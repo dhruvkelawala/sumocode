@@ -48,11 +48,14 @@ Paired with a private `sumocode-config` repo that syncs settings/extensions/memo
 
 ## Install
 
+**Quick try:**
 ```bash
 pi install git:github.com/dhruvkelawala/sumocode
 ```
 
 Then reload Pi. You should see the notification: `SumoCode loaded · v0.1.0`.
+
+**Full personal setup** (me on a new machine): see [SETUP.md](./SETUP.md) — bootstraps both repos, env vars, system deps, verification.
 
 ## Roadmap
 
@@ -67,23 +70,15 @@ High level:
 
 ## Development
 
+See [DEV_LOOP.md](./DEV_LOOP.md) for the full edit/test/release workflow, debugging, and common tasks.
+
+TL;DR:
 ```bash
 cd "/Volumes/SumoDeus NVMe/openclaw/workspace/sumocode"
-pi -e .          # ephemeral install — doesn't touch settings.json
-# edit src/extension.ts
-# reload pi to see changes
-```
-
-When ready to release:
-
-```bash
-# bump version in package.json
-git commit -am "v0.x.y: <what changed>"
-git tag v0.x.y
-git push && git push --tags
-
-# both machines pick it up:
-pi update git:github.com/dhruvkelawala/sumocode
+pi -e .                          # ephemeral install, edit src/, relaunch to test
+# ...edit, commit, push...
+git tag v0.x.y && git push --tags
+pi update git:github.com/dhruvkelawala/sumocode  # on each machine
 ```
 
 ## License

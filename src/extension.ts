@@ -1,0 +1,20 @@
+import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+
+const VERSION = "0.1.0";
+
+/**
+ * SumoCode — v0.1.0 hello-world scaffold.
+ *
+ * This is the minimal viable SumoCode extension. It does almost nothing yet —
+ * just registers a one-shot notification on session start so you can see it's
+ * loaded. Real functionality (persona, footer, sidebar, memory, status signals)
+ * lands in v0.2+ after the /skill:grill-me → /skill:to-prd → Stitch flow
+ * resolves the remaining design decisions.
+ *
+ * See PLAN.md for decision log and roadmap.
+ */
+export default function sumocode(pi: ExtensionAPI): void {
+	pi.on("session_start", (_event, ctx) => {
+		ctx.ui.notify(`SumoCode loaded · v${VERSION}`, "info");
+	});
+}

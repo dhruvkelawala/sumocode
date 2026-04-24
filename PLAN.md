@@ -109,6 +109,7 @@ Pi (mariozechner/pi-mono)            SumoCode (this repo)
 - [x] Publish to `github.com/dhruvkelawala/sumocode` (public)
 - [x] Tag v0.1.0
 - [x] Wire into `sumocode-config/pi-agent/settings.json` as git source
+- [x] Write SETUP.md (new-machine bootstrap) and DEV_LOOP.md (edit/test/release)
 
 ### Next
 - [ ] Run `/skill:grill-me` to resolve Q8 (persona)

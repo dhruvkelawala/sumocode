@@ -1,0 +1,32 @@
+{
+  "name": "@dhruvkelawala/sumocode",
+  "version": "0.1.0",
+  "description": "SumoCode — a Pi extension that makes the terminal AI coding experience feel personal. OpenCode visual language + persistent memory + preattentive status signals.",
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "sumocode",
+    "terminal",
+    "ai"
+  ],
+  "license": "MIT",
+  "author": "Dhruv Kelawala",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dhruvkelawala/sumocode.git"
+  },
+  "pi": {
+    "extensions": [
+      "src/extension.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-coding-agent": "*",
+    "@mariozechner/pi-tui": "*",
+    "typebox": "*"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

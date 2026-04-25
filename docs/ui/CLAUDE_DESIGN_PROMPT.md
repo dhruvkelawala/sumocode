@@ -322,23 +322,63 @@ on whether this works.
 - We can be much more specific about what's *not* in the design (no header, no logo, no nav menu) — Claude follows negation rules, Stitch doesn't.
 - Iteration is real-time: paste prompt, look at artifact, give feedback, see new artifact.
 
-## Suggested workflow
+## Recommended workflow (use Claude Design's Design System feature)
 
-1. Start a fresh Claude conversation (Sonnet 4 or Opus, with Artifacts enabled).
-2. Paste the prompt above as a single message.
-3. Review the 6 artifacts. Resize the artifact pane wide so the 160-col 
-   layout doesn't wrap.
-4. Iterate by replying with specific changes — e.g., "the terracotta 
-   modal frame on screen 4 is too saturated, dim it 20%" — Claude updates 
-   the artifact in place.
-5. When happy, save each artifact's HTML source to 
-   `sumocode/docs/ui/claude-design/<screen>.html` in this repo.
-6. Take a screenshot of each artifact at full resolution → save to 
-   `sumocode/docs/ui/claude-design/<screen>.png`.
-7. Commit and push to `dhruvkelawala/sumocode`.
+Claude Design has a **Design System** feature that ingests a `DESIGN.md`
+and makes it the persistent source-of-truth for every artifact in a
+project. We have one ready: `docs/ui/DESIGN.md` (Cathedral direction,
+9-section [awesome-claude-design](https://github.com/VoltAgent/awesome-claude-design) format).
 
-The HTML artifacts will then serve as the **canonical visual reference** 
-for translating to Pi TUI implementation.
+### Step 1 — Set up the design system (one-time)
+
+Go to [claude.ai/design](https://claude.ai/design). Two options:
+
+**Option A (org-level, applies to every future project):**
+  1. Visit https://claude.ai/design/#org
+  2. Click **Create new design system**
+  3. On *Set up your design system*, upload `docs/ui/DESIGN.md` under **Add assets**
+  4. Claude scaffolds a full UI kit (CSS variables, type scale, components, preview cards) under your org
+  5. Every new project automatically uses it (Team/Enterprise plans)
+
+**Option B (project-level, simpler for solo use):**
+  1. Open https://claude.ai/design
+  2. Create a new prototype
+  3. In the chat, attach `docs/ui/DESIGN.md`
+  4. Type: `Create a design system from this DESIGN.md`
+  5. Claude scaffolds the system within the project. All future artifacts in that project follow it.
+
+### Step 2 — Generate the screens
+
+After the design system is loaded, paste the screen-generation prompt above. Claude will produce all 6 screens consistently styled per the SumoCode tokens.
+
+### Step 3 — Iterate visually
+
+Review the 6 artifacts in the side pane. Resize the artifact pane wide so the 160-col layout doesn't wrap. Reply with specific changes; Claude updates artifacts in place against the locked design system.
+
+### Step 4 — Save outputs to the repo
+
+```bash
+# Save each artifact's HTML source
+docs/ui/claude-design/01-idle.html
+docs/ui/claude-design/02-streaming.html
+docs/ui/claude-design/03-tool-running.html
+docs/ui/claude-design/04-approval.html
+docs/ui/claude-design/05-memory-editor.html
+docs/ui/claude-design/06-command-palette.html
+```
+
+Also save full-resolution screenshots of each artifact to `<screen>.png`.
+
+### Step 5 — Commit
+
+```bash
+cd "/Volumes/SumoDeus NVMe/openclaw/workspace/sumocode"
+git add -A
+git commit -m "design: add Claude Design HTML artifacts (Cathedral)"
+git push
+```
+
+The HTML artifacts then serve as the **canonical visual reference** for translating to Pi TUI implementation.
 
 ---
 

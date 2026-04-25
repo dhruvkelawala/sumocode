@@ -24,6 +24,12 @@ export const VOICE = {
 		approval: "needs you",
 		learning: "learning",
 	},
+	sections: {
+		context: "context",
+		mcp: "mcp",
+		memory: "memory",
+	},
 } as const;
 
 export type VoiceStatus = keyof typeof VOICE.status;
+export type VoiceSection = keyof typeof VOICE.sections;

@@ -5,6 +5,7 @@ import { execFileSync } from "node:child_process";
 import { afterEach, describe, expect, it } from "vitest";
 import { SUMOCODE_STATES, type SumoCodeState } from "./tokens.js";
 import { formatContextGauge, formatFooterLine, resolveGitBranch, type FooterSnapshot } from "./footer.js";
+import { VOICE } from "./voice.js";
 
 const ANSI = /\u001b\[[0-9;]*m/g;
 const tempDirs: string[] = [];
@@ -43,7 +44,7 @@ afterEach(() => {
 });
 
 describe("formatFooterLine", () => {
-	it.each(SUMOCODE_STATES)("formats the %s state", (state: SumoCodeState) => {
+	it.each(SUMOCODE_STATES)("formats the %s state with its voice label", (state: SumoCodeState) => {
 		const line = formatFooterLine(snapshot({ state }));
 		const plain = withoutAnsi(line);
 
@@ -51,7 +52,7 @@ describe("formatFooterLine", () => {
 		expect(plain).toContain("↑12k ↓8.0k");
 		expect(plain).toContain("$0.42");
 		expect(plain).toContain("42%/200k");
-		expect(plain).toContain(`● ${state}`);
+		expect(plain).toContain(`● ${VOICE.status[state]}`);
 		expect(plain).toContain("claude-opus-4-7");
 	});
 

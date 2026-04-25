@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { truncateToWidth } from "@mariozechner/pi-tui";
 import { CATHEDRAL_TOKENS, type SumoCodeState } from "./tokens.js";
+import { VOICE } from "./voice.js";
 
 type Usage = {
 	input: number;
@@ -77,7 +78,7 @@ export function formatFooterLine(snapshot: FooterSnapshot, width = 120): string 
 		`↑${formatTokenCount(snapshot.inputTokens)} ↓${formatTokenCount(snapshot.outputTokens)}`,
 		`$${snapshot.costUsd.toFixed(2)}`,
 		formatContextGauge(snapshot.contextPercent, snapshot.contextWindow),
-		`${dot} ${snapshot.state}`,
+		`${dot} ${VOICE.status[snapshot.state]}`,
 		snapshot.modelId,
 	].join(" · ");
 	return truncateToWidth(line, width);

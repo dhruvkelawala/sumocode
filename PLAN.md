@@ -244,6 +244,19 @@ The 3 theme bundles live at `src/themes/cathedral.ts`, `src/themes/amber-crt.ts`
 - [x] Q13 resolved — punt ACPX integration to v2+ (defensive TTY guards in v0.2)
 - [x] Q14 resolved — cycle preview picker + Ctrl+Shift+T keybinding
 - [x] **GRILL COMPLETE** — all 14 questions resolved
+- [x] Claude Design v1 mockup imported (`docs/ui/claude-design/`)
+- [x] PRD written (`docs/prd.md` + `docs/prd.html` visual explainer)
+- [x] **v0.2 issues filed** on `dhruvkelawala/sumocode`:
+  - [#1](https://github.com/dhruvkelawala/sumocode/issues/1) PRD tracker
+  - [#2](https://github.com/dhruvkelawala/sumocode/issues/2) Footer with preattentive state dot
+  - [#3](https://github.com/dhruvkelawala/sumocode/issues/3) Remnic install + bootstrap.sh (HITL)
+  - [#4](https://github.com/dhruvkelawala/sumocode/issues/4) /sumo:persona slash command
+  - [#5](https://github.com/dhruvkelawala/sumocode/issues/5) Voice module + working indicator
+  - [#6](https://github.com/dhruvkelawala/sumocode/issues/6) Right sidebar with static content
+  - [#7](https://github.com/dhruvkelawala/sumocode/issues/7) /sumo:sync command + sync module
+  - [#8](https://github.com/dhruvkelawala/sumocode/issues/8) Memory client + sidebar wiring
+  - [#9](https://github.com/dhruvkelawala/sumocode/issues/9) /sumo:memory slash command
+  - [#10](https://github.com/dhruvkelawala/sumocode/issues/10) TTY-defensive guards
 
 ### Next
 - [x] Stitch generated all 3 themes (cathedral idle, amber-crt idle, obsidian-temple idle)
@@ -277,4 +290,4 @@ The 3 theme bundles live at `src/themes/cathedral.ts`, `src/themes/amber-crt.ts`
 
 ---
 
-*Last updated: 2026-04-25 · v0.1.0 scaffold · Q1–Q14 ALL RESOLVED · grill complete · ready for PRD generation*
+*Last updated: 2026-04-25 · v0.1.0 scaffold · Q1–Q14 ALL RESOLVED · PRD written · v0.2 issues filed · ready to start building*

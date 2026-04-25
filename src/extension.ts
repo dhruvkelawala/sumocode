@@ -1,4 +1,5 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import { registerPersonaCommand } from "./commands/persona.js";
 import { installFooter } from "./footer.js";
 
 const VERSION = "0.2.0";
@@ -16,6 +17,7 @@ const VERSION = "0.2.0";
  */
 export default function sumocode(pi: ExtensionAPI): void {
 	installFooter(pi);
+	registerPersonaCommand(pi);
 
 	pi.on("session_start", (_event, ctx) => {
 		if (!ctx.hasUI) return;

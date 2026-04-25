@@ -1,6 +1,7 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import { installFooter } from "./footer.js";
 
-const VERSION = "0.1.0";
+const VERSION = "0.2.0";
 
 /**
  * SumoCode — v0.1.0 hello-world scaffold.
@@ -14,7 +15,10 @@ const VERSION = "0.1.0";
  * See PLAN.md for decision log and roadmap.
  */
 export default function sumocode(pi: ExtensionAPI): void {
+	installFooter(pi);
+
 	pi.on("session_start", (_event, ctx) => {
+		if (!ctx.hasUI) return;
 		ctx.ui.notify(`SumoCode loaded · v${VERSION}`, "info");
 	});
 }

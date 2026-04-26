@@ -2,36 +2,26 @@
  * Cathedral working indicator — animation that replaces Pi's default thinking
  * spinner while the agent is generating or running tools.
  *
- * Design intent (from Cathedral DESIGN.md): a slow, warm pulse that fits the
- * scriptorium aesthetic. Frames are simple braille spinners; v0.3+ will move
- * frame definitions into theme bundles so each theme owns its own animation
- * vocabulary.
+ * Design intent (from Cathedral DESIGN.md): a slow, warm sweep that fits the
+ * scriptorium aesthetic. The arc frames trace an ensō / dohyō / cathedral dome
+ * in miniature; v0.3+ will move frame definitions into theme bundles so each
+ * theme owns its own animation vocabulary.
  */
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { CATHEDRAL_TOKENS } from "./tokens.js";
 
 /**
- * Cathedral spinner frames — a Zeus sigil (`ϟ`) fused with the canonical
- * 10-frame rotating-dots braille pattern (the same motion used by ora, npm,
- * ink-spinner, cli-spinners). Always rotates forward so the animation never
- * reads as stuck or stuttering, which is what a palindrome cycle produces.
+ * Cathedral spinner frames — a single arc segment sweeping around a circle.
+ * It reads as both SumoCode halves at once:
  *
- * The sigil makes the indicator feel SumoCode-native without using emoji or
- * variable-width glyphs. Every frame is exactly two visible cells: bolt + rotor.
+ * - Greek/Cathedral: arch, vault, dome.
+ * - Japanese/Sumo: ensō brushstroke, dohyō ring being traced.
+ *
+ * All frames are unique, single-cell glyphs. The loop always moves forward and
+ * avoids the generic npm/ora spinner vocabulary.
  */
-export const CATHEDRAL_INDICATOR_FRAMES = [
-	"ϟ⠋",
-	"ϟ⠙",
-	"ϟ⠹",
-	"ϟ⠸",
-	"ϟ⠼",
-	"ϟ⠴",
-	"ϟ⠦",
-	"ϟ⠧",
-	"ϟ⠇",
-	"ϟ⠏",
-] as const;
+export const CATHEDRAL_INDICATOR_FRAMES = ["◜", "◠", "◝", "◞", "◡", "◟"] as const;
 
 const RESET = "\u001b[0m";
 
@@ -65,11 +55,10 @@ export function renderIndicator(
 }
 
 /**
- * Default frame interval in ms. ora ships 80ms; we sit slightly slower at 100ms
- * so the rotation reads as deliberate without losing motion. 10 frames × 100ms
- * = 1000ms per full revolution, which feels meditative rather than frantic.
+ * Default frame interval in ms. 130ms over 6 frames ≈ 780ms per sweep: deliberate
+ * enough to feel like a brushstroke in a temple, not a racetrack spinner.
  */
-export const CATHEDRAL_INDICATOR_INTERVAL_MS = 100;
+export const CATHEDRAL_INDICATOR_INTERVAL_MS = 130;
 
 /**
  * Pre-colorize each Cathedral frame with the accent token so Pi can render the

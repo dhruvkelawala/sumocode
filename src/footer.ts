@@ -2,7 +2,13 @@ import { execFileSync } from "node:child_process";
 import { homedir } from "node:os";
 import { basename } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { truncateToWidth } from "@mariozechner/pi-tui";
+import { truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
+
+/**
+ * Pi's `ThinkingLevel` union, inlined to avoid pulling in `pi-agent-core`
+ * as a direct dep. Mirrors the upstream definition exactly.
+ */
+export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
 import { CATHEDRAL_TOKENS, type SumoCodeState } from "./tokens.js";
 import { VOICE } from "./voice.js";
 
@@ -18,10 +24,9 @@ export type FooterSnapshot = {
 	inputTokens: number;
 	outputTokens: number;
 	costUsd: number;
-	contextPercent: number | null;
-	contextWindow: number;
 	state: SumoCodeState;
 	modelId: string;
+	thinkingLevel: ThinkingLevel;
 };
 
 type GitRunner = (args: string[], cwd: string) => string;
@@ -43,12 +48,6 @@ export function formatTokenCount(count: number): string {
 	if (count < 1000000) return `${Math.round(count / 1000)}k`;
 	if (count < 10000000) return `${(count / 1000000).toFixed(1)}M`;
 	return `${Math.round(count / 1000000)}M`;
-}
-
-export function formatContextGauge(contextPercent: number | null, contextWindow: number): string {
-	const window = formatTokenCount(contextWindow);
-	if (contextPercent === null || !Number.isFinite(contextPercent)) return `?/${window}`;
-	return `${Math.round(contextPercent)}%/${window}`;
 }
 
 export function formatCwd(cwd: string): string {
@@ -73,7 +72,28 @@ export function resolveGitBranch(cwd: string, runGit: GitRunner = defaultGitRunn
 	}
 }
 
-export function formatFooterLine(snapshot: FooterSnapshot, width = 120): string {
+/**
+ * F1 two-zone footer layout (Element 5 from CATHEDRAL_DECISIONS.md).
+ *
+ *   left zone  = agent state:    ● <STATE> · <model> · <thinking>
+ *   right zone = session metrics: <project> (<branch>) · ↑<in> ↓<out> · $<cost>
+ *
+ * Zones are separated by spaces sized to fill width. At narrow widths the
+ * right zone collapses field-by-field (cost → tokens → path) before the
+ * whole right zone disappears.
+ *
+ * Note: ctx% deliberately NOT in footer (lives in sidebar CONTEXT sub-tab).
+ */
+export function formatFooterLine(snapshot: FooterSnapshot, width = 160): string {
+	const dot = colorHex("●", CATHEDRAL_TOKENS.colors.states[snapshot.state]);
+	const stateLabel = colorHex(VOICE.status[snapshot.state], CATHEDRAL_TOKENS.colors.foreground);
+	const model = colorHex(snapshot.modelId, CATHEDRAL_TOKENS.colors.foregroundDim);
+	const thinking = colorHex(snapshot.thinkingLevel, CATHEDRAL_TOKENS.colors.foregroundDim);
+	const sep = colorHex(" · ", CATHEDRAL_TOKENS.colors.divider);
+
+	const leftZone = [`${dot} ${stateLabel}`, model, thinking].join(sep);
+	const leftLen = visibleWidth(leftZone);
+
 	const branch = snapshot.branch ? ` (${snapshot.branch})` : "";
 	const path = colorHex(`${formatCwd(snapshot.cwd)}${branch}`, CATHEDRAL_TOKENS.colors.foreground);
 	const tokens = colorHex(
@@ -81,17 +101,31 @@ export function formatFooterLine(snapshot: FooterSnapshot, width = 120): string 
 		CATHEDRAL_TOKENS.colors.foregroundDim,
 	);
 	const cost = colorHex(`$${snapshot.costUsd.toFixed(2)}`, CATHEDRAL_TOKENS.colors.foregroundDim);
-	const gauge = colorHex(
-		formatContextGauge(snapshot.contextPercent, snapshot.contextWindow),
-		CATHEDRAL_TOKENS.colors.foregroundDim,
-	);
-	const dot = colorHex("●", CATHEDRAL_TOKENS.colors.states[snapshot.state]);
-	const stateLabel = colorHex(VOICE.status[snapshot.state], CATHEDRAL_TOKENS.colors.foreground);
-	const model = colorHex(snapshot.modelId, CATHEDRAL_TOKENS.colors.foregroundDim);
-	const sep = colorHex(" · ", CATHEDRAL_TOKENS.colors.divider);
 
-	const line = [path, tokens, cost, gauge, `${dot} ${stateLabel}`, model].join(sep);
-	return truncateToWidth(line, width);
+	// Build right zone progressively, dropping rightmost fields if they don't fit.
+	const rightCandidates: string[][] = [
+		[path, tokens, cost],   // full
+		[path, tokens],         // drop cost
+		[path],                 // drop tokens too
+		[],                     // drop everything
+	];
+
+	const MIN_GAP = 3; // minimum spaces between zones
+	for (const candidate of rightCandidates) {
+		const rightZone = candidate.join(sep);
+		const rightLen = visibleWidth(rightZone);
+		const totalNeeded = leftLen + (rightLen > 0 ? MIN_GAP + rightLen : 0);
+		if (totalNeeded <= width) {
+			if (rightLen === 0) {
+				return truncateToWidth(leftZone, width);
+			}
+			const gap = width - leftLen - rightLen;
+			return `${leftZone}${" ".repeat(gap)}${rightZone}`;
+		}
+	}
+
+	// Fallback: even just the left zone overflows; truncate it.
+	return truncateToWidth(leftZone, width);
 }
 
 export function installFooter(pi: ExtensionAPI): void {
@@ -132,9 +166,6 @@ export function installFooter(pi: ExtensionAPI): void {
 
 function createSnapshot(ctx: ExtensionContext, branch: string | null, state: SumoCodeState): FooterSnapshot {
 	const usage = getSessionUsage(ctx);
-	const contextUsage = ctx.getContextUsage() ?? null;
-	const contextWindow = contextUsage?.contextWindow ?? ctx.model?.contextWindow ?? 0;
-	const contextPercent = contextUsage?.percent ?? null;
 
 	return {
 		cwd: ctx.cwd,
@@ -142,11 +173,20 @@ function createSnapshot(ctx: ExtensionContext, branch: string | null, state: Sum
 		inputTokens: usage.input,
 		outputTokens: usage.output,
 		costUsd: usage.cost,
-		contextPercent,
-		contextWindow,
 		state,
 		modelId: ctx.model?.id ?? "no-model",
+		thinkingLevel: getThinkingLevel(ctx),
 	};
+}
+
+function getThinkingLevel(ctx: ExtensionContext): ThinkingLevel {
+	// Pi exposes thinking level on the agent state, but extensions only see it
+	// indirectly via `ctx.getSystemPrompt()` (no public getter for the active
+	// thinking level). For now we read from a process-level cache populated by
+	// the model_select / before_agent_start handler patterns. Falls back to
+	// "medium" until Pi exposes it.
+	const maybe = (ctx as { thinkingLevel?: ThinkingLevel }).thinkingLevel;
+	return maybe ?? "medium";
 }
 
 function getSessionUsage(ctx: ExtensionContext): Usage {

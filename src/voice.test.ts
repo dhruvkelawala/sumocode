@@ -13,13 +13,21 @@ describe("VOICE.status", () => {
 		}
 	});
 
-	it("uses lowercase, no exclamation marks, no trailing punctuation", () => {
+	it("uses cathedral UPPERCASE labels (locked Q5.5)", () => {
 		for (const state of SUMOCODE_STATES) {
 			const label = VOICE.status[state];
-			expect(label, `"${label}" should be lowercase`).toBe(label.toLowerCase());
+			expect(label, `"${label}" should be uppercase`).toBe(label.toUpperCase());
 			expect(label, `"${label}" must not contain '!'`).not.toContain("!");
 			expect(label, `"${label}" must not end with a period`).not.toMatch(/\.$/);
 		}
+	});
+
+	it("uses the cathedral state vocabulary (READY/MEDITATING/ILLUMINATING/DEFERRING/INSCRIBING)", () => {
+		expect(VOICE.status.idle).toBe("READY");
+		expect(VOICE.status.thinking).toBe("MEDITATING");
+		expect(VOICE.status.tool).toBe("ILLUMINATING");
+		expect(VOICE.status.approval).toBe("DEFERRING");
+		expect(VOICE.status.learning).toBe("INSCRIBING");
 	});
 });
 

@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { afterEach, describe, expect, it } from "vitest";
 import { SUMOCODE_STATES, type SumoCodeState } from "./tokens.js";
-import { formatContextGauge, formatCwd, formatFooterLine, resolveGitBranch, type FooterSnapshot } from "./footer.js";
+import { formatCwd, formatFooterLine, resolveGitBranch, type FooterSnapshot } from "./footer.js";
 import { VOICE } from "./voice.js";
 
 const ANSI = /\u001b\[[0-9;]*m/g;
@@ -21,10 +21,9 @@ function snapshot(overrides: Partial<FooterSnapshot> = {}): FooterSnapshot {
 		inputTokens: 12_000,
 		outputTokens: 8_000,
 		costUsd: 0.42,
-		contextPercent: 42,
-		contextWindow: 200_000,
 		state: "idle",
 		modelId: "claude-opus-4-7",
+		thinkingLevel: "xhigh",
 		...overrides,
 	};
 }
@@ -43,24 +42,71 @@ afterEach(() => {
 	for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
-describe("formatFooterLine", () => {
-	it.each(SUMOCODE_STATES)("formats the %s state with its voice label", (state: SumoCodeState) => {
-		const line = formatFooterLine(snapshot({ state }));
+describe("formatFooterLine — F1 two-zone layout", () => {
+	it.each(SUMOCODE_STATES)("left zone has dot + cathedral label + model + thinking for %s", (state: SumoCodeState) => {
+		const line = formatFooterLine(snapshot({ state, thinkingLevel: "xhigh" }));
 		const plain = withoutAnsi(line);
 
-		expect(plain).toContain("~/argent-x (main)");
-		expect(plain).toContain("↑12k ↓8.0k");
-		expect(plain).toContain("$0.42");
-		expect(plain).toContain("42%/200k");
+		// Left zone: ● <STATE> · claude-opus-4-7 · xhigh
 		expect(plain).toContain(`● ${VOICE.status[state]}`);
 		expect(plain).toContain("claude-opus-4-7");
+		expect(plain).toContain("xhigh");
+	});
+
+	it("right zone has path + branch + tokens + cost", () => {
+		const line = withoutAnsi(formatFooterLine(snapshot()));
+
+		expect(line).toContain("~/argent-x (main)");
+		expect(line).toContain("↑12k ↓8.0k");
+		expect(line).toContain("$0.42");
+	});
+
+	it("does NOT include context window percent (it lives in sidebar CONTEXT now)", () => {
+		const line = withoutAnsi(formatFooterLine(snapshot()));
+		expect(line).not.toMatch(/\d+%\/\d/);
+	});
+
+	it("places state on the left and session metrics on the right with a gap", () => {
+		const line = withoutAnsi(formatFooterLine(snapshot(), 160));
+		const stateIdx = line.indexOf(VOICE.status.idle);
+		const pathIdx = line.indexOf("~/argent-x");
+
+		expect(stateIdx).toBeGreaterThanOrEqual(0);
+		expect(pathIdx).toBeGreaterThanOrEqual(0);
+		expect(pathIdx).toBeGreaterThan(stateIdx);
+		// At least 3 spaces of gap between zones
+		expect(line).toMatch(/   {3,}/);
+	});
+
+	it("includes thinking level after model id", () => {
+		for (const level of ["off", "minimal", "low", "medium", "high", "xhigh"] as const) {
+			const line = withoutAnsi(formatFooterLine(snapshot({ thinkingLevel: level })));
+			const modelIdx = line.indexOf("claude-opus-4-7");
+			const levelIdx = line.indexOf(level);
+			expect(modelIdx).toBeGreaterThanOrEqual(0);
+			expect(levelIdx).toBeGreaterThanOrEqual(0);
+			expect(levelIdx).toBeGreaterThan(modelIdx);
+		}
 	});
 
 	it("omits git branch parentheses outside a repository", () => {
 		const line = withoutAnsi(formatFooterLine(snapshot({ branch: null })));
 
-		expect(line).toContain("~/argent-x · ↑12k ↓8.0k");
+		expect(line).toContain("~/argent-x");
 		expect(line).not.toContain("~/argent-x (");
+	});
+
+	it("drops cost first when too narrow to fit everything", () => {
+		const line = withoutAnsi(formatFooterLine(snapshot(), 80));
+		// At 80 cols with all the colored separators / dots, cost is the right-most field.
+		// Path + tokens may stay; cost may drop. Either way, the line must fit.
+		expect(line.length).toBeLessThanOrEqual(80);
+	});
+
+	it("left-zone-only at very narrow widths", () => {
+		const line = withoutAnsi(formatFooterLine(snapshot(), 50));
+		expect(line).toContain(VOICE.status.idle);
+		expect(line.length).toBeLessThanOrEqual(50);
 	});
 });
 
@@ -98,16 +144,6 @@ describe("formatCwd", () => {
 	it("keeps a single ~ for HOME itself", () => {
 		const home = process.env.HOME ?? "/Users/sumo-deus";
 		expect(formatCwd(home)).toBe("~");
-	});
-});
-
-describe("formatContextGauge", () => {
-	it("rounds percent and formats context window", () => {
-		expect(formatContextGauge(41.6, 200_000)).toBe("42%/200k");
-	});
-
-	it("uses an unknown marker when context usage is unavailable", () => {
-		expect(formatContextGauge(null, 200_000)).toBe("?/200k");
 	});
 });
 

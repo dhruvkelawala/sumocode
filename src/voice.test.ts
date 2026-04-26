@@ -34,3 +34,9 @@ describe("VOICE.sections", () => {
 		}
 	});
 });
+
+describe("VOICE.errors", () => {
+	it("defines terse daemon-down copy", () => {
+		expect(VOICE.errors.daemonDown).toBe("memory unavailable");
+	});
+});

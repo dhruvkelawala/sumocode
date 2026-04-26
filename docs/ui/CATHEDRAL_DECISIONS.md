@@ -305,10 +305,69 @@ Propagation:
 
 ---
 
+## Element 6 — Approval modal
+
+**Locked: extend (not rewrite) `bash`/`edit`/`write` with our approval flow + flat-hybrid modal style + explicit `[Y]ES [N]O [A]LWAYS` buttons + use Pi's allowlist mechanism.**
+
+### Q6.1 — Scope: **B (extend via re-register)**
+
+For the three destructive built-in tools (`bash`, `edit`, `write`), `pi.registerTool()` re-registers each with:
+- our custom approval modal as the gate
+- delegated execution via Pi's underlying machinery (`BashOperations` / `ctx.exec` / Pi's existing edit-write helpers)
+- `renderShell: "self"` for the call/result frame
+
+We DO NOT reimplement the underlying execution — only the approval flow and rendering.
+
+### Q6.2 — Modal visual: **flat-hybrid (v1/v2 card + v3 code-block frame)**
+
+Final sketch:
+
+```
+                                 APPROVAL REQUIRED
+   ────────────────────────────────────────────────────────────────────────
+
+   You are about to execute:
+
+   ┌─────────────────────────────────────────────┐
+   │ rm -rf node_modules/                        │
+   └─────────────────────────────────────────────┘
+
+   — This will remove 234MB and is irreversible.
+
+   ────────────────────────────────────────────────────────────────────────
+   ■ SYSTEM NOTICE                              [Y]ES  [N]O  [A]LWAYS
+```
+
+Visual treatment:
+- Card: subtle elevation via `surfaceLifted` background, no double-line border
+- Title `APPROVAL REQUIRED`: large, accent (burnt orange), centered
+- Divider rules above/below content: `divider` color
+- Code block: carved frame from v3 (`┌─┐ │ └─┘`) with `surfaceRecess` bg, accent text
+- Body text: regular `foreground`
+- Em-dash explanation row: `foregroundDim`
+- `■ SYSTEM NOTICE`: small caps, `state.approval` (terracotta) for square + dim brown for label
+- Buttons: outlined (`[Y]ES`, `[N]O` with subtle border), with **active button** filled in `accent` (burnt orange) like v3's `[A]LWAYS`
+
+### Q6.3 — `[A]lways`: **present + use Pi's allowlist**
+
+Pi already supports always-allow (per-tool / per-pattern). Our modal exposes the third button and the answer is forwarded to Pi's existing allow-list machinery. We do not maintain a separate SumoCode allowlist.
+
+### Q6.4 — Buttons: **B (explicit `[Y]ES [N]O [A]LWAYS`)**
+
+Not a text prompt (`Proceed? [Y/n/a]`). Three real focusable buttons. Default focus on `[N]O` for safety. `Tab` cycles focus, `Y/N/A` letters select directly.
+
+### Q6.5 — Wrap which tools: **b (`bash`, `edit`, `write`)**
+
+All three destructive built-ins re-registered. `read`/`find`/`grep`/`ls` stay Pi default.
+
+---
+
 ## Open follow-ups
 
-- Element 5 (footer style + version line)
-- Element 6+ (approval modal, memory editor, command palette, tool pills, code blocks)
+- Element 7 (memory editor)
+- Element 8 (command palette)
+- Element 9 (tool pills)
+- Element 10 (code blocks)
 - Bash sub-shell overlay for the `[terminal]` icon — needs implementation
   spec.
 - Settings overlay theming — Pi's built-in `/settings` modal.

@@ -12,24 +12,25 @@ import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { CATHEDRAL_TOKENS } from "./tokens.js";
 
 /**
- * Cathedral spinner frames — the canonical 10-frame rotating-dots braille
- * pattern (the same shape used by ora, npm, ink-spinner, cli-spinners). Always
- * rotates forward so the animation never reads as stuck or stuttering, which
- * is what a palindrome cycle produces. The cathedral feeling comes from the
- * #D97706 burnt-orange tint and the slightly slow cadence (see INTERVAL_MS),
- * not from a bespoke frame set.
+ * Cathedral spinner frames — a Zeus sigil (`ϟ`) fused with the canonical
+ * 10-frame rotating-dots braille pattern (the same motion used by ora, npm,
+ * ink-spinner, cli-spinners). Always rotates forward so the animation never
+ * reads as stuck or stuttering, which is what a palindrome cycle produces.
+ *
+ * The sigil makes the indicator feel SumoCode-native without using emoji or
+ * variable-width glyphs. Every frame is exactly two visible cells: bolt + rotor.
  */
 export const CATHEDRAL_INDICATOR_FRAMES = [
-	"⠋",
-	"⠙",
-	"⠹",
-	"⠸",
-	"⠼",
-	"⠴",
-	"⠦",
-	"⠧",
-	"⠇",
-	"⠏",
+	"ϟ⠋",
+	"ϟ⠙",
+	"ϟ⠹",
+	"ϟ⠸",
+	"ϟ⠼",
+	"ϟ⠴",
+	"ϟ⠦",
+	"ϟ⠧",
+	"ϟ⠇",
+	"ϟ⠏",
 ] as const;
 
 const RESET = "\u001b[0m";

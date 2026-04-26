@@ -362,9 +362,85 @@ All three destructive built-ins re-registered. `read`/`find`/`grep`/`ls` stay Pi
 
 ---
 
+## Element 7 — Memory editor (`/sumo:memory edit` modal)
+
+**Locked: read-only browser + Remnic-native metadata categorization with 6 panels + flat-hybrid modal style matching Element 6.**
+
+### Q7.1 — Scope: **A (read-only browser)**
+
+Modal lists existing memories. Editing happens via slash commands:
+- `/sumo:memory add --panel <name> "..."`
+- `/sumo:memory forget <id>`
+
+No inline editing in v1.
+
+### Q7.2 — Categorization: **A (Approach 2-lite from spike)**
+
+**6 panels** rendered as a v3-style categorized grid:
+
+| Panel | Routing signals |
+|---|---|
+| `IDENTITY` | tag `sumocode:identity`, `entityRef=dhruv`, category `entity`/`relationship`, keywords `dhruv`/`argent`/`london`/`senior frontend` |
+| `PREFERENCES` | category `preference`/`rule`/`principle`, tag `sumocode:preference` |
+| `WORKFLOW` | category `procedure`/`skill`/`rule`/`decision`, tags `sumocode:workflow`/`sumocode:tdd`/`sumocode:visual` |
+| `PROJECTS` | tag `sumocode:project`, `project:sumocode`/`project:openclaw`, keywords `sumocode`/`openclaw`/`cmux`/`cathedral` |
+| `SYSTEM` | tag `sumocode:system`, runtime/machine constraints (`cmux`, `mac mini portrait`, `macbook landscape`, `terminal`, `visual verification`) |
+| `GENERAL` | unclassified — **hidden if empty** |
+
+**Routing precedence per fact** (deterministic, no LLM):
+
+1. explicit `sumocode:<panel>` tag
+2. Remnic `category` field
+3. keyword rules on `content`
+4. fallback → `GENERAL`
+
+**Future enhancement**: `/sumo:memory add --panel <name> "..."` writes the `sumocode:<panel>` tag at write-time, so new facts skip heuristic routing entirely. Existing untagged facts continue to route via category + keywords with zero migration.
+
+### Q7.3 — Visual: **B (flat-hybrid matching Element 6)**
+
+```
+                              SUMOCODE MEMORY
+   ────────────────────────────────────────────────────────────────────────
+
+   │ search…                                              48 facts │
+
+   ╭─ IDENTITY ───────────────────╮  ╭─ PREFERENCES ────────────────╮
+   │ Dhruv · Senior FE · Argent     │  │ prefers TypeScript strict      │
+   │ London / BST                   │  │ pnpm not npm                   │
+   ╰──────────────────────────────╯  ╰────────────────────────────────╯
+
+   ╭─ WORKFLOW ───────────────────╮  ╭─ PROJECTS ───────────────────╮
+   │ TDD by default                 │  │ sumocode/cathedral parity      │
+   │ visual approval before done    │  │ openclaw ACPX integration      │
+   ╰──────────────────────────────╯  ╰────────────────────────────────╯
+
+   ╭─ SYSTEM ─────────────────────╮
+   │ cmux runtime, libghostty       │
+   │ mac mini portrait              │
+   │ macbook landscape              │
+   ╰──────────────────────────────╯
+
+   ────────────────────────────────────────────────────────────────────────
+   ↑↓ navigate   /  search   ⏎  copy id   esc  close
+```
+
+- Same flat card style as approval modal (no double-line border)
+- Title `SUMOCODE MEMORY` accent, centered
+- Search input with `48 facts` count right-aligned
+- Panels rendered as bordered sub-cards, 2 across when width allows
+- Empty panels hidden
+- Footer keybind hints same style as Element 3
+
+### Implementation refs
+
+- Spike: `docs/ui/MEMORY_CATEGORIZATION_SPIKE.md`
+- Existing Remnic client: `src/memory.ts` — needs `browse({ status, q, limit, offset })` method added (the spike notes this).
+- New module: `src/memory-categorization.ts` — pure grouping function, fully unit tested.
+
+---
+
 ## Open follow-ups
 
-- Element 7 (memory editor)
 - Element 8 (command palette)
 - Element 9 (tool pills)
 - Element 10 (code blocks)

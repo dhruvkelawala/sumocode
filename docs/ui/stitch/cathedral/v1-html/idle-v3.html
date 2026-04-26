@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>CATHEDRAL-IDLE</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+          darkMode: "class",
+          theme: {
+            extend: {
+              "colors": {
+                      "error-container": "#93000a",
+                      "tertiary-fixed": "#bdf1a3",
+                      "surface-container-high": "#2f2924",
+                      "primary-fixed-dim": "#ffb77d",
+                      "on-surface": "#ece0d9",
+                      "error": "#ffb4ab",
+                      "surface-container-low": "#201b16",
+                      "on-primary-fixed": "#2f1500",
+                      "on-tertiary-fixed": "#052100",
+                      "surface-tint": "#ffb77d",
+                      "on-tertiary-fixed-variant": "#255015",
+                      "surface-variant": "#3a342f",
+                      "surface-container-lowest": "#120d0a",
+                      "primary-fixed": "#ffdcc3",
+                      "inverse-on-surface": "#352f2b",
+                      "on-tertiary-container": "#0a3100",
+                      "on-secondary-fixed-variant": "#534531",
+                      "surface-bright": "#3e3833",
+                      "tertiary": "#a1d489",
+                      "on-secondary-container": "#c6b299",
+                      "on-error-container": "#ffdad6",
+                      "on-primary": "#4d2600",
+                      "tertiary-fixed-dim": "#a1d489",
+                      "on-secondary-fixed": "#241a09",
+                      "surface": "#17120e",
+                      "on-background": "#ece0d9",
+                      "secondary": "#d8c3a9",
+                      "surface-container": "#241f1a",
+                      "on-secondary": "#3b2e1c",
+                      "secondary-fixed": "#f5dfc4",
+                      "outline-variant": "#554336",
+                      "on-surface-variant": "#dbc2b0",
+                      "inverse-surface": "#ece0d9",
+                      "primary": "#ffb77d",
+                      "secondary-container": "#534531",
+                      "on-primary-container": "#432100",
+                      "surface-container-highest": "#3a342f",
+                      "surface-dim": "#17120e",
+                      "on-tertiary": "#0d3900",
+                      "background": "#17120e",
+                      "tertiary-container": "#6d9d58",
+                      "secondary-fixed-dim": "#d8c3a9",
+                      "on-primary-fixed-variant": "#6e3900",
+                      "primary-container": "#d97707",
+                      "outline": "#a38c7c",
+                      "on-error": "#690005",
+                      "inverse-primary": "#904d00"
+              },
+              "borderRadius": {
+                      "DEFAULT": "0px",
+                      "lg": "0px",
+                      "xl": "0px",
+                      "full": "0px"
+              },
+              "spacing": {},
+              "fontFamily": {
+                      "headline": ["IBM Plex Mono"],
+                      "display": ["IBM Plex Mono"],
+                      "body": ["IBM Plex Mono"],
+                      "label": ["IBM Plex Mono"],
+                      "mono": ["IBM Plex Mono"]
+              },
+              "fontSize": {}
+      },
+          },
+        }
+    </script>
+<style>
+        body {
+            font-family: 'IBM Plex Mono', monospace;
+            background-color: #1A1511; /* Aged Walnut */
+            color: #F5E6C8; /* Warm Vellum */
+            line-height: 1.65;
+            margin: 0;
+            overflow: hidden;
+        }
+        .ansi-border {
+            border: 1px solid #3A2F25;
+        }
+        .ansi-border-primary {
+            border: 2px solid #D97706; /* Double-line feel via thickness */
+        }
+        .ansi-border-l { border-left: 1px solid #3A2F25; }
+        .ansi-border-t { border-top: 1px solid #3A2F25; }
+        .ansi-border-b { border-bottom: 1px solid #3A2F25; }
+        
+        /* Typography specifics */
+        .small-caps {
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+        }
+    </style>
+</head>
+<body class="flex flex-col h-screen antialiased bg-[#1A1511] text-[#F5E6C8] font-mono text-sm">
+<!-- TopAppBar -->
+<header class="flex items-center justify-between px-4 w-full h-12 bg-[#1A1511] border-b border-[#3A2F25] flex-shrink-0 relative z-10">
+<div class="flex items-center space-x-6 h-full">
+<span class="text-[#D97706] font-bold tracking-widest text-lg">SUMOCODE</span>
+<nav class="flex h-full">
+<!-- Navigation Tabs based on JSON -->
+<div class="flex items-center h-full px-4 text-[#8B7A63] border-r border-[#3A2F25] border-l">WORKSPACE.TS</div>
+<div class="flex items-center h-full px-4 text-[#D97706] border-b-2 border-[#D97706] bg-[#241D17] border-r border-[#3A2F25]">INDEX.MD</div>
+<div class="flex items-center h-full px-4 text-[#8B7A63] border-r border-[#3A2F25]">SCRIPTS.PY</div>
+</nav>
+</div>
+<!-- Tab requested by prompt (work-20260424) represented here as an active session identifier on right -->
+<div class="flex items-center h-full">
+<div class="ansi-border-primary px-3 py-1 bg-[#241D17] text-[#F5E6C8] font-bold small-caps text-xs">
+                work-20260424
+            </div>
+</div>
+</header>
+<div class="flex flex-1 overflow-hidden">
+<!-- Main Area -->
+<main class="flex-1 flex flex-col relative px-8 py-12">
+<!-- Dim Quote -->
+<div class="text-[#8B7A63] italic w-full text-center mt-12 max-w-3xl mx-auto">
+                "Perfection is achieved when there is nothing left to take away."<br/>
+<span class="text-xs mt-2 block">— Saint-Exupéry</span>
+</div>
+<div class="flex-1"></div>
+<!-- Input Box -->
+<div class="w-full max-w-4xl mx-auto mb-8 bg-[#120d0a] ansi-border p-4 relative">
+<div class="absolute -top-3 left-4 bg-[#1A1511] px-2 text-[#8B7A63] text-xs small-caps">INPUT</div>
+<div class="flex items-center text-lg">
+<span class="text-[#D97706] mr-3">&gt;</span>
+<span class="text-[#F5E6C8] opacity-50">_</span>
+<span class="ml-1 w-2.5 h-5 bg-[#D97706] animate-pulse block"></span>
+</div>
+</div>
+</main>
+<!-- SideNavBar -->
+<aside class="w-64 bg-[#241D17] border-l border-[#3A2F25] flex-shrink-0 flex flex-col h-full py-4 space-y-6">
+<div class="px-6 mb-4">
+<div class="text-[#F5E6C8] font-bold small-caps text-base">KNOWLEDGE BASE</div>
+<div class="text-[#8B7A63] small-caps text-xs mt-1">SCRIPTORIUM PROTOCOL</div>
+</div>
+<nav class="flex flex-col space-y-2 px-4">
+<a class="flex items-center text-[#8B7A63] px-2 py-1 hover:text-[#F5E6C8] hover:bg-[#3A342F] transition-none" href="#">
+<span class="material-symbols-outlined mr-3 text-sm">analytics</span>
+<span class="small-caps text-sm tracking-[0.1em]">CONTEXT</span>
+</a>
+<a class="flex items-center text-[#8B7A63] px-2 py-1 hover:text-[#F5E6C8] hover:bg-[#3A342F] transition-none" href="#">
+<span class="material-symbols-outlined mr-3 text-sm">terminal</span>
+<span class="small-caps text-sm tracking-[0.1em]">MCP</span>
+</a>
+<a class="flex items-center text-[#8B7A63] px-2 py-1 hover:text-[#F5E6C8] hover:bg-[#3A342F] transition-none" href="#">
+<span class="material-symbols-outlined mr-3 text-sm">psychology</span>
+<span class="small-caps text-sm tracking-[0.1em]">MEMORY</span>
+</a>
+</nav>
+<div class="mt-auto px-6 pt-8 border-t border-[#3A2F25] border-dashed border-opacity-30">
+<div class="text-[#8B7A63] text-xs mb-2">SYSTEM STATUS</div>
+<div class="flex flex-col space-y-2">
+<div class="flex justify-between text-xs">
+<span class="text-[#8B7A63]">MEM</span>
+<span class="text-[#F5E6C8]">24%</span>
+</div>
+<div class="flex justify-between text-xs">
+<span class="text-[#8B7A63]">CPU</span>
+<span class="text-[#F5E6C8]">02%</span>
+</div>
+</div>
+</div>
+</aside>
+</div>
+<!-- Footer -->
+<footer class="flex justify-between items-center px-4 h-8 w-full bg-[#120d0a] border-t border-[#3A2F25] flex-shrink-0 z-10 text-xs font-mono uppercase tracking-tighter">
+<div class="flex items-center space-x-6">
+<div class="flex items-center text-[#7FB069]">
+<span class="mr-2">●</span>
+<span>ready</span>
+</div>
+<span class="text-[#8B7A63]">STATE: IDLE</span>
+</div>
+<div class="flex space-x-6 text-[#8B7A63]">
+<span class="hover:text-[#D97706] transition-none cursor-pointer">PATH: /SRC/CORE</span>
+<span class="hover:text-[#D97706] transition-none cursor-pointer">6.4KB/S</span>
+<span class="hover:text-[#D97706] transition-none cursor-pointer">0.042$</span>
+<span class="hover:text-[#D97706] transition-none cursor-pointer">12.4K TOKENS</span>
+</div>
+</footer>
+</body></html>

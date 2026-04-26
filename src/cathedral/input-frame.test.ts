@@ -10,21 +10,21 @@ const ANSI = /\u001b\[[0-9;]*m/g;
 const stripAnsi = (s: string): string => s.replace(ANSI, "");
 
 describe("renderInputFrame — active state (no label, no placeholder)", () => {
-	it("renders 3 rows: top border, content, bottom border", () => {
+	it("renders 5 rows: top + pad + content + pad + bottom (Stitch p-4)", () => {
 		const lines = renderInputFrame("hello", 50);
-		expect(lines.length).toBe(3);
+		expect(lines.length).toBe(5);
 		expect(lines[0]).toMatch(/┌.+┐/);
-		expect(lines[2]).toMatch(/└.+┘/);
+		expect(lines[4]).toMatch(/└.+┘/);
 	});
 
-	it("renders prompt arrow > before input text", () => {
+	it("renders prompt arrow > before input text on the content row (row 2)", () => {
 		const lines = renderInputFrame("hello", 50).map(stripAnsi);
-		expect(lines[1]).toContain("> hello");
+		expect(lines[2]).toContain("> hello");
 	});
 
 	it("renders cursor █ at end of text", () => {
 		const lines = renderInputFrame("hello", 50).map(stripAnsi);
-		expect(lines[1]).toContain("> hello█");
+		expect(lines[2]).toContain("> hello█");
 	});
 
 	it("pads each line to exact width", () => {
@@ -41,26 +41,43 @@ describe("renderInputFrame — active state (no label, no placeholder)", () => {
 		expect(lines.join("\n")).toContain("\u001b[38;2;58;47;37m");
 	});
 
-	it("colors prompt > and cursor █ in accent (#D97706)", () => {
+	it("colors cursor █ in accent (#D97706)", () => {
 		const lines = renderInputFrame("test", 40);
 		// accent #D97706 -> 217;119;6
 		expect(lines.join("\n")).toContain("\u001b[38;2;217;119;6m");
 	});
+
+	it("paints the inner content with the recess background (#120D0A)", () => {
+		const lines = renderInputFrame("hi", 40);
+		// recess #120D0A -> 18;13;10 as bg = 48;2;18;13;10
+		expect(lines.join("\n")).toContain("\u001b[48;2;18;13;10m");
+	});
+
+	it("defaults `>` prompt to oxidized (#8B7A63), not accent", () => {
+		const lines = renderInputFrame("hello", 50);
+		// oxidized #8B7A63 -> 139;122;99
+		expect(lines.join("\n")).toContain("\u001b[38;2;139;122;99m>");
+	});
+
+	it("colors `>` accent when promptColor: 'accent' is set", () => {
+		const lines = renderInputFrame("hello", 50, { promptColor: "accent" });
+		expect(lines.join("\n")).toContain("\u001b[38;2;217;119;6m>");
+	});
 });
 
 describe("renderInputFrame — splash state (with label + placeholder)", () => {
-	it("renders top border with label `┌─ LABEL ──...─┐`", () => {
-		const lines = renderInputFrame("", 60, { label: "DIVINE INVOCATION" });
+	it("renders top border with label `┌─ SCRIPTOR INPUT ──...─┐`", () => {
+		const lines = renderInputFrame("", 60, { label: "SCRIPTOR INPUT" });
 		const top = stripAnsi(lines[0]!);
-		expect(top).toMatch(/^┌.* DIVINE INVOCATION /);
+		expect(top).toMatch(/^┌.* SCRIPTOR INPUT /);
 		expect(top).toMatch(/┐$/);
 	});
 
-	it("shows placeholder text when input is empty", () => {
+	it("shows placeholder text when input is empty (on the content row, row 2)", () => {
 		const lines = renderInputFrame("", 80, {
 			placeholder: 'Ask anything... "Refactor the auth flow."',
 		});
-		const content = stripAnsi(lines[1]!);
+		const content = stripAnsi(lines[2]!);
 		expect(content).toContain("Ask anything");
 		expect(content).toContain("Refactor the auth flow.");
 	});
@@ -69,7 +86,7 @@ describe("renderInputFrame — splash state (with label + placeholder)", () => {
 		const lines = renderInputFrame("hello", 80, {
 			placeholder: "should not appear",
 		});
-		const content = stripAnsi(lines[1]!);
+		const content = stripAnsi(lines[2]!);
 		expect(content).not.toContain("should not appear");
 		expect(content).toContain("> hello");
 	});
@@ -112,8 +129,15 @@ describe("renderInputHints", () => {
 		// Only enough room for keybinds
 		const line = stripAnsi(renderInputHints(40, { leftHint: INPUT_FRAME_HINT_AWAITING }));
 		expect(line).toContain(INPUT_FRAME_HINT_KEYBINDS);
-		// AWAITING DIVINE INVOCATION at this width should drop
+		// INPUT PROTOCOL AWAITING COMMAND at this width should drop
 		expect(line).not.toContain("AWAITING");
+	});
+
+	it("colors TAB and CTRL+P modifier keys in accent (#D97706)", () => {
+		const line = renderInputHints(80);
+		// accent escape sequence ANSI 38;2;217;119;6 immediately preceding TAB
+		expect(line).toContain("\u001b[38;2;217;119;6mTAB");
+		expect(line).toContain("\u001b[38;2;217;119;6mCTRL+P");
 	});
 
 	it("at very narrow width, returns minimal/empty", () => {
@@ -123,11 +147,11 @@ describe("renderInputHints", () => {
 });
 
 describe("INPUT_FRAME_HINT_KEYBINDS / INPUT_FRAME_HINT_AWAITING constants", () => {
-	it("exposes locked keybind hint string from Element 3", () => {
+	it("exposes locked keybind hint string (uppercase from Stitch CSS)", () => {
 		expect(INPUT_FRAME_HINT_KEYBINDS).toBe("TAB · AGENTS  CTRL+P · COMMANDS");
 	});
 
-	it("exposes locked awaiting hint string from Element 3", () => {
-		expect(INPUT_FRAME_HINT_AWAITING).toBe("└─ AWAITING DIVINE INVOCATION");
+	it("exposes locked awaiting hint string (verbatim from Stitch HTML)", () => {
+		expect(INPUT_FRAME_HINT_AWAITING).toBe("┌─ INPUT PROTOCOL AWAITING COMMAND");
 	});
 });

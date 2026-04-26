@@ -90,8 +90,12 @@ function loadFace(): readonly string[] {
 
 const SUMO_FACE = loadFace();
 
-export const SUMOCODE_QUOTE = '"perfection is achieved when there is nothing left to take away."';
-export const SUMOCODE_QUOTE_ATTRIBUTION = "— saint-exupéry";
+// Quote text + attribution lifted verbatim from the Stitch HTML mockup
+// (`docs/ui/stitch/cathedral/v1-html/splash.html`). The CSS applies
+// `uppercase` so the rendered string in the terminal is upper-case too.
+export const SUMOCODE_QUOTE =
+	'"PERFECTION IS ACHIEVED, NOT WHEN THERE IS NOTHING MORE TO ADD, BUT WHEN THERE IS NOTHING LEFT TO TAKE AWAY."';
+export const SUMOCODE_QUOTE_ATTRIBUTION = "— ANTOINE DE SAINT-EXUPÉRY";
 
 export type SplashSnapshot = {
 	quote: string;

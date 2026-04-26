@@ -24,10 +24,12 @@ import type {
 } from "@mariozechner/pi-coding-agent";
 import { CustomEditor } from "@mariozechner/pi-coding-agent";
 import type { EditorTheme, TUI } from "@mariozechner/pi-tui";
-import { renderInputFrame } from "./input-frame.js";
-
-const SPLASH_LABEL = "DIVINE INVOCATION";
-const SPLASH_PLACEHOLDER = 'Ask anything... "Refactor the auth flow."';
+import {
+	INPUT_FRAME_LABEL_ACTIVE,
+	INPUT_FRAME_LABEL_SPLASH,
+	INPUT_FRAME_PLACEHOLDER,
+	renderInputFrame,
+} from "./input-frame.js";
 
 class CathedralEditor extends CustomEditor {
 	constructor(
@@ -42,14 +44,20 @@ class CathedralEditor extends CustomEditor {
 	override render(width: number): string[] {
 		if (!this.isSplash()) {
 			// Active state: defer to Pi's full editor for autocomplete + multi-line.
+			// (We deliberately do NOT wrap it in our cathedral frame because that
+			// would cost autocomplete display, multi-line wrap, and IME support.
+			// Active-state cathedral input is tracked as a v2 follow-up.)
+			void INPUT_FRAME_LABEL_ACTIVE; // re-export touch so deletions surface here
 			return super.render(width);
 		}
 
-		// Splash state: render carved cathedral frame with DIVINE INVOCATION label.
+		// Splash state: render the carved cathedral frame with `SCRIPTOR INPUT`
+		// label and the canonical placeholder text from the Stitch mockup.
 		const text = this.getText();
 		return renderInputFrame(text, width, {
-			label: SPLASH_LABEL,
-			placeholder: SPLASH_PLACEHOLDER,
+			label: INPUT_FRAME_LABEL_SPLASH,
+			placeholder: INPUT_FRAME_PLACEHOLDER,
+			promptColor: "oxidized",
 		});
 	}
 }

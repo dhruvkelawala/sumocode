@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>SumoCode - Idle</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,400;0,700;1,400&amp;family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,700;1,6..72,400&amp;family=Public+Sans:wght@400;700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+          darkMode: "class",
+          theme: {
+            extend: {
+              "colors": {
+                      "inverse-surface": "#ece0d9",
+                      "secondary-fixed-dim": "#d8c3a9",
+                      "on-primary-fixed-variant": "#6e3900",
+                      "outline-variant": "#554336",
+                      "on-surface": "#ece0d9",
+                      "inverse-on-surface": "#352f2b",
+                      "on-secondary-fixed": "#241a09",
+                      "error-container": "#93000a",
+                      "surface": "#17120e",
+                      "secondary-container": "#534531",
+                      "on-surface-variant": "#dbc2b0",
+                      "on-error-container": "#ffdad6",
+                      "background": "#17120e",
+                      "surface-container-highest": "#3a342f",
+                      "surface-bright": "#3e3833",
+                      "inverse-primary": "#904d00",
+                      "on-tertiary": "#0d3900",
+                      "primary-container": "#d97707",
+                      "on-tertiary-container": "#0a3100",
+                      "on-primary-fixed": "#2f1500",
+                      "tertiary-fixed-dim": "#a1d489",
+                      "tertiary-container": "#6d9d58",
+                      "surface-container-high": "#2f2924",
+                      "on-secondary-fixed-variant": "#534531",
+                      "on-primary": "#4d2600",
+                      "surface-container-low": "#201b16",
+                      "tertiary-fixed": "#bdf1a3",
+                      "surface-tint": "#ffb77d",
+                      "primary": "#ffb77d",
+                      "on-tertiary-fixed-variant": "#255015",
+                      "tertiary": "#a1d489",
+                      "surface-container": "#241f1a",
+                      "primary-fixed-dim": "#ffb77d",
+                      "on-tertiary-fixed": "#052100",
+                      "surface-container-lowest": "#120d0a",
+                      "primary-fixed": "#ffdcc3",
+                      "surface-variant": "#3a342f",
+                      "error": "#ffb4ab",
+                      "secondary-fixed": "#f5dfc4",
+                      "on-secondary": "#3b2e1c",
+                      "on-primary-container": "#432100",
+                      "secondary": "#d8c3a9",
+                      "on-secondary-container": "#c6b299",
+                      "on-background": "#ece0d9",
+                      "surface-dim": "#17120e",
+                      "outline": "#a38c7c",
+                      "on-error": "#690005"
+              },
+              "borderRadius": {
+                      "DEFAULT": "0rem",
+                      "lg": "0rem",
+                      "xl": "0rem",
+                      "full": "0rem"
+              },
+              "fontFamily": {
+                      "headline": ["IBM Plex Mono"],
+                      "display": ["IBM Plex Mono"],
+                      "body": ["IBM Plex Mono"],
+                      "label": ["IBM Plex Mono"],
+                      "mono": ["IBM Plex Mono", "monospace"]
+              }
+            }
+          }
+        }
+    </script>
+<style>
+        body {
+            font-family: 'IBM Plex Mono', monospace;
+            background-color: #1A1511;
+            color: #F5E6C8;
+            line-height: 1.65;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            flex-direction: column;
+            min-height: 100vh;
+        }
+        ::selection {
+            background: #D97706;
+            color: #1A1511;
+        }
+        .text-accent { color: #D97706; }
+        .text-sage { color: #7FB069; }
+        .text-oxidized { color: #8B7A63; }
+        .bg-surface { background-color: #241D17; }
+        .bg-recess { background-color: #120D0A; }
+        .border-divider { border-color: #3A2F25; }
+    </style>
+</head>
+<body class="bg-[#1A1511] text-[#F5E6C8] font-mono flex flex-col h-screen overflow-hidden">
+<!-- Top Navigation (Shared Component Shell) -->
+<header class="flex justify-between items-center w-full px-6 py-2 bg-[#1A1511] border-b border-divider font-mono uppercase tracking-[0.1em] text-sm text-[#8B7A63] z-50">
+<div class="flex items-center space-x-6">
+<span class="font-mono font-bold tracking-[0.2em] text-[#D97706]">SUMOCODE</span>
+<div class="flex space-x-4">
+<a class="text-[#8B7A63] hover:bg-[#241D17] hover:text-[#F5E6C8] px-2 py-1" href="#">SESSION_01</a>
+<a class="text-[#8B7A63] hover:bg-[#241D17] hover:text-[#F5E6C8] px-2 py-1" href="#">SESSION_02</a>
+<a class="text-[#8B7A63] hover:bg-[#241D17] hover:text-[#F5E6C8] px-2 py-1" href="#">ARCHIVE</a>
+</div>
+</div>
+<div class="flex items-center space-x-4 text-[#8B7A63]">
+<span class="material-symbols-outlined text-sm hover:text-[#F5E6C8] cursor-pointer" data-icon="terminal">terminal</span>
+<span class="material-symbols-outlined text-sm hover:text-[#F5E6C8] cursor-pointer" data-icon="settings">settings</span>
+</div>
+</header>
+<!-- Main Content Canvas -->
+<main class="flex-grow flex flex-col items-center justify-center p-8 relative">
+<!-- Header Line Overlay -->
+<div class="absolute top-4 left-4 text-oxidized text-xs font-mono">
+            ║ <span class="text-sage">●</span> work-20260424 ║ │ <span class="text-accent">+</span> new
+        </div>
+<div class="w-full max-w-2xl flex flex-col items-center space-y-12">
+<!-- ASCII Art Bastet -->
+<pre aria-hidden="true" class="font-mono text-sm leading-tight text-[#F5E6C8] text-center select-none">      /\_/\
+     ( o.o )
+      &gt; ^ &lt;
+     /  <span class="text-accent">☥</span>  \
+    /| <span class="text-accent">◈</span> | \
+   | |___| |
+  (__)   (__)
+            </pre>
+<!-- Wordmark -->
+<h1 class="text-accent text-3xl md:text-4xl font-bold tracking-[0.4em] uppercase text-center mt-8">
+                S U M O C O D E
+            </h1>
+<!-- Quote -->
+<p class="text-oxidized text-sm italic tracking-wide text-center uppercase">
+                "Perfection is achieved, not when there is nothing more to add, but when there is nothing left to take away."
+                <br/>
+<span class="text-xs tracking-widest mt-2 block">— Antoine de Saint-Exupéry</span>
+</p>
+<!-- Input Area -->
+<div class="w-full mt-12 relative group">
+<div class="absolute -top-3 left-2 bg-[#1A1511] px-2 text-oxidized text-xs uppercase tracking-widest z-10 group-focus-within:text-accent transition-colors duration-150">
+                    SCRIPTOR INPUT
+                </div>
+<div class="bg-recess border border-divider p-4 relative font-mono text-sm text-[#F5E6C8] w-full flex flex-col focus-within:border-[#554336] transition-colors duration-150 shadow-none rounded-none">
+<div class="flex items-start">
+<span class="text-oxidized mr-3 select-none">&gt;</span>
+<div aria-multiline="true" class="flex-grow outline-none bg-transparent resize-none overflow-hidden placeholder-oxidized min-h-[3rem]" contenteditable="true" role="textbox">Ask anything... "Refactor the auth flow."<span class="text-accent ml-1 animate-pulse select-none">█</span></div>
+</div>
+</div>
+<div class="w-full flex justify-between items-center mt-3 text-[10px] text-oxidized uppercase tracking-widest">
+<span>┌─ INPUT PROTOCOL AWAITING COMMAND</span>
+<div class="space-x-4">
+<span><span class="text-accent mr-1">tab</span>· agents</span>
+<span><span class="text-accent mr-1">ctrl+p</span>· commands</span>
+</div>
+</div>
+</div>
+</div>
+</main>
+<!-- Footer Navigation (Shared Component Shell) -->
+<footer class="fixed bottom-0 w-full flex justify-between items-center px-6 py-1 z-50 bg-[#120d0a] border-t border-divider font-mono text-xs uppercase tracking-widest text-[#7FB069]">
+<div class="flex items-center space-x-2">
+<span class="text-[#8B7A63]">SYSTEM_ID: SCRIPTORIUM-V1 // STATUS: SAGE_IDLE // LATENCY: 14MS</span>
+</div>
+<div class="flex space-x-6">
+<a class="text-[#8B7A63] hover:text-[#F5E6C8] transition-colors" href="#">MANUAL</a>
+<a class="text-[#8B7A63] hover:text-[#F5E6C8] transition-colors" href="#">KERNEL</a>
+<a class="text-[#8B7A63] hover:text-[#F5E6C8] transition-colors" href="#">EXIT</a>
+</div>
+</footer>
+</body></html>

@@ -75,7 +75,7 @@ describe("installInputHints", () => {
 		expect(lines.length).toBe(1);
 		const stripped = lines[0]!.replace(/\u001b\[[0-9;]*m/g, "");
 		expect(stripped).toContain("TAB · AGENTS  CTRL+P · COMMANDS");
-		expect(stripped).not.toContain("AWAITING DIVINE INVOCATION");
+		expect(stripped).not.toContain("INPUT PROTOCOL AWAITING COMMAND");
 	});
 
 	it("widget factory renders BOTH hints on splash (no messages yet)", () => {
@@ -104,7 +104,7 @@ describe("installInputHints", () => {
 		const lines = component!.render(120);
 		expect(lines.length).toBe(1);
 		const stripped = lines[0]!.replace(/\u001b\[[0-9;]*m/g, "");
-		expect(stripped).toContain("AWAITING DIVINE INVOCATION");
+		expect(stripped).toContain("INPUT PROTOCOL AWAITING COMMAND");
 		expect(stripped).toContain("TAB · AGENTS  CTRL+P · COMMANDS");
 	});
 });

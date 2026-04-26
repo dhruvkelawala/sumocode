@@ -11,8 +11,9 @@ const stripAnsi = (s: string): string => s.replace(ANSI, "");
 
 function snapshot(overrides: Partial<SplashSnapshot> = {}): SplashSnapshot {
 	return {
-		quote: '"perfection is achieved when there is nothing left to take away."',
-		quoteAttribution: "— saint-exupéry",
+		quote:
+			'"PERFECTION IS ACHIEVED, NOT WHEN THERE IS NOTHING MORE TO ADD, BUT WHEN THERE IS NOTHING LEFT TO TAKE AWAY."',
+		quoteAttribution: "— ANTOINE DE SAINT-EXUPÉRY",
 		hasMessages: false,
 		...overrides,
 	};
@@ -49,8 +50,10 @@ describe("renderSplash", () => {
 		const lines = renderSplash(snapshot(), 160);
 		const blob = lines.join("\n");
 
-		expect(stripAnsi(blob)).toContain("perfection is achieved when there is nothing left to take away.");
-		expect(stripAnsi(blob)).toContain("— saint-exupéry");
+		expect(stripAnsi(blob)).toContain(
+			"PERFECTION IS ACHIEVED, NOT WHEN THERE IS NOTHING MORE TO ADD, BUT WHEN THERE IS NOTHING LEFT TO TAKE AWAY.",
+		);
+		expect(stripAnsi(blob)).toContain("— ANTOINE DE SAINT-EXUPÉRY");
 		// Dim muted brown #8B7A63 -> 139;122;99
 		expect(blob).toContain("\u001b[38;2;139;122;99m");
 	});

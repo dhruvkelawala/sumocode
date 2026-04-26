@@ -1,15 +1,20 @@
 import { basename } from "node:path";
 import type { ExtensionAPI, ExtensionContext, Theme } from "@mariozechner/pi-coding-agent";
 import type { Component } from "@mariozechner/pi-tui";
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { readFileSync } from "node:fs";
 import { CATHEDRAL_TOKENS, type SumoCodeState } from "./tokens.js";
-import { formatTokenCount } from "./footer.js";
+import { formatTokenCount, resolveGitBranch } from "./footer.js";
 import { createRemnicMemoryClient, type RemnicMemoryClient } from "./memory.js";
 import { VOICE } from "./voice.js";
 
 /** Threshold below which the sidebar hides itself. */
-export const SIDEBAR_MIN_TERMINAL_WIDTH = 120;
-/** Render width for the sidebar overlay. */
-export const SIDEBAR_WIDTH = 32;
+export const SIDEBAR_MIN_TERMINAL_WIDTH = 160;
+/** Render width for the sidebar overlay (DESIGN.md §5 — cols 112..160). */
+export const SIDEBAR_WIDTH = 49;
+/** Leading indent inside each sidebar row, matching docs/ui/claude-design/Sidebar.jsx. */
+const SIDEBAR_INDENT = "  ";
 /** Debounce used when refreshing memories from user prompt changes. */
 export const SIDEBAR_MEMORY_DEBOUNCE_MS = 200;
 /** Retry cadence while Remnic is unavailable. */
@@ -30,14 +35,33 @@ export type McpServerSnapshot = {
 
 export type SidebarSnapshot = {
 	projectName: string;
+	branch?: string;
 	inputTokens: number;
 	outputTokens: number;
 	contextWindow: number;
 	costUsd: number;
 	mcpServers: readonly McpServerSnapshot[];
 	memory: readonly string[];
+	/** Total memories in the store; used to compute the 'N more · ⌘M' footer. */
+	memoryTotal?: number;
 	memoryUnavailable?: boolean;
 };
+
+export type SidebarAnchor = "right-center" | "top-right" | "bottom-right";
+
+/**
+ * Pick a sidebar anchor responsive to terminal aspect ratio. Override always
+ * wins so per-machine `~/.sumocode/local-config.json` can pin a value.
+ */
+export function chooseSidebarAnchor(
+	termWidth: number,
+	termHeight: number,
+	override?: SidebarAnchor,
+): SidebarAnchor {
+	if (override) return override;
+	if (termHeight > termWidth * 1.4) return "top-right";
+	return "right-center";
+}
 
 const RESET = "\u001b[0m";
 const ANSI_PATTERN = /\u001b\[[0-9;]*m/g;
@@ -83,33 +107,89 @@ function surfaceLine(content: string, width: number): string {
 	return `${surface}${foreground}${content}${padding}${RESET}`;
 }
 
+function indent(content: string): string {
+	return `${SIDEBAR_INDENT}${content}`;
+}
+
 function banner(title: string, width: number): string {
 	const upper = title.toUpperCase();
 	const inner = ` ${upper} `;
-	const dashCount = Math.max(2, width - inner.length);
-	const left = Math.floor(dashCount / 2);
-	const right = dashCount - left;
-	const content = color(`${"═".repeat(left)}${inner}${"═".repeat(right)}`, CATHEDRAL_TOKENS.colors.accent);
-	return surfaceLine(content, width);
+	const available = Math.max(2, width - SIDEBAR_INDENT.length - inner.length);
+	const left = Math.floor(available / 2);
+	const right = available - left;
+	const banner = color(`${"═".repeat(left)}${inner}${"═".repeat(right)}`, CATHEDRAL_TOKENS.colors.accent);
+	return surfaceLine(indent(banner), width);
+}
+
+const PROGRESS_BAR_TOTAL = 24;
+
+function renderProgressBar(used: number, total: number): string {
+	if (total <= 0) {
+		return `[${"░".repeat(PROGRESS_BAR_TOTAL)}]`;
+	}
+	const ratio = Math.max(0, Math.min(1, used / total));
+	const filled = Math.round(ratio * PROGRESS_BAR_TOTAL);
+	const empty = PROGRESS_BAR_TOTAL - filled;
+	const leftBracket = color("[", CATHEDRAL_TOKENS.colors.divider);
+	const rightBracket = color("]", CATHEDRAL_TOKENS.colors.divider);
+	const fill = color("█".repeat(filled), CATHEDRAL_TOKENS.colors.foreground);
+	const rest = color("░".repeat(empty), CATHEDRAL_TOKENS.colors.divider);
+	return `${leftBracket}${fill}${rest}${rightBracket}`;
 }
 
 function contextLines(snapshot: SidebarSnapshot, width: number): string[] {
 	const used = snapshot.inputTokens + snapshot.outputTokens;
 	const gauge = `${formatTokenCount(used)}/${formatTokenCount(snapshot.contextWindow)}`;
-	const cost = `$${snapshot.costUsd.toFixed(2)}`;
+	const projectLabel = snapshot.branch ? `${snapshot.projectName} (${snapshot.branch})` : snapshot.projectName;
+	const progressBar = renderProgressBar(used, snapshot.contextWindow);
+	const spend = color(`$${snapshot.costUsd.toFixed(2)} spent · session`, CATHEDRAL_TOKENS.colors.foregroundDim);
+
 	return [
+		surfaceLine("", width),
 		banner(VOICE.sections.context, width),
-		surfaceLine(snapshot.projectName, width),
-		surfaceLine(gauge, width),
-		surfaceLine(cost, width),
+		surfaceLine("", width),
+		surfaceLine(indent(projectLabel), width),
+		surfaceLine(indent(`${progressBar} ${gauge}`), width),
+		surfaceLine(indent(spend), width),
 	];
 }
 
+function statusLabel(status: SumoCodeState): string {
+	switch (status) {
+		case "idle":
+			return "idle";
+		case "thinking":
+			return "working";
+		case "tool":
+			return "tool";
+		case "approval":
+			return "down";
+		case "learning":
+			return "learning";
+	}
+}
+
 function mcpLines(snapshot: SidebarSnapshot, width: number): string[] {
-	const lines: string[] = [surfaceLine("", width), banner(VOICE.sections.mcp, width)];
+	const lines: string[] = [
+		surfaceLine("", width),
+		banner(VOICE.sections.mcp, width),
+		surfaceLine("", width),
+	];
+
+	const innerWidth = width - SIDEBAR_INDENT.length;
+
 	for (const server of snapshot.mcpServers) {
 		const dot = color("●", CATHEDRAL_TOKENS.colors.states[server.status]);
-		lines.push(surfaceLine(`${dot} ${server.name}`, width));
+		const label = statusLabel(server.status);
+		const pill = color(label, CATHEDRAL_TOKENS.colors.foregroundDim);
+		// Visible chars: "● " + name + spaces + label = innerWidth
+		const nameMaxLen = Math.max(0, innerWidth - 2 /* dot + space */ - label.length - 1 /* gap */);
+		const name = server.name.length > nameMaxLen
+			? `${server.name.slice(0, Math.max(0, nameMaxLen - 1))}…`
+			: server.name;
+		const gap = Math.max(1, innerWidth - 2 - name.length - label.length);
+		const row = `${dot} ${name}${" ".repeat(gap)}${pill}`;
+		lines.push(surfaceLine(indent(row), width));
 	}
 	return lines;
 }
@@ -117,24 +197,38 @@ function mcpLines(snapshot: SidebarSnapshot, width: number): string[] {
 const MEMORY_DISPLAY_LIMIT = 5;
 
 function memoryLines(snapshot: SidebarSnapshot, width: number): string[] {
-	const lines: string[] = [surfaceLine("", width), banner(VOICE.sections.memory, width)];
+	const lines: string[] = [
+		surfaceLine("", width),
+		banner(VOICE.sections.memory, width),
+		surfaceLine("", width),
+	];
+
 	if (snapshot.memoryUnavailable) {
-		lines.push(surfaceLine(dim(VOICE.errors.daemonDown), width));
+		lines.push(surfaceLine(indent(dim(VOICE.errors.daemonDown)), width));
 		return lines;
 	}
 
 	if (snapshot.memory.length === 0) {
-		lines.push(surfaceLine(dim(VOICE.empty.memory), width));
+		lines.push(surfaceLine(indent(dim(VOICE.empty.memory)), width));
 		return lines;
 	}
 
-	for (const item of snapshot.memory.slice(0, MEMORY_DISPLAY_LIMIT)) {
+	const shown = snapshot.memory.slice(0, MEMORY_DISPLAY_LIMIT);
+	for (const item of shown) {
 		const bullet = color("❧", CATHEDRAL_TOKENS.colors.accent);
 		// truncate item text so visible width never exceeds the column count.
-		const available = Math.max(0, width - 2 /* bullet + space */);
+		const available = Math.max(0, width - SIDEBAR_INDENT.length - 2 /* bullet + space */);
 		const truncated = item.length > available ? `${item.slice(0, Math.max(0, available - 1))}…` : item;
-		lines.push(surfaceLine(`${bullet} ${truncated}`, width));
+		lines.push(surfaceLine(indent(`${bullet} ${truncated}`), width));
 	}
+
+	const total = snapshot.memoryTotal ?? snapshot.memory.length;
+	const hidden = Math.max(0, total - shown.length);
+	if (hidden > 0) {
+		lines.push(surfaceLine("", width));
+		lines.push(surfaceLine(indent(color(`${hidden} more · ⌘M`, CATHEDRAL_TOKENS.colors.foregroundDim)), width));
+	}
+
 	return lines;
 }
 
@@ -241,17 +335,41 @@ function snapshotFromContext(
 	}
 
 	const contextWindow = ctx.getContextUsage()?.contextWindow ?? ctx.model?.contextWindow ?? 0;
+	const branch = resolveGitBranch(ctx.cwd) ?? undefined;
 
 	return {
 		projectName: basename(ctx.cwd) || ctx.cwd,
+		branch,
 		inputTokens: input,
 		outputTokens: output,
 		contextWindow,
 		costUsd: cost,
 		mcpServers: PLACEHOLDER_MCP,
 		memory: memorySnapshot.memory,
+		memoryTotal: memorySnapshot.memory.length,
 		memoryUnavailable: memorySnapshot.memoryUnavailable,
 	};
+}
+
+/**
+ * Read a per-machine sidebar anchor override from `~/.sumocode/local-config.json`.
+ * Per #13: this file is intentionally NOT synced via the config repo.
+ */
+export const SIDEBAR_LOCAL_CONFIG_PATH = join(homedir(), ".sumocode", "local-config.json");
+
+function readSidebarAnchorOverride(): SidebarAnchor | undefined {
+	try {
+		const raw = readFileSync(SIDEBAR_LOCAL_CONFIG_PATH, "utf8");
+		const parsed: unknown = JSON.parse(raw);
+		if (typeof parsed !== "object" || parsed === null) return undefined;
+		const value = (parsed as { sidebarAnchor?: unknown }).sidebarAnchor;
+		if (value === "right-center" || value === "top-right" || value === "bottom-right") {
+			return value;
+		}
+		return undefined;
+	} catch {
+		return undefined;
+	}
 }
 
 /**
@@ -270,6 +388,8 @@ export function installSidebar(pi: ExtensionAPI): void {
 		memoryCache = createSidebarMemoryCache(createRemnicMemoryClient());
 		memoryCache.schedule("", () => requestRender?.());
 
+		const override = readSidebarAnchorOverride();
+
 		void ctx.ui
 			.custom<void>(
 				(tui, _theme: Theme, _keybindings, _done): Component => {
@@ -283,13 +403,17 @@ export function installSidebar(pi: ExtensionAPI): void {
 				},
 				{
 					overlay: true,
-					overlayOptions: {
-						anchor: "right-center",
+					overlayOptions: () => ({
+						anchor: chooseSidebarAnchor(
+							process.stdout.columns ?? 0,
+							process.stdout.rows ?? 0,
+							override,
+						),
 						width: SIDEBAR_WIDTH,
 						maxHeight: "100%",
 						nonCapturing: true,
 						visible: (cols: number) => cols >= SIDEBAR_MIN_TERMINAL_WIDTH,
-					},
+					}),
 				},
 			)
 			.catch(() => {

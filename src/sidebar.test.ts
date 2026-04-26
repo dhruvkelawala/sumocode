@@ -3,6 +3,9 @@ import { MemoryClientError, type RemnicMemoryClient } from "./memory.js";
 import {
 	SIDEBAR_MEMORY_DEBOUNCE_MS,
 	SIDEBAR_MEMORY_RETRY_MS,
+	SIDEBAR_MIN_TERMINAL_WIDTH,
+	SIDEBAR_WIDTH,
+	chooseSidebarAnchor,
 	createSidebarMemoryCache,
 	renderSidebar,
 	type SidebarSnapshot,
@@ -23,6 +26,7 @@ function memoryClient(query: RemnicMemoryClient["query"]): RemnicMemoryClient {
 function snapshot(overrides: Partial<SidebarSnapshot> = {}): SidebarSnapshot {
 	return {
 		projectName: "argent-x",
+		branch: "main",
 		inputTokens: 12_000,
 		outputTokens: 8_000,
 		contextWindow: 200_000,
@@ -36,6 +40,7 @@ function snapshot(overrides: Partial<SidebarSnapshot> = {}): SidebarSnapshot {
 			"never autoformat go",
 			"writes commits in cathedral voice",
 		],
+		memoryTotal: 3,
 		...overrides,
 	};
 }
@@ -113,9 +118,19 @@ describe("createSidebarMemoryCache", () => {
 	});
 });
 
+describe("sidebar layout constants", () => {
+	it("defaults to the cathedral 49-column sidebar", () => {
+		expect(SIDEBAR_WIDTH).toBe(49);
+	});
+
+	it("only mounts when the chat pane has room (≥ 160 cols total)", () => {
+		expect(SIDEBAR_MIN_TERMINAL_WIDTH).toBe(160);
+	});
+});
+
 describe("renderSidebar — surface", () => {
 	it("pads every line to exactly the requested width so the surface fills cleanly", () => {
-		const width = 32;
+		const width = 49;
 		const lines = renderSidebar(snapshot(), width);
 		expect(lines.length).toBeGreaterThan(0);
 		for (const line of lines) {
@@ -124,7 +139,7 @@ describe("renderSidebar — surface", () => {
 	});
 
 	it("wraps every line in the cathedral mahogany surface background", () => {
-		const lines = renderSidebar(snapshot(), 32);
+		const lines = renderSidebar(snapshot(), 49);
 		for (const line of lines) {
 			// #241D17 -> 36;29;23
 			expect(line).toContain("\u001b[48;2;36;29;23m");
@@ -133,42 +148,44 @@ describe("renderSidebar — surface", () => {
 });
 
 describe("renderSidebar — context section", () => {
-	it("shows the project name, a token gauge, and cost in a context block", () => {
-		const lines = renderSidebar(snapshot(), 32).map(stripAnsi);
+	it("shows project (branch), a filled progress bar, and a 'spent · session' line", () => {
+		const lines = renderSidebar(snapshot(), 49).map(stripAnsi);
 		const blob = lines.join("\n");
 
 		expect(blob).toContain("CONTEXT");
-		expect(blob).toContain("argent-x");
-		expect(blob).toContain("20k/200k"); // 12k input + 8k output of 200k
-		expect(blob).toContain("$0.42");
+		expect(blob).toContain("argent-x (main)");
+		expect(blob).toMatch(/\[█+░+\] +20k\/200k/);
+		expect(blob).toContain("$0.42 spent · session");
 	});
 });
 
 describe("renderSidebar — mcp section", () => {
-	it("lists each MCP server with a colored status dot", () => {
-		const rendered = renderSidebar(snapshot(), 32);
+	it("lists each MCP server with a colored status dot and a right-aligned status pill", () => {
+		const rendered = renderSidebar(snapshot(), 49);
 		const blob = rendered.map(stripAnsi).join("\n");
 
 		expect(blob).toContain("MCP");
 		expect(blob).toContain("github");
 		expect(blob).toContain("stitch");
 
-		// Each MCP line carries a state-colored dot. The status row for github (idle)
-		// must include the green idle hex; stitch (tool) must include the blue tool hex.
 		const githubRow = rendered.find((line) => line.includes("github"));
 		const stitchRow = rendered.find((line) => line.includes("stitch"));
 
 		expect(githubRow).toBeDefined();
 		expect(stitchRow).toBeDefined();
-		expect(githubRow).toContain("127;176;105"); // #7FB069 idle (green)
-		expect(stitchRow).toContain("91;155;213"); // #5B9BD5 tool (blue)
+		expect(githubRow).toContain("127;176;105"); // #7FB069 idle (green) dot
+		expect(stitchRow).toContain("91;155;213"); // #5B9BD5 tool (blue) dot
+
+		// Status pill text right-aligned at the end of the row.
+		expect(stripAnsi(githubRow!)).toMatch(/idle\s*$/);
+		expect(stripAnsi(stitchRow!)).toMatch(/tool\s*$/);
 	});
 });
 
 describe("renderSidebar — memory section", () => {
 	it("renders each memory item with a ❧ bullet", () => {
-		const lines = renderSidebar(snapshot(), 32);
-		const memoryLines = lines.map(stripAnsi).filter((l) => l.startsWith("❧"));
+		const lines = renderSidebar(snapshot(), 49);
+		const memoryLines = lines.map(stripAnsi).filter((l) => /^\s*❧/.test(l));
 
 		expect(memoryLines.length).toBe(3);
 		expect(memoryLines[0]).toContain("prefers pnpm");
@@ -179,8 +196,8 @@ describe("renderSidebar — memory section", () => {
 		const many = snapshot({
 			memory: ["a", "b", "c", "d", "e", "f", "g"],
 		});
-		const lines = renderSidebar(many, 32);
-		const memoryLines = lines.map(stripAnsi).filter((l) => l.startsWith("❧"));
+		const lines = renderSidebar(many, 49);
+		const memoryLines = lines.map(stripAnsi).filter((l) => /^\s*❧/.test(l));
 
 		expect(memoryLines.length).toBe(5);
 		expect(memoryLines[4]).toContain("e");
@@ -188,20 +205,67 @@ describe("renderSidebar — memory section", () => {
 	});
 
 	it("shows dim no-match copy when memory is healthy but empty", () => {
-		const lines = renderSidebar(snapshot({ memory: [], memoryUnavailable: false }), 32);
+		const lines = renderSidebar(snapshot({ memory: [], memoryUnavailable: false }), 49);
 		const row = lines.find((line) => stripAnsi(line).includes("no memory match"));
 
 		expect(row).toBeDefined();
 		expect(row).toContain("\u001b[2m");
-		expect(lines.map(stripAnsi).filter((line) => line.startsWith("❧"))).toHaveLength(0);
+		expect(lines.map(stripAnsi).filter((line) => /^\s*❧/.test(line))).toHaveLength(0);
 	});
 
 	it("shows dim memory unavailable copy when the daemon is down", () => {
-		const lines = renderSidebar(snapshot({ memory: [], memoryUnavailable: true }), 32);
+		const lines = renderSidebar(snapshot({ memory: [], memoryUnavailable: true }), 49);
 		const row = lines.find((line) => stripAnsi(line).includes("memory unavailable"));
 
 		expect(row).toBeDefined();
 		expect(row).toContain("\u001b[2m");
-		expect(lines.map(stripAnsi).filter((line) => line.startsWith("❧"))).toHaveLength(0);
+		expect(lines.map(stripAnsi).filter((line) => /^\s*❧/.test(line))).toHaveLength(0);
+	});
+
+	it("shows a 'N more · ⌘M' footer when memoryTotal exceeds shown facts", () => {
+		const lines = renderSidebar(snapshot({
+			memory: ["a", "b", "c", "d", "e"],
+			memoryTotal: 53,
+		}), 49);
+		const blob = lines.map(stripAnsi).join("\n");
+
+		expect(blob).toContain("48 more · ⌘M");
+	});
+
+	it("omits the 'N more · ⌘M' footer when memoryTotal equals shown facts", () => {
+		const lines = renderSidebar(snapshot({
+			memory: ["a", "b", "c"],
+			memoryTotal: 3,
+		}), 49);
+		const blob = lines.map(stripAnsi).join("\n");
+
+		expect(blob).not.toContain("more · ⌘M");
+	});
+});
+
+describe("renderSidebar — memory section bullet indent", () => {
+	it("renders each memory item with a leading two-space indent before ❧", () => {
+		const lines = renderSidebar(snapshot(), 49);
+		const memoryLines = lines.map(stripAnsi).filter((line) => /^\s*❧/.test(line));
+
+		expect(memoryLines.length).toBeGreaterThan(0);
+		for (const line of memoryLines) {
+			expect(line.startsWith("  ❧"), `expected '  ❧...' indent on: ${line}`).toBe(true);
+		}
+	});
+});
+
+describe("chooseSidebarAnchor", () => {
+	it("defaults to right-center on landscape monitors", () => {
+		expect(chooseSidebarAnchor(200, 60)).toBe("right-center");
+	});
+
+	it("defaults to top-right on portrait monitors", () => {
+		expect(chooseSidebarAnchor(60, 160)).toBe("top-right");
+	});
+
+	it("honors a per-machine override over the default", () => {
+		expect(chooseSidebarAnchor(200, 60, "bottom-right")).toBe("bottom-right");
+		expect(chooseSidebarAnchor(60, 160, "right-center")).toBe("right-center");
 	});
 });

@@ -3,21 +3,15 @@ import type { ExtensionAPI, ExtensionContext, Theme } from "@mariozechner/pi-cod
 import type { Component } from "@mariozechner/pi-tui";
 import { CATHEDRAL_TOKENS, type SumoCodeState } from "./tokens.js";
 import { formatTokenCount } from "./footer.js";
+import { createRemnicMemoryClient, type RemnicMemoryClient } from "./memory.js";
 import { VOICE } from "./voice.js";
 
 /** Threshold below which the sidebar hides itself. */
 export const SIDEBAR_MIN_TERMINAL_WIDTH = 120;
 /** Render width for the sidebar overlay. */
 export const SIDEBAR_WIDTH = 32;
-
-/** Static placeholder until #8 wires real memory data. */
-export const PLACEHOLDER_MEMORY: readonly string[] = [
-	"prefers pnpm and bun",
-	"commits in cathedral voice",
-	"never autoformats go",
-	"opus-4 code, haiku-4 memory",
-	"argent-x is the day job",
-];
+/** Debounce used when refreshing memories from user prompt changes. */
+export const SIDEBAR_MEMORY_DEBOUNCE_MS = 200;
 
 /** Static placeholder until Pi exposes MCP server health. */
 export const PLACEHOLDER_MCP: readonly McpServerSnapshot[] = [
@@ -40,6 +34,7 @@ export type SidebarSnapshot = {
 	costUsd: number;
 	mcpServers: readonly McpServerSnapshot[];
 	memory: readonly string[];
+	memoryUnavailable?: boolean;
 };
 
 const RESET = "\u001b[0m";
@@ -66,6 +61,10 @@ function bg(hex: string): string {
 
 function color(text: string, hex: string): string {
 	return `${fg(hex)}${text}${RESET}`;
+}
+
+function dim(text: string): string {
+	return `\u001b[2m${text}${RESET}`;
 }
 
 /** Visible cell length (strips SGR escapes). */
@@ -117,6 +116,11 @@ const MEMORY_DISPLAY_LIMIT = 5;
 
 function memoryLines(snapshot: SidebarSnapshot, width: number): string[] {
 	const lines: string[] = [surfaceLine("", width), banner(VOICE.sections.memory, width)];
+	if (snapshot.memoryUnavailable) {
+		lines.push(surfaceLine(dim(VOICE.errors.daemonDown), width));
+		return lines;
+	}
+
 	for (const item of snapshot.memory.slice(0, MEMORY_DISPLAY_LIMIT)) {
 		const bullet = color("❧", CATHEDRAL_TOKENS.colors.accent);
 		// truncate item text so visible width never exceeds the column count.
@@ -131,7 +135,72 @@ export function renderSidebar(snapshot: SidebarSnapshot, width: number): string[
 	return [...contextLines(snapshot, width), ...mcpLines(snapshot, width), ...memoryLines(snapshot, width)];
 }
 
-function snapshotFromContext(ctx: ExtensionContext): SidebarSnapshot {
+export type SidebarMemoryCache = {
+	refresh(prompt: string): Promise<void>;
+	schedule(prompt: string, onChange: () => void): void;
+	snapshot(): Pick<SidebarSnapshot, "memory" | "memoryUnavailable">;
+};
+
+export function createSidebarMemoryCache(
+	memoryClient: Pick<RemnicMemoryClient, "query">,
+	debounceMs = SIDEBAR_MEMORY_DEBOUNCE_MS,
+): SidebarMemoryCache {
+	let memory: readonly string[] = [];
+	let memoryUnavailable = false;
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	let generation = 0;
+
+	async function refresh(prompt: string): Promise<void> {
+		const run = ++generation;
+		try {
+			const facts = await memoryClient.query(prompt, MEMORY_DISPLAY_LIMIT);
+			if (run !== generation) return;
+			memory = facts.map((fact) => fact.text);
+			memoryUnavailable = false;
+		} catch {
+			if (run !== generation) return;
+			memory = [];
+			memoryUnavailable = true;
+		}
+	}
+
+	return {
+		refresh,
+		schedule(prompt: string, onChange: () => void): void {
+			if (timer) clearTimeout(timer);
+			timer = setTimeout(() => {
+				void refresh(prompt).finally(onChange);
+			}, debounceMs);
+		},
+		snapshot(): Pick<SidebarSnapshot, "memory" | "memoryUnavailable"> {
+			return { memory, memoryUnavailable };
+		},
+	};
+}
+
+function messageText(message: unknown): string {
+	if (!message || typeof message !== "object") return "";
+	const maybe = message as { role?: unknown; content?: unknown };
+	if (maybe.role !== "user") return "";
+	if (typeof maybe.content === "string") return maybe.content;
+	if (Array.isArray(maybe.content)) {
+		return maybe.content
+			.map((part) => {
+				if (part && typeof part === "object" && (part as { type?: unknown }).type === "text") {
+					return (part as { text?: unknown }).text;
+				}
+				return undefined;
+			})
+			.filter((part): part is string => typeof part === "string")
+			.join("\n");
+	}
+	return "";
+}
+
+function snapshotFromContext(
+	ctx: ExtensionContext,
+	memorySnapshot: Pick<SidebarSnapshot, "memory" | "memoryUnavailable">,
+): SidebarSnapshot {
 	let input = 0;
 	let output = 0;
 	let cost = 0;
@@ -151,7 +220,8 @@ function snapshotFromContext(ctx: ExtensionContext): SidebarSnapshot {
 		contextWindow,
 		costUsd: cost,
 		mcpServers: PLACEHOLDER_MCP,
-		memory: PLACEHOLDER_MEMORY,
+		memory: memorySnapshot.memory,
+		memoryUnavailable: memorySnapshot.memoryUnavailable,
 	};
 }
 
@@ -163,9 +233,13 @@ function snapshotFromContext(ctx: ExtensionContext): SidebarSnapshot {
  */
 export function installSidebar(pi: ExtensionAPI): void {
 	let requestRender: (() => void) | undefined;
+	let memoryCache: SidebarMemoryCache | undefined;
 
 	pi.on("session_start", (_event, ctx) => {
 		if (!ctx.hasUI) return;
+
+		memoryCache = createSidebarMemoryCache(createRemnicMemoryClient());
+		void memoryCache.refresh("").finally(() => requestRender?.());
 
 		void ctx.ui
 			.custom<void>(
@@ -174,7 +248,7 @@ export function installSidebar(pi: ExtensionAPI): void {
 					return {
 						invalidate(): void {},
 						render(width: number): string[] {
-							return renderSidebar(snapshotFromContext(ctx), width);
+							return renderSidebar(snapshotFromContext(ctx, memoryCache?.snapshot() ?? { memory: [] }), width);
 						},
 					};
 				},
@@ -192,6 +266,12 @@ export function installSidebar(pi: ExtensionAPI): void {
 			.catch(() => {
 				/* overlay was dismissed; nothing to clean up */
 			});
+	});
+
+	pi.on("message_start", (event) => {
+		const prompt = messageText(event.message);
+		if (!prompt) return;
+		memoryCache?.schedule(prompt, () => requestRender?.());
 	});
 
 	// Kick a render whenever counters or cost might have moved.

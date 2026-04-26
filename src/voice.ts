@@ -29,6 +29,9 @@ export const VOICE = {
 		mcp: "mcp",
 		memory: "memory",
 	},
+	errors: {
+		daemonDown: "memory unavailable",
+	},
 } as const;
 
 export type VoiceStatus = keyof typeof VOICE.status;

@@ -1,8 +1,23 @@
-import { describe, expect, it } from "vitest";
-import { renderSidebar, type SidebarSnapshot } from "./sidebar.js";
+import { describe, expect, it, vi } from "vitest";
+import { MemoryClientError, type RemnicMemoryClient } from "./memory.js";
+import {
+	SIDEBAR_MEMORY_DEBOUNCE_MS,
+	createSidebarMemoryCache,
+	renderSidebar,
+	type SidebarSnapshot,
+} from "./sidebar.js";
 
 const ANSI = /\u001b\[[0-9;]*m/g;
 const stripAnsi = (s: string): string => s.replace(ANSI, "");
+
+function memoryClient(query: RemnicMemoryClient["query"]): RemnicMemoryClient {
+	return {
+		query,
+		status: vi.fn(),
+		add: vi.fn(),
+		forget: vi.fn(),
+	};
+}
 
 function snapshot(overrides: Partial<SidebarSnapshot> = {}): SidebarSnapshot {
 	return {
@@ -23,6 +38,54 @@ function snapshot(overrides: Partial<SidebarSnapshot> = {}): SidebarSnapshot {
 		...overrides,
 	};
 }
+
+describe("createSidebarMemoryCache", () => {
+	it("queries Remnic and exposes the latest fact text for rendering", async () => {
+		const cache = createSidebarMemoryCache(memoryClient(vi.fn(async () => [
+			{ id: "1", text: "prefers pnpm" },
+			{ id: "2", text: "uses Cathedral" },
+		])));
+
+		await cache.refresh("package manager");
+
+		expect(cache.snapshot()).toEqual({
+			memory: ["prefers pnpm", "uses Cathedral"],
+			memoryUnavailable: false,
+		});
+	});
+
+	it("marks memory unavailable when Remnic cannot answer", async () => {
+		const cache = createSidebarMemoryCache(memoryClient(vi.fn(async () => {
+			throw new MemoryClientError("daemon_down", "memory unavailable");
+		})));
+
+		await cache.refresh("anything");
+
+		expect(cache.snapshot()).toEqual({ memory: [], memoryUnavailable: true });
+	});
+
+	it("debounces prompt refreshes and only queries the latest prompt", async () => {
+		vi.useFakeTimers();
+		try {
+			const query = vi.fn(async () => [{ id: "latest", text: "convex preference" }]);
+			const onChange = vi.fn();
+			const cache = createSidebarMemoryCache(memoryClient(query));
+
+			cache.schedule("auth", onChange);
+			cache.schedule("convex", onChange);
+			expect(query).not.toHaveBeenCalled();
+
+			await vi.advanceTimersByTimeAsync(SIDEBAR_MEMORY_DEBOUNCE_MS);
+
+			expect(query).toHaveBeenCalledTimes(1);
+			expect(query).toHaveBeenCalledWith("convex", 5);
+			expect(cache.snapshot().memory).toEqual(["convex preference"]);
+			expect(onChange).toHaveBeenCalledTimes(1);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+});
 
 describe("renderSidebar — surface", () => {
 	it("pads every line to exactly the requested width so the surface fills cleanly", () => {
@@ -96,5 +159,14 @@ describe("renderSidebar — memory section", () => {
 		expect(memoryLines.length).toBe(5);
 		expect(memoryLines[4]).toContain("e");
 		expect(memoryLines.some((l) => l.includes("f"))).toBe(false);
+	});
+
+	it("shows dim memory unavailable copy when the daemon is down", () => {
+		const lines = renderSidebar(snapshot({ memory: [], memoryUnavailable: true }), 32);
+		const row = lines.find((line) => stripAnsi(line).includes("memory unavailable"));
+
+		expect(row).toBeDefined();
+		expect(row).toContain("\u001b[2m");
+		expect(lines.map(stripAnsi).filter((line) => line.startsWith("❧"))).toHaveLength(0);
 	});
 });

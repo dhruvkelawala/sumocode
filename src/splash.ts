@@ -100,37 +100,70 @@ export type SplashSnapshot = {
 };
 
 /**
+ * Vertical layout reserved for the rest of Pi's chrome below the splash.
+ * Used to compute how much top padding to add for vertical centering.
+ *
+ *   1 row : top chrome bar (Element 2)
+ *   1 row : input frame (Pi's editor)
+ *   1 row : input hints (Element 4)
+ *   1 row : footer (Element 5)
+ *   2 rows: anthropic warning (Pi-hardcoded)
+ *   1 row : breathing room
+ *   3 rows: anthropic auth banner / package updates (Pi-hardcoded, varies)
+ */
+const CHROME_RESERVED_ROWS = 9;
+
+/**
  * Pure render of the cathedral splash. Returns an empty array if the session
  * already has messages — caller can splice this into a header without
  * conditional logic.
+ *
+ * `terminalHeight` is optional. When provided, the splash output is padded
+ * with blank rows at the top so the cat + wordmark + quote sit vertically
+ * centered in the viewport, with chrome reserved at top and bottom. Without
+ * it, the splash starts immediately below whatever rendered above (the
+ * pre-altscreen behaviour).
  */
-export function renderSplash(snapshot: SplashSnapshot, width: number): string[] {
+export function renderSplash(snapshot: SplashSnapshot, width: number, terminalHeight?: number): string[] {
 	if (snapshot.hasMessages) return [];
 
-	const out: string[] = [];
-
-	// Blank top padding so the splash sits roughly centered above the input.
-	for (let i = 0; i < 4; i++) out.push("");
+	const content: string[] = [];
 
 	// Cat face — already 24-bit-color ANSI, no extra coloring required.
-	for (const row of SUMO_FACE) out.push(center(row, width));
+	for (const row of SUMO_FACE) content.push(center(row, width));
 
 	if (SUMO_FACE.length > 0) {
-		out.push("");
-		out.push("");
+		content.push("");
+		content.push("");
 	}
 
 	// SUMOCODE wordmark in burnt orange.
 	for (const row of SUMOCODE_WORDMARK) {
-		out.push(center(`${ACCENT}${row}${RESET}`, width));
+		content.push(center(`${ACCENT}${row}${RESET}`, width));
 	}
 
-	out.push("");
-	out.push("");
+	content.push("");
+	content.push("");
 
 	// Saint-Exupéry quote in dim muted brown.
-	out.push(center(`${DIM}${MUTED}${snapshot.quote}${RESET}`, width));
-	out.push(center(`${DIM}${MUTED}${snapshot.quoteAttribution}${RESET}`, width));
+	content.push(center(`${DIM}${MUTED}${snapshot.quote}${RESET}`, width));
+	content.push(center(`${DIM}${MUTED}${snapshot.quoteAttribution}${RESET}`, width));
 
+	// Vertical centering: pad with blank rows above the content so the splash
+	// sits in the middle of the available viewport. Reserve CHROME_RESERVED_ROWS
+	// for the bottom chrome (input + hints + footer + anthropic warning).
+	if (terminalHeight && terminalHeight > content.length + CHROME_RESERVED_ROWS) {
+		const availableForCentering = terminalHeight - CHROME_RESERVED_ROWS;
+		const topPad = Math.max(2, Math.floor((availableForCentering - content.length) / 2));
+		const out: string[] = [];
+		for (let i = 0; i < topPad; i++) out.push("");
+		out.push(...content);
+		return out;
+	}
+
+	// Fallback: small fixed top padding (legacy behaviour).
+	const out: string[] = [];
+	for (let i = 0; i < 4; i++) out.push("");
+	out.push(...content);
 	return out;
 }

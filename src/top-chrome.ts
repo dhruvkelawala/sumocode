@@ -220,6 +220,7 @@ export function installTopChrome(pi: ExtensionAPI, loader?: TopChromeLoader): vo
 				render(width: number): string[] {
 					const snap = loader ? loader() : defaultSnapshot(ctx, state);
 					const chrome = renderTopChrome(snap, width);
+					const termHeight = process.stdout.rows ?? 0;
 					const splash = renderSplash(
 						{
 							quote: SUMOCODE_QUOTE,
@@ -227,6 +228,7 @@ export function installTopChrome(pi: ExtensionAPI, loader?: TopChromeLoader): vo
 							hasMessages: sessionHasMessages(ctx),
 						},
 						width,
+						termHeight > 0 ? termHeight : undefined,
 					);
 					return [chrome, ...splash];
 				},

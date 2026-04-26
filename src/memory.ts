@@ -9,6 +9,19 @@ export type MemoryFact = {
 	score?: number;
 	createdAt?: string;
 	updatedAt?: string;
+	/** Remnic-native tags. Includes `sumocode:<panel>` routing tags. */
+	tags?: readonly string[];
+	/** Remnic-native entity reference (e.g. "dhruv"). */
+	entityRef?: string;
+	/** Memory lifecycle status ("active" | "archived" | "hidden" | etc). */
+	status?: string;
+};
+
+export type MemoryBrowseParams = {
+	status?: "active" | "archived" | "all";
+	q?: string;
+	limit?: number;
+	offset?: number;
 };
 
 export type MemoryStatus = {
@@ -50,6 +63,12 @@ export type RemnicMemoryClient = {
 	status(): Promise<MemoryStatus>;
 	add(text: string, category?: string): Promise<MemoryFact>;
 	forget(factId: string): Promise<void>;
+	/**
+	 * List all memories (newest first by default) for the cathedral memory editor.
+	 * Uses Remnic's GET /engram/v1/memories endpoint with status / q / limit / offset
+	 * filters per the spike findings.
+	 */
+	browse(params?: MemoryBrowseParams): Promise<MemoryFact[]>;
 };
 
 export const DEFAULT_REMNIC_BASE_URL = "http://127.0.0.1:7749";
@@ -76,6 +95,12 @@ function asNumber(value: unknown): number | undefined {
 	return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
+function asStringArray(value: unknown): readonly string[] | undefined {
+	if (!Array.isArray(value)) return undefined;
+	const strings = value.filter((item): item is string => typeof item === "string");
+	return strings.length === 0 ? undefined : strings;
+}
+
 function factFromUnknown(value: unknown): MemoryFact | undefined {
 	const raw = isRecord(value) && isRecord(value.memory) ? value.memory : value;
 	if (!isRecord(raw)) return undefined;
@@ -91,6 +116,9 @@ function factFromUnknown(value: unknown): MemoryFact | undefined {
 		score: asNumber(raw.score) ?? (isRecord(value) ? asNumber(value.score) : undefined),
 		createdAt: asString(raw.createdAt) ?? asString(raw.created_at) ?? asString(raw.created),
 		updatedAt: asString(raw.updatedAt) ?? asString(raw.updated_at) ?? asString(raw.updated),
+		tags: asStringArray(raw.tags),
+		entityRef: asString(raw.entityRef) ?? asString(raw.entity_ref),
+		status: asString(raw.status),
 	};
 }
 
@@ -220,6 +248,23 @@ export function createRemnicMemoryClient(options: RemnicMemoryClientOptions = {}
 					reasonCode: "sumocode_forget",
 				}),
 			});
+		},
+
+		async browse(params: MemoryBrowseParams = {}): Promise<MemoryFact[]> {
+			const search = new URLSearchParams();
+			if (params.status && params.status !== "all") search.set("status", params.status);
+			else if (!params.status) search.set("status", "active");
+			if (params.q) search.set("q", params.q);
+			search.set("limit", String(params.limit ?? 200));
+			search.set("offset", String(params.offset ?? 0));
+			search.set("sort", "updated_desc");
+
+			const payload = await requestJson(`/engram/v1/memories?${search.toString()}`, { method: "GET" });
+			if (!isRecord(payload)) {
+				throw new MemoryClientError("malformed_response", "Remnic browse response was not an object");
+			}
+			const memories = Array.isArray(payload.memories) ? payload.memories : [];
+			return memories.map(factFromUnknown).filter((fact): fact is MemoryFact => fact !== undefined);
 		},
 	};
 }

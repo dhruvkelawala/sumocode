@@ -6,6 +6,7 @@ import { registerTabsCommand } from "./commands/tabs.js";
 import { registerThemeCheckCommand } from "./commands/theme-check.js";
 import { installCommandPalette } from "./command-palette.js";
 import { installFooter } from "./footer.js";
+import { registerMemoryCommand } from "./memory-editor.js";
 import { installTopChrome } from "./top-chrome.js";
 import { installWorkingIndicator } from "./working-indicator.js";
 
@@ -29,4 +30,5 @@ export default function sumocode(pi: ExtensionAPI): void {
 	registerSpinnerCommand(pi);
 	registerTabsCommand(pi);
 	registerThemeCheckCommand(pi);
+	registerMemoryCommand(pi);
 }

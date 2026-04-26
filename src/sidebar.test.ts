@@ -24,6 +24,25 @@ function snapshot(overrides: Partial<SidebarSnapshot> = {}): SidebarSnapshot {
 	};
 }
 
+describe("renderSidebar — surface", () => {
+	it("pads every line to exactly the requested width so the surface fills cleanly", () => {
+		const width = 32;
+		const lines = renderSidebar(snapshot(), width);
+		expect(lines.length).toBeGreaterThan(0);
+		for (const line of lines) {
+			expect(stripAnsi(line).length, `line was not padded to ${width}: ${JSON.stringify(stripAnsi(line))}`).toBe(width);
+		}
+	});
+
+	it("wraps every line in the cathedral mahogany surface background", () => {
+		const lines = renderSidebar(snapshot(), 32);
+		for (const line of lines) {
+			// #241D17 -> 36;29;23
+			expect(line).toContain("\u001b[48;2;36;29;23m");
+		}
+	});
+});
+
 describe("renderSidebar — context section", () => {
 	it("shows the project name, a token gauge, and cost in a context block", () => {
 		const lines = renderSidebar(snapshot(), 32).map(stripAnsi);

@@ -12,11 +12,11 @@ export const SIDEBAR_WIDTH = 32;
 
 /** Static placeholder until #8 wires real memory data. */
 export const PLACEHOLDER_MEMORY: readonly string[] = [
-	"prefers pnpm and bun over npm/yarn",
-	"writes commit messages in cathedral voice",
-	"never autoformats go files",
-	"opus-4 for code, haiku-4 for memory extraction",
-	"argent-x is the day-job repo",
+	"prefers pnpm and bun",
+	"commits in cathedral voice",
+	"never autoformats go",
+	"opus-4 code, haiku-4 memory",
+	"argent-x is the day job",
 ];
 
 /** Static placeholder until Pi exposes MCP server health. */
@@ -43,13 +43,43 @@ export type SidebarSnapshot = {
 };
 
 const RESET = "\u001b[0m";
+const ANSI_PATTERN = /\u001b\[[0-9;]*m/g;
+
+function parseHex(hex: string): { r: number; g: number; b: number } {
+	const n = hex.replace("#", "");
+	return {
+		r: Number.parseInt(n.slice(0, 2), 16),
+		g: Number.parseInt(n.slice(2, 4), 16),
+		b: Number.parseInt(n.slice(4, 6), 16),
+	};
+}
+
+function fg(hex: string): string {
+	const { r, g, b } = parseHex(hex);
+	return `\u001b[38;2;${r};${g};${b}m`;
+}
+
+function bg(hex: string): string {
+	const { r, g, b } = parseHex(hex);
+	return `\u001b[48;2;${r};${g};${b}m`;
+}
 
 function color(text: string, hex: string): string {
-	const n = hex.replace("#", "");
-	const r = Number.parseInt(n.slice(0, 2), 16);
-	const g = Number.parseInt(n.slice(2, 4), 16);
-	const b = Number.parseInt(n.slice(4, 6), 16);
-	return `\u001b[38;2;${r};${g};${b}m${text}${RESET}`;
+	return `${fg(hex)}${text}${RESET}`;
+}
+
+/** Visible cell length (strips SGR escapes). */
+function visibleLength(text: string): number {
+	return text.replace(ANSI_PATTERN, "").length;
+}
+
+/** Pad a line to exactly `width` visible cells, then wrap in cathedral surface. */
+function surfaceLine(content: string, width: number): string {
+	const short = visibleLength(content);
+	const padding = short < width ? " ".repeat(width - short) : "";
+	const surface = bg(CATHEDRAL_TOKENS.colors.surface);
+	const foreground = fg(CATHEDRAL_TOKENS.colors.foreground);
+	return `${surface}${foreground}${content}${padding}${RESET}`;
 }
 
 function banner(title: string, width: number): string {
@@ -58,21 +88,27 @@ function banner(title: string, width: number): string {
 	const dashCount = Math.max(2, width - inner.length);
 	const left = Math.floor(dashCount / 2);
 	const right = dashCount - left;
-	return color(`${"═".repeat(left)}${inner}${"═".repeat(right)}`, CATHEDRAL_TOKENS.colors.accent);
+	const content = color(`${"═".repeat(left)}${inner}${"═".repeat(right)}`, CATHEDRAL_TOKENS.colors.accent);
+	return surfaceLine(content, width);
 }
 
 function contextLines(snapshot: SidebarSnapshot, width: number): string[] {
 	const used = snapshot.inputTokens + snapshot.outputTokens;
 	const gauge = `${formatTokenCount(used)}/${formatTokenCount(snapshot.contextWindow)}`;
 	const cost = `$${snapshot.costUsd.toFixed(2)}`;
-	return [banner(VOICE.sections.context, width), snapshot.projectName, gauge, cost];
+	return [
+		banner(VOICE.sections.context, width),
+		surfaceLine(snapshot.projectName, width),
+		surfaceLine(gauge, width),
+		surfaceLine(cost, width),
+	];
 }
 
 function mcpLines(snapshot: SidebarSnapshot, width: number): string[] {
-	const lines: string[] = ["", banner(VOICE.sections.mcp, width)];
+	const lines: string[] = [surfaceLine("", width), banner(VOICE.sections.mcp, width)];
 	for (const server of snapshot.mcpServers) {
 		const dot = color("●", CATHEDRAL_TOKENS.colors.states[server.status]);
-		lines.push(`${dot} ${server.name}`);
+		lines.push(surfaceLine(`${dot} ${server.name}`, width));
 	}
 	return lines;
 }
@@ -80,10 +116,13 @@ function mcpLines(snapshot: SidebarSnapshot, width: number): string[] {
 const MEMORY_DISPLAY_LIMIT = 5;
 
 function memoryLines(snapshot: SidebarSnapshot, width: number): string[] {
-	const lines: string[] = ["", banner(VOICE.sections.memory, width)];
+	const lines: string[] = [surfaceLine("", width), banner(VOICE.sections.memory, width)];
 	for (const item of snapshot.memory.slice(0, MEMORY_DISPLAY_LIMIT)) {
 		const bullet = color("❧", CATHEDRAL_TOKENS.colors.accent);
-		lines.push(`${bullet} ${item}`);
+		// truncate item text so visible width never exceeds the column count.
+		const available = Math.max(0, width - 2 /* bullet + space */);
+		const truncated = item.length > available ? `${item.slice(0, Math.max(0, available - 1))}…` : item;
+		lines.push(surfaceLine(`${bullet} ${truncated}`, width));
 	}
 	return lines;
 }

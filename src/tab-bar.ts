@@ -99,6 +99,24 @@ export function renderTabBar(snapshot: TabBarSnapshot, width: number): string {
 }
 
 /**
+ * Resolve a friendly active-session label for the tab bar.
+ *
+ * Pi populates `getSessionName()` for named sessions; otherwise it returns
+ * `undefined` and the only stable identity is the UUID `getSessionId()`. We
+ * collapse the UUID to its first segment (e.g. `019dca88`) so the label fits
+ * the cathedral aesthetic and never overflows the bar.
+ */
+function buildTabBarSnapshot(
+	ctx: { sessionManager: { getSessionId(): string; getSessionName(): string | undefined } },
+	state: SumoCodeState,
+): TabBarSnapshot {
+	const sessionName = ctx.sessionManager.getSessionName();
+	const sessionId = ctx.sessionManager.getSessionId();
+	const activeLabel = sessionName ?? sessionId.split("-")[0] ?? "session";
+	return { activeLabel, state, inactiveLabels: [] };
+}
+
+/**
  * Pi-wiring glue. Mounts the cathedral tab bar as the session header
  * (above the chat area). Re-renders whenever state changes.
  */
@@ -118,20 +136,7 @@ export function installTabBar(pi: ExtensionAPI): void {
 				},
 				invalidate(): void {},
 				render(width: number): string[] {
-					const sessionId = ctx.sessionManager.getSessionId();
-					const sessionName = ctx.sessionManager.getSessionName();
-					const activeLabel = sessionName ?? sessionId ?? "session";
-
-					return [
-						renderTabBar(
-							{
-								activeLabel,
-								state,
-								inactiveLabels: [],
-							},
-							width,
-						),
-					];
+					return [renderTabBar(buildTabBarSnapshot(ctx, state), width)];
 				},
 			};
 		});

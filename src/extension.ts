@@ -4,6 +4,7 @@ import { registerSpinnerCommand } from "./commands/spinner.js";
 import { registerThemeCheckCommand } from "./commands/theme-check.js";
 import { installFooter } from "./footer.js";
 import { installSidebar } from "./sidebar.js";
+import { installTabBar } from "./tab-bar.js";
 import { installWorkingIndicator } from "./working-indicator.js";
 
 /**
@@ -14,6 +15,7 @@ import { installWorkingIndicator } from "./working-indicator.js";
  * the previous `ctx.ui.notify("SumoCode loaded · v...", "info")` was removed.
  */
 export default function sumocode(pi: ExtensionAPI): void {
+	installTabBar(pi);
 	installFooter(pi);
 	installSidebar(pi);
 	installWorkingIndicator(pi);

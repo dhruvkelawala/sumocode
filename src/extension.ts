@@ -1,6 +1,7 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { registerPersonaCommand } from "./commands/persona.js";
 import { registerSpinnerCommand } from "./commands/spinner.js";
+import { registerThemeCheckCommand } from "./commands/theme-check.js";
 import { installFooter } from "./footer.js";
 import { installSidebar } from "./sidebar.js";
 import { installWorkingIndicator } from "./working-indicator.js";
@@ -18,4 +19,5 @@ export default function sumocode(pi: ExtensionAPI): void {
 	installWorkingIndicator(pi);
 	registerPersonaCommand(pi);
 	registerSpinnerCommand(pi);
+	registerThemeCheckCommand(pi);
 }

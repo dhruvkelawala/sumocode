@@ -4,6 +4,7 @@ import { registerPersonaCommand } from "./commands/persona.js";
 import { registerSpinnerCommand } from "./commands/spinner.js";
 import { registerTabsCommand } from "./commands/tabs.js";
 import { registerThemeCheckCommand } from "./commands/theme-check.js";
+import { installApprovalGate } from "./approval-modal.js";
 import { installCommandPalette } from "./command-palette.js";
 import { installFooter } from "./footer.js";
 import { registerMemoryCommand } from "./memory-editor.js";
@@ -25,6 +26,7 @@ export default function sumocode(pi: ExtensionAPI): void {
 	installFooter(pi);
 	installInputHints(pi);
 	installCommandPalette(pi);
+	installApprovalGate(pi);
 	installWorkingIndicator(pi);
 	registerPersonaCommand(pi);
 	registerSpinnerCommand(pi);

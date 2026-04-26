@@ -32,6 +32,9 @@ export const VOICE = {
 	errors: {
 		daemonDown: "memory unavailable",
 	},
+	empty: {
+		memory: "no memory match",
+	},
 } as const;
 
 export type VoiceStatus = keyof typeof VOICE.status;

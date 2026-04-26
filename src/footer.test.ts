@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { afterEach, describe, expect, it } from "vitest";
 import { SUMOCODE_STATES, type SumoCodeState } from "./tokens.js";
-import { formatContextGauge, formatFooterLine, resolveGitBranch, type FooterSnapshot } from "./footer.js";
+import { formatContextGauge, formatCwd, formatFooterLine, resolveGitBranch, type FooterSnapshot } from "./footer.js";
 import { VOICE } from "./voice.js";
 
 const ANSI = /\u001b\[[0-9;]*m/g;
@@ -61,6 +61,43 @@ describe("formatFooterLine", () => {
 
 		expect(line).toContain("~/argent-x · ↑12k ↓8.0k");
 		expect(line).not.toContain("~/argent-x (");
+	});
+});
+
+describe("formatFooterLine — cathedral coloring", () => {
+	it("renders · separators in the divider color", () => {
+		const line = formatFooterLine(snapshot());
+		// #3A2F25 -> 58;47;37
+		expect(line).toContain("\u001b[38;2;58;47;37m");
+	});
+
+	it("renders tokens, cost, gauge and model in foreground-dim", () => {
+		const line = formatFooterLine(snapshot());
+		// #8B7A63 -> 139;122;99
+		expect(line).toContain("\u001b[38;2;139;122;99m");
+	});
+
+	it("keeps the path in vellum foreground", () => {
+		const line = formatFooterLine(snapshot());
+		// #F5E6C8 -> 245;230;200
+		expect(line).toContain("\u001b[38;2;245;230;200m");
+	});
+});
+
+describe("formatCwd", () => {
+	it("replaces $HOME with ~", () => {
+		const home = process.env.HOME ?? "/Users/sumo-deus";
+		expect(formatCwd(`${home}/argent-x`)).toBe("~/argent-x");
+	});
+
+	it("returns just the basename for paths outside $HOME", () => {
+		expect(formatCwd("/Volumes/SumoDeus NVMe/openclaw/workspace/sumocode")).toBe("sumocode");
+		expect(formatCwd("/opt/homebrew/etc")).toBe("etc");
+	});
+
+	it("keeps a single ~ for HOME itself", () => {
+		const home = process.env.HOME ?? "/Users/sumo-deus";
+		expect(formatCwd(home)).toBe("~");
 	});
 });
 

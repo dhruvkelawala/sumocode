@@ -4,7 +4,15 @@ import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { afterEach, describe, expect, it } from "vitest";
 import { SUMOCODE_STATES, type SumoCodeState } from "./tokens.js";
-import { formatCwd, formatFooterLine, resolveGitBranch, type FooterSnapshot } from "./footer.js";
+import {
+	formatCwd,
+	formatFooterLine,
+	renderFooterBlock,
+	renderSplashVersionLine,
+	resolveGitBranch,
+	SPLASH_VERSION_LINE,
+	type FooterSnapshot,
+} from "./footer.js";
 import { VOICE } from "./voice.js";
 
 const ANSI = /\u001b\[[0-9;]*m/g;
@@ -144,6 +152,54 @@ describe("formatCwd", () => {
 	it("keeps a single ~ for HOME itself", () => {
 		const home = process.env.HOME ?? "/Users/sumo-deus";
 		expect(formatCwd(home)).toBe("~");
+	});
+});
+
+describe("renderFooterBlock — splash adds a version line", () => {
+	it("in active state, returns 1 line (just the footer)", () => {
+		const lines = renderFooterBlock(snapshot({ isSplash: false }));
+		expect(lines.length).toBe(1);
+	});
+
+	it("on splash, returns 2 lines (footer + version)", () => {
+		const lines = renderFooterBlock(snapshot({ isSplash: true }), 160);
+		expect(lines.length).toBe(2);
+		const plainSecond = lines[1]!.replace(ANSI, "");
+		expect(plainSecond).toContain(SPLASH_VERSION_LINE);
+	});
+
+	it("on splash but too narrow for version line, returns 1 line", () => {
+		const lines = renderFooterBlock(snapshot({ isSplash: true }), 30);
+		expect(lines.length).toBe(1);
+	});
+});
+
+describe("renderSplashVersionLine", () => {
+	it("renders the SUMOCODE V0.2.0 version string", () => {
+		const line = renderSplashVersionLine(160).replace(ANSI, "");
+		expect(line).toContain("SUMOCODE V0.2.0");
+		expect(line).toContain("CATHEDRAL");
+		expect(line).toContain("160 \u00d7 45 MONOSPACE");
+	});
+
+	it("renders in foregroundDim color (#8B7A63)", () => {
+		const line = renderSplashVersionLine(160);
+		// 139;122;99 = #8B7A63
+		expect(line).toContain("\u001b[38;2;139;122;99m");
+	});
+
+	it("centers the version line horizontally", () => {
+		const line = renderSplashVersionLine(160);
+		const plain = line.replace(ANSI, "");
+		expect(plain.length).toBe(160);
+		// Equal-ish leading and trailing whitespace
+		const leading = plain.length - plain.trimStart().length;
+		const trailing = plain.length - plain.trimEnd().length;
+		expect(Math.abs(leading - trailing)).toBeLessThanOrEqual(1);
+	});
+
+	it("returns empty string when too narrow for the version text", () => {
+		expect(renderSplashVersionLine(20)).toBe("");
 	});
 });
 

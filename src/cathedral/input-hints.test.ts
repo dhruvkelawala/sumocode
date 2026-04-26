@@ -61,7 +61,12 @@ describe("installInputHints", () => {
 		const setWidget = vi.fn((_key: string, f: typeof factory) => {
 			factory = f;
 		});
-		const ctx = { hasUI: true, ui: { setWidget } } as unknown;
+		// Active state: branch contains a real message entry
+		const ctx = {
+			hasUI: true,
+			ui: { setWidget },
+			sessionManager: { getBranch: () => [{ type: "message" }] },
+		} as unknown;
 		const startHandlers = handlers.get("session_start") ?? [];
 		for (const handler of startHandlers) handler({ type: "session_start" }, ctx);
 
@@ -69,6 +74,37 @@ describe("installInputHints", () => {
 		const lines = component!.render(80);
 		expect(lines.length).toBe(1);
 		const stripped = lines[0]!.replace(/\u001b\[[0-9;]*m/g, "");
+		expect(stripped).toContain("TAB · AGENTS  CTRL+P · COMMANDS");
+		expect(stripped).not.toContain("AWAITING DIVINE INVOCATION");
+	});
+
+	it("widget factory renders BOTH hints on splash (no messages yet)", () => {
+		const handlers = new Map<string, Handler[]>();
+		const on = vi.fn((event: string, handler: Handler) => {
+			const list = handlers.get(event) ?? [];
+			list.push(handler);
+			handlers.set(event, list);
+		});
+		installInputHints({ on } as never);
+
+		let factory: ((tui: unknown, theme: unknown) => { render(width: number): string[] }) | undefined;
+		const setWidget = vi.fn((_key: string, f: typeof factory) => {
+			factory = f;
+		});
+		// Splash state: branch has no message entries
+		const ctx = {
+			hasUI: true,
+			ui: { setWidget },
+			sessionManager: { getBranch: () => [] },
+		} as unknown;
+		const startHandlers = handlers.get("session_start") ?? [];
+		for (const handler of startHandlers) handler({ type: "session_start" }, ctx);
+
+		const component = factory?.(undefined, undefined);
+		const lines = component!.render(120);
+		expect(lines.length).toBe(1);
+		const stripped = lines[0]!.replace(/\u001b\[[0-9;]*m/g, "");
+		expect(stripped).toContain("AWAITING DIVINE INVOCATION");
 		expect(stripped).toContain("TAB · AGENTS  CTRL+P · COMMANDS");
 	});
 });

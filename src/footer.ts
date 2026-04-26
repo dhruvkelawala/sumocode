@@ -27,7 +27,17 @@ export type FooterSnapshot = {
 	state: SumoCodeState;
 	modelId: string;
 	thinkingLevel: ThinkingLevel;
+	/**
+	 * When true, an additional dim version line is rendered below the main
+	 * footer row. Per Q5.2, this only happens on the splash empty state.
+	 */
+	isSplash?: boolean;
 };
+
+/**
+ * SumoCode version line for splash state (Q5.2 from CATHEDRAL_DECISIONS.md).
+ */
+export const SPLASH_VERSION_LINE = "SUMOCODE V0.2.0 · CATHEDRAL · 160 × 45 MONOSPACE";
 
 type GitRunner = (args: string[], cwd: string) => string;
 
@@ -128,6 +138,29 @@ export function formatFooterLine(snapshot: FooterSnapshot, width = 160): string 
 	return truncateToWidth(leftZone, width);
 }
 
+/**
+ * Render the splash-only bottom version line. Returns a single dim row
+ * centered horizontally at the requested width. Empty string if too narrow.
+ */
+export function renderSplashVersionLine(width: number): string {
+	if (width <= 0 || SPLASH_VERSION_LINE.length > width) return "";
+	const padLeft = Math.floor((width - SPLASH_VERSION_LINE.length) / 2);
+	const padRight = width - SPLASH_VERSION_LINE.length - padLeft;
+	const dim = colorHex(SPLASH_VERSION_LINE, CATHEDRAL_TOKENS.colors.foregroundDim);
+	return `${" ".repeat(padLeft)}${dim}${" ".repeat(padRight)}`;
+}
+
+/**
+ * Render the full footer block. 1 line in active state, 2 lines on splash
+ * (footer + version line).
+ */
+export function renderFooterBlock(snapshot: FooterSnapshot, width = 160): string[] {
+	const footer = formatFooterLine(snapshot, width);
+	if (!snapshot.isSplash) return [footer];
+	const version = renderSplashVersionLine(width);
+	return version === "" ? [footer] : [footer, version];
+}
+
 export function installFooter(pi: ExtensionAPI): void {
 	let state: SumoCodeState = "idle";
 	let render: (() => void) | undefined;
@@ -176,7 +209,16 @@ function createSnapshot(ctx: ExtensionContext, branch: string | null, state: Sum
 		state,
 		modelId: ctx.model?.id ?? "no-model",
 		thinkingLevel: getThinkingLevel(ctx),
+		isSplash: !sessionHasMessages(ctx),
 	};
+}
+
+function sessionHasMessages(ctx: ExtensionContext): boolean {
+	try {
+		return ctx.sessionManager.getBranch().some((entry) => entry.type === "message");
+	} catch {
+		return false;
+	}
 }
 
 function getThinkingLevel(ctx: ExtensionContext): ThinkingLevel {

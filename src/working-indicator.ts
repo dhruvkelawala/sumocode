@@ -12,11 +12,25 @@ import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { CATHEDRAL_TOKENS } from "./tokens.js";
 
 /**
- * Cathedral spinner frames — a slow inhale/exhale rhythm in braille that pairs
- * with the warm walnut surface. Tick cadence is decided by the caller; the
- * default in Pi is ~80–100ms per frame which yields a calm 6-frame breath.
+ * Cathedral spinner frames — the canonical 10-frame rotating-dots braille
+ * pattern (the same shape used by ora, npm, ink-spinner, cli-spinners). Always
+ * rotates forward so the animation never reads as stuck or stuttering, which
+ * is what a palindrome cycle produces. The cathedral feeling comes from the
+ * #D97706 burnt-orange tint and the slightly slow cadence (see INTERVAL_MS),
+ * not from a bespoke frame set.
  */
-export const CATHEDRAL_INDICATOR_FRAMES = ["⠂", "⠦", "⠮", "⠶", "⠮", "⠦"] as const;
+export const CATHEDRAL_INDICATOR_FRAMES = [
+	"⠋",
+	"⠙",
+	"⠹",
+	"⠸",
+	"⠼",
+	"⠴",
+	"⠦",
+	"⠧",
+	"⠇",
+	"⠏",
+] as const;
 
 const RESET = "\u001b[0m";
 
@@ -50,10 +64,11 @@ export function renderIndicator(
 }
 
 /**
- * Default frame interval in ms. ~110ms over 6 frames ≈ 660ms per inhale→exhale
- * cycle, which reads as a calm, deliberate pulse rather than a frantic spinner.
+ * Default frame interval in ms. ora ships 80ms; we sit slightly slower at 100ms
+ * so the rotation reads as deliberate without losing motion. 10 frames × 100ms
+ * = 1000ms per full revolution, which feels meditative rather than frantic.
  */
-export const CATHEDRAL_INDICATOR_INTERVAL_MS = 110;
+export const CATHEDRAL_INDICATOR_INTERVAL_MS = 100;
 
 /**
  * Pre-colorize each Cathedral frame with the accent token so Pi can render the
@@ -61,6 +76,26 @@ export const CATHEDRAL_INDICATOR_INTERVAL_MS = 110;
  */
 export function buildCathedralIndicatorFrames(hex: string = CATHEDRAL_TOKENS.colors.accent): string[] {
 	return CATHEDRAL_INDICATOR_FRAMES.map((_, i) => renderIndicator(i, CATHEDRAL_INDICATOR_FRAMES, hex));
+}
+
+/**
+ * Static, multi-line preview of every spinner frame for debugging without
+ * having to read animation. Returned as a single string ready to drop into a
+ * notification or stdout. Closes the observability loop — Dhruv can copy this
+ * back to me as text when an animation reads wrong.
+ */
+export function formatSpinnerInspection(
+	frames: readonly string[],
+	hex: string,
+	intervalMs: number,
+): string {
+	const lines: string[] = [`${frames.length} frames · ${intervalMs}ms per frame`];
+	for (let i = 0; i < frames.length; i++) {
+		const num = String(i + 1).padStart(2, " ");
+		const colored = renderIndicator(i, frames, hex);
+		lines.push(`  ${num}. ${colored}  ${frames[i]}`);
+	}
+	return lines.join("\n");
 }
 
 /**

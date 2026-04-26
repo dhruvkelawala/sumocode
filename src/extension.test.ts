@@ -29,6 +29,7 @@ function buildCtxStub() {
 			notify: vi.fn(),
 			custom: vi.fn(() => Promise.resolve()),
 			setFooter: vi.fn(),
+			setHeader: vi.fn(),
 			setWorkingIndicator: vi.fn(),
 		},
 	};

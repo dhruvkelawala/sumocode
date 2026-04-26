@@ -1,9 +1,7 @@
 import { basename } from "node:path";
-import type { ExtensionAPI, ExtensionContext, Theme } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import type { Component } from "@mariozechner/pi-tui";
-import { homedir } from "node:os";
-import { join } from "node:path";
-import { readFileSync } from "node:fs";
+import { truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
 import { CATHEDRAL_TOKENS, type SumoCodeState } from "./tokens.js";
 import { formatTokenCount, resolveGitBranch } from "./footer.js";
 import { createRemnicMemoryClient, type RemnicMemoryClient } from "./memory.js";
@@ -241,6 +239,110 @@ export function renderSidebar(snapshot: SidebarSnapshot, width: number): string[
 	return [...contextLines(snapshot, width), ...mcpLines(snapshot, width), ...memoryLines(snapshot, width)];
 }
 
+const STATIC_SIDEBAR_GUTTER = 1;
+const STATIC_SIDEBAR_DOCK_MARKER = Symbol("sumocode.staticSidebarDock");
+
+type MutableTuiRoot = {
+	children: Component[];
+	requestRender(): void;
+};
+
+function padToWidth(line: string, width: number): string {
+	const truncated = visibleWidth(line) > width ? truncateToWidth(line, width, "") : line;
+	const padding = Math.max(0, width - visibleWidth(truncated));
+	return `${truncated}${" ".repeat(padding)}`;
+}
+
+function renderComponents(components: readonly Component[], width: number): string[] {
+	return components.flatMap((component) => component.render(width));
+}
+
+/**
+ * Static two-column dock used as a guarded workaround for Pi 0.70.x not
+ * exposing a public side-panel API. It renders chat/pending/status at a
+ * reduced left-column width and appends the sidebar in reserved right columns.
+ *
+ * Cathedral splash discipline: when `shouldShowSidebar()` returns false (no
+ * messages yet), the dock renders its main components at full width and skips
+ * the sidebar column entirely. The sidebar only earns its column when there is
+ * chat to contextualize.
+ */
+export class StaticSidebarDock implements Component {
+	readonly [STATIC_SIDEBAR_DOCK_MARKER] = true;
+
+	constructor(
+		private readonly mainComponents: readonly Component[],
+		private readonly sidebarComponent: Component,
+		private readonly shouldShowSidebar: () => boolean,
+	) {}
+
+	invalidate(): void {
+		for (const component of [...this.mainComponents, this.sidebarComponent]) {
+			component.invalidate?.();
+		}
+	}
+
+	render(width: number): string[] {
+		if (width < SIDEBAR_MIN_TERMINAL_WIDTH || !this.shouldShowSidebar()) {
+			return renderComponents(this.mainComponents, width);
+		}
+
+		const mainWidth = Math.max(1, width - SIDEBAR_WIDTH - STATIC_SIDEBAR_GUTTER);
+		const mainLines = renderComponents(this.mainComponents, mainWidth);
+		const sidebarLines = this.sidebarComponent.render(SIDEBAR_WIDTH);
+		const rowCount = Math.max(mainLines.length, sidebarLines.length);
+		const lines: string[] = [];
+
+		for (let i = 0; i < rowCount; i++) {
+			const left = padToWidth(mainLines[i] ?? "", mainWidth);
+			const right = i < sidebarLines.length
+				? padToWidth(sidebarLines[i]!, SIDEBAR_WIDTH)
+				: " ".repeat(SIDEBAR_WIDTH);
+			lines.push(`${left}${" ".repeat(STATIC_SIDEBAR_GUTTER)}${right}`);
+		}
+
+		return lines;
+	}
+}
+
+function isStaticSidebarDock(component: Component): component is StaticSidebarDock {
+	return (component as Partial<Record<typeof STATIC_SIDEBAR_DOCK_MARKER, boolean>>)[STATIC_SIDEBAR_DOCK_MARKER] === true;
+}
+
+/**
+ * Guarded root-container surgery. Pi currently gives extensions no public API
+ * for static side panels, but `TUI` is a public `Container` and exposes its
+ * children array. We only mutate the expected root shape and return a restore
+ * callback so reload/shutdown can put Pi's tree back exactly as it was.
+ *
+ * The dock wraps header + chat + pending + status (everything above the
+ * editor) so that the splash, which lives in the header, also respects the
+ * reserved sidebar column when the sidebar becomes visible.
+ */
+export function dockStaticSidebar(
+	tui: MutableTuiRoot,
+	sidebarComponent: Component,
+	shouldShowSidebar: () => boolean,
+): (() => void) | undefined {
+	if (tui.children.some(isStaticSidebarDock)) return undefined;
+	if (tui.children.length < 5) return undefined;
+
+	const [header, chat, pending, status, ...rest] = tui.children;
+	if (!header || !chat || !pending || !status || rest.length === 0) return undefined;
+
+	const dock = new StaticSidebarDock([header, chat, pending, status], sidebarComponent, shouldShowSidebar);
+	const original = [...tui.children];
+	tui.children.splice(0, 4, dock);
+	tui.requestRender();
+
+	return () => {
+		const dockIndex = tui.children.indexOf(dock);
+		if (dockIndex !== -1) {
+			tui.children.splice(dockIndex, 1, ...original.slice(0, 4));
+		}
+	};
+}
+
 export type SidebarMemoryCache = {
 	refresh(prompt: string): Promise<void>;
 	schedule(prompt: string, onChange: () => void): void;
@@ -357,31 +459,9 @@ function snapshotFromContext(
 }
 
 /**
- * Read a per-machine sidebar anchor override from `~/.sumocode/local-config.json`.
- * Per #13: this file is intentionally NOT synced via the config repo.
- */
-export const SIDEBAR_LOCAL_CONFIG_PATH = join(homedir(), ".sumocode", "local-config.json");
-
-function readSidebarAnchorOverride(): SidebarAnchor | undefined {
-	try {
-		const raw = readFileSync(SIDEBAR_LOCAL_CONFIG_PATH, "utf8");
-		const parsed: unknown = JSON.parse(raw);
-		if (typeof parsed !== "object" || parsed === null) return undefined;
-		const value = (parsed as { sidebarAnchor?: unknown }).sidebarAnchor;
-		if (value === "right-center" || value === "top-right" || value === "bottom-right") {
-			return value;
-		}
-		return undefined;
-	} catch {
-		return undefined;
-	}
-}
-
-/**
- * Pi-wiring glue. Mounts the sidebar as a non-capturing right-anchored overlay
- * that hides automatically when the terminal is narrower than
- * SIDEBAR_MIN_TERMINAL_WIDTH columns. Untested by design — pure rendering logic
- * lives in `renderSidebar` above.
+ * Pi-wiring glue. Mounts the sidebar as a static, column-reserving dock by
+ * wrapping Pi's chat/pending/status root containers. This intentionally avoids
+ * overlays because overlays hide chat content instead of reserving space.
  */
 export function installSidebar(pi: ExtensionAPI): void {
 	let requestRender: (() => void) | undefined;
@@ -393,37 +473,28 @@ export function installSidebar(pi: ExtensionAPI): void {
 		memoryCache = createSidebarMemoryCache(createRemnicMemoryClient());
 		memoryCache.schedule("", () => requestRender?.());
 
-		const override = readSidebarAnchorOverride();
-
-		void ctx.ui
-			.custom<void>(
-				(tui, _theme: Theme, _keybindings, _done): Component => {
-					requestRender = () => tui.requestRender();
-					return {
-						invalidate(): void {},
-						render(width: number): string[] {
-							return renderSidebar(snapshotFromContext(ctx, memoryCache?.snapshot() ?? { memory: [] }), width);
-						},
-					};
+		ctx.ui.setWidget("sumocode-sidebar-dock", (tui): Component & { dispose(): void } => {
+			requestRender = () => tui.requestRender();
+			const sidebarComponent: Component = {
+				invalidate(): void {},
+				render(width: number): string[] {
+					return renderSidebar(snapshotFromContext(ctx, memoryCache?.snapshot() ?? { memory: [] }), width);
 				},
-				{
-					overlay: true,
-					overlayOptions: () => ({
-						anchor: chooseSidebarAnchor(
-							process.stdout.columns ?? 0,
-							process.stdout.rows ?? 0,
-							override,
-						),
-						width: SIDEBAR_WIDTH,
-						maxHeight: "100%",
-						nonCapturing: true,
-						visible: (cols: number) => cols >= SIDEBAR_MIN_TERMINAL_WIDTH,
-					}),
+			};
+			const restore = dockStaticSidebar(tui, sidebarComponent, () =>
+				ctx.sessionManager.getBranch().some((entry) => entry.type === "message"),
+			);
+			return {
+				invalidate(): void {},
+				render(): string[] {
+					return [];
 				},
-			)
-			.catch(() => {
-				/* overlay was dismissed; nothing to clean up */
-			});
+				dispose(): void {
+					restore?.();
+					requestRender = undefined;
+				},
+			};
+		});
 	});
 
 	pi.on("message_start", (event) => {

@@ -5,6 +5,8 @@ import {
 	SIDEBAR_MEMORY_RETRY_MS,
 	SIDEBAR_MIN_TERMINAL_WIDTH,
 	SIDEBAR_WIDTH,
+	StaticSidebarDock,
+	dockStaticSidebar,
 	chooseSidebarAnchor,
 	createSidebarMemoryCache,
 	renderSidebar,
@@ -20,6 +22,20 @@ function memoryClient(query: RemnicMemoryClient["query"]): RemnicMemoryClient {
 		status: vi.fn(),
 		add: vi.fn(),
 		forget: vi.fn(),
+	};
+}
+
+function component(lines: string[]): { renderCalls: number[]; node: { render(width: number): string[]; invalidate(): void } } {
+	const renderCalls: number[] = [];
+	return {
+		renderCalls,
+		node: {
+			render(width: number): string[] {
+				renderCalls.push(width);
+				return lines;
+			},
+			invalidate(): void {},
+		},
 	};
 }
 
@@ -44,6 +60,86 @@ function snapshot(overrides: Partial<SidebarSnapshot> = {}): SidebarSnapshot {
 		...overrides,
 	};
 }
+
+describe("StaticSidebarDock", () => {
+	it("renders the chat column at a reduced width and appends the sidebar top-aligned in reserved columns", () => {
+		const left = component(["hello from chat", "second line", "third line"]);
+		const right = component(["CTX", "MCP"]);
+		const dock = new StaticSidebarDock([left.node], right.node, () => true);
+
+		const lines = dock.render(160).map(stripAnsi);
+
+		expect(left.renderCalls).toEqual([160 - SIDEBAR_WIDTH - 1]);
+		expect(right.renderCalls).toEqual([SIDEBAR_WIDTH]);
+		expect(lines[0]).toContain("hello from chat");
+		expect(lines[0]).toContain("CTX");
+		expect(lines[1]).toContain("second line");
+		expect(lines[1]).toContain("MCP");
+		expect(lines[2]).toContain("third line");
+		expect(lines[2]).not.toContain("CTX");
+		expect(lines[2]).not.toContain("MCP");
+		expect(lines[0]?.length).toBeLessThanOrEqual(160);
+	});
+
+	it("hides the sidebar entirely while the session has no messages (cathedral splash discipline)", () => {
+		const left = component(["splash + input"]);
+		const right = component(["SIDE"]);
+		const dock = new StaticSidebarDock([left.node], right.node, () => false);
+
+		const lines = dock.render(160).map(stripAnsi);
+
+		expect(left.renderCalls).toEqual([160]);
+		expect(right.renderCalls).toEqual([]);
+		expect(lines).toEqual(["splash + input"]);
+	});
+
+	it("does not render the sidebar below the wide-layout threshold", () => {
+		const left = component(["full width chat"]);
+		const right = component(["SIDE"]);
+		const dock = new StaticSidebarDock([left.node], right.node, () => true);
+
+		const lines = dock.render(SIDEBAR_MIN_TERMINAL_WIDTH - 1).map(stripAnsi);
+
+		expect(left.renderCalls).toEqual([SIDEBAR_MIN_TERMINAL_WIDTH - 1]);
+		expect(right.renderCalls).toEqual([]);
+		expect(lines).toEqual(["full width chat"]);
+	});
+});
+
+describe("dockStaticSidebar", () => {
+	it("wraps header, chat, pending, and status root containers in a static split and can restore them", () => {
+		const header = component(["header"]).node;
+		const chat = component(["chat"]).node;
+		const pending = component(["pending"]).node;
+		const status = component(["status"]).node;
+		const editor = component(["editor"]).node;
+		const sidebar = component(["side"]).node;
+		const tui = { children: [header, chat, pending, status, editor], requestRender: vi.fn() };
+
+		const restore = dockStaticSidebar(tui, sidebar, () => true);
+
+		expect(restore).toBeTypeOf("function");
+		expect(tui.children).toHaveLength(2);
+		expect(tui.children[0]).toBeInstanceOf(StaticSidebarDock);
+		expect(tui.children[1]).toBe(editor);
+		expect(tui.requestRender).toHaveBeenCalledTimes(1);
+
+		restore?.();
+
+		expect(tui.children).toEqual([header, chat, pending, status, editor]);
+	});
+
+	it("refuses to mutate unexpected root layouts", () => {
+		const header = component(["header"]).node;
+		const chat = component(["chat"]).node;
+		const sidebar = component(["side"]).node;
+		const tui = { children: [header, chat], requestRender: vi.fn() };
+
+		expect(dockStaticSidebar(tui, sidebar, () => true)).toBeUndefined();
+		expect(tui.children).toEqual([header, chat]);
+		expect(tui.requestRender).not.toHaveBeenCalled();
+	});
+});
 
 describe("createSidebarMemoryCache", () => {
 	it("queries Remnic and exposes the latest fact text for rendering", async () => {

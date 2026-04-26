@@ -123,6 +123,11 @@ function memoryLines(snapshot: SidebarSnapshot, width: number): string[] {
 		return lines;
 	}
 
+	if (snapshot.memory.length === 0) {
+		lines.push(surfaceLine(dim(VOICE.empty.memory), width));
+		return lines;
+	}
+
 	for (const item of snapshot.memory.slice(0, MEMORY_DISPLAY_LIMIT)) {
 		const bullet = color("❧", CATHEDRAL_TOKENS.colors.accent);
 		// truncate item text so visible width never exceeds the column count.

@@ -2,26 +2,34 @@
  * Cathedral working indicator — animation that replaces Pi's default thinking
  * spinner while the agent is generating or running tools.
  *
- * Design intent (from Cathedral DESIGN.md): a slow, warm sweep that fits the
- * scriptorium aesthetic. The arc frames trace an ensō / dohyō / cathedral dome
- * in miniature; v0.3+ will move frame definitions into theme bundles so each
- * theme owns its own animation vocabulary.
+ * Design intent (from Cathedral DESIGN.md): a hand-crafted flower-pulse rather
+ * than a generic rotor. The frames are six Unicode dingbats that together tell
+ * a Greek + Eastern story — quiet, rises, blooms, bursts, works, settles. v0.3+
+ * will move frame definitions into theme bundles so each theme owns its own
+ * animation vocabulary.
+ *
+ * Inspiration: Kyle Martinez's reverse-engineering of Claude Code's `· ✻ ✽ ✶ ✳ ✢`
+ * spinner. The lesson is that AI-agent indicators feel alive when the frames
+ * transform into different shapes, not when a single rotor cycles.
  */
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { CATHEDRAL_TOKENS } from "./tokens.js";
 
 /**
- * Cathedral spinner frames — a single arc segment sweeping around a circle.
- * It reads as both SumoCode halves at once:
+ * Cathedral spinner frames — a flower-pulse that doubles as Greek + Eastern
+ * iconography. Every glyph is single-cell and lives in the U+2700 Dingbats
+ * range, so it renders reliably across IBM Plex Mono, JetBrains Mono, SF Mono.
  *
- * - Greek/Cathedral: arch, vault, dome.
- * - Japanese/Sumo: ensō brushstroke, dohyō ring being traced.
- *
- * All frames are unique, single-cell glyphs. The loop always moves forward and
- * avoids the generic npm/ora spinner vocabulary.
+ * Sequence as story:
+ *   · — quiet, before
+ *   ✦ — small Greek cross-star, rising
+ *   ❖ — lozenge, Eastern bloom
+ *   ✺ — 12-pointed sun, Zeus full burst
+ *   ❋ — propeller, work-in-progress
+ *   ✶ — heavy 6-point, settled
  */
-export const CATHEDRAL_INDICATOR_FRAMES = ["◜", "◠", "◝", "◞", "◡", "◟"] as const;
+export const CATHEDRAL_INDICATOR_FRAMES = ["·", "✦", "❖", "✺", "❋", "✶"] as const;
 
 const RESET = "\u001b[0m";
 
@@ -55,10 +63,11 @@ export function renderIndicator(
 }
 
 /**
- * Default frame interval in ms. 130ms over 6 frames ≈ 780ms per sweep: deliberate
- * enough to feel like a brushstroke in a temple, not a racetrack spinner.
+ * Default frame interval in ms. 150ms over 6 frames ≈ 900ms per pulse:
+ * deliberately slower than ora (80ms) and Claude Code (~100ms) so the bloom
+ * reads as scriptorium brushwork rather than a frantic CLI spinner.
  */
-export const CATHEDRAL_INDICATOR_INTERVAL_MS = 130;
+export const CATHEDRAL_INDICATOR_INTERVAL_MS = 150;
 
 /**
  * Pre-colorize each Cathedral frame with the accent token so Pi can render the

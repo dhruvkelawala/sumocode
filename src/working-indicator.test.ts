@@ -30,8 +30,8 @@ describe("indicatorFrameAt", () => {
 });
 
 describe("renderIndicator", () => {
-	it("uses the SumoCode ensō/dohyō arc sweep", () => {
-		expect(CATHEDRAL_INDICATOR_FRAMES).toEqual(["◜", "◠", "◝", "◞", "◡", "◟"]);
+	it("uses the SumoCode flower-pulse arc (Greek+Eastern dingbats, not a rotor)", () => {
+		expect(CATHEDRAL_INDICATOR_FRAMES).toEqual(["·", "✦", "❖", "✺", "❋", "✶"]);
 	});
 
 	it("keeps every frame single-cell so the indicator never jumps", () => {
@@ -39,8 +39,8 @@ describe("renderIndicator", () => {
 		expect(widths).toEqual(new Set([1]));
 	});
 
-	it("uses a slower temple cadence", () => {
-		expect(CATHEDRAL_INDICATOR_INTERVAL_MS).toBe(130);
+	it("uses the temple cadence", () => {
+		expect(CATHEDRAL_INDICATOR_INTERVAL_MS).toBe(150);
 	});
 
 	it("colorizes the current frame with the Cathedral accent", () => {

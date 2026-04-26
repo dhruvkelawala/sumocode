@@ -5,6 +5,7 @@ import { registerSpinnerCommand } from "./commands/spinner.js";
 import { registerTabsCommand } from "./commands/tabs.js";
 import { registerThemeCheckCommand } from "./commands/theme-check.js";
 import { installApprovalGate } from "./approval-modal.js";
+import { installAltscreen } from "./cathedral/altscreen.js";
 import { installCommandPalette } from "./command-palette.js";
 import { installFooter } from "./footer.js";
 import { registerMemoryCommand } from "./memory-editor.js";
@@ -23,6 +24,7 @@ import { installWorkingIndicator } from "./working-indicator.js";
  * the active-state chrome below it is stable.
  */
 export default function sumocode(pi: ExtensionAPI): void {
+	installAltscreen(pi);
 	installTopChrome(pi);
 	installFooter(pi);
 	installInputHints(pi);

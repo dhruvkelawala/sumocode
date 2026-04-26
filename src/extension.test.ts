@@ -13,6 +13,7 @@ function buildPiStub() {
 			handlers.set(event, list);
 		}),
 		registerCommand: vi.fn(),
+		registerShortcut: vi.fn(),
 	};
 
 	return { pi, handlers };

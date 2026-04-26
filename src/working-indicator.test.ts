@@ -30,8 +30,15 @@ describe("indicatorFrameAt", () => {
 });
 
 describe("renderIndicator", () => {
-	it("uses the SumoCode flower-pulse arc (Greek+Eastern dingbats, not a rotor)", () => {
-		expect(CATHEDRAL_INDICATOR_FRAMES).toEqual(["·", "✦", "❖", "✺", "❋", "✶"]);
+	it("uses the SumoCode flower-pulse arc with zero glyph overlap vs Claude Code", () => {
+		expect(CATHEDRAL_INDICATOR_FRAMES).toEqual(["◌", "✦", "❖", "✺", "❋", "❉"]);
+	});
+
+	it("shares no glyph with Claude Code's reverse-engineered spinner", () => {
+		const claudeSpinner = new Set(["·", "✻", "✽", "✶", "✳", "✢"]);
+		for (const frame of CATHEDRAL_INDICATOR_FRAMES) {
+			expect(claudeSpinner.has(frame), `frame "${frame}" overlaps with Claude Code`).toBe(false);
+		}
 	});
 
 	it("keeps every frame single-cell so the indicator never jumps", () => {

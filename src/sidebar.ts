@@ -12,6 +12,8 @@ export const SIDEBAR_MIN_TERMINAL_WIDTH = 120;
 export const SIDEBAR_WIDTH = 32;
 /** Debounce used when refreshing memories from user prompt changes. */
 export const SIDEBAR_MEMORY_DEBOUNCE_MS = 200;
+/** Retry cadence while Remnic is unavailable. */
+export const SIDEBAR_MEMORY_RETRY_MS = 5_000;
 
 /** Static placeholder until Pi exposes MCP server health. */
 export const PLACEHOLDER_MCP: readonly McpServerSnapshot[] = [
@@ -148,6 +150,7 @@ export function createSidebarMemoryCache(
 	let memory: readonly string[] = [];
 	let memoryUnavailable = false;
 	let timer: ReturnType<typeof setTimeout> | undefined;
+	let retryTimer: ReturnType<typeof setTimeout> | undefined;
 	let generation = 0;
 
 	async function refresh(prompt: string): Promise<void> {
@@ -164,13 +167,34 @@ export function createSidebarMemoryCache(
 		}
 	}
 
+	function clearRetry(): void {
+		if (retryTimer) clearTimeout(retryTimer);
+		retryTimer = undefined;
+	}
+
+	function scheduleRetry(prompt: string, onChange: () => void): void {
+		clearRetry();
+		retryTimer = setTimeout(() => {
+			void refresh(prompt).finally(() => {
+				onChange();
+				if (memoryUnavailable) scheduleRetry(prompt, onChange);
+			});
+		}, SIDEBAR_MEMORY_RETRY_MS);
+		retryTimer.unref?.();
+	}
+
 	return {
 		refresh,
 		schedule(prompt: string, onChange: () => void): void {
 			if (timer) clearTimeout(timer);
+			clearRetry();
 			timer = setTimeout(() => {
-				void refresh(prompt).finally(onChange);
+				void refresh(prompt).finally(() => {
+					onChange();
+					if (memoryUnavailable) scheduleRetry(prompt, onChange);
+				});
 			}, debounceMs);
+			timer.unref?.();
 		},
 		snapshot(): Pick<SidebarSnapshot, "memory" | "memoryUnavailable"> {
 			return { memory, memoryUnavailable };
@@ -239,7 +263,7 @@ export function installSidebar(pi: ExtensionAPI): void {
 		if (!ctx.hasUI) return;
 
 		memoryCache = createSidebarMemoryCache(createRemnicMemoryClient());
-		void memoryCache.refresh("").finally(() => requestRender?.());
+		memoryCache.schedule("", () => requestRender?.());
 
 		void ctx.ui
 			.custom<void>(

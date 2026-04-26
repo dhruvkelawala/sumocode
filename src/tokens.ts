@@ -2,7 +2,11 @@ export const CATHEDRAL_TOKENS = {
 	colors: {
 		background: "#1A1511",
 		surface: "#241D17",
+		surfaceRecess: "#120D0A",
+		surfaceLifted: "#3A342F",
 		foreground: "#F5E6C8",
+		foregroundDim: "#8B7A63",
+		divider: "#3A2F25",
 		accent: "#D97706",
 		states: {
 			idle: "#7FB069",

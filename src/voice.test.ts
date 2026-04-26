@@ -35,6 +35,12 @@ describe("VOICE.sections", () => {
 	});
 });
 
+describe("VOICE.empty", () => {
+	it("defines terse empty memory copy", () => {
+		expect(VOICE.empty.memory).toBe("no memory match");
+	});
+});
+
 describe("VOICE.errors", () => {
 	it("defines terse daemon-down copy", () => {
 		expect(VOICE.errors.daemonDown).toBe("memory unavailable");

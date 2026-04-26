@@ -187,6 +187,15 @@ describe("renderSidebar — memory section", () => {
 		expect(memoryLines.some((l) => l.includes("f"))).toBe(false);
 	});
 
+	it("shows dim no-match copy when memory is healthy but empty", () => {
+		const lines = renderSidebar(snapshot({ memory: [], memoryUnavailable: false }), 32);
+		const row = lines.find((line) => stripAnsi(line).includes("no memory match"));
+
+		expect(row).toBeDefined();
+		expect(row).toContain("\u001b[2m");
+		expect(lines.map(stripAnsi).filter((line) => line.startsWith("❧"))).toHaveLength(0);
+	});
+
 	it("shows dim memory unavailable copy when the daemon is down", () => {
 		const lines = renderSidebar(snapshot({ memory: [], memoryUnavailable: true }), 32);
 		const row = lines.find((line) => stripAnsi(line).includes("memory unavailable"));

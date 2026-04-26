@@ -30,15 +30,17 @@ describe("indicatorFrameAt", () => {
 });
 
 describe("renderIndicator", () => {
-	it("brands every frame with the Zeus bolt sigil", () => {
-		for (const frame of CATHEDRAL_INDICATOR_FRAMES) {
-			expect(frame.startsWith("ϟ")).toBe(true);
-		}
+	it("uses the SumoCode ensō/dohyō arc sweep", () => {
+		expect(CATHEDRAL_INDICATOR_FRAMES).toEqual(["◜", "◠", "◝", "◞", "◡", "◟"]);
 	});
 
-	it("keeps every frame the same visible width so the indicator never jumps", () => {
+	it("keeps every frame single-cell so the indicator never jumps", () => {
 		const widths = new Set(CATHEDRAL_INDICATOR_FRAMES.map((frame) => stripAnsi(frame).length));
-		expect(widths).toEqual(new Set([2]));
+		expect(widths).toEqual(new Set([1]));
+	});
+
+	it("uses a slower temple cadence", () => {
+		expect(CATHEDRAL_INDICATOR_INTERVAL_MS).toBe(130);
 	});
 
 	it("colorizes the current frame with the Cathedral accent", () => {

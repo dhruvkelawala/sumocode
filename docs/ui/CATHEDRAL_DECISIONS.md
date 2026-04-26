@@ -208,7 +208,58 @@ served by splash.
 
 ## Element 5 — Footer + bottom version line
 
-**Pending — see CATHEDRAL_UX_SPEC.md for follow-up grill.**
+**Locked: F1 footer + version line on splash only + same footer everywhere + thinking level in footer + READY/MEDITATING/ILLUMINATING/DEFERRING/INSCRIBING state labels.**
+
+### Q5.1 — Footer style: **F1 (two-zone hybrid)**
+
+Left zone = agent state. Right zone = session metrics. No context window in footer (lives in sidebar CONTEXT sub-tab).
+
+```
+● READY · claude-opus-4-7 · xhigh                       sumocode (main) · ↑12k ↓8k · $0.42
+```
+
+- Left: state dot (color matches state) · state label UPPERCASE · model id (lowercase) · thinking level (lowercase).
+- Right: project shortname (no `~/` prefix) (branch) · ↑ input tokens ↓ output tokens · $ session cost.
+- Cathedral tone via uppercased state label only. Model id + thinking level + tokens stay practical lowercase.
+
+Splash footer is the same shape — nothing special on splash.
+
+### Q5.2 — Bottom version line: **c (only on splash)**
+
+```
+SUMOCODE V0.2.0 · CATHEDRAL · 160 × 45 MONOSPACE
+```
+
+- Renders as a second row below the footer **only on splash**. In active state the row is gone.
+- Dim. Centered horizontally.
+- Identity / first-contact ceremony.
+
+### Q5.3 — Footer same on splash and active: **a (yes, always identical)**
+
+One footer style. The splash difference is the bottom version line (Q5.2), not the footer itself.
+
+### Q5.4 — Thinking level placement: **a (footer, after model id)**
+
+Closing issue **#23**. Thinking level appears as `· xhigh` after the model id. Updates live when user changes thinking level mid-session.
+
+### Q5.5 — State labels (final): **mixed cathedral set**
+
+```
+internal     UI label       reason for choice
+─────────    ───────────    ─────────────────
+idle      →  READY          most common state — stays practical for daily glance
+thinking  →  MEDITATING     contemplative thought, scriptorium feel
+tool      →  ILLUMINATING   the scribe decorates / writes / reads
+approval  →  DEFERRING      agent honestly defers decision to user
+learning  →  INSCRIBING     writing into the codex (memory)
+```
+
+Propagation:
+- footer state label
+- working indicator label / message
+- state dot tooltip (if any)
+- src/voice.ts replaces `ready/thinking/working/needs you/learning`
+- src/tokens.ts colors stay mapped to internal state names (no token rename)
 
 ---
 

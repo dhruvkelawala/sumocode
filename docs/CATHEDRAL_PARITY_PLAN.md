@@ -249,22 +249,31 @@ per category (IDENTITY, PREFERENCES, STACK, PROJECTS).
 Each issue is one or two layers. Each issue gets a `vhs` scenario before it
 merges.
 
-| Issue | Layers | Notes |
-|---|---|---|
-| **#14 hygiene** | 0.1–0.7 | extension cleanup + boot-noise quiet |
-| **#15 cathedral pi theme** | 1.1–1.3 | hand-authored `cathedral.json` |
-| **#16 sidebar parity** | 2.1–2.7 | width, anchor, sections rebuilt |
-| **#17 footer parity** | 3.1–3.6 | colors, separators, path collapse |
-| **#18 tab bar** | 4.1–4.6 | new component |
-| **#19 tool pills** | 5.1–5.3 | only if Pi API supports |
-| **#20 code blocks + markdown** | 6.1–6.4 | mostly theme-driven |
-| **#21 approval modal** | 7.1–7.2 | only if Pi API supports |
-| **#22 command palette** | 8.1–8.2 | overlay |
-| **#23 input frame** | 9.1–9.2 | only if Pi API supports |
-| **#24 memory editor screen** | 10.1–10.2 | last |
+### Shipped
 
-The sidebar already has issue #6. We can either close #6 as superseded by
-#16 or convert #6 into the parity issue.
+| Issue | Layer | Status |
+|---|---|---|
+| #15 first-paint hygiene | 0 | ✅ closed |
+| #16 cathedral pi theme | 1 | ✅ closed |
+| #17 sidebar parity | 2 | ✅ closed (superseded by #22 layout fix) |
+| #18 footer parity | 3 | ✅ closed |
+| #19 cathedral tab bar | 4 | ✅ closed |
+| #21 cathedral splash | 5 (added) | ✅ closed retroactively |
+
+### Open
+
+| Issue | Layer / fix | Priority | Notes |
+|---|---|---|---|
+| **#22** sidebar static | layout fix on #17 | **P0 — highest** | Floating overlay covers chat. Must reserve columns. |
+| **#23** footer thinking level | small fix on #18 | P1 | Append `xhigh` etc. to footer. |
+| **#24** tool pills | layer 6 | P1 | Most visually dense remaining gap. |
+| **#25** code blocks + markdown audit | layer 7 | P2 | Mostly theme-driven; verify only. |
+| **#26** approval modal | layer 8 | P2 | Pi-API permitting. |
+| **#27** command palette overlay | layer 9 | P3 | Quality of life. |
+| **#28** input frame | layer 10 | P3 | Pi-API permitting. |
+| **#29** memory editor screen | layer 11 | P3 | Depends on #8 (already shipped). |
+
+*(Issues #24–#29 above will be filed when we approach each one.)*
 
 ---
 
@@ -285,6 +294,28 @@ Each `.tape` drives Pi into the matching state and screenshots. The agent
 reads both PNGs side by side and compares structurally.
 
 ---
+
+## Reusable cathedral-asset pipeline
+
+For any new ASCII / pixel-art asset (alternate cat poses, theme-specific
+mascots, animation frames):
+
+1. Generate PNG via the `claude-art-skill` we installed:
+
+   ```bash
+   bun ~/sumocode-config/pi-agent/skills/art/tools/generate-image.ts \
+     --prompt "<spec>" --size 1K --aspect-ratio 1:1 --thinking high \
+     --output X.png
+   ```
+2. Convert to ANSI via `chafa`:
+
+   ```bash
+   chafa --format=symbols --symbols=block --fg-only --colors=full \
+         --size=24x14 X.png > src/assets/X.ans
+   ```
+3. Print the `.ans` file verbatim from the SumoCode component.
+
+The whole pipeline is unit-tested via the splash component (`src/splash.test.ts`).
 
 ## Definition of done for the parity pass
 

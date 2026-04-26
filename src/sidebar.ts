@@ -9,9 +9,14 @@ import { formatTokenCount, resolveGitBranch } from "./footer.js";
 import { createRemnicMemoryClient, type RemnicMemoryClient } from "./memory.js";
 import { VOICE } from "./voice.js";
 
-/** Threshold below which the sidebar hides itself. */
-export const SIDEBAR_MIN_TERMINAL_WIDTH = 160;
-/** Render width for the sidebar overlay (DESIGN.md §5 — cols 112..160). */
+/**
+ * Threshold below which the sidebar hides itself. Per DESIGN.md §8
+ * (Responsive), the wide layout is ≥ 120 cols: chat ~70 cols + 1 gutter +
+ * 49 sidebar fits comfortably. Below this we collapse to chat-only and let
+ * sidebar info come through `/sumo:memory` etc.
+ */
+export const SIDEBAR_MIN_TERMINAL_WIDTH = 120;
+/** Render width for the sidebar overlay (DESIGN.md §5 — cols 112..160 in the wide layout). */
 export const SIDEBAR_WIDTH = 49;
 /** Leading indent inside each sidebar row, matching docs/ui/claude-design/Sidebar.jsx. */
 const SIDEBAR_INDENT = "  ";

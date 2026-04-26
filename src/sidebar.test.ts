@@ -123,8 +123,8 @@ describe("sidebar layout constants", () => {
 		expect(SIDEBAR_WIDTH).toBe(49);
 	});
 
-	it("only mounts when the chat pane has room (≥ 160 cols total)", () => {
-		expect(SIDEBAR_MIN_TERMINAL_WIDTH).toBe(160);
+	it("only mounts at the wide-layout threshold from DESIGN.md §8 (≥ 120 cols)", () => {
+		expect(SIDEBAR_MIN_TERMINAL_WIDTH).toBe(120);
 	});
 });
 

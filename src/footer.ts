@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { homedir } from "node:os";
+import { basename } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { truncateToWidth } from "@mariozechner/pi-tui";
 import { CATHEDRAL_TOKENS, type SumoCodeState } from "./tokens.js";
@@ -54,7 +55,9 @@ export function formatCwd(cwd: string): string {
 	const home = homedir();
 	if (cwd === home) return "~";
 	if (cwd.startsWith(`${home}/`)) return `~/${cwd.slice(home.length + 1)}`;
-	return cwd;
+	// Outside $HOME (e.g. /Volumes/.../sumocode), show only the project basename
+	// per DESIGN.md §4 footer spec.
+	return basename(cwd) || cwd;
 }
 
 export function resolveGitBranch(cwd: string, runGit: GitRunner = defaultGitRunner): string | null {
@@ -72,15 +75,22 @@ export function resolveGitBranch(cwd: string, runGit: GitRunner = defaultGitRunn
 
 export function formatFooterLine(snapshot: FooterSnapshot, width = 120): string {
 	const branch = snapshot.branch ? ` (${snapshot.branch})` : "";
-	const dot = colorHex("●", CATHEDRAL_TOKENS.colors.states[snapshot.state]);
-	const line = [
-		`${formatCwd(snapshot.cwd)}${branch}`,
+	const path = colorHex(`${formatCwd(snapshot.cwd)}${branch}`, CATHEDRAL_TOKENS.colors.foreground);
+	const tokens = colorHex(
 		`↑${formatTokenCount(snapshot.inputTokens)} ↓${formatTokenCount(snapshot.outputTokens)}`,
-		`$${snapshot.costUsd.toFixed(2)}`,
+		CATHEDRAL_TOKENS.colors.foregroundDim,
+	);
+	const cost = colorHex(`$${snapshot.costUsd.toFixed(2)}`, CATHEDRAL_TOKENS.colors.foregroundDim);
+	const gauge = colorHex(
 		formatContextGauge(snapshot.contextPercent, snapshot.contextWindow),
-		`${dot} ${VOICE.status[snapshot.state]}`,
-		snapshot.modelId,
-	].join(" · ");
+		CATHEDRAL_TOKENS.colors.foregroundDim,
+	);
+	const dot = colorHex("●", CATHEDRAL_TOKENS.colors.states[snapshot.state]);
+	const stateLabel = colorHex(VOICE.status[snapshot.state], CATHEDRAL_TOKENS.colors.foreground);
+	const model = colorHex(snapshot.modelId, CATHEDRAL_TOKENS.colors.foregroundDim);
+	const sep = colorHex(" · ", CATHEDRAL_TOKENS.colors.divider);
+
+	const line = [path, tokens, cost, gauge, `${dot} ${stateLabel}`, model].join(sep);
 	return truncateToWidth(line, width);
 }
 

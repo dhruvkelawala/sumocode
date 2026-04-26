@@ -36,6 +36,10 @@ export type McpServerSnapshot = {
 	status: SumoCodeState;
 };
 
+export type SidebarSubTab = "CONTEXT" | "MEMORY";
+
+export const SIDEBAR_SUB_TABS: readonly SidebarSubTab[] = ["CONTEXT", "MEMORY"];
+
 export type SidebarSnapshot = {
 	projectName: string;
 	branch?: string;
@@ -48,6 +52,11 @@ export type SidebarSnapshot = {
 	/** Total memories in the store; used to compute the 'N more · ⌘M' footer. */
 	memoryTotal?: number;
 	memoryUnavailable?: boolean;
+	/**
+	 * Which sub-tab is currently active. Defaults to CONTEXT.
+	 * Switched via Ctrl+1 / Ctrl+2 (Element 1 lock).
+	 */
+	activeSubTab?: SidebarSubTab;
 };
 
 export type SidebarAnchor = "right-center" | "top-right" | "bottom-right";
@@ -235,8 +244,51 @@ function memoryLines(snapshot: SidebarSnapshot, width: number): string[] {
 	return lines;
 }
 
+/**
+ * REGISTRY header rendered at the top of every sidebar render.
+ *
+ *     REGISTRY
+ *     v 1.0.0
+ *
+ *     ◆ CONTEXT       ← active marker
+ *     ▢ MEMORY        ← inactive marker
+ */
+function registryHeaderLines(snapshot: SidebarSnapshot, width: number): string[] {
+	const active = snapshot.activeSubTab ?? "CONTEXT";
+	const registryTitle = color("REGISTRY", CATHEDRAL_TOKENS.colors.accent);
+	const version = color("v 1.0.0", CATHEDRAL_TOKENS.colors.foregroundDim);
+
+	const lines: string[] = [];
+	lines.push(surfaceLine("", width));
+	lines.push(surfaceLine(indent(registryTitle), width));
+	lines.push(surfaceLine(indent(version), width));
+	lines.push(surfaceLine("", width));
+
+	for (const tab of SIDEBAR_SUB_TABS) {
+		const isActive = tab === active;
+		const marker = isActive
+			? color("◆", CATHEDRAL_TOKENS.colors.accent)
+			: color("▢", CATHEDRAL_TOKENS.colors.foregroundDim);
+		const label = color(
+			tab,
+			isActive ? CATHEDRAL_TOKENS.colors.foreground : CATHEDRAL_TOKENS.colors.foregroundDim,
+		);
+		const row = `${marker} ${label}`;
+		lines.push(surfaceLine(indent(row), width));
+	}
+
+	lines.push(surfaceLine("", width));
+	return lines;
+}
+
 export function renderSidebar(snapshot: SidebarSnapshot, width: number): string[] {
-	return [...contextLines(snapshot, width), ...mcpLines(snapshot, width), ...memoryLines(snapshot, width)];
+	const active = snapshot.activeSubTab ?? "CONTEXT";
+	const header = registryHeaderLines(snapshot, width);
+
+	if (active === "CONTEXT") {
+		return [...header, ...contextLines(snapshot, width), ...mcpLines(snapshot, width)];
+	}
+	return [...header, ...memoryLines(snapshot, width)];
 }
 
 const STATIC_SIDEBAR_GUTTER = 1;
@@ -430,6 +482,7 @@ function messageText(message: unknown): string {
 function snapshotFromContext(
 	ctx: ExtensionContext,
 	memorySnapshot: Pick<SidebarSnapshot, "memory" | "memoryUnavailable">,
+	activeSubTab: SidebarSubTab,
 ): SidebarSnapshot {
 	let input = 0;
 	let output = 0;
@@ -455,6 +508,7 @@ function snapshotFromContext(
 		memory: memorySnapshot.memory,
 		memoryTotal: memorySnapshot.memory.length,
 		memoryUnavailable: memorySnapshot.memoryUnavailable,
+		activeSubTab,
 	};
 }
 
@@ -466,6 +520,22 @@ function snapshotFromContext(
 export function installSidebar(pi: ExtensionAPI): void {
 	let requestRender: (() => void) | undefined;
 	let memoryCache: SidebarMemoryCache | undefined;
+	let activeSubTab: SidebarSubTab = "CONTEXT";
+
+	pi.registerShortcut("ctrl+1", {
+		description: "sidebar: show CONTEXT sub-tab",
+		handler: () => {
+			activeSubTab = "CONTEXT";
+			requestRender?.();
+		},
+	});
+	pi.registerShortcut("ctrl+2", {
+		description: "sidebar: show MEMORY sub-tab",
+		handler: () => {
+			activeSubTab = "MEMORY";
+			requestRender?.();
+		},
+	});
 
 	pi.on("session_start", (_event, ctx) => {
 		if (!ctx.hasUI) return;
@@ -478,7 +548,10 @@ export function installSidebar(pi: ExtensionAPI): void {
 			const sidebarComponent: Component = {
 				invalidate(): void {},
 				render(width: number): string[] {
-					return renderSidebar(snapshotFromContext(ctx, memoryCache?.snapshot() ?? { memory: [] }), width);
+					return renderSidebar(
+						snapshotFromContext(ctx, memoryCache?.snapshot() ?? { memory: [] }, activeSubTab),
+						width,
+					);
 				},
 			};
 			const restore = dockStaticSidebar(tui, sidebarComponent, () =>

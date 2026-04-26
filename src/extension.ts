@@ -8,6 +8,7 @@ import { installApprovalGate } from "./approval-modal.js";
 import { installCommandPalette } from "./command-palette.js";
 import { installFooter } from "./footer.js";
 import { registerMemoryCommand } from "./memory-editor.js";
+import { installSidebar } from "./sidebar.js";
 import { installTopChrome } from "./top-chrome.js";
 import { installWorkingIndicator } from "./working-indicator.js";
 
@@ -27,6 +28,7 @@ export default function sumocode(pi: ExtensionAPI): void {
 	installInputHints(pi);
 	installCommandPalette(pi);
 	installApprovalGate(pi);
+	installSidebar(pi);
 	installWorkingIndicator(pi);
 	registerPersonaCommand(pi);
 	registerSpinnerCommand(pi);

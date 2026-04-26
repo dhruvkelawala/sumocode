@@ -279,9 +279,9 @@ describe("renderSidebar — mcp section", () => {
 	});
 });
 
-describe("renderSidebar — memory section", () => {
-	it("renders each memory item with a ❧ bullet", () => {
-		const lines = renderSidebar(snapshot(), 49);
+describe("renderSidebar — MEMORY sub-tab active", () => {
+	it("renders each memory item with a ❧ bullet (when activeSubTab=MEMORY)", () => {
+		const lines = renderSidebar(snapshot({ activeSubTab: "MEMORY" }), 49);
 		const memoryLines = lines.map(stripAnsi).filter((l) => /^\s*❧/.test(l));
 
 		expect(memoryLines.length).toBe(3);
@@ -291,6 +291,7 @@ describe("renderSidebar — memory section", () => {
 
 	it("caps display at the first 5 memory items even if more are supplied", () => {
 		const many = snapshot({
+			activeSubTab: "MEMORY",
 			memory: ["a", "b", "c", "d", "e", "f", "g"],
 		});
 		const lines = renderSidebar(many, 49);
@@ -302,7 +303,7 @@ describe("renderSidebar — memory section", () => {
 	});
 
 	it("shows dim no-match copy when memory is healthy but empty", () => {
-		const lines = renderSidebar(snapshot({ memory: [], memoryUnavailable: false }), 49);
+		const lines = renderSidebar(snapshot({ activeSubTab: "MEMORY", memory: [], memoryUnavailable: false }), 49);
 		const row = lines.find((line) => stripAnsi(line).includes("no memory match"));
 
 		expect(row).toBeDefined();
@@ -311,7 +312,7 @@ describe("renderSidebar — memory section", () => {
 	});
 
 	it("shows dim memory unavailable copy when the daemon is down", () => {
-		const lines = renderSidebar(snapshot({ memory: [], memoryUnavailable: true }), 49);
+		const lines = renderSidebar(snapshot({ activeSubTab: "MEMORY", memory: [], memoryUnavailable: true }), 49);
 		const row = lines.find((line) => stripAnsi(line).includes("memory unavailable"));
 
 		expect(row).toBeDefined();
@@ -321,6 +322,7 @@ describe("renderSidebar — memory section", () => {
 
 	it("shows a 'N more · ⌘M' footer when memoryTotal exceeds shown facts", () => {
 		const lines = renderSidebar(snapshot({
+			activeSubTab: "MEMORY",
 			memory: ["a", "b", "c", "d", "e"],
 			memoryTotal: 53,
 		}), 49);
@@ -331,6 +333,7 @@ describe("renderSidebar — memory section", () => {
 
 	it("omits the 'N more · ⌘M' footer when memoryTotal equals shown facts", () => {
 		const lines = renderSidebar(snapshot({
+			activeSubTab: "MEMORY",
 			memory: ["a", "b", "c"],
 			memoryTotal: 3,
 		}), 49);
@@ -340,9 +343,55 @@ describe("renderSidebar — memory section", () => {
 	});
 });
 
+describe("renderSidebar — sub-tab navigation", () => {
+	it("defaults to CONTEXT sub-tab (no activeSubTab field)", () => {
+		const lines = renderSidebar(snapshot(), 49);
+		const blob = lines.map(stripAnsi).join("\n");
+		expect(blob).toContain("REGISTRY");
+		expect(blob).toContain("CONTEXT");
+		expect(blob).toContain("MEMORY");
+		// CONTEXT sub-tab content shown
+		expect(blob).toContain("argent-x");
+		expect(blob).toContain("github");
+		// MEMORY sub-tab content NOT shown (no ❧ bullets)
+		expect(lines.map(stripAnsi).filter((line) => /^\s*❧/.test(line))).toHaveLength(0);
+	});
+
+	it("renders REGISTRY header with v 1.0.0 version line", () => {
+		const lines = renderSidebar(snapshot(), 49).map(stripAnsi);
+		const hasRegistry = lines.some((l) => l.includes("REGISTRY"));
+		const hasVersion = lines.some((l) => l.includes("v 1.0.0"));
+		expect(hasRegistry).toBe(true);
+		expect(hasVersion).toBe(true);
+	});
+
+	it("marks active sub-tab with ◆ (filled) and inactive with ▢ (outlined)", () => {
+		const lines = renderSidebar(snapshot({ activeSubTab: "CONTEXT" }), 49).map(stripAnsi);
+		const contextRow = lines.find((l) => l.includes("CONTEXT") && !l.includes("ACTIVE_CONTEXT"));
+		const memoryRow = lines.find((l) => l.includes("MEMORY") && !l.includes("ACTIVE_MEMORY"));
+		expect(contextRow).toBeDefined();
+		expect(memoryRow).toBeDefined();
+		expect(contextRow).toContain("◆");
+		expect(memoryRow).toContain("▢");
+	});
+
+	it("switching activeSubTab swaps content (CONTEXT → MEMORY)", () => {
+		const contextLines = renderSidebar(snapshot({ activeSubTab: "CONTEXT" }), 49).map(stripAnsi);
+		const memoryLines = renderSidebar(snapshot({ activeSubTab: "MEMORY" }), 49).map(stripAnsi);
+
+		const contextHasMcp = contextLines.some((l) => l.includes("github"));
+		const memoryHasMcp = memoryLines.some((l) => l.includes("github"));
+		expect(contextHasMcp).toBe(true);
+		expect(memoryHasMcp).toBe(false);
+
+		const memoryHasBullets = memoryLines.some((l) => /^\s*❧/.test(l));
+		expect(memoryHasBullets).toBe(true);
+	});
+});
+
 describe("renderSidebar — memory section bullet indent", () => {
 	it("renders each memory item with a leading two-space indent before ❧", () => {
-		const lines = renderSidebar(snapshot(), 49);
+		const lines = renderSidebar(snapshot({ activeSubTab: "MEMORY" }), 49);
 		const memoryLines = lines.map(stripAnsi).filter((line) => /^\s*❧/.test(line));
 
 		expect(memoryLines.length).toBeGreaterThan(0);

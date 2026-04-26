@@ -7,3 +7,6 @@ logs/
 # local-only dev artifacts
 .local/
 tmp/
+
+# visual harness output (rendered PNGs from `pnpm visual`)
+docs/visual/out/

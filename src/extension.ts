@@ -1,4 +1,5 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import { installInputHints } from "./cathedral/input-hints.js";
 import { registerPersonaCommand } from "./commands/persona.js";
 import { registerSpinnerCommand } from "./commands/spinner.js";
 import { registerTabsCommand } from "./commands/tabs.js";
@@ -20,6 +21,7 @@ import { installWorkingIndicator } from "./working-indicator.js";
 export default function sumocode(pi: ExtensionAPI): void {
 	installTopChrome(pi);
 	installFooter(pi);
+	installInputHints(pi);
 	installWorkingIndicator(pi);
 	registerPersonaCommand(pi);
 	registerSpinnerCommand(pi);

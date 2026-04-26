@@ -17,19 +17,23 @@ import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { CATHEDRAL_TOKENS } from "./tokens.js";
 
 /**
- * Cathedral spinner frames — a flower-pulse that doubles as Greek + Eastern
- * iconography. Every glyph is single-cell and lives in the U+2700 Dingbats
- * range, so it renders reliably across IBM Plex Mono, JetBrains Mono, SF Mono.
+ * Cathedral spinner frames — a hand-crafted flower-pulse that shares the
+ * design DNA with Claude Code's spinner (transforming dingbats, not a rotor)
+ * but has zero glyph overlap with their `· ✻ ✽ ✶ ✳ ✢` set.
+ *
+ * Every glyph renders as a single visible cell. Five of six are in the
+ * U+2700 Dingbats range; the opener `◌` (U+25CC, Geometric Shapes) is
+ * single-cell in Western locales.
  *
  * Sequence as story:
- *   · — quiet, before
- *   ✦ — small Greek cross-star, rising
- *   ❖ — lozenge, Eastern bloom
- *   ✺ — 12-pointed sun, Zeus full burst
- *   ❋ — propeller, work-in-progress
- *   ✶ — heavy 6-point, settled
+ *   ◌ — empty stone ring, before work begins
+ *   ✦ — small black 4-pointed star, rising
+ *   ❖ — lozenge, ornamental bloom
+ *   ✺ — 12-pointed sun, full burst
+ *   ❋ — heavy propeller, work-in-progress
+ *   ❉ — balloon-spoked pinwheel, settled medallion
  */
-export const CATHEDRAL_INDICATOR_FRAMES = ["·", "✦", "❖", "✺", "❋", "✶"] as const;
+export const CATHEDRAL_INDICATOR_FRAMES = ["◌", "✦", "❖", "✺", "❋", "❉"] as const;
 
 const RESET = "\u001b[0m";
 

@@ -15,6 +15,7 @@
  */
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import { renderSplash, SUMOCODE_QUOTE, SUMOCODE_QUOTE_ATTRIBUTION } from "./splash.js";
 import { CATHEDRAL_TOKENS, type SumoCodeState } from "./tokens.js";
 
 const RESET = "\u001b[0m";
@@ -117,8 +118,23 @@ function buildTabBarSnapshot(
 }
 
 /**
- * Pi-wiring glue. Mounts the cathedral tab bar as the session header
- * (above the chat area). Re-renders whenever state changes.
+ * Heuristic: returns true if the active session has at least one entry that
+ * represents user-visible chat (a Message of any role). Compaction summaries
+ * and branch summaries don't count, so a freshly-resumed empty branch still
+ * shows the splash.
+ */
+function sessionHasMessages(ctx: { sessionManager: { getBranch(): readonly { type?: string }[] } }): boolean {
+	try {
+		return ctx.sessionManager.getBranch().some((entry) => entry.type === "message");
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * Pi-wiring glue. Mounts the cathedral tab bar AND splash as the session
+ * header (above the chat area). The splash is included only while the
+ * session has zero messages; first user prompt collapses it.
  */
 export function installTabBar(pi: ExtensionAPI): void {
 	let state: SumoCodeState = "idle";
@@ -136,7 +152,16 @@ export function installTabBar(pi: ExtensionAPI): void {
 				},
 				invalidate(): void {},
 				render(width: number): string[] {
-					return [renderTabBar(buildTabBarSnapshot(ctx, state), width)];
+					const tab = renderTabBar(buildTabBarSnapshot(ctx, state), width);
+					const splash = renderSplash(
+						{
+							quote: SUMOCODE_QUOTE,
+							quoteAttribution: SUMOCODE_QUOTE_ATTRIBUTION,
+							hasMessages: sessionHasMessages(ctx),
+						},
+						width,
+					);
+					return [tab, ...splash];
 				},
 			};
 		});
@@ -162,4 +187,8 @@ export function installTabBar(pi: ExtensionAPI): void {
 		state = "idle";
 		render?.();
 	});
+
+	// Collapse the splash on the first user message arrival.
+	pi.on("message_start", () => render?.());
+	pi.on("message_end", () => render?.());
 }

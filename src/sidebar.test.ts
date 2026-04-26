@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { MemoryClientError, type RemnicMemoryClient } from "./memory.js";
 import {
 	SIDEBAR_MEMORY_DEBOUNCE_MS,
+	SIDEBAR_MEMORY_RETRY_MS,
 	createSidebarMemoryCache,
 	renderSidebar,
 	type SidebarSnapshot,
@@ -81,6 +82,31 @@ describe("createSidebarMemoryCache", () => {
 			expect(query).toHaveBeenCalledWith("convex", 5);
 			expect(cache.snapshot().memory).toEqual(["convex preference"]);
 			expect(onChange).toHaveBeenCalledTimes(1);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("auto-retries after daemon-down and recovers without a new prompt", async () => {
+		vi.useFakeTimers();
+		try {
+			const query = vi
+				.fn<RemnicMemoryClient["query"]>()
+				.mockRejectedValueOnce(new MemoryClientError("daemon_down", "memory unavailable"))
+				.mockResolvedValueOnce([{ id: "recovered", text: "memory is back" }]);
+			const onChange = vi.fn();
+			const cache = createSidebarMemoryCache(memoryClient(query));
+
+			cache.schedule("sumocode", onChange);
+			await vi.advanceTimersByTimeAsync(SIDEBAR_MEMORY_DEBOUNCE_MS);
+			expect(cache.snapshot()).toEqual({ memory: [], memoryUnavailable: true });
+
+			await vi.advanceTimersByTimeAsync(SIDEBAR_MEMORY_RETRY_MS);
+
+			expect(query).toHaveBeenCalledTimes(2);
+			expect(query).toHaveBeenLastCalledWith("sumocode", 5);
+			expect(cache.snapshot()).toEqual({ memory: ["memory is back"], memoryUnavailable: false });
+			expect(onChange).toHaveBeenCalledTimes(2);
 		} finally {
 			vi.useRealTimers();
 		}

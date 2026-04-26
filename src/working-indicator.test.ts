@@ -30,6 +30,17 @@ describe("indicatorFrameAt", () => {
 });
 
 describe("renderIndicator", () => {
+	it("brands every frame with the Zeus bolt sigil", () => {
+		for (const frame of CATHEDRAL_INDICATOR_FRAMES) {
+			expect(frame.startsWith("ϟ")).toBe(true);
+		}
+	});
+
+	it("keeps every frame the same visible width so the indicator never jumps", () => {
+		const widths = new Set(CATHEDRAL_INDICATOR_FRAMES.map((frame) => stripAnsi(frame).length));
+		expect(widths).toEqual(new Set([2]));
+	});
+
 	it("colorizes the current frame with the Cathedral accent", () => {
 		const output = renderIndicator(0, CATHEDRAL_INDICATOR_FRAMES, CATHEDRAL_TOKENS.colors.accent);
 		const raw = CATHEDRAL_INDICATOR_FRAMES[0];

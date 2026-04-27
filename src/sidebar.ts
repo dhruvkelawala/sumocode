@@ -2,10 +2,18 @@ import { basename } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import type { Component } from "@mariozechner/pi-tui";
 import { truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
-import { CATHEDRAL_TOKENS, type SumoCodeState } from "./tokens.js";
-import { formatTokenCount, resolveGitBranch } from "./footer.js";
+import { resolveGitBranch } from "./footer.js";
 import { createRemnicMemoryClient, type RemnicMemoryClient } from "./memory.js";
-import { VOICE } from "./voice.js";
+import { MetricsHud } from "./sumo-tui/cathedral/metrics-hud.js";
+import {
+	SIDEBAR_SUB_TABS,
+	renderRegistrySidebarLines,
+	type McpServerSnapshot,
+	type RegistrySidebarSnapshot,
+	type SidebarSessionSnapshot,
+	type SidebarSubTab,
+} from "./sumo-tui/cathedral/sidebar-rendering.js";
+import { surfaceLine } from "./sumo-tui/cathedral/ansi.js";
 
 /**
  * Threshold below which the sidebar hides itself. Per DESIGN.md §8
@@ -16,8 +24,6 @@ import { VOICE } from "./voice.js";
 export const SIDEBAR_MIN_TERMINAL_WIDTH = 120;
 /** Render width for the sidebar overlay (DESIGN.md §5 — cols 112..160 in the wide layout). */
 export const SIDEBAR_WIDTH = 49;
-/** Leading indent inside each sidebar row, matching docs/ui/claude-design/Sidebar.jsx. */
-const SIDEBAR_INDENT = "  ";
 /** Debounce used when refreshing memories from user prompt changes. */
 export const SIDEBAR_MEMORY_DEBOUNCE_MS = 200;
 /** Retry cadence while Remnic is unavailable. */
@@ -26,46 +32,15 @@ export const SIDEBAR_MEMORY_RETRY_MS = 5_000;
 /** Static placeholder until Pi exposes MCP server health. */
 export const PLACEHOLDER_MCP: readonly McpServerSnapshot[] = [
 	{ name: "github", status: "idle" },
-	{ name: "stitch", status: "idle" },
+	{ name: "stitch", status: "ok" },
 	{ name: "context7", status: "idle" },
 	{ name: "chrome-devtools", status: "idle" },
 ];
 
-export type McpServerSnapshot = {
-	name: string;
-	status: SumoCodeState;
-};
+export { SIDEBAR_SUB_TABS };
+export type { McpServerSnapshot, SidebarSessionSnapshot, SidebarSubTab };
 
-export type SidebarSubTab = "CONTEXT" | "MEMORY";
-
-export const SIDEBAR_SUB_TABS: readonly SidebarSubTab[] = ["CONTEXT", "MEMORY"];
-
-export type SidebarSessionSnapshot = {
-	name: string;
-	branch?: string;
-	active?: boolean;
-};
-
-export type SidebarSnapshot = {
-	projectName: string;
-	branch?: string;
-	inputTokens: number;
-	outputTokens: number;
-	contextWindow: number;
-	costUsd: number;
-	mcpServers: readonly McpServerSnapshot[];
-	memory: readonly string[];
-	/** Total memories in the store; used to compute the 'N more · ⌘M' footer. */
-	memoryTotal?: number;
-	memoryUnavailable?: boolean;
-	/**
-	 * Which sub-tab is currently active. Defaults to CONTEXT.
-	 * Switched via Ctrl+1 / Ctrl+2 (Element 1 lock).
-	 */
-	activeSubTab?: SidebarSubTab;
-	/** Active + archived sessions shown in the REGISTRY chrome. */
-	sessions?: readonly SidebarSessionSnapshot[];
-};
+export type SidebarSnapshot = RegistrySidebarSnapshot;
 
 export type SidebarAnchor = "right-center" | "top-right" | "bottom-right";
 
@@ -83,248 +58,8 @@ export function chooseSidebarAnchor(
 	return "right-center";
 }
 
-const RESET = "\u001b[0m";
-const ANSI_PATTERN = /\u001b\[[0-9;]*m/g;
-
-function parseHex(hex: string): { r: number; g: number; b: number } {
-	const n = hex.replace("#", "");
-	return {
-		r: Number.parseInt(n.slice(0, 2), 16),
-		g: Number.parseInt(n.slice(2, 4), 16),
-		b: Number.parseInt(n.slice(4, 6), 16),
-	};
-}
-
-function fg(hex: string): string {
-	const { r, g, b } = parseHex(hex);
-	return `\u001b[38;2;${r};${g};${b}m`;
-}
-
-function bg(hex: string): string {
-	const { r, g, b } = parseHex(hex);
-	return `\u001b[48;2;${r};${g};${b}m`;
-}
-
-function color(text: string, hex: string): string {
-	return `${fg(hex)}${text}${RESET}`;
-}
-
-function dim(text: string): string {
-	return `\u001b[2m${text}${RESET}`;
-}
-
-function bold(text: string): string {
-	return `\u001b[1m${text}${RESET}`;
-}
-
-/** Visible cell length (strips SGR escapes). */
-function visibleLength(text: string): number {
-	return text.replace(ANSI_PATTERN, "").length;
-}
-
-/** Pad a line to exactly `width` visible cells, then wrap in cathedral surface. */
-function surfaceLine(content: string, width: number): string {
-	const short = visibleLength(content);
-	const padding = short < width ? " ".repeat(width - short) : "";
-	const surface = bg(CATHEDRAL_TOKENS.colors.surface);
-	const foreground = fg(CATHEDRAL_TOKENS.colors.foreground);
-	return `${surface}${foreground}${content}${padding}${RESET}`;
-}
-
-function indent(content: string): string {
-	return `${SIDEBAR_INDENT}${content}`;
-}
-
-function banner(title: string, width: number): string {
-	const upper = title.toUpperCase();
-	const inner = ` ${upper} `;
-	const available = Math.max(2, width - SIDEBAR_INDENT.length - inner.length);
-	const left = Math.floor(available / 2);
-	const right = available - left;
-	const banner = color(`${"═".repeat(left)}${inner}${"═".repeat(right)}`, CATHEDRAL_TOKENS.colors.accent);
-	return surfaceLine(indent(banner), width);
-}
-
-const PROGRESS_BAR_TOTAL = 24;
-
-function renderProgressBar(used: number, total: number): string {
-	if (total <= 0) {
-		return `[${"░".repeat(PROGRESS_BAR_TOTAL)}]`;
-	}
-	const ratio = Math.max(0, Math.min(1, used / total));
-	const filled = Math.round(ratio * PROGRESS_BAR_TOTAL);
-	const empty = PROGRESS_BAR_TOTAL - filled;
-	const leftBracket = color("[", CATHEDRAL_TOKENS.colors.divider);
-	const rightBracket = color("]", CATHEDRAL_TOKENS.colors.divider);
-	const fill = color("█".repeat(filled), CATHEDRAL_TOKENS.colors.foreground);
-	const rest = color("░".repeat(empty), CATHEDRAL_TOKENS.colors.divider);
-	return `${leftBracket}${fill}${rest}${rightBracket}`;
-}
-
-function contextLines(snapshot: SidebarSnapshot, width: number): string[] {
-	const used = snapshot.inputTokens + snapshot.outputTokens;
-	const gauge = `${formatTokenCount(used)}/${formatTokenCount(snapshot.contextWindow)}`;
-	const projectLabel = snapshot.branch ? `${snapshot.projectName} (${snapshot.branch})` : snapshot.projectName;
-	const progressBar = renderProgressBar(used, snapshot.contextWindow);
-	const spend = color(`$${snapshot.costUsd.toFixed(2)} spent · session`, CATHEDRAL_TOKENS.colors.foregroundDim);
-
-	return [
-		surfaceLine("", width),
-		banner(VOICE.sections.context, width),
-		surfaceLine("", width),
-		surfaceLine(indent(projectLabel), width),
-		surfaceLine(indent(`${progressBar} ${gauge}`), width),
-		surfaceLine(indent(spend), width),
-	];
-}
-
-function statusLabel(status: SumoCodeState): string {
-	switch (status) {
-		case "idle":
-			return "idle";
-		case "thinking":
-			return "working";
-		case "tool":
-			return "tool";
-		case "approval":
-			return "down";
-		case "learning":
-			return "learning";
-	}
-}
-
-function mcpLines(snapshot: SidebarSnapshot, width: number): string[] {
-	const lines: string[] = [
-		surfaceLine("", width),
-		banner(VOICE.sections.mcp, width),
-		surfaceLine("", width),
-	];
-
-	const innerWidth = width - SIDEBAR_INDENT.length;
-
-	for (const server of snapshot.mcpServers) {
-		const dot = color("●", CATHEDRAL_TOKENS.colors.states[server.status]);
-		const label = statusLabel(server.status);
-		const pill = color(label, CATHEDRAL_TOKENS.colors.foregroundDim);
-		// Visible chars: "● " + name + spaces + label = innerWidth
-		const nameMaxLen = Math.max(0, innerWidth - 2 /* dot + space */ - label.length - 1 /* gap */);
-		const name = server.name.length > nameMaxLen
-			? `${server.name.slice(0, Math.max(0, nameMaxLen - 1))}…`
-			: server.name;
-		const gap = Math.max(1, innerWidth - 2 - name.length - label.length);
-		const row = `${dot} ${name}${" ".repeat(gap)}${pill}`;
-		lines.push(surfaceLine(indent(row), width));
-	}
-	return lines;
-}
-
-const MEMORY_DISPLAY_LIMIT = 5;
-
-function memoryLines(snapshot: SidebarSnapshot, width: number): string[] {
-	const lines: string[] = [
-		surfaceLine("", width),
-		banner(VOICE.sections.memory, width),
-		surfaceLine("", width),
-	];
-
-	if (snapshot.memoryUnavailable) {
-		lines.push(surfaceLine(indent(dim(VOICE.errors.daemonDown)), width));
-		return lines;
-	}
-
-	if (snapshot.memory.length === 0) {
-		lines.push(surfaceLine(indent(dim(VOICE.empty.memory)), width));
-		return lines;
-	}
-
-	const shown = snapshot.memory.slice(0, MEMORY_DISPLAY_LIMIT);
-	for (const item of shown) {
-		const bullet = color("❧", CATHEDRAL_TOKENS.colors.accent);
-		// truncate item text so visible width never exceeds the column count.
-		const available = Math.max(0, width - SIDEBAR_INDENT.length - 2 /* bullet + space */);
-		const truncated = item.length > available ? `${item.slice(0, Math.max(0, available - 1))}…` : item;
-		lines.push(surfaceLine(indent(`${bullet} ${truncated}`), width));
-	}
-
-	const total = snapshot.memoryTotal ?? snapshot.memory.length;
-	const hidden = Math.max(0, total - shown.length);
-	if (hidden > 0) {
-		lines.push(surfaceLine("", width));
-		lines.push(surfaceLine(indent(color(`${hidden} more · ⌘M`, CATHEDRAL_TOKENS.colors.foregroundDim)), width));
-	}
-
-	return lines;
-}
-
-/**
- * REGISTRY header rendered at the top of every sidebar render.
- *
- *     REGISTRY
- *     v 1.0.0
- *
- *     ◆ sumocode (main)          ← active session marker
- *
- *     ◆ CONTEXT                  ← active sub-tab marker
- *     ▢ MEMORY                   ← inactive sub-tab marker
- */
-function sessionLabel(session: SidebarSessionSnapshot): string {
-	return session.branch ? `${session.name} (${session.branch})` : session.name;
-}
-
-function registrySessions(snapshot: SidebarSnapshot): readonly SidebarSessionSnapshot[] {
-	return snapshot.sessions?.length
-		? snapshot.sessions
-		: [{ name: snapshot.projectName, branch: snapshot.branch, active: true }];
-}
-
-function registryHeaderLines(snapshot: SidebarSnapshot, width: number): string[] {
-	const active = snapshot.activeSubTab ?? "CONTEXT";
-	const registryTitle = color("REGISTRY", CATHEDRAL_TOKENS.colors.accent);
-	const version = color("v 1.0.0", CATHEDRAL_TOKENS.colors.foregroundDim);
-
-	const lines: string[] = [];
-	lines.push(surfaceLine("", width));
-	lines.push(surfaceLine(indent(registryTitle), width));
-	lines.push(surfaceLine(indent(version), width));
-	lines.push(surfaceLine("", width));
-
-	for (const [index, session] of registrySessions(snapshot).entries()) {
-		const isActive = session.active ?? index === 0;
-		const marker = isActive
-			? color("◆", CATHEDRAL_TOKENS.colors.accent)
-			: color("▢", CATHEDRAL_TOKENS.colors.foregroundDim);
-		const label = isActive
-			? color(sessionLabel(session), CATHEDRAL_TOKENS.colors.foreground)
-			: color(sessionLabel(session), CATHEDRAL_TOKENS.colors.foregroundDim);
-		lines.push(surfaceLine(indent(`${marker} ${label}`), width));
-	}
-
-	lines.push(surfaceLine("", width));
-
-	for (const tab of SIDEBAR_SUB_TABS) {
-		const isActive = tab === active;
-		const marker = isActive
-			? color("◆", CATHEDRAL_TOKENS.colors.accent)
-			: color("▢", CATHEDRAL_TOKENS.colors.foregroundDim);
-		const label = isActive
-			? bold(color(tab, CATHEDRAL_TOKENS.colors.accent))
-			: color(tab, CATHEDRAL_TOKENS.colors.foregroundDim);
-		const row = `${marker} ${label}`;
-		lines.push(surfaceLine(indent(row), width));
-	}
-
-	lines.push(surfaceLine("", width));
-	return lines;
-}
-
 export function renderSidebar(snapshot: SidebarSnapshot, width: number): string[] {
-	const active = snapshot.activeSubTab ?? "CONTEXT";
-	const header = registryHeaderLines(snapshot, width);
-
-	if (active === "CONTEXT") {
-		return [...header, ...contextLines(snapshot, width), ...mcpLines(snapshot, width)];
-	}
-	return [...header, ...memoryLines(snapshot, width)];
+	return renderRegistrySidebarLines(snapshot, width).map((line) => surfaceLine(line, width));
 }
 
 const STATIC_SIDEBAR_GUTTER = 1;
@@ -438,6 +173,8 @@ export type SidebarMemoryCache = {
 	snapshot(): Pick<SidebarSnapshot, "memory" | "memoryUnavailable">;
 };
 
+const MEMORY_DISPLAY_LIMIT = 5;
+
 export function createSidebarMemoryCache(
 	memoryClient: Pick<RemnicMemoryClient, "query">,
 	debounceMs = SIDEBAR_MEMORY_DEBOUNCE_MS,
@@ -524,10 +261,15 @@ function messageText(message: unknown): string {
 	return "";
 }
 
+function sessionHasMessages(ctx: ExtensionContext): boolean {
+	return ctx.sessionManager.getBranch().some((entry) => entry.type === "message");
+}
+
 function snapshotFromContext(
 	ctx: ExtensionContext,
 	memorySnapshot: Pick<SidebarSnapshot, "memory" | "memoryUnavailable">,
 	activeSubTab: SidebarSubTab,
+	metrics: SidebarSnapshot["metrics"],
 ): SidebarSnapshot {
 	let input = 0;
 	let output = 0;
@@ -554,6 +296,7 @@ function snapshotFromContext(
 		memoryTotal: memorySnapshot.memory.length,
 		memoryUnavailable: memorySnapshot.memoryUnavailable,
 		activeSubTab,
+		metrics,
 	};
 }
 
@@ -565,6 +308,7 @@ function snapshotFromContext(
 export function installSidebar(pi: ExtensionAPI): void {
 	let requestRender: (() => void) | undefined;
 	let memoryCache: SidebarMemoryCache | undefined;
+	let activeMetricsHud: MetricsHud | undefined;
 	let activeSubTab: SidebarSubTab = "CONTEXT";
 
 	pi.registerShortcut("ctrl+1", {
@@ -585,28 +329,35 @@ export function installSidebar(pi: ExtensionAPI): void {
 	pi.on("session_start", (_event, ctx) => {
 		if (!ctx.hasUI) return;
 
+		activeSubTab = "CONTEXT";
 		memoryCache = createSidebarMemoryCache(createRemnicMemoryClient());
 
 		ctx.ui.setWidget("sumocode-sidebar-dock", (tui): Component & { dispose(): void } => {
 			requestRender = () => tui.requestRender();
+			activeMetricsHud?.stop();
+			const metricsHud = new MetricsHud();
+			activeMetricsHud = metricsHud;
+			metricsHud.start(() => {
+				if (sessionHasMessages(ctx)) requestRender?.();
+			});
 			const sidebarComponent: Component = {
 				invalidate(): void {},
 				render(width: number): string[] {
 					return renderSidebar(
-						snapshotFromContext(ctx, memoryCache?.snapshot() ?? { memory: [] }, activeSubTab),
+						snapshotFromContext(ctx, memoryCache?.snapshot() ?? { memory: [] }, activeSubTab, metricsHud.snapshot()),
 						width,
 					);
 				},
 			};
-			const restore = dockStaticSidebar(tui, sidebarComponent, () =>
-				ctx.sessionManager.getBranch().some((entry) => entry.type === "message"),
-			);
+			const restore = dockStaticSidebar(tui, sidebarComponent, () => sessionHasMessages(ctx));
 			return {
 				invalidate(): void {},
 				render(): string[] {
 					return [];
 				},
 				dispose(): void {
+					metricsHud.stop();
+					if (activeMetricsHud === metricsHud) activeMetricsHud = undefined;
 					restore?.();
 					requestRender = undefined;
 				},

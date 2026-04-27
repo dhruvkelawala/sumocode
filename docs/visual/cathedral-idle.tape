@@ -15,7 +15,7 @@ Set Padding 10
 Set TypingSpeed 30ms
 
 # Land in the sumocode repo so the footer/sidebar context lines are stable.
-Type "cd '/Volumes/SumoDeus NVMe/openclaw/workspace/sumocode'"
+Type "cd '/Volumes/SumoDeus NVMe/openclaw/workspace/worktrees/sumocode-fix-56'"
 Enter
 Sleep 250ms
 

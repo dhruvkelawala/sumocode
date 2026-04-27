@@ -45,6 +45,7 @@ describe("FrameScheduler", () => {
 		expect(vi.getTimerCount()).toBe(1);
 		await vi.advanceTimersByTimeAsync(16);
 		expect(render).toHaveBeenCalledTimes(1);
+		expect(scheduler.getRendersPerSecond()).toBe(1);
 		expect(vi.getTimerCount()).toBe(0);
 		scheduler.exitStreamingMode();
 		expect(scheduler.isStreamingMode()).toBe(false);

@@ -22,6 +22,24 @@ export interface LifecycleInput {
 	setRawMode?(enabled: boolean): void;
 }
 
+export interface TerminalDimensions {
+	readonly cols: number;
+	readonly rows: number;
+}
+
+export interface TerminalDimensionSource {
+	readonly columns?: number;
+	readonly rows?: number;
+	on?(event: "resize", listener: () => void): unknown;
+	off?(event: "resize", listener: () => void): unknown;
+	removeListener?(event: "resize", listener: () => void): unknown;
+}
+
+export interface TerminalDimensionsHandle {
+	getSnapshot(): TerminalDimensions;
+	dispose(): void;
+}
+
 export interface LifecycleRenderControls {
 	scheduleRender(): void;
 	setStreamingMode(enabled: boolean): void;
@@ -73,6 +91,26 @@ function getNodeInput(): LifecycleInput | undefined {
 function crashText(error: unknown): string {
 	if (error instanceof Error) return error.stack ?? `${error.name}: ${error.message}`;
 	return String(error);
+}
+
+/** Subscribe to terminal resize events and expose the latest cell dimensions. */
+export function useTerminalDimensions(
+	onChange: (dimensions: TerminalDimensions) => void,
+	source: TerminalDimensionSource = process.stdout,
+): TerminalDimensionsHandle {
+	const snapshot = (): TerminalDimensions => ({
+		cols: Math.max(1, source.columns ?? 80),
+		rows: Math.max(1, source.rows ?? 24),
+	});
+	const handleResize = (): void => onChange(snapshot());
+	source.on?.("resize", handleResize);
+	return {
+		getSnapshot: snapshot,
+		dispose(): void {
+			if (source.off) source.off("resize", handleResize);
+			else source.removeListener?.("resize", handleResize);
+		},
+	};
 }
 
 /**

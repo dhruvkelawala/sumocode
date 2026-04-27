@@ -1,10 +1,11 @@
+import { EventEmitter } from "node:events";
 import { existsSync, readFileSync } from "node:fs";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { describe, expect, it } from "vitest";
-import { createLifecycleRuntime, type LifecycleInput, type LifecycleListener, type LifecycleProcess, type LifecycleProcessEvent, type LifecycleSignal } from "./lifecycle.js";
+import { createLifecycleRuntime, useTerminalDimensions, type LifecycleInput, type LifecycleListener, type LifecycleProcess, type LifecycleProcessEvent, type LifecycleSignal } from "./lifecycle.js";
 import { ALTSCREEN_ENTER_SEQUENCE, MOUSE_SGR_ENABLE_SEQUENCE, TERMINAL_CLEANUP_SEQUENCE, TerminalController, type TerminalOutput } from "./terminal-controller.js";
 
 class FakeProcess implements LifecycleProcess {
@@ -91,6 +92,26 @@ function buildPiStub() {
 	};
 	return { pi: pi as unknown as ExtensionAPI, handlers };
 }
+
+describe("useTerminalDimensions", () => {
+	it("tracks stdout resize events and unsubscribes cleanly", () => {
+		const source = new EventEmitter() as EventEmitter & { columns: number; rows: number };
+		source.columns = 100;
+		source.rows = 40;
+		const seen: { cols: number; rows: number }[] = [];
+		const handle = useTerminalDimensions((dimensions) => seen.push(dimensions), source);
+
+		expect(handle.getSnapshot()).toEqual({ cols: 100, rows: 40 });
+		source.columns = 80;
+		source.rows = 24;
+		source.emit("resize");
+		expect(seen).toEqual([{ cols: 80, rows: 24 }]);
+		handle.dispose();
+		source.columns = 120;
+		source.emit("resize");
+		expect(seen).toHaveLength(1);
+	});
+});
 
 describe("LifecycleRuntime", () => {
 	it("registers process signal handlers exactly once", () => {

@@ -17,6 +17,7 @@ import type {
 	TUI,
 } from "@mariozechner/pi-tui";
 import { ModalManager } from "../widgets/modal.js";
+import { ModalLayer } from "../widgets/modal-layer.js";
 import { NotificationCenter, type NotificationLevel } from "../widgets/notification.js";
 import {
 	RegionRegistry,
@@ -123,7 +124,13 @@ export class SumoExtensionUIAdapter implements ExtensionUIContext {
 		this.currentTheme = options.theme;
 		this.keybindings = options.keybindings;
 		this.notifications = options.notifications ?? new NotificationCenter({ onChange: options.onRenderRequest });
-		this.modals = options.modals ?? new ModalManager({ onChange: options.onRenderRequest });
+		this.modals = options.modals ?? new ModalLayer({
+			onChange: options.onRenderRequest,
+			getTerminalSize: () => ({
+				columns: (this.tui.terminal as { columns?: number } | undefined)?.columns ?? 80,
+				rows: (this.tui.terminal as { rows?: number } | undefined)?.rows ?? 24,
+			}),
+		});
 		this.editorText = options.editorText;
 		this.themeApi = options.themeApi;
 		this.tools = options.tools;
@@ -138,11 +145,20 @@ export class SumoExtensionUIAdapter implements ExtensionUIContext {
 			width: "45%",
 			maxHeight: 6,
 		});
-		this.regionRegistry.mountOverlay("__modal", this.modals, {
-			anchor: "center",
-			width: "65%",
-			maxHeight: "80%",
-		});
+		if (this.modals instanceof ModalLayer) {
+			this.regionRegistry.mountOverlay("__modal", this.modals, {
+				row: 0,
+				col: 0,
+				width: "100%",
+				maxHeight: "100%",
+			});
+		} else {
+			this.regionRegistry.mountModal("__modal", this.modals, {
+				anchor: "center",
+				width: "65%",
+				maxHeight: "80%",
+			});
+		}
 	}
 
 	public select(title: string, options: string[], opts?: ExtensionUIDialogOptions): Promise<string | undefined> {
@@ -253,7 +269,8 @@ export class SumoExtensionUIAdapter implements ExtensionUIContext {
 						return;
 					}
 					wrapper = new OverlayComponentWrapper(component);
-					this.regionRegistry.mountOverlay(key, wrapper, options?.overlay === false ? undefined : options?.overlayOptions);
+					if (options?.overlay === false) this.regionRegistry.mountOverlay(key, wrapper, undefined);
+					else this.regionRegistry.mountModal(key, wrapper, options?.overlayOptions);
 					options?.onHandle?.(this.createOverlayHandle(key, wrapper));
 				})
 				.catch((error: unknown) => {

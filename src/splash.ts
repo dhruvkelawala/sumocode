@@ -18,6 +18,9 @@
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import { truncateToWidth } from "@mariozechner/pi-tui";
+import type { Component } from "@mariozechner/pi-tui";
 import { CATHEDRAL_TOKENS } from "./tokens.js";
 
 const RESET = "\u001b[0m";
@@ -41,7 +44,7 @@ function visibleLength(text: string): number {
 
 function center(line: string, width: number): string {
 	const len = visibleLength(line);
-	if (len >= width) return line;
+	if (len >= width) return truncateToWidth(line, width, "");
 	const pad = Math.floor((width - len) / 2);
 	return `${" ".repeat(pad)}${line}`;
 }
@@ -104,39 +107,13 @@ export type SplashSnapshot = {
 };
 
 /**
- * Vertical layout reserved for the rest of Pi's chrome below the splash.
- * Used to compute how much top padding to add to push the footer to the
- * bottom of the viewport.
+ * Standalone splash content: cat + wordmark + quote only.
  *
- *   1 row : top chrome bar (Element 2)
- *   8 rows: Pi-hardcoded noise (extension issues warnings + ctrl+p/k
- *           shortcut conflicts + Anthropic auth subscription warning;
- *           varies by environment, sized for the worst case)
- *   5 rows: cathedral input frame (Element 3 + 4 — top + pad + content +
- *           pad + bottom; matches Stitch HTML `p-4`)
- *   1 row : input hints row (Element 4)
- *   1 row : footer F1 (Element 5)
- *   ----
- *  16 rows total reserved
- *
- * If this value is too low, the footer ends up halfway up the viewport with
- * empty space below it. If it's too high, the splash content is pushed off
- * screen at the top. Re-measure when adding/removing chrome rows.
+ * The retained sumo-tui splash tree centers this fixed-height leaf with Yoga
+ * flex spacers. Keep this function free of viewport padding and chrome
+ * reservation hacks so centering remains a layout concern.
  */
-const CHROME_RESERVED_ROWS = 16;
-
-/**
- * Pure render of the cathedral splash. Returns an empty array if the session
- * already has messages — caller can splice this into a header without
- * conditional logic.
- *
- * `terminalHeight` is optional. When provided, the splash output is padded
- * with blank rows at the top so the cat + wordmark + quote sit vertically
- * centered in the viewport, with chrome reserved at top and bottom. Without
- * it, the splash starts immediately below whatever rendered above (the
- * pre-altscreen behaviour).
- */
-export function renderSplash(snapshot: SplashSnapshot, width: number, terminalHeight?: number): string[] {
+export function renderSplashContent(snapshot: SplashSnapshot, width: number): string[] {
 	if (snapshot.hasMessages) return [];
 
 	const content: string[] = [];
@@ -161,21 +138,63 @@ export function renderSplash(snapshot: SplashSnapshot, width: number, terminalHe
 	content.push(center(`${DIM}${MUTED}${snapshot.quote}${RESET}`, width));
 	content.push(center(`${DIM}${MUTED}${snapshot.quoteAttribution}${RESET}`, width));
 
-	// Vertical centering: pad with blank rows above the content so the splash
-	// sits in the middle of the available viewport. Reserve CHROME_RESERVED_ROWS
-	// for the bottom chrome (input + hints + footer + anthropic warning).
-	if (terminalHeight && terminalHeight > content.length + CHROME_RESERVED_ROWS) {
-		const availableForCentering = terminalHeight - CHROME_RESERVED_ROWS;
-		const topPad = Math.max(2, Math.floor((availableForCentering - content.length) / 2));
-		const out: string[] = [];
-		for (let i = 0; i < topPad; i++) out.push("");
-		out.push(...content);
-		return out;
+	return content;
+}
+
+/**
+ * Legacy line renderer retained for preview scripts and non-retained fallback.
+ * When `terminalHeight` is provided it centers against the whole viewport — no
+ * `CHROME_RESERVED_ROWS` subtraction. The retained runtime should prefer
+ * `renderSplashContent()` inside `splash-tree.ts`.
+ */
+export function renderSplash(snapshot: SplashSnapshot, width: number, terminalHeight?: number): string[] {
+	const content = renderSplashContent(snapshot, width);
+	if (content.length === 0) return [];
+
+	if (terminalHeight && terminalHeight > content.length) {
+		const topPad = Math.max(0, Math.floor((terminalHeight - content.length) / 2));
+		return [...Array.from({ length: topPad }, () => ""), ...content];
 	}
 
-	// Fallback: small fixed top padding (legacy behaviour).
-	const out: string[] = [];
-	for (let i = 0; i < 4; i++) out.push("");
-	out.push(...content);
-	return out;
+	return content;
+}
+
+function sessionHasMessages(ctx: ExtensionContext): boolean {
+	try {
+		return ctx.sessionManager.getBranch().some((entry) => entry.type === "message");
+	} catch {
+		return false;
+	}
+}
+
+class SplashComponent implements Component {
+	public constructor(private readonly ctx: ExtensionContext) {}
+	public invalidate(): void {}
+	public render(width: number): string[] {
+		return renderSplash(
+			{
+				quote: SUMOCODE_QUOTE,
+				quoteAttribution: SUMOCODE_QUOTE_ATTRIBUTION,
+				hasMessages: sessionHasMessages(this.ctx),
+			},
+			width,
+			process.stdout.rows,
+		);
+	}
+}
+
+/** Mounts the splash as its own chrome region instead of piggybacking on the top bar. */
+export function installSplash(pi: ExtensionAPI): void {
+	let render: (() => void) | undefined;
+
+	pi.on("session_start", (_event, ctx) => {
+		if (!ctx.hasUI) return;
+		ctx.ui.setWidget("sumocode-splash", (tui) => {
+			render = () => tui.requestRender();
+			return new SplashComponent(ctx);
+		});
+	});
+
+	pi.on("message_start", () => render?.());
+	pi.on("message_end", () => render?.());
 }

@@ -21,7 +21,6 @@
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { isTopChromeHidden } from "./commands/tabs.js";
-import { renderSplash, SUMOCODE_QUOTE, SUMOCODE_QUOTE_ATTRIBUTION } from "./splash.js";
 import { CATHEDRAL_TOKENS, type SumoCodeState } from "./tokens.js";
 
 const RESET = "\u001b[0m";
@@ -190,18 +189,6 @@ export function renderTopChrome(snapshot: TopChromeSnapshot, width: number): str
  */
 export type TopChromeLoader = () => TopChromeSnapshot;
 
-/**
- * Heuristic: returns true if the session has at least one user-visible message
- * entry. Used to decide whether to render the splash content below the chrome.
- */
-function sessionHasMessages(ctx: { sessionManager: { getBranch(): readonly { type?: string }[] } }): boolean {
-	try {
-		return ctx.sessionManager.getBranch().some((entry) => entry.type === "message");
-	} catch {
-		return false;
-	}
-}
-
 export function installTopChrome(pi: ExtensionAPI, loader?: TopChromeLoader): void {
 	let state: SumoCodeState = "idle";
 	let render: (() => void) | undefined;
@@ -219,18 +206,7 @@ export function installTopChrome(pi: ExtensionAPI, loader?: TopChromeLoader): vo
 				invalidate(): void {},
 				render(width: number): string[] {
 					const snap = loader ? loader() : defaultSnapshot(ctx, state);
-					const chrome = renderTopChrome(snap, width);
-					const termHeight = process.stdout.rows ?? 0;
-					const splash = renderSplash(
-						{
-							quote: SUMOCODE_QUOTE,
-							quoteAttribution: SUMOCODE_QUOTE_ATTRIBUTION,
-							hasMessages: sessionHasMessages(ctx),
-						},
-						width,
-						termHeight > 0 ? termHeight : undefined,
-					);
-					return [chrome, ...splash];
+					return [renderTopChrome(snap, width)];
 				},
 			};
 		});
@@ -257,7 +233,7 @@ export function installTopChrome(pi: ExtensionAPI, loader?: TopChromeLoader): vo
 		render?.();
 	});
 
-	// Splash collapses on first user message arrival.
+	// Session-name / state affordances can change when messages commit.
 	pi.on("message_start", () => render?.());
 	pi.on("message_end", () => render?.());
 }

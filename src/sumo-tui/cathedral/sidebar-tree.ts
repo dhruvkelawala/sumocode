@@ -1,0 +1,116 @@
+import { SIDEBAR_MIN_TERMINAL_WIDTH, SIDEBAR_WIDTH } from "../../sidebar.js";
+import { SumoNode } from "../layout/node.js";
+import { FLEX_DIRECTION_ROW, type Yoga, type YogaNode } from "../layout/yoga.js";
+import type { CellBuffer, Rect } from "../render/buffer.js";
+import { cathedralBackdropCell } from "./theme-bridge.js";
+
+export type SidebarLayoutMode = "dock" | "overlay" | "hidden";
+
+export interface SidebarLayoutSnapshot {
+	readonly terminalWidth: number;
+	readonly terminalHeight: number;
+	readonly sessionHasMessages: boolean;
+	readonly dockMinWidth?: number;
+	readonly sidebarWidth?: number;
+}
+
+export interface SidebarTree {
+	readonly root: SumoNode;
+	readonly chat: SumoNode;
+	readonly backdrop: SidebarBackdropNode;
+	readonly sidebar: SumoNode;
+	mode: SidebarLayoutMode;
+	sync(snapshot: SidebarLayoutSnapshot): SidebarLayoutMode;
+}
+
+function finiteDimension(value: number, fallback: number): number {
+	return Number.isFinite(value) && value > 0 ? Math.floor(value) : fallback;
+}
+
+export function resolveSidebarLayoutMode(snapshot: SidebarLayoutSnapshot): SidebarLayoutMode {
+	if (!snapshot.sessionHasMessages) return "hidden";
+	return snapshot.terminalWidth >= (snapshot.dockMinWidth ?? SIDEBAR_MIN_TERMINAL_WIDTH) ? "dock" : "overlay";
+}
+
+export class SidebarBackdropNode extends SumoNode {
+	private visible = false;
+
+	public constructor(yogaNode: YogaNode, parent?: SumoNode) {
+		super(yogaNode, parent);
+	}
+
+	public setVisible(visible: boolean): void {
+		this.visible = visible;
+	}
+
+	public render(buffer: CellBuffer, rect: Rect): void {
+		if (!this.visible) return;
+		buffer.paint(rect, cathedralBackdropCell());
+	}
+}
+
+/**
+ * Responsive cathedral sidebar host.
+ *
+ * Wide terminals dock the sidebar as a fixed 49-column sibling after chat.
+ * Narrow terminals let chat keep the full width and place sidebar above it as
+ * an absolute right overlay with a dim backdrop. Empty splash state hides both
+ * sidebar and backdrop (EC-17.6).
+ */
+export function createSidebarTree(yoga: Yoga, parent: SumoNode | undefined, snapshot: SidebarLayoutSnapshot): SidebarTree {
+	const root = new SumoNode(yoga.Node.create(), parent);
+	root.flexDirection = FLEX_DIRECTION_ROW;
+	root.flexGrow = 1;
+	root.flexShrink = 1;
+
+	const chat = new SumoNode(yoga.Node.create(), root);
+	chat.flexGrow = 1;
+	chat.flexShrink = 1;
+
+	const backdrop = new SidebarBackdropNode(yoga.Node.create(), root);
+	backdrop.position = "absolute";
+	backdrop.top = 0;
+	backdrop.left = 0;
+	backdrop.right = 0;
+	backdrop.bottom = 0;
+	backdrop.zIndex = 100;
+
+	const sidebar = new SumoNode(yoga.Node.create(), root);
+	sidebar.flexShrink = 0;
+	sidebar.zIndex = 101;
+
+	const tree: SidebarTree = {
+		root,
+		chat,
+		backdrop,
+		sidebar,
+		mode: "hidden",
+		sync(next: SidebarLayoutSnapshot): SidebarLayoutMode {
+			const mode = resolveSidebarLayoutMode(next);
+			const width = Math.min(next.sidebarWidth ?? SIDEBAR_WIDTH, finiteDimension(next.terminalWidth, SIDEBAR_WIDTH));
+			this.mode = mode;
+			backdrop.setVisible(mode === "overlay");
+			if (mode === "hidden") {
+				sidebar.position = "relative";
+				sidebar.width = 0;
+				sidebar.height = 0;
+				return mode;
+			}
+			if (mode === "dock") {
+				sidebar.position = "relative";
+				sidebar.width = width;
+				sidebar.height = "100%";
+				return mode;
+			}
+			sidebar.position = "absolute";
+			sidebar.top = 0;
+			sidebar.right = 0;
+			sidebar.bottom = 0;
+			sidebar.width = width;
+			sidebar.height = finiteDimension(next.terminalHeight, 24);
+			return mode;
+		},
+	};
+	tree.sync(snapshot);
+	return tree;
+}

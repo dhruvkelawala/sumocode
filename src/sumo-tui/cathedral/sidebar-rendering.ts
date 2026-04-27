@@ -41,6 +41,11 @@ export interface RegistrySidebarSnapshot {
 const TOKEN_BAR_CELLS = 10;
 const MEMORY_DISPLAY_LIMIT = 5;
 
+function tokenUsageRatio(used: number, total: number): number {
+	if (total <= 0 || !Number.isFinite(used) || !Number.isFinite(total)) return 0;
+	return Math.max(0, used / total);
+}
+
 function clampRatio(value: number): number {
 	return Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : 0;
 }
@@ -56,7 +61,8 @@ function indented(content: string): string {
 }
 
 export function tokenMeterColor(used: number, total: number): string {
-	const ratio = total > 0 ? clampRatio(used / total) : 0;
+	const ratio = tokenUsageRatio(used, total);
+	if (ratio > 1) return CATHEDRAL_TOKENS.colors.states.approval;
 	if (ratio >= 0.8) return CATHEDRAL_TOKENS.colors.accent;
 	if (ratio >= 0.5) return CATHEDRAL_TOKENS.colors.states.thinking;
 	return CATHEDRAL_TOKENS.colors.states.idle;
@@ -64,15 +70,17 @@ export function tokenMeterColor(used: number, total: number): string {
 
 /** CATHEDRAL_UX_SPEC.md §4.2 token gauge: `[██████░░░] 42k/200k`. */
 export function renderTokenMeter(used: number, total: number): string {
-	const ratio = total > 0 ? clampRatio(used / total) : 0;
-	const filled = Math.round(ratio * TOKEN_BAR_CELLS);
+	const ratio = tokenUsageRatio(used, total);
+	const filled = Math.round(clampRatio(ratio) * TOKEN_BAR_CELLS);
 	const empty = TOKEN_BAR_CELLS - filled;
+	const overBudget = ratio > 1;
 	const meterColor = tokenMeterColor(used, total);
 	const leftBracket = colorHex("[", CATHEDRAL_TOKENS.colors.divider);
 	const rightBracket = colorHex("]", CATHEDRAL_TOKENS.colors.divider);
 	const fill = colorHex("█".repeat(filled), meterColor);
 	const rest = colorHex("░".repeat(empty), CATHEDRAL_TOKENS.colors.divider);
-	const usage = colorHex(`${formatTokenCount(used)}/${formatTokenCount(total)}`, CATHEDRAL_TOKENS.colors.foreground);
+	const usageText = `${formatTokenCount(used)}/${formatTokenCount(total)}${overBudget ? " OVER" : ""}`;
+	const usage = colorHex(usageText, overBudget ? CATHEDRAL_TOKENS.colors.states.approval : CATHEDRAL_TOKENS.colors.foreground);
 	return `${leftBracket}${fill}${rest}${rightBracket} ${usage}`;
 }
 

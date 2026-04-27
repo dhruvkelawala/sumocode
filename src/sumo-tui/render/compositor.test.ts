@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
+import { CATHEDRAL_TOKENS } from "../../tokens.js";
 import { SumoNode } from "../layout/node.js";
 import { DIRECTION_LTR, FLEX_DIRECTION_COLUMN, loadYoga, type YogaNode } from "../layout/yoga.js";
 import { CellBuffer, type Rect } from "./buffer.js";
 import { createAttrs } from "./cell.js";
+import { bufferToAnsiLines } from "./ansi-writer.js";
 import { composite } from "./compositor.js";
 
 class PaintNode extends SumoNode {
@@ -65,6 +67,30 @@ describe("compositor", () => {
 		composite(root, buffer);
 
 		expect(buffer.toPlainRow(0)).toBe(".2.");
+		root.dispose();
+	});
+
+	it("fills unpainted viewport cells with the cathedral background before painting widgets", async () => {
+		const yoga = await loadYoga();
+		const root = new SumoNode(yoga.Node.create());
+		const leaf = new PaintNode(yoga.Node.create(), "X", root);
+		root.width = 4;
+		root.height = 2;
+		leaf.width = 2;
+		leaf.height = 1;
+		root.yogaNode.calculateLayout(4, 2, DIRECTION_LTR);
+
+		const buffer = new CellBuffer(2, 4);
+		composite(root, buffer);
+
+		for (let row = 0; row < 2; row += 1) {
+			for (let col = 0; col < 4; col += 1) {
+				expect(buffer.getCell(row, col).bg).toBe(CATHEDRAL_TOKENS.colors.background);
+			}
+		}
+		expect(buffer.toPlainRow(0)).toBe("XX  ");
+		expect(buffer.toPlainRow(1)).toBe("    ");
+		expect(bufferToAnsiLines(buffer).every((line) => line.includes("48;2;26;21;17m"))).toBe(true);
 		root.dispose();
 	});
 });

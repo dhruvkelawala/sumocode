@@ -90,6 +90,8 @@ export class CellBuffer {
 	private readonly fg = new Map<number, string>();
 	private readonly bg = new Map<number, string>();
 	private readonly attrs = new Map<number, number>();
+	private defaultBg: string | null = null;
+	private defaultFg: string | null = null;
 
 	public constructor(rows: number, cols: number) {
 		this.rows = Math.max(0, Math.floor(rows));
@@ -102,6 +104,22 @@ export class CellBuffer {
 		return { rows: this.rows, cols: this.cols };
 	}
 
+	public setDefaultBackground(hex: string): void {
+		this.defaultBg = hex;
+	}
+
+	public setDefaultForeground(hex: string): void {
+		this.defaultFg = hex;
+	}
+
+	public getDefaultBackground(): string | null {
+		return this.defaultBg;
+	}
+
+	public getDefaultForeground(): string | null {
+		return this.defaultFg;
+	}
+
 	public resize(rows: number, cols: number): void {
 		const nextRows = Math.max(0, Math.floor(rows));
 		const nextCols = Math.max(0, Math.floor(cols));
@@ -111,6 +129,13 @@ export class CellBuffer {
 		const nextFg = new Map<number, string>();
 		const nextBg = new Map<number, string>();
 		const nextAttrs = new Map<number, number>();
+		const totalCells = nextRows * nextCols;
+		if (this.defaultFg) {
+			for (let index = 0; index < totalCells; index += 1) nextFg.set(index, this.defaultFg);
+		}
+		if (this.defaultBg) {
+			for (let index = 0; index < totalCells; index += 1) nextBg.set(index, this.defaultBg);
+		}
 		const copyRows = Math.min(this.rows, nextRows);
 		const copyCols = Math.min(this.cols, nextCols);
 
@@ -191,6 +216,11 @@ export class CellBuffer {
 		const endCol = Math.min(this.cols, col + Math.floor(maxCols));
 		let index = 0;
 		const style: Omit<Cell, "char"> = { attrs: createAttrs() };
+		if (this.defaultFg) style.fg = this.defaultFg;
+		// Inherit cathedral bg by default so chat messages render on the cathedral
+		// surface rather than terminal-default black. Explicit `\x1b[48;...m` in the
+		// ANSI input still overrides via consumeEscape.
+		if (this.defaultBg) style.bg = this.defaultBg;
 
 		while (index < ansiString.length && col < endCol) {
 			const char = ansiString[index];
@@ -232,6 +262,8 @@ export class CellBuffer {
 
 	public clone(): CellBuffer {
 		const next = new CellBuffer(this.rows, this.cols);
+		next.defaultBg = this.defaultBg;
+		next.defaultFg = this.defaultFg;
 		next.chars.set(this.chars);
 		for (const [key, value] of this.extendedChars) next.extendedChars.set(key, value);
 		for (const [key, value] of this.fg) next.fg.set(key, value);
@@ -272,7 +304,7 @@ export class CellBuffer {
 		for (let index = 0; index < codes.length; index += 1) {
 			const code = codes[index] ?? 0;
 			if (code === 0) {
-				style.fg = undefined;
+				style.fg = this.defaultFg ?? undefined;
 				style.bg = undefined;
 				style.attrs = createAttrs();
 			} else if (code === 1) {
@@ -295,7 +327,7 @@ export class CellBuffer {
 			} else if (code === 27) {
 				style.attrs.inverse = false;
 			} else if (code === 39) {
-				style.fg = undefined;
+				style.fg = this.defaultFg ?? undefined;
 			} else if (code === 49) {
 				style.bg = undefined;
 			} else if (code >= 30 && code <= 37) {
@@ -360,8 +392,10 @@ export class CellBuffer {
 		const index = this.index(row, col);
 		this.chars[index] = 32;
 		this.extendedChars.delete(index);
-		this.fg.delete(index);
-		this.bg.delete(index);
+		if (this.defaultFg) this.fg.set(index, this.defaultFg);
+		else this.fg.delete(index);
+		if (this.defaultBg) this.bg.set(index, this.defaultBg);
+		else this.bg.delete(index);
 		this.attrs.delete(index);
 	}
 
@@ -369,7 +403,7 @@ export class CellBuffer {
 		if (source.fg) this.fg.set(index, source.fg);
 		else this.fg.delete(index);
 		if (source.bg) this.bg.set(index, source.bg);
-		else this.bg.delete(index);
+		else if (!this.bg.has(index) && this.defaultBg) this.bg.set(index, this.defaultBg);
 		const mask = attrsToMask(source.attrs);
 		if (mask === 0) this.attrs.delete(index);
 		else this.attrs.set(index, mask);

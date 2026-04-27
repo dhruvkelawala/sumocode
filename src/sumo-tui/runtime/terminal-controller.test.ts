@@ -1,7 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import {
 	ALTSCREEN_ENTER_SEQUENCE,
+	CURSOR_COLOR_RESET,
+	CURSOR_COLOR_SET,
 	MOUSE_SGR_ENABLE_SEQUENCE,
+	TERMINAL_BG_RESET,
+	TERMINAL_BG_SET,
 	TERMINAL_CLEANUP_SEQUENCE,
 	TerminalController,
 	type TerminalOutput,
@@ -19,14 +23,14 @@ function outputStub(isTTY = true): TerminalOutput & { writes: string[] } {
 }
 
 describe("TerminalController", () => {
-	it("enterAltscreen emits the Phase 1 altscreen bytes", () => {
+	it("enterAltscreen emits altscreen bytes followed by cathedral cursor color", () => {
 		const output = outputStub();
 		const controller = new TerminalController({ output });
 
 		controller.enterAltscreen();
 
-		expect(output.writes).toEqual([ALTSCREEN_ENTER_SEQUENCE]);
-		expect(output.writes[0]).toBe("\x1b[?1049h\x1b[?25h\x1b[H");
+		expect(output.writes).toEqual([`${ALTSCREEN_ENTER_SEQUENCE}${TERMINAL_BG_SET}${CURSOR_COLOR_SET}`]);
+		expect(output.writes[0]).toBe("\x1b[?1049h\x1b[?25h\x1b[H\x1b]11;#1A1511\x1b\\\x1b]12;#D97706\x1b\\");
 	});
 
 	it("enableMouseSGR emits click/wheel SGR bytes without any-event motion tracking", () => {
@@ -39,14 +43,14 @@ describe("TerminalController", () => {
 		expect(output.writes[0]).toBe("\x1b[?1000h\x1b[?1006h");
 	});
 
-	it("exitTerminal emits the full cleanup bytes in the required order (EC-5.1)", () => {
+	it("exitTerminal resets cursor color before the full cleanup bytes (EC-5.1)", () => {
 		const output = outputStub();
 		const controller = new TerminalController({ output });
 
 		controller.exitTerminal();
 
-		expect(output.writes).toEqual([TERMINAL_CLEANUP_SEQUENCE]);
-		expect(output.writes[0]).toBe("\x1b[<u\x1b[>4;0m\x1b[?2004l\x1b[?1003l\x1b[?1006l\x1b[?1000l\x1b[?1049l\x1b[?25h\x1b[0m");
+		expect(output.writes).toEqual([`${CURSOR_COLOR_RESET}${TERMINAL_BG_RESET}${TERMINAL_CLEANUP_SEQUENCE}`]);
+		expect(output.writes[0]).toBe("\x1b]112\x1b\\\x1b]111\x1b\\\x1b[<u\x1b[>4;0m\x1b[?2004l\x1b[?1003l\x1b[?1006l\x1b[?1000l\x1b[?1049l\x1b[?25h\x1b[0m");
 		expect(controller.restored).toBe(true);
 	});
 
@@ -57,7 +61,7 @@ describe("TerminalController", () => {
 		controller.exitTerminal();
 		controller.exitTerminal();
 
-		expect(output.writes).toEqual([TERMINAL_CLEANUP_SEQUENCE]);
+		expect(output.writes).toEqual([`${CURSOR_COLOR_RESET}${TERMINAL_BG_RESET}${TERMINAL_CLEANUP_SEQUENCE}`]);
 	});
 
 	it("re-entering terminal modes clears the restored flag for the next cleanup", () => {
@@ -70,10 +74,10 @@ describe("TerminalController", () => {
 		controller.exitTerminal();
 
 		expect(output.writes).toEqual([
-			TERMINAL_CLEANUP_SEQUENCE,
-			ALTSCREEN_ENTER_SEQUENCE,
+			`${CURSOR_COLOR_RESET}${TERMINAL_BG_RESET}${TERMINAL_CLEANUP_SEQUENCE}`,
+			`${ALTSCREEN_ENTER_SEQUENCE}${TERMINAL_BG_SET}${CURSOR_COLOR_SET}`,
 			MOUSE_SGR_ENABLE_SEQUENCE,
-			TERMINAL_CLEANUP_SEQUENCE,
+			`${CURSOR_COLOR_RESET}${TERMINAL_BG_RESET}${TERMINAL_CLEANUP_SEQUENCE}`,
 		]);
 	});
 

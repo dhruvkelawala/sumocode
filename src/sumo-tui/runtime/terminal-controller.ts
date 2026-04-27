@@ -9,6 +9,17 @@
  */
 
 export const ALTSCREEN_ENTER_SEQUENCE = "\x1b[?1049h\x1b[?25h\x1b[H";
+export const CURSOR_COLOR_SET = "\x1b]12;#D97706\x1b\\";
+export const CURSOR_COLOR_RESET = "\x1b]112\x1b\\";
+// OSC 11 sets the terminal's default background color. Without this, cells
+// outside our retained renderer's reach (Pi noise output, terminal cursor
+// row, scrollback before altscreen, etc.) show as the terminal's own default
+// (often pure black `#000000`), which makes the cathedral palette look wrong.
+// Setting OSC 11 to cathedral `bg` (#1A1511) ensures every cell shares the
+// same base, and the sidebar's `surface` (#241D17) reads as elevated above it.
+// Reset on exit via OSC 111 so the user's normal terminal bg is restored.
+export const TERMINAL_BG_SET = "\x1b]11;#1A1511\x1b\\";
+export const TERMINAL_BG_RESET = "\x1b]111\x1b\\";
 /**
  * Enable click/wheel mouse reporting in SGR format without xterm any-event
  * motion tracking. `?1003h` makes Mac trackpads feel "captured" because mere
@@ -58,7 +69,10 @@ export class TerminalController {
 	public enterAltscreen(): void {
 		if (!this.isTTY()) return;
 		this.restored = false;
-		this.write(ALTSCREEN_ENTER_SEQUENCE);
+		// Order matters: enter altscreen first, set terminal-wide bg before any
+		// content writes so empty regions read as cathedral bg, then set cursor
+		// color so the input caret is accent orange.
+		this.write(`${ALTSCREEN_ENTER_SEQUENCE}${TERMINAL_BG_SET}${CURSOR_COLOR_SET}`);
 	}
 
 	public enableMouseSGR(): void {
@@ -76,7 +90,9 @@ export class TerminalController {
 		if (this.restored) return;
 		this.restored = true;
 		if (!this.isTTY()) return;
-		this.write(TERMINAL_CLEANUP_SEQUENCE);
+		// Reset cursor + bg colors before the rest of the cleanup so the user's
+		// shell returns to its native palette.
+		this.write(`${CURSOR_COLOR_RESET}${TERMINAL_BG_RESET}${TERMINAL_CLEANUP_SEQUENCE}`);
 	}
 
 	private write(data: string): void {

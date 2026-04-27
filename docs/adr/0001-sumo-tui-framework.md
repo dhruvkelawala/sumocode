@@ -184,4 +184,5 @@ Total: ~38 working days across ~8–10 calendar weeks.
 ## Status notes
 
 - 2026-04-27 — Drafted, accepted by @dhruvkelawala. Phase 0 issues filed. Phase 1 sprint begins.
+- 2026-04-27 — Phase 4b landed the Pi `0.70.2` fork activation path. `SUMO_TUI=1` now switches Pi's interactive constructor to SumoCode's `SumoInteractiveMode`; local worktrees use `SUMO_TUI_MODULE=file://.../sumo-interactive-mode.js`, and pnpm applies the equivalent published-package patch because GitHub subdirectory installs omit Pi's untracked `dist/` output.
 - (revisit dates / re-evaluations to be appended below)

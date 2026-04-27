@@ -4,22 +4,30 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+patchedDependencies:
+  '@mariozechner/pi-coding-agent@0.70.2':
+    hash: 1c48d442a49fba83c8ff071fce4ac30acdec356678118b4aceb3304d5d02ae3d
+    path: patches/@mariozechner__pi-coding-agent@0.70.2.patch
+
 importers:
 
   .:
     dependencies:
+      '@mariozechner/jiti':
+        specifier: ^2.6.5
+        version: 2.6.5
       yoga-wasm-web:
         specifier: ^0.3.3
         version: 0.3.3
     devDependencies:
       '@mariozechner/pi-ai':
-        specifier: ~0.70.0
+        specifier: 0.70.2
         version: 0.70.2(ws@8.20.0)(zod@4.3.6)
       '@mariozechner/pi-coding-agent':
-        specifier: ~0.70.0
-        version: 0.70.2(ws@8.20.0)(zod@4.3.6)
+        specifier: 0.70.2
+        version: 0.70.2(patch_hash=1c48d442a49fba83c8ff071fce4ac30acdec356678118b4aceb3304d5d02ae3d)(ws@8.20.0)(zod@4.3.6)
       '@mariozechner/pi-tui':
-        specifier: ~0.70.0
+        specifier: 0.70.2
         version: 0.70.2
       '@types/node':
         specifier: ^25.6.0
@@ -2054,7 +2062,7 @@ snapshots:
       - ws
       - zod
 
-  '@mariozechner/pi-coding-agent@0.70.2(ws@8.20.0)(zod@4.3.6)':
+  '@mariozechner/pi-coding-agent@0.70.2(patch_hash=1c48d442a49fba83c8ff071fce4ac30acdec356678118b4aceb3304d5d02ae3d)(ws@8.20.0)(zod@4.3.6)':
     dependencies:
       '@mariozechner/jiti': 2.6.5
       '@mariozechner/pi-agent-core': 0.70.2(ws@8.20.0)(zod@4.3.6)

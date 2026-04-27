@@ -1,20 +1,35 @@
 /**
- * Cathedral editor (Element 3 + 4 polish from CATHEDRAL_DECISIONS.md).
+ * Cathedral editor (Element 3 + 4 from CATHEDRAL_DECISIONS.md).
  *
- * Wraps Pi's CustomEditor with cathedral chrome:
+ * Wraps Pi's `CustomEditor` with cathedral chrome **without replacing it**.
+ * Pi's editor stays in charge of:
+ *   - text layout + cursor positioning (CURSOR_MARKER preserved)
+ *   - autocomplete dropdown (slash commands, agents, file mentions)
+ *   - multi-line wrap + scroll indicators
+ *   - bracketed paste, IME, kill-ring, history
  *
- *   Splash state (no messages):
- *     ┌─ DIVINE INVOCATION ──────────────────────┐
- *     │ > Ask anything... "Refactor the auth flow." █ │
- *     └────────────────────────────────────────────┘
+ * We just decorate around it: replace Pi's flat top/bottom horizontal lines
+ * with our `┌─ LABEL ──┐` / `└─┘` corners, wrap each interior row in side
+ * pipes, paint the inner span with the recess background, and let any
+ * autocomplete rows tail through unwrapped (they sit under the bottom
+ * border like a dropdown).
  *
- *   Active state (after first message):
- *     defers to Pi's default editor (full features: autocomplete,
- *     multi-line, IME, paste handling, syntax mode, etc.)
+ * Splash state (no messages):
+ *   ┌─ SCRIPTOR INPUT ─────────────────────────────────────┐
+ *   │ > Ask anything... "Refactor the auth flow."  █       │
+ *   └──────────────────────────────────────────────────────┘
  *
- * Trade-off documented in CATHEDRAL_DECISIONS.md Q4.1: the carved frame
- * is the splash ceremony only. Pi's editor takes over once you start
- * working so you don't lose autocomplete + multi-line.
+ * Active state (after first message):
+ *   ┌─ INPUT ──────────────────────────────────────────────┐
+ *   │ > /ag<cursor>                                        │
+ *   └──────────────────────────────────────────────────────┘
+ *      ▸ /agent  switch agent
+ *      ▸ /agents list available agents
+ *
+ * Earlier versions of this file *replaced* `super.render` entirely on
+ * splash. That broke slash-command autocomplete (typing `/res` showed no
+ * suggestions) because Pi's autocomplete machinery is part of `super.render`.
+ * The wrap approach below keeps autocomplete alive.
  */
 
 import type {
@@ -24,12 +39,96 @@ import type {
 } from "@mariozechner/pi-coding-agent";
 import { CustomEditor } from "@mariozechner/pi-coding-agent";
 import type { EditorTheme, TUI } from "@mariozechner/pi-tui";
+import { CATHEDRAL_TOKENS } from "../tokens.js";
 import {
 	INPUT_FRAME_LABEL_ACTIVE,
 	INPUT_FRAME_LABEL_SPLASH,
 	INPUT_FRAME_PLACEHOLDER,
-	renderInputFrame,
 } from "./input-frame.js";
+
+const RESET = "\u001b[0m";
+const ANSI_PATTERN = /\u001b\[[0-9;]*m/g;
+const DIM = "\u001b[2m";
+
+function visibleLength(text: string): number {
+	return text.replace(ANSI_PATTERN, "").length;
+}
+
+function fg(hex: string): string {
+	const n = hex.replace("#", "");
+	const r = Number.parseInt(n.slice(0, 2), 16);
+	const g = Number.parseInt(n.slice(2, 4), 16);
+	const b = Number.parseInt(n.slice(4, 6), 16);
+	return `\u001b[38;2;${r};${g};${b}m`;
+}
+
+function bg(hex: string): string {
+	const n = hex.replace("#", "");
+	const r = Number.parseInt(n.slice(0, 2), 16);
+	const g = Number.parseInt(n.slice(2, 4), 16);
+	const b = Number.parseInt(n.slice(4, 6), 16);
+	return `\u001b[48;2;${r};${g};${b}m`;
+}
+
+function color(text: string, hex: string): string {
+	return `${fg(hex)}${text}${RESET}`;
+}
+
+const DIVIDER_FG = fg(CATHEDRAL_TOKENS.colors.divider);
+const RECESS_BG = bg(CATHEDRAL_TOKENS.colors.surfaceRecess);
+const RESET_BG = "\u001b[49m";
+
+/**
+ * Build the cathedral top border with an embedded label, e.g.:
+ *   ┌─ SCRIPTOR INPUT ────...─────┐
+ */
+function renderTopBorder(width: number, label: string): string {
+	if (width < 6) return color("─".repeat(width), CATHEDRAL_TOKENS.colors.divider);
+	const inner = width - 2;
+	const labelInner = ` ${label} `;
+	const remaining = Math.max(2, inner - labelInner.length - 2);
+	const left = `${DIVIDER_FG}┌──`;
+	const labelText = color(labelInner, CATHEDRAL_TOKENS.colors.accent);
+	const right = `${DIVIDER_FG}${"─".repeat(remaining)}┐${RESET}`;
+	return `${left}${labelText}${right}`;
+}
+
+function renderBottomBorder(width: number): string {
+	if (width < 6) return color("─".repeat(width), CATHEDRAL_TOKENS.colors.divider);
+	return color(`└${"─".repeat(width - 2)}┘`, CATHEDRAL_TOKENS.colors.divider);
+}
+
+/**
+ * Wrap a single Pi editor row in `│ <inner> │` with the recess background
+ * painted on the inner span. The inner span is `width - 2` cells wide; we
+ * pad with spaces to that exact width so the bg block is uniform.
+ *
+ * IMPORTANT: We must not strip ANSI from `inner` — it carries cursor markers
+ * and color codes that Pi's TUI engine relies on (CURSOR_MARKER for hardware
+ * cursor placement, syntax/highlight colors, etc.). We just measure visible
+ * length to compute padding.
+ */
+function wrapRow(inner: string, width: number): string {
+	const innerWidth = Math.max(0, width - 2);
+	const visible = visibleLength(inner);
+	const pad = Math.max(0, innerWidth - visible);
+	const padded = `${inner}${" ".repeat(pad)}`;
+	return `${DIVIDER_FG}│${RESET}${RECESS_BG}${padded}${RESET_BG}${RESET}${DIVIDER_FG}│${RESET}`;
+}
+
+/**
+ * Test whether a row is one of Pi's flat horizontal borders, i.e. a row
+ * consisting of nothing but `─` chars (after stripping ANSI), or one of
+ * Pi's scroll indicators like `─── ↑ N more ───────`.
+ */
+function isPiBorderRow(row: string): boolean {
+	const stripped = row.replace(ANSI_PATTERN, "").trimEnd();
+	if (stripped.length === 0) return false;
+	if (/^─+$/.test(stripped)) return true;
+	// Scroll indicators: `─── ↑ 3 more ───────────`
+	if (/^─+\s*[↑↓]\s*\d+\s*more\s*─+$/.test(stripped)) return true;
+	return false;
+}
 
 class CathedralEditor extends CustomEditor {
 	constructor(
@@ -42,23 +141,79 @@ class CathedralEditor extends CustomEditor {
 	}
 
 	override render(width: number): string[] {
-		if (!this.isSplash()) {
-			// Active state: defer to Pi's full editor for autocomplete + multi-line.
-			// (We deliberately do NOT wrap it in our cathedral frame because that
-			// would cost autocomplete display, multi-line wrap, and IME support.
-			// Active-state cathedral input is tracked as a v2 follow-up.)
-			void INPUT_FRAME_LABEL_ACTIVE; // re-export touch so deletions surface here
-			return super.render(width);
+		// Too narrow for our chrome — fall back to Pi's bare render.
+		if (width < 8) return super.render(width);
+
+		// Always defer to Pi's editor for layout. Pi gets `width - 2` so its
+		// content fits inside our `│ ... │` side borders. Pi's CURSOR_MARKER
+		// stays in the row, so when we prepend `│` (one visible cell) the
+		// cursor's visual column is correctly offset by 1.
+		const innerRows = super.render(width - 2);
+		if (innerRows.length === 0) return innerRows;
+
+		const splash = this.isSplash();
+		const label = splash ? INPUT_FRAME_LABEL_SPLASH : INPUT_FRAME_LABEL_ACTIVE;
+
+		// Find Pi's bottom border row. Pi's render is structured:
+		//   row 0           : top border (─...─)
+		//   rows 1..k-1     : content rows
+		//   row k           : bottom border
+		//   rows k+1..end   : autocomplete dropdown (if any)
+		let bottomIdx = -1;
+		for (let i = 1; i < innerRows.length; i++) {
+			if (isPiBorderRow(innerRows[i]!)) {
+				bottomIdx = i;
+				break;
+			}
 		}
 
-		// Splash state: render the carved cathedral frame with `SCRIPTOR INPUT`
-		// label and the canonical placeholder text from the Stitch mockup.
+		// Splash placeholder injection: when the editor is empty AND we're on
+		// splash, replace the (otherwise blank) content row with the dim
+		// placeholder text so the user sees what the input wants. Pi's editor
+		// has no concept of placeholders; we shim it from the outside.
 		const text = this.getText();
-		return renderInputFrame(text, width, {
-			label: INPUT_FRAME_LABEL_SPLASH,
-			placeholder: INPUT_FRAME_PLACEHOLDER,
-			promptColor: "oxidized",
-		});
+		const showPlaceholder = splash && text.length === 0;
+		const renderContent = (row: string, isFirstContent: boolean): string => {
+			if (showPlaceholder && isFirstContent) {
+				const ghost = `${DIM}${color(`> ${INPUT_FRAME_PLACEHOLDER}`, CATHEDRAL_TOKENS.colors.foregroundDim)}${RESET}`;
+				return wrapRow(ghost, width);
+			}
+			return wrapRow(row, width);
+		};
+
+		// p-4 mirror: one blank-recess padding row above + below the content
+		// rows, so the inside of the frame has visible breathing room like the
+		// Stitch HTML mockup.
+		const paddingRow = wrapRow("", width);
+
+		const result: string[] = [renderTopBorder(width, label), paddingRow];
+
+		const lastContentIdx = bottomIdx === -1 ? innerRows.length : bottomIdx;
+		let contentSeen = false;
+		for (let i = 1; i < lastContentIdx; i++) {
+			result.push(renderContent(innerRows[i]!, !contentSeen));
+			contentSeen = true;
+		}
+		result.push(paddingRow);
+		result.push(renderBottomBorder(width));
+
+		// Autocomplete rows after Pi's bottom border — passed through as-is
+		// at the narrower inner width. They appear as a dropdown directly
+		// below the cathedral frame's bottom border, matching how Pi already
+		// renders autocomplete (and how the Stitch mockup for the active
+		// state implies suggestions float below the input).
+		if (bottomIdx !== -1) {
+			for (let i = bottomIdx + 1; i < innerRows.length; i++) {
+				// Pad to full width so we don't leave artifacts from previous
+				// autocomplete frames at the right edge.
+				const row = innerRows[i]!;
+				const visible = visibleLength(row);
+				const pad = Math.max(0, width - visible);
+				result.push(`${row}${" ".repeat(pad)}`);
+			}
+		}
+
+		return result;
 	}
 }
 
@@ -72,7 +227,9 @@ function sessionHasMessages(ctx: ExtensionContext): boolean {
 
 /**
  * Mount the cathedral editor via setEditorComponent. Replaces Pi's default
- * editor with our wrapper that branches on splash vs active state.
+ * editor with our wrapper that decorates `super.render` output without
+ * intercepting any of its behaviour (autocomplete, multi-line, IME etc.
+ * all keep working).
  */
 export function installCathedralEditor(pi: ExtensionAPI): void {
 	pi.on("session_start", (_event, ctx) => {

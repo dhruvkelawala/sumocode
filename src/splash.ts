@@ -105,17 +105,25 @@ export type SplashSnapshot = {
 
 /**
  * Vertical layout reserved for the rest of Pi's chrome below the splash.
- * Used to compute how much top padding to add for vertical centering.
+ * Used to compute how much top padding to add to push the footer to the
+ * bottom of the viewport.
  *
  *   1 row : top chrome bar (Element 2)
- *   1 row : input frame (Pi's editor)
- *   1 row : input hints (Element 4)
- *   1 row : footer (Element 5)
- *   2 rows: anthropic warning (Pi-hardcoded)
- *   1 row : breathing room
- *   3 rows: anthropic auth banner / package updates (Pi-hardcoded, varies)
+ *   8 rows: Pi-hardcoded noise (extension issues warnings + ctrl+p/k
+ *           shortcut conflicts + Anthropic auth subscription warning;
+ *           varies by environment, sized for the worst case)
+ *   5 rows: cathedral input frame (Element 3 + 4 — top + pad + content +
+ *           pad + bottom; matches Stitch HTML `p-4`)
+ *   1 row : input hints row (Element 4)
+ *   1 row : footer F1 (Element 5)
+ *   ----
+ *  16 rows total reserved
+ *
+ * If this value is too low, the footer ends up halfway up the viewport with
+ * empty space below it. If it's too high, the splash content is pushed off
+ * screen at the top. Re-measure when adding/removing chrome rows.
  */
-const CHROME_RESERVED_ROWS = 9;
+const CHROME_RESERVED_ROWS = 16;
 
 /**
  * Pure render of the cathedral splash. Returns an empty array if the session

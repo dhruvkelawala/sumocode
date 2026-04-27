@@ -3,6 +3,7 @@ import { installInputHints } from "./cathedral/input-hints.js";
 import { registerPersonaCommand } from "./commands/persona.js";
 import { registerSpinnerCommand } from "./commands/spinner.js";
 import { registerTabsCommand } from "./commands/tabs.js";
+import { registerThemeCommand } from "./commands/theme.js";
 import { registerThemeCheckCommand } from "./commands/theme-check.js";
 // Element 6 approval gate disabled per Dhruv's request 2026-04-27.
 // The cathedral approval modal was blocking bash/edit/write tool calls and
@@ -41,6 +42,7 @@ export default function sumocode(pi: ExtensionAPI): void {
 	registerPersonaCommand(pi);
 	registerSpinnerCommand(pi);
 	registerTabsCommand(pi);
+	registerThemeCommand(pi);
 	registerThemeCheckCommand(pi);
 	registerMemoryCommand(pi);
 }

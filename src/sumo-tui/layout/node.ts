@@ -19,11 +19,13 @@ import {
 export type SumoNodePosition = "absolute" | "relative" | "static" | PositionType;
 export type SumoNodeSize = number | `${number}%`;
 
+export type SumoNodeEventHandlerResult = boolean | void;
+
 export interface SumoNodeEventHandlers {
-	onMouseDown?: (node: SumoNode, event: unknown) => void;
-	onMouseUp?: (node: SumoNode, event: unknown) => void;
-	onMouseMove?: (node: SumoNode, event: unknown) => void;
-	onScroll?: (node: SumoNode, event: unknown) => void;
+	onMouseDown?: (node: SumoNode, event: unknown) => SumoNodeEventHandlerResult;
+	onMouseUp?: (node: SumoNode, event: unknown) => SumoNodeEventHandlerResult;
+	onMouseMove?: (node: SumoNode, event: unknown) => SumoNodeEventHandlerResult;
+	onScroll?: (node: SumoNode, event: unknown) => SumoNodeEventHandlerResult;
 }
 
 function assertFiniteLayoutNumber(value: number): number {

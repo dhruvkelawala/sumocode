@@ -1,5 +1,6 @@
 import { POSITION_TYPE_ABSOLUTE } from "../layout/yoga.js";
-import type { SumoNode } from "../layout/node.js";
+import type { SumoNode, SumoNodeEventHandlerResult } from "../layout/node.js";
+import type { MouseEvent } from "../input/mouse.js";
 import type { CellBuffer, Rect } from "./buffer.js";
 
 export interface HardwareCursor {
@@ -14,6 +15,14 @@ export interface CompositeResult {
 interface RenderableNode extends SumoNode {
 	render?: (buffer: CellBuffer, rect: Rect) => void;
 	getHardwareCursor?: () => HardwareCursor | null;
+	/** A widget such as ScrollBox renders/culls its own children into a viewport. */
+	compositeChildren?: boolean;
+}
+
+interface HitTestNode extends SumoNode {
+	/** Allows scroll containers to translate child hit rects by their current offset. */
+	getChildHitOrigin?: (rect: Rect) => { top: number; left: number };
+	handleMouseEvent?: (event: MouseEvent) => boolean | void;
 }
 
 interface PositionedChild {
@@ -25,6 +34,10 @@ function isRenderable(node: SumoNode): node is RenderableNode {
 	return "render" in node || "getHardwareCursor" in node;
 }
 
+function asHitTestNode(node: SumoNode): HitTestNode {
+	return node as HitTestNode;
+}
+
 function nodeRect(node: SumoNode, originTop: number, originLeft: number): Rect {
 	return {
 		top: originTop + node.getComputedTop(),
@@ -34,9 +47,23 @@ function nodeRect(node: SumoNode, originTop: number, originLeft: number): Rect {
 	};
 }
 
+function containsPoint(rect: Rect, row: number, col: number): boolean {
+	return row >= rect.top && row < rect.top + rect.height && col >= rect.left && col < rect.left + rect.width;
+}
+
 function collectCursor(node: SumoNode, current: HardwareCursor | null): HardwareCursor | null {
 	if (!isRenderable(node) || !node.getHardwareCursor) return current;
 	return node.getHardwareCursor() ?? current;
+}
+
+function orderedChildren(node: SumoNode): PositionedChild[] {
+	return node.children.map((child, order) => ({ node: child, order })).sort((left, right) => {
+		const leftAbs = left.node.getPositionType() === POSITION_TYPE_ABSOLUTE;
+		const rightAbs = right.node.getPositionType() === POSITION_TYPE_ABSOLUTE;
+		if (leftAbs !== rightAbs) return leftAbs ? 1 : -1;
+		if (!leftAbs) return left.order - right.order;
+		return left.node.zIndex - right.node.zIndex || left.order - right.order;
+	});
 }
 
 /**
@@ -54,6 +81,7 @@ export function composite(root: SumoNode, buffer: CellBuffer): CompositeResult {
 		if (isRenderable(node) && node.render) {
 			node.render(buffer, rect);
 			hardwareCursor = collectCursor(node, hardwareCursor);
+			if (node.compositeChildren === false) return;
 		}
 
 		const normalChildren: PositionedChild[] = [];
@@ -70,4 +98,46 @@ export function composite(root: SumoNode, buffer: CellBuffer): CompositeResult {
 
 	visit(root, 0, 0);
 	return { hardwareCursor };
+}
+
+/** Return the deepest Yoga node whose computed rect contains the zero-based cell. */
+export function hitTest(root: SumoNode, row: number, col: number): SumoNode | null {
+	function visit(node: SumoNode, originTop: number, originLeft: number): SumoNode | null {
+		const rect = nodeRect(node, originTop, originLeft);
+		if (!containsPoint(rect, row, col)) return null;
+
+		const hitNode = asHitTestNode(node);
+		const childOrigin = hitNode.getChildHitOrigin?.(rect) ?? { top: rect.top, left: rect.left };
+		const children = orderedChildren(node);
+		for (let index = children.length - 1; index >= 0; index -= 1) {
+			const child = children[index];
+			if (!child) continue;
+			const childHit = visit(child.node, childOrigin.top, childOrigin.left);
+			if (childHit) return childHit;
+		}
+
+		return node;
+	}
+
+	return visit(root, 0, 0);
+}
+
+function invokeEventHandler(node: SumoNode, event: MouseEvent): SumoNodeEventHandlerResult {
+	const handlers = node.eventHandlers;
+	if (event.type === "scroll") return handlers.onScroll?.(node, event);
+	if (event.type === "down") return handlers.onMouseDown?.(node, event);
+	if (event.type === "up") return handlers.onMouseUp?.(node, event);
+	return handlers.onMouseMove?.(node, event);
+}
+
+/** Hit-test and bubble a mouse event from deepest target to ancestors. */
+export function dispatchMouseEvent(root: SumoNode, event: MouseEvent): boolean {
+	let node = hitTest(root, event.row, event.col);
+	while (node) {
+		const hitNode = asHitTestNode(node);
+		if (hitNode.handleMouseEvent?.(event) === true) return true;
+		if (invokeEventHandler(node, event) === true) return true;
+		node = node.parent ?? null;
+	}
+	return false;
 }

@@ -4,7 +4,11 @@ import { registerPersonaCommand } from "./commands/persona.js";
 import { registerSpinnerCommand } from "./commands/spinner.js";
 import { registerTabsCommand } from "./commands/tabs.js";
 import { registerThemeCheckCommand } from "./commands/theme-check.js";
-import { installApprovalGate } from "./approval-modal.js";
+// Element 6 approval gate disabled per Dhruv's request 2026-04-27.
+// The cathedral approval modal was blocking bash/edit/write tool calls and
+// slowing down agent iteration. We trust Pi's own tool security model for now.
+// Re-enable later if we want a per-tool consent UX (Phase 7+).
+// import { installApprovalGate } from "./approval-modal.js";
 import { installAltscreen } from "./cathedral/altscreen.js";
 import { installCathedralEditor } from "./cathedral/cathedral-editor.js";
 import { installCommandPalette } from "./command-palette.js";
@@ -31,7 +35,7 @@ export default function sumocode(pi: ExtensionAPI): void {
 	installCathedralEditor(pi);
 	installInputHints(pi);
 	installCommandPalette(pi);
-	installApprovalGate(pi);
+	// installApprovalGate(pi); // disabled — see import comment above
 	installSidebar(pi);
 	installWorkingIndicator(pi);
 	registerPersonaCommand(pi);

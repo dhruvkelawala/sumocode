@@ -79,7 +79,11 @@ export function createSplashTree(yoga: Yoga, parent: SumoNode | undefined, snaps
 				root.height = 0;
 				root.flexGrow = 0;
 				root.flexShrink = 0;
+				return;
 			}
+			root.yogaNode.setHeightAuto();
+			root.flexGrow = 1;
+			root.flexShrink = 1;
 		},
 	};
 }

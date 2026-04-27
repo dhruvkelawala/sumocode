@@ -11,6 +11,17 @@ import {
 	textFromAgentMessage,
 	type PiNoiseFilterState,
 } from "./sumo-interactive-mode.js";
+import { defaultSplashSnapshot, getSplashContentHeight } from "../cathedral/splash-tree.js";
+
+const ANSI_PATTERN = /\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\)|_[^\x07]*(?:\x07|\x1b\\))/g;
+
+function stripAnsi(text: string): string {
+	return text.replace(ANSI_PATTERN, "");
+}
+
+function firstNonBlankRow(lines: readonly string[]): number {
+	return lines.findIndex((line) => stripAnsi(line).trim().length > 0);
+}
 
 class TextNode {
 	public constructor(public text: string) {}
@@ -78,6 +89,32 @@ describe("sumo interactive Pi noise filtering", () => {
 		expect(textFromAgentMessage({ role: "user", content: "hello" })).toBe("hello");
 		expect(textFromAgentMessage({ role: "assistant", content: [{ type: "thinking", thinking: "hidden" }, { type: "text", text: "visible" }] })).toBe("visible");
 		expect(textFromAgentMessage({ role: "toolResult", content: [{ type: "text", text: "tool output" }] })).toBe("tool output");
+	});
+
+	it("renders the retained splash centered in the chat slot until the first message", async () => {
+		const runtime = new SumoInteractiveRuntime({ isTTY: false, columns: 100, rows: 30, write: vi.fn() });
+		const snapshot = await runtime.start();
+
+		const lines = runtime.renderChatLines(100, 30);
+		const expectedTop = Math.floor((30 - getSplashContentHeight(defaultSplashSnapshot(false), 100)) / 2);
+		expect(firstNonBlankRow(lines)).toBeGreaterThanOrEqual(expectedTop);
+		expect(stripAnsi(lines.join("\n"))).toContain("PERFECTION IS ACHIEVED");
+
+		snapshot.chat.addMessage("user", "hello");
+		const chatLines = runtime.renderChatLines(100, 30);
+		expect(stripAnsi(chatLines.join("\n"))).toContain("USER > hello");
+		expect(stripAnsi(chatLines.join("\n"))).not.toContain("PERFECTION IS ACHIEVED");
+		runtime.stop();
+	});
+
+	it("caches retained chat frames when upstream re-renders without chat dirtiness", async () => {
+		const runtime = new SumoInteractiveRuntime({ isTTY: false, columns: 100, rows: 30, write: vi.fn() });
+		await runtime.start();
+		const first = runtime.renderChatLines(100, 30);
+		const second = runtime.renderChatLines(100, 30);
+
+		expect(second).toEqual(first);
+		runtime.stop();
 	});
 
 	it("routes Pi chat rendering and wheel input through ChatPager", async () => {

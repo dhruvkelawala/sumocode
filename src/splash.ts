@@ -167,6 +167,10 @@ function sessionHasMessages(ctx: ExtensionContext): boolean {
 	}
 }
 
+export function shouldUseRetainedSplash(env: NodeJS.ProcessEnv = process.env): boolean {
+	return env.SUMO_TUI === "1";
+}
+
 class SplashComponent implements Component {
 	public constructor(private readonly ctx: ExtensionContext) {}
 	public invalidate(): void {}
@@ -188,7 +192,7 @@ export function installSplash(pi: ExtensionAPI): void {
 	let render: (() => void) | undefined;
 
 	pi.on("session_start", (_event, ctx) => {
-		if (!ctx.hasUI) return;
+		if (!ctx.hasUI || shouldUseRetainedSplash()) return;
 		ctx.ui.setWidget("sumocode-splash", (tui) => {
 			render = () => tui.requestRender();
 			return new SplashComponent(ctx);

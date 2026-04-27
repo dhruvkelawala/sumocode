@@ -38,7 +38,7 @@ import type {
 	KeybindingsManager,
 } from "@mariozechner/pi-coding-agent";
 import { CustomEditor } from "@mariozechner/pi-coding-agent";
-import type { EditorTheme, TUI } from "@mariozechner/pi-tui";
+import { CURSOR_MARKER, visibleWidth, type EditorTheme, type TUI } from "@mariozechner/pi-tui";
 import { CATHEDRAL_TOKENS } from "../tokens.js";
 import {
 	INPUT_FRAME_LABEL_ACTIVE,
@@ -51,7 +51,7 @@ const ANSI_PATTERN = /\u001b\[[0-9;]*m/g;
 const DIM = "\u001b[2m";
 
 function visibleLength(text: string): number {
-	return text.replace(ANSI_PATTERN, "").length;
+	return visibleWidth(text);
 }
 
 function fg(hex: string): string {
@@ -175,7 +175,10 @@ class CathedralEditor extends CustomEditor {
 		const showPlaceholder = splash && text.length === 0;
 		const renderContent = (row: string, isFirstContent: boolean): string => {
 			if (showPlaceholder && isFirstContent) {
-				const ghost = `${DIM}${color(`> ${INPUT_FRAME_PLACEHOLDER}`, CATHEDRAL_TOKENS.colors.foregroundDim)}${RESET}`;
+				// Preserve Pi's zero-width cursor marker while painting our ghost text.
+				// Without this, TUI.positionHardwareCursor() sees no marker on the
+				// splash empty state and emits \x1b[?25l after every render.
+				const ghost = `${DIM}${color(`> ${CURSOR_MARKER}${INPUT_FRAME_PLACEHOLDER}`, CATHEDRAL_TOKENS.colors.foregroundDim)}${RESET}`;
 				return wrapRow(ghost, width);
 			}
 			return wrapRow(row, width);

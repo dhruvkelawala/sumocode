@@ -46,6 +46,8 @@ describe("sumo-tui cursor visibility integration", () => {
 
 		await app.waitForOutput(PI_BOOT_SEQUENCE, 10_000);
 		await app.waitForOutput("SCRIPTOR INPUT", 10_000);
+		await app.waitForOutput("\x1b[?25h", 10_000);
+		expect(app.getCurrentTerminalState().cursorVisible).toBe(true);
 
 		let typed = "";
 		let previousColumn = 0;

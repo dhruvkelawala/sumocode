@@ -3,6 +3,7 @@ import { CATHEDRAL_TOKENS } from "./tokens.js";
 import {
 	SUMOCODE_WORDMARK,
 	renderSplash,
+	shouldUseRetainedSplash,
 	type SplashSnapshot,
 } from "./splash.js";
 
@@ -66,6 +67,12 @@ describe("renderSplash", () => {
 		for (const line of lines) {
 			expect(stripAnsi(line).length).toBeLessThanOrEqual(width);
 		}
+	});
+
+	it("lets the retained sumo-tui chat slot own the splash when enabled", () => {
+		expect(shouldUseRetainedSplash({ SUMO_TUI: "1" })).toBe(true);
+		expect(shouldUseRetainedSplash({ SUMO_TUI: "0" })).toBe(false);
+		expect(shouldUseRetainedSplash({})).toBe(false);
 	});
 
 	it("uses cathedral palette tokens (no ad-hoc colors)", () => {

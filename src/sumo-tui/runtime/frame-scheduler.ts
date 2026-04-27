@@ -1,3 +1,5 @@
+import { logDiagnostic } from "./diagnostics.js";
+
 export type FrameRenderCallback = () => void | Promise<void>;
 
 export interface FrameSchedulerOptions {
@@ -46,7 +48,7 @@ export class FrameScheduler {
 			this.clearTimer(this.idleTimer);
 			this.idleTimer = undefined;
 		}
-		this.ensureStreamingTimer();
+		if (this.queue.length > 0) this.ensureStreamingTimer();
 	}
 
 	public exitStreamingMode(): void {
@@ -99,17 +101,19 @@ export class FrameScheduler {
 
 	private async flushStreamingTick(): Promise<void> {
 		if (this.queue.length > 0) await this.flushOnce();
-		if (this.streaming) this.ensureStreamingTimer();
+		if (this.streaming && this.queue.length > 0) this.ensureStreamingTimer();
 	}
 
 	private async flushOnce(): Promise<void> {
 		if (this.inFlight || this.queue.length === 0) return;
 		this.inFlight = true;
+		const queuedFrames = this.queue.length;
 		// Coalesce all queued invalidations into the newest frame. The bounded queue
 		// still gives us Edge Case 2.4 backpressure semantics: newest state wins and
 		// old dirty tokens are dropped before memory can grow.
 		this.queue = [];
 		try {
+			logDiagnostic("frame_scheduler_render", { streaming: this.streaming, queuedFrames });
 			await this.renderCallback();
 		} finally {
 			this.inFlight = false;

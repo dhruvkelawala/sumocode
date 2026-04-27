@@ -35,6 +35,7 @@
     "@mariozechner/pi-tui": "0.70.2",
     "@types/node": "^25.6.0",
     "node-pty": "^1.1.0",
+    "typebox": "1.1.33",
     "typescript": "^6.0.3",
     "vitest": "^4.1.5"
   },
@@ -45,5 +46,8 @@
     "test:integration": "vitest run test/integration/",
     "vitest": "vitest",
     "visual": "node scripts/visual.mjs"
+  },
+  "dependencies": {
+    "yoga-wasm-web": "^0.3.3"
   }
 }

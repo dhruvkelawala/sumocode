@@ -98,7 +98,7 @@ describe("sumo interactive Pi noise filtering", () => {
 		const lines = runtime.renderChatLines(100, 30);
 		const expectedTop = Math.floor((30 - getSplashContentHeight(defaultSplashSnapshot(false), 100)) / 2);
 		expect(firstNonBlankRow(lines)).toBeGreaterThanOrEqual(expectedTop);
-		expect(lines.join("\n")).toContain("\x1b[38;2;217;119;6m");
+		expect(lines.join("\n")).toContain("38;2;217;119;6");
 		expect(stripAnsi(lines.join("\n"))).toContain("PERFECTION IS ACHIEVED");
 
 		snapshot.chat.addMessage("user", "hello");

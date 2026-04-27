@@ -45,4 +45,17 @@ describe("CellBuffer", () => {
 		expect(buffer.toPlainRow(1)).toBe("ef");
 		expect(buffer.toPlainRow(2)).toBe("  ");
 	});
+
+	it("clears and paints transparent rows on top of the configured default background", () => {
+		const buffer = new CellBuffer(1, 4);
+		buffer.setDefaultBackground("#1A1511");
+		buffer.setDefaultForeground("#F5E6C8");
+		buffer.clear();
+		buffer.paintRow(0, "hi");
+
+		expect(buffer.getCell(0, 0).bg).toBe("#1A1511");
+		expect(buffer.getCell(0, 1).bg).toBe("#1A1511");
+		expect(buffer.getCell(0, 2).bg).toBe("#1A1511");
+		expect(buffer.getCell(0, 2).fg).toBe("#F5E6C8");
+	});
 });

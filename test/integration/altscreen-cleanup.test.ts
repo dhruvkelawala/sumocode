@@ -2,7 +2,7 @@ import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { TERMINAL_CLEANUP_SEQUENCE } from "../../src/sumo-tui/runtime/terminal-controller.js";
+import { CURSOR_COLOR_RESET, CURSOR_COLOR_SET, TERMINAL_CLEANUP_SEQUENCE } from "../../src/sumo-tui/runtime/terminal-controller.js";
 import { PI_BOOT_SEQUENCE, spawnPiPty, type SpawnedPiPty } from "./spawn-pi-pty.js";
 
 let app: SpawnedPiPty | undefined;
@@ -18,10 +18,14 @@ describe("sumo-tui altscreen cleanup integration", () => {
 		app = spawnPiPty({ env: { PI_CODING_AGENT_DIR: agentDir } });
 
 		await app.waitForOutput(PI_BOOT_SEQUENCE, 10_000);
+		await app.waitForOutput(CURSOR_COLOR_SET, 5_000);
 		app.sendSignal("SIGINT");
 		await app.waitForOutput(TERMINAL_CLEANUP_SEQUENCE, 5_000);
+		await app.waitForOutput(CURSOR_COLOR_RESET, 5_000);
 
 		const state = app.getCurrentTerminalState();
+		expect(app.getOutput()).toContain(CURSOR_COLOR_SET);
+		expect(app.getOutput()).toContain(CURSOR_COLOR_RESET);
 		expect(state.cleanupSequenceSeen).toBe(true);
 		expect(state.altscreenActive).toBe(false);
 		expect(state.kittyKeyboardPopped).toBe(true);

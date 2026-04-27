@@ -2,6 +2,7 @@ import { appendFileSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import { FrameScheduler, type FrameRenderCallback } from "./frame-scheduler.js";
 import { TerminalController } from "./terminal-controller.js";
 
 export type LifecycleSignal = "SIGINT" | "SIGTERM" | "SIGHUP" | "SIGQUIT" | "SIGTSTP" | "SIGCONT";
@@ -21,10 +22,17 @@ export interface LifecycleInput {
 	setRawMode?(enabled: boolean): void;
 }
 
+export interface LifecycleRenderControls {
+	scheduleRender(): void;
+	setStreamingMode(enabled: boolean): void;
+}
+
 export interface LifecycleRuntimeOptions {
 	readonly controller?: TerminalController;
 	readonly process?: LifecycleProcess;
 	readonly input?: LifecycleInput;
+	readonly scheduler?: FrameScheduler;
+	readonly render?: FrameRenderCallback;
 	readonly homeDir?: () => string;
 	readonly mkdirSync?: (path: string, options: { recursive: true }) => unknown;
 	readonly appendFileSync?: (path: string, data: string, encoding: BufferEncoding) => void;
@@ -76,6 +84,7 @@ export class LifecycleRuntime {
 	private readonly controller: TerminalController;
 	private readonly lifecycleProcess: LifecycleProcess;
 	private readonly input: LifecycleInput | undefined;
+	private readonly scheduler: FrameScheduler;
 	private readonly getHomeDir: () => string;
 	private readonly makeDir: (path: string, options: { recursive: true }) => unknown;
 	private readonly appendFile: (path: string, data: string, encoding: BufferEncoding) => void;
@@ -88,12 +97,13 @@ export class LifecycleRuntime {
 		this.controller = options.controller ?? new TerminalController();
 		this.lifecycleProcess = options.process ?? getNodeProcess();
 		this.input = options.input ?? getNodeInput();
+		this.scheduler = options.scheduler ?? new FrameScheduler({ render: options.render ?? (() => undefined) });
 		this.getHomeDir = options.homeDir ?? homedir;
 		this.makeDir = options.mkdirSync ?? mkdirSync;
 		this.appendFile = options.appendFileSync ?? appendFileSync;
 	}
 
-	public installLifecycle(pi: ExtensionAPI): void {
+	public installLifecycle(pi: ExtensionAPI): LifecycleRenderControls {
 		this.installProcessHandlers();
 
 		pi.on("session_start", (_event, ctx) => {
@@ -105,6 +115,24 @@ export class LifecycleRuntime {
 		pi.on("session_shutdown", () => {
 			this.restoreTerminal();
 		});
+
+		return this.getRenderControls();
+	}
+
+	public scheduleRender(): void {
+		this.scheduler.requestRender();
+	}
+
+	public setStreamingMode(enabled: boolean): void {
+		if (enabled) this.scheduler.enterStreamingMode();
+		else this.scheduler.exitStreamingMode();
+	}
+
+	public getRenderControls(): LifecycleRenderControls {
+		return {
+			scheduleRender: () => this.scheduleRender(),
+			setStreamingMode: (enabled) => this.setStreamingMode(enabled),
+		};
 	}
 
 	public installProcessHandlers(): void {
@@ -234,6 +262,14 @@ export function createLifecycleRuntime(options: LifecycleRuntimeOptions = {}): L
 const defaultLifecycle = createLifecycleRuntime();
 defaultLifecycle.installProcessHandlers();
 
-export function installLifecycle(pi: ExtensionAPI): void {
-	defaultLifecycle.installLifecycle(pi);
+export function installLifecycle(pi: ExtensionAPI): LifecycleRenderControls {
+	return defaultLifecycle.installLifecycle(pi);
+}
+
+export function scheduleRender(): void {
+	defaultLifecycle.scheduleRender();
+}
+
+export function setStreamingMode(enabled: boolean): void {
+	defaultLifecycle.setStreamingMode(enabled);
 }

@@ -86,6 +86,16 @@ interface MouseInputDiagnosticsFields {
 	readonly consumed: boolean;
 	readonly pendingLength: number;
 	readonly leftoverLength: number;
+	readonly sourceHex: string;
+	readonly leftoverHex: string;
+}
+
+function toHex(value: string): string {
+	let hex = "";
+	for (let index = 0; index < value.length; index += 1) {
+		hex += value.charCodeAt(index).toString(16).padStart(2, "0");
+	}
+	return hex;
 }
 
 function diagnoseMouseInput(fields: MouseInputDiagnosticsFields): void {
@@ -96,6 +106,8 @@ function diagnoseMouseInput(fields: MouseInputDiagnosticsFields): void {
 		consumed: fields.consumed,
 		pending_length: fields.pendingLength,
 		leftover_length: fields.leftoverLength,
+		source_hex: fields.sourceHex,
+		leftover_hex: fields.leftoverHex,
 	});
 }
 
@@ -601,13 +613,16 @@ class UpstreamChatPagerBridge {
 			for (const event of parsed.events) {
 				this.handleMouse(event);
 			}
-			if (parsed.events.length > 0) consumed = true;
 
-			// Strip every complete SGR mouse sequence first.
+			// Strip every complete SGR mouse sequence — including wheel-left/right
+			// (button codes 66/67) and any other variants the parser may not
+			// recognize. Anything matching `\x1b[<\d+;\d+;\d+[Mm]` is mouse input
+			// and must never reach Pi's editor as visible text.
+			const beforeCompleteStrip = nextData;
 			nextData = nextData.replace(COMPLETE_SGR_MOUSE_SEQUENCE, "");
+			if (nextData !== beforeCompleteStrip) consumed = true;
 
-			// If the remaining tail looks like a partial mouse sequence (terminal
-			// split a wheel event across stdin chunks), buffer it for next call.
+			// Buffer trailing partial mouse sequences across chunks.
 			const tailMatch = nextData.match(SGR_MOUSE_PREFIX_TAIL_PATTERN);
 			if (tailMatch && tailMatch[0].length > 0) {
 				this.pendingMouseInput = tailMatch[0];
@@ -615,9 +630,8 @@ class UpstreamChatPagerBridge {
 				consumed = true;
 			}
 
-			// Anything else starting with `\x1b[<` and ending with M/m but not
-			// matching our complete pattern is a corrupt/stale mouse fragment.
-			// Drop it instead of forwarding raw bytes to Pi's editor.
+			// Anything else starting with `\x1b[<` is a corrupt/stale mouse
+			// fragment. Drop it instead of forwarding raw bytes to Pi's editor.
 			if (nextData.includes("\x1b[<")) {
 				const stripped = nextData.replace(/\x1b\[<[\d;]*[Mm]?/g, "");
 				if (stripped !== nextData) {
@@ -633,6 +647,8 @@ class UpstreamChatPagerBridge {
 				consumed,
 				pendingLength: this.pendingMouseInput.length,
 				leftoverLength: nextData.length,
+				sourceHex: toHex(source.slice(0, 64)),
+				leftoverHex: toHex(nextData.slice(0, 64)),
 			});
 		}
 

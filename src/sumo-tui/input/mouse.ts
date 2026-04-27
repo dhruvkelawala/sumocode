@@ -61,11 +61,17 @@ export function parseSgrMouseEvent(input: string): MouseEvent | undefined {
 
 	if ((code & 64) !== 0) {
 		const directionCode = code & 3;
-		if (directionCode > 1) return undefined;
+		// SGR mouse buttons 64/65 = vertical wheel up/down, 66/67 = horizontal
+		// wheel left/right (Mac trackpad two-finger swipe with any horizontal
+		// component emits these). Map left/right to undefined scrollDir so the
+		// chat scrollbox ignores them, but still report them as scroll events
+		// so the bridge classifies the bytes as consumed mouse input.
+		const scrollDir: MouseScrollDirection | undefined =
+			directionCode === 0 ? "up" : directionCode === 1 ? "down" : undefined;
 		return {
 			type: "scroll",
 			button: 64 + directionCode,
-			scrollDir: directionCode === 0 ? "up" : "down",
+			scrollDir,
 			row,
 			col,
 			modifiers,

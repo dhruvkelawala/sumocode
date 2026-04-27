@@ -176,6 +176,10 @@ export class ScrollBox extends SumoNode {
 
 	public handleMouseEvent(event: MouseEvent): boolean {
 		if (event.type !== "scroll" || !eventInside(this.lastRect, event)) return false;
+		// Horizontal wheel (left/right) has scrollDir undefined — claim the event
+		// so the bridge counts it as consumed mouse input but don't actually move
+		// the chat scroll position.
+		if (event.scrollDir === undefined) return true;
 		this.scrollBy(event.scrollDir === "up" ? -this.scrollAcceleration : this.scrollAcceleration);
 		return true;
 	}

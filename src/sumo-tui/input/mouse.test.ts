@@ -24,6 +24,14 @@ describe("SGR mouse parser", () => {
 		expect(parseSgrMouseEvent("\x1b[<65;2;1M")).toMatchObject({ type: "scroll", button: 65, scrollDir: "down" });
 	});
 
+	it("parses horizontal wheel left/right (Mac trackpad two-finger swipe)", () => {
+		// Button 66 = wheel-left, 67 = wheel-right. We must classify these as
+		// scroll events so the bridge consumes their bytes — even though the
+		// chat scrollbox doesn't currently move horizontally.
+		expect(parseSgrMouseEvent("\x1b[<66;2;1M")).toMatchObject({ type: "scroll", button: 66, scrollDir: undefined });
+		expect(parseSgrMouseEvent("\x1b[<67;2;1M")).toMatchObject({ type: "scroll", button: 67, scrollDir: undefined });
+	});
+
 	it("consumes complete sequences and preserves incomplete rest", () => {
 		const parsed = parseSgrMouseStream(`noise\x1b[<0;1;1M\x1b[<65;2;2M\x1b[<64;`);
 		expect(parsed.events.map((event) => event.type)).toEqual(["down", "scroll"]);

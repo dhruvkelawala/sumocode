@@ -83,6 +83,7 @@ const FALSE_ENV_VALUES = new Set(["0", "false", "no", "off"]);
 const PI_NOISE_FILTER_INSTALLED = Symbol("sumo-tui.pi-noise-filter-installed");
 const CHAT_PAGER_BRIDGE_INSTALLED = Symbol("sumo-tui.chat-pager-bridge-installed");
 const COMPLETE_SGR_MOUSE_SEQUENCE = /\x1b\[<\d+;\d+;\d+[Mm]/g;
+const SGR_MOUSE_PREFIX_PATTERN = /^\x1b\[<\d*(?:;\d*){0,2}$/;
 
 export const PI_NOISE_TEXT_PATTERNS: readonly RegExp[] = [
 	/\[Extension issues\]/i,
@@ -537,6 +538,7 @@ class UpstreamChatPagerBridge {
 	private lastChatTop = 0;
 	private lastChatWidth = 1;
 	private lastChatHeight = 1;
+	private pendingMouseInput = "";
 
 	public constructor(
 		private readonly runtime: SumoInteractiveRuntime,
@@ -554,19 +556,27 @@ class UpstreamChatPagerBridge {
 	public clear(): void {
 		this.chat.clearMessages();
 		this.lastAssistantText = "";
+		this.pendingMouseInput = "";
 		this.runtime.setEmptyChatQuoteState({ active: false, userMessageCount: 0 });
 	}
 
 	public handleInput(data: string): { consume?: boolean; data?: string } | void {
-		let nextData = data;
+		const source = this.pendingMouseInput + data;
+		this.pendingMouseInput = "";
+		let nextData = source;
 		let consumed = false;
 
-		if (data.includes("\x1b[<")) {
-			const parsed = parseSgrMouseStream(data);
+		if (source.includes("\x1b[<")) {
+			const parsed = parseSgrMouseStream(source);
 			for (const event of parsed.events) {
 				if (this.handleMouse(event)) consumed = true;
 			}
 			nextData = nextData.replace(COMPLETE_SGR_MOUSE_SEQUENCE, "");
+			if (SGR_MOUSE_PREFIX_PATTERN.test(parsed.rest)) {
+				this.pendingMouseInput = parsed.rest;
+				nextData = nextData.replace(parsed.rest, "");
+				consumed = true;
+			}
 			if (parsed.events.length > 0) consumed = true;
 		}
 

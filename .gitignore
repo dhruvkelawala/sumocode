@@ -10,3 +10,7 @@ tmp/
 
 # visual harness output (rendered PNGs from `pnpm visual`)
 docs/visual/out/
+
+# local-only third-party source clones used for spikes
+# (docs should cite the clone path + upstream URL, but don't vendor the clone)
+docs/spike-research/

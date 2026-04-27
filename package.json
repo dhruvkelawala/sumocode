@@ -42,5 +42,11 @@
     "test": "vitest run",
     "vitest": "vitest",
     "visual": "node scripts/visual.mjs"
+  },
+  "dependencies": {
+    "@opentui/core": "^0.1.104",
+    "@opentui/react": "^0.1.104",
+    "opentui-island": "^0.4.0",
+    "react": "^19.2.5"
   }
 }

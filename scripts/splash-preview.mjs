@@ -77,7 +77,7 @@ function inputBox() {
 }
 
 function inputHints() {
-	return `${MUTED}tab · agents    ctrl+p · commands${RESET}`;
+	return `${MUTED}tab · agents    ctrl+/ · commands${RESET}`;
 }
 
 function bastetFigureV1() {

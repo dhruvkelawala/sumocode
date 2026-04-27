@@ -10,13 +10,13 @@
  *   ┌─ INPUT ──────────────────────────────────────┐
  *   │ > █                                          │
  *   └──────────────────────────────────────────────┘
- *                                       TAB · AGENTS  CTRL+P · COMMANDS
+ *                                       TAB · AGENTS  CTRL+/ · COMMANDS
  *
  * Splash state (Element 3) — label `SCRIPTOR INPUT`:
  *   ┌─ SCRIPTOR INPUT ──────────────────────────────────────────┐
  *   │ > Ask anything... "Refactor the auth flow."  █            │
  *   └───────────────────────────────────────────────────────────┘
- *   ┌─ INPUT PROTOCOL AWAITING COMMAND          TAB · AGENTS  CTRL+P · COMMANDS
+ *   ┌─ INPUT PROTOCOL AWAITING COMMAND          TAB · AGENTS  CTRL+/ · COMMANDS
  *
  * Token map (from Stitch CSS variables):
  *   border       → divider  (#3A2F25)  — dim, not accent
@@ -39,7 +39,7 @@ const DIM = "\u001b[2m";
 export const INPUT_FRAME_LABEL_SPLASH = "SCRIPTOR INPUT";
 export const INPUT_FRAME_LABEL_ACTIVE = "INPUT";
 export const INPUT_FRAME_PLACEHOLDER = 'Ask anything... "Refactor the auth flow."';
-export const INPUT_FRAME_HINT_KEYBINDS = "TAB · AGENTS  CTRL+P · COMMANDS";
+export const INPUT_FRAME_HINT_KEYBINDS = "TAB · AGENTS  CTRL+/ · COMMANDS";
 export const INPUT_FRAME_HINT_AWAITING = "┌─ INPUT PROTOCOL AWAITING COMMAND";
 
 function visibleLength(text: string): number {
@@ -172,7 +172,7 @@ export type InputHintsOptions = {
  * Pure render of the single-line hint row below the input frame.
  *
  * Right-side keybind hint always appears (right-aligned). The modifier keys
- * `TAB` and `CTRL+P` are tinted accent (per Stitch HTML), the labels stay
+ * `TAB` and `CTRL+/` are tinted accent (per Stitch HTML), the labels stay
  * dim oxidized.
  *
  * Optional left-side flavour hint (used on splash) renders dim oxidized.
@@ -187,8 +187,8 @@ export function renderInputHints(width: number, options: InputHintsOptions = {})
 	const dimFg = `${DIM}${fg(CATHEDRAL_TOKENS.colors.foregroundDim)}`;
 	const accent = fg(CATHEDRAL_TOKENS.colors.accent);
 
-	// Build the colored right-hand string: TAB and CTRL+P in accent, labels in dim.
-	const rightColored = `${accent}TAB${RESET} ${dimFg}· AGENTS  ${RESET}${accent}CTRL+P${RESET} ${dimFg}· COMMANDS${RESET}`;
+	// Build the colored right-hand string: TAB and CTRL+/ in accent, labels in dim.
+	const rightColored = `${accent}TAB${RESET} ${dimFg}· AGENTS  ${RESET}${accent}CTRL+/${RESET} ${dimFg}· COMMANDS${RESET}`;
 
 	// At narrow widths, drop the left hint first.
 	const leftFitsAlongside = left !== undefined && rightLen + 4 + left.length <= width;

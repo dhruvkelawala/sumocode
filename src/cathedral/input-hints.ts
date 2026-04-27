@@ -2,11 +2,11 @@
  * Cathedral input keybind hint row (Elements 3 + 4 from CATHEDRAL_DECISIONS.md).
  *
  * Active state (Element 4):
- *   right-aligned dim:    TAB · AGENTS  CTRL+P · COMMANDS
+ *   right-aligned dim:    TAB · AGENTS  CTRL+/ · COMMANDS
  *
  * Splash state (Element 3):
  *   left dim flavour:     └─ AWAITING DIVINE INVOCATION
- *   right-aligned dim:    TAB · AGENTS  CTRL+P · COMMANDS
+ *   right-aligned dim:    TAB · AGENTS  CTRL+/ · COMMANDS
  *
  * Mounted via `setWidget(..., { placement: "belowEditor" })`.
  */

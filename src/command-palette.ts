@@ -33,6 +33,8 @@ export const COMMAND_PALETTE_THINKING_LEVELS: readonly ThinkingLevel[] = [
 	"xhigh",
 ];
 
+export const COMMAND_PALETTE_SHORTCUT = "ctrl+/";
+
 export const COMMAND_PALETTE_OVERLAY_OPTIONS: OverlayOptions = {
 	anchor: "center",
 	width: "60%",
@@ -265,7 +267,7 @@ export function installCommandPalette(pi: ExtensionAPI): void {
 		},
 	});
 
-	pi.registerShortcut("ctrl+p", {
+	pi.registerShortcut(COMMAND_PALETTE_SHORTCUT, {
 		description: "Open SumoCode command palette",
 		handler: async (ctx) => {
 			if (!ctx.hasUI) return;
@@ -281,13 +283,4 @@ export function installCommandPalette(pi: ExtensionAPI): void {
 		},
 	});
 
-	pi.registerShortcut("ctrl+k", {
-		description: "Cycle model forward",
-		handler: (ctx) => cycleModel(ctx, pi, 1),
-	});
-
-	pi.registerShortcut("ctrl+shift+k", {
-		description: "Cycle model backward",
-		handler: (ctx) => cycleModel(ctx, pi, -1),
-	});
 }

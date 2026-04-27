@@ -133,11 +133,11 @@ describe("renderInputHints", () => {
 		expect(line).not.toContain("AWAITING");
 	});
 
-	it("colors TAB and CTRL+P modifier keys in accent (#D97706)", () => {
+	it("colors TAB and CTRL+/ modifier keys in accent (#D97706)", () => {
 		const line = renderInputHints(80);
 		// accent escape sequence ANSI 38;2;217;119;6 immediately preceding TAB
 		expect(line).toContain("\u001b[38;2;217;119;6mTAB");
-		expect(line).toContain("\u001b[38;2;217;119;6mCTRL+P");
+		expect(line).toContain("\u001b[38;2;217;119;6mCTRL+/");
 	});
 
 	it("at very narrow width, returns minimal/empty", () => {
@@ -148,7 +148,7 @@ describe("renderInputHints", () => {
 
 describe("INPUT_FRAME_HINT_KEYBINDS / INPUT_FRAME_HINT_AWAITING constants", () => {
 	it("exposes locked keybind hint string (uppercase from Stitch CSS)", () => {
-		expect(INPUT_FRAME_HINT_KEYBINDS).toBe("TAB · AGENTS  CTRL+P · COMMANDS");
+		expect(INPUT_FRAME_HINT_KEYBINDS).toBe("TAB · AGENTS  CTRL+/ · COMMANDS");
 	});
 
 	it("exposes locked awaiting hint string (verbatim from Stitch HTML)", () => {

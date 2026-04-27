@@ -1,3 +1,7 @@
+import { existsSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { dirname, join, resolve, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { installInputHints } from "./cathedral/input-hints.js";
 import { registerPersonaCommand } from "./commands/persona.js";
@@ -20,6 +24,65 @@ import { installSplash } from "./splash.js";
 import { installTopChrome } from "./top-chrome.js";
 import { installWorkingIndicator } from "./working-indicator.js";
 
+const SUMOCODE_PACKAGE_NAME = "@dhruvkelawala/sumocode";
+
+type ExistsFn = (path: string) => boolean;
+type ReadFileFn = (path: string, encoding: BufferEncoding) => string;
+
+export interface DuplicateInstalledExtensionOptions {
+	readonly moduleUrl?: string;
+	readonly cwd?: string;
+	readonly homeDir?: string;
+	readonly exists?: ExistsFn;
+	readonly readFile?: ReadFileFn;
+}
+
+function moduleUrlToPath(moduleUrl: string): string {
+	try {
+		return moduleUrl.startsWith("file:") ? fileURLToPath(moduleUrl) : moduleUrl;
+	} catch {
+		return moduleUrl;
+	}
+}
+
+export function isInstalledPiAgentGitModule(moduleUrl: string, homeDir = homedir()): boolean {
+	const modulePath = resolve(moduleUrlToPath(moduleUrl));
+	const agentGitRoot = `${resolve(homeDir, ".pi", "agent", "git")}${sep}`;
+	return modulePath.startsWith(agentGitRoot);
+}
+
+function packageNameAt(dir: string, exists: ExistsFn, readFile: ReadFileFn): string | undefined {
+	const packagePath = join(dir, "package.json");
+	if (!exists(packagePath)) return undefined;
+	try {
+		const parsed = JSON.parse(readFile(packagePath, "utf8")) as { name?: unknown };
+		return typeof parsed.name === "string" ? parsed.name : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+export function findActiveSumoDevTree(cwd: string, options: Pick<DuplicateInstalledExtensionOptions, "exists" | "readFile"> = {}): string | undefined {
+	const exists = options.exists ?? existsSync;
+	const readFile = options.readFile ?? ((path, encoding) => readFileSync(path, encoding));
+	let current = resolve(cwd);
+	while (true) {
+		const isSumocodePackage = packageNameAt(current, exists, readFile) === SUMOCODE_PACKAGE_NAME;
+		const hasExtensionSource = exists(join(current, "src", "extension.ts"));
+		const hasGitMetadata = exists(join(current, ".git"));
+		if (isSumocodePackage && hasExtensionSource && hasGitMetadata) return current;
+		const parent = dirname(current);
+		if (parent === current) return undefined;
+		current = parent;
+	}
+}
+
+export function shouldNoopDuplicateInstalledExtension(options: DuplicateInstalledExtensionOptions = {}): boolean {
+	const moduleUrl = options.moduleUrl ?? import.meta.url;
+	if (!isInstalledPiAgentGitModule(moduleUrl, options.homeDir ?? homedir())) return false;
+	return findActiveSumoDevTree(options.cwd ?? process.cwd(), options) !== undefined;
+}
+
 /**
  * SumoCode — cathedral-themed Pi extension entry point.
  *
@@ -31,6 +94,11 @@ import { installWorkingIndicator } from "./working-indicator.js";
  * the active-state chrome below it is stable.
  */
 export default function sumocode(pi: ExtensionAPI): void {
+	if (shouldNoopDuplicateInstalledExtension()) {
+		console.warn("[sumocode] Skipping installed SumoCode extension because this session is already inside an active SumoCode dev checkout.");
+		return;
+	}
+
 	installAltscreen(pi);
 	installTopChrome(pi);
 	installSplash(pi);

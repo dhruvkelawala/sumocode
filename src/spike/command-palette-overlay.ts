@@ -52,7 +52,7 @@ class CommandPaletteComponent implements Component {
 }
 
 export default function commandPaletteOverlaySpike(pi: ExtensionAPI): void {
-	pi.registerShortcut("ctrl+k", {
+	pi.registerShortcut("ctrl+/", {
 		description: "Open Cathedral command palette spike",
 		handler: (ctx) => {
 			if (!ctx.hasUI) return;

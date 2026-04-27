@@ -26,7 +26,7 @@ describe("TerminalController", () => {
 		controller.enterAltscreen();
 
 		expect(output.writes).toEqual([ALTSCREEN_ENTER_SEQUENCE]);
-		expect(output.writes[0]).toBe("\x1b[?1049h\x1b[H");
+		expect(output.writes[0]).toBe("\x1b[?1049h\x1b[?25h\x1b[H");
 	});
 
 	it("enableMouseSGR emits xterm normal + SGR + any-event mouse bytes (EC-8.3 best-effort mouse)", () => {

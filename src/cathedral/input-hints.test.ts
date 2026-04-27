@@ -74,7 +74,7 @@ describe("installInputHints", () => {
 		const lines = component!.render(80);
 		expect(lines.length).toBe(1);
 		const stripped = lines[0]!.replace(/\u001b\[[0-9;]*m/g, "");
-		expect(stripped).toContain("TAB · AGENTS  CTRL+P · COMMANDS");
+		expect(stripped).toContain("TAB · AGENTS  CTRL+/ · COMMANDS");
 		expect(stripped).not.toContain("INPUT PROTOCOL AWAITING COMMAND");
 	});
 
@@ -105,6 +105,6 @@ describe("installInputHints", () => {
 		expect(lines.length).toBe(1);
 		const stripped = lines[0]!.replace(/\u001b\[[0-9;]*m/g, "");
 		expect(stripped).toContain("INPUT PROTOCOL AWAITING COMMAND");
-		expect(stripped).toContain("TAB · AGENTS  CTRL+P · COMMANDS");
+		expect(stripped).toContain("TAB · AGENTS  CTRL+/ · COMMANDS");
 	});
 });

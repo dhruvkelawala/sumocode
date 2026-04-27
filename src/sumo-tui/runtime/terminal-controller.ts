@@ -8,7 +8,7 @@
  * `docs/research/sumo-tui-spike/01-opencode.md` section 2).
  */
 
-export const ALTSCREEN_ENTER_SEQUENCE = "\x1b[?1049h\x1b[H";
+export const ALTSCREEN_ENTER_SEQUENCE = "\x1b[?1049h\x1b[?25h\x1b[H";
 export const MOUSE_SGR_ENABLE_SEQUENCE = "\x1b[?1000h\x1b[?1006h\x1b[?1003h";
 export const TERMINAL_CLEANUP_SEQUENCE =
 	"\x1b[<u" + // kitty keyboard pop

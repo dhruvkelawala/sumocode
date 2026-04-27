@@ -4,6 +4,7 @@ import {
 	COMMAND_PALETTE_HINT_ROW,
 	COMMAND_PALETTE_MODE_ROWS,
 	COMMAND_PALETTE_OVERLAY_OPTIONS,
+	COMMAND_PALETTE_SHORTCUT,
 	CommandPaletteComponent,
 	buildPaletteSnapshot,
 	filterPaletteRows,
@@ -115,20 +116,21 @@ describe("resolveCommandPaletteWidth", () => {
 });
 
 describe("installCommandPalette", () => {
-	it("registers Ctrl+P for the palette and Ctrl+K model cycle shortcuts", () => {
+	it("registers Ctrl+/ for the palette without stealing Pi/TUI built-in model/editing shortcuts", () => {
 		const registerShortcut = vi.fn();
 		const registerCommand = vi.fn();
 		installCommandPalette({ registerShortcut, registerCommand } as never);
 
-		expect(registerShortcut).toHaveBeenCalledWith("ctrl+p", expect.objectContaining({ handler: expect.any(Function) }));
-		expect(registerShortcut).toHaveBeenCalledWith("ctrl+k", expect.objectContaining({ handler: expect.any(Function) }));
-		expect(registerShortcut).toHaveBeenCalledWith("ctrl+shift+k", expect.objectContaining({ handler: expect.any(Function) }));
+		expect(registerShortcut).toHaveBeenCalledTimes(1);
+		expect(registerShortcut).toHaveBeenCalledWith(COMMAND_PALETTE_SHORTCUT, expect.objectContaining({ handler: expect.any(Function) }));
+		expect(registerShortcut).not.toHaveBeenCalledWith("ctrl+p", expect.anything());
+		expect(registerShortcut).not.toHaveBeenCalledWith("ctrl+k", expect.anything());
 	});
 
-	it("Ctrl+P opens a centered 60% overlay", async () => {
+	it("Ctrl+/ opens a centered 60% overlay", async () => {
 		let handler: ((ctx: unknown) => Promise<void> | void) | undefined;
 		const registerShortcut = vi.fn((key: string, options: { handler: typeof handler }) => {
-			if (key === "ctrl+p") handler = options.handler;
+			if (key === COMMAND_PALETTE_SHORTCUT) handler = options.handler;
 		});
 		const registerCommand = vi.fn();
 		installCommandPalette({

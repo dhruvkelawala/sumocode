@@ -145,7 +145,7 @@ Splash renders only when the session has zero user messages.
    │ > Ask anything... "Refactor the auth flow."  █            │
    └───────────────────────────────────────────────────────────┘
 
-   └─ AWAITING DIVINE INVOCATION              TAB · AGENTS  CTRL+P · COMMANDS
+   └─ AWAITING DIVINE INVOCATION              TAB · AGENTS  CTRL+/ · COMMANDS
 ```
 
 - Top bar (Element 2) renders above the splash.
@@ -175,7 +175,7 @@ Static dim placeholder example, e.g.
 Both hints below the input frame:
 
 - Left (dim flavour): `└─ AWAITING DIVINE INVOCATION`
-- Right (dim keybinds): `TAB · AGENTS  CTRL+P · COMMANDS`
+- Right (dim keybinds): `TAB · AGENTS  CTRL+/ · COMMANDS`
 
 ---
 
@@ -187,7 +187,7 @@ Both hints below the input frame:
    ┌──────────────────────────────────────────────┐
    │ > █                                          │
    └──────────────────────────────────────────────┘
-                                                  TAB · AGENTS  CTRL+P · COMMANDS
+                                                  TAB · AGENTS  CTRL+/ · COMMANDS
 ```
 
 ### Q4.1 — Active-state input label: **b** — drop the `DIVINE INVOCATION` label in active state
@@ -196,7 +196,7 @@ The label is splash-only ceremony. Active state has just the carved frame.
 
 ### Q4.2 — Active-state hint row: **b** — keep keybinds only, drop cathedral flavour
 
-`TAB · AGENTS  CTRL+P · COMMANDS` on the right of the row below the frame.
+`TAB · AGENTS  CTRL+/ · COMMANDS` on the right of the row below the frame.
 No `AWAITING DIVINE INVOCATION` flavour text.
 
 ### Q4.3 — Active-state placeholder: **b** — no placeholder
@@ -299,7 +299,7 @@ Propagation:
    `src/sidebar.ts`, refit to F shape.
 8. Approval modal (TBD) — `tool_call` interception + custom overlay.
 9. Memory editor (TBD) — `/sumo:memory edit` + custom overlay.
-10. Command palette (TBD) — `Ctrl+K` + custom overlay.
+10. Command palette (TBD) — `Ctrl+/` + custom overlay.
 11. Tool pills (TBD) — `pi.registerTool()` overrides.
 12. Code blocks audit (TBD) — verify `cathedral.json` covers all syntax slots.
 
@@ -441,20 +441,21 @@ No inline editing in v1.
 
 ## Element 8 — Command palette
 
-**Locked: Ctrl+P palette + 5 modes + drill-down + flat-hybrid modal.**
+**Locked: Ctrl+/ palette + 5 modes + drill-down + flat-hybrid modal.**
 
-### Q8.1 — Trigger keybind: **Ctrl+P + reassign model cycle**
+### Q8.1 — Trigger keybind: **Ctrl+/; leave Pi model/editing defaults alone**
 
-- `Ctrl+P` opens the SumoCode command palette (VSCode-style, also used by Quick Open).
-- Model cycle moves off `Ctrl+P` to `Ctrl+K` / `Ctrl+Shift+K` (forward / backward).
-- Other Pi defaults unchanged: `Ctrl+T` thinking cycle, `Ctrl+M` model selector, `Ctrl+E` expand tools.
+- `Ctrl+/` opens the SumoCode command palette. This supersedes the earlier `Ctrl+P` decision after daily-drive issue #48: Pi owns `Ctrl+P` / `Shift+Ctrl+P` for model cycling, and pi-tui owns `Ctrl+K` for delete-to-line-end.
+- SumoCode does not register `Ctrl+P`, `Ctrl+K`, or `Ctrl+Shift+K`, which avoids Pi's built-in shortcut conflict diagnostics.
+- Other Pi defaults unchanged: `Ctrl+P` / `Shift+Ctrl+P` model cycle, `Ctrl+T` thinking cycle, `Ctrl+M` model selector, `Ctrl+E` expand tools.
 
 Full SumoCode keybind table after Element 8:
 
 ```
-Ctrl+P             open command palette  (Element 8)
-Ctrl+K             model cycle forward    (replaces Pi Ctrl+P)
-Ctrl+Shift+K       model cycle backward   (replaces Pi Ctrl+Shift+P)
+Ctrl+/             open command palette  (Element 8)
+Ctrl+P             model cycle forward    (Pi default)
+Ctrl+Shift+P       model cycle backward   (Pi default)
+Ctrl+K             delete to line end     (pi-tui default)
 Ctrl+T             thinking level cycle   (Pi default)
 Ctrl+M             model selector         (Pi default)
 Ctrl+E             expand tools           (Pi default)
@@ -508,7 +509,7 @@ Enter on a row closes the palette and opens the matching sub-overlay. No in-plac
 
 ### Splash hint row update
 
-Element 3's splash hint row currently says `TAB · AGENTS  CTRL+P · COMMANDS`. The `CTRL+P COMMANDS` part is now correct (palette opens with Ctrl+P). No change needed. The hint row text stays as locked in Element 3.
+Element 3's splash hint row now says `TAB · AGENTS  CTRL+/ · COMMANDS` so the on-screen hint matches the conflict-free palette shortcut.
 
 ---
 
@@ -521,8 +522,9 @@ Element 3's splash hint row currently says `TAB · AGENTS  CTRL+P · COMMANDS`. 
 - Settings overlay theming — Pi's built-in `/settings` modal.
 - LLM session summarization implementation — model choice, cost cap, error
   handling.
-- Anthropic auth warning + Package Updates message — confirmed Pi-hardcoded
-  per spike, accepted as known limit until upstream changes.
+- Package Updates message — confirmed Pi-hardcoded per spike, accepted as known
+  limit until upstream changes. Anthropic subscription auth warning is hidden in
+  SumoInteractiveMode by the reversible `SUMO_TUI_HIDE_PI_NOISE` filter.
 
 ---
 

@@ -16,23 +16,29 @@
     "type": "git",
     "url": "git+https://github.com/dhruvkelawala/sumocode.git"
   },
+  "exports": {
+    "./sumo-interactive-mode": "./sumo-interactive-mode.js"
+  },
+  "bin": {
+    "sumocode": "bin/sumocode.sh"
+  },
   "pi": {
     "extensions": [
       "src/extension.ts"
     ]
   },
   "peerDependencies": {
-    "@mariozechner/pi-coding-agent": "*",
-    "@mariozechner/pi-tui": "*",
+    "@mariozechner/pi-coding-agent": "~0.70.0",
+    "@mariozechner/pi-tui": "~0.70.0",
     "typebox": "*"
   },
   "engines": {
     "node": ">=20"
   },
   "devDependencies": {
-    "@mariozechner/pi-ai": "~0.70.0",
-    "@mariozechner/pi-coding-agent": "~0.70.0",
-    "@mariozechner/pi-tui": "~0.70.0",
+    "@mariozechner/pi-ai": "0.70.2",
+    "@mariozechner/pi-coding-agent": "0.70.2",
+    "@mariozechner/pi-tui": "0.70.2",
     "@types/node": "^25.6.0",
     "node-pty": "^1.1.0",
     "typebox": "1.1.33",
@@ -48,6 +54,12 @@
     "visual": "node scripts/visual.mjs"
   },
   "dependencies": {
+    "@mariozechner/jiti": "^2.6.5",
     "yoga-wasm-web": "^0.3.3"
+  },
+  "pnpm": {
+    "patchedDependencies": {
+      "@mariozechner/pi-coding-agent@0.70.2": "patches/@mariozechner__pi-coding-agent@0.70.2.patch"
+    }
   }
 }

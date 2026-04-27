@@ -1,0 +1,36 @@
+diff --git a/dist/main.js b/dist/main.js
+index 5cc6978..f047cea 100644
+--- a/dist/main.js
++++ b/dist/main.js
+@@ -545,14 +545,18 @@ export async function main(args, options) {
+                 .join(", ");
+             console.log(chalk.dim(`Model scope: ${modelList} ${chalk.gray("(Ctrl+P to cycle)")}`));
+         }
+-        const interactiveMode = new InteractiveMode(runtime, {
++        const interactiveOptions = {
+             migratedProviders,
+             modelFallbackMessage,
+             initialMessage,
+             initialImages,
+             initialMessages: parsed.messages,
+             verbose: parsed.verbose,
+-        });
++        };
++        const useSumoTui = isTruthyEnvFlag(process.env.SUMO_TUI) || parsed.unknownFlags.has("sumo-tui");
++        const interactiveMode = useSumoTui
++            ? await loadSumoInteractiveMode(runtime, interactiveOptions)
++            : new InteractiveMode(runtime, interactiveOptions);
+         if (startupBenchmark) {
+             await interactiveMode.init();
+             time("interactiveMode.init");
+@@ -586,4 +590,9 @@ export async function main(args, options) {
+         return;
+     }
+ }
++async function loadSumoInteractiveMode(...args) {
++    const specifier = process.env.SUMO_TUI_MODULE ?? "@dhruvkelawala/sumocode/sumo-interactive-mode";
++    const { SumoInteractiveMode } = await import(specifier);
++    return new SumoInteractiveMode(...args);
++}
+ //# sourceMappingURL=main.js.map
+\ No newline at end of file

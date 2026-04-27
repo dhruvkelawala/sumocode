@@ -67,6 +67,10 @@ The prompt listed these files, but they were not present in either the worktree 
 
 I proceeded using the shipped Phase 1–3 source/tests, Pi docs, and Pi 0.70.2 installed sources.
 
+## Phase 4b update
+
+Phase 4b added the fork activation path documented here: `SUMO_TUI=1` now causes the patched Pi `dist/main.js` constructor site to load `SumoInteractiveMode` via `SUMO_TUI_MODULE` or `@dhruvkelawala/sumocode/sumo-interactive-mode`. The SumoCode worktree uses a pnpm patch against the published Pi `0.70.2` package because pnpm GitHub subdirectory installs omit Pi's untracked `dist/` output.
+
 ## Acceptance criteria still open
 
 - Visual verification via VHS/screenshot of SumoCode running on the retained renderer.

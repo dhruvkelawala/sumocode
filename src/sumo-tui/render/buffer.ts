@@ -56,8 +56,13 @@ function normalizeHex(r: number, g: number, b: number): string {
 	return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
 }
 
+function isColorByte(value: number | undefined): value is number {
+	return value !== undefined && Number.isInteger(value) && value >= 0 && value <= 255;
+}
+
 function indexedColor(index: number): string | undefined {
-	if (index >= 0 && index < ANSI_16.length) return ANSI_16[index];
+	if (!isColorByte(index)) return undefined;
+	if (index < ANSI_16.length) return ANSI_16[index];
 	if (index >= 16 && index <= 231) {
 		const value = index - 16;
 		const r = Math.floor(value / 36);
@@ -318,7 +323,7 @@ export class CellBuffer {
 			const r = codes[offset + 1];
 			const g = codes[offset + 2];
 			const b = codes[offset + 3];
-			if (r === undefined || g === undefined || b === undefined) return undefined;
+			if (!isColorByte(r) || !isColorByte(g) || !isColorByte(b)) return undefined;
 			return { value: normalizeHex(r, g, b), nextIndex: offset + 3 };
 		}
 		if (mode === 5) {

@@ -432,7 +432,8 @@ export function dockStaticSidebar(
 }
 
 export type SidebarMemoryCache = {
-	refresh(prompt: string): Promise<void>;
+	/** Refreshes Remnic facts and returns true when the rendered memory snapshot changed. */
+	refresh(prompt: string): Promise<boolean>;
 	schedule(prompt: string, onChange: () => void): void;
 	snapshot(): Pick<SidebarSnapshot, "memory" | "memoryUnavailable">;
 };
@@ -447,17 +448,22 @@ export function createSidebarMemoryCache(
 	let retryTimer: ReturnType<typeof setTimeout> | undefined;
 	let generation = 0;
 
-	async function refresh(prompt: string): Promise<void> {
+	function setSnapshot(nextMemory: readonly string[], nextUnavailable: boolean): boolean {
+		const changed = memoryUnavailable !== nextUnavailable || memory.length !== nextMemory.length || memory.some((item, index) => item !== nextMemory[index]);
+		memory = nextMemory;
+		memoryUnavailable = nextUnavailable;
+		return changed;
+	}
+
+	async function refresh(prompt: string): Promise<boolean> {
 		const run = ++generation;
 		try {
 			const facts = await memoryClient.query(prompt, MEMORY_DISPLAY_LIMIT);
-			if (run !== generation) return;
-			memory = facts.map((fact) => fact.text);
-			memoryUnavailable = false;
+			if (run !== generation) return false;
+			return setSnapshot(facts.map((fact) => fact.text), false);
 		} catch {
-			if (run !== generation) return;
-			memory = [];
-			memoryUnavailable = true;
+			if (run !== generation) return false;
+			return setSnapshot([], true);
 		}
 	}
 
@@ -467,10 +473,11 @@ export function createSidebarMemoryCache(
 	}
 
 	function scheduleRetry(prompt: string, onChange: () => void): void {
+		if (prompt.trim().length === 0) return;
 		clearRetry();
 		retryTimer = setTimeout(() => {
-			void refresh(prompt).finally(() => {
-				onChange();
+			void refresh(prompt).then((changed) => {
+				if (changed) onChange();
 				if (memoryUnavailable) scheduleRetry(prompt, onChange);
 			});
 		}, SIDEBAR_MEMORY_RETRY_MS);
@@ -482,10 +489,12 @@ export function createSidebarMemoryCache(
 		schedule(prompt: string, onChange: () => void): void {
 			if (timer) clearTimeout(timer);
 			clearRetry();
+			const normalizedPrompt = prompt.trim();
+			if (normalizedPrompt.length === 0) return;
 			timer = setTimeout(() => {
-				void refresh(prompt).finally(() => {
-					onChange();
-					if (memoryUnavailable) scheduleRetry(prompt, onChange);
+				void refresh(normalizedPrompt).then((changed) => {
+					if (changed) onChange();
+					if (memoryUnavailable) scheduleRetry(normalizedPrompt, onChange);
 				});
 			}, debounceMs);
 			timer.unref?.();
@@ -577,7 +586,6 @@ export function installSidebar(pi: ExtensionAPI): void {
 		if (!ctx.hasUI) return;
 
 		memoryCache = createSidebarMemoryCache(createRemnicMemoryClient());
-		memoryCache.schedule("", () => requestRender?.());
 
 		ctx.ui.setWidget("sumocode-sidebar-dock", (tui): Component & { dispose(): void } => {
 			requestRender = () => tui.requestRender();

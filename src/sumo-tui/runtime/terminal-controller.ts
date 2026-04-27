@@ -9,7 +9,14 @@
  */
 
 export const ALTSCREEN_ENTER_SEQUENCE = "\x1b[?1049h\x1b[?25h\x1b[H";
-export const MOUSE_SGR_ENABLE_SEQUENCE = "\x1b[?1000h\x1b[?1006h\x1b[?1003h";
+/**
+ * Enable click/wheel mouse reporting in SGR format without xterm any-event
+ * motion tracking. `?1003h` makes Mac trackpads feel "captured" because mere
+ * finger hover/movement is turned into app mouse events even when the editor
+ * does not support pointer placement. `?1000h` + `?1006h` preserves wheel
+ * scroll for chat/history while leaving trackpad cursoring usable.
+ */
+export const MOUSE_SGR_ENABLE_SEQUENCE = "\x1b[?1000h\x1b[?1006h";
 export const TERMINAL_CLEANUP_SEQUENCE =
 	"\x1b[<u" + // kitty keyboard pop
 	"\x1b[>4;0m" + // xterm modifyOtherKeys off

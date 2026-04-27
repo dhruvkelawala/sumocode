@@ -29,14 +29,14 @@ describe("TerminalController", () => {
 		expect(output.writes[0]).toBe("\x1b[?1049h\x1b[?25h\x1b[H");
 	});
 
-	it("enableMouseSGR emits xterm normal + SGR + any-event mouse bytes (EC-8.3 best-effort mouse)", () => {
+	it("enableMouseSGR emits click/wheel SGR bytes without any-event motion tracking", () => {
 		const output = outputStub();
 		const controller = new TerminalController({ output });
 
 		controller.enableMouseSGR();
 
 		expect(output.writes).toEqual([MOUSE_SGR_ENABLE_SEQUENCE]);
-		expect(output.writes[0]).toBe("\x1b[?1000h\x1b[?1006h\x1b[?1003h");
+		expect(output.writes[0]).toBe("\x1b[?1000h\x1b[?1006h");
 	});
 
 	it("exitTerminal emits the full cleanup bytes in the required order (EC-5.1)", () => {

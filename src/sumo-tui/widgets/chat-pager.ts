@@ -135,6 +135,10 @@ export class ChatPager extends SumoNode {
 		return this.lastReadIndex;
 	}
 
+	public hasMessages(): boolean {
+		return this.getTotalMessageCount() > 0;
+	}
+
 	public handleKey(event: KeyEvent): boolean {
 		return this.scrollBox.handleKey(event);
 	}

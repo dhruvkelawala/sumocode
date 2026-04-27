@@ -2,6 +2,7 @@ import { appendFileSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import { instrumentPiEventEmitter, logDiagnostic } from "./diagnostics.js";
 import { FrameScheduler, type FrameRenderCallback } from "./frame-scheduler.js";
 import { TerminalController } from "./terminal-controller.js";
 
@@ -143,6 +144,7 @@ export class LifecycleRuntime {
 
 	public installLifecycle(pi: ExtensionAPI): LifecycleRenderControls {
 		this.installProcessHandlers();
+		instrumentPiEventEmitter(pi);
 
 		pi.on("session_start", (_event, ctx) => {
 			if (!ctx.hasUI) return;
@@ -185,6 +187,7 @@ export class LifecycleRuntime {
 		this.registerRawCtrlCExit();
 
 		this.lifecycleProcess.on("uncaughtException", (error) => {
+			logDiagnostic("process_event", { name: "uncaughtException" });
 			// Edge case 5.3: restore first, then persist a crash breadcrumb, then
 			// rethrow so Node/Pi still fail loudly with the original exception.
 			this.restoreTerminal();
@@ -193,6 +196,7 @@ export class LifecycleRuntime {
 		});
 
 		this.lifecycleProcess.on("exit", () => {
+			logDiagnostic("process_event", { name: "exit" });
 			this.restoreTerminal();
 		});
 	}
@@ -205,6 +209,7 @@ export class LifecycleRuntime {
 	private registerReraisingSignal(signal: (typeof EXIT_SIGNALS)[number]): void {
 		let reraised = false;
 		const handler = (): void => {
+			logDiagnostic("process_event", { name: signal });
 			if (reraised) return;
 			reraised = true;
 			// Edge case 5.1: Ctrl+C and termination restore terminal state before
@@ -225,6 +230,7 @@ export class LifecycleRuntime {
 			handler = existingHandler;
 		} else {
 			handler = (): void => {
+				logDiagnostic("process_event", { name: "SIGTSTP" });
 				if (this.suspended) return;
 				// Edge case 5.4: Ctrl+Z must leave the user's shell in a clean mode
 				// before the OS suspends the process.
@@ -242,6 +248,7 @@ export class LifecycleRuntime {
 
 	private registerContinueSignal(): void {
 		const handler = (): void => {
+			logDiagnostic("process_event", { name: "SIGCONT" });
 			this.suspended = false;
 			this.acquireRawMode();
 			this.controller.enterAltscreen();

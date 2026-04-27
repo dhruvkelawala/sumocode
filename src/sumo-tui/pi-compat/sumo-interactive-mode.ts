@@ -32,6 +32,7 @@ import { InteractiveMode } from "@mariozechner/pi-coding-agent";
 import type { ExtensionUIContext } from "@mariozechner/pi-coding-agent";
 import type { KeyEvent } from "../input/key-router.js";
 import { parseSgrMouseStream, type MouseEvent } from "../input/mouse.js";
+import { createSplashTree, defaultSplashSnapshot, type SplashTree } from "../cathedral/splash-tree.js";
 import { SumoNode } from "../layout/node.js";
 import { DIRECTION_LTR, FLEX_DIRECTION_COLUMN, loadYoga, type Yoga } from "../layout/yoga.js";
 import { CellBuffer } from "../render/buffer.js";
@@ -66,6 +67,7 @@ interface SumoInteractiveRuntimeSnapshot {
 	readonly root: SumoNode;
 	readonly chat: ChatPager;
 	readonly scheduler: FrameScheduler;
+	readonly splash: SplashTree;
 }
 
 function debugLog(message: string): void {
@@ -312,10 +314,16 @@ export class SumoInteractiveRuntime {
 	private yoga: Yoga | undefined;
 	private root: SumoNode | undefined;
 	private chat: ChatPager | undefined;
+	private splash: SplashTree | undefined;
 	private scheduler: FrameScheduler | undefined;
 	private previousFrame: CellBuffer | undefined;
 	private resizeHandler: (() => void) | undefined;
 	private externalRenderControls: { scheduleRender(): void; setStreamingMode(enabled: boolean): void } | undefined;
+	private frameVersion = 0;
+	private renderedVersion = -1;
+	private renderedWidth = 0;
+	private renderedHeight = 0;
+	private chatFrameCache: { width: number; height: number; version: number; lines: string[] } | undefined;
 	private started = false;
 
 	public constructor(output: TerminalLike = process.stdout) {
@@ -324,25 +332,27 @@ export class SumoInteractiveRuntime {
 	}
 
 	public async start(): Promise<SumoInteractiveRuntimeSnapshot> {
-		if (this.started && this.root && this.chat && this.scheduler) {
-			return { root: this.root, chat: this.chat, scheduler: this.scheduler };
+		if (this.started && this.root && this.chat && this.scheduler && this.splash) {
+			return { root: this.root, chat: this.chat, scheduler: this.scheduler, splash: this.splash };
 		}
 
 		this.yoga = await loadYoga();
 		this.root = new SumoNode(this.yoga.Node.create());
 		this.root.flexDirection = FLEX_DIRECTION_COLUMN;
-		this.chat = ChatPager.create(this.yoga, this.root, {
+		this.chat = ChatPager.create(this.yoga, undefined, {
 			renderControls: {
 				scheduleRender: () => this.requestRender(),
 				setStreamingMode: (enabled) => this.setStreamingMode(enabled),
 			},
 		});
+		this.splash = createSplashTree(this.yoga, undefined, () => defaultSplashSnapshot(this.chat?.hasMessages() ?? false));
+		this.syncChatSlot();
 		this.scheduler = new FrameScheduler({ render: () => this.render() });
 		this.resizeHandler = () => this.requestRender();
 		process.stdout.on("resize", this.resizeHandler);
 		this.started = true;
 		debugLog("SumoInteractiveMode retained runtime started");
-		return { root: this.root, chat: this.chat, scheduler: this.scheduler };
+		return { root: this.root, chat: this.chat, scheduler: this.scheduler, splash: this.splash };
 	}
 
 	public setExternalRenderControls(controls: { scheduleRender(): void; setStreamingMode(enabled: boolean): void } | undefined): void {
@@ -350,6 +360,7 @@ export class SumoInteractiveRuntime {
 	}
 
 	public requestRender(): void {
+		this.invalidateFrameCache();
 		if (this.externalRenderControls) {
 			this.externalRenderControls.scheduleRender();
 			return;
@@ -361,34 +372,67 @@ export class SumoInteractiveRuntime {
 		if (!this.root) return [];
 		const safeWidth = Math.max(1, Math.floor(width));
 		const safeHeight = Math.max(1, Math.floor(height));
+		const cached = this.chatFrameCache;
+		if (cached && cached.width === safeWidth && cached.height === safeHeight && cached.version === this.frameVersion) {
+			return [...cached.lines];
+		}
+
+		this.syncChatSlot();
 		this.root.width = safeWidth;
 		this.root.height = safeHeight;
 		this.root.yogaNode.calculateLayout(safeWidth, safeHeight, DIRECTION_LTR);
 		const frame = new CellBuffer(safeHeight, safeWidth);
 		composite(this.root, frame);
-		return Array.from({ length: safeHeight }, (_, row) => frame.toPlainRow(row));
+		const lines = Array.from({ length: safeHeight }, (_, row) => frame.toPlainRow(row));
+		this.chatFrameCache = { width: safeWidth, height: safeHeight, version: this.frameVersion, lines };
+		return [...lines];
 	}
 
 	public stop(): void {
 		if (!this.started) return;
 		if (this.resizeHandler) process.stdout.off("resize", this.resizeHandler);
 		this.scheduler?.dispose();
+		this.chat?.dispose();
+		this.splash?.root.dispose();
 		this.root?.dispose();
 		this.previousFrame = undefined;
+		this.chatFrameCache = undefined;
 		this.externalRenderControls = undefined;
 		this.scheduler = undefined;
 		this.chat = undefined;
+		this.splash = undefined;
 		this.root = undefined;
 		this.yoga = undefined;
 		this.resizeHandler = undefined;
+		this.frameVersion = 0;
+		this.renderedVersion = -1;
+		this.renderedWidth = 0;
+		this.renderedHeight = 0;
 		this.started = false;
 		this.terminal.exitTerminal();
 		debugLog("SumoInteractiveMode retained runtime stopped");
 	}
 
 	public getSnapshot(): SumoInteractiveRuntimeSnapshot | undefined {
-		if (!this.root || !this.chat || !this.scheduler) return undefined;
-		return { root: this.root, chat: this.chat, scheduler: this.scheduler };
+		if (!this.root || !this.chat || !this.scheduler || !this.splash) return undefined;
+		return { root: this.root, chat: this.chat, scheduler: this.scheduler, splash: this.splash };
+	}
+
+	private invalidateFrameCache(): void {
+		this.frameVersion += 1;
+	}
+
+	private syncChatSlot(): void {
+		if (!this.root || !this.chat || !this.splash) return;
+		const hasMessages = this.chat.hasMessages();
+		this.splash.syncVisibility();
+		if (hasMessages) {
+			if (this.splash.root.parent === this.root) this.root.removeChild(this.splash.root);
+			if (this.chat.parent !== this.root) this.root.addChild(this.chat);
+			return;
+		}
+		if (this.chat.parent === this.root) this.root.removeChild(this.chat);
+		if (this.splash.root.parent !== this.root) this.root.addChild(this.splash.root);
 	}
 
 	private setStreamingMode(enabled: boolean): void {
@@ -404,6 +448,10 @@ export class SumoInteractiveRuntime {
 		if (!this.root || !this.output.isTTY) return;
 		const width = Math.max(1, this.output.columns ?? 80);
 		const height = Math.max(1, this.output.rows ?? 24);
+		if (this.previousFrame && this.renderedVersion === this.frameVersion && this.renderedWidth === width && this.renderedHeight === height && !this.root.yogaNode.isDirty()) {
+			return;
+		}
+		this.syncChatSlot();
 		this.root.width = width;
 		this.root.height = height;
 		this.root.yogaNode.calculateLayout(width, height, DIRECTION_LTR);
@@ -412,6 +460,9 @@ export class SumoInteractiveRuntime {
 		const patches = diffFrames(this.previousFrame, nextFrame);
 		this.writePatches(patches, result.hardwareCursor);
 		this.previousFrame = nextFrame.clone();
+		this.renderedVersion = this.frameVersion;
+		this.renderedWidth = width;
+		this.renderedHeight = height;
 	}
 
 	private writePatches(patches: readonly FrameDiffPatch[], hardwareCursor: HardwareCursor | null): void {
@@ -575,7 +626,7 @@ class UpstreamChatPagerBridge {
 	}
 
 	private requestRender(): void {
-		this.upstream.ui?.requestRender?.();
+		this.runtime.requestRender();
 	}
 }
 
@@ -608,7 +659,7 @@ export function installChatPagerBridge(upstream: unknown, runtime: SumoInteracti
 	};
 	chatContainer.invalidate = (): void => {
 		originalInvalidate?.();
-		target.ui?.requestRender?.();
+		runtime.requestRender();
 	};
 	if (originalHandleEvent) {
 		target.handleEvent = async (event: unknown): Promise<unknown> => {

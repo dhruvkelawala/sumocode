@@ -35,6 +35,7 @@ import { parseSgrMouseStream, type MouseEvent } from "../input/mouse.js";
 import { createSplashTree, defaultSplashSnapshot, type SplashTree } from "../cathedral/splash-tree.js";
 import { SumoNode } from "../layout/node.js";
 import { DIRECTION_LTR, FLEX_DIRECTION_COLUMN, loadYoga, type Yoga } from "../layout/yoga.js";
+import { bufferToAnsiLines } from "../render/ansi-writer.js";
 import { CellBuffer } from "../render/buffer.js";
 import { composite, type HardwareCursor } from "../render/compositor.js";
 import { diffFrames, type FrameDiffPatch } from "../render/diff.js";
@@ -383,7 +384,7 @@ export class SumoInteractiveRuntime {
 		this.root.yogaNode.calculateLayout(safeWidth, safeHeight, DIRECTION_LTR);
 		const frame = new CellBuffer(safeHeight, safeWidth);
 		composite(this.root, frame);
-		const lines = Array.from({ length: safeHeight }, (_, row) => frame.toPlainRow(row));
+		const lines = bufferToAnsiLines(frame);
 		this.chatFrameCache = { width: safeWidth, height: safeHeight, version: this.frameVersion, lines };
 		return [...lines];
 	}

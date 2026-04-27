@@ -189,6 +189,24 @@ describe("createSidebarMemoryCache", () => {
 		}
 	});
 
+	it("does not query or retry for an empty splash prompt", async () => {
+		vi.useFakeTimers();
+		try {
+			const query = vi.fn(async () => [{ id: "unused", text: "unused" }]);
+			const onChange = vi.fn();
+			const cache = createSidebarMemoryCache(memoryClient(query));
+
+			cache.schedule("   ", onChange);
+			await vi.advanceTimersByTimeAsync(SIDEBAR_MEMORY_DEBOUNCE_MS + SIDEBAR_MEMORY_RETRY_MS);
+
+			expect(query).not.toHaveBeenCalled();
+			expect(onChange).not.toHaveBeenCalled();
+			expect(cache.snapshot()).toEqual({ memory: [], memoryUnavailable: false });
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("auto-retries after daemon-down and recovers without a new prompt", async () => {
 		vi.useFakeTimers();
 		try {
@@ -209,6 +227,25 @@ describe("createSidebarMemoryCache", () => {
 			expect(query).toHaveBeenLastCalledWith("sumocode", 5);
 			expect(cache.snapshot()).toEqual({ memory: ["memory is back"], memoryUnavailable: false });
 			expect(onChange).toHaveBeenCalledTimes(2);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("suppresses repeated daemon-down renders while continuing retry probes", async () => {
+		vi.useFakeTimers();
+		try {
+			const query = vi.fn<RemnicMemoryClient["query"]>().mockRejectedValue(new MemoryClientError("daemon_down", "memory unavailable"));
+			const onChange = vi.fn();
+			const cache = createSidebarMemoryCache(memoryClient(query));
+
+			cache.schedule("sumocode", onChange);
+			await vi.advanceTimersByTimeAsync(SIDEBAR_MEMORY_DEBOUNCE_MS);
+			await vi.advanceTimersByTimeAsync(SIDEBAR_MEMORY_RETRY_MS * 2);
+
+			expect(query).toHaveBeenCalledTimes(3);
+			expect(cache.snapshot()).toEqual({ memory: [], memoryUnavailable: true });
+			expect(onChange).toHaveBeenCalledTimes(1);
 		} finally {
 			vi.useRealTimers();
 		}

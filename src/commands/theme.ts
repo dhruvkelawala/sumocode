@@ -1,4 +1,5 @@
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import { emitCathedralThemeChanged } from "../sumo-tui/cathedral/theme-bridge.js";
 
 function currentThemeName(ctx: ExtensionContext): string {
 	return (ctx.ui.theme as { name?: string } | undefined)?.name ?? "current";
@@ -22,6 +23,7 @@ export function registerThemeCommand(pi: ExtensionAPI): void {
 
 			const result = ctx.ui.setTheme(requested);
 			if (result.success) {
+				emitCathedralThemeChanged(requested);
 				ctx.ui.notify(`theme set: ${requested}`, "info");
 				return;
 			}

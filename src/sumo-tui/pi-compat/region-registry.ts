@@ -7,9 +7,11 @@ import type { Component, EditorComponent, EditorTheme, OverlayOptions, TUI } fro
 import { SumoNode } from "../layout/node.js";
 import {
 	FLEX_DIRECTION_COLUMN,
+	FLEX_DIRECTION_ROW,
 	POSITION_TYPE_ABSOLUTE,
 	type Yoga,
 } from "../layout/yoga.js";
+import { ModalBackdropNode, ModalSurfaceComponent } from "../widgets/modal-layer.js";
 import { PiComponentLeaf } from "../widgets/pi-component-leaf.js";
 import { PiEditorLeaf } from "../widgets/pi-editor-leaf.js";
 import type { CustomEditor } from "@mariozechner/pi-coding-agent";
@@ -23,9 +25,10 @@ export type RegionSlotName =
 	| "chat"
 	| "pending"
 	| "status"
-	| "widgets-default";
+	| "widgets-default"
+	| "sidebar";
 
-export type WidgetPlacement = "aboveEditor" | "belowEditor" | "default";
+export type WidgetPlacement = "aboveEditor" | "belowEditor" | "default" | "sidebar" | "modal";
 export type DisposableComponent = Component & { dispose?(): void };
 
 export type HeaderMount =
@@ -85,9 +88,10 @@ function safeDispose(component: DisposableComponent): void {
 	}
 }
 
-function placementToSlot(placement: WidgetPlacement | undefined): RegionSlotName {
+function placementToSlot(placement: Exclude<WidgetPlacement, "modal"> | undefined): RegionSlotName {
 	if (placement === "belowEditor") return "belowEditor";
 	if (placement === "default") return "widgets-default";
+	if (placement === "sidebar") return "sidebar";
 	return "aboveEditor";
 }
 
@@ -130,16 +134,28 @@ export class RegionRegistry {
 		this.root = options.root ?? new SumoNode(this.yoga.Node.create());
 		this.root.flexDirection = FLEX_DIRECTION_COLUMN;
 
+		const header = this.createSlot("header", this.root);
+		const main = new SumoNode(this.yoga.Node.create(), this.root);
+		main.flexDirection = FLEX_DIRECTION_ROW;
+		main.flexGrow = 1;
+		main.flexShrink = 1;
+
+		const content = new SumoNode(this.yoga.Node.create(), main);
+		content.flexDirection = FLEX_DIRECTION_COLUMN;
+		content.flexGrow = 1;
+		content.flexShrink = 1;
+
 		this.slots = {
-			header: this.createSlot("header"),
-			chat: this.createFlexSlot("chat"),
-			pending: this.createSlot("pending"),
-			status: this.createSlot("status"),
-			"widgets-default": this.createSlot("widgets-default"),
-			aboveEditor: this.createSlot("aboveEditor"),
-			editor: this.createSlot("editor"),
-			belowEditor: this.createSlot("belowEditor"),
-			footer: this.createSlot("footer"),
+			header,
+			chat: this.createFlexSlot("chat", content),
+			pending: this.createSlot("pending", content),
+			status: this.createSlot("status", content),
+			"widgets-default": this.createSlot("widgets-default", content),
+			aboveEditor: this.createSlot("aboveEditor", content),
+			editor: this.createSlot("editor", content),
+			belowEditor: this.createSlot("belowEditor", content),
+			sidebar: this.createSlot("sidebar", main),
+			footer: this.createSlot("footer", this.root),
 		};
 
 		this.overlayRoot = new SumoNode(this.yoga.Node.create(), this.root);
@@ -190,7 +206,16 @@ export class RegionRegistry {
 			this.onChange();
 			return;
 		}
-		this.mount(key, placementToSlot(opts.placement), this.resolveWidget(content));
+		if (opts.placement === "modal") {
+			this.mountModal(key, this.resolveWidget(content), { anchor: "center", width: "65%", maxHeight: "80%" });
+			return;
+		}
+		const slot = placementToSlot(opts.placement);
+		if (slot === "sidebar") {
+			this.slots.sidebar.width = 49;
+			this.slots.sidebar.flexShrink = 0;
+		}
+		this.mount(key, slot, this.resolveWidget(content));
 	}
 
 	public mountOverlay(key: string, component: DisposableComponent | undefined, overlayOptions?: OverlayOptions | (() => OverlayOptions)): void {
@@ -204,6 +229,33 @@ export class RegionRegistry {
 		node.zIndex = this.mounts.size + 1;
 		this.applyOverlayOptions(node, overlayOptions);
 		this.mounts.set(key, { key, slot: "overlay", node, component });
+		this.onChange();
+	}
+
+	public mountModal(key: string, component: DisposableComponent | undefined, overlayOptions?: OverlayOptions | (() => OverlayOptions)): void {
+		this.unmount(key);
+		if (!component) {
+			this.onChange();
+			return;
+		}
+		const surface = new ModalSurfaceComponent(component);
+		const width = this.resolveOverlayWidth(
+			typeof overlayOptions === "function" ? overlayOptions() : overlayOptions,
+			((this.tui.terminal as { columns?: number } | undefined)?.columns ?? 80),
+		);
+		const backdrop = new ModalBackdropNode(this.yoga.Node.create(), this.overlayRoot, () => surface.isVisible(width));
+		backdrop.position = POSITION_TYPE_ABSOLUTE;
+		backdrop.top = 0;
+		backdrop.left = 0;
+		backdrop.right = 0;
+		backdrop.bottom = 0;
+		backdrop.zIndex = this.mounts.size + 1;
+
+		const node = PiComponentLeaf.create(this.yoga, surface, backdrop);
+		node.position = POSITION_TYPE_ABSOLUTE;
+		node.zIndex = 1;
+		this.applyModalOptions(node, surface, overlayOptions);
+		this.mounts.set(key, { key, slot: "overlay", node: backdrop, component: surface });
 		this.onChange();
 	}
 
@@ -225,14 +277,14 @@ export class RegionRegistry {
 		this.root.dispose();
 	}
 
-	private createSlot(_name: RegionSlotName): SumoNode {
-		const slot = new SumoNode(this.yoga.Node.create(), this.root);
+	private createSlot(_name: RegionSlotName, parent: SumoNode): SumoNode {
+		const slot = new SumoNode(this.yoga.Node.create(), parent);
 		slot.flexDirection = FLEX_DIRECTION_COLUMN;
 		return slot;
 	}
 
-	private createFlexSlot(name: RegionSlotName): SumoNode {
-		const slot = this.createSlot(name);
+	private createFlexSlot(name: RegionSlotName, parent: SumoNode): SumoNode {
+		const slot = this.createSlot(name, parent);
 		slot.flexGrow = 1;
 		slot.flexShrink = 1;
 		return slot;
@@ -281,7 +333,7 @@ export class RegionRegistry {
 		const terminal = this.tui.terminal as { columns?: number; rows?: number } | undefined;
 		const columns = terminal?.columns ?? 80;
 		const rows = terminal?.rows ?? 24;
-		const width = percentToCells(options?.width, columns) ?? Math.min(60, columns);
+		const width = this.resolveOverlayWidth(options, columns);
 		const maxHeight = percentToCells(options?.maxHeight, rows);
 		node.width = width;
 		if (maxHeight !== undefined) node.height = maxHeight;
@@ -303,6 +355,27 @@ export class RegionRegistry {
 		}
 		node.top = options?.row === undefined ? Math.max(0, Math.floor(rows / 3)) : (percentToCells(options.row, rows) ?? 0);
 		node.left = options?.col === undefined ? Math.max(0, Math.floor((columns - width) / 2)) : (percentToCells(options.col, columns) ?? 0);
+	}
+
+	private applyModalOptions(node: SumoNode, surface: ModalSurfaceComponent, overlayOptions: OverlayOptions | (() => OverlayOptions) | undefined): void {
+		const options = typeof overlayOptions === "function" ? overlayOptions() : overlayOptions;
+		const terminal = this.tui.terminal as { columns?: number; rows?: number } | undefined;
+		const columns = terminal?.columns ?? 80;
+		const rows = terminal?.rows ?? 24;
+		const width = this.resolveOverlayWidth(options, columns);
+		const maxHeight = percentToCells(options?.maxHeight, rows);
+		const contentHeight = surface.render(width).length;
+		const height = maxHeight === undefined ? contentHeight : Math.min(maxHeight, contentHeight);
+		node.width = width;
+		node.height = height;
+		node.top = Math.max(0, Math.floor((rows - height) / 2) + (options?.offsetY ?? 0));
+		node.left = Math.max(0, Math.floor((columns - width) / 2) + (options?.offsetX ?? 0));
+	}
+
+	private resolveOverlayWidth(options: OverlayOptions | undefined, columns: number): number {
+		const requested = percentToCells(options?.width, columns) ?? Math.min(60, columns);
+		const minWidth = options?.minWidth ?? 0;
+		return Math.max(1, Math.min(columns, Math.max(minWidth, requested)));
 	}
 }
 

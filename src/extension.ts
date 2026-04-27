@@ -16,6 +16,7 @@ import { installCommandPalette } from "./command-palette.js";
 import { installFooter } from "./footer.js";
 import { registerMemoryCommand } from "./memory-editor.js";
 import { installSidebar } from "./sidebar.js";
+import { installSplash } from "./splash.js";
 import { installTopChrome } from "./top-chrome.js";
 import { installWorkingIndicator } from "./working-indicator.js";
 
@@ -32,6 +33,7 @@ import { installWorkingIndicator } from "./working-indicator.js";
 export default function sumocode(pi: ExtensionAPI): void {
 	installAltscreen(pi);
 	installTopChrome(pi);
+	installSplash(pi);
 	installFooter(pi);
 	installCathedralEditor(pi);
 	installInputHints(pi);

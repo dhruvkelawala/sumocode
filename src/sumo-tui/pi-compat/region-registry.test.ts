@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { DIRECTION_LTR, loadYoga } from "../layout/yoga.js";
 import { CellBuffer } from "../render/buffer.js";
 import { composite } from "../render/compositor.js";
+import { ChatPager } from "../widgets/chat-pager.js";
 import { RegionRegistry } from "./region-registry.js";
 
 class TestComponent implements Component {
@@ -102,6 +103,24 @@ describe("RegionRegistry", () => {
 
 		expect(frame.toPlainRow(0)).toBe("alpha       ");
 		expect(frame.toPlainRow(1)).toBe("beta        ");
+		registry.dispose();
+	});
+
+	it("mounts a retained ChatPager into the chat slot", async () => {
+		const registry = await makeRegistry();
+		const yoga = await loadYoga();
+		const chat = ChatPager.create(yoga);
+		chat.addMessage("user", "hello retained chat");
+
+		registry.mountChat(chat);
+		registry.root.width = 40;
+		registry.root.height = 8;
+		registry.root.yogaNode.calculateLayout(40, 8, DIRECTION_LTR);
+		const frame = new CellBuffer(8, 40);
+		composite(registry.root, frame);
+
+		expect(registry.getSlot("chat").children).toContain(chat);
+		expect(frame.toPlainRow(0)).toContain("USER > hello retained chat");
 		registry.dispose();
 	});
 });

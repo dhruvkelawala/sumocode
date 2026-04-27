@@ -365,6 +365,19 @@ describe("renderSidebar — sub-tab navigation", () => {
 		expect(hasVersion).toBe(true);
 	});
 
+	it("marks active session with ◆ and archived sessions with ▢", () => {
+		const lines = renderSidebar(snapshot({
+			sessions: [
+				{ name: "sumocode", branch: "main", active: true },
+				{ name: "sumocode", branch: "other-branch", active: false },
+			],
+		}), 49).map(stripAnsi);
+		const activeSession = lines.find((l) => l.includes("sumocode (main)"));
+		const archivedSession = lines.find((l) => l.includes("sumocode (other-branch)"));
+		expect(activeSession).toContain("◆");
+		expect(archivedSession).toContain("▢");
+	});
+
 	it("marks active sub-tab with ◆ (filled) and inactive with ▢ (outlined)", () => {
 		const lines = renderSidebar(snapshot({ activeSubTab: "CONTEXT" }), 49).map(stripAnsi);
 		const contextRow = lines.find((l) => l.includes("CONTEXT") && !l.includes("ACTIVE_CONTEXT"));

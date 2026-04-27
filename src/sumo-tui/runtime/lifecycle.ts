@@ -148,6 +148,12 @@ export class LifecycleRuntime {
 
 		pi.on("session_start", (_event, ctx) => {
 			if (!ctx.hasUI) return;
+			// Edge case 5.6: when /resume tears down and restarts a session, our
+			// session_shutdown handler put stdin into cooked mode. Pi-TUI does
+			// not restart its terminal across resume, so we must re-acquire raw
+			// mode here or stdin stays line-buffered and mouse bytes (which have
+			// no newline) sit in the kernel buffer until the user presses Enter.
+			this.acquireRawMode();
 			this.controller.enterAltscreen();
 			this.controller.enableMouseSGR();
 		});

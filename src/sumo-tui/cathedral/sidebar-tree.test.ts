@@ -59,4 +59,35 @@ describe("sidebar-tree", () => {
 		expect(tree.sidebar.getComputedWidth()).toBe(0);
 		root.dispose();
 	});
+
+	it("renders REGISTRY chrome with version, session markers, and active sub-tabs", async () => {
+		const yoga = await loadYoga();
+		const root = new SumoNode(yoga.Node.create());
+		root.flexDirection = FLEX_DIRECTION_COLUMN;
+		root.width = 140;
+		root.height = 24;
+		const tree = createSidebarTree(yoga, root, {
+			terminalWidth: 140,
+			terminalHeight: 24,
+			sessionHasMessages: true,
+			activeSubTab: "MEMORY",
+			sessions: [
+				{ name: "sumocode", branch: "main", active: true },
+				{ name: "sumocode", branch: "other-branch", active: false },
+			],
+		});
+		root.yogaNode.calculateLayout(140, 24, DIRECTION_LTR);
+		const frame = new CellBuffer(24, 140);
+		composite(root, frame);
+		const sidebarLeft = tree.sidebar.getComputedLeft();
+		const sidebarText = Array.from({ length: 12 }, (_, row) => frame.toPlainRow(row).slice(sidebarLeft)).join("\n");
+
+		expect(sidebarText).toContain("REGISTRY");
+		expect(sidebarText).toContain("v 1.0.0");
+		expect(sidebarText).toContain("◆ sumocode (main)");
+		expect(sidebarText).toContain("▢ sumocode (other-branch)");
+		expect(sidebarText).toContain("▢ CONTEXT");
+		expect(sidebarText).toContain("◆ MEMORY");
+		root.dispose();
+	});
 });

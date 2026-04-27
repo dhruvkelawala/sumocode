@@ -87,6 +87,21 @@ export class ChatPager extends SumoNode {
 		this.scheduleRender();
 	}
 
+	public replaceLast(text: string): void {
+		const last = this.getLastMessage();
+		if (!last) {
+			this.addMessage("sumo", text);
+			return;
+		}
+		if (last.text === text) return;
+		const width = this.scrollBox.getComputedWidth();
+		const beforeHeight = last.getEstimatedHeight(width);
+		last.setText(text);
+		const afterHeight = last.getEstimatedHeight(width);
+		this.scrollBox.notifyContentChanged(Math.max(0, afterHeight - beforeHeight), Math.max(0, beforeHeight - afterHeight));
+		this.scheduleRender();
+	}
+
 	public endStreaming(): void {
 		this.renderControls.setStreamingMode(false);
 	}

@@ -40,6 +40,12 @@ export type SidebarSubTab = "CONTEXT" | "MEMORY";
 
 export const SIDEBAR_SUB_TABS: readonly SidebarSubTab[] = ["CONTEXT", "MEMORY"];
 
+export type SidebarSessionSnapshot = {
+	name: string;
+	branch?: string;
+	active?: boolean;
+};
+
 export type SidebarSnapshot = {
 	projectName: string;
 	branch?: string;
@@ -57,6 +63,8 @@ export type SidebarSnapshot = {
 	 * Switched via Ctrl+1 / Ctrl+2 (Element 1 lock).
 	 */
 	activeSubTab?: SidebarSubTab;
+	/** Active + archived sessions shown in the REGISTRY chrome. */
+	sessions?: readonly SidebarSessionSnapshot[];
 };
 
 export type SidebarAnchor = "right-center" | "top-right" | "bottom-right";
@@ -103,6 +111,10 @@ function color(text: string, hex: string): string {
 
 function dim(text: string): string {
 	return `\u001b[2m${text}${RESET}`;
+}
+
+function bold(text: string): string {
+	return `\u001b[1m${text}${RESET}`;
 }
 
 /** Visible cell length (strips SGR escapes). */
@@ -250,9 +262,21 @@ function memoryLines(snapshot: SidebarSnapshot, width: number): string[] {
  *     REGISTRY
  *     v 1.0.0
  *
- *     ◆ CONTEXT       ← active marker
- *     ▢ MEMORY        ← inactive marker
+ *     ◆ sumocode (main)          ← active session marker
+ *
+ *     ◆ CONTEXT                  ← active sub-tab marker
+ *     ▢ MEMORY                   ← inactive sub-tab marker
  */
+function sessionLabel(session: SidebarSessionSnapshot): string {
+	return session.branch ? `${session.name} (${session.branch})` : session.name;
+}
+
+function registrySessions(snapshot: SidebarSnapshot): readonly SidebarSessionSnapshot[] {
+	return snapshot.sessions?.length
+		? snapshot.sessions
+		: [{ name: snapshot.projectName, branch: snapshot.branch, active: true }];
+}
+
 function registryHeaderLines(snapshot: SidebarSnapshot, width: number): string[] {
 	const active = snapshot.activeSubTab ?? "CONTEXT";
 	const registryTitle = color("REGISTRY", CATHEDRAL_TOKENS.colors.accent);
@@ -264,15 +288,27 @@ function registryHeaderLines(snapshot: SidebarSnapshot, width: number): string[]
 	lines.push(surfaceLine(indent(version), width));
 	lines.push(surfaceLine("", width));
 
+	for (const [index, session] of registrySessions(snapshot).entries()) {
+		const isActive = session.active ?? index === 0;
+		const marker = isActive
+			? color("◆", CATHEDRAL_TOKENS.colors.accent)
+			: color("▢", CATHEDRAL_TOKENS.colors.foregroundDim);
+		const label = isActive
+			? color(sessionLabel(session), CATHEDRAL_TOKENS.colors.foreground)
+			: color(sessionLabel(session), CATHEDRAL_TOKENS.colors.foregroundDim);
+		lines.push(surfaceLine(indent(`${marker} ${label}`), width));
+	}
+
+	lines.push(surfaceLine("", width));
+
 	for (const tab of SIDEBAR_SUB_TABS) {
 		const isActive = tab === active;
 		const marker = isActive
 			? color("◆", CATHEDRAL_TOKENS.colors.accent)
 			: color("▢", CATHEDRAL_TOKENS.colors.foregroundDim);
-		const label = color(
-			tab,
-			isActive ? CATHEDRAL_TOKENS.colors.foreground : CATHEDRAL_TOKENS.colors.foregroundDim,
-		);
+		const label = isActive
+			? bold(color(tab, CATHEDRAL_TOKENS.colors.accent))
+			: color(tab, CATHEDRAL_TOKENS.colors.foregroundDim);
 		const row = `${marker} ${label}`;
 		lines.push(surfaceLine(indent(row), width));
 	}

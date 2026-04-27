@@ -122,6 +122,7 @@ export class RegionRegistry {
 	private readonly slots: Record<RegionSlotName, SumoNode>;
 	private readonly overlayRoot: SumoNode;
 	private readonly mounts = new Map<string, MountedRegion>();
+	private mountedChatNode: SumoNode | undefined;
 
 	public constructor(options: RegionRegistryOptions) {
 		this.yoga = options.yoga;
@@ -200,6 +201,18 @@ export class RegionRegistry {
 		this.onChange();
 	}
 
+	public mountChat(node: SumoNode | undefined): void {
+		if (this.mountedChatNode) {
+			this.slots.chat.removeChild(this.mountedChatNode);
+			this.mountedChatNode = undefined;
+		}
+		if (node) {
+			this.slots.chat.addChild(node);
+			this.mountedChatNode = node;
+		}
+		this.onChange();
+	}
+
 	public mountWidget(key: string, content: WidgetMount | undefined, opts: { placement?: WidgetPlacement } = {}): void {
 		this.unmount(key);
 		if (content === undefined) {
@@ -274,6 +287,7 @@ export class RegionRegistry {
 
 	public dispose(): void {
 		this.clear();
+		this.mountChat(undefined);
 		this.root.dispose();
 	}
 

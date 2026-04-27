@@ -1,11 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+	SumoInteractiveRuntime,
 	filterPiNoiseChildren,
 	forceHardwareCursorVisible,
+	installChatPagerBridge,
 	installPiNoiseFilter,
 	isPiNoiseTextComponent,
 	shouldForceHardwareCursor,
 	shouldHidePiNoise,
+	textFromAgentMessage,
 	type PiNoiseFilterState,
 } from "./sumo-interactive-mode.js";
 
@@ -69,5 +72,78 @@ describe("sumo interactive Pi noise filtering", () => {
 
 		expect(forceHardwareCursorVisible(upstream)).toBe(true);
 		expect(setShowHardwareCursor).toHaveBeenCalledWith(true);
+	});
+
+	it("extracts streamed assistant text from Pi message shapes", () => {
+		expect(textFromAgentMessage({ role: "user", content: "hello" })).toBe("hello");
+		expect(textFromAgentMessage({ role: "assistant", content: [{ type: "thinking", thinking: "hidden" }, { type: "text", text: "visible" }] })).toBe("visible");
+		expect(textFromAgentMessage({ role: "toolResult", content: [{ type: "text", text: "tool output" }] })).toBe("tool output");
+	});
+
+	it("routes Pi chat rendering and wheel input through ChatPager", async () => {
+		const inputListeners: ((data: string) => { consume?: boolean; data?: string } | void)[] = [];
+		const runtime = new SumoInteractiveRuntime({ isTTY: false, columns: 80, rows: 20, write: vi.fn() });
+		await runtime.start();
+		const upstream: {
+			ui: {
+				terminal: { rows: number; columns: number };
+				requestRender: ReturnType<typeof vi.fn>;
+				addInputListener(listener: (data: string) => { consume?: boolean; data?: string } | void): () => void;
+			};
+			headerContainer: { render(width: number): string[] };
+			pendingMessagesContainer: { render(width: number): string[] };
+			statusContainer: { render(width: number): string[] };
+			widgetContainerAbove: { render(width: number): string[] };
+			editorContainer: { render(width: number): string[] };
+			widgetContainerBelow: { render(width: number): string[] };
+			footer: { render(width: number): string[] };
+			chatContainer: { children: unknown[]; addChild(child: unknown): void; render(width: number): string[]; clear(): void };
+			handleEvent: (event: unknown) => unknown;
+		} = {
+			ui: {
+				terminal: { rows: 12, columns: 80 },
+				requestRender: vi.fn(),
+				addInputListener(listener: (data: string) => { consume?: boolean; data?: string } | void) {
+					inputListeners.push(listener);
+					return () => undefined;
+				},
+			},
+			headerContainer: { render: (_width: number) => ["header"] },
+			pendingMessagesContainer: { render: (_width: number) => [] },
+			statusContainer: { render: (_width: number) => [] },
+			widgetContainerAbove: { render: (_width: number) => [] },
+			editorContainer: { render: (_width: number) => ["editor", "hints"] },
+			widgetContainerBelow: { render: (_width: number) => [] },
+			footer: { render: (_width: number) => ["footer"] },
+			chatContainer: {
+				children: [],
+				addChild(child: unknown) {
+					this.children.push(child);
+				},
+				render: (_width: number) => ["upstream chat"],
+				clear() {
+					this.children = [];
+				},
+			},
+			handleEvent: vi.fn(),
+		};
+
+		const cleanup = installChatPagerBridge(upstream, runtime);
+		for (let index = 0; index < 50; index += 1) {
+			await upstream.handleEvent({ type: "message_start", message: { role: "user", content: `message ${index}` } });
+		}
+		upstream.chatContainer.render(60);
+		const before = runtime.getSnapshot()?.chat.scrollBox.scrollOffset ?? 0;
+
+		const result = inputListeners[0]?.("\x1b[<64;10;5M");
+		const after = runtime.getSnapshot()?.chat.scrollBox.scrollOffset ?? 0;
+
+		expect(result).toEqual({ consume: true });
+		expect(after).toBeLessThan(before);
+		const rendered = upstream.chatContainer.render(60).join("\n");
+		expect(rendered).toContain("USER >");
+		expect(rendered).not.toContain("upstream chat");
+		cleanup?.();
+		runtime.stop();
 	});
 });

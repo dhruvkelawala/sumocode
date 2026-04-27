@@ -30,6 +30,8 @@
 import type { AgentSessionRuntime, InteractiveModeOptions } from "@mariozechner/pi-coding-agent";
 import { InteractiveMode } from "@mariozechner/pi-coding-agent";
 import type { ExtensionUIContext } from "@mariozechner/pi-coding-agent";
+import type { KeyEvent } from "../input/key-router.js";
+import { parseSgrMouseStream, type MouseEvent } from "../input/mouse.js";
 import { SumoNode } from "../layout/node.js";
 import { DIRECTION_LTR, FLEX_DIRECTION_COLUMN, loadYoga, type Yoga } from "../layout/yoga.js";
 import { CellBuffer } from "../render/buffer.js";
@@ -74,6 +76,8 @@ function debugLog(message: string): void {
 const ANSI_PATTERN = /\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\)|_[^\x07]*(?:\x07|\x1b\\))/g;
 const FALSE_ENV_VALUES = new Set(["0", "false", "no", "off"]);
 const PI_NOISE_FILTER_INSTALLED = Symbol("sumo-tui.pi-noise-filter-installed");
+const CHAT_PAGER_BRIDGE_INSTALLED = Symbol("sumo-tui.chat-pager-bridge-installed");
+const COMPLETE_SGR_MOUSE_SEQUENCE = /\x1b\[<\d+;\d+;\d+[Mm]/g;
 
 export const PI_NOISE_TEXT_PATTERNS: readonly RegExp[] = [
 	/\[Extension issues\]/i,
@@ -84,6 +88,34 @@ export const PI_NOISE_TEXT_PATTERNS: readonly RegExp[] = [
 interface PiChatContainer {
 	children?: unknown[];
 	addChild?(component: unknown): void;
+	clear?(): void;
+	invalidate?(): void;
+	render?(width: number): string[];
+}
+
+interface PiRenderableComponent {
+	render(width: number): string[];
+}
+
+interface PiTuiLike {
+	readonly terminal?: { readonly rows?: number; readonly columns?: number };
+	children?: unknown[];
+	requestRender?(): void;
+	addInputListener?(listener: (data: string) => { consume?: boolean; data?: string } | void): () => void;
+}
+
+interface UpstreamInteractiveLike {
+	ui?: PiTuiLike;
+	chatContainer?: PiChatContainer;
+	headerContainer?: PiRenderableComponent;
+	pendingMessagesContainer?: PiRenderableComponent;
+	statusContainer?: PiRenderableComponent;
+	widgetContainerAbove?: PiRenderableComponent;
+	widgetContainerBelow?: PiRenderableComponent;
+	editorContainer?: PiRenderableComponent;
+	footer?: PiRenderableComponent;
+	handleEvent?(event: unknown): unknown;
+	renderSessionContext?(sessionContext: unknown, options?: unknown): unknown;
 }
 
 interface FilterablePiChatContainer extends PiChatContainer {
@@ -195,6 +227,75 @@ export function forceHardwareCursorVisible(upstream: unknown): boolean {
 	return true;
 }
 
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+	return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : undefined;
+}
+
+function textFromContent(content: unknown): string {
+	if (typeof content === "string") return content;
+	if (!Array.isArray(content)) return "";
+	return content
+		.map((part) => {
+			const record = asRecord(part);
+			if (!record || record.type !== "text") return undefined;
+			return typeof record.text === "string" ? record.text : undefined;
+		})
+		.filter((part): part is string => typeof part === "string")
+		.join("");
+}
+
+export function textFromAgentMessage(message: unknown): string {
+	const record = asRecord(message);
+	if (!record) return "";
+	if (record.role === "bashExecution") {
+		const command = typeof record.command === "string" ? record.command : "bash";
+		const output = typeof record.output === "string" ? record.output : "";
+		return output ? `$ ${command}\n${output}` : `$ ${command}`;
+	}
+	const text = textFromContent(record.content);
+	if (text.length > 0) return text;
+	return typeof record.errorMessage === "string" ? record.errorMessage : "";
+}
+
+function chatRoleFromAgentMessage(message: unknown): string {
+	const role = asRecord(message)?.role;
+	if (role === "assistant") return "sumo";
+	if (role === "toolResult" || role === "bashExecution") return "tool";
+	if (typeof role === "string") return role;
+	return "system";
+}
+
+function keyFromInput(data: string): KeyEvent | undefined {
+	switch (data) {
+		case "\x1b[5~":
+			return { key: "PageUp", sequence: data };
+		case "\x1b[6~":
+			return { key: "PageDown", sequence: data };
+		case "\x1b[H":
+		case "\x1b[1~":
+			return { key: "Home", sequence: data };
+		case "\x1b[F":
+		case "\x1b[4~":
+			return { key: "End", sequence: data };
+		default:
+			return undefined;
+	}
+}
+
+function renderableLineCount(component: PiRenderableComponent | undefined, width: number): number {
+	if (!component) return 0;
+	try {
+		return component.render(width).length;
+	} catch {
+		return 0;
+	}
+}
+
+function sessionMessages(sessionContext: unknown): unknown[] {
+	const messages = asRecord(sessionContext)?.messages;
+	return Array.isArray(messages) ? messages : [];
+}
+
 /**
  * Minimal retained-runtime owner for Phase 4b.
  *
@@ -205,7 +306,7 @@ export function forceHardwareCursorVisible(upstream: unknown): boolean {
  * testable while keeping Pi behaviour intact until the remaining private
  * interactive-mode responsibilities are ported.
  */
-class SumoInteractiveRuntime {
+export class SumoInteractiveRuntime {
 	private readonly output: TerminalLike;
 	private readonly terminal: TerminalController;
 	private yoga: Yoga | undefined;
@@ -214,6 +315,7 @@ class SumoInteractiveRuntime {
 	private scheduler: FrameScheduler | undefined;
 	private previousFrame: CellBuffer | undefined;
 	private resizeHandler: (() => void) | undefined;
+	private externalRenderControls: { scheduleRender(): void; setStreamingMode(enabled: boolean): void } | undefined;
 	private started = false;
 
 	public constructor(output: TerminalLike = process.stdout) {
@@ -231,23 +333,40 @@ class SumoInteractiveRuntime {
 		this.root.flexDirection = FLEX_DIRECTION_COLUMN;
 		this.chat = ChatPager.create(this.yoga, this.root, {
 			renderControls: {
-				scheduleRender: () => this.scheduler?.requestRender(),
-				setStreamingMode: (enabled) => {
-					if (enabled) this.scheduler?.enterStreamingMode();
-					else this.scheduler?.exitStreamingMode();
-				},
+				scheduleRender: () => this.requestRender(),
+				setStreamingMode: (enabled) => this.setStreamingMode(enabled),
 			},
 		});
 		this.scheduler = new FrameScheduler({ render: () => this.render() });
-		this.resizeHandler = () => this.scheduler?.requestRender();
+		this.resizeHandler = () => this.requestRender();
 		process.stdout.on("resize", this.resizeHandler);
 		this.started = true;
 		debugLog("SumoInteractiveMode retained runtime started");
 		return { root: this.root, chat: this.chat, scheduler: this.scheduler };
 	}
 
+	public setExternalRenderControls(controls: { scheduleRender(): void; setStreamingMode(enabled: boolean): void } | undefined): void {
+		this.externalRenderControls = controls;
+	}
+
 	public requestRender(): void {
+		if (this.externalRenderControls) {
+			this.externalRenderControls.scheduleRender();
+			return;
+		}
 		this.scheduler?.requestRender();
+	}
+
+	public renderChatLines(width: number, height: number): string[] {
+		if (!this.root) return [];
+		const safeWidth = Math.max(1, Math.floor(width));
+		const safeHeight = Math.max(1, Math.floor(height));
+		this.root.width = safeWidth;
+		this.root.height = safeHeight;
+		this.root.yogaNode.calculateLayout(safeWidth, safeHeight, DIRECTION_LTR);
+		const frame = new CellBuffer(safeHeight, safeWidth);
+		composite(this.root, frame);
+		return Array.from({ length: safeHeight }, (_, row) => frame.toPlainRow(row));
 	}
 
 	public stop(): void {
@@ -256,6 +375,7 @@ class SumoInteractiveRuntime {
 		this.scheduler?.dispose();
 		this.root?.dispose();
 		this.previousFrame = undefined;
+		this.externalRenderControls = undefined;
 		this.scheduler = undefined;
 		this.chat = undefined;
 		this.root = undefined;
@@ -269,6 +389,15 @@ class SumoInteractiveRuntime {
 	public getSnapshot(): SumoInteractiveRuntimeSnapshot | undefined {
 		if (!this.root || !this.chat || !this.scheduler) return undefined;
 		return { root: this.root, chat: this.chat, scheduler: this.scheduler };
+	}
+
+	private setStreamingMode(enabled: boolean): void {
+		if (this.externalRenderControls) {
+			this.externalRenderControls.setStreamingMode(enabled);
+			return;
+		}
+		if (enabled) this.scheduler?.enterStreamingMode();
+		else this.scheduler?.exitStreamingMode();
 	}
 
 	private render(): void {
@@ -301,6 +430,217 @@ class SumoInteractiveRuntime {
 	}
 }
 
+class UpstreamChatPagerBridge {
+	private lastAssistantText = "";
+	private lastChatTop = 0;
+	private lastChatWidth = 1;
+	private lastChatHeight = 1;
+
+	public constructor(
+		private readonly runtime: SumoInteractiveRuntime,
+		private readonly chat: ChatPager,
+		private readonly upstream: UpstreamInteractiveLike,
+	) {}
+
+	public render(width: number): string[] {
+		this.lastChatWidth = Math.max(1, Math.floor(width));
+		this.lastChatTop = this.computeChatTop(this.lastChatWidth);
+		this.lastChatHeight = this.computeChatHeight(this.lastChatWidth);
+		return this.runtime.renderChatLines(this.lastChatWidth, this.lastChatHeight);
+	}
+
+	public clear(): void {
+		this.chat.clearMessages();
+		this.lastAssistantText = "";
+	}
+
+	public handleInput(data: string): { consume?: boolean; data?: string } | void {
+		let nextData = data;
+		let consumed = false;
+
+		if (data.includes("\x1b[<")) {
+			const parsed = parseSgrMouseStream(data);
+			for (const event of parsed.events) {
+				if (this.handleMouse(event)) consumed = true;
+			}
+			nextData = nextData.replace(COMPLETE_SGR_MOUSE_SEQUENCE, "");
+			if (parsed.events.length > 0) consumed = true;
+		}
+
+		const keyEvent = keyFromInput(nextData);
+		if (keyEvent && this.chat.handleKey(keyEvent)) {
+			this.requestRender();
+			return { consume: true };
+		}
+
+		if (nextData.length === 0 && consumed) return { consume: true };
+		if (nextData !== data) return { data: nextData };
+		return undefined;
+	}
+
+	public handleAgentEvent(event: unknown): void {
+		const record = asRecord(event);
+		if (!record || typeof record.type !== "string") return;
+		const message = record.message;
+		switch (record.type) {
+			case "message_start":
+				this.handleMessageStart(message);
+				break;
+			case "message_update":
+				this.handleMessageUpdate(message, record.assistantMessageEvent);
+				break;
+			case "message_end":
+				this.handleMessageEnd(message);
+				break;
+			case "agent_end":
+				this.chat.endStreaming();
+				break;
+		}
+	}
+
+	public renderSessionContext(sessionContext: unknown): void {
+		this.clear();
+		for (const message of sessionMessages(sessionContext)) {
+			const text = textFromAgentMessage(message);
+			if (text.length === 0) continue;
+			this.chat.addMessage(chatRoleFromAgentMessage(message), text);
+		}
+	}
+
+	private handleMessageStart(message: unknown): void {
+		const role = asRecord(message)?.role;
+		if (role === "assistant") {
+			this.lastAssistantText = "";
+			this.chat.addMessage("sumo", "");
+			return;
+		}
+		const text = textFromAgentMessage(message);
+		if (text.length === 0) return;
+		this.chat.addMessage(chatRoleFromAgentMessage(message), text);
+	}
+
+	private handleMessageUpdate(message: unknown, assistantMessageEvent: unknown): void {
+		if (asRecord(message)?.role !== "assistant") return;
+		const streamEvent = asRecord(assistantMessageEvent);
+		if (streamEvent?.type === "text_delta" && typeof streamEvent.delta === "string") {
+			this.chat.appendToLast(streamEvent.delta);
+			this.lastAssistantText += streamEvent.delta;
+			return;
+		}
+		const text = textFromAgentMessage(message);
+		if (text.length === 0 || text === this.lastAssistantText) return;
+		this.chat.replaceLast(text);
+		this.lastAssistantText = text;
+	}
+
+	private handleMessageEnd(message: unknown): void {
+		if (asRecord(message)?.role === "assistant") {
+			const text = textFromAgentMessage(message);
+			if (text.length > 0 && text !== this.lastAssistantText) {
+				this.chat.replaceLast(text);
+				this.lastAssistantText = text;
+			}
+			this.chat.endStreaming();
+		}
+	}
+
+	private handleMouse(event: MouseEvent): boolean {
+		const localEvent: MouseEvent = {
+			...event,
+			row: event.row - this.lastChatTop,
+			col: event.col,
+		};
+		if (localEvent.row < 0 || localEvent.row >= this.lastChatHeight || localEvent.col < 0 || localEvent.col >= this.lastChatWidth) return false;
+		const handled = this.chat.handleMouseEvent(localEvent);
+		if (handled) this.requestRender();
+		return handled;
+	}
+
+	private computeChatTop(width: number): number {
+		return renderableLineCount(this.upstream.headerContainer, width);
+	}
+
+	private computeChatHeight(width: number): number {
+		const terminalRows = Math.max(1, this.upstream.ui?.terminal?.rows ?? 24);
+		const terminalWidth = Math.max(1, this.upstream.ui?.terminal?.columns ?? width);
+		const chromeRows =
+			renderableLineCount(this.upstream.headerContainer, width) +
+			renderableLineCount(this.upstream.pendingMessagesContainer, width) +
+			renderableLineCount(this.upstream.statusContainer, width) +
+			renderableLineCount(this.upstream.widgetContainerAbove, terminalWidth) +
+			renderableLineCount(this.upstream.editorContainer, terminalWidth) +
+			renderableLineCount(this.upstream.widgetContainerBelow, terminalWidth) +
+			renderableLineCount(this.upstream.footer, terminalWidth);
+		return Math.max(1, terminalRows - chromeRows);
+	}
+
+	private requestRender(): void {
+		this.upstream.ui?.requestRender?.();
+	}
+}
+
+interface BridgeInstalledUpstream extends UpstreamInteractiveLike {
+	[CHAT_PAGER_BRIDGE_INSTALLED]?: () => void;
+}
+
+export function installChatPagerBridge(upstream: unknown, runtime: SumoInteractiveRuntime): (() => void) | undefined {
+	const target = upstream as BridgeInstalledUpstream;
+	if (target[CHAT_PAGER_BRIDGE_INSTALLED]) return undefined;
+	const snapshot = runtime.getSnapshot();
+	if (!snapshot || !target.chatContainer) return undefined;
+	const bridge = new UpstreamChatPagerBridge(runtime, snapshot.chat, target);
+	const chatContainer = target.chatContainer;
+	const originalRender = chatContainer.render?.bind(chatContainer);
+	const originalClear = chatContainer.clear?.bind(chatContainer);
+	const originalInvalidate = chatContainer.invalidate?.bind(chatContainer);
+	const originalHandleEvent = target.handleEvent?.bind(target);
+	const originalRenderSessionContext = target.renderSessionContext?.bind(target);
+	const removeInputListener = target.ui?.addInputListener?.((data) => bridge.handleInput(data));
+
+	runtime.setExternalRenderControls({
+		scheduleRender: () => target.ui?.requestRender?.(),
+		setStreamingMode: () => target.ui?.requestRender?.(),
+	});
+	chatContainer.render = (width: number): string[] => bridge.render(width);
+	chatContainer.clear = (): void => {
+		bridge.clear();
+		originalClear?.();
+	};
+	chatContainer.invalidate = (): void => {
+		originalInvalidate?.();
+		target.ui?.requestRender?.();
+	};
+	if (originalHandleEvent) {
+		target.handleEvent = async (event: unknown): Promise<unknown> => {
+			bridge.handleAgentEvent(event);
+			return originalHandleEvent(event);
+		};
+	}
+	if (originalRenderSessionContext) {
+		target.renderSessionContext = (sessionContext: unknown, options?: unknown): unknown => {
+			bridge.renderSessionContext(sessionContext);
+			return originalRenderSessionContext(sessionContext, options);
+		};
+	}
+
+	const cleanup = (): void => {
+		removeInputListener?.();
+		runtime.setExternalRenderControls(undefined);
+		if (originalRender) chatContainer.render = originalRender;
+		else delete chatContainer.render;
+		if (originalClear) chatContainer.clear = originalClear;
+		else delete chatContainer.clear;
+		if (originalInvalidate) chatContainer.invalidate = originalInvalidate;
+		else delete chatContainer.invalidate;
+		if (originalHandleEvent) target.handleEvent = originalHandleEvent;
+		if (originalRenderSessionContext) target.renderSessionContext = originalRenderSessionContext;
+		delete target[CHAT_PAGER_BRIDGE_INSTALLED];
+	};
+	target[CHAT_PAGER_BRIDGE_INSTALLED] = cleanup;
+	debugLog("wired upstream Pi chatContainer through ChatPager");
+	return cleanup;
+}
+
 /**
  * Small Phase 4 fork boundary for Pi 0.70.x.
  *
@@ -325,6 +665,7 @@ export class SumoInteractiveMode {
 	private readonly retainedRuntime = new SumoInteractiveRuntime();
 	private readonly piNoiseFilterState: PiNoiseFilterState = { removedNodes: [], skipNextSpacer: false };
 	private retainedUIContext: ExtensionUIContext | undefined;
+	private chatPagerBridgeCleanup: (() => void) | undefined;
 
 	public constructor(
 		private readonly runtimeHost: AgentSessionRuntime,
@@ -346,6 +687,8 @@ export class SumoInteractiveMode {
 	}
 
 	public stop(): void {
+		this.chatPagerBridgeCleanup?.();
+		this.chatPagerBridgeCleanup = undefined;
 		this.upstream?.stop();
 		this.retainedRuntime.stop();
 	}
@@ -381,6 +724,7 @@ export class SumoInteractiveMode {
 
 	private configureUpstreamBeforeInit(upstream: InteractiveMode): void {
 		if (shouldHidePiNoise()) installPiNoiseFilter(upstream, this.piNoiseFilterState);
+		if (!this.chatPagerBridgeCleanup) this.chatPagerBridgeCleanup = installChatPagerBridge(upstream, this.retainedRuntime);
 		if (shouldForceHardwareCursor()) forceHardwareCursorVisible(upstream);
 	}
 

@@ -1,7 +1,9 @@
 import { defineConfig } from "vitest/config";
 
+const includeIntegration = process.argv.some((argument) => argument.includes("test/integration"));
+
 export default defineConfig({
 	test: {
-		include: ["src/**/*.test.ts"],
+		include: includeIntegration ? ["src/**/*.test.ts", "test/integration/**/*.test.ts"] : ["src/**/*.test.ts"],
 	},
 });

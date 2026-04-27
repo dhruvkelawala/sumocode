@@ -41,6 +41,7 @@ import { CellBuffer } from "../render/buffer.js";
 import { composite, type HardwareCursor } from "../render/compositor.js";
 import { diffFrames, type FrameDiffPatch } from "../render/diff.js";
 import { FrameScheduler } from "../runtime/frame-scheduler.js";
+import { logDiagnostic } from "../runtime/diagnostics.js";
 import { TerminalController } from "../runtime/terminal-controller.js";
 import { ChatPager } from "../widgets/chat-pager.js";
 import { SIDEBAR_MIN_TERMINAL_WIDTH } from "../../sidebar.js";
@@ -78,12 +79,41 @@ function debugLog(message: string): void {
 	console.error(`[sumo-tui] ${message}`);
 }
 
+interface MouseInputDiagnosticsFields {
+	readonly dataLength: number;
+	readonly sourceLength: number;
+	readonly eventCount: number;
+	readonly consumed: boolean;
+	readonly pendingLength: number;
+	readonly leftoverLength: number;
+}
+
+function diagnoseMouseInput(fields: MouseInputDiagnosticsFields): void {
+	logDiagnostic("sumo_mouse_input", {
+		data_length: fields.dataLength,
+		source_length: fields.sourceLength,
+		events: fields.eventCount,
+		consumed: fields.consumed,
+		pending_length: fields.pendingLength,
+		leftover_length: fields.leftoverLength,
+	});
+}
+
 const ANSI_PATTERN = /\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\)|_[^\x07]*(?:\x07|\x1b\\))/g;
 const FALSE_ENV_VALUES = new Set(["0", "false", "no", "off"]);
 const PI_NOISE_FILTER_INSTALLED = Symbol("sumo-tui.pi-noise-filter-installed");
 const CHAT_PAGER_BRIDGE_INSTALLED = Symbol("sumo-tui.chat-pager-bridge-installed");
 const COMPLETE_SGR_MOUSE_SEQUENCE = /\x1b\[<\d+;\d+;\d+[Mm]/g;
-const SGR_MOUSE_PREFIX_PATTERN = /^\x1b\[<\d*(?:;\d*){0,2}$/;
+/**
+ * Match a trailing prefix of an SGR mouse sequence so we can buffer partial
+ * input across stdin chunks. Matches any of:
+ *
+ *   ESC, ESC [, ESC [ <, ESC [ < digits, ESC [ < digits ; digits ...
+ *
+ * The terminating M / m is intentionally absent — that's what makes it a
+ * prefix. Anchored to end-of-string only.
+ */
+const SGR_MOUSE_PREFIX_TAIL_PATTERN = /(?:\x1b(?:\[(?:<\d*(?:;\d*){0,2})?)?)$/;
 
 export const PI_NOISE_TEXT_PATTERNS: readonly RegExp[] = [
 	/\[Extension issues\]/i,
@@ -566,18 +596,44 @@ class UpstreamChatPagerBridge {
 		let nextData = source;
 		let consumed = false;
 
-		if (source.includes("\x1b[<")) {
+		if (source.includes("\x1b")) {
 			const parsed = parseSgrMouseStream(source);
 			for (const event of parsed.events) {
-				if (this.handleMouse(event)) consumed = true;
-			}
-			nextData = nextData.replace(COMPLETE_SGR_MOUSE_SEQUENCE, "");
-			if (SGR_MOUSE_PREFIX_PATTERN.test(parsed.rest)) {
-				this.pendingMouseInput = parsed.rest;
-				nextData = nextData.replace(parsed.rest, "");
-				consumed = true;
+				this.handleMouse(event);
 			}
 			if (parsed.events.length > 0) consumed = true;
+
+			// Strip every complete SGR mouse sequence first.
+			nextData = nextData.replace(COMPLETE_SGR_MOUSE_SEQUENCE, "");
+
+			// If the remaining tail looks like a partial mouse sequence (terminal
+			// split a wheel event across stdin chunks), buffer it for next call.
+			const tailMatch = nextData.match(SGR_MOUSE_PREFIX_TAIL_PATTERN);
+			if (tailMatch && tailMatch[0].length > 0) {
+				this.pendingMouseInput = tailMatch[0];
+				nextData = nextData.slice(0, nextData.length - tailMatch[0].length);
+				consumed = true;
+			}
+
+			// Anything else starting with `\x1b[<` and ending with M/m but not
+			// matching our complete pattern is a corrupt/stale mouse fragment.
+			// Drop it instead of forwarding raw bytes to Pi's editor.
+			if (nextData.includes("\x1b[<")) {
+				const stripped = nextData.replace(/\x1b\[<[\d;]*[Mm]?/g, "");
+				if (stripped !== nextData) {
+					nextData = stripped;
+					consumed = true;
+				}
+			}
+
+			diagnoseMouseInput({
+				dataLength: data.length,
+				sourceLength: source.length,
+				eventCount: parsed.events.length,
+				consumed,
+				pendingLength: this.pendingMouseInput.length,
+				leftoverLength: nextData.length,
+			});
 		}
 
 		const keyEvent = keyFromInput(nextData);

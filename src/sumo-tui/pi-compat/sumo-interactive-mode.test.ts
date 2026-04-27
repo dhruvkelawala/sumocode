@@ -225,6 +225,9 @@ describe("sumo interactive Pi noise filtering", () => {
 		upstream.chatContainer.render(60);
 		const before = runtime.getSnapshot()?.chat.scrollBox.scrollOffset ?? 0;
 
+		// Event coords (row=19, col=43) sit outside the chat region for this test
+		// chrome geometry, so we only assert that the bridge fully consumed the
+		// split bytes — no leak — independent of scroll motion.
 		const firstChunk = inputListeners[0]?.("\x1b[<64;43;19");
 		const secondChunk = inputListeners[0]?.("M");
 		const after = runtime.getSnapshot()?.chat.scrollBox.scrollOffset ?? 0;
@@ -232,6 +235,56 @@ describe("sumo interactive Pi noise filtering", () => {
 		expect(firstChunk).toEqual({ consume: true });
 		expect(secondChunk).toEqual({ consume: true });
 		expect(after).toBe(before);
+		cleanup?.();
+		runtime.stop();
+	});
+
+	it("drops orphan mouse fragments that follow a stale partial sequence (long-chat trackpad path)", async () => {
+		const inputListeners: ((data: string) => { consume?: boolean; data?: string } | void)[] = [];
+		const runtime = new SumoInteractiveRuntime({ isTTY: false, columns: 80, rows: 20, write: vi.fn() });
+		await runtime.start();
+		const upstream = {
+			ui: {
+				terminal: { rows: 12, columns: 80 },
+				requestRender: vi.fn(),
+				addInputListener(listener: (data: string) => { consume?: boolean; data?: string } | void) {
+					inputListeners.push(listener);
+					return () => undefined;
+				},
+			},
+			headerContainer: { render: (_width: number) => ["header"] },
+			pendingMessagesContainer: { render: (_width: number) => [] },
+			statusContainer: { render: (_width: number) => [] },
+			widgetContainerAbove: { render: (_width: number) => [] },
+			editorContainer: { render: (_width: number) => ["editor", "hints"] },
+			widgetContainerBelow: { render: (_width: number) => [] },
+			footer: { render: (_width: number) => ["footer"] },
+			chatContainer: {
+				children: [] as unknown[],
+				addChild(child: unknown) {
+					this.children.push(child);
+				},
+				render: (_width: number) => ["upstream chat"],
+				clear() {
+					this.children = [];
+				},
+			},
+			handleEvent: vi.fn(),
+		};
+
+		const cleanup = installChatPagerBridge(upstream, runtime);
+		for (let index = 0; index < 50; index += 1) {
+			await upstream.handleEvent({ type: "message_start", message: { role: "user", content: `message ${index}` } });
+		}
+		upstream.chatContainer.render(60);
+
+		// Stale partial sequence followed by complete sequences in the same chunk —
+		// this is the wheel-spam pattern reported when chat scroll is available.
+		const stale = "\x1b[<64;33;19";
+		const wheel = "\x1b[<64;33;19M";
+		const result = inputListeners[0]?.(stale + wheel + wheel);
+
+		expect(result).toEqual({ consume: true });
 		cleanup?.();
 		runtime.stop();
 	});

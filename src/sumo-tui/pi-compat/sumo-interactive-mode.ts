@@ -32,6 +32,7 @@ import { InteractiveMode } from "@mariozechner/pi-coding-agent";
 import type { ExtensionUIContext } from "@mariozechner/pi-coding-agent";
 import type { KeyEvent } from "../input/key-router.js";
 import { parseSgrMouseStream, type MouseEvent } from "../input/mouse.js";
+import { EmptyChatQuoteNode, shouldRenderEmptyChatQuote, type EmptyChatQuoteSnapshot } from "../cathedral/empty-chat-quote.js";
 import { createSplashTree, defaultSplashSnapshot, type SplashTree } from "../cathedral/splash-tree.js";
 import { SumoNode } from "../layout/node.js";
 import { DIRECTION_LTR, FLEX_DIRECTION_COLUMN, loadYoga, type Yoga } from "../layout/yoga.js";
@@ -42,6 +43,7 @@ import { diffFrames, type FrameDiffPatch } from "../render/diff.js";
 import { FrameScheduler } from "../runtime/frame-scheduler.js";
 import { TerminalController } from "../runtime/terminal-controller.js";
 import { ChatPager } from "../widgets/chat-pager.js";
+import { SIDEBAR_MIN_TERMINAL_WIDTH } from "../../sidebar.js";
 import { SumoExtensionUIAdapter, type SumoExtensionUIAdapterOptions } from "./extension-ui-adapter.js";
 import { createForeignAwareUIContext, type ForeignAwareUIOptions } from "./foreign-extension-warning.js";
 
@@ -299,6 +301,14 @@ function sessionMessages(sessionContext: unknown): unknown[] {
 	return Array.isArray(messages) ? messages : [];
 }
 
+function isUserMessage(message: unknown): boolean {
+	return asRecord(message)?.role === "user";
+}
+
+function countUserMessages(messages: readonly unknown[]): number {
+	return messages.filter(isUserMessage).length;
+}
+
 /**
  * Minimal retained-runtime owner for Phase 4b.
  *
@@ -316,6 +326,7 @@ export class SumoInteractiveRuntime {
 	private root: SumoNode | undefined;
 	private chat: ChatPager | undefined;
 	private splash: SplashTree | undefined;
+	private emptyChatQuote: EmptyChatQuoteNode | undefined;
 	private scheduler: FrameScheduler | undefined;
 	private previousFrame: CellBuffer | undefined;
 	private resizeHandler: (() => void) | undefined;
@@ -325,6 +336,8 @@ export class SumoInteractiveRuntime {
 	private renderedWidth = 0;
 	private renderedHeight = 0;
 	private chatFrameCache: { width: number; height: number; version: number; lines: string[] } | undefined;
+	private activeEmptyChat = false;
+	private emptyChatUserMessageCount = 0;
 	private started = false;
 
 	public constructor(output: TerminalLike = process.stdout) {
@@ -347,6 +360,7 @@ export class SumoInteractiveRuntime {
 			},
 		});
 		this.splash = createSplashTree(this.yoga, undefined, () => defaultSplashSnapshot(this.chat?.hasMessages() ?? false));
+		this.emptyChatQuote = new EmptyChatQuoteNode(this.yoga.Node.create(), () => this.emptyChatQuoteSnapshot());
 		this.syncChatSlot();
 		this.scheduler = new FrameScheduler({ render: () => this.render() });
 		this.resizeHandler = () => this.requestRender();
@@ -395,6 +409,7 @@ export class SumoInteractiveRuntime {
 		this.scheduler?.dispose();
 		this.chat?.dispose();
 		this.splash?.root.dispose();
+		this.emptyChatQuote?.dispose();
 		this.root?.dispose();
 		this.previousFrame = undefined;
 		this.chatFrameCache = undefined;
@@ -402,6 +417,7 @@ export class SumoInteractiveRuntime {
 		this.scheduler = undefined;
 		this.chat = undefined;
 		this.splash = undefined;
+		this.emptyChatQuote = undefined;
 		this.root = undefined;
 		this.yoga = undefined;
 		this.resizeHandler = undefined;
@@ -419,21 +435,55 @@ export class SumoInteractiveRuntime {
 		return { root: this.root, chat: this.chat, scheduler: this.scheduler, splash: this.splash };
 	}
 
+	public setEmptyChatQuoteState(state: { active: boolean; userMessageCount: number }): void {
+		const nextCount = Math.max(0, Math.floor(state.userMessageCount));
+		const changed = this.activeEmptyChat !== state.active || this.emptyChatUserMessageCount !== nextCount;
+		this.activeEmptyChat = state.active;
+		this.emptyChatUserMessageCount = nextCount;
+		if (changed) this.requestRender();
+	}
+
+	public noteUserMessage(): void {
+		this.activeEmptyChat = false;
+		this.emptyChatUserMessageCount += 1;
+		this.requestRender();
+	}
+
 	private invalidateFrameCache(): void {
 		this.frameVersion += 1;
 	}
 
 	private syncChatSlot(): void {
-		if (!this.root || !this.chat || !this.splash) return;
+		if (!this.root || !this.chat || !this.splash || !this.emptyChatQuote) return;
 		const hasMessages = this.chat.hasMessages();
+		const showEmptyQuote = this.shouldShowEmptyChatQuote();
 		this.splash.syncVisibility();
 		if (hasMessages) {
 			if (this.splash.root.parent === this.root) this.root.removeChild(this.splash.root);
+			if (this.emptyChatQuote.parent === this.root) this.root.removeChild(this.emptyChatQuote);
 			if (this.chat.parent !== this.root) this.root.addChild(this.chat);
 			return;
 		}
 		if (this.chat.parent === this.root) this.root.removeChild(this.chat);
+		if (showEmptyQuote) {
+			if (this.splash.root.parent === this.root) this.root.removeChild(this.splash.root);
+			if (this.emptyChatQuote.parent !== this.root) this.root.addChild(this.emptyChatQuote);
+			return;
+		}
+		if (this.emptyChatQuote.parent === this.root) this.root.removeChild(this.emptyChatQuote);
 		if (this.splash.root.parent !== this.root) this.root.addChild(this.splash.root);
+	}
+
+	private emptyChatQuoteSnapshot(): EmptyChatQuoteSnapshot {
+		return {
+			sidebarVisible: (this.output.columns ?? 0) >= SIDEBAR_MIN_TERMINAL_WIDTH,
+			isSplash: !this.activeEmptyChat,
+			userMessageCount: this.emptyChatUserMessageCount,
+		};
+	}
+
+	private shouldShowEmptyChatQuote(): boolean {
+		return shouldRenderEmptyChatQuote(this.emptyChatQuoteSnapshot()) && !(this.chat?.hasMessages() ?? false);
 	}
 
 	private setStreamingMode(enabled: boolean): void {
@@ -504,6 +554,7 @@ class UpstreamChatPagerBridge {
 	public clear(): void {
 		this.chat.clearMessages();
 		this.lastAssistantText = "";
+		this.runtime.setEmptyChatQuoteState({ active: false, userMessageCount: 0 });
 	}
 
 	public handleInput(data: string): { consume?: boolean; data?: string } | void {
@@ -552,7 +603,9 @@ class UpstreamChatPagerBridge {
 
 	public renderSessionContext(sessionContext: unknown): void {
 		this.clear();
-		for (const message of sessionMessages(sessionContext)) {
+		const messages = sessionMessages(sessionContext);
+		this.runtime.setEmptyChatQuoteState({ active: messages.length === 0, userMessageCount: countUserMessages(messages) });
+		for (const message of messages) {
 			const text = textFromAgentMessage(message);
 			if (text.length === 0) continue;
 			this.chat.addMessage(chatRoleFromAgentMessage(message), text);
@@ -561,6 +614,7 @@ class UpstreamChatPagerBridge {
 
 	private handleMessageStart(message: unknown): void {
 		const role = asRecord(message)?.role;
+		if (role === "user") this.runtime.noteUserMessage();
 		if (role === "assistant") {
 			this.lastAssistantText = "";
 			this.chat.addMessage("sumo", "");

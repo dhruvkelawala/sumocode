@@ -307,12 +307,12 @@ describe("renderSidebar — mcp section", () => {
 
 		expect(githubRow).toBeDefined();
 		expect(stitchRow).toBeDefined();
-		expect(githubRow).toContain("127;176;105"); // #7FB069 idle (green) dot
-		expect(stitchRow).toContain("91;155;213"); // #5B9BD5 tool (blue) dot
+		expect(githubRow).toContain("139;122;99"); // #8B7A63 idle dot (foregroundDim)
+		expect(stitchRow).toContain("232;179;57"); // #E8B339 in-flight dot (amber)
 
 		// Status pill text right-aligned at the end of the row.
 		expect(stripAnsi(githubRow!)).toMatch(/idle\s*$/);
-		expect(stripAnsi(stitchRow!)).toMatch(/tool\s*$/);
+		expect(stripAnsi(stitchRow!)).toMatch(/in-flight\s*$/);
 	});
 });
 
@@ -390,8 +390,8 @@ describe("renderSidebar — sub-tab navigation", () => {
 		// CONTEXT sub-tab content shown
 		expect(blob).toContain("argent-x");
 		expect(blob).toContain("github");
-		// MEMORY sub-tab content NOT shown (no ❧ bullets)
-		expect(lines.map(stripAnsi).filter((line) => /^\s*❧/.test(line))).toHaveLength(0);
+		// Issue #56 keeps Remnic facts visible in the active registry summary.
+		expect(lines.map(stripAnsi).filter((line) => /^\s*❧/.test(line))).toHaveLength(3);
 	});
 
 	it("renders REGISTRY header with v 1.0.0 version line", () => {

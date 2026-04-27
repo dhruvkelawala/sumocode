@@ -10,7 +10,7 @@ Set Height 900
 Set Padding 10
 Set TypingSpeed 20ms
 
-Type "cd '/Volumes/SumoDeus NVMe/openclaw/workspace/worktrees/sumocode-phase-3'"
+Type "cd '/Volumes/SumoDeus NVMe/openclaw/workspace/worktrees/sumocode-fix-56'"
 Enter
 Sleep 250ms
 

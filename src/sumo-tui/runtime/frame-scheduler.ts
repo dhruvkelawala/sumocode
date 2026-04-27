@@ -23,6 +23,7 @@ export class FrameScheduler {
 	private streaming = false;
 	private inFlight = false;
 	private sequence = 0;
+	private renderHistory: number[] = [];
 
 	public constructor(options: FrameSchedulerOptions) {
 		this.renderCallback = options.render;
@@ -69,12 +70,19 @@ export class FrameScheduler {
 		return this.queue.length;
 	}
 
+	public getRendersPerSecond(): number {
+		const cutoff = Date.now() - 1_000;
+		this.trimRenderHistory(cutoff);
+		return this.renderHistory.length;
+	}
+
 	public dispose(): void {
 		if (this.idleTimer) this.clearTimer(this.idleTimer);
 		if (this.streamingTimer) this.clearTimer(this.streamingTimer);
 		this.idleTimer = undefined;
 		this.streamingTimer = undefined;
 		this.queue = [];
+		this.renderHistory = [];
 	}
 
 	private enqueueDirtyFrame(): void {
@@ -104,6 +112,21 @@ export class FrameScheduler {
 		if (this.streaming && this.queue.length > 0) this.ensureStreamingTimer();
 	}
 
+	private trimRenderHistory(cutoff = Date.now() - 60_000): void {
+		const firstRecent = this.renderHistory.findIndex((timestamp) => timestamp >= cutoff);
+		if (firstRecent === -1) {
+			this.renderHistory = [];
+			return;
+		}
+		if (firstRecent > 0) this.renderHistory.splice(0, firstRecent);
+	}
+
+	private recordRender(): void {
+		const now = Date.now();
+		this.renderHistory.push(now);
+		this.trimRenderHistory(now - 60_000);
+	}
+
 	private async flushOnce(): Promise<void> {
 		if (this.inFlight || this.queue.length === 0) return;
 		this.inFlight = true;
@@ -115,6 +138,7 @@ export class FrameScheduler {
 		try {
 			logDiagnostic("frame_scheduler_render", { streaming: this.streaming, queuedFrames });
 			await this.renderCallback();
+			this.recordRender();
 		} finally {
 			this.inFlight = false;
 		}

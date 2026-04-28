@@ -633,58 +633,36 @@ function htmlPage({ title, label, blurb, cols, gridRows, customHTML }) {
 `;
 }
 
+// ELEMENT 13 LOCKED: 7A REFINED ROUNDED single-tone (rounded corners, surface
+// bg interior, 1 blank row between boxes). 7B sharp-tablet + 7C dual-tone are
+// available alts via /sumo:chat-style {default|sharp|dual} slash command.
 const explorations = [
-	// ROUND 1
-	{ filename: "13-chat-illuminated.html", build: buildIlluminated,
-		title: "Bible · Element 13 · ILLUMINATED MANUSCRIPT",
-		label: "element 13 · #1 ILLUMINATED MANUSCRIPT · 130 cols",
-		blurb: "drop-cap glyphs (◊ user, ❧ sumo). body indented col 4. no frame. metadata rule after sumo. illuminated codex page.",
-	},
-	{ filename: "13-chat-stele.html", build: buildStele,
-		title: "Bible · Element 13 · STELE / INSCRIPTION",
-		label: "element 13 · #2 STELE / INSCRIPTION · 130 cols",
-		blurb: "tracked-out role labels (U S E R). accent underline rule under each. left-rail │ anchors the column. carved-in-stone.",
-	},
-	{ filename: "13-chat-versicle.html", build: buildVersicle,
-		title: "Bible · Element 13 · VERSICLE & RESPONSE",
-		label: "element 13 · #3 VERSICLE & RESPONSE · 130 cols",
-		blurb: "liturgical call-and-response (℣. user / ℟. sumo). indented body. cathedral-as-liturgy.",
-	},
-	// ROUND 2
-	{ filename: "13-chat-brutalist.html", build: buildBrutalist,
-		title: "Bible · Element 13 · BRUTALIST / RAW",
-		label: "element 13 · #4 BRUTALIST · 130 cols",
-		blurb: "heavy ━━━ rules above each turn. [USER] / [SUMO] brackets. metadata in (parens, lowercase). raw, function-first, no decoration.",
-	},
-	{ filename: "13-chat-ledger.html", build: buildLedger,
-		title: "Bible · Element 13 · LEDGER / SCRIPTORIUM",
-		label: "element 13 · #5 LEDGER / SCRIPTORIUM · 130 cols",
-		blurb: "numbered entries (001, 002, …) with right-aligned timestamps. continuation prefix on body rows. structured, audit-trail feel.",
-	},
 	{ filename: "13-chat-boxed-a-refined.html", buildHTML: buildBoxedRefinedHTML,
-		title: "Bible · Element 13 · BOXED 7A · REFINED ROUNDED",
-		label: "element 13 · #7A REFINED ROUNDED · 130 cols",
-		blurb: "rounded corners ╭─╮ │ │ ╰─╯. surface bg fill (slightly lighter than terminal bg). 1 blank row between boxes. boxes feel elevated — message cards.",
+		title: "Bible · Element 13 · BOXED 7A · REFINED ROUNDED · LOCKED DEFAULT",
+		label: "element 13 · LOCKED · ╭─╮ refined rounded · single-tone surface bg · 130 cols",
+		blurb: "→ LOCKED DEFAULT. rounded corners ╭─╮ │ │ ╰─╯. single warm surface bg fill on box interior. 1 blank row between boxes. boxes feel elevated — message cards.",
 	},
 	{ filename: "13-chat-boxed-b-sharp-tablet.html", buildHTML: buildBoxedSharpTabletHTML,
-		title: "Bible · Element 13 · BOXED 7B · SHARP TABLET",
-		label: "element 13 · #7B SHARP TABLET · 130 cols",
-		blurb: "sharp corners ┌─┐ │ │ └─┘. surface-recess bg (DARKER than terminal). ═══ header divider rule inside each box separating title from body. tight inter-box spacing (no blanks). feels like stacked stone tablets.",
+		title: "Bible · Element 13 · BOXED 7B · SHARP TABLET · ALT",
+		label: "element 13 · alt · ┌─┐ sharp tablet · recess bg · ═ header rule · 130 cols",
+		blurb: "alt via /sumo:chat-style sharp. sharp corners ┌─┐ │ │ └─┘. surface-recess bg interior (DARKER than terminal). ═══ header divider rule. tight inter-box spacing (no blanks). stacked stone tablets.",
 	},
 	{ filename: "13-chat-boxed-c-dual-tone.html", buildHTML: buildBoxedDualToneHTML,
-		title: "Bible · Element 13 · BOXED 7C · DUAL-TONE",
-		label: "element 13 · #7C DUAL-TONE · 130 cols",
-		blurb: "rounded corners. USER uses surface-recess (darker, like input frame). SUMO uses surface-lifted (slightly elevated). role distinguished by bg tone, not just label color.",
+		title: "Bible · Element 13 · BOXED 7C · DUAL-TONE · ALT",
+		label: "element 13 · alt · ╭─╮ dual-tone · recess+lifted bg · 130 cols",
+		blurb: "alt via /sumo:chat-style dual. rounded corners. USER box recess (darker, like input frame). SUMO box surface-lifted (warm amber). role distinguished by bg tone, not just label color.",
 	},
-	{ filename: "13-chat-oracle.html", build: buildOracle,
-		title: "Bible · Element 13 · ORACLE TABLET / TWO-COLUMN",
-		label: "element 13 · #6 ORACLE TABLET · 130 cols",
-		blurb: "two-column dialog. speaker right-aligned in left column (16 cells), content in right column. like reading transcribed oratory.",
+	// Portrait variant of locked default (60 cols, sidebar hidden)
+	{ filename: "13-chat-boxed-a-refined-portrait.html", buildHTML: buildBoxedRefinedHTML,
+		title: "Bible · Element 13 · BOXED 7A · PORTRAIT · LOCKED DEFAULT",
+		label: "element 13 · LOCKED · portrait 60 cols (sidebar hidden, chat full-width)",
+		blurb: "→ LOCKED DEFAULT · portrait dim variant. same boxed pattern at 60 cols. sidebar hidden when terminal width < 120 — chat takes full width.",
+		cols: 60,
 	},
 ];
 
 for (const e of explorations) {
-	const cols = 130;
+	const cols = e.cols ?? 130;
 	const path = resolve(out, e.filename);
 	if (e.buildHTML) {
 		const customHTML = e.buildHTML({ messages: conversation, cols });

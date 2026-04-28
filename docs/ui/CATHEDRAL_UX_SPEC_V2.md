@@ -583,44 +583,67 @@ Width: 60% of terminal, min 50, max 80. Centered.
 
 ### Element 13 — Chat message rendering
 
-**NEW.** Replaces current minimal `Sumo > ...` / `User > ...` / `Tool > ...` layout.
+**LOCKED 2026-04-28** after grilling 7 design directions.
 
-**Mockup**: forthcoming `v4/13-chat-messages.png`.
+**Mockup**: `docs/ui/bible/13-chat-boxed-a-refined.html` (landscape) +
+`13-chat-boxed-a-refined-portrait.html` (portrait).
+
+**Visual contract**:
 
 ```
-   ┌ USER
-   │ hello, refactor the auth flow
-   │ to use the new session pattern.
-   └
-
-   ┌ SUMO · claude-opus-4-7 · 11:42
-   │ Reading the auth flow now to understand the current pattern.
-   │
-   │ [read]  src/auth.ts                          ✓
-   │ [edit]  src/auth.ts                          ✓
-   │
-   │ Done. Updated 14 lines, deleted 6 stale helpers.
-   └
-
-   ┌ USER
-   │ run tests
-   └
-
-   ┌ SUMO · claude-opus-4-7 · 11:43
-   │ [bash]  pnpm test src/auth                   ✓
-   │ All 22 tests pass.
-   └
+╭ USER ───────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ hello, refactor the auth flow to use the new session pattern.                                                                  │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+                                                                                                                                  (blank)
+╭ SUMO ─────────────────────────────────────────────────────────────────────────────────────────────────────── 11:42 ─╮
+│ Reading the auth flow.                                                                                                         │
+│                                                                                                                                │
+│ ✓ [read]  src/auth/session.ts                                                                                                 │
+│ ✓ [edit]  src/auth/session.ts                                                                                                 │
+│                                                                                                                                │
+│ Done. Updated 14 lines, deleted 6 stale helpers.                                                                               │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
 ```
+
+Each message renders as a self-contained closed-frame box:
+- **Rounded corners**: `╭ ╮ ╰ ╯`
+- **Vertical sides**: `│`
+- **Horizontal**: `─`
+- **Top border** has the role label inline + dashes filling + (SUMO only) right-aligned time
+- **Box interior** filled with `surface` bg (slightly lighter than terminal bg) — only the cells INSIDE the frame, NOT the frame chars themselves
+- **Frame chars** sit on terminal default bg (`background`) — they look like crisp dark borders around an elevated panel
+- **1 blank row** between consecutive boxes (terminal-default bg shows through)
+- **No model id** in header (decluttered — model lives in footer)
+- **Time** right-aligned on SUMO top border: `╭ SUMO ─────...─── 11:42 ─╮`
 
 **Tokens**:
-- Frame chars `┌ │ └`: `divider`
+- Frame chars `╭╮╰╯│─`: `divider`
 - `USER` label: `foreground`, uppercase
 - `SUMO` label: `accent`, uppercase
-- `· model · time` metadata: `foregroundDim`
+- ` HH:MM` time on SUMO header: `foregroundDim`
 - Body text: `foreground`
-- Tool pills (Element 9) live INSIDE the SUMO message frame
+- Box interior bg fill (default): `surface` `#241D17`
+- Tool pills (Element 9) live INSIDE the SUMO message box
 
-**Spacing**: blank row between user and assistant messages. No row between assistant text and the tool pills it produced.
+**Spacing**: 1 blank row between consecutive messages. No blank between assistant text and the tool pills it produced (within the same SUMO box).
+
+**Word wrap**: chat width minus 4 cells (`│ ` + content + ` │`).
+  - Landscape (sidebar visible, chat = 130 cols): wrap to 126 cells per line
+  - Portrait / sidebar hidden (chat = full term width): wrap to `term_width - 4`
+
+**Slash command toggle**: `/sumo:chat-style {default | sharp | dual}`
+
+| Style | Mockup | Description |
+|---|---|---|
+| `default` (locked) | `13-chat-boxed-a-refined.html` | rounded corners + single `surface` bg + 1 blank row between |
+| `sharp` (alt) | `13-chat-boxed-b-sharp-tablet.html` | sharp corners `┌┐└┘` + `surface-recess` bg + `═══` header divider + tight (no blank) |
+| `dual` (alt) | `13-chat-boxed-c-dual-tone.html` | rounded + USER `surface-recess` (darker) + SUMO `surface-lifted` (warm amber) |
+
+**Color update**: `--surface-lifted` was `#3A342F` in v1. Bumped to `#3D3024` (warmer amber) for v2 because `#3A342F` reads as cool grey on monitor. The runtime cathedral.json + truecolor.ts must adopt the new value when Element 13 implementation begins.
+
+**Backup directions** (kept in `docs/ui/bible/_archive/` as references; not implemented):
+- `13-chat-brutalist.html` — heavy `━━━` rules + `[USER]/[SUMO]` brackets
+- `13-chat-ledger.html` — numbered entries + right-aligned timestamps
 
 ---
 

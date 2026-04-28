@@ -121,7 +121,7 @@ html, body {
 .term.narrow   { --term-cols: 80;  --sidebar-cols: 0; }
 .term.portrait { --term-cols: 60;  --term-rows: 100; --sidebar-cols: 0; }
 
-/* ── row primitive ─────────────────────────────────────────────── */
+/* ── row primitive ──────────────────────────────────────────────── */
 .row {
   display: block;
   white-space: pre;
@@ -131,6 +131,30 @@ html, body {
   margin: 0;
   padding: 0;
   overflow: hidden;
+  width: 100%;
+}
+
+/* Flex variants — use when row has a spacer that should push trailing
+   content to the right edge (e.g., input frame closing border, hint row). */
+.row-flex {
+  display: flex;
+  flex-direction: row;
+  align-items: baseline;
+}
+.row-flex .spacer { flex: 1 1 auto; }
+.row-flex .right { margin-left: auto; }
+
+.row-flex span { white-space: pre; }
+
+/* Cursor primitive — 1ch wide, full cell height, accent-fill. The runtime
+   uses terminal-default cursor shape; this mockup shape is the most common
+   block style. /sumo:cursor slash command can override at runtime. */
+.cursor {
+  display: inline-block;
+  width: 1ch;
+  height: var(--cell-h);
+  background: var(--accent);
+  vertical-align: top;
 }
 
 /* ── sidebar bg overlay (z=0) ─────────────────────────────────── */

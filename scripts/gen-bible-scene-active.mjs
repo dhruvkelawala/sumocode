@@ -199,29 +199,34 @@ function buildInputFrameRows(cols) {
 }
 
 // ─── Hint row (right-aligned keybinds, 1-char l/r padding) ─────────────
+const PAD = 2; // 2-char l/r padding for chrome rows
+
 function buildHintRow(cols) {
 	const rightHTML =
 		`<span class="fg-dim">TAB \u00b7 AGENTS  </span>` +
 		`<span class="fg-accent">CTRL+/</span>` +
 		`<span class="fg-dim"> \u00b7 COMMANDS</span>`;
 	const rightLen = 31;
-	const pad = cols - rightLen - 2;
-	return ` ` + rep(" ", Math.max(0, pad)) + rightHTML + ` `;
+	const lead = cols - rightLen - PAD * 2;
+	return rep(" ", PAD) + rep(" ", Math.max(0, lead)) + rightHTML + rep(" ", PAD);
 }
 
 // ─── Footer (Element 5 idle / READY, width-adaptive) ───────────────────
-function buildFooterRow(cols) {
+// Project+branch in footer ONLY when sidebar hidden (sidebar shows them otherwise).
+function buildFooterRow(cols, sidebarVisible) {
 	const leftCompact = cols < 80;
 	const left = leftCompact
 		? `<span class="fg-idle">\u25cf</span> <span class="fg-fg">READY</span><span class="fg-dim"> \u00b7 </span><span class="fg-fg">gpt-5.5</span><span class="fg-dim"> \u00b7 </span><span class="fg-fg">medium</span>`
 		: `<span class="fg-idle">\u25cf</span> <span class="fg-fg">READY</span><span class="fg-dim"> \u00b7 </span><span class="fg-fg">claude-opus-4-7</span><span class="fg-dim"> \u00b7 </span><span class="fg-fg">xhigh</span>`;
-	const leftLen = leftCompact ? 26 : 32;
+	const leftLen = visibleLen(left);
 
 	const tokens = [];
-	if (cols >= 110) tokens.push({ html: `<span class="fg-fg">sumo-deus</span>`, len: 9 });
-	if (cols >= 90)  tokens.push({ html: `<span class="fg-dim">(main)</span>`, len: 6 });
-	if (cols >= 50)  tokens.push({ html: `<span class="fg-fg">42k/200k</span>`, len: 8 });
-	if (cols >= 70)  tokens.push({ html: `<span class="fg-fg">$0.42</span>`, len: 5 });
+	if (!sidebarVisible) {
+		tokens.push({ html: `<span class="fg-fg">sumo-deus</span>`, len: 9 });
+		tokens.push({ html: `<span class="fg-dim">(main)</span>`, len: 6 });
+	}
+	if (cols >= 50) tokens.push({ html: `<span class="fg-fg">42k/200k</span>`, len: 8 });
+	if (cols >= 70) tokens.push({ html: `<span class="fg-fg">$0.42</span>`, len: 5 });
 
 	let rightHTML = "";
 	let rightLen = 0;
@@ -234,26 +239,26 @@ function buildFooterRow(cols) {
 		rightLen += tokens[i].len;
 	}
 
-	const pad = cols - 2 - leftLen - rightLen;
-	return ` ` + left + rep(" ", Math.max(1, pad)) + rightHTML + ` `;
+	const middle = cols - PAD * 2 - leftLen - rightLen;
+	return rep(" ", PAD) + left + rep(" ", Math.max(1, middle)) + rightHTML + rep(" ", PAD);
 }
 
 // ─── Top bar placeholder ───────────────────────────────────────────────
 function buildTopBarPlaceholder(cols) {
+	let left, leftLen, right, rightLen;
 	if (cols >= 80) {
-		const left = `<span class="fg-accent">SUMOCODE</span><span class="fg-dim">  \u2551 \u25cf 019dd3d8 \u2551</span>`;
-		const leftLen = 24;
-		const right = `<span class="fg-dim">ARCHIVE   [terminal]  [\u2699]</span>`;
-		const rightLen = 28;
-		const pad = cols - leftLen - rightLen - 2;
-		return ` ` + left + rep(" ", Math.max(1, pad)) + right + ` `;
+		left = `<span class="fg-accent">SUMOCODE</span><span class="fg-dim">  \u2551 \u25cf 019dd3d8 \u2551</span>`;
+		leftLen = 24;
+		right = `<span class="fg-dim">ARCHIVE   [terminal]  [\u2699]</span>`;
+		rightLen = 28;
+	} else {
+		left = `<span class="fg-accent">SUMOCODE</span><span class="fg-dim">  \u25cf</span>`;
+		leftLen = 11;
+		right = `<span class="fg-dim">[\u2699]</span>`;
+		rightLen = 3;
 	}
-	const left = `<span class="fg-accent">SUMOCODE</span><span class="fg-dim">  \u25cf</span>`;
-	const leftLen = 11;
-	const right = `<span class="fg-dim">[\u2699]</span>`;
-	const rightLen = 3;
-	const pad = cols - leftLen - rightLen - 2;
-	return ` ` + left + rep(" ", Math.max(1, pad)) + right + ` `;
+	const middle = cols - PAD * 2 - leftLen - rightLen;
+	return rep(" ", PAD) + left + rep(" ", Math.max(1, middle)) + right + rep(" ", PAD);
 }
 
 // ─── Compose scene ──────────────────────────────────────────────────────
@@ -265,7 +270,7 @@ function buildScene(variant) {
 	const chatHTML = buildChatHTML(CHAT_COLS);
 	const inputRows = buildInputFrameRows(cols);
 	const hintRow = buildHintRow(cols);
-	const footerRow = buildFooterRow(cols);
+	const footerRow = buildFooterRow(cols, sidebarVisible);
 	const topBarRow = buildTopBarPlaceholder(cols);
 
 	const middleCols = sidebarVisible ? `${CHAT_COLS}ch ${sidebarCols}ch` : `1fr`;

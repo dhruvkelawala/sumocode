@@ -610,9 +610,9 @@ Each message renders as a self-contained closed-frame box:
 - **Vertical sides**: `│`
 - **Horizontal**: `─`
 - **Top border** has the role label inline + dashes filling + (SUMO only) right-aligned time
-- **Box interior** filled with `surface` bg (slightly lighter than terminal bg) — only the cells INSIDE the frame, NOT the frame chars themselves
-- **Frame chars** sit on terminal default bg (`background`) — they look like crisp dark borders around an elevated panel
-- **1 blank row** between consecutive boxes (terminal-default bg shows through)
+- **Box interior** is **TRANSPARENT** (no bg fill) in the LOCKED default. Frame + interior all sit on terminal default bg. Pure typographic frames.
+- **Frame chars** in `divider` color
+- **1 blank row** between consecutive boxes
 - **No model id** in header (decluttered — model lives in footer)
 - **Time** right-aligned on SUMO top border: `╭ SUMO ─────...─── 11:42 ─╮`
 
@@ -622,7 +622,7 @@ Each message renders as a self-contained closed-frame box:
 - `SUMO` label: `accent`, uppercase
 - ` HH:MM` time on SUMO header: `foregroundDim`
 - Body text: `foreground`
-- Box interior bg fill (default): `surface` `#241D17`
+- Box interior bg fill (default): **transparent** — falls through to terminal default bg `#1A1511`
 - Tool pills (Element 9) live INSIDE the SUMO message box
 
 **Spacing**: 1 blank row between consecutive messages. No blank between assistant text and the tool pills it produced (within the same SUMO box).
@@ -635,11 +635,11 @@ Each message renders as a self-contained closed-frame box:
 
 | Style | Mockup | Description |
 |---|---|---|
-| `default` (locked) | `13-chat-boxed-a-refined.html` | rounded corners + single `surface` bg + 1 blank row between |
-| `sharp` (alt) | `13-chat-boxed-b-sharp-tablet.html` | sharp corners `┌┐└┘` + `surface-recess` bg + `═══` header divider + tight (no blank) |
-| `dual` (alt) | `13-chat-boxed-c-dual-tone.html` | rounded + USER `surface-recess` (darker) + SUMO `surface-lifted` (warm amber) |
+| `default` (locked) | `13-chat-boxed-a-refined.html` | rounded corners, **transparent interior** (no bg fill), 1 blank row between |
+| `sharp` (alt) | `13-chat-boxed-b-sharp-tablet.html` | sharp corners `┌┐└┘` + `surface-recess` bg fill + `═══` header divider + tight (no blank) |
+| `dual` (alt) | `13-chat-boxed-c-dual-tone.html` | rounded + USER **transparent** (matches default) + SUMO `surface-lifted` warm amber bg fill. One-sided emphasis on the assistant turn. |
 
-**Color update**: `--surface-lifted` was `#3A342F` in v1. Bumped to `#3D3024` (warmer amber) for v2 because `#3A342F` reads as cool grey on monitor. The runtime cathedral.json + truecolor.ts must adopt the new value when Element 13 implementation begins.
+**Color update**: `--surface-lifted` was `#3A342F` in v1. Bumped to `#3D3024` (warmer amber) for v2 because `#3A342F` reads as cool grey on monitor. The runtime `cathedral.json` + `src/sumo-tui/render/truecolor.ts` must adopt the new value when Element 13 implementation begins.
 
 **Backup directions** (kept in `docs/ui/bible/_archive/` as references; not implemented):
 - `13-chat-brutalist.html` — heavy `━━━` rules + `[USER]/[SUMO]` brackets

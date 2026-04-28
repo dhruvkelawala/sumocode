@@ -48,18 +48,51 @@ viewing-context adjustment, not a palette change.
 See `CATHEDRAL_UX_SPEC_V2.md` for the spec. 13 elements × ~2 dimension
 variants × 2-3 states each = ~50-70 mockups when complete.
 
-| Element | Status |
-|---|---|
-| 1 — Sidebar | TODO |
-| 2 — Top bar | TODO |
-| 3 — Splash | TODO |
-| 4 — Active input frame | ✅ landscape + portrait, empty + typed |
-| 5 — Footer | TODO |
-| 6 — Approval modal | TODO |
-| 7 — Memory editor | TODO |
-| 8 — Command palette | TODO |
-| 9 — Tool pills | TODO |
-| 10 — Code blocks | TODO |
-| 11 — DIVINE QUERY | TODO |
-| 12 — Task tool | TODO |
-| 13 — Chat messages | TODO |
+| Element | Status | Mockups |
+|---|---|---|
+| 1 — Sidebar | TODO | |
+| 2 — Top bar | TODO | |
+| 3 — Splash | TODO | |
+| **4 — Active input frame** | ✅ LOCKED | empty/typed × landscape/portrait (4) |
+| **5 — Footer** | ✅ LOCKED | 5 states + portrait + version-line (7) |
+| 6 — Approval modal | TODO | |
+| 7 — Memory editor | TODO | |
+| 8 — Command palette | TODO | |
+| 9 — Tool pills | TODO | |
+| 10 — Code blocks | TODO | |
+| 11 — DIVINE QUERY | TODO | |
+| 12 — Task tool | TODO | |
+| **13 — Chat messages** | ✅ LOCKED | default (7A refined rounded) + portrait + 2 alts (sharp, dual) (4) |
+
+## Locked decisions summary
+
+### Element 4 — Active input frame
+- No label above frame (drop `INPUT`/`SCRIPTOR INPUT`)
+- `>` prompt arrow inside frame in accent color
+- Hint row right-aligned: `TAB · AGENTS  CTRL+/ · COMMANDS`
+- Cursor: terminal user preference (don't override OSC 12); `/sumo:cursor block|bar|thin` to override
+- Frame interior: `surface-recess` bg fill on every row
+
+### Element 5 — Footer
+- Single row, cathedral state labels (READY / MEDITATING / ILLUMINATING / DEFERRING / INSCRIBING)
+- Left zone: `● <STATE> · <model> · <thinking>`
+- Right zone: `<project> (<branch>) · <ctx>/<window> · $<cost>`
+- Width handling: collapse right-to-left at narrow (drop project, branch, $cost progressively)
+- Splash variant: dim version line (`SUMOCODE V0.2.0 · CATHEDRAL · 160 × 45 MONOSPACE`) below footer, splash only
+
+### Element 13 — Chat messages
+- LOCKED: closed-frame boxes with rounded corners `╭─╮ │ │ ╰─╯`
+- **Default (single-tone)**: ALL boxes transparent interior — just the frame, no bg fill
+- SUMO header has time right-aligned on top border (no model id)
+- USER header has just `╭ USER ─────...───╮` (no metadata)
+- 1 blank row between boxes
+- Slash command `/sumo:chat-style {default | sharp | dual}` for alt variants
+- Color update: `--surface-lifted: #3A342F → #3D3024` (warmer amber, was reading as cool grey)
+
+## Backup directions (rejected, archived)
+
+In `docs/ui/bible/_archive/`:
+- `13-chat-brutalist.html` — heavy `━━━` rules, `[USER]/[SUMO]` brackets
+- `13-chat-ledger.html` — numbered entries `001 │ USER`, right-aligned timestamps
+
+Deleted (rejected during round 1 grilling): illuminated, stele, versicle, oracle.

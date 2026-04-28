@@ -1,8 +1,7 @@
-import { matchesKey } from "@mariozechner/pi-tui";
-import type { KeyEvent } from "../input/key-router.js";
 import { parseSgrMouseStream, type MouseEvent } from "../input/mouse.js";
 import { logDiagnostic } from "../runtime/diagnostics.js";
 import { ChatPager } from "../widgets/chat-pager.js";
+import { chatScrollCommandFromInput } from "../widgets/chat-scroll-command.js";
 import { SIDEBAR_MIN_TERMINAL_WIDTH, SIDEBAR_WIDTH } from "../../sidebar.js";
 
 const CHAT_VIEWPORT_BRIDGE_INSTALLED = Symbol("sumo-tui.chat-viewport-bridge-installed");
@@ -136,24 +135,6 @@ function chatRoleFromAgentMessage(message: unknown): string {
 	return "system";
 }
 
-function keyFromInput(data: string): KeyEvent | undefined {
-	switch (data) {
-		case "\x1b[5~":
-			return { key: "PageUp", sequence: data };
-		case "\x1b[6~":
-			return { key: "PageDown", sequence: data };
-		case "\x1b[H":
-		case "\x1b[1~":
-			return { key: "Home", sequence: data };
-		case "\x1b[F":
-		case "\x1b[4~":
-			return { key: "End", sequence: data };
-		default:
-			if (matchesKey(data, "shift+down")) return { key: "End", sequence: data };
-			return undefined;
-	}
-}
-
 function renderableLineCount(component: PiRenderableComponent | undefined, width: number): number {
 	if (!component) return 0;
 	try {
@@ -272,7 +253,7 @@ export class ChatViewportController {
 			});
 		}
 
-		const keyEvent = keyFromInput(nextData);
+		const keyEvent = chatScrollCommandFromInput(nextData);
 		if (keyEvent && this.chat.handleKey(keyEvent)) {
 			this.renderChatViewportOrRequest();
 			return { consume: true };

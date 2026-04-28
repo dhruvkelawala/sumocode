@@ -2,6 +2,7 @@ import { SumoNode } from "../layout/node.js";
 import { FLEX_DIRECTION_COLUMN, POSITION_TYPE_ABSOLUTE, type Yoga, type YogaNode } from "../layout/yoga.js";
 import type { KeyEvent } from "../input/key-router.js";
 import type { MouseEvent } from "../input/mouse.js";
+import { chatScrollCommandFromKey } from "./chat-scroll-command.js";
 import { CellBuffer, type Rect } from "../render/buffer.js";
 import type { HardwareCursor } from "../render/compositor.js";
 
@@ -185,29 +186,28 @@ export class ScrollBox extends SumoNode {
 	}
 
 	public handleKey(event: KeyEvent): boolean {
-		const key = event.key.toLowerCase();
-		if (key === "pageup" || key === "pgup") {
-			// OpenCode pages messages by a viewport fraction (`packages/opencode/src/cli/cmd/tui/routes/session/index.tsx:686-770`).
-			this.scrollBy(-this.halfPage());
-			return true;
+		const command = chatScrollCommandFromKey(event);
+		switch (command) {
+			case "page-up":
+				// OpenCode pages messages by a viewport fraction (`packages/opencode/src/cli/cmd/tui/routes/session/index.tsx:686-770`).
+				this.scrollBy(-this.halfPage());
+				return true;
+			case "page-down":
+				this.scrollBy(this.halfPage());
+				return true;
+			case "jump-top":
+				this.scrollTo(0);
+				return true;
+			case "jump-bottom":
+				this.scrollToBottom();
+				this.manualScroll = false;
+				this.emitStateIfChanged();
+				return true;
+			default:
+				// EC-13.2: drag-selection across messages is intentionally not claimed here;
+				// terminal-native selection requires a later selection model so we let drags bubble.
+				return false;
 		}
-		if (key === "pagedown" || key === "pgdn") {
-			this.scrollBy(this.halfPage());
-			return true;
-		}
-		if (key === "home") {
-			this.scrollTo(0);
-			return true;
-		}
-		if (key === "end" || key === "shift+down") {
-			this.scrollToBottom();
-			this.manualScroll = false;
-			this.emitStateIfChanged();
-			return true;
-		}
-		// EC-13.2: drag-selection across messages is intentionally not claimed here;
-		// terminal-native selection requires a later selection model so we let drags bubble.
-		return false;
 	}
 
 	private halfPage(): number {

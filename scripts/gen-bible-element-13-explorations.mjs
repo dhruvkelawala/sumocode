@@ -501,6 +501,10 @@ function buildBoxedDualToneHTML({ messages, cols }) {
 }
 
 // Generic boxed builder — driven by config object.
+// IMPORTANT: bg is applied to the body CONTENT span only, NOT to frame chars
+// or the <pre> wrapper. So the rounded/sharp corners sit on terminal-default
+// bg and the warm/recess fill is ONLY the interior of the box (between │
+// verticals), matching how a real terminal would render box-with-bg-fill.
 function buildBoxedGeneric({ messages, cols, corners, bgFor, spacingBetweenBoxes, headerDivider }) {
 	const innerCols = cols - 4;
 	const blocks = [];
@@ -537,19 +541,27 @@ function buildBoxedGeneric({ messages, cols, corners, bgFor, spacingBetweenBoxes
 			rightPart,
 		);
 
+		const bg = bgFor(msg);
+		const bgStyle = bg ? ` style="background: ${bg}"` : "";
 		const bodyRow = (contentHTML, contentLen) => {
 			const padLen = innerCols - contentLen;
-			return `<span class="fg-divider">${corners.v}</span> ` + contentHTML +
-				rep(" ", padLen) + ` <span class="fg-divider">${corners.v}</span>`;
+			// Frame verticals: no bg (terminal default).
+			// Interior content + padding: wrap in a single span with bg fill,
+			// so only the cells INSIDE the frame get the warm/recess color.
+			return (
+				`<span class="fg-divider">${corners.v}</span>` +
+				`<span${bgStyle}> ` + contentHTML + rep(" ", padLen) + ` </span>` +
+				`<span class="fg-divider">${corners.v}</span>`
+			);
 		};
 		const blankRow = () => bodyRow("", 0);
 
 		// Optional header divider rule (═══ inside) immediately after the title row
 		if (headerDivider) {
 			rows.push(
-				`<span class="fg-divider">${corners.v}</span> ` +
-				`<span class="fg-divider">${rep("═", innerCols)}</span>` +
-				` <span class="fg-divider">${corners.v}</span>`,
+				`<span class="fg-divider">${corners.v}</span>` +
+				`<span${bgStyle}> <span class="fg-divider">${rep("═", innerCols)}</span> </span>` +
+				`<span class="fg-divider">${corners.v}</span>`,
 			);
 		}
 
@@ -578,20 +590,19 @@ function buildBoxedGeneric({ messages, cols, corners, bgFor, spacingBetweenBoxes
 
 		rows.push(`<span class="fg-divider">${corners.bl}${rep(corners.h, cols - 2)}${corners.br}</span>`);
 
-		blocks.push({ rows, bg: bgFor(msg) });
+		blocks.push({ rows });
 
 		if (i < messages.length - 1) {
 			for (let s = 0; s < spacingBetweenBoxes; s++) {
-				blocks.push({ rows: [""], bg: null });
+				blocks.push({ rows: [""] });
 			}
 		}
 	}
 
+	// Single <pre> per block. No bg on the pre — each body row paints its own
+	// interior bg via inline span. Frame chars stay transparent (terminal default).
 	return blocks
-		.map((b) => {
-			const styleAttr = b.bg ? ` style="background: ${b.bg}"` : "";
-			return `<pre class="grid"${styleAttr}>${b.rows.join("\n")}</pre>`;
-		})
+		.map((b) => `<pre class="grid">${b.rows.join("\n")}</pre>`)
 		.join("\n");
 }
 

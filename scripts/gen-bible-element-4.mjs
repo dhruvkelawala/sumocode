@@ -23,10 +23,10 @@ function buildElement4({ cols, typedText }) {
 	const botBorder = `<span class="fg-divider">└${rep("─", cols - 2)}┘</span>`;
 
 	// Cursor row: │ > <text><cursor><padding>│ (total cols)
-	// Layout: 1 (left border) + 1 (space) + 1 (>) + 1 (space) + N (text) + 1 (cursor) + ?(padding) + 1 (right border)
-	// padding = cols - (5 + textLen + 1 + 1) = cols - textLen - 7
+	// Cells: 1 (left │) + 1 (space) + 1 (>) + 1 (space) + N (text) + 1 (cursor) + ? (pad) + 1 (right │)
+	// = 4 + textLen + 1 + padLen + 1 = cols  →  padLen = cols - textLen - 6
 	const textLen = typedText.length;
-	const padLen = cols - textLen - 7;
+	const padLen = cols - textLen - 6;
 	if (padLen < 0) throw new Error(`text too long for ${cols} cols`);
 
 	const cursorRow =

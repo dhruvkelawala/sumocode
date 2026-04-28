@@ -147,12 +147,14 @@ html, body {
   white-space: pre;
   color: inherit;
 }
-.term .grid span { background: inherit; }
+/* Span baseline inside .grid: transparent so parent <pre> bg shows through.
+   Color helpers (.fg-*) override the foreground but not the bg. */
+.term .grid span { background: transparent; }
 
 /* Cursor primitive (block style) — used inline inside <pre>, shown as a
-   1-char inverse-video block. Use a non-breaking space inside so it occupies
-   exactly one cell. */
-.cursor {
+   1-cell inverse-video block. Higher specificity than .term .grid span
+   so it wins over the transparent default. */
+.term .grid span.cursor {
   background: var(--accent);
   color: var(--background);
 }

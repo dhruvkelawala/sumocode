@@ -1,0 +1,3 @@
+# Renders are regenerated from HTML. Don't commit binary PNGs in this dir.
+# Goldens for T2 will live in docs/visual/golden/ once locked.
+*.png

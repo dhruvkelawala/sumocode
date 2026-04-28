@@ -446,7 +446,9 @@ Width: 80% of terminal, min 70, max 120. Centered.
 
 ### Element 8 — Command palette
 
-**Mockup**: forthcoming `v4/08-command-palette.png`.
+**LOCKED**: Scriptorium variant approved 2026-04-29.
+
+**Mockup**: `docs/ui/bible/08-palette-v2-scriptorium.html`.
 
 **Trigger**: `Ctrl+/`. Drops Pi's `Ctrl+P`, `Ctrl+K` registrations (Pi defaults preserved).
 
@@ -454,26 +456,44 @@ Width: 80% of terminal, min 70, max 120. Centered.
 1. Currently works on splash, broken in active state (palette doesn't open)
 2. Enter on a row inserts slash command into input field instead of opening sub-overlay (drill-down path broken)
 
-**6 modes** (was 5 — add SETTINGS):
+**6 modes** (was 5 — add SETTINGS): SESSION, MODEL, THINKING, MEMORY, THEME, SETTINGS.
 
+**Visual contract**:
+
+```txt
+                         ✾  COMMAND PALETTE  ✾
+
+              ──────────────────────  ·  ──────────────────────
+
+     ❯  █what shall we attend to…
+
+     ·   SESSION                                      auth-flow-refactor
+     ❈   MODEL                                         claude-opus-4-7
+     ·   THINKING                                                xhigh
+     ·   MEMORY                                               55 facts
+     ·   THEME                                              cathedral
+     ·   SETTINGS
+
+              ──────────────────────  ·  ──────────────────────
+                         ↑↓ wander    ⏎ attend    ⎋ retreat
 ```
-                              COMMAND PALETTE
-   ────────────────────────────────────────────────────────────────────────
 
-   │ search…                                                          │
+**Tokens**:
+- Title text + `✾` floral marks: `accent`
+- Decorative rules + center `·`: `divider`
+- Search chevron `❯`: `accent`
+- Search cursor block: active cursor token / accent bg
+- Search placeholder: `foregroundDim`
+- Focused row marker `❈` heavy sparkle: `accent`
+- Unfocused row marker `·`: `divider`
+- Focused label + value: `foreground`
+- Unfocused label + value: `foregroundDim`
+- Footer keybind text: `foregroundDim`
 
-     SESSION        ▶ CURRENT: refactor-auth-flow
-   █ MODEL          ▶ CURRENT: claude-opus-4-7              █
-     THINKING       ▶ CURRENT: xhigh
-     MEMORY         ▶ 55 FACTS
-     THEME          ▶ CURRENT: cathedral
-     SETTINGS
-
-   ────────────────────────────────────────────────────────────────────────
-   ↑↓ navigate    ⏎  select    esc  close
-```
-
-All drill-down (no in-place cycling).
+**Behavior**:
+- All drill-down (no in-place cycling).
+- Enter on a row opens that mode's sub-overlay rather than inserting text into the input field.
+- Filter/search narrows visible rows while preserving the scriptorium chrome.
 
 Width: 60% of terminal, min 50, max 80. Centered.
 
@@ -825,7 +845,7 @@ Each row = one PR + one issue + visual approval.
 6. Element 11 DIVINE QUERY modal
 
 **Phase C — Element bugs**:
-7. Element 8 command palette: fix active-state opening + drill-down behavior + add SETTINGS row
+7. Element 8 command palette: implement locked scriptorium palette, fix active-state opening + drill-down behavior + add SETTINGS row
 8. Element 2 top bar: ship LLM session summarization + recent session tabs (interactive if easy)
 
 **Phase D — Element 9, 10, 12 (new design)**:
@@ -868,7 +888,7 @@ For the visual bible to lock and CI golden-image diff to engage:
 - [ ] Phase C (palette + top bar) — 2 PRs, all green, visual approved
 - [ ] Phase D (tool pills + skill pill + code + task) — 4 PRs, all green, visual approved
 - [ ] Phase E (approvals + selection + perf + memory) — 4 PRs, all green, visual approved
-- [ ] All 13 elements + Element 9a skill pill have a forthcoming `v4/*.png` / bible mockup committed before implementation
+- [ ] All 13 elements + Element 9a skill pill have locked bible mockups committed before implementation
 - [ ] T2 verification harness (golden-image diff) gates CI on every Phase A–E PR
 
 Phase F is post-acceptance polish.

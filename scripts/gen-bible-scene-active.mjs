@@ -199,7 +199,7 @@ function buildInputFrameRows(cols) {
 }
 
 // ─── Hint row (right-aligned keybinds, 1-char l/r padding) ─────────────
-const PAD = 2; // 2-char l/r padding for chrome rows
+const PAD = 1; // 2-char l/r padding for chrome rows
 
 // In portrait (sidebar hidden), hint row carries the project name + branch
 // on the LEFT (since sidebar can't show them). In landscape, hint row is

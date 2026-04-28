@@ -156,6 +156,18 @@ html, body {
    Color helpers (.fg-*) override the foreground but not the bg. */
 .term .grid span { background: transparent; }
 
+/* Box-interior bg fill — used by the boxed chat direction (Element 13#7).
+ * Spans WITH this class are inline-block at exact cell-h height so the bg
+ * fills the FULL row height (no thin unpainted strips between rows from
+ * line-height > content-height). The TUI runtime renders SGR bg uniformly
+ * across cells, so this CSS hack matches that uniform appearance in HTML. */
+.term .grid span.box-fill {
+  display: inline-block;
+  height: var(--cell-h);
+  line-height: var(--cell-h);
+  vertical-align: top;
+}
+
 /* Cursor primitive (block style) — used inline inside <pre>, shown as a
    1-cell inverse-video block. Higher specificity than .term .grid span
    so it wins over the transparent default. */

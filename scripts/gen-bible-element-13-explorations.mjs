@@ -546,11 +546,11 @@ function buildBoxedGeneric({ messages, cols, corners, bgFor, spacingBetweenBoxes
 		const bodyRow = (contentHTML, contentLen) => {
 			const padLen = innerCols - contentLen;
 			// Frame verticals: no bg (terminal default).
-			// Interior content + padding: wrap in a single span with bg fill,
-			// so only the cells INSIDE the frame get the warm/recess color.
+			// Interior content + padding: wrap in a single inline-block span with
+			// bg fill that covers the FULL row height (matches TUI uniform render).
 			return (
 				`<span class="fg-divider">${corners.v}</span>` +
-				`<span${bgStyle}> ` + contentHTML + rep(" ", padLen) + ` </span>` +
+				`<span class="box-fill"${bgStyle}> ` + contentHTML + rep(" ", padLen) + ` </span>` +
 				`<span class="fg-divider">${corners.v}</span>`
 			);
 		};
@@ -560,7 +560,7 @@ function buildBoxedGeneric({ messages, cols, corners, bgFor, spacingBetweenBoxes
 		if (headerDivider) {
 			rows.push(
 				`<span class="fg-divider">${corners.v}</span>` +
-				`<span${bgStyle}> <span class="fg-divider">${rep("═", innerCols)}</span> </span>` +
+				`<span class="box-fill"${bgStyle}> <span class="fg-divider">${rep("═", innerCols)}</span> </span>` +
 				`<span class="fg-divider">${corners.v}</span>`,
 			);
 		}

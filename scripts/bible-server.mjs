@@ -66,9 +66,10 @@ function indexHTML() {
 						.replace(/\.html$/, "")
 						.replace(/^\d+-/, "")
 						.replace(/-/g, " ");
-					return `      <a class="card" href="/bible/${f}">
+					const png = `/bible/renders/${f.replace(/\.html$/, ".png")}`;
+				return `      <a class="card" href="/bible/${f}">
         <div class="card-frame">
-          <iframe src="/bible/${f}" loading="lazy" scrolling="no"></iframe>
+          <img src="${png}" alt="${label}" loading="lazy">
         </div>
         <div class="card-label">${label}</div>
       </a>`;
@@ -106,8 +107,8 @@ ${cards}
   .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(680px, 1fr)); gap: 24px; margin-top: 16px; }
   .card { display: block; background: var(--surface); border: 1px solid var(--divider); padding: 0; text-decoration: none; color: var(--fg); transition: border-color 120ms; overflow: hidden; }
   .card:hover { border-color: var(--accent); }
-  .card-frame { background: var(--bg); height: 200px; overflow: hidden; position: relative; }
-  .card-frame iframe { position: absolute; top: 0; left: 0; border: 0; width: 200%; height: 400%; transform: scale(0.5); transform-origin: top left; pointer-events: none; }
+  .card-frame { background: var(--bg); display: flex; align-items: center; justify-content: center; padding: 16px; min-height: 100px; }
+  .card-frame img { max-width: 100%; height: auto; display: block; image-rendering: pixelated; }
   .card-label { padding: 12px 16px; border-top: 1px solid var(--divider); font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--fg-dim); }
 
   .meta { color: var(--fg-dim); font-size: 11px; letter-spacing: 0.08em; }

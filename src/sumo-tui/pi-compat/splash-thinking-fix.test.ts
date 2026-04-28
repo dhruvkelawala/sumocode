@@ -4,13 +4,12 @@ describe("UX_SPEC §0 — splash takes no-messages slot, not empty-chat-quote (#
 	it("splash predicate triggers when chat has zero messages regardless of sidebar visibility", () => {
 		// Pure regression guard: ensure shouldShowEmptyChatQuote is not on the
 		// hot path of syncChatSlot. We test by inspecting the source surface.
-		const path = new URL("./sumo-interactive-mode.ts", import.meta.url);
+		const path = new URL("./retained-shell-transition.ts", import.meta.url);
 		const source = require("node:fs").readFileSync(path, "utf8") as string;
-		const syncBlock = source.slice(source.indexOf("private syncChatSlot()"), source.indexOf("private syncChatSlot()") + 1500);
-		// The body must NOT branch on showEmptyQuote anymore.
-		expect(syncBlock).not.toContain("showEmptyQuote");
+		// The transition Module must NOT branch on showEmptyQuote anymore.
+		expect(source).not.toContain("showEmptyQuote");
 		// Splash mount must remain.
-		expect(syncBlock).toContain("this.root.addChild(this.splash.root)");
+		expect(source).toContain("root.addChild(splash.root)");
 	});
 });
 

@@ -43,6 +43,7 @@ import { TerminalController } from "../runtime/terminal-controller.js";
 import { ChatPager } from "../widgets/chat-pager.js";
 import { SIDEBAR_MIN_TERMINAL_WIDTH } from "../../sidebar.js";
 import { installChatViewportBridge } from "./chat-viewport-controller.js";
+import { RetainedShellTransition } from "./retained-shell-transition.js";
 import { SumoExtensionUIAdapter, type SumoExtensionUIAdapterOptions } from "./extension-ui-adapter.js";
 import { createForeignAwareUIContext, type ForeignAwareUIOptions } from "./foreign-extension-warning.js";
 
@@ -222,6 +223,7 @@ export class SumoInteractiveRuntime {
 	private chat: ChatPager | undefined;
 	private splash: SplashTree | undefined;
 	private emptyChatQuote: EmptyChatQuoteNode | undefined;
+	private shellTransition: RetainedShellTransition | undefined;
 	private scheduler: FrameScheduler | undefined;
 	private previousFrame: CellBuffer | undefined;
 	private resizeHandler: (() => void) | undefined;
@@ -256,6 +258,7 @@ export class SumoInteractiveRuntime {
 		});
 		this.splash = createSplashTree(this.yoga, undefined, () => defaultSplashSnapshot(this.chat?.hasMessages() ?? false));
 		this.emptyChatQuote = new EmptyChatQuoteNode(this.yoga.Node.create(), () => this.emptyChatQuoteSnapshot());
+		this.shellTransition = new RetainedShellTransition({ root: this.root, chat: this.chat, splash: this.splash, emptyChatQuote: this.emptyChatQuote });
 		this.syncChatSlot();
 		// Retained SumoInteractiveMode owns the application terminal contract.
 		// The extension lifecycle shim also enters altscreen when loaded, but the
@@ -324,6 +327,7 @@ export class SumoInteractiveRuntime {
 		this.chat = undefined;
 		this.splash = undefined;
 		this.emptyChatQuote = undefined;
+		this.shellTransition = undefined;
 		this.root = undefined;
 		this.yoga = undefined;
 		this.resizeHandler = undefined;
@@ -360,25 +364,7 @@ export class SumoInteractiveRuntime {
 	}
 
 	private syncChatSlot(): void {
-		if (!this.root || !this.chat || !this.splash) return;
-		const hasMessages = this.chat.hasMessages();
-		this.splash.syncVisibility();
-		// Per UX_SPEC §0: "no messages → splash (cat + SUMOCODE wordmark + quote,
-		// full width); first message / /resume → cathedral active state". The
-		// empty-chat-quote (§4.4) was a misinterpretation that contradicted §0 —
-		// it stole the splash slot whenever sidebar was visible + no messages,
-		// causing the splash to flash for one frame at boot then disappear. We
-		// keep the EmptyChatQuoteNode allocated for v2 work but never mount it.
-		if (this.emptyChatQuote && this.emptyChatQuote.parent === this.root) {
-			this.root.removeChild(this.emptyChatQuote);
-		}
-		if (hasMessages) {
-			if (this.splash.root.parent === this.root) this.root.removeChild(this.splash.root);
-			if (this.chat.parent !== this.root) this.root.addChild(this.chat);
-			return;
-		}
-		if (this.chat.parent === this.root) this.root.removeChild(this.chat);
-		if (this.splash.root.parent !== this.root) this.root.addChild(this.splash.root);
+		this.shellTransition?.sync();
 	}
 
 	private emptyChatQuoteSnapshot(): EmptyChatQuoteSnapshot {

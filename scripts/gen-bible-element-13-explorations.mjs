@@ -544,9 +544,12 @@ function buildBoxedGeneric({ messages, cols, corners, bgFor, spacingBetweenBoxes
 			// Frame verticals: no bg (terminal default).
 			// Interior content + padding: wrap in a single inline-block span with
 			// bg fill that covers the FULL row height (matches TUI uniform render).
+			const innerCellWidth = innerCols + 2; // content + 2 padding spaces
+			const widthStyle = `width: ${innerCellWidth}ch`;
+			const combinedStyle = bgStyle ? bgStyle.replace('"', `"${widthStyle}; `) : ` style="${widthStyle}"`;
 			return (
 				`<span class="fg-divider">${corners.v}</span>` +
-				`<span class="box-fill"${bgStyle}> ` + contentHTML + rep(" ", padLen) + ` </span>` +
+				`<span class="box-fill"${combinedStyle}> ` + contentHTML + rep(" ", padLen) + ` </span>` +
 				`<span class="fg-divider">${corners.v}</span>`
 			);
 		};

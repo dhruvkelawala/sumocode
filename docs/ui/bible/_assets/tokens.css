@@ -162,6 +162,11 @@ html, body {
  * line-height > content-height). The TUI runtime renders SGR bg uniformly
  * across cells, so this CSS hack matches that uniform appearance in HTML. */
 .term .grid span.box-fill {
+  /* IMPORTANT: width is set inline per-row via style="width: <cols>ch".
+   * Without an explicit width, inline-block fits content, and chars like
+   * narrow-no-break-space (U+202F) or East-Asian-Wide glyphs (●, ⚙) make
+   * the span shorter than the intended cell count, leaving terminal-bg
+   * "holes" on the right side of each row. */
   display: inline-block;
   height: var(--cell-h);
   line-height: var(--cell-h);

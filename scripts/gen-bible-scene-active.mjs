@@ -30,7 +30,7 @@ const trackOut = (s) => s.split("").join("\u202f");
 function buildSidebarRows(SIDEBAR_COLS) {
 	const rows = [];
 	const cell = (h) =>
-		`<span class="box-fill" style="background: var(--surface)">` +
+		`<span class="box-fill" style="background: var(--surface); width: ${SIDEBAR_COLS}ch">` +
 		padRight(h, SIDEBAR_COLS) +
 		`</span>`;
 	const blank = () => cell("");
@@ -141,7 +141,7 @@ function buildChatHTML(cols) {
 
 		const bodyRow = (h, len) => {
 			const padLen = innerCols - len;
-			return `<span class="fg-divider">\u2502</span><span class="box-fill"> ` + h + rep(" ", padLen) + ` </span><span class="fg-divider">\u2502</span>`;
+			return `<span class="fg-divider">\u2502</span><span class="box-fill" style="width: ${innerCols + 2}ch"> ` + h + rep(" ", padLen) + ` </span><span class="fg-divider">\u2502</span>`;
 		};
 		const blankRow = () => bodyRow("", 0);
 
@@ -185,7 +185,7 @@ function buildChatHTML(cols) {
 function buildInputFrameRows(cols) {
 	const innerCols = cols - 2;
 	const cell = (h) =>
-		`<span class="box-fill" style="background: var(--surface-recess)">` +
+		`<span class="box-fill" style="background: var(--surface-recess); width: ${cols}ch">` +
 		padRight(h, cols) +
 		`</span>`;
 	const top = `<span class="fg-divider">\u250c${rep("\u2500", innerCols)}\u2510</span>`;

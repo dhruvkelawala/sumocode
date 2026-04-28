@@ -27,15 +27,23 @@ const padRight = (s, n) => {
 // Active-session dot is STATIC accent (matches SUMOCODE wordmark color).
 // Agent state lives in the FOOTER dot, not here. Top-bar dot just marks
 // "this is the active session" — no state semantics.
-function buildTopBar({ cols, activeSession, recents = [], showTabs = true, showArchive = true }) {
+// Dot size togglable via /sumo:dotsize {small|medium|large} slash command.
+const DOT_GLYPHS = {
+	small:  "\u00b7", // · MIDDLE DOT
+	medium: "\u2022", // • BULLET
+	large:  "\u25cf", // ● BLACK CIRCLE
+};
+
+function buildTopBar({ cols, activeSession, recents = [], showTabs = true, showArchive = true, dotSize = "medium" }) {
 	const PAD = 1;
 	const dotClass = "fg-accent";
+	const dot = DOT_GLYPHS[dotSize];
 
 	// Left: SUMOCODE + active session marker
 	const left =
 		`<span class="fg-accent">SUMOCODE</span>` +
 		`<span class="fg-dim">  \u2551 </span>` +
-		`<span class="${dotClass}">\u2022</span>` +
+		`<span class="${dotClass}">${dot}</span>` +
 		`<span class="fg-fg"> ${activeSession}</span>` +
 		`<span class="fg-dim"> \u2551</span>`;
 
@@ -102,14 +110,30 @@ const standardSessions = {
 };
 
 const variants = [
-	// Default landscape (with 2 recent tabs + ARCHIVE)
+	// Three dot-size variants (togglable via /sumo:dotsize)
+	{
+		filename: "02-topbar-dot-small.html",
+		title: "Bible · Element 2 · Top bar · dot small",
+		label: "element 2 · top bar · dotsize small (·) · 160 cols",
+		blurb: "/sumo:dotsize small — minimal · MIDDLE DOT. understated.",
+		cols: 160,
+		spec: { activeSession: standardSessions.active, recents: standardSessions.recents, dotSize: "small" },
+	},
 	{
 		filename: "02-topbar-default.html",
-		title: "Bible · Element 2 · Top bar · default",
-		label: "element 2 · top bar · default landscape · 160 cols",
-		blurb: "active session dot is STATIC accent (session marker, not state). agent state lives in footer. SUMOCODE + ║ ● <session> ║ + 2 recent tabs + ARCHIVE + ⏵_  ⚙ icons.",
+		title: "Bible · Element 2 · Top bar · dot medium (default)",
+		label: "element 2 · top bar · dotsize medium (•) · 160 cols · DEFAULT",
+		blurb: "/sumo:dotsize medium (default) — • BULLET. balanced. STATIC accent (session marker, not state).",
 		cols: 160,
-		spec: { activeSession: standardSessions.active, recents: standardSessions.recents },
+		spec: { activeSession: standardSessions.active, recents: standardSessions.recents, dotSize: "medium" },
+	},
+	{
+		filename: "02-topbar-dot-large.html",
+		title: "Bible · Element 2 · Top bar · dot large",
+		label: "element 2 · top bar · dotsize large (●) · 160 cols",
+		blurb: "/sumo:dotsize large — ● BLACK CIRCLE. prominent.",
+		cols: 160,
+		spec: { activeSession: standardSessions.active, recents: standardSessions.recents, dotSize: "large" },
 	},
 	// First-boot / single-session
 	{

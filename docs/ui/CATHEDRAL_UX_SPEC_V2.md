@@ -211,6 +211,10 @@ SUMOCODE   ║ ● auth-flow-refactor ║   │ debug-balance-tx   │ index-iss
 
 - `SUMOCODE` accent left, always visible
 - `║ ● <session-name> ║` active session marker. **Dot is STATIC `accent`** (matches SUMOCODE wordmark color). It is a session marker, not a state indicator. Agent state lives in the FOOTER dot.
+- **Dot size togglable** via `/sumo:dotsize {small | medium | large}` slash command:
+  - `small`  → `·` MIDDLE DOT (most subtle)
+  - `medium` → `•` BULLET (default, balanced)
+  - `large`  → `●` BLACK CIRCLE (most prominent)
 - `│ <session-name>` recent sessions, dim, mtime-desc, max 5 visible
 - `│ ARCHIVE` opens session list overlay (full archive)
 - `[terminal]` = bash sub-shell overlay (`Ctrl+\`)
@@ -681,6 +685,7 @@ Each message renders as a self-contained closed-frame box:
 | `/sidebar [show\|hide]` | toggle sidebar visibility | 1 |
 | `/metrics [on\|off]` | toggle METRICS HUD in sidebar | 1 |
 | `/sumo:cursor [block\|bar\|thin]` | override cursor shape | 4 |
+| `/sumo:dotsize [small\|medium\|large]` | active-session dot size | 2 |
 | `/sumo:summaryModel <model-id>` | set model for session-name summarization | 2 |
 | `/sumo:tabs [show\|hide]` | toggle top-bar tabs | 2 |
 | `/sumo:bg [paint\|none]` | toggle OSC 11 bg painting | cross-cut |

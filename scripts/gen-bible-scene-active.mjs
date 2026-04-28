@@ -256,12 +256,13 @@ function buildFooterRow(cols, sidebarVisible) {
 // ─── Top bar placeholder ───────────────────────────────────────────────
 function buildTopBarPlaceholder(cols) {
 	let left, right;
+	// Nerd Font icons: \uf120 = terminal prompt, \u2699 = standard gear glyph
 	if (cols >= 80) {
 		left = `<span class="fg-accent">SUMOCODE</span><span class="fg-dim">  \u2551 \u25cf 019dd3d8 \u2551</span>`;
-		right = `<span class="fg-dim">ARCHIVE   [terminal]  [\u2699]</span>`;
+		right = `<span class="fg-dim">ARCHIVE   </span><span class="fg-fg">\uf120</span><span class="fg-dim">  </span><span class="fg-fg">\u2699</span>`;
 	} else {
 		left = `<span class="fg-accent">SUMOCODE</span><span class="fg-dim">  \u25cf</span>`;
-		right = `<span class="fg-dim">[\u2699]</span>`;
+		right = `<span class="fg-fg">\uf120</span><span class="fg-dim">  </span><span class="fg-fg">\u2699</span>`;
 	}
 	const leftLen = visibleLen(left);
 	const rightLen = visibleLen(right);

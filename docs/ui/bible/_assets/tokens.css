@@ -9,20 +9,23 @@
  *   - Cell metrics tuned for JetBrainsMono Nerd Font Mono 13pt (cmux/Ghostty)
  */
 
-/* Local font — works offline + reliable in headless Chrome */
+/* Local font — JetBrains Mono Nerd Font Mono includes the standard JetBrains
+ * Mono glyphs PLUS Nerd Font icon range (private use area) for terminal /
+ * git / file-system / brand icons. Cathedral mockups use Nerd Font icons
+ * (e.g. \uF120 for terminal) so we serve the merged variant. */
 @font-face {
   font-family: 'JetBrains Mono';
   font-style: normal;
   font-weight: 400;
   font-display: block;
-  src: url('./fonts/jetbrains-mono.woff2') format('woff2');
+  src: url('./fonts/jetbrains-mono-nerd.woff2') format('woff2');
 }
 @font-face {
   font-family: 'JetBrains Mono';
   font-style: normal;
   font-weight: 500;
   font-display: block;
-  src: url('./fonts/jetbrains-mono.woff2') format('woff2');
+  src: url('./fonts/jetbrains-mono-nerd.woff2') format('woff2');
 }
 
 :root {

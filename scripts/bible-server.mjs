@@ -101,17 +101,17 @@ ${cards}
     --divider: #5A4D3C;
   }
   html, body { margin: 0; padding: 0; background: var(--bg); color: var(--fg); font-family: 'JetBrains Mono', ui-monospace, Menlo, monospace; }
-  body { padding: 32px; }
-  h1 { font-size: 18px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--accent); }
-  h2 { font-size: 13px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--fg-dim); margin-top: 32px; border-bottom: 1px solid var(--divider); padding-bottom: 6px; }
-  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(680px, 1fr)); gap: 24px; margin-top: 16px; }
+  body { padding: 20px 24px; }
+  h1 { font-size: 14px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--accent); margin: 0 0 4px; }
+  h2 { font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--fg-dim); margin-top: 20px; margin-bottom: 6px; border-bottom: 1px solid var(--divider); padding-bottom: 4px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; margin-top: 12px; }
   .card { display: block; background: var(--surface); border: 1px solid var(--divider); padding: 0; text-decoration: none; color: var(--fg); transition: border-color 120ms; overflow: hidden; }
   .card:hover { border-color: var(--accent); }
-  .card-frame { background: var(--bg); display: flex; align-items: center; justify-content: center; padding: 16px; min-height: 100px; }
-  .card-frame img { max-width: 100%; height: auto; display: block; image-rendering: pixelated; }
-  .card-label { padding: 12px 16px; border-top: 1px solid var(--divider); font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--fg-dim); }
+  .card-frame { background: var(--bg); display: flex; align-items: center; justify-content: center; padding: 8px; height: 140px; overflow: hidden; }
+  .card-frame img { max-width: 100%; max-height: 100%; height: auto; display: block; image-rendering: pixelated; object-fit: contain; }
+  .card-label { padding: 6px 10px; border-top: 1px solid var(--divider); font-size: 9px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--fg-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
-  .meta { color: var(--fg-dim); font-size: 11px; letter-spacing: 0.08em; }
+  .meta { color: var(--fg-dim); font-size: 10px; letter-spacing: 0.05em; margin: 0 0 4px; }
 </style>
 </head>
 <body>

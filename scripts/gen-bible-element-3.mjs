@@ -15,9 +15,14 @@
 import { writeFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { ansToHTMLLines } from "./lib/ansi-to-html.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const out = resolve(repoRoot, "docs", "ui", "bible");
+
+// Real production cat from src/assets/sumo-face.ans (chafa-rendered from
+// Gemini-generated PNG). 12 lines, 24 cols wide. Truecolor SGR codes.
+const CAT_HTML_LINES = ansToHTMLLines(resolve(repoRoot, "src/assets/sumo-face.ans"));
 
 const rep = (ch, n) => ch.repeat(n);
 const visibleLen = (s) =>
@@ -39,25 +44,8 @@ const center = (s, n) => {
 };
 const row = (h) => padRight(h, 0); // joined later
 
-// ─── Cat ASCII (placeholder for runtime chafa render) ───────────────────
-// 24 cols × 14 rows. Stylized to evoke a cat face/body without committing
-// to detailed pixel art (runtime renders the actual chafa-converted photo).
-const CAT_LINES = [
-	"          ╱╲    ╱╲      ",
-	"         ╱  ╲__╱  ╲     ",
-	"        ╱          ╲    ",
-	"       │  ◉      ◉  │   ",
-	"       │            │   ",
-	"       │     ╳      │   ",
-	"        ╲   ╲_╱    ╱    ",
-	"         ╲        ╱     ",
-	"          ╲______╱      ",
-	"          ╱       ╲     ",
-	"         │         │    ",
-	"         │         │    ",
-	"          ╲__╱╲__╱      ",
-	"           ╱ ╲ ╲        ",
-];
+// Cat is the REAL production rendered output (truecolor chafa).
+// Loaded from src/assets/sumo-face.ans via CAT_HTML_LINES above.
 
 // ─── SUMOCODE wordmark (letter-spaced) ──────────────────────────────────
 const WORDMARK = "S U M O C O D E"; // 15 chars
@@ -82,9 +70,14 @@ const PLACEHOLDERS = [
 function buildSplash({ cols, rows: totalRows, placeholderIndex = 0 }) {
 	const lines = [];
 
-	// 1. Cat hero — center horizontally
-	const catRendered = CAT_LINES.map((line) =>
-		center(`<span class="fg-accent">${line}</span>`, cols),
+	// 1. Cat hero — center horizontally. Each line is already an HTML
+	// fragment with inline color spans (from chafa truecolor output).
+	// Visible width is 24 cells per the source asset.
+	const CAT_VISIBLE_W = 24;
+	const catLeftPad = Math.max(0, Math.floor((cols - CAT_VISIBLE_W) / 2));
+	const catRightPad = Math.max(0, cols - CAT_VISIBLE_W - catLeftPad);
+	const catRendered = CAT_HTML_LINES.map((line) =>
+		rep(" ", catLeftPad) + line + rep(" ", catRightPad),
 	);
 
 	// 2. Wordmark — center, accent
@@ -155,7 +148,7 @@ function buildSplash({ cols, rows: totalRows, placeholderIndex = 0 }) {
 
 	// Top padding
 	const contentRows =
-		CAT_LINES.length + // 14
+		CAT_HTML_LINES.length + // 12
 		2 + 1 + // wordmark
 		2 + QUOTE_LINES.length + // 3
 		2 + 3 + // input frame

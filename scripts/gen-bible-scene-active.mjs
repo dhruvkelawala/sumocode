@@ -275,10 +275,10 @@ function buildTopBarPlaceholder(cols) {
 // ─── Compose scene ──────────────────────────────────────────────────────
 function buildScene(variant) {
 	const { cols, rows: TERM_ROWS, sidebarCols, sidebarVisible } = variant;
-	// 2-col gutter:
-	//   landscape: between chat and sidebar
-	//   portrait : on the right of chat (left stays flush)
-	const GUTTER = 2;
+	// Gutter:
+	//   landscape: 2 cols between chat and sidebar (column separator)
+	//   portrait : 1 col on right of chat (matches chrome row padding)
+	const GUTTER = sidebarVisible ? 2 : 1;
 	const CHAT_COLS = sidebarVisible ? cols - sidebarCols - GUTTER : cols - GUTTER;
 
 	const sidebarRows = sidebarVisible ? buildSidebarRows(sidebarCols) : [];

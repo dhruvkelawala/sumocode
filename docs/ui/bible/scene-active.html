@@ -8,9 +8,8 @@
   .stage-blurb { max-width: 130ch; color: var(--foreground-dim); font-size: 11px; line-height: 1.6; padding: 0 8px; text-align: center; }
   .scene { display: grid; grid-template-rows: var(--cell-h) var(--cell-h) auto var(--cell-h) calc(var(--cell-h) * 3) var(--cell-h) var(--cell-h) var(--cell-h); }
   .scene .middle { display: grid; grid-template-columns: 130ch 30ch; grid-row: 3; min-height: 0; overflow: hidden; }
-  .scene .middle .chat-col { overflow: hidden; min-height: 0; }
-  .scene .middle .sidebar-col { overflow: hidden; min-height: 0; }
-  .scene .middle .chat-col pre, .scene .middle .sidebar-col pre { margin: 0; }
+  .scene .middle .chat-col, .scene .middle .sidebar-col { overflow: hidden; min-height: 0; }
+  .scene .middle pre { margin: 0; }
 </style>
 </head>
 <body>
@@ -46,8 +45,7 @@
 <span class="fg-divider">│</span><span class="box-fill">                                                                                                                                </span><span class="fg-divider">│</span>
 <span class="fg-divider">│</span><span class="box-fill"> <span class="fg-fg">All 22 tests pass.</span>                                                                                                             </span><span class="fg-divider">│</span>
 <span class="fg-divider">╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯</span></pre></div>
-      <div class="sidebar-col">
-        <pre class="grid"><span class="box-fill" style="background: var(--surface)">                              </span>
+      <div class="sidebar-col"><pre class="grid"><span class="box-fill" style="background: var(--surface)">                              </span>
 <span class="box-fill" style="background: var(--surface)">  <span class="fg-accent">REGISTRY</span>                    </span>
 <span class="box-fill" style="background: var(--surface)">  <span class="fg-dim">— v 1.0.0</span>                   </span>
 <span class="box-fill" style="background: var(--surface)">                              </span>
@@ -82,16 +80,15 @@
 <span class="box-fill" style="background: var(--surface)">                              </span>
 <span class="box-fill" style="background: var(--surface)">                              </span>
 <span class="box-fill" style="background: var(--surface)">                              </span>
-<span class="box-fill" style="background: var(--surface)">                              </span></pre>
-      </div>
+<span class="box-fill" style="background: var(--surface)">                              </span></pre></div>
     </div>
     <pre class="grid" style="grid-row: 4;"> </pre>
     <pre class="grid" style="grid-row: 5;"><span class="box-fill" style="background: var(--surface-recess)"><span class="fg-divider">┌──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐</span></span>
 <span class="box-fill" style="background: var(--surface-recess)"><span class="fg-divider">│</span> <span class="fg-accent">&gt;</span> <span class="cursor"> </span>                                                                                                                                                          <span class="fg-divider">│</span></span>
 <span class="box-fill" style="background: var(--surface-recess)"><span class="fg-divider">└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘</span></span></pre>
-    <pre class="grid" style="grid-row: 6;">                                                                                                                                 <span class="fg-dim">TAB · AGENTS  </span><span class="fg-accent">CTRL+/</span><span class="fg-dim"> · COMMANDS</span></pre>
+    <pre class="grid" style="grid-row: 6;">                                                                                                                                <span class="fg-dim">TAB · AGENTS  </span><span class="fg-accent">CTRL+/</span><span class="fg-dim"> · COMMANDS</span> </pre>
     <pre class="grid" style="grid-row: 7;"> </pre>
-    <pre class="grid" style="grid-row: 8;"><span class="fg-idle">●</span> <span class="fg-fg">READY</span><span class="fg-dim"> · </span><span class="fg-fg">claude-opus-4-7</span><span class="fg-dim"> · </span><span class="fg-fg">xhigh</span>                                                                                            <span class="fg-fg">sumo-deus</span> <span class="fg-dim">(main)</span><span class="fg-dim"> · </span><span class="fg-fg">42k/200k</span><span class="fg-dim"> · </span><span class="fg-fg">$0.42</span></pre>
+    <pre class="grid" style="grid-row: 8;"> <span class="fg-idle">●</span> <span class="fg-fg">READY</span><span class="fg-dim"> · </span><span class="fg-fg">claude-opus-4-7</span><span class="fg-dim"> · </span><span class="fg-fg">xhigh</span>                                                                                         <span class="fg-fg">sumo-deus</span><span class="fg-dim"> · </span><span class="fg-dim">(main)</span><span class="fg-dim"> · </span><span class="fg-fg">42k/200k</span><span class="fg-dim"> · </span><span class="fg-fg">$0.42</span> </pre>
   </div>
 </div>
 </body>

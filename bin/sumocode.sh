@@ -26,7 +26,22 @@ const bin = process.argv[1];
 try {
 	const resolved = fs.realpathSync(bin);
 	const dir = path.dirname(resolved);
-	for (const candidate of [path.join(dir, "main.js"), path.join(dir, "..", "dist", "main.js")]) {
+	const candidates = [path.join(dir, "main.js"), path.join(dir, "..", "dist", "main.js")];
+
+	// pnpm creates a shell shim at node_modules/.bin/pi that execs
+	// ../@mariozechner/pi-coding-agent/dist/cli.js. Resolve that target so we
+	// can inspect the adjacent dist/main.js for the Sumo constructor patch.
+	const source = fs.readFileSync(resolved, "utf8");
+	const marker = "@mariozechner/pi-coding-agent/dist/cli.js";
+	const markerIndex = source.indexOf(marker);
+	const shimTarget = markerIndex >= 0 ? source.slice(0, markerIndex + marker.length).match(/[^\"\s]+@mariozechner\/pi-coding-agent\/dist\/cli\.js$/)?.[0] : undefined;
+	if (shimTarget) {
+		const normalizedShimTarget = shimTarget.replace(/^\$basedir\//, "");
+		const cliPath = path.resolve(dir, normalizedShimTarget);
+		candidates.push(path.join(path.dirname(cliPath), "main.js"));
+	}
+
+	for (const candidate of candidates) {
 		if (fs.existsSync(candidate)) {
 			console.log(candidate);
 			process.exit(0);

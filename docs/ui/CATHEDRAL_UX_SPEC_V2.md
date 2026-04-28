@@ -23,6 +23,7 @@
 | 7 | Memory editor | not visually verified | needs verification + inline edit |
 | 8 | Command palette | broken in active state | 2 |
 | 9 | Tool pills | Pi default + theme only — needs cathedral framing | new |
+| 9a | Skill pill | NEW — Pi inline skill notice, cathedral-colored | new |
 | 10 | Code blocks | Pi default + theme only — needs full frame + gutter | new |
 | 11 | Question/Confirm UI (DIVINE QUERY) | NEW — Pi default ugly, needs cathedral modal | new |
 | 12 | Task tool sub-agent UI | NEW — task_tool works under hood, UI broken | new |
@@ -519,6 +520,45 @@ Width: 60% of terminal, min 50, max 80. Centered.
 
 ---
 
+### Element 9a — Skill pill
+
+**NEW.** Skills are Pi capability packs loaded on-demand via `/skill:name` or model-triggered progressive disclosure. Pi renders the invocation inline in the assistant turn; Cathedral keeps that interaction lightweight rather than turning it into a full tool card.
+
+**Locked direction**: V1 inline notice — Pi-default structure with cathedral colors.
+
+**Mockup**: `docs/ui/bible/skill-v1-inline.html`.
+
+**Visual contract**:
+
+```
+[skill] frontend-design (⌘O to expand)
+```
+
+Inside a SUMO message box:
+
+```
+╭ SUMO ─────────────────────────────────────────────── 11:42 ─╮
+│ Let me design that frontend with a fresh aesthetic.          │
+│                                                              │
+│ [skill] frontend-design (⌘O to expand)                       │
+│                                                              │
+│ Picking direction "brutally minimal" — generating now.       │
+╰──────────────────────────────────────────────────────────────╯
+```
+
+**Tokens**:
+- Brackets `[` `]`: `divider`
+- `skill` tag: `accent`
+- Skill name: `foreground`
+- Expand hint `(⌘O to expand)`: `foregroundDim`
+
+**Behavior**:
+- Collapsed by default, one row only.
+- `⌘O` / Pi expand action reveals the loaded `SKILL.md` content using Pi's existing expansion behavior, themed to Cathedral where possible.
+- No per-skill icon, no description preview, no tool-pill frame. The skill pill is metadata inside the assistant reasoning flow, not a tool execution result.
+
+---
+
 ### Element 10 — Code blocks
 
 **Mockup**: forthcoming `v4/10-code-block.png`.
@@ -790,6 +830,7 @@ Each row = one PR + one issue + visual approval.
 
 **Phase D — Element 9, 10, 12 (new design)**:
 9. Element 9 tool pills: cathedral framing for bash/edit/write/read
+9a. Element 9a skill pill: inline `[skill] name (⌘O to expand)` rendering inside SUMO boxes
 10. Element 10 code blocks: full frame + cathedral syntax colors + (optional) line gutter
 11. Element 12 task tool sub-agent UI
 
@@ -825,9 +866,9 @@ For the visual bible to lock and CI golden-image diff to engage:
 - [ ] Phase A (regressions) — 4 PRs, all green, visual approved
 - [ ] Phase B (chat + queries) — 2 PRs, all green, visual approved
 - [ ] Phase C (palette + top bar) — 2 PRs, all green, visual approved
-- [ ] Phase D (tool pills + code + task) — 3 PRs, all green, visual approved
+- [ ] Phase D (tool pills + skill pill + code + task) — 4 PRs, all green, visual approved
 - [ ] Phase E (approvals + selection + perf + memory) — 4 PRs, all green, visual approved
-- [ ] All 13 elements have a forthcoming `v4/*.png` mockup committed before implementation
+- [ ] All 13 elements + Element 9a skill pill have a forthcoming `v4/*.png` / bible mockup committed before implementation
 - [ ] T2 verification harness (golden-image diff) gates CI on every Phase A–E PR
 
 Phase F is post-acceptance polish.

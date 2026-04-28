@@ -95,42 +95,70 @@ Modal overlays sit centered. We cannot dim the underlying canvas in a terminal �
 
 ### Element 1 — Sidebar (active state only)
 
-**Mockup**: forthcoming `cathedral/v4/01-active-sidebar-context.png` and `02-active-sidebar-memory.png`.
+**LOCKED 2026-04-28** after grilling 4 directions (REGISTRY baseline / V1 DENSE / V2 EDITORIAL / V3 MARGINALIA).
+
+**Direction**: V2 EDITORIAL — magazine display with tracked-out section names, thick `━` underline rules, hero values, generous whitespace.
+
+**Mockups**: `docs/ui/bible/01-sidebar-{context,memory,context-over-budget,memory-empty,memory-daemon-down,with-metrics}.html` (6 state variants, all 30 cols).
 
 **Width**: **30 cols** (was 49).
 
 **Sub-tabs**: CONTEXT (`Ctrl+1`) + MEMORY (`Ctrl+2`). SCRIPTOR + FILES deferred to v2.
 
-**Chrome**:
+**Chrome (V2 EDITORIAL)**:
 
 ```
-                              REGISTRY
-                              v 1.0.0
+  REGISTRY
+  — v 1.0.0
 
-                              ◆ CONTEXT       ← Ctrl+1
-                              ▢ MEMORY        ← Ctrl+2
+  ◆ C O N T E X T
+  ▢ M E M O R Y
+  
+  ━━━━━━━━━━━━━━━━━━━━━━━━━━
 ```
 
-**CONTEXT sub-tab content**:
+Key design moves:
+- `REGISTRY` accent left-aligned, `— v 1.0.0` dim subtitle
+- Sub-tabs use **tracked-out** narrow-no-break-space typography (`C O N T E X T`) for editorial display feel
+- Heavy `━` rule (26 chars) separates header from content
+- All section labels (CONTEXT / SESSION / MCP / METRICS) use tracked-out style
+
+**CONTEXT sub-tab content (V2 EDITORIAL)**:
 
 ```
-                              ┌ ACTIVE_CONTEXT ─
-                              sumo-deus
-                              [██████░░░] 42k/200k
-                              session: 3.4M cumul
-                              $0.42 spent
+  sumo-deus
+  on main
 
-                              ┌ MCP ─
-                              ● github           idle
-                              ● stitch             ok
-                              ● context7        idle
-                              ● chrome-dev      idle
+  C O N T E X T
+  ▉▉▉▉▉░░░░░░░░░░░░░░░░░
+  42k / 200k
+
+  S E S S I O N
+  $0.42 · 3.4M cumul
+
+  ━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  M C P
+
+  ● github                  idle
+  ● stitch                    ok
+  ● context7              idle
+  ● chrome-dev          idle
 ```
 
-When context > 100% of model window, render `OVER` badge in `state.approval`:
+Key design moves:
+- Hero project name (`sumo-deus`) in foreground weight, `on <branch>` dim subtitle
+- `CONTEXT` tracked-out section label
+- Token bar uses block-fill `▉▉▉▉▉` (left-aligned, 22 cells) over `░` empty cells — sage when under, terracotta when OVER
+- Token ratio `42k / 200k` foreground+dim split
+- `SESSION` tracked-out label + cost+cumul on one line
+- `MCP` block: `●` state-color pill + name (left) + state text (right)
+
+**Over-budget state**: bar fills full + turns terracotta. Token row gets `OVER` suffix:
 ```
-                              [██████████] 3.4M/1.0M OVER
+  3.4M / 1.0M OVER
 ```
+(via fg-approve color)
 
 **MEMORY sub-tab content**:
 

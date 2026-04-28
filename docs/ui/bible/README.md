@@ -50,7 +50,7 @@ variants × 2-3 states each = ~50-70 mockups when complete.
 
 | Element | Status | Mockups |
 |---|---|---|
-| 1 — Sidebar | TODO | |
+| **1 — Sidebar** | ✅ LOCKED | V2 EDITORIAL: 6 states (context / memory / over-budget / empty / daemon-down / metrics) |
 | 2 — Top bar | TODO | |
 | 3 — Splash | TODO | |
 | **4 — Active input frame** | ✅ LOCKED | empty/typed × landscape/portrait (4) |
@@ -65,6 +65,18 @@ variants × 2-3 states each = ~50-70 mockups when complete.
 | **13 — Chat messages** | ✅ LOCKED | default (7A refined rounded) + portrait + 2 alts (sharp, dual) (4) |
 
 ## Locked decisions summary
+
+### Element 1 — Sidebar
+- LOCKED: V2 EDITORIAL direction (magazine display, tracked-out masthead)
+- Width 30 cols (down from 49)
+- Sub-tabs: CONTEXT (`Ctrl+1`) + MEMORY (`Ctrl+2`)
+- Tracked-out section names with narrow-no-break-space (`C O N T E X T`)
+- Thick `━` underline rules between sections
+- Hero project name (foreground weight) + `on <branch>` subtitle
+- Block-fill token bar (22 cells, sage / amber / terracotta by state)
+- All rows have uniform surface bg fill (no inter-section gap bug)
+- METRICS HUD opt-in via `/metrics on`, `/sidebar [show|hide]` to toggle
+- Backups: V3 MARGINALIA (manuscript notes) considered but rejected; V1 DENSE rejected first round
 
 ### Element 4 — Active input frame
 - No label above frame (drop `INPUT`/`SCRIPTOR INPUT`)

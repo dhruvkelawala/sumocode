@@ -261,7 +261,9 @@ function buildTopBarPlaceholder(cols) {
 		left = `<span class="fg-accent">SUMOCODE</span><span class="fg-dim">  \u2551 \u25cf 019dd3d8 \u2551</span>`;
 		right = `<span class="fg-dim">ARCHIVE   </span><span class="fg-fg">\uf489</span><span class="fg-dim">  </span><span class="fg-fg">\uf423</span>`;
 	} else {
-		left = `<span class="fg-accent">SUMOCODE</span><span class="fg-dim">  \u25cf</span>`;
+		// Portrait: same SUMOCODE + active-session marker as landscape, just no
+		// recent-session tabs and no ARCHIVE. Drop those entirely.
+		left = `<span class="fg-accent">SUMOCODE</span><span class="fg-dim">  \u2551 \u25cf 019dd3d8 \u2551</span>`;
 		right = `<span class="fg-fg">\uf489</span><span class="fg-dim">  </span><span class="fg-fg">\uf423</span>`;
 	}
 	const leftLen = visibleLen(left);

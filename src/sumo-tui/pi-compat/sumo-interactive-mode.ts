@@ -42,8 +42,8 @@ import { FrameScheduler } from "../runtime/frame-scheduler.js";
 import { TerminalController } from "../runtime/terminal-controller.js";
 import { ChatPager } from "../widgets/chat-pager.js";
 import { SIDEBAR_MIN_TERMINAL_WIDTH } from "../../sidebar.js";
-import { ChatViewportController } from "./chat-viewport-controller.js";
-export { textFromAgentMessage } from "./chat-viewport-controller.js";
+import { installChatViewportBridge } from "./chat-viewport-controller.js";
+export { installChatPagerBridge, textFromAgentMessage } from "./chat-viewport-controller.js";
 import { SumoExtensionUIAdapter, type SumoExtensionUIAdapterOptions } from "./extension-ui-adapter.js";
 import { createForeignAwareUIContext, type ForeignAwareUIOptions } from "./foreign-extension-warning.js";
 
@@ -81,7 +81,6 @@ function debugLog(message: string): void {
 const ANSI_PATTERN = /\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\)|_[^\x07]*(?:\x07|\x1b\\))/g;
 const FALSE_ENV_VALUES = new Set(["0", "false", "no", "off"]);
 const PI_NOISE_FILTER_INSTALLED = Symbol("sumo-tui.pi-noise-filter-installed");
-const CHAT_PAGER_BRIDGE_INSTALLED = Symbol("sumo-tui.chat-pager-bridge-installed");
 
 export const PI_NOISE_TEXT_PATTERNS: readonly RegExp[] = [
 	/\[Extension issues\]/i,
@@ -95,31 +94,6 @@ interface PiChatContainer {
 	clear?(): void;
 	invalidate?(): void;
 	render?(width: number): string[];
-}
-
-interface PiRenderableComponent {
-	render(width: number): string[];
-}
-
-interface PiTuiLike {
-	readonly terminal?: { readonly rows?: number; readonly columns?: number };
-	children?: unknown[];
-	requestRender?(force?: boolean): void;
-	addInputListener?(listener: (data: string) => { consume?: boolean; data?: string } | void): () => void;
-}
-
-interface UpstreamInteractiveLike {
-	ui?: PiTuiLike;
-	chatContainer?: PiChatContainer;
-	headerContainer?: PiRenderableComponent;
-	pendingMessagesContainer?: PiRenderableComponent;
-	statusContainer?: PiRenderableComponent;
-	widgetContainerAbove?: PiRenderableComponent;
-	widgetContainerBelow?: PiRenderableComponent;
-	editorContainer?: PiRenderableComponent;
-	footer?: PiRenderableComponent;
-	handleEvent?(event: unknown): unknown;
-	renderSessionContext?(sessionContext: unknown, options?: unknown): unknown;
 }
 
 interface FilterablePiChatContainer extends PiChatContainer {
@@ -482,74 +456,6 @@ export class SumoInteractiveRuntime {
 	}
 }
 
-interface BridgeInstalledUpstream extends UpstreamInteractiveLike {
-	[CHAT_PAGER_BRIDGE_INSTALLED]?: () => void;
-}
-
-export function installChatPagerBridge(upstream: unknown, runtime: SumoInteractiveRuntime): (() => void) | undefined {
-	const target = upstream as BridgeInstalledUpstream;
-	if (target[CHAT_PAGER_BRIDGE_INSTALLED]) return undefined;
-	const snapshot = runtime.getSnapshot();
-	if (!snapshot || !target.chatContainer) return undefined;
-	const bridge = new ChatViewportController(runtime, snapshot.chat, target);
-	const chatContainer = target.chatContainer;
-	const originalRender = chatContainer.render?.bind(chatContainer);
-	const originalClear = chatContainer.clear?.bind(chatContainer);
-	const originalInvalidate = chatContainer.invalidate?.bind(chatContainer);
-	const originalHandleEvent = target.handleEvent?.bind(target);
-	const originalRenderSessionContext = target.renderSessionContext?.bind(target);
-	const removeInputListener = target.ui?.addInputListener?.((data) => bridge.handleInput(data));
-
-	runtime.setExternalRenderControls({
-		// Pi's normal differential renderer optimizes line shifts with terminal
-		// scroll sequences. In SumoCode's hybrid shell, chat scroll changes only
-		// the left content while the sidebar/footer remain fixed; terminal scroll
-		// sequences move the whole screen and leave stale sidebar/chat fragments.
-		// Force Pi's full redraw path for retained chat updates until Sumo owns the
-		// entire root renderer.
-		scheduleRender: () => target.ui?.requestRender?.(true),
-		setStreamingMode: () => target.ui?.requestRender?.(true),
-	});
-	chatContainer.render = (width: number): string[] => bridge.render(width);
-	chatContainer.clear = (): void => {
-		bridge.clear();
-		originalClear?.();
-	};
-	chatContainer.invalidate = (): void => {
-		originalInvalidate?.();
-		runtime.requestRender();
-	};
-	if (originalHandleEvent) {
-		target.handleEvent = async (event: unknown): Promise<unknown> => {
-			bridge.handleAgentEvent(event);
-			return originalHandleEvent(event);
-		};
-	}
-	if (originalRenderSessionContext) {
-		target.renderSessionContext = (sessionContext: unknown, options?: unknown): unknown => {
-			bridge.renderSessionContext(sessionContext);
-			return originalRenderSessionContext(sessionContext, options);
-		};
-	}
-
-	const cleanup = (): void => {
-		removeInputListener?.();
-		runtime.setExternalRenderControls(undefined);
-		if (originalRender) chatContainer.render = originalRender;
-		else delete chatContainer.render;
-		if (originalClear) chatContainer.clear = originalClear;
-		else delete chatContainer.clear;
-		if (originalInvalidate) chatContainer.invalidate = originalInvalidate;
-		else delete chatContainer.invalidate;
-		if (originalHandleEvent) target.handleEvent = originalHandleEvent;
-		if (originalRenderSessionContext) target.renderSessionContext = originalRenderSessionContext;
-		delete target[CHAT_PAGER_BRIDGE_INSTALLED];
-	};
-	target[CHAT_PAGER_BRIDGE_INSTALLED] = cleanup;
-	debugLog("wired upstream Pi chatContainer through ChatPager");
-	return cleanup;
-}
-
 /**
  * Small Phase 4 fork boundary for Pi 0.70.x.
  *
@@ -633,7 +539,7 @@ export class SumoInteractiveMode {
 
 	private configureUpstreamBeforeInit(upstream: InteractiveMode): void {
 		if (shouldHidePiNoise()) installPiNoiseFilter(upstream, this.piNoiseFilterState);
-		if (!this.chatPagerBridgeCleanup) this.chatPagerBridgeCleanup = installChatPagerBridge(upstream, this.retainedRuntime);
+		if (!this.chatPagerBridgeCleanup) this.chatPagerBridgeCleanup = installChatViewportBridge(upstream, this.retainedRuntime);
 		if (shouldForceHardwareCursor()) forceHardwareCursorVisible(upstream);
 	}
 

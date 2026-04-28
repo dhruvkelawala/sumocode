@@ -5,15 +5,26 @@ import { logDiagnostic } from "../runtime/diagnostics.js";
 import { ChatPager } from "../widgets/chat-pager.js";
 import { SIDEBAR_MIN_TERMINAL_WIDTH, SIDEBAR_WIDTH } from "../../sidebar.js";
 
+const CHAT_VIEWPORT_BRIDGE_INSTALLED = Symbol("sumo-tui.chat-viewport-bridge-installed");
+
 interface PiRenderableComponent {
 	render(width: number): string[];
 }
 
+interface PiChatContainer {
+	clear?(): void;
+	invalidate?(): void;
+	render?(width: number): string[];
+}
+
+interface PiTuiLike {
+	readonly terminal?: { readonly rows?: number; readonly columns?: number };
+	requestRender?(force?: boolean): void;
+	addInputListener?(listener: (data: string) => { consume?: boolean; data?: string } | void): () => void;
+}
+
 export interface ChatViewportHost {
-	readonly ui?: {
-		readonly terminal?: { readonly rows?: number; readonly columns?: number };
-		requestRender?(force?: boolean): void;
-	};
+	readonly ui?: PiTuiLike;
 	readonly headerContainer?: PiRenderableComponent;
 	readonly pendingMessagesContainer?: PiRenderableComponent;
 	readonly statusContainer?: PiRenderableComponent;
@@ -29,6 +40,18 @@ export interface ChatViewportRuntime {
 	requestRender(): void;
 	setEmptyChatQuoteState(state: { active: boolean; userMessageCount: number }): void;
 	noteUserMessage(): void;
+}
+
+interface ChatViewportBridgeRuntime extends ChatViewportRuntime {
+	getSnapshot(): { readonly chat: ChatPager } | undefined;
+	setExternalRenderControls(controls: { scheduleRender(): void; setStreamingMode(enabled: boolean): void } | undefined): void;
+}
+
+interface ChatViewportBridgeHost extends ChatViewportHost {
+	chatContainer?: PiChatContainer;
+	handleEvent?(event: unknown): unknown;
+	renderSessionContext?(sessionContext: unknown, options?: unknown): unknown;
+	[CHAT_VIEWPORT_BRIDGE_INSTALLED]?: () => void;
 }
 
 interface MouseInputDiagnosticsFields {
@@ -365,3 +388,68 @@ export class ChatViewportController {
 		return Math.max(1, terminalRows - chromeRows);
 	}
 }
+
+export function installChatViewportBridge(upstream: unknown, runtime: ChatViewportBridgeRuntime): (() => void) | undefined {
+	const target = upstream as ChatViewportBridgeHost;
+	if (target[CHAT_VIEWPORT_BRIDGE_INSTALLED]) return undefined;
+	const snapshot = runtime.getSnapshot();
+	if (!snapshot || !target.chatContainer) return undefined;
+	const controller = new ChatViewportController(runtime, snapshot.chat, target);
+	const chatContainer = target.chatContainer;
+	const originalRender = chatContainer.render?.bind(chatContainer);
+	const originalClear = chatContainer.clear?.bind(chatContainer);
+	const originalInvalidate = chatContainer.invalidate?.bind(chatContainer);
+	const originalHandleEvent = target.handleEvent?.bind(target);
+	const originalRenderSessionContext = target.renderSessionContext?.bind(target);
+	const removeInputListener = target.ui?.addInputListener?.((data) => controller.handleInput(data));
+
+	runtime.setExternalRenderControls({
+		// Pi's normal differential renderer optimizes line shifts with terminal
+		// scroll sequences. In SumoCode's hybrid shell, chat scroll changes only
+		// the left content while the sidebar/footer remain fixed; terminal scroll
+		// sequences move the whole screen and leave stale sidebar/chat fragments.
+		// Force Pi's full redraw path for retained chat updates until Sumo owns the
+		// entire root renderer.
+		scheduleRender: () => target.ui?.requestRender?.(true),
+		setStreamingMode: () => target.ui?.requestRender?.(true),
+	});
+	chatContainer.render = (width: number): string[] => controller.render(width);
+	chatContainer.clear = (): void => {
+		controller.clear();
+		originalClear?.();
+	};
+	chatContainer.invalidate = (): void => {
+		originalInvalidate?.();
+		runtime.requestRender();
+	};
+	if (originalHandleEvent) {
+		target.handleEvent = async (event: unknown): Promise<unknown> => {
+			controller.handleAgentEvent(event);
+			return originalHandleEvent(event);
+		};
+	}
+	if (originalRenderSessionContext) {
+		target.renderSessionContext = (sessionContext: unknown, options?: unknown): unknown => {
+			controller.renderSessionContext(sessionContext);
+			return originalRenderSessionContext(sessionContext, options);
+		};
+	}
+
+	const cleanup = (): void => {
+		removeInputListener?.();
+		runtime.setExternalRenderControls(undefined);
+		if (originalRender) chatContainer.render = originalRender;
+		else delete chatContainer.render;
+		if (originalClear) chatContainer.clear = originalClear;
+		else delete chatContainer.clear;
+		if (originalInvalidate) chatContainer.invalidate = originalInvalidate;
+		else delete chatContainer.invalidate;
+		if (originalHandleEvent) target.handleEvent = originalHandleEvent;
+		if (originalRenderSessionContext) target.renderSessionContext = originalRenderSessionContext;
+		delete target[CHAT_VIEWPORT_BRIDGE_INSTALLED];
+	};
+	target[CHAT_VIEWPORT_BRIDGE_INSTALLED] = cleanup;
+	return cleanup;
+}
+
+export const installChatPagerBridge = installChatViewportBridge;

@@ -35,7 +35,7 @@ function buildTopBar({ cols, activeSession, recents = [], showTabs = true, showA
 	const left =
 		`<span class="fg-accent">SUMOCODE</span>` +
 		`<span class="fg-dim">  \u2551 </span>` +
-		`<span class="${dotClass}">\u25cf</span>` +
+		`<span class="${dotClass}">\u2022</span>` +
 		`<span class="fg-fg"> ${activeSession}</span>` +
 		`<span class="fg-dim"> \u2551</span>`;
 

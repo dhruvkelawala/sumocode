@@ -30,7 +30,12 @@
   --background:        #1A1511;
   --surface:           #241D17;
   --surface-recess:    #120D0A;
-  --surface-lifted:    #3A342F;
+  /* SURFACE-LIFTED: locked at #3A342F in v1 spec but reads as cool grey on
+   * dark monitor. Bumped to #3D3024 in bible — warmer (more orange-amber)
+   * to read as 'aged parchment lifted above the surface' rather than grey.
+   * Will propagate this to runtime palette + cathedral.json after we lock
+   * Element 13. Original was: #3A342F. */
+  --surface-lifted:    #3D3024;
   /* DIVIDER: locked at #3A2F25 in runtime palette. For mockup legibility
    * (PNG export viewed on bright monitor / IDE), bump contrast slightly. The
    * subtle aesthetic is preserved in actual terminal use where ambient light

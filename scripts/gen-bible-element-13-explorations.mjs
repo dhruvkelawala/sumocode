@@ -509,19 +509,32 @@ function buildBoxedGeneric({ messages, cols, corners, bgFor, spacingBetweenBoxes
 		const msg = messages[i];
 		const rows = [];
 
-		let roleHTML, roleVisLen;
+		// Top border: ╭ <ROLE> <dashes> [<time>] <corner-tr>
+		// USER:  ╭ USER ───────...──────╮            (no metadata)
+		// SUMO:  ╭ SUMO ───────...─ 11:42 ╮        (time right-aligned)
+		let leftPart, leftLen, rightPart, rightLen;
 		if (msg.role === "USER") {
-			roleHTML = `<span class="fg-fg">USER</span>`;
-			roleVisLen = 4;
+			leftPart =
+				`<span class="fg-divider">${corners.tl} </span>` +
+				`<span class="fg-fg">USER</span> `;
+			leftLen = 7; // tl + sp + USER(4) + sp
+			rightPart = `<span class="fg-divider">${corners.tr}</span>`;
+			rightLen = 1;
 		} else {
-			const metaText = ` · ${msg.model} · ${msg.time}`;
-			roleHTML = `<span class="fg-accent">SUMO</span><span class="fg-dim">${metaText}</span>`;
-			roleVisLen = 4 + metaText.length;
+			leftPart =
+				`<span class="fg-divider">${corners.tl} </span>` +
+				`<span class="fg-accent">SUMO</span> `;
+			leftLen = 7; // tl + sp + SUMO(4) + sp
+			rightPart =
+				` <span class="fg-dim">${msg.time}</span> ` +
+				`<span class="fg-divider">${corners.tr}</span>`;
+			rightLen = 1 + msg.time.length + 1 + 1; // sp + time + sp + tr
 		}
-		const topDashLen = cols - 4 - roleVisLen;
+		const topDashLen = cols - leftLen - rightLen;
 		rows.push(
-			`<span class="fg-divider">${corners.tl} </span>` + roleHTML + ` ` +
-			`<span class="fg-divider">${rep(corners.h, topDashLen)}${corners.tr}</span>`,
+			leftPart +
+			`<span class="fg-divider">${rep(corners.h, topDashLen)}</span>` +
+			rightPart,
 		);
 
 		const bodyRow = (contentHTML, contentLen) => {

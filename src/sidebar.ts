@@ -346,7 +346,13 @@ export function installSidebar(pi: ExtensionAPI): void {
 		memoryCache = createSidebarMemoryCache(createRemnicMemoryClient());
 
 		ctx.ui.setWidget("sumocode-sidebar-dock", (tui): Component & { dispose(): void } => {
-			requestRender = () => tui.requestRender();
+			// Keep the sidebar out of Pi's normal vertical line flow. The previous
+			// StaticSidebarDock wrapped header/chat/status and made sidebar rows part of
+			// the scrollback snapshot; with long chats, Pi's diff/scroll optimizations
+			// could smear or duplicate sidebar rows. A non-capturing overlay is
+			// screen-relative, so chat can scroll independently while the shell stays
+			// pinned.
+			requestRender = () => tui.requestRender(true);
 			activeMetricsHud?.stop();
 			const metricsHud = new MetricsHud();
 			activeMetricsHud = metricsHud;
@@ -362,7 +368,15 @@ export function installSidebar(pi: ExtensionAPI): void {
 					);
 				},
 			};
-			const restore = dockStaticSidebar(tui, sidebarComponent, () => sessionHasMessages(ctx));
+			const overlay = tui.showOverlay(sidebarComponent, {
+				width: SIDEBAR_WIDTH,
+				anchor: "top-right",
+				margin: { top: 1, right: 0, bottom: 4, left: 0 },
+				maxHeight: "90%",
+				nonCapturing: true,
+				visible: (termWidth) => termWidth >= SIDEBAR_MIN_TERMINAL_WIDTH && sessionHasMessages(ctx),
+			});
+			tui.requestRender(true);
 			return {
 				invalidate(): void {},
 				render(): string[] {
@@ -371,7 +385,7 @@ export function installSidebar(pi: ExtensionAPI): void {
 				dispose(): void {
 					metricsHud.stop();
 					if (activeMetricsHud === metricsHud) activeMetricsHud = undefined;
-					restore?.();
+					overlay.hide();
 					requestRender = undefined;
 				},
 			};

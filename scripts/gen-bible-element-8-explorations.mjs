@@ -123,7 +123,7 @@ function buildScriptorium({ selectedIdx }) {
 		const labelClass = focused ? "fg-fg" : "fg-dim";
 		const valueClass = focused ? "fg-fg" : "fg-dim";
 		const markerClass = focused ? "fg-accent" : "fg-divider";
-		const marker = focused ? "❧" : "·"; // ❧ vs ·
+		const marker = focused ? "❈" : "·"; // ❈ heavy sparkle vs ·
 
 		const labelStr =
 			`     <span class="${markerClass}">${marker}</span>   ` +

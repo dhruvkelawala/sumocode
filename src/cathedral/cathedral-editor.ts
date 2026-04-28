@@ -184,12 +184,9 @@ class CathedralEditor extends CustomEditor {
 			return wrapRow(row, width);
 		};
 
-		// p-4 mirror: one blank-recess padding row above + below the content
-		// rows, so the inside of the frame has visible breathing room like the
-		// Stitch HTML mockup.
+		const result: string[] = [renderTopBorder(width, label)];
 		const paddingRow = wrapRow("", width);
-
-		const result: string[] = [renderTopBorder(width, label), paddingRow];
+		if (splash) result.push(paddingRow);
 
 		const lastContentIdx = bottomIdx === -1 ? innerRows.length : bottomIdx;
 		let contentSeen = false;
@@ -197,7 +194,10 @@ class CathedralEditor extends CustomEditor {
 			result.push(renderContent(innerRows[i]!, !contentSeen));
 			contentSeen = true;
 		}
-		result.push(paddingRow);
+		// Keep the roomy mockup padding for the splash empty state, but avoid
+		// adding active-state bottom padding. In active chat, every extra editor
+		// row steals vertical space from chat and makes the shell feel bouncy.
+		if (splash) result.push(paddingRow);
 		result.push(renderBottomBorder(width));
 
 		// Autocomplete rows after Pi's bottom border — passed through as-is

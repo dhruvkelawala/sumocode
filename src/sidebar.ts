@@ -113,7 +113,12 @@ export class StaticSidebarDock implements Component {
 		const mainWidth = Math.max(1, width - SIDEBAR_WIDTH - STATIC_SIDEBAR_GUTTER);
 		const mainLines = renderComponents(this.mainComponents, mainWidth);
 		const sidebarLines = this.sidebarComponent.render(SIDEBAR_WIDTH);
-		const rowCount = Math.max(mainLines.length, sidebarLines.length);
+		// The dock is part of Pi's vertical root flow above the editor/footer. Its
+		// height must be dictated by the main column (header + retained chat +
+		// status), not by sidebar content. If the sidebar is taller, growing the
+		// dock pushes the input/footer down and makes the whole layout bounce during
+		// chat scroll/full redraw. Treat the sidebar as clipped to the main column.
+		const rowCount = mainLines.length;
 		const lines: string[] = [];
 
 		// Pre-build a surface-bg-painted blank sidebar row so rows where the

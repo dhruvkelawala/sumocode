@@ -105,6 +105,19 @@ describe("StaticSidebarDock", () => {
 		expect(right.renderCalls).toEqual([]);
 		expect(lines).toEqual(["full width chat"]);
 	});
+
+	it("clips tall sidebar content to the main column height so editor/footer stay pinned", () => {
+		const left = component(["chat row"]);
+		const right = component(["SIDE 1", "SIDE 2", "SIDE 3"]);
+		const dock = new StaticSidebarDock([left.node], right.node, () => true);
+
+		const lines = dock.render(160).map(stripAnsi);
+
+		expect(lines).toHaveLength(1);
+		expect(lines[0]).toContain("chat row");
+		expect(lines[0]).toContain("SIDE 1");
+		expect(lines[0]).not.toContain("SIDE 2");
+	});
 });
 
 describe("dockStaticSidebar", () => {

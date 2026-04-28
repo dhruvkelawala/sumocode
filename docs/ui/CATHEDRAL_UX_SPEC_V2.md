@@ -210,8 +210,7 @@ SUMOCODE   ║ ● auth-flow-refactor ║   │ debug-balance-tx   │ index-iss
 ```
 
 - `SUMOCODE` accent left, always visible
-- `║ ● <session-name> ║` active session marker. Dot color matches **agent state**:
-  - idle = `state.idle` sage, thinking = `state.thinking` amber, tool = `state.tool` blue, approval = `state.approval` terracotta, learning = `state.learning` violet
+- `║ ● <session-name> ║` active session marker. **Dot is STATIC `accent`** (matches SUMOCODE wordmark color). It is a session marker, not a state indicator. Agent state lives in the FOOTER dot.
 - `│ <session-name>` recent sessions, dim, mtime-desc, max 5 visible
 - `│ ARCHIVE` opens session list overlay (full archive)
 - `[terminal]` = bash sub-shell overlay (`Ctrl+\`)

@@ -258,12 +258,12 @@ function buildTopBarPlaceholder(cols) {
 	let left, right;
 	// Nerd Font icons: \uf489 = terminal prompt, \uf423 = nf-oct-gear (Octicons)
 	if (cols >= 80) {
-		left = `<span class="fg-accent">SUMOCODE</span><span class="fg-dim">  \u2551 \u25cf 019dd3d8 \u2551</span>`;
+		left = `<span class="fg-accent">SUMOCODE</span><span class="fg-dim">  \u2551 </span><span class="fg-accent">\u25cf</span><span class="fg-dim"> 019dd3d8 \u2551</span>`;
 		right = `<span class="fg-dim">ARCHIVE   </span><span class="fg-fg">\uf489</span><span class="fg-dim">  </span><span class="fg-fg">\uf423</span>`;
 	} else {
 		// Portrait: same SUMOCODE + active-session marker as landscape, just no
 		// recent-session tabs and no ARCHIVE. Drop those entirely.
-		left = `<span class="fg-accent">SUMOCODE</span><span class="fg-dim">  \u2551 \u25cf 019dd3d8 \u2551</span>`;
+		left = `<span class="fg-accent">SUMOCODE</span><span class="fg-dim">  \u2551 </span><span class="fg-accent">\u25cf</span><span class="fg-dim"> 019dd3d8 \u2551</span>`;
 		right = `<span class="fg-fg">\uf489</span><span class="fg-dim">  </span><span class="fg-fg">\uf423</span>`;
 	}
 	const leftLen = visibleLen(left);

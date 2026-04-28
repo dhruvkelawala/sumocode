@@ -24,17 +24,12 @@ const padRight = (s, n) => {
 	return need > 0 ? s + rep(" ", need) : s;
 };
 
-const STATE_CLASS = {
-	idle:      "fg-idle",
-	thinking:  "fg-think",
-	tool:      "fg-tool",
-	approval:  "fg-approve",
-	learning:  "fg-learn",
-};
-
-function buildTopBar({ cols, state, activeSession, recents = [], showTabs = true, showArchive = true }) {
+// Active-session dot is STATIC accent (matches SUMOCODE wordmark color).
+// Agent state lives in the FOOTER dot, not here. Top-bar dot just marks
+// "this is the active session" — no state semantics.
+function buildTopBar({ cols, activeSession, recents = [], showTabs = true, showArchive = true }) {
 	const PAD = 1;
-	const dotClass = STATE_CLASS[state];
+	const dotClass = "fg-accent";
 
 	// Left: SUMOCODE + active session marker
 	const left =
@@ -107,64 +102,32 @@ const standardSessions = {
 };
 
 const variants = [
-	// 5 state variants (landscape, with recent tabs)
+	// Default landscape (with 2 recent tabs + ARCHIVE)
 	{
-		filename: "02-topbar-idle.html",
-		title: "Bible · Element 2 · Top bar · IDLE",
-		label: "element 2 · top bar · IDLE state · 160 cols",
-		blurb: "active session dot in sage (idle / READY). full landscape with 2 recent session tabs and ARCHIVE.",
+		filename: "02-topbar-default.html",
+		title: "Bible · Element 2 · Top bar · default",
+		label: "element 2 · top bar · default landscape · 160 cols",
+		blurb: "active session dot is STATIC accent (session marker, not state). agent state lives in footer. SUMOCODE + ║ ● <session> ║ + 2 recent tabs + ARCHIVE + ⏵_  ⚙ icons.",
 		cols: 160,
-		spec: { state: "idle", activeSession: standardSessions.active, recents: standardSessions.recents },
+		spec: { activeSession: standardSessions.active, recents: standardSessions.recents },
 	},
-	{
-		filename: "02-topbar-thinking.html",
-		title: "Bible · Element 2 · Top bar · THINKING",
-		label: "element 2 · top bar · THINKING state · 160 cols",
-		blurb: "active session dot in amber (thinking / MEDITATING).",
-		cols: 160,
-		spec: { state: "thinking", activeSession: standardSessions.active, recents: standardSessions.recents },
-	},
-	{
-		filename: "02-topbar-tool.html",
-		title: "Bible · Element 2 · Top bar · TOOL",
-		label: "element 2 · top bar · TOOL state · 160 cols",
-		blurb: "active session dot in blue (tool running / ILLUMINATING).",
-		cols: 160,
-		spec: { state: "tool", activeSession: standardSessions.active, recents: standardSessions.recents },
-	},
-	{
-		filename: "02-topbar-approval.html",
-		title: "Bible · Element 2 · Top bar · APPROVAL",
-		label: "element 2 · top bar · APPROVAL state · 160 cols",
-		blurb: "active session dot in terracotta (approval needed / DEFERRING).",
-		cols: 160,
-		spec: { state: "approval", activeSession: standardSessions.active, recents: standardSessions.recents },
-	},
-	{
-		filename: "02-topbar-learning.html",
-		title: "Bible · Element 2 · Top bar · LEARNING",
-		label: "element 2 · top bar · LEARNING state · 160 cols",
-		blurb: "active session dot in violet (memory write / INSCRIBING).",
-		cols: 160,
-		spec: { state: "learning", activeSession: standardSessions.active, recents: standardSessions.recents },
-	},
-	// Without recents (fewer sessions)
+	// First-boot / single-session
 	{
 		filename: "02-topbar-no-recents.html",
 		title: "Bible · Element 2 · Top bar · no recent tabs",
 		label: "element 2 · top bar · no recent sessions · 160 cols",
 		blurb: "first-boot or single-session state. just SUMOCODE + active marker + ARCHIVE.",
 		cols: 160,
-		spec: { state: "idle", activeSession: "first-session", recents: [] },
+		spec: { activeSession: "first-session", recents: [] },
 	},
-	// Tabs hidden (`/sumo:tabs hide`)
+	// Tabs hidden via /sumo:tabs hide
 	{
 		filename: "02-topbar-tabs-hidden.html",
 		title: "Bible · Element 2 · Top bar · tabs hidden",
 		label: "element 2 · top bar · /sumo:tabs hide · 160 cols",
 		blurb: "minimal mode. just SUMOCODE + active session + icons. activated via /sumo:tabs hide.",
 		cols: 160,
-		spec: { state: "idle", activeSession: standardSessions.active, recents: [], showTabs: false, showArchive: false },
+		spec: { activeSession: standardSessions.active, recents: [], showTabs: false, showArchive: false },
 	},
 	// Portrait narrow
 	{
@@ -173,7 +136,7 @@ const variants = [
 		label: "element 2 · top bar · portrait 60 cols",
 		blurb: "narrow form. drops recent tabs and ARCHIVE. SUMOCODE + active session + icons only.",
 		cols: 60,
-		spec: { state: "idle", activeSession: "019dd3d8", recents: [], showTabs: false, showArchive: false },
+		spec: { activeSession: "019dd3d8", recents: [], showTabs: false, showArchive: false },
 	},
 ];
 

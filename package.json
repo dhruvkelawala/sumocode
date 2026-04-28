@@ -51,7 +51,8 @@
     "test": "vitest run",
     "test:integration": "vitest run test/integration/",
     "vitest": "vitest",
-    "visual": "node scripts/visual.mjs"
+    "visual": "node scripts/visual.mjs",
+    "test:visual:real-runtime": "node scripts/visual-real-runtime.mjs"
   },
   "dependencies": {
     "@mariozechner/jiti": "^2.6.5",

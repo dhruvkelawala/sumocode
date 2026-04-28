@@ -184,7 +184,7 @@ export function installFooter(pi: ExtensionAPI): void {
 				},
 				invalidate(): void {},
 				render(width: number): string[] {
-					return [formatFooterLine(createSnapshot(ctx, footerData.getGitBranch(), state), width)];
+					return [formatFooterLine(createSnapshot(pi, ctx, footerData.getGitBranch(), state), width)];
 				},
 			};
 		});
@@ -197,7 +197,7 @@ export function installFooter(pi: ExtensionAPI): void {
 	pi.on("agent_end", () => setState("idle"));
 }
 
-function createSnapshot(ctx: ExtensionContext, branch: string | null, state: SumoCodeState): FooterSnapshot {
+function createSnapshot(pi: ExtensionAPI, ctx: ExtensionContext, branch: string | null, state: SumoCodeState): FooterSnapshot {
 	const usage = getSessionUsage(ctx);
 
 	return {
@@ -208,7 +208,7 @@ function createSnapshot(ctx: ExtensionContext, branch: string | null, state: Sum
 		costUsd: usage.cost,
 		state,
 		modelId: ctx.model?.id ?? "no-model",
-		thinkingLevel: getThinkingLevel(ctx),
+		thinkingLevel: getThinkingLevel(pi, ctx),
 		isSplash: !sessionHasMessages(ctx),
 	};
 }
@@ -221,17 +221,30 @@ function sessionHasMessages(ctx: ExtensionContext): boolean {
 	}
 }
 
-function getThinkingLevel(ctx: ExtensionContext): ThinkingLevel {
-	// Pi 0.70.2+ exposes thinking level via the public extension API:
-	// `ctx.getThinkingLevel(): ThinkingLevel` (see
-	// node_modules/@mariozechner/pi-coding-agent/dist/core/extensions/types.d.ts:849).
-	// Earlier versions only had a non-existent `ctx.thinkingLevel` property
-	// which silently fell back to "medium" — that's the bug we're fixing.
+function getThinkingLevel(pi: ExtensionAPI, ctx: ExtensionContext): ThinkingLevel {
+	// Pi 0.70.2 exposes the thinking-level getter on `ExtensionAPI` (the `pi`
+	// parameter of installFooter), NOT on `ExtensionContext` (`ctx`). The
+	// canonical reference is
+	// `node_modules/@mariozechner/pi-coding-agent/dist/core/extensions/types.d.ts:849`
+	// which lives inside `interface ExtensionAPI` (line 768).
+	//
+	// PR #60 mistakenly probed `ctx.getThinkingLevel()` and silently fell back
+	// to "medium" because that property doesn't exist on ctx. This call site
+	// fixes the lookup to use `pi.getThinkingLevel()`.
 	try {
-		const getter = (ctx as { getThinkingLevel?: () => ThinkingLevel }).getThinkingLevel;
-		if (typeof getter === "function") return getter.call(ctx);
+		const piGetter = (pi as { getThinkingLevel?: () => ThinkingLevel }).getThinkingLevel;
+		if (typeof piGetter === "function") return piGetter.call(pi);
 	} catch {
-		// fall through to legacy probe
+		// fall through
+	}
+	// Legacy probe (kept so older Pi versions / mocked contexts still work).
+	const ctxGetter = (ctx as { getThinkingLevel?: () => ThinkingLevel }).getThinkingLevel;
+	if (typeof ctxGetter === "function") {
+		try {
+			return ctxGetter.call(ctx);
+		} catch {
+			// fall through
+		}
 	}
 	const legacy = (ctx as { thinkingLevel?: ThinkingLevel }).thinkingLevel;
 	return legacy ?? "medium";

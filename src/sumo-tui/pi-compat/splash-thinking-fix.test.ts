@@ -14,13 +14,14 @@ describe("UX_SPEC §0 — splash takes no-messages slot, not empty-chat-quote (#
 	});
 });
 
-describe("Footer thinking level reads ctx.getThinkingLevel() (#60)", () => {
-	it("uses Pi 0.70.2 public getter when present, not the legacy property fallback", () => {
+describe("Footer thinking level reads pi.getThinkingLevel() (#62)", () => {
+	it("uses Pi 0.70.2 public getter on ExtensionAPI when present", () => {
 		const fs = require("node:fs") as typeof import("node:fs");
 		const path = new URL("../../footer.ts", import.meta.url);
 		const source = fs.readFileSync(path, "utf8") as string;
 		const fnSlice = source.slice(source.indexOf("function getThinkingLevel"), source.indexOf("function getSessionUsage"));
 		expect(fnSlice).toContain("getThinkingLevel?: () => ThinkingLevel");
-		expect(fnSlice).toContain("getter.call(ctx)");
+		// PR #62 corrected the lookup target from ctx → pi (ExtensionAPI).
+		expect(fnSlice).toContain("piGetter.call(pi)");
 	});
 });

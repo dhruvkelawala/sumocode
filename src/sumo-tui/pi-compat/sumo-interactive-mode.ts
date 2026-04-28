@@ -44,7 +44,7 @@ import { FrameScheduler } from "../runtime/frame-scheduler.js";
 import { logDiagnostic } from "../runtime/diagnostics.js";
 import { TerminalController } from "../runtime/terminal-controller.js";
 import { ChatPager } from "../widgets/chat-pager.js";
-import { SIDEBAR_MIN_TERMINAL_WIDTH } from "../../sidebar.js";
+import { SIDEBAR_MIN_TERMINAL_WIDTH, SIDEBAR_WIDTH } from "../../sidebar.js";
 import { SumoExtensionUIAdapter, type SumoExtensionUIAdapterOptions } from "./extension-ui-adapter.js";
 import { createForeignAwareUIContext, type ForeignAwareUIOptions } from "./foreign-extension-warning.js";
 
@@ -594,7 +594,20 @@ class UpstreamChatPagerBridge {
 	) {}
 
 	public render(width: number): string[] {
-		this.lastChatWidth = Math.max(1, Math.floor(width));
+		// Pi's chatContainer is allocated the full terminal width by Pi's TUI.
+		// But Pi separately mounts our installSidebar() widget at the right 49
+		// cols (when the session has messages and terminal width >= 120). If we
+		// composite the chat tree at full width, our chat content paints into the
+		// cols Pi will overpaint with the sidebar — visually that's chat text
+		// running INTO the sidebar boundary before being clobbered.
+		// Fix: narrow our composite to (terminal - SIDEBAR_WIDTH) when the same
+		// predicate Pi uses for showing the sidebar is true. The sidebar's own
+		// 49 cols on the right come from Pi's separate widget paint.
+		const terminalWidth = Math.max(1, Math.floor(width));
+		const sidebarVisible =
+			terminalWidth >= SIDEBAR_MIN_TERMINAL_WIDTH && this.chat.hasMessages();
+		const effectiveWidth = sidebarVisible ? Math.max(1, terminalWidth - SIDEBAR_WIDTH) : terminalWidth;
+		this.lastChatWidth = effectiveWidth;
 		this.lastChatTop = this.computeChatTop(this.lastChatWidth);
 		this.lastChatHeight = this.computeChatHeight(this.lastChatWidth);
 		return this.runtime.renderChatLines(this.lastChatWidth, this.lastChatHeight);

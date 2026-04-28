@@ -497,23 +497,24 @@ export class SumoInteractiveRuntime {
 	}
 
 	private syncChatSlot(): void {
-		if (!this.root || !this.chat || !this.splash || !this.emptyChatQuote) return;
+		if (!this.root || !this.chat || !this.splash) return;
 		const hasMessages = this.chat.hasMessages();
-		const showEmptyQuote = this.shouldShowEmptyChatQuote();
 		this.splash.syncVisibility();
+		// Per UX_SPEC §0: "no messages → splash (cat + SUMOCODE wordmark + quote,
+		// full width); first message / /resume → cathedral active state". The
+		// empty-chat-quote (§4.4) was a misinterpretation that contradicted §0 —
+		// it stole the splash slot whenever sidebar was visible + no messages,
+		// causing the splash to flash for one frame at boot then disappear. We
+		// keep the EmptyChatQuoteNode allocated for v2 work but never mount it.
+		if (this.emptyChatQuote && this.emptyChatQuote.parent === this.root) {
+			this.root.removeChild(this.emptyChatQuote);
+		}
 		if (hasMessages) {
 			if (this.splash.root.parent === this.root) this.root.removeChild(this.splash.root);
-			if (this.emptyChatQuote.parent === this.root) this.root.removeChild(this.emptyChatQuote);
 			if (this.chat.parent !== this.root) this.root.addChild(this.chat);
 			return;
 		}
 		if (this.chat.parent === this.root) this.root.removeChild(this.chat);
-		if (showEmptyQuote) {
-			if (this.splash.root.parent === this.root) this.root.removeChild(this.splash.root);
-			if (this.emptyChatQuote.parent !== this.root) this.root.addChild(this.emptyChatQuote);
-			return;
-		}
-		if (this.emptyChatQuote.parent === this.root) this.root.removeChild(this.emptyChatQuote);
 		if (this.splash.root.parent !== this.root) this.root.addChild(this.splash.root);
 	}
 
@@ -525,6 +526,10 @@ export class SumoInteractiveRuntime {
 		};
 	}
 
+	/** @deprecated UX_SPEC §0 says splash, not empty-chat-quote, takes the no-messages slot.
+	 *  Kept private so the EmptyChatQuote module + tests still type-check while we let
+	 *  the v2 design re-evaluate whether §4.4 ever ships. */
+	// @ts-expect-error retained for future v2 work
 	private shouldShowEmptyChatQuote(): boolean {
 		return shouldRenderEmptyChatQuote(this.emptyChatQuoteSnapshot()) && !(this.chat?.hasMessages() ?? false);
 	}

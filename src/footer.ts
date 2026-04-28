@@ -222,13 +222,19 @@ function sessionHasMessages(ctx: ExtensionContext): boolean {
 }
 
 function getThinkingLevel(ctx: ExtensionContext): ThinkingLevel {
-	// Pi exposes thinking level on the agent state, but extensions only see it
-	// indirectly via `ctx.getSystemPrompt()` (no public getter for the active
-	// thinking level). For now we read from a process-level cache populated by
-	// the model_select / before_agent_start handler patterns. Falls back to
-	// "medium" until Pi exposes it.
-	const maybe = (ctx as { thinkingLevel?: ThinkingLevel }).thinkingLevel;
-	return maybe ?? "medium";
+	// Pi 0.70.2+ exposes thinking level via the public extension API:
+	// `ctx.getThinkingLevel(): ThinkingLevel` (see
+	// node_modules/@mariozechner/pi-coding-agent/dist/core/extensions/types.d.ts:849).
+	// Earlier versions only had a non-existent `ctx.thinkingLevel` property
+	// which silently fell back to "medium" — that's the bug we're fixing.
+	try {
+		const getter = (ctx as { getThinkingLevel?: () => ThinkingLevel }).getThinkingLevel;
+		if (typeof getter === "function") return getter.call(ctx);
+	} catch {
+		// fall through to legacy probe
+	}
+	const legacy = (ctx as { thinkingLevel?: ThinkingLevel }).thinkingLevel;
+	return legacy ?? "medium";
 }
 
 function getSessionUsage(ctx: ExtensionContext): Usage {

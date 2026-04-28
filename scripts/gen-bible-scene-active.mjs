@@ -245,18 +245,16 @@ function buildFooterRow(cols, sidebarVisible) {
 
 // ─── Top bar placeholder ───────────────────────────────────────────────
 function buildTopBarPlaceholder(cols) {
-	let left, leftLen, right, rightLen;
+	let left, right;
 	if (cols >= 80) {
 		left = `<span class="fg-accent">SUMOCODE</span><span class="fg-dim">  \u2551 \u25cf 019dd3d8 \u2551</span>`;
-		leftLen = 24;
 		right = `<span class="fg-dim">ARCHIVE   [terminal]  [\u2699]</span>`;
-		rightLen = 28;
 	} else {
 		left = `<span class="fg-accent">SUMOCODE</span><span class="fg-dim">  \u25cf</span>`;
-		leftLen = 11;
 		right = `<span class="fg-dim">[\u2699]</span>`;
-		rightLen = 3;
 	}
+	const leftLen = visibleLen(left);
+	const rightLen = visibleLen(right);
 	const middle = cols - PAD * 2 - leftLen - rightLen;
 	return rep(" ", PAD) + left + rep(" ", Math.max(1, middle)) + right + rep(" ", PAD);
 }

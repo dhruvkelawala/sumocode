@@ -1,0 +1,29 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Bible · Element 12 · Task tool · running</title>
+<link rel="stylesheet" href="_assets/tokens.css">
+<style>
+  .stage-blurb { max-width: 130ch; color: var(--foreground-dim); font-size: 11px; line-height: 1.6; padding: 0 8px; text-align: center; }
+</style>
+</head>
+<body>
+<div class="stage">
+  <div class="stage-label">element 12 · task tool · sub-agent running · 130×8</div>
+  <div class="stage-blurb">outer task pill + inner sub-agent box. tools indented inside frame. shows live token counts + elapsed.</div>
+  <div data-render-rect class="term" style="--term-cols: 130; --term-rows: 10;">
+    <pre class="grid"><span class="fg-divider">━━━</span> <span class="fg-accent">[task]</span><span class="fg-fg">  refactor auth flow into smaller modules</span> <span class="fg-divider">━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</span> <span class="fg-divider">━━━</span> <span class="fg-tool">▶</span> <span class="fg-fg">running</span>
+                                                                                                                                  
+   <span class="fg-divider">┌ </span><span class="fg-dim">child agent · gpt-5.5 · medium</span> <span class="fg-divider">──────────────────────────────────────────────────────────────────────────────────────────</span>    
+   <span class="fg-divider">│</span> <span class="fg-idle">✓</span> <span class="fg-accent">[read]</span><span class="fg-fg">  src/auth.ts</span>                                                                                                        
+   <span class="fg-divider">│</span> <span class="fg-idle">✓</span> <span class="fg-accent">[edit]</span><span class="fg-fg">  src/auth.ts</span>                                                                                                        
+   <span class="fg-divider">│</span> <span class="fg-idle">✓</span> <span class="fg-accent">[edit]</span><span class="fg-fg">  src/auth-helpers.ts</span>                                                                                                
+   <span class="fg-divider">│</span> <span class="fg-tool">▶</span> <span class="fg-accent">[bash]</span><span class="fg-fg">  pnpm test src/auth</span>                                                                                                 
+   <span class="fg-divider">│</span>                                                                                                                              
+   <span class="fg-divider">│</span> <span class="fg-dim">Tokens: ↑8k ↓3k · 22s elapsed</span>                                                                                                
+   <span class="fg-divider">└────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────</span>  </pre>
+  </div>
+</div>
+</body>
+</html>

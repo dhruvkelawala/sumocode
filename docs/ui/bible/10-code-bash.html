@@ -1,0 +1,31 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Bible · Element 10 · Code · bash</title>
+<link rel="stylesheet" href="_assets/tokens.css">
+<style>
+  .stage-blurb { max-width: 100ch; color: var(--foreground-dim); font-size: 11px; line-height: 1.6; padding: 0 8px; text-align: center; }
+</style>
+</head>
+<body>
+<div class="stage">
+  <div class="stage-label">element 10 · bash script · 100 cols</div>
+  <div class="stage-blurb">shell script with comment, command substitution, conditional.</div>
+  <div data-render-rect class="term" style="--term-cols: 100; --term-rows: 12;">
+    <pre class="grid"><span class="fg-divider">╭─</span><span class="fg-divider">─ </span><span class="fg-dim">bash</span><span class="fg-divider"> ─</span><span class="fg-divider">────────────────────────────────────────────────────────────────────────────────────────╮</span>
+<span class="fg-divider">│</span><span class="box-fill" style="background: var(--surface-recess); width: 98ch"> <span class="fg-dim">  1 </span><span class="fg-comment">#!/usr/bin/env bash</span>                                                                          </span><span class="fg-divider">│</span>
+<span class="fg-divider">│</span><span class="box-fill" style="background: var(--surface-recess); width: 98ch"> <span class="fg-dim">  2 </span><span class="fg-comment"># archive sessions older than 30 days</span>                                                        </span><span class="fg-divider">│</span>
+<span class="fg-divider">│</span><span class="box-fill" style="background: var(--surface-recess); width: 98ch"> <span class="fg-dim">  3 </span>                                                                                             </span><span class="fg-divider">│</span>
+<span class="fg-divider">│</span><span class="box-fill" style="background: var(--surface-recess); width: 98ch"> <span class="fg-dim">  4 </span><span class="fg-fg">cd</span> <span class="fg-string">"${HOME}/.pi/agent/sessions"</span>                                                              </span><span class="fg-divider">│</span>
+<span class="fg-divider">│</span><span class="box-fill" style="background: var(--surface-recess); width: 98ch"> <span class="fg-dim">  5 </span>                                                                                             </span><span class="fg-divider">│</span>
+<span class="fg-divider">│</span><span class="box-fill" style="background: var(--surface-recess); width: 98ch"> <span class="fg-dim">  6 </span><span class="fg-keyword">for</span> <span class="fg-fg">f</span> <span class="fg-keyword">in</span> $(<span class="fg-fn">find</span> . <span class="fg-string">-name "*.jsonl"</span> <span class="fg-string">-mtime +30</span>); <span class="fg-keyword">do</span>                                            </span><span class="fg-divider">│</span>
+<span class="fg-divider">│</span><span class="box-fill" style="background: var(--surface-recess); width: 98ch"> <span class="fg-dim">  7 </span>  <span class="fg-fn">gzip</span> <span class="fg-string">"${f}"</span> && <span class="fg-fn">mv</span> <span class="fg-string">"${f}.gz"</span> <span class="fg-string">archive/</span>                                                       </span><span class="fg-divider">│</span>
+<span class="fg-divider">│</span><span class="box-fill" style="background: var(--surface-recess); width: 98ch"> <span class="fg-dim">  8 </span><span class="fg-keyword">done</span>                                                                                         </span><span class="fg-divider">│</span>
+<span class="fg-divider">│</span><span class="box-fill" style="background: var(--surface-recess); width: 98ch"> <span class="fg-dim">  9 </span>                                                                                             </span><span class="fg-divider">│</span>
+<span class="fg-divider">│</span><span class="box-fill" style="background: var(--surface-recess); width: 98ch"> <span class="fg-dim"> 10 </span><span class="fg-fn">echo</span> <span class="fg-string">"archived <span class="fg-number">$(ls archive/ | wc -l)</span> sessions"</span>                                              </span><span class="fg-divider">│</span>
+<span class="fg-divider">╰──────────────────────────────────────────────────────────────────────────────────────────────────╯</span></pre>
+  </div>
+</div>
+</body>
+</html>

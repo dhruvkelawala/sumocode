@@ -36,8 +36,8 @@ import { SumoNode } from "../layout/node.js";
 import { DIRECTION_LTR, FLEX_DIRECTION_COLUMN, loadYoga, type Yoga } from "../layout/yoga.js";
 import { bufferToAnsiLines } from "../render/ansi-writer.js";
 import { CellBuffer } from "../render/buffer.js";
-import { composite, type HardwareCursor } from "../render/compositor.js";
-import { diffFrames, type FrameDiffPatch } from "../render/diff.js";
+import { composite } from "../render/compositor.js";
+import { diffFrames } from "../render/diff.js";
 import { FrameScheduler } from "../runtime/frame-scheduler.js";
 import { TerminalController } from "../runtime/terminal-controller.js";
 import { ChatPager } from "../widgets/chat-pager.js";
@@ -262,8 +262,7 @@ export class SumoInteractiveRuntime {
 		// runtime must not depend on extension ordering: mouse wheel chat scrolling
 		// only works reliably when SGR mouse mode is enabled before Pi's first
 		// interactive frame.
-		this.terminal.enterAltscreen();
-		this.terminal.enableMouseSGR();
+		this.terminal.startRetainedSession();
 		this.scheduler = new FrameScheduler({ render: () => this.render() });
 		this.resizeHandler = () => this.requestRender();
 		process.stdout.on("resize", this.resizeHandler);
@@ -306,19 +305,8 @@ export class SumoInteractiveRuntime {
 	}
 
 	public writeChatViewport(top: number, left: number, width: number, height: number): boolean {
-		if (!this.output.isTTY) return false;
 		this.invalidateFrameCache();
-		const safeTop = Math.max(0, Math.floor(top));
-		const safeLeft = Math.max(0, Math.floor(left));
-		const lines = this.renderChatLines(width, height);
-		if (lines.length === 0) return false;
-		let output = "\x1b[?2026h\x1b7";
-		for (let row = 0; row < lines.length; row += 1) {
-			output += `\x1b[${safeTop + row + 1};${safeLeft + 1}H${lines[row] ?? ""}`;
-		}
-		output += "\x1b8\x1b[?2026l";
-		this.output.write(output);
-		return true;
+		return this.terminal.writeChatViewport(top, left, this.renderChatLines(width, height));
 	}
 
 	public stop(): void {
@@ -432,26 +420,11 @@ export class SumoInteractiveRuntime {
 		const nextFrame = new CellBuffer(height, width);
 		const result = composite(this.root, nextFrame);
 		const patches = diffFrames(this.previousFrame, nextFrame);
-		this.writePatches(patches, result.hardwareCursor);
+		this.terminal.writeFramePatches(patches, result.hardwareCursor);
 		this.previousFrame = nextFrame.clone();
 		this.renderedVersion = this.frameVersion;
 		this.renderedWidth = width;
 		this.renderedHeight = height;
-	}
-
-	private writePatches(patches: readonly FrameDiffPatch[], hardwareCursor: HardwareCursor | null): void {
-		if (patches.length === 0 && !hardwareCursor) return;
-		let output = "\x1b[?2026h";
-		for (const patch of patches) {
-			if (patch.type === "scroll") {
-				output += patch.ansi;
-				continue;
-			}
-			output += `\x1b[${patch.row + 1};1H${patch.ansi}\x1b[K`;
-		}
-		if (hardwareCursor) output += `\x1b[${hardwareCursor.row + 1};${hardwareCursor.col + 1}H\x1b[?25h`;
-		output += "\x1b[?2026l";
-		this.output.write(output);
 	}
 }
 

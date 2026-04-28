@@ -23,6 +23,15 @@ function outputStub(isTTY = true): TerminalOutput & { writes: string[] } {
 }
 
 describe("TerminalController", () => {
+	it("startRetainedSession owns altscreen and mouse mode startup", () => {
+		const output = outputStub();
+		const controller = new TerminalController({ output });
+
+		controller.startRetainedSession();
+
+		expect(output.writes).toEqual([`${ALTSCREEN_ENTER_SEQUENCE}${TERMINAL_BG_SET}${CURSOR_COLOR_SET}`, MOUSE_SGR_ENABLE_SEQUENCE]);
+	});
+
 	it("enterAltscreen emits altscreen bytes followed by cathedral cursor color", () => {
 		const output = outputStub();
 		const controller = new TerminalController({ output });
@@ -41,6 +50,24 @@ describe("TerminalController", () => {
 
 		expect(output.writes).toEqual([MOUSE_SGR_ENABLE_SEQUENCE]);
 		expect(output.writes[0]).toBe("\x1b[?1000h\x1b[?1006h");
+	});
+
+	it("writes absolute chat viewport rows behind the terminal ownership seam", () => {
+		const output = outputStub();
+		const controller = new TerminalController({ output });
+
+		expect(controller.writeChatViewport(2, 3, ["one", "two"])).toBe(true);
+
+		expect(output.writes).toEqual(["\x1b[?2026h\x1b7\x1b[3;4Hone\x1b[4;4Htwo\x1b8\x1b[?2026l"]);
+	});
+
+	it("writes full-frame patches and hardware cursor behind the terminal ownership seam", () => {
+		const output = outputStub();
+		const controller = new TerminalController({ output });
+
+		controller.writeFramePatches([{ row: 1, ansi: "hello" }], { row: 2, col: 4 });
+
+		expect(output.writes).toEqual(["\x1b[?2026h\x1b[2;1Hhello\x1b[K\x1b[3;5H\x1b[?25h\x1b[?2026l"]);
 	});
 
 	it("exitTerminal resets cursor color before the full cleanup bytes (EC-5.1)", () => {

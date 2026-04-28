@@ -41,6 +41,16 @@ export interface TerminalOutput {
 	write(data: string): unknown;
 }
 
+export interface TerminalCursor {
+	readonly row: number;
+	readonly col: number;
+}
+
+export interface TerminalPatch {
+	readonly row: number;
+	readonly ansi: string;
+}
+
 export interface TerminalControllerOptions {
 	readonly output?: TerminalOutput;
 }
@@ -66,6 +76,11 @@ export class TerminalController {
 		return this.output.isTTY === true;
 	}
 
+	public startRetainedSession(): void {
+		this.enterAltscreen();
+		this.enableMouseSGR();
+	}
+
 	public enterAltscreen(): void {
 		if (!this.isTTY()) return;
 		this.restored = false;
@@ -79,6 +94,30 @@ export class TerminalController {
 		if (!this.isTTY()) return;
 		this.restored = false;
 		this.write(MOUSE_SGR_ENABLE_SEQUENCE);
+	}
+
+	public writeChatViewport(top: number, left: number, lines: readonly string[]): boolean {
+		if (!this.isTTY() || lines.length === 0) return false;
+		const safeTop = Math.max(0, Math.floor(top));
+		const safeLeft = Math.max(0, Math.floor(left));
+		let output = "\x1b[?2026h\x1b7";
+		for (let row = 0; row < lines.length; row += 1) {
+			output += `\x1b[${safeTop + row + 1};${safeLeft + 1}H${lines[row] ?? ""}`;
+		}
+		output += "\x1b8\x1b[?2026l";
+		this.write(output);
+		return true;
+	}
+
+	public writeFramePatches(patches: readonly TerminalPatch[], cursor: TerminalCursor | null): void {
+		if (!this.isTTY() || (patches.length === 0 && !cursor)) return;
+		let output = "\x1b[?2026h";
+		for (const patch of patches) {
+			output += `\x1b[${patch.row + 1};1H${patch.ansi}\x1b[K`;
+		}
+		if (cursor) output += `\x1b[${cursor.row + 1};${cursor.col + 1}H\x1b[?25h`;
+		output += "\x1b[?2026l";
+		this.write(output);
 	}
 
 	/**

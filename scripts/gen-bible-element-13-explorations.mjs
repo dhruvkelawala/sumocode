@@ -453,20 +453,15 @@ function buildOracle({ messages, cols }) {
 
 // ═════════════════════════════════════════════════════════════════════════
 
-// Direction 7A — BOXED / REFINED ROUNDED (the default)
-//   Each message in its own ╭─╮ │ │ ╰─╯ box with surface bg fill.
-//   Returns full HTML (multi-<pre>) so each box can have its own bg.
-//
-// Variants below (7B, 7C) share the same structural skeleton but differ in:
-//   - corner glyphs (rounded vs sharp)
-//   - bg color (surface / recess / lifted, sometimes per-role)
-//   - inter-box spacing (blank vs tight)
-//   - intra-box header divider (none vs ═══)
+// Direction 7A — BOXED / REFINED ROUNDED (the LOCKED default)
+//   Each message in its own ╭─╮ │ │ ╰─╯ box. ALL boxes are TRANSPARENT
+//   (no bg fill) — just the frame chars sitting on terminal default bg.
+//   Single-tone simplicity. Dual-tone (7C) is the opt-in toggle.
 function buildBoxedRefinedHTML({ messages, cols }) {
 	return buildBoxedGeneric({
 		messages, cols,
 		corners: { tl: "╭", tr: "╮", bl: "╰", br: "╯", h: "─", v: "│" },
-		bgFor: () => "var(--surface)",
+		bgFor: () => null, // transparent — no bg fill
 		spacingBetweenBoxes: 1,
 		headerDivider: false,
 	});
@@ -487,14 +482,15 @@ function buildBoxedSharpTabletHTML({ messages, cols }) {
 }
 
 // Direction 7C — BOXED / DUAL-TONE
-//   Rounded corners. USER uses surface-recess (darker, like input). SUMO uses
-//   surface-lifted (slightly elevated). Role distinction via bg tone instead
-//   of via label color alone.
+//   Rounded corners. USER box stays TRANSPARENT (just the frame, like default).
+//   SUMO box gets `surface-lifted` warm-amber fill on its interior. Role
+//   distinction is one-sided: only the assistant pops; the user reads as
+//   typed input flush against the terminal bg.
 function buildBoxedDualToneHTML({ messages, cols }) {
 	return buildBoxedGeneric({
 		messages, cols,
 		corners: { tl: "╭", tr: "╮", bl: "╰", br: "╯", h: "─", v: "│" },
-		bgFor: (msg) => msg.role === "USER" ? "var(--surface-recess)" : "var(--surface-lifted)",
+		bgFor: (msg) => msg.role === "USER" ? null : "var(--surface-lifted)",
 		spacingBetweenBoxes: 1,
 		headerDivider: false,
 	});

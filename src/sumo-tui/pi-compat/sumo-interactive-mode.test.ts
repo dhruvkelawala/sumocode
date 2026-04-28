@@ -12,6 +12,7 @@ import {
 	type PiNoiseFilterState,
 } from "./sumo-interactive-mode.js";
 import { defaultSplashSnapshot, getSplashContentHeight } from "../cathedral/splash-tree.js";
+import { ALTSCREEN_ENTER_SEQUENCE, MOUSE_SGR_ENABLE_SEQUENCE } from "../runtime/terminal-controller.js";
 
 const ANSI_PATTERN = /\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\)|_[^\x07]*(?:\x07|\x1b\\))/g;
 
@@ -89,6 +90,18 @@ describe("sumo interactive Pi noise filtering", () => {
 		expect(textFromAgentMessage({ role: "user", content: "hello" })).toBe("hello");
 		expect(textFromAgentMessage({ role: "assistant", content: [{ type: "thinking", thinking: "hidden" }, { type: "text", text: "visible" }] })).toBe("visible");
 		expect(textFromAgentMessage({ role: "toolResult", content: [{ type: "text", text: "tool output" }] })).toBe("tool output");
+	});
+
+	it("enters altscreen and enables SGR mouse from the retained runtime", async () => {
+		const write = vi.fn();
+		const runtime = new SumoInteractiveRuntime({ isTTY: true, columns: 100, rows: 30, write });
+
+		await runtime.start();
+
+		const output = write.mock.calls.map(([chunk]) => String(chunk)).join("");
+		expect(output).toContain(ALTSCREEN_ENTER_SEQUENCE);
+		expect(output).toContain(MOUSE_SGR_ENABLE_SEQUENCE);
+		runtime.stop();
 	});
 
 	it("renders the retained splash centered in the chat slot until the first message", async () => {
@@ -178,6 +191,7 @@ describe("sumo interactive Pi noise filtering", () => {
 
 		expect(result).toEqual({ consume: true });
 		expect(after).toBeLessThan(before);
+		expect(upstream.ui.requestRender).toHaveBeenCalledWith(true);
 		const rendered = upstream.chatContainer.render(60).join("\n");
 		expect(rendered).toContain("USER >");
 		expect(rendered).not.toContain("upstream chat");

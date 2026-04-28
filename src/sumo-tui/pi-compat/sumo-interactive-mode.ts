@@ -148,7 +148,7 @@ interface PiRenderableComponent {
 interface PiTuiLike {
 	readonly terminal?: { readonly rows?: number; readonly columns?: number };
 	children?: unknown[];
-	requestRender?(): void;
+	requestRender?(force?: boolean): void;
 	addInputListener?(listener: (data: string) => { consume?: boolean; data?: string } | void): () => void;
 }
 
@@ -405,6 +405,13 @@ export class SumoInteractiveRuntime {
 		this.splash = createSplashTree(this.yoga, undefined, () => defaultSplashSnapshot(this.chat?.hasMessages() ?? false));
 		this.emptyChatQuote = new EmptyChatQuoteNode(this.yoga.Node.create(), () => this.emptyChatQuoteSnapshot());
 		this.syncChatSlot();
+		// Retained SumoInteractiveMode owns the application terminal contract.
+		// The extension lifecycle shim also enters altscreen when loaded, but the
+		// runtime must not depend on extension ordering: mouse wheel chat scrolling
+		// only works reliably when SGR mouse mode is enabled before Pi's first
+		// interactive frame.
+		this.terminal.enterAltscreen();
+		this.terminal.enableMouseSGR();
 		this.scheduler = new FrameScheduler({ render: () => this.render() });
 		this.resizeHandler = () => this.requestRender();
 		process.stdout.on("resize", this.resizeHandler);
@@ -804,8 +811,14 @@ export function installChatPagerBridge(upstream: unknown, runtime: SumoInteracti
 	const removeInputListener = target.ui?.addInputListener?.((data) => bridge.handleInput(data));
 
 	runtime.setExternalRenderControls({
-		scheduleRender: () => target.ui?.requestRender?.(),
-		setStreamingMode: () => target.ui?.requestRender?.(),
+		// Pi's normal differential renderer optimizes line shifts with terminal
+		// scroll sequences. In SumoCode's hybrid shell, chat scroll changes only
+		// the left content while the sidebar/footer remain fixed; terminal scroll
+		// sequences move the whole screen and leave stale sidebar/chat fragments.
+		// Force Pi's full redraw path for retained chat updates until Sumo owns the
+		// entire root renderer.
+		scheduleRender: () => target.ui?.requestRender?.(true),
+		setStreamingMode: () => target.ui?.requestRender?.(true),
 	});
 	chatContainer.render = (width: number): string[] => bridge.render(width);
 	chatContainer.clear = (): void => {

@@ -394,7 +394,9 @@ Disappears on first keystroke.
 
 ### Element 7 — Memory editor
 
-**Mockup**: forthcoming `v4/07-memory-editor.png`.
+**LOCKED**: Memory Scriptorium variant approved 2026-04-29.
+
+**Mockups**: `docs/ui/bible/07-memory-editor.html` + `docs/ui/bible/07-memory-editor-search.html`.
 
 **Trigger**: `/sumo:memory edit` slash, OR `⌘M` keybind, OR Ctrl+/ → MEMORY drill-down.
 
@@ -421,24 +423,46 @@ Disappears on first keystroke.
 3. keyword rules on `content`
 4. fallback → `GENERAL`
 
-**Visual** (locked):
+**Visual contract**:
 
-```
-                              SUMOCODE MEMORY
-   ────────────────────────────────────────────────────────────────────────
+```txt
+                         ✾  MEMORY SCRIPTORIUM  ✾
 
-   │ search…                                              48 facts │
+              ──────────────────────────────  ·  ──────────────────────────────
 
-   ╭─ IDENTITY ───────────────────╮  ╭─ PREFERENCES ────────────────╮
-   │ Dhruv · Senior FE · Argent     │  │ prefers TypeScript strict      │
-   │ London / BST                   │  │ pnpm not npm                   │
-   ╰──────────────────────────────╯  ╰────────────────────────────────╯
+   ❯  █search remembered facts…                                      48 facts
+
+   ╭────────── IDENTITY ──────────╮  ╭──────── PREFERENCES ────────╮
+   │ · Dhruv · Senior FE · Argent │  │ ❈ prefers TypeScript strict │
+   │ · London / BST               │  │ · pnpm not npm              │
+   ╰──────────────────────────────╯  ╰─────────────────────────────╯
 
    ... 4 more panels in 2-across grid ...
 
-   ────────────────────────────────────────────────────────────────────────
-   ↑↓ navigate   /  search   e  edit   d  delete   esc  close
+              ──────────────────────────────  ·  ──────────────────────────────
+                 ↑↓ wander    / search    e revise    d forget    ⎋ retreat
 ```
+
+**Tokens**:
+- Title text + `✾` floral marks: `accent`
+- Decorative rules + center `·`: `divider`
+- Search chevron `❯`: `accent`
+- Search cursor block: active cursor token / accent bg
+- Search placeholder: `foregroundDim`; active search text: `foreground`
+- Facts count: `foregroundDim`
+- Panel borders `╭╮╰╯│─`: `divider`
+- Panel titles: `accent`
+- Focused fact marker `❈` heavy sparkle: `accent`
+- Unfocused fact marker `·`: `divider`
+- Fact text: `foreground`
+- Footer keybind text: `foregroundDim`
+
+**Behavior**:
+- Six panels are visible in the full editor: IDENTITY, PREFERENCES, WORKFLOW, PROJECTS, SYSTEM, GENERAL.
+- Search filters visible facts while preserving the scriptorium chrome.
+- `e` revises the selected fact inline.
+- `d` forgets/deletes the selected fact.
+- `⎋` closes the editor.
 
 Width: 80% of terminal, min 70, max 120. Centered.
 
@@ -858,7 +882,7 @@ Each row = one PR + one issue + visual approval.
 12. Element 6 approval modal: re-enable + Pi default policy integration + `/yolo` slash
 13. Cross-cut: mouse selection + OSC 52 auto-copy
 14. Cross-cut: resume perf fix (HIGH)
-15. Element 7 memory editor: inline `e`/`d` editing + verify visually + AI-driven write path
+15. Element 7 memory editor: implement locked Memory Scriptorium, inline `e`/`d` editing + AI-driven write path
 
 **Phase F — Polish stretch**:
 16. Animated splash hero (cycle frames)

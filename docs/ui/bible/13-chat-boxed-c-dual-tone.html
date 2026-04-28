@@ -2,7 +2,7 @@
 <html>
 <head>
 <meta charset="utf-8">
-<title>Bible · Element 13 · BOXED / CLOSED FRAME</title>
+<title>Bible · Element 13 · BOXED 7C · DUAL-TONE</title>
 <link rel="stylesheet" href="_assets/tokens.css">
 <style>
   .stage-blurb { max-width: 130ch; color: var(--foreground-dim); font-size: 11px; line-height: 1.6; letter-spacing: 0.04em; padding: 0 8px; text-align: center; }
@@ -10,14 +10,14 @@
 </head>
 <body>
 <div class="stage">
-  <div class="stage-label">element 13 · #7 BOXED / CLOSED FRAME · 130 cols</div>
-  <div class="stage-blurb">each message in its own self-contained box with rounded corners ╭─╮ │ │ ╰─╯ and surface bg fill (slightly lighter than terminal bg). role label inline with top border. boxes feel elevated — like message cards.</div>
+  <div class="stage-label">element 13 · #7C DUAL-TONE · 130 cols</div>
+  <div class="stage-blurb">rounded corners. USER uses surface-recess (darker, like input frame). SUMO uses surface-lifted (slightly elevated). role distinguished by bg tone, not just label color.</div>
   <div data-render-rect class="term" style="--term-cols: 130; --term-rows: 25;">
-    <pre class="grid" style="background: var(--surface)"><span class="fg-divider">╭ </span><span class="fg-fg">USER</span> <span class="fg-divider">──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮</span>
+    <pre class="grid" style="background: var(--surface-recess)"><span class="fg-divider">╭ </span><span class="fg-fg">USER</span> <span class="fg-divider">──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮</span>
 <span class="fg-divider">│</span> <span class="fg-fg">hello, refactor the auth flow to use the new session pattern.</span>                                                                  <span class="fg-divider">│</span>
 <span class="fg-divider">╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯</span></pre>
 <pre class="grid"></pre>
-<pre class="grid" style="background: var(--surface)"><span class="fg-divider">╭ </span><span class="fg-accent">SUMO</span><span class="fg-dim"> · claude-opus-4-7 · 11:42</span> <span class="fg-divider">────────────────────────────────────────────────────────────────────────────────────────────────╮</span>
+<pre class="grid" style="background: var(--surface-lifted)"><span class="fg-divider">╭ </span><span class="fg-accent">SUMO</span><span class="fg-dim"> · claude-opus-4-7 · 11:42</span> <span class="fg-divider">────────────────────────────────────────────────────────────────────────────────────────────────╮</span>
 <span class="fg-divider">│</span> <span class="fg-fg">Reading the auth flow.</span>                                                                                                         <span class="fg-divider">│</span>
 <span class="fg-divider">│</span>                                                                                                                                <span class="fg-divider">│</span>
 <span class="fg-divider">│</span> <span class="fg-idle">✓</span> <span class="fg-accent">[read]</span><span class="fg-fg">  src/auth/session.ts</span>                                                                                                  <span class="fg-divider">│</span>
@@ -27,11 +27,11 @@
 <span class="fg-divider">│</span> <span class="fg-fg">Done. Updated 14 lines, deleted 6 stale helpers.</span>                                                                               <span class="fg-divider">│</span>
 <span class="fg-divider">╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯</span></pre>
 <pre class="grid"></pre>
-<pre class="grid" style="background: var(--surface)"><span class="fg-divider">╭ </span><span class="fg-fg">USER</span> <span class="fg-divider">──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮</span>
+<pre class="grid" style="background: var(--surface-recess)"><span class="fg-divider">╭ </span><span class="fg-fg">USER</span> <span class="fg-divider">──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮</span>
 <span class="fg-divider">│</span> <span class="fg-fg">run tests</span>                                                                                                                      <span class="fg-divider">│</span>
 <span class="fg-divider">╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯</span></pre>
 <pre class="grid"></pre>
-<pre class="grid" style="background: var(--surface)"><span class="fg-divider">╭ </span><span class="fg-accent">SUMO</span><span class="fg-dim"> · claude-opus-4-7 · 11:43</span> <span class="fg-divider">────────────────────────────────────────────────────────────────────────────────────────────────╮</span>
+<pre class="grid" style="background: var(--surface-lifted)"><span class="fg-divider">╭ </span><span class="fg-accent">SUMO</span><span class="fg-dim"> · claude-opus-4-7 · 11:43</span> <span class="fg-divider">────────────────────────────────────────────────────────────────────────────────────────────────╮</span>
 <span class="fg-divider">│</span> <span class="fg-fg">Running tests now.</span>                                                                                                             <span class="fg-divider">│</span>
 <span class="fg-divider">│</span>                                                                                                                                <span class="fg-divider">│</span>
 <span class="fg-divider">│</span> <span class="fg-idle">✓</span> <span class="fg-accent">[bash]</span><span class="fg-fg">  pnpm test src/auth</span><span class="fg-dim">  · 22 tests, 1.2s</span>                                                                                 <span class="fg-divider">│</span>

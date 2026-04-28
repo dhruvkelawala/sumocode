@@ -453,10 +453,55 @@ function buildOracle({ messages, cols }) {
 
 // ═════════════════════════════════════════════════════════════════════════
 
-// Direction 7 — BOXED / CLOSED FRAME
+// Direction 7A — BOXED / REFINED ROUNDED (the default)
 //   Each message in its own ╭─╮ │ │ ╰─╯ box with surface bg fill.
 //   Returns full HTML (multi-<pre>) so each box can have its own bg.
-function buildBoxedHTML({ messages, cols }) {
+//
+// Variants below (7B, 7C) share the same structural skeleton but differ in:
+//   - corner glyphs (rounded vs sharp)
+//   - bg color (surface / recess / lifted, sometimes per-role)
+//   - inter-box spacing (blank vs tight)
+//   - intra-box header divider (none vs ═══)
+function buildBoxedRefinedHTML({ messages, cols }) {
+	return buildBoxedGeneric({
+		messages, cols,
+		corners: { tl: "╭", tr: "╮", bl: "╰", br: "╯", h: "─", v: "│" },
+		bgFor: () => "var(--surface)",
+		spacingBetweenBoxes: 1,
+		headerDivider: false,
+	});
+}
+
+// Direction 7B — BOXED / SHARP TABLET
+//   Sharp corners ┌─┐ │ │ └─┘, surface-recess (darker) bg, ═══ header
+//   divider rule inside each box, tight inter-box spacing (no blank rows).
+//   Feels like stacked stone tablets.
+function buildBoxedSharpTabletHTML({ messages, cols }) {
+	return buildBoxedGeneric({
+		messages, cols,
+		corners: { tl: "┌", tr: "┐", bl: "└", br: "┘", h: "─", v: "│" },
+		bgFor: () => "var(--surface-recess)",
+		spacingBetweenBoxes: 0,
+		headerDivider: true,
+	});
+}
+
+// Direction 7C — BOXED / DUAL-TONE
+//   Rounded corners. USER uses surface-recess (darker, like input). SUMO uses
+//   surface-lifted (slightly elevated). Role distinction via bg tone instead
+//   of via label color alone.
+function buildBoxedDualToneHTML({ messages, cols }) {
+	return buildBoxedGeneric({
+		messages, cols,
+		corners: { tl: "╭", tr: "╮", bl: "╰", br: "╯", h: "─", v: "│" },
+		bgFor: (msg) => msg.role === "USER" ? "var(--surface-recess)" : "var(--surface-lifted)",
+		spacingBetweenBoxes: 1,
+		headerDivider: false,
+	});
+}
+
+// Generic boxed builder — driven by config object.
+function buildBoxedGeneric({ messages, cols, corners, bgFor, spacingBetweenBoxes, headerDivider }) {
 	const innerCols = cols - 4;
 	const blocks = [];
 
@@ -475,16 +520,25 @@ function buildBoxedHTML({ messages, cols }) {
 		}
 		const topDashLen = cols - 4 - roleVisLen;
 		rows.push(
-			`<span class="fg-divider">╭ </span>` + roleHTML + ` ` +
-			`<span class="fg-divider">${rep("─", topDashLen)}╮</span>`,
+			`<span class="fg-divider">${corners.tl} </span>` + roleHTML + ` ` +
+			`<span class="fg-divider">${rep(corners.h, topDashLen)}${corners.tr}</span>`,
 		);
 
 		const bodyRow = (contentHTML, contentLen) => {
 			const padLen = innerCols - contentLen;
-			return `<span class="fg-divider">│</span> ` + contentHTML +
-				rep(" ", padLen) + ` <span class="fg-divider">│</span>`;
+			return `<span class="fg-divider">${corners.v}</span> ` + contentHTML +
+				rep(" ", padLen) + ` <span class="fg-divider">${corners.v}</span>`;
 		};
 		const blankRow = () => bodyRow("", 0);
+
+		// Optional header divider rule (═══ inside) immediately after the title row
+		if (headerDivider) {
+			rows.push(
+				`<span class="fg-divider">${corners.v}</span> ` +
+				`<span class="fg-divider">${rep("═", innerCols)}</span>` +
+				` <span class="fg-divider">${corners.v}</span>`,
+			);
+		}
 
 		if (msg.body) {
 			const wrapped = wrap(msg.body, innerCols);
@@ -509,12 +563,14 @@ function buildBoxedHTML({ messages, cols }) {
 			}
 		}
 
-		rows.push(`<span class="fg-divider">╰${rep("─", cols - 2)}╯</span>`);
+		rows.push(`<span class="fg-divider">${corners.bl}${rep(corners.h, cols - 2)}${corners.br}</span>`);
 
-		blocks.push({ rows, bg: "var(--surface)" });
+		blocks.push({ rows, bg: bgFor(msg) });
 
 		if (i < messages.length - 1) {
-			blocks.push({ rows: [""], bg: null });
+			for (let s = 0; s < spacingBetweenBoxes; s++) {
+				blocks.push({ rows: [""], bg: null });
+			}
 		}
 	}
 
@@ -581,10 +637,20 @@ const explorations = [
 		label: "element 13 · #5 LEDGER / SCRIPTORIUM · 130 cols",
 		blurb: "numbered entries (001, 002, …) with right-aligned timestamps. continuation prefix on body rows. structured, audit-trail feel.",
 	},
-	{ filename: "13-chat-boxed.html", buildHTML: buildBoxedHTML,
-		title: "Bible · Element 13 · BOXED / CLOSED FRAME",
-		label: "element 13 · #7 BOXED / CLOSED FRAME · 130 cols",
-		blurb: "each message in its own self-contained box with rounded corners ╭─╮ │ │ ╰─╯ and surface bg fill (slightly lighter than terminal bg). role label inline with top border. boxes feel elevated — like message cards.",
+	{ filename: "13-chat-boxed-a-refined.html", buildHTML: buildBoxedRefinedHTML,
+		title: "Bible · Element 13 · BOXED 7A · REFINED ROUNDED",
+		label: "element 13 · #7A REFINED ROUNDED · 130 cols",
+		blurb: "rounded corners ╭─╮ │ │ ╰─╯. surface bg fill (slightly lighter than terminal bg). 1 blank row between boxes. boxes feel elevated — message cards.",
+	},
+	{ filename: "13-chat-boxed-b-sharp-tablet.html", buildHTML: buildBoxedSharpTabletHTML,
+		title: "Bible · Element 13 · BOXED 7B · SHARP TABLET",
+		label: "element 13 · #7B SHARP TABLET · 130 cols",
+		blurb: "sharp corners ┌─┐ │ │ └─┘. surface-recess bg (DARKER than terminal). ═══ header divider rule inside each box separating title from body. tight inter-box spacing (no blanks). feels like stacked stone tablets.",
+	},
+	{ filename: "13-chat-boxed-c-dual-tone.html", buildHTML: buildBoxedDualToneHTML,
+		title: "Bible · Element 13 · BOXED 7C · DUAL-TONE",
+		label: "element 13 · #7C DUAL-TONE · 130 cols",
+		blurb: "rounded corners. USER uses surface-recess (darker, like input frame). SUMO uses surface-lifted (slightly elevated). role distinguished by bg tone, not just label color.",
 	},
 	{ filename: "13-chat-oracle.html", build: buildOracle,
 		title: "Bible · Element 13 · ORACLE TABLET / TWO-COLUMN",

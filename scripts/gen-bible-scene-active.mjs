@@ -275,7 +275,11 @@ function buildTopBarPlaceholder(cols) {
 // ─── Compose scene ──────────────────────────────────────────────────────
 function buildScene(variant) {
 	const { cols, rows: TERM_ROWS, sidebarCols, sidebarVisible } = variant;
-	const CHAT_COLS = sidebarVisible ? cols - sidebarCols : cols;
+	// 2-col gutter:
+	//   landscape: between chat and sidebar
+	//   portrait : on the right of chat (left stays flush)
+	const GUTTER = 2;
+	const CHAT_COLS = sidebarVisible ? cols - sidebarCols - GUTTER : cols - GUTTER;
 
 	const sidebarRows = sidebarVisible ? buildSidebarRows(sidebarCols) : [];
 	const chatHTML = buildChatHTML(CHAT_COLS);
@@ -284,7 +288,9 @@ function buildScene(variant) {
 	const footerRow = buildFooterRow(cols, sidebarVisible);
 	const topBarRow = buildTopBarPlaceholder(cols);
 
-	const middleCols = sidebarVisible ? `${CHAT_COLS}ch ${sidebarCols}ch` : `1fr`;
+	const middleCols = sidebarVisible
+		? `${CHAT_COLS}ch ${GUTTER}ch ${sidebarCols}ch`
+		: `${CHAT_COLS}ch ${GUTTER}ch`;
 
 	return `<!doctype html>
 <html>
@@ -311,6 +317,7 @@ function buildScene(variant) {
     <pre class="grid" style="grid-row: 2;"> </pre>
     <div class="middle">
       <div class="chat-col">${chatHTML}</div>
+      <div class="gutter-col"></div>
       ${sidebarVisible ? `<div class="sidebar-col"><pre class="grid">${sidebarRows.join("\n")}</pre></div>` : ""}
     </div>
     <pre class="grid" style="grid-row: 4;"> </pre>

@@ -44,8 +44,8 @@ function buildPalette({ cols, search, selectedIdx }) {
 	rows.push(`   <span class="fg-divider">${rep("\u2500", cols - 6)}</span>   `);
 	rows.push(blank());
 
-	// Search input
-	const searchInner = cols - 10;
+	// Search input — total row = 3 + 1 + 1 + searchInner + 1 + 3 = cols
+	const searchInner = cols - 9;
 	const searchText = search || "search\u2026";
 	const searchClass = search ? "fg-fg" : "fg-dim";
 	rows.push(
@@ -67,16 +67,19 @@ function buildPalette({ cols, search, selectedIdx }) {
 		const innerCols = cols - 8;
 		const padEnd = innerCols - mode.key.length - padAfterLabel - valueLen;
 
+		// Build the row content (leave width math to padRight at end)
+		let rowHTML;
 		if (focused) {
-			rows.push(
-				`   <span class="cursor"> </span><span class="fg-fg" style="background: var(--accent); color: var(--background);">  ${mode.key}${rep(" ", padAfterLabel)}${mode.arrow ? mode.arrow + " " + mode.value : ""}${rep(" ", Math.max(0, padEnd - 2))}</span><span class="cursor"> </span>` +
-				rep(" ", cols - innerCols - 4),
-			);
+			// Focused row: 3 leading spaces, then accent-fill block (cursor + label + value), then 3 trailing
+			const valueText = mode.arrow ? `${mode.arrow} ${mode.value}` : "";
+			rowHTML =
+				`   <span class="cursor"> </span>` +
+				`<span class="fg-fg" style="background: var(--accent); color: var(--background);"> ${mode.key}${rep(" ", padAfterLabel)}${valueText}</span>` +
+				`<span class="cursor"> </span>`;
 		} else {
-			rows.push(
-				`     <span class="fg-fg">${mode.key}</span>${rep(" ", padAfterLabel)}${valuePart}${rep(" ", Math.max(0, padEnd - 2))}     `,
-			);
+			rowHTML = `     <span class="fg-fg">${mode.key}</span>${rep(" ", padAfterLabel)}${valuePart}`;
 		}
+		rows.push(padRight(rowHTML, cols));
 	}
 
 	rows.push(blank());

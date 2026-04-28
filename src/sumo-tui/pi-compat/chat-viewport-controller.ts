@@ -451,5 +451,3 @@ export function installChatViewportBridge(upstream: unknown, runtime: ChatViewpo
 	target[CHAT_VIEWPORT_BRIDGE_INSTALLED] = cleanup;
 	return cleanup;
 }
-
-export const installChatPagerBridge = installChatViewportBridge;

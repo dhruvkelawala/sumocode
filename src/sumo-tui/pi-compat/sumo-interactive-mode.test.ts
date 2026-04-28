@@ -3,14 +3,13 @@ import {
 	SumoInteractiveRuntime,
 	filterPiNoiseChildren,
 	forceHardwareCursorVisible,
-	installChatPagerBridge,
 	installPiNoiseFilter,
 	isPiNoiseTextComponent,
 	shouldForceHardwareCursor,
 	shouldHidePiNoise,
-	textFromAgentMessage,
 	type PiNoiseFilterState,
 } from "./sumo-interactive-mode.js";
+import { installChatViewportBridge } from "./chat-viewport-controller.js";
 import { defaultSplashSnapshot, getSplashContentHeight } from "../cathedral/splash-tree.js";
 import { ALTSCREEN_ENTER_SEQUENCE, MOUSE_SGR_ENABLE_SEQUENCE } from "../runtime/terminal-controller.js";
 
@@ -84,12 +83,6 @@ describe("sumo interactive Pi noise filtering", () => {
 
 		expect(forceHardwareCursorVisible(upstream)).toBe(true);
 		expect(setShowHardwareCursor).toHaveBeenCalledWith(true);
-	});
-
-	it("extracts streamed assistant text from Pi message shapes", () => {
-		expect(textFromAgentMessage({ role: "user", content: "hello" })).toBe("hello");
-		expect(textFromAgentMessage({ role: "assistant", content: [{ type: "thinking", thinking: "hidden" }, { type: "text", text: "visible" }] })).toBe("visible");
-		expect(textFromAgentMessage({ role: "toolResult", content: [{ type: "text", text: "tool output" }] })).toBe("tool output");
 	});
 
 	it("enters altscreen and enables SGR mouse from the retained runtime", async () => {
@@ -179,7 +172,7 @@ describe("sumo interactive Pi noise filtering", () => {
 			handleEvent: vi.fn(),
 		};
 
-		const cleanup = installChatPagerBridge(upstream, runtime);
+		const cleanup = installChatViewportBridge(upstream, runtime);
 		for (let index = 0; index < 50; index += 1) {
 			await upstream.handleEvent({ type: "message_start", message: { role: "user", content: `message ${index}` } });
 		}
@@ -236,7 +229,7 @@ describe("sumo interactive Pi noise filtering", () => {
 			handleEvent: vi.fn(),
 		};
 
-		const cleanup = installChatPagerBridge(upstream, runtime);
+		const cleanup = installChatViewportBridge(upstream, runtime);
 		for (let index = 0; index < 50; index += 1) {
 			await upstream.handleEvent({ type: "message_start", message: { role: "user", content: `message ${index}` } });
 		}
@@ -290,7 +283,7 @@ describe("sumo interactive Pi noise filtering", () => {
 			handleEvent: vi.fn(),
 		};
 
-		const cleanup = installChatPagerBridge(upstream, runtime);
+		const cleanup = installChatViewportBridge(upstream, runtime);
 		for (let index = 0; index < 50; index += 1) {
 			await upstream.handleEvent({ type: "message_start", message: { role: "user", content: `message ${index}` } });
 		}

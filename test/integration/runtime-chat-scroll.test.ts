@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { installChatPagerBridge, SumoInteractiveRuntime } from "../../src/sumo-tui/pi-compat/sumo-interactive-mode.js";
+import { SumoInteractiveRuntime } from "../../src/sumo-tui/pi-compat/sumo-interactive-mode.js";
+import { installChatViewportBridge } from "../../src/sumo-tui/pi-compat/chat-viewport-controller.js";
 
 describe("runtime ChatPager scroll bridge", () => {
 	it("moves ChatPager scroll offset after an SGR mouse wheel event", async () => {
@@ -36,7 +37,7 @@ describe("runtime ChatPager scroll bridge", () => {
 			handleEvent: vi.fn(),
 		};
 
-		const cleanup = installChatPagerBridge(upstream, runtime);
+		const cleanup = installChatViewportBridge(upstream, runtime);
 		for (let index = 0; index < 50; index += 1) {
 			await upstream.handleEvent({ type: "message_start", message: { role: "user", content: `fake message ${index}` } });
 		}

@@ -6,7 +6,7 @@ import { bufferToAnsiLines } from "../render/ansi-writer.js";
 import { CellBuffer } from "../render/buffer.js";
 import { composite } from "../render/compositor.js";
 import { ChatPager } from "../widgets/chat-pager.js";
-import { ChatViewportController, type ChatViewportHost, type ChatViewportRuntime } from "./chat-viewport-controller.js";
+import { ChatViewportController, textFromAgentMessage, type ChatViewportHost, type ChatViewportRuntime } from "./chat-viewport-controller.js";
 
 function rows(count: number): { render(width: number): string[] } {
 	return { render: (_width: number) => Array.from({ length: count }, () => "chrome") };
@@ -66,6 +66,12 @@ async function makeController(options: { terminalRows?: number; terminalColumns?
 }
 
 describe("ChatViewportController", () => {
+	it("extracts streamed assistant text from Pi message shapes", () => {
+		expect(textFromAgentMessage({ role: "user", content: "hello" })).toBe("hello");
+		expect(textFromAgentMessage({ role: "assistant", content: [{ type: "thinking", thinking: "hidden" }, { type: "text", text: "visible" }] })).toBe("visible");
+		expect(textFromAgentMessage({ role: "toolResult", content: [{ type: "text", text: "tool output" }] })).toBe("tool output");
+	});
+
 	it("owns chat viewport geometry, including sidebar-aware width", async () => {
 		const { root, chat, runtime, controller } = await makeController({ terminalRows: 16, terminalColumns: 130 });
 

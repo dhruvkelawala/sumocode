@@ -43,7 +43,6 @@ import { TerminalController } from "../runtime/terminal-controller.js";
 import { ChatPager } from "../widgets/chat-pager.js";
 import { SIDEBAR_MIN_TERMINAL_WIDTH } from "../../sidebar.js";
 import { installChatViewportBridge } from "./chat-viewport-controller.js";
-export { installChatPagerBridge, textFromAgentMessage } from "./chat-viewport-controller.js";
 import { SumoExtensionUIAdapter, type SumoExtensionUIAdapterOptions } from "./extension-ui-adapter.js";
 import { createForeignAwareUIContext, type ForeignAwareUIOptions } from "./foreign-extension-warning.js";
 
@@ -480,7 +479,7 @@ export class SumoInteractiveMode {
 	private readonly retainedRuntime = new SumoInteractiveRuntime();
 	private readonly piNoiseFilterState: PiNoiseFilterState = { removedNodes: [], skipNextSpacer: false };
 	private retainedUIContext: ExtensionUIContext | undefined;
-	private chatPagerBridgeCleanup: (() => void) | undefined;
+	private chatViewportBridgeCleanup: (() => void) | undefined;
 
 	public constructor(
 		private readonly runtimeHost: AgentSessionRuntime,
@@ -502,8 +501,8 @@ export class SumoInteractiveMode {
 	}
 
 	public stop(): void {
-		this.chatPagerBridgeCleanup?.();
-		this.chatPagerBridgeCleanup = undefined;
+		this.chatViewportBridgeCleanup?.();
+		this.chatViewportBridgeCleanup = undefined;
 		this.upstream?.stop();
 		this.retainedRuntime.stop();
 	}
@@ -539,7 +538,7 @@ export class SumoInteractiveMode {
 
 	private configureUpstreamBeforeInit(upstream: InteractiveMode): void {
 		if (shouldHidePiNoise()) installPiNoiseFilter(upstream, this.piNoiseFilterState);
-		if (!this.chatPagerBridgeCleanup) this.chatPagerBridgeCleanup = installChatViewportBridge(upstream, this.retainedRuntime);
+		if (!this.chatViewportBridgeCleanup) this.chatViewportBridgeCleanup = installChatViewportBridge(upstream, this.retainedRuntime);
 		if (shouldForceHardwareCursor()) forceHardwareCursorVisible(upstream);
 	}
 

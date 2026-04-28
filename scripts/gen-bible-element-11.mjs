@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Element 11 — DIVINE QUERY modal (cathedral-themed Pi ask/confirm).
-// Per CATHEDRAL_UX_SPEC_V2.md §3.11.
+// Scriptorium direction: manuscript chrome, ❈ focused option marker.
 // Width 60% terminal, min 50, max 80. Centered.
 
 import { writeFileSync } from "node:fs";
@@ -27,47 +27,34 @@ const center = (s, n) => {
 
 function buildDivineQuery({ cols, question, options, selectedIdx }) {
 	const rows = [];
-	const innerCols = cols - 4;
 	const blank = () => padRight("", cols);
+	const halfRule = rep("─", 22);
 
-	// Centered title
 	rows.push(blank());
-	rows.push(center(`<span class="fg-accent">DIVINE QUERY</span>`, cols));
+	rows.push(center(`<span class="fg-accent">✾</span>  <span class="fg-accent">DIVINE QUERY</span>  <span class="fg-accent">✾</span>`, cols));
 	rows.push(blank());
-
-	// Top divider rule
-	rows.push(`   <span class="fg-divider">${rep("\u2500", cols - 6)}</span>   `);
+	rows.push(center(`<span class="fg-divider">${halfRule}</span>  <span class="fg-divider">·</span>  <span class="fg-divider">${halfRule}</span>`, cols));
 	rows.push(blank());
 
-	// Question (wrapped)
-	const questionLines = wrap(question, innerCols - 4);
+	const questionLines = wrap(question, cols - 12);
 	for (const line of questionLines) {
-		rows.push(`   <span class="fg-fg">${line}</span>${rep(" ", cols - 3 - line.length)}`);
+		rows.push(padRight(`     <span class="fg-fg">${line}</span>`, cols));
 	}
 	rows.push(blank());
 
-	// Options
 	for (let i = 0; i < options.length; i++) {
 		const opt = options[i];
+		const focused = i === selectedIdx;
+		const marker = focused ? "❈" : "·";
+		const markerClass = focused ? "fg-accent" : "fg-divider";
+		const textClass = focused ? "fg-fg" : "fg-dim";
 		const label = `${String.fromCharCode(65 + i)}) ${opt}`;
-		if (i === selectedIdx) {
-			// Selected row: accent bg fill
-			const padInner = innerCols - label.length - 2;
-			rows.push(
-				`   <span class="cursor"> </span><span class="fg-fg" style="background: var(--accent); color: var(--background);">${label}${rep(" ", padInner)}</span><span class="cursor"> </span>` +
-				rep(" ", cols - innerCols - 4),
-			);
-		} else {
-			rows.push(`     <span class="fg-fg">${label}</span>${rep(" ", cols - 5 - label.length)}`);
-		}
+		rows.push(padRight(`     <span class="${markerClass}">${marker}</span>   <span class="${textClass}">${label}</span>`, cols));
 	}
 	rows.push(blank());
 
-	// Bottom divider rule
-	rows.push(`   <span class="fg-divider">${rep("\u2500", cols - 6)}</span>   `);
-
-	// Footer keybinds
-	const hint = `<span class="fg-dim">\u2191\u2193  navigate    \u23ce  select    esc  cancel</span>`;
+	rows.push(center(`<span class="fg-divider">${halfRule}</span>  <span class="fg-divider">·</span>  <span class="fg-divider">${halfRule}</span>`, cols));
+	const hint = `<span class="fg-dim">↑↓ wander    ⏎ answer    ⎋ retreat</span>`;
 	rows.push(center(hint, cols));
 	rows.push(blank());
 
@@ -117,8 +104,8 @@ const variants = [
 	{
 		filename: "11-divine-query-rename.html",
 		title: "Bible · Element 11 · DIVINE QUERY · rename",
-		label: "element 11 · DIVINE QUERY · 3 options, B selected · 80 cols",
-		blurb: "cathedral-themed Pi ask/confirm dialog. flat-hybrid card on surface-lifted bg. selected option in accent fill.",
+		label: "element 11 · DIVINE QUERY scriptorium · 3 options, B selected · 80 cols",
+		blurb: "full Scriptorium treatment: floral title marks, split rules, ❈ focused option marker, cathedral footer verbs.",
 		spec: {
 			question: "Should I rename `getUser` to `fetchUser` across the auth module?",
 			options: [
@@ -132,8 +119,8 @@ const variants = [
 	{
 		filename: "11-divine-query-yesno.html",
 		title: "Bible · Element 11 · DIVINE QUERY · yes/no",
-		label: "element 11 · DIVINE QUERY · 2 options, A selected · 80 cols",
-		blurb: "minimal yes/no question with first option focused.",
+		label: "element 11 · DIVINE QUERY scriptorium · 2 options, A selected · 80 cols",
+		blurb: "minimal yes/no question with first option focused via ❈.",
 		spec: {
 			question: "Run the migration on production database?",
 			options: ["Yes", "No"],
@@ -143,8 +130,8 @@ const variants = [
 	{
 		filename: "11-divine-query-many.html",
 		title: "Bible · Element 11 · DIVINE QUERY · 5 options",
-		label: "element 11 · DIVINE QUERY · 5 options, C selected · 80 cols",
-		blurb: "longer option list. middle option focused.",
+		label: "element 11 · DIVINE QUERY scriptorium · 5 options, C selected · 80 cols",
+		blurb: "longer option list. middle option focused via ❈.",
 		spec: {
 			question: "Which test framework should I use for the new auth module?",
 			options: [
@@ -163,5 +150,5 @@ for (const v of variants) {
 	const content = buildDivineQuery({ cols: COLS, ...v.spec });
 	const rows = content.split("\n").length;
 	writeFileSync(resolve(out, v.filename), htmlPage({ ...v, cols: COLS, content, rows }));
-	console.log(`wrote ${v.filename}  (${COLS}\u00d7${rows})`);
+	console.log(`wrote ${v.filename}  (${COLS}×${rows})`);
 }

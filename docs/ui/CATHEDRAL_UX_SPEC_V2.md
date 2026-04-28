@@ -363,11 +363,14 @@ Disappears on first keystroke.
 
 **Implementation task**: investigate Pi's `pi-coding-agent` source for how it currently triggers approvals, then plug our themed modal into that flow rather than re-implementing the policy.
 
-**Modal design** (locked, unchanged from DECISIONS):
+**Modal design** (locked): Scriptorium-danger hybrid approved 2026-04-29.
 
-```
-                                 APPROVAL REQUIRED
-   ────────────────────────────────────────────────────────────────────────
+**Mockups**: `docs/ui/bible/06-approval-rm.html`, `06-approval-curl.html`, `06-approval-yes-focused.html`.
+
+```txt
+                       ✾  APPROVAL REQUIRED  ✾
+
+              ──────────────────────  ·  ──────────────────────
 
    You are about to execute:
 
@@ -377,16 +380,18 @@ Disappears on first keystroke.
 
    — This will remove 234MB and is irreversible.
 
-   ────────────────────────────────────────────────────────────────────────
+              ──────────────────────  ·  ──────────────────────
+
    ■ SYSTEM NOTICE                              [Y]ES  [N]O  [A]LWAYS
 ```
 
-- Flat-hybrid (no double-line border)
-- Title `APPROVAL REQUIRED` accent, centered
-- Inner code frame (`┌─┐│└─┘`) with `surfaceRecess` bg
+- Scriptorium chrome for modal-family consistency, but danger semantics stay severe
+- Title `✾ APPROVAL REQUIRED ✾`: `state.approval`, centered
+- Decorative split rules: `divider`
+- Inner command frame (`┌─┐│└─┘`) with `surfaceRecess` bg
 - Em-dash explanation row: `foregroundDim`
 - `■ SYSTEM NOTICE`: `state.approval` square + dim brown label
-- Buttons: outlined, focused button accent-fill. Default focus on `[N]O` for safety
+- Buttons: outlined, focused button uses `state.approval` fill (not accent). Default focus on `[N]O` for safety
 - `Y` / `N` / `A` letter-keys select directly. `Tab` cycles focus
 - `[A]LWAYS` forwards to Pi's allowlist (no separate SumoCode allowlist)
 
@@ -638,27 +643,32 @@ Inside a SUMO message box:
 
 **NEW.** Replaces Pi default `ctx.ui.ask` / `ctx.ui.confirm` rendering.
 
-**Mockup**: forthcoming `v4/11-divine-query.png`.
+**LOCKED**: full Scriptorium variant approved 2026-04-29.
 
-```
-                              DIVINE QUERY
-   ────────────────────────────────────────────────────────────────────────
+**Mockups**: `docs/ui/bible/11-divine-query-rename.html`, `11-divine-query-yesno.html`, `11-divine-query-many.html`.
+
+```txt
+                         ✾  DIVINE QUERY  ✾
+
+              ──────────────────────  ·  ──────────────────────
 
    Should I rename `foo` to `bar`?
 
-     A) Yes, rename it
-   █ B) No, leave it                                                   █
-     C) Use a different name
+     ·   A) Yes, rename it
+     ❈   B) No, leave it
+     ·   C) Use a different name
 
-   ────────────────────────────────────────────────────────────────────────
-   ↑↓  navigate    ⏎  select    esc  cancel
+              ──────────────────────  ·  ──────────────────────
+                         ↑↓ wander    ⏎ answer    ⎋ retreat
 ```
 
-- Flat-hybrid modal (matches Elements 6, 7, 8)
-- Title `DIVINE QUERY` accent, centered
+- Full Scriptorium modal (matches Elements 7 and 8)
+- Title `✾ DIVINE QUERY ✾`: `accent`, centered
+- Decorative split rules: `divider`
 - Question body in `foreground`
-- Options as a list. Selected row filled with `accent` bg
-- Footer keybinds: `↑↓ navigate / ⏎ select / esc cancel`
+- Options as manuscript rows. Focused option uses `❈` heavy sparkle marker, not fill
+- Unfocused options use `·` marker + `foregroundDim`
+- Footer keybinds: `↑↓ wander / ⏎ answer / ⎋ retreat`
 
 Width: 60% of terminal, min 50, max 80. Centered.
 
@@ -866,7 +876,7 @@ Each row = one PR + one issue + visual approval.
 
 **Phase B — Element 13 chat messages + Element 11 questions**:
 5. Element 13 chat message framing (`┌ USER │ ... └`, `┌ SUMO · model · time │ ... └`)
-6. Element 11 DIVINE QUERY modal
+6. Element 11 DIVINE QUERY modal: implement locked Scriptorium query
 
 **Phase C — Element bugs**:
 7. Element 8 command palette: implement locked scriptorium palette, fix active-state opening + drill-down behavior + add SETTINGS row
@@ -879,7 +889,7 @@ Each row = one PR + one issue + visual approval.
 11. Element 12 task tool sub-agent UI
 
 **Phase E — Element 6 + crosscut**:
-12. Element 6 approval modal: re-enable + Pi default policy integration + `/yolo` slash
+12. Element 6 approval modal: implement locked Scriptorium-danger hybrid + Pi default policy integration + `/yolo` slash
 13. Cross-cut: mouse selection + OSC 52 auto-copy
 14. Cross-cut: resume perf fix (HIGH)
 15. Element 7 memory editor: implement locked Memory Scriptorium, inline `e`/`d` editing + AI-driven write path

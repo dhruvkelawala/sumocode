@@ -1,11 +1,9 @@
 #!/usr/bin/env node
 // Element 6 — Approval modal.
-// Per CATHEDRAL_UX_SPEC_V2.md §3.6:
-//   - flat-hybrid card on surface-lifted bg
-//   - APPROVAL REQUIRED title accent
+// Scriptorium-danger hybrid:
+//   - manuscript chrome for modal-family consistency
+//   - state.approval title / notice for safety severity
 //   - command in inner ┌─┐ frame on surface-recess bg
-//   - explanation row dim, em-dash prefix
-//   - ■ SYSTEM NOTICE in approval (terracotta) color
 //   - [Y]ES [N]O [A]LWAYS buttons, [N]O focused by default for safety
 
 import { writeFileSync } from "node:fs";
@@ -33,41 +31,38 @@ const center = (s, n) => {
 function buildApprovalModal({ cols, command, explanation, focusedButton = "no" }) {
 	const rows = [];
 	const blank = () => padRight("", cols);
+	const halfRule = rep("─", 22);
 
 	rows.push(blank());
-	rows.push(center(`<span class="fg-accent">APPROVAL REQUIRED</span>`, cols));
+	rows.push(center(`<span class="fg-approve">✾</span>  <span class="fg-approve">APPROVAL REQUIRED</span>  <span class="fg-approve">✾</span>`, cols));
 	rows.push(blank());
-	rows.push(`   <span class="fg-divider">${rep("\u2500", cols - 6)}</span>   `);
+	rows.push(center(`<span class="fg-divider">${halfRule}</span>  <span class="fg-divider">·</span>  <span class="fg-divider">${halfRule}</span>`, cols));
 	rows.push(blank());
 
-	rows.push(`   <span class="fg-fg">You are about to execute:</span>${rep(" ", cols - 28)}`);
+	rows.push(padRight(`   <span class="fg-fg">You are about to execute:</span>`, cols));
 	rows.push(blank());
 
 	// Command frame — all 3 rows on surface-recess bg (frame chars + interior).
-	// Wrap each row in a single box-fill span at the inner width so the
-	// recess color extends across the entire frame including borders.
 	const cmdInnerWidth = cols - 14;
-	const cmdFullWidth = cmdInnerWidth + 2; // includes left + right border chars
+	const cmdFullWidth = cmdInnerWidth + 2;
 	const cmdRow = (inner) =>
 		`   <span class="box-fill" style="background: var(--surface-recess); width: ${cmdFullWidth}ch">${inner}</span>   `;
-	const cmdTopBorder = cmdRow(`<span class="fg-divider">\u250c${rep("\u2500", cmdInnerWidth)}\u2510</span>`);
-	const cmdContent = cmdRow(`<span class="fg-divider">\u2502</span> <span class="fg-fg">${command}</span>${rep(" ", cmdInnerWidth - command.length - 1)}<span class="fg-divider">\u2502</span>`);
-	const cmdBotBorder = cmdRow(`<span class="fg-divider">\u2514${rep("\u2500", cmdInnerWidth)}\u2518</span>`);
+	const cmdTopBorder = cmdRow(`<span class="fg-divider">┌${rep("─", cmdInnerWidth)}┐</span>`);
+	const cmdContent = cmdRow(`<span class="fg-divider">│</span> <span class="fg-fg">${command}</span>${rep(" ", cmdInnerWidth - command.length - 1)}<span class="fg-divider">│</span>`);
+	const cmdBotBorder = cmdRow(`<span class="fg-divider">└${rep("─", cmdInnerWidth)}┘</span>`);
 	rows.push(padRight(cmdTopBorder, cols));
 	rows.push(padRight(cmdContent, cols));
 	rows.push(padRight(cmdBotBorder, cols));
 	rows.push(blank());
 
-	// Explanation
-	rows.push(`   <span class="fg-dim">\u2014 ${explanation}</span>${rep(" ", Math.max(1, cols - 6 - explanation.length))}`);
+	rows.push(padRight(`   <span class="fg-dim">— ${explanation}</span>`, cols));
 	rows.push(blank());
-	rows.push(`   <span class="fg-divider">${rep("\u2500", cols - 6)}</span>   `);
+	rows.push(center(`<span class="fg-divider">${halfRule}</span>  <span class="fg-divider">·</span>  <span class="fg-divider">${halfRule}</span>`, cols));
 	rows.push(blank());
 
-	// Bottom row: ■ SYSTEM NOTICE  ............  [Y]ES  [N]O  [A]LWAYS
 	const buttonStr = (label, focused) => {
 		if (focused) {
-			return `<span class="fg-fg" style="background: var(--accent); color: var(--background);">  ${label}  </span>`;
+			return `<span class="fg-fg" style="background: var(--state-approval); color: var(--background);">  ${label}  </span>`;
 		}
 		return `<span class="fg-divider">[</span><span class="fg-fg">${label[0]}</span><span class="fg-divider">]</span><span class="fg-fg">${label.slice(1)}</span>`;
 	};
@@ -77,7 +72,7 @@ function buildApprovalModal({ cols, command, explanation, focusedButton = "no" }
 	const buttons = `${yes}  ${no}  ${always}`;
 	const buttonsLen = visibleLen(buttons);
 
-	const left = `<span class="fg-approve">\u25a0</span> <span class="fg-dim">SYSTEM NOTICE</span>`;
+	const left = `<span class="fg-approve">■</span> <span class="fg-dim">SYSTEM NOTICE</span>`;
 	const leftLen = visibleLen(left);
 	const middle = cols - 6 - leftLen - buttonsLen;
 	rows.push(`   ${left}${rep(" ", Math.max(1, middle))}${buttons}   `);
@@ -116,8 +111,8 @@ const variants = [
 	{
 		filename: "06-approval-rm.html",
 		title: "Bible · Element 6 · Approval · rm -rf",
-		label: "element 6 · approval modal · destructive bash · 80 cols",
-		blurb: "rm -rf approval. focus on [N]O for safety. ■ SYSTEM NOTICE in approval-red.",
+		label: "element 6 · scriptorium-danger approval · destructive bash · 80 cols",
+		blurb: "Scriptorium chrome, but danger semantics remain: approval-red title, hard command frame, [N]O focused for safety.",
 		spec: {
 			command: "rm -rf node_modules/",
 			explanation: "This will remove 234MB and is irreversible.",
@@ -127,7 +122,7 @@ const variants = [
 	{
 		filename: "06-approval-curl.html",
 		title: "Bible · Element 6 · Approval · curl",
-		label: "element 6 · approval modal · network call · 80 cols",
+		label: "element 6 · scriptorium-danger approval · network call · 80 cols",
 		blurb: "curl-pipe-shell pattern. classic risky operation.",
 		spec: {
 			command: "curl -fsSL https://get.example.com | sh",
@@ -138,7 +133,7 @@ const variants = [
 	{
 		filename: "06-approval-yes-focused.html",
 		title: "Bible · Element 6 · Approval · YES focused",
-		label: "element 6 · approval modal · YES button focused · 80 cols",
+		label: "element 6 · scriptorium-danger approval · YES button focused · 80 cols",
 		blurb: "after user pressed Tab to move focus to YES.",
 		spec: {
 			command: "git push --force origin main",
@@ -152,5 +147,5 @@ for (const v of variants) {
 	const content = buildApprovalModal({ cols: COLS, ...v.spec });
 	const rows = content.split("\n").length;
 	writeFileSync(resolve(out, v.filename), htmlPage({ ...v, cols: COLS, content, rows }));
-	console.log(`wrote ${v.filename}  (${COLS}\u00d7${rows})`);
+	console.log(`wrote ${v.filename}  (${COLS}×${rows})`);
 }

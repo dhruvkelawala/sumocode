@@ -48,13 +48,28 @@ const row = (h) => padRight(h, 0); // joined later
 // Loaded from src/assets/sumo-face.ans via CAT_HTML_LINES above.
 
 // ─── SUMOCODE wordmark (letter-spaced) ──────────────────────────────────
-const WORDMARK = "S U M O C O D E"; // 15 chars
+// Production block-letter wordmark — each glyph 6 cells × 5 rows.
+// Source: src/splash.ts SUMOCODE_WORDMARK.
+const WORDMARK_GLYPHS = {
+	S: ["█████ ", "█     ", "█████ ", "    █ ", "█████ "],
+	U: ["█   █ ", "█   █ ", "█   █ ", "█   █ ", "█████ "],
+	M: ["█   █ ", "██ ██ ", "█ █ █ ", "█   █ ", "█   █ "],
+	O: ["█████ ", "█   █ ", "█   █ ", "█   █ ", "█████ "],
+	C: ["█████ ", "█     ", "█     ", "█     ", "█████ "],
+	D: ["████  ", "█   █ ", "█   █ ", "█   █ ", "████  "],
+	E: ["█████ ", "█     ", "████  ", "█     ", "█████ "],
+};
+const WORDMARK_LINES = (() => {
+	const letters = "SUMOCODE".split("");
+	return Array.from({ length: 5 }, (_, i) =>
+		letters.map((ch) => WORDMARK_GLYPHS[ch][i]).join(""),
+	);
+})(); // 5 rows of 48 cols
 
 // ─── Quote (3 lines: 2 quote, 1 attribution) ────────────────────────────
 const QUOTE_LINES = [
-	`"perfection is achieved when there is`,
-	`nothing left to take away."`,
-	`— saint-exupéry`,
+	`"Meow meow meow... meow meow"`,
+	`— SUMO`,
 ];
 
 // ─── Rotating placeholder examples ──────────────────────────────────────
@@ -81,7 +96,9 @@ function buildSplash({ cols, rows: totalRows, placeholderIndex = 0 }) {
 	);
 
 	// 2. Wordmark — center, accent
-	const wordmark = center(`<span class="fg-accent">${WORDMARK}</span>`, cols);
+	const wordmarkRows = WORDMARK_LINES.map((line) =>
+		center(`<span class="fg-accent">${line}</span>`, cols),
+	);
 
 	// 3. Quote — center, dim italic
 	const quote = QUOTE_LINES.map((line) =>
@@ -162,7 +179,7 @@ function buildSplash({ cols, rows: totalRows, placeholderIndex = 0 }) {
 	// Top padding
 	const contentRows =
 		CAT_HTML_LINES.length + // 12
-		2 + 1 + // wordmark
+		2 + WORDMARK_LINES.length + // 5
 		2 + QUOTE_LINES.length + // 3
 		2 + 3 + // input frame
 		1 + 1 + // hint
@@ -175,8 +192,8 @@ function buildSplash({ cols, rows: totalRows, placeholderIndex = 0 }) {
 	out.push(blank);
 	out.push(blank);
 
-	// Wordmark
-	out.push(wordmark);
+	// Wordmark (5 rows of block letters)
+	out.push(...wordmarkRows);
 	out.push(blank);
 	out.push(blank);
 

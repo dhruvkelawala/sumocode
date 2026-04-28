@@ -530,42 +530,101 @@ Width: 60% of terminal, min 50, max 80. Centered.
 
 ### Element 9 — Tool pills
 
-**Mockup**: forthcoming `v4/09-tool-pills.png` (read / bash / edit / write states).
+**LOCKED**: Hybrid Tool Ledger + Bash Live View approved 2026-04-29.
 
-**v1 = ship cathedral framing.** Replace Pi default tool rendering for `bash`, `edit`, `write`, `read`.
+**Mockups**:
+- Standalone states: `docs/ui/bible/09-pill-*.html`
+- Ledger in active chat: `docs/ui/bible/scene-active-tool-ledger.html`
+- Bash live-view in active chat: `docs/ui/bible/scene-active-bash-live-view.html`
 
-```
-━━━ [read]  src/app.ts                                   ━━━ ✓
-   1   import { serve } from "bun";
-   2   import { router } from "./routes";
-   3
-       120 lines collapsed
+**Reference/future fork**: `https://github.com/dhruvkelawala/pi-bash-live-view` (forked from `lucasmeijer/pi-bash-live-view`). Use as the v2 PTY live-bash reference if/when we adapt/vendor the implementation.
+
+**Decision**: do not make every tool a large card. Use compact pills for common completed tools, ledger cards for expansion/error/detail, and live terminal cards only for running/long bash.
+
+**Default compact form**:
+
+```txt
+✓ [read]  src/auth/session.ts                 · 184 lines · ⌘O expand
+✓ [edit]  src/auth/session.ts                 · +14 -6 · ⌘O diff
+✓ [bash]  pnpm test src/auth                  · 22 tests, 1.2s · ⌘O output
+✗ [bash]  pnpm test src/auth                  · 1 failed · ⌘O error
 ```
 
-```
-━━━ [bash]  pnpm test                                    ━━━ ▶ running
+**Expanded read ledger**:
 
-> sumocode@1.0.4 test /usr/src/app
-> vitest run
-✓ src/core/parser.test.ts (14 tests)
-[█████████░░░░░] 57%
+```txt
+╭─ [read]  src/auth/session.ts ───────────────────────────── ✓ 184 lines ╮
+│   1  import { Session } from "./session";
+│   2  import { verifyToken } from "./jwt";
+│   3
+│   4  export async function getUser(token: string) {
+│   5    const session = await Session.fromToken(token);
+│      … 176 lines collapsed
+╰────────────────────────────────────────────────────────────────────────╯
 ```
+
+**Expanded edit ledger**:
+
+```txt
+╭─ [edit]  src/auth/session.ts ───────────────────────────── ✓ +14 -6 ╮
+│  12  - const session = new Session(token);
+│  13  - if (session.expired) return null;
+│  14      return session.user;
+│  16  + const session = await Session.fromToken(token);
+│  17  + if (!session || session.expired) return null;
+│  18  + return session.user;
+╰──────────────────────────────────────────────────────────────────────╯
+```
+
+**Running/long bash live-view**:
+
+```txt
+╭ live bash · pnpm test src/auth ───────────────────── 4.2s ╮
+│ $ pnpm test src/auth                                      │
+│ > vitest run src/auth                                     │
+│ ✓ src/auth/session.test.ts (22 tests)                     │
+│ ▶ watching stdout… press ⌘O expand                       │
+│ [███████████░░░░] 73%                                     │
+╰───────────────────────────────────────────────────────────╯
+```
+
+**Behavior matrix**:
+
+| Tool/state | Default | Expanded |
+|---|---|---|
+| `read` | compact pill with file + line count | ledger excerpt with line gutter + collapse marker |
+| `edit` | compact pill with `+N -M` | diff ledger |
+| `write` | compact pill with file + line count | preview ledger |
+| completed `bash` | compact summary pill | output ledger |
+| failed `bash` | compact failed summary | error ledger |
+| running/long `bash` | live terminal card | larger live terminal / output ledger |
 
 **Tokens**:
-- `━━━` rule: `divider`
+- Compact status `✓`: `state.idle`
+- Compact status `▶`: `state.tool`
+- Compact status `✗`: `state.approval`
 - `[name]` lowercase tag: `accent`
-- target path: `foreground`
-- `✓` (done): `state.idle`
-- `▶ running`: `state.tool`
-- `✗` (failed): `state.approval`
-- line numbers (read/edit): `foregroundDim`
-- collapse marker (`120 lines collapsed`): `foregroundDim` italic
+- target path / command: `foreground`
+- note + expand hint: `foregroundDim`
+- Ledger borders `╭╮╰╯│─`: `divider`
+- Live bash borders: `state.tool`
+- Live bash timer: `foregroundDim`
+- Line numbers: `foregroundDim`
+- Diff additions: `state.idle`
+- Diff removals: `state.approval`
+- Collapse marker (`… N lines collapsed`): `foregroundDim`
 
-**Diff rendering** (`edit` tool): for v1, use Pi's default themed to cathedral palette. Custom diff style deferred.
+**Expansion**:
+- Compact by default.
+- `⌘O` / Pi tool expand action expands nearest/latest tool where possible.
+- `Ctrl+E` expands/collapses all tools using Pi's existing tools expansion semantics.
+- Mouse click on tool header may toggle if mouse support is active; not required for v1.
+- Long outputs always collapse safely with `N lines collapsed`; full text remains available to the model/result payload.
 
-**Long output collapse**: auto-collapse to last 20 lines + `N lines collapsed` marker. Expand on key (`E` or click).
-
-**Implementation**: register custom tool renderers via `tool.renderCall` / `tool.renderResult`.
+**Implementation plan**:
+1. **Phase D v1**: structured chat tool render model + compact pills + expanded ledger cards. No PTY execution change.
+2. **v1.5 spike**: custom `bash` renderer that delegates to Pi's normal bash execution, proving self-rendered bash without changing security semantics.
+3. **v2 / optional Phase D+**: PTY-backed live bash adapted from `dhruvkelawala/pi-bash-live-view`, behind `/sumo:live-bash [auto|on|off]`. Keep tool name `bash` so Pi/Sumo approval policy still applies.
 
 ---
 
@@ -787,6 +846,7 @@ Each message renders as a self-contained closed-frame box:
 | `/sumo:memory edit` | open memory editor | 7 |
 | `/sumo:memory add --panel <NAME> "..."` | add memory fact | 7 |
 | `/sumo:memory forget <id>` | remove memory fact | 7 |
+| `/sumo:live-bash [auto\|on\|off]` | configure PTY-backed live bash cards (v2/spike) | 9 |
 
 ---
 
@@ -883,7 +943,7 @@ Each row = one PR + one issue + visual approval.
 8. Element 2 top bar: ship LLM session summarization + recent session tabs (interactive if easy)
 
 **Phase D — Element 9, 10, 12 (new design)**:
-9. Element 9 tool pills: cathedral framing for bash/edit/write/read
+9. Element 9 tool pills: implement locked Hybrid Tool Ledger + compact pills for read/edit/write/bash
 9a. Element 9a skill pill: inline `[skill] name (⌘O to expand)` rendering inside SUMO boxes
 10. Element 10 code blocks: full frame + cathedral syntax colors + (optional) line gutter
 11. Element 12 task tool sub-agent UI
@@ -897,14 +957,14 @@ Each row = one PR + one issue + visual approval.
 **Phase F — Polish stretch**:
 16. Animated splash hero (cycle frames)
 17. Per-terminal OSC 11/111 compat research
-18. Tool diff redesign
+18. PTY-backed live bash spike/integration from `dhruvkelawala/pi-bash-live-view`
 
 ---
 
 ## 9. v2 punted to v3+
 
 - Sidebar SCRIPTOR + FILES sub-tabs (originally locked, deferred)
-- Tool pills custom diff renderer (Pi default for v1)
+- PTY-backed live bash as default behavior (compact/ledger ships first; live bash is spike/v2)
 - Themes Amber CRT + Obsidian Temple
 - Light mode
 - Multi-pane workspace splits

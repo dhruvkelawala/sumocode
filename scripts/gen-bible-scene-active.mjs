@@ -85,7 +85,7 @@ function buildSidebarRows(SIDEBAR_COLS) {
 }
 
 // ─── Chat conversation (Element 13 boxed 7A refined) ───────────────────
-function buildChatHTML(cols) {
+function buildChatHTML(cols, toolStyle = "inline") {
 	const innerCols = cols - 4;
 	const blocks = [];
 
@@ -155,12 +155,62 @@ function buildChatHTML(cols) {
 				rows.push(blankRow());
 				const dotClass = { ok: "fg-idle", running: "fg-tool", failed: "fg-approve" }[tool.state] ?? "fg-dim";
 				const glyph = { ok: "\u2713", running: "\u25b6", failed: "\u2717" }[tool.state] ?? "\u00b7";
+
+				if (toolStyle === "live" && tool.name === "bash") {
+					const title = `live bash · ${tool.target}`;
+					const timer = ` 4.2s `;
+					const titleLen = title.length + 2;
+					const timerLen = timer.length;
+					const top =
+						`<span class="fg-tool">╭ </span><span class="fg-fg">${title}</span><span class="fg-tool"> ` +
+						`${rep("─", Math.max(1, innerCols - titleLen - timerLen - 2))}</span>` +
+						`<span class="fg-dim">${timer}</span><span class="fg-tool">╮</span>`;
+					rows.push(bodyRow(top, innerCols));
+					const liveRows = [
+						`<span class="fg-fg">$ pnpm test src/auth</span>`,
+						`<span class="fg-fg">> vitest run src/auth</span>`,
+						`<span class="fg-idle">✓</span> <span class="fg-fg">src/auth/session.test.ts</span> <span class="fg-dim">(22 tests)</span>`,
+						`<span class="fg-tool">▶</span> <span class="fg-fg">watching stdout…</span> <span class="fg-dim">press ⌘O expand</span>`,
+						`<span class="fg-fg">[</span><span class="fg-tool">███████████</span><span class="fg-divider">░░░░</span><span class="fg-fg">] 73%</span>`,
+					];
+					for (const liveRow of liveRows) {
+						rows.push(bodyRow(`<span class="fg-tool">│</span> ${liveRow}`, visibleLen(liveRow) + 2));
+					}
+					rows.push(bodyRow(`<span class="fg-tool">╰${rep("─", innerCols - 1)}</span>`, innerCols));
+					continue;
+				}
+
+				if (toolStyle === "ledger") {
+					const status = tool.note ? `${glyph} ${tool.note}` : glyph;
+					const statusHTML = `<span class="${dotClass}">${glyph}</span>${tool.note ? `<span class="fg-dim"> ${tool.note}</span>` : ""}`;
+					const title = `[${tool.name}]  ${tool.target}`;
+					const leftHTML = `<span class="fg-divider">╭─ </span><span class="fg-accent">[${tool.name}]</span><span class="fg-fg">  ${tool.target}</span> `;
+					const leftLen = 3 + title.length + 1;
+					const rightLen = visibleLen(statusHTML) + 2;
+					rows.push(bodyRow(leftHTML + `<span class="fg-divider">${rep("─", Math.max(1, innerCols - leftLen - rightLen))}</span> ` + statusHTML, innerCols));
+
+					const outputLines = tool.name === "bash"
+						? [
+							`<span class="fg-fg">> pnpm test src/auth</span>`,
+							`<span class="fg-idle">✓</span> <span class="fg-fg">src/auth/session.test.ts (22 tests)</span>`,
+							`<span class="fg-dim">22 passed in 1.2s</span>`,
+						]
+						: tool.name === "edit"
+							? [`<span class="fg-idle">+14</span> <span class="fg-approve">-6</span> <span class="fg-dim">session flow updated</span>`]
+							: [`<span class="fg-dim">preview collapsed</span>`];
+					for (const outputLine of outputLines) {
+						rows.push(bodyRow(`<span class="fg-divider">│</span> ${outputLine}`, visibleLen(outputLine) + 2));
+					}
+					rows.push(bodyRow(`<span class="fg-divider">╰${rep("─", innerCols - 1)}</span>`, innerCols));
+					continue;
+				}
+
 				const note = tool.note ? `<span class="fg-dim">  \u00b7 ${tool.note}</span>` : "";
 				const pillHTML =
 					`<span class="${dotClass}">${glyph}</span> ` +
 					`<span class="fg-accent">[${tool.name}]</span>` +
 					`<span class="fg-fg">  ${tool.target}</span>` +
-					note;
+				note;
 				const pillLen = visibleLen(pillHTML);
 				rows.push(bodyRow(pillHTML, pillLen));
 			}
@@ -282,7 +332,8 @@ function buildScene(variant) {
 	const CHAT_COLS = sidebarVisible ? cols - sidebarCols - GUTTER : cols - GUTTER;
 
 	const sidebarRows = sidebarVisible ? buildSidebarRows(sidebarCols) : [];
-	const chatHTML = buildChatHTML(CHAT_COLS);
+	const toolStyle = variant.toolStyle ?? "inline";
+	const chatHTML = buildChatHTML(CHAT_COLS, toolStyle);
 	const inputRows = buildInputFrameRows(cols);
 	const hintRow = buildHintRow(cols, sidebarVisible);
 	const footerRow = buildFooterRow(cols, sidebarVisible);
@@ -296,7 +347,7 @@ function buildScene(variant) {
 <html>
 <head>
 <meta charset="utf-8">
-<title>Bible · Scene · Active ${cols}×${TERM_ROWS}</title>
+<title>Bible · Scene · Active ${cols}×${TERM_ROWS}${toolStyle === "ledger" ? " · Tool Ledger" : toolStyle === "live" ? " · Bash Live View" : ""}</title>
 <link rel="stylesheet" href="_assets/tokens.css">
 <style>
   .stage-blurb { max-width: ${Math.max(60, CHAT_COLS)}ch; color: var(--foreground-dim); font-size: 11px; line-height: 1.6; padding: 0 8px; text-align: center; }
@@ -308,10 +359,14 @@ function buildScene(variant) {
 </head>
 <body>
 <div class="stage">
-  <div class="stage-label">scene · active state · ${cols}×${TERM_ROWS} ${sidebarVisible ? "landscape" : "portrait (sidebar hidden)"}</div>
-  <div class="stage-blurb">${sidebarVisible
-		? "first scene composition: combines all 5 locked elements (top-bar placeholder, sidebar V2 editorial CONTEXT, chat boxed 7A, input frame, footer READY). validates the full visual gestalt before adding remaining elements."
-		: "portrait variant. sidebar hidden (per Element 1 rule: < 120 col). chat takes full term width. footer collapses right zone (drops project + branch + $cost; keeps tokens). hint row: keybinds only (left flavour dropped at narrow widths)."}</div>
+  <div class="stage-label">${toolStyle === "ledger" ? "scene · active state + ledger tool cards" : toolStyle === "live" ? "scene · active state + bash live-view card" : `scene · active state · ${cols}×${TERM_ROWS} ${sidebarVisible ? "landscape" : "portrait (sidebar hidden)"}`}</div>
+  <div class="stage-blurb">${toolStyle === "ledger"
+		? "Option 3A preview for Element 9: tool calls render as nested ledger cards inside the SUMO message box. Tests vertical rhythm, containment, and density in the full active scene."
+		: toolStyle === "live"
+			? "Option 3B preview inspired by lucasmeijer/pi-bash-live-view: bash renders as a live PTY viewport card with elapsed timer; non-bash tools remain compact."
+			: sidebarVisible
+			? "first scene composition: combines all 5 locked elements (top-bar placeholder, sidebar V2 editorial CONTEXT, chat boxed 7A, input frame, footer READY). validates the full visual gestalt before adding remaining elements."
+			: "portrait variant. sidebar hidden (per Element 1 rule: < 120 col). chat takes full term width. footer collapses right zone (drops project + branch + $cost; keeps tokens). hint row: keybinds only (left flavour dropped at narrow widths)."}</div>
   <div data-render-rect class="term scene" style="--term-cols: ${cols}; --term-rows: ${TERM_ROWS};">
     <pre class="grid" style="grid-row: 1;">${topBarRow}</pre>
     <pre class="grid" style="grid-row: 2;"> </pre>
@@ -335,6 +390,8 @@ function buildScene(variant) {
 for (const v of [
 	{ filename: "scene-active.html", spec: LANDSCAPE },
 	{ filename: "scene-active-portrait.html", spec: PORTRAIT },
+	{ filename: "scene-active-tool-ledger.html", spec: { ...LANDSCAPE, toolStyle: "ledger" } },
+	{ filename: "scene-active-bash-live-view.html", spec: { ...LANDSCAPE, toolStyle: "live" } },
 ]) {
 	writeFileSync(resolve(out, v.filename), buildScene(v.spec));
 	console.log(`wrote ${v.filename}  (${v.spec.cols}\u00d7${v.spec.rows})`);

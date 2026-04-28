@@ -55,7 +55,7 @@ describe("ScrollBox input", () => {
 		root.dispose();
 	});
 
-	it("PgUp/PgDn move by half a page, Home/End jump to edges", async () => {
+	it("PgUp/PgDn move by half a page, Home/End/Shift+Down jump to edges", async () => {
 		const yoga = await loadYoga();
 		const root = new SumoNode(yoga.Node.create());
 		const scrollBox = new ScrollBox(yoga.Node.create(), root);
@@ -71,6 +71,10 @@ describe("ScrollBox input", () => {
 		scrollBox.handleKey({ key: "PageUp" });
 		expect(scrollBox.scrollOffset).toBe(4);
 		scrollBox.handleKey({ key: "PageDown" });
+		expect(scrollBox.scrollOffset).toBe(6);
+		scrollBox.handleKey({ key: "Home" });
+		expect(scrollBox.scrollOffset).toBe(0);
+		scrollBox.handleKey({ key: "Shift+Down" });
 		expect(scrollBox.scrollOffset).toBe(6);
 		scrollBox.handleKey({ key: "Home" });
 		expect(scrollBox.scrollOffset).toBe(0);

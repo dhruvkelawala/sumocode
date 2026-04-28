@@ -199,7 +199,7 @@ export class ScrollBox extends SumoNode {
 			this.scrollTo(0);
 			return true;
 		}
-		if (key === "end") {
+		if (key === "end" || key === "shift+down") {
 			this.scrollToBottom();
 			this.manualScroll = false;
 			this.emitStateIfChanged();

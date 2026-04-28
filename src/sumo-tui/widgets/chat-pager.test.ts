@@ -134,7 +134,7 @@ describe("ChatPager", () => {
 		const frame = buffer();
 
 		expect(chat.getUnreadCount()).toBe(1);
-		expect(frame.toPlainRow(4)).toContain("↓ 1 new message — Press End to jump");
+		expect(frame.toPlainRow(4)).toContain("↓ 1 new message — Press ⇧↓ to jump");
 		root.dispose();
 	});
 

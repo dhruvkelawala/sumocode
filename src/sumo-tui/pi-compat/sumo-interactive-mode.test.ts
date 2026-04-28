@@ -188,9 +188,13 @@ describe("sumo interactive Pi noise filtering", () => {
 
 		const result = inputListeners[0]?.("\x1b[<64;10;5M");
 		const after = runtime.getSnapshot()?.chat.scrollBox.scrollOffset ?? 0;
+		const jumpResult = inputListeners[0]?.("\x1b[b");
+		const jumped = runtime.getSnapshot()?.chat.scrollBox.scrollOffset ?? 0;
 
 		expect(result).toEqual({ consume: true });
 		expect(after).toBeLessThan(before);
+		expect(jumpResult).toEqual({ consume: true });
+		expect(jumped).toBe(before);
 		expect(upstream.ui.requestRender).toHaveBeenCalledWith(true);
 		const rendered = upstream.chatContainer.render(60).join("\n");
 		expect(rendered).toContain("USER >");

@@ -30,6 +30,7 @@
 import type { AgentSessionRuntime, InteractiveModeOptions } from "@mariozechner/pi-coding-agent";
 import { InteractiveMode } from "@mariozechner/pi-coding-agent";
 import type { ExtensionUIContext } from "@mariozechner/pi-coding-agent";
+import { matchesKey } from "@mariozechner/pi-tui";
 import type { KeyEvent } from "../input/key-router.js";
 import { parseSgrMouseStream, type MouseEvent } from "../input/mouse.js";
 import { EmptyChatQuoteNode, shouldRenderEmptyChatQuote, type EmptyChatQuoteSnapshot } from "../cathedral/empty-chat-quote.js";
@@ -326,6 +327,7 @@ function keyFromInput(data: string): KeyEvent | undefined {
 		case "\x1b[4~":
 			return { key: "End", sequence: data };
 		default:
+			if (matchesKey(data, "shift+down")) return { key: "End", sequence: data };
 			return undefined;
 	}
 }

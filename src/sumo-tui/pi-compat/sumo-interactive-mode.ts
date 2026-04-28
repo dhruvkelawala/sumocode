@@ -453,6 +453,22 @@ export class SumoInteractiveRuntime {
 		return [...lines];
 	}
 
+	public writeChatViewport(top: number, left: number, width: number, height: number): boolean {
+		if (!this.output.isTTY) return false;
+		this.invalidateFrameCache();
+		const safeTop = Math.max(0, Math.floor(top));
+		const safeLeft = Math.max(0, Math.floor(left));
+		const lines = this.renderChatLines(width, height);
+		if (lines.length === 0) return false;
+		let output = "\x1b[?2026h\x1b7";
+		for (let row = 0; row < lines.length; row += 1) {
+			output += `\x1b[${safeTop + row + 1};${safeLeft + 1}H${lines[row] ?? ""}`;
+		}
+		output += "\x1b8\x1b[?2026l";
+		this.output.write(output);
+		return true;
+	}
+
 	public stop(): void {
 		if (!this.started) return;
 		if (this.resizeHandler) process.stdout.off("resize", this.resizeHandler);
@@ -679,7 +695,7 @@ class UpstreamChatPagerBridge {
 
 		const keyEvent = keyFromInput(nextData);
 		if (keyEvent && this.chat.handleKey(keyEvent)) {
-			this.requestRender();
+			this.renderChatViewportOrRequest();
 			return { consume: true };
 		}
 
@@ -765,8 +781,14 @@ class UpstreamChatPagerBridge {
 		};
 		if (localEvent.row < 0 || localEvent.row >= this.lastChatHeight || localEvent.col < 0 || localEvent.col >= this.lastChatWidth) return false;
 		const handled = this.chat.handleMouseEvent(localEvent);
-		if (handled) this.requestRender();
+		if (handled) this.renderChatViewportOrRequest();
 		return handled;
+	}
+
+	private renderChatViewportOrRequest(): void {
+		if (!this.runtime.writeChatViewport(this.lastChatTop, 0, this.lastChatWidth, this.lastChatHeight)) {
+			this.requestRender();
+		}
 	}
 
 	private computeChatTop(width: number): number {

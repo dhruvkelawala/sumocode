@@ -100,38 +100,47 @@ function buildScriptorium({ selectedIdx }) {
 	const blank = () => padRight("", COLS);
 	rows.push(blank());
 
-	rows.push(center(`<span class="fg-accent">\u2766  COMMAND PALETTE  \u2766</span>`, COLS));
-	rows.push(blank());
-	rows.push(center(`<span class="fg-divider">\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u00b7\u00b7\u00b7\u00b7\u00b7\u2500\u2500\u2500\u2500\u2500\u2500\u2500</span>`, COLS));
+	// Title with ❉ sparkle decoration
+	rows.push(center(`<span class="fg-accent">❉</span>  <span class="fg-accent">COMMAND PALETTE</span>  <span class="fg-accent">❉</span>`, COLS));
 	rows.push(blank());
 
-	// Search as reading rule — no box, leading ▸ arrow
+	// Decorative rule with center sparkle
+	const halfRule = rep("─", 22);
+	rows.push(center(`<span class="fg-divider">${halfRule}</span>  <span class="fg-divider">·</span>  <span class="fg-divider">${halfRule}</span>`, COLS));
+	rows.push(blank());
+
+	// Search: ❯ chevron + cursor + placeholder
 	const placeholder = "what shall we attend to…";
 	rows.push(
-		padRight(`     <span class="fg-accent">\u25b8</span>  <span class="fg-dim">${placeholder}</span>`, COLS),
+		padRight(`     <span class="fg-accent">❯</span>  <span class="cursor"> </span><span class="fg-dim">${placeholder}</span>`, COLS),
 	);
 	rows.push(blank());
 
-	// Mode rows: Roman numeral + ❧ bullet + label
-	const numerals = ["\u2160", "\u2161", "\u2162", "\u2163", "\u2164", "\u2165"]; // Ⅰ Ⅱ Ⅲ Ⅳ Ⅴ Ⅵ
+	// Mode rows: ❧/· marker + Nerd Font icon + label + value
 	for (let i = 0; i < MODES.length; i++) {
 		const m = MODES[i];
 		const focused = i === selectedIdx;
-		const numeral = numerals[i];
 		const labelClass = focused ? "fg-fg" : "fg-dim";
 		const valueClass = focused ? "fg-fg" : "fg-dim";
-		const bullet = focused ? `<span class="fg-accent">\u2767</span>` : `<span class="fg-divider">\u00b7</span>`;
-		const labelStr = `   <span class="fg-divider">${numeral}.</span>  ${bullet}  <span class="${labelClass}">${m.key}</span>`;
+		const markerClass = focused ? "fg-accent" : "fg-divider";
+		const marker = focused ? "❧" : "·";
+		const iconClass = focused ? "fg-accent" : "fg-dim";
+		const icon = `<span class="${iconClass}">${m.glyph}</span>`;
+
+		const labelStr =
+			`     <span class="${markerClass}">${marker}</span>  ` +
+			`${icon}   ` +
+			`<span class="${labelClass}">${m.key}</span>`;
 		const labelLen = visibleLen(labelStr);
 		const valueStr = m.value ? `<span class="${valueClass}">${m.value}</span>` : "";
 		const valueLen = m.value.length;
-		const padBetween = COLS - labelLen - valueLen - 4;
-		rows.push(`${labelStr}${rep(" ", Math.max(2, padBetween))}${valueStr}    `);
+		const padBetween = COLS - labelLen - valueLen - 5;
+		rows.push(padRight(`${labelStr}${rep(" ", Math.max(2, padBetween))}${valueStr}`, COLS));
 	}
 
 	rows.push(blank());
-	rows.push(center(`<span class="fg-divider">\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u00b7\u00b7\u00b7\u00b7\u00b7\u2500\u2500\u2500\u2500\u2500\u2500\u2500</span>`, COLS));
-	rows.push(center(`<span class="fg-dim">\u2191\u2193 wander    \u23ce attend    \u238b retreat</span>`, COLS));
+	rows.push(center(`<span class="fg-divider">${halfRule}</span>  <span class="fg-divider">·</span>  <span class="fg-divider">${halfRule}</span>`, COLS));
+	rows.push(center(`<span class="fg-dim">↑↓ wander    ⏎ attend    ⎋ retreat</span>`, COLS));
 	rows.push(blank());
 
 	return rows.join("\n");

@@ -100,11 +100,11 @@ function buildScriptorium({ selectedIdx }) {
 	const blank = () => padRight("", COLS);
 	rows.push(blank());
 
-	// Title with ❉ sparkle decoration
-	rows.push(center(`<span class="fg-accent">❉</span>  <span class="fg-accent">COMMAND PALETTE</span>  <span class="fg-accent">❉</span>`, COLS));
+	// Title with ✾ floral mark (six-petalled black & white florette).
+	rows.push(center(`<span class="fg-accent">✾</span>  <span class="fg-accent">COMMAND PALETTE</span>  <span class="fg-accent">✾</span>`, COLS));
 	rows.push(blank());
 
-	// Decorative rule with center sparkle
+	// Decorative rule with center floral mark
 	const halfRule = rep("─", 22);
 	rows.push(center(`<span class="fg-divider">${halfRule}</span>  <span class="fg-divider">·</span>  <span class="fg-divider">${halfRule}</span>`, COLS));
 	rows.push(blank());
@@ -116,20 +116,17 @@ function buildScriptorium({ selectedIdx }) {
 	);
 	rows.push(blank());
 
-	// Mode rows: ❧/· marker + Nerd Font icon + label + value
+	// Mode rows: ❧/· marker + label + value (NO per-row icons — keep simple)
 	for (let i = 0; i < MODES.length; i++) {
 		const m = MODES[i];
 		const focused = i === selectedIdx;
 		const labelClass = focused ? "fg-fg" : "fg-dim";
 		const valueClass = focused ? "fg-fg" : "fg-dim";
 		const markerClass = focused ? "fg-accent" : "fg-divider";
-		const marker = focused ? "❧" : "·";
-		const iconClass = focused ? "fg-accent" : "fg-dim";
-		const icon = `<span class="${iconClass}">${m.glyph}</span>`;
+		const marker = focused ? "❧" : "·"; // ❧ vs ·
 
 		const labelStr =
-			`     <span class="${markerClass}">${marker}</span>  ` +
-			`${icon}   ` +
+			`     <span class="${markerClass}">${marker}</span>   ` +
 			`<span class="${labelClass}">${m.key}</span>`;
 		const labelLen = visibleLen(labelStr);
 		const valueStr = m.value ? `<span class="${valueClass}">${m.value}</span>` : "";

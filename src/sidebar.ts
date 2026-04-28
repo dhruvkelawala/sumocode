@@ -116,11 +116,19 @@ export class StaticSidebarDock implements Component {
 		const rowCount = Math.max(mainLines.length, sidebarLines.length);
 		const lines: string[] = [];
 
+		// Pre-build a surface-bg-painted blank sidebar row so rows where the
+		// sidebar has no content still cover the right 49 cols with the cathedral
+		// surface (#241D17). Without this, cells past the last sidebar line fall
+		// back to terminal-default bg — visible as black bands when the chat
+		// content underneath is taller than the sidebar (e.g., long tool outputs).
+		// surfaceLine pads to width and wraps in cathedral surface bg + fg ANSI.
+		const blankSidebarRow = surfaceLine("", SIDEBAR_WIDTH);
+
 		for (let i = 0; i < rowCount; i++) {
 			const left = padToWidth(mainLines[i] ?? "", mainWidth);
 			const right = i < sidebarLines.length
 				? padToWidth(sidebarLines[i]!, SIDEBAR_WIDTH)
-				: " ".repeat(SIDEBAR_WIDTH);
+				: blankSidebarRow;
 			lines.push(`${left}${" ".repeat(STATIC_SIDEBAR_GUTTER)}${right}`);
 		}
 

@@ -43,11 +43,16 @@ function buildApprovalModal({ cols, command, explanation, focusedButton = "no" }
 	rows.push(`   <span class="fg-fg">You are about to execute:</span>${rep(" ", cols - 28)}`);
 	rows.push(blank());
 
-	// Command frame on surface-recess
+	// Command frame — all 3 rows on surface-recess bg (frame chars + interior).
+	// Wrap each row in a single box-fill span at the inner width so the
+	// recess color extends across the entire frame including borders.
 	const cmdInnerWidth = cols - 14;
-	const cmdTopBorder = `   <span class="fg-divider">\u250c${rep("\u2500", cmdInnerWidth)}\u2510</span>   `;
-	const cmdContent = `   <span class="fg-divider">\u2502</span><span class="box-fill" style="background: var(--surface-recess); width: ${cmdInnerWidth}ch"> <span class="fg-fg">${command}</span>${rep(" ", cmdInnerWidth - command.length - 1)}</span><span class="fg-divider">\u2502</span>   `;
-	const cmdBotBorder = `   <span class="fg-divider">\u2514${rep("\u2500", cmdInnerWidth)}\u2518</span>   `;
+	const cmdFullWidth = cmdInnerWidth + 2; // includes left + right border chars
+	const cmdRow = (inner) =>
+		`   <span class="box-fill" style="background: var(--surface-recess); width: ${cmdFullWidth}ch">${inner}</span>   `;
+	const cmdTopBorder = cmdRow(`<span class="fg-divider">\u250c${rep("\u2500", cmdInnerWidth)}\u2510</span>`);
+	const cmdContent = cmdRow(`<span class="fg-divider">\u2502</span> <span class="fg-fg">${command}</span>${rep(" ", cmdInnerWidth - command.length - 1)}<span class="fg-divider">\u2502</span>`);
+	const cmdBotBorder = cmdRow(`<span class="fg-divider">\u2514${rep("\u2500", cmdInnerWidth)}\u2518</span>`);
 	rows.push(padRight(cmdTopBorder, cols));
 	rows.push(padRight(cmdContent, cols));
 	rows.push(padRight(cmdBotBorder, cols));

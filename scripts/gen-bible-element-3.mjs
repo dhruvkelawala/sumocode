@@ -88,26 +88,39 @@ function buildSplash({ cols, rows: totalRows, placeholderIndex = 0 }) {
 		center(`<span class="fg-dim">${line}</span>`, cols),
 	);
 
-	// 4. Input frame DIVINE INVOCATION — 60 cols inner, centered if room
-	const innerWidth = Math.min(60, cols - 6); // input frame width
+	// 4. Input frame DIVINE INVOCATION — 60 cols inner (or shrink if cols<66)
+	const innerWidth = Math.min(60, cols - 6);
 	const placeholder = PLACEHOLDERS[placeholderIndex % PLACEHOLDERS.length];
-	const truncatedPh = placeholder.length > innerWidth - 4
-		? placeholder.slice(0, innerWidth - 5) + "…"
+	// Cap placeholder so input row fits: layout is
+	// │ _ > _ <ph> <cursor> <pad> │ = 6 + N + P = innerWidth
+	// max N when P=1: N = innerWidth - 7
+	const maxPh = innerWidth - 7;
+	const truncatedPh = placeholder.length > maxPh
+		? placeholder.slice(0, maxPh - 1) + "…"
 		: placeholder;
-	// Frame: ┌─ DIVINE INVOCATION ────────...─────┐
+
+	// Frame top: ┌─ DIVINE INVOCATION <dashes>┐
+	// Layout: ┌ (1) + ─ (1) + _ (1) + label (L) + _ (1) + dashes (D) + ┐ (1)
+	// = 5 + L + D = innerWidth  →  D = innerWidth - 5 - L
 	const labelText = "DIVINE INVOCATION";
-	const topBorderText = `┌─ ${labelText} ${rep("─", innerWidth - 4 - labelText.length - 2)}┐`;
+	const dashCount = innerWidth - 5 - labelText.length;
 	const topBorderHTML = `<span class="fg-divider">┌─ </span>` +
 		`<span class="fg-accent">${labelText}</span>` +
-		` <span class="fg-divider">${rep("─", innerWidth - 4 - labelText.length - 2)}┐</span>`;
-	const inputText = `> ${truncatedPh}`;
-	const inputContentLen = 2 + truncatedPh.length + 1; // "> " + ph + cursor
-	const inputPad = innerWidth - 2 - inputContentLen - 2 - 2; // borders + leading/trailing space
-	const inputRowHTML = `<span class="fg-divider">│</span> ` +
-		`<span class="fg-accent">&gt;</span> <span class="fg-dim">${truncatedPh}</span>` +
+		` <span class="fg-divider">${rep("─", dashCount)}┐</span>`;
+
+	// Input row: │ _ > _ <ph><cursor><pad>│
+	// Layout: │ (1) + _ (1) + > (1) + _ (1) + N + 1 (cursor) + P + │ (1)
+	// = 6 + N + P = innerWidth  →  P = innerWidth - 6 - N
+	const inputPad = innerWidth - 6 - truncatedPh.length;
+	const inputRowHTML =
+		`<span class="fg-divider">│</span> ` +
+		`<span class="fg-accent">&gt;</span> ` +
+		`<span class="fg-dim">${truncatedPh}</span>` +
 		`<span class="cursor"> </span>` +
-		rep(" ", Math.max(1, inputPad + 2)) +
+		rep(" ", Math.max(0, inputPad)) +
 		`<span class="fg-divider">│</span>`;
+
+	// Frame bottom: └<dashes>┘ (innerWidth - 2 dashes)
 	const botBorderHTML = `<span class="fg-divider">└${rep("─", innerWidth - 2)}┘</span>`;
 
 	const inputFrameRows = [

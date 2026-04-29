@@ -149,8 +149,8 @@ function scenarioDescription(scenario) {
 		"footer-ready-component": "Focused component capture for the Cathedral footer status row. Review state labels, dot ownership, and spacing.",
 		"sidebar-editorial-component": "Focused component capture for the editorial REGISTRY sidebar. Review width, masthead, section rhythm, and hierarchy.",
 		"splash-runtime": "Real runtime splash capture. Informational until splash parity and startup edge cases are addressed.",
-		"active-landscape-runtime": "Real 160x40 landscape runtime capture. Informational until approved primitives are composed into the daily-drive scene.",
-		"active-portrait-runtime": "Real portrait runtime capture. Informational until portrait composition work begins.",
+		"active-landscape-runtime": "Real 160x45 post-submit active-working capture. Offline runtime is expected to show SUMO working/meditating, not a completed model answer.",
+		"active-portrait-runtime": "Real portrait post-submit active-working capture. Offline runtime is expected to show SUMO working/meditating, not a completed model answer.",
 	};
 	return descriptions[scenario.id] ?? "Visual parity scenario.";
 }

@@ -28,6 +28,10 @@ pnpm visual:review -- --lane component
 pnpm visual:review -- --lane runtime
 ```
 
+## Initial runtime scenario note
+
+The active runtime scenarios submit a prompt and capture the deterministic offline **active-working** state. They intentionally do not wait for a completed model answer because `--offline --no-session` cannot produce one deterministically. Completed-response scene captures should be fixture-backed in a later slice.
+
 ## Status model
 
 - `review` — report Bible/runtime drift, do not fail CI on pixels.

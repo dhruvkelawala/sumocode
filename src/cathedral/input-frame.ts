@@ -23,7 +23,7 @@
  *   inner bg     → recess   (#120D0A)  — painted on every row
  *   `>` prompt   → oxidized (#8B7A63)  — splash | accent (#D97706) — active
  *   cursor `█`   → accent   (#D97706)
- *   placeholder  → oxidized (#8B7A63) + DIM
+ *   placeholder  → oxidized (#8B7A63)
  *   label        → oxidized → accent on focus (we always render accent)
  *
  * Pure render only. Pi-glue (mounting via setEditorComponent) lives in
@@ -33,8 +33,8 @@
 import { CATHEDRAL_TOKENS } from "../tokens.js";
 
 const RESET = "\u001b[0m";
+const RESET_BG = "\u001b[49m";
 const ANSI_PATTERN = /\u001b\[[0-9;]*m/g;
-const DIM = "\u001b[2m";
 
 export const INPUT_FRAME_LABEL_SPLASH = "DIVINE INVOCATION";
 export const INPUT_FRAME_LABEL_ACTIVE = "";
@@ -66,10 +66,11 @@ function color(text: string, hex: string): string {
 	return `${fg(hex)}${text}${RESET}`;
 }
 
-function onRecess(text: string): string {
-	// Paint a span with the recess background; reset only the bg at the end
-	// so any inner foreground colors stay intact within the span.
-	return `${bg(CATHEDRAL_TOKENS.colors.surfaceRecess)}${text}\u001b[49m`;
+function withBackground(line: string, hex: string): string {
+	const bgCode = bg(hex);
+	// Inner color() calls use RESET, which clears background too. Re-apply the
+	// row background after each RESET so the whole terminal row stays recessed.
+	return `${bgCode}${line.replaceAll(RESET, `${RESET}${bgCode}`)}${RESET_BG}`;
 }
 
 function padToWidth(line: string, width: number): string {
@@ -121,9 +122,9 @@ export function renderInputFrame(input: string, width: number, options: InputFra
 		top = `${dividerCh("┌")}${dividerCh("─".repeat(inner))}${dividerCh("┐")}`;
 	}
 
-	// Content row: `> <text>█` or `> <placeholder>█`. Inner span gets the
-	// recess (#120D0A) background to read as a recessed well per Stitch CSS
-	// `bg-recess` on the input container. Cursor is accent █.
+	// Content row: `> <text>█` or `> <placeholder>█`. The full row gets the
+	// recess (#120D0A) background to match the Bible `bg-recess` frame block.
+	// Cursor is accent █.
 	const showPlaceholder = input.length === 0 && options.placeholder !== undefined;
 	const promptHex =
 		options.promptColor === "accent"
@@ -133,7 +134,7 @@ export function renderInputFrame(input: string, width: number, options: InputFra
 	const cursor = color("█", CATHEDRAL_TOKENS.colors.accent);
 	let textPart: string;
 	if (showPlaceholder) {
-		textPart = `${DIM}${color(options.placeholder!, CATHEDRAL_TOKENS.colors.foregroundDim)}${RESET}`;
+		textPart = color(options.placeholder!, CATHEDRAL_TOKENS.colors.foregroundDim);
 	} else {
 		textPart = color(input, CATHEDRAL_TOKENS.colors.foreground);
 	}
@@ -141,15 +142,16 @@ export function renderInputFrame(input: string, width: number, options: InputFra
 	const innerVisible = visibleLength(innerContent);
 	const padding = Math.max(0, inner - innerVisible);
 	const contentInner = `${innerContent}${" ".repeat(padding)}`;
-	const content = `${dividerCh("│")}${onRecess(contentInner)}${dividerCh("│")}`;
+	const content = `${dividerCh("│")}${contentInner}${dividerCh("│")}`;
 
 	// Bottom border
 	const bottom = `${dividerCh("└")}${dividerCh("─".repeat(inner))}${dividerCh("┘")}`;
+	const frameBg = CATHEDRAL_TOKENS.colors.surfaceRecess;
 
 	return [
-		padToWidth(top, width),
-		padToWidth(content, width),
-		padToWidth(bottom, width),
+		withBackground(padToWidth(top, width), frameBg),
+		withBackground(padToWidth(content, width), frameBg),
+		withBackground(padToWidth(bottom, width), frameBg),
 	];
 }
 
@@ -177,7 +179,7 @@ export function renderInputHints(width: number, options: InputHintsOptions = {})
 	const rightLen = rightPlain.length;
 	const left = options.leftHint;
 
-	const dimFg = `${DIM}${fg(CATHEDRAL_TOKENS.colors.foregroundDim)}`;
+	const dimFg = fg(CATHEDRAL_TOKENS.colors.foregroundDim);
 	const accent = fg(CATHEDRAL_TOKENS.colors.accent);
 
 	// Build the colored right-hand string: CTRL+/ in accent, label in dim.

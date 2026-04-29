@@ -97,12 +97,13 @@ describe("renderInputFrame — splash state (with label + placeholder)", () => {
 		expect(content).toContain("> hello");
 	});
 
-	it("placeholder text is dim", () => {
+	it("placeholder text uses foregroundDim without ANSI DIM", () => {
 		const lines = renderInputFrame("", 80, {
 			placeholder: "Ask anything",
 		});
-		// dim escape \u001b[2m
-		expect(lines.join("\n")).toContain("\u001b[2m");
+		const output = lines.join("\n");
+		expect(output).toContain("\u001b[38;2;139;122;99m");
+		expect(output).not.toContain("\u001b[2m");
 	});
 });
 
@@ -126,7 +127,7 @@ describe("renderInputHints", () => {
 		expect(plain.indexOf(INPUT_FRAME_HINT_AWAITING)).toBeLessThan(plain.indexOf(INPUT_FRAME_HINT_KEYBINDS));
 	});
 
-	it("hints are dim", () => {
+	it("hints use foregroundDim", () => {
 		const line = renderInputHints(80, { leftHint: INPUT_FRAME_HINT_AWAITING });
 		// foregroundDim #8B7A63 -> 139;122;99
 		expect(line).toContain("\u001b[38;2;139;122;99m");

@@ -48,7 +48,6 @@ import {
 
 const RESET = "\u001b[0m";
 const ANSI_PATTERN = /\u001b\[[0-9;]*m/g;
-const DIM = "\u001b[2m";
 
 function visibleLength(text: string): number {
 	return visibleWidth(text);
@@ -78,31 +77,37 @@ const DIVIDER_FG = fg(CATHEDRAL_TOKENS.colors.divider);
 const RECESS_BG = bg(CATHEDRAL_TOKENS.colors.surfaceRecess);
 const RESET_BG = "\u001b[49m";
 
+function withFrameBackground(line: string): string {
+	// Any nested RESET clears the background. Re-apply the frame background so
+	// the whole input frame row remains the recessed #120D0A Bible well.
+	return `${RECESS_BG}${line.replaceAll(RESET, `${RESET}${RECESS_BG}`)}${RESET_BG}`;
+}
+
 /**
  * Build the cathedral top border with an embedded label, e.g.:
  *   ┌─ SCRIPTOR INPUT ────...─────┐
  */
 function renderTopBorder(width: number, label?: string): string {
-	if (width < 6) return color("─".repeat(width), CATHEDRAL_TOKENS.colors.divider);
+	if (width < 6) return withFrameBackground(color("─".repeat(width), CATHEDRAL_TOKENS.colors.divider));
 	const inner = width - 2;
-	if (!label) return color(`┌${"─".repeat(inner)}┐`, CATHEDRAL_TOKENS.colors.divider);
+	if (!label) return withFrameBackground(color(`┌${"─".repeat(inner)}┐`, CATHEDRAL_TOKENS.colors.divider));
 	const labelInner = ` ${label} `;
 	const remaining = Math.max(2, inner - labelInner.length - 2);
 	const left = `${DIVIDER_FG}┌──`;
 	const labelText = color(labelInner, CATHEDRAL_TOKENS.colors.accent);
 	const right = `${DIVIDER_FG}${"─".repeat(remaining)}┐${RESET}`;
-	return `${left}${labelText}${right}`;
+	return withFrameBackground(`${left}${labelText}${right}`);
 }
 
 function renderBottomBorder(width: number): string {
-	if (width < 6) return color("─".repeat(width), CATHEDRAL_TOKENS.colors.divider);
-	return color(`└${"─".repeat(width - 2)}┘`, CATHEDRAL_TOKENS.colors.divider);
+	if (width < 6) return withFrameBackground(color("─".repeat(width), CATHEDRAL_TOKENS.colors.divider));
+	return withFrameBackground(color(`└${"─".repeat(width - 2)}┘`, CATHEDRAL_TOKENS.colors.divider));
 }
 
 /**
  * Wrap a single Pi editor row in `│ <inner> │` with the recess background
- * painted on the inner span. The inner span is `width - 2` cells wide; we
- * pad with spaces to that exact width so the bg block is uniform.
+ * painted across the whole row. The inner span is `width - 2` cells wide;
+ * we pad with spaces to that exact width so the bg block is uniform.
  *
  * IMPORTANT: We must not strip ANSI from `inner` — it carries cursor markers
  * and color codes that Pi's TUI engine relies on (CURSOR_MARKER for hardware
@@ -114,7 +119,7 @@ function wrapRow(inner: string, width: number): string {
 	const visible = visibleLength(inner);
 	const pad = Math.max(0, innerWidth - visible);
 	const padded = `${inner}${" ".repeat(pad)}`;
-	return `${DIVIDER_FG}│${RESET}${RECESS_BG}${padded}${RESET_BG}${RESET}${DIVIDER_FG}│${RESET}`;
+	return withFrameBackground(`${DIVIDER_FG}│${RESET}${padded}${DIVIDER_FG}│${RESET}`);
 }
 
 /**
@@ -169,8 +174,8 @@ class CathedralEditor extends CustomEditor {
 		}
 
 		// Splash placeholder injection: when the editor is empty AND we're on
-		// splash, replace the (otherwise blank) content row with the dim
-		// placeholder text so the user sees what the input wants. Pi's editor
+		// splash, replace the (otherwise blank) content row with the placeholder
+		// text so the user sees what the input wants. Pi's editor
 		// has no concept of placeholders; we shim it from the outside.
 		const text = this.getText();
 		const showPlaceholder = splash && text.length === 0;
@@ -179,7 +184,7 @@ class CathedralEditor extends CustomEditor {
 				// Preserve Pi's zero-width cursor marker while painting our ghost text.
 				// Without this, TUI.positionHardwareCursor() sees no marker on the
 				// splash empty state and emits \x1b[?25l after every render.
-				const ghost = `${DIM}${color(`> ${CURSOR_MARKER}${INPUT_FRAME_PLACEHOLDER}`, CATHEDRAL_TOKENS.colors.foregroundDim)}${RESET}`;
+				const ghost = color(`> ${CURSOR_MARKER}${INPUT_FRAME_PLACEHOLDER}`, CATHEDRAL_TOKENS.colors.foregroundDim);
 				return wrapRow(ghost, width);
 			}
 			return wrapRow(row, width);

@@ -1,8 +1,8 @@
 import { CATHEDRAL_TOKENS, type SumoCodeState } from "../../tokens.js";
 import { formatTokenCount } from "../../footer.js";
 import { VOICE } from "../../voice.js";
-import { bold, colorHex, dim, italic, padAnsiToWidth, renderSidebarSectionHeader, SIDEBAR_INDENT, visibleLength } from "./ansi.js";
-import { renderMetricsHudLines, type MetricsHudSnapshot } from "./metrics-hud.js";
+import { fgHex, padAnsiToWidth, SIDEBAR_INDENT, stripAnsi, visibleLength } from "./ansi.js";
+import type { MetricsHudSnapshot } from "./metrics-hud.js";
 
 export type SidebarSubTab = "CONTEXT" | "MEMORY";
 export const SIDEBAR_SUB_TABS: readonly SidebarSubTab[] = ["CONTEXT", "MEMORY"];
@@ -27,6 +27,7 @@ export interface RegistrySidebarSnapshot {
 	readonly inputTokens: number;
 	readonly outputTokens: number;
 	readonly contextWindow: number;
+	readonly cumulativeTokens?: number;
 	readonly costUsd: number;
 	readonly mcpServers: readonly McpServerSnapshot[];
 	readonly memory: readonly string[];
@@ -38,8 +39,18 @@ export interface RegistrySidebarSnapshot {
 	readonly metrics?: MetricsHudSnapshot;
 }
 
-const TOKEN_BAR_CELLS = 10;
+const TOKEN_BAR_CELLS = 22;
 const MEMORY_DISPLAY_LIMIT = 5;
+const FG_RESET = "\u001b[39m";
+const DIM_OFF = "\u001b[22m";
+
+function colorHex(text: string, hex: string): string {
+	return `${fgHex(hex)}${text}${FG_RESET}`;
+}
+
+function dim(text: string): string {
+	return `\u001b[2m${text}${DIM_OFF}`;
+}
 
 function tokenUsageRatio(used: number, total: number): number {
 	if (total <= 0 || !Number.isFinite(used) || !Number.isFinite(total)) return 0;
@@ -60,6 +71,23 @@ function indented(content: string): string {
 	return `${SIDEBAR_INDENT}${content}`;
 }
 
+function tracked(text: string): string {
+	return text.split("").join("\u202F");
+}
+
+function blank(width: number): string {
+	return padAnsiToWidth("", width);
+}
+
+function rule(width: number): string {
+	const count = Math.max(1, width - visibleLength(SIDEBAR_INDENT) - 2);
+	return padAnsiToWidth(indented(colorHex("━".repeat(count), CATHEDRAL_TOKENS.colors.divider)), width);
+}
+
+function row(content: string, width: number): string {
+	return padAnsiToWidth(indented(content), width);
+}
+
 export function tokenMeterColor(used: number, total: number): string {
 	const ratio = tokenUsageRatio(used, total);
 	if (ratio > 1) return CATHEDRAL_TOKENS.colors.states.approval;
@@ -68,30 +96,37 @@ export function tokenMeterColor(used: number, total: number): string {
 	return CATHEDRAL_TOKENS.colors.states.idle;
 }
 
-/** CATHEDRAL_UX_SPEC.md §4.2 token gauge: `[██████░░░] 42k/200k`. */
+/** Cathedral V2 editorial token gauge: `▉▉▉▉▉░░░...` on its own row. */
 export function renderTokenMeter(used: number, total: number): string {
 	const ratio = tokenUsageRatio(used, total);
-	const filled = Math.round(clampRatio(ratio) * TOKEN_BAR_CELLS);
+	const filled = ratio > 1 ? TOKEN_BAR_CELLS : Math.round(clampRatio(ratio) * TOKEN_BAR_CELLS);
 	const empty = TOKEN_BAR_CELLS - filled;
-	const overBudget = ratio > 1;
 	const meterColor = tokenMeterColor(used, total);
-	const leftBracket = colorHex("[", CATHEDRAL_TOKENS.colors.divider);
-	const rightBracket = colorHex("]", CATHEDRAL_TOKENS.colors.divider);
-	const fill = colorHex("█".repeat(filled), meterColor);
-	const rest = colorHex("░".repeat(empty), CATHEDRAL_TOKENS.colors.divider);
-	const usageText = `${formatTokenCount(used)}/${formatTokenCount(total)}${overBudget ? " OVER" : ""}`;
-	const usage = colorHex(usageText, overBudget ? CATHEDRAL_TOKENS.colors.states.approval : CATHEDRAL_TOKENS.colors.foreground);
-	return `${leftBracket}${fill}${rest}${rightBracket} ${usage}`;
+	return `${colorHex("▉".repeat(filled), meterColor)}${colorHex("░".repeat(empty), CATHEDRAL_TOKENS.colors.divider)}`;
 }
 
 function contextLines(snapshot: RegistrySidebarSnapshot, width: number): string[] {
 	const used = snapshot.inputTokens + snapshot.outputTokens;
-	const projectLabel = snapshot.branch ? `${snapshot.projectName} (${snapshot.branch})` : snapshot.projectName;
+	const overBudget = snapshot.contextWindow > 0 && used > snapshot.contextWindow;
 	return [
-		renderSidebarSectionHeader("ACTIVE_CONTEXT", width),
-		padAnsiToWidth(indented(colorHex(projectLabel, CATHEDRAL_TOKENS.colors.foreground)), width),
-		padAnsiToWidth(indented(renderTokenMeter(used, snapshot.contextWindow)), width),
-		padAnsiToWidth(indented(colorHex(`$${snapshot.costUsd.toFixed(2)} spent · session`, CATHEDRAL_TOKENS.colors.foregroundDim)), width),
+		row(colorHex(snapshot.projectName, CATHEDRAL_TOKENS.colors.foreground), width),
+		row(colorHex(`on ${snapshot.branch ?? "unknown"}`, CATHEDRAL_TOKENS.colors.foregroundDim), width),
+		blank(width),
+		row(colorHex(tracked("CONTEXT"), CATHEDRAL_TOKENS.colors.foregroundDim), width),
+		row(renderTokenMeter(used, snapshot.contextWindow), width),
+		row(
+			`${colorHex(formatTokenCount(used), overBudget ? CATHEDRAL_TOKENS.colors.states.approval : CATHEDRAL_TOKENS.colors.foreground)} ` +
+				`${colorHex(`/ ${formatTokenCount(snapshot.contextWindow)}`, CATHEDRAL_TOKENS.colors.foregroundDim)}` +
+				(overBudget ? ` ${colorHex("OVER", CATHEDRAL_TOKENS.colors.states.approval)}` : ""),
+			width,
+		),
+		blank(width),
+		row(colorHex(tracked("SESSION"), CATHEDRAL_TOKENS.colors.foregroundDim), width),
+		row(
+			`${colorHex(`$${snapshot.costUsd.toFixed(2)}`, CATHEDRAL_TOKENS.colors.foreground)} ` +
+				`${colorHex(`· ${formatTokenCount(snapshot.cumulativeTokens ?? used)} cumul`, CATHEDRAL_TOKENS.colors.foregroundDim)}`,
+			width,
+		),
 	];
 }
 
@@ -132,37 +167,36 @@ export function mcpStatusLabel(status: McpServerStatusLike): string {
 }
 
 export function renderMcpServerRow(server: McpServerSnapshot, width: number): string {
-	const innerWidth = Math.max(1, width - SIDEBAR_INDENT.length);
 	const status = mcpStatusLabel(server.status);
 	const dot = colorHex("●", mcpStatusColor(server.status));
 	const statusText = colorHex(status, CATHEDRAL_TOKENS.colors.foregroundDim);
-	const nameMaxWidth = Math.max(1, innerWidth - 2 - status.length - 1);
-	const name = truncatePlainText(server.name, nameMaxWidth);
-	const gap = Math.max(1, innerWidth - 2 - visibleLength(name) - status.length);
-	return padAnsiToWidth(indented(`${dot} ${colorHex(name, CATHEDRAL_TOKENS.colors.foreground)}${" ".repeat(gap)}${statusText}`), width);
+	const reserve = visibleLength(SIDEBAR_INDENT) + 1 + 1 + status.length + 2;
+	const name = truncatePlainText(server.name, Math.max(1, width - reserve));
+	const gap = Math.max(1, width - visibleLength(SIDEBAR_INDENT) - 2 - visibleLength(name) - status.length - 2);
+	return padAnsiToWidth(indented(`${dot} ${colorHex(name, CATHEDRAL_TOKENS.colors.foreground)}${" ".repeat(gap)}${statusText}  `), width);
 }
 
 function mcpLines(snapshot: RegistrySidebarSnapshot, width: number): string[] {
-	const lines = [renderSidebarSectionHeader("MCP", width)];
+	const lines = [row(colorHex(tracked("MCP"), CATHEDRAL_TOKENS.colors.foregroundDim), width), blank(width)];
 	for (const server of snapshot.mcpServers) lines.push(renderMcpServerRow(server, width));
 	return lines;
 }
 
 export function renderMemoryFactLine(item: string, width: number): string {
-	const available = Math.max(0, width - SIDEBAR_INDENT.length - 2);
+	const available = Math.max(0, width - visibleLength(SIDEBAR_INDENT) - 2);
 	const bullet = colorHex("❧", CATHEDRAL_TOKENS.colors.accent);
 	const text = colorHex(truncatePlainText(item, available), CATHEDRAL_TOKENS.colors.foreground);
 	return padAnsiToWidth(indented(`${bullet} ${text}`), width);
 }
 
 function memoryLines(snapshot: RegistrySidebarSnapshot, width: number): string[] {
-	const lines = [renderSidebarSectionHeader("ACTIVE_MEMORY", width)];
+	const lines = [row(colorHex(tracked("MEMORY"), CATHEDRAL_TOKENS.colors.foregroundDim), width), blank(width)];
 	if (snapshot.memoryUnavailable) {
-		lines.push(padAnsiToWidth(indented(dim(VOICE.errors.daemonDown)), width));
+		lines.push(row(dim(VOICE.errors.daemonDown), width));
 		return lines;
 	}
 	if (snapshot.memory.length === 0) {
-		lines.push(padAnsiToWidth(indented(dim(VOICE.empty.memory)), width));
+		lines.push(row(dim(VOICE.empty.memory), width));
 		return lines;
 	}
 
@@ -172,47 +206,30 @@ function memoryLines(snapshot: RegistrySidebarSnapshot, width: number): string[]
 	const total = snapshot.memoryTotal ?? snapshot.memory.length;
 	const hidden = Math.max(0, total - shown.length);
 	if (hidden > 0) {
-		lines.push(padAnsiToWidth(indented(italic(colorHex(`${hidden} more · ⌘M`, CATHEDRAL_TOKENS.colors.foregroundDim))), width));
+		lines.push(blank(width));
+		lines.push(rule(width));
+		lines.push(row(colorHex(`${hidden} more · ⌘M`, CATHEDRAL_TOKENS.colors.foregroundDim), width));
 	}
 	return lines;
-}
-
-function sessionLabel(session: SidebarSessionSnapshot): string {
-	return session.branch ? `${session.name} (${session.branch})` : session.name;
-}
-
-function registrySessions(snapshot: RegistrySidebarSnapshot): readonly SidebarSessionSnapshot[] {
-	return snapshot.sessions?.length
-		? snapshot.sessions
-		: [{ name: snapshot.projectName, branch: snapshot.branch, active: true }];
 }
 
 export function renderRegistryHeaderLines(snapshot: RegistrySidebarSnapshot, width: number): string[] {
 	const active = snapshot.activeSubTab ?? "CONTEXT";
 	const lines: string[] = [
-		padAnsiToWidth("", width),
-		padAnsiToWidth(indented(colorHex("REGISTRY", CATHEDRAL_TOKENS.colors.accent)), width),
-		padAnsiToWidth(indented(colorHex("v 1.0.0", CATHEDRAL_TOKENS.colors.foregroundDim)), width),
-		padAnsiToWidth("", width),
+		blank(width),
+		row(colorHex("REGISTRY", CATHEDRAL_TOKENS.colors.accent), width),
+		blank(width),
 	];
 
-	for (const [index, session] of registrySessions(snapshot).entries()) {
-		const isActive = session.active ?? index === 0;
-		const marker = colorHex(isActive ? "◆" : "▢", isActive ? CATHEDRAL_TOKENS.colors.accent : CATHEDRAL_TOKENS.colors.foregroundDim);
-		const label = colorHex(sessionLabel(session), isActive ? CATHEDRAL_TOKENS.colors.foreground : CATHEDRAL_TOKENS.colors.foregroundDim);
-		lines.push(padAnsiToWidth(indented(`${marker} ${label}`), width));
-	}
-
-	lines.push(padAnsiToWidth("", width));
 	for (const tab of SIDEBAR_SUB_TABS) {
 		const isActive = tab === active;
 		const marker = colorHex(isActive ? "◆" : "▢", isActive ? CATHEDRAL_TOKENS.colors.accent : CATHEDRAL_TOKENS.colors.foregroundDim);
-		const label = isActive
-			? bold(colorHex(tab, CATHEDRAL_TOKENS.colors.accent))
-			: colorHex(tab, CATHEDRAL_TOKENS.colors.foregroundDim);
+		const label = colorHex(tracked(tab), isActive ? CATHEDRAL_TOKENS.colors.foreground : CATHEDRAL_TOKENS.colors.foregroundDim);
 		lines.push(padAnsiToWidth(indented(`${marker} ${label}`), width));
 	}
-	lines.push(padAnsiToWidth("", width));
+	lines.push(blank(width));
+	lines.push(rule(width));
+	lines.push(blank(width));
 	return lines;
 }
 
@@ -222,17 +239,17 @@ export function renderRegistrySidebarLines(snapshot: RegistrySidebarSnapshot, wi
 
 	if (active === "CONTEXT") {
 		lines.push(...contextLines(snapshot, width));
-		lines.push(padAnsiToWidth("", width));
+		lines.push(blank(width));
+		lines.push(rule(width));
+		lines.push(blank(width));
 		lines.push(...mcpLines(snapshot, width));
-		lines.push(padAnsiToWidth("", width));
-		// Issue #56 polish keeps v1's two-tab sidebar (DECISIONS Element 1) while
-		// surfacing Remnic facts in the active-state registry per UX_SPEC.md §4.2.
-		lines.push(...memoryLines(snapshot, width));
 	} else {
 		lines.push(...memoryLines(snapshot, width));
 	}
 
-	lines.push(padAnsiToWidth("", width));
-	lines.push(...renderMetricsHudLines(snapshot.metrics, width));
 	return lines.map((line) => padAnsiToWidth(line, width));
+}
+
+export function stripSidebarAnsi(text: string): string {
+	return stripAnsi(text);
 }

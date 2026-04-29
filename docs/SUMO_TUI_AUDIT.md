@@ -2,39 +2,30 @@
 
 > Scope: current `sumocode` worktree, `src/sumo-tui/**`, Cathedral runtime/UI code, SumoTUI research docs, V2 visual spec, and a quick survey of other production TUI frameworks.
 >
-> Bottom line: **SumoTUI is the right strategic bet** for the final goal, but the project is currently in a risky middle state: part retained app-shell, part Pi line-renderer surgery. The fastest path to a daily-driver-quality SumoCode is to stop adding surfaces briefly, align spec/tests/runtime, then deepen SumoTUI into a small, composable app-shell kernel with one owner for terminal lifecycle, input, layout, transcript state, and rendering.
+> Revision log: v1 (2026-04-29) → v2 (2026-04-29, post-review). v2 leads with the spine, adds effort buckets, promotes the Pi-patch question to P0, names a fallback product, picks one app-model direction, and adds a decision section for in-flight V2 UI work.
 
 ---
 
-## 1. What I think about SumoTUI
+## 0. The spine (read this first)
 
-SumoTUI is justified. This is not aesthetic overengineering.
+**The risk is the hybrid phase, not the SumoTUI decision.**
 
-Pi is excellent as an agent engine: models, tools, sessions, extension loading, editor edge cases, slash commands, auth, MCP. But Pi's default `pi-tui` render model is fundamentally a vertical `Component.render(width): string[]` concatenator. That model will always fight the final SumoCode goal:
+SumoTUI as a direction is correct and already proven: real primitives exist (Yoga, CellBuffer, lifecycle, scheduler, ScrollBox, ChatPager), perf is in budget, and the ADR is sound. What is not stable is the seam: today Pi owns root vertical flow, SumoTUI owns chat rows inside that flow, sidebar is a non-capturing overlay outside flow, chat width is reduced by hardcoded sidebar constants, and mouse events translate retained chat coordinates through a Pi-rendered shell. **Neither renderer has full authority** — every new surface compounds drift.
 
-- footer pinned to the viewport bottom;
-- app-owned chat scrollback in altscreen;
-- mouse wheel routing that does not mutate prompt history;
-- portrait/landscape adaptive shell;
-- modal focus stack;
-- structured chat/tool/code blocks;
-- SumoCode-specific visual identity that survives long sessions.
+The fastest path to a daily-driver SumoCode is four moves, in order:
 
-The accepted ADR is directionally correct: **keep Pi as runtime/editor/agent utility, and build SumoTUI as the root experience renderer**.
+1. **Stop the bleed.** Pause new Cathedral surfaces. Make integration green. Pick V2 spec / V1 tests / runtime constants — only one survives.
+2. **Single owner for terminal lifecycle.** One state machine, one place altscreen/mouse/cursor-color toggle. OSC 12 cursor color off by default (V2 contract).
+3. **Centralize commands and keybindings.** Remove the duplicate `/sumo:memory` registration. Add a startup conflict inspector.
+4. **Deepen the kernel.** Pick *one* app-model pattern (recommendation in §6), add typed style primitives, add a headless TestBackend, then resume surface work on the new spine.
 
-The current danger is not the decision to build SumoTUI. The danger is the **hybrid phase lasting too long**. Today SumoTUI has real primitives — Yoga nodes, cell buffer, diff writer, ScrollBox, ChatPager, lifecycle, mouse parser — but production still depends on private Pi container overrides and Pi full redraws. That means many bugs are now seam bugs: neither renderer has complete authority.
-
-My high-confidence recommendation:
-
-1. **Do not extract SumoTUI as a package yet.** Keep it bundled until SumoCode daily-drives it for at least 30 stable days.
-2. **Do not add more Cathedral surfaces until runtime/spec/tests are aligned.** Right now new work will compound drift.
-3. **Make SumoTUI a real app-shell kernel, not just a retained widget library.** It needs a model/update/render loop, typed styling primitives, a proper focus/input system, a headless test backend, and a clean Pi adapter seam.
+Everything else is in service of those four. If you only have a week, do moves 1–3.
 
 ---
 
-## 2. Current health snapshot
+## 1. Current health snapshot
 
-### Commands run during audit
+### Verification commands
 
 ```bash
 pnpm exec tsc --noEmit
@@ -47,289 +38,194 @@ pnpm visual:ci
 
 | Check | Result | Notes |
 |---|---:|---|
-| `pnpm exec tsc --noEmit` | ✅ pass | TypeScript is clean. |
-| `pnpm build` | ✅ pass | Build script is `tsc --noEmit`. |
-| `pnpm test` | ✅ pass | 68 files / 399 tests passing on current HEAD `6097b23`. |
-| `pnpm test:integration` | ❌ fail | `cursor-visibility.test.ts` times out. 10 files pass, 1 fails; 13 passing / 14 total. |
-| `pnpm visual:ci` | ✅ review-compatible | 7 scenarios rendered. `footer-ready`, `sidebar-editorial`, `active-portrait` passed; `input`, `top-bar`, `splash`, `active-landscape` are still review states. |
+| `pnpm exec tsc --noEmit` | pass | TypeScript clean. |
+| `pnpm build` | pass | Build is `tsc --noEmit`. |
+| `pnpm test` | pass | 68 files / 399 tests on HEAD `6097b23`. |
+| `pnpm test:integration` | **fail** | `cursor-visibility.test.ts` PTY timeout. 13/14 passing. |
+| `pnpm visual:ci` | review-compatible | 7 scenarios. `footer-ready`, `sidebar-editorial`, `active-portrait` pass; `input`, `top-bar`, `splash`, `active-landscape` review-only. |
 
-### Immediate interpretation
+### Read-out
 
-The code is type-safe and unit coverage is green on the current sidebar V2 commit, but the repo is **not fully green** because one PTY integration test still times out. The remaining failure looks like a runtime/integration contract issue rather than TypeScript or pure renderer breakage. `cursor-visibility.test.ts` still deserves triage because V2 explicitly removed active input labels, and cursor correctness is a daily-driver P0.
-
-Before feature work, align the remaining runtime contract and make integration green.
+Type-safe and unit coverage green, but **not fully green** — one PTY test times out and that test happens to cover cursor visibility, which is the most basic correctness invariant for an interactive TUI. The remaining failure is a runtime contract issue, not a renderer or TS issue. Daily-driver readiness is gated on this and on the V2 contract drift.
 
 ---
 
-## 3. Current strengths
+## 2. Strengths to preserve
 
-### 3.1 The ADR and research quality are unusually strong
-
-`docs/adr/0001-sumo-tui-framework.md` and `docs/research/sumo-tui-spike/**` are a good decision trail. The project already captured the key architectural lesson from OpenCode/OpenTUI: **altscreen works only if the app owns scrollback**.
-
-The edge-case catalog is also strong. It anticipates cursor remapping, wide chars, streaming races, resize, crash cleanup, images, no-TTY, Yoga leaks, Pi version drift, and mouse routing.
-
-### 3.2 Core primitives exist and are tested
-
-Good foundations already present:
-
-- `TerminalController` for altscreen, SGR mouse, OSC bg, cleanup.
-- `LifecycleRuntime` for signals, raw-mode restore, crash log.
-- `FrameScheduler` with event-driven idle and streaming coalescing.
-- `SumoNode` + Yoga WASM layout.
-- `CellBuffer` + ANSI writer + frame diff.
-- `ScrollBox` + `ChatPager` with sticky-bottom/manual-scroll behavior.
-- `PiEditorLeaf` cursor-marker remapping.
-- `RegionRegistry` and `SumoExtensionUIAdapter` as a retained replacement path for Pi UI hooks.
-- Visual Bible + V2 visual harness.
-
-This is not just a sketch; it is a real beginning of a terminal app framework.
-
-### 3.3 Performance measurements are encouraging
-
-`docs/research/sumo-tui-performance.md` shows:
-
-- retained render p50 ~1.08ms, p95 ~1.41ms;
-- streaming p95 ~9ms;
-- SumoTUI idle RSS delta vs bare Pi ~19 MiB;
-- streaming RSS well under the 300 MiB target.
-
-`docs/research/sumo-tui-cpu-diagnosis.md` shows idle CPU at ~0.30% after the scheduler guard fixes. That is exactly the discipline this project needs.
-
-### 3.4 The visual verification loop is a real differentiator
-
-The V2 visual harness and Bible are worth keeping. Terminal UIs regress in ways unit tests do not see: stray bg cells, line overflow, missing cursor, stale ANSI. The current `pnpm visual:ci` loop is already catching those classes.
+- **ADR + research quality.** `docs/adr/0001-sumo-tui-framework.md` and `docs/research/sumo-tui-spike/**` capture the architectural lessons (altscreen requires app-owned scrollback) and the edge-case catalog. Keep this discipline; reference it when seam bugs reappear.
+- **Real primitives, real tests.** `TerminalController`, `LifecycleRuntime`, `FrameScheduler`, `SumoNode`+Yoga, `CellBuffer`+ANSI writer+diff, `ScrollBox`+`ChatPager`, `PiEditorLeaf` cursor remap, `RegionRegistry`, `SumoExtensionUIAdapter`. This is a real terminal app framework in progress.
+- **Perf is in budget.** Retained render p50 ~1.08 ms / p95 ~1.41 ms, streaming p95 ~9 ms, idle CPU ~0.30 %, idle RSS delta ~19 MiB vs bare Pi. (See `docs/research/sumo-tui-performance.md` and `sumo-tui-cpu-diagnosis.md`.)
+- **Visual harness.** Terminal UIs regress in ways unit tests miss (stray bg cells, line overflow, missing cursor, stale ANSI). `pnpm visual:ci` already catches these classes. Worth keeping.
 
 ---
 
-## 4. Biggest risks and improvement areas
+## 3. Risks, ranked
 
-### P0 — The runtime is stuck between two renderers
+### P0-A — Two renderers, neither has authority *(effort: 1w+, mostly design)*
 
-Evidence:
+Evidence in code:
 
 - `SumoInteractiveRuntime` starts SumoTUI primitives, then delegates the session loop to upstream `InteractiveMode`.
-- `installChatViewportBridge()` overrides `upstream.chatContainer.render`, `clear`, `invalidate`, `handleEvent`, and `renderSessionContext`.
-- Chat updates force `target.ui?.requestRender?.(true)` because Pi's differential scroll can smear SumoTUI's hybrid chat/sidebar layout.
+- `installChatViewportBridge()` overrides `upstream.chatContainer.render`, `clear`, `invalidate`, `handleEvent`, `renderSessionContext`.
+- Chat updates force `target.ui?.requestRender?.(true)` because Pi's differential scroll smears the hybrid layout.
 - Chat geometry is computed by rendering Pi chrome components to count rows.
+- Sidebar overlay reduces chat width via a hardcoded constant.
 
-This is clever and probably necessary as a transitional bridge, but it is fragile. It means:
+That is not a final architecture. **Define modes explicitly and stop blurring them**:
 
-- Pi still owns root vertical flow.
-- SumoTUI owns chat rows inside that flow.
-- Sidebar is an overlay outside flow.
-- Chat width is manually reduced by sidebar constants.
-- Mouse events are translated through retained chat coordinates into a Pi-rendered shell.
+| Mode | Owner | Use |
+|---|---|---|
+| **Hybrid-safe (fallback)** | Pi owns terminal/editor/chat. SumoCode = header/footer/sidebar overlays only, no altscreen takeover. | The off-ramp. Always shippable. |
+| **Owned-shell (target)** | SumoTUI owns terminal, root layout, chat, footer, sidebar, modals, input routing. Pi provides agent/session/editor utilities through adapters. | Daily-driver target. |
+| **Full-owned (post-v1)** | Owned-shell + native editor replacement. | Experimental; only if `PiEditorLeaf` fails. |
 
-That is not a stable final architecture.
+Daily-driver work goes to owned-shell. Hybrid-safe stays as fallback so the project can ship even if the kernel rewrite stalls.
 
-**Recommendation:** define explicit modes and stop blurring them:
+### P0-B — V2 contract drift between spec, tests, runtime *(effort: 2–3d)*
 
-1. **Hybrid-safe mode**: Pi owns terminal/editor/chat. No altscreen unless SumoTUI owns scrollback. SumoCode uses header/footer/sidebar overlays only.
-2. **Owned-shell mode**: SumoTUI owns terminal, root layout, chat viewport, footer, sidebar, modals, input routing. Pi provides agent/session/editor utilities through adapters.
-3. **Experimental full-owned mode**: SumoTUI owns everything, including native editor replacement.
+- V2 says active input has no label; integration test still references it.
+- V2 says command palette has 6 modes incl. `SETTINGS`; `PaletteMode` has 5.
+- V2 says cursor color respects terminal; `TerminalController` unconditionally emits `OSC 12 ; #D97706`.
+- V2 references `src/sumo-tui/render/truecolor.ts`; only `truecolor.test.ts` exists.
+- V2 says command palette active-state opening / drill-down is broken; current code still writes slash text for some selections.
 
-Daily-driver work should move to owned-shell mode. Hybrid-safe is fallback only.
+This kills velocity because every new surface has to choose between code, tests, and spec. **Acknowledge contract realignment is a precondition for the P1 kernel work**, not "item 1 of P0" — the kernel work is unsafe until the tests stop being a liability.
 
----
+Realignment PR scope:
 
-### P0 — Some runtime contracts still lag the locked V2 spec
-
-The sidebar V2 unit-test drift appears resolved on current HEAD `6097b23`, but several spec/runtime gaps remain:
-
-- V2 spec says active input has **no label**; `cursor-visibility.test.ts` should not rely on obsolete labels and still times out in PTY.
-- V2 spec says command palette has 6 modes including `SETTINGS`; current `PaletteMode` has 5 modes and no `SETTINGS`.
-- V2 spec says cursor color should respect terminal preference; `TerminalController` unconditionally emits OSC 12 cursor color set/reset.
-- V2 spec mentions `src/sumo-tui/render/truecolor.ts`; the code has `truecolor.test.ts` but no such module.
-- V2 spec calls out command palette active-state opening and drill-down behavior as broken; current implementation still writes slash commands/editor text for some selections.
-
-This is still a velocity killer because every new surface must decide whether to follow the code, the tests, or the V2 spec.
-
-**Recommendation:** add a one-time "contract realignment" PR:
-
-1. Mark `docs/ui/CATHEDRAL_UX_SPEC_V2.md` + Bible HTML as the only visual source of truth.
-2. Keep the newly aligned V2 unit tests green; delete/update stale V1 assertions whenever they reappear.
+1. Lock `docs/ui/CATHEDRAL_UX_SPEC_V2.md` + Bible HTML as the only visual source of truth.
+2. Update or delete stale V1 assertions whenever they reappear.
 3. Lock constants to V2: sidebar width 30, thresholds recomputed, terminal dim line dynamic.
 4. Update integration tests to wait for durable runtime markers, not obsolete labels.
-5. Add a `docs/visual/parity/CONTRACT.md` that defines which crops are review-only vs required.
+5. Add `docs/visual/parity/CONTRACT.md` defining review-only vs required crops.
 
----
-
-### P0 — Terminal lifecycle has too many owners
-
-Current ownership paths:
+### P0-C — Terminal lifecycle has duplicate owners *(effort: 1–2d)*
 
 - `src/extension.ts` calls `installAltscreen(pi)`.
 - `installAltscreen()` calls `installLifecycle(pi)`.
-- `LifecycleRuntime` enters altscreen + mouse on `session_start` and restores on `session_shutdown`.
-- `SumoInteractiveRuntime.start()` also calls `TerminalController.startRetainedSession()` before upstream init.
-- The controllers are different instances.
+- `LifecycleRuntime` enters altscreen + mouse on `session_start`, restores on `session_shutdown`.
+- `SumoInteractiveRuntime.start()` *also* calls `TerminalController.startRetainedSession()` before upstream init.
+- The two controllers are different instances.
 
-This duplicate ownership may be benign in many runs because terminal sequences are idempotent-ish, but it increases risk during `/resume`, `SIGTSTP`, `SIGCONT`, uncaught exceptions, and no-session/no-TTY test modes.
-
-Also, V2 says not to override cursor preference, but `TerminalController` emits:
+Idempotent-ish today, fragile under `/resume`, `SIGTSTP`, `SIGCONT`, uncaught exceptions, no-session/no-TTY tests. Plus OSC 12 cursor color is emitted unconditionally, against V2:
 
 ```ts
 export const CURSOR_COLOR_SET = "\x1b]12;#D97706\x1b\\";
 ```
 
-**Recommendation:** introduce one `TerminalSessionOwner` singleton with an explicit reference-count or state machine:
+Introduce one `TerminalSessionOwner` singleton with a state machine:
 
 ```txt
 idle → starting → active → suspending → suspended → active → stopping → stopped
 ```
 
-Rules:
+Rules: exactly one place enters/leaves altscreen, exactly one place toggles mouse, OSC 11 bg paint feature-flagged (`/sumo:bg paint|none`), OSC 12 cursor color off by default and only set by explicit `/sumo:cursor`, no-TTY paths no-op but testable through a headless backend.
 
-- exactly one place enters/leaves altscreen;
-- exactly one place enables/disables mouse;
-- OSC 11 bg paint is feature-flagged (`/sumo:bg paint|none`);
-- OSC 12 cursor color is off by default and only set by explicit `/sumo:cursor`;
-- no-TTY paths are no-op but still testable through a headless backend.
+### P0-D — The Pi patch is the real version-drift seam *(effort: 1–2d to evaluate, 1w+ to remove)*
 
----
+`patches/@mariozechner__pi-coding-agent@0.70.2.patch` + the `loadSumoInteractiveMode` hook in `bin/sumocode.sh` and `sumo-interactive-mode.js` are how SumoTUI injects the retained renderer. **This is the seam Pi-version drift will break first.** Every Pi minor bump risks invalidating the patch.
 
-### P0 — Portrait support is still unresolved against the final goal
+This was missing from v1. It is P0 because:
 
-Project context says Mac mini is portrait and MacBook is landscape. PRD earlier wanted bottom/sidebar adaptations for portrait. V2 spec currently says:
+- Owning the patch means SumoTUI's stability is bounded by patch maintenance forever.
+- Removing it means finding a clean injection via Pi's public API or accepting a fork.
+- Either way the decision belongs at the same layer as "two renderers" and "single terminal owner".
 
-- sidebar hidden on splash;
-- sidebar hidden when `W < 120`;
-- otherwise visible as a right pane.
+Action: spend 1–2d evaluating whether `setEditorComponent` / `setHeader` / `setFooter` / a future `setRootRenderer` covers the injection. If yes, plan the patch removal as a milestone. If no, document the patch maintenance contract (what to verify on each Pi bump, when to upstream).
 
-That may be okay if portrait terminals still exceed 120 columns, but portrait often means narrower width and taller height. Hiding the sidebar entirely removes one of SumoCode's core value props: ambient memory/context.
-
-**Recommendation:** decide this explicitly:
-
-- **Option A:** V1 portrait hides sidebar and footer/hint row absorbs context. Simple, less personal.
-- **Option B:** V1 portrait has a bottom registry band. More work, aligns with PRD/final goal.
-- **Option C:** V1 portrait has a command-toggled overlay only. Middle ground.
-
-My vote: **Option B eventually, Option C immediately.** Right now, make portrait overlay reliable and non-capturing; then add bottom band once the owned layout is stable.
-
----
-
-### P0 — Command and keybinding conflicts are already visible
-
-Examples:
+### P0-E — Command and keybinding conflicts already visible *(effort: 1–2d)*
 
 - `src/command-palette.ts` registers `sumo:memory` as a stub.
 - `src/memory-editor.ts` registers `sumo:memory` again with real behavior.
-- V2 says command palette trigger is `Ctrl+/`, active-state opening is broken, and Enter should drill down rather than insert slash text.
-- V2 says `Ctrl+T` thinking-cycle may be intercepted.
+- V2 says command palette trigger is `Ctrl+/`, active-state opening is broken, Enter should drill down rather than insert slash text.
+- V2 flags `Ctrl+T` thinking-cycle as possibly intercepted.
 
-**Recommendation:** centralize command/keybind registration:
+Centralize:
 
 ```ts
-commands/register.ts
-keybindings/register.ts
+src/commands/register.ts
+src/keybindings/register.ts
 ```
 
-Add a startup conflict inspector that emits a structured dev warning:
+Add a startup conflict inspector that emits a structured dev warning (`keybind conflict: ctrl+/ owned by command-palette, skipped by X`). Borrow from Textual's event/message routing and Bubble Tea's central message loop.
 
-```txt
-keybind conflict: ctrl+/ owned by command-palette, skipped by X
-slash conflict: /sumo:memory registered by command-palette and memory-editor
+### P0-F — Portrait policy is implicit *(effort: 0.5–1d for Option C)*
+
+Mac mini = portrait (the dev box), MacBook = landscape. V2 currently says: sidebar hidden on splash, hidden when `W < 120`, otherwise right pane. Portrait often means `W < 120`, which silently removes ambient memory/context — one of SumoCode's stated value props.
+
+Three options:
+
+- **A** — V1 portrait hides sidebar, footer/hint absorbs context. Simple, less personal.
+- **B** — V1 portrait has a bottom registry band. More work, aligns with PRD.
+- **C** — V1 portrait has a command-toggled overlay only. Middle ground.
+
+Honest framing: Mac mini is the dev box, so Option C is already the de-facto today. Recommending C "now, B later" is recommending the status quo. **Pick: ship B in V1 (work the user already has to do), or admit portrait richness is V2.** Don't punt with C.
+
+### P0-G — Workers (cancelable async) *(effort: 1–2d, ships against current code)*
+
+This was P1 in v1; promoting to P0 because it is cheap and ships *without* the kernel rewrite. Memory cache, MCP health probe, sidebar refresh, and session summary all currently race. Borrow Textual's `Worker` with `exclusive`:
+
+```ts
+type WorkerOptions = { exclusive?: boolean; group?: string };
+runWorker(name, options, async () => { ... });
 ```
 
-Borrow from Textual's event/message routing and Bubble Tea's central message loop: key events should flow through one router with priority, focus, modal stack, and trace logging.
+Cancels stale fetches when a new one starts, removes the entire class of "memory loaded after sidebar swapped" bugs.
 
 ---
 
-### P1 — Rendering is too raw-string-heavy
+### P1 — Kernel deepening (gated on P0)
 
-There are repeated ad hoc helpers across files:
+**P1-A — Pick one app-model pattern** *(effort: 2–4w)*
 
-- `fg(hex)`, `bg(hex)`, `color(text, hex)`, `visibleLength()`, `padToWidth()`.
-- ANSI resets and bg repaint logic differ by component.
-- Many renderers emit strings directly rather than styled spans.
+Three substitutes, not complements:
 
-This causes the exact bugs already seen: cells falling through to terminal bg, nested resets clearing row bg, over-width lines, stale ANSI after truncation.
+| Pattern | Cost | Benefit | Cost vs Pi events |
+|---|---|---|---|
+| **Bubble Tea / Elm** — `Model + Update + View`, all events become `AppMsg` | High. Every Pi event has to translate to/from `AppMsg`. Hybrid-safe mode harder to keep working. | Deterministic transitions, replayable bug reports, headless tests. | Largest divergence from Pi idioms. |
+| **Textual reactive properties** — declared reactive fields auto-invalidate the right widget | Medium. Adds a small reactive runtime; events update fields directly. | Locality of behavior preserved; tests still readable. | Smallest divergence; Pi events update fields naturally. |
+| **Status quo + state-mutation discipline** — keep direct event hooks, gate mutations through a single `dispatch()` | Low. Mostly convention. | Quickest. | None. |
 
-**Recommendation:** introduce a small typed render primitive layer before building more UI:
+**v2 recommendation: Textual-style reactive properties.** Lower divergence from Pi's event idioms, keeps the hybrid-safe fallback viable, gives you locality + invalidation correctness without rebuilding the event system. Bubble Tea is the right answer if SumoTUI eventually extracts as a public framework; it is overkill for SumoCode today.
+
+Worker API (P0-G) integrates cleanly into either pattern.
+
+**P1-B — Typed style/render primitives** *(effort: 1w)*
+
+Repeated ad hoc helpers (`fg(hex)`, `bg(hex)`, `color()`, `visibleLength()`, `padToWidth()`) cause the bg-fall-through and stale-ANSI bugs already seen.
 
 ```ts
 type Style = { fg?: Token; bg?: Token; bold?: boolean; italic?: boolean; dim?: boolean };
 type Span = { text: string; style?: Style };
 type Line = Span[];
 
-renderLine(line: Line, width, options): string
+renderLine(line, width, options): string
 box({ title, width, style, children }): Line[]
 rule(width, style): Line
-pad(line, width, fillStyle): Line
-truncate(line, width): Line
+pad / truncate
 ```
 
-Then build Cathedral surfaces from these primitives:
+Then build `MessageFrame`, `ToolPill`, `ToolLedger`, `CodeBlock`, `ScriptoriumModal`, `RegistrySidebar`, `FooterLine`, `InputFrame` from these primitives. The Charm / Lip Gloss lesson: make styling/layout primitives pure, reusable, boring.
 
-- `MessageFrame`
-- `ToolPill`
-- `ToolLedger`
-- `CodeBlock`
-- `ScriptoriumModal`
-- `RegistrySidebar`
-- `FooterLine`
-- `InputFrame`
+**P1-C — Headless `TestBackend` + Pilot API** *(effort: 1w)*
 
-This is the "Lip Gloss" lesson from Charm: make styling/layout primitives pure, reusable, and boring.
+Borrow Ratatui / Textual:
 
----
+- `TestBackend` exposes current/previous buffers + cursor state.
+- Pilot API can press keys, send mouse events, resize, assert visible cells.
+- Visual goldens promoted only after human approval.
 
-### P1 — SumoTUI needs a unidirectional app model
+Test layers:
 
-Current state is scattered:
+1. Pure render — `renderFoo(snapshot, width)` returns styled lines.
+2. Headless SumoTUI — app model + backend + input events, no PTY.
+3. PTY smoke — real Pi/Sumo integration, terminal lifecycle, cursor, mouse.
+4. Visual Bible — component/runtime crops.
+5. Long-session soak — 10k messages, 1h idle, resize storm, streaming-while-scrolled.
 
-- Pi events update footer state directly.
-- Sidebar reads from `ctx.sessionManager` during render.
-- Chat bridge mutates `ChatPager` from Pi event hooks.
-- Memory cache timers call render callbacks.
-- Command palette directly writes editor text or calls UI selects.
+**P1-D — Structured transcript model** *(effort: 1w)*
 
-This works for a small extension. It will not scale to a full shell.
-
-Borrow the Elm/Bubble Tea pattern:
-
-```ts
-type AppModel = {
-  terminal: TerminalModel;
-  session: SessionModel;
-  chat: ChatModel;
-  sidebar: SidebarModel;
-  modalStack: ModalModel[];
-  input: InputModel;
-  theme: ThemeModel;
-};
-
-type AppMsg =
-  | { type: "pi.message_start"; message: PiMessage }
-  | { type: "pi.tool_result"; result: PiToolResult }
-  | { type: "terminal.resize"; cols: number; rows: number }
-  | { type: "input.key"; event: KeyEvent }
-  | { type: "mouse.event"; event: MouseEvent }
-  | { type: "memory.loaded"; facts: Fact[] }
-  | { type: "theme.changed"; theme: ThemeId };
-
-function update(model: AppModel, msg: AppMsg): [AppModel, Command[]]
-function view(model: AppModel): SumoNode
-```
-
-This gives you:
-
-- deterministic state transitions;
-- replayable bug reports;
-- easier headless tests;
-- a single place to profile resume/startup;
-- clean async via commands/workers.
-
-Borrow Textual's `Worker` idea for memory fetches, session summary, and long-running UI tasks: exclusive workers cancel stale work and avoid races.
-
----
-
-### P1 — Chat model is not structured enough for V2 elements
-
-V2 needs message frames, skill pills, tool pills, code blocks, scroll/scribe delegation, Divine Query, and later live bash. Current retained chat is mostly text-role messages.
-
-**Recommendation:** introduce a structured transcript model now:
+Required for chat message frames, skill pills, tool pills, code blocks, scroll/scribe delegation, Divine Query, future live bash. Stop inferring V2 surfaces from plain text rows.
 
 ```ts
 type ChatBlock =
@@ -341,380 +237,231 @@ type ChatBlock =
   | { type: "delegation"; scroll: ScrollViewModel };
 
 type ChatMessageViewModel = {
-  id: string;
-  role: "user" | "sumo" | "system";
-  displayName: string;
-  timestamp?: Date;
+  id: string; role: "user" | "sumo" | "system";
+  displayName: string; timestamp?: Date;
   blocks: ChatBlock[];
 };
 ```
 
-Render `ChatMessageViewModel` to retained widgets. Do not keep trying to infer V2 surfaces from plain text rows.
+**P1-E — Focus / modal stack + keybinding priority** *(effort: 0.5w)*
+
+Already most of the way there with `RegionRegistry`. Wrap into a single `InputRouter` with focus, modal-stack, priority, trace logging.
+
+**P1-F — Selection manager + OSC 52 copy** *(effort: 0.5w)*
+
+SGR mouse capture weakens native terminal selection; daily-driver users will copy text dozens of times an hour. Either implement in-app selection + OSC 52, or accept users will hold modifier to bypass mouse capture. Pick one and document.
+
+**P1-G — Debug overlay** *(effort: 2–3d)*
+
+`Ctrl+Shift+D`: mode (hybrid/owned), terminal dims, frame p50/p95, dirty queue depth, focused widget, modal stack, scroll offset/manualScroll/unread, active keybindings, Pi event rate, memory worker status. Plus `SUMO_TUI_TRACE=1` writes replayable event logs and `sumocode replay <trace>` runs them headlessly. Pays for itself fast — terminal bugs are hard to describe.
+
+### P2 — Visual / product surfaces (after P0 + P1 land)
+
+Element 13 chat message frames · Element 11 Divine Query · Element 9 tool pills/ledgers · Element 10 code blocks · Element 9a skill pill · Element 12 scroll/scribe delegation · Element 6 approval modal via Pi risk policy · Element 7 Memory Scriptorium · top-bar LLM summaries + recent sessions.
+
+### P3 — Extraction (only after 30 days stable)
+
+Decide whether `src/sumo-tui` becomes `@sumodeus/sumo-tui` · publish architecture docs · third-party Pi extension compatibility tier · React/Solid adapter.
+
+### Demoted
+
+- **CellBuffer optimization (was P1).** Perf is acceptable today. Trigger gate: 10k-msg synthetic transcript p95 > 33 ms, *or* drag-selection / animated splash / split-pane lands. Until then, `Uint16Array` chars + `Map<number, string|number>` style storage is fine.
+
+### Removed
+
+- **Ink reference.** v1 itself said "do not start there." Cut.
+- **Section 6 feature ideas (25 items).** Moved to `docs/IDEAS.md` so this audit stays a roadmap, not a buffet.
 
 ---
 
-### P1 — CellBuffer works, but should be optimized before longer sessions
-
-Current `CellBuffer` uses a `Uint16Array` for chars, but style storage is multiple `Map<number, string|number>` structures. `clone()` copies maps every frame. This is okay at current sizes and measured benchmarks, but it will become a cost under:
-
-- 160×60 full-shell frames;
-- drag selection highlight;
-- code/tool ledgers;
-- animated splash;
-- long streaming sessions;
-- split panes later.
-
-Borrow from Ratatui/OpenTUI:
-
-- store style IDs in typed arrays;
-- maintain a style table `{ fg,bg,attrs } -> id`;
-- keep previous/current buffers and swap them instead of cloning maps;
-- dirty-row/dirty-rect tracking;
-- row hash before per-cell compare;
-- cache wrapped markdown/code blocks by `(contentHash,width,themeVersion)`.
-
-Do this only after contracts are aligned; current perf is acceptable.
-
----
-
-### P1 — Testing strategy is good but not yet authoritative
-
-The repo has a lot of tests, but the failure mode shows the problem: tests are not tied to the latest spec contract.
-
-Borrow from Ratatui/Textual:
-
-- a **headless backend** that behaves like the terminal but does not write real ANSI;
-- a **Pilot API** that can press keys, send mouse events, resize, and assert visible cells;
-- a **TestBackend** that exposes current/previous buffers and cursor state;
-- visual goldens promoted only after human approval.
-
-Proposed test layers:
-
-1. **Pure render tests**: `renderFoo(snapshot,width)` returns styled lines/cells.
-2. **Headless SumoTUI tests**: app model + backend + input events.
-3. **PTY smoke tests**: real Pi/Sumo integration, terminal lifecycle, cursor, mouse.
-4. **Visual Bible tests**: component/runtime crops.
-5. **Long-session soak tests**: 10k messages, 1h idle, resize storm, streaming while scrolled up.
-
----
-
-### P1 — Observability/devtools should become a first-class feature
-
-Current diagnostics are good but low-level: JSONL diagnostics, CPU script, visual outputs.
-
-Borrow Textual Devtools and OpenTUI debug overlays:
-
-- `Ctrl+Shift+D` debug overlay with:
-  - current mode: hybrid/owned;
-  - terminal dims;
-  - frame p50/p95;
-  - renders/sec;
-  - dirty queue depth;
-  - focused widget;
-  - modal stack;
-  - scroll offset/manualScroll/unread;
-  - active keybindings;
-  - Pi event rate;
-  - memory worker status.
-- `SUMO_TUI_TRACE=1` writes replayable event logs.
-- `sumocode replay <trace>` replays a bug in headless mode.
-
-This will pay for itself because terminal bugs are hard to describe.
-
----
-
-## 5. Patterns to borrow from other TUIs
+## 4. Patterns to borrow (and not borrow)
 
 ### OpenCode / OpenTUI
 
-Already researched in `docs/research/sumo-tui-spike/01-opencode.md` and `02-opentui.md`.
-
-Steal aggressively:
-
-- App-owned `ScrollBox` with sticky bottom.
-- Prompt outside scrollbox.
-- Explicit snap-to-bottom after async session load/submit.
-- Message-boundary navigation using rendered child positions.
-- Responsive sidebar: dock on wide, overlay on narrow.
-- Theme tokens for every semantic surface.
-- Central renderer lifecycle with suspend/resume/destroy.
-- Hit grid / focus manager / mouse dispatcher.
-- Selection-aware mouse handling.
-
-Do **not** copy blindly:
-
-- Bun/OpenTUI as direct runtime dependency; Pi extensions are Node/jiti today.
-- Fixed FPS loop as the default; SumoTUI's event-driven idle model is better for agent sessions.
+Already covered in `docs/research/sumo-tui-spike/01-opencode.md` and `02-opentui.md`. Steal: app-owned `ScrollBox` with sticky-bottom, prompt outside scrollbox, snap-to-bottom after async load/submit, message-boundary navigation, responsive sidebar (dock wide / overlay narrow), theme tokens for every semantic surface, central renderer lifecycle, hit grid + focus manager + mouse dispatcher, selection-aware mouse handling. Don't copy: Bun/OpenTUI as direct runtime dep; fixed-FPS loop as default.
 
 ### Bubble Tea
 
-Source: `https://github.com/charmbracelet/bubbletea`
-
-Borrow:
-
-- `Model -> Update -> View` architecture.
-- Commands as async effects that return messages.
-- Keep update/view fast; all blocking work becomes a command.
-- Central message channel for safe background work.
-
-Why it matters here: SumoCode currently has direct event-to-render hooks everywhere. A Bubble Tea-like loop would make runtime behavior testable and replayable.
+Considered as the app-model pattern in P1-A and **rejected as primary** in favor of Textual-style reactivity, on cost-vs-Pi grounds. Still steal the small lesson: keep update/view fast, all blocking work becomes a command.
 
 ### Ratatui
 
-Sources:
-
-- `https://ratatui.rs/`
-- `https://docs.rs/ratatui/latest/ratatui/backend/struct.TestBackend.html`
-
-Borrow:
-
-- Immediate draw into a buffer, then diff previous/current buffers.
-- TestBackend for integration tests with no terminal.
-- Widget authors render into a `Frame`, not strings.
-- Modular core vs app-facing package split once the API stabilizes.
-
-Why it matters here: SumoTUI already has a retained tree, but the **backend/test** lesson is huge. Build a formal headless backend and stop relying so much on pty parsing for correctness.
+Steal: immediate-draw-into-buffer + diff prev/current, `TestBackend` for integration tests with no terminal, widget authors render into a `Frame` not strings, modular core vs app-facing split when API stabilizes. The TestBackend lesson is the biggest — stop relying on PTY parsing for correctness.
 
 ### Textual
 
-Sources:
-
-- `https://textual.textualize.io/guide/reactivity/`
-- `https://textual.textualize.io/guide/workers/`
-- `https://textual.textualize.io/guide/events/`
-- `https://textual.textualize.io/guide/testing/`
-- `https://textual.textualize.io/guide/devtools/`
-
-Borrow:
-
-- Reactive properties that automatically invalidate the right widget.
-- Worker API with `exclusive` behavior for canceling stale async tasks.
-- Message pump with selector-style handlers.
-- Headless `run_test()` + Pilot API.
-- Devtools console that avoids corrupting terminal output.
-- Styling separated from logic.
-
-Why it matters here: memory queries, session summarization, MCP health, and visual state updates all need cancellation/race protection.
-
-### Ink
-
-Source: `https://github.com/vadimdemedes/ink`
-
-Borrow:
-
-- Component composition and flexbox mental model.
-- Eventually, a declarative adapter for complex UI trees.
-
-Do not start there. A React reconciler is a Phase 6+ idea. First make the imperative kernel correct.
+Steal: reactive properties auto-invalidate the right widget (P1-A), Worker API with `exclusive` for cancelling stale tasks (P0-G), message pump with selector-style handlers, headless `run_test()` + Pilot, devtools console that doesn't corrupt terminal output (P1-G), styling separated from logic (P1-B).
 
 ### Charm Lip Gloss / Bubbles
 
-Borrow:
-
-- Small reusable styling primitives.
-- Composable widgets that can be used without a full framework.
-- Strong separation between layout/style and app logic.
-
-This directly maps to the suggested `Span/Line/Style` layer.
+Maps directly to P1-B (`Span/Line/Style`).
 
 ---
 
-## 6. Feature ideas that move SumoTUI toward the final goal
-
-### Daily-driver UX
-
-1. **Transcript search**: `/` inside chat scrollback, jump between matches, highlight cells.
-2. **Semantic jumps**: next/previous user message, next/previous tool, last failed tool, last code block.
-3. **Session archive overlay**: top-bar ARCHIVE opens a searchable session list.
-4. **Recent session tabs**: passive first, interactive once session switching is stable.
-5. **Command palette drill-downs**: SESSION / MODEL / THINKING / MEMORY / THEME / SETTINGS, all Scriptorium style.
-6. **Keybinding conflict inspector**: visible list of active owner/priority for each binding.
-7. **In-app selection + OSC 52 copy**: required because SGR mouse capture weakens native terminal selection.
-8. **Slow terminal mode**: lower frame cap, disable animations, more aggressive row diffing.
-9. **Safe recovery command**: `sumocode recover` emits reset bytes after SIGKILL/terminal corruption.
-10. **Resume perf budget overlay**: show exact resume path timing when `SUMO_TUI_DEBUG=1`.
-
-### Agent/product features
-
-1. **Tool ledger cards**: compact by default, expanded on demand.
-2. **Bash live view**: optional v2, preserve Pi security semantics.
-3. **Code block frames/gutters**: shared renderer with edit/read ledgers.
-4. **Skill pill**: `[skill] frontend-design (⌘O to expand)` inside SUMO messages.
-5. **Divine Query modal**: replaces ugly question/confirm prompts.
-6. **Approval modal**: use Pi risk policy, SumoTUI rendering.
-7. **Memory Scriptorium**: read/edit/delete/search facts; deterministic panel routing.
-8. **Primary agent display name**: `sumocode.json` controls `SUMO` vs `ZEUS` chat headers.
-9. **MCP health real data**: replace placeholder MCP server rows.
-10. **Memory diff on session end**: show what was remembered, allow reject/edit.
-
-### Developer ergonomics
-
-1. **Storybook-like Bible runner**: render individual components with fixtures.
-2. **Trace replay**: record `AppMsg` stream and replay headlessly.
-3. **Layout inspector**: show Yoga rects and z-index overlays.
-4. **Perf budget CI**: fail if p95 render or idle CPU regresses beyond thresholds.
-5. **Pi upgrade smoke matrix**: run against pinned + latest compatible Pi versions.
-
----
-
-## 7. Recommended architecture target
-
-### 7.1 SumoTUI should become a kernel with seven seams
+## 5. Recommended architecture target
 
 ```txt
 ┌─────────────────────────────────────────────────────────┐
 │ SumoCode product shell                                  │
-│  - Cathedral surfaces                                   │
-│  - command palette, memory, sidebar, footer, chat        │
+│  Cathedral surfaces · palette · memory · sidebar · footer │
 └─────────────────────────────────────────────────────────┘
-                         │
+                           │
 ┌─────────────────────────────────────────────────────────┐
 │ SumoTUI kernel                                           │
-│ 1. AppModel + Update loop                                │
-│ 2. TerminalSessionOwner                                  │
-│ 3. InputRouter + FocusManager + SelectionManager         │
-│ 4. LayoutTree / Yoga nodes                               │
-│ 5. Renderer backend: CellBuffer + diff + writer          │
-│ 6. Widget primitives: Box/Text/ScrollBox/Modal/TextInput │
-│ 7. Headless TestBackend + TraceReplay                    │
+│  1. AppModel + reactive props (Textual-style)            │
+│  2. TerminalSessionOwner (state machine)                 │
+│  3. InputRouter + FocusManager + SelectionManager        │
+│  4. LayoutTree / Yoga                                    │
+│  5. CellBuffer + diff + ANSI writer                      │
+│  6. Widget primitives (Box/Text/ScrollBox/Modal/TextInput)│
+│  7. Headless TestBackend + TraceReplay                   │
 └─────────────────────────────────────────────────────────┘
-                         │
+                           │
 ┌─────────────────────────────────────────────────────────┐
-│ Pi adapter                                               │
-│  - agent/session event subscription                      │
-│  - Pi editor leaf or native editor fallback              │
-│  - extension UI compatibility                            │
-│  - model/theme/settings/tool bridge                      │
+│ Pi adapter (the patch lives here)                       │
+│  agent/session events · editor leaf · UI shim · bridges │
 └─────────────────────────────────────────────────────────┘
-                         │
+                           │
 ┌─────────────────────────────────────────────────────────┐
-│ Pi runtime                                               │
-│  - LLMs, tools, MCP, auth, sessions, skills              │
+│ Pi runtime — LLMs, tools, MCP, auth, sessions, skills   │
 └─────────────────────────────────────────────────────────┘
 ```
 
-### 7.2 Deep modules to carve out
+### Deep modules (carve out, treat as units)
 
-| Module | Responsibility | Why it is deep |
+| Module | Responsibility | Why deep |
 |---|---|---|
-| `terminal-session-owner` | terminal mode state machine | Prevents cleanup/cursor/mouse regressions. |
-| `app-runtime` | Model/Update/View + command effects | Gives locality for state/race bugs. |
-| `input-router` | key/mouse/focus/modal/selection routing | Stops keybinding conflicts and lost focus. |
-| `style` | tokens -> spans -> ANSI/cells | Prevents bg/reset/width bugs. |
-| `transcript` | structured messages + virtualization | Enables chat frames/tool/code/search. |
-| `pi-adapter` | private Pi seams isolated | Contains Pi drift risk. |
-| `test-backend` | headless terminal + pilot | Makes runtime testable without pty flake. |
+| `terminal-session-owner` | Terminal mode state machine | Prevents cleanup/cursor/mouse regressions |
+| `app-runtime` | Reactive model + commands/workers | Locality for state/race bugs |
+| `input-router` | Key/mouse/focus/modal/selection routing | Stops keybinding conflicts and lost focus |
+| `style` | Tokens → spans → ANSI/cells | Prevents bg/reset/width bugs |
+| `transcript` | Structured messages + virtualization | Enables frames/tool/code/search |
+| `pi-adapter` | All private Pi seams isolated, **including the patch** | Contains Pi drift risk |
+| `test-backend` | Headless terminal + pilot | Makes runtime testable without PTY flake |
 
-### 7.3 What should stay shallow
+### Stay shallow
 
-- Individual Cathedral renderers once built on primitives.
-- Slash command registration wrappers.
-- Static token definitions.
-- Demo extensions.
-- Bible scenario fixtures.
+Cathedral renderers built on primitives, slash command wrappers, static tokens, demo extensions, Bible scenario fixtures.
 
 ---
 
-## 8. Prioritized backlog
+## 6. Non-goals (V1 contract)
 
-### P0 — Contract and stability reset
+Hold the line on these until v1 daily-drives for 30 days:
 
-1. **Remove stale Convex workflow from workspace agent instructions.** Done in `../AGENTS.md` during this audit.
-2. **Make integration tests green.** Unit tests now pass; the cursor PTY test still times out.
-3. **Pick and encode sidebar policy.** 30-col V2 is the apparent direction; portrait behavior still needs an explicit product decision.
-4. **Single terminal owner.** Remove duplicate lifecycle ownership; gate OSC 11/12.
-5. **Remove duplicate `/sumo:memory` registration.** Command palette should call memory editor; not register a stub.
-6. **Fix command palette active-state open + drill-down behavior.** Align with Element 8.
-7. **Fix integration test cursor marker to V2.** Wait for stable runtime/cursor bytes, not `SCRIPTOR INPUT`.
-8. **Add memory/sidebar timer disposal.** `SidebarMemoryCache` needs `dispose()` to clear debounce/retry timers on session shutdown.
-9. **Run Pi version smoke script in CI/local pre-release.** The fork patch must be verified.
-10. **Update README status.** It still says v0.1 scaffold while the repo now contains a substantial renderer and V2 spec.
+- **No tabs / multi-pane / split editors.**
+- **No native editor replacement.** `PiEditorLeaf` is the contract; native textarea is fallback only.
+- **No React reconciler.** Imperative + reactive props is the v1 API.
+- **No public package extraction.** `src/sumo-tui` stays bundled.
+- **No third-party Pi extension UI compat.** Foreign extensions get a one-shot warning + no-op.
+- **No theme configurability beyond the 3 hardcoded themes.**
+- **No proactive behaviors / hooks / auto-summarize.**
+- **No portrait Option B** unless explicitly chosen in P0-F (otherwise = V2).
 
-### P1 — Kernel deepening
-
-1. Add `AppModel/AppMsg/update()` loop.
-2. Add typed `Style/Span/Line` rendering layer.
-3. Add headless `TestBackend` + pilot.
-4. Add focus/modal stack and keybinding priority system.
-5. Move chat to structured transcript model.
-6. Add selection manager + OSC52 copy.
-7. Add debug overlay.
-
-### P2 — Visual/product surface completion
-
-1. Element 13 chat message frames.
-2. Element 11 Divine Query.
-3. Element 9 tool pills/ledgers.
-4. Element 10 code blocks.
-5. Element 9a skill pill.
-6. Element 12 scroll/scribe delegation.
-7. Element 6 approval modal via Pi risk policy.
-8. Element 7 Memory Scriptorium.
-9. Top-bar LLM summaries + recent sessions.
-
-### P3 — Extraction/public API
-
-Only after 30 days stable:
-
-- decide whether `src/sumo-tui` becomes `@sumodeus/sumo-tui`;
-- publish architecture docs;
-- add third-party Pi extension compatibility tier;
-- consider React/Solid adapter.
+If a feature request reaches into this list, it's V2.
 
 ---
 
-## 9. Acceptance gates before declaring SumoTUI v1 daily-driver ready
+## 7. The fallback product
 
-### Correctness gates
+If owned-shell mode does not reach daily-driver quality in N weeks, **hybrid-safe mode is a complete product**:
+
+- No altscreen takeover.
+- Pi owns terminal, editor, chat, scrollback.
+- SumoCode contributes: persona (Zeus), custom footer, sidebar overlay, working indicator, splash, slash commands, memory widget, voice/copy module, theme tokens applied to Pi's renderer.
+
+That ships today and is meaningfully different from stock Pi. Naming the off-ramp prevents the kernel rewrite from becoming existential.
+
+Trigger to fall back: P0-A redesign + P1-A app-model rewrite together exceed 6 weeks without integration green, *or* the Pi patch (P0-D) becomes unmaintainable on a Pi minor bump.
+
+---
+
+## 8. Acceptance gates for v1 daily-driver
+
+### Correctness
 
 - `pnpm test` passes.
-- `pnpm test:integration` passes.
+- `pnpm test:integration` passes (incl. `cursor-visibility`).
 - `pnpm exec tsc --noEmit` passes.
-- `pnpm build` passes.
-- `pnpm visual:ci` has no hard failures and required crops pass.
-- No known V2 contract contradiction between docs/tests/constants.
+- `pnpm visual:ci` no hard failures, required crops pass.
+- Zero V2 contract contradictions between docs / tests / constants.
 
-### Runtime gates
+### Runtime
 
 - Ctrl+C exits cleanly, no escape leakage.
-- Ctrl+Z/fg works.
-- No-TTY `pi --print` / ACPX paths do not emit UI or crash.
+- Ctrl+Z / fg works.
+- No-TTY (`pi --print`, ACPX) no-op cleanly.
 - Mouse wheel scrolls chat, not editor history.
-- Cursor stays visible and correctly placed during typing, autocomplete, resize.
-- Streaming while scrolled up preserves viewport and shows jump-to-bottom affordance.
-- `/resume` active transition under 500ms or dominant cause documented.
+- Cursor visible and correctly placed during typing, autocomplete, resize.
+- Streaming while scrolled-up preserves viewport + shows jump-to-bottom.
+- `/resume` active transition < 500 ms or root cause documented.
+- Pi version smoke matrix (pinned + latest compatible) green.
+- Patch (P0-D) verified or removed.
 
-### Performance gates
+### Performance
 
-- Idle CPU < 1%.
+- Idle CPU < 1 %.
 - No retained render loop at idle.
-- Streaming p95 render < 16.7ms target / < 33ms acceptable.
-- Long session RSS < 300 MiB after 1h.
-- 10k-message synthetic transcript keeps only virtualized active rows in tree.
+- Streaming p95 render < 16.7 ms target / < 33 ms acceptable.
+- 1 h session RSS < 300 MiB.
+- 10k-message synthetic transcript only virtualizes active rows.
 
-### UX gates
+### UX
 
-- MacBook landscape: sidebar and chat feel balanced.
-- Mac mini portrait: explicit approved behavior, not accidental hide.
-- Visual Bible scenes for active, portrait, tools, code, palette, memory, approval, query, skill all exist.
-- Dhruv has visually approved the promoted crops.
+- MacBook landscape: balanced sidebar + chat.
+- Mac mini portrait: explicit approved behavior (decision per P0-F).
+- Visual Bible scenes for active, portrait, tools, code, palette, memory, approval, query, skill all exist and approved by Dhruv.
 
 ---
 
-## 10. Final recommendation
+## 9. Sequencing — given V2 UI work in flight (#80)
 
-Keep going with SumoTUI. The final goal needs it.
+Issue #80 (V2 UI parity epic) and its children #82, #85, #86, #87, #88, #89, #90 are partially impacted by this audit. **Don't stop or restart wholesale; cut the epic by survivability**:
 
-But spend the next slice on **consolidation**, not new polish:
+### Survives the kernel rewrite — finish these now
 
-1. Align V2 spec, constants, tests, and README.
-2. Make terminal lifecycle single-owner.
-3. Centralize commands/keybindings.
-4. Introduce typed style primitives.
-5. Add the app model/update loop and headless backend.
+- **#82 Active input frame parity** — token + render work, lands on existing rails.
+- **#85 Editorial sidebar parity** — same.
+- **#88 Splash/runtime invocation parity** — splash is a leaf surface; safe.
 
-Once those are in place, the remaining Cathedral elements become straightforward surface work instead of brittle ANSI surgery.
+These exercise the visual harness, validate V2 constants, and keep daily-drive momentum without touching the seam.
 
-The north star should be:
+### Will be rewritten if done before kernel work — pause these
 
-> **SumoCode feels like OpenCode-level terminal ownership, with Pi's agent engine and editor intelligence underneath, and a Cathedral product identity that is stable enough to daily-drive in cmux on both portrait and landscape machines.**
+- **#89 V2 chat message frame parity** — *requires* the structured transcript model (P1-D). Doing it on plain-text rows means doing it twice.
+- **#86 Active landscape scene** + **#87 Active portrait scene** — compose every primitive on top of the runtime; landscape blocks until P0-A modes are explicit, portrait blocks until P0-F decides Option B vs V2.
+- **#90 Deterministic fixture states** — depends on the structured transcript + headless `TestBackend` (P1-C) to be useful beyond what `pnpm visual:ci` gives today.
+
+### Recommended order
+
+1. **Now (1 week):** finish #82, #85, #88. They are mostly token + render work and bank measurable V2 progress.
+2. **In parallel (sequencing-light, ~1 week):** P0-B contract realignment, P0-C single terminal owner, P0-E command/keybind centralization, P0-G Workers. These don't block #82/#85/#88 and they remove the contradictions the next slice would otherwise inherit.
+3. **Then (3–6 weeks):** P0-A modes decision + P0-D patch decision + P0-F portrait decision + P1-A reactive app model + P1-B style primitives + P1-C TestBackend + P1-D structured transcript.
+4. **Then unblock:** #89, #86, #87, #90 on the new spine.
+
+The point is *don't pause the epic* — pause the parts of the epic that would be rewritten.
+
+---
+
+## 10. Score
+
+**Current: 6 / 10.** Bones are right (3 pts: ADR, primitives, perf). Working extension with several Cathedral elements (2). Clean TS, test discipline, visual harness (1). Loses 4 to: hybrid seam fragility, contract drift, integration red, no headless test backend, command/keybind conflicts, duplicate terminal owners, OSC 12 unconditional override, Pi patch unaddressed, no devtools.
+
+**After P0 + P1: 8.5 / 10.** Daily-drivable owned-shell SumoCode with stable contracts, single terminal owner, structured transcript, TestBackend, devtools, workers. Capped at 8.5 because: extraction deferred (P3), portrait Option B may still be V2, public API absent, Pi patch may still be in place unless P0-D removes it. Ninth point unlocks with 30 stable days + patch removed; tenth with extraction + a second consumer.
+
+---
+
+## 11. Final recommendation
+
+Keep going with SumoTUI. Pause the parts of #80 that would be rewritten. Spend the next slice on **consolidation, not new polish**:
+
+1. Align V2 spec / constants / tests / README.
+2. Single terminal owner.
+3. Centralize commands + keybindings.
+4. Pi patch decision (remove or formalize).
+5. Workers for cancellable async.
+6. Then: typed style primitives, headless TestBackend, reactive app model, structured transcript.
+
+After that the Cathedral elements that survive the rewrite become straightforward surface work.
+
+> **North star.** SumoCode feels like OpenCode-level terminal ownership, with Pi's agent engine and editor intelligence underneath, and a Cathedral product identity stable enough to daily-drive in cmux on both portrait and landscape machines.

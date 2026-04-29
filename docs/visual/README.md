@@ -3,6 +3,13 @@
 Headless reproducible screenshots of SumoCode running inside Pi, used for
 Cathedral visual parity verification.
 
+## V2 Cathedral Visual Harness
+
+- PRD: https://github.com/dhruvkelawala/sumocode/issues/78
+- Technical spec: [`V2_HARNESS_SPEC.md`](./V2_HARNESS_SPEC.md)
+
+V2 will compare Visual Bible targets against deterministic retained-TUI runtime and component captures. It is crop-first, review-only initially, and promotes approved runtime goldens explicitly before they become CI-blocking.
+
 ## How it works
 
 [`vhs`](https://github.com/charmbracelet/vhs) renders scripted terminal sessions

@@ -4,6 +4,7 @@ import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { installInputHints } from "./cathedral/input-hints.js";
+import { registerCursorCommand } from "./commands/cursor.js";
 import { registerPersonaCommand } from "./commands/persona.js";
 import { registerSpinnerCommand } from "./commands/spinner.js";
 import { registerTabsCommand } from "./commands/tabs.js";
@@ -109,6 +110,7 @@ export default function sumocode(pi: ExtensionAPI): void {
 	// installApprovalGate(pi); // disabled — see import comment above
 	installSidebar(pi);
 	installWorkingIndicator(pi);
+	registerCursorCommand(pi);
 	registerPersonaCommand(pi);
 	registerSpinnerCommand(pi);
 	registerTabsCommand(pi);

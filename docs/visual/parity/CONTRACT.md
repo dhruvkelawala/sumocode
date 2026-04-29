@@ -65,7 +65,7 @@ Splash/empty-state captures may show `DIVINE INVOCATION`; active typed component
 
 Hardware cursor visibility is a Pi/TUI runtime preference. PTY integration tests that assert hardware cursor behavior must opt in with `PI_HARDWARE_CURSOR=1` and wait for the stable post-render cursor state, not the first incidental `?25h` emitted during startup.
 
-Visual parity screenshots should not rely on terminal cursor color. The V2 terminal ownership contract is: terminal cursor color remains the user's preference unless an explicit future SumoCode cursor command changes it. The current hybrid `TerminalController` still contains the older OSC 12 path; #100/P0-C owns moving that behind the single terminal owner so this #99 test/visual contract does not depend on cursor color.
+Visual parity screenshots should not rely on terminal cursor color. The V2 terminal ownership contract is: terminal cursor color remains the user's preference unless an explicit future SumoCode cursor command changes it. `TerminalSessionOwner` therefore does not emit OSC 12 during normal startup; cursor color overrides are opt-in only.
 
 ## 5. Crop status semantics
 

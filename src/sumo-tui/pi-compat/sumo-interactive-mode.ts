@@ -39,7 +39,7 @@ import { CellBuffer } from "../render/buffer.js";
 import { composite } from "../render/compositor.js";
 import { diffFrames } from "../render/diff.js";
 import { FrameScheduler } from "../runtime/frame-scheduler.js";
-import { TerminalController } from "../runtime/terminal-controller.js";
+import { defaultTerminalSessionOwner, TerminalSessionOwner, type TerminalOutput } from "../runtime/terminal-controller.js";
 import { ChatPager } from "../widgets/chat-pager.js";
 import { SIDEBAR_MIN_TERMINAL_WIDTH } from "../../sidebar.js";
 import { installChatViewportBridge } from "./chat-viewport-controller.js";
@@ -77,11 +77,9 @@ export interface CreateExtensionUIContextOptions extends SumoExtensionUIAdapterO
 	readonly foreignExtensions?: ForeignAwareUIOptions;
 }
 
-interface TerminalLike {
-	readonly isTTY?: boolean;
+interface TerminalLike extends TerminalOutput {
 	readonly columns?: number;
 	readonly rows?: number;
-	write(data: string): unknown;
 }
 
 interface SumoInteractiveRuntimeSnapshot {
@@ -108,7 +106,7 @@ function debugLog(message: string): void {
  */
 export class SumoInteractiveRuntime {
 	private readonly output: TerminalLike;
-	private readonly terminal: TerminalController;
+	private readonly terminal: TerminalSessionOwner;
 	private yoga: Yoga | undefined;
 	private root: SumoNode | undefined;
 	private chat: ChatPager | undefined;
@@ -128,9 +126,9 @@ export class SumoInteractiveRuntime {
 	private emptyChatUserMessageCount = 0;
 	private started = false;
 
-	public constructor(output: TerminalLike = process.stdout) {
+	public constructor(output: TerminalLike = process.stdout, terminalSession?: TerminalSessionOwner) {
 		this.output = output;
-		this.terminal = new TerminalController({ output });
+		this.terminal = terminalSession ?? (output === process.stdout ? defaultTerminalSessionOwner : new TerminalSessionOwner({ output }));
 	}
 
 	public async start(): Promise<SumoInteractiveRuntimeSnapshot> {

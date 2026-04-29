@@ -4,7 +4,7 @@ import { join } from "node:path";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { instrumentPiEventEmitter, logDiagnostic } from "./diagnostics.js";
 import { FrameScheduler, type FrameRenderCallback } from "./frame-scheduler.js";
-import { TerminalController } from "./terminal-controller.js";
+import { defaultTerminalSessionOwner, TerminalSessionOwner } from "./terminal-controller.js";
 
 export type LifecycleSignal = "SIGINT" | "SIGTERM" | "SIGHUP" | "SIGQUIT" | "SIGTSTP" | "SIGCONT";
 export type LifecycleProcessEvent = LifecycleSignal | "exit" | "uncaughtException";
@@ -47,7 +47,7 @@ export interface LifecycleRenderControls {
 }
 
 export interface LifecycleRuntimeOptions {
-	readonly controller?: TerminalController;
+	readonly terminalSession?: TerminalSessionOwner;
 	readonly process?: LifecycleProcess;
 	readonly input?: LifecycleInput;
 	readonly scheduler?: FrameScheduler;
@@ -120,7 +120,7 @@ export function useTerminalDimensions(
  * the Phase 1 crash-recovery requirement.
  */
 export class LifecycleRuntime {
-	private readonly controller: TerminalController;
+	private readonly terminalSession: TerminalSessionOwner;
 	private readonly lifecycleProcess: LifecycleProcess;
 	private readonly input: LifecycleInput | undefined;
 	private readonly scheduler: FrameScheduler;
@@ -133,7 +133,7 @@ export class LifecycleRuntime {
 	private readonly signalHandlers = new Map<LifecycleSignal, LifecycleListener>();
 
 	public constructor(options: LifecycleRuntimeOptions = {}) {
-		this.controller = options.controller ?? new TerminalController();
+		this.terminalSession = options.terminalSession ?? defaultTerminalSessionOwner;
 		this.lifecycleProcess = options.process ?? getNodeProcess();
 		this.input = options.input ?? getNodeInput();
 		this.scheduler = options.scheduler ?? new FrameScheduler({ render: options.render ?? (() => undefined) });
@@ -154,8 +154,7 @@ export class LifecycleRuntime {
 			// mode here or stdin stays line-buffered and mouse bytes (which have
 			// no newline) sit in the kernel buffer until the user presses Enter.
 			this.acquireRawMode();
-			this.controller.enterAltscreen();
-			this.controller.enableMouseSGR();
+			this.terminalSession.startRetainedSession();
 		});
 
 		pi.on("session_shutdown", () => {
@@ -209,7 +208,7 @@ export class LifecycleRuntime {
 
 	public restoreTerminal(): void {
 		this.releaseRawMode();
-		this.controller.exitTerminal();
+		this.terminalSession.exitTerminal();
 	}
 
 	private registerReraisingSignal(signal: (typeof EXIT_SIGNALS)[number]): void {
@@ -257,8 +256,7 @@ export class LifecycleRuntime {
 			logDiagnostic("process_event", { name: "SIGCONT" });
 			this.suspended = false;
 			this.acquireRawMode();
-			this.controller.enterAltscreen();
-			this.controller.enableMouseSGR();
+			this.terminalSession.startRetainedSession();
 			this.registerSuspendSignal();
 		};
 		this.signalHandlers.set("SIGCONT", handler);

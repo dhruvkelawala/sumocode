@@ -6,7 +6,7 @@ import { join } from "node:path";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 import { createLifecycleRuntime, useTerminalDimensions, type LifecycleInput, type LifecycleListener, type LifecycleProcess, type LifecycleProcessEvent, type LifecycleSignal } from "./lifecycle.js";
-import { ALTSCREEN_ENTER_SEQUENCE, CURSOR_COLOR_RESET, CURSOR_COLOR_SET, MOUSE_SGR_ENABLE_SEQUENCE, TERMINAL_BG_RESET, TERMINAL_BG_SET, TERMINAL_CLEANUP_SEQUENCE, TerminalController, type TerminalOutput } from "./terminal-controller.js";
+import { ALTSCREEN_ENTER_SEQUENCE, MOUSE_SGR_ENABLE_SEQUENCE, TERMINAL_BG_RESET, TERMINAL_BG_SET, TERMINAL_CLEANUP_SEQUENCE, TerminalSessionOwner, type TerminalOutput } from "./terminal-controller.js";
 
 class FakeProcess implements LifecycleProcess {
 	public readonly pid = 4242;
@@ -117,7 +117,7 @@ describe("LifecycleRuntime", () => {
 	it("registers process signal handlers exactly once", () => {
 		const fakeProcess = new FakeProcess();
 		const output = outputStub();
-		const runtime = createLifecycleRuntime({ process: fakeProcess, controller: new TerminalController({ output }) });
+		const runtime = createLifecycleRuntime({ process: fakeProcess, terminalSession: new TerminalSessionOwner({ output }) });
 
 		runtime.installProcessHandlers();
 		runtime.installProcessHandlers();
@@ -132,7 +132,7 @@ describe("LifecycleRuntime", () => {
 	it("installLifecycle wires session_start and session_shutdown through the controller", () => {
 		const fakeProcess = new FakeProcess();
 		const output = outputStub();
-		const runtime = createLifecycleRuntime({ process: fakeProcess, controller: new TerminalController({ output }) });
+		const runtime = createLifecycleRuntime({ process: fakeProcess, terminalSession: new TerminalSessionOwner({ output }) });
 		const { pi, handlers } = buildPiStub();
 
 		runtime.installLifecycle(pi);
@@ -143,13 +143,13 @@ describe("LifecycleRuntime", () => {
 			handler({ type: "session_shutdown" }, { hasUI: true });
 		}
 
-		expect(output.writes).toEqual([`${ALTSCREEN_ENTER_SEQUENCE}${TERMINAL_BG_SET}${CURSOR_COLOR_SET}`, MOUSE_SGR_ENABLE_SEQUENCE, `${CURSOR_COLOR_RESET}${TERMINAL_BG_RESET}${TERMINAL_CLEANUP_SEQUENCE}`]);
+		expect(output.writes).toEqual([`${ALTSCREEN_ENTER_SEQUENCE}${TERMINAL_BG_SET}`, MOUSE_SGR_ENABLE_SEQUENCE, `${TERMINAL_BG_RESET}${TERMINAL_CLEANUP_SEQUENCE}`]);
 	});
 
 	it("session_start ignores non-UI contexts", () => {
 		const fakeProcess = new FakeProcess();
 		const output = outputStub();
-		const runtime = createLifecycleRuntime({ process: fakeProcess, controller: new TerminalController({ output }) });
+		const runtime = createLifecycleRuntime({ process: fakeProcess, terminalSession: new TerminalSessionOwner({ output }) });
 		const { pi, handlers } = buildPiStub();
 
 		runtime.installLifecycle(pi);
@@ -163,24 +163,24 @@ describe("LifecycleRuntime", () => {
 	it("cleanup runs once even if called twice", () => {
 		const fakeProcess = new FakeProcess();
 		const output = outputStub();
-		const runtime = createLifecycleRuntime({ process: fakeProcess, controller: new TerminalController({ output }) });
+		const runtime = createLifecycleRuntime({ process: fakeProcess, terminalSession: new TerminalSessionOwner({ output }) });
 
 		runtime.restoreTerminal();
 		runtime.restoreTerminal();
 
-		expect(output.writes).toEqual([`${CURSOR_COLOR_RESET}${TERMINAL_BG_RESET}${TERMINAL_CLEANUP_SEQUENCE}`]);
+		expect(output.writes).toEqual([TERMINAL_CLEANUP_SEQUENCE]);
 	});
 
 	it("SIGINT restores once, unregisters itself, and re-raises (EC-5.1)", () => {
 		const fakeProcess = new FakeProcess();
 		const output = outputStub();
-		const runtime = createLifecycleRuntime({ process: fakeProcess, controller: new TerminalController({ output }) });
+		const runtime = createLifecycleRuntime({ process: fakeProcess, terminalSession: new TerminalSessionOwner({ output }) });
 
 		runtime.installProcessHandlers();
 		fakeProcess.emit("SIGINT");
 		fakeProcess.emit("SIGINT");
 
-		expect(output.writes).toEqual([`${CURSOR_COLOR_RESET}${TERMINAL_BG_RESET}${TERMINAL_CLEANUP_SEQUENCE}`]);
+		expect(output.writes).toEqual([TERMINAL_CLEANUP_SEQUENCE]);
 		expect(fakeProcess.kills).toEqual([{ pid: fakeProcess.pid, signal: "SIGINT" }]);
 		expect(fakeProcess.listenerCount("SIGINT")).toBe(0);
 	});
@@ -189,13 +189,13 @@ describe("LifecycleRuntime", () => {
 		const fakeProcess = new FakeProcess();
 		const fakeInput = new FakeInput();
 		const output = outputStub();
-		const runtime = createLifecycleRuntime({ process: fakeProcess, input: fakeInput, controller: new TerminalController({ output }) });
+		const runtime = createLifecycleRuntime({ process: fakeProcess, input: fakeInput, terminalSession: new TerminalSessionOwner({ output }) });
 
 		runtime.installProcessHandlers();
 		fakeProcess.emit("SIGTSTP");
 		fakeProcess.emit("SIGCONT");
 
-		expect(output.writes).toEqual([`${CURSOR_COLOR_RESET}${TERMINAL_BG_RESET}${TERMINAL_CLEANUP_SEQUENCE}`, `${ALTSCREEN_ENTER_SEQUENCE}${TERMINAL_BG_SET}${CURSOR_COLOR_SET}`, MOUSE_SGR_ENABLE_SEQUENCE]);
+		expect(output.writes).toEqual([TERMINAL_CLEANUP_SEQUENCE, `${ALTSCREEN_ENTER_SEQUENCE}${TERMINAL_BG_SET}`, MOUSE_SGR_ENABLE_SEQUENCE]);
 		expect(fakeInput.rawModes).toEqual([false, true]);
 		expect(fakeProcess.kills).toEqual([{ pid: fakeProcess.pid, signal: "SIGTSTP" }]);
 		expect(fakeProcess.listenerCount("SIGTSTP")).toBe(1);
@@ -205,14 +205,14 @@ describe("LifecycleRuntime", () => {
 		const fakeProcess = new FakeProcess();
 		const fakeInput = new FakeInput();
 		const output = outputStub();
-		const runtime = createLifecycleRuntime({ process: fakeProcess, input: fakeInput, controller: new TerminalController({ output }) });
+		const runtime = createLifecycleRuntime({ process: fakeProcess, input: fakeInput, terminalSession: new TerminalSessionOwner({ output }) });
 
 		runtime.installProcessHandlers();
 		fakeInput.emit("\x03");
 
 		expect(fakeInput.listenerCount()).toBe(1);
 		expect(fakeInput.rawModes).toEqual([false]);
-		expect(output.writes).toEqual([`${CURSOR_COLOR_RESET}${TERMINAL_BG_RESET}${TERMINAL_CLEANUP_SEQUENCE}`]);
+		expect(output.writes).toEqual([TERMINAL_CLEANUP_SEQUENCE]);
 		expect(fakeProcess.exits).toEqual([130]);
 	});
 
@@ -222,7 +222,7 @@ describe("LifecycleRuntime", () => {
 		const tmpHome = await mkdtemp(join(tmpdir(), "sumocode-crash-"));
 		const runtime = createLifecycleRuntime({
 			process: fakeProcess,
-			controller: new TerminalController({ output }),
+			terminalSession: new TerminalSessionOwner({ output }),
 			homeDir: () => tmpHome,
 		});
 		const error = new Error("phase 1 crash proof");
@@ -231,7 +231,7 @@ describe("LifecycleRuntime", () => {
 		expect(() => fakeProcess.emit("uncaughtException", error)).toThrow(error);
 
 		const crashLog = join(tmpHome, ".sumocode", "crash.log");
-		expect(output.writes).toEqual([`${CURSOR_COLOR_RESET}${TERMINAL_BG_RESET}${TERMINAL_CLEANUP_SEQUENCE}`]);
+		expect(output.writes).toEqual([TERMINAL_CLEANUP_SEQUENCE]);
 		expect(existsSync(crashLog)).toBe(true);
 		expect(readFileSync(crashLog, "utf8")).toContain("phase 1 crash proof");
 	});

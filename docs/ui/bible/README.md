@@ -12,6 +12,37 @@ pnpm render:bible
 
 Regenerates all scripted HTML mockups, then renders every `*.html` via Playwright + chromium → PNG in `renders/`.
 
+## Static export + hosting
+
+```bash
+pnpm render:bible
+pnpm export:bible-static
+```
+
+Exports a deployable static site to `dist/bible-site/`:
+
+- `/index.html` redirects to `/bible/`
+- `/bible/index.html` is the gallery
+- `/bible/*.html` are the full mockups
+- `/bible/renders/*.png` are the generated PNG thumbnails/artifacts
+- `/bible/_assets/*` contains shared CSS/fonts/assets
+
+Deploy the exported directory with Vercel CLI:
+
+```bash
+vercel deploy dist/bible-site
+# or production alias:
+vercel deploy dist/bible-site --prod
+```
+
+Current hosted gallery:
+
+```txt
+https://sumocode-bible-static.vercel.app/bible/
+```
+
+GitHub Actions runs the same render + export path and uploads `dist/bible-site` as an artifact. It intentionally does **not** auto-deploy to Vercel; deployment stays manual until Vercel project/org secrets and promotion rules are explicitly configured.
+
 ## Naming convention
 
 ```

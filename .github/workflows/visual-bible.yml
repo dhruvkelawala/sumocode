@@ -1,0 +1,69 @@
+name: visual-bible
+
+on:
+  pull_request:
+    paths:
+      - "docs/ui/bible/**"
+      - "scripts/bible-server.mjs"
+      - "scripts/export-bible-static.mjs"
+      - "scripts/gen-bible-*.mjs"
+      - "scripts/lib/bible-gallery.mjs"
+      - "scripts/render-bible.mjs"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - ".github/workflows/visual-bible.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "docs/ui/bible/**"
+      - "scripts/bible-server.mjs"
+      - "scripts/export-bible-static.mjs"
+      - "scripts/gen-bible-*.mjs"
+      - "scripts/lib/bible-gallery.mjs"
+      - "scripts/render-bible.mjs"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - ".github/workflows/visual-bible.yml"
+  workflow_dispatch:
+
+jobs:
+  render-and-export:
+    name: render and export static bible
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.29.2
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Playwright Chromium
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Render Visual Bible PNGs
+        run: pnpm render:bible
+
+      - name: Export static Visual Bible site
+        run: pnpm export:bible-static
+
+      - name: Upload static Visual Bible artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cathedral-visual-bible-static
+          path: dist/bible-site
+          if-no-files-found: error
+          retention-days: 14

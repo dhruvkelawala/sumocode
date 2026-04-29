@@ -52,6 +52,7 @@
     "test": "vitest run",
     "test:integration": "vitest run test/integration/",
     "render:bible": "node scripts/render-bible.mjs",
+    "export:bible-static": "node scripts/export-bible-static.mjs",
     "vitest": "vitest",
     "visual": "node scripts/visual.mjs"
   },

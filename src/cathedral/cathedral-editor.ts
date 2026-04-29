@@ -84,8 +84,8 @@ function withFrameBackground(line: string): string {
 }
 
 /**
- * Build the cathedral top border with an embedded label, e.g.:
- *   ┌─ SCRIPTOR INPUT ────...─────┐
+ * Build the cathedral top border with an optional embedded label. V2 active
+ * input is label-less; splash uses `DIVINE INVOCATION`.
  */
 function renderTopBorder(width: number, label?: string): string {
 	if (width < 6) return withFrameBackground(color("─".repeat(width), CATHEDRAL_TOKENS.colors.divider));

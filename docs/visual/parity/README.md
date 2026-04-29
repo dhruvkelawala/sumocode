@@ -2,6 +2,8 @@
 
 Declarative scenario/crop registry and approved runtime goldens for the V2 Cathedral Visual Harness.
 
+Read `CONTRACT.md` first for the authoritative runtime/crop/status semantics.
+
 ## Run
 
 ```bash
@@ -27,6 +29,15 @@ Run one lane:
 pnpm visual:review -- --lane component
 pnpm visual:review -- --lane runtime
 ```
+
+## Contract
+
+- Visual Bible renders are the design target.
+- Runtime goldens are approved implementation checkpoints, not design targets.
+- `required` crops gate against committed runtime goldens after explicit promotion.
+- Legacy V1 labels such as `SCRIPTOR INPUT` and 49-column sidebar assertions are historical only; V2 active input is label-less and the sidebar is 30 columns.
+
+See `CONTRACT.md` for the full contract.
 
 ## Initial runtime scenario note
 

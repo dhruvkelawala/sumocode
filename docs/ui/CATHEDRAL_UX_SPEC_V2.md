@@ -299,9 +299,9 @@ Disappears on first keystroke.
                                                         CTRL+/ · COMMANDS
 ```
 
-- **No label** above frame (regression to fix — currently shows `INPUT` / `SCRIPTOR INPUT`)
-- `>` prompt arrow inside frame, accent (currently missing — fix)
-- **No flavour text** on hint row (regression to fix — currently shows `INPUT PROTOCOL AWAITING COMMAND`)
+- **No label** above active frame (fixed in V2 runtime; do not reintroduce `INPUT` / `SCRIPTOR INPUT`)
+- `>` prompt arrow inside frame, accent
+- **No flavour text** on hint row (do not reintroduce `INPUT PROTOCOL AWAITING COMMAND`)
 - Hint row right side only: `CTRL+/ · COMMANDS` until agent switching is functional
 - Frame chars in `divider`
 - Bg inside frame: `surfaceRecess` — **EVERY ROW** including padding rows above/below cursor row
@@ -1023,11 +1023,11 @@ User-perceived: 2-3s splash → active transition on `/resume`. Must be < 500ms.
 
 Each row = one PR + one issue + visual approval.
 
-**Phase A — Element corrections (regressions to fix)**:
-1. Element 4 input frame: drop `SCRIPTOR INPUT` label + drop `INPUT PROTOCOL AWAITING COMMAND` flavour + add `>` prompt
-2. Element 1 sidebar: width 49 → 30, paint inter-section bg, render `N more · ⌘M` overflow marker, ⌘M keybind
+**Phase A — Element corrections**:
+1. Element 4 input frame: label-less active frame, no `INPUT PROTOCOL AWAITING COMMAND`, `>` prompt (locked by #82)
+2. Element 1 sidebar: width 49 → 30, paint inter-section bg, render `N more · ⌘M` overflow marker, ⌘M keybind (30-col editorial registry locked by #85)
 3. Element 1: `/sidebar [show|hide]` slash, `/metrics [on|off]` slash, compact metrics mode
-4. Element 5 footer: drop `↑/↓` cumulative, switch to `42k/200k · $0.42` right zone
+4. Element 5 footer: drop `↑/↓` cumulative, switch to `42k/200k · $0.42` right zone (locked by #83)
 
 **Phase B — Element 13 chat messages + Element 11 questions**:
 5. Element 13 chat message framing (`┌ USER │ ... └`, `┌ SUMO · model · time │ ... └`)

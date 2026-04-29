@@ -158,6 +158,8 @@ Build frames, tool pills, code blocks, modals, footer, sidebar, and input from s
 
 ### P1-C — Headless TestBackend + Pilot API
 
+Implementation contract: [`docs/SUMO_TUI_TEST_BACKEND.md`](./SUMO_TUI_TEST_BACKEND.md)
+
 Add a Ratatui/Textual-style headless backend with current/previous buffers, cursor state, key/mouse input, resize, and assertions. PTY tests remain smoke tests, not the only integration test layer.
 
 ### P1-D — Structured transcript model

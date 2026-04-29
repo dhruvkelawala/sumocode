@@ -8,7 +8,40 @@ Cathedral visual parity verification.
 - PRD: https://github.com/dhruvkelawala/sumocode/issues/78
 - Technical spec: [`V2_HARNESS_SPEC.md`](./V2_HARNESS_SPEC.md)
 
-V2 will compare Visual Bible targets against deterministic retained-TUI runtime and component captures. It is crop-first, review-only initially, and promotes approved runtime goldens explicitly before they become CI-blocking.
+V2 compares Visual Bible targets against deterministic retained-TUI runtime and component captures. It is crop-first, review-only initially, and promotes approved runtime goldens explicitly before they become CI-blocking.
+
+Run V2 locally:
+
+```bash
+pnpm render:bible
+pnpm visual:review
+```
+
+Outputs:
+
+```txt
+docs/visual/out/parity/index.html
+docs/visual/out/parity/results.json
+```
+
+Run one scenario or lane:
+
+```bash
+pnpm visual:review -- --scenario input-typed-component
+pnpm visual:review -- --lane runtime
+```
+
+CI mode uses the same renderer but fails only on hard capture/render failures and `required` crop drift:
+
+```bash
+pnpm visual:ci
+```
+
+Promote an explicitly approved crop to a committed runtime golden:
+
+```bash
+pnpm visual:promote -- --scenario input-typed-component --crop input-frame --status approved
+```
 
 ## How it works
 

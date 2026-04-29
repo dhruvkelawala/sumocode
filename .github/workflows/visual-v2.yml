@@ -1,0 +1,75 @@
+name: visual-v2
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+on:
+  pull_request:
+    paths:
+      - "docs/ui/bible/**"
+      - "docs/visual/parity/**"
+      - "scripts/render-bible.mjs"
+      - "scripts/gen-bible-*.mjs"
+      - "scripts/visual-v2/**"
+      - "src/**"
+      - "bin/sumocode.sh"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - ".github/workflows/visual-v2.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "docs/ui/bible/**"
+      - "docs/visual/parity/**"
+      - "scripts/render-bible.mjs"
+      - "scripts/gen-bible-*.mjs"
+      - "scripts/visual-v2/**"
+      - "src/**"
+      - "bin/sumocode.sh"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - ".github/workflows/visual-v2.yml"
+  workflow_dispatch:
+
+jobs:
+  review-pack:
+    name: build V2 parity review pack
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.29.2
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Playwright Chromium
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Render Visual Bible targets
+        run: pnpm render:bible
+
+      - name: Build V2 review pack
+        run: pnpm visual:ci
+
+      - name: Upload V2 parity review pack
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: cathedral-v2-parity-review-pack
+          path: docs/visual/out/parity
+          if-no-files-found: error
+          retention-days: 14

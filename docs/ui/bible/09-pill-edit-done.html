@@ -1,0 +1,29 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Bible · Element 9 · pill · edit with diff</title>
+<link rel="stylesheet" href="_assets/tokens.css">
+<style>
+  .stage-blurb { max-width: 130ch; color: var(--foreground-dim); font-size: 11px; line-height: 1.6; padding: 0 8px; text-align: center; }
+</style>
+</head>
+<body>
+<div class="stage">
+  <div class="stage-label">element 9 · [edit] done with diff · 130×9</div>
+  <div class="stage-blurb">edit completed with file diff. green +lines, red -lines, line numbers in dim.</div>
+  <div data-render-rect class="term" style="--term-cols: 130; --term-rows: 9;">
+    <pre class="grid"><span class="fg-divider">━━━</span> <span class="fg-accent">[edit]</span><span class="fg-fg">  src/auth/session.ts</span> <span class="fg-divider">━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</span> <span class="fg-divider">━━━</span> <span class="fg-idle">✓</span>
+                                                                                                                                  
+  <span class="fg-dim">  12  </span><span class="fg-approve" style="background: rgba(193,68,62,0.15)">- const session = new Session(token);</span>                                                                                     
+  <span class="fg-dim">  13  </span><span class="fg-approve" style="background: rgba(193,68,62,0.15)">- if (session.expired) return null;</span>                                                                                       
+  <span class="fg-dim">  14  </span><span class="fg-fg">    return session.user;</span>                                                                                                  
+  <span class="fg-dim">  15  </span><span class="fg-fg">  }</span>                                                                                                                       
+  <span class="fg-dim">  16  </span><span class="fg-idle" style="background: rgba(127,176,105,0.15)">+ const session = await Session.fromToken(token);</span>                                                                         
+  <span class="fg-dim">  17  </span><span class="fg-idle" style="background: rgba(127,176,105,0.15)">+ if (!session || session.expired) return null;</span>                                                                           
+  <span class="fg-dim">  18  </span><span class="fg-idle" style="background: rgba(127,176,105,0.15)">+ return session.user;</span>                                                                                                    
+  <span class="fg-dim">  19  </span><span class="fg-fg">  }</span>                                                                                                                       </pre>
+  </div>
+</div>
+</body>
+</html>

@@ -1,0 +1,27 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Bible · Element 9 · pill · bash failed</title>
+<link rel="stylesheet" href="_assets/tokens.css">
+<style>
+  .stage-blurb { max-width: 130ch; color: var(--foreground-dim); font-size: 11px; line-height: 1.6; padding: 0 8px; text-align: center; }
+</style>
+</head>
+<body>
+<div class="stage">
+  <div class="stage-label">element 9 · [bash] failed · 130×6</div>
+  <div class="stage-blurb">bash failed. ✗ glyph in approval color + error output.</div>
+  <div data-render-rect class="term" style="--term-cols: 130; --term-rows: 6;">
+    <pre class="grid"><span class="fg-divider">━━━</span> <span class="fg-accent">[bash]</span><span class="fg-fg">  pnpm test src/auth</span> <span class="fg-divider">━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</span> <span class="fg-divider">━━━</span> <span class="fg-approve">✗</span><span class="fg-dim"> 1 failed</span>
+                                                                                                                                  
+  <span class="fg-fg">✓ src/core/parser.test.ts (14 tests)</span>                                                                                            
+  <span class="fg-approve">✗ src/auth/session.test.ts (3 tests, 1 failed)</span>                                                                                  
+                                                                                                                                  
+  <span class="fg-approve">✗ session expiry should reject expired tokens</span>                                                                                   
+  <span class="fg-fg">  expected: false</span>                                                                                                               
+  <span class="fg-fg">  received: true</span>                                                                                                                </pre>
+  </div>
+</div>
+</body>
+</html>

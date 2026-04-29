@@ -1,7 +1,7 @@
 {
   "name": "@dhruvkelawala/sumocode",
   "version": "0.1.0",
-  "description": "SumoCode \u2014 a Pi extension that makes the terminal AI coding experience feel personal. OpenCode visual language + persistent memory + preattentive status signals.",
+  "description": "SumoCode — a Pi extension that makes the terminal AI coding experience feel personal. OpenCode visual language + persistent memory + preattentive status signals.",
   "keywords": [
     "pi-package",
     "pi-extension",
@@ -41,6 +41,7 @@
     "@mariozechner/pi-tui": "0.70.2",
     "@types/node": "^25.6.0",
     "node-pty": "^1.1.0",
+    "playwright": "^1.59.1",
     "typebox": "1.1.33",
     "typescript": "^6.0.3",
     "vitest": "^4.1.5"
@@ -50,6 +51,8 @@
     "build": "tsc --noEmit",
     "test": "vitest run",
     "test:integration": "vitest run test/integration/",
+    "render:bible": "node scripts/render-bible.mjs",
+    "export:bible-static": "node scripts/export-bible-static.mjs",
     "vitest": "vitest",
     "visual": "node scripts/visual.mjs",
     "test:visual:real-runtime": "node scripts/visual-real-runtime.mjs"

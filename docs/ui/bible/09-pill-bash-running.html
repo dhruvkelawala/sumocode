@@ -1,0 +1,28 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Bible · Element 9 · pill · bash running</title>
+<link rel="stylesheet" href="_assets/tokens.css">
+<style>
+  .stage-blurb { max-width: 130ch; color: var(--foreground-dim); font-size: 11px; line-height: 1.6; padding: 0 8px; text-align: center; }
+</style>
+</head>
+<body>
+<div class="stage">
+  <div class="stage-label">element 9 · [bash] running with progress · 130×8</div>
+  <div class="stage-blurb">bash running. blue ▶ glyph + progress bar in tool color.</div>
+  <div data-render-rect class="term" style="--term-cols: 130; --term-rows: 8;">
+    <pre class="grid"><span class="fg-divider">━━━</span> <span class="fg-accent">[bash]</span><span class="fg-fg">  pnpm test</span> <span class="fg-divider">━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</span> <span class="fg-divider">━━━</span> <span class="fg-tool">▶</span>
+                                                                                                                                  
+  <span class="fg-fg">> sumocode@1.0.4 test /usr/src/app</span>                                                                                              
+  <span class="fg-fg">> vitest run</span>                                                                                                                    
+                                                                                                                                  
+  <span class="fg-idle">✓</span> <span class="fg-fg">src/core/parser.test.ts (14 tests)</span>                                                                                            
+  <span class="fg-tool">▶</span> <span class="fg-fg">src/engine/runner.test.ts (running…)</span>                                                                                          
+                                                                                                                                  
+  <span class="fg-fg">[</span><span class="fg-tool">█████████</span><span class="fg-divider">░░░░░░░░░░</span><span class="fg-fg">] </span><span class="fg-fg">57%</span>                                                                                                       </pre>
+  </div>
+</div>
+</body>
+</html>

@@ -1,0 +1,255 @@
+/* SumoCode Cathedral — Visual Bible v1
+ *
+ * Source of truth for runtime visuals. Every element renders against
+ * an exact terminal grid (col × row monospace cells). The runtime must
+ * match these renders pixel-by-pixel modulo font-hinting tolerance.
+ *
+ * Adapted from docs/ui/claude-design/tokens.css with v2 spec adjustments:
+ *   - Sidebar width: 49 → 30 cols
+ *   - Cell metrics tuned for JetBrainsMono Nerd Font Mono 13pt (cmux/Ghostty)
+ */
+
+/* Local font — JetBrains Mono Nerd Font Mono includes the standard JetBrains
+ * Mono glyphs PLUS Nerd Font icon range (private use area) for terminal /
+ * git / file-system / brand icons. Cathedral mockups use Nerd Font icons
+ * (e.g. \uF120 for terminal) so we serve the merged variant. */
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 400;
+  font-display: block;
+  src: url('./fonts/jetbrains-mono-nerd.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 500;
+  font-display: block;
+  src: url('./fonts/jetbrains-mono-nerd.woff2') format('woff2');
+}
+
+:root {
+  /* ── palette ───────────────────────────────────────────────── */
+  --background:        #1A1511;
+  --surface:           #241D17;
+  --surface-recess:    #120D0A;
+  /* SURFACE-LIFTED: locked at #3A342F in v1 spec but reads as cool grey on
+   * dark monitor. Bumped to #3D3024 in bible — warmer (more orange-amber)
+   * to read as 'aged parchment lifted above the surface' rather than grey.
+   * Will propagate this to runtime palette + cathedral.json after we lock
+   * Element 13. Original was: #3A342F. */
+  --surface-lifted:    #3D3024;
+  /* DIVIDER: locked at #3A2F25 in runtime palette. For mockup legibility
+   * (PNG export viewed on bright monitor / IDE), bump contrast slightly. The
+   * subtle aesthetic is preserved in actual terminal use where ambient light
+   * is low and eyes are dark-adapted. Only the bible mockups use the bumped
+   * value via --divider-mockup. */
+  --divider:           #3A2F25;
+  --divider-mockup:    #5A4D3C;
+  --foreground:        #F5E6C8;
+  --foreground-dim:    #8B7A63;
+  --accent:            #D97706;
+
+  --state-idle:        #7FB069;
+  --state-thinking:    #E8B339;
+  --state-tool:        #5B9BD5;
+  --state-approval:    #C1443E;
+  --state-learning:    #8E7AB5;
+
+  --syntax-keyword:    #D97706;
+  --syntax-string:     #7FB069;
+  --syntax-number:     #E8B339;
+  --syntax-comment:    #6F5D46;
+  --syntax-function:   #E8B339;
+
+  /* ── typography ─────────────────────────────────────────────── */
+  --font-mono:
+    'JetBrains Mono', 'JetBrainsMono Nerd Font Mono',
+    'IBM Plex Mono', 'Berkeley Mono', 'Commit Mono',
+    ui-monospace, Menlo, Consolas, monospace;
+
+  --cell-w: 7.83px;     /* JetBrainsMono 13pt × 1ch */
+  --cell-h: 18.2px;     /* 13px × 1.4 line-height   */
+
+  /* ── layout (v2 spec) ──────────────────────────────────────── */
+  --term-cols: 160;
+  --term-rows: 45;
+  --sidebar-cols: 30;
+  --chat-cols: calc(var(--term-cols) - var(--sidebar-cols));   /* 130 */
+}
+
+/* ── page chrome (out-of-canvas) ───────────────────────────────── */
+html, body {
+  margin: 0;
+  padding: 0;
+  background: #0B0806;
+  color: var(--foreground);
+  font-family: var(--font-mono);
+  font-feature-settings: "liga" 0, "calt" 0;
+  font-variant-ligatures: none;
+}
+
+.stage {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  gap: 12px;
+}
+
+.stage-label {
+  font-size: 11px;
+  color: var(--foreground-dim);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+/* ── the terminal viewport ─────────────────────────────────────── */
+.term {
+  background: var(--background);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.4;
+  font-weight: 400;
+  width: calc(var(--term-cols) * 1ch);
+  height: calc(var(--term-rows) * var(--cell-h));
+  position: relative;
+  overflow: hidden;
+  color: var(--foreground);
+  /* DO NOT set white-space: pre on .term — newlines between row divs
+   * become rendered whitespace and push content down. Pre lives on .row only. */
+  box-shadow:
+    0 0 0 1px rgba(90,77,60,0.4),
+    0 24px 48px rgba(0,0,0,0.5);
+}
+
+/* dimensions for narrow / portrait variants */
+.term.narrow   { --term-cols: 80;  --sidebar-cols: 0; }
+.term.portrait { --term-cols: 60;  --term-rows: 100; --sidebar-cols: 0; }
+
+/* ── row primitive ──────────────────────────────────────────────── */
+.row {
+  display: block;
+  white-space: pre;
+  height: var(--cell-h);
+  line-height: var(--cell-h);
+  font-size: 13px;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  width: 100%;
+}
+
+/* ── cell-grid <pre> layout ─────────────────────────────────── */
+/* Use <pre class="grid"> as the inside of .term. Every char sits at
+   integer column position, no flex sub-pixel gaps. Inline <span> adds
+   color without breaking grid alignment. */
+.term .grid {
+  margin: 0;
+  padding: 0;
+  font-family: inherit;
+  font-size: inherit;
+  line-height: var(--cell-h);
+  white-space: pre;
+  color: inherit;
+}
+/* Span baseline inside .grid: transparent so parent <pre> bg shows through.
+   Color helpers (.fg-*) override the foreground but not the bg. */
+.term .grid span { background: transparent; }
+
+/* Box-interior bg fill — used by the boxed chat direction (Element 13#7).
+ * Spans WITH this class are inline-block at exact cell-h height so the bg
+ * fills the FULL row height (no thin unpainted strips between rows from
+ * line-height > content-height). The TUI runtime renders SGR bg uniformly
+ * across cells, so this CSS hack matches that uniform appearance in HTML. */
+.term .grid span.box-fill {
+  /* IMPORTANT: width is set inline per-row via style="width: <cols>ch".
+   * Without an explicit width, inline-block fits content, and chars like
+   * narrow-no-break-space (U+202F) or East-Asian-Wide glyphs (●, ⚙) make
+   * the span shorter than the intended cell count, leaving terminal-bg
+   * "holes" on the right side of each row. */
+  display: inline-block;
+  height: var(--cell-h);
+  line-height: var(--cell-h);
+  vertical-align: top;
+}
+
+/* Cursor primitive (block style) — used inline inside <pre>, shown as a
+   1-cell inverse-video block. Higher specificity than .term .grid span
+   so it wins over the transparent default. */
+.term .grid span.cursor {
+  background: var(--accent);
+  color: var(--background);
+}
+
+/* surface-recess wrapper — used to paint the bg of a multi-row block (like
+   the input frame). Applied to a <pre.grid> directly. */
+.bg-recess { background: var(--surface-recess); }
+.bg-surface { background: var(--surface); }
+.bg-lifted  { background: var(--surface-lifted); }
+
+/* ── sidebar bg overlay (z=0) ─────────────────────────────────── */
+.term .sidebar-bg {
+  position: absolute;
+  top: calc(var(--cell-h) * 1);                /* row 2 (after top chrome row 1) */
+  bottom: calc(var(--cell-h) * 2);             /* above footer + version */
+  left: calc(var(--chat-cols) * 1ch);
+  width: calc(var(--sidebar-cols) * 1ch);
+  background: var(--surface);
+  z-index: 0;
+  pointer-events: none;
+}
+
+.term .layer { position: relative; z-index: 1; }
+
+/* ── modal layer (z=5) ────────────────────────────────────────── */
+.term .dimmed { opacity: 0.5; }
+
+.term .modal-layer {
+  position: absolute;
+  top: calc(var(--cell-h) * 1);
+  bottom: calc(var(--cell-h) * 2);
+  left: 0;
+  width: calc(var(--chat-cols) * 1ch);
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+.term .modal-layer .modal { pointer-events: auto; white-space: pre; }
+
+/* ── color helpers ────────────────────────────────────────────── */
+.fg-accent   { color: var(--accent); }
+.fg-dim      { color: var(--foreground-dim); }
+.fg-divider  { color: var(--divider-mockup); }
+.fg-fg       { color: var(--foreground); }
+.fg-comment  { color: var(--syntax-comment); }
+
+.fg-idle     { color: var(--state-idle); }
+.fg-think    { color: var(--state-thinking); }
+.fg-tool     { color: var(--state-tool); }
+.fg-approve  { color: var(--state-approval); }
+.fg-learn    { color: var(--state-learning); }
+
+.fg-string   { color: var(--syntax-string); }
+.fg-number   { color: var(--syntax-number); }
+.fg-keyword  { color: var(--syntax-keyword); }
+.fg-fn       { color: var(--syntax-function); }
+
+/* ── bg helpers (for cells that need theme bg fill) ───────────── */
+.bg-recess   { background: var(--surface-recess); }
+.bg-surface  { background: var(--surface); }
+.bg-lifted   { background: var(--surface-lifted); }
+
+/* ── span primitives for inline color/bg runs ──────────────────── */
+.term span { background: inherit; }
+
+/* ── overlay panel for an input frame interior ─────────────────── */
+.term .input-bg {
+  position: absolute;
+  background: var(--surface-recess);
+  z-index: 0;
+}

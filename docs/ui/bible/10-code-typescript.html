@@ -1,0 +1,29 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Bible · Element 10 · Code · TypeScript</title>
+<link rel="stylesheet" href="_assets/tokens.css">
+<style>
+  .stage-blurb { max-width: 100ch; color: var(--foreground-dim); font-size: 11px; line-height: 1.6; padding: 0 8px; text-align: center; }
+</style>
+</head>
+<body>
+<div class="stage">
+  <div class="stage-label">element 10 · TypeScript code block · 100 cols</div>
+  <div class="stage-blurb">cathedral syntax. keywords accent, strings sage, numbers amber, comments dim brown.</div>
+  <div data-render-rect class="term" style="--term-cols: 100; --term-rows: 10;">
+    <pre class="grid"><span class="fg-divider">╭─</span><span class="fg-divider">─ </span><span class="fg-dim">ts</span><span class="fg-divider"> ─</span><span class="fg-divider">──────────────────────────────────────────────────────────────────────────────────────────╮</span>
+<span class="fg-divider">│</span><span class="box-fill" style="background: var(--surface-recess); width: 98ch"> <span class="fg-dim">  1 </span><span class="fg-keyword">async function</span> <span class="fg-fn">authenticate</span>(<span class="fg-fg">token</span>: <span class="fg-fg">string</span>) {                                                 </span><span class="fg-divider">│</span>
+<span class="fg-divider">│</span><span class="box-fill" style="background: var(--surface-recess); width: 98ch"> <span class="fg-dim">  2 </span>  <span class="fg-keyword">const</span> <span class="fg-fg">session</span> = <span class="fg-keyword">await</span> <span class="fg-fn">Session</span>.<span class="fg-fn">fromToken</span>(<span class="fg-fg">token</span>);                                            </span><span class="fg-divider">│</span>
+<span class="fg-divider">│</span><span class="box-fill" style="background: var(--surface-recess); width: 98ch"> <span class="fg-dim">  3 </span>  <span class="fg-keyword">if</span> (!<span class="fg-fg">session</span> || <span class="fg-fg">session</span>.<span class="fg-fg">expired</span>) <span class="fg-keyword">return</span> <span class="fg-keyword">null</span>;                                              </span><span class="fg-divider">│</span>
+<span class="fg-divider">│</span><span class="box-fill" style="background: var(--surface-recess); width: 98ch"> <span class="fg-dim">  4 </span>                                                                                             </span><span class="fg-divider">│</span>
+<span class="fg-divider">│</span><span class="box-fill" style="background: var(--surface-recess); width: 98ch"> <span class="fg-dim">  5 </span>  <span class="fg-comment">// emit auth event for telemetry</span>                                                           </span><span class="fg-divider">│</span>
+<span class="fg-divider">│</span><span class="box-fill" style="background: var(--surface-recess); width: 98ch"> <span class="fg-dim">  6 </span>  <span class="fg-fn">emit</span>(<span class="fg-string">"auth.success"</span>, { <span class="fg-fg">userId</span>: <span class="fg-fg">session</span>.<span class="fg-fg">user</span>.<span class="fg-fg">id</span> });                                         </span><span class="fg-divider">│</span>
+<span class="fg-divider">│</span><span class="box-fill" style="background: var(--surface-recess); width: 98ch"> <span class="fg-dim">  7 </span>  <span class="fg-keyword">return</span> <span class="fg-fg">session</span>.<span class="fg-fg">user</span>;                                                                       </span><span class="fg-divider">│</span>
+<span class="fg-divider">│</span><span class="box-fill" style="background: var(--surface-recess); width: 98ch"> <span class="fg-dim">  8 </span>}                                                                                            </span><span class="fg-divider">│</span>
+<span class="fg-divider">╰──────────────────────────────────────────────────────────────────────────────────────────────────╯</span></pre>
+  </div>
+</div>
+</body>
+</html>

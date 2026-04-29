@@ -31,14 +31,14 @@ function snapshot(): RegistrySidebarSnapshot {
 }
 
 describe("sidebar memory bullets", () => {
-	it("renders ACTIVE_MEMORY facts with an accented ❧ bullet", () => {
-		const line = renderMemoryFactLine("prefers TypeScript strict", 49);
+	it("renders MEMORY facts with an accented ❧ bullet", () => {
+		const line = renderMemoryFactLine("prefers TypeScript strict", 30);
 		expect(stripAnsi(line).trim()).toBe("❧ prefers TypeScript strict");
 		expect(line).toContain(rgb(CATHEDRAL_TOKENS.colors.accent));
 	});
 
-	it("caps visible facts at 5 and renders an italic overflow marker", () => {
-		const rendered = renderRegistrySidebarLines(snapshot(), 49);
+	it("caps visible facts at 5 and renders a dim overflow marker", () => {
+		const rendered = renderRegistrySidebarLines(snapshot(), 30);
 		const plain = rendered.map(stripAnsi);
 		const factRows = plain.filter((line) => /^\s*❧/.test(line));
 		const overflow = rendered.find((line) => stripAnsi(line).includes("48 more · ⌘M"));
@@ -46,6 +46,6 @@ describe("sidebar memory bullets", () => {
 		expect(factRows).toHaveLength(5);
 		expect(plain.join("\n")).not.toContain("hidden sixth fact");
 		expect(overflow).toBeDefined();
-		expect(overflow).toContain("\u001b[3m");
+		expect(overflow).toContain(rgb(CATHEDRAL_TOKENS.colors.foregroundDim));
 	});
 });

@@ -15,6 +15,7 @@ import {
 
 const ANSI = /\u001b\[[0-9;]*m/g;
 const stripAnsi = (s: string): string => s.replace(ANSI, "");
+const untrack = (s: string): string => s.replace(/\u202F/g, "");
 
 function memoryClient(query: RemnicMemoryClient["query"]): RemnicMemoryClient {
 	return {
@@ -266,8 +267,8 @@ describe("createSidebarMemoryCache", () => {
 });
 
 describe("sidebar layout constants", () => {
-	it("defaults to the cathedral 49-column sidebar", () => {
-		expect(SIDEBAR_WIDTH).toBe(49);
+	it("defaults to the cathedral 30-column sidebar", () => {
+		expect(SIDEBAR_WIDTH).toBe(30);
 	});
 
 	it("only mounts at the wide-layout threshold from DESIGN.md §8 (≥ 120 cols)", () => {
@@ -277,7 +278,7 @@ describe("sidebar layout constants", () => {
 
 describe("renderSidebar — surface", () => {
 	it("pads every line to exactly the requested width so the surface fills cleanly", () => {
-		const width = 49;
+		const width = SIDEBAR_WIDTH;
 		const lines = renderSidebar(snapshot(), width);
 		expect(lines.length).toBeGreaterThan(0);
 		for (const line of lines) {
@@ -286,7 +287,7 @@ describe("renderSidebar — surface", () => {
 	});
 
 	it("wraps every line in the cathedral mahogany surface background", () => {
-		const lines = renderSidebar(snapshot(), 49);
+		const lines = renderSidebar(snapshot(), SIDEBAR_WIDTH);
 		for (const line of lines) {
 			// #241D17 -> 36;29;23
 			expect(line).toContain("\u001b[48;2;36;29;23m");
@@ -295,23 +296,25 @@ describe("renderSidebar — surface", () => {
 });
 
 describe("renderSidebar — context section", () => {
-	it("shows project (branch), a filled progress bar, and a 'spent · session' line", () => {
-		const lines = renderSidebar(snapshot(), 49).map(stripAnsi);
-		const blob = lines.join("\n");
+	it("shows project, branch, V2 token bar, and session totals", () => {
+		const lines = renderSidebar(snapshot(), SIDEBAR_WIDTH).map(stripAnsi);
+		const blob = untrack(lines.join("\n"));
 
 		expect(blob).toContain("CONTEXT");
-		expect(blob).toContain("argent-x (main)");
-		expect(blob).toMatch(/\[█+░+\] +20k\/200k/);
-		expect(blob).toContain("$0.42 spent · session");
+		expect(blob).toContain("argent-x");
+		expect(blob).toContain("on main");
+		expect(blob).toMatch(/▉+░+/);
+		expect(blob).toContain("20k / 200k");
+		expect(blob).toContain("$0.42 · 20k cumul");
 	});
 });
 
 describe("renderSidebar — mcp section", () => {
 	it("lists each MCP server with a colored status dot and a right-aligned status pill", () => {
-		const rendered = renderSidebar(snapshot(), 49);
+		const rendered = renderSidebar(snapshot(), SIDEBAR_WIDTH);
 		const blob = rendered.map(stripAnsi).join("\n");
 
-		expect(blob).toContain("MCP");
+		expect(untrack(blob)).toContain("MCP");
 		expect(blob).toContain("github");
 		expect(blob).toContain("stitch");
 
@@ -331,7 +334,7 @@ describe("renderSidebar — mcp section", () => {
 
 describe("renderSidebar — MEMORY sub-tab active", () => {
 	it("renders each memory item with a ❧ bullet (when activeSubTab=MEMORY)", () => {
-		const lines = renderSidebar(snapshot({ activeSubTab: "MEMORY" }), 49);
+		const lines = renderSidebar(snapshot({ activeSubTab: "MEMORY" }), SIDEBAR_WIDTH);
 		const memoryLines = lines.map(stripAnsi).filter((l) => /^\s*❧/.test(l));
 
 		expect(memoryLines.length).toBe(3);
@@ -344,7 +347,7 @@ describe("renderSidebar — MEMORY sub-tab active", () => {
 			activeSubTab: "MEMORY",
 			memory: ["a", "b", "c", "d", "e", "f", "g"],
 		});
-		const lines = renderSidebar(many, 49);
+		const lines = renderSidebar(many, SIDEBAR_WIDTH);
 		const memoryLines = lines.map(stripAnsi).filter((l) => /^\s*❧/.test(l));
 
 		expect(memoryLines.length).toBe(5);
@@ -353,7 +356,7 @@ describe("renderSidebar — MEMORY sub-tab active", () => {
 	});
 
 	it("shows dim no-match copy when memory is healthy but empty", () => {
-		const lines = renderSidebar(snapshot({ activeSubTab: "MEMORY", memory: [], memoryUnavailable: false }), 49);
+		const lines = renderSidebar(snapshot({ activeSubTab: "MEMORY", memory: [], memoryUnavailable: false }), SIDEBAR_WIDTH);
 		const row = lines.find((line) => stripAnsi(line).includes("no memory match"));
 
 		expect(row).toBeDefined();
@@ -362,7 +365,7 @@ describe("renderSidebar — MEMORY sub-tab active", () => {
 	});
 
 	it("shows dim memory unavailable copy when the daemon is down", () => {
-		const lines = renderSidebar(snapshot({ activeSubTab: "MEMORY", memory: [], memoryUnavailable: true }), 49);
+		const lines = renderSidebar(snapshot({ activeSubTab: "MEMORY", memory: [], memoryUnavailable: true }), SIDEBAR_WIDTH);
 		const row = lines.find((line) => stripAnsi(line).includes("memory unavailable"));
 
 		expect(row).toBeDefined();
@@ -375,7 +378,7 @@ describe("renderSidebar — MEMORY sub-tab active", () => {
 			activeSubTab: "MEMORY",
 			memory: ["a", "b", "c", "d", "e"],
 			memoryTotal: 53,
-		}), 49);
+		}), SIDEBAR_WIDTH);
 		const blob = lines.map(stripAnsi).join("\n");
 
 		expect(blob).toContain("48 more · ⌘M");
@@ -386,7 +389,7 @@ describe("renderSidebar — MEMORY sub-tab active", () => {
 			activeSubTab: "MEMORY",
 			memory: ["a", "b", "c"],
 			memoryTotal: 3,
-		}), 49);
+		}), SIDEBAR_WIDTH);
 		const blob = lines.map(stripAnsi).join("\n");
 
 		expect(blob).not.toContain("more · ⌘M");
@@ -395,43 +398,36 @@ describe("renderSidebar — MEMORY sub-tab active", () => {
 
 describe("renderSidebar — sub-tab navigation", () => {
 	it("defaults to CONTEXT sub-tab (no activeSubTab field)", () => {
-		const lines = renderSidebar(snapshot(), 49);
-		const blob = lines.map(stripAnsi).join("\n");
+		const lines = renderSidebar(snapshot(), SIDEBAR_WIDTH);
+		const blob = untrack(lines.map(stripAnsi).join("\n"));
 		expect(blob).toContain("REGISTRY");
 		expect(blob).toContain("CONTEXT");
 		expect(blob).toContain("MEMORY");
 		// CONTEXT sub-tab content shown
 		expect(blob).toContain("argent-x");
 		expect(blob).toContain("github");
-		// Issue #56 keeps Remnic facts visible in the active registry summary.
-		expect(lines.map(stripAnsi).filter((line) => /^\s*❧/.test(line))).toHaveLength(3);
+		expect(lines.map(stripAnsi).filter((line) => /^\s*❧/.test(line))).toHaveLength(0);
 	});
 
-	it("renders REGISTRY header with v 1.0.0 version line", () => {
-		const lines = renderSidebar(snapshot(), 49).map(stripAnsi);
+	it("renders REGISTRY header without version metadata", () => {
+		const lines = renderSidebar(snapshot(), SIDEBAR_WIDTH).map(stripAnsi);
 		const hasRegistry = lines.some((l) => l.includes("REGISTRY"));
 		const hasVersion = lines.some((l) => l.includes("v 1.0.0"));
 		expect(hasRegistry).toBe(true);
-		expect(hasVersion).toBe(true);
+		expect(hasVersion).toBe(false);
 	});
 
-	it("marks active session with ◆ and archived sessions with ▢", () => {
-		const lines = renderSidebar(snapshot({
-			sessions: [
-				{ name: "sumocode", branch: "main", active: true },
-				{ name: "sumocode", branch: "other-branch", active: false },
-			],
-		}), 49).map(stripAnsi);
-		const activeSession = lines.find((l) => l.includes("sumocode (main)"));
-		const archivedSession = lines.find((l) => l.includes("sumocode (other-branch)"));
-		expect(activeSession).toContain("◆");
-		expect(archivedSession).toContain("▢");
+	it("renders project and branch as editorial hero values", () => {
+		const lines = renderSidebar(snapshot({ projectName: "sumocode", branch: "main" }), SIDEBAR_WIDTH).map(stripAnsi);
+		const blob = lines.join("\n");
+		expect(blob).toContain("sumocode");
+		expect(blob).toContain("on main");
 	});
 
 	it("marks active sub-tab with ◆ (filled) and inactive with ▢ (outlined)", () => {
-		const lines = renderSidebar(snapshot({ activeSubTab: "CONTEXT" }), 49).map(stripAnsi);
-		const contextRow = lines.find((l) => l.includes("CONTEXT") && !l.includes("ACTIVE_CONTEXT"));
-		const memoryRow = lines.find((l) => l.includes("MEMORY") && !l.includes("ACTIVE_MEMORY"));
+		const lines = renderSidebar(snapshot({ activeSubTab: "CONTEXT" }), SIDEBAR_WIDTH).map(stripAnsi);
+		const contextRow = lines.find((l) => untrack(l).includes("CONTEXT"));
+		const memoryRow = lines.find((l) => untrack(l).includes("MEMORY"));
 		expect(contextRow).toBeDefined();
 		expect(memoryRow).toBeDefined();
 		expect(contextRow).toContain("◆");
@@ -439,8 +435,8 @@ describe("renderSidebar — sub-tab navigation", () => {
 	});
 
 	it("switching activeSubTab swaps content (CONTEXT → MEMORY)", () => {
-		const contextLines = renderSidebar(snapshot({ activeSubTab: "CONTEXT" }), 49).map(stripAnsi);
-		const memoryLines = renderSidebar(snapshot({ activeSubTab: "MEMORY" }), 49).map(stripAnsi);
+		const contextLines = renderSidebar(snapshot({ activeSubTab: "CONTEXT" }), SIDEBAR_WIDTH).map(stripAnsi);
+		const memoryLines = renderSidebar(snapshot({ activeSubTab: "MEMORY" }), SIDEBAR_WIDTH).map(stripAnsi);
 
 		const contextHasMcp = contextLines.some((l) => l.includes("github"));
 		const memoryHasMcp = memoryLines.some((l) => l.includes("github"));
@@ -454,7 +450,7 @@ describe("renderSidebar — sub-tab navigation", () => {
 
 describe("renderSidebar — memory section bullet indent", () => {
 	it("renders each memory item with a leading two-space indent before ❧", () => {
-		const lines = renderSidebar(snapshot({ activeSubTab: "MEMORY" }), 49);
+		const lines = renderSidebar(snapshot({ activeSubTab: "MEMORY" }), SIDEBAR_WIDTH);
 		const memoryLines = lines.map(stripAnsi).filter((line) => /^\s*❧/.test(line));
 
 		expect(memoryLines.length).toBeGreaterThan(0);

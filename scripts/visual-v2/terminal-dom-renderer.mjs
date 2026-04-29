@@ -49,7 +49,7 @@ export async function renderTerminalSnapshot(snapshot, outputPng, options = {}) 
 export function terminalSnapshotHtml(snapshot, options = {}) {
 	const tokens = readFileSync(bibleTokensCss, "utf8");
 	const fontUrl = pathToFileURL(bibleFontPath).href;
-	const rows = snapshot.cells.map((row) => `<div class="row">${renderRow(row)}</div>`).join("\n");
+	const rows = snapshot.cells.map((row) => `<div class="row" style="background:${rowBackground(row)}">${renderRow(row)}</div>`).join("\n");
 	return `<!doctype html>
 <html>
 <head>
@@ -66,7 +66,13 @@ ${tokens}
 }
 html, body { min-height: 100%; }
 .stage { min-height: auto; align-items: flex-start; justify-content: flex-start; padding: 0; }
-.v2-cell-run { white-space: pre; }
+.v2-cell-run {
+  display: inline-block;
+  height: var(--cell-h);
+  line-height: var(--cell-h);
+  white-space: pre;
+  vertical-align: top;
+}
 </style>
 </head>
 <body>
@@ -77,6 +83,10 @@ ${rows}
 </div>
 </body>
 </html>`;
+}
+
+function rowBackground(row) {
+	return row[0]?.bg ?? "#1A1511";
 }
 
 function renderRow(row) {

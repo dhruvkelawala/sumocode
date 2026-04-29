@@ -9,9 +9,9 @@ function rgb(hex: string): string {
 }
 
 describe("sidebar token bar", () => {
-	it("renders a 10-cell visual bar plus formatted used/total text", () => {
+	it("renders a 22-cell editorial visual bar", () => {
 		const meter = renderTokenMeter(60_000, 100_000);
-		expect(stripAnsi(meter)).toBe("[██████░░░░] 60k/100k");
+		expect(stripAnsi(meter)).toBe(`${"▉".repeat(13)}${"░".repeat(9)}`);
 	});
 
 	it("uses sage below 50%, amber from 50–80%, accent from 80–100%, and terracotta over budget", () => {
@@ -24,6 +24,6 @@ describe("sidebar token bar", () => {
 		expect(renderTokenMeter(60, 100)).toContain(rgb(CATHEDRAL_TOKENS.colors.states.thinking));
 		expect(renderTokenMeter(90, 100)).toContain(rgb(CATHEDRAL_TOKENS.colors.accent));
 		expect(renderTokenMeter(101, 100)).toContain(rgb(CATHEDRAL_TOKENS.colors.states.approval));
-		expect(stripAnsi(renderTokenMeter(101, 100))).toBe("[██████████] 101/100 OVER");
+		expect(stripAnsi(renderTokenMeter(101, 100))).toBe("▉".repeat(22));
 	});
 });

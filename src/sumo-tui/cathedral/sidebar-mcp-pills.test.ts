@@ -18,10 +18,10 @@ describe("sidebar MCP state pills", () => {
 	});
 
 	it("renders a colored ●, foreground server name, and right-aligned status", () => {
-		const row = renderMcpServerRow({ name: "chrome-devtools", status: "in-flight" }, 49);
+		const row = renderMcpServerRow({ name: "chrome-dev", status: "in-flight" }, 30);
 		const plain = stripAnsi(row);
 
-		expect(plain).toContain("● chrome-devtools");
+		expect(plain).toContain("● chrome-dev");
 		expect(plain).toMatch(/in-flight\s*$/);
 		expect(row).toContain(rgb(CATHEDRAL_TOKENS.colors.states.thinking));
 	});

@@ -122,8 +122,9 @@ Current harness: **88 mockups** rendered by `pnpm render:bible`.
 ### Element 5 — Footer
 - Single row, cathedral state labels (READY / MEDITATING / ILLUMINATING / DEFERRING / INSCRIBING)
 - Left zone: `● <STATE> · <model> · <thinking>`
-- Right zone: `<project> (<branch>) · <ctx>/<window> · $<cost>`
-- Width handling: collapse right-to-left at narrow (drop project, branch, $cost progressively)
+- Right zone: `<ctx>/<window> · $<cost>`
+- Project/branch live in sidebar when visible and hint row when sidebar is hidden
+- Width handling: collapse right-to-left at narrow (drop cost, then ctx progressively)
 - Splash variant: dim version line (`SUMOCODE V0.2.0 · CATHEDRAL · 160 × 45 MONOSPACE`) below footer, splash only
 
 ### Scene compositions + harness

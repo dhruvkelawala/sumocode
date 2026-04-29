@@ -111,7 +111,9 @@
 				{
 					"id": "footer",
 					"targetCrop": "footer-component",
-					"runtimeCrop": "footer-component"
+					"runtimeCrop": "footer-component",
+					"status": "required",
+					"threshold": 0.04
 				}
 			]
 		},

@@ -2,7 +2,7 @@
 // Element 5 — Footer + bottom version line.
 // Per CATHEDRAL_UX_SPEC_V2.md §3.5:
 //   Left:  ● <STATE> · <model> · <thinking>
-//   Right: <project> (branch) · <ctx>/<window> · $<cost>
+//   Right: <ctx>/<window> · $<cost> (project/branch live in sidebar or hint row)
 // 5 state variants, plus narrow + splash-with-version.
 
 import { writeFileSync } from "node:fs";
@@ -24,7 +24,7 @@ const STATES = {
 };
 
 /** Build a footer row. Returns inner HTML for one <pre.grid> row. */
-function buildFooter({ cols, state, model, thinking, project, branch, ctxTokens, ctxWindow, cost, sidebarHidden }) {
+function buildFooter({ cols, state, model, thinking, ctxTokens, ctxWindow, cost }) {
 	const { label, dotClass } = STATES[state];
 
 	// Left zone construction (visible content + length)
@@ -41,16 +41,12 @@ function buildFooter({ cols, state, model, thinking, project, branch, ctxTokens,
 		`<span class="fg-fg">${thinking}</span>`;
 
 	// Right zone: progressively collapse based on width
-	// 1: project (branch) · ctx/win · $cost
-	// 2: (branch) · ctx/win · $cost           [< 110]
-	// 3: ctx/win · $cost                       [< 90]
-	// 4: ctx/win                               [< 70]
-	// 5: <empty>                               [< 50]
+	// 1: ctx/win · $cost
+	// 2: ctx/win                               [< 70]
+	// 3: <empty>                               [< 50]
 	let rightTokens = [];
 	if (cols >= 50)  rightTokens.push(`${ctxTokens}/${ctxWindow}`);
 	if (cols >= 70)  rightTokens.push(`$${cost}`);
-	if (cols >= 90)  rightTokens.unshift(`(${branch})`);
-	if (cols >= 110) rightTokens.unshift(project);
 
 	const rightStr = rightTokens.join(" · ");
 	const rightLen = rightStr.length;
@@ -63,9 +59,7 @@ function buildFooter({ cols, state, model, thinking, project, branch, ctxTokens,
 	// Construct right zone HTML
 	let rightHTML = "";
 	if (rightStr) {
-		// Color tokens: project + (branch) in fg-fg, separators in fg-dim,
-		// ctx/win in fg-fg, $cost in fg-fg
-		// Just split on " · " and color each piece
+		// Color tokens: ctx/win and $cost in fg-fg, separators in fg-dim.
 		const pieces = rightStr.split(" · ");
 		rightHTML = pieces
 			.map((piece, i) => {

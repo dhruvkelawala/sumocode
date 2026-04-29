@@ -210,14 +210,15 @@ served by splash.
 
 ### Q5.1 — Footer style: **F1 (two-zone hybrid)**
 
-Left zone = agent state. Right zone = session metrics. No context window in footer (lives in sidebar CONTEXT sub-tab).
+Left zone = agent state. Right zone = session metrics. Project/branch are deliberately not repeated in the footer.
 
 ```
-● READY · claude-opus-4-7 · xhigh                       sumocode (main) · ↑12k ↓8k · $0.42
+● READY · claude-opus-4-7 · xhigh                                      42k/200k · $0.42
 ```
 
 - Left: state dot (color matches state) · state label UPPERCASE · model id (lowercase) · thinking level (lowercase).
-- Right: project shortname (no `~/` prefix) (branch) · ↑ input tokens ↓ output tokens · $ session cost.
+- Right: current context tokens/window · $ session cost.
+- Project/branch live in the sidebar when visible and the hint row when the sidebar is hidden.
 - Cathedral tone via uppercased state label only. Model id + thinking level + tokens stay practical lowercase.
 
 Splash footer is the same shape — nothing special on splash.

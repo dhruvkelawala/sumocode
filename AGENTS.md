@@ -1,0 +1,193 @@
+# AGENTS.md
+
+This file is the canonical instruction file for AI coding agents working in this repository. `CLAUDE.md` intentionally points here so all agents share the same guidance.
+
+## What this repo is
+
+SumoCode is a **Pi extension** for `@mariozechner/pi-coding-agent`. It owns the UX layer — splash, top chrome, footer, sidebar, working indicator, slash commands, theme, retained terminal renderer — while Pi keeps the agent loop, LLM, sessions, MCP, skills, and provider/runtime machinery.
+
+User-specific state (persona, memory, settings, MCP, skills) lives in the separate private repo `sumocode-config` and is symlinked into `~/.pi/agent/`. **Never put user state in this repo.**
+
+## Non-negotiables
+
+- Do not delete branches, force-push, merge PRs, remove files, or run destructive cleanup unless Dhruv explicitly approves it.
+- Always quote paths with spaces. The primary dev tree is `/Volumes/SumoDeus NVMe/openclaw/workspace/sumocode`.
+- Preserve the public/private split: this repo is public MIT; secrets and personal config belong in `sumocode-config`.
+- Visual UI work is not done until the relevant capture/review evidence is produced and Dhruv approves any golden promotion.
+- Use the project's existing patterns before introducing new abstractions.
+
+## Commands
+
+```bash
+pnpm install                       # installs Pi peer deps + applies pi-coding-agent patch
+pnpm typecheck                     # tsc --noEmit
+pnpm build                         # alias for typecheck — Pi runs TS via jiti; no emitted dist
+pnpm test                          # vitest run, src/**/*.test.ts
+pnpm test:integration              # vitest run test/integration/** — spawns real Pi via node-pty
+pnpm vitest                        # targeted/watch Vitest runner
+pnpm render:bible                  # regenerate Visual Bible HTML/PNG targets
+pnpm visual:review                 # build V2 Bible/runtime review pack
+pnpm visual:ci                     # V2 visual CI gate; required crops gate against runtime goldens
+pnpm visual:promote                # promote runtime crop status/golden; requires explicit human approval
+pnpm test:visual:real-runtime      # legacy real-runtime smoke harness
+
+pi -e .                            # ephemeral install of THIS checkout — primary extension dev loop
+bin/sumocode.sh                    # wrapper that enables SUMO_TUI retained-renderer patch path
+```
+
+Run a single test file:
+
+```bash
+pnpm vitest run src/footer.test.ts
+```
+
+Run a single test name:
+
+```bash
+pnpm vitest run -t "renders branch"
+```
+
+Before declaring done on code changes, run the relevant suite and always include:
+
+```bash
+pnpm exec tsc --noEmit && pnpm build
+```
+
+For SumoTUI/runtime/visual changes, also run:
+
+```bash
+pnpm test
+pnpm test:integration
+pnpm visual:ci
+```
+
+## Dev loop
+
+The canonical workflow lives in `DEV_LOOP.md`.
+
+Short version: edit in this checkout → `pi -e .` or `bin/sumocode.sh` to test → commit → for releases bump `package.json` version + `VERSION` in `src/extension.ts`, tag, push tags, then `pi update git:github.com/dhruvkelawala/sumocode` on consumer machines. Tagged releases are the only thing that propagates; pushes to `main` do not.
+
+Never edit `~/.pi/agent/git/github.com/dhruvkelawala/sumocode/` — that is the installed clone, not the source of truth.
+
+## Architecture
+
+### Extension entry point
+
+`src/extension.ts` exports a default `(pi: ExtensionAPI) => void` that wires every feature module via its `installX(pi)` / `registerXCommand(pi)` function. The order in that file is the load order — keep it intentional. `package.json#pi.extensions` lists what Pi loads.
+
+`shouldNoopDuplicateInstalledExtension()` runs first: if the installed-from-git copy is loading while the user is inside a SumoCode dev tree, the installed copy bails so the dev tree wins. Do not break this — it is how `pi -e .` coexists with the always-installed copy.
+
+### Two rendering paths
+
+This codebase contains two UI layers at different maturity levels:
+
+1. **Classic Pi extension API** (`src/*.ts`, `src/commands/*`). These call `ctx.ui.setFooter / setHeader / setEditorComponent / custom / notify / registerCommand`. They run inside Pi's existing line-concatenation renderer and are subject to its layout limits.
+2. **`src/sumo-tui/` retained renderer**. This is a Node-native retained renderer built to escape those limits. It owns altscreen lifecycle, signal cleanup, mouse SGR routing, Yoga flex layout, cell buffer compositor, frame diff, in-app scroll, modal layer, and compatibility bridges back into Pi.
+
+When adding a feature, decide which layer it belongs to. Anything needing flex layout, in-app scroll, sticky footers, mouse routing, modal layers, deterministic visual capture, or retained state belongs in `src/sumo-tui/`. Simple status text, extension commands, and lightweight classic Pi UI can stay in the classic layer. The `src/sumo-tui/pi-compat/` directory is the only place the two layers should meet.
+
+### Pi patch seam
+
+SumoTUI activation currently requires the tiny Pi constructor patch documented in `docs/SUMO_TUI_PI_PATCH_STRATEGY.md`.
+
+The user-facing wrapper is `bin/sumocode.sh`:
+
+- defaults `SUMO_TUI=1`
+- verifies the selected Pi binary contains `loadSumoInteractiveMode`
+- sets `SUMO_TUI_MODULE` to the checkout-local `sumo-interactive-mode.js`
+- falls back to classic Pi behavior if the patch is missing
+
+Do not casually change `patches/@mariozechner__pi-coding-agent@*.patch`, `SUMO_TUI`, `SUMO_TUI_MODULE`, or `sumo-interactive-mode.js`. Pi version bumps must follow `docs/research/pi-fork-upgrade.md` and the smoke matrix in `docs/SUMO_TUI_PI_PATCH_STRATEGY.md`.
+
+## Cathedral rendering
+
+`src/cathedral/` and `src/sumo-tui/cathedral/` hold Cathedral-themed adapters and retained UI nodes. The visual canon is:
+
+- `docs/ui/CATHEDRAL_UX_SPEC_V2.md`
+- `docs/ui/bible/*.html`
+- `docs/ui/bible/renders/*.png`
+- `docs/visual/parity/CONTRACT.md`
+- `docs/visual/parity/scenarios.json`
+
+Color and state tokens are centralized in `src/tokens.ts` (`CATHEDRAL_TOKENS`, `SUMOCODE_STATES`). Five preattentive states: `idle / thinking / tool / approval / learning`.
+
+### Do not hand-roll new ANSI for Cathedral surfaces
+
+Before changing Cathedral rendering, read `docs/SUMO_TUI_RENDER_PRIMITIVES.md`.
+
+Use `src/sumo-tui/render/primitives.ts` for new typed `Style`, `Span`, and `Line` rendering. Convert typed lines to ANSI/cells through the shared helpers. This avoids stale foreground/background/reset/width bugs.
+
+Allowed exceptions:
+
+- low-level ANSI parser/writer code
+- terminal controller escape sequences
+- compatibility shims that must mirror Pi byte-for-byte
+- legacy surfaces that have not yet been migrated
+- tests that intentionally assert ANSI escapes
+
+If adding a production Cathedral rendering exception, leave a comment explaining why typed primitives are not appropriate yet.
+
+## Visual harness
+
+The canonical V2 path is documented in `docs/visual/parity/CONTRACT.md`:
+
+```txt
+node-pty bytes → @xterm/headless replay → DOM terminal renderer → Playwright screenshot → crop/mask/diff → review pack
+```
+
+Use:
+
+```bash
+pnpm render:bible
+pnpm visual:review
+pnpm visual:review -- --scenario <scenario>
+pnpm visual:ci
+```
+
+Runtime scenarios invoke:
+
+```bash
+./bin/sumocode.sh --offline --no-extensions --no-session
+```
+
+`tmux`, cmux/Ghostty screenshots, and live terminal captures are debugging aids only. They must not define CI pass/fail for V2 parity.
+
+Required crops gate against committed approved runtime goldens. Bible diffs remain review evidence. Promote runtime goldens only after Dhruv explicitly approves the capture.
+
+## Current layout decisions
+
+- V2 sidebar width is `30` columns.
+- Wide sidebar layout starts at `SIDEBAR_MIN_TERMINAL_WIDTH = 120`.
+- Canonical portrait runtime is `60 × 100` and **no-sidebar** for V1. See `docs/SUMO_TUI_PORTRAIT_SIDEBAR_POLICY.md`.
+- Active V2 input frame is label-less; do not reintroduce `SCRIPTOR INPUT` or legacy input labels.
+- Footer right zone is context/window + cost only. Project/branch live in the sidebar when visible or hint row when hidden.
+- Top bar active dot is a static session marker; agent state lives in the footer dot.
+
+## Conventions
+
+- No build step. Pi executes TypeScript directly via jiti. Do not add `tsc -b`, bundlers, or emit-to-`dist/`.
+- TypeScript is strict with `noUnusedLocals` and `noUnusedParameters`.
+- Use tabs for indentation in TypeScript files, matching the existing codebase.
+- Tests colocate with source: `foo.ts` next to `foo.test.ts`. Integration tests live under `test/integration/`.
+- Pi-bundled deps belong in `peerDependencies`, not `dependencies`. `@mariozechner/pi-coding-agent`, `@mariozechner/pi-tui`, and `typebox` are peer-only.
+- `ctx.ui.*` calls must happen inside an event handler (`session_start`, `message_start`, etc.). Calling them at module top level fires before Pi's TUI exists and is silently dropped.
+- Be TTY-defensive: guard interactive UI so `acpx pi`, `pi --print`, and `--mode rpc` keep working.
+- Voice is enforced by `src/voice.ts`. State labels are uppercase Cathedral verbs (`READY / MEDITATING / ILLUMINATING / DEFERRING / INSCRIBING`); other product copy is lowercase, terse, no exclamation marks, no apologies, no decorative emoji.
+- `src/spike/` is throwaway exploration. Do not import from `spike/` outside its own directory; promote a spike by moving it into a real module.
+
+## Decision trail
+
+- `PLAN.md` — Q1–Q14 grilling decisions.
+- `docs/adr/` — accepted ADRs. ADR 0001 covers the SumoTUI retained renderer.
+- `docs/SUMO_TUI_CONSOLIDATION_PLAN.md` — active consolidation sequencing after the deep audit.
+- `docs/SUMO_TUI_AUDIT.md` — audit conclusion: SumoTUI is the right direction; the hybrid Pi/SumoTUI seam is the risk.
+- `docs/SUMO_TUI_PI_PATCH_STRATEGY.md` — private Pi patch maintenance contract.
+- `docs/SUMO_TUI_PORTRAIT_SIDEBAR_POLICY.md` — V1 portrait/no-sidebar policy.
+- `docs/SUMO_TUI_RENDER_PRIMITIVES.md` — typed render primitive contract.
+- `docs/prd.md` / `docs/prd.html` — formal product spec.
+
+## Integration tests
+
+`test/integration/` spawns a real Pi inside a `node-pty` PTY (see `spawn-pi-pty.ts`). These tests verify things that cannot be trusted to unit tests alone: altscreen cleanup on signal, mouse scroll routing, cursor visibility, editor boundary behavior, splash centering, and slash-command dispatch.
+
+Keep PTY integration tests as smoke/contract tests. Prefer unit/headless tests for detailed behavior where possible.

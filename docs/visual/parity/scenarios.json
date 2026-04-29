@@ -91,7 +91,7 @@
       "runtime": {
         "command": "./bin/sumocode.sh",
         "args": ["--offline", "--no-extensions", "--no-session"],
-        "settleMs": 800,
+        "settleMs": 1800,
         "env": {
           "PI_OFFLINE": "1",
           "SUMO_TUI": "1",
@@ -100,7 +100,8 @@
           "FORCE_COLOR": "3"
         },
         "inputs": [
-          { "afterMs": 1800, "type": "text", "value": "review src/argent-x/balance.ts and tighten the return type" }
+          { "afterMs": 1800, "type": "text", "value": "review src/argent-x/balance.ts and tighten the return type" },
+          { "afterMs": 150, "type": "key", "value": "\r" }
         ]
       },
       "rejectIfOutputMatches": [
@@ -128,7 +129,7 @@
       "runtime": {
         "command": "./bin/sumocode.sh",
         "args": ["--offline", "--no-extensions", "--no-session"],
-        "settleMs": 800,
+        "settleMs": 1800,
         "env": {
           "PI_OFFLINE": "1",
           "SUMO_TUI": "1",
@@ -137,7 +138,8 @@
           "FORCE_COLOR": "3"
         },
         "inputs": [
-          { "afterMs": 1800, "type": "text", "value": "summarize the plan" }
+          { "afterMs": 1800, "type": "text", "value": "summarize the plan" },
+          { "afterMs": 150, "type": "key", "value": "\r" }
         ]
       },
       "rejectIfOutputMatches": [

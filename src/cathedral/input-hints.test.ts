@@ -74,8 +74,9 @@ describe("installInputHints", () => {
 		const lines = component!.render(80);
 		expect(lines.length).toBe(1);
 		const stripped = lines[0]!.replace(/\u001b\[[0-9;]*m/g, "");
-		expect(stripped).toContain("TAB · AGENTS  CTRL+/ · COMMANDS");
-		expect(stripped).not.toContain("INPUT PROTOCOL AWAITING COMMAND");
+		expect(stripped).toContain("CTRL+/ · COMMANDS");
+		expect(stripped).not.toContain("TAB · AGENTS");
+		expect(stripped).not.toContain("AWAITING PROMPT");
 	});
 
 	it("widget factory renders BOTH hints on splash (no messages yet)", () => {
@@ -104,7 +105,8 @@ describe("installInputHints", () => {
 		const lines = component!.render(120);
 		expect(lines.length).toBe(1);
 		const stripped = lines[0]!.replace(/\u001b\[[0-9;]*m/g, "");
-		expect(stripped).toContain("INPUT PROTOCOL AWAITING COMMAND");
-		expect(stripped).toContain("TAB · AGENTS  CTRL+/ · COMMANDS");
+		expect(stripped).toContain("╰─ AWAITING PROMPT");
+		expect(stripped).toContain("CTRL+/ · COMMANDS");
+		expect(stripped).not.toContain("TAB · AGENTS");
 	});
 });

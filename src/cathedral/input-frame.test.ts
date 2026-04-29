@@ -10,21 +10,27 @@ const ANSI = /\u001b\[[0-9;]*m/g;
 const stripAnsi = (s: string): string => s.replace(ANSI, "");
 
 describe("renderInputFrame — active state (no label, no placeholder)", () => {
-	it("renders 5 rows: top + pad + content + pad + bottom (Stitch p-4)", () => {
+	it("renders 3 rows: top + content + bottom", () => {
 		const lines = renderInputFrame("hello", 50);
-		expect(lines.length).toBe(5);
+		expect(lines.length).toBe(3);
 		expect(lines[0]).toMatch(/┌.+┐/);
-		expect(lines[4]).toMatch(/└.+┘/);
+		expect(lines[2]).toMatch(/└.+┘/);
 	});
 
-	it("renders prompt arrow > before input text on the content row (row 2)", () => {
+	it("renders an unlabeled top border by default", () => {
+		const top = stripAnsi(renderInputFrame("hello", 50)[0]!);
+		expect(top).toBe(`┌${"─".repeat(48)}┐`);
+		expect(top).not.toContain("INPUT");
+	});
+
+	it("renders prompt arrow > before input text on the content row", () => {
 		const lines = renderInputFrame("hello", 50).map(stripAnsi);
-		expect(lines[2]).toContain("> hello");
+		expect(lines[1]).toContain("> hello");
 	});
 
 	it("renders cursor █ at end of text", () => {
 		const lines = renderInputFrame("hello", 50).map(stripAnsi);
-		expect(lines[2]).toContain("> hello█");
+		expect(lines[1]).toContain("> hello█");
 	});
 
 	it("pads each line to exact width", () => {
@@ -66,18 +72,18 @@ describe("renderInputFrame — active state (no label, no placeholder)", () => {
 });
 
 describe("renderInputFrame — splash state (with label + placeholder)", () => {
-	it("renders top border with label `┌─ SCRIPTOR INPUT ──...─┐`", () => {
-		const lines = renderInputFrame("", 60, { label: "SCRIPTOR INPUT" });
+	it("renders top border with label `┌─ DIVINE INVOCATION ──...─┐`", () => {
+		const lines = renderInputFrame("", 60, { label: "DIVINE INVOCATION" });
 		const top = stripAnsi(lines[0]!);
-		expect(top).toMatch(/^┌.* SCRIPTOR INPUT /);
+		expect(top).toMatch(/^┌.* DIVINE INVOCATION /);
 		expect(top).toMatch(/┐$/);
 	});
 
-	it("shows placeholder text when input is empty (on the content row, row 2)", () => {
+	it("shows placeholder text when input is empty on the content row", () => {
 		const lines = renderInputFrame("", 80, {
 			placeholder: 'Ask anything... "Refactor the auth flow."',
 		});
-		const content = stripAnsi(lines[2]!);
+		const content = stripAnsi(lines[1]!);
 		expect(content).toContain("Ask anything");
 		expect(content).toContain("Refactor the auth flow.");
 	});
@@ -86,7 +92,7 @@ describe("renderInputFrame — splash state (with label + placeholder)", () => {
 		const lines = renderInputFrame("hello", 80, {
 			placeholder: "should not appear",
 		});
-		const content = stripAnsi(lines[2]!);
+		const content = stripAnsi(lines[1]!);
 		expect(content).not.toContain("should not appear");
 		expect(content).toContain("> hello");
 	});
@@ -101,11 +107,12 @@ describe("renderInputFrame — splash state (with label + placeholder)", () => {
 });
 
 describe("renderInputHints", () => {
-	it("returns a single-line right-aligned keybind hint by default", () => {
+	it("returns a single-line right-aligned command hint by default", () => {
 		const line = renderInputHints(80);
 		const plain = stripAnsi(line);
 		expect(plain.length).toBe(80);
 		expect(plain).toContain(INPUT_FRAME_HINT_KEYBINDS);
+		expect(plain).not.toContain("AGENTS");
 		// Right-aligned: keybinds at the end
 		expect(plain.trimEnd().endsWith(INPUT_FRAME_HINT_KEYBINDS)).toBe(true);
 	});
@@ -127,16 +134,15 @@ describe("renderInputHints", () => {
 
 	it("at narrow width, drops left hint first", () => {
 		// Only enough room for keybinds
-		const line = stripAnsi(renderInputHints(40, { leftHint: INPUT_FRAME_HINT_AWAITING }));
+		const line = stripAnsi(renderInputHints(30, { leftHint: INPUT_FRAME_HINT_AWAITING }));
 		expect(line).toContain(INPUT_FRAME_HINT_KEYBINDS);
-		// INPUT PROTOCOL AWAITING COMMAND at this width should drop
 		expect(line).not.toContain("AWAITING");
 	});
 
-	it("colors TAB and CTRL+/ modifier keys in accent (#D97706)", () => {
+	it("colors CTRL+/ modifier key in accent (#D97706)", () => {
 		const line = renderInputHints(80);
-		// accent escape sequence ANSI 38;2;217;119;6 immediately preceding TAB
-		expect(line).toContain("\u001b[38;2;217;119;6mTAB");
+		expect(line).not.toContain("TAB");
+		expect(line).not.toContain("AGENTS");
 		expect(line).toContain("\u001b[38;2;217;119;6mCTRL+/");
 	});
 
@@ -147,11 +153,11 @@ describe("renderInputHints", () => {
 });
 
 describe("INPUT_FRAME_HINT_KEYBINDS / INPUT_FRAME_HINT_AWAITING constants", () => {
-	it("exposes locked keybind hint string (uppercase from Stitch CSS)", () => {
-		expect(INPUT_FRAME_HINT_KEYBINDS).toBe("TAB · AGENTS  CTRL+/ · COMMANDS");
+	it("exposes locked keybind hint string", () => {
+		expect(INPUT_FRAME_HINT_KEYBINDS).toBe("CTRL+/ · COMMANDS");
 	});
 
-	it("exposes locked awaiting hint string (verbatim from Stitch HTML)", () => {
-		expect(INPUT_FRAME_HINT_AWAITING).toBe("┌─ INPUT PROTOCOL AWAITING COMMAND");
+	it("exposes locked awaiting hint string", () => {
+		expect(INPUT_FRAME_HINT_AWAITING).toBe("╰─ AWAITING PROMPT");
 	});
 });

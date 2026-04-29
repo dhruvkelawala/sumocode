@@ -9,18 +9,18 @@
  *   - bracketed paste, IME, kill-ring, history
  *
  * We just decorate around it: replace Pi's flat top/bottom horizontal lines
- * with our `┌─ LABEL ──┐` / `└─┘` corners, wrap each interior row in side
+ * with our `┌─ LABEL ──┐` splash or unlabeled active `┌──┐` / `└─┘` corners, wrap each interior row in side
  * pipes, paint the inner span with the recess background, and let any
  * autocomplete rows tail through unwrapped (they sit under the bottom
  * border like a dropdown).
  *
  * Splash state (no messages):
- *   ┌─ SCRIPTOR INPUT ─────────────────────────────────────┐
+ *   ┌─ DIVINE INVOCATION ──────────────────────────────────┐
  *   │ > Ask anything... "Refactor the auth flow."  █       │
  *   └──────────────────────────────────────────────────────┘
  *
  * Active state (after first message):
- *   ┌─ INPUT ──────────────────────────────────────────────┐
+ *   ┌──────────────────────────────────────────────────────┐
  *   │ > /ag<cursor>                                        │
  *   └──────────────────────────────────────────────────────┘
  *      ▸ /agent  switch agent
@@ -82,9 +82,10 @@ const RESET_BG = "\u001b[49m";
  * Build the cathedral top border with an embedded label, e.g.:
  *   ┌─ SCRIPTOR INPUT ────...─────┐
  */
-function renderTopBorder(width: number, label: string): string {
+function renderTopBorder(width: number, label?: string): string {
 	if (width < 6) return color("─".repeat(width), CATHEDRAL_TOKENS.colors.divider);
 	const inner = width - 2;
+	if (!label) return color(`┌${"─".repeat(inner)}┐`, CATHEDRAL_TOKENS.colors.divider);
 	const labelInner = ` ${label} `;
 	const remaining = Math.max(2, inner - labelInner.length - 2);
 	const left = `${DIVIDER_FG}┌──`;

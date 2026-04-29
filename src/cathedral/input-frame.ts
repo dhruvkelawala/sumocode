@@ -6,17 +6,17 @@
  *
  *   div.bg-recess.border-divider.p-4 + absolute -top-3 left-2 floating label
  *
- * Active state (Element 4) — label `INPUT`:
- *   ┌─ INPUT ──────────────────────────────────────┐
+ * Active state (Element 4) — no label:
+ *   ┌──────────────────────────────────────────────┐
  *   │ > █                                          │
  *   └──────────────────────────────────────────────┘
- *                                       TAB · AGENTS  CTRL+/ · COMMANDS
+ *                                       CTRL+/ · COMMANDS
  *
- * Splash state (Element 3) — label `SCRIPTOR INPUT`:
- *   ┌─ SCRIPTOR INPUT ──────────────────────────────────────────┐
+ * Splash state (Element 3) — label `DIVINE INVOCATION`:
+ *   ┌─ DIVINE INVOCATION ───────────────────────────────────────┐
  *   │ > Ask anything... "Refactor the auth flow."  █            │
  *   └───────────────────────────────────────────────────────────┘
- *   ┌─ INPUT PROTOCOL AWAITING COMMAND          TAB · AGENTS  CTRL+/ · COMMANDS
+ *   ╰─ AWAITING PROMPT                         CTRL+/ · COMMANDS
  *
  * Token map (from Stitch CSS variables):
  *   border       → divider  (#3A2F25)  — dim, not accent
@@ -36,11 +36,11 @@ const RESET = "\u001b[0m";
 const ANSI_PATTERN = /\u001b\[[0-9;]*m/g;
 const DIM = "\u001b[2m";
 
-export const INPUT_FRAME_LABEL_SPLASH = "SCRIPTOR INPUT";
-export const INPUT_FRAME_LABEL_ACTIVE = "INPUT";
+export const INPUT_FRAME_LABEL_SPLASH = "DIVINE INVOCATION";
+export const INPUT_FRAME_LABEL_ACTIVE = "";
 export const INPUT_FRAME_PLACEHOLDER = 'Ask anything... "Refactor the auth flow."';
-export const INPUT_FRAME_HINT_KEYBINDS = "TAB · AGENTS  CTRL+/ · COMMANDS";
-export const INPUT_FRAME_HINT_AWAITING = "┌─ INPUT PROTOCOL AWAITING COMMAND";
+export const INPUT_FRAME_HINT_KEYBINDS = "CTRL+/ · COMMANDS";
+export const INPUT_FRAME_HINT_AWAITING = "╰─ AWAITING PROMPT";
 
 function visibleLength(text: string): number {
 	return text.replace(ANSI_PATTERN, "").length;
@@ -92,11 +92,11 @@ export type InputFrameOptions = {
 };
 
 /**
- * Pure render of the carved 5-row input frame.
+ * Pure render of the carved 3-row input frame.
  *
- * Returns 5 lines (top + padding + content + padding + bottom), each padded
- * exactly to `width` cells. The two padding rows mirror the Stitch HTML's
- * `p-4` vertical padding around the content.
+ * Returns 3 lines (top + content + bottom), each padded exactly to `width`
+ * cells. The active V2 contract keeps the frame compact so chat retains
+ * vertical space.
  *
  * If `width < 4`, returns a single-line minimal cursor (degraded mode).
  */
@@ -143,19 +143,12 @@ export function renderInputFrame(input: string, width: number, options: InputFra
 	const contentInner = `${innerContent}${" ".repeat(padding)}`;
 	const content = `${dividerCh("│")}${onRecess(contentInner)}${dividerCh("│")}`;
 
-	// Top + bottom padding rows (recess background only, no content) to mirror
-	// the Stitch `p-4` vertical breathing room.
-	const padInner = onRecess(" ".repeat(inner));
-	const padRow = `${dividerCh("│")}${padInner}${dividerCh("│")}`;
-
 	// Bottom border
 	const bottom = `${dividerCh("└")}${dividerCh("─".repeat(inner))}${dividerCh("┘")}`;
 
 	return [
 		padToWidth(top, width),
-		padToWidth(padRow, width),
 		padToWidth(content, width),
-		padToWidth(padRow, width),
 		padToWidth(bottom, width),
 	];
 }
@@ -171,9 +164,9 @@ export type InputHintsOptions = {
 /**
  * Pure render of the single-line hint row below the input frame.
  *
- * Right-side keybind hint always appears (right-aligned). The modifier keys
- * `TAB` and `CTRL+/` are tinted accent (per Stitch HTML), the labels stay
- * dim oxidized.
+ * Right-side command hint always appears (right-aligned). The functional
+ * modifier key `CTRL+/` is tinted accent; inactive future affordances such as
+ * `TAB · AGENTS` are intentionally omitted until implemented.
  *
  * Optional left-side flavour hint (used on splash) renders dim oxidized.
  */
@@ -187,8 +180,8 @@ export function renderInputHints(width: number, options: InputHintsOptions = {})
 	const dimFg = `${DIM}${fg(CATHEDRAL_TOKENS.colors.foregroundDim)}`;
 	const accent = fg(CATHEDRAL_TOKENS.colors.accent);
 
-	// Build the colored right-hand string: TAB and CTRL+/ in accent, labels in dim.
-	const rightColored = `${accent}TAB${RESET} ${dimFg}· AGENTS  ${RESET}${accent}CTRL+/${RESET} ${dimFg}· COMMANDS${RESET}`;
+	// Build the colored right-hand string: CTRL+/ in accent, label in dim.
+	const rightColored = `${accent}CTRL+/${RESET} ${dimFg}· COMMANDS${RESET}`;
 
 	// At narrow widths, drop the left hint first.
 	const leftFitsAlongside = left !== undefined && rightLen + 4 + left.length <= width;

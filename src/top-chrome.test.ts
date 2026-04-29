@@ -21,29 +21,29 @@ function snapshot(overrides: Partial<TopChromeSnapshot> = {}): TopChromeSnapshot
 }
 
 describe("renderTopChrome", () => {
-	it("renders SUMOCODE brand label first", () => {
+	it("renders with stable one-character outer padding", () => {
 		const line = stripAnsi(renderTopChrome(snapshot(), 160));
-		expect(line.startsWith(TOP_CHROME_BRAND)).toBe(true);
+		expect(line).toHaveLength(160);
+		expect(line.startsWith(` ${TOP_CHROME_BRAND}`)).toBe(true);
+		expect(line.endsWith(" ")).toBe(true);
 	});
 
-	it("wraps active session with ║ ║ and includes state dot + label", () => {
+	it("wraps active session with ║ ║ and includes static active marker + label", () => {
 		const line = stripAnsi(renderTopChrome(snapshot(), 160));
-		expect(line).toContain("║ ● refactor-auth-flow ║");
+		expect(line).toContain("║ • refactor-auth-flow ║");
 	});
 
-	it("uses idle state dot color (#7FB069 sage) in active session", () => {
-		const line = renderTopChrome(snapshot({ activeSession: { id: "x", label: "fresh", state: "idle" } }), 160);
-		// 127;176;105 = #7FB069
-		expect(line).toContain("\u001b[38;2;127;176;105m");
+	it("uses static accent dot color regardless of active session state", () => {
+		const line = renderTopChrome(snapshot({ activeSession: { id: "x", label: "live", state: "thinking" } }), 160);
+		// accent #D97706 = 217;119;6
+		expect(line).toContain("\u001b[38;2;217;119;6m•");
+		// thinking #E8B339 = 232;179;57 must remain footer-owned
+		expect(line).not.toContain("\u001b[38;2;232;179;57m");
 	});
 
-	it("uses thinking state dot color (#E8B339 amber) when state=thinking", () => {
-		const line = renderTopChrome(
-			snapshot({ activeSession: { id: "x", label: "live", state: "thinking" } }),
-			160,
-		);
-		// 232;179;57 = #E8B339
-		expect(line).toContain("\u001b[38;2;232;179;57m");
+	it("supports small and large active marker dot sizes", () => {
+		expect(stripAnsi(renderTopChrome(snapshot({ dotSize: "small" }), 160))).toContain("║ · refactor-auth-flow ║");
+		expect(stripAnsi(renderTopChrome(snapshot({ dotSize: "large" }), 160))).toContain("║ ● refactor-auth-flow ║");
 	});
 
 	it("renders recent sessions as │ label", () => {
@@ -59,29 +59,30 @@ describe("renderTopChrome", () => {
 		expect(archiveIdx).toBeGreaterThan(lastRecentIdx);
 	});
 
-	it("renders [terminal] and [⚙] icons at the right edge", () => {
+	it("renders terminal and settings Octicons at the right edge", () => {
 		const line = stripAnsi(renderTopChrome(snapshot(), 160));
-		expect(line).toContain("[terminal]");
-		expect(line).toContain("[⚙]");
-		const terminalIdx = line.indexOf("[terminal]");
-		const settingsIdx = line.indexOf("[⚙]");
+		expect(line).toContain("\uF489");
+		expect(line).toContain("\uF423");
+		const terminalIdx = line.indexOf("\uF489");
+		const settingsIdx = line.indexOf("\uF423");
 		expect(settingsIdx).toBeGreaterThan(terminalIdx);
+		expect(line.trimEnd().endsWith("\uF423")).toBe(true);
 	});
 
 	it("when hidden=true, only SUMOCODE label is shown (nothing else)", () => {
 		const line = stripAnsi(renderTopChrome(snapshot({ hidden: true }), 160));
-		expect(line.startsWith(TOP_CHROME_BRAND)).toBe(true);
+		expect(line.trim()).toBe(TOP_CHROME_BRAND);
 		expect(line).not.toContain("║");
 		expect(line).not.toContain("│");
 		expect(line).not.toContain("ARCHIVE");
-		expect(line).not.toContain("[terminal]");
-		expect(line).not.toContain("[⚙]");
+		expect(line).not.toContain("\uF489");
+		expect(line).not.toContain("\uF423");
 	});
 
 	it("at narrow width drops icons first, then ARCHIVE, then recents", () => {
 		// Wide enough for everything
 		const wide = stripAnsi(renderTopChrome(snapshot(), 160));
-		expect(wide).toContain("[⚙]");
+		expect(wide).toContain("\uF423");
 
 		// Narrow: 80 cols — should drop icons but keep brand + active + maybe some recents
 		const narrow = stripAnsi(renderTopChrome(snapshot(), 80));
@@ -117,11 +118,11 @@ describe("renderTopChrome", () => {
 		expect(line).toContain("\u001b[38;2;217;119;6m");
 	});
 
-	it("renders ║ chars in accent and │ separators in foregroundDim", () => {
+	it("renders session dividers and recent tabs in foregroundDim", () => {
 		const line = renderTopChrome(snapshot(), 160);
-		// accent #D97706 = 217;119;6 — used by ║
+		// accent #D97706 = 217;119;6 — used by SUMOCODE + active dot
 		expect(line).toContain("\u001b[38;2;217;119;6m");
-		// foregroundDim #8B7A63 = 139;122;99 — used by │ + recents
+		// foregroundDim #8B7A63 = 139;122;99 — used by ║, │, recents, ARCHIVE
 		expect(line).toContain("\u001b[38;2;139;122;99m");
 	});
 

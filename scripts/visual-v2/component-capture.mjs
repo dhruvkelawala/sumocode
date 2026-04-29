@@ -24,6 +24,7 @@ export async function captureComponentScenario(scenario) {
 async function renderComponentLines(kind, scenario) {
 	if (kind === "input-frame-typed") return renderInputFrameTyped(scenario.dimensions.cols);
 	if (kind === "footer-ready") return renderFooterReady(scenario.dimensions.cols);
+	if (kind === "top-bar-default") return renderTopBarDefault(scenario.dimensions.cols);
 	if (kind === "sidebar-editorial") return renderSidebarEditorial(scenario.dimensions.cols);
 	throw new Error(`Unsupported component scenario kind: ${kind}`);
 }
@@ -34,6 +35,19 @@ async function renderInputFrameTyped(width) {
 		...mod.renderInputFrame("review src/argent-x/balance.ts and tighten the return type", width, { promptColor: "accent" }),
 		mod.renderInputHints(width),
 	];
+}
+
+async function renderTopBarDefault(width) {
+	const mod = await jiti.import(`${repoRoot}/src/top-chrome.ts`);
+	return [mod.renderTopChrome({
+		activeSession: { id: "abc", label: "auth-flow-refactor", state: "thinking" },
+		recentSessions: [
+			{ id: "def", label: "debug-balance-tx" },
+			{ id: "ghi", label: "index-issues" },
+		],
+		hidden: false,
+		dotSize: "medium",
+	}, width)];
 }
 
 async function renderFooterReady(width) {

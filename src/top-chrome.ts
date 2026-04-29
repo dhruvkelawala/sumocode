@@ -2,14 +2,14 @@
  * Cathedral top chrome (Element 2 from CATHEDRAL_DECISIONS.md).
  *
  * Layout:
- *   SUMOCODE   ║ ● refactor-auth-flow ║   │ debug-balance-tx   │ index-issues   │ ARCHIVE        [terminal]  [⚙]
+ *   SUMOCODE  ║ • auth-flow-refactor ║   │ debug-balance-tx   │ index-issues   │ ARCHIVE          
  *
  *   - SUMOCODE: brand label, always visible (in accent), top-left
- *   - ║ ● label ║: active session marker; ● uses current state color, ║ in accent
+ *   - ║ • label ║: active session marker; • is static accent, never state-colored
  *   - │ label: recent sessions (LLM-summarized names), in dim
  *   - │ ARCHIVE: opens session-list overlay
- *   - [terminal]: bash sub-shell overlay (Ctrl+\), in dim
- *   - [⚙]: settings overlay (Ctrl+,), in dim
+ *   - : bash sub-shell overlay (Ctrl+\), in foreground
+ *   - : settings overlay (Ctrl+,), in foreground
  *
  * When `hidden` is true (set via /sumo:tabs hide), only SUMOCODE renders.
  *
@@ -28,10 +28,13 @@ const ANSI_PATTERN = /\u001b\[[0-9;]*m/g;
 
 export const TOP_CHROME_BRAND = "SUMOCODE";
 
+export type TopChromeDotSize = "small" | "medium" | "large";
+
 export type TopChromeSnapshot = {
 	activeSession: { id: string; label: string; state: SumoCodeState };
 	recentSessions: readonly { id: string; label: string }[];
 	hidden: boolean;
+	dotSize?: TopChromeDotSize;
 };
 
 function visibleLength(text: string): number {
@@ -57,19 +60,26 @@ function ellipsize(text: string, max: number): string {
 	return `${text.slice(0, max - 1)}…`;
 }
 
-const ICON_TERMINAL = "[terminal]";
-const ICON_SETTINGS = "[⚙]";
+const ICON_TERMINAL = "\uF489";
+const ICON_SETTINGS = "\uF423";
 const ICON_GAP = "  ";
 const ARCHIVE_LABEL = "ARCHIVE";
+const OUTER_PAD = 1;
+const BRAND_ACTIVE_GAP = 2;
+const DOT_GLYPHS: Record<TopChromeDotSize, string> = {
+	small: "·",
+	medium: "•",
+	large: "●",
+};
 
 /**
- * Compose the active-session segment: `║ ● label ║`.
- * Visible width = 6 + label.length (║ space ● space label space ║).
+ * Compose the active-session segment: `║ • label ║`.
+ * Visible width = 6 + label.length (║ space • space label space ║).
  */
-function activeSegment(active: TopChromeSnapshot["activeSession"], maxLabel: number): string {
+function activeSegment(active: TopChromeSnapshot["activeSession"], maxLabel: number, dotSize: TopChromeDotSize): string {
 	const label = ellipsize(active.label, maxLabel);
-	const dot = color("●", CATHEDRAL_TOKENS.colors.states[active.state]);
-	const wrap = (ch: string): string => color(ch, CATHEDRAL_TOKENS.colors.accent);
+	const dot = color(DOT_GLYPHS[dotSize], CATHEDRAL_TOKENS.colors.accent);
+	const wrap = (ch: string): string => color(ch, CATHEDRAL_TOKENS.colors.foregroundDim);
 	return `${wrap("║")} ${dot} ${label} ${wrap("║")}`;
 }
 
@@ -88,8 +98,8 @@ function archiveSegment(): string {
 }
 
 function iconsSegment(): string {
-	const term = color(ICON_TERMINAL, CATHEDRAL_TOKENS.colors.foregroundDim);
-	const gear = color(ICON_SETTINGS, CATHEDRAL_TOKENS.colors.foregroundDim);
+	const term = color(ICON_TERMINAL, CATHEDRAL_TOKENS.colors.foreground);
+	const gear = color(ICON_SETTINGS, CATHEDRAL_TOKENS.colors.foreground);
 	return `${term}${ICON_GAP}${gear}`;
 }
 
@@ -119,27 +129,32 @@ function padToWidth(text: string, width: number): string {
 export function renderTopChrome(snapshot: TopChromeSnapshot, width: number): string {
 	if (width <= 0) return "";
 
+	const outerPad = width >= OUTER_PAD * 2 ? " ".repeat(OUTER_PAD) : "";
+	const innerWidth = Math.max(0, width - visibleLength(outerPad) * 2);
+	if (innerWidth <= 0) return " ".repeat(width);
+
 	const brand = brandSegment();
 	if (snapshot.hidden) {
-		return padToWidth(brand, width);
+		return `${outerPad}${padToWidth(brand, innerWidth)}${outerPad}`;
 	}
 
 	const brandLen = visibleLength(brand);
+	const dotSize = snapshot.dotSize ?? "medium";
 
 	// Compute the active session at its full label first; truncate only if it
 	// won't fit in width with brand + gap.
-	const fullActive = activeSegment(snapshot.activeSession, snapshot.activeSession.label.length);
+	const fullActive = activeSegment(snapshot.activeSession, snapshot.activeSession.label.length, dotSize);
 	const fullActiveLen = visibleLength(fullActive);
 
 	let active: string;
-	if (brandLen + 3 + fullActiveLen <= width) {
+	if (brandLen + BRAND_ACTIVE_GAP + fullActiveLen <= innerWidth) {
 		active = fullActive;
 	} else {
-		const maxActiveLabel = Math.max(1, width - brandLen - 3 - ACTIVE_OVERHEAD);
-		active = activeSegment(snapshot.activeSession, maxActiveLabel);
+		const maxActiveLabel = Math.max(1, innerWidth - brandLen - BRAND_ACTIVE_GAP - ACTIVE_OVERHEAD);
+		active = activeSegment(snapshot.activeSession, maxActiveLabel, dotSize);
 	}
-	let consumed = brandLen + 3 + visibleLength(active);
-	let line = `${brand}   ${active}`;
+	let consumed = brandLen + BRAND_ACTIVE_GAP + visibleLength(active);
+	let line = `${brand}${" ".repeat(BRAND_ACTIVE_GAP)}${active}`;
 
 	// Try to fit recent sessions one at a time.
 	for (const recent of snapshot.recentSessions) {
@@ -164,14 +179,14 @@ export function renderTopChrome(snapshot: TopChromeSnapshot, width: number): str
 	{
 		const iconBlock = iconsSegment();
 		const iconLen = visibleLength(iconBlock);
-		if (consumed + 2 + iconLen <= width) {
-			const gap = width - consumed - iconLen;
+		if (consumed + 1 + iconLen <= innerWidth) {
+			const gap = innerWidth - consumed - iconLen;
 			line += `${" ".repeat(gap)}${iconBlock}`;
-			consumed = width;
+			consumed = innerWidth;
 		}
 	}
 
-	return padToWidth(line, width);
+	return `${outerPad}${padToWidth(line, innerWidth)}${outerPad}`;
 }
 
 // ============================================================================

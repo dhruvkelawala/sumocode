@@ -58,6 +58,12 @@
 			"cols": 160,
 			"rows": 1
 		},
+		"top-bar-component": {
+			"x": 0,
+			"y": 0,
+			"cols": 160,
+			"rows": 1
+		},
 		"sidebar-component": {
 			"kind": "full"
 		}
@@ -114,6 +120,33 @@
 					"runtimeCrop": "footer-component",
 					"status": "required",
 					"threshold": 0.04
+				}
+			]
+		},
+		{
+			"id": "top-bar-default-component",
+			"lane": "component",
+			"status": "review",
+			"component": {
+				"kind": "top-bar-default"
+			},
+			"dimensions": {
+				"cols": 160,
+				"rows": 1
+			},
+			"bibleTarget": "02-topbar-default.png",
+			"crops": [
+				{
+					"id": "full",
+					"targetCrop": "full",
+					"runtimeCrop": "full"
+				},
+				{
+					"id": "top-bar",
+					"targetCrop": "top-bar-component",
+					"runtimeCrop": "top-bar-component",
+					"status": "required",
+					"threshold": 0.08
 				}
 			]
 		},

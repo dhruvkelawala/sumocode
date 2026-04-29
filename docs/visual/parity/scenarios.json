@@ -85,7 +85,8 @@
 					"id": "input-frame",
 					"targetCrop": "input-component-frame",
 					"runtimeCrop": "input-component-frame",
-					"status": "required"
+					"status": "required",
+					"threshold": 0.03
 				}
 			]
 		},

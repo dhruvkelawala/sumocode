@@ -37,7 +37,6 @@ function buildSidebarRows(SIDEBAR_COLS) {
 
 	rows.push(blank());
 	rows.push(cell(`  <span class="fg-accent">REGISTRY</span>`));
-	rows.push(cell(`  <span class="fg-dim">\u2014 v 1.0.0</span>`));
 	rows.push(blank());
 
 	rows.push(cell(`  <span class="fg-accent">\u25c6</span> <span class="fg-fg">${trackOut("CONTEXT")}</span>`));

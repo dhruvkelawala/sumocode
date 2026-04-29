@@ -110,7 +110,6 @@ Modal overlays sit centered. We cannot dim the underlying canvas in a terminal �
 
 ```
   REGISTRY
-  — v 1.0.0
 
   ◆ C O N T E X T
   ▢ M E M O R Y
@@ -119,7 +118,7 @@ Modal overlays sit centered. We cannot dim the underlying canvas in a terminal �
 ```
 
 Key design moves:
-- `REGISTRY` accent left-aligned, `— v 1.0.0` dim subtitle
+- `REGISTRY` is a single-row accent masthead; version metadata does not appear in the sidebar
 - Sub-tabs use **tracked-out** narrow-no-break-space typography (`C O N T E X T`) for editorial display feel
 - Heavy `━` rule (26 chars) separates header from content
 - All section labels (CONTEXT / SESSION / MCP / METRICS) use tracked-out style

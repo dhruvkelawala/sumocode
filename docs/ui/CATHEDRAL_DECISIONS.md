@@ -17,8 +17,8 @@
 
 **Locked: F (REGISTRY chrome + 2 sub-tabs + Claude Design content)**
 
-- Chrome / aesthetic: from Stitch v1/v2 — `REGISTRY` header, `v 1.0.0` line,
-  `◆ active / ▢ inactive` sub-tab markers.
+- Chrome / aesthetic: `REGISTRY` single-row masthead plus
+  `◆ active / ▢ inactive` sub-tab markers. Version metadata is not shown in the sidebar.
 - Sub-tabs: only **CONTEXT** and **MEMORY** in v1.
   - `Ctrl+1` → CONTEXT
   - `Ctrl+2` → MEMORY
@@ -36,7 +36,6 @@ Sketch (active state, CONTEXT selected):
 
 ```
                                                   REGISTRY
-                                                  v 1.0.0
 
                                                   ◆ CONTEXT       ← Ctrl+1
                                                   ▢ MEMORY        ← Ctrl+2
@@ -55,7 +54,6 @@ When user presses `Ctrl+2`:
 
 ```
                                                   REGISTRY
-                                                  v 1.0.0
 
                                                   ▢ CONTEXT       ← Ctrl+1
                                                   ◆ MEMORY        ← Ctrl+2

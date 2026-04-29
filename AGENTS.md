@@ -190,4 +190,4 @@ Required crops gate against committed approved runtime goldens. Bible diffs rema
 
 `test/integration/` spawns a real Pi inside a `node-pty` PTY (see `spawn-pi-pty.ts`). These tests verify things that cannot be trusted to unit tests alone: altscreen cleanup on signal, mouse scroll routing, cursor visibility, editor boundary behavior, splash centering, and slash-command dispatch.
 
-Keep PTY integration tests as smoke/contract tests. Prefer unit/headless tests for detailed behavior where possible.
+Keep PTY integration tests as smoke/contract tests. Prefer unit/headless tests for detailed behavior where possible. For retained renderer behavior, use `src/sumo-tui/testing/test-backend.ts` and read `docs/SUMO_TUI_TEST_BACKEND.md`.

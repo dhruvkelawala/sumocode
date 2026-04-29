@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-// Element 12 — Task tool (sub-agent) UI.
-// Per CATHEDRAL_UX_SPEC_V2.md §3.12. Nested tool pill in chat showing
-// sub-agent state.
+// Element 12 — Scroll + scribe delegated-work UI.
+// The underlying Pi tool may still be called task, but the runtime UI presents
+// delegated sub-agent work as a written scroll assigned to a scribe.
 
 import { writeFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
@@ -18,43 +18,39 @@ const padRight = (s, n) => {
 	return need > 0 ? s + rep(" ", need) : s;
 };
 
-function buildTaskTool({ cols, taskName, model, thinking, childCalls, tokensIn, tokensOut, elapsed, status }) {
+const STATE_GLYPH = { ok: "\u2713", running: "\u25b6", failed: "\u2717" };
+const STATE_CLASS = { ok: "fg-idle", running: "fg-tool", failed: "fg-approve" };
+const STATE_LABEL = { ok: "done", running: "running", failed: "failed" };
+
+function buildScroll({ cols, title, model, thinking, calls, tokensIn, tokensOut, elapsed, status }) {
 	const rows = [];
-	const innerCols = cols - 4;
 
-	const STATE_GLYPH = { ok: "\u2713", running: "\u25b6", failed: "\u2717" };
-	const STATE_CLASS = { ok: "fg-idle", running: "fg-tool", failed: "fg-approve" };
-
-	// Outer pill: ━━━ [task] <name> ━━━━ status
-	const left = `[task]  ${taskName}`;
-	const leftLen = left.length;
-	const rightStr = status === "running" ? "▶ running" : `${STATE_GLYPH[status]} done`;
-	const rightLen = rightStr.length;
-	const dashes = cols - 10 - leftLen - rightLen;
+	// Outer framed pill: ━━━ [scroll] <title> ━━━ ▶ running
+	const left = `[scroll]  ${title}`;
+	const right = `${STATE_GLYPH[status]} ${STATE_LABEL[status]}`;
+	const dashes = cols - 10 - left.length - right.length;
 	rows.push(
 		`<span class="fg-divider">\u2501\u2501\u2501</span> ` +
-		`<span class="fg-accent">[task]</span>` +
-		`<span class="fg-fg">  ${taskName}</span>` +
+		`<span class="fg-accent">[scroll]</span>` +
+		`<span class="fg-fg">  ${title}</span>` +
 		` <span class="fg-divider">${rep("\u2501", Math.max(3, dashes))}</span> ` +
 		`<span class="fg-divider">\u2501\u2501\u2501</span> ` +
 		`<span class="${STATE_CLASS[status]}">${STATE_GLYPH[status]}</span> ` +
-		`<span class="fg-fg">${status === "running" ? "running" : "done"}</span>`,
+		`<span class="fg-fg">${STATE_LABEL[status]}</span>`,
 	);
 	rows.push("");
 
-	// Inner box: ┌ child agent · model · thinking ─┐
+	// Inner ledger: the scribe owns nested tool calls and token accounting.
 	const innerWidth = cols - 6;
-	const childTitle = `child agent \u00b7 ${model} \u00b7 ${thinking}`;
-	const titleLen = childTitle.length;
-	const innerDashes = innerWidth - titleLen - 4;
+	const scribeTitle = `scribe \u00b7 ${model} \u00b7 ${thinking}`;
+	const innerDashes = innerWidth - scribeTitle.length - 4;
 	rows.push(
 		`   <span class="fg-divider">\u250c </span>` +
-		`<span class="fg-dim">${childTitle}</span>` +
-		` <span class="fg-divider">${rep("\u2500", innerDashes)}</span>`,
+		`<span class="fg-dim">${scribeTitle}</span>` +
+		` <span class="fg-divider">${rep("\u2500", Math.max(3, innerDashes))}</span>`,
 	);
 
-	// child calls
-	for (const call of childCalls) {
+	for (const call of calls) {
 		const glyph = STATE_GLYPH[call.state] || "\u00b7";
 		const glyphClass = STATE_CLASS[call.state] || "fg-dim";
 		rows.push(
@@ -70,10 +66,7 @@ function buildTaskTool({ cols, taskName, model, thinking, childCalls, tokensIn, 
 		`   <span class="fg-divider">\u2502</span> ` +
 		`<span class="fg-dim">Tokens: \u2191${tokensIn} \u2193${tokensOut} \u00b7 ${elapsed} elapsed</span>`,
 	);
-
-	rows.push(
-		`   <span class="fg-divider">\u2514${rep("\u2500", innerWidth)}</span>`,
-	);
+	rows.push(`   <span class="fg-divider">\u2514${rep("\u2500", innerWidth)}</span>`);
 
 	return rows.map((r) => padRight(r, cols)).join("\n");
 }
@@ -106,16 +99,16 @@ const COLS = 130;
 
 const variants = [
 	{
-		filename: "12-task-running.html",
-		title: "Bible · Element 12 · Task tool · running",
-		label: "element 12 · task tool · sub-agent running · 130×8",
-		blurb: "outer task pill + inner sub-agent box. tools indented inside frame. shows live token counts + elapsed.",
+		filename: "12-scroll-running.html",
+		title: "Bible · Element 12 · scroll + scribe · running",
+		label: "element 12 · [scroll] + scribe running · 130×10",
+		blurb: "delegated work appears as a scroll assigned to a scribe. nested tool calls stay indented inside the scribe ledger.",
 		spec: {
-			taskName: "refactor auth flow into smaller modules",
+			title: "refactor auth flow into smaller modules",
 			model: "gpt-5.5",
 			thinking: "medium",
 			status: "running",
-			childCalls: [
+			calls: [
 				{ name: "read", target: "src/auth.ts", state: "ok" },
 				{ name: "edit", target: "src/auth.ts", state: "ok" },
 				{ name: "edit", target: "src/auth-helpers.ts", state: "ok" },
@@ -127,16 +120,16 @@ const variants = [
 		},
 	},
 	{
-		filename: "12-task-done.html",
-		title: "Bible · Element 12 · Task tool · done",
-		label: "element 12 · task tool · sub-agent completed · 130×8",
-		blurb: "after sub-agent completes. all tool calls ✓, outer pill turns ✓ done.",
+		filename: "12-scroll-done.html",
+		title: "Bible · Element 12 · scroll + scribe · done",
+		label: "element 12 · [scroll] + scribe done · 130×9",
+		blurb: "after the scribe completes. all nested tool calls ✓, outer scroll marks ✓ done.",
 		spec: {
-			taskName: "audit imports across all .ts files",
+			title: "audit imports across all .ts files",
 			model: "claude-haiku-4-5",
 			thinking: "low",
 			status: "ok",
-			childCalls: [
+			calls: [
 				{ name: "bash", target: "find . -name '*.ts'", state: "ok" },
 				{ name: "read", target: "(247 files in batches)", state: "ok" },
 				{ name: "write", target: "/tmp/import-audit.txt", state: "ok" },
@@ -149,7 +142,7 @@ const variants = [
 ];
 
 for (const v of variants) {
-	const content = buildTaskTool({ cols: COLS, ...v.spec });
+	const content = buildScroll({ cols: COLS, ...v.spec });
 	const rows = content.split("\n").length;
 	writeFileSync(resolve(out, v.filename), htmlPage({ ...v, cols: COLS, content, rows }));
 	console.log(`wrote ${v.filename}  (${COLS}\u00d7${rows})`);

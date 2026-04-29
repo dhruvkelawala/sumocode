@@ -7,7 +7,7 @@
 // exact terminal mockups without page chrome.
 
 import { spawnSync } from "node:child_process";
-import { readdirSync, mkdirSync, existsSync } from "node:fs";
+import { readdirSync, mkdirSync, existsSync, statSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -22,6 +22,43 @@ if (!existsSync(bibleDir)) {
 	process.exit(1);
 }
 mkdirSync(renderDir, { recursive: true });
+
+const generators = [
+	"scripts/gen-bible-element-1-explorations.mjs",
+	"scripts/gen-bible-element-1.mjs",
+	"scripts/gen-bible-element-2.mjs",
+	"scripts/gen-bible-element-3.mjs",
+	"scripts/gen-bible-element-4.mjs",
+	"scripts/gen-bible-element-5.mjs",
+	"scripts/gen-bible-element-6.mjs",
+	"scripts/gen-bible-element-7.mjs",
+	"scripts/gen-bible-element-8.mjs",
+	"scripts/gen-bible-element-8-explorations.mjs",
+	"scripts/gen-bible-element-9.mjs",
+	"scripts/gen-bible-element-skill.mjs",
+	"scripts/gen-bible-element-10.mjs",
+	"scripts/gen-bible-element-11.mjs",
+	"scripts/gen-bible-element-12.mjs",
+	"scripts/gen-bible-element-13-explorations.mjs",
+	"scripts/gen-bible-scene-active.mjs",
+	"scripts/gen-bible-scenes.mjs",
+];
+
+console.log("[render-bible] regenerating HTML mockups");
+for (const generator of generators) {
+	const result = spawnSync(process.execPath, [generator], {
+		cwd: repoRoot,
+		encoding: "utf8",
+		stdio: "pipe",
+	});
+	if (result.status !== 0) {
+		console.error(`\n[render-bible] generator failed: ${generator}`);
+		if (result.stdout) console.error(result.stdout.trim());
+		if (result.stderr) console.error(result.stderr.trim());
+		process.exit(result.status ?? 1);
+	}
+}
+console.log("");
 
 const htmls = readdirSync(bibleDir)
 	.filter((n) => n.endsWith(".html") && !n.startsWith("_"))
@@ -74,4 +111,16 @@ if (failed > 0) {
 	console.error(`${failed}/${htmls.length} failed (${total}s)`);
 	process.exit(1);
 }
+
+const missing = [];
+for (const html of htmls) {
+	const png = resolve(renderDir, html.replace(/\.html$/, ".png"));
+	if (!existsSync(png) || statSync(png).size === 0) missing.push(png);
+}
+if (missing.length > 0) {
+	console.error(`Missing/empty rendered PNGs after render:`);
+	for (const png of missing) console.error(`  ${png}`);
+	process.exit(1);
+}
+
 console.log(`All ${htmls.length} rendered in ${total}s`);

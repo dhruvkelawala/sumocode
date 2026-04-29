@@ -33,15 +33,25 @@ function listMockups() {
 
 function indexHTML() {
 	const mockups = listMockups();
-	// Group by element number
+	// Group by element number, plus explicit non-element groups.
 	const groups = new Map();
 	for (const m of mockups) {
-		const n = m.match(/^(\d+)/)?.[1] ?? "??";
-		if (!groups.has(n)) groups.set(n, []);
-		groups.get(n).push(m);
+		const key = m.startsWith("scene-") ? "scene" : m.startsWith("skill-") ? "skill" : (m.match(/^(\d+)/)?.[1] ?? "misc");
+		if (!groups.has(key)) groups.set(key, []);
+		groups.get(key).push(m);
 	}
 
+	const groupOrder = (n) => {
+		if (/^\d+$/.test(n)) return Number(n);
+		if (n === "skill") return 9.5;
+		if (n === "scene") return 99;
+		return 100;
+	};
+
 	const elementName = (n) => ({
+		"skill": "Skill pill",
+		"scene": "Scene compositions",
+		"misc": "Misc",
 		"01": "Sidebar",
 		"02": "Top bar",
 		"03": "Splash",
@@ -53,30 +63,35 @@ function indexHTML() {
 		"09": "Tool pills",
 		"10": "Code blocks",
 		"11": "DIVINE QUERY",
-		"12": "Task tool",
+		"12": "Scroll + scribe",
 		"13": "Chat messages",
 	})[n] ?? "Unnamed";
 
 	const sections = [...groups.entries()]
-		.sort(([a], [b]) => a.localeCompare(b))
+		.sort(([a], [b]) => groupOrder(a) - groupOrder(b) || a.localeCompare(b))
 		.map(([n, files]) => {
 			const cards = files
 				.map((f) => {
 					const label = f
 						.replace(/\.html$/, "")
 						.replace(/^\d+-/, "")
+						.replace(/^scene-/, "scene · ")
+						.replace(/^skill-/, "skill · ")
 						.replace(/-/g, " ");
-					const png = `/bible/renders/${f.replace(/\.html$/, ".png")}`;
+					const pngFile = join(root, "renders", f.replace(/\.html$/, ".png"));
+					const version = existsSync(pngFile) ? `?v=${Math.round(statSync(pngFile).mtimeMs)}` : "";
+					const png = `/bible/renders/${f.replace(/\.html$/, ".png")}${version}`;
 				return `      <a class="card" href="/bible/${f}">
         <div class="card-frame">
-          <img src="${png}" alt="${label}" loading="lazy">
+          <img src="${png}" alt="${label}" loading="lazy" onerror="this.closest('.card').classList.add('missing')">
         </div>
         <div class="card-label">${label}</div>
       </a>`;
 				})
 				.join("\n");
+			const heading = /^\d+$/.test(n) ? `Element ${n} · ${elementName(n)}` : elementName(n);
 			return `    <section>
-      <h2>Element ${n} · ${elementName(n)}</h2>
+      <h2>${heading}</h2>
       <div class="grid">
 ${cards}
       </div>
@@ -107,8 +122,11 @@ ${cards}
   .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; margin-top: 12px; }
   .card { display: block; background: var(--surface); border: 1px solid var(--divider); padding: 0; text-decoration: none; color: var(--fg); transition: border-color 120ms; overflow: hidden; }
   .card:hover { border-color: var(--accent); }
+  .card.missing { border-color: #C1443E; }
   .card-frame { background: var(--bg); display: flex; align-items: center; justify-content: center; padding: 8px; height: 140px; overflow: hidden; }
   .card-frame img { max-width: 100%; max-height: 100%; height: auto; display: block; image-rendering: pixelated; object-fit: contain; }
+  .card.missing .card-frame::after { content: 'PNG MISSING — run pnpm render:bible'; color: #C1443E; font-size: 10px; letter-spacing: 0.08em; text-align: center; }
+  .card.missing img { display: none; }
   .card-label { padding: 6px 10px; border-top: 1px solid var(--divider); font-size: 9px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--fg-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
   .meta { color: var(--fg-dim); font-size: 10px; letter-spacing: 0.05em; margin: 0 0 4px; }
@@ -129,7 +147,12 @@ const server = createServer((req, res) => {
 	// Strip /bible prefix if served via tailscale --set-path
 	if (path.startsWith("/bible")) path = path.slice(6);
 	if (path === "" || path === "/") {
-		res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+		res.writeHead(200, {
+			"Content-Type": "text/html; charset=utf-8",
+			"Cache-Control": "no-store, max-age=0, must-revalidate",
+			"Pragma": "no-cache",
+			"Expires": "0",
+		});
 		res.end(indexHTML());
 		return;
 	}
@@ -156,7 +179,12 @@ const server = createServer((req, res) => {
 	}
 
 	const mime = MIME[extname(filePath)] ?? "application/octet-stream";
-	res.writeHead(200, { "Content-Type": mime, "Cache-Control": "no-cache" });
+	res.writeHead(200, {
+		"Content-Type": mime,
+		"Cache-Control": "no-store, max-age=0, must-revalidate",
+		"Pragma": "no-cache",
+		"Expires": "0",
+	});
 	res.end(readFileSync(filePath));
 });
 

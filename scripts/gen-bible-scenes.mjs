@@ -65,9 +65,9 @@ const scenes = [
 	{
 		filename: "scene-palette-overlay.html",
 		base: "scene-active.html",
-		modal: "08-palette-default.html",
-		label: "scene · active + Ctrl+/ palette overlay · 160×45",
-		blurb: "command palette opened. centered modal over chat + sidebar. drill-down on Enter opens sub-overlay.",
+		modal: "08-palette-v2-scriptorium.html",
+		label: "scene · active + Scriptorium command palette overlay · 160×45",
+		blurb: "locked command palette opened. centered Scriptorium overlay over chat + sidebar with floral title marks and ❈ focused row.",
 	},
 	{
 		filename: "scene-divine-query-overlay.html",
@@ -75,6 +75,13 @@ const scenes = [
 		modal: "11-divine-query-rename.html",
 		label: "scene · active + DIVINE QUERY overlay · 160×45",
 		blurb: "DIVINE QUERY (Pi ask/confirm) centered over active scene. user picks via arrow keys + Enter.",
+	},
+	{
+		filename: "scene-memory-scriptorium-overlay.html",
+		base: "scene-active.html",
+		modal: "07-memory-editor.html",
+		label: "scene · active + MEMORY SCRIPTORIUM overlay · 160×45",
+		blurb: "Memory Scriptorium opened from active chat. Tests the six-panel memory editor over the full Cathedral shell.",
 	},
 ];
 

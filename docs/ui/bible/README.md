@@ -10,7 +10,7 @@ renders pixel-by-pixel modulo font-hinting tolerance.
 pnpm render:bible
 ```
 
-Renders all `*.html` mockups via Playwright + chromium → PNG in `renders/`.
+Regenerates all scripted HTML mockups, then renders every `*.html` via Playwright + chromium → PNG in `renders/`.
 
 ## Naming convention
 
@@ -43,10 +43,11 @@ invisible. The bible uses `--divider-mockup: #5A4D3C` (3:1 contrast) for
 legibility WHILE THE RUNTIME PALETTE STAYS LOCKED. This is a design
 viewing-context adjustment, not a palette change.
 
-## Element coverage
+## Element + scene coverage
 
-See `CATHEDRAL_UX_SPEC_V2.md` for the spec. 13 elements × ~2 dimension
-variants × 2-3 states each = ~50-70 mockups when complete.
+See `CATHEDRAL_UX_SPEC_V2.md` for the spec. The bible contains standalone element mockups plus full-scene compositions that combine locked elements in the actual Cathedral shell.
+
+Current harness: **88 mockups** rendered by `pnpm render:bible`.
 
 | Element | Status | Mockups |
 |---|---|---|
@@ -61,8 +62,10 @@ variants × 2-3 states each = ~50-70 mockups when complete.
 | 9 — Tool pills | TODO | |
 | 10 — Code blocks | TODO | |
 | 11 — DIVINE QUERY | TODO | |
-| 12 — Task tool | TODO | |
+| **12 — Scroll + scribe** | ✅ LOCKED | running + done (2) |
 | **13 — Chat messages** | ✅ LOCKED | default (7A refined rounded) + portrait + 2 alts (sharp, dual) (4) |
+| **Skill pill** | ✅ LOCKED | inline default + rejected alts (3) |
+| **Scene compositions** | ✅ ACTIVE | active landscape/portrait, tool ledger, bash live-view, code block, skill pill, scroll/scribe, approval overlay, Divine Query overlay, memory overlay, palette overlay (11) |
 
 ## Locked decisions summary
 
@@ -91,6 +94,32 @@ variants × 2-3 states each = ~50-70 mockups when complete.
 - Right zone: `<project> (<branch>) · <ctx>/<window> · $<cost>`
 - Width handling: collapse right-to-left at narrow (drop project, branch, $cost progressively)
 - Splash variant: dim version line (`SUMOCODE V0.2.0 · CATHEDRAL · 160 × 45 MONOSPACE`) below footer, splash only
+
+### Scene compositions + harness
+- `pnpm render:bible` now regenerates scripted HTML before rendering PNGs, so new/renamed element mockups cannot appear in the gallery without their PNG thumbnails.
+- `scripts/bible-server.mjs` groups non-element mockups into **Skill pill** and **Scene compositions** sections instead of `Element ??`.
+- Gallery image URLs include a render-time cache-buster (`?v=<png-mtime>`), so browsers recover from previously-missing thumbnails after re-render.
+- Missing thumbnails show an explicit `PNG MISSING — run pnpm render:bible` card state.
+- Current scene files:
+  - `scene-active.html`
+  - `scene-active-portrait.html`
+  - `scene-active-tool-ledger.html`
+  - `scene-active-bash-live-view.html`
+  - `scene-active-code-block.html`
+  - `scene-active-skill-pill.html`
+  - `scene-active-scroll-scribe.html`
+  - `scene-approval-overlay.html`
+  - `scene-divine-query-overlay.html`
+  - `scene-memory-scriptorium-overlay.html`
+  - `scene-palette-overlay.html`
+
+### Element 12 — Scroll + scribe delegated work
+- LOCKED: underlying task/sub-agent work renders as `[scroll]` assigned to a `scribe`
+- `[scroll]` is the visible outer tool tag; `scribe` is the nested actor label
+- Avoid `child agent` in UI; avoid visible `[task]` except developer docs for Pi internals
+- Outer framed pill matches Element 9 (`━━━ [scroll] ... ━━━ ▶ running`)
+- Inner ledger shows `scribe · model · thinking`, nested tool calls, token counts, elapsed time
+- Completion/failure use clear state labels: `✓ done`, `✗ failed`
 
 ### Element 13 — Chat messages
 - LOCKED: closed-frame boxes with rounded corners `╭─╮ │ │ ╰─╯`

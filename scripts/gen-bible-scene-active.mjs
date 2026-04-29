@@ -126,6 +126,33 @@ function buildChatHTML(cols, toolStyle = "inline") {
 		];
 	}
 
+	if (toolStyle === "skill") {
+		messages = [
+			{ role: "USER", body: "use the frontend-design skill and sketch the command palette polish plan." },
+			{ role: "SUMO", time: "11:45", body: "Loading the design skill and keeping it inline, Pi-minimal, and non-decorative.", skill: "frontend-design", footer: "I’ll apply the skill guidance to the Scriptorium palette without changing the locked interaction model." },
+		];
+	}
+
+	if (toolStyle === "scroll") {
+		messages = [
+			{ role: "USER", body: "delegate a focused pass to inspect the renderer crash and report back." },
+			{ role: "SUMO", time: "11:46", body: "I’m assigning this as a scroll so the scribe can inspect independently and return the summary.", scroll: {
+				title: "inspect renderer crash at 40 columns",
+				model: "gpt-5.5",
+				thinking: "medium",
+				status: "running",
+				calls: [
+					{ name: "read", target: "src/sumo-tui/render/compositor.ts", state: "ok" },
+					{ name: "read", target: "src/sumo-tui/render/buffer.ts", state: "ok" },
+					{ name: "bash", target: "pnpm test src/sumo-tui/render", state: "running" },
+				],
+				tokensIn: "6k",
+				tokensOut: "1.1k",
+				elapsed: "18s",
+			} },
+		];
+	}
+
 	function wrap(text, w) {
 		const words = text.split(/\s+/);
 		const lines = [];
@@ -185,6 +212,48 @@ function buildChatHTML(cols, toolStyle = "inline") {
 				rows.push(bodyRow(rowHTML, codeInner));
 			}
 			rows.push(bodyRow(`<span class="fg-divider">╰${rep("─", codeInner - 2)}╯</span>`, codeInner));
+		}
+
+		if (msg.skill) {
+			rows.push(blankRow());
+			const skillHTML = `<span class="fg-accent">[skill]</span><span class="fg-fg"> ${msg.skill}</span> <span class="fg-dim">(⌘O to expand)</span>`;
+			rows.push(bodyRow(skillHTML, visibleLen(skillHTML)));
+		}
+
+		if (msg.scroll) {
+			rows.push(blankRow());
+			const stateGlyph = { ok: "✓", running: "▶", failed: "✗" }[msg.scroll.status];
+			const stateClass = { ok: "fg-idle", running: "fg-tool", failed: "fg-approve" }[msg.scroll.status];
+			const stateLabel = { ok: "done", running: "running", failed: "failed" }[msg.scroll.status];
+			const left = `[scroll]  ${msg.scroll.title}`;
+			const right = `${stateGlyph} ${stateLabel}`;
+			const dashCount = innerCols - 10 - left.length - right.length;
+			const scrollTop =
+				`<span class="fg-divider">━━━</span> ` +
+				`<span class="fg-accent">[scroll]</span>` +
+				`<span class="fg-fg">  ${msg.scroll.title}</span>` +
+				` <span class="fg-divider">${rep("━", Math.max(3, dashCount))}</span> ` +
+				`<span class="fg-divider">━━━</span> ` +
+				`<span class="${stateClass}">${stateGlyph}</span> ` +
+				`<span class="fg-fg">${stateLabel}</span>`;
+			rows.push(bodyRow(scrollTop, innerCols));
+			rows.push(blankRow());
+
+			const ledgerIndent = "   ";
+			const scribeTitle = `scribe · ${msg.scroll.model} · ${msg.scroll.thinking}`;
+			const ledgerTopPlain = `${ledgerIndent}┌ ${scribeTitle} `;
+			const ledgerTop = `${ledgerIndent}<span class="fg-divider">┌ </span><span class="fg-dim">${scribeTitle}</span> <span class="fg-divider">${rep("─", Math.max(3, innerCols - ledgerTopPlain.length - 1))}</span>`;
+			rows.push(bodyRow(ledgerTop, visibleLen(ledgerTop)));
+			for (const call of msg.scroll.calls) {
+				const glyph = { ok: "✓", running: "▶", failed: "✗" }[call.state] ?? "·";
+				const glyphClass = { ok: "fg-idle", running: "fg-tool", failed: "fg-approve" }[call.state] ?? "fg-dim";
+				const callHTML = `${ledgerIndent}<span class="fg-divider">│</span> <span class="${glyphClass}">${glyph}</span> <span class="fg-accent">[${call.name}]</span><span class="fg-fg">  ${call.target}</span>`;
+				rows.push(bodyRow(callHTML, visibleLen(callHTML)));
+			}
+			rows.push(bodyRow(`${ledgerIndent}<span class="fg-divider">│</span>`, ledgerIndent.length + 1));
+			const tokenHTML = `${ledgerIndent}<span class="fg-divider">│</span> <span class="fg-dim">Tokens: ↑${msg.scroll.tokensIn} ↓${msg.scroll.tokensOut} · ${msg.scroll.elapsed} elapsed</span>`;
+			rows.push(bodyRow(tokenHTML, visibleLen(tokenHTML)));
+			rows.push(bodyRow(`${ledgerIndent}<span class="fg-divider">└${rep("─", innerCols - ledgerIndent.length - 1)}</span>`, innerCols));
 		}
 
 		if (msg.tools) {
@@ -384,7 +453,7 @@ function buildScene(variant) {
 <html>
 <head>
 <meta charset="utf-8">
-<title>Bible · Scene · Active ${cols}×${TERM_ROWS}${toolStyle === "ledger" ? " · Tool Ledger" : toolStyle === "live" ? " · Bash Live View" : toolStyle === "code" ? " · Code Block" : ""}</title>
+<title>Bible · Scene · Active ${cols}×${TERM_ROWS}${toolStyle === "ledger" ? " · Tool Ledger" : toolStyle === "live" ? " · Bash Live View" : toolStyle === "code" ? " · Code Block" : toolStyle === "skill" ? " · Skill Pill" : toolStyle === "scroll" ? " · Scroll + Scribe" : ""}</title>
 <link rel="stylesheet" href="_assets/tokens.css">
 <style>
   .stage-blurb { max-width: ${Math.max(60, CHAT_COLS)}ch; color: var(--foreground-dim); font-size: 11px; line-height: 1.6; padding: 0 8px; text-align: center; }
@@ -396,14 +465,18 @@ function buildScene(variant) {
 </head>
 <body>
 <div class="stage">
-  <div class="stage-label">${toolStyle === "ledger" ? "scene · active state + ledger tool cards" : toolStyle === "live" ? "scene · active state + bash live-view card" : toolStyle === "code" ? "scene · active state + code block in SUMO chat" : `scene · active state · ${cols}×${TERM_ROWS} ${sidebarVisible ? "landscape" : "portrait (sidebar hidden)"}`}</div>
+  <div class="stage-label">${toolStyle === "ledger" ? "scene · active state + ledger tool cards" : toolStyle === "live" ? "scene · active state + bash live-view card" : toolStyle === "code" ? "scene · active state + code block in SUMO chat" : toolStyle === "skill" ? "scene · active state + inline skill pill" : toolStyle === "scroll" ? "scene · active state + scroll/scribe delegation" : `scene · active state · ${cols}×${TERM_ROWS} ${sidebarVisible ? "landscape" : "portrait (sidebar hidden)"}`}</div>
   <div class="stage-blurb">${toolStyle === "ledger"
 		? "Option 3A preview for Element 9: tool calls render as nested ledger cards inside the SUMO message box. Tests vertical rhythm, containment, and density in the full active scene."
 		: toolStyle === "live"
 			? "Option 3B preview inspired by lucasmeijer/pi-bash-live-view: bash renders as a live PTY viewport card with elapsed timer; non-bash tools remain compact."
 			: toolStyle === "code"
 				? "Element 10 preview in context: a framed, line-numbered TypeScript code block embedded inside a SUMO chat message."
-				: sidebarVisible
+				: toolStyle === "skill"
+					? "Element 9a preview in context: Pi-minimal inline skill pill inside a SUMO chat message, with no decorative frame."
+					: toolStyle === "scroll"
+						? "Element 12 preview in context: delegated work appears as a [scroll] with a nested scribe ledger inside the SUMO chat frame."
+						: sidebarVisible
 			? "first scene composition: combines all 5 locked elements (top-bar placeholder, sidebar V2 editorial CONTEXT, chat boxed 7A, input frame, footer READY). validates the full visual gestalt before adding remaining elements."
 			: "portrait variant. sidebar hidden (per Element 1 rule: < 120 col). chat takes full term width. footer collapses right zone (drops project + branch + $cost; keeps tokens). hint row: keybinds only (left flavour dropped at narrow widths)."}</div>
   <div data-render-rect class="term scene" style="--term-cols: ${cols}; --term-rows: ${TERM_ROWS};">
@@ -432,6 +505,8 @@ for (const v of [
 	{ filename: "scene-active-tool-ledger.html", spec: { ...LANDSCAPE, toolStyle: "ledger" } },
 	{ filename: "scene-active-bash-live-view.html", spec: { ...LANDSCAPE, toolStyle: "live" } },
 	{ filename: "scene-active-code-block.html", spec: { ...LANDSCAPE, toolStyle: "code" } },
+	{ filename: "scene-active-skill-pill.html", spec: { ...LANDSCAPE, toolStyle: "skill" } },
+	{ filename: "scene-active-scroll-scribe.html", spec: { ...LANDSCAPE, toolStyle: "scroll" } },
 ]) {
 	writeFileSync(resolve(out, v.filename), buildScene(v.spec));
 	console.log(`wrote ${v.filename}  (${v.spec.cols}\u00d7${v.spec.rows})`);

@@ -2,7 +2,7 @@
 <html>
 <head>
 <meta charset="utf-8">
-<title>Bible · Scene · scene · active + Ctrl+/ palette overlay · 160×45</title>
+<title>Bible · Scene · scene · active + Scriptorium command palette overlay · 160×45</title>
 <link rel="stylesheet" href="_assets/tokens.css">
 <style>
   .stage-blurb { max-width: 128ch; color: var(--foreground-dim); font-size: 11px; line-height: 1.6; padding: 0 8px; text-align: center; }
@@ -14,10 +14,10 @@
 </head>
 <body>
 <div class="stage">
-  <div class="stage-label">scene · active + Ctrl+/ palette overlay · 160×45</div>
-  <div class="stage-blurb">command palette opened. centered modal over chat + sidebar. drill-down on Enter opens sub-overlay.</div>
+  <div class="stage-label">scene · active + Scriptorium command palette overlay · 160×45</div>
+  <div class="stage-blurb">locked command palette opened. centered Scriptorium overlay over chat + sidebar with floral title marks and ❈ focused row.</div>
   <div data-render-rect class="term scene" style="--term-cols: 160; --term-rows: 45;">
-    <pre class="grid" style="grid-row: 1;"> <span class="fg-accent">SUMOCODE</span><span class="fg-dim">  ║ ● 019dd3d8 ║</span>                                                                                                                        <span class="fg-dim">ARCHIVE   </span><span class="fg-fg"></span><span class="fg-dim">  </span><span class="fg-fg"></span> </pre>
+    <pre class="grid" style="grid-row: 1;"> <span class="fg-accent">SUMOCODE</span><span class="fg-dim">  ║ </span><span class="fg-accent">•</span><span class="fg-dim"> 019dd3d8 ║</span>                                                                                                                        <span class="fg-dim">ARCHIVE   </span><span class="fg-fg"></span><span class="fg-dim">  </span><span class="fg-fg"></span> </pre>
     <pre class="grid" style="grid-row: 2;"> </pre>
     <div class="middle">
       <div class="chat-col"><pre class="grid"><span class="fg-divider">╭ </span><span class="fg-fg">USER</span> <span class="fg-divider">────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────</span><span class="fg-divider">╮</span>
@@ -90,21 +90,21 @@
     <pre class="grid" style="grid-row: 6;">                                                                                                                                <span class="fg-dim">TAB · AGENTS  </span><span class="fg-accent">CTRL+/</span><span class="fg-dim"> · COMMANDS</span> </pre>
     <pre class="grid" style="grid-row: 7;"> </pre>
     <div class="modal-overlay" style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 10; box-shadow: 0 12px 40px rgba(0,0,0,0.6);"><pre class="grid" style="background: var(--surface-lifted)">                                                                                
-                                <span class="fg-accent">COMMAND PALETTE</span>                                 
+                             <span class="fg-accent">✾</span>  <span class="fg-accent">COMMAND PALETTE</span>  <span class="fg-accent">✾</span>                              
                                                                                 
-   <span class="fg-divider">──────────────────────────────────────────────────────────────────────────</span>   
+               <span class="fg-divider">──────────────────────</span>  <span class="fg-divider">·</span>  <span class="fg-divider">──────────────────────</span>                
                                                                                 
-   <span class="fg-divider">│</span> <span class="fg-dim">search…</span>                                                               <span class="fg-divider">│</span>   
+     <span class="fg-accent">❯</span>  <span class="cursor"> </span><span class="fg-dim">what shall we attend to…</span>                                               
                                                                                 
-     <span class="fg-fg">SESSION</span>     <span class="fg-dim">▶ CURRENT: auth-flow-refactor</span>                                  
-   <span class="cursor"> </span><span class="fg-fg" style="background: var(--accent); color: var(--background);">  MODEL       ▶ CURRENT: claude-opus-4-7                                </span><span class="cursor"> </span>    
-     <span class="fg-fg">THINKING</span>    <span class="fg-dim">▶ CURRENT: xhigh</span>                                               
-     <span class="fg-fg">MEMORY</span>      <span class="fg-dim">▶ 55 FACTS</span>                                                     
-     <span class="fg-fg">THEME</span>       <span class="fg-dim">▶ CURRENT: cathedral</span>                                           
-     <span class="fg-fg">SETTINGS</span>                                                                   
+     <span class="fg-divider">·</span>   <span class="fg-dim">SESSION</span>                                         <span class="fg-dim">auth-flow-refactor</span>     
+     <span class="fg-accent">❈</span>   <span class="fg-fg">MODEL</span>                                              <span class="fg-fg">claude-opus-4-7</span>     
+     <span class="fg-divider">·</span>   <span class="fg-dim">THINKING</span>                                                     <span class="fg-dim">xhigh</span>     
+     <span class="fg-divider">·</span>   <span class="fg-dim">MEMORY</span>                                                    <span class="fg-dim">55 facts</span>     
+     <span class="fg-divider">·</span>   <span class="fg-dim">THEME</span>                                                    <span class="fg-dim">cathedral</span>     
+     <span class="fg-divider">·</span>   <span class="fg-dim">SETTINGS</span>                                                               
                                                                                 
-   <span class="fg-divider">──────────────────────────────────────────────────────────────────────────</span>   
-                     <span class="fg-dim">↑↓ navigate    ⏎  select    esc  close</span>                     
+               <span class="fg-divider">──────────────────────</span>  <span class="fg-divider">·</span>  <span class="fg-divider">──────────────────────</span>                
+                       <span class="fg-dim">↑↓ wander    ⏎ attend    ⎋ retreat</span>                       
                                                                                 </pre></div>
     <pre class="grid" style="grid-row: 8;"> <span class="fg-idle">●</span> <span class="fg-fg">READY</span><span class="fg-dim"> · </span><span class="fg-fg">claude-opus-4-7</span><span class="fg-dim"> · </span><span class="fg-fg">xhigh</span>                                                                                                             <span class="fg-fg">42k/200k</span><span class="fg-dim"> · </span><span class="fg-fg">$0.42</span> </pre>
   </div>

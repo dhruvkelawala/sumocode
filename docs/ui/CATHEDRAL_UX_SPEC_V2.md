@@ -26,7 +26,7 @@
 | 9a | Skill pill | NEW — Pi inline skill notice, cathedral-colored | new |
 | 10 | Code blocks | Pi default + theme only — needs full frame + gutter | new |
 | 11 | Question/Confirm UI (DIVINE QUERY) | NEW — Pi default ugly, needs cathedral modal | new |
-| 12 | Task tool sub-agent UI | NEW — task_tool works under hood, UI broken | new |
+| 12 | Scroll + scribe delegated-work UI | LOCKED — underlying task_tool rendered as `[scroll]` + `scribe` | locked |
 | 13 | Chat message rendering | NEW — current `Sumo > ...` is barebone, needs framing | new |
 
 ### Out of scope (for v1)
@@ -748,33 +748,44 @@ Width: 60% of terminal, min 50, max 80. Centered.
 
 ---
 
-### Element 12 — Task tool sub-agent UI
+### Element 12 — Scroll + scribe delegated-work UI
 
-**NEW.** task_tool extension works under the hood; UI broken or missing.
+**LOCKED 2026-04-29**: the underlying Pi task/sub-agent tool renders as a themed `[scroll]` assigned to a `scribe`.
 
-**Mockup**: forthcoming `v4/12-task-tool-progress.png`.
+**Mockups**:
+- `docs/ui/bible/12-scroll-running.html`
+- `docs/ui/bible/12-scroll-done.html`
 
-**Investigation task**: triage `dhruvkelawala/sumocode#11` to confirm what's actually broken.
+**Investigation task**: triage `dhruvkelawala/sumocode#11` to confirm what's actually broken in the existing task tool UI.
 
-**Proposed v1 UX**: nested tool pill in chat showing sub-agent state.
+**Locked v1 UX**: nested tool pill in chat showing delegated-work state.
 
 ```
-━━━ [task]  refactor auth flow into smaller modules        ━━━ ▶ running
+━━━ [scroll]  refactor auth flow into smaller modules        ━━━ ▶ running
 
-   ┌ child agent · gpt-5.5 · medium ─────────────────
-   │ [read]  src/auth.ts                          ✓
-   │ [edit]  src/auth.ts                          ✓
-   │ [edit]  src/auth-helpers.ts                  ✓
-   │ [bash]  pnpm test src/auth                   ▶
+   ┌ scribe · gpt-5.5 · medium ─────────────────
+   │ ✓ [read]  src/auth.ts
+   │ ✓ [edit]  src/auth.ts
+   │ ✓ [edit]  src/auth-helpers.ts
+   │ ▶ [bash]  pnpm test src/auth
    │
    │ Tokens: ↑8k ↓3k · 22s elapsed
    └─────────────────────────────────────────────
 ```
 
-- Outer `━━━ [task]` framing matches Element 9
-- Inner `┌─┐│└─┘` framing showing sub-agent's tool calls indented
-- Sub-agent state line at bottom of inner frame: model, thinking, tokens, elapsed time
-- On sub-agent done: outer pill marks `✓` + summary
+**Naming contract**:
+- Visible tool tag: `[scroll]`
+- Nested actor label: `scribe`
+- Avoid `child agent` in UI.
+- Avoid generic `[task]` in visible UI, except in developer docs when referring to Pi's underlying tool.
+
+**Visual contract**:
+- Outer `━━━ [scroll]` framing matches Element 9 framed tool pills.
+- Inner `┌ │ └` ledger frame shows the scribe's nested tool calls indented.
+- Nested tool calls reuse Element 9 compact pills (`✓ [read]`, `▶ [bash]`, etc.).
+- Scribe metadata line includes model + thinking; bottom ledger line includes tokens + elapsed time.
+- On completion: outer pill marks `✓ done`; on failure: outer pill marks `✗ failed` in approval color.
+- `Ctrl+O` expands/collapses the scroll details where Pi permits expansion; `Ctrl+E` keeps Pi's expand/collapse-all behavior.
 
 ---
 
@@ -923,7 +934,7 @@ Each message renders as a self-contained closed-frame box:
 - `primaryAgentName` controls the assistant identity label in chat message headers (`╭ ZEUS ─── 11:42 ─╮`).
 - Future implementation may also use `primaryAgentName` for footer/status prose and splash signature, but only where it refers to the agent/persona, not the product.
 - User message headers stay `USER`.
-- Tool names stay technical/product nouns (`[read]`, `[edit]`, `[mission]`, etc.) and are not affected by `primaryAgentName`.
+- Tool names stay technical/product nouns (`[read]`, `[edit]`, `[scroll]`, etc.) and are not affected by `primaryAgentName`.
 
 **Implementation note**:
 - Add a small SumoCode config loader (e.g. `src/config/sumocode-config.ts`) with deterministic lookup + schema validation.
@@ -966,6 +977,32 @@ User-perceived: 2-3s splash → active transition on `/resume`. Must be < 500ms.
 | #72 | Crash at 40-col width | HIGH — Element 1 + footer width handling |
 | #73 | Skill-conflict banner cosmetic | LOW |
 
+### 6.6 Visual Bible scene compositions + render harness
+
+**LOCKED 2026-04-29**: the Cathedral Visual Bible is not only a standalone element library. It also owns scene compositions that combine locked elements inside the full shell before runtime implementation begins.
+
+**Harness contract**:
+- `pnpm render:bible` regenerates scripted HTML mockups before rendering PNGs.
+- Rendered PNGs live in `docs/ui/bible/renders/` and are gallery thumbnails plus future T2 golden-image inputs.
+- `scripts/bible-server.mjs` groups non-element pages into **Skill pill** and **Scene compositions** sections.
+- Gallery thumbnails include a PNG mtime cache-buster (`?v=<png-mtime>`) so a previously missing image reloads after re-render.
+- Missing thumbnails render an explicit `PNG MISSING — run pnpm render:bible` card state.
+
+**Current scene set**:
+- `scene-active.html` — full shell active state
+- `scene-active-portrait.html` — full shell portrait/no-sidebar state
+- `scene-active-tool-ledger.html` — Element 9 ledger cards in chat
+- `scene-active-bash-live-view.html` — future live bash card in chat
+- `scene-active-code-block.html` — Element 10 code block in chat
+- `scene-active-skill-pill.html` — Element 9a skill pill in chat
+- `scene-active-scroll-scribe.html` — Element 12 scroll/scribe delegation in chat
+- `scene-approval-overlay.html` — Element 6 approval modal over active shell
+- `scene-divine-query-overlay.html` — Element 11 Divine Query over active shell
+- `scene-memory-scriptorium-overlay.html` — Element 7 Memory Scriptorium over active shell
+- `scene-palette-overlay.html` — Element 8 Scriptorium command palette over active shell
+
+**Latest render baseline**: 88 mockups rendered successfully.
+
 ---
 
 ## 7. Open follow-ups (researchable, not blocking v1)
@@ -1002,7 +1039,7 @@ Each row = one PR + one issue + visual approval.
 9. Element 9 tool pills: implement locked Hybrid Tool Ledger + compact pills for read/edit/write/bash
 9a. Element 9a skill pill: inline `[skill] name (⌘O to expand)` rendering inside SUMO boxes
 10. Element 10 code blocks: full frame + cathedral syntax colors + (optional) line gutter
-11. Element 12 task tool sub-agent UI
+11. Element 12 scroll + scribe delegated-work UI
 
 **Phase E — Element 6 + crosscut**:
 12. Element 6 approval modal: implement locked Scriptorium-danger hybrid + Pi default policy integration + `/yolo` slash
@@ -1037,9 +1074,11 @@ For the visual bible to lock and CI golden-image diff to engage:
 - [ ] Phase A (regressions) — 4 PRs, all green, visual approved
 - [ ] Phase B (chat + queries) — 2 PRs, all green, visual approved
 - [ ] Phase C (palette + top bar) — 2 PRs, all green, visual approved
-- [ ] Phase D (tool pills + skill pill + code + task) — 4 PRs, all green, visual approved
+- [ ] Phase D (tool pills + skill pill + code + scroll/scribe) — 4 PRs, all green, visual approved
 - [ ] Phase E (approvals + selection + perf + memory) — 4 PRs, all green, visual approved
 - [ ] All 13 elements + Element 9a skill pill have locked bible mockups committed before implementation
+- [ ] Scene compositions cover the full shell plus overlays for approvals, palette, Divine Query, memory, tools, skill pill, code blocks, and scroll/scribe delegation
+- [ ] `pnpm render:bible` regenerates HTML + renders all PNGs successfully before visual approval
 - [ ] T2 verification harness (golden-image diff) gates CI on every Phase A–E PR
 
 Phase F is post-acceptance polish.
@@ -1060,7 +1099,7 @@ From this grill session:
 - E9: tool pill cathedral framing
 - E10: code block frame + syntax audit
 - E11: DIVINE QUERY modal (NEW)
-- E12: task tool UI (NEW)
+- E12: scroll + scribe delegated-work UI (LOCKED)
 - E13: chat message framing (NEW)
 - Cross-cut: SumoCode config loader + `primaryAgentName`
 - Cross-cut: mouse selection + auto-copy
@@ -1072,5 +1111,5 @@ That's ~17 issues. Will file in batches as Phases proceed.
 
 ---
 
-*Last updated: 2026-04-28 · v2.0 · Direction: Cathedral.*
-*Next: build `CATHEDRAL_VISUAL_BIBLE.md` with mockups for all 13 elements, locked palette, locked layout. Then Phase A begins.*
+*Last updated: 2026-04-29 · v2.0 · Direction: Cathedral.*
+*Next: build `CATHEDRAL_VISUAL_BIBLE.md` cross-reference from the locked element + scene library. Then Phase A begins.*

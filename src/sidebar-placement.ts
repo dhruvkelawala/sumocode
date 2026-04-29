@@ -5,8 +5,9 @@ import { surfaceLine } from "./sumo-tui/cathedral/ansi.js";
 /**
  * Threshold below which the sidebar hides itself. Per DESIGN.md §8
  * (Responsive), the wide layout is ≥ 120 cols: chat + gutter + the locked
- * 30-column V2 editorial sidebar fit comfortably. Below this we collapse to chat-only and let
- * sidebar info come through `/sumo:memory` etc.
+ * 30-column V2 editorial sidebar fit comfortably. Below this — including the canonical
+ * 60x100 portrait runtime — V1 collapses to chat-only and lets sidebar info come
+ * through the hint/footer row plus `/sumo:memory` etc.
  */
 export const SIDEBAR_MIN_TERMINAL_WIDTH = 120;
 /** Render width for the V2 editorial sidebar (Bible Element 1). */
@@ -17,6 +18,10 @@ export type SidebarAnchor = "right-center" | "top-right" | "bottom-right";
 /**
  * Pick a sidebar anchor responsive to terminal aspect ratio. Override always
  * wins so per-machine `~/.sumocode/local-config.json` can pin a value.
+ *
+ * This is a legacy/future placement helper. V1 visibility is still width-gated
+ * by `SIDEBAR_MIN_TERMINAL_WIDTH`, so narrow portrait terminals do not show the
+ * sidebar even though this helper can describe a portrait anchor.
  */
 export function chooseSidebarAnchor(
 	termWidth: number,

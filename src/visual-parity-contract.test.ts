@@ -63,6 +63,13 @@ describe("V2 visual parity contract", () => {
 		expect(cropDefinition("sidebar")).toEqual({ x: 130, y: 3, cols: 30, rows: 34 });
 	});
 
+	it("keeps the V1 portrait runtime no-sidebar", () => {
+		const portrait = scenario("active-portrait-runtime");
+
+		expect(portrait.dimensions.cols).toBeLessThan(SIDEBAR_MIN_TERMINAL_WIDTH);
+		expect(portrait.crops.map((crop) => crop.id)).toEqual(["full"]);
+	});
+
 	it("keeps required crop gates backed by committed runtime goldens", () => {
 		const requiredCrops = manifest.scenarios.flatMap((item) =>
 			item.crops

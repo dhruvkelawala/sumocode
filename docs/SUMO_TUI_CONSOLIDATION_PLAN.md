@@ -122,13 +122,15 @@ Scope:
 
 **Goal:** choose the Mac mini portrait behavior before #87 resumes.
 
-Options:
+Decision doc: [`docs/SUMO_TUI_PORTRAIT_SIDEBAR_POLICY.md`](./SUMO_TUI_PORTRAIT_SIDEBAR_POLICY.md)
 
-- A — hide sidebar in portrait, footer/hint absorbs context.
-- B — bottom registry band in portrait.
-- C — command-toggled overlay only.
+Chosen V1 policy: **Option A** — hide the sidebar in portrait/narrow layouts; footer/hint absorbs essential context. Portrait richness is explicitly V2/later.
 
-Decision needed: ship B in V1, or explicitly mark portrait richness as V2.
+Options evaluated:
+
+- A — hide sidebar in portrait, footer/hint absorbs context. **Accepted for V1.**
+- B — bottom registry band in portrait. Deferred to V2/later.
+- C — command-toggled overlay only. Deferred to V2/later.
 
 ---
 

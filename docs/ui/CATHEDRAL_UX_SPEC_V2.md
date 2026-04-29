@@ -669,32 +669,45 @@ Inside a SUMO message box:
 
 ### Element 10 — Code blocks
 
-**Mockup**: forthcoming `v4/10-code-block.png`.
+**LOCKED**: framed markdown code blocks approved 2026-04-29.
 
-**v1 = full frame + line gutter (if trivial)**:
+**Mockups**:
+- Standalone: `docs/ui/bible/10-code-typescript.html`, `10-code-bash.html`
+- In active chat: `docs/ui/bible/scene-active-code-block.html`
 
+**Scope**: Element 10 is for **markdown fenced code blocks in assistant messages**, not edit-tool output. Edit/read/write/bash tool details belong to Element 9 ledgers, though both renderers should share frame/gutter/syntax primitives.
+
+**Visual contract**:
+
+```txt
+╭─ ts ─────────────────────────────────────────────────────────╮
+│   1 export async function authenticate(token: string) {       │
+│   2   const session = await Session.fromToken(token);         │
+│   3   if (!session || session.expired) return null;           │
+│   4                                                            │
+│   5   // emit auth event for telemetry                        │
+│   6   emit("auth.success", { userId: session.user.id });      │
+│   7   return session.user;                                    │
+│   8 }                                                          │
+╰──────────────────────────────────────────────────────────────╯
 ```
-   ╭───────────────────────────────────────────────────╮
-   │   1   function initializeCathedralEngine( config ) {
-   │   2     const status = "yellow_protocol_active";
-   │   3     let sequence = "0xDEAD";
-   │   4
-   │   5     /* Awaiting structural integration… */
-   │   6     return ( status, sequence );
-   │   7   }
-   ╰───────────────────────────────────────────────────╯
-```
 
-- Full frame `╭───╮│╰───╯` with `surfaceRecess` bg
-- Line numbers: `foregroundDim`, right-aligned 3 cols, 1 col gap. SHIP if trivial — otherwise skip in v1
-- Syntax colors:
-  - keywords (`function`, `const`, `let`, `return`): `accent`
-  - strings: `state.idle`
-  - numbers, function names: `state.thinking`
-  - comments: `syntax.comment` (`#6F5D46`)
-  - operators, brackets: `foreground`
+**Tokens**:
+- Frame chars `╭╮╰╯│─`: `divider`
+- Language label (`ts`, `bash`): `foregroundDim`
+- Line numbers: `foregroundDim`, right-aligned 3 cols, 1 col gap
+- Body text/operators/brackets: `foreground`
+- keywords (`function`, `const`, `let`, `return`, `if`, shell `for/do/done`): `accent`
+- strings: `state.idle`
+- numbers / function names: `state.thinking`
+- comments: `syntax.comment` (`#6F5D46`)
 
-**Implementation**: audit `cathedral.json` syntax slots, ensure every kind Pi emits has the right slot, verify with code-render visual test.
+**Behavior / implementation**:
+- Parse assistant markdown into structured chat blocks: `text`, `code`, `tool`.
+- Render fenced code as `renderCathedralCodeBlock(language, source, width)` inside the SUMO message body.
+- Code block rows must obey a fixed cell-width contract: top, every body row, and bottom must have identical visible width so the right border closes cleanly.
+- Long code blocks collapse after a safe visible height (e.g. 20 rows) with `… N lines collapsed · ⌘O expand`.
+- Syntax highlighting may start with the current theme slots; if full tokenization is hard, ship stable frame + gutter first and improve token coverage later.
 
 ---
 

@@ -89,7 +89,7 @@ function buildChatHTML(cols, toolStyle = "inline") {
 	const innerCols = cols - 4;
 	const blocks = [];
 
-	const messages = [
+	let messages = [
 		{ role: "USER", body: "hello, refactor the auth flow to use the new session pattern." },
 		{ role: "SUMO", time: "11:42",
 			body: "Reading the auth flow.",
@@ -106,6 +106,25 @@ function buildChatHTML(cols, toolStyle = "inline") {
 			footer: "All 22 tests pass.",
 		},
 	];
+
+	if (toolStyle === "code") {
+		messages = [
+			{ role: "USER", body: "show me the new auth helper shape before implementing it." },
+			{ role: "SUMO", time: "11:44", body: "Here is the proposed TypeScript shape:", code: {
+				language: "ts",
+				lines: [
+					`<span class="fg-keyword">export async function</span> <span class="fg-fn">authenticate</span>(<span class="fg-fg">token</span>: <span class="fg-fg">string</span>) {`,
+					`  <span class="fg-keyword">const</span> <span class="fg-fg">session</span> = <span class="fg-keyword">await</span> <span class="fg-fn">Session</span>.<span class="fg-fn">fromToken</span>(<span class="fg-fg">token</span>);`,
+					`  <span class="fg-keyword">if</span> (!<span class="fg-fg">session</span> || <span class="fg-fg">session</span>.<span class="fg-fg">expired</span>) <span class="fg-keyword">return</span> <span class="fg-keyword">null</span>;`,
+					``,
+					`  <span class="fg-comment">// emit auth event for telemetry</span>`,
+					`  <span class="fg-fn">emit</span>(<span class="fg-string">"auth.success"</span>, { <span class="fg-fg">userId</span>: <span class="fg-fg">session</span>.<span class="fg-fg">user</span>.<span class="fg-fg">id</span> });`,
+					`  <span class="fg-keyword">return</span> <span class="fg-fg">session</span>.<span class="fg-fg">user</span>;`,
+					`}`,
+				],
+			}, footer: "If this looks right, I’ll wire it into the session boundary." },
+		];
+	}
 
 	function wrap(text, w) {
 		const words = text.split(/\s+/);
@@ -150,6 +169,24 @@ function buildChatHTML(cols, toolStyle = "inline") {
 				rows.push(bodyRow(`<span class="fg-fg">${line}</span>`, line.length));
 			}
 		}
+		if (msg.code) {
+			rows.push(blankRow());
+			const codeInner = Math.min(innerCols - 4, 96);
+			const lang = msg.code.language;
+			const langTag = `─ <span class="fg-dim">${lang}</span> ─`;
+			const langLen = 2 + lang.length + 3;
+			rows.push(bodyRow(`<span class="fg-divider">╭─ </span><span class="fg-dim">${lang}</span><span class="fg-divider"> ${rep("─", Math.max(1, codeInner - langLen))}╮</span>`, codeInner));
+			for (let i = 0; i < msg.code.lines.length; i++) {
+				const lineNum = String(i + 1).padStart(3);
+				const code = msg.code.lines[i];
+				const left = `<span class="fg-divider">│</span> <span class="fg-dim">${lineNum} </span>${code}`;
+				const leftLen = visibleLen(left);
+				const rowHTML = left + rep(" ", Math.max(0, codeInner - leftLen - 1)) + `<span class="fg-divider">│</span>`;
+				rows.push(bodyRow(rowHTML, codeInner));
+			}
+			rows.push(bodyRow(`<span class="fg-divider">╰${rep("─", codeInner - 2)}╯</span>`, codeInner));
+		}
+
 		if (msg.tools) {
 			for (const tool of msg.tools) {
 				rows.push(blankRow());
@@ -347,7 +384,7 @@ function buildScene(variant) {
 <html>
 <head>
 <meta charset="utf-8">
-<title>Bible · Scene · Active ${cols}×${TERM_ROWS}${toolStyle === "ledger" ? " · Tool Ledger" : toolStyle === "live" ? " · Bash Live View" : ""}</title>
+<title>Bible · Scene · Active ${cols}×${TERM_ROWS}${toolStyle === "ledger" ? " · Tool Ledger" : toolStyle === "live" ? " · Bash Live View" : toolStyle === "code" ? " · Code Block" : ""}</title>
 <link rel="stylesheet" href="_assets/tokens.css">
 <style>
   .stage-blurb { max-width: ${Math.max(60, CHAT_COLS)}ch; color: var(--foreground-dim); font-size: 11px; line-height: 1.6; padding: 0 8px; text-align: center; }
@@ -359,12 +396,14 @@ function buildScene(variant) {
 </head>
 <body>
 <div class="stage">
-  <div class="stage-label">${toolStyle === "ledger" ? "scene · active state + ledger tool cards" : toolStyle === "live" ? "scene · active state + bash live-view card" : `scene · active state · ${cols}×${TERM_ROWS} ${sidebarVisible ? "landscape" : "portrait (sidebar hidden)"}`}</div>
+  <div class="stage-label">${toolStyle === "ledger" ? "scene · active state + ledger tool cards" : toolStyle === "live" ? "scene · active state + bash live-view card" : toolStyle === "code" ? "scene · active state + code block in SUMO chat" : `scene · active state · ${cols}×${TERM_ROWS} ${sidebarVisible ? "landscape" : "portrait (sidebar hidden)"}`}</div>
   <div class="stage-blurb">${toolStyle === "ledger"
 		? "Option 3A preview for Element 9: tool calls render as nested ledger cards inside the SUMO message box. Tests vertical rhythm, containment, and density in the full active scene."
 		: toolStyle === "live"
 			? "Option 3B preview inspired by lucasmeijer/pi-bash-live-view: bash renders as a live PTY viewport card with elapsed timer; non-bash tools remain compact."
-			: sidebarVisible
+			: toolStyle === "code"
+				? "Element 10 preview in context: a framed, line-numbered TypeScript code block embedded inside a SUMO chat message."
+				: sidebarVisible
 			? "first scene composition: combines all 5 locked elements (top-bar placeholder, sidebar V2 editorial CONTEXT, chat boxed 7A, input frame, footer READY). validates the full visual gestalt before adding remaining elements."
 			: "portrait variant. sidebar hidden (per Element 1 rule: < 120 col). chat takes full term width. footer collapses right zone (drops project + branch + $cost; keeps tokens). hint row: keybinds only (left flavour dropped at narrow widths)."}</div>
   <div data-render-rect class="term scene" style="--term-cols: ${cols}; --term-rows: ${TERM_ROWS};">
@@ -392,6 +431,7 @@ for (const v of [
 	{ filename: "scene-active-portrait.html", spec: PORTRAIT },
 	{ filename: "scene-active-tool-ledger.html", spec: { ...LANDSCAPE, toolStyle: "ledger" } },
 	{ filename: "scene-active-bash-live-view.html", spec: { ...LANDSCAPE, toolStyle: "live" } },
+	{ filename: "scene-active-code-block.html", spec: { ...LANDSCAPE, toolStyle: "code" } },
 ]) {
 	writeFileSync(resolve(out, v.filename), buildScene(v.spec));
 	console.log(`wrote ${v.filename}  (${v.spec.cols}\u00d7${v.spec.rows})`);

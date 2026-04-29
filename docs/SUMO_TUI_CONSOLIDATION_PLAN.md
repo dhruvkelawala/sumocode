@@ -164,6 +164,8 @@ Add a Ratatui/Textual-style headless backend with current/previous buffers, curs
 
 ### P1-D — Structured transcript model
 
+Implementation contract: [`docs/SUMO_TUI_TRANSCRIPT_MODEL.md`](./SUMO_TUI_TRANSCRIPT_MODEL.md)
+
 Introduce typed chat blocks for markdown, code, tools, skills, questions, and delegation. This unblocks #89 and robust fixture-backed #90 states.
 
 ### P1-E — Focus/modal/input router

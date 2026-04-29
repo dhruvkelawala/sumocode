@@ -142,8 +142,7 @@ Splash renders only when the session has zero user messages.
    ┌─ DIVINE INVOCATION ───────────────────────────────────────┐
    │ > Ask anything... "Refactor the auth flow."  █            │
    └───────────────────────────────────────────────────────────┘
-
-   └─ AWAITING DIVINE INVOCATION              TAB · AGENTS  CTRL+/ · COMMANDS
+   ╰─ AWAITING PROMPT                         TAB · AGENTS  CTRL+/ · COMMANDS
 ```
 
 - Top bar (Element 2) renders above the splash.
@@ -168,11 +167,11 @@ the scriptorium aesthetic.
 Static dim placeholder example, e.g.
 `Ask anything... "Refactor the auth flow."`. Disappears on first keystroke.
 
-### Q3.5 — hint row: **a**
+### Q3.5 — hint row: **a**, refined 2026-04-29
 
-Both hints below the input frame:
+Both hints sit below the input frame and are constrained to the invocation frame width, not the full terminal width:
 
-- Left (dim flavour): `└─ AWAITING DIVINE INVOCATION`
+- Left (dim flavour): `╰─ AWAITING PROMPT`
 - Right (dim keybinds): `TAB · AGENTS  CTRL+/ · COMMANDS`
 
 ---

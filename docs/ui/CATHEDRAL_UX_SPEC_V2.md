@@ -264,8 +264,7 @@ SUMOCODE   ║ ● auth-flow-refactor ║   │ debug-balance-tx   │ index-iss
    ┌─ DIVINE INVOCATION ───────────────────────────────────────┐
    │ > <rotating placeholder>  █                                │
    └───────────────────────────────────────────────────────────┘
-
-   └─ AWAITING DIVINE INVOCATION              TAB · AGENTS  CTRL+/ · COMMANDS
+   ╰─ AWAITING PROMPT                         TAB · AGENTS  CTRL+/ · COMMANDS
 
                           SUMOCODE V0.2.0 · CATHEDRAL · 160 × 45 MONOSPACE
 ```

@@ -9,7 +9,7 @@
 //   - SUMOCODE wordmark (letter-spaced or pixel-block, accent)
 //   - quote: "perfection is achieved..." — saint-exupéry
 //   - DIVINE INVOCATION input frame with rotating placeholder
-//   - hint row: AWAITING DIVINE INVOCATION (left) + keybinds (right)
+//   - hint row: AWAITING PROMPT (left) + keybinds (right), constrained to invocation frame width
 //   - version line at bottom (splash only): SUMOCODE V0.2.0 · CATHEDRAL · 160×45 MONOSPACE
 
 import { writeFileSync } from "node:fs";
@@ -146,27 +146,21 @@ function buildSplash({ cols, rows: totalRows, placeholderIndex = 0 }) {
 		center(botBorderHTML, cols),
 	];
 
-	// 5. Hint row: left "└─ AWAITING DIVINE INVOCATION" + right "TAB · AGENTS  CTRL+/ · COMMANDS"
-	// At narrow widths the left flavour doesn't fit alongside the right keybinds.
-	// Drop the left flavour below 100 cols; keep right keybinds always.
-	const right = `TAB · AGENTS  CTRL+/ · COMMANDS`; // 31 cells
+	// 5. Hint row: constrained to the invocation frame width.
+	// Human review reads this as a pair attached to the frame, not terminal-edge chrome.
+	const left = `╰─ AWAITING PROMPT`;
+	const right = `TAB · AGENTS  CTRL+/ · COMMANDS`;
 	const rightHTML =
 		`<span class="fg-dim">TAB · AGENTS  </span>` +
 		`<span class="fg-accent">CTRL+/</span>` +
 		`<span class="fg-dim"> · COMMANDS</span>`;
-	const showLeftFlavour = cols >= 100;
 	const inputFrameLeftPad = Math.floor((cols - innerWidth) / 2);
-	let hintRow;
-	if (showLeftFlavour) {
-		const left = `└─ AWAITING DIVINE INVOCATION`; // 30 cells
-		const hintLeftHTML = rep(" ", inputFrameLeftPad) + `<span class="fg-dim">${left}</span>`;
-		const hintMid = cols - inputFrameLeftPad - left.length - right.length;
-		hintRow = hintLeftHTML + rep(" ", Math.max(1, hintMid)) + rightHTML;
-	} else {
-		// portrait/narrow: just right-align keybinds
-		const leadingPad = cols - right.length;
-		hintRow = rep(" ", Math.max(1, leadingPad)) + rightHTML;
-	}
+	const hintMid = innerWidth - left.length - right.length;
+	const hintRow =
+		rep(" ", inputFrameLeftPad) +
+		`<span class="fg-dim">${left}</span>` +
+		rep(" ", Math.max(1, hintMid)) +
+		rightHTML;
 
 	// 6. Version line: SUMOCODE V0.2.0 · CATHEDRAL · 160 × 45 MONOSPACE
 	const versionText = `SUMOCODE V0.2.0 · CATHEDRAL · ${cols} × ${totalRows} MONOSPACE`;
@@ -249,7 +243,7 @@ const variants = [
 		filename: "03-splash.html",
 		title: "Bible · Element 3 · SPLASH (landscape)",
 		label: "element 3 · splash · 160×45 landscape",
-		blurb: "splash renders only when session has zero messages. cat hero (24×14 chafa render placeholder), SUMOCODE wordmark accent, quote dim italic, DIVINE INVOCATION input frame with rotating placeholder, hint row, version line at bottom.",
+		blurb: "splash renders only when session has zero messages. cat hero (24×14 chafa render placeholder), SUMOCODE wordmark accent, quote dim italic, DIVINE INVOCATION input frame with rotating placeholder, frame-constrained hint row, version line at bottom.",
 		cols: 160, rows: 45, placeholderIndex: 0,
 	},
 	{

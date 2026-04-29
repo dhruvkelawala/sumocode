@@ -239,4 +239,6 @@ Resume #86/#87/#89/#90 only after:
 - #89 has the structured transcript model from P1-D.
 - #90 has a headless/backend fixture story from P1-C/P1-D.
 
+#86 resumed after those blockers and records its composed landscape review evidence in `docs/visual/parity/ACTIVE_LANDSCAPE_REVIEW.md`.
+
 Until then, keep V2 work to leaf surfaces and consolidation slices.

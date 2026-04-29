@@ -74,18 +74,17 @@ When user presses `Ctrl+2`:
 Layout:
 
 ```
-SUMOCODE   ║ ● refactor-auth-flow ║   │ debug-balance-tx   │ index-issues   │ ARCHIVE        [terminal]  [⚙]
+SUMOCODE   ║ • refactor-auth-flow ║   │ debug-balance-tx   │ index-issues   │ ARCHIVE          
                                                                                               Ctrl+\\      Ctrl+,
 ```
 
 - `SUMOCODE` — always visible, top-left, accent (burnt orange).
-- `║ ● <name> ║` — active session marker, name is LLM-summarized (see Q2.6).
-  - State dot color matches current state (idle / thinking / tool / approval /
-    learning).
+- `║ • <name> ║` — active session marker, name is LLM-summarized (see Q2.6).
+  - Dot is static accent (session marker), not agent-state colored. Agent state lives in the footer dot.
 - `│ <name>` — recent sessions, dim, ordered by mtime descending.
 - `│ ARCHIVE` — opens full session list overlay.
-- `[terminal]` icon — opens bash sub-shell overlay. Keybind: `Ctrl+\\`.
-- `[⚙]` icon — opens `/settings` overlay. Keybind: `Ctrl+,`.
+- `` terminal icon — opens bash sub-shell overlay. Keybind: `Ctrl+\\`.
+- `` settings icon — opens `/settings` overlay. Keybind: `Ctrl+,`.
 
 ### Q2.4 — Layout: **a**
 

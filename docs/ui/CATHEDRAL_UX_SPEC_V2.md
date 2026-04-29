@@ -208,8 +208,8 @@ When sidebar is hidden by either mechanism, footer absorbs context info per Elem
 **Layout**:
 
 ```
-SUMOCODE   ║ ● auth-flow-refactor ║   │ debug-balance-tx   │ index-issues   │ ARCHIVE        [terminal]  [⚙]
-                                                                                              Ctrl+\\      Ctrl+,
+SUMOCODE   ║ • auth-flow-refactor ║   │ debug-balance-tx   │ index-issues   │ ARCHIVE          
+                                                                                              Ctrl+\\  Ctrl+,
 ```
 
 - `SUMOCODE` accent left, always visible
@@ -220,8 +220,8 @@ SUMOCODE   ║ ● auth-flow-refactor ║   │ debug-balance-tx   │ index-iss
   - `large`  → `●` BLACK CIRCLE (most prominent)
 - `│ <session-name>` recent sessions, dim, mtime-desc, max 5 visible
 - `│ ARCHIVE` opens session list overlay (full archive)
-- `[terminal]` = bash sub-shell overlay (`Ctrl+\`)
-- `[⚙]` = `/settings` overlay (`Ctrl+,`)
+- `` = bash sub-shell overlay (`Ctrl+\`)
+- `` = `/settings` overlay (`Ctrl+,`)
 
 **Session naming**:
 - Trigger: `agent_end` after first 5 user messages in session
@@ -235,7 +235,7 @@ SUMOCODE   ║ ● auth-flow-refactor ║   │ debug-balance-tx   │ index-iss
 - Interactive in v1 if "easy" (clickable / Tab-cyclable): switches to that session
 - Otherwise passive indicators
 
-**Width handling**: drop tabs from the right at narrow widths. `[⚙]` first, then `[terminal]`, then `ARCHIVE`, then recents one by one. SUMOCODE always visible until `W < 60`, then drop too.
+**Width handling**: drop tabs from the right at narrow widths. `` first, then ``, then `ARCHIVE`, then recents one by one. SUMOCODE always visible until `W < 60`, then drop too.
 
 **Hide via**: `/sumo:tabs hide|show`.
 

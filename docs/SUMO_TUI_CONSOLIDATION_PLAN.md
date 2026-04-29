@@ -144,6 +144,8 @@ Adopt Textual-style reactive properties rather than a full Bubble Tea/Elm rewrit
 
 ### P1-B — Typed style/render primitives
 
+Implementation contract: [`docs/SUMO_TUI_RENDER_PRIMITIVES.md`](./SUMO_TUI_RENDER_PRIMITIVES.md)
+
 Create a boring, typed style layer:
 
 ```ts

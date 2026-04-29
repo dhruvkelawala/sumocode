@@ -1,5 +1,6 @@
 import { truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
 import { CATHEDRAL_TOKENS } from "../../tokens.js";
+import { lineToAnsi, span, textLine } from "../render/primitives.js";
 
 export const ANSI_PATTERN = /\u001b\[[0-9;]*m/g;
 export const RESET = "\u001b[0m";
@@ -57,8 +58,10 @@ export function padAnsiToWidth(line: string, width: number): string {
 
 /** Wrap a logical sidebar row in the cathedral mahogany surface background. */
 export function surfaceLine(content: string, width: number): string {
-	const line = padAnsiToWidth(content, width);
-	return `${bgHex(CATHEDRAL_TOKENS.colors.surface)}${fgHex(CATHEDRAL_TOKENS.colors.foreground)}${line}${RESET}`;
+	return lineToAnsi(textLine([span(content)], {
+		fg: CATHEDRAL_TOKENS.colors.foreground,
+		bg: CATHEDRAL_TOKENS.colors.surface,
+	}), { width });
 }
 
 /**

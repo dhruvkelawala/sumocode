@@ -4,6 +4,7 @@ import type { Component } from "@mariozechner/pi-tui";
 import { resolveGitBranch } from "./footer.js";
 import { createRemnicMemoryClient, type RemnicMemoryClient } from "./memory.js";
 import { MetricsHud } from "./sumo-tui/cathedral/metrics-hud.js";
+import { CancellableWorkerRuntime } from "./sumo-tui/runtime/worker-runtime.js";
 import {
 	SIDEBAR_SUB_TABS,
 	renderRegistrySidebarLines,
@@ -53,16 +54,17 @@ export type SidebarMemoryCache = {
 };
 
 const MEMORY_DISPLAY_LIMIT = 5;
+const SIDEBAR_MEMORY_WORKER_GROUP = "sidebar-memory";
 
 export function createSidebarMemoryCache(
 	memoryClient: Pick<RemnicMemoryClient, "query">,
 	debounceMs = SIDEBAR_MEMORY_DEBOUNCE_MS,
+	workerRuntime = new CancellableWorkerRuntime(),
 ): SidebarMemoryCache {
 	let memory: readonly string[] = [];
 	let memoryUnavailable = false;
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	let retryTimer: ReturnType<typeof setTimeout> | undefined;
-	let generation = 0;
 
 	function setSnapshot(nextMemory: readonly string[], nextUnavailable: boolean): boolean {
 		const changed = memoryUnavailable !== nextUnavailable || memory.length !== nextMemory.length || memory.some((item, index) => item !== nextMemory[index]);
@@ -72,15 +74,22 @@ export function createSidebarMemoryCache(
 	}
 
 	async function refresh(prompt: string): Promise<boolean> {
-		const run = ++generation;
-		try {
-			const facts = await memoryClient.query(prompt, MEMORY_DISPLAY_LIMIT);
-			if (run !== generation) return false;
-			return setSnapshot(facts.map((fact) => fact.text), false);
-		} catch {
-			if (run !== generation) return false;
-			return setSnapshot([], true);
-		}
+		const handle = workerRuntime.start({
+			name: "sidebar-memory.refresh",
+			exclusiveGroup: SIDEBAR_MEMORY_WORKER_GROUP,
+			run: async ({ signal }) => {
+				try {
+					const facts = await memoryClient.query(prompt, MEMORY_DISPLAY_LIMIT);
+					if (signal.aborted) return false;
+					return setSnapshot(facts.map((fact) => fact.text), false);
+				} catch {
+					if (signal.aborted) return false;
+					return setSnapshot([], true);
+				}
+			},
+		});
+		const result = await handle.result;
+		return result.status === "completed" ? result.value : false;
 	}
 
 	function clearRetry(): void {
@@ -105,6 +114,7 @@ export function createSidebarMemoryCache(
 		schedule(prompt: string, onChange: () => void): void {
 			if (timer) clearTimeout(timer);
 			clearRetry();
+			workerRuntime.cancelGroup(SIDEBAR_MEMORY_WORKER_GROUP);
 			const normalizedPrompt = prompt.trim();
 			if (normalizedPrompt.length === 0) return;
 			timer = setTimeout(() => {

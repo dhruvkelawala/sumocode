@@ -27,6 +27,14 @@ function memoryClient(query: RemnicMemoryClient["query"]): RemnicMemoryClient {
 	};
 }
 
+function deferred<T>() {
+	let resolve!: (value: T) => void;
+	const promise = new Promise<T>((resolvePromise) => {
+		resolve = resolvePromise;
+	});
+	return { promise, resolve };
+}
+
 function component(lines: string[]): { renderCalls: number[]; node: { render(width: number): string[]; invalidate(): void } } {
 	const renderCalls: number[] = [];
 	return {
@@ -181,6 +189,24 @@ describe("createSidebarMemoryCache", () => {
 		expect(cache.snapshot()).toEqual({ memory: [], memoryUnavailable: true });
 	});
 
+	it("invalidates stale in-flight prompt refreshes when a newer refresh wins", async () => {
+		const oldRefresh = deferred<Awaited<ReturnType<RemnicMemoryClient["query"]>>>();
+		const newRefresh = deferred<Awaited<ReturnType<RemnicMemoryClient["query"]>>>();
+		const query = vi.fn<RemnicMemoryClient["query"]>((prompt) => prompt === "old" ? oldRefresh.promise : newRefresh.promise);
+		const cache = createSidebarMemoryCache(memoryClient(query));
+
+		const stale = cache.refresh("old");
+		const latest = cache.refresh("new");
+		newRefresh.resolve([{ id: "new", text: "new fact" }]);
+
+		await expect(latest).resolves.toBe(true);
+		expect(cache.snapshot()).toEqual({ memory: ["new fact"], memoryUnavailable: false });
+
+		oldRefresh.resolve([{ id: "old", text: "old fact" }]);
+		await expect(stale).resolves.toBe(false);
+		expect(cache.snapshot()).toEqual({ memory: ["new fact"], memoryUnavailable: false });
+	});
+
 	it("debounces prompt refreshes and only queries the latest prompt", async () => {
 		vi.useFakeTimers();
 		try {
@@ -197,6 +223,37 @@ describe("createSidebarMemoryCache", () => {
 			expect(query).toHaveBeenCalledTimes(1);
 			expect(query).toHaveBeenCalledWith("convex", 5);
 			expect(cache.snapshot().memory).toEqual(["convex preference"]);
+			expect(onChange).toHaveBeenCalledTimes(1);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("cancels a stale scheduled session refresh when the prompt changes", async () => {
+		vi.useFakeTimers();
+		try {
+			const oldRefresh = deferred<Awaited<ReturnType<RemnicMemoryClient["query"]>>>();
+			const newRefresh = deferred<Awaited<ReturnType<RemnicMemoryClient["query"]>>>();
+			const query = vi.fn<RemnicMemoryClient["query"]>((prompt) => prompt === "session-a" ? oldRefresh.promise : newRefresh.promise);
+			const onChange = vi.fn();
+			const cache = createSidebarMemoryCache(memoryClient(query));
+
+			cache.schedule("session-a", onChange);
+			await vi.advanceTimersByTimeAsync(SIDEBAR_MEMORY_DEBOUNCE_MS);
+			expect(query).toHaveBeenCalledWith("session-a", 5);
+
+			cache.schedule("session-b", onChange);
+			await vi.advanceTimersByTimeAsync(SIDEBAR_MEMORY_DEBOUNCE_MS);
+			expect(query).toHaveBeenCalledWith("session-b", 5);
+
+			newRefresh.resolve([{ id: "new", text: "new session" }]);
+			await vi.advanceTimersByTimeAsync(0);
+			expect(cache.snapshot()).toEqual({ memory: ["new session"], memoryUnavailable: false });
+			expect(onChange).toHaveBeenCalledTimes(1);
+
+			oldRefresh.resolve([{ id: "old", text: "old session" }]);
+			await vi.advanceTimersByTimeAsync(0);
+			expect(cache.snapshot()).toEqual({ memory: ["new session"], memoryUnavailable: false });
 			expect(onChange).toHaveBeenCalledTimes(1);
 		} finally {
 			vi.useRealTimers();

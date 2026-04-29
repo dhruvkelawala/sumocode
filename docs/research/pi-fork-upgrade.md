@@ -1,5 +1,7 @@
 # Pi fork upgrade procedure
 
+> Active strategy: [`docs/SUMO_TUI_PI_PATCH_STRATEGY.md`](../SUMO_TUI_PI_PATCH_STRATEGY.md). This file is the step-by-step upgrade runbook.
+
 Phase 4b pins SumoCode to Pi `0.70.2` plus Dhruv's tiny fork patch on `dhruvkelawala/pi-mono` branch `sumocode/0.70.2-fork`.
 
 The fork patch lives in upstream Pi source at `packages/coding-agent/src/main.ts` and is mirrored into SumoCode's pnpm patch file because pnpm's GitHub subdirectory install packs `packages/coding-agent` without `dist/`.

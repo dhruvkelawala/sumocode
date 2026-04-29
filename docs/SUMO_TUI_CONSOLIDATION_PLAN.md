@@ -110,6 +110,8 @@ Scope:
 
 **Goal:** make the private Pi patch seam explicit and maintainable, or remove it.
 
+Decision doc: [`docs/SUMO_TUI_PI_PATCH_STRATEGY.md`](./SUMO_TUI_PI_PATCH_STRATEGY.md)
+
 Scope:
 
 - Audit `patches/@mariozechner__pi-coding-agent@0.70.2.patch` and `loadSumoInteractiveMode` usage.

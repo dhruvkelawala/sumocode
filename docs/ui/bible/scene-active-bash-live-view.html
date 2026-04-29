@@ -6,8 +6,8 @@
 <link rel="stylesheet" href="_assets/tokens.css">
 <style>
   .stage-blurb { max-width: 128ch; color: var(--foreground-dim); font-size: 11px; line-height: 1.6; padding: 0 8px; text-align: center; }
-  .scene { display: grid; grid-template-rows: var(--cell-h) var(--cell-h) auto var(--cell-h) calc(var(--cell-h) * 3) var(--cell-h) var(--cell-h) var(--cell-h); }
-  .scene .middle { display: grid; grid-template-columns: 128ch 2ch 30ch; grid-row: 3; min-height: 0; overflow: hidden; }
+  .scene { display: grid; grid-template-rows: var(--cell-h) var(--cell-h) var(--cell-h) auto var(--cell-h) calc(var(--cell-h) * 3) var(--cell-h) var(--cell-h) var(--cell-h) var(--cell-h); }
+  .scene .middle { display: grid; grid-template-columns: 128ch 2ch 30ch; grid-row: 4; min-height: 0; overflow: hidden; }
   .scene .middle .chat-col, .scene .middle .sidebar-col { overflow: hidden; min-height: 0; }
   .scene .middle pre { margin: 0; }
 </style>
@@ -17,8 +17,9 @@
   <div class="stage-label">scene · active state + bash live-view card</div>
   <div class="stage-blurb">Option 3B preview inspired by lucasmeijer/pi-bash-live-view: bash renders as a live PTY viewport card with elapsed timer; non-bash tools remain compact.</div>
   <div data-render-rect class="term scene" style="--term-cols: 160; --term-rows: 45;">
-    <pre class="grid" style="grid-row: 1;"> <span class="fg-accent">SUMOCODE</span><span class="fg-dim">  ║ </span><span class="fg-accent">•</span><span class="fg-dim"> 019dd3d8 ║</span>                                                                                                                        <span class="fg-dim">ARCHIVE   </span><span class="fg-fg"></span><span class="fg-dim">  </span><span class="fg-fg"></span> </pre>
-    <pre class="grid" style="grid-row: 2;"> </pre>
+    <pre class="grid" style="grid-row: 1;"> </pre>
+    <pre class="grid" style="grid-row: 2;"> <span class="fg-accent">SUMOCODE</span><span class="fg-dim">  ║ </span><span class="fg-accent">•</span><span class="fg-dim"> 019dd3d8 ║</span>                                                                                                                        <span class="fg-dim">ARCHIVE   </span><span class="fg-fg"></span><span class="fg-dim">  </span><span class="fg-fg"></span> </pre>
+    <pre class="grid" style="grid-row: 3;"> </pre>
     <div class="middle">
       <div class="chat-col"><pre class="grid"><span class="fg-divider">╭ </span><span class="fg-fg">USER</span> <span class="fg-divider">────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────</span><span class="fg-divider">╮</span>
 <span class="fg-divider">│</span><span class="box-fill" style="width: 126ch"> <span class="fg-fg">hello, refactor the auth flow to use the new session pattern.</span>                                                                </span><span class="fg-divider">│</span>
@@ -89,13 +90,14 @@
 <span class="box-fill" style="background: var(--surface); width: 30ch">                              </span>
 <span class="box-fill" style="background: var(--surface); width: 30ch">                              </span></pre></div>
     </div>
-    <pre class="grid" style="grid-row: 4;"> </pre>
-    <pre class="grid" style="grid-row: 5;"><span class="box-fill" style="background: var(--surface-recess); width: 160ch"><span class="fg-divider">┌──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐</span></span>
+    <pre class="grid" style="grid-row: 5;"> </pre>
+    <pre class="grid" style="grid-row: 6;"><span class="box-fill" style="background: var(--surface-recess); width: 160ch"><span class="fg-divider">┌──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐</span></span>
 <span class="box-fill" style="background: var(--surface-recess); width: 160ch"><span class="fg-divider">│</span> <span class="fg-accent">&gt;</span> <span class="cursor"> </span>                                                                                                                                                          <span class="fg-divider">│</span></span>
 <span class="box-fill" style="background: var(--surface-recess); width: 160ch"><span class="fg-divider">└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘</span></span></pre>
-    <pre class="grid" style="grid-row: 6;">                                                                                                                                              <span class="fg-accent">CTRL+/</span><span class="fg-dim"> · COMMANDS</span> </pre>
-    <pre class="grid" style="grid-row: 7;"> </pre>
-    <pre class="grid" style="grid-row: 8;"> <span class="fg-idle">●</span> <span class="fg-fg">READY</span><span class="fg-dim"> · </span><span class="fg-fg">claude-opus-4-7</span><span class="fg-dim"> · </span><span class="fg-fg">xhigh</span>                                                                                                             <span class="fg-fg">42k/200k</span><span class="fg-dim"> · </span><span class="fg-fg">$0.42</span> </pre>
+    <pre class="grid" style="grid-row: 7;">                                                                                                                                              <span class="fg-accent">CTRL+/</span><span class="fg-dim"> · COMMANDS</span> </pre>
+    <pre class="grid" style="grid-row: 8;"> </pre>
+    <pre class="grid" style="grid-row: 9;"> <span class="fg-idle">●</span> <span class="fg-fg">READY</span><span class="fg-dim"> · </span><span class="fg-fg">claude-opus-4-7</span><span class="fg-dim"> · </span><span class="fg-fg">xhigh</span>                                                                                                             <span class="fg-fg">42k/200k</span><span class="fg-dim"> · </span><span class="fg-fg">$0.42</span> </pre>
+    <pre class="grid" style="grid-row: 10;"> </pre>
   </div>
 </div>
 </body>

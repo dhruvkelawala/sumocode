@@ -67,20 +67,23 @@ OSC 11 (`\x1b]11;#1A1511\x1b\\`) painted on altscreen entry. OSC 111 reset on ex
 ## 2. Global layout
 
 ```
-Row 1            : top chrome bar (Element 2)
-Row 2            : blank
-Rows 3..N-3      : 2-pane content
+Row 1            : blank breathing row
+Row 2            : top chrome bar (Element 2)
+Row 3            : blank
+Rows 4..N-7      : 2-pane content
                    - left  (chat / tool pills / code blocks): cols 1..(W-30)
                    - right (registry sidebar):                cols (W-29)..W
-Row N-2          : input frame (3 rows)
-Row N-1          : blank
-Row N            : registry footer (Element 5)
-Row N+1 (splash) : version line (only on splash)
+Row N-6          : blank
+Rows N-5..N-3    : input frame (3 rows)
+Row N-2          : hint row
+Row N-1          : registry footer (Element 5)
+Row N            : blank breathing row
+Splash extra     : version line only on splash, above bottom breathing row
 ```
 
 `W` = terminal width.
 
-**CHANGED v1 → v2**: Sidebar width `49 → 30` cols. Two-pane split adjusts at `W-30`.
+**CHANGED v1 → v2**: Sidebar width `49 → 30` cols. Two-pane split adjusts at `W-30`. Full-screen scenes reserve one internal blank row above the top bar and one below the footer so chrome does not glue to the terminal edge.
 
 **Sidebar visibility rules**:
 - Hidden on splash (always full-width splash content)

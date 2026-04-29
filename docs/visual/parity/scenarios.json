@@ -8,12 +8,12 @@
   },
   "crops": {
     "full": { "kind": "full" },
-    "top-bar": { "x": 0, "y": 0, "cols": 160, "rows": 1 },
-    "sidebar": { "x": 130, "y": 2, "cols": 30, "rows": 36 },
-    "chat-area": { "x": 0, "y": 2, "cols": 128, "rows": 36 },
-    "input-frame": { "x": 0, "y": 39, "cols": 160, "rows": 3 },
-    "hint-row": { "x": 0, "y": 42, "cols": 160, "rows": 1 },
-    "footer": { "x": 0, "y": 44, "cols": 160, "rows": 1 },
+    "top-bar": { "x": 0, "y": 1, "cols": 160, "rows": 1 },
+    "sidebar": { "x": 130, "y": 3, "cols": 30, "rows": 34 },
+    "chat-area": { "x": 0, "y": 3, "cols": 128, "rows": 34 },
+    "input-frame": { "x": 0, "y": 38, "cols": 160, "rows": 3 },
+    "hint-row": { "x": 0, "y": 41, "cols": 160, "rows": 1 },
+    "footer": { "x": 0, "y": 43, "cols": 160, "rows": 1 },
     "input-component-frame": { "x": 0, "y": 0, "cols": 160, "rows": 4 },
     "footer-component": { "x": 0, "y": 0, "cols": 160, "rows": 1 },
     "sidebar-component": { "kind": "full" }

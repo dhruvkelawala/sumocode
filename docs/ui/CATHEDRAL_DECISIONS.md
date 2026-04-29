@@ -147,6 +147,7 @@ Splash renders only when the session has zero user messages.
 
 - Top bar (Element 2) renders above the splash.
 - Footer (Element 5) renders below the splash.
+- Full-screen scenes reserve one internal blank row above the top bar and one below the footer so chrome does not glue to the terminal edge.
 - Sidebar is hidden during splash (full chat width).
 - Splash collapses on `message_start` (first user message).
 

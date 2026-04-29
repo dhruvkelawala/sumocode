@@ -30,6 +30,10 @@ export type InteractionDiagnosticReporter = (diagnostics: readonly InteractionCo
 
 type CommandOptions = Parameters<ExtensionAPI["registerCommand"]>[1];
 type ShortcutOptions = Parameters<ExtensionAPI["registerShortcut"]>[1];
+// Installers must register interactions synchronously. The registry temporarily
+// wraps Pi's registration methods for the duration of `install()` and restores
+// them in `finally`; delayed registrations would intentionally bypass ownership
+// tracking instead of keeping a Proxy/cast-heavy wrapper alive.
 type InteractionInstaller = (pi: ExtensionAPI) => void;
 
 function defaultReporter(diagnostics: readonly InteractionConflictDiagnostic[]): void {

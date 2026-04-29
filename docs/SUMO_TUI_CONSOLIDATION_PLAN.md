@@ -176,18 +176,18 @@ Add `Ctrl+Shift+D` debug overlay and `SUMO_TUI_TRACE=1` trace logs replayable th
 
 The consolidation epic should track these implementation issues:
 
-| Slice | Type | Depends on | Notes |
-|---|---|---|---|
-| Epic: SumoTUI consolidation after deep audit | HITL | none | Owns audit-driven sequencing. |
-| P0-B: Realign V2 runtime/test/visual contract | AFK | epic | First implementation slice. |
-| P0-C: Introduce single TerminalSessionOwner | AFK | P0-B | Runtime lifecycle spine. |
-| P0-E: Centralize commands and keybindings | AFK | epic | Can run after/alongside P0-C if no conflicts. |
-| P0-G: Add cancellable worker runtime | AFK | epic | Can run after/alongside P0-C. |
-| P0-D: Decide Pi patch strategy | HITL | P0-C | Needs architecture decision and possibly upstream/Pi API path. |
-| P0-F: Decide portrait sidebar policy | HITL | epic | Blocks #87. |
-| P1-B: Add typed style/render primitives | AFK | P0-B | Foundation for future surfaces. |
-| P1-C: Add headless TestBackend + pilot API | AFK | P0-C | Makes runtime tests less PTY-flaky. |
-| P1-D: Introduce structured transcript model | AFK | P1-B, P1-C | Blocks #89 and useful #90 fixtures. |
+| Issue | Slice | Type | Depends on | Notes |
+|---|---|---|---|---|
+| #98 | Epic: SumoTUI consolidation after deep audit | HITL | none | Owns audit-driven sequencing. |
+| #99 | P0-B: Realign V2 runtime/test/visual contract | AFK | #98 | First implementation slice. |
+| #100 | P0-C: Introduce single TerminalSessionOwner | AFK | #99 | Runtime lifecycle spine. |
+| #101 | P0-E: Centralize commands and keybindings | AFK | #98 | Can run after/alongside P0-C if no conflicts. |
+| #102 | P0-G: Add cancellable worker runtime | AFK | #98 | Can run after/alongside P0-C. |
+| #103 | P0-D: Decide Pi patch strategy | HITL | #100 | Needs architecture decision and possibly upstream/Pi API path. |
+| #104 | P0-F: Decide portrait sidebar policy | HITL | #98 | Blocks #87. |
+| #105 | P1-B: Add typed style/render primitives | AFK | #99 | Foundation for future surfaces. |
+| #106 | P1-C: Add headless TestBackend + pilot API | AFK | #100 | Makes runtime tests less PTY-flaky. |
+| #107 | P1-D: Introduce structured transcript model | AFK | #105, #106 | Blocks #89 and useful #90 fixtures. |
 
 ---
 

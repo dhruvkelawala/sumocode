@@ -9,7 +9,7 @@
  *   - blank rows for vertical centering
  *   - Sumo BSH cat face (chafa-converted from a Gemini-generated PNG)
  *   - SUMOCODE block-letter wordmark in burnt orange
- *   - Saint-Exupéry quote in dim muted brown
+ *   - Visual Bible quote in dim muted brown
  *
  * The Pi-glue lives in `installTabBar` because Pi exposes only ONE setHeader
  * slot. The splash and the tab bar are stacked into a single header render.
@@ -93,12 +93,9 @@ function loadFace(): readonly string[] {
 
 const SUMO_FACE = loadFace();
 
-// Quote text + attribution lifted verbatim from the Stitch HTML mockup
-// (`docs/ui/stitch/cathedral/v1-html/splash.html`). The CSS applies
-// `uppercase` so the rendered string in the terminal is upper-case too.
-export const SUMOCODE_QUOTE =
-	'"PERFECTION IS ACHIEVED, NOT WHEN THERE IS NOTHING MORE TO ADD, BUT WHEN THERE IS NOTHING LEFT TO TAKE AWAY."';
-export const SUMOCODE_QUOTE_ATTRIBUTION = "— ANTOINE DE SAINT-EXUPÉRY";
+// Quote text + attribution locked by the V2 Visual Bible Element 3 splash.
+export const SUMOCODE_QUOTE = '"Meow meow meow... meow meow"';
+export const SUMOCODE_QUOTE_ATTRIBUTION = "— SUMO";
 
 export type SplashSnapshot = {
 	quote: string;
@@ -134,7 +131,7 @@ export function renderSplashContent(snapshot: SplashSnapshot, width: number): st
 	content.push("");
 	content.push("");
 
-	// Saint-Exupéry quote in dim muted brown.
+	// V2 Visual Bible quote in dim muted brown.
 	content.push(center(`${DIM}${MUTED}${snapshot.quote}${RESET}`, width));
 	content.push(center(`${DIM}${MUTED}${snapshot.quoteAttribution}${RESET}`, width));
 

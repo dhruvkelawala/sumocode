@@ -183,7 +183,7 @@ export function installFooter(pi: ExtensionAPI): void {
 				},
 				invalidate(): void {},
 				render(width: number): string[] {
-					return [formatFooterLine(createSnapshot(pi, ctx, footerData.getGitBranch(), state), width)];
+					return renderFooterBlock(createSnapshot(pi, ctx, footerData.getGitBranch(), state), width);
 				},
 			};
 		});

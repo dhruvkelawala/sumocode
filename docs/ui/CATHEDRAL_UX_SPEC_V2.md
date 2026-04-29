@@ -262,9 +262,8 @@ SUMOCODE   ║ • auth-flow-refactor ║   │ debug-balance-tx   │ index-iss
 
 
 
-                  "perfection is achieved when there is
-                              nothing left to take away."
-                                  — saint-exupéry
+                          "Meow meow meow... meow meow"
+                                      — SUMO
 
 
 

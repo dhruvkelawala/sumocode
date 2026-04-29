@@ -20,12 +20,12 @@ describe("sumo-tui splash centering integration", () => {
 			const lines = runtime.renderChatLines(100, 30);
 			const expectedTop = Math.floor((30 - getSplashContentHeight(defaultSplashSnapshot(false), 100)) / 2);
 			expect(firstNonBlankRow(lines)).toBeGreaterThanOrEqual(expectedTop);
-			expect(stripAnsi(lines.join("\n"))).toContain("PERFECTION IS ACHIEVED");
+			expect(stripAnsi(lines.join("\n"))).toContain("Meow meow meow");
 
 			snapshot.chat.addMessage("user", "hello");
 			const chatLines = runtime.renderChatLines(100, 30);
 			expect(stripAnsi(chatLines.join("\n"))).toContain("USER > hello");
-			expect(stripAnsi(chatLines.join("\n"))).not.toContain("PERFECTION IS ACHIEVED");
+			expect(stripAnsi(chatLines.join("\n"))).not.toContain("Meow meow meow");
 		} finally {
 			runtime.stop();
 		}

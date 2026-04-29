@@ -39,7 +39,15 @@ pnpm visual:review -- --lane runtime
 
 See `CONTRACT.md` for the full contract.
 
-## Initial runtime scenario note
+## Runtime scenario notes
+
+`splash-runtime` invokes the user-facing contract directly:
+
+```bash
+./bin/sumocode.sh --offline --no-extensions --no-session
+```
+
+The scenario rejects known loader/error output (`ERR_MODULE_NOT_FOUND`, terminal-width crashes, dev-checkout extension skips, and raw `Error [` screens) as hard capture failures. #71's original blank/offline splash failure is therefore not hidden by an accepted screenshot: the capture must show the V2 splash or fail before review.
 
 The active runtime scenarios submit a prompt and capture the deterministic offline **active-working** state. They intentionally do not wait for a completed model answer because `--offline --no-session` cannot produce one deterministically. Completed-response scene captures should be fixture-backed in a later slice.
 

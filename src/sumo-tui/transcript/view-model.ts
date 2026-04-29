@@ -1,0 +1,304 @@
+export type ChatMessageRole = "user" | "sumo" | "system";
+
+export type ToolStatus = "pending" | "running" | "success" | "error" | "cancelled";
+export type DelegationStatus = "queued" | "running" | "success" | "error" | "cancelled";
+
+export interface ToolCallViewModel {
+	readonly id?: string;
+	readonly name: string;
+	readonly status: ToolStatus;
+	readonly input?: unknown;
+	readonly output?: string;
+	readonly details?: unknown;
+	readonly error?: string;
+}
+
+export interface QuestionViewModel {
+	readonly id?: string;
+	readonly prompt: string;
+	readonly choices: readonly string[];
+	readonly selected?: string;
+	readonly required?: boolean;
+}
+
+export interface DelegationViewModel {
+	readonly id?: string;
+	readonly title: string;
+	readonly agent?: string;
+	readonly status: DelegationStatus;
+	readonly summary?: string;
+}
+
+export type ChatBlock =
+	| { readonly type: "markdown"; readonly text: string }
+	| { readonly type: "code"; readonly lang: string; readonly source: string; readonly collapsed?: boolean }
+	| { readonly type: "tool"; readonly tool: ToolCallViewModel }
+	| { readonly type: "skill"; readonly name: string; readonly expanded: boolean }
+	| { readonly type: "question"; readonly question: QuestionViewModel }
+	| { readonly type: "delegation"; readonly delegation: DelegationViewModel };
+
+export interface ChatMessageViewModel {
+	readonly id: string;
+	readonly role: ChatMessageRole;
+	readonly displayName: string;
+	readonly timestamp?: Date;
+	readonly blocks: readonly ChatBlock[];
+}
+
+export interface TranscriptViewModel {
+	readonly messages: readonly ChatMessageViewModel[];
+}
+
+const FENCED_CODE_PATTERN = /```([^\n`]*)\n?([\s\S]*?)```/g;
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+	return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : undefined;
+}
+
+function asString(value: unknown): string | undefined {
+	return typeof value === "string" ? value : undefined;
+}
+
+function asBoolean(value: unknown): boolean | undefined {
+	return typeof value === "boolean" ? value : undefined;
+}
+
+function asStringArray(value: unknown): string[] {
+	if (!Array.isArray(value)) return [];
+	return value.filter((item): item is string => typeof item === "string");
+}
+
+function firstString(...values: unknown[]): string | undefined {
+	for (const value of values) {
+		if (typeof value === "string" && value.length > 0) return value;
+	}
+	return undefined;
+}
+
+function timestampFrom(value: unknown): Date | undefined {
+	if (value instanceof Date) return value;
+	if (typeof value === "number" && Number.isFinite(value)) return new Date(value);
+	if (typeof value === "string") {
+		const timestamp = Date.parse(value);
+		if (Number.isFinite(timestamp)) return new Date(timestamp);
+	}
+	return undefined;
+}
+
+function messageId(record: Record<string, unknown>, fallbackIndex: number): string {
+	return firstString(record.id, record.messageId, record.responseId, record.toolCallId) ?? `message-${fallbackIndex}`;
+}
+
+function roleFromMessage(record: Record<string, unknown>): ChatMessageRole {
+	if (record.role === "user") return "user";
+	if (record.role === "assistant") return "sumo";
+	return "system";
+}
+
+function displayName(role: ChatMessageRole): string {
+	if (role === "user") return "YOU";
+	if (role === "sumo") return "SUMO";
+	return "SYSTEM";
+}
+
+function normalizeStatus(value: unknown, fallback: ToolStatus): ToolStatus {
+	if (value === "pending" || value === "running" || value === "success" || value === "error" || value === "cancelled") return value;
+	if (value === "ok" || value === "done") return "success";
+	if (value === "failed" || value === "failure") return "error";
+	return fallback;
+}
+
+function normalizeDelegationStatus(value: unknown): DelegationStatus {
+	if (value === "queued" || value === "running" || value === "success" || value === "error" || value === "cancelled") return value;
+	if (value === "ok" || value === "done") return "success";
+	if (value === "failed" || value === "failure") return "error";
+	return "running";
+}
+
+export function markdownAndCodeBlocksFromText(text: string): ChatBlock[] {
+	if (text.length === 0) return [];
+
+	const blocks: ChatBlock[] = [];
+	let cursor = 0;
+	for (const match of text.matchAll(FENCED_CODE_PATTERN)) {
+		const index = match.index ?? 0;
+		const before = text.slice(cursor, index);
+		if (before.length > 0) blocks.push({ type: "markdown", text: before });
+		blocks.push({
+			type: "code",
+			lang: (match[1] ?? "").trim(),
+			source: (match[2] ?? "").replace(/\n$/, ""),
+		});
+		cursor = index + match[0].length;
+	}
+
+	const after = text.slice(cursor);
+	if (after.length > 0) blocks.push({ type: "markdown", text: after });
+	return blocks.length > 0 ? blocks : [{ type: "markdown", text }];
+}
+
+function textFromContent(content: unknown): string {
+	if (typeof content === "string") return content;
+	if (!Array.isArray(content)) return "";
+	return content
+		.map((part) => {
+			const record = asRecord(part);
+			if (!record || record.type !== "text") return undefined;
+			return asString(record.text);
+		})
+		.filter((part): part is string => part !== undefined)
+		.join("");
+}
+
+function toolBlockFromRecord(record: Record<string, unknown>, fallbackStatus: ToolStatus): ChatBlock {
+	const name = firstString(record.name, record.toolName, record.command) ?? "tool";
+	const output = textFromContent(record.content) || asString(record.output);
+	const error = asString(record.errorMessage) ?? asString(record.error);
+	const isError = record.isError === true || error !== undefined;
+	return {
+		type: "tool",
+		tool: {
+			id: firstString(record.id, record.toolCallId),
+			name,
+			status: normalizeStatus(record.status, isError ? "error" : fallbackStatus),
+			input: record.arguments ?? record.input ?? (record.command ? { command: record.command } : undefined),
+			output,
+			details: record.details,
+			error,
+		},
+	};
+}
+
+function skillBlockFromRecord(record: Record<string, unknown>): ChatBlock {
+	return {
+		type: "skill",
+		name: firstString(record.name, record.skill, record.skillName) ?? "unknown-skill",
+		expanded: asBoolean(record.expanded) ?? false,
+	};
+}
+
+function questionBlockFromRecord(record: Record<string, unknown>): ChatBlock {
+	return {
+		type: "question",
+		question: {
+			id: firstString(record.id, record.questionId),
+			prompt: firstString(record.prompt, record.question, record.title, record.message) ?? "question",
+			choices: asStringArray(record.choices).length > 0 ? asStringArray(record.choices) : asStringArray(record.options),
+			selected: firstString(record.selected, record.defaultChoice),
+			required: asBoolean(record.required),
+		},
+	};
+}
+
+function delegationBlockFromRecord(record: Record<string, unknown>): ChatBlock {
+	return {
+		type: "delegation",
+		delegation: {
+			id: firstString(record.id, record.delegationId),
+			title: firstString(record.title, record.name, record.agent, record.target) ?? "delegation",
+			agent: firstString(record.agent, record.target),
+			status: normalizeDelegationStatus(record.status),
+			summary: firstString(record.summary, record.text, record.description),
+		},
+	};
+}
+
+function blocksFromContentPart(part: unknown): ChatBlock[] {
+	const record = asRecord(part);
+	if (!record) return [];
+	switch (record.type) {
+		case "text":
+			return markdownAndCodeBlocksFromText(asString(record.text) ?? "");
+		case "toolCall":
+		case "tool_call":
+		case "tool":
+			return [toolBlockFromRecord(record, record.status === "running" ? "running" : "pending")];
+		case "toolResult":
+		case "tool_result":
+			return [toolBlockFromRecord(record, "success")];
+		case "skill":
+		case "skill_invocation":
+			return [skillBlockFromRecord(record)];
+		case "question":
+		case "confirm":
+		case "select":
+			return [questionBlockFromRecord(record)];
+		case "delegation":
+		case "scroll":
+		case "subagent":
+			return [delegationBlockFromRecord(record)];
+		default:
+			return [];
+	}
+}
+
+function blocksFromContent(content: unknown): ChatBlock[] {
+	if (typeof content === "string") return markdownAndCodeBlocksFromText(content);
+	if (!Array.isArray(content)) return [];
+	return content.flatMap((part) => blocksFromContentPart(part));
+}
+
+function blocksFromMessage(record: Record<string, unknown>): ChatBlock[] {
+	if (record.role === "bashExecution") {
+		const status = record.cancelled === true ? "cancelled" : record.exitCode === 0 || record.exitCode === undefined ? "success" : "error";
+		return [toolBlockFromRecord({ ...record, type: "tool", name: "bash", status }, status)];
+	}
+	if (record.role === "toolResult") return [toolBlockFromRecord(record, "success")];
+	if (record.role === "custom" && typeof record.customType === "string") {
+		if (record.customType === "skill") return [skillBlockFromRecord(asRecord(record.details) ?? record)];
+		if (record.customType === "question") return [questionBlockFromRecord(asRecord(record.details) ?? record)];
+		if (record.customType === "delegation") return [delegationBlockFromRecord(asRecord(record.details) ?? record)];
+	}
+
+	const blocks = blocksFromContent(record.content);
+	if (blocks.length > 0) return blocks;
+	const errorMessage = asString(record.errorMessage);
+	return errorMessage ? [{ type: "markdown", text: errorMessage }] : [];
+}
+
+export function chatMessageViewModelFromPiMessage(message: unknown, index = 0): ChatMessageViewModel | undefined {
+	const record = asRecord(message);
+	if (!record) return undefined;
+	if (record.role === "custom" && record.display === false) return undefined;
+
+	const role = roleFromMessage(record);
+	const blocks = blocksFromMessage(record);
+	return {
+		id: messageId(record, index),
+		role,
+		displayName: displayName(role),
+		timestamp: timestampFrom(record.timestamp),
+		blocks: blocks.length > 0 ? blocks : [{ type: "markdown", text: "" }],
+	};
+}
+
+export function transcriptFromSessionContext(sessionContext: unknown): TranscriptViewModel {
+	const messages = asRecord(sessionContext)?.messages;
+	if (!Array.isArray(messages)) return { messages: [] };
+	return {
+		messages: messages
+			.map((message, index) => chatMessageViewModelFromPiMessage(message, index))
+			.filter((message): message is ChatMessageViewModel => message !== undefined),
+	};
+}
+
+export function chatMessageViewModelToPlainText(message: ChatMessageViewModel): string {
+	return message.blocks
+		.map((block) => {
+			switch (block.type) {
+				case "markdown":
+					return block.text;
+				case "code":
+					return `\`\`\`${block.lang}\n${block.source}\n\`\`\``;
+				case "tool":
+					return [`[tool] ${block.tool.name} · ${block.tool.status}`, block.tool.output, block.tool.error].filter(Boolean).join("\n");
+				case "skill":
+					return `[skill] ${block.name}${block.expanded ? " (expanded)" : " (⌘O to expand)"}`;
+				case "question":
+					return [`[question] ${block.question.prompt}`, ...block.question.choices.map((choice) => `- ${choice}`)].join("\n");
+				case "delegation":
+					return [`[delegation] ${block.delegation.title} · ${block.delegation.status}`, block.delegation.summary].filter(Boolean).join("\n");
+			}
+		})
+		.join("\n");
+}

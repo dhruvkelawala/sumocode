@@ -184,6 +184,8 @@ Required crops gate against committed approved runtime goldens. Bible diffs rema
 - `docs/SUMO_TUI_PI_PATCH_STRATEGY.md` — private Pi patch maintenance contract.
 - `docs/SUMO_TUI_PORTRAIT_SIDEBAR_POLICY.md` — V1 portrait/no-sidebar policy.
 - `docs/SUMO_TUI_RENDER_PRIMITIVES.md` — typed render primitive contract.
+- `docs/SUMO_TUI_TEST_BACKEND.md` — headless retained-renderer test backend contract.
+- `docs/SUMO_TUI_TRANSCRIPT_MODEL.md` — structured transcript view-model contract.
 - `docs/prd.md` / `docs/prd.html` — formal product spec.
 
 ## Integration tests

@@ -48,33 +48,31 @@ export class InteractionRegistry {
 	private readonly commands = new Map<string, string>();
 	private readonly shortcuts = new Map<string, string>();
 	private readonly diagnostics: InteractionConflictDiagnostic[] = [];
-	private readonly apiProxy: ExtensionAPI;
 	private activeOwner = "unknown";
 
 	public constructor(
 		private readonly pi: ExtensionAPI,
 		private readonly reporter: InteractionDiagnosticReporter = defaultReporter,
-	) {
-		this.apiProxy = new Proxy(pi as object, {
-			get: (target, property, receiver) => {
-				if (property === "registerCommand") return this.registerCommand;
-				if (property === "registerShortcut") return this.registerShortcut;
-				const value = Reflect.get(target, property, receiver);
-				return typeof value === "function" ? value.bind(target) : value;
-			},
-		}) as ExtensionAPI;
-	}
-
-	public get api(): ExtensionAPI {
-		return this.apiProxy;
-	}
+	) {}
 
 	public install(owner: string, installer: InteractionInstaller): void {
 		const previousOwner = this.activeOwner;
+		const originalRegisterCommand = this.pi.registerCommand;
+		const originalRegisterShortcut = this.pi.registerShortcut;
 		this.activeOwner = owner;
+		this.pi.registerCommand = (name: string, options: CommandOptions): void => {
+			if (!this.claim("command", name, this.commands)) return;
+			originalRegisterCommand.call(this.pi, name, options);
+		};
+		this.pi.registerShortcut = (shortcut: Parameters<ExtensionAPI["registerShortcut"]>[0], options: ShortcutOptions): void => {
+			if (!this.claim("shortcut", String(shortcut), this.shortcuts)) return;
+			originalRegisterShortcut.call(this.pi, shortcut, options);
+		};
 		try {
-			installer(this.apiProxy);
+			installer(this.pi);
 		} finally {
+			this.pi.registerCommand = originalRegisterCommand;
+			this.pi.registerShortcut = originalRegisterShortcut;
 			this.activeOwner = previousOwner;
 		}
 	}
@@ -90,16 +88,6 @@ export class InteractionRegistry {
 			diagnostics: [...this.diagnostics],
 		};
 	}
-
-	private readonly registerCommand = (name: string, options: CommandOptions): void => {
-		if (!this.claim("command", name, this.commands)) return;
-		this.pi.registerCommand(name, options);
-	};
-
-	private readonly registerShortcut = (shortcut: Parameters<ExtensionAPI["registerShortcut"]>[0], options: ShortcutOptions): void => {
-		if (!this.claim("shortcut", String(shortcut), this.shortcuts)) return;
-		this.pi.registerShortcut(shortcut, options);
-	};
 
 	private claim(kind: InteractionKind, id: string, owners: Map<string, string>): boolean {
 		const existingOwner = owners.get(id);

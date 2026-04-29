@@ -887,7 +887,50 @@ Each message renders as a self-contained closed-frame box:
 
 ## 6. Cross-cutting
 
-### 6.1 Mouse text selection + auto-copy (NEW for v1)
+### 6.1 SumoCode config + primary agent display name
+
+**LOCKED 2026-04-29**: SumoCode owns its app/persona config in `sumocode.json`, not Pi's `settings.json`.
+
+**Rationale**:
+- Pi settings are for Pi runtime concerns; SumoCode display/persona labels are product-level config.
+- Avoid relying on unknown-key behavior in Pi `SettingsManager` for first-class SumoCode options.
+- Keep public repo defaults clean while allowing private/user config to rename the primary agent (`SUMO` → `Zeus`, etc.).
+
+**Resolution order**:
+1. Project-local `.sumocode.json`
+2. Project-local `.pi/sumocode.json`
+3. Global `~/.pi/agent/sumocode.json`
+4. Built-in defaults
+
+**Config shape**:
+
+```json
+{
+  "primaryAgentName": "Zeus"
+}
+```
+
+**Defaults**:
+
+```json
+{
+  "primaryAgentName": "SUMO"
+}
+```
+
+**UI contract**:
+- `SUMOCODE` remains the product/app name in top chrome and splash wordmark.
+- `primaryAgentName` controls the assistant identity label in chat message headers (`╭ ZEUS ─── 11:42 ─╮`).
+- Future implementation may also use `primaryAgentName` for footer/status prose and splash signature, but only where it refers to the agent/persona, not the product.
+- User message headers stay `USER`.
+- Tool names stay technical/product nouns (`[read]`, `[edit]`, `[mission]`, etc.) and are not affected by `primaryAgentName`.
+
+**Implementation note**:
+- Add a small SumoCode config loader (e.g. `src/config/sumocode-config.ts`) with deterministic lookup + schema validation.
+- Do not modify Pi's `settings.json` for this v1 decision.
+- A future slash command may be added: `/sumo:name <display-name>` to write the nearest writable SumoCode config file, but manual JSON config is enough for v1.
+
+### 6.2 Mouse text selection + auto-copy (NEW for v1)
 
 **Decision**: ship in v1. Replace native terminal selection (which is blocked by our SGR mouse capture) with in-app selection + OSC 52 auto-copy.
 
@@ -900,11 +943,11 @@ Each message renders as a self-contained closed-frame box:
 
 **Implementation**: ~1 day. New module `src/sumo-tui/input/selection.ts` + compositor highlight pass + clipboard escape emitter.
 
-### 6.2 Cathedral OSC 11 bg
+### 6.3 Cathedral OSC 11 bg
 
 **Decision**: keep paint for v1, focus on cmux/Ghostty (libghostty). Other terminals: best-effort. Research follow-up: investigate per-terminal escape handling for v2 (e.g., does Apple Terminal honor OSC 111 reset reliably? iTerm2? Alacritty?).
 
-### 6.3 Resume flow performance (HIGH priority)
+### 6.4 Resume flow performance (HIGH priority)
 
 User-perceived: 2-3s splash → active transition on `/resume`. Must be < 500ms.
 
@@ -915,7 +958,7 @@ User-perceived: 2-3s splash → active transition on `/resume`. Must be < 500ms.
 
 **Fix in v1**.
 
-### 6.4 Defects from T1 verification harness
+### 6.5 Defects from T1 verification harness
 
 | # | Defect | Severity v2 |
 |---|---|---|
@@ -963,14 +1006,15 @@ Each row = one PR + one issue + visual approval.
 
 **Phase E — Element 6 + crosscut**:
 12. Element 6 approval modal: implement locked Scriptorium-danger hybrid + Pi default policy integration + `/yolo` slash
-13. Cross-cut: mouse selection + OSC 52 auto-copy
-14. Cross-cut: resume perf fix (HIGH)
-15. Element 7 memory editor: implement locked Memory Scriptorium, inline `e`/`d` editing + AI-driven write path
+13. Cross-cut: SumoCode config loader + `primaryAgentName` UI label support
+14. Cross-cut: mouse selection + OSC 52 auto-copy
+15. Cross-cut: resume perf fix (HIGH)
+16. Element 7 memory editor: implement locked Memory Scriptorium, inline `e`/`d` editing + AI-driven write path
 
 **Phase F — Polish stretch**:
-16. Animated splash hero (cycle frames)
-17. Per-terminal OSC 11/111 compat research
-18. PTY-backed live bash spike/integration from `dhruvkelawala/pi-bash-live-view`
+17. Animated splash hero (cycle frames)
+18. Per-terminal OSC 11/111 compat research
+19. PTY-backed live bash spike/integration from `dhruvkelawala/pi-bash-live-view`
 
 ---
 
@@ -1018,6 +1062,7 @@ From this grill session:
 - E11: DIVINE QUERY modal (NEW)
 - E12: task tool UI (NEW)
 - E13: chat message framing (NEW)
+- Cross-cut: SumoCode config loader + `primaryAgentName`
 - Cross-cut: mouse selection + auto-copy
 - Cross-cut: resume perf
 - Cross-cut: OSC 11 cross-terminal research

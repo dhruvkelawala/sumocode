@@ -80,7 +80,7 @@ function padToWidth(line: string, width: number): string {
 }
 
 export type InputFrameOptions = {
-	/** Top-border label, e.g. "SCRIPTOR INPUT" (splash) or "INPUT" (active). */
+	/** Optional top-border label. V2 active input passes an empty label; splash uses "DIVINE INVOCATION". */
 	label?: string;
 	/** Placeholder text shown when input is empty. Splash state only. */
 	placeholder?: string;

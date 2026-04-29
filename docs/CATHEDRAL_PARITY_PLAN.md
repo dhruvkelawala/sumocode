@@ -1,5 +1,11 @@
 # Cathedral Visual Parity Pass
 
+> **Status:** historical V1 plan. The active V2 visual/runtime contract lives in
+> `docs/visual/parity/CONTRACT.md` and `docs/ui/CATHEDRAL_UX_SPEC_V2.md`.
+> Legacy 49-column sidebar and `SCRIPTOR INPUT` references below are retained as
+> provenance only; new V2 work uses a 30-column sidebar and label-less active
+> input.
+
 > **Goal:** make SumoCode visually 100% aligned with `docs/ui/DESIGN.md` and the
 > Cathedral mockups under `docs/ui/stitch/cathedral/`. Stop adding features
 > (memory commands, sync, etc.) until parity is reached. Verify each step
@@ -88,12 +94,12 @@ We replace it with a hand-authored `cathedral.json` Pi theme.
 
 ### Layer 2 — Sidebar parity
 
-Current sidebar renders a 32-col mahogany card with banners but does not
-match the planned 49-col, 3-section layout from `Sidebar.jsx`.
+**Superseded by V2.** The original plan targeted the older wide React mockup.
+The active V2 contract uses the 30-column editorial registry from the Visual
+Bible and `docs/visual/parity/CONTRACT.md`.
 
-- **2.1** Widen `SIDEBAR_WIDTH` from `32` to `49`.
-- **2.2** Update the auto-hide threshold so the sidebar still fits
-  alongside the chat pane (likely `SIDEBAR_MIN_TERMINAL_WIDTH ≈ 160`).
+- **2.1** Keep `SIDEBAR_WIDTH` at the V2 value of `30`.
+- **2.2** Keep the wide-layout threshold aligned to the V2 split (`SIDEBAR_MIN_TERMINAL_WIDTH = 120`).
 - **2.3** Anchor responsive to terminal aspect ratio (#13):
   landscape → `right-center`; portrait → `top-right`.
   Persist override in per-machine `~/.sumocode/local-config.json`.

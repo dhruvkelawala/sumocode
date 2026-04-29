@@ -21,6 +21,15 @@ function latestVisibleCursorColumn(output: string): number | undefined {
 	return latest;
 }
 
+async function waitForCursorVisible(pty: SpawnedPiPty): Promise<void> {
+	const deadline = Date.now() + 10_000;
+	while (Date.now() < deadline) {
+		if (pty.getCurrentTerminalState().cursorVisible) return;
+		await new Promise((resolve) => setTimeout(resolve, 50));
+	}
+	throw new Error(`Timed out waiting for hardware cursor to become visible. Last output: ${JSON.stringify(pty.getOutput().slice(-1200))}`);
+}
+
 async function waitForCursorAdvance(pty: SpawnedPiPty, previousColumn: number, text: string): Promise<number> {
 	const deadline = Date.now() + 5_000;
 	while (Date.now() < deadline) {
@@ -38,6 +47,7 @@ describe("sumo-tui cursor visibility integration", () => {
 		app = spawnPiPty({
 			env: {
 				PI_CODING_AGENT_DIR: agentDir,
+				PI_HARDWARE_CURSOR: "1",
 				SUMO_TUI: "1",
 				SUMO_TUI_HIDE_PI_NOISE: "1",
 				SUMO_TUI_MODULE: pathToFileURL(join(process.cwd(), "sumo-interactive-mode.js")).href,
@@ -45,13 +55,13 @@ describe("sumo-tui cursor visibility integration", () => {
 		});
 
 		await app.waitForOutput(PI_BOOT_SEQUENCE, 10_000);
-		await app.waitForOutput("SCRIPTOR INPUT", 10_000);
-		await app.waitForOutput("\x1b[?25h", 10_000);
+		await app.waitForOutput("DIVINE INVOCATION", 10_000);
+		await waitForCursorVisible(app);
 		expect(app.getCurrentTerminalState().cursorVisible).toBe(true);
 
 		let typed = "";
 		let previousColumn = 0;
-		for (const char of "abcde") {
+		for (const char of "ZQXJW") {
 			typed += char;
 			app.sendInput(char);
 			const nextColumn = await waitForCursorAdvance(app, previousColumn, typed);
@@ -59,5 +69,5 @@ describe("sumo-tui cursor visibility integration", () => {
 			previousColumn = nextColumn;
 			expect(app.getCurrentTerminalState().cursorVisible).toBe(true);
 		}
-	});
+	}, 30_000);
 });

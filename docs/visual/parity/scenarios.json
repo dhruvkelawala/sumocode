@@ -49,7 +49,7 @@
       "status": "review",
       "component": { "kind": "sidebar-editorial" },
       "dimensions": { "cols": 30, "rows": 54 },
-      "bibleTarget": "01-sidebar-v2-editorial.png",
+      "bibleTarget": "01-sidebar-v2-editorial-context.png",
       "crops": [
         { "id": "full", "targetCrop": "full", "runtimeCrop": "full" }
       ]

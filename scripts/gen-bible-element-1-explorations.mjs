@@ -24,7 +24,7 @@ const padRight = (s, n) => {
 	return need > 0 ? s + rep(" ", need) : s;
 };
 const row = (h) =>
-	`<span class="box-fill" style="background: var(--surface)">` + padRight(h, COLS) + `</span>`;
+	`<span class="box-fill" style="background: var(--surface); width: ${COLS}ch">` + padRight(h, COLS) + `</span>`;
 const blank = () => row("");
 
 const trackOut = (s) => s.split("").join("\u202f"); // narrow no-break space

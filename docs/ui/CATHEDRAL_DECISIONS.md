@@ -142,7 +142,7 @@ Splash renders only when the session has zero user messages.
    ┌─ DIVINE INVOCATION ───────────────────────────────────────┐
    │ > Ask anything... "Refactor the auth flow."  █            │
    └───────────────────────────────────────────────────────────┘
-   ╰─ AWAITING PROMPT                         TAB · AGENTS  CTRL+/ · COMMANDS
+   ╰─ AWAITING PROMPT                                           CTRL+/ · COMMANDS
 ```
 
 - Top bar (Element 2) renders above the splash.
@@ -172,7 +172,7 @@ Static dim placeholder example, e.g.
 Both hints sit below the input frame and are constrained to the invocation frame width, not the full terminal width:
 
 - Left (dim flavour): `╰─ AWAITING PROMPT`
-- Right (dim keybinds): `TAB · AGENTS  CTRL+/ · COMMANDS`
+- Right (dim keybinds): `CTRL+/ · COMMANDS` until agent switching is functional
 
 ---
 
@@ -184,7 +184,7 @@ Both hints sit below the input frame and are constrained to the invocation frame
    ┌──────────────────────────────────────────────┐
    │ > █                                          │
    └──────────────────────────────────────────────┘
-                                                  TAB · AGENTS  CTRL+/ · COMMANDS
+                                                                CTRL+/ · COMMANDS
 ```
 
 ### Q4.1 — Active-state input label: **b** — drop the `DIVINE INVOCATION` label in active state
@@ -193,8 +193,8 @@ The label is splash-only ceremony. Active state has just the carved frame.
 
 ### Q4.2 — Active-state hint row: **b** — keep keybinds only, drop cathedral flavour
 
-`TAB · AGENTS  CTRL+/ · COMMANDS` on the right of the row below the frame.
-No `AWAITING DIVINE INVOCATION` flavour text.
+`CTRL+/ · COMMANDS` on the right of the row below the frame.
+No `AWAITING DIVINE INVOCATION` flavour text. `TAB · AGENTS` is intentionally deferred until agent switching is functional.
 
 ### Q4.3 — Active-state placeholder: **b** — no placeholder
 
@@ -506,7 +506,7 @@ Enter on a row closes the palette and opens the matching sub-overlay. No in-plac
 
 ### Splash hint row update
 
-Element 3's splash hint row now says `TAB · AGENTS  CTRL+/ · COMMANDS` so the on-screen hint matches the conflict-free palette shortcut.
+Element 3's splash hint row now says `CTRL+/ · COMMANDS`; `TAB · AGENTS` is deferred until agent switching is functional.
 
 ---
 

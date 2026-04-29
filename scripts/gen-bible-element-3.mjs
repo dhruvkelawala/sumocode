@@ -149,9 +149,8 @@ function buildSplash({ cols, rows: totalRows, placeholderIndex = 0 }) {
 	// 5. Hint row: constrained to the invocation frame width.
 	// Human review reads this as a pair attached to the frame, not terminal-edge chrome.
 	const left = `╰─ AWAITING PROMPT`;
-	const right = `TAB · AGENTS  CTRL+/ · COMMANDS`;
+	const right = `CTRL+/ · COMMANDS`;
 	const rightHTML =
-		`<span class="fg-dim">TAB · AGENTS  </span>` +
 		`<span class="fg-accent">CTRL+/</span>` +
 		`<span class="fg-dim"> · COMMANDS</span>`;
 	const inputFrameLeftPad = Math.floor((cols - innerWidth) / 2);

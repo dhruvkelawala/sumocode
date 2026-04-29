@@ -264,7 +264,7 @@ SUMOCODE   ║ ● auth-flow-refactor ║   │ debug-balance-tx   │ index-iss
    ┌─ DIVINE INVOCATION ───────────────────────────────────────┐
    │ > <rotating placeholder>  █                                │
    └───────────────────────────────────────────────────────────┘
-   ╰─ AWAITING PROMPT                         TAB · AGENTS  CTRL+/ · COMMANDS
+   ╰─ AWAITING PROMPT                                           CTRL+/ · COMMANDS
 
                           SUMOCODE V0.2.0 · CATHEDRAL · 160 × 45 MONOSPACE
 ```
@@ -290,13 +290,13 @@ Disappears on first keystroke.
    ┌──────────────────────────────────────────────┐
    │ > █                                          │
    └──────────────────────────────────────────────┘
-                                          TAB · AGENTS  CTRL+/ · COMMANDS
+                                                        CTRL+/ · COMMANDS
 ```
 
 - **No label** above frame (regression to fix — currently shows `INPUT` / `SCRIPTOR INPUT`)
 - `>` prompt arrow inside frame, accent (currently missing — fix)
 - **No flavour text** on hint row (regression to fix — currently shows `INPUT PROTOCOL AWAITING COMMAND`)
-- Hint row right side only: `TAB · AGENTS  CTRL+/ · COMMANDS`
+- Hint row right side only: `CTRL+/ · COMMANDS` until agent switching is functional
 - Frame chars in `divider`
 - Bg inside frame: `surfaceRecess` — **EVERY ROW** including padding rows above/below cursor row
 - Text: `foreground`

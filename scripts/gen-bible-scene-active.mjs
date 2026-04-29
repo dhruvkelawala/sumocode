@@ -354,17 +354,16 @@ function buildInputFrameRows(cols) {
 }
 
 // ─── Hint row (right-aligned keybinds, 1-char l/r padding) ─────────────
-const PAD = 1; // 2-char l/r padding for chrome rows
+const PAD = 1; // 1-char l/r padding for chrome rows
 
 // In portrait (sidebar hidden), hint row carries the project name + branch
 // on the LEFT (since sidebar can't show them). In landscape, hint row is
 // right-keybinds-only (sidebar shows project).
 function buildHintRow(cols, sidebarVisible) {
 	const rightHTML =
-		`<span class="fg-dim">TAB \u00b7 AGENTS  </span>` +
 		`<span class="fg-accent">CTRL+/</span>` +
 		`<span class="fg-dim"> \u00b7 COMMANDS</span>`;
-	const rightLen = 31;
+	const rightLen = 17;
 
 	if (sidebarVisible) {
 		const lead = cols - rightLen - PAD * 2;

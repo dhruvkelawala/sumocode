@@ -115,7 +115,7 @@ Current harness: **88 mockups** rendered by `pnpm render:bible`.
 ### Element 4 — Active input frame
 - No label above frame (drop `INPUT`/`SCRIPTOR INPUT`)
 - `>` prompt arrow inside frame in accent color
-- Hint row right-aligned: `TAB · AGENTS  CTRL+/ · COMMANDS`
+- Hint row right-aligned: `CTRL+/ · COMMANDS` (`TAB · AGENTS` deferred until agent switching is functional)
 - Cursor: terminal user preference (don't override OSC 12); `/sumo:cursor block|bar|thin` to override
 - Frame interior: `surface-recess` bg fill on every row
 

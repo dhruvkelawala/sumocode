@@ -26,7 +26,7 @@ function component(lines: string[]): { renderCalls: number[]; node: { render(wid
 }
 
 describe("sidebar placement", () => {
-	it("chooses portrait-friendly sidebar anchors", () => {
+	it("keeps the legacy portrait anchor helper deterministic", () => {
 		expect(chooseSidebarAnchor(80, 140)).toBe("top-right");
 		expect(chooseSidebarAnchor(140, 80)).toBe("right-center");
 		expect(chooseSidebarAnchor(140, 80, "bottom-right")).toBe("bottom-right");
@@ -94,6 +94,7 @@ describe("sidebar placement", () => {
 		const options = showOverlay.mock.calls[0]![1];
 		expect(options.visible?.(SIDEBAR_MIN_TERMINAL_WIDTH, 24)).toBe(true);
 		expect(options.visible?.(SIDEBAR_MIN_TERMINAL_WIDTH - 1, 24)).toBe(false);
+		expect(options.visible?.(60, 100)).toBe(false);
 		expect(tui.requestRender).toHaveBeenCalledWith(true);
 	});
 });

@@ -522,7 +522,7 @@ describe("chooseSidebarAnchor", () => {
 		expect(chooseSidebarAnchor(200, 60)).toBe("right-center");
 	});
 
-	it("defaults to top-right on portrait monitors", () => {
+	it("keeps the legacy portrait anchor stable for future overlays", () => {
 		expect(chooseSidebarAnchor(60, 160)).toBe("top-right");
 	});
 

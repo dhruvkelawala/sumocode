@@ -51,6 +51,8 @@ The manifest owns scenario dimensions. Current locked V2 dimensions are:
 
 V2 sidebar width is **30 columns**. Legacy 49-column sidebar references are historical V1/mockup material and must not be used for new V2 assertions.
 
+P0-F portrait policy is **Option A**: portrait/narrow layouts hide the sidebar and let the footer/hint row absorb essential context. The canonical `60 × 100` portrait runtime scene is therefore a no-sidebar scene; it must not add a sidebar crop, bottom-registry crop, or portrait overlay crop in V1.
+
 For 160-column full-screen crops, the sidebar crop starts at `x=130` and spans `30` columns. Chat/runtime content should reserve the matching right-side space only when the runtime sidebar policy says the sidebar is visible.
 
 ## 4. Input and cursor contract

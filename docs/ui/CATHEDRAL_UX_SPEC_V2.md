@@ -85,11 +85,12 @@ Splash extra     : version line only on splash, above bottom breathing row
 
 **CHANGED v1 → v2**: Sidebar width `49 → 30` cols. Two-pane split adjusts at `W-30`. Full-screen scenes reserve one internal blank row above the top bar and one below the footer so chrome does not glue to the terminal edge.
 
-**Sidebar visibility rules**:
+**Sidebar visibility rules** (P0-F locked in `docs/SUMO_TUI_PORTRAIT_SIDEBAR_POLICY.md`):
 - Hidden on splash (always full-width splash content)
-- Hidden when `W < 120` cols (footer absorbs context info — see Element 5)
+- Hidden when `W < 120` cols (footer/hint absorbs context info — see Element 5)
 - Hidden when user runs `/sidebar hide`
 - Visible otherwise
+- V1 portrait policy is chat-first/no-sidebar; bottom registry bands and portrait overlays are V2/later
 
 Modal overlays sit centered. We cannot dim the underlying canvas in a terminal — modals use `surfaceLifted` bg to read as elevated.
 

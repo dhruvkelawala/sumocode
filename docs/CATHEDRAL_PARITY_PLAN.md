@@ -100,9 +100,7 @@ Bible and `docs/visual/parity/CONTRACT.md`.
 
 - **2.1** Keep `SIDEBAR_WIDTH` at the V2 value of `30`.
 - **2.2** Keep the wide-layout threshold aligned to the V2 split (`SIDEBAR_MIN_TERMINAL_WIDTH = 120`).
-- **2.3** Anchor responsive to terminal aspect ratio (#13):
-  landscape → `right-center`; portrait → `top-right`.
-  Persist override in per-machine `~/.sumocode/local-config.json`.
+- **2.3** Portrait policy superseded by P0-F: V1 hides the sidebar below `120` cols and keeps the canonical portrait scene no-sidebar. Future portrait overlays/bottom bands require a separate V2 issue and visual approval.
 - **2.4** CONTEXT section parity:
   - row 1: `argent-x (main)` (project + branch)
   - row 2: `[██████░░░░░░░░░░░░░░░░░░] 42k/200k`

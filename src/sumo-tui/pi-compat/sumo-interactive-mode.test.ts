@@ -11,7 +11,7 @@ import {
 } from "./sumo-interactive-mode.js";
 import { installChatViewportBridge } from "./chat-viewport-controller.js";
 import { defaultSplashSnapshot, getSplashContentHeight } from "../cathedral/splash-tree.js";
-import { ALTSCREEN_ENTER_SEQUENCE, MOUSE_SGR_ENABLE_SEQUENCE } from "../runtime/terminal-controller.js";
+import { ALTSCREEN_ENTER_SEQUENCE, MOUSE_SGR_ENABLE_SEQUENCE, TerminalSessionOwner } from "../runtime/terminal-controller.js";
 
 const ANSI_PATTERN = /\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\)|_[^\x07]*(?:\x07|\x1b\\))/g;
 
@@ -94,6 +94,21 @@ describe("sumo interactive Pi noise filtering", () => {
 		const output = write.mock.calls.map(([chunk]) => String(chunk)).join("");
 		expect(output).toContain(ALTSCREEN_ENTER_SEQUENCE);
 		expect(output).toContain(MOUSE_SGR_ENABLE_SEQUENCE);
+		runtime.stop();
+	});
+
+	it("shares the terminal owner with lifecycle startup without duplicate mode writes", async () => {
+		const write = vi.fn();
+		const output = { isTTY: true, columns: 100, rows: 30, write };
+		const terminal = new TerminalSessionOwner({ output });
+		terminal.startRetainedSession();
+		const runtime = new SumoInteractiveRuntime(output, terminal);
+
+		await runtime.start();
+
+		const written = write.mock.calls.map(([chunk]) => String(chunk)).join("");
+		expect(written.match(/\x1b\[\?1049h/g) ?? []).toHaveLength(1);
+		expect(written.match(/\x1b\[\?1000h\x1b\[\?1006h/g) ?? []).toHaveLength(1);
 		runtime.stop();
 	});
 

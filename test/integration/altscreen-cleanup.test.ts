@@ -18,14 +18,13 @@ describe("sumo-tui altscreen cleanup integration", () => {
 		app = spawnPiPty({ env: { PI_CODING_AGENT_DIR: agentDir } });
 
 		await app.waitForOutput(PI_BOOT_SEQUENCE, 10_000);
-		await app.waitForOutput(CURSOR_COLOR_SET, 5_000);
 		app.sendSignal("SIGINT");
 		await app.waitForOutput(TERMINAL_CLEANUP_SEQUENCE, 5_000);
-		await app.waitForOutput(CURSOR_COLOR_RESET, 5_000);
 
+		const output = app.getOutput();
 		const state = app.getCurrentTerminalState();
-		expect(app.getOutput()).toContain(CURSOR_COLOR_SET);
-		expect(app.getOutput()).toContain(CURSOR_COLOR_RESET);
+		expect(output).not.toContain(CURSOR_COLOR_SET);
+		expect(output).not.toContain(CURSOR_COLOR_RESET);
 		expect(state.cleanupSequenceSeen).toBe(true);
 		expect(state.altscreenActive).toBe(false);
 		expect(state.kittyKeyboardPopped).toBe(true);

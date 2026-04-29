@@ -3,6 +3,8 @@
 > Scope: current `sumocode` worktree, `src/sumo-tui/**`, Cathedral runtime/UI code, SumoTUI research docs, V2 visual spec, and a quick survey of other production TUI frameworks.
 >
 > Revision log: v1 (2026-04-29) → v2 (2026-04-29, post-review). v2 leads with the spine, adds effort buckets, promotes the Pi-patch question to P0, names a fallback product, picks one app-model direction, and adds a decision section for in-flight V2 UI work.
+>
+> Post-#100 note: P0-C introduced `TerminalSessionOwner`, shared it across lifecycle/runtime startup, and moved OSC 12 cursor color behind an explicit opt-in hook. Findings below that mention duplicate terminal owners or unconditional OSC 12 describe the pre-#100 state.
 
 ---
 

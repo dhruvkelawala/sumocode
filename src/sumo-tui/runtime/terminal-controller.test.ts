@@ -7,7 +7,7 @@ import {
 	TERMINAL_BG_RESET,
 	TERMINAL_BG_SET,
 	TERMINAL_CLEANUP_SEQUENCE,
-	TerminalController,
+	TerminalSessionOwner,
 	type TerminalOutput,
 } from "./terminal-controller.js";
 
@@ -22,31 +22,68 @@ function outputStub(isTTY = true): TerminalOutput & { writes: string[] } {
 	};
 }
 
-describe("TerminalController", () => {
-	it("startRetainedSession owns altscreen and mouse mode startup", () => {
+describe("TerminalSessionOwner", () => {
+	it("startRetainedSession owns altscreen and mouse mode startup without overriding cursor color", () => {
 		const output = outputStub();
-		const controller = new TerminalController({ output });
+		const terminal = new TerminalSessionOwner({ output });
 
-		controller.startRetainedSession();
+		terminal.startRetainedSession();
 
-		expect(output.writes).toEqual([`${ALTSCREEN_ENTER_SEQUENCE}${TERMINAL_BG_SET}${CURSOR_COLOR_SET}`, MOUSE_SGR_ENABLE_SEQUENCE]);
+		expect(output.writes).toEqual([`${ALTSCREEN_ENTER_SEQUENCE}${TERMINAL_BG_SET}`, MOUSE_SGR_ENABLE_SEQUENCE]);
+		expect(output.writes.join("")).not.toContain(CURSOR_COLOR_SET);
+		expect(terminal.getState()).toMatchObject({
+			altscreenActive: true,
+			mouseSGREnabled: true,
+			backgroundPainted: true,
+			cursorColorOverridden: false,
+			restored: false,
+		});
 	});
 
-	it("enterAltscreen emits altscreen bytes followed by cathedral cursor color", () => {
+	it("suppresses duplicate retained lifecycle requests until cleanup", () => {
 		const output = outputStub();
-		const controller = new TerminalController({ output });
+		const terminal = new TerminalSessionOwner({ output });
 
-		controller.enterAltscreen();
+		terminal.startRetainedSession();
+		terminal.startRetainedSession();
+		terminal.enterAltscreen();
+		terminal.enableMouseSGR();
 
-		expect(output.writes).toEqual([`${ALTSCREEN_ENTER_SEQUENCE}${TERMINAL_BG_SET}${CURSOR_COLOR_SET}`]);
-		expect(output.writes[0]).toBe("\x1b[?1049h\x1b[?25h\x1b[H\x1b]11;#1A1511\x1b\\\x1b]12;#D97706\x1b\\");
+		expect(output.writes).toEqual([`${ALTSCREEN_ENTER_SEQUENCE}${TERMINAL_BG_SET}`, MOUSE_SGR_ENABLE_SEQUENCE]);
+	});
+
+	it("enterAltscreen emits altscreen bytes and terminal background only", () => {
+		const output = outputStub();
+		const terminal = new TerminalSessionOwner({ output });
+
+		terminal.enterAltscreen();
+
+		expect(output.writes).toEqual([`${ALTSCREEN_ENTER_SEQUENCE}${TERMINAL_BG_SET}`]);
+		expect(output.writes[0]).toBe("\x1b[?1049h\x1b[?25h\x1b[H\x1b]11;#1A1511\x1b\\");
+		expect(output.writes[0]).not.toContain("\x1b]12;");
+	});
+
+	it("explicit cursor color overrides are opt-in and reset on cleanup", () => {
+		const output = outputStub();
+		const terminal = new TerminalSessionOwner({ output });
+
+		terminal.startRetainedSession();
+		terminal.setCursorColor();
+		terminal.exitTerminal();
+
+		expect(output.writes).toEqual([
+			`${ALTSCREEN_ENTER_SEQUENCE}${TERMINAL_BG_SET}`,
+			MOUSE_SGR_ENABLE_SEQUENCE,
+			CURSOR_COLOR_SET,
+			`${CURSOR_COLOR_RESET}${TERMINAL_BG_RESET}${TERMINAL_CLEANUP_SEQUENCE}`,
+		]);
 	});
 
 	it("enableMouseSGR emits click/wheel SGR bytes without any-event motion tracking", () => {
 		const output = outputStub();
-		const controller = new TerminalController({ output });
+		const terminal = new TerminalSessionOwner({ output });
 
-		controller.enableMouseSGR();
+		terminal.enableMouseSGR();
 
 		expect(output.writes).toEqual([MOUSE_SGR_ENABLE_SEQUENCE]);
 		expect(output.writes[0]).toBe("\x1b[?1000h\x1b[?1006h");
@@ -54,71 +91,78 @@ describe("TerminalController", () => {
 
 	it("writes absolute chat viewport rows behind the terminal ownership seam", () => {
 		const output = outputStub();
-		const controller = new TerminalController({ output });
+		const terminal = new TerminalSessionOwner({ output });
 
-		expect(controller.writeChatViewport(2, 3, ["one", "two"])).toBe(true);
+		expect(terminal.writeChatViewport(2, 3, ["one", "two"])).toBe(true);
 
 		expect(output.writes).toEqual(["\x1b[?2026h\x1b7\x1b[3;4Hone\x1b[4;4Htwo\x1b8\x1b[?2026l"]);
 	});
 
 	it("writes full-frame patches and hardware cursor behind the terminal ownership seam", () => {
 		const output = outputStub();
-		const controller = new TerminalController({ output });
+		const terminal = new TerminalSessionOwner({ output });
 
-		controller.writeFramePatches([{ row: 1, ansi: "hello" }], { row: 2, col: 4 });
+		terminal.writeFramePatches([{ row: 1, ansi: "hello" }], { row: 2, col: 4 });
 
 		expect(output.writes).toEqual(["\x1b[?2026h\x1b[2;1Hhello\x1b[K\x1b[3;5H\x1b[?25h\x1b[?2026l"]);
 	});
 
-	it("exitTerminal resets cursor color before the full cleanup bytes (EC-5.1)", () => {
+	it("exitTerminal emits cleanup without cursor or bg reset when retained mode was never entered", () => {
 		const output = outputStub();
-		const controller = new TerminalController({ output });
+		const terminal = new TerminalSessionOwner({ output });
 
-		controller.exitTerminal();
+		terminal.exitTerminal();
 
-		expect(output.writes).toEqual([`${CURSOR_COLOR_RESET}${TERMINAL_BG_RESET}${TERMINAL_CLEANUP_SEQUENCE}`]);
-		expect(output.writes[0]).toBe("\x1b]112\x1b\\\x1b]111\x1b\\\x1b[<u\x1b[>4;0m\x1b[?2004l\x1b[?1003l\x1b[?1006l\x1b[?1000l\x1b[?1049l\x1b[?25h\x1b[0m");
-		expect(controller.restored).toBe(true);
+		expect(output.writes).toEqual([TERMINAL_CLEANUP_SEQUENCE]);
+		expect(output.writes[0]).toBe("\x1b[<u\x1b[>4;0m\x1b[?2004l\x1b[?1003l\x1b[?1006l\x1b[?1000l\x1b[?1049l\x1b[?25h\x1b[0m");
+		expect(output.writes[0]).not.toContain("\x1b]12;");
+		expect(output.writes[0]).not.toContain(CURSOR_COLOR_RESET);
+		expect(terminal.restored).toBe(true);
+	});
+
+	it("exitTerminal restores bg after retained mode was active", () => {
+		const output = outputStub();
+		const terminal = new TerminalSessionOwner({ output });
+
+		terminal.startRetainedSession();
+		terminal.exitTerminal();
+
+		expect(output.writes).toEqual([`${ALTSCREEN_ENTER_SEQUENCE}${TERMINAL_BG_SET}`, MOUSE_SGR_ENABLE_SEQUENCE, `${TERMINAL_BG_RESET}${TERMINAL_CLEANUP_SEQUENCE}`]);
 	});
 
 	it("double cleanup is a no-op after the restored flag is set", () => {
 		const output = outputStub();
-		const controller = new TerminalController({ output });
+		const terminal = new TerminalSessionOwner({ output });
 
-		controller.exitTerminal();
-		controller.exitTerminal();
+		terminal.exitTerminal();
+		terminal.exitTerminal();
 
-		expect(output.writes).toEqual([`${CURSOR_COLOR_RESET}${TERMINAL_BG_RESET}${TERMINAL_CLEANUP_SEQUENCE}`]);
+		expect(output.writes).toEqual([TERMINAL_CLEANUP_SEQUENCE]);
 	});
 
 	it("re-entering terminal modes clears the restored flag for the next cleanup", () => {
 		const output = outputStub();
-		const controller = new TerminalController({ output });
+		const terminal = new TerminalSessionOwner({ output });
 
-		controller.exitTerminal();
-		controller.enterAltscreen();
-		controller.enableMouseSGR();
-		controller.exitTerminal();
+		terminal.exitTerminal();
+		terminal.enterAltscreen();
+		terminal.enableMouseSGR();
+		terminal.exitTerminal();
 
-		expect(output.writes).toEqual([
-			`${CURSOR_COLOR_RESET}${TERMINAL_BG_RESET}${TERMINAL_CLEANUP_SEQUENCE}`,
-			`${ALTSCREEN_ENTER_SEQUENCE}${TERMINAL_BG_SET}${CURSOR_COLOR_SET}`,
-			MOUSE_SGR_ENABLE_SEQUENCE,
-			`${CURSOR_COLOR_RESET}${TERMINAL_BG_RESET}${TERMINAL_CLEANUP_SEQUENCE}`,
-		]);
+		expect(output.writes).toEqual([TERMINAL_CLEANUP_SEQUENCE, `${ALTSCREEN_ENTER_SEQUENCE}${TERMINAL_BG_SET}`, MOUSE_SGR_ENABLE_SEQUENCE, `${TERMINAL_BG_RESET}${TERMINAL_CLEANUP_SEQUENCE}`]);
 	});
 
 	it("isTTY=false skips enter and cleanup writes gracefully (EC-10.1)", () => {
 		const output = outputStub(false);
-		const controller = new TerminalController({ output });
+		const terminal = new TerminalSessionOwner({ output });
 
-		controller.enterAltscreen();
-		controller.enableMouseSGR();
-		controller.exitTerminal();
+		terminal.enterAltscreen();
+		terminal.enableMouseSGR();
+		terminal.exitTerminal();
 
-		expect(controller.isTTY()).toBe(false);
+		expect(terminal.isTTY()).toBe(false);
 		expect(output.writes).toEqual([]);
-		expect(controller.restored).toBe(true);
+		expect(terminal.restored).toBe(true);
 	});
 
 	it("catches EPIPE silently and suppresses later writes (EC-5.5)", () => {
@@ -128,12 +172,12 @@ describe("TerminalController", () => {
 			throw error;
 		});
 		const output: TerminalOutput = { isTTY: true, write };
-		const controller = new TerminalController({ output });
+		const terminal = new TerminalSessionOwner({ output });
 
-		expect(() => controller.exitTerminal()).not.toThrow();
-		controller.enterAltscreen();
+		expect(() => terminal.exitTerminal()).not.toThrow();
+		terminal.enterAltscreen();
 
 		expect(write).toHaveBeenCalledTimes(1);
-		expect(controller.restored).toBe(false);
+		expect(terminal.restored).toBe(false);
 	});
 });

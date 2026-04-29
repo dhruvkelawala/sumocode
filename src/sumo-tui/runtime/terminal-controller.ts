@@ -1,5 +1,5 @@
 /**
- * Terminal lifecycle controller for sumo-tui Phase 1.
+ * Terminal lifecycle owner for sumo-tui.
  *
  * The sequence choices are taken from the accepted sumo-tui ADR and Phase 1
  * plan, which in turn follow the OpenCode/OpenTUI pattern of application-owned
@@ -51,29 +51,64 @@ export interface TerminalPatch {
 	readonly ansi: string;
 }
 
-export interface TerminalControllerOptions {
+export interface TerminalSessionOwnerOptions {
 	readonly output?: TerminalOutput;
+	/** Paint the terminal default bg via OSC 11 while retained mode is active. */
+	readonly paintBackground?: boolean;
+}
+
+export interface TerminalSessionOwnerState {
+	readonly altscreenActive: boolean;
+	readonly mouseSGREnabled: boolean;
+	readonly backgroundPainted: boolean;
+	readonly cursorColorOverridden: boolean;
+	readonly restored: boolean;
 }
 
 function isBrokenPipeError(error: unknown): boolean {
 	return typeof error === "object" && error !== null && "code" in error && (error as { code?: unknown }).code === "EPIPE";
 }
 
+function cursorColorSetSequence(hex: string): string {
+	return `\x1b]12;${hex}\x1b\\`;
+}
+
 /**
- * Owns the byte-level terminal mode transitions for sumo-tui.
+ * Single state machine for retained terminal lifecycle.
+ *
+ * It owns altscreen, mouse mode, terminal background paint, explicit cursor
+ * color overrides, and cleanup. Multiple callers may request retained mode
+ * (the Pi lifecycle shim and the retained runtime currently both do during the
+ * hybrid phase), but duplicate writes are suppressed until cleanup runs.
  */
-export class TerminalController {
+export class TerminalSessionOwner {
 	public restored = false;
 	private readonly output: TerminalOutput;
+	private readonly paintBackground: boolean;
 	private brokenPipe = false;
+	private altscreenActive = false;
+	private mouseSGREnabled = false;
+	private backgroundPainted = false;
+	private cursorColorOverridden = false;
 
-	public constructor(options: TerminalControllerOptions = {}) {
+	public constructor(options: TerminalSessionOwnerOptions = {}) {
 		this.output = options.output ?? process.stdout;
+		this.paintBackground = options.paintBackground ?? true;
 	}
 
 	/** Edge case 10.1: no-op terminal ownership when stdout is not a TTY. */
 	public isTTY(): boolean {
 		return this.output.isTTY === true;
+	}
+
+	public getState(): TerminalSessionOwnerState {
+		return {
+			altscreenActive: this.altscreenActive,
+			mouseSGREnabled: this.mouseSGREnabled,
+			backgroundPainted: this.backgroundPainted,
+			cursorColorOverridden: this.cursorColorOverridden,
+			restored: this.restored,
+		};
 	}
 
 	public startRetainedSession(): void {
@@ -82,18 +117,38 @@ export class TerminalController {
 	}
 
 	public enterAltscreen(): void {
-		if (!this.isTTY()) return;
+		if (!this.isTTY() || this.altscreenActive) return;
 		this.restored = false;
-		// Order matters: enter altscreen first, set terminal-wide bg before any
-		// content writes so empty regions read as cathedral bg, then set cursor
-		// color so the input caret is accent orange.
-		this.write(`${ALTSCREEN_ENTER_SEQUENCE}${TERMINAL_BG_SET}${CURSOR_COLOR_SET}`);
+		let output = ALTSCREEN_ENTER_SEQUENCE;
+		if (this.paintBackground) {
+			output += TERMINAL_BG_SET;
+			this.backgroundPainted = true;
+		}
+		// V2 contract: do not emit OSC 12 cursor color during normal startup.
+		this.write(output);
+		this.altscreenActive = true;
 	}
 
 	public enableMouseSGR(): void {
-		if (!this.isTTY()) return;
+		if (!this.isTTY() || this.mouseSGREnabled) return;
 		this.restored = false;
 		this.write(MOUSE_SGR_ENABLE_SEQUENCE);
+		this.mouseSGREnabled = true;
+	}
+
+	/** Explicit cursor-color override hook for `/sumo:cursor accent`. */
+	public setCursorColor(hex = "#D97706"): void {
+		if (!this.isTTY()) return;
+		this.restored = false;
+		this.write(cursorColorSetSequence(hex));
+		this.cursorColorOverridden = true;
+	}
+
+	/** Explicit cursor-color reset hook for `/sumo:cursor reset`. */
+	public resetCursorColor(): void {
+		if (!this.isTTY()) return;
+		this.write(CURSOR_COLOR_RESET);
+		this.cursorColorOverridden = false;
 	}
 
 	public writeChatViewport(top: number, left: number, lines: readonly string[]): boolean {
@@ -128,10 +183,18 @@ export class TerminalController {
 	public exitTerminal(): void {
 		if (this.restored) return;
 		this.restored = true;
+		const shouldResetCursorColor = this.cursorColorOverridden;
+		const shouldResetBackground = this.backgroundPainted;
+		this.altscreenActive = false;
+		this.mouseSGREnabled = false;
+		this.backgroundPainted = false;
+		this.cursorColorOverridden = false;
 		if (!this.isTTY()) return;
-		// Reset cursor + bg colors before the rest of the cleanup so the user's
-		// shell returns to its native palette.
-		this.write(`${CURSOR_COLOR_RESET}${TERMINAL_BG_RESET}${TERMINAL_CLEANUP_SEQUENCE}`);
+		let output = "";
+		if (shouldResetCursorColor) output += CURSOR_COLOR_RESET;
+		if (shouldResetBackground) output += TERMINAL_BG_RESET;
+		output += TERMINAL_CLEANUP_SEQUENCE;
+		this.write(output);
 	}
 
 	private write(data: string): void {
@@ -149,3 +212,11 @@ export class TerminalController {
 		}
 	}
 }
+
+/**
+ * Backwards-compatible name for the old low-level seam. New code should depend
+ * on `TerminalSessionOwner`; this alias remains for existing imports/tests.
+ */
+export class TerminalController extends TerminalSessionOwner {}
+
+export const defaultTerminalSessionOwner = new TerminalSessionOwner();

@@ -144,7 +144,9 @@
 				{
 					"id": "top-bar",
 					"targetCrop": "top-bar-component",
-					"runtimeCrop": "top-bar-component"
+					"runtimeCrop": "top-bar-component",
+					"status": "required",
+					"threshold": 0.08
 				}
 			]
 		},

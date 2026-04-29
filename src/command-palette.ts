@@ -260,13 +260,6 @@ export async function cycleModel(ctx: ExtensionContext, pi: ExtensionAPI, direct
 }
 
 export function installCommandPalette(pi: ExtensionAPI): void {
-	pi.registerCommand("sumo:memory", {
-		description: "Open SumoCode memory browser (stub until Element 7 is installed)",
-		handler: async (_args, ctx) => {
-			ctx.ui.notify("memory editor ships in cathedral element 7", "info");
-		},
-	});
-
 	pi.registerShortcut(COMMAND_PALETTE_SHORTCUT, {
 		description: "Open SumoCode command palette",
 		handler: async (ctx) => {

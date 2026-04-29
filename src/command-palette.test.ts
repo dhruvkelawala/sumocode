@@ -121,6 +121,7 @@ describe("installCommandPalette", () => {
 		const registerCommand = vi.fn();
 		installCommandPalette({ registerShortcut, registerCommand } as never);
 
+		expect(registerCommand).not.toHaveBeenCalled();
 		expect(registerShortcut).toHaveBeenCalledTimes(1);
 		expect(registerShortcut).toHaveBeenCalledWith(COMMAND_PALETTE_SHORTCUT, expect.objectContaining({ handler: expect.any(Function) }));
 		expect(registerShortcut).not.toHaveBeenCalledWith("ctrl+p", expect.anything());

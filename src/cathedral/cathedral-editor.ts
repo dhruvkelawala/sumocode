@@ -48,6 +48,7 @@ import {
 
 const RESET = "\u001b[0m";
 const ANSI_PATTERN = /\u001b\[[0-9;]*m/g;
+const SPLASH_INPUT_FRAME_WIDTH = 60;
 
 function visibleLength(text: string): number {
 	return visibleWidth(text);
@@ -122,6 +123,14 @@ function wrapRow(inner: string, width: number): string {
 	return withFrameBackground(`${DIVIDER_FG}│${RESET}${padded}${DIVIDER_FG}│${RESET}`);
 }
 
+function centerRow(row: string, width: number): string {
+	const visible = visibleLength(row);
+	if (visible >= width) return row;
+	const left = Math.floor((width - visible) / 2);
+	const right = width - visible - left;
+	return `${" ".repeat(left)}${row}${" ".repeat(right)}`;
+}
+
 /**
  * Test whether a row is one of Pi's flat horizontal borders, i.e. a row
  * consisting of nothing but `─` chars (after stripping ANSI), or one of
@@ -150,14 +159,17 @@ class CathedralEditor extends CustomEditor {
 		// Too narrow for our chrome — fall back to Pi's bare render.
 		if (width < 8) return super.render(width);
 
-		// Always defer to Pi's editor for layout. Pi gets `width - 2` so its
+		const splash = this.isSplash();
+		const frameWidth = splash ? Math.min(width, SPLASH_INPUT_FRAME_WIDTH) : width;
+
+		// Always defer to Pi's editor for layout. Pi gets `frameWidth - 2` so its
 		// content fits inside our `│ ... │` side borders. Pi's CURSOR_MARKER
 		// stays in the row, so when we prepend `│` (one visible cell) the
 		// cursor's visual column is correctly offset by 1.
-		const innerRows = super.render(width - 2);
+		const innerRows = super.render(frameWidth - 2);
 		if (innerRows.length === 0) return innerRows;
 
-		const splash = this.isSplash();
+		const fullRow = (row: string): string => splash ? centerRow(row, width) : row;
 		const label = splash ? INPUT_FRAME_LABEL_SPLASH : INPUT_FRAME_LABEL_ACTIVE;
 
 		// Find Pi's bottom border row. Pi's render is structured:
@@ -185,13 +197,13 @@ class CathedralEditor extends CustomEditor {
 				// Without this, TUI.positionHardwareCursor() sees no marker on the
 				// splash empty state and emits \x1b[?25l after every render.
 				const ghost = color(`> ${CURSOR_MARKER}${INPUT_FRAME_PLACEHOLDER}`, CATHEDRAL_TOKENS.colors.foregroundDim);
-				return wrapRow(ghost, width);
+				return fullRow(wrapRow(ghost, frameWidth));
 			}
-			return wrapRow(row, width);
+			return fullRow(wrapRow(row, frameWidth));
 		};
 
-		const result: string[] = [renderTopBorder(width, label)];
-		const paddingRow = wrapRow("", width);
+		const result: string[] = [fullRow(renderTopBorder(frameWidth, label))];
+		const paddingRow = fullRow(wrapRow("", frameWidth));
 		if (splash) result.push(paddingRow);
 
 		const lastContentIdx = bottomIdx === -1 ? innerRows.length : bottomIdx;
@@ -204,7 +216,7 @@ class CathedralEditor extends CustomEditor {
 		// adding active-state bottom padding. In active chat, every extra editor
 		// row steals vertical space from chat and makes the shell feel bouncy.
 		if (splash) result.push(paddingRow);
-		result.push(renderBottomBorder(width));
+		result.push(fullRow(renderBottomBorder(frameWidth)));
 
 		// Autocomplete rows after Pi's bottom border — passed through as-is
 		// at the narrower inner width. They appear as a dropdown directly

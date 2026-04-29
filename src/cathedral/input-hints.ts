@@ -13,14 +13,27 @@
 
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import type { Component } from "@mariozechner/pi-tui";
+import { visibleWidth } from "@mariozechner/pi-tui";
 import { INPUT_FRAME_HINT_AWAITING, renderInputHints } from "./input-frame.js";
+
+const SPLASH_INPUT_FRAME_WIDTH = 60;
+const ANSI_PATTERN = /\u001b\[[0-9;]*m/g;
+
+function centerAnsi(line: string, width: number): string {
+	const visible = visibleWidth(line.replace(ANSI_PATTERN, ""));
+	if (visible >= width) return line;
+	const left = Math.floor((width - visible) / 2);
+	const right = width - visible - left;
+	return `${" ".repeat(left)}${line}${" ".repeat(right)}`;
+}
 
 class InputHintsComponent implements Component {
 	constructor(private readonly isSplash: () => boolean) {}
 	invalidate(): void {}
 	render(width: number): string[] {
 		if (this.isSplash()) {
-			return [renderInputHints(width, { leftHint: INPUT_FRAME_HINT_AWAITING })];
+			const frameWidth = Math.min(width, SPLASH_INPUT_FRAME_WIDTH);
+			return [centerAnsi(renderInputHints(frameWidth, { leftHint: INPUT_FRAME_HINT_AWAITING }), width)];
 		}
 		return [renderInputHints(width)];
 	}

@@ -25,6 +25,12 @@ type Scenario = {
 		cols: number;
 		rows: number;
 	};
+	runtime?: {
+		command: string;
+		args: string[];
+		env?: Record<string, string>;
+	};
+	rejectIfOutputMatches?: string[];
 	crops: ScenarioCrop[];
 };
 
@@ -61,6 +67,20 @@ describe("V2 visual parity contract", () => {
 		expect(scenario("active-landscape-runtime").dimensions).toEqual({ cols: 160, rows: 45 });
 		expect(scenario("active-portrait-runtime").dimensions).toEqual({ cols: 60, rows: 100 });
 		expect(cropDefinition("sidebar")).toEqual({ x: 130, y: 3, cols: 30, rows: 34 });
+	});
+
+	it("keeps splash runtime capture on the user-facing invocation contract", () => {
+		const splash = scenario("splash-runtime");
+
+		expect(splash.runtime?.command).toBe("./bin/sumocode.sh");
+		expect(splash.runtime?.args).toEqual(["--offline", "--no-extensions", "--no-session"]);
+		expect(splash.runtime?.env).toMatchObject({ SUMO_TUI: "1", PI_OFFLINE: "1" });
+		expect(splash.rejectIfOutputMatches).toEqual(expect.arrayContaining([
+			"ERR_MODULE_NOT_FOUND",
+			"Rendered line .* exceeds terminal width",
+			"Skipping installed SumoCode extension because this session is already inside an active SumoCode dev checkout",
+			"Error \\\[",
+		]));
 	});
 
 	it("keeps the V1 portrait runtime no-sidebar", () => {

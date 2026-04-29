@@ -39,20 +39,16 @@ function buildElement4({ cols, typedText }) {
 		rep(" ", padLen) +
 		`<span class="fg-divider">│</span>`;
 
-	// Hint row: right-aligned. "TAB · AGENTS  CTRL+/ · COMMANDS" = 31 chars.
-	const hintLeft = "TAB · AGENTS";
-	const hintMidGap = "  ";
-	const hintMid = "CTRL+/";
+	// Hint row: right-aligned. Only show currently-functional affordances.
+	const hintKey = "CTRL+/";
 	const hintRight = " · COMMANDS";
-	const hintLen = hintLeft.length + hintMidGap.length + hintMid.length + hintRight.length;
+	const hintLen = hintKey.length + hintRight.length;
 	const hintPad = cols - hintLen;
 	if (hintPad < 0) throw new Error(`hint too long for ${cols} cols`);
 
 	const hintRow =
 		rep(" ", hintPad) +
-		`<span class="fg-dim">${hintLeft}</span>` +
-		hintMidGap +
-		`<span class="fg-accent">${hintMid}</span>` +
+		`<span class="fg-accent">${hintKey}</span>` +
 		`<span class="fg-dim">${hintRight}</span>`;
 
 	return { topBorder, cursorRow, botBorder, hintRow };

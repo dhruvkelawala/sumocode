@@ -37,7 +37,6 @@ function buildSidebarRows(SIDEBAR_COLS) {
 
 	rows.push(blank());
 	rows.push(cell(`  <span class="fg-accent">REGISTRY</span>`));
-	rows.push(cell(`  <span class="fg-dim">\u2014 v 1.0.0</span>`));
 	rows.push(blank());
 
 	rows.push(cell(`  <span class="fg-accent">\u25c6</span> <span class="fg-fg">${trackOut("CONTEXT")}</span>`));
@@ -355,17 +354,16 @@ function buildInputFrameRows(cols) {
 }
 
 // ─── Hint row (right-aligned keybinds, 1-char l/r padding) ─────────────
-const PAD = 1; // 2-char l/r padding for chrome rows
+const PAD = 1; // 1-char l/r padding for chrome rows
 
 // In portrait (sidebar hidden), hint row carries the project name + branch
 // on the LEFT (since sidebar can't show them). In landscape, hint row is
 // right-keybinds-only (sidebar shows project).
 function buildHintRow(cols, sidebarVisible) {
 	const rightHTML =
-		`<span class="fg-dim">TAB \u00b7 AGENTS  </span>` +
 		`<span class="fg-accent">CTRL+/</span>` +
 		`<span class="fg-dim"> \u00b7 COMMANDS</span>`;
-	const rightLen = 31;
+	const rightLen = 17;
 
 	if (sidebarVisible) {
 		const lead = cols - rightLen - PAD * 2;
@@ -457,8 +455,8 @@ function buildScene(variant) {
 <link rel="stylesheet" href="_assets/tokens.css">
 <style>
   .stage-blurb { max-width: ${Math.max(60, CHAT_COLS)}ch; color: var(--foreground-dim); font-size: 11px; line-height: 1.6; padding: 0 8px; text-align: center; }
-  .scene { display: grid; grid-template-rows: var(--cell-h) var(--cell-h) auto var(--cell-h) calc(var(--cell-h) * 3) var(--cell-h) var(--cell-h) var(--cell-h); }
-  .scene .middle { display: grid; grid-template-columns: ${middleCols}; grid-row: 3; min-height: 0; overflow: hidden; }
+  .scene { display: grid; grid-template-rows: var(--cell-h) var(--cell-h) var(--cell-h) auto var(--cell-h) calc(var(--cell-h) * 3) var(--cell-h) var(--cell-h) var(--cell-h) var(--cell-h); }
+  .scene .middle { display: grid; grid-template-columns: ${middleCols}; grid-row: 4; min-height: 0; overflow: hidden; }
   .scene .middle .chat-col, .scene .middle .sidebar-col { overflow: hidden; min-height: 0; }
   .scene .middle pre { margin: 0; }
 </style>
@@ -480,18 +478,20 @@ function buildScene(variant) {
 			? "first scene composition: combines all 5 locked elements (top-bar placeholder, sidebar V2 editorial CONTEXT, chat boxed 7A, input frame, footer READY). validates the full visual gestalt before adding remaining elements."
 			: "portrait variant. sidebar hidden (per Element 1 rule: < 120 col). chat takes full term width. footer collapses right zone (drops project + branch + $cost; keeps tokens). hint row: keybinds only (left flavour dropped at narrow widths)."}</div>
   <div data-render-rect class="term scene" style="--term-cols: ${cols}; --term-rows: ${TERM_ROWS};">
-    <pre class="grid" style="grid-row: 1;">${topBarRow}</pre>
-    <pre class="grid" style="grid-row: 2;"> </pre>
+    <pre class="grid" style="grid-row: 1;"> </pre>
+    <pre class="grid" style="grid-row: 2;">${topBarRow}</pre>
+    <pre class="grid" style="grid-row: 3;"> </pre>
     <div class="middle">
       <div class="chat-col">${chatHTML}</div>
       <div class="gutter-col"></div>
       ${sidebarVisible ? `<div class="sidebar-col"><pre class="grid">${sidebarRows.join("\n")}</pre></div>` : ""}
     </div>
-    <pre class="grid" style="grid-row: 4;"> </pre>
-    <pre class="grid" style="grid-row: 5;">${inputRows.join("\n")}</pre>
-    <pre class="grid" style="grid-row: 6;">${hintRow}</pre>
-    <pre class="grid" style="grid-row: 7;"> </pre>
-    <pre class="grid" style="grid-row: 8;">${footerRow}</pre>
+    <pre class="grid" style="grid-row: 5;"> </pre>
+    <pre class="grid" style="grid-row: 6;">${inputRows.join("\n")}</pre>
+    <pre class="grid" style="grid-row: 7;">${hintRow}</pre>
+    <pre class="grid" style="grid-row: 8;"> </pre>
+    <pre class="grid" style="grid-row: 9;">${footerRow}</pre>
+    <pre class="grid" style="grid-row: 10;"> </pre>
   </div>
 </div>
 </body>

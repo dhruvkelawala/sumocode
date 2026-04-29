@@ -64,7 +64,6 @@ const v2 = {
 		return [
 			blank(),
 			row(`  <span class="fg-accent">REGISTRY</span>`),
-			row(`  <span class="fg-dim">\u2014 v 1.0.0</span>`),
 			blank(),
 		];
 	},

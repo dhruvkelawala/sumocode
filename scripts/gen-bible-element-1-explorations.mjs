@@ -24,7 +24,7 @@ const padRight = (s, n) => {
 	return need > 0 ? s + rep(" ", need) : s;
 };
 const row = (h) =>
-	`<span class="box-fill" style="background: var(--surface)">` + padRight(h, COLS) + `</span>`;
+	`<span class="box-fill" style="background: var(--surface); width: ${COLS}ch">` + padRight(h, COLS) + `</span>`;
 const blank = () => row("");
 
 const trackOut = (s) => s.split("").join("\u202f"); // narrow no-break space
@@ -69,7 +69,6 @@ const v2 = {
 		return [
 			blank(),
 			row(`  <span class="fg-accent">REGISTRY</span>`),
-			row(`  <span class="fg-dim">\u2014 v 1.0.0</span>`),
 			blank(),
 		];
 	},
@@ -171,7 +170,6 @@ const v3 = {
 		return [
 			blank(),
 			row(`   <span class="fg-accent">REGISTRY</span>`),
-			row(`   <span class="fg-dim">v 1.0.0</span>`),
 			blank(),
 		];
 	},

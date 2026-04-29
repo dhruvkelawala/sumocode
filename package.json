@@ -40,8 +40,11 @@
     "@mariozechner/pi-coding-agent": "0.70.2",
     "@mariozechner/pi-tui": "0.70.2",
     "@types/node": "^25.6.0",
+    "@xterm/headless": "^6.0.0",
     "node-pty": "^1.1.0",
+    "pixelmatch": "^7.1.1",
     "playwright": "^1.59.1",
+    "pngjs": "^7.0.0",
     "typebox": "1.1.33",
     "typescript": "^6.0.3",
     "vitest": "^4.1.5"
@@ -55,6 +58,9 @@
     "export:bible-static": "node scripts/export-bible-static.mjs",
     "vitest": "vitest",
     "visual": "node scripts/visual.mjs",
+    "visual:review": "node scripts/visual-v2/index.mjs review",
+    "visual:ci": "node scripts/visual-v2/index.mjs ci",
+    "visual:promote": "node scripts/visual-v2/promote-golden.mjs",
     "test:visual:real-runtime": "node scripts/visual-real-runtime.mjs"
   },
   "dependencies": {
@@ -62,6 +68,9 @@
     "yoga-wasm-web": "^0.3.3"
   },
   "pnpm": {
+    "onlyBuiltDependencies": [
+      "node-pty"
+    ],
     "patchedDependencies": {
       "@mariozechner/pi-coding-agent@0.70.2": "patches/@mariozechner__pi-coding-agent@0.70.2.patch"
     }

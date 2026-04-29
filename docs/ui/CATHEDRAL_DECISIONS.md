@@ -17,8 +17,8 @@
 
 **Locked: F (REGISTRY chrome + 2 sub-tabs + Claude Design content)**
 
-- Chrome / aesthetic: from Stitch v1/v2 — `REGISTRY` header, `v 1.0.0` line,
-  `◆ active / ▢ inactive` sub-tab markers.
+- Chrome / aesthetic: `REGISTRY` single-row masthead plus
+  `◆ active / ▢ inactive` sub-tab markers. Version metadata is not shown in the sidebar.
 - Sub-tabs: only **CONTEXT** and **MEMORY** in v1.
   - `Ctrl+1` → CONTEXT
   - `Ctrl+2` → MEMORY
@@ -36,7 +36,6 @@ Sketch (active state, CONTEXT selected):
 
 ```
                                                   REGISTRY
-                                                  v 1.0.0
 
                                                   ◆ CONTEXT       ← Ctrl+1
                                                   ▢ MEMORY        ← Ctrl+2
@@ -55,7 +54,6 @@ When user presses `Ctrl+2`:
 
 ```
                                                   REGISTRY
-                                                  v 1.0.0
 
                                                   ▢ CONTEXT       ← Ctrl+1
                                                   ◆ MEMORY        ← Ctrl+2
@@ -144,12 +142,12 @@ Splash renders only when the session has zero user messages.
    ┌─ DIVINE INVOCATION ───────────────────────────────────────┐
    │ > Ask anything... "Refactor the auth flow."  █            │
    └───────────────────────────────────────────────────────────┘
-
-   └─ AWAITING DIVINE INVOCATION              TAB · AGENTS  CTRL+/ · COMMANDS
+   ╰─ AWAITING PROMPT                                           CTRL+/ · COMMANDS
 ```
 
 - Top bar (Element 2) renders above the splash.
 - Footer (Element 5) renders below the splash.
+- Full-screen scenes reserve one internal blank row above the top bar and one below the footer so chrome does not glue to the terminal edge.
 - Sidebar is hidden during splash (full chat width).
 - Splash collapses on `message_start` (first user message).
 
@@ -170,12 +168,12 @@ the scriptorium aesthetic.
 Static dim placeholder example, e.g.
 `Ask anything... "Refactor the auth flow."`. Disappears on first keystroke.
 
-### Q3.5 — hint row: **a**
+### Q3.5 — hint row: **a**, refined 2026-04-29
 
-Both hints below the input frame:
+Both hints sit below the input frame and are constrained to the invocation frame width, not the full terminal width:
 
-- Left (dim flavour): `└─ AWAITING DIVINE INVOCATION`
-- Right (dim keybinds): `TAB · AGENTS  CTRL+/ · COMMANDS`
+- Left (dim flavour): `╰─ AWAITING PROMPT`
+- Right (dim keybinds): `CTRL+/ · COMMANDS` until agent switching is functional
 
 ---
 
@@ -187,7 +185,7 @@ Both hints below the input frame:
    ┌──────────────────────────────────────────────┐
    │ > █                                          │
    └──────────────────────────────────────────────┘
-                                                  TAB · AGENTS  CTRL+/ · COMMANDS
+                                                                CTRL+/ · COMMANDS
 ```
 
 ### Q4.1 — Active-state input label: **b** — drop the `DIVINE INVOCATION` label in active state
@@ -196,8 +194,8 @@ The label is splash-only ceremony. Active state has just the carved frame.
 
 ### Q4.2 — Active-state hint row: **b** — keep keybinds only, drop cathedral flavour
 
-`TAB · AGENTS  CTRL+/ · COMMANDS` on the right of the row below the frame.
-No `AWAITING DIVINE INVOCATION` flavour text.
+`CTRL+/ · COMMANDS` on the right of the row below the frame.
+No `AWAITING DIVINE INVOCATION` flavour text. `TAB · AGENTS` is intentionally deferred until agent switching is functional.
 
 ### Q4.3 — Active-state placeholder: **b** — no placeholder
 
@@ -509,7 +507,7 @@ Enter on a row closes the palette and opens the matching sub-overlay. No in-plac
 
 ### Splash hint row update
 
-Element 3's splash hint row now says `TAB · AGENTS  CTRL+/ · COMMANDS` so the on-screen hint matches the conflict-free palette shortcut.
+Element 3's splash hint row now says `CTRL+/ · COMMANDS`; `TAB · AGENTS` is deferred until agent switching is functional.
 
 ---
 

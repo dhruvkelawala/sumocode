@@ -33,7 +33,7 @@ export const PLACEHOLDER_MCP: readonly McpServerSnapshot[] = [
 	{ name: "github", status: "idle" },
 	{ name: "stitch", status: "ok" },
 	{ name: "context7", status: "idle" },
-	{ name: "chrome-devtools", status: "idle" },
+	{ name: "chrome-dev", status: "idle" },
 ];
 
 export { SIDEBAR_SUB_TABS };
@@ -169,6 +169,7 @@ function snapshotFromContext(
 		inputTokens: input,
 		outputTokens: output,
 		contextWindow,
+		cumulativeTokens: input + output,
 		costUsd: cost,
 		mcpServers: PLACEHOLDER_MCP,
 		memory: memorySnapshot.memory,

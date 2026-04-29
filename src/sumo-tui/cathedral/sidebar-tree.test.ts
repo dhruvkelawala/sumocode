@@ -3,6 +3,7 @@ import { SumoNode } from "../layout/node.js";
 import { DIRECTION_LTR, FLEX_DIRECTION_COLUMN, loadYoga } from "../layout/yoga.js";
 import { CellBuffer } from "../render/buffer.js";
 import { composite } from "../render/compositor.js";
+import { SIDEBAR_WIDTH } from "../../sidebar.js";
 import { createSidebarTree, resolveSidebarLayoutMode } from "./sidebar-tree.js";
 
 function plainRowHasPaint(buffer: CellBuffer, row: number): boolean {
@@ -10,7 +11,7 @@ function plainRowHasPaint(buffer: CellBuffer, row: number): boolean {
 }
 
 describe("sidebar-tree", () => {
-	it("docks at width >= 120 with a fixed 49-column sidebar", async () => {
+	it("docks at width >= 120 with a fixed 30-column sidebar", async () => {
 		const yoga = await loadYoga();
 		const root = new SumoNode(yoga.Node.create());
 		root.flexDirection = FLEX_DIRECTION_COLUMN;
@@ -20,9 +21,9 @@ describe("sidebar-tree", () => {
 		root.yogaNode.calculateLayout(130, 20, DIRECTION_LTR);
 
 		expect(tree.mode).toBe("dock");
-		expect(tree.sidebar.getComputedWidth()).toBe(49);
-		expect(tree.chat.getComputedWidth()).toBe(81);
-		expect(tree.sidebar.getComputedLeft()).toBe(81);
+		expect(tree.sidebar.getComputedWidth()).toBe(SIDEBAR_WIDTH);
+		expect(tree.chat.getComputedWidth()).toBe(130 - SIDEBAR_WIDTH);
+		expect(tree.sidebar.getComputedLeft()).toBe(130 - SIDEBAR_WIDTH);
 		root.dispose();
 	});
 
@@ -39,8 +40,8 @@ describe("sidebar-tree", () => {
 
 		expect(tree.mode).toBe("overlay");
 		expect(tree.chat.getComputedWidth()).toBe(80);
-		expect(tree.sidebar.getComputedWidth()).toBe(49);
-		expect(tree.sidebar.getComputedLeft()).toBe(31);
+		expect(tree.sidebar.getComputedWidth()).toBe(SIDEBAR_WIDTH);
+		expect(tree.sidebar.getComputedLeft()).toBe(80 - SIDEBAR_WIDTH);
 		expect(plainRowHasPaint(frame, 0)).toBe(false);
 		expect(frame.getCell(0, 0).bg).toBe("#120D0A");
 		root.dispose();
@@ -60,7 +61,7 @@ describe("sidebar-tree", () => {
 		root.dispose();
 	});
 
-	it("renders REGISTRY chrome with version, session markers, and active sub-tabs", async () => {
+	it("renders REGISTRY chrome with editorial sub-tabs and memory content", async () => {
 		const yoga = await loadYoga();
 		const root = new SumoNode(yoga.Node.create());
 		root.flexDirection = FLEX_DIRECTION_COLUMN;
@@ -82,12 +83,11 @@ describe("sidebar-tree", () => {
 		const sidebarLeft = tree.sidebar.getComputedLeft();
 		const sidebarText = Array.from({ length: 12 }, (_, row) => frame.toPlainRow(row).slice(sidebarLeft)).join("\n");
 
-		expect(sidebarText).toContain("REGISTRY");
-		expect(sidebarText).toContain("v 1.0.0");
-		expect(sidebarText).toContain("◆ sumocode (main)");
-		expect(sidebarText).toContain("▢ sumocode (other-branch)");
-		expect(sidebarText).toContain("▢ CONTEXT");
-		expect(sidebarText).toContain("◆ MEMORY");
+		const normalized = sidebarText.replace(/\u202F/g, "");
+		expect(normalized).toContain("REGISTRY");
+		expect(normalized).not.toContain("v 1.0.0");
+		expect(normalized).toContain("▢ CONTEXT");
+		expect(normalized).toContain("◆ MEMORY");
 		root.dispose();
 	});
 });

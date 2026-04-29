@@ -225,7 +225,7 @@ export class RegionRegistry {
 		}
 		const slot = placementToSlot(opts.placement);
 		if (slot === "sidebar") {
-			this.slots.sidebar.width = 49;
+			this.slots.sidebar.width = 30;
 			this.slots.sidebar.flexShrink = 0;
 		}
 		this.mount(key, slot, this.resolveWidget(content));

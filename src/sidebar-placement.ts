@@ -4,13 +4,13 @@ import { surfaceLine } from "./sumo-tui/cathedral/ansi.js";
 
 /**
  * Threshold below which the sidebar hides itself. Per DESIGN.md §8
- * (Responsive), the wide layout is ≥ 120 cols: chat ~70 cols + 1 gutter +
- * 49 sidebar fits comfortably. Below this we collapse to chat-only and let
+ * (Responsive), the wide layout is ≥ 120 cols: chat + gutter + the locked
+ * 30-column V2 editorial sidebar fit comfortably. Below this we collapse to chat-only and let
  * sidebar info come through `/sumo:memory` etc.
  */
 export const SIDEBAR_MIN_TERMINAL_WIDTH = 120;
-/** Render width for the sidebar overlay (DESIGN.md §5 — cols 112..160 in the wide layout). */
-export const SIDEBAR_WIDTH = 49;
+/** Render width for the V2 editorial sidebar (Bible Element 1). */
+export const SIDEBAR_WIDTH = 30;
 
 export type SidebarAnchor = "right-center" | "top-right" | "bottom-right";
 
@@ -92,7 +92,7 @@ export class StaticSidebarDock implements Component {
 		const lines: string[] = [];
 
 		// Pre-build a surface-bg-painted blank sidebar row so rows where the
-		// sidebar has no content still cover the right 49 cols with the cathedral
+		// sidebar has no content still cover the right sidebar cols with the cathedral
 		// surface (#241D17). Without this, cells past the last sidebar line fall
 		// back to terminal-default bg — visible as black bands when the chat
 		// content underneath is taller than the sidebar (e.g., long tool outputs).

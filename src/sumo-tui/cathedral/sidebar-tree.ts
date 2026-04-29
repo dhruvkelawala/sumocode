@@ -48,9 +48,10 @@ export interface SidebarTree {
 }
 
 const DEFAULT_MCP_SERVERS: readonly McpServerSnapshot[] = [
+	{ name: "github", status: "idle" },
 	{ name: "stitch", status: "ok" },
-	{ name: "figma", status: "down" },
-	{ name: "chrome-devtools", status: "idle" },
+	{ name: "context7", status: "idle" },
+	{ name: "chrome-dev", status: "idle" },
 ];
 
 function finiteDimension(value: number, fallback: number): number {
@@ -133,7 +134,7 @@ export class SidebarChromeNode extends SumoNode {
 /**
  * Responsive cathedral sidebar host.
  *
- * Wide terminals dock the sidebar as a fixed 49-column sibling after chat.
+ * Wide terminals dock the sidebar as a fixed 30-column sibling after chat.
  * Narrow terminals let chat keep the full width and place sidebar above it as
  * an absolute right overlay with a dim backdrop. Empty splash state hides both
  * sidebar and backdrop (EC-17.6).

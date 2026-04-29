@@ -124,7 +124,7 @@ Key design moves:
 - `REGISTRY` is a single-row accent masthead; version metadata does not appear in the sidebar
 - Sub-tabs use **tracked-out** narrow-no-break-space typography (`C O N T E X T`) for editorial display feel
 - Heavy `━` rule (26 chars) separates header from content
-- All section labels (CONTEXT / SESSION / MCP / METRICS) use tracked-out style
+- All section labels (CONTEXT / SESSION / MCP / MEMORY / METRICS) use tracked-out style
 
 **CONTEXT sub-tab content (V2 EDITORIAL)**:
 
@@ -163,16 +163,19 @@ Key design moves:
 ```
 (via fg-approve color)
 
-**MEMORY sub-tab content**:
+**MEMORY sub-tab content (V2 EDITORIAL)**:
 
 ```
-                              ┌ ACTIVE_MEMORY ─
-                              ❧ prefers TS strict
-                              ❧ pnpm not npm
-                              ❧ based London · BST
-                              ❧ Argent → argent-x
-                              ❧ imperative commits
-                              48 more · ⌘M
+  M E M O R Y
+
+  ❧ prefers TS strict
+  ❧ pnpm not npm
+  ❧ based London · BST
+  ❧ Argent → argent-x
+  ❧ imperative commits
+
+  ━━━━━━━━━━━━━━━━━━━━━━━━━━
+  48 more · ⌘M
 ```
 
 `⌘M` opens memory editor (Element 7). Second path alongside `Ctrl+/ → MEMORY`.

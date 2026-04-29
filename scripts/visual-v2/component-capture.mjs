@@ -69,16 +69,18 @@ async function renderFooterReady(width) {
 async function renderSidebarEditorial(width) {
 	const mod = await jiti.import(`${repoRoot}/src/sidebar.ts`);
 	return mod.renderSidebar({
-		projectName: "sumocode",
+		projectName: "sumo-deus",
 		branch: "main",
 		inputTokens: 42000,
-		outputTokens: 8000,
+		outputTokens: 0,
 		contextWindow: 200000,
+		cumulativeTokens: 3400000,
 		costUsd: 0.42,
 		mcpServers: [
-			{ name: "github", status: "ok" },
-			{ name: "stitch", status: "idle" },
-			{ name: "chrome", status: "idle" },
+			{ name: "github", status: "idle" },
+			{ name: "stitch", status: "ok" },
+			{ name: "context7", status: "idle" },
+			{ name: "chrome-dev", status: "idle" },
 		],
 		memory: [
 			"prefers Scriptorium language",
@@ -88,14 +90,6 @@ async function renderSidebarEditorial(width) {
 		memoryTotal: 48,
 		memoryUnavailable: false,
 		activeSubTab: "CONTEXT",
-		metrics: {
-			cpuPercent: 2.4,
-			memoryMiB: 142,
-			fps: 60,
-			cpuHistory: [1, 1.4, 1.8, 2.0, 2.4, 2.1, 1.9, 2.2, 2.4, 2.4],
-			memoryHistory: [120, 123, 126, 130, 134, 138, 140, 141, 142, 142],
-			fpsHistory: [58, 60, 60, 59, 60, 60, 60, 59, 60, 60],
-		},
 	}, width);
 }
 

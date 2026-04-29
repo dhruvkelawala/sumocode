@@ -179,14 +179,14 @@ export class ChatViewportController {
 
 	public render(width: number): string[] {
 		// Pi's chatContainer is allocated the full terminal width by Pi's TUI.
-		// But Pi separately mounts our installSidebar() widget at the right 49
-		// cols (when the session has messages and terminal width >= 120). If we
-		// composite the chat tree at full width, our chat content paints into the
-		// cols Pi will overpaint with the sidebar — visually that's chat text
-		// running INTO the sidebar boundary before being clobbered.
+		// But Pi separately mounts our installSidebar() widget at the right
+		// SIDEBAR_WIDTH cols (when the session has messages and terminal width >=
+		// 120). If we composite the chat tree at full width, our chat content paints
+		// into the cols Pi will overpaint with the sidebar — visually that's chat
+		// text running INTO the sidebar boundary before being clobbered.
 		// Fix: narrow our composite to (terminal - SIDEBAR_WIDTH) when the same
 		// predicate Pi uses for showing the sidebar is true. The sidebar's own
-		// 49 cols on the right come from Pi's separate widget paint.
+		// right-side cols come from Pi's separate widget paint.
 		const terminalWidth = Math.max(1, Math.floor(width));
 		const sidebarVisible = terminalWidth >= SIDEBAR_MIN_TERMINAL_WIDTH && this.chat.hasMessages();
 		const effectiveWidth = sidebarVisible ? Math.max(1, terminalWidth - SIDEBAR_WIDTH) : terminalWidth;

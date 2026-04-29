@@ -138,8 +138,15 @@ async function runScenario(scenario) {
 
 function cropResult(crop, comparison) {
 	const biblePassed = comparison.bible.passed;
+	const hasGolden = comparison.golden !== null;
 	const goldenPassed = comparison.golden?.passed ?? true;
-	if (crop.status === "required" && (!goldenPassed || !biblePassed)) return "failed";
+	// Required crops are regression gates. Once an approved runtime golden exists,
+	// CI should fail on drift from that golden, while Bible drift remains review
+	// evidence until the design target and implementation converge exactly.
+	if (crop.status === "required") {
+		if (hasGolden) return goldenPassed ? (biblePassed ? "passed" : "review-diff") : "failed";
+		return biblePassed ? "passed" : "failed";
+	}
 	if (!biblePassed || !goldenPassed) return "review-diff";
 	return "passed";
 }

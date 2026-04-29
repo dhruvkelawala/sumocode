@@ -6,24 +6,24 @@
  *
  *   div.bg-recess.border-divider.p-4 + absolute -top-3 left-2 floating label
  *
- * Active state (Element 4) — label `INPUT`:
- *   ┌─ INPUT ──────────────────────────────────────┐
+ * Active state (Element 4) — no label:
+ *   ┌──────────────────────────────────────────────┐
  *   │ > █                                          │
  *   └──────────────────────────────────────────────┘
- *                                       TAB · AGENTS  CTRL+/ · COMMANDS
+ *                                       CTRL+/ · COMMANDS
  *
- * Splash state (Element 3) — label `SCRIPTOR INPUT`:
- *   ┌─ SCRIPTOR INPUT ──────────────────────────────────────────┐
+ * Splash state (Element 3) — label `DIVINE INVOCATION`:
+ *   ┌─ DIVINE INVOCATION ───────────────────────────────────────┐
  *   │ > Ask anything... "Refactor the auth flow."  █            │
  *   └───────────────────────────────────────────────────────────┘
- *   ┌─ INPUT PROTOCOL AWAITING COMMAND          TAB · AGENTS  CTRL+/ · COMMANDS
+ *   ╰─ AWAITING PROMPT                         CTRL+/ · COMMANDS
  *
  * Token map (from Stitch CSS variables):
  *   border       → divider  (#3A2F25)  — dim, not accent
  *   inner bg     → recess   (#120D0A)  — painted on every row
  *   `>` prompt   → oxidized (#8B7A63)  — splash | accent (#D97706) — active
  *   cursor `█`   → accent   (#D97706)
- *   placeholder  → oxidized (#8B7A63) + DIM
+ *   placeholder  → oxidized (#8B7A63)
  *   label        → oxidized → accent on focus (we always render accent)
  *
  * Pure render only. Pi-glue (mounting via setEditorComponent) lives in
@@ -33,14 +33,14 @@
 import { CATHEDRAL_TOKENS } from "../tokens.js";
 
 const RESET = "\u001b[0m";
+const RESET_BG = "\u001b[49m";
 const ANSI_PATTERN = /\u001b\[[0-9;]*m/g;
-const DIM = "\u001b[2m";
 
-export const INPUT_FRAME_LABEL_SPLASH = "SCRIPTOR INPUT";
-export const INPUT_FRAME_LABEL_ACTIVE = "INPUT";
+export const INPUT_FRAME_LABEL_SPLASH = "DIVINE INVOCATION";
+export const INPUT_FRAME_LABEL_ACTIVE = "";
 export const INPUT_FRAME_PLACEHOLDER = 'Ask anything... "Refactor the auth flow."';
-export const INPUT_FRAME_HINT_KEYBINDS = "TAB · AGENTS  CTRL+/ · COMMANDS";
-export const INPUT_FRAME_HINT_AWAITING = "┌─ INPUT PROTOCOL AWAITING COMMAND";
+export const INPUT_FRAME_HINT_KEYBINDS = "CTRL+/ · COMMANDS";
+export const INPUT_FRAME_HINT_AWAITING = "╰─ AWAITING PROMPT";
 
 function visibleLength(text: string): number {
 	return text.replace(ANSI_PATTERN, "").length;
@@ -66,10 +66,11 @@ function color(text: string, hex: string): string {
 	return `${fg(hex)}${text}${RESET}`;
 }
 
-function onRecess(text: string): string {
-	// Paint a span with the recess background; reset only the bg at the end
-	// so any inner foreground colors stay intact within the span.
-	return `${bg(CATHEDRAL_TOKENS.colors.surfaceRecess)}${text}\u001b[49m`;
+function withBackground(line: string, hex: string): string {
+	const bgCode = bg(hex);
+	// Inner color() calls use RESET, which clears background too. Re-apply the
+	// row background after each RESET so the whole terminal row stays recessed.
+	return `${bgCode}${line.replaceAll(RESET, `${RESET}${bgCode}`)}${RESET_BG}`;
 }
 
 function padToWidth(line: string, width: number): string {
@@ -92,11 +93,11 @@ export type InputFrameOptions = {
 };
 
 /**
- * Pure render of the carved 5-row input frame.
+ * Pure render of the carved 3-row input frame.
  *
- * Returns 5 lines (top + padding + content + padding + bottom), each padded
- * exactly to `width` cells. The two padding rows mirror the Stitch HTML's
- * `p-4` vertical padding around the content.
+ * Returns 3 lines (top + content + bottom), each padded exactly to `width`
+ * cells. The active V2 contract keeps the frame compact so chat retains
+ * vertical space.
  *
  * If `width < 4`, returns a single-line minimal cursor (degraded mode).
  */
@@ -121,9 +122,9 @@ export function renderInputFrame(input: string, width: number, options: InputFra
 		top = `${dividerCh("┌")}${dividerCh("─".repeat(inner))}${dividerCh("┐")}`;
 	}
 
-	// Content row: `> <text>█` or `> <placeholder>█`. Inner span gets the
-	// recess (#120D0A) background to read as a recessed well per Stitch CSS
-	// `bg-recess` on the input container. Cursor is accent █.
+	// Content row: `> <text>█` or `> <placeholder>█`. The full row gets the
+	// recess (#120D0A) background to match the Bible `bg-recess` frame block.
+	// Cursor is accent █.
 	const showPlaceholder = input.length === 0 && options.placeholder !== undefined;
 	const promptHex =
 		options.promptColor === "accent"
@@ -133,7 +134,7 @@ export function renderInputFrame(input: string, width: number, options: InputFra
 	const cursor = color("█", CATHEDRAL_TOKENS.colors.accent);
 	let textPart: string;
 	if (showPlaceholder) {
-		textPart = `${DIM}${color(options.placeholder!, CATHEDRAL_TOKENS.colors.foregroundDim)}${RESET}`;
+		textPart = color(options.placeholder!, CATHEDRAL_TOKENS.colors.foregroundDim);
 	} else {
 		textPart = color(input, CATHEDRAL_TOKENS.colors.foreground);
 	}
@@ -141,22 +142,16 @@ export function renderInputFrame(input: string, width: number, options: InputFra
 	const innerVisible = visibleLength(innerContent);
 	const padding = Math.max(0, inner - innerVisible);
 	const contentInner = `${innerContent}${" ".repeat(padding)}`;
-	const content = `${dividerCh("│")}${onRecess(contentInner)}${dividerCh("│")}`;
-
-	// Top + bottom padding rows (recess background only, no content) to mirror
-	// the Stitch `p-4` vertical breathing room.
-	const padInner = onRecess(" ".repeat(inner));
-	const padRow = `${dividerCh("│")}${padInner}${dividerCh("│")}`;
+	const content = `${dividerCh("│")}${contentInner}${dividerCh("│")}`;
 
 	// Bottom border
 	const bottom = `${dividerCh("└")}${dividerCh("─".repeat(inner))}${dividerCh("┘")}`;
+	const frameBg = CATHEDRAL_TOKENS.colors.surfaceRecess;
 
 	return [
-		padToWidth(top, width),
-		padToWidth(padRow, width),
-		padToWidth(content, width),
-		padToWidth(padRow, width),
-		padToWidth(bottom, width),
+		withBackground(padToWidth(top, width), frameBg),
+		withBackground(padToWidth(content, width), frameBg),
+		withBackground(padToWidth(bottom, width), frameBg),
 	];
 }
 
@@ -171,9 +166,9 @@ export type InputHintsOptions = {
 /**
  * Pure render of the single-line hint row below the input frame.
  *
- * Right-side keybind hint always appears (right-aligned). The modifier keys
- * `TAB` and `CTRL+/` are tinted accent (per Stitch HTML), the labels stay
- * dim oxidized.
+ * Right-side command hint always appears (right-aligned). The functional
+ * modifier key `CTRL+/` is tinted accent; inactive future affordances such as
+ * `TAB · AGENTS` are intentionally omitted until implemented.
  *
  * Optional left-side flavour hint (used on splash) renders dim oxidized.
  */
@@ -184,11 +179,11 @@ export function renderInputHints(width: number, options: InputHintsOptions = {})
 	const rightLen = rightPlain.length;
 	const left = options.leftHint;
 
-	const dimFg = `${DIM}${fg(CATHEDRAL_TOKENS.colors.foregroundDim)}`;
+	const dimFg = fg(CATHEDRAL_TOKENS.colors.foregroundDim);
 	const accent = fg(CATHEDRAL_TOKENS.colors.accent);
 
-	// Build the colored right-hand string: TAB and CTRL+/ in accent, labels in dim.
-	const rightColored = `${accent}TAB${RESET} ${dimFg}· AGENTS  ${RESET}${accent}CTRL+/${RESET} ${dimFg}· COMMANDS${RESET}`;
+	// Build the colored right-hand string: CTRL+/ in accent, label in dim.
+	const rightColored = `${accent}CTRL+/${RESET} ${dimFg}· COMMANDS${RESET}`;
 
 	// At narrow widths, drop the left hint first.
 	const leftFitsAlongside = left !== undefined && rightLen + 4 + left.length <= width;

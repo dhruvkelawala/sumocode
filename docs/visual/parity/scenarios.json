@@ -1,156 +1,311 @@
 {
-  "version": 1,
-  "defaults": {
-    "threshold": 0.02,
-    "deviceScaleFactor": 2,
-    "fontSize": 13,
-    "lineHeight": 1.4
-  },
-  "crops": {
-    "full": { "kind": "full" },
-    "top-bar": { "x": 0, "y": 1, "cols": 160, "rows": 1 },
-    "sidebar": { "x": 130, "y": 3, "cols": 30, "rows": 34 },
-    "chat-area": { "x": 0, "y": 3, "cols": 128, "rows": 34 },
-    "input-frame": { "x": 0, "y": 38, "cols": 160, "rows": 3 },
-    "hint-row": { "x": 0, "y": 41, "cols": 160, "rows": 1 },
-    "footer": { "x": 0, "y": 43, "cols": 160, "rows": 1 },
-    "input-component-frame": { "x": 0, "y": 0, "cols": 160, "rows": 4 },
-    "footer-component": { "x": 0, "y": 0, "cols": 160, "rows": 1 },
-    "sidebar-component": { "kind": "full" }
-  },
-  "scenarios": [
-    {
-      "id": "input-typed-component",
-      "lane": "component",
-      "status": "review",
-      "component": { "kind": "input-frame-typed" },
-      "dimensions": { "cols": 160, "rows": 4 },
-      "bibleTarget": "04-active-input-typed.png",
-      "crops": [
-        { "id": "full", "targetCrop": "full", "runtimeCrop": "full" },
-        { "id": "input-frame", "targetCrop": "input-component-frame", "runtimeCrop": "input-component-frame" }
-      ]
-    },
-    {
-      "id": "footer-ready-component",
-      "lane": "component",
-      "status": "review",
-      "component": { "kind": "footer-ready" },
-      "dimensions": { "cols": 160, "rows": 1 },
-      "bibleTarget": "05-footer-idle.png",
-      "crops": [
-        { "id": "full", "targetCrop": "full", "runtimeCrop": "full" },
-        { "id": "footer", "targetCrop": "footer-component", "runtimeCrop": "footer-component" }
-      ]
-    },
-    {
-      "id": "sidebar-editorial-component",
-      "lane": "component",
-      "status": "review",
-      "component": { "kind": "sidebar-editorial" },
-      "dimensions": { "cols": 30, "rows": 54 },
-      "bibleTarget": "01-sidebar-v2-editorial-context.png",
-      "crops": [
-        { "id": "full", "targetCrop": "full", "runtimeCrop": "full" }
-      ]
-    },
-    {
-      "id": "splash-runtime",
-      "lane": "runtime",
-      "status": "review",
-      "dimensions": { "cols": 160, "rows": 45 },
-      "bibleTarget": "03-splash.png",
-      "runtime": {
-        "command": "./bin/sumocode.sh",
-        "args": ["--offline", "--no-extensions", "--no-session"],
-        "settleMs": 3000,
-        "env": {
-          "PI_OFFLINE": "1",
-          "SUMO_TUI": "1",
-          "TERM": "xterm-256color",
-          "COLORTERM": "truecolor",
-          "FORCE_COLOR": "3"
-        }
-      },
-      "rejectIfOutputMatches": [
-        "ERR_MODULE_NOT_FOUND",
-        "Rendered line .* exceeds terminal width",
-        "Skipping installed SumoCode extension because this session is already inside an active SumoCode dev checkout",
-        "Error \\["
-      ],
-      "crops": [
-        { "id": "full", "targetCrop": "full", "runtimeCrop": "full" }
-      ]
-    },
-    {
-      "id": "active-landscape-runtime",
-      "lane": "runtime",
-      "status": "review",
-      "dimensions": { "cols": 160, "rows": 45 },
-      "bibleTarget": "scene-active.png",
-      "runtime": {
-        "command": "./bin/sumocode.sh",
-        "args": ["--offline", "--no-extensions", "--no-session"],
-        "settleMs": 1800,
-        "env": {
-          "PI_OFFLINE": "1",
-          "SUMO_TUI": "1",
-          "TERM": "xterm-256color",
-          "COLORTERM": "truecolor",
-          "FORCE_COLOR": "3"
-        },
-        "inputs": [
-          { "afterMs": 1800, "type": "text", "value": "review src/argent-x/balance.ts and tighten the return type" },
-          { "afterMs": 150, "type": "key", "value": "\r" }
-        ]
-      },
-      "rejectIfOutputMatches": [
-        "ERR_MODULE_NOT_FOUND",
-        "Rendered line .* exceeds terminal width",
-        "Skipping installed SumoCode extension because this session is already inside an active SumoCode dev checkout",
-        "Error \\["
-      ],
-      "crops": [
-        { "id": "full", "targetCrop": "full", "runtimeCrop": "full" },
-        { "id": "top-bar", "targetCrop": "top-bar", "runtimeCrop": "top-bar" },
-        { "id": "sidebar", "targetCrop": "sidebar", "runtimeCrop": "sidebar" },
-        { "id": "chat-area", "targetCrop": "chat-area", "runtimeCrop": "chat-area" },
-        { "id": "input-frame", "targetImage": "04-active-input-typed.png", "targetCrop": "full", "runtimeCrop": "input-frame" },
-        { "id": "hint-row", "targetCrop": "hint-row", "runtimeCrop": "hint-row" },
-        { "id": "footer", "targetCrop": "footer", "runtimeCrop": "footer" }
-      ]
-    },
-    {
-      "id": "active-portrait-runtime",
-      "lane": "runtime",
-      "status": "review",
-      "dimensions": { "cols": 60, "rows": 100 },
-      "bibleTarget": "scene-active-portrait.png",
-      "runtime": {
-        "command": "./bin/sumocode.sh",
-        "args": ["--offline", "--no-extensions", "--no-session"],
-        "settleMs": 1800,
-        "env": {
-          "PI_OFFLINE": "1",
-          "SUMO_TUI": "1",
-          "TERM": "xterm-256color",
-          "COLORTERM": "truecolor",
-          "FORCE_COLOR": "3"
-        },
-        "inputs": [
-          { "afterMs": 1800, "type": "text", "value": "summarize the plan" },
-          { "afterMs": 150, "type": "key", "value": "\r" }
-        ]
-      },
-      "rejectIfOutputMatches": [
-        "ERR_MODULE_NOT_FOUND",
-        "Rendered line .* exceeds terminal width",
-        "Skipping installed SumoCode extension because this session is already inside an active SumoCode dev checkout",
-        "Error \\["
-      ],
-      "crops": [
-        { "id": "full", "targetCrop": "full", "runtimeCrop": "full" }
-      ]
-    }
-  ]
+	"version": 1,
+	"defaults": {
+		"threshold": 0.02,
+		"deviceScaleFactor": 2,
+		"fontSize": 13,
+		"lineHeight": 1.4
+	},
+	"crops": {
+		"full": {
+			"kind": "full"
+		},
+		"top-bar": {
+			"x": 0,
+			"y": 1,
+			"cols": 160,
+			"rows": 1
+		},
+		"sidebar": {
+			"x": 130,
+			"y": 3,
+			"cols": 30,
+			"rows": 34
+		},
+		"chat-area": {
+			"x": 0,
+			"y": 3,
+			"cols": 128,
+			"rows": 34
+		},
+		"input-frame": {
+			"x": 0,
+			"y": 38,
+			"cols": 160,
+			"rows": 3
+		},
+		"hint-row": {
+			"x": 0,
+			"y": 41,
+			"cols": 160,
+			"rows": 1
+		},
+		"footer": {
+			"x": 0,
+			"y": 43,
+			"cols": 160,
+			"rows": 1
+		},
+		"input-component-frame": {
+			"x": 0,
+			"y": 0,
+			"cols": 160,
+			"rows": 4
+		},
+		"footer-component": {
+			"x": 0,
+			"y": 0,
+			"cols": 160,
+			"rows": 1
+		},
+		"sidebar-component": {
+			"kind": "full"
+		}
+	},
+	"scenarios": [
+		{
+			"id": "input-typed-component",
+			"lane": "component",
+			"status": "review",
+			"component": {
+				"kind": "input-frame-typed"
+			},
+			"dimensions": {
+				"cols": 160,
+				"rows": 4
+			},
+			"bibleTarget": "04-active-input-typed.png",
+			"crops": [
+				{
+					"id": "full",
+					"targetCrop": "full",
+					"runtimeCrop": "full"
+				},
+				{
+					"id": "input-frame",
+					"targetCrop": "input-component-frame",
+					"runtimeCrop": "input-component-frame",
+					"status": "required",
+					"threshold": 0.03
+				}
+			]
+		},
+		{
+			"id": "footer-ready-component",
+			"lane": "component",
+			"status": "review",
+			"component": {
+				"kind": "footer-ready"
+			},
+			"dimensions": {
+				"cols": 160,
+				"rows": 1
+			},
+			"bibleTarget": "05-footer-idle.png",
+			"crops": [
+				{
+					"id": "full",
+					"targetCrop": "full",
+					"runtimeCrop": "full"
+				},
+				{
+					"id": "footer",
+					"targetCrop": "footer-component",
+					"runtimeCrop": "footer-component"
+				}
+			]
+		},
+		{
+			"id": "sidebar-editorial-component",
+			"lane": "component",
+			"status": "review",
+			"component": {
+				"kind": "sidebar-editorial"
+			},
+			"dimensions": {
+				"cols": 30,
+				"rows": 54
+			},
+			"bibleTarget": "01-sidebar-v2-editorial-context.png",
+			"crops": [
+				{
+					"id": "full",
+					"targetCrop": "full",
+					"runtimeCrop": "full"
+				}
+			]
+		},
+		{
+			"id": "splash-runtime",
+			"lane": "runtime",
+			"status": "review",
+			"dimensions": {
+				"cols": 160,
+				"rows": 45
+			},
+			"bibleTarget": "03-splash.png",
+			"runtime": {
+				"command": "./bin/sumocode.sh",
+				"args": [
+					"--offline",
+					"--no-extensions",
+					"--no-session"
+				],
+				"settleMs": 3000,
+				"env": {
+					"PI_OFFLINE": "1",
+					"SUMO_TUI": "1",
+					"TERM": "xterm-256color",
+					"COLORTERM": "truecolor",
+					"FORCE_COLOR": "3"
+				}
+			},
+			"rejectIfOutputMatches": [
+				"ERR_MODULE_NOT_FOUND",
+				"Rendered line .* exceeds terminal width",
+				"Skipping installed SumoCode extension because this session is already inside an active SumoCode dev checkout",
+				"Error \\["
+			],
+			"crops": [
+				{
+					"id": "full",
+					"targetCrop": "full",
+					"runtimeCrop": "full"
+				}
+			]
+		},
+		{
+			"id": "active-landscape-runtime",
+			"lane": "runtime",
+			"status": "review",
+			"dimensions": {
+				"cols": 160,
+				"rows": 45
+			},
+			"bibleTarget": "scene-active.png",
+			"runtime": {
+				"command": "./bin/sumocode.sh",
+				"args": [
+					"--offline",
+					"--no-extensions",
+					"--no-session"
+				],
+				"settleMs": 1800,
+				"env": {
+					"PI_OFFLINE": "1",
+					"SUMO_TUI": "1",
+					"TERM": "xterm-256color",
+					"COLORTERM": "truecolor",
+					"FORCE_COLOR": "3"
+				},
+				"inputs": [
+					{
+						"afterMs": 1800,
+						"type": "text",
+						"value": "review src/argent-x/balance.ts and tighten the return type"
+					},
+					{
+						"afterMs": 150,
+						"type": "key",
+						"value": "\r"
+					}
+				]
+			},
+			"rejectIfOutputMatches": [
+				"ERR_MODULE_NOT_FOUND",
+				"Rendered line .* exceeds terminal width",
+				"Skipping installed SumoCode extension because this session is already inside an active SumoCode dev checkout",
+				"Error \\["
+			],
+			"crops": [
+				{
+					"id": "full",
+					"targetCrop": "full",
+					"runtimeCrop": "full"
+				},
+				{
+					"id": "top-bar",
+					"targetCrop": "top-bar",
+					"runtimeCrop": "top-bar"
+				},
+				{
+					"id": "sidebar",
+					"targetCrop": "sidebar",
+					"runtimeCrop": "sidebar"
+				},
+				{
+					"id": "chat-area",
+					"targetCrop": "chat-area",
+					"runtimeCrop": "chat-area"
+				},
+				{
+					"id": "input-frame",
+					"targetImage": "04-active-input-typed.png",
+					"targetCrop": "full",
+					"runtimeCrop": "input-frame"
+				},
+				{
+					"id": "hint-row",
+					"targetCrop": "hint-row",
+					"runtimeCrop": "hint-row"
+				},
+				{
+					"id": "footer",
+					"targetCrop": "footer",
+					"runtimeCrop": "footer"
+				}
+			]
+		},
+		{
+			"id": "active-portrait-runtime",
+			"lane": "runtime",
+			"status": "review",
+			"dimensions": {
+				"cols": 60,
+				"rows": 100
+			},
+			"bibleTarget": "scene-active-portrait.png",
+			"runtime": {
+				"command": "./bin/sumocode.sh",
+				"args": [
+					"--offline",
+					"--no-extensions",
+					"--no-session"
+				],
+				"settleMs": 1800,
+				"env": {
+					"PI_OFFLINE": "1",
+					"SUMO_TUI": "1",
+					"TERM": "xterm-256color",
+					"COLORTERM": "truecolor",
+					"FORCE_COLOR": "3"
+				},
+				"inputs": [
+					{
+						"afterMs": 1800,
+						"type": "text",
+						"value": "summarize the plan"
+					},
+					{
+						"afterMs": 150,
+						"type": "key",
+						"value": "\r"
+					}
+				]
+			},
+			"rejectIfOutputMatches": [
+				"ERR_MODULE_NOT_FOUND",
+				"Rendered line .* exceeds terminal width",
+				"Skipping installed SumoCode extension because this session is already inside an active SumoCode dev checkout",
+				"Error \\["
+			],
+			"crops": [
+				{
+					"id": "full",
+					"targetCrop": "full",
+					"runtimeCrop": "full"
+				}
+			]
+		}
+	]
 }

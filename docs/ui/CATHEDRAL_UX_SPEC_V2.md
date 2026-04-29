@@ -316,12 +316,12 @@ Disappears on first keystroke.
 **Mockup**: forthcoming `v4/05-footer-states.png` (one row per agent state).
 
 ```
-● MEDITATING · claude-opus-4-7 · xhigh           sumo-deus (main) · 42k/200k · $0.42
+● MEDITATING · claude-opus-4-7 · xhigh                                      42k/200k · $0.42
 ```
 
 **Left zone**: `● <STATE>` (uppercase) `· <model-id>` (lowercase) `· <thinking-level>` (lowercase). State dot color = agent state.
 
-**Right zone**: `<project-shortname> (<branch>) · <ctx-tokens>/<ctx-window> · $<session-cost>`.
+**Right zone**: `<ctx-tokens>/<ctx-window> · $<session-cost>`. Project/branch live in the sidebar when visible and the hint row when the sidebar is hidden; footer must not duplicate them.
 
 **Cathedral state labels**:
 | internal | UI label |
@@ -334,7 +334,7 @@ Disappears on first keystroke.
 
 **Same shape regardless of sidebar visibility** (single-row always).
 
-**When sidebar is hidden** (W<120 OR `/sidebar hide`): footer right zone shows ctx + cost. Sidebar (when visible) shows fuller view: bar visualization + cumulative session totals — NOT in footer.
+**When sidebar is hidden** (W<120 OR `/sidebar hide`): the hint row carries project/branch. Footer right zone remains ctx + cost. Sidebar (when visible) shows fuller view: project/branch, bar visualization, and cumulative session totals — NOT in footer.
 
 **Bottom version line on splash only**:
 ```
@@ -345,8 +345,6 @@ Disappears on first keystroke.
 - Vanishes in active state
 
 **Width handling**: at narrow widths, collapse right zone right-to-left:
-- `< 110 cols`: drop project name (keep `(branch)`)
-- `< 90 cols`: drop branch
 - `< 70 cols`: drop $ cost
 - `< 50 cols`: drop ctx tokens (just left zone visible)
 

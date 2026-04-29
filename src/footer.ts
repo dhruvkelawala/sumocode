@@ -23,6 +23,8 @@ export type FooterSnapshot = {
 	branch: string | null;
 	inputTokens: number;
 	outputTokens: number;
+	contextTokens?: number;
+	contextWindow?: number;
 	costUsd: number;
 	state: SumoCodeState;
 	modelId: string;
@@ -86,38 +88,35 @@ export function resolveGitBranch(cwd: string, runGit: GitRunner = defaultGitRunn
  * F1 two-zone footer layout (Element 5 from CATHEDRAL_DECISIONS.md).
  *
  *   left zone  = agent state:    ● <STATE> · <model> · <thinking>
- *   right zone = session metrics: <project> (<branch>) · ↑<in> ↓<out> · $<cost>
+ *   right zone = session metrics: <ctx>/<window> · $<cost>
  *
- * Zones are separated by spaces sized to fill width. At narrow widths the
- * right zone collapses field-by-field (cost → tokens → path) before the
- * whole right zone disappears.
- *
- * Note: ctx% deliberately NOT in footer (lives in sidebar CONTEXT sub-tab).
+ * Zones are separated by spaces sized to fill width. Project/branch are not
+ * rendered here: sidebar owns them when visible, and the hint row owns them
+ * when the sidebar is hidden.
  */
 export function formatFooterLine(snapshot: FooterSnapshot, width = 160): string {
 	const dot = colorHex("●", CATHEDRAL_TOKENS.colors.states[snapshot.state]);
 	const stateLabel = colorHex(VOICE.status[snapshot.state], CATHEDRAL_TOKENS.colors.foreground);
-	const model = colorHex(snapshot.modelId, CATHEDRAL_TOKENS.colors.foregroundDim);
-	const thinking = colorHex(snapshot.thinkingLevel, CATHEDRAL_TOKENS.colors.foregroundDim);
-	const sep = colorHex(" · ", CATHEDRAL_TOKENS.colors.divider);
+	const model = colorHex(snapshot.modelId, CATHEDRAL_TOKENS.colors.foreground);
+	const thinking = colorHex(snapshot.thinkingLevel, CATHEDRAL_TOKENS.colors.foreground);
+	const sep = colorHex(" · ", CATHEDRAL_TOKENS.colors.foregroundDim);
 
 	const leftZone = [`${dot} ${stateLabel}`, model, thinking].join(sep);
 	const leftLen = visibleWidth(leftZone);
 
-	const branch = snapshot.branch ? ` (${snapshot.branch})` : "";
-	const path = colorHex(`${formatCwd(snapshot.cwd)}${branch}`, CATHEDRAL_TOKENS.colors.foreground);
-	const tokens = colorHex(
-		`↑${formatTokenCount(snapshot.inputTokens)} ↓${formatTokenCount(snapshot.outputTokens)}`,
-		CATHEDRAL_TOKENS.colors.foregroundDim,
-	);
-	const cost = colorHex(`$${snapshot.costUsd.toFixed(2)}`, CATHEDRAL_TOKENS.colors.foregroundDim);
+	const contextTokens = snapshot.contextTokens ?? snapshot.inputTokens + snapshot.outputTokens;
+	const contextWindow = snapshot.contextWindow ?? 0;
+	const tokensText = contextWindow > 0
+		? `${formatTokenCount(contextTokens)}/${formatTokenCount(contextWindow)}`
+		: formatTokenCount(contextTokens);
+	const tokens = colorHex(tokensText, CATHEDRAL_TOKENS.colors.foreground);
+	const cost = colorHex(`$${snapshot.costUsd.toFixed(2)}`, CATHEDRAL_TOKENS.colors.foreground);
 
 	// Build right zone progressively, dropping rightmost fields if they don't fit.
 	const rightCandidates: string[][] = [
-		[path, tokens, cost],   // full
-		[path, tokens],         // drop cost
-		[path],                 // drop tokens too
-		[],                     // drop everything
+		[tokens, cost],
+		[tokens],
+		[],
 	];
 
 	const MIN_GAP = 3; // minimum spaces between zones
@@ -205,6 +204,8 @@ function createSnapshot(pi: ExtensionAPI, ctx: ExtensionContext, branch: string 
 		branch,
 		inputTokens: usage.input,
 		outputTokens: usage.output,
+		contextTokens: getContextTokens(ctx, usage),
+		contextWindow: getContextWindow(ctx),
 		costUsd: usage.cost,
 		state,
 		modelId: ctx.model?.id ?? "no-model",
@@ -248,6 +249,26 @@ function getThinkingLevel(pi: ExtensionAPI, ctx: ExtensionContext): ThinkingLeve
 	}
 	const legacy = (ctx as { thinkingLevel?: ThinkingLevel }).thinkingLevel;
 	return legacy ?? "medium";
+}
+
+function getContextTokens(ctx: ExtensionContext, usage: Usage): number {
+	try {
+		const contextUsage = (ctx as { getContextUsage?: () => { tokens?: number } | undefined }).getContextUsage?.();
+		if (typeof contextUsage?.tokens === "number") return contextUsage.tokens;
+	} catch {
+		// fall through
+	}
+	return usage.input + usage.output;
+}
+
+function getContextWindow(ctx: ExtensionContext): number {
+	try {
+		const contextUsage = (ctx as { getContextUsage?: () => { contextWindow?: number } | undefined }).getContextUsage?.();
+		if (typeof contextUsage?.contextWindow === "number") return contextUsage.contextWindow;
+	} catch {
+		// fall through
+	}
+	return ctx.model?.contextWindow ?? 0;
 }
 
 function getSessionUsage(ctx: ExtensionContext): Usage {

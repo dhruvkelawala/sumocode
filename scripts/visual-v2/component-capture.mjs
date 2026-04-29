@@ -39,13 +39,15 @@ async function renderInputFrameTyped(width) {
 async function renderFooterReady(width) {
 	const mod = await jiti.import(`${repoRoot}/src/footer.ts`);
 	return mod.renderFooterBlock({
-		cwd: repoRoot,
+		cwd: "/Users/sumo-deus/sumo-deus",
 		branch: "main",
-		inputTokens: 12000,
-		outputTokens: 8000,
+		inputTokens: 42000,
+		outputTokens: 0,
+		contextTokens: 42000,
+		contextWindow: 200000,
 		costUsd: 0.42,
 		state: "idle",
-		modelId: "claude-opus-4-7",
+		modelId: "gpt-5.5",
 		thinkingLevel: "medium",
 	}, width);
 }

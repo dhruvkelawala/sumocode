@@ -28,6 +28,8 @@ function snapshot(overrides: Partial<FooterSnapshot> = {}): FooterSnapshot {
 		branch: "main",
 		inputTokens: 12_000,
 		outputTokens: 8_000,
+		contextTokens: 42_000,
+		contextWindow: 200_000,
 		costUsd: 0.42,
 		state: "idle",
 		modelId: "claude-opus-4-7",
@@ -61,27 +63,27 @@ describe("formatFooterLine — F1 two-zone layout", () => {
 		expect(plain).toContain("xhigh");
 	});
 
-	it("right zone has path + branch + tokens + cost", () => {
+	it("right zone has context tokens + cost", () => {
 		const line = withoutAnsi(formatFooterLine(snapshot()));
 
-		expect(line).toContain("~/argent-x (main)");
-		expect(line).toContain("↑12k ↓8.0k");
+		expect(line).toContain("42k/200k");
 		expect(line).toContain("$0.42");
 	});
 
-	it("does NOT include context window percent (it lives in sidebar CONTEXT now)", () => {
+	it("does NOT include cumulative input/output arrows", () => {
 		const line = withoutAnsi(formatFooterLine(snapshot()));
-		expect(line).not.toMatch(/\d+%\/\d/);
+		expect(line).not.toContain("↑");
+		expect(line).not.toContain("↓");
 	});
 
 	it("places state on the left and session metrics on the right with a gap", () => {
 		const line = withoutAnsi(formatFooterLine(snapshot(), 160));
 		const stateIdx = line.indexOf(VOICE.status.idle);
-		const pathIdx = line.indexOf("~/argent-x");
+		const tokensIdx = line.indexOf("42k/200k");
 
 		expect(stateIdx).toBeGreaterThanOrEqual(0);
-		expect(pathIdx).toBeGreaterThanOrEqual(0);
-		expect(pathIdx).toBeGreaterThan(stateIdx);
+		expect(tokensIdx).toBeGreaterThanOrEqual(0);
+		expect(tokensIdx).toBeGreaterThan(stateIdx);
 		// At least 3 spaces of gap between zones
 		expect(line).toMatch(/   {3,}/);
 	});
@@ -97,17 +99,16 @@ describe("formatFooterLine — F1 two-zone layout", () => {
 		}
 	});
 
-	it("omits git branch parentheses outside a repository", () => {
-		const line = withoutAnsi(formatFooterLine(snapshot({ branch: null })));
+	it("omits project and git branch to avoid duplicating sidebar/hint row", () => {
+		const line = withoutAnsi(formatFooterLine(snapshot()));
 
-		expect(line).toContain("~/argent-x");
-		expect(line).not.toContain("~/argent-x (");
+		expect(line).not.toContain("~/argent-x");
+		expect(line).not.toContain("(main)");
 	});
 
 	it("drops cost first when too narrow to fit everything", () => {
 		const line = withoutAnsi(formatFooterLine(snapshot(), 80));
-		// At 80 cols with all the colored separators / dots, cost is the right-most field.
-		// Path + tokens may stay; cost may drop. Either way, the line must fit.
+		expect(line).toContain("42k/200k");
 		expect(line.length).toBeLessThanOrEqual(80);
 	});
 
@@ -119,13 +120,13 @@ describe("formatFooterLine — F1 two-zone layout", () => {
 });
 
 describe("formatFooterLine — cathedral coloring", () => {
-	it("renders · separators in the divider color", () => {
+	it("renders · separators in foregroundDim", () => {
 		const line = formatFooterLine(snapshot());
-		// #3A2F25 -> 58;47;37
-		expect(line).toContain("\u001b[38;2;58;47;37m");
+		// #8B7A63 -> 139;122;99
+		expect(line).toContain("\u001b[38;2;139;122;99m");
 	});
 
-	it("renders tokens, cost, gauge and model in foreground-dim", () => {
+	it("renders separators in foreground-dim", () => {
 		const line = formatFooterLine(snapshot());
 		// #8B7A63 -> 139;122;99
 		expect(line).toContain("\u001b[38;2;139;122;99m");

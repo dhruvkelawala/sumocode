@@ -14,7 +14,6 @@ This avoids relying on `--offline --no-session` live Pi output for completed mod
 - `fixture-completed-landscape` — 160×45 completed transcript with read/edit/bash tool blocks.
 - `fixture-completed-portrait` — 60×100 completed transcript under the no-sidebar portrait policy.
 - `fixture-tool-ledger-landscape` — tool-heavy landscape fixture for reviewing completed tool composition.
-- `fixture-command-palette-overlay` — command palette overlay fixture for reviewing overlay composition without live input.
 
 All fixture scenarios remain `review` status. No fixture crop is promoted to `approved` or `required` in #90.
 
@@ -40,6 +39,7 @@ http://127.0.0.1:7781/bible-verify/
 ## Known deferrals
 
 - Rich block-specific renderers (tool ledger cards, code frames, skill pills, Divine Query, delegation cards) still need dedicated component slices. The fixture lane provides deterministic scene reachability first.
-- Additional overlays (approval modal, Divine Query, memory scriptorium) can follow the command-palette fixture pattern.
+- Command palette overlay requires a Scriptorium-themed palette renderer rewrite before it can be fixtured (tracked separately).
+- Additional overlays (approval modal, Divine Query, memory scriptorium) should follow the fixture lane pattern once their renderers match the Bible.
 - Real runtime harness fixture injection via `SUMOCODE_HARNESS_FIXTURE` remains optional future work if we need Pi extension/session chrome involved in completed states.
 - Fixture crops are review evidence only until Dhruv explicitly approves a runtime/fixture golden promotion.

@@ -90,27 +90,6 @@ const FIXTURES = {
 			],
 		},
 	},
-	"command-palette": {
-		overlay: "command-palette",
-		transcript: {
-			messages: [
-				{
-					id: "u1",
-					role: "user",
-					displayName: "USER",
-					timestamp: FIXTURE_TIMES.userOne,
-					blocks: [{ type: "markdown", text: "open command palette" }],
-				},
-				{
-					id: "s1",
-					role: "sumo",
-					displayName: "SUMO",
-					timestamp: FIXTURE_TIMES.sumoOne,
-					blocks: [{ type: "markdown", text: "Palette is ready." }],
-				},
-			],
-		},
-	},
 	"tool-ledger": {
 		transcript: {
 			messages: [

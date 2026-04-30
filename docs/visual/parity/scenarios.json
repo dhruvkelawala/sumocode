@@ -709,31 +709,6 @@
 					"runtimeCrop": "footer"
 				}
 			]
-		},
-		{
-			"id": "fixture-command-palette-overlay",
-			"lane": "fixture",
-			"status": "review",
-			"dimensions": {
-				"cols": 160,
-				"rows": 45
-			},
-			"bibleTarget": "scene-palette-overlay.png",
-			"fixture": {
-				"id": "command-palette"
-			},
-			"crops": [
-				{
-					"id": "full",
-					"targetCrop": "full",
-					"runtimeCrop": "full"
-				},
-				{
-					"id": "overlay",
-					"targetCrop": "overlay-center",
-					"runtimeCrop": "overlay-center"
-				}
-			]
 		}
 	]
 }

@@ -107,8 +107,6 @@ describe("V2 visual parity contract", () => {
 		expect(scenario("fixture-completed-landscape")).toMatchObject({ status: "review" });
 		expect(scenario("fixture-completed-portrait")).toMatchObject({ status: "review" });
 		expect(scenario("fixture-tool-ledger-landscape")).toMatchObject({ status: "review" });
-		expect(scenario("fixture-command-palette-overlay")).toMatchObject({ status: "review" });
-		expect(cropDefinition("overlay-center")).toEqual({ x: 40, y: 16, cols: 80, rows: 13 });
 		expect(scenario("fixture-completed-landscape").crops.map((crop) => crop.id)).toEqual([
 			"full",
 			"top-bar",

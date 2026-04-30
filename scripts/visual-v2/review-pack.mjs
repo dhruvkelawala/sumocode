@@ -155,7 +155,6 @@ function scenarioDescription(scenario) {
 		"fixture-completed-landscape": "Deterministic 160x45 completed transcript fixture with read/edit/bash tool blocks.",
 		"fixture-completed-portrait": "Deterministic 60x100 completed transcript fixture using the no-sidebar portrait policy.",
 		"fixture-tool-ledger-landscape": "Deterministic tool-heavy fixture for reviewing completed tool state composition.",
-		"fixture-command-palette-overlay": "Deterministic overlay fixture for reviewing command palette composition without live input.",
 	};
 	return descriptions[scenario.id] ?? "Visual parity scenario.";
 }

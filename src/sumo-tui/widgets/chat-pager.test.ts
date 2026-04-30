@@ -101,6 +101,16 @@ describe("ChatPager", () => {
 		root.dispose();
 	});
 
+	it("accepts deterministic timestamps for fixture-backed visual states", async () => {
+		const { root, chat } = await makeChat();
+		const timestamp = new Date("2026-04-30T11:42:00Z");
+
+		chat.addMessage("sumo", "done", timestamp);
+
+		expect(chat.getRenderedMessages()[0]?.timestamp).toEqual(timestamp);
+		root.dispose();
+	});
+
 	it("tool result during typing keeps the editor cursor leaf stable (EC-2.3)", async () => {
 		const yoga = await loadYoga();
 		const root = new SumoNode(yoga.Node.create());

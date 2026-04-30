@@ -28,7 +28,38 @@ Run one lane:
 ```bash
 pnpm visual:review -- --lane component
 pnpm visual:review -- --lane runtime
+pnpm visual:review -- --lane fixture
 ```
+
+## Verification outputs
+
+After a review run, each scenario writes text-level reports alongside the PNG review pack:
+
+```txt
+docs/visual/out/parity/<scenario>/raw/
+  styled-cell-diff.txt     # char + fg + bg diff vs Bible HTML (primary)
+  styled-cell-diff.json    # structured diff for failing rows (when applicable)
+  geometry-audit.txt       # row classification + column bound checks
+  geometry-audit.json      # structured mismatch list
+  terminal-snapshot.json   # full xterm cell grid
+```
+
+Check text reports before inspecting PNGs:
+
+```bash
+cat docs/visual/out/parity/<scenario>/raw/styled-cell-diff.txt
+cat docs/visual/out/parity/<scenario>/raw/geometry-audit.txt
+```
+
+## Scenario lanes
+
+| Lane | Input | Purpose |
+|---|---|---|
+| `component` | Deterministic fixture → ANSI | Isolated TUI component captures |
+| `fixture` | `TranscriptViewModel` → full scene ANSI | Deterministic completed/tool/overlay states without live Pi |
+| `runtime` | `./bin/sumocode.sh` via node-pty | Real end-to-end runtime captures |
+
+Fixture transcripts are declared in `scripts/visual-v2/fixture-capture.mjs`. Add new completed/tool/overlay states there.
 
 ## Contract
 
@@ -36,6 +67,7 @@ pnpm visual:review -- --lane runtime
 - Runtime goldens are approved implementation checkpoints, not design targets.
 - `required` crops gate against committed runtime goldens after explicit promotion.
 - Legacy V1 labels such as `SCRIPTOR INPUT` and 49-column sidebar assertions are historical only; V2 active input is label-less and the sidebar is 30 columns.
+- Styled cell diff is the primary verification layer. PNG diffs are review evidence.
 
 See `CONTRACT.md` for the full contract.
 

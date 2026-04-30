@@ -58,9 +58,9 @@ export class ChatPager extends SumoNode {
 		return new ChatPager(yoga.Node.create(), yoga, parent, options);
 	}
 
-	public addMessage(role: ChatMessageRole, text: string): ChatMessage {
+	public addMessage(role: ChatMessageRole, text: string, timestamp?: Date): ChatMessage {
 		const wasReadingHistory = this.isReadingHistory();
-		const message = ChatMessage.create(this.yoga, role, text);
+		const message = ChatMessage.create(this.yoga, role, text, undefined, timestamp);
 		const addedLines = message.getEstimatedHeight(this.scrollBox.getComputedWidth());
 		this.activeMessages.push(message);
 		this.scrollBox.addChild(message);

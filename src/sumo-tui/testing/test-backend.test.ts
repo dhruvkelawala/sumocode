@@ -2,6 +2,8 @@ import type { CustomEditor } from "@mariozechner/pi-coding-agent";
 import { CURSOR_MARKER } from "@mariozechner/pi-tui";
 import { afterEach, describe, expect, it } from "vitest";
 import { SumoNode } from "../layout/node.js";
+import type { YogaNode } from "../layout/yoga.js";
+import { CellBuffer, type Rect } from "../render/buffer.js";
 import { PiEditorLeaf } from "../widgets/pi-editor-leaf.js";
 import { SumoTuiTestBackend } from "./test-backend.js";
 
@@ -23,6 +25,16 @@ class CursorEditor {
 	public render(width: number): string[] {
 		const row = `> ${this.text}${CURSOR_MARKER}`;
 		return [row.padEnd(Math.max(0, width), " ")];
+	}
+}
+
+class TextRowNode extends SumoNode {
+	public constructor(yogaNode: YogaNode, parent: SumoNode, private readonly text: string) {
+		super(yogaNode, parent);
+	}
+
+	public render(buffer: CellBuffer, rect: Rect): void {
+		buffer.paintRow(rect.top, this.text, rect.left, rect.width);
 	}
 }
 
@@ -100,5 +112,57 @@ describe("SumoTuiTestBackend", () => {
 		}
 
 		expect(frame.current.toPlainRow(0).trimEnd()).toBe("> ZQXJW");
+	});
+
+	it("selects text through Pilot mouse events, highlights it, and emits OSC 52 on mouse-up", async () => {
+		const backend = await createBackend({ cols: 12, rows: 2 });
+		const node = new TextRowNode(backend.yoga.Node.create(), backend.root, "hello world");
+		node.width = "100%";
+		node.height = 1;
+		backend.render();
+
+		expect(backend.pilot.mouse({ type: "down", button: 0, row: 0, col: 0 })).toBe(true);
+		expect(backend.pilot.mouse({ type: "drag", button: 0, row: 0, col: 4 })).toBe(true);
+		let frame = backend.pilot.mouse({ type: "up", button: 0, row: 0, col: 4 });
+
+		expect(frame).toBe(true);
+		expect(backend.clipboardWrites.at(-1)).toEqual({
+			text: "hello",
+			sequence: "\x1b]52;c;aGVsbG8=\x1b\\",
+		});
+		expect(backend.current?.getCell(0, 0).attrs.inverse).toBe(true);
+		expect(backend.current?.getCell(0, 4).attrs.inverse).toBe(true);
+		expect(backend.current?.getCell(0, 5).attrs.inverse).toBe(false);
+
+		backend.clipboardWrites.length = 0;
+		expect(backend.pilot.key({ key: "c", meta: true })).toBe(true);
+		expect(backend.clipboardWrites.at(-1)?.text).toBe("hello");
+
+		expect(backend.pilot.key("Escape")).toBe(true);
+		expect(backend.current?.getCell(0, 0).attrs.inverse).toBe(false);
+	});
+
+	it("clears selection on outside click and keeps wide glyphs intact", async () => {
+		const backend = await createBackend({ cols: 8, rows: 2 });
+		const node = new TextRowNode(backend.yoga.Node.create(), backend.root, "a界b");
+		node.width = "100%";
+		node.height = 1;
+		backend.render();
+
+		backend.pilot.mouse({ type: "down", button: 0, row: 0, col: 2 });
+		backend.pilot.mouse({ type: "drag", button: 0, row: 0, col: 3 });
+		backend.pilot.mouse({ type: "up", button: 0, row: 0, col: 3 });
+
+		expect(backend.clipboardWrites.at(-1)?.text).toBe("界b");
+		expect(backend.current?.getCell(0, 1).attrs.inverse).toBe(true);
+		expect(backend.current?.getCell(0, 2).attrs.inverse).toBe(true);
+
+		backend.clipboardWrites.length = 0;
+		backend.pilot.mouse({ type: "down", button: 0, row: 1, col: 0 });
+		backend.pilot.mouse({ type: "up", button: 0, row: 1, col: 0 });
+
+		expect(backend.clipboardWrites).toEqual([]);
+		expect(backend.current?.getCell(0, 1).attrs.inverse).toBe(false);
+		expect(backend.current?.getCell(0, 2).attrs.inverse).toBe(false);
 	});
 });

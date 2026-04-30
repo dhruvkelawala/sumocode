@@ -4,6 +4,7 @@ import { CellBuffer } from "../render/buffer.js";
 import type { KeyEvent, KeyTarget } from "../input/key-router.js";
 import { KeyRouter } from "../input/key-router.js";
 import type { MouseEvent } from "../input/mouse.js";
+import { SelectionController } from "../input/selection.js";
 import { SumoNode } from "../layout/node.js";
 import { DIRECTION_LTR, FLEX_DIRECTION_COLUMN, loadYoga, type Yoga } from "../layout/yoga.js";
 
@@ -40,7 +41,9 @@ export class SumoTuiTestBackend {
 	public readonly yoga: Yoga;
 	public readonly root: SumoNode;
 	public readonly keyRouter = new KeyRouter();
+	public readonly selection: SelectionController;
 	public readonly pilot: SumoTuiPilot;
+	public readonly clipboardWrites: { sequence: string; text: string }[] = [];
 	private cols: number;
 	private rows: number;
 	private currentBuffer: CellBuffer | undefined;
@@ -54,6 +57,16 @@ export class SumoTuiTestBackend {
 		this.rows = options.rows;
 		this.root = new SumoNode(yoga.Node.create());
 		this.root.flexDirection = FLEX_DIRECTION_COLUMN;
+		this.selection = new SelectionController({
+			readBuffer: () => this.currentBuffer?.clone(),
+			emitClipboard: (sequence, text) => this.clipboardWrites.push({ sequence, text }),
+		});
+		this.keyRouter.bind("Escape", (event) => this.selection.handleKey(event));
+		this.keyRouter.bind("Esc", (event) => this.selection.handleKey(event));
+		this.keyRouter.bind("c", (event) => this.selection.handleKey(event));
+		this.keyRouter.bind("Cmd+C", (event) => this.selection.handleKey(event));
+		this.keyRouter.bind("Meta+C", (event) => this.selection.handleKey(event));
+		this.keyRouter.bind("Copy", (event) => this.selection.handleKey(event));
 		this.pilot = new SumoTuiPilot(this);
 	}
 
@@ -93,7 +106,7 @@ export class SumoTuiTestBackend {
 
 		const previous = this.currentBuffer?.clone();
 		const current = new CellBuffer(this.rows, this.cols);
-		const result = composite(this.root, current);
+		const result = composite(this.root, current, { selection: this.selection });
 
 		this.previousBuffer = previous;
 		this.currentBuffer = current.clone();
@@ -115,7 +128,9 @@ export class SumoTuiTestBackend {
 
 	public sendMouse(event: MouseEvent): boolean {
 		this.assertNotDisposed();
-		return dispatchMouseEvent(this.root, event);
+		const handledByTree = dispatchMouseEvent(this.root, event);
+		const handledBySelection = handledByTree ? false : this.selection.handleMouseEvent(event, this.currentBuffer);
+		return handledByTree || handledBySelection;
 	}
 
 	public resize(cols: number, rows: number): void {

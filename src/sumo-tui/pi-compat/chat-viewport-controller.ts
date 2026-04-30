@@ -1,4 +1,5 @@
 import { parseSgrMouseStream, type MouseEvent } from "../input/mouse.js";
+import type { KeyEvent } from "../input/key-router.js";
 import { logDiagnostic } from "../runtime/diagnostics.js";
 import { chatMessageViewModelFromPiMessage, chatMessageViewModelToPlainText, transcriptFromSessionContext, type ChatMessageViewModel } from "../transcript/view-model.js";
 import { ChatPager } from "../widgets/chat-pager.js";
@@ -44,6 +45,8 @@ export interface ChatViewportRuntime {
 	requestRender(): void;
 	setEmptyChatQuoteState(state: { active: boolean; userMessageCount: number }): void;
 	noteUserMessage(): void;
+	handleSelectionMouse?(event: MouseEvent, width: number, height: number): boolean;
+	handleSelectionKey?(event: KeyEvent, width: number, height: number): boolean;
 }
 
 interface ChatViewportBridgeRuntime extends ChatViewportRuntime {
@@ -244,6 +247,12 @@ export class ChatViewportController {
 			return { consume: true };
 		}
 
+		const selectionKey = selectionCopyKeyFromInput(nextData);
+		if (selectionKey && this.runtime.handleSelectionKey?.(selectionKey, this.lastChatWidth, this.lastChatHeight) === true) {
+			this.renderChatViewportOrRequest();
+			return { consume: true };
+		}
+
 		if (nextData.length === 0 && consumed) return { consume: true };
 		if (nextData !== data) return { data: nextData };
 		return undefined;
@@ -329,8 +338,9 @@ export class ChatViewportController {
 		};
 		if (localEvent.row < 0 || localEvent.row >= this.lastChatHeight || localEvent.col < 0 || localEvent.col >= this.lastChatWidth) return false;
 		const handled = this.chat.handleMouseEvent(localEvent);
-		if (handled) this.renderChatViewportOrRequest();
-		return handled;
+		const handledSelection = this.runtime.handleSelectionMouse?.(localEvent, this.lastChatWidth, this.lastChatHeight) === true;
+		if (handled || handledSelection) this.renderChatViewportOrRequest();
+		return handled || handledSelection;
 	}
 
 	private renderChatViewportOrRequest(): void {
@@ -364,6 +374,13 @@ export class ChatViewportController {
 			renderableLineCount(this.host.footer, terminalWidth);
 		return Math.max(1, terminalRows - chromeRows);
 	}
+}
+
+function selectionCopyKeyFromInput(data: string): KeyEvent | undefined {
+	if (data.length === 0) return undefined;
+	const lower = data.toLowerCase();
+	if (lower === "cmd+c" || lower === "command+c" || lower === "meta+c") return { key: "c", sequence: data, meta: true };
+	return undefined;
 }
 
 export function installChatViewportBridge(upstream: unknown, runtime: ChatViewportBridgeRuntime): (() => void) | undefined {

@@ -21,18 +21,19 @@ export const CURSOR_COLOR_RESET = "\x1b]112\x1b\\";
 export const TERMINAL_BG_SET = "\x1b]11;#1A1511\x1b\\";
 export const TERMINAL_BG_RESET = "\x1b]111\x1b\\";
 /**
- * Enable click/wheel mouse reporting in SGR format without xterm any-event
+ * Enable click/wheel/drag mouse reporting in SGR format without xterm any-event
  * motion tracking. `?1003h` makes Mac trackpads feel "captured" because mere
  * finger hover/movement is turned into app mouse events even when the editor
- * does not support pointer placement. `?1000h` + `?1006h` preserves wheel
- * scroll for chat/history while leaving trackpad cursoring usable.
+ * does not support pointer placement. `?1000h` + `?1002h` + `?1006h` preserves
+ * wheel scroll and button-drag selection while leaving trackpad cursoring usable.
  */
-export const MOUSE_SGR_ENABLE_SEQUENCE = "\x1b[?1000h\x1b[?1006h";
+export const MOUSE_SGR_ENABLE_SEQUENCE = "\x1b[?1000h\x1b[?1002h\x1b[?1006h";
+export const MOUSE_SGR_DISABLE_SEQUENCE = "\x1b[?1003l\x1b[?1002l\x1b[?1006l\x1b[?1000l";
 export const TERMINAL_CLEANUP_SEQUENCE =
 	"\x1b[<u" + // kitty keyboard pop
 	"\x1b[>4;0m" + // xterm modifyOtherKeys off
 	"\x1b[?2004l" + // bracketed paste off
-	"\x1b[?1003l\x1b[?1006l\x1b[?1000l" + // mouse off
+	MOUSE_SGR_DISABLE_SEQUENCE + // mouse off
 	"\x1b[?1049l" + // altscreen off
 	"\x1b[?25h\x1b[0m"; // cursor visible + SGR reset
 
@@ -169,6 +170,12 @@ export class TerminalSessionOwner {
 		}
 		output += "\x1b8\x1b[?2026l";
 		this.write(output);
+		return true;
+	}
+
+	public writeClipboardSequence(sequence: string): boolean {
+		if (!this.isTTY() || sequence.length === 0) return false;
+		this.write(sequence);
 		return true;
 	}
 

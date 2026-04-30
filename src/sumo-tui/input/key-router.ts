@@ -4,6 +4,8 @@ export interface KeyEvent {
 	ctrl?: boolean;
 	alt?: boolean;
 	shift?: boolean;
+	meta?: boolean;
+	cmd?: boolean;
 }
 
 export type KeyHandler = (event: KeyEvent) => boolean | void;

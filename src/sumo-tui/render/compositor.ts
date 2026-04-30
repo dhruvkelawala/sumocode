@@ -13,6 +13,14 @@ export interface CompositeResult {
 	hardwareCursor: HardwareCursor | null;
 }
 
+export interface CompositeSelectionPass {
+	applySelectionHighlight(buffer: CellBuffer): void;
+}
+
+export interface CompositeOptions {
+	selection?: CompositeSelectionPass;
+}
+
 interface RenderableNode extends SumoNode {
 	render?: (buffer: CellBuffer, rect: Rect) => void;
 	getHardwareCursor?: () => HardwareCursor | null;
@@ -74,7 +82,7 @@ function orderedChildren(node: SumoNode): PositionedChild[] {
  * Yoga walk (`docs/spike-research/opentui-island/src/adapters/ink/index.tsx:106-123`),
  * while the retained frame shape follows the OpenTUI host-frame model.
  */
-export function composite(root: SumoNode, buffer: CellBuffer): CompositeResult {
+export function composite(root: SumoNode, buffer: CellBuffer, options: CompositeOptions = {}): CompositeResult {
 	buffer.setDefaultBackground(CATHEDRAL_TOKENS.colors.background);
 	buffer.setDefaultForeground(CATHEDRAL_TOKENS.colors.foreground);
 	buffer.clear();
@@ -102,6 +110,7 @@ export function composite(root: SumoNode, buffer: CellBuffer): CompositeResult {
 	}
 
 	visit(root, 0, 0);
+	options.selection?.applySelectionHighlight(buffer);
 	return { hardwareCursor };
 }
 

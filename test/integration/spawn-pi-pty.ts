@@ -2,7 +2,7 @@ import { chmodSync, existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
 import { spawn, type IPty } from "node-pty";
-import { ALTSCREEN_ENTER_SEQUENCE, MOUSE_SGR_ENABLE_SEQUENCE, TERMINAL_CLEANUP_SEQUENCE } from "../../src/sumo-tui/runtime/terminal-controller.js";
+import { ALTSCREEN_ENTER_SEQUENCE, MOUSE_SGR_DISABLE_SEQUENCE, MOUSE_SGR_ENABLE_SEQUENCE, TERMINAL_CLEANUP_SEQUENCE } from "../../src/sumo-tui/runtime/terminal-controller.js";
 
 export interface TerminalStateProbe {
 	readonly altscreenActive: boolean;
@@ -56,7 +56,7 @@ function lastModeState(buffer: string, enableSequence: string, disableSequence: 
 
 function parseTerminalState(buffer: string): TerminalStateProbe {
 	const altscreenActive = lastModeState(buffer, "\x1b[?1049h", "\x1b[?1049l");
-	const mouseSGRActive = buffer.lastIndexOf(MOUSE_SGR_ENABLE_SEQUENCE) > buffer.lastIndexOf("\x1b[?1003l\x1b[?1006l\x1b[?1000l");
+	const mouseSGRActive = buffer.lastIndexOf(MOUSE_SGR_ENABLE_SEQUENCE) > buffer.lastIndexOf(MOUSE_SGR_DISABLE_SEQUENCE);
 	const cursorVisible = buffer.lastIndexOf("\x1b[?25h") > buffer.lastIndexOf("\x1b[?25l");
 
 	return {

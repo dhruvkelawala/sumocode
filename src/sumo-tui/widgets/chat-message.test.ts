@@ -39,8 +39,77 @@ describe("ChatMessage", () => {
 		composite(root, buffer);
 
 		expect(buffer.toPlainRow(0)).toMatch(/^╭ SUMO ─+ 11:42 ─╮$/);
-		expect(buffer.toPlainRow(1)).toBe("│ hello from a v │");
-		expect(buffer.toPlainRow(2)).toBe("│ ery long assis │");
+		expect(buffer.toPlainRow(1)).toBe("│ hello from a   │");
+		expect(buffer.toPlainRow(2)).toBe("│ very long      │");
+		expect(buffer.toPlainRow(3)).toBe("│ assistant      │");
+		root.dispose();
+	});
+
+	it("hard-wraps long unbreakable tokens inside the body width", async () => {
+		const yoga = await loadYoga();
+		const root = new SumoNode(yoga.Node.create());
+		root.flexDirection = FLEX_DIRECTION_COLUMN;
+		root.width = 14;
+		root.height = 6;
+		ChatMessage.create(yoga, "user", "abcdefghijklmnop", root, FIXED_TIME);
+
+		root.yogaNode.calculateLayout(14, 6, DIRECTION_LTR);
+		const buffer = new CellBuffer(6, 14);
+		composite(root, buffer);
+
+		expect(buffer.toPlainRow(1)).toBe("│ abcdefghij │");
+		expect(buffer.toPlainRow(2)).toBe("│ klmnop     │");
+		root.dispose();
+	});
+
+	it("wraps CJK text by whole glyphs when no whitespace is available", async () => {
+		const yoga = await loadYoga();
+		const root = new SumoNode(yoga.Node.create());
+		root.flexDirection = FLEX_DIRECTION_COLUMN;
+		root.width = 12;
+		root.height = 6;
+		ChatMessage.create(yoga, "user", "界界界界界", root, FIXED_TIME);
+
+		root.yogaNode.calculateLayout(12, 6, DIRECTION_LTR);
+		const buffer = new CellBuffer(6, 12);
+		composite(root, buffer);
+
+		expect(buffer.toPlainRow(1)).toBe("│ 界界界界 │");
+		expect(buffer.toPlainRow(2)).toBe("│ 界       │");
+		root.dispose();
+	});
+
+	it("uses 126 body cells in a 130-column landscape chat frame", async () => {
+		const yoga = await loadYoga();
+		const root = new SumoNode(yoga.Node.create());
+		root.flexDirection = FLEX_DIRECTION_COLUMN;
+		root.width = 130;
+		root.height = 6;
+		ChatMessage.create(yoga, "user", `${"a".repeat(125)} tail`, root, FIXED_TIME);
+
+		root.yogaNode.calculateLayout(130, 6, DIRECTION_LTR);
+		const buffer = new CellBuffer(6, 130);
+		composite(root, buffer);
+
+		expect(buffer.toPlainRow(1)).toBe(`│ ${"a".repeat(125)}  │`);
+		expect(buffer.toPlainRow(2)).toBe(`│ tail${" ".repeat(122)} │`);
+		root.dispose();
+	});
+
+	it("uses term width minus 4 body cells in a portrait chat frame", async () => {
+		const yoga = await loadYoga();
+		const root = new SumoNode(yoga.Node.create());
+		root.flexDirection = FLEX_DIRECTION_COLUMN;
+		root.width = 60;
+		root.height = 6;
+		ChatMessage.create(yoga, "user", `${"b".repeat(56)} rest`, root, FIXED_TIME);
+
+		root.yogaNode.calculateLayout(60, 6, DIRECTION_LTR);
+		const buffer = new CellBuffer(6, 60);
+		composite(root, buffer);
+
+		expect(buffer.toPlainRow(1)).toBe(`│ ${"b".repeat(56)} │`);
+		expect(buffer.toPlainRow(2)).toBe(`│ rest${" ".repeat(52)} │`);
 		root.dispose();
 	});
 });

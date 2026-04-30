@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
 	installTopChrome,
 	renderTopChrome,
+	renderTopChromeBlock,
 	type TopChromeSnapshot,
 	TOP_CHROME_BRAND,
 } from "./top-chrome.js";
@@ -27,6 +28,15 @@ describe("renderTopChrome", () => {
 		expect(line).toHaveLength(160);
 		expect(line.startsWith(` ${TOP_CHROME_BRAND}`)).toBe(true);
 		expect(line.endsWith(" ")).toBe(true);
+	});
+
+	it("wraps compact portrait chrome with top/bottom breathing rows", () => {
+		const lines = renderTopChromeBlock(snapshot(), 60).map(stripAnsi);
+		expect(lines).toHaveLength(3);
+		expect(lines[0]).toBe(" ".repeat(60));
+		expect(lines[1]).toContain(TOP_CHROME_BRAND);
+		expect(lines[2]).toBe(" ".repeat(60));
+		expect(renderTopChromeBlock(snapshot(), 160)).toHaveLength(1);
 	});
 
 	it("wraps active session with ║ ║ and includes static active marker + label", () => {
@@ -80,20 +90,21 @@ describe("renderTopChrome", () => {
 		expect(line).not.toContain("\uF423");
 	});
 
-	it("at narrow width drops icons first, then ARCHIVE, then recents", () => {
-		// Wide enough for everything
+	it("at compact portrait width drops recents and ARCHIVE but keeps icons", () => {
+		// Wide enough for everything.
 		const wide = stripAnsi(renderTopChrome(snapshot(), 160));
 		expect(wide).toContain("\uF423");
+		expect(wide).toContain("ARCHIVE");
+		expect(wide).toContain("debug-balance-tx");
 
-		// Narrow: 80 cols — should drop icons but keep brand + active + maybe some recents
-		const narrow = stripAnsi(renderTopChrome(snapshot(), 80));
-		expect(narrow).toContain(TOP_CHROME_BRAND);
-		expect(narrow).toContain("refactor-auth-flow");
-
-		// Very narrow: 50 cols — only brand + active session
-		const veryNarrow = stripAnsi(renderTopChrome(snapshot(), 50));
-		expect(veryNarrow).toContain(TOP_CHROME_BRAND);
-		expect(veryNarrow).toContain("refactor-auth-flow");
+		// Portrait: keep brand + active + right icons, but collapse tab/archive text.
+		const portrait = stripAnsi(renderTopChrome(snapshot(), 60));
+		expect(portrait).toContain(TOP_CHROME_BRAND);
+		expect(portrait).toContain("refactor-auth-flow");
+		expect(portrait).toContain("\uF489");
+		expect(portrait).toContain("\uF423");
+		expect(portrait).not.toContain("ARCHIVE");
+		expect(portrait).not.toContain("debug-balance-tx");
 	});
 
 	it("truncates very long session labels with ellipsis", () => {
@@ -160,5 +171,6 @@ describe("installTopChrome", () => {
 
 		ctx.sessionManager.getBranch.mockReturnValue([{ type: "message" }]);
 		expect(stripAnsi(component!.render(160)[0]!)).toContain(TOP_CHROME_BRAND);
+		expect(component!.render(60)).toHaveLength(3);
 	});
 });

@@ -83,11 +83,22 @@ describe("V2 visual parity contract", () => {
 		]));
 	});
 
-	it("keeps the V1 portrait runtime no-sidebar", () => {
+	it("keeps the V1 portrait runtime no-sidebar with crop-level evidence", () => {
 		const portrait = scenario("active-portrait-runtime");
 
 		expect(portrait.dimensions.cols).toBeLessThan(SIDEBAR_MIN_TERMINAL_WIDTH);
-		expect(portrait.crops.map((crop) => crop.id)).toEqual(["full"]);
+		expect(portrait.crops.map((crop) => crop.id)).toEqual([
+			"full",
+			"top-bar",
+			"chat-area",
+			"input-frame",
+			"hint-row",
+			"footer",
+		]);
+		expect(portrait.crops.map((crop) => crop.id)).not.toContain("sidebar");
+		expect(cropDefinition("portrait-top-bar")).toEqual({ x: 0, y: 1, cols: 60, rows: 1 });
+		expect(cropDefinition("portrait-input-frame")).toEqual({ x: 0, y: 93, cols: 60, rows: 3 });
+		expect(cropDefinition("portrait-footer")).toEqual({ x: 0, y: 98, cols: 60, rows: 1 });
 	});
 
 	it("keeps required crop gates backed by committed runtime goldens", () => {

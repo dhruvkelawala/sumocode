@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
+	installTopChrome,
 	renderTopChrome,
 	type TopChromeSnapshot,
 	TOP_CHROME_BRAND,
@@ -132,5 +133,32 @@ describe("renderTopChrome", () => {
 		expect(line).toContain("refactor-auth-flow");
 		expect(line).toContain("ARCHIVE");
 		expect(line).not.toContain("│ debug");
+	});
+});
+
+
+describe("installTopChrome", () => {
+	it("hides the top chrome on splash and shows it after messages exist", () => {
+		const handlers = new Map<string, ((event: unknown, ctx: unknown) => void)[]>();
+		const on = vi.fn((event: string, handler: (event: unknown, ctx: unknown) => void) => {
+			const list = handlers.get(event) ?? [];
+			list.push(handler);
+			handlers.set(event, list);
+		});
+		installTopChrome({ on } as never, () => snapshot({ recentSessions: [] }));
+
+		let factory: ((tui: { requestRender(): void }) => { render(width: number): string[] }) | undefined;
+		const ctx = {
+			hasUI: true,
+			ui: { setHeader: vi.fn((nextFactory: typeof factory) => { factory = nextFactory; }) },
+			sessionManager: { getBranch: vi.fn((): unknown[] => []) },
+		};
+		for (const handler of handlers.get("session_start") ?? []) handler({ type: "session_start" }, ctx);
+
+		const component = factory?.({ requestRender: vi.fn() });
+		expect(component?.render(160)).toEqual([]);
+
+		ctx.sessionManager.getBranch.mockReturnValue([{ type: "message" }]);
+		expect(stripAnsi(component!.render(160)[0]!)).toContain(TOP_CHROME_BRAND);
 	});
 });

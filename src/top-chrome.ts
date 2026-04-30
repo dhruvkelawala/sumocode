@@ -220,6 +220,7 @@ export function installTopChrome(pi: ExtensionAPI, loader?: TopChromeLoader): vo
 				},
 				invalidate(): void {},
 				render(width: number): string[] {
+					if (!sessionHasMessages(ctx)) return [];
 					const snap = loader ? loader() : defaultSnapshot(ctx, state);
 					return [renderTopChrome(snap, width)];
 				},
@@ -251,6 +252,14 @@ export function installTopChrome(pi: ExtensionAPI, loader?: TopChromeLoader): vo
 	// Session-name / state affordances can change when messages commit.
 	pi.on("message_start", () => render?.());
 	pi.on("message_end", () => render?.());
+}
+
+function sessionHasMessages(ctx: { sessionManager?: { getBranch?: () => unknown[] } }): boolean {
+	try {
+		return ctx.sessionManager?.getBranch?.().some((entry) => (entry as { type?: string }).type === "message") ?? false;
+	} catch {
+		return false;
+	}
 }
 
 /**

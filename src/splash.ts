@@ -24,7 +24,8 @@ import type { Component } from "@mariozechner/pi-tui";
 import { CATHEDRAL_TOKENS } from "./tokens.js";
 
 const RESET = "\u001b[0m";
-const ANSI_PATTERN = /\u001b\[[0-9;]*m/g;
+const ANSI_PATTERN = /\u001b(?:\[[0-?]*[ -/]*[@-~]|\][^\u0007]*(?:\u0007|\u001b\\))/g;
+const CURSOR_VISIBILITY_PATTERN = /\u001b\[\?25[lh]/g;
 
 function fg(hex: string): string {
 	const n = hex.replace("#", "");
@@ -84,8 +85,8 @@ const FACE_PATH = resolve(ASSET_DIR, "sumo-face.ans");
  */
 function loadFace(): readonly string[] {
 	try {
-		const raw = readFileSync(FACE_PATH, "utf8").replace(/\r?\n$/, "");
-		return raw.split("\n");
+		const raw = readFileSync(FACE_PATH, "utf8").replace(CURSOR_VISIBILITY_PATTERN, "");
+		return raw.replace(/\r?\n$/, "").split(/\r?\n/).filter((line) => line.length > 0);
 	} catch {
 		return [];
 	}

@@ -32,6 +32,9 @@ class InputHintsComponent implements Component {
 	invalidate(): void {}
 	render(width: number): string[] {
 		if (this.isSplash()) {
+			// On splash the hint row is visually part of the centered invocation
+			// block. Return just the hint (no leading blank) so Pi's belowEditor
+			// slot stays compact and the input frame sits close to the content.
 			const frameWidth = Math.min(width, SPLASH_INPUT_FRAME_WIDTH);
 			return [centerAnsi(renderInputHints(frameWidth, { leftHint: INPUT_FRAME_HINT_AWAITING }), width)];
 		}

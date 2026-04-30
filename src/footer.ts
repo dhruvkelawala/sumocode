@@ -44,6 +44,8 @@ export const SPLASH_VERSION_LINE = "SUMOCODE V0.2.0 · CATHEDRAL · 160 × 45 MO
 type GitRunner = (args: string[], cwd: string) => string;
 
 const RESET = "\u001b[0m";
+const SPLASH_VERSION_TOP_GAP_ROWS = 2;
+const SPLASH_VERSION_BOTTOM_GAP_ROWS = 7;
 
 export function colorHex(text: string, hex: string): string {
 	const normalized = hex.replace("#", "");
@@ -150,14 +152,18 @@ export function renderSplashVersionLine(width: number): string {
 }
 
 /**
- * Render the full footer block. 1 line in active state, 2 lines on splash
- * (footer + version line).
+ * Render the full footer block. Active state keeps the status footer. Splash
+ * matches Bible Element 3: no status footer, just breathing rows and the
+ * centered version line below the invocation hint row.
  */
 export function renderFooterBlock(snapshot: FooterSnapshot, width = 160): string[] {
-	const footer = formatFooterLine(snapshot, width);
-	if (!snapshot.isSplash) return [footer];
+	if (!snapshot.isSplash) return [formatFooterLine(snapshot, width)];
 	const version = renderSplashVersionLine(width);
-	return version === "" ? [footer] : [footer, version];
+	return [
+		...Array.from({ length: SPLASH_VERSION_TOP_GAP_ROWS }, () => ""),
+		...(version === "" ? [] : [version]),
+		...Array.from({ length: SPLASH_VERSION_BOTTOM_GAP_ROWS }, () => ""),
+	];
 }
 
 export function installFooter(pi: ExtensionAPI): void {

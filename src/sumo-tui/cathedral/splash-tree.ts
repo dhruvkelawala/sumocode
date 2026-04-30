@@ -66,8 +66,9 @@ export function createSplashTree(yoga: Yoga, parent: SumoNode | undefined, snaps
 	content.flexShrink = 0;
 
 	const bottomSpacer = new SumoNode(yoga.Node.create(), root);
-	bottomSpacer.flexGrow = 1;
-	bottomSpacer.flexShrink = 1;
+	bottomSpacer.flexGrow = 0;
+	bottomSpacer.flexShrink = 0;
+	bottomSpacer.height = 0;
 
 	return {
 		root,

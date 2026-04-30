@@ -356,13 +356,21 @@ export class ChatViewportController {
 	}
 
 	private computeChatHeight(width: number): number {
-		const terminalRows = Math.max(1, this.host.ui?.terminal?.rows ?? 24);
+		const hostRows = Math.max(1, this.host.ui?.terminal?.rows ?? 24);
+		const stdoutRows = (process.stdout as { rows?: number }).rows ?? 0;
+		const terminalRows = Math.max(1, hostRows, stdoutRows);
 		const terminalWidth = Math.max(1, this.host.ui?.terminal?.columns ?? width);
+		// On splash, skip counting Pi's empty pre-editor containers
+		// (pendingMessages, status, widgetAbove) so the chat slot extends
+		// through that space and the splash content sits close to the editor.
+		const isSplash = !this.chat.hasMessages();
+		const preEditorRows = isSplash ? 0
+			: renderableLineCount(this.host.pendingMessagesContainer, width) +
+				renderableLineCount(this.host.statusContainer, width) +
+				renderableLineCount(this.host.widgetContainerAbove, terminalWidth);
 		const chromeRows =
 			renderableLineCount(this.host.headerContainer, width) +
-			renderableLineCount(this.host.pendingMessagesContainer, width) +
-			renderableLineCount(this.host.statusContainer, width) +
-			renderableLineCount(this.host.widgetContainerAbove, terminalWidth) +
+			preEditorRows +
 			renderableLineCount(this.host.editorContainer, terminalWidth) +
 			renderableLineCount(this.host.widgetContainerBelow, terminalWidth) +
 			renderableLineCount(this.host.footer, terminalWidth);

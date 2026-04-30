@@ -84,25 +84,29 @@ function withFrameBackground(line: string): string {
 	return `${RECESS_BG}${line.replaceAll(RESET, `${RESET}${RECESS_BG}`)}${RESET_BG}`;
 }
 
+function maybeWithFrameBackground(line: string, enabled: boolean): string {
+	return enabled ? withFrameBackground(line) : line;
+}
+
 /**
  * Build the cathedral top border with an optional embedded label. V2 active
  * input is label-less; splash uses `DIVINE INVOCATION`.
  */
-function renderTopBorder(width: number, label?: string): string {
-	if (width < 6) return withFrameBackground(color("─".repeat(width), CATHEDRAL_TOKENS.colors.divider));
+function renderTopBorder(width: number, label: string | undefined, paintBackground: boolean): string {
+	if (width < 6) return maybeWithFrameBackground(color("─".repeat(width), CATHEDRAL_TOKENS.colors.divider), paintBackground);
 	const inner = width - 2;
-	if (!label) return withFrameBackground(color(`┌${"─".repeat(inner)}┐`, CATHEDRAL_TOKENS.colors.divider));
+	if (!label) return maybeWithFrameBackground(color(`┌${"─".repeat(inner)}┐`, CATHEDRAL_TOKENS.colors.divider), paintBackground);
 	const labelInner = ` ${label} `;
-	const remaining = Math.max(2, inner - labelInner.length - 2);
-	const left = `${DIVIDER_FG}┌──`;
+	const remaining = Math.max(2, width - labelInner.length - 3);
+	const left = `${DIVIDER_FG}┌─`;
 	const labelText = color(labelInner, CATHEDRAL_TOKENS.colors.accent);
 	const right = `${DIVIDER_FG}${"─".repeat(remaining)}┐${RESET}`;
-	return withFrameBackground(`${left}${labelText}${right}`);
+	return maybeWithFrameBackground(`${left}${labelText}${right}`, paintBackground);
 }
 
-function renderBottomBorder(width: number): string {
-	if (width < 6) return withFrameBackground(color("─".repeat(width), CATHEDRAL_TOKENS.colors.divider));
-	return withFrameBackground(color(`└${"─".repeat(width - 2)}┘`, CATHEDRAL_TOKENS.colors.divider));
+function renderBottomBorder(width: number, paintBackground: boolean): string {
+	if (width < 6) return maybeWithFrameBackground(color("─".repeat(width), CATHEDRAL_TOKENS.colors.divider), paintBackground);
+	return maybeWithFrameBackground(color(`└${"─".repeat(width - 2)}┘`, CATHEDRAL_TOKENS.colors.divider), paintBackground);
 }
 
 /**
@@ -115,12 +119,12 @@ function renderBottomBorder(width: number): string {
  * cursor placement, syntax/highlight colors, etc.). We just measure visible
  * length to compute padding.
  */
-function wrapRow(inner: string, width: number): string {
+function wrapRow(inner: string, width: number, paintBackground: boolean): string {
 	const innerWidth = Math.max(0, width - 2);
 	const visible = visibleLength(inner);
 	const pad = Math.max(0, innerWidth - visible);
 	const padded = `${inner}${" ".repeat(pad)}`;
-	return withFrameBackground(`${DIVIDER_FG}│${RESET}${padded}${DIVIDER_FG}│${RESET}`);
+	return maybeWithFrameBackground(`${DIVIDER_FG}│${RESET}${padded}${DIVIDER_FG}│${RESET}`, paintBackground);
 }
 
 function centerRow(row: string, width: number): string {
@@ -171,6 +175,7 @@ class CathedralEditor extends CustomEditor {
 
 		const fullRow = (row: string): string => splash ? centerRow(row, width) : row;
 		const label = splash ? INPUT_FRAME_LABEL_SPLASH : INPUT_FRAME_LABEL_ACTIVE;
+		const paintFrameBackground = !splash;
 
 		// Find Pi's bottom border row. Pi's render is structured:
 		//   row 0           : top border (─...─)
@@ -196,15 +201,13 @@ class CathedralEditor extends CustomEditor {
 				// Preserve Pi's zero-width cursor marker while painting our ghost text.
 				// Without this, TUI.positionHardwareCursor() sees no marker on the
 				// splash empty state and emits \x1b[?25l after every render.
-				const ghost = color(`> ${CURSOR_MARKER}${INPUT_FRAME_PLACEHOLDER}`, CATHEDRAL_TOKENS.colors.foregroundDim);
-				return fullRow(wrapRow(ghost, frameWidth));
+				const ghost = ` ${color(">", CATHEDRAL_TOKENS.colors.accent)} ${color(`${INPUT_FRAME_PLACEHOLDER}${CURSOR_MARKER}`, CATHEDRAL_TOKENS.colors.foregroundDim)}`;
+				return fullRow(wrapRow(ghost, frameWidth, paintFrameBackground));
 			}
-			return fullRow(wrapRow(row, frameWidth));
+			return fullRow(wrapRow(row, frameWidth, paintFrameBackground));
 		};
 
-		const result: string[] = [fullRow(renderTopBorder(frameWidth, label))];
-		const paddingRow = fullRow(wrapRow("", frameWidth));
-		if (splash) result.push(paddingRow);
+		const result: string[] = [fullRow(renderTopBorder(frameWidth, label, paintFrameBackground))];
 
 		const lastContentIdx = bottomIdx === -1 ? innerRows.length : bottomIdx;
 		let contentSeen = false;
@@ -212,11 +215,7 @@ class CathedralEditor extends CustomEditor {
 			result.push(renderContent(innerRows[i]!, !contentSeen));
 			contentSeen = true;
 		}
-		// Keep the roomy mockup padding for the splash empty state, but avoid
-		// adding active-state bottom padding. In active chat, every extra editor
-		// row steals vertical space from chat and makes the shell feel bouncy.
-		if (splash) result.push(paddingRow);
-		result.push(fullRow(renderBottomBorder(frameWidth)));
+		result.push(fullRow(renderBottomBorder(frameWidth, paintFrameBackground)));
 
 		// Autocomplete rows after Pi's bottom border — passed through as-is
 		// at the narrower inner width. They appear as a dropdown directly

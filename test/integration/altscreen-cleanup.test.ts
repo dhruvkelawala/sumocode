@@ -23,8 +23,10 @@ describe("sumo-tui altscreen cleanup integration", () => {
 
 		const output = app.getOutput();
 		const state = app.getCurrentTerminalState();
-		expect(output).not.toContain(CURSOR_COLOR_SET);
-		expect(output).not.toContain(CURSOR_COLOR_RESET);
+		// V2 Bible Element 4: accent cursor is applied on retained start and
+		// must be reset on exit so the host shell regains its preferred cursor.
+		expect(output).toContain(CURSOR_COLOR_SET);
+		expect(output).toContain(CURSOR_COLOR_RESET);
 		expect(state.cleanupSequenceSeen).toBe(true);
 		expect(state.altscreenActive).toBe(false);
 		expect(state.kittyKeyboardPopped).toBe(true);

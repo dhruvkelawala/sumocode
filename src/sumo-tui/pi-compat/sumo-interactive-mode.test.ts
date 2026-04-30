@@ -124,7 +124,8 @@ describe("sumo interactive Pi noise filtering", () => {
 
 		snapshot.chat.addMessage("user", "hello");
 		const chatLines = runtime.renderChatLines(100, 30);
-		expect(stripAnsi(chatLines.join("\n"))).toContain("USER > hello");
+		expect(stripAnsi(chatLines.join("\n"))).toContain("╭ USER");
+		expect(stripAnsi(chatLines.join("\n"))).toContain("hello");
 		expect(stripAnsi(chatLines.join("\n"))).not.toContain("Meow meow meow");
 		runtime.stop();
 	});
@@ -205,7 +206,7 @@ describe("sumo interactive Pi noise filtering", () => {
 		expect(jumped).toBe(before);
 		expect(upstream.ui.requestRender).toHaveBeenCalledWith(true);
 		const rendered = upstream.chatContainer.render(60).join("\n");
-		expect(rendered).toContain("USER >");
+		expect(rendered).toContain("USER");
 		expect(rendered).not.toContain("upstream chat");
 		cleanup?.();
 		runtime.stop();

@@ -28,6 +28,13 @@ export {
 export const SIDEBAR_MEMORY_DEBOUNCE_MS = 200;
 /** Retry cadence while Remnic is unavailable. */
 export const SIDEBAR_MEMORY_RETRY_MS = 5_000;
+/**
+ * Rows the sidebar yields to chrome above (top breathing + top bar) and below
+ * (input frame, hint row, footer, breathing). Tuned to match the V2 Bible
+ * active landscape scene where the registry surface ends just above the input
+ * frame.
+ */
+const ACTIVE_LANDSCAPE_NON_SIDEBAR_ROWS = 7;
 
 /** Static placeholder until Pi exposes MCP server health. */
 export const PLACEHOLDER_MCP: readonly McpServerSnapshot[] = [
@@ -233,10 +240,16 @@ export function installSidebar(pi: ExtensionAPI): void {
 			const sidebarComponent: Component = {
 				invalidate(): void {},
 				render(width: number): string[] {
-					return renderSidebar(
+					const lines = renderSidebar(
 						snapshotFromContext(ctx, memoryCache?.snapshot() ?? { memory: [] }, activeSubTab, metricsHud.snapshot()),
 						width,
 					);
+					const terminalRows = (tui.terminal as { rows?: number } | undefined)?.rows ?? lines.length;
+					const targetRows = Math.max(lines.length, terminalRows - ACTIVE_LANDSCAPE_NON_SIDEBAR_ROWS);
+					return [
+						...lines,
+						...Array.from({ length: Math.max(0, targetRows - lines.length) }, () => surfaceLine("", width)),
+					];
 				},
 			};
 			const overlay = installNonCapturingSidebarOverlay(tui, sidebarComponent, () => sessionHasMessages(ctx));

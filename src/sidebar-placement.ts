@@ -168,8 +168,8 @@ export function installNonCapturingSidebarOverlay(
 	const overlayOptions: OverlayOptions = {
 		width: SIDEBAR_WIDTH,
 		anchor: "top-right",
-		margin: { top: 1, right: 0, bottom: 4, left: 0 },
-		maxHeight: "90%",
+		margin: { top: 1, right: 0, bottom: 6, left: 0 },
+		maxHeight: "100%",
 		nonCapturing: true,
 		visible: (termWidth) => termWidth >= SIDEBAR_MIN_TERMINAL_WIDTH && shouldShowSidebar(),
 	};

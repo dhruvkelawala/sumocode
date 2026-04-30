@@ -127,6 +127,24 @@ function wrapRow(inner: string, width: number, paintBackground: boolean): string
 	return maybeWithFrameBackground(`${DIVIDER_FG}│${RESET}${padded}${DIVIDER_FG}│${RESET}`, paintBackground);
 }
 
+/**
+ * Wrap a Pi editor row with the V2 active prompt: `│ > <content>│`. The
+ * `>` is accent-colored on the first content row and replaced with three
+ * spaces on continuation rows so multi-line input keeps cursor columns aligned.
+ */
+function wrapActiveRow(inner: string, width: number, paintBackground: boolean, isFirstRow: boolean): string {
+	const innerWidth = Math.max(0, width - 2);
+	const promptCells = 3; // " > " or "   "
+	const contentWidth = Math.max(0, innerWidth - promptCells);
+	const visible = visibleLength(inner);
+	const pad = Math.max(0, contentWidth - visible);
+	const padded = `${inner}${" ".repeat(pad)}`;
+	const prompt = isFirstRow
+		? ` ${color(">", CATHEDRAL_TOKENS.colors.accent)} `
+		: "   ";
+	return maybeWithFrameBackground(`${DIVIDER_FG}│${RESET}${prompt}${padded}${DIVIDER_FG}│${RESET}`, paintBackground);
+}
+
 function centerRow(row: string, width: number): string {
 	const visible = visibleLength(row);
 	if (visible >= width) return row;
@@ -166,11 +184,11 @@ class CathedralEditor extends CustomEditor {
 		const splash = this.isSplash();
 		const frameWidth = splash ? Math.min(width, SPLASH_INPUT_FRAME_WIDTH) : width;
 
-		// Always defer to Pi's editor for layout. Pi gets `frameWidth - 2` so its
-		// content fits inside our `│ ... │` side borders. Pi's CURSOR_MARKER
-		// stays in the row, so when we prepend `│` (one visible cell) the
-		// cursor's visual column is correctly offset by 1.
-		const innerRows = super.render(frameWidth - 2);
+		// Active state reserves 3 inner cols for the V2 `│ > ` prompt so cathedral
+		// chrome owns the prompt arrow + leading space. Splash keeps the historical
+		// budget so the ghost placeholder fits the exact 60-col mockup width.
+		const piContentWidth = splash ? frameWidth - 2 : frameWidth - 5;
+		const innerRows = super.render(Math.max(1, piContentWidth));
 		if (innerRows.length === 0) return innerRows;
 
 		const fullRow = (row: string): string => splash ? centerRow(row, width) : row;
@@ -204,6 +222,7 @@ class CathedralEditor extends CustomEditor {
 				const ghost = ` ${color(">", CATHEDRAL_TOKENS.colors.accent)} ${color(`${INPUT_FRAME_PLACEHOLDER}${CURSOR_MARKER}`, CATHEDRAL_TOKENS.colors.foregroundDim)}`;
 				return fullRow(wrapRow(ghost, frameWidth, paintFrameBackground));
 			}
+			if (!splash) return wrapActiveRow(row, frameWidth, paintFrameBackground, isFirstContent);
 			return fullRow(wrapRow(row, frameWidth, paintFrameBackground));
 		};
 

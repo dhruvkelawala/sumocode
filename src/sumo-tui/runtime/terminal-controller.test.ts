@@ -23,19 +23,22 @@ function outputStub(isTTY = true): TerminalOutput & { writes: string[] } {
 }
 
 describe("TerminalSessionOwner", () => {
-	it("startRetainedSession owns altscreen and mouse mode startup without overriding cursor color", () => {
+	it("startRetainedSession owns altscreen, mouse mode, and accent cursor (Bible Element 4)", () => {
 		const output = outputStub();
 		const terminal = new TerminalSessionOwner({ output });
 
 		terminal.startRetainedSession();
 
-		expect(output.writes).toEqual([`${ALTSCREEN_ENTER_SEQUENCE}${TERMINAL_BG_SET}`, MOUSE_SGR_ENABLE_SEQUENCE]);
-		expect(output.writes.join("")).not.toContain(CURSOR_COLOR_SET);
+		expect(output.writes).toEqual([
+			`${ALTSCREEN_ENTER_SEQUENCE}${TERMINAL_BG_SET}`,
+			MOUSE_SGR_ENABLE_SEQUENCE,
+			CURSOR_COLOR_SET,
+		]);
 		expect(terminal.getState()).toMatchObject({
 			altscreenActive: true,
 			mouseSGREnabled: true,
 			backgroundPainted: true,
-			cursorColorOverridden: false,
+			cursorColorOverridden: true,
 			restored: false,
 		});
 	});
@@ -49,7 +52,11 @@ describe("TerminalSessionOwner", () => {
 		terminal.enterAltscreen();
 		terminal.enableMouseSGR();
 
-		expect(output.writes).toEqual([`${ALTSCREEN_ENTER_SEQUENCE}${TERMINAL_BG_SET}`, MOUSE_SGR_ENABLE_SEQUENCE]);
+		expect(output.writes).toEqual([
+			`${ALTSCREEN_ENTER_SEQUENCE}${TERMINAL_BG_SET}`,
+			MOUSE_SGR_ENABLE_SEQUENCE,
+			CURSOR_COLOR_SET,
+		]);
 	});
 
 	it("enterAltscreen emits altscreen bytes and terminal background only", () => {
@@ -63,11 +70,12 @@ describe("TerminalSessionOwner", () => {
 		expect(output.writes[0]).not.toContain("\x1b]12;");
 	});
 
-	it("explicit cursor color overrides are opt-in and reset on cleanup", () => {
+	it("setCursorColor is idempotent for the active accent and resets on cleanup", () => {
 		const output = outputStub();
 		const terminal = new TerminalSessionOwner({ output });
 
 		terminal.startRetainedSession();
+		// Re-applying the same accent must not duplicate the OSC 12 write.
 		terminal.setCursorColor();
 		terminal.exitTerminal();
 
@@ -120,14 +128,19 @@ describe("TerminalSessionOwner", () => {
 		expect(terminal.restored).toBe(true);
 	});
 
-	it("exitTerminal restores bg after retained mode was active", () => {
+	it("exitTerminal restores bg and accent cursor after retained mode was active", () => {
 		const output = outputStub();
 		const terminal = new TerminalSessionOwner({ output });
 
 		terminal.startRetainedSession();
 		terminal.exitTerminal();
 
-		expect(output.writes).toEqual([`${ALTSCREEN_ENTER_SEQUENCE}${TERMINAL_BG_SET}`, MOUSE_SGR_ENABLE_SEQUENCE, `${TERMINAL_BG_RESET}${TERMINAL_CLEANUP_SEQUENCE}`]);
+		expect(output.writes).toEqual([
+			`${ALTSCREEN_ENTER_SEQUENCE}${TERMINAL_BG_SET}`,
+			MOUSE_SGR_ENABLE_SEQUENCE,
+			CURSOR_COLOR_SET,
+			`${CURSOR_COLOR_RESET}${TERMINAL_BG_RESET}${TERMINAL_CLEANUP_SEQUENCE}`,
+		]);
 	});
 
 	it("double cleanup is a no-op after the restored flag is set", () => {

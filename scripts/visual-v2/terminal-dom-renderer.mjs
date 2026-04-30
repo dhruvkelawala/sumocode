@@ -72,6 +72,12 @@ html, body { min-height: 100%; }
   line-height: var(--cell-h);
   white-space: pre;
   vertical-align: top;
+  /* Force exact cell-count width so narrow glyphs (e.g. NARROW NO-BREAK
+     SPACE used by sidebar tracked() headers) cannot collapse a run
+     below its terminal cell footprint. */
+  text-align: left;
+  letter-spacing: 0;
+  flex-shrink: 0;
 }
 </style>
 </head>
@@ -95,7 +101,8 @@ function renderRow(row) {
 	let style = null;
 	function flush() {
 		if (run.length === 0) return;
-		html += `<span class="v2-cell-run" style="${styleToCss(style)}">${escapeHtml(run.join(""))}</span>`;
+		const widthCss = `width: ${run.length}ch; min-width: ${run.length}ch`;
+		html += `<span class="v2-cell-run" style="${styleToCss(style)};${widthCss}">${escapeHtml(run.join(""))}</span>`;
 		run = [];
 	}
 	for (const cell of row) {

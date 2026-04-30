@@ -90,6 +90,7 @@ export class TerminalSessionOwner {
 	private mouseSGREnabled = false;
 	private backgroundPainted = false;
 	private cursorColorOverridden = false;
+	private lastCursorColor: string | undefined;
 
 	public constructor(options: TerminalSessionOwnerOptions = {}) {
 		this.output = options.output ?? process.stdout;
@@ -114,6 +115,10 @@ export class TerminalSessionOwner {
 	public startRetainedSession(): void {
 		this.enterAltscreen();
 		this.enableMouseSGR();
+		// V2 Bible Element 4 calls for an accent-colored cursor block. Apply OSC 12
+		// at startup so the runtime matches the mockup; users can opt out via
+		// `/sumo:cursor reset` which restores the terminal default.
+		this.setCursorColor();
 	}
 
 	public enterAltscreen(): void {
@@ -140,8 +145,10 @@ export class TerminalSessionOwner {
 	public setCursorColor(hex = "#D97706"): void {
 		if (!this.isTTY()) return;
 		this.restored = false;
+		if (this.cursorColorOverridden && this.lastCursorColor === hex) return;
 		this.write(cursorColorSetSequence(hex));
 		this.cursorColorOverridden = true;
+		this.lastCursorColor = hex;
 	}
 
 	/** Explicit cursor-color reset hook for `/sumo:cursor reset`. */
@@ -149,6 +156,7 @@ export class TerminalSessionOwner {
 		if (!this.isTTY()) return;
 		this.write(CURSOR_COLOR_RESET);
 		this.cursorColorOverridden = false;
+		this.lastCursorColor = undefined;
 	}
 
 	public writeChatViewport(top: number, left: number, lines: readonly string[]): boolean {
@@ -189,6 +197,7 @@ export class TerminalSessionOwner {
 		this.mouseSGREnabled = false;
 		this.backgroundPainted = false;
 		this.cursorColorOverridden = false;
+		this.lastCursorColor = undefined;
 		if (!this.isTTY()) return;
 		let output = "";
 		if (shouldResetCursorColor) output += CURSOR_COLOR_RESET;

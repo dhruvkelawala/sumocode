@@ -4,6 +4,7 @@ import { SumoNode } from "../layout/node.js";
 import { MEASURE_MODE_EXACTLY, type MeasureMode, type Yoga, type YogaNode } from "../layout/yoga.js";
 import type { CellBuffer, Rect } from "../render/buffer.js";
 import { lineToAnsi, span, textLine, withPersistentStyle, type Span } from "../render/primitives.js";
+import { renderCathedralCodeBlock } from "../transcript/code-renderer.js";
 import { renderToolBlockRows } from "../transcript/tool-renderer.js";
 import type { ChatBlock } from "../transcript/view-model.js";
 
@@ -152,7 +153,7 @@ function renderDelegationRows(block: Extract<ChatBlock, { type: "delegation" }>)
 }
 
 function renderCodeRows(block: Extract<ChatBlock, { type: "code" }>, width: number): string[] {
-	return wrapPlainText(`\`\`\`${block.lang}\n${block.source}\n\`\`\``, width);
+	return renderCathedralCodeBlock(block.lang, block.source, width);
 }
 
 function renderBlockRows(blocks: readonly ChatBlock[], width: number): string[] {

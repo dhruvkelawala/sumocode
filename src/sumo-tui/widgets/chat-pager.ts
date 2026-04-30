@@ -32,7 +32,7 @@ function noop(): void {}
 
 function chatRoleFromViewModel(message: ChatMessageViewModel): ChatMessageRole {
 	const onlyToolBlocks = message.blocks.length > 0 && message.blocks.every((block) => block.type === "tool");
-	if (onlyToolBlocks) return "tool";
+	if (message.role === "system" && onlyToolBlocks) return "tool";
 	return message.role;
 }
 

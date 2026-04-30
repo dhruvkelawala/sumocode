@@ -23,6 +23,17 @@ export interface ChatMessageSnapshot {
 
 const MIN_BOX_WIDTH = 8;
 
+interface TextSegmenter {
+	segment(input: string): Iterable<{ segment: string }>;
+}
+
+const SEGMENTER_CTOR = (Intl as unknown as {
+	Segmenter?: new (locale: string | undefined, options: { granularity: "grapheme" }) => TextSegmenter;
+}).Segmenter;
+
+const GRAPHEME_SEGMENTER = SEGMENTER_CTOR ? new SEGMENTER_CTOR(undefined, { granularity: "grapheme" }) : undefined;
+const TRAILING_WHITESPACE_PATTERN = /\s+$/u;
+
 function normalizeWidth(width: number): number {
 	if (!Number.isFinite(width)) return 0;
 	return Math.max(0, Math.floor(width));
@@ -46,17 +57,75 @@ function takeVisible(input: string, maxWidth: number): { head: string; tail: str
 	if (maxWidth <= 0 || input.length === 0) return { head: "", tail: input };
 	let width = 0;
 	let index = 0;
-	for (const glyph of Array.from(input)) {
+	for (const glyph of splitGraphemes(input)) {
 		const glyphWidth = visibleWidth(glyph);
 		if (width + glyphWidth > maxWidth) break;
 		width += glyphWidth;
 		index += glyph.length;
 	}
 	if (index === 0) {
-		const [first = ""] = Array.from(input);
+		const [first = ""] = splitGraphemes(input);
 		return { head: first, tail: input.slice(first.length) };
 	}
 	return { head: input.slice(0, index), tail: input.slice(index) };
+}
+
+function splitGraphemes(text: string): string[] {
+	if (!text) return [];
+	if (!GRAPHEME_SEGMENTER) return Array.from(text);
+	return [...GRAPHEME_SEGMENTER.segment(text)].map((part) => part.segment);
+}
+
+function isWhitespace(glyph: string): boolean {
+	return /^\s$/u.test(glyph);
+}
+
+function joinLine(glyphs: readonly string[]): string {
+	return glyphs.join("").replace(TRAILING_WHITESPACE_PATTERN, "");
+}
+
+function skipLeadingWhitespace(glyphs: readonly string[]): string[] {
+	let index = 0;
+	while (index < glyphs.length && isWhitespace(glyphs[index] ?? "")) index += 1;
+	return glyphs.slice(index);
+}
+
+function wrapParagraph(paragraph: string, width: number): string[] {
+	let remaining = splitGraphemes(paragraph.replace(TRAILING_WHITESPACE_PATTERN, ""));
+	if (remaining.length === 0) return [""];
+
+	const rows: string[] = [];
+	while (remaining.length > 0) {
+		let visible = 0;
+		let fitEnd = 0;
+		let lastWhitespace = -1;
+		for (let index = 0; index < remaining.length; index += 1) {
+			const glyph = remaining[index] ?? "";
+			const glyphWidth = visibleWidth(glyph);
+			if (fitEnd > 0 && visible + glyphWidth > width) break;
+			visible += glyphWidth;
+			fitEnd = index + 1;
+			if (index > 0 && isWhitespace(glyph)) lastWhitespace = index;
+			if (visible >= width) break;
+		}
+
+		if (fitEnd >= remaining.length) {
+			rows.push(joinLine(remaining));
+			break;
+		}
+
+		if (lastWhitespace > 0) {
+			rows.push(joinLine(remaining.slice(0, lastWhitespace)));
+			remaining = skipLeadingWhitespace(remaining.slice(lastWhitespace));
+			continue;
+		}
+
+		const hardEnd = Math.max(1, fitEnd);
+		rows.push(joinLine(remaining.slice(0, hardEnd)));
+		remaining = skipLeadingWhitespace(remaining.slice(hardEnd));
+	}
+
+	return rows;
 }
 
 function wrapPlainText(input: string, width: number): string[] {
@@ -64,16 +133,7 @@ function wrapPlainText(input: string, width: number): string[] {
 	const rows: string[] = [];
 	const paragraphs = input.split("\n");
 	for (const paragraph of paragraphs) {
-		if (paragraph.length === 0) {
-			rows.push("");
-			continue;
-		}
-		let remaining = paragraph;
-		while (remaining.length > 0) {
-			const part = takeVisible(remaining, width);
-			rows.push(part.head);
-			remaining = part.tail;
-		}
+		rows.push(...wrapParagraph(paragraph, width));
 	}
 	return rows.length === 0 ? [""] : rows;
 }

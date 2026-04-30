@@ -1,4 +1,5 @@
 import { visibleWidth } from "@mariozechner/pi-tui";
+import { DEFAULT_SUMOCODE_CONFIG } from "../../config/sumocode-config.js";
 import { CATHEDRAL_TOKENS } from "../../tokens.js";
 import { SumoNode } from "../layout/node.js";
 import { MEASURE_MODE_EXACTLY, type MeasureMode, type Yoga, type YogaNode } from "../layout/yoga.js";
@@ -22,6 +23,10 @@ export interface ChatMessageSnapshot {
 	blocks?: readonly ChatBlock[];
 }
 
+export interface ChatMessageOptions {
+	readonly primaryAgentName?: string;
+}
+
 const MIN_BOX_WIDTH = 8;
 
 function normalizeWidth(width: number): number {
@@ -29,9 +34,14 @@ function normalizeWidth(width: number): number {
 	return Math.max(0, Math.floor(width));
 }
 
-function roleLabel(role: ChatMessageRole): string {
+function agentRoleLabel(primaryAgentName: string | undefined): string {
+	const label = primaryAgentName?.trim() || DEFAULT_SUMOCODE_CONFIG.primaryAgentName;
+	return label.toUpperCase();
+}
+
+function roleLabel(role: ChatMessageRole, primaryAgentName?: string): string {
 	if (role === "user") return "USER";
-	if (role === "sumo" || role === "assistant") return "SUMO";
+	if (role === "sumo" || role === "assistant") return agentRoleLabel(primaryAgentName);
 	if (role === "tool") return "TOOL";
 	return String(role).toUpperCase();
 }
@@ -94,8 +104,8 @@ function formatTime(timestamp: Date): string {
 	return `${hours}:${minutes}`;
 }
 
-function frameTop(role: ChatMessageRole, timestamp: Date | undefined, width: number): string {
-	const label = roleLabel(role);
+function frameTop(role: ChatMessageRole, timestamp: Date | undefined, width: number, primaryAgentName?: string): string {
+	const label = roleLabel(role, primaryAgentName);
 	const leftParts: (Span | string)[] = [
 		span("╭ ", { fg: CATHEDRAL_TOKENS.colors.divider }),
 		span(label, { fg: roleColor(role) }),
@@ -197,6 +207,7 @@ export class ChatMessage extends SumoNode {
 		parent?: SumoNode,
 		timestamp = new Date(),
 		private blocks?: readonly ChatBlock[],
+		private readonly options: ChatMessageOptions = {},
 	) {
 		super(yogaNode, parent);
 		this.timestamp = timestamp;
@@ -204,8 +215,8 @@ export class ChatMessage extends SumoNode {
 		this.setMeasureFunc((width, widthMode, height, heightMode) => this.measure(width, widthMode, height, heightMode));
 	}
 
-	public static create(yoga: Yoga, role: ChatMessageRole, text: string, parent?: SumoNode, timestamp?: Date, blocks?: readonly ChatBlock[]): ChatMessage {
-		return new ChatMessage(yoga.Node.create(), role, text, parent, timestamp, blocks);
+	public static create(yoga: Yoga, role: ChatMessageRole, text: string, parent?: SumoNode, timestamp?: Date, blocks?: readonly ChatBlock[], options?: ChatMessageOptions): ChatMessage {
+		return new ChatMessage(yoga.Node.create(), role, text, parent, timestamp, blocks, options);
 	}
 
 	public setText(text: string): void {
@@ -259,7 +270,7 @@ export class ChatMessage extends SumoNode {
 		const bodyWidth = Math.max(1, renderWidth - 4);
 		const bodyRows = this.blocks ? renderBlockRows(this.blocks, bodyWidth) : wrapPlainText(this.text, bodyWidth);
 		return [
-			frameTop(this.role, this.timestamp, renderWidth),
+			frameTop(this.role, this.timestamp, renderWidth, this.options.primaryAgentName),
 			...bodyRows.map((row) => frameBody(row, renderWidth)),
 			frameBottom(renderWidth),
 		];

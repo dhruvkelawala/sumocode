@@ -1,8 +1,15 @@
 import { describe, expect, it } from "vitest";
 import { cellRowToAnsi } from "./ansi-writer.js";
 import { CellBuffer } from "./buffer.js";
+import { indexedColor, normalizeHexColor, parseHexColor } from "./truecolor.js";
 
 describe("truecolor ANSI preservation", () => {
+	it("normalizes 24-bit cathedral colors through the shared truecolor helpers", () => {
+		expect(normalizeHexColor(61, 48, 36)).toBe("#3d3024");
+		expect(parseHexColor("#3D3024")).toEqual([61, 48, 36]);
+		expect(indexedColor(208)).toBe("#ff8700");
+	});
+
 	it("round-trips a 24-bit foreground SGR through the cell buffer", () => {
 		const buffer = new CellBuffer(1, 1);
 		buffer.paintRow(0, "\x1b[38;2;217;119;6mX\x1b[0m");

@@ -1,5 +1,6 @@
 import { visibleWidth } from "@mariozechner/pi-tui";
 import { BLANK_CELL, attrsEqual, attrsToMask, createAttrs, maskToAttrs, type Cell } from "./cell.js";
+import { indexedColor, isColorByte, normalizeHexColor } from "./truecolor.js";
 
 export interface Rect {
 	top: number;
@@ -18,25 +19,6 @@ const SEGMENTER_CTOR = (Intl as unknown as {
 
 const GRAPHEME_SEGMENTER = SEGMENTER_CTOR ? new SEGMENTER_CTOR(undefined, { granularity: "grapheme" }) : undefined;
 
-const ANSI_16: readonly string[] = [
-	"#000000",
-	"#800000",
-	"#008000",
-	"#808000",
-	"#000080",
-	"#800080",
-	"#008080",
-	"#c0c0c0",
-	"#808080",
-	"#ff0000",
-	"#00ff00",
-	"#ffff00",
-	"#0000ff",
-	"#ff00ff",
-	"#00ffff",
-	"#ffffff",
-];
-
 function splitGraphemes(text: string): string[] {
 	if (!text) return [];
 	if (!GRAPHEME_SEGMENTER) return Array.from(text);
@@ -49,33 +31,6 @@ function clampRect(rect: Rect, rows: number, cols: number): Rect {
 	const bottom = Math.max(top, Math.min(rows, Math.floor(rect.top + rect.height)));
 	const right = Math.max(left, Math.min(cols, Math.floor(rect.left + rect.width)));
 	return { top, left, width: right - left, height: bottom - top };
-}
-
-function normalizeHex(r: number, g: number, b: number): string {
-	const toHex = (value: number) => Math.max(0, Math.min(255, value)).toString(16).padStart(2, "0");
-	return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
-}
-
-function isColorByte(value: number | undefined): value is number {
-	return value !== undefined && Number.isInteger(value) && value >= 0 && value <= 255;
-}
-
-function indexedColor(index: number): string | undefined {
-	if (!isColorByte(index)) return undefined;
-	if (index < ANSI_16.length) return ANSI_16[index];
-	if (index >= 16 && index <= 231) {
-		const value = index - 16;
-		const r = Math.floor(value / 36);
-		const g = Math.floor((value % 36) / 6);
-		const b = value % 6;
-		const cube = [0, 95, 135, 175, 215, 255];
-		return normalizeHex(cube[r] ?? 0, cube[g] ?? 0, cube[b] ?? 0);
-	}
-	if (index >= 232 && index <= 255) {
-		const gray = 8 + (index - 232) * 10;
-		return normalizeHex(gray, gray, gray);
-	}
-	return undefined;
 }
 
 function sameStyle(left: Cell, right: Cell): boolean {
@@ -365,7 +320,7 @@ export class CellBuffer {
 			const g = codes[offset + 2];
 			const b = codes[offset + 3];
 			if (!isColorByte(r) || !isColorByte(g) || !isColorByte(b)) return undefined;
-			return { value: normalizeHex(r, g, b), nextIndex: offset + 3 };
+			return { value: normalizeHexColor(r, g, b), nextIndex: offset + 3 };
 		}
 		if (mode === 5) {
 			const color = indexedColor(codes[offset + 1] ?? -1);

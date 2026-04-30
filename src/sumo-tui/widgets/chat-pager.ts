@@ -3,7 +3,7 @@ import { FLEX_DIRECTION_COLUMN, type Yoga, type YogaNode } from "../layout/yoga.
 import type { KeyEvent } from "../input/key-router.js";
 import type { MouseEvent } from "../input/mouse.js";
 import { chatMessageViewModelToPlainText, type ChatMessageViewModel } from "../transcript/view-model.js";
-import { ChatMessage, type ChatMessageRole } from "./chat-message.js";
+import { ChatMessage, type ChatMessageOptions, type ChatMessageRole } from "./chat-message.js";
 import { ScrolledUpBanner } from "./scrolled-up-banner.js";
 import { ScrollBox, type ScrollBoxStateChange } from "./scrollbox.js";
 
@@ -16,6 +16,7 @@ export interface ChatPagerOptions {
 	readonly renderControls?: ChatPagerRenderControls;
 	readonly maxRenderedMessages?: number;
 	readonly stickyBottom?: boolean;
+	readonly primaryAgentName?: string;
 }
 
 const DEFAULT_MAX_RENDERED_MESSAGES = 200;
@@ -36,6 +37,7 @@ export class ChatPager extends SumoNode {
 	private readonly yoga: Yoga;
 	private readonly renderControls: ChatPagerRenderControls;
 	private readonly maxRenderedMessages: number;
+	private readonly chatMessageOptions: ChatMessageOptions;
 	private readonly activeMessages: ChatMessage[] = [];
 	private placeholder: ChatMessage | undefined;
 	private unreadCount = 0;
@@ -47,6 +49,7 @@ export class ChatPager extends SumoNode {
 		this.yoga = yoga;
 		this.renderControls = options.renderControls ?? { scheduleRender: noop, setStreamingMode: noop };
 		this.maxRenderedMessages = Math.max(1, Math.round(options.maxRenderedMessages ?? DEFAULT_MAX_RENDERED_MESSAGES));
+		this.chatMessageOptions = { primaryAgentName: options.primaryAgentName };
 		this.flexGrow = 1;
 		this.flexShrink = 1;
 		this.flexDirection = FLEX_DIRECTION_COLUMN;
@@ -66,7 +69,7 @@ export class ChatPager extends SumoNode {
 	}
 
 	public addMessage(role: ChatMessageRole, text: string, timestamp?: Date): ChatMessage {
-		return this.addChatMessage(ChatMessage.create(this.yoga, role, text, undefined, timestamp));
+		return this.addChatMessage(ChatMessage.create(this.yoga, role, text, undefined, timestamp, undefined, this.chatMessageOptions));
 	}
 
 	public addViewModel(message: ChatMessageViewModel): ChatMessage {
@@ -78,6 +81,7 @@ export class ChatPager extends SumoNode {
 			undefined,
 			message.timestamp,
 			message.blocks,
+			this.chatMessageOptions,
 		));
 	}
 
@@ -235,7 +239,7 @@ export class ChatPager extends SumoNode {
 		if (this.archivedMessages.length === 0) return { addedLines, removedLines };
 		const placeholderText = `── ${this.archivedMessages.length} earlier messages ──`;
 		if (!this.placeholder) {
-			this.placeholder = ChatMessage.create(this.yoga, "system", placeholderText);
+			this.placeholder = ChatMessage.create(this.yoga, "system", placeholderText, undefined, undefined, undefined, this.chatMessageOptions);
 			addedLines += this.placeholder.getEstimatedHeight(width);
 			this.rebuildRenderedChildren();
 		} else if (this.placeholder.text !== placeholderText) {

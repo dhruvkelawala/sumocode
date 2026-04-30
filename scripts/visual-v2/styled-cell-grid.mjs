@@ -50,8 +50,6 @@ const EQUIVALENT_PAIRS = [
 	{ bible: "#5A4D3C", runtime: "#3A2F25", reason: "divider-mockup vs divider" },
 	// idle state: Bible tokens.css has #7FB069, runtime CATHEDRAL_TOKENS uses #22C55E
 	{ bible: "#7FB069", runtime: "#22C55E", reason: "state-idle palette difference" },
-	// lifted surface: Bible mockups use the warmer #3D3024, runtime token still has #3A342F.
-	{ bible: "#3D3024", runtime: "#3A342F", reason: "surface-lifted palette difference" },
 ];
 
 function colorsEquivalent(a, b) {

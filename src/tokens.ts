@@ -6,7 +6,7 @@ export const CATHEDRAL_TOKENS = {
 		surfaceLifted: "#3D3024",
 		foreground: "#F5E6C8",
 		foregroundDim: "#8B7A63",
-		divider: "#3A2F25",
+		divider: "#5A4D3C",
 		accent: "#D97706",
 		states: {
 			idle: "#7FB069",

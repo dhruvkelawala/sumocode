@@ -179,30 +179,55 @@ function renderReadLikeBody(tool: ToolCallViewModel, width: number): string[] {
 	return rows;
 }
 
+function renderEditSummary(text: string, width: number): string[] {
+	const additions = text.match(/\+(\d+)/)?.[0];
+	const removals = text.match(/-(\d+)/)?.[0];
+	const rest = text.replace(/\+\d+|-\d+/g, "").trim();
+	return [renderBodyLine([
+		...(additions ? [span(additions, { fg: CATHEDRAL_TOKENS.colors.states.idle }), span(" ")] : []),
+		...(removals ? [span(removals, { fg: CATHEDRAL_TOKENS.colors.states.approval }), span(" ")] : []),
+		span(rest || "diff collapsed", { fg: CATHEDRAL_TOKENS.colors.foregroundDim }),
+	], width)];
+}
+
 function renderEditBody(tool: ToolCallViewModel, width: number): string[] {
 	const details = asRecord(tool.details);
-	const diff = arrayFromDetails(details, "diff").length > 0 ? arrayFromDetails(details, "diff") : outputLines(tool);
-	if (diff.length === 0) {
+	const diffLines = arrayFromDetails(details, "diff");
+
+	// No explicit diff array → render summary from output/note
+	if (diffLines.length === 0) {
 		const note = toolNote(tool) ?? "diff collapsed";
-		const additions = note.match(/\+(\d+)/)?.[0];
-		const removals = note.match(/-(\d+)/)?.[0];
-		const rest = note.replace(/\+\d+|-\d+/g, "").trim();
-		return [renderBodyLine([
-			...(additions ? [span(additions, { fg: CATHEDRAL_TOKENS.colors.states.idle }), span(" ")] : []),
-			...(removals ? [span(removals, { fg: CATHEDRAL_TOKENS.colors.states.approval }), span(" ")] : []),
-			span(rest || "diff collapsed", { fg: CATHEDRAL_TOKENS.colors.foregroundDim }),
-		], width)];
+		return renderEditSummary(note, width);
 	}
+
+	// Render actual diff lines with gutter
 	const startLine = typeof details?.startLine === "number" ? details.startLine : 1;
-	const rows = diff.slice(0, 6).map((line, index) => {
+	const rows = diffLines.slice(0, 6).map((line, index) => {
 		const color = line.trimStart().startsWith("+") ? CATHEDRAL_TOKENS.colors.states.idle
 			: line.trimStart().startsWith("-") ? CATHEDRAL_TOKENS.colors.states.approval
 			: CATHEDRAL_TOKENS.colors.foreground;
 		return renderGutterLine(startLine + index, line, width, color);
 	});
-	const collapsed = collapsedMarker(details, Math.max(0, diff.length - rows.length));
+	const collapsed = collapsedMarker(details, Math.max(0, diffLines.length - rows.length));
 	if (collapsed) rows.push(renderBodyLine([span("      ", { fg: CATHEDRAL_TOKENS.colors.foregroundDim }), span(collapsed, { fg: CATHEDRAL_TOKENS.colors.foregroundDim })], width));
 	return rows;
+}
+
+function renderBashLine(line: string): (Span | string)[] {
+	const trimmed = line.trimStart();
+	const indent = line.slice(0, line.length - trimmed.length);
+	// Lines starting with ✓ or ✗: color only the glyph, rest stays foreground
+	if (trimmed.startsWith("✓")) {
+		return [span(`${indent}✓`, { fg: CATHEDRAL_TOKENS.colors.states.idle }), span(trimmed.slice(1))];
+	}
+	if (trimmed.startsWith("✗")) {
+		return [span(`${indent}✗`, { fg: CATHEDRAL_TOKENS.colors.states.approval }), span(trimmed.slice(1))];
+	}
+	// Summary / result lines (no leading > or glyph): dim
+	if (!trimmed.startsWith(">")) {
+		return [span(line, { fg: CATHEDRAL_TOKENS.colors.foregroundDim })];
+	}
+	return [line];
 }
 
 function renderBashBody(tool: ToolCallViewModel, width: number): string[] {
@@ -213,10 +238,7 @@ function renderBashBody(tool: ToolCallViewModel, width: number): string[] {
 	const collapsed = collapsedMarker(details, Math.max(0, outputLines(tool).length - lines.length));
 	if (collapsed) body.push(renderBodyLine([span(`  ${collapsed}`, { fg: CATHEDRAL_TOKENS.colors.foregroundDim })], width));
 	for (const line of lines) {
-		const color = line.trimStart().startsWith("✗") ? CATHEDRAL_TOKENS.colors.states.approval
-			: line.trimStart().startsWith("✓") ? CATHEDRAL_TOKENS.colors.states.idle
-			: CATHEDRAL_TOKENS.colors.foreground;
-		body.push(renderBodyLine([span(line, { fg: color })], width));
+		body.push(renderBodyLine(renderBashLine(line), width));
 	}
 	if (lines.length === 0 && tool.status === "running") body.push(renderBodyLine([span("watching stdout…", { fg: CATHEDRAL_TOKENS.colors.foregroundDim })], width));
 	return body;

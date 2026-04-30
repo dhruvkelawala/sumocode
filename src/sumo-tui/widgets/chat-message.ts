@@ -3,7 +3,7 @@ import { CATHEDRAL_TOKENS } from "../../tokens.js";
 import { SumoNode } from "../layout/node.js";
 import { MEASURE_MODE_EXACTLY, type MeasureMode, type Yoga, type YogaNode } from "../layout/yoga.js";
 import type { CellBuffer, Rect } from "../render/buffer.js";
-import { lineToAnsi, span, textLine, type Span } from "../render/primitives.js";
+import { lineToAnsi, span, textLine, withPersistentStyle, type Span } from "../render/primitives.js";
 import { renderToolBlockRows } from "../transcript/tool-renderer.js";
 import type { ChatBlock } from "../transcript/view-model.js";
 
@@ -98,7 +98,7 @@ function frameTop(role: ChatMessageRole, timestamp: Date | undefined, width: num
 	const leftParts: (Span | string)[] = [
 		span("╭ ", { fg: CATHEDRAL_TOKENS.colors.divider }),
 		span(label, { fg: roleColor(role) }),
-		span(" ", { fg: CATHEDRAL_TOKENS.colors.divider }),
+		span(" ", { fg: CATHEDRAL_TOKENS.colors.foreground }),
 	];
 
 	const showTime = (role === "sumo" || role === "assistant") && timestamp !== undefined;
@@ -123,11 +123,10 @@ function frameTop(role: ChatMessageRole, timestamp: Date | undefined, width: num
 function frameBody(row: string, width: number): string {
 	const inner = Math.max(0, width - 4);
 	const text = fitCellText(row, inner);
+	const body = withPersistentStyle(` ${text} `, CATHEDRAL_TOKENS.colors.foreground, CATHEDRAL_TOKENS.colors.surfaceRecess);
 	return lineToAnsi(textLine([
 		span("│", { fg: CATHEDRAL_TOKENS.colors.divider }),
-		" ",
-		span(text, { fg: CATHEDRAL_TOKENS.colors.foreground }),
-		" ",
+		span(body),
 		span("│", { fg: CATHEDRAL_TOKENS.colors.divider }),
 	]), { width });
 }

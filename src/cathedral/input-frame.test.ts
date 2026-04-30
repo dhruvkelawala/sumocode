@@ -41,10 +41,10 @@ describe("renderInputFrame — active state (no label, no placeholder)", () => {
 		}
 	});
 
-	it("colors frame chars in divider color (#3A2F25)", () => {
+	it("colors frame chars in divider color (#5A4D3C)", () => {
 		const lines = renderInputFrame("hi", 40);
-		// divider #3A2F25 -> 58;47;37
-		expect(lines.join("\n")).toContain("\u001b[38;2;58;47;37m");
+		// divider #5A4D3C -> 90;77;60
+		expect(lines.join("\n")).toContain("\u001b[38;2;90;77;60m");
 	});
 
 	it("colors cursor █ in accent (#D97706)", () => {

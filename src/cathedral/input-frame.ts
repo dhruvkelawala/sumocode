@@ -19,7 +19,7 @@
  *   ╰─ AWAITING PROMPT                         CTRL+/ · COMMANDS
  *
  * Token map (from Stitch CSS variables):
- *   border       → divider  (#3A2F25)  — dim, not accent
+ *   border       → divider  (#5A4D3C)  — dim, not accent
  *   inner bg     → recess   (#120D0A)  — painted on every row
  *   `>` prompt   → oxidized (#8B7A63)  — splash | accent (#D97706) — active
  *   cursor `█`   → accent   (#D97706)

@@ -21,7 +21,7 @@ describe("tool renderer", () => {
 
 		expect(rows.map(stripAnsi)).toEqual([
 			"╭─ [edit]  src/auth/session.ts ────────────────── ✓ +14 -6 session flow updated ",
-			"│    1  +14 -6 session flow updated                                             ",
+			"│ +14 -6 session flow updated                                                   ",
 			"╰───────────────────────────────────────────────────────────────────────────────",
 		]);
 		expect(rows.every((row) => stripAnsi(row).length === 80)).toBe(true);

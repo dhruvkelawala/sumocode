@@ -8,6 +8,8 @@ import { composite } from "../render/compositor.js";
 import { ChatPager } from "../widgets/chat-pager.js";
 import { ChatViewportController, installChatViewportBridge, textFromAgentMessage, type ChatViewportHost, type ChatViewportRuntime } from "./chat-viewport-controller.js";
 
+const ANSI_PATTERN = /\u001b\[[0-9;]*m/g;
+
 function rows(count: number): { render(width: number): string[] } {
 	return { render: (_width: number) => Array.from({ length: count }, () => "chrome") };
 }
@@ -69,7 +71,7 @@ describe("ChatViewportController", () => {
 	it("extracts streamed assistant text from Pi message shapes", () => {
 		expect(textFromAgentMessage({ role: "user", content: "hello" })).toBe("hello");
 		expect(textFromAgentMessage({ role: "assistant", content: [{ type: "thinking", thinking: "hidden" }, { type: "text", text: "visible" }] })).toBe("visible");
-		expect(textFromAgentMessage({ role: "toolResult", content: [{ type: "text", text: "tool output" }] })).toBe("tool output");
+		expect(textFromAgentMessage({ role: "toolResult", content: [{ type: "text", text: "tool output" }] }).replace(ANSI_PATTERN, "")).toBe("✓ [tool]  tool output  · ⌘O expand");
 	});
 
 	it("owns chat viewport geometry, including sidebar and portrait gutters", async () => {
@@ -122,6 +124,41 @@ describe("ChatViewportController", () => {
 
 		expect(runtime.noteUserMessage).toHaveBeenCalledTimes(1);
 		expect(chat.getRenderedMessages().map((message) => message.text)).toEqual(["hello", "hello back"]);
+		root.dispose();
+	});
+
+	it("mirrors Pi tool expansion state into retained chat tool blocks", async () => {
+		const yoga = await loadYoga();
+		const root = new SumoNode(yoga.Node.create());
+		const chat = ChatPager.create(yoga, root);
+		chat.addViewModel({
+			id: "s1",
+			role: "sumo",
+			displayName: "SUMO",
+			blocks: [{ type: "tool", tool: { name: "read", status: "success", input: { path: "src/auth/session.ts" } } }],
+		});
+		const originalSetToolsExpanded = vi.fn();
+		const host = {
+			ui: { terminal: { rows: 24, columns: 120 }, requestRender: vi.fn() },
+			chatContainer: { render: vi.fn(() => []), clear: vi.fn(), invalidate: vi.fn() },
+			setToolsExpanded: originalSetToolsExpanded,
+		};
+		const runtime = {
+			getSnapshot: () => ({ chat }),
+			setExternalRenderControls: vi.fn(),
+			renderChatLines: vi.fn(() => []),
+			writeChatViewport: vi.fn(() => true),
+			requestRender: vi.fn(),
+			setEmptyChatQuoteState: vi.fn(),
+			noteUserMessage: vi.fn(),
+		};
+
+		const cleanup = installChatViewportBridge(host, runtime);
+		host.setToolsExpanded(true);
+
+		expect(originalSetToolsExpanded).toHaveBeenCalledWith(true);
+		expect(chat.getRenderedMessages()[0]?.toSnapshot().blocks?.[0]).toMatchObject({ type: "tool", tool: { expanded: true } });
+		cleanup?.();
 		root.dispose();
 	});
 

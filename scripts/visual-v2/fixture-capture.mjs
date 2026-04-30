@@ -8,38 +8,6 @@ const jiti = createJiti(import.meta.url, {
 	tryNative: false,
 });
 
-// ── Bible-matching tool pill formatter ─────────────────────────────
-const RESET = "\u001b[0m";
-function fgAnsi(hex) {
-	const n = hex.replace("#", "");
-	const r = parseInt(n.slice(0, 2), 16);
-	const g = parseInt(n.slice(2, 4), 16);
-	const b = parseInt(n.slice(4, 6), 16);
-	return `\u001b[38;2;${r};${g};${b}m`;
-}
-const TOOL_GLYPHS = { success: "✓", error: "✗", running: "⚡", pending: "○" };
-const TOOL_COLORS = { success: "#22C55E", error: "#C1443E", running: "#E8B339", pending: "#8B7A63" };
-
-/** Format a tool block as Bible-matching pill: `✓ [name]  target  · note` */
-function formatToolPill(tool) {
-	const glyph = TOOL_GLYPHS[tool.status] ?? "○";
-	const color = TOOL_COLORS[tool.status] ?? "#8B7A63";
-	const target = tool.output ?? "";
-	return `${fgAnsi(color)}${glyph}${RESET} ${fgAnsi("#D97706")}[${tool.name}]${RESET}${fgAnsi("#F5E6C8")}  ${target}${RESET}`;
-}
-
-/** Convert a ChatMessageViewModel to text matching the Bible chat content. */
-function fixtureMessageToText(message) {
-	return message.blocks.map(block => {
-		switch (block.type) {
-			case "markdown": return block.text;
-			case "tool": return formatToolPill(block.tool);
-			case "code": return `\`\`\`${block.lang}\n${block.source}\n\`\`\``;
-			default: return "";
-		}
-	}).filter(Boolean).join("\n\n");
-}
-
 const FIXTURE_TIMES = {
 	userOne: new Date("2026-04-30T11:41:00"),
 	sumoOne: new Date("2026-04-30T11:42:00"),
@@ -65,8 +33,8 @@ const FIXTURES = {
 					timestamp: FIXTURE_TIMES.sumoOne,
 					blocks: [
 						{ type: "markdown", text: "Reading the auth flow." },
-						{ type: "tool", tool: { id: "read-session", name: "read", status: "success", output: "src/auth/session.ts" } },
-						{ type: "tool", tool: { id: "edit-session", name: "edit", status: "success", output: "src/auth/session.ts" } },
+						{ type: "tool", tool: { id: "read-session", name: "read", status: "success", input: { path: "src/auth/session.ts" } } },
+						{ type: "tool", tool: { id: "edit-session", name: "edit", status: "success", input: { path: "src/auth/session.ts" }, output: "+14 -6 session flow updated" } },
 						{ type: "markdown", text: "Done. Updated 14 lines, deleted 6 stale helpers." },
 					],
 				},
@@ -84,7 +52,7 @@ const FIXTURES = {
 					timestamp: FIXTURE_TIMES.sumoTwo,
 					blocks: [
 						{ type: "markdown", text: "Running tests now." },
-						{ type: "tool", tool: { id: "bash-test", name: "bash", status: "success", output: "pnpm test src/auth · 22 tests, 1.2s" } },
+						{ type: "tool", tool: { id: "bash-test", name: "bash", status: "success", input: { command: "pnpm test src/auth" }, output: "✓ src/auth/session.test.ts (22 tests)\n22 passed in 1.2s", details: { summary: "22 tests, 1.2s" } } },
 						{ type: "markdown", text: "All 22 tests pass." },
 					],
 				},
@@ -99,7 +67,7 @@ const FIXTURES = {
 					role: "user",
 					displayName: "USER",
 					timestamp: FIXTURE_TIMES.userOne,
-					blocks: [{ type: "markdown", text: "inspect auth session and run focused tests" }],
+					blocks: [{ type: "markdown", text: "hello, refactor the auth flow to use the new session pattern." }],
 				},
 				{
 					id: "s1",
@@ -107,11 +75,28 @@ const FIXTURES = {
 					displayName: "SUMO",
 					timestamp: FIXTURE_TIMES.sumoOne,
 					blocks: [
-						{ type: "markdown", text: "I’ll inspect the session boundary, patch it, then run focused tests." },
-						{ type: "tool", tool: { id: "read", name: "read", status: "success", output: "src/auth/session.ts" } },
-						{ type: "tool", tool: { id: "edit", name: "edit", status: "success", output: "+14 -6 session flow updated" } },
-						{ type: "tool", tool: { id: "bash", name: "bash", status: "success", output: "22 passed in 1.2s" } },
-						{ type: "markdown", text: "The focused path is green." },
+						{ type: "markdown", text: "Reading the auth flow." },
+						{ type: "tool", tool: { id: "read", name: "read", status: "success", input: { path: "src/auth/session.ts" }, expanded: true } },
+						{ type: "tool", tool: { id: "edit", name: "edit", status: "success", input: { path: "src/auth/session.ts" }, output: "+14 -6 session flow updated", expanded: true } },
+						{ type: "markdown", text: "Done. Updated 14 lines, deleted 6 stale helpers." },
+					],
+				},
+				{
+					id: "u2",
+					role: "user",
+					displayName: "USER",
+					timestamp: FIXTURE_TIMES.userTwo,
+					blocks: [{ type: "markdown", text: "run tests" }],
+				},
+				{
+					id: "s2",
+					role: "sumo",
+					displayName: "SUMO",
+					timestamp: FIXTURE_TIMES.sumoTwo,
+					blocks: [
+						{ type: "markdown", text: "Running tests now." },
+						{ type: "tool", tool: { id: "bash", name: "bash", status: "success", input: { command: "pnpm test src/auth" }, output: "✓ src/auth/session.test.ts (22 tests)\n22 passed in 1.2s", details: { summary: "22 tests, 1.2s" }, expanded: true } },
+						{ type: "markdown", text: "All 22 tests pass." },
 					],
 				},
 			],
@@ -145,7 +130,7 @@ async function renderFixtureScene(scenario, fixture) {
 	const sidebarWidth = sidebarVisible ? 30 : 0;
 	const chatWidth = Math.max(1, cols - sidebarWidth - gutter);
 
-	const [topChrome, inputFrame, footer, sidebar, chatPager, yogaMod, layoutNodeMod, bufferMod, compositorMod, writerMod, transcriptMod] = await Promise.all([
+	const [topChrome, inputFrame, footer, sidebar, chatPager, yogaMod, layoutNodeMod, bufferMod, compositorMod, writerMod] = await Promise.all([
 		jiti.import(`${repoRoot}/src/top-chrome.ts`),
 		jiti.import(`${repoRoot}/src/cathedral/input-frame.ts`),
 		jiti.import(`${repoRoot}/src/footer.ts`),
@@ -156,7 +141,6 @@ async function renderFixtureScene(scenario, fixture) {
 		jiti.import(`${repoRoot}/src/sumo-tui/render/buffer.ts`),
 		jiti.import(`${repoRoot}/src/sumo-tui/render/compositor.ts`),
 		jiti.import(`${repoRoot}/src/sumo-tui/render/ansi-writer.ts`),
-		jiti.import(`${repoRoot}/src/sumo-tui/transcript/view-model.ts`),
 	]);
 
 	// Bible always has blank / topbar / blank regardless of width.
@@ -193,7 +177,7 @@ async function renderFixtureScene(scenario, fixture) {
 	chatRoot.flexDirection = yogaMod.FLEX_DIRECTION_COLUMN;
 	const chat = chatPager.ChatPager.create(yoga, chatRoot, { stickyBottom: false });
 	for (const message of transcript.messages) {
-		chat.addMessage(message.role, fixtureMessageToText(message), message.timestamp);
+		chat.addViewModel(message);
 	}
 	chatRoot.width = chatWidth;
 	chatRoot.height = chatHeight;

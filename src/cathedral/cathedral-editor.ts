@@ -38,7 +38,7 @@ import type {
 	KeybindingsManager,
 } from "@mariozechner/pi-coding-agent";
 import { CustomEditor } from "@mariozechner/pi-coding-agent";
-import { CURSOR_MARKER, visibleWidth, type EditorTheme, type TUI } from "@mariozechner/pi-tui";
+import { CURSOR_MARKER, truncateToWidth, visibleWidth, type EditorTheme, type TUI } from "@mariozechner/pi-tui";
 import { CATHEDRAL_TOKENS } from "../tokens.js";
 import {
 	INPUT_FRAME_LABEL_ACTIVE,
@@ -52,6 +52,18 @@ const SPLASH_INPUT_FRAME_WIDTH = 60;
 
 function visibleLength(text: string): number {
 	return visibleWidth(text);
+}
+
+function ellipsize(text: string, max: number): string {
+	if (max <= 0) return "";
+	if (text.length <= max) return text;
+	if (max === 1) return "…";
+	return `${text.slice(0, max - 1)}…`;
+}
+
+function fitAnsiToWidth(text: string, width: number): string {
+	if (width <= 0) return "";
+	return visibleLength(text) > width ? truncateToWidth(text, width, "…") : text;
 }
 
 function fg(hex: string): string {
@@ -96,12 +108,15 @@ function renderTopBorder(width: number, label: string | undefined, paintBackgrou
 	if (width < 6) return maybeWithFrameBackground(color("─".repeat(width), CATHEDRAL_TOKENS.colors.divider), paintBackground);
 	const inner = width - 2;
 	if (!label) return maybeWithFrameBackground(color(`┌${"─".repeat(inner)}┐`, CATHEDRAL_TOKENS.colors.divider), paintBackground);
-	const labelInner = ` ${label} `;
-	const remaining = Math.max(2, width - labelInner.length - 3);
-	const left = `${DIVIDER_FG}┌─`;
-	const labelText = color(labelInner, CATHEDRAL_TOKENS.colors.accent);
-	const right = `${DIVIDER_FG}${"─".repeat(remaining)}┐${RESET}`;
-	return maybeWithFrameBackground(`${left}${labelText}${right}`, paintBackground);
+	const leftDashes = "─".repeat(Math.min(1, inner));
+	const maxLabelText = Math.max(0, inner - leftDashes.length - 2); // 2 = spaces around label
+	const labelText = ellipsize(label, maxLabelText);
+	const labelInner = labelText.length > 0 ? ` ${labelText} ` : "";
+	const rightDashes = "─".repeat(Math.max(0, inner - leftDashes.length - labelInner.length));
+	const left = `${DIVIDER_FG}┌${leftDashes}`;
+	const labelSegment = color(labelInner, CATHEDRAL_TOKENS.colors.accent);
+	const right = `${DIVIDER_FG}${rightDashes}┐${RESET}`;
+	return maybeWithFrameBackground(`${left}${labelSegment}${right}`, paintBackground);
 }
 
 function renderBottomBorder(width: number, paintBackground: boolean): string {
@@ -121,9 +136,10 @@ function renderBottomBorder(width: number, paintBackground: boolean): string {
  */
 function wrapRow(inner: string, width: number, paintBackground: boolean): string {
 	const innerWidth = Math.max(0, width - 2);
-	const visible = visibleLength(inner);
+	const fitted = fitAnsiToWidth(inner, innerWidth);
+	const visible = visibleLength(fitted);
 	const pad = Math.max(0, innerWidth - visible);
-	const padded = `${inner}${" ".repeat(pad)}`;
+	const padded = `${fitted}${" ".repeat(pad)}`;
 	return maybeWithFrameBackground(`${DIVIDER_FG}│${RESET}${padded}${DIVIDER_FG}│${RESET}`, paintBackground);
 }
 
@@ -136,9 +152,10 @@ function wrapActiveRow(inner: string, width: number, paintBackground: boolean, i
 	const innerWidth = Math.max(0, width - 2);
 	const promptCells = 3; // " > " or "   "
 	const contentWidth = Math.max(0, innerWidth - promptCells);
-	const visible = visibleLength(inner);
+	const fitted = fitAnsiToWidth(inner, contentWidth);
+	const visible = visibleLength(fitted);
 	const pad = Math.max(0, contentWidth - visible);
-	const padded = `${inner}${" ".repeat(pad)}`;
+	const padded = `${fitted}${" ".repeat(pad)}`;
 	const prompt = isFirstRow
 		? ` ${color(">", CATHEDRAL_TOKENS.colors.accent)} `
 		: "   ";
@@ -147,7 +164,8 @@ function wrapActiveRow(inner: string, width: number, paintBackground: boolean, i
 
 function centerRow(row: string, width: number): string {
 	const visible = visibleLength(row);
-	if (visible >= width) return row;
+	if (visible > width) return truncateToWidth(row, width, "…");
+	if (visible === width) return row;
 	const left = Math.floor((width - visible) / 2);
 	const right = width - visible - left;
 	return `${" ".repeat(left)}${row}${" ".repeat(right)}`;
@@ -219,7 +237,10 @@ class CathedralEditor extends CustomEditor {
 				// Preserve Pi's zero-width cursor marker while painting our ghost text.
 				// Without this, TUI.positionHardwareCursor() sees no marker on the
 				// splash empty state and emits \x1b[?25l after every render.
-				const ghost = ` ${color(">", CATHEDRAL_TOKENS.colors.accent)} ${color(`${INPUT_FRAME_PLACEHOLDER}${CURSOR_MARKER}`, CATHEDRAL_TOKENS.colors.foregroundDim)}`;
+				const prompt = ` ${color(">", CATHEDRAL_TOKENS.colors.accent)} `;
+				const maxPlaceholder = Math.max(0, frameWidth - 2 - visibleLength(prompt));
+				const placeholder = ellipsize(INPUT_FRAME_PLACEHOLDER, maxPlaceholder);
+				const ghost = `${prompt}${color(`${placeholder}${CURSOR_MARKER}`, CATHEDRAL_TOKENS.colors.foregroundDim)}`;
 				return fullRow(wrapRow(ghost, frameWidth, paintFrameBackground));
 			}
 			if (!splash) return wrapActiveRow(row, frameWidth, paintFrameBackground, isFirstContent);

@@ -534,8 +534,18 @@
 					{
 						"startRow": 0,
 						"endRow": 0,
+						"category": "blank"
+					},
+					{
+						"startRow": 1,
+						"endRow": 1,
 						"category": "top-bar",
 						"firstCol": 1
+					},
+					{
+						"startRow": 2,
+						"endRow": 2,
+						"category": "blank"
 					}
 				],
 				"contentBounds": {

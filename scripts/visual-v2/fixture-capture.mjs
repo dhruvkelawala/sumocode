@@ -7,6 +7,38 @@ const jiti = createJiti(import.meta.url, {
 	tryNative: false,
 });
 
+// ── Bible-matching tool pill formatter ─────────────────────────────
+const RESET = "\u001b[0m";
+function fgAnsi(hex) {
+	const n = hex.replace("#", "");
+	const r = parseInt(n.slice(0, 2), 16);
+	const g = parseInt(n.slice(2, 4), 16);
+	const b = parseInt(n.slice(4, 6), 16);
+	return `\u001b[38;2;${r};${g};${b}m`;
+}
+const TOOL_GLYPHS = { success: "✓", error: "✗", running: "⚡", pending: "○" };
+const TOOL_COLORS = { success: "#22C55E", error: "#C1443E", running: "#E8B339", pending: "#8B7A63" };
+
+/** Format a tool block as Bible-matching pill: `✓ [name]  target  · note` */
+function formatToolPill(tool) {
+	const glyph = TOOL_GLYPHS[tool.status] ?? "○";
+	const color = TOOL_COLORS[tool.status] ?? "#8B7A63";
+	const target = tool.output ?? "";
+	return `${fgAnsi(color)}${glyph}${RESET} ${fgAnsi("#D97706")}[${tool.name}]${RESET}${fgAnsi("#F5E6C8")}  ${target}${RESET}`;
+}
+
+/** Convert a ChatMessageViewModel to text matching the Bible chat content. */
+function fixtureMessageToText(message) {
+	return message.blocks.map(block => {
+		switch (block.type) {
+			case "markdown": return block.text;
+			case "tool": return formatToolPill(block.tool);
+			case "code": return `\`\`\`${block.lang}\n${block.source}\n\`\`\``;
+			default: return "";
+		}
+	}).filter(Boolean).join("\n\n");
+}
+
 const FIXTURE_TIMES = {
 	userOne: new Date("2026-04-30T11:41:00"),
 	sumoOne: new Date("2026-04-30T11:42:00"),
@@ -147,16 +179,19 @@ async function renderFixtureScene(scenario, fixture) {
 		jiti.import(`${repoRoot}/src/sumo-tui/transcript/view-model.ts`),
 	]);
 
-	const topRows = topChrome.renderTopChromeBlock({
+	// Bible always has blank / topbar / blank regardless of width.
+	const topBarLine = topChrome.renderTopChrome({
 		activeSession: { id: "fixture", label: "019dd3d8", state: "idle" },
 		recentSessions: [],
 		hidden: false,
 	}, cols);
+	const topRows = ["", topBarLine, ""];
 
 	const inputRows = inputFrame.renderInputFrame("", cols, { promptColor: "accent" });
-	const hintRows = portrait
-		? [` ${inputFrame.renderInputHints(cols - 2, { leftHint: "sumo-deus (main)", leftHintStyle: "project-branch" })} `, " ".repeat(cols)]
-		: [inputFrame.renderInputHints(cols)];
+	// Portrait hint already includes its own breathing blank row.
+	const hintRow = portrait
+		? ` ${inputFrame.renderInputHints(cols - 2, { leftHint: "sumo-deus (main)", leftHintStyle: "project-branch" })} `
+		: inputFrame.renderInputHints(cols);
 	const footerRows = footer.renderFooterBlock({
 		cwd: "/Users/sumo-deus/sumo-deus",
 		branch: "main",
@@ -169,7 +204,8 @@ async function renderFixtureScene(scenario, fixture) {
 		modelId: "gpt-5.5",
 		thinkingLevel: "medium",
 	}, cols);
-	const bottomRows = ["" , ...inputRows, ...hintRows, ...(portrait ? [] : [""]), ...footerRows, ""];
+	// Bible bottom stack: blank, input(3), hint, blank, footer, blank
+	const bottomRows = ["", ...inputRows, hintRow, "", ...footerRows, ""];
 	const chatHeight = Math.max(1, rows - topRows.length - bottomRows.length);
 
 	const yoga = await yogaMod.loadYoga();
@@ -177,7 +213,7 @@ async function renderFixtureScene(scenario, fixture) {
 	chatRoot.flexDirection = yogaMod.FLEX_DIRECTION_COLUMN;
 	const chat = chatPager.ChatPager.create(yoga, chatRoot, { stickyBottom: false });
 	for (const message of transcript.messages) {
-		chat.addMessage(message.role, transcriptMod.chatMessageViewModelToPlainText(message), message.timestamp);
+		chat.addMessage(message.role, fixtureMessageToText(message), message.timestamp);
 	}
 	chatRoot.width = chatWidth;
 	chatRoot.height = chatHeight;
@@ -215,18 +251,31 @@ async function renderFixtureScene(scenario, fixture) {
 async function applyOverlay(lines, cols, rows, overlay) {
 	if (overlay !== "command-palette") throw new Error(`Unsupported fixture overlay: ${overlay}`);
 	const palette = await jiti.import(`${repoRoot}/src/command-palette.ts`);
+
+	// Bible command palette is rendered by Pi's overlay system which centers
+	// the component at 60% terminal width. We replicate that here.
+	const paletteWidth = palette.resolveCommandPaletteWidth(cols);
 	const overlayLines = palette.renderCommandPalette({
 		searchQuery: "",
 		activeIndex: 1,
 		rows: palette.COMMAND_PALETTE_MODE_ROWS,
-	}, cols);
-	const overlayWidth = Math.max(...overlayLines.map((line) => visibleWidth(line)), 0);
-	const left = Math.max(0, Math.floor((cols - overlayWidth) / 2));
+	}, paletteWidth);
+
+	// Center the overlay horizontally and vertically, compositing over
+	// the existing scene content (not replacing entire rows).
+	const left = Math.max(0, Math.floor((cols - paletteWidth) / 2));
 	const top = Math.max(0, Math.floor((rows - overlayLines.length) / 2));
 	const next = [...lines];
 	for (let index = 0; index < overlayLines.length && top + index < rows; index += 1) {
-		const overlayLine = padAnsiToWidth(overlayLines[index] ?? "", overlayWidth);
-		next[top + index] = `${" ".repeat(left)}${overlayLine}${" ".repeat(Math.max(0, cols - left - overlayWidth))}`;
+		const overlayLine = padAnsiToWidth(overlayLines[index] ?? "", paletteWidth);
+		// Splice the overlay into the middle of the existing row content,
+		// preserving the left margin and right remnant.
+		const existingLine = next[top + index] ?? "";
+		const leftPad = " ".repeat(left);
+		const rightStart = left + paletteWidth;
+		// Approximate: keep right side of original row if it extends past overlay
+		const rightRemnant = rightStart < cols ? " ".repeat(cols - rightStart) : "";
+		next[top + index] = padAnsiToWidth(`${leftPad}${overlayLine}${rightRemnant}`, cols);
 	}
 	return next;
 }

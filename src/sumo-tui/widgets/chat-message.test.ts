@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { CATHEDRAL_TOKENS } from "../../tokens.js";
 import { SumoNode } from "../layout/node.js";
 import { DIRECTION_LTR, FLEX_DIRECTION_COLUMN, loadYoga } from "../layout/yoga.js";
 import { CellBuffer } from "../render/buffer.js";
@@ -23,6 +24,10 @@ describe("ChatMessage", () => {
 		expect(buffer.toPlainRow(0)).toMatch(/^╭ USER ─+╮$/);
 		expect(buffer.toPlainRow(1)).toBe("│ review src/auth/session.ts             │");
 		expect(buffer.toPlainRow(2)).toMatch(/^╰─+╯$/);
+		for (let col = 0; col < 42; col += 1) {
+			expect(buffer.getCell(1, col).bg).toBe(CATHEDRAL_TOKENS.colors.background);
+			expect(buffer.getCell(1, col).bg).not.toBe(CATHEDRAL_TOKENS.colors.surfaceRecess);
+		}
 		root.dispose();
 	});
 

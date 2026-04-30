@@ -4,7 +4,7 @@ import { CATHEDRAL_TOKENS } from "../../tokens.js";
 import { SumoNode } from "../layout/node.js";
 import { MEASURE_MODE_EXACTLY, type MeasureMode, type Yoga, type YogaNode } from "../layout/yoga.js";
 import type { CellBuffer, Rect } from "../render/buffer.js";
-import { lineToAnsi, span, textLine, withPersistentStyle, type Span } from "../render/primitives.js";
+import { lineToAnsi, span, textLine, type Span } from "../render/primitives.js";
 import { renderCathedralCodeBlock } from "../transcript/code-renderer.js";
 import { renderScrollBlock } from "../transcript/scroll-renderer.js";
 import { renderToolBlockRows } from "../transcript/tool-renderer.js";
@@ -195,10 +195,11 @@ function frameTop(role: ChatMessageRole, timestamp: Date | undefined, width: num
 function frameBody(row: string, width: number): string {
 	const inner = Math.max(0, width - 4);
 	const text = fitCellText(row, inner);
-	const body = withPersistentStyle(` ${text} `, CATHEDRAL_TOKENS.colors.foreground, CATHEDRAL_TOKENS.colors.surfaceRecess);
 	return lineToAnsi(textLine([
 		span("│", { fg: CATHEDRAL_TOKENS.colors.divider }),
-		span(body),
+		span(" "),
+		span(text, { fg: CATHEDRAL_TOKENS.colors.foreground }),
+		span(" "),
 		span("│", { fg: CATHEDRAL_TOKENS.colors.divider }),
 	]), { width });
 }

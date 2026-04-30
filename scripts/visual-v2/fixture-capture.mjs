@@ -102,6 +102,30 @@ const FIXTURES = {
 			],
 		},
 	},
+	"skill-pill": {
+		transcript: {
+			messages: [
+				{
+					id: "u1",
+					role: "user",
+					displayName: "USER",
+					timestamp: FIXTURE_TIMES.userOne,
+					blocks: [{ type: "markdown", text: "use the frontend-design skill and sketch the command palette polish plan." }],
+				},
+				{
+					id: "s1",
+					role: "sumo",
+					displayName: "SUMO",
+					timestamp: new Date("2026-04-30T11:45:00"),
+					blocks: [
+						{ type: "markdown", text: "Loading the design skill and keeping it inline, Pi-minimal, and non-decorative." },
+						{ type: "skill", name: "frontend-design", expanded: false },
+						{ type: "markdown", text: "I'll apply the skill guidance to the Scriptorium palette without changing the locked interaction model." },
+					],
+				},
+			],
+		},
+	},
 	"code-block": {
 		transcript: {
 			messages: [

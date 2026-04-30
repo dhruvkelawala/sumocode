@@ -211,7 +211,12 @@ function frameBottom(width: number): string {
 }
 
 function renderSkillRow(block: Extract<ChatBlock, { type: "skill" }>): string {
-	return `[skill] ${block.name}${block.expanded ? " (expanded)" : " (⌘O to expand)"}`;
+	const hint = block.expanded ? "(expanded)" : "(⌘O to expand)";
+	return lineToAnsi(textLine([
+		span("[skill]", { fg: CATHEDRAL_TOKENS.colors.accent }),
+		span(` ${block.name} `, { fg: CATHEDRAL_TOKENS.colors.foreground }),
+		span(hint, { fg: CATHEDRAL_TOKENS.colors.foregroundDim }),
+	]));
 }
 
 function renderQuestionRows(block: Extract<ChatBlock, { type: "question" }>): string[] {

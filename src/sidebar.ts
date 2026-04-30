@@ -14,7 +14,7 @@ import {
 	type SidebarSubTab,
 } from "./sumo-tui/cathedral/sidebar-rendering.js";
 import { surfaceLine } from "./sumo-tui/cathedral/ansi.js";
-import { installNonCapturingSidebarOverlay } from "./sidebar-placement.js";
+import { installNonCapturingSidebarOverlay, sidebarOverlayTargetRows } from "./sidebar-placement.js";
 export {
 	SIDEBAR_MIN_TERMINAL_WIDTH,
 	SIDEBAR_WIDTH,
@@ -28,14 +28,6 @@ export {
 export const SIDEBAR_MEMORY_DEBOUNCE_MS = 200;
 /** Retry cadence while Remnic is unavailable. */
 export const SIDEBAR_MEMORY_RETRY_MS = 5_000;
-/**
- * Rows the sidebar yields to chrome above (top breathing + top bar) and below
- * (input frame, hint row, footer, breathing). Tuned to match the V2 Bible
- * active landscape scene where the registry surface ends just above the input
- * frame.
- */
-const ACTIVE_LANDSCAPE_NON_SIDEBAR_ROWS = 7;
-
 /** Static placeholder until Pi exposes MCP server health. */
 export const PLACEHOLDER_MCP: readonly McpServerSnapshot[] = [
 	{ name: "github", status: "idle" },
@@ -245,7 +237,7 @@ export function installSidebar(pi: ExtensionAPI): void {
 						width,
 					);
 					const terminalRows = (tui.terminal as { rows?: number } | undefined)?.rows ?? lines.length;
-					const targetRows = Math.max(lines.length, terminalRows - ACTIVE_LANDSCAPE_NON_SIDEBAR_ROWS);
+					const targetRows = Math.max(lines.length, sidebarOverlayTargetRows(terminalRows));
 					return [
 						...lines,
 						...Array.from({ length: Math.max(0, targetRows - lines.length) }, () => surfaceLine("", width)),

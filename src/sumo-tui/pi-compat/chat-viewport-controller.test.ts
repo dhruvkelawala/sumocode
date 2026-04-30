@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { SIDEBAR_WIDTH } from "../../sidebar.js";
+import { PORTRAIT_SIDEBAR_GUTTER_WIDTH, SIDEBAR_GUTTER_WIDTH } from "../../sidebar-placement.js";
 import { SumoNode } from "../layout/node.js";
 import { DIRECTION_LTR, FLEX_DIRECTION_COLUMN, loadYoga } from "../layout/yoga.js";
 import { bufferToAnsiLines } from "../render/ansi-writer.js";
@@ -82,7 +83,7 @@ describe("ChatViewportController", () => {
 
 		chat.addMessage("user", "hello");
 		controller.render(130);
-		expect(runtime.renderCalls.at(-1)).toEqual({ width: 130 - SIDEBAR_WIDTH, height: 12 });
+		expect(runtime.renderCalls.at(-1)).toEqual({ width: 130 - SIDEBAR_WIDTH - SIDEBAR_GUTTER_WIDTH, height: 12 });
 		root.dispose();
 
 		const portrait = await makeController({ terminalRows: 100, terminalColumns: 60 });
@@ -90,6 +91,12 @@ describe("ChatViewportController", () => {
 		portrait.controller.render(60);
 		expect(portrait.runtime.renderCalls.at(-1)).toMatchObject({ width: 59 });
 		portrait.root.dispose();
+
+		const portraitWide = await makeController({ terminalRows: 180, terminalColumns: 130 });
+		portraitWide.chat.addMessage("user", "hello");
+		portraitWide.controller.render(130);
+		expect(portraitWide.runtime.renderCalls.at(-1)).toEqual({ width: 130 - SIDEBAR_WIDTH - PORTRAIT_SIDEBAR_GUTTER_WIDTH, height: 176 });
+		portraitWide.root.dispose();
 	});
 
 	it("translates wheel and jump-to-bottom input into local viewport repaint", async () => {

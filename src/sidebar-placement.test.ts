@@ -1,8 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+	PORTRAIT_SIDEBAR_GUTTER_WIDTH,
 	SIDEBAR_MIN_TERMINAL_WIDTH,
+	SIDEBAR_OVERLAY_BOTTOM_RESERVED_ROWS,
+	SIDEBAR_OVERLAY_TOP_MARGIN_ROWS,
 	SIDEBAR_WIDTH,
+	SIDEBAR_GUTTER_WIDTH,
 	StaticSidebarDock,
+	sidebarGutterWidth,
 	chooseSidebarAnchor,
 	dockStaticSidebar,
 	installNonCapturingSidebarOverlay,
@@ -32,6 +37,11 @@ describe("sidebar placement", () => {
 		expect(chooseSidebarAnchor(140, 80, "bottom-right")).toBe("bottom-right");
 	});
 
+	it("uses a wider sidebar gutter for portrait-wide terminals", () => {
+		expect(sidebarGutterWidth(160, 45)).toBe(SIDEBAR_GUTTER_WIDTH);
+		expect(sidebarGutterWidth(130, 180)).toBe(PORTRAIT_SIDEBAR_GUTTER_WIDTH);
+	});
+
 	it("renders the legacy dock with clipped sidebar height", () => {
 		const left = component(["chat row"]);
 		const right = component(["SIDE 1", "SIDE 2", "SIDE 3"]);
@@ -39,7 +49,7 @@ describe("sidebar placement", () => {
 
 		const lines = dock.render(160).map(stripAnsi);
 
-		expect(left.renderCalls).toEqual([160 - SIDEBAR_WIDTH - 1]);
+		expect(left.renderCalls).toEqual([160 - SIDEBAR_WIDTH - SIDEBAR_GUTTER_WIDTH]);
 		expect(right.renderCalls).toEqual([SIDEBAR_WIDTH]);
 		expect(lines).toHaveLength(1);
 		expect(lines[0]).toContain("chat row");
@@ -89,6 +99,12 @@ describe("sidebar placement", () => {
 		expect(showOverlay).toHaveBeenCalledWith(sidebar, expect.objectContaining({
 			width: SIDEBAR_WIDTH,
 			anchor: "top-right",
+			margin: {
+				top: SIDEBAR_OVERLAY_TOP_MARGIN_ROWS,
+				right: 0,
+				bottom: SIDEBAR_OVERLAY_BOTTOM_RESERVED_ROWS,
+				left: 0,
+			},
 			nonCapturing: true,
 		}));
 		const options = showOverlay.mock.calls[0]![1];

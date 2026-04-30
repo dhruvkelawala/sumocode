@@ -9,7 +9,7 @@
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { Editor, type EditorTheme, Key, matchesKey, Text } from "@mariozechner/pi-tui";
+import { Editor, type EditorTheme, Key, matchesKey, Text, truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
 import { Type } from "typebox";
 import { renderDivineQuery, updateDivineQuery, type DivineQuerySnapshot, DIVINE_QUERY_OVERLAY_OPTIONS } from "./divine-query.js";
 
@@ -28,6 +28,21 @@ const QuestionParams = Type.Object({
 });
 
 const FREE_TEXT_LABEL = "Type something…";
+const ANSI_PATTERN = /\u001b\[[0-9;]*m/g;
+const RESET = "\u001b[0m";
+const LIFTED_BG = "\u001b[48;2;61;48;36m";
+const FOREGROUND_FG = "\u001b[38;2;245;230;200m";
+
+function visibleLength(value: string): number {
+	return visibleWidth(value.replace(ANSI_PATTERN, ""));
+}
+
+export function padQuestionModalLine(line: string, width: number): string {
+	const fitted = visibleLength(line) > width ? truncateToWidth(line, width, "…") : line;
+	const padding = Math.max(0, width - visibleLength(fitted));
+	const persistent = `${FOREGROUND_FG}${LIFTED_BG}${fitted.replaceAll(RESET, `${RESET}${FOREGROUND_FG}${LIFTED_BG}`)}${" ".repeat(padding)}${RESET}`;
+	return persistent;
+}
 
 interface QuestionResult {
 	answer: string;
@@ -113,15 +128,9 @@ async function showCathedralQuestion(
 				const lines = renderDivineQuery(snapshot, width);
 
 				if (editMode) {
-					const RESET = "\u001b[0m";
-					const bgCode = "\u001b[48;2;61;48;36m"; // surfaceLifted
-					const pad = (s: string) => {
-						const stripped = s.replace(/\u001b\[[0-9;]*m/g, "");
-						const padding = Math.max(0, width - stripped.length);
-						return `${bgCode}${s}${" ".repeat(padding)}${RESET}`;
-					};
+					const pad = (s: string) => padQuestionModalLine(s, width);
 					lines.push(pad(`     ${theme.fg("muted", "Your answer:")}`));
-					for (const line of editor.render(width - 6)) {
+					for (const line of editor.render(Math.max(1, width - 6))) {
 						lines.push(pad(`     ${line}`));
 					}
 					lines.push(pad(""));

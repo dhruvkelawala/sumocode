@@ -120,10 +120,12 @@ export function renderInputFrame(input: string, width: number, options: InputFra
 	// accent foreground over recess background so it reads as a notch.
 	let top: string;
 	if (options.label) {
-		const labelInner = ` ${options.label} `;
-		const remaining = Math.max(2, inner - labelInner.length - 2); // 2 = leading "─" before label
-		const leftDashes = "─".repeat(2);
-		const rightDashes = "─".repeat(remaining);
+		const leftDashCount = Math.min(2, inner);
+		const leftDashes = "─".repeat(leftDashCount);
+		const maxLabelText = Math.max(0, inner - leftDashCount - 2); // 2 = spaces around label
+		const labelText = ellipsize(options.label, maxLabelText);
+		const labelInner = labelText.length > 0 ? ` ${labelText} ` : "";
+		const rightDashes = "─".repeat(Math.max(0, inner - leftDashes.length - labelInner.length));
 		top = `${dividerCh("┌")}${dividerCh(leftDashes)}${color(labelInner, CATHEDRAL_TOKENS.colors.accent)}${dividerCh(rightDashes)}${dividerCh("┐")}`;
 	} else {
 		top = `${dividerCh("┌")}${dividerCh("─".repeat(inner))}${dividerCh("┐")}`;
@@ -139,13 +141,21 @@ export function renderInputFrame(input: string, width: number, options: InputFra
 			: CATHEDRAL_TOKENS.colors.foregroundDim;
 	const promptArrow = color(">", promptHex);
 	const cursor = color("█", CATHEDRAL_TOKENS.colors.accent);
-	let textPart: string;
-	if (showPlaceholder) {
-		textPart = color(options.placeholder!, CATHEDRAL_TOKENS.colors.foregroundDim);
+	const rawText = showPlaceholder ? options.placeholder! : input;
+	const textColor = showPlaceholder ? CATHEDRAL_TOKENS.colors.foregroundDim : CATHEDRAL_TOKENS.colors.foreground;
+	let innerContent: string;
+	if (inner >= 4) {
+		const maxText = Math.max(0, inner - 4); // leading space + prompt + separator + cursor
+		const text = ellipsize(rawText, maxText);
+		const textPart = text.length > 0 ? color(text, textColor) : "";
+		innerContent = ` ${promptArrow} ${textPart}${cursor}`;
+	} else if (inner === 3) {
+		innerContent = `${promptArrow} ${cursor}`;
+	} else if (inner === 2) {
+		innerContent = `${promptArrow}${cursor}`;
 	} else {
-		textPart = color(input, CATHEDRAL_TOKENS.colors.foreground);
+		innerContent = cursor;
 	}
-	const innerContent = ` ${promptArrow} ${textPart}${cursor}`;
 	const innerVisible = visibleLength(innerContent);
 	const padding = Math.max(0, inner - innerVisible);
 	const contentInner = `${innerContent}${" ".repeat(padding)}`;

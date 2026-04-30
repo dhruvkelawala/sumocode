@@ -69,6 +69,13 @@ describe("renderInputFrame — active state (no label, no placeholder)", () => {
 		const lines = renderInputFrame("hello", 50, { promptColor: "accent" });
 		expect(lines.join("\n")).toContain("\u001b[38;2;217;119;6m>");
 	});
+
+	for (const width of [40, 30, 20, 6, 5, 4]) {
+		it(`never exceeds ${width} cols when active input must truncate`, () => {
+			const lines = renderInputFrame("a very long pasted active input line that must not overflow", width, { promptColor: "accent" });
+			for (const line of lines) expect(stripAnsi(line).length).toBe(width);
+		});
+	}
 });
 
 describe("renderInputFrame — splash state (with label + placeholder)", () => {
@@ -105,6 +112,16 @@ describe("renderInputFrame — splash state (with label + placeholder)", () => {
 		expect(output).toContain("\u001b[38;2;139;122;99m");
 		expect(output).not.toContain("\u001b[2m");
 	});
+
+	for (const width of [40, 30, 20, 6, 5, 4]) {
+		it(`never exceeds ${width} cols when splash label/placeholder must truncate`, () => {
+			const lines = renderInputFrame("", width, {
+				label: "DIVINE INVOCATION",
+				placeholder: 'Ask anything... "Refactor the auth flow."',
+			});
+			for (const line of lines) expect(stripAnsi(line).length).toBe(width);
+		});
+	}
 });
 
 describe("renderInputHints", () => {

@@ -9,6 +9,35 @@ function bufferWithRow(text: string, cols = text.length): CellBuffer {
 }
 
 describe("SelectionController", () => {
+	it("does not start semantic selection from non-selectable frame cells", () => {
+		const buffer = bufferWithRow("│ selectable │", 16);
+		for (let col = 2; col <= 11; col += 1) buffer.setSelectionMeta(0, col, { selectable: true });
+		const selection = new SelectionController();
+
+		expect(selection.handleMouseEvent({ type: "down", button: 0, row: 0, col: 0, modifiers: { shift: false, alt: false, ctrl: false } }, buffer)).toBe(false);
+		expect(selection.handleMouseEvent({ type: "drag", button: 0, row: 0, col: 8, modifiers: { shift: false, alt: false, ctrl: false } }, buffer)).toBe(false);
+		selection.applySelectionHighlight(buffer);
+
+		expect(selection.extractSelectedText(buffer)).toBe("");
+		expect(buffer.getCell(0, 2).attrs.inverse).toBe(false);
+	});
+
+	it("uses semantic selection metadata instead of rectangular row cells", () => {
+		const buffer = bufferWithRow("│ abc                         │", 32);
+		for (let col = 2; col <= 4; col += 1) buffer.setSelectionMeta(0, col, { selectable: true });
+		const selection = new SelectionController();
+
+		selection.handleMouseEvent({ type: "down", button: 0, row: 0, col: 2, modifiers: { shift: false, alt: false, ctrl: false } }, buffer);
+		selection.handleMouseEvent({ type: "drag", button: 0, row: 0, col: 30, modifiers: { shift: false, alt: false, ctrl: false } }, buffer);
+		selection.applySelectionHighlight(buffer);
+
+		expect(selection.extractSelectedText(buffer)).toBe("abc");
+		expect(buffer.getCell(0, 2).attrs.inverse).toBe(true);
+		expect(buffer.getCell(0, 4).attrs.inverse).toBe(true);
+		expect(buffer.getCell(0, 5).attrs.inverse).toBe(false);
+		expect(buffer.getCell(0, 30).attrs.inverse).toBe(false);
+	});
+
 	it("clips same-row selection highlight to selectable text, not frame padding", () => {
 		const buffer = bufferWithRow("│ `dd of=`                         │", 36);
 		const selection = new SelectionController();

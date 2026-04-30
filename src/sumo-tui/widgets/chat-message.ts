@@ -325,7 +325,25 @@ export class ChatMessage extends SumoNode {
 		const rows = this.renderRows(rect.width);
 		const height = Math.min(rows.length, rect.height);
 		for (let row = 0; row < height; row += 1) {
-			buffer.paintRow(rect.top + row, rows[row] ?? "", rect.left, rect.width);
+			const absoluteRow = rect.top + row;
+			buffer.paintRow(absoluteRow, rows[row] ?? "", rect.left, rect.width);
+			if (rect.width >= MIN_BOX_WIDTH && row > 0 && row < rows.length - 1) {
+				this.markBodyRowSelectable(buffer, absoluteRow, rect.left, rect.width);
+			}
+		}
+	}
+
+	private markBodyRowSelectable(buffer: CellBuffer, row: number, left: number, width: number): void {
+		const startCol = left + 2;
+		const endCol = left + Math.max(1, width - 3);
+		let contentEnd: number | undefined;
+		for (let col = startCol; col <= endCol; col += 1) {
+			const cell = buffer.getCell(row, col);
+			if (cell.char.length > 0 && cell.char.trim().length > 0) contentEnd = col;
+		}
+		if (contentEnd === undefined) return;
+		for (let col = startCol; col <= contentEnd; col += 1) {
+			buffer.setSelectionMeta(row, col, { selectable: true });
 		}
 	}
 

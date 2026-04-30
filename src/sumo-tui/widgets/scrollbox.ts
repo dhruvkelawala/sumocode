@@ -162,7 +162,11 @@ export class ScrollBox extends SumoNode {
 
 		for (let row = 0; row < rect.height; row += 1) {
 			for (let col = 0; col < rect.width; col += 1) {
-				buffer.setCell(rect.top + row, rect.left + col, viewportBuffer.getCell(row, col));
+				const targetRow = rect.top + row;
+				const targetCol = rect.left + col;
+				buffer.setCell(targetRow, targetCol, viewportBuffer.getCell(row, col));
+				const selectionMeta = viewportBuffer.getSelectionMeta(row, col);
+				if (selectionMeta) buffer.setSelectionMeta(targetRow, targetCol, selectionMeta);
 			}
 		}
 	}

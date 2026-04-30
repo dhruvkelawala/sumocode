@@ -71,6 +71,10 @@ function isSelectableEdgeGlyph(glyph: string): boolean {
 	return !NON_SELECTABLE_EDGE_CHARS.has(glyph) && glyph.trim().length > 0;
 }
 
+function hasSemanticSelection(buffer: CellBuffer | undefined): boolean {
+	return buffer?.hasSelectionMeta() === true;
+}
+
 function intersects(leftStart: number, leftEnd: number, rightStart: number, rightEnd: number): boolean {
 	return leftStart <= rightEnd && rightStart <= leftEnd;
 }
@@ -138,6 +142,7 @@ export class SelectionController {
 		const point = normalizePoint({ row: event.row, col: event.col }, buffer);
 		if (event.type === "down") {
 			if (this.hasSelection() && !this.pointIsSelected(point, buffer)) this.clear();
+			if (hasSemanticSelection(buffer) && !buffer?.getSelectionMeta(point.row, point.col)) return false;
 			this.anchor = point;
 			this.focus = point;
 			this.dragging = true;
@@ -184,6 +189,13 @@ export class SelectionController {
 		);
 		const lines: string[] = [];
 		for (let row = range.start.row; row <= range.end.row && row < dimensions.rows; row += 1) {
+			if (hasSemanticSelection(buffer)) {
+				const rawColumns = columnsForRow(range, row, dimensions.cols);
+				if (!rawColumns) continue;
+				const semanticText = this.extractSemanticRowText(buffer, row, rawColumns.startCol, rawColumns.endCol);
+				if (semanticText.length > 0) lines.push(semanticText);
+				continue;
+			}
 			const columns = this.selectableColumnsForRow(buffer, range, row);
 			if (!columns) continue;
 			lines.push(this.extractRowText(buffer, row, columns.startCol, columns.endCol).trimEnd());
@@ -199,6 +211,11 @@ export class SelectionController {
 			normalizePoint(this.focus, buffer),
 		);
 		for (let row = range.start.row; row <= range.end.row && row < dimensions.rows; row += 1) {
+			if (hasSemanticSelection(buffer)) {
+				const rawColumns = columnsForRow(range, row, dimensions.cols);
+				if (rawColumns) this.applySemanticRowHighlight(buffer, row, rawColumns.startCol, rawColumns.endCol);
+				continue;
+			}
 			const columns = this.selectableColumnsForRow(buffer, range, row);
 			if (!columns) continue;
 			this.applyRowHighlight(buffer, row, columns.startCol, columns.endCol);
@@ -249,6 +266,19 @@ export class SelectionController {
 		return output;
 	}
 
+	private extractSemanticRowText(buffer: CellBuffer, row: number, startCol: number, endCol: number): string {
+		const { cols } = buffer.getDimensions();
+		let output = "";
+		for (let col = 0; col < cols;) {
+			const cell = buffer.getCell(row, col);
+			const width = glyphWidth(cell.char);
+			const glyphEnd = col + width - 1;
+			if (cell.char.length > 0 && intersects(col, glyphEnd, startCol, endCol) && this.glyphHasSelectionMeta(buffer, row, col, width)) output += cell.char;
+			col += width;
+		}
+		return output;
+	}
+
 	private applyRowHighlight(buffer: CellBuffer, row: number, startCol: number, endCol: number): void {
 		const { cols } = buffer.getDimensions();
 		for (let col = 0; col < cols;) {
@@ -268,8 +298,31 @@ export class SelectionController {
 		}
 	}
 
+	private applySemanticRowHighlight(buffer: CellBuffer, row: number, startCol: number, endCol: number): void {
+		const { cols } = buffer.getDimensions();
+		for (let col = 0; col < cols;) {
+			const cell = buffer.getCell(row, col);
+			const width = glyphWidth(cell.char);
+			const glyphEnd = col + width - 1;
+			if (cell.char.length > 0 && intersects(col, glyphEnd, startCol, endCol) && this.glyphHasSelectionMeta(buffer, row, col, width)) {
+				for (let offset = 0; offset < width && col + offset < cols; offset += 1) {
+					if (buffer.getSelectionMeta(row, col + offset)) buffer.updateCellAttrs(row, col + offset, (attrs) => ({ ...attrs, inverse: true }));
+				}
+			}
+			col += width;
+		}
+	}
+
+	private glyphHasSelectionMeta(buffer: CellBuffer, row: number, col: number, width: number): boolean {
+		for (let offset = 0; offset < width; offset += 1) {
+			if (buffer.getSelectionMeta(row, col + offset)) return true;
+		}
+		return false;
+	}
+
 	private pointIsSelected(point: SelectionPoint, buffer: CellBuffer | undefined): boolean {
 		if (!this.anchor || !this.focus || samePoint(this.anchor, this.focus)) return false;
+		if (hasSemanticSelection(buffer) && !buffer?.getSelectionMeta(point.row, point.col)) return false;
 		const dimensions = buffer?.getDimensions();
 		const cols = dimensions?.cols ?? Math.max(this.anchor.col, this.focus.col, point.col) + 1;
 		const range = orderedRange(this.anchor, this.focus);

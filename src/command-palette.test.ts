@@ -196,21 +196,23 @@ describe("handlePaletteSelection", () => {
 	it("MODEL opens a model selector", async () => {
 		const selectedModel = { id: "claude-sonnet-4-5" };
 		const setModel = vi.fn();
-		const select = vi.fn(() => Promise.resolve("claude-sonnet-4-5"));
+		// showDivineQuery calls ctx.ui.custom — mock it to return the index of the selected model
+		const custom = vi.fn(() => Promise.resolve(1)); // index 1 = claude-sonnet-4-5
 		await handlePaletteSelection("MODEL", {
 			modelRegistry: { getAvailable: () => [{ id: "claude-opus-4-7" }, selectedModel] },
-			ui: { select },
+			ui: { custom },
 		} as never, { setModel } as never);
 
-		expect(select).toHaveBeenCalledWith("MODEL", ["claude-opus-4-7", "claude-sonnet-4-5"]);
+		expect(custom).toHaveBeenCalled();
 		expect(setModel).toHaveBeenCalledWith(selectedModel);
 	});
 
 	it("THINKING opens a thinking selector", async () => {
 		const setThinkingLevel = vi.fn();
-		const select = vi.fn(() => Promise.resolve("xhigh"));
-		await handlePaletteSelection("THINKING", { ui: { select } } as never, { setThinkingLevel } as never);
-		expect(select).toHaveBeenCalledWith("THINKING", ["off", "minimal", "low", "medium", "high", "xhigh"]);
+		// showDivineQuery calls ctx.ui.custom — mock returns index 5 = "xhigh"
+		const custom = vi.fn(() => Promise.resolve(5));
+		await handlePaletteSelection("THINKING", { ui: { custom } } as never, { setThinkingLevel } as never);
+		expect(custom).toHaveBeenCalled();
 		expect(setThinkingLevel).toHaveBeenCalledWith("xhigh");
 	});
 

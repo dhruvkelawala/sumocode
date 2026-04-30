@@ -18,6 +18,7 @@ function buildPiStub() {
 		}),
 		registerCommand: vi.fn(),
 		registerShortcut: vi.fn(),
+		registerTool: vi.fn(),
 	};
 
 	return { pi, handlers };

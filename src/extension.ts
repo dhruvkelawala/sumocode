@@ -4,7 +4,10 @@ import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { installInputHints } from "./cathedral/input-hints.js";
+import { installAnswerTool } from "./answer-tool.js";
 import { installApprovalGate } from "./approval-modal.js";
+import { installQuestionTool } from "./question-tool.js";
+
 import { installAltscreen } from "./cathedral/altscreen.js";
 import { installCathedralEditor } from "./cathedral/cathedral-editor.js";
 import { installSumoInteractions } from "./interaction-registry.js";
@@ -94,6 +97,11 @@ export default function sumocode(pi: ExtensionAPI): void {
 	installCathedralEditor(pi);
 	installInputHints(pi);
 	installApprovalGate(pi);
+	installQuestionTool(pi);
+	installAnswerTool(pi);
+
+
+
 	installWorkingIndicator(pi);
 	installSumoInteractions(pi);
 }

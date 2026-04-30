@@ -95,7 +95,7 @@ describe("TerminalSessionOwner", () => {
 		terminal.enableMouseSGR();
 
 		expect(output.writes).toEqual([MOUSE_SGR_ENABLE_SEQUENCE]);
-		expect(output.writes[0]).toBe("\x1b[?1000h\x1b[?1002h\x1b[?1006h");
+		expect(output.writes[0]).toBe("\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1006h");
 	});
 
 	it("writes absolute chat viewport rows behind the terminal ownership seam", () => {

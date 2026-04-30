@@ -1,4 +1,5 @@
 import { visibleWidth } from "@mariozechner/pi-tui";
+import { logDiagnostic } from "../runtime/diagnostics.js";
 import type { CellBuffer } from "../render/buffer.js";
 import type { KeyEvent } from "./key-router.js";
 import type { MouseEvent } from "./mouse.js";
@@ -17,6 +18,7 @@ export interface SelectionRange {
 export interface SelectionControllerOptions {
 	readonly readBuffer?: () => CellBuffer | undefined;
 	readonly emitClipboard?: (sequence: string, text: string) => void;
+	readonly onCopied?: (text: string) => void;
 	readonly onSelectionChanged?: () => void;
 }
 
@@ -61,6 +63,12 @@ function columnsForRow(range: OrderedRange, row: number, cols: number): { startC
 	if (row === range.start.row) return { startCol: Math.max(0, Math.min(cols - 1, range.start.col)), endCol: cols - 1 };
 	if (row === range.end.row) return { startCol: 0, endCol: Math.max(0, Math.min(cols - 1, range.end.col)) };
 	return { startCol: 0, endCol: cols - 1 };
+}
+
+const NON_SELECTABLE_EDGE_CHARS = new Set(["", "│", "┃", "╭", "╮", "╰", "╯", "┌", "┐", "└", "┘", "─", "━", "═", "┬", "┴", "├", "┤", "┼"]);
+
+function isSelectableEdgeGlyph(glyph: string): boolean {
+	return !NON_SELECTABLE_EDGE_CHARS.has(glyph) && glyph.trim().length > 0;
 }
 
 function intersects(leftStart: number, leftEnd: number, rightStart: number, rightEnd: number): boolean {
@@ -119,7 +127,12 @@ export class SelectionController {
 	}
 
 	public handleMouseEvent(event: MouseEvent, buffer = this.options.readBuffer?.()): boolean {
-		if (event.type === "scroll" || event.type === "move") return false;
+		logDiagnostic("selection_mouse_event", { type: event.type, button: event.button, row: event.row, col: event.col, dragging: this.dragging });
+		if (event.type === "scroll") return false;
+		if (event.type === "move") {
+			if (!this.dragging || !this.anchor) return false;
+			return this.handleMouseEvent({ ...event, type: "drag", button: PRIMARY_BUTTON }, buffer);
+		}
 		if (event.button !== undefined && event.button !== PRIMARY_BUTTON) return false;
 
 		const point = normalizePoint({ row: event.row, col: event.col }, buffer);
@@ -154,8 +167,11 @@ export class SelectionController {
 
 	public copyCurrentSelection(buffer = this.options.readBuffer?.()): boolean {
 		const text = this.extractSelectedText(buffer);
+		logDiagnostic("selection_copy_attempt", { chars: text.length, hasBuffer: buffer !== undefined, preview: text.slice(0, 80) });
 		if (text.length === 0) return false;
 		this.options.emitClipboard?.(createOsc52Sequence(text), text);
+		this.options.onCopied?.(text);
+		logDiagnostic("selection_copy_success", { chars: text.length, preview: text.slice(0, 80) });
 		return true;
 	}
 
@@ -168,7 +184,7 @@ export class SelectionController {
 		);
 		const lines: string[] = [];
 		for (let row = range.start.row; row <= range.end.row && row < dimensions.rows; row += 1) {
-			const columns = columnsForRow(range, row, dimensions.cols);
+			const columns = this.selectableColumnsForRow(buffer, range, row);
 			if (!columns) continue;
 			lines.push(this.extractRowText(buffer, row, columns.startCol, columns.endCol).trimEnd());
 		}
@@ -183,10 +199,37 @@ export class SelectionController {
 			normalizePoint(this.focus, buffer),
 		);
 		for (let row = range.start.row; row <= range.end.row && row < dimensions.rows; row += 1) {
-			const columns = columnsForRow(range, row, dimensions.cols);
+			const columns = this.selectableColumnsForRow(buffer, range, row);
 			if (!columns) continue;
 			this.applyRowHighlight(buffer, row, columns.startCol, columns.endCol);
 		}
+	}
+
+	private selectableColumnsForRow(buffer: CellBuffer, range: OrderedRange, row: number): { startCol: number; endCol: number } | undefined {
+		const { cols } = buffer.getDimensions();
+		const rawColumns = columnsForRow(range, row, cols);
+		if (!rawColumns) return undefined;
+		const contentBounds = this.selectableContentBounds(buffer, row);
+		if (!contentBounds) return undefined;
+		const startCol = Math.max(rawColumns.startCol, contentBounds.startCol);
+		const endCol = Math.min(rawColumns.endCol, contentBounds.endCol);
+		return startCol <= endCol ? { startCol, endCol } : undefined;
+	}
+
+	private selectableContentBounds(buffer: CellBuffer, row: number): { startCol: number; endCol: number } | undefined {
+		const { cols } = buffer.getDimensions();
+		let startCol: number | undefined;
+		let endCol: number | undefined;
+		for (let col = 0; col < cols;) {
+			const cell = buffer.getCell(row, col);
+			const width = glyphWidth(cell.char);
+			if (isSelectableEdgeGlyph(cell.char)) {
+				startCol ??= col;
+				endCol = col + width - 1;
+			}
+			col += width;
+		}
+		return startCol === undefined || endCol === undefined ? undefined : { startCol, endCol };
 	}
 
 	private extractRowText(buffer: CellBuffer, row: number, startCol: number, endCol: number): string {

@@ -47,6 +47,8 @@ import { FrameScheduler } from "../runtime/frame-scheduler.js";
 import { emitResumeBudgetOverlay, measureMaybe, ResumeProfiler, type ResumeProfileMetadata } from "../runtime/resume-profiler.js";
 import { defaultTerminalSessionOwner, TerminalSessionOwner, type TerminalOutput } from "../runtime/terminal-controller.js";
 import { ChatPager } from "../widgets/chat-pager.js";
+import { NotificationCenter } from "../widgets/notification.js";
+import { PiComponentLeaf } from "../widgets/pi-component-leaf.js";
 import { SIDEBAR_MIN_TERMINAL_WIDTH } from "../../sidebar.js";
 import { installChatViewportBridge } from "./chat-viewport-controller.js";
 import {
@@ -118,6 +120,8 @@ export class SumoInteractiveRuntime {
 	private chat: ChatPager | undefined;
 	private splash: SplashTree | undefined;
 	private emptyChatQuote: EmptyChatQuoteNode | undefined;
+	private selectionNotifications: NotificationCenter | undefined;
+	private selectionNotificationNode: PiComponentLeaf | undefined;
 	private shellTransition: RetainedShellTransition | undefined;
 	private scheduler: FrameScheduler | undefined;
 	private readonly selection: SelectionController;
@@ -141,6 +145,12 @@ export class SumoInteractiveRuntime {
 			emitClipboard: (sequence) => {
 				this.terminal.writeClipboardSequence(sequence);
 			},
+			onCopied: () => {
+				const hasNotifications = this.selectionNotifications !== undefined;
+				logDiagnostic("selection_copied_toast", { hasNotifications });
+				this.selectionNotifications?.notify("copied", "success", 1_400);
+				this.requestRender();
+			},
 			onSelectionChanged: () => this.requestRender(),
 		});
 	}
@@ -163,6 +173,14 @@ export class SumoInteractiveRuntime {
 		});
 		this.splash = createSplashTree(this.yoga, undefined, () => defaultSplashSnapshot(this.chat?.hasMessages() ?? false));
 		this.emptyChatQuote = new EmptyChatQuoteNode(this.yoga.Node.create(), () => this.emptyChatQuoteSnapshot());
+		this.selectionNotifications = new NotificationCenter({ onChange: () => this.requestRender() });
+		this.selectionNotificationNode = PiComponentLeaf.create(this.yoga, this.selectionNotifications, this.root);
+		this.selectionNotificationNode.position = "absolute";
+		this.selectionNotificationNode.top = 1;
+		this.selectionNotificationNode.left = 0;
+		this.selectionNotificationNode.right = 1;
+		this.selectionNotificationNode.height = 4;
+		this.selectionNotificationNode.zIndex = 20_000;
 		this.shellTransition = new RetainedShellTransition({ root: this.root, chat: this.chat, splash: this.splash, emptyChatQuote: this.emptyChatQuote });
 		this.syncChatSlot();
 		// Retained SumoInteractiveMode owns the application terminal contract.
@@ -268,6 +286,8 @@ export class SumoInteractiveRuntime {
 		this.scheduler?.dispose();
 		this.chat?.dispose();
 		this.splash?.root.dispose();
+		this.selectionNotifications?.dispose();
+		this.selectionNotificationNode?.dispose();
 		this.emptyChatQuote?.dispose();
 		this.root?.dispose();
 		this.previousFrame = undefined;
@@ -278,6 +298,8 @@ export class SumoInteractiveRuntime {
 		this.chat = undefined;
 		this.splash = undefined;
 		this.emptyChatQuote = undefined;
+		this.selectionNotifications = undefined;
+		this.selectionNotificationNode = undefined;
 		this.shellTransition = undefined;
 		this.root = undefined;
 		this.yoga = undefined;

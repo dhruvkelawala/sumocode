@@ -1,6 +1,6 @@
 import type { Component } from "@mariozechner/pi-tui";
 
-export type NotificationLevel = "info" | "warning" | "error";
+export type NotificationLevel = "info" | "success" | "warning" | "error";
 
 export interface Toast {
 	readonly id: number;
@@ -19,6 +19,7 @@ export interface NotificationCenterOptions {
 
 const LEVEL_PREFIX: Record<NotificationLevel, string> = {
 	info: "ⓘ",
+	success: "✓",
 	warning: "⚠",
 	error: "✖",
 };

@@ -128,4 +128,23 @@ describe("ChatMessage", () => {
 		expect(buffer.toPlainRow(0)).toMatch(/^╭ ZEUS ─+ 11:42 ─╮$/);
 		root.dispose();
 	});
+
+	it("renders skill blocks as styled inline pills", async () => {
+		const yoga = await loadYoga();
+		const root = new SumoNode(yoga.Node.create());
+		root.flexDirection = FLEX_DIRECTION_COLUMN;
+		root.width = 60;
+		root.height = 6;
+		ChatMessage.create(yoga, "sumo", "", root, FIXED_TIME, [
+			{ type: "skill", name: "frontend-design", expanded: false },
+		]);
+
+		root.yogaNode.calculateLayout(60, 6, DIRECTION_LTR);
+		const buffer = new CellBuffer(6, 60);
+		composite(root, buffer);
+
+		const row = buffer.toPlainRow(1);
+		expect(row).toContain("[skill] frontend-design (⌘O to expand)");
+		root.dispose();
+	});
 });

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
 	installApprovalGate,
+	isDangerousBashCommand,
 	renderApprovalModal,
 	updateApprovalSnapshot,
 	type ApprovalModalSnapshot,
@@ -130,6 +131,59 @@ describe("updateApprovalSnapshot — Enter + Escape", () => {
 		const r = updateApprovalSnapshot(snapshot({ activeButton: "always" }), "escape");
 		expect(r.done).toBe("no");
 		expect(r.snapshot.activeButton).toBe("no");
+	});
+});
+
+describe("isDangerousBashCommand", () => {
+	it("flags rm -rf and rm --recursive", () => {
+		expect(isDangerousBashCommand("rm -rf node_modules/")).toBe(true);
+		expect(isDangerousBashCommand("rm --recursive dist/")).toBe(true);
+		expect(isDangerousBashCommand("rm -r tmp/")).toBe(true);
+	});
+
+	it("flags sudo", () => {
+		expect(isDangerousBashCommand("sudo apt install foo")).toBe(true);
+	});
+
+	it("flags git push --force (without --force-with-lease)", () => {
+		expect(isDangerousBashCommand("git push --force origin main")).toBe(true);
+		expect(isDangerousBashCommand("git push --force-with-lease")).toBe(false);
+	});
+
+	it("flags git reset --hard", () => {
+		expect(isDangerousBashCommand("git reset --hard HEAD~1")).toBe(true);
+	});
+
+	it("flags mutating gh CLI commands", () => {
+		expect(isDangerousBashCommand("gh pr create --title 'test'")).toBe(true);
+		expect(isDangerousBashCommand("gh pr merge 42")).toBe(true);
+		expect(isDangerousBashCommand("gh issue create --title 'bug'")).toBe(true);
+		expect(isDangerousBashCommand("gh issue close 99")).toBe(true);
+		expect(isDangerousBashCommand("gh repo delete foo")).toBe(true);
+		expect(isDangerousBashCommand("gh release create v1.0")).toBe(true);
+	});
+
+	it("does NOT flag read-only gh commands", () => {
+		expect(isDangerousBashCommand("gh pr list")).toBe(false);
+		expect(isDangerousBashCommand("gh issue view 42")).toBe(false);
+		expect(isDangerousBashCommand("gh pr view 99 --json state")).toBe(false);
+		expect(isDangerousBashCommand("gh run list")).toBe(false);
+		expect(isDangerousBashCommand("gh api /repos/foo/bar")).toBe(false);
+	});
+
+	it("does NOT flag normal commands", () => {
+		expect(isDangerousBashCommand("pnpm test")).toBe(false);
+		expect(isDangerousBashCommand("pnpm build")).toBe(false);
+		expect(isDangerousBashCommand("git add -A")).toBe(false);
+		expect(isDangerousBashCommand("git commit -m 'test'")).toBe(false);
+		expect(isDangerousBashCommand("git push origin main")).toBe(false);
+		expect(isDangerousBashCommand("cat src/index.ts")).toBe(false);
+		expect(isDangerousBashCommand("ls -la")).toBe(false);
+	});
+
+	it("does NOT flag edit/write tool names", () => {
+		// The gate only intercepts bash, not edit/write
+		expect(isDangerousBashCommand("echo hello")).toBe(false);
 	});
 });
 

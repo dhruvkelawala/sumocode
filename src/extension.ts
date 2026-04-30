@@ -4,11 +4,7 @@ import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { installInputHints } from "./cathedral/input-hints.js";
-// Element 6 approval gate disabled per Dhruv's request 2026-04-27.
-// The cathedral approval modal was blocking bash/edit/write tool calls and
-// slowing down agent iteration. We trust Pi's own tool security model for now.
-// Re-enable later if we want a per-tool consent UX (Phase 7+).
-// import { installApprovalGate } from "./approval-modal.js";
+import { installApprovalGate } from "./approval-modal.js";
 import { installAltscreen } from "./cathedral/altscreen.js";
 import { installCathedralEditor } from "./cathedral/cathedral-editor.js";
 import { installSumoInteractions } from "./interaction-registry.js";
@@ -97,7 +93,7 @@ export default function sumocode(pi: ExtensionAPI): void {
 	installFooter(pi);
 	installCathedralEditor(pi);
 	installInputHints(pi);
-	// installApprovalGate(pi); // disabled — see import comment above
+	installApprovalGate(pi);
 	installWorkingIndicator(pi);
 	installSumoInteractions(pi);
 }

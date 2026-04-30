@@ -235,85 +235,113 @@ export async function showApprovalModal(
 // tool_call interception
 // ============================================================================
 
-/**
- * Tools we intercept for cathedral approval. Per Q6.5 (locked):
- *
- *   bash, edit, write
- *
- * read/find/grep/ls keep Pi's default behaviour (which is no approval).
- */
-const INTERCEPTED_TOOLS: ReadonlySet<string> = new Set(["bash", "edit", "write"]);
+// ============================================================================
+// Dangerous command detection
+// ============================================================================
 
 /**
- * Sumo-side allow set, populated by `[A]lways` selections. Cleared on
- * extension reload. Keyed by tool name + canonical-args string.
+ * Patterns that trigger the approval modal for bash commands.
+ * Matches Pi's own permission-gate.ts example: rm -rf, sudo, chmod 777,
+ * plus gh CLI commands that mutate remote state.
+ *
+ * Regular edit/write/read are NOT gated — Pi doesn't gate them natively
+ * and they slow down agent iteration.
  */
-const sumoAllowSet = new Set<string>();
+const DANGEROUS_BASH_PATTERNS: readonly RegExp[] = [
+	/\brm\s+(-[\w]*r[\w]*|--recursive)/i,  // rm -rf, rm -r, rm --recursive
+	/\bsudo\b/i,
+	/\b(chmod|chown)\b.*777/i,
+	/\bmkfs\b/i,
+	/\bdd\b.*\bof=/i,
+	/\b(shutdown|reboot|halt|poweroff)\b/i,
+	/\bgit\s+push\b.*--force(?!-with-lease)/i,  // force push (without --force-with-lease)
+	/\bgit\s+(reset\s+--hard|clean\s+-fd)/i,
+];
 
-function allowKey(toolName: string, args: unknown): string {
-	try {
-		return `${toolName}::${JSON.stringify(args)}`;
-	} catch {
-		return `${toolName}::<unjson>`;
-	}
-}
+/**
+ * gh CLI sub-commands that mutate remote state and warrant approval.
+ * Read-only commands (gh issue view, gh pr list, gh api GET) are NOT gated.
+ */
+const GH_MUTATING_PATTERNS: readonly RegExp[] = [
+	/\bgh\s+pr\s+(create|merge|close|edit|ready|review)\b/i,
+	/\bgh\s+issue\s+(create|close|edit|delete|transfer|pin)\b/i,
+	/\bgh\s+release\s+(create|delete|edit)\b/i,
+	/\bgh\s+repo\s+(create|delete|fork|rename|archive)\b/i,
+	/\bgh\s+api\b.*(-X\s+(POST|PUT|PATCH|DELETE)|--method\s+(POST|PUT|PATCH|DELETE))/i,
+];
 
-function describeCommand(toolName: string, args: unknown): { command: string; description: string[] } {
-	if (typeof args !== "object" || args === null) {
-		return { command: `[${toolName}] ${String(args)}`, description: [] };
-	}
-	const a = args as Record<string, unknown>;
-	if (toolName === "bash") {
-		return {
-			command: typeof a.command === "string" ? a.command : "<bash>",
-			description: ["The agent wants to execute this command."],
-		};
-	}
-	if (toolName === "edit" || toolName === "write") {
-		const target = typeof a.path === "string" ? a.path : "<file>";
-		return {
-			command: `[${toolName}] ${target}`,
-			description: ["The agent wants to modify this file."],
-		};
-	}
-	return { command: `[${toolName}]`, description: [] };
+export function isDangerousBashCommand(command: string): boolean {
+	return DANGEROUS_BASH_PATTERNS.some((p) => p.test(command))
+		|| GH_MUTATING_PATTERNS.some((p) => p.test(command));
 }
 
 /**
- * Install the approval interceptor. Listens to `tool_call` events on
- * intercepted tools and shows the cathedral modal before letting Pi proceed.
+ * Sumo-side session allow set, populated by `[A]lways` selections.
+ * Cleared on extension reload. Keyed by command string.
+ */
+const sessionAllowSet = new Set<string>();
+
+function describeCommand(command: string): { command: string; description: string[] } {
+	if (GH_MUTATING_PATTERNS.some((p) => p.test(command))) {
+		return { command, description: ["This GitHub CLI command will modify remote state."] };
+	}
+	if (/\brm\b/.test(command)) {
+		return { command, description: ["This will permanently delete files."] };
+	}
+	if (/\bsudo\b/.test(command)) {
+		return { command, description: ["This runs with elevated privileges."] };
+	}
+	if (/\bgit\s+push.*--force/.test(command)) {
+		return { command, description: ["Force push rewrites remote history."] };
+	}
+	if (/\bgit\s+reset\s+--hard/.test(command)) {
+		return { command, description: ["Hard reset discards uncommitted changes."] };
+	}
+	return { command, description: ["The agent wants to execute a potentially dangerous command."] };
+}
+
+/**
+ * Install the approval gate. Only intercepts bash tool calls with dangerous
+ * command patterns. Does NOT gate edit/write/read — matching vanilla Pi
+ * behavior where regular file operations proceed without approval.
  *
- * v1 behaviour:
- *   - YES allows the call
- *   - NO blocks via `event.block = true`
- *   - ALWAYS adds (toolName, args) to the SumoCode allow set so future
- *     identical calls bypass the modal in this session
+ * Gated commands:
+ *   - rm -rf / rm --recursive
+ *   - sudo
+ *   - chmod/chown 777
+ *   - git push --force (without --force-with-lease)
+ *   - git reset --hard / git clean -fd
+ *   - gh pr create/merge/close, gh issue create/close/delete, etc.
  *
- * Pi may also have its own approval flow that runs independently. Where
- * Pi already has an allow rule, our modal won't appear; where it doesn't,
- * our modal is the gate.
+ * NOT gated:
+ *   - edit, write, read (regular agent iteration)
+ *   - gh pr list, gh issue view (read-only gh commands)
+ *   - pnpm/npm/node (build commands)
+ *   - git add/commit/push (normal git)
  */
 export function installApprovalGate(pi: ExtensionAPI): void {
 	pi.on("tool_call", async (event, ctx) => {
 		if (!ctx.hasUI) return;
-		if (!INTERCEPTED_TOOLS.has(event.toolName)) return;
-		if (sumoAllowSet.has(allowKey(event.toolName, event.input))) return;
+		if (event.toolName !== "bash") return;
 
-		const { command, description } = describeCommand(event.toolName, event.input);
+		const command = typeof event.input.command === "string" ? event.input.command : "";
+		if (!isDangerousBashCommand(command)) return;
+		if (sessionAllowSet.has(command)) return;
+
+		const info = describeCommand(command);
 		let choice: ApprovalChoice = "no";
 		try {
-			choice = await showApprovalModal(ctx, { command, descriptionLines: description });
+			choice = await showApprovalModal(ctx, { command: info.command, descriptionLines: info.description });
 		} catch {
 			choice = "no";
 		}
 
 		if (choice === "always") {
-			sumoAllowSet.add(allowKey(event.toolName, event.input));
+			sessionAllowSet.add(command);
 		}
 		if (choice === "no") {
 			return { block: true, reason: "user denied via cathedral approval modal" };
 		}
-		// yes / always: let Pi proceed
 		return undefined;
 	});
 }

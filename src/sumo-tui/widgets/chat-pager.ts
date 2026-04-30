@@ -345,8 +345,8 @@ export class ChatPager extends SumoNode {
 	private disposeMessageNodes(): void {
 		const nodes = new Set<ChatMessage>([...this.activeMessages, ...this.archivedMessages]);
 		if (this.placeholder) nodes.add(this.placeholder);
-		for (const node of nodes) node.dispose();
 		for (const child of [...this.scrollBox.children]) this.scrollBox.removeChild(child);
+		for (const node of nodes) node.dispose();
 	}
 
 	private rebuildRenderedChildren(): void {

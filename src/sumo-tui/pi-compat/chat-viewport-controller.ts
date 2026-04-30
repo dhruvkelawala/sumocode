@@ -1,7 +1,7 @@
 import { parseSgrMouseStream, type MouseEvent } from "../input/mouse.js";
 import type { KeyEvent } from "../input/key-router.js";
 import { logDiagnostic } from "../runtime/diagnostics.js";
-import { ResumeProfiler, type ResumeProfileMetadata } from "../runtime/resume-profiler.js";
+import { measureMaybe, ResumeProfiler, type ResumeProfileMetadata } from "../runtime/resume-profiler.js";
 import { chatMessageViewModelFromPiMessage, chatMessageViewModelToPlainText, transcriptFromSessionContext, type ChatMessageViewModel } from "../transcript/view-model.js";
 import { ChatPager } from "../widgets/chat-pager.js";
 import { chatScrollCommandFromInput } from "../widgets/chat-scroll-command.js";
@@ -284,12 +284,13 @@ export class ChatViewportController {
 	public renderSessionContext(sessionContext: unknown): void {
 		this.lastAssistantText = "";
 		this.pendingMouseInput = "";
+		// Resume uses bulk transcript replacement instead of `clear()` + per-message
+		// replay; `replaceViewModels()` resets the chat-side scroll/banner state.
 		const profile = this.runtime.startResumeProfile?.();
-		const measure = <T>(name: Parameters<ResumeProfiler["measure"]>[0], run: () => T): T => profile ? profile.measure(name, run) : run();
-		const messages = measure("session_scan", () => sessionMessages(sessionContext));
+		const messages = measureMaybe(profile, "session_scan", () => sessionMessages(sessionContext));
 		this.runtime.setEmptyChatQuoteState({ active: messages.length === 0, userMessageCount: countUserMessages(messages) });
-		const transcript = measure("transcript_model", () => transcriptFromSessionContext(sessionContext));
-		const stats = measure("transcript_hydrate", () => this.chat.replaceViewModels(transcript.messages));
+		const transcript = measureMaybe(profile, "transcript_model", () => transcriptFromSessionContext(sessionContext));
+		const stats = measureMaybe(profile, "transcript_hydrate", () => this.chat.replaceViewModels(transcript.messages));
 		if (profile) {
 			this.runtime.completeResumeHydration?.(profile, {
 				sourceMessages: messages.length,

@@ -1,3 +1,6 @@
+import { mkdtempSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
 	SumoInteractiveRuntime,
@@ -9,7 +12,7 @@ import {
 	shouldHidePiNoise,
 	type PiNoiseFilterState,
 } from "./sumo-interactive-mode.js";
-import { installChatViewportBridge } from "./chat-viewport-controller.js";
+import { ChatViewportController, installChatViewportBridge } from "./chat-viewport-controller.js";
 import { defaultSplashSnapshot, getSplashContentHeight } from "../cathedral/splash-tree.js";
 import { ALTSCREEN_ENTER_SEQUENCE, MOUSE_SGR_ENABLE_SEQUENCE, TerminalSessionOwner } from "../runtime/terminal-controller.js";
 
@@ -141,6 +144,43 @@ describe("sumo interactive Pi noise filtering", () => {
 
 		expect(second).toEqual(first);
 		runtime.stop();
+	});
+
+	it("emits resume budget diagnostics after session context hydration and first full render", async () => {
+		const previousDiagFile = process.env.SUMO_TUI_DIAG_FILE;
+		const diagFile = join(mkdtempSync(join(tmpdir(), "sumocode-resume-diag-")), "diag.jsonl");
+		process.env.SUMO_TUI_DIAG_FILE = diagFile;
+		const runtime = new SumoInteractiveRuntime({ isTTY: true, columns: 100, rows: 30, write: vi.fn() });
+		try {
+			const snapshot = await runtime.start();
+			const controller = new ChatViewportController(runtime, snapshot.chat, {});
+			controller.renderSessionContext({
+				messages: [
+					{ role: "user", content: "resume prompt" },
+					{ role: "assistant", content: "resume response" },
+				],
+			});
+
+			(runtime as unknown as { render(): void }).render();
+
+			const events = readFileSync(diagFile, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line) as Record<string, unknown>);
+			const resumeEvent = events.find((event) => event.event === "resume_budget");
+			expect(resumeEvent).toMatchObject({
+				event: "resume_budget",
+				pass: true,
+				source_messages: 2,
+				accepted_messages: 2,
+				rendered_messages: 2,
+				archived_messages: 0,
+			});
+			for (const stage of ["session_scan_ms", "transcript_model_ms", "transcript_hydrate_ms", "yoga_first_layout_ms", "first_frame_render_ms"]) {
+				expect(typeof resumeEvent?.[stage]).toBe("number");
+			}
+		} finally {
+			runtime.stop();
+			if (previousDiagFile === undefined) delete process.env.SUMO_TUI_DIAG_FILE;
+			else process.env.SUMO_TUI_DIAG_FILE = previousDiagFile;
+		}
 	});
 
 	it("routes Pi chat rendering and wheel input through ChatPager", async () => {

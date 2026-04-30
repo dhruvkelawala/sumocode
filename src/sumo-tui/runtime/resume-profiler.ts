@@ -55,6 +55,7 @@ function formatMs(value: number): string {
 }
 
 function percentile(values: readonly number[], percentileValue: number): number {
+	// Nearest-rank percentile: ceil((p/100) * n) - 1, indexed into the sorted array.
 	if (values.length === 0) return 0;
 	const sorted = [...values].sort((left, right) => left - right);
 	const index = Math.min(sorted.length - 1, Math.max(0, Math.ceil((percentileValue / 100) * sorted.length) - 1));
@@ -95,6 +96,10 @@ export class ResumeProfiler {
 			metadata,
 		};
 	}
+}
+
+export function measureMaybe<T>(profile: ResumeProfiler | undefined, name: ResumeStageName, run: () => T): T {
+	return profile ? profile.measure(name, run) : run();
 }
 
 export function summarizeResumeProfiles(profiles: readonly ResumeProfile[]): ResumeProfileSummary {

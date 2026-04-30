@@ -19,6 +19,8 @@ interface SyntheticPiMessage {
 }
 
 function syntheticMessages(count: number): SyntheticPiMessage[] {
+	// Fixed markdown messages keep the CI budget stable; mixed tool/code/skill
+	// transcripts belong in a future realism benchmark, not this regression gate.
 	return Array.from({ length: count }, (_, index) => ({
 		id: `message-${index}`,
 		role: index % 2 === 0 ? "user" : "assistant",

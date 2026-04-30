@@ -43,7 +43,7 @@ import type { MouseEvent } from "../input/mouse.js";
 import { SelectionController } from "../input/selection.js";
 import { diffFrames } from "../render/diff.js";
 import { FrameScheduler } from "../runtime/frame-scheduler.js";
-import { emitResumeBudgetOverlay, ResumeProfiler, type ResumeProfileMetadata } from "../runtime/resume-profiler.js";
+import { emitResumeBudgetOverlay, measureMaybe, ResumeProfiler, type ResumeProfileMetadata } from "../runtime/resume-profiler.js";
 import { defaultTerminalSessionOwner, TerminalSessionOwner, type TerminalOutput } from "../runtime/terminal-controller.js";
 import { ChatPager } from "../widgets/chat-pager.js";
 import { SIDEBAR_MIN_TERMINAL_WIDTH } from "../../sidebar.js";
@@ -230,23 +230,13 @@ export class SumoInteractiveRuntime {
 		this.syncChatSlot();
 		root.width = safeWidth;
 		root.height = safeHeight;
-		const pendingProfile = this.pendingResumeProfile;
-		if (pendingProfile) {
-			pendingProfile.profile.measure("yoga_first_layout", () => root.yogaNode.calculateLayout(safeWidth, safeHeight, DIRECTION_LTR));
-		} else {
-			root.yogaNode.calculateLayout(safeWidth, safeHeight, DIRECTION_LTR);
-		}
-		const { frame, lines } = pendingProfile
-			? pendingProfile.profile.measure("first_frame_render", () => {
-				const nextFrame = new CellBuffer(safeHeight, safeWidth);
-				composite(root, nextFrame, { selection: this.selection });
-				return { frame: nextFrame, lines: bufferToAnsiLines(nextFrame) };
-			})
-			: (() => {
-				const nextFrame = new CellBuffer(safeHeight, safeWidth);
-				composite(root, nextFrame, { selection: this.selection });
-				return { frame: nextFrame, lines: bufferToAnsiLines(nextFrame) };
-			})();
+		const pendingProfile = this.claimPendingResumeProfile();
+		measureMaybe(pendingProfile?.profile, "yoga_first_layout", () => root.yogaNode.calculateLayout(safeWidth, safeHeight, DIRECTION_LTR));
+		const { frame, lines } = measureMaybe(pendingProfile?.profile, "first_frame_render", () => {
+			const nextFrame = new CellBuffer(safeHeight, safeWidth);
+			composite(root, nextFrame, { selection: this.selection });
+			return { frame: nextFrame, lines: bufferToAnsiLines(nextFrame) };
+		});
 		this.chatFrameCache = { width: safeWidth, height: safeHeight, version: this.frameVersion, selectionRevision, frame: frame.clone(), lines };
 		if (pendingProfile) this.finishPendingResumeProfile(pendingProfile);
 		return { frame: frame.clone(), lines: [...lines] };
@@ -349,27 +339,15 @@ export class SumoInteractiveRuntime {
 		this.syncChatSlot();
 		root.width = width;
 		root.height = height;
-		const pendingProfile = this.pendingResumeProfile;
-		if (pendingProfile) {
-			pendingProfile.profile.measure("yoga_first_layout", () => root.yogaNode.calculateLayout(width, height, DIRECTION_LTR));
-		} else {
-			root.yogaNode.calculateLayout(width, height, DIRECTION_LTR);
-		}
-		const nextFrame = pendingProfile
-			? pendingProfile.profile.measure("first_frame_render", () => {
-				const frame = new CellBuffer(height, width);
-				const compositeResult = composite(root, frame, { selection: this.selection });
-				const patches = diffFrames(this.previousFrame, frame);
-				this.terminal.writeFramePatches(patches, compositeResult.hardwareCursor);
-				return frame;
-			})
-			: (() => {
-				const frame = new CellBuffer(height, width);
-				const compositeResult = composite(root, frame, { selection: this.selection });
-				const patches = diffFrames(this.previousFrame, frame);
-				this.terminal.writeFramePatches(patches, compositeResult.hardwareCursor);
-				return frame;
-			})();
+		const pendingProfile = this.claimPendingResumeProfile();
+		measureMaybe(pendingProfile?.profile, "yoga_first_layout", () => root.yogaNode.calculateLayout(width, height, DIRECTION_LTR));
+		const nextFrame = measureMaybe(pendingProfile?.profile, "first_frame_render", () => {
+			const frame = new CellBuffer(height, width);
+			const compositeResult = composite(root, frame, { selection: this.selection });
+			const patches = diffFrames(this.previousFrame, frame);
+			this.terminal.writeFramePatches(patches, compositeResult.hardwareCursor);
+			return frame;
+		});
 		this.previousFrame = nextFrame.clone();
 		this.renderedVersion = this.frameVersion;
 		this.renderedWidth = width;
@@ -377,9 +355,18 @@ export class SumoInteractiveRuntime {
 		if (pendingProfile) this.finishPendingResumeProfile(pendingProfile);
 	}
 
-	private finishPendingResumeProfile(pendingProfile: { profile: ResumeProfiler; metadata: ResumeProfileMetadata }): void {
-		if (this.pendingResumeProfile !== pendingProfile) return;
+	private claimPendingResumeProfile(): { profile: ResumeProfiler; metadata: ResumeProfileMetadata } | undefined {
+		const pendingProfile = this.pendingResumeProfile;
+		if (!pendingProfile) return undefined;
+		// Resume can paint through the hybrid chat-frame path or the full retained
+		// root path. The first renderer to claim the profile is the user-visible
+		// transition owner; clearing here prevents a later render pass from
+		// appending unreported stages to the same profile.
 		this.pendingResumeProfile = undefined;
+		return pendingProfile;
+	}
+
+	private finishPendingResumeProfile(pendingProfile: { profile: ResumeProfiler; metadata: ResumeProfileMetadata }): void {
 		emitResumeBudgetOverlay(pendingProfile.profile.finish(pendingProfile.metadata));
 	}
 }

@@ -110,6 +110,26 @@ describe("ChatPager", () => {
 		root.dispose();
 	});
 
+	it("can bulk replace resumed transcripts repeatedly after detaching old Yoga nodes", async () => {
+		const yoga = await loadYoga();
+		const root = new SumoNode(yoga.Node.create());
+		const chat = ChatPager.create(yoga, root, { maxRenderedMessages: 3 });
+		const messages = (prefix: string) => Array.from({ length: 6 }, (_, index) => ({
+			id: `${prefix}-${index}`,
+			role: "sumo" as const,
+			displayName: "SUMO",
+			blocks: [{ type: "markdown" as const, text: `${prefix} message ${index}` }],
+		}));
+
+		chat.replaceViewModels(messages("first"));
+		chat.replaceViewModels(messages("second"));
+
+		expect(chat.getArchivedMessageCount()).toBe(3);
+		expect(chat.getRenderedMessages().map((message) => message.text)).toEqual(["second message 3", "second message 4", "second message 5"]);
+		expect(chat.scrollBox.children[0]).toMatchObject({ text: "── 3 earlier messages ──" });
+		root.dispose();
+	});
+
 	it("streaming while scrolled up preserves the visible position (EC-2.5)", async () => {
 		const { root, chat, buffer } = await makeChat(36, 5);
 		for (let index = 0; index < 12; index += 1) chat.addMessage("sumo", `message ${index}`);

@@ -6,6 +6,7 @@ import { MEASURE_MODE_EXACTLY, type MeasureMode, type Yoga, type YogaNode } from
 import type { CellBuffer, Rect } from "../render/buffer.js";
 import { lineToAnsi, span, textLine, withPersistentStyle, type Span } from "../render/primitives.js";
 import { renderCathedralCodeBlock } from "../transcript/code-renderer.js";
+import { renderScrollBlock } from "../transcript/scroll-renderer.js";
 import { renderToolBlockRows } from "../transcript/tool-renderer.js";
 import type { ChatBlock } from "../transcript/view-model.js";
 
@@ -223,8 +224,8 @@ function renderQuestionRows(block: Extract<ChatBlock, { type: "question" }>): st
 	return [`[question] ${block.question.prompt}`, ...block.question.choices.map((choice) => `- ${choice}`)];
 }
 
-function renderDelegationRows(block: Extract<ChatBlock, { type: "delegation" }>): string[] {
-	return [`[delegation] ${block.delegation.title} · ${block.delegation.status}`, ...(block.delegation.summary ? [block.delegation.summary] : [])];
+function renderDelegationRows(block: Extract<ChatBlock, { type: "delegation" }>, width: number): string[] {
+	return renderScrollBlock(block.delegation, width);
 }
 
 function renderCodeRows(block: Extract<ChatBlock, { type: "code" }>, width: number): string[] {
@@ -252,7 +253,7 @@ function renderBlockRows(blocks: readonly ChatBlock[], width: number): string[] 
 				rows.push(...renderQuestionRows(block));
 				break;
 			case "delegation":
-				rows.push(...renderDelegationRows(block));
+				rows.push(...renderDelegationRows(block, width));
 				break;
 		}
 	}

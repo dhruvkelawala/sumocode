@@ -52,4 +52,20 @@ describe("FrameScheduler", () => {
 		scheduler.dispose();
 		vi.useRealTimers();
 	});
+
+	it("does not wake the retained render loop after an idle resume render", async () => {
+		vi.useFakeTimers();
+		const render = vi.fn();
+		const scheduler = new FrameScheduler({ render });
+
+		scheduler.requestRender();
+		await vi.runAllTimersAsync();
+		await vi.advanceTimersByTimeAsync(1_000);
+
+		expect(render).toHaveBeenCalledTimes(1);
+		expect(scheduler.getQueueDepth()).toBe(0);
+		expect(vi.getTimerCount()).toBe(0);
+		scheduler.dispose();
+		vi.useRealTimers();
+	});
 });

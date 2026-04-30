@@ -192,6 +192,15 @@ export class CellBuffer {
 		};
 	}
 
+	public updateCellAttrs(row: number, col: number, update: (attrs: Cell["attrs"]) => Cell["attrs"]): void {
+		if (!this.inBounds(row, col)) return;
+		const index = this.index(row, col);
+		const next = update(maskToAttrs(this.attrs.get(index) ?? 0));
+		const mask = attrsToMask(next);
+		if (mask === 0) this.attrs.delete(index);
+		else this.attrs.set(index, mask);
+	}
+
 	public clear(rect?: Rect): void {
 		const area = rect ? clampRect(rect, this.rows, this.cols) : { top: 0, left: 0, width: this.cols, height: this.rows };
 		for (let row = area.top; row < area.top + area.height; row += 1) {

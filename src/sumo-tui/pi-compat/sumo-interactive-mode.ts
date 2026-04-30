@@ -37,6 +37,9 @@ import { DIRECTION_LTR, FLEX_DIRECTION_COLUMN, loadYoga, type Yoga } from "../la
 import { bufferToAnsiLines } from "../render/ansi-writer.js";
 import { CellBuffer } from "../render/buffer.js";
 import { composite } from "../render/compositor.js";
+import type { KeyEvent } from "../input/key-router.js";
+import type { MouseEvent } from "../input/mouse.js";
+import { SelectionController } from "../input/selection.js";
 import { diffFrames } from "../render/diff.js";
 import { FrameScheduler } from "../runtime/frame-scheduler.js";
 import { defaultTerminalSessionOwner, TerminalSessionOwner, type TerminalOutput } from "../runtime/terminal-controller.js";
@@ -114,6 +117,7 @@ export class SumoInteractiveRuntime {
 	private emptyChatQuote: EmptyChatQuoteNode | undefined;
 	private shellTransition: RetainedShellTransition | undefined;
 	private scheduler: FrameScheduler | undefined;
+	private readonly selection: SelectionController;
 	private previousFrame: CellBuffer | undefined;
 	private resizeHandler: (() => void) | undefined;
 	private externalRenderControls: { scheduleRender(): void; setStreamingMode(enabled: boolean): void } | undefined;
@@ -121,7 +125,7 @@ export class SumoInteractiveRuntime {
 	private renderedVersion = -1;
 	private renderedWidth = 0;
 	private renderedHeight = 0;
-	private chatFrameCache: { width: number; height: number; version: number; lines: string[] } | undefined;
+	private chatFrameCache: { width: number; height: number; version: number; selectionRevision: number; frame: CellBuffer; lines: string[] } | undefined;
 	private activeEmptyChat = false;
 	private emptyChatUserMessageCount = 0;
 	private started = false;
@@ -129,6 +133,12 @@ export class SumoInteractiveRuntime {
 	public constructor(output: TerminalLike = process.stdout, terminalSession?: TerminalSessionOwner) {
 		this.output = output;
 		this.terminal = terminalSession ?? (output === process.stdout ? defaultTerminalSessionOwner : new TerminalSessionOwner({ output }));
+		this.selection = new SelectionController({
+			emitClipboard: (sequence) => {
+				this.terminal.writeClipboardSequence(sequence);
+			},
+			onSelectionChanged: () => this.requestRender(),
+		});
 	}
 
 	public async start(): Promise<SumoInteractiveRuntimeSnapshot> {
@@ -177,12 +187,30 @@ export class SumoInteractiveRuntime {
 	}
 
 	public renderChatLines(width: number, height: number): string[] {
-		if (!this.root) return [];
+		return [...this.renderChatFrame(width, height).lines];
+	}
+
+	public handleSelectionMouse(event: MouseEvent, width: number, height: number): boolean {
+		const frame = this.renderChatFrame(width, height).frame;
+		return this.selection.handleMouseEvent(event, frame);
+	}
+
+	public handleSelectionKey(event: KeyEvent, width: number, height: number): boolean {
+		const frame = this.renderChatFrame(width, height).frame;
+		return this.selection.handleKey(event, frame);
+	}
+
+	private renderChatFrame(width: number, height: number): { frame: CellBuffer; lines: string[] } {
 		const safeWidth = Math.max(1, Math.floor(width));
 		const safeHeight = Math.max(1, Math.floor(height));
+		if (!this.root) {
+			const empty = new CellBuffer(safeHeight, safeWidth);
+			return { frame: empty, lines: bufferToAnsiLines(empty) };
+		}
+		const selectionRevision = this.selection.getRevision();
 		const cached = this.chatFrameCache;
-		if (cached && cached.width === safeWidth && cached.height === safeHeight && cached.version === this.frameVersion) {
-			return [...cached.lines];
+		if (cached && cached.width === safeWidth && cached.height === safeHeight && cached.version === this.frameVersion && cached.selectionRevision === selectionRevision) {
+			return { frame: cached.frame.clone(), lines: [...cached.lines] };
 		}
 
 		this.syncChatSlot();
@@ -190,10 +218,10 @@ export class SumoInteractiveRuntime {
 		this.root.height = safeHeight;
 		this.root.yogaNode.calculateLayout(safeWidth, safeHeight, DIRECTION_LTR);
 		const frame = new CellBuffer(safeHeight, safeWidth);
-		composite(this.root, frame);
+		composite(this.root, frame, { selection: this.selection });
 		const lines = bufferToAnsiLines(frame);
-		this.chatFrameCache = { width: safeWidth, height: safeHeight, version: this.frameVersion, lines };
-		return [...lines];
+		this.chatFrameCache = { width: safeWidth, height: safeHeight, version: this.frameVersion, selectionRevision, frame: frame.clone(), lines };
+		return { frame: frame.clone(), lines: [...lines] };
 	}
 
 	public writeChatViewport(top: number, left: number, width: number, height: number): boolean {
@@ -293,7 +321,7 @@ export class SumoInteractiveRuntime {
 		this.root.height = height;
 		this.root.yogaNode.calculateLayout(width, height, DIRECTION_LTR);
 		const nextFrame = new CellBuffer(height, width);
-		const result = composite(this.root, nextFrame);
+		const result = composite(this.root, nextFrame, { selection: this.selection });
 		const patches = diffFrames(this.previousFrame, nextFrame);
 		this.terminal.writeFramePatches(patches, result.hardwareCursor);
 		this.previousFrame = nextFrame.clone();

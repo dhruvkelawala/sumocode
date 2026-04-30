@@ -3,6 +3,7 @@ import {
 	ALTSCREEN_ENTER_SEQUENCE,
 	CURSOR_COLOR_RESET,
 	CURSOR_COLOR_SET,
+	MOUSE_SGR_DISABLE_SEQUENCE,
 	MOUSE_SGR_ENABLE_SEQUENCE,
 	TERMINAL_BG_RESET,
 	TERMINAL_BG_SET,
@@ -94,7 +95,7 @@ describe("TerminalSessionOwner", () => {
 		terminal.enableMouseSGR();
 
 		expect(output.writes).toEqual([MOUSE_SGR_ENABLE_SEQUENCE]);
-		expect(output.writes[0]).toBe("\x1b[?1000h\x1b[?1006h");
+		expect(output.writes[0]).toBe("\x1b[?1000h\x1b[?1002h\x1b[?1006h");
 	});
 
 	it("writes absolute chat viewport rows behind the terminal ownership seam", () => {
@@ -122,7 +123,7 @@ describe("TerminalSessionOwner", () => {
 		terminal.exitTerminal();
 
 		expect(output.writes).toEqual([TERMINAL_CLEANUP_SEQUENCE]);
-		expect(output.writes[0]).toBe("\x1b[<u\x1b[>4;0m\x1b[?2004l\x1b[?1003l\x1b[?1006l\x1b[?1000l\x1b[?1049l\x1b[?25h\x1b[0m");
+		expect(output.writes[0]).toBe(`\x1b[<u\x1b[>4;0m\x1b[?2004l${MOUSE_SGR_DISABLE_SEQUENCE}\x1b[?1049l\x1b[?25h\x1b[0m`);
 		expect(output.writes[0]).not.toContain("\x1b]12;");
 		expect(output.writes[0]).not.toContain(CURSOR_COLOR_RESET);
 		expect(terminal.restored).toBe(true);

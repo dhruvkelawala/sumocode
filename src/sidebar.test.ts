@@ -115,6 +115,25 @@ describe("StaticSidebarDock", () => {
 		expect(lines).toEqual(["full width chat"]);
 	});
 
+	it("fills blank sidebar rows with surface bg when chat is taller than sidebar content", () => {
+		const chatRows = Array.from({ length: 30 }, (_, i) => `chat row ${i}`);
+		const left = component(chatRows);
+		const sidebarContent = ["SIDE 1", "SIDE 2"];
+		const right = component(sidebarContent);
+		const dock = new StaticSidebarDock([left.node], right.node, () => true);
+
+		const lines = dock.render(160);
+
+		expect(lines).toHaveLength(30);
+		// Row beyond sidebar content should still have surface bg (#241D17 → 36;29;23)
+		const lastRow = lines[29]!;
+		expect(lastRow).toContain("\u001b[48;2;36;29;23m");
+		// And should be padded to sidebar width
+		const sidebarPart = stripAnsi(lastRow).slice(-SIDEBAR_WIDTH);
+		expect(sidebarPart.length).toBe(SIDEBAR_WIDTH);
+		expect(sidebarPart.trim()).toBe("");
+	});
+
 	it("clips tall sidebar content to the main column height so editor/footer stay pinned", () => {
 		const left = component(["chat row"]);
 		const right = component(["SIDE 1", "SIDE 2", "SIDE 3"]);

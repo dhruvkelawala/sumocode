@@ -130,7 +130,7 @@ async function renderFixtureScene(scenario, fixture) {
 	const sidebarWidth = sidebarVisible ? 30 : 0;
 	const chatWidth = Math.max(1, cols - sidebarWidth - gutter);
 
-	const [topChrome, inputFrame, footer, sidebar, chatPager, yogaMod, layoutNodeMod, bufferMod, compositorMod, writerMod] = await Promise.all([
+	const [topChrome, inputFrame, footer, sidebar, chatPager, yogaMod, layoutNodeMod, bufferMod, compositorMod, writerMod, ansiMod] = await Promise.all([
 		jiti.import(`${repoRoot}/src/top-chrome.ts`),
 		jiti.import(`${repoRoot}/src/cathedral/input-frame.ts`),
 		jiti.import(`${repoRoot}/src/footer.ts`),
@@ -141,6 +141,7 @@ async function renderFixtureScene(scenario, fixture) {
 		jiti.import(`${repoRoot}/src/sumo-tui/render/buffer.ts`),
 		jiti.import(`${repoRoot}/src/sumo-tui/render/compositor.ts`),
 		jiti.import(`${repoRoot}/src/sumo-tui/render/ansi-writer.ts`),
+		jiti.import(`${repoRoot}/src/sumo-tui/cathedral/ansi.ts`),
 	]);
 
 	// Bible always has blank / topbar / blank regardless of width.
@@ -204,7 +205,7 @@ async function renderFixtureScene(scenario, fixture) {
 	const scene = [...topRows];
 	for (let row = 0; row < chatHeight; row += 1) {
 		const chatLine = padAnsiToWidth(chatLines[row] ?? "", chatWidth);
-		if (sidebarVisible) scene.push(`${chatLine}${" ".repeat(gutter)}${sidebarLines[row] ?? " ".repeat(sidebarWidth)}`);
+		if (sidebarVisible) scene.push(`${chatLine}${" ".repeat(gutter)}${sidebarLines[row] ?? ansiMod.surfaceLine("", sidebarWidth)}`);
 		else scene.push(`${chatLine}${" ".repeat(gutter)}`);
 	}
 	scene.push(...bottomRows);

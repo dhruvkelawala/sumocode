@@ -108,8 +108,14 @@ function padAnsi(line: string, width: number): string {
 	return `${line}${" ".repeat(width - visible)}`;
 }
 
+/** Header note: only explicit summary from details (bash summary etc). */
+function headerNote(tool: ToolCallViewModel): string | undefined {
+	const details = asRecord(tool.details);
+	return firstString(details?.summary, details?.note);
+}
+
 function renderHeader(tool: ToolCallViewModel, width: number): string {
-	const note = toolNote(tool);
+	const note = headerNote(tool);
 	const target = toolTarget(tool);
 	const right: Span[] = [
 		span(" "),

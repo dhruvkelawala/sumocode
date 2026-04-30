@@ -211,6 +211,13 @@ describe("sumo interactive Pi noise filtering", () => {
 		const rendered = upstream.chatContainer.render(60).join("\n");
 		expect(rendered).toContain("USER");
 		expect(rendered).not.toContain("upstream chat");
+		// Regression for #67: chatContainer.render must only return retained
+		// chat/splash content. Pi owns header, editor, and footer as separate
+		// shell slots; if those leak here they stack as ghost UI in scrollback.
+		expect(rendered).not.toContain("header");
+		expect(rendered).not.toContain("editor");
+		expect(rendered).not.toContain("hints");
+		expect(rendered).not.toContain("footer");
 		cleanup?.();
 		runtime.stop();
 	});

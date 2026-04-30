@@ -3,6 +3,7 @@ import { copyFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { resolve } from "node:path";
 import { captureComponentScenario } from "./component-capture.mjs";
+import { captureFixtureScenario } from "./fixture-capture.mjs";
 import { captureRuntimeScenario } from "./runtime-capture.mjs";
 import { replayAnsi } from "./ansi-replay.mjs";
 import { renderTerminalSnapshot } from "./terminal-dom-renderer.mjs";
@@ -11,11 +12,13 @@ import { assertScenarioTargetsExist, loadScenarioRegistry } from "./scenario-reg
 import { outDir } from "./paths.mjs";
 import { resetDir, writeFile, writeJson } from "./fs-utils.mjs";
 import { writeReviewPack } from "./review-pack.mjs";
+import { auditGeometry, auditToText } from "./geometry-audit.mjs";
+import { parseBibleStyledGrid, runtimeStyledGrid, diffStyledGrids, styledDiffToText } from "./styled-cell-grid.mjs";
 
 const args = parseArgs(process.argv.slice(2));
 const mode = args.mode ?? "review";
 if (!["review", "ci"].includes(mode)) {
-	console.error(`Usage: pnpm visual:review [--scenario id] [--lane component|runtime]\n       pnpm visual:ci [--scenario id] [--lane component|runtime]`);
+	console.error(`Usage: pnpm visual:review [--scenario id] [--lane component|runtime|fixture]\n       pnpm visual:ci [--scenario id] [--lane component|runtime|fixture]`);
 	process.exit(1);
 }
 
@@ -73,12 +76,43 @@ async function runScenario(scenario) {
 	const rawOut = resolve(scenarioOut, "raw");
 	const capture = scenario.lane === "component"
 		? await captureComponentScenario(scenario)
-		: await captureRuntimeScenario(scenario);
+		: scenario.lane === "fixture"
+			? await captureFixtureScenario(scenario)
+			: await captureRuntimeScenario(scenario);
 	writeFile(resolve(rawOut, "runtime-output.ansi"), capture.bytes);
 	writeJson(resolve(rawOut, "capture-metadata.json"), capture.metadata ?? {});
 
 	const snapshot = await replayAnsi(capture.bytes, scenario.dimensions);
 	writeJson(resolve(rawOut, "terminal-snapshot.json"), snapshotForJson(snapshot));
+
+	const geometrySpec = scenario.geometrySpec ?? null;
+	const audit = auditGeometry(snapshot, geometrySpec);
+	writeJson(resolve(rawOut, "geometry-audit.json"), { passed: audit.passed, summary: audit.summary, mismatches: audit.mismatches });
+	writeFile(resolve(rawOut, "geometry-audit.txt"), auditToText(audit));
+
+	// Styled cell-level Bible diff (char + fg + bg — no PNG)
+	// Bible HTML lives one level up from the renders/ PNG.
+	const bibleHtmlPath = scenario.bibleTargetPath
+		.replace(/\.png$/, ".html")
+		.replace(/[\/]renders[\/]/, "/");
+	let cellDiff = null;
+	try {
+		const bibleGrid = parseBibleStyledGrid(bibleHtmlPath);
+		const runtimeGrid = runtimeStyledGrid(snapshot);
+		cellDiff = diffStyledGrids(bibleGrid, runtimeGrid);
+		writeFile(resolve(rawOut, "styled-cell-diff.txt"), styledDiffToText(cellDiff));
+		if (!cellDiff.passed) {
+			writeJson(resolve(rawOut, "styled-cell-diff.json"), {
+				passed: false,
+				diffRows: cellDiff.rowDiffs.length,
+				totalRows: cellDiff.totalRows,
+				rowDiffs: cellDiff.rowDiffs.slice(0, 30),
+			});
+		}
+	} catch {
+		// Bible HTML may not exist for all scenarios (component-only, etc.)
+	}
+
 	const targetFull = resolve(scenarioOut, "target-full.png");
 	copyFileSync(scenario.bibleTargetPath, targetFull);
 	const runtimeFull = resolve(scenarioOut, "runtime-full.png");
@@ -128,6 +162,8 @@ async function runScenario(scenario) {
 		bibleTarget: scenario.bibleTarget,
 		capture: capture.metadata,
 		render: runtimeRender.metrics,
+		geometryAudit: { passed: audit.passed, summary: audit.summary, mismatchCount: audit.mismatches.length },
+		cellDiff: cellDiff ? { passed: cellDiff.passed, diffRows: cellDiff.rowDiffs?.length ?? 0 } : null,
 		artifacts: {
 			targetFull,
 			runtimeFull,

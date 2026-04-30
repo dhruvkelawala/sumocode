@@ -168,23 +168,23 @@ export function renderTopChrome(snapshot: TopChromeSnapshot, width: number): str
 			line += seg;
 			consumed += segLen;
 		}
-
-		// Try to fit ARCHIVE link.
-		{
-			const seg = archiveSegment();
-			const segLen = visibleLength(seg);
-			if (consumed + segLen <= width) {
-				line += seg;
-				consumed += segLen;
-			}
-		}
 	}
 
-	// Try to fit icons block, right-aligned with at least 2 spaces of gap.
+	// Build right-aligned block: ARCHIVE (when not compact) + icons.
+	// Bible positions ARCHIVE immediately left of the icons, right-aligned.
 	{
 		const iconBlock = iconsSegment();
 		const iconLen = visibleLength(iconBlock);
-		if (consumed + 1 + iconLen <= innerWidth) {
+		const archiveBlock = compact ? "" : archiveSegment();
+		const archiveLen = compact ? 0 : visibleLength(archiveBlock);
+		const rightBlock = `${archiveBlock}${" ".repeat(archiveLen > 0 ? 3 : 0)}${iconBlock}`;
+		const rightLen = archiveLen + (archiveLen > 0 ? 3 : 0) + iconLen;
+		if (consumed + 1 + rightLen <= innerWidth) {
+			const gap = innerWidth - consumed - rightLen;
+			line += `${" ".repeat(gap)}${rightBlock}`;
+			consumed = innerWidth;
+		} else if (consumed + 1 + iconLen <= innerWidth) {
+			// ARCHIVE doesn't fit; still right-align icons only
 			const gap = innerWidth - consumed - iconLen;
 			line += `${" ".repeat(gap)}${iconBlock}`;
 			consumed = innerWidth;

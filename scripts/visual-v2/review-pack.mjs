@@ -115,8 +115,9 @@ function summaryHtml(results) {
 
 function scenarioGroupsHtml(results) {
 	const component = results.scenarios.filter((scenario) => scenario.lane === "component");
+	const fixture = results.scenarios.filter((scenario) => scenario.lane === "fixture");
 	const runtime = results.scenarios.filter((scenario) => scenario.lane === "runtime");
-	return `${scenarioSectionHtml("Component scenarios — review these first", "Small deterministic component captures. Use these cards to decide whether the harness is useful for component-by-component V2 work.", component)}\n${scenarioSectionHtml("Runtime scenarios — informational for now", "Real SumoCode runtime captures. These are expected to differ until V2 primitives and scene composition are implemented.", runtime)}`;
+	return `${scenarioSectionHtml("Component scenarios — review these first", "Small deterministic component captures. Use these cards to decide whether the harness is useful for component-by-component V2 work.", component)}\n${scenarioSectionHtml("Fixture scenes — deterministic completed states", "Full-scene captures from TranscriptViewModel fixtures. These cover completed assistant/tool states without live model or tool nondeterminism.", fixture)}\n${scenarioSectionHtml("Runtime scenarios — informational for now", "Real SumoCode runtime captures. These are expected to differ until V2 primitives and scene composition are implemented.", runtime)}`;
 }
 
 function scenarioSectionHtml(title, note, scenarios) {
@@ -137,7 +138,7 @@ function scenarioHtml(scenario) {
   ${scenario.error ? `<pre>${escapeHtml(scenario.error)}</pre>` : ""}
   <div class="artifacts">
     ${artifact("Bible target", scenario.artifacts?.targetFull)}
-    ${artifact("Runtime", scenario.artifacts?.runtimeFull)}
+    ${artifact(scenario.lane === "fixture" ? "Fixture capture" : "Runtime", scenario.artifacts?.runtimeFull)}
   </div>
   ${scenario.crops.map(cropHtml).join("\n")}
 </section>`;
@@ -151,6 +152,10 @@ function scenarioDescription(scenario) {
 		"splash-runtime": "Real runtime splash capture. Informational until splash parity and startup edge cases are addressed.",
 		"active-landscape-runtime": "Real 160x45 post-submit active-working capture. Offline runtime is expected to show SUMO working/meditating, not a completed model answer.",
 		"active-portrait-runtime": "Real portrait post-submit active-working capture. Offline runtime is expected to show SUMO working/meditating, not a completed model answer.",
+		"fixture-completed-landscape": "Deterministic 160x45 completed transcript fixture with read/edit/bash tool blocks.",
+		"fixture-completed-portrait": "Deterministic 60x100 completed transcript fixture using the no-sidebar portrait policy.",
+		"fixture-tool-ledger-landscape": "Deterministic tool-heavy fixture for reviewing completed tool state composition.",
+		"fixture-command-palette-overlay": "Deterministic overlay fixture for reviewing command palette composition without live input.",
 	};
 	return descriptions[scenario.id] ?? "Visual parity scenario.";
 }

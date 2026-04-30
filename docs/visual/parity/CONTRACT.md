@@ -15,18 +15,35 @@ This document defines what the V2 Cathedral Visual Harness is allowed to assert.
 
 If these disagree, update the Bible/manifest first, then regenerate review evidence, then promote a runtime golden only after explicit developer approval.
 
-## 2. Capture engine
+## 2. Capture engine and verification layers
 
-The canonical V2 path is:
+The canonical V2 pipeline is:
 
 ```txt
-node-pty bytes
-→ @xterm/headless replay
-→ DOM terminal renderer
-→ Playwright screenshot
-→ crop/mask/diff
-→ HTML review pack
+node-pty bytes OR deterministic fixture ANSI
+→ @xterm/headless replay → cell snapshot (JSON)
+  ├─ styled cell diff  (char + fg + bg per cell vs Bible HTML)
+  ├─ geometry audit    (row categories + column bounds vs geometrySpec)
+  └─ DOM terminal renderer → Playwright screenshot → crop/mask/diff → review pack
 ```
+
+### Styled cell diff (primary verification)
+
+`scripts/visual-v2/styled-cell-grid.mjs` parses Bible HTML `<pre class="grid">` spans into a per-cell `{ char, fg, bg, bold, dim }` grid and compares it cell-for-cell against the xterm runtime snapshot. This is fully deterministic and text-level — no PNG in the loop.
+
+Known intentional differences between Bible mockup and runtime palette are declared as equivalent color pairs (e.g. `--divider-mockup` #5A4D3C ↔ `--divider` #3A2F25) and suppressed from the diff.
+
+Output: `docs/visual/out/parity/<scenario>/raw/styled-cell-diff.txt`
+
+### Geometry audit
+
+`scripts/visual-v2/geometry-audit.mjs` classifies each row by content (top-bar, chat-frame-top, hint-row, footer, blank, etc.) and checks horizontal bounds against a `geometrySpec` declared per scenario in `scenarios.json`. Catches structural layout drift (e.g. input frame at the wrong row, missing breathing rows).
+
+Output: `docs/visual/out/parity/<scenario>/raw/geometry-audit.txt`
+
+### PNG crop/diff (review evidence)
+
+Playwright screenshot + pixelmatch diff remains for visual review packs and human approval. It is not the primary verification gate. Use text-level reports first.
 
 `tmux`, cmux/Ghostty screenshots, and live terminal captures are debugging aids only. They must not define CI pass/fail for V2 pixel parity.
 
@@ -36,7 +53,7 @@ Runtime scenarios invoke SumoCode through the user-facing entry contract:
 ./bin/sumocode.sh --offline --no-extensions --no-session
 ```
 
-Runtime scenarios must set deterministic terminal env in the manifest (`PI_OFFLINE=1`, `SUMO_TUI=1`, `TERM=xterm-256color`, `COLORTERM=truecolor`, `FORCE_COLOR=3`).
+Runtime scenarios must set deterministic terminal env in the manifest (`PI_OFFLINE=1`, `SUMO_TUI=1`, `TERM=xterm-256color`, `COLORTERM=truecolor`, `FORCE_COLOR=3`). Fixture scenarios do not spawn Pi; they render deterministic `TranscriptViewModel` state through the same SumoTUI scene primitives and then enter the same ANSI replay/DOM/crop pipeline. Use fixtures for completed assistant/tool states that cannot be reached deterministically through offline runtime capture.
 
 ## 3. V2 dimensions and layout constants
 
@@ -70,6 +87,12 @@ Hardware cursor visibility is a Pi/TUI runtime preference. PTY integration tests
 Visual parity screenshots should not rely on browser-rendered cursor color: the harness renders a fixed cursor cell, while real terminals honor cursor-color escape sequences. The V2 terminal ownership contract now applies the Cathedral accent cursor (`OSC 12 #D97706`) when retained mode starts, and resets it on terminal cleanup so the host shell regains its default. `/sumo:cursor reset` remains the explicit opt-out path during a session.
 
 ## 5. Crop status semantics
+
+Scenario lanes:
+
+- `component` — isolated primitive/component captures.
+- `fixture` — deterministic full-scene captures from fixture transcripts.
+- `runtime` — real `./bin/sumocode.sh` captures through node-pty.
 
 Each crop resolves its status from the crop entry or its parent scenario:
 

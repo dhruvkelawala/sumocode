@@ -129,19 +129,46 @@ If adding a production Cathedral rendering exception, leave a comment explaining
 
 ## Visual harness
 
-The canonical V2 path is documented in `docs/visual/parity/CONTRACT.md`:
+The canonical V2 path is documented in `docs/visual/parity/CONTRACT.md`.
+
+### Three scenario lanes
+
+| Lane | Input | Purpose |
+|---|---|---|
+| `component` | Deterministic fixture → ANSI | Isolated TUI component captures |
+| `fixture` | `TranscriptViewModel` fixture → full scene ANSI | Deterministic completed/tool/overlay states without live Pi |
+| `runtime` | `./bin/sumocode.sh` via node-pty | Real end-to-end runtime captures |
+
+All three converge into the same pipeline:
 
 ```txt
-node-pty bytes → @xterm/headless replay → DOM terminal renderer → Playwright screenshot → crop/mask/diff → review pack
+ANSI bytes → @xterm/headless replay → cell snapshot (JSON)
+  ├─ styled cell diff (char + fg + bg per cell vs Bible HTML → text report)
+  ├─ geometry audit (row categories + column bounds vs spec → text report)
+  └─ DOM terminal renderer → Playwright screenshot → crop/mask/diff → review pack
 ```
 
-Use:
+### Verification layers
+
+1. **Styled cell diff** (`styled-cell-grid.mjs`) — the primary verification. Parses Bible HTML `<pre class="grid">` spans into a per-cell `{ char, fg, bg, bold, dim }` grid, parses the runtime xterm snapshot into the same shape, and diffs them cell-for-cell. Output is a deterministic text report (`styled-cell-diff.txt`). Known intentional differences (e.g. `--divider-mockup` vs `--divider`) are declared as equivalent pairs and suppressed.
+2. **Geometry audit** (`geometry-audit.mjs`) — classifies each row (top-bar, chat-frame-top, hint-row, footer, blank, etc.) and checks column bounds against a `geometrySpec` declared in `scenarios.json`. Catches structural layout drift.
+3. **PNG crop/diff** — pixel-level comparison for visual review evidence. Not the primary gate; used for human review packs alongside the text-level reports.
+
+### Commands
 
 ```bash
-pnpm render:bible
-pnpm visual:review
-pnpm visual:review -- --scenario <scenario>
-pnpm visual:ci
+pnpm render:bible                                    # regenerate Bible HTML/PNG targets
+pnpm visual:review                                    # review all scenarios
+pnpm visual:review -- --scenario <id>                 # review one scenario
+pnpm visual:review -- --lane fixture                  # review one lane
+pnpm visual:ci                                        # CI gate
+```
+
+After a review run, check the text-level reports before inspecting PNGs:
+
+```bash
+cat docs/visual/out/parity/<scenario>/raw/styled-cell-diff.txt
+cat docs/visual/out/parity/<scenario>/raw/geometry-audit.txt
 ```
 
 Runtime scenarios invoke:
@@ -178,6 +205,7 @@ Required crops gate against committed approved runtime goldens. Bible diffs rema
 ## Decision trail
 
 - `PLAN.md` — Q1–Q14 grilling decisions.
+- `docs/visual/parity/FIXTURE_STATES_REVIEW.md` — fixture lane design for deterministic completed/tool/overlay states.
 - `docs/adr/` — accepted ADRs. ADR 0001 covers the SumoTUI retained renderer.
 - `docs/SUMO_TUI_CONSOLIDATION_PLAN.md` — active consolidation sequencing after the deep audit.
 - `docs/SUMO_TUI_AUDIT.md` — audit conclusion: SumoTUI is the right direction; the hybrid Pi/SumoTUI seam is the risk.
@@ -186,6 +214,8 @@ Required crops gate against committed approved runtime goldens. Bible diffs rema
 - `docs/SUMO_TUI_RENDER_PRIMITIVES.md` — typed render primitive contract.
 - `docs/SUMO_TUI_TEST_BACKEND.md` — headless retained-renderer test backend contract.
 - `docs/SUMO_TUI_TRANSCRIPT_MODEL.md` — structured transcript view-model contract.
+- `docs/visual/parity/PORTRAIT_REVIEW.md` — portrait scene composition review.
+- `docs/visual/parity/FIXTURE_STATES_REVIEW.md` — fixture lane and deterministic state review.
 - `docs/prd.md` / `docs/prd.html` — formal product spec.
 
 ## Integration tests

@@ -156,22 +156,24 @@ describe("formatCwd", () => {
 	});
 });
 
-describe("renderFooterBlock — splash adds a version line", () => {
+describe("renderFooterBlock — splash renders Bible version block", () => {
 	it("in active state, returns 1 line (just the footer)", () => {
 		const lines = renderFooterBlock(snapshot({ isSplash: false }));
 		expect(lines.length).toBe(1);
 	});
 
-	it("on splash, returns 2 lines (footer + version)", () => {
+	it("on splash, returns breathing rows plus version with no status footer", () => {
 		const lines = renderFooterBlock(snapshot({ isSplash: true }), 160);
-		expect(lines.length).toBe(2);
-		const plainSecond = lines[1]!.replace(ANSI, "");
-		expect(plainSecond).toContain(SPLASH_VERSION_LINE);
+		expect(lines.length).toBe(10);
+		const plain = lines.map((line) => line.replace(ANSI, ""));
+		expect(plain[2]).toContain(SPLASH_VERSION_LINE);
+		expect(plain.join("\n")).not.toContain("READY");
 	});
 
-	it("on splash but too narrow for version line, returns 1 line", () => {
+	it("on splash but too narrow for version line, keeps breathing rows without status footer", () => {
 		const lines = renderFooterBlock(snapshot({ isSplash: true }), 30);
-		expect(lines.length).toBe(1);
+		expect(lines.length).toBe(9);
+		expect(lines.join("\n").replace(ANSI, "")).not.toContain("READY");
 	});
 });
 

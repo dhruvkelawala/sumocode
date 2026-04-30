@@ -25,7 +25,7 @@
  */
 
 import type { Component, OverlayOptions } from "@mariozechner/pi-tui";
-import { matchesKey } from "@mariozechner/pi-tui";
+import { matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@mariozechner/pi-tui";
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { CATHEDRAL_TOKENS } from "./tokens.js";
 
@@ -33,7 +33,7 @@ const RESET = "\u001b[0m";
 const ANSI_PATTERN = /\u001b\[[0-9;]*m/g;
 
 function visibleLength(text: string): number {
-	return text.replace(ANSI_PATTERN, "").length;
+	return visibleWidth(text.replace(ANSI_PATTERN, ""));
 }
 
 function fg(text: string, hex: string): string {
@@ -59,16 +59,33 @@ function persistentBg(text: string, fgHex: string, bgHex: string): string {
 }
 
 function center(line: string, width: number): string {
-	const len = visibleLength(line);
-	if (len >= width) return line;
+	const fitted = fitLine(line, width);
+	const len = visibleLength(fitted);
+	if (len >= width) return fitted;
 	const pad = Math.floor((width - len) / 2);
-	return `${" ".repeat(pad)}${line}${" ".repeat(width - len - pad)}`;
+	return `${" ".repeat(pad)}${fitted}${" ".repeat(width - len - pad)}`;
+}
+
+function fitLine(line: string, width: number): string {
+	if (width <= 0) return "";
+	return visibleLength(line) > width ? truncateToWidth(line, width, "…") : line;
 }
 
 function padRight(line: string, width: number): string {
-	const len = visibleLength(line);
-	if (len >= width) return line;
-	return `${line}${" ".repeat(width - len)}`;
+	const fitted = fitLine(line, width);
+	const len = visibleLength(fitted);
+	if (len >= width) return fitted;
+	return `${fitted}${" ".repeat(width - len)}`;
+}
+
+function wrapIndentedText(text: string, width: number, indent: string): string[] {
+	const contentWidth = Math.max(1, width - visibleLength(indent));
+	const rows: string[] = [];
+	for (const paragraph of text.split("\n")) {
+		const wrapped = wrapTextWithAnsi(paragraph, contentWidth);
+		rows.push(...(wrapped.length > 0 ? wrapped : [""]).map((line) => `${indent}${line}`));
+	}
+	return rows;
 }
 
 // ── Snapshot ──────────────────────────────────────────────────
@@ -118,7 +135,9 @@ export function renderDivineQuery(snapshot: DivineQuerySnapshot, width: number):
 	lines.push("");
 
 	// Question body
-	lines.push(padRight(`${indent}${fg(snapshot.title, CATHEDRAL_TOKENS.colors.foreground)}`, width));
+	for (const questionLine of wrapIndentedText(snapshot.title, width, indent)) {
+		lines.push(padRight(fg(questionLine, CATHEDRAL_TOKENS.colors.foreground), width));
+	}
 
 	// Blank
 	lines.push("");
@@ -129,11 +148,18 @@ export function renderDivineQuery(snapshot: DivineQuerySnapshot, width: number):
 		const mark = focused
 			? fg(FOCUSED_MARK, CATHEDRAL_TOKENS.colors.accent)
 			: fg(UNFOCUSED_MARK, CATHEDRAL_TOKENS.colors.divider);
+		const optionIndent = `${indent}${mark}   `;
+		const continuationIndent = `${indent}    `;
 		const label = `${optionLabel(i)}${snapshot.options[i]}`;
-		const text = focused
-			? fg(label, CATHEDRAL_TOKENS.colors.foreground)
-			: fg(label, CATHEDRAL_TOKENS.colors.foregroundDim);
-		lines.push(padRight(`${indent}${mark}   ${text}`, width));
+		const wrappedOption = wrapIndentedText(label, width, `${indent}    `);
+		for (let optionRow = 0; optionRow < wrappedOption.length; optionRow += 1) {
+			const raw = (wrappedOption[optionRow] ?? "").slice(continuationIndent.length);
+			const prefix = optionRow === 0 ? optionIndent : continuationIndent;
+			const text = focused
+				? fg(raw, CATHEDRAL_TOKENS.colors.foreground)
+				: fg(raw, CATHEDRAL_TOKENS.colors.foregroundDim);
+			lines.push(padRight(`${prefix}${text}`, width));
+		}
 	}
 
 	// Blank

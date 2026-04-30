@@ -82,6 +82,20 @@ describe("renderDivineQuery", () => {
 		}
 	});
 
+	it("wraps long question and option text inside the modal width", () => {
+		const lines = renderDivineQuery(snapshot({
+			title: "Divine Query smoke test: which modal behavior should we verify next, and why does this text need to stay inside the modal frame?",
+			options: ["Type a very long custom answer option that should never run past the lifted surface edge"],
+		}), 50);
+		const plain = lines.map(stripAnsi);
+
+		for (const line of plain) {
+			expect(line.length, `row overflowed: ${JSON.stringify(line)}`).toBe(50);
+		}
+		expect(plain.filter((line) => line.includes("Divine Query smoke test")).length).toBe(1);
+		expect(plain.some((line) => line.includes("inside the modal frame"))).toBe(true);
+	});
+
 	it("labels options with A), B), C), etc.", () => {
 		const lines = renderDivineQuery(snapshot(), 80).map(stripAnsi);
 		expect(lines.some((l) => l.includes("A)"))).toBe(true);

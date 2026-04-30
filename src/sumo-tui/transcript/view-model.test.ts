@@ -94,7 +94,7 @@ describe("structured transcript view model", () => {
 		});
 
 		expect(message?.blocks).toEqual([
-			{ type: "delegation", delegation: { id: "d1", title: "scribe", agent: "scribe", status: "running", summary: "scrolling the long transcript", model: undefined, thinking: undefined, nestedTools: [], tokensIn: undefined, tokensOut: undefined, elapsedMs: undefined } },
+			{ type: "delegation", delegation: { id: "d1", title: "scribe", agent: "scribe", status: "running", summary: "scrolling the long transcript" } },
 		]);
 	});
 

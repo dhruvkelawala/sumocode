@@ -102,47 +102,6 @@ const FIXTURES = {
 			],
 		},
 	},
-	"scroll-scribe": {
-		transcript: {
-			messages: [
-				{
-					id: "u1",
-					role: "user",
-					displayName: "USER",
-					timestamp: FIXTURE_TIMES.userOne,
-					blocks: [{ type: "markdown", text: "refactor the auth flow into smaller modules" }],
-				},
-				{
-					id: "s1",
-					role: "sumo",
-					displayName: "SUMO",
-					timestamp: FIXTURE_TIMES.sumoOne,
-					blocks: [
-						{ type: "markdown", text: "Dispatching a scribe to handle the refactor." },
-						{
-							type: "delegation",
-							delegation: {
-								title: "refactor auth flow into smaller modules",
-								agent: "scribe",
-								status: "running",
-								model: "gpt-5.5",
-								thinking: "medium",
-								nestedTools: [
-									{ name: "read", status: "success", input: { path: "src/auth.ts" } },
-									{ name: "edit", status: "success", input: { path: "src/auth.ts" } },
-									{ name: "edit", status: "success", input: { path: "src/auth-helpers.ts" } },
-									{ name: "bash", status: "running", input: { command: "pnpm test src/auth" } },
-								],
-								tokensIn: 8000,
-								tokensOut: 3000,
-								elapsedMs: 22000,
-							},
-						},
-					],
-				},
-			],
-		},
-	},
 	"skill-pill": {
 		transcript: {
 			messages: [

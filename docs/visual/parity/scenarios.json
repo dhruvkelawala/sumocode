@@ -750,31 +750,6 @@
 			]
 		},
 		{
-			"id": "fixture-scroll-scribe-landscape",
-			"lane": "fixture",
-			"status": "review",
-			"dimensions": {
-				"cols": 160,
-				"rows": 45
-			},
-			"bibleTarget": "scene-active-scroll-scribe.png",
-			"fixture": {
-				"id": "scroll-scribe"
-			},
-			"crops": [
-				{
-					"id": "full",
-					"targetCrop": "full",
-					"runtimeCrop": "full"
-				},
-				{
-					"id": "chat-area",
-					"targetCrop": "chat-area",
-					"runtimeCrop": "chat-area"
-				}
-			]
-		},
-		{
 			"id": "fixture-skill-pill-landscape",
 			"lane": "fixture",
 			"status": "review",

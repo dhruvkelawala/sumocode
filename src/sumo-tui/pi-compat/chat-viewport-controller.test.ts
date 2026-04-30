@@ -134,6 +134,47 @@ describe("ChatViewportController", () => {
 		root.dispose();
 	});
 
+	it("folds live tool results into the active SUMO message", async () => {
+		const { root, chat, runtime, controller } = await makeController();
+
+		controller.handleAgentEvent({ type: "message_start", message: { role: "assistant", content: "" } });
+		controller.handleAgentEvent({ type: "message_update", message: { role: "assistant", content: "Reading." }, assistantMessageEvent: { type: "text_delta", delta: "Reading." } });
+		controller.handleAgentEvent({
+			type: "message_update",
+			message: {
+				role: "assistant",
+				content: [
+					{ type: "text", text: "Reading." },
+					{ type: "toolCall", id: "tc1", name: "read", arguments: { path: "src/auth/session.ts" } },
+				],
+			},
+		});
+		controller.handleAgentEvent({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "Reading." }, { type: "toolCall", id: "tc1", name: "read", arguments: { path: "src/auth/session.ts" } }] } });
+		controller.handleAgentEvent({ type: "message_start", message: { role: "toolResult", toolCallId: "tc1", toolName: "read", content: [{ type: "text", text: "file contents" }] } });
+
+		const messages = chat.getRenderedMessages().map((message) => message.toSnapshot());
+		expect(messages).toHaveLength(1);
+		expect(messages[0]?.role).toBe("sumo");
+		expect(messages[0]?.blocks).toEqual([
+			{ type: "markdown", text: "Reading." },
+			{ type: "tool", tool: { id: "tc1", name: "read", status: "success", input: { path: "src/auth/session.ts" }, output: "file contents", details: undefined, error: undefined } },
+		]);
+		expect(runtime.noteUserMessage).not.toHaveBeenCalled();
+		root.dispose();
+	});
+
+	it("keeps assistant-only tool blocks under SUMO instead of TOOL", async () => {
+		const { root, chat, controller } = await makeController();
+
+		controller.handleAgentEvent({ type: "message_start", message: { role: "assistant", content: "" } });
+		controller.handleAgentEvent({ type: "message_update", message: { role: "assistant", content: [{ type: "toolCall", id: "tc1", name: "bash", arguments: { command: "pnpm test" } }] } });
+
+		const message = chat.getRenderedMessages()[0]?.toSnapshot();
+		expect(message?.role).toBe("sumo");
+		expect(message?.blocks?.[0]).toMatchObject({ type: "tool", tool: { id: "tc1", name: "bash", status: "pending" } });
+		root.dispose();
+	});
+
 	it("mirrors Pi tool expansion state into retained chat tool blocks", async () => {
 		const yoga = await loadYoga();
 		const root = new SumoNode(yoga.Node.create());

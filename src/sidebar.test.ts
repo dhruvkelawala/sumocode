@@ -115,6 +115,49 @@ describe("StaticSidebarDock", () => {
 		expect(lines).toEqual(["full width chat"]);
 	});
 
+	it("fills blank sidebar rows with surface bg when chat is taller than sidebar content", () => {
+		const chatRows = Array.from({ length: 30 }, (_, i) => `chat row ${i}`);
+		const left = component(chatRows);
+		const sidebarContent = ["SIDE 1", "SIDE 2"];
+		const right = component(sidebarContent);
+		const dock = new StaticSidebarDock([left.node], right.node, () => true);
+
+		const lines = dock.render(160);
+
+		expect(lines).toHaveLength(30);
+		// Row beyond sidebar content should still have surface bg (#241D17 → 36;29;23)
+		const lastRow = lines[29]!;
+		expect(lastRow).toContain("\u001b[48;2;36;29;23m");
+		// And should be padded to sidebar width
+		const sidebarPart = stripAnsi(lastRow).slice(-SIDEBAR_WIDTH);
+		expect(sidebarPart.length).toBe(SIDEBAR_WIDTH);
+		expect(sidebarPart.trim()).toBe("");
+	});
+
+	it("sidebar stays identical when chat content changes (scroll independence)", () => {
+		const sidebarNode = component(["REGISTRY", "CONTEXT", "MEMORY"]).node;
+
+		// First render: short chat
+		const chatShort = component(["msg 1", "msg 2"]);
+		const dockA = new StaticSidebarDock([chatShort.node], sidebarNode, () => true);
+		const linesA = dockA.render(160);
+
+		// Second render: long chat (simulates scrolling to more messages)
+		const chatLong = component(["msg 1", "msg 2", "msg 3", "msg 4", "msg 5", "msg 6", "msg 7"]);
+		const dockB = new StaticSidebarDock([chatLong.node], sidebarNode, () => true);
+		const linesB = dockB.render(160);
+
+		// Sidebar occupies cols 130-159 in a 160-col terminal (128 chat + 2 gutter + 30 sidebar)
+		const sidebarColsA = linesA.map((l) => stripAnsi(l).slice(-SIDEBAR_WIDTH));
+		const sidebarColsB = linesB.slice(0, linesA.length).map((l) => stripAnsi(l).slice(-SIDEBAR_WIDTH));
+
+		// Sidebar content in the overlapping rows must be identical regardless of chat changes
+		expect(sidebarColsA).toEqual(sidebarColsB);
+		// Chat grew but sidebar content stays the same
+		expect(linesB).toHaveLength(7);
+		expect(linesA).toHaveLength(2);
+	});
+
 	it("clips tall sidebar content to the main column height so editor/footer stay pinned", () => {
 		const left = component(["chat row"]);
 		const right = component(["SIDE 1", "SIDE 2", "SIDE 3"]);

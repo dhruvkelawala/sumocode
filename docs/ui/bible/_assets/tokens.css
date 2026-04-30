@@ -33,19 +33,14 @@
   --background:        #1A1511;
   --surface:           #241D17;
   --surface-recess:    #120D0A;
-  /* SURFACE-LIFTED: locked at #3A342F in v1 spec but reads as cool grey on
-   * dark monitor. Bumped to #3D3024 in bible — warmer (more orange-amber)
-   * to read as 'aged parchment lifted above the surface' rather than grey.
-   * Will propagate this to runtime palette + cathedral.json after we lock
-   * Element 13. Original was: #3A342F. */
+  /* SURFACE-LIFTED: unified at #3D3024 (warmer amber, not cool grey).
+   * Matches runtime tokens.ts. */
   --surface-lifted:    #3D3024;
-  /* DIVIDER: locked at #3A2F25 in runtime palette. For mockup legibility
-   * (PNG export viewed on bright monitor / IDE), bump contrast slightly. The
-   * subtle aesthetic is preserved in actual terminal use where ambient light
-   * is low and eyes are dark-adapted. Only the bible mockups use the bumped
-   * value via --divider-mockup. */
-  --divider:           #3A2F25;
-  --divider-mockup:    #5A4D3C;
+  /* DIVIDER: canonical value shared by runtime tokens.ts and Bible CSS.
+   * Previously split into --divider (#3A2F25) + --divider-mockup (#5A4D3C)
+   * which caused persistent styled-cell-diff mismatches. Unified to #5A4D3C
+   * as of 2026-04-30. */
+  --divider:           #5A4D3C;
   --foreground:        #F5E6C8;
   --foreground-dim:    #8B7A63;
   --accent:            #D97706;
@@ -224,7 +219,7 @@ html, body {
 /* ── color helpers ────────────────────────────────────────────── */
 .fg-accent   { color: var(--accent); }
 .fg-dim      { color: var(--foreground-dim); }
-.fg-divider  { color: var(--divider-mockup); }
+.fg-divider  { color: var(--divider); }
 .fg-fg       { color: var(--foreground); }
 .fg-comment  { color: var(--syntax-comment); }
 

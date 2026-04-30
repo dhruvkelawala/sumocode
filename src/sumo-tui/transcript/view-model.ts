@@ -1,3 +1,5 @@
+import { renderCompactToolPill } from "./tool-renderer.js";
+
 export type ChatMessageRole = "user" | "sumo" | "system";
 
 export type ToolStatus = "pending" | "running" | "success" | "error" | "cancelled";
@@ -11,6 +13,7 @@ export interface ToolCallViewModel {
 	readonly output?: string;
 	readonly details?: unknown;
 	readonly error?: string;
+	readonly expanded?: boolean;
 }
 
 export interface QuestionViewModel {
@@ -155,6 +158,7 @@ function toolBlockFromRecord(record: Record<string, unknown>, fallbackStatus: To
 	const output = textFromContent(record.content) || asString(record.output);
 	const error = asString(record.errorMessage) ?? asString(record.error);
 	const isError = record.isError === true || error !== undefined;
+	const expanded = asBoolean(record.expanded) ?? asBoolean(asRecord(record.details)?.expanded);
 	return {
 		type: "tool",
 		tool: {
@@ -165,6 +169,7 @@ function toolBlockFromRecord(record: Record<string, unknown>, fallbackStatus: To
 			output,
 			details: record.details,
 			error,
+			...(expanded === undefined ? {} : { expanded }),
 		},
 	};
 }
@@ -291,7 +296,7 @@ export function chatMessageViewModelToPlainText(message: ChatMessageViewModel): 
 				case "code":
 					return `\`\`\`${block.lang}\n${block.source}\n\`\`\``;
 				case "tool":
-					return [`[tool] ${block.tool.name} · ${block.tool.status}`, block.tool.output, block.tool.error].filter(Boolean).join("\n");
+					return renderCompactToolPill(block.tool);
 				case "skill":
 					return `[skill] ${block.name}${block.expanded ? " (expanded)" : " (⌘O to expand)"}`;
 				case "question":

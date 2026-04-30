@@ -45,6 +45,19 @@ export interface BoxOptions {
 
 const RESET = "\u001b[0m";
 
+/**
+ * Inject persistent fg + bg into pre-rendered ANSI text.
+ * Every SGR reset (\x1b[0m) inside the text is followed by the restore
+ * codes so both colors survive through nested ANSI-formatted content.
+ */
+export function withPersistentStyle(ansiText: string, fgHex: string, bgHex: string): string {
+	const fg = parseHex(fgHex);
+	const bg = parseHex(bgHex);
+	if (!fg || !bg) return ansiText;
+	const styleCode = `\u001b[38;2;${fg[0]};${fg[1]};${fg[2]}m\u001b[48;2;${bg[0]};${bg[1]};${bg[2]}m`;
+	return `${styleCode}${ansiText.replace(/\u001b\[0m/g, `${RESET}${styleCode}`)}${RESET}`;
+}
+
 function parseHex(hex: string): [number, number, number] | undefined {
 	const normalized = hex.replace("#", "");
 	if (!/^[0-9a-fA-F]{6}$/.test(normalized)) return undefined;

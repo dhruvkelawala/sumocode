@@ -1,5 +1,6 @@
 import { parseSgrMouseStream, type MouseEvent } from "../input/mouse.js";
 import { logDiagnostic } from "../runtime/diagnostics.js";
+import { chatMessageViewModelFromPiMessage, chatMessageViewModelToPlainText, transcriptFromSessionContext, type ChatMessageViewModel } from "../transcript/view-model.js";
 import { ChatPager } from "../widgets/chat-pager.js";
 import { chatScrollCommandFromInput } from "../widgets/chat-scroll-command.js";
 import { SIDEBAR_MIN_TERMINAL_WIDTH, SIDEBAR_WIDTH } from "../../sidebar.js";
@@ -33,6 +34,8 @@ export interface ChatViewportHost {
 	readonly widgetContainerBelow?: PiRenderableComponent;
 	readonly editorContainer?: PiRenderableComponent;
 	readonly footer?: PiRenderableComponent;
+	setToolsExpanded?(expanded: boolean): void;
+	getToolsExpanded?(): boolean;
 }
 
 export interface ChatViewportRuntime {
@@ -103,38 +106,13 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 	return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : undefined;
 }
 
-function textFromContent(content: unknown): string {
-	if (typeof content === "string") return content;
-	if (!Array.isArray(content)) return "";
-	return content
-		.map((part) => {
-			const record = asRecord(part);
-			if (!record || record.type !== "text") return undefined;
-			return typeof record.text === "string" ? record.text : undefined;
-		})
-		.filter((part): part is string => typeof part === "string")
-		.join("");
-}
-
 export function textFromAgentMessage(message: unknown): string {
-	const record = asRecord(message);
-	if (!record) return "";
-	if (record.role === "bashExecution") {
-		const command = typeof record.command === "string" ? record.command : "bash";
-		const output = typeof record.output === "string" ? record.output : "";
-		return output ? `$ ${command}\n${output}` : `$ ${command}`;
-	}
-	const text = textFromContent(record.content);
-	if (text.length > 0) return text;
-	return typeof record.errorMessage === "string" ? record.errorMessage : "";
+	const viewModel = chatMessageViewModelFromPiMessage(message);
+	return viewModel ? chatMessageViewModelToPlainText(viewModel) : "";
 }
 
-function chatRoleFromAgentMessage(message: unknown): string {
-	const role = asRecord(message)?.role;
-	if (role === "assistant") return "sumo";
-	if (role === "toolResult" || role === "bashExecution") return "tool";
-	if (typeof role === "string") return role;
-	return "system";
+function addViewModel(chat: ChatPager, message: ChatMessageViewModel): void {
+	chat.addViewModel(message);
 }
 
 function renderableLineCount(component: PiRenderableComponent | undefined, width: number): number {
@@ -295,10 +273,9 @@ export class ChatViewportController {
 		this.clear();
 		const messages = sessionMessages(sessionContext);
 		this.runtime.setEmptyChatQuoteState({ active: messages.length === 0, userMessageCount: countUserMessages(messages) });
-		for (const message of messages) {
-			const text = textFromAgentMessage(message);
-			if (text.length === 0) continue;
-			this.chat.addMessage(chatRoleFromAgentMessage(message), text);
+		for (const message of transcriptFromSessionContext(sessionContext).messages) {
+			if (chatMessageViewModelToPlainText(message).length === 0) continue;
+			addViewModel(this.chat, message);
 		}
 	}
 
@@ -310,9 +287,9 @@ export class ChatViewportController {
 			this.chat.addMessage("sumo", "");
 			return;
 		}
-		const text = textFromAgentMessage(message);
-		if (text.length === 0) return;
-		this.chat.addMessage(chatRoleFromAgentMessage(message), text);
+		const viewModel = chatMessageViewModelFromPiMessage(message);
+		if (!viewModel || chatMessageViewModelToPlainText(viewModel).length === 0) return;
+		addViewModel(this.chat, viewModel);
 	}
 
 	private handleMessageUpdate(message: unknown, assistantMessageEvent: unknown): void {
@@ -323,17 +300,21 @@ export class ChatViewportController {
 			this.lastAssistantText += streamEvent.delta;
 			return;
 		}
-		const text = textFromAgentMessage(message);
+		const viewModel = chatMessageViewModelFromPiMessage(message);
+		const text = viewModel ? chatMessageViewModelToPlainText(viewModel) : textFromAgentMessage(message);
 		if (text.length === 0 || text === this.lastAssistantText) return;
-		this.chat.replaceLast(text);
+		if (viewModel) this.chat.replaceLastWithViewModel(viewModel);
+		else this.chat.replaceLast(text);
 		this.lastAssistantText = text;
 	}
 
 	private handleMessageEnd(message: unknown): void {
 		if (asRecord(message)?.role === "assistant") {
-			const text = textFromAgentMessage(message);
+			const viewModel = chatMessageViewModelFromPiMessage(message);
+			const text = viewModel ? chatMessageViewModelToPlainText(viewModel) : textFromAgentMessage(message);
 			if (text.length > 0 && text !== this.lastAssistantText) {
-				this.chat.replaceLast(text);
+				if (viewModel) this.chat.replaceLastWithViewModel(viewModel);
+				else this.chat.replaceLast(text);
 				this.lastAssistantText = text;
 			}
 			this.chat.endStreaming();
@@ -399,6 +380,7 @@ export function installChatViewportBridge(upstream: unknown, runtime: ChatViewpo
 	const originalStatusRender = statusContainer?.render?.bind(statusContainer);
 	const originalHandleEvent = target.handleEvent?.bind(target);
 	const originalRenderSessionContext = target.renderSessionContext?.bind(target);
+	const originalSetToolsExpanded = target.setToolsExpanded?.bind(target);
 	const removeInputListener = target.ui?.addInputListener?.((data) => controller.handleInput(data));
 
 	runtime.setExternalRenderControls({
@@ -430,6 +412,12 @@ export function installChatViewportBridge(upstream: unknown, runtime: ChatViewpo
 			return originalStatusRender(width);
 		};
 	}
+	if (originalSetToolsExpanded) {
+		target.setToolsExpanded = (expanded: boolean): void => {
+			snapshot.chat.setToolExpansion(expanded);
+			originalSetToolsExpanded(expanded);
+		};
+	}
 	if (originalHandleEvent) {
 		target.handleEvent = async (event: unknown): Promise<unknown> => {
 			controller.handleAgentEvent(event);
@@ -453,6 +441,7 @@ export function installChatViewportBridge(upstream: unknown, runtime: ChatViewpo
 		if (originalInvalidate) chatContainer.invalidate = originalInvalidate;
 		else delete chatContainer.invalidate;
 		if (statusContainer && originalStatusRender) statusContainer.render = originalStatusRender;
+		if (originalSetToolsExpanded) target.setToolsExpanded = originalSetToolsExpanded;
 		if (originalHandleEvent) target.handleEvent = originalHandleEvent;
 		if (originalRenderSessionContext) target.renderSessionContext = originalRenderSessionContext;
 		delete target[CHAT_VIEWPORT_BRIDGE_INSTALLED];

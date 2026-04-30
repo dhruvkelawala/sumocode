@@ -2,6 +2,7 @@ import { SumoNode } from "../layout/node.js";
 import { FLEX_DIRECTION_COLUMN, type Yoga, type YogaNode } from "../layout/yoga.js";
 import type { KeyEvent } from "../input/key-router.js";
 import type { MouseEvent } from "../input/mouse.js";
+import { chatMessageViewModelToPlainText, type ChatMessageViewModel } from "../transcript/view-model.js";
 import { ChatMessage, type ChatMessageRole } from "./chat-message.js";
 import { ScrolledUpBanner } from "./scrolled-up-banner.js";
 import { ScrollBox, type ScrollBoxStateChange } from "./scrollbox.js";
@@ -20,6 +21,12 @@ export interface ChatPagerOptions {
 const DEFAULT_MAX_RENDERED_MESSAGES = 200;
 
 function noop(): void {}
+
+function chatRoleFromViewModel(message: ChatMessageViewModel): ChatMessageRole {
+	const onlyToolBlocks = message.blocks.length > 0 && message.blocks.every((block) => block.type === "tool");
+	if (onlyToolBlocks) return "tool";
+	return message.role;
+}
 
 /** Stateful chat scrollback wrapper: messages + ScrollBox + unread banner. */
 export class ChatPager extends SumoNode {
@@ -59,16 +66,19 @@ export class ChatPager extends SumoNode {
 	}
 
 	public addMessage(role: ChatMessageRole, text: string, timestamp?: Date): ChatMessage {
-		const wasReadingHistory = this.isReadingHistory();
-		const message = ChatMessage.create(this.yoga, role, text, undefined, timestamp);
-		const addedLines = message.getEstimatedHeight(this.scrollBox.getComputedWidth());
-		this.activeMessages.push(message);
-		this.scrollBox.addChild(message);
-		const virtualized = this.virtualizeIfNeeded();
-		if (wasReadingHistory) this.unreadCount += 1;
-		this.scrollBox.notifyContentChanged(addedLines + virtualized.addedLines, virtualized.removedLines);
-		this.scheduleRender();
-		return message;
+		return this.addChatMessage(ChatMessage.create(this.yoga, role, text, undefined, timestamp));
+	}
+
+	public addViewModel(message: ChatMessageViewModel): ChatMessage {
+		const role = chatRoleFromViewModel(message);
+		return this.addChatMessage(ChatMessage.create(
+			this.yoga,
+			role,
+			chatMessageViewModelToPlainText(message),
+			undefined,
+			message.timestamp,
+			message.blocks,
+		));
 	}
 
 	public appendToLast(chunk: string): void {
@@ -94,10 +104,30 @@ export class ChatPager extends SumoNode {
 			return;
 		}
 		if (last.text === text) return;
+		this.updateLast(last, () => last.setText(text));
+	}
+
+	public replaceLastWithViewModel(message: ChatMessageViewModel): void {
+		const last = this.getLastMessage();
+		if (!last) {
+			this.addViewModel(message);
+			return;
+		}
+		last.role = chatRoleFromViewModel(message);
+		this.updateLast(last, () => last.setBlocks(message.blocks, chatMessageViewModelToPlainText(message)));
+	}
+
+	public setToolExpansion(expanded: boolean): void {
 		const width = this.scrollBox.getComputedWidth();
-		const beforeHeight = last.getEstimatedHeight(width);
-		last.setText(text);
-		const afterHeight = last.getEstimatedHeight(width);
+		let beforeHeight = 0;
+		let afterHeight = 0;
+		let changed = false;
+		for (const message of this.activeMessages) {
+			beforeHeight += message.getEstimatedHeight(width);
+			changed = message.setToolExpansion(expanded) || changed;
+			afterHeight += message.getEstimatedHeight(width);
+		}
+		if (!changed) return;
 		this.scrollBox.notifyContentChanged(Math.max(0, afterHeight - beforeHeight), Math.max(0, beforeHeight - afterHeight));
 		this.scheduleRender();
 	}
@@ -145,6 +175,27 @@ export class ChatPager extends SumoNode {
 
 	public handleMouseEvent(event: MouseEvent): boolean {
 		return this.scrollBox.handleMouseEvent(event);
+	}
+
+	private addChatMessage(message: ChatMessage): ChatMessage {
+		const wasReadingHistory = this.isReadingHistory();
+		const addedLines = message.getEstimatedHeight(this.scrollBox.getComputedWidth());
+		this.activeMessages.push(message);
+		this.scrollBox.addChild(message);
+		const virtualized = this.virtualizeIfNeeded();
+		if (wasReadingHistory) this.unreadCount += 1;
+		this.scrollBox.notifyContentChanged(addedLines + virtualized.addedLines, virtualized.removedLines);
+		this.scheduleRender();
+		return message;
+	}
+
+	private updateLast(message: ChatMessage, update: () => void): void {
+		const width = this.scrollBox.getComputedWidth();
+		const beforeHeight = message.getEstimatedHeight(width);
+		update();
+		const afterHeight = message.getEstimatedHeight(width);
+		this.scrollBox.notifyContentChanged(Math.max(0, afterHeight - beforeHeight), Math.max(0, beforeHeight - afterHeight));
+		this.scheduleRender();
 	}
 
 	private scheduleRender(): void {

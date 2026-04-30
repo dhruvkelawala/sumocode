@@ -81,8 +81,8 @@ const DOT_GLYPHS: Record<TopChromeDotSize, string> = {
 function activeSegment(active: TopChromeSnapshot["activeSession"], maxLabel: number, dotSize: TopChromeDotSize): string {
 	const label = ellipsize(active.label, maxLabel);
 	const dot = color(DOT_GLYPHS[dotSize], CATHEDRAL_TOKENS.colors.accent);
-	const wrap = (ch: string): string => color(ch, CATHEDRAL_TOKENS.colors.foregroundDim);
-	return `${wrap("║")} ${dot} ${label} ${wrap("║")}`;
+	const dim = (ch: string): string => color(ch, CATHEDRAL_TOKENS.colors.foregroundDim);
+	return `${dim("║" + " ")}${dot}${dim(" " + label + " " + "║")}`;
 }
 
 const ACTIVE_OVERHEAD = 6; // chars consumed by `║ ● ` + ` ║`
@@ -155,8 +155,9 @@ export function renderTopChrome(snapshot: TopChromeSnapshot, width: number): str
 		const maxActiveLabel = Math.max(1, innerWidth - brandLen - BRAND_ACTIVE_GAP - ACTIVE_OVERHEAD);
 		active = activeSegment(snapshot.activeSession, maxActiveLabel, dotSize);
 	}
+	const brandGap = color(" ".repeat(BRAND_ACTIVE_GAP), CATHEDRAL_TOKENS.colors.foregroundDim);
 	let consumed = brandLen + BRAND_ACTIVE_GAP + visibleLength(active);
-	let line = `${brand}${" ".repeat(BRAND_ACTIVE_GAP)}${active}`;
+	let line = `${brand}${brandGap}${active}`;
 	const compact = innerWidth < COMPACT_TOP_CHROME_WIDTH;
 
 	if (!compact) {

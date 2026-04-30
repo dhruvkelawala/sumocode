@@ -3,7 +3,9 @@ import { CATHEDRAL_TOKENS } from "../../tokens.js";
 import { SumoNode } from "../layout/node.js";
 import { MEASURE_MODE_EXACTLY, type MeasureMode, type Yoga, type YogaNode } from "../layout/yoga.js";
 import type { CellBuffer, Rect } from "../render/buffer.js";
-import { lineToAnsi, span, textLine, type Span } from "../render/primitives.js";
+import { lineToAnsi, span, textLine, withPersistentStyle, type Span } from "../render/primitives.js";
+import { renderToolBlockRows } from "../transcript/tool-renderer.js";
+import type { ChatBlock } from "../transcript/view-model.js";
 
 export type ChatMessageRole = "user" | "sumo" | "system" | "tool" | string;
 
@@ -16,6 +18,7 @@ export interface ChatMessageSnapshot {
 	role: ChatMessageRole;
 	text: string;
 	timestamp: Date;
+	blocks?: readonly ChatBlock[];
 }
 
 const MIN_BOX_WIDTH = 8;
@@ -81,7 +84,7 @@ function textWidth(parts: readonly (Span | string)[]): number {
 
 function fitCellText(text: string, width: number): string {
 	const visible = visibleWidth(text);
-	return visible >= width ? takeVisible(text, width).head : `${text}${" ".repeat(width - visible)}`;
+	return visible > width ? takeVisible(text, width).head : `${text}${" ".repeat(width - visible)}`;
 }
 
 function formatTime(timestamp: Date): string {
@@ -95,7 +98,7 @@ function frameTop(role: ChatMessageRole, timestamp: Date | undefined, width: num
 	const leftParts: (Span | string)[] = [
 		span("╭ ", { fg: CATHEDRAL_TOKENS.colors.divider }),
 		span(label, { fg: roleColor(role) }),
-		span(" ", { fg: CATHEDRAL_TOKENS.colors.divider }),
+		span(" ", { fg: CATHEDRAL_TOKENS.colors.foreground }),
 	];
 
 	const showTime = (role === "sumo" || role === "assistant") && timestamp !== undefined;
@@ -120,11 +123,10 @@ function frameTop(role: ChatMessageRole, timestamp: Date | undefined, width: num
 function frameBody(row: string, width: number): string {
 	const inner = Math.max(0, width - 4);
 	const text = fitCellText(row, inner);
+	const body = withPersistentStyle(` ${text} `, CATHEDRAL_TOKENS.colors.foreground, CATHEDRAL_TOKENS.colors.surfaceRecess);
 	return lineToAnsi(textLine([
 		span("│", { fg: CATHEDRAL_TOKENS.colors.divider }),
-		" ",
-		span(text, { fg: CATHEDRAL_TOKENS.colors.foreground }),
-		" ",
+		span(body),
 		span("│", { fg: CATHEDRAL_TOKENS.colors.divider }),
 	]), { width });
 }
@@ -137,37 +139,103 @@ function frameBottom(width: number): string {
 	]), { width });
 }
 
+function renderSkillRow(block: Extract<ChatBlock, { type: "skill" }>): string {
+	return `[skill] ${block.name}${block.expanded ? " (expanded)" : " (⌘O to expand)"}`;
+}
+
+function renderQuestionRows(block: Extract<ChatBlock, { type: "question" }>): string[] {
+	return [`[question] ${block.question.prompt}`, ...block.question.choices.map((choice) => `- ${choice}`)];
+}
+
+function renderDelegationRows(block: Extract<ChatBlock, { type: "delegation" }>): string[] {
+	return [`[delegation] ${block.delegation.title} · ${block.delegation.status}`, ...(block.delegation.summary ? [block.delegation.summary] : [])];
+}
+
+function renderCodeRows(block: Extract<ChatBlock, { type: "code" }>, width: number): string[] {
+	return wrapPlainText(`\`\`\`${block.lang}\n${block.source}\n\`\`\``, width);
+}
+
+function renderBlockRows(blocks: readonly ChatBlock[], width: number): string[] {
+	const rows: string[] = [];
+	for (const block of blocks) {
+		if (rows.length > 0) rows.push("");
+		switch (block.type) {
+			case "markdown":
+				rows.push(...wrapPlainText(block.text, width));
+				break;
+			case "code":
+				rows.push(...renderCodeRows(block, width));
+				break;
+			case "tool":
+				rows.push(...renderToolBlockRows(block.tool, width));
+				break;
+			case "skill":
+				rows.push(renderSkillRow(block));
+				break;
+			case "question":
+				rows.push(...renderQuestionRows(block));
+				break;
+			case "delegation":
+				rows.push(...renderDelegationRows(block));
+				break;
+		}
+	}
+	return rows.length === 0 ? [""] : rows;
+}
+
 /** One V2 framed chat message. Markdown block parsing lands in #89/#90. */
 export class ChatMessage extends SumoNode {
 	public readonly timestamp: Date;
 	private measuring = false;
 	private lastMeasure: ChatMessageMeasure = { width: 0, height: 1 };
 
-	public constructor(yogaNode: YogaNode, public role: ChatMessageRole, public text: string, parent?: SumoNode, timestamp = new Date()) {
+	public constructor(
+		yogaNode: YogaNode,
+		public role: ChatMessageRole,
+		public text: string,
+		parent?: SumoNode,
+		timestamp = new Date(),
+		private blocks?: readonly ChatBlock[],
+	) {
 		super(yogaNode, parent);
 		this.timestamp = timestamp;
 		this.marginBottom = 1;
 		this.setMeasureFunc((width, widthMode, height, heightMode) => this.measure(width, widthMode, height, heightMode));
 	}
 
-	public static create(yoga: Yoga, role: ChatMessageRole, text: string, parent?: SumoNode, timestamp?: Date): ChatMessage {
-		return new ChatMessage(yoga.Node.create(), role, text, parent, timestamp);
+	public static create(yoga: Yoga, role: ChatMessageRole, text: string, parent?: SumoNode, timestamp?: Date, blocks?: readonly ChatBlock[]): ChatMessage {
+		return new ChatMessage(yoga.Node.create(), role, text, parent, timestamp, blocks);
 	}
 
 	public setText(text: string): void {
-		if (this.text === text) return;
+		if (this.text === text && this.blocks === undefined) return;
+		this.text = text;
+		this.blocks = undefined;
+		this.markDirty();
+	}
+
+	public setBlocks(blocks: readonly ChatBlock[], text: string): void {
+		this.blocks = blocks;
 		this.text = text;
 		this.markDirty();
 	}
 
+	public setToolExpansion(expanded: boolean): boolean {
+		if (!this.blocks?.some((block) => block.type === "tool" && Boolean(block.tool.expanded) !== expanded)) return false;
+		this.blocks = this.blocks.map((block) => block.type === "tool" ? { ...block, tool: { ...block.tool, expanded } } : block);
+		this.markDirty();
+		return true;
+	}
+
 	public appendText(chunk: string): void {
 		if (chunk.length === 0) return;
+		this.blocks = undefined;
 		this.text += chunk;
 		this.markDirty();
 	}
 
 	public toSnapshot(): ChatMessageSnapshot {
-		return { role: this.role, text: this.text, timestamp: this.timestamp };
+		return { role: this.role, text: this.text, timestamp: this.timestamp, blocks: this.blocks };
 	}
 
 	public getEstimatedHeight(width = this.getComputedWidth()): number {
@@ -188,7 +256,7 @@ export class ChatMessage extends SumoNode {
 		if (renderWidth < MIN_BOX_WIDTH) return [fitCellText(this.text, renderWidth)];
 
 		const bodyWidth = Math.max(1, renderWidth - 4);
-		const bodyRows = wrapPlainText(this.text, bodyWidth);
+		const bodyRows = this.blocks ? renderBlockRows(this.blocks, bodyWidth) : wrapPlainText(this.text, bodyWidth);
 		return [
 			frameTop(this.role, this.timestamp, renderWidth),
 			...bodyRows.map((row) => frameBody(row, renderWidth)),

@@ -101,6 +101,25 @@ describe("ChatPager", () => {
 		root.dispose();
 	});
 
+	it("renders structured tool blocks compact by default and expands them on demand", async () => {
+		const { root, chat, buffer } = await makeChat(90, 8);
+		chat.addViewModel({
+			id: "s1",
+			role: "sumo",
+			displayName: "SUMO",
+			blocks: [{ type: "tool", tool: { name: "read", status: "success", input: { path: "src/auth/session.ts" } } }],
+		});
+		let frame = buffer();
+		expect(frame.toPlainRow(1)).toContain("✓ [read]  src/auth/session.ts  · ⌘O expand");
+		expect(frame.toPlainRow(2)).toMatch(/^╰─+╯/);
+
+		chat.setToolExpansion(true);
+		frame = buffer();
+		expect(frame.toPlainRow(1)).toContain("╭─ [read]  src/auth/session.ts");
+		expect(frame.toPlainRow(2)).toContain("preview collapsed");
+		root.dispose();
+	});
+
 	it("accepts deterministic timestamps for fixture-backed visual states", async () => {
 		const { root, chat } = await makeChat();
 		const timestamp = new Date("2026-04-30T11:42:00Z");

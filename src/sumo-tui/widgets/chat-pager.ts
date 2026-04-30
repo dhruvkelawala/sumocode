@@ -19,6 +19,13 @@ export interface ChatPagerOptions {
 	readonly primaryAgentName?: string;
 }
 
+export interface ChatPagerReplaceStats {
+	readonly sourceMessages: number;
+	readonly acceptedMessages: number;
+	readonly renderedMessages: number;
+	readonly archivedMessages: number;
+}
+
 const DEFAULT_MAX_RENDERED_MESSAGES = 200;
 
 function noop(): void {}
@@ -27,6 +34,22 @@ function chatRoleFromViewModel(message: ChatMessageViewModel): ChatMessageRole {
 	const onlyToolBlocks = message.blocks.length > 0 && message.blocks.every((block) => block.type === "tool");
 	if (onlyToolBlocks) return "tool";
 	return message.role;
+}
+
+interface PreparedChatMessage {
+	readonly role: ChatMessageRole;
+	readonly text: string;
+	readonly timestamp?: Date;
+	readonly blocks: readonly ChatMessageViewModel["blocks"][number][];
+}
+
+function prepareChatMessage(message: ChatMessageViewModel): PreparedChatMessage {
+	return {
+		role: chatRoleFromViewModel(message),
+		text: chatMessageViewModelToPlainText(message),
+		timestamp: message.timestamp,
+		blocks: message.blocks,
+	};
 }
 
 /** Stateful chat scrollback wrapper: messages + ScrollBox + unread banner. */
@@ -40,6 +63,7 @@ export class ChatPager extends SumoNode {
 	private readonly chatMessageOptions: ChatMessageOptions;
 	private readonly activeMessages: ChatMessage[] = [];
 	private placeholder: ChatMessage | undefined;
+	private virtualArchivedCount = 0;
 	private unreadCount = 0;
 	private lastReadIndex = -1;
 	private previousManualScroll = false;
@@ -73,16 +97,49 @@ export class ChatPager extends SumoNode {
 	}
 
 	public addViewModel(message: ChatMessageViewModel): ChatMessage {
-		const role = chatRoleFromViewModel(message);
-		return this.addChatMessage(ChatMessage.create(
-			this.yoga,
-			role,
-			chatMessageViewModelToPlainText(message),
-			undefined,
-			message.timestamp,
-			message.blocks,
-			this.chatMessageOptions,
-		));
+		return this.addPreparedMessage(prepareChatMessage(message));
+	}
+
+	public replaceViewModels(messages: readonly ChatMessageViewModel[]): ChatPagerReplaceStats {
+		const previousHeight = this.scrollBox.scrollHeight;
+		const width = this.scrollBox.getComputedWidth();
+		const renderedWindow: PreparedChatMessage[] = [];
+		let acceptedMessages = 0;
+		for (const message of messages) {
+			const prepared = prepareChatMessage(message);
+			if (prepared.text.length === 0) continue;
+			const windowSlot = acceptedMessages % this.maxRenderedMessages;
+			acceptedMessages += 1;
+			if (renderedWindow.length < this.maxRenderedMessages) renderedWindow.push(prepared);
+			else renderedWindow[windowSlot] = prepared;
+		}
+		const windowStart = acceptedMessages > renderedWindow.length ? acceptedMessages % this.maxRenderedMessages : 0;
+		const orderedWindow = windowStart === 0 ? renderedWindow : [...renderedWindow.slice(windowStart), ...renderedWindow.slice(0, windowStart)];
+		this.disposeMessageNodes();
+		this.activeMessages.length = 0;
+		this.archivedMessages = [];
+		this.virtualArchivedCount = Math.max(0, acceptedMessages - renderedWindow.length);
+		this.placeholder = undefined;
+		this.unreadCount = 0;
+		this.previousManualScroll = false;
+		this.scrollBox.manualScroll = false;
+
+		for (const message of orderedWindow) {
+			this.activeMessages.push(this.createChatMessage(message));
+		}
+		if (this.virtualArchivedCount > 0) {
+			this.placeholder = this.createPlaceholder();
+		}
+		this.rebuildRenderedChildren();
+		this.lastReadIndex = this.getTotalMessageCount() - 1;
+		this.scrollBox.notifyContentChanged(this.getRenderedEstimatedHeight(width), previousHeight);
+		this.scheduleRender();
+		return {
+			sourceMessages: messages.length,
+			acceptedMessages,
+			renderedMessages: this.activeMessages.length,
+			archivedMessages: this.getArchivedMessageCount(),
+		};
 	}
 
 	public appendToLast(chunk: string): void {
@@ -142,13 +199,15 @@ export class ChatPager extends SumoNode {
 
 	public clearMessages(): void {
 		const previousHeight = this.scrollBox.scrollHeight;
-		for (const child of [...this.scrollBox.children]) this.scrollBox.removeChild(child);
+		this.disposeMessageNodes();
 		this.activeMessages.length = 0;
 		this.archivedMessages = [];
+		this.virtualArchivedCount = 0;
 		this.placeholder = undefined;
 		this.unreadCount = 0;
 		this.lastReadIndex = -1;
 		this.previousManualScroll = false;
+		this.scrollBox.manualScroll = false;
 		this.scrollBox.notifyContentChanged(0, previousHeight);
 		this.scheduleRender();
 	}
@@ -163,6 +222,10 @@ export class ChatPager extends SumoNode {
 
 	public getUnreadCount(): number {
 		return this.unreadCount;
+	}
+
+	public getArchivedMessageCount(): number {
+		return this.virtualArchivedCount + this.archivedMessages.length;
 	}
 
 	public getLastReadIndex(): number {
@@ -191,6 +254,22 @@ export class ChatPager extends SumoNode {
 		this.scrollBox.notifyContentChanged(addedLines + virtualized.addedLines, virtualized.removedLines);
 		this.scheduleRender();
 		return message;
+	}
+
+	private addPreparedMessage(message: PreparedChatMessage): ChatMessage {
+		return this.addChatMessage(this.createChatMessage(message));
+	}
+
+	private createChatMessage(message: PreparedChatMessage): ChatMessage {
+		return ChatMessage.create(
+			this.yoga,
+			message.role,
+			message.text,
+			undefined,
+			message.timestamp,
+			message.blocks,
+			this.chatMessageOptions,
+		);
 	}
 
 	private updateLast(message: ChatMessage, update: () => void): void {
@@ -236,10 +315,10 @@ export class ChatPager extends SumoNode {
 			archivedAny = true;
 		}
 
-		if (this.archivedMessages.length === 0) return { addedLines, removedLines };
-		const placeholderText = `── ${this.archivedMessages.length} earlier messages ──`;
+		if (this.getArchivedMessageCount() === 0) return { addedLines, removedLines };
+		const placeholderText = this.placeholderText();
 		if (!this.placeholder) {
-			this.placeholder = ChatMessage.create(this.yoga, "system", placeholderText, undefined, undefined, undefined, this.chatMessageOptions);
+			this.placeholder = this.createPlaceholder();
 			addedLines += this.placeholder.getEstimatedHeight(width);
 			this.rebuildRenderedChildren();
 		} else if (this.placeholder.text !== placeholderText) {
@@ -247,6 +326,27 @@ export class ChatPager extends SumoNode {
 		}
 		if (archivedAny && this.placeholder.parent !== this.scrollBox) this.rebuildRenderedChildren();
 		return { addedLines, removedLines };
+	}
+
+	private createPlaceholder(): ChatMessage {
+		return ChatMessage.create(this.yoga, "system", this.placeholderText(), undefined, undefined, undefined, this.chatMessageOptions);
+	}
+
+	private placeholderText(): string {
+		return `── ${this.getArchivedMessageCount()} earlier messages ──`;
+	}
+
+	private getRenderedEstimatedHeight(width: number): number {
+		let height = this.placeholder ? this.placeholder.getEstimatedHeight(width) : 0;
+		for (const message of this.activeMessages) height += message.getEstimatedHeight(width);
+		return height;
+	}
+
+	private disposeMessageNodes(): void {
+		const nodes = new Set<ChatMessage>([...this.activeMessages, ...this.archivedMessages]);
+		if (this.placeholder) nodes.add(this.placeholder);
+		for (const child of [...this.scrollBox.children]) this.scrollBox.removeChild(child);
+		for (const node of nodes) node.dispose();
 	}
 
 	private rebuildRenderedChildren(): void {
@@ -267,7 +367,7 @@ export class ChatPager extends SumoNode {
 	}
 
 	private getTotalMessageCount(): number {
-		return this.archivedMessages.length + this.activeMessages.length;
+		return this.getArchivedMessageCount() + this.activeMessages.length;
 	}
 
 	private getLastVisibleMessageIndex(): number {
@@ -277,14 +377,14 @@ export class ChatPager extends SumoNode {
 		const viewportBottom = viewportTop + this.scrollBox.viewportHeight;
 		let last = -1;
 		if (this.placeholder && this.placeholder.parent === this.scrollBox && this.nodeIntersectsViewport(this.placeholder, viewportTop, viewportBottom)) {
-			last = Math.max(last, this.archivedMessages.length - 1);
+			last = Math.max(last, this.getArchivedMessageCount() - 1);
 		}
 		for (let index = 0; index < this.activeMessages.length; index += 1) {
 			const message = this.activeMessages[index];
-			if (message && this.nodeIntersectsViewport(message, viewportTop, viewportBottom)) last = this.archivedMessages.length + index;
+			if (message && this.nodeIntersectsViewport(message, viewportTop, viewportBottom)) last = this.getArchivedMessageCount() + index;
 		}
 		if (last !== -1) return last;
-		return this.scrollBox.isAtBottom() ? total - 1 : Math.min(total - 1, this.archivedMessages.length);
+		return this.scrollBox.isAtBottom() ? total - 1 : Math.min(total - 1, this.getArchivedMessageCount());
 	}
 
 	private nodeIntersectsViewport(node: ChatMessage, viewportTop: number, viewportBottom: number): boolean {

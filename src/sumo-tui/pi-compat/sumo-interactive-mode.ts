@@ -43,6 +43,7 @@ import type { MouseEvent } from "../input/mouse.js";
 import { SelectionController } from "../input/selection.js";
 import { diffFrames } from "../render/diff.js";
 import { FrameScheduler } from "../runtime/frame-scheduler.js";
+import { emitResumeBudgetOverlay, measureMaybe, ResumeProfiler, type ResumeProfileMetadata } from "../runtime/resume-profiler.js";
 import { defaultTerminalSessionOwner, TerminalSessionOwner, type TerminalOutput } from "../runtime/terminal-controller.js";
 import { ChatPager } from "../widgets/chat-pager.js";
 import { SIDEBAR_MIN_TERMINAL_WIDTH } from "../../sidebar.js";
@@ -130,6 +131,7 @@ export class SumoInteractiveRuntime {
 	private activeEmptyChat = false;
 	private emptyChatUserMessageCount = 0;
 	private started = false;
+	private pendingResumeProfile: { profile: ResumeProfiler; metadata: ResumeProfileMetadata } | undefined;
 
 	public constructor(output: TerminalLike = process.stdout, terminalSession?: TerminalSessionOwner) {
 		this.output = output;
@@ -203,6 +205,14 @@ export class SumoInteractiveRuntime {
 		return this.selection.handleKey(event, frame);
 	}
 
+	public startResumeProfile(): ResumeProfiler {
+		return new ResumeProfiler();
+	}
+
+	public completeResumeHydration(profile: ResumeProfiler, metadata: ResumeProfileMetadata): void {
+		this.pendingResumeProfile = { profile, metadata };
+	}
+
 	private renderChatFrame(width: number, height: number): { frame: CellBuffer; lines: string[] } {
 		const safeWidth = Math.max(1, Math.floor(width));
 		const safeHeight = Math.max(1, Math.floor(height));
@@ -210,6 +220,7 @@ export class SumoInteractiveRuntime {
 			const empty = new CellBuffer(safeHeight, safeWidth);
 			return { frame: empty, lines: bufferToAnsiLines(empty) };
 		}
+		const root = this.root;
 		const selectionRevision = this.selection.getRevision();
 		const cached = this.chatFrameCache;
 		if (cached && cached.width === safeWidth && cached.height === safeHeight && cached.version === this.frameVersion && cached.selectionRevision === selectionRevision) {
@@ -217,13 +228,17 @@ export class SumoInteractiveRuntime {
 		}
 
 		this.syncChatSlot();
-		this.root.width = safeWidth;
-		this.root.height = safeHeight;
-		this.root.yogaNode.calculateLayout(safeWidth, safeHeight, DIRECTION_LTR);
-		const frame = new CellBuffer(safeHeight, safeWidth);
-		composite(this.root, frame, { selection: this.selection });
-		const lines = bufferToAnsiLines(frame);
+		root.width = safeWidth;
+		root.height = safeHeight;
+		const pendingProfile = this.claimPendingResumeProfile();
+		measureMaybe(pendingProfile?.profile, "yoga_first_layout", () => root.yogaNode.calculateLayout(safeWidth, safeHeight, DIRECTION_LTR));
+		const { frame, lines } = measureMaybe(pendingProfile?.profile, "first_frame_render", () => {
+			const nextFrame = new CellBuffer(safeHeight, safeWidth);
+			composite(root, nextFrame, { selection: this.selection });
+			return { frame: nextFrame, lines: bufferToAnsiLines(nextFrame) };
+		});
 		this.chatFrameCache = { width: safeWidth, height: safeHeight, version: this.frameVersion, selectionRevision, frame: frame.clone(), lines };
+		if (pendingProfile) this.finishPendingResumeProfile(pendingProfile);
 		return { frame: frame.clone(), lines: [...lines] };
 	}
 
@@ -243,6 +258,7 @@ export class SumoInteractiveRuntime {
 		this.previousFrame = undefined;
 		this.chatFrameCache = undefined;
 		this.externalRenderControls = undefined;
+		this.pendingResumeProfile = undefined;
 		this.scheduler = undefined;
 		this.chat = undefined;
 		this.splash = undefined;
@@ -314,23 +330,44 @@ export class SumoInteractiveRuntime {
 
 	private render(): void {
 		if (!this.root || !this.output.isTTY) return;
+		const root = this.root;
 		const width = Math.max(1, this.output.columns ?? 80);
 		const height = Math.max(1, this.output.rows ?? 24);
-		if (this.previousFrame && this.renderedVersion === this.frameVersion && this.renderedWidth === width && this.renderedHeight === height && !this.root.yogaNode.isDirty()) {
+		if (this.previousFrame && this.renderedVersion === this.frameVersion && this.renderedWidth === width && this.renderedHeight === height && !root.yogaNode.isDirty()) {
 			return;
 		}
 		this.syncChatSlot();
-		this.root.width = width;
-		this.root.height = height;
-		this.root.yogaNode.calculateLayout(width, height, DIRECTION_LTR);
-		const nextFrame = new CellBuffer(height, width);
-		const result = composite(this.root, nextFrame, { selection: this.selection });
-		const patches = diffFrames(this.previousFrame, nextFrame);
-		this.terminal.writeFramePatches(patches, result.hardwareCursor);
+		root.width = width;
+		root.height = height;
+		const pendingProfile = this.claimPendingResumeProfile();
+		measureMaybe(pendingProfile?.profile, "yoga_first_layout", () => root.yogaNode.calculateLayout(width, height, DIRECTION_LTR));
+		const nextFrame = measureMaybe(pendingProfile?.profile, "first_frame_render", () => {
+			const frame = new CellBuffer(height, width);
+			const compositeResult = composite(root, frame, { selection: this.selection });
+			const patches = diffFrames(this.previousFrame, frame);
+			this.terminal.writeFramePatches(patches, compositeResult.hardwareCursor);
+			return frame;
+		});
 		this.previousFrame = nextFrame.clone();
 		this.renderedVersion = this.frameVersion;
 		this.renderedWidth = width;
 		this.renderedHeight = height;
+		if (pendingProfile) this.finishPendingResumeProfile(pendingProfile);
+	}
+
+	private claimPendingResumeProfile(): { profile: ResumeProfiler; metadata: ResumeProfileMetadata } | undefined {
+		const pendingProfile = this.pendingResumeProfile;
+		if (!pendingProfile) return undefined;
+		// Resume can paint through the hybrid chat-frame path or the full retained
+		// root path. The first renderer to claim the profile is the user-visible
+		// transition owner; clearing here prevents a later render pass from
+		// appending unreported stages to the same profile.
+		this.pendingResumeProfile = undefined;
+		return pendingProfile;
+	}
+
+	private finishPendingResumeProfile(pendingProfile: { profile: ResumeProfiler; metadata: ResumeProfileMetadata }): void {
+		emitResumeBudgetOverlay(pendingProfile.profile.finish(pendingProfile.metadata));
 	}
 }
 

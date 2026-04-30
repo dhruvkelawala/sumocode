@@ -54,6 +54,8 @@
     "build": "tsc --noEmit",
     "test": "vitest run",
     "test:integration": "vitest run test/integration/",
+    "perf:resume": "vitest run src/sumo-tui/runtime/resume-flow.perf.test.ts",
+    "perf:resume:report": "node scripts/measure-resume-perf.mjs",
     "render:bible": "node scripts/render-bible.mjs",
     "export:bible-static": "node scripts/export-bible-static.mjs",
     "vitest": "vitest",

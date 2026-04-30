@@ -1,6 +1,7 @@
 import { parseSgrMouseStream, type MouseEvent } from "../input/mouse.js";
 import type { KeyEvent } from "../input/key-router.js";
 import { logDiagnostic } from "../runtime/diagnostics.js";
+import { measureMaybe, ResumeProfiler, type ResumeProfileMetadata } from "../runtime/resume-profiler.js";
 import { chatMessageViewModelFromPiMessage, chatMessageViewModelToPlainText, transcriptFromSessionContext, type ChatMessageViewModel } from "../transcript/view-model.js";
 import { ChatPager } from "../widgets/chat-pager.js";
 import { chatScrollCommandFromInput } from "../widgets/chat-scroll-command.js";
@@ -47,6 +48,8 @@ export interface ChatViewportRuntime {
 	noteUserMessage(): void;
 	handleSelectionMouse?(event: MouseEvent, width: number, height: number): boolean;
 	handleSelectionKey?(event: KeyEvent, width: number, height: number): boolean;
+	startResumeProfile?(): ResumeProfiler;
+	completeResumeHydration?(profile: ResumeProfiler, metadata: ResumeProfileMetadata): void;
 }
 
 interface ChatViewportBridgeRuntime extends ChatViewportRuntime {
@@ -279,12 +282,22 @@ export class ChatViewportController {
 	}
 
 	public renderSessionContext(sessionContext: unknown): void {
-		this.clear();
-		const messages = sessionMessages(sessionContext);
+		this.lastAssistantText = "";
+		this.pendingMouseInput = "";
+		// Resume uses bulk transcript replacement instead of `clear()` + per-message
+		// replay; `replaceViewModels()` resets the chat-side scroll/banner state.
+		const profile = this.runtime.startResumeProfile?.();
+		const messages = measureMaybe(profile, "session_scan", () => sessionMessages(sessionContext));
 		this.runtime.setEmptyChatQuoteState({ active: messages.length === 0, userMessageCount: countUserMessages(messages) });
-		for (const message of transcriptFromSessionContext(sessionContext).messages) {
-			if (chatMessageViewModelToPlainText(message).length === 0) continue;
-			addViewModel(this.chat, message);
+		const transcript = measureMaybe(profile, "transcript_model", () => transcriptFromSessionContext(sessionContext));
+		const stats = measureMaybe(profile, "transcript_hydrate", () => this.chat.replaceViewModels(transcript.messages));
+		if (profile) {
+			this.runtime.completeResumeHydration?.(profile, {
+				sourceMessages: messages.length,
+				acceptedMessages: stats.acceptedMessages,
+				renderedMessages: stats.renderedMessages,
+				archivedMessages: stats.archivedMessages,
+			});
 		}
 	}
 

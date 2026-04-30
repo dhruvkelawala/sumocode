@@ -1,0 +1,52 @@
+name: perf
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+on:
+  pull_request:
+    paths:
+      - "src/**"
+      - "test/**"
+      - "scripts/measure-resume-perf.mjs"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - ".github/workflows/perf.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "src/**"
+      - "test/**"
+      - "scripts/measure-resume-perf.mjs"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - ".github/workflows/perf.yml"
+  workflow_dispatch:
+
+jobs:
+  resume:
+    name: resume p95 budget
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.29.2
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Resume perf budget
+        run: pnpm perf:resume

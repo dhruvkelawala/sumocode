@@ -237,10 +237,10 @@ class CathedralEditor extends CustomEditor {
 				// Preserve Pi's zero-width cursor marker while painting our ghost text.
 				// Without this, TUI.positionHardwareCursor() sees no marker on the
 				// splash empty state and emits \x1b[?25l after every render.
-				const prompt = ` ${color(">", CATHEDRAL_TOKENS.colors.accent)} `;
+				const prompt = ` ${color(">", CATHEDRAL_TOKENS.colors.accent)} ${CURSOR_MARKER}`;
 				const maxPlaceholder = Math.max(0, frameWidth - 2 - visibleLength(prompt));
 				const placeholder = ellipsize(INPUT_FRAME_PLACEHOLDER, maxPlaceholder);
-				const ghost = `${prompt}${color(`${placeholder}${CURSOR_MARKER}`, CATHEDRAL_TOKENS.colors.foregroundDim)}`;
+				const ghost = `${prompt}${color(placeholder, CATHEDRAL_TOKENS.colors.foregroundDim)}`;
 				return fullRow(wrapRow(ghost, frameWidth, paintFrameBackground));
 			}
 			if (!splash) return wrapActiveRow(row, frameWidth, paintFrameBackground, isFirstContent);

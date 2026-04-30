@@ -5,6 +5,8 @@ import { chatScrollCommandFromInput } from "../widgets/chat-scroll-command.js";
 import { SIDEBAR_MIN_TERMINAL_WIDTH, SIDEBAR_WIDTH } from "../../sidebar.js";
 
 const CHAT_VIEWPORT_BRIDGE_INSTALLED = Symbol("sumo-tui.chat-viewport-bridge-installed");
+const PORTRAIT_STATUS_MIN_WIDTH = 80;
+const PORTRAIT_CHAT_GUTTER_MIN_WIDTH = 80;
 
 interface PiRenderableComponent {
 	render(width: number): string[];
@@ -189,7 +191,12 @@ export class ChatViewportController {
 		// right-side cols come from Pi's separate widget paint.
 		const terminalWidth = Math.max(1, Math.floor(width));
 		const sidebarVisible = terminalWidth >= SIDEBAR_MIN_TERMINAL_WIDTH && this.chat.hasMessages();
-		const effectiveWidth = sidebarVisible ? Math.max(1, terminalWidth - SIDEBAR_WIDTH) : terminalWidth;
+		const portraitGutterVisible = !sidebarVisible && this.chat.hasMessages() && terminalWidth < PORTRAIT_CHAT_GUTTER_MIN_WIDTH;
+		const effectiveWidth = sidebarVisible
+			? Math.max(1, terminalWidth - SIDEBAR_WIDTH)
+			: portraitGutterVisible
+				? Math.max(1, terminalWidth - 1)
+				: terminalWidth;
 		this.lastChatWidth = effectiveWidth;
 		this.lastChatTop = this.computeChatTop(this.lastChatWidth);
 		this.lastChatHeight = this.computeChatHeight(this.lastChatWidth);
@@ -388,6 +395,8 @@ export function installChatViewportBridge(upstream: unknown, runtime: ChatViewpo
 	const originalRender = chatContainer.render?.bind(chatContainer);
 	const originalClear = chatContainer.clear?.bind(chatContainer);
 	const originalInvalidate = chatContainer.invalidate?.bind(chatContainer);
+	const statusContainer = target.statusContainer as (PiRenderableComponent & { render?: (width: number) => string[] }) | undefined;
+	const originalStatusRender = statusContainer?.render?.bind(statusContainer);
 	const originalHandleEvent = target.handleEvent?.bind(target);
 	const originalRenderSessionContext = target.renderSessionContext?.bind(target);
 	const removeInputListener = target.ui?.addInputListener?.((data) => controller.handleInput(data));
@@ -411,6 +420,16 @@ export function installChatViewportBridge(upstream: unknown, runtime: ChatViewpo
 		originalInvalidate?.();
 		runtime.requestRender();
 	};
+	if (statusContainer && originalStatusRender) {
+		statusContainer.render = (width: number): string[] => {
+			const terminalWidth = target.ui?.terminal?.columns ?? width;
+			// Portrait V1 Bible rhythm reserves the pre-input row as breathing
+			// space. Suppress Pi's loader/status row at compact widths so the input,
+			// hint, and footer land on the target rows.
+			if (terminalWidth < PORTRAIT_STATUS_MIN_WIDTH) return [];
+			return originalStatusRender(width);
+		};
+	}
 	if (originalHandleEvent) {
 		target.handleEvent = async (event: unknown): Promise<unknown> => {
 			controller.handleAgentEvent(event);
@@ -433,6 +452,7 @@ export function installChatViewportBridge(upstream: unknown, runtime: ChatViewpo
 		else delete chatContainer.clear;
 		if (originalInvalidate) chatContainer.invalidate = originalInvalidate;
 		else delete chatContainer.invalidate;
+		if (statusContainer && originalStatusRender) statusContainer.render = originalStatusRender;
 		if (originalHandleEvent) target.handleEvent = originalHandleEvent;
 		if (originalRenderSessionContext) target.renderSessionContext = originalRenderSessionContext;
 		delete target[CHAT_VIEWPORT_BRIDGE_INSTALLED];

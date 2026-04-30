@@ -46,6 +46,7 @@ type GitRunner = (args: string[], cwd: string) => string;
 const RESET = "\u001b[0m";
 const SPLASH_VERSION_TOP_GAP_ROWS = 2;
 const SPLASH_VERSION_BOTTOM_GAP_ROWS = 7;
+const PORTRAIT_FOOTER_PAD_WIDTH = 80;
 
 export function colorHex(text: string, hex: string): string {
 	const normalized = hex.replace("#", "");
@@ -97,6 +98,20 @@ export function resolveGitBranch(cwd: string, runGit: GitRunner = defaultGitRunn
  * when the sidebar is hidden.
  */
 export function formatFooterLine(snapshot: FooterSnapshot, width = 160): string {
+	const compactPad = width > 2 && width < PORTRAIT_FOOTER_PAD_WIDTH;
+	const contentWidth = compactPad ? width - 2 : width;
+	const inner = formatFooterLineInner(snapshot, contentWidth);
+	if (!compactPad) return inner;
+	return ` ${padAnsiToWidth(inner, contentWidth)} `;
+}
+
+function padAnsiToWidth(line: string, width: number): string {
+	const visible = visibleWidth(line);
+	if (visible >= width) return truncateToWidth(line, width);
+	return `${line}${" ".repeat(width - visible)}`;
+}
+
+function formatFooterLineInner(snapshot: FooterSnapshot, width: number): string {
 	const dot = colorHex("●", CATHEDRAL_TOKENS.colors.states[snapshot.state]);
 	const stateLabel = colorHex(VOICE.status[snapshot.state], CATHEDRAL_TOKENS.colors.foreground);
 	const model = colorHex(snapshot.modelId, CATHEDRAL_TOKENS.colors.foreground);

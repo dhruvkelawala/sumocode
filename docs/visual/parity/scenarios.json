@@ -46,6 +46,36 @@
 			"cols": 160,
 			"rows": 1
 		},
+		"portrait-top-bar": {
+			"x": 0,
+			"y": 1,
+			"cols": 60,
+			"rows": 1
+		},
+		"portrait-chat-area": {
+			"x": 0,
+			"y": 3,
+			"cols": 60,
+			"rows": 89
+		},
+		"portrait-input-frame": {
+			"x": 0,
+			"y": 93,
+			"cols": 60,
+			"rows": 3
+		},
+		"portrait-hint-row": {
+			"x": 0,
+			"y": 96,
+			"cols": 60,
+			"rows": 1
+		},
+		"portrait-footer": {
+			"x": 0,
+			"y": 98,
+			"cols": 60,
+			"rows": 1
+		},
 		"input-component-frame": {
 			"x": 0,
 			"y": 0,
@@ -313,7 +343,9 @@
 					"SUMO_TUI": "1",
 					"TERM": "xterm-256color",
 					"COLORTERM": "truecolor",
-					"FORCE_COLOR": "3"
+					"FORCE_COLOR": "3",
+					"COLUMNS": "60",
+					"LINES": "100"
 				},
 				"inputs": [
 					{
@@ -339,6 +371,32 @@
 					"id": "full",
 					"targetCrop": "full",
 					"runtimeCrop": "full"
+				},
+				{
+					"id": "top-bar",
+					"targetCrop": "portrait-top-bar",
+					"runtimeCrop": "portrait-top-bar"
+				},
+				{
+					"id": "chat-area",
+					"targetCrop": "portrait-chat-area",
+					"runtimeCrop": "portrait-chat-area"
+				},
+				{
+					"id": "input-frame",
+					"targetImage": "04-active-input-empty-portrait.png",
+					"targetCrop": "full",
+					"runtimeCrop": "portrait-input-frame"
+				},
+				{
+					"id": "hint-row",
+					"targetCrop": "portrait-hint-row",
+					"runtimeCrop": "portrait-hint-row"
+				},
+				{
+					"id": "footer",
+					"targetCrop": "portrait-footer",
+					"runtimeCrop": "portrait-footer"
 				}
 			]
 		}

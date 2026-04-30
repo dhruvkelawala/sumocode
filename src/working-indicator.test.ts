@@ -6,6 +6,7 @@ import {
 	formatSpinnerInspection,
 	indicatorFrameAt,
 	renderIndicator,
+	shouldInstallWorkingIndicator,
 } from "./working-indicator.js";
 
 const ANSI_PATTERN = /\u001b\[[0-9;]*m/g;
@@ -68,6 +69,15 @@ describe("renderIndicator", () => {
 		// half the loop retraces. Every frame must be unique within the cycle.
 		const seen = new Set(CATHEDRAL_INDICATOR_FRAMES);
 		expect(seen.size).toBe(CATHEDRAL_INDICATOR_FRAMES.length);
+	});
+});
+
+describe("shouldInstallWorkingIndicator", () => {
+	it("keeps the working row out of portrait 60-column scenes", () => {
+		expect(shouldInstallWorkingIndicator(60)).toBe(false);
+		expect(shouldInstallWorkingIndicator(79)).toBe(false);
+		expect(shouldInstallWorkingIndicator(80)).toBe(true);
+		expect(shouldInstallWorkingIndicator(160)).toBe(true);
 	});
 });
 

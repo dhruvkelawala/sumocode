@@ -13,8 +13,8 @@
  *
  * When `hidden` is true (set via /sumo:tabs hide), only SUMOCODE renders.
  *
- * At narrow widths, regions are dropped right-to-left: icons → ARCHIVE → recents.
- * SUMOCODE + active session always survive.
+ * At compact portrait widths, recents + ARCHIVE collapse first and the right
+ * icons survive when space allows. SUMOCODE + active session always survive.
  *
  * Pure render only. Pi-glue is in `installTopChrome` below.
  */
@@ -66,6 +66,8 @@ const ICON_GAP = "  ";
 const ARCHIVE_LABEL = "ARCHIVE";
 const OUTER_PAD = 1;
 const BRAND_ACTIVE_GAP = 2;
+const COMPACT_TOP_CHROME_WIDTH = 80;
+const PORTRAIT_CHROME_BREATHING_WIDTH = 80;
 const DOT_GLYPHS: Record<TopChromeDotSize, string> = {
 	small: "·",
 	medium: "•",
@@ -123,8 +125,8 @@ function padToWidth(text: string, width: number): string {
  *   4. ARCHIVE link
  *   5. Icons block (right-aligned)
  *
- * At narrow widths, regions drop right-to-left in reverse priority order
- * (icons first, then ARCHIVE, then recents).
+ * At compact portrait widths, the chrome keeps brand + active session + icons
+ * and drops recents/ARCHIVE so 60-column scenes remain readable.
  */
 export function renderTopChrome(snapshot: TopChromeSnapshot, width: number): string {
 	if (width <= 0) return "";
@@ -155,23 +157,26 @@ export function renderTopChrome(snapshot: TopChromeSnapshot, width: number): str
 	}
 	let consumed = brandLen + BRAND_ACTIVE_GAP + visibleLength(active);
 	let line = `${brand}${" ".repeat(BRAND_ACTIVE_GAP)}${active}`;
+	const compact = innerWidth < COMPACT_TOP_CHROME_WIDTH;
 
-	// Try to fit recent sessions one at a time.
-	for (const recent of snapshot.recentSessions) {
-		const seg = recentSegment(recent.label);
-		const segLen = visibleLength(seg);
-		if (consumed + segLen > width) break;
-		line += seg;
-		consumed += segLen;
-	}
-
-	// Try to fit ARCHIVE link.
-	{
-		const seg = archiveSegment();
-		const segLen = visibleLength(seg);
-		if (consumed + segLen <= width) {
+	if (!compact) {
+		// Try to fit recent sessions one at a time.
+		for (const recent of snapshot.recentSessions) {
+			const seg = recentSegment(recent.label);
+			const segLen = visibleLength(seg);
+			if (consumed + segLen > width) break;
 			line += seg;
 			consumed += segLen;
+		}
+
+		// Try to fit ARCHIVE link.
+		{
+			const seg = archiveSegment();
+			const segLen = visibleLength(seg);
+			if (consumed + segLen <= width) {
+				line += seg;
+				consumed += segLen;
+			}
 		}
 	}
 
@@ -187,6 +192,20 @@ export function renderTopChrome(snapshot: TopChromeSnapshot, width: number): str
 	}
 
 	return `${outerPad}${padToWidth(line, innerWidth)}${outerPad}`;
+}
+
+/**
+ * Runtime block wrapper. Portrait Bible scenes reserve one blank breathing row
+ * above and below the top chrome, while wider scenes keep the previously
+ * approved one-row landscape chrome.
+ */
+export function renderTopChromeBlock(snapshot: TopChromeSnapshot, width: number): string[] {
+	const line = renderTopChrome(snapshot, width);
+	if (width > 0 && width < PORTRAIT_CHROME_BREATHING_WIDTH) {
+		const blank = " ".repeat(width);
+		return [blank, line, blank];
+	}
+	return [line];
 }
 
 // ============================================================================
@@ -222,7 +241,7 @@ export function installTopChrome(pi: ExtensionAPI, loader?: TopChromeLoader): vo
 				render(width: number): string[] {
 					if (!sessionHasMessages(ctx)) return [];
 					const snap = loader ? loader() : defaultSnapshot(ctx, state);
-					return [renderTopChrome(snap, width)];
+					return renderTopChromeBlock(snap, width);
 				},
 			};
 		});

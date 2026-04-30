@@ -64,6 +64,7 @@ describe("installInputHints", () => {
 		// Active state: branch contains a real message entry
 		const ctx = {
 			hasUI: true,
+			cwd: "/tmp/sumocode",
 			ui: { setWidget },
 			sessionManager: { getBranch: () => [{ type: "message" }] },
 		} as unknown;
@@ -74,9 +75,18 @@ describe("installInputHints", () => {
 		const lines = component!.render(80);
 		expect(lines.length).toBe(1);
 		const stripped = lines[0]!.replace(/\u001b\[[0-9;]*m/g, "");
+		expect(stripped).toContain("sumocode");
 		expect(stripped).toContain("CTRL+/ · COMMANDS");
 		expect(stripped).not.toContain("TAB · AGENTS");
 		expect(stripped).not.toContain("AWAITING PROMPT");
+
+		const portraitLines = component!.render(60).map((line) => line.replace(/\u001b\[[0-9;]*m/g, ""));
+		expect(portraitLines).toHaveLength(2);
+		expect(portraitLines[0]).toHaveLength(60);
+		expect(portraitLines[0]!.startsWith(" ")).toBe(true);
+		expect(portraitLines[0]!.endsWith(" ")).toBe(true);
+		expect(portraitLines[0]).toContain("CTRL+/ · COMMANDS");
+		expect(portraitLines[1]).toBe(" ".repeat(60));
 	});
 
 	it("widget factory renders BOTH hints on splash (no messages yet)", () => {

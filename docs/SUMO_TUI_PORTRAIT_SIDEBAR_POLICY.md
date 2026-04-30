@@ -74,7 +74,7 @@ For the canonical `60 × 100` portrait scene:
 
 ### Visual harness
 
-`active-portrait-runtime` remains a no-sidebar scene. It should not add a sidebar crop or bottom-registry crop in V1.
+`active-portrait-runtime` remains a no-sidebar scene. It should not add a sidebar crop or bottom-registry crop in V1. It should include crop-level review evidence for the portrait top bar, chat area, input frame, hint row, and footer so #87 can be reviewed with the same harness ergonomics as landscape.
 
 Future V2 portrait richness must get its own issue, Bible target, scenario manifest update, and human visual approval before becoming required.
 

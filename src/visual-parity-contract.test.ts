@@ -118,6 +118,7 @@ describe("V2 visual parity contract", () => {
 	it("keeps fixture scenes deterministic and review-only", () => {
 		expect(scenario("fixture-completed-landscape")).toMatchObject({ status: "review" });
 		expect(scenario("fixture-completed-portrait")).toMatchObject({ status: "review" });
+		expect(scenario("fixture-command-palette-overlay")).toMatchObject({ status: "review" });
 		expect(scenario("fixture-tool-ledger-landscape")).toMatchObject({ status: "review" });
 		expect(scenario("fixture-completed-landscape").crops.map((crop) => crop.id)).toEqual([
 			"full",
@@ -128,6 +129,8 @@ describe("V2 visual parity contract", () => {
 			"hint-row",
 			"footer",
 		]);
+		expect(scenario("fixture-command-palette-overlay").crops.map((crop) => crop.id)).toEqual(["full", "overlay-center"]);
+		expect(cropDefinition("overlay-center")).toEqual({ x: 40, y: 14, cols: 80, rows: 17 });
 	});
 
 	it("keeps required crop gates backed by committed runtime goldens", () => {

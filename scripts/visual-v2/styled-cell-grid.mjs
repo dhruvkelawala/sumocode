@@ -17,8 +17,7 @@ const FG_CLASS_MAP = {
 	"fg-accent":   "#D97706",
 	"fg-fg":       "#F5E6C8",
 	"fg-dim":      "#8B7A63",
-	"fg-divider":  "#3A2F25",  // Bible uses --divider-mockup (#5A4D3C) for legibility;
-	                            // runtime uses --divider (#3A2F25). We normalize to runtime.
+	"fg-divider":  "#5A4D3C",
 	"fg-comment":  "#6F5D46",
 	"fg-idle":     "#22C55E",  // Bible uses --state-idle (#7FB069); runtime token is #22C55E.
 	                            // TODO: reconcile once runtime palette is final.
@@ -46,8 +45,6 @@ const DEFAULT_BG = "#1A1511";
  * These pairs are treated as equivalent during diff.
  */
 const EQUIVALENT_PAIRS = [
-	// divider: Bible uses mockup-bumped contrast, runtime uses production value
-	{ bible: "#5A4D3C", runtime: "#3A2F25", reason: "divider-mockup vs divider" },
 	// idle state: Bible tokens.css has #7FB069, runtime CATHEDRAL_TOKENS uses #22C55E
 	{ bible: "#7FB069", runtime: "#22C55E", reason: "state-idle palette difference" },
 ];
@@ -68,13 +65,25 @@ function colorsEquivalent(a, b) {
 
 // ── Bible HTML → StyledCell[][] ───────────────────────────────────
 
-const TAG_OPEN = /<span\s+class="([^"]*)"(?:\s+style="[^"]*")?>/g;
+const TAG_OPEN = /<span\s+class="([^"]*)"(?:\s+style="([^"]*)")?>/g;
 const TAG_CLOSE = /<\/span>/g;
 const ALL_TAGS = /<\/?[^>]+>/g;
 const HTML_ENTITY = /&(amp|lt|gt|quot|#39|#x27|nbsp);/g;
 const ENTITY_MAP = { amp: "&", lt: "<", gt: ">", quot: '"', "#39": "'", "#x27": "'", nbsp: " " };
 
 function decodeEntity(_, e) { return ENTITY_MAP[e] ?? _; }
+
+function bgFromStyle(style) {
+	if (style.includes("background: var(--surface-recess)")) return "#120D0A";
+	if (style.includes("background: var(--surface)")) return "#241D17";
+	if (style.includes("background: var(--surface-lifted)")) return "#3D3024";
+	if (style.includes("background: var(--accent)")) return "#D97706";
+	return null;
+}
+
+function parentBgFromAttrs(attrs) {
+	return bgFromStyle(attrs) ?? DEFAULT_BG;
+}
 
 /**
  * Parse a single Bible HTML line (contents of a <pre class="grid">)
@@ -98,15 +107,18 @@ function parseBibleLine(html, parentBg = DEFAULT_BG) {
 		const openMatch = TAG_OPEN.exec(html);
 		if (openMatch && openMatch.index === pos) {
 			const classes = openMatch[1].split(/\s+/);
+			const style = openMatch[2] ?? "";
 			let newFg = fg;
 			let newBg = bg;
 			let newBold = bold;
 			for (const cls of classes) {
 				if (FG_CLASS_MAP[cls]) newFg = FG_CLASS_MAP[cls];
 				if (BG_CLASS_MAP[cls]) newBg = BG_CLASS_MAP[cls];
-				if (cls === "box-fill") newBg = "#120D0A"; // surface-recess
+				if (cls === "box-fill") newBg = bgFromStyle(style) ?? "#120D0A";
 				if (cls === "cursor") { newBg = "#D97706"; newFg = DEFAULT_BG; }
 			}
+			if (style.includes("background: var(--accent)")) newBg = "#D97706";
+			if (style.includes("color: var(--background)")) newFg = DEFAULT_BG;
 			fgStack.push(newFg);
 			bgStack.push(newBg);
 			boldStack.push(newBold);
@@ -157,6 +169,86 @@ function parseBibleLine(html, parentBg = DEFAULT_BG) {
 	return cells;
 }
 
+function parseGridContent(content, parentBg = DEFAULT_BG) {
+	return content.split("\n").map((line) => parseBibleLine(line, parentBg));
+}
+
+function emptyStyledGrid(cols, rows) {
+	const grid = [];
+	for (let row = 0; row < rows; row++) {
+		grid.push(Array.from({ length: cols }, () => ({ char: " ", fg: DEFAULT_FG, bg: DEFAULT_BG, bold: false, dim: false })));
+	}
+	return grid;
+}
+
+function writeCells(target, startRow, startCol, sourceRows) {
+	for (let row = 0; row < sourceRows.length; row++) {
+		const targetRow = target[startRow + row];
+		if (!targetRow) continue;
+		const source = sourceRows[row] ?? [];
+		for (let col = 0; col < source.length; col++) {
+			if (startCol + col >= 0 && startCol + col < targetRow.length) targetRow[startCol + col] = source[col];
+		}
+	}
+}
+
+const PRE_GRID_PATTERN = /<pre class="grid"([^>]*)>([\s\S]*?)<\/pre>/g;
+
+function extractPreGridRows(html, parentBg = DEFAULT_BG) {
+	return [...html.matchAll(PRE_GRID_PATTERN)].flatMap((match) => parseGridContent(match[2], parentBgFromAttrs(match[1]) ?? parentBg));
+}
+
+function parseScenePaletteOverlayGrid(html, cols, rows) {
+	const grid = emptyStyledGrid(cols, rows);
+	const gridRowStarts = new Map([
+		[1, 0],
+		[2, 1],
+		[3, 2],
+		[5, 37],
+		[6, 38],
+		[7, 41],
+		[8, 42],
+		[9, 43],
+		[10, 44],
+	]);
+
+	for (const match of html.matchAll(PRE_GRID_PATTERN)) {
+		const attrs = match[1] ?? "";
+		const gridRow = attrs.match(/grid-row:\s*(\d+)/)?.[1];
+		if (!gridRow) continue;
+		const startRow = gridRowStarts.get(Number(gridRow));
+		if (startRow === undefined) continue;
+		writeCells(grid, startRow, 0, parseGridContent(match[2], parentBgFromAttrs(attrs)));
+	}
+
+	const chatMatch = html.match(/<div class="chat-col">([\s\S]*?)<\/div>\s*<div class="gutter-col">/);
+	if (chatMatch) {
+		let row = 3;
+		for (const match of chatMatch[1].matchAll(PRE_GRID_PATTERN)) {
+			const parsed = parseGridContent(match[2], parentBgFromAttrs(match[1] ?? ""));
+			writeCells(grid, row, 0, parsed);
+			row += parsed.length;
+		}
+	}
+
+	const sidebarMatch = html.match(/<div class="sidebar-col">([\s\S]*?)<\/div>\s*<\/div>/);
+	if (sidebarMatch) {
+		const sidebarRows = extractPreGridRows(sidebarMatch[1], DEFAULT_BG);
+		writeCells(grid, 3, 130, sidebarRows);
+	}
+
+	const modalMatch = html.match(/<div class="modal-overlay"[\s\S]*?<pre class="grid"([^>]*)>([\s\S]*?)<\/pre><\/div>/);
+	if (modalMatch) {
+		const modalRows = parseGridContent(modalMatch[2], parentBgFromAttrs(modalMatch[1] ?? "") || "#3D3024");
+		const modalWidth = Math.max(0, ...modalRows.map((row) => row.length));
+		const top = Math.max(0, Math.floor((rows - modalRows.length) / 2));
+		const left = Math.max(0, Math.floor((cols - modalWidth) / 2));
+		writeCells(grid, top, left, modalRows);
+	}
+
+	return { cols, rows, grid };
+}
+
 /**
  * Parse a full Bible HTML file into a StyledCell[][] grid.
  */
@@ -167,6 +259,10 @@ export function parseBibleStyledGrid(htmlPath) {
 	const rowsMatch = html.match(/--term-rows:\s*(\d+)/);
 	const cols = colsMatch ? parseInt(colsMatch[1], 10) : 160;
 	const rows = rowsMatch ? parseInt(rowsMatch[1], 10) : 45;
+
+	if (htmlPath.endsWith("scene-palette-overlay.html")) {
+		return parseScenePaletteOverlayGrid(html, cols, rows);
+	}
 
 	// Extract grid blocks in document order
 	const gridPattern = /<pre class="grid"[^>]*>([\s\S]*?)<\/pre>/g;
@@ -184,8 +280,7 @@ export function parseBibleStyledGrid(htmlPath) {
 	for (const grid of allGrids) {
 		const content = grid[1];
 		// Detect parent bg from inline style (box-fill backgrounds)
-		const bgMatch = grid[0].match(/background:\s*var\(--surface-recess\)/);
-		const parentBg = bgMatch ? "#120D0A" : DEFAULT_BG;
+		const parentBg = parentBgFromAttrs(grid[0]);
 		// Split on literal newlines inside <pre> — each is a terminal row
 		const lines = content.split("\n");
 		for (const line of lines) {
@@ -227,6 +322,20 @@ export function runtimeStyledGrid(snapshot) {
 		grid.push(outRow);
 	}
 	return { cols: snapshot.cols, rows: snapshot.rows, grid };
+}
+
+export function cropStyledGrid(source, crop) {
+	if (!crop || crop.kind === "full") return source;
+	const grid = [];
+	for (let row = 0; row < crop.rows; row++) {
+		const srcRow = source.grid[crop.y + row] ?? [];
+		const outRow = [];
+		for (let col = 0; col < crop.cols; col++) {
+			outRow.push(srcRow[crop.x + col] ?? { char: " ", fg: DEFAULT_FG, bg: DEFAULT_BG, bold: false, dim: false });
+		}
+		grid.push(outRow);
+	}
+	return { cols: crop.cols, rows: crop.rows, grid };
 }
 
 // ── Diff ──────────────────────────────────────────────────────────

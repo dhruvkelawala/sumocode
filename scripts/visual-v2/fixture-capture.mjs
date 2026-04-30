@@ -1,5 +1,6 @@
 import { createJiti } from "@mariozechner/jiti";
 import { visibleWidth } from "@mariozechner/pi-tui";
+import { sliceByColumn } from "@mariozechner/pi-tui/dist/utils.js";
 import { repoRoot } from "./paths.mjs";
 
 const jiti = createJiti(import.meta.url, {
@@ -224,15 +225,16 @@ async function renderFixtureScene(scenario, fixture) {
 	}
 	scene.push(...bottomRows);
 	const fitted = fitRows(scene, cols, rows);
-	return fixture.overlay ? await applyOverlay(fitted, cols, rows, fixture.overlay) : fitted;
+	const overlay = scenario.fixture?.overlay ?? fixture.overlay;
+	return overlay ? await applyOverlay(fitted, cols, rows, overlay) : fitted;
 }
 
 async function applyOverlay(lines, cols, rows, overlay) {
 	if (overlay !== "command-palette") throw new Error(`Unsupported fixture overlay: ${overlay}`);
 	const palette = await jiti.import(`${repoRoot}/src/command-palette.ts`);
 
-	// Bible command palette is rendered by Pi's overlay system which centers
-	// the component at 60% terminal width. We replicate that here.
+	// Bible command palette is rendered by Pi's overlay system as a centered
+	// 80-column panel. We replicate that here.
 	const paletteWidth = palette.resolveCommandPaletteWidth(cols);
 	const overlayLines = palette.renderCommandPalette({
 		searchQuery: "",
@@ -250,11 +252,10 @@ async function applyOverlay(lines, cols, rows, overlay) {
 		// Splice the overlay into the middle of the existing row content,
 		// preserving the left margin and right remnant.
 		const existingLine = next[top + index] ?? "";
-		const leftPad = " ".repeat(left);
 		const rightStart = left + paletteWidth;
-		// Approximate: keep right side of original row if it extends past overlay
-		const rightRemnant = rightStart < cols ? " ".repeat(cols - rightStart) : "";
-		next[top + index] = padAnsiToWidth(`${leftPad}${overlayLine}${rightRemnant}`, cols);
+		const leftRemnant = padAnsiToWidth(sliceByColumn(existingLine, 0, left, true), left);
+		const rightRemnant = rightStart < cols ? sliceByColumn(existingLine, rightStart, cols - rightStart, true) : "";
+		next[top + index] = padAnsiToWidth(`${leftRemnant}${overlayLine}${rightRemnant}`, cols);
 	}
 	return next;
 }

@@ -32,19 +32,35 @@ function snapshot(overrides: Partial<CommandPaletteSnapshot> = {}): CommandPalet
 }
 
 describe("renderCommandPalette", () => {
-	it("renders the five mode rows in fixed order", () => {
+	it("renders the six Scriptorium mode rows in fixed order", () => {
 		const lines = plain(renderCommandPalette(snapshot(), 80)).join("\n");
 		expect(lines.indexOf("SESSION")).toBeLessThan(lines.indexOf("MODEL"));
 		expect(lines.indexOf("MODEL")).toBeLessThan(lines.indexOf("THINKING"));
 		expect(lines.indexOf("THINKING")).toBeLessThan(lines.indexOf("MEMORY"));
 		expect(lines.indexOf("MEMORY")).toBeLessThan(lines.indexOf("THEME"));
+		expect(lines.indexOf("THEME")).toBeLessThan(lines.indexOf("SETTINGS"));
 	});
 
-	it("marks the active row with accent block rails", () => {
+	it("renders the Scriptorium title, search prompt, and 17-row panel", () => {
+		const lines = plain(renderCommandPalette(snapshot({ activeIndex: 1 }), 80));
+		expect(lines).toHaveLength(17);
+		expect(lines.join("\n")).toContain("✾  COMMAND PALETTE  ✾");
+		expect(lines.join("\n")).toContain("❯   what shall we attend to…");
+		expect(lines.every((line) => line.length === 80)).toBe(true);
+	});
+
+	it("marks the active row with the Scriptorium accent floret", () => {
 		const lines = renderCommandPalette(snapshot({ activeIndex: 1 }), 80);
 		const activeLine = lines.find((line) => line.replace(ANSI, "").includes("MODEL"));
-		expect(activeLine).toContain("\u001b[38;2;217;119;6m█");
-		expect(activeLine?.replace(ANSI, "")).toContain("█ MODEL");
+		expect(activeLine).toContain("\u001b[38;2;217;119;6m❈");
+		expect(activeLine?.replace(ANSI, "")).toContain("❈   MODEL");
+	});
+
+	it("uses the Bible contrast divider color for ornamental rules", () => {
+		const lines = renderCommandPalette(snapshot({ activeIndex: 1 }), 80);
+		const dividerLine = lines.find((line) => line.replace(ANSI, "").includes("────") && line.replace(ANSI, "").includes("·"));
+		expect(dividerLine).toContain("\u001b[38;2;90;77;60m─");
+		expect(dividerLine).toContain("\u001b[38;2;90;77;60m·");
 	});
 
 	it("filters rows by label substring case-insensitively", () => {
@@ -108,9 +124,9 @@ describe("CommandPaletteComponent", () => {
 });
 
 describe("resolveCommandPaletteWidth", () => {
-	it("uses 60% with min 50 and max 80", () => {
-		expect(resolveCommandPaletteWidth(40)).toBe(50);
-		expect(resolveCommandPaletteWidth(100)).toBe(60);
+	it("uses the Bible 80-col panel width and clamps to the terminal", () => {
+		expect(resolveCommandPaletteWidth(40)).toBe(40);
+		expect(resolveCommandPaletteWidth(100)).toBe(80);
 		expect(resolveCommandPaletteWidth(200)).toBe(80);
 	});
 });
@@ -128,7 +144,7 @@ describe("installCommandPalette", () => {
 		expect(registerShortcut).not.toHaveBeenCalledWith("ctrl+k", expect.anything());
 	});
 
-	it("Ctrl+/ opens a centered 60% overlay", async () => {
+	it("Ctrl+/ opens a centered 80-col overlay", async () => {
 		let handler: ((ctx: unknown) => Promise<void> | void) | undefined;
 		const registerShortcut = vi.fn((key: string, options: { handler: typeof handler }) => {
 			if (key === COMMAND_PALETTE_SHORTCUT) handler = options.handler;
@@ -164,12 +180,14 @@ describe("buildPaletteSnapshot", () => {
 			ui: { theme: { name: "cathedral" } },
 		} as never);
 
+		expect(snap.activeIndex).toBe(1);
 		expect(snap.rows.map((row) => `${row.label}:${row.currentValue}`)).toEqual([
-			"SESSION:CURRENT: refactor-auth-flow",
-			"MODEL:CURRENT: claude-opus-4-7",
-			"THINKING:CURRENT: xhigh",
-			"MEMORY:OPEN MEMORY EDITOR",
-			"THEME:CURRENT: cathedral",
+			"SESSION:refactor-auth-flow",
+			"MODEL:claude-opus-4-7",
+			"THINKING:xhigh",
+			"MEMORY:55 facts",
+			"THEME:cathedral",
+			"SETTINGS:",
 		]);
 	});
 });

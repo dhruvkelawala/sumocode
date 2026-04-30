@@ -3,7 +3,7 @@ export const CATHEDRAL_TOKENS = {
 		background: "#1A1511",
 		surface: "#241D17",
 		surfaceRecess: "#120D0A",
-		surfaceLifted: "#3A342F",
+		surfaceLifted: "#3D3024",
 		foreground: "#F5E6C8",
 		foregroundDim: "#8B7A63",
 		divider: "#3A2F25",

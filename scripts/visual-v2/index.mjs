@@ -13,7 +13,7 @@ import { outDir } from "./paths.mjs";
 import { resetDir, writeFile, writeJson } from "./fs-utils.mjs";
 import { writeReviewPack } from "./review-pack.mjs";
 import { auditGeometry, auditToText } from "./geometry-audit.mjs";
-import { parseBibleStyledGrid, runtimeStyledGrid, diffStyledGrids, styledDiffToText } from "./styled-cell-grid.mjs";
+import { parseBibleStyledGrid, runtimeStyledGrid, cropStyledGrid, diffStyledGrids, styledDiffToText } from "./styled-cell-grid.mjs";
 
 const args = parseArgs(process.argv.slice(2));
 const mode = args.mode ?? "review";
@@ -96,9 +96,9 @@ async function runScenario(scenario) {
 		.replace(/\.png$/, ".html")
 		.replace(/[\/]renders[\/]/, "/");
 	let cellDiff = null;
+	const runtimeGrid = runtimeStyledGrid(snapshot);
 	try {
 		const bibleGrid = parseBibleStyledGrid(bibleHtmlPath);
-		const runtimeGrid = runtimeStyledGrid(snapshot);
 		cellDiff = diffStyledGrids(bibleGrid, runtimeGrid);
 		writeFile(resolve(rawOut, "styled-cell-diff.txt"), styledDiffToText(cellDiff));
 		if (!cellDiff.passed) {
@@ -140,6 +140,7 @@ async function runScenario(scenario) {
 			outPaths,
 			dimensions: scenario.dimensions,
 		});
+		const styledCellDiff = cropStyledCellDiff(crop, runtimeGrid, rawOut);
 		const result = cropResult(crop, comparison);
 		cropResults.push({
 			id: crop.id,
@@ -149,6 +150,7 @@ async function runScenario(scenario) {
 			targetImage: crop.targetImage,
 			goldenExists: crop.goldenExists,
 			comparison,
+			styledCellDiff,
 			artifacts: outPaths,
 		});
 	}
@@ -170,6 +172,24 @@ async function runScenario(scenario) {
 		},
 		crops: cropResults,
 	};
+}
+
+function cropStyledCellDiff(crop, runtimeGrid, rawOut) {
+	try {
+		const targetHtmlPath = crop.targetPath
+			.replace(/\.png$/, ".html")
+			.replace(/[\/]renders[\/]/, "/");
+		const targetGrid = parseBibleStyledGrid(targetHtmlPath);
+		const diff = diffStyledGrids(
+			cropStyledGrid(targetGrid, crop.targetCrop),
+			cropStyledGrid(runtimeGrid, crop.runtimeCrop),
+		);
+		const artifact = resolve(rawOut, `styled-cell-diff-${crop.id}.txt`);
+		writeFile(artifact, styledDiffToText(diff));
+		return { passed: diff.passed, diffRows: diff.rowDiffs?.length ?? 0, artifact };
+	} catch {
+		return null;
+	}
 }
 
 function cropResult(crop, comparison) {

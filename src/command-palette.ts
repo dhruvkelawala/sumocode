@@ -1,10 +1,10 @@
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import type { Component, OverlayOptions } from "@mariozechner/pi-tui";
 import { Key, matchesKey, truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
-import { colorHex, type ThinkingLevel } from "./footer.js";
+import type { ThinkingLevel } from "./footer.js";
 import { CATHEDRAL_TOKENS } from "./tokens.js";
 
-export type PaletteMode = "SESSION" | "MODEL" | "THINKING" | "MEMORY" | "THEME";
+export type PaletteMode = "SESSION" | "MODEL" | "THINKING" | "MEMORY" | "THEME" | "SETTINGS";
 
 export type PaletteRow = {
 	label: PaletteMode;
@@ -23,7 +23,7 @@ export type PaletteInputResult = {
 	selection?: PaletteMode;
 };
 
-export const COMMAND_PALETTE_HINT_ROW = "↑↓ navigate    ⏎  select    esc  close";
+export const COMMAND_PALETTE_HINT_ROW = "↑↓ wander    ⏎ attend    ⎋ retreat";
 export const COMMAND_PALETTE_THINKING_LEVELS: readonly ThinkingLevel[] = [
 	"off",
 	"minimal",
@@ -37,33 +37,57 @@ export const COMMAND_PALETTE_SHORTCUT = "ctrl+/";
 
 export const COMMAND_PALETTE_OVERLAY_OPTIONS: OverlayOptions = {
 	anchor: "center",
-	width: "60%",
+	width: 80,
 	minWidth: 50,
 	maxHeight: 20,
 };
 
 export const COMMAND_PALETTE_MODE_ROWS: readonly PaletteRow[] = [
-	{ label: "SESSION", currentValue: "CURRENT: refactor-auth-flow" },
-	{ label: "MODEL", currentValue: "CURRENT: claude-opus-4-7" },
-	{ label: "THINKING", currentValue: "CURRENT: xhigh" },
-	{ label: "MEMORY", currentValue: "OPEN MEMORY EDITOR" },
-	{ label: "THEME", currentValue: "CURRENT: cathedral" },
+	{ label: "SESSION", currentValue: "auth-flow-refactor" },
+	{ label: "MODEL", currentValue: "claude-opus-4-7" },
+	{ label: "THINKING", currentValue: "xhigh" },
+	{ label: "MEMORY", currentValue: "55 facts" },
+	{ label: "THEME", currentValue: "cathedral" },
+	{ label: "SETTINGS", currentValue: "" },
 ];
 
 const RESET = "\u001b[0m";
-const ANSI_PATTERN = /\u001b\[[0-9;]*m/g;
-const DIM = "\u001b[2m";
+const FG_RESET = "\u001b[39m";
+const PANEL_BG = CATHEDRAL_TOKENS.colors.surfaceLifted;
+// Bible `fg-divider` intentionally uses the higher-contrast mockup divider
+// (#5A4D3C) so ornament rules stay visible on the warm lifted panel.
+const PALETTE_DIVIDER = "#5A4D3C";
 
-function visibleLength(text: string): number {
-	return text.replace(ANSI_PATTERN, "").length;
+function ansiColor(hex: string, channel: 38 | 48): string {
+	const normalized = hex.replace("#", "");
+	const red = parseInt(normalized.slice(0, 2), 16);
+	const green = parseInt(normalized.slice(2, 4), 16);
+	const blue = parseInt(normalized.slice(4, 6), 16);
+	return `\u001b[${channel};2;${red};${green};${blue}m`;
+}
+
+function fg(text: string, hex: string): string {
+	return `${ansiColor(hex, 38)}${text}${FG_RESET}`;
 }
 
 function dim(text: string): string {
-	return `${DIM}${colorHex(text, CATHEDRAL_TOKENS.colors.foregroundDim)}${RESET}`;
+	return fg(text, CATHEDRAL_TOKENS.colors.foregroundDim);
 }
 
-function divider(width: number): string {
-	return colorHex("─".repeat(Math.max(0, width)), CATHEDRAL_TOKENS.colors.divider);
+function accent(text: string): string {
+	return fg(text, CATHEDRAL_TOKENS.colors.accent);
+}
+
+function dividerText(text: string): string {
+	return fg(text, PALETTE_DIVIDER);
+}
+
+function foreground(text: string): string {
+	return fg(text, CATHEDRAL_TOKENS.colors.foreground);
+}
+
+function cursorCell(): string {
+	return `${ansiColor(CATHEDRAL_TOKENS.colors.accent, 48)}${ansiColor(CATHEDRAL_TOKENS.colors.background, 38)} ${FG_RESET}${ansiColor(PANEL_BG, 48)}`;
 }
 
 function padToWidth(text: string, width: number): string {
@@ -72,8 +96,12 @@ function padToWidth(text: string, width: number): string {
 	return `${text}${" ".repeat(width - len)}`;
 }
 
+function panelLine(text: string, width: number): string {
+	return `${ansiColor(PANEL_BG, 48)}${ansiColor(CATHEDRAL_TOKENS.colors.foreground, 38)}${padToWidth(text, width)}${RESET}`;
+}
+
 function center(text: string, width: number): string {
-	const len = visibleLength(text);
+	const len = visibleWidth(text);
 	if (len >= width) return truncateToWidth(text, width, "");
 	const left = Math.floor((width - len) / 2);
 	const right = width - len - left;
@@ -81,7 +109,7 @@ function center(text: string, width: number): string {
 }
 
 export function resolveCommandPaletteWidth(termWidth: number): number {
-	return Math.min(80, Math.max(50, Math.floor(termWidth * 0.6)));
+	return Math.min(80, Math.max(1, Math.floor(termWidth)));
 }
 
 export function filterPaletteRows(rows: readonly PaletteRow[], searchQuery: string): PaletteRow[] {
@@ -96,40 +124,45 @@ function normalizedActiveIndex(snapshot: CommandPaletteSnapshot, rows: readonly 
 }
 
 export function renderCommandPalette(snapshot: CommandPaletteSnapshot, width: number): string[] {
-	const w = resolveCommandPaletteWidth(width);
-	if (w <= 0) return [];
-
+	const w = Math.max(1, Math.floor(width));
 	const rows = filterPaletteRows(snapshot.rows, snapshot.searchQuery);
 	const active = normalizedActiveIndex(snapshot, rows);
-	const searchText = snapshot.searchQuery.length > 0 ? snapshot.searchQuery : "search…";
-	const searchPadding = " ".repeat(Math.max(0, w - visibleLength(searchText) - 8));
+	const searchText = snapshot.searchQuery.length > 0 ? snapshot.searchQuery : "what shall we attend to…";
+	const halfRule = "─".repeat(22);
 	const lines: string[] = [];
 
-	lines.push(center(colorHex("COMMAND PALETTE", CATHEDRAL_TOKENS.colors.accent), w));
-	lines.push(divider(w));
-	lines.push("");
-	lines.push(padToWidth(`  ${colorHex("│", CATHEDRAL_TOKENS.colors.divider)} ${dim(searchText)}${searchPadding}${colorHex("│", CATHEDRAL_TOKENS.colors.divider)}`, w));
-	lines.push("");
+	lines.push(panelLine("", w));
+	lines.push(panelLine(center(`${accent("✾")}  ${accent("COMMAND PALETTE")}  ${accent("✾")}`, w), w));
+	lines.push(panelLine("", w));
+	lines.push(panelLine(center(`${dividerText(halfRule)}  ${dividerText("·")}  ${dividerText(halfRule)}`, w), w));
+	lines.push(panelLine("", w));
+	lines.push(panelLine(`     ${accent("❯")}  ${cursorCell()}${snapshot.searchQuery.length > 0 ? foreground(searchText) : dim(searchText)}`, w));
+	lines.push(panelLine("", w));
 
 	if (rows.length === 0) {
-		lines.push(padToWidth(dim("  no matching command"), w));
+		lines.push(panelLine(`     ${dividerText("·")}   ${dim("no matching command")}`, w));
 	} else {
 		for (const [index, row] of rows.entries()) {
-			const label = row.label.padEnd(14, " ");
-			const content = `${label} ▶ ${row.currentValue}`;
-			if (index === active) {
-				const rail = colorHex("█", CATHEDRAL_TOKENS.colors.accent);
-				lines.push(padToWidth(`  ${rail} ${colorHex(content, CATHEDRAL_TOKENS.colors.foreground)} ${rail}`, w));
-			} else {
-				lines.push(padToWidth(`    ${colorHex(content, CATHEDRAL_TOKENS.colors.foreground)}`, w));
-			}
+			const focused = index === active;
+			const marker = focused ? accent("❈") : dividerText("·");
+			const label = focused ? foreground(row.label) : dim(row.label);
+			const value = displayPaletteValue(row);
+			const valueText = value.length > 0 ? (focused ? foreground(value) : dim(value)) : "";
+			const left = `     ${marker}   ${label}`;
+			const padBetween = Math.max(2, w - visibleWidth(left) - visibleWidth(valueText) - 5);
+			lines.push(panelLine(`${left}${" ".repeat(padBetween)}${valueText}`, w));
 		}
 	}
 
-	lines.push("");
-	lines.push(divider(w));
-	lines.push(dim(COMMAND_PALETTE_HINT_ROW));
+	lines.push(panelLine("", w));
+	lines.push(panelLine(center(`${dividerText(halfRule)}  ${dividerText("·")}  ${dividerText(halfRule)}`, w), w));
+	lines.push(panelLine(center(dim(COMMAND_PALETTE_HINT_ROW), w), w));
+	lines.push(panelLine("", w));
 	return lines;
+}
+
+function displayPaletteValue(row: PaletteRow): string {
+	return row.currentValue.replace(/^CURRENT:\s*/i, "").trim();
 }
 
 /**
@@ -204,13 +237,14 @@ export function buildPaletteSnapshot(ctx: PaletteSnapshotContext): CommandPalett
 
 	return {
 		searchQuery: "",
-		activeIndex: 0,
+		activeIndex: 1,
 		rows: [
-			{ label: "SESSION", currentValue: `CURRENT: ${sessionLabel}` },
-			{ label: "MODEL", currentValue: `CURRENT: ${modelId}` },
-			{ label: "THINKING", currentValue: `CURRENT: ${thinkingLevel}` },
-			{ label: "MEMORY", currentValue: "OPEN MEMORY EDITOR" },
-			{ label: "THEME", currentValue: `CURRENT: ${themeName}` },
+			{ label: "SESSION", currentValue: sessionLabel },
+			{ label: "MODEL", currentValue: modelId },
+			{ label: "THINKING", currentValue: thinkingLevel },
+			{ label: "MEMORY", currentValue: "55 facts" },
+			{ label: "THEME", currentValue: themeName },
+			{ label: "SETTINGS", currentValue: "" },
 		],
 	};
 }

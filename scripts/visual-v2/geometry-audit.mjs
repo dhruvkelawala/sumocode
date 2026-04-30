@@ -25,6 +25,8 @@ function classifyRow(line) {
 	// Input frame borders must be checked before generic frame-border.
 	if (/^┌─/.test(trimmed) && /┐$/.test(trimmed)) return "input-top";
 	if (/^└─/.test(trimmed) && /┘$/.test(trimmed)) return "input-bottom";
+	// Overlays are spliced into existing rows; detect them before chat frame rows.
+	if (trimmed.includes("COMMAND PALETTE")) return "overlay";
 	if (/^╭\s*(USER|SUMO|TOOL)/.test(trimmed)) return "chat-frame-top";
 	if (/^╰─/.test(trimmed)) return "chat-frame-bottom";
 	if (/^│/.test(trimmed) && /│\s*$/.test(trimmed)) return "chat-frame-body";
@@ -33,7 +35,6 @@ function classifyRow(line) {
 	if (trimmed.includes("CTRL+/") && trimmed.includes("COMMANDS")) return "hint-row";
 	if (/^●\s/.test(trimmed) || /^[●○]\s*(READY|MEDITATING|ILLUMINATING|DEFERRING|INSCRIBING)/.test(trimmed)) return "footer";
 	if (trimmed.includes("REGISTRY") || trimmed.includes("CONTEXT") || trimmed.includes("MEMORY")) return "sidebar";
-	if (trimmed.includes("COMMAND PALETTE")) return "overlay";
 	if (trimmed.includes("Working...")) return "working";
 	return "content";
 }

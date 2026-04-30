@@ -1,8 +1,10 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+	DEFAULT_APPROVAL_CONFIG,
 	installApprovalGate,
 	isDangerousBashCommand,
 	renderApprovalModal,
+	setApprovalConfig,
 	updateApprovalSnapshot,
 	type ApprovalModalSnapshot,
 } from "./approval-modal.js";
@@ -184,6 +186,24 @@ describe("isDangerousBashCommand", () => {
 	it("does NOT flag edit/write tool names", () => {
 		// The gate only intercepts bash, not edit/write
 		expect(isDangerousBashCommand("echo hello")).toBe(false);
+	});
+});
+
+describe("approval config", () => {
+	afterEach(() => setApprovalConfig(DEFAULT_APPROVAL_CONFIG));
+
+	it("extraPatterns adds custom gates", () => {
+		expect(isDangerousBashCommand("curl -X POST https://api.example.com")).toBe(false);
+		setApprovalConfig({ extraPatterns: [/\bcurl\s+-X\s+POST\b/i] });
+		expect(isDangerousBashCommand("curl -X POST https://api.example.com")).toBe(true);
+	});
+
+	it("allowList bypasses built-in gates", () => {
+		expect(isDangerousBashCommand("sudo docker build .")).toBe(true);
+		setApprovalConfig({ allowList: [/\bsudo\s+docker\b/i] });
+		expect(isDangerousBashCommand("sudo docker build .")).toBe(false);
+		// Other sudo commands still gated
+		expect(isDangerousBashCommand("sudo rm -rf /")).toBe(true);
 	});
 });
 

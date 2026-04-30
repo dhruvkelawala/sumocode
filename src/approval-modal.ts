@@ -236,33 +236,32 @@ export async function showApprovalModal(
 // ============================================================================
 
 // ============================================================================
-// Dangerous command detection
+// Dangerous command detection — configurable
 // ============================================================================
 
-/**
- * Patterns that trigger the approval modal for bash commands.
- * Matches Pi's own permission-gate.ts example: rm -rf, sudo, chmod 777,
- * plus gh CLI commands that mutate remote state.
- *
- * Regular edit/write/read are NOT gated — Pi doesn't gate them natively
- * and they slow down agent iteration.
- */
-const DANGEROUS_BASH_PATTERNS: readonly RegExp[] = [
-	/\brm\s+(-[\w]*r[\w]*|--recursive)/i,  // rm -rf, rm -r, rm --recursive
+export interface ApprovalGateConfig {
+	/** Regex patterns for dangerous bash commands. */
+	readonly dangerousPatterns: readonly RegExp[];
+	/** Regex patterns for mutating gh CLI commands. */
+	readonly ghMutatingPatterns: readonly RegExp[];
+	/** Extra user-supplied patterns (appended to dangerous). */
+	readonly extraPatterns: readonly RegExp[];
+	/** Commands to always allow (bypass all patterns). */
+	readonly allowList: readonly RegExp[];
+}
+
+const DEFAULT_DANGEROUS_PATTERNS: readonly RegExp[] = [
+	/\brm\s+(-[\w]*r[\w]*|--recursive)/i,
 	/\bsudo\b/i,
 	/\b(chmod|chown)\b.*777/i,
 	/\bmkfs\b/i,
 	/\bdd\b.*\bof=/i,
 	/\b(shutdown|reboot|halt|poweroff)\b/i,
-	/\bgit\s+push\b.*--force(?!-with-lease)/i,  // force push (without --force-with-lease)
+	/\bgit\s+push\b.*--force(?!-with-lease)/i,
 	/\bgit\s+(reset\s+--hard|clean\s+-fd)/i,
 ];
 
-/**
- * gh CLI sub-commands that mutate remote state and warrant approval.
- * Read-only commands (gh issue view, gh pr list, gh api GET) are NOT gated.
- */
-const GH_MUTATING_PATTERNS: readonly RegExp[] = [
+const DEFAULT_GH_MUTATING_PATTERNS: readonly RegExp[] = [
 	/\bgh\s+pr\s+(create|merge|close|edit|ready|review)\b/i,
 	/\bgh\s+issue\s+(create|close|edit|delete|transfer|pin)\b/i,
 	/\bgh\s+release\s+(create|delete|edit)\b/i,
@@ -270,9 +269,28 @@ const GH_MUTATING_PATTERNS: readonly RegExp[] = [
 	/\bgh\s+api\b.*(-X\s+(POST|PUT|PATCH|DELETE)|--method\s+(POST|PUT|PATCH|DELETE))/i,
 ];
 
+export const DEFAULT_APPROVAL_CONFIG: ApprovalGateConfig = {
+	dangerousPatterns: DEFAULT_DANGEROUS_PATTERNS,
+	ghMutatingPatterns: DEFAULT_GH_MUTATING_PATTERNS,
+	extraPatterns: [],
+	allowList: [],
+};
+
+let activeConfig: ApprovalGateConfig = DEFAULT_APPROVAL_CONFIG;
+
+export function setApprovalConfig(config: Partial<ApprovalGateConfig>): void {
+	activeConfig = { ...DEFAULT_APPROVAL_CONFIG, ...config };
+}
+
+export function getApprovalConfig(): ApprovalGateConfig {
+	return activeConfig;
+}
+
 export function isDangerousBashCommand(command: string): boolean {
-	return DANGEROUS_BASH_PATTERNS.some((p) => p.test(command))
-		|| GH_MUTATING_PATTERNS.some((p) => p.test(command));
+	if (activeConfig.allowList.some((p) => p.test(command))) return false;
+	return activeConfig.dangerousPatterns.some((p) => p.test(command))
+		|| activeConfig.ghMutatingPatterns.some((p) => p.test(command))
+		|| activeConfig.extraPatterns.some((p) => p.test(command));
 }
 
 /**
@@ -282,7 +300,7 @@ export function isDangerousBashCommand(command: string): boolean {
 const sessionAllowSet = new Set<string>();
 
 function describeCommand(command: string): { command: string; description: string[] } {
-	if (GH_MUTATING_PATTERNS.some((p) => p.test(command))) {
+	if (activeConfig.ghMutatingPatterns.some((p) => p.test(command))) {
 		return { command, description: ["This GitHub CLI command will modify remote state."] };
 	}
 	if (/\brm\b/.test(command)) {

@@ -66,6 +66,8 @@ describe("V2 visual parity contract", () => {
 		expect(scenario("splash-runtime").dimensions).toEqual({ cols: 160, rows: 45 });
 		expect(scenario("active-landscape-runtime").dimensions).toEqual({ cols: 160, rows: 45 });
 		expect(scenario("active-portrait-runtime").dimensions).toEqual({ cols: 60, rows: 100 });
+		expect(scenario("fixture-completed-landscape").dimensions).toEqual({ cols: 160, rows: 45 });
+		expect(scenario("fixture-completed-portrait").dimensions).toEqual({ cols: 60, rows: 100 });
 		expect(cropDefinition("sidebar")).toEqual({ x: 130, y: 3, cols: 30, rows: 34 });
 	});
 
@@ -95,11 +97,37 @@ describe("V2 visual parity contract", () => {
 		]);
 	});
 
-	it("keeps the V1 portrait runtime no-sidebar", () => {
+	it("keeps the V1 portrait runtime no-sidebar with crop-level evidence", () => {
 		const portrait = scenario("active-portrait-runtime");
 
 		expect(portrait.dimensions.cols).toBeLessThan(SIDEBAR_MIN_TERMINAL_WIDTH);
-		expect(portrait.crops.map((crop) => crop.id)).toEqual(["full"]);
+		expect(portrait.crops.map((crop) => crop.id)).toEqual([
+			"full",
+			"top-bar",
+			"chat-area",
+			"input-frame",
+			"hint-row",
+			"footer",
+		]);
+		expect(portrait.crops.map((crop) => crop.id)).not.toContain("sidebar");
+		expect(cropDefinition("portrait-top-bar")).toEqual({ x: 0, y: 1, cols: 60, rows: 1 });
+		expect(cropDefinition("portrait-input-frame")).toEqual({ x: 0, y: 93, cols: 60, rows: 3 });
+		expect(cropDefinition("portrait-footer")).toEqual({ x: 0, y: 98, cols: 60, rows: 1 });
+	});
+
+	it("keeps fixture scenes deterministic and review-only", () => {
+		expect(scenario("fixture-completed-landscape")).toMatchObject({ status: "review" });
+		expect(scenario("fixture-completed-portrait")).toMatchObject({ status: "review" });
+		expect(scenario("fixture-tool-ledger-landscape")).toMatchObject({ status: "review" });
+		expect(scenario("fixture-completed-landscape").crops.map((crop) => crop.id)).toEqual([
+			"full",
+			"top-bar",
+			"sidebar",
+			"chat-area",
+			"input-frame",
+			"hint-row",
+			"footer",
+		]);
 	});
 
 	it("keeps required crop gates backed by committed runtime goldens", () => {

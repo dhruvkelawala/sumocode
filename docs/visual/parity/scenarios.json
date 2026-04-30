@@ -46,6 +46,36 @@
 			"cols": 160,
 			"rows": 1
 		},
+		"portrait-top-bar": {
+			"x": 0,
+			"y": 1,
+			"cols": 60,
+			"rows": 1
+		},
+		"portrait-chat-area": {
+			"x": 0,
+			"y": 3,
+			"cols": 60,
+			"rows": 89
+		},
+		"portrait-input-frame": {
+			"x": 0,
+			"y": 93,
+			"cols": 60,
+			"rows": 3
+		},
+		"portrait-hint-row": {
+			"x": 0,
+			"y": 96,
+			"cols": 60,
+			"rows": 1
+		},
+		"portrait-footer": {
+			"x": 0,
+			"y": 98,
+			"cols": 60,
+			"rows": 1
+		},
 		"input-component-frame": {
 			"x": 0,
 			"y": 0,
@@ -66,6 +96,12 @@
 		},
 		"sidebar-component": {
 			"kind": "full"
+		},
+		"overlay-center": {
+			"x": 40,
+			"y": 16,
+			"cols": 80,
+			"rows": 13
 		}
 	},
 	"scenarios": [
@@ -289,7 +325,21 @@
 					"targetCrop": "footer",
 					"runtimeCrop": "footer"
 				}
-			]
+			],
+			"geometrySpec": {
+				"regions": [
+					{
+						"startRow": 0,
+						"endRow": 0,
+						"category": "top-bar",
+						"firstCol": 1
+					}
+				],
+				"contentBounds": {
+					"minFirst": 0,
+					"maxLast": 159
+				}
+			}
 		},
 		{
 			"id": "active-portrait-runtime",
@@ -313,7 +363,9 @@
 					"SUMO_TUI": "1",
 					"TERM": "xterm-256color",
 					"COLORTERM": "truecolor",
-					"FORCE_COLOR": "3"
+					"FORCE_COLOR": "3",
+					"COLUMNS": "60",
+					"LINES": "100"
 				},
 				"inputs": [
 					{
@@ -339,6 +391,322 @@
 					"id": "full",
 					"targetCrop": "full",
 					"runtimeCrop": "full"
+				},
+				{
+					"id": "top-bar",
+					"targetCrop": "portrait-top-bar",
+					"runtimeCrop": "portrait-top-bar"
+				},
+				{
+					"id": "chat-area",
+					"targetCrop": "portrait-chat-area",
+					"runtimeCrop": "portrait-chat-area"
+				},
+				{
+					"id": "input-frame",
+					"targetImage": "04-active-input-empty-portrait.png",
+					"targetCrop": "full",
+					"runtimeCrop": "portrait-input-frame"
+				},
+				{
+					"id": "hint-row",
+					"targetCrop": "portrait-hint-row",
+					"runtimeCrop": "portrait-hint-row"
+				},
+				{
+					"id": "footer",
+					"targetCrop": "portrait-footer",
+					"runtimeCrop": "portrait-footer"
+				}
+			],
+			"geometrySpec": {
+				"regions": [
+					{
+						"startRow": 0,
+						"endRow": 0,
+						"category": "blank"
+					},
+					{
+						"startRow": 1,
+						"endRow": 1,
+						"category": "top-bar",
+						"firstCol": 1,
+						"lastCol": 58
+					},
+					{
+						"startRow": 2,
+						"endRow": 2,
+						"category": "blank"
+					},
+					{
+						"startRow": 93,
+						"endRow": 93,
+						"category": "input-top"
+					},
+					{
+						"startRow": 95,
+						"endRow": 95,
+						"category": "input-bottom"
+					},
+					{
+						"startRow": 96,
+						"endRow": 96,
+						"category": "hint-row",
+						"firstCol": 1,
+						"lastCol": 58
+					},
+					{
+						"startRow": 97,
+						"endRow": 97,
+						"category": "blank"
+					},
+					{
+						"startRow": 98,
+						"endRow": 98,
+						"category": "footer",
+						"firstCol": 1,
+						"lastCol": 58
+					},
+					{
+						"startRow": 99,
+						"endRow": 99,
+						"category": "blank"
+					}
+				],
+				"contentBounds": {
+					"minFirst": 0,
+					"maxLast": 59
+				}
+			}
+		},
+		{
+			"id": "fixture-completed-landscape",
+			"lane": "fixture",
+			"status": "review",
+			"dimensions": {
+				"cols": 160,
+				"rows": 45
+			},
+			"bibleTarget": "scene-active.png",
+			"fixture": {
+				"id": "completed-active"
+			},
+			"crops": [
+				{
+					"id": "full",
+					"targetCrop": "full",
+					"runtimeCrop": "full"
+				},
+				{
+					"id": "top-bar",
+					"targetCrop": "top-bar",
+					"runtimeCrop": "top-bar"
+				},
+				{
+					"id": "sidebar",
+					"targetCrop": "sidebar",
+					"runtimeCrop": "sidebar"
+				},
+				{
+					"id": "chat-area",
+					"targetCrop": "chat-area",
+					"runtimeCrop": "chat-area"
+				},
+				{
+					"id": "input-frame",
+					"targetImage": "04-active-input-empty.png",
+					"targetCrop": "full",
+					"runtimeCrop": "input-frame"
+				},
+				{
+					"id": "hint-row",
+					"targetCrop": "hint-row",
+					"runtimeCrop": "hint-row"
+				},
+				{
+					"id": "footer",
+					"targetCrop": "footer",
+					"runtimeCrop": "footer"
+				}
+			],
+			"geometrySpec": {
+				"regions": [
+					{
+						"startRow": 0,
+						"endRow": 0,
+						"category": "blank"
+					},
+					{
+						"startRow": 1,
+						"endRow": 1,
+						"category": "top-bar",
+						"firstCol": 1
+					},
+					{
+						"startRow": 2,
+						"endRow": 2,
+						"category": "blank"
+					}
+				],
+				"contentBounds": {
+					"minFirst": 0,
+					"maxLast": 159
+				}
+			}
+		},
+		{
+			"id": "fixture-completed-portrait",
+			"lane": "fixture",
+			"status": "review",
+			"dimensions": {
+				"cols": 60,
+				"rows": 100
+			},
+			"bibleTarget": "scene-active-portrait.png",
+			"fixture": {
+				"id": "completed-active"
+			},
+			"crops": [
+				{
+					"id": "full",
+					"targetCrop": "full",
+					"runtimeCrop": "full"
+				},
+				{
+					"id": "top-bar",
+					"targetCrop": "portrait-top-bar",
+					"runtimeCrop": "portrait-top-bar"
+				},
+				{
+					"id": "chat-area",
+					"targetCrop": "portrait-chat-area",
+					"runtimeCrop": "portrait-chat-area"
+				},
+				{
+					"id": "input-frame",
+					"targetImage": "04-active-input-empty-portrait.png",
+					"targetCrop": "full",
+					"runtimeCrop": "portrait-input-frame"
+				},
+				{
+					"id": "hint-row",
+					"targetCrop": "portrait-hint-row",
+					"runtimeCrop": "portrait-hint-row"
+				},
+				{
+					"id": "footer",
+					"targetCrop": "portrait-footer",
+					"runtimeCrop": "portrait-footer"
+				}
+			],
+			"geometrySpec": {
+				"regions": [
+					{
+						"startRow": 0,
+						"endRow": 0,
+						"category": "blank"
+					},
+					{
+						"startRow": 1,
+						"endRow": 1,
+						"category": "top-bar",
+						"firstCol": 1,
+						"lastCol": 58
+					},
+					{
+						"startRow": 2,
+						"endRow": 2,
+						"category": "blank"
+					},
+					{
+						"startRow": 93,
+						"endRow": 93,
+						"category": "input-top"
+					},
+					{
+						"startRow": 95,
+						"endRow": 95,
+						"category": "input-bottom"
+					},
+					{
+						"startRow": 96,
+						"endRow": 96,
+						"category": "hint-row",
+						"firstCol": 1,
+						"lastCol": 58
+					},
+					{
+						"startRow": 97,
+						"endRow": 97,
+						"category": "blank"
+					},
+					{
+						"startRow": 98,
+						"endRow": 98,
+						"category": "footer",
+						"firstCol": 1,
+						"lastCol": 58
+					},
+					{
+						"startRow": 99,
+						"endRow": 99,
+						"category": "blank"
+					}
+				],
+				"contentBounds": {
+					"minFirst": 0,
+					"maxLast": 59
+				}
+			}
+		},
+		{
+			"id": "fixture-tool-ledger-landscape",
+			"lane": "fixture",
+			"status": "review",
+			"dimensions": {
+				"cols": 160,
+				"rows": 45
+			},
+			"bibleTarget": "scene-active-tool-ledger.png",
+			"fixture": {
+				"id": "tool-ledger"
+			},
+			"crops": [
+				{
+					"id": "full",
+					"targetCrop": "full",
+					"runtimeCrop": "full"
+				},
+				{
+					"id": "top-bar",
+					"targetCrop": "top-bar",
+					"runtimeCrop": "top-bar"
+				},
+				{
+					"id": "sidebar",
+					"targetCrop": "sidebar",
+					"runtimeCrop": "sidebar"
+				},
+				{
+					"id": "chat-area",
+					"targetCrop": "chat-area",
+					"runtimeCrop": "chat-area"
+				},
+				{
+					"id": "input-frame",
+					"targetImage": "04-active-input-empty.png",
+					"targetCrop": "full",
+					"runtimeCrop": "input-frame"
+				},
+				{
+					"id": "hint-row",
+					"targetCrop": "hint-row",
+					"runtimeCrop": "hint-row"
+				},
+				{
+					"id": "footer",
+					"targetCrop": "footer",
+					"runtimeCrop": "footer"
 				}
 			]
 		}

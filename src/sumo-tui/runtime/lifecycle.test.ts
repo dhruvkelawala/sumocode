@@ -6,7 +6,17 @@ import { join } from "node:path";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 import { createLifecycleRuntime, useTerminalDimensions, type LifecycleInput, type LifecycleListener, type LifecycleProcess, type LifecycleProcessEvent, type LifecycleSignal } from "./lifecycle.js";
-import { ALTSCREEN_ENTER_SEQUENCE, MOUSE_SGR_ENABLE_SEQUENCE, TERMINAL_BG_RESET, TERMINAL_BG_SET, TERMINAL_CLEANUP_SEQUENCE, TerminalSessionOwner, type TerminalOutput } from "./terminal-controller.js";
+import {
+	ALTSCREEN_ENTER_SEQUENCE,
+	CURSOR_COLOR_RESET,
+	CURSOR_COLOR_SET,
+	MOUSE_SGR_ENABLE_SEQUENCE,
+	TERMINAL_BG_RESET,
+	TERMINAL_BG_SET,
+	TERMINAL_CLEANUP_SEQUENCE,
+	TerminalSessionOwner,
+	type TerminalOutput,
+} from "./terminal-controller.js";
 
 class FakeProcess implements LifecycleProcess {
 	public readonly pid = 4242;
@@ -143,7 +153,12 @@ describe("LifecycleRuntime", () => {
 			handler({ type: "session_shutdown" }, { hasUI: true });
 		}
 
-		expect(output.writes).toEqual([`${ALTSCREEN_ENTER_SEQUENCE}${TERMINAL_BG_SET}`, MOUSE_SGR_ENABLE_SEQUENCE, `${TERMINAL_BG_RESET}${TERMINAL_CLEANUP_SEQUENCE}`]);
+		expect(output.writes).toEqual([
+			`${ALTSCREEN_ENTER_SEQUENCE}${TERMINAL_BG_SET}`,
+			MOUSE_SGR_ENABLE_SEQUENCE,
+			CURSOR_COLOR_SET,
+			`${CURSOR_COLOR_RESET}${TERMINAL_BG_RESET}${TERMINAL_CLEANUP_SEQUENCE}`,
+		]);
 	});
 
 	it("session_start ignores non-UI contexts", () => {
@@ -195,7 +210,12 @@ describe("LifecycleRuntime", () => {
 		fakeProcess.emit("SIGTSTP");
 		fakeProcess.emit("SIGCONT");
 
-		expect(output.writes).toEqual([TERMINAL_CLEANUP_SEQUENCE, `${ALTSCREEN_ENTER_SEQUENCE}${TERMINAL_BG_SET}`, MOUSE_SGR_ENABLE_SEQUENCE]);
+		expect(output.writes).toEqual([
+			TERMINAL_CLEANUP_SEQUENCE,
+			`${ALTSCREEN_ENTER_SEQUENCE}${TERMINAL_BG_SET}`,
+			MOUSE_SGR_ENABLE_SEQUENCE,
+			CURSOR_COLOR_SET,
+		]);
 		expect(fakeInput.rawModes).toEqual([false, true]);
 		expect(fakeProcess.kills).toEqual([{ pid: fakeProcess.pid, signal: "SIGTSTP" }]);
 		expect(fakeProcess.listenerCount("SIGTSTP")).toBe(1);

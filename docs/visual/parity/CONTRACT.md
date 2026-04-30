@@ -15,18 +15,35 @@ This document defines what the V2 Cathedral Visual Harness is allowed to assert.
 
 If these disagree, update the Bible/manifest first, then regenerate review evidence, then promote a runtime golden only after explicit developer approval.
 
-## 2. Capture engine
+## 2. Capture engine and verification layers
 
-The canonical V2 path is:
+The canonical V2 pipeline is:
 
 ```txt
-node-pty bytes
-→ @xterm/headless replay
-→ DOM terminal renderer
-→ Playwright screenshot
-→ crop/mask/diff
-→ HTML review pack
+node-pty bytes OR deterministic fixture ANSI
+→ @xterm/headless replay → cell snapshot (JSON)
+  ├─ styled cell diff  (char + fg + bg per cell vs Bible HTML)
+  ├─ geometry audit    (row categories + column bounds vs geometrySpec)
+  └─ DOM terminal renderer → Playwright screenshot → crop/mask/diff → review pack
 ```
+
+### Styled cell diff (primary verification)
+
+`scripts/visual-v2/styled-cell-grid.mjs` parses Bible HTML `<pre class="grid">` spans into a per-cell `{ char, fg, bg, bold, dim }` grid and compares it cell-for-cell against the xterm runtime snapshot. This is fully deterministic and text-level — no PNG in the loop.
+
+Known intentional differences between Bible mockup and runtime palette are declared as equivalent color pairs (e.g. `--divider-mockup` #5A4D3C ↔ `--divider` #3A2F25) and suppressed from the diff.
+
+Output: `docs/visual/out/parity/<scenario>/raw/styled-cell-diff.txt`
+
+### Geometry audit
+
+`scripts/visual-v2/geometry-audit.mjs` classifies each row by content (top-bar, chat-frame-top, hint-row, footer, blank, etc.) and checks horizontal bounds against a `geometrySpec` declared per scenario in `scenarios.json`. Catches structural layout drift (e.g. input frame at the wrong row, missing breathing rows).
+
+Output: `docs/visual/out/parity/<scenario>/raw/geometry-audit.txt`
+
+### PNG crop/diff (review evidence)
+
+Playwright screenshot + pixelmatch diff remains for visual review packs and human approval. It is not the primary verification gate. Use text-level reports first.
 
 `tmux`, cmux/Ghostty screenshots, and live terminal captures are debugging aids only. They must not define CI pass/fail for V2 pixel parity.
 
@@ -36,7 +53,7 @@ Runtime scenarios invoke SumoCode through the user-facing entry contract:
 ./bin/sumocode.sh --offline --no-extensions --no-session
 ```
 
-Runtime scenarios must set deterministic terminal env in the manifest (`PI_OFFLINE=1`, `SUMO_TUI=1`, `TERM=xterm-256color`, `COLORTERM=truecolor`, `FORCE_COLOR=3`).
+Runtime scenarios must set deterministic terminal env in the manifest (`PI_OFFLINE=1`, `SUMO_TUI=1`, `TERM=xterm-256color`, `COLORTERM=truecolor`, `FORCE_COLOR=3`). Fixture scenarios do not spawn Pi; they render deterministic `TranscriptViewModel` state through the same SumoTUI scene primitives and then enter the same ANSI replay/DOM/crop pipeline. Use fixtures for completed assistant/tool states that cannot be reached deterministically through offline runtime capture.
 
 ## 3. V2 dimensions and layout constants
 
@@ -51,7 +68,7 @@ The manifest owns scenario dimensions. Current locked V2 dimensions are:
 
 V2 sidebar width is **30 columns**. Legacy 49-column sidebar references are historical V1/mockup material and must not be used for new V2 assertions.
 
-P0-F portrait policy is **Option A**: portrait/narrow layouts hide the sidebar and let the footer/hint row absorb essential context. The canonical `60 × 100` portrait runtime scene is therefore a no-sidebar scene; it must not add a sidebar crop, bottom-registry crop, or portrait overlay crop in V1.
+P0-F portrait policy is **Option A**: portrait/narrow layouts hide the sidebar and let the footer/hint row absorb essential context. The canonical `60 × 100` portrait runtime scene is therefore a no-sidebar scene; it must not add a sidebar crop, bottom-registry crop, or portrait overlay crop in V1. It may still define crop-level evidence for the top bar, chat area, input frame, hint row, and footer.
 
 For 160-column full-screen crops, the sidebar crop starts at `x=130` and spans `30` columns. Chat/runtime content should reserve the matching right-side space only when the runtime sidebar policy says the sidebar is visible.
 
@@ -67,9 +84,15 @@ Splash/empty-state captures may show `DIVINE INVOCATION`; active typed component
 
 Hardware cursor visibility is a Pi/TUI runtime preference. PTY integration tests that assert hardware cursor behavior must opt in with `PI_HARDWARE_CURSOR=1` and wait for the stable post-render cursor state, not the first incidental `?25h` emitted during startup.
 
-Visual parity screenshots should not rely on terminal cursor color. The V2 terminal ownership contract is: terminal cursor color remains the user's preference unless an explicit future SumoCode cursor command changes it. `TerminalSessionOwner` therefore does not emit OSC 12 during normal startup; cursor color overrides are opt-in only.
+Visual parity screenshots should not rely on browser-rendered cursor color: the harness renders a fixed cursor cell, while real terminals honor cursor-color escape sequences. The V2 terminal ownership contract now applies the Cathedral accent cursor (`OSC 12 #D97706`) when retained mode starts, and resets it on terminal cleanup so the host shell regains its default. `/sumo:cursor reset` remains the explicit opt-out path during a session.
 
 ## 5. Crop status semantics
+
+Scenario lanes:
+
+- `component` — isolated primitive/component captures.
+- `fixture` — deterministic full-scene captures from fixture transcripts.
+- `runtime` — real `./bin/sumocode.sh` captures through node-pty.
 
 Each crop resolves its status from the crop entry or its parent scenario:
 

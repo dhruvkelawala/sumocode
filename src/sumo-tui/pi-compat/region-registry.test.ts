@@ -120,7 +120,8 @@ describe("RegionRegistry", () => {
 		composite(registry.root, frame);
 
 		expect(registry.getSlot("chat").children).toContain(chat);
-		expect(frame.toPlainRow(0)).toContain("USER > hello retained chat");
+		expect(frame.toPlainRow(0)).toContain("╭ USER");
+		expect(frame.toPlainRow(1)).toContain("hello retained chat");
 		registry.dispose();
 	});
 });

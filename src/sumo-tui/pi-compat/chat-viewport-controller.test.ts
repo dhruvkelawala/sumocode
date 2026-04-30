@@ -6,7 +6,7 @@ import { bufferToAnsiLines } from "../render/ansi-writer.js";
 import { CellBuffer } from "../render/buffer.js";
 import { composite } from "../render/compositor.js";
 import { ChatPager } from "../widgets/chat-pager.js";
-import { ChatViewportController, textFromAgentMessage, type ChatViewportHost, type ChatViewportRuntime } from "./chat-viewport-controller.js";
+import { ChatViewportController, installChatViewportBridge, textFromAgentMessage, type ChatViewportHost, type ChatViewportRuntime } from "./chat-viewport-controller.js";
 
 function rows(count: number): { render(width: number): string[] } {
 	return { render: (_width: number) => Array.from({ length: count }, () => "chrome") };
@@ -72,7 +72,7 @@ describe("ChatViewportController", () => {
 		expect(textFromAgentMessage({ role: "toolResult", content: [{ type: "text", text: "tool output" }] })).toBe("tool output");
 	});
 
-	it("owns chat viewport geometry, including sidebar-aware width", async () => {
+	it("owns chat viewport geometry, including sidebar and portrait gutters", async () => {
 		const { root, chat, runtime, controller } = await makeController({ terminalRows: 16, terminalColumns: 130 });
 
 		controller.render(130);
@@ -82,6 +82,12 @@ describe("ChatViewportController", () => {
 		controller.render(130);
 		expect(runtime.renderCalls.at(-1)).toEqual({ width: 130 - SIDEBAR_WIDTH, height: 12 });
 		root.dispose();
+
+		const portrait = await makeController({ terminalRows: 100, terminalColumns: 60 });
+		portrait.chat.addMessage("user", "hello");
+		portrait.controller.render(60);
+		expect(portrait.runtime.renderCalls.at(-1)).toMatchObject({ width: 59 });
+		portrait.root.dispose();
 	});
 
 	it("translates wheel and jump-to-bottom input into local viewport repaint", async () => {
@@ -116,6 +122,40 @@ describe("ChatViewportController", () => {
 
 		expect(runtime.noteUserMessage).toHaveBeenCalledTimes(1);
 		expect(chat.getRenderedMessages().map((message) => message.text)).toEqual(["hello", "hello back"]);
+		root.dispose();
+	});
+
+	it("suppresses Pi status loader row in portrait while preserving landscape", async () => {
+		const yoga = await loadYoga();
+		const root = new SumoNode(yoga.Node.create());
+		const chat = ChatPager.create(yoga, root);
+		const originalStatusRender = vi.fn((_width: number) => ["Working..."]);
+		const statusContainer = { render: originalStatusRender };
+		const host = {
+			ui: { terminal: { rows: 100, columns: 60 }, requestRender: vi.fn() },
+			chatContainer: { render: vi.fn(() => []), clear: vi.fn(), invalidate: vi.fn() },
+			statusContainer,
+		};
+		const runtime = {
+			getSnapshot: () => ({ chat }),
+			setExternalRenderControls: vi.fn(),
+			renderChatLines: vi.fn(() => []),
+			writeChatViewport: vi.fn(() => true),
+			requestRender: vi.fn(),
+			setEmptyChatQuoteState: vi.fn(),
+			noteUserMessage: vi.fn(),
+		};
+
+		const cleanup = installChatViewportBridge(host, runtime);
+		expect(statusContainer.render(60)).toEqual([]);
+		expect(originalStatusRender).not.toHaveBeenCalled();
+
+		host.ui.terminal.columns = 160;
+		expect(statusContainer.render(160)).toEqual(["Working..."]);
+		expect(originalStatusRender).toHaveBeenCalledWith(160);
+
+		cleanup?.();
+		expect(statusContainer.render(60)).toEqual(["Working..."]);
 		root.dispose();
 	});
 });

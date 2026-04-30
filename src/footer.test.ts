@@ -117,6 +117,14 @@ describe("formatFooterLine — F1 two-zone layout", () => {
 		expect(line).toContain(VOICE.status.idle);
 		expect(line.length).toBeLessThanOrEqual(50);
 	});
+
+	it("adds one-cell side padding for portrait footer rhythm", () => {
+		const line = withoutAnsi(formatFooterLine(snapshot(), 60));
+		expect(line).toHaveLength(60);
+		expect(line.startsWith(" ")).toBe(true);
+		expect(line.endsWith(" ")).toBe(true);
+		expect(line.trim()).toContain(VOICE.status.idle);
+	});
 });
 
 describe("formatFooterLine — cathedral coloring", () => {

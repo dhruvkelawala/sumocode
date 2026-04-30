@@ -79,6 +79,13 @@ function padToWidth(line: string, width: number): string {
 	return `${line}${" ".repeat(width - len)}`;
 }
 
+function ellipsize(text: string, max: number): string {
+	if (max <= 0) return "";
+	if (text.length <= max) return text;
+	if (max === 1) return "…";
+	return `${text.slice(0, max - 1)}…`;
+}
+
 export type InputFrameOptions = {
 	/** Optional top-border label. V2 active input passes an empty label; splash uses "DIVINE INVOCATION". */
 	label?: string;
@@ -157,10 +164,14 @@ export function renderInputFrame(input: string, width: number, options: InputFra
 
 export type InputHintsOptions = {
 	/**
-	 * Left-side dim hint, e.g. `└─ AWAITING DIVINE INVOCATION` (splash only).
-	 * Element 4 (active state) omits this and shows only the right-side keybinds.
+	 * Left-side hint. Splash uses `╰─ AWAITING PROMPT`; portrait active state
+	 * uses project/branch context when the sidebar is hidden.
 	 */
 	leftHint?: string;
+	/** When set, truncate the left hint instead of dropping it at narrow widths. */
+	leftHintOverflow?: "drop" | "truncate";
+	/** Project context renders project in foreground and branch in dim. */
+	leftHintStyle?: "dim" | "project-branch";
 };
 
 /**
@@ -184,13 +195,32 @@ export function renderInputHints(width: number, options: InputHintsOptions = {})
 
 	// Build the colored right-hand string: CTRL+/ in accent, label in dim.
 	const rightColored = `${accent}CTRL+/${RESET} ${dimFg}· COMMANDS${RESET}`;
+	const colorLeftHint = (text: string): string => {
+		if (options.leftHintStyle !== "project-branch") return `${dimFg}${text}${RESET}`;
+		const branchStart = text.indexOf(" (");
+		if (branchStart === -1) return color(text, CATHEDRAL_TOKENS.colors.foreground);
+		const project = text.slice(0, branchStart);
+		const branch = text.slice(branchStart);
+		return `${color(project, CATHEDRAL_TOKENS.colors.foreground)}${dimFg}${branch}${RESET}`;
+	};
 
-	// At narrow widths, drop the left hint first.
-	const leftFitsAlongside = left !== undefined && rightLen + 4 + left.length <= width;
+	// At narrow widths, drop the left hint first unless the caller explicitly
+	// asks for truncation (portrait active context path).
+	const minGap = 4;
+	const leftFitsAlongside = left !== undefined && rightLen + minGap + left.length <= width;
 
 	if (leftFitsAlongside) {
 		const gap = width - rightLen - left!.length;
-		return `${dimFg}${left!}${RESET}${" ".repeat(gap)}${rightColored}`;
+		return `${colorLeftHint(left!)}${" ".repeat(gap)}${rightColored}`;
+	}
+
+	if (left !== undefined && options.leftHintOverflow === "truncate" && width > rightLen + minGap) {
+		const maxLeft = width - rightLen - minGap;
+		const truncatedLeft = ellipsize(left, maxLeft);
+		if (truncatedLeft.length > 0) {
+			const gap = width - rightLen - truncatedLeft.length;
+			return `${colorLeftHint(truncatedLeft)}${" ".repeat(gap)}${rightColored}`;
+		}
 	}
 
 	// Right-only path. Right-align if there's room.

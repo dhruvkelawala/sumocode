@@ -24,8 +24,8 @@ describe("Phase 3 chat history scroll integration", () => {
 		const pageUpFrame = new CellBuffer(8, 48);
 		composite(root, pageUpFrame);
 
-		expect(bottomFrame.toPlainRow(0)).toContain("message 192");
-		expect(pageUpFrame.toPlainRow(0)).toContain("message 188");
+		expect(Array.from({ length: 8 }, (_, row) => bottomFrame.toPlainRow(row)).join("\n")).toContain("message 199");
+		expect(Array.from({ length: 8 }, (_, row) => pageUpFrame.toPlainRow(row)).join("\n")).toContain("message 197");
 		root.dispose();
 	});
 

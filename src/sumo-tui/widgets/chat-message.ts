@@ -3,6 +3,7 @@ import { CATHEDRAL_TOKENS } from "../../tokens.js";
 import { SumoNode } from "../layout/node.js";
 import { MEASURE_MODE_EXACTLY, type MeasureMode, type Yoga, type YogaNode } from "../layout/yoga.js";
 import type { CellBuffer, Rect } from "../render/buffer.js";
+import { lineToAnsi, span, textLine, type Span } from "../render/primitives.js";
 
 export type ChatMessageRole = "user" | "sumo" | "system" | "tool" | string;
 
@@ -17,17 +18,7 @@ export interface ChatMessageSnapshot {
 	timestamp: Date;
 }
 
-const RESET = "\x1b[0m";
-
-function hexToRgb(hexColor: string): [number, number, number] {
-	const hex = hexColor.startsWith("#") ? hexColor.slice(1) : hexColor;
-	return [Number.parseInt(hex.slice(0, 2), 16), Number.parseInt(hex.slice(2, 4), 16), Number.parseInt(hex.slice(4, 6), 16)];
-}
-
-function fg(hexColor: string): string {
-	const [red, green, blue] = hexToRgb(hexColor);
-	return `\x1b[38;2;${red};${green};${blue}m`;
-}
+const MIN_BOX_WIDTH = 8;
 
 function normalizeWidth(width: number): number {
 	if (!Number.isFinite(width)) return 0;
@@ -35,15 +26,15 @@ function normalizeWidth(width: number): number {
 }
 
 function roleLabel(role: ChatMessageRole): string {
-	if (role === "user") return "USER >";
-	if (role === "sumo" || role === "assistant") return "SUMO >";
-	if (role === "tool") return "TOOL >";
-	return `${String(role).toUpperCase()} >`;
+	if (role === "user") return "USER";
+	if (role === "sumo" || role === "assistant") return "SUMO";
+	if (role === "tool") return "TOOL";
+	return String(role).toUpperCase();
 }
 
 function roleColor(role: ChatMessageRole): string {
-	if (role === "user") return CATHEDRAL_TOKENS.colors.accent;
-	if (role === "sumo" || role === "assistant") return CATHEDRAL_TOKENS.colors.states.idle;
+	if (role === "user") return CATHEDRAL_TOKENS.colors.foreground;
+	if (role === "sumo" || role === "assistant") return CATHEDRAL_TOKENS.colors.accent;
 	if (role === "tool") return CATHEDRAL_TOKENS.colors.states.tool;
 	return CATHEDRAL_TOKENS.colors.foregroundDim;
 }
@@ -84,7 +75,69 @@ function wrapPlainText(input: string, width: number): string[] {
 	return rows.length === 0 ? [""] : rows;
 }
 
-/** One role-prefixed chat row group. Markdown parsing is deferred to Phase 5. */
+function textWidth(parts: readonly (Span | string)[]): number {
+	return parts.reduce((sum, part) => sum + visibleWidth(typeof part === "string" ? part : part.text), 0);
+}
+
+function fitCellText(text: string, width: number): string {
+	const visible = visibleWidth(text);
+	return visible >= width ? takeVisible(text, width).head : `${text}${" ".repeat(width - visible)}`;
+}
+
+function formatTime(timestamp: Date): string {
+	const hours = String(timestamp.getHours()).padStart(2, "0");
+	const minutes = String(timestamp.getMinutes()).padStart(2, "0");
+	return `${hours}:${minutes}`;
+}
+
+function frameTop(role: ChatMessageRole, timestamp: Date | undefined, width: number): string {
+	const label = roleLabel(role);
+	const leftParts: (Span | string)[] = [
+		span("╭ ", { fg: CATHEDRAL_TOKENS.colors.divider }),
+		span(label, { fg: roleColor(role) }),
+		span(" ", { fg: CATHEDRAL_TOKENS.colors.divider }),
+	];
+
+	const showTime = (role === "sumo" || role === "assistant") && timestamp !== undefined;
+	const rightParts: (Span | string)[] = showTime
+		? [
+			span(" ", { fg: CATHEDRAL_TOKENS.colors.divider }),
+			span(formatTime(timestamp), { fg: CATHEDRAL_TOKENS.colors.foregroundDim }),
+			span(" \u2500", { fg: CATHEDRAL_TOKENS.colors.divider }),
+		]
+		: [];
+
+	const used = textWidth(leftParts) + textWidth(rightParts) + 1; // right corner
+	const rule = Math.max(0, width - used);
+	return lineToAnsi(textLine([
+		...leftParts,
+		span("─".repeat(rule), { fg: CATHEDRAL_TOKENS.colors.divider }),
+		...rightParts,
+		span("╮", { fg: CATHEDRAL_TOKENS.colors.divider }),
+	]), { width });
+}
+
+function frameBody(row: string, width: number): string {
+	const inner = Math.max(0, width - 4);
+	const text = fitCellText(row, inner);
+	return lineToAnsi(textLine([
+		span("│", { fg: CATHEDRAL_TOKENS.colors.divider }),
+		" ",
+		span(text, { fg: CATHEDRAL_TOKENS.colors.foreground }),
+		" ",
+		span("│", { fg: CATHEDRAL_TOKENS.colors.divider }),
+	]), { width });
+}
+
+function frameBottom(width: number): string {
+	return lineToAnsi(textLine([
+		span("╰", { fg: CATHEDRAL_TOKENS.colors.divider }),
+		span("─".repeat(Math.max(0, width - 2)), { fg: CATHEDRAL_TOKENS.colors.divider }),
+		span("╯", { fg: CATHEDRAL_TOKENS.colors.divider }),
+	]), { width });
+}
+
+/** One V2 framed chat message. Markdown block parsing lands in #89/#90. */
 export class ChatMessage extends SumoNode {
 	public readonly timestamp: Date;
 	private measuring = false;
@@ -93,6 +146,7 @@ export class ChatMessage extends SumoNode {
 	public constructor(yogaNode: YogaNode, public role: ChatMessageRole, public text: string, parent?: SumoNode, timestamp = new Date()) {
 		super(yogaNode, parent);
 		this.timestamp = timestamp;
+		this.marginBottom = 1;
 		this.setMeasureFunc((width, widthMode, height, heightMode) => this.measure(width, widthMode, height, heightMode));
 	}
 
@@ -117,7 +171,7 @@ export class ChatMessage extends SumoNode {
 	}
 
 	public getEstimatedHeight(width = this.getComputedWidth()): number {
-		return this.renderRows(width).length;
+		return this.renderRows(width).length + 1;
 	}
 
 	public render(buffer: CellBuffer, rect: Rect): void {
@@ -131,19 +185,15 @@ export class ChatMessage extends SumoNode {
 	private renderRows(width: number): string[] {
 		const renderWidth = normalizeWidth(width);
 		if (renderWidth <= 0) return [""];
-		const label = roleLabel(this.role);
-		const prefix = `${label} `;
-		const prefixWidth = visibleWidth(prefix);
-		const firstLineWidth = Math.max(1, renderWidth - prefixWidth);
-		const continuationWidth = Math.max(1, renderWidth - prefixWidth);
-		const contentRows = wrapPlainText(this.text, firstLineWidth);
-		const labelStyle = fg(roleColor(this.role));
-		const textStyle = fg(CATHEDRAL_TOKENS.colors.foreground);
-		return contentRows.map((row, index) => {
-			const content = index === 0 ? row : takeVisible(row, continuationWidth).head;
-			if (index === 0) return `${labelStyle}${prefix}${RESET}${textStyle}${content}${RESET}`;
-			return `${" ".repeat(prefixWidth)}${textStyle}${content}${RESET}`;
-		});
+		if (renderWidth < MIN_BOX_WIDTH) return [fitCellText(this.text, renderWidth)];
+
+		const bodyWidth = Math.max(1, renderWidth - 4);
+		const bodyRows = wrapPlainText(this.text, bodyWidth);
+		return [
+			frameTop(this.role, this.timestamp, renderWidth),
+			...bodyRows.map((row) => frameBody(row, renderWidth)),
+			frameBottom(renderWidth),
+		];
 	}
 
 	private measure(width: number, widthMode: MeasureMode, _height: number, _heightMode: MeasureMode): ChatMessageMeasure {

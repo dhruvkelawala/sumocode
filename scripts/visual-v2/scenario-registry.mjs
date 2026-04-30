@@ -4,7 +4,7 @@ import { approvedRuntimeDir, bibleRenderDir, scenarioManifestPath } from "./path
 import { readJson } from "./fs-utils.mjs";
 
 const STATUSES = new Set(["review", "approved", "required"]);
-const LANES = new Set(["component", "runtime"]);
+const LANES = new Set(["component", "runtime", "fixture"]);
 
 export function loadScenarioRegistry(options = {}) {
 	const manifestPath = options.manifestPath ?? scenarioManifestPath;
@@ -52,6 +52,7 @@ function validateManifest(manifest, manifestPath) {
 		if (!LANES.has(scenario.lane)) throw new Error(`Scenario ${scenario.id} has invalid lane: ${scenario.lane}`);
 		if (!STATUSES.has(scenario.status)) throw new Error(`Scenario ${scenario.id} has invalid status: ${scenario.status}`);
 		if (!scenario.bibleTarget || typeof scenario.bibleTarget !== "string") throw new Error(`Scenario ${scenario.id} needs bibleTarget`);
+		if (scenario.lane === "fixture" && (!scenario.fixture || typeof scenario.fixture.id !== "string")) throw new Error(`Fixture scenario ${scenario.id} needs fixture.id`);
 		if (!scenario.dimensions || !Number.isInteger(scenario.dimensions.cols)) throw new Error(`Scenario ${scenario.id} needs integer dimensions.cols`);
 		if (!Array.isArray(scenario.crops) || scenario.crops.length === 0) throw new Error(`Scenario ${scenario.id} needs crop definitions`);
 		for (const crop of scenario.crops) {

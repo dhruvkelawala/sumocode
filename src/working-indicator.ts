@@ -72,6 +72,7 @@ export function renderIndicator(
  * reads as scriptorium brushwork rather than a frantic CLI spinner.
  */
 export const CATHEDRAL_INDICATOR_INTERVAL_MS = 150;
+export const WORKING_INDICATOR_MIN_WIDTH = 80;
 
 /**
  * Pre-colorize each Cathedral frame with the accent token so Pi can render the
@@ -79,6 +80,26 @@ export const CATHEDRAL_INDICATOR_INTERVAL_MS = 150;
  */
 export function buildCathedralIndicatorFrames(hex: string = CATHEDRAL_TOKENS.colors.accent): string[] {
 	return CATHEDRAL_INDICATOR_FRAMES.map((_, i) => renderIndicator(i, CATHEDRAL_INDICATOR_FRAMES, hex));
+}
+
+/**
+ * Portrait Bible scenes reserve the pre-input breathing row; the working
+ * indicator is a landscape affordance for V1 so it does not consume that row at
+ * 60 columns.
+ */
+function currentTerminalWidth(): number {
+	// Prefer COLUMNS because the visual harness intentionally pins it to the
+	// scenario width; process.stdout.columns can remain stale at 80 inside the
+	// hybrid Pi/SumoTUI bootstrap.
+	const envColumns = Number.parseInt(process.env.COLUMNS ?? "", 10);
+	if (Number.isFinite(envColumns) && envColumns > 0) return envColumns;
+	const stdoutColumns = process.stdout.columns;
+	if (Number.isFinite(stdoutColumns) && stdoutColumns > 0) return stdoutColumns;
+	return 80;
+}
+
+export function shouldInstallWorkingIndicator(width = currentTerminalWidth()): boolean {
+	return width >= WORKING_INDICATOR_MIN_WIDTH;
 }
 
 /**
@@ -110,6 +131,7 @@ export function formatSpinnerInspection(
 export function installWorkingIndicator(pi: ExtensionAPI): void {
 	pi.on("session_start", (_event, ctx) => {
 		if (!ctx.hasUI) return;
+		if (!shouldInstallWorkingIndicator()) return;
 
 		ctx.ui.setWorkingIndicator({
 			frames: buildCathedralIndicatorFrames(),

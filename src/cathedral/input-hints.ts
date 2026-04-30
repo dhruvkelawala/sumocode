@@ -14,9 +14,11 @@
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import type { Component } from "@mariozechner/pi-tui";
 import { visibleWidth } from "@mariozechner/pi-tui";
+import { formatCwd, resolveGitBranch } from "../footer.js";
 import { INPUT_FRAME_HINT_AWAITING, renderInputHints } from "./input-frame.js";
 
 const SPLASH_INPUT_FRAME_WIDTH = 60;
+const PORTRAIT_HINT_BREATHING_WIDTH = 80;
 const ANSI_PATTERN = /\u001b\[[0-9;]*m/g;
 
 function centerAnsi(line: string, width: number): string {
@@ -28,7 +30,10 @@ function centerAnsi(line: string, width: number): string {
 }
 
 class InputHintsComponent implements Component {
-	constructor(private readonly isSplash: () => boolean) {}
+	constructor(
+		private readonly isSplash: () => boolean,
+		private readonly activeLeftHint: () => string | undefined,
+	) {}
 	invalidate(): void {}
 	render(width: number): string[] {
 		if (this.isSplash()) {
@@ -38,8 +43,20 @@ class InputHintsComponent implements Component {
 			const frameWidth = Math.min(width, SPLASH_INPUT_FRAME_WIDTH);
 			return [centerAnsi(renderInputHints(frameWidth, { leftHint: INPUT_FRAME_HINT_AWAITING }), width)];
 		}
-		return [renderInputHints(width)];
+		if (width > 2 && width < PORTRAIT_HINT_BREATHING_WIDTH) {
+			const hint = renderInputHints(width - 2, { leftHint: this.activeLeftHint(), leftHintOverflow: "truncate", leftHintStyle: "project-branch" });
+			return [` ${hint} `, " ".repeat(width)];
+		}
+		return [renderInputHints(width, { leftHint: this.activeLeftHint(), leftHintOverflow: "truncate", leftHintStyle: "project-branch" })];
 	}
+}
+
+function activeContextHint(ctx: ExtensionContext): string | undefined {
+	const cwd = ctx.cwd;
+	if (!cwd) return undefined;
+	const project = formatCwd(cwd);
+	const branch = resolveGitBranch(cwd);
+	return branch ? `${project} (${branch})` : project;
 }
 
 function sessionHasMessages(ctx: ExtensionContext): boolean {
@@ -55,7 +72,7 @@ export function installInputHints(pi: ExtensionAPI): void {
 		if (!ctx.hasUI) return;
 		ctx.ui.setWidget(
 			"sumocode-input-hints",
-			() => new InputHintsComponent(() => !sessionHasMessages(ctx)),
+			() => new InputHintsComponent(() => !sessionHasMessages(ctx), () => activeContextHint(ctx)),
 			{ placement: "belowEditor" },
 		);
 	});

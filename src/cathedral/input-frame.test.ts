@@ -140,6 +140,27 @@ describe("renderInputHints", () => {
 		expect(line).not.toContain("AWAITING");
 	});
 
+	it("can truncate active left context instead of dropping it", () => {
+		const line = stripAnsi(renderInputHints(60, {
+			leftHint: "sumocode (feat/issue-87-active-portrait-scene)",
+			leftHintOverflow: "truncate",
+			leftHintStyle: "project-branch",
+		}));
+		expect(line).toHaveLength(60);
+		expect(line).toContain("sumocode (");
+		expect(line).toContain("…");
+		expect(line).toContain(INPUT_FRAME_HINT_KEYBINDS);
+	});
+
+	it("colors project context foreground and branch dim", () => {
+		const line = renderInputHints(80, {
+			leftHint: "sumocode (main)",
+			leftHintStyle: "project-branch",
+		});
+		expect(line).toContain("\u001b[38;2;245;230;200msumocode");
+		expect(line).toContain("\u001b[38;2;139;122;99m (main)");
+	});
+
 	it("colors CTRL+/ modifier key in accent (#D97706)", () => {
 		const line = renderInputHints(80);
 		expect(line).not.toContain("TAB");

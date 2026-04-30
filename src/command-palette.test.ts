@@ -56,6 +56,13 @@ describe("renderCommandPalette", () => {
 		expect(activeLine?.replace(ANSI, "")).toContain("❈   MODEL");
 	});
 
+	it("uses the Bible contrast divider color for ornamental rules", () => {
+		const lines = renderCommandPalette(snapshot({ activeIndex: 1 }), 80);
+		const dividerLine = lines.find((line) => line.replace(ANSI, "").includes("────") && line.replace(ANSI, "").includes("·"));
+		expect(dividerLine).toContain("\u001b[38;2;90;77;60m─");
+		expect(dividerLine).toContain("\u001b[38;2;90;77;60m·");
+	});
+
 	it("filters rows by label substring case-insensitively", () => {
 		const rows = filterPaletteRows(COMMAND_PALETTE_MODE_ROWS, "thin");
 		expect(rows.map((row) => row.label)).toEqual(["THINKING"]);

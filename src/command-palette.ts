@@ -54,6 +54,9 @@ export const COMMAND_PALETTE_MODE_ROWS: readonly PaletteRow[] = [
 const RESET = "\u001b[0m";
 const FG_RESET = "\u001b[39m";
 const PANEL_BG = CATHEDRAL_TOKENS.colors.surfaceLifted;
+// Bible `fg-divider` intentionally uses the higher-contrast mockup divider
+// (#5A4D3C) so ornament rules stay visible on the warm lifted panel.
+const PALETTE_DIVIDER = "#5A4D3C";
 
 function ansiColor(hex: string, channel: 38 | 48): string {
 	const normalized = hex.replace("#", "");
@@ -76,7 +79,7 @@ function accent(text: string): string {
 }
 
 function dividerText(text: string): string {
-	return fg(text, CATHEDRAL_TOKENS.colors.divider);
+	return fg(text, PALETTE_DIVIDER);
 }
 
 function foreground(text: string): string {

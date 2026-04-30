@@ -17,8 +17,7 @@ const FG_CLASS_MAP = {
 	"fg-accent":   "#D97706",
 	"fg-fg":       "#F5E6C8",
 	"fg-dim":      "#8B7A63",
-	"fg-divider":  "#3A2F25",  // Bible uses --divider-mockup (#5A4D3C) for legibility;
-	                            // runtime uses --divider (#3A2F25). We normalize to runtime.
+	"fg-divider":  "#5A4D3C",
 	"fg-comment":  "#6F5D46",
 	"fg-idle":     "#22C55E",  // Bible uses --state-idle (#7FB069); runtime token is #22C55E.
 	                            // TODO: reconcile once runtime palette is final.
@@ -46,8 +45,6 @@ const DEFAULT_BG = "#1A1511";
  * These pairs are treated as equivalent during diff.
  */
 const EQUIVALENT_PAIRS = [
-	// divider: Bible uses mockup-bumped contrast, runtime uses production value
-	{ bible: "#5A4D3C", runtime: "#3A2F25", reason: "divider-mockup vs divider" },
 	// idle state: Bible tokens.css has #7FB069, runtime CATHEDRAL_TOKENS uses #22C55E
 	{ bible: "#7FB069", runtime: "#22C55E", reason: "state-idle palette difference" },
 ];
@@ -325,6 +322,20 @@ export function runtimeStyledGrid(snapshot) {
 		grid.push(outRow);
 	}
 	return { cols: snapshot.cols, rows: snapshot.rows, grid };
+}
+
+export function cropStyledGrid(source, crop) {
+	if (!crop || crop.kind === "full") return source;
+	const grid = [];
+	for (let row = 0; row < crop.rows; row++) {
+		const srcRow = source.grid[crop.y + row] ?? [];
+		const outRow = [];
+		for (let col = 0; col < crop.cols; col++) {
+			outRow.push(srcRow[crop.x + col] ?? { char: " ", fg: DEFAULT_FG, bg: DEFAULT_BG, bold: false, dim: false });
+		}
+		grid.push(outRow);
+	}
+	return { cols: crop.cols, rows: crop.rows, grid };
 }
 
 // ── Diff ──────────────────────────────────────────────────────────

@@ -79,7 +79,7 @@ describe("StaticSidebarDock", () => {
 
 		const lines = dock.render(160).map(stripAnsi);
 
-		expect(left.renderCalls).toEqual([160 - SIDEBAR_WIDTH - 1]);
+		expect(left.renderCalls).toEqual([160 - SIDEBAR_WIDTH - 2]);
 		expect(right.renderCalls).toEqual([SIDEBAR_WIDTH]);
 		expect(lines[0]).toContain("hello from chat");
 		expect(lines[0]).toContain("CTX");

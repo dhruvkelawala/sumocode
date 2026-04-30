@@ -6,6 +6,7 @@ import { chatMessageViewModelFromPiMessage, chatMessageViewModelToPlainText, tra
 import { ChatPager } from "../widgets/chat-pager.js";
 import { chatScrollCommandFromInput } from "../widgets/chat-scroll-command.js";
 import { SIDEBAR_MIN_TERMINAL_WIDTH, SIDEBAR_WIDTH } from "../../sidebar.js";
+import { sidebarGutterWidth } from "../../sidebar-placement.js";
 
 const CHAT_VIEWPORT_BRIDGE_INSTALLED = Symbol("sumo-tui.chat-viewport-bridge-installed");
 const PORTRAIT_STATUS_MIN_WIDTH = 80;
@@ -174,10 +175,12 @@ export class ChatViewportController {
 		// predicate Pi uses for showing the sidebar is true. The sidebar's own
 		// right-side cols come from Pi's separate widget paint.
 		const terminalWidth = Math.max(1, Math.floor(width));
+		const terminalHeight = Math.max(1, this.host.ui?.terminal?.rows ?? 24);
 		const sidebarVisible = terminalWidth >= SIDEBAR_MIN_TERMINAL_WIDTH && this.chat.hasMessages();
+		const sidebarGutter = sidebarVisible ? sidebarGutterWidth(terminalWidth, terminalHeight) : 0;
 		const portraitGutterVisible = !sidebarVisible && this.chat.hasMessages() && terminalWidth < PORTRAIT_CHAT_GUTTER_MIN_WIDTH;
 		const effectiveWidth = sidebarVisible
-			? Math.max(1, terminalWidth - SIDEBAR_WIDTH)
+			? Math.max(1, terminalWidth - SIDEBAR_WIDTH - sidebarGutter)
 			: portraitGutterVisible
 				? Math.max(1, terminalWidth - 1)
 				: terminalWidth;

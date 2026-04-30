@@ -33,7 +33,18 @@ export function chooseSidebarAnchor(
 	return "right-center";
 }
 
-const STATIC_SIDEBAR_GUTTER = 1;
+export const SIDEBAR_GUTTER_WIDTH = 2;
+export const PORTRAIT_SIDEBAR_GUTTER_WIDTH = 4;
+export const SIDEBAR_OVERLAY_TOP_MARGIN_ROWS = 2;
+export const SIDEBAR_OVERLAY_BOTTOM_RESERVED_ROWS = 8;
+
+export function sidebarOverlayTargetRows(termHeight: number): number {
+	return Math.max(1, Math.floor(termHeight) - SIDEBAR_OVERLAY_TOP_MARGIN_ROWS - SIDEBAR_OVERLAY_BOTTOM_RESERVED_ROWS);
+}
+
+export function sidebarGutterWidth(termWidth: number, termHeight: number): number {
+	return termHeight > termWidth ? PORTRAIT_SIDEBAR_GUTTER_WIDTH : SIDEBAR_GUTTER_WIDTH;
+}
 const STATIC_SIDEBAR_DOCK_MARKER = Symbol("sumocode.staticSidebarDock");
 
 type MutableTuiRoot = {
@@ -85,7 +96,7 @@ export class StaticSidebarDock implements Component {
 			return renderComponents(this.mainComponents, width);
 		}
 
-		const mainWidth = Math.max(1, width - SIDEBAR_WIDTH - STATIC_SIDEBAR_GUTTER);
+		const mainWidth = Math.max(1, width - SIDEBAR_WIDTH - SIDEBAR_GUTTER_WIDTH);
 		const mainLines = renderComponents(this.mainComponents, mainWidth);
 		const sidebarLines = this.sidebarComponent.render(SIDEBAR_WIDTH);
 		// The dock is part of Pi's vertical root flow above the editor/footer. Its
@@ -109,7 +120,7 @@ export class StaticSidebarDock implements Component {
 			const right = i < sidebarLines.length
 				? padToWidth(sidebarLines[i]!, SIDEBAR_WIDTH)
 				: blankSidebarRow;
-			lines.push(`${left}${" ".repeat(STATIC_SIDEBAR_GUTTER)}${right}`);
+			lines.push(`${left}${" ".repeat(SIDEBAR_GUTTER_WIDTH)}${right}`);
 		}
 
 		return lines;
@@ -168,7 +179,7 @@ export function installNonCapturingSidebarOverlay(
 	const overlayOptions: OverlayOptions = {
 		width: SIDEBAR_WIDTH,
 		anchor: "top-right",
-		margin: { top: 1, right: 0, bottom: 6, left: 0 },
+		margin: { top: SIDEBAR_OVERLAY_TOP_MARGIN_ROWS, right: 0, bottom: SIDEBAR_OVERLAY_BOTTOM_RESERVED_ROWS, left: 0 },
 		maxHeight: "100%",
 		nonCapturing: true,
 		visible: (termWidth) => termWidth >= SIDEBAR_MIN_TERMINAL_WIDTH && shouldShowSidebar(),

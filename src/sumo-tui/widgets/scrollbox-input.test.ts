@@ -23,7 +23,23 @@ function wheel(row: number, col: number, scrollDir: "up" | "down"): MouseEvent {
 }
 
 describe("ScrollBox input", () => {
-	it("mouse wheel inside scrollbox scrolls by the acceleration amount", async () => {
+	it("mouse wheel defaults to one row per tick for precise chat scrolling", async () => {
+		const yoga = await loadYoga();
+		const root = new SumoNode(yoga.Node.create());
+		const scrollBox = new ScrollBox(yoga.Node.create(), root);
+		for (let index = 0; index < 8; index += 1) new RowNode(yoga.Node.create(), scrollBox);
+		root.width = 4;
+		root.height = 3;
+		root.flexDirection = FLEX_DIRECTION_COLUMN;
+		root.yogaNode.calculateLayout(4, 3, DIRECTION_LTR);
+		composite(root, new CellBuffer(3, 4));
+
+		expect(dispatchMouseEvent(root, wheel(1, 1, "down"))).toBe(true);
+		expect(scrollBox.scrollOffset).toBe(1);
+		root.dispose();
+	});
+
+	it("mouse wheel inside scrollbox scrolls by the configured acceleration amount", async () => {
 		const yoga = await loadYoga();
 		const root = new SumoNode(yoga.Node.create());
 		const scrollBox = new ScrollBox(yoga.Node.create(), root, { scrollAcceleration: 3 });

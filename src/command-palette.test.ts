@@ -213,4 +213,10 @@ describe("handlePaletteSelection", () => {
 		expect(select).toHaveBeenCalledWith("THINKING", ["off", "minimal", "low", "medium", "high", "xhigh"]);
 		expect(setThinkingLevel).toHaveBeenCalledWith("xhigh");
 	});
+
+	it("SETTINGS opens Pi settings through the command editor", async () => {
+		const setEditorText = vi.fn();
+		await handlePaletteSelection("SETTINGS", { ui: { setEditorText } } as never, {} as never);
+		expect(setEditorText).toHaveBeenCalledWith("/settings");
+	});
 });

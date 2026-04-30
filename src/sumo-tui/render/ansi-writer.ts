@@ -2,6 +2,7 @@ import { visibleWidth } from "@mariozechner/pi-tui";
 import type { Cell, CellAttrs } from "./cell.js";
 import { attrsEqual, createAttrs } from "./cell.js";
 import type { CellBuffer } from "./buffer.js";
+import { parseHexColor } from "./truecolor.js";
 
 interface StyleState {
 	fg?: string;
@@ -10,13 +11,6 @@ interface StyleState {
 }
 
 const DEFAULT_STYLE: StyleState = { attrs: createAttrs() };
-
-function parseHexColor(color: string | undefined): [number, number, number] | undefined {
-	if (!color) return undefined;
-	const hex = color.startsWith("#") ? color.slice(1) : color;
-	if (!/^[0-9a-fA-F]{6}$/.test(hex)) return undefined;
-	return [Number.parseInt(hex.slice(0, 2), 16), Number.parseInt(hex.slice(2, 4), 16), Number.parseInt(hex.slice(4, 6), 16)];
-}
 
 function styleEqual(left: StyleState, right: StyleState): boolean {
 	return left.fg === right.fg && left.bg === right.bg && attrsEqual(left.attrs, right.attrs);

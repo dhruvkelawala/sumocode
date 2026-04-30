@@ -130,6 +130,23 @@ describe("ChatPager", () => {
 		root.dispose();
 	});
 
+	it("passes the configured primary agent name into assistant chat headers", async () => {
+		const yoga = await loadYoga();
+		const root = new SumoNode(yoga.Node.create());
+		const chat = ChatPager.create(yoga, root, { primaryAgentName: "Zeus" });
+		root.width = 24;
+		root.height = 5;
+		root.flexDirection = FLEX_DIRECTION_COLUMN;
+		chat.addMessage("sumo", "done", new Date("2026-04-30T11:42:00.000"));
+
+		root.yogaNode.calculateLayout(24, 5, DIRECTION_LTR);
+		const frame = new CellBuffer(5, 24);
+		composite(root, frame);
+
+		expect(frame.toPlainRow(0)).toMatch(/^╭ ZEUS ─+ 11:42 ─╮$/);
+		root.dispose();
+	});
+
 	it("tool result during typing keeps the editor cursor leaf stable (EC-2.3)", async () => {
 		const yoga = await loadYoga();
 		const root = new SumoNode(yoga.Node.create());

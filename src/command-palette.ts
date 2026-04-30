@@ -280,6 +280,12 @@ export async function handlePaletteSelection(mode: PaletteMode | undefined, ctx:
 		const themes = ctx.ui.getAllThemes().map((theme) => theme.name);
 		const selected = await ctx.ui.select("THEME", themes);
 		if (selected) ctx.ui.setTheme(selected);
+		return;
+	}
+
+	if (mode === "SETTINGS") {
+		ctx.ui.setEditorText("/settings");
+		return;
 	}
 }
 

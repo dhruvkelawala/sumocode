@@ -112,4 +112,20 @@ describe("ChatMessage", () => {
 		expect(buffer.toPlainRow(2)).toBe(`│ rest${" ".repeat(52)} │`);
 		root.dispose();
 	});
+
+	it("uses the configured primary agent name for assistant headers", async () => {
+		const yoga = await loadYoga();
+		const root = new SumoNode(yoga.Node.create());
+		root.flexDirection = FLEX_DIRECTION_COLUMN;
+		root.width = 18;
+		root.height = 5;
+		ChatMessage.create(yoga, "sumo", "configured name", root, FIXED_TIME, undefined, { primaryAgentName: "Zeus" });
+
+		root.yogaNode.calculateLayout(18, 5, DIRECTION_LTR);
+		const buffer = new CellBuffer(5, 18);
+		composite(root, buffer);
+
+		expect(buffer.toPlainRow(0)).toMatch(/^╭ ZEUS ─+ 11:42 ─╮$/);
+		root.dispose();
+	});
 });

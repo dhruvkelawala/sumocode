@@ -30,6 +30,7 @@
 import type { AgentSessionRuntime, InteractiveModeOptions } from "@mariozechner/pi-coding-agent";
 import { InteractiveMode } from "@mariozechner/pi-coding-agent";
 import type { ExtensionUIContext } from "@mariozechner/pi-coding-agent";
+import { loadSumoCodeConfig } from "../../config/sumocode-config.js";
 import { EmptyChatQuoteNode, shouldRenderEmptyChatQuote, type EmptyChatQuoteSnapshot } from "../cathedral/empty-chat-quote.js";
 import { createSplashTree, defaultSplashSnapshot, type SplashTree } from "../cathedral/splash-tree.js";
 import { SumoNode } from "../layout/node.js";
@@ -147,9 +148,11 @@ export class SumoInteractiveRuntime {
 		}
 
 		this.yoga = await loadYoga();
+		const sumocodeConfig = loadSumoCodeConfig().config;
 		this.root = new SumoNode(this.yoga.Node.create());
 		this.root.flexDirection = FLEX_DIRECTION_COLUMN;
 		this.chat = ChatPager.create(this.yoga, undefined, {
+			primaryAgentName: sumocodeConfig.primaryAgentName,
 			renderControls: {
 				scheduleRender: () => this.requestRender(),
 				setStreamingMode: (enabled) => this.setStreamingMode(enabled),

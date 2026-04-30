@@ -48,7 +48,7 @@ Unchanged from v1. Reproduced for completeness.
 | `#1A1511` | `background` | terminal-default (OSC 11), splash bg, chat bg |
 | `#241D17` | `surface` | sidebar bg, modal bg |
 | `#120D0A` | `surfaceRecess` | input frame bg, code block bg |
-| `#3A342F` | `surfaceLifted` | modal bg (alternate), focused row band |
+| `#3D3024` | `surfaceLifted` | modal bg (alternate), focused row band |
 | `#3A2F25` | `divider` | sub-section dividers, sidebar tab inactive bg |
 | `#F5E6C8` | `foreground` | most body text |
 | `#8B7A63` | `foregroundDim` | metadata, line numbers, hints |

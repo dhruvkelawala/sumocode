@@ -17,6 +17,10 @@ Review pack:
 docs/visual/out/parity/index.html
 ```
 
+Scene review records:
+
+- `ACTIVE_LANDSCAPE_REVIEW.md` — #86 composed active landscape runtime review
+
 Run one scenario:
 
 ```bash

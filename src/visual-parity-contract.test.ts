@@ -85,6 +85,18 @@ describe("V2 visual parity contract", () => {
 		]));
 	});
 
+	it("keeps active landscape runtime composition crops present", () => {
+		expect(scenario("active-landscape-runtime").crops.map((crop) => crop.id)).toEqual([
+			"full",
+			"top-bar",
+			"sidebar",
+			"chat-area",
+			"input-frame",
+			"hint-row",
+			"footer",
+		]);
+	});
+
 	it("keeps the V1 portrait runtime no-sidebar with crop-level evidence", () => {
 		const portrait = scenario("active-portrait-runtime");
 

@@ -31,7 +31,10 @@ class Spacer {}
 
 describe("sumo interactive Pi noise filtering", () => {
 	it("matches Pi startup noise Text components after ANSI styling", () => {
+		expect(isPiNoiseTextComponent(new TextNode("\x1b[33m[Skill conflicts]\x1b[0m\n  \"use-railway\" collision:"))).toBe(true);
+		expect(isPiNoiseTextComponent(new TextNode("\x1b[33m[Prompt conflicts]\x1b[0m\nconflict"))).toBe(true);
 		expect(isPiNoiseTextComponent(new TextNode("\x1b[33m[Extension issues]\x1b[0m\nshortcut conflict"))).toBe(true);
+		expect(isPiNoiseTextComponent(new TextNode("\x1b[33m[Theme conflicts]\x1b[0m\nconflict"))).toBe(true);
 		expect(isPiNoiseTextComponent(new TextNode("\x1b[33mWarning: Anthropic subscription auth is active. Third-party harness usage draws from extra usage.\x1b[0m"))).toBe(true);
 		expect(isPiNoiseTextComponent(new TextNode("Warning: Wait for the current response to finish before reloading."))).toBe(false);
 	});

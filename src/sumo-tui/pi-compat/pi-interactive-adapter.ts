@@ -3,7 +3,10 @@ const FALSE_ENV_VALUES = new Set(["0", "false", "no", "off"]);
 const PI_NOISE_FILTER_INSTALLED = Symbol("sumo-tui.pi-noise-filter-installed");
 
 export const PI_NOISE_TEXT_PATTERNS: readonly RegExp[] = [
+	/\[Skill conflicts\]/i,
+	/\[Prompt conflicts\]/i,
 	/\[Extension issues\]/i,
+	/\[Theme conflicts\]/i,
 	/Warning:\s*Anthropic subscription auth is active/i,
 	/Anthropic subscription auth is active\. Third-party harness usage/i,
 ];

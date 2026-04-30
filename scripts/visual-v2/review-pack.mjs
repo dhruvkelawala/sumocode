@@ -154,6 +154,7 @@ function scenarioDescription(scenario) {
 		"active-portrait-runtime": "Real portrait post-submit active-working capture. Offline runtime is expected to show SUMO working/meditating, not a completed model answer.",
 		"fixture-completed-landscape": "Deterministic 160x45 completed transcript fixture with read/edit/bash tool blocks.",
 		"fixture-completed-portrait": "Deterministic 60x100 completed transcript fixture using the no-sidebar portrait policy.",
+		"fixture-command-palette-overlay": "Deterministic completed transcript fixture with the V2 Scriptorium command palette centered as an overlay.",
 		"fixture-tool-ledger-landscape": "Deterministic tool-heavy fixture for reviewing completed tool state composition.",
 	};
 	return descriptions[scenario.id] ?? "Visual parity scenario.";

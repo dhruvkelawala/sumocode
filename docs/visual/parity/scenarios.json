@@ -99,9 +99,9 @@
 		},
 		"overlay-center": {
 			"x": 40,
-			"y": 16,
+			"y": 14,
 			"cols": 80,
-			"rows": 13
+			"rows": 17
 		}
 	},
 	"scenarios": [
@@ -656,6 +656,45 @@
 				"contentBounds": {
 					"minFirst": 0,
 					"maxLast": 59
+				}
+			}
+		},
+		{
+			"id": "fixture-command-palette-overlay",
+			"lane": "fixture",
+			"status": "review",
+			"dimensions": {
+				"cols": 160,
+				"rows": 45
+			},
+			"bibleTarget": "scene-palette-overlay.png",
+			"fixture": {
+				"id": "completed-active",
+				"overlay": "command-palette"
+			},
+			"crops": [
+				{
+					"id": "full",
+					"targetCrop": "full",
+					"runtimeCrop": "full"
+				},
+				{
+					"id": "overlay-center",
+					"targetCrop": "overlay-center",
+					"runtimeCrop": "overlay-center"
+				}
+			],
+			"geometrySpec": {
+				"regions": [
+					{
+						"startRow": 15,
+						"endRow": 15,
+						"category": "overlay"
+					}
+				],
+				"contentBounds": {
+					"minFirst": 0,
+					"maxLast": 159
 				}
 			}
 		},

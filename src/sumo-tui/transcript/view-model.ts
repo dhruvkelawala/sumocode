@@ -30,6 +30,12 @@ export interface DelegationViewModel {
 	readonly agent?: string;
 	readonly status: DelegationStatus;
 	readonly summary?: string;
+	readonly model?: string;
+	readonly thinking?: string;
+	readonly nestedTools?: readonly ToolCallViewModel[];
+	readonly tokensIn?: number;
+	readonly tokensOut?: number;
+	readonly elapsedMs?: number;
 }
 
 export type ChatBlock =
@@ -195,7 +201,24 @@ function questionBlockFromRecord(record: Record<string, unknown>): ChatBlock {
 	};
 }
 
+function parseDelegationTools(value: unknown): ToolCallViewModel[] {
+	if (!Array.isArray(value)) return [];
+	const results: ToolCallViewModel[] = [];
+	for (const item of value) {
+		const r = asRecord(item);
+		if (!r) continue;
+		results.push({
+			name: firstString(r.name, r.toolName) ?? "tool",
+			status: normalizeStatus(r.status, "success") as ToolStatus,
+			input: r.input ?? r.arguments,
+			output: asString(r.output),
+		});
+	}
+	return results;
+}
+
 function delegationBlockFromRecord(record: Record<string, unknown>): ChatBlock {
+	const details = asRecord(record.details);
 	return {
 		type: "delegation",
 		delegation: {
@@ -204,6 +227,12 @@ function delegationBlockFromRecord(record: Record<string, unknown>): ChatBlock {
 			agent: firstString(record.agent, record.target),
 			status: normalizeDelegationStatus(record.status),
 			summary: firstString(record.summary, record.text, record.description),
+			model: firstString(details?.model, record.model),
+			thinking: firstString(details?.thinking, record.thinking),
+			nestedTools: parseDelegationTools(details?.tools ?? record.tools),
+			tokensIn: typeof (details?.tokensIn ?? record.tokensIn) === "number" ? (details?.tokensIn ?? record.tokensIn) as number : undefined,
+			tokensOut: typeof (details?.tokensOut ?? record.tokensOut) === "number" ? (details?.tokensOut ?? record.tokensOut) as number : undefined,
+			elapsedMs: typeof (details?.elapsedMs ?? record.elapsedMs) === "number" ? (details?.elapsedMs ?? record.elapsedMs) as number : undefined,
 		},
 	};
 }

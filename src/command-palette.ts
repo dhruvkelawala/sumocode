@@ -2,6 +2,7 @@ import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-age
 import type { Component, OverlayOptions } from "@mariozechner/pi-tui";
 import { Key, matchesKey, truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
 import type { ThinkingLevel } from "./footer.js";
+import { showDivineQuery } from "./divine-query.js";
 import { CATHEDRAL_TOKENS } from "./tokens.js";
 
 export type PaletteMode = "SESSION" | "MODEL" | "THINKING" | "MEMORY" | "THEME" | "SETTINGS";
@@ -257,14 +258,14 @@ export async function handlePaletteSelection(mode: PaletteMode | undefined, ctx:
 
 	if (mode === "MODEL") {
 		const models = ctx.modelRegistry.getAvailable();
-		const selected = await ctx.ui.select("MODEL", models.map((model) => model.id));
+		const selected = await showDivineQuery(ctx, "Choose a model", models.map((model) => model.id));
 		const model = models.find((candidate) => candidate.id === selected);
 		if (model) await pi.setModel(model);
 		return;
 	}
 
 	if (mode === "THINKING") {
-		const selected = await ctx.ui.select("THINKING", [...COMMAND_PALETTE_THINKING_LEVELS]);
+		const selected = await showDivineQuery(ctx, "Set thinking level", [...COMMAND_PALETTE_THINKING_LEVELS]);
 		if (selected && COMMAND_PALETTE_THINKING_LEVELS.includes(selected as ThinkingLevel)) {
 			pi.setThinkingLevel(selected as ThinkingLevel);
 		}
@@ -278,7 +279,7 @@ export async function handlePaletteSelection(mode: PaletteMode | undefined, ctx:
 
 	if (mode === "THEME") {
 		const themes = ctx.ui.getAllThemes().map((theme) => theme.name);
-		const selected = await ctx.ui.select("THEME", themes);
+		const selected = await showDivineQuery(ctx, "Choose a theme", themes);
 		if (selected) ctx.ui.setTheme(selected);
 		return;
 	}

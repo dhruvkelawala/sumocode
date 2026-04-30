@@ -308,6 +308,7 @@ async function renderFixtureScene(scenario, fixture) {
 }
 
 async function applyOverlay(lines, cols, rows, overlay) {
+	if (overlay === "divine-query") return applyDivineQueryOverlay(lines, cols, rows);
 	if (overlay !== "command-palette") throw new Error(`Unsupported fixture overlay: ${overlay}`);
 	const palette = await jiti.import(`${repoRoot}/src/command-palette.ts`);
 
@@ -331,6 +332,30 @@ async function applyOverlay(lines, cols, rows, overlay) {
 		// preserving the left margin and right remnant.
 		const existingLine = next[top + index] ?? "";
 		const rightStart = left + paletteWidth;
+		const leftRemnant = padAnsiToWidth(sliceByColumn(existingLine, 0, left, true), left);
+		const rightRemnant = rightStart < cols ? sliceByColumn(existingLine, rightStart, cols - rightStart, true) : "";
+		next[top + index] = padAnsiToWidth(`${leftRemnant}${overlayLine}${rightRemnant}`, cols);
+	}
+	return next;
+}
+
+async function applyDivineQueryOverlay(lines, cols, rows) {
+	const divineQuery = await jiti.import(`${repoRoot}/src/divine-query.ts`);
+
+	const overlayWidth = Math.max(50, Math.min(80, Math.floor(cols * 0.6)));
+	const overlayLines = divineQuery.renderDivineQuery({
+		title: "Should I rename `getUser` to `fetchUser` across the auth module?",
+		options: ["Yes, rename it everywhere", "No, leave it as-is", "Use a different name"],
+		focusedIndex: 1,
+	}, overlayWidth);
+
+	const left = Math.max(0, Math.floor((cols - overlayWidth) / 2));
+	const top = Math.max(0, Math.floor((rows - overlayLines.length) / 2));
+	const next = [...lines];
+	for (let index = 0; index < overlayLines.length && top + index < rows; index += 1) {
+		const overlayLine = padAnsiToWidth(overlayLines[index] ?? "", overlayWidth);
+		const existingLine = next[top + index] ?? "";
+		const rightStart = left + overlayWidth;
 		const leftRemnant = padAnsiToWidth(sliceByColumn(existingLine, 0, left, true), left);
 		const rightRemnant = rightStart < cols ? sliceByColumn(existingLine, rightStart, cols - rightStart, true) : "";
 		next[top + index] = padAnsiToWidth(`${leftRemnant}${overlayLine}${rightRemnant}`, cols);

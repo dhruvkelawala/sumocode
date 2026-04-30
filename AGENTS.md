@@ -99,6 +99,14 @@ The user-facing wrapper is `bin/sumocode.sh`:
 
 Do not casually change `patches/@mariozechner__pi-coding-agent@*.patch`, `SUMO_TUI`, `SUMO_TUI_MODULE`, or `sumo-interactive-mode.js`. Pi version bumps must follow `docs/research/pi-fork-upgrade.md` and the smoke matrix in `docs/SUMO_TUI_PI_PATCH_STRATEGY.md`.
 
+### Pi ↔ SumoCode tool boundary
+
+Read `docs/PI_TOOL_ARCHITECTURE.md` before adding, overriding, or intercepting tools. Key rules:
+
+- **Built-in tools** (`bash`, `read`, `write`, `edit`, `mcp`, `task`): never re-register. Intercept via `pi.on("tool_call")` for gating; render via transcript view-model pipeline.
+- **Pi example extensions** (e.g. `question`): override by registering a tool with the same `name` in SumoCode. SumoCode's version replaces Pi's.
+- **Pi internal UI** (`showExtensionSelector`, `showExtensionConfirm`): cannot be intercepted without upstream changes. SumoCode-owned code calls `showDivineQuery()` directly instead of `ctx.ui.select`.
+
 ## Cathedral rendering
 
 `src/cathedral/` and `src/sumo-tui/cathedral/` hold Cathedral-themed adapters and retained UI nodes. The visual canon is:

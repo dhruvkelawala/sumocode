@@ -102,6 +102,34 @@ const FIXTURES = {
 			],
 		},
 	},
+	"code-block": {
+		transcript: {
+			messages: [
+				{
+					id: "u1",
+					role: "user",
+					displayName: "USER",
+					timestamp: FIXTURE_TIMES.userOne,
+					blocks: [{ type: "markdown", text: "show me the auth flow" }],
+				},
+				{
+					id: "s1",
+					role: "sumo",
+					displayName: "SUMO",
+					timestamp: FIXTURE_TIMES.sumoOne,
+					blocks: [
+						{ type: "markdown", text: "Here's the authentication handler:" },
+						{
+							type: "code",
+							lang: "ts",
+							source: 'async function authenticate(token: string) {\n  const session = await Session.fromToken(token);\n  if (!session || session.expired) return null;\n\n  // emit auth event for telemetry\n  emit("auth.success", { userId: session.user.id });\n  return session.user;\n}',
+						},
+						{ type: "markdown", text: "The session lookup validates the token and checks expiry before emitting a telemetry event." },
+					],
+				},
+			],
+		},
+	},
 };
 
 export async function captureFixtureScenario(scenario) {

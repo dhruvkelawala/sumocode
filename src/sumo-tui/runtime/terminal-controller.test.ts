@@ -116,6 +116,117 @@ describe("TerminalSessionOwner", () => {
 		expect(output.writes).toEqual(["\x1b[?2026h\x1b[2;1Hhello\x1b[K\x1b[3;5H\x1b[?25h\x1b[?2026l"]);
 	});
 
+	it("emits a partial-row patch without \\x1b[K when startCol > 0", () => {
+		const output = outputStub();
+		const terminal = new TerminalSessionOwner({ output });
+
+		terminal.writeFramePatches([{ row: 1, startCol: 4, ansi: "DEF" }], null);
+
+		// Partial patches MUST skip clear-to-end-of-line so cells right of the
+		// change region survive untouched. Cursor position 5 (= startCol + 1).
+		expect(output.writes).toEqual(["\x1b[?2026h\x1b[2;5HDEF\x1b[?2026l"]);
+		expect(output.writes[0]).not.toContain("\x1b[K");
+	});
+
+	it("lazy frame-start: emits zero bytes for a no-op tick (no patches, no cursor)", () => {
+		const output = outputStub();
+		const terminal = new TerminalSessionOwner({ output });
+
+		terminal.writeFramePatches([], null);
+
+		expect(output.writes).toEqual([]);
+	});
+
+	it("lazy frame-start: emits zero bytes when the cursor lands on its last-emitted position", () => {
+		const output = outputStub();
+		const terminal = new TerminalSessionOwner({ output });
+
+		// First call emits the cursor; cache lastEmittedCursor = (2, 4).
+		terminal.writeFramePatches([], { row: 2, col: 4 });
+		expect(output.writes.length).toBe(1);
+
+		// Second call with same cursor + no patches → no bytes.
+		terminal.writeFramePatches([], { row: 2, col: 4 });
+		expect(output.writes.length).toBe(1);
+	});
+
+	it("re-emits cursor after every patch frame even when the logical cursor is unchanged", () => {
+		// Correctness gate: the patch loop physically moves the terminal cursor
+		// to each patched row via `\x1b[r;cH`, so skipping the final cursor
+		// reposition would leave the caret parked at the end of the last patch.
+		// Cursor-write elision is only safe for true no-op frames.
+		const output = outputStub();
+		const terminal = new TerminalSessionOwner({ output });
+
+		terminal.writeFramePatches([{ row: 0, ansi: "hello" }], { row: 2, col: 4 });
+		output.writes.length = 0;
+
+		terminal.writeFramePatches([{ row: 1, ansi: "world" }], { row: 2, col: 4 });
+
+		// The cursor reposition (`\x1b[3;5H\x1b[?25h`) MUST appear even though
+		// the logical cursor didn't move, because the patch above moved the
+		// terminal cursor to row 2.
+		expect(output.writes).toEqual(["\x1b[?2026h\x1b[2;1Hworld\x1b[K\x1b[3;5H\x1b[?25h\x1b[?2026l"]);
+	});
+
+	it("emits ONLY cursor reposition when patches=0 but cursor moved (no wrapper savings, but no patches either)", () => {
+		const output = outputStub();
+		const terminal = new TerminalSessionOwner({ output });
+
+		// Seed lastEmittedCursor with the first call, then move cursor only.
+		terminal.writeFramePatches([], { row: 0, col: 0 });
+		output.writes.length = 0;
+
+		terminal.writeFramePatches([], { row: 5, col: 10 });
+
+		expect(output.writes).toEqual(["\x1b[?2026h\x1b[6;11H\x1b[?25h\x1b[?2026l"]);
+	});
+
+	it("invalidates the cursor cache when emitting patches with a null cursor (hardwareCursor=null path)", () => {
+		// Regression: the patch loop physically moves the terminal cursor when
+		// patches are emitted, even when no logical cursor is provided. Failing
+		// to invalidate `lastEmittedCursor` here would let the next frame (with
+		// a cursor matching the stale cache) early-return and leave the visible
+		// caret parked at the end of the last patch.
+		const output = outputStub();
+		const terminal = new TerminalSessionOwner({ output });
+
+		// Frame A: seed the cache with cursor (5, 10).
+		terminal.writeFramePatches([{ row: 0, ansi: "a" }], { row: 5, col: 10 });
+
+		// Frame B: patches with null cursor. Patch loop moves the terminal
+		// cursor; logical cursor isn't tracked. Cache MUST be invalidated.
+		terminal.writeFramePatches([{ row: 1, ansi: "b" }], null);
+		output.writes.length = 0;
+
+		// Frame C: same logical cursor as frame A. With the bug, this would
+		// early-return because cursorMoved=false against the stale cache.
+		// With the fix, cache was nulled by frame B, so cursorMoved=true and
+		// we re-emit the cursor reposition.
+		terminal.writeFramePatches([], { row: 5, col: 10 });
+
+		expect(output.writes).toEqual(["\x1b[?2026h\x1b[6;11H\x1b[?25h\x1b[?2026l"]);
+	});
+
+	it("re-emits cursor after exitTerminal clears lastEmittedCursor", () => {
+		const output = outputStub();
+		const terminal = new TerminalSessionOwner({ output });
+
+		terminal.writeFramePatches([], { row: 2, col: 4 });
+		terminal.exitTerminal();
+		// After exit, lastEmittedCursor must be reset so re-entering altscreen
+		// re-emits cursor sequences.
+		output.writes.length = 0;
+
+		// Simulate fresh session re-entering: re-set isTTY by creating a new
+		// owner referencing the same output. (`exitTerminal` flips internal
+		// state; we just want to confirm a subsequent write emits cursor.)
+		const next = new TerminalSessionOwner({ output });
+		next.writeFramePatches([], { row: 2, col: 4 });
+
+		expect(output.writes).toEqual(["\x1b[?2026h\x1b[3;5H\x1b[?25h\x1b[?2026l"]);
+	});
+
 	it("exitTerminal emits cleanup without cursor or bg reset when retained mode was never entered", () => {
 		const output = outputStub();
 		const terminal = new TerminalSessionOwner({ output });

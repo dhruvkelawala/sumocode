@@ -252,9 +252,11 @@ export class ChatViewportController {
 				events: parsed.events.length,
 				types: parsed.events.map((event) => event.type),
 			});
+			let mouseViewportDirty = false;
 			for (const event of parsed.events) {
-				this.handleMouse(event);
+				mouseViewportDirty = this.handleMouse(event, { deferRender: true }) || mouseViewportDirty;
 			}
+			if (mouseViewportDirty) this.renderChatViewportOrRequest();
 
 			// Strip every complete SGR mouse sequence — including wheel-left/right
 			// (button codes 66/67) and any other variants the parser may not
@@ -455,7 +457,7 @@ export class ChatViewportController {
 		});
 	}
 
-	private handleMouse(event: MouseEvent): boolean {
+	private handleMouse(event: MouseEvent, options: { deferRender?: boolean } = {}): boolean {
 		const localEvent: MouseEvent = {
 			...event,
 			row: event.row - this.lastChatTop,
@@ -481,7 +483,7 @@ export class ChatViewportController {
 			scrollOffsetBefore: beforeOffset,
 			scrollOffsetAfter: this.chat.scrollBox.scrollOffset,
 		});
-		if (handled || handledSelection) this.renderChatViewportOrRequest();
+		if ((handled || handledSelection) && options.deferRender !== true) this.renderChatViewportOrRequest();
 		return handled || handledSelection;
 	}
 

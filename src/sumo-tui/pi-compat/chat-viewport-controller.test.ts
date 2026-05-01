@@ -110,10 +110,25 @@ describe("ChatViewportController", () => {
 		const jumpResult = controller.handleInput("\x1b[b");
 
 		expect(wheelResult).toEqual({ consume: true });
-		expect(afterWheel).toBeLessThan(bottom);
+		expect(afterWheel).toBe(bottom - 2);
 		expect(jumpResult).toEqual({ consume: true });
 		expect(chat.scrollBox.scrollOffset).toBe(bottom);
 		expect(runtime.writeCalls).toContainEqual({ top: 1, left: 0, width: 80, height: 8 });
+		root.dispose();
+	});
+
+	it("coalesces batched wheel mouse bytes into one viewport repaint", async () => {
+		const { root, chat, runtime, controller } = await makeController({ terminalRows: 12, terminalColumns: 80 });
+		for (let index = 0; index < 50; index += 1) chat.addMessage("user", `message ${index}`);
+		controller.render(80);
+		const bottom = chat.scrollBox.scrollOffset;
+		runtime.writeCalls.length = 0;
+
+		const result = controller.handleInput("\x1b[<64;10;5M\x1b[<64;10;5M");
+
+		expect(result).toEqual({ consume: true });
+		expect(chat.scrollBox.scrollOffset).toBe(bottom - 4);
+		expect(runtime.writeCalls).toEqual([{ top: 1, left: 0, width: 80, height: 8 }]);
 		root.dispose();
 	});
 

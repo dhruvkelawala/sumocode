@@ -263,8 +263,14 @@ export class SelectionController {
 			if (hasSemanticSelection(buffer)) {
 				const rawColumns = columnsForRow(range, row, dimensions.cols);
 				if (!rawColumns) continue;
+				// Push any row that has semantic metadata, even if the extracted text
+				// is whitespace only — this preserves intentional blank lines
+				// (paragraph breaks, blank rows in code blocks) in copied text. Rows
+				// without metadata (frame borders, gap rows between messages) are
+				// still skipped.
+				if (!rowHasSelectable(buffer, row)) continue;
 				const semanticText = this.extractSemanticRowText(buffer, row, rawColumns.startCol, rawColumns.endCol);
-				if (semanticText.length > 0) lines.push(semanticText);
+				lines.push(semanticText.trimEnd());
 				continue;
 			}
 			const columns = this.selectableColumnsForRow(buffer, range, row);

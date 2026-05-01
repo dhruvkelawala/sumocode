@@ -341,8 +341,15 @@ export class ChatMessage extends SumoNode {
 			const cell = buffer.getCell(row, col);
 			if (cell.char.length > 0 && cell.char.trim().length > 0) contentEnd = col;
 		}
-		if (contentEnd === undefined) return;
-		for (let col = startCol; col <= contentEnd; col += 1) {
+		// For non-blank rows we mark startCol..contentEnd so trailing padding
+		// stays unselectable. For blank body rows (paragraph breaks, blank lines
+		// inside code blocks) we still need to mark the full inner range so the
+		// row participates in semantic selection — otherwise multi-row drags drop
+		// the blank line from copied text and `snapFocusToSelectableRow` skips
+		// past it. Selection text extraction trims trailing whitespace so the
+		// row contributes an empty line, not a row of spaces.
+		const lastSelectable = contentEnd ?? endCol;
+		for (let col = startCol; col <= lastSelectable; col += 1) {
 			buffer.setSelectionMeta(row, col, { selectable: true });
 		}
 	}

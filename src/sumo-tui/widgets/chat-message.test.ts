@@ -54,6 +54,40 @@ describe("ChatMessage", () => {
 		root.dispose();
 	});
 
+	it("preserves blank body rows in semantic selection so paragraph breaks survive copy", async () => {
+		const yoga = await loadYoga();
+		const root = new SumoNode(yoga.Node.create());
+		root.flexDirection = FLEX_DIRECTION_COLUMN;
+		root.width = 32;
+		root.height = 7;
+		ChatMessage.create(yoga, "user", "first paragraph\n\nsecond paragraph", root, FIXED_TIME);
+
+		root.yogaNode.calculateLayout(32, 7, DIRECTION_LTR);
+		const buffer = new CellBuffer(7, 32);
+		composite(root, buffer);
+
+		// Frame row 0 (top), body rows 1-3, frame row 4 (bottom).
+		expect(buffer.toPlainRow(1)).toBe("│ first paragraph              │");
+		expect(buffer.toPlainRow(2)).toBe("│                              │");
+		expect(buffer.toPlainRow(3)).toBe("│ second paragraph             │");
+
+		// Blank body row must still carry selection metadata so the row
+		// participates in semantic selection. Frame edges and trailing
+		// padding stay untagged.
+		expect(buffer.getSelectionMeta(2, 0)).toBeUndefined();
+		expect(buffer.getSelectionMeta(2, 1)).toBeUndefined();
+		expect(buffer.getSelectionMeta(2, 2)).toEqual({ selectable: true });
+		expect(buffer.getSelectionMeta(2, 28)).toEqual({ selectable: true });
+		expect(buffer.getSelectionMeta(2, 31)).toBeUndefined();
+
+		const selection = new SelectionController();
+		selection.handleMouseEvent({ type: "down", button: 0, row: 1, col: 2, modifiers: { shift: false, alt: false, ctrl: false } }, buffer);
+		selection.handleMouseEvent({ type: "drag", button: 0, row: 3, col: 18, modifiers: { shift: false, alt: false, ctrl: false } }, buffer);
+
+		expect(selection.extractSelectedText(buffer)).toBe("first paragraph\n\nsecond paragraph");
+		root.dispose();
+	});
+
 	it("semantic chat selection cannot start from the frame and highlights only content", async () => {
 		const yoga = await loadYoga();
 		const root = new SumoNode(yoga.Node.create());

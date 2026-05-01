@@ -142,6 +142,10 @@ export class ChatPager extends SumoNode {
 		};
 	}
 
+	public beginStreaming(): void {
+		this.renderControls.setStreamingMode(true);
+	}
+
 	public appendToLast(chunk: string): void {
 		if (chunk.length === 0) return;
 		const last = this.getLastMessage();
@@ -154,7 +158,7 @@ export class ChatPager extends SumoNode {
 		last.appendText(chunk);
 		const afterHeight = last.getEstimatedHeight(width);
 		this.scrollBox.notifyContentChanged(Math.max(0, afterHeight - beforeHeight), Math.max(0, beforeHeight - afterHeight));
-		this.renderControls.setStreamingMode(true);
+		this.beginStreaming();
 		this.scheduleRender();
 	}
 

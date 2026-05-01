@@ -9,6 +9,7 @@ import { truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
  * as a direct dep. Mirrors the upstream definition exactly.
  */
 export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+import { getSessionUsage as getCachedSessionUsage, sessionHasMessages as cachedSessionHasMessages } from "./session-cache.js";
 import { CATHEDRAL_TOKENS, type SumoCodeState } from "./tokens.js";
 import { VOICE } from "./voice.js";
 
@@ -237,7 +238,7 @@ function createSnapshot(pi: ExtensionAPI, ctx: ExtensionContext, branch: string 
 
 function sessionHasMessages(ctx: ExtensionContext): boolean {
 	try {
-		return ctx.sessionManager.getBranch().some((entry) => entry.type === "message");
+		return cachedSessionHasMessages(ctx);
 	} catch {
 		return false;
 	}
@@ -293,18 +294,8 @@ function getContextWindow(ctx: ExtensionContext): number {
 }
 
 function getSessionUsage(ctx: ExtensionContext): Usage {
-	let input = 0;
-	let output = 0;
-	let cost = 0;
-
-	for (const entry of ctx.sessionManager.getBranch()) {
-		if (entry.type !== "message" || entry.message.role !== "assistant") continue;
-		input += entry.message.usage.input;
-		output += entry.message.usage.output;
-		cost += entry.message.usage.cost.total;
-	}
-
-	return { input, output, cost };
+	const cached = getCachedSessionUsage(ctx);
+	return { input: cached.input, output: cached.output, cost: cached.cost };
 }
 
 function defaultGitRunner(args: string[], cwd: string): string {

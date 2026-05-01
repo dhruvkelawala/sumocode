@@ -14,7 +14,8 @@
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import type { Component } from "@mariozechner/pi-tui";
 import { visibleWidth } from "@mariozechner/pi-tui";
-import { formatCwd, resolveGitBranch } from "../footer.js";
+import { formatCwd } from "../footer.js";
+import { getGitBranch, sessionHasMessages as cachedSessionHasMessages } from "../session-cache.js";
 import { INPUT_FRAME_HINT_AWAITING, renderInputHints } from "./input-frame.js";
 
 const SPLASH_INPUT_FRAME_WIDTH = 60;
@@ -55,13 +56,13 @@ function activeContextHint(ctx: ExtensionContext): string | undefined {
 	const cwd = ctx.cwd;
 	if (!cwd) return undefined;
 	const project = formatCwd(cwd);
-	const branch = resolveGitBranch(cwd);
+	const branch = getGitBranch(ctx);
 	return branch ? `${project} (${branch})` : project;
 }
 
 function sessionHasMessages(ctx: ExtensionContext): boolean {
 	try {
-		return ctx.sessionManager.getBranch().some((entry) => entry.type === "message");
+		return cachedSessionHasMessages(ctx);
 	} catch {
 		return false;
 	}

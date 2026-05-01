@@ -1,7 +1,11 @@
 import { basename } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import type { Component } from "@mariozechner/pi-tui";
-import { resolveGitBranch } from "./footer.js";
+import {
+	getGitBranch as getCachedGitBranch,
+	getSessionUsage as getCachedSessionUsage,
+	sessionHasMessages as cachedSessionHasMessages,
+} from "./session-cache.js";
 import { createRemnicMemoryClient, type RemnicMemoryClient } from "./memory.js";
 import { MetricsHud } from "./sumo-tui/cathedral/metrics-hud.js";
 import { CancellableWorkerRuntime } from "./sumo-tui/runtime/worker-runtime.js";
@@ -14,6 +18,7 @@ import {
 	type SidebarSubTab,
 } from "./sumo-tui/cathedral/sidebar-rendering.js";
 import { surfaceLine } from "./sumo-tui/cathedral/ansi.js";
+import { logDiagnostic } from "./sumo-tui/runtime/diagnostics.js";
 import { installNonCapturingSidebarOverlay, sidebarOverlayTargetRows } from "./sidebar-placement.js";
 export {
 	SIDEBAR_MIN_TERMINAL_WIDTH,
@@ -150,7 +155,7 @@ function messageText(message: unknown): string {
 }
 
 function sessionHasMessages(ctx: ExtensionContext): boolean {
-	return ctx.sessionManager.getBranch().some((entry) => entry.type === "message");
+	return cachedSessionHasMessages(ctx);
 }
 
 function snapshotFromContext(
@@ -159,18 +164,10 @@ function snapshotFromContext(
 	activeSubTab: SidebarSubTab,
 	metrics: SidebarSnapshot["metrics"],
 ): SidebarSnapshot {
-	let input = 0;
-	let output = 0;
-	let cost = 0;
-	for (const entry of ctx.sessionManager.getBranch()) {
-		if (entry.type !== "message" || entry.message.role !== "assistant") continue;
-		input += entry.message.usage.input;
-		output += entry.message.usage.output;
-		cost += entry.message.usage.cost.total;
-	}
+	const { input, output, cost } = getCachedSessionUsage(ctx);
 
 	const contextWindow = ctx.getContextUsage()?.contextWindow ?? ctx.model?.contextWindow ?? 0;
-	const branch = resolveGitBranch(ctx.cwd) ?? undefined;
+	const branch = getCachedGitBranch(ctx) ?? undefined;
 
 	return {
 		projectName: basename(ctx.cwd) || ctx.cwd,
@@ -222,13 +219,24 @@ export function installSidebar(pi: ExtensionAPI): void {
 		memoryCache = createSidebarMemoryCache(createRemnicMemoryClient());
 
 		ctx.ui.setWidget("sumocode-sidebar-dock", (tui): Component & { dispose(): void } => {
-			requestRender = () => tui.requestRender(true);
+			// `requestRender(false)` lets Pi's differential renderer diff the sidebar
+			// region and emit only changed cells. The hot driver of this trigger is
+			// MetricsHud ticking every 1s — with `force = true`, each tick forces a
+			// full-screen repaint (~25 KB of ANSI/sec idle drain measured in -d).
+			// Sidebar updates do NOT scroll chat, so there are no seam fragments to
+			// mask. Chat-scroll force-redraws stay in chat-viewport-controller.ts
+			// (see #161 Slice B for the proper owned-shell rework).
+			requestRender = () => tui.requestRender();
 			activeMetricsHud?.stop();
 			const metricsHud = new MetricsHud();
 			activeMetricsHud = metricsHud;
-			metricsHud.start(() => {
-				if (sessionHasMessages(ctx)) requestRender?.();
-			});
+			const metricsHudDisabled = process.env.SUMOCODE_DISABLE_METRICS_HUD === "1";
+			logDiagnostic("sidebar_metrics_hud", { disabled: metricsHudDisabled });
+			if (!metricsHudDisabled) {
+				metricsHud.start(() => {
+					if (sessionHasMessages(ctx)) requestRender?.();
+				});
+			}
 			const sidebarComponent: Component = {
 				invalidate(): void {},
 				render(width: number): string[] {

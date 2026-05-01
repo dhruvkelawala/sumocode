@@ -12,6 +12,8 @@ import { installAltscreen } from "./cathedral/altscreen.js";
 import { installCathedralEditor } from "./cathedral/cathedral-editor.js";
 import { installSumoInteractions } from "./interaction-registry.js";
 import { installFooter } from "./footer.js";
+import { installRenderDiagnostics } from "./render-diagnostics.js";
+import { installSessionCache } from "./session-cache.js";
 import { installSplash } from "./splash.js";
 import { installTopChrome } from "./top-chrome.js";
 import { installWorkingIndicator } from "./working-indicator.js";
@@ -90,6 +92,14 @@ export default function sumocode(pi: ExtensionAPI): void {
 		return;
 	}
 
+	// Render diagnostics must install BEFORE any consumer so its `setFooter` /
+	// `setHeader` / `setEditorComponent` / `setWidget` wrappers are in place
+	// when those modules wire their components. No-op unless `SUMO_TUI_DIAG_FILE`
+	// is set (i.e. `sumocode -d`).
+	installRenderDiagnostics(pi);
+	// Cache must install before any consumer (footer/sidebar/top-chrome) so its
+	// invalidation handlers run alongside their state updates on lifecycle events.
+	installSessionCache(pi);
 	installAltscreen(pi);
 	installTopChrome(pi);
 	installSplash(pi);

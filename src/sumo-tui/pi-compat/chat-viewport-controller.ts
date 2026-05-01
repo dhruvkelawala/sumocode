@@ -18,6 +18,8 @@ import { sidebarGutterWidth } from "../../sidebar-placement.js";
 const CHAT_VIEWPORT_BRIDGE_INSTALLED = Symbol("sumo-tui.chat-viewport-bridge-installed");
 const PORTRAIT_STATUS_MIN_WIDTH = 80;
 const PORTRAIT_CHAT_GUTTER_MIN_WIDTH = 80;
+const STREAMING_CHAT_RENDER_COALESCE_MS = 100;
+const MOUSE_CHAT_RENDER_COALESCE_MS = 50;
 
 interface PiRenderableComponent {
 	render(width: number): string[];
@@ -197,6 +199,11 @@ export class ChatViewportController {
 	private lastChatWidth = 1;
 	private lastChatHeight = 1;
 	private pendingMouseInput = "";
+	private pendingMouseRender: ReturnType<typeof setTimeout> | undefined;
+	private lastMouseRenderAt = 0;
+	private lastMouseInputAt = 0;
+	private renderRevision = 0;
+	private cachedRender: { revision: number; requestedWidth: number; chatTop: number; chatWidth: number; chatHeight: number; terminalRows: number; lines: string[] } | undefined;
 
 	public constructor(
 		private readonly runtime: ChatViewportRuntime,
@@ -224,13 +231,31 @@ export class ChatViewportController {
 			: portraitGutterVisible
 				? Math.max(1, terminalWidth - 1)
 				: terminalWidth;
+		const chatTop = this.computeChatTop(effectiveWidth);
+		const chatHeight = this.computeChatHeight(effectiveWidth);
 		this.lastChatWidth = effectiveWidth;
-		this.lastChatTop = this.computeChatTop(this.lastChatWidth);
-		this.lastChatHeight = this.computeChatHeight(this.lastChatWidth);
-		return this.runtime.renderChatLines(this.lastChatWidth, this.lastChatHeight);
+		this.lastChatTop = chatTop;
+		this.lastChatHeight = chatHeight;
+		const cached = this.cachedRender;
+		if (
+			cached &&
+			cached.revision === this.renderRevision &&
+			cached.requestedWidth === terminalWidth &&
+			cached.chatTop === chatTop &&
+			cached.chatWidth === effectiveWidth &&
+			cached.chatHeight === chatHeight &&
+			cached.terminalRows === terminalHeight
+		) {
+			logDiagnostic("chat_viewport_render_cache_hit", { width: effectiveWidth, height: chatHeight, revision: this.renderRevision });
+			return [...cached.lines];
+		}
+		const lines = this.runtime.renderChatLines(this.lastChatWidth, this.lastChatHeight);
+		this.cachedRender = { revision: this.renderRevision, requestedWidth: terminalWidth, chatTop, chatWidth: effectiveWidth, chatHeight, terminalRows: terminalHeight, lines: [...lines] };
+		return lines;
 	}
 
 	public clear(): void {
+		this.markRenderDirty();
 		this.chat.clearMessages();
 		this.lastAssistantText = "";
 		this.liveAssistant = undefined;
@@ -256,7 +281,7 @@ export class ChatViewportController {
 			for (const event of parsed.events) {
 				mouseViewportDirty = this.handleMouse(event, { deferRender: true }) || mouseViewportDirty;
 			}
-			if (mouseViewportDirty) this.renderChatViewportOrRequest();
+			if (mouseViewportDirty) this.scheduleMouseChatViewportRender();
 
 			// Strip every complete SGR mouse sequence — including wheel-left/right
 			// (button codes 66/67) and any other variants the parser may not
@@ -298,12 +323,14 @@ export class ChatViewportController {
 
 		const keyEvent = chatScrollCommandFromInput(nextData);
 		if (keyEvent && this.chat.handleKey(keyEvent)) {
+			this.markRenderDirty();
 			this.renderChatViewportOrRequest();
 			return { consume: true };
 		}
 
 		const selectionKey = selectionCopyKeyFromInput(nextData);
 		if (selectionKey && this.runtime.handleSelectionKey?.(selectionKey, this.lastChatWidth, this.lastChatHeight) === true) {
+			this.markRenderDirty();
 			this.renderChatViewportOrRequest();
 			return { consume: true };
 		}
@@ -342,6 +369,7 @@ export class ChatViewportController {
 		// replay; `replaceViewModels()` resets the chat-side scroll/banner state.
 		const profile = this.runtime.startResumeProfile?.();
 		const messages = measureMaybe(profile, "session_scan", () => sessionMessages(sessionContext));
+		this.markRenderDirty();
 		this.runtime.setEmptyChatQuoteState({ active: messages.length === 0, userMessageCount: countUserMessages(messages) });
 		const transcript = measureMaybe(profile, "transcript_model", () => transcriptFromSessionContext(sessionContext));
 		const stats = measureMaybe(profile, "transcript_hydrate", () => this.chat.replaceViewModels(transcript.messages));
@@ -356,6 +384,7 @@ export class ChatViewportController {
 	}
 
 	private handleMessageStart(message: unknown): void {
+		this.markRenderDirty();
 		const role = asRecord(message)?.role;
 		if (role === "user") {
 			this.liveAssistant = undefined;
@@ -377,14 +406,17 @@ export class ChatViewportController {
 
 	private handleMessageUpdate(message: unknown, assistantMessageEvent: unknown): void {
 		if (asRecord(message)?.role !== "assistant") return;
+		this.markRenderDirty();
 		const streamEvent = asRecord(assistantMessageEvent);
 		if (streamEvent?.type === "text_delta" && typeof streamEvent.delta === "string") {
+			this.chat.beginStreaming();
 			this.appendAssistantTextDelta(streamEvent.delta);
 			return;
 		}
 		const viewModel = chatMessageViewModelFromPiMessage(message);
 		const text = viewModel ? chatMessageViewModelToPlainText(viewModel) : textFromAgentMessage(message);
 		if (text.length === 0 || text === this.lastAssistantText) return;
+		this.chat.beginStreaming();
 		if (viewModel) {
 			this.liveAssistant = { ...viewModel, role: "sumo", displayName: "SUMO" };
 			this.liveAssistantBlocks = [...viewModel.blocks];
@@ -397,6 +429,7 @@ export class ChatViewportController {
 	}
 
 	private handleMessageEnd(message: unknown): void {
+		this.markRenderDirty();
 		if (asRecord(message)?.role === "assistant") {
 			const viewModel = chatMessageViewModelFromPiMessage(message);
 			const text = viewModel ? chatMessageViewModelToPlainText(viewModel) : textFromAgentMessage(message);
@@ -469,6 +502,7 @@ export class ChatViewportController {
 			return false;
 		}
 		const beforeOffset = this.chat.scrollBox.scrollOffset;
+		this.lastMouseInputAt = Date.now();
 		const handled = this.chat.handleMouseEvent(localEvent);
 		const handledSelection = this.runtime.handleSelectionMouse?.(localEvent, this.lastChatWidth, this.lastChatHeight) === true;
 		logDiagnostic("mouse_dispatch", {
@@ -483,14 +517,49 @@ export class ChatViewportController {
 			scrollOffsetBefore: beforeOffset,
 			scrollOffsetAfter: this.chat.scrollBox.scrollOffset,
 		});
+		if (handled || handledSelection) this.markRenderDirty();
 		if ((handled || handledSelection) && options.deferRender !== true) this.renderChatViewportOrRequest();
 		return handled || handledSelection;
+	}
+
+	public markRenderDirty(): void {
+		this.renderRevision += 1;
+		this.cachedRender = undefined;
 	}
 
 	private renderChatViewportOrRequest(): void {
 		if (!this.runtime.writeChatViewport(this.lastChatTop, 0, this.lastChatWidth, this.lastChatHeight)) {
 			this.runtime.requestRender();
 		}
+	}
+
+	public shouldCoalesceChatRenderAsMouse(): boolean {
+		return Date.now() - this.lastMouseInputAt <= MOUSE_CHAT_RENDER_COALESCE_MS;
+	}
+
+	public scheduleMouseChatViewportRender(): void {
+		const now = Date.now();
+		const elapsed = now - this.lastMouseRenderAt;
+		if (elapsed >= MOUSE_CHAT_RENDER_COALESCE_MS && !this.pendingMouseRender) {
+			this.lastMouseRenderAt = now;
+			logDiagnostic("chat_viewport_mouse_render_request", { source: "mouse", coalesceMs: MOUSE_CHAT_RENDER_COALESCE_MS });
+			this.renderChatViewportOrRequest();
+			return;
+		}
+		if (this.pendingMouseRender) return;
+		const delay = Math.max(0, MOUSE_CHAT_RENDER_COALESCE_MS - elapsed);
+		this.pendingMouseRender = setTimeout(() => {
+			this.pendingMouseRender = undefined;
+			this.lastMouseRenderAt = Date.now();
+			logDiagnostic("chat_viewport_mouse_render_request", { source: "mouse", coalesceMs: MOUSE_CHAT_RENDER_COALESCE_MS });
+			this.renderChatViewportOrRequest();
+		}, delay);
+		this.pendingMouseRender.unref?.();
+	}
+
+	public dispose(): void {
+		if (this.pendingMouseRender) clearTimeout(this.pendingMouseRender);
+		this.pendingMouseRender = undefined;
 	}
 
 	private computeChatTop(width: number): number {
@@ -543,6 +612,36 @@ export function installChatViewportBridge(upstream: unknown, runtime: ChatViewpo
 	const originalRenderSessionContext = target.renderSessionContext?.bind(target);
 	const originalSetToolsExpanded = target.setToolsExpanded?.bind(target);
 	const removeInputListener = target.ui?.addInputListener?.((data) => controller.handleInput(data));
+	let streaming = false;
+	let pendingStreamingRender: ReturnType<typeof setTimeout> | undefined;
+	let lastStreamingRenderAt = 0;
+	const requestForcedRender = (source: "immediate" | "streaming" | "stream-end"): void => {
+		lastStreamingRenderAt = Date.now();
+		logDiagnostic("chat_viewport_render_request", { source, force: true });
+		target.ui?.requestRender?.(true);
+	};
+	const flushPendingStreamingRender = (): void => {
+		if (pendingStreamingRender) {
+			clearTimeout(pendingStreamingRender);
+			pendingStreamingRender = undefined;
+		}
+		requestForcedRender("stream-end");
+	};
+	const scheduleStreamingRender = (): void => {
+		const now = Date.now();
+		const elapsed = now - lastStreamingRenderAt;
+		if (elapsed >= STREAMING_CHAT_RENDER_COALESCE_MS && !pendingStreamingRender) {
+			requestForcedRender("streaming");
+			return;
+		}
+		if (pendingStreamingRender) return;
+		const delay = Math.max(0, STREAMING_CHAT_RENDER_COALESCE_MS - elapsed);
+		pendingStreamingRender = setTimeout(() => {
+			pendingStreamingRender = undefined;
+			requestForcedRender("streaming");
+		}, delay);
+		pendingStreamingRender.unref?.();
+	};
 
 	runtime.setExternalRenderControls({
 		// Pi's normal differential renderer optimizes line shifts with terminal
@@ -550,9 +649,25 @@ export function installChatViewportBridge(upstream: unknown, runtime: ChatViewpo
 		// the left content while the sidebar/footer remain fixed; terminal scroll
 		// sequences move the whole screen and leave stale sidebar/chat fragments.
 		// Force Pi's full redraw path for retained chat updates until Sumo owns the
-		// entire root renderer.
-		scheduleRender: () => target.ui?.requestRender?.(true),
-		setStreamingMode: () => target.ui?.requestRender?.(true),
+		// entire root renderer, but coalesce token-stream bursts so input remains
+		// responsive while the assistant is streaming.
+		scheduleRender: () => {
+			if (streaming) {
+				scheduleStreamingRender();
+				return;
+			}
+			if (controller.shouldCoalesceChatRenderAsMouse()) {
+				controller.scheduleMouseChatViewportRender();
+				return;
+			}
+			requestForcedRender("immediate");
+		},
+		setStreamingMode: (enabled) => {
+			if (streaming === enabled) return;
+			streaming = enabled;
+			logDiagnostic("chat_viewport_streaming_mode", { enabled, coalesceMs: STREAMING_CHAT_RENDER_COALESCE_MS });
+			if (!enabled) flushPendingStreamingRender();
+		},
 	});
 	chatContainer.render = (width: number): string[] => controller.render(width);
 	chatContainer.clear = (): void => {
@@ -560,6 +675,7 @@ export function installChatViewportBridge(upstream: unknown, runtime: ChatViewpo
 		originalClear?.();
 	};
 	chatContainer.invalidate = (): void => {
+		controller.markRenderDirty();
 		originalInvalidate?.();
 		runtime.requestRender();
 	};
@@ -575,6 +691,7 @@ export function installChatViewportBridge(upstream: unknown, runtime: ChatViewpo
 	}
 	if (originalSetToolsExpanded) {
 		target.setToolsExpanded = (expanded: boolean): void => {
+			controller.markRenderDirty();
 			snapshot.chat.setToolExpansion(expanded);
 			originalSetToolsExpanded(expanded);
 		};
@@ -593,6 +710,9 @@ export function installChatViewportBridge(upstream: unknown, runtime: ChatViewpo
 	}
 
 	const cleanup = (): void => {
+		if (pendingStreamingRender) clearTimeout(pendingStreamingRender);
+		pendingStreamingRender = undefined;
+		controller.dispose();
 		removeInputListener?.();
 		runtime.setExternalRenderControls(undefined);
 		if (originalRender) chatContainer.render = originalRender;

@@ -39,6 +39,7 @@ import type {
 } from "@mariozechner/pi-coding-agent";
 import { CustomEditor } from "@mariozechner/pi-coding-agent";
 import { CURSOR_MARKER, truncateToWidth, visibleWidth, type EditorTheme, type TUI } from "@mariozechner/pi-tui";
+import { sessionHasMessages as cachedSessionHasMessages } from "../session-cache.js";
 import { CATHEDRAL_TOKENS } from "../tokens.js";
 import {
 	INPUT_FRAME_LABEL_ACTIVE,
@@ -294,7 +295,7 @@ class CathedralEditor extends CustomEditor {
 
 function sessionHasMessages(ctx: ExtensionContext): boolean {
 	try {
-		return ctx.sessionManager.getBranch().some((entry) => entry.type === "message");
+		return cachedSessionHasMessages(ctx);
 	} catch {
 		return false;
 	}

@@ -38,6 +38,25 @@ function isDefaultStyle(style: StyleState): boolean {
 	return styleEqual(style, DEFAULT_STYLE);
 }
 
+/**
+ * SGR codes are additive: emitting `\x1b[38;2;R;G;Bm` after `\x1b[7m` does not
+ * clear the inverse bit. Whenever an attribute or color disappears between two
+ * adjacent cells we must explicitly reset state with `\x1b[0m` before applying
+ * the new style; otherwise the trailing cells keep the old attribute lit (this
+ * was the cause of "highlight extends past the selected cells" — selection
+ * inverse on cells 28-40 visually leaked across the rest of the row).
+ */
+function styleNeedsReset(prev: StyleState, next: StyleState): boolean {
+	if (prev.attrs.bold && !next.attrs.bold) return true;
+	if (prev.attrs.dim && !next.attrs.dim) return true;
+	if (prev.attrs.italic && !next.attrs.italic) return true;
+	if (prev.attrs.underline && !next.attrs.underline) return true;
+	if (prev.attrs.inverse && !next.attrs.inverse) return true;
+	if (prev.fg !== undefined && next.fg === undefined) return true;
+	if (prev.bg !== undefined && next.bg === undefined) return true;
+	return false;
+}
+
 /** Convert one retained cell row into an ANSI string, emitting SGR only when style changes. */
 export function cellRowToAnsi(buffer: CellBuffer, row: number): string {
 	const { cols } = buffer.getDimensions();
@@ -50,9 +69,16 @@ export function cellRowToAnsi(buffer: CellBuffer, row: number): string {
 		if (cell.char === "") continue;
 		const nextStyle = styleFromCell(cell);
 		if (!styleEqual(current, nextStyle)) {
-			output += sgrForStyle(nextStyle);
+			if (styleNeedsReset(current, nextStyle)) {
+				output += "\x1b[0m";
+				current = DEFAULT_STYLE;
+				styled = false;
+			}
+			if (!isDefaultStyle(nextStyle)) {
+				output += sgrForStyle(nextStyle);
+				styled = true;
+			}
 			current = nextStyle;
-			styled = !isDefaultStyle(nextStyle);
 		}
 		output += cell.char;
 		const width = visibleWidth(cell.char);

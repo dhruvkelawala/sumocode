@@ -44,3 +44,15 @@ if (lastSelection) {
   console.log("\nLast selection:");
   console.log(`  ${JSON.stringify(lastSelection)}`);
 }
+
+const highlights = events.filter((event) => event.event === "selection_highlight");
+if (highlights.length > 0) {
+  console.log(`\nSelection highlights: ${highlights.length}`);
+  for (const event of highlights.slice(-5)) {
+    console.log(`  semantic=${event.semantic} rows=${event.rowsTouched}/${event.totalRows} cells=${event.cellsInverted}`);
+    for (const sample of event.sampleRows ?? []) {
+      const ranges = (sample.ranges ?? []).map(([a, b]) => `${a}-${b}`).join(", ");
+      console.log(`    row ${sample.row}: ${ranges || "(empty)"}`);
+    }
+  }
+}

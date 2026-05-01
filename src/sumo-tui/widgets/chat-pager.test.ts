@@ -5,6 +5,7 @@ import { SumoNode } from "../layout/node.js";
 import { DIRECTION_LTR, FLEX_DIRECTION_COLUMN, loadYoga } from "../layout/yoga.js";
 import { CellBuffer } from "../render/buffer.js";
 import { composite } from "../render/compositor.js";
+import { SelectionController } from "../input/selection.js";
 import { PiEditorLeaf } from "./pi-editor-leaf.js";
 import { ChatPager, type ChatPagerRenderControls } from "./chat-pager.js";
 
@@ -57,6 +58,22 @@ describe("ChatPager", () => {
 		expect(chat.getRenderedMessages()).toHaveLength(1);
 		expect(chat.scrollBox.scrollHeight).toBeGreaterThan(0);
 		expect(chat.scrollBox.children).toHaveLength(1);
+		root.dispose();
+	});
+
+	it("preserves chat body selection metadata through the scroll viewport", async () => {
+		const { root, chat, buffer } = await makeChat(32, 5);
+		chat.addMessage("user", "select me");
+		const frame = buffer();
+		const selection = new SelectionController();
+
+		expect(frame.getSelectionMeta(1, 2)).toEqual({ selectable: true });
+		expect(frame.getSelectionMeta(1, 0)).toBeUndefined();
+		expect(selection.handleMouseEvent({ type: "down", button: 0, row: 1, col: 0, modifiers: { shift: false, alt: false, ctrl: false } }, frame)).toBe(false);
+		selection.handleMouseEvent({ type: "down", button: 0, row: 1, col: 2, modifiers: { shift: false, alt: false, ctrl: false } }, frame);
+		selection.handleMouseEvent({ type: "drag", button: 0, row: 1, col: 31, modifiers: { shift: false, alt: false, ctrl: false } }, frame);
+
+		expect(selection.extractSelectedText(frame)).toBe("select me");
 		root.dispose();
 	});
 

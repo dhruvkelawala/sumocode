@@ -9,6 +9,10 @@ export interface Rect {
 	height: number;
 }
 
+export interface SelectionCellMeta {
+	readonly selectable: true;
+}
+
 interface TextSegmenter {
 	segment(input: string): Iterable<{ segment: string }>;
 }
@@ -45,6 +49,7 @@ export class CellBuffer {
 	private readonly fg = new Map<number, string>();
 	private readonly bg = new Map<number, string>();
 	private readonly attrs = new Map<number, number>();
+	private readonly selectionMeta = new Map<number, SelectionCellMeta>();
 	private defaultBg: string | null = null;
 	private defaultFg: string | null = null;
 
@@ -84,6 +89,7 @@ export class CellBuffer {
 		const nextFg = new Map<number, string>();
 		const nextBg = new Map<number, string>();
 		const nextAttrs = new Map<number, number>();
+		const nextSelectionMeta = new Map<number, SelectionCellMeta>();
 		const totalCells = nextRows * nextCols;
 		if (this.defaultFg) {
 			for (let index = 0; index < totalCells; index += 1) nextFg.set(index, this.defaultFg);
@@ -107,6 +113,8 @@ export class CellBuffer {
 				if (bg !== undefined) nextBg.set(newIndex, bg);
 				const attrs = this.attrs.get(oldIndex);
 				if (attrs !== undefined) nextAttrs.set(newIndex, attrs);
+				const selectionMeta = this.selectionMeta.get(oldIndex);
+				if (selectionMeta !== undefined) nextSelectionMeta.set(newIndex, selectionMeta);
 			}
 		}
 
@@ -117,10 +125,12 @@ export class CellBuffer {
 		this.fg.clear();
 		this.bg.clear();
 		this.attrs.clear();
+		this.selectionMeta.clear();
 		for (const [key, value] of nextExtended) this.extendedChars.set(key, value);
 		for (const [key, value] of nextFg) this.fg.set(key, value);
 		for (const [key, value] of nextBg) this.bg.set(key, value);
 		for (const [key, value] of nextAttrs) this.attrs.set(key, value);
+		for (const [key, value] of nextSelectionMeta) this.selectionMeta.set(key, value);
 	}
 
 	public setCell(row: number, col: number, cell: Cell): void {
@@ -154,6 +164,25 @@ export class CellBuffer {
 		const mask = attrsToMask(next);
 		if (mask === 0) this.attrs.delete(index);
 		else this.attrs.set(index, mask);
+	}
+
+	public setSelectionMeta(row: number, col: number, meta: SelectionCellMeta): void {
+		if (!this.inBounds(row, col)) return;
+		this.selectionMeta.set(this.index(row, col), meta);
+	}
+
+	public clearSelectionMeta(row: number, col: number): void {
+		if (!this.inBounds(row, col)) return;
+		this.selectionMeta.delete(this.index(row, col));
+	}
+
+	public getSelectionMeta(row: number, col: number): SelectionCellMeta | undefined {
+		if (!this.inBounds(row, col)) return undefined;
+		return this.selectionMeta.get(this.index(row, col));
+	}
+
+	public hasSelectionMeta(): boolean {
+		return this.selectionMeta.size > 0;
 	}
 
 	public clear(rect?: Rect): void {
@@ -233,6 +262,7 @@ export class CellBuffer {
 		for (const [key, value] of this.fg) next.fg.set(key, value);
 		for (const [key, value] of this.bg) next.bg.set(key, value);
 		for (const [key, value] of this.attrs) next.attrs.set(key, value);
+		for (const [key, value] of this.selectionMeta) next.selectionMeta.set(key, value);
 		return next;
 	}
 
@@ -340,6 +370,7 @@ export class CellBuffer {
 	private setSingleCell(row: number, col: number, glyph: string, source: Cell): void {
 		const index = this.index(row, col);
 		this.extendedChars.delete(index);
+		this.selectionMeta.delete(index);
 		const codePoint = glyph.codePointAt(0);
 		if (glyph.length === 0) {
 			this.chars[index] = 0;
@@ -361,6 +392,7 @@ export class CellBuffer {
 		if (this.defaultBg) this.bg.set(index, this.defaultBg);
 		else this.bg.delete(index);
 		this.attrs.delete(index);
+		this.selectionMeta.delete(index);
 	}
 
 	private setStyle(index: number, source: Cell): void {

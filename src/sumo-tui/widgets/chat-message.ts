@@ -325,7 +325,32 @@ export class ChatMessage extends SumoNode {
 		const rows = this.renderRows(rect.width);
 		const height = Math.min(rows.length, rect.height);
 		for (let row = 0; row < height; row += 1) {
-			buffer.paintRow(rect.top + row, rows[row] ?? "", rect.left, rect.width);
+			const absoluteRow = rect.top + row;
+			buffer.paintRow(absoluteRow, rows[row] ?? "", rect.left, rect.width);
+			if (rect.width >= MIN_BOX_WIDTH && row > 0 && row < rows.length - 1) {
+				this.markBodyRowSelectable(buffer, absoluteRow, rect.left, rect.width);
+			}
+		}
+	}
+
+	private markBodyRowSelectable(buffer: CellBuffer, row: number, left: number, width: number): void {
+		const startCol = left + 2;
+		const endCol = left + Math.max(1, width - 3);
+		let contentEnd: number | undefined;
+		for (let col = startCol; col <= endCol; col += 1) {
+			const cell = buffer.getCell(row, col);
+			if (cell.char.length > 0 && cell.char.trim().length > 0) contentEnd = col;
+		}
+		// For non-blank rows we mark startCol..contentEnd so trailing padding
+		// stays unselectable. For blank body rows (paragraph breaks, blank lines
+		// inside code blocks) we still need to mark the full inner range so the
+		// row participates in semantic selection — otherwise multi-row drags drop
+		// the blank line from copied text and `snapFocusToSelectableRow` skips
+		// past it. Selection text extraction trims trailing whitespace so the
+		// row contributes an empty line, not a row of spaces.
+		const lastSelectable = contentEnd ?? endCol;
+		for (let col = startCol; col <= lastSelectable; col += 1) {
+			buffer.setSelectionMeta(row, col, { selectable: true });
 		}
 	}
 

@@ -49,6 +49,7 @@ import {
 const RESET = "\u001b[0m";
 const ANSI_PATTERN = /\u001b\[[0-9;]*m/g;
 const SPLASH_INPUT_FRAME_WIDTH = 60;
+const ACTIVE_AUTOCOMPLETE_LEFT_OFFSET = 4; // `│ > ` before typed content.
 
 function visibleLength(text: string): number {
 	return visibleWidth(text);
@@ -171,6 +172,21 @@ function centerRow(row: string, width: number): string {
 	return `${" ".repeat(left)}${row}${" ".repeat(right)}`;
 }
 
+export function alignAutocompleteRow(row: string, width: number, options: { splash: boolean; frameWidth?: number }): string {
+	if (width <= 0) return "";
+	const left = options.splash
+		? Math.min(
+			Math.max(0, Math.floor((width - Math.min(width, options.frameWidth ?? width)) / 2) + 1),
+			Math.max(0, width - 1),
+		)
+		: Math.min(ACTIVE_AUTOCOMPLETE_LEFT_OFFSET, Math.max(0, width - 1));
+	const frameContentWidth = options.splash ? Math.max(0, Math.min(width, options.frameWidth ?? width) - 2) : undefined;
+	const available = Math.max(0, Math.min(width - left, frameContentWidth ?? width));
+	const fitted = fitAnsiToWidth(row, available);
+	const pad = Math.max(0, width - left - visibleLength(fitted));
+	return `${" ".repeat(left)}${fitted}${" ".repeat(pad)}`;
+}
+
 /**
  * Test whether a row is one of Pi's flat horizontal borders, i.e. a row
  * consisting of nothing but `─` chars (after stripping ANSI), or one of
@@ -264,12 +280,11 @@ class CathedralEditor extends CustomEditor {
 		// state implies suggestions float below the input).
 		if (bottomIdx !== -1) {
 			for (let i = bottomIdx + 1; i < innerRows.length; i++) {
-				// Pad to full width so we don't leave artifacts from previous
-				// autocomplete frames at the right edge.
-				const row = innerRows[i]!;
-				const visible = visibleLength(row);
-				const pad = Math.max(0, width - visible);
-				result.push(`${row}${" ".repeat(pad)}`);
+				// Pi emits autocomplete rows relative to its bare editor at column 0.
+				// Cathedral chrome adds a left frame + prompt (`│ > `) in active mode
+				// and centers the splash frame, so dropdown rows need the same anchor
+				// translation or slash-command suggestions appear glued to terminal col 0.
+				result.push(alignAutocompleteRow(innerRows[i]!, width, { splash, frameWidth }));
 			}
 		}
 

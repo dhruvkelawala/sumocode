@@ -74,13 +74,14 @@ describe("InteractionRegistry", () => {
 			"sumo:cursor",
 			"sumo:memory",
 			"sumo:persona",
+			"sumo:query",
 			"sumo:spinner",
 			"sumo:tabs",
 			"sumo:theme",
 			"sumo:theme-check",
 		]);
 		expect(snapshot.shortcuts.map(([id]) => id).sort()).toEqual(["ctrl+/", "ctrl+1", "ctrl+2"]);
-		expect(pi.registerCommand).toHaveBeenCalledTimes(7);
+		expect(pi.registerCommand).toHaveBeenCalledTimes(8);
 		expect(pi.registerShortcut).toHaveBeenCalledTimes(3);
 	});
 });

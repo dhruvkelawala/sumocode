@@ -31,8 +31,12 @@ pnpm visual:ci                     # V2 visual CI gate; required crops gate agai
 pnpm visual:promote                # promote runtime crop status/golden; requires explicit human approval
 pnpm test:visual:real-runtime      # legacy real-runtime smoke harness
 
-pi -e .                            # ephemeral install of THIS checkout — primary extension dev loop
-bin/sumocode.sh                    # wrapper that enables SUMO_TUI retained-renderer patch path
+pi -e .                            # ephemeral install of THIS checkout — classic Pi extension dev loop
+bin/sumocode.sh                    # local SumoCode CLI wrapper (retained SumoTUI by default)
+bin/sumocode.sh -h                 # full CLI help
+bin/sumocode.sh -d .               # debug/diagnostics mode for manual testing
+bin/sumocode.sh doctor             # check Pi patch/module/diagnostics health
+bin/sumocode.sh diag               # summarize /tmp/sumocode-manual.jsonl
 ```
 
 Run a single test file:
@@ -65,7 +69,7 @@ pnpm visual:ci
 
 The canonical workflow lives in `DEV_LOOP.md`.
 
-Short version: edit in this checkout → `pi -e .` or `bin/sumocode.sh` to test → commit → for releases bump `package.json` version + `VERSION` in `src/extension.ts`, tag, push tags, then `pi update git:github.com/dhruvkelawala/sumocode` on consumer machines. Tagged releases are the only thing that propagates; pushes to `main` do not.
+Short version: edit in this checkout → `pi -e .` for classic extension-only checks or `bin/sumocode.sh` / globally linked `sumocode` for retained SumoTUI checks → commit → for releases bump `package.json` version + `VERSION` in `src/extension.ts`, tag, push tags, then `pi update git:github.com/dhruvkelawala/sumocode` on consumer machines. Tagged releases are the only thing that propagates; pushes to `main` do not.
 
 Never edit `~/.pi/agent/git/github.com/dhruvkelawala/sumocode/` — that is the installed clone, not the source of truth.
 
@@ -90,12 +94,16 @@ When adding a feature, decide which layer it belongs to. Anything needing flex l
 
 SumoTUI activation currently requires the tiny Pi constructor patch documented in `docs/SUMO_TUI_PI_PATCH_STRATEGY.md`.
 
-The user-facing wrapper is `bin/sumocode.sh`:
+The user-facing wrapper is `bin/sumocode.sh` and, when linked/installed, the `sumocode` command:
 
 - defaults `SUMO_TUI=1`
+- accepts `sumocode [options] [path]`, with at most one project path
+- supports `-h/--help`, `-v/--version`, `doctor`, `diag [file]`, `-d/--debug`, `--diag-file`, `--no-clear-diag`, `--dry-run`, and `--no-sumo-tui`
 - verifies the selected Pi binary contains `loadSumoInteractiveMode`
 - sets `SUMO_TUI_MODULE` to the checkout-local `sumo-interactive-mode.js`
 - falls back to classic Pi behavior if the patch is missing
+
+Manual-test diagnostics are opt-in via `sumocode -d` / `bin/sumocode.sh -d`. Debug mode writes JSONL to `/tmp/sumocode-manual.jsonl` by default, or to `--diag-file <path>` / `SUMO_TUI_DIAG_FILE`. The launcher clears the diagnostics file at startup unless `--no-clear-diag` is set. Use `sumocode diag` or `node scripts/diag-summary.mjs /tmp/sumocode-manual.jsonl` to summarize a run. Diagnostics must stay no-op unless `SUMO_TUI_DIAG_FILE` is set.
 
 Do not casually change `patches/@mariozechner__pi-coding-agent@*.patch`, `SUMO_TUI`, `SUMO_TUI_MODULE`, or `sumo-interactive-mode.js`. Pi version bumps must follow `docs/research/pi-fork-upgrade.md` and the smoke matrix in `docs/SUMO_TUI_PI_PATCH_STRATEGY.md`.
 

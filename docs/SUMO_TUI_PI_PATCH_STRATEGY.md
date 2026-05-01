@@ -29,14 +29,31 @@ This is the only place SumoCode currently gains control before Pi's interactive 
 
 ### `bin/sumocode.sh`
 
-The wrapper is the user-facing activation contract:
+The wrapper is the user-facing activation contract. When the package is linked or installed, it is exposed as the `sumocode` binary.
+
+Core responsibilities:
 
 - defaults `SUMO_TUI=1`
+- accepts `sumocode [options] [path]`, forwarding the optional project path to Pi unchanged
 - resolves the repo-local Pi binary first
 - inspects Pi's `dist/main.js` for `loadSumoInteractiveMode`
 - sets `SUMO_TUI_MODULE=file://.../sumo-interactive-mode.js` for checkout-local runtime loading
 - falls back to `SUMO_TUI=0` with a warning if the selected Pi binary is not patched
 - executes Pi with `-e src/extension.ts`
+
+CLI/operator features:
+
+- `sumocode -h` / `sumocode --help` — full launcher reference
+- `sumocode -v` / `sumocode --version` — package version + git commit when available
+- `sumocode doctor` — validates Node, Pi binary, Pi main file, retained-TUI patch, Sumo module, diagnostics path, and TTY status
+- `sumocode diag [file]` — summarizes diagnostics JSONL via `scripts/diag-summary.mjs`
+- `sumocode -d` / `sumocode --debug` — enables manual-test diagnostics
+- `sumocode --diag-file <path>` — custom diagnostics path and implies debug mode
+- `sumocode --no-clear-diag` — append to the diagnostics file instead of starting fresh
+- `sumocode --dry-run` — print the resolved launch config without starting Pi
+- `sumocode --no-sumo-tui` — per-launch fallback equivalent to `SUMO_TUI=0`
+
+Debug mode writes JSONL diagnostics to `/tmp/sumocode-manual.jsonl` by default and clears that file at startup unless `--no-clear-diag` is set. Diagnostics are intentionally no-op unless `SUMO_TUI_DIAG_FILE` is set.
 
 This wrapper prevents accidental use of stale installed SumoCode code during local development and avoids hard failure when the patch is missing.
 

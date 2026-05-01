@@ -42,6 +42,7 @@ import type { KeyEvent } from "../input/key-router.js";
 import type { MouseEvent } from "../input/mouse.js";
 import { SelectionController } from "../input/selection.js";
 import { diffFrames } from "../render/diff.js";
+import { logDiagnostic, logRuntimeStart } from "../runtime/diagnostics.js";
 import { FrameScheduler } from "../runtime/frame-scheduler.js";
 import { emitResumeBudgetOverlay, measureMaybe, ResumeProfiler, type ResumeProfileMetadata } from "../runtime/resume-profiler.js";
 import { defaultTerminalSessionOwner, TerminalSessionOwner, type TerminalOutput } from "../runtime/terminal-controller.js";
@@ -170,6 +171,17 @@ export class SumoInteractiveRuntime {
 		// only works reliably when SGR mouse mode is enabled before Pi's first
 		// interactive frame.
 		this.terminal.startRetainedSession();
+		logRuntimeStart({
+			terminal: {
+				columns: this.output.columns ?? null,
+				rows: this.output.rows ?? null,
+				isTTY: this.output.isTTY,
+			},
+			features: {
+				retainedTui: true,
+				mouseSgr: true,
+			},
+		});
 		this.scheduler = new FrameScheduler({ render: () => this.render() });
 		this.resizeHandler = () => this.requestRender();
 		process.stdout.on("resize", this.resizeHandler);
@@ -232,11 +244,14 @@ export class SumoInteractiveRuntime {
 		root.height = safeHeight;
 		const pendingProfile = this.claimPendingResumeProfile();
 		measureMaybe(pendingProfile?.profile, "yoga_first_layout", () => root.yogaNode.calculateLayout(safeWidth, safeHeight, DIRECTION_LTR));
+		const renderStart = performance.now();
 		const { frame, lines } = measureMaybe(pendingProfile?.profile, "first_frame_render", () => {
 			const nextFrame = new CellBuffer(safeHeight, safeWidth);
 			composite(root, nextFrame, { selection: this.selection });
 			return { frame: nextFrame, lines: bufferToAnsiLines(nextFrame) };
 		});
+		const renderMs = performance.now() - renderStart;
+		logDiagnostic(renderMs > 33 ? "slow_frame" : "render_frame", { path: "chat_viewport", durationMs: Math.round(renderMs * 100) / 100, width: safeWidth, height: safeHeight, selectionRevision });
 		this.chatFrameCache = { width: safeWidth, height: safeHeight, version: this.frameVersion, selectionRevision, frame: frame.clone(), lines };
 		if (pendingProfile) this.finishPendingResumeProfile(pendingProfile);
 		return { frame: frame.clone(), lines: [...lines] };
@@ -341,13 +356,17 @@ export class SumoInteractiveRuntime {
 		root.height = height;
 		const pendingProfile = this.claimPendingResumeProfile();
 		measureMaybe(pendingProfile?.profile, "yoga_first_layout", () => root.yogaNode.calculateLayout(width, height, DIRECTION_LTR));
+		const renderStart = performance.now();
 		const nextFrame = measureMaybe(pendingProfile?.profile, "first_frame_render", () => {
 			const frame = new CellBuffer(height, width);
 			const compositeResult = composite(root, frame, { selection: this.selection });
 			const patches = diffFrames(this.previousFrame, frame);
 			this.terminal.writeFramePatches(patches, compositeResult.hardwareCursor);
+			logDiagnostic("render_patches", { patchCount: patches.length, cursor: compositeResult.hardwareCursor ?? null });
 			return frame;
 		});
+		const renderMs = performance.now() - renderStart;
+		logDiagnostic(renderMs > 33 ? "slow_frame" : "render_frame", { path: "full_root", durationMs: Math.round(renderMs * 100) / 100, width, height, version: this.frameVersion });
 		this.previousFrame = nextFrame.clone();
 		this.renderedVersion = this.frameVersion;
 		this.renderedWidth = width;

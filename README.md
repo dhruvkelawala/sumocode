@@ -75,10 +75,22 @@ See [DEV_LOOP.md](./DEV_LOOP.md) for the full edit/test/release workflow, debugg
 TL;DR:
 ```bash
 cd "/Volumes/SumoDeus NVMe/openclaw/workspace/sumocode"
-pi -e .                          # ephemeral install, edit src/, relaunch to test
+pi -e .                          # classic ephemeral Pi extension check
+./bin/sumocode.sh                 # retained SumoTUI local launcher
+./bin/sumocode.sh -d .            # retained launcher + diagnostics flight recorder
+./bin/sumocode.sh doctor          # check Pi patch/module/diagnostics health
 # ...edit, commit, push...
 git tag v0.x.y && git push --tags
 pi update git:github.com/dhruvkelawala/sumocode  # on each machine
+```
+
+If linked globally with `pnpm link --global`, use `sumocode` directly:
+
+```bash
+sumocode --help
+sumocode .
+sumocode -d .
+sumocode diag                    # summarizes /tmp/sumocode-manual.jsonl
 ```
 
 ## License

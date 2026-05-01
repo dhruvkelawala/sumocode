@@ -26,10 +26,26 @@ cd "/Volumes/SumoDeus NVMe/openclaw/workspace/sumocode"
 # open src/extension.ts or wherever the change lives
 ```
 
-### 2. Test with ephemeral install
+### 2. Test with ephemeral install or SumoCode CLI
+
+Classic extension-only smoke:
 
 ```bash
 pi -e .
+```
+
+Retained SumoTUI smoke (preferred for daily-driver UI work):
+
+```bash
+./bin/sumocode.sh
+./bin/sumocode.sh .
+```
+
+If the package is globally linked, use the `sumocode` bin directly:
+
+```bash
+sumocode
+sumocode .
 ```
 
 `-e` (or `--extension`) installs the extension **for this Pi session only**. It does NOT:
@@ -48,10 +64,20 @@ When I exit Pi, the ephemeral install vanishes. My stable install continues runn
 
 ### 3. Verify it works
 
-Launch Pi with ephemeral install:
+Launch Pi with ephemeral install or retained SumoCode:
 
 ```bash
 pi -e .
+./bin/sumocode.sh
+```
+
+For manual runtime/debug sessions, use diagnostics mode:
+
+```bash
+./bin/sumocode.sh -d .
+sumocode -d .                    # if globally linked
+sumocode diag                    # summarizes /tmp/sumocode-manual.jsonl
+sumocode doctor                  # checks Pi patch/module/diagnostics health
 ```
 
 Expected signals for v0.1.0:

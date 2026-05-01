@@ -99,6 +99,20 @@ describe("ChatViewportController", () => {
 		portraitWide.root.dispose();
 	});
 
+	it("caches repeated same-geometry viewport renders until chat content changes", async () => {
+		const { root, runtime, controller } = await makeController({ terminalRows: 12, terminalColumns: 80 });
+
+		expect(controller.render(80)).toHaveLength(8);
+		expect(controller.render(80)).toHaveLength(8);
+		expect(runtime.renderCalls).toHaveLength(1);
+
+		controller.handleAgentEvent({ type: "message_start", message: { role: "user", content: "hello" } });
+		controller.render(80);
+		controller.render(80);
+		expect(runtime.renderCalls).toHaveLength(2);
+		root.dispose();
+	});
+
 	it("translates wheel and jump-to-bottom input into local viewport repaint", async () => {
 		const { root, chat, runtime, controller } = await makeController({ terminalRows: 12, terminalColumns: 80 });
 		for (let index = 0; index < 50; index += 1) chat.addMessage("user", `message ${index}`);
@@ -188,6 +202,44 @@ describe("ChatViewportController", () => {
 		expect(message?.role).toBe("sumo");
 		expect(message?.blocks?.[0]).toMatchObject({ type: "tool", tool: { id: "tc1", name: "bash", status: "pending" } });
 		root.dispose();
+	});
+
+	it("coalesces bridge streaming render requests", async () => {
+		vi.useFakeTimers();
+		const yoga = await loadYoga();
+		const root = new SumoNode(yoga.Node.create());
+		const chat = ChatPager.create(yoga, root);
+		const requestRender = vi.fn();
+		const host = {
+			ui: { terminal: { rows: 24, columns: 120 }, requestRender },
+			chatContainer: { render: vi.fn(() => []), clear: vi.fn(), invalidate: vi.fn() },
+		};
+		let controls: { scheduleRender(): void; setStreamingMode(enabled: boolean): void } | undefined;
+		const runtime = {
+			getSnapshot: () => ({ chat }),
+			setExternalRenderControls: vi.fn((next) => { controls = next; }),
+			renderChatLines: vi.fn(() => []),
+			writeChatViewport: vi.fn(() => true),
+			requestRender: vi.fn(),
+			setEmptyChatQuoteState: vi.fn(),
+			noteUserMessage: vi.fn(),
+		};
+
+		const cleanup = installChatViewportBridge(host, runtime);
+		controls?.setStreamingMode(true);
+		controls?.scheduleRender();
+		controls?.scheduleRender();
+		controls?.scheduleRender();
+
+		expect(requestRender).toHaveBeenCalledTimes(1);
+		vi.advanceTimersByTime(100);
+		expect(requestRender).toHaveBeenCalledTimes(2);
+		controls?.setStreamingMode(false);
+		expect(requestRender).toHaveBeenCalledTimes(3);
+
+		cleanup?.();
+		root.dispose();
+		vi.useRealTimers();
 	});
 
 	it("mirrors Pi tool expansion state into retained chat tool blocks", async () => {

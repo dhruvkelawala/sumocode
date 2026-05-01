@@ -19,8 +19,9 @@
  * Pure render only. Pi-glue is in `installTopChrome` below.
  */
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { isTopChromeHidden } from "./commands/tabs.js";
+import { sessionHasMessages as cachedSessionHasMessages } from "./session-cache.js";
 import { CATHEDRAL_TOKENS, type SumoCodeState } from "./tokens.js";
 
 const RESET = "\u001b[0m";
@@ -276,6 +277,17 @@ export function installTopChrome(pi: ExtensionAPI, loader?: TopChromeLoader): vo
 
 function sessionHasMessages(ctx: { sessionManager?: { getBranch?: () => unknown[] } }): boolean {
 	try {
+		// Route through the shared session cache when ctx looks like a real
+		// ExtensionContext so we don't re-walk the branch on every header render.
+		// Falls back to the inline traversal for the test mock shape that only
+		// supplies `{ sessionManager: { getBranch } }`.
+		if (
+			typeof (ctx as { cwd?: unknown }).cwd === "string" &&
+			ctx.sessionManager &&
+			typeof ctx.sessionManager.getBranch === "function"
+		) {
+			return cachedSessionHasMessages(ctx as ExtensionContext);
+		}
 		return ctx.sessionManager?.getBranch?.().some((entry) => (entry as { type?: string }).type === "message") ?? false;
 	} catch {
 		return false;

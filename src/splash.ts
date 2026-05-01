@@ -21,6 +21,7 @@ import { fileURLToPath } from "node:url";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { truncateToWidth } from "@mariozechner/pi-tui";
 import type { Component } from "@mariozechner/pi-tui";
+import { sessionHasMessages as cachedSessionHasMessages } from "./session-cache.js";
 import { CATHEDRAL_TOKENS } from "./tokens.js";
 
 const RESET = "\u001b[0m";
@@ -159,7 +160,7 @@ export function renderSplash(snapshot: SplashSnapshot, width: number, terminalHe
 
 function sessionHasMessages(ctx: ExtensionContext): boolean {
 	try {
-		return ctx.sessionManager.getBranch().some((entry) => entry.type === "message");
+		return cachedSessionHasMessages(ctx);
 	} catch {
 		return false;
 	}

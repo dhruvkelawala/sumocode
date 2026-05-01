@@ -29,6 +29,25 @@ const QuestionParams = Type.Object({
 
 const FREE_TEXT_LABEL = "Type something…";
 
+/**
+ * Pi's `Editor` renders with its own theme tokens — its default cursor and
+ * syntax colors are bright greens that look foreign on the Cathedral palette.
+ * Wrap each editor row so any Pi `[39m` (default-fg reset) lands back on
+ * Cathedral foreground. The framing layer in `renderDivineQuery` re-applies
+ * surfaceLifted bg via `persistentBg`, so we only need foreground discipline
+ * here.
+ */
+const FG_RESET = "[39m";
+const RESET = "[0m";
+const CATHEDRAL_FG = "[38;2;245;230;200m";
+
+export function withCathedralForeground(line: string): string {
+	const reCathedralized = line
+		.replaceAll(RESET, `${RESET}${CATHEDRAL_FG}`)
+		.replaceAll(FG_RESET, `${FG_RESET}${CATHEDRAL_FG}`);
+	return `${CATHEDRAL_FG}${reCathedralized}${FG_RESET}`;
+}
+
 interface QuestionResult {
 	answer: string;
 	wasCustom: boolean;
@@ -110,25 +129,20 @@ async function showCathedralQuestion(
 			function render(width: number): string[] {
 				if (cachedLines) return cachedLines;
 
-				const lines = renderDivineQuery(snapshot, width);
-
+				const extras: string[] = [];
 				if (editMode) {
-					const RESET = "\u001b[0m";
-					const bgCode = "\u001b[48;2;61;48;36m"; // surfaceLifted
-					const pad = (s: string) => {
-						const stripped = s.replace(/\u001b\[[0-9;]*m/g, "");
-						const padding = Math.max(0, width - stripped.length);
-						return `${bgCode}${s}${" ".repeat(padding)}${RESET}`;
-					};
-					lines.push(pad(`     ${theme.fg("muted", "Your answer:")}`));
-					for (const line of editor.render(width - 6)) {
-						lines.push(pad(`     ${line}`));
+					// `renderDivineQuery` returns full-width lifted panel rows.
+					// Reserve 5 cols indent + 1 col trailing margin.
+					const editorInnerWidth = Math.max(1, width - 6);
+					extras.push(`     ${theme.fg("muted", "Your answer:")}`);
+					for (const line of editor.render(editorInnerWidth)) {
+						extras.push(`     ${withCathedralForeground(line)}`);
 					}
-					lines.push(pad(""));
-					lines.push(pad(`     ${theme.fg("dim", "Enter to submit · Esc to go back")}`));
-					lines.push(pad(""));
+					extras.push("");
+					extras.push(`     ${theme.fg("dim", "Enter to submit · Esc to go back")}`);
 				}
 
+				const lines = renderDivineQuery(snapshot, width, { extras });
 				cachedLines = lines;
 				return lines;
 			}

@@ -5,7 +5,7 @@ import {
 	type DivineQuerySnapshot,
 } from "./divine-query.js";
 
-const ANSI = /\u001b\[[0-9;]*m/g;
+const ANSI = /\[[0-9;]*m/g;
 const stripAnsi = (s: string): string => s.replace(ANSI, "");
 
 function snapshot(overrides: Partial<DivineQuerySnapshot> = {}): DivineQuerySnapshot {
@@ -18,27 +18,42 @@ function snapshot(overrides: Partial<DivineQuerySnapshot> = {}): DivineQuerySnap
 }
 
 describe("renderDivineQuery", () => {
-	it("renders ✾ DIVINE QUERY ✾ title in accent", () => {
+	it("renders an unframed lifted panel padded to width", () => {
+		const lines = renderDivineQuery(snapshot(), 80);
+		const plain = lines.map(stripAnsi);
+
+		for (const row of plain) {
+			expect(row.length, `row not padded: ${JSON.stringify(row)}`).toBe(80);
+			expect(row.startsWith("╭")).toBe(false);
+			expect(row.startsWith("│")).toBe(false);
+			expect(row.startsWith("╰")).toBe(false);
+			expect(row.endsWith("╮")).toBe(false);
+			expect(row.endsWith("│")).toBe(false);
+			expect(row.endsWith("╯")).toBe(false);
+		}
+	});
+
+	it("renders ✾ DIVINE QUERY ✾ title in accent inside the panel", () => {
 		const lines = renderDivineQuery(snapshot(), 80);
 		const titleLine = lines.find((l) => stripAnsi(l).includes("DIVINE QUERY"));
 		expect(titleLine).toBeDefined();
 		// accent #D97706 -> 217;119;6
-		expect(titleLine).toContain("\u001b[38;2;217;119;6m");
+		expect(titleLine).toContain("[38;2;217;119;6m");
 		expect(stripAnsi(titleLine!)).toContain("✾  DIVINE QUERY  ✾");
 	});
 
 	it("renders decorative split rules in divider", () => {
 		const lines = renderDivineQuery(snapshot(), 80).map(stripAnsi);
-		const ruleLines = lines.filter((l) => l.includes("──") && l.includes("·"));
-		expect(ruleLines.length).toBe(2); // top + bottom
+		const ruleLines = lines.filter((l) => l.includes("·") && l.includes("──"));
+		expect(ruleLines.length).toBe(2); // top + bottom inner rules
 	});
 
-	it("renders question body in foreground", () => {
+	it("renders question body in foreground inside the lifted panel", () => {
 		const lines = renderDivineQuery(snapshot(), 80);
 		const bodyLine = lines.find((l) => stripAnsi(l).includes("rename"));
 		expect(bodyLine).toBeDefined();
 		// foreground #F5E6C8 -> 245;230;200
-		expect(bodyLine).toContain("\u001b[38;2;245;230;200m");
+		expect(bodyLine).toContain("[38;2;245;230;200m");
 	});
 
 	it("renders focused option with ❈ in accent and text in foreground", () => {
@@ -46,7 +61,7 @@ describe("renderDivineQuery", () => {
 		const focusedLine = lines.find((l) => stripAnsi(l).includes("❈"));
 		expect(focusedLine).toBeDefined();
 		expect(stripAnsi(focusedLine!)).toContain("A) Yes, rename it everywhere");
-		expect(focusedLine).toContain("\u001b[38;2;217;119;6m❈"); // accent
+		expect(focusedLine).toContain("[38;2;217;119;6m❈"); // accent
 	});
 
 	it("renders unfocused options with · in divider and text in dim", () => {
@@ -54,9 +69,8 @@ describe("renderDivineQuery", () => {
 		const plain = lines.map(stripAnsi);
 		const bLine = plain.find((l) => l.includes("B) No"));
 		expect(bLine).toContain("·");
-		// Check dim color on the raw ANSI
 		const rawB = lines.find((l) => stripAnsi(l).includes("B) No"));
-		expect(rawB).toContain("\u001b[38;2;139;122;99m"); // foregroundDim
+		expect(rawB).toContain("[38;2;139;122;99m"); // foregroundDim
 	});
 
 	it("renders footer with wander/answer/retreat", () => {
@@ -67,19 +81,51 @@ describe("renderDivineQuery", () => {
 		expect(footer).toContain("⎋ retreat");
 	});
 
-	it("renders surfaceLifted background on all rows", () => {
+	it("renders surfaceLifted background on every panel row", () => {
 		const lines = renderDivineQuery(snapshot(), 80);
 		// surfaceLifted #3D3024 -> 61;48;36
 		for (const line of lines) {
-			expect(line).toContain("\u001b[48;2;61;48;36m");
+			expect(line).toContain("[48;2;61;48;36m");
 		}
 	});
 
-	it("pads every row to the requested width", () => {
+	it("pads every row to exactly the requested width", () => {
 		const lines = renderDivineQuery(snapshot(), 80);
 		for (const line of lines) {
 			expect(stripAnsi(line).length, `row not padded: ${JSON.stringify(stripAnsi(line))}`).toBe(80);
 		}
+	});
+
+	it("wraps long question and option text inside the panel width", () => {
+		const lines = renderDivineQuery(snapshot({
+			title: "Divine Query smoke test: which modal behavior should we verify next, and why does this text need to stay inside the modal panel?",
+			options: ["Type a very long custom answer option that should never run past the lifted surface edge"],
+		}), 50);
+		const plain = lines.map(stripAnsi);
+
+		for (const line of plain) {
+			expect(line.length, `row overflowed: ${JSON.stringify(line)}`).toBe(50);
+			expect(line.startsWith("│"), `row unexpectedly framed: ${JSON.stringify(line)}`).toBe(false);
+			expect(line.endsWith("│"), `row unexpectedly framed: ${JSON.stringify(line)}`).toBe(false);
+		}
+		expect(plain.filter((line) => line.includes("Divine Query smoke test")).length).toBe(1);
+		expect(plain.some((line) => line.includes("panel?"))).toBe(true);
+	});
+
+	it("appends extras between footer and trailing padding in the same panel", () => {
+		const lines = renderDivineQuery(snapshot(), 60, {
+			extras: ["     Your answer:", "     hello world"],
+		});
+		const plain = lines.map(stripAnsi);
+
+		const helloRow = plain.find((line) => line.includes("hello world"));
+		expect(helloRow).toBeDefined();
+		expect(helloRow!.startsWith("│")).toBe(false);
+		expect(helloRow!.endsWith("│")).toBe(false);
+		expect(helloRow!.length).toBe(60);
+
+		const helloIndex = plain.findIndex((line) => line.includes("hello world"));
+		expect(helloIndex).toBeLessThan(plain.length - 1);
 	});
 
 	it("labels options with A), B), C), etc.", () => {
@@ -87,6 +133,11 @@ describe("renderDivineQuery", () => {
 		expect(lines.some((l) => l.includes("A)"))).toBe(true);
 		expect(lines.some((l) => l.includes("B)"))).toBe(true);
 		expect(lines.some((l) => l.includes("C)"))).toBe(true);
+	});
+
+	it("renders empty array at widths < 1", () => {
+		expect(renderDivineQuery(snapshot(), 0)).toEqual([]);
+		expect(renderDivineQuery(snapshot(), -1)).toEqual([]);
 	});
 });
 

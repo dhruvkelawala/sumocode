@@ -6,18 +6,21 @@
  *
  * Visual:
  *
- *                            ✾  DIVINE QUERY  ✾
- *
- *            ──────────────────────  ·  ──────────────────────
- *
- *     Should I rename `getUser` to `fetchUser`?
- *
- *     ❈   A) Yes, rename it everywhere
- *     ·   B) No, leave it as-is
- *     ·   C) Use a different name
- *
- *            ──────────────────────  ·  ──────────────────────
- *                    ↑↓ wander    ⏎ answer    ⎋ retreat
+ *   ╭──────────────────────────────────────────╮
+ *   │            ✾  DIVINE QUERY  ✾            │
+ *   │                                          │
+ *   │     ──────────────  ·  ──────────────    │
+ *   │                                          │
+ *   │     Should I rename `getUser` to         │
+ *   │     `fetchUser`?                         │
+ *   │                                          │
+ *   │     ❈   A) Yes, rename it everywhere     │
+ *   │     ·   B) No, leave it as-is            │
+ *   │     ·   C) Use a different name          │
+ *   │                                          │
+ *   │     ──────────────  ·  ──────────────    │
+ *   │      ↑↓ wander    ⏎ answer    ⎋ retreat  │
+ *   ╰──────────────────────────────────────────╯
  *
  * Bible source:
  *   docs/ui/bible/11-divine-query-rename.html
@@ -25,15 +28,15 @@
  */
 
 import type { Component, OverlayOptions } from "@mariozechner/pi-tui";
-import { matchesKey } from "@mariozechner/pi-tui";
+import { matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@mariozechner/pi-tui";
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { CATHEDRAL_TOKENS } from "./tokens.js";
 
-const RESET = "\u001b[0m";
-const ANSI_PATTERN = /\u001b\[[0-9;]*m/g;
+const RESET = "[0m";
+const ANSI_PATTERN = /\[[0-9;]*m/g;
 
 function visibleLength(text: string): number {
-	return text.replace(ANSI_PATTERN, "").length;
+	return visibleWidth(text.replace(ANSI_PATTERN, ""));
 }
 
 function fg(text: string, hex: string): string {
@@ -41,7 +44,7 @@ function fg(text: string, hex: string): string {
 	const r = parseInt(h.slice(0, 2), 16);
 	const g = parseInt(h.slice(2, 4), 16);
 	const b = parseInt(h.slice(4, 6), 16);
-	return `\u001b[38;2;${r};${g};${b}m${text}${RESET}`;
+	return `[38;2;${r};${g};${b}m${text}${RESET}`;
 }
 
 function persistentBg(text: string, fgHex: string, bgHex: string): string {
@@ -53,22 +56,39 @@ function persistentBg(text: string, fgHex: string, bgHex: string): string {
 	const br = parseInt(bh.slice(0, 2), 16);
 	const bg = parseInt(bh.slice(2, 4), 16);
 	const bb = parseInt(bh.slice(4, 6), 16);
-	const styleCode = `\u001b[38;2;${fr};${fgCode};${fb}m\u001b[48;2;${br};${bg};${bb}m`;
+	const styleCode = `[38;2;${fr};${fgCode};${fb}m[48;2;${br};${bg};${bb}m`;
 	// Restore both fg+bg after every reset so lifted bg persists through inner ANSI
-	return `${styleCode}${text.replace(/\u001b\[0m/g, `${RESET}${styleCode}`)}${RESET}`;
+	return `${styleCode}${text.replace(/\[0m/g, `${RESET}${styleCode}`)}${RESET}`;
 }
 
 function center(line: string, width: number): string {
-	const len = visibleLength(line);
-	if (len >= width) return line;
+	const fitted = fitLine(line, width);
+	const len = visibleLength(fitted);
+	if (len >= width) return fitted;
 	const pad = Math.floor((width - len) / 2);
-	return `${" ".repeat(pad)}${line}${" ".repeat(width - len - pad)}`;
+	return `${" ".repeat(pad)}${fitted}${" ".repeat(width - len - pad)}`;
+}
+
+function fitLine(line: string, width: number): string {
+	if (width <= 0) return "";
+	return visibleLength(line) > width ? truncateToWidth(line, width, "…") : line;
 }
 
 function padRight(line: string, width: number): string {
-	const len = visibleLength(line);
-	if (len >= width) return line;
-	return `${line}${" ".repeat(width - len)}`;
+	const fitted = fitLine(line, width);
+	const len = visibleLength(fitted);
+	if (len >= width) return fitted;
+	return `${fitted}${" ".repeat(width - len)}`;
+}
+
+function wrapIndentedText(text: string, width: number, indent: string): string[] {
+	const contentWidth = Math.max(1, width - visibleLength(indent));
+	const rows: string[] = [];
+	for (const paragraph of text.split("\n")) {
+		const wrapped = wrapTextWithAnsi(paragraph, contentWidth);
+		rows.push(...(wrapped.length > 0 ? wrapped : [""]).map((line) => `${indent}${line}`));
+	}
+	return rows;
 }
 
 // ── Snapshot ──────────────────────────────────────────────────
@@ -79,6 +99,18 @@ export interface DivineQuerySnapshot {
 	readonly focusedIndex: number;
 }
 
+export interface DivineQueryRenderOptions {
+	/**
+	 * Extra inner rows to render between the footer and the bottom border —
+	 * used by `question-tool.ts` for the edit-mode `Your answer:` editor when
+	 * the user picks the free-text option.
+	 *
+	 * Each entry is rendered inside the frame as `│ <padded content> │` with
+	 * surfaceLifted bg + foreground fg.
+	 */
+	readonly extras?: readonly string[];
+}
+
 // ── Pure render ──────────────────────────────────────────────
 
 const TITLE_MARK = "✾";
@@ -86,7 +118,7 @@ const FOCUSED_MARK = "❈";
 const UNFOCUSED_MARK = "·";
 
 function splitRule(width: number): string {
-	const ruleLen = Math.max(1, Math.floor((width - 6) / 2 - 15));
+	const ruleLen = Math.max(1, Math.min(22, Math.floor((width - 5) / 2)));
 	const left = fg("─".repeat(ruleLen), CATHEDRAL_TOKENS.colors.divider);
 	const dot = fg("·", CATHEDRAL_TOKENS.colors.divider);
 	const right = fg("─".repeat(ruleLen), CATHEDRAL_TOKENS.colors.divider);
@@ -97,31 +129,39 @@ function optionLabel(index: number): string {
 	return `${String.fromCharCode(65 + index)}) `;
 }
 
-export function renderDivineQuery(snapshot: DivineQuerySnapshot, width: number): string[] {
-	const lines: string[] = [];
+/**
+ * Build the inner content rows of a Divine Query modal at the given content
+ * width (i.e. excluding the side borders). Returned rows are not yet padded
+ * to width — `wrapInnerRow` handles padding + bg paint at the framing layer.
+ */
+function buildInnerRows(snapshot: DivineQuerySnapshot, contentWidth: number, extras: readonly string[]): string[] {
+	const inner: string[] = [];
 	const indent = "     ";
 
 	// Blank
-	lines.push("");
+	inner.push("");
 
 	// Title: ✾  DIVINE QUERY  ✾
 	const titleText = `${fg(TITLE_MARK, CATHEDRAL_TOKENS.colors.accent)}  ${fg("DIVINE QUERY", CATHEDRAL_TOKENS.colors.accent)}  ${fg(TITLE_MARK, CATHEDRAL_TOKENS.colors.accent)}`;
-	lines.push(center(titleText, width));
+	inner.push(center(titleText, contentWidth));
 
 	// Blank
-	lines.push("");
+	inner.push("");
 
 	// Split rule
-	lines.push(splitRule(width));
+	inner.push(splitRule(contentWidth));
 
 	// Blank
-	lines.push("");
+	inner.push("");
 
-	// Question body
-	lines.push(padRight(`${indent}${fg(snapshot.title, CATHEDRAL_TOKENS.colors.foreground)}`, width));
+	// Question body. Bible Element 11 keeps a generous right margin: text wraps
+	// at `cols - 12`, then gets a 5-col left indent.
+	for (const questionLine of wrapIndentedText(snapshot.title, Math.max(1, contentWidth - 7), indent)) {
+		inner.push(fg(questionLine, CATHEDRAL_TOKENS.colors.foreground));
+	}
 
 	// Blank
-	lines.push("");
+	inner.push("");
 
 	// Options
 	for (let i = 0; i < snapshot.options.length; i += 1) {
@@ -129,32 +169,60 @@ export function renderDivineQuery(snapshot: DivineQuerySnapshot, width: number):
 		const mark = focused
 			? fg(FOCUSED_MARK, CATHEDRAL_TOKENS.colors.accent)
 			: fg(UNFOCUSED_MARK, CATHEDRAL_TOKENS.colors.divider);
+		const optionIndent = `${indent}${mark}   `;
+		const continuationIndent = `${indent}    `;
 		const label = `${optionLabel(i)}${snapshot.options[i]}`;
-		const text = focused
-			? fg(label, CATHEDRAL_TOKENS.colors.foreground)
-			: fg(label, CATHEDRAL_TOKENS.colors.foregroundDim);
-		lines.push(padRight(`${indent}${mark}   ${text}`, width));
+		const wrappedOption = wrapIndentedText(label, contentWidth, continuationIndent);
+		for (let optionRow = 0; optionRow < wrappedOption.length; optionRow += 1) {
+			const raw = (wrappedOption[optionRow] ?? "").slice(continuationIndent.length);
+			const prefix = optionRow === 0 ? optionIndent : continuationIndent;
+			const text = focused
+				? fg(raw, CATHEDRAL_TOKENS.colors.foreground)
+				: fg(raw, CATHEDRAL_TOKENS.colors.foregroundDim);
+			inner.push(`${prefix}${text}`);
+		}
 	}
 
 	// Blank
-	lines.push("");
+	inner.push("");
 
 	// Split rule
-	lines.push(splitRule(width));
+	inner.push(splitRule(contentWidth));
 
 	// Footer
 	const footer = fg("↑↓ wander    ⏎ answer    ⎋ retreat", CATHEDRAL_TOKENS.colors.foregroundDim);
-	lines.push(center(footer, width));
+	inner.push(center(footer, contentWidth));
+
+	// Extras (e.g. edit-mode editor rows from question-tool)
+	for (const extra of extras) inner.push(extra);
 
 	// Blank
-	lines.push("");
+	inner.push("");
 
-	// Wrap all lines with persistent surfaceLifted bg + foreground fg
-	return lines.map((line) => persistentBg(
-		padRight(line, width),
+	return inner;
+}
+
+/** Paint a full-width lifted panel row. Element 11 is intentionally
+ * unframed in the Bible; Pi's overlay host may already provide surrounding
+ * chrome, so adding a second box here makes the modal read too heavy.
+ */
+function wrapPanelRow(innerLine: string, contentWidth: number): string {
+	return persistentBg(
+		padRight(innerLine, contentWidth),
 		CATHEDRAL_TOKENS.colors.foreground,
 		CATHEDRAL_TOKENS.colors.surfaceLifted,
-	));
+	);
+}
+
+export function renderDivineQuery(
+	snapshot: DivineQuerySnapshot,
+	width: number,
+	options: DivineQueryRenderOptions = {},
+): string[] {
+	if (width < 1) return [];
+	const contentWidth = width;
+	const inner = buildInnerRows(snapshot, contentWidth, options.extras ?? []);
+	return inner.map((innerLine) => wrapPanelRow(innerLine, contentWidth));
 }
 
 // ── State machine ────────────────────────────────────────────
@@ -219,10 +287,9 @@ class DivineQueryComponent implements Component {
 
 export const DIVINE_QUERY_OVERLAY_OPTIONS: OverlayOptions = {
 	anchor: "center",
-	width: "60%",
-	minWidth: 50,
-
-	maxHeight: "80%",
+	width: 80,
+	minWidth: 56,
+	maxHeight: "65%",
 };
 
 /**
@@ -249,5 +316,3 @@ export async function showDivineQuery(
 	if (selectedIndex < 0 || selectedIndex >= options.length) return undefined;
 	return options[selectedIndex];
 }
-
-

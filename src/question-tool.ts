@@ -9,7 +9,7 @@
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { Editor, type EditorTheme, Key, matchesKey, Text, truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
+import { Editor, type EditorTheme, Key, matchesKey, Text } from "@mariozechner/pi-tui";
 import { Type } from "typebox";
 import { renderDivineQuery, updateDivineQuery, type DivineQuerySnapshot, DIVINE_QUERY_OVERLAY_OPTIONS } from "./divine-query.js";
 
@@ -28,20 +28,24 @@ const QuestionParams = Type.Object({
 });
 
 const FREE_TEXT_LABEL = "Type something…";
-const ANSI_PATTERN = /\u001b\[[0-9;]*m/g;
-const RESET = "\u001b[0m";
-const LIFTED_BG = "\u001b[48;2;61;48;36m";
-const FOREGROUND_FG = "\u001b[38;2;245;230;200m";
 
-function visibleLength(value: string): number {
-	return visibleWidth(value.replace(ANSI_PATTERN, ""));
-}
+/**
+ * Pi's `Editor` renders with its own theme tokens — its default cursor and
+ * syntax colors are bright greens that look foreign on the Cathedral palette.
+ * Wrap each editor row so any Pi `[39m` (default-fg reset) lands back on
+ * Cathedral foreground. The framing layer in `renderDivineQuery` re-applies
+ * surfaceLifted bg via `persistentBg`, so we only need foreground discipline
+ * here.
+ */
+const FG_RESET = "[39m";
+const RESET = "[0m";
+const CATHEDRAL_FG = "[38;2;245;230;200m";
 
-export function padQuestionModalLine(line: string, width: number): string {
-	const fitted = visibleLength(line) > width ? truncateToWidth(line, width, "…") : line;
-	const padding = Math.max(0, width - visibleLength(fitted));
-	const persistent = `${FOREGROUND_FG}${LIFTED_BG}${fitted.replaceAll(RESET, `${RESET}${FOREGROUND_FG}${LIFTED_BG}`)}${" ".repeat(padding)}${RESET}`;
-	return persistent;
+export function withCathedralForeground(line: string): string {
+	const reCathedralized = line
+		.replaceAll(RESET, `${RESET}${CATHEDRAL_FG}`)
+		.replaceAll(FG_RESET, `${FG_RESET}${CATHEDRAL_FG}`);
+	return `${CATHEDRAL_FG}${reCathedralized}${FG_RESET}`;
 }
 
 interface QuestionResult {
@@ -125,19 +129,21 @@ async function showCathedralQuestion(
 			function render(width: number): string[] {
 				if (cachedLines) return cachedLines;
 
-				const lines = renderDivineQuery(snapshot, width);
-
+				const extras: string[] = [];
 				if (editMode) {
-					const pad = (s: string) => padQuestionModalLine(s, width);
-					lines.push(pad(`     ${theme.fg("muted", "Your answer:")}`));
-					for (const line of editor.render(Math.max(1, width - 6))) {
-						lines.push(pad(`     ${line}`));
+					// `renderDivineQuery` frames everything inside `│ ... │`. Inner
+					// content width = `width - 2`. Reserve 5 cols indent + 1 col
+					// trailing margin → editor inner width = width - 8.
+					const editorInnerWidth = Math.max(1, width - 8);
+					extras.push(`     ${theme.fg("muted", "Your answer:")}`);
+					for (const line of editor.render(editorInnerWidth)) {
+						extras.push(`     ${withCathedralForeground(line)}`);
 					}
-					lines.push(pad(""));
-					lines.push(pad(`     ${theme.fg("dim", "Enter to submit · Esc to go back")}`));
-					lines.push(pad(""));
+					extras.push("");
+					extras.push(`     ${theme.fg("dim", "Enter to submit · Esc to go back")}`);
 				}
 
+				const lines = renderDivineQuery(snapshot, width, { extras });
 				cachedLines = lines;
 				return lines;
 			}

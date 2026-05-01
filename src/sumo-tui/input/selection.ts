@@ -186,7 +186,6 @@ export class SelectionController {
 	}
 
 	public handleMouseEvent(event: MouseEvent, buffer = this.options.readBuffer?.()): boolean {
-		logDiagnostic("selection_mouse_event", { type: event.type, button: event.button, row: event.row, col: event.col, dragging: this.dragging });
 		if (event.type === "scroll") return false;
 		if (event.type === "move") {
 			if (!this.dragging || !this.anchor) return false;
@@ -245,7 +244,6 @@ export class SelectionController {
 
 	public copyCurrentSelection(buffer = this.options.readBuffer?.()): boolean {
 		const text = this.extractSelectedText(buffer);
-		logDiagnostic("selection_copy_attempt", { chars: text.length, hasBuffer: buffer !== undefined, preview: text.slice(0, 80) });
 		if (text.length === 0) return false;
 		this.options.emitClipboard?.(createOsc52Sequence(text), text);
 		this.options.onCopied?.(text);

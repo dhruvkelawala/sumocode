@@ -114,7 +114,7 @@ describe("sumo interactive Pi noise filtering", () => {
 
 		const written = write.mock.calls.map(([chunk]) => String(chunk)).join("");
 		expect(written.match(/\x1b\[\?1049h/g) ?? []).toHaveLength(1);
-		expect(written.match(/\x1b\[\?1000h\x1b\[\?1002h\x1b\[\?1003h\x1b\[\?1006h/g) ?? []).toHaveLength(1);
+		expect(written.match(/\x1b\[\?1000h\x1b\[\?1002h\x1b\[\?1006h/g) ?? []).toHaveLength(1);
 		runtime.stop();
 	});
 

@@ -462,18 +462,6 @@ export class ChatViewportController {
 			col: event.col,
 		};
 		const inViewport = localEvent.row >= 0 && localEvent.row < this.lastChatHeight && localEvent.col >= 0 && localEvent.col < this.lastChatWidth;
-		logDiagnostic("chat_mouse_event", {
-			type: event.type,
-			button: event.button,
-			row: event.row,
-			col: event.col,
-			localRow: localEvent.row,
-			localCol: localEvent.col,
-			inViewport,
-			chatTop: this.lastChatTop,
-			chatWidth: this.lastChatWidth,
-			chatHeight: this.lastChatHeight,
-		});
 		if (!inViewport) {
 			logDiagnostic("mouse_dispatch", { type: event.type, row: event.row, col: event.col, target: "outside_chat", handled: false });
 			return false;
@@ -481,7 +469,6 @@ export class ChatViewportController {
 		const beforeOffset = this.chat.scrollBox.scrollOffset;
 		const handled = this.chat.handleMouseEvent(localEvent);
 		const handledSelection = this.runtime.handleSelectionMouse?.(localEvent, this.lastChatWidth, this.lastChatHeight) === true;
-		logDiagnostic("chat_mouse_handled", { type: event.type, handledScroll: handled, handledSelection });
 		logDiagnostic("mouse_dispatch", {
 			type: event.type,
 			row: event.row,

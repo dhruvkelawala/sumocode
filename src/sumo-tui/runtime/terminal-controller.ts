@@ -226,6 +226,14 @@ export class TerminalSessionOwner {
 		if (cursor && (patches.length > 0 || cursorMoved)) {
 			output += `\x1b[${cursor.row + 1};${cursor.col + 1}H\x1b[?25h`;
 			this.lastEmittedCursor = { row: cursor.row, col: cursor.col };
+		} else if (patches.length > 0) {
+			// Patches moved the terminal cursor without us emitting a known new
+			// position (compositor returned `hardwareCursor: null`). The cached
+			// `lastEmittedCursor` is now stale — the visible caret is at the end
+			// of the last patch, not at the cached coordinates. Invalidate so the
+			// NEXT frame with a non-null cursor re-emits its position even if it
+			// matches the stale cache.
+			this.lastEmittedCursor = null;
 		}
 		output += "\x1b[?2026l";
 		this.write(output);

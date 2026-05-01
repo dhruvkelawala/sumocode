@@ -182,6 +182,32 @@ describe("TerminalSessionOwner", () => {
 		expect(output.writes).toEqual(["\x1b[?2026h\x1b[6;11H\x1b[?25h\x1b[?2026l"]);
 	});
 
+	it("invalidates the cursor cache when emitting patches with a null cursor (hardwareCursor=null path)", () => {
+		// Regression: the patch loop physically moves the terminal cursor when
+		// patches are emitted, even when no logical cursor is provided. Failing
+		// to invalidate `lastEmittedCursor` here would let the next frame (with
+		// a cursor matching the stale cache) early-return and leave the visible
+		// caret parked at the end of the last patch.
+		const output = outputStub();
+		const terminal = new TerminalSessionOwner({ output });
+
+		// Frame A: seed the cache with cursor (5, 10).
+		terminal.writeFramePatches([{ row: 0, ansi: "a" }], { row: 5, col: 10 });
+
+		// Frame B: patches with null cursor. Patch loop moves the terminal
+		// cursor; logical cursor isn't tracked. Cache MUST be invalidated.
+		terminal.writeFramePatches([{ row: 1, ansi: "b" }], null);
+		output.writes.length = 0;
+
+		// Frame C: same logical cursor as frame A. With the bug, this would
+		// early-return because cursorMoved=false against the stale cache.
+		// With the fix, cache was nulled by frame B, so cursorMoved=true and
+		// we re-emit the cursor reposition.
+		terminal.writeFramePatches([], { row: 5, col: 10 });
+
+		expect(output.writes).toEqual(["\x1b[?2026h\x1b[6;11H\x1b[?25h\x1b[?2026l"]);
+	});
+
 	it("re-emits cursor after exitTerminal clears lastEmittedCursor", () => {
 		const output = outputStub();
 		const terminal = new TerminalSessionOwner({ output });

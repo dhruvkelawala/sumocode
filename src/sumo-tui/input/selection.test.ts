@@ -128,6 +128,57 @@ describe("SelectionController", () => {
 		});
 	});
 
+	it("snaps focus back to the anchor row when drag drifts onto a non-selectable gap row", () => {
+		const buffer = new CellBuffer(3, 80);
+		buffer.paintRow(0, " ".repeat(80));
+		buffer.paintRow(1, "│ hello world here is some text                                              │");
+		buffer.paintRow(2, " ".repeat(80));
+		for (let col = 2; col <= 32; col += 1) buffer.setSelectionMeta(1, col, { selectable: true });
+		const selection = new SelectionController();
+
+		selection.handleMouseEvent({ type: "down", button: 0, row: 1, col: 8, modifiers: { shift: false, alt: false, ctrl: false } }, buffer);
+		selection.handleMouseEvent({ type: "drag", button: 0, row: 0, col: 12, modifiers: { shift: false, alt: false, ctrl: false } }, buffer);
+
+		const range = selection.getRange();
+		expect(range?.focus.row).toBe(1);
+		expect(range?.focus.col).toBe(12);
+		expect(selection.extractSelectedText(buffer)).toBe("world");
+	});
+
+	it("snaps mouse-up focus back to the anchor row when release lands on a gap row", () => {
+		const buffer = new CellBuffer(3, 80);
+		buffer.paintRow(0, " ".repeat(80));
+		buffer.paintRow(1, "│ word boundary check                                                          │");
+		buffer.paintRow(2, " ".repeat(80));
+		for (let col = 2; col <= 22; col += 1) buffer.setSelectionMeta(1, col, { selectable: true });
+		const selection = new SelectionController();
+
+		selection.handleMouseEvent({ type: "down", button: 0, row: 1, col: 7, modifiers: { shift: false, alt: false, ctrl: false } }, buffer);
+		selection.handleMouseEvent({ type: "up", button: 0, row: 0, col: 11, modifiers: { shift: false, alt: false, ctrl: false } }, buffer);
+
+		const range = selection.getRange();
+		expect(range?.focus.row).toBe(1);
+		expect(range?.focus.col).toBe(11);
+	});
+
+	it("keeps multi-row drag intact when focus row has selectable content", () => {
+		const buffer = new CellBuffer(4, 80);
+		buffer.paintRow(0, " ".repeat(80));
+		buffer.paintRow(1, "│ first message line                                                            │");
+		buffer.paintRow(2, "│ second message line                                                           │");
+		buffer.paintRow(3, " ".repeat(80));
+		for (let col = 2; col <= 22; col += 1) buffer.setSelectionMeta(1, col, { selectable: true });
+		for (let col = 2; col <= 22; col += 1) buffer.setSelectionMeta(2, col, { selectable: true });
+		const selection = new SelectionController();
+
+		selection.handleMouseEvent({ type: "down", button: 0, row: 1, col: 8, modifiers: { shift: false, alt: false, ctrl: false } }, buffer);
+		selection.handleMouseEvent({ type: "drag", button: 0, row: 2, col: 12, modifiers: { shift: false, alt: false, ctrl: false } }, buffer);
+
+		const range = selection.getRange();
+		expect(range?.focus.row).toBe(2);
+		expect(range?.focus.col).toBe(12);
+	});
+
 	it("emits a copied callback after OSC 52 copy succeeds", () => {
 		const buffer = bufferWithRow("copy me", 12);
 		const onCopied = vi.fn();

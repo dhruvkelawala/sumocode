@@ -75,6 +75,40 @@ function hasSemanticSelection(buffer: CellBuffer | undefined): boolean {
 	return buffer?.hasSelectionMeta() === true;
 }
 
+function rowHasSelectable(buffer: CellBuffer, row: number): boolean {
+	const { cols } = buffer.getDimensions();
+	for (let col = 0; col < cols; col += 1) {
+		if (buffer.getSelectionMeta(row, col)) return true;
+	}
+	return false;
+}
+
+/**
+ * Snap a candidate focus point back toward the anchor when it lands on a row
+ * with no selectable cells. This prevents tiny vertical jitter during a
+ * single-line drag from promoting the selection into a multi-row text-flow
+ * selection that visually highlights an entire content row from col 2.
+ */
+function snapFocusToSelectableRow(
+	candidate: SelectionPoint,
+	anchor: SelectionPoint | undefined,
+	buffer: CellBuffer | undefined,
+): { point: SelectionPoint; snapped: boolean; fromRow: number } {
+	if (!buffer || !hasSemanticSelection(buffer) || !anchor) return { point: candidate, snapped: false, fromRow: candidate.row };
+	if (rowHasSelectable(buffer, candidate.row)) return { point: candidate, snapped: false, fromRow: candidate.row };
+	const { rows } = buffer.getDimensions();
+	const direction = candidate.row < anchor.row ? 1 : candidate.row > anchor.row ? -1 : 0;
+	if (direction === 0) return { point: candidate, snapped: false, fromRow: candidate.row };
+	let row = candidate.row + direction;
+	while (row >= 0 && row < rows && row !== anchor.row + direction) {
+		if (rowHasSelectable(buffer, row)) {
+			return { point: { row, col: candidate.col }, snapped: true, fromRow: candidate.row };
+		}
+		row += direction;
+	}
+	return { point: { row: anchor.row, col: candidate.col }, snapped: true, fromRow: candidate.row };
+}
+
 function intersects(leftStart: number, leftEnd: number, rightStart: number, rightEnd: number): boolean {
 	return leftStart <= rightEnd && rightStart <= leftEnd;
 }
@@ -179,12 +213,16 @@ export class SelectionController {
 		if (!this.dragging || !this.anchor) return false;
 
 		if (event.type === "drag") {
-			this.focus = point;
+			const snapped = snapFocusToSelectableRow(point, this.anchor, buffer);
+			if (snapped.snapped) logDiagnostic("selection_focus_snap", { phase: "drag", fromRow: snapped.fromRow, toRow: snapped.point.row, col: snapped.point.col });
+			this.focus = snapped.point;
 			this.notifyChanged();
 			return true;
 		}
 
-		this.focus = point;
+		const upSnap = snapFocusToSelectableRow(point, this.anchor, buffer);
+		if (upSnap.snapped) logDiagnostic("selection_focus_snap", { phase: "up", fromRow: upSnap.fromRow, toRow: upSnap.point.row, col: upSnap.point.col });
+		this.focus = upSnap.point;
 		this.dragging = false;
 		const selected = this.hasSelection();
 		if (!selected) {

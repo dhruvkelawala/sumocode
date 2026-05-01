@@ -247,6 +247,11 @@ export class ChatViewportController {
 
 		if (source.includes("\x1b")) {
 			const parsed = parseSgrMouseStream(source);
+			logDiagnostic("mouse_batch", {
+				rawBytes: source.length,
+				events: parsed.events.length,
+				types: parsed.events.map((event) => event.type),
+			});
 			for (const event of parsed.events) {
 				this.handleMouse(event);
 			}
@@ -456,9 +461,26 @@ export class ChatViewportController {
 			row: event.row - this.lastChatTop,
 			col: event.col,
 		};
-		if (localEvent.row < 0 || localEvent.row >= this.lastChatHeight || localEvent.col < 0 || localEvent.col >= this.lastChatWidth) return false;
+		const inViewport = localEvent.row >= 0 && localEvent.row < this.lastChatHeight && localEvent.col >= 0 && localEvent.col < this.lastChatWidth;
+		if (!inViewport) {
+			logDiagnostic("mouse_dispatch", { type: event.type, row: event.row, col: event.col, target: "outside_chat", handled: false });
+			return false;
+		}
+		const beforeOffset = this.chat.scrollBox.scrollOffset;
 		const handled = this.chat.handleMouseEvent(localEvent);
 		const handledSelection = this.runtime.handleSelectionMouse?.(localEvent, this.lastChatWidth, this.lastChatHeight) === true;
+		logDiagnostic("mouse_dispatch", {
+			type: event.type,
+			row: event.row,
+			col: event.col,
+			localRow: localEvent.row,
+			localCol: localEvent.col,
+			target: "chat",
+			handledScroll: handled,
+			handledSelection,
+			scrollOffsetBefore: beforeOffset,
+			scrollOffsetAfter: this.chat.scrollBox.scrollOffset,
+		});
 		if (handled || handledSelection) this.renderChatViewportOrRequest();
 		return handled || handledSelection;
 	}

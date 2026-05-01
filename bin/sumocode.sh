@@ -6,9 +6,266 @@ ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 export SUMO_TUI="${SUMO_TUI:-1}"
 
+print_help() {
+	cat <<EOF
+SumoCode — Cathedral terminal AI coding agent
+
+USAGE
+  sumocode [options] [path]
+  sumocode doctor [options]
+  sumocode diag [file]
+
+ARGUMENTS
+  path
+      Optional project directory to open. If omitted, SumoCode starts in the
+      current working directory. The path is forwarded to Pi unchanged, so all
+      normal Pi path handling still applies.
+
+  Additional unknown flags are forwarded to Pi unchanged. This preserves Pi
+  options such as --offline, --no-session, --no-extensions, --provider, and
+  --model while SumoCode owns only the options documented below.
+
+COMMANDS
+  doctor
+      Check local SumoCode/Pi installation health: Node version, Pi binary,
+      retained-TUI patch availability, module resolution, and diagnostics path
+      writability.
+
+  diag [file]
+      Summarize a diagnostics JSONL file. Defaults to /tmp/sumocode-manual.jsonl.
+
+OPTIONS
+  -d, --debug
+      Enable manual-test diagnostics / flight-recorder mode.
+
+      In debug mode, SumoCode writes structured JSONL diagnostics to:
+
+        /tmp/sumocode-manual.jsonl
+
+      unless SUMO_TUI_DIAG_FILE is already set. The file is cleared at startup
+      so every debug run starts with a fresh trace.
+
+      Debug mode also exports:
+        SUMO_TUI_DEBUG=1
+        SUMOCODE_DEBUG_BRANCH=<current git branch, when available>
+        SUMOCODE_DEBUG_COMMIT=<current git commit summary, when available>
+
+      Diagnostics are intentionally no-op in normal mode.
+
+  --diag-file <path>
+      Write debug diagnostics to <path>. Implies --debug.
+
+  --no-clear-diag
+      Do not delete the diagnostics file at debug startup. By default, debug
+      mode starts with a fresh trace.
+
+  --no-sumo-tui
+      Disable the retained SumoTUI runtime for this launch. Equivalent to
+      SUMO_TUI=0 sumocode ... and useful for comparing against legacy Pi UI.
+
+  --dry-run
+      Print the resolved launch configuration and exit without starting Pi.
+
+  -v, --version
+      Print SumoCode package version and git commit, then exit.
+
+  -h, --help
+      Show this help message and exit.
+
+EXAMPLES
+  Start in the current directory:
+      sumocode
+
+  Start in an explicit project directory:
+      sumocode .
+      sumocode /path/to/project
+
+  Start with diagnostics enabled:
+      sumocode -d
+      sumocode --debug
+
+  Start a specific project with diagnostics enabled:
+      sumocode -d .
+      sumocode --debug /path/to/project
+
+  Use a custom diagnostics file:
+      sumocode -d --diag-file /tmp/my-run.jsonl
+      SUMO_TUI_DIAG_FILE=/tmp/my-run.jsonl sumocode -d
+
+  Keep appending to an existing diagnostics file:
+      sumocode -d --no-clear-diag
+
+  Compare retained SumoTUI against legacy Pi UI:
+      sumocode --no-sumo-tui .
+
+  Check installation health:
+      sumocode doctor
+
+  Summarize a debug run:
+      sumocode diag
+      sumocode diag /tmp/my-run.jsonl
+      node scripts/diag-summary.mjs /tmp/sumocode-manual.jsonl
+
+DIAGNOSTICS EVENTS
+  Debug mode may record events such as:
+      runtime_start       process, cwd, branch, commit, terminal size
+      render_frame        retained render timings
+      slow_frame          render frame over the slow-frame threshold
+      render_patches      terminal patch count and cursor placement
+      mouse_batch         parsed SGR mouse bytes per stdin batch
+      mouse_dispatch      chat hit-testing and scroll offset transitions
+      pi_event            Pi lifecycle events observed by SumoCode
+
+  Event payloads are truncated/sanitized so logs stay readable and diagnostics
+  never interrupt the interactive session.
+
+ENVIRONMENT
+  SUMO_TUI
+      Defaults to 1. Set SUMO_TUI=0 to bypass the retained SumoTUI runtime and
+      fall back to legacy Pi UI behavior.
+
+  SUMO_TUI_MODULE
+      Optional override for the retained SumoInteractiveMode module URL. Normally
+      set automatically by this launcher when the patched Pi binary is detected.
+
+  SUMO_TUI_DIAG_FILE
+      Path to the diagnostics JSONL file used by --debug. Defaults to
+      /tmp/sumocode-manual.jsonl in debug mode.
+
+  SUMO_TUI_DEBUG
+      Enables extra stderr debug messages in SumoTUI internals. Automatically
+      set to 1 by --debug unless already set.
+
+EXIT STATUS
+  0     Help/version/doctor succeeded, or Pi exited successfully.
+  64    Command-line usage error, such as an unknown option or too many paths.
+  70    Doctor found an installation problem.
+  other Propagates the underlying Pi process exit status.
+
+NOTES
+  SumoCode wraps the project-local Pi binary when available:
+      ./node_modules/.bin/pi
+
+  If that Pi binary is missing the Sumo retained-TUI patch, the launcher prints
+  a warning and falls back to legacy Pi splash behavior rather than failing the
+  session.
+EOF
+}
+
+package_version() {
+	node -e 'const pkg = require(process.argv[1]); console.log(pkg.version || "0.0.0");' "${ROOT_DIR}/package.json"
+}
+
+print_version() {
+	printf "sumocode %s\n" "$(package_version)"
+	if command -v git >/dev/null 2>&1 && git -C "${ROOT_DIR}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+		git -C "${ROOT_DIR}" log --oneline -1 2>/dev/null || true
+	fi
+}
+
+usage_error() {
+	cat >&2 <<EOF
+[sumocode] $1
+
+Run 'sumocode --help' for usage.
+EOF
+	exit 64
+}
+
+DEBUG_MODE=0
+CLEAR_DIAG=1
+DRY_RUN=0
+COMMAND="run"
+DIAG_FILE="${SUMO_TUI_DIAG_FILE:-}"
+SUMOCODE_ARGS=()
+while [[ $# -gt 0 ]]; do
+	case "$1" in
+		doctor|diag)
+			if [[ "${COMMAND}" != "run" ]]; then usage_error "Only one command may be specified."; fi
+			COMMAND="$1"
+			shift
+			;;
+		-d|--debug)
+			DEBUG_MODE=1
+			shift
+			;;
+		--diag-file)
+			[[ $# -ge 2 ]] || usage_error "--diag-file requires a path."
+			DEBUG_MODE=1
+			DIAG_FILE="$2"
+			shift 2
+			;;
+		--diag-file=*)
+			DEBUG_MODE=1
+			DIAG_FILE="${1#--diag-file=}"
+			[[ -n "${DIAG_FILE}" ]] || usage_error "--diag-file requires a path."
+			shift
+			;;
+		--no-clear-diag)
+			CLEAR_DIAG=0
+			shift
+			;;
+		--no-sumo-tui)
+			export SUMO_TUI=0
+			shift
+			;;
+		--dry-run)
+			DRY_RUN=1
+			shift
+			;;
+		-v|--version)
+			print_version
+			exit 0
+			;;
+		-h|--help)
+			print_help
+			exit 0
+			;;
+		--)
+			shift
+			SUMOCODE_ARGS+=("$@")
+			break
+			;;
+		-*)
+			# Unknown flags belong to Pi. Preserve pass-through so existing visual
+			# harness/runtime invocations keep working (`--offline`, `--no-session`,
+			# `--no-extensions`, provider/model flags, etc.).
+			SUMOCODE_ARGS+=("$1")
+			shift
+			;;
+		*)
+			SUMOCODE_ARGS+=("$1")
+			shift
+			;;
+	esac
+done
+
+if [[ "${COMMAND}" == "doctor" && "${#SUMOCODE_ARGS[@]}" -gt 0 ]]; then
+	usage_error "doctor does not accept a path argument."
+fi
+if [[ "${COMMAND}" == "diag" && "${#SUMOCODE_ARGS[@]}" -gt 1 ]]; then
+	usage_error "diag accepts at most one diagnostics file path."
+fi
+
+if [[ "${DEBUG_MODE}" == "1" ]]; then
+	SUMO_TUI_DIAG_FILE="${DIAG_FILE:-/tmp/sumocode-manual.jsonl}"
+	if [[ "${CLEAR_DIAG}" == "1" && "${DRY_RUN}" != "1" ]]; then rm -f "${SUMO_TUI_DIAG_FILE}"; fi
+	export SUMO_TUI_DIAG_FILE
+	export SUMO_TUI_DEBUG="${SUMO_TUI_DEBUG:-1}"
+	if command -v git >/dev/null 2>&1 && git -C "${ROOT_DIR}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+		export SUMOCODE_DEBUG_BRANCH="$(git -C "${ROOT_DIR}" branch --show-current 2>/dev/null || true)"
+		export SUMOCODE_DEBUG_COMMIT="$(git -C "${ROOT_DIR}" log --oneline -1 2>/dev/null || true)"
+	fi
+	if [[ "${DRY_RUN}" != "1" ]]; then
+		cat >&2 <<EOF
+[sumocode] Debug diagnostics enabled: ${SUMO_TUI_DIAG_FILE}
+EOF
+	fi
+fi
+
 PI_BIN="${ROOT_DIR}/node_modules/.bin/pi"
 if [[ ! -x "${PI_BIN}" ]]; then
-	PI_BIN="$(command -v pi)"
+	PI_BIN="$(command -v pi || true)"
 fi
 
 is_truthy_env_flag() {
@@ -58,6 +315,92 @@ pi_has_sumo_tui_patch() {
 	[[ -n "${main_file}" ]] && grep -q "loadSumoInteractiveMode" "${main_file}"
 }
 
+run_diag_summary() {
+	local file="${1:-/tmp/sumocode-manual.jsonl}"
+	exec node "${ROOT_DIR}/scripts/diag-summary.mjs" "${file}"
+}
+
+run_doctor() {
+	local failures=0
+	printf "SumoCode doctor\n\n"
+	printf "Version: %s\n" "$(package_version)"
+	printf "Root: %s\n" "${ROOT_DIR}"
+	if command -v node >/dev/null 2>&1; then
+		local node_version
+		node_version="$(node -v)"
+		printf "✓ Node: %s\n" "${node_version}"
+	else
+		printf "✗ Node: not found\n"
+		failures=$((failures + 1))
+	fi
+	if [[ -n "${PI_BIN}" && -x "${PI_BIN}" ]]; then
+		printf "✓ Pi binary: %s\n" "${PI_BIN}"
+	else
+		printf "✗ Pi binary: not found or not executable\n"
+		failures=$((failures + 1))
+	fi
+	local main_file=""
+	if [[ -n "${PI_BIN}" ]]; then main_file="$(pi_main_file "${PI_BIN}" 2>/dev/null || true)"; fi
+	if [[ -n "${main_file}" ]]; then
+		printf "✓ Pi main: %s\n" "${main_file}"
+	else
+		printf "✗ Pi main: could not resolve\n"
+		failures=$((failures + 1))
+	fi
+	if [[ -n "${PI_BIN}" ]] && pi_has_sumo_tui_patch "${PI_BIN}"; then
+		printf "✓ retained-TUI patch: detected\n"
+	else
+		printf "✗ retained-TUI patch: missing\n"
+		failures=$((failures + 1))
+	fi
+	local module_path="${ROOT_DIR}/sumo-interactive-mode.js"
+	if [[ -f "${module_path}" ]]; then
+		printf "✓ Sumo module: %s\n" "${module_path}"
+	else
+		printf "✗ Sumo module: missing at %s\n" "${module_path}"
+		failures=$((failures + 1))
+	fi
+	local diag_path="${DIAG_FILE:-${SUMO_TUI_DIAG_FILE:-/tmp/sumocode-manual.jsonl}}"
+	local diag_dir
+	diag_dir="$(dirname "${diag_path}")"
+	if [[ -d "${diag_dir}" && -w "${diag_dir}" ]]; then
+		printf "✓ diagnostics path writable: %s\n" "${diag_path}"
+	else
+		printf "✗ diagnostics directory not writable: %s\n" "${diag_dir}"
+		failures=$((failures + 1))
+	fi
+	if [[ -t 1 ]]; then
+		printf "✓ stdout is TTY"
+		if [[ -n "${COLUMNS:-}" && -n "${LINES:-}" ]]; then printf " (%sx%s)" "${COLUMNS}" "${LINES}"; fi
+		printf "\n"
+	else
+		printf "! stdout is not a TTY\n"
+	fi
+	printf "\n"
+	if [[ "${failures}" -eq 0 ]]; then
+		printf "Doctor passed.\n"
+		return 0
+	fi
+	printf "Doctor found %s problem(s).\n" "${failures}"
+	return 70
+}
+
+if [[ "${COMMAND}" == "diag" ]]; then
+	run_diag_summary "${SUMOCODE_ARGS[0]:-/tmp/sumocode-manual.jsonl}"
+fi
+
+if [[ "${COMMAND}" == "doctor" ]]; then
+	run_doctor
+	exit $?
+fi
+
+if [[ -z "${PI_BIN}" ]]; then
+	cat >&2 <<EOF
+[sumocode] Could not find Pi binary. Run 'pnpm install' in ${ROOT_DIR} or install pi on PATH.
+EOF
+	exit 70
+fi
+
 if is_truthy_env_flag "${SUMO_TUI}"; then
 	if pi_has_sumo_tui_patch "${PI_BIN}"; then
 		if [[ -z "${SUMO_TUI_MODULE:-}" ]]; then
@@ -75,4 +418,24 @@ EOF
 	fi
 fi
 
-exec "${PI_BIN}" -e "${ROOT_DIR}/src/extension.ts" "$@"
+if [[ "${DRY_RUN}" == "1" ]]; then
+	cat <<EOF
+sumocode dry run
+PI_BIN=${PI_BIN}
+ROOT_DIR=${ROOT_DIR}
+SUMO_TUI=${SUMO_TUI:-}
+SUMO_TUI_MODULE=${SUMO_TUI_MODULE:-}
+SUMO_TUI_DIAG_FILE=${SUMO_TUI_DIAG_FILE:-}
+SUMO_TUI_DEBUG=${SUMO_TUI_DEBUG:-}
+COMMAND=${COMMAND}
+ARGS=${SUMOCODE_ARGS[*]:-}
+exec ${PI_BIN} -e ${ROOT_DIR}/src/extension.ts ${SUMOCODE_ARGS[*]:-}
+EOF
+	exit 0
+fi
+
+if [[ "${#SUMOCODE_ARGS[@]}" -eq 0 ]]; then
+	exec "${PI_BIN}" -e "${ROOT_DIR}/src/extension.ts"
+fi
+
+exec "${PI_BIN}" -e "${ROOT_DIR}/src/extension.ts" "${SUMOCODE_ARGS[@]}"

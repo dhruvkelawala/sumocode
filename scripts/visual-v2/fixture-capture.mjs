@@ -309,6 +309,7 @@ async function renderFixtureScene(scenario, fixture) {
 
 async function applyOverlay(lines, cols, rows, overlay) {
 	if (overlay === "divine-query") return applyDivineQueryOverlay(lines, cols, rows);
+	if (overlay === "memory-scriptorium") return applyMemoryScriptoriumOverlay(lines, cols, rows);
 	if (overlay !== "command-palette") throw new Error(`Unsupported fixture overlay: ${overlay}`);
 	const palette = await jiti.import(`${repoRoot}/src/command-palette.ts`);
 
@@ -332,6 +333,50 @@ async function applyOverlay(lines, cols, rows, overlay) {
 		// preserving the left margin and right remnant.
 		const existingLine = next[top + index] ?? "";
 		const rightStart = left + paletteWidth;
+		const leftRemnant = padAnsiToWidth(sliceByColumn(existingLine, 0, left, true), left);
+		const rightRemnant = rightStart < cols ? sliceByColumn(existingLine, rightStart, cols - rightStart, true) : "";
+		next[top + index] = padAnsiToWidth(`${leftRemnant}${overlayLine}${rightRemnant}`, cols);
+	}
+	return next;
+}
+
+async function applyMemoryScriptoriumOverlay(lines, cols, rows) {
+	const memoryEditor = await jiti.import(`${repoRoot}/src/memory-editor.ts`);
+	const memoryCategorization = await jiti.import(`${repoRoot}/src/memory-categorization.ts`);
+
+	// Bible-aligned fact set spanning all six panels with PREFERENCES focused
+	// to exercise the ❈ marker.
+	const facts = [
+		{ id: "fact-1", text: "Dhruv · Senior FE · Argent" },
+		{ id: "fact-2", text: "London / BST" },
+		{ id: "fact-3", text: "prefers TypeScript strict" },
+		{ id: "fact-4", text: "pnpm not npm" },
+		{ id: "fact-5", text: "TDD by default" },
+		{ id: "fact-6", text: "visual approval before done" },
+		{ id: "fact-7", text: "sumocode/cathedral parity" },
+		{ id: "fact-8", text: "openclaw ACPX integration" },
+		{ id: "fact-9", text: "cmux runtime, libghostty" },
+		{ id: "fact-10", text: "mac mini portrait" },
+		{ id: "fact-11", text: "macbook landscape" },
+		{ id: "fact-12", text: "ask open-ended questions" },
+		{ id: "fact-13", text: "commit hash must be verified" },
+	];
+	const groups = memoryCategorization.groupFactsByPanel(facts);
+	const overlayWidth = Math.max(70, Math.min(120, Math.floor(cols * 0.8)));
+	const overlayLines = memoryEditor.renderMemoryEditor({
+		searchQuery: "",
+		groups,
+		factsTotal: facts.length,
+		focusedFactId: "fact-3",
+	}, overlayWidth);
+
+	const left = Math.max(0, Math.floor((cols - overlayWidth) / 2));
+	const top = Math.max(0, Math.floor((rows - overlayLines.length) / 2));
+	const next = [...lines];
+	for (let index = 0; index < overlayLines.length && top + index < rows; index += 1) {
+		const overlayLine = padAnsiToWidth(overlayLines[index] ?? "", overlayWidth);
+		const existingLine = next[top + index] ?? "";
+		const rightStart = left + overlayWidth;
 		const leftRemnant = padAnsiToWidth(sliceByColumn(existingLine, 0, left, true), left);
 		const rightRemnant = rightStart < cols ? sliceByColumn(existingLine, rightStart, cols - rightStart, true) : "";
 		next[top + index] = padAnsiToWidth(`${leftRemnant}${overlayLine}${rightRemnant}`, cols);

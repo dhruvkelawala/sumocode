@@ -776,6 +776,32 @@
 			]
 		},
 		{
+			"id": "fixture-memory-scriptorium-overlay",
+			"lane": "fixture",
+			"status": "review",
+			"dimensions": {
+				"cols": 160,
+				"rows": 45
+			},
+			"bibleTarget": "scene-memory-scriptorium-overlay.png",
+			"fixture": {
+				"id": "completed-active",
+				"overlay": "memory-scriptorium"
+			},
+			"crops": [
+				{
+					"id": "full",
+					"targetCrop": "full",
+					"runtimeCrop": "full"
+				},
+				{
+					"id": "overlay-center",
+					"targetCrop": "overlay-center",
+					"runtimeCrop": "overlay-center"
+				}
+			]
+		},
+		{
 			"id": "fixture-scroll-scribe-landscape",
 			"lane": "fixture",
 			"status": "review",

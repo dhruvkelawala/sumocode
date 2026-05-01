@@ -8,12 +8,14 @@ import {
 import type { MemoryFact } from "./memory.js";
 import { groupFactsByPanel } from "./memory-categorization.js";
 
-const ANSI = /\u001b\[[0-9;]*m/g;
+const ANSI = /\[[0-9;]*m/g;
 const stripAnsi = (s: string): string => s.replace(ANSI, "");
 
+let factCounter = 0;
 function fact(overrides: Partial<MemoryFact> = {}): MemoryFact {
+	factCounter += 1;
 	return {
-		id: `fact-${Math.random().toString(36).slice(2)}`,
+		id: `fact-${factCounter}`,
 		text: "default fact text",
 		...overrides,
 	};
@@ -27,52 +29,72 @@ function snapshot(overrides: Partial<MemoryEditorSnapshot> = {}): MemoryEditorSn
 		fact({ text: "SumoCode is the cathedral product" }),    // PROJECTS
 		fact({ text: "mac mini in portrait orientation" }),     // SYSTEM
 	];
+	const groups = groupFactsByPanel(facts);
 	return {
 		searchQuery: "",
-		groups: groupFactsByPanel(facts),
+		groups,
 		factsTotal: facts.length,
+		focusedFactId: null,
 		...overrides,
 	};
 }
 
-describe("renderMemoryEditor — title + dividers", () => {
-	it("renders SUMOCODE MEMORY title centered", () => {
-		const lines = renderMemoryEditor(snapshot(), 100).map(stripAnsi);
-		const titleLine = lines.find((l) => l.includes("SUMOCODE MEMORY"));
-		expect(titleLine).toBeDefined();
-	});
-
-	it("renders title in accent color", () => {
+describe("renderMemoryEditor — Scriptorium chrome", () => {
+	it("renders ✾ MEMORY SCRIPTORIUM ✾ title in accent", () => {
 		const lines = renderMemoryEditor(snapshot(), 100);
-		const titleLine = lines.find((l) => l.includes("SUMOCODE MEMORY"));
+		const titleLine = lines.find((l) => stripAnsi(l).includes("MEMORY SCRIPTORIUM"));
+		expect(titleLine).toBeDefined();
 		// accent #D97706 -> 217;119;6
-		expect(titleLine).toContain("\u001b[38;2;217;119;6m");
+		expect(titleLine).toContain("[38;2;217;119;6m");
+		expect(stripAnsi(titleLine!)).toContain("✾  MEMORY SCRIPTORIUM  ✾");
 	});
 
-	it("renders divider rules above and below content", () => {
+	it("renders top + bottom decorative split rules with center dot", () => {
 		const lines = renderMemoryEditor(snapshot(), 100).map(stripAnsi);
-		const dividers = lines.filter((l) => l.includes("─".repeat(20)));
-		expect(dividers.length).toBeGreaterThanOrEqual(2);
+		const ruleLines = lines.filter((l) => l.includes("·") && l.includes("─".repeat(8)));
+		expect(ruleLines.length).toBeGreaterThanOrEqual(2);
 	});
-});
 
-describe("renderMemoryEditor — search row", () => {
-	it("shows dim 'search…' placeholder when searchQuery is empty", () => {
-		const lines = renderMemoryEditor(snapshot({ searchQuery: "" }), 100).map(stripAnsi);
-		const searchLine = lines.find((l) => l.includes("search"));
+	it("paints surfaceLifted background on every row", () => {
+		const lines = renderMemoryEditor(snapshot(), 100);
+		// surfaceLifted #3D3024 -> 61;48;36
+		for (const line of lines) {
+			expect(line).toContain("[48;2;61;48;36m");
+		}
+	});
+
+	it("pads every row to the requested width", () => {
+		const lines = renderMemoryEditor(snapshot(), 100);
+		for (const line of lines) {
+			expect(stripAnsi(line).length).toBe(100);
+		}
+	});
+
+	it("renders ❯ search prompt in accent followed by dim placeholder when empty", () => {
+		const lines = renderMemoryEditor(snapshot({ searchQuery: "" }), 100);
+		const searchLine = lines.find((l) => stripAnsi(l).includes("search remembered facts"));
 		expect(searchLine).toBeDefined();
+		// accent prompt + dim placeholder
+		expect(searchLine).toContain("[38;2;217;119;6m❯");
+		expect(searchLine).toContain("[38;2;139;122;99m"); // foregroundDim
 	});
 
 	it("shows the actual query when searchQuery is non-empty", () => {
 		const lines = renderMemoryEditor(snapshot({ searchQuery: "typescript" }), 100).map(stripAnsi);
-		const searchLine = lines.find((l) => l.includes("typescript"));
-		expect(searchLine).toBeDefined();
+		expect(lines.some((l) => l.includes("typescript"))).toBe(true);
 	});
 
 	it("shows the facts total count on the right side of the search row", () => {
 		const lines = renderMemoryEditor(snapshot(), 100).map(stripAnsi);
 		const searchLine = lines.find((l) => l.includes("5 facts"));
 		expect(searchLine).toBeDefined();
+	});
+
+	it("renders the V2 footer hint copy in foregroundDim", () => {
+		const lines = renderMemoryEditor(snapshot(), 100);
+		const footerLine = lines.find((l) => stripAnsi(l).includes(MEMORY_EDITOR_HINTS));
+		expect(footerLine).toBeDefined();
+		expect(footerLine).toContain("[38;2;139;122;99m"); // dim
 	});
 });
 
@@ -95,28 +117,66 @@ describe("renderMemoryEditor — panel grid", () => {
 
 	it("shows GENERAL panel when there are unrouted facts", () => {
 		const facts = [fact({ text: "the sky is blue" })];
+		const groups = groupFactsByPanel(facts);
 		const snap: MemoryEditorSnapshot = {
 			searchQuery: "",
-			groups: groupFactsByPanel(facts),
+			groups,
 			factsTotal: 1,
+			focusedFactId: facts[0]!.id,
 		};
 		const lines = renderMemoryEditor(snap, 160).map(stripAnsi);
-		const text = lines.join("\n");
-		expect(text).toContain(" GENERAL ");
+		expect(lines.join("\n")).toContain(" GENERAL ");
 	});
 
-	it("renders each fact with ❧ bullet", () => {
-		const lines = renderMemoryEditor(snapshot(), 160).map(stripAnsi);
-		const text = lines.join("\n");
-		expect(text).toContain("❧");
+	it("uses ❈ accent marker on the focused fact and · divider marker on the rest", () => {
+		const focusedSnapshot = snapshot();
+		const focusedFact = focusedSnapshot.groups.find((g) => g.panel === "IDENTITY")!.facts[0]!;
+		const lines = renderMemoryEditor({ ...focusedSnapshot, focusedFactId: focusedFact.id }, 160);
+		const focusedRow = lines.find((l) => stripAnsi(l).includes("Dhruv"))!;
+		// ❈ in accent
+		expect(focusedRow).toContain("[38;2;217;119;6m❈");
+		// Other facts use `·` in divider
+		const otherRow = lines.find((l) => stripAnsi(l).includes("prefers TypeScript"))!;
+		expect(otherRow).toContain("[38;2;90;77;60m·");
+	});
+
+	it("renders panel borders in divider color and panel titles in accent", () => {
+		const lines = renderMemoryEditor(snapshot(), 160);
+		const identityHeader = lines.find((l) => stripAnsi(l).includes(" IDENTITY "))!;
+		// divider for the dashes
+		expect(identityHeader).toContain("[38;2;90;77;60m");
+		// accent for the label
+		expect(identityHeader).toContain("[38;2;217;119;6m IDENTITY ");
 	});
 });
 
-describe("renderMemoryEditor — footer hints", () => {
-	it("includes navigate/search/copy/close hints", () => {
-		const lines = renderMemoryEditor(snapshot(), 160).map(stripAnsi);
+describe("renderMemoryEditor — search filter", () => {
+	it("filters fact rows when searchQuery is non-empty", () => {
+		const lines = renderMemoryEditor(snapshot({ searchQuery: "typescript" }), 160).map(stripAnsi);
 		const text = lines.join("\n");
-		expect(text).toContain(MEMORY_EDITOR_HINTS);
+		expect(text).toContain("prefers TypeScript strict");
+		expect(text).not.toContain("Dhruv works at Argent");
+	});
+
+	it("renders empty panels with `(empty)` placeholder when filter has no matches in that panel", () => {
+		const lines = renderMemoryEditor(snapshot({ searchQuery: "typescript" }), 160).map(stripAnsi);
+		expect(lines.join("\n")).toContain("(empty)");
+	});
+
+	it("returns no fact rows when the query matches nothing", () => {
+		const lines = renderMemoryEditor(snapshot({ searchQuery: "zzzz-no-match-zzzz" }), 160).map(stripAnsi);
+		const text = lines.join("\n");
+		expect(text).not.toContain("Dhruv");
+		expect(text).not.toContain("TypeScript");
+		// Empty placeholders still appear
+		expect(text).toContain("(empty)");
+	});
+});
+
+describe("renderMemoryEditor — width safety", () => {
+	it("returns empty array at width < 20 (frame would not fit)", () => {
+		expect(renderMemoryEditor(snapshot(), 10)).toEqual([]);
+		expect(renderMemoryEditor(snapshot(), 19)).toEqual([]);
 	});
 });
 
@@ -141,8 +201,9 @@ describe("registerMemoryCommand", () => {
 		const notify = vi.fn();
 		await handler!("", { ui: { custom, notify } });
 
-		// Without a remnic daemon, browse() will fail and we'll notify "memory unavailable"
-		// rather than open the modal. Either way, the command is reachable.
+		// Without a remnic daemon, browse() will fail and we'll notify "memory
+		// unavailable" rather than open the modal. Either way, the command is
+		// reachable.
 		expect(custom.mock.calls.length + notify.mock.calls.length).toBeGreaterThan(0);
 	});
 });

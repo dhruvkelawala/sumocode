@@ -1,4 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CellBuffer } from "../render/buffer.js";
 import { SelectionController } from "./selection.js";
 
@@ -65,6 +68,64 @@ describe("SelectionController", () => {
 		expect(buffer.getCell(0, 2).attrs.inverse).toBe(true);
 		expect(buffer.getCell(0, 5).attrs.inverse).toBe(true);
 		expect(buffer.getCell(0, 6).attrs.inverse).toBe(false);
+	});
+
+	describe("selection_highlight diagnostic", () => {
+		let tmp: string;
+		let diagFile: string;
+		let previousDiag: string | undefined;
+
+		beforeEach(() => {
+			tmp = mkdtempSync(join(tmpdir(), "sumocode-selection-"));
+			diagFile = join(tmp, "diag.jsonl");
+			previousDiag = process.env.SUMO_TUI_DIAG_FILE;
+			process.env.SUMO_TUI_DIAG_FILE = diagFile;
+		});
+
+		afterEach(() => {
+			if (previousDiag === undefined) delete process.env.SUMO_TUI_DIAG_FILE;
+			else process.env.SUMO_TUI_DIAG_FILE = previousDiag;
+			rmSync(tmp, { recursive: true, force: true });
+		});
+
+		it("records semantic highlight ranges that match selectable cells", () => {
+			const buffer = bufferWithRow("│ Hello world                  │", 32);
+			for (let col = 2; col <= 12; col += 1) buffer.setSelectionMeta(0, col, { selectable: true });
+			const selection = new SelectionController();
+
+			selection.handleMouseEvent({ type: "down", button: 0, row: 0, col: 2, modifiers: { shift: false, alt: false, ctrl: false } }, buffer);
+			selection.handleMouseEvent({ type: "drag", button: 0, row: 0, col: 30, modifiers: { shift: false, alt: false, ctrl: false } }, buffer);
+			selection.applySelectionHighlight(buffer);
+
+			const events = readFileSync(diagFile, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+			const highlight = events.find((event) => event.event === "selection_highlight");
+			expect(highlight).toMatchObject({
+				semantic: true,
+				rowsTouched: 1,
+				cellsInverted: 11,
+				totalRows: 1,
+			});
+			expect(highlight.sampleRows).toEqual([{ row: 0, ranges: [[2, 12]] }]);
+		});
+
+		it("reports semantic mode even when selectable cells span less than rectangular range", () => {
+			const buffer = bufferWithRow("│ Hi                               │", 36);
+			for (let col = 2; col <= 3; col += 1) buffer.setSelectionMeta(0, col, { selectable: true });
+			const selection = new SelectionController();
+
+			selection.handleMouseEvent({ type: "down", button: 0, row: 0, col: 2, modifiers: { shift: false, alt: false, ctrl: false } }, buffer);
+			selection.handleMouseEvent({ type: "drag", button: 0, row: 0, col: 35, modifiers: { shift: false, alt: false, ctrl: false } }, buffer);
+			selection.applySelectionHighlight(buffer);
+
+			const events = readFileSync(diagFile, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+			const highlight = events.find((event) => event.event === "selection_highlight");
+			expect(highlight).toMatchObject({
+				semantic: true,
+				rowsTouched: 1,
+				cellsInverted: 2,
+			});
+			expect(highlight.sampleRows).toEqual([{ row: 0, ranges: [[2, 3]] }]);
+		});
 	});
 
 	it("emits a copied callback after OSC 52 copy succeeds", () => {

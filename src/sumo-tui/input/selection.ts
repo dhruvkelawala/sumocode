@@ -83,6 +83,27 @@ function glyphWidth(glyph: string): number {
 	return Math.max(1, visibleWidth(glyph));
 }
 
+function collectInverseRanges(buffer: CellBuffer, row: number): number[][] {
+	const { cols } = buffer.getDimensions();
+	const ranges: number[][] = [];
+	let rangeStart: number | undefined;
+	let rangeEnd: number | undefined;
+	for (let col = 0; col < cols; col += 1) {
+		const inverse = buffer.getCell(row, col).attrs.inverse === true;
+		if (inverse) {
+			if (rangeStart === undefined) rangeStart = col;
+			rangeEnd = col;
+		} else if (rangeStart !== undefined && rangeEnd !== undefined) {
+			ranges.push([rangeStart, rangeEnd]);
+			rangeStart = undefined;
+			rangeEnd = undefined;
+		}
+		if (ranges.length >= 6) break;
+	}
+	if (rangeStart !== undefined && rangeEnd !== undefined && ranges.length < 6) ranges.push([rangeStart, rangeEnd]);
+	return ranges;
+}
+
 function isCopyKey(event: KeyEvent): boolean {
 	const key = event.key.toLowerCase();
 	if (key === "copy" || key === "cmd+c" || key === "command+c" || key === "meta+c") return true;
@@ -224,16 +245,26 @@ export class SelectionController {
 			normalizePoint(this.anchor, buffer),
 			normalizePoint(this.focus, buffer),
 		);
+		const semantic = hasSemanticSelection(buffer);
+		let rowsTouched = 0;
+		let cellsInverted = 0;
+		const sampleRows: { row: number; ranges: number[][] }[] = [];
 		for (let row = range.start.row; row <= range.end.row && row < dimensions.rows; row += 1) {
-			if (hasSemanticSelection(buffer)) {
+			let inverted = 0;
+			if (semantic) {
 				const rawColumns = columnsForRow(range, row, dimensions.cols);
-				if (rawColumns) this.applySemanticRowHighlight(buffer, row, rawColumns.startCol, rawColumns.endCol);
-				continue;
+				if (rawColumns) inverted = this.applySemanticRowHighlight(buffer, row, rawColumns.startCol, rawColumns.endCol);
+			} else {
+				const columns = this.selectableColumnsForRow(buffer, range, row);
+				if (columns) inverted = this.applyRowHighlight(buffer, row, columns.startCol, columns.endCol);
 			}
-			const columns = this.selectableColumnsForRow(buffer, range, row);
-			if (!columns) continue;
-			this.applyRowHighlight(buffer, row, columns.startCol, columns.endCol);
+			if (inverted > 0) {
+				rowsTouched += 1;
+				cellsInverted += inverted;
+				if (sampleRows.length < 8) sampleRows.push({ row, ranges: collectInverseRanges(buffer, row) });
+			}
 		}
+		logDiagnostic("selection_highlight", { semantic, rowsTouched, cellsInverted, totalRows: range.end.row - range.start.row + 1, sampleRows });
 	}
 
 	private selectableColumnsForRow(buffer: CellBuffer, range: OrderedRange, row: number): { startCol: number; endCol: number } | undefined {
@@ -293,8 +324,9 @@ export class SelectionController {
 		return output;
 	}
 
-	private applyRowHighlight(buffer: CellBuffer, row: number, startCol: number, endCol: number): void {
+	private applyRowHighlight(buffer: CellBuffer, row: number, startCol: number, endCol: number): number {
 		const { cols } = buffer.getDimensions();
+		let inverted = 0;
 		for (let col = 0; col < cols;) {
 			const cell = buffer.getCell(row, col);
 			if (cell.char.length === 0) {
@@ -306,25 +338,32 @@ export class SelectionController {
 			if (intersects(col, glyphEnd, startCol, endCol)) {
 				for (let offset = 0; offset < width && col + offset < cols; offset += 1) {
 					buffer.updateCellAttrs(row, col + offset, (attrs) => ({ ...attrs, inverse: true }));
+					inverted += 1;
 				}
 			}
 			col += width;
 		}
+		return inverted;
 	}
 
-	private applySemanticRowHighlight(buffer: CellBuffer, row: number, startCol: number, endCol: number): void {
+	private applySemanticRowHighlight(buffer: CellBuffer, row: number, startCol: number, endCol: number): number {
 		const { cols } = buffer.getDimensions();
+		let inverted = 0;
 		for (let col = 0; col < cols;) {
 			const cell = buffer.getCell(row, col);
 			const width = glyphWidth(cell.char);
 			const glyphEnd = col + width - 1;
 			if (cell.char.length > 0 && intersects(col, glyphEnd, startCol, endCol) && this.glyphHasSelectionMeta(buffer, row, col, width)) {
 				for (let offset = 0; offset < width && col + offset < cols; offset += 1) {
-					if (buffer.getSelectionMeta(row, col + offset)) buffer.updateCellAttrs(row, col + offset, (attrs) => ({ ...attrs, inverse: true }));
+					if (buffer.getSelectionMeta(row, col + offset)) {
+						buffer.updateCellAttrs(row, col + offset, (attrs) => ({ ...attrs, inverse: true }));
+						inverted += 1;
+					}
 				}
 			}
 			col += width;
 		}
+		return inverted;
 	}
 
 	private glyphHasSelectionMeta(buffer: CellBuffer, row: number, col: number, width: number): boolean {

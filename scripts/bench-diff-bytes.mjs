@@ -12,14 +12,18 @@
  * frame-start. Per-frame measurements use the diff layer directly to keep
  * the comparison apples-to-apples between paths.
  */
+import { fileURLToPath } from "node:url";
+import { dirname, resolve } from "node:path";
 import { createJiti } from "@mariozechner/jiti";
 
+const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
+const ROOT = resolve(SCRIPT_DIR, "..", "src", "sumo-tui");
+
 const jiti = createJiti(import.meta.url, { moduleCache: false, tryNative: false });
-const root = "/Users/dhruvkelawala/development/sumocode/src/sumo-tui";
-const { CellBuffer } = await jiti.import(`${root}/render/buffer.ts`);
-const { diffFrames } = await jiti.import(`${root}/render/diff.ts`);
-const { cellRowToAnsi } = await jiti.import(`${root}/render/ansi-writer.ts`);
-const { TerminalSessionOwner } = await jiti.import(`${root}/runtime/terminal-controller.ts`);
+const { CellBuffer } = await jiti.import(resolve(ROOT, "render/buffer.ts"));
+const { diffFrames } = await jiti.import(resolve(ROOT, "render/diff.ts"));
+const { cellRowToAnsi } = await jiti.import(resolve(ROOT, "render/ansi-writer.ts"));
+const { TerminalSessionOwner } = await jiti.import(resolve(ROOT, "runtime/terminal-controller.ts"));
 
 class StubOut {
 	constructor() { this.bytes = 0; this.calls = 0; }

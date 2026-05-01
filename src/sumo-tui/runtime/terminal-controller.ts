@@ -218,7 +218,12 @@ export class TerminalSessionOwner {
 			// cells to the right of the change region.
 			if (startCol === 0) output += "\x1b[K";
 		}
-		if (cursor && cursorMoved) {
+		// Cursor-write elision is safe ONLY for true no-op frames. When
+		// `patches.length > 0`, every `\x1b[r;c+1H<ansi>` in the loop above
+		// physically moved the terminal cursor; skipping the reposition here
+		// would leave the visible caret parked at the end of the last patch
+		// instead of at `cursor`. Always re-emit when patches were written.
+		if (cursor && (patches.length > 0 || cursorMoved)) {
 			output += `\x1b[${cursor.row + 1};${cursor.col + 1}H\x1b[?25h`;
 			this.lastEmittedCursor = { row: cursor.row, col: cursor.col };
 		}

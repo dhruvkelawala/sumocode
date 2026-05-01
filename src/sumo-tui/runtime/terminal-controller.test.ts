@@ -150,7 +150,11 @@ describe("TerminalSessionOwner", () => {
 		expect(output.writes.length).toBe(1);
 	});
 
-	it("lazy frame-start: skips cursor reposition when only the patches change but cursor is unchanged", () => {
+	it("re-emits cursor after every patch frame even when the logical cursor is unchanged", () => {
+		// Correctness gate: the patch loop physically moves the terminal cursor
+		// to each patched row via `\x1b[r;cH`, so skipping the final cursor
+		// reposition would leave the caret parked at the end of the last patch.
+		// Cursor-write elision is only safe for true no-op frames.
 		const output = outputStub();
 		const terminal = new TerminalSessionOwner({ output });
 
@@ -159,9 +163,23 @@ describe("TerminalSessionOwner", () => {
 
 		terminal.writeFramePatches([{ row: 1, ansi: "world" }], { row: 2, col: 4 });
 
-		// Cursor sequence (`\x1b[3;5H\x1b[?25h`) should NOT appear in the second
-		// write because the cursor hasn't moved since the last emit.
-		expect(output.writes).toEqual(["\x1b[?2026h\x1b[2;1Hworld\x1b[K\x1b[?2026l"]);
+		// The cursor reposition (`\x1b[3;5H\x1b[?25h`) MUST appear even though
+		// the logical cursor didn't move, because the patch above moved the
+		// terminal cursor to row 2.
+		expect(output.writes).toEqual(["\x1b[?2026h\x1b[2;1Hworld\x1b[K\x1b[3;5H\x1b[?25h\x1b[?2026l"]);
+	});
+
+	it("emits ONLY cursor reposition when patches=0 but cursor moved (no wrapper savings, but no patches either)", () => {
+		const output = outputStub();
+		const terminal = new TerminalSessionOwner({ output });
+
+		// Seed lastEmittedCursor with the first call, then move cursor only.
+		terminal.writeFramePatches([], { row: 0, col: 0 });
+		output.writes.length = 0;
+
+		terminal.writeFramePatches([], { row: 5, col: 10 });
+
+		expect(output.writes).toEqual(["\x1b[?2026h\x1b[6;11H\x1b[?25h\x1b[?2026l"]);
 	});
 
 	it("re-emits cursor after exitTerminal clears lastEmittedCursor", () => {

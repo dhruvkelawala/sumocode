@@ -110,7 +110,7 @@ describe("ChatViewportController", () => {
 		const jumpResult = controller.handleInput("\x1b[b");
 
 		expect(wheelResult).toEqual({ consume: true });
-		expect(afterWheel).toBe(bottom - 1);
+		expect(afterWheel).toBe(bottom - 2);
 		expect(jumpResult).toEqual({ consume: true });
 		expect(chat.scrollBox.scrollOffset).toBe(bottom);
 		expect(runtime.writeCalls).toContainEqual({ top: 1, left: 0, width: 80, height: 8 });
@@ -127,7 +127,7 @@ describe("ChatViewportController", () => {
 		const result = controller.handleInput("\x1b[<64;10;5M\x1b[<64;10;5M");
 
 		expect(result).toEqual({ consume: true });
-		expect(chat.scrollBox.scrollOffset).toBe(bottom - 2);
+		expect(chat.scrollBox.scrollOffset).toBe(bottom - 4);
 		expect(runtime.writeCalls).toEqual([{ top: 1, left: 0, width: 80, height: 8 }]);
 		root.dispose();
 	});

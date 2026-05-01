@@ -84,7 +84,7 @@ export class ScrollBox extends SumoNode {
 	public constructor(yogaNode: YogaNode, parent?: SumoNode, options: ScrollBoxOptions = {}) {
 		super(yogaNode, parent);
 		this.stickyBottom = options.stickyBottom ?? false;
-		this.scrollAcceleration = Math.max(1, Math.round(options.scrollAcceleration ?? 1));
+		this.scrollAcceleration = Math.max(1, Math.round(options.scrollAcceleration ?? 2));
 		this.onScrollStateChange = options.onScrollStateChange;
 		this.flexGrow = 1;
 		this.flexShrink = 1;

@@ -23,7 +23,7 @@ function wheel(row: number, col: number, scrollDir: "up" | "down"): MouseEvent {
 }
 
 describe("ScrollBox input", () => {
-	it("mouse wheel defaults to one row per tick for precise chat scrolling", async () => {
+	it("mouse wheel defaults to two rows per tick for responsive chat scrolling", async () => {
 		const yoga = await loadYoga();
 		const root = new SumoNode(yoga.Node.create());
 		const scrollBox = new ScrollBox(yoga.Node.create(), root);
@@ -35,7 +35,7 @@ describe("ScrollBox input", () => {
 		composite(root, new CellBuffer(3, 4));
 
 		expect(dispatchMouseEvent(root, wheel(1, 1, "down"))).toBe(true);
-		expect(scrollBox.scrollOffset).toBe(1);
+		expect(scrollBox.scrollOffset).toBe(2);
 		root.dispose();
 	});
 

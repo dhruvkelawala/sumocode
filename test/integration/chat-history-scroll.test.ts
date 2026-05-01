@@ -45,7 +45,7 @@ describe("Phase 3 chat history scroll integration", () => {
 		const handled = dispatchMouseEvent(root, { type: "scroll", scrollDir: "up", button: 64, row: 2, col: 2, modifiers: { shift: false, alt: false, ctrl: false } });
 
 		expect(handled).toBe(true);
-		expect(chat.scrollBox.scrollOffset).toBe(before - 1);
+		expect(chat.scrollBox.scrollOffset).toBe(before - 2);
 		expect(chat.scrollBox.manualScroll).toBe(true);
 		root.dispose();
 	});

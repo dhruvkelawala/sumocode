@@ -142,10 +142,15 @@ export class SelectionController {
 		const point = normalizePoint({ row: event.row, col: event.col }, buffer);
 		if (event.type === "down") {
 			if (this.hasSelection() && !this.pointIsSelected(point, buffer)) this.clear();
-			if (hasSemanticSelection(buffer) && !buffer?.getSelectionMeta(point.row, point.col)) return false;
+			const semantic = hasSemanticSelection(buffer);
+			if (semantic && !buffer?.getSelectionMeta(point.row, point.col)) {
+				logDiagnostic("selection_start_rejected", { reason: "non_selectable_cell", semantic, row: point.row, col: point.col });
+				return false;
+			}
 			this.anchor = point;
 			this.focus = point;
 			this.dragging = true;
+			logDiagnostic("selection_start", { semantic, row: point.row, col: point.col });
 			this.notifyChanged();
 			return true;
 		}
@@ -166,6 +171,15 @@ export class SelectionController {
 			return true;
 		}
 		this.notifyChanged();
+		const text = this.extractSelectedText(buffer);
+		logDiagnostic("selection_finish", {
+			semantic: hasSemanticSelection(buffer),
+			anchor: this.anchor,
+			focus: this.focus,
+			selectedChars: text.length,
+			selectedLines: text.length === 0 ? 0 : text.split("\n").length,
+			preview: text.slice(0, 120),
+		});
 		this.copyCurrentSelection(buffer);
 		return true;
 	}

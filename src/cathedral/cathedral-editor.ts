@@ -174,9 +174,14 @@ function centerRow(row: string, width: number): string {
 
 export function alignAutocompleteRow(row: string, width: number, options: { splash: boolean; frameWidth?: number }): string {
 	if (width <= 0) return "";
-	if (options.splash) return centerRow(row, width);
-	const left = Math.min(ACTIVE_AUTOCOMPLETE_LEFT_OFFSET, Math.max(0, width - 1));
-	const available = Math.max(0, width - left);
+	const left = options.splash
+		? Math.min(
+			Math.max(0, Math.floor((width - Math.min(width, options.frameWidth ?? width)) / 2) + 1),
+			Math.max(0, width - 1),
+		)
+		: Math.min(ACTIVE_AUTOCOMPLETE_LEFT_OFFSET, Math.max(0, width - 1));
+	const frameContentWidth = options.splash ? Math.max(0, Math.min(width, options.frameWidth ?? width) - 2) : undefined;
+	const available = Math.max(0, Math.min(width - left, frameContentWidth ?? width));
 	const fitted = fitAnsiToWidth(row, available);
 	const pad = Math.max(0, width - left - visibleLength(fitted));
 	return `${" ".repeat(left)}${fitted}${" ".repeat(pad)}`;

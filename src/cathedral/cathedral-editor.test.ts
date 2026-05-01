@@ -14,12 +14,16 @@ describe("alignAutocompleteRow", () => {
 		expect(aligned.startsWith("▸")).toBe(false);
 	});
 
-	it("centers splash autocomplete rows under the centered splash frame", () => {
-		const row = "▸ /help";
-		const aligned = stripAnsi(alignAutocompleteRow(row, 80, { splash: true, frameWidth: 60 }));
+	it("anchors splash autocomplete rows to the centered splash frame content column", () => {
+		const shortRow = "▸ /help";
+		const longRow = "▸ /resume  resume previous session";
+		const alignedShort = stripAnsi(alignAutocompleteRow(shortRow, 80, { splash: true, frameWidth: 60 }));
+		const alignedLong = stripAnsi(alignAutocompleteRow(longRow, 80, { splash: true, frameWidth: 60 }));
 
-		expect(aligned).toHaveLength(80);
-		expect(aligned.indexOf("▸ /help")).toBeGreaterThan(0);
+		expect(alignedShort).toHaveLength(80);
+		expect(alignedLong).toHaveLength(80);
+		expect(alignedShort.indexOf("▸ /help")).toBe(11);
+		expect(alignedLong.indexOf("▸ /resume")).toBe(11);
 	});
 
 	it("truncates active autocomplete rows after applying the left anchor", () => {

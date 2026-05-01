@@ -35,13 +35,6 @@ import { CATHEDRAL_TOKENS } from "./tokens.js";
 const RESET = "[0m";
 const ANSI_PATTERN = /\[[0-9;]*m/g;
 
-const TOP_LEFT = "╭";
-const TOP_RIGHT = "╮";
-const BOTTOM_LEFT = "╰";
-const BOTTOM_RIGHT = "╯";
-const HORIZONTAL = "─";
-const VERTICAL = "│";
-
 function visibleLength(text: string): number {
 	return visibleWidth(text.replace(ANSI_PATTERN, ""));
 }
@@ -125,7 +118,7 @@ const FOCUSED_MARK = "❈";
 const UNFOCUSED_MARK = "·";
 
 function splitRule(width: number): string {
-	const ruleLen = Math.max(1, Math.floor((width - 6) / 2 - 12));
+	const ruleLen = Math.max(1, Math.min(22, Math.floor((width - 5) / 2)));
 	const left = fg("─".repeat(ruleLen), CATHEDRAL_TOKENS.colors.divider);
 	const dot = fg("·", CATHEDRAL_TOKENS.colors.divider);
 	const right = fg("─".repeat(ruleLen), CATHEDRAL_TOKENS.colors.divider);
@@ -161,8 +154,9 @@ function buildInnerRows(snapshot: DivineQuerySnapshot, contentWidth: number, ext
 	// Blank
 	inner.push("");
 
-	// Question body
-	for (const questionLine of wrapIndentedText(snapshot.title, contentWidth, indent)) {
+	// Question body. Bible Element 11 keeps a generous right margin: text wraps
+	// at `cols - 12`, then gets a 5-col left indent.
+	for (const questionLine of wrapIndentedText(snapshot.title, Math.max(1, contentWidth - 7), indent)) {
 		inner.push(fg(questionLine, CATHEDRAL_TOKENS.colors.foreground));
 	}
 
@@ -208,34 +202,13 @@ function buildInnerRows(snapshot: DivineQuerySnapshot, contentWidth: number, ext
 	return inner;
 }
 
-/**
- * Wrap an inner content row with the modal frame:
- *   `│ <content padded to contentWidth> │`
- *
- * Borders are painted in `divider`; content gets `surfaceLifted` bg paint
- * via `persistentBg` so any inner ANSI resets restore the lifted background.
+/** Paint a full-width lifted panel row. Element 11 is intentionally
+ * unframed in the Bible; Pi's overlay host may already provide surrounding
+ * chrome, so adding a second box here makes the modal read too heavy.
  */
-function wrapInnerRow(innerLine: string, contentWidth: number): string {
-	const padded = padRight(innerLine, contentWidth);
-	const borderChar = fg(VERTICAL, CATHEDRAL_TOKENS.colors.divider);
+function wrapPanelRow(innerLine: string, contentWidth: number): string {
 	return persistentBg(
-		`${borderChar}${padded}${borderChar}`,
-		CATHEDRAL_TOKENS.colors.foreground,
-		CATHEDRAL_TOKENS.colors.surfaceLifted,
-	);
-}
-
-function renderTopBorder(contentWidth: number): string {
-	return persistentBg(
-		fg(`${TOP_LEFT}${HORIZONTAL.repeat(contentWidth)}${TOP_RIGHT}`, CATHEDRAL_TOKENS.colors.divider),
-		CATHEDRAL_TOKENS.colors.foreground,
-		CATHEDRAL_TOKENS.colors.surfaceLifted,
-	);
-}
-
-function renderBottomBorder(contentWidth: number): string {
-	return persistentBg(
-		fg(`${BOTTOM_LEFT}${HORIZONTAL.repeat(contentWidth)}${BOTTOM_RIGHT}`, CATHEDRAL_TOKENS.colors.divider),
+		padRight(innerLine, contentWidth),
 		CATHEDRAL_TOKENS.colors.foreground,
 		CATHEDRAL_TOKENS.colors.surfaceLifted,
 	);
@@ -246,13 +219,10 @@ export function renderDivineQuery(
 	width: number,
 	options: DivineQueryRenderOptions = {},
 ): string[] {
-	if (width < 4) return [];
-	const contentWidth = width - 2;
+	if (width < 1) return [];
+	const contentWidth = width;
 	const inner = buildInnerRows(snapshot, contentWidth, options.extras ?? []);
-	const lines: string[] = [renderTopBorder(contentWidth)];
-	for (const innerLine of inner) lines.push(wrapInnerRow(innerLine, contentWidth));
-	lines.push(renderBottomBorder(contentWidth));
-	return lines;
+	return inner.map((innerLine) => wrapPanelRow(innerLine, contentWidth));
 }
 
 // ── State machine ────────────────────────────────────────────
@@ -317,7 +287,7 @@ class DivineQueryComponent implements Component {
 
 export const DIVINE_QUERY_OVERLAY_OPTIONS: OverlayOptions = {
 	anchor: "center",
-	width: "75%",
+	width: 80,
 	minWidth: 56,
 	maxHeight: "65%",
 };

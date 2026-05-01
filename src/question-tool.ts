@@ -131,10 +131,9 @@ async function showCathedralQuestion(
 
 				const extras: string[] = [];
 				if (editMode) {
-					// `renderDivineQuery` frames everything inside `│ ... │`. Inner
-					// content width = `width - 2`. Reserve 5 cols indent + 1 col
-					// trailing margin → editor inner width = width - 8.
-					const editorInnerWidth = Math.max(1, width - 8);
+					// `renderDivineQuery` returns full-width lifted panel rows.
+					// Reserve 5 cols indent + 1 col trailing margin.
+					const editorInnerWidth = Math.max(1, width - 6);
 					extras.push(`     ${theme.fg("muted", "Your answer:")}`);
 					for (const line of editor.render(editorInnerWidth)) {
 						extras.push(`     ${withCathedralForeground(line)}`);

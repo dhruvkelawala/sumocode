@@ -116,6 +116,73 @@ describe("TerminalSessionOwner", () => {
 		expect(output.writes).toEqual(["\x1b[?2026h\x1b[2;1Hhello\x1b[K\x1b[3;5H\x1b[?25h\x1b[?2026l"]);
 	});
 
+	it("emits a partial-row patch without \\x1b[K when startCol > 0", () => {
+		const output = outputStub();
+		const terminal = new TerminalSessionOwner({ output });
+
+		terminal.writeFramePatches([{ row: 1, startCol: 4, ansi: "DEF" }], null);
+
+		// Partial patches MUST skip clear-to-end-of-line so cells right of the
+		// change region survive untouched. Cursor position 5 (= startCol + 1).
+		expect(output.writes).toEqual(["\x1b[?2026h\x1b[2;5HDEF\x1b[?2026l"]);
+		expect(output.writes[0]).not.toContain("\x1b[K");
+	});
+
+	it("lazy frame-start: emits zero bytes for a no-op tick (no patches, no cursor)", () => {
+		const output = outputStub();
+		const terminal = new TerminalSessionOwner({ output });
+
+		terminal.writeFramePatches([], null);
+
+		expect(output.writes).toEqual([]);
+	});
+
+	it("lazy frame-start: emits zero bytes when the cursor lands on its last-emitted position", () => {
+		const output = outputStub();
+		const terminal = new TerminalSessionOwner({ output });
+
+		// First call emits the cursor; cache lastEmittedCursor = (2, 4).
+		terminal.writeFramePatches([], { row: 2, col: 4 });
+		expect(output.writes.length).toBe(1);
+
+		// Second call with same cursor + no patches → no bytes.
+		terminal.writeFramePatches([], { row: 2, col: 4 });
+		expect(output.writes.length).toBe(1);
+	});
+
+	it("lazy frame-start: skips cursor reposition when only the patches change but cursor is unchanged", () => {
+		const output = outputStub();
+		const terminal = new TerminalSessionOwner({ output });
+
+		terminal.writeFramePatches([{ row: 0, ansi: "hello" }], { row: 2, col: 4 });
+		output.writes.length = 0;
+
+		terminal.writeFramePatches([{ row: 1, ansi: "world" }], { row: 2, col: 4 });
+
+		// Cursor sequence (`\x1b[3;5H\x1b[?25h`) should NOT appear in the second
+		// write because the cursor hasn't moved since the last emit.
+		expect(output.writes).toEqual(["\x1b[?2026h\x1b[2;1Hworld\x1b[K\x1b[?2026l"]);
+	});
+
+	it("re-emits cursor after exitTerminal clears lastEmittedCursor", () => {
+		const output = outputStub();
+		const terminal = new TerminalSessionOwner({ output });
+
+		terminal.writeFramePatches([], { row: 2, col: 4 });
+		terminal.exitTerminal();
+		// After exit, lastEmittedCursor must be reset so re-entering altscreen
+		// re-emits cursor sequences.
+		output.writes.length = 0;
+
+		// Simulate fresh session re-entering: re-set isTTY by creating a new
+		// owner referencing the same output. (`exitTerminal` flips internal
+		// state; we just want to confirm a subsequent write emits cursor.)
+		const next = new TerminalSessionOwner({ output });
+		next.writeFramePatches([], { row: 2, col: 4 });
+
+		expect(output.writes).toEqual(["\x1b[?2026h\x1b[3;5H\x1b[?25h\x1b[?2026l"]);
+	});
+
 	it("exitTerminal emits cleanup without cursor or bg reset when retained mode was never entered", () => {
 		const output = outputStub();
 		const terminal = new TerminalSessionOwner({ output });

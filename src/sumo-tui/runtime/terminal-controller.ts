@@ -49,6 +49,12 @@ export interface TerminalCursor {
 
 export interface TerminalPatch {
 	readonly row: number;
+	/**
+	 * Column offset (0-indexed) where this patch starts. Defaults to 0 for
+	 * full-row repaints. When > 0 the writer emits ONLY the slice and skips
+	 * the trailing `\x1b[K` so unchanged cells to the right are preserved.
+	 */
+	readonly startCol?: number;
 	readonly ansi: string;
 }
 
@@ -92,6 +98,16 @@ export class TerminalSessionOwner {
 	private backgroundPainted = false;
 	private cursorColorOverridden = false;
 	private lastCursorColor: string | undefined;
+	/**
+	 * Last cursor position we emitted to the terminal. Used to skip redundant
+	 * cursor-reposition writes when the frame doesn't move the cursor. Reset
+	 * on `exitTerminal` so a re-entered altscreen always re-emits.
+	 *
+	 * Borrowed from OpenTUI's renderer (`zig/renderer.zig` ~1180): a
+	 * "lastEmittedCursor" cache that pairs with the lazy frame-start to
+	 * suppress no-op ticks entirely.
+	 */
+	private lastEmittedCursor: TerminalCursor | null = null;
 
 	public constructor(options: TerminalSessionOwnerOptions = {}) {
 		this.output = options.output ?? process.stdout;
@@ -180,12 +196,32 @@ export class TerminalSessionOwner {
 	}
 
 	public writeFramePatches(patches: readonly TerminalPatch[], cursor: TerminalCursor | null): void {
-		if (!this.isTTY() || (patches.length === 0 && !cursor)) return;
+		if (!this.isTTY()) return;
+		// Lazy frame-start (OpenTUI port, see `lastEmittedCursor` comment): if no
+		// cells changed AND the cursor would land where it already is, emit zero
+		// bytes. Otherwise wrap the patches in `\x1b[?2026h … \x1b[?2026l` for a
+		// synchronized atomic frame.
+		const cursorMoved = cursor !== null && (
+			this.lastEmittedCursor === null ||
+			cursor.row !== this.lastEmittedCursor.row ||
+			cursor.col !== this.lastEmittedCursor.col
+		);
+		if (patches.length === 0 && !cursorMoved) return;
+
 		let output = "\x1b[?2026h";
 		for (const patch of patches) {
-			output += `\x1b[${patch.row + 1};1H${patch.ansi}\x1b[K`;
+			const startCol = patch.startCol ?? 0;
+			output += `\x1b[${patch.row + 1};${startCol + 1}H${patch.ansi}`;
+			// Only full-row patches benefit from `\x1b[K` (clear-to-end-of-line):
+			// they overwrite every cell on the row anyway. Partial-row patches
+			// (`startCol > 0`) MUST NOT emit `\x1b[K` or they would wipe correct
+			// cells to the right of the change region.
+			if (startCol === 0) output += "\x1b[K";
 		}
-		if (cursor) output += `\x1b[${cursor.row + 1};${cursor.col + 1}H\x1b[?25h`;
+		if (cursor && cursorMoved) {
+			output += `\x1b[${cursor.row + 1};${cursor.col + 1}H\x1b[?25h`;
+			this.lastEmittedCursor = { row: cursor.row, col: cursor.col };
+		}
 		output += "\x1b[?2026l";
 		this.write(output);
 	}
@@ -205,6 +241,7 @@ export class TerminalSessionOwner {
 		this.backgroundPainted = false;
 		this.cursorColorOverridden = false;
 		this.lastCursorColor = undefined;
+		this.lastEmittedCursor = null;
 		if (!this.isTTY()) return;
 		let output = "";
 		if (shouldResetCursorColor) output += CURSOR_COLOR_RESET;

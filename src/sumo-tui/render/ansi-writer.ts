@@ -60,11 +60,25 @@ function styleNeedsReset(prev: StyleState, next: StyleState): boolean {
 /** Convert one retained cell row into an ANSI string, emitting SGR only when style changes. */
 export function cellRowToAnsi(buffer: CellBuffer, row: number): string {
 	const { cols } = buffer.getDimensions();
+	return cellRowSliceToAnsi(buffer, row, 0, cols - 1);
+}
+
+/**
+ * Convert a column slice of one retained cell row into an ANSI string, emitting
+ * SGR only when style changes. `startCol` and `endCol` are inclusive cell
+ * indices. Continuation cells (wide-char trailing halves) are skipped, so
+ * callers that want byte-correct output for a slice must ensure `startCol` is
+ * the head of a glyph — `rowChangeRange` in `diff.ts` handles this.
+ */
+export function cellRowSliceToAnsi(buffer: CellBuffer, row: number, startCol: number, endCol: number): string {
+	const { cols } = buffer.getDimensions();
+	const start = Math.max(0, startCol);
+	const end = Math.min(cols - 1, endCol);
 	let output = "";
 	let current: StyleState = DEFAULT_STYLE;
 	let styled = false;
 
-	for (let col = 0; col < cols; col += 1) {
+	for (let col = start; col <= end; col += 1) {
 		const cell = buffer.getCell(row, col);
 		if (cell.char === "") continue;
 		const nextStyle = styleFromCell(cell);

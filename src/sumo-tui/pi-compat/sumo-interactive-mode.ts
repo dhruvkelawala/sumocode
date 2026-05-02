@@ -30,6 +30,7 @@
 import type { AgentSessionRuntime, InteractiveModeOptions } from "@mariozechner/pi-coding-agent";
 import { InteractiveMode } from "@mariozechner/pi-coding-agent";
 import type { ExtensionUIContext } from "@mariozechner/pi-coding-agent";
+import type { Component } from "@mariozechner/pi-tui";
 import { loadSumoCodeConfig } from "../../config/sumocode-config.js";
 import { EmptyChatQuoteNode, shouldRenderEmptyChatQuote, type EmptyChatQuoteSnapshot } from "../cathedral/empty-chat-quote.js";
 import { createSplashTree, defaultSplashSnapshot, type SplashTree } from "../cathedral/splash-tree.js";
@@ -98,6 +99,45 @@ interface SumoInteractiveRuntimeSnapshot {
 	readonly splash: SplashTree;
 }
 
+export interface SidebarPublication {
+	readonly component: Component;
+	readonly isVisible: (cols: number, rows: number) => boolean;
+}
+
+// Module-level singleton would normally be enough here, but the retained
+// `sumo-interactive-mode.js` jiti loader uses `moduleCache: false` so the
+// SumoInteractiveMode and the extension code (sidebar, etc.) end up holding
+// different module copies. Cross those copies with a globalThis symbol so a
+// single instance is observable from anywhere.
+const ACTIVE_SUMO_RUNTIME_KEY = Symbol.for("sumocode.activeSumoRuntime");
+
+interface ActiveRuntimeBox { runtime: SumoInteractiveRuntime | undefined }
+
+function activeRuntimeBox(): ActiveRuntimeBox {
+	const host = globalThis as unknown as Record<symbol, ActiveRuntimeBox | undefined>;
+	let box = host[ACTIVE_SUMO_RUNTIME_KEY];
+	if (!box) {
+		box = { runtime: undefined };
+		host[ACTIVE_SUMO_RUNTIME_KEY] = box;
+	}
+	return box;
+}
+
+function setActiveSumoRuntime(runtime: SumoInteractiveRuntime | undefined): void {
+	activeRuntimeBox().runtime = runtime;
+}
+
+/**
+ * Module-level accessor so non-Pi extensions (e.g. `installSidebar`) can
+ * publish components into the owned shell without going through Pi's overlay
+ * stack. Backed by a globalThis symbol because the jiti loader for
+ * `sumo-interactive-mode.js` keeps no module cache, which would otherwise give
+ * each importer its own private copy of this module.
+ */
+export function getActiveSumoRuntime(): SumoInteractiveRuntime | undefined {
+	return activeRuntimeBox().runtime;
+}
+
 function debugLog(message: string): void {
 	if (process.env.SUMO_TUI_DEBUG !== "1") return;
 	console.error(`[sumo-tui] ${message}`);
@@ -138,8 +178,12 @@ export class SumoInteractiveRuntime {
 	private emptyChatUserMessageCount = 0;
 	private started = false;
 	private pendingResumeProfile: { profile: ResumeProfiler; metadata: ResumeProfileMetadata } | undefined;
+	private ownedShellMouseHandler: ((event: MouseEvent) => boolean) | undefined;
+	private ownedShellActiveCheck: (() => boolean) | undefined;
+	private sidebarPublication: SidebarPublication | undefined;
 
 	public constructor(output: TerminalLike = process.stdout, terminalSession?: TerminalSessionOwner) {
+		setActiveSumoRuntime(this);
 		this.output = output;
 		this.terminal = terminalSession ?? (output === process.stdout ? defaultTerminalSessionOwner : new TerminalSessionOwner({ output }));
 		this.selection = new SelectionController({
@@ -244,6 +288,43 @@ export class SumoInteractiveRuntime {
 		this.pendingResumeProfile = { profile, metadata };
 	}
 
+	public setOwnedShellMouseHandler(handler: ((event: MouseEvent) => boolean) | undefined): void {
+		this.ownedShellMouseHandler = handler;
+	}
+
+	public handleOwnedShellMouse(event: MouseEvent): boolean {
+		return this.ownedShellMouseHandler?.(event) === true;
+	}
+
+	public setOwnedShellActiveCheck(check: (() => boolean) | undefined): void {
+		this.ownedShellActiveCheck = check;
+	}
+
+	public isOwnedShellActive(): boolean {
+		return this.ownedShellActiveCheck?.() === true;
+	}
+
+	/**
+	 * Publish the sidebar component to the owned-shell so it can mount it as a
+	 * Yoga sibling of the chat region. Called by `installSidebar` instead of
+	 * `tui.showOverlay()` when owned-shell is enabled. Pass `undefined` to
+	 * unpublish (e.g. on session shutdown).
+	 */
+	public setSidebarComponent(
+		component: Component | undefined,
+		isVisible: (cols: number, rows: number) => boolean = () => true,
+	): void {
+		this.sidebarPublication = component ? { component, isVisible } : undefined;
+		logDiagnostic("sumo_runtime_sidebar_publication", {
+			hasComponent: component !== undefined,
+		});
+		this.requestRender();
+	}
+
+	public getSidebarPublication(): SidebarPublication | undefined {
+		return this.sidebarPublication;
+	}
+
 	public getYoga(): Yoga | undefined {
 		return this.yoga;
 	}
@@ -303,6 +384,10 @@ export class SumoInteractiveRuntime {
 		this.chatFrameCache = undefined;
 		this.externalRenderControls = undefined;
 		this.pendingResumeProfile = undefined;
+		this.ownedShellMouseHandler = undefined;
+		this.ownedShellActiveCheck = undefined;
+		this.sidebarPublication = undefined;
+		if (getActiveSumoRuntime() === this) setActiveSumoRuntime(undefined);
 		this.scheduler = undefined;
 		this.chat = undefined;
 		this.splash = undefined;
@@ -570,7 +655,15 @@ export class SumoInteractiveMode {
 			terminal: this.retainedRuntime.getTerminalSessionOwner(),
 			dimensions,
 			overlayHost: host.ui as never,
+			sidebarPublication: () => this.retainedRuntime.getSidebarPublication(),
 		});
+
+		this.retainedRuntime.setOwnedShellMouseHandler((event) => {
+			const handled = this.ownedShell?.handleMouseEvent(event) === true;
+			if (handled) this.ownedShell?.render();
+			return handled;
+		});
+		this.retainedRuntime.setOwnedShellActiveCheck(() => this.ownedShell !== undefined);
 
 		// Replace Pi's TUI rendering with the owned-shell render. Pi's stdin
 		// listening, requestRender scheduling, and overlay/focus logic continue
@@ -594,6 +687,8 @@ export class SumoInteractiveMode {
 		const targetUi = (this.upstream as unknown as { ui?: { doRender?: () => void } } | undefined)?.ui;
 		if (targetUi && this.ownedShellOriginalDoRender) targetUi.doRender = this.ownedShellOriginalDoRender;
 		this.ownedShellOriginalDoRender = undefined;
+		this.retainedRuntime.setOwnedShellMouseHandler(undefined);
+		this.retainedRuntime.setOwnedShellActiveCheck(undefined);
 		this.ownedShell.dispose();
 		this.ownedShell = undefined;
 		logDiagnostic("owned_shell_uninstalled", {});

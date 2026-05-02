@@ -81,15 +81,17 @@ describe("OwnedShellRenderer", () => {
 		const lines = fakeTerminal.patches.map((patch) => stripAnsi(patch.ansi));
 		expect(lines.length).toBe(12);
 		expect(lines[0]?.startsWith("TOP")).toBe(true);
-		// footer is pinned to last row
-		expect(lines[11]?.startsWith("FOOTER")).toBe(true);
-		// hint is one row above footer
-		expect(lines[10]?.startsWith("HINT")).toBe(true);
-		// editor occupies 3 rows above hint (rows 7..9), hint=10, footer=11
-		expect(lines[7]?.startsWith("┌")).toBe(true);
-		expect(lines[9]?.startsWith("└")).toBe(true);
+		// footer is pinned above the terminal-bottom safe row
+		expect(lines[10]?.startsWith("FOOTER")).toBe(true);
+		expect(lines[11]?.trim()).toBe("");
+		// hint is separated from footer by one breathing row
+		expect(lines[8]?.startsWith("HINT")).toBe(true);
+		expect(lines[9]?.trim()).toBe("");
+		// editor occupies 3 rows above hint (rows 5..7), hint=8, footer=10
+		expect(lines[5]?.startsWith("┌")).toBe(true);
+		expect(lines[7]?.startsWith("└")).toBe(true);
 		// blank row above editor
-		expect(lines[6]?.trim()).toBe("");
+		expect(lines[4]?.trim()).toBe("");
 
 		renderer.dispose();
 	});

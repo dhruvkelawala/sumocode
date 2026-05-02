@@ -84,6 +84,14 @@ export class SumoNode {
 		this.yogaNode.setFlexShrink(value);
 	}
 
+	public set flexBasis(value: SumoNodeSize | "auto") {
+		if (value === "auto") {
+			this.yogaNode.setFlexBasisAuto?.();
+			return;
+		}
+		this.yogaNode.setFlexBasis(value);
+	}
+
 	public set flexDirection(value: FlexDirection) {
 		this.yogaNode.setFlexDirection(value);
 	}

@@ -19,7 +19,9 @@ import {
 } from "./sumo-tui/cathedral/sidebar-rendering.js";
 import { surfaceLine } from "./sumo-tui/cathedral/ansi.js";
 import { logDiagnostic } from "./sumo-tui/runtime/diagnostics.js";
-import { installNonCapturingSidebarOverlay, sidebarOverlayTargetRows } from "./sidebar-placement.js";
+import { installNonCapturingSidebarOverlay, SIDEBAR_MIN_TERMINAL_WIDTH, sidebarOverlayTargetRows } from "./sidebar-placement.js";
+import { getActiveSumoRuntime } from "./sumo-tui/pi-compat/sumo-interactive-mode.js";
+import { ownedShellEnabled } from "./sumo-tui/pi-compat/owned-shell-renderer.js";
 export {
 	SIDEBAR_MIN_TERMINAL_WIDTH,
 	SIDEBAR_WIDTH,
@@ -257,7 +259,17 @@ export function installSidebar(pi: ExtensionAPI): void {
 					];
 				},
 			};
-			const overlay = installNonCapturingSidebarOverlay(tui, sidebarComponent, () => sessionHasMessages(ctx));
+			// Owned-shell mounts the sidebar as a real Yoga sibling of the chat
+			// region. Publish the component to the runtime so it can pin its
+			// columns structurally instead of relying on overlay compositing
+			// (which is unsafe across chat scroll, resize, and full-frame diff).
+			const runtime = ownedShellEnabled() ? getActiveSumoRuntime() : undefined;
+			const overlay = runtime
+				? undefined
+				: installNonCapturingSidebarOverlay(tui, sidebarComponent, () => sessionHasMessages(ctx));
+			if (runtime) {
+				runtime.setSidebarComponent(sidebarComponent, (cols) => cols >= SIDEBAR_MIN_TERMINAL_WIDTH && sessionHasMessages(ctx));
+			}
 			return {
 				invalidate(): void {},
 				render(): string[] {
@@ -266,7 +278,8 @@ export function installSidebar(pi: ExtensionAPI): void {
 				dispose(): void {
 					metricsHud.stop();
 					if (activeMetricsHud === metricsHud) activeMetricsHud = undefined;
-					overlay.hide();
+					overlay?.hide();
+					runtime?.setSidebarComponent(undefined);
 					requestRender = undefined;
 				},
 			};

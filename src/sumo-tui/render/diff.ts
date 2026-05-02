@@ -179,7 +179,16 @@ function detectScroll(prev: CellBuffer, next: CellBuffer): FrameDiffPatch[] | nu
  * `anomalyco/opentui` (`zig/renderer.zig` 1331-1349) — see
  * `docs/research/OPENTUI_COMPARISON.md` §A3.
  */
-export function diffFrames(prev: CellBuffer | null | undefined, next: CellBuffer): FrameDiffPatch[] {
+export interface FrameDiffOptions {
+	/**
+	 * Detect shifted rows and emit terminal scroll-region sequences. Useful for
+	 * plain full-screen retained roots, but unsafe when only one visual region
+	 * should scroll while sibling/overlay chrome must remain pinned.
+	 */
+	detectScroll?: boolean;
+}
+
+export function diffFrames(prev: CellBuffer | null | undefined, next: CellBuffer, options: FrameDiffOptions = {}): FrameDiffPatch[] {
 	if (!prev || !dimensionsEqual(prev, next)) {
 		const { rows } = next.getDimensions();
 		const patches: FrameDiffPatch[] = [];
@@ -191,7 +200,7 @@ export function diffFrames(prev: CellBuffer | null | undefined, next: CellBuffer
 
 	const patches = changedRowPatches(prev, next);
 	if (patches.length === 0) return [];
-	const scroll = detectScroll(prev, next);
+	const scroll = options.detectScroll === false ? null : detectScroll(prev, next);
 	if (scroll && scroll.length < patches.length) return scroll;
 	return patches;
 }

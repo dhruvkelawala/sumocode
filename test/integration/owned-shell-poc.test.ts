@@ -58,17 +58,19 @@ describe("owned-shell POC (issue #195 / #161 Slice A)", () => {
 			const output = app.getOutput();
 			const lines = (await replayTerminal(output, cols, rows)).map((line) => stripAnsi(line));
 
-			// Footer/hint/input frame should occupy the LAST 5 visible rows in this order:
-			//   row N-5: top of input frame
-			//   row N-4: input row
-			//   row N-3: bottom of input frame
-			//   row N-2: hint row
-			//   row N-1: footer (blank in splash)
-			expect(lines[rows - 5]?.includes("DIVINE INVOCATION")).toBe(true);
-			expect(lines[rows - 3]?.includes("└")).toBe(true);
-			expect(lines[rows - 2]?.includes("AWAITING PROMPT")).toBe(true);
+			// Footer/hint/input frame should occupy the bottom chrome band in this order:
+			//   row N-7: top of input frame
+			//   row N-6: input row
+			//   row N-5: bottom of input frame
+			//   row N-4: hint row
+			//   row N-3: breathing row
+			//   row N-2: footer (blank in splash)
+			//   row N-1: terminal-bottom safe row
+			expect(lines[rows - 7]?.includes("DIVINE INVOCATION")).toBe(true);
+			expect(lines[rows - 5]?.includes("└")).toBe(true);
+			expect(lines[rows - 4]?.includes("AWAITING PROMPT")).toBe(true);
 
-			const footerRow = lines[rows - 1];
+			const footerRow = lines[rows - 2];
 			expect(typeof footerRow).toBe("string");
 			expect(footerRow?.length).toBe(cols);
 

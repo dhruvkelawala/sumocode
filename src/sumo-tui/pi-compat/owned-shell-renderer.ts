@@ -14,7 +14,9 @@
  *   ├── blank          (h: 1)
  *   ├── input-frame    (measured by PiEditorLeaf)
  *   ├── hint-row       (h: 1)
- *   └── footer         (h: 1)
+ *   ├── blank          (h: 1)
+ *   ├── footer         (h: 1)
+ *   └── blank          (h: 1)
  *
  * Composites Pi's own overlay stack on top of the buffer so existing widgets
  * that depend on `tui.showOverlay` (sidebar, modal selectors, notifications)
@@ -25,20 +27,24 @@ import type { Component, OverlayOptions } from "@mariozechner/pi-tui";
 import type { CustomEditor } from "@mariozechner/pi-coding-agent";
 import { SumoNode } from "../layout/node.js";
 import {
+	ALIGN_STRETCH,
 	DIRECTION_LTR,
 	FLEX_DIRECTION_COLUMN,
 	FLEX_DIRECTION_ROW,
 	type Yoga,
 } from "../layout/yoga.js";
 import { CellBuffer } from "../render/buffer.js";
-import { composite, type HardwareCursor } from "../render/compositor.js";
+import { composite, dispatchMouseEvent, type HardwareCursor } from "../render/compositor.js";
 import { diffFrames } from "../render/diff.js";
 import { logDiagnostic } from "../runtime/diagnostics.js";
 import type { TerminalSessionOwner } from "../runtime/terminal-controller.js";
+import type { MouseEvent } from "../input/mouse.js";
 import { ChatPager } from "../widgets/chat-pager.js";
 import { PiComponentLeaf } from "../widgets/pi-component-leaf.js";
 import { PiEditorLeaf } from "../widgets/pi-editor-leaf.js";
 import type { SplashTree } from "../cathedral/splash-tree.js";
+import type { SidebarPublication } from "./sumo-interactive-mode.js";
+import { SIDEBAR_WIDTH, sidebarGutterWidth } from "../../sidebar-placement.js";
 
 export interface OwnedShellRendererTerminal {
 	readonly columns?: number;
@@ -78,11 +84,20 @@ export interface OwnedShellRendererOptions {
 	readonly dimensions: OwnedShellRendererTerminal;
 	/** Pi TUI host that owns the overlay stack (modal/sidebar/notifications). */
 	readonly overlayHost?: PiOverlayHost;
+	/**
+	 * Lazy resolver for the runtime-published sidebar component. Owned-shell
+	 * mounts the sidebar as a Yoga sibling of the chat region instead of
+	 * compositing it from Pi's overlay stack. Returning `undefined` hides the
+	 * sidebar and reclaims the columns for chat.
+	 */
+	readonly sidebarPublication?: () => SidebarPublication | undefined;
 }
 
 const SHELL_BLANK_ROW = 1;
 const SHELL_HINT_ROW = 1;
+const SHELL_FOOTER_GAP_ROW = 1;
 const SHELL_FOOTER_ROW = 1;
+const SHELL_BOTTOM_SAFE_ROW = 1;
 
 /**
  * Owns the full-screen Yoga layout per issue #161 Slice A.
@@ -96,16 +111,22 @@ export class OwnedShellRenderer {
 	private readonly terminal: TerminalSessionOwner;
 	private readonly dimensions: OwnedShellRendererTerminal;
 	private readonly overlayHost: PiOverlayHost | undefined;
+	private readonly resolveSidebarPublication: () => SidebarPublication | undefined;
 	private previousFrame: CellBuffer | undefined;
 	private readonly headerLeaf: PiComponentLeaf;
 	private readonly editorLeaf: PiEditorLeaf;
 	private readonly hintLeaf: PiComponentLeaf;
 	private readonly footerLeaf: PiComponentLeaf;
 	private readonly chatRow: SumoNode;
+	private readonly sidebarGutter: SumoNode;
+	private readonly sidebarLeaf: PiComponentLeaf;
 	private readonly blankSpacer: SumoNode;
+	private readonly footerGapSpacer: SumoNode;
+	private readonly bottomSafeSpacer: SumoNode;
 	private readonly chat: ChatPager;
 	private readonly splash: SplashTree | undefined;
 	private mountedChatChild: "chat" | "splash" | undefined;
+	private mountedSidebar = false;
 	private disposed = false;
 
 	public constructor(options: OwnedShellRendererOptions) {
@@ -115,6 +136,7 @@ export class OwnedShellRenderer {
 		this.chat = options.chat;
 		this.splash = options.splash;
 		this.overlayHost = options.overlayHost;
+		this.resolveSidebarPublication = options.sidebarPublication ?? (() => undefined);
 
 		this.root = new SumoNode(this.yoga.Node.create());
 		this.root.flexDirection = FLEX_DIRECTION_COLUMN;
@@ -123,6 +145,7 @@ export class OwnedShellRenderer {
 		const editorProxy = new LazyComponentProxy(options.editorContainer);
 		const hintProxy = new LazyComponentProxy(options.widgetContainerBelow);
 		const footerProxy = new LazyComponentProxy(options.footer);
+		const sidebarProxy = new LazyComponentProxy(() => this.resolveSidebarPublication()?.component ?? EMPTY_COMPONENT);
 
 		// 1) top-chrome
 		this.headerLeaf = PiComponentLeaf.create(this.yoga, headerProxy, this.root);
@@ -130,9 +153,21 @@ export class OwnedShellRenderer {
 		// 2) chat-row (flexGrow: 1)
 		this.chatRow = new SumoNode(this.yoga.Node.create(), this.root);
 		this.chatRow.flexDirection = FLEX_DIRECTION_ROW;
+		this.chatRow.alignItems = ALIGN_STRETCH;
 		this.chatRow.flexGrow = 1;
 		this.chatRow.flexShrink = 1;
-		this.syncChatRowChild();
+
+		// Owned-shell owns the sidebar as a real Yoga sibling of ChatPager when the
+		// legacy Pi sidebar overlay is present and visible. This reserves the right
+		// columns structurally, so chat scroll/diff can never paint through or stale
+		// out the sidebar surface.
+		this.sidebarGutter = new SumoNode(this.yoga.Node.create());
+		this.sidebarGutter.flexShrink = 0;
+		this.sidebarLeaf = PiComponentLeaf.create(this.yoga, sidebarProxy);
+		this.sidebarLeaf.width = SIDEBAR_WIDTH;
+		this.sidebarLeaf.height = "100%";
+		this.sidebarLeaf.flexShrink = 0;
+		this.syncChatRowChildren(this.dimensions.columns ?? 80, this.dimensions.rows ?? 24);
 
 		// 3) blank breathing row above input
 		this.blankSpacer = new SumoNode(this.yoga.Node.create(), this.root);
@@ -149,9 +184,20 @@ export class OwnedShellRenderer {
 		this.hintLeaf = PiComponentLeaf.create(this.yoga, hintProxy, this.root);
 		this.hintLeaf.height = SHELL_HINT_ROW;
 
-		// 6) footer (pinned to last row by flex column)
+		// 6) breathing row between hint and footer. This preserves the V2 Bible
+		// contract from #188: active input must not visually crowd the status footer.
+		this.footerGapSpacer = new SumoNode(this.yoga.Node.create(), this.root);
+		this.footerGapSpacer.height = SHELL_FOOTER_GAP_ROW;
+
+		// 7) footer
 		this.footerLeaf = PiComponentLeaf.create(this.yoga, footerProxy, this.root);
 		this.footerLeaf.height = SHELL_FOOTER_ROW;
+
+		// 8) bottom safe row. cmux/Ghostty prompt/cursor affordances are easier to
+		// read with a terminal-bottom guard row, and the visual Bible encodes this
+		// as the final blank row in active portrait/landscape scenes.
+		this.bottomSafeSpacer = new SumoNode(this.yoga.Node.create(), this.root);
+		this.bottomSafeSpacer.height = SHELL_BOTTOM_SAFE_ROW;
 
 		logDiagnostic("owned_shell_constructed", {
 			cols: this.dimensions.columns ?? null,
@@ -167,14 +213,28 @@ export class OwnedShellRenderer {
 	 * runs inside the owned shell's chat-row instead of the runtime's chat-only
 	 * root tree.
 	 */
-	private syncChatRowChild(): void {
+	private syncChatRowChildren(cols: number, rows: number): void {
 		const wantSplash = !!this.splash && !this.chat.hasMessages();
 		const desired: "chat" | "splash" = wantSplash ? "splash" : "chat";
-		if (desired === this.mountedChatChild) return;
+		const sidebarVisible = desired === "chat" && this.isSidebarVisible(cols, rows);
+		const gutterWidth = sidebarVisible ? sidebarGutterWidth(cols, rows) : 0;
+		if (desired === "chat") {
+			// ChatPager declares `flexBasis: 0 + flexGrow: 1` in its constructor so
+			// Yoga always sizes it from the row's leftover width and stretches it
+			// to the row's height. The owned shell only needs to reserve the
+			// sidebar's fixed columns; the chat fills whatever remains.
+			this.sidebarGutter.width = gutterWidth;
+			this.sidebarLeaf.width = SIDEBAR_WIDTH;
+		}
+		if (desired === this.mountedChatChild && sidebarVisible === this.mountedSidebar) return;
 
-		// Detach whichever node is currently attached.
+		// Detach whichever nodes are currently attached. Chat/splash state lives on
+		// the nodes themselves, so remounting them under the row is cheap and keeps
+		// the child ordering deterministic: chat → gutter → sidebar.
 		if (this.chat.parent === this.chatRow) this.chatRow.removeChild(this.chat);
 		if (this.splash && this.splash.root.parent === this.chatRow) this.chatRow.removeChild(this.splash.root);
+		if (this.sidebarGutter.parent === this.chatRow) this.chatRow.removeChild(this.sidebarGutter);
+		if (this.sidebarLeaf.parent === this.chatRow) this.chatRow.removeChild(this.sidebarLeaf);
 
 		if (desired === "splash" && this.splash) {
 			this.splash.syncVisibility();
@@ -185,17 +245,21 @@ export class OwnedShellRenderer {
 			// content to shrink so the selector takes priority and splash clips
 			// gracefully instead of overflowing into the input/hint/footer rows.
 			this.splash.content.flexShrink = 1;
-			if (this.splash.root.parent !== this.chatRow) this.chatRow.addChild(this.splash.root);
+			this.chatRow.addChild(this.splash.root);
 		} else {
-			// chat: detach from any other parent, then mount under chat-row.
 			const currentParent = this.chat.parent;
 			if (currentParent && currentParent !== this.chatRow) currentParent.removeChild(this.chat);
-			if (this.chat.parent !== this.chatRow) this.chatRow.addChild(this.chat);
 			this.chat.flexGrow = 1;
 			this.chat.flexShrink = 1;
+			this.chatRow.addChild(this.chat);
+			if (sidebarVisible) {
+				this.chatRow.addChild(this.sidebarGutter);
+				this.chatRow.addChild(this.sidebarLeaf);
+			}
 		}
 		this.mountedChatChild = desired;
-		logDiagnostic("owned_shell_chat_row", { mounted: desired });
+		this.mountedSidebar = sidebarVisible;
+		logDiagnostic("owned_shell_chat_row", { mounted: desired, sidebarVisible });
 	}
 
 	/**
@@ -214,7 +278,7 @@ export class OwnedShellRenderer {
 		const cols = Math.max(1, Math.floor(this.dimensions.columns ?? 80));
 		const rows = Math.max(1, Math.floor(this.dimensions.rows ?? 24));
 
-		this.syncChatRowChild();
+		this.syncChatRowChildren(cols, rows);
 		// Re-measure dynamic-height leaves so Yoga grows the editor when
 		// autocomplete is shown, and shrinks it back when dismissed. Without this
 		// PiComponentLeaf would return its stale cached measure and the autocomplete
@@ -223,6 +287,7 @@ export class OwnedShellRenderer {
 		this.editorLeaf.markDirty();
 		this.hintLeaf.markDirty();
 		this.footerLeaf.markDirty();
+		this.sidebarLeaf.markDirty();
 		this.root.width = cols;
 		this.root.height = rows;
 		const layoutStart = performance.now();
@@ -238,7 +303,10 @@ export class OwnedShellRenderer {
 		// Hide the hardware cursor when an overlay (modal/notification) is visible
 		// so the editor's cursor doesn't bleed through the modal's text.
 		const cursor: HardwareCursor | null = overlayCount > 0 ? null : result.hardwareCursor;
-		const patches = diffFrames(this.previousFrame, frame);
+		// Owned-shell has independently pinned regions (chat, sidebar, input,
+		// footer). Terminal scroll-region optimization moves the whole screen and
+		// corrupts those siblings during ChatPager scroll. Use row diffs only.
+		const patches = diffFrames(this.previousFrame, frame, { detectScroll: false });
 		this.terminal.writeFramePatches(patches, cursor);
 		this.previousFrame = frame.clone();
 
@@ -250,6 +318,19 @@ export class OwnedShellRenderer {
 			patchCount: patches.length,
 			overlayCount,
 			mountedChild: this.mountedChatChild,
+			rects: {
+				header: this.nodeRect(this.headerLeaf),
+				chatRow: this.nodeRect(this.chatRow),
+				chat: this.nodeRect(this.chat),
+				sidebarGutter: this.nodeRect(this.sidebarGutter),
+				sidebar: this.nodeRect(this.sidebarLeaf),
+				inputSpacer: this.nodeRect(this.blankSpacer),
+				editor: this.nodeRect(this.editorLeaf),
+				hint: this.nodeRect(this.hintLeaf),
+				footerGap: this.nodeRect(this.footerGapSpacer),
+				footer: this.nodeRect(this.footerLeaf),
+				bottomSafe: this.nodeRect(this.bottomSafeSpacer),
+			},
 			hardwareCursor: cursor ? { row: cursor.row, col: cursor.col } : null,
 		});
 	}
@@ -288,6 +369,16 @@ export class OwnedShellRenderer {
 		return visibleEntries.length;
 	}
 
+	private isSidebarVisible(termWidth: number, termHeight: number): boolean {
+		const publication = this.resolveSidebarPublication();
+		if (!publication) return false;
+		try {
+			return publication.isVisible(termWidth, termHeight);
+		} catch {
+			return false;
+		}
+	}
+
 	private isOverlayVisible(entry: OverlayEntry, termWidth: number, termHeight: number): boolean {
 		if (entry.hidden === true) return false;
 		const visibleFn = (entry.options as { visible?: (cols: number, rows: number) => boolean } | undefined)?.visible;
@@ -313,6 +404,29 @@ export class OwnedShellRenderer {
 		this.previousFrame = undefined;
 	}
 
+	public handleMouseEvent(event: MouseEvent): boolean {
+		if (this.disposed) return false;
+		const handled = dispatchMouseEvent(this.root, event);
+		if (handled) {
+			logDiagnostic("owned_shell_mouse_dispatch", {
+				type: event.type,
+				row: event.row,
+				col: event.col,
+				scrollDir: event.scrollDir ?? null,
+			});
+		}
+		return handled;
+	}
+
+	private nodeRect(node: SumoNode): { top: number; left: number; width: number; height: number } {
+		return {
+			top: node.getComputedTop(),
+			left: node.getComputedLeft(),
+			width: node.getComputedWidth(),
+			height: node.getComputedHeight(),
+		};
+	}
+
 	public dispose(): void {
 		if (this.disposed) return;
 		this.disposed = true;
@@ -321,14 +435,27 @@ export class OwnedShellRenderer {
 		this.hintLeaf.dispose();
 		this.footerLeaf.dispose();
 		this.blankSpacer.dispose();
+		this.footerGapSpacer.dispose();
+		this.bottomSafeSpacer.dispose();
 		// Chat + splash are owned by SumoInteractiveRuntime; only detach.
 		if (this.chat.parent === this.chatRow) this.chatRow.removeChild(this.chat);
 		if (this.splash && this.splash.root.parent === this.chatRow) this.chatRow.removeChild(this.splash.root);
+		if (this.sidebarGutter.parent === this.chatRow) this.chatRow.removeChild(this.sidebarGutter);
+		if (this.sidebarLeaf.parent === this.chatRow) this.chatRow.removeChild(this.sidebarLeaf);
+		this.sidebarGutter.dispose();
+		this.sidebarLeaf.dispose();
 		this.chatRow.dispose();
 		this.root.dispose();
 		this.previousFrame = undefined;
 	}
 }
+
+const EMPTY_COMPONENT: Component = {
+	invalidate(): void {},
+	render(): string[] {
+		return [];
+	},
+};
 
 /**
  * Component proxy that re-resolves its target on every render. Required so

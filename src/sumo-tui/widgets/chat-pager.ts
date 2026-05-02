@@ -76,6 +76,12 @@ export class ChatPager extends SumoNode {
 		this.chatMessageOptions = { primaryAgentName: options.primaryAgentName };
 		this.flexGrow = 1;
 		this.flexShrink = 1;
+		// `flexBasis: 0` is the canonical viewport contract: the pager never
+		// claims its content's natural size as a layout hint. Without this Yoga
+		// can fall back to a min-content cross-size (e.g. height 1) when the
+		// pager sits next to fixed-width siblings, collapsing the chat region
+		// after a scroll-state change. See OwnedShellRenderer chat-row mount.
+		this.flexBasis = 0;
 		this.flexDirection = FLEX_DIRECTION_COLUMN;
 		this.scrollBox = new ScrollBox(yoga.Node.create(), this, {
 			stickyBottom: options.stickyBottom ?? true,

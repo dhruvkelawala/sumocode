@@ -68,18 +68,18 @@ describe("owned-shell POC (issue #195 / #161 Slice A)", () => {
 			expect(lines[rows - 3]?.includes("└")).toBe(true);
 			expect(lines[rows - 2]?.includes("AWAITING PROMPT")).toBe(true);
 
-			// Footer row exists. In splash mode the SumoCode footer renders blank
-			// rows; what matters for #161 is that it's pinned to the last row
-			// rather than crowding the input.
 			const footerRow = lines[rows - 1];
 			expect(typeof footerRow).toBe("string");
 			expect(footerRow?.length).toBe(cols);
 
-			// Mid-screen rows above the input must be blank (no double-paint, no
-			// Pi-rendered footer leaking into the chat region).
-			for (let row = 0; row < rows - 5; row += 1) {
-				expect(lines[row]?.trim()).toBe("");
-			}
+			// Splash now mounts inside the chat-row of the owned-shell tree, so
+			// mid-screen rows show the SUMOCODE pixel-letter art rather than
+			// being blank. The asserts below pin the splash signature without
+			// allowing the Pi-built-in footer ("READY", "sumocode (...)") to leak.
+			const chatRegion = lines.slice(0, rows - 5).join("\n");
+			expect(chatRegion).toMatch(/█████ █   █ █   █ █████/);
+			expect(chatRegion).not.toMatch(/READY/);
+			expect(chatRegion).not.toMatch(/MEDITATING/);
 		},
 		20_000,
 	);

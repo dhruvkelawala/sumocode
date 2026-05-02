@@ -1,9 +1,9 @@
-import type { Component, EditorComponent } from "@mariozechner/pi-tui";
-import type { CustomEditor } from "@mariozechner/pi-coding-agent";
+import type { Component, OverlayOptions } from "@mariozechner/pi-tui";
 import { describe, expect, it, vi } from "vitest";
 import { loadYoga } from "../layout/yoga.js";
 import { TerminalSessionOwner, type TerminalPatch } from "../runtime/terminal-controller.js";
 import { ChatPager } from "../widgets/chat-pager.js";
+import { createSplashTree, defaultSplashSnapshot } from "../cathedral/splash-tree.js";
 import { OwnedShellRenderer, ownedShellEnabled } from "./owned-shell-renderer.js";
 
 class StaticComponent implements Component {
@@ -15,12 +15,13 @@ class StaticComponent implements Component {
 }
 
 class StaticEditor implements Component {
+	public extraRows: string[] = [];
 	public invalidate(): void {}
 	public render(width: number): string[] {
 		const top = `┌${"─".repeat(Math.max(0, width - 2))}┐`;
 		const mid = `│ > ${" ".repeat(Math.max(0, width - 5))}│`;
 		const bot = `└${"─".repeat(Math.max(0, width - 2))}┘`;
-		return [top, mid, bot];
+		return [top, mid, bot, ...this.extraRows];
 	}
 }
 
@@ -41,19 +42,21 @@ class FakeTerminal {
 }
 
 describe("ownedShellEnabled", () => {
-	it("defaults off when env var is unset", () => {
-		expect(ownedShellEnabled({})).toBe(false);
+	it("defaults on when env var is unset", () => {
+		expect(ownedShellEnabled({})).toBe(true);
 	});
 
-	it("treats truthy variants as on", () => {
+	it("treats explicit on values as on", () => {
 		expect(ownedShellEnabled({ SUMOCODE_OWNED_SHELL: "1" })).toBe(true);
 		expect(ownedShellEnabled({ SUMOCODE_OWNED_SHELL: "true" })).toBe(true);
 		expect(ownedShellEnabled({ SUMOCODE_OWNED_SHELL: "YES" })).toBe(true);
 	});
 
-	it("treats other values as off", () => {
+	it("treats explicit off values as off", () => {
 		expect(ownedShellEnabled({ SUMOCODE_OWNED_SHELL: "0" })).toBe(false);
 		expect(ownedShellEnabled({ SUMOCODE_OWNED_SHELL: "off" })).toBe(false);
+		expect(ownedShellEnabled({ SUMOCODE_OWNED_SHELL: "false" })).toBe(false);
+		expect(ownedShellEnabled({ SUMOCODE_OWNED_SHELL: "no" })).toBe(false);
 	});
 });
 
@@ -66,10 +69,10 @@ describe("OwnedShellRenderer", () => {
 		const renderer = new OwnedShellRenderer({
 			yoga,
 			chat,
-			editor: new StaticEditor() as unknown as CustomEditor | EditorComponent,
-			headerContainer: new StaticComponent(["TOP"]),
-			widgetContainerBelow: new StaticComponent(["HINT"]),
-			footer: new StaticComponent(["FOOTER"]),
+			editorContainer: () => new StaticEditor() as Component,
+			headerContainer: () => new StaticComponent(["TOP"]),
+			widgetContainerBelow: () => new StaticComponent(["HINT"]),
+			footer: () => new StaticComponent(["FOOTER"]),
 			terminal: fakeTerminal.owner,
 			dimensions: { columns: 20, rows: 12 },
 		});
@@ -99,10 +102,10 @@ describe("OwnedShellRenderer", () => {
 		const renderer = new OwnedShellRenderer({
 			yoga,
 			chat,
-			editor: editor as unknown as CustomEditor | EditorComponent,
-			headerContainer: new StaticComponent(["TOP"]),
-			widgetContainerBelow: new StaticComponent(["HINT"]),
-			footer: new StaticComponent(["FOOTER"]),
+			editorContainer: () => editor as Component,
+			headerContainer: () => new StaticComponent(["TOP"]),
+			widgetContainerBelow: () => new StaticComponent(["HINT"]),
+			footer: () => new StaticComponent(["FOOTER"]),
 			terminal: fakeTerminal.owner,
 			dimensions: { columns: 20, rows: 12 },
 		});
@@ -113,6 +116,164 @@ describe("OwnedShellRenderer", () => {
 		renderer.render();
 		// Same content → diff returns no patches
 		expect(fakeTerminal.patches.length).toBe(0);
+		renderer.dispose();
+	});
+
+	it("regrows the editor row when autocomplete content appears", async () => {
+		const yoga = await loadYoga();
+		const chat = ChatPager.create(yoga);
+		const fakeTerminal = new FakeTerminal();
+		const editor = new StaticEditor();
+		const renderer = new OwnedShellRenderer({
+			yoga,
+			chat,
+			editorContainer: () => editor as Component,
+			headerContainer: () => new StaticComponent(["TOP"]),
+			widgetContainerBelow: () => new StaticComponent(["HINT"]),
+			footer: () => new StaticComponent(["FOOTER"]),
+			terminal: fakeTerminal.owner,
+			dimensions: { columns: 20, rows: 14 },
+		});
+
+		renderer.render();
+		editor.extraRows = ["AUTO-1", "AUTO-2", "AUTO-3"]; // simulate autocomplete dropdown
+		renderer.render();
+		// Patches from render #2 are the diff vs #1 — they should include the
+		// autocomplete rows that newly appeared between footer area and previous editor.
+		const lines = fakeTerminal.patches.map((patch) => stripAnsi(patch.ansi));
+		expect(lines.some((line) => line.includes("AUTO-1"))).toBe(true);
+		expect(lines.some((line) => line.includes("AUTO-2"))).toBe(true);
+		expect(lines.some((line) => line.includes("AUTO-3"))).toBe(true);
+		renderer.dispose();
+	});
+
+	it("mounts splash in chat-row when no messages, swaps to ChatPager once messages exist", async () => {
+		const yoga = await loadYoga();
+		const chat = ChatPager.create(yoga);
+		const splash = createSplashTree(yoga, undefined, () => defaultSplashSnapshot(chat.hasMessages()));
+		const fakeTerminal = new FakeTerminal();
+		const editor = new StaticEditor();
+		const renderer = new OwnedShellRenderer({
+			yoga,
+			chat,
+			splash,
+			editorContainer: () => editor as Component,
+			headerContainer: () => new StaticComponent(["TOP"]),
+			widgetContainerBelow: () => new StaticComponent(["HINT"]),
+			footer: () => new StaticComponent(["FOOTER"]),
+			terminal: fakeTerminal.owner,
+			dimensions: { columns: 60, rows: 24 },
+		});
+
+		renderer.render();
+		const splashLines = fakeTerminal.patches.map((p) => stripAnsi(p.ansi)).join("\n");
+		// SUMOCODE block-letter pixel art is the splash signature.
+		expect(splashLines).toMatch(/█████ █   █ █   █ █████/);
+
+		chat.addMessage("user", "hello-active");
+		renderer.render();
+		const activeLines = fakeTerminal.patches.map((p) => stripAnsi(p.ansi)).join("\n");
+		expect(activeLines).toContain("hello-active");
+		renderer.dispose();
+	});
+
+	it("renders Pi-internal selectors (e.g. /resume) when editorContainer swaps children", async () => {
+		const yoga = await loadYoga();
+		const chat = ChatPager.create(yoga);
+		const fakeTerminal = new FakeTerminal();
+		let active: Component = new StaticEditor();
+		// Mimic Pi's editorContainer: a Container whose render delegates to the
+		// currently active child (editor or extension selector).
+		const renderer = new OwnedShellRenderer({
+			yoga,
+			chat,
+			editorContainer: () => active,
+			headerContainer: () => new StaticComponent(["TOP"]),
+			widgetContainerBelow: () => new StaticComponent(["HINT"]),
+			footer: () => new StaticComponent(["FOOTER"]),
+			terminal: fakeTerminal.owner,
+			dimensions: { columns: 40, rows: 20 },
+		});
+
+		renderer.render();
+		// /resume swap: replace the editor with a session selector component.
+		active = new StaticComponent(["SELECT SESSION", " · alpha-session", " · beta-session", " · gamma-session"]);
+		renderer.render();
+
+		const lines = fakeTerminal.patches.map((p) => stripAnsi(p.ansi));
+		expect(lines.some((line) => line.includes("SELECT SESSION"))).toBe(true);
+		expect(lines.some((line) => line.includes("alpha-session"))).toBe(true);
+		expect(lines.some((line) => line.includes("beta-session"))).toBe(true);
+
+		// Restore editor; the next render should swap back.
+		active = new StaticEditor();
+		renderer.render();
+		const restoredLines = fakeTerminal.patches.map((p) => stripAnsi(p.ansi));
+		expect(restoredLines.some((line) => line.includes("┌─"))).toBe(true);
+		renderer.dispose();
+	});
+
+	it("follows lazy footer resolver after Pi swaps customFooter (e.g. /resume reload)", async () => {
+		const yoga = await loadYoga();
+		const chat = ChatPager.create(yoga);
+		const fakeTerminal = new FakeTerminal();
+		// Simulate the stale-after-reload condition: render() throws once Pi
+		// disposes the component because its captured ctx is invalidated.
+		const staleFooter: Component = {
+			invalidate(): void {},
+			render(): string[] {
+				throw new Error("extension ctx is stale after session replacement or reload");
+			},
+		};
+		const freshFooter = new StaticComponent(["FRESH-FOOTER"]);
+		let currentFooter: Component = staleFooter;
+		const renderer = new OwnedShellRenderer({
+			yoga,
+			chat,
+			editorContainer: () => new StaticEditor() as Component,
+			headerContainer: () => new StaticComponent(["TOP"]),
+			widgetContainerBelow: () => new StaticComponent(["HINT"]),
+			footer: () => currentFooter,
+			terminal: fakeTerminal.owner,
+			dimensions: { columns: 30, rows: 12 },
+		});
+
+		// Render with stale footer: proxy swallows the error, returns empty rows.
+		expect(() => renderer.render()).not.toThrow();
+
+		// Pi reinstalls the footer; the resolver picks up the new component.
+		currentFooter = freshFooter;
+		renderer.render();
+		const lines = fakeTerminal.patches.map((p) => stripAnsi(p.ansi));
+		expect(lines.some((line) => line.includes("FRESH-FOOTER"))).toBe(true);
+		renderer.dispose();
+	});
+
+	it("composites Pi overlays (sidebar / modal / notification) on top of the buffer", async () => {
+		const yoga = await loadYoga();
+		const chat = ChatPager.create(yoga);
+		const fakeTerminal = new FakeTerminal();
+		const overlay: { component: Component; options?: OverlayOptions; hidden?: boolean; focusOrder?: number } = {
+			component: new StaticComponent(["│ SIDEBAR │"]),
+			options: { width: 10, anchor: "top-right", maxHeight: "100%" },
+			focusOrder: 1,
+		};
+		const overlayHost = { overlayStack: [overlay] };
+		const renderer = new OwnedShellRenderer({
+			yoga,
+			chat,
+			editorContainer: () => new StaticEditor() as Component,
+			headerContainer: () => new StaticComponent(["TOP"]),
+			widgetContainerBelow: () => new StaticComponent(["HINT"]),
+			footer: () => new StaticComponent(["FOOTER"]),
+			terminal: fakeTerminal.owner,
+			dimensions: { columns: 30, rows: 12 },
+			overlayHost,
+		});
+
+		renderer.render();
+		const lines = fakeTerminal.patches.map((p) => stripAnsi(p.ansi));
+		expect(lines.some((line) => line.includes("SIDEBAR"))).toBe(true);
 		renderer.dispose();
 	});
 });

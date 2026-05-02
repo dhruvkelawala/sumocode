@@ -524,23 +524,28 @@ export class SumoInteractiveMode {
 		const yoga = this.retainedRuntime.getYoga();
 		const snapshot = this.retainedRuntime.getSnapshot();
 		const host = upstream as unknown as {
-			editor?: unknown;
+			editorContainer?: unknown;
 			headerContainer?: unknown;
 			widgetContainerBelow?: unknown;
 			footer?: unknown;
 			customFooter?: unknown;
-			ui?: { terminal?: { columns?: number; rows?: number }; doRender?: () => void };
+			ui?: {
+				terminal?: { columns?: number; rows?: number };
+				doRender?: () => void;
+				overlayStack?: readonly unknown[];
+				isOverlayVisible?(entry: unknown): boolean;
+			};
 		};
 		// Pi swaps `customFooter` in for `footer` when an extension calls
 		// `setFooter()`. Owned-shell needs to wrap whichever footer Pi is
 		// actually painting into the bottom row.
 		const footerComponent = host.customFooter ?? host.footer;
-		if (!yoga || !snapshot || !host.ui || !host.editor || !host.headerContainer || !host.widgetContainerBelow || !footerComponent) {
+		if (!yoga || !snapshot || !host.ui || !host.editorContainer || !host.headerContainer || !host.widgetContainerBelow || !footerComponent) {
 			logDiagnostic("owned_shell_install_skipped", {
 				hasYoga: yoga !== undefined,
 				hasSnapshot: snapshot !== undefined,
 				hasUi: host.ui !== undefined,
-				hasEditor: host.editor !== undefined,
+				hasEditorContainer: host.editorContainer !== undefined,
 				hasHeader: host.headerContainer !== undefined,
 				hasHint: host.widgetContainerBelow !== undefined,
 				hasFooter: footerComponent !== undefined,
@@ -552,12 +557,19 @@ export class SumoInteractiveMode {
 		this.ownedShell = new OwnedShellRenderer({
 			yoga,
 			chat: snapshot.chat,
-			editor: host.editor as never,
-			headerContainer: host.headerContainer as never,
-			widgetContainerBelow: host.widgetContainerBelow as never,
-			footer: footerComponent as never,
+			splash: snapshot.splash,
+			// Resolve Pi container/footer references LAZILY at render time.
+			// Pi recreates `customFooter` (and other slots) on session reload
+			// (`/resume`, `ctx.newSession`, `ctx.fork`). Capturing references at
+			// install time would keep painting disposed components and trigger
+			// `ExtensionRunner.assertActive: extension ctx is stale`.
+			editorContainer: () => host.editorContainer as never,
+			headerContainer: () => host.headerContainer as never,
+			widgetContainerBelow: () => host.widgetContainerBelow as never,
+			footer: () => (host.customFooter ?? host.footer) as never,
 			terminal: this.retainedRuntime.getTerminalSessionOwner(),
 			dimensions,
+			overlayHost: host.ui as never,
 		});
 
 		// Replace Pi's TUI rendering with the owned-shell render. Pi's stdin

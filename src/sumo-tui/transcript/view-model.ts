@@ -40,6 +40,7 @@ export interface DelegationViewModel {
 
 export type ChatBlock =
 	| { readonly type: "markdown"; readonly text: string }
+	| { readonly type: "thinking"; readonly text: string; readonly hidden?: boolean }
 	| { readonly type: "code"; readonly lang: string; readonly source: string; readonly collapsed?: boolean }
 	| { readonly type: "tool"; readonly tool: ToolCallViewModel }
 	| { readonly type: "skill"; readonly name: string; readonly expanded: boolean }
@@ -159,6 +160,14 @@ function textFromContent(content: unknown): string {
 		.join("");
 }
 
+function thinkingBlockFromRecord(record: Record<string, unknown>): ChatBlock[] {
+	const text = firstString(record.thinking, record.reasoning, record.text, record.content, record.delta);
+	const hidden = record.hidden === true || record.redacted === true || record.encrypted === true;
+	if (hidden && (!text || text.trim().length === 0)) return [{ type: "thinking", text: "Thinking...", hidden: true }];
+	if (!text || text.trim().length === 0) return [];
+	return [{ type: "thinking", text: text.trim(), ...(hidden ? { hidden: true } : {}) }];
+}
+
 function toolBlockFromRecord(record: Record<string, unknown>, fallbackStatus: ToolStatus): ChatBlock {
 	const name = firstString(record.name, record.toolName, record.command) ?? "tool";
 	const output = textFromContent(record.content) || asString(record.output);
@@ -243,6 +252,11 @@ function blocksFromContentPart(part: unknown): ChatBlock[] {
 	switch (record.type) {
 		case "text":
 			return markdownAndCodeBlocksFromText(asString(record.text) ?? "");
+		case "thinking":
+		case "reasoning":
+		case "thinking_delta":
+		case "reasoning_delta":
+			return thinkingBlockFromRecord(record);
 		case "toolCall":
 		case "tool_call":
 		case "tool":
@@ -322,6 +336,8 @@ export function chatMessageViewModelToPlainText(message: ChatMessageViewModel): 
 			switch (block.type) {
 				case "markdown":
 					return block.text;
+				case "thinking":
+					return block.hidden ? "Thinking..." : block.text;
 				case "code":
 					return `\`\`\`${block.lang}\n${block.source}\n\`\`\``;
 				case "tool":

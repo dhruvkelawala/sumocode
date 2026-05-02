@@ -224,6 +224,14 @@ function renderSkillRow(block: Extract<ChatBlock, { type: "skill" }>): string {
 	]));
 }
 
+function renderThinkingRows(block: Extract<ChatBlock, { type: "thinking" }>, width: number): string[] {
+	const prefix = block.hidden ? "◌ " : "✦ ";
+	return wrapPlainText(block.text, Math.max(1, width - visibleWidth(prefix))).map((row) => lineToAnsi(textLine([
+		span(prefix, { fg: CATHEDRAL_TOKENS.colors.states.thinking, dim: true }),
+		span(row, { fg: CATHEDRAL_TOKENS.colors.states.thinking, italic: true, dim: true }),
+	]), { width }));
+}
+
 function renderQuestionRows(block: Extract<ChatBlock, { type: "question" }>): string[] {
 	return [`[question] ${block.question.prompt}`, ...block.question.choices.map((choice) => `- ${choice}`)];
 }
@@ -243,6 +251,9 @@ function renderBlockRows(blocks: readonly ChatBlock[], width: number): string[] 
 		switch (block.type) {
 			case "markdown":
 				rows.push(...wrapPlainText(block.text, width));
+				break;
+			case "thinking":
+				rows.push(...renderThinkingRows(block, width));
 				break;
 			case "code":
 				rows.push(...renderCodeRows(block, width));

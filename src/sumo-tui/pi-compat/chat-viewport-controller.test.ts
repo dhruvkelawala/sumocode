@@ -72,7 +72,7 @@ async function makeController(options: { terminalRows?: number; terminalColumns?
 describe("ChatViewportController", () => {
 	it("extracts streamed assistant text from Pi message shapes", () => {
 		expect(textFromAgentMessage({ role: "user", content: "hello" })).toBe("hello");
-		expect(textFromAgentMessage({ role: "assistant", content: [{ type: "thinking", thinking: "hidden" }, { type: "text", text: "visible" }] })).toBe("visible");
+		expect(textFromAgentMessage({ role: "assistant", content: [{ type: "thinking", thinking: "hidden" }, { type: "text", text: "visible" }] })).toBe("hidden\nvisible");
 		expect(textFromAgentMessage({ role: "toolResult", content: [{ type: "text", text: "tool output" }] }).replace(ANSI_PATTERN, "")).toBe("✓ [tool]  tool output  · ⌘O expand");
 	});
 
@@ -174,6 +174,21 @@ describe("ChatViewportController", () => {
 
 		expect(runtime.noteUserMessage).toHaveBeenCalledTimes(1);
 		expect(chat.getRenderedMessages().map((message) => message.text)).toEqual(["hello", "hello back"]);
+		root.dispose();
+	});
+
+	it("streams thinking deltas into the active SUMO message", async () => {
+		const { root, chat, controller } = await makeController();
+
+		controller.handleAgentEvent({ type: "message_start", message: { role: "assistant", content: [] } });
+		controller.handleAgentEvent({
+			type: "message_update",
+			assistantMessageEvent: { type: "thinking_delta", delta: "checking files" },
+			message: { role: "assistant", content: [{ type: "thinking", thinking: "checking files" }] },
+		});
+
+		const snapshot = chat.getRenderedMessages()[0]?.toSnapshot();
+		expect(snapshot?.blocks).toEqual([{ type: "thinking", text: "checking files" }]);
 		root.dispose();
 	});
 

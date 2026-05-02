@@ -174,7 +174,7 @@ describe("ChatPager", () => {
 			blocks: [{ type: "tool", tool: { name: "read", status: "success", input: { path: "src/auth/session.ts" } } }],
 		});
 		let frame = buffer();
-		expect(frame.toPlainRow(1)).toContain("╭─ [read]  src/auth/session.ts");
+		expect(frame.toPlainRow(1)).toContain("╭─ [read]");
 		expect(frame.toPlainRow(2)).toContain("preview collapsed");
 
 		chat.setToolExpansion(false);

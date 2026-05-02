@@ -121,9 +121,10 @@ function headerNote(tool: ToolCallViewModel): string | undefined {
 	return firstString(details?.summary, details?.note);
 }
 
+const TOOL_LEDGER_STYLE = { bg: CATHEDRAL_TOKENS.colors.surfaceRecess } as const;
+
 function renderHeader(tool: ToolCallViewModel, width: number): string {
 	const note = headerNote(tool);
-	const target = toolTarget(tool);
 	const right: Span[] = [
 		span(" "),
 		span(toolStatusGlyph(tool.status), { fg: toolStatusColor(tool.status) }),
@@ -133,13 +134,11 @@ function renderHeader(tool: ToolCallViewModel, width: number): string {
 	const left: Span[] = [
 		span("╭─ ", { fg: CATHEDRAL_TOKENS.colors.divider }),
 		span(`[${tool.name}]`, { fg: CATHEDRAL_TOKENS.colors.accent }),
-		span("  "),
-		span(target, { fg: CATHEDRAL_TOKENS.colors.foreground }),
 		span(" "),
 	];
 	const used = [...left, ...right].reduce((sum, part) => sum + visibleWidth(part.text), 0);
 	const rule = Math.max(1, width - used);
-	return lineToAnsi(textLine([...left, span("─".repeat(rule), { fg: CATHEDRAL_TOKENS.colors.divider }), ...right]), { width });
+	return lineToAnsi(textLine([...left, span("─".repeat(rule), { fg: CATHEDRAL_TOKENS.colors.divider }), ...right]), { width, style: TOOL_LEDGER_STYLE });
 }
 
 function renderBodyLine(parts: readonly (Span | string)[], width: number): string {
@@ -147,14 +146,14 @@ function renderBodyLine(parts: readonly (Span | string)[], width: number): strin
 		span("│", { fg: CATHEDRAL_TOKENS.colors.divider }),
 		span(" "),
 		...parts.map((part) => typeof part === "string" ? span(part, { fg: CATHEDRAL_TOKENS.colors.foreground }) : part),
-	]), { width });
+	]), { width, style: TOOL_LEDGER_STYLE });
 }
 
 function renderBottom(width: number): string {
 	return lineToAnsi(textLine([
 		span("╰", { fg: CATHEDRAL_TOKENS.colors.divider }),
 		span("─".repeat(Math.max(0, width - 1)), { fg: CATHEDRAL_TOKENS.colors.divider }),
-	]), { width });
+	]), { width, style: TOOL_LEDGER_STYLE });
 }
 
 function outputLines(tool: ToolCallViewModel): string[] {

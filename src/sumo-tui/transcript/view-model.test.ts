@@ -34,6 +34,25 @@ describe("structured transcript view model", () => {
 		]);
 	});
 
+	it("maps assistant thinking blocks in message order", () => {
+		const message = chatMessageViewModelFromPiMessage({
+			id: "a-thinking",
+			role: "assistant",
+			content: [
+				{ type: "thinking", thinking: "checking context" },
+				{ type: "text", text: "Visible answer." },
+				{ type: "thinking", hidden: true },
+			],
+		});
+
+		expect(message?.blocks).toEqual([
+			{ type: "thinking", text: "checking context" },
+			{ type: "markdown", text: "Visible answer." },
+			{ type: "thinking", text: "Thinking...", hidden: true },
+		]);
+		expect(message ? chatMessageViewModelToPlainText(message) : "").toBe("checking context\nVisible answer.\nThinking...");
+	});
+
 	it("maps assistant tool call blocks", () => {
 		const message = chatMessageViewModelFromPiMessage({
 			id: "a1",

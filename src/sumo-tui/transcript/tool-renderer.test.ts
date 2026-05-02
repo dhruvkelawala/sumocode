@@ -21,11 +21,12 @@ describe("tool renderer", () => {
 		}, 80);
 
 		expect(rows.map(stripAnsi)).toEqual([
-			"╭─ [edit]  src/auth/session.ts ────────────────────────────────────────────── ✓ ",
+			"╭─ [edit] ─────────────────────────────────────────────────────────────────── ✓ ",
 			"│ +14 -6 session flow updated                                                   ",
 			"╰───────────────────────────────────────────────────────────────────────────────",
 		]);
 		expect(rows.every((row) => stripAnsi(row).length === 80)).toBe(true);
+		expect(rows.join("\n")).toContain("48;2;18;13;10m");
 	});
 
 	it("covers compact read/edit/write/bash status variants", () => {
@@ -95,16 +96,17 @@ describe("tool renderer", () => {
 		expect(plain).toContain("- old session");
 		expect(plain).toContain("+ new session");
 		expect(plain).toContain("… 8 lines collapsed");
-		expect(rows.join("\n")).toContain("\u001b[38;2;193;68;62m- old session");
-		expect(rows.join("\n")).toContain("\u001b[38;2;127;176;105m+ new session");
+		expect(rows.join("\n")).toContain("38;2;193;68;62m");
+		expect(rows.join("\n")).toContain("38;2;127;176;105m");
 	});
 
 	it("uses tool color for running bash rows", () => {
 		const rows = renderToolLedgerRows({ name: "bash", status: "running", input: { command: "pnpm test" } }, 60);
 		const plain = rows.map(stripAnsi).join("\n");
 
-		expect(plain).toContain("[bash]  pnpm test");
+		expect(plain).toContain("[bash]");
+		expect(plain).toContain("> pnpm test");
 		expect(plain).toContain("▶");
-		expect(rows.join("\n")).toContain("\u001b[38;2;91;155;213m▶");
+		expect(rows.join("\n")).toContain("38;2;91;155;213m");
 	});
 });

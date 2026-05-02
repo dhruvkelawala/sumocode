@@ -52,10 +52,12 @@ export interface TerminalPatch {
 	/**
 	 * Column offset (0-indexed) where this patch starts. Defaults to 0 for
 	 * full-row repaints. When > 0 the writer emits ONLY the slice and skips
-	 * the trailing `\x1b[K` so unchanged cells to the right are preserved.
+	 * line clearing so unchanged cells to the right are preserved.
 	 */
 	readonly startCol?: number;
 	readonly ansi: string;
+	/** Scroll-region patches carry cursor/control sequences, not row content. */
+	readonly type?: "row" | "scroll";
 }
 
 export interface TerminalSessionOwnerOptions {
@@ -108,6 +110,7 @@ export class TerminalSessionOwner {
 	 * suppress no-op ticks entirely.
 	 */
 	private lastEmittedCursor: TerminalCursor | null = null;
+	private hardwareCursorVisible = false;
 
 	public constructor(options: TerminalSessionOwnerOptions = {}) {
 		this.output = options.output ?? process.stdout;
@@ -206,17 +209,22 @@ export class TerminalSessionOwner {
 			cursor.row !== this.lastEmittedCursor.row ||
 			cursor.col !== this.lastEmittedCursor.col
 		);
-		if (patches.length === 0 && !cursorMoved) return;
+		const shouldHideCursor = cursor === null && this.hardwareCursorVisible;
+		if (patches.length === 0 && !cursorMoved && !shouldHideCursor) return;
 
 		let output = "\x1b[?2026h";
 		for (const patch of patches) {
 			const startCol = patch.startCol ?? 0;
-			output += `\x1b[${patch.row + 1};${startCol + 1}H${patch.ansi}`;
-			// Only full-row patches benefit from `\x1b[K` (clear-to-end-of-line):
-			// they overwrite every cell on the row anyway. Partial-row patches
-			// (`startCol > 0`) MUST NOT emit `\x1b[K` or they would wipe correct
-			// cells to the right of the change region.
-			if (startCol === 0) output += "\x1b[K";
+			output += `\x1b[${patch.row + 1};${startCol + 1}H`;
+			// Full-row content patches still benefit from clearing stale cells, but
+			// the clear must happen BEFORE the row is drawn. Clearing after drawing a
+			// retained row that reaches the final terminal column can erase that final
+			// styled cell in pending-wrap state, leaving a one-column black strip at the
+			// right edge of owned-shell surfaces (sidebar/input). Partial-row patches
+			// (`startCol > 0`) MUST NOT clear or they would wipe correct cells to the
+			// right. Scroll patches carry terminal control sequences, not row content.
+			if (startCol === 0 && patch.type !== "scroll") output += "\x1b[K";
+			output += patch.ansi;
 		}
 		// Cursor-write elision is safe ONLY for true no-op frames. When
 		// `patches.length > 0`, every `\x1b[r;c+1H<ansi>` in the loop above
@@ -226,14 +234,20 @@ export class TerminalSessionOwner {
 		if (cursor && (patches.length > 0 || cursorMoved)) {
 			output += `\x1b[${cursor.row + 1};${cursor.col + 1}H\x1b[?25h`;
 			this.lastEmittedCursor = { row: cursor.row, col: cursor.col };
-		} else if (patches.length > 0) {
-			// Patches moved the terminal cursor without us emitting a known new
-			// position (compositor returned `hardwareCursor: null`). The cached
-			// `lastEmittedCursor` is now stale — the visible caret is at the end
-			// of the last patch, not at the cached coordinates. Invalidate so the
-			// NEXT frame with a non-null cursor re-emits its position even if it
-			// matches the stale cache.
-			this.lastEmittedCursor = null;
+			this.hardwareCursorVisible = true;
+		} else if (cursor === null) {
+			// No CURSOR_MARKER was present in the composited frame. Pi's own TUI hides
+			// the hardware cursor in this case (notably while autocomplete is open,
+			// where the editor paints a fake inverted cursor). Mirror that behavior so
+			// the terminal cursor doesn't remain visible at the end of the last patch.
+			if (patches.length > 0 || shouldHideCursor) output += "\x1b[?25l";
+			this.hardwareCursorVisible = false;
+			if (patches.length > 0) {
+				// Patches moved the terminal cursor without us emitting a known new
+				// position. Invalidate so the NEXT frame with a non-null cursor re-emits
+				// its position even if it matches the stale cache.
+				this.lastEmittedCursor = null;
+			}
 		}
 		output += "\x1b[?2026l";
 		this.write(output);
@@ -255,6 +269,7 @@ export class TerminalSessionOwner {
 		this.cursorColorOverridden = false;
 		this.lastCursorColor = undefined;
 		this.lastEmittedCursor = null;
+		this.hardwareCursorVisible = false;
 		if (!this.isTTY()) return;
 		let output = "";
 		if (shouldResetCursorColor) output += CURSOR_COLOR_RESET;

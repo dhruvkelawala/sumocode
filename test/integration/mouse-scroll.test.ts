@@ -22,6 +22,8 @@ describe("sumo-tui mouse SGR integration", () => {
 		app = spawnPiPty({ env: { PI_CODING_AGENT_DIR: agentDir } });
 
 		await app.waitForOutput(MOUSE_SGR_ENABLE_SEQUENCE, 10_000);
+		await app.waitForOutput("DIVINE INVOCATION", 10_000);
+		await app.waitForOutput("\x1b[?2004h", 10_000);
 		app.sendInput("phase1-scroll-proof");
 		await app.waitForOutput("phase1-scroll-proof", 5_000);
 

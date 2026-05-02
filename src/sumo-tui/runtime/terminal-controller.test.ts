@@ -134,7 +134,7 @@ describe("TerminalSessionOwner", () => {
 
 		// Partial patches MUST skip clear-to-end-of-line so cells right of the
 		// change region survive untouched. Cursor position 5 (= startCol + 1).
-		expect(output.writes).toEqual(["\x1b[?2026h\x1b[2;5HDEF\x1b[?2026l"]);
+		expect(output.writes).toEqual(["\x1b[?2026h\x1b[2;5HDEF\x1b[?25l\x1b[?2026l"]);
 		expect(output.writes[0]).not.toContain("\x1b[K");
 	});
 
@@ -144,8 +144,20 @@ describe("TerminalSessionOwner", () => {
 
 		terminal.writeFramePatches([{ row: 0, type: "scroll", ansi: "\x1b[1;3r\x1b[1S\x1b[r" }], null);
 
-		expect(output.writes).toEqual(["\x1b[?2026h\x1b[1;1H\x1b[1;3r\x1b[1S\x1b[r\x1b[?2026l"]);
+		expect(output.writes).toEqual(["\x1b[?2026h\x1b[1;1H\x1b[1;3r\x1b[1S\x1b[r\x1b[?25l\x1b[?2026l"]);
 		expect(output.writes[0]).not.toContain("\x1b[K");
+	});
+
+	it("hides hardware cursor when a marker disappears without patches", () => {
+		const output = outputStub();
+		const terminal = new TerminalSessionOwner({ output });
+
+		terminal.writeFramePatches([], { row: 2, col: 4 });
+		output.writes.length = 0;
+
+		terminal.writeFramePatches([], null);
+
+		expect(output.writes).toEqual(["\x1b[?2026h\x1b[?25l\x1b[?2026l"]);
 	});
 
 	it("lazy frame-start: emits zero bytes for a no-op tick (no patches, no cursor)", () => {

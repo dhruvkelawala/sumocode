@@ -110,6 +110,7 @@ export class TerminalSessionOwner {
 	 * suppress no-op ticks entirely.
 	 */
 	private lastEmittedCursor: TerminalCursor | null = null;
+	private hardwareCursorVisible = false;
 
 	public constructor(options: TerminalSessionOwnerOptions = {}) {
 		this.output = options.output ?? process.stdout;
@@ -208,7 +209,8 @@ export class TerminalSessionOwner {
 			cursor.row !== this.lastEmittedCursor.row ||
 			cursor.col !== this.lastEmittedCursor.col
 		);
-		if (patches.length === 0 && !cursorMoved) return;
+		const shouldHideCursor = cursor === null && this.hardwareCursorVisible;
+		if (patches.length === 0 && !cursorMoved && !shouldHideCursor) return;
 
 		let output = "\x1b[?2026h";
 		for (const patch of patches) {
@@ -232,14 +234,20 @@ export class TerminalSessionOwner {
 		if (cursor && (patches.length > 0 || cursorMoved)) {
 			output += `\x1b[${cursor.row + 1};${cursor.col + 1}H\x1b[?25h`;
 			this.lastEmittedCursor = { row: cursor.row, col: cursor.col };
-		} else if (patches.length > 0) {
-			// Patches moved the terminal cursor without us emitting a known new
-			// position (compositor returned `hardwareCursor: null`). The cached
-			// `lastEmittedCursor` is now stale — the visible caret is at the end
-			// of the last patch, not at the cached coordinates. Invalidate so the
-			// NEXT frame with a non-null cursor re-emits its position even if it
-			// matches the stale cache.
-			this.lastEmittedCursor = null;
+			this.hardwareCursorVisible = true;
+		} else if (cursor === null) {
+			// No CURSOR_MARKER was present in the composited frame. Pi's own TUI hides
+			// the hardware cursor in this case (notably while autocomplete is open,
+			// where the editor paints a fake inverted cursor). Mirror that behavior so
+			// the terminal cursor doesn't remain visible at the end of the last patch.
+			if (patches.length > 0 || shouldHideCursor) output += "\x1b[?25l";
+			this.hardwareCursorVisible = false;
+			if (patches.length > 0) {
+				// Patches moved the terminal cursor without us emitting a known new
+				// position. Invalidate so the NEXT frame with a non-null cursor re-emits
+				// its position even if it matches the stale cache.
+				this.lastEmittedCursor = null;
+			}
 		}
 		output += "\x1b[?2026l";
 		this.write(output);
@@ -261,6 +269,7 @@ export class TerminalSessionOwner {
 		this.cursorColorOverridden = false;
 		this.lastCursorColor = undefined;
 		this.lastEmittedCursor = null;
+		this.hardwareCursorVisible = false;
 		if (!this.isTTY()) return;
 		let output = "";
 		if (shouldResetCursorColor) output += CURSOR_COLOR_RESET;

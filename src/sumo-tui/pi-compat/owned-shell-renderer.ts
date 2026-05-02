@@ -145,6 +145,7 @@ export class OwnedShellRenderer {
 	private readonly splash: SplashTree | undefined;
 	private mountedChatChild: "chat" | "splash" | undefined;
 	private mountedSidebar = false;
+	private inputMountedInSplash = false;
 	private disposed = false;
 
 	public constructor(options: OwnedShellRendererOptions) {
@@ -246,7 +247,7 @@ export class OwnedShellRenderer {
 	 * root tree.
 	 */
 	private syncEditorRowChildren(cols: number): void {
-		const centered = !!this.splash && !this.chat.hasMessages();
+		const centered = this.inputMountedInSplash;
 		const frameWidth = centered ? Math.min(cols, SPLASH_EDITOR_FRAME_WIDTH) : cols;
 		if (this.editorLeftSpacer.parent === this.editorRow) this.editorRow.removeChild(this.editorLeftSpacer);
 		if (this.editorLeaf.parent === this.editorRow) this.editorRow.removeChild(this.editorLeaf);
@@ -257,6 +258,43 @@ export class OwnedShellRenderer {
 		if (centered && frameWidth < cols) this.editorRow.addChild(this.editorLeftSpacer);
 		this.editorRow.addChild(this.editorLeaf);
 		if (centered && frameWidth < cols) this.editorRow.addChild(this.editorRightSpacer);
+	}
+
+	private syncInputPlacement(): void {
+		const centerWithSplash = !!this.splash && !this.chat.hasMessages();
+		if (centerWithSplash === this.inputMountedInSplash) return;
+
+		for (const node of [
+			this.blankSpacer,
+			this.editorRow,
+			this.hintLeaf,
+			this.footerGapSpacer,
+			this.footerLeaf,
+			this.bottomSafeSpacer,
+		]) {
+			if (node.parent) node.parent.removeChild(node);
+		}
+
+		if (centerWithSplash && this.splash) {
+			if (this.splash.bottomSpacer.parent === this.splash.root) this.splash.root.removeChild(this.splash.bottomSpacer);
+			this.splash.root.addChild(this.blankSpacer);
+			this.splash.root.addChild(this.editorRow);
+			this.splash.root.addChild(this.hintLeaf);
+			this.splash.root.addChild(this.splash.bottomSpacer);
+			this.root.addChild(this.footerGapSpacer);
+			this.root.addChild(this.footerLeaf);
+			this.root.addChild(this.bottomSafeSpacer);
+		} else {
+			if (this.splash && this.splash.bottomSpacer.parent !== this.splash.root) this.splash.root.addChild(this.splash.bottomSpacer);
+			this.root.addChild(this.blankSpacer);
+			this.root.addChild(this.editorRow);
+			this.root.addChild(this.hintLeaf);
+			this.root.addChild(this.footerGapSpacer);
+			this.root.addChild(this.footerLeaf);
+			this.root.addChild(this.bottomSafeSpacer);
+		}
+
+		this.inputMountedInSplash = centerWithSplash;
 	}
 
 	private syncChatRowChildren(cols: number, rows: number): void {
@@ -325,6 +363,7 @@ export class OwnedShellRenderer {
 		const rows = Math.max(1, Math.floor(this.dimensions.rows ?? 24));
 
 		this.syncChatRowChildren(cols, rows);
+		this.syncInputPlacement();
 		this.syncEditorRowChildren(cols);
 		// Re-measure dynamic-height leaves so Yoga grows the editor when
 		// autocomplete is shown, and shrinks it back when dismissed. Without this

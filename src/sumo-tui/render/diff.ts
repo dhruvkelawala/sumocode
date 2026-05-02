@@ -7,12 +7,12 @@ export interface FrameDiffPatch {
 	/**
 	 * Column offset (0-indexed) where this patch starts on the row.
 	 *
-	 * - For full-row repaints (`type: "row"` with `startCol === 0`) and scroll
-	 *   patches the writer continues to emit `\x1b[K` after the ANSI to clear
-	 *   any trailing cells.
-	 * - For partial-row patches (`startCol > 0`) the writer emits ONLY the
-	 *   slice and skips the line-clear so unchanged cells to the left and
-	 *   right of the change region survive untouched.
+	 * - For full-row repaints (`type: "row"` with `startCol === 0`) the terminal
+	 *   writer clears the row before writing ANSI content, so stale cells disappear
+	 *   without erasing the final terminal column after pending-wrap.
+	 * - For partial-row patches (`startCol > 0`) and scroll patches, the writer
+	 *   emits ONLY the ANSI and skips line-clear so unchanged cells/control
+	 *   sequences survive untouched.
 	 *
 	 * Borrowed from OpenTUI's per-row column-range diff (`zig/renderer.zig`
 	 * 1331-1349). Saves 50–90% of bytes per streaming tick on typical chat

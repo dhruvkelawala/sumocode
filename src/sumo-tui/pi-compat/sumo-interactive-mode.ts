@@ -180,6 +180,7 @@ export class SumoInteractiveRuntime {
 	private pendingResumeProfile: { profile: ResumeProfiler; metadata: ResumeProfileMetadata } | undefined;
 	private ownedShellMouseHandler: ((event: MouseEvent) => boolean) | undefined;
 	private ownedShellActiveCheck: (() => boolean) | undefined;
+	private selectionFrameSource: (() => CellBuffer | undefined) | undefined;
 	private sidebarPublication: SidebarPublication | undefined;
 
 	public constructor(output: TerminalLike = process.stdout, terminalSession?: TerminalSessionOwner) {
@@ -271,13 +272,21 @@ export class SumoInteractiveRuntime {
 	}
 
 	public handleSelectionMouse(event: MouseEvent, width: number, height: number): boolean {
-		const frame = this.renderChatFrame(width, height).frame;
+		const frame = this.selectionFrameSource?.() ?? this.renderChatFrame(width, height).frame;
 		return this.selection.handleMouseEvent(event, frame);
 	}
 
 	public handleSelectionKey(event: KeyEvent, width: number, height: number): boolean {
-		const frame = this.renderChatFrame(width, height).frame;
+		const frame = this.selectionFrameSource?.() ?? this.renderChatFrame(width, height).frame;
 		return this.selection.handleKey(event, frame);
+	}
+
+	public getSelectionController(): SelectionController {
+		return this.selection;
+	}
+
+	public setSelectionFrameSource(source: (() => CellBuffer | undefined) | undefined): void {
+		this.selectionFrameSource = source;
 	}
 
 	public startResumeProfile(): ResumeProfiler {
@@ -386,6 +395,7 @@ export class SumoInteractiveRuntime {
 		this.pendingResumeProfile = undefined;
 		this.ownedShellMouseHandler = undefined;
 		this.ownedShellActiveCheck = undefined;
+		this.selectionFrameSource = undefined;
 		this.sidebarPublication = undefined;
 		if (getActiveSumoRuntime() === this) setActiveSumoRuntime(undefined);
 		this.scheduler = undefined;
@@ -639,10 +649,12 @@ export class SumoInteractiveMode {
 		}
 
 		const dimensions = host.ui.terminal ?? { columns: process.stdout.columns ?? 80, rows: process.stdout.rows ?? 24 };
+		const selectionPass = this.retainedRuntime.getSelectionController();
 		this.ownedShell = new OwnedShellRenderer({
 			yoga,
 			chat: snapshot.chat,
 			splash: snapshot.splash,
+			selection: selectionPass,
 			// Resolve Pi container/footer references LAZILY at render time.
 			// Pi recreates `customFooter` (and other slots) on session reload
 			// (`/resume`, `ctx.newSession`, `ctx.fork`). Capturing references at
@@ -658,9 +670,25 @@ export class SumoInteractiveMode {
 			sidebarPublication: () => this.retainedRuntime.getSidebarPublication(),
 		});
 
+		// Selection's hit-test buffer is the OwnedShellRenderer's last full-frame
+		// composite. Mouse coords are terminal-absolute, which lines up with the
+		// chat region painted into the same buffer.
+		this.retainedRuntime.setSelectionFrameSource(() => this.ownedShell?.getLastFrame());
+
+		// Mouse events arrive in stdin bursts (mac trackpads + smooth-scroll mice
+		// fire 30+ events per gesture). Apply state synchronously but schedule
+		// paint through Pi's frame loop so a burst collapses into a single render.
 		this.retainedRuntime.setOwnedShellMouseHandler((event) => {
-			const handled = this.ownedShell?.handleMouseEvent(event) === true;
-			if (handled) this.ownedShell?.render();
+			const widgetHandled = this.ownedShell?.handleMouseEvent(event) === true;
+			let selectionHandled = false;
+			if (event.type !== "scroll") {
+				const chatRect = this.ownedShell?.getChatRect();
+				if (chatRect) {
+					selectionHandled = this.retainedRuntime.handleSelectionMouse(event, chatRect.width, chatRect.height);
+				}
+			}
+			const handled = widgetHandled || selectionHandled;
+			if (handled) (host.ui as { requestRender?: (force?: boolean) => void } | undefined)?.requestRender?.(true);
 			return handled;
 		});
 		this.retainedRuntime.setOwnedShellActiveCheck(() => this.ownedShell !== undefined);
@@ -689,6 +717,7 @@ export class SumoInteractiveMode {
 		this.ownedShellOriginalDoRender = undefined;
 		this.retainedRuntime.setOwnedShellMouseHandler(undefined);
 		this.retainedRuntime.setOwnedShellActiveCheck(undefined);
+		this.retainedRuntime.setSelectionFrameSource(undefined);
 		this.ownedShell.dispose();
 		this.ownedShell = undefined;
 		logDiagnostic("owned_shell_uninstalled", {});

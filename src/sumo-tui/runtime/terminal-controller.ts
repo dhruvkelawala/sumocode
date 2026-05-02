@@ -52,10 +52,12 @@ export interface TerminalPatch {
 	/**
 	 * Column offset (0-indexed) where this patch starts. Defaults to 0 for
 	 * full-row repaints. When > 0 the writer emits ONLY the slice and skips
-	 * the trailing `\x1b[K` so unchanged cells to the right are preserved.
+	 * line clearing so unchanged cells to the right are preserved.
 	 */
 	readonly startCol?: number;
 	readonly ansi: string;
+	/** Scroll-region patches carry cursor/control sequences, not row content. */
+	readonly type?: "row" | "scroll";
 }
 
 export interface TerminalSessionOwnerOptions {
@@ -211,12 +213,16 @@ export class TerminalSessionOwner {
 		let output = "\x1b[?2026h";
 		for (const patch of patches) {
 			const startCol = patch.startCol ?? 0;
-			output += `\x1b[${patch.row + 1};${startCol + 1}H${patch.ansi}`;
-			// Only full-row patches benefit from `\x1b[K` (clear-to-end-of-line):
-			// they overwrite every cell on the row anyway. Partial-row patches
-			// (`startCol > 0`) MUST NOT emit `\x1b[K` or they would wipe correct
-			// cells to the right of the change region.
-			if (startCol === 0) output += "\x1b[K";
+			output += `\x1b[${patch.row + 1};${startCol + 1}H`;
+			// Full-row content patches still benefit from clearing stale cells, but
+			// the clear must happen BEFORE the row is drawn. Clearing after drawing a
+			// retained row that reaches the final terminal column can erase that final
+			// styled cell in pending-wrap state, leaving a one-column black strip at the
+			// right edge of owned-shell surfaces (sidebar/input). Partial-row patches
+			// (`startCol > 0`) MUST NOT clear or they would wipe correct cells to the
+			// right. Scroll patches carry terminal control sequences, not row content.
+			if (startCol === 0 && patch.type !== "scroll") output += "\x1b[K";
+			output += patch.ansi;
 		}
 		// Cursor-write elision is safe ONLY for true no-op frames. When
 		// `patches.length > 0`, every `\x1b[r;c+1H<ansi>` in the loop above

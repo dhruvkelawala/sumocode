@@ -113,7 +113,17 @@ describe("TerminalSessionOwner", () => {
 
 		terminal.writeFramePatches([{ row: 1, ansi: "hello" }], { row: 2, col: 4 });
 
-		expect(output.writes).toEqual(["\x1b[?2026h\x1b[2;1Hhello\x1b[K\x1b[3;5H\x1b[?25h\x1b[?2026l"]);
+		expect(output.writes).toEqual(["\x1b[?2026h\x1b[2;1H\x1b[Khello\x1b[3;5H\x1b[?25h\x1b[?2026l"]);
+	});
+
+	it("clears full-row patches before drawing so the final column is not erased", () => {
+		const output = outputStub();
+		const terminal = new TerminalSessionOwner({ output });
+
+		terminal.writeFramePatches([{ row: 0, ansi: "abc" }], null);
+
+		expect(output.writes[0]).toContain("\x1b[1;1H\x1b[Kabc");
+		expect(output.writes[0]).not.toContain("abc\x1b[K");
 	});
 
 	it("emits a partial-row patch without \\x1b[K when startCol > 0", () => {
@@ -125,6 +135,16 @@ describe("TerminalSessionOwner", () => {
 		// Partial patches MUST skip clear-to-end-of-line so cells right of the
 		// change region survive untouched. Cursor position 5 (= startCol + 1).
 		expect(output.writes).toEqual(["\x1b[?2026h\x1b[2;5HDEF\x1b[?2026l"]);
+		expect(output.writes[0]).not.toContain("\x1b[K");
+	});
+
+	it("emits scroll patches without line clearing", () => {
+		const output = outputStub();
+		const terminal = new TerminalSessionOwner({ output });
+
+		terminal.writeFramePatches([{ row: 0, type: "scroll", ansi: "\x1b[1;3r\x1b[1S\x1b[r" }], null);
+
+		expect(output.writes).toEqual(["\x1b[?2026h\x1b[1;1H\x1b[1;3r\x1b[1S\x1b[r\x1b[?2026l"]);
 		expect(output.writes[0]).not.toContain("\x1b[K");
 	});
 
@@ -166,7 +186,7 @@ describe("TerminalSessionOwner", () => {
 		// The cursor reposition (`\x1b[3;5H\x1b[?25h`) MUST appear even though
 		// the logical cursor didn't move, because the patch above moved the
 		// terminal cursor to row 2.
-		expect(output.writes).toEqual(["\x1b[?2026h\x1b[2;1Hworld\x1b[K\x1b[3;5H\x1b[?25h\x1b[?2026l"]);
+		expect(output.writes).toEqual(["\x1b[?2026h\x1b[2;1H\x1b[Kworld\x1b[3;5H\x1b[?25h\x1b[?2026l"]);
 	});
 
 	it("emits ONLY cursor reposition when patches=0 but cursor moved (no wrapper savings, but no patches either)", () => {

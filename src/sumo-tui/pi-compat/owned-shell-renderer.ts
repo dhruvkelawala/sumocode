@@ -33,8 +33,8 @@ import {
 	FLEX_DIRECTION_ROW,
 	type Yoga,
 } from "../layout/yoga.js";
-import { CellBuffer } from "../render/buffer.js";
-import { composite, dispatchMouseEvent, type HardwareCursor } from "../render/compositor.js";
+import { CellBuffer, type Rect } from "../render/buffer.js";
+import { composite, dispatchMouseEvent, type CompositeSelectionPass, type HardwareCursor } from "../render/compositor.js";
 import { diffFrames } from "../render/diff.js";
 import { logDiagnostic } from "../runtime/diagnostics.js";
 import type { TerminalSessionOwner } from "../runtime/terminal-controller.js";
@@ -85,6 +85,14 @@ export interface OwnedShellRendererOptions {
 	/** Pi TUI host that owns the overlay stack (modal/sidebar/notifications). */
 	readonly overlayHost?: PiOverlayHost;
 	/**
+	 * Selection compositor. Owned-shell paints the selection highlight on top
+	 * of the composited cell buffer and exposes the latest frame so the
+	 * SelectionController can hit-test against the same cells the user sees.
+	 * Without this, mouse drag-to-select never reaches selection in owned-shell
+	 * mode because the chat frame is no longer rendered through Pi's pipeline.
+	 */
+	readonly selection?: CompositeSelectionPass;
+	/**
 	 * Lazy resolver for the runtime-published sidebar component. Owned-shell
 	 * mounts the sidebar as a Yoga sibling of the chat region instead of
 	 * compositing it from Pi's overlay stack. Returning `undefined` hides the
@@ -112,6 +120,8 @@ export class OwnedShellRenderer {
 	private readonly dimensions: OwnedShellRendererTerminal;
 	private readonly overlayHost: PiOverlayHost | undefined;
 	private readonly resolveSidebarPublication: () => SidebarPublication | undefined;
+	private readonly selection: CompositeSelectionPass | undefined;
+	private lastFrame: CellBuffer | undefined;
 	private previousFrame: CellBuffer | undefined;
 	private readonly headerLeaf: PiComponentLeaf;
 	private readonly editorLeaf: PiEditorLeaf;
@@ -137,6 +147,7 @@ export class OwnedShellRenderer {
 		this.splash = options.splash;
 		this.overlayHost = options.overlayHost;
 		this.resolveSidebarPublication = options.sidebarPublication ?? (() => undefined);
+		this.selection = options.selection;
 
 		this.root = new SumoNode(this.yoga.Node.create());
 		this.root.flexDirection = FLEX_DIRECTION_COLUMN;
@@ -296,7 +307,7 @@ export class OwnedShellRenderer {
 
 		const compositeStart = performance.now();
 		const frame = new CellBuffer(rows, cols);
-		const result = composite(this.root, frame);
+		const result = composite(this.root, frame, this.selection ? { selection: this.selection } : {});
 		const overlayCount = this.compositeOverlays(frame, cols, rows);
 		const compositeMs = performance.now() - compositeStart;
 
@@ -309,6 +320,7 @@ export class OwnedShellRenderer {
 		const patches = diffFrames(this.previousFrame, frame, { detectScroll: false });
 		this.terminal.writeFramePatches(patches, cursor);
 		this.previousFrame = frame.clone();
+		this.lastFrame = frame;
 
 		logDiagnostic("owned_shell_render", {
 			cols,
@@ -416,6 +428,20 @@ export class OwnedShellRenderer {
 			});
 		}
 		return handled;
+	}
+
+	public getLastFrame(): CellBuffer | undefined {
+		return this.lastFrame;
+	}
+
+	public getChatRect(): Rect | undefined {
+		if (this.mountedChatChild !== "chat") return undefined;
+		return {
+			top: this.chat.getComputedTop() + this.chatRow.getComputedTop(),
+			left: this.chat.getComputedLeft() + this.chatRow.getComputedLeft(),
+			width: this.chat.getComputedWidth(),
+			height: this.chat.getComputedHeight(),
+		};
 	}
 
 	private nodeRect(node: SumoNode): { top: number; left: number; width: number; height: number } {

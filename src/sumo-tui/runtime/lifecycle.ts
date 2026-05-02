@@ -2,6 +2,7 @@ import { appendFileSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import { consumeActiveEditorDraftClear } from "../../cathedral/editor-draft-state.js";
 import { instrumentPiEventEmitter, logDiagnostic } from "./diagnostics.js";
 import { FrameScheduler, type FrameRenderCallback } from "./frame-scheduler.js";
 import { defaultTerminalSessionOwner, TerminalSessionOwner } from "./terminal-controller.js";
@@ -189,7 +190,6 @@ export class LifecycleRuntime {
 		}
 		this.registerSuspendSignal();
 		this.registerContinueSignal();
-		this.registerRawCtrlCExit();
 
 		this.lifecycleProcess.on("uncaughtException", (error) => {
 			logDiagnostic("process_event", { name: "uncaughtException" });
@@ -215,6 +215,10 @@ export class LifecycleRuntime {
 		let reraised = false;
 		const handler = (): void => {
 			logDiagnostic("process_event", { name: signal });
+			if (signal === "SIGINT" && consumeActiveEditorDraftClear()) {
+				logDiagnostic("process_event", { name: "SIGINT_clear_editor_draft" });
+				return;
+			}
 			if (reraised) return;
 			reraised = true;
 			// Edge case 5.1: Ctrl+C and termination restore terminal state before
@@ -261,19 +265,6 @@ export class LifecycleRuntime {
 		};
 		this.signalHandlers.set("SIGCONT", handler);
 		this.lifecycleProcess.on("SIGCONT", handler);
-	}
-
-	private registerRawCtrlCExit(): void {
-		this.input?.on("data", (data) => {
-			const text = typeof data === "string" ? data : data.toString("utf8");
-			if (!text.includes("\x03")) return;
-			this.restoreTerminal();
-			if (this.lifecycleProcess.exit) {
-				this.lifecycleProcess.exit(130);
-				return;
-			}
-			this.lifecycleProcess.kill(this.lifecycleProcess.pid, "SIGINT");
-		});
 	}
 
 	private releaseRawMode(): void {

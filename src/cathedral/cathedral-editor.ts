@@ -41,6 +41,7 @@ import { CustomEditor } from "@mariozechner/pi-coding-agent";
 import { CURSOR_MARKER, truncateToWidth, visibleWidth, type EditorTheme, type TUI } from "@mariozechner/pi-tui";
 import { sessionHasMessages as cachedSessionHasMessages } from "../session-cache.js";
 import { CATHEDRAL_TOKENS } from "../tokens.js";
+import { setActiveEditorDraftController } from "./editor-draft-state.js";
 import {
 	INPUT_FRAME_LABEL_ACTIVE,
 	INPUT_FRAME_LABEL_SPLASH,
@@ -204,12 +205,19 @@ function isPiBorderRow(row: string): boolean {
 
 class CathedralEditor extends CustomEditor {
 	constructor(
-		tui: TUI,
+		private readonly cathedralTui: TUI,
 		theme: EditorTheme,
 		keybindings: KeybindingsManager,
 		private readonly isSplash: () => boolean,
 	) {
-		super(tui, theme, keybindings);
+		super(cathedralTui, theme, keybindings);
+		setActiveEditorDraftController({
+			hasDraft: () => this.getText().length > 0,
+			clearDraft: () => {
+				this.setText("");
+				this.cathedralTui.requestRender();
+			},
+		});
 	}
 
 	override render(width: number): string[] {

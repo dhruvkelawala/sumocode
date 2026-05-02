@@ -4,7 +4,8 @@ import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { setActiveEditorDraftController } from "../../cathedral/editor-draft-state.js";
 import { createLifecycleRuntime, useTerminalDimensions, type LifecycleInput, type LifecycleListener, type LifecycleProcess, type LifecycleProcessEvent, type LifecycleSignal } from "./lifecycle.js";
 import {
 	ALTSCREEN_ENTER_SEQUENCE,
@@ -124,6 +125,7 @@ describe("useTerminalDimensions", () => {
 });
 
 describe("LifecycleRuntime", () => {
+	afterEach(() => { setActiveEditorDraftController(undefined); });
 	it("registers process signal handlers exactly once", () => {
 		const fakeProcess = new FakeProcess();
 		const output = outputStub();
@@ -221,7 +223,24 @@ describe("LifecycleRuntime", () => {
 		expect(fakeProcess.listenerCount("SIGTSTP")).toBe(1);
 	});
 
-	it("raw Ctrl+C input restores terminal and exits with SIGINT convention", () => {
+	it("SIGINT clears a non-empty editor draft instead of exiting", () => {
+		const fakeProcess = new FakeProcess();
+		const output = outputStub();
+		const clearDraft = vi.fn();
+		setActiveEditorDraftController({ hasDraft: () => true, clearDraft });
+		const runtime = createLifecycleRuntime({ process: fakeProcess, terminalSession: new TerminalSessionOwner({ output }) });
+
+		runtime.installProcessHandlers();
+		fakeProcess.emit("SIGINT");
+
+		expect(clearDraft).toHaveBeenCalledTimes(1);
+		expect(output.writes).toEqual([]);
+		expect(fakeProcess.exits).toEqual([]);
+		expect(fakeProcess.kills).toEqual([]);
+		expect(fakeProcess.listenerCount("SIGINT")).toBe(1);
+	});
+
+	it("does not intercept raw Ctrl+C input so Pi can clear the editor draft", () => {
 		const fakeProcess = new FakeProcess();
 		const fakeInput = new FakeInput();
 		const output = outputStub();
@@ -230,10 +249,11 @@ describe("LifecycleRuntime", () => {
 		runtime.installProcessHandlers();
 		fakeInput.emit("\x03");
 
-		expect(fakeInput.listenerCount()).toBe(1);
-		expect(fakeInput.rawModes).toEqual([false]);
-		expect(output.writes).toEqual([TERMINAL_CLEANUP_SEQUENCE]);
-		expect(fakeProcess.exits).toEqual([130]);
+		expect(fakeInput.listenerCount()).toBe(0);
+		expect(fakeInput.rawModes).toEqual([]);
+		expect(output.writes).toEqual([]);
+		expect(fakeProcess.exits).toEqual([]);
+		expect(fakeProcess.kills).toEqual([]);
 	});
 
 	it("uncaughtException restores terminal, logs crash.log, and rethrows (EC-5.3)", async () => {

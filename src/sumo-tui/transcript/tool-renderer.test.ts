@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { stripAnsi } from "../cathedral/ansi.js";
-import { renderCompactToolPill, renderToolLedgerRows } from "./tool-renderer.js";
+import { visibleWidth } from "@mariozechner/pi-tui";
+import { renderCompactToolPill, renderToolBlockRows, renderToolLedgerRows } from "./tool-renderer.js";
 
 describe("tool renderer", () => {
 	it("renders compact Cathedral tool pills", () => {
@@ -40,6 +41,19 @@ describe("tool renderer", () => {
 		for (const [tool, expected] of cases) {
 			expect(stripAnsi(renderCompactToolPill(tool))).toBe(expected);
 		}
+	});
+
+	it("truncates collapsed tool blocks to the available width", () => {
+		const rows = renderToolBlockRows({
+			name: "read",
+			status: "success",
+			input: { path: "/Volumes/SumoDeus NVMe/openclaw/workspace/sumocode/src/sumo-tui/pi-compat/sumo-interactive-mode.ts" },
+			details: { lineCount: 184 },
+		}, 80);
+
+		expect(rows).toHaveLength(1);
+		expect(visibleWidth(rows[0]!)).toBeLessThanOrEqual(80);
+		expect(stripAnsi(rows[0]!)).toContain("[read]");
 	});
 
 	it("renders expanded read ledgers with line gutter and collapsed marker", () => {

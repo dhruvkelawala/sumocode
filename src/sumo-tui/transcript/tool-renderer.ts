@@ -268,5 +268,5 @@ export function renderToolLedgerRows(tool: ToolCallViewModel, width: number): st
 }
 
 export function renderToolBlockRows(tool: ToolCallViewModel, width: number): string[] {
-	return tool.expanded ? renderToolLedgerRows(tool, width) : [renderCompactToolPill(tool)];
+	return tool.expanded ? renderToolLedgerRows(tool, width) : [padAnsi(renderCompactToolPill(tool), Math.max(1, Math.floor(width)))];
 }

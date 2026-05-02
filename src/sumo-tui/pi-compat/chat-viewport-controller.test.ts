@@ -1,3 +1,4 @@
+import { visibleWidth } from "@mariozechner/pi-tui";
 import { describe, expect, it, vi } from "vitest";
 import { SIDEBAR_WIDTH } from "../../sidebar.js";
 import { PORTRAIT_SIDEBAR_GUTTER_WIDTH, SIDEBAR_GUTTER_WIDTH } from "../../sidebar-placement.js";
@@ -73,6 +74,19 @@ describe("ChatViewportController", () => {
 		expect(textFromAgentMessage({ role: "user", content: "hello" })).toBe("hello");
 		expect(textFromAgentMessage({ role: "assistant", content: [{ type: "thinking", thinking: "hidden" }, { type: "text", text: "visible" }] })).toBe("visible");
 		expect(textFromAgentMessage({ role: "toolResult", content: [{ type: "text", text: "tool output" }] }).replace(ANSI_PATTERN, "")).toBe("✓ [tool]  tool output  · ⌘O expand");
+	});
+
+	it("clamps retained chat lines to the terminal width before handing them to Pi", async () => {
+		const { root, runtime, controller } = await makeController({ terminalRows: 12, terminalColumns: 80 });
+		runtime.renderChatLines = (width: number, height: number): string[] => {
+			runtime.renderCalls.push({ width, height });
+			return ["x".repeat(100)];
+		};
+
+		const lines = controller.render(80);
+
+		expect(visibleWidth(lines[0]!)).toBe(80);
+		root.dispose();
 	});
 
 	it("owns chat viewport geometry, including sidebar and portrait gutters", async () => {

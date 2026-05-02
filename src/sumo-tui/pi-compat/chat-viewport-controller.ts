@@ -1,3 +1,4 @@
+import { truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
 import { parseSgrMouseStream, type MouseEvent } from "../input/mouse.js";
 import type { KeyEvent } from "../input/key-router.js";
 import { logDiagnostic } from "../runtime/diagnostics.js";
@@ -117,6 +118,11 @@ function diagnoseMouseInput(fields: MouseInputDiagnosticsFields): void {
 		source_hex: fields.sourceHex,
 		leftover_hex: fields.leftoverHex,
 	});
+}
+
+function clampRenderedLine(line: string, width: number): string {
+	const safeWidth = Math.max(1, Math.floor(width));
+	return visibleWidth(line) > safeWidth ? truncateToWidth(line, safeWidth, "") : line;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
@@ -250,7 +256,8 @@ export class ChatViewportController {
 			logDiagnostic("chat_viewport_render_cache_hit", { width: effectiveWidth, height: chatHeight, revision: this.renderRevision });
 			return [...cached.lines];
 		}
-		const lines = this.runtime.renderChatLines(this.lastChatWidth, this.lastChatHeight);
+		const lines = this.runtime.renderChatLines(this.lastChatWidth, this.lastChatHeight)
+			.map((line) => clampRenderedLine(line, terminalWidth));
 		this.cachedRender = { revision: this.renderRevision, requestedWidth: terminalWidth, chatTop, chatWidth: effectiveWidth, chatHeight, terminalRows: terminalHeight, lines: [...lines] };
 		return lines;
 	}

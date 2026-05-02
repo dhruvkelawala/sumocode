@@ -92,10 +92,7 @@ function normalizeNotificationLevel(level: "info" | "warning" | "error" | undefi
 }
 
 /**
- * Pi ExtensionUIContext implementation backed by RegionRegistry's named slots.
- * OwnedShellRenderer is the product render root; this adapter remains the
- * compatibility layer for extension UI surfaces that are not yet permanent
- * chrome siblings.
+ * Pi ExtensionUIContext implementation backed by RegionRegistry.
  *
  * Source: Pi 0.70.2's interactive mode exposes this surface from
  * `createExtensionUIContext()` at

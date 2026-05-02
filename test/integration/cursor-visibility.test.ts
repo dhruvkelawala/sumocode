@@ -2,7 +2,6 @@ import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import xterm from "@xterm/headless";
 import { afterEach, describe, expect, it } from "vitest";
 import { PI_BOOT_SEQUENCE, spawnPiPty, type SpawnedPiPty } from "./spawn-pi-pty.js";
 
@@ -13,16 +12,13 @@ afterEach(() => {
 	app = undefined;
 });
 
-interface ReplayedCursor {
-	readonly row: number;
-	readonly col: number;
-}
-
-async function replayCursor(output: string, cols = 100, rows = 30): Promise<ReplayedCursor> {
-	const term = new xterm.Terminal({ cols, rows, allowProposedApi: true, scrollback: 0 });
-	await new Promise<void>((resolve) => term.write(output, () => resolve()));
-	const buffer = term.buffer.active;
-	return { row: buffer.cursorY, col: buffer.cursorX };
+function latestVisibleCursorColumn(output: string): number | undefined {
+	const pattern = /\x1b\[(\d+)G\x1b\[\?25h/g;
+	let latest: number | undefined;
+	for (let match = pattern.exec(output); match !== null; match = pattern.exec(output)) {
+		latest = Number.parseInt(match[1]!, 10);
+	}
+	return latest;
 }
 
 async function waitForCursorVisible(pty: SpawnedPiPty): Promise<void> {
@@ -38,11 +34,8 @@ async function waitForCursorAdvance(pty: SpawnedPiPty, previousColumn: number, t
 	const deadline = Date.now() + 5_000;
 	while (Date.now() < deadline) {
 		const output = pty.getOutput();
-		const { col } = await replayCursor(output);
-		// Replay-based cursor extraction is deterministic regardless of whether
-		// the renderer paints via Pi's `\x1b[<col>G` form or SumoTUI's owned-shell
-		// `\x1b[<row>;<col>H` synchronized patches.
-		if (col > previousColumn) return col;
+		const column = latestVisibleCursorColumn(output);
+		if (output.includes(text) && column !== undefined && column > previousColumn) return column;
 		await new Promise((resolve) => setTimeout(resolve, 50));
 	}
 	throw new Error(`Timed out waiting for visible cursor after ${JSON.stringify(text)}. Last output: ${JSON.stringify(pty.getOutput().slice(-1200))}`);
@@ -66,18 +59,8 @@ describe("sumo-tui cursor visibility integration", () => {
 		await waitForCursorVisible(app);
 		expect(app.getCurrentTerminalState().cursorVisible).toBe(true);
 
-		// Warm up: the empty editor renders with placeholder text
-		// ("Ask anything... \"Refactor the auth flow.\"") which sits past the
-		// prompt prefix. The cursor starts at the END of the placeholder. The
-		// first real keystroke clears the placeholder and the cursor snaps back
-		// to the start of the line. Subsequent keystrokes move the cursor right.
-		app.sendInput("_");
-		await new Promise((resolve) => setTimeout(resolve, 300));
-		const output = app.getOutput();
-		let previousColumn = await replayCursor(output).then((c) => c.col);
-		expect(previousColumn).toBeGreaterThan(0);
-
-		let typed = "_";
+		let typed = "";
+		let previousColumn = 0;
 		for (const char of "ZQXJW") {
 			typed += char;
 			app.sendInput(char);

@@ -30,7 +30,6 @@
 import type { AgentSessionRuntime, InteractiveModeOptions } from "@mariozechner/pi-coding-agent";
 import { InteractiveMode } from "@mariozechner/pi-coding-agent";
 import type { ExtensionUIContext } from "@mariozechner/pi-coding-agent";
-import type { Component } from "@mariozechner/pi-tui";
 import { loadSumoCodeConfig } from "../../config/sumocode-config.js";
 import { EmptyChatQuoteNode, shouldRenderEmptyChatQuote, type EmptyChatQuoteSnapshot } from "../cathedral/empty-chat-quote.js";
 import { createSplashTree, defaultSplashSnapshot, type SplashTree } from "../cathedral/splash-tree.js";
@@ -71,7 +70,6 @@ export {
 	type PiNoiseFilterState,
 } from "./pi-interactive-adapter.js";
 import { RetainedShellTransition } from "./retained-shell-transition.js";
-import { OwnedShellRenderer } from "./owned-shell-renderer.js";
 import { SumoExtensionUIAdapter, type SumoExtensionUIAdapterOptions } from "./extension-ui-adapter.js";
 import { createForeignAwareUIContext, type ForeignAwareUIOptions } from "./foreign-extension-warning.js";
 
@@ -97,49 +95,6 @@ interface SumoInteractiveRuntimeSnapshot {
 	readonly chat: ChatPager;
 	readonly scheduler: FrameScheduler;
 	readonly splash: SplashTree;
-}
-
-export interface SidebarPublication {
-	readonly component: Component;
-	readonly isVisible: (cols: number, rows: number) => boolean;
-}
-
-export interface TopChromePublication {
-	readonly component: Component;
-}
-
-// Module-level singleton would normally be enough here, but the retained
-// `sumo-interactive-mode.js` jiti loader uses `moduleCache: false` so the
-// SumoInteractiveMode and the extension code (sidebar, etc.) end up holding
-// different module copies. Cross those copies with a globalThis symbol so a
-// single instance is observable from anywhere.
-const ACTIVE_SUMO_RUNTIME_KEY = Symbol.for("sumocode.activeSumoRuntime");
-
-interface ActiveRuntimeBox { runtime: SumoInteractiveRuntime | undefined }
-
-function activeRuntimeBox(): ActiveRuntimeBox {
-	const host = globalThis as unknown as Record<symbol, ActiveRuntimeBox | undefined>;
-	let box = host[ACTIVE_SUMO_RUNTIME_KEY];
-	if (!box) {
-		box = { runtime: undefined };
-		host[ACTIVE_SUMO_RUNTIME_KEY] = box;
-	}
-	return box;
-}
-
-function setActiveSumoRuntime(runtime: SumoInteractiveRuntime | undefined): void {
-	activeRuntimeBox().runtime = runtime;
-}
-
-/**
- * Module-level accessor so non-Pi extensions (e.g. `installSidebar`) can
- * publish components into the owned shell without going through Pi's overlay
- * stack. Backed by a globalThis symbol because the jiti loader for
- * `sumo-interactive-mode.js` keeps no module cache, which would otherwise give
- * each importer its own private copy of this module.
- */
-export function getActiveSumoRuntime(): SumoInteractiveRuntime | undefined {
-	return activeRuntimeBox().runtime;
 }
 
 function debugLog(message: string): void {
@@ -182,14 +137,8 @@ export class SumoInteractiveRuntime {
 	private emptyChatUserMessageCount = 0;
 	private started = false;
 	private pendingResumeProfile: { profile: ResumeProfiler; metadata: ResumeProfileMetadata } | undefined;
-	private ownedShellMouseHandler: ((event: MouseEvent) => boolean) | undefined;
-	private ownedShellActiveCheck: (() => boolean) | undefined;
-	private selectionFrameSource: (() => CellBuffer | undefined) | undefined;
-	private sidebarPublication: SidebarPublication | undefined;
-	private topChromePublication: TopChromePublication | undefined;
 
 	public constructor(output: TerminalLike = process.stdout, terminalSession?: TerminalSessionOwner) {
-		setActiveSumoRuntime(this);
 		this.output = output;
 		this.terminal = terminalSession ?? (output === process.stdout ? defaultTerminalSessionOwner : new TerminalSessionOwner({ output }));
 		this.selection = new SelectionController({
@@ -277,21 +226,13 @@ export class SumoInteractiveRuntime {
 	}
 
 	public handleSelectionMouse(event: MouseEvent, width: number, height: number): boolean {
-		const frame = this.selectionFrameSource?.() ?? this.renderChatFrame(width, height).frame;
+		const frame = this.renderChatFrame(width, height).frame;
 		return this.selection.handleMouseEvent(event, frame);
 	}
 
 	public handleSelectionKey(event: KeyEvent, width: number, height: number): boolean {
-		const frame = this.selectionFrameSource?.() ?? this.renderChatFrame(width, height).frame;
+		const frame = this.renderChatFrame(width, height).frame;
 		return this.selection.handleKey(event, frame);
-	}
-
-	public getSelectionController(): SelectionController {
-		return this.selection;
-	}
-
-	public setSelectionFrameSource(source: (() => CellBuffer | undefined) | undefined): void {
-		this.selectionFrameSource = source;
 	}
 
 	public startResumeProfile(): ResumeProfiler {
@@ -300,64 +241,6 @@ export class SumoInteractiveRuntime {
 
 	public completeResumeHydration(profile: ResumeProfiler, metadata: ResumeProfileMetadata): void {
 		this.pendingResumeProfile = { profile, metadata };
-	}
-
-	public setOwnedShellMouseHandler(handler: ((event: MouseEvent) => boolean) | undefined): void {
-		this.ownedShellMouseHandler = handler;
-	}
-
-	public handleOwnedShellMouse(event: MouseEvent): boolean {
-		return this.ownedShellMouseHandler?.(event) === true;
-	}
-
-	public setOwnedShellActiveCheck(check: (() => boolean) | undefined): void {
-		this.ownedShellActiveCheck = check;
-	}
-
-	public isOwnedShellActive(): boolean {
-		return this.ownedShellActiveCheck?.() === true;
-	}
-
-	/**
-	 * Publish the sidebar component to the owned-shell so it can mount it as a
-	 * Yoga sibling of the chat region. Called by `installSidebar` instead of
-	 * `tui.showOverlay()` when owned-shell is enabled. Pass `undefined` to
-	 * unpublish (e.g. on session shutdown).
-	 */
-	public setSidebarComponent(
-		component: Component | undefined,
-		isVisible: (cols: number, rows: number) => boolean = () => true,
-	): void {
-		this.sidebarPublication = component ? { component, isVisible } : undefined;
-		logDiagnostic("sumo_runtime_sidebar_publication", {
-			hasComponent: component !== undefined,
-		});
-		this.requestRender();
-	}
-
-	public getSidebarPublication(): SidebarPublication | undefined {
-		return this.sidebarPublication;
-	}
-
-	/** Publish the retained top-chrome component consumed by OwnedShellRenderer. */
-	public setTopChromeComponent(component: Component | undefined): void {
-		this.topChromePublication = component ? { component } : undefined;
-		logDiagnostic("sumo_runtime_top_chrome_publication", {
-			hasComponent: component !== undefined,
-		});
-		this.requestRender();
-	}
-
-	public getTopChromePublication(): TopChromePublication | undefined {
-		return this.topChromePublication;
-	}
-
-	public getYoga(): Yoga | undefined {
-		return this.yoga;
-	}
-
-	public getTerminalSessionOwner(): TerminalSessionOwner {
-		return this.terminal;
 	}
 
 	private renderChatFrame(width: number, height: number): { frame: CellBuffer; lines: string[] } {
@@ -411,12 +294,6 @@ export class SumoInteractiveRuntime {
 		this.chatFrameCache = undefined;
 		this.externalRenderControls = undefined;
 		this.pendingResumeProfile = undefined;
-		this.ownedShellMouseHandler = undefined;
-		this.ownedShellActiveCheck = undefined;
-		this.selectionFrameSource = undefined;
-		this.sidebarPublication = undefined;
-		this.topChromePublication = undefined;
-		if (getActiveSumoRuntime() === this) setActiveSumoRuntime(undefined);
 		this.scheduler = undefined;
 		this.chat = undefined;
 		this.splash = undefined;
@@ -560,8 +437,6 @@ export class SumoInteractiveMode {
 	private readonly piNoiseFilterState: PiNoiseFilterState = { removedNodes: [], skipNextSpacer: false };
 	private retainedUIContext: ExtensionUIContext | undefined;
 	private chatViewportBridgeCleanup: (() => void) | undefined;
-	private ownedShell: OwnedShellRenderer | undefined;
-	private ownedShellOriginalDoRender: (() => void) | undefined;
 
 	public constructor(
 		private readonly runtimeHost: AgentSessionRuntime,
@@ -585,7 +460,6 @@ export class SumoInteractiveMode {
 	public stop(): void {
 		this.chatViewportBridgeCleanup?.();
 		this.chatViewportBridgeCleanup = undefined;
-		this.uninstallOwnedShell();
 		this.upstream?.stop();
 		this.retainedRuntime.stop();
 	}
@@ -631,116 +505,6 @@ export class SumoInteractiveMode {
 			if (chatContainer) filterPiNoiseChildren(chatContainer, this.piNoiseFilterState);
 		}
 		if (shouldForceHardwareCursor()) forceHardwareCursorVisible(upstream);
-		this.installOwnedShell(upstream);
-	}
-
-	private installOwnedShell(upstream: InteractiveMode): void {
-		const yoga = this.retainedRuntime.getYoga();
-		const snapshot = this.retainedRuntime.getSnapshot();
-		const host = upstream as unknown as {
-			editorContainer?: unknown;
-			headerContainer?: unknown;
-			widgetContainerBelow?: unknown;
-			footer?: unknown;
-			customFooter?: unknown;
-			ui?: {
-				terminal?: { columns?: number; rows?: number };
-				doRender?: () => void;
-				overlayStack?: readonly unknown[];
-				isOverlayVisible?(entry: unknown): boolean;
-			};
-		};
-		// Pi swaps `customFooter` in for `footer` when an extension calls
-		// `setFooter()`. Owned-shell needs to wrap whichever footer Pi is
-		// actually painting into the bottom row.
-		const footerComponent = host.customFooter ?? host.footer;
-		if (!yoga || !snapshot || !host.ui || !host.editorContainer || !host.headerContainer || !host.widgetContainerBelow || !footerComponent) {
-			logDiagnostic("owned_shell_install_skipped", {
-				hasYoga: yoga !== undefined,
-				hasSnapshot: snapshot !== undefined,
-				hasUi: host.ui !== undefined,
-				hasEditorContainer: host.editorContainer !== undefined,
-				hasHeader: host.headerContainer !== undefined,
-				hasHint: host.widgetContainerBelow !== undefined,
-				hasFooter: footerComponent !== undefined,
-			});
-			return;
-		}
-
-		const dimensions = host.ui.terminal ?? { columns: process.stdout.columns ?? 80, rows: process.stdout.rows ?? 24 };
-		const selectionPass = this.retainedRuntime.getSelectionController();
-		this.ownedShell = new OwnedShellRenderer({
-			yoga,
-			chat: snapshot.chat,
-			splash: snapshot.splash,
-			selection: selectionPass,
-			// Resolve Pi container/footer references LAZILY at render time.
-			// Pi recreates `customFooter` (and other slots) on session reload
-			// (`/resume`, `ctx.newSession`, `ctx.fork`). Capturing references at
-			// install time would keep painting disposed components and trigger
-			// `ExtensionRunner.assertActive: extension ctx is stale`.
-			editorContainer: () => host.editorContainer as never,
-			headerContainer: () => host.headerContainer as never,
-			topChromePublication: () => this.retainedRuntime.getTopChromePublication(),
-			widgetContainerBelow: () => host.widgetContainerBelow as never,
-			footer: () => (host.customFooter ?? host.footer) as never,
-			terminal: this.retainedRuntime.getTerminalSessionOwner(),
-			dimensions,
-			overlayHost: host.ui as never,
-			sidebarPublication: () => this.retainedRuntime.getSidebarPublication(),
-		});
-
-		// Selection's hit-test buffer is the OwnedShellRenderer's last full-frame
-		// composite. Mouse coords are terminal-absolute, which lines up with the
-		// chat region painted into the same buffer.
-		this.retainedRuntime.setSelectionFrameSource(() => this.ownedShell?.getLastFrame());
-
-		// Mouse events arrive in stdin bursts (mac trackpads + smooth-scroll mice
-		// fire 30+ events per gesture). Apply state synchronously but schedule
-		// paint through Pi's frame loop so a burst collapses into a single render.
-		this.retainedRuntime.setOwnedShellMouseHandler((event) => {
-			const widgetHandled = this.ownedShell?.handleMouseEvent(event) === true;
-			let selectionHandled = false;
-			if (event.type !== "scroll") {
-				const chatRect = this.ownedShell?.getChatRect();
-				if (chatRect) {
-					selectionHandled = this.retainedRuntime.handleSelectionMouse(event, chatRect.width, chatRect.height);
-				}
-			}
-			const handled = widgetHandled || selectionHandled;
-			if (handled) (host.ui as { requestRender?: (force?: boolean) => void } | undefined)?.requestRender?.(true);
-			return handled;
-		});
-		this.retainedRuntime.setOwnedShellActiveCheck(() => this.ownedShell !== undefined);
-
-		// Replace Pi's TUI rendering with the owned-shell render. Pi's stdin
-		// listening, requestRender scheduling, and overlay/focus logic continue
-		// to drive the render cadence. Patch route, no upstream Pi changes.
-		const targetUi = host.ui as { doRender?: () => void };
-		this.ownedShellOriginalDoRender = targetUi.doRender?.bind(targetUi);
-		targetUi.doRender = () => this.ownedShell?.render();
-
-		// Trigger an immediate paint so the owned shell appears without waiting
-		// for the next Pi-driven render request.
-		process.nextTick(() => this.ownedShell?.render());
-
-		logDiagnostic("owned_shell_installed", {
-			cols: dimensions.columns ?? null,
-			rows: dimensions.rows ?? null,
-		});
-	}
-
-	private uninstallOwnedShell(): void {
-		if (!this.ownedShell) return;
-		const targetUi = (this.upstream as unknown as { ui?: { doRender?: () => void } } | undefined)?.ui;
-		if (targetUi && this.ownedShellOriginalDoRender) targetUi.doRender = this.ownedShellOriginalDoRender;
-		this.ownedShellOriginalDoRender = undefined;
-		this.retainedRuntime.setOwnedShellMouseHandler(undefined);
-		this.retainedRuntime.setOwnedShellActiveCheck(undefined);
-		this.retainedRuntime.setSelectionFrameSource(undefined);
-		this.ownedShell.dispose();
-		this.ownedShell = undefined;
-		logDiagnostic("owned_shell_uninstalled", {});
 	}
 }
 

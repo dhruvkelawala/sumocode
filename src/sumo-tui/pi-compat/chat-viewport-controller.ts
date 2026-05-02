@@ -66,21 +66,6 @@ export interface ChatViewportRuntime {
 	noteUserMessage(): void;
 	handleSelectionMouse?(event: MouseEvent, width: number, height: number): boolean;
 	handleSelectionKey?(event: KeyEvent, width: number, height: number): boolean;
-	/**
-	 * Owned-shell render path handles hit-testing against the full Yoga root.
-	 * The legacy hybrid controller only knows chat geometry after Pi calls
-	 * chatContainer.render(), which no longer happens when owned-shell replaces
-	 * `tui.doRender`. Delegate mouse routing there when available.
-	 */
-	handleOwnedShellMouse?(event: MouseEvent): boolean;
-	/**
-	 * Returns true when SumoCode owns the full frame via OwnedShellRenderer.
-	 * The bridge skips legacy partial-paint paths (chatContainer.render override,
-	 * status suppression, bottom chrome spacers, writeChatViewport diff) when
-	 * this is true. Mouse + key + agent event ingest still go through the
-	 * controller, but render scheduling delegates to owned-shell.
-	 */
-	isOwnedShellActive?(): boolean;
 	startResumeProfile?(): ResumeProfiler;
 	completeResumeHydration?(profile: ResumeProfiler, metadata: ResumeProfileMetadata): void;
 }
@@ -602,36 +587,6 @@ export class ChatViewportController {
 	}
 
 	private handleMouse(event: MouseEvent, options: { deferRender?: boolean } = {}): boolean {
-		if (this.runtime.isOwnedShellActive?.() === true) {
-			const ownedShellOffsetBefore = this.chat.scrollBox.scrollOffset;
-			const handled = this.runtime.handleOwnedShellMouse?.(event) === true;
-			if (handled) {
-				this.lastMouseInputAt = Date.now();
-				this.markRenderDirty();
-				logDiagnostic("mouse_dispatch", {
-					type: event.type,
-					row: event.row,
-					col: event.col,
-					target: "owned_shell",
-					handledScroll: true,
-					scrollOffsetBefore: ownedShellOffsetBefore,
-					scrollOffsetAfter: this.chat.scrollBox.scrollOffset,
-				});
-			} else {
-				logDiagnostic("mouse_dispatch", {
-					type: event.type,
-					row: event.row,
-					col: event.col,
-					target: "owned_shell",
-					handled: false,
-				});
-			}
-			// Even if owned-shell did not consume the scroll (e.g. wheel over the
-			// editor), still return handled so the legacy hybrid path never runs in
-			// owned-shell mode — it relies on chat geometry that no longer exists.
-			return handled;
-		}
-
 		const localEvent: MouseEvent = {
 			...event,
 			row: event.row - this.lastChatTop,
@@ -669,13 +624,6 @@ export class ChatViewportController {
 	}
 
 	private renderChatViewportOrRequest(): void {
-		// Owned-shell owns the full frame; partial writeChatViewport would skip
-		// sibling repaint (sidebar, footer, hint) and leave the screen in a
-		// torn state.
-		if (this.runtime.isOwnedShellActive?.() === true) {
-			this.runtime.requestRender();
-			return;
-		}
 		if (!this.runtime.writeChatViewport(this.lastChatTop, 0, this.lastChatWidth, this.lastChatHeight)) {
 			this.runtime.requestRender();
 		}
@@ -763,21 +711,13 @@ export function installChatViewportBridge(upstream: unknown, runtime: ChatViewpo
 	const originalRenderSessionContext = target.renderSessionContext?.bind(target);
 	const originalSetToolsExpanded = target.setToolsExpanded?.bind(target);
 	const removeInputListener = target.ui?.addInputListener?.((data) => controller.handleInput(data));
-	// Owned-shell prevents Pi from rendering chat/status containers itself, so
-	// the spacer workaround that pushed the input/footer down inside Pi's flow
-	// is unnecessary and would only consume rows that owned-shell already
-	// reserves through Yoga.
-	const ownedShellActive = runtime.isOwnedShellActive?.() === true;
-	const removeBottomChromeSpacers = ownedShellActive ? undefined : installBottomChromeSpacers(target, snapshot.chat);
+	const removeBottomChromeSpacers = installBottomChromeSpacers(target, snapshot.chat);
 	let streaming = false;
 	let pendingStreamingRender: ReturnType<typeof setTimeout> | undefined;
 	let lastStreamingRenderAt = 0;
 	const requestForcedRender = (source: "immediate" | "streaming" | "stream-end"): void => {
 		lastStreamingRenderAt = Date.now();
-		logDiagnostic("chat_viewport_render_request", { source, force: true, ownedShell: ownedShellActive });
-		// In owned-shell mode Pi's render loop is replaced. Calling its
-		// requestRender still triggers our `tui.doRender` override (which paints
-		// the owned-shell frame), so the schedule path is the same.
+		logDiagnostic("chat_viewport_render_request", { source, force: true });
 		target.ui?.requestRender?.(true);
 	};
 	const flushPendingStreamingRender = (): void => {
@@ -829,24 +769,7 @@ export function installChatViewportBridge(upstream: unknown, runtime: ChatViewpo
 			if (!enabled) flushPendingStreamingRender();
 		},
 	});
-	// Owned-shell mounts ChatPager directly into its Yoga tree and bypasses
-	// Pi's render pipeline. Overriding chatContainer.render here would do
-	// nothing visible and only burn CPU on every Pi render-loop tick. In
-	// hybrid mode we still need it so Pi paints the controller's rendered
-	// chat lines into its own line flow.
-	if (!ownedShellActive) {
-		chatContainer.render = (width: number): string[] => controller.render(width);
-		if (statusContainer && originalStatusRender) {
-			statusContainer.render = (width: number): string[] => {
-				const terminalWidth = target.ui?.terminal?.columns ?? width;
-				// Portrait V1 Bible rhythm reserves the pre-input row as breathing
-				// space. Suppress Pi's loader/status row at compact widths so the
-				// input, hint, and footer land on the target rows.
-				if (terminalWidth < PORTRAIT_STATUS_MIN_WIDTH) return [];
-				return originalStatusRender(width);
-			};
-		}
-	}
+	chatContainer.render = (width: number): string[] => controller.render(width);
 	chatContainer.clear = (): void => {
 		controller.clear();
 		originalClear?.();
@@ -856,6 +779,16 @@ export function installChatViewportBridge(upstream: unknown, runtime: ChatViewpo
 		originalInvalidate?.();
 		runtime.requestRender();
 	};
+	if (statusContainer && originalStatusRender) {
+		statusContainer.render = (width: number): string[] => {
+			const terminalWidth = target.ui?.terminal?.columns ?? width;
+			// Portrait V1 Bible rhythm reserves the pre-input row as breathing
+			// space. Suppress Pi's loader/status row at compact widths so the input,
+			// hint, and footer land on the target rows.
+			if (terminalWidth < PORTRAIT_STATUS_MIN_WIDTH) return [];
+			return originalStatusRender(width);
+		};
+	}
 	if (originalSetToolsExpanded) {
 		target.setToolsExpanded = (expanded: boolean): void => {
 			controller.markRenderDirty();
@@ -883,15 +816,13 @@ export function installChatViewportBridge(upstream: unknown, runtime: ChatViewpo
 		removeInputListener?.();
 		removeBottomChromeSpacers?.();
 		runtime.setExternalRenderControls(undefined);
-		if (!ownedShellActive) {
-			if (originalRender) chatContainer.render = originalRender;
-			else delete chatContainer.render;
-			if (statusContainer && originalStatusRender) statusContainer.render = originalStatusRender;
-		}
+		if (originalRender) chatContainer.render = originalRender;
+		else delete chatContainer.render;
 		if (originalClear) chatContainer.clear = originalClear;
 		else delete chatContainer.clear;
 		if (originalInvalidate) chatContainer.invalidate = originalInvalidate;
 		else delete chatContainer.invalidate;
+		if (statusContainer && originalStatusRender) statusContainer.render = originalStatusRender;
 		if (originalSetToolsExpanded) target.setToolsExpanded = originalSetToolsExpanded;
 		if (originalHandleEvent) target.handleEvent = originalHandleEvent;
 		if (originalRenderSessionContext) target.renderSessionContext = originalRenderSessionContext;

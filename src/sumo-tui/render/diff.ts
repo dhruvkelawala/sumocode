@@ -7,12 +7,12 @@ export interface FrameDiffPatch {
 	/**
 	 * Column offset (0-indexed) where this patch starts on the row.
 	 *
-	 * - For full-row repaints (`type: "row"` with `startCol === 0`) the terminal
-	 *   writer clears the row before writing ANSI content, so stale cells disappear
-	 *   without erasing the final terminal column after pending-wrap.
-	 * - For partial-row patches (`startCol > 0`) and scroll patches, the writer
-	 *   emits ONLY the ANSI and skips line-clear so unchanged cells/control
-	 *   sequences survive untouched.
+	 * - For full-row repaints (`type: "row"` with `startCol === 0`) and scroll
+	 *   patches the writer continues to emit `\x1b[K` after the ANSI to clear
+	 *   any trailing cells.
+	 * - For partial-row patches (`startCol > 0`) the writer emits ONLY the
+	 *   slice and skips the line-clear so unchanged cells to the left and
+	 *   right of the change region survive untouched.
 	 *
 	 * Borrowed from OpenTUI's per-row column-range diff (`zig/renderer.zig`
 	 * 1331-1349). Saves 50–90% of bytes per streaming tick on typical chat
@@ -179,16 +179,7 @@ function detectScroll(prev: CellBuffer, next: CellBuffer): FrameDiffPatch[] | nu
  * `anomalyco/opentui` (`zig/renderer.zig` 1331-1349) — see
  * `docs/research/OPENTUI_COMPARISON.md` §A3.
  */
-export interface FrameDiffOptions {
-	/**
-	 * Detect shifted rows and emit terminal scroll-region sequences. Useful for
-	 * plain full-screen retained roots, but unsafe when only one visual region
-	 * should scroll while sibling/overlay chrome must remain pinned.
-	 */
-	detectScroll?: boolean;
-}
-
-export function diffFrames(prev: CellBuffer | null | undefined, next: CellBuffer, options: FrameDiffOptions = {}): FrameDiffPatch[] {
+export function diffFrames(prev: CellBuffer | null | undefined, next: CellBuffer): FrameDiffPatch[] {
 	if (!prev || !dimensionsEqual(prev, next)) {
 		const { rows } = next.getDimensions();
 		const patches: FrameDiffPatch[] = [];
@@ -200,7 +191,7 @@ export function diffFrames(prev: CellBuffer | null | undefined, next: CellBuffer
 
 	const patches = changedRowPatches(prev, next);
 	if (patches.length === 0) return [];
-	const scroll = options.detectScroll === false ? null : detectScroll(prev, next);
+	const scroll = detectScroll(prev, next);
 	if (scroll && scroll.length < patches.length) return scroll;
 	return patches;
 }

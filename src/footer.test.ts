@@ -165,11 +165,10 @@ describe("formatCwd", () => {
 });
 
 describe("renderFooterBlock — splash renders Bible version block", () => {
-	it("in active state, returns 2 lines (footer + blank bottom spacer)", () => {
+	it("in active state, returns one semantic footer line", () => {
 		const lines = renderFooterBlock(snapshot({ isSplash: false }));
-		expect(lines.length).toBe(2);
+		expect(lines.length).toBe(1);
 		expect(lines[0]).toMatch(/READY|MEDITATING|ILLUMINATING/);
-		expect(lines[1]).toBe("");
 	});
 
 	it("on splash, returns breathing rows plus version with no status footer", () => {

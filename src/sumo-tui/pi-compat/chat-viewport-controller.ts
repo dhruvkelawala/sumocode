@@ -22,9 +22,12 @@ const PORTRAIT_STATUS_MIN_WIDTH = 80;
 const PORTRAIT_CHAT_GUTTER_MIN_WIDTH = 80;
 const STREAMING_CHAT_RENDER_COALESCE_MS = 100;
 const MOUSE_CHAT_RENDER_COALESCE_MS = 50;
+const BOTTOM_CHROME_SPACERS_INSTALLED = Symbol("sumo-tui.bottom-chrome-spacers-installed");
+export const ACTIVE_BOTTOM_CHROME_SPACER_ROWS = 2;
 
 interface PiRenderableComponent {
 	render(width: number): string[];
+	invalidate?(): void;
 }
 
 interface PiChatContainer {
@@ -35,8 +38,11 @@ interface PiChatContainer {
 
 interface PiTuiLike {
 	readonly terminal?: { readonly rows?: number; readonly columns?: number };
+	children?: unknown[];
+	addChild?(component: unknown): void;
 	requestRender?(force?: boolean): void;
 	addInputListener?(listener: (data: string) => { consume?: boolean; data?: string } | void): () => void;
+	[BOTTOM_CHROME_SPACERS_INSTALLED]?: true;
 }
 
 export interface ChatViewportHost {
@@ -176,6 +182,80 @@ function renderableLineCount(component: PiRenderableComponent | undefined, width
 	} catch {
 		return 0;
 	}
+}
+
+class BottomChromeSpacerComponent implements PiRenderableComponent {
+	public constructor(private readonly active: (width: number) => boolean) {}
+	public invalidate(): void {}
+	public render(width: number): string[] {
+		return this.active(width) ? [""] : [];
+	}
+}
+
+function removeChild(children: unknown[], child: unknown): void {
+	const index = children.indexOf(child);
+	if (index >= 0) children.splice(index, 1);
+}
+
+function installBottomChromeSpacers(host: ChatViewportBridgeHost, _chat: ChatPager): (() => void) | undefined {
+	const ui = host.ui;
+	const footer = host.footer;
+	logDiagnostic("bottom_chrome_spacers_install", {
+		hasUi: ui !== undefined,
+		hasFooter: footer !== undefined,
+		hasAddChild: typeof ui?.addChild === "function",
+		hasChildren: Array.isArray(ui?.children),
+		alreadyInstalled: ui?.[BOTTOM_CHROME_SPACERS_INSTALLED] === true,
+	});
+	if (!ui || !footer || ui[BOTTOM_CHROME_SPACERS_INSTALLED]) return undefined;
+	if (!ui.addChild && !Array.isArray(ui.children)) return undefined;
+
+	const hasActiveFooter = (width: number): boolean => renderableLineCount(host.footer, width) === 1;
+	const beforeFooter = new BottomChromeSpacerComponent(hasActiveFooter);
+	const afterFooter = new BottomChromeSpacerComponent(hasActiveFooter);
+	const originalAddChild = ui.addChild;
+	let inserted = false;
+
+	const insertIntoExistingChildren = (): void => {
+		if (!Array.isArray(ui.children) || inserted) return;
+		const footerIndex = ui.children.indexOf(footer);
+		if (footerIndex < 0) return;
+		ui.children.splice(footerIndex, 0, beforeFooter);
+		ui.children.splice(footerIndex + 2, 0, afterFooter);
+		inserted = true;
+		logDiagnostic("bottom_chrome_spacers_inserted", { mode: "existing", footerIndex });
+	};
+
+	if (originalAddChild) {
+		ui.addChild = (component: unknown): void => {
+			if (component === footer && !inserted) {
+				originalAddChild.call(ui, beforeFooter);
+				originalAddChild.call(ui, component);
+				originalAddChild.call(ui, afterFooter);
+				inserted = true;
+				logDiagnostic("bottom_chrome_spacers_inserted", { mode: "addChild" });
+				return;
+			}
+			originalAddChild.call(ui, component);
+			insertIntoExistingChildren();
+		};
+	}
+
+	insertIntoExistingChildren();
+	ui[BOTTOM_CHROME_SPACERS_INSTALLED] = true;
+
+	return () => {
+		if (originalAddChild) ui.addChild = originalAddChild;
+		if (Array.isArray(ui.children)) {
+			removeChild(ui.children, beforeFooter);
+			removeChild(ui.children, afterFooter);
+		}
+		delete ui[BOTTOM_CHROME_SPACERS_INSTALLED];
+	};
+}
+
+function hasBottomChromeSpacers(host: ChatViewportHost): boolean {
+	return host.ui?.[BOTTOM_CHROME_SPACERS_INSTALLED] === true;
 }
 
 function sessionMessages(sessionContext: unknown): unknown[] {
@@ -595,12 +675,15 @@ export class ChatViewportController {
 			: renderableLineCount(this.host.pendingMessagesContainer, width) +
 				renderableLineCount(this.host.statusContainer, width) +
 				renderableLineCount(this.host.widgetContainerAbove, terminalWidth);
+		const footerRows = renderableLineCount(this.host.footer, terminalWidth);
+		const activeBottomSpacerRows = footerRows === 1 && hasBottomChromeSpacers(this.host) ? ACTIVE_BOTTOM_CHROME_SPACER_ROWS : 0;
 		const chromeRows =
 			renderableLineCount(this.host.headerContainer, width) +
 			preEditorRows +
 			renderableLineCount(this.host.editorContainer, terminalWidth) +
 			renderableLineCount(this.host.widgetContainerBelow, terminalWidth) +
-			renderableLineCount(this.host.footer, terminalWidth);
+			footerRows +
+			activeBottomSpacerRows;
 		return Math.max(1, terminalRows - chromeRows);
 	}
 }
@@ -628,6 +711,7 @@ export function installChatViewportBridge(upstream: unknown, runtime: ChatViewpo
 	const originalRenderSessionContext = target.renderSessionContext?.bind(target);
 	const originalSetToolsExpanded = target.setToolsExpanded?.bind(target);
 	const removeInputListener = target.ui?.addInputListener?.((data) => controller.handleInput(data));
+	const removeBottomChromeSpacers = installBottomChromeSpacers(target, snapshot.chat);
 	let streaming = false;
 	let pendingStreamingRender: ReturnType<typeof setTimeout> | undefined;
 	let lastStreamingRenderAt = 0;
@@ -730,6 +814,7 @@ export function installChatViewportBridge(upstream: unknown, runtime: ChatViewpo
 		pendingStreamingRender = undefined;
 		controller.dispose();
 		removeInputListener?.();
+		removeBottomChromeSpacers?.();
 		runtime.setExternalRenderControls(undefined);
 		if (originalRender) chatContainer.render = originalRender;
 		else delete chatContainer.render;

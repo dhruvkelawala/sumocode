@@ -281,6 +281,75 @@ describe("sumo interactive Pi noise filtering", () => {
 		runtime.stop();
 	});
 
+	it("installs active-only bottom chrome spacer rows around Pi's footer", async () => {
+		const inputListeners: ((data: string) => { consume?: boolean; data?: string } | void)[] = [];
+		const children: unknown[] = [];
+		let footerRows = ["", "version"];
+		const runtime = new SumoInteractiveRuntime({ isTTY: false, columns: 80, rows: 20, write: vi.fn() });
+		await runtime.start();
+		const upstream = {
+			ui: {
+				children,
+				terminal: { rows: 12, columns: 80 },
+				requestRender: vi.fn(),
+				addChild(component: unknown) {
+					children.push(component);
+				},
+				addInputListener(listener: (data: string) => { consume?: boolean; data?: string } | void) {
+					inputListeners.push(listener);
+					return () => undefined;
+				},
+			},
+			headerContainer: { render: (_width: number) => ["header"] },
+			pendingMessagesContainer: { render: (_width: number) => [] },
+			statusContainer: { render: (_width: number) => [] },
+			widgetContainerAbove: { render: (_width: number) => [] },
+			editorContainer: { render: (_width: number) => ["editor"] },
+			widgetContainerBelow: { render: (_width: number) => ["hint"] },
+			footer: { render: (_width: number) => [...footerRows] },
+			chatContainer: {
+				children: [] as unknown[],
+				addChild(child: unknown) {
+					this.children.push(child);
+				},
+				render: (_width: number) => ["upstream chat"],
+				clear() {
+					this.children = [];
+				},
+			},
+			handleEvent: vi.fn(),
+		};
+
+		const cleanup = installChatViewportBridge(upstream, runtime);
+		upstream.ui.addChild(upstream.headerContainer);
+		upstream.ui.addChild(upstream.chatContainer);
+		upstream.ui.addChild(upstream.editorContainer);
+		upstream.ui.addChild(upstream.widgetContainerBelow);
+		upstream.ui.addChild(upstream.footer);
+
+		const footerIndex = children.indexOf(upstream.footer);
+		expect(footerIndex).toBeGreaterThan(0);
+		const beforeFooter = children[footerIndex - 1] as { render(width: number): string[] };
+		const afterFooter = children[footerIndex + 1] as { render(width: number): string[] };
+		expect(beforeFooter.render(80)).toEqual([]);
+		expect(afterFooter.render(80)).toEqual([]);
+
+		footerRows = ["footer"];
+		runtime.getSnapshot()?.chat.addMessage("user", "hello");
+		expect(beforeFooter.render(80)).toEqual([""]);
+		expect(afterFooter.render(80)).toEqual([""]);
+		const activeRows = children.flatMap((child) => (child as { render(width: number): string[] }).render(80));
+		expect(activeRows).toHaveLength(12);
+		expect(activeRows.at(-3)).toBe("");
+		expect(activeRows.at(-2)).toBe("footer");
+		expect(activeRows.at(-1)).toBe("");
+
+		cleanup?.();
+		expect(children).not.toContain(beforeFooter);
+		expect(children).not.toContain(afterFooter);
+		runtime.stop();
+	});
+
 	it("buffers split SGR mouse sequences so trackpad bytes never reach Pi's editor", async () => {
 		const inputListeners: ((data: string) => { consume?: boolean; data?: string } | void)[] = [];
 		const runtime = new SumoInteractiveRuntime({ isTTY: false, columns: 80, rows: 20, write: vi.fn() });

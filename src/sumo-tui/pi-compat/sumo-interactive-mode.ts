@@ -70,6 +70,7 @@ export {
 	type PiNoiseFilterState,
 } from "./pi-interactive-adapter.js";
 import { RetainedShellTransition } from "./retained-shell-transition.js";
+import { OwnedShellRenderer, ownedShellEnabled } from "./owned-shell-renderer.js";
 import { SumoExtensionUIAdapter, type SumoExtensionUIAdapterOptions } from "./extension-ui-adapter.js";
 import { createForeignAwareUIContext, type ForeignAwareUIOptions } from "./foreign-extension-warning.js";
 
@@ -241,6 +242,14 @@ export class SumoInteractiveRuntime {
 
 	public completeResumeHydration(profile: ResumeProfiler, metadata: ResumeProfileMetadata): void {
 		this.pendingResumeProfile = { profile, metadata };
+	}
+
+	public getYoga(): Yoga | undefined {
+		return this.yoga;
+	}
+
+	public getTerminalSessionOwner(): TerminalSessionOwner {
+		return this.terminal;
 	}
 
 	private renderChatFrame(width: number, height: number): { frame: CellBuffer; lines: string[] } {
@@ -437,6 +446,8 @@ export class SumoInteractiveMode {
 	private readonly piNoiseFilterState: PiNoiseFilterState = { removedNodes: [], skipNextSpacer: false };
 	private retainedUIContext: ExtensionUIContext | undefined;
 	private chatViewportBridgeCleanup: (() => void) | undefined;
+	private ownedShell: OwnedShellRenderer | undefined;
+	private ownedShellOriginalDoRender: (() => void) | undefined;
 
 	public constructor(
 		private readonly runtimeHost: AgentSessionRuntime,
@@ -460,6 +471,7 @@ export class SumoInteractiveMode {
 	public stop(): void {
 		this.chatViewportBridgeCleanup?.();
 		this.chatViewportBridgeCleanup = undefined;
+		this.uninstallOwnedShell();
 		this.upstream?.stop();
 		this.retainedRuntime.stop();
 	}
@@ -505,6 +517,74 @@ export class SumoInteractiveMode {
 			if (chatContainer) filterPiNoiseChildren(chatContainer, this.piNoiseFilterState);
 		}
 		if (shouldForceHardwareCursor()) forceHardwareCursorVisible(upstream);
+		if (ownedShellEnabled()) this.installOwnedShell(upstream);
+	}
+
+	private installOwnedShell(upstream: InteractiveMode): void {
+		const yoga = this.retainedRuntime.getYoga();
+		const snapshot = this.retainedRuntime.getSnapshot();
+		const host = upstream as unknown as {
+			editor?: unknown;
+			headerContainer?: unknown;
+			widgetContainerBelow?: unknown;
+			footer?: unknown;
+			customFooter?: unknown;
+			ui?: { terminal?: { columns?: number; rows?: number }; doRender?: () => void };
+		};
+		// Pi swaps `customFooter` in for `footer` when an extension calls
+		// `setFooter()`. Owned-shell needs to wrap whichever footer Pi is
+		// actually painting into the bottom row.
+		const footerComponent = host.customFooter ?? host.footer;
+		if (!yoga || !snapshot || !host.ui || !host.editor || !host.headerContainer || !host.widgetContainerBelow || !footerComponent) {
+			logDiagnostic("owned_shell_install_skipped", {
+				hasYoga: yoga !== undefined,
+				hasSnapshot: snapshot !== undefined,
+				hasUi: host.ui !== undefined,
+				hasEditor: host.editor !== undefined,
+				hasHeader: host.headerContainer !== undefined,
+				hasHint: host.widgetContainerBelow !== undefined,
+				hasFooter: footerComponent !== undefined,
+			});
+			return;
+		}
+
+		const dimensions = host.ui.terminal ?? { columns: process.stdout.columns ?? 80, rows: process.stdout.rows ?? 24 };
+		this.ownedShell = new OwnedShellRenderer({
+			yoga,
+			chat: snapshot.chat,
+			editor: host.editor as never,
+			headerContainer: host.headerContainer as never,
+			widgetContainerBelow: host.widgetContainerBelow as never,
+			footer: footerComponent as never,
+			terminal: this.retainedRuntime.getTerminalSessionOwner(),
+			dimensions,
+		});
+
+		// Replace Pi's TUI rendering with the owned-shell render. Pi's stdin
+		// listening, requestRender scheduling, and overlay/focus logic continue
+		// to drive the render cadence. Patch route, no upstream Pi changes.
+		const targetUi = host.ui as { doRender?: () => void };
+		this.ownedShellOriginalDoRender = targetUi.doRender?.bind(targetUi);
+		targetUi.doRender = () => this.ownedShell?.render();
+
+		// Trigger an immediate paint so the owned shell appears without waiting
+		// for the next Pi-driven render request.
+		process.nextTick(() => this.ownedShell?.render());
+
+		logDiagnostic("owned_shell_installed", {
+			cols: dimensions.columns ?? null,
+			rows: dimensions.rows ?? null,
+		});
+	}
+
+	private uninstallOwnedShell(): void {
+		if (!this.ownedShell) return;
+		const targetUi = (this.upstream as unknown as { ui?: { doRender?: () => void } } | undefined)?.ui;
+		if (targetUi && this.ownedShellOriginalDoRender) targetUi.doRender = this.ownedShellOriginalDoRender;
+		this.ownedShellOriginalDoRender = undefined;
+		this.ownedShell.dispose();
+		this.ownedShell = undefined;
+		logDiagnostic("owned_shell_uninstalled", {});
 	}
 }
 

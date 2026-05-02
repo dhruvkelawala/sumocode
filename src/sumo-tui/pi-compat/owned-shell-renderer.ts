@@ -8,19 +8,19 @@
  * Owns the full-screen Yoga tree per #161:
  *
  *   column root
- *   ├── top-chrome     (h: header lines)
- *   ├── chat-row       (flexGrow: 1, flexDirection: row)
+ *   ├── retained top-chrome (h: header lines)
+ *   ├── chat-row           (flexGrow: 1, flexDirection: row)
  *   │   └── chat-or-splash (flexGrow: 1)   ← splash when no messages, ChatPager when active
- *   ├── blank          (h: 1)
- *   ├── input-frame    (measured by PiEditorLeaf)
- *   ├── hint-row       (h: 1)
- *   ├── blank          (h: 1)
- *   ├── footer         (h: 1)
- *   └── blank          (h: 1)
+ *   ├── blank              (h: 1)
+ *   ├── input-frame        (measured by PiEditorLeaf)
+ *   ├── hint-row           (h: 1)
+ *   ├── blank              (h: 1)
+ *   ├── footer             (h: 1)
+ *   └── blank              (h: 1)
  *
  * Composites Pi's own overlay stack on top of the buffer so existing widgets
- * that depend on `tui.showOverlay` (sidebar, modal selectors, notifications)
- * keep working without changes.
+ * that depend on `tui.showOverlay` (modal selectors, notifications) keep
+ * working while permanent chrome is owned by Yoga siblings.
  */
 
 import type { Component, OverlayOptions } from "@mariozechner/pi-tui";
@@ -43,7 +43,7 @@ import { ChatPager } from "../widgets/chat-pager.js";
 import { PiComponentLeaf } from "../widgets/pi-component-leaf.js";
 import { PiEditorLeaf } from "../widgets/pi-editor-leaf.js";
 import type { SplashTree } from "../cathedral/splash-tree.js";
-import type { SidebarPublication } from "./sumo-interactive-mode.js";
+import type { SidebarPublication, TopChromePublication } from "./sumo-interactive-mode.js";
 import { SIDEBAR_WIDTH, sidebarGutterWidth } from "../../sidebar-placement.js";
 
 export interface OwnedShellRendererTerminal {
@@ -77,6 +77,8 @@ export interface OwnedShellRendererOptions {
 	 */
 	readonly editorContainer: () => Component;
 	readonly headerContainer: () => Component;
+	/** Retained top chrome published by `installTopChrome`; falls back to Pi's header container during tests/startup. */
+	readonly topChromePublication?: () => TopChromePublication | undefined;
 	readonly widgetContainerBelow: () => Component;
 	/** Resolves to the currently mounted footer (custom extension footer or Pi built-in). */
 	readonly footer: () => Component;
@@ -120,6 +122,7 @@ export class OwnedShellRenderer {
 	private readonly dimensions: OwnedShellRendererTerminal;
 	private readonly overlayHost: PiOverlayHost | undefined;
 	private readonly resolveSidebarPublication: () => SidebarPublication | undefined;
+	private readonly resolveTopChromePublication: () => TopChromePublication | undefined;
 	private readonly selection: CompositeSelectionPass | undefined;
 	private lastFrame: CellBuffer | undefined;
 	private previousFrame: CellBuffer | undefined;
@@ -147,12 +150,13 @@ export class OwnedShellRenderer {
 		this.splash = options.splash;
 		this.overlayHost = options.overlayHost;
 		this.resolveSidebarPublication = options.sidebarPublication ?? (() => undefined);
+		this.resolveTopChromePublication = options.topChromePublication ?? (() => undefined);
 		this.selection = options.selection;
 
 		this.root = new SumoNode(this.yoga.Node.create());
 		this.root.flexDirection = FLEX_DIRECTION_COLUMN;
 
-		const headerProxy = new LazyComponentProxy(options.headerContainer);
+		const headerProxy = new LazyComponentProxy(() => this.resolveTopChromePublication()?.component ?? options.headerContainer());
 		const editorProxy = new LazyComponentProxy(options.editorContainer);
 		const hintProxy = new LazyComponentProxy(options.widgetContainerBelow);
 		const footerProxy = new LazyComponentProxy(options.footer);
@@ -609,16 +613,11 @@ function resolveOverlayLayout(
 	return { width, row, col, maxHeight };
 }
 
-const OWNED_SHELL_ENV_FLAG = "SUMOCODE_OWNED_SHELL";
-
 /**
- * Owned-shell mode is the default daily-drive renderer. Set
- * `SUMOCODE_OWNED_SHELL=0` to fall back to the hybrid Pi+SumoTUI render path
- * for diff bisection or recovery.
+ * Owned-shell mode is the daily-drive renderer. The old hybrid Pi+SumoTUI
+ * outer-chrome path is no longer runtime-selectable; use `sumocode --no-sumo-tui`
+ * for emergency recovery into plain Pi.
  */
-export function ownedShellEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
-	const value = env[OWNED_SHELL_ENV_FLAG];
-	if (value === undefined) return true;
-	const normalized = value.trim().toLowerCase();
-	return normalized !== "0" && normalized !== "false" && normalized !== "off" && normalized !== "no";
+export function ownedShellEnabled(): boolean {
+	return true;
 }

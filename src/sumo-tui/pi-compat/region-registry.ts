@@ -104,11 +104,11 @@ function percentToCells(value: number | `${number}%` | undefined, total: number)
 /**
  * Named SumoCode slots for Pi extension UI hooks.
  *
- * Source: Pi 0.70.2 wires extension UI through `createExtensionUIContext()` and
- * delegates `setWidget`, `setFooter`, `setHeader`, `custom`, and
- * `setEditorComponent` to mutable pi-tui containers at
- * `node_modules/.pnpm/@mariozechner+pi-coding-agent@0.70.2.../dist/modes/interactive/interactive-mode.js:1522-1557`.
- * This registry is the retained-Yoga replacement for those mutable containers.
+ * Owned-shell rendering is now handled by `OwnedShellRenderer`; this registry is
+ * deliberately repurposed as an extension-UI compatibility registry for custom
+ * widgets, modal/backdrop experiments, and tests that need named Yoga slots.
+ * It is no longer the product render root, which avoids maintaining two full
+ * outer-chrome trees after #195.
  */
 export class RegionRegistry {
 	public readonly root: SumoNode;

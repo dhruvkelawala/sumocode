@@ -42,21 +42,8 @@ class FakeTerminal {
 }
 
 describe("ownedShellEnabled", () => {
-	it("defaults on when env var is unset", () => {
-		expect(ownedShellEnabled({})).toBe(true);
-	});
-
-	it("treats explicit on values as on", () => {
-		expect(ownedShellEnabled({ SUMOCODE_OWNED_SHELL: "1" })).toBe(true);
-		expect(ownedShellEnabled({ SUMOCODE_OWNED_SHELL: "true" })).toBe(true);
-		expect(ownedShellEnabled({ SUMOCODE_OWNED_SHELL: "YES" })).toBe(true);
-	});
-
-	it("treats explicit off values as off", () => {
-		expect(ownedShellEnabled({ SUMOCODE_OWNED_SHELL: "0" })).toBe(false);
-		expect(ownedShellEnabled({ SUMOCODE_OWNED_SHELL: "off" })).toBe(false);
-		expect(ownedShellEnabled({ SUMOCODE_OWNED_SHELL: "false" })).toBe(false);
-		expect(ownedShellEnabled({ SUMOCODE_OWNED_SHELL: "no" })).toBe(false);
+	it("is always enabled in SumoTUI mode", () => {
+		expect(ownedShellEnabled()).toBe(true);
 	});
 });
 
@@ -93,6 +80,29 @@ describe("OwnedShellRenderer", () => {
 		// blank row above editor
 		expect(lines[4]?.trim()).toBe("");
 
+		renderer.dispose();
+	});
+
+	it("prefers retained top chrome over Pi header container", async () => {
+		const yoga = await loadYoga();
+		const chat = ChatPager.create(yoga);
+		const fakeTerminal = new FakeTerminal();
+		const renderer = new OwnedShellRenderer({
+			yoga,
+			chat,
+			editorContainer: () => new StaticEditor() as Component,
+			headerContainer: () => new StaticComponent(["PI-HEADER"]),
+			topChromePublication: () => ({ component: new StaticComponent(["RETAINED-TOP"]) }),
+			widgetContainerBelow: () => new StaticComponent(["HINT"]),
+			footer: () => new StaticComponent(["FOOTER"]),
+			terminal: fakeTerminal.owner,
+			dimensions: { columns: 24, rows: 12 },
+		});
+
+		renderer.render();
+		const lines = fakeTerminal.patches.map((patch) => stripAnsi(patch.ansi));
+		expect(lines[0]?.startsWith("RETAINED-TOP")).toBe(true);
+		expect(lines.join("\n")).not.toContain("PI-HEADER");
 		renderer.dispose();
 	});
 

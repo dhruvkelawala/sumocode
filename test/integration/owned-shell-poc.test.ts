@@ -49,7 +49,6 @@ describe("owned-shell POC (issue #195 / #161 Slice A)", () => {
 					SUMO_TUI: "1",
 					SUMO_TUI_HIDE_PI_NOISE: "1",
 					SUMO_TUI_MODULE: pathToFileURL(join(process.cwd(), "sumo-interactive-mode.js")).href,
-					SUMOCODE_OWNED_SHELL: "1",
 				},
 			});
 

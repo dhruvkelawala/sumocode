@@ -71,7 +71,7 @@ export {
 	type PiNoiseFilterState,
 } from "./pi-interactive-adapter.js";
 import { RetainedShellTransition } from "./retained-shell-transition.js";
-import { OwnedShellRenderer, ownedShellEnabled } from "./owned-shell-renderer.js";
+import { OwnedShellRenderer } from "./owned-shell-renderer.js";
 import { SumoExtensionUIAdapter, type SumoExtensionUIAdapterOptions } from "./extension-ui-adapter.js";
 import { createForeignAwareUIContext, type ForeignAwareUIOptions } from "./foreign-extension-warning.js";
 
@@ -102,6 +102,10 @@ interface SumoInteractiveRuntimeSnapshot {
 export interface SidebarPublication {
 	readonly component: Component;
 	readonly isVisible: (cols: number, rows: number) => boolean;
+}
+
+export interface TopChromePublication {
+	readonly component: Component;
 }
 
 // Module-level singleton would normally be enough here, but the retained
@@ -182,6 +186,7 @@ export class SumoInteractiveRuntime {
 	private ownedShellActiveCheck: (() => boolean) | undefined;
 	private selectionFrameSource: (() => CellBuffer | undefined) | undefined;
 	private sidebarPublication: SidebarPublication | undefined;
+	private topChromePublication: TopChromePublication | undefined;
 
 	public constructor(output: TerminalLike = process.stdout, terminalSession?: TerminalSessionOwner) {
 		setActiveSumoRuntime(this);
@@ -334,6 +339,19 @@ export class SumoInteractiveRuntime {
 		return this.sidebarPublication;
 	}
 
+	/** Publish the retained top-chrome component consumed by OwnedShellRenderer. */
+	public setTopChromeComponent(component: Component | undefined): void {
+		this.topChromePublication = component ? { component } : undefined;
+		logDiagnostic("sumo_runtime_top_chrome_publication", {
+			hasComponent: component !== undefined,
+		});
+		this.requestRender();
+	}
+
+	public getTopChromePublication(): TopChromePublication | undefined {
+		return this.topChromePublication;
+	}
+
 	public getYoga(): Yoga | undefined {
 		return this.yoga;
 	}
@@ -397,6 +415,7 @@ export class SumoInteractiveRuntime {
 		this.ownedShellActiveCheck = undefined;
 		this.selectionFrameSource = undefined;
 		this.sidebarPublication = undefined;
+		this.topChromePublication = undefined;
 		if (getActiveSumoRuntime() === this) setActiveSumoRuntime(undefined);
 		this.scheduler = undefined;
 		this.chat = undefined;
@@ -612,7 +631,7 @@ export class SumoInteractiveMode {
 			if (chatContainer) filterPiNoiseChildren(chatContainer, this.piNoiseFilterState);
 		}
 		if (shouldForceHardwareCursor()) forceHardwareCursorVisible(upstream);
-		if (ownedShellEnabled()) this.installOwnedShell(upstream);
+		this.installOwnedShell(upstream);
 	}
 
 	private installOwnedShell(upstream: InteractiveMode): void {
@@ -662,6 +681,7 @@ export class SumoInteractiveMode {
 			// `ExtensionRunner.assertActive: extension ctx is stale`.
 			editorContainer: () => host.editorContainer as never,
 			headerContainer: () => host.headerContainer as never,
+			topChromePublication: () => this.retainedRuntime.getTopChromePublication(),
 			widgetContainerBelow: () => host.widgetContainerBelow as never,
 			footer: () => (host.customFooter ?? host.footer) as never,
 			terminal: this.retainedRuntime.getTerminalSessionOwner(),

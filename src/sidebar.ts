@@ -21,7 +21,6 @@ import { surfaceLine } from "./sumo-tui/cathedral/ansi.js";
 import { logDiagnostic } from "./sumo-tui/runtime/diagnostics.js";
 import { installNonCapturingSidebarOverlay, SIDEBAR_MIN_TERMINAL_WIDTH, sidebarOverlayTargetRows } from "./sidebar-placement.js";
 import { getActiveSumoRuntime } from "./sumo-tui/pi-compat/sumo-interactive-mode.js";
-import { ownedShellEnabled } from "./sumo-tui/pi-compat/owned-shell-renderer.js";
 export {
 	SIDEBAR_MIN_TERMINAL_WIDTH,
 	SIDEBAR_WIDTH,
@@ -263,7 +262,7 @@ export function installSidebar(pi: ExtensionAPI): void {
 			// region. Publish the component to the runtime so it can pin its
 			// columns structurally instead of relying on overlay compositing
 			// (which is unsafe across chat scroll, resize, and full-frame diff).
-			const runtime = ownedShellEnabled() ? getActiveSumoRuntime() : undefined;
+			const runtime = getActiveSumoRuntime();
 			const overlay = runtime
 				? undefined
 				: installNonCapturingSidebarOverlay(tui, sidebarComponent, () => sessionHasMessages(ctx));

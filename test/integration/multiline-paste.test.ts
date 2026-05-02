@@ -63,6 +63,24 @@ describe("multiline paste and newline handling", () => {
 		expect(editor.getText()).toBe("");
 	});
 
+	it("keeps raw CR multiline paste chunks as one draft instead of submitting each line", async () => {
+		const agentDir = await mkdtemp(join(tmpdir(), "sumocode-pi-agent-"));
+		app = spawnPiPty({ cols: 80, rows: 30, env: { PI_CODING_AGENT_DIR: agentDir } });
+
+		await app.waitForOutput(BRACKETED_PASTE_ENABLE, 10_000);
+		await app.waitForOutput("DIVINE INVOCATION", 10_000);
+
+		app.sendInput("line one\rline two\rline three");
+		await app.waitForOutput("line three", 5_000);
+
+		const plain = stripAnsi(app.getOutput());
+		expect(plain).toContain("line one");
+		expect(plain).toContain("line two");
+		expect(plain).toContain("line three");
+		expect(plain).not.toContain("Working...");
+		expect(plain).not.toContain("Error:");
+	}, 20_000);
+
 	it("enables bracketed paste in the real SumoCode runtime and does not submit pasted newlines", async () => {
 		const agentDir = await mkdtemp(join(tmpdir(), "sumocode-pi-agent-"));
 		app = spawnPiPty({

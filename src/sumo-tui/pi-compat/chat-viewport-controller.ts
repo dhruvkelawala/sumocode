@@ -14,6 +14,7 @@ import { ChatPager } from "../widgets/chat-pager.js";
 import { chatScrollCommandFromInput } from "../widgets/chat-scroll-command.js";
 import { SIDEBAR_MIN_TERMINAL_WIDTH, SIDEBAR_WIDTH } from "../../sidebar.js";
 import { sidebarGutterWidth } from "../../sidebar-placement.js";
+import { normalizeRawMultilinePasteInput } from "../../cathedral/multiline-paste.js";
 
 const CHAT_VIEWPORT_BRIDGE_INSTALLED = Symbol("sumo-tui.chat-viewport-bridge-installed");
 const PORTRAIT_STATUS_MIN_WIDTH = 80;
@@ -319,6 +320,13 @@ export class ChatViewportController {
 				sourceHex: toHex(source.slice(0, 64)),
 				leftoverHex: toHex(nextData.slice(0, 64)),
 			});
+		}
+
+		const normalizedPasteData = normalizeRawMultilinePasteInput(nextData);
+		if (normalizedPasteData !== nextData) {
+			logDiagnostic("raw_multiline_paste_normalized", { sourceLength: nextData.length, normalizedLength: normalizedPasteData.length });
+			nextData = normalizedPasteData;
+			consumed = true;
 		}
 
 		const keyEvent = chatScrollCommandFromInput(nextData);

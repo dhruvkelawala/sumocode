@@ -47,10 +47,13 @@ import {
 	INPUT_FRAME_LABEL_SPLASH,
 	INPUT_FRAME_PLACEHOLDER,
 } from "./input-frame.js";
+export { normalizeRawMultilinePasteInput } from "./multiline-paste.js";
+import { normalizeRawMultilinePasteInput } from "./multiline-paste.js";
 
 const RESET = "\u001b[0m";
 const ANSI_PATTERN = /\u001b\[[0-9;]*m/g;
 const SPLASH_INPUT_FRAME_WIDTH = 60;
+const RAW_PASTE_CR_WINDOW_MS = 50;
 const ACTIVE_AUTOCOMPLETE_LEFT_OFFSET = 4; // `│ > ` before typed content.
 
 function visibleLength(text: string): number {
@@ -204,6 +207,8 @@ function isPiBorderRow(row: string): boolean {
 }
 
 class CathedralEditor extends CustomEditor {
+	private lastPrintableInputAt = 0;
+
 	constructor(
 		private readonly cathedralTui: TUI,
 		theme: EditorTheme,
@@ -218,6 +223,18 @@ class CathedralEditor extends CustomEditor {
 				this.cathedralTui.requestRender();
 			},
 		});
+	}
+
+	override handleInput(data: string): void {
+		const now = Date.now();
+		if (data === "\r" && now - this.lastPrintableInputAt <= RAW_PASTE_CR_WINDOW_MS) {
+			super.handleInput("\n");
+			return;
+		}
+
+		const normalized = normalizeRawMultilinePasteInput(data);
+		if (/[^\x00-\x1f\x7f]/.test(normalized)) this.lastPrintableInputAt = now;
+		super.handleInput(normalized);
 	}
 
 	override render(width: number): string[] {

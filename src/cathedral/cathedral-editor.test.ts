@@ -1,8 +1,24 @@
 import { describe, expect, it } from "vitest";
-import { alignAutocompleteRow } from "./cathedral-editor.js";
+import { alignAutocompleteRow, normalizeRawMultilinePasteInput } from "./cathedral-editor.js";
 
 const ANSI_PATTERN = /\u001b\[[0-9;]*m/g;
 const stripAnsi = (value: string): string => value.replace(ANSI_PATTERN, "");
+
+describe("normalizeRawMultilinePasteInput", () => {
+	it("keeps a single raw Enter as submit", () => {
+		expect(normalizeRawMultilinePasteInput("\r")).toBe("\r");
+	});
+
+	it("turns raw CR multiline paste chunks into editor newlines", () => {
+		expect(normalizeRawMultilinePasteInput("line one\rline two\rline three")).toBe("line one\nline two\nline three");
+		expect(normalizeRawMultilinePasteInput("line one\r\nline two")).toBe("line one\nline two");
+	});
+
+	it("leaves bracketed paste untouched for Pi's editor parser", () => {
+		const paste = "\x1b[200~line one\rline two\x1b[201~";
+		expect(normalizeRawMultilinePasteInput(paste)).toBe(paste);
+	});
+});
 
 describe("alignAutocompleteRow", () => {
 	it("anchors active autocomplete under the Cathedral input content, not terminal col 0", () => {

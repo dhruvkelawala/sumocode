@@ -71,6 +71,7 @@ describe("InteractionRegistry", () => {
 		expect(diagnostics).toEqual([]);
 		expect(snapshot.diagnostics).toEqual([]);
 		expect(snapshot.commands.map(([id]) => id).sort()).toEqual([
+			"exit",
 			"sumo:cursor",
 			"sumo:memory",
 			"sumo:persona",
@@ -81,7 +82,7 @@ describe("InteractionRegistry", () => {
 			"sumo:theme-check",
 		]);
 		expect(snapshot.shortcuts.map(([id]) => id).sort()).toEqual(["ctrl+/", "ctrl+1", "ctrl+2"]);
-		expect(pi.registerCommand).toHaveBeenCalledTimes(8);
+		expect(pi.registerCommand).toHaveBeenCalledTimes(9);
 		expect(pi.registerShortcut).toHaveBeenCalledTimes(3);
 	});
 });

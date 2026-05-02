@@ -200,7 +200,7 @@ describe("ChatViewportController", () => {
 		expect(messages[0]?.role).toBe("sumo");
 		expect(messages[0]?.blocks).toEqual([
 			{ type: "markdown", text: "Reading." },
-			{ type: "tool", tool: { id: "tc1", name: "read", status: "success", input: { path: "src/auth/session.ts" }, output: "file contents", details: undefined, error: undefined } },
+			{ type: "tool", tool: { id: "tc1", name: "read", status: "success", input: { path: "src/auth/session.ts" }, output: "file contents", details: undefined, error: undefined, expanded: true } },
 		]);
 		expect(runtime.noteUserMessage).not.toHaveBeenCalled();
 		root.dispose();

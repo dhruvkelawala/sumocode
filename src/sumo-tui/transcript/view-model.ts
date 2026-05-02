@@ -164,7 +164,7 @@ function toolBlockFromRecord(record: Record<string, unknown>, fallbackStatus: To
 	const output = textFromContent(record.content) || asString(record.output);
 	const error = asString(record.errorMessage) ?? asString(record.error);
 	const isError = record.isError === true || error !== undefined;
-	const expanded = asBoolean(record.expanded) ?? asBoolean(asRecord(record.details)?.expanded);
+	const expanded = asBoolean(record.expanded) ?? asBoolean(asRecord(record.details)?.expanded) ?? true;
 	return {
 		type: "tool",
 		tool: {

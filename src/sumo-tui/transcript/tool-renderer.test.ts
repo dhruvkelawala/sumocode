@@ -43,12 +43,26 @@ describe("tool renderer", () => {
 		}
 	});
 
+	it("renders tool blocks expanded by default", () => {
+		const rows = renderToolBlockRows({
+			name: "read",
+			status: "success",
+			input: { path: "src/example.ts" },
+			details: { excerpt: ["\tconst value = 1;"], totalLines: 1 },
+		}, 60);
+
+		expect(stripAnsi(rows[0]!)).toContain("╭─ [read]");
+		expect(stripAnsi(rows.join("\n"))).toContain("    const value = 1;");
+		expect(rows.every((row) => visibleWidth(row) <= 60)).toBe(true);
+	});
+
 	it("truncates collapsed tool blocks to the available width", () => {
 		const rows = renderToolBlockRows({
 			name: "read",
 			status: "success",
 			input: { path: "/Volumes/SumoDeus NVMe/openclaw/workspace/sumocode/src/sumo-tui/pi-compat/sumo-interactive-mode.ts" },
 			details: { lineCount: 184 },
+			expanded: false,
 		}, 80);
 
 		expect(rows).toHaveLength(1);

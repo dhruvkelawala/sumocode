@@ -165,7 +165,7 @@ describe("ChatPager", () => {
 		root.dispose();
 	});
 
-	it("renders structured tool blocks compact by default and expands them on demand", async () => {
+	it("renders structured tool blocks expanded by default and can collapse them on demand", async () => {
 		const { root, chat, buffer } = await makeChat(90, 8);
 		chat.addViewModel({
 			id: "s1",
@@ -174,13 +174,13 @@ describe("ChatPager", () => {
 			blocks: [{ type: "tool", tool: { name: "read", status: "success", input: { path: "src/auth/session.ts" } } }],
 		});
 		let frame = buffer();
-		expect(frame.toPlainRow(1)).toContain("✓ [read]  src/auth/session.ts  · ⌘O expand");
-		expect(frame.toPlainRow(2)).toMatch(/^╰─+╯/);
-
-		chat.setToolExpansion(true);
-		frame = buffer();
 		expect(frame.toPlainRow(1)).toContain("╭─ [read]  src/auth/session.ts");
 		expect(frame.toPlainRow(2)).toContain("preview collapsed");
+
+		chat.setToolExpansion(false);
+		frame = buffer();
+		expect(frame.toPlainRow(1)).toContain("✓ [read]  src/auth/session.ts  · ⌘O expand");
+		expect(frame.toPlainRow(2)).toMatch(/^╰─+╯/);
 		root.dispose();
 	});
 

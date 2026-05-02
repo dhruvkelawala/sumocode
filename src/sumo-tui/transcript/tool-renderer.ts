@@ -34,6 +34,13 @@ function compactWhitespace(value: string): string {
 	return value.replace(/\s+/g, " ").trim();
 }
 
+function terminalSafeText(value: string): string {
+	// Raw tabs are measured differently by terminals/Pi's final line guard than
+	// by our cell renderer, which can make an apparently padded tool row overflow
+	// in retained TUI. Expand them before any width accounting.
+	return value.replaceAll("\t", "    ");
+}
+
 export function toolStatusGlyph(status: ToolStatus): string {
 	return STATUS_GLYPH[status] ?? "○";
 }
@@ -176,7 +183,7 @@ function renderGutterLine(lineNumber: number | undefined, text: string, width: n
 
 function renderReadLikeBody(tool: ToolCallViewModel, width: number): string[] {
 	const details = asRecord(tool.details);
-	const excerpt = arrayFromDetails(details, "excerpt").length > 0 ? arrayFromDetails(details, "excerpt") : outputLines(tool).slice(0, 5);
+	const excerpt = (arrayFromDetails(details, "excerpt").length > 0 ? arrayFromDetails(details, "excerpt") : outputLines(tool).slice(0, 5)).map(terminalSafeText);
 	const startLine = typeof details?.startLine === "number" ? details.startLine : 1;
 	const rows = excerpt.slice(0, 5).map((line, index) => renderGutterLine(startLine + index, line, width));
 	const collapsed = collapsedMarker(details, typeof details?.totalLines === "number" ? Math.max(0, details.totalLines - excerpt.length) : 0);
@@ -198,7 +205,7 @@ function renderEditSummary(text: string, width: number): string[] {
 
 function renderEditBody(tool: ToolCallViewModel, width: number): string[] {
 	const details = asRecord(tool.details);
-	const diffLines = arrayFromDetails(details, "diff");
+	const diffLines = arrayFromDetails(details, "diff").map(terminalSafeText);
 
 	// No explicit diff array → render summary from output/note
 	if (diffLines.length === 0) {
@@ -239,7 +246,7 @@ function renderBashLine(line: string): (Span | string)[] {
 function renderBashBody(tool: ToolCallViewModel, width: number): string[] {
 	const details = asRecord(tool.details);
 	const target = toolTarget(tool);
-	const lines = outputLines(tool).slice(0, 5);
+	const lines = outputLines(tool).slice(0, 5).map(terminalSafeText);
 	const body = [renderBodyLine([`> ${target}`], width)];
 	const collapsed = collapsedMarker(details, Math.max(0, outputLines(tool).length - lines.length));
 	if (collapsed) body.push(renderBodyLine([span(`  ${collapsed}`, { fg: CATHEDRAL_TOKENS.colors.foregroundDim })], width));
@@ -268,5 +275,5 @@ export function renderToolLedgerRows(tool: ToolCallViewModel, width: number): st
 }
 
 export function renderToolBlockRows(tool: ToolCallViewModel, width: number): string[] {
-	return tool.expanded ? renderToolLedgerRows(tool, width) : [padAnsi(renderCompactToolPill(tool), Math.max(1, Math.floor(width)))];
+	return tool.expanded === false ? [padAnsi(renderCompactToolPill(tool), Math.max(1, Math.floor(width)))] : renderToolLedgerRows(tool, width);
 }

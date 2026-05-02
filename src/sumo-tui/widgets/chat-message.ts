@@ -1,6 +1,7 @@
-import { visibleWidth } from "@mariozechner/pi-tui";
+import { truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
 import { DEFAULT_SUMOCODE_CONFIG } from "../../config/sumocode-config.js";
 import { CATHEDRAL_TOKENS } from "../../tokens.js";
+import { fgHex, RESET } from "../cathedral/ansi.js";
 import { SumoNode } from "../layout/node.js";
 import { MEASURE_MODE_EXACTLY, type MeasureMode, type Yoga, type YogaNode } from "../layout/yoga.js";
 import type { CellBuffer, Rect } from "../render/buffer.js";
@@ -159,6 +160,12 @@ function fitCellText(text: string, width: number): string {
 	return visible > width ? takeVisible(text, width).head : `${text}${" ".repeat(width - visible)}`;
 }
 
+function fitAnsiText(text: string, width: number): string {
+	const safeWidth = Math.max(0, Math.floor(width));
+	const clipped = visibleWidth(text) > safeWidth ? truncateToWidth(text, safeWidth, "") : text;
+	return `${clipped}${" ".repeat(Math.max(0, safeWidth - visibleWidth(clipped)))}`;
+}
+
 function formatTime(timestamp: Date): string {
 	const hours = String(timestamp.getHours()).padStart(2, "0");
 	const minutes = String(timestamp.getMinutes()).padStart(2, "0");
@@ -194,14 +201,10 @@ function frameTop(role: ChatMessageRole, timestamp: Date | undefined, width: num
 
 function frameBody(row: string, width: number): string {
 	const inner = Math.max(0, width - 4);
-	const text = fitCellText(row, inner);
-	return lineToAnsi(textLine([
-		span("│", { fg: CATHEDRAL_TOKENS.colors.divider }),
-		span(" "),
-		span(text, { fg: CATHEDRAL_TOKENS.colors.foreground }),
-		span(" "),
-		span("│", { fg: CATHEDRAL_TOKENS.colors.divider }),
-	]), { width });
+	const text = fitAnsiText(row, inner);
+	const divider = fgHex(CATHEDRAL_TOKENS.colors.divider);
+	const foreground = fgHex(CATHEDRAL_TOKENS.colors.foreground);
+	return `${divider}│${RESET} ${foreground}${text}${RESET} ${divider}│${RESET}`;
 }
 
 function frameBottom(width: number): string {
@@ -300,7 +303,7 @@ export class ChatMessage extends SumoNode {
 	}
 
 	public setToolExpansion(expanded: boolean): boolean {
-		if (!this.blocks?.some((block) => block.type === "tool" && Boolean(block.tool.expanded) !== expanded)) return false;
+		if (!this.blocks?.some((block) => block.type === "tool")) return false;
 		this.blocks = this.blocks.map((block) => block.type === "tool" ? { ...block, tool: { ...block.tool, expanded } } : block);
 		this.markDirty();
 		return true;

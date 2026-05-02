@@ -47,7 +47,7 @@ describe("structured transcript view model", () => {
 		expect(message?.role).toBe("sumo");
 		expect(message?.blocks).toEqual([
 			{ type: "markdown", text: "I will run the tests." },
-			{ type: "tool", tool: { id: "tc1", name: "bash", status: "pending", input: { command: "pnpm test" }, output: undefined, details: undefined, error: undefined } },
+			{ type: "tool", tool: { id: "tc1", name: "bash", status: "pending", input: { command: "pnpm test" }, output: undefined, details: undefined, error: undefined, expanded: true } },
 		]);
 	});
 

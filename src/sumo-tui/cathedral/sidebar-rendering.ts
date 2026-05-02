@@ -26,6 +26,8 @@ export interface RegistrySidebarSnapshot {
 	readonly branch?: string;
 	readonly inputTokens: number;
 	readonly outputTokens: number;
+	/** Current context window usage from `ctx.getContextUsage()?.tokens`. Falls back to inputTokens+outputTokens if unavailable. */
+	readonly currentContextTokens?: number;
 	readonly contextWindow: number;
 	readonly cumulativeTokens?: number;
 	readonly costUsd: number;
@@ -106,7 +108,7 @@ export function renderTokenMeter(used: number, total: number): string {
 }
 
 function contextLines(snapshot: RegistrySidebarSnapshot, width: number): string[] {
-	const used = snapshot.inputTokens + snapshot.outputTokens;
+	const used = snapshot.currentContextTokens ?? (snapshot.inputTokens + snapshot.outputTokens);
 	const overBudget = snapshot.contextWindow > 0 && used > snapshot.contextWindow;
 	return [
 		row(colorHex(snapshot.projectName, CATHEDRAL_TOKENS.colors.foreground), width),

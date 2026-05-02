@@ -28,6 +28,7 @@ export interface SidebarLayoutSnapshot {
 	readonly branch?: string;
 	readonly inputTokens?: number;
 	readonly outputTokens?: number;
+	readonly currentContextTokens?: number;
 	readonly contextWindow?: number;
 	readonly costUsd?: number;
 	readonly mcpServers?: readonly McpServerSnapshot[];
@@ -64,6 +65,7 @@ function registrySnapshot(snapshot: SidebarLayoutSnapshot): RegistrySidebarSnaps
 		branch: snapshot.branch ?? "main",
 		inputTokens: snapshot.inputTokens ?? 0,
 		outputTokens: snapshot.outputTokens ?? 0,
+		currentContextTokens: snapshot.currentContextTokens,
 		contextWindow: snapshot.contextWindow ?? 0,
 		costUsd: snapshot.costUsd ?? 0,
 		mcpServers: snapshot.mcpServers ?? DEFAULT_MCP_SERVERS,

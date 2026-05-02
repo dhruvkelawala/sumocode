@@ -20,6 +20,41 @@ function snapshot(overrides: Partial<RegistrySidebarSnapshot> = {}): RegistrySid
 }
 
 describe("sidebar-tree headers", () => {
+	it("uses currentContextTokens for CONTEXT meter, not cumulative inputTokens+outputTokens", () => {
+		// Reproduces issue #192: sidebar showed 21M (cumulative) instead of 254k (current context)
+		const plain = untrack(
+			renderRegistrySidebarLines(
+				snapshot({
+					inputTokens: 10_000_000,
+					outputTokens: 11_000_000,
+					currentContextTokens: 254_000,
+					contextWindow: 272_000,
+					cumulativeTokens: 21_000_000,
+				}),
+				30,
+			)
+				.map(stripAnsi)
+				.join("\n"),
+		);
+		// CONTEXT section: should show current (254k), not cumulative (21M)
+		expect(plain).toContain("254k");
+		expect(plain).not.toContain("OVER");
+		// SESSION cumul: should still show cumulative
+		expect(plain).toContain("21M");
+	});
+
+	it("falls back to inputTokens+outputTokens when currentContextTokens is absent", () => {
+		const plain = untrack(
+			renderRegistrySidebarLines(
+				snapshot({ inputTokens: 100_000, outputTokens: 50_000, contextWindow: 200_000 }),
+				30,
+			)
+				.map(stripAnsi)
+				.join("\n"),
+		);
+		expect(plain).toContain("150k");
+	});
+
 	it("uses the V2 editorial tracked labels and thick rules", () => {
 		const plain = untrack(renderRegistrySidebarLines(snapshot(), 30).map(stripAnsi).join("\n"));
 

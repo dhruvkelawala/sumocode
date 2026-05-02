@@ -166,7 +166,11 @@ function snapshotFromContext(
 ): SidebarSnapshot {
 	const { input, output, cost } = getCachedSessionUsage(ctx);
 
-	const contextWindow = ctx.getContextUsage()?.contextWindow ?? ctx.model?.contextWindow ?? 0;
+	const contextUsage = ctx.getContextUsage();
+	const contextWindow = contextUsage?.contextWindow ?? ctx.model?.contextWindow ?? 0;
+	// Current context tokens from Pi's live context usage API — same source as the footer.
+	// Falls back to cumulative input+output only if the API is unavailable.
+	const currentContextTokens = typeof contextUsage?.tokens === "number" ? contextUsage.tokens : undefined;
 	const branch = getCachedGitBranch(ctx) ?? undefined;
 
 	return {
@@ -174,6 +178,7 @@ function snapshotFromContext(
 		branch,
 		inputTokens: input,
 		outputTokens: output,
+		currentContextTokens,
 		contextWindow,
 		cumulativeTokens: input + output,
 		costUsd: cost,

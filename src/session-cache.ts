@@ -20,6 +20,7 @@
 
 import { execFile, execFileSync } from "node:child_process";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import { logDiagnostic } from "./sumo-tui/runtime/diagnostics.js";
 import { renderDiagnosticsCounters } from "./render-diagnostics.js";
 
 export type SessionUsage = {
@@ -38,6 +39,21 @@ type Entry = {
 	asyncRefreshInFlight: boolean;
 };
 
+/**
+ * Module-level flag: once ANY message_start fires in the current process,
+ * `sessionHasMessages` returns true without needing the session branch.
+ *
+ * Why module-level instead of WeakMap-keyed-on-ctx:
+ *   Pi creates a NEW ExtensionContext object per event handler invocation.
+ *   The ctx from message_start differs from the ctx captured in the editor
+ *   or top-chrome closure (session_start ctx), so WeakMap entries never match.
+ *   A module-level flag works correctly because Pi runs one interactive
+ *   session at a time.
+ *
+ * Reset on session_start so new sessions start clean.
+ */
+let liveSessionHasMessages = false;
+
 const cache = new WeakMap<ExtensionContext, Entry>();
 
 function entryFor(ctx: ExtensionContext): Entry {
@@ -52,6 +68,17 @@ function entryFor(ctx: ExtensionContext): Entry {
 export function invalidateSessionUsage(ctx: ExtensionContext): void {
 	const e = cache.get(ctx);
 	if (e) e.usage = undefined;
+	logDiagnostic("session_cache_invalidate", { liveSessionHasMessages });
+}
+
+export function noteSessionMessage(): void {
+	liveSessionHasMessages = true;
+	logDiagnostic("session_cache_note_message", { liveSessionHasMessages: true });
+}
+
+/** Reset the live-session flag. For use in tests and session_start only. */
+export function resetLiveSessionHasMessages(): void {
+	liveSessionHasMessages = false;
 }
 
 export function invalidateGitBranch(ctx: ExtensionContext): void {
@@ -76,7 +103,9 @@ export function getSessionUsage(ctx: ExtensionContext): SessionUsage {
 	let output = 0;
 	let cost = 0;
 	let hasMessages = false;
+	let branchLen = 0;
 	for (const e of ctx.sessionManager.getBranch()) {
+		branchLen += 1;
 		if (e.type !== "message") continue;
 		hasMessages = true;
 		// Defensive: tests and edge sessions may carry partial message shapes.
@@ -88,11 +117,15 @@ export function getSessionUsage(ctx: ExtensionContext): SessionUsage {
 		output += message.usage.output ?? 0;
 		cost += message.usage.cost?.total ?? 0;
 	}
-	entry.usage = { input, output, cost, hasMessages };
+	const result = { input, output, cost, hasMessages: hasMessages || liveSessionHasMessages };
+	logDiagnostic("session_cache_walk", { branchLen, hasMessagesFromWalk: hasMessages, liveSessionHasMessages, result: result.hasMessages });
+	entry.usage = result;
 	return entry.usage;
 }
 
 export function sessionHasMessages(ctx: ExtensionContext): boolean {
+	// Fast path: if we've already seen a message_start, no need to walk the branch.
+	if (liveSessionHasMessages) return true;
 	return getSessionUsage(ctx).hasMessages;
 }
 
@@ -203,13 +236,17 @@ export function installSessionCache(pi: ExtensionAPI): void {
 		invalidateSessionUsage(ctx);
 	};
 	pi.on("session_start", (_event, ctx) => {
+		// Reset module-level flag for the new session.
+		liveSessionHasMessages = false;
 		invalidateSessionUsage(ctx);
 		// Pre-warm the branch synchronously here — we're outside the render path
 		// so the fork+exec is fine, and it means the first keystroke already sees
 		// a real value instead of `null` while the async resolver kicks in.
 		refreshGitBranchSync(ctx);
 	});
-	pi.on("message_start", drop);
+	pi.on("message_start", () => {
+		noteSessionMessage();
+	});
 	pi.on("message_end", drop);
 	pi.on("agent_end", (_event, ctx) => {
 		invalidateSessionUsage(ctx);

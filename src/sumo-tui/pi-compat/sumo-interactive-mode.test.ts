@@ -136,6 +136,25 @@ describe("sumo interactive Pi noise filtering", () => {
 		runtime.stop();
 	});
 
+	it("transitions from retained splash to active chat on the first live user message", async () => {
+		const runtime = new SumoInteractiveRuntime({ isTTY: false, columns: 100, rows: 30, write: vi.fn() });
+		const snapshot = await runtime.start();
+		const controller = new ChatViewportController(runtime, snapshot.chat, {});
+
+		controller.renderSessionContext({ messages: [] });
+		expect(snapshot.chat.hasMessages()).toBe(false);
+		expect(stripAnsi(runtime.renderChatLines(100, 30).join("\n"))).toContain("Meow meow meow");
+
+		controller.handleAgentEvent({ type: "message_start", message: { role: "user", content: "hello" } });
+
+		const activeLines = stripAnsi(runtime.renderChatLines(100, 30).join("\n"));
+		expect(snapshot.chat.hasMessages()).toBe(true);
+		expect(activeLines).toContain("╭ USER");
+		expect(activeLines).toContain("hello");
+		expect(activeLines).not.toContain("Meow meow meow");
+		runtime.stop();
+	});
+
 	it("caches retained chat frames when upstream re-renders without chat dirtiness", async () => {
 		const runtime = new SumoInteractiveRuntime({ isTTY: false, columns: 100, rows: 30, write: vi.fn() });
 		await runtime.start();

@@ -402,6 +402,7 @@ export class ChatViewportController {
 			return;
 		}
 		addViewModel(this.chat, viewModel);
+		this.runtime.requestRender();
 	}
 
 	private handleMessageUpdate(message: unknown, assistantMessageEvent: unknown): void {

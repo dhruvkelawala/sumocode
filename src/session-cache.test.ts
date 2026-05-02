@@ -1,9 +1,11 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	getGitBranch,
 	getSessionUsage,
 	invalidateGitBranch,
 	invalidateSessionUsage,
+	noteSessionMessage,
+	resetLiveSessionHasMessages,
 	refreshGitBranchAsync,
 	refreshGitBranchSync,
 	sessionHasMessages,
@@ -32,6 +34,8 @@ function assistantEntry(input: number, output: number, costTotal: number) {
 }
 
 describe("session-cache.getSessionUsage", () => {
+	beforeEach(() => { resetLiveSessionHasMessages(); });
+
 	it("sums tokens across assistant entries and reports hasMessages", () => {
 		const ctx = makeCtx([
 			assistantEntry(100, 50, 0.01),
@@ -70,6 +74,26 @@ describe("session-cache.getSessionUsage", () => {
 		getSessionUsage(ctx);
 
 		expect(spy).toHaveBeenCalledTimes(2);
+	});
+
+	it("optimistically marks live sessions as having messages via module-level flag", () => {
+		const ctx = makeCtx([]);
+
+		// Reset: simulate a fresh session_start resetting the flag
+		noteSessionMessage(); // call without ctx — module-level
+		expect(sessionHasMessages(ctx)).toBe(true);
+	});
+
+	it("module-level flag survives subsequent invalidateSessionUsage calls", () => {
+		const ctx = makeCtx([]);
+
+		noteSessionMessage();
+		// Simulate message_end / agent_end invalidating usage cache
+		invalidateSessionUsage(ctx);
+		invalidateSessionUsage(ctx);
+
+		// Even though getBranch() is empty, hasMessages stays true
+		expect(sessionHasMessages(ctx)).toBe(true);
 	});
 });
 

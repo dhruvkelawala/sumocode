@@ -226,6 +226,52 @@ function parseDelegationTools(value: unknown): ToolCallViewModel[] {
 	return results;
 }
 
+function taskBlockFromRecord(record: Record<string, unknown>, fallbackStatus: ToolStatus): ChatBlock {
+	// Pi built-in `task` tool call → Cathedral scroll/scribe (Element 12).
+	// Extract title, agent metadata, and status from the task arguments/output.
+	const args = asRecord(record.arguments ?? record.input);
+	const tasks = Array.isArray(args?.tasks) ? args.tasks : [];
+	const firstTask = asRecord(tasks[0]);
+	const model = firstString(
+		firstTask?.model,
+		args?.model,
+		record.model,
+	);
+	const thinking = firstString(firstTask?.thinking, args?.thinking, record.thinking);
+	const rawPrompt = firstString(firstTask?.prompt, args?.prompt, record.prompt) ?? "task";
+	// Title: use first non-empty line, capped at 80 chars
+	const firstLine = rawPrompt.split("\n").find((l) => l.trim().length > 0) ?? rawPrompt;
+	const title = firstLine.length > 80 ? `${firstLine.slice(0, 77)}…` : firstLine;
+	// Status from toolResult output
+	const outputText = (() => {
+		const content = record.content;
+		if (typeof content === "string") return content;
+		if (Array.isArray(content)) {
+			const first = asRecord(content[0]);
+			return asString(first?.text);
+		}
+		return undefined;
+	})();
+	const isError = record.isError === true;
+	const status = isError ? "error" : fallbackStatus;
+	return {
+		type: "delegation",
+		delegation: {
+			id: firstString(record.id, record.toolCallId),
+			title,
+			agent: "scribe",
+			model,
+			thinking,
+			status: normalizeDelegationStatus(status),
+			summary: outputText ? outputText.split("\n").find((l) => l.trim().length > 0) : undefined,
+			nestedTools: [],
+			tokensIn: undefined,
+			tokensOut: undefined,
+			elapsedMs: undefined,
+		},
+	};
+}
+
 function delegationBlockFromRecord(record: Record<string, unknown>): ChatBlock {
 	const details = asRecord(record.details);
 	return {
@@ -260,9 +306,11 @@ function blocksFromContentPart(part: unknown): ChatBlock[] {
 		case "toolCall":
 		case "tool_call":
 		case "tool":
+			if (asString(record.name) === "task") return [taskBlockFromRecord(record, "running")];
 			return [toolBlockFromRecord(record, record.status === "running" ? "running" : "pending")];
 		case "toolResult":
 		case "tool_result":
+			if (asString(record.name) === "task") return [taskBlockFromRecord(record, "success")];
 			return [toolBlockFromRecord(record, "success")];
 		case "skill":
 		case "skill_invocation":
@@ -291,7 +339,11 @@ function blocksFromMessage(record: Record<string, unknown>): ChatBlock[] {
 		const status = record.cancelled === true ? "cancelled" : record.exitCode === 0 || record.exitCode === undefined ? "success" : "error";
 		return [toolBlockFromRecord({ ...record, type: "tool", name: "bash", status }, status)];
 	}
-	if (record.role === "toolResult") return [toolBlockFromRecord(record, "success")];
+	if (record.role === "toolResult") {
+		const toolName = firstString(asString(record.toolName), asString(record.name));
+		if (toolName === "task") return [taskBlockFromRecord(record, "success")];
+		return [toolBlockFromRecord(record, "success")];
+	}
 	if (record.role === "custom" && typeof record.customType === "string") {
 		if (record.customType === "skill") return [skillBlockFromRecord(asRecord(record.details) ?? record)];
 		if (record.customType === "question") return [questionBlockFromRecord(asRecord(record.details) ?? record)];
@@ -347,7 +399,7 @@ export function chatMessageViewModelToPlainText(message: ChatMessageViewModel): 
 				case "question":
 					return [`[question] ${block.question.prompt}`, ...block.question.choices.map((choice) => `- ${choice}`)].join("\n");
 				case "delegation":
-					return [`[delegation] ${block.delegation.title} · ${block.delegation.status}`, block.delegation.summary].filter(Boolean).join("\n");
+					return [`[scroll] ${block.delegation.title} · ${block.delegation.status}`, block.delegation.summary].filter(Boolean).join("\n");
 			}
 		})
 		.join("\n");

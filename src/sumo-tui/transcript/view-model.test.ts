@@ -34,6 +34,51 @@ describe("structured transcript view model", () => {
 		]);
 	});
 
+	it("maps pi task tool calls to Cathedral scroll/scribe delegation blocks", () => {
+		const message = chatMessageViewModelFromPiMessage({
+			id: "a-task",
+			role: "assistant",
+			content: [
+				{ type: "toolCall", id: "tc-task", name: "task", arguments: {
+					type: "single",
+					tasks: [{ prompt: "Implement Slice A: Yoga-flex outer chrome\nDetails follow...", model: "openai-codex/gpt-5.5", thinking: "high" }],
+				} },
+			],
+		});
+
+		const block = message?.blocks[0];
+		expect(block?.type).toBe("delegation");
+		if (block?.type !== "delegation") throw new Error("wrong block type");
+		expect(block.delegation.title).toBe("Implement Slice A: Yoga-flex outer chrome");
+		expect(block.delegation.model).toBe("openai-codex/gpt-5.5");
+		expect(block.delegation.thinking).toBe("high");
+		expect(block.delegation.agent).toBe("scribe");
+		expect(block.delegation.status).toBe("running");
+
+		const plainText = message ? chatMessageViewModelToPlainText(message) : "";
+		expect(plainText).toContain("[scroll]");
+		expect(plainText).toContain("Implement Slice A");
+	});
+
+	it("maps pi task tool results to completed scroll blocks", () => {
+		const message = chatMessageViewModelFromPiMessage({
+			role: "toolResult",
+			toolCallId: "tc-task",
+			toolName: "task",
+			name: "task",
+			type: "toolResult",
+			arguments: { type: "single", tasks: [{ prompt: "Fix the bug", model: "openai-codex/gpt-5.5" }] },
+			content: [{ type: "text", text: "Task completed. Committed a1b2c3d." }],
+		});
+
+		const block = message?.blocks[0];
+		expect(block?.type).toBe("delegation");
+		if (block?.type !== "delegation") throw new Error("wrong block type");
+		expect(block.delegation.status).toBe("success");
+		expect(block.delegation.title).toBe("Fix the bug");
+		expect(block.delegation.summary).toBe("Task completed. Committed a1b2c3d.");
+	});
+
 	it("maps assistant thinking blocks in message order", () => {
 		const message = chatMessageViewModelFromPiMessage({
 			id: "a-thinking",

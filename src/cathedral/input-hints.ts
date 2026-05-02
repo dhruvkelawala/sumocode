@@ -44,11 +44,13 @@ class InputHintsComponent implements Component {
 			const frameWidth = Math.min(width, SPLASH_INPUT_FRAME_WIDTH);
 			return [centerAnsi(renderInputHints(frameWidth, { leftHint: INPUT_FRAME_HINT_AWAITING }), width)];
 		}
+		// Bible contract: hint row + blank spacer row, so the footer has breathing
+		// room below the input. Portrait already had the blank; add it in landscape too.
 		if (width > 2 && width < PORTRAIT_HINT_BREATHING_WIDTH) {
 			const hint = renderInputHints(width - 2, { leftHint: this.activeLeftHint(), leftHintOverflow: "truncate", leftHintStyle: "project-branch" });
 			return [` ${hint} `, " ".repeat(width)];
 		}
-		return [renderInputHints(width, { leftHint: this.activeLeftHint(), leftHintOverflow: "truncate", leftHintStyle: "project-branch" })];
+		return [renderInputHints(width, { leftHint: this.activeLeftHint(), leftHintOverflow: "truncate", leftHintStyle: "project-branch" }), ""];
 	}
 }
 

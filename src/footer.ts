@@ -172,8 +172,16 @@ export function renderSplashVersionLine(width: number): string {
  * matches Bible Element 3: no status footer, just breathing rows and the
  * centered version line below the invocation hint row.
  */
+/**
+ * Bible contract bottom-stack rows reserved by the footer component:
+ *   [footer row] + [blank bottom spacer]
+ * The hint widget below the editor provides [hint row] + [blank spacer].
+ * Together they satisfy the active scene 4-row bottom chrome below the input.
+ */
+export const FOOTER_BOTTOM_SPACER_ROWS = 1;
+
 export function renderFooterBlock(snapshot: FooterSnapshot, width = 160): string[] {
-	if (!snapshot.isSplash) return [formatFooterLine(snapshot, width)];
+	if (!snapshot.isSplash) return [formatFooterLine(snapshot, width), ""];
 	const version = renderSplashVersionLine(width);
 	return [
 		...Array.from({ length: SPLASH_VERSION_TOP_GAP_ROWS }, () => ""),

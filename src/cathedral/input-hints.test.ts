@@ -73,12 +73,13 @@ describe("installInputHints", () => {
 
 		const component = factory?.(undefined, undefined);
 		const lines = component!.render(80);
-		expect(lines.length).toBe(1);
+		expect(lines.length).toBe(2);
 		const stripped = lines[0]!.replace(/\u001b\[[0-9;]*m/g, "");
 		expect(stripped).toContain("sumocode");
 		expect(stripped).toContain("CTRL+/ · COMMANDS");
 		expect(stripped).not.toContain("TAB · AGENTS");
 		expect(stripped).not.toContain("AWAITING PROMPT");
+		expect(lines[1]).toBe("");
 
 		const portraitLines = component!.render(60).map((line) => line.replace(/\u001b\[[0-9;]*m/g, ""));
 		expect(portraitLines).toHaveLength(2);

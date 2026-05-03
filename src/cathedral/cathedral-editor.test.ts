@@ -18,6 +18,28 @@ describe("normalizeRawMultilinePasteInput", () => {
 		const paste = "\x1b[200~line one\rline two\x1b[201~";
 		expect(normalizeRawMultilinePasteInput(paste)).toBe(paste);
 	});
+
+	it("preserves modifier-Enter encodings so Shift+Enter / Alt+Enter survive (#201)", () => {
+		// Kitty's default Shift+Enter mapping (and the legacy Alt+Enter encoding
+		// when kitty protocol is off) is `\x1b\r`. Ghostty's Shift+Enter is
+		// `\x1b\n`. Both must pass through verbatim — rewriting the CR to LF
+		// yields `\x1b\n`, which pi-tui's editor recognizes as neither
+		// shift+enter nor alt+enter, silently dropping the keypress.
+		expect(normalizeRawMultilinePasteInput("\x1b\r")).toBe("\x1b\r");
+		expect(normalizeRawMultilinePasteInput("\x1b\n")).toBe("\x1b\n");
+		// Defend against a hypothetical terminal-batched chunk of two
+		// Shift+Enters arriving in one event — must still pass through.
+		expect(normalizeRawMultilinePasteInput("\x1b\r\x1b\r")).toBe("\x1b\r\x1b\r");
+	});
+
+	it("still normalizes paste even when content contains ESC sequences", () => {
+		// Pasting an ANSI-colored multi-line log: the bridge must still turn raw
+		// CR into editor newlines so the user's draft preserves all lines. The
+		// modifier-Enter bailout is a regex that matches ONLY whole-chunk
+		// modifier-Enter encodings, so paste-with-embedded-ESC stays in the
+		// rewrite path.
+		expect(normalizeRawMultilinePasteInput("\x1b[31mError\x1b[0m\rline two")).toBe("\x1b[31mError\x1b[0m\nline two");
+	});
 });
 
 describe("alignAutocompleteRow", () => {

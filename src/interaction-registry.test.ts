@@ -6,6 +6,7 @@ function buildPiStub() {
 		on: vi.fn(),
 		registerCommand: vi.fn(),
 		registerShortcut: vi.fn(),
+		registerTool: vi.fn(),
 	};
 }
 
@@ -72,6 +73,7 @@ describe("InteractionRegistry", () => {
 		expect(snapshot.diagnostics).toEqual([]);
 		expect(snapshot.commands.map(([id]) => id).sort()).toEqual([
 			"exit",
+			"slate",
 			"sumo:approval",
 			"sumo:cursor",
 			"sumo:memory",
@@ -83,7 +85,7 @@ describe("InteractionRegistry", () => {
 			"sumo:theme-check",
 		]);
 		expect(snapshot.shortcuts.map(([id]) => id).sort()).toEqual(["ctrl+/", "ctrl+1", "ctrl+2"]);
-		expect(pi.registerCommand).toHaveBeenCalledTimes(10);
+		expect(pi.registerCommand).toHaveBeenCalledTimes(11);
 		expect(pi.registerShortcut).toHaveBeenCalledTimes(3);
 	});
 });

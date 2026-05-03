@@ -134,9 +134,12 @@ function renderHeader(tool: ToolCallViewModel, width: number): string {
 		...(note ? [span(" "), span(note, { fg: CATHEDRAL_TOKENS.colors.foregroundDim })] : []),
 		span(" "),
 	];
+	const input = asRecord(tool.input);
+	const filePath = firstString(input?.path, input?.filePath);
 	const left: Span[] = [
 		span("╭─ ", { fg: CATHEDRAL_TOKENS.colors.divider }),
 		span(`[${tool.name}]`, { fg: CATHEDRAL_TOKENS.colors.accent }),
+		...(filePath ? [span("  "), span(filePath, { fg: CATHEDRAL_TOKENS.colors.foreground })] : []),
 		span(" "),
 	];
 	const used = [...left, ...right].reduce((sum, part) => sum + visibleWidth(part.text), 0);

@@ -266,6 +266,7 @@ export class TerminalSessionOwner {
 		this.cursorColorOverridden = false;
 		this.lastCursorColor = undefined;
 		this.lastEmittedCursor = null;
+		this.hardwareCursorVisible = true;
 		if (!this.isTTY()) return;
 		let output = "";
 		if (shouldResetCursorColor) output += CURSOR_COLOR_RESET;

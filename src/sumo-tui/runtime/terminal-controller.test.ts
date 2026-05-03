@@ -249,6 +249,28 @@ describe("TerminalSessionOwner", () => {
 		expect(output.writes[0]).not.toContain("\x1b[?25l"); // no redundant hide
 	});
 
+	it("resets hardwareCursorVisible on terminal exit so next session doesn't skip hide", () => {
+		// exitTerminal() emits \x1b[?25h in its cleanup sequence but wasn't
+		// syncing hardwareCursorVisible. A prior session that hid the cursor
+		// leaves the flag stale, so the next session's first overlay frame
+		// skips \x1b[?25l (thinking it's already hidden) and the cursor bleeds.
+		const output = outputStub();
+		const terminal = new TerminalSessionOwner({ output });
+
+		// Simulate a session that hid the cursor.
+		terminal.writeFramePatches([{ row: 5, ansi: "x" }], null);
+		expect(output.writes[0]).toContain("\x1b[?25l");
+		terminal.exitTerminal();
+		output.writes.length = 0;
+
+		// New session: first frame with null cursor — must emit hide.
+		terminal.enterAltscreen();
+		output.writes.length = 0;
+		terminal.writeFramePatches([{ row: 1, ansi: "fresh" }], null);
+		expect(output.writes).toHaveLength(1);
+		expect(output.writes[0]).toContain("\x1b[?25l");
+	});
+
 	it("re-emits cursor after exitTerminal clears lastEmittedCursor", () => {
 		const output = outputStub();
 		const terminal = new TerminalSessionOwner({ output });

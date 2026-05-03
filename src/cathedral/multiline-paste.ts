@@ -10,9 +10,13 @@ export function normalizeRawMultilinePasteInput(data: string): string {
 	// when not. Rewriting the CR to LF here yields `\x1b\n`, which the editor
 	// recognizes as neither — the keypress is silently dropped. Pass these
 	// through verbatim so pi-tui can interpret them. Same applies to `\x1b\n`
-	// (Ghostty's shift+enter encoding). CSI u modifier-Enter sequences such as
-	// `\x1b[13;2u` already do not contain CR, so they are unaffected by the
-	// rewrite below.
-	if (data === "\x1b\r" || data === "\x1b\n") return data;
+	// (Ghostty's shift+enter encoding). The regex matches one or more
+	// modifier-Enter encodings (defending against a hypothetical batched
+	// `\x1b\r\x1b\r` chunk) and explicitly NOT a chunk that mixes
+	// modifier-Enter with paste content — that case stays in the rewrite path
+	// because the paste content is what we actually need to normalize.
+	// CSI u modifier-Enter sequences such as `\x1b[13;2u` already do not
+	// contain CR, so they are unaffected by the rewrite below.
+	if (/^(?:\x1b[\r\n])+$/.test(data)) return data;
 	return data.replace(/\r\n?/g, "\n");
 }

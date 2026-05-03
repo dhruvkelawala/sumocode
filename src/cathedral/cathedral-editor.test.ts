@@ -27,6 +27,18 @@ describe("normalizeRawMultilinePasteInput", () => {
 		// shift+enter nor alt+enter, silently dropping the keypress.
 		expect(normalizeRawMultilinePasteInput("\x1b\r")).toBe("\x1b\r");
 		expect(normalizeRawMultilinePasteInput("\x1b\n")).toBe("\x1b\n");
+		// Defend against a hypothetical terminal-batched chunk of two
+		// Shift+Enters arriving in one event — must still pass through.
+		expect(normalizeRawMultilinePasteInput("\x1b\r\x1b\r")).toBe("\x1b\r\x1b\r");
+	});
+
+	it("still normalizes paste even when content contains ESC sequences", () => {
+		// Pasting an ANSI-colored multi-line log: the bridge must still turn raw
+		// CR into editor newlines so the user's draft preserves all lines. The
+		// modifier-Enter bailout is a regex that matches ONLY whole-chunk
+		// modifier-Enter encodings, so paste-with-embedded-ESC stays in the
+		// rewrite path.
+		expect(normalizeRawMultilinePasteInput("\x1b[31mError\x1b[0m\rline two")).toBe("\x1b[31mError\x1b[0m\nline two");
 	});
 });
 

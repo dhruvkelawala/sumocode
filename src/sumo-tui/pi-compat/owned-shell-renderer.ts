@@ -474,11 +474,13 @@ export class OwnedShellRenderer {
 	 * bottom of the chat area. The banner overlays the last N rows of the
 	 * chat pager region without shifting the Yoga layout.
 	 */
-	private paintPendingMessages(frame: CellBuffer, cols: number): void {
+	private paintPendingMessages(frame: CellBuffer, _cols: number): void {
 		if (!this.resolvePendingMessages) return;
 		try {
 			const container = this.resolvePendingMessages();
-			const rendered = container.render(cols);
+			const chatWidth = Math.max(1, Math.floor(this.chat.getComputedWidth()));
+			const chatLeft = Math.floor(this.chatRow.getComputedLeft() + this.chat.getComputedLeft());
+			const rendered = container.render(chatWidth);
 			const contentLines = rendered.filter((line: string) => line.replace(/\x1b\[[0-9;]*m/g, "").trim().length > 0);
 			if (contentLines.length === 0) return;
 
@@ -490,8 +492,8 @@ export class OwnedShellRenderer {
 			const T = CATHEDRAL_TOKENS.colors;
 			for (let i = 0; i < height; i += 1) {
 				const plain = (contentLines[i] ?? "").replace(/\x1b\[[0-9;]*m/g, "");
-				const padded = plain.length < cols ? `${plain}${" ".repeat(cols - plain.length)}` : plain.slice(0, cols);
-				frame.paintRow(top + i, withPersistentStyle(padded, T.foregroundDim, T.surfaceLifted), 0, cols);
+				const padded = plain.length < chatWidth ? `${plain}${" ".repeat(chatWidth - plain.length)}` : plain.slice(0, chatWidth);
+				frame.paintRow(top + i, withPersistentStyle(padded, T.foregroundDim, T.surfaceLifted), chatLeft, chatWidth);
 			}
 		} catch {
 			// Container may not be ready yet

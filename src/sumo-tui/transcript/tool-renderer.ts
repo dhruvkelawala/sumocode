@@ -135,7 +135,14 @@ function renderHeader(tool: ToolCallViewModel, width: number): string {
 		span(" "),
 	];
 	const input = asRecord(tool.input);
-	const filePath = firstString(input?.path, input?.filePath);
+	const rawFilePath = firstString(input?.path, input?.filePath);
+	// Reserve space for right side (glyph + note) + minimum rule of 4 dashes
+	const rightWidth = right.reduce((sum, part) => sum + visibleWidth(part.text), 0);
+	const baseLeftWidth = 3 + tool.name.length + 2 + 1; // "╭─ " + "[name]" + " "
+	const maxPathWidth = Math.max(0, width - baseLeftWidth - rightWidth - 4 - 2); // 4 dashes min, 2 for "  " before path
+	const filePath = rawFilePath && rawFilePath.length > maxPathWidth
+		? (maxPathWidth > 3 ? `…${rawFilePath.slice(-(maxPathWidth - 1))}` : undefined)
+		: rawFilePath;
 	const left: Span[] = [
 		span("╭─ ", { fg: CATHEDRAL_TOKENS.colors.divider }),
 		span(`[${tool.name}]`, { fg: CATHEDRAL_TOKENS.colors.accent }),

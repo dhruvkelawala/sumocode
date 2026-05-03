@@ -23,7 +23,7 @@ export function getSlate(): Slate {
 
 function reconstructSlate(ctx: ExtensionContext): void {
 	try {
-		const entries = ctx.sessionManager.getEntries();
+		const entries = ctx.sessionManager.getBranch();
 		slate = Slate.fromEntries(entries as Parameters<typeof Slate.fromEntries>[0]);
 	} catch {
 		slate = new Slate();
@@ -31,7 +31,6 @@ function reconstructSlate(ctx: ExtensionContext): void {
 }
 
 function persistSlate(pi: ExtensionAPI): void {
-	if (slate.isEmpty) return;
 	pi.appendEntry(SLATE_CUSTOM_TYPE, slate.toJSON());
 }
 
@@ -46,7 +45,7 @@ function parseSubcommand(rawArgs: string): { action: "add"; text: string } | { a
 		if (rest === "") return { action: "done" };
 		const num = Number.parseInt(rest, 10);
 		if (Number.isFinite(num) && num > 0) return { action: "done", index: num };
-		return { action: "done" };
+		return { action: "add", text: joined };
 	}
 	return { action: "add", text: joined };
 }

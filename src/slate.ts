@@ -42,8 +42,10 @@ export class Slate {
 	 * Returns the removed text, or undefined if index is out of bounds.
 	 */
 	public remove(oneBasedIndex?: number): string | undefined {
-		const index = (oneBasedIndex ?? 1) - 1;
-		if (index < 0 || index >= this.items.length) return undefined;
+		const raw = oneBasedIndex ?? 1;
+		if (!Number.isInteger(raw) || raw < 1) return undefined;
+		const index = raw - 1;
+		if (index >= this.items.length) return undefined;
 		return this.items.splice(index, 1)[0];
 	}
 

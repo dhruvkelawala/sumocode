@@ -30,27 +30,63 @@
 
 import type { Component } from "@mariozechner/pi-tui";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { matchesKey } from "@mariozechner/pi-tui";
-import { colorHex } from "./footer.js";
+import { matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@mariozechner/pi-tui";
 import { CATHEDRAL_TOKENS } from "./tokens.js";
 
 const RESET = "\u001b[0m";
 const ANSI_PATTERN = /\u001b\[[0-9;]*m/g;
+const PANEL_INDENT = "   ";
+const BIBLE_COMMAND_BOX_WIDTH_AT_80 = 68;
 
 function visibleLength(text: string): number {
-	return text.replace(ANSI_PATTERN, "").length;
+	return visibleWidth(text.replace(ANSI_PATTERN, ""));
+}
+
+function sgr(hex: string, mode: 38 | 48): string {
+	const normalized = hex.replace("#", "");
+	const red = Number.parseInt(normalized.slice(0, 2), 16);
+	const green = Number.parseInt(normalized.slice(2, 4), 16);
+	const blue = Number.parseInt(normalized.slice(4, 6), 16);
+	return `\u001b[${mode};2;${red};${green};${blue}m`;
+}
+
+function fg(text: string, hex: string): string {
+	return `${sgr(hex, 38)}${text}${RESET}`;
+}
+
+function persistentBg(text: string, fgHex: string, bgHex: string): string {
+	const styleCode = `${sgr(fgHex, 38)}${sgr(bgHex, 48)}`;
+	return `${styleCode}${text.replace(/\u001b\[0m/g, `${RESET}${styleCode}`)}${RESET}`;
+}
+
+function fitLine(line: string, width: number): string {
+	if (width <= 0) return "";
+	return visibleLength(line) > width ? truncateToWidth(line, width, "…") : line;
+}
+
+function padRight(line: string, width: number): string {
+	const fitted = fitLine(line, width);
+	const length = visibleLength(fitted);
+	if (length >= width) return fitted;
+	return `${fitted}${" ".repeat(width - length)}`;
 }
 
 function center(line: string, width: number): string {
-	const len = visibleLength(line);
-	if (len >= width) return line;
-	const pad = Math.floor((width - len) / 2);
-	return `${" ".repeat(pad)}${line}`;
+	const fitted = fitLine(line, width);
+	const length = visibleLength(fitted);
+	if (length >= width) return fitted;
+	const left = Math.floor((width - length) / 2);
+	return `${" ".repeat(left)}${fitted}${" ".repeat(width - length - left)}`;
 }
 
-function divider(width: number): string {
-	const inner = Math.max(0, width - 6);
-	return `   ${colorHex("─".repeat(inner), CATHEDRAL_TOKENS.colors.divider)}`;
+function panelRow(inner: string, width: number): string {
+	return persistentBg(padRight(inner, width), CATHEDRAL_TOKENS.colors.foreground, CATHEDRAL_TOKENS.colors.surfaceLifted);
+}
+
+function splitRule(width: number): string {
+	const ruleLength = Math.max(1, Math.min(22, Math.floor((width - 5) / 2)));
+	const divider = CATHEDRAL_TOKENS.colors.divider;
+	return center(`${fg("─".repeat(ruleLength), divider)}  ${fg("·", divider)}  ${fg("─".repeat(ruleLength), divider)}`, width);
 }
 
 export type ApprovalChoice = "yes" | "no" | "always";
@@ -64,62 +100,83 @@ export type ApprovalModalSnapshot = {
 const DEFAULT_BUTTON_ORDER: readonly ApprovalChoice[] = ["yes", "no", "always"];
 
 function renderButton(choice: ApprovalChoice, isActive: boolean): string {
-	const label = choice === "yes" ? "[Y]ES" : choice === "no" ? "[N]O" : "[A]LWAYS";
+	const key = choice === "yes" ? "Y" : choice === "no" ? "N" : "A";
+	const rest = choice === "yes" ? "ES" : choice === "no" ? "O" : "LWAYS";
 	if (isActive) {
-		// Active button is filled in accent (burnt orange) per Q6.4 lock
-		const bg = `\u001b[48;2;217;119;6m`;
-		const fg = `\u001b[38;2;26;21;17m`; // background hex 1A1511 inverted on accent
-		return `${bg}${fg} ${label} ${RESET}`;
+		const label = choice === "yes" ? " YES " : choice === "no" ? "  NO  " : " ALWAYS ";
+		return `${sgr(CATHEDRAL_TOKENS.colors.states.approval, 48)}${sgr(CATHEDRAL_TOKENS.colors.background, 38)}${label}${RESET}`;
 	}
-	return ` ${colorHex(label, CATHEDRAL_TOKENS.colors.foreground)} `;
+	return `${fg("[", CATHEDRAL_TOKENS.colors.divider)}${fg(key, CATHEDRAL_TOKENS.colors.foreground)}${fg("]", CATHEDRAL_TOKENS.colors.divider)}${fg(rest, CATHEDRAL_TOKENS.colors.foreground)}`;
+}
+
+function commandBoxWidth(width: number): number {
+	const maxBoxWidth = Math.max(2, width - visibleLength(PANEL_INDENT));
+	const target = Math.max(20, width - (80 - BIBLE_COMMAND_BOX_WIDTH_AT_80));
+	return Math.min(maxBoxWidth, target);
+}
+
+function renderCommandFrame(command: string, width: number): string[] {
+	const boxWidth = commandBoxWidth(width);
+	const innerWidth = Math.max(0, boxWidth - 2);
+	const commandWidth = Math.max(1, innerWidth - 2);
+	const border = CATHEDRAL_TOKENS.colors.divider;
+	const commandRows = wrapTextWithAnsi(command, commandWidth);
+	const safeRows = commandRows.length > 0 ? commandRows : [""];
+	const boxRows = [
+		fg(`┌${"─".repeat(innerWidth)}┐`, border),
+		...safeRows.map((row) => `${fg("│", border)} ${fg(fitLine(row, commandWidth), CATHEDRAL_TOKENS.colors.foreground)}${" ".repeat(Math.max(0, commandWidth - visibleLength(row)))} ${fg("│", border)}`),
+		fg(`└${"─".repeat(innerWidth)}┘`, border),
+	];
+	return boxRows.map((row) => `${PANEL_INDENT}${persistentBg(padRight(row, boxWidth), CATHEDRAL_TOKENS.colors.foreground, CATHEDRAL_TOKENS.colors.surfaceRecess)}`);
+}
+
+function renderDescriptionRows(descriptionLines: readonly string[], width: number): string[] {
+	const rows: string[] = [];
+	const contentWidth = Math.max(1, width - visibleLength(PANEL_INDENT));
+	for (let index = 0; index < descriptionLines.length; index += 1) {
+		const prefix = index === 0 ? "— " : "  ";
+		const wrapped = wrapTextWithAnsi(descriptionLines[index] ?? "", Math.max(1, contentWidth - visibleLength(prefix)));
+		const lines = wrapped.length > 0 ? wrapped : [""];
+		for (let rowIndex = 0; rowIndex < lines.length; rowIndex += 1) {
+			const rowPrefix = rowIndex === 0 ? prefix : "  ";
+			rows.push(`${PANEL_INDENT}${fg(`${rowPrefix}${lines[rowIndex]}`, CATHEDRAL_TOKENS.colors.foregroundDim)}`);
+		}
+	}
+	return rows;
 }
 
 /**
  * Pure render of the modal content (lines that go inside the overlay).
  */
 export function renderApprovalModal(snapshot: ApprovalModalSnapshot, width: number): string[] {
+	const safeWidth = Math.max(1, Math.floor(width));
 	const lines: string[] = [];
 
-	lines.push("");
-	lines.push(center(colorHex("APPROVAL REQUIRED", CATHEDRAL_TOKENS.colors.accent), width));
-	lines.push(divider(width));
-	lines.push("");
+	lines.push(panelRow("", safeWidth));
+	lines.push(panelRow(center(`${fg("✾", CATHEDRAL_TOKENS.colors.states.approval)}  ${fg("APPROVAL REQUIRED", CATHEDRAL_TOKENS.colors.states.approval)}  ${fg("✾", CATHEDRAL_TOKENS.colors.states.approval)}`, safeWidth), safeWidth));
+	lines.push(panelRow("", safeWidth));
+	lines.push(panelRow(splitRule(safeWidth), safeWidth));
+	lines.push(panelRow("", safeWidth));
 
-	// "You are about to execute:"
-	lines.push(`   ${colorHex("You are about to execute:", CATHEDRAL_TOKENS.colors.foreground)}`);
-	lines.push("");
+	lines.push(panelRow(`${PANEL_INDENT}${fg("You are about to execute:", CATHEDRAL_TOKENS.colors.foreground)}`, safeWidth));
+	lines.push(panelRow("", safeWidth));
 
-	// Code block frame around the command
-	const innerWidth = Math.max(20, width - 6);
-	const top = colorHex(`┌${"─".repeat(innerWidth - 2)}┐`, CATHEDRAL_TOKENS.colors.divider);
-	const bottom = colorHex(`└${"─".repeat(innerWidth - 2)}┘`, CATHEDRAL_TOKENS.colors.divider);
-	const sideOpen = colorHex("│", CATHEDRAL_TOKENS.colors.divider);
-	const sideClose = colorHex("│", CATHEDRAL_TOKENS.colors.divider);
-	const cmdText = colorHex(snapshot.command, CATHEDRAL_TOKENS.colors.accent);
-	const cmdLine = `${sideOpen} ${cmdText}`;
-	const cmdLinePad = Math.max(1, innerWidth - 1 - 1 - visibleLength(snapshot.command) - 1);
-	const cmdLineFull = `${cmdLine}${" ".repeat(cmdLinePad)}${sideClose}`;
-	lines.push(`   ${top}`);
-	lines.push(`   ${cmdLineFull}`);
-	lines.push(`   ${bottom}`);
-	lines.push("");
+	for (const row of renderCommandFrame(snapshot.command, safeWidth)) lines.push(panelRow(row, safeWidth));
+	lines.push(panelRow("", safeWidth));
 
-	// Description lines (em-dash leader on first)
-	for (let i = 0; i < snapshot.descriptionLines.length; i++) {
-		const prefix = i === 0 ? "— " : "  ";
-		lines.push(`   ${colorHex(`${prefix}${snapshot.descriptionLines[i]}`, CATHEDRAL_TOKENS.colors.foregroundDim)}`);
-	}
+	for (const row of renderDescriptionRows(snapshot.descriptionLines, safeWidth)) lines.push(panelRow(row, safeWidth));
 
-	lines.push("");
-	lines.push(divider(width));
+	lines.push(panelRow("", safeWidth));
+	lines.push(panelRow(splitRule(safeWidth), safeWidth));
+	lines.push(panelRow("", safeWidth));
 
-	// Bottom row: ■ SYSTEM NOTICE   [Y]ES  [N]O  [A]LWAYS (right-aligned)
-	const systemNotice = `${colorHex("■", CATHEDRAL_TOKENS.colors.states.approval)} ${colorHex("SYSTEM NOTICE", CATHEDRAL_TOKENS.colors.foregroundDim)}`;
-	const buttons = DEFAULT_BUTTON_ORDER.map((c) => renderButton(c, c === snapshot.activeButton)).join(" ");
-	const left = `   ${systemNotice}`;
-	const right = `${buttons}   `;
-	const gap = Math.max(2, width - visibleLength(left) - visibleLength(right));
-	lines.push(`${left}${" ".repeat(gap)}${right}`);
+	const systemNotice = `${fg("■", CATHEDRAL_TOKENS.colors.states.approval)} ${fg("SYSTEM NOTICE", CATHEDRAL_TOKENS.colors.foregroundDim)}`;
+	const buttons = DEFAULT_BUTTON_ORDER.map((choice) => renderButton(choice, choice === snapshot.activeButton)).join("  ");
+	const left = `${PANEL_INDENT}${systemNotice}`;
+	const right = `${buttons}${PANEL_INDENT}`;
+	const gap = Math.max(1, safeWidth - visibleLength(left) - visibleLength(right));
+	lines.push(panelRow(`${left}${" ".repeat(gap)}${right}`, safeWidth));
+	lines.push(panelRow("", safeWidth));
 
 	return lines;
 }

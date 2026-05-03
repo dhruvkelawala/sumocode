@@ -1,9 +1,10 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	getGitBranch,
 	getSessionUsage,
 	invalidateGitBranch,
 	invalidateSessionUsage,
+	linkGitBranchProvider,
 	noteSessionMessage,
 	resetLiveSessionHasMessages,
 	refreshGitBranchAsync,
@@ -175,5 +176,99 @@ describe("session-cache git branch", () => {
 		await Promise.all([a, b]);
 
 		expect(asyncRunner).toHaveBeenCalledTimes(1);
+	});
+});
+
+describe("linkGitBranchProvider", () => {
+	afterEach(() => {
+		linkGitBranchProvider(null);
+	});
+
+	it("getGitBranch returns the linked provider's live value, bypassing the ctx cache", () => {
+		const ctx = makeCtx([], "/tmp/proj");
+
+		// Pre-populate the ctx cache with a stale value
+		refreshGitBranchSync(ctx, () => "stale\n");
+		expect(getGitBranch(ctx)).toBe("stale");
+
+		// Link a live provider — getGitBranch must prefer its value
+		const unsubscribe = vi.fn();
+		linkGitBranchProvider({
+			getGitBranch: () => "live-main",
+			onBranchChange: (cb: () => void) => { void cb; return unsubscribe; },
+		});
+
+		expect(getGitBranch(ctx)).toBe("live-main");
+	});
+
+	it("returns null from the linked provider when not in a repo", () => {
+		const ctx = makeCtx([], "/tmp/proj");
+		refreshGitBranchSync(ctx, () => "old\n");
+
+		linkGitBranchProvider({
+			getGitBranch: () => null,
+			onBranchChange: () => vi.fn(),
+		});
+
+		expect(getGitBranch(ctx)).toBeNull();
+	});
+
+	it("falling back to ctx cache after unlinking", () => {
+		const ctx = makeCtx([], "/tmp/proj");
+		refreshGitBranchSync(ctx, () => "cached\n");
+
+		linkGitBranchProvider({
+			getGitBranch: () => "live",
+			onBranchChange: () => vi.fn(),
+		});
+		expect(getGitBranch(ctx)).toBe("live");
+
+		// Unlink — should fall back to the cached value
+		linkGitBranchProvider(null);
+		expect(getGitBranch(ctx)).toBe("cached");
+	});
+
+	it("subscribes to onBranchChange when linking", () => {
+		const onBranchChange = vi.fn(() => vi.fn());
+		linkGitBranchProvider({
+			getGitBranch: () => "main",
+			onBranchChange,
+		});
+
+		expect(onBranchChange).toHaveBeenCalledTimes(1);
+	});
+
+	it("unsubscribes previous provider when linking a new one", () => {
+		const unsub1 = vi.fn();
+		const onBranchChange1 = vi.fn(() => unsub1);
+		linkGitBranchProvider({
+			getGitBranch: () => "first",
+			onBranchChange: onBranchChange1,
+		});
+
+		const unsub2 = vi.fn();
+		linkGitBranchProvider({
+			getGitBranch: () => "second",
+			onBranchChange: vi.fn(() => unsub2),
+		});
+
+		expect(unsub1).toHaveBeenCalledTimes(1);
+		expect(unsub2).not.toHaveBeenCalled();
+	});
+
+	it("cleanup from an old provider does not unlink a newer provider", () => {
+		const ctx = makeCtx([], "/tmp/proj");
+		const oldCleanup = linkGitBranchProvider({
+			getGitBranch: () => "old",
+			onBranchChange: () => vi.fn(),
+		});
+		linkGitBranchProvider({
+			getGitBranch: () => "new",
+			onBranchChange: () => vi.fn(),
+		});
+
+		oldCleanup();
+
+		expect(getGitBranch(ctx)).toBe("new");
 	});
 });

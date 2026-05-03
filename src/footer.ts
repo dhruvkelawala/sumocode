@@ -9,7 +9,7 @@ import { truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
  * as a direct dep. Mirrors the upstream definition exactly.
  */
 export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
-import { getSessionUsage as getCachedSessionUsage, sessionHasMessages as cachedSessionHasMessages } from "./session-cache.js";
+import { getSessionUsage as getCachedSessionUsage, sessionHasMessages as cachedSessionHasMessages, linkGitBranchProvider } from "./session-cache.js";
 import { CATHEDRAL_TOKENS, type SumoCodeState } from "./tokens.js";
 import { VOICE } from "./voice.js";
 
@@ -203,9 +203,15 @@ export function installFooter(pi: ExtensionAPI): void {
 			render = () => tui.requestRender();
 			const unsubscribe = footerData.onBranchChange(render);
 
+			// Bridge Pi's file-watcher-driven branch provider into the shared
+			// session-cache so the sidebar and input-hints also see live updates
+			// instead of stale session_start/agent_end snapshots.
+			const unlinkBranchProvider = linkGitBranchProvider(footerData);
+
 			return {
 				dispose(): void {
 					unsubscribe();
+					unlinkBranchProvider();
 					if (render) render = undefined;
 				},
 				invalidate(): void {},

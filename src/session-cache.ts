@@ -19,7 +19,7 @@
  */
 
 import { execFile, execFileSync } from "node:child_process";
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, ReadonlyFooterDataProvider } from "@mariozechner/pi-coding-agent";
 import { logDiagnostic } from "./sumo-tui/runtime/diagnostics.js";
 import { renderDiagnosticsCounters } from "./render-diagnostics.js";
 
@@ -32,6 +32,8 @@ export type SessionUsage = {
 
 export type GitRunner = (args: string[], cwd: string) => string;
 export type AsyncGitRunner = (args: string[], cwd: string) => Promise<string>;
+
+export type GitBranchProvider = Pick<ReadonlyFooterDataProvider, "getGitBranch" | "onBranchChange">;
 
 type Entry = {
 	usage: SessionUsage | undefined;
@@ -130,16 +132,60 @@ export function sessionHasMessages(ctx: ExtensionContext): boolean {
 }
 
 /**
- * Read-only cached git branch lookup. NEVER invokes `git` — always returns the
- * value most recently resolved by `refreshGitBranchSync` (called once on
- * `session_start`) or `refreshGitBranchAsync` (called on `agent_end`).
+ * Module-level live branch provider, set by {@link linkGitBranchProvider}.
+ * When linked, `getGitBranch()` returns this provider's live value directly —
+ * file-watcher-driven — bypassing the ctx-keyed cache entirely.
+ */
+let linkedBranchProvider: GitBranchProvider | null = null;
+let linkedProviderUnsubscribe: (() => void) | null = null;
+
+/**
+ * Link a live git branch provider so all `getGitBranch()` callers receive
+ * file-watcher-driven updates instead of the ctx-keyed snapshot cache.
  *
- * Render-path callers (footer, sidebar, input-hints) use this so a `git`
- * fork+exec can never block a keystroke. Worst case while a refresh is in
- * flight: callers see the previous value, or `null` if the cache hasn't been
- * primed yet.
+ * Call from `installFooter` when Pi creates its `FooterDataProvider`.
+ * Pass `null` to unlink (cleanup).
+ */
+export function linkGitBranchProvider(provider: GitBranchProvider | null): () => void {
+	linkedProviderUnsubscribe?.();
+	linkedProviderUnsubscribe = null;
+	linkedBranchProvider = provider;
+	if (!provider) return () => undefined;
+
+	let active = true;
+	linkedProviderUnsubscribe = provider.onBranchChange(() => {
+		// When the branch changes live, notify render diagnostics so the next
+		// render picks up the new value. The branch value itself is returned
+		// directly from provider.getGitBranch() — no cache invalidation needed.
+		renderDiagnosticsCounters.noteBranchChange();
+	});
+
+	return () => {
+		if (!active) return;
+		active = false;
+		// Avoid an old footer/session disposal unlinking a newer provider.
+		if (linkedBranchProvider !== provider) return;
+		linkedProviderUnsubscribe?.();
+		linkedProviderUnsubscribe = null;
+		linkedBranchProvider = null;
+	};
+}
+
+/**
+ * Read-only git branch lookup.
+ *
+ * When a live {@link GitBranchProvider} is linked via {@link linkGitBranchProvider},
+ * returns its current value directly — always fresh, file-watcher-driven.
+ *
+ * Otherwise falls back to the ctx-keyed cache populated by
+ * `refreshGitBranchSync` (called once on `session_start`) or
+ * `refreshGitBranchAsync` (called on `agent_end`).
+ *
+ * NEVER invokes `git` directly — a fork+exec can never block a keystroke.
  */
 export function getGitBranch(ctx: ExtensionContext): string | null {
+	if (linkedBranchProvider) return linkedBranchProvider.getGitBranch();
+
 	const entry = entryFor(ctx);
 	if (entry.branch === undefined) {
 		renderDiagnosticsCounters.noteBranchCacheMiss();

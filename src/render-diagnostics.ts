@@ -81,6 +81,7 @@ class RenderStats {
 	private cacheUsageMisses = 0;
 	private cacheBranchHits = 0;
 	private cacheBranchMisses = 0;
+	private cacheBranchChanges = 0;
 	private piEvents = 0;
 	private keystrokes = 0;
 	private keystrokeBytes = 0;
@@ -134,6 +135,10 @@ class RenderStats {
 
 	public recordCacheBranchMiss(): void {
 		this.cacheBranchMisses += 1;
+	}
+
+	public recordCacheBranchChange(): void {
+		this.cacheBranchChanges += 1;
 	}
 
 	public recordPiEvent(): void {
@@ -207,6 +212,7 @@ class RenderStats {
 			this.cacheUsageMisses === 0 &&
 			this.cacheBranchHits === 0 &&
 			this.cacheBranchMisses === 0 &&
+			this.cacheBranchChanges === 0 &&
 			this.piEvents === 0 &&
 			this.keystrokes === 0 &&
 			this.stdoutByStream.size === 0 &&
@@ -279,6 +285,7 @@ class RenderStats {
 			sessionCacheMisses: this.cacheUsageMisses,
 			branchCacheHits: this.cacheBranchHits,
 			branchCacheMisses: this.cacheBranchMisses,
+			branchCacheChanges: this.cacheBranchChanges,
 			piEvents: this.piEvents,
 			keystrokes: this.keystrokes,
 			keystrokeBytes: this.keystrokeBytes,
@@ -293,6 +300,7 @@ class RenderStats {
 		this.cacheUsageMisses = 0;
 		this.cacheBranchHits = 0;
 		this.cacheBranchMisses = 0;
+		this.cacheBranchChanges = 0;
 		this.piEvents = 0;
 		this.keystrokes = 0;
 		this.keystrokeBytes = 0;
@@ -332,6 +340,9 @@ export const renderDiagnosticsCounters = {
 	},
 	noteBranchCacheMiss(): void {
 		if (isDiagnosticsEnabled()) stats.recordCacheBranchMiss();
+	},
+	noteBranchChange(): void {
+		if (isDiagnosticsEnabled()) stats.recordCacheBranchChange();
 	},
 } as const;
 

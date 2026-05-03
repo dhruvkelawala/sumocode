@@ -22,20 +22,24 @@ function snapshot(overrides: Partial<ApprovalModalSnapshot> = {}): ApprovalModal
 }
 
 describe("renderApprovalModal", () => {
-	it("renders 'APPROVAL REQUIRED' title in accent", () => {
+	it("renders 'APPROVAL REQUIRED' title in approval red with scriptorium marks", () => {
 		const lines = renderApprovalModal(snapshot(), 80);
-		const titleLine = lines.find((l) => stripAnsi(l).includes("APPROVAL REQUIRED"));
+		const titleLine = lines.find((line) => stripAnsi(line).includes("APPROVAL REQUIRED"));
 		expect(titleLine).toBeDefined();
-		// accent #D97706 -> 217;119;6
-		expect(titleLine).toContain("\u001b[38;2;217;119;6m");
+		expect(stripAnsi(titleLine!)).toContain("✾  APPROVAL REQUIRED  ✾");
+		// approval #C1443E -> 193;68;62
+		expect(titleLine).toContain("\u001b[38;2;193;68;62m");
 	});
 
-	it("renders the command in a carved code block frame", () => {
-		const lines = renderApprovalModal(snapshot(), 80).map(stripAnsi);
-		const text = lines.join("\n");
+	it("renders the command in a recessed carved code block frame", () => {
+		const lines = renderApprovalModal(snapshot(), 80);
+		const text = lines.map(stripAnsi).join("\n");
 		expect(text).toContain("┌");
 		expect(text).toContain("└");
 		expect(text).toContain("rm -rf node_modules/");
+		const commandFrameRows = lines.filter((line) => stripAnsi(line).includes("│") || stripAnsi(line).includes("┌") || stripAnsi(line).includes("└"));
+		expect(commandFrameRows).toHaveLength(3);
+		for (const row of commandFrameRows) expect(row).toContain("\u001b[48;2;18;13;10m"); // surfaceRecess
 	});
 
 	it("renders em-dash explanation in dim", () => {
@@ -54,31 +58,46 @@ describe("renderApprovalModal", () => {
 		expect(sysLine).toContain("\u001b[38;2;193;68;62m");
 	});
 
-	it("renders all three buttons: [Y]ES [N]O [A]LWAYS", () => {
+	it("renders all three buttons with NO focused by default", () => {
 		const lines = renderApprovalModal(snapshot(), 80).map(stripAnsi);
 		const text = lines.join("\n");
 		expect(text).toContain("[Y]ES");
-		expect(text).toContain("[N]O");
+		expect(text).toContain("  NO  ");
 		expect(text).toContain("[A]LWAYS");
 	});
 
-	it("highlights the active button with accent fill (default [N]O)", () => {
+	it("highlights the active button with approval fill (default NO)", () => {
 		const lines = renderApprovalModal(snapshot({ activeButton: "no" }), 80);
-		const buttonLine = lines.find((l) => stripAnsi(l).includes("[N]O"));
-		// accent bg 217;119;6
-		expect(buttonLine).toContain("\u001b[48;2;217;119;6m");
+		const buttonLine = lines.find((line) => stripAnsi(line).includes("NO"));
+		// approval bg 193;68;62
+		expect(buttonLine).toContain("\u001b[48;2;193;68;62m");
+		expect(stripAnsi(buttonLine!)).toContain("  NO  ");
 	});
 
-	it("when activeButton=yes, [Y]ES is filled", () => {
+	it("when activeButton=yes, YES is filled with approval red", () => {
 		const lines = renderApprovalModal(snapshot({ activeButton: "yes" }), 80);
-		const text = lines.join("\n");
-		// Find the [Y]ES button section after the bg escape
-		expect(text).toContain("\u001b[48;2;217;119;6m");
-		// And the accent bg should be associated with [Y]ES — by checking there's
-		// only ONE accent bg in the line containing buttons
-		const buttonLine = lines.find((l) => l.includes("[Y]ES"));
-		const matches = buttonLine!.match(/\u001b\[48;2;217;119;6m/g) ?? [];
+		const buttonLine = lines.find((line) => stripAnsi(line).includes("YES"));
+		expect(buttonLine).toContain("\u001b[48;2;193;68;62m");
+		const matches = buttonLine!.match(/\u001b\[48;2;193;68;62m/g) ?? [];
 		expect(matches.length).toBe(1);
+	});
+
+	it("paints every modal row with surfaceLifted background", () => {
+		const lines = renderApprovalModal(snapshot(), 80);
+		expect(lines.length).toBeGreaterThan(0);
+		for (const line of lines) expect(line).toContain("\u001b[48;2;61;48;36m");
+	});
+
+	it("wraps long commands and descriptions inside the modal width", () => {
+		const longCommand = `cd \"/Volumes/SumoDeus NVMe/openclaw/workspace/sumocode\" && gh issue create --title \"Approval modal leaks long commands across the terminal\" --body \"long quoted body with spaces\"`;
+		const lines = renderApprovalModal(snapshot({
+			command: longCommand,
+			descriptionLines: ["This command mutates GitHub state and has a very long quoted body that should wrap inside the lifted modal without leaking past the terminal edge."],
+		}), 80);
+		const plain = lines.map(stripAnsi);
+		for (const row of plain) expect(row.length).toBeLessThanOrEqual(80);
+		expect(plain.filter((row) => row.includes("│")).length).toBeGreaterThan(1);
+		expect(plain.join("\n")).toContain("Approval modal leaks long commands");
 	});
 });
 

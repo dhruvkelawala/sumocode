@@ -34,6 +34,7 @@ export class PiEditorLeaf extends PiComponentLeaf {
 		this.hardwareCursor = null;
 		const rows = this.renderRows(rect.width);
 		const height = Math.min(rows.length, rect.height);
+		let fallbackInverseCursor: HardwareCursorPosition | null = null;
 		for (let row = 0; row < height; row += 1) {
 			const raw = rows[row] ?? "";
 			const markerIndex = raw.indexOf(CURSOR_MARKER);
@@ -43,7 +44,21 @@ export class PiEditorLeaf extends PiComponentLeaf {
 				this.hardwareCursor = { row: rect.top + row, col: rect.left + markerCol };
 			}
 			buffer.paintRow(rect.top + row, painted, rect.left, rect.width);
+			if (markerIndex === -1 && fallbackInverseCursor === null) {
+				for (let col = 0; col < rect.width; col += 1) {
+					const cell = buffer.getCell(rect.top + row, rect.left + col);
+					if (cell.attrs.inverse) {
+						fallbackInverseCursor = { row: rect.top + row, col: rect.left + col };
+						break;
+					}
+				}
+			}
 		}
+		// Pi suppresses CURSOR_MARKER while autocomplete is active and paints a fake
+		// inverse cursor instead. Keep the real terminal cursor on top of that cell
+		// rather than hiding it globally; hiding (`\x1b[?25l`) also hides the mouse
+		// pointer in cmux/Ghostty for Dhruv.
+		if (this.hardwareCursor === null) this.hardwareCursor = fallbackInverseCursor;
 	}
 
 	public getHardwareCursor(): HardwareCursorPosition | null {

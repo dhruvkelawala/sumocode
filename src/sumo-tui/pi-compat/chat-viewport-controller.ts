@@ -763,18 +763,37 @@ export function installChatViewportBridge(upstream: unknown, runtime: ChatViewpo
 	const originalRenderSessionContext = target.renderSessionContext?.bind(target);
 	const originalSetToolsExpanded = target.setToolsExpanded?.bind(target);
 	const removeInputListener = target.ui?.addInputListener?.((data) => controller.handleInput(data));
-	// Owned-shell prevents Pi from rendering chat/status containers itself, so
-	// the spacer workaround that pushed the input/footer down inside Pi's flow
-	// is unnecessary and would only consume rows that owned-shell already
-	// reserves through Yoga.
-	const ownedShellActive = runtime.isOwnedShellActive?.() === true;
-	const removeBottomChromeSpacers = ownedShellActive ? undefined : installBottomChromeSpacers(target, snapshot.chat);
+	const isOwnedShellActive = (): boolean => runtime.isOwnedShellActive?.() === true;
+	// Owned-shell is wired after this bridge is installed during normal startup.
+	// Do not snapshot the state here: resolve it lazily at each mutation point so
+	// the legacy hybrid spacers/overrides stay disabled once OwnedShellRenderer is
+	// actually active.
+	let removeBottomChromeSpacers: (() => void) | undefined;
+	let pendingBottomChromeSpacerReconcile: ReturnType<typeof setTimeout> | undefined;
+	const reconcileBottomChromeSpacers = (): void => {
+		if (isOwnedShellActive()) {
+			removeBottomChromeSpacers?.();
+			removeBottomChromeSpacers = undefined;
+			return;
+		}
+		removeBottomChromeSpacers ??= installBottomChromeSpacers(target, snapshot.chat);
+	};
+	const scheduleBottomChromeSpacerReconcile = (): void => {
+		if (pendingBottomChromeSpacerReconcile) return;
+		pendingBottomChromeSpacerReconcile = setTimeout(() => {
+			pendingBottomChromeSpacerReconcile = undefined;
+			reconcileBottomChromeSpacers();
+		}, 0);
+		pendingBottomChromeSpacerReconcile.unref?.();
+	};
+	scheduleBottomChromeSpacerReconcile();
 	let streaming = false;
 	let pendingStreamingRender: ReturnType<typeof setTimeout> | undefined;
 	let lastStreamingRenderAt = 0;
 	const requestForcedRender = (source: "immediate" | "streaming" | "stream-end"): void => {
 		lastStreamingRenderAt = Date.now();
-		logDiagnostic("chat_viewport_render_request", { source, force: true, ownedShell: ownedShellActive });
+		reconcileBottomChromeSpacers();
+		logDiagnostic("chat_viewport_render_request", { source, force: true, ownedShell: isOwnedShellActive() });
 		// In owned-shell mode Pi's render loop is replaced. Calling its
 		// requestRender still triggers our `tui.doRender` override (which paints
 		// the owned-shell frame), so the schedule path is the same.
@@ -830,22 +849,25 @@ export function installChatViewportBridge(upstream: unknown, runtime: ChatViewpo
 		},
 	});
 	// Owned-shell mounts ChatPager directly into its Yoga tree and bypasses
-	// Pi's render pipeline. Overriding chatContainer.render here would do
-	// nothing visible and only burn CPU on every Pi render-loop tick. In
-	// hybrid mode we still need it so Pi paints the controller's rendered
-	// chat lines into its own line flow.
-	if (!ownedShellActive) {
-		chatContainer.render = (width: number): string[] => controller.render(width);
-		if (statusContainer && originalStatusRender) {
-			statusContainer.render = (width: number): string[] => {
-				const terminalWidth = target.ui?.terminal?.columns ?? width;
-				// Portrait V1 Bible rhythm reserves the pre-input row as breathing
-				// space. Suppress Pi's loader/status row at compact widths so the
-				// input, hint, and footer land on the target rows.
-				if (terminalWidth < PORTRAIT_STATUS_MIN_WIDTH) return [];
-				return originalStatusRender(width);
-			};
-		}
+	// Pi's render pipeline. The bridge may install before owned-shell is wired,
+	// so keep the override dynamic: in owned-shell mode, never run the expensive
+	// retained chat render just to hand Pi dead bytes.
+	chatContainer.render = (width: number): string[] => {
+		reconcileBottomChromeSpacers();
+		if (isOwnedShellActive()) return [];
+		return controller.render(width);
+	};
+	if (statusContainer && originalStatusRender) {
+		statusContainer.render = (width: number): string[] => {
+			reconcileBottomChromeSpacers();
+			if (isOwnedShellActive()) return originalStatusRender(width);
+			const terminalWidth = target.ui?.terminal?.columns ?? width;
+			// Portrait V1 Bible rhythm reserves the pre-input row as breathing
+			// space. Suppress Pi's loader/status row at compact widths so the
+			// input, hint, and footer land on the target rows.
+			if (terminalWidth < PORTRAIT_STATUS_MIN_WIDTH) return [];
+			return originalStatusRender(width);
+		};
 	}
 	chatContainer.clear = (): void => {
 		controller.clear();
@@ -879,15 +901,15 @@ export function installChatViewportBridge(upstream: unknown, runtime: ChatViewpo
 	const cleanup = (): void => {
 		if (pendingStreamingRender) clearTimeout(pendingStreamingRender);
 		pendingStreamingRender = undefined;
+		if (pendingBottomChromeSpacerReconcile) clearTimeout(pendingBottomChromeSpacerReconcile);
+		pendingBottomChromeSpacerReconcile = undefined;
 		controller.dispose();
 		removeInputListener?.();
 		removeBottomChromeSpacers?.();
 		runtime.setExternalRenderControls(undefined);
-		if (!ownedShellActive) {
-			if (originalRender) chatContainer.render = originalRender;
-			else delete chatContainer.render;
-			if (statusContainer && originalStatusRender) statusContainer.render = originalStatusRender;
-		}
+		if (originalRender) chatContainer.render = originalRender;
+		else delete chatContainer.render;
+		if (statusContainer && originalStatusRender) statusContainer.render = originalStatusRender;
 		if (originalClear) chatContainer.clear = originalClear;
 		else delete chatContainer.clear;
 		if (originalInvalidate) chatContainer.invalidate = originalInvalidate;

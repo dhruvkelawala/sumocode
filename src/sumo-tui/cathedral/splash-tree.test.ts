@@ -5,7 +5,7 @@ import { createSplashTree, defaultSplashSnapshot, getSplashContentHeight } from 
 
 describe("createSplashTree", () => {
 	for (const height of [30, 60, 100]) {
-		it(`bottom-aligns splash content at ${height} rows so it stays close to Pi's editor`, async () => {
+		it(`centers splash content at ${height} rows`, async () => {
 			const yoga = await loadYoga();
 			const root = new SumoNode(yoga.Node.create());
 			root.flexDirection = FLEX_DIRECTION_COLUMN;
@@ -18,9 +18,12 @@ describe("createSplashTree", () => {
 
 			const contentHeight = getSplashContentHeight(snapshot, 120);
 			const freeRows = Math.max(0, height - contentHeight);
-			expect(tree.bottomSpacer.getComputedHeight()).toBe(0);
-			expect(tree.topSpacer.getComputedHeight()).toBe(freeRows);
-			expect(tree.content.getComputedTop()).toBe(freeRows);
+			const expectedContentTop = Math.floor(freeRows / 2);
+			const expectedBottom = Math.floor(freeRows / 2);
+			// Yoga may assign the odd rounding row to the top spacer's computed
+			// height, but the content's actual top remains the visual center point.
+			expect(tree.bottomSpacer.getComputedHeight()).toBe(expectedBottom);
+			expect(tree.content.getComputedTop()).toBe(expectedContentTop);
 			root.dispose();
 		});
 	}

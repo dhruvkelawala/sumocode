@@ -326,6 +326,7 @@ describe("sumo interactive Pi noise filtering", () => {
 		upstream.ui.addChild(upstream.editorContainer);
 		upstream.ui.addChild(upstream.widgetContainerBelow);
 		upstream.ui.addChild(upstream.footer);
+		await new Promise((resolve) => setTimeout(resolve, 0));
 
 		const footerIndex = children.indexOf(upstream.footer);
 		expect(footerIndex).toBeGreaterThan(0);

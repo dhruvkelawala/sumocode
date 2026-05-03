@@ -306,6 +306,77 @@ describe("ChatViewportController", () => {
 		root.dispose();
 	});
 
+	it("short-circuits Pi chat rendering when owned-shell becomes active after bridge install", async () => {
+		const yoga = await loadYoga();
+		const root = new SumoNode(yoga.Node.create());
+		const chat = ChatPager.create(yoga, root);
+		let ownedShellActive = false;
+		const originalStatusRender = vi.fn((_width: number) => ["Working..."]);
+		const host = {
+			ui: { terminal: { rows: 100, columns: 60 }, requestRender: vi.fn() },
+			chatContainer: { render: vi.fn((_width: number) => ["legacy"]), clear: vi.fn(), invalidate: vi.fn() },
+			statusContainer: { render: originalStatusRender },
+		};
+		const runtime = {
+			getSnapshot: () => ({ chat }),
+			setExternalRenderControls: vi.fn(),
+			renderChatLines: vi.fn(() => ["retained"]),
+			writeChatViewport: vi.fn(() => true),
+			requestRender: vi.fn(),
+			setEmptyChatQuoteState: vi.fn(),
+			noteUserMessage: vi.fn(),
+			isOwnedShellActive: () => ownedShellActive,
+		};
+
+		const cleanup = installChatViewportBridge(host, runtime);
+		ownedShellActive = true;
+
+		expect(host.chatContainer.render(60)).toEqual([]);
+		expect(runtime.renderChatLines).not.toHaveBeenCalled();
+		expect(host.statusContainer.render(60)).toEqual(["Working..."]);
+		expect(originalStatusRender).toHaveBeenCalledWith(60);
+
+		cleanup?.();
+		expect(host.chatContainer.render(60)).toEqual(["legacy"]);
+		root.dispose();
+	});
+
+	it("does not install bottom chrome spacers when owned-shell wires after bridge install", async () => {
+		const yoga = await loadYoga();
+		const root = new SumoNode(yoga.Node.create());
+		const chat = ChatPager.create(yoga, root);
+		let ownedShellActive = false;
+		const footer = rows(1);
+		const host = {
+			ui: {
+				terminal: { rows: 100, columns: 60 },
+				children: [footer],
+				requestRender: vi.fn(),
+			},
+			chatContainer: { render: vi.fn((_width: number) => []), clear: vi.fn(), invalidate: vi.fn() },
+			footer,
+		};
+		const runtime = {
+			getSnapshot: () => ({ chat }),
+			setExternalRenderControls: vi.fn(),
+			renderChatLines: vi.fn(() => []),
+			writeChatViewport: vi.fn(() => true),
+			requestRender: vi.fn(),
+			setEmptyChatQuoteState: vi.fn(),
+			noteUserMessage: vi.fn(),
+			isOwnedShellActive: () => ownedShellActive,
+		};
+
+		const cleanup = installChatViewportBridge(host, runtime);
+		ownedShellActive = true;
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		expect(host.ui.children).toEqual([footer]);
+
+		cleanup?.();
+		root.dispose();
+	});
+
 	it("suppresses Pi status loader row in portrait while preserving landscape", async () => {
 		const yoga = await loadYoga();
 		const root = new SumoNode(yoga.Node.create());

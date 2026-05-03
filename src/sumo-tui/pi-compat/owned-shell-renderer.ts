@@ -31,6 +31,7 @@ import {
 	DIRECTION_LTR,
 	FLEX_DIRECTION_COLUMN,
 	FLEX_DIRECTION_ROW,
+	JUSTIFY_CENTER,
 	type Yoga,
 } from "../layout/yoga.js";
 import { CellBuffer, type Rect } from "../render/buffer.js";
@@ -103,6 +104,7 @@ export interface OwnedShellRendererOptions {
 	readonly sidebarPublication?: () => SidebarPublication | undefined;
 }
 
+const SPLASH_EDITOR_FRAME_WIDTH = 60;
 const SHELL_BLANK_ROW = 1;
 const SHELL_HINT_ROW = 1;
 const SHELL_FOOTER_GAP_ROW = 1;
@@ -127,7 +129,10 @@ export class OwnedShellRenderer {
 	private lastFrame: CellBuffer | undefined;
 	private previousFrame: CellBuffer | undefined;
 	private readonly headerLeaf: PiComponentLeaf;
+	private readonly editorRow: SumoNode;
+	private readonly editorLeftSpacer: SumoNode;
 	private readonly editorLeaf: PiEditorLeaf;
+	private readonly editorRightSpacer: SumoNode;
 	private readonly hintLeaf: PiComponentLeaf;
 	private readonly footerLeaf: PiComponentLeaf;
 	private readonly chatRow: SumoNode;
@@ -140,6 +145,7 @@ export class OwnedShellRenderer {
 	private readonly splash: SplashTree | undefined;
 	private mountedChatChild: "chat" | "splash" | undefined;
 	private mountedSidebar = false;
+	private inputMountedInSplash = false;
 	private disposed = false;
 
 	public constructor(options: OwnedShellRendererOptions) {
@@ -193,7 +199,19 @@ export class OwnedShellRenderer {
 		// render through the same Yoga leaf. PiEditorLeaf scans rendered lines
 		// for the editor's CURSOR_MARKER; selectors don't emit one and that's
 		// the correct behaviour (no editor cursor while a selector is focused).
-		this.editorLeaf = PiEditorLeaf.create(this.yoga, editorProxy as unknown as CustomEditor, this.root);
+		// In empty splash mode the row centers the input frame; once chat starts,
+		// the editor returns to the full-width active input contract.
+		this.editorRow = new SumoNode(this.yoga.Node.create(), this.root);
+		this.editorRow.flexDirection = FLEX_DIRECTION_ROW;
+		this.editorRow.justifyContent = JUSTIFY_CENTER;
+		this.editorLeftSpacer = new SumoNode(this.yoga.Node.create());
+		this.editorLeftSpacer.flexGrow = 1;
+		this.editorLeftSpacer.flexShrink = 1;
+		this.editorLeaf = PiEditorLeaf.create(this.yoga, editorProxy as unknown as CustomEditor);
+		this.editorRightSpacer = new SumoNode(this.yoga.Node.create());
+		this.editorRightSpacer.flexGrow = 1;
+		this.editorRightSpacer.flexShrink = 1;
+		this.syncEditorRowChildren(this.dimensions.columns ?? 80);
 
 		// 5) hint row
 		this.hintLeaf = PiComponentLeaf.create(this.yoga, hintProxy, this.root);
@@ -228,6 +246,57 @@ export class OwnedShellRenderer {
 	 * runs inside the owned shell's chat-row instead of the runtime's chat-only
 	 * root tree.
 	 */
+	private syncEditorRowChildren(cols: number): void {
+		const centered = this.inputMountedInSplash;
+		const frameWidth = centered ? Math.min(cols, SPLASH_EDITOR_FRAME_WIDTH) : cols;
+		if (this.editorLeftSpacer.parent === this.editorRow) this.editorRow.removeChild(this.editorLeftSpacer);
+		if (this.editorLeaf.parent === this.editorRow) this.editorRow.removeChild(this.editorLeaf);
+		if (this.editorRightSpacer.parent === this.editorRow) this.editorRow.removeChild(this.editorRightSpacer);
+
+		this.editorLeaf.width = frameWidth;
+		this.editorLeaf.flexShrink = centered ? 0 : 1;
+		if (centered && frameWidth < cols) this.editorRow.addChild(this.editorLeftSpacer);
+		this.editorRow.addChild(this.editorLeaf);
+		if (centered && frameWidth < cols) this.editorRow.addChild(this.editorRightSpacer);
+	}
+
+	private syncInputPlacement(): void {
+		const centerWithSplash = !!this.splash && !this.chat.hasMessages();
+		if (centerWithSplash === this.inputMountedInSplash) return;
+
+		for (const node of [
+			this.blankSpacer,
+			this.editorRow,
+			this.hintLeaf,
+			this.footerGapSpacer,
+			this.footerLeaf,
+			this.bottomSafeSpacer,
+		]) {
+			if (node.parent) node.parent.removeChild(node);
+		}
+
+		if (centerWithSplash && this.splash) {
+			if (this.splash.bottomSpacer.parent === this.splash.root) this.splash.root.removeChild(this.splash.bottomSpacer);
+			this.splash.root.addChild(this.blankSpacer);
+			this.splash.root.addChild(this.editorRow);
+			this.splash.root.addChild(this.hintLeaf);
+			this.splash.root.addChild(this.splash.bottomSpacer);
+			this.root.addChild(this.footerGapSpacer);
+			this.root.addChild(this.footerLeaf);
+			this.root.addChild(this.bottomSafeSpacer);
+		} else {
+			if (this.splash && this.splash.bottomSpacer.parent !== this.splash.root) this.splash.root.addChild(this.splash.bottomSpacer);
+			this.root.addChild(this.blankSpacer);
+			this.root.addChild(this.editorRow);
+			this.root.addChild(this.hintLeaf);
+			this.root.addChild(this.footerGapSpacer);
+			this.root.addChild(this.footerLeaf);
+			this.root.addChild(this.bottomSafeSpacer);
+		}
+
+		this.inputMountedInSplash = centerWithSplash;
+	}
+
 	private syncChatRowChildren(cols: number, rows: number): void {
 		const wantSplash = !!this.splash && !this.chat.hasMessages();
 		const desired: "chat" | "splash" = wantSplash ? "splash" : "chat";
@@ -294,6 +363,8 @@ export class OwnedShellRenderer {
 		const rows = Math.max(1, Math.floor(this.dimensions.rows ?? 24));
 
 		this.syncChatRowChildren(cols, rows);
+		this.syncInputPlacement();
+		this.syncEditorRowChildren(cols);
 		// Re-measure dynamic-height leaves so Yoga grows the editor when
 		// autocomplete is shown, and shrinks it back when dismissed. Without this
 		// PiComponentLeaf would return its stale cached measure and the autocomplete
@@ -341,6 +412,7 @@ export class OwnedShellRenderer {
 				sidebarGutter: this.nodeRect(this.sidebarGutter),
 				sidebar: this.nodeRect(this.sidebarLeaf),
 				inputSpacer: this.nodeRect(this.blankSpacer),
+				editorRow: this.nodeRect(this.editorRow),
 				editor: this.nodeRect(this.editorLeaf),
 				hint: this.nodeRect(this.hintLeaf),
 				footerGap: this.nodeRect(this.footerGapSpacer),
@@ -474,6 +546,14 @@ export class OwnedShellRenderer {
 		if (this.sidebarLeaf.parent === this.chatRow) this.chatRow.removeChild(this.sidebarLeaf);
 		this.sidebarGutter.dispose();
 		this.sidebarLeaf.dispose();
+		// The editor row is created at construction time and reparented into the
+		// splash column when the splash is active. When splash.root is detached
+		// above, editorRow becomes orphaned and is NOT reached by root.dispose()
+		// below. Explicitly dispose it here regardless of parentage (dispose is
+		// idempotent, so it's safe to call in both splash and post-splash states).
+		this.editorLeftSpacer.dispose();
+		this.editorRightSpacer.dispose();
+		this.editorRow.dispose();
 		this.chatRow.dispose();
 		this.root.dispose();
 		this.previousFrame = undefined;

@@ -53,6 +53,23 @@ describe("PiEditorLeaf", () => {
 		}
 	});
 
+	it("falls back to Pi's fake inverse cursor when autocomplete omits the marker", async () => {
+		const yoga = await loadYoga();
+		const root = new SumoNode(yoga.Node.create());
+		const leaf = new PiEditorLeaf(yoga.Node.create(), asEditor(new FakeEditor([" > \x1b[7m \x1b[0m"])), root);
+		root.width = 8;
+		root.paddingTop = 1;
+		root.paddingLeft = 2;
+		root.yogaNode.calculateLayout(10, undefined, DIRECTION_LTR);
+
+		const buffer = new CellBuffer(2, 10);
+		const result = composite(root, buffer);
+
+		expect(leaf.getHardwareCursor()).toEqual({ row: 1, col: 5 });
+		expect(result.hardwareCursor).toEqual({ row: 1, col: 5 });
+		root.dispose();
+	});
+
 	it("returns null when the cursor marker is scrolled out of the rendered rows (EC-1.3)", async () => {
 		const yoga = await loadYoga();
 		const root = new SumoNode(yoga.Node.create());

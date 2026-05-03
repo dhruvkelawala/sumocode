@@ -44,6 +44,14 @@ export async function captureRuntimeScenario(scenario) {
 
 	const settleMs = Math.max(0, Number(runtime.settleMs ?? 500));
 	await sleep(settleMs);
+	const emptyOutputGraceMs = Math.max(0, Number(runtime.emptyOutputGraceMs ?? 5000));
+	if (!exited && output.trim().length === 0 && emptyOutputGraceMs > 0) {
+		// CI runners can be slow to reach the first retained-frame write, especially
+		// for no-input splash captures. Do not fail immediately at settleMs just
+		// because startup has not emitted bytes yet; wait a short grace window for
+		// first output while keeping genuinely silent captures diagnosable.
+		await sleep(emptyOutputGraceMs);
+	}
 	const captured = output;
 	const plain = stripAnsi(captured);
 	const rejection = findRejection(plain, scenario.rejectIfOutputMatches ?? []);
@@ -57,7 +65,9 @@ export async function captureRuntimeScenario(scenario) {
 	if (rejection) {
 		throw new Error(`Runtime capture ${scenario.id} matched rejection pattern ${JSON.stringify(rejection.pattern)}. Snippet: ${JSON.stringify(rejection.snippet)}`);
 	}
-	if (captured.trim().length === 0) throw new Error(`Runtime capture ${scenario.id} produced no terminal output`);
+	if (captured.trim().length === 0) {
+		throw new Error(`Runtime capture ${scenario.id} produced no terminal output after settleMs=${settleMs} and emptyOutputGraceMs=${emptyOutputGraceMs}`);
+	}
 	if (exited && exitInfo?.exitCode && exitInfo.exitCode !== 0) {
 		throw new Error(`Runtime capture ${scenario.id} exited early with code ${exitInfo.exitCode}`);
 	}
@@ -72,6 +82,7 @@ export async function captureRuntimeScenario(scenario) {
 			cols: dimensions.cols,
 			rows: dimensions.rows,
 			settleMs,
+			emptyOutputGraceMs,
 			inputCount: inputs.length,
 			exited,
 			exitInfo,

@@ -110,7 +110,8 @@ export class TerminalSessionOwner {
 	 * suppress no-op ticks entirely.
 	 */
 	private lastEmittedCursor: TerminalCursor | null = null;
-	private hardwareCursorVisible = false;
+	/** Tracks whether we last emitted \x1b[?25h or \x1b[?25l so we don't re-emit the same. */
+	private hardwareCursorVisible = true;
 
 	public constructor(options: TerminalSessionOwnerOptions = {}) {
 		this.output = options.output ?? process.stdout;
@@ -236,17 +237,14 @@ export class TerminalSessionOwner {
 			this.lastEmittedCursor = { row: cursor.row, col: cursor.col };
 			this.hardwareCursorVisible = true;
 		} else if (cursor === null) {
-			// No CURSOR_MARKER was present in the composited frame. Pi's own TUI hides
-			// the hardware cursor in this case (notably while autocomplete is open,
-			// where the editor paints a fake inverted cursor). Mirror that behavior so
-			// the terminal cursor doesn't remain visible at the end of the last patch.
-			if (patches.length > 0 || shouldHideCursor) output += "\x1b[?25l";
-			this.hardwareCursorVisible = false;
-			if (patches.length > 0) {
-				// Patches moved the terminal cursor without us emitting a known new
-				// position. Invalidate so the NEXT frame with a non-null cursor re-emits
-				// its position even if it matches the stale cache.
-				this.lastEmittedCursor = null;
+			// No logical cursor is present (for example an overlay frame). Invalidate
+			// the cache even without patches: the next non-null cursor frame must
+			// re-emit its position/visibility, even if it matches the last visible
+			// editor cursor.
+			this.lastEmittedCursor = null;
+			if (this.hardwareCursorVisible) {
+				output += "\x1b[?25l";
+				this.hardwareCursorVisible = false;
 			}
 		}
 		output += "\x1b[?2026l";
@@ -269,7 +267,7 @@ export class TerminalSessionOwner {
 		this.cursorColorOverridden = false;
 		this.lastCursorColor = undefined;
 		this.lastEmittedCursor = null;
-		this.hardwareCursorVisible = false;
+		this.hardwareCursorVisible = true;
 		if (!this.isTTY()) return;
 		let output = "";
 		if (shouldResetCursorColor) output += CURSOR_COLOR_RESET;

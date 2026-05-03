@@ -130,11 +130,11 @@ describe("TerminalSessionOwner", () => {
 		const output = outputStub();
 		const terminal = new TerminalSessionOwner({ output });
 
-		terminal.writeFramePatches([{ row: 1, startCol: 4, ansi: "DEF" }], null);
+		terminal.writeFramePatches([{ row: 1, startCol: 4, ansi: "DEF" }], { row: 0, col: 0 });
 
 		// Partial patches MUST skip clear-to-end-of-line so cells right of the
 		// change region survive untouched. Cursor position 5 (= startCol + 1).
-		expect(output.writes).toEqual(["\x1b[?2026h\x1b[2;5HDEF\x1b[?25l\x1b[?2026l"]);
+		expect(output.writes).toEqual(["\x1b[?2026h\x1b[2;5HDEF\x1b[1;1H\x1b[?25h\x1b[?2026l"]);
 		expect(output.writes[0]).not.toContain("\x1b[K");
 	});
 
@@ -142,30 +142,23 @@ describe("TerminalSessionOwner", () => {
 		const output = outputStub();
 		const terminal = new TerminalSessionOwner({ output });
 
-		terminal.writeFramePatches([{ row: 0, type: "scroll", ansi: "\x1b[1;3r\x1b[1S\x1b[r" }], null);
+		terminal.writeFramePatches([{ row: 0, type: "scroll", ansi: "\x1b[1;3r\x1b[1S\x1b[r" }], { row: 0, col: 0 });
 
-		expect(output.writes).toEqual(["\x1b[?2026h\x1b[1;1H\x1b[1;3r\x1b[1S\x1b[r\x1b[?25l\x1b[?2026l"]);
+		expect(output.writes).toEqual(["\x1b[?2026h\x1b[1;1H\x1b[1;3r\x1b[1S\x1b[r\x1b[1;1H\x1b[?25h\x1b[?2026l"]);
 		expect(output.writes[0]).not.toContain("\x1b[K");
 	});
 
-	it("hides hardware cursor when a marker disappears without patches", () => {
+	it("hides the cursor when a null-cursor frame has no patches", () => {
 		const output = outputStub();
 		const terminal = new TerminalSessionOwner({ output });
-
-		terminal.writeFramePatches([], { row: 2, col: 4 });
-		output.writes.length = 0;
 
 		terminal.writeFramePatches([], null);
 
 		expect(output.writes).toEqual(["\x1b[?2026h\x1b[?25l\x1b[?2026l"]);
-	});
+		output.writes.length = 0;
 
-	it("lazy frame-start: emits zero bytes for a no-op tick (no patches, no cursor)", () => {
-		const output = outputStub();
-		const terminal = new TerminalSessionOwner({ output });
-
+		// Once hidden, a repeated no-patch/null-cursor frame is a true no-op.
 		terminal.writeFramePatches([], null);
-
 		expect(output.writes).toEqual([]);
 	});
 
@@ -214,12 +207,12 @@ describe("TerminalSessionOwner", () => {
 		expect(output.writes).toEqual(["\x1b[?2026h\x1b[6;11H\x1b[?25h\x1b[?2026l"]);
 	});
 
-	it("invalidates the cursor cache when emitting patches with a null cursor (hardwareCursor=null path)", () => {
-		// Regression: the patch loop physically moves the terminal cursor when
-		// patches are emitted, even when no logical cursor is provided. Failing
-		// to invalidate `lastEmittedCursor` here would let the next frame (with
-		// a cursor matching the stale cache) early-return and leave the visible
-		// caret parked at the end of the last patch.
+	it("invalidates the cursor cache when emitting a null cursor", () => {
+		// Regression: the terminal cursor can be hidden while the logical cursor
+		// cache still points at the previous visible editor cursor. Failing to
+		// invalidate `lastEmittedCursor` here would let the next frame (with a
+		// cursor matching the stale cache) early-return and leave the caret hidden
+		// or parked at the end of the last patch.
 		const output = outputStub();
 		const terminal = new TerminalSessionOwner({ output });
 
@@ -238,6 +231,69 @@ describe("TerminalSessionOwner", () => {
 		terminal.writeFramePatches([], { row: 5, col: 10 });
 
 		expect(output.writes).toEqual(["\x1b[?2026h\x1b[6;11H\x1b[?25h\x1b[?2026l"]);
+	});
+
+	it("invalidates the cursor cache when a null-cursor frame has no patches", () => {
+		const output = outputStub();
+		const terminal = new TerminalSessionOwner({ output });
+
+		// Frame A: seed a visible cursor.
+		terminal.writeFramePatches([], { row: 3, col: 7 });
+		output.writes.length = 0;
+
+		// Frame B: metadata-only transition to no cursor. Must hide and invalidate
+		// even though the cell buffer did not change.
+		terminal.writeFramePatches([], null);
+		expect(output.writes).toEqual(["\x1b[?2026h\x1b[?25l\x1b[?2026l"]);
+		output.writes.length = 0;
+
+		// Frame C: same cursor position as frame A. Must re-show/reposition; if the
+		// cache was stale, this would incorrectly early-return.
+		terminal.writeFramePatches([], { row: 3, col: 7 });
+		expect(output.writes).toEqual(["\x1b[?2026h\x1b[4;8H\x1b[?25h\x1b[?2026l"]);
+	});
+
+	it("writes patches on subsequent overlay frames after cursor is already hidden", () => {
+		// Regression: when `hardwareCursorVisible` is already false (cursor hidden
+		// by a previous overlay frame), the null-cursor branch must still write
+		// frame content. Early-returning would drop all patch bytes, freezing
+		// overlay updates after the first frame.
+		const output = outputStub();
+		const terminal = new TerminalSessionOwner({ output });
+
+		// Frame A: patch with null cursor — hides cursor, writes "overlay A".
+		terminal.writeFramePatches([{ row: 5, ansi: "overlay A" }], null);
+		expect(output.writes[0]).toContain("\x1b[?25l");
+		expect(output.writes[0]).toContain("overlay A");
+		output.writes.length = 0;
+
+		// Frame B: patch with null cursor, already hidden. Must still write.
+		terminal.writeFramePatches([{ row: 5, ansi: "overlay B" }], null);
+		expect(output.writes).toHaveLength(1);
+		expect(output.writes[0]).toContain("overlay B");
+		expect(output.writes[0]).not.toContain("\x1b[?25l"); // no redundant hide
+	});
+
+	it("resets hardwareCursorVisible on terminal exit so next session doesn't skip hide", () => {
+		// exitTerminal() emits \x1b[?25h in its cleanup sequence but wasn't
+		// syncing hardwareCursorVisible. A prior session that hid the cursor
+		// leaves the flag stale, so the next session's first overlay frame
+		// skips \x1b[?25l (thinking it's already hidden) and the cursor bleeds.
+		const output = outputStub();
+		const terminal = new TerminalSessionOwner({ output });
+
+		// Simulate a session that hid the cursor.
+		terminal.writeFramePatches([{ row: 5, ansi: "x" }], null);
+		expect(output.writes[0]).toContain("\x1b[?25l");
+		terminal.exitTerminal();
+		output.writes.length = 0;
+
+		// New session: first frame with null cursor — must emit hide.
+		terminal.enterAltscreen();
+		output.writes.length = 0;
+		terminal.writeFramePatches([{ row: 1, ansi: "fresh" }], null);
+		expect(output.writes).toHaveLength(1);
+		expect(output.writes[0]).toContain("\x1b[?25l");
 	});
 
 	it("re-emits cursor after exitTerminal clears lastEmittedCursor", () => {

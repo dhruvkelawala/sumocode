@@ -319,4 +319,24 @@ export class TerminalSessionOwner {
  */
 export class TerminalController extends TerminalSessionOwner {}
 
-export const defaultTerminalSessionOwner = new TerminalSessionOwner();
+/**
+ * Singleton across module loads.
+ *
+ * Why a `globalThis` pin instead of a plain module-level `const`: jiti's TS
+ * loader (used by SumoCode's launcher) evaluates this source file multiple
+ * times per process — once per importer when path normalization or extension
+ * resolution differ. Each evaluation would otherwise construct its own
+ * `defaultTerminalSessionOwner` with its own `restored` flag. The lifecycle
+ * shim then calls `exitTerminal()` on instance A while the OwnedShellRenderer
+ * paints through instance B — and PR #200's `restored` guard silently misses
+ * the leak, repainting the splash onto the user's main shell scrollback after
+ * altscreen exit (#199 / "splash residue" repro).
+ *
+ * Pinning to `globalThis` makes every importer see the same object regardless
+ * of how many times the source is evaluated.
+ */
+const GLOBAL_OWNER_KEY = "__sumoDefaultTerminalSessionOwner";
+type GlobalWithOwner = typeof globalThis & { [GLOBAL_OWNER_KEY]?: TerminalSessionOwner };
+const globalForOwner = globalThis as GlobalWithOwner;
+if (!globalForOwner[GLOBAL_OWNER_KEY]) globalForOwner[GLOBAL_OWNER_KEY] = new TerminalSessionOwner();
+export const defaultTerminalSessionOwner: TerminalSessionOwner = globalForOwner[GLOBAL_OWNER_KEY] as TerminalSessionOwner;

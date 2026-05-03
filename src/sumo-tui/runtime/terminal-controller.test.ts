@@ -3,6 +3,7 @@ import {
 	ALTSCREEN_ENTER_SEQUENCE,
 	CURSOR_COLOR_RESET,
 	CURSOR_COLOR_SET,
+	defaultTerminalSessionOwner,
 	MOUSE_SGR_DISABLE_SEQUENCE,
 	MOUSE_SGR_ENABLE_SEQUENCE,
 	TERMINAL_BG_RESET,
@@ -93,6 +94,24 @@ describe("TerminalSessionOwner", () => {
 		expect(TERMINAL_CLEANUP_SEQUENCE).toContain("\x1b[>4;0m");
 		expect(ALTSCREEN_ENTER_SEQUENCE).toContain("\x1b[?2004h");
 		expect(TERMINAL_CLEANUP_SEQUENCE).toContain("\x1b[?2004l");
+	});
+
+	it("defaultTerminalSessionOwner is a globalThis-pinned singleton (#199)", () => {
+		// Regression guard: jiti can evaluate this module multiple times per
+		// process, and a plain module-level `const` would give each evaluation
+		// its own `defaultTerminalSessionOwner` with its own `restored` flag.
+		// The lifecycle would call `exitTerminal` on instance A while the
+		// OwnedShellRenderer rendered through instance B, and PR #200's guard
+		// would silently miss the leak.
+		//
+		// The contract is "the value is stored on globalThis under a stable
+		// key, so any future module evaluation finds and reuses it". Verify
+		// directly: the export must be the same object globalThis holds, and
+		// re-evaluating the export expression must yield that same object.
+		const pinned = (globalThis as { __sumoDefaultTerminalSessionOwner?: TerminalSessionOwner })
+			.__sumoDefaultTerminalSessionOwner;
+		expect(pinned).toBeDefined();
+		expect(pinned).toBe(defaultTerminalSessionOwner);
 	});
 
 	it("setCursorColor is idempotent for the active accent and resets on cleanup", () => {

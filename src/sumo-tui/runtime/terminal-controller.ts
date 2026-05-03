@@ -24,6 +24,8 @@ export function getExitTerminalEmittedAt(): number | undefined {
 	return exitTerminalEmittedAt;
 }
 
+let nextTerminalSessionOwnerId = 1;
+
 // Kitty keyboard mode and xterm modifyOtherKeys are per-screen. pi-tui pushes
 // `\x1b[>7u` (or falls back to `\x1b[>4;2m`) on the main screen at startup; the
 // altscreen stack starts at flags=0, so without re-pushing here Shift+Enter,
@@ -120,6 +122,7 @@ function cursorColorSetSequence(hex: string): string {
  * hybrid phase), but duplicate writes are suppressed until cleanup runs.
  */
 export class TerminalSessionOwner {
+	public readonly instanceId = nextTerminalSessionOwnerId++;
 	public restored = false;
 	private readonly output: TerminalOutput;
 	private readonly paintBackground: boolean;
@@ -183,6 +186,7 @@ export class TerminalSessionOwner {
 		this.write(output);
 		this.altscreenActive = true;
 		logDiagnostic("altscreen_enter_written", {
+			instanceId: this.instanceId,
 			containsKittyPush: output.includes("\x1b[>7u"),
 			containsModifyOtherKeys: output.includes("\x1b[>4;2m"),
 			containsBracketedPaste: output.includes("\x1b[?2004h"),
@@ -235,6 +239,15 @@ export class TerminalSessionOwner {
 	}
 
 	public writeFramePatches(patches: readonly TerminalPatch[], cursor: TerminalCursor | null): void {
+		if (isExitTerminalEmitted() && !this.restored) {
+			logDiagnostic("write_frame_patches_after_exit_but_unguarded", {
+				instanceId: this.instanceId,
+				restored: this.restored,
+				altscreenActive: this.altscreenActive,
+				patchCount: patches.length,
+				caller: new Error().stack?.split("\n").slice(2, 6).map((l) => l.trim()),
+			});
+		}
 		if (!this.isTTY() || this.restored) return;
 		// Lazy frame-start (OpenTUI port, see `lastEmittedCursor` comment): if no
 		// cells changed AND the cursor would land where it already is, emit zero
@@ -304,6 +317,7 @@ export class TerminalSessionOwner {
 		this.lastEmittedCursor = null;
 		this.hardwareCursorVisible = true;
 		logDiagnostic("exit_terminal_called", {
+			instanceId: this.instanceId,
 			isTTY: this.isTTY(),
 			caller: new Error().stack?.split("\n").slice(2, 6).map((l) => l.trim()),
 		});
@@ -315,6 +329,7 @@ export class TerminalSessionOwner {
 		this.write(output);
 		exitTerminalEmittedAt = Date.now();
 		logDiagnostic("exit_terminal_cleanup_written", {
+			instanceId: this.instanceId,
 			bytes: output.length,
 			containsAltscreenOff: output.includes("\x1b[?1049l"),
 		});

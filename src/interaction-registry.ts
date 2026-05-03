@@ -1,5 +1,6 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { installCommandPalette } from "./command-palette.js";
+import { registerApprovalCommand } from "./commands/approval.js";
 import { registerCursorCommand } from "./commands/cursor.js";
 import { registerDivineQueryCommand } from "./commands/divine-query.js";
 import { registerExitCommand } from "./commands/exit.js";
@@ -124,6 +125,7 @@ export function installSumoInteractions(pi: ExtensionAPI, options: InstallSumoIn
 	const registry = createInteractionRegistry(pi, options.reporter);
 	registry.install("command-palette", installCommandPalette);
 	registry.install("sidebar", installSidebar);
+	registry.install("commands.approval", registerApprovalCommand);
 	registry.install("commands.cursor", registerCursorCommand);
 	registry.install("commands.divine-query", registerDivineQueryCommand);
 	registry.install("commands.exit", registerExitCommand);

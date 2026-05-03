@@ -210,7 +210,8 @@ export class TerminalSessionOwner {
 			cursor.row !== this.lastEmittedCursor.row ||
 			cursor.col !== this.lastEmittedCursor.col
 		);
-		if (patches.length === 0 && !cursorMoved) return;
+		const shouldHideCursor = cursor === null && this.hardwareCursorVisible;
+		if (patches.length === 0 && !cursorMoved && !shouldHideCursor) return;
 
 		let output = "\x1b[?2026h";
 		for (const patch of patches) {
@@ -235,11 +236,11 @@ export class TerminalSessionOwner {
 			output += `\x1b[${cursor.row + 1};${cursor.col + 1}H\x1b[?25h`;
 			this.lastEmittedCursor = { row: cursor.row, col: cursor.col };
 			this.hardwareCursorVisible = true;
-		} else if (patches.length > 0) {
-			// Patches moved the terminal cursor without us emitting a known new
-			// position (for example a modal with no editor cursor). Invalidate so the
-			// NEXT frame with a non-null cursor re-emits its position even if it matches
-			// the stale cache.
+		} else if (cursor === null) {
+			// No logical cursor is present (for example an overlay frame). Invalidate
+			// the cache even without patches: the next non-null cursor frame must
+			// re-emit its position/visibility, even if it matches the last visible
+			// editor cursor.
 			this.lastEmittedCursor = null;
 			if (this.hardwareCursorVisible) {
 				output += "\x1b[?25l";

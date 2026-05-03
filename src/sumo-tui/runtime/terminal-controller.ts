@@ -181,7 +181,7 @@ export class TerminalSessionOwner {
 	}
 
 	public writeChatViewport(top: number, left: number, lines: readonly string[]): boolean {
-		if (!this.isTTY() || lines.length === 0) return false;
+		if (!this.isTTY() || this.restored || lines.length === 0) return false;
 		const safeTop = Math.max(0, Math.floor(top));
 		const safeLeft = Math.max(0, Math.floor(left));
 		let output = "\x1b[?2026h\x1b7";
@@ -194,13 +194,13 @@ export class TerminalSessionOwner {
 	}
 
 	public writeClipboardSequence(sequence: string): boolean {
-		if (!this.isTTY() || sequence.length === 0) return false;
+		if (!this.isTTY() || this.restored || sequence.length === 0) return false;
 		this.write(sequence);
 		return true;
 	}
 
 	public writeFramePatches(patches: readonly TerminalPatch[], cursor: TerminalCursor | null): void {
-		if (!this.isTTY()) return;
+		if (!this.isTTY() || this.restored) return;
 		// Lazy frame-start (OpenTUI port, see `lastEmittedCursor` comment): if no
 		// cells changed AND the cursor would land where it already is, emit zero
 		// bytes. Otherwise wrap the patches in `\x1b[?2026h … \x1b[?2026l` for a

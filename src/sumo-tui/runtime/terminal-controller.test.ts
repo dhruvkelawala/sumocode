@@ -130,11 +130,11 @@ describe("TerminalSessionOwner", () => {
 		const output = outputStub();
 		const terminal = new TerminalSessionOwner({ output });
 
-		terminal.writeFramePatches([{ row: 1, startCol: 4, ansi: "DEF" }], null);
+		terminal.writeFramePatches([{ row: 1, startCol: 4, ansi: "DEF" }], { row: 0, col: 0 });
 
 		// Partial patches MUST skip clear-to-end-of-line so cells right of the
 		// change region survive untouched. Cursor position 5 (= startCol + 1).
-		expect(output.writes).toEqual(["\x1b[?2026h\x1b[2;5HDEF\x1b[?2026l"]);
+		expect(output.writes).toEqual(["\x1b[?2026h\x1b[2;5HDEF\x1b[1;1H\x1b[?25h\x1b[?2026l"]);
 		expect(output.writes[0]).not.toContain("\x1b[K");
 	});
 
@@ -142,9 +142,9 @@ describe("TerminalSessionOwner", () => {
 		const output = outputStub();
 		const terminal = new TerminalSessionOwner({ output });
 
-		terminal.writeFramePatches([{ row: 0, type: "scroll", ansi: "\x1b[1;3r\x1b[1S\x1b[r" }], null);
+		terminal.writeFramePatches([{ row: 0, type: "scroll", ansi: "\x1b[1;3r\x1b[1S\x1b[r" }], { row: 0, col: 0 });
 
-		expect(output.writes).toEqual(["\x1b[?2026h\x1b[1;1H\x1b[1;3r\x1b[1S\x1b[r\x1b[?2026l"]);
+		expect(output.writes).toEqual(["\x1b[?2026h\x1b[1;1H\x1b[1;3r\x1b[1S\x1b[r\x1b[1;1H\x1b[?25h\x1b[?2026l"]);
 		expect(output.writes[0]).not.toContain("\x1b[K");
 	});
 

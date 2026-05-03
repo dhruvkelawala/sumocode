@@ -110,6 +110,8 @@ export class TerminalSessionOwner {
 	 * suppress no-op ticks entirely.
 	 */
 	private lastEmittedCursor: TerminalCursor | null = null;
+	/** Tracks whether we last emitted \x1b[?25h or \x1b[?25l so we don't re-emit the same. */
+	private hardwareCursorVisible = true;
 
 	public constructor(options: TerminalSessionOwnerOptions = {}) {
 		this.output = options.output ?? process.stdout;
@@ -232,13 +234,16 @@ export class TerminalSessionOwner {
 		if (cursor && (patches.length > 0 || cursorMoved)) {
 			output += `\x1b[${cursor.row + 1};${cursor.col + 1}H\x1b[?25h`;
 			this.lastEmittedCursor = { row: cursor.row, col: cursor.col };
+			this.hardwareCursorVisible = true;
 		} else if (patches.length > 0) {
 			// Patches moved the terminal cursor without us emitting a known new
 			// position (for example a modal with no editor cursor). Invalidate so the
 			// NEXT frame with a non-null cursor re-emits its position even if it matches
-			// the stale cache. Do not hide the cursor here: in cmux/Ghostty that also
-			// hides the mouse pointer for Dhruv.
+			// the stale cache.
 			this.lastEmittedCursor = null;
+			if (!this.hardwareCursorVisible) return;
+			output += "\x1b[?25l";
+			this.hardwareCursorVisible = false;
 		}
 		output += "\x1b[?2026l";
 		this.write(output);

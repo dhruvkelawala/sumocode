@@ -67,8 +67,32 @@ describe("TerminalSessionOwner", () => {
 		terminal.enterAltscreen();
 
 		expect(output.writes).toEqual([`${ALTSCREEN_ENTER_SEQUENCE}${TERMINAL_BG_SET}`]);
-		expect(output.writes[0]).toBe("\x1b[?1049h\x1b[?25h\x1b[H\x1b]11;#1A1511\x1b\\");
+		expect(output.writes[0]).toBe(
+			"\x1b[?1049h\x1b[?2004h\x1b[>7u\x1b[>4;2m\x1b[?25h\x1b[H\x1b]11;#1A1511\x1b\\",
+		);
+		// Bracketed paste, kitty keyboard, and modifyOtherKeys must all be pushed
+		// on altscreen entry so modified Enter keys (Shift+Enter, Alt+Enter, etc.)
+		// remain distinguishable inside altscreen. Pi-tui pushes these on the main
+		// screen at startup; without re-pushing here the altscreen stack starts
+		// at flags=0 and Shift+Enter collapses to plain `\r`.
+		expect(output.writes[0]).toContain("\x1b[>7u");
+		expect(output.writes[0]).toContain("\x1b[>4;2m");
+		expect(output.writes[0]).toContain("\x1b[?2004h");
 		expect(output.writes[0]).not.toContain("\x1b]12;");
+	});
+
+	it("altscreen enter/cleanup pair is symmetric for keyboard modes (#201)", () => {
+		// Regression guard for the Shift+Enter altscreen-entry bug. Kitty keyboard
+		// mode and xterm modifyOtherKeys are per-screen; cleanup pops them on the
+		// way out of altscreen, so the enter sequence must push them on the way
+		// in. Without this pairing, modified Enter keys collapse to plain `\r`
+		// inside altscreen and Shift+Enter silently submits.
+		expect(ALTSCREEN_ENTER_SEQUENCE).toContain("\x1b[>7u");
+		expect(TERMINAL_CLEANUP_SEQUENCE).toContain("\x1b[<u");
+		expect(ALTSCREEN_ENTER_SEQUENCE).toContain("\x1b[>4;2m");
+		expect(TERMINAL_CLEANUP_SEQUENCE).toContain("\x1b[>4;0m");
+		expect(ALTSCREEN_ENTER_SEQUENCE).toContain("\x1b[?2004h");
+		expect(TERMINAL_CLEANUP_SEQUENCE).toContain("\x1b[?2004l");
 	});
 
 	it("setCursorColor is idempotent for the active accent and resets on cleanup", () => {

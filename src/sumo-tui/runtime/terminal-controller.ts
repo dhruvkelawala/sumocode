@@ -8,7 +8,20 @@
  * `docs/research/sumo-tui-spike/01-opencode.md` section 2).
  */
 
-export const ALTSCREEN_ENTER_SEQUENCE = "\x1b[?1049h\x1b[?25h\x1b[H";
+// Kitty keyboard mode and xterm modifyOtherKeys are per-screen. pi-tui pushes
+// `\x1b[>7u` (or falls back to `\x1b[>4;2m`) on the main screen at startup; the
+// altscreen stack starts at flags=0, so without re-pushing here Shift+Enter,
+// Alt+Enter etc. all collapse to plain `\r` once we enter altscreen. Bracketed
+// paste is per-screen on enough terminals (kitty) to be worth re-asserting too.
+// The cleanup pops every one of these on exit (TERMINAL_CLEANUP_SEQUENCE), so
+// the enter sequence has to push them or the pair is asymmetric. Pushing on a
+// terminal that doesn't support a given mode is a no-op.
+export const ALTSCREEN_ENTER_SEQUENCE =
+	"\x1b[?1049h" + // altscreen on
+	"\x1b[?2004h" + // bracketed paste on
+	"\x1b[>7u" + // kitty keyboard push (flags 1+2+4, matches pi-tui terminal.js)
+	"\x1b[>4;2m" + // xterm modifyOtherKeys mode 2 (kitty-less fallback)
+	"\x1b[?25h\x1b[H";
 export const CURSOR_COLOR_SET = "\x1b]12;#D97706\x1b\\";
 export const CURSOR_COLOR_RESET = "\x1b]112\x1b\\";
 // OSC 11 sets the terminal's default background color. Without this, cells

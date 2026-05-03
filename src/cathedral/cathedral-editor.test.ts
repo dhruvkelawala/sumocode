@@ -18,6 +18,16 @@ describe("normalizeRawMultilinePasteInput", () => {
 		const paste = "\x1b[200~line one\rline two\x1b[201~";
 		expect(normalizeRawMultilinePasteInput(paste)).toBe(paste);
 	});
+
+	it("preserves modifier-Enter encodings so Shift+Enter / Alt+Enter survive (#201)", () => {
+		// Kitty's default Shift+Enter mapping (and the legacy Alt+Enter encoding
+		// when kitty protocol is off) is `\x1b\r`. Ghostty's Shift+Enter is
+		// `\x1b\n`. Both must pass through verbatim — rewriting the CR to LF
+		// yields `\x1b\n`, which pi-tui's editor recognizes as neither
+		// shift+enter nor alt+enter, silently dropping the keypress.
+		expect(normalizeRawMultilinePasteInput("\x1b\r")).toBe("\x1b\r");
+		expect(normalizeRawMultilinePasteInput("\x1b\n")).toBe("\x1b\n");
+	});
 });
 
 describe("alignAutocompleteRow", () => {

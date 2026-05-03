@@ -7,7 +7,10 @@ import { createSplashTree, defaultSplashSnapshot } from "../cathedral/splash-tre
 import { OwnedShellRenderer, ownedShellEnabled } from "./owned-shell-renderer.js";
 
 class StaticComponent implements Component {
-	public constructor(private readonly rows: readonly string[]) {}
+	public rows: readonly string[];
+	public constructor(rows: readonly string[]) {
+		this.rows = rows;
+	}
 	public invalidate(): void {}
 	public render(width: number): string[] {
 		return this.rows.map((row) => (row.length >= width ? row.slice(0, width) : row.padEnd(width, " ")));
@@ -286,6 +289,72 @@ describe("OwnedShellRenderer", () => {
 		renderer.render();
 		const lines = fakeTerminal.patches.map((p) => stripAnsi(p.ansi));
 		expect(lines.some((line) => line.includes("SIDEBAR"))).toBe(true);
+		renderer.dispose();
+	});
+
+	it("paints queued messages as a Cathedral banner in the chat area", async () => {
+		const yoga = await loadYoga();
+		const chat = ChatPager.create(yoga);
+		const fakeTerminal = new FakeTerminal();
+		const pendingMessages = new StaticComponent([]);
+
+		const renderer = new OwnedShellRenderer({
+			yoga,
+			chat,
+			editorContainer: () => new StaticEditor() as Component,
+			headerContainer: () => new StaticComponent(["TOP"]),
+			widgetContainerBelow: () => new StaticComponent(["HINT"]),
+			pendingMessagesContainer: () => pendingMessages as Component,
+			footer: () => new StaticComponent(["FOOTER"]),
+			terminal: fakeTerminal.owner,
+			dimensions: { columns: 40, rows: 14 },
+		});
+
+		// First render: no banner
+		renderer.render();
+		const linesBefore = fakeTerminal.patches.map((p) => stripAnsi(p.ansi));
+		expect(linesBefore.some((line) => line.includes("QUEUED"))).toBe(false);
+
+		// Simulate Pi queueing a follow-up
+		pendingMessages.rows = ["", "Follow-up: fix the sidebar", "↳ hint"];
+
+		// Re-render: Cathedral banner should appear with QUEUED label and message text
+		renderer.render();
+		const linesAfter = fakeTerminal.patches.map((p) => stripAnsi(p.ansi));
+		expect(linesAfter.some((line) => line.includes("Follow-up: fix the sidebar"))).toBe(true);
+
+		renderer.dispose();
+	});
+
+	it("clears queued banner when container becomes empty", async () => {
+		const yoga = await loadYoga();
+		const chat = ChatPager.create(yoga);
+		const fakeTerminal = new FakeTerminal();
+		const pendingMessages = new StaticComponent(["", "Steering: test msg", "↳ hint"]);
+
+		const renderer = new OwnedShellRenderer({
+			yoga,
+			chat,
+			editorContainer: () => new StaticEditor() as Component,
+			headerContainer: () => new StaticComponent(["TOP"]),
+			widgetContainerBelow: () => new StaticComponent(["HINT"]),
+			pendingMessagesContainer: () => pendingMessages as Component,
+			footer: () => new StaticComponent(["FOOTER"]),
+			terminal: fakeTerminal.owner,
+			dimensions: { columns: 30, rows: 14 },
+		});
+
+		// Render with content
+		renderer.render();
+		const linesWith = fakeTerminal.patches.map((p) => stripAnsi(p.ansi));
+		expect(linesWith.some((line) => line.includes("Steering: test msg"))).toBe(true);
+
+		// Clear and re-render
+		pendingMessages.rows = [];
+		renderer.render();
+		const linesWithout = fakeTerminal.patches.map((p) => stripAnsi(p.ansi));
+		expect(linesWithout.some((line) => line.includes("Steering"))).toBe(false);
+
 		renderer.dispose();
 	});
 });

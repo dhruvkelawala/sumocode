@@ -34,6 +34,8 @@ import {
 	JUSTIFY_CENTER,
 	type Yoga,
 } from "../layout/yoga.js";
+import { CATHEDRAL_TOKENS } from "../../tokens.js";
+import { withPersistentStyle } from "../render/primitives.js";
 import { CellBuffer, type Rect } from "../render/buffer.js";
 import { composite, dispatchMouseEvent, type CompositeSelectionPass, type HardwareCursor } from "../render/compositor.js";
 import { diffFrames } from "../render/diff.js";
@@ -81,6 +83,8 @@ export interface OwnedShellRendererOptions {
 	/** Retained top chrome published by `installTopChrome`; falls back to Pi's header container during tests/startup. */
 	readonly topChromePublication?: () => TopChromePublication | undefined;
 	readonly widgetContainerBelow: () => Component;
+	/** Resolves to Pi's pending-messages container (queued steer/follow-up messages). */
+	readonly pendingMessagesContainer?: () => Component;
 	/** Resolves to the currently mounted footer (custom extension footer or Pi built-in). */
 	readonly footer: () => Component;
 	readonly terminal: TerminalSessionOwner;
@@ -129,6 +133,7 @@ export class OwnedShellRenderer {
 	private lastFrame: CellBuffer | undefined;
 	private previousFrame: CellBuffer | undefined;
 	private readonly headerLeaf: PiComponentLeaf;
+	private readonly resolvePendingMessages: (() => Component) | undefined;
 	private readonly editorRow: SumoNode;
 	private readonly editorLeftSpacer: SumoNode;
 	private readonly editorLeaf: PiEditorLeaf;
@@ -193,6 +198,11 @@ export class OwnedShellRenderer {
 		// 3) blank breathing row above input
 		this.blankSpacer = new SumoNode(this.yoga.Node.create(), this.root);
 		this.blankSpacer.height = SHELL_BLANK_ROW;
+
+		// 3b) pending messages — painted into the blank spacer row during composite,
+		// NOT a separate Yoga leaf. This avoids vertical layout shift when messages
+		// are queued.
+		this.resolvePendingMessages = options.pendingMessagesContainer;
 
 		// 4) input slot — wraps Pi's `editorContainer` so the live editor AND
 		// Pi-internal selectors (`/resume`, model picker, confirm dialogs) both
@@ -264,14 +274,15 @@ export class OwnedShellRenderer {
 		const centerWithSplash = !!this.splash && !this.chat.hasMessages();
 		if (centerWithSplash === this.inputMountedInSplash) return;
 
-		for (const node of [
+		const movableNodes: SumoNode[] = [
 			this.blankSpacer,
 			this.editorRow,
 			this.hintLeaf,
 			this.footerGapSpacer,
 			this.footerLeaf,
 			this.bottomSafeSpacer,
-		]) {
+		];
+		for (const node of movableNodes) {
 			if (node.parent) node.parent.removeChild(node);
 		}
 
@@ -383,6 +394,7 @@ export class OwnedShellRenderer {
 		const compositeStart = performance.now();
 		const frame = new CellBuffer(rows, cols);
 		const result = composite(this.root, frame, this.selection ? { selection: this.selection } : {});
+		this.paintPendingMessages(frame, cols);
 		const overlayCount = this.compositeOverlays(frame, cols, rows);
 		const compositeMs = performance.now() - compositeStart;
 
@@ -455,6 +467,35 @@ export class OwnedShellRenderer {
 			}
 		}
 		return visibleEntries.length;
+	}
+
+	/**
+	 * Paint pending steer/follow-up messages as a Cathedral banner at the
+	 * bottom of the chat area. The banner overlays the last N rows of the
+	 * chat pager region without shifting the Yoga layout.
+	 */
+	private paintPendingMessages(frame: CellBuffer, cols: number): void {
+		if (!this.resolvePendingMessages) return;
+		try {
+			const container = this.resolvePendingMessages();
+			const rendered = container.render(cols);
+			const contentLines = rendered.filter((line: string) => line.replace(/\x1b\[[0-9;]*m/g, "").trim().length > 0);
+			if (contentLines.length === 0) return;
+
+			const chatBottom = Math.floor(this.chatRow.getComputedTop() + this.chatRow.getComputedHeight());
+			const height = Math.min(contentLines.length, Math.floor(this.chatRow.getComputedHeight()));
+			const top = chatBottom - height;
+			if (top < 0) return;
+
+			const T = CATHEDRAL_TOKENS.colors;
+			for (let i = 0; i < height; i += 1) {
+				const plain = (contentLines[i] ?? "").replace(/\x1b\[[0-9;]*m/g, "");
+				const padded = plain.length < cols ? `${plain}${" ".repeat(cols - plain.length)}` : plain.slice(0, cols);
+				frame.paintRow(top + i, withPersistentStyle(padded, T.foregroundDim, T.surfaceLifted), 0, cols);
+			}
+		} catch {
+			// Container may not be ready yet
+		}
 	}
 
 	private isSidebarVisible(termWidth: number, termHeight: number): boolean {

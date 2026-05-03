@@ -8,6 +8,8 @@
  * `docs/research/sumo-tui-spike/01-opencode.md` section 2).
  */
 
+import { logDiagnostic } from "./diagnostics.js";
+
 // Kitty keyboard mode and xterm modifyOtherKeys are per-screen. pi-tui pushes
 // `\x1b[>7u` (or falls back to `\x1b[>4;2m`) on the main screen at startup; the
 // altscreen stack starts at flags=0, so without re-pushing here Shift+Enter,
@@ -166,6 +168,12 @@ export class TerminalSessionOwner {
 		// V2 contract: do not emit OSC 12 cursor color during normal startup.
 		this.write(output);
 		this.altscreenActive = true;
+		logDiagnostic("altscreen_enter_written", {
+			containsKittyPush: output.includes("\x1b[>7u"),
+			containsModifyOtherKeys: output.includes("\x1b[>4;2m"),
+			containsBracketedPaste: output.includes("\x1b[?2004h"),
+			bytes: output.length,
+		});
 	}
 
 	public enableMouseSGR(): void {

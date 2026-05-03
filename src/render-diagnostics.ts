@@ -481,6 +481,26 @@ function instrumentStdin(): void {
 		const chunk = args[0] as Buffer | string | undefined;
 		const bytes = chunk === undefined ? 0 : typeof chunk === "string" ? Buffer.byteLength(chunk) : chunk.byteLength;
 		stats.recordKeystroke(bytes);
+		// Log the raw bytes so investigators can see exactly what the terminal
+		// produced for any given keypress. Capped at 64 bytes (paste chunks can
+		// be huge). This is what we need to debug Shift+Enter and other
+		// modifier-aware keys without speculation.
+		if (chunk !== undefined && bytes > 0) {
+			const buf = typeof chunk === "string" ? Buffer.from(chunk, "utf8") : chunk;
+			const sliced = buf.subarray(0, 64);
+			let hex = "";
+			let ascii = "";
+			for (const b of sliced) {
+				hex += b.toString(16).padStart(2, "0") + " ";
+				ascii += b >= 0x20 && b < 0x7f ? String.fromCharCode(b) : ".";
+			}
+			logDiagnostic("stdin_raw", {
+				bytes,
+				truncated: bytes > 64,
+				hex: hex.trimEnd(),
+				ascii,
+			});
+		}
 		if (pendingSince === undefined) {
 			pendingSince = performance.now();
 			pendingBytes = bytes;

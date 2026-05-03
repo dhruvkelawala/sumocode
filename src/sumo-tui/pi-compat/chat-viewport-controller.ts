@@ -445,6 +445,20 @@ export class ChatViewportController {
 			return { consume: true };
 		}
 
+		// Diagnostic: log the bridge handleInput verdict for ESC-prefixed chunks
+		// so investigators can see whether the bridge consumed/rewrote/forwarded
+		// modifier-aware sequences like \x1b[13;2u (Shift+Enter, kitty CSI u).
+		if (data.includes("\x1b") || data !== nextData || consumed) {
+			logDiagnostic("bridge_input_verdict", {
+				inLen: data.length,
+				outLen: nextData.length,
+				consumed,
+				rewritten: nextData !== data,
+				inHex: toHex(data.slice(0, 32)),
+				outHex: toHex(nextData.slice(0, 32)),
+			});
+		}
+
 		if (nextData.length === 0 && consumed) return { consume: true };
 		if (nextData !== data) return { data: nextData };
 		return undefined;

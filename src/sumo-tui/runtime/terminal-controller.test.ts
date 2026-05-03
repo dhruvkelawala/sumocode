@@ -116,6 +116,21 @@ describe("TerminalSessionOwner", () => {
 		expect(output.writes).toEqual(["\x1b[?2026h\x1b[2;1H\x1b[Khello\x1b[3;5H\x1b[?25h\x1b[?2026l"]);
 	});
 
+	it("drops writes after exitTerminal so post-cleanup renders cannot leak into main screen", () => {
+		const output = outputStub();
+		const terminal = new TerminalSessionOwner({ output });
+
+		terminal.startRetainedSession();
+		terminal.exitTerminal();
+		output.writes.length = 0;
+
+		terminal.writeFramePatches([{ row: 0, ansi: "splash bytes" }], { row: 0, col: 0 });
+		expect(terminal.writeChatViewport(0, 0, ["chat line"])).toBe(false);
+		expect(terminal.writeClipboardSequence("\x1b]52;c;abc\x1b\\")).toBe(false);
+
+		expect(output.writes).toEqual([]);
+	});
+
 	it("clears full-row patches before drawing so the final column is not erased", () => {
 		const output = outputStub();
 		const terminal = new TerminalSessionOwner({ output });

@@ -121,6 +121,9 @@ function headerNote(tool: ToolCallViewModel): string | undefined {
 	return firstString(details?.summary, details?.note);
 }
 
+/** Maximum body lines shown in an expanded tool ledger row before collapsing. */
+const TOOL_BODY_MAX_LINES = 25;
+
 const TOOL_LEDGER_STYLE = { bg: CATHEDRAL_TOKENS.colors.surfaceRecess } as const;
 
 function renderHeader(tool: ToolCallViewModel, width: number): string {
@@ -182,9 +185,9 @@ function renderGutterLine(lineNumber: number | undefined, text: string, width: n
 
 function renderReadLikeBody(tool: ToolCallViewModel, width: number): string[] {
 	const details = asRecord(tool.details);
-	const excerpt = (arrayFromDetails(details, "excerpt").length > 0 ? arrayFromDetails(details, "excerpt") : outputLines(tool).slice(0, 5)).map(terminalSafeText);
+	const excerpt = (arrayFromDetails(details, "excerpt").length > 0 ? arrayFromDetails(details, "excerpt") : outputLines(tool).slice(0, TOOL_BODY_MAX_LINES)).map(terminalSafeText);
 	const startLine = typeof details?.startLine === "number" ? details.startLine : 1;
-	const rows = excerpt.slice(0, 5).map((line, index) => renderGutterLine(startLine + index, line, width));
+	const rows = excerpt.slice(0, TOOL_BODY_MAX_LINES).map((line, index) => renderGutterLine(startLine + index, line, width));
 	const collapsed = collapsedMarker(details, typeof details?.totalLines === "number" ? Math.max(0, details.totalLines - excerpt.length) : 0);
 	if (collapsed) rows.push(renderBodyLine([span("      ", { fg: CATHEDRAL_TOKENS.colors.foregroundDim }), span(collapsed, { fg: CATHEDRAL_TOKENS.colors.foregroundDim })], width));
 	if (rows.length === 0) rows.push(renderBodyLine([span("preview collapsed", { fg: CATHEDRAL_TOKENS.colors.foregroundDim })], width));
@@ -214,7 +217,7 @@ function renderEditBody(tool: ToolCallViewModel, width: number): string[] {
 
 	// Render actual diff lines with gutter
 	const startLine = typeof details?.startLine === "number" ? details.startLine : 1;
-	const rows = diffLines.slice(0, 6).map((line, index) => {
+	const rows = diffLines.slice(0, TOOL_BODY_MAX_LINES).map((line, index) => {
 		const color = line.trimStart().startsWith("+") ? CATHEDRAL_TOKENS.colors.states.idle
 			: line.trimStart().startsWith("-") ? CATHEDRAL_TOKENS.colors.states.approval
 			: CATHEDRAL_TOKENS.colors.foreground;
@@ -245,7 +248,7 @@ function renderBashLine(line: string): (Span | string)[] {
 function renderBashBody(tool: ToolCallViewModel, width: number): string[] {
 	const details = asRecord(tool.details);
 	const target = toolTarget(tool);
-	const lines = outputLines(tool).slice(0, 5).map(terminalSafeText);
+	const lines = outputLines(tool).slice(0, TOOL_BODY_MAX_LINES).map(terminalSafeText);
 	const body = [renderBodyLine([`> ${target}`], width)];
 	const collapsed = collapsedMarker(details, Math.max(0, outputLines(tool).length - lines.length));
 	if (collapsed) body.push(renderBodyLine([span(`  ${collapsed}`, { fg: CATHEDRAL_TOKENS.colors.foregroundDim })], width));

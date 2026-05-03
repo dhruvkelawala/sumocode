@@ -546,6 +546,14 @@ export class OwnedShellRenderer {
 		if (this.sidebarLeaf.parent === this.chatRow) this.chatRow.removeChild(this.sidebarLeaf);
 		this.sidebarGutter.dispose();
 		this.sidebarLeaf.dispose();
+		// The editor row is created at construction time and reparented into the
+		// splash column when the splash is active. When splash.root is detached
+		// above, editorRow becomes orphaned and is NOT reached by root.dispose()
+		// below. Explicitly dispose it here regardless of parentage (dispose is
+		// idempotent, so it's safe to call in both splash and post-splash states).
+		this.editorLeftSpacer.dispose();
+		this.editorRightSpacer.dispose();
+		this.editorRow.dispose();
 		this.chatRow.dispose();
 		this.root.dispose();
 		this.previousFrame = undefined;

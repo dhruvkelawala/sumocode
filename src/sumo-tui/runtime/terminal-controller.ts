@@ -10,6 +10,20 @@
 
 import { logDiagnostic } from "./diagnostics.js";
 
+/**
+ * Cross-module tripwire: set the moment ANY TerminalSessionOwner emits its
+ * altscreen-exit cleanup. Used by `render-diagnostics` to log every stdout
+ * write that lands AFTER the cleanup — those are the bytes leaking onto the
+ * user's main shell scrollback (#199 / "splash residue" repro).
+ */
+let exitTerminalEmittedAt: number | undefined;
+export function isExitTerminalEmitted(): boolean {
+	return exitTerminalEmittedAt !== undefined;
+}
+export function getExitTerminalEmittedAt(): number | undefined {
+	return exitTerminalEmittedAt;
+}
+
 // Kitty keyboard mode and xterm modifyOtherKeys are per-screen. pi-tui pushes
 // `\x1b[>7u` (or falls back to `\x1b[>4;2m`) on the main screen at startup; the
 // altscreen stack starts at flags=0, so without re-pushing here Shift+Enter,
@@ -289,12 +303,21 @@ export class TerminalSessionOwner {
 		this.lastCursorColor = undefined;
 		this.lastEmittedCursor = null;
 		this.hardwareCursorVisible = true;
+		logDiagnostic("exit_terminal_called", {
+			isTTY: this.isTTY(),
+			caller: new Error().stack?.split("\n").slice(2, 6).map((l) => l.trim()),
+		});
 		if (!this.isTTY()) return;
 		let output = "";
 		if (shouldResetCursorColor) output += CURSOR_COLOR_RESET;
 		if (shouldResetBackground) output += TERMINAL_BG_RESET;
 		output += TERMINAL_CLEANUP_SEQUENCE;
 		this.write(output);
+		exitTerminalEmittedAt = Date.now();
+		logDiagnostic("exit_terminal_cleanup_written", {
+			bytes: output.length,
+			containsAltscreenOff: output.includes("\x1b[?1049l"),
+		});
 	}
 
 	private write(data: string): void {

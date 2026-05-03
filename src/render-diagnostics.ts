@@ -27,6 +27,7 @@ import { createRequire } from "node:module";
 import { performance } from "node:perf_hooks";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { isDiagnosticsEnabled, logDiagnostic } from "./sumo-tui/runtime/diagnostics.js";
+import { isExitTerminalEmitted } from "./sumo-tui/runtime/terminal-controller.js";
 
 /** Render durations >= this (ms) get logged individually as `render_sample`. */
 const SLOW_RENDER_THRESHOLD_MS = 4;
@@ -442,6 +443,28 @@ function instrumentWritable(stream: NodeJS.WriteStream, label: "stdout" | "stder
 	const original = target.write.bind(stream) as NodeJS.WriteStream["write"];
 	target.write = ((chunk: string | Uint8Array, ...rest: unknown[]): boolean => {
 		const bytes = typeof chunk === "string" ? Buffer.byteLength(chunk) : chunk.byteLength;
+		// Wiretap: log every write that lands AFTER altscreen-exit cleanup. These
+		// are the bytes painting onto the user's main shell scrollback (#199).
+		// We capture BEFORE the actual write so the byte order in the diag log
+		// matches the byte order on the wire, and we get a stack so we can see
+		// who is writing.
+		if (label === "stdout" && isExitTerminalEmitted()) {
+			const buf = typeof chunk === "string" ? Buffer.from(chunk, "utf8") : Buffer.from(chunk);
+			const sliced = buf.subarray(0, 64);
+			let hex = "";
+			let ascii = "";
+			for (const b of sliced) {
+				hex += b.toString(16).padStart(2, "0") + " ";
+				ascii += b >= 0x20 && b < 0x7f ? String.fromCharCode(b) : ".";
+			}
+			logDiagnostic("post_exit_stdout_write", {
+				bytes,
+				truncated: bytes > 64,
+				hex: hex.trimEnd(),
+				ascii,
+				caller: new Error().stack?.split("\n").slice(2, 7).map((l) => l.trim()),
+			});
+		}
 		const start = performance.now();
 		// eslint-disable-next-line @typescript-eslint/no-explicit-any
 		const result = (original as unknown as (...args: any[]) => boolean)(chunk, ...(rest as unknown[]));

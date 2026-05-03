@@ -641,6 +641,7 @@ export class SumoInteractiveMode {
 			editorContainer?: unknown;
 			headerContainer?: unknown;
 			widgetContainerBelow?: unknown;
+			pendingMessagesContainer?: unknown;
 			footer?: unknown;
 			customFooter?: unknown;
 			ui?: {
@@ -683,6 +684,7 @@ export class SumoInteractiveMode {
 			headerContainer: () => host.headerContainer as never,
 			topChromePublication: () => this.retainedRuntime.getTopChromePublication(),
 			widgetContainerBelow: () => host.widgetContainerBelow as never,
+			pendingMessagesContainer: host.pendingMessagesContainer ? (() => host.pendingMessagesContainer as never) : undefined,
 			footer: () => (host.customFooter ?? host.footer) as never,
 			terminal: this.retainedRuntime.getTerminalSessionOwner(),
 			dimensions,

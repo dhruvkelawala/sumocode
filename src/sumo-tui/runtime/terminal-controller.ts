@@ -241,9 +241,10 @@ export class TerminalSessionOwner {
 			// NEXT frame with a non-null cursor re-emits its position even if it matches
 			// the stale cache.
 			this.lastEmittedCursor = null;
-			if (!this.hardwareCursorVisible) return;
-			output += "\x1b[?25l";
-			this.hardwareCursorVisible = false;
+			if (this.hardwareCursorVisible) {
+				output += "\x1b[?25l";
+				this.hardwareCursorVisible = false;
+			}
 		}
 		output += "\x1b[?2026l";
 		this.write(output);

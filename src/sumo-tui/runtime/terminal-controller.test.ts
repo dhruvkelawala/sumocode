@@ -228,6 +228,27 @@ describe("TerminalSessionOwner", () => {
 		expect(output.writes).toEqual(["\x1b[?2026h\x1b[6;11H\x1b[?25h\x1b[?2026l"]);
 	});
 
+	it("writes patches on subsequent overlay frames after cursor is already hidden", () => {
+		// Regression: when `hardwareCursorVisible` is already false (cursor hidden
+		// by a previous overlay frame), the null-cursor branch must still write
+		// frame content. Early-returning would drop all patch bytes, freezing
+		// overlay updates after the first frame.
+		const output = outputStub();
+		const terminal = new TerminalSessionOwner({ output });
+
+		// Frame A: patch with null cursor — hides cursor, writes "overlay A".
+		terminal.writeFramePatches([{ row: 5, ansi: "overlay A" }], null);
+		expect(output.writes[0]).toContain("\x1b[?25l");
+		expect(output.writes[0]).toContain("overlay A");
+		output.writes.length = 0;
+
+		// Frame B: patch with null cursor, already hidden. Must still write.
+		terminal.writeFramePatches([{ row: 5, ansi: "overlay B" }], null);
+		expect(output.writes).toHaveLength(1);
+		expect(output.writes[0]).toContain("overlay B");
+		expect(output.writes[0]).not.toContain("\x1b[?25l"); // no redundant hide
+	});
+
 	it("re-emits cursor after exitTerminal clears lastEmittedCursor", () => {
 		const output = outputStub();
 		const terminal = new TerminalSessionOwner({ output });

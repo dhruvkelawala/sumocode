@@ -239,12 +239,14 @@ export class TerminalSessionOwner {
 	}
 
 	public writeFramePatches(patches: readonly TerminalPatch[], cursor: TerminalCursor | null): void {
-		if (isExitTerminalEmitted() && !this.restored) {
-			logDiagnostic("write_frame_patches_after_exit_but_unguarded", {
+		if (isExitTerminalEmitted()) {
+			logDiagnostic("write_frame_patches_after_exit", {
 				instanceId: this.instanceId,
 				restored: this.restored,
 				altscreenActive: this.altscreenActive,
+				isTTY: this.isTTY(),
 				patchCount: patches.length,
+				willReturn: !this.isTTY() || this.restored,
 				caller: new Error().stack?.split("\n").slice(2, 6).map((l) => l.trim()),
 			});
 		}

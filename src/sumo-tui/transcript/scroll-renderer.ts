@@ -8,7 +8,7 @@
  *   docs/ui/bible/12-scroll-running.html
  *   docs/ui/bible/12-scroll-done.html
  */
-import { visibleWidth } from "@mariozechner/pi-tui";
+import { truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
 import { CATHEDRAL_TOKENS } from "../../tokens.js";
 import { lineToAnsi, span, textLine, type Span } from "../render/primitives.js";
 import type { DelegationStatus, DelegationViewModel, ToolCallViewModel } from "./view-model.js";
@@ -157,6 +157,27 @@ function scribeBlankRow(width: number): string {
 	]), { width });
 }
 
+function scribeTextRow(text: string, width: number): string {
+	const contentWidth = Math.max(1, width - 6); // indent(3) + │ + spaces around content
+	const clipped = visibleWidth(text) > contentWidth ? truncateToWidth(text, contentWidth, "") : text;
+	return lineToAnsi(textLine([
+		span("   "),
+		span("│", { fg: CATHEDRAL_TOKENS.colors.divider }),
+		span(" "),
+		span(clipped, { fg: CATHEDRAL_TOKENS.colors.foreground }),
+	]), { width });
+}
+
+function scribeSummaryRows(summary: string | undefined, width: number): string[] {
+	if (!summary || summary.trim().length === 0) return [];
+	return summary
+		.split("\n")
+		.map((line) => line.trim())
+		.filter((line) => line.length > 0)
+		.slice(0, 4)
+		.map((line) => scribeTextRow(line, width));
+}
+
 function scribeMetadataRow(delegation: DelegationViewModel, width: number): string {
 	const parts: string[] = [];
 	const tokens = formatTokens(delegation.tokensIn, delegation.tokensOut);
@@ -194,7 +215,9 @@ export function renderScrollBlock(delegation: DelegationViewModel, width: number
 		rows.push(nestedToolRow(tool, safeWidth));
 	}
 
-	rows.push(scribeBlankRow(safeWidth));
+	const summaryRows = scribeSummaryRows(delegation.summary, safeWidth);
+	if (summaryRows.length > 0) rows.push(...summaryRows);
+	else rows.push(scribeBlankRow(safeWidth));
 
 	if (delegation.tokensIn !== undefined || delegation.elapsedMs !== undefined) {
 		rows.push(scribeMetadataRow(delegation, safeWidth));

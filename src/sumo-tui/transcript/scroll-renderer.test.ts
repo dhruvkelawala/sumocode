@@ -46,6 +46,11 @@ describe("scroll/scribe renderer", () => {
 		expect(rows.some((r) => r.includes("▶") && r.includes("[bash]") && r.includes("pnpm test"))).toBe(true);
 	});
 
+	it("renders completed task summary inside the scribe body", () => {
+		const rows = renderScrollBlock(delegation({ status: "success", summary: "Task tool ran." }), 130).map(stripAnsi);
+		expect(rows.some((r) => r.includes("│ Task tool ran."))).toBe(true);
+	});
+
 	it("renders token and elapsed metadata", () => {
 		const rows = renderScrollBlock(delegation(), 130).map(stripAnsi);
 		const meta = rows.find((r) => r.includes("Tokens"));

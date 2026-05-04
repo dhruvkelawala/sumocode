@@ -221,6 +221,49 @@ describe("ChatViewportController", () => {
 		root.dispose();
 	});
 
+	it("folds live task results into the active scroll block", async () => {
+		const { root, chat, controller } = await makeController();
+		const taskCall = {
+			type: "toolCall",
+			id: "tc-task",
+			name: "task",
+			arguments: {
+				type: "single",
+				model: "openai-codex/gpt-5.5",
+				thinking: "high",
+				tasks: [{ prompt: "You are Zeus.\n\n## Verify issue 194 scroll metadata rendering\n\nReturn one line." }],
+			},
+		};
+
+		controller.handleAgentEvent({ type: "message_start", message: { role: "assistant", content: "" } });
+		controller.handleAgentEvent({ type: "message_update", message: { role: "assistant", content: [taskCall] } });
+		controller.handleAgentEvent({ type: "message_end", message: { role: "assistant", content: [taskCall] } });
+		controller.handleAgentEvent({ type: "message_start", message: { role: "toolResult", toolCallId: "tc-task", toolName: "task", name: "task", content: [{ type: "text", text: "Task tool ran." }] } });
+
+		const messages = chat.getRenderedMessages().map((message) => message.toSnapshot());
+		expect(messages).toHaveLength(1);
+		expect(messages[0]?.role).toBe("sumo");
+		expect(messages[0]?.blocks).toEqual([
+			{
+				type: "delegation",
+				delegation: {
+					id: "tc-task",
+					title: "Verify issue 194 scroll metadata rendering",
+					agent: "scribe",
+					model: "openai-codex/gpt-5.5",
+					thinking: "high",
+					status: "success",
+					summary: "Task tool ran.",
+					nestedTools: [],
+					tokensIn: undefined,
+					tokensOut: undefined,
+					elapsedMs: undefined,
+				},
+			},
+		]);
+		root.dispose();
+	});
+
 	it("keeps assistant-only tool blocks under SUMO instead of TOOL", async () => {
 		const { root, chat, controller } = await makeController();
 

@@ -226,12 +226,104 @@ function parseDelegationTools(value: unknown): ToolCallViewModel[] {
 	return results;
 }
 
+interface TaskMetadata {
+	readonly id: string;
+	readonly arguments?: Record<string, unknown>;
+	readonly prompt?: string;
+	readonly model?: string;
+	readonly thinking?: string;
+}
+
+function taskRecordId(record: Record<string, unknown>): string | undefined {
+	return firstString(record.id, record.toolCallId);
+}
+
+function isTaskToolRecord(record: Record<string, unknown>): boolean {
+	return firstString(record.name, record.toolName) === "task";
+}
+
+function taskArgumentsFromRecord(record: Record<string, unknown>): Record<string, unknown> | undefined {
+	return asRecord(record.arguments ?? record.input);
+}
+
+function firstTaskFromArgs(args: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
+	const tasks = Array.isArray(args?.tasks) ? args.tasks : [];
+	return asRecord(tasks[0]);
+}
+
+function taskMetadataFromRecord(record: Record<string, unknown>): TaskMetadata | undefined {
+	if (!isTaskToolRecord(record)) return undefined;
+	const id = taskRecordId(record);
+	if (!id) return undefined;
+	const args = taskArgumentsFromRecord(record);
+	const firstTask = firstTaskFromArgs(args);
+	return {
+		id,
+		arguments: args,
+		prompt: firstString(firstTask?.prompt, args?.prompt, record.prompt),
+		model: firstString(firstTask?.model, args?.model, record.model),
+		thinking: firstString(firstTask?.thinking, args?.thinking, record.thinking),
+	};
+}
+
+function collectTaskMetadataFromRecord(record: Record<string, unknown>, cache: Map<string, TaskMetadata>): void {
+	const metadata = taskMetadataFromRecord(record);
+	if (metadata && (metadata.arguments || metadata.prompt || metadata.model || metadata.thinking)) cache.set(metadata.id, metadata);
+	if (!Array.isArray(record.content)) return;
+	for (const part of record.content) {
+		const partRecord = asRecord(part);
+		if (partRecord) collectTaskMetadataFromRecord(partRecord, cache);
+	}
+}
+
+function enrichTaskRecordFromCache(record: Record<string, unknown>, cache: Map<string, TaskMetadata>): Record<string, unknown> {
+	const id = taskRecordId(record);
+	if (!id || !isTaskToolRecord(record)) return record;
+	const metadata = cache.get(id);
+	if (!metadata) return record;
+	return {
+		...record,
+		arguments: record.arguments ?? record.input ?? metadata.arguments,
+		prompt: record.prompt ?? metadata.prompt,
+		model: record.model ?? metadata.model,
+		thinking: record.thinking ?? metadata.thinking,
+	};
+}
+
+function enrichTaskResultsFromCache(record: Record<string, unknown>, cache: Map<string, TaskMetadata>): Record<string, unknown> {
+	const enriched = enrichTaskRecordFromCache(record, cache);
+	if (!Array.isArray(enriched.content)) return enriched;
+	return {
+		...enriched,
+		content: enriched.content.map((part) => {
+			const partRecord = asRecord(part);
+			return partRecord ? enrichTaskRecordFromCache(partRecord, cache) : part;
+		}),
+	};
+}
+
+function truncateTaskTitle(title: string): string {
+	return title.length > 80 ? `${title.slice(0, 77)}…` : title;
+}
+
+function taskTitleFromPrompt(rawPrompt: string): string {
+	const lines = rawPrompt.split("\n");
+	const heading = lines
+		.map((line) => line.trim().match(/^#{2,6}\s+(.+?)\s*#*$/)?.[1]?.trim())
+		.find((line): line is string => line !== undefined && line.length > 0);
+	if (heading) return truncateTaskTitle(heading);
+
+	const meaningful = lines
+		.map((line) => line.trim())
+		.find((line) => line.length > 0 && !/^you(?: are|'re)\b/i.test(line));
+	return truncateTaskTitle(meaningful ?? (rawPrompt.trim() || "task"));
+}
+
 function taskBlockFromRecord(record: Record<string, unknown>, fallbackStatus: ToolStatus): ChatBlock {
 	// Pi built-in `task` tool call → Cathedral scroll/scribe (Element 12).
 	// Extract title, agent metadata, and status from the task arguments/output.
-	const args = asRecord(record.arguments ?? record.input);
-	const tasks = Array.isArray(args?.tasks) ? args.tasks : [];
-	const firstTask = asRecord(tasks[0]);
+	const args = taskArgumentsFromRecord(record);
+	const firstTask = firstTaskFromArgs(args);
 	const model = firstString(
 		firstTask?.model,
 		args?.model,
@@ -239,9 +331,7 @@ function taskBlockFromRecord(record: Record<string, unknown>, fallbackStatus: To
 	);
 	const thinking = firstString(firstTask?.thinking, args?.thinking, record.thinking);
 	const rawPrompt = firstString(firstTask?.prompt, args?.prompt, record.prompt) ?? "task";
-	// Title: use first non-empty line, capped at 80 chars
-	const firstLine = rawPrompt.split("\n").find((l) => l.trim().length > 0) ?? rawPrompt;
-	const title = firstLine.length > 80 ? `${firstLine.slice(0, 77)}…` : firstLine;
+	const title = taskTitleFromPrompt(rawPrompt);
 	// Status from toolResult output
 	const outputText = (() => {
 		const content = record.content;
@@ -372,14 +462,41 @@ export function chatMessageViewModelFromPiMessage(message: unknown, index = 0): 
 	};
 }
 
-export function transcriptFromSessionContext(sessionContext: unknown): TranscriptViewModel {
-	const messages = asRecord(sessionContext)?.messages;
-	if (!Array.isArray(messages)) return { messages: [] };
+export interface TranscriptViewModelMapper {
+	reset(): void;
+	messageFromPiMessage(message: unknown, index?: number): ChatMessageViewModel | undefined;
+	transcriptFromSessionContext(sessionContext: unknown): TranscriptViewModel;
+}
+
+export function createTranscriptViewModelMapper(): TranscriptViewModelMapper {
+	const taskMetadata = new Map<string, TaskMetadata>();
 	return {
-		messages: messages
-			.map((message, index) => chatMessageViewModelFromPiMessage(message, index))
-			.filter((message): message is ChatMessageViewModel => message !== undefined),
+		reset(): void {
+			taskMetadata.clear();
+		},
+		messageFromPiMessage(message: unknown, index = 0): ChatMessageViewModel | undefined {
+			const record = asRecord(message);
+			if (!record) return undefined;
+			const enriched = enrichTaskResultsFromCache(record, taskMetadata);
+			const viewModel = chatMessageViewModelFromPiMessage(enriched, index);
+			collectTaskMetadataFromRecord(enriched, taskMetadata);
+			return viewModel;
+		},
+		transcriptFromSessionContext(sessionContext: unknown): TranscriptViewModel {
+			const messages = asRecord(sessionContext)?.messages;
+			if (!Array.isArray(messages)) return { messages: [] };
+			return {
+				messages: messages
+					.map((message, index) => this.messageFromPiMessage(message, index))
+					.filter((message): message is ChatMessageViewModel => message !== undefined),
+			};
+		},
 	};
+}
+
+export function transcriptFromSessionContext(sessionContext: unknown): TranscriptViewModel {
+	const mapper = createTranscriptViewModelMapper();
+	return mapper.transcriptFromSessionContext(sessionContext);
 }
 
 export function chatMessageViewModelToPlainText(message: ChatMessageViewModel): string {

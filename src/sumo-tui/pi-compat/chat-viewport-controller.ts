@@ -224,7 +224,7 @@ function upsertFoldableBlock(blocks: readonly ChatBlock[], incoming: ChatBlock):
 		const byId = incomingId
 			? blocks.findIndex((block) => block.type === "delegation" && block.delegation.id === incomingId)
 			: -1;
-		const byRunning = byId === -1
+		const byRunning = !incomingId && byId === -1
 			? blocks.findIndex((block) => block.type === "delegation" && (block.delegation.status === "queued" || block.delegation.status === "running"))
 			: -1;
 		const index = byId !== -1 ? byId : byRunning;
@@ -524,6 +524,11 @@ export class ChatViewportController {
 			case "message_end":
 				this.handleMessageEnd(message);
 				break;
+			case "tool_execution_start":
+			case "tool_execution_update":
+			case "tool_execution_end":
+				this.handleToolExecutionEvent(record);
+				break;
 			case "agent_end":
 				this.chat.endStreaming();
 				break;
@@ -554,6 +559,27 @@ export class ChatViewportController {
 				archivedMessages: stats.archivedMessages,
 			});
 		}
+	}
+
+	private handleToolExecutionEvent(record: Record<string, unknown>): void {
+		if (record.toolName !== "task") return;
+		this.markRenderDirty();
+		if (record.type !== "tool_execution_end" && record.partialResult === undefined) return;
+		const result = record.type === "tool_execution_end" ? record.result : record.partialResult;
+		const resultRecord = asRecord(result);
+		const viewModel = this.viewModelMapper.messageFromPiMessage({
+			role: "toolResult",
+			toolCallId: record.toolCallId,
+			toolName: "task",
+			name: "task",
+			arguments: record.args,
+			content: resultRecord?.content ?? [],
+			details: resultRecord?.details,
+			isError: record.isError,
+		});
+		if (!viewModel || !isFoldableOnlyViewModel(viewModel) || !this.liveAssistant) return;
+		this.foldBlocksIntoAssistant(viewModel.blocks);
+		this.runtime.requestRender();
 	}
 
 	private handleMessageStart(message: unknown): void {

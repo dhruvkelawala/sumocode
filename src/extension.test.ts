@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import sumocode, {
 	findActiveSumoDevTree,
 	isInstalledPiAgentGitModule,
+	shouldInstallNativeTaskTool,
 	shouldNoopDuplicateInstalledExtension,
 } from "./extension.js";
 
@@ -88,6 +89,28 @@ describe("duplicate installed extension guard", () => {
 });
 
 describe("sumocode extension", () => {
+	it("detects whether native task can install without conflicting with the legacy task extension", () => {
+		expect(shouldInstallNativeTaskTool({ homeDir: "/home/dhruv", exists: () => false })).toBe(true);
+		expect(shouldInstallNativeTaskTool({ homeDir: "/home/dhruv", exists: () => true })).toBe(false);
+		expect(shouldInstallNativeTaskTool({ homeDir: "/home/dhruv", exists: () => true, force: "1" })).toBe(true);
+	});
+
+	it("registers a native task tool when forced", () => {
+		const previous = process.env.SUMOCODE_NATIVE_TASK;
+		process.env.SUMOCODE_NATIVE_TASK = "1";
+		try {
+			const { pi } = buildPiStub();
+
+			sumocode(pi as never);
+
+			const toolNames = pi.registerTool.mock.calls.map((call) => (call[0] as { name: string }).name);
+			expect(toolNames).toContain("task");
+		} finally {
+			if (previous === undefined) delete process.env.SUMOCODE_NATIVE_TASK;
+			else process.env.SUMOCODE_NATIVE_TASK = previous;
+		}
+	});
+
 	it("does not push a 'SumoCode loaded' notification on session_start", () => {
 		const { pi, handlers } = buildPiStub();
 

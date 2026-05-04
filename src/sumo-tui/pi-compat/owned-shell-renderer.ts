@@ -9,6 +9,7 @@
  *
  *   column root
  *   ├── retained top-chrome (h: header lines)
+ *   ├── blank              (h: 1 when active, h: 0 on splash)
  *   ├── chat-row           (flexGrow: 1, flexDirection: row)
  *   │   └── chat-or-splash (flexGrow: 1)   ← splash when no messages, ChatPager when active
  *   ├── blank              (h: 1)
@@ -109,6 +110,7 @@ export interface OwnedShellRendererOptions {
 }
 
 const SPLASH_EDITOR_FRAME_WIDTH = 60;
+const SHELL_TOP_CHROME_GAP_ROW = 1;
 const SHELL_BLANK_ROW = 1;
 const SHELL_HINT_ROW = 1;
 const SHELL_FOOTER_GAP_ROW = 1;
@@ -118,7 +120,7 @@ const SHELL_BOTTOM_SAFE_ROW = 1;
 /**
  * Owns the full-screen Yoga layout per issue #161 Slice A.
  *
- * Composition: top-chrome → chat-row → blank → input → hint → footer. Footer
+ * Composition: top-chrome → gap → chat-row → blank → input → hint → footer. Footer
  * is pinned to the last row by the column flex constraint, not by row counting.
  */
 export class OwnedShellRenderer {
@@ -133,6 +135,7 @@ export class OwnedShellRenderer {
 	private lastFrame: CellBuffer | undefined;
 	private previousFrame: CellBuffer | undefined;
 	private readonly headerLeaf: PiComponentLeaf;
+	private readonly topChromeGapSpacer: SumoNode;
 	private readonly resolvePendingMessages: (() => Component) | undefined;
 	private readonly editorRow: SumoNode;
 	private readonly editorLeftSpacer: SumoNode;
@@ -175,6 +178,11 @@ export class OwnedShellRenderer {
 
 		// 1) top-chrome
 		this.headerLeaf = PiComponentLeaf.create(this.yoga, headerProxy, this.root);
+
+		// 1b) breathing row between title bar and chat/sidebar content.
+		// Collapses on splash so the compact 24-row splash keeps its wordmark.
+		this.topChromeGapSpacer = new SumoNode(this.yoga.Node.create(), this.root);
+		this.topChromeGapSpacer.height = SHELL_TOP_CHROME_GAP_ROW;
 
 		// 2) chat-row (flexGrow: 1)
 		this.chatRow = new SumoNode(this.yoga.Node.create(), this.root);
@@ -311,6 +319,7 @@ export class OwnedShellRenderer {
 	private syncChatRowChildren(cols: number, rows: number): void {
 		const wantSplash = !!this.splash && !this.chat.hasMessages();
 		const desired: "chat" | "splash" = wantSplash ? "splash" : "chat";
+		this.topChromeGapSpacer.height = desired === "chat" ? SHELL_TOP_CHROME_GAP_ROW : 0;
 		const sidebarVisible = desired === "chat" && this.isSidebarVisible(cols, rows);
 		const gutterWidth = sidebarVisible ? sidebarGutterWidth(cols, rows) : 0;
 		if (desired === "chat") {
@@ -419,6 +428,7 @@ export class OwnedShellRenderer {
 			mountedChild: this.mountedChatChild,
 			rects: {
 				header: this.nodeRect(this.headerLeaf),
+				topChromeGap: this.nodeRect(this.topChromeGapSpacer),
 				chatRow: this.nodeRect(this.chatRow),
 				chat: this.nodeRect(this.chat),
 				sidebarGutter: this.nodeRect(this.sidebarGutter),
@@ -576,6 +586,7 @@ export class OwnedShellRenderer {
 		if (this.disposed) return;
 		this.disposed = true;
 		this.headerLeaf.dispose();
+		this.topChromeGapSpacer.dispose();
 		this.editorLeaf.dispose();
 		this.hintLeaf.dispose();
 		this.footerLeaf.dispose();

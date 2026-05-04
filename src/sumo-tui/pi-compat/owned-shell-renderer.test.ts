@@ -71,6 +71,8 @@ describe("OwnedShellRenderer", () => {
 		const lines = fakeTerminal.patches.map((patch) => stripAnsi(patch.ansi));
 		expect(lines.length).toBe(12);
 		expect(lines[0]?.startsWith("TOP")).toBe(true);
+		// title bar is separated from chat/sidebar by one breathing row
+		expect(lines[1]?.trim()).toBe("");
 		// footer is pinned above the terminal-bottom safe row
 		expect(lines[10]?.startsWith("FOOTER")).toBe(true);
 		expect(lines[11]?.trim()).toBe("");
@@ -106,6 +108,33 @@ describe("OwnedShellRenderer", () => {
 		const lines = fakeTerminal.patches.map((patch) => stripAnsi(patch.ansi));
 		expect(lines[0]?.startsWith("RETAINED-TOP")).toBe(true);
 		expect(lines.join("\n")).not.toContain("PI-HEADER");
+		renderer.dispose();
+	});
+
+	it("keeps one breathing row between top chrome and the docked sidebar", async () => {
+		const yoga = await loadYoga();
+		const chat = ChatPager.create(yoga);
+		const fakeTerminal = new FakeTerminal();
+		const renderer = new OwnedShellRenderer({
+			yoga,
+			chat,
+			editorContainer: () => new StaticEditor() as Component,
+			headerContainer: () => new StaticComponent(["TOP"]),
+			widgetContainerBelow: () => new StaticComponent(["HINT"]),
+			footer: () => new StaticComponent(["FOOTER"]),
+			terminal: fakeTerminal.owner,
+			dimensions: { columns: 80, rows: 12 },
+			sidebarPublication: () => ({
+				component: new StaticComponent(["SIDE"]),
+				isVisible: () => true,
+			}),
+		});
+
+		renderer.render();
+		const lines = fakeTerminal.patches.map((patch) => stripAnsi(patch.ansi));
+		expect(lines[0]?.startsWith("TOP")).toBe(true);
+		expect(lines[1]?.trim()).toBe("");
+		expect(lines[2]).toContain("SIDE");
 		renderer.dispose();
 	});
 

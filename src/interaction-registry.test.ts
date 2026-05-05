@@ -7,6 +7,8 @@ function buildPiStub() {
 		registerCommand: vi.fn(),
 		registerShortcut: vi.fn(),
 		registerTool: vi.fn(),
+		registerMessageRenderer: vi.fn(),
+		sendMessage: vi.fn(),
 	};
 }
 

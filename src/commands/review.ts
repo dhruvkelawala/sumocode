@@ -110,6 +110,12 @@ DO NOT flag any of the following:
 
 ${inspect}
 
+Regression-contract discipline:
+- For each changed code path that replaces or wraps existing behavior, compare the old and new success, failure, and no-op paths from the diff. Preserve old failure semantics unless the PR explicitly says otherwise.
+- If a changed call returns a result object such as \`{ success, error }\`, verify the error path is handled before any success notification, persistence write, subscriber event, cache update, or internal state mutation.
+- For code that coordinates two state systems (for example external UI/API state plus internal registry/cache state), treat the boundary as transactional: internal state must not advance if the external operation failed.
+- Tests are inadequate if they cover only the happy path and unknown-input path while omitting a known-input failure from a mocked dependency.
+
 Reasoning discipline — for every finding you report:
 - State the premise: what you observed in the code.
 - Trace the concrete execution path that leads to the failure.

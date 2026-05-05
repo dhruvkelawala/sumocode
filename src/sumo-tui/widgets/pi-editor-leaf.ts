@@ -15,7 +15,7 @@ export interface HardwareCursorPosition {
  *
  * Source: Pi's own `TUI.extractCursorPosition()` scans for CURSOR_MARKER,
  * measures `visibleWidth(beforeMarker)`, strips the marker, then positions the
- * hardware cursor (`node_modules/.pnpm/@mariozechner+pi-tui@0.70.2/.../dist/tui.js:651-674`).
+ * hardware cursor (`node_modules/.pnpm/@mariozechner+pi-tui@0.73.0/.../dist/tui.js:651-674`).
  * sumo-tui performs the same scan inside the Yoga leaf and offsets by the
  * leaf's computed frame rect.
  */

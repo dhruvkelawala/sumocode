@@ -15,7 +15,7 @@ Revisit removal when Pi exposes a public interactive-mode/runtime injection API,
 
 ## Audited seam
 
-### `patches/@mariozechner__pi-coding-agent@0.70.2.patch`
+### `patches/@mariozechner__pi-coding-agent@0.73.0.patch`
 
 The patch changes Pi's `dist/main.js` constructor site from direct `new InteractiveMode(...)` to:
 

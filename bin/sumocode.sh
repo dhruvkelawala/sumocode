@@ -286,37 +286,39 @@ is_truthy_env_flag() {
 }
 
 pi_main_file() {
-	node -e '
-const fs = require("node:fs");
-const path = require("node:path");
-const bin = process.argv[1];
-try {
-	const resolved = fs.realpathSync(bin);
-	const dir = path.dirname(resolved);
-	const candidates = [path.join(dir, "main.js"), path.join(dir, "..", "dist", "main.js")];
+	local bin="$1"
+	local resolved dir cli_target cli_path main_file fallback
+	resolved="$(realpath "${bin}" 2>/dev/null || true)"
+	[[ -n "${resolved}" ]] || return 1
+	dir="$(dirname "${resolved}")"
 
-	// pnpm creates a shell shim at node_modules/.bin/pi that execs
-	// ../@mariozechner/pi-coding-agent/dist/cli.js. Resolve that target so we
-	// can inspect the adjacent dist/main.js for the Sumo constructor patch.
-	const source = fs.readFileSync(resolved, "utf8");
-	const marker = "@mariozechner/pi-coding-agent/dist/cli.js";
-	const markerIndex = source.indexOf(marker);
-	const shimTarget = markerIndex >= 0 ? source.slice(0, markerIndex + marker.length).match(/[^\"\s]+@mariozechner\/pi-coding-agent\/dist\/cli\.js$/)?.[0] : undefined;
-	if (shimTarget) {
-		const normalizedShimTarget = shimTarget.replace(/^\$basedir\//, "");
-		const cliPath = path.resolve(dir, normalizedShimTarget);
-		candidates.push(path.join(path.dirname(cliPath), "main.js"));
-	}
+	# Direct installs may expose dist/main.js next to the resolved binary.
+	for fallback in "${dir}/main.js" "${dir}/../dist/main.js"; do
+		if [[ -f "${fallback}" ]]; then
+			realpath "${fallback}"
+			return 0
+		fi
+	done
 
-	for (const candidate of candidates) {
-		if (fs.existsSync(candidate)) {
-			console.log(candidate);
-			process.exit(0);
-		}
-	}
-} catch {}
-process.exit(1);
-' "$1"
+	# pnpm creates a shell shim at node_modules/.bin/pi that execs
+	# ../@mariozechner/pi-coding-agent/dist/cli.js. Resolve that target so we
+	# can inspect the adjacent dist/main.js for the Sumo constructor patch.
+	cli_target="$(grep -Eo '([^"[:space:]]+/)?@mariozechner/pi-coding-agent/dist/cli\.js' "${resolved}" | head -n 1 || true)"
+	[[ -n "${cli_target}" ]] || return 1
+	cli_target="${cli_target#\$basedir/}"
+	cli_path="$(cd "${dir}" && realpath "${cli_target}" 2>/dev/null || true)"
+	[[ -n "${cli_path}" ]] || return 1
+	main_file="${cli_path%/cli.js}/main.js"
+	[[ -f "${main_file}" ]] || return 1
+	realpath "${main_file}"
+}
+
+path_to_file_url() {
+	local path="$1"
+	local resolved encoded
+	resolved="$(realpath "${path}")"
+	encoded="$(printf '%s' "${resolved}" | sed -e 's/%/%25/g' -e 's/ /%20/g' -e 's/#/%23/g' -e 's/?/%3F/g')"
+	printf 'file://%s\n' "${encoded}"
 }
 
 pi_has_sumo_tui_patch() {
@@ -414,7 +416,7 @@ fi
 if is_truthy_env_flag "${SUMO_TUI}"; then
 	if pi_has_sumo_tui_patch "${PI_BIN}"; then
 		if [[ -z "${SUMO_TUI_MODULE:-}" ]]; then
-			SUMO_TUI_MODULE="$(node -e 'const { pathToFileURL } = require("node:url"); console.log(pathToFileURL(process.argv[1]).href);' "${ROOT_DIR}/sumo-interactive-mode.js")"
+			SUMO_TUI_MODULE="$(path_to_file_url "${ROOT_DIR}/sumo-interactive-mode.js")"
 			export SUMO_TUI_MODULE
 		fi
 	else

@@ -3,6 +3,31 @@ import { truncateToWidth, visibleWidth, type Component } from "@mariozechner/pi-
 import { activeThemeColors, getActiveTheme, getTheme, listThemes } from "../themes/index.js";
 import { emitCathedralThemeChanged } from "../sumo-tui/cathedral/theme-bridge.js";
 
+/**
+ * Apply a known SumoCode theme. The SumoCode registry is the authoritative
+ * source of truth for SumoCode chrome rendering. Pi's `setTheme` is called
+ * opportunistically to keep Pi's markdown/syntax theming in sync when Pi
+ * happens to know the theme name; its failure is non-fatal because Pi only
+ * knows its own built-in themes (catppuccin, dracula, etc.) and not our
+ * SumoCode registry. The non-fatal warning is surfaced as a side-channel.
+ */
+export interface ApplyThemeOutcome {
+	readonly piWarning?: string;
+}
+
+export function applyKnownTheme(
+	theme: { name: string },
+	applyPiTheme: ((name: string) => { success: boolean; error?: string }) | undefined,
+): ApplyThemeOutcome {
+	let piWarning: string | undefined;
+	if (applyPiTheme) {
+		const result = applyPiTheme(theme.name);
+		if (!result.success) piWarning = result.error ?? theme.name;
+	}
+	emitCathedralThemeChanged(theme.name);
+	return piWarning === undefined ? {} : { piWarning };
+}
+
 export const THEME_RESULT_CUSTOM_TYPE = "sumocode-theme-result";
 
 export interface ThemeResultDetails {
@@ -121,16 +146,11 @@ export function registerThemeCommand(pi: ExtensionAPI): void {
 				return;
 			}
 
-			if (ctx.hasUI) {
-				const result = ctx.ui.setTheme(theme.name);
-				if (!result.success) {
-					pushThemeResult(pi, ctx, [`theme failed: ${result.error ?? theme.name}`], "warning");
-					return;
-				}
-			}
-
-			emitCathedralThemeChanged(theme.name);
-			pushThemeResult(pi, ctx, [`theme set: ${theme.name}`], "info");
+			const applyPi = ctx.hasUI ? (name: string) => ctx.ui.setTheme(name) : undefined;
+			const outcome = applyKnownTheme(theme, applyPi);
+			const lines = [`theme set: ${theme.name}`];
+			if (outcome.piWarning) lines.push(`(Pi theme not found: ${outcome.piWarning})`);
+			pushThemeResult(pi, ctx, lines, "info");
 		},
 	});
 }

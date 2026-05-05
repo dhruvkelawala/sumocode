@@ -2,7 +2,7 @@
  * MIT License
  *
  * Portions of this compatibility boundary are derived from
- * @mariozechner/pi-coding-agent 0.70.2, package `dist/modes/interactive/interactive-mode.js`.
+ * @mariozechner/pi-coding-agent 0.73.0, package `dist/modes/interactive/interactive-mode.js`.
  * The upstream npm package declares license: MIT.
  *
  * Copyright (c) Mario Zechner and pi-mono contributors.
@@ -32,6 +32,7 @@ import { InteractiveMode } from "@mariozechner/pi-coding-agent";
 import type { ExtensionUIContext } from "@mariozechner/pi-coding-agent";
 import type { Component } from "@mariozechner/pi-tui";
 import { loadSumoCodeConfig } from "../../config/sumocode-config.js";
+import { onThemeChanged } from "../../themes/index.js";
 import { EmptyChatQuoteNode, shouldRenderEmptyChatQuote, type EmptyChatQuoteSnapshot } from "../cathedral/empty-chat-quote.js";
 import { createSplashTree, defaultSplashSnapshot, type SplashTree } from "../cathedral/splash-tree.js";
 import { SumoNode } from "../layout/node.js";
@@ -174,6 +175,7 @@ export class SumoInteractiveRuntime {
 	private resizeHandler: (() => void) | undefined;
 	private externalRenderControls: { scheduleRender(): void; setStreamingMode(enabled: boolean): void } | undefined;
 	private frameVersion = 0;
+	private themeUnsubscribe: (() => void) | undefined;
 	private renderedVersion = -1;
 	private renderedWidth = 0;
 	private renderedHeight = 0;
@@ -254,6 +256,17 @@ export class SumoInteractiveRuntime {
 		this.scheduler = new FrameScheduler({ render: () => this.render() });
 		this.resizeHandler = () => this.requestRender();
 		process.stdout.on("resize", this.resizeHandler);
+		// Theme cycle / `/sumo:theme <name>` must repaint the entire retained frame.
+		// Without this, frame-version-cached chat messages keep the previous theme's
+		// ANSI codes and the user sees only sidebar/editor change, while chat,
+		// background, and footer stay on the old palette.
+		this.themeUnsubscribe?.();
+		this.themeUnsubscribe = onThemeChanged(() => {
+			this.chatFrameCache = undefined;
+			this.previousFrame = undefined;
+			this.invalidateFrameCache();
+			this.requestRender();
+		});
 		this.started = true;
 		debugLog("SumoInteractiveMode retained runtime started");
 		return { root: this.root, chat: this.chat, scheduler: this.scheduler, splash: this.splash };
@@ -401,6 +414,8 @@ export class SumoInteractiveRuntime {
 		if (!this.started) return;
 		if (this.resizeHandler) process.stdout.off("resize", this.resizeHandler);
 		this.scheduler?.dispose();
+		this.themeUnsubscribe?.();
+		this.themeUnsubscribe = undefined;
 		this.chat?.dispose();
 		this.splash?.root.dispose();
 		this.selectionNotifications?.dispose();
@@ -536,10 +551,10 @@ export class SumoInteractiveRuntime {
 }
 
 /**
- * Small Phase 4 fork boundary for Pi 0.70.x.
+ * Small Phase 4 fork boundary for Pi 0.73.x.
  *
  * Pi's CLI constructs `InteractiveMode` directly in
- * `node_modules/.pnpm/@mariozechner+pi-coding-agent@0.70.2.../dist/main.js:548-571`.
+ * `node_modules/.pnpm/@mariozechner+pi-coding-agent@0.73.0.../dist/main.js:542-565`.
  * The fork patch now replaces that constructor call with `new
  * SumoInteractiveMode(...)` when `SUMO_TUI=1` or `--sumo-tui` is set.
  *
@@ -562,11 +577,32 @@ export class SumoInteractiveMode {
 	private chatViewportBridgeCleanup: (() => void) | undefined;
 	private ownedShell: OwnedShellRenderer | undefined;
 	private ownedShellOriginalDoRender: (() => void) | undefined;
+	private themeUnsubscribe: (() => void) | undefined;
 
 	public constructor(
 		private readonly runtimeHost: AgentSessionRuntime,
 		private readonly options: SumoInteractiveModeOptions = {},
-	) {}
+	) {
+		// Theme switching must repaint the entire surface end-to-end. Listen at the
+		// outermost retained mode so we can bust BOTH the retained runtime frame
+		// cache and the OwnedShellRenderer's previousFrame, then force Pi's TUI to
+		// do a clear+full-redraw via requestRender(true).
+		this.themeUnsubscribe = onThemeChanged(() => this.handleThemeChanged());
+	}
+
+	private handleThemeChanged(): void {
+		logDiagnostic("theme_change_repaint", {
+			ownedShellInstalled: this.ownedShell !== undefined,
+			hasUpstream: this.upstream !== undefined,
+		});
+		this.ownedShell?.invalidatePreviousFrame();
+		this.retainedRuntime.requestRender();
+		const upstream = this.upstream as unknown as { ui?: { requestRender?: (force?: boolean) => void } } | undefined;
+		upstream?.ui?.requestRender?.(true);
+		// Pi schedules its forced render asynchronously; nudge the owned-shell so
+		// the bg-only diff lands in this tick rather than waiting for next input.
+		process.nextTick(() => this.ownedShell?.render());
+	}
 
 	public async init(): Promise<void> {
 		await this.retainedRuntime.start();
@@ -588,6 +624,8 @@ export class SumoInteractiveMode {
 		this.uninstallOwnedShell();
 		this.upstream?.stop();
 		this.retainedRuntime.stop();
+		this.themeUnsubscribe?.();
+		this.themeUnsubscribe = undefined;
 	}
 
 	public createExtensionUIContext(options: CreateExtensionUIContextOptions): ExtensionUIContext {

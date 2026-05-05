@@ -9,7 +9,7 @@ describe("theme-bridge", () => {
 
 		emitCathedralThemeChanged("amber-crt");
 		unsubscribe();
-		emitCathedralThemeChanged("obsidian-temple");
+		emitCathedralThemeChanged("obsidian");
 
 		expect(getCathedralThemeVersion()).toBe(before + 2);
 		expect(seen).toEqual(["amber-crt"]);

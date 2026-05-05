@@ -15,6 +15,8 @@ function commandRegistry(): { pi: ExtensionAPI; commands: Map<string, Omit<Regis
 			commands.set(name, options);
 		},
 		registerShortcut: () => undefined,
+		registerMessageRenderer: () => undefined,
+		sendMessage: () => undefined,
 		on: () => undefined,
 	} as unknown as ExtensionAPI;
 	return { pi, commands };

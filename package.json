@@ -28,17 +28,17 @@
     ]
   },
   "peerDependencies": {
-    "@mariozechner/pi-coding-agent": "~0.70.0",
-    "@mariozechner/pi-tui": "~0.70.0",
+    "@mariozechner/pi-coding-agent": "~0.73.0",
+    "@mariozechner/pi-tui": "~0.73.0",
     "typebox": "*"
   },
   "engines": {
     "node": ">=20"
   },
   "devDependencies": {
-    "@mariozechner/pi-ai": "0.70.2",
-    "@mariozechner/pi-coding-agent": "0.70.2",
-    "@mariozechner/pi-tui": "0.70.2",
+    "@mariozechner/pi-ai": "0.73.0",
+    "@mariozechner/pi-coding-agent": "0.73.0",
+    "@mariozechner/pi-tui": "0.73.0",
     "@types/node": "^25.6.0",
     "@xterm/headless": "^6.0.0",
     "node-pty": "^1.1.0",
@@ -56,6 +56,7 @@
     "test:integration": "vitest run test/integration/",
     "perf:resume": "vitest run src/sumo-tui/runtime/resume-flow.perf.test.ts",
     "perf:resume:report": "node scripts/measure-resume-perf.mjs",
+    "perf:startup": "node scripts/perf-startup.mjs",
     "render:bible": "node scripts/render-bible.mjs",
     "export:bible-static": "node scripts/export-bible-static.mjs",
     "vitest": "vitest",
@@ -74,7 +75,7 @@
       "node-pty"
     ],
     "patchedDependencies": {
-      "@mariozechner/pi-coding-agent@0.70.2": "patches/@mariozechner__pi-coding-agent@0.70.2.patch"
+      "@mariozechner/pi-coding-agent@0.73.0": "patches/@mariozechner__pi-coding-agent@0.73.0.patch"
     }
   }
 }

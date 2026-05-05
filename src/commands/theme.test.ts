@@ -11,9 +11,9 @@ describe("/sumo:theme", () => {
 	});
 
 	it("lists registered themes and marks the active one", () => {
-		expect(formatThemeList()).toEqual([
-			"* cathedral — 19th-century scriptorium: warm walnut, parchment foreground, burnt-orange accents.",
-		]);
+		const lines = formatThemeList();
+		expect(lines).toContain("* cathedral — 19th-century scriptorium: warm walnut, parchment foreground, burnt-orange accents.");
+		expect(lines.some((line) => line.startsWith("  obsidian"))).toBe(true);
 	});
 
 	it("registers a custom message renderer for theme results", () => {
@@ -45,7 +45,7 @@ describe("/sumo:theme", () => {
 			expect.objectContaining({
 				customType: THEME_RESULT_CUSTOM_TYPE,
 				display: true,
-				details: { tone: "info", lines: [expect.stringContaining("* cathedral")] },
+				details: { tone: "info", lines: expect.arrayContaining([expect.stringContaining("* cathedral")]) },
 			}),
 			{ triggerTurn: false },
 		);
@@ -72,20 +72,21 @@ describe("/sumo:theme", () => {
 		);
 	});
 
-	it("warns for known themes when Pi theme application fails", async () => {
+	it("applies SumoCode themes even when Pi theme API does not know them", async () => {
 		const { handler, sendMessage } = registerHarness();
-		const setTheme = vi.fn(() => ({ success: false, error: "Theme API unavailable" }));
+		const setTheme = vi.fn(() => ({ success: false, error: "Theme not found: obsidian" }));
 
-		await handler("cathedral", uiContext({ setTheme }));
+		await handler("obsidian", uiContext({ setTheme }));
 
-		expect(setTheme).toHaveBeenCalledWith("cathedral");
+		expect(setTheme).toHaveBeenCalledWith("obsidian");
 		expect(sendMessage).toHaveBeenCalledWith(
-			expect.objectContaining({ details: { tone: "warning", lines: ["theme failed: Theme API unavailable"] } }),
+			expect.objectContaining({
+				details: {
+					tone: "info",
+					lines: ["theme set: obsidian", "(Pi theme not found: Theme not found: obsidian)"],
+				},
+			}),
 			{ triggerTurn: false },
-		);
-		expect(sendMessage).not.toHaveBeenCalledWith(
-			expect.objectContaining({ details: { tone: "info", lines: ["theme set: cathedral"] } }),
-			expect.anything(),
 		);
 	});
 

@@ -177,15 +177,17 @@ export class LifecycleRuntime {
 			this.terminalSession.startRetainedSession();
 		});
 
-		pi.on("session_shutdown", () => {
+		pi.on("session_shutdown", (event) => {
 			// In retained SumoTUI mode the process-level runtime owns altscreen for
 			// the whole interactive process. Pi emits session_shutdown during in-process
 			// switches (/new, /resume, /fork); leaving altscreen there clears the
 			// terminal while the retained renderer still holds a previous-frame cache,
 			// so the next paint diffs against stale cells and only repaints a fragment.
 			// Keep the terminal session active across session switches, but release raw
-			// mode so Pi can safely rebuild stdin for the next session_start.
-			if (isRetainedSumoRuntimeActive()) {
+			// mode so Pi can safely rebuild stdin for the next session_start. For real
+			// quit/reload shutdowns, restore the terminal immediately instead of relying
+			// on process-level cleanup.
+			if (isRetainedSumoRuntimeActive() && (event.reason === "new" || event.reason === "resume" || event.reason === "fork")) {
 				this.releaseRawMode();
 				return;
 			}

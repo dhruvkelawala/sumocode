@@ -9,6 +9,7 @@ import { installApprovalGate } from "./approval-modal.js";
 import { installQuestionTool } from "./question-tool.js";
 import { taskTool } from "./native-task-tool.js";
 
+import { setActiveTheme } from "./themes/index.js";
 import { installAltscreen } from "./cathedral/altscreen.js";
 import { installCathedralEditor } from "./cathedral/cathedral-editor.js";
 import { installSumoInteractions } from "./interaction-registry.js";
@@ -103,6 +104,11 @@ export default function sumocode(pi: ExtensionAPI): void {
 		console.warn("[sumocode] Skipping installed SumoCode extension because this session is already inside an active SumoCode dev checkout.");
 		return;
 	}
+
+	// Default runtime theme. The registry default stays Cathedral (so unit tests
+	// that don't explicitly switch themes get a stable baseline). Switching here
+	// only affects the runtime path. Persistence across sessions lands later.
+	setActiveTheme("obsidian");
 
 	// Render diagnostics must install BEFORE any consumer so its `setFooter` /
 	// `setHeader` / `setEditorComponent` / `setWidget` wrappers are in place

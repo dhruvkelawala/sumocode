@@ -10,7 +10,6 @@ import type {
 } from "@mariozechner/pi-coding-agent";
 import type {
 	Component,
-	EditorComponent,
 	EditorTheme,
 	OverlayHandle,
 	OverlayOptions,
@@ -57,12 +56,14 @@ export interface SumoExtensionUIAdapterOptions {
 	readonly addAutocompleteProvider?: (factory: AutocompleteProviderFactory) => void;
 	readonly setStatus?: (key: string, text: string | undefined) => void;
 	readonly setWorkingMessage?: (message?: string) => void;
+	readonly setWorkingVisible?: (visible: boolean) => void;
 	readonly setWorkingIndicator?: (options?: WorkingIndicatorOptions) => void;
 	readonly setHiddenThinkingLabel?: (label?: string) => void;
 	readonly onRenderRequest?: () => void;
 }
 
 type TerminalInputHandler = Parameters<ExtensionUIContext["onTerminalInput"]>[0];
+type EditorFactory = NonNullable<ReturnType<ExtensionUIContext["getEditorComponent"]>>;
 
 class OverlayComponentWrapper implements Component {
 	private hidden = false;
@@ -97,9 +98,9 @@ function normalizeNotificationLevel(level: "info" | "warning" | "error" | undefi
  * compatibility layer for extension UI surfaces that are not yet permanent
  * chrome siblings.
  *
- * Source: Pi 0.70.2's interactive mode exposes this surface from
+ * Source: Pi 0.73.0's interactive mode exposes this surface from
  * `createExtensionUIContext()` at
- * `node_modules/.pnpm/@mariozechner+pi-coding-agent@0.70.2.../dist/modes/interactive/interactive-mode.js:1522-1557`.
+ * `node_modules/.pnpm/@mariozechner+pi-coding-agent@0.73.0.../dist/modes/interactive/interactive-mode.js:1522-1557`.
  * Dialog/editor/custom behaviours mirror the upstream editor-container and
  * overlay paths at `interactive-mode.js:1584-1774`.
  */
@@ -116,10 +117,12 @@ export class SumoExtensionUIAdapter implements ExtensionUIContext {
 	private readonly addProvider: ((factory: AutocompleteProviderFactory) => void) | undefined;
 	private readonly onStatus: ((key: string, text: string | undefined) => void) | undefined;
 	private readonly onWorkingMessage: ((message?: string) => void) | undefined;
+	private readonly onWorkingVisible: ((visible: boolean) => void) | undefined;
 	private readonly onWorkingIndicator: ((options?: WorkingIndicatorOptions) => void) | undefined;
 	private readonly onHiddenThinkingLabel: ((label?: string) => void) | undefined;
 	private readonly requestRender: () => void;
 	private readonly terminalInputHandlers = new Set<TerminalInputHandler>();
+	private editorFactory: EditorFactory | undefined;
 
 	public constructor(options: SumoExtensionUIAdapterOptions) {
 		this.regionRegistry = options.regionRegistry;
@@ -140,6 +143,7 @@ export class SumoExtensionUIAdapter implements ExtensionUIContext {
 		this.addProvider = options.addAutocompleteProvider;
 		this.onStatus = options.setStatus;
 		this.onWorkingMessage = options.setWorkingMessage;
+		this.onWorkingVisible = options.setWorkingVisible;
 		this.onWorkingIndicator = options.setWorkingIndicator;
 		this.onHiddenThinkingLabel = options.setHiddenThinkingLabel;
 		this.requestRender = options.onRenderRequest ?? (() => this.tui.requestRender?.());
@@ -201,6 +205,11 @@ export class SumoExtensionUIAdapter implements ExtensionUIContext {
 
 	public setWorkingMessage(message?: string): void {
 		this.onWorkingMessage?.(message);
+		this.requestRender();
+	}
+
+	public setWorkingVisible(visible: boolean): void {
+		this.onWorkingVisible?.(visible);
 		this.requestRender();
 	}
 
@@ -305,10 +314,13 @@ export class SumoExtensionUIAdapter implements ExtensionUIContext {
 		this.addProvider?.(factory);
 	}
 
-	public setEditorComponent(
-		factory: ((tui: TUI, theme: EditorTheme, keybindings: KeybindingsManager) => EditorComponent) | undefined,
-	): void {
+	public setEditorComponent(factory: EditorFactory | undefined): void {
+		this.editorFactory = factory;
 		this.regionRegistry.mountEditor(factory);
+	}
+
+	public getEditorComponent(): EditorFactory | undefined {
+		return this.editorFactory;
 	}
 
 	public get theme(): Theme {

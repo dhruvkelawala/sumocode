@@ -25,10 +25,69 @@ export interface ThemeWorkingIndicator {
 	intervalMs: number;
 }
 
+/**
+ * Structural chrome vocabulary — the box-drawing, glyphs, and typographic
+ * conventions that give each theme its visual personality beyond color.
+ *
+ * Every rendering surface that emits structural characters (frame corners,
+ * section banners, dividers, bullets) reads from the active theme's chrome
+ * via `activeThemeChrome()` instead of hardcoding glyphs.
+ *
+ * To build a new theme, spread `DEFAULT_CHROME` and override what matters.
+ */
+export interface ThemeChrome {
+	/** Chat message / modal frame box-drawing characters. */
+	frame: {
+		topLeft: string;
+		topRight: string;
+		bottomLeft: string;
+		bottomRight: string;
+		horizontal: string;
+		vertical: string;
+	};
+
+	/**
+	 * Sidebar section header glyph prefixes.
+	 * Key = lowercase section id ("context", "memory", "mcp", "session", "registry").
+	 * Value = glyph string prepended to the header. Empty string = no glyph.
+	 */
+	sectionGlyphs: Partial<Record<string, string>>;
+
+	/** Whether section header text uses letter-spacing ("C O N T E X T" vs "CONTEXT"). */
+	sectionTracked: boolean;
+
+	/** Character used for horizontal rule dividers in the sidebar. */
+	ruleChar: string;
+
+	/** Active tab marker glyph. */
+	tabActive: string;
+
+	/** Inactive tab marker glyph. */
+	tabInactive: string;
+
+	/** Memory / list item bullet glyph. */
+	bullet: string;
+
+	/** Bullet color hex override. Falls back to theme `accent` if omitted. */
+	bulletColor?: string;
+}
+
+/** Cathedral chrome — the baseline structural vocabulary. Spread this in new themes. */
+export const DEFAULT_CHROME: ThemeChrome = {
+	frame: { topLeft: "╭", topRight: "╮", bottomLeft: "╰", bottomRight: "╯", horizontal: "─", vertical: "│" },
+	sectionGlyphs: {},
+	sectionTracked: true,
+	ruleChar: "━",
+	tabActive: "◆",
+	tabInactive: "▢",
+	bullet: "❧",
+};
+
 export interface Theme {
 	name: string;
 	displayName: string;
 	description: string;
 	tokens: ThemeTokens;
 	workingIndicator: ThemeWorkingIndicator;
+	chrome: ThemeChrome;
 }

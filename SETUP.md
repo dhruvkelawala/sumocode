@@ -134,4 +134,4 @@ See [README.md](./README.md) for architecture and roadmap.
 
 ---
 
-*Last updated: 2026-04-24 · tested on macOS 26, Node 25, Pi 0.70.2*
+*Last updated: 2026-04-24 · tested on macOS 26, Node 25, Pi 0.73.0*

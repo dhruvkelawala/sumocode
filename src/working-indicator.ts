@@ -216,9 +216,10 @@ export function installWorkingIndicator(pi: ExtensionAPI): void {
 		if (!shouldInstallWorkingIndicator()) return;
 
 		if (isRetainedMode()) {
-			// Retained SumoTUI owns the chrome. Hide Pi's inline indicator and
+			// Retained SumoTUI owns the chrome. Hide Pi's inline loader row and
 			// drive a theme-aware widget above the editor instead.
-			ctx.ui.setWorkingIndicator({ frames: [] });
+			if (typeof ctx.ui.setWorkingVisible === "function") ctx.ui.setWorkingVisible(false);
+			else ctx.ui.setWorkingIndicator({ frames: [] });
 			ctx.ui.setWidget(
 				WORKING_INDICATOR_WIDGET_KEY,
 				(tui) => {

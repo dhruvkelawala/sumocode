@@ -2,7 +2,7 @@
  * MIT License
  *
  * Portions of this compatibility boundary are derived from
- * @mariozechner/pi-coding-agent 0.70.2, package `dist/modes/interactive/interactive-mode.js`.
+ * @mariozechner/pi-coding-agent 0.73.0, package `dist/modes/interactive/interactive-mode.js`.
  * The upstream npm package declares license: MIT.
  *
  * Copyright (c) Mario Zechner and pi-mono contributors.
@@ -549,10 +549,10 @@ export class SumoInteractiveRuntime {
 }
 
 /**
- * Small Phase 4 fork boundary for Pi 0.70.x.
+ * Small Phase 4 fork boundary for Pi 0.73.x.
  *
  * Pi's CLI constructs `InteractiveMode` directly in
- * `node_modules/.pnpm/@mariozechner+pi-coding-agent@0.70.2.../dist/main.js:548-571`.
+ * `node_modules/.pnpm/@mariozechner+pi-coding-agent@0.73.0.../dist/main.js:542-565`.
  * The fork patch now replaces that constructor call with `new
  * SumoInteractiveMode(...)` when `SUMO_TUI=1` or `--sumo-tui` is set.
  *

@@ -256,7 +256,7 @@ function sessionHasMessages(ctx: ExtensionContext): boolean {
 }
 
 function getThinkingLevel(pi: ExtensionAPI, ctx: ExtensionContext): ThinkingLevel {
-	// Pi 0.70.2 exposes the thinking-level getter on `ExtensionAPI` (the `pi`
+	// Pi 0.73.0 exposes the thinking-level getter on `ExtensionAPI` (the `pi`
 	// parameter of installFooter), NOT on `ExtensionContext` (`ctx`). The
 	// canonical reference is
 	// `node_modules/@mariozechner/pi-coding-agent/dist/core/extensions/types.d.ts:849`

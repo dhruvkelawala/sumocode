@@ -6,6 +6,7 @@ import {
 	CATHEDRAL_INDICATOR_INTERVAL_MS,
 	formatSpinnerInspection,
 	indicatorFrameAt,
+	isRetainedMode,
 	renderIndicator,
 	shouldInstallWorkingIndicator,
 	WorkingIndicatorComponent,
@@ -71,6 +72,20 @@ describe("renderIndicator", () => {
 		// half the loop retraces. Every frame must be unique within the cycle.
 		const seen = new Set(CATHEDRAL_INDICATOR_FRAMES);
 		expect(seen.size).toBe(CATHEDRAL_INDICATOR_FRAMES.length);
+	});
+});
+
+describe("isRetainedMode", () => {
+	it("matches Pi's truthy SUMO_TUI activation flags", () => {
+		for (const value of ["1", "true", "TRUE", "yes", "YES", "on", "ON"]) {
+			expect(isRetainedMode({ SUMO_TUI: value })).toBe(true);
+		}
+	});
+
+	it("treats unset and false-like SUMO_TUI values as classic mode", () => {
+		for (const value of [undefined, "", "0", "false", "FALSE", "no", "off"]) {
+			expect(isRetainedMode({ SUMO_TUI: value })).toBe(false);
+		}
 	});
 });
 

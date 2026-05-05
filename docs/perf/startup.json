@@ -1,0 +1,121 @@
+{
+  "generatedAt": "2026-05-05T23:10:43.147Z",
+  "commit": "fc8dd18 perf(startup): cache jiti and streamline launcher",
+  "runs": 5,
+  "measurements": [
+    {
+      "label": "launcher-dry-run",
+      "samples": [
+        {
+          "ok": true,
+          "durationMs": 30.28866696357727,
+          "code": 0,
+          "signal": null,
+          "stderr": ""
+        },
+        {
+          "ok": true,
+          "durationMs": 27.221333026885986,
+          "code": 0,
+          "signal": null,
+          "stderr": ""
+        },
+        {
+          "ok": true,
+          "durationMs": 27.084999918937683,
+          "code": 0,
+          "signal": null,
+          "stderr": ""
+        },
+        {
+          "ok": true,
+          "durationMs": 26.149749994277954,
+          "code": 0,
+          "signal": null,
+          "stderr": ""
+        },
+        {
+          "ok": true,
+          "durationMs": 27.652125000953674,
+          "code": 0,
+          "signal": null,
+          "stderr": ""
+        }
+      ],
+      "avgMiddleMs": 27.3,
+      "minMs": 26.1,
+      "maxMs": 30.3
+    },
+    {
+      "label": "print-mode",
+      "samples": [
+        {
+          "ok": true,
+          "durationMs": 5538.391374945641,
+          "code": 0,
+          "signal": null,
+          "stderr": ""
+        },
+        {
+          "ok": true,
+          "durationMs": 4574.412541985512,
+          "code": 0,
+          "signal": null,
+          "stderr": ""
+        },
+        {
+          "ok": true,
+          "durationMs": 5436.385333061218,
+          "code": 0,
+          "signal": null,
+          "stderr": ""
+        },
+        {
+          "ok": true,
+          "durationMs": 4955.364082932472,
+          "code": 0,
+          "signal": null,
+          "stderr": ""
+        },
+        {
+          "ok": true,
+          "durationMs": 5353.7576669454575,
+          "code": 0,
+          "signal": null,
+          "stderr": ""
+        }
+      ],
+      "avgMiddleMs": 5248.5,
+      "minMs": 4574.4,
+      "maxMs": 5538.4
+    },
+    {
+      "label": "first-frame",
+      "samples": [
+        {
+          "ok": true,
+          "durationMs": 1565.6332920789719
+        },
+        {
+          "ok": true,
+          "durationMs": 1510.1555409431458
+        },
+        {
+          "ok": true,
+          "durationMs": 1519.8704578876495
+        },
+        {
+          "ok": true,
+          "durationMs": 1555.0875000953674
+        },
+        {
+          "ok": true,
+          "durationMs": 1500.5384999513626
+        }
+      ],
+      "avgMiddleMs": 1528.4,
+      "minMs": 1500.5,
+      "maxMs": 1565.6
+    }
+  ]
+}

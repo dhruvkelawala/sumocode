@@ -184,7 +184,7 @@ describe("LifecycleRuntime", () => {
 			handler({ type: "session_start" }, { hasUI: true });
 		}
 		for (const handler of handlers.get("session_shutdown") ?? []) {
-			handler({ type: "session_shutdown" }, { hasUI: true });
+			handler({ type: "session_shutdown", reason: "new" }, { hasUI: true });
 		}
 
 		expect(terminalSession.getState().altscreenActive).toBe(true);
@@ -215,7 +215,7 @@ describe("LifecycleRuntime", () => {
 			handler({ type: "session_start" }, { hasUI: true });
 		}
 		for (const handler of handlers.get("session_shutdown") ?? []) {
-			handler({ type: "session_shutdown" }, { hasUI: true });
+			handler({ type: "session_shutdown", reason: "resume", targetSessionFile: "/tmp/session.json" }, { hasUI: true });
 		}
 
 		expect(terminalSession.getState().altscreenActive).toBe(true);
@@ -223,6 +223,33 @@ describe("LifecycleRuntime", () => {
 			`${ALTSCREEN_ENTER_SEQUENCE}${TERMINAL_BG_SET}`,
 			MOUSE_SGR_ENABLE_SEQUENCE,
 			CURSOR_COLOR_SET,
+		]);
+		expect(fakeInput.rawModes).toEqual([true, false]);
+	});
+
+	it("restores terminal on retained quit shutdown", () => {
+		process.env.SUMO_TUI = "1";
+		const fakeProcess = new FakeProcess();
+		const fakeInput = new FakeInput();
+		const output = outputStub();
+		const terminalSession = new TerminalSessionOwner({ output });
+		const runtime = createLifecycleRuntime({ process: fakeProcess, input: fakeInput, terminalSession });
+		const { pi, handlers } = buildPiStub();
+
+		runtime.installLifecycle(pi);
+		for (const handler of handlers.get("session_start") ?? []) {
+			handler({ type: "session_start" }, { hasUI: true });
+		}
+		for (const handler of handlers.get("session_shutdown") ?? []) {
+			handler({ type: "session_shutdown", reason: "quit" }, { hasUI: true });
+		}
+
+		expect(terminalSession.getState().altscreenActive).toBe(false);
+		expect(output.writes).toEqual([
+			`${ALTSCREEN_ENTER_SEQUENCE}${TERMINAL_BG_SET}`,
+			MOUSE_SGR_ENABLE_SEQUENCE,
+			CURSOR_COLOR_SET,
+			`${CURSOR_COLOR_RESET}${TERMINAL_BG_RESET}${TERMINAL_CLEANUP_SEQUENCE}`,
 		]);
 		expect(fakeInput.rawModes).toEqual([true, false]);
 	});

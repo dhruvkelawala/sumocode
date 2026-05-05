@@ -414,6 +414,8 @@ export class SumoInteractiveRuntime {
 		if (!this.started) return;
 		if (this.resizeHandler) process.stdout.off("resize", this.resizeHandler);
 		this.scheduler?.dispose();
+		this.themeUnsubscribe?.();
+		this.themeUnsubscribe = undefined;
 		this.chat?.dispose();
 		this.splash?.root.dispose();
 		this.selectionNotifications?.dispose();

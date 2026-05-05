@@ -197,8 +197,9 @@ export class WorkingIndicatorComponent implements Component {
 	}
 }
 
-function isRetainedMode(env: NodeJS.ProcessEnv = process.env): boolean {
-	return env.SUMO_TUI === "1";
+export function isRetainedMode(env: NodeJS.ProcessEnv = process.env): boolean {
+	const flag = env.SUMO_TUI;
+	return flag === "1" || flag === "true" || flag === "TRUE" || flag === "yes" || flag === "YES" || flag === "on" || flag === "ON";
 }
 
 /**

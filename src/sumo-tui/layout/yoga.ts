@@ -91,6 +91,13 @@ export function loadYoga(): Promise<Yoga> {
 	return yogaPromise;
 }
 
+// Pre-warm Yoga during module evaluation. SumoTUI always needs layout, so
+// starting the WASM read/compile here overlaps it with the rest of startup.
+// Attach a rejection handler now so a missing/unreadable WASM file is still
+// surfaced by the later awaited loadYoga() call instead of as an unhandled
+// fire-and-forget rejection during module import.
+void loadYoga().catch(() => undefined);
+
 /**
  * Free a Yoga node and all descendants without relying on the binding's
  * built-in `freeRecursive()`. Walking children ourselves makes leak tests able

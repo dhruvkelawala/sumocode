@@ -285,10 +285,9 @@ export function installSessionCache(pi: ExtensionAPI): void {
 		// Reset module-level flag for the new session.
 		liveSessionHasMessages = false;
 		invalidateSessionUsage(ctx);
-		// Pre-warm the branch synchronously here — we're outside the render path
-		// so the fork+exec is fine, and it means the first keystroke already sees
-		// a real value instead of `null` while the async resolver kicks in.
-		refreshGitBranchSync(ctx);
+		// Resolve git branch off the startup path. Consumers tolerate `null` for
+		// the first frame and update when the async resolver lands.
+		void refreshGitBranchAsync(ctx).catch(() => undefined);
 	});
 	pi.on("message_start", () => {
 		noteSessionMessage();

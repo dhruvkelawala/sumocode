@@ -213,8 +213,9 @@ export class SumoInteractiveRuntime {
 			return { root: this.root, chat: this.chat, scheduler: this.scheduler, splash: this.splash };
 		}
 
-		this.yoga = await loadYoga();
+		const yogaPromise = loadYoga();
 		const sumocodeConfig = loadSumoCodeConfig().config;
+		this.yoga = await yogaPromise;
 		this.root = new SumoNode(this.yoga.Node.create());
 		this.root.flexDirection = FLEX_DIRECTION_COLUMN;
 		this.chat = ChatPager.create(this.yoga, undefined, {

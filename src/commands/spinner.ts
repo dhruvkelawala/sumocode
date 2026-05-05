@@ -1,5 +1,5 @@
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { CATHEDRAL_TOKENS } from "../tokens.js";
+import { activeThemeColors } from "../themes/index.js";
 import {
 	CATHEDRAL_INDICATOR_FRAMES,
 	CATHEDRAL_INDICATOR_INTERVAL_MS,
@@ -21,7 +21,7 @@ export function registerSpinnerCommand(pi: ExtensionAPI): void {
 		handler: async (_args, ctx: ExtensionContext) => {
 			const report = formatSpinnerInspection(
 				CATHEDRAL_INDICATOR_FRAMES,
-				CATHEDRAL_TOKENS.colors.accent,
+				activeThemeColors().accent,
 				CATHEDRAL_INDICATOR_INTERVAL_MS,
 			);
 

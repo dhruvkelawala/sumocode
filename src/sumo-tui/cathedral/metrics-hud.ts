@@ -1,4 +1,4 @@
-import { CATHEDRAL_TOKENS } from "../../tokens.js";
+import { activeThemeColors } from "../../themes/index.js";
 import { colorHex, padAnsiToWidth, renderSidebarSectionHeader, SIDEBAR_INDENT } from "./ansi.js";
 
 export interface MetricsHudSnapshot {
@@ -46,22 +46,22 @@ export function renderSparkline(values: readonly number[], maxValue: number): st
 }
 
 export function cpuMetricColor(cpuPercent: number): string {
-	if (cpuPercent < 5) return CATHEDRAL_TOKENS.colors.foregroundDim;
-	if (cpuPercent <= 20) return CATHEDRAL_TOKENS.colors.states.thinking;
-	return CATHEDRAL_TOKENS.colors.states.approval;
+	if (cpuPercent < 5) return activeThemeColors().foregroundDim;
+	if (cpuPercent <= 20) return activeThemeColors().states.thinking;
+	return activeThemeColors().states.approval;
 }
 
 export function memoryMetricColor(memoryMiB: number): string {
-	if (memoryMiB < 200) return CATHEDRAL_TOKENS.colors.foregroundDim;
-	if (memoryMiB <= 300) return CATHEDRAL_TOKENS.colors.states.thinking;
-	return CATHEDRAL_TOKENS.colors.states.approval;
+	if (memoryMiB < 200) return activeThemeColors().foregroundDim;
+	if (memoryMiB <= 300) return activeThemeColors().states.thinking;
+	return activeThemeColors().states.approval;
 }
 
 export function fpsMetricColor(fps: number): string {
-	if (fps === 0) return CATHEDRAL_TOKENS.colors.foregroundDim;
-	if (fps <= 5) return CATHEDRAL_TOKENS.colors.states.idle;
-	if (fps <= 30) return CATHEDRAL_TOKENS.colors.states.thinking;
-	return CATHEDRAL_TOKENS.colors.states.approval;
+	if (fps === 0) return activeThemeColors().foregroundDim;
+	if (fps <= 5) return activeThemeColors().states.idle;
+	if (fps <= 30) return activeThemeColors().states.thinking;
+	return activeThemeColors().states.approval;
 }
 
 function formatCpu(cpuPercent: number): string {

@@ -28,7 +28,7 @@ import {
 	type PanelGroup,
 	type PanelId,
 } from "./memory-categorization.js";
-import { CATHEDRAL_TOKENS } from "./tokens.js";
+import { activeThemeColors } from "./themes/index.js";
 
 const RESET = "\u001b[0m";
 const ANSI_PATTERN = /\u001b\[[0-9;]*m/g;
@@ -52,7 +52,7 @@ function padToWidth(line: string, width: number): string {
 }
 
 function divider(width: number): string {
-	return colorHex("─".repeat(Math.max(0, width - 6)), CATHEDRAL_TOKENS.colors.divider);
+	return colorHex("─".repeat(Math.max(0, width - 6)), activeThemeColors().divider);
 }
 
 export type MemoryEditorSnapshot = {
@@ -74,27 +74,27 @@ function renderPanel(group: PanelGroup, width: number): string[] {
 	const bottom = `╰${"─".repeat(innerWidth - 2)}╯`;
 
 	const lines: string[] = [];
-	lines.push(colorHex(top, CATHEDRAL_TOKENS.colors.divider).replace(
+	lines.push(colorHex(top, activeThemeColors().divider).replace(
 		labelInner,
-		colorHex(labelInner, CATHEDRAL_TOKENS.colors.accent),
+		colorHex(labelInner, activeThemeColors().accent),
 	));
 
 	if (group.facts.length === 0) {
-		const empty = ` ${colorHex("(empty)", CATHEDRAL_TOKENS.colors.foregroundDim)} `;
-		lines.push(`${colorHex("│", CATHEDRAL_TOKENS.colors.divider)}${padToWidth(empty, innerWidth - 2)}${colorHex("│", CATHEDRAL_TOKENS.colors.divider)}`);
+		const empty = ` ${colorHex("(empty)", activeThemeColors().foregroundDim)} `;
+		lines.push(`${colorHex("│", activeThemeColors().divider)}${padToWidth(empty, innerWidth - 2)}${colorHex("│", activeThemeColors().divider)}`);
 	} else {
 		for (const fact of group.facts) {
-			const bullet = colorHex("❧", CATHEDRAL_TOKENS.colors.accent);
+			const bullet = colorHex("❧", activeThemeColors().accent);
 			const text = colorHex(
 				fact.text.length > innerWidth - 6 ? `${fact.text.slice(0, innerWidth - 7)}…` : fact.text,
-				CATHEDRAL_TOKENS.colors.foreground,
+				activeThemeColors().foreground,
 			);
 			const content = ` ${bullet} ${text}`;
-			lines.push(`${colorHex("│", CATHEDRAL_TOKENS.colors.divider)}${padToWidth(content, innerWidth - 2)}${colorHex("│", CATHEDRAL_TOKENS.colors.divider)}`);
+			lines.push(`${colorHex("│", activeThemeColors().divider)}${padToWidth(content, innerWidth - 2)}${colorHex("│", activeThemeColors().divider)}`);
 		}
 	}
 
-	lines.push(colorHex(bottom, CATHEDRAL_TOKENS.colors.divider));
+	lines.push(colorHex(bottom, activeThemeColors().divider));
 	return lines;
 }
 
@@ -107,17 +107,17 @@ export function renderMemoryEditor(snapshot: MemoryEditorSnapshot, width: number
 
 	// Title
 	lines.push("");
-	lines.push(center(colorHex("SUMOCODE MEMORY", CATHEDRAL_TOKENS.colors.accent), width));
+	lines.push(center(colorHex("SUMOCODE MEMORY", activeThemeColors().accent), width));
 	lines.push(divider(width));
 	lines.push("");
 
 	// Search input row
-	const searchPrompt = colorHex("│ ", CATHEDRAL_TOKENS.colors.divider);
+	const searchPrompt = colorHex("│ ", activeThemeColors().divider);
 	const searchPlaceholder = snapshot.searchQuery === ""
-		? `${DIM}${colorHex("search…", CATHEDRAL_TOKENS.colors.foregroundDim)}${RESET}`
-		: colorHex(snapshot.searchQuery, CATHEDRAL_TOKENS.colors.foreground);
-	const factsCount = colorHex(`${snapshot.factsTotal} facts`, CATHEDRAL_TOKENS.colors.foregroundDim);
-	const searchClose = colorHex(" │", CATHEDRAL_TOKENS.colors.divider);
+		? `${DIM}${colorHex("search…", activeThemeColors().foregroundDim)}${RESET}`
+		: colorHex(snapshot.searchQuery, activeThemeColors().foreground);
+	const factsCount = colorHex(`${snapshot.factsTotal} facts`, activeThemeColors().foregroundDim);
+	const searchClose = colorHex(" │", activeThemeColors().divider);
 
 	const searchLineLeft = `   ${searchPrompt}${searchPlaceholder}`;
 	const searchLineRight = `${factsCount}${searchClose}`;
@@ -141,7 +141,7 @@ export function renderMemoryEditor(snapshot: MemoryEditorSnapshot, width: number
 	}
 
 	lines.push(divider(width));
-	lines.push(`   ${DIM}${colorHex(MEMORY_EDITOR_HINTS, CATHEDRAL_TOKENS.colors.foregroundDim)}${RESET}`);
+	lines.push(`   ${DIM}${colorHex(MEMORY_EDITOR_HINTS, activeThemeColors().foregroundDim)}${RESET}`);
 
 	return lines;
 }

@@ -30,7 +30,7 @@
 import type { Component, OverlayOptions } from "@mariozechner/pi-tui";
 import { matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@mariozechner/pi-tui";
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { CATHEDRAL_TOKENS } from "./tokens.js";
+import { activeThemeColors } from "./themes/index.js";
 
 const RESET = "[0m";
 const ANSI_PATTERN = /\[[0-9;]*m/g;
@@ -119,9 +119,9 @@ const UNFOCUSED_MARK = "·";
 
 function splitRule(width: number): string {
 	const ruleLen = Math.max(1, Math.min(22, Math.floor((width - 5) / 2)));
-	const left = fg("─".repeat(ruleLen), CATHEDRAL_TOKENS.colors.divider);
-	const dot = fg("·", CATHEDRAL_TOKENS.colors.divider);
-	const right = fg("─".repeat(ruleLen), CATHEDRAL_TOKENS.colors.divider);
+	const left = fg("─".repeat(ruleLen), activeThemeColors().divider);
+	const dot = fg("·", activeThemeColors().divider);
+	const right = fg("─".repeat(ruleLen), activeThemeColors().divider);
 	return center(`${left}  ${dot}  ${right}`, width);
 }
 
@@ -142,7 +142,7 @@ function buildInnerRows(snapshot: DivineQuerySnapshot, contentWidth: number, ext
 	inner.push("");
 
 	// Title: ✾  DIVINE QUERY  ✾
-	const titleText = `${fg(TITLE_MARK, CATHEDRAL_TOKENS.colors.accent)}  ${fg("DIVINE QUERY", CATHEDRAL_TOKENS.colors.accent)}  ${fg(TITLE_MARK, CATHEDRAL_TOKENS.colors.accent)}`;
+	const titleText = `${fg(TITLE_MARK, activeThemeColors().accent)}  ${fg("DIVINE QUERY", activeThemeColors().accent)}  ${fg(TITLE_MARK, activeThemeColors().accent)}`;
 	inner.push(center(titleText, contentWidth));
 
 	// Blank
@@ -157,7 +157,7 @@ function buildInnerRows(snapshot: DivineQuerySnapshot, contentWidth: number, ext
 	// Question body. Bible Element 11 keeps a generous right margin: text wraps
 	// at `cols - 12`, then gets a 5-col left indent.
 	for (const questionLine of wrapIndentedText(snapshot.title, Math.max(1, contentWidth - 7), indent)) {
-		inner.push(fg(questionLine, CATHEDRAL_TOKENS.colors.foreground));
+		inner.push(fg(questionLine, activeThemeColors().foreground));
 	}
 
 	// Blank
@@ -167,8 +167,8 @@ function buildInnerRows(snapshot: DivineQuerySnapshot, contentWidth: number, ext
 	for (let i = 0; i < snapshot.options.length; i += 1) {
 		const focused = i === snapshot.focusedIndex;
 		const mark = focused
-			? fg(FOCUSED_MARK, CATHEDRAL_TOKENS.colors.accent)
-			: fg(UNFOCUSED_MARK, CATHEDRAL_TOKENS.colors.divider);
+			? fg(FOCUSED_MARK, activeThemeColors().accent)
+			: fg(UNFOCUSED_MARK, activeThemeColors().divider);
 		const optionIndent = `${indent}${mark}   `;
 		const continuationIndent = `${indent}    `;
 		const label = `${optionLabel(i)}${snapshot.options[i]}`;
@@ -177,8 +177,8 @@ function buildInnerRows(snapshot: DivineQuerySnapshot, contentWidth: number, ext
 			const raw = (wrappedOption[optionRow] ?? "").slice(continuationIndent.length);
 			const prefix = optionRow === 0 ? optionIndent : continuationIndent;
 			const text = focused
-				? fg(raw, CATHEDRAL_TOKENS.colors.foreground)
-				: fg(raw, CATHEDRAL_TOKENS.colors.foregroundDim);
+				? fg(raw, activeThemeColors().foreground)
+				: fg(raw, activeThemeColors().foregroundDim);
 			inner.push(`${prefix}${text}`);
 		}
 	}
@@ -190,7 +190,7 @@ function buildInnerRows(snapshot: DivineQuerySnapshot, contentWidth: number, ext
 	inner.push(splitRule(contentWidth));
 
 	// Footer
-	const footer = fg("↑↓ wander    ⏎ answer    ⎋ retreat", CATHEDRAL_TOKENS.colors.foregroundDim);
+	const footer = fg("↑↓ wander    ⏎ answer    ⎋ retreat", activeThemeColors().foregroundDim);
 	inner.push(center(footer, contentWidth));
 
 	// Extras (e.g. edit-mode editor rows from question-tool)
@@ -209,8 +209,8 @@ function buildInnerRows(snapshot: DivineQuerySnapshot, contentWidth: number, ext
 function wrapPanelRow(innerLine: string, contentWidth: number): string {
 	return persistentBg(
 		padRight(innerLine, contentWidth),
-		CATHEDRAL_TOKENS.colors.foreground,
-		CATHEDRAL_TOKENS.colors.surfaceLifted,
+		activeThemeColors().foreground,
+		activeThemeColors().surfaceLifted,
 	);
 }
 

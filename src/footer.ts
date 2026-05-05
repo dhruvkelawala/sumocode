@@ -10,7 +10,7 @@ import { truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
  */
 export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
 import { getSessionUsage as getCachedSessionUsage, sessionHasMessages as cachedSessionHasMessages, linkGitBranchProvider } from "./session-cache.js";
-import { CATHEDRAL_TOKENS, type SumoCodeState } from "./tokens.js";
+import { activeThemeColors, type SumoCodeState } from "./themes/index.js";
 import { VOICE } from "./voice.js";
 
 type Usage = {
@@ -113,11 +113,11 @@ function padAnsiToWidth(line: string, width: number): string {
 }
 
 function formatFooterLineInner(snapshot: FooterSnapshot, width: number): string {
-	const dot = colorHex("●", CATHEDRAL_TOKENS.colors.states[snapshot.state]);
-	const stateLabel = colorHex(VOICE.status[snapshot.state], CATHEDRAL_TOKENS.colors.foreground);
-	const model = colorHex(snapshot.modelId, CATHEDRAL_TOKENS.colors.foreground);
-	const thinking = colorHex(snapshot.thinkingLevel, CATHEDRAL_TOKENS.colors.foreground);
-	const sep = colorHex(" · ", CATHEDRAL_TOKENS.colors.foregroundDim);
+	const dot = colorHex("●", activeThemeColors().states[snapshot.state]);
+	const stateLabel = colorHex(VOICE.status[snapshot.state], activeThemeColors().foreground);
+	const model = colorHex(snapshot.modelId, activeThemeColors().foreground);
+	const thinking = colorHex(snapshot.thinkingLevel, activeThemeColors().foreground);
+	const sep = colorHex(" · ", activeThemeColors().foregroundDim);
 
 	const leftZone = [`${dot} ${stateLabel}`, model, thinking].join(sep);
 	const leftLen = visibleWidth(leftZone);
@@ -127,8 +127,8 @@ function formatFooterLineInner(snapshot: FooterSnapshot, width: number): string 
 	const tokensText = contextWindow > 0
 		? `${formatTokenCount(contextTokens)}/${formatTokenCount(contextWindow)}`
 		: formatTokenCount(contextTokens);
-	const tokens = colorHex(tokensText, CATHEDRAL_TOKENS.colors.foreground);
-	const cost = colorHex(`$${snapshot.costUsd.toFixed(2)}`, CATHEDRAL_TOKENS.colors.foreground);
+	const tokens = colorHex(tokensText, activeThemeColors().foreground);
+	const cost = colorHex(`$${snapshot.costUsd.toFixed(2)}`, activeThemeColors().foreground);
 
 	// Build right zone progressively, dropping rightmost fields if they don't fit.
 	const rightCandidates: string[][] = [
@@ -163,7 +163,7 @@ export function renderSplashVersionLine(width: number): string {
 	if (width <= 0 || SPLASH_VERSION_LINE.length > width) return "";
 	const padLeft = Math.floor((width - SPLASH_VERSION_LINE.length) / 2);
 	const padRight = width - SPLASH_VERSION_LINE.length - padLeft;
-	const dim = colorHex(SPLASH_VERSION_LINE, CATHEDRAL_TOKENS.colors.foregroundDim);
+	const dim = colorHex(SPLASH_VERSION_LINE, activeThemeColors().foregroundDim);
 	return `${" ".repeat(padLeft)}${dim}${" ".repeat(padRight)}`;
 }
 

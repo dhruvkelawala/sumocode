@@ -10,7 +10,7 @@
  *   docs/ui/bible/10-code-bash.html
  */
 import { visibleWidth } from "@mariozechner/pi-tui";
-import { CATHEDRAL_TOKENS } from "../../tokens.js";
+import { activeThemeColors } from "../../themes/index.js";
 import { lineToAnsi, span, textLine, withPersistentStyle, type Span } from "../render/primitives.js";
 
 const MAX_VISIBLE_LINES = 20;
@@ -44,11 +44,11 @@ function isFunctionCall(rest: string): boolean {
  */
 function highlightLine(line: string, lang: string): SyntaxSpan[] {
 	const spans: SyntaxSpan[] = [];
-	const fg = CATHEDRAL_TOKENS.colors.foreground;
-	const kw = CATHEDRAL_TOKENS.colors.accent;
-	const str = CATHEDRAL_TOKENS.colors.states.idle;
-	const num = CATHEDRAL_TOKENS.colors.states.thinking;
-	const fn = CATHEDRAL_TOKENS.colors.states.thinking;
+	const fg = activeThemeColors().foreground;
+	const kw = activeThemeColors().accent;
+	const str = activeThemeColors().states.idle;
+	const num = activeThemeColors().states.thinking;
+	const fn = activeThemeColors().states.thinking;
 	const comment = "#6F5D46";
 
 	let i = 0;
@@ -147,29 +147,29 @@ function takeVisible(input: string, maxWidth: number): string {
 
 function codeFrameTop(lang: string, width: number): string {
 	const labelParts: (Span | string)[] = lang.length > 0
-		? [span("── ", { fg: CATHEDRAL_TOKENS.colors.divider }), span(lang, { fg: CATHEDRAL_TOKENS.colors.foregroundDim }), span(" ─", { fg: CATHEDRAL_TOKENS.colors.divider })]
-		: [span("──", { fg: CATHEDRAL_TOKENS.colors.divider })];
+		? [span("── ", { fg: activeThemeColors().divider }), span(lang, { fg: activeThemeColors().foregroundDim }), span(" ─", { fg: activeThemeColors().divider })]
+		: [span("──", { fg: activeThemeColors().divider })];
 	const labelWidth = lang.length > 0 ? 5 + lang.length : 2;
 	const ruleLen = Math.max(0, width - 3 - labelWidth);
 	return lineToAnsi(textLine([
-		span("╭─", { fg: CATHEDRAL_TOKENS.colors.divider }),
+		span("╭─", { fg: activeThemeColors().divider }),
 		...labelParts,
-		span("─".repeat(ruleLen), { fg: CATHEDRAL_TOKENS.colors.divider }),
-		span("╮", { fg: CATHEDRAL_TOKENS.colors.divider }),
+		span("─".repeat(ruleLen), { fg: activeThemeColors().divider }),
+		span("╮", { fg: activeThemeColors().divider }),
 	]), { width });
 }
 
 function codeFrameBottom(width: number): string {
 	return lineToAnsi(textLine([
-		span("╰", { fg: CATHEDRAL_TOKENS.colors.divider }),
-		span("─".repeat(Math.max(0, width - 2)), { fg: CATHEDRAL_TOKENS.colors.divider }),
-		span("╯", { fg: CATHEDRAL_TOKENS.colors.divider }),
+		span("╰", { fg: activeThemeColors().divider }),
+		span("─".repeat(Math.max(0, width - 2)), { fg: activeThemeColors().divider }),
+		span("╯", { fg: activeThemeColors().divider }),
 	]), { width });
 }
 
 function codeBodyRow(lineNumber: number, syntaxSpans: SyntaxSpan[], width: number): string {
 	const gutter = `${String(lineNumber).padStart(3)} `;
-	const gutterSpan = span(gutter, { fg: CATHEDRAL_TOKENS.colors.foregroundDim });
+	const gutterSpan = span(gutter, { fg: activeThemeColors().foregroundDim });
 	const bodySpans: Span[] = syntaxSpans.map((s) => span(s.text, { fg: s.color }));
 	const innerWidth = Math.max(0, width - 4); // 2 for │+space, 1 for space+│
 	const contentWidth = GUTTER_WIDTH + syntaxSpans.reduce((w, s) => w + visibleWidth(s.text), 0);
@@ -177,14 +177,14 @@ function codeBodyRow(lineNumber: number, syntaxSpans: SyntaxSpan[], width: numbe
 
 	const inner = withPersistentStyle(
 		lineToAnsi(textLine([span(" "), gutterSpan, ...bodySpans, span(" ".repeat(pad + 1))]), { width: innerWidth + 2 }),
-		CATHEDRAL_TOKENS.colors.foreground,
-		CATHEDRAL_TOKENS.colors.surfaceRecess,
+		activeThemeColors().foreground,
+		activeThemeColors().surfaceRecess,
 	);
 
 	return lineToAnsi(textLine([
-		span("│", { fg: CATHEDRAL_TOKENS.colors.divider }),
+		span("│", { fg: activeThemeColors().divider }),
 		span(inner),
-		span("│", { fg: CATHEDRAL_TOKENS.colors.divider }),
+		span("│", { fg: activeThemeColors().divider }),
 	]), { width });
 }
 
@@ -193,14 +193,14 @@ function collapsedRow(remaining: number, width: number): string {
 	const innerWidth = Math.max(0, width - 4);
 	const pad = Math.max(0, innerWidth - GUTTER_WIDTH - visibleWidth(text));
 	const inner = withPersistentStyle(
-		lineToAnsi(textLine([span(" "), span(" ".repeat(GUTTER_WIDTH), { fg: CATHEDRAL_TOKENS.colors.foregroundDim }), span(text, { fg: CATHEDRAL_TOKENS.colors.foregroundDim }), span(" ".repeat(pad + 1))]), { width: innerWidth + 2 }),
-		CATHEDRAL_TOKENS.colors.foreground,
-		CATHEDRAL_TOKENS.colors.surfaceRecess,
+		lineToAnsi(textLine([span(" "), span(" ".repeat(GUTTER_WIDTH), { fg: activeThemeColors().foregroundDim }), span(text, { fg: activeThemeColors().foregroundDim }), span(" ".repeat(pad + 1))]), { width: innerWidth + 2 }),
+		activeThemeColors().foreground,
+		activeThemeColors().surfaceRecess,
 	);
 	return lineToAnsi(textLine([
-		span("│", { fg: CATHEDRAL_TOKENS.colors.divider }),
+		span("│", { fg: activeThemeColors().divider }),
 		span(inner),
-		span("│", { fg: CATHEDRAL_TOKENS.colors.divider }),
+		span("│", { fg: activeThemeColors().divider }),
 	]), { width });
 }
 

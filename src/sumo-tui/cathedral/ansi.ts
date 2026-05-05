@@ -1,5 +1,5 @@
 import { truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
-import { CATHEDRAL_TOKENS } from "../../tokens.js";
+import { activeThemeColors } from "../../themes/index.js";
 import { lineToAnsi, span, textLine } from "../render/primitives.js";
 
 export const ANSI_PATTERN = /\u001b\[[0-9;]*m/g;
@@ -59,8 +59,8 @@ export function padAnsiToWidth(line: string, width: number): string {
 /** Wrap a logical sidebar row in the cathedral mahogany surface background. */
 export function surfaceLine(content: string, width: number): string {
 	return lineToAnsi(textLine([span(content)], {
-		fg: CATHEDRAL_TOKENS.colors.foreground,
-		bg: CATHEDRAL_TOKENS.colors.surface,
+		fg: activeThemeColors().foreground,
+		bg: activeThemeColors().surface,
 	}), { width });
 }
 
@@ -74,7 +74,7 @@ export function renderSidebarSectionHeader(label: string, width: number, indent 
 	const prefixWidth = 2 + label.length + 1; // "┌ " + label + " "
 	const dashCount = Math.max(4, innerWidth - prefixWidth);
 	return padAnsiToWidth(
-		`${indent}${colorHex("┌", CATHEDRAL_TOKENS.colors.divider)} ${colorHex(label, CATHEDRAL_TOKENS.colors.accent)} ${colorHex("─".repeat(dashCount), CATHEDRAL_TOKENS.colors.divider)}`,
+		`${indent}${colorHex("┌", activeThemeColors().divider)} ${colorHex(label, activeThemeColors().accent)} ${colorHex("─".repeat(dashCount), activeThemeColors().divider)}`,
 		safeWidth,
 	);
 }

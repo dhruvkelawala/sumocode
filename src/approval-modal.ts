@@ -31,7 +31,7 @@
 import type { Component } from "@mariozechner/pi-tui";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@mariozechner/pi-tui";
-import { CATHEDRAL_TOKENS } from "./tokens.js";
+import { activeThemeColors } from "./themes/index.js";
 
 const RESET = "\u001b[0m";
 const ANSI_PATTERN = /\u001b\[[0-9;]*m/g;
@@ -80,12 +80,12 @@ function center(line: string, width: number): string {
 }
 
 function panelRow(inner: string, width: number): string {
-	return persistentBg(padRight(inner, width), CATHEDRAL_TOKENS.colors.foreground, CATHEDRAL_TOKENS.colors.surfaceLifted);
+	return persistentBg(padRight(inner, width), activeThemeColors().foreground, activeThemeColors().surfaceLifted);
 }
 
 function splitRule(width: number): string {
 	const ruleLength = Math.max(1, Math.min(22, Math.floor((width - 5) / 2)));
-	const divider = CATHEDRAL_TOKENS.colors.divider;
+	const divider = activeThemeColors().divider;
 	return center(`${fg("─".repeat(ruleLength), divider)}  ${fg("·", divider)}  ${fg("─".repeat(ruleLength), divider)}`, width);
 }
 
@@ -104,9 +104,9 @@ function renderButton(choice: ApprovalChoice, isActive: boolean): string {
 	const rest = choice === "yes" ? "ES" : choice === "no" ? "O" : "LWAYS";
 	if (isActive) {
 		const label = choice === "yes" ? " YES " : choice === "no" ? "  NO  " : " ALWAYS ";
-		return `${sgr(CATHEDRAL_TOKENS.colors.states.approval, 48)}${sgr(CATHEDRAL_TOKENS.colors.background, 38)}${label}${RESET}`;
+		return `${sgr(activeThemeColors().states.approval, 48)}${sgr(activeThemeColors().background, 38)}${label}${RESET}`;
 	}
-	return `${fg("[", CATHEDRAL_TOKENS.colors.divider)}${fg(key, CATHEDRAL_TOKENS.colors.foreground)}${fg("]", CATHEDRAL_TOKENS.colors.divider)}${fg(rest, CATHEDRAL_TOKENS.colors.foreground)}`;
+	return `${fg("[", activeThemeColors().divider)}${fg(key, activeThemeColors().foreground)}${fg("]", activeThemeColors().divider)}${fg(rest, activeThemeColors().foreground)}`;
 }
 
 function commandBoxWidth(width: number): number {
@@ -119,15 +119,15 @@ function renderCommandFrame(command: string, width: number): string[] {
 	const boxWidth = commandBoxWidth(width);
 	const innerWidth = Math.max(0, boxWidth - 2);
 	const commandWidth = Math.max(1, innerWidth - 2);
-	const border = CATHEDRAL_TOKENS.colors.divider;
+	const border = activeThemeColors().divider;
 	const commandRows = wrapTextWithAnsi(command, commandWidth);
 	const safeRows = commandRows.length > 0 ? commandRows : [""];
 	const boxRows = [
 		fg(`┌${"─".repeat(innerWidth)}┐`, border),
-		...safeRows.map((row) => `${fg("│", border)} ${fg(fitLine(row, commandWidth), CATHEDRAL_TOKENS.colors.foreground)}${" ".repeat(Math.max(0, commandWidth - visibleLength(row)))} ${fg("│", border)}`),
+		...safeRows.map((row) => `${fg("│", border)} ${fg(fitLine(row, commandWidth), activeThemeColors().foreground)}${" ".repeat(Math.max(0, commandWidth - visibleLength(row)))} ${fg("│", border)}`),
 		fg(`└${"─".repeat(innerWidth)}┘`, border),
 	];
-	return boxRows.map((row) => `${PANEL_INDENT}${persistentBg(padRight(row, boxWidth), CATHEDRAL_TOKENS.colors.foreground, CATHEDRAL_TOKENS.colors.surfaceRecess)}`);
+	return boxRows.map((row) => `${PANEL_INDENT}${persistentBg(padRight(row, boxWidth), activeThemeColors().foreground, activeThemeColors().surfaceRecess)}`);
 }
 
 function renderDescriptionRows(descriptionLines: readonly string[], width: number): string[] {
@@ -139,7 +139,7 @@ function renderDescriptionRows(descriptionLines: readonly string[], width: numbe
 		const lines = wrapped.length > 0 ? wrapped : [""];
 		for (let rowIndex = 0; rowIndex < lines.length; rowIndex += 1) {
 			const rowPrefix = rowIndex === 0 ? prefix : "  ";
-			rows.push(`${PANEL_INDENT}${fg(`${rowPrefix}${lines[rowIndex]}`, CATHEDRAL_TOKENS.colors.foregroundDim)}`);
+			rows.push(`${PANEL_INDENT}${fg(`${rowPrefix}${lines[rowIndex]}`, activeThemeColors().foregroundDim)}`);
 		}
 	}
 	return rows;
@@ -153,12 +153,12 @@ export function renderApprovalModal(snapshot: ApprovalModalSnapshot, width: numb
 	const lines: string[] = [];
 
 	lines.push(panelRow("", safeWidth));
-	lines.push(panelRow(center(`${fg("✾", CATHEDRAL_TOKENS.colors.states.approval)}  ${fg("APPROVAL REQUIRED", CATHEDRAL_TOKENS.colors.states.approval)}  ${fg("✾", CATHEDRAL_TOKENS.colors.states.approval)}`, safeWidth), safeWidth));
+	lines.push(panelRow(center(`${fg("✾", activeThemeColors().states.approval)}  ${fg("APPROVAL REQUIRED", activeThemeColors().states.approval)}  ${fg("✾", activeThemeColors().states.approval)}`, safeWidth), safeWidth));
 	lines.push(panelRow("", safeWidth));
 	lines.push(panelRow(splitRule(safeWidth), safeWidth));
 	lines.push(panelRow("", safeWidth));
 
-	lines.push(panelRow(`${PANEL_INDENT}${fg("You are about to execute:", CATHEDRAL_TOKENS.colors.foreground)}`, safeWidth));
+	lines.push(panelRow(`${PANEL_INDENT}${fg("You are about to execute:", activeThemeColors().foreground)}`, safeWidth));
 	lines.push(panelRow("", safeWidth));
 
 	for (const row of renderCommandFrame(snapshot.command, safeWidth)) lines.push(panelRow(row, safeWidth));
@@ -170,7 +170,7 @@ export function renderApprovalModal(snapshot: ApprovalModalSnapshot, width: numb
 	lines.push(panelRow(splitRule(safeWidth), safeWidth));
 	lines.push(panelRow("", safeWidth));
 
-	const systemNotice = `${fg("■", CATHEDRAL_TOKENS.colors.states.approval)} ${fg("SYSTEM NOTICE", CATHEDRAL_TOKENS.colors.foregroundDim)}`;
+	const systemNotice = `${fg("■", activeThemeColors().states.approval)} ${fg("SYSTEM NOTICE", activeThemeColors().foregroundDim)}`;
 	const buttons = DEFAULT_BUTTON_ORDER.map((choice) => renderButton(choice, choice === snapshot.activeButton)).join("  ");
 	const left = `${PANEL_INDENT}${systemNotice}`;
 	const right = `${buttons}${PANEL_INDENT}`;

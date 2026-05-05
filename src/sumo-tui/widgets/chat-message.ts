@@ -1,6 +1,6 @@
 import { truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
 import { DEFAULT_SUMOCODE_CONFIG } from "../../config/sumocode-config.js";
-import { CATHEDRAL_TOKENS } from "../../tokens.js";
+import { activeThemeColors } from "../../themes/index.js";
 import { fgHex, RESET } from "../cathedral/ansi.js";
 import { SumoNode } from "../layout/node.js";
 import { MEASURE_MODE_EXACTLY, type MeasureMode, type Yoga, type YogaNode } from "../layout/yoga.js";
@@ -60,10 +60,10 @@ function roleLabel(role: ChatMessageRole, primaryAgentName?: string): string {
 }
 
 function roleColor(role: ChatMessageRole): string {
-	if (role === "user") return CATHEDRAL_TOKENS.colors.foreground;
-	if (role === "sumo" || role === "assistant") return CATHEDRAL_TOKENS.colors.accent;
-	if (role === "tool") return CATHEDRAL_TOKENS.colors.states.tool;
-	return CATHEDRAL_TOKENS.colors.foregroundDim;
+	if (role === "user") return activeThemeColors().foreground;
+	if (role === "sumo" || role === "assistant") return activeThemeColors().accent;
+	if (role === "tool") return activeThemeColors().states.tool;
+	return activeThemeColors().foregroundDim;
 }
 
 function takeVisible(input: string, maxWidth: number): { head: string; tail: string } {
@@ -175,17 +175,17 @@ function formatTime(timestamp: Date): string {
 function frameTop(role: ChatMessageRole, timestamp: Date | undefined, width: number, primaryAgentName?: string): string {
 	const label = roleLabel(role, primaryAgentName);
 	const leftParts: (Span | string)[] = [
-		span("╭ ", { fg: CATHEDRAL_TOKENS.colors.divider }),
+		span("╭ ", { fg: activeThemeColors().divider }),
 		span(label, { fg: roleColor(role) }),
-		span(" ", { fg: CATHEDRAL_TOKENS.colors.foreground }),
+		span(" ", { fg: activeThemeColors().foreground }),
 	];
 
 	const showTime = (role === "sumo" || role === "assistant") && timestamp !== undefined;
 	const rightParts: (Span | string)[] = showTime
 		? [
-			span(" ", { fg: CATHEDRAL_TOKENS.colors.divider }),
-			span(formatTime(timestamp), { fg: CATHEDRAL_TOKENS.colors.foregroundDim }),
-			span(" \u2500", { fg: CATHEDRAL_TOKENS.colors.divider }),
+			span(" ", { fg: activeThemeColors().divider }),
+			span(formatTime(timestamp), { fg: activeThemeColors().foregroundDim }),
+			span(" \u2500", { fg: activeThemeColors().divider }),
 		]
 		: [];
 
@@ -193,42 +193,42 @@ function frameTop(role: ChatMessageRole, timestamp: Date | undefined, width: num
 	const rule = Math.max(0, width - used);
 	return lineToAnsi(textLine([
 		...leftParts,
-		span("─".repeat(rule), { fg: CATHEDRAL_TOKENS.colors.divider }),
+		span("─".repeat(rule), { fg: activeThemeColors().divider }),
 		...rightParts,
-		span("╮", { fg: CATHEDRAL_TOKENS.colors.divider }),
+		span("╮", { fg: activeThemeColors().divider }),
 	]), { width });
 }
 
 function frameBody(row: string, width: number): string {
 	const inner = Math.max(0, width - 4);
 	const text = fitAnsiText(row, inner);
-	const divider = fgHex(CATHEDRAL_TOKENS.colors.divider);
-	const foreground = fgHex(CATHEDRAL_TOKENS.colors.foreground);
+	const divider = fgHex(activeThemeColors().divider);
+	const foreground = fgHex(activeThemeColors().foreground);
 	return `${divider}│${RESET} ${foreground}${text}${RESET} ${divider}│${RESET}`;
 }
 
 function frameBottom(width: number): string {
 	return lineToAnsi(textLine([
-		span("╰", { fg: CATHEDRAL_TOKENS.colors.divider }),
-		span("─".repeat(Math.max(0, width - 2)), { fg: CATHEDRAL_TOKENS.colors.divider }),
-		span("╯", { fg: CATHEDRAL_TOKENS.colors.divider }),
+		span("╰", { fg: activeThemeColors().divider }),
+		span("─".repeat(Math.max(0, width - 2)), { fg: activeThemeColors().divider }),
+		span("╯", { fg: activeThemeColors().divider }),
 	]), { width });
 }
 
 function renderSkillRow(block: Extract<ChatBlock, { type: "skill" }>): string {
 	const hint = block.expanded ? "(expanded)" : "(⌘O to expand)";
 	return lineToAnsi(textLine([
-		span("[skill]", { fg: CATHEDRAL_TOKENS.colors.accent }),
-		span(` ${block.name} `, { fg: CATHEDRAL_TOKENS.colors.foreground }),
-		span(hint, { fg: CATHEDRAL_TOKENS.colors.foregroundDim }),
+		span("[skill]", { fg: activeThemeColors().accent }),
+		span(` ${block.name} `, { fg: activeThemeColors().foreground }),
+		span(hint, { fg: activeThemeColors().foregroundDim }),
 	]));
 }
 
 function renderThinkingRows(block: Extract<ChatBlock, { type: "thinking" }>, width: number): string[] {
 	const prefix = block.hidden ? "◌ " : "✦ ";
 	return wrapPlainText(block.text, Math.max(1, width - visibleWidth(prefix))).map((row) => lineToAnsi(textLine([
-		span(prefix, { fg: CATHEDRAL_TOKENS.colors.states.thinking, dim: true }),
-		span(row, { fg: CATHEDRAL_TOKENS.colors.states.thinking, italic: true, dim: true }),
+		span(prefix, { fg: activeThemeColors().states.thinking, dim: true }),
+		span(row, { fg: activeThemeColors().states.thinking, italic: true, dim: true }),
 	]), { width }));
 }
 

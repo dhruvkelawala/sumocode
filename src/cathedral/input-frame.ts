@@ -30,7 +30,7 @@
  * `src/cathedral/cathedral-editor.ts`.
  */
 
-import { CATHEDRAL_TOKENS } from "../tokens.js";
+import { activeThemeColors } from "../themes/index.js";
 
 const RESET = "\u001b[0m";
 const RESET_BG = "\u001b[49m";
@@ -110,11 +110,11 @@ export type InputFrameOptions = {
  */
 export function renderInputFrame(input: string, width: number, options: InputFrameOptions = {}): string[] {
 	if (width < 4) {
-		return [padToWidth(color("█", CATHEDRAL_TOKENS.colors.accent), width)];
+		return [padToWidth(color("█", activeThemeColors().accent), width)];
 	}
 
 	const inner = width - 2;
-	const dividerCh = (ch: string): string => color(ch, CATHEDRAL_TOKENS.colors.divider);
+	const dividerCh = (ch: string): string => color(ch, activeThemeColors().divider);
 
 	// Top border with optional label. Label punches through the border with
 	// accent foreground over recess background so it reads as a notch.
@@ -126,7 +126,7 @@ export function renderInputFrame(input: string, width: number, options: InputFra
 		const labelText = ellipsize(options.label, maxLabelText);
 		const labelInner = labelText.length > 0 ? ` ${labelText} ` : "";
 		const rightDashes = "─".repeat(Math.max(0, inner - leftDashes.length - labelInner.length));
-		top = `${dividerCh("┌")}${dividerCh(leftDashes)}${color(labelInner, CATHEDRAL_TOKENS.colors.accent)}${dividerCh(rightDashes)}${dividerCh("┐")}`;
+		top = `${dividerCh("┌")}${dividerCh(leftDashes)}${color(labelInner, activeThemeColors().accent)}${dividerCh(rightDashes)}${dividerCh("┐")}`;
 	} else {
 		top = `${dividerCh("┌")}${dividerCh("─".repeat(inner))}${dividerCh("┐")}`;
 	}
@@ -137,12 +137,12 @@ export function renderInputFrame(input: string, width: number, options: InputFra
 	const showPlaceholder = input.length === 0 && options.placeholder !== undefined;
 	const promptHex =
 		options.promptColor === "accent"
-			? CATHEDRAL_TOKENS.colors.accent
-			: CATHEDRAL_TOKENS.colors.foregroundDim;
+			? activeThemeColors().accent
+			: activeThemeColors().foregroundDim;
 	const promptArrow = color(">", promptHex);
-	const cursor = color("█", CATHEDRAL_TOKENS.colors.accent);
+	const cursor = color("█", activeThemeColors().accent);
 	const rawText = showPlaceholder ? options.placeholder! : input;
-	const textColor = showPlaceholder ? CATHEDRAL_TOKENS.colors.foregroundDim : CATHEDRAL_TOKENS.colors.foreground;
+	const textColor = showPlaceholder ? activeThemeColors().foregroundDim : activeThemeColors().foreground;
 	let innerContent: string;
 	if (inner >= 4) {
 		const maxText = Math.max(0, inner - 4); // leading space + prompt + separator + cursor
@@ -163,7 +163,7 @@ export function renderInputFrame(input: string, width: number, options: InputFra
 
 	// Bottom border
 	const bottom = `${dividerCh("└")}${dividerCh("─".repeat(inner))}${dividerCh("┘")}`;
-	const frameBg = CATHEDRAL_TOKENS.colors.surfaceRecess;
+	const frameBg = activeThemeColors().surfaceRecess;
 
 	return [
 		withBackground(padToWidth(top, width), frameBg),
@@ -200,18 +200,18 @@ export function renderInputHints(width: number, options: InputHintsOptions = {})
 	const rightLen = rightPlain.length;
 	const left = options.leftHint;
 
-	const dimFg = fg(CATHEDRAL_TOKENS.colors.foregroundDim);
-	const accent = fg(CATHEDRAL_TOKENS.colors.accent);
+	const dimFg = fg(activeThemeColors().foregroundDim);
+	const accent = fg(activeThemeColors().accent);
 
 	// Build the colored right-hand string: CTRL+/ in accent, label in dim.
 	const rightColored = `${accent}CTRL+/${RESET} ${dimFg}· COMMANDS${RESET}`;
 	const colorLeftHint = (text: string): string => {
 		if (options.leftHintStyle !== "project-branch") return `${dimFg}${text}${RESET}`;
 		const branchStart = text.indexOf(" (");
-		if (branchStart === -1) return color(text, CATHEDRAL_TOKENS.colors.foreground);
+		if (branchStart === -1) return color(text, activeThemeColors().foreground);
 		const project = text.slice(0, branchStart);
 		const branch = text.slice(branchStart);
-		return `${color(project, CATHEDRAL_TOKENS.colors.foreground)}${dimFg}${branch}${RESET}`;
+		return `${color(project, activeThemeColors().foreground)}${dimFg}${branch}${RESET}`;
 	};
 
 	// At narrow widths, drop the left hint first unless the caller explicitly

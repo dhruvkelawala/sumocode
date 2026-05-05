@@ -22,7 +22,7 @@ import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-age
 import { truncateToWidth } from "@mariozechner/pi-tui";
 import type { Component } from "@mariozechner/pi-tui";
 import { sessionHasMessages as cachedSessionHasMessages } from "./session-cache.js";
-import { CATHEDRAL_TOKENS } from "./tokens.js";
+import { activeThemeColors } from "./themes/index.js";
 
 const RESET = "\u001b[0m";
 const ANSI_PATTERN = /\u001b(?:\[[0-?]*[ -/]*[@-~]|\][^\u0007]*(?:\u0007|\u001b\\))/g;
@@ -36,8 +36,14 @@ function fg(hex: string): string {
 	return `\u001b[38;2;${r};${g};${b}m`;
 }
 
-const ACCENT = fg(CATHEDRAL_TOKENS.colors.accent);
-const MUTED = fg(CATHEDRAL_TOKENS.colors.foregroundDim);
+function accentFg(): string {
+	return fg(activeThemeColors().accent);
+}
+
+function mutedFg(): string {
+	return fg(activeThemeColors().foregroundDim);
+}
+
 const DIM = "\u001b[2m";
 
 function visibleLength(text: string): number {
@@ -127,15 +133,15 @@ export function renderSplashContent(snapshot: SplashSnapshot, width: number): st
 
 	// SUMOCODE wordmark in burnt orange.
 	for (const row of SUMOCODE_WORDMARK) {
-		content.push(center(`${ACCENT}${row}${RESET}`, width));
+		content.push(center(`${accentFg()}${row}${RESET}`, width));
 	}
 
 	content.push("");
 	content.push("");
 
 	// V2 Visual Bible quote in dim muted brown.
-	content.push(center(`${DIM}${MUTED}${snapshot.quote}${RESET}`, width));
-	content.push(center(`${DIM}${MUTED}${snapshot.quoteAttribution}${RESET}`, width));
+	content.push(center(`${DIM}${mutedFg()}${snapshot.quote}${RESET}`, width));
+	content.push(center(`${DIM}${mutedFg()}${snapshot.quoteAttribution}${RESET}`, width));
 
 	return content;
 }

@@ -1,4 +1,4 @@
-import { CATHEDRAL_TOKENS } from "../../tokens.js";
+import { activeThemeColors } from "../../themes/index.js";
 import { POSITION_TYPE_ABSOLUTE } from "../layout/yoga.js";
 import type { SumoNode, SumoNodeEventHandlerResult } from "../layout/node.js";
 import type { MouseEvent } from "../input/mouse.js";
@@ -83,8 +83,8 @@ function orderedChildren(node: SumoNode): PositionedChild[] {
  * while the retained frame shape follows the OpenTUI host-frame model.
  */
 export function composite(root: SumoNode, buffer: CellBuffer, options: CompositeOptions = {}): CompositeResult {
-	buffer.setDefaultBackground(CATHEDRAL_TOKENS.colors.background);
-	buffer.setDefaultForeground(CATHEDRAL_TOKENS.colors.foreground);
+	buffer.setDefaultBackground(activeThemeColors().background);
+	buffer.setDefaultForeground(activeThemeColors().foreground);
 	buffer.clear();
 
 	let hardwareCursor: HardwareCursor | null = null;

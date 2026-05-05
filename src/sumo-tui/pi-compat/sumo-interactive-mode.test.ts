@@ -91,7 +91,7 @@ describe("sumo interactive Pi noise filtering", () => {
 		expect(setShowHardwareCursor).toHaveBeenCalledWith(true);
 	});
 
-	it("enters altscreen and enables SGR mouse from the retained runtime", async () => {
+	it("enters altscreen, enables SGR mouse, and eagerly paints splash from the retained runtime", async () => {
 		const write = vi.fn();
 		const runtime = new SumoInteractiveRuntime({ isTTY: true, columns: 100, rows: 30, write });
 
@@ -100,6 +100,7 @@ describe("sumo interactive Pi noise filtering", () => {
 		const output = write.mock.calls.map(([chunk]) => String(chunk)).join("");
 		expect(output).toContain(ALTSCREEN_ENTER_SEQUENCE);
 		expect(output).toContain(MOUSE_SGR_ENABLE_SEQUENCE);
+		expect(stripAnsi(output)).toContain("Meow meow meow");
 		runtime.stop();
 	});
 

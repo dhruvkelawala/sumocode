@@ -56,6 +56,40 @@ describe("scroll/scribe renderer", () => {
 		expect(rows.some((r) => r.includes("▶") && r.includes("[bash]") && r.includes("pnpm test"))).toBe(true);
 	});
 
+	it("keeps multiline nested tool output inside the scribe frame", () => {
+		const rows = renderScrollBlock(delegation({
+			nestedTools: [
+				{
+					name: "read",
+					status: "success",
+					output: "import type { ExtensionAPI } from '@mariozechner/pi-coding-agent';\nindex abc123..def456\n--- a/src/foo.ts\n+++ b/src/foo.ts",
+				},
+			],
+		}), 80).map(stripAnsi);
+
+		for (const row of rows) {
+			expect(row.length, `row not clipped: ${JSON.stringify(row)}`).toBe(80);
+		}
+		const toolRow = rows.find((r) => r.includes("[read]"));
+		expect(toolRow).toContain("import type");
+		expect(toolRow).not.toContain("\n");
+		expect(rows.some((r) => r.startsWith("index "))).toBe(false);
+		expect(rows.some((r) => r.startsWith("--- a/"))).toBe(false);
+	});
+
+	it("renders up to 25 scribe summary lines with a collapsed marker", () => {
+		const summary = Array.from({ length: 30 }, (_, index) => `line ${index + 1}`).join("\n");
+		const rows = renderScrollBlock(delegation({ status: "success", summary }), 100).map(stripAnsi);
+
+		expect(rows.some((r) => r.includes("│ line 1"))).toBe(true);
+		expect(rows.some((r) => r.includes("│ line 25"))).toBe(true);
+		expect(rows.some((r) => r.includes("│ line 26"))).toBe(false);
+		expect(rows.some((r) => r.includes("… 5 lines collapsed"))).toBe(true);
+		for (const row of rows) {
+			expect(row.length, `row not padded: ${JSON.stringify(row)}`).toBe(100);
+		}
+	});
+
 	it("renders completed task summary inside the scribe body", () => {
 		const rows = renderScrollBlock(delegation({ status: "success", summary: "Task tool ran." }), 130).map(stripAnsi);
 		expect(rows.some((r) => r.includes("│ Task tool ran."))).toBe(true);

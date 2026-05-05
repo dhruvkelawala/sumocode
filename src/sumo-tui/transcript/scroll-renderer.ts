@@ -49,11 +49,19 @@ const TOOL_STATUS_COLOR: Record<string, string> = {
 	cancelled: CATHEDRAL_TOKENS.colors.foregroundDim,
 };
 
+const SCRIBE_BODY_MAX_LINES = 25;
+
+function singleLinePreview(text: string): string {
+	return text.replace(/[\r\n]+/g, " ").replace(/\s+/g, " ").trim();
+}
+
 function toolTarget(tool: ToolCallViewModel): string {
 	const input = typeof tool.input === "object" && tool.input !== null ? tool.input as Record<string, unknown> : {};
-	return typeof input.path === "string" ? input.path
+	const target = typeof input.path === "string" ? input.path
 		: typeof input.command === "string" ? input.command
-		: tool.output ?? "";
+		: typeof tool.output === "string" ? tool.output
+		: "";
+	return singleLinePreview(target);
 }
 
 function formatTokens(tokensIn?: number, tokensOut?: number): string | undefined {
@@ -179,6 +187,9 @@ function nestedToolRow(tool: ToolCallViewModel, width: number): string {
 	const glyph = TOOL_STATUS_GLYPH[tool.status] ?? "○";
 	const color = TOOL_STATUS_COLOR[tool.status] ?? CATHEDRAL_TOKENS.colors.foregroundDim;
 	const target = toolTarget(tool);
+	const prefixWidth = visibleWidth(`   │ ${glyph} [${tool.name}]  `);
+	const contentWidth = Math.max(1, width - prefixWidth);
+	const clipped = visibleWidth(target) > contentWidth ? truncateToWidth(target, contentWidth, "") : target;
 
 	return lineToAnsi(textLine([
 		span("   "),
@@ -187,7 +198,8 @@ function nestedToolRow(tool: ToolCallViewModel, width: number): string {
 		span(glyph, { fg: color }),
 		span(" "),
 		span(`[${tool.name}]`, { fg: CATHEDRAL_TOKENS.colors.accent }),
-		span(`  ${target}`, { fg: CATHEDRAL_TOKENS.colors.foreground }),
+		span("  "),
+		span(clipped, { fg: CATHEDRAL_TOKENS.colors.foreground }),
 	]), { width });
 }
 
@@ -209,14 +221,25 @@ function scribeTextRow(text: string, width: number): string {
 	]), { width });
 }
 
+function scribeCollapsedRow(remaining: number, width: number): string {
+	return lineToAnsi(textLine([
+		span("   "),
+		span("│", { fg: CATHEDRAL_TOKENS.colors.divider }),
+		span(` … ${remaining} lines collapsed`, { fg: CATHEDRAL_TOKENS.colors.foregroundDim }),
+	]), { width });
+}
+
 function scribeSummaryRows(summary: string | undefined, width: number): string[] {
 	if (!summary || summary.trim().length === 0) return [];
-	return summary
+	const lines = summary
 		.split("\n")
 		.map((line) => line.trim())
-		.filter((line) => line.length > 0)
-		.slice(0, 4)
-		.map((line) => scribeTextRow(line, width));
+		.filter((line) => line.length > 0);
+	const visible = lines.slice(0, SCRIBE_BODY_MAX_LINES);
+	const rows = visible.map((line) => scribeTextRow(line, width));
+	const collapsed = lines.length - visible.length;
+	if (collapsed > 0) rows.push(scribeCollapsedRow(collapsed, width));
+	return rows;
 }
 
 function scribeMetadataRow(delegation: DelegationViewModel, width: number): string {

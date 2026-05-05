@@ -1,4 +1,5 @@
 export { CATHEDRAL_INDICATOR_FRAMES, CATHEDRAL_INDICATOR_INTERVAL_MS, CATHEDRAL_THEME } from "./cathedral.js";
+export { OBSIDIAN_INDICATOR_FRAMES, OBSIDIAN_INDICATOR_INTERVAL_MS, OBSIDIAN_THEME } from "./obsidian.js";
 export {
 	activeThemeColors,
 	activeThemeTokens,

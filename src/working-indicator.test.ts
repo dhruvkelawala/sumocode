@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { resetThemeRegistryForTests, setActiveTheme } from "./themes/index.js";
 import { CATHEDRAL_TOKENS } from "./tokens.js";
 import {
 	CATHEDRAL_INDICATOR_FRAMES,
@@ -7,6 +8,7 @@ import {
 	indicatorFrameAt,
 	renderIndicator,
 	shouldInstallWorkingIndicator,
+	WorkingIndicatorComponent,
 } from "./working-indicator.js";
 
 const ANSI_PATTERN = /\u001b\[[0-9;]*m/g;
@@ -78,6 +80,76 @@ describe("shouldInstallWorkingIndicator", () => {
 		expect(shouldInstallWorkingIndicator(79)).toBe(false);
 		expect(shouldInstallWorkingIndicator(80)).toBe(true);
 		expect(shouldInstallWorkingIndicator(160)).toBe(true);
+	});
+});
+
+describe("WorkingIndicatorComponent", () => {
+	afterEach(() => resetThemeRegistryForTests());
+
+	it("renders an empty row when idle", () => {
+		const tui = { requestRender: vi.fn() };
+		const component = new WorkingIndicatorComponent(tui);
+
+		expect(component.render(80)).toEqual([""]);
+
+		component.dispose();
+	});
+
+	it("renders a colored frame and label when busy", () => {
+		vi.useFakeTimers();
+		const tui = { requestRender: vi.fn() };
+		const component = new WorkingIndicatorComponent(tui);
+
+		component.start();
+		const [line] = component.render(80);
+		expect(line).toBeDefined();
+		expect(line!.includes(CATHEDRAL_INDICATOR_FRAMES[0]!)).toBe(true);
+		expect(line).toMatch(/Working/);
+		expect(tui.requestRender).toHaveBeenCalled();
+
+		component.dispose();
+		vi.useRealTimers();
+	});
+
+	it("advances the frame on each interval tick while busy", () => {
+		vi.useFakeTimers();
+		const tui = { requestRender: vi.fn() };
+		const component = new WorkingIndicatorComponent(tui);
+
+		component.start();
+		const before = tui.requestRender.mock.calls.length;
+		vi.advanceTimersByTime(CATHEDRAL_INDICATOR_INTERVAL_MS * 3);
+		expect(tui.requestRender.mock.calls.length).toBeGreaterThan(before);
+
+		component.dispose();
+		vi.useRealTimers();
+	});
+
+	it("stops cycling and renders empty after stop()", () => {
+		vi.useFakeTimers();
+		const tui = { requestRender: vi.fn() };
+		const component = new WorkingIndicatorComponent(tui);
+
+		component.start();
+		component.stop();
+		expect(component.isBusy()).toBe(false);
+		expect(component.render(80)).toEqual([""]);
+
+		component.dispose();
+		vi.useRealTimers();
+	});
+
+	it("re-renders when the active theme changes", () => {
+		vi.useFakeTimers();
+		const tui = { requestRender: vi.fn() };
+		const component = new WorkingIndicatorComponent(tui);
+
+		tui.requestRender.mockClear();
+		setActiveTheme("obsidian");
+		expect(tui.requestRender).toHaveBeenCalled();
+
+		component.dispose();
+		vi.useRealTimers();
 	});
 });
 

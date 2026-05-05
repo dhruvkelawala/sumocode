@@ -1,29 +1,70 @@
 import { CATHEDRAL_THEME } from "./cathedral.js";
+import { OBSIDIAN_THEME } from "./obsidian.js";
 import type { Theme, ThemeColors, ThemeTokens } from "./types.js";
 
 export type ThemeChangedListener = (theme: Theme) => void;
 export type SetThemeResult = { success: true; theme: Theme } | { success: false; error: string };
 
+/**
+ * Pin the theme registry on `globalThis` because the retained
+ * `sumo-interactive-mode.js` jiti loader uses `moduleCache: false`. Without
+ * this, SumoInteractiveMode and the extension code each get a private copy of
+ * `listeners`, `activeThemeName`, and the registry Map — `setActiveTheme()`
+ * fires listeners in one copy while subscribers live on the other, so the
+ * retained chrome never repaints on theme switch.
+ *
+ * Mirrors the `ACTIVE_SUMO_RUNTIME_KEY` pattern in
+ * `sumo-interactive-mode.ts` and the diagnostic singleton in
+ * `render-diagnostics.ts`.
+ */
+const REGISTRY_KEY = Symbol.for("sumocode.themeRegistry");
+
+interface ThemeRegistryState {
+	registry: Map<string, Theme>;
+	listeners: Set<ThemeChangedListener>;
+	activeThemeName: string;
+	themeVersion: number;
+}
+
+function ensureState(): ThemeRegistryState {
+	const host = globalThis as unknown as Record<symbol, ThemeRegistryState | undefined>;
+	let state = host[REGISTRY_KEY];
+	if (!state) {
+		state = {
+			registry: new Map<string, Theme>([
+				[CATHEDRAL_THEME.name, CATHEDRAL_THEME],
+				[OBSIDIAN_THEME.name, OBSIDIAN_THEME],
+			]),
+			listeners: new Set<ThemeChangedListener>(),
+			activeThemeName: CATHEDRAL_THEME.name,
+			themeVersion: 0,
+		};
+		host[REGISTRY_KEY] = state;
+		return state;
+	}
+	// Re-imported module copies must observe newly-shipped builtin themes added
+	// after the first state was created (e.g. Obsidian Temple landed on a later
+	// require chain). Defensive merge keeps cross-copy registries aligned.
+	if (!state.registry.has(OBSIDIAN_THEME.name)) state.registry.set(OBSIDIAN_THEME.name, OBSIDIAN_THEME);
+	if (!state.registry.has(CATHEDRAL_THEME.name)) state.registry.set(CATHEDRAL_THEME.name, CATHEDRAL_THEME);
+	return state;
+}
+
 function normalizeThemeName(name: string): string {
 	return name.trim().toLowerCase();
 }
 
-const registry = new Map<string, Theme>([[CATHEDRAL_THEME.name, CATHEDRAL_THEME]]);
-const listeners = new Set<ThemeChangedListener>();
-
-let activeThemeName = CATHEDRAL_THEME.name;
-let themeVersion = 0;
-
 export function listThemes(): Theme[] {
-	return [...registry.values()];
+	return [...ensureState().registry.values()];
 }
 
 export function getTheme(name: string): Theme | undefined {
-	return registry.get(normalizeThemeName(name));
+	return ensureState().registry.get(normalizeThemeName(name));
 }
 
 export function getActiveTheme(): Theme {
-	return registry.get(activeThemeName) ?? CATHEDRAL_THEME;
+	const state = ensureState();
+	return state.registry.get(state.activeThemeName) ?? CATHEDRAL_THEME;
 }
 
 export function activeThemeTokens(): ThemeTokens {
@@ -35,25 +76,28 @@ export function activeThemeColors(): ThemeColors {
 }
 
 export function getThemeVersion(): number {
-	return themeVersion;
+	return ensureState().themeVersion;
 }
 
 export function setActiveTheme(name: string): SetThemeResult {
-	const theme = getTheme(name);
+	const state = ensureState();
+	const theme = state.registry.get(normalizeThemeName(name));
 	if (!theme) return { success: false, error: `Unknown SumoCode theme: ${name}` };
-	activeThemeName = theme.name;
-	themeVersion += 1;
-	for (const listener of listeners) listener(theme);
+	state.activeThemeName = theme.name;
+	state.themeVersion += 1;
+	for (const listener of state.listeners) listener(theme);
 	return { success: true, theme };
 }
 
 export function onThemeChanged(listener: ThemeChangedListener): () => void {
-	listeners.add(listener);
-	return () => listeners.delete(listener);
+	const state = ensureState();
+	state.listeners.add(listener);
+	return () => state.listeners.delete(listener);
 }
 
 export function resetThemeRegistryForTests(): void {
-	activeThemeName = CATHEDRAL_THEME.name;
-	themeVersion = 0;
-	listeners.clear();
+	const state = ensureState();
+	state.activeThemeName = CATHEDRAL_THEME.name;
+	state.themeVersion = 0;
+	state.listeners.clear();
 }

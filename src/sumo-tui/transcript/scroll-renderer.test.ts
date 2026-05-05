@@ -33,6 +33,16 @@ describe("scroll/scribe renderer", () => {
 		expect(rows[0]).toContain("running");
 	});
 
+	it("renders task prompt in the outer scroll frame before the scribe frame", () => {
+		const rows = renderScrollBlock(delegation({ prompt: "Review architecture\nReturn risks.", summary: "Scribe result." }), 130).map(stripAnsi);
+		const taskHeaderIndex = rows.findIndex((r) => r.includes("┌ task"));
+		const scribeHeaderIndex = rows.findIndex((r) => r.includes("┌ scribe"));
+		expect(taskHeaderIndex).toBeGreaterThan(0);
+		expect(scribeHeaderIndex).toBeGreaterThan(taskHeaderIndex);
+		expect(rows.some((r) => r.includes("│ Review architecture"))).toBe(true);
+		expect(rows.some((r) => r.includes("│ Scribe result."))).toBe(true);
+	});
+
 	it("renders scribe header with agent, model, and thinking", () => {
 		const rows = renderScrollBlock(delegation(), 130).map(stripAnsi);
 		const header = rows.find((r) => r.includes("scribe"));
@@ -44,6 +54,11 @@ describe("scroll/scribe renderer", () => {
 		const rows = renderScrollBlock(delegation(), 130).map(stripAnsi);
 		expect(rows.some((r) => r.includes("✓") && r.includes("[read]") && r.includes("src/auth.ts"))).toBe(true);
 		expect(rows.some((r) => r.includes("▶") && r.includes("[bash]") && r.includes("pnpm test"))).toBe(true);
+	});
+
+	it("renders completed task summary inside the scribe body", () => {
+		const rows = renderScrollBlock(delegation({ status: "success", summary: "Task tool ran." }), 130).map(stripAnsi);
+		expect(rows.some((r) => r.includes("│ Task tool ran."))).toBe(true);
 	});
 
 	it("renders token and elapsed metadata", () => {

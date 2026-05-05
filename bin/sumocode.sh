@@ -1,7 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SOURCE="${BASH_SOURCE[0]}"
+while [[ -L "${SOURCE}" ]]; do
+	SOURCE_DIR="$(cd "$(dirname "${SOURCE}")" && pwd)"
+	TARGET="$(readlink "${SOURCE}")"
+	if [[ "${TARGET}" == /* ]]; then
+		SOURCE="${TARGET}"
+	else
+		SOURCE="${SOURCE_DIR}/${TARGET}"
+	fi
+done
+SCRIPT_DIR="$(cd "$(dirname "${SOURCE}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 export SUMO_TUI="${SUMO_TUI:-1}"

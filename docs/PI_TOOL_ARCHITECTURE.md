@@ -20,8 +20,6 @@ These ship with Pi and are always available:
 | `write` | Create/overwrite files                           | Tool pill renderer (E9)      |
 | `edit`  | Precise text replacement                         | Tool pill renderer (E9)      |
 | `mcp`   | Call MCP server tools                            | Tool pill renderer (E9)      |
-| `task`  | Dispatch sub-agent work                          | Scroll/scribe renderer (E12) |
-
 SumoCode **does not re-register** these. It intercepts them via `pi.on("tool_call")`
 for approval gating and renders them via the transcript view-model pipeline.
 
@@ -46,7 +44,7 @@ vanilla Pi.
 
 | Tool         | Source                         | Purpose                      |
 |--------------|--------------------------------|------------------------------|
-| *(none yet)* | —                              | —                            |
+| `task`       | `src/native-task-tool.ts`       | Run isolated Pi subprocess tasks and stream structured scroll/scribe state |
 
 ### 4. SumoCode Extension Hooks
 

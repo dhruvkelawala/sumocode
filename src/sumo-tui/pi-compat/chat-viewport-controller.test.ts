@@ -221,6 +221,164 @@ describe("ChatViewportController", () => {
 		root.dispose();
 	});
 
+	it("folds live task results into the active scroll block", async () => {
+		const { root, chat, controller } = await makeController();
+		const taskCall = {
+			type: "toolCall",
+			id: "tc-task",
+			name: "task",
+			arguments: {
+				type: "single",
+				model: "openai-codex/gpt-5.5",
+				thinking: "high",
+				tasks: [{ prompt: "You are Zeus.\n\n## Verify issue 194 scroll metadata rendering\n\nReturn one line." }],
+			},
+		};
+
+		controller.handleAgentEvent({ type: "message_start", message: { role: "assistant", content: "" } });
+		controller.handleAgentEvent({ type: "message_update", message: { role: "assistant", content: [taskCall] } });
+		controller.handleAgentEvent({ type: "message_end", message: { role: "assistant", content: [taskCall] } });
+		controller.handleAgentEvent({ type: "message_start", message: { role: "toolResult", toolCallId: "tc-task", toolName: "task", name: "task", content: [{ type: "text", text: "Task tool ran." }] } });
+
+		const messages = chat.getRenderedMessages().map((message) => message.toSnapshot());
+		expect(messages).toHaveLength(1);
+		expect(messages[0]?.role).toBe("sumo");
+		expect(messages[0]?.blocks).toEqual([
+			{
+				type: "delegation",
+				delegation: {
+					id: "tc-task",
+					title: "Verify issue 194 scroll metadata rendering",
+					agent: "scribe",
+					model: "openai-codex/gpt-5.5",
+					thinking: "high",
+					status: "success",
+					prompt: "Return one line.",
+					summary: "Task tool ran.",
+					nestedTools: [],
+					tokensIn: undefined,
+					tokensOut: undefined,
+					elapsedMs: undefined,
+				},
+			},
+		]);
+		root.dispose();
+	});
+
+	it("does not merge explicit unmatched delegation ids into another running scroll", async () => {
+		const { root, chat, controller } = await makeController();
+		const firstCall = { type: "toolCall", id: "task-a", name: "task", arguments: { type: "single", tasks: [{ prompt: "## First task" }] } };
+		const secondCall = { type: "toolCall", id: "task-b", name: "task", arguments: { type: "single", tasks: [{ prompt: "## Second task" }] } };
+
+		controller.handleAgentEvent({ type: "message_start", message: { role: "assistant", content: "" } });
+		controller.handleAgentEvent({ type: "message_update", message: { role: "assistant", content: [firstCall] } });
+		controller.handleAgentEvent({
+			type: "tool_execution_update",
+			toolCallId: "task-b",
+			toolName: "task",
+			args: secondCall.arguments,
+			partialResult: {
+				content: [{ type: "text", text: "second running" }],
+				details: { mode: "single", results: [{ prompt: "## Second task", exitCode: -1, messages: [], usage: {} }] },
+			},
+		});
+
+		const blocks = chat.getRenderedMessages()[0]?.toSnapshot().blocks;
+		expect(blocks).toHaveLength(2);
+		expect(blocks?.[0]).toMatchObject({ type: "delegation", delegation: { id: "task-a", title: "First task" } });
+		expect(blocks?.[1]).toMatchObject({ type: "delegation", delegation: { id: "task-b", title: "Second task" } });
+		root.dispose();
+	});
+
+	it("ignores task execution start events without partial result details", async () => {
+		const { root, chat, controller } = await makeController();
+		const taskCall = { type: "toolCall", id: "tc-task", name: "task", arguments: { type: "single", tasks: [{ prompt: "## Running task" }] } };
+
+		controller.handleAgentEvent({ type: "message_start", message: { role: "assistant", content: "" } });
+		controller.handleAgentEvent({ type: "message_update", message: { role: "assistant", content: [taskCall] } });
+		controller.handleAgentEvent({ type: "tool_execution_start", toolCallId: "tc-task", toolName: "task", args: taskCall.arguments });
+
+		const block = chat.getRenderedMessages()[0]?.toSnapshot().blocks?.[0];
+		expect(block).toMatchObject({ type: "delegation", delegation: { title: "Running task", status: "running" } });
+		root.dispose();
+	});
+
+	it("updates the active task scroll from tool execution partial details", async () => {
+		const { root, chat, controller } = await makeController();
+		const taskCall = {
+			type: "toolCall",
+			id: "tc-task",
+			name: "task",
+			arguments: { type: "single", tasks: [{ prompt: "## Audit auth\n\nFind risky files." }] },
+		};
+
+		controller.handleAgentEvent({ type: "message_start", message: { role: "assistant", content: "" } });
+		controller.handleAgentEvent({ type: "message_update", message: { role: "assistant", content: [taskCall] } });
+		controller.handleAgentEvent({
+			type: "tool_execution_update",
+			toolCallId: "tc-task",
+			toolName: "task",
+			args: taskCall.arguments,
+			partialResult: {
+				content: [{ type: "text", text: "reading auth files" }],
+				details: {
+					mode: "single",
+					results: [{
+						prompt: "## Audit auth\n\nFind risky files.",
+						exitCode: -1,
+						messages: [],
+						toolEvents: [{ id: "read-1", name: "read", args: { path: "src/auth.ts" }, status: "running" }],
+						usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 },
+						model: "openai-codex/gpt-5.5",
+						thinking: "high",
+					}],
+				},
+			},
+		});
+
+		const message = chat.getRenderedMessages()[0]?.toSnapshot();
+		expect(message?.blocks?.[0]).toMatchObject({
+			type: "delegation",
+			delegation: {
+				title: "Audit auth",
+				model: "openai-codex/gpt-5.5",
+				thinking: "high",
+				status: "running",
+				nestedTools: [{ id: "read-1", name: "read", status: "running", input: { path: "src/auth.ts" } }],
+			},
+		});
+		root.dispose();
+	});
+
+	it("shows task body while a live scroll is still running", async () => {
+		const { root, chat, controller } = await makeController();
+		const taskCall = {
+			type: "toolCall",
+			id: "tc-task",
+			name: "task",
+			arguments: {
+				prompt: "You are Zeus.\n\n## Verify issue 194 live scroll result folding\n\nRespond with exactly this sentence:\nTask output visible inside scribe.",
+				thinking: "minimal",
+			},
+		};
+
+		controller.handleAgentEvent({ type: "message_start", message: { role: "assistant", content: "" } });
+		controller.handleAgentEvent({ type: "message_update", message: { role: "assistant", content: [taskCall] } });
+
+		const message = chat.getRenderedMessages()[0]?.toSnapshot();
+		expect(message?.blocks?.[0]).toMatchObject({
+			type: "delegation",
+			delegation: {
+				title: "Verify issue 194 live scroll result folding",
+				thinking: "minimal",
+				status: "running",
+				prompt: "Respond with exactly this sentence:\nTask output visible inside scribe.",
+				summary: undefined,
+			},
+		});
+		root.dispose();
+	});
+
 	it("keeps assistant-only tool blocks under SUMO instead of TOOL", async () => {
 		const { root, chat, controller } = await makeController();
 

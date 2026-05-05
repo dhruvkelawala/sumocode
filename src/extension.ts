@@ -7,6 +7,7 @@ import { installInputHints } from "./cathedral/input-hints.js";
 import { installAnswerTool } from "./answer-tool.js";
 import { installApprovalGate } from "./approval-modal.js";
 import { installQuestionTool } from "./question-tool.js";
+import { taskTool } from "./native-task-tool.js";
 
 import { installAltscreen } from "./cathedral/altscreen.js";
 import { installCathedralEditor } from "./cathedral/cathedral-editor.js";
@@ -19,6 +20,7 @@ import { installTopChrome } from "./top-chrome.js";
 import { installWorkingIndicator } from "./working-indicator.js";
 
 const SUMOCODE_PACKAGE_NAME = "@dhruvkelawala/sumocode";
+const LEGACY_TASK_TOOL_EXTENSION_PATH = join(".pi", "agent", "extensions", "task-tool", "index.ts");
 
 type ExistsFn = (path: string) => boolean;
 type ReadFileFn = (path: string, encoding: BufferEncoding) => string;
@@ -77,6 +79,16 @@ export function shouldNoopDuplicateInstalledExtension(options: DuplicateInstalle
 	return findActiveSumoDevTree(options.cwd ?? process.cwd(), options) !== undefined;
 }
 
+export function hasLegacyTaskToolExtension(options: Pick<DuplicateInstalledExtensionOptions, "homeDir" | "exists"> = {}): boolean {
+	const exists = options.exists ?? existsSync;
+	return exists(join(options.homeDir ?? homedir(), LEGACY_TASK_TOOL_EXTENSION_PATH));
+}
+
+export function shouldInstallNativeTaskTool(options: Pick<DuplicateInstalledExtensionOptions, "homeDir" | "exists"> & { force?: string } = {}): boolean {
+	if (options.force === "1" || options.force === "true") return true;
+	return !hasLegacyTaskToolExtension(options);
+}
+
 /**
  * SumoCode — cathedral-themed Pi extension entry point.
  *
@@ -107,6 +119,31 @@ export default function sumocode(pi: ExtensionAPI): void {
 	installCathedralEditor(pi);
 	installInputHints(pi);
 	installApprovalGate(pi);
+	// The old global `~/.pi/agent/extensions/task-tool` extension registers the
+	// same `task` tool name and Pi treats duplicate tools as fatal. Until the
+	// user removes/disables that legacy extension, defer to it instead of
+	// crashing SumoCode startup. Native task takes over automatically once the
+	// legacy wrapper is gone.
+	if (shouldInstallNativeTaskTool({ force: process.env.SUMOCODE_NATIVE_TASK })) {
+		taskTool({
+			name: "task",
+			label: "Task",
+			description: [
+				"Run isolated pi subprocess tasks (single, chain, or parallel).",
+				"Optional model override (provider/modelId).",
+			].join(" "),
+			maxParallelTasks: 8,
+			maxConcurrency: 4,
+			collapsedItemCount: 10,
+			skillListLimit: 30,
+			systemPromptPatches: [
+				{
+					match: /\n\s*\n\s*in addition to the tools above, you may have access to other custom tools depending on the project\./i,
+					replace: "\n- task: never run this tool unless it's a skill run or I explictly ask you to",
+				},
+			],
+		})(pi);
+	}
 	installQuestionTool(pi);
 	installAnswerTool(pi);
 

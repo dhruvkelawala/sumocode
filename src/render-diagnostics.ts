@@ -325,7 +325,15 @@ function round(n: number): number {
 	return Math.round(n * 100) / 100;
 }
 
-const stats = new RenderStats();
+const GLOBAL_RENDER_STATS_KEY = "__sumoRenderDiagnosticsStats";
+const GLOBAL_EVENT_LOOP_PROBE_KEY = "__sumoRenderDiagnosticsEventLoopProbeStarted";
+type GlobalWithRenderDiagnostics = typeof globalThis & {
+	[GLOBAL_RENDER_STATS_KEY]?: RenderStats;
+	[GLOBAL_EVENT_LOOP_PROBE_KEY]?: boolean;
+};
+const globalForRenderDiagnostics = globalThis as GlobalWithRenderDiagnostics;
+if (!globalForRenderDiagnostics[GLOBAL_RENDER_STATS_KEY]) globalForRenderDiagnostics[GLOBAL_RENDER_STATS_KEY] = new RenderStats();
+const stats = globalForRenderDiagnostics[GLOBAL_RENDER_STATS_KEY] as RenderStats;
 
 /** Counters that other modules can poke into. No-op when diagnostics are disabled. */
 export const renderDiagnosticsCounters = {
@@ -589,6 +597,8 @@ function instrumentModuleLoad(): void {
  * way to detect "something is blocking the event loop" without knowing what.
  */
 function startEventLoopLagProbe(): void {
+	if (globalForRenderDiagnostics[GLOBAL_EVENT_LOOP_PROBE_KEY]) return;
+	globalForRenderDiagnostics[GLOBAL_EVENT_LOOP_PROBE_KEY] = true;
 	let lastTick = performance.now();
 	const probe = (): void => {
 		const now = performance.now();

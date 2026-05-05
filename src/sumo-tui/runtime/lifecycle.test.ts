@@ -125,7 +125,14 @@ describe("useTerminalDimensions", () => {
 });
 
 describe("LifecycleRuntime", () => {
-	afterEach(() => { setActiveEditorDraftController(undefined); });
+	afterEach(() => {
+		setActiveEditorDraftController(undefined);
+		delete process.env.SUMO_TUI;
+		// Always clear the global retained-runtime symbol between tests so a stale
+		// runtime from one test cannot bleed into another.
+		const host = globalThis as unknown as Record<symbol, unknown>;
+		delete host[Symbol.for("sumocode.activeSumoRuntime")];
+	});
 	it("registers process signal handlers exactly once", () => {
 		const fakeProcess = new FakeProcess();
 		const output = outputStub();
@@ -161,6 +168,63 @@ describe("LifecycleRuntime", () => {
 			CURSOR_COLOR_SET,
 			`${CURSOR_COLOR_RESET}${TERMINAL_BG_RESET}${TERMINAL_CLEANUP_SEQUENCE}`,
 		]);
+	});
+
+	it("keeps altscreen active across session switches when SUMO_TUI=1 env is set", () => {
+		process.env.SUMO_TUI = "1";
+		const fakeProcess = new FakeProcess();
+		const fakeInput = new FakeInput();
+		const output = outputStub();
+		const terminalSession = new TerminalSessionOwner({ output });
+		const runtime = createLifecycleRuntime({ process: fakeProcess, input: fakeInput, terminalSession });
+		const { pi, handlers } = buildPiStub();
+
+		runtime.installLifecycle(pi);
+		for (const handler of handlers.get("session_start") ?? []) {
+			handler({ type: "session_start" }, { hasUI: true });
+		}
+		for (const handler of handlers.get("session_shutdown") ?? []) {
+			handler({ type: "session_shutdown" }, { hasUI: true });
+		}
+
+		expect(terminalSession.getState().altscreenActive).toBe(true);
+		expect(output.writes).toEqual([
+			`${ALTSCREEN_ENTER_SEQUENCE}${TERMINAL_BG_SET}`,
+			MOUSE_SGR_ENABLE_SEQUENCE,
+			CURSOR_COLOR_SET,
+		]);
+		expect(fakeInput.rawModes).toEqual([true, false]);
+	});
+
+	it("keeps altscreen active across session switches when retained runtime is registered (e.g. --sumo-tui CLI flag)", () => {
+		// Simulate the --sumo-tui launch path: SumoInteractiveRuntime registers itself
+		// on the globalThis symbol but SUMO_TUI env is NOT set.
+		delete process.env.SUMO_TUI;
+		const host = globalThis as unknown as Record<symbol, { runtime: unknown }>;
+		host[Symbol.for("sumocode.activeSumoRuntime")] = { runtime: { fake: true } };
+
+		const fakeProcess = new FakeProcess();
+		const fakeInput = new FakeInput();
+		const output = outputStub();
+		const terminalSession = new TerminalSessionOwner({ output });
+		const runtime = createLifecycleRuntime({ process: fakeProcess, input: fakeInput, terminalSession });
+		const { pi, handlers } = buildPiStub();
+
+		runtime.installLifecycle(pi);
+		for (const handler of handlers.get("session_start") ?? []) {
+			handler({ type: "session_start" }, { hasUI: true });
+		}
+		for (const handler of handlers.get("session_shutdown") ?? []) {
+			handler({ type: "session_shutdown" }, { hasUI: true });
+		}
+
+		expect(terminalSession.getState().altscreenActive).toBe(true);
+		expect(output.writes).toEqual([
+			`${ALTSCREEN_ENTER_SEQUENCE}${TERMINAL_BG_SET}`,
+			MOUSE_SGR_ENABLE_SEQUENCE,
+			CURSOR_COLOR_SET,
+		]);
+		expect(fakeInput.rawModes).toEqual([true, false]);
 	});
 
 	it("session_start ignores non-UI contexts", () => {

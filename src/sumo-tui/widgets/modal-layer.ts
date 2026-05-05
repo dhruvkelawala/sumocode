@@ -2,7 +2,7 @@ import { truncateToWidth, visibleWidth, type Component } from "@mariozechner/pi-
 import { SumoNode } from "../layout/node.js";
 import type { YogaNode } from "../layout/yoga.js";
 import type { CellBuffer, Rect } from "../render/buffer.js";
-import { CATHEDRAL_TOKENS } from "../../tokens.js";
+import { activeThemeColors } from "../../themes/index.js";
 import { ModalManager, type ModalManagerOptions } from "./modal.js";
 import { cathedralBackdropCell } from "../cathedral/theme-bridge.js";
 
@@ -43,7 +43,7 @@ function padVisible(text: string, width: number): string {
 }
 
 function centerRows(rows: readonly string[], width: number, height: number): string[] {
-	const blank = `${bg(CATHEDRAL_TOKENS.colors.surfaceRecess)}${" ".repeat(width)}${RESET}`;
+	const blank = `${bg(activeThemeColors().surfaceRecess)}${" ".repeat(width)}${RESET}`;
 	const out = Array.from({ length: height }, () => blank);
 	if (rows.length === 0) return [];
 	const top = Math.max(0, Math.floor((height - rows.length) / 2));
@@ -51,7 +51,7 @@ function centerRows(rows: readonly string[], width: number, height: number): str
 		const row = rows[index] ?? "";
 		const left = Math.max(0, Math.floor((width - visibleWidth(row)) / 2));
 		const right = Math.max(0, width - left - visibleWidth(row));
-		out[top + index] = `${bg(CATHEDRAL_TOKENS.colors.surfaceRecess)}${" ".repeat(left)}${row}${" ".repeat(right)}${RESET}`;
+		out[top + index] = `${bg(activeThemeColors().surfaceRecess)}${" ".repeat(left)}${row}${" ".repeat(right)}${RESET}`;
 	}
 	return out;
 }
@@ -73,8 +73,8 @@ export class ModalSurfaceComponent implements Component {
 	public render(width: number): string[] {
 		const outerWidth = Math.max(12, width);
 		const innerWidth = Math.max(1, outerWidth - 2);
-		const border = fg(CATHEDRAL_TOKENS.colors.divider);
-		const surface = bg(CATHEDRAL_TOKENS.colors.surfaceLifted);
+		const border = fg(activeThemeColors().divider);
+		const surface = bg(activeThemeColors().surfaceLifted);
 		const childRows = this.inner.render(innerWidth);
 		if (childRows.length === 0) return [];
 		const lines: string[] = [];

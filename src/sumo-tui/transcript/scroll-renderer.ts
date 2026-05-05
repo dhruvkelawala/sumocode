@@ -9,7 +9,7 @@
  *   docs/ui/bible/12-scroll-done.html
  */
 import { truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
-import { CATHEDRAL_TOKENS } from "../../tokens.js";
+import { activeThemeColors } from "../../themes/index.js";
 import { lineToAnsi, span, textLine, type Span } from "../render/primitives.js";
 import type { DelegationStatus, DelegationViewModel, ToolCallViewModel } from "./view-model.js";
 
@@ -21,13 +21,6 @@ const STATUS_GLYPH: Record<DelegationStatus, string> = {
 	cancelled: "✗",
 };
 
-const STATUS_COLOR: Record<DelegationStatus, string> = {
-	queued: CATHEDRAL_TOKENS.colors.foregroundDim,
-	running: CATHEDRAL_TOKENS.colors.states.tool,
-	success: CATHEDRAL_TOKENS.colors.states.idle,
-	error: CATHEDRAL_TOKENS.colors.states.approval,
-	cancelled: CATHEDRAL_TOKENS.colors.foregroundDim,
-};
 
 const STATUS_LABEL: Record<DelegationStatus, string> = {
 	queued: "queued",
@@ -41,15 +34,32 @@ const TOOL_STATUS_GLYPH: Record<string, string> = {
 	pending: "○", running: "▶", success: "✓", error: "✗", cancelled: "✗",
 };
 
-const TOOL_STATUS_COLOR: Record<string, string> = {
-	pending: CATHEDRAL_TOKENS.colors.foregroundDim,
-	running: CATHEDRAL_TOKENS.colors.states.tool,
-	success: CATHEDRAL_TOKENS.colors.states.idle,
-	error: CATHEDRAL_TOKENS.colors.states.approval,
-	cancelled: CATHEDRAL_TOKENS.colors.foregroundDim,
-};
 
 const SCRIBE_BODY_MAX_LINES = 25;
+
+function delegationStatusColor(status: DelegationStatus): string {
+	const colors = activeThemeColors();
+	const statusColor: Record<DelegationStatus, string> = {
+		queued: colors.foregroundDim,
+		running: colors.states.tool,
+		success: colors.states.idle,
+		error: colors.states.approval,
+		cancelled: colors.foregroundDim,
+	};
+	return statusColor[status];
+}
+
+function toolStatusColor(status: string): string {
+	const colors = activeThemeColors();
+	const statusColor: Record<string, string> = {
+		pending: colors.foregroundDim,
+		running: colors.states.tool,
+		success: colors.states.idle,
+		error: colors.states.approval,
+		cancelled: colors.foregroundDim,
+	};
+	return statusColor[status] ?? colors.foregroundDim;
+}
 
 function singleLinePreview(text: string): string {
 	return text.replace(/[\r\n]+/g, " ").replace(/\s+/g, " ").trim();
@@ -90,18 +100,18 @@ function formatElapsed(ms?: number): string | undefined {
 
 function scrollHeader(delegation: DelegationViewModel, width: number): string {
 	const statusGlyph = STATUS_GLYPH[delegation.status];
-	const statusColor = STATUS_COLOR[delegation.status];
+	const statusColor = delegationStatusColor(delegation.status);
 	const statusLabel = STATUS_LABEL[delegation.status];
 
 	const left: Span[] = [
-		span("━━━ ", { fg: CATHEDRAL_TOKENS.colors.divider }),
-		span("[scroll]", { fg: CATHEDRAL_TOKENS.colors.accent }),
-		span(`  ${delegation.title} `, { fg: CATHEDRAL_TOKENS.colors.foreground }),
+		span("━━━ ", { fg: activeThemeColors().divider }),
+		span("[scroll]", { fg: activeThemeColors().accent }),
+		span(`  ${delegation.title} `, { fg: activeThemeColors().foreground }),
 	];
 	const right: Span[] = [
-		span(" ━━━ ", { fg: CATHEDRAL_TOKENS.colors.divider }),
+		span(" ━━━ ", { fg: activeThemeColors().divider }),
 		span(statusGlyph, { fg: statusColor }),
-		span(` ${statusLabel}`, { fg: CATHEDRAL_TOKENS.colors.foreground }),
+		span(` ${statusLabel}`, { fg: activeThemeColors().foreground }),
 	];
 
 	const leftWidth = left.reduce((w, s) => w + visibleWidth(s.text), 0);
@@ -110,7 +120,7 @@ function scrollHeader(delegation: DelegationViewModel, width: number): string {
 
 	return lineToAnsi(textLine([
 		...left,
-		span("━".repeat(ruleLen), { fg: CATHEDRAL_TOKENS.colors.divider }),
+		span("━".repeat(ruleLen), { fg: activeThemeColors().divider }),
 		...right,
 	]), { width });
 }
@@ -120,9 +130,9 @@ function scrollPromptRow(text: string, width: number): string {
 	const clipped = visibleWidth(text) > contentWidth ? truncateToWidth(text, contentWidth, "") : text;
 	return lineToAnsi(textLine([
 		span("   "),
-		span("│", { fg: CATHEDRAL_TOKENS.colors.divider }),
+		span("│", { fg: activeThemeColors().divider }),
 		span(" "),
-		span(clipped, { fg: CATHEDRAL_TOKENS.colors.foregroundDim }),
+		span(clipped, { fg: activeThemeColors().foregroundDim }),
 	]), { width });
 }
 
@@ -138,19 +148,19 @@ function scrollPromptRows(prompt: string | undefined, width: number): string[] {
 	const label = "task";
 	const left: Span[] = [
 		span("   "),
-		span("┌ ", { fg: CATHEDRAL_TOKENS.colors.divider }),
-		span(label, { fg: CATHEDRAL_TOKENS.colors.foregroundDim }),
-		span(" ", { fg: CATHEDRAL_TOKENS.colors.divider }),
+		span("┌ ", { fg: activeThemeColors().divider }),
+		span(label, { fg: activeThemeColors().foregroundDim }),
+		span(" ", { fg: activeThemeColors().divider }),
 	];
 	const leftWidth = left.reduce((w, s) => w + visibleWidth(s.text), 0);
 	const ruleLen = Math.max(0, width - leftWidth - 2);
 	return [
-		lineToAnsi(textLine([...left, span("─".repeat(ruleLen), { fg: CATHEDRAL_TOKENS.colors.divider }), span("  ")]), { width }),
+		lineToAnsi(textLine([...left, span("─".repeat(ruleLen), { fg: activeThemeColors().divider }), span("  ")]), { width }),
 		...lines.map((line) => scrollPromptRow(line, width)),
 		lineToAnsi(textLine([
 			span("   "),
-			span("└", { fg: CATHEDRAL_TOKENS.colors.divider }),
-			span("─".repeat(Math.max(0, width - 6)), { fg: CATHEDRAL_TOKENS.colors.divider }),
+			span("└", { fg: activeThemeColors().divider }),
+			span("─".repeat(Math.max(0, width - 6)), { fg: activeThemeColors().divider }),
 			span("  "),
 		]), { width }),
 	];
@@ -165,9 +175,9 @@ function scribeHeader(delegation: DelegationViewModel, width: number): string {
 
 	const left: Span[] = [
 		span("   "),
-		span("┌ ", { fg: CATHEDRAL_TOKENS.colors.divider }),
-		span(meta, { fg: CATHEDRAL_TOKENS.colors.foregroundDim }),
-		span(" ", { fg: CATHEDRAL_TOKENS.colors.divider }),
+		span("┌ ", { fg: activeThemeColors().divider }),
+		span(meta, { fg: activeThemeColors().foregroundDim }),
+		span(" ", { fg: activeThemeColors().divider }),
 	];
 	const leftWidth = left.reduce((w, s) => w + visibleWidth(s.text), 0);
 	// Match bottom border alignment: indent(3) + └(1) + dashes + trailing(2)
@@ -178,14 +188,14 @@ function scribeHeader(delegation: DelegationViewModel, width: number): string {
 
 	return lineToAnsi(textLine([
 		...left,
-		span("─".repeat(ruleLen), { fg: CATHEDRAL_TOKENS.colors.divider }),
+		span("─".repeat(ruleLen), { fg: activeThemeColors().divider }),
 		span(" ".repeat(trailing)),
 	]), { width });
 }
 
 function nestedToolRow(tool: ToolCallViewModel, width: number): string {
 	const glyph = TOOL_STATUS_GLYPH[tool.status] ?? "○";
-	const color = TOOL_STATUS_COLOR[tool.status] ?? CATHEDRAL_TOKENS.colors.foregroundDim;
+	const color = toolStatusColor(tool.status);
 	const target = toolTarget(tool);
 	const prefixWidth = visibleWidth(`   │ ${glyph} [${tool.name}]  `);
 	const contentWidth = Math.max(1, width - prefixWidth);
@@ -193,20 +203,20 @@ function nestedToolRow(tool: ToolCallViewModel, width: number): string {
 
 	return lineToAnsi(textLine([
 		span("   "),
-		span("│", { fg: CATHEDRAL_TOKENS.colors.divider }),
+		span("│", { fg: activeThemeColors().divider }),
 		span(" "),
 		span(glyph, { fg: color }),
 		span(" "),
-		span(`[${tool.name}]`, { fg: CATHEDRAL_TOKENS.colors.accent }),
+		span(`[${tool.name}]`, { fg: activeThemeColors().accent }),
 		span("  "),
-		span(clipped, { fg: CATHEDRAL_TOKENS.colors.foreground }),
+		span(clipped, { fg: activeThemeColors().foreground }),
 	]), { width });
 }
 
 function scribeBlankRow(width: number): string {
 	return lineToAnsi(textLine([
 		span("   "),
-		span("│", { fg: CATHEDRAL_TOKENS.colors.divider }),
+		span("│", { fg: activeThemeColors().divider }),
 	]), { width });
 }
 
@@ -215,17 +225,17 @@ function scribeTextRow(text: string, width: number): string {
 	const clipped = visibleWidth(text) > contentWidth ? truncateToWidth(text, contentWidth, "") : text;
 	return lineToAnsi(textLine([
 		span("   "),
-		span("│", { fg: CATHEDRAL_TOKENS.colors.divider }),
+		span("│", { fg: activeThemeColors().divider }),
 		span(" "),
-		span(clipped, { fg: CATHEDRAL_TOKENS.colors.foreground }),
+		span(clipped, { fg: activeThemeColors().foreground }),
 	]), { width });
 }
 
 function scribeCollapsedRow(remaining: number, width: number): string {
 	return lineToAnsi(textLine([
 		span("   "),
-		span("│", { fg: CATHEDRAL_TOKENS.colors.divider }),
-		span(` … ${remaining} lines collapsed`, { fg: CATHEDRAL_TOKENS.colors.foregroundDim }),
+		span("│", { fg: activeThemeColors().divider }),
+		span(` … ${remaining} lines collapsed`, { fg: activeThemeColors().foregroundDim }),
 	]), { width });
 }
 
@@ -252,8 +262,8 @@ function scribeMetadataRow(delegation: DelegationViewModel, width: number): stri
 
 	return lineToAnsi(textLine([
 		span("   "),
-		span("│", { fg: CATHEDRAL_TOKENS.colors.divider }),
-		span(` ${text}`, { fg: CATHEDRAL_TOKENS.colors.foregroundDim }),
+		span("│", { fg: activeThemeColors().divider }),
+		span(` ${text}`, { fg: activeThemeColors().foregroundDim }),
 	]), { width });
 }
 
@@ -261,8 +271,8 @@ function scribeBottom(width: number): string {
 	const ruleLen = Math.max(0, width - 6); // 3(indent) + 1(└) + dashes + 2(trailing)
 	return lineToAnsi(textLine([
 		span("   "),
-		span("└", { fg: CATHEDRAL_TOKENS.colors.divider }),
-		span("─".repeat(ruleLen), { fg: CATHEDRAL_TOKENS.colors.divider }),
+		span("└", { fg: activeThemeColors().divider }),
+		span("─".repeat(ruleLen), { fg: activeThemeColors().divider }),
 		span("  "),
 	]), { width });
 }

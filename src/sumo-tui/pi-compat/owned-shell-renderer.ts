@@ -35,7 +35,7 @@ import {
 	JUSTIFY_CENTER,
 	type Yoga,
 } from "../layout/yoga.js";
-import { CATHEDRAL_TOKENS } from "../../tokens.js";
+import { activeThemeColors } from "../../themes/index.js";
 import { withPersistentStyle } from "../render/primitives.js";
 import { CellBuffer, type Rect } from "../render/buffer.js";
 import { composite, dispatchMouseEvent, type CompositeSelectionPass, type HardwareCursor } from "../render/compositor.js";
@@ -499,7 +499,7 @@ export class OwnedShellRenderer {
 			const top = chatBottom - height;
 			if (top < 0) return;
 
-			const T = CATHEDRAL_TOKENS.colors;
+			const T = activeThemeColors();
 			for (let i = 0; i < height; i += 1) {
 				const plain = (contentLines[i] ?? "").replace(/\x1b\[[0-9;]*m/g, "");
 				const padded = plain.length < chatWidth ? `${plain}${" ".repeat(chatWidth - plain.length)}` : plain.slice(0, chatWidth);

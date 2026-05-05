@@ -14,7 +14,7 @@
  */
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { CATHEDRAL_TOKENS } from "./tokens.js";
+import { CATHEDRAL_INDICATOR_FRAMES as THEME_CATHEDRAL_INDICATOR_FRAMES, CATHEDRAL_INDICATOR_INTERVAL_MS as THEME_CATHEDRAL_INDICATOR_INTERVAL_MS, getActiveTheme } from "./themes/index.js";
 
 /**
  * Cathedral spinner frames — a hand-crafted flower-pulse that shares the
@@ -33,7 +33,10 @@ import { CATHEDRAL_TOKENS } from "./tokens.js";
  *   ❋ — heavy propeller, work-in-progress
  *   ❉ — balloon-spoked pinwheel, settled medallion
  */
-export const CATHEDRAL_INDICATOR_FRAMES = ["◌", "✦", "❖", "✺", "❋", "❉"] as const;
+
+export const CATHEDRAL_INDICATOR_FRAMES = THEME_CATHEDRAL_INDICATOR_FRAMES;
+
+export const CATHEDRAL_INDICATOR_INTERVAL_MS = THEME_CATHEDRAL_INDICATOR_INTERVAL_MS;
 
 const RESET = "\u001b[0m";
 
@@ -71,15 +74,20 @@ export function renderIndicator(
  * deliberately slower than ora (80ms) and Claude Code (~100ms) so the bloom
  * reads as scriptorium brushwork rather than a frantic CLI spinner.
  */
-export const CATHEDRAL_INDICATOR_INTERVAL_MS = 150;
+export const WORKING_INDICATOR_INTERVAL_MS = THEME_CATHEDRAL_INDICATOR_INTERVAL_MS;
 export const WORKING_INDICATOR_MIN_WIDTH = 80;
 
 /**
  * Pre-colorize each Cathedral frame with the accent token so Pi can render the
  * array verbatim. Pi handles cycling itself.
  */
-export function buildCathedralIndicatorFrames(hex: string = CATHEDRAL_TOKENS.colors.accent): string[] {
+export function buildCathedralIndicatorFrames(hex: string = getActiveTheme().tokens.colors.accent): string[] {
 	return CATHEDRAL_INDICATOR_FRAMES.map((_, i) => renderIndicator(i, CATHEDRAL_INDICATOR_FRAMES, hex));
+}
+
+export function buildActiveThemeIndicatorFrames(): string[] {
+	const theme = getActiveTheme();
+	return theme.workingIndicator.frames.map((_, i) => renderIndicator(i, theme.workingIndicator.frames, theme.tokens.colors.accent));
 }
 
 /**
@@ -133,9 +141,10 @@ export function installWorkingIndicator(pi: ExtensionAPI): void {
 		if (!ctx.hasUI) return;
 		if (!shouldInstallWorkingIndicator()) return;
 
+		const theme = getActiveTheme();
 		ctx.ui.setWorkingIndicator({
-			frames: buildCathedralIndicatorFrames(),
-			intervalMs: CATHEDRAL_INDICATOR_INTERVAL_MS,
+			frames: buildActiveThemeIndicatorFrames(),
+			intervalMs: theme.workingIndicator.intervalMs,
 		});
 	});
 }

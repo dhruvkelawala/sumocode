@@ -2,7 +2,7 @@ import { EmptyChatQuoteNode } from "../cathedral/empty-chat-quote.js";
 import { createSidebarTree, type SidebarLayoutSnapshot } from "../cathedral/sidebar-tree.js";
 import { SumoNode } from "../layout/node.js";
 import { DIRECTION_LTR, FLEX_DIRECTION_COLUMN, loadYoga, type Yoga } from "../layout/yoga.js";
-import { CATHEDRAL_TOKENS } from "../../tokens.js";
+import { activeThemeColors } from "../../themes/index.js";
 import { colorHex } from "../cathedral/ansi.js";
 import { bufferToAnsiLines } from "../render/ansi-writer.js";
 import { CellBuffer, type Rect } from "../render/buffer.js";
@@ -105,27 +105,27 @@ async function createTree(yoga: Yoga, scenario: string): Promise<ReturnType<type
 
 	if (scenario === "sidebar") {
 		const text = new DemoTextNode(yoga.Node.create(), [
-			`${colorHex("SYSTEM >", CATHEDRAL_TOKENS.colors.foregroundDim)} ${colorHex("Sidebar fixture: all UX_SPEC §4.2 panels are populated for visual verification.", CATHEDRAL_TOKENS.colors.foreground)}`,
+			`${colorHex("SYSTEM >", activeThemeColors().foregroundDim)} ${colorHex("Sidebar fixture: all UX_SPEC §4.2 panels are populated for visual verification.", activeThemeColors().foreground)}`,
 		], tree.root);
 		placeChatOverlay(text);
 		return tree;
 	}
 
 	const text = new DemoTextNode(yoga.Node.create(), [
-		`${colorHex("USER >", CATHEDRAL_TOKENS.colors.accent)} ${colorHex("Can you polish the cathedral chat and sidebar without expanding v1 scope?", CATHEDRAL_TOKENS.colors.foreground)}`,
-		`${colorHex("SUMO >", CATHEDRAL_TOKENS.colors.states.idle)} ${colorHex("Yes — keeping DECISIONS locked. Code block theme audit sample:", CATHEDRAL_TOKENS.colors.foreground)}`,
-		colorHex("       ```ts", CATHEDRAL_TOKENS.colors.foregroundDim),
-		`${colorHex("       function", CATHEDRAL_TOKENS.colors.accent)} ${colorHex("initializeCathedralEngine", CATHEDRAL_TOKENS.colors.states.thinking)}${colorHex("(config) {", CATHEDRAL_TOKENS.colors.foreground)}`,
-		`${colorHex("         const", CATHEDRAL_TOKENS.colors.accent)} ${colorHex("status", CATHEDRAL_TOKENS.colors.foreground)} ${colorHex("=", CATHEDRAL_TOKENS.colors.foreground)} ${colorHex("\"yellow_protocol_active\"", CATHEDRAL_TOKENS.colors.states.idle)}${colorHex(";", CATHEDRAL_TOKENS.colors.foreground)}`,
-		`${colorHex("         return", CATHEDRAL_TOKENS.colors.accent)} ${colorHex("status", CATHEDRAL_TOKENS.colors.foreground)}${colorHex(";", CATHEDRAL_TOKENS.colors.foreground)}`,
-		colorHex("       }", CATHEDRAL_TOKENS.colors.foreground),
-		colorHex("       ```", CATHEDRAL_TOKENS.colors.foregroundDim),
-		`${colorHex("USER >", CATHEDRAL_TOKENS.colors.accent)} ${colorHex("Show the htop HUD and memory bullets too.", CATHEDRAL_TOKENS.colors.foreground)}`,
-		`${colorHex("TOOL >", CATHEDRAL_TOKENS.colors.states.tool)} ${colorHex("$ pnpm test", CATHEDRAL_TOKENS.colors.foreground)}`,
-		colorHex("       ✓ src/sidebar-token-bar.test.ts", CATHEDRAL_TOKENS.colors.states.idle),
-		colorHex("       ✓ src/sidebar-mcp-pills.test.ts", CATHEDRAL_TOKENS.colors.states.idle),
-		colorHex("       ✓ src/empty-chat-quote.test.ts", CATHEDRAL_TOKENS.colors.states.idle),
-		`${colorHex("SUMO >", CATHEDRAL_TOKENS.colors.states.idle)} ${colorHex("Done. ACTIVE_CONTEXT, MCP, ACTIVE_MEMORY, and METRICS now share the §4.2 carved header style.", CATHEDRAL_TOKENS.colors.foreground)}`,
+		`${colorHex("USER >", activeThemeColors().accent)} ${colorHex("Can you polish the cathedral chat and sidebar without expanding v1 scope?", activeThemeColors().foreground)}`,
+		`${colorHex("SUMO >", activeThemeColors().states.idle)} ${colorHex("Yes — keeping DECISIONS locked. Code block theme audit sample:", activeThemeColors().foreground)}`,
+		colorHex("       ```ts", activeThemeColors().foregroundDim),
+		`${colorHex("       function", activeThemeColors().accent)} ${colorHex("initializeCathedralEngine", activeThemeColors().states.thinking)}${colorHex("(config) {", activeThemeColors().foreground)}`,
+		`${colorHex("         const", activeThemeColors().accent)} ${colorHex("status", activeThemeColors().foreground)} ${colorHex("=", activeThemeColors().foreground)} ${colorHex("\"yellow_protocol_active\"", activeThemeColors().states.idle)}${colorHex(";", activeThemeColors().foreground)}`,
+		`${colorHex("         return", activeThemeColors().accent)} ${colorHex("status", activeThemeColors().foreground)}${colorHex(";", activeThemeColors().foreground)}`,
+		colorHex("       }", activeThemeColors().foreground),
+		colorHex("       ```", activeThemeColors().foregroundDim),
+		`${colorHex("USER >", activeThemeColors().accent)} ${colorHex("Show the htop HUD and memory bullets too.", activeThemeColors().foreground)}`,
+		`${colorHex("TOOL >", activeThemeColors().states.tool)} ${colorHex("$ pnpm test", activeThemeColors().foreground)}`,
+		colorHex("       ✓ src/sidebar-token-bar.test.ts", activeThemeColors().states.idle),
+		colorHex("       ✓ src/sidebar-mcp-pills.test.ts", activeThemeColors().states.idle),
+		colorHex("       ✓ src/empty-chat-quote.test.ts", activeThemeColors().states.idle),
+		`${colorHex("SUMO >", activeThemeColors().states.idle)} ${colorHex("Done. ACTIVE_CONTEXT, MCP, ACTIVE_MEMORY, and METRICS now share the §4.2 carved header style.", activeThemeColors().foreground)}`,
 	], tree.root);
 	placeChatOverlay(text);
 	return tree;

@@ -1,23 +1,7 @@
-export const CATHEDRAL_TOKENS = {
-	colors: {
-		background: "#1A1511",
-		surface: "#241D17",
-		surfaceRecess: "#120D0A",
-		surfaceLifted: "#3D3024",
-		foreground: "#F5E6C8",
-		foregroundDim: "#8B7A63",
-		divider: "#5A4D3C",
-		accent: "#D97706",
-		states: {
-			idle: "#7FB069",
-			thinking: "#E8B339",
-			tool: "#5B9BD5",
-			approval: "#C1443E",
-			learning: "#8E7AB5",
-		},
-	},
-} as const;
+import { CATHEDRAL_THEME, SUMOCODE_STATE_NAMES, type SumoCodeState } from "./themes/index.js";
 
-export type SumoCodeState = keyof typeof CATHEDRAL_TOKENS.colors.states;
+export const CATHEDRAL_TOKENS = CATHEDRAL_THEME.tokens;
 
-export const SUMOCODE_STATES = Object.keys(CATHEDRAL_TOKENS.colors.states) as SumoCodeState[];
+export type { SumoCodeState };
+
+export const SUMOCODE_STATES = [...SUMOCODE_STATE_NAMES] as SumoCodeState[];

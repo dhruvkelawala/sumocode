@@ -3,7 +3,7 @@ import type { Component, OverlayOptions } from "@mariozechner/pi-tui";
 import { Key, matchesKey, truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
 import type { ThinkingLevel } from "./footer.js";
 import { showDivineQuery } from "./divine-query.js";
-import { CATHEDRAL_TOKENS } from "./tokens.js";
+import { activeThemeColors } from "./themes/index.js";
 
 export type PaletteMode = "SESSION" | "MODEL" | "THINKING" | "MEMORY" | "THEME" | "SETTINGS";
 
@@ -54,8 +54,13 @@ export const COMMAND_PALETTE_MODE_ROWS: readonly PaletteRow[] = [
 
 const RESET = "\u001b[0m";
 const FG_RESET = "\u001b[39m";
-const PANEL_BG = CATHEDRAL_TOKENS.colors.surfaceLifted;
-const PALETTE_DIVIDER = CATHEDRAL_TOKENS.colors.divider;
+function panelBg(): string {
+	return activeThemeColors().surfaceLifted;
+}
+
+function paletteDivider(): string {
+	return activeThemeColors().divider;
+}
 
 function ansiColor(hex: string, channel: 38 | 48): string {
 	const normalized = hex.replace("#", "");
@@ -70,23 +75,23 @@ function fg(text: string, hex: string): string {
 }
 
 function dim(text: string): string {
-	return fg(text, CATHEDRAL_TOKENS.colors.foregroundDim);
+	return fg(text, activeThemeColors().foregroundDim);
 }
 
 function accent(text: string): string {
-	return fg(text, CATHEDRAL_TOKENS.colors.accent);
+	return fg(text, activeThemeColors().accent);
 }
 
 function dividerText(text: string): string {
-	return fg(text, PALETTE_DIVIDER);
+	return fg(text, paletteDivider());
 }
 
 function foreground(text: string): string {
-	return fg(text, CATHEDRAL_TOKENS.colors.foreground);
+	return fg(text, activeThemeColors().foreground);
 }
 
 function cursorCell(): string {
-	return `${ansiColor(CATHEDRAL_TOKENS.colors.accent, 48)}${ansiColor(CATHEDRAL_TOKENS.colors.background, 38)} ${FG_RESET}${ansiColor(PANEL_BG, 48)}`;
+	return `${ansiColor(activeThemeColors().accent, 48)}${ansiColor(activeThemeColors().background, 38)} ${FG_RESET}${ansiColor(panelBg(), 48)}`;
 }
 
 function padToWidth(text: string, width: number): string {
@@ -96,7 +101,7 @@ function padToWidth(text: string, width: number): string {
 }
 
 function panelLine(text: string, width: number): string {
-	return `${ansiColor(PANEL_BG, 48)}${ansiColor(CATHEDRAL_TOKENS.colors.foreground, 38)}${padToWidth(text, width)}${RESET}`;
+	return `${ansiColor(panelBg(), 48)}${ansiColor(activeThemeColors().foreground, 38)}${padToWidth(text, width)}${RESET}`;
 }
 
 function center(text: string, width: number): string {

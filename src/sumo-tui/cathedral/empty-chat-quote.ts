@@ -1,4 +1,4 @@
-import { CATHEDRAL_TOKENS } from "../../tokens.js";
+import { activeThemeColors } from "../../themes/index.js";
 import { SumoNode } from "../layout/node.js";
 import { MEASURE_MODE_EXACTLY, type MeasureMode, type YogaNode } from "../layout/yoga.js";
 import type { CellBuffer, Rect } from "../render/buffer.js";
@@ -27,7 +27,7 @@ function centerPlain(text: string, width: number): string {
 }
 
 export function renderEmptyChatQuoteLines(width: number): string[] {
-	const quoteColor = CATHEDRAL_TOKENS.colors.foregroundDim;
+	const quoteColor = activeThemeColors().foregroundDim;
 	return [
 		padAnsiToWidth(italic(colorHex(centerPlain(EMPTY_CHAT_QUOTE_TEXT[0], width), quoteColor)), width),
 		padAnsiToWidth(italic(colorHex(centerPlain(EMPTY_CHAT_QUOTE_TEXT[1], width), quoteColor)), width),

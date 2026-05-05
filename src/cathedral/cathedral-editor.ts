@@ -40,7 +40,7 @@ import type {
 import { CustomEditor } from "@mariozechner/pi-coding-agent";
 import { CURSOR_MARKER, truncateToWidth, visibleWidth, type EditorTheme, type TUI } from "@mariozechner/pi-tui";
 import { sessionHasMessages as cachedSessionHasMessages } from "../session-cache.js";
-import { CATHEDRAL_TOKENS } from "../tokens.js";
+import { activeThemeColors } from "../themes/index.js";
 import { setActiveEditorDraftController } from "./editor-draft-state.js";
 import {
 	INPUT_FRAME_LABEL_ACTIVE,
@@ -92,14 +92,21 @@ function color(text: string, hex: string): string {
 	return `${fg(hex)}${text}${RESET}`;
 }
 
-const DIVIDER_FG = fg(CATHEDRAL_TOKENS.colors.divider);
-const RECESS_BG = bg(CATHEDRAL_TOKENS.colors.surfaceRecess);
+function dividerFg(): string {
+	return fg(activeThemeColors().divider);
+}
+
+function recessBg(): string {
+	return bg(activeThemeColors().surfaceRecess);
+}
+
 const RESET_BG = "\u001b[49m";
 
 function withFrameBackground(line: string): string {
 	// Any nested RESET clears the background. Re-apply the frame background so
 	// the whole input frame row remains the recessed #120D0A Bible well.
-	return `${RECESS_BG}${line.replaceAll(RESET, `${RESET}${RECESS_BG}`)}${RESET_BG}`;
+	const frameBg = recessBg();
+	return `${frameBg}${line.replaceAll(RESET, `${RESET}${frameBg}`)}${RESET_BG}`;
 }
 
 function maybeWithFrameBackground(line: string, enabled: boolean): string {
@@ -111,23 +118,24 @@ function maybeWithFrameBackground(line: string, enabled: boolean): string {
  * input is label-less; splash uses `DIVINE INVOCATION`.
  */
 function renderTopBorder(width: number, label: string | undefined, paintBackground: boolean): string {
-	if (width < 6) return maybeWithFrameBackground(color("─".repeat(width), CATHEDRAL_TOKENS.colors.divider), paintBackground);
+	if (width < 6) return maybeWithFrameBackground(color("─".repeat(width), activeThemeColors().divider), paintBackground);
 	const inner = width - 2;
-	if (!label) return maybeWithFrameBackground(color(`┌${"─".repeat(inner)}┐`, CATHEDRAL_TOKENS.colors.divider), paintBackground);
+	if (!label) return maybeWithFrameBackground(color(`┌${"─".repeat(inner)}┐`, activeThemeColors().divider), paintBackground);
 	const leftDashes = "─".repeat(Math.min(1, inner));
 	const maxLabelText = Math.max(0, inner - leftDashes.length - 2); // 2 = spaces around label
 	const labelText = ellipsize(label, maxLabelText);
 	const labelInner = labelText.length > 0 ? ` ${labelText} ` : "";
 	const rightDashes = "─".repeat(Math.max(0, inner - leftDashes.length - labelInner.length));
-	const left = `${DIVIDER_FG}┌${leftDashes}`;
-	const labelSegment = color(labelInner, CATHEDRAL_TOKENS.colors.accent);
-	const right = `${DIVIDER_FG}${rightDashes}┐${RESET}`;
+	const divider = dividerFg();
+	const left = `${divider}┌${leftDashes}`;
+	const labelSegment = color(labelInner, activeThemeColors().accent);
+	const right = `${divider}${rightDashes}┐${RESET}`;
 	return maybeWithFrameBackground(`${left}${labelSegment}${right}`, paintBackground);
 }
 
 function renderBottomBorder(width: number, paintBackground: boolean): string {
-	if (width < 6) return maybeWithFrameBackground(color("─".repeat(width), CATHEDRAL_TOKENS.colors.divider), paintBackground);
-	return maybeWithFrameBackground(color(`└${"─".repeat(width - 2)}┘`, CATHEDRAL_TOKENS.colors.divider), paintBackground);
+	if (width < 6) return maybeWithFrameBackground(color("─".repeat(width), activeThemeColors().divider), paintBackground);
+	return maybeWithFrameBackground(color(`└${"─".repeat(width - 2)}┘`, activeThemeColors().divider), paintBackground);
 }
 
 /**
@@ -146,7 +154,8 @@ function wrapRow(inner: string, width: number, paintBackground: boolean): string
 	const visible = visibleLength(fitted);
 	const pad = Math.max(0, innerWidth - visible);
 	const padded = `${fitted}${" ".repeat(pad)}`;
-	return maybeWithFrameBackground(`${DIVIDER_FG}│${RESET}${padded}${DIVIDER_FG}│${RESET}`, paintBackground);
+	const divider = dividerFg();
+	return maybeWithFrameBackground(`${divider}│${RESET}${padded}${divider}│${RESET}`, paintBackground);
 }
 
 /**
@@ -163,9 +172,10 @@ function wrapActiveRow(inner: string, width: number, paintBackground: boolean, i
 	const pad = Math.max(0, contentWidth - visible);
 	const padded = `${fitted}${" ".repeat(pad)}`;
 	const prompt = isFirstRow
-		? ` ${color(">", CATHEDRAL_TOKENS.colors.accent)} `
+		? ` ${color(">", activeThemeColors().accent)} `
 		: "   ";
-	return maybeWithFrameBackground(`${DIVIDER_FG}│${RESET}${prompt}${padded}${DIVIDER_FG}│${RESET}`, paintBackground);
+	const divider = dividerFg();
+	return maybeWithFrameBackground(`${divider}│${RESET}${prompt}${padded}${divider}│${RESET}`, paintBackground);
 }
 
 function centerRow(row: string, width: number): string {
@@ -279,10 +289,10 @@ class CathedralEditor extends CustomEditor {
 				// Preserve Pi's zero-width cursor marker while painting our ghost text.
 				// Without this, TUI.positionHardwareCursor() sees no marker on the
 				// splash empty state and emits \x1b[?25l after every render.
-				const prompt = ` ${color(">", CATHEDRAL_TOKENS.colors.accent)} ${CURSOR_MARKER}`;
+				const prompt = ` ${color(">", activeThemeColors().accent)} ${CURSOR_MARKER}`;
 				const maxPlaceholder = Math.max(0, frameWidth - 2 - visibleLength(prompt));
 				const placeholder = ellipsize(INPUT_FRAME_PLACEHOLDER, maxPlaceholder);
-				const ghost = `${prompt}${color(placeholder, CATHEDRAL_TOKENS.colors.foregroundDim)}`;
+				const ghost = `${prompt}${color(placeholder, activeThemeColors().foregroundDim)}`;
 				return fullRow(wrapRow(ghost, frameWidth, paintFrameBackground));
 			}
 			if (!splash) return wrapActiveRow(row, frameWidth, paintFrameBackground, isFirstContent);

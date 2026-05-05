@@ -14,7 +14,7 @@ import { BorderedLoader } from "@mariozechner/pi-coding-agent";
 import { Editor, type EditorTheme, Key, matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@mariozechner/pi-tui";
 import type { Component, TUI } from "@mariozechner/pi-tui";
 import { DIVINE_QUERY_OVERLAY_OPTIONS } from "./divine-query.js";
-import { CATHEDRAL_TOKENS } from "./tokens.js";
+import { activeThemeColors } from "./themes/index.js";
 
 // ── Types ────────────────────────────────────────────────────
 
@@ -96,12 +96,12 @@ function cathedralFg(text: string, hex: string): string {
 	return `\u001b[38;2;${r};${g};${b}m${text}${RESET}`;
 }
 
-const accent = (s: string) => cathedralFg(s, CATHEDRAL_TOKENS.colors.accent);
-const fg = (s: string) => cathedralFg(s, CATHEDRAL_TOKENS.colors.foreground);
-const dim = (s: string) => cathedralFg(s, CATHEDRAL_TOKENS.colors.foregroundDim);
-const divider = (s: string) => cathedralFg(s, CATHEDRAL_TOKENS.colors.divider);
-const idle = (s: string) => cathedralFg(s, CATHEDRAL_TOKENS.colors.states.idle);
-const thinking = (s: string) => cathedralFg(s, CATHEDRAL_TOKENS.colors.states.thinking);
+const accent = (s: string) => cathedralFg(s, activeThemeColors().accent);
+const fg = (s: string) => cathedralFg(s, activeThemeColors().foreground);
+const dim = (s: string) => cathedralFg(s, activeThemeColors().foregroundDim);
+const divider = (s: string) => cathedralFg(s, activeThemeColors().divider);
+const idle = (s: string) => cathedralFg(s, activeThemeColors().states.idle);
+const thinking = (s: string) => cathedralFg(s, activeThemeColors().states.thinking);
 const liftedBg = `\u001b[48;2;61;48;36m`; // surfaceLifted
 
 class CathedralQnAComponent implements Component {
@@ -121,13 +121,13 @@ class CathedralQnAComponent implements Component {
 		this.onDone = onDone;
 
 		const editorTheme: EditorTheme = {
-			borderColor: (s) => cathedralFg(s, CATHEDRAL_TOKENS.colors.accent),
+			borderColor: (s) => cathedralFg(s, activeThemeColors().accent),
 			selectList: {
-				selectedPrefix: (t) => cathedralFg(t, CATHEDRAL_TOKENS.colors.accent),
-				selectedText: (t) => cathedralFg(t, CATHEDRAL_TOKENS.colors.accent),
-				description: (t) => cathedralFg(t, CATHEDRAL_TOKENS.colors.foregroundDim),
-				scrollInfo: (t) => cathedralFg(t, CATHEDRAL_TOKENS.colors.foregroundDim),
-				noMatch: (t) => cathedralFg(t, CATHEDRAL_TOKENS.colors.states.approval),
+				selectedPrefix: (t) => cathedralFg(t, activeThemeColors().accent),
+				selectedText: (t) => cathedralFg(t, activeThemeColors().accent),
+				description: (t) => cathedralFg(t, activeThemeColors().foregroundDim),
+				scrollInfo: (t) => cathedralFg(t, activeThemeColors().foregroundDim),
+				noMatch: (t) => cathedralFg(t, activeThemeColors().states.approval),
 			},
 		};
 		this.editor = new Editor(tui, editorTheme);

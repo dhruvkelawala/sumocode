@@ -1,4 +1,4 @@
-import { CATHEDRAL_TOKENS } from "../../tokens.js";
+import { activeThemeColors } from "../../themes/index.js";
 import { SumoNode } from "../layout/node.js";
 import type { Yoga, YogaNode } from "../layout/yoga.js";
 import type { MouseEvent } from "../input/mouse.js";
@@ -49,7 +49,7 @@ export class ScrolledUpBanner extends SumoNode {
 		const unread = this.getUnreadCount();
 		const noun = unread === 1 ? "message" : "messages";
 		const label = `↓ ${unread} new ${noun} — Press ${chatScrollHintLabel("jump-bottom")} to jump`;
-		const styled = `\x1b[2m${fg(CATHEDRAL_TOKENS.colors.foregroundDim)}${label}\x1b[0m`;
+		const styled = `\x1b[2m${fg(activeThemeColors().foregroundDim)}${label}\x1b[0m`;
 		buffer.paintRow(rect.top, styled, rect.left, rect.width);
 	}
 

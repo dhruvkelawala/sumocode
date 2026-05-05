@@ -6,6 +6,7 @@ import { registerDivineQueryCommand } from "./commands/divine-query.js";
 import { registerExitCommand } from "./commands/exit.js";
 import { registerSlateCommand } from "./commands/slate.js";
 import { registerPersonaCommand } from "./commands/persona.js";
+import { registerReviewCommand } from "./commands/review.js";
 import { registerSpinnerCommand } from "./commands/spinner.js";
 import { registerTabsCommand } from "./commands/tabs.js";
 import { registerThemeCommand } from "./commands/theme.js";
@@ -132,6 +133,7 @@ export function installSumoInteractions(pi: ExtensionAPI, options: InstallSumoIn
 	registry.install("commands.exit", registerExitCommand);
 	registry.install("commands.slate", registerSlateCommand);
 	registry.install("commands.persona", registerPersonaCommand);
+	registry.install("commands.review", registerReviewCommand);
 	registry.install("commands.spinner", registerSpinnerCommand);
 	registry.install("commands.tabs", registerTabsCommand);
 	registry.install("commands.theme", registerThemeCommand);

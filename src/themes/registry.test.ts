@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { CATHEDRAL_THEME, activeThemeColors, getActiveTheme, getTheme, getThemeVersion, listThemes, OBSIDIAN_THEME, onThemeChanged, resetThemeRegistryForTests, setActiveTheme } from "./index.js";
+import { CATHEDRAL_THEME, activeThemeColors, cycleActiveTheme, getActiveTheme, getTheme, getThemeVersion, listThemes, nextThemeName, OBSIDIAN_THEME, onThemeChanged, resetThemeRegistryForTests, setActiveTheme } from "./index.js";
 
 describe("theme registry", () => {
 	afterEach(() => resetThemeRegistryForTests());
@@ -46,5 +46,25 @@ describe("theme registry", () => {
 		expect(activeThemeColors().background).toBe("#050308");
 		expect(activeThemeColors().accent).toBe("#F0B400");
 		expect(activeThemeColors().states.thinking).toBe("#00E5FF");
+	});
+
+	it("reports the next theme name and wraps from last to first", () => {
+		expect(nextThemeName("cathedral")).toBe("obsidian");
+		expect(nextThemeName("obsidian")).toBe("cathedral");
+		expect(nextThemeName("unknown")).toBe("cathedral");
+	});
+
+	it("cycles to the next theme and notifies subscribers", () => {
+		const before = getThemeVersion();
+		const seen: string[] = [];
+		const unsubscribe = onThemeChanged((theme) => seen.push(theme.name));
+
+		const next = cycleActiveTheme();
+		unsubscribe();
+
+		expect(next).toBe(OBSIDIAN_THEME);
+		expect(getActiveTheme()).toBe(OBSIDIAN_THEME);
+		expect(getThemeVersion()).toBe(before + 1);
+		expect(seen).toEqual(["obsidian"]);
 	});
 });

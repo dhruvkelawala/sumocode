@@ -87,8 +87,8 @@ describe("InteractionRegistry", () => {
 			"sumo:theme",
 			"sumo:theme-check",
 		]);
-		expect(snapshot.shortcuts.map(([id]) => id).sort()).toEqual(["ctrl+/", "ctrl+1", "ctrl+2"]);
+		expect(snapshot.shortcuts.map(([id]) => id).sort()).toEqual(["alt+t", "ctrl+/", "ctrl+1", "ctrl+2", "ctrl+shift+t"]);
 		expect(pi.registerCommand).toHaveBeenCalledTimes(12);
-		expect(pi.registerShortcut).toHaveBeenCalledTimes(3);
+		expect(pi.registerShortcut).toHaveBeenCalledTimes(5);
 	});
 });

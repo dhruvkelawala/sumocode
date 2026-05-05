@@ -102,25 +102,69 @@ describe("/sumo:theme", () => {
 			{ triggerTurn: false },
 		);
 	});
+
+	describe("cycle shortcut", () => {
+		it("registers ctrl+shift+t and alt+t", () => {
+			const { shortcuts } = registerHarness();
+			expect([...shortcuts.keys()].sort()).toEqual(["alt+t", "ctrl+shift+t"]);
+		});
+
+		it("cycles theme through Pi UI and notifies on success", async () => {
+			const { shortcuts } = registerHarness();
+			const setTheme = vi.fn(() => ({ success: true }));
+			const notify = vi.fn();
+
+			await shortcuts.get("ctrl+shift+t")?.({ hasUI: true, ui: { notify, setTheme } });
+
+			expect(setTheme).toHaveBeenCalledWith("obsidian");
+			expect(notify).toHaveBeenCalledWith("theme: obsidian", "info");
+		});
+
+		it("alt+t fallback uses the same handler", async () => {
+			const { shortcuts } = registerHarness();
+			const setTheme = vi.fn(() => ({ success: true }));
+			const notify = vi.fn();
+
+			await shortcuts.get("alt+t")?.({ hasUI: true, ui: { notify, setTheme } });
+
+			expect(setTheme).toHaveBeenCalledWith("obsidian");
+			expect(notify).toHaveBeenCalledWith("theme: obsidian", "info");
+		});
+
+		it("cycles SumoCode theme even when Pi theme API rejects the cycle", async () => {
+			const { shortcuts } = registerHarness();
+			const setTheme = vi.fn(() => ({ success: false, error: "Theme API unavailable" }));
+			const notify = vi.fn();
+
+			await shortcuts.get("ctrl+shift+t")?.({ hasUI: true, ui: { notify, setTheme } });
+
+			expect(notify).toHaveBeenCalledWith("theme: obsidian (Theme API unavailable)", "info");
+		});
+	});
 });
 
 interface RegisteredHarness {
 	handler: (args: string, ctx: any) => Promise<void>;
+	shortcuts: Map<string, (ctx: any) => void | Promise<void>>;
 	sendMessage: ReturnType<typeof vi.fn>;
 	registerMessageRenderer: ReturnType<typeof vi.fn>;
 }
 
 function registerHarness(): RegisteredHarness {
 	let handler: ((args: string, ctx: any) => Promise<void>) | undefined;
+	const shortcuts = new Map<string, (ctx: any) => void | Promise<void>>();
 	const registerCommand = vi.fn((_name: string, options: { handler: typeof handler }) => {
 		handler = options.handler;
+	});
+	const registerShortcut = vi.fn((shortcut: string, options: { handler: (ctx: any) => void | Promise<void> }) => {
+		shortcuts.set(String(shortcut), options.handler);
 	});
 	const sendMessage = vi.fn();
 	const registerMessageRenderer = vi.fn();
 
-	registerThemeCommand({ registerCommand, sendMessage, registerMessageRenderer } as never);
+	registerThemeCommand({ registerCommand, registerShortcut, sendMessage, registerMessageRenderer } as never);
 	if (!handler) throw new Error("handler was not registered");
-	return { handler, sendMessage, registerMessageRenderer };
+	return { handler, shortcuts, sendMessage, registerMessageRenderer };
 }
 
 function uiContext(options: { setTheme?: ReturnType<typeof vi.fn> } = {}): any {

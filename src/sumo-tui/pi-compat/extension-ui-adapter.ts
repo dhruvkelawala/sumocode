@@ -63,7 +63,7 @@ export interface SumoExtensionUIAdapterOptions {
 }
 
 type TerminalInputHandler = Parameters<ExtensionUIContext["onTerminalInput"]>[0];
-type EditorFactory = NonNullable<ReturnType<ExtensionUIContext["getEditorComponent"]>>;
+type EditorFactory = Parameters<ExtensionUIContext["setEditorComponent"]>[0];
 
 class OverlayComponentWrapper implements Component {
 	private hidden = false;

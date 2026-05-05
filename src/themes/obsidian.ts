@@ -1,4 +1,4 @@
-import type { Theme } from "./types.js";
+import { DEFAULT_CHROME, type Theme } from "./types.js";
 
 /**
  * Obsidian spinner — sacred-geometry progression.
@@ -46,13 +46,13 @@ export const OBSIDIAN_THEME: Theme = {
 	tokens: {
 		colors: {
 			background: "#050308",       // deep obsidian, near-black with violet undertone
-			surface: "#15082A",          // polished granite — more violet than the ground for visible chrome layering
+			surface: "#0E0917",          // polished granite — subtle violet, stone not glass
 			surfaceRecess: "#020104",    // input prompt void
-			surfaceLifted: "#1F0F2E",    // sidebar / lifted panels — clearly violet stone, distinct from `background`
+			surfaceLifted: "#160C22",    // sidebar / lifted panels — muted violet stone, distinct from `background`
 			foreground: "#D4B896",       // aged papyrus / warm bronze
 			foregroundDim: "#8B7355",    // oxidized bronze
-			divider: "#3A2750",          // deep violet-purple, brighter so dividers register on the obsidian ground
-			accent: "#FFD700",           // sacred gold (cartouche, accents)
+			divider: "#2A1F40",          // deep violet-purple, carved stone border
+			accent: "#F0B400",           // electrum gold — warm, not bright yellow
 			states: {
 				idle: "#00C896",       // malachite life / sacred green
 				thinking: "#00E5FF",   // neon cyan — thinking ignition
@@ -65,5 +65,16 @@ export const OBSIDIAN_THEME: Theme = {
 	workingIndicator: {
 		frames: OBSIDIAN_INDICATOR_FRAMES,
 		intervalMs: OBSIDIAN_INDICATOR_INTERVAL_MS,
+	},
+	chrome: {
+		...DEFAULT_CHROME,
+		frame: { topLeft: "┌", topRight: "┐", bottomLeft: "└", bottomRight: "┘", horizontal: "─", vertical: "│" },
+		sectionGlyphs: { context: "𓂀", memory: "𓏛", mcp: "⚛", session: "𓊝", registry: "𓋹" },
+		sectionTracked: false,
+		ruleChar: "─",
+		tabActive: "◆",
+		tabInactive: "◇",
+		bullet: "❧",
+		bulletColor: "#FF00AA",
 	},
 };

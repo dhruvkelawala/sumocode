@@ -1,0 +1,223 @@
+/* SumoCode Obsidian Temple — Visual Bible tokens
+ *
+ * Mirror of tokens.css for the Obsidian sacred-tech theme.
+ * Source of truth: src/themes/obsidian.ts + docs/ui/stitch/obsidian-temple/DESIGN.md
+ *
+ * Usage: replace the tokens.css import with tokens-obsidian.css in any
+ * bible page to preview the Obsidian variant.
+ */
+
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 400;
+  font-display: block;
+  src: url('./fonts/jetbrains-mono-nerd.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 500;
+  font-display: block;
+  src: url('./fonts/jetbrains-mono-nerd.woff2') format('woff2');
+}
+
+:root {
+  /* ── palette ───────────────────────────────────────────────── */
+  --background:        #050308;
+  --surface:           #0E0917;
+  --surface-recess:    #020104;
+  --surface-lifted:    #160C22;
+  --divider:           #2A1F40;
+  --foreground:        #D4B896;
+  --foreground-dim:    #8B7355;
+  --accent:            #F0B400;
+
+  --state-idle:        #00C896;
+  --state-thinking:    #00E5FF;
+  --state-tool:        #F0B400;
+  --state-approval:    #B91C1C;
+  --state-learning:    #FF00AA;
+
+  --syntax-keyword:    #F0B400;
+  --syntax-string:     #00C896;
+  --syntax-number:     #00E5FF;
+  --syntax-comment:    #4A3F30;
+  --syntax-function:   #00E5FF;
+
+  /* ── obsidian-specific accents ──────────────────────────────── */
+  --sacred-gold:       #FFD700;
+  --neon-cyan:         #00E5FF;
+  --neon-magenta:      #FF00AA;
+  --lapis:             #1E40AF;
+
+  /* ── typography ─────────────────────────────────────────────── */
+  --font-mono:
+    'JetBrains Mono', 'JetBrainsMono Nerd Font Mono',
+    'IBM Plex Mono', 'Berkeley Mono', 'Commit Mono',
+    ui-monospace, Menlo, Consolas, monospace;
+
+  --cell-w: 7.83px;
+  --cell-h: 18.2px;
+
+  /* ── layout (v2 spec) ──────────────────────────────────────── */
+  --term-cols: 160;
+  --term-rows: 45;
+  --sidebar-cols: 30;
+  --chat-cols: calc(var(--term-cols) - var(--sidebar-cols));
+}
+
+/* ── page chrome (out-of-canvas) ───────────────────────────────── */
+html, body {
+  margin: 0;
+  padding: 0;
+  background: #020104;
+  color: var(--foreground);
+  font-family: var(--font-mono);
+  font-feature-settings: "liga" 0, "calt" 0;
+  font-variant-ligatures: none;
+}
+
+.stage {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  gap: 12px;
+}
+
+.stage-label {
+  font-size: 11px;
+  color: var(--foreground-dim);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+/* ── the terminal viewport ─────────────────────────────────────── */
+.term {
+  background: var(--background);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.4;
+  font-weight: 400;
+  width: calc(var(--term-cols) * 1ch);
+  height: calc(var(--term-rows) * var(--cell-h));
+  position: relative;
+  overflow: hidden;
+  color: var(--foreground);
+  box-shadow:
+    0 0 0 1px rgba(42,31,64,0.6),
+    0 24px 48px rgba(0,0,0,0.7);
+}
+
+.term.narrow   { --term-cols: 80;  --sidebar-cols: 0; }
+.term.portrait { --term-cols: 60;  --term-rows: 100; --sidebar-cols: 0; }
+
+/* ── row primitive ──────────────────────────────────────────────── */
+.row {
+  display: block;
+  white-space: pre;
+  height: var(--cell-h);
+  line-height: var(--cell-h);
+  font-size: 13px;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  width: 100%;
+}
+
+/* ── cell-grid <pre> layout ─────────────────────────────────── */
+.term .grid {
+  margin: 0;
+  padding: 0;
+  font-family: inherit;
+  font-size: inherit;
+  line-height: var(--cell-h);
+  white-space: pre;
+  color: inherit;
+}
+.term .grid span { background: transparent; }
+
+.term .grid span.box-fill {
+  display: inline-block;
+  height: var(--cell-h);
+  line-height: var(--cell-h);
+  vertical-align: top;
+}
+
+.term .grid span.cursor {
+  background: var(--accent);
+  color: var(--background);
+}
+
+.bg-recess  { background: var(--surface-recess); }
+.bg-surface { background: var(--surface); }
+.bg-lifted  { background: var(--surface-lifted); }
+
+/* ── sidebar bg overlay ───────────────────────────────────────── */
+.term .sidebar-bg {
+  position: absolute;
+  top: calc(var(--cell-h) * 1);
+  bottom: calc(var(--cell-h) * 2);
+  left: calc(var(--chat-cols) * 1ch);
+  width: calc(var(--sidebar-cols) * 1ch);
+  background: var(--surface);
+  z-index: 0;
+  pointer-events: none;
+}
+
+.term .layer { position: relative; z-index: 1; }
+
+/* ── modal layer ──────────────────────────────────────────────── */
+.term .dimmed { opacity: 0.5; }
+
+.term .modal-layer {
+  position: absolute;
+  top: calc(var(--cell-h) * 1);
+  bottom: calc(var(--cell-h) * 2);
+  left: 0;
+  width: calc(var(--chat-cols) * 1ch);
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+.term .modal-layer .modal { pointer-events: auto; white-space: pre; }
+
+/* ── color helpers ────────────────────────────────────────────── */
+.fg-accent   { color: var(--accent); }
+.fg-dim      { color: var(--foreground-dim); }
+.fg-divider  { color: var(--divider); }
+.fg-fg       { color: var(--foreground); }
+.fg-comment  { color: var(--syntax-comment); }
+
+.fg-idle     { color: var(--state-idle); }
+.fg-think    { color: var(--state-thinking); }
+.fg-tool     { color: var(--state-tool); }
+.fg-approve  { color: var(--state-approval); }
+.fg-learn    { color: var(--state-learning); }
+
+.fg-string   { color: var(--syntax-string); }
+.fg-number   { color: var(--syntax-number); }
+.fg-keyword  { color: var(--syntax-keyword); }
+.fg-fn       { color: var(--syntax-function); }
+
+/* ── sacred glow effects (HTML-only, not in terminal) ─────────── */
+.glow-cyan    { text-shadow: 0 0 6px #00E5FF, 0 0 16px rgba(0,229,255,0.4); }
+.glow-magenta { text-shadow: 0 0 6px #FF00AA, 0 0 16px rgba(255,0,170,0.4); }
+.glow-gold    { text-shadow: 0 0 4px #FFAA00; }
+
+.bg-recess   { background: var(--surface-recess); }
+.bg-surface  { background: var(--surface); }
+.bg-lifted   { background: var(--surface-lifted); }
+
+.term span { background: inherit; }
+
+.term .input-bg {
+  position: absolute;
+  background: var(--surface-recess);
+  z-index: 0;
+}

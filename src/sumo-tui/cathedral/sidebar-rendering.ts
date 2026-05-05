@@ -1,4 +1,4 @@
-import { activeThemeColors, type SumoCodeState } from "../../themes/index.js";
+import { activeThemeChrome, activeThemeColors, type SumoCodeState } from "../../themes/index.js";
 import { formatTokenCount } from "../../footer.js";
 import { VOICE } from "../../voice.js";
 import { fgHex, padAnsiToWidth, SIDEBAR_INDENT, stripAnsi, visibleLength } from "./ansi.js";
@@ -73,8 +73,11 @@ function indented(content: string): string {
 	return `${SIDEBAR_INDENT}${content}`;
 }
 
-function tracked(text: string): string {
-	return text.split("").join("\u202F");
+function sectionLabel(text: string): string {
+	const chrome = activeThemeChrome();
+	const label = chrome.sectionTracked ? text.split("").join("\u202F") : text;
+	const glyph = chrome.sectionGlyphs[text.toLowerCase()] ?? "";
+	return glyph ? `${glyph}  ${label}` : label;
 }
 
 function blank(width: number): string {
@@ -82,8 +85,9 @@ function blank(width: number): string {
 }
 
 function rule(width: number): string {
+	const chrome = activeThemeChrome();
 	const count = Math.max(1, width - visibleLength(SIDEBAR_INDENT) - 2);
-	return padAnsiToWidth(indented(colorHex("━".repeat(count), activeThemeColors().divider)), width);
+	return padAnsiToWidth(indented(colorHex(chrome.ruleChar.repeat(count), activeThemeColors().divider)), width);
 }
 
 function row(content: string, width: number): string {
@@ -114,7 +118,7 @@ function contextLines(snapshot: RegistrySidebarSnapshot, width: number): string[
 		row(colorHex(snapshot.projectName, activeThemeColors().foreground), width),
 		row(colorHex(`on ${snapshot.branch ?? "unknown"}`, activeThemeColors().foregroundDim), width),
 		blank(width),
-		row(colorHex(tracked("CONTEXT"), activeThemeColors().foregroundDim), width),
+		row(colorHex(sectionLabel("CONTEXT"), activeThemeColors().foregroundDim), width),
 		row(renderTokenMeter(used, snapshot.contextWindow), width),
 		row(
 			`${colorHex(formatTokenCount(used), overBudget ? activeThemeColors().states.approval : activeThemeColors().foreground)} ` +
@@ -123,7 +127,7 @@ function contextLines(snapshot: RegistrySidebarSnapshot, width: number): string[
 			width,
 		),
 		blank(width),
-		row(colorHex(tracked("SESSION"), activeThemeColors().foregroundDim), width),
+		row(colorHex(sectionLabel("SESSION"), activeThemeColors().foregroundDim), width),
 		row(
 			`${colorHex(`$${snapshot.costUsd.toFixed(2)}`, activeThemeColors().foreground)} ` +
 				`${colorHex(`· ${formatTokenCount(snapshot.cumulativeTokens ?? used)} cumul`, activeThemeColors().foregroundDim)}`,
@@ -179,20 +183,21 @@ export function renderMcpServerRow(server: McpServerSnapshot, width: number): st
 }
 
 function mcpLines(snapshot: RegistrySidebarSnapshot, width: number): string[] {
-	const lines = [row(colorHex(tracked("MCP"), activeThemeColors().foregroundDim), width), blank(width)];
+	const lines = [row(colorHex(sectionLabel("MCP"), activeThemeColors().foregroundDim), width), blank(width)];
 	for (const server of snapshot.mcpServers) lines.push(renderMcpServerRow(server, width));
 	return lines;
 }
 
 export function renderMemoryFactLine(item: string, width: number): string {
 	const available = Math.max(0, width - visibleLength(SIDEBAR_INDENT) - 2);
-	const bullet = colorHex("❧", activeThemeColors().accent);
+	const chrome = activeThemeChrome();
+	const bullet = colorHex(chrome.bullet, chrome.bulletColor ?? activeThemeColors().accent);
 	const text = colorHex(truncatePlainText(item, available), activeThemeColors().foreground);
 	return padAnsiToWidth(indented(`${bullet} ${text}`), width);
 }
 
 function memoryLines(snapshot: RegistrySidebarSnapshot, width: number): string[] {
-	const lines = [row(colorHex(tracked("MEMORY"), activeThemeColors().foregroundDim), width), blank(width)];
+	const lines = [row(colorHex(sectionLabel("MEMORY"), activeThemeColors().foregroundDim), width), blank(width)];
 	if (snapshot.memoryUnavailable) {
 		lines.push(row(dim(VOICE.errors.daemonDown), width));
 		return lines;
@@ -225,8 +230,9 @@ export function renderRegistryHeaderLines(snapshot: RegistrySidebarSnapshot, wid
 
 	for (const tab of SIDEBAR_SUB_TABS) {
 		const isActive = tab === active;
-		const marker = colorHex(isActive ? "◆" : "▢", isActive ? activeThemeColors().accent : activeThemeColors().foregroundDim);
-		const label = colorHex(tracked(tab), isActive ? activeThemeColors().foreground : activeThemeColors().foregroundDim);
+		const chrome = activeThemeChrome();
+		const marker = colorHex(isActive ? chrome.tabActive : chrome.tabInactive, isActive ? activeThemeColors().accent : activeThemeColors().foregroundDim);
+		const label = colorHex(sectionLabel(tab), isActive ? activeThemeColors().foreground : activeThemeColors().foregroundDim);
 		lines.push(padAnsiToWidth(indented(`${marker} ${label}`), width));
 	}
 	lines.push(blank(width));

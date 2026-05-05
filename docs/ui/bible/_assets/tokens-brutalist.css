@@ -1,0 +1,191 @@
+/* SumoCode Brutalist Ledger — Visual Bible tokens
+ *
+ * Source: docs/ui/stitch/obsidian/DESIGN.md
+ * Mood: high-precision instrument. Pure void. Monochrome. The only chromatic
+ * moments are the functional state dots — treat them like LEDs on a vintage
+ * server rack.
+ *
+ * No accent color. No box-drawing frames. Depth is CARVED from tonal contrast,
+ * not painted with borders.
+ */
+
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 400;
+  font-display: block;
+  src: url('./fonts/jetbrains-mono-nerd.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 500;
+  font-display: block;
+  src: url('./fonts/jetbrains-mono-nerd.woff2') format('woff2');
+}
+
+:root {
+  /* ── palette ───────────────────────────────────────────────── */
+  --background:        #000000;  /* the absolute void */
+  --surface:           #0C0C0C;  /* sidebar / panel — subtle elevation */
+  --surface-recess:    #0E0E0E;  /* code blocks — slight deeper recess */
+  --surface-lifted:    #1A1A1A;  /* selection / focused row */
+  --divider:           #1F1F1F;
+  --foreground:        #FAFAFA;
+  --foreground-dim:    #6B6B6B;
+  /* MONOCHROME: there is no hero accent. Sections that previously used
+   * `--accent` use plain bright foreground. Only functional state dots
+   * carry color. */
+  --accent:            #FAFAFA;
+
+  --state-idle:        #8FB28C;  /* muted sage */
+  --state-thinking:    #D4B76A;  /* ochre */
+  --state-tool:        #7FA8C9;  /* steel blue */
+  --state-approval:    #C97070;  /* dusty rose */
+  --state-learning:    #9A8FBA;  /* muted lavender */
+
+  --syntax-keyword:    #FAFAFA;
+  --syntax-string:     #FAFAFA;
+  --syntax-number:     #FAFAFA;
+  --syntax-comment:    #6B6B6B;
+  --syntax-function:   #FAFAFA;
+
+  /* ── typography ─────────────────────────────────────────────── */
+  --font-mono:
+    'JetBrains Mono', 'JetBrainsMono Nerd Font Mono',
+    'IBM Plex Mono', 'Berkeley Mono', 'Commit Mono',
+    ui-monospace, Menlo, Consolas, monospace;
+
+  --cell-w: 7.83px;
+  --cell-h: 18.2px;
+
+  /* ── layout ─────────────────────────────────────────────────── */
+  --term-cols: 160;
+  --term-rows: 45;
+  --sidebar-cols: 30;
+  --chat-cols: calc(var(--term-cols) - var(--sidebar-cols));
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: #000000;
+  color: var(--foreground);
+  font-family: var(--font-mono);
+  font-feature-settings: "liga" 0, "calt" 0;
+  font-variant-ligatures: none;
+}
+
+.stage {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  gap: 12px;
+}
+
+.stage-label {
+  font-size: 11px;
+  color: var(--foreground-dim);
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+
+.term {
+  background: var(--background);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.4;
+  font-weight: 400;
+  width: calc(var(--term-cols) * 1ch);
+  height: calc(var(--term-rows) * var(--cell-h));
+  position: relative;
+  overflow: hidden;
+  color: var(--foreground);
+  box-shadow:
+    0 0 0 1px rgba(31,31,31,0.8),
+    0 24px 48px rgba(0,0,0,0.8);
+}
+
+.term.narrow   { --term-cols: 80;  --sidebar-cols: 0; }
+.term.portrait { --term-cols: 60;  --term-rows: 100; --sidebar-cols: 0; }
+
+.row {
+  display: block;
+  white-space: pre;
+  height: var(--cell-h);
+  line-height: var(--cell-h);
+  font-size: 13px;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  width: 100%;
+}
+
+.term .grid {
+  margin: 0;
+  padding: 0;
+  font-family: inherit;
+  font-size: inherit;
+  line-height: var(--cell-h);
+  white-space: pre;
+  color: inherit;
+}
+.term .grid span { background: transparent; }
+
+.term .grid span.box-fill {
+  display: inline-block;
+  height: var(--cell-h);
+  line-height: var(--cell-h);
+  vertical-align: top;
+}
+
+/* Brutalist cursor: single block in foreground, no glow. */
+.term .grid span.cursor {
+  background: var(--foreground);
+  color: var(--background);
+}
+
+.bg-recess  { background: var(--surface-recess); }
+.bg-surface { background: var(--surface); }
+.bg-lifted  { background: var(--surface-lifted); }
+
+/* sidebar bg overlay */
+.term .sidebar-bg {
+  position: absolute;
+  top: calc(var(--cell-h) * 1);
+  bottom: calc(var(--cell-h) * 2);
+  left: calc(var(--chat-cols) * 1ch);
+  width: calc(var(--sidebar-cols) * 1ch);
+  background: var(--surface);
+  z-index: 0;
+  pointer-events: none;
+}
+
+.term .layer { position: relative; z-index: 1; }
+
+/* color helpers — note: fg-accent is just foreground in brutalist */
+.fg-accent   { color: var(--foreground); }
+.fg-dim      { color: var(--foreground-dim); }
+.fg-divider  { color: var(--divider); }
+.fg-fg       { color: var(--foreground); }
+.fg-comment  { color: var(--syntax-comment); }
+
+.fg-idle     { color: var(--state-idle); }
+.fg-think    { color: var(--state-thinking); }
+.fg-tool     { color: var(--state-tool); }
+.fg-approve  { color: var(--state-approval); }
+.fg-learn    { color: var(--state-learning); }
+
+.fg-string   { color: var(--syntax-string); }
+.fg-number   { color: var(--syntax-number); }
+.fg-keyword  { color: var(--syntax-keyword); }
+.fg-fn       { color: var(--syntax-function); }
+
+/* tracked uppercase — defining feature of the design */
+.tracked    { letter-spacing: 0.15em; text-transform: uppercase; }
+.tracked-tight { letter-spacing: 0.08em; text-transform: uppercase; }
+
+.term span { background: inherit; }

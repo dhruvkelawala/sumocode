@@ -2,7 +2,7 @@ import { truncateToWidth, visibleWidth, type Component } from "@mariozechner/pi-
 import { SumoNode } from "../layout/node.js";
 import type { YogaNode } from "../layout/yoga.js";
 import type { CellBuffer, Rect } from "../render/buffer.js";
-import { activeThemeColors } from "../../themes/index.js";
+import { activeThemeChrome, activeThemeColors } from "../../themes/index.js";
 import { ModalManager, type ModalManagerOptions } from "./modal.js";
 import { cathedralBackdropCell } from "../cathedral/theme-bridge.js";
 
@@ -78,11 +78,12 @@ export class ModalSurfaceComponent implements Component {
 		const childRows = this.inner.render(innerWidth);
 		if (childRows.length === 0) return [];
 		const lines: string[] = [];
-		lines.push(`${surface}${border}╭${"─".repeat(innerWidth)}╮${RESET}`);
+		const chrome = activeThemeChrome();
+		lines.push(`${surface}${border}${chrome.frame.topLeft}${chrome.frame.horizontal.repeat(innerWidth)}${chrome.frame.topRight}${RESET}`);
 		for (const row of childRows) {
-			lines.push(`${surface}${border}│${RESET}${surface}${padVisible(row, innerWidth)}${border}│${RESET}`);
+			lines.push(`${surface}${border}${chrome.frame.vertical}${RESET}${surface}${padVisible(row, innerWidth)}${border}${chrome.frame.vertical}${RESET}`);
 		}
-		lines.push(`${surface}${border}╰${"─".repeat(innerWidth)}╯${RESET}`);
+		lines.push(`${surface}${border}${chrome.frame.bottomLeft}${chrome.frame.horizontal.repeat(innerWidth)}${chrome.frame.bottomRight}${RESET}`);
 		return lines;
 	}
 }

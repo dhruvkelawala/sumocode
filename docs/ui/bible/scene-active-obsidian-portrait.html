@@ -1,0 +1,66 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Bible · Scene · Active Obsidian 60×100</title>
+<link rel="stylesheet" href="_assets/tokens-obsidian.css">
+<style>
+  .stage-blurb { max-width: 60ch; color: var(--foreground-dim); font-size: 11px; line-height: 1.6; padding: 0 8px; text-align: center; }
+  .scene { display: grid; grid-template-rows: var(--cell-h) var(--cell-h) var(--cell-h) auto var(--cell-h) calc(var(--cell-h) * 3) var(--cell-h) var(--cell-h) var(--cell-h) var(--cell-h); }
+  .scene .middle { display: grid; grid-template-columns: 59ch 1ch; grid-row: 4; min-height: 0; overflow: hidden; }
+  .scene .middle .chat-col, .scene .middle .sidebar-col { overflow: hidden; min-height: 0; }
+  .scene .middle pre { margin: 0; }
+</style>
+</head>
+<body>
+<div class="stage">
+  <div class="stage-label">scene · active state · obsidian temple · 60×100 portrait (sidebar hidden)</div>
+  <div class="stage-blurb">Obsidian portrait variant. Sidebar hidden (per Element 1 rule: &lt; 120 col). Straight corners ┌┐└┘, electrum gold accent, neon cyan thinking. Footer shows full-width. Hint row carries project + branch since sidebar is hidden.</div>
+  <div data-render-rect class="term scene" style="--term-cols: 60; --term-rows: 100;">
+    <pre class="grid" style="grid-row: 1;"> </pre>
+    <pre class="grid" style="grid-row: 2;"> <span class="fg-accent">SUMOCODE</span><span class="fg-dim">  ║ </span><span class="fg-accent">•</span><span class="fg-dim"> 019df9f6 ║</span>                              <span class="fg-fg"></span><span class="fg-dim">  </span><span class="fg-fg"></span> </pre>
+    <pre class="grid" style="grid-row: 3;"> </pre>
+    <div class="middle">
+      <div class="chat-col"><pre class="grid"><span class="fg-divider">┌ </span><span class="fg-fg">USER</span> <span class="fg-divider">───────────────────────────────────────────────────</span><span class="fg-divider">┐</span>
+<span class="fg-divider">│</span><span class="box-fill" style="width: 57ch"> <span class="fg-fg">hello, refactor the auth flow to use the new session</span>    </span><span class="fg-divider">│</span>
+<span class="fg-divider">│</span><span class="box-fill" style="width: 57ch"> <span class="fg-fg">pattern.</span>                                                </span><span class="fg-divider">│</span>
+<span class="fg-divider">└─────────────────────────────────────────────────────────┘</span></pre>
+<pre class="grid"> </pre>
+<pre class="grid"><span class="fg-divider">┌ </span><span class="fg-accent">SUMO</span> <span class="fg-divider">────────────────────────────────────────────</span> <span class="fg-dim">11:42</span> <span class="fg-divider">─┐</span>
+<span class="fg-divider">│</span><span class="box-fill" style="width: 57ch"> <span class="fg-think" style="font-style: italic; opacity: 0.7;">✦ The user wants to refactor the auth flow.</span>             </span><span class="fg-divider">│</span>
+<span class="fg-divider">│</span><span class="box-fill" style="width: 57ch"> <span class="fg-think" style="font-style: italic; opacity: 0.7;">  Let me read the current session pattern.</span>              </span><span class="fg-divider">│</span>
+<span class="fg-divider">│</span><span class="box-fill" style="width: 57ch">                                                         </span><span class="fg-divider">│</span>
+<span class="fg-divider">│</span><span class="box-fill" style="width: 57ch"> <span class="fg-fg">Reading the auth flow.</span>                                  </span><span class="fg-divider">│</span>
+<span class="fg-divider">│</span><span class="box-fill" style="width: 57ch">                                                         </span><span class="fg-divider">│</span>
+<span class="fg-divider">│</span><span class="box-fill" style="width: 57ch"> <span class="fg-idle">✓</span> <span class="fg-accent">[read]</span><span class="fg-fg">  src/auth/session.ts</span>                           </span><span class="fg-divider">│</span>
+<span class="fg-divider">│</span><span class="box-fill" style="width: 57ch">                                                         </span><span class="fg-divider">│</span>
+<span class="fg-divider">│</span><span class="box-fill" style="width: 57ch"> <span class="fg-idle">✓</span> <span class="fg-accent">[edit]</span><span class="fg-fg">  src/auth/session.ts</span>                           </span><span class="fg-divider">│</span>
+<span class="fg-divider">│</span><span class="box-fill" style="width: 57ch">                                                         </span><span class="fg-divider">│</span>
+<span class="fg-divider">│</span><span class="box-fill" style="width: 57ch"> <span class="fg-fg">Done. Updated 14 lines, deleted 6 stale helpers.</span>        </span><span class="fg-divider">│</span>
+<span class="fg-divider">└─────────────────────────────────────────────────────────┘</span></pre>
+<pre class="grid"> </pre>
+<pre class="grid"><span class="fg-divider">┌ </span><span class="fg-fg">USER</span> <span class="fg-divider">───────────────────────────────────────────────────</span><span class="fg-divider">┐</span>
+<span class="fg-divider">│</span><span class="box-fill" style="width: 57ch"> <span class="fg-fg">run tests</span>                                               </span><span class="fg-divider">│</span>
+<span class="fg-divider">└─────────────────────────────────────────────────────────┘</span></pre>
+<pre class="grid"> </pre>
+<pre class="grid"><span class="fg-divider">┌ </span><span class="fg-accent">SUMO</span> <span class="fg-divider">────────────────────────────────────────────</span> <span class="fg-dim">11:43</span> <span class="fg-divider">─┐</span>
+<span class="fg-divider">│</span><span class="box-fill" style="width: 57ch"> <span class="fg-fg">Running tests now.</span>                                      </span><span class="fg-divider">│</span>
+<span class="fg-divider">│</span><span class="box-fill" style="width: 57ch">                                                         </span><span class="fg-divider">│</span>
+<span class="fg-divider">│</span><span class="box-fill" style="width: 57ch"> <span class="fg-idle">✓</span> <span class="fg-accent">[bash]</span><span class="fg-fg">  pnpm test src/auth</span><span class="fg-dim">  · 22 tests, 1.2s</span>          </span><span class="fg-divider">│</span>
+<span class="fg-divider">│</span><span class="box-fill" style="width: 57ch">                                                         </span><span class="fg-divider">│</span>
+<span class="fg-divider">│</span><span class="box-fill" style="width: 57ch"> <span class="fg-fg">All 22 tests pass.</span>                                      </span><span class="fg-divider">│</span>
+<span class="fg-divider">└─────────────────────────────────────────────────────────┘</span></pre></div>
+      <div class="gutter-col"></div>
+    </div>
+    <pre class="grid" style="grid-row: 5;"> </pre>
+    <pre class="grid" style="grid-row: 6;"><span class="box-fill" style="background: var(--surface-recess); width: 60ch"><span class="fg-divider">┌──────────────────────────────────────────────────────────┐</span></span>
+<span class="box-fill" style="background: var(--surface-recess); width: 60ch"><span class="fg-divider">│</span> <span class="fg-accent">&gt;</span> <span class="cursor">█</span>                                                      <span class="fg-divider">│</span></span>
+<span class="box-fill" style="background: var(--surface-recess); width: 60ch"><span class="fg-divider">└──────────────────────────────────────────────────────────┘</span></span></pre>
+    <pre class="grid" style="grid-row: 7;"> <span class="fg-fg">sumocode</span> <span class="fg-dim">(feat/theme-obsidian-216)</span>      <span class="fg-accent">CTRL+/</span><span class="fg-dim"> · COMMANDS</span> </pre>
+    <pre class="grid" style="grid-row: 8;"> </pre>
+    <pre class="grid" style="grid-row: 9;"> <span class="fg-idle">●</span> <span class="fg-fg">READY</span><span class="fg-dim"> · </span><span class="fg-fg">claude-opus-4-6</span><span class="fg-dim"> · </span><span class="fg-fg">high</span>            <span class="fg-fg">19k/1.0M</span><span class="fg-dim"> · </span><span class="fg-fg">$0.01</span> </pre>
+    <pre class="grid" style="grid-row: 10;"> </pre>
+  </div>
+</div>
+</body>
+</html>

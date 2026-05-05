@@ -1,6 +1,6 @@
 import { truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
 import { DEFAULT_SUMOCODE_CONFIG } from "../../config/sumocode-config.js";
-import { activeThemeColors } from "../../themes/index.js";
+import { activeThemeChrome, activeThemeColors } from "../../themes/index.js";
 import { fgHex, RESET } from "../cathedral/ansi.js";
 import { SumoNode } from "../layout/node.js";
 import { MEASURE_MODE_EXACTLY, type MeasureMode, type Yoga, type YogaNode } from "../layout/yoga.js";
@@ -173,9 +173,10 @@ function formatTime(timestamp: Date): string {
 }
 
 function frameTop(role: ChatMessageRole, timestamp: Date | undefined, width: number, primaryAgentName?: string): string {
+	const chrome = activeThemeChrome();
 	const label = roleLabel(role, primaryAgentName);
 	const leftParts: (Span | string)[] = [
-		span("╭ ", { fg: activeThemeColors().divider }),
+		span(`${chrome.frame.topLeft} `, { fg: activeThemeColors().divider }),
 		span(label, { fg: roleColor(role) }),
 		span(" ", { fg: activeThemeColors().foreground }),
 	];
@@ -185,7 +186,7 @@ function frameTop(role: ChatMessageRole, timestamp: Date | undefined, width: num
 		? [
 			span(" ", { fg: activeThemeColors().divider }),
 			span(formatTime(timestamp), { fg: activeThemeColors().foregroundDim }),
-			span(" \u2500", { fg: activeThemeColors().divider }),
+			span(` ${chrome.frame.horizontal}`, { fg: activeThemeColors().divider }),
 		]
 		: [];
 
@@ -193,25 +194,27 @@ function frameTop(role: ChatMessageRole, timestamp: Date | undefined, width: num
 	const rule = Math.max(0, width - used);
 	return lineToAnsi(textLine([
 		...leftParts,
-		span("─".repeat(rule), { fg: activeThemeColors().divider }),
+		span(chrome.frame.horizontal.repeat(rule), { fg: activeThemeColors().divider }),
 		...rightParts,
-		span("╮", { fg: activeThemeColors().divider }),
+		span(chrome.frame.topRight, { fg: activeThemeColors().divider }),
 	]), { width });
 }
 
 function frameBody(row: string, width: number): string {
+	const chrome = activeThemeChrome();
 	const inner = Math.max(0, width - 4);
 	const text = fitAnsiText(row, inner);
 	const divider = fgHex(activeThemeColors().divider);
 	const foreground = fgHex(activeThemeColors().foreground);
-	return `${divider}│${RESET} ${foreground}${text}${RESET} ${divider}│${RESET}`;
+	return `${divider}${chrome.frame.vertical}${RESET} ${foreground}${text}${RESET} ${divider}${chrome.frame.vertical}${RESET}`;
 }
 
 function frameBottom(width: number): string {
+	const chrome = activeThemeChrome();
 	return lineToAnsi(textLine([
-		span("╰", { fg: activeThemeColors().divider }),
-		span("─".repeat(Math.max(0, width - 2)), { fg: activeThemeColors().divider }),
-		span("╯", { fg: activeThemeColors().divider }),
+		span(chrome.frame.bottomLeft, { fg: activeThemeColors().divider }),
+		span(chrome.frame.horizontal.repeat(Math.max(0, width - 2)), { fg: activeThemeColors().divider }),
+		span(chrome.frame.bottomRight, { fg: activeThemeColors().divider }),
 	]), { width });
 }
 

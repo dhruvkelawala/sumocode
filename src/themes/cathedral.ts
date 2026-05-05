@@ -1,4 +1,4 @@
-import type { Theme } from "./types.js";
+import { DEFAULT_CHROME, type Theme } from "./types.js";
 
 /**
  * Cathedral spinner frames — a hand-crafted flower-pulse that shares the
@@ -36,4 +36,5 @@ export const CATHEDRAL_THEME: Theme = {
 		frames: CATHEDRAL_INDICATOR_FRAMES,
 		intervalMs: CATHEDRAL_INDICATOR_INTERVAL_MS,
 	},
+	chrome: { ...DEFAULT_CHROME },
 };

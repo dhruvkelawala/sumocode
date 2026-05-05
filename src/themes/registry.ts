@@ -1,6 +1,6 @@
 import { CATHEDRAL_THEME } from "./cathedral.js";
 import { OBSIDIAN_THEME } from "./obsidian.js";
-import type { Theme, ThemeColors, ThemeTokens } from "./types.js";
+import type { Theme, ThemeChrome, ThemeColors, ThemeTokens } from "./types.js";
 
 export type ThemeChangedListener = (theme: Theme) => void;
 export type SetThemeResult = { success: true; theme: Theme } | { success: false; error: string };
@@ -73,6 +73,10 @@ export function activeThemeTokens(): ThemeTokens {
 
 export function activeThemeColors(): ThemeColors {
 	return getActiveTheme().tokens.colors;
+}
+
+export function activeThemeChrome(): ThemeChrome {
+	return getActiveTheme().chrome;
 }
 
 export function getThemeVersion(): number {

@@ -44,7 +44,7 @@ describe("theme registry", () => {
 		if (result.success) expect(result.theme).toBe(OBSIDIAN_THEME);
 		expect(getActiveTheme()).toBe(OBSIDIAN_THEME);
 		expect(activeThemeColors().background).toBe("#050308");
-		expect(activeThemeColors().accent).toBe("#FFD700");
+		expect(activeThemeColors().accent).toBe("#F0B400");
 		expect(activeThemeColors().states.thinking).toBe("#00E5FF");
 	});
 });

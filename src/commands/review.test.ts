@@ -86,6 +86,15 @@ describe("/sumo:review", () => {
 			expect(prompt).toContain("concrete execution path");
 		});
 
+		it("requires regression-contract checks for failure paths and state boundaries", () => {
+			const prompt = buildReviewPrompt("", "deepseek/deepseek-v4-pro");
+			expect(prompt).toContain("Regression-contract discipline");
+			expect(prompt).toContain("compare the old and new success, failure, and no-op paths");
+			expect(prompt).toContain("returns a result object such as `{ success, error }`");
+			expect(prompt).toContain("internal state must not advance if the external operation failed");
+			expect(prompt).toContain("known-input failure from a mocked dependency");
+		});
+
 		it("injects project context with build and test commands", () => {
 			const prompt = buildReviewPrompt("", "deepseek/deepseek-v4-pro");
 			expect(prompt).toContain("pnpm exec tsc --noEmit");

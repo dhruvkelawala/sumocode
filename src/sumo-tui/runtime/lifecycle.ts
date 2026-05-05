@@ -60,6 +60,25 @@ export interface LifecycleRuntimeOptions {
 
 const EXIT_SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP", "SIGQUIT"] as const;
 
+/**
+ * Detect whether the retained SumoTUI runtime is active, regardless of how it
+ * was launched (`SUMO_TUI=1` env or `--sumo-tui` CLI flag — see
+ * `patches/@mariozechner__pi-coding-agent@*.patch`).
+ *
+ * Reads the same `globalThis` symbol that `SumoInteractiveRuntime` registers
+ * itself under in `pi-compat/sumo-interactive-mode.ts`. Avoids a backwards
+ * import from `runtime/` to `pi-compat/`. Falls back to the env flag for
+ * tests and early-init paths that run before the runtime has registered.
+ */
+const ACTIVE_SUMO_RUNTIME_KEY = Symbol.for("sumocode.activeSumoRuntime");
+
+export function isRetainedSumoRuntimeActive(): boolean {
+	type ActiveRuntimeBox = { runtime: unknown };
+	const host = globalThis as unknown as Record<symbol, ActiveRuntimeBox | undefined>;
+	if (host[ACTIVE_SUMO_RUNTIME_KEY]?.runtime) return true;
+	return process.env.SUMO_TUI === "1";
+}
+
 function getNodeProcess(): LifecycleProcess {
 	const processLike = process as unknown as {
 		pid: number;
@@ -159,6 +178,17 @@ export class LifecycleRuntime {
 		});
 
 		pi.on("session_shutdown", () => {
+			// In retained SumoTUI mode the process-level runtime owns altscreen for
+			// the whole interactive process. Pi emits session_shutdown during in-process
+			// switches (/new, /resume, /fork); leaving altscreen there clears the
+			// terminal while the retained renderer still holds a previous-frame cache,
+			// so the next paint diffs against stale cells and only repaints a fragment.
+			// Keep the terminal session active across session switches, but release raw
+			// mode so Pi can safely rebuild stdin for the next session_start.
+			if (isRetainedSumoRuntimeActive()) {
+				this.releaseRawMode();
+				return;
+			}
 			this.restoreTerminal();
 		});
 
@@ -299,7 +329,11 @@ export function createLifecycleRuntime(options: LifecycleRuntimeOptions = {}): L
 	return new LifecycleRuntime(options);
 }
 
-const defaultLifecycle = createLifecycleRuntime();
+const GLOBAL_LIFECYCLE_KEY = "__sumoDefaultLifecycleRuntime";
+type GlobalWithLifecycle = typeof globalThis & { [GLOBAL_LIFECYCLE_KEY]?: LifecycleRuntime };
+const globalForLifecycle = globalThis as GlobalWithLifecycle;
+if (!globalForLifecycle[GLOBAL_LIFECYCLE_KEY]) globalForLifecycle[GLOBAL_LIFECYCLE_KEY] = createLifecycleRuntime();
+const defaultLifecycle = globalForLifecycle[GLOBAL_LIFECYCLE_KEY] as LifecycleRuntime;
 defaultLifecycle.installProcessHandlers();
 
 export function installLifecycle(pi: ExtensionAPI): LifecycleRenderControls {

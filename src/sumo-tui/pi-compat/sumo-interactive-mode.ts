@@ -235,7 +235,15 @@ export class SumoInteractiveRuntime {
 		this.selectionNotificationNode.right = 1;
 		this.selectionNotificationNode.height = 4;
 		this.selectionNotificationNode.zIndex = 20_000;
-		this.shellTransition = new RetainedShellTransition({ root: this.root, chat: this.chat, splash: this.splash, emptyChatQuote: this.emptyChatQuote });
+		this.shellTransition = new RetainedShellTransition({
+			root: this.root,
+			chat: this.chat,
+			splash: this.splash,
+			emptyChatQuote: this.emptyChatQuote,
+			scheduleRender: () => this.requestRender(),
+			setTimeout: (callback, ms) => setTimeout(callback, ms),
+			reducedMotion: !this.output.isTTY || process.env.SUMOCODE_REDUCED_MOTION === "1",
+		});
 		this.syncChatSlot();
 		// Retained SumoInteractiveMode owns the application terminal contract.
 		// The extension lifecycle shim also enters altscreen when loaded, but the
@@ -243,6 +251,7 @@ export class SumoInteractiveRuntime {
 		// only works reliably when SGR mouse mode is enabled before Pi's first
 		// interactive frame.
 		this.terminal.startRetainedSession();
+		this.paintEagerSplashFrame();
 		logRuntimeStart({
 			terminal: {
 				columns: this.output.columns ?? null,
@@ -477,6 +486,27 @@ export class SumoInteractiveRuntime {
 
 	private syncChatSlot(): void {
 		this.shellTransition?.sync();
+	}
+
+	private paintEagerSplashFrame(): void {
+		if (!this.root || !this.output.isTTY) return;
+		const root = this.root;
+		const width = Math.max(1, this.output.columns ?? 80);
+		const height = Math.max(1, this.output.rows ?? 24);
+		this.syncChatSlot();
+		root.width = width;
+		root.height = height;
+		root.yogaNode.calculateLayout(width, height, DIRECTION_LTR);
+		const frame = new CellBuffer(height, width);
+		const compositeResult = composite(root, frame, { selection: this.selection });
+		const patches = diffFrames(undefined, frame);
+		if (patches.length === 0) return;
+		this.terminal.writeFramePatches(patches, compositeResult.hardwareCursor);
+		this.previousFrame = frame.clone();
+		this.renderedVersion = this.frameVersion;
+		this.renderedWidth = width;
+		this.renderedHeight = height;
+		logDiagnostic("eager_splash_paint", { width, height, patchCount: patches.length });
 	}
 
 	private emptyChatQuoteSnapshot(): EmptyChatQuoteSnapshot {

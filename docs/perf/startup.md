@@ -2,12 +2,12 @@
 
 Report-only startup measurements for the current checkout. These numbers are intentionally not CI gates; use them to compare phase-by-phase deltas.
 
-- commit: `1303711 perf(startup): parallelize yoga and async git`
+- commit: `ad3697e perf(startup): eagerly paint splash`
 - runs: 5
-- generated: 2026-05-05T23:47:42.618Z
+- generated: 2026-05-06T00:01:25.444Z
 
 | Measurement | Avg middle runs | Min | Max | Runs |
 | --- | ---: | ---: | ---: | ---: |
-| launcher-dry-run | 25.9ms | 24.5ms | 27.7ms | 5 |
-| print-mode | 4956.6ms | 4546.6ms | 5439.3ms | 5 |
-| first-frame | 1510.7ms | 1492.2ms | 1517.8ms | 5 |
+| launcher-dry-run | 24.2ms | 23.6ms | 25.9ms | 5 |
+| print-mode | 6662.3ms | 4655ms | 8257.7ms | 5 |
+| first-frame | 1504.3ms | 1494.4ms | 1513.6ms | 5 |

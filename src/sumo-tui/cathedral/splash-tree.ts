@@ -18,6 +18,7 @@ export interface SplashTree {
 	readonly bottomSpacer: SumoNode;
 	/** Collapse the tree once the first message arrives (EC-17.4 / 17.6). */
 	syncVisibility(): void;
+	setDimmed(dimmed: boolean): void;
 }
 
 export function defaultSplashSnapshot(hasMessages = false): SplashSnapshot {
@@ -33,10 +34,17 @@ export function getSplashContentHeight(snapshot: SplashSnapshot, width: number):
 }
 
 class SplashContentComponent implements Component {
+	private dimmed = false;
 	public constructor(private readonly snapshot: SplashSnapshotProvider) {}
 	public invalidate(): void {}
+	public setDimmed(dimmed: boolean): void {
+		this.dimmed = dimmed;
+	}
 	public render(width: number): string[] {
-		return renderSplashContent(this.snapshot(), width);
+		const snapshot = this.snapshot();
+		const rows = renderSplashContent(this.dimmed ? { ...snapshot, hasMessages: false } : snapshot, width);
+		if (!this.dimmed) return rows;
+		return rows.map((row) => `\u001b[2m${row}\u001b[0m`);
 	}
 }
 
@@ -62,7 +70,9 @@ export function createSplashTree(yoga: Yoga, parent: SumoNode | undefined, snaps
 	topSpacer.flexGrow = 1;
 	topSpacer.flexShrink = 1;
 
-	const content = PiComponentLeaf.create(yoga, new SplashContentComponent(snapshot), root);
+	const contentComponent = new SplashContentComponent(snapshot);
+	let forceVisible = false;
+	const content = PiComponentLeaf.create(yoga, contentComponent, root);
 	content.flexShrink = 0;
 
 	const bottomSpacer = new SumoNode(yoga.Node.create(), root);
@@ -75,7 +85,7 @@ export function createSplashTree(yoga: Yoga, parent: SumoNode | undefined, snaps
 		content,
 		bottomSpacer,
 		syncVisibility(): void {
-			if (snapshot().hasMessages) {
+			if (snapshot().hasMessages && !forceVisible) {
 				root.height = 0;
 				root.flexGrow = 0;
 				root.flexShrink = 0;
@@ -84,6 +94,10 @@ export function createSplashTree(yoga: Yoga, parent: SumoNode | undefined, snaps
 			root.yogaNode.setHeightAuto();
 			root.flexGrow = 1;
 			root.flexShrink = 1;
+		},
+		setDimmed(dimmed: boolean): void {
+			forceVisible = dimmed;
+			contentComponent.setDimmed(dimmed);
 		},
 	};
 }

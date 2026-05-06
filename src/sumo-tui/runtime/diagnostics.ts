@@ -33,13 +33,18 @@ function sanitizeDiagnosticValue(value: unknown): DiagnosticValue {
 	return String(value);
 }
 
+const diagnosticsStart = performance.now();
+let lastMark = diagnosticsStart;
+
 export function logDiagnostic(event: string, fields: DiagnosticFields = {}): void {
 	const file = diagnosticsFile();
 	if (!file) return;
 	try {
+		const now = performance.now();
 		const sanitized: Record<string, DiagnosticValue> = {};
 		for (const [key, value] of Object.entries(fields)) sanitized[key] = sanitizeDiagnosticValue(value);
-		appendFileSync(file, `${JSON.stringify({ ts: Date.now(), event, ...sanitized })}\n`, "utf8");
+		appendFileSync(file, `${JSON.stringify({ ts: Date.now(), event, sinceDiagnosticsMs: Math.round((now - diagnosticsStart) * 100) / 100, deltaMs: Math.round((now - lastMark) * 100) / 100, ...sanitized })}\n`, "utf8");
+		lastMark = now;
 	} catch {
 		// Diagnostics must never perturb the interactive session.
 	}

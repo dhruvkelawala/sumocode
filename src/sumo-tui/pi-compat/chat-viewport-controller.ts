@@ -861,6 +861,12 @@ export function installChatViewportBridge(upstream: unknown, runtime: ChatViewpo
 	const originalAddChild = chatContainer.addChild?.bind(chatContainer);
 	const pendingMessagesContainer = target.pendingMessagesContainer;
 	const originalPendingAddChild = pendingMessagesContainer?.addChild?.bind(pendingMessagesContainer);
+	// Pi's `renderSessionContext` replays history and recreates
+	// `BashExecutionComponent` instances for each historical bash message. Our
+	// mirror would otherwise duplicate them at the end of chat. The transcript
+	// view-model already places those bash messages via `replaceViewModels`, so
+	// suppress mirroring while Pi is replaying.
+	let replayingSessionHistory = false;
 	const statusContainer = target.statusContainer as (PiRenderableComponent & { render?: (width: number) => string[] }) | undefined;
 	const originalStatusRender = statusContainer?.render?.bind(statusContainer);
 	const originalHandleEvent = target.handleEvent?.bind(target);
@@ -959,12 +965,14 @@ export function installChatViewportBridge(upstream: unknown, runtime: ChatViewpo
 	if (originalAddChild) {
 		chatContainer.addChild = (component: unknown): void => {
 			originalAddChild(component);
+			if (replayingSessionHistory) return;
 			if (isOwnedShellActive()) controller.attachForeignBashComponent(component);
 		};
 	}
 	if (pendingMessagesContainer && originalPendingAddChild) {
 		pendingMessagesContainer.addChild = (component: unknown): void => {
 			originalPendingAddChild(component);
+			if (replayingSessionHistory) return;
 			if (isOwnedShellActive()) controller.attachForeignBashComponent(component);
 		};
 	}
@@ -1010,7 +1018,12 @@ export function installChatViewportBridge(upstream: unknown, runtime: ChatViewpo
 	if (originalRenderSessionContext) {
 		target.renderSessionContext = (sessionContext: unknown, options?: unknown): unknown => {
 			controller.renderSessionContext(sessionContext);
-			return originalRenderSessionContext(sessionContext, options);
+			replayingSessionHistory = true;
+			try {
+				return originalRenderSessionContext(sessionContext, options);
+			} finally {
+				replayingSessionHistory = false;
+			}
 		};
 	}
 

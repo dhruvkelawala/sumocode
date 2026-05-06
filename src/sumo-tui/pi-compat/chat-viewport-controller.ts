@@ -17,6 +17,7 @@ import { chatScrollCommandFromInput } from "../widgets/chat-scroll-command.js";
 import { SIDEBAR_MIN_TERMINAL_WIDTH, SIDEBAR_WIDTH } from "../../sidebar.js";
 import { sidebarGutterWidth } from "../../sidebar-placement.js";
 import { normalizeRawMultilinePasteInput } from "../../cathedral/multiline-paste.js";
+import { setCompactionReason, type CompactionReason } from "../../compaction-state.js";
 
 const CHAT_VIEWPORT_BRIDGE_INSTALLED = Symbol("sumo-tui.chat-viewport-bridge-installed");
 const PORTRAIT_STATUS_MIN_WIDTH = 80;
@@ -543,6 +544,12 @@ export class ChatViewportController {
 				break;
 			case "agent_end":
 				this.chat.endStreaming();
+				break;
+			case "compaction_start":
+				setCompactionReason(record.reason as CompactionReason);
+				break;
+			case "compaction_end":
+				setCompactionReason(null);
 				break;
 		}
 	}

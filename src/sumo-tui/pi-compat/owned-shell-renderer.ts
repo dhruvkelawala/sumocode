@@ -257,10 +257,11 @@ export class OwnedShellRenderer {
 						// Drop Pi's leading Spacer(1). If nothing remains, no above-editor
 						// widget is installed, so collapse to zero rows. If a widget remains
 						// but renders blank (the retained working indicator's idle state),
-						// still reserve the same breathing + widget + breathing block so
-						// agent_start/agent_end does not shift the editor/footer.
+						// still reserve the block height so agent_start/agent_end does not
+						// shift the editor. Leading blank provided here; trailing gap is
+						// provided by belowIndicatorSpacer (always SHELL_BLANK_ROW).
 						const content = raw.length > 1 ? raw.slice(1) : [];
-						return content.length > 0 ? ["", ...content, ""] : [];
+						return content.length > 0 ? ["", ...content] : [];
 					},
 					invalidate: () => aboveSource.invalidate?.(),
 				}
@@ -365,12 +366,15 @@ export class OwnedShellRenderer {
 		if (centerWithSplash && this.splash) {
 			if (this.splash.bottomSpacer.parent === this.splash.root) this.splash.root.removeChild(this.splash.bottomSpacer);
 			// Splash mode never shows the working indicator (no agent activity yet),
-			// so the above-editor leaf stays detached and only one breathing row
-			// is mounted. Restore this shared spacer because the active branch may
-			// collapse it to zero height when the host exposes widgetContainerAbove.
+			// so the above-editor leaf stays detached and both indicator spacers are
+			// repurposed: belowIndicatorSpacer provides breathing above the editor,
+			// aboveIndicatorSpacer provides the gap between editor and hint row.
+			// Restore both to SHELL_BLANK_ROW because active-layout may have zeroed one.
+			this.aboveIndicatorSpacer.height = SHELL_BLANK_ROW;
 			this.belowIndicatorSpacer.height = SHELL_BLANK_ROW;
 			this.splash.root.addChild(this.belowIndicatorSpacer);
 			this.splash.root.addChild(this.editorRow);
+			this.splash.root.addChild(this.aboveIndicatorSpacer);
 			this.splash.root.addChild(this.hintLeaf);
 			this.splash.root.addChild(this.splash.bottomSpacer);
 			this.root.addChild(this.footerGapSpacer);
@@ -379,7 +383,10 @@ export class OwnedShellRenderer {
 		} else {
 			if (this.splash && this.splash.bottomSpacer.parent !== this.splash.root) this.splash.root.addChild(this.splash.bottomSpacer);
 			if (this.hasAboveEditorContainer) this.root.addChild(this.aboveEditorLeaf);
-			this.belowIndicatorSpacer.height = this.hasAboveEditorContainer ? 0 : SHELL_BLANK_ROW;
+			// Always 1 explicit blank row between the above-editor block and the
+			// editor. The aboveProxy provides a leading blank; this spacer provides
+			// the trailing gap so the bar / indicator never touches the input frame.
+			this.belowIndicatorSpacer.height = SHELL_BLANK_ROW;
 			this.root.addChild(this.belowIndicatorSpacer);
 			this.root.addChild(this.editorRow);
 			this.root.addChild(this.hintLeaf);
@@ -465,6 +472,7 @@ export class OwnedShellRenderer {
 		// PiComponentLeaf would return its stale cached measure and the autocomplete
 		// dropdown would be clipped or invisible.
 		this.headerLeaf.markDirty();
+		this.aboveEditorLeaf.markDirty();
 		this.editorLeaf.markDirty();
 		this.hintLeaf.markDirty();
 		this.footerLeaf.markDirty();

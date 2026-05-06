@@ -39,6 +39,9 @@ export class RetainedShellTransition {
 	public sync(): RetainedShellPhase {
 		const { root, chat, splash, emptyChatQuote } = this.parts;
 		const desiredPhase = chat.hasMessages() ? "active-chat" : "splash";
+		const shouldStartFade = desiredPhase === "active-chat" && !this.parts.reducedMotion && splash.root.parent === root && this.fadingSince === undefined;
+		if (shouldStartFade) this.fadingSince = this.now();
+		splash.setDimmed(this.fadingSince !== undefined);
 		splash.syncVisibility();
 
 		if (emptyChatQuote && emptyChatQuote.parent === root) {
@@ -46,9 +49,7 @@ export class RetainedShellTransition {
 		}
 
 		if (desiredPhase === "active-chat") {
-			if (!this.parts.reducedMotion && splash.root.parent === root && this.fadingSince === undefined) {
-				this.fadingSince = this.now();
-				splash.setDimmed(true);
+			if (shouldStartFade) {
 				this.parts.scheduleRender?.();
 				this.parts.setTimeout?.(() => this.parts.scheduleRender?.(), RetainedShellTransition.FADE_MS);
 				return "fading-splash";

@@ -56,13 +56,14 @@ function roleLabel(role: ChatMessageRole, primaryAgentName?: string): string {
 	if (role === "user") return "USER";
 	if (role === "sumo" || role === "assistant") return agentRoleLabel(primaryAgentName);
 	if (role === "tool") return "TOOL";
+	if (role === "bash") return "BASH";
 	return String(role).toUpperCase();
 }
 
 function roleColor(role: ChatMessageRole): string {
 	if (role === "user") return activeThemeColors().foreground;
 	if (role === "sumo" || role === "assistant") return activeThemeColors().accent;
-	if (role === "tool") return activeThemeColors().states.tool;
+	if (role === "tool" || role === "bash") return activeThemeColors().states.tool;
 	return activeThemeColors().foregroundDim;
 }
 

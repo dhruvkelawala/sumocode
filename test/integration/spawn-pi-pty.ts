@@ -70,6 +70,34 @@ function parseTerminalState(buffer: string): TerminalStateProbe {
 	};
 }
 
+/**
+ * SumoCode debug env vars that leak retained-mode wiring or diagnostics into
+ * spawned tests when set in the developer's shell (e.g. `sumocode -d`). They
+ * must NOT be inherited by integration child processes unless a test
+ * explicitly opts in via `options.env`. See #187.
+ */
+const SUMO_DEBUG_ENV_KEYS = [
+	"SUMO_TUI",
+	"SUMO_TUI_DEBUG",
+	"SUMO_TUI_DIAG_FILE",
+	"SUMO_TUI_MODULE",
+	"SUMO_TUI_HIDE_PI_NOISE",
+	"SUMOCODE_REDUCED_MOTION",
+	"SUMOCODE_DEBUG_BRANCH",
+	"SUMOCODE_DEBUG_COMMIT",
+] as const;
+
+export function buildSpawnEnv(parent: NodeJS.ProcessEnv, overrides: NodeJS.ProcessEnv | undefined): NodeJS.ProcessEnv {
+	const scrubbed: NodeJS.ProcessEnv = { ...parent };
+	for (const key of SUMO_DEBUG_ENV_KEYS) delete scrubbed[key];
+	return {
+		...scrubbed,
+		...(overrides ?? {}),
+		PI_OFFLINE: "1",
+		TERM: "xterm-256color",
+	};
+}
+
 export function spawnPiPty(options: SpawnPiPtyOptions = {}): SpawnedPiPty {
 	ensureNodePtySpawnHelperExecutable();
 
@@ -79,12 +107,7 @@ export function spawnPiPty(options: SpawnPiPtyOptions = {}): SpawnedPiPty {
 		cols: options.cols ?? 100,
 		rows: options.rows ?? 30,
 		cwd,
-		env: {
-			...process.env,
-			...options.env,
-			PI_OFFLINE: "1",
-			TERM: "xterm-256color",
-		},
+		env: buildSpawnEnv(process.env, options.env),
 	});
 
 	let output = "";

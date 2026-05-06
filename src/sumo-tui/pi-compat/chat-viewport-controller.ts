@@ -12,6 +12,7 @@ import {
 	type ChatMessageViewModel,
 } from "../transcript/view-model.js";
 import { ChatPager } from "../widgets/chat-pager.js";
+import { BashExecutionMirror } from "./bash-execution-mirror.js";
 import { chatScrollCommandFromInput } from "../widgets/chat-scroll-command.js";
 import { SIDEBAR_MIN_TERMINAL_WIDTH, SIDEBAR_WIDTH } from "../../sidebar.js";
 import { sidebarGutterWidth } from "../../sidebar-placement.js";
@@ -96,13 +97,6 @@ interface ChatViewportBridgeHost extends ChatViewportHost {
 	handleEvent?(event: unknown): unknown;
 	renderSessionContext?(sessionContext: unknown, options?: unknown): unknown;
 	[CHAT_VIEWPORT_BRIDGE_INSTALLED]?: () => void;
-}
-
-interface BashExecutionLike extends PiRenderableComponent {
-	getCommand(): string;
-	getOutput(): string;
-	appendOutput(chunk: string): void;
-	setComplete(exitCode?: number, cancelled?: boolean, truncationResult?: unknown, fullOutputPath?: string): void;
 }
 
 interface MouseInputDiagnosticsFields {
@@ -358,7 +352,7 @@ export class ChatViewportController {
 	private lastMouseRenderAt = 0;
 	private lastMouseInputAt = 0;
 	private renderRevision = 0;
-	private readonly mirroredBashComponents = new WeakSet<BashExecutionLike>();
+	private readonly bashMirror: BashExecutionMirror;
 	private readonly viewModelMapper = createTranscriptViewModelMapper();
 	private cachedRender: { revision: number; requestedWidth: number; chatTop: number; chatWidth: number; chatHeight: number; terminalRows: number; lines: string[] } | undefined;
 
@@ -366,7 +360,12 @@ export class ChatViewportController {
 		private readonly runtime: ChatViewportRuntime,
 		private readonly chat: ChatPager,
 		private readonly host: ChatViewportHost,
-	) {}
+	) {
+		this.bashMirror = new BashExecutionMirror(this.chat, {
+			requestRender: () => this.runtime.requestRender(),
+			markRenderDirty: () => this.markRenderDirty(),
+		});
+	}
 
 	public render(width: number): string[] {
 		// Pi's chatContainer is allocated the full terminal width by Pi's TUI.
@@ -413,27 +412,7 @@ export class ChatViewportController {
 	}
 
 	public attachForeignBashComponent(component: unknown): void {
-		if (!isBashExecutionComponent(component) || this.mirroredBashComponents.has(component)) return;
-		this.mirroredBashComponents.add(component);
-		const message = this.chat.addMessage("bash", this.renderBashComponentText(component, "running"));
-		const update = (status: "running" | "complete" = "running"): void => {
-			message.setText(this.renderBashComponentText(component, status));
-			this.markRenderDirty();
-			this.runtime.requestRender();
-		};
-		const originalAppendOutput = component.appendOutput.bind(component);
-		component.appendOutput = (chunk: string): void => {
-			originalAppendOutput(chunk);
-			update("running");
-		};
-		const originalSetComplete = component.setComplete.bind(component);
-		component.setComplete = (exitCode?: number, cancelled?: boolean, truncationResult?: unknown, fullOutputPath?: string): void => {
-			originalSetComplete(exitCode, cancelled, truncationResult, fullOutputPath);
-			update("complete");
-		};
-		logDiagnostic("foreign_bash_component_attached", { command: component.getCommand() });
-		this.markRenderDirty();
-		this.runtime.requestRender();
+		this.bashMirror.attach(component);
 	}
 
 	public clear(): void {
@@ -592,14 +571,6 @@ export class ChatViewportController {
 				archivedMessages: stats.archivedMessages,
 			});
 		}
-	}
-
-	private renderBashComponentText(component: BashExecutionLike, status: "running" | "complete"): string {
-		const output = component.getOutput().trimEnd();
-		const lines = [`$ ${component.getCommand()}`];
-		if (output.length > 0) lines.push("", output);
-		if (status === "running") lines.push("", "running…");
-		return lines.join("\n");
 	}
 
 	private handleToolExecutionEvent(record: Record<string, unknown>): void {
@@ -875,16 +846,6 @@ function selectionCopyKeyFromInput(data: string): KeyEvent | undefined {
 	const lower = data.toLowerCase();
 	if (lower === "cmd+c" || lower === "command+c" || lower === "meta+c") return { key: "c", sequence: data, meta: true };
 	return undefined;
-}
-
-function isBashExecutionComponent(value: unknown): value is BashExecutionLike {
-	const record = asRecord(value);
-	return !!record &&
-		typeof record.getCommand === "function" &&
-		typeof record.getOutput === "function" &&
-		typeof record.appendOutput === "function" &&
-		typeof record.setComplete === "function" &&
-		typeof record.render === "function";
 }
 
 export function installChatViewportBridge(upstream: unknown, runtime: ChatViewportBridgeRuntime): (() => void) | undefined {

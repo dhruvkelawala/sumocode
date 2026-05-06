@@ -77,10 +77,11 @@ async function runOneAttempt(scenario, runtime, attempt) {
 	const emptyOutputGraceMs = Math.max(0, Number(runtime.emptyOutputGraceMs ?? 5000));
 	if (!exited && output.trim().length === 0 && emptyOutputGraceMs > 0) {
 		// CI runners can be slow to reach the first retained-frame write,
-		// especially for no-input splash captures. Wait a short grace window
-		// while polling so we settle as soon as the first byte lands rather than
-		// always sleeping the full duration.
-		await waitForFirstByte(() => output.length > 0 || exited, emptyOutputGraceMs);
+		// especially for no-input splash captures. Poll for non-whitespace
+		// output so we settle as soon as the first frame byte lands but never
+		// short-circuit on stray `\r\n` keepalive chunks that would still trip
+		// the empty-output check below.
+		await waitForFirstByte(() => output.trim().length > 0 || exited, emptyOutputGraceMs);
 	}
 
 	const captured = output;

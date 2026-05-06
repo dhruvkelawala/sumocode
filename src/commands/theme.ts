@@ -1,6 +1,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { truncateToWidth, visibleWidth, type Component } from "@mariozechner/pi-tui";
 import { activeThemeColors, getActiveTheme, getTheme, listThemes, nextThemeName } from "../themes/index.js";
+import { saveSumoCodeConfigPatch } from "../config/sumocode-config.js";
 import { emitCathedralThemeChanged } from "../sumo-tui/cathedral/theme-bridge.js";
 
 /**
@@ -13,11 +14,13 @@ import { emitCathedralThemeChanged } from "../sumo-tui/cathedral/theme-bridge.js
  */
 export interface ApplyThemeOutcome {
 	readonly piWarning?: string;
+	readonly persistenceWarning?: string;
 }
 
 export function applyKnownTheme(
 	theme: { name: string },
 	applyPiTheme: ((name: string) => { success: boolean; error?: string }) | undefined,
+	persistTheme: ((name: string) => { success: boolean; error?: string }) | undefined = (name) => saveSumoCodeConfigPatch({ themeName: name }),
 ): ApplyThemeOutcome {
 	let piWarning: string | undefined;
 	if (applyPiTheme) {
@@ -25,7 +28,9 @@ export function applyKnownTheme(
 		if (!result.success) piWarning = result.error ?? theme.name;
 	}
 	emitCathedralThemeChanged(theme.name);
-	return piWarning === undefined ? {} : { piWarning };
+	const persistResult = persistTheme?.(theme.name);
+	const persistenceWarning = persistResult && !persistResult.success ? persistResult.error ?? theme.name : undefined;
+	return { ...(piWarning === undefined ? {} : { piWarning }), ...(persistenceWarning === undefined ? {} : { persistenceWarning }) };
 }
 
 export const THEME_RESULT_CUSTOM_TYPE = "sumocode-theme-result";
@@ -123,8 +128,12 @@ export function formatThemeList(): string[] {
 	return listThemes().map((theme) => `${theme.name === active ? "*" : " "} ${theme.name} — ${theme.description}`);
 }
 
+interface RegisterThemeOptions {
+	readonly persistTheme?: (name: string) => { success: boolean; error?: string };
+}
+
 /** Register the `Ctrl+Shift+T` / `Alt+T` cycle shortcuts. */
-export function registerThemeCycleShortcuts(pi: ExtensionAPI): void {
+export function registerThemeCycleShortcuts(pi: ExtensionAPI, options: RegisterThemeOptions = {}): void {
 	const handler = (ctx: ExtensionContext): void => {
 		const nextName = nextThemeName();
 		const theme = getTheme(nextName);
@@ -134,9 +143,10 @@ export function registerThemeCycleShortcuts(pi: ExtensionAPI): void {
 		}
 
 		const applyPi = ctx.hasUI ? (name: string) => ctx.ui.setTheme(name) : undefined;
-		const outcome = applyKnownTheme(theme, applyPi);
+		const outcome = applyKnownTheme(theme, applyPi, options.persistTheme);
 		if (ctx.hasUI) {
-			ctx.ui.notify(outcome.piWarning ? `theme: ${theme.name} (${outcome.piWarning})` : `theme: ${theme.name}`, "info");
+			const warning = outcome.persistenceWarning ?? outcome.piWarning;
+			ctx.ui.notify(warning ? `theme: ${theme.name} (${warning})` : `theme: ${theme.name}`, outcome.persistenceWarning ? "warning" : "info");
 		}
 	};
 
@@ -145,9 +155,9 @@ export function registerThemeCycleShortcuts(pi: ExtensionAPI): void {
 }
 
 /** Register `/sumo:theme [list|name]` for SumoCode theme switching. */
-export function registerThemeCommand(pi: ExtensionAPI): void {
+export function registerThemeCommand(pi: ExtensionAPI, options: RegisterThemeOptions = {}): void {
 	registerThemeResultRenderer(pi);
-	registerThemeCycleShortcuts(pi);
+	registerThemeCycleShortcuts(pi, options);
 	pi.registerCommand("sumo:theme", {
 		description: "Show or switch the active SumoCode theme",
 		handler: async (args: string, ctx: ExtensionContext) => {
@@ -169,10 +179,11 @@ export function registerThemeCommand(pi: ExtensionAPI): void {
 			}
 
 			const applyPi = ctx.hasUI ? (name: string) => ctx.ui.setTheme(name) : undefined;
-			const outcome = applyKnownTheme(theme, applyPi);
+			const outcome = applyKnownTheme(theme, applyPi, options.persistTheme);
 			const lines = [`theme set: ${theme.name}`];
 			if (outcome.piWarning) lines.push(`(Pi theme not found: ${outcome.piWarning})`);
-			pushThemeResult(pi, ctx, lines, "info");
+			if (outcome.persistenceWarning) lines.push(`(theme preference not saved: ${outcome.persistenceWarning})`);
+			pushThemeResult(pi, ctx, lines, outcome.persistenceWarning ? "warning" : "info");
 		},
 	});
 }

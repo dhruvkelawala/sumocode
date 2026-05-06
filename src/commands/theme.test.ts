@@ -59,13 +59,14 @@ describe("/sumo:theme", () => {
 		expect(sendMessage).toHaveBeenCalledWith(expect.anything(), { triggerTurn: false });
 	});
 
-	it("switches known themes through the registry and Pi theme API", async () => {
-		const { handler, sendMessage } = registerHarness();
+	it("switches known themes through the registry and Pi theme API and persists the preference", async () => {
+		const { handler, sendMessage, persistTheme } = registerHarness();
 		const setTheme = vi.fn(() => ({ success: true }));
 
 		await handler(" Cathedral ", uiContext({ setTheme }));
 
 		expect(setTheme).toHaveBeenCalledWith("cathedral");
+		expect(persistTheme).toHaveBeenCalledWith("cathedral");
 		expect(sendMessage).toHaveBeenCalledWith(
 			expect.objectContaining({ details: { tone: "info", lines: ["theme set: cathedral"] } }),
 			{ triggerTurn: false },
@@ -90,13 +91,14 @@ describe("/sumo:theme", () => {
 		);
 	});
 
-	it("warns for unknown themes without calling Pi theme API", async () => {
-		const { handler, sendMessage } = registerHarness();
+	it("warns for unknown themes without calling Pi theme API or persistence", async () => {
+		const { handler, sendMessage, persistTheme } = registerHarness();
 		const setTheme = vi.fn(() => ({ success: true }));
 
 		await handler("amber-crt", uiContext({ setTheme }));
 
 		expect(setTheme).not.toHaveBeenCalled();
+		expect(persistTheme).not.toHaveBeenCalled();
 		expect(sendMessage).toHaveBeenCalledWith(
 			expect.objectContaining({ details: { tone: "warning", lines: ["Unknown SumoCode theme: amber-crt"] } }),
 			{ triggerTurn: false },
@@ -109,14 +111,15 @@ describe("/sumo:theme", () => {
 			expect([...shortcuts.keys()].sort()).toEqual(["alt+t", "ctrl+shift+t"]);
 		});
 
-		it("cycles theme through Pi UI and notifies on success", async () => {
-			const { shortcuts } = registerHarness();
+		it("cycles theme through Pi UI, persists, and notifies on success", async () => {
+			const { shortcuts, persistTheme } = registerHarness();
 			const setTheme = vi.fn(() => ({ success: true }));
 			const notify = vi.fn();
 
 			await shortcuts.get("ctrl+shift+t")?.({ hasUI: true, ui: { notify, setTheme } });
 
 			expect(setTheme).toHaveBeenCalledWith("obsidian");
+			expect(persistTheme).toHaveBeenCalledWith("obsidian");
 			expect(notify).toHaveBeenCalledWith("theme: obsidian", "info");
 		});
 
@@ -140,6 +143,16 @@ describe("/sumo:theme", () => {
 
 			expect(notify).toHaveBeenCalledWith("theme: obsidian (Theme API unavailable)", "info");
 		});
+
+		it("warns when cycling succeeds but persistence fails", async () => {
+			const { shortcuts } = registerHarness({ persistTheme: vi.fn(() => ({ success: false, error: "EACCES" })) });
+			const setTheme = vi.fn(() => ({ success: true }));
+			const notify = vi.fn();
+
+			await shortcuts.get("ctrl+shift+t")?.({ hasUI: true, ui: { notify, setTheme } });
+
+			expect(notify).toHaveBeenCalledWith("theme: obsidian (EACCES)", "warning");
+		});
 	});
 });
 
@@ -148,9 +161,10 @@ interface RegisteredHarness {
 	shortcuts: Map<string, (ctx: any) => void | Promise<void>>;
 	sendMessage: ReturnType<typeof vi.fn>;
 	registerMessageRenderer: ReturnType<typeof vi.fn>;
+	persistTheme: ReturnType<typeof vi.fn>;
 }
 
-function registerHarness(): RegisteredHarness {
+function registerHarness(options: { persistTheme?: any } = {}): RegisteredHarness {
 	let handler: ((args: string, ctx: any) => Promise<void>) | undefined;
 	const shortcuts = new Map<string, (ctx: any) => void | Promise<void>>();
 	const registerCommand = vi.fn((_name: string, options: { handler: typeof handler }) => {
@@ -161,10 +175,11 @@ function registerHarness(): RegisteredHarness {
 	});
 	const sendMessage = vi.fn();
 	const registerMessageRenderer = vi.fn();
+	const persistTheme = options.persistTheme ?? vi.fn(() => ({ success: true }));
 
-	registerThemeCommand({ registerCommand, registerShortcut, sendMessage, registerMessageRenderer } as never);
+	registerThemeCommand({ registerCommand, registerShortcut, sendMessage, registerMessageRenderer } as never, { persistTheme });
 	if (!handler) throw new Error("handler was not registered");
-	return { handler, shortcuts, sendMessage, registerMessageRenderer };
+	return { handler, shortcuts, sendMessage, registerMessageRenderer, persistTheme };
 }
 
 function uiContext(options: { setTheme?: ReturnType<typeof vi.fn> } = {}): any {

@@ -209,13 +209,18 @@ export class SumoInteractiveRuntime {
 	}
 
 	public async start(): Promise<SumoInteractiveRuntimeSnapshot> {
+		logDiagnostic("runtime_start_begin", { started: this.started, isTTY: this.output.isTTY, columns: this.output.columns ?? null, rows: this.output.rows ?? null });
 		if (this.started && this.root && this.chat && this.scheduler && this.splash) {
 			return { root: this.root, chat: this.chat, scheduler: this.scheduler, splash: this.splash };
 		}
 
+		logDiagnostic("runtime_yoga_load_start");
 		const yogaPromise = loadYoga();
+		logDiagnostic("runtime_config_load_start");
 		const sumocodeConfig = loadSumoCodeConfig().config;
+		logDiagnostic("runtime_config_load_end", { primaryAgentName: sumocodeConfig.primaryAgentName });
 		this.yoga = await yogaPromise;
+		logDiagnostic("runtime_yoga_load_end");
 		this.root = new SumoNode(this.yoga.Node.create());
 		this.root.flexDirection = FLEX_DIRECTION_COLUMN;
 		this.chat = ChatPager.create(this.yoga, undefined, {
@@ -245,12 +250,15 @@ export class SumoInteractiveRuntime {
 			reducedMotion: !this.output.isTTY || process.env.SUMOCODE_REDUCED_MOTION === "1",
 		});
 		this.syncChatSlot();
+		logDiagnostic("runtime_tree_ready");
 		// Retained SumoInteractiveMode owns the application terminal contract.
 		// The extension lifecycle shim also enters altscreen when loaded, but the
 		// runtime must not depend on extension ordering: mouse wheel chat scrolling
 		// only works reliably when SGR mouse mode is enabled before Pi's first
 		// interactive frame.
+		logDiagnostic("terminal_retained_session_start");
 		this.terminal.startRetainedSession();
+		logDiagnostic("terminal_retained_session_end");
 		this.paintEagerSplashFrame();
 		logRuntimeStart({
 			terminal: {
@@ -278,6 +286,7 @@ export class SumoInteractiveRuntime {
 			this.requestRender();
 		});
 		this.started = true;
+		logDiagnostic("runtime_start_end");
 		debugLog("SumoInteractiveMode retained runtime started");
 		return { root: this.root, chat: this.chat, scheduler: this.scheduler, splash: this.splash };
 	}
@@ -496,17 +505,24 @@ export class SumoInteractiveRuntime {
 		this.syncChatSlot();
 		root.width = width;
 		root.height = height;
+		const layoutStart = performance.now();
 		root.yogaNode.calculateLayout(width, height, DIRECTION_LTR);
+		const layoutMs = performance.now() - layoutStart;
+		const compositeStart = performance.now();
 		const frame = new CellBuffer(height, width);
 		const compositeResult = composite(root, frame, { selection: this.selection });
 		const patches = diffFrames(undefined, frame);
-		if (patches.length === 0) return;
+		const compositeMs = performance.now() - compositeStart;
+		if (patches.length === 0) {
+			logDiagnostic("eager_splash_paint_skipped", { reason: "empty_patch_set", width, height });
+			return;
+		}
 		this.terminal.writeFramePatches(patches, compositeResult.hardwareCursor);
 		this.previousFrame = frame.clone();
 		this.renderedVersion = this.frameVersion;
 		this.renderedWidth = width;
 		this.renderedHeight = height;
-		logDiagnostic("eager_splash_paint", { width, height, patchCount: patches.length });
+		logDiagnostic("eager_splash_paint", { width, height, patchCount: patches.length, layoutMs: Math.round(layoutMs * 100) / 100, compositeMs: Math.round(compositeMs * 100) / 100 });
 	}
 
 	private emptyChatQuoteSnapshot(): EmptyChatQuoteSnapshot {
@@ -636,17 +652,25 @@ export class SumoInteractiveMode {
 	}
 
 	public async init(): Promise<void> {
+		logDiagnostic("sumo_mode_init_begin");
 		await this.retainedRuntime.start();
+		logDiagnostic("sumo_mode_retained_runtime_ready");
 		const upstream = this.ensureUpstream();
 		this.configureUpstreamBeforeInit(upstream);
+		logDiagnostic("upstream_init_start");
 		await upstream.init();
+		logDiagnostic("upstream_init_end");
 		this.configureUpstreamAfterInit(upstream);
+		logDiagnostic("sumo_mode_init_end");
 	}
 
 	public async run(): Promise<void> {
+		logDiagnostic("sumo_mode_run_begin");
 		await this.init();
 		debugLog("SumoInteractiveMode.run() delegating to Pi session loop");
+		logDiagnostic("upstream_run_start");
 		await this.ensureUpstream().run();
+		logDiagnostic("upstream_run_end");
 	}
 
 	public stop(): void {
@@ -681,8 +705,10 @@ export class SumoInteractiveMode {
 
 	private ensureUpstream(): InteractiveMode {
 		if (!this.upstream) {
+			logDiagnostic("upstream_construct_start");
 			if (shouldForceHardwareCursor() && process.env.PI_HARDWARE_CURSOR === undefined) process.env.PI_HARDWARE_CURSOR = "1";
 			this.upstream = new InteractiveMode(this.runtimeHost, this.options);
+			logDiagnostic("upstream_construct_end");
 			this.configureUpstreamBeforeInit(this.upstream);
 		}
 		return this.upstream;
@@ -796,7 +822,11 @@ export class SumoInteractiveMode {
 
 		// Trigger an immediate paint so the owned shell appears without waiting
 		// for the next Pi-driven render request.
-		process.nextTick(() => this.ownedShell?.render());
+		process.nextTick(() => {
+			logDiagnostic("owned_shell_initial_render_start");
+			this.ownedShell?.render();
+			logDiagnostic("owned_shell_initial_render_end");
+		});
 
 		logDiagnostic("owned_shell_installed", {
 			cols: dimensions.columns ?? null,

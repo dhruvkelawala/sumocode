@@ -178,7 +178,7 @@ class RenderStats {
 		}
 	}
 
-	public recordModuleLoad(spec: string, durationMs: number): void {
+	public recordModuleLoad(spec: string, durationMs: number, fields: Record<string, unknown> = {}): void {
 		this.moduleLoad.count += 1;
 		this.moduleLoad.totalMs += durationMs;
 		if (durationMs > this.moduleLoad.maxMs) {
@@ -186,7 +186,7 @@ class RenderStats {
 			this.moduleLoad.slowestSpec = spec;
 		}
 		if (durationMs >= SLOW_MODULE_LOAD_MS) {
-			logDiagnostic("module_load_slow", { spec, durationMs: round(durationMs) });
+			logDiagnostic("module_load_slow", { spec, durationMs: round(durationMs), ...fields });
 		}
 	}
 
@@ -577,11 +577,21 @@ function instrumentModuleLoad(): void {
 		const original = proto.require;
 		proto.require = function patchedRequire(this: unknown, id: string) {
 			const start = performance.now();
+			let resolved: string | undefined;
+			let parentId: string | undefined;
+			try {
+				const parent = this as { id?: unknown; filename?: unknown; path?: unknown; constructor?: { _resolveFilename?: (request: string, parent: unknown) => string } };
+				parentId = typeof parent.filename === "string" ? parent.filename : typeof parent.id === "string" ? parent.id : undefined;
+				const resolveFilename = parent.constructor?._resolveFilename;
+				if (typeof resolveFilename === "function") resolved = resolveFilename(id, this);
+			} catch {
+				// Best-effort context only.
+			}
 			try {
 				return original.call(this, id);
 			} finally {
 				const duration = performance.now() - start;
-				stats.recordModuleLoad(id, duration);
+				stats.recordModuleLoad(id, duration, { resolved, parent: parentId });
 			}
 		};
 		Module.__sumoTuiDiagnosticsModuleLoadPatched = true;

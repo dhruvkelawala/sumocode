@@ -415,7 +415,7 @@ export class ChatViewportController {
 	public attachForeignBashComponent(component: unknown): void {
 		if (!isBashExecutionComponent(component) || this.mirroredBashComponents.has(component)) return;
 		this.mirroredBashComponents.add(component);
-		const message = this.chat.addMessage("tool", this.renderBashComponentText(component, "running"));
+		const message = this.chat.addMessage("bash", this.renderBashComponentText(component, "running"));
 		const update = (status: "running" | "complete" = "running"): void => {
 			message.setText(this.renderBashComponentText(component, status));
 			this.markRenderDirty();

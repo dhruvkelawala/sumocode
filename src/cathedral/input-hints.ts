@@ -19,7 +19,7 @@ import { getGitBranch, sessionHasMessages as cachedSessionHasMessages } from "..
 import { INPUT_FRAME_HINT_AWAITING, renderInputHints } from "./input-frame.js";
 
 const SPLASH_INPUT_FRAME_WIDTH = 60;
-const PORTRAIT_HINT_BREATHING_WIDTH = 80;
+const ACTIVE_HINT_HORIZONTAL_PADDING = 1;
 const ANSI_PATTERN = /\u001b\[[0-9;]*m/g;
 
 function centerAnsi(line: string, width: number): string {
@@ -46,11 +46,10 @@ class InputHintsComponent implements Component {
 		}
 		// Active bottom breathing rows are owned by the retained shell layout shim,
 		// not by the hint component. This keeps the component semantic: one hint row.
-		if (width > 2 && width < PORTRAIT_HINT_BREATHING_WIDTH) {
-			const hint = renderInputHints(width - 2, { leftHint: this.activeLeftHint(), leftHintOverflow: "truncate", leftHintStyle: "project-branch" });
-			return [` ${hint} `];
-		}
-		return [renderInputHints(width, { leftHint: this.activeLeftHint(), leftHintOverflow: "truncate", leftHintStyle: "project-branch" })];
+		const pad = width > ACTIVE_HINT_HORIZONTAL_PADDING * 2 ? ACTIVE_HINT_HORIZONTAL_PADDING : 0;
+		const innerWidth = Math.max(0, width - pad * 2);
+		const hint = renderInputHints(innerWidth, { leftHint: this.activeLeftHint(), leftHintOverflow: "truncate", leftHintStyle: "project-branch" });
+		return [`${" ".repeat(pad)}${hint}${" ".repeat(pad)}`];
 	}
 }
 

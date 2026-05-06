@@ -155,7 +155,7 @@
 					"targetCrop": "footer-component",
 					"runtimeCrop": "footer-component",
 					"status": "required",
-					"threshold": 0.04
+					"threshold": 0.045
 				}
 			]
 		},

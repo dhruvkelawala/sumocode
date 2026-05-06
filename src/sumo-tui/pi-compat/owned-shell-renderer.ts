@@ -84,6 +84,14 @@ export interface OwnedShellRendererOptions {
 	/** Retained top chrome published by `installTopChrome`; falls back to Pi's header container during tests/startup. */
 	readonly topChromePublication?: () => TopChromePublication | undefined;
 	readonly widgetContainerBelow: () => Component;
+	/**
+	 * Lazy resolver for Pi's `widgetContainerAbove` (the slot that hosts
+	 * extension widgets registered with `setWidget(..., { placement: "aboveEditor" })`,
+	 * including the SumoCode working indicator). Optional for backward
+	 * compatibility — owned-shell tests and host environments that don't expose
+	 * a Pi-style `widgetContainerAbove` get a static blank single-row leaf.
+	 */
+	readonly widgetContainerAbove?: () => Component;
 	/** Resolves to Pi's pending-messages container (queued steer/follow-up messages). */
 	readonly pendingMessagesContainer?: () => Component;
 	/** Resolves to the currently mounted footer (custom extension footer or Pi built-in). */
@@ -146,14 +154,33 @@ export class OwnedShellRenderer {
 	private readonly chatRow: SumoNode;
 	private readonly sidebarGutter: SumoNode;
 	private readonly sidebarLeaf: PiComponentLeaf;
-	private readonly blankSpacer: SumoNode;
+	/**
+	 * Always-blank 1-row breathing spacer between the chat region and the
+	 * above-editor widget slot. Keeps transient activity chrome from crowding
+	 * the final chat message.
+	 */
+	private readonly aboveIndicatorSpacer: SumoNode;
+	/**
+	 * Always-blank 1-row breathing spacer between the above-editor widget slot
+	 * and the editor. Preserves the V2 Bible contract that transient activity
+	 * chrome (notably the working indicator) does not crowd the editor frame.
+	 */
+	private readonly belowIndicatorSpacer: SumoNode;
+	/**
+	 * 1-row leaf above the editor. Wraps Pi's `widgetContainerAbove` so widgets
+	 * registered with `setWidget(... "aboveEditor")` (notably the working
+	 * indicator) actually paint inside the owned shell. Renders an empty row
+	 * when no widget is mounted (or the widget reports idle).
+	 */
+	private readonly aboveEditorLeaf: PiComponentLeaf;
+	private readonly hasAboveEditorContainer: boolean;
 	private readonly footerGapSpacer: SumoNode;
 	private readonly bottomSafeSpacer: SumoNode;
 	private readonly chat: ChatPager;
 	private readonly splash: SplashTree | undefined;
 	private mountedChatChild: "chat" | "splash" | undefined;
 	private mountedSidebar = false;
-	private inputMountedInSplash = false;
+	private inputMountedInSplash: boolean | undefined;
 	private disposed = false;
 
 	public constructor(options: OwnedShellRendererOptions) {
@@ -203,11 +230,50 @@ export class OwnedShellRenderer {
 		this.sidebarLeaf.flexShrink = 0;
 		this.syncChatRowChildren(this.dimensions.columns ?? 80, this.dimensions.rows ?? 24);
 
-		// 3) blank breathing row above input
-		this.blankSpacer = new SumoNode(this.yoga.Node.create(), this.root);
-		this.blankSpacer.height = SHELL_BLANK_ROW;
+		// 3) blank breathing row above the activity slot.
+		this.aboveIndicatorSpacer = new SumoNode(this.yoga.Node.create(), this.root);
+		this.aboveIndicatorSpacer.height = SHELL_BLANK_ROW;
 
-		// 3b) pending messages — painted into the blank spacer row during composite,
+		// 3b) above-editor row — hosts Pi's `widgetContainerAbove` (the slot for
+		//     `setWidget(... "aboveEditor")` widgets such as the working indicator).
+		//
+		//     Pi's `renderWidgetContainer(... leadingSpacer=true)` injects a leading
+		//     `Spacer(1)` before the first widget, so `widgetContainerAbove.render(w)`
+		//     returns `[<spacer line>, <widget line(s)>…]`. We already have a
+		//     dedicated breathing row above this leaf, so Pi's spacer would push the
+		//     widget into a clipped row 2. Drop Pi's leading line so the widget
+		//     paints into row 1 of the leaf.
+		//
+		//    Defaults to a static empty 1-row component when the host doesn't
+		//    expose a Pi-style above-editor container.
+		this.hasAboveEditorContainer = options.widgetContainerAbove !== undefined;
+		const aboveSource: Component | undefined = this.hasAboveEditorContainer
+			? (new LazyComponentProxy(options.widgetContainerAbove!) as unknown as Component)
+			: undefined;
+		const aboveProxy: Component = aboveSource
+			? {
+					render: (w: number) => {
+						const raw = aboveSource.render(w);
+						// Drop Pi's leading Spacer(1). If nothing remains, no above-editor
+						// widget is installed, so collapse to zero rows. If a widget remains
+						// but renders blank (the retained working indicator's idle state),
+						// still reserve the same breathing + widget + breathing block so
+						// agent_start/agent_end does not shift the editor/footer.
+						const content = raw.length > 1 ? raw.slice(1) : [];
+						return content.length > 0 ? ["", ...content, ""] : [];
+					},
+					invalidate: () => aboveSource.invalidate?.(),
+				}
+			: { render: (_w: number) => [], invalidate: () => undefined };
+		this.aboveEditorLeaf = PiComponentLeaf.create(this.yoga, aboveProxy, this.root);
+
+		// 3c) blank breathing row — always 1 empty row between the above-editor
+		//     widget slot and the editor. This is the row that keeps `Working…`
+		//     from visually touching the input frame while the agent is busy.
+		this.belowIndicatorSpacer = new SumoNode(this.yoga.Node.create(), this.root);
+		this.belowIndicatorSpacer.height = SHELL_BLANK_ROW;
+
+		// 3d) pending messages — painted into the lower blank spacer row during composite,
 		// NOT a separate Yoga leaf. This avoids vertical layout shift when messages
 		// are queued.
 		this.resolvePendingMessages = options.pendingMessagesContainer;
@@ -283,7 +349,9 @@ export class OwnedShellRenderer {
 		if (centerWithSplash === this.inputMountedInSplash) return;
 
 		const movableNodes: SumoNode[] = [
-			this.blankSpacer,
+			this.aboveIndicatorSpacer,
+			this.aboveEditorLeaf,
+			this.belowIndicatorSpacer,
 			this.editorRow,
 			this.hintLeaf,
 			this.footerGapSpacer,
@@ -296,7 +364,12 @@ export class OwnedShellRenderer {
 
 		if (centerWithSplash && this.splash) {
 			if (this.splash.bottomSpacer.parent === this.splash.root) this.splash.root.removeChild(this.splash.bottomSpacer);
-			this.splash.root.addChild(this.blankSpacer);
+			// Splash mode never shows the working indicator (no agent activity yet),
+			// so the above-editor leaf stays detached and only one breathing row
+			// is mounted. Restore this shared spacer because the active branch may
+			// collapse it to zero height when the host exposes widgetContainerAbove.
+			this.belowIndicatorSpacer.height = SHELL_BLANK_ROW;
+			this.splash.root.addChild(this.belowIndicatorSpacer);
 			this.splash.root.addChild(this.editorRow);
 			this.splash.root.addChild(this.hintLeaf);
 			this.splash.root.addChild(this.splash.bottomSpacer);
@@ -305,7 +378,9 @@ export class OwnedShellRenderer {
 			this.root.addChild(this.bottomSafeSpacer);
 		} else {
 			if (this.splash && this.splash.bottomSpacer.parent !== this.splash.root) this.splash.root.addChild(this.splash.bottomSpacer);
-			this.root.addChild(this.blankSpacer);
+			if (this.hasAboveEditorContainer) this.root.addChild(this.aboveEditorLeaf);
+			this.belowIndicatorSpacer.height = this.hasAboveEditorContainer ? 0 : SHELL_BLANK_ROW;
+			this.root.addChild(this.belowIndicatorSpacer);
 			this.root.addChild(this.editorRow);
 			this.root.addChild(this.hintLeaf);
 			this.root.addChild(this.footerGapSpacer);
@@ -433,7 +508,9 @@ export class OwnedShellRenderer {
 				chat: this.nodeRect(this.chat),
 				sidebarGutter: this.nodeRect(this.sidebarGutter),
 				sidebar: this.nodeRect(this.sidebarLeaf),
-				inputSpacer: this.nodeRect(this.blankSpacer),
+				inputSpacer: this.nodeRect(this.belowIndicatorSpacer),
+				aboveEditorSpacer: this.nodeRect(this.aboveIndicatorSpacer),
+				aboveEditor: this.nodeRect(this.aboveEditorLeaf),
 				editorRow: this.nodeRect(this.editorRow),
 				editor: this.nodeRect(this.editorLeaf),
 				hint: this.nodeRect(this.hintLeaf),
@@ -590,7 +667,9 @@ export class OwnedShellRenderer {
 		this.editorLeaf.dispose();
 		this.hintLeaf.dispose();
 		this.footerLeaf.dispose();
-		this.blankSpacer.dispose();
+		this.aboveIndicatorSpacer.dispose();
+		this.aboveEditorLeaf.dispose();
+		this.belowIndicatorSpacer.dispose();
 		this.footerGapSpacer.dispose();
 		this.bottomSafeSpacer.dispose();
 		// Chat + splash are owned by SumoInteractiveRuntime; only detach.

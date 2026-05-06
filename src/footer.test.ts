@@ -118,12 +118,14 @@ describe("formatFooterLine — F1 two-zone layout", () => {
 		expect(line.length).toBeLessThanOrEqual(50);
 	});
 
-	it("adds one-cell side padding for portrait footer rhythm", () => {
-		const line = withoutAnsi(formatFooterLine(snapshot(), 60));
-		expect(line).toHaveLength(60);
-		expect(line.startsWith(" ")).toBe(true);
-		expect(line.endsWith(" ")).toBe(true);
-		expect(line.trim()).toContain(VOICE.status.idle);
+	it("adds one-cell side padding for footer rhythm", () => {
+		for (const width of [60, 160]) {
+			const line = withoutAnsi(formatFooterLine(snapshot(), width));
+			expect(line).toHaveLength(width);
+			expect(line.startsWith(" ")).toBe(true);
+			expect(line.endsWith(" ")).toBe(true);
+			expect(line.trim()).toContain(VOICE.status.idle);
+		}
 	});
 });
 

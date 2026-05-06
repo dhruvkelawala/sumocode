@@ -6,9 +6,15 @@ import { repoRoot } from "./paths.mjs";
 
 const DEFAULT_MAX_ATTEMPTS = 2;
 
+function clampPositiveInt(value, fallback) {
+	const parsed = Math.floor(Number(value));
+	if (!Number.isFinite(parsed) || parsed < 1) return fallback;
+	return parsed;
+}
+
 export async function captureRuntimeScenario(scenario) {
 	const runtime = scenario.runtime ?? {};
-	const maxAttempts = Math.max(1, Number(runtime.maxAttempts ?? DEFAULT_MAX_ATTEMPTS));
+	const maxAttempts = clampPositiveInt(runtime.maxAttempts ?? DEFAULT_MAX_ATTEMPTS, DEFAULT_MAX_ATTEMPTS);
 	let lastError;
 	const attemptDiagnostics = [];
 	for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {

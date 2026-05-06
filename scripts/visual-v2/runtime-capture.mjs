@@ -4,8 +4,36 @@ import { dirname, resolve } from "node:path";
 import { spawn } from "node-pty";
 import { repoRoot } from "./paths.mjs";
 
+const DEFAULT_MAX_ATTEMPTS = 2;
+
 export async function captureRuntimeScenario(scenario) {
 	const runtime = scenario.runtime ?? {};
+	const maxAttempts = Math.max(1, Number(runtime.maxAttempts ?? DEFAULT_MAX_ATTEMPTS));
+	let lastError;
+	const attemptDiagnostics = [];
+	for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+		try {
+			const result = await runOneAttempt(scenario, runtime, attempt);
+			if (attemptDiagnostics.length > 0) {
+				result.metadata = {
+					...result.metadata,
+					earlierAttempts: attemptDiagnostics,
+				};
+			}
+			return result;
+		} catch (error) {
+			attemptDiagnostics.push({ attempt, message: error.message, ...(error.diagnostics ?? {}) });
+			lastError = error;
+			if (!error.retryable || attempt === maxAttempts) break;
+		}
+	}
+	if (lastError && attemptDiagnostics.length > 0) {
+		lastError.message = `${lastError.message} | attempts: ${JSON.stringify(attemptDiagnostics)}`;
+	}
+	throw lastError ?? new Error(`Runtime capture ${scenario.id} failed without a recorded error`);
+}
+
+async function runOneAttempt(scenario, runtime, attempt) {
 	const command = runtime.command ?? "./bin/sumocode.sh";
 	const args = runtime.args ?? ["--offline", "--no-session"];
 	const dimensions = scenario.dimensions;
@@ -19,10 +47,13 @@ export async function captureRuntimeScenario(scenario) {
 		env: deterministicEnv(runtime.env),
 	});
 
+	const startedAt = Date.now();
 	let output = "";
 	let exited = false;
 	let exitInfo = null;
+	let firstByteAt = null;
 	child.onData((data) => {
+		if (firstByteAt === null) firstByteAt = Date.now();
 		output += data;
 	});
 	child.onExit((event) => {
@@ -31,11 +62,9 @@ export async function captureRuntimeScenario(scenario) {
 	});
 
 	const inputs = runtime.inputs ?? [];
-	let elapsed = 0;
 	for (const input of inputs) {
 		const wait = Math.max(0, Number(input.afterMs ?? 0));
 		await sleep(wait);
-		elapsed += wait;
 		if (exited) break;
 		if (input.type === "text") child.write(input.value ?? "");
 		else if (input.type === "key") child.write(input.value ?? "");
@@ -44,14 +73,16 @@ export async function captureRuntimeScenario(scenario) {
 
 	const settleMs = Math.max(0, Number(runtime.settleMs ?? 500));
 	await sleep(settleMs);
+
 	const emptyOutputGraceMs = Math.max(0, Number(runtime.emptyOutputGraceMs ?? 5000));
 	if (!exited && output.trim().length === 0 && emptyOutputGraceMs > 0) {
-		// CI runners can be slow to reach the first retained-frame write, especially
-		// for no-input splash captures. Do not fail immediately at settleMs just
-		// because startup has not emitted bytes yet; wait a short grace window for
-		// first output while keeping genuinely silent captures diagnosable.
-		await sleep(emptyOutputGraceMs);
+		// CI runners can be slow to reach the first retained-frame write,
+		// especially for no-input splash captures. Wait a short grace window
+		// while polling so we settle as soon as the first byte lands rather than
+		// always sleeping the full duration.
+		await waitForFirstByte(() => output.length > 0 || exited, emptyOutputGraceMs);
 	}
+
 	const captured = output;
 	const plain = stripAnsi(captured);
 	const rejection = findRejection(plain, scenario.rejectIfOutputMatches ?? []);
@@ -62,14 +93,36 @@ export async function captureRuntimeScenario(scenario) {
 		// process may already be gone
 	}
 
+	const durationMs = Date.now() - startedAt;
+	const diagnostics = {
+		attempt,
+		durationMs,
+		outputBytes: captured.length,
+		outputTrimmedLength: captured.trim().length,
+		firstByteMs: firstByteAt === null ? null : firstByteAt - startedAt,
+		exited,
+		exitCode: exitInfo?.exitCode ?? null,
+		exitSignal: exitInfo?.signal ?? null,
+		outputTail: captured.length > 0 ? captured.slice(-512) : null,
+	};
+
 	if (rejection) {
-		throw new Error(`Runtime capture ${scenario.id} matched rejection pattern ${JSON.stringify(rejection.pattern)}. Snippet: ${JSON.stringify(rejection.snippet)}`);
+		const error = new Error(`Runtime capture ${scenario.id} matched rejection pattern ${JSON.stringify(rejection.pattern)}. Snippet: ${JSON.stringify(rejection.snippet)}`);
+		error.retryable = false;
+		error.diagnostics = diagnostics;
+		throw error;
 	}
 	if (captured.trim().length === 0) {
-		throw new Error(`Runtime capture ${scenario.id} produced no terminal output after settleMs=${settleMs} and emptyOutputGraceMs=${emptyOutputGraceMs}`);
+		const error = new Error(`Runtime capture ${scenario.id} produced no terminal output after settleMs=${settleMs} and emptyOutputGraceMs=${emptyOutputGraceMs} (exited=${exited}, exitCode=${exitInfo?.exitCode ?? "none"}, exitSignal=${exitInfo?.signal ?? "none"})`);
+		error.retryable = true;
+		error.diagnostics = diagnostics;
+		throw error;
 	}
 	if (exited && exitInfo?.exitCode && exitInfo.exitCode !== 0) {
-		throw new Error(`Runtime capture ${scenario.id} exited early with code ${exitInfo.exitCode}`);
+		const error = new Error(`Runtime capture ${scenario.id} exited early with code ${exitInfo.exitCode} (signal=${exitInfo.signal ?? "none"}, outputBytes=${captured.length})`);
+		error.retryable = true;
+		error.diagnostics = diagnostics;
+		throw error;
 	}
 
 	return {
@@ -86,8 +139,20 @@ export async function captureRuntimeScenario(scenario) {
 			inputCount: inputs.length,
 			exited,
 			exitInfo,
+			attempt,
+			firstByteMs: diagnostics.firstByteMs,
+			durationMs,
 		},
 	};
+}
+
+async function waitForFirstByte(isReady, timeoutMs) {
+	const pollMs = 50;
+	const started = Date.now();
+	while (Date.now() - started < timeoutMs) {
+		if (isReady()) return;
+		await sleep(pollMs);
+	}
 }
 
 function deterministicEnv(extra = {}) {

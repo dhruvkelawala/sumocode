@@ -126,6 +126,30 @@ describe("PiEditorLeaf", () => {
 		root.dispose();
 	});
 
+	it("keeps blank rows inside multiline prompts selectable so paragraph breaks survive copy", async () => {
+		const yoga = await loadYoga();
+		const root = new SumoNode(yoga.Node.create());
+		const rows = [
+			"\u256D\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u256E",
+			"\u2502 line1 \u2502",
+			"\u2502       \u2502",
+			"\u2502 line3 \u2502",
+			"\u2570\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u256F",
+		];
+		new PiEditorLeaf(yoga.Node.create(), asEditor(new FakeEditor(rows)), root);
+		root.width = 9;
+		root.yogaNode.calculateLayout(9, undefined, DIRECTION_LTR);
+		const buffer = new CellBuffer(5, 9);
+		composite(root, buffer);
+
+		for (const row of [1, 2, 3]) {
+			for (let col = 1; col <= 7; col += 1) {
+				expect(buffer.getSelectionMeta(row, col)).toEqual({ selectable: true });
+			}
+		}
+		root.dispose();
+	});
+
 	it("preserves ANSI underline around IME pre-edit while stripping only the marker (EC-1.5)", async () => {
 		const yoga = await loadYoga();
 		const root = new SumoNode(yoga.Node.create());

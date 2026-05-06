@@ -106,7 +106,7 @@ describe("PiEditorLeaf", () => {
 			"\u2502 hello \u2502",
 			"\u2570\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u256F",
 		];
-		const leaf = new PiEditorLeaf(yoga.Node.create(), asEditor(new FakeEditor(rows)), root);
+		new PiEditorLeaf(yoga.Node.create(), asEditor(new FakeEditor(rows)), root);
 		root.width = 9;
 		root.yogaNode.calculateLayout(9, undefined, DIRECTION_LTR);
 		const buffer = new CellBuffer(3, 9);

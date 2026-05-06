@@ -3,7 +3,7 @@ import type { Component, OverlayOptions } from "@mariozechner/pi-tui";
 import { Key, matchesKey, truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
 import type { ThinkingLevel } from "./footer.js";
 import { showDivineQuery } from "./divine-query.js";
-import { activeThemeColors } from "./themes/index.js";
+import { activeThemeColors, getActiveTheme } from "./themes/index.js";
 
 export type PaletteMode = "SESSION" | "MODEL" | "THINKING" | "MEMORY" | "THEME" | "SETTINGS";
 
@@ -237,7 +237,12 @@ export function buildPaletteSnapshot(ctx: PaletteSnapshotContext): CommandPalett
 	const sessionLabel = ctx.sessionManager.getSessionName() ?? ctx.sessionManager.getSessionId().split("-")[0] ?? "current-session";
 	const modelId = ctx.model?.id ?? "no-model";
 	const thinkingLevel = ctx.getThinkingLevel?.() ?? "medium";
-	const themeName = (ctx.ui.theme as { name?: string } | undefined)?.name ?? "cathedral";
+	// Read from the SumoCode theme registry, not `ctx.ui.theme`. Pi's theme API
+	// only knows its own built-ins (catppuccin/dracula), so for SumoCode-only
+	// themes (e.g. `obsidian`) Pi rejects `setTheme` and `ctx.ui.theme.name`
+	// stays on the previous Pi theme. The SumoCode registry is the authoritative
+	// source of truth for which theme is currently rendering.
+	const themeName = getActiveTheme().name;
 
 	return {
 		searchQuery: "",

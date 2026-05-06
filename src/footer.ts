@@ -47,7 +47,7 @@ type GitRunner = (args: string[], cwd: string) => string;
 const RESET = "\u001b[0m";
 const SPLASH_VERSION_TOP_GAP_ROWS = 2;
 const SPLASH_VERSION_BOTTOM_GAP_ROWS = 7;
-const PORTRAIT_FOOTER_PAD_WIDTH = 80;
+const FOOTER_HORIZONTAL_PADDING = 1;
 
 export function colorHex(text: string, hex: string): string {
 	const normalized = hex.replace("#", "");
@@ -99,11 +99,11 @@ export function resolveGitBranch(cwd: string, runGit: GitRunner = defaultGitRunn
  * when the sidebar is hidden.
  */
 export function formatFooterLine(snapshot: FooterSnapshot, width = 160): string {
-	const compactPad = width > 2 && width < PORTRAIT_FOOTER_PAD_WIDTH;
-	const contentWidth = compactPad ? width - 2 : width;
+	const pad = width > FOOTER_HORIZONTAL_PADDING * 2 ? FOOTER_HORIZONTAL_PADDING : 0;
+	const contentWidth = Math.max(0, width - pad * 2);
 	const inner = formatFooterLineInner(snapshot, contentWidth);
-	if (!compactPad) return inner;
-	return ` ${padAnsiToWidth(inner, contentWidth)} `;
+	if (pad === 0) return inner;
+	return `${" ".repeat(pad)}${padAnsiToWidth(inner, contentWidth)}${" ".repeat(pad)}`;
 }
 
 function padAnsiToWidth(line: string, width: number): string {

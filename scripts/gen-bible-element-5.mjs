@@ -26,6 +26,8 @@ const STATES = {
 /** Build a footer row. Returns inner HTML for one <pre.grid> row. */
 function buildFooter({ cols, state, model, thinking, ctxTokens, ctxWindow, cost }) {
 	const { label, dotClass } = STATES[state];
+	const horizontalPad = cols > 2 ? 1 : 0;
+	const innerCols = Math.max(0, cols - horizontalPad * 2);
 
 	// Left zone construction (visible content + length)
 	// ● <LABEL> · <model> · <thinking>
@@ -45,13 +47,13 @@ function buildFooter({ cols, state, model, thinking, ctxTokens, ctxWindow, cost 
 	// 2: ctx/win                               [< 70]
 	// 3: <empty>                               [< 50]
 	let rightTokens = [];
-	if (cols >= 50)  rightTokens.push(`${ctxTokens}/${ctxWindow}`);
-	if (cols >= 70)  rightTokens.push(`$${cost}`);
+	if (innerCols >= 50)  rightTokens.push(`${ctxTokens}/${ctxWindow}`);
+	if (innerCols >= 70)  rightTokens.push(`$${cost}`);
 
 	const rightStr = rightTokens.join(" · ");
 	const rightLen = rightStr.length;
 
-	const padLen = cols - leftLen - rightLen;
+	const padLen = innerCols - leftLen - rightLen;
 	if (padLen < 0) {
 		throw new Error(`footer too long for ${cols} cols: leftLen=${leftLen} rightLen=${rightLen}`);
 	}
@@ -69,7 +71,7 @@ function buildFooter({ cols, state, model, thinking, ctxTokens, ctxWindow, cost 
 			.join("");
 	}
 
-	return leftHTML + rep(" ", padLen) + rightHTML;
+	return rep(" ", horizontalPad) + leftHTML + rep(" ", padLen) + rightHTML + rep(" ", horizontalPad);
 }
 
 /** Build splash version line (centered, dim) */

@@ -1,5 +1,6 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { Key } from "@mariozechner/pi-tui";
+import { resetThemeRegistryForTests, setActiveTheme } from "./themes/index.js";
 import {
 	COMMAND_PALETTE_HINT_ROW,
 	COMMAND_PALETTE_MODE_ROWS,
@@ -172,6 +173,8 @@ describe("installCommandPalette", () => {
 });
 
 describe("buildPaletteSnapshot", () => {
+	afterEach(() => resetThemeRegistryForTests());
+
 	it("builds current values from context", () => {
 		const snap = buildPaletteSnapshot({
 			sessionManager: { getSessionName: () => "refactor-auth-flow", getSessionId: () => "019dcbf5" },
@@ -189,6 +192,25 @@ describe("buildPaletteSnapshot", () => {
 			"THEME:cathedral",
 			"SETTINGS:",
 		]);
+	});
+
+	// Regression for Codex P2: Pi theme API only knows its built-ins, so for
+	// SumoCode-only themes (`obsidian`) `ctx.ui.theme.name` keeps reporting the
+	// previous Pi theme even after the registry switched. The palette must read
+	// from the SumoCode registry, not Pi.
+	it("reads active theme from the SumoCode registry, not ctx.ui.theme", () => {
+		const result = setActiveTheme("obsidian");
+		expect(result.success).toBe(true);
+
+		const snap = buildPaletteSnapshot({
+			sessionManager: { getSessionName: () => "any-session", getSessionId: () => "abc" },
+			model: { id: "claude-opus-4-7" },
+			getThinkingLevel: () => "medium",
+			ui: { theme: { name: "cathedral" } },
+		} as never);
+
+		const themeRow = snap.rows.find((row) => row.label === "THEME");
+		expect(themeRow?.currentValue).toBe("obsidian");
 	});
 });
 

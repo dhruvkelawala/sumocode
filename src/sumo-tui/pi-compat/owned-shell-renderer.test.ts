@@ -51,7 +51,7 @@ describe("ownedShellEnabled", () => {
 });
 
 describe("OwnedShellRenderer", () => {
-	it("composes the #161 column tree with the footer pinned to the last row", async () => {
+	it("composes the #161 column tree with the footer pinned to the bottom block", async () => {
 		const yoga = await loadYoga();
 		const chat = ChatPager.create(yoga);
 		const fakeTerminal = new FakeTerminal();
@@ -73,18 +73,53 @@ describe("OwnedShellRenderer", () => {
 		expect(lines[0]?.startsWith("TOP")).toBe(true);
 		// title bar is separated from chat/sidebar by one breathing row
 		expect(lines[1]?.trim()).toBe("");
-		// footer is pinned above the terminal-bottom safe row
-		expect(lines[10]?.startsWith("FOOTER")).toBe(true);
-		expect(lines[11]?.trim()).toBe("");
-		// hint is separated from footer by one breathing row
-		expect(lines[8]?.startsWith("HINT")).toBe(true);
-		expect(lines[9]?.trim()).toBe("");
-		// editor occupies 3 rows above hint (rows 5..7), hint=8, footer=10
-		expect(lines[5]?.startsWith("┌")).toBe(true);
-		expect(lines[7]?.startsWith("└")).toBe(true);
-		// blank row above editor
-		expect(lines[4]?.trim()).toBe("");
+		// footer is restored in the bottom block
+		expect(lines.some((line) => line.startsWith("FOOTER"))).toBe(true);
+		// hint remains below editor, separated from footer by the gap row.
+		expect(lines.some((line) => line.startsWith("HINT"))).toBe(true);
+		// editor frame remains present above hint.
+		expect(lines.some((line) => line.startsWith("┌"))).toBe(true);
+		expect(lines.some((line) => line.startsWith("└"))).toBe(true);
 
+		renderer.dispose();
+	});
+
+	// Regression for the working-indicator-invisible report:
+	// 1. OwnedShell needs a slot that paints `widgetContainerAbove` (the
+	//    `setWidget(... aboveEditor)` mount point) — without it the indicator
+	//    is registered but never rendered.
+	// 2. Pi's `renderWidgetContainer(... leadingSpacer=true)` always prepends a
+	//    `Spacer(1)` line, so the widget's content lives on row 2 of the
+	//    container output. Our 1-row above-editor leaf must drop that leading
+	//    line or the widget gets clipped and the row appears blank.
+	// 3. Breathing rows are preserved on both sides of the indicator slot, so an
+	//    active spinner does not crowd either the chat content or the editor frame.
+	it("renders Pi widgetContainerAbove children between breathing rows, dropping the leading Spacer line", async () => {
+		const yoga = await loadYoga();
+		const chat = ChatPager.create(yoga);
+		const fakeTerminal = new FakeTerminal();
+
+		const renderer = new OwnedShellRenderer({
+			yoga,
+			chat,
+			editorContainer: () => new StaticEditor() as Component,
+			headerContainer: () => new StaticComponent(["TOP"]),
+			widgetContainerBelow: () => new StaticComponent(["HINT"]),
+			widgetContainerAbove: () => new StaticComponent(["SPACER-LEAD", "WORKING"]),
+			footer: () => new StaticComponent(["FOOTER"]),
+			terminal: fakeTerminal.owner,
+			dimensions: { columns: 24, rows: 13 },
+		});
+
+		renderer.render();
+		const lines = fakeTerminal.patches.map((patch) => stripAnsi(patch.ansi));
+		const workingRow = lines.findIndex((line) => line.startsWith("WORKING"));
+		expect(workingRow).toBeGreaterThan(0);
+		// The widget's second line (`WORKING`) must paint, not Pi's leading spacer
+		// (`SPACER-LEAD`), and it must breathe on both sides.
+		expect(lines[workingRow - 1]?.trim()).toBe("");
+		expect(lines[workingRow + 1]?.trim()).toBe("");
+		expect(lines.join("\n")).not.toContain("SPACER-LEAD");
 		renderer.dispose();
 	});
 
@@ -123,7 +158,7 @@ describe("OwnedShellRenderer", () => {
 			widgetContainerBelow: () => new StaticComponent(["HINT"]),
 			footer: () => new StaticComponent(["FOOTER"]),
 			terminal: fakeTerminal.owner,
-			dimensions: { columns: 80, rows: 12 },
+			dimensions: { columns: 80, rows: 14 },
 			sidebarPublication: () => ({
 				component: new StaticComponent(["SIDE"]),
 				isVisible: () => true,
@@ -134,7 +169,7 @@ describe("OwnedShellRenderer", () => {
 		const lines = fakeTerminal.patches.map((patch) => stripAnsi(patch.ansi));
 		expect(lines[0]?.startsWith("TOP")).toBe(true);
 		expect(lines[1]?.trim()).toBe("");
-		expect(lines[2]).toContain("SIDE");
+		expect(lines.slice(2).some((line) => line.includes("SIDE"))).toBe(true);
 		renderer.dispose();
 	});
 

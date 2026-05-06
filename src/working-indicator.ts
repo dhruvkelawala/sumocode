@@ -211,15 +211,19 @@ export function isRetainedMode(env: NodeJS.ProcessEnv = process.env): boolean {
  */
 export function installWorkingIndicator(pi: ExtensionAPI): void {
 	let component: WorkingIndicatorComponent | undefined;
+	let classicThemeUnsubscribe: (() => void) | undefined;
 
 	pi.on("session_start", (_event, ctx) => {
 		if (!ctx.hasUI) return;
+		classicThemeUnsubscribe?.();
+		classicThemeUnsubscribe = undefined;
 		if (!shouldInstallWorkingIndicator()) return;
 
 		if (isRetainedMode()) {
 			// Retained SumoTUI owns the chrome. Hide Pi's inline loader row and
 			// drive a theme-aware widget above the editor instead.
-			if (typeof ctx.ui.setWorkingVisible === "function") ctx.ui.setWorkingVisible(false);
+			const workingUi = ctx.ui as { setWorkingVisible?: (visible: boolean) => void };
+			if (typeof workingUi.setWorkingVisible === "function") workingUi.setWorkingVisible(false);
 			else ctx.ui.setWorkingIndicator({ frames: [] });
 			ctx.ui.setWidget(
 				WORKING_INDICATOR_WIDGET_KEY,
@@ -233,12 +237,17 @@ export function installWorkingIndicator(pi: ExtensionAPI): void {
 			return;
 		}
 
-		// Classic Pi: forward our frames to Pi's inline indicator.
-		const theme = getActiveTheme();
-		ctx.ui.setWorkingIndicator({
-			frames: buildActiveThemeIndicatorFrames(),
-			intervalMs: theme.workingIndicator.intervalMs,
-		});
+		// Classic Pi: forward our frames to Pi's inline indicator and refresh them
+		// when the SumoCode theme changes mid-session.
+		const applyClassicIndicator = (): void => {
+			const theme = getActiveTheme();
+			ctx.ui.setWorkingIndicator({
+				frames: buildActiveThemeIndicatorFrames(),
+				intervalMs: theme.workingIndicator.intervalMs,
+			});
+		};
+		applyClassicIndicator();
+		classicThemeUnsubscribe = onThemeChanged(applyClassicIndicator);
 	});
 
 	pi.on("agent_start", () => component?.start());
@@ -246,5 +255,7 @@ export function installWorkingIndicator(pi: ExtensionAPI): void {
 	pi.on("session_shutdown", () => {
 		component?.dispose();
 		component = undefined;
+		classicThemeUnsubscribe?.();
+		classicThemeUnsubscribe = undefined;
 	});
 }

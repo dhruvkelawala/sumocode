@@ -348,7 +348,7 @@ export function installCathedralEditor(pi: ExtensionAPI): void {
 		// Pi 0.71+ exposes the current editor factory. Read it before installing
 		// ours so future editor composition work has a safe public seam and repeated
 		// session_start calls can observe whether another extension already owns it.
-		ctx.ui.getEditorComponent?.();
+		(ctx.ui as { getEditorComponent?: () => unknown }).getEditorComponent?.();
 		ctx.ui.setEditorComponent((tui, theme, keybindings) => {
 			return new CathedralEditor(tui, theme, keybindings, () => !sessionHasMessages(ctx));
 		});

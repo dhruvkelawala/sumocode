@@ -5,6 +5,19 @@ import type { Yoga, YogaNode } from "../layout/yoga.js";
 import type { CellBuffer, Rect } from "../render/buffer.js";
 import { PiComponentLeaf } from "./pi-component-leaf.js";
 
+const ANSI_PATTERN = /\x1b\][^\x07]*(?:\x07|\x1b\\)|\x1b\[[0-?]*[ -/]*[@-~]|\x1b[()][A-Za-z0-9]/g;
+const BORDER_ONLY_PATTERN = /^[\s\u2500-\u257F]*$/;
+
+function stripAnsi(value: string): string {
+	return value.replace(ANSI_PATTERN, "");
+}
+
+function isBorderRow(rendered: string): boolean {
+	const plain = stripAnsi(rendered).replace(/[\u200B-\u200F]/g, "");
+	if (plain.length === 0) return true;
+	return BORDER_ONLY_PATTERN.test(plain);
+}
+
 export interface HardwareCursorPosition {
 	row: number;
 	col: number;
@@ -51,6 +64,16 @@ export class PiEditorLeaf extends PiComponentLeaf {
 						fallbackInverseCursor = { row: rect.top + row, col: rect.left + col };
 						break;
 					}
+				}
+			}
+			if (!isBorderRow(painted) && rect.width >= 3) {
+				// Mark inner editor cells as selectable so the user can drag-copy the
+				// prompt text. Skip the leftmost / rightmost columns: the Cathedral
+				// input frame paints `│ … │` so the outer cells are border glyphs.
+				const startCol = rect.left + 1;
+				const endCol = rect.left + rect.width - 2;
+				for (let col = startCol; col <= endCol; col += 1) {
+					buffer.setSelectionMeta(row + rect.top, col, { selectable: true });
 				}
 			}
 		}

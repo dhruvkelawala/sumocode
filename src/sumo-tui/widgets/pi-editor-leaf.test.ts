@@ -98,6 +98,34 @@ describe("PiEditorLeaf", () => {
 		root.dispose();
 	});
 
+	it("marks inner editor cells as selectable so drag-to-copy works (#207-style follow-up)", async () => {
+		const yoga = await loadYoga();
+		const root = new SumoNode(yoga.Node.create());
+		const rows = [
+			"\u256D\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u256E",
+			"\u2502 hello \u2502",
+			"\u2570\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u256F",
+		];
+		const leaf = new PiEditorLeaf(yoga.Node.create(), asEditor(new FakeEditor(rows)), root);
+		root.width = 9;
+		root.yogaNode.calculateLayout(9, undefined, DIRECTION_LTR);
+		const buffer = new CellBuffer(3, 9);
+		composite(root, buffer);
+
+		// border rows must remain non-selectable
+		for (let col = 0; col < 9; col += 1) {
+			expect(buffer.getSelectionMeta(0, col)).toBeUndefined();
+			expect(buffer.getSelectionMeta(2, col)).toBeUndefined();
+		}
+		// content row marks inner cells but not the side border columns
+		expect(buffer.getSelectionMeta(1, 0)).toBeUndefined();
+		expect(buffer.getSelectionMeta(1, 8)).toBeUndefined();
+		for (let col = 1; col <= 7; col += 1) {
+			expect(buffer.getSelectionMeta(1, col)).toEqual({ selectable: true });
+		}
+		root.dispose();
+	});
+
 	it("preserves ANSI underline around IME pre-edit while stripping only the marker (EC-1.5)", async () => {
 		const yoga = await loadYoga();
 		const root = new SumoNode(yoga.Node.create());

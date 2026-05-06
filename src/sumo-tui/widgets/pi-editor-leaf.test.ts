@@ -126,6 +126,27 @@ describe("PiEditorLeaf", () => {
 		root.dispose();
 	});
 
+	it("treats embedded separators inside content rows as selectable", async () => {
+		const yoga = await loadYoga();
+		const root = new SumoNode(yoga.Node.create());
+		const rows = [
+			"\u256D\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u256E",
+			"\u2502 \u2500\u2500\u2500\u2500\u2500 \u2502",
+			"\u2570\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u256F",
+		];
+		new PiEditorLeaf(yoga.Node.create(), asEditor(new FakeEditor(rows)), root);
+		root.width = 9;
+		root.yogaNode.calculateLayout(9, undefined, DIRECTION_LTR);
+		const buffer = new CellBuffer(3, 9);
+		composite(root, buffer);
+
+		// the separator row still has side `│` borders, so its inner cells stay selectable
+		for (let col = 1; col <= 7; col += 1) {
+			expect(buffer.getSelectionMeta(1, col)).toEqual({ selectable: true });
+		}
+		root.dispose();
+	});
+
 	it("keeps blank rows inside multiline prompts selectable so paragraph breaks survive copy", async () => {
 		const yoga = await loadYoga();
 		const root = new SumoNode(yoga.Node.create());

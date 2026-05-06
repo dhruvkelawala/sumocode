@@ -7,6 +7,7 @@ import { PiComponentLeaf } from "./pi-component-leaf.js";
 
 const ANSI_PATTERN = /\x1b\][^\x07]*(?:\x07|\x1b\\)|\x1b\[[0-?]*[ -/]*[@-~]|\x1b[()][A-Za-z0-9]/g;
 const HORIZONTAL_BAR_PATTERN = /[\u2500\u2501\u2504\u2505\u2508\u2509\u254C\u254D\u2550]/;
+const VERTICAL_BAR_PATTERN = /[\u2502\u2503\u2506\u2507\u250A\u250B\u254E\u254F\u2551]/;
 const NON_BORDER_PATTERN = /[^\s\u2500-\u257F]/;
 
 function stripAnsi(value: string): string {
@@ -14,15 +15,18 @@ function stripAnsi(value: string): string {
 }
 
 /**
- * A row is a frame border iff it contains at least one horizontal box-drawing
- * bar (─━═ etc) and no non-whitespace, non-box-drawing characters. Side-only
- * frame rows like `│ hello │` and `│       │` (intentional blank line in a
- * multiline prompt) are content rows so multiline selection still picks up
- * paragraph breaks during copy.
+ * Classify the editor frame's top/bottom border rows. A border row contains
+ * at least one horizontal box-drawing bar (─━═ etc), no vertical bar
+ * (│┃║ etc), and no non-box-drawing content characters. Side-bordered
+ * content rows like `│ hello │`, blank rows like `│       │`, and editor
+ * content that intentionally embeds a separator like `│ ───── │` therefore
+ * stay selectable so multiline copy preserves paragraph breaks and inline
+ * separators.
  */
 function isBorderRow(rendered: string): boolean {
 	const plain = stripAnsi(rendered).replace(/[\u200B-\u200F]/g, "");
 	if (!HORIZONTAL_BAR_PATTERN.test(plain)) return false;
+	if (VERTICAL_BAR_PATTERN.test(plain)) return false;
 	return !NON_BORDER_PATTERN.test(plain);
 }
 

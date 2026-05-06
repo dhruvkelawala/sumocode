@@ -34,6 +34,7 @@ interface PiChatContainer {
 	clear?(): void;
 	invalidate?(): void;
 	render?(width: number): string[];
+	addChild?(component: unknown): void;
 }
 
 interface PiTuiLike {
@@ -48,7 +49,7 @@ interface PiTuiLike {
 export interface ChatViewportHost {
 	readonly ui?: PiTuiLike;
 	readonly headerContainer?: PiRenderableComponent;
-	readonly pendingMessagesContainer?: PiRenderableComponent;
+	readonly pendingMessagesContainer?: PiRenderableComponent & { addChild?(component: unknown): void };
 	readonly statusContainer?: PiRenderableComponent;
 	readonly widgetContainerAbove?: PiRenderableComponent;
 	readonly widgetContainerBelow?: PiRenderableComponent;
@@ -95,6 +96,13 @@ interface ChatViewportBridgeHost extends ChatViewportHost {
 	handleEvent?(event: unknown): unknown;
 	renderSessionContext?(sessionContext: unknown, options?: unknown): unknown;
 	[CHAT_VIEWPORT_BRIDGE_INSTALLED]?: () => void;
+}
+
+interface BashExecutionLike extends PiRenderableComponent {
+	getCommand(): string;
+	getOutput(): string;
+	appendOutput(chunk: string): void;
+	setComplete(exitCode?: number, cancelled?: boolean, truncationResult?: unknown, fullOutputPath?: string): void;
 }
 
 interface MouseInputDiagnosticsFields {
@@ -350,6 +358,7 @@ export class ChatViewportController {
 	private lastMouseRenderAt = 0;
 	private lastMouseInputAt = 0;
 	private renderRevision = 0;
+	private readonly mirroredBashComponents = new WeakSet<BashExecutionLike>();
 	private readonly viewModelMapper = createTranscriptViewModelMapper();
 	private cachedRender: { revision: number; requestedWidth: number; chatTop: number; chatWidth: number; chatHeight: number; terminalRows: number; lines: string[] } | undefined;
 
@@ -401,6 +410,30 @@ export class ChatViewportController {
 			.map((line) => clampRenderedLine(line, terminalWidth));
 		this.cachedRender = { revision: this.renderRevision, requestedWidth: terminalWidth, chatTop, chatWidth: effectiveWidth, chatHeight, terminalRows: terminalHeight, lines: [...lines] };
 		return lines;
+	}
+
+	public attachForeignBashComponent(component: unknown): void {
+		if (!isBashExecutionComponent(component) || this.mirroredBashComponents.has(component)) return;
+		this.mirroredBashComponents.add(component);
+		const message = this.chat.addMessage("tool", this.renderBashComponentText(component, "running"));
+		const update = (status: "running" | "complete" = "running"): void => {
+			message.setText(this.renderBashComponentText(component, status));
+			this.markRenderDirty();
+			this.runtime.requestRender();
+		};
+		const originalAppendOutput = component.appendOutput.bind(component);
+		component.appendOutput = (chunk: string): void => {
+			originalAppendOutput(chunk);
+			update("running");
+		};
+		const originalSetComplete = component.setComplete.bind(component);
+		component.setComplete = (exitCode?: number, cancelled?: boolean, truncationResult?: unknown, fullOutputPath?: string): void => {
+			originalSetComplete(exitCode, cancelled, truncationResult, fullOutputPath);
+			update("complete");
+		};
+		logDiagnostic("foreign_bash_component_attached", { command: component.getCommand() });
+		this.markRenderDirty();
+		this.runtime.requestRender();
 	}
 
 	public clear(): void {
@@ -559,6 +592,14 @@ export class ChatViewportController {
 				archivedMessages: stats.archivedMessages,
 			});
 		}
+	}
+
+	private renderBashComponentText(component: BashExecutionLike, status: "running" | "complete"): string {
+		const output = component.getOutput().trimEnd();
+		const lines = [`$ ${component.getCommand()}`];
+		if (output.length > 0) lines.push("", output);
+		if (status === "running") lines.push("", "running…");
+		return lines.join("\n");
 	}
 
 	private handleToolExecutionEvent(record: Record<string, unknown>): void {
@@ -836,6 +877,16 @@ function selectionCopyKeyFromInput(data: string): KeyEvent | undefined {
 	return undefined;
 }
 
+function isBashExecutionComponent(value: unknown): value is BashExecutionLike {
+	const record = asRecord(value);
+	return !!record &&
+		typeof record.getCommand === "function" &&
+		typeof record.getOutput === "function" &&
+		typeof record.appendOutput === "function" &&
+		typeof record.setComplete === "function" &&
+		typeof record.render === "function";
+}
+
 export function installChatViewportBridge(upstream: unknown, runtime: ChatViewportBridgeRuntime): (() => void) | undefined {
 	const target = upstream as ChatViewportBridgeHost;
 	if (target[CHAT_VIEWPORT_BRIDGE_INSTALLED]) return undefined;
@@ -846,6 +897,9 @@ export function installChatViewportBridge(upstream: unknown, runtime: ChatViewpo
 	const originalRender = chatContainer.render?.bind(chatContainer);
 	const originalClear = chatContainer.clear?.bind(chatContainer);
 	const originalInvalidate = chatContainer.invalidate?.bind(chatContainer);
+	const originalAddChild = chatContainer.addChild?.bind(chatContainer);
+	const pendingMessagesContainer = target.pendingMessagesContainer;
+	const originalPendingAddChild = pendingMessagesContainer?.addChild?.bind(pendingMessagesContainer);
 	const statusContainer = target.statusContainer as (PiRenderableComponent & { render?: (width: number) => string[] }) | undefined;
 	const originalStatusRender = statusContainer?.render?.bind(statusContainer);
 	const originalHandleEvent = target.handleEvent?.bind(target);
@@ -941,6 +995,18 @@ export function installChatViewportBridge(upstream: unknown, runtime: ChatViewpo
 	// Pi's render pipeline. The bridge may install before owned-shell is wired,
 	// so keep the override dynamic: in owned-shell mode, never run the expensive
 	// retained chat render just to hand Pi dead bytes.
+	if (originalAddChild) {
+		chatContainer.addChild = (component: unknown): void => {
+			originalAddChild(component);
+			if (isOwnedShellActive()) controller.attachForeignBashComponent(component);
+		};
+	}
+	if (pendingMessagesContainer && originalPendingAddChild) {
+		pendingMessagesContainer.addChild = (component: unknown): void => {
+			originalPendingAddChild(component);
+			if (isOwnedShellActive()) controller.attachForeignBashComponent(component);
+		};
+	}
 	chatContainer.render = (width: number): string[] => {
 		reconcileBottomChromeSpacers();
 		if (isOwnedShellActive()) return [];
@@ -998,6 +1064,9 @@ export function installChatViewportBridge(upstream: unknown, runtime: ChatViewpo
 		runtime.setExternalRenderControls(undefined);
 		if (originalRender) chatContainer.render = originalRender;
 		else delete chatContainer.render;
+		if (originalAddChild) chatContainer.addChild = originalAddChild;
+		else delete chatContainer.addChild;
+		if (pendingMessagesContainer && originalPendingAddChild) pendingMessagesContainer.addChild = originalPendingAddChild;
 		if (statusContainer && originalStatusRender) statusContainer.render = originalStatusRender;
 		if (originalClear) chatContainer.clear = originalClear;
 		else delete chatContainer.clear;

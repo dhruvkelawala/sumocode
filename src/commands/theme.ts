@@ -1,6 +1,6 @@
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { truncateToWidth, visibleWidth, type Component } from "@mariozechner/pi-tui";
-import { activeThemeColors, getActiveTheme, getTheme, listThemes } from "../themes/index.js";
+import { activeThemeColors, getActiveTheme, getTheme, listThemes, nextThemeName } from "../themes/index.js";
 import { emitCathedralThemeChanged } from "../sumo-tui/cathedral/theme-bridge.js";
 
 /**
@@ -123,9 +123,31 @@ export function formatThemeList(): string[] {
 	return listThemes().map((theme) => `${theme.name === active ? "*" : " "} ${theme.name} — ${theme.description}`);
 }
 
+/** Register the `Ctrl+Shift+T` / `Alt+T` cycle shortcuts. */
+export function registerThemeCycleShortcuts(pi: ExtensionAPI): void {
+	const handler = (ctx: ExtensionContext): void => {
+		const nextName = nextThemeName();
+		const theme = getTheme(nextName);
+		if (!theme) {
+			if (ctx.hasUI) ctx.ui.notify(`theme cycle failed: ${nextName}`, "warning");
+			return;
+		}
+
+		const applyPi = ctx.hasUI ? (name: string) => ctx.ui.setTheme(name) : undefined;
+		const outcome = applyKnownTheme(theme, applyPi);
+		if (ctx.hasUI) {
+			ctx.ui.notify(outcome.piWarning ? `theme: ${theme.name} (${outcome.piWarning})` : `theme: ${theme.name}`, "info");
+		}
+	};
+
+	pi.registerShortcut("ctrl+shift+t", { description: "Cycle SumoCode theme", handler });
+	pi.registerShortcut("alt+t", { description: "Cycle SumoCode theme (terminals that grab Ctrl+Shift)", handler });
+}
+
 /** Register `/sumo:theme [list|name]` for SumoCode theme switching. */
 export function registerThemeCommand(pi: ExtensionAPI): void {
 	registerThemeResultRenderer(pi);
+	registerThemeCycleShortcuts(pi);
 	pi.registerCommand("sumo:theme", {
 		description: "Show or switch the active SumoCode theme",
 		handler: async (args: string, ctx: ExtensionContext) => {

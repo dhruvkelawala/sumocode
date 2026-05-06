@@ -93,6 +93,20 @@ export function setActiveTheme(name: string): SetThemeResult {
 	return { success: true, theme };
 }
 
+export function nextThemeName(currentName: string = getActiveTheme().name): string {
+	const names = listThemes().map((theme) => theme.name);
+	if (names.length === 0) return currentName;
+	const currentIndex = names.indexOf(currentName);
+	const nextIndex = currentIndex === -1 ? 0 : (currentIndex + 1) % names.length;
+	return names[nextIndex]!;
+}
+
+export function cycleActiveTheme(): Theme {
+	const result = setActiveTheme(nextThemeName());
+	if (!result.success) return getActiveTheme();
+	return result.theme;
+}
+
 export function onThemeChanged(listener: ThemeChangedListener): () => void {
 	const state = ensureState();
 	state.listeners.add(listener);

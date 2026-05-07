@@ -2,7 +2,10 @@
  * Cathedral Divine Query modal (Element 11 from CATHEDRAL_UX_SPEC_V2.md).
  *
  * Replaces Pi's default `ctx.ui.select` rendering with a Scriptorium-themed
- * overlay when SumoCode is active.
+ * overlay when SumoCode is active. Painting helpers (lifted bg, floral title,
+ * focus marker, split rule) come from `./cathedral/scriptorium-chrome.js` so
+ * Memory Scriptorium and Approval Modal share the exact same look without
+ * duplicate copies of `persistentBg` etc.
  *
  * Visual:
  *
@@ -25,61 +28,23 @@
  * Bible source:
  *   docs/ui/bible/11-divine-query-rename.html
  *   docs/ui/bible/11-divine-query-yesno.html
+ *
+ * See `docs/cathedral/SCRIPTORIUM_CHROME.md` for the shared modal contract.
  */
 
 import type { Component, OverlayOptions } from "@mariozechner/pi-tui";
-import { matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@mariozechner/pi-tui";
+import { matchesKey, wrapTextWithAnsi } from "@mariozechner/pi-tui";
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { activeThemeColors } from "./themes/index.js";
-
-const RESET = "[0m";
-const ANSI_PATTERN = /\[[0-9;]*m/g;
-
-function visibleLength(text: string): number {
-	return visibleWidth(text.replace(ANSI_PATTERN, ""));
-}
-
-function fg(text: string, hex: string): string {
-	const h = hex.replace("#", "");
-	const r = parseInt(h.slice(0, 2), 16);
-	const g = parseInt(h.slice(2, 4), 16);
-	const b = parseInt(h.slice(4, 6), 16);
-	return `[38;2;${r};${g};${b}m${text}${RESET}`;
-}
-
-function persistentBg(text: string, fgHex: string, bgHex: string): string {
-	const fh = fgHex.replace("#", "");
-	const bh = bgHex.replace("#", "");
-	const fr = parseInt(fh.slice(0, 2), 16);
-	const fgCode = parseInt(fh.slice(2, 4), 16);
-	const fb = parseInt(fh.slice(4, 6), 16);
-	const br = parseInt(bh.slice(0, 2), 16);
-	const bg = parseInt(bh.slice(2, 4), 16);
-	const bb = parseInt(bh.slice(4, 6), 16);
-	const styleCode = `[38;2;${fr};${fgCode};${fb}m[48;2;${br};${bg};${bb}m`;
-	// Restore both fg+bg after every reset so lifted bg persists through inner ANSI
-	return `${styleCode}${text.replace(/\[0m/g, `${RESET}${styleCode}`)}${RESET}`;
-}
-
-function center(line: string, width: number): string {
-	const fitted = fitLine(line, width);
-	const len = visibleLength(fitted);
-	if (len >= width) return fitted;
-	const pad = Math.floor((width - len) / 2);
-	return `${" ".repeat(pad)}${fitted}${" ".repeat(width - len - pad)}`;
-}
-
-function fitLine(line: string, width: number): string {
-	if (width <= 0) return "";
-	return visibleLength(line) > width ? truncateToWidth(line, width, "…") : line;
-}
-
-function padRight(line: string, width: number): string {
-	const fitted = fitLine(line, width);
-	const len = visibleLength(fitted);
-	if (len >= width) return fitted;
-	return `${fitted}${" ".repeat(width - len)}`;
-}
+import {
+	center,
+	fg,
+	focusMarker,
+	splitRule,
+	titleRow,
+	visibleLength,
+	wrapPanelRow,
+} from "./cathedral/scriptorium-chrome.js";
 
 function wrapIndentedText(text: string, width: number, indent: string): string[] {
 	const contentWidth = Math.max(1, width - visibleLength(indent));
@@ -113,18 +78,6 @@ export interface DivineQueryRenderOptions {
 
 // ── Pure render ──────────────────────────────────────────────
 
-const TITLE_MARK = "✾";
-const FOCUSED_MARK = "❈";
-const UNFOCUSED_MARK = "·";
-
-function splitRule(width: number): string {
-	const ruleLen = Math.max(1, Math.min(22, Math.floor((width - 5) / 2)));
-	const left = fg("─".repeat(ruleLen), activeThemeColors().divider);
-	const dot = fg("·", activeThemeColors().divider);
-	const right = fg("─".repeat(ruleLen), activeThemeColors().divider);
-	return center(`${left}  ${dot}  ${right}`, width);
-}
-
 function optionLabel(index: number): string {
 	return `${String.fromCharCode(65 + index)}) `;
 }
@@ -132,18 +85,18 @@ function optionLabel(index: number): string {
 /**
  * Build the inner content rows of a Divine Query modal at the given content
  * width (i.e. excluding the side borders). Returned rows are not yet padded
- * to width — `wrapInnerRow` handles padding + bg paint at the framing layer.
+ * to width — `wrapPanelRow` handles padding + bg paint at the framing layer.
  */
 function buildInnerRows(snapshot: DivineQuerySnapshot, contentWidth: number, extras: readonly string[]): string[] {
 	const inner: string[] = [];
 	const indent = "     ";
+	const colors = activeThemeColors();
 
 	// Blank
 	inner.push("");
 
 	// Title: ✾  DIVINE QUERY  ✾
-	const titleText = `${fg(TITLE_MARK, activeThemeColors().accent)}  ${fg("DIVINE QUERY", activeThemeColors().accent)}  ${fg(TITLE_MARK, activeThemeColors().accent)}`;
-	inner.push(center(titleText, contentWidth));
+	inner.push(titleRow("DIVINE QUERY", contentWidth));
 
 	// Blank
 	inner.push("");
@@ -157,7 +110,7 @@ function buildInnerRows(snapshot: DivineQuerySnapshot, contentWidth: number, ext
 	// Question body. Bible Element 11 keeps a generous right margin: text wraps
 	// at `cols - 12`, then gets a 5-col left indent.
 	for (const questionLine of wrapIndentedText(snapshot.title, Math.max(1, contentWidth - 7), indent)) {
-		inner.push(fg(questionLine, activeThemeColors().foreground));
+		inner.push(fg(questionLine, colors.foreground));
 	}
 
 	// Blank
@@ -166,9 +119,7 @@ function buildInnerRows(snapshot: DivineQuerySnapshot, contentWidth: number, ext
 	// Options
 	for (let i = 0; i < snapshot.options.length; i += 1) {
 		const focused = i === snapshot.focusedIndex;
-		const mark = focused
-			? fg(FOCUSED_MARK, activeThemeColors().accent)
-			: fg(UNFOCUSED_MARK, activeThemeColors().divider);
+		const mark = focusMarker(focused);
 		const optionIndent = `${indent}${mark}   `;
 		const continuationIndent = `${indent}    `;
 		const label = `${optionLabel(i)}${snapshot.options[i]}`;
@@ -177,8 +128,8 @@ function buildInnerRows(snapshot: DivineQuerySnapshot, contentWidth: number, ext
 			const raw = (wrappedOption[optionRow] ?? "").slice(continuationIndent.length);
 			const prefix = optionRow === 0 ? optionIndent : continuationIndent;
 			const text = focused
-				? fg(raw, activeThemeColors().foreground)
-				: fg(raw, activeThemeColors().foregroundDim);
+				? fg(raw, colors.foreground)
+				: fg(raw, colors.foregroundDim);
 			inner.push(`${prefix}${text}`);
 		}
 	}
@@ -190,8 +141,7 @@ function buildInnerRows(snapshot: DivineQuerySnapshot, contentWidth: number, ext
 	inner.push(splitRule(contentWidth));
 
 	// Footer
-	const footer = fg("↑↓ wander    ⏎ answer    ⎋ retreat", activeThemeColors().foregroundDim);
-	inner.push(center(footer, contentWidth));
+	inner.push(center(fg("↑↓ wander    ⏎ answer    ⎋ retreat", colors.foregroundDim), contentWidth));
 
 	// Extras (e.g. edit-mode editor rows from question-tool)
 	for (const extra of extras) inner.push(extra);
@@ -202,27 +152,14 @@ function buildInnerRows(snapshot: DivineQuerySnapshot, contentWidth: number, ext
 	return inner;
 }
 
-/** Paint a full-width lifted panel row. Element 11 is intentionally
- * unframed in the Bible; Pi's overlay host may already provide surrounding
- * chrome, so adding a second box here makes the modal read too heavy.
- */
-function wrapPanelRow(innerLine: string, contentWidth: number): string {
-	return persistentBg(
-		padRight(innerLine, contentWidth),
-		activeThemeColors().foreground,
-		activeThemeColors().surfaceLifted,
-	);
-}
-
 export function renderDivineQuery(
 	snapshot: DivineQuerySnapshot,
 	width: number,
 	options: DivineQueryRenderOptions = {},
 ): string[] {
 	if (width < 1) return [];
-	const contentWidth = width;
-	const inner = buildInnerRows(snapshot, contentWidth, options.extras ?? []);
-	return inner.map((innerLine) => wrapPanelRow(innerLine, contentWidth));
+	const inner = buildInnerRows(snapshot, width, options.extras ?? []);
+	return inner.map((innerLine) => wrapPanelRow(innerLine, width));
 }
 
 // ── State machine ────────────────────────────────────────────

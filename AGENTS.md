@@ -230,6 +230,7 @@ Required crops gate against committed approved runtime goldens. Bible diffs rema
 - `docs/SUMO_TUI_RENDER_PRIMITIVES.md` — typed render primitive contract.
 - `docs/SUMO_TUI_TEST_BACKEND.md` — headless retained-renderer test backend contract.
 - `docs/SUMO_TUI_TRANSCRIPT_MODEL.md` — structured transcript view-model contract.
+- `docs/cathedral/SCRIPTORIUM_CHROME.md` — shared modal painting contract; read this before adding any new Cathedral overlay (Divine Query / Approval / Memory Scriptorium share it).
 - `docs/visual/parity/PORTRAIT_REVIEW.md` — portrait scene composition review.
 - `docs/visual/parity/FIXTURE_STATES_REVIEW.md` — fixture lane and deterministic state review.
 - `docs/prd.md` / `docs/prd.html` — formal product spec.

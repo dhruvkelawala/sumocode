@@ -36,7 +36,13 @@ export function visibleLength(text: string): number {
 	return visibleWidth(text.replace(ANSI_PATTERN, ""));
 }
 
-function sgr(hex: string, mode: 38 | 48): string {
+/**
+ * Build a 24-bit truecolor SGR opener for `mode === 38` (foreground) or
+ * `mode === 48` (background). Exported so modal-specific composites (e.g. the
+ * approval modal's inverse-label buttons) can stack fg+bg directly without
+ * piping every cell through `persistentBg`.
+ */
+export function sgr(hex: string, mode: 38 | 48): string {
 	const normalized = hex.replace("#", "");
 	const red = Number.parseInt(normalized.slice(0, 2), 16);
 	const green = Number.parseInt(normalized.slice(2, 4), 16);

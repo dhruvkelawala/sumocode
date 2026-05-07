@@ -47,6 +47,15 @@ import {
 
 const PANEL_INDENT = "   ";
 const BIBLE_COMMAND_BOX_WIDTH_AT_80 = 68;
+/**
+ * Cap the visible row count of the command box. Long bash commands (e.g.
+ * a deeply piped one-liner) would otherwise wrap into dozens of rows and
+ * grow the modal beyond the terminal height. The remaining rows are
+ * collapsed into a `… N more lines` indicator so the user still sees that
+ * the command is truncated and can `⎘` to abort and copy from session.
+ */
+const MAX_COMMAND_ROWS = 12;
+const MAX_DESCRIPTION_ROWS = 4;
 
 const panelRow = wrapPanelRow;
 
@@ -81,11 +90,25 @@ function renderCommandFrame(command: string, width: number): string[] {
 	const innerWidth = Math.max(0, boxWidth - 2);
 	const commandWidth = Math.max(1, innerWidth - 2);
 	const border = activeThemeColors().divider;
-	const commandRows = wrapTextWithAnsi(command, commandWidth);
-	const safeRows = commandRows.length > 0 ? commandRows : [""];
+	const dim = activeThemeColors().foregroundDim;
+	const wrappedRows = wrapTextWithAnsi(command, commandWidth);
+	const initialRows = wrappedRows.length > 0 ? wrappedRows : [""];
+	const overflowCount = Math.max(0, initialRows.length - MAX_COMMAND_ROWS);
+	const commandRows = overflowCount > 0
+		? [
+			...initialRows.slice(0, MAX_COMMAND_ROWS - 1),
+			fitLine(`… ${overflowCount + 1} more lines hidden`, commandWidth),
+		]
+		: initialRows;
+	const commandFg = (row: string, isOverflow: boolean): string =>
+		fg(fitLine(row, commandWidth), isOverflow ? dim : activeThemeColors().foreground);
 	const boxRows = [
 		fg(`┌${"─".repeat(innerWidth)}┐`, border),
-		...safeRows.map((row) => `${fg("│", border)} ${fg(fitLine(row, commandWidth), activeThemeColors().foreground)}${" ".repeat(Math.max(0, commandWidth - visibleLength(row)))} ${fg("│", border)}`),
+		...commandRows.map((row, index) => {
+			const isOverflow = overflowCount > 0 && index === commandRows.length - 1;
+			const paddingCount = Math.max(0, commandWidth - visibleLength(row));
+			return `${fg("│", border)} ${commandFg(row, isOverflow)}${" ".repeat(paddingCount)} ${fg("│", border)}`;
+		}),
 		fg(`└${"─".repeat(innerWidth)}┘`, border),
 	];
 	return boxRows.map((row) => `${PANEL_INDENT}${persistentBg(padRight(row, boxWidth), activeThemeColors().foreground, activeThemeColors().surfaceRecess)}`);
@@ -103,7 +126,12 @@ function renderDescriptionRows(descriptionLines: readonly string[], width: numbe
 			rows.push(`${PANEL_INDENT}${fg(`${rowPrefix}${lines[rowIndex]}`, activeThemeColors().foregroundDim)}`);
 		}
 	}
-	return rows;
+	if (rows.length <= MAX_DESCRIPTION_ROWS) return rows;
+	const hidden = rows.length - (MAX_DESCRIPTION_ROWS - 1);
+	return [
+		...rows.slice(0, MAX_DESCRIPTION_ROWS - 1),
+		`${PANEL_INDENT}${fg(`  … ${hidden} more lines hidden`, activeThemeColors().foregroundDim)}`,
+	];
 }
 
 /**

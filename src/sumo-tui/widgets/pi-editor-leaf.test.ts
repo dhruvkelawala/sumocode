@@ -126,6 +126,38 @@ describe("PiEditorLeaf", () => {
 		root.dispose();
 	});
 
+	it("marks every cell selectable when the editor renders without a frame (e.g. Pi resume selector)", async () => {
+		const yoga = await loadYoga();
+		const root = new SumoNode(yoga.Node.create());
+		const rows = ["SELECT SESSION"];
+		new PiEditorLeaf(yoga.Node.create(), asEditor(new FakeEditor(rows)), root);
+		root.width = 14;
+		root.yogaNode.calculateLayout(14, undefined, DIRECTION_LTR);
+		const buffer = new CellBuffer(1, 14);
+		composite(root, buffer);
+
+		for (let col = 0; col < 14; col += 1) {
+			expect(buffer.getSelectionMeta(0, col)).toEqual({ selectable: true });
+		}
+		root.dispose();
+	});
+
+	it("keeps a bare horizontal-bar row selectable when no corners frame it", async () => {
+		const yoga = await loadYoga();
+		const root = new SumoNode(yoga.Node.create());
+		const rows = ["\u2500\u2500\u2500\u2500\u2500"];
+		new PiEditorLeaf(yoga.Node.create(), asEditor(new FakeEditor(rows)), root);
+		root.width = 5;
+		root.yogaNode.calculateLayout(5, undefined, DIRECTION_LTR);
+		const buffer = new CellBuffer(1, 5);
+		composite(root, buffer);
+
+		for (let col = 0; col < 5; col += 1) {
+			expect(buffer.getSelectionMeta(0, col)).toEqual({ selectable: true });
+		}
+		root.dispose();
+	});
+
 	it("treats embedded separators inside content rows as selectable", async () => {
 		const yoga = await loadYoga();
 		const root = new SumoNode(yoga.Node.create());

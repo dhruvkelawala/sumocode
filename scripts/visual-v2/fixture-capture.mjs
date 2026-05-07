@@ -309,6 +309,7 @@ async function renderFixtureScene(scenario, fixture) {
 
 async function applyOverlay(lines, cols, rows, overlay) {
 	if (overlay === "divine-query") return applyDivineQueryOverlay(lines, cols, rows);
+	if (overlay === "memory-scriptorium") return applyMemoryScriptoriumOverlay(lines, cols, rows);
 	if (overlay !== "command-palette") throw new Error(`Unsupported fixture overlay: ${overlay}`);
 	const palette = await jiti.import(`${repoRoot}/src/command-palette.ts`);
 
@@ -332,6 +333,46 @@ async function applyOverlay(lines, cols, rows, overlay) {
 		// preserving the left margin and right remnant.
 		const existingLine = next[top + index] ?? "";
 		const rightStart = left + paletteWidth;
+		const leftRemnant = padAnsiToWidth(sliceByColumn(existingLine, 0, left, true), left);
+		const rightRemnant = rightStart < cols ? sliceByColumn(existingLine, rightStart, cols - rightStart, true) : "";
+		next[top + index] = padAnsiToWidth(`${leftRemnant}${overlayLine}${rightRemnant}`, cols);
+	}
+	return next;
+}
+
+async function applyMemoryScriptoriumOverlay(lines, cols, rows) {
+	const memoryEditor = await jiti.import(`${repoRoot}/src/memory-editor.ts`);
+	const categorization = await jiti.import(`${repoRoot}/src/memory-categorization.ts`);
+	const facts = [
+		{ id: "id-1", text: "Dhruv · Senior FE · Argent", tags: ["sumocode:identity"] },
+		{ id: "id-2", text: "London / BST", tags: ["sumocode:identity"] },
+		{ id: "pref-1", text: "prefers TypeScript strict", tags: ["sumocode:preferences"] },
+		{ id: "pref-2", text: "pnpm not npm", tags: ["sumocode:preferences"] },
+		{ id: "wf-1", text: "TDD by default", tags: ["sumocode:workflow"] },
+		{ id: "wf-2", text: "visual approval before done", tags: ["sumocode:workflow"] },
+		{ id: "proj-1", text: "sumocode/cathedral parity", tags: ["sumocode:projects"] },
+		{ id: "proj-2", text: "openclaw ACPX integration", tags: ["sumocode:projects"] },
+		{ id: "sys-1", text: "cmux runtime, libghostty", tags: ["sumocode:system"] },
+		{ id: "sys-2", text: "mac mini portrait", tags: ["sumocode:system"] },
+		{ id: "sys-3", text: "macbook landscape", tags: ["sumocode:system"] },
+		{ id: "gen-1", text: "ask open-ended questions", tags: ["sumocode:general"] },
+		{ id: "gen-2", text: "commit hash must be verified", tags: ["sumocode:general"] },
+	];
+	const overlayWidth = Math.max(70, Math.min(120, Math.floor(cols * 0.8)));
+	const overlayLines = memoryEditor.renderMemoryEditor({
+		searchQuery: "",
+		groups: categorization.groupFactsByPanel(facts),
+		factsTotal: facts.length,
+		focusedFactId: "pref-1",
+	}, overlayWidth);
+
+	const left = Math.max(0, Math.floor((cols - overlayWidth) / 2));
+	const top = Math.max(0, Math.floor((rows - overlayLines.length) / 2));
+	const next = [...lines];
+	for (let index = 0; index < overlayLines.length && top + index < rows; index += 1) {
+		const overlayLine = padAnsiToWidth(overlayLines[index] ?? "", overlayWidth);
+		const existingLine = next[top + index] ?? "";
+		const rightStart = left + overlayWidth;
 		const leftRemnant = padAnsiToWidth(sliceByColumn(existingLine, 0, left, true), left);
 		const rightRemnant = rightStart < cols ? sliceByColumn(existingLine, rightStart, cols - rightStart, true) : "";
 		next[top + index] = padAnsiToWidth(`${leftRemnant}${overlayLine}${rightRemnant}`, cols);

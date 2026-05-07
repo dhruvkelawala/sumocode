@@ -245,7 +245,14 @@ export class MemoryEditorComponent implements Component {
 				this.updateSearch(this.snapshot.searchQuery.slice(0, -1));
 				return;
 			}
-			if (matchesKey(data, "enter") || data === "enter" || data === "\r" || data === "\n") {
+			if (
+				matchesKey(data, "enter")
+				|| data === "enter"
+				|| matchesKey(data, "return")
+				|| data === "return"
+				|| data === "\r"
+				|| data === "\n"
+			) {
 				this.snapshot = { ...this.snapshot, mode: "command" };
 				this.deps.invalidate();
 				return;

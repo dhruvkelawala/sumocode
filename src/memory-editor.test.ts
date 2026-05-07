@@ -182,6 +182,17 @@ describe("MemoryEditorComponent — interaction", () => {
 		expect(invalidate).toHaveBeenCalled();
 	});
 
+	it.each(["return", "enter", "\r"])("%s in search mode exits back to command mode", (key) => {
+		const { component, close } = buildComponent();
+		component.handleInput("/");
+		component.handleInput("a");
+		component.handleInput(key);
+		expect(close).not.toHaveBeenCalled();
+		// After Enter exits search, the next Esc should close (proves we're back in command mode)
+		component.handleInput("escape");
+		expect(close).toHaveBeenCalled();
+	});
+
 	it("escape in search mode returns to command mode without closing", () => {
 		const { component, close } = buildComponent();
 		component.handleInput("/");

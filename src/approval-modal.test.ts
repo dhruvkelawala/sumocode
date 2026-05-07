@@ -99,6 +99,29 @@ describe("renderApprovalModal", () => {
 		expect(plain.filter((row) => row.includes("│")).length).toBeGreaterThan(1);
 		expect(plain.join("\n")).toContain("Approval modal leaks long commands");
 	});
+
+	it("caps the command box height for very long commands and shows a truncation marker", () => {
+		// Twenty pipe-separated subcommands that each wrap once at width 80 →
+		// far more than MAX_COMMAND_ROWS = 12 once expanded into the modal.
+		const longCommand = Array.from({ length: 20 }, (_, i) => `subcmd${i} --flag-${i}=very-long-value-${i}-${i}-${i}-${i}-${i}-${i}-${i}-${i}-${i}-${i}`).join(" | ");
+		const lines = renderApprovalModal(snapshot({ command: longCommand }), 80);
+		const plain = lines.map(stripAnsi);
+		const commandRows = plain.filter((row) => row.includes("│") && !row.includes("┌") && !row.includes("└"));
+		// Cap is MAX_COMMAND_ROWS = 12, so the bash region must not blow up the modal height.
+		expect(commandRows.length).toBeLessThanOrEqual(12);
+		expect(plain.some((row) => row.includes("more lines hidden"))).toBe(true);
+		// Total modal height stays bounded.
+		expect(lines.length).toBeLessThanOrEqual(28);
+	});
+
+	it("caps the description region for verbose multi-line explanations", () => {
+		const lines = renderApprovalModal(snapshot({
+			descriptionLines: Array.from({ length: 12 }, (_, i) => `Reason ${i + 1}: this command is dangerous because of an unusual edge case.`),
+		}), 80);
+		const plain = lines.map(stripAnsi).join("\n");
+		expect(plain).toContain("more lines hidden");
+		expect(lines.length).toBeLessThanOrEqual(28);
+	});
 });
 
 describe("updateApprovalSnapshot — direct letter selection", () => {

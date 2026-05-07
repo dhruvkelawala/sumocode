@@ -343,7 +343,21 @@ export class MemoryEditorComponent implements Component {
 			await this.deps.client.forget(focusId);
 			this.deps.notify("forgotten", "info");
 		} catch (error) {
-			this.snapshot = { ...this.snapshot, groups: previousGroups, factsTotal: previousFactsTotal, focusedFactId: focusId };
+			// Recompute focus against the CURRENT search filter, not the search
+			// that was active when forget started. The user may have typed into
+			// search while the request was in flight, so the rolled-back fact
+			// may no longer be visible. Forcing the stale id back as focus would
+			// let a subsequent `d` keystroke delete a hidden fact.
+			const restoredVisible = flatVisibleFacts(filterGroups(previousGroups, this.snapshot.searchQuery));
+			const restoredFocus = restoredVisible.some((fact) => fact.id === focusId)
+				? focusId
+				: nextFocusAfterRemoval(restoredVisible, restoredVisible, null);
+			this.snapshot = {
+				...this.snapshot,
+				groups: previousGroups,
+				factsTotal: previousFactsTotal,
+				focusedFactId: restoredFocus,
+			};
 			this.deps.invalidate();
 			this.deps.notify(`forget failed: ${error instanceof Error ? error.message : String(error)}`, "warning");
 		} finally {

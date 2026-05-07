@@ -242,6 +242,39 @@ describe("MemoryEditorComponent — interaction", () => {
 		expect(client).toBeDefined();
 	});
 
+	it("recomputes focus after forget rejection if the user filtered the focused fact out mid-flight", async () => {
+		let reject: (error: Error) => void = () => {};
+		const forget = vi.fn(() => new Promise<void>((_, rej) => { reject = rej; }));
+		const { component } = buildComponent({ focusedFactId: "pref-1" }, {
+			client: fakeClient({ forget }),
+		});
+		component.handleInput("d");
+		// While forget is in flight, user filters so `pref-1` is no longer visible.
+		component.handleInput("/");
+		for (const ch of "argent") component.handleInput(ch);
+		reject(new Error("daemon offline"));
+		await Promise.resolve();
+		await Promise.resolve();
+		await Promise.resolve();
+		const rendered = component.render(160).map(stripAnsi).join("\n");
+		// Focused glyph must point at a fact still visible under the new filter.
+		const focusedSegment = rendered
+			.split("│")
+			.find((segment) => segment.includes("❈"));
+		if (focusedSegment) {
+			expect(focusedSegment).toMatch(/Argent/);
+			expect(focusedSegment).not.toMatch(/prefers TypeScript strict/);
+		}
+		// And a follow-up `d` cannot accidentally delete the hidden fact.
+		component.handleInput("escape"); // exit search mode
+		forget.mockClear();
+		component.handleInput("d");
+		await Promise.resolve();
+		if (forget.mock.calls.length > 0) {
+			expect(forget).not.toHaveBeenCalledWith("pref-1");
+		}
+	});
+
 	it("restores the original facts total on forget rejection even when a search filter is active", async () => {
 		let reject: (error: Error) => void = () => {};
 		const forget = vi.fn(() => new Promise<void>((_, rej) => { reject = rej; }));

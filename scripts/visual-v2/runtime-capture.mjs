@@ -99,6 +99,11 @@ async function runOneAttempt(scenario, runtime, attempt) {
 	} catch {
 		// process may already be gone
 	}
+	// Block until the child actually exits before this attempt resolves so
+	// retries cannot run concurrently with a still-shutting-down `sumocode`
+	// process. SIGTERM-then-SIGKILL escalates so we never hang the harness on
+	// a wedged child.
+	await awaitChildExit(child, () => exited, 1000);
 
 	const durationMs = Date.now() - startedAt;
 	const diagnostics = {
@@ -158,6 +163,25 @@ async function waitForFirstByte(isReady, timeoutMs) {
 	const started = Date.now();
 	while (Date.now() - started < timeoutMs) {
 		if (isReady()) return;
+		await sleep(pollMs);
+	}
+}
+
+async function awaitChildExit(child, hasExited, softTimeoutMs) {
+	const pollMs = 25;
+	const startedSoft = Date.now();
+	while (!hasExited() && Date.now() - startedSoft < softTimeoutMs) {
+		await sleep(pollMs);
+	}
+	if (hasExited()) return;
+	try {
+		child.kill("SIGKILL");
+	} catch {
+		// process may already be gone
+	}
+	const hardTimeoutMs = 1000;
+	const startedHard = Date.now();
+	while (!hasExited() && Date.now() - startedHard < hardTimeoutMs) {
 		await sleep(pollMs);
 	}
 }

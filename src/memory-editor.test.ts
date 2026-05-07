@@ -166,8 +166,13 @@ describe("MemoryEditorComponent — interaction", () => {
 		expect(lines).toContain("❈");
 	});
 
-	it("filters facts as the user types", () => {
+	it("only routes letter keys into the search query after entering search mode with /", () => {
 		const { component, invalidate } = buildComponent();
+		// In default command mode, letters should NOT mutate the search query.
+		component.handleInput("t");
+		expect(component.render(160).map(stripAnsi).join("\n")).toContain("search remembered facts");
+
+		component.handleInput("/");
 		component.handleInput("t");
 		component.handleInput("y");
 		component.handleInput("p");
@@ -175,6 +180,27 @@ describe("MemoryEditorComponent — interaction", () => {
 		expect(lines).toContain("prefers TypeScript strict");
 		expect(lines).not.toContain("Dhruv works at Argent");
 		expect(invalidate).toHaveBeenCalled();
+	});
+
+	it("escape in search mode returns to command mode without closing", () => {
+		const { component, close } = buildComponent();
+		component.handleInput("/");
+		component.handleInput("a");
+		component.handleInput("escape");
+		expect(close).not.toHaveBeenCalled();
+		// Subsequent escape from command mode closes
+		component.handleInput("escape");
+		expect(close).toHaveBeenCalled();
+	});
+
+	it("does not invoke forget when the user types `d` while filtering for `node`", async () => {
+		const forget = vi.fn(async () => undefined);
+		const { component } = buildComponent({}, { client: fakeClient({ forget }) });
+		component.handleInput("/");
+		for (const ch of "node") component.handleInput(ch);
+		await Promise.resolve();
+		await Promise.resolve();
+		expect(forget).not.toHaveBeenCalled();
 	});
 
 	it("walks focus across visible facts with arrow keys", () => {
@@ -236,13 +262,20 @@ describe("MemoryEditorComponent — interaction", () => {
 		expect(notify).toHaveBeenCalledWith(expect.stringMatching(/forget failed: nope/), "warning");
 	});
 
-	it("notifies a hint when the user presses e (revise inline deferred)", () => {
+	it("notifies a hint when the user presses e in command mode (revise inline deferred)", () => {
 		const { component, notify } = buildComponent({ focusedFactId: "pref-1" });
 		component.handleInput("e");
 		expect(notify).toHaveBeenCalledWith(expect.stringMatching(/revise inline coming soon/), "info");
 	});
 
-	it("closes on escape", () => {
+	it("does not notify the revise hint while typing `prefers` in search mode", () => {
+		const { component, notify } = buildComponent();
+		component.handleInput("/");
+		for (const ch of "prefers") component.handleInput(ch);
+		expect(notify).not.toHaveBeenCalled();
+	});
+
+	it("closes on escape from command mode", () => {
 		const { component, close } = buildComponent();
 		component.handleInput("escape");
 		expect(close).toHaveBeenCalled();

@@ -45,14 +45,24 @@ const SEARCH_PROMPT_GLYPH = "\u276F";
 const PANEL_INDENT = "   ";
 const PANEL_GAP = "   ";
 
+export type MemoryEditorMode = "command" | "search";
+
 export type MemoryEditorSnapshot = {
 	searchQuery: string;
 	groups: readonly PanelGroup[];
 	factsTotal: number;
 	focusedFactId: string | null;
+	/**
+	 * `"command"` (default) routes letter keys to hotkeys (`d` forget, `e`
+	 * revise, `/` enters search). `"search"` routes letter keys into the
+	 * search query so `pre`, `node`, `android`, etc. filter cleanly. Esc in
+	 * `"search"` returns to `"command"` (preserving the query); Esc in
+	 * `"command"` closes the overlay.
+	 */
+	mode?: MemoryEditorMode;
 };
 
-export const MEMORY_EDITOR_HINTS = "\u2191\u2193 wander    /  search    e  revise    d  forget    \u23CE retreat";
+export const MEMORY_EDITOR_HINTS = "\u2191\u2193 wander    /  search    e  revise    d  forget    \u238B retreat";
 
 export const MEMORY_EDITOR_OVERLAY_OPTIONS: OverlayOptions = {
 	anchor: "center",
@@ -224,8 +234,36 @@ export class MemoryEditorComponent implements Component {
 	}
 
 	public handleInput(data: string): void {
+		const mode = this.snapshot.mode ?? "command";
+		if (mode === "search") {
+			if (matchesKey(data, "escape") || data === "escape" || data === "\u001b") {
+				this.snapshot = { ...this.snapshot, mode: "command" };
+				this.deps.invalidate();
+				return;
+			}
+			if (matchesKey(data, "backspace") || data === "backspace") {
+				this.updateSearch(this.snapshot.searchQuery.slice(0, -1));
+				return;
+			}
+			if (matchesKey(data, "enter") || data === "enter" || data === "\r" || data === "\n") {
+				this.snapshot = { ...this.snapshot, mode: "command" };
+				this.deps.invalidate();
+				return;
+			}
+			if (data.length === 1 && !/\p{Cc}/u.test(data)) {
+				this.updateSearch(`${this.snapshot.searchQuery}${data}`);
+			}
+			return;
+		}
+
+		// command mode
 		if (matchesKey(data, "escape") || data === "escape" || data === "\u001b") {
 			this.deps.close();
+			return;
+		}
+		if (data === "/") {
+			this.snapshot = { ...this.snapshot, mode: "search" };
+			this.deps.invalidate();
 			return;
 		}
 		if (matchesKey(data, "up") || data === "up") {
@@ -243,13 +281,6 @@ export class MemoryEditorComponent implements Component {
 		if (data === "e") {
 			this.deps.notify("revise inline coming soon \u2014 use /sumo:memory forget <id> + /sumo:memory add <text>", "info");
 			return;
-		}
-		if (matchesKey(data, "backspace") || data === "backspace") {
-			this.updateSearch(this.snapshot.searchQuery.slice(0, -1));
-			return;
-		}
-		if (data.length === 1 && !/\p{Cc}/u.test(data)) {
-			this.updateSearch(`${this.snapshot.searchQuery}${data}`);
 		}
 	}
 

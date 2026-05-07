@@ -31,11 +31,15 @@ function ensureState(): ThemeRegistryState {
 	const host = globalThis as unknown as Record<symbol, ThemeRegistryState | undefined>;
 	let state = host[REGISTRY_KEY];
 	if (!state) {
+		// Registry insertion order is the user-visible cycle order for both
+		// `Ctrl+Shift+T` and `/sumo:theme list`. PRD § Themes (line 187) pins
+		// cathedral first, amber-crt second, obsidian third — do not reorder
+		// without an explicit PRD change.
 		state = {
 			registry: new Map<string, Theme>([
 				[CATHEDRAL_THEME.name, CATHEDRAL_THEME],
-				[OBSIDIAN_THEME.name, OBSIDIAN_THEME],
 				[AMBER_CRT_THEME.name, AMBER_CRT_THEME],
+				[OBSIDIAN_THEME.name, OBSIDIAN_THEME],
 			]),
 			listeners: new Set<ThemeChangedListener>(),
 			activeThemeName: CATHEDRAL_THEME.name,
@@ -47,9 +51,13 @@ function ensureState(): ThemeRegistryState {
 	// Re-imported module copies must observe newly-shipped builtin themes added
 	// after the first state was created (e.g. Obsidian Temple landed on a later
 	// require chain). Defensive merge keeps cross-copy registries aligned.
-	if (!state.registry.has(OBSIDIAN_THEME.name)) state.registry.set(OBSIDIAN_THEME.name, OBSIDIAN_THEME);
+	// Defensive merges for re-imported module copies. Insertion order on a
+	// pre-existing state is whatever the original copy seeded; once that copy
+	// is gone the next `ensureState` call falls back to the canonical order
+	// above.
 	if (!state.registry.has(CATHEDRAL_THEME.name)) state.registry.set(CATHEDRAL_THEME.name, CATHEDRAL_THEME);
 	if (!state.registry.has(AMBER_CRT_THEME.name)) state.registry.set(AMBER_CRT_THEME.name, AMBER_CRT_THEME);
+	if (!state.registry.has(OBSIDIAN_THEME.name)) state.registry.set(OBSIDIAN_THEME.name, OBSIDIAN_THEME);
 	return state;
 }
 

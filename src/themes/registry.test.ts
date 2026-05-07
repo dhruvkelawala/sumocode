@@ -4,8 +4,9 @@ import { AMBER_CRT_THEME, CATHEDRAL_THEME, activeThemeColors, cycleActiveTheme, 
 describe("theme registry", () => {
 	afterEach(() => resetThemeRegistryForTests());
 
-	it("registers Cathedral, Obsidian, and Amber CRT in registry order", () => {
-		expect(listThemes().map((theme) => theme.name)).toEqual(["cathedral", "obsidian", "amber-crt"]);
+	it("registers Cathedral, Amber CRT, and Obsidian in PRD-pinned registry order", () => {
+		// PRD § Themes (line 187): cathedral first, amber-crt second, obsidian third.
+		expect(listThemes().map((theme) => theme.name)).toEqual(["cathedral", "amber-crt", "obsidian"]);
 		expect(getTheme("cathedral")).toBe(CATHEDRAL_THEME);
 		expect(getTheme(" Cathedral ")).toBe(CATHEDRAL_THEME);
 		expect(getTheme("obsidian")).toBe(OBSIDIAN_THEME);
@@ -67,9 +68,9 @@ describe("theme registry", () => {
 	});
 
 	it("reports the next theme name and wraps from last to first", () => {
-		expect(nextThemeName("cathedral")).toBe("obsidian");
-		expect(nextThemeName("obsidian")).toBe("amber-crt");
-		expect(nextThemeName("amber-crt")).toBe("cathedral");
+		expect(nextThemeName("cathedral")).toBe("amber-crt");
+		expect(nextThemeName("amber-crt")).toBe("obsidian");
+		expect(nextThemeName("obsidian")).toBe("cathedral");
 		expect(nextThemeName("unknown")).toBe("cathedral");
 	});
 
@@ -81,9 +82,9 @@ describe("theme registry", () => {
 		const next = cycleActiveTheme();
 		unsubscribe();
 
-		expect(next).toBe(OBSIDIAN_THEME);
-		expect(getActiveTheme()).toBe(OBSIDIAN_THEME);
+		expect(next).toBe(AMBER_CRT_THEME);
+		expect(getActiveTheme()).toBe(AMBER_CRT_THEME);
 		expect(getThemeVersion()).toBe(before + 1);
-		expect(seen).toEqual(["obsidian"]);
+		expect(seen).toEqual(["amber-crt"]);
 	});
 });

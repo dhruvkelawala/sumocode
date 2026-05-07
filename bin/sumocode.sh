@@ -15,6 +15,9 @@ SCRIPT_DIR="$(cd "$(dirname "${SOURCE}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 export SUMO_TUI="${SUMO_TUI:-1}"
+# Set so the SumoCode `/sumo:reload` slash command knows it's running under
+# the loop-respawn launcher and can exit with the reload signal.
+export SUMOCODE_LAUNCHER="${SOURCE}"
 
 print_help() {
 	cat <<EOF
@@ -273,7 +276,13 @@ EOF
 	fi
 fi
 
-PI_BIN="${ROOT_DIR}/node_modules/.bin/pi"
+# Honour a caller-provided PI_BIN env var first so harness/test fixtures can
+# point the launcher at a stub binary without rewriting bin/sumocode.sh.
+if [[ -n "${PI_BIN:-}" && -x "${PI_BIN}" ]]; then
+	:
+else
+	PI_BIN="${ROOT_DIR}/node_modules/.bin/pi"
+fi
 if [[ ! -x "${PI_BIN}" ]]; then
 	PI_BIN="$(command -v pi || true)"
 fi
@@ -446,8 +455,30 @@ EOF
 	exit 0
 fi
 
-if [[ "${#SUMOCODE_ARGS[@]}" -eq 0 ]]; then
-	exec "${PI_BIN}" -e "${ROOT_DIR}/src/extension.ts"
-fi
+# `/sumo:reload` exits the inner pi with this code so we re-launch in place.
+# Other exit codes propagate normally.
+SUMOCODE_RELOAD_EXIT_CODE=100
 
-exec "${PI_BIN}" -e "${ROOT_DIR}/src/extension.ts" "${SUMOCODE_ARGS[@]}"
+while :; do
+	code=0
+	if [[ "${#SUMOCODE_ARGS[@]}" -eq 0 ]]; then
+		"${PI_BIN}" -e "${ROOT_DIR}/src/extension.ts" || code=$?
+	else
+		"${PI_BIN}" -e "${ROOT_DIR}/src/extension.ts" "${SUMOCODE_ARGS[@]}" || code=$?
+	fi
+	if [[ "${code}" -ne "${SUMOCODE_RELOAD_EXIT_CODE}" ]]; then
+		exit "${code}"
+	fi
+	# Re-launch with --continue so the in-progress session resumes after the
+	# code change. Skip if --continue / -c / --resume / --no-session is already
+	# in argv.
+	have_continue=0
+	for arg in "${SUMOCODE_ARGS[@]:-}"; do
+		case "${arg}" in
+			--continue|-c|--resume|-r|--no-session) have_continue=1 ;;
+		esac
+	done
+	if [[ "${have_continue}" -eq 0 ]]; then
+		SUMOCODE_ARGS=("--continue" "${SUMOCODE_ARGS[@]:-}")
+	fi
+done

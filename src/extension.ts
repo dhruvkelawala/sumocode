@@ -13,6 +13,7 @@ import { loadSumoCodeConfig } from "./config/sumocode-config.js";
 import { getTheme, setActiveTheme } from "./themes/index.js";
 import { installAltscreen } from "./cathedral/altscreen.js";
 import { installCathedralEditor } from "./cathedral/cathedral-editor.js";
+import { registerSumoReloadCommand } from "./commands/reload.js";
 import { installSumoInteractions } from "./interaction-registry.js";
 import { installFooter } from "./footer.js";
 import { installRenderDiagnostics } from "./render-diagnostics.js";
@@ -158,5 +159,6 @@ export default function sumocode(pi: ExtensionAPI): void {
 
 
 	installWorkingIndicator(pi);
+	registerSumoReloadCommand(pi);
 	installSumoInteractions(pi);
 }

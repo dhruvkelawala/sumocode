@@ -81,13 +81,21 @@ async function runOneAttempt(scenario, runtime, attempt) {
 	await sleep(settleMs);
 
 	const emptyOutputGraceMs = Math.max(0, Number(runtime.emptyOutputGraceMs ?? 5000));
-	if (!exited && output.trim().length === 0 && emptyOutputGraceMs > 0) {
-		// CI runners can be slow to reach the first retained-frame write,
-		// especially for no-input splash captures. Poll for non-whitespace
-		// output so we settle as soon as the first frame byte lands but never
-		// short-circuit on stray `\r\n` keepalive chunks that would still trip
-		// the empty-output check below.
-		await waitForFirstByte(() => output.trim().length > 0 || exited, emptyOutputGraceMs);
+	const stabilizeMs = Math.max(0, Number(runtime.outputStabilizeMs ?? 200));
+	if (!exited && emptyOutputGraceMs > 0) {
+		// CI runners can be slow to reach the first retained-frame write and
+		// the frame itself can stream across multiple PTY chunks. Poll within
+		// the grace window until the output buffer has been stable for
+		// `stabilizeMs` (or until the child exits / the grace expires) so we
+		// neither short-circuit on whitespace-only chunks nor capture a
+		// half-streamed frame.
+		await waitForStableOutput(
+			() => output.length,
+			() => output.trim().length > 0,
+			() => exited,
+			emptyOutputGraceMs,
+			stabilizeMs,
+		);
 	}
 
 	const captured = output;
@@ -158,11 +166,19 @@ async function runOneAttempt(scenario, runtime, attempt) {
 	};
 }
 
-async function waitForFirstByte(isReady, timeoutMs) {
+async function waitForStableOutput(getLength, hasMeaningfulOutput, hasExited, totalTimeoutMs, stabilizeMs) {
 	const pollMs = 50;
 	const started = Date.now();
-	while (Date.now() - started < timeoutMs) {
-		if (isReady()) return;
+	let lastLength = getLength();
+	let lastChange = Date.now();
+	while (Date.now() - started < totalTimeoutMs) {
+		if (hasExited()) return;
+		const length = getLength();
+		if (length !== lastLength) {
+			lastLength = length;
+			lastChange = Date.now();
+		}
+		if (hasMeaningfulOutput() && Date.now() - lastChange >= stabilizeMs) return;
 		await sleep(pollMs);
 	}
 }

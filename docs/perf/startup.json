@@ -1,6 +1,6 @@
 {
-  "generatedAt": "2026-05-06T00:01:25.444Z",
-  "commit": "ad3697e perf(startup): eagerly paint splash",
+  "generatedAt": "2026-05-07T14:48:13.265Z",
+  "commit": "f9afabb fix(approval): cap command + description rows so modal cannot overflow vertically (#241)",
   "runs": 5,
   "measurements": [
     {
@@ -8,114 +8,114 @@
       "samples": [
         {
           "ok": true,
-          "durationMs": 25.891416907310486,
+          "durationMs": 20.72654092311859,
           "code": 0,
           "signal": null,
           "stderr": ""
         },
         {
           "ok": true,
-          "durationMs": 24.53737509250641,
+          "durationMs": 17.967416048049927,
           "code": 0,
           "signal": null,
           "stderr": ""
         },
         {
           "ok": true,
-          "durationMs": 24.107332944869995,
+          "durationMs": 16.95358395576477,
           "code": 0,
           "signal": null,
           "stderr": ""
         },
         {
           "ok": true,
-          "durationMs": 23.91504192352295,
+          "durationMs": 17.123542070388794,
           "code": 0,
           "signal": null,
           "stderr": ""
         },
         {
           "ok": true,
-          "durationMs": 23.64979100227356,
+          "durationMs": 16.729292035102844,
           "code": 0,
           "signal": null,
           "stderr": ""
         }
       ],
-      "avgMiddleMs": 24.2,
-      "minMs": 23.6,
-      "maxMs": 25.9
+      "avgMiddleMs": 17.3,
+      "minMs": 16.7,
+      "maxMs": 20.7
     },
     {
       "label": "print-mode",
       "samples": [
         {
           "ok": true,
-          "durationMs": 8257.736582994461,
+          "durationMs": 6806.204792022705,
           "code": 0,
           "signal": null,
           "stderr": ""
         },
         {
           "ok": true,
-          "durationMs": 6654.875874996185,
+          "durationMs": 5941.384124994278,
           "code": 0,
           "signal": null,
           "stderr": ""
         },
         {
           "ok": true,
-          "durationMs": 7177.2815001010895,
+          "durationMs": 7303.392708063126,
           "code": 0,
           "signal": null,
           "stderr": ""
         },
         {
           "ok": true,
-          "durationMs": 4654.975583076477,
+          "durationMs": 7803.824165940285,
           "code": 0,
           "signal": null,
           "stderr": ""
         },
         {
           "ok": true,
-          "durationMs": 6154.770874977112,
+          "durationMs": 5942.814875006676,
           "code": 0,
           "signal": null,
           "stderr": ""
         }
       ],
-      "avgMiddleMs": 6662.3,
-      "minMs": 4655,
-      "maxMs": 8257.7
+      "avgMiddleMs": 6684.1,
+      "minMs": 5941.4,
+      "maxMs": 7803.8
     },
     {
       "label": "first-frame",
       "samples": [
         {
           "ok": true,
-          "durationMs": 1513.5900000333786
+          "durationMs": 1547.0335420370102
         },
         {
           "ok": true,
-          "durationMs": 1509.7610830068588
+          "durationMs": 1489.8589580059052
         },
         {
           "ok": true,
-          "durationMs": 1494.4068750143051
+          "durationMs": 1474.977334022522
         },
         {
           "ok": true,
-          "durationMs": 1494.456416964531
+          "durationMs": 1497.0913330316544
         },
         {
           "ok": true,
-          "durationMs": 1508.68549990654
+          "durationMs": 1534.0268750190735
         }
       ],
-      "avgMiddleMs": 1504.3,
-      "minMs": 1494.4,
-      "maxMs": 1513.6
+      "avgMiddleMs": 1507,
+      "minMs": 1475,
+      "maxMs": 1547
     }
   ]
 }

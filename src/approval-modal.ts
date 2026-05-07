@@ -30,64 +30,25 @@
 
 import type { Component } from "@mariozechner/pi-tui";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@mariozechner/pi-tui";
+import { matchesKey, wrapTextWithAnsi } from "@mariozechner/pi-tui";
 import { activeThemeColors } from "./themes/index.js";
+import {
+	RESET,
+	center,
+	fg,
+	fitLine,
+	padRight,
+	persistentBg,
+	sgr,
+	splitRule,
+	visibleLength,
+	wrapPanelRow,
+} from "./cathedral/scriptorium-chrome.js";
 
-const RESET = "\u001b[0m";
-const ANSI_PATTERN = /\u001b\[[0-9;]*m/g;
 const PANEL_INDENT = "   ";
 const BIBLE_COMMAND_BOX_WIDTH_AT_80 = 68;
 
-function visibleLength(text: string): number {
-	return visibleWidth(text.replace(ANSI_PATTERN, ""));
-}
-
-function sgr(hex: string, mode: 38 | 48): string {
-	const normalized = hex.replace("#", "");
-	const red = Number.parseInt(normalized.slice(0, 2), 16);
-	const green = Number.parseInt(normalized.slice(2, 4), 16);
-	const blue = Number.parseInt(normalized.slice(4, 6), 16);
-	return `\u001b[${mode};2;${red};${green};${blue}m`;
-}
-
-function fg(text: string, hex: string): string {
-	return `${sgr(hex, 38)}${text}${RESET}`;
-}
-
-function persistentBg(text: string, fgHex: string, bgHex: string): string {
-	const styleCode = `${sgr(fgHex, 38)}${sgr(bgHex, 48)}`;
-	return `${styleCode}${text.replace(/\u001b\[0m/g, `${RESET}${styleCode}`)}${RESET}`;
-}
-
-function fitLine(line: string, width: number): string {
-	if (width <= 0) return "";
-	return visibleLength(line) > width ? truncateToWidth(line, width, "…") : line;
-}
-
-function padRight(line: string, width: number): string {
-	const fitted = fitLine(line, width);
-	const length = visibleLength(fitted);
-	if (length >= width) return fitted;
-	return `${fitted}${" ".repeat(width - length)}`;
-}
-
-function center(line: string, width: number): string {
-	const fitted = fitLine(line, width);
-	const length = visibleLength(fitted);
-	if (length >= width) return fitted;
-	const left = Math.floor((width - length) / 2);
-	return `${" ".repeat(left)}${fitted}${" ".repeat(width - length - left)}`;
-}
-
-function panelRow(inner: string, width: number): string {
-	return persistentBg(padRight(inner, width), activeThemeColors().foreground, activeThemeColors().surfaceLifted);
-}
-
-function splitRule(width: number): string {
-	const ruleLength = Math.max(1, Math.min(22, Math.floor((width - 5) / 2)));
-	const divider = activeThemeColors().divider;
-	return center(`${fg("─".repeat(ruleLength), divider)}  ${fg("·", divider)}  ${fg("─".repeat(ruleLength), divider)}`, width);
-}
+const panelRow = wrapPanelRow;
 
 export type ApprovalChoice = "yes" | "no" | "always";
 

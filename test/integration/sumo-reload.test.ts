@@ -86,6 +86,10 @@ describe("bin/sumocode.sh reload loop", () => {
 		// Second launch carries `--continue` so the session resumes against fresh code.
 		const runTwoLine = output.split(/[\r\n]+/).find((line) => line.includes("RUN-2"));
 		expect(runTwoLine).toMatch(/--continue/);
+		// And no synthetic empty-string arg trailing it (regression: a previous
+		// `"${SUMOCODE_ARGS[@]:-}"` spread inserted `\"\"` after `--continue`).
+		expect(runTwoLine).not.toMatch(/--continue\s+$/);
+		expect(runTwoLine?.trimEnd()).toMatch(/--continue$/);
 
 		// Final exit code propagates from the second run.
 		expect(event.exitCode).toBe(0);

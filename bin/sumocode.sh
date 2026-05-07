@@ -479,6 +479,14 @@ while :; do
 		esac
 	done
 	if [[ "${have_continue}" -eq 0 ]]; then
-		SUMOCODE_ARGS=("--continue" "${SUMOCODE_ARGS[@]:-}")
+		# Spread without `:-` because `"${arr[@]:-}"` synthesizes an empty
+		# string element when the array is empty, which would forward `""` to
+		# pi as a phantom positional arg. Bash treats `"${arr[@]}"` of a
+		# declared empty array as a no-op even under `set -u`.
+		if [[ "${#SUMOCODE_ARGS[@]}" -eq 0 ]]; then
+			SUMOCODE_ARGS=("--continue")
+		else
+			SUMOCODE_ARGS=("--continue" "${SUMOCODE_ARGS[@]}")
+		fi
 	fi
 done

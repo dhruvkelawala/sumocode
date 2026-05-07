@@ -205,6 +205,21 @@ describe("MemoryEditorComponent — interaction", () => {
 		expect(client).toBeDefined();
 	});
 
+	it("restores the original facts total on forget rejection even when a search filter is active", async () => {
+		let reject: (error: Error) => void = () => {};
+		const forget = vi.fn(() => new Promise<void>((_, rej) => { reject = rej; }));
+		const { component } = buildComponent({ focusedFactId: "pref-1", searchQuery: "prefer" }, {
+			client: fakeClient({ forget }),
+		});
+		component.handleInput("d");
+		reject(new Error("daemon offline"));
+		await Promise.resolve();
+		await Promise.resolve();
+		await Promise.resolve();
+		const rendered = component.render(160).map(stripAnsi).join("\n");
+		expect(rendered).toContain("5 facts");
+	});
+
 	it("rolls back the optimistic removal when forget rejects", async () => {
 		let reject: (error: Error) => void = () => {};
 		const forget = vi.fn(() => new Promise<void>((_, rej) => { reject = rej; }));

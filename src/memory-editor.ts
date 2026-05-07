@@ -298,6 +298,7 @@ export class MemoryEditorComponent implements Component {
 		this.busy = true;
 		const previousGroups = this.snapshot.groups;
 		const previousSearch = this.snapshot.searchQuery;
+		const previousFactsTotal = this.snapshot.factsTotal;
 		const optimisticGroups = previousGroups.map((group) => ({
 			panel: group.panel,
 			facts: group.facts.filter((fact) => fact.id !== focusId),
@@ -315,7 +316,7 @@ export class MemoryEditorComponent implements Component {
 			await this.deps.client.forget(focusId);
 			this.deps.notify("forgotten", "info");
 		} catch (error) {
-			this.snapshot = { ...this.snapshot, groups: previousGroups, factsTotal: previousVisible.length, focusedFactId: focusId };
+			this.snapshot = { ...this.snapshot, groups: previousGroups, factsTotal: previousFactsTotal, focusedFactId: focusId };
 			this.deps.invalidate();
 			this.deps.notify(`forget failed: ${error instanceof Error ? error.message : String(error)}`, "warning");
 		} finally {

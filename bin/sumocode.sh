@@ -15,6 +15,9 @@ SCRIPT_DIR="$(cd "$(dirname "${SOURCE}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 export SUMO_TUI="${SUMO_TUI:-1}"
+# Set so the SumoCode `/sumo:reload` slash command knows it's running under
+# the loop-respawn launcher and can exit with the reload signal.
+export SUMOCODE_LAUNCHER="${SOURCE}"
 
 print_help() {
 	cat <<EOF
@@ -273,7 +276,21 @@ EOF
 	fi
 fi
 
-PI_BIN="${ROOT_DIR}/node_modules/.bin/pi"
+# Honour a caller-provided PI_BIN env var first so harness/test fixtures can
+# point the launcher at a stub binary without rewriting bin/sumocode.sh.
+# Accept either an absolute/relative executable path OR a PATH-resolvable
+# command name (e.g. `PI_BIN=pi-dev`).
+if [[ -n "${PI_BIN:-}" ]]; then
+	if [[ ! -x "${PI_BIN}" ]]; then
+		resolved="$(command -v "${PI_BIN}" || true)"
+		if [[ -n "${resolved}" ]]; then
+			PI_BIN="${resolved}"
+		fi
+	fi
+fi
+if [[ -z "${PI_BIN:-}" || ! -x "${PI_BIN}" ]]; then
+	PI_BIN="${ROOT_DIR}/node_modules/.bin/pi"
+fi
 if [[ ! -x "${PI_BIN}" ]]; then
 	PI_BIN="$(command -v pi || true)"
 fi
@@ -446,8 +463,50 @@ EOF
 	exit 0
 fi
 
-if [[ "${#SUMOCODE_ARGS[@]}" -eq 0 ]]; then
-	exec "${PI_BIN}" -e "${ROOT_DIR}/src/extension.ts"
-fi
+# `/sumo:reload` exits the inner pi with this code so we re-launch in place.
+# Other exit codes propagate normally.
+SUMOCODE_RELOAD_EXIT_CODE=100
 
-exec "${PI_BIN}" -e "${ROOT_DIR}/src/extension.ts" "${SUMOCODE_ARGS[@]}"
+while :; do
+	code=0
+	if [[ "${#SUMOCODE_ARGS[@]}" -eq 0 ]]; then
+		"${PI_BIN}" -e "${ROOT_DIR}/src/extension.ts" || code=$?
+	else
+		"${PI_BIN}" -e "${ROOT_DIR}/src/extension.ts" "${SUMOCODE_ARGS[@]}" || code=$?
+	fi
+	if [[ "${code}" -ne "${SUMOCODE_RELOAD_EXIT_CODE}" ]]; then
+		exit "${code}"
+	fi
+	# Re-launch with --continue so the in-progress session resumes after the
+	# code change.
+	#
+	# `--resume`/`-r` means "open the session picker" (one-shot UX). On reload
+	# the user wants to keep the session they already picked, so strip those
+	# flags before injecting `--continue`. Skip the inject when `--continue`,
+	# `-c`, or `--no-session` is already in argv.
+	filtered_args=()
+	have_continue=0
+	for arg in "${SUMOCODE_ARGS[@]:-}"; do
+		case "${arg}" in
+			--resume|-r) ;;
+			--continue|-c|--no-session) have_continue=1; filtered_args+=("${arg}") ;;
+			*) filtered_args+=("${arg}") ;;
+		esac
+	done
+	SUMOCODE_ARGS=("${filtered_args[@]:-}")
+	# Drop any synthetic empty element introduced by `:-` on an empty array.
+	if [[ "${#SUMOCODE_ARGS[@]}" -eq 1 && -z "${SUMOCODE_ARGS[0]}" ]]; then
+		SUMOCODE_ARGS=()
+	fi
+	if [[ "${have_continue}" -eq 0 ]]; then
+		# Spread without `:-` because `"${arr[@]:-}"` synthesizes an empty
+		# string element when the array is empty, which would forward `""` to
+		# pi as a phantom positional arg. Bash treats `"${arr[@]}"` of a
+		# declared empty array as a no-op even under `set -u`.
+		if [[ "${#SUMOCODE_ARGS[@]}" -eq 0 ]]; then
+			SUMOCODE_ARGS=("--continue")
+		else
+			SUMOCODE_ARGS=("--continue" "${SUMOCODE_ARGS[@]}")
+		fi
+	fi
+done

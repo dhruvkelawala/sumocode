@@ -48,19 +48,45 @@ sumocode
 sumocode .
 ```
 
-`-e` (or `--extension`) installs the extension **for this Pi session only**. It does NOT:
+### Why `-e` is the dev-checkout entry point
+
+`-e <path>` (alias `--extension`) tells Pi: *for this session only, load the extension at this path via jiti*. Both `pi -e .` and the `bin/sumocode.sh` launcher (which internally runs `pi -e ${ROOT_DIR}/src/extension.ts`) use it for the same reason: the dev checkout is not registered in `~/.pi/agent/settings.json`, so without `-e` Pi would start without SumoCode loaded.
+
+Load path matrix:
+
+| How I run it | Where SumoCode is loaded from | `-e` needed? |
+|---|---|---|
+| `./bin/sumocode.sh` from this checkout | `${ROOT_DIR}/src/extension.ts` | yes — checkout isn't in settings.json |
+| `sumocode` linked from a `pi install` | `pi.extensions` field in installed `package.json` | no — Pi resolves via its own loader |
+| plain `pi` | only globally-registered extensions | never loads SumoCode unless installed |
+
+What `-e` does NOT do:
 
 - Modify `~/.pi/agent/settings.json`
 - Touch the published git-installed version at `~/.pi/agent/git/github.com/dhruvkelawala/sumocode/`
 - Need a commit or push
 
-It DOES:
+What `-e` DOES do:
 
 - Spin up a temporary Pi with my local code
-- Hot-reload changes when I restart Pi (the next `pi -e .` picks up edits)
+- Read `src/extension.ts` directly via jiti on each launch
 - Let me iterate without polluting my real setup
 
 When I exit Pi, the ephemeral install vanishes. My stable install continues running whatever version is published on GitHub.
+
+### Hot reload: `/sumo:reload`
+
+Pi's built-in `/reload` reloads keybindings, themes, prompts, skills, and extension metadata, but it does **not** re-import a `pi -e` extension's TypeScript graph (jiti caches the modules). To pick up source edits without a Ctrl+C + relaunch, use:
+
+```txt
+/sumo:reload
+```
+
+Mechanism: `bin/sumocode.sh` runs pi inside a `while :;` loop. The slash-command handler exits pi with code `100`; the loop catches that, re-launches pi with `--continue` appended (so the in-progress session resumes), and the next jiti import reads the fresh source. Any other exit code propagates normally.
+
+This only works when launched through `bin/sumocode.sh` (which exports `SUMOCODE_LAUNCHER`). Run from plain `pi -e .` and `/sumo:reload` falls back to a warning notification — you have to quit + relaunch by hand.
+
+Good mental model: `/sumo:reload` is the dev-loop fast path; restart by hand is the safe fallback when the loop isn't available.
 
 ### 3. Verify it works
 
@@ -179,12 +205,20 @@ Common failures:
 
 ### Ephemeral install cache is stuck on old code
 
-Pi caches module resolution. Kill the ephemeral Pi and relaunch:
+jiti caches every module it transpiles, so source edits don't show up inside the running session. Two ways to refresh:
+
+```txt
+/sumo:reload
+```
+
+Fastest path — only works when launched via `bin/sumocode.sh` / `sumocode`. Re-execs pi inside the launcher loop and resumes the session. See "Hot reload: `/sumo:reload`" above.
 
 ```bash
 # Ctrl+D or /exit to quit Pi
 pi -e .
 ```
+
+Fallback when running plain `pi -e .` or when the reload signal is unavailable. Loses session unless you pass `--continue`.
 
 ### Need to see what Pi actually has for the extension
 

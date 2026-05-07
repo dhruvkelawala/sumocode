@@ -95,12 +95,12 @@ describe("/sumo:theme", () => {
 		const { handler, sendMessage, persistTheme } = registerHarness();
 		const setTheme = vi.fn(() => ({ success: true }));
 
-		await handler("amber-crt", uiContext({ setTheme }));
+		await handler("abyssal-tide", uiContext({ setTheme }));
 
 		expect(setTheme).not.toHaveBeenCalled();
 		expect(persistTheme).not.toHaveBeenCalled();
 		expect(sendMessage).toHaveBeenCalledWith(
-			expect.objectContaining({ details: { tone: "warning", lines: ["Unknown SumoCode theme: amber-crt"] } }),
+			expect.objectContaining({ details: { tone: "warning", lines: ["Unknown SumoCode theme: abyssal-tide"] } }),
 			{ triggerTurn: false },
 		);
 	});
@@ -112,15 +112,16 @@ describe("/sumo:theme", () => {
 		});
 
 		it("cycles theme through Pi UI, persists, and notifies on success", async () => {
+			// PRD-pinned cycle order: cathedral → amber-crt → obsidian → cathedral.
 			const { shortcuts, persistTheme } = registerHarness();
 			const setTheme = vi.fn(() => ({ success: true }));
 			const notify = vi.fn();
 
 			await shortcuts.get("ctrl+shift+t")?.({ hasUI: true, ui: { notify, setTheme } });
 
-			expect(setTheme).toHaveBeenCalledWith("obsidian");
-			expect(persistTheme).toHaveBeenCalledWith("obsidian");
-			expect(notify).toHaveBeenCalledWith("theme: obsidian", "info");
+			expect(setTheme).toHaveBeenCalledWith("amber-crt");
+			expect(persistTheme).toHaveBeenCalledWith("amber-crt");
+			expect(notify).toHaveBeenCalledWith("theme: amber-crt", "info");
 		});
 
 		it("alt+t fallback uses the same handler", async () => {
@@ -130,8 +131,8 @@ describe("/sumo:theme", () => {
 
 			await shortcuts.get("alt+t")?.({ hasUI: true, ui: { notify, setTheme } });
 
-			expect(setTheme).toHaveBeenCalledWith("obsidian");
-			expect(notify).toHaveBeenCalledWith("theme: obsidian", "info");
+			expect(setTheme).toHaveBeenCalledWith("amber-crt");
+			expect(notify).toHaveBeenCalledWith("theme: amber-crt", "info");
 		});
 
 		it("cycles SumoCode theme even when Pi theme API rejects the cycle", async () => {
@@ -141,7 +142,7 @@ describe("/sumo:theme", () => {
 
 			await shortcuts.get("ctrl+shift+t")?.({ hasUI: true, ui: { notify, setTheme } });
 
-			expect(notify).toHaveBeenCalledWith("theme: obsidian (Theme API unavailable)", "info");
+			expect(notify).toHaveBeenCalledWith("theme: amber-crt (Theme API unavailable)", "info");
 		});
 
 		it("warns when cycling succeeds but persistence fails", async () => {
@@ -151,7 +152,7 @@ describe("/sumo:theme", () => {
 
 			await shortcuts.get("ctrl+shift+t")?.({ hasUI: true, ui: { notify, setTheme } });
 
-			expect(notify).toHaveBeenCalledWith("theme: obsidian (EACCES)", "warning");
+			expect(notify).toHaveBeenCalledWith("theme: amber-crt (EACCES)", "warning");
 		});
 	});
 });

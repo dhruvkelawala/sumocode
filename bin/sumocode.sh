@@ -278,9 +278,17 @@ fi
 
 # Honour a caller-provided PI_BIN env var first so harness/test fixtures can
 # point the launcher at a stub binary without rewriting bin/sumocode.sh.
-if [[ -n "${PI_BIN:-}" && -x "${PI_BIN}" ]]; then
-	:
-else
+# Accept either an absolute/relative executable path OR a PATH-resolvable
+# command name (e.g. `PI_BIN=pi-dev`).
+if [[ -n "${PI_BIN:-}" ]]; then
+	if [[ ! -x "${PI_BIN}" ]]; then
+		resolved="$(command -v "${PI_BIN}" || true)"
+		if [[ -n "${resolved}" ]]; then
+			PI_BIN="${resolved}"
+		fi
+	fi
+fi
+if [[ -z "${PI_BIN:-}" || ! -x "${PI_BIN}" ]]; then
 	PI_BIN="${ROOT_DIR}/node_modules/.bin/pi"
 fi
 if [[ ! -x "${PI_BIN}" ]]; then
@@ -470,14 +478,26 @@ while :; do
 		exit "${code}"
 	fi
 	# Re-launch with --continue so the in-progress session resumes after the
-	# code change. Skip if --continue / -c / --resume / --no-session is already
-	# in argv.
+	# code change.
+	#
+	# `--resume`/`-r` means "open the session picker" (one-shot UX). On reload
+	# the user wants to keep the session they already picked, so strip those
+	# flags before injecting `--continue`. Skip the inject when `--continue`,
+	# `-c`, or `--no-session` is already in argv.
+	filtered_args=()
 	have_continue=0
 	for arg in "${SUMOCODE_ARGS[@]:-}"; do
 		case "${arg}" in
-			--continue|-c|--resume|-r|--no-session) have_continue=1 ;;
+			--resume|-r) ;;
+			--continue|-c|--no-session) have_continue=1; filtered_args+=("${arg}") ;;
+			*) filtered_args+=("${arg}") ;;
 		esac
 	done
+	SUMOCODE_ARGS=("${filtered_args[@]:-}")
+	# Drop any synthetic empty element introduced by `:-` on an empty array.
+	if [[ "${#SUMOCODE_ARGS[@]}" -eq 1 && -z "${SUMOCODE_ARGS[0]}" ]]; then
+		SUMOCODE_ARGS=()
+	fi
 	if [[ "${have_continue}" -eq 0 ]]; then
 		# Spread without `:-` because `"${arr[@]:-}"` synthesizes an empty
 		# string element when the array is empty, which would forward `""` to

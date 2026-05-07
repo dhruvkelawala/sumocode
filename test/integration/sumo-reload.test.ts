@@ -97,6 +97,24 @@ describe("bin/sumocode.sh reload loop", () => {
 		await rm(tempDir, { recursive: true, force: true });
 	}, 15_000);
 
+	it("strips --resume and replaces with --continue on relaunch (one-shot picker becomes in-place resume)", async () => {
+		const tempDir = await mkdtemp(join(tmpdir(), "sumocode-reload-resume-"));
+		stateFile = join(tempDir, "mock-pi.count");
+		session = spawnLauncherWithMockPi(stateFile, ["--resume"]);
+
+		const event = await session.exit;
+		const output = session.getOutput();
+
+		const runOne = output.split(/[\r\n]+/).find((l) => l.includes("RUN-1"));
+		const runTwo = output.split(/[\r\n]+/).find((l) => l.includes("RUN-2"));
+		expect(runOne).toMatch(/--resume/);
+		expect(runTwo).not.toMatch(/--resume/);
+		expect(runTwo).toMatch(/--continue/);
+		expect(event.exitCode).toBe(0);
+
+		await rm(tempDir, { recursive: true, force: true });
+	}, 15_000);
+
 	it("preserves the inner exit code for any non-100 exit (no respawn)", async () => {
 		// Mock-pi exits 100 on first invocation; we verify the second invocation
 		// (which exits 0) does NOT trigger a third respawn.

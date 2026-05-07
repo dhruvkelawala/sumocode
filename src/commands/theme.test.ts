@@ -95,12 +95,12 @@ describe("/sumo:theme", () => {
 		const { handler, sendMessage, persistTheme } = registerHarness();
 		const setTheme = vi.fn(() => ({ success: true }));
 
-		await handler("amber-crt", uiContext({ setTheme }));
+		await handler("abyssal-tide", uiContext({ setTheme }));
 
 		expect(setTheme).not.toHaveBeenCalled();
 		expect(persistTheme).not.toHaveBeenCalled();
 		expect(sendMessage).toHaveBeenCalledWith(
-			expect.objectContaining({ details: { tone: "warning", lines: ["Unknown SumoCode theme: amber-crt"] } }),
+			expect.objectContaining({ details: { tone: "warning", lines: ["Unknown SumoCode theme: abyssal-tide"] } }),
 			{ triggerTurn: false },
 		);
 	});

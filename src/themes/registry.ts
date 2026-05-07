@@ -1,3 +1,4 @@
+import { AMBER_CRT_THEME } from "./amber-crt.js";
 import { CATHEDRAL_THEME } from "./cathedral.js";
 import { OBSIDIAN_THEME } from "./obsidian.js";
 import type { Theme, ThemeChrome, ThemeColors, ThemeTokens } from "./types.js";
@@ -34,6 +35,7 @@ function ensureState(): ThemeRegistryState {
 			registry: new Map<string, Theme>([
 				[CATHEDRAL_THEME.name, CATHEDRAL_THEME],
 				[OBSIDIAN_THEME.name, OBSIDIAN_THEME],
+				[AMBER_CRT_THEME.name, AMBER_CRT_THEME],
 			]),
 			listeners: new Set<ThemeChangedListener>(),
 			activeThemeName: CATHEDRAL_THEME.name,
@@ -47,6 +49,7 @@ function ensureState(): ThemeRegistryState {
 	// require chain). Defensive merge keeps cross-copy registries aligned.
 	if (!state.registry.has(OBSIDIAN_THEME.name)) state.registry.set(OBSIDIAN_THEME.name, OBSIDIAN_THEME);
 	if (!state.registry.has(CATHEDRAL_THEME.name)) state.registry.set(CATHEDRAL_THEME.name, CATHEDRAL_THEME);
+	if (!state.registry.has(AMBER_CRT_THEME.name)) state.registry.set(AMBER_CRT_THEME.name, AMBER_CRT_THEME);
 	return state;
 }
 

@@ -44,14 +44,14 @@ describe("theme registry", () => {
 		expect(result.success).toBe(true);
 		if (result.success) expect(result.theme).toBe(AMBER_CRT_THEME);
 		expect(getActiveTheme()).toBe(AMBER_CRT_THEME);
-		expect(activeThemeColors().background).toBe("#1A0F00");
+		expect(activeThemeColors().background).toBe("#0A0806");
 		expect(activeThemeColors().foreground).toBe("#FFB000");
 		expect(activeThemeColors().accent).toBe("#FFD700");
 		// Preattentive states must remain distinct from Cathedral/Obsidian.
-		expect(activeThemeColors().states.idle).toBe("#33FF33");
+		expect(activeThemeColors().states.idle).toBe("#00FF66");
 		expect(activeThemeColors().states.thinking).toBe("#F0F0F0");
-		expect(activeThemeColors().states.tool).toBe("#33D6FF");
-		expect(activeThemeColors().states.approval).toBe("#FF3333");
+		expect(activeThemeColors().states.tool).toBe("#00E5FF");
+		expect(activeThemeColors().states.approval).toBe("#FF5500");
 		expect(activeThemeColors().states.learning).toBe("#FF66FF");
 	});
 

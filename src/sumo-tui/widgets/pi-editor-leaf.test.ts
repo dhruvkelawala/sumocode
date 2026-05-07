@@ -142,6 +142,30 @@ describe("PiEditorLeaf", () => {
 		root.dispose();
 	});
 
+	it("keeps a user-typed box-drawing row in the middle of a multiline prompt selectable", async () => {
+		const yoga = await loadYoga();
+		const root = new SumoNode(yoga.Node.create());
+		const rows = [
+			"\u256D\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u256E",
+			"\u2502 hello \u2502",
+			"\u2502\u250C\u2500\u2500\u2500\u2500\u2500\u2510\u2502",
+			"\u2502 world \u2502",
+			"\u2570\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u256F",
+		];
+		new PiEditorLeaf(yoga.Node.create(), asEditor(new FakeEditor(rows)), root);
+		root.width = 9;
+		root.yogaNode.calculateLayout(9, undefined, DIRECTION_LTR);
+		const buffer = new CellBuffer(5, 9);
+		composite(root, buffer);
+
+		// the middle row is box-drawing-only but sits inside the frame, so its
+		// inner cells stay selectable
+		for (let col = 1; col <= 7; col += 1) {
+			expect(buffer.getSelectionMeta(2, col)).toEqual({ selectable: true });
+		}
+		root.dispose();
+	});
+
 	it("keeps a bare horizontal-bar row selectable when no corners frame it", async () => {
 		const yoga = await loadYoga();
 		const root = new SumoNode(yoga.Node.create());

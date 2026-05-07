@@ -86,7 +86,13 @@ export class PiEditorLeaf extends PiComponentLeaf {
 					}
 				}
 			}
-			if (!isBorderRow(painted) && rect.width >= 1) {
+			// Cathedral input frame's top/bottom borders only ever appear at the
+			// outer edges of the editor render. Restrict the box-drawing border
+			// classification to those positions so that user-typed content rows
+			// composed only of box-drawing glyphs (e.g. `┌────┐`, `┬────┬`) in the
+			// middle of a multiline prompt remain selectable.
+			const isOuterRow = row === 0 || row === height - 1;
+			if ((!isOuterRow || !isBorderRow(painted)) && rect.width >= 1) {
 				// Mark editor content cells as selectable so the user can drag-copy
 				// the prompt text. The Cathedral input frame paints `│ … │`, so when
 				// the actual edge cells are vertical-bar glyphs we skip them; for

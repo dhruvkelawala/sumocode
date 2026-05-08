@@ -12,8 +12,8 @@ import {
  * pattern can be inspected without trying to read animation in motion.
  *
  * Output is sent to stdout in non-TTY mode and as a single info notification
- * in interactive mode. Either way the result is plain text Dhruv can paste
- * back to the agent for review.
+ * in interactive mode. Either way the result is plain text the user can
+ * paste back to the agent for review.
  */
 export function registerSpinnerCommand(pi: ExtensionAPI): void {
 	pi.registerCommand("sumo:spinner", {

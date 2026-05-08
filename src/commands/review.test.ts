@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { buildReviewPrompt, DEFAULT_REVIEW_MODEL, parseReviewScope, registerReviewCommand, resolveReviewModel } from "./review.js";
+import { buildReviewPrompt, DEFAULT_REVIEW_MODEL, extractModelAlias, MODEL_ALIASES, parseReviewScope, registerReviewCommand, resolveReviewModel } from "./review.js";
 
 describe("/sumo:review", () => {
 	describe("resolveReviewModel", () => {
@@ -10,6 +10,34 @@ describe("/sumo:review", () => {
 
 		it("allows model override via SUMOCODE_REVIEW_MODEL", () => {
 			expect(resolveReviewModel({ SUMOCODE_REVIEW_MODEL: "openai-codex/gpt-5.5" })).toBe("openai-codex/gpt-5.5");
+		});
+	});
+
+	describe("extractModelAlias", () => {
+		it("recognises codex alias", () => {
+			expect(extractModelAlias("codex #42")).toEqual({ model: "openai-codex/gpt-5.3-codex", scopeArgs: "#42" });
+		});
+
+		it("recognises opus alias", () => {
+			expect(extractModelAlias("opus")).toEqual({ model: "anthropic/claude-opus-4.6", scopeArgs: "" });
+		});
+
+		it("recognises sonnet alias", () => {
+			expect(extractModelAlias("sonnet src/foo.ts")).toEqual({ model: "anthropic/claude-sonnet-4.6", scopeArgs: "src/foo.ts" });
+		});
+
+		it("is case-insensitive", () => {
+			expect(extractModelAlias("OPUS #10")).toEqual({ model: "anthropic/claude-opus-4.6", scopeArgs: "#10" });
+		});
+
+		it("returns undefined model for non-alias first word", () => {
+			expect(extractModelAlias("#42")).toEqual({ model: undefined, scopeArgs: "#42" });
+			expect(extractModelAlias("")).toEqual({ model: undefined, scopeArgs: "" });
+			expect(extractModelAlias("src/foo.ts")).toEqual({ model: undefined, scopeArgs: "src/foo.ts" });
+		});
+
+		it("deepseek alias resolves to default", () => {
+			expect(extractModelAlias("deepseek")).toEqual({ model: MODEL_ALIASES.deepseek, scopeArgs: "" });
 		});
 	});
 
@@ -144,6 +172,22 @@ describe("/sumo:review", () => {
 
 			expect(sendUserMessage).toHaveBeenCalledWith(expect.stringContaining("gh pr diff 42"), { deliverAs: "followUp" });
 			expect(notify).toHaveBeenCalledWith(expect.stringContaining("PR #42"), "info");
+		});
+
+		it("uses alias model when provided as first arg", async () => {
+			let handler: ((args: string, ctx: { hasUI: boolean; ui: { notify: ReturnType<typeof vi.fn> } }) => Promise<void>) | undefined;
+			const sendUserMessage = vi.fn();
+			const registerCommand = vi.fn((_name: string, options: { handler: typeof handler }) => {
+				handler = options.handler;
+			});
+			const notify = vi.fn();
+
+			registerReviewCommand({ registerCommand, sendUserMessage } as never);
+			await handler?.("opus #42", { hasUI: true, ui: { notify } });
+
+			expect(sendUserMessage).toHaveBeenCalledWith(expect.stringContaining("anthropic/claude-opus-4.6"), { deliverAs: "followUp" });
+			expect(sendUserMessage).toHaveBeenCalledWith(expect.stringContaining("gh pr diff 42"), { deliverAs: "followUp" });
+			expect(notify).toHaveBeenCalledWith(expect.stringContaining("anthropic/claude-opus-4.6"), "info");
 		});
 	});
 });

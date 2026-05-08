@@ -2,8 +2,36 @@ import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-age
 
 export const DEFAULT_REVIEW_MODEL = "deepseek/deepseek-v4-pro";
 
+/** Short aliases → full provider/model ids. */
+export const MODEL_ALIASES: Record<string, string> = {
+	codex: "openai-codex/gpt-5.3-codex",
+	opus: "anthropic/claude-opus-4.6",
+	sonnet: "anthropic/claude-sonnet-4.6",
+	deepseek: "deepseek/deepseek-v4-pro",
+};
+
 export function resolveReviewModel(env: NodeJS.ProcessEnv = process.env): string {
 	return env.SUMOCODE_REVIEW_MODEL?.trim() || DEFAULT_REVIEW_MODEL;
+}
+
+/**
+ * Split args into an optional model alias (first word) and the remaining scope string.
+ *
+ *   "codex #42"  → { model: "openai-codex/gpt-5.3-codex", scopeArgs: "#42" }
+ *   "#42"        → { model: undefined, scopeArgs: "#42" }
+ *   "opus"       → { model: "anthropic/claude-opus-4.6",  scopeArgs: "" }
+ *   ""           → { model: undefined, scopeArgs: "" }
+ */
+export function extractModelAlias(args: string): { model: string | undefined; scopeArgs: string } {
+	const trimmed = args.trim();
+	const spaceIdx = trimmed.indexOf(" ");
+	const firstWord = (spaceIdx === -1 ? trimmed : trimmed.slice(0, spaceIdx)).toLowerCase();
+	const alias = MODEL_ALIASES[firstWord];
+	if (alias) {
+		const rest = spaceIdx === -1 ? "" : trimmed.slice(spaceIdx + 1);
+		return { model: alias, scopeArgs: rest };
+	}
+	return { model: undefined, scopeArgs: trimmed };
 }
 
 /**
@@ -159,11 +187,12 @@ function notify(ctx: ExtensionContext, message: string, type: "info" | "warning"
 
 export function registerReviewCommand(pi: ExtensionAPI): void {
 	pi.registerCommand("sumo:review", {
-		description: "Run scroll/scribe diff review until GREEN. Args: empty=branch diff, #51=PR, or git range/path",
+		description: `Run scroll/scribe diff review until GREEN. Args: [${Object.keys(MODEL_ALIASES).join("|")}] [scope]. Scope: empty=branch diff, #51=PR, or git range/path`,
 		handler: async (args, ctx) => {
-			const model = resolveReviewModel();
-			const prompt = buildReviewPrompt(args, model);
-			const scope = parseReviewScope(args);
+			const { model: aliasModel, scopeArgs } = extractModelAlias(args);
+			const model = aliasModel ?? resolveReviewModel();
+			const prompt = buildReviewPrompt(scopeArgs, model);
+			const scope = parseReviewScope(scopeArgs);
 			const label = scope.kind === "pr" ? `PR #${scope.number}` : scope.kind === "explicit" ? scope.raw : "branch diff";
 			try {
 				pi.sendUserMessage(prompt, { deliverAs: "followUp" });

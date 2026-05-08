@@ -53,7 +53,7 @@ const standardMem = {
 		"prefers TS strict",
 		"pnpm not npm",
 		"based London \u00b7 BST",
-		"Argent \u2192 argent-x",
+		"BigCo \u2192 main-app",
 		"imperative commits",
 	],
 	totalCount: 53,

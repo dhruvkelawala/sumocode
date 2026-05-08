@@ -49,7 +49,7 @@ export function routeFactToPanel(fact: MemoryFact): PanelId {
 
 	// 3. Keyword rules on content (case-insensitive)
 	const text = (fact.text ?? "").toLowerCase();
-	if (/\b(dhruv|argent|london|senior frontend)\b/.test(text)) return "IDENTITY";
+	if (/\b(works\s+at|based\s+in|located\s+in|lives\s+in|senior\s+(frontend|backend|engineer|developer)|software\s+engineer|principal\s+engineer|staff\s+engineer|lead\s+engineer)\b/.test(text)) return "IDENTITY";
 	if (/\b(cmux|portrait|landscape|terminal|libghostty|visual verification)\b/.test(text)) return "SYSTEM";
 	if (/\b(sumocode|openclaw|cathedral|project:)\b/.test(text)) return "PROJECTS";
 	if (/\b(tdd|workflow|always|never|prefer)\b/.test(text)) return "WORKFLOW";

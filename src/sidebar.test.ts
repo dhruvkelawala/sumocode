@@ -51,7 +51,7 @@ function component(lines: string[]): { renderCalls: number[]; node: { render(wid
 
 function snapshot(overrides: Partial<SidebarSnapshot> = {}): SidebarSnapshot {
 	return {
-		projectName: "argent-x",
+		projectName: "main-app",
 		branch: "main",
 		inputTokens: 12_000,
 		outputTokens: 8_000,
@@ -401,7 +401,7 @@ describe("renderSidebar — context section", () => {
 		const blob = untrack(lines.join("\n"));
 
 		expect(blob).toContain("CONTEXT");
-		expect(blob).toContain("argent-x");
+		expect(blob).toContain("main-app");
 		expect(blob).toContain("on main");
 		expect(blob).toMatch(/▉+░+/);
 		expect(blob).toContain("20k / 200k");
@@ -504,7 +504,7 @@ describe("renderSidebar — sub-tab navigation", () => {
 		expect(blob).toContain("CONTEXT");
 		expect(blob).toContain("MEMORY");
 		// CONTEXT sub-tab content shown
-		expect(blob).toContain("argent-x");
+		expect(blob).toContain("main-app");
 		expect(blob).toContain("github");
 		expect(lines.map(stripAnsi).filter((line) => /^\s*❧/.test(line))).toHaveLength(0);
 	});

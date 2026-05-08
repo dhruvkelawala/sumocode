@@ -127,7 +127,7 @@ Source: `/opt/homebrew/lib/node_modules/@remnic/cli/node_modules/@remnic/core/di
 **Partially.** It supports a fixed `category` enum. It does **not** support arbitrary typed schemas such as:
 
 ```json
-{ "type": "identity", "primaryAlias": "Dhruv Kelawala" }
+{ "type": "identity", "primaryAlias": "developer" }
 ```
 
 Attempting `category: "identity"` fails validation:
@@ -351,7 +351,7 @@ Existing facts already carry useful `category` metadata (`fact`, `preference`) b
 Tell users to add memories like:
 
 ```txt
-identity: Dhruv is a Senior Frontend Engineer at Argent in London.
+identity: Dhruv is a Senior Frontend Engineer at BigCo in London.
 preference: prefers TDD and visual approval before UI slices are done.
 stack: uses pnpm, TypeScript strict, React Native, Next.js.
 project: SumoCode runs inside cmux; sidebar hidden on splash.
@@ -393,7 +393,7 @@ Small.
    ────────────────────────────────────────────────────────────────────────
 
    ╭─ IDENTITY ─────────────────────╮  ╭─ PREFERENCES ───────────────────╮
-   │ Dhruv · Senior FE · Argent     │  │ TDD by default                  │
+   │ senior FE · indie operator     │  │ TDD by default                  │
    │ London / BST                   │  │ visual approval before done     │
    │                                │  │ pnpm, not npm                   │
    ╰────────────────────────────────╯  ╰────────────────────────────────╯
@@ -453,7 +453,7 @@ Low if `/sumo:memory add` auto-tags.
 Manual command examples could be:
 
 ```txt
-/sumo:memory add --panel identity "Dhruv is a Senior Frontend Engineer at Argent in London."
+/sumo:memory add --panel identity "Dhruv is a Senior Frontend Engineer at BigCo in London."
 /sumo:memory add --panel workflow "Use TDD for all v0.2+ SumoCode slices."
 /sumo:memory add --panel project:sumocode "Sidebar hidden on splash; Path D accepted for active chat."
 ```
@@ -607,7 +607,7 @@ Large.
 
    IDENTITY                         PREFERENCES
    ─────────────────────────────    ─────────────────────────────
-   · Dhruv · Senior FE · Argent     ❯ prefers TDD slices
+   · senior FE · indie operator     ❯ prefers TDD slices
    · London / BST                   · concise final answers
 
    WORKFLOW                         PROJECTS

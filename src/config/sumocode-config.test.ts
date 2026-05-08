@@ -179,7 +179,7 @@ describe("sumocode-config", () => {
 
 	it("returns a save error when the existing global config cannot be read", () => {
 		expect(saveSumoCodeConfigPatch({ themeName: "obsidian" }, {
-			homeDir: "/home/dhruv",
+			homeDir: "/home/user",
 			readFile: () => {
 				throw new Error("EACCES");
 			},

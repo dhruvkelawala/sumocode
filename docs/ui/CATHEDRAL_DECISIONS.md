@@ -41,7 +41,7 @@ Sketch (active state, CONTEXT selected):
                                                   ▢ MEMORY        ← Ctrl+2
 
                                                   ┌ ACTIVE_CONTEXT ─
-                                                  argent-x (main)
+                                                  main-app (main)
                                                   [██████░░░] 42k/200k
                                                   $0.42 spent · session
 
@@ -403,7 +403,7 @@ No inline editing in v1.
    │ search…                                              48 facts │
 
    ╭─ IDENTITY ───────────────────╮  ╭─ PREFERENCES ────────────────╮
-   │ Dhruv · Senior FE · Argent     │  │ prefers TypeScript strict      │
+   │ senior FE · indie operator     │  │ prefers TypeScript strict      │
    │ London / BST                   │  │ pnpm not npm                   │
    ╰──────────────────────────────╯  ╰────────────────────────────────╯
 

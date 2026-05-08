@@ -344,7 +344,7 @@ async function applyMemoryScriptoriumOverlay(lines, cols, rows) {
 	const memoryEditor = await jiti.import(`${repoRoot}/src/memory-editor.ts`);
 	const categorization = await jiti.import(`${repoRoot}/src/memory-categorization.ts`);
 	const facts = [
-		{ id: "id-1", text: "Dhruv · Senior FE · Argent", tags: ["sumocode:identity"] },
+		{ id: "id-1", text: "senior FE · indie operator", tags: ["sumocode:identity"] },
 		{ id: "id-2", text: "London / BST", tags: ["sumocode:identity"] },
 		{ id: "pref-1", text: "prefers TypeScript strict", tags: ["sumocode:preferences"] },
 		{ id: "pref-2", text: "pnpm not npm", tags: ["sumocode:preferences"] },

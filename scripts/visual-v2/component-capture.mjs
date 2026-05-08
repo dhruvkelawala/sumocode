@@ -32,7 +32,7 @@ async function renderComponentLines(kind, scenario) {
 async function renderInputFrameTyped(width) {
 	const mod = await jiti.import(`${repoRoot}/src/cathedral/input-frame.ts`);
 	return [
-		...mod.renderInputFrame("review src/argent-x/balance.ts and tighten the return type", width, { promptColor: "accent" }),
+		...mod.renderInputFrame("review src/auth/session.ts and tighten the return type", width, { promptColor: "accent" }),
 		mod.renderInputHints(width),
 	];
 }

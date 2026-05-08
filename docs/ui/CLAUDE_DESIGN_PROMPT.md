@@ -103,7 +103,7 @@ ROWS 2-43 (middle, 42 rows tall) — SPLIT PANE:
      decorative banner in burnt orange:
      
      ════════ CONTEXT ════════
-     argent-x (main)
+     main-app (main)
      [████████░░░░] 42k/200k
      $0.42
      
@@ -117,7 +117,7 @@ ROWS 2-43 (middle, 42 rows tall) — SPLIT PANE:
      ❧ prefers TypeScript strict
      ❧ pnpm, not npm
      ❧ based in London
-     ❧ Argent · argent-x
+     ❧ BigCo · main-app
      ❧ imperative commits
      11 more · ⌘M
      
@@ -128,7 +128,7 @@ ROW 44 (separator) — single line of ─ characters in divider color,
     spanning full 160 cols.
 
 ROW 45 (footer) — single line, full width:
-   ~/argent-x (main) · ↑12k ↓8k · $0.42 · 42%/200k · ● <state-label> · claude-opus-4-7
+   ~/main-app (main) · ↑12k ↓8k · $0.42 · 42%/200k · ● <state-label> · claude-opus-4-7
    
    The state dot ● uses the appropriate state color for the screen we're 
    rendering. The state-label is a single lowercase word: ready, thinking, 
@@ -161,11 +161,11 @@ Chat area shows a partial assistant response, mid-stream:
 
   ── APPROACH ──
   
-  I'll wire the React Query state into a custom `useArgentBalance` hook 
+  I'll wire the React Query state into a custom `useBigCoBalance` hook 
   that handles the loading and error states cleanly.
   
   ╔══════════════════════════════════════════════════════════════════════╗
-  ║ 1  function useArgentBalance(account: string) {                     ║
+  ║ 1  function useBigCoBalance(account: string) {                     ║
   ║ 2    return useQuery({                                              ║
   ║ 3      queryKey: ['balance', account],                              ║
   ║ 4      queryFn: () => fetchBalance(account),                        ║
@@ -186,9 +186,9 @@ at the bottom of the chat area in amber, just above the input zone.
 Footer state: ● working (#5B9BD5 blue-gray)
 Chat area shows three tool invocations as decorative chapters:
 
-  ━━━ [read]   src/argent-x/balance.ts            ━━━ ✓
+  ━━━ [read]   src/main-app/balance.ts            ━━━ ✓
   ━━━ [bash]   pnpm test --filter @argent/sdk     ━━━ ▶ running
-  ━━━ [edit]   src/argent-x/balance.ts            ━━━ ✓
+  ━━━ [edit]   src/main-app/balance.ts            ━━━ ✓
   
   ┌── DIFF ─────────────────────────────────────────────────────────────┐
   │ - const balance = await provider.getBalance(account);              │ ← burnt orange
@@ -239,7 +239,7 @@ journal:
   ║                                                              ● learning ║
   ║                                                                          ║
   ║   ════════ IDENTITY ════════                                            ║
-  ║   ❧ You are Dhruv Kelawala, senior engineer at Argent.                 ║
+  ║   ❧ You are a senior engineer working in your terminal.                 ║
   ║   ❧ Based in London, BST timezone.                                     ║
   ║                                                                          ║
   ║   ════════ PREFERENCES ════════                                         ║
@@ -253,7 +253,7 @@ journal:
   ║   ❧ Bun preferred where possible                                       ║
   ║                                                                          ║
   ║   ════════ PROJECTS ════════                                           ║
-  ║   ❧ argent-x: Starknet privacy wallet extension                       ║
+  ║   ❧ main-app: Starknet privacy wallet extension                       ║
   ║   ❧ readyx: React Native consumer app                                 ║
   ║                                                                          ║
   ║   ──────────────────────────────────────────────────────────────────   ║

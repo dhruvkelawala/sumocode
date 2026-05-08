@@ -72,7 +72,7 @@ function buildStreamingRows() {
   rows.push(blankRow());
 
   // Prose
-  const p1 = "I'll wire React Query into a custom useArgentBalance hook that handles the loading";
+  const p1 = "I'll wire React Query into a custom useBigCoBalance hook that handles the loading";
   const p2 = "and error states cleanly. Cache for 30 seconds, refetch on window focus.";
   rows.push(fixedRow(<span style={{ color: '#F5E6C8' }}>{p1}</span>, p1.length));
   rows.push(fixedRow(<span style={{ color: '#F5E6C8' }}>{p2}</span>, p2.length));
@@ -108,7 +108,7 @@ function buildStreamingRows() {
   const KW = '#D97706', ST = '#7FB069', NM = '#E8B339', FG = '#F5E6C8', FN = '#E8B339', CM = '#6F5D46';
   rows.push(codeLine(1, [
     { text: 'function ', color: KW },
-    { text: 'useArgentBalance', color: FN },
+    { text: 'useBigCoBalance', color: FN },
     { text: '(account: ', color: FG },
     { text: 'string', color: KW },
     { text: ') {', color: FG },
@@ -198,9 +198,9 @@ function buildToolRows() {
     );
   };
 
-  rows.push(toolPill('read', 'src/argent-x/balance.ts',          '✓', '#7FB069'));
+  rows.push(toolPill('read', 'src/main-app/balance.ts',          '✓', '#7FB069'));
   rows.push(toolPill('bash', 'pnpm test --filter @argent/sdk',   '▶ running', '#5B9BD5'));
-  rows.push(toolPill('edit', 'src/argent-x/balance.ts',          '✓', '#7FB069'));
+  rows.push(toolPill('edit', 'src/main-app/balance.ts',          '✓', '#7FB069'));
   rows.push(blankRow());
 
   // DIFF box — single-line, with title in upper border: ┌── DIFF ─...─┐
@@ -232,9 +232,9 @@ function buildToolRows() {
   rows.push(blankRow());
 
   // Live test output — running
-  const log1 = '   PASS  src/argent-x/balance.test.ts  (4 tests, 318ms)';
-  const log2 = '   PASS  src/argent-x/account.test.ts  (12 tests, 612ms)';
-  const log3 = '   RUNS  src/argent-x/integration.test.ts';
+  const log1 = '   PASS  src/main-app/balance.test.ts  (4 tests, 318ms)';
+  const log2 = '   PASS  src/main-app/account.test.ts  (12 tests, 612ms)';
+  const log3 = '   RUNS  src/main-app/integration.test.ts';
   rows.push(fixedRow(<span style={{ color: '#7FB069' }}>{log1}</span>, log1.length));
   rows.push(fixedRow(<span style={{ color: '#7FB069' }}>{log2}</span>, log2.length));
   rows.push(fixedRow(<span style={{ color: '#5B9BD5' }}>{log3}</span>, log3.length));

@@ -102,7 +102,7 @@ Bible and `docs/visual/parity/CONTRACT.md`.
 - **2.2** Keep the wide-layout threshold aligned to the V2 split (`SIDEBAR_MIN_TERMINAL_WIDTH = 120`).
 - **2.3** Portrait policy superseded by P0-F: V1 hides the sidebar below `120` cols and keeps the canonical portrait scene no-sidebar. Future portrait overlays/bottom bands require a separate V2 issue and visual approval.
 - **2.4** CONTEXT section parity:
-  - row 1: `argent-x (main)` (project + branch)
+  - row 1: `main-app (main)` (project + branch)
   - row 2: `[██████░░░░░░░░░░░░░░░░░░] 42k/200k`
     (filled+empty progress bar, dim brackets, foreground fill, divider
     empty cells, dim suffix)
@@ -133,7 +133,7 @@ Current footer:
 Mockup footer:
 
 ```
-~/argent-x (main) · ↑12k ↓8k · $0.42 · 42%/200k · ● ready · claude-opus-4-7
+~/main-app (main) · ↑12k ↓8k · $0.42 · 42%/200k · ● ready · claude-opus-4-7
 ```
 
 Differences to fix:
@@ -174,9 +174,9 @@ Currently Pi renders tool calls in its default style (boxed multiline). The
 mockup uses one-row "tool pills":
 
 ```
-━━━ [read]  src/argent-x/balance.ts            ━━━ ✓
+━━━ [read]  src/main-app/balance.ts            ━━━ ✓
 ━━━ [bash]  pnpm test                          ━━━ ▶ running
-━━━ [edit]  src/argent-x/balance.ts            ━━━ ✓
+━━━ [edit]  src/main-app/balance.ts            ━━━ ✓
 ```
 
 Pi exposes a `MessageRenderer`-style hook for tool result customization. We

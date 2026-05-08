@@ -172,7 +172,7 @@ Key design moves:
   ❧ prefers TS strict
   ❧ pnpm not npm
   ❧ based London · BST
-  ❧ Argent → argent-x
+  ❧ BigCo → main-app
   ❧ imperative commits
 
   ━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -440,7 +440,7 @@ Disappears on first keystroke.
    ❯  █search remembered facts…                                      48 facts
 
    ╭────────── IDENTITY ──────────╮  ╭──────── PREFERENCES ────────╮
-   │ · Dhruv · Senior FE · Argent │  │ ❈ prefers TypeScript strict │
+   │ · senior FE · indie operator │  │ ❈ prefers TypeScript strict │
    │ · London / BST               │  │ · pnpm not npm              │
    ╰──────────────────────────────╯  ╰─────────────────────────────╯
 

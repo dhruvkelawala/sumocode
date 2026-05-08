@@ -6,7 +6,7 @@ const untrack = (s: string): string => s.replace(/\u202F/g, "");
 
 function snapshot(overrides: Partial<RegistrySidebarSnapshot> = {}): RegistrySidebarSnapshot {
 	return {
-		projectName: "argent-x",
+		projectName: "main-app",
 		branch: "main",
 		inputTokens: 12_000,
 		outputTokens: 30_000,

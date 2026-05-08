@@ -54,10 +54,10 @@ class MemoryEditorComponent implements Component {
 		return renderMemoryEditor(
 			{
 				user: "You",
-				org: "Argent",
+				org: "BigCo",
 				preferences: ["TypeScript (Strict)", "pnpm execution"],
 				stack: ["React 18+", "Vite bundler"],
-				projects: ["argent-x [active]"],
+				projects: ["main-app [active]"],
 				learning: true,
 			},
 			width,

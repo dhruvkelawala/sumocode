@@ -273,7 +273,7 @@
 					{
 						"afterMs": 1800,
 						"type": "text",
-						"value": "review src/argent-x/balance.ts and tighten the return type"
+						"value": "review src/auth/session.ts and tighten the return type"
 					},
 					{
 						"afterMs": 150,

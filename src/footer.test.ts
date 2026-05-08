@@ -24,7 +24,7 @@ function withoutAnsi(value: string): string {
 
 function snapshot(overrides: Partial<FooterSnapshot> = {}): FooterSnapshot {
 	return {
-		cwd: join(process.env.HOME ?? "/Users/dev", "argent-x"),
+		cwd: join(process.env.HOME ?? "/Users/dev", "sample-app"),
 		branch: "main",
 		inputTokens: 12_000,
 		outputTokens: 8_000,
@@ -102,7 +102,7 @@ describe("formatFooterLine — F1 two-zone layout", () => {
 	it("omits project and git branch to avoid duplicating sidebar/hint row", () => {
 		const line = withoutAnsi(formatFooterLine(snapshot()));
 
-		expect(line).not.toContain("~/argent-x");
+		expect(line).not.toContain("~/sample-app");
 		expect(line).not.toContain("(main)");
 	});
 
@@ -152,7 +152,7 @@ describe("formatFooterLine — cathedral coloring", () => {
 describe("formatCwd", () => {
 	it("replaces $HOME with ~", () => {
 		const home = process.env.HOME ?? "/Users/dev";
-		expect(formatCwd(`${home}/argent-x`)).toBe("~/argent-x");
+		expect(formatCwd(`${home}/sample-app`)).toBe("~/sample-app");
 	});
 
 	it("returns just the basename for paths outside $HOME", () => {

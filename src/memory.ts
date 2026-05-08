@@ -11,7 +11,7 @@ export type MemoryFact = {
 	updatedAt?: string;
 	/** Remnic-native tags. Includes `sumocode:<panel>` routing tags. */
 	tags?: readonly string[];
-	/** Remnic-native entity reference (e.g. "dhruv"). */
+	/** Remnic-native entity reference (e.g. "alice"). */
 	entityRef?: string;
 	/** Memory lifecycle status ("active" | "archived" | "hidden" | etc). */
 	status?: string;

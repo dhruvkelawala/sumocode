@@ -74,7 +74,7 @@ function buildMemoryEditor({ cols, search, selectedPanel, totalFacts }) {
 	// 2-column panel grid.
 	const panelWidth = Math.floor((cols - 8) / 2); // left margin 3 + gap 2 + right margin 3
 	const panels = [
-		{ title: "IDENTITY", items: ["Dhruv · Senior FE · Argent", "London / BST"] },
+		{ title: "IDENTITY", items: ["senior FE · indie operator", "London / BST"] },
 		{ title: "PREFERENCES", items: ["prefers TypeScript strict", "pnpm not npm"] },
 		{ title: "WORKFLOW", items: ["TDD by default", "visual approval before done"] },
 		{ title: "PROJECTS", items: ["sumocode/cathedral parity", "openclaw ACPX integration"] },

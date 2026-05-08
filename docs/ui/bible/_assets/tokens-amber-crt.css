@@ -1,0 +1,229 @@
+/* SumoCode Amber CRT — Visual Bible tokens
+ *
+ * Mirror of tokens.css for the Amber CRT theme.
+ * Source of truth: src/themes/amber-crt.ts
+ *
+ * Stitch reference: https://stitch.withgoogle.com/projects/5385606235875789209
+ *   ("SumoCode v0.1 — Amber CRT")
+ *
+ * Mood: warm dark brown-black CRT chassis, P3 amber phosphor body text,
+ * sharp 90-degree corners, double-line ASCII chrome, fleur-de-lis bullets
+ * carried over from Cathedral. The five preattentive states map to canonical
+ * CRT phosphor colours (green / white / cyan / red / magenta).
+ *
+ * Usage: replace the tokens.css import with tokens-amber-crt.css in any
+ * bible page to preview the Amber CRT variant.
+ */
+
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 400;
+  font-display: block;
+  src: url('./fonts/jetbrains-mono-nerd.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 500;
+  font-display: block;
+  src: url('./fonts/jetbrains-mono-nerd.woff2') format('woff2');
+}
+
+:root {
+  /* ── palette (mirror of src/themes/amber-crt.ts) ──────────────── */
+  --background:        #0A0806;
+  --surface:           #14100A;
+  --surface-recess:    #070504;
+  --surface-lifted:    #1F180F;
+  --divider:           #4D3500;
+  --foreground:        #FFB000;
+  --foreground-dim:    #CC8C00;
+  --accent:            #FFD700;
+
+  --state-idle:        #00FF66;
+  --state-thinking:    #F0F0F0;
+  --state-tool:        #00E5FF;
+  --state-approval:    #FF5500;
+  --state-learning:    #FF66FF;
+
+  --syntax-keyword:    #FFD700;
+  --syntax-string:     #00FF66;
+  --syntax-number:     #00E5FF;
+  --syntax-comment:    #805800;
+  --syntax-function:   #FFB000;
+
+  /* ── amber-CRT-specific accents ──────────────────────────────── */
+  --amber-bright:      #FFB000;
+  --amber-soft:        #CC8C00;
+  --amber-deep:        #805800;
+  --gold:              #FFD700;
+
+  /* ── typography ─────────────────────────────────────────────── */
+  --font-mono:
+    'JetBrains Mono', 'JetBrainsMono Nerd Font Mono',
+    'IBM Plex Mono', 'Berkeley Mono', 'Commit Mono',
+    ui-monospace, Menlo, Consolas, monospace;
+
+  --cell-w: 7.83px;
+  --cell-h: 18.2px;
+
+  /* ── layout (v2 spec) ──────────────────────────────────────── */
+  --term-cols: 160;
+  --term-rows: 45;
+  --sidebar-cols: 30;
+  --chat-cols: calc(var(--term-cols) - var(--sidebar-cols));
+}
+
+/* ── page chrome (out-of-canvas) ───────────────────────────────── */
+html, body {
+  margin: 0;
+  padding: 0;
+  background: #050302;
+  color: var(--foreground);
+  font-family: var(--font-mono);
+  font-feature-settings: "liga" 0, "calt" 0;
+  font-variant-ligatures: none;
+}
+
+.stage {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  gap: 12px;
+}
+
+.stage-label {
+  font-size: 11px;
+  color: var(--foreground-dim);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+/* ── the terminal viewport ─────────────────────────────────────── */
+.term {
+  background: var(--background);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.4;
+  font-weight: 400;
+  width: calc(var(--term-cols) * 1ch);
+  height: calc(var(--term-rows) * var(--cell-h));
+  position: relative;
+  overflow: hidden;
+  color: var(--foreground);
+  /* Soft amber-phosphor glow shadow — sells the CRT chassis without
+   * leaking into individual cells. */
+  box-shadow:
+    0 0 0 1px rgba(77,53,0,0.6),
+    0 24px 48px rgba(0,0,0,0.7),
+    inset 0 0 80px rgba(255,176,0,0.04);
+}
+
+.term.narrow   { --term-cols: 80;  --sidebar-cols: 0; }
+.term.portrait { --term-cols: 60;  --term-rows: 100; --sidebar-cols: 0; }
+
+/* ── row primitive ──────────────────────────────────────────────── */
+.row {
+  display: block;
+  white-space: pre;
+  height: var(--cell-h);
+  line-height: var(--cell-h);
+  font-size: 13px;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  width: 100%;
+}
+
+/* ── cell-grid <pre> layout ─────────────────────────────────── */
+.term .grid {
+  margin: 0;
+  padding: 0;
+  font-family: inherit;
+  font-size: inherit;
+  line-height: var(--cell-h);
+  white-space: pre;
+  color: inherit;
+}
+.term .grid span { background: transparent; }
+
+.term .grid span.box-fill {
+  display: inline-block;
+  height: var(--cell-h);
+  line-height: var(--cell-h);
+  vertical-align: top;
+}
+
+.term .grid span.cursor {
+  background: var(--accent);
+  color: var(--background);
+}
+
+.bg-recess  { background: var(--surface-recess); }
+.bg-surface { background: var(--surface); }
+.bg-lifted  { background: var(--surface-lifted); }
+
+/* ── sidebar bg overlay ───────────────────────────────────────── */
+.term .sidebar-bg {
+  position: absolute;
+  top: calc(var(--cell-h) * 1);
+  bottom: calc(var(--cell-h) * 2);
+  left: calc(var(--chat-cols) * 1ch);
+  width: calc(var(--sidebar-cols) * 1ch);
+  background: var(--surface-lifted);
+  z-index: 0;
+  pointer-events: none;
+}
+
+.term .layer { position: relative; z-index: 1; }
+
+/* ── modal layer ──────────────────────────────────────────────── */
+.term .dimmed { opacity: 0.5; }
+
+.term .modal-layer {
+  position: absolute;
+  top: calc(var(--cell-h) * 1);
+  bottom: calc(var(--cell-h) * 2);
+  left: 0;
+  width: calc(var(--chat-cols) * 1ch);
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+.term .modal-layer .modal { pointer-events: auto; white-space: pre; }
+
+/* ── color helpers ────────────────────────────────────────────── */
+.fg-accent   { color: var(--accent); }
+.fg-dim      { color: var(--foreground-dim); }
+.fg-divider  { color: var(--divider); }
+.fg-fg       { color: var(--foreground); }
+.fg-comment  { color: var(--syntax-comment); }
+
+.fg-idle     { color: var(--state-idle); }
+.fg-think    { color: var(--state-thinking); }
+.fg-tool     { color: var(--state-tool); }
+.fg-approve  { color: var(--state-approval); }
+.fg-learn    { color: var(--state-learning); }
+
+.fg-string   { color: var(--syntax-string); }
+.fg-number   { color: var(--syntax-number); }
+.fg-keyword  { color: var(--syntax-keyword); }
+.fg-fn       { color: var(--syntax-function); }
+
+/* ── phosphor glow effects (HTML-only, not in terminal) ─────── */
+.glow-amber  { text-shadow: 0 0 4px var(--amber-bright), 0 0 12px rgba(255,176,0,0.3); }
+.glow-gold   { text-shadow: 0 0 4px var(--gold), 0 0 12px rgba(255,215,0,0.25); }
+
+.term span { background: inherit; }
+
+.term .input-bg {
+  position: absolute;
+  background: var(--surface-recess);
+  z-index: 0;
+}

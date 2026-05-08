@@ -10,7 +10,7 @@
 //   - quote: "perfection is achieved..." — saint-exupéry
 //   - DIVINE INVOCATION input frame with rotating placeholder
 //   - hint row: AWAITING PROMPT (left) + keybinds (right), constrained to invocation frame width
-//   - version line at bottom (splash only): SUMOCODE V0.2.0 · CATHEDRAL · 160×45 MONOSPACE
+//   - version line at bottom (splash only): SUMOCODE V0.3.0 · CATHEDRAL · 160×45 MONOSPACE
 
 import { writeFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
@@ -161,8 +161,8 @@ function buildSplash({ cols, rows: totalRows, placeholderIndex = 0 }) {
 		rep(" ", Math.max(1, hintMid)) +
 		rightHTML;
 
-	// 6. Version line: SUMOCODE V0.2.0 · CATHEDRAL · 160 × 45 MONOSPACE
-	const versionText = `SUMOCODE V0.2.0 · CATHEDRAL · ${cols} × ${totalRows} MONOSPACE`;
+	// 6. Version line: SUMOCODE V0.3.0 · CATHEDRAL · 160 × 45 MONOSPACE
+	const versionText = `SUMOCODE V0.3.0 · CATHEDRAL · ${cols} × ${totalRows} MONOSPACE`;
 	const versionRow = center(`<span class="fg-dim">${versionText}</span>`, cols);
 
 	// ─── compose with spacing ───────────────────────────────────────────

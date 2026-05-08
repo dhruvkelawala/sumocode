@@ -378,7 +378,7 @@ No inline editing in v1.
 
 | Panel | Routing signals |
 |---|---|
-| `IDENTITY` | tag `sumocode:identity`, `entityRef=dhruv`, category `entity`/`relationship`, keywords `dhruv`/`argent`/`london`/`senior frontend` |
+| `IDENTITY` | tag `sumocode:identity`, category `entity`/`relationship`, keywords `works at`/`based in`/`senior frontend` |
 | `PREFERENCES` | category `preference`/`rule`/`principle`, tag `sumocode:preference` |
 | `WORKFLOW` | category `procedure`/`skill`/`rule`/`decision`, tags `sumocode:workflow`/`sumocode:tdd`/`sumocode:visual` |
 | `PROJECTS` | tag `sumocode:project`, `project:sumocode`/`project:openclaw`, keywords `sumocode`/`openclaw`/`cmux`/`cathedral` |

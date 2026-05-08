@@ -148,7 +148,7 @@ function MemoryEditor() {
       <Blank />
       {sectionRow('IDENTITY')}
       <Blank />
-      {factRow('You are Dhruv Kelawala — senior engineer at BigCo.')}
+      {factRow('User is a senior engineer at BigCo.')}
       {factRow('Based in London · BST timezone.')}
       <Blank />
       {sectionRow('PREFERENCES')}

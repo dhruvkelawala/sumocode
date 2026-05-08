@@ -15,7 +15,7 @@ Already locked:
 
 Open decision:
 
-- **Q7.2 categorization:** Dhruv prefers Stitch v3-style categorized memory if achievable without major friction. Otherwise flat list is acceptable.
+- **Q7.2 categorization:** The maintainer prefers Stitch v3-style categorized memory if achievable without major friction. Otherwise flat list is acceptable.
 
 Relevant mockups:
 
@@ -46,7 +46,7 @@ This is honest because Remnic **does not** have a native custom `identity` / `st
 
 ### Why this beats the flat list
 
-- Dhruv explicitly prefers v3-style categorization.
+- The maintainer explicitly prefers v3-style categorization.
 - Remnic's schema already supports `category` and `tags`; we do not need to mutate internal state.
 - The modal is read-only, so categorization can be display-only at first. No data-loss risk.
 - Existing untagged memories can be shown through deterministic routing and `GENERAL` fallback.
@@ -325,7 +325,7 @@ The CLI is broad, but the SumoCode memory editor should prefer the public HTTP A
   "status": "active",
   "tags": [],
   "entityRef": null,
-  "preview": "dhruv runs sumocode inside cmux from manaflow-ai/cmux..., not Ghostty directly..."
+  "preview": "user runs sumocode inside cmux from manaflow-ai/cmux..., not Ghostty directly..."
 }
 ```
 
@@ -351,7 +351,7 @@ Existing facts already carry useful `category` metadata (`fact`, `preference`) b
 Tell users to add memories like:
 
 ```txt
-identity: Dhruv is a Senior Frontend Engineer at BigCo in London.
+identity: User is a senior frontend engineer at BigCo in London.
 preference: prefers TDD and visual approval before UI slices are done.
 stack: uses pnpm, TypeScript strict, React Native, Next.js.
 project: SumoCode runs inside cmux; sidebar hidden on splash.
@@ -433,7 +433,7 @@ Because Remnic category names are generic, SumoCode should define a display taxo
 
 | SumoCode panel | Native signals |
 |---|---|
-| `IDENTITY` | tag `sumocode:identity`, `entityRef=dhruv`, content with `dhruv`, `london`, `argent`, `senior frontend`, category `entity`/`relationship` |
+| `IDENTITY` | tag `sumocode:identity`, content matching `works at`/`based in`/`senior frontend` (and friends), category `entity`/`relationship` |
 | `PREFERENCES` | category `preference`, `rule`, `principle`; tag `sumocode:preference` |
 | `WORKFLOW` | category `procedure`, `skill`, `rule`, `decision`; tags `sumocode:workflow`, `sumocode:tdd`, `sumocode:visual` |
 | `PROJECTS` | tags `sumocode:project`, `project:sumocode`, `project:openclaw`, content with `sumocode`, `openclaw`, `cmux`, `cathedral` |
@@ -443,7 +443,7 @@ Because Remnic category names are generic, SumoCode should define a display taxo
 Panel label change from the Stitch v1/v3 mockups:
 
 - `STACK` becomes **`WORKFLOW`** because the stored facts are mostly process/runtime/product constraints, not just libraries.
-- Add **`SYSTEM`** because Dhruv's actual memories include machine/terminal/orientation constraints.
+- Add **`SYSTEM`** because real-world memories include machine/terminal/orientation constraints.
 - Keep `PROJECTS` because SumoCode/OpenClaw facts are project-scoped.
 
 ### Friction
@@ -453,7 +453,7 @@ Low if `/sumo:memory add` auto-tags.
 Manual command examples could be:
 
 ```txt
-/sumo:memory add --panel identity "Dhruv is a Senior Frontend Engineer at BigCo in London."
+/sumo:memory add --panel identity "User is a senior frontend engineer at BigCo in London."
 /sumo:memory add --panel workflow "Use TDD for all v0.2+ SumoCode slices."
 /sumo:memory add --panel project:sumocode "Sidebar hidden on splash; Path D accepted for active chat."
 ```
@@ -508,7 +508,7 @@ Required SumoCode pieces:
 
    IDENTITY                         PREFERENCES
    ─────────────────────────────    ─────────────────────────────
-   · Dhruv runs SumoCode...         ❯ mac mini portrait; macbook landscape
+   · User runs SumoCode...          ❯ mac mini portrait; macbook landscape
 
    WORKFLOW                         PROJECTS
    ─────────────────────────────    ─────────────────────────────
@@ -654,7 +654,7 @@ Small.
 
 ### Cons
 
-- Does not deliver Dhruv's desired v3-style memory experience.
+- Does not deliver the maintainer's desired v3-style memory experience.
 - Less cathedral identity.
 - Harder to scan once memory count grows.
 
@@ -671,7 +671,7 @@ Small.
    ❯ cmux ships vertical tabs and is purpose-built for AI coding agents…
      fact · fact-1777214500725-3yyl · updated today
 
-     dhruv runs sumocode inside cmux from manaflow-ai/cmux…
+     user runs sumocode inside cmux from manaflow-ai/cmux…
      fact · fact-1777214500714-5ypz · updated today
 
      mac mini is in portrait orientation. macbook is landscape…
@@ -718,4 +718,4 @@ I would not ship an LLM classifier yet. It solves a future problem, not today's 
 3. enhance `/sumo:memory add` later so new memories carry panel tags,
 4. defer LLM classification until memory volume makes manual/deterministic grouping visibly inadequate.
 
-This gives Dhruv the desired Stitch v3 feeling without turning a UI polish pass into a new memory product.
+This gives the maintainer the desired Stitch v3 feeling without turning a UI polish pass into a new memory product.

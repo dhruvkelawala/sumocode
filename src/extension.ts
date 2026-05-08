@@ -21,6 +21,7 @@ import { installSessionCache } from "./session-cache.js";
 import { installSplash } from "./splash.js";
 import { installTopChrome } from "./top-chrome.js";
 import { installWorkingIndicator } from "./working-indicator.js";
+import { installCompactionIndicator } from "./compaction-indicator.js";
 
 const SUMOCODE_PACKAGE_NAME = "@dhruvkelawala/sumocode";
 const LEGACY_TASK_TOOL_EXTENSION_PATH = join(".pi", "agent", "extensions", "task-tool", "index.ts");
@@ -159,6 +160,7 @@ export default function sumocode(pi: ExtensionAPI): void {
 
 
 	installWorkingIndicator(pi);
+	installCompactionIndicator(pi);
 	registerSumoReloadCommand(pi);
 	installSumoInteractions(pi);
 }

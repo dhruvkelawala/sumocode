@@ -241,7 +241,7 @@ describe("OwnedShellRenderer", () => {
 			widgetContainerBelow: () => new StaticComponent(["HINT"]),
 			footer: () => new StaticComponent(["FOOTER"]),
 			terminal: fakeTerminal.owner,
-			dimensions: { columns: 60, rows: 24 },
+			dimensions: { columns: 60, rows: 25 },
 		});
 
 		renderer.render();

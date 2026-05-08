@@ -130,7 +130,7 @@ return lineToAnsi(row, { width });
 
 ```ts
 const truncated = truncateLine(textLine([
-	span("argent-x", { fg: CATHEDRAL_TOKENS.colors.foreground }),
+	span("main-app", { fg: CATHEDRAL_TOKENS.colors.foreground }),
 	span(" on main", { fg: CATHEDRAL_TOKENS.colors.foregroundDim }),
 ]), width);
 ```

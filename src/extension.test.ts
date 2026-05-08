@@ -59,8 +59,8 @@ describe("duplicate installed extension guard", () => {
 	};
 
 	it("detects Pi-installed copies under ~/.pi/agent/git", () => {
-		expect(isInstalledPiAgentGitModule("file:///Users/dhruv/.pi/agent/git/github.com/dhruvkelawala/sumocode/src/extension.ts", "/Users/dhruv")).toBe(true);
-		expect(isInstalledPiAgentGitModule("file:///repo/sumocode/src/extension.ts", "/Users/dhruv")).toBe(false);
+		expect(isInstalledPiAgentGitModule("file:///Users/dev/.pi/agent/git/github.com/dhruvkelawala/sumocode/src/extension.ts", "/Users/dev")).toBe(true);
+		expect(isInstalledPiAgentGitModule("file:///repo/sumocode/src/extension.ts", "/Users/dev")).toBe(false);
 	});
 
 	it("finds an active SumoCode dev tree from nested cwd", () => {
@@ -71,8 +71,8 @@ describe("duplicate installed extension guard", () => {
 	it("noops only the installed copy when cwd is already a dev checkout", () => {
 		expect(
 			shouldNoopDuplicateInstalledExtension({
-				moduleUrl: "file:///Users/dhruv/.pi/agent/git/github.com/dhruvkelawala/sumocode/src/extension.ts",
-				homeDir: "/Users/dhruv",
+				moduleUrl: "file:///Users/dev/.pi/agent/git/github.com/dhruvkelawala/sumocode/src/extension.ts",
+				homeDir: "/Users/dev",
 				cwd: "/repo/sumocode",
 				exists,
 				readFile,
@@ -81,7 +81,7 @@ describe("duplicate installed extension guard", () => {
 		expect(
 			shouldNoopDuplicateInstalledExtension({
 				moduleUrl: "file:///repo/sumocode/src/extension.ts",
-				homeDir: "/Users/dhruv",
+				homeDir: "/Users/dev",
 				cwd: "/repo/sumocode",
 				exists,
 				readFile,
@@ -92,9 +92,9 @@ describe("duplicate installed extension guard", () => {
 
 describe("sumocode extension", () => {
 	it("detects whether native task can install without conflicting with the legacy task extension", () => {
-		expect(shouldInstallNativeTaskTool({ homeDir: "/home/dhruv", exists: () => false })).toBe(true);
-		expect(shouldInstallNativeTaskTool({ homeDir: "/home/dhruv", exists: () => true })).toBe(false);
-		expect(shouldInstallNativeTaskTool({ homeDir: "/home/dhruv", exists: () => true, force: "1" })).toBe(true);
+		expect(shouldInstallNativeTaskTool({ homeDir: "/home/user", exists: () => false })).toBe(true);
+		expect(shouldInstallNativeTaskTool({ homeDir: "/home/user", exists: () => true })).toBe(false);
+		expect(shouldInstallNativeTaskTool({ homeDir: "/home/user", exists: () => true, force: "1" })).toBe(true);
 	});
 
 	it("registers a native task tool when forced", () => {

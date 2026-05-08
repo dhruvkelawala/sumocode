@@ -51,7 +51,7 @@ describe("routeFactToPanel — explicit sumocode tag wins", () => {
 	it("tag wins over keyword content", () => {
 		expect(
 			routeFactToPanel(
-				fact({ tags: ["sumocode:projects"], text: "dhruv is in london" }),
+				fact({ tags: ["sumocode:projects"], text: "engineer is in london" }),
 			),
 		).toBe("PROJECTS");
 	});
@@ -85,13 +85,13 @@ describe("routeFactToPanel — Remnic category", () => {
 	});
 
 	it("unrecognized category falls through to keyword rules", () => {
-		expect(routeFactToPanel(fact({ category: "fact", text: "dhruv is here" }))).toBe("IDENTITY");
+		expect(routeFactToPanel(fact({ category: "fact", text: "software engineer based in Berlin" }))).toBe("IDENTITY");
 	});
 });
 
 describe("routeFactToPanel — keyword rules", () => {
-	it("Dhruv/Argent/London/senior frontend → IDENTITY", () => {
-		expect(routeFactToPanel(fact({ text: "Dhruv works at Argent" }))).toBe("IDENTITY");
+	it("company/city/senior frontend → IDENTITY", () => {
+		expect(routeFactToPanel(fact({ text: "engineer works at Big Co" }))).toBe("IDENTITY");
 		expect(routeFactToPanel(fact({ text: "based in London" }))).toBe("IDENTITY");
 		expect(routeFactToPanel(fact({ text: "senior frontend at SomeCorp" }))).toBe("IDENTITY");
 	});
@@ -128,7 +128,7 @@ describe("routeFactToPanel — fallback", () => {
 describe("groupFactsByPanel", () => {
 	it("returns groups in MEMORY_PANELS order", () => {
 		const facts = [
-			fact({ text: "dhruv argent" }),       // IDENTITY
+			fact({ text: "works at Big Co" }),    // IDENTITY
 			fact({ text: "tdd workflow" }),       // WORKFLOW
 			fact({ text: "mac mini portrait" }),  // SYSTEM
 			fact({ text: "typescript pnpm" }),    // PREFERENCES
@@ -140,7 +140,7 @@ describe("groupFactsByPanel", () => {
 	});
 
 	it("hides GENERAL panel when empty", () => {
-		const facts = [fact({ text: "dhruv london" })];
+		const facts = [fact({ text: "based in london" })];
 		const groups = groupFactsByPanel(facts);
 		expect(groups.some((g) => g.panel === "GENERAL")).toBe(false);
 	});

@@ -130,7 +130,7 @@ Key design moves:
 **CONTEXT sub-tab content (V2 EDITORIAL)**:
 
 ```
-  sumo-deus
+  sumocode
   on main
 
   C O N T E X T
@@ -151,7 +151,7 @@ Key design moves:
 ```
 
 Key design moves:
-- Hero project name (`sumo-deus`) in foreground weight, `on <branch>` dim subtitle
+- Hero project name (`sumocode`) in foreground weight, `on <branch>` dim subtitle
 - `CONTEXT` tracked-out section label
 - Token bar uses block-fill `▉▉▉▉▉` (left-aligned, 22 cells) over `░` empty cells — sage when under, terracotta when OVER
 - Token ratio `42k / 200k` foreground+dim split
@@ -172,7 +172,7 @@ Key design moves:
   ❧ prefers TS strict
   ❧ pnpm not npm
   ❧ based London · BST
-  ❧ Argent → argent-x
+  ❧ BigCo → main-app
   ❧ imperative commits
 
   ━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -440,7 +440,7 @@ Disappears on first keystroke.
    ❯  █search remembered facts…                                      48 facts
 
    ╭────────── IDENTITY ──────────╮  ╭──────── PREFERENCES ────────╮
-   │ · Dhruv · Senior FE · Argent │  │ ❈ prefers TypeScript strict │
+   │ · senior FE · indie operator │  │ ❈ prefers TypeScript strict │
    │ · London / BST               │  │ · pnpm not npm              │
    ╰──────────────────────────────╯  ╰─────────────────────────────╯
 

@@ -150,7 +150,7 @@ shown. SUMOCODE always shown. Below `60` cols, drop SUMOCODE label too.
                                    ❧ prefers TypeScript strict
                                    ❧ pnpm not npm
                                    ❧ based in London
-                                   ❧ Argent → argent-x
+                                   ❧ BigCo → main-app
                                    ❧ imperative commits
 ```
 
@@ -294,7 +294,7 @@ renders only when the predicate is true. Composed inside the chat container.
 **ASCII template (with text)**:
 ```
    ┌──────────────────────────────────────┐
-   │ > review src/argent-x/balance.ts█    │
+   │ > review src/main-app/balance.ts█    │
    └──────────────────────────────────────┘
 ```
 
@@ -530,12 +530,12 @@ keyboard nav. This is fully implementable with current Pi APIs.
    ╔═════ CATHEDRAL-MEMORY-EDITOR ═════╗  ◆ learning
    ║                                   ║
    ║  ┌ IDENTITY ─────┐  ┌ PREFERENCES ───────────┐
-   ║  │ User: Dhruv   │  │ ❧ TypeScript (Strict)  │
-   ║  │ Org:  Argent  │  │ ❧ pnpm execution        │
+   ║  │ User: developer   │  │ ❧ TypeScript (Strict)  │
+   ║  │ Org:  BigCo  │  │ ❧ pnpm execution        │
    ║  └───────────────┘  │ ❧ Prettier enforcing    │
    ║                     └─────────────────────────┘
    ║  ┌ STACK ────────┐  ┌ PROJECTS ───────────────┐
-   ║  │ React 18+     │  │ ▶ argent-x [active]     │
+   ║  │ React 18+     │  │ ▶ main-app [active]     │
    ║  │ Vite bundler  │  └─────────────────────────┘
    ║  │ Tailwind v4   │
    ║  └───────────────┘

@@ -12,7 +12,7 @@ I (Dhruv, senior engineer) work in the terminal all day. Pi (`@earendil-works/pi
 
 Three concrete symptoms:
 
-1. **No persistent identity.** Each new Pi session starts from zero. The agent doesn't remember that I prefer TypeScript strict mode, that I use pnpm not npm, that I'm based in London, or that I work at Argent on argent-x. I re-explain these every time, or I edit `APPEND_SYSTEM.md` once and hope the LLM picks it up.
+1. **No persistent identity.** Each new Pi session starts from zero. The agent doesn't remember that I prefer TypeScript strict mode, that I use pnpm not npm, that I'm based in London, or which company / project I work on. I re-explain these every time, or I edit `APPEND_SYSTEM.md` once and hope the LLM picks it up.
 
 2. **No visible state.** I can't tell at a glance whether the agent is thinking, running a tool, or waiting for my approval. The default footer shows model + cost, which is useful, but lacks the preattentive state signals that production-grade agent UIs (Cursor's status bar, OpenCode's split-pane) use.
 

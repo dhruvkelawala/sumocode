@@ -125,7 +125,7 @@ Current harness: **88 mockups** rendered by `pnpm render:bible`.
 - Right zone: `<ctx>/<window> · $<cost>`
 - Project/branch live in sidebar when visible and hint row when sidebar is hidden
 - Width handling: collapse right-to-left at narrow (drop cost, then ctx progressively)
-- Splash variant: dim version line (`SUMOCODE V0.2.0 · CATHEDRAL · 160 × 45 MONOSPACE`) below footer, splash only
+- Splash variant: dim version line (`SUMOCODE V0.3.0 · CATHEDRAL · 160 × 45 MONOSPACE`) below footer, splash only
 
 ### Scene compositions + harness
 - `pnpm render:bible` now regenerates scripted HTML before rendering PNGs, so new/renamed element mockups cannot appear in the gallery without their PNG thumbnails.

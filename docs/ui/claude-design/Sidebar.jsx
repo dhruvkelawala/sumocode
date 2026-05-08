@@ -39,8 +39,8 @@ function buildSidebarRows() {
   rows.push(bannerRow('CONTEXT'));
   // 2: blank
   rows.push(blank());
-  // 3: argent-x (main)
-  rows.push(fix(<span style={{ color: '#F5E6C8' }}>{'argent-x (main)'}</span>, 'argent-x (main)'.length));
+  // 3: main-app (main)
+  rows.push(fix(<span style={{ color: '#F5E6C8' }}>{'main-app (main)'}</span>, 'main-app (main)'.length));
   // 4: progress bar  [████████░░░░] 42k/200k
   rows.push(fix(
     <span>
@@ -101,7 +101,7 @@ function buildSidebarRows() {
   rows.push(fact('prefers TypeScript strict'));
   rows.push(fact('pnpm, not npm'));
   rows.push(fact('based in London · BST'));
-  rows.push(fact('Argent · argent-x'));
+  rows.push(fact('BigCo · main-app'));
   rows.push(fact('imperative commits'));
   rows.push(fact('readyx · React Native'));
   rows.push(fact('Bun where possible'));

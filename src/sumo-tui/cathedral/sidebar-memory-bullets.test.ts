@@ -10,7 +10,7 @@ function rgb(hex: string): string {
 
 function snapshot(): RegistrySidebarSnapshot {
 	return {
-		projectName: "argent-x",
+		projectName: "main-app",
 		branch: "main",
 		inputTokens: 0,
 		outputTokens: 0,

@@ -32,7 +32,7 @@ async function renderComponentLines(kind, scenario) {
 async function renderInputFrameTyped(width) {
 	const mod = await jiti.import(`${repoRoot}/src/cathedral/input-frame.ts`);
 	return [
-		...mod.renderInputFrame("review src/argent-x/balance.ts and tighten the return type", width, { promptColor: "accent" }),
+		...mod.renderInputFrame("review src/auth/session.ts and tighten the return type", width, { promptColor: "accent" }),
 		mod.renderInputHints(width),
 	];
 }
@@ -53,7 +53,7 @@ async function renderTopBarDefault(width) {
 async function renderFooterReady(width) {
 	const mod = await jiti.import(`${repoRoot}/src/footer.ts`);
 	return mod.renderFooterBlock({
-		cwd: "/Users/sumo-deus/sumo-deus",
+		cwd: "/Users/dev/projects/sumocode",
 		branch: "main",
 		inputTokens: 42000,
 		outputTokens: 0,
@@ -69,7 +69,7 @@ async function renderFooterReady(width) {
 async function renderSidebarEditorial(width) {
 	const mod = await jiti.import(`${repoRoot}/src/sidebar.ts`);
 	return mod.renderSidebar({
-		projectName: "sumo-deus",
+		projectName: "sumocode",
 		branch: "main",
 		inputTokens: 42000,
 		outputTokens: 0,

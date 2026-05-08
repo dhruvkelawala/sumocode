@@ -148,7 +148,7 @@ function MemoryEditor() {
       <Blank />
       {sectionRow('IDENTITY')}
       <Blank />
-      {factRow('You are Dhruv Kelawala — senior engineer at Argent.')}
+      {factRow('User is a senior engineer at BigCo.')}
       {factRow('Based in London · BST timezone.')}
       <Blank />
       {sectionRow('PREFERENCES')}
@@ -166,7 +166,7 @@ function MemoryEditor() {
       <Blank />
       {sectionRow('PROJECTS')}
       <Blank />
-      {factRow('argent-x — Starknet privacy wallet extension (main work).')}
+      {factRow('main-app — Starknet privacy wallet extension (main work).')}
       {factRow('readyx — React Native consumer app, pre-launch.')}
       {factRow('sumocode — personal Pi extension, terminal AI.')}
       <Blank />

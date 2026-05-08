@@ -24,7 +24,7 @@ function fact(overrides: Partial<MemoryFact> = {}): MemoryFact {
 
 function snapshot(overrides: Partial<MemoryEditorSnapshot> = {}): MemoryEditorSnapshot {
 	const facts: MemoryFact[] = [
-		fact({ id: "id-1", text: "Dhruv works at Argent in London" }),     // IDENTITY
+		fact({ id: "id-1", text: "works at Big Co in London" }),     // IDENTITY
 		fact({ id: "pref-1", text: "prefers TypeScript strict" }),         // PREFERENCES
 		fact({ id: "wf-1", text: "always use TDD for new features" }),     // WORKFLOW
 		fact({ id: "proj-1", text: "SumoCode is the cathedral product" }),  // PROJECTS
@@ -134,7 +134,7 @@ describe("renderMemoryEditor — panel grid", () => {
 			.find((segment) => segment.includes("prefers TypeScript strict"));
 		const otherSegment = lines
 			.flatMap((l) => l.split("│"))
-			.find((segment) => segment.includes("Dhruv works at Argent"));
+			.find((segment) => segment.includes("works at Big Co"));
 		expect(focusedSegment).toContain("❈");
 		expect(focusedSegment).not.toContain("·");
 		expect(otherSegment).toContain("·");
@@ -178,7 +178,7 @@ describe("MemoryEditorComponent — interaction", () => {
 		component.handleInput("p");
 		const lines = component.render(160).map(stripAnsi).join("\n");
 		expect(lines).toContain("prefers TypeScript strict");
-		expect(lines).not.toContain("Dhruv works at Argent");
+		expect(lines).not.toContain("works at Big Co");
 		expect(invalidate).toHaveBeenCalled();
 	});
 
@@ -251,7 +251,7 @@ describe("MemoryEditorComponent — interaction", () => {
 		component.handleInput("d");
 		// While forget is in flight, user filters so `pref-1` is no longer visible.
 		component.handleInput("/");
-		for (const ch of "argent") component.handleInput(ch);
+		for (const ch of "big co") component.handleInput(ch);
 		reject(new Error("daemon offline"));
 		await Promise.resolve();
 		await Promise.resolve();
@@ -262,7 +262,7 @@ describe("MemoryEditorComponent — interaction", () => {
 			.split("│")
 			.find((segment) => segment.includes("❈"));
 		if (focusedSegment) {
-			expect(focusedSegment).toMatch(/Argent/);
+			expect(focusedSegment).toMatch(/Big Co/);
 			expect(focusedSegment).not.toMatch(/prefers TypeScript strict/);
 		}
 		// And a follow-up `d` cannot accidentally delete the hidden fact.

@@ -207,7 +207,7 @@ Sections use decorative ASCII banners as their headers. No CSS borders.
 ```html
 <section>
   <h2>════════ CONTEXT ════════</h2>
-  <p>argent-x (main)</p>
+  <p>main-app (main)</p>
   <p>[████████░░░░] 42k/200k</p>
   <p>$0.42</p>
 </section>
@@ -262,7 +262,7 @@ Modal frame is double-line box-drawing in either `--accent` (informational) or `
 Single line, full width, dot-separated:
 
 ```
-~/argent-x (main) · ↑12k ↓8k · $0.42 · 42%/200k · ● <state-label> · claude-opus-4-7
+~/main-app (main) · ↑12k ↓8k · $0.42 · 42%/200k · ● <state-label> · claude-opus-4-7
 ```
 
 The `●` color matches the current preattentive state. The state-label is one lowercase word.
@@ -272,9 +272,9 @@ The `●` color matches the current preattentive state. The state-label is one l
 Tools (read, bash, edit) appear as decorative chapters in the chat area:
 
 ```
-━━━ [read]  src/argent-x/balance.ts            ━━━ ✓
+━━━ [read]  src/main-app/balance.ts            ━━━ ✓
 ━━━ [bash]  pnpm test                          ━━━ ▶ running
-━━━ [edit]  src/argent-x/balance.ts            ━━━ ✓
+━━━ [edit]  src/main-app/balance.ts            ━━━ ✓
 ```
 
 The `[name]` tag uses `--accent`. The `✓` is `--state-idle`. The `▶` is `--state-tool`. The `━` decorations are `--divider`.

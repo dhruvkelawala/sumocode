@@ -41,7 +41,7 @@ Sketch (active state, CONTEXT selected):
                                                   ▢ MEMORY        ← Ctrl+2
 
                                                   ┌ ACTIVE_CONTEXT ─
-                                                  argent-x (main)
+                                                  main-app (main)
                                                   [██████░░░] 42k/200k
                                                   $0.42 spent · session
 
@@ -378,7 +378,7 @@ No inline editing in v1.
 
 | Panel | Routing signals |
 |---|---|
-| `IDENTITY` | tag `sumocode:identity`, `entityRef=dhruv`, category `entity`/`relationship`, keywords `dhruv`/`argent`/`london`/`senior frontend` |
+| `IDENTITY` | tag `sumocode:identity`, category `entity`/`relationship`, keywords `works at`/`based in`/`senior frontend` |
 | `PREFERENCES` | category `preference`/`rule`/`principle`, tag `sumocode:preference` |
 | `WORKFLOW` | category `procedure`/`skill`/`rule`/`decision`, tags `sumocode:workflow`/`sumocode:tdd`/`sumocode:visual` |
 | `PROJECTS` | tag `sumocode:project`, `project:sumocode`/`project:openclaw`, keywords `sumocode`/`openclaw`/`cmux`/`cathedral` |
@@ -403,7 +403,7 @@ No inline editing in v1.
    │ search…                                              48 facts │
 
    ╭─ IDENTITY ───────────────────╮  ╭─ PREFERENCES ────────────────╮
-   │ Dhruv · Senior FE · Argent     │  │ prefers TypeScript strict      │
+   │ senior FE · indie operator     │  │ prefers TypeScript strict      │
    │ London / BST                   │  │ pnpm not npm                   │
    ╰──────────────────────────────╯  ╰────────────────────────────────╯
 

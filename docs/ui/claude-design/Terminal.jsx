@@ -125,8 +125,8 @@ const STATE_META = {
 function Footer({ state }) {
   const meta = STATE_META[state];
   // Render as one row, padded to 160 cols.
-  // Layout: ~/argent-x (main) · ↑12k ↓8k · $0.42 · 42%/200k · ● <label> · claude-opus-4-7
-  const path     = '~/argent-x (main)';
+  // Layout: ~/main-app (main) · ↑12k ↓8k · $0.42 · 42%/200k · ● <label> · claude-opus-4-7
+  const path     = '~/main-app (main)';
   const tokens   = '↑12k ↓8k';
   const cost     = '$0.42';
   const ctx      = '42%/200k';

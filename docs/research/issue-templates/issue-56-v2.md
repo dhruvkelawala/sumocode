@@ -20,7 +20,7 @@ Spec template (active state, MEMORY active):
                                    ❧ prefers TypeScript strict
                                    ❧ pnpm not npm
                                    ❧ based in London
-                                   ❧ Argent → argent-x
+                                   ❧ BigCo → main-app
 ```
 
 Current screenshot shows the sidebar rendering but with these deltas vs spec:

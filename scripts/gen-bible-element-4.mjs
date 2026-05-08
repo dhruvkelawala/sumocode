@@ -90,7 +90,7 @@ const variants = [
 		title: "Bible · Element 4 · active input — typed",
 		label: "element 4 · active input · typed · 160×4",
 		cols: 160, rows: 4,
-		typedText: "review src/argent-x/balance.ts and tighten the return type",
+		typedText: "review src/auth/session.ts and tighten the return type",
 	},
 	{
 		filename: "04-active-input-empty-portrait.html",

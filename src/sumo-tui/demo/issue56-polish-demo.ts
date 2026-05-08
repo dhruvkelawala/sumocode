@@ -42,7 +42,7 @@ function fixtureSnapshot(): SidebarLayoutSnapshot {
 		terminalHeight: terminalSize().rows,
 		sessionHasMessages: true,
 		dockMinWidth: 80,
-		projectName: "argent-x",
+		projectName: "main-app",
 		branch: "main",
 		inputTokens: 42_000,
 		outputTokens: 0,

@@ -53,7 +53,7 @@ class MemoryEditorComponent implements Component {
 	render(width: number): string[] {
 		return renderMemoryEditor(
 			{
-				user: "Dhruv Kelawala",
+				user: "You",
 				org: "Argent",
 				preferences: ["TypeScript (Strict)", "pnpm execution"],
 				stack: ["React 18+", "Vite bundler"],

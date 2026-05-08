@@ -1,7 +1,15 @@
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { showApprovalModal } from "../approval-modal.js";
 
-const TEST_COMMAND = `cd "/Volumes/SumoDeus NVMe/openclaw/workspace/sumocode" && gh issue create --title "Approval modal leaks long commands across the terminal" --body "long quoted body with spaces"`;
+/**
+ * A representative dangerous command for the approval-modal QA harness. The
+ * exact wording isn't important — the modal renders whatever string it's
+ * handed — but a long, multi-flag `gh` invocation gives the wrap / row-cap
+ * logic something realistic to chew on.
+ */
+function buildTestCommand(cwd: string): string {
+	return `cd ${JSON.stringify(cwd)} && gh issue create --title "Approval modal QA: long command" --body "a representative long quoted body that should wrap inside the lifted modal without leaking past the terminal edge."`;
+}
 
 /**
  * `/sumo:approval` — manual QA helper for the Cathedral approval modal.
@@ -18,7 +26,7 @@ export function registerApprovalCommand(pi: ExtensionAPI): void {
 			}
 
 			const choice = await showApprovalModal(ctx, {
-				command: TEST_COMMAND,
+				command: buildTestCommand(process.cwd()),
 				descriptionLines: [
 					"This command mutates GitHub state and has a very long quoted body that should wrap inside the lifted modal without leaking past the terminal edge.",
 				],

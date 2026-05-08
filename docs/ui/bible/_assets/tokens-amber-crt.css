@@ -11,6 +11,20 @@
  * carried over from Cathedral. The five preattentive states map to canonical
  * CRT phosphor colours (green / white / cyan / red / magenta).
  *
+ * Token contract:
+ *   The 13 palette + state values below (background, surface, surface-recess,
+ *   surface-lifted, foreground, foreground-dim, divider, accent, state-idle,
+ *   state-thinking, state-tool, state-approval, state-learning) are kept
+ *   strictly in sync with `src/themes/amber-crt.ts`. The Visual Bible — CI
+ *   contract requires byte-exact parity for these.
+ *
+ *   The remaining tokens (syntax-*, amber-*, gold, html/body page chrome) are
+ *   bible-only supplements: they style code-block highlighting and the
+ *   out-of-canvas page background that frames each mockup, neither of which
+ *   exists in the terminal-rendered runtime. They are deliberately NOT part
+ *   of the runtime theme contract; do not propagate them back into
+ *   `src/themes/amber-crt.ts`.
+ *
  * Usage: replace the tokens.css import with tokens-amber-crt.css in any
  * bible page to preview the Amber CRT variant.
  */

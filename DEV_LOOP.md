@@ -106,11 +106,12 @@ sumocode diag                    # summarizes /tmp/sumocode-manual.jsonl
 sumocode doctor                  # checks Pi patch/module/diagnostics health
 ```
 
-Expected signals for v0.1.0:
-- Notification: `SumoCode loaded · v0.1.0`
-- No errors in the footer or on startup
+Expected signals on a healthy boot:
+- Splash centered with version line `SUMOCODE V0.3.0 · CATHEDRAL · 160 × 45 MONOSPACE`
+- Sidebar paints in landscape (terminal width ≥ 120 cols)
+- Footer dot reads `● READY` in the active theme's idle colour
 
-For v0.2+ features, verify the specific things I just changed.
+For a feature change, verify the specific surface I just touched.
 
 ### 4. Commit to the dev repo
 
@@ -141,10 +142,10 @@ When a set of commits is ready to go live on all machines:
 Edit `package.json`:
 
 ```json
-{ "version": "0.2.0" }
+{ "version": "0.3.1" }
 ```
 
-And update `VERSION` const in `src/extension.ts` if the notification needs to reflect it.
+And update `SPLASH_VERSION_LINE` in `src/footer.ts` so the splash matches. The bible mockup version line in `scripts/gen-bible-element-3.mjs` mirrors it; bump that too if the doc is part of the release.
 
 Semver convention for SumoCode:
 - **MAJOR** — breaking extension API usage (something crashes if downgraded)
@@ -154,8 +155,8 @@ Semver convention for SumoCode:
 ### 2. Commit + tag
 
 ```bash
-git commit -am "release: v0.2.0"
-git tag v0.2.0
+git commit -am "release: v0.3.1"
+git tag v0.3.1
 ```
 
 ### 3. Push
@@ -164,7 +165,7 @@ git tag v0.2.0
 git push && git push --tags
 ```
 
-GitHub now shows the v0.2.0 release. Installed machines still on v0.1.0.
+GitHub now shows the new release. Installed machines still on the previous tag until they `pi update`.
 
 ### 4. Pull on each machine
 
@@ -172,7 +173,7 @@ GitHub now shows the v0.2.0 release. Installed machines still on v0.1.0.
 pi update git:github.com/dhruvkelawala/sumocode
 ```
 
-This refreshes `~/.pi/agent/git/github.com/dhruvkelawala/sumocode/` from the new `main` tip (which is now at v0.2.0). Restart Pi to load the new version.
+This refreshes `~/.pi/agent/git/github.com/dhruvkelawala/sumocode/` from the new `main` tip. Restart Pi to load the new version.
 
 Do this on both mini and MacBook. Since `sumocode` is in `sumocode-config`'s synced `settings.json`, no config changes are needed — it's just a package update.
 
@@ -279,15 +280,22 @@ Rule of thumb:
 
 ---
 
+## What's in the dev loop now
+
+- **Tests.** 821 unit tests via vitest, 32 integration tests via node-pty. Run `pnpm test` and `pnpm test:integration`. Both gated on the same TypeScript graph that ships.
+- **Visual harness.** `pnpm visual:ci` for the V2 parity contract; `pnpm render:bible` regenerates the mockup PNGs.
+- **Perf snapshot.** `pnpm perf:startup` produces a markdown report under `docs/perf/`.
+- **Scribe diff review.** `/sumo:review` runs an in-session reviewer (default `openai-codex/gpt-5.3-codex`) on the current branch diff. Repeat until GREEN before merging.
+- **CHANGELOG.** Keep-a-Changelog format; one section per release, retroactively documented for v0.1.0 → v0.2.0 → v0.3.0.
+- **Pi version smoke.** `scripts/smoke-pi-versions.sh` runs `pi --version` against the pinned + adjacent Pi versions to catch the seam patch breaking on a Pi bump before a real session does.
+
 ## What's NOT in the dev loop yet
 
-- Tests. No test harness exists yet. If/when extensions grow complex enough to warrant testing, add `vitest` and point it at Pi's `VirtualTerminal` for TUI tests. Not worth it at v0.1–v0.3.
-- CI. No GitHub Actions yet. Might add a lint + typecheck workflow at v0.3+.
-- Changelog file. Commit messages + GitHub Releases are enough at this scale.
-- Lint. `oxlint` or `biome` would be nice eventually. Not worth setup time at v0.1.
+- **Public PR CI.** A GitHub Actions workflow that runs `pnpm test + pnpm exec tsc --noEmit` on every PR. Stub workflows for visual + perf live under `.github/workflows/`; the typecheck/test gate is on the v0.3.x followup list.
+- **Lint.** Project leans on `tsc` strict and the scribe rather than a separate linter. If/when biome gets adopted, point it at `src/`.
 
-These are intentionally deferred. Add them when friction actually shows up, not before.
+These are intentionally deferred. Add them when friction actually shows up.
 
 ---
 
-*Last updated: 2026-04-24 · v0.1.0*
+*Last updated: 2026-05-08 · v0.3.0 · Pi 0.74.0 (`@earendil-works/pi-coding-agent`)*

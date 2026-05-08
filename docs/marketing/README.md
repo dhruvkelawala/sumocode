@@ -80,9 +80,8 @@ ask for nothing." These five do the heavy lifting:
 ## Personal data
 
 These mockups have been genericized for public release: no real names, no
-employer, no `/Volumes/SumoDeus NVMe` paths. The IDENTITY example panel
-shows `senior FE · indie operator · London / BST` as a representative
-profile. The MEMORY example facts (`prefers TypeScript strict`, `pnpm not
+employer, no machine-specific paths. The IDENTITY example panel shows
+`senior FE · indie operator · London / BST` as a representative profile. The MEMORY example facts (`prefers TypeScript strict`, `pnpm not
 npm`, `cmux runtime, libghostty`, etc.) are illustrative system prefs, not
 private user data.
 

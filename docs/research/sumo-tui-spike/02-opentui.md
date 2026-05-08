@@ -40,7 +40,7 @@ OpenCode layers significant agent-specific logic on top of this textarea; OpenTU
 
 OpenTUI parses modern keyboard protocols. Kitty key parsing lives under `parse.keypress-kitty.ts`, decoding CSI-u, event types, modifiers, alternate/base layout keys, and functional key equivalents (`packages/core/src/lib/parse.keypress-kitty.ts:1-240`). Mouse parsing handles SGR/URXVT-like mouse encodings, button state, wheel direction, modifier bits, coordinates, and event kinds (`packages/core/src/lib/parse.mouse.ts:1-220`).
 
-This matters because cmux/libghostty is a modern terminal environment. Sumo-Tui can rely on 24-bit color and modern key protocols, but it must also avoid partial ownership. If mouse tracking is enabled, wheel events belong to the app. If Kitty keyboard protocol is enabled, the app must decode it and route it consistently. Pi already has similar key parsing utilities in `@mariozechner/pi-tui`, so Sumo-Tui should either reuse those in Node phases or adopt OpenTUI's parser wholesale only inside a full renderer.
+This matters because cmux/libghostty is a modern terminal environment. Sumo-Tui can rely on 24-bit color and modern key protocols, but it must also avoid partial ownership. If mouse tracking is enabled, wheel events belong to the app. If Kitty keyboard protocol is enabled, the app must decode it and route it consistently. Pi already has similar key parsing utilities in `@earendil-works/pi-tui`, so Sumo-Tui should either reuse those in Node phases or adopt OpenTUI's parser wholesale only inside a full renderer.
 
 ## 7. React and Solid adapters
 
@@ -61,7 +61,7 @@ The previous SumoCode island spike measured this cost in practice: two always-on
 
 ## 9. Compatibility with Pi / Node
 
-Direct in-process OpenTUI use in Pi is blocked by Bun/native assumptions. `packages/core/src/zig.ts` imports `bun:ffi` (`packages/core/src/zig.ts:1-35`), and OpenCode's own package scripts are Bun-centered (`/tmp/sumo-tui-research/opencode/packages/opencode/package.json:8-18`). Pi extension APIs expose `setHeader`, `setFooter`, `setWidget`, `custom`, `onTerminalInput`, `setEditorComponent`, and autocomplete hooks (`/Volumes/SumoDeus NVMe/openclaw/workspace/sumocode/node_modules/.pnpm/@mariozechner+pi-coding-agent@0.70.2_ws@8.20.0_zod@4.3.6/node_modules/@mariozechner/pi-coding-agent/dist/core/extensions/types.d.ts:66-186`). Those APIs are designed for augmenting Pi's existing TUI, not replacing its root renderer.
+Direct in-process OpenTUI use in Pi is blocked by Bun/native assumptions. `packages/core/src/zig.ts` imports `bun:ffi` (`packages/core/src/zig.ts:1-35`), and OpenCode's own package scripts are Bun-centered (`/tmp/sumo-tui-research/opencode/packages/opencode/package.json:8-18`). Pi extension APIs expose `setHeader`, `setFooter`, `setWidget`, `custom`, `onTerminalInput`, `setEditorComponent`, and autocomplete hooks (`/Volumes/SumoDeus NVMe/openclaw/workspace/sumocode/node_modules/.pnpm/@earendil-works+pi-coding-agent@0.70.2_ws@8.20.0_zod@4.3.6/node_modules/@earendil-works/pi-coding-agent/dist/core/extensions/types.d.ts:66-186`). Those APIs are designed for augmenting Pi's existing TUI, not replacing its root renderer.
 
 Therefore there are three viable integration shapes:
 

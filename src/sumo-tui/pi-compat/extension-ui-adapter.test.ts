@@ -1,5 +1,5 @@
-import type { KeybindingsManager, ReadonlyFooterDataProvider, Theme } from "@mariozechner/pi-coding-agent";
-import type { Component, EditorComponent, EditorTheme, TUI } from "@mariozechner/pi-tui";
+import type { KeybindingsManager, ReadonlyFooterDataProvider, Theme } from "@earendil-works/pi-coding-agent";
+import type { Component, EditorComponent, EditorTheme, TUI } from "@earendil-works/pi-tui";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadYoga } from "../layout/yoga.js";
 import { ModalManager } from "../widgets/modal.js";

@@ -15,7 +15,7 @@ Revisit removal when Pi exposes a public interactive-mode/runtime injection API,
 
 ## Audited seam
 
-### `patches/@mariozechner__pi-coding-agent@0.73.0.patch`
+### `patches/@earendil-works__pi-coding-agent@0.74.0.patch`
 
 The patch changes Pi's `dist/main.js` constructor site from direct `new InteractiveMode(...)` to:
 
@@ -59,7 +59,7 @@ This wrapper prevents accidental use of stale installed SumoCode code during loc
 
 ### `sumo-interactive-mode.js`
 
-The shim uses `@mariozechner/jiti` to load the TypeScript source implementation:
+The shim uses `jiti` to load the TypeScript source implementation:
 
 - `src/sumo-tui/pi-compat/sumo-interactive-mode.ts`
 - exports `SumoInteractiveMode`
@@ -124,7 +124,7 @@ The private patch is allowed only under these rules:
 1. **Patch stays tiny.** Keep the Pi diff limited to the interactive constructor switch and dynamic loader. Target under ~30 changed lines.
 2. **Default path stays upstream.** When `SUMO_TUI` is unset/false and `--sumo-tui` is absent, Pi must instantiate upstream `InteractiveMode` normally.
 3. **Wrapper validates activation.** `bin/sumocode.sh` must keep checking for `loadSumoInteractiveMode` before exporting `SUMO_TUI_MODULE`.
-4. **Patch file tracks exact Pi package version.** A Pi bump must create a new `patches/@mariozechner__pi-coding-agent@<version>.patch` and update `package.json` `pnpm.patchedDependencies` in the same PR.
+4. **Patch file tracks exact Pi package version.** A Pi bump must create a new `patches/@earendil-works__pi-coding-agent@<version>.patch` and update `package.json` `pnpm.patchedDependencies` in the same PR.
 5. **No silent major drift.** If the constructor site moves or the patch stops applying cleanly, stop and update the strategy before shipping.
 6. **No upstream default behavior change.** The patch must remain opt-in and non-breaking for normal Pi users.
 7. **Smoke matrix is mandatory for Pi bumps.** Every Pi version change must run the matrix below and record results in the PR body.
@@ -138,7 +138,7 @@ For every Pi bump PR:
 
 ```bash
 pnpm install
-rg "SUMO_TUI_MODULE|loadSumoInteractiveMode" node_modules/@mariozechner/pi-coding-agent/dist/main.js
+rg "SUMO_TUI_MODULE|loadSumoInteractiveMode" node_modules/@earendil-works/pi-coding-agent/dist/main.js
 ```
 
 Expected: both markers exist for the patched target version.
@@ -209,7 +209,7 @@ Removal plan:
 2. Port `SumoInteractiveMode` constructor activation to the public API.
 3. Replace private `installChatViewportBridge()` field hooks with public chat/runtime hooks.
 4. Run the full smoke matrix with the patch removed.
-5. Delete `patches/@mariozechner__pi-coding-agent@*.patch` and remove `pnpm.patchedDependencies` from `package.json`.
+5. Delete `patches/@earendil-works__pi-coding-agent@*.patch` and remove `pnpm.patchedDependencies` from `package.json`.
 6. Update `bin/sumocode.sh` so missing patch is no longer a fallback condition.
 7. Update this document and close the patch maintenance issue.
 

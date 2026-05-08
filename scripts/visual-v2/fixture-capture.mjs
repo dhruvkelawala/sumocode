@@ -1,6 +1,6 @@
-import { createJiti } from "@mariozechner/jiti";
-import { visibleWidth } from "@mariozechner/pi-tui";
-import { sliceByColumn } from "@mariozechner/pi-tui/dist/utils.js";
+import { createJiti } from "jiti";
+import { visibleWidth } from "@earendil-works/pi-tui";
+import { sliceByColumn } from "@earendil-works/pi-tui/dist/utils.js";
 import { repoRoot } from "./paths.mjs";
 
 const jiti = createJiti(import.meta.url, {

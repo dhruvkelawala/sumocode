@@ -1,4 +1,4 @@
-import { truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
+import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { activeThemeColors } from "../../themes/index.js";
 import { lineToAnsi, span, textLine, type Span } from "../render/primitives.js";
 import type { ToolCallViewModel, ToolStatus } from "./view-model.js";

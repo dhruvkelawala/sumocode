@@ -31,8 +31,8 @@
  * then the slot is cleared.
  */
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import type { Component, TUI } from "@mariozechner/pi-tui";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { Component, TUI } from "@earendil-works/pi-tui";
 import { lineToAnsi, span, textLine, truncateLine, type Span } from "./sumo-tui/render/primitives.js";
 import { getActiveTheme, onThemeChanged } from "./themes/index.js";
 import { getCompactionReason, setCompactionReason } from "./compaction-state.js";

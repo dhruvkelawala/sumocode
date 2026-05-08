@@ -29,7 +29,7 @@ will hit us), **Mitigation**, **Test**.
 ### 1.4 Cursor on wide character (CJK, emoji)
 - **Description**: A wide char counts as 2 cells visually but 1 grapheme. visibleWidth must use Pi's `visibleWidth()` not `String.length`.
 - **Phase**: 2.
-- **Mitigation**: Reuse Pi's `visibleWidth` from `@mariozechner/pi-tui/utils`. Don't reimplement.
+- **Mitigation**: Reuse Pi's `visibleWidth` from `@earendil-works/pi-tui/utils`. Don't reimplement.
 - **Test**: unit — input "日本" with cursor after "日", visibleWidth = 2, cursor lands at column 2.
 
 ### 1.5 Cursor in IME pre-edit

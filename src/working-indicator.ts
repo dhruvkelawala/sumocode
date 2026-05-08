@@ -17,8 +17,8 @@
  * transform into different shapes, not when a single rotor cycles.
  */
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import type { Component, TUI } from "@mariozechner/pi-tui";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { Component, TUI } from "@earendil-works/pi-tui";
 import {
 	CATHEDRAL_INDICATOR_FRAMES as THEME_CATHEDRAL_INDICATOR_FRAMES,
 	CATHEDRAL_INDICATOR_INTERVAL_MS as THEME_CATHEDRAL_INDICATOR_INTERVAL_MS,

@@ -1,4 +1,4 @@
-import type { ExtensionAPI, RegisteredCommand } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, RegisteredCommand } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 import { installCommandPalette } from "../../src/command-palette.js";
 import { registerMemoryCommand } from "../../src/memory-editor.js";

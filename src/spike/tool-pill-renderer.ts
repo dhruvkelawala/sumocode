@@ -3,9 +3,9 @@
 // this prototype registers a spike tool; production should re-register built-in
 // read/bash/edit with the same public override pattern and delegate execution.
 
-import type { AgentToolResult, ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import type { Component } from "@mariozechner/pi-tui";
-import { truncateToWidth } from "@mariozechner/pi-tui";
+import type { AgentToolResult, ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { Component } from "@earendil-works/pi-tui";
+import { truncateToWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 
 export type ToolPillSnapshot = {

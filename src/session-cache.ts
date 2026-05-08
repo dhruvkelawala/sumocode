@@ -19,7 +19,7 @@
  */
 
 import { execFile, execFileSync } from "node:child_process";
-import type { ExtensionAPI, ExtensionContext, ReadonlyFooterDataProvider } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, ReadonlyFooterDataProvider } from "@earendil-works/pi-coding-agent";
 import { logDiagnostic } from "./sumo-tui/runtime/diagnostics.js";
 import { renderDiagnosticsCounters } from "./render-diagnostics.js";
 

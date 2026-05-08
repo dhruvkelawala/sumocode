@@ -11,7 +11,7 @@ import {
 	refreshGitBranchSync,
 	sessionHasMessages,
 } from "./session-cache.js";
-import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 type Branch = ReturnType<ExtensionContext["sessionManager"]["getBranch"]>;
 

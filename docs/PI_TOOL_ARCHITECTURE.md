@@ -2,7 +2,7 @@
 
 ## Overview
 
-SumoCode is a Pi **extension** that wraps `@mariozechner/pi-coding-agent`.
+SumoCode is a Pi **extension** that wraps `@earendil-works/pi-coding-agent`.
 Pi provides built-in tools (`bash`, `read`, `write`, `edit`, `mcp`) and an
 extension API that lets SumoCode register additional tools, intercept tool
 calls, and customize UI rendering.

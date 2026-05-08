@@ -8,8 +8,8 @@
  * "Type something…" which opens a Pi editor for free-text input.
  */
 
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { Editor, type EditorTheme, Key, matchesKey, Text } from "@mariozechner/pi-tui";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { Editor, type EditorTheme, Key, matchesKey, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { renderDivineQuery, updateDivineQuery, type DivineQuerySnapshot, DIVINE_QUERY_OVERLAY_OPTIONS } from "./divine-query.js";
 

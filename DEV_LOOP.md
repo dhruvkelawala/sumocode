@@ -196,7 +196,7 @@ PI_LOG_LEVEL=debug pi 2>&1 | grep -i "sumocode\|extension.*load"
 
 Common failures:
 - Syntax error in `src/extension.ts` → check TS errors with `pnpm tsc --noEmit` or equivalent
-- Missing peer dep → ensure `@mariozechner/pi-coding-agent` exports the types I'm using
+- Missing peer dep → ensure `@earendil-works/pi-coding-agent` exports the types I'm using
 - Import path typo
 
 ### The extension loads but my UI changes don't render
@@ -249,7 +249,7 @@ If the installed version is stale, `pi update git:github.com/dhruvkelawala/sumoc
 
 **Runtime deps** (things SumoCode uses at runtime, like a date library): go into `dependencies` in `package.json`.
 
-**Pi-bundled deps** (things Pi itself ships, like `@mariozechner/pi-tui`): go into `peerDependencies` with `"*"` as the version. Do NOT add them to `dependencies` — that creates duplicate module instances and breaks things.
+**Pi-bundled deps** (things Pi itself ships, like `@earendil-works/pi-tui`): go into `peerDependencies` with `"*"` as the version. Do NOT add them to `dependencies` — that creates duplicate module instances and breaks things.
 
 ### Test on MacBook before releasing
 

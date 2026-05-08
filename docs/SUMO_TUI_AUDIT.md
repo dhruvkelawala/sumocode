@@ -125,7 +125,7 @@ Rules: exactly one place enters/leaves altscreen, exactly one place toggles mous
 
 ### P0-D — The Pi patch is the real version-drift seam *(effort: 1–2d to evaluate, 1w+ to remove)*
 
-`patches/@mariozechner__pi-coding-agent@0.73.0.patch` + the `loadSumoInteractiveMode` hook in `bin/sumocode.sh` and `sumo-interactive-mode.js` are how SumoTUI injects the retained renderer. **This is the seam Pi-version drift will break first.** Every Pi minor bump risks invalidating the patch.
+`patches/@earendil-works__pi-coding-agent@0.74.0.patch` + the `loadSumoInteractiveMode` hook in `bin/sumocode.sh` and `sumo-interactive-mode.js` are how SumoTUI injects the retained renderer. **This is the seam Pi-version drift will break first.** Every Pi minor bump risks invalidating the patch.
 
 This was missing from v1. It is P0 because:
 

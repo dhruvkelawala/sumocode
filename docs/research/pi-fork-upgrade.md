@@ -2,15 +2,15 @@
 
 > Active strategy: [`docs/SUMO_TUI_PI_PATCH_STRATEGY.md`](../SUMO_TUI_PI_PATCH_STRATEGY.md). This file is the step-by-step upgrade runbook.
 
-SumoCode currently pins Pi `0.73.0` plus Dhruv's tiny constructor patch. The patch is carried as a pnpm patch against the published `@mariozechner/pi-coding-agent` package because pnpm's GitHub subdirectory installs pack `packages/coding-agent` without untracked `dist/` output.
+SumoCode currently pins Pi `0.74.0` plus Dhruv's tiny constructor patch. The patch is carried as a pnpm patch against the published `@earendil-works/pi-coding-agent` package because pnpm's GitHub subdirectory installs pack `packages/coding-agent` without untracked `dist/` output.
 
 ## Current activation model
 
 - Runtime flag: `SUMO_TUI=1`
 - Optional module override: `SUMO_TUI_MODULE=file:///.../sumo-interactive-mode.js`
 - SumoCode wrapper: `bin/sumocode.sh`
-- Local package patch: `patches/@mariozechner__pi-coding-agent@0.73.0.patch`
-- Patched constructor site: `@mariozechner/pi-coding-agent@0.73.0/dist/main.js` around the interactive-mode construction block
+- Local package patch: `patches/@earendil-works__pi-coding-agent@0.74.0.patch`
+- Patched constructor site: `@earendil-works/pi-coding-agent@0.74.0/dist/main.js` around the interactive-mode construction block
 
 ## Upgrade checklist for future Pi bumps
 
@@ -20,7 +20,7 @@ SumoCode currently pins Pi `0.73.0` plus Dhruv's tiny constructor patch. The pat
    rm -rf /tmp/pi-npm-target
    mkdir /tmp/pi-npm-target
    cd /tmp/pi-npm-target
-   npm pack @mariozechner/pi-coding-agent@<version> --silent
+   npm pack @earendil-works/pi-coding-agent@<version> --silent
    tar -xzf mariozechner-pi-coding-agent-<version>.tgz
    ```
 
@@ -44,23 +44,23 @@ SumoCode currently pins Pi `0.73.0` plus Dhruv's tiny constructor patch. The pat
    Convert the patch headers to `a/dist/main.js` and `b/dist/main.js`, then save as:
 
    ```text
-   patches/@mariozechner__pi-coding-agent@<version>.patch
+   patches/@earendil-works__pi-coding-agent@<version>.patch
    ```
 
 4. Update SumoCode `package.json`:
 
-   - `peerDependencies.@mariozechner/pi-coding-agent` -> `~<minor>.0`
-   - `peerDependencies.@mariozechner/pi-tui` -> `~<minor>.0`
-   - `devDependencies.@mariozechner/pi-coding-agent` -> `<version>`
-   - `devDependencies.@mariozechner/pi-ai` -> matching Pi version
-   - `devDependencies.@mariozechner/pi-tui` -> matching Pi version
+   - `peerDependencies.@earendil-works/pi-coding-agent` -> `~<minor>.0`
+   - `peerDependencies.@earendil-works/pi-tui` -> `~<minor>.0`
+   - `devDependencies.@earendil-works/pi-coding-agent` -> `<version>`
+   - `devDependencies.@earendil-works/pi-ai` -> matching Pi version
+   - `devDependencies.@earendil-works/pi-tui` -> matching Pi version
    - `pnpm.patchedDependencies` key/path -> new patch file
 
 5. Install and verify the patch is present:
 
    ```bash
    pnpm install
-   rg "SUMO_TUI_MODULE|loadSumoInteractiveMode" node_modules/@mariozechner/pi-coding-agent/dist/main.js
+   rg "SUMO_TUI_MODULE|loadSumoInteractiveMode" node_modules/@earendil-works/pi-coding-agent/dist/main.js
    ```
 
 6. Run SumoCode verification:

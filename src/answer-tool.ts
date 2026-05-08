@@ -8,11 +8,11 @@
  * This replaces Pi's `answer.ts` extension with Cathedral-themed UI.
  */
 
-import { complete, type Model, type Api, type UserMessage } from "@mariozechner/pi-ai";
-import type { ExtensionAPI, ExtensionContext, ModelRegistry } from "@mariozechner/pi-coding-agent";
-import { BorderedLoader } from "@mariozechner/pi-coding-agent";
-import { Editor, type EditorTheme, Key, matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@mariozechner/pi-tui";
-import type { Component, TUI } from "@mariozechner/pi-tui";
+import { complete, type Model, type Api, type UserMessage } from "@earendil-works/pi-ai";
+import type { ExtensionAPI, ExtensionContext, ModelRegistry } from "@earendil-works/pi-coding-agent";
+import { BorderedLoader } from "@earendil-works/pi-coding-agent";
+import { Editor, type EditorTheme, Key, matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import type { Component, TUI } from "@earendil-works/pi-tui";
 import { DIVINE_QUERY_OVERLAY_OPTIONS } from "./divine-query.js";
 import { activeThemeColors } from "./themes/index.js";
 

@@ -19,8 +19,8 @@
  * Pure render only. Pi-glue is in `installTopChrome` below.
  */
 
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
-import type { Component } from "@mariozechner/pi-tui";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { Component } from "@earendil-works/pi-tui";
 import { isTopChromeHidden } from "./commands/tabs.js";
 import { sessionHasMessages as cachedSessionHasMessages } from "./session-cache.js";
 import { getActiveSumoRuntime } from "./sumo-tui/pi-compat/sumo-interactive-mode.js";

@@ -1,4 +1,4 @@
-import { Text } from "@mariozechner/pi-tui";
+import { Text } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "vitest";
 import { SumoNode } from "../../src/sumo-tui/layout/node.js";
 import { DIRECTION_LTR, FLEX_DIRECTION_COLUMN, loadYoga, type YogaNode } from "../../src/sumo-tui/layout/yoga.js";

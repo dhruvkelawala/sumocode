@@ -3,9 +3,9 @@
 // does not replace Pi's built-in assistant markdown renderer; normal assistant
 // fenced code relies on the active Theme slots.
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import type { Component } from "@mariozechner/pi-tui";
-import { truncateToWidth } from "@mariozechner/pi-tui";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { Component } from "@earendil-works/pi-tui";
+import { truncateToWidth } from "@earendil-works/pi-tui";
 
 export type CodeBlockSnapshot = {
 	language: string;

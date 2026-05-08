@@ -1,5 +1,5 @@
-import type { Component, OverlayHandle, OverlayOptions } from "@mariozechner/pi-tui";
-import { truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
+import type { Component, OverlayHandle, OverlayOptions } from "@earendil-works/pi-tui";
+import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { surfaceLine } from "./sumo-tui/cathedral/ansi.js";
 
 /**

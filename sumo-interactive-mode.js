@@ -1,5 +1,5 @@
 import { appendFileSync } from "node:fs";
-import { createJiti } from "@mariozechner/jiti";
+import { createJiti } from "jiti";
 
 const bootstrapStart = performance.now();
 const diagFile = process.env.SUMO_TUI_DIAG_FILE;

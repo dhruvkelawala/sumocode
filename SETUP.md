@@ -12,7 +12,7 @@ The "full SumoCode experience" needs both repos: this one (the extension) **plus
 
 ```bash
 # install Pi
-npm install -g @mariozechner/pi-coding-agent
+npm install -g @earendil-works/pi-coding-agent
 
 # system tools
 brew install chafa gh tailscale jq
@@ -83,7 +83,7 @@ SumoCode is a personal project — installing it without the private config repo
 ### Minimum viable install
 
 ```bash
-npm install -g @mariozechner/pi-coding-agent
+npm install -g @earendil-works/pi-coding-agent
 pi install git:github.com/dhruvkelawala/sumocode
 pi
 ```
@@ -134,4 +134,4 @@ See [README.md](./README.md) for architecture and roadmap.
 
 ---
 
-*Last updated: 2026-04-24 · tested on macOS 26, Node 25, Pi 0.73.0*
+*Last updated: 2026-05-08 · tested on macOS 26, Node 25, Pi 0.74.0 (`@earendil-works/pi-coding-agent`)*

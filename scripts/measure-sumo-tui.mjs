@@ -6,7 +6,7 @@ import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { createJiti } from "@mariozechner/jiti";
+import { createJiti } from "jiti";
 import { spawn as spawnPty } from "node-pty";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));

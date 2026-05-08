@@ -1,4 +1,4 @@
-import { matchesKey } from "@mariozechner/pi-tui";
+import { matchesKey } from "@earendil-works/pi-tui";
 import type { KeyEvent } from "../input/key-router.js";
 
 export type ChatScrollCommand = "page-up" | "page-down" | "jump-top" | "jump-bottom";

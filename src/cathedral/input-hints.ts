@@ -11,9 +11,9 @@
  * Mounted via `setWidget(..., { placement: "belowEditor" })`.
  */
 
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
-import type { Component } from "@mariozechner/pi-tui";
-import { visibleWidth } from "@mariozechner/pi-tui";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { Component } from "@earendil-works/pi-tui";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import { formatCwd } from "../footer.js";
 import { getGitBranch, sessionHasMessages as cachedSessionHasMessages } from "../session-cache.js";
 import { INPUT_FRAME_HINT_AWAITING, renderInputHints } from "./input-frame.js";

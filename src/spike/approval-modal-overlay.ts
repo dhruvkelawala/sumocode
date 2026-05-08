@@ -3,9 +3,9 @@
 // it only covers approval gates owned by this extension; Pi core confirmations
 // still use ctx.ui.confirm's built-in modal unless upstream exposes theming.
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import type { Component } from "@mariozechner/pi-tui";
-import { Key, matchesKey, truncateToWidth } from "@mariozechner/pi-tui";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { Component } from "@earendil-works/pi-tui";
+import { Key, matchesKey, truncateToWidth } from "@earendil-works/pi-tui";
 
 function fit(line: string, width: number): string {
 	const clipped = truncateToWidth(line, Math.max(0, width), "");

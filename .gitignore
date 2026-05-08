@@ -10,3 +10,4 @@ tmp/
 
 # visual harness output (rendered PNGs from `pnpm visual`)
 docs/visual/out/
+package-lock.json

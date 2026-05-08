@@ -2,9 +2,9 @@
 // ctx.ui.custom({ overlay: true }) component. Limits: read-only prototype; Pi
 // overlay composition does not physically dim the rest of the terminal.
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import type { Component } from "@mariozechner/pi-tui";
-import { Key, matchesKey, truncateToWidth } from "@mariozechner/pi-tui";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { Component } from "@earendil-works/pi-tui";
+import { Key, matchesKey, truncateToWidth } from "@earendil-works/pi-tui";
 
 export type MemoryEditorSnapshot = {
 	user: string;

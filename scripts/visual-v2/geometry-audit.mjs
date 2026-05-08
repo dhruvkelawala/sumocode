@@ -14,7 +14,7 @@
  * `geometrySpec` key (optional; scenarios without one skip the audit).
  */
 
-import { visibleWidth } from "@mariozechner/pi-tui";
+import { visibleWidth } from "@earendil-works/pi-tui";
 
 /**
  * Classify a row by its visible content.

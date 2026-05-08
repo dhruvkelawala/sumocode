@@ -1,4 +1,4 @@
-import type { Component } from "@mariozechner/pi-tui";
+import type { Component } from "@earendil-works/pi-tui";
 import { describe, expect, it, vi } from "vitest";
 import { SumoNode } from "../layout/node.js";
 import { DIRECTION_LTR, loadYoga } from "../layout/yoga.js";

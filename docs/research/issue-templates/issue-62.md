@@ -12,7 +12,7 @@ Fix: in `UpstreamChatPagerBridge.render(width)`, narrow the effective width to `
 
 PR #60 was meant to fix this by reading `ctx.getThinkingLevel()`. But `getThinkingLevel()` lives on **`ExtensionAPI`** (the `pi` parameter), not on `ExtensionContext` (`ctx`).
 
-Reference: `node_modules/@mariozechner/pi-coding-agent/dist/core/extensions/types.d.ts:849` is inside `interface ExtensionAPI` (line 768). `ExtensionContext` does NOT expose `getThinkingLevel()`.
+Reference: `node_modules/@earendil-works/pi-coding-agent/dist/core/extensions/types.d.ts:849` is inside `interface ExtensionAPI` (line 768). `ExtensionContext` does NOT expose `getThinkingLevel()`.
 
 So #60's probe always missed and silently fell back to "medium".
 

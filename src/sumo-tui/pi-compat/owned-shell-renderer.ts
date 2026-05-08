@@ -24,8 +24,8 @@
  * working while permanent chrome is owned by Yoga siblings.
  */
 
-import type { Component, OverlayOptions } from "@mariozechner/pi-tui";
-import type { CustomEditor } from "@mariozechner/pi-coding-agent";
+import type { Component, OverlayOptions } from "@earendil-works/pi-tui";
+import type { CustomEditor } from "@earendil-works/pi-coding-agent";
 import { SumoNode } from "../layout/node.js";
 import {
 	ALIGN_STRETCH,

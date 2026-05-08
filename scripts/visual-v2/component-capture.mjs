@@ -1,4 +1,4 @@
-import { createJiti } from "@mariozechner/jiti";
+import { createJiti } from "jiti";
 import { repoRoot } from "./paths.mjs";
 
 const jiti = createJiti(import.meta.url, {

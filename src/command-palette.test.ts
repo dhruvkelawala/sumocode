@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { Key } from "@mariozechner/pi-tui";
+import { Key } from "@earendil-works/pi-tui";
 import { resetThemeRegistryForTests, setActiveTheme } from "./themes/index.js";
 import {
 	COMMAND_PALETTE_HINT_ROW,

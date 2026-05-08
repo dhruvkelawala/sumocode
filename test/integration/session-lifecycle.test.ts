@@ -1,5 +1,5 @@
-import type { KeybindingsManager, Theme } from "@mariozechner/pi-coding-agent";
-import type { Component, EditorComponent, EditorTheme, TUI } from "@mariozechner/pi-tui";
+import type { KeybindingsManager, Theme } from "@earendil-works/pi-coding-agent";
+import type { Component, EditorComponent, EditorTheme, TUI } from "@earendil-works/pi-tui";
 import { describe, expect, it, vi } from "vitest";
 import { RegionRegistry } from "../../src/sumo-tui/pi-compat/region-registry.js";
 import { DIRECTION_LTR, loadYoga } from "../../src/sumo-tui/layout/yoga.js";

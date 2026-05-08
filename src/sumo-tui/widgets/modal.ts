@@ -1,4 +1,4 @@
-import { Key, matchesKey, type Component, type KeyId } from "@mariozechner/pi-tui";
+import { Key, matchesKey, type Component, type KeyId } from "@earendil-works/pi-tui";
 
 export interface ModalDialogOptions {
 	readonly signal?: AbortSignal;

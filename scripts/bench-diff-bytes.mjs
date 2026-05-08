@@ -14,7 +14,7 @@
  */
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
-import { createJiti } from "@mariozechner/jiti";
+import { createJiti } from "jiti";
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(SCRIPT_DIR, "..", "src", "sumo-tui");

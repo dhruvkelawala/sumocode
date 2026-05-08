@@ -1,4 +1,4 @@
-import { visibleWidth } from "@mariozechner/pi-tui";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import { BLANK_CELL, attrsEqual, attrsToMask, createAttrs, maskToAttrs, type Cell } from "./cell.js";
 import { indexedColor, isColorByte, normalizeHexColor } from "./truecolor.js";
 

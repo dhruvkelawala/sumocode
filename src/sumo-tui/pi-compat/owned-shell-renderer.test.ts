@@ -1,4 +1,4 @@
-import type { Component, OverlayOptions } from "@mariozechner/pi-tui";
+import type { Component, OverlayOptions } from "@earendil-works/pi-tui";
 import { describe, expect, it, vi } from "vitest";
 import { loadYoga } from "../layout/yoga.js";
 import { TerminalSessionOwner, type TerminalPatch } from "../runtime/terminal-controller.js";

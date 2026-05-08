@@ -15,9 +15,9 @@
  * Triggered via `/sumo:memory` (or `/sumo:memory edit`).
  */
 
-import type { Component, KeybindingsManager, OverlayHandle, OverlayOptions, TUI } from "@mariozechner/pi-tui";
-import { matchesKey, wrapTextWithAnsi } from "@mariozechner/pi-tui";
-import type { ExtensionAPI, ExtensionCommandContext } from "@mariozechner/pi-coding-agent";
+import type { Component, KeybindingsManager, OverlayHandle, OverlayOptions, TUI } from "@earendil-works/pi-tui";
+import { matchesKey, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import {
 	createRemnicMemoryClient,
 	MemoryClientError,

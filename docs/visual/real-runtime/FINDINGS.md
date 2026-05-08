@@ -28,8 +28,8 @@ Error: Rendered line 12 exceeds terminal width (45 > 40).
 This is likely caused by a custom TUI component not truncating its output.
 Use visibleWidth() to measure and truncateToWidth() to truncate lines.
 
-  at TUI.doRender (file:///opt/homebrew/lib/node_modules/@mariozechner/pi-coding-agent/node_modules/@mariozechner/pi-tui/dist/tui.js:906:23)
-  at Timeout._onTimeout (file:///opt/homebrew/lib/node_modules/@mariozechner/pi-coding-agent/node_modules/@mariozechner/pi-tui/dist/tui.js:350:18)
+  at TUI.doRender (file:///opt/homebrew/lib/node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-tui/dist/tui.js:906:23)
+  at Timeout._onTimeout (file:///opt/homebrew/lib/node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-tui/dist/tui.js:350:18)
 ```
 
 Crash is in `src/sumo-tui/runtime/lifecycle.ts:201` (rethrown). Pi-tui's `doRender` validates row widths and we're producing a 45-cell row at width 40.

@@ -8,7 +8,7 @@
  *   docs/ui/bible/12-scroll-running.html
  *   docs/ui/bible/12-scroll-done.html
  */
-import { truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
+import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { activeThemeColors } from "../../themes/index.js";
 import { lineToAnsi, span, textLine, type Span } from "../render/primitives.js";
 import type { DelegationStatus, DelegationViewModel, ToolCallViewModel } from "./view-model.js";

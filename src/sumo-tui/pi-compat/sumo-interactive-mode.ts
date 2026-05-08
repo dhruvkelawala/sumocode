@@ -2,7 +2,7 @@
  * MIT License
  *
  * Portions of this compatibility boundary are derived from
- * @mariozechner/pi-coding-agent 0.73.0, package `dist/modes/interactive/interactive-mode.js`.
+ * @earendil-works/pi-coding-agent 0.74.0, package `dist/modes/interactive/interactive-mode.js`.
  * The upstream npm package declares license: MIT.
  *
  * Copyright (c) Mario Zechner and pi-mono contributors.
@@ -27,10 +27,10 @@
  * SOFTWARE.
  */
 
-import type { AgentSessionRuntime, InteractiveModeOptions } from "@mariozechner/pi-coding-agent";
-import { InteractiveMode } from "@mariozechner/pi-coding-agent";
-import type { ExtensionUIContext } from "@mariozechner/pi-coding-agent";
-import type { Component } from "@mariozechner/pi-tui";
+import type { AgentSessionRuntime, InteractiveModeOptions } from "@earendil-works/pi-coding-agent";
+import { InteractiveMode } from "@earendil-works/pi-coding-agent";
+import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
+import type { Component } from "@earendil-works/pi-tui";
 import { loadSumoCodeConfig } from "../../config/sumocode-config.js";
 import { onThemeChanged } from "../../themes/index.js";
 import { EmptyChatQuoteNode, shouldRenderEmptyChatQuote, type EmptyChatQuoteSnapshot } from "../cathedral/empty-chat-quote.js";
@@ -601,7 +601,7 @@ export class SumoInteractiveRuntime {
  * Small Phase 4 fork boundary for Pi 0.73.x.
  *
  * Pi's CLI constructs `InteractiveMode` directly in
- * `node_modules/.pnpm/@mariozechner+pi-coding-agent@0.73.0.../dist/main.js:542-565`.
+ * `node_modules/.pnpm/@earendil-works+pi-coding-agent@0.74.0.../dist/main.js:539-559`.
  * The fork patch now replaces that constructor call with `new
  * SumoInteractiveMode(...)` when `SUMO_TUI=1` or `--sumo-tui` is set.
  *

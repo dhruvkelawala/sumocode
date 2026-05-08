@@ -1,8 +1,8 @@
 import { execFileSync } from "node:child_process";
 import { homedir } from "node:os";
 import { basename } from "node:path";
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 
 /**
  * Pi's `ThinkingLevel` union, inlined to avoid pulling in `pi-agent-core`
@@ -256,10 +256,10 @@ function sessionHasMessages(ctx: ExtensionContext): boolean {
 }
 
 function getThinkingLevel(pi: ExtensionAPI, ctx: ExtensionContext): ThinkingLevel {
-	// Pi 0.73.0 exposes the thinking-level getter on `ExtensionAPI` (the `pi`
+	// Pi 0.74.0 exposes the thinking-level getter on `ExtensionAPI` (the `pi`
 	// parameter of installFooter), NOT on `ExtensionContext` (`ctx`). The
 	// canonical reference is
-	// `node_modules/@mariozechner/pi-coding-agent/dist/core/extensions/types.d.ts:849`
+	// `node_modules/@earendil-works/pi-coding-agent/dist/core/extensions/types.d.ts:849`
 	// which lives inside `interface ExtensionAPI` (line 768).
 	//
 	// PR #60 mistakenly probed `ctx.getThinkingLevel()` and silently fell back

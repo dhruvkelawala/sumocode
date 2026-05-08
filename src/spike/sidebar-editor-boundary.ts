@@ -3,9 +3,9 @@
 // Limits: editor render output is mounted at the editor slot only, so this
 // cannot own or reserve the full-height chat/sidebar content area.
 
-import { CustomEditor, type ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import type { Component } from "@mariozechner/pi-tui";
-import { truncateToWidth } from "@mariozechner/pi-tui";
+import { CustomEditor, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { Component } from "@earendil-works/pi-tui";
+import { truncateToWidth } from "@earendil-works/pi-tui";
 
 export function renderEditorOwnedSideBand(input: string, width: number): string[] {
 	const sidebarWidth = width >= 120 ? 49 : 0;

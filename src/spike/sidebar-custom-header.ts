@@ -3,9 +3,9 @@
 // reserves columns within the header itself, but Pi's real chat still starts
 // BELOW the header; it cannot make normal message rows share this split.
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import type { Component } from "@mariozechner/pi-tui";
-import { truncateToWidth } from "@mariozechner/pi-tui";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { Component } from "@earendil-works/pi-tui";
+import { truncateToWidth } from "@earendil-works/pi-tui";
 
 export type HeaderWorkspaceSnapshot = {
 	quote: string;

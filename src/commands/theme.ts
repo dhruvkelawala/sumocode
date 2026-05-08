@@ -1,5 +1,5 @@
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { truncateToWidth, visibleWidth, type Component } from "@mariozechner/pi-tui";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { truncateToWidth, visibleWidth, type Component } from "@earendil-works/pi-tui";
 import { activeThemeColors, getActiveTheme, getTheme, listThemes, nextThemeName } from "../themes/index.js";
 import { saveSumoCodeConfigPatch } from "../config/sumocode-config.js";
 import { emitCathedralThemeChanged } from "../sumo-tui/cathedral/theme-bridge.js";

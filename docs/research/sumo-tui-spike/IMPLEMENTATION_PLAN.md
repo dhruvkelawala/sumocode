@@ -42,7 +42,7 @@ Buffer: 30% for unknowns → calendar 8-10 weeks.
 - [ ] `docs/adr/0001-sumo-tui-framework.md` (Mario Heinemeier Hansen ADR style: Status, Context, Decision, Consequences, Alternatives Considered)
 - [ ] GitHub issues filed for Phases 1-5 with acceptance criteria + edge case IDs from `EDGE_CASES.md`
 - [ ] Worktree `worktrees/sumocode-sumo-tui/` on branch `feat/sumo-tui-phase-1` (or per-phase branches)
-- [ ] `package.json` audit — pin `@mariozechner/pi-coding-agent: 0.70.x`, `@mariozechner/pi-tui: 0.70.x`
+- [ ] `package.json` audit — pin `@earendil-works/pi-coding-agent: 0.70.x`, `@earendil-works/pi-tui: 0.70.x`
 
 ### Acceptance gate
 ADR merged. Phase 1 issue clearly defines what "done" looks like.
@@ -353,7 +353,7 @@ This is the highest-risk phase. We're modifying private Pi code.
 ### Tasks
 
 #### Day 1 — Read interactive-mode source
-1. Map every responsibility in `node_modules/.pnpm/@mariozechner+pi-coding-agent@0.70.2*/dist/modes/interactive/interactive-mode.js`.
+1. Map every responsibility in `node_modules/.pnpm/@earendil-works+pi-coding-agent@0.70.2*/dist/modes/interactive/interactive-mode.js`.
 2. Identify the seam where pi-tui is constructed.
 3. Document in `docs/research/interactive-mode-map.md`.
 

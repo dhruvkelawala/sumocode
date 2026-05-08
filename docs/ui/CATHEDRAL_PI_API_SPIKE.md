@@ -2,7 +2,7 @@
 
 > Branch: `spike/cathedral-pi-api`
 > Scope: prove robust Cathedral implementation routes using public `ExtensionAPI`,
-> `ExtensionUIContext`, and `@mariozechner/pi-tui` only.
+> `ExtensionUIContext`, and `@earendil-works/pi-tui` only.
 > Rule: no `tui.children.splice`, no monkey-patching, no forked Pi core.
 
 ---
@@ -41,7 +41,7 @@ reserved column.
 ### 1.1 Extension lifecycle and events
 
 Signature source:
-`node_modules/.../@mariozechner/pi-coding-agent/dist/core/extensions/types.d.ts`.
+`node_modules/.../@earendil-works/pi-coding-agent/dist/core/extensions/types.d.ts`.
 
 ```ts
 pi.on(eventName, handler): void

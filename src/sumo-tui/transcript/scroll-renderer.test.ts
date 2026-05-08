@@ -62,7 +62,7 @@ describe("scroll/scribe renderer", () => {
 				{
 					name: "read",
 					status: "success",
-					output: "import type { ExtensionAPI } from '@mariozechner/pi-coding-agent';\nindex abc123..def456\n--- a/src/foo.ts\n+++ b/src/foo.ts",
+					output: "import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';\nindex abc123..def456\n--- a/src/foo.ts\n+++ b/src/foo.ts",
 				},
 			],
 		}), 80).map(stripAnsi);

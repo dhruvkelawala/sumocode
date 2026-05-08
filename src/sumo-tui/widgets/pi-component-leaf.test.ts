@@ -1,4 +1,4 @@
-import { Spacer, Text, type Component } from "@mariozechner/pi-tui";
+import { Spacer, Text, type Component } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "vitest";
 import { SumoNode } from "../layout/node.js";
 import { DIRECTION_LTR, loadYoga } from "../layout/yoga.js";

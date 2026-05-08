@@ -2,9 +2,9 @@
 // footer with a registry-tone single-line status bar. Limits: setFooter can
 // only own the bottom footer row; it cannot alter editor placement.
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import type { Component } from "@mariozechner/pi-tui";
-import { truncateToWidth } from "@mariozechner/pi-tui";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { Component } from "@earendil-works/pi-tui";
+import { truncateToWidth } from "@earendil-works/pi-tui";
 import type { SumoCodeState } from "../tokens.js";
 
 export type RegistryFooterSnapshot = {

@@ -1,4 +1,4 @@
-import { visibleWidth } from "@mariozechner/pi-tui";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import type { Cell, CellAttrs } from "./cell.js";
 import { attrsEqual, createAttrs } from "./cell.js";
 import type { CellBuffer } from "./buffer.js";

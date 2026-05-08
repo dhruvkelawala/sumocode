@@ -1,4 +1,4 @@
-import { truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
+import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { DEFAULT_SUMOCODE_CONFIG } from "../../config/sumocode-config.js";
 import { activeThemeChrome, activeThemeColors } from "../../themes/index.js";
 import { fgHex, RESET } from "../cathedral/ansi.js";

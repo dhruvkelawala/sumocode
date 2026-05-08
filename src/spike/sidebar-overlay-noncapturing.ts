@@ -3,9 +3,9 @@
 // coexist with editor focus. Limits: overlays composite on top of Pi chat; they
 // do NOT reserve columns, so long chat lines can draw underneath the sidebar.
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import type { Component } from "@mariozechner/pi-tui";
-import { truncateToWidth } from "@mariozechner/pi-tui";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { Component } from "@earendil-works/pi-tui";
+import { truncateToWidth } from "@earendil-works/pi-tui";
 
 export type RegistryTab = "CONTEXT" | "MEMORY" | "SCRIPTOR" | "FILES";
 

@@ -7,7 +7,7 @@
  * - `/slate clear`    — clear all items
  */
 
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { Slate, SLATE_CUSTOM_TYPE } from "../slate.js";
 import { showDivineQuery } from "../divine-query.js";

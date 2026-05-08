@@ -8,7 +8,7 @@
 
 ## Problem Statement
 
-I (Dhruv, senior engineer) work in the terminal all day. Pi (`@mariozechner/pi-coding-agent`) is the best terminal AI coding agent available, but its UX is generic — every Pi user gets the same default footer, no persistent memory across sessions, no visual identity. After three weeks of using stock Pi, my terminal still feels like "running someone else's tool" rather than "this is mine."
+I (Dhruv, senior engineer) work in the terminal all day. Pi (`@earendil-works/pi-coding-agent`) is the best terminal AI coding agent available, but its UX is generic — every Pi user gets the same default footer, no persistent memory across sessions, no visual identity. After three weeks of using stock Pi, my terminal still feels like "running someone else's tool" rather than "this is mine."
 
 Three concrete symptoms:
 
@@ -359,7 +359,7 @@ The two repos are independent. Sumocode-config is bootstrapped first on a new ma
 
 ### Acknowledgments
 
-- **Pi** by Mario Zechner (`@mariozechner/pi-coding-agent`) — the engine.
+- **Pi** by Mario Zechner (`@earendil-works/pi-coding-agent`) — the engine.
 - **OpenClaw** — the secretary/dispatch layer SumoCode integrates with via ACPX.
 - **Remnic** by Joshua Warren — the memory backend.
 - **Mission Control v3** — the design language SumoCode inherits from for cross-agent consistency.

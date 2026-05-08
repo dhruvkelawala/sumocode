@@ -4,7 +4,7 @@
 
 **A Pi extension that makes your terminal AI coding experience feel personal.**
 
-OpenCode visual language · persistent memory across sessions · preattentive status signals · built on [@mariozechner/pi-mono](https://github.com/badlogic/pi-mono).
+OpenCode visual language · persistent memory across sessions · preattentive status signals · built on [@earendil-works/pi-mono](https://github.com/badlogic/pi-mono).
 
 </div>
 

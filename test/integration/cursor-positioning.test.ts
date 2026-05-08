@@ -1,5 +1,5 @@
-import type { CustomEditor } from "@mariozechner/pi-coding-agent";
-import { CURSOR_MARKER, type Component } from "@mariozechner/pi-tui";
+import type { CustomEditor } from "@earendil-works/pi-coding-agent";
+import { CURSOR_MARKER, type Component } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "vitest";
 import { SumoNode } from "../../src/sumo-tui/layout/node.js";
 import { DIRECTION_LTR, loadYoga } from "../../src/sumo-tui/layout/yoga.js";

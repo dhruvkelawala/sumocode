@@ -7,14 +7,14 @@ import type {
 	ReadonlyFooterDataProvider,
 	Theme,
 	WorkingIndicatorOptions,
-} from "@mariozechner/pi-coding-agent";
+} from "@earendil-works/pi-coding-agent";
 import type {
 	Component,
 	EditorTheme,
 	OverlayHandle,
 	OverlayOptions,
 	TUI,
-} from "@mariozechner/pi-tui";
+} from "@earendil-works/pi-tui";
 import { ModalManager } from "../widgets/modal.js";
 import { ModalLayer } from "../widgets/modal-layer.js";
 import { NotificationCenter, type NotificationLevel } from "../widgets/notification.js";
@@ -98,9 +98,9 @@ function normalizeNotificationLevel(level: "info" | "warning" | "error" | undefi
  * compatibility layer for extension UI surfaces that are not yet permanent
  * chrome siblings.
  *
- * Source: Pi 0.73.0's interactive mode exposes this surface from
+ * Source: Pi 0.74.0's interactive mode exposes this surface from
  * `createExtensionUIContext()` at
- * `node_modules/.pnpm/@mariozechner+pi-coding-agent@0.73.0.../dist/modes/interactive/interactive-mode.js:1522-1557`.
+ * `node_modules/.pnpm/@earendil-works+pi-coding-agent@0.74.0.../dist/modes/interactive/interactive-mode.js:1522-1557`.
  * Dialog/editor/custom behaviours mirror the upstream editor-container and
  * overlay paths at `interactive-mode.js:1584-1774`.
  */

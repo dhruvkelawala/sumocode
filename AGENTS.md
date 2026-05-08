@@ -4,7 +4,7 @@ This file is the canonical instruction file for AI coding agents working in this
 
 ## What this repo is
 
-SumoCode is a **Pi extension** for `@mariozechner/pi-coding-agent`. It owns the UX layer — splash, top chrome, footer, sidebar, working indicator, slash commands, theme, retained terminal renderer — while Pi keeps the agent loop, LLM, sessions, MCP, skills, and provider/runtime machinery.
+SumoCode is a **Pi extension** for `@earendil-works/pi-coding-agent`. It owns the UX layer — splash, top chrome, footer, sidebar, working indicator, slash commands, theme, retained terminal renderer — while Pi keeps the agent loop, LLM, sessions, MCP, skills, and provider/runtime machinery.
 
 User-specific state (persona, memory, settings, MCP, skills) lives in the separate private repo `sumocode-config` and is symlinked into `~/.pi/agent/`. **Never put user state in this repo.**
 
@@ -105,7 +105,7 @@ The user-facing wrapper is `bin/sumocode.sh` and, when linked/installed, the `su
 
 Manual-test diagnostics are opt-in via `sumocode -d` / `bin/sumocode.sh -d`. Debug mode writes JSONL to `/tmp/sumocode-manual.jsonl` by default, or to `--diag-file <path>` / `SUMO_TUI_DIAG_FILE`. The launcher clears the diagnostics file at startup unless `--no-clear-diag` is set. Use `sumocode diag` or `node scripts/diag-summary.mjs /tmp/sumocode-manual.jsonl` to summarize a run. Diagnostics must stay no-op unless `SUMO_TUI_DIAG_FILE` is set.
 
-Do not casually change `patches/@mariozechner__pi-coding-agent@*.patch`, `SUMO_TUI`, `SUMO_TUI_MODULE`, or `sumo-interactive-mode.js`. Pi version bumps must follow `docs/research/pi-fork-upgrade.md` and the smoke matrix in `docs/SUMO_TUI_PI_PATCH_STRATEGY.md`.
+Do not casually change `patches/@earendil-works__pi-coding-agent@*.patch`, `SUMO_TUI`, `SUMO_TUI_MODULE`, or `sumo-interactive-mode.js`. Pi version bumps must follow `docs/research/pi-fork-upgrade.md` and the smoke matrix in `docs/SUMO_TUI_PI_PATCH_STRATEGY.md`.
 
 ### Pi ↔ SumoCode tool boundary
 
@@ -212,7 +212,7 @@ Required crops gate against committed approved runtime goldens. Bible diffs rema
 - TypeScript is strict with `noUnusedLocals` and `noUnusedParameters`.
 - Use tabs for indentation in TypeScript files, matching the existing codebase.
 - Tests colocate with source: `foo.ts` next to `foo.test.ts`. Integration tests live under `test/integration/`.
-- Pi-bundled deps belong in `peerDependencies`, not `dependencies`. `@mariozechner/pi-coding-agent`, `@mariozechner/pi-tui`, and `typebox` are peer-only.
+- Pi-bundled deps belong in `peerDependencies`, not `dependencies`. `@earendil-works/pi-coding-agent`, `@earendil-works/pi-tui`, and `typebox` are peer-only.
 - `ctx.ui.*` calls must happen inside an event handler (`session_start`, `message_start`, etc.). Calling them at module top level fires before Pi's TUI exists and is silently dropped.
 - Be TTY-defensive: guard interactive UI so `acpx pi`, `pi --print`, and `--mode rpc` keep working.
 - Voice is enforced by `src/voice.ts`. State labels are uppercase Cathedral verbs (`READY / MEDITATING / ILLUMINATING / DEFERRING / INSCRIBING`); other product copy is lowercase, terse, no exclamation marks, no apologies, no decorative emoji.

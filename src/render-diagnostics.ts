@@ -25,7 +25,7 @@
 
 import { createRequire } from "node:module";
 import { performance } from "node:perf_hooks";
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { isDiagnosticsEnabled, logDiagnostic } from "./sumo-tui/runtime/diagnostics.js";
 
 /** Render durations >= this (ms) get logged individually as `render_sample`. */

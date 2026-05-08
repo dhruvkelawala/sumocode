@@ -22,7 +22,7 @@
  * box is the visual frame.
  */
 
-import { truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
+import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { activeThemeColors } from "../themes/index.js";
 
 export const RESET = "\u001b[0m";

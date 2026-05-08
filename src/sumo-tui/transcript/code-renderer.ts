@@ -9,7 +9,7 @@
  *   docs/ui/bible/10-code-typescript.html
  *   docs/ui/bible/10-code-bash.html
  */
-import { visibleWidth } from "@mariozechner/pi-tui";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import { activeThemeColors } from "../../themes/index.js";
 import { lineToAnsi, span, textLine, withPersistentStyle, type Span } from "../render/primitives.js";
 

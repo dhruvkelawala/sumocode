@@ -13,7 +13,7 @@ Issue: `#44` (also closes parent `#38`)
   - `SUMO_TUI_MODULE` can point at a local file URL for worktree development.
 - Added `sumo-interactive-mode.js` as SumoCode's runtime-loadable public bridge.
 - Added `bin/sumocode.sh`, which sets `SUMO_TUI=1`, points `SUMO_TUI_MODULE` at the worktree bridge, and runs the local patched Pi binary.
-- Added a pnpm patch for `@mariozechner/pi-coding-agent@0.70.2` so the installed `dist/main.js` contains the same fork behaviour.
+- Added a pnpm patch for `@earendil-works/pi-coding-agent@0.70.2` so the installed `dist/main.js` contains the same fork behaviour.
 - Updated `SumoInteractiveMode` so the forked entry point starts real sumo-tui primitives before delegating to Pi's existing session loop:
   - `TerminalController`
   - Yoga root `SumoNode`
@@ -30,7 +30,7 @@ Issue: `#44` (also closes parent `#38`)
 
 ## What was painful
 
-- pnpm GitHub subdirectory installs did not produce a usable `@mariozechner/pi-coding-agent` package from the monorepo fork because the package `files` list includes `dist/`, but `dist/` is not committed upstream.
+- pnpm GitHub subdirectory installs did not produce a usable `@earendil-works/pi-coding-agent` package from the monorepo fork because the package `files` list includes `dist/`, but `dist/` is not committed upstream.
 - Adding `prepare` to the fork was explored and rejected:
   - pnpm requires explicit build-script allowlisting for git-hosted dependencies;
   - running prepare from a workspace package caused root/package lifecycle confusion;

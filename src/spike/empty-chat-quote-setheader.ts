@@ -2,9 +2,9 @@
 // a centered quote while the session branch has no messages. Limits: header
 // content sits above chat rather than inside Pi's message scrollback.
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import type { Component } from "@mariozechner/pi-tui";
-import { truncateToWidth } from "@mariozechner/pi-tui";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { Component } from "@earendil-works/pi-tui";
+import { truncateToWidth } from "@earendil-works/pi-tui";
 
 export type EmptyQuoteSnapshot = {
 	quote: string;

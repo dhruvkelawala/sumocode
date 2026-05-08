@@ -37,8 +37,8 @@ pnpm exec tsc --noEmit
 
 Pi 0.70.2 constructs `InteractiveMode` inside the package binary, not inside SumoCode extension user code:
 
-- import site: `node_modules/.pnpm/@mariozechner+pi-coding-agent@0.70.2.../dist/main.js:31`
-- constructor site: `node_modules/.pnpm/@mariozechner+pi-coding-agent@0.70.2.../dist/main.js:548-571`
+- import site: `node_modules/.pnpm/@earendil-works+pi-coding-agent@0.70.2.../dist/main.js:31`
+- constructor site: `node_modules/.pnpm/@earendil-works+pi-coding-agent@0.70.2.../dist/main.js:548-571`
 
 Because SumoCode is loaded as a Pi extension, `src/extension.ts` cannot replace the already-imported ESM binding. The actual fork patch still needs to replace that constructor call with `new SumoInteractiveMode(...)` in our pinned Pi fork/package. Until that patch is applied, running `pi -e ./src/extension.ts` still enters upstream pi-tui's `InteractiveMode` and only uses sumo-tui for the Phase 1 lifecycle shim.
 

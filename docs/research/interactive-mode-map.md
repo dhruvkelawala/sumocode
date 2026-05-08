@@ -1,6 +1,6 @@
 # Pi 0.70.2 `interactive-mode.js` responsibility map
 
-Scope: `@mariozechner/pi-coding-agent@0.70.2/dist/modes/interactive/interactive-mode.js` in this worktree's `node_modules/.pnpm/...` install. The Pi CLI integration point is `dist/main.js`.
+Scope: `@earendil-works/pi-coding-agent@0.70.2/dist/modes/interactive/interactive-mode.js` in this worktree's `node_modules/.pnpm/...` install. The Pi CLI integration point is `dist/main.js`.
 
 ## Class structure
 

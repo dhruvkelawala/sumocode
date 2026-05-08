@@ -1,4 +1,4 @@
-import { visibleWidth } from "@mariozechner/pi-tui";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import { logDiagnostic } from "../runtime/diagnostics.js";
 import type { CellBuffer } from "../render/buffer.js";
 import type { KeyEvent } from "./key-router.js";

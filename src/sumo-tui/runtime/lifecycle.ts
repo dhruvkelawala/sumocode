@@ -1,7 +1,7 @@
 import { appendFileSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { consumeActiveEditorDraftClear } from "../../cathedral/editor-draft-state.js";
 import { instrumentPiEventEmitter, logDiagnostic } from "./diagnostics.js";
 import { FrameScheduler, type FrameRenderCallback } from "./frame-scheduler.js";
@@ -63,7 +63,7 @@ const EXIT_SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP", "SIGQUIT"] as const;
 /**
  * Detect whether the retained SumoTUI runtime is active, regardless of how it
  * was launched (`SUMO_TUI=1` env or `--sumo-tui` CLI flag — see
- * `patches/@mariozechner__pi-coding-agent@*.patch`).
+ * `patches/@earendil-works__pi-coding-agent@*.patch`).
  *
  * Reads the same `globalThis` symbol that `SumoInteractiveRuntime` registers
  * itself under in `pi-compat/sumo-interactive-mode.ts`. Avoids a backwards

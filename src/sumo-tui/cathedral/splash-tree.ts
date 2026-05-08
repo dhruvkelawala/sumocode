@@ -1,4 +1,4 @@
-import type { Component } from "@mariozechner/pi-tui";
+import type { Component } from "@earendil-works/pi-tui";
 import { SumoNode } from "../layout/node.js";
 import { FLEX_DIRECTION_COLUMN, type Yoga } from "../layout/yoga.js";
 import { PiComponentLeaf } from "../widgets/pi-component-leaf.js";

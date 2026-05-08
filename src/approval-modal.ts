@@ -28,9 +28,9 @@
  * own ~/.sumocode/allowlist.json (v1 fallback).
  */
 
-import type { Component } from "@mariozechner/pi-tui";
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { matchesKey, wrapTextWithAnsi } from "@mariozechner/pi-tui";
+import type { Component } from "@earendil-works/pi-tui";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { matchesKey, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { activeThemeColors } from "./themes/index.js";
 import {
 	RESET,

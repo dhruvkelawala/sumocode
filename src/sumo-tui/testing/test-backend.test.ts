@@ -1,5 +1,5 @@
-import type { CustomEditor } from "@mariozechner/pi-coding-agent";
-import { CURSOR_MARKER } from "@mariozechner/pi-tui";
+import type { CustomEditor } from "@earendil-works/pi-coding-agent";
+import { CURSOR_MARKER } from "@earendil-works/pi-tui";
 import { afterEach, describe, expect, it } from "vitest";
 import { SumoNode } from "../layout/node.js";
 import type { YogaNode } from "../layout/yoga.js";

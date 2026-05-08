@@ -2,7 +2,7 @@ import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { Editor, type EditorTheme, type TUI } from "@mariozechner/pi-tui";
+import { Editor, type EditorTheme, type TUI } from "@earendil-works/pi-tui";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { spawnPiPty, type SpawnedPiPty } from "./spawn-pi-pty.js";
 

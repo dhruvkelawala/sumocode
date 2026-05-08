@@ -24,7 +24,7 @@ function getThinkingLevel(ctx: ExtensionContext): ThinkingLevel {
 }
 ```
 
-`ctx.thinkingLevel` is not a public Pi API — it doesn't exist on ExtensionContext. So the `?? "medium"` fallback always wins. Pi 0.70.2 exposes the proper getter at `node_modules/@mariozechner/pi-coding-agent/dist/core/extensions/types.d.ts:849`:
+`ctx.thinkingLevel` is not a public Pi API — it doesn't exist on ExtensionContext. So the `?? "medium"` fallback always wins. Pi 0.70.2 exposes the proper getter at `node_modules/@earendil-works/pi-coding-agent/dist/core/extensions/types.d.ts:849`:
 
 ```ts
 /** Get current thinking level. */

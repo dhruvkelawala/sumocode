@@ -318,9 +318,9 @@ pi_main_file() {
 	done
 
 	# pnpm creates a shell shim at node_modules/.bin/pi that execs
-	# ../@mariozechner/pi-coding-agent/dist/cli.js. Resolve that target so we
+	# ../@earendil-works/pi-coding-agent/dist/cli.js. Resolve that target so we
 	# can inspect the adjacent dist/main.js for the Sumo constructor patch.
-	cli_target="$(grep -Eo '([^"[:space:]]+/)?@mariozechner/pi-coding-agent/dist/cli\.js' "${resolved}" | head -n 1 || true)"
+	cli_target="$(grep -Eo '([^"[:space:]]+/)?@earendil-works/pi-coding-agent/dist/cli\.js' "${resolved}" | head -n 1 || true)"
 	[[ -n "${cli_target}" ]] || return 1
 	cli_target="${cli_target#\$basedir/}"
 	cli_path="$(cd "${dir}" && realpath "${cli_target}" 2>/dev/null || true)"

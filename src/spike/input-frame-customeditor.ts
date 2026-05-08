@@ -2,8 +2,8 @@
 // installs a CustomEditor subclass and delegates handleInput() to super for Pi
 // keybindings. Limits: it only replaces the editor slot, not chat rendering.
 
-import { CustomEditor, type ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { truncateToWidth } from "@mariozechner/pi-tui";
+import { CustomEditor, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { truncateToWidth } from "@earendil-works/pi-tui";
 
 function pad(line: string, width: number): string {
 	const clipped = truncateToWidth(line, Math.max(0, width), "");

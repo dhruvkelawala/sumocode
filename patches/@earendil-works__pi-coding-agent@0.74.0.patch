@@ -1,8 +1,8 @@
 diff --git a/dist/main.js b/dist/main.js
-index 5cc6978..f047cea 100644
+index 0000000..0000000 100644
 --- a/dist/main.js
 +++ b/dist/main.js
-@@ -545,14 +545,18 @@ export async function main(args, options) {
+@@ -539,14 +539,18 @@ export async function main(args, options) {
                  .join(", ");
              console.log(chalk.dim(`Model scope: ${modelList} ${chalk.gray("(Ctrl+P to cycle)")}`));
          }
@@ -23,7 +23,7 @@ index 5cc6978..f047cea 100644
          if (startupBenchmark) {
              await interactiveMode.init();
              time("interactiveMode.init");
-@@ -586,4 +590,9 @@ export async function main(args, options) {
+@@ -580,4 +584,9 @@ export async function main(args, options) {
          return;
      }
  }

@@ -1,4 +1,4 @@
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { showDivineQuery } from "../divine-query.js";
 
 const TEST_TITLE = "Divine Query test modal\nUse this to verify the runtime overlay without waiting for the LLM.";

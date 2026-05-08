@@ -1,4 +1,4 @@
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { activeThemeColors } from "../themes/index.js";
 import {
 	CATHEDRAL_INDICATOR_FRAMES,

@@ -16,7 +16,7 @@
  * command falls back to a notify + clean exit.
  */
 
-import type { ExtensionAPI, ExtensionCommandContext } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 
 export const SUMOCODE_RELOAD_EXIT_CODE = 100;
 

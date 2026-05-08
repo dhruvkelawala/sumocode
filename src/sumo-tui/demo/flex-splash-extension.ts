@@ -1,5 +1,5 @@
-import type { CustomEditor, ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { CURSOR_MARKER, Text, visibleWidth, type Component } from "@mariozechner/pi-tui";
+import type { CustomEditor, ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { CURSOR_MARKER, Text, visibleWidth, type Component } from "@earendil-works/pi-tui";
 import { SumoNode } from "../layout/node.js";
 import { DIRECTION_LTR, FLEX_DIRECTION_COLUMN, loadYoga } from "../layout/yoga.js";
 import { bufferToAnsiLines } from "../render/ansi-writer.js";

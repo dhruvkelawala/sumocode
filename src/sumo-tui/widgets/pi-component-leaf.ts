@@ -1,4 +1,4 @@
-import { visibleWidth, type Component } from "@mariozechner/pi-tui";
+import { visibleWidth, type Component } from "@earendil-works/pi-tui";
 import { SumoNode } from "../layout/node.js";
 import { MEASURE_MODE_EXACTLY, type MeasureMode, type Yoga, type YogaNode } from "../layout/yoga.js";
 import type { CellBuffer, Rect } from "../render/buffer.js";

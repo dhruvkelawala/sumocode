@@ -2,8 +2,8 @@ import type {
 	KeybindingsManager,
 	ReadonlyFooterDataProvider,
 	Theme,
-} from "@mariozechner/pi-coding-agent";
-import type { Component, EditorComponent, EditorTheme, OverlayOptions, TUI } from "@mariozechner/pi-tui";
+} from "@earendil-works/pi-coding-agent";
+import type { Component, EditorComponent, EditorTheme, OverlayOptions, TUI } from "@earendil-works/pi-tui";
 import { SumoNode } from "../layout/node.js";
 import {
 	FLEX_DIRECTION_COLUMN,
@@ -14,7 +14,7 @@ import {
 import { ModalBackdropNode, ModalSurfaceComponent } from "../widgets/modal-layer.js";
 import { PiComponentLeaf } from "../widgets/pi-component-leaf.js";
 import { PiEditorLeaf } from "../widgets/pi-editor-leaf.js";
-import type { CustomEditor } from "@mariozechner/pi-coding-agent";
+import type { CustomEditor } from "@earendil-works/pi-coding-agent";
 
 export type RegionSlotName =
 	| "header"

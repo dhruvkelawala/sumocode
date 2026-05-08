@@ -7,7 +7,7 @@ import { logDiagnostic } from "../runtime/diagnostics.js";
  * so we never import Pi's private component module.
  *
  * Pi source for reference:
- * `node_modules/@mariozechner/pi-coding-agent/dist/modes/interactive/components/bash-execution.js`
+ * `node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/components/bash-execution.js`
  */
 export interface BashExecutionLike {
 	render(width: number): string[];

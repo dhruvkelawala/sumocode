@@ -58,15 +58,19 @@ describe("owned-shell POC (issue #195 / #161 Slice A)", () => {
 			const lines = (await replayTerminal(output, cols, rows)).map((line) => stripAnsi(line));
 
 			// Footer/hint/input frame should occupy the bottom chrome band in this order:
-			//   row N-7: top of input frame
-			//   row N-6: input row
-			//   row N-5: bottom of input frame
+			//   row N-8: top of input frame
+			//   row N-7: input row
+			//   row N-6: bottom of input frame
+			//   row N-5: breathing row
 			//   row N-4: hint row
 			//   row N-3: breathing row
 			//   row N-2: footer (blank in splash)
 			//   row N-1: terminal-bottom safe row
-			expect(lines[rows - 7]?.includes("DIVINE INVOCATION")).toBe(true);
-			expect(lines[rows - 5]?.includes("└")).toBe(true);
+			//
+			// Pi 0.74 added the extra breathing row between input frame and hint;
+			// previous layout had `└` at N-5 and DIVINE INVOCATION at N-7.
+			expect(lines[rows - 8]?.includes("DIVINE INVOCATION")).toBe(true);
+			expect(lines[rows - 6]?.includes("└")).toBe(true);
 			expect(lines[rows - 4]?.includes("AWAITING PROMPT")).toBe(true);
 
 			const footerRow = lines[rows - 2];
@@ -77,7 +81,7 @@ describe("owned-shell POC (issue #195 / #161 Slice A)", () => {
 			// mid-screen rows show the SUMOCODE pixel-letter art rather than
 			// being blank. The asserts below pin the splash signature without
 			// allowing the Pi-built-in footer ("READY", "sumocode (...)") to leak.
-			const chatRegion = lines.slice(0, rows - 5).join("\n");
+			const chatRegion = lines.slice(0, rows - 6).join("\n");
 			expect(chatRegion).toMatch(/█████ █   █ █   █ █████/);
 			expect(chatRegion).not.toMatch(/READY/);
 			expect(chatRegion).not.toMatch(/MEDITATING/);

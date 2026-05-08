@@ -57,8 +57,17 @@ last several weeks; the announce release is built on top of this commit.
   diagnostics fields.
 
 ### Changed
-- **Pi 0.70.2 → 0.73.0** (#222). Patch surface trimmed to 36 lines for the
-  SumoTUI seam (`patches/@mariozechner__pi-coding-agent@0.73.0.patch`).
+- **Pi 0.70.2 → 0.74.0** (#222). Patch surface trimmed to 36 lines for the
+  SumoTUI seam (`patches/@earendil-works__pi-coding-agent@0.74.0.patch`).
+- **Pi packages migrated to `@earendil-works/*` namespace.** Upstream
+  rebranding announced May 7, 2026: all `@mariozechner/pi-*` packages on
+  npm are deprecated. SumoCode tracks `@earendil-works/pi-coding-agent`,
+  `pi-tui`, and `pi-ai` at `0.74.0`. The patch file moved from
+  `patches/@mariozechner__pi-coding-agent@0.73.0.patch` to
+  `patches/@earendil-works__pi-coding-agent@0.74.0.patch` (same logical
+  edits, line offsets shifted from 545/590 to 539/584).
+- **`@mariozechner/jiti` dropped** in favour of upstream `jiti@^2.7.0`,
+  matching Pi 0.74's peer-dep list.
 - **Anthropic extra-usage warning** silenced via Pi 0.73's new
   `warnings.anthropicExtraUsage` setting in private config — closes #20's
   upstream limitation tracker.
@@ -167,7 +176,7 @@ basic slash commands. Established the public/private split between this repo
 and `sumocode-config`.
 
 ### Added
-- Pi extension scaffold targeting `@mariozechner/pi-coding-agent`.
+- Pi extension scaffold targeting `@earendil-works/pi-coding-agent`.
 - `/sumo:persona` slash command.
 - `SumoCode loaded · v0.1.0` startup notification.
 - MIT license; public repo + private `sumocode-config` companion.

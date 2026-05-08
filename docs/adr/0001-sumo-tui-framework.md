@@ -10,7 +10,7 @@
 
 ## Context
 
-SumoCode is a Pi extension that wraps `@mariozechner/pi-coding-agent` with a custom UI. After ten cathedral elements shipped against Pi's render model, we hit a structural ceiling. The pi-tui rendering library is a vertical line-concatenation `Container` (no flex layout, no in-app scroll, no sticky-bottom, no mouse routing). Workarounds keep accumulating:
+SumoCode is a Pi extension that wraps `@earendil-works/pi-coding-agent` with a custom UI. After ten cathedral elements shipped against Pi's render model, we hit a structural ceiling. The pi-tui rendering library is a vertical line-concatenation `Container` (no flex layout, no in-app scroll, no sticky-bottom, no mouse routing). Workarounds keep accumulating:
 
 - Manual padding math for splash centering (`CHROME_RESERVED_ROWS = 16`) that fails at unknown terminal heights.
 - Footer floats wherever Pi's linear renderer puts it instead of pinning to the last row.
@@ -186,4 +186,5 @@ Total: ~38 working days across ~8–10 calendar weeks.
 - 2026-04-27 — Drafted, accepted by @dhruvkelawala. Phase 0 issues filed. Phase 1 sprint begins.
 - 2026-04-27 — Phase 4b landed the Pi `0.70.2` fork activation path. `SUMO_TUI=1` now switches Pi's interactive constructor to SumoCode's `SumoInteractiveMode`; local worktrees use `SUMO_TUI_MODULE=file://.../sumo-interactive-mode.js`, and pnpm applies the equivalent published-package patch because GitHub subdirectory installs omit Pi's untracked `dist/` output.
 - 2026-05-05 — Pi dependency and constructor patch upgraded to `0.73.0`; the retained-runtime activation seam stayed identical apart from line offset drift.
+- 2026-05-08 — Pi packages migrated to the `@earendil-works/*` namespace; SumoCode tracks `@earendil-works/pi-coding-agent@0.74.0`. Patch surface re-applied identically (line offsets shifted from 545/590 to 539/584). The local `@mariozechner/jiti` fork was dropped in favour of upstream `jiti@^2.7.0` per Pi 0.74's peer dep list. Old patch file `patches/@mariozechner__pi-coding-agent@0.73.0.patch` deleted; new file `patches/@earendil-works__pi-coding-agent@0.74.0.patch` carries the same logical edits.
 - (revisit dates / re-evaluations to be appended below)

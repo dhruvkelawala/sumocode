@@ -1,6 +1,6 @@
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
-import type { Component, OverlayOptions } from "@mariozechner/pi-tui";
-import { Key, matchesKey, truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { Component, OverlayOptions } from "@earendil-works/pi-tui";
+import { Key, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { ThinkingLevel } from "./footer.js";
 import { showDivineQuery } from "./divine-query.js";
 import { activeThemeColors, getActiveTheme } from "./themes/index.js";

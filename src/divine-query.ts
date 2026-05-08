@@ -32,9 +32,9 @@
  * See `docs/cathedral/SCRIPTORIUM_CHROME.md` for the shared modal contract.
  */
 
-import type { Component, OverlayOptions } from "@mariozechner/pi-tui";
-import { matchesKey, wrapTextWithAnsi } from "@mariozechner/pi-tui";
-import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { Component, OverlayOptions } from "@earendil-works/pi-tui";
+import { matchesKey, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { activeThemeColors } from "./themes/index.js";
 import {
 	center,

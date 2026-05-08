@@ -53,7 +53,7 @@ async function renderTopBarDefault(width) {
 async function renderFooterReady(width) {
 	const mod = await jiti.import(`${repoRoot}/src/footer.ts`);
 	return mod.renderFooterBlock({
-		cwd: "/Users/sumo-deus/sumo-deus",
+		cwd: "/Users/dev/projects/sumocode",
 		branch: "main",
 		inputTokens: 42000,
 		outputTokens: 0,
@@ -69,7 +69,7 @@ async function renderFooterReady(width) {
 async function renderSidebarEditorial(width) {
 	const mod = await jiti.import(`${repoRoot}/src/sidebar.ts`);
 	return mod.renderSidebar({
-		projectName: "sumo-deus",
+		projectName: "sumocode",
 		branch: "main",
 		inputTokens: 42000,
 		outputTokens: 0,

@@ -45,7 +45,7 @@ function buildSidebarRows(SIDEBAR_COLS) {
 	rows.push(cell(`  <span class="fg-divider">${rep("\u2501", 26)}</span>`));
 	rows.push(blank());
 
-	rows.push(cell(`  <span class="fg-fg">sumo-deus</span>`));
+	rows.push(cell(`  <span class="fg-fg">sumocode</span>`));
 	rows.push(cell(`  <span class="fg-dim">on main</span>`));
 	rows.push(blank());
 
@@ -371,7 +371,7 @@ function buildHintRow(cols, sidebarVisible) {
 	}
 
 	// Sidebar hidden: project + branch on the left
-	const leftHTML = `<span class="fg-fg">sumo-deus</span> <span class="fg-dim">(main)</span>`;
+	const leftHTML = `<span class="fg-fg">sumocode</span> <span class="fg-dim">(main)</span>`;
 	const leftLen = visibleLen(leftHTML);
 	const middle = cols - PAD * 2 - leftLen - rightLen;
 	return rep(" ", PAD) + leftHTML + rep(" ", Math.max(1, middle)) + rightHTML + rep(" ", PAD);

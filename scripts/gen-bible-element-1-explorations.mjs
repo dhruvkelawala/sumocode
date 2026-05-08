@@ -31,7 +31,7 @@ const trackOut = (s) => s.split("").join("\u202f"); // narrow no-break space
 
 // ─── data ───────────────────────────────────────────────────────────────
 const standardCtx = {
-	project: "sumo-deus",
+	project: "sumocode",
 	branch: "main",
 	ctxTokens: "42k",
 	ctxWindow: "200k",

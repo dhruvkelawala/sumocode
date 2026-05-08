@@ -24,7 +24,7 @@ function withoutAnsi(value: string): string {
 
 function snapshot(overrides: Partial<FooterSnapshot> = {}): FooterSnapshot {
 	return {
-		cwd: join(process.env.HOME ?? "/Users/sumo-deus", "argent-x"),
+		cwd: join(process.env.HOME ?? "/Users/dev", "argent-x"),
 		branch: "main",
 		inputTokens: 12_000,
 		outputTokens: 8_000,
@@ -151,7 +151,7 @@ describe("formatFooterLine — cathedral coloring", () => {
 
 describe("formatCwd", () => {
 	it("replaces $HOME with ~", () => {
-		const home = process.env.HOME ?? "/Users/sumo-deus";
+		const home = process.env.HOME ?? "/Users/dev";
 		expect(formatCwd(`${home}/argent-x`)).toBe("~/argent-x");
 	});
 
@@ -161,7 +161,7 @@ describe("formatCwd", () => {
 	});
 
 	it("keeps a single ~ for HOME itself", () => {
-		const home = process.env.HOME ?? "/Users/sumo-deus";
+		const home = process.env.HOME ?? "/Users/dev";
 		expect(formatCwd(home)).toBe("~");
 	});
 });

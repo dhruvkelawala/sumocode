@@ -110,7 +110,7 @@ function htmlPage({ title, label, cols, rows, footerSpec, withVersion = null }) 
 const standardSpec = {
 	model: "claude-opus-4-7",
 	thinking: "xhigh",
-	project: "sumo-deus",
+	project: "sumocode",
 	branch: "main",
 	ctxTokens: "42k",
 	ctxWindow: "200k",

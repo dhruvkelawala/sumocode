@@ -248,10 +248,10 @@ async function renderFixtureScene(scenario, fixture) {
 	const inputRows = inputFrame.renderInputFrame("", cols, { promptColor: "accent" });
 	// Portrait hint already includes its own breathing blank row.
 	const hintRow = portrait
-		? ` ${inputFrame.renderInputHints(cols - 2, { leftHint: "sumo-deus (main)", leftHintStyle: "project-branch" })} `
+		? ` ${inputFrame.renderInputHints(cols - 2, { leftHint: "sumocode (main)", leftHintStyle: "project-branch" })} `
 		: inputFrame.renderInputHints(cols);
 	const footerRows = footer.renderFooterBlock({
-		cwd: "/Users/sumo-deus/sumo-deus",
+		cwd: "/Users/dev/projects/sumocode",
 		branch: "main",
 		inputTokens: 42000,
 		outputTokens: 0,
@@ -282,7 +282,7 @@ async function renderFixtureScene(scenario, fixture) {
 	chatRoot.dispose();
 
 	const sidebarLines = sidebarVisible ? sidebar.renderSidebar({
-		projectName: "sumo-deus",
+		projectName: "sumocode",
 		branch: "main",
 		inputTokens: 42000,
 		outputTokens: 0,

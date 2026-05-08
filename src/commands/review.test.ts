@@ -5,7 +5,7 @@ describe("/sumo:review", () => {
 	describe("resolveReviewModel", () => {
 		it("uses deepseek v4 pro by default", () => {
 			expect(resolveReviewModel({})).toBe(DEFAULT_REVIEW_MODEL);
-			expect(DEFAULT_REVIEW_MODEL).toBe("deepseek/deepseek-v4-pro");
+			expect(DEFAULT_REVIEW_MODEL).toBe("openai-codex/gpt-5.3-codex");
 		});
 
 		it("allows model override via SUMOCODE_REVIEW_MODEL", () => {
@@ -156,7 +156,7 @@ describe("/sumo:review", () => {
 
 			expect(registerCommand).toHaveBeenCalledWith("sumo:review", expect.objectContaining({ description: expect.any(String) }));
 			expect(sendUserMessage).toHaveBeenCalledWith(expect.stringContaining("git diff src/foo.ts"), { deliverAs: "followUp" });
-			expect(notify).toHaveBeenCalledWith(expect.stringContaining("deepseek/deepseek-v4-pro"), "info");
+			expect(notify).toHaveBeenCalledWith(expect.stringContaining("openai-codex/gpt-5.3-codex"), "info");
 		});
 
 		it("includes scope label in notify for PR args", async () => {

@@ -1,6 +1,6 @@
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 
-export const DEFAULT_REVIEW_MODEL = "deepseek/deepseek-v4-pro";
+export const DEFAULT_REVIEW_MODEL = "openai-codex/gpt-5.3-codex";
 
 /** Short aliases → full provider/model ids. */
 export const MODEL_ALIASES: Record<string, string> = {

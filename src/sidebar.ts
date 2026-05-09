@@ -1,6 +1,8 @@
-import { basename } from "node:path";
+import { homedir } from "node:os";
+import { basename, join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
+import { getCachedMcpRoster, setMcpDiagnosticHandler } from "./mcp-config-reader.js";
 import {
 	getGitBranch as getCachedGitBranch,
 	getSessionUsage as getCachedSessionUsage,
@@ -34,13 +36,31 @@ export {
 export const SIDEBAR_MEMORY_DEBOUNCE_MS = 200;
 /** Retry cadence while Remnic is unavailable. */
 export const SIDEBAR_MEMORY_RETRY_MS = 5_000;
-/** Static placeholder until Pi exposes MCP server health. */
+/**
+ * Deterministic MCP roster used by the visual-v2 fixture lane. The
+ * fixture lane needs a stable, reproducible roster so cell-diff golden
+ * comparisons stay deterministic; this constant is intentionally NOT
+ * what the runtime sidebar shows. Runtime callers go through
+ * `mcp-config-reader.ts` instead, which reads `pi-mcp-adapter`'s real
+ * config files.
+ */
 export const PLACEHOLDER_MCP: readonly McpServerSnapshot[] = [
 	{ name: "github", status: "idle" },
 	{ name: "stitch", status: "ok" },
 	{ name: "context7", status: "idle" },
 	{ name: "chrome-dev", status: "idle" },
 ];
+
+function resolvePiAgentDir(): string {
+	return process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent");
+}
+
+// Wire pi-mcp-adapter `imports` diagnostics through the existing diagnostics
+// pipeline. Module-level so the handler is set exactly once when sidebar.ts
+// loads, before any sidebar snapshot triggers a config read.
+setMcpDiagnosticHandler((event) => {
+	logDiagnostic(event.type, { path: event.path, importsCount: event.importsCount });
+});
 
 export { SIDEBAR_SUB_TABS };
 export type { McpServerSnapshot, SidebarSessionSnapshot, SidebarSubTab };
@@ -183,7 +203,7 @@ function snapshotFromContext(
 		contextWindow,
 		cumulativeTokens: input + output,
 		costUsd: cost,
-		mcpServers: PLACEHOLDER_MCP,
+		mcpServers: getCachedMcpRoster({ cwd: ctx.cwd, piAgentDir: resolvePiAgentDir() }),
 		memory: memorySnapshot.memory,
 		memoryTotal: memorySnapshot.memory.length,
 		memoryUnavailable: memorySnapshot.memoryUnavailable,

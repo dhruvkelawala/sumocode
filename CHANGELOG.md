@@ -55,6 +55,22 @@ last several weeks; the announce release is built on top of this commit.
 - **Visual CI flake remediation** (#186, PR #236) — empty captures retry,
   `waitForStableOutput`, `awaitChildExit`, `clampPositiveInt(maxAttempts)`,
   diagnostics fields.
+- **Real MCP server roster in sidebar** (PR #250) — `src/mcp-config-reader.ts`
+  reads `pi-mcp-adapter`'s on-disk config files in documented precedence order
+  (`~/.config/mcp/mcp.json` → `<piAgentDir>/mcp.json` → `<cwd>/.mcp.json` →
+  `<cwd>/.pi/mcp.json`) and shows the configured roster instead of the
+  hardcoded 4-server placeholder. Each server appears once with status `idle`
+  — honest given Pi 0.74's `ExtensionAPI` exposes no runtime MCP connection
+  state and `pi-mcp-adapter` defaults to lazy lifecycle. Cache keyed by
+  `(cwd, piAgentDir)` so session switches inside the same process get a
+  fresh read. `PLACEHOLDER_MCP` is retained for the visual-fixture lane only.
+  Known gap: `pi-mcp-adapter`'s `imports: ["cursor", "claude-code", ...]`
+  field is not resolved here — each host has its own config-path layout per
+  platform and reproducing that is several hundred lines of host-aware code.
+  When `imports` is present the reader emits an `mcp_imports_unresolved`
+  diagnostic to `SUMO_TUI_DIAG_FILE`. Workaround: run `pi-mcp-adapter init`
+  which expands imports into `mcpServers` in-place; once expanded, the
+  reader picks them up.
 
 ### Changed
 - **Pi 0.70.2 → 0.74.0** (#222). Patch surface trimmed to 36 lines for the

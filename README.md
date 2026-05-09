@@ -2,125 +2,140 @@
 
 # SumoCode
 
-**a scriptorium for the terminal**
+A Pi extension that ships its own retained terminal renderer (SumoTUI), three theme bundles, and a persistent memory surface. Daily-driven by the maintainer for two months.
 
-a Pi extension i built so my terminal AI feels personal across machines.
-
-[![mit license](https://img.shields.io/badge/license-MIT-2D211A?style=flat-square)](./LICENSE)
-[![version](https://img.shields.io/badge/v0.3.0-B85A22?style=flat-square)](./CHANGELOG.md)
-[![pi 0.74](https://img.shields.io/badge/pi-0.74.0-4A6B3A?style=flat-square)](https://github.com/earendil-works/pi)
-[![tests](https://img.shields.io/badge/tests-821%20passing-4A6B3A?style=flat-square)](./test)
+[![MIT License](https://img.shields.io/badge/license-MIT-2D211A?style=flat-square)](./LICENSE)
+[![Version](https://img.shields.io/badge/v0.3.0-B85A22?style=flat-square)](./CHANGELOG.md)
+[![Pi 0.74](https://img.shields.io/badge/pi-0.74.0-4A6B3A?style=flat-square)](https://github.com/earendil-works/pi)
+[![Tests](https://img.shields.io/badge/tests-807%20passing-4A6B3A?style=flat-square)](./test)
 
 <br>
 
-<img src="./docs/marketing/02-cathedral-active.png" alt="SumoCode running in Cathedral theme — active scroll/scribe delegation with sidebar visible" width="900">
+<img src="./docs/marketing/01-cathedral-splash.png" alt="SumoCode splash — pixel-art SUMO cat, wordmark, and Divine Invocation input frame on the Cathedral palette" width="900">
 
 </div>
 
 ---
 
-## what you're looking at
+## Overview
 
-SumoCode is a Pi extension. it owns the experience layer — splash, top chrome, footer, sidebar, modals, themes, persistent memory across sessions. [Pi](https://github.com/earendil-works/pi) keeps the agent loop, the LLM, sessions, MCP, skills.
+SumoCode is a [Pi](https://github.com/earendil-works/pi) extension. Pi provides the agent loop, LLM abstraction, sessions, MCP, and skills. SumoCode owns the experience layer: splash, top chrome, footer, sidebar, modals, themes, in-app scrollback, and mouse routing.
 
-three themes ship. cathedral by default. amber CRT when i miss DOS. obsidian temple at night. cycle with `Ctrl+Shift+T`. choice persists across machines.
+The renderer is **SumoTUI** — a Node-native retained renderer in [`src/sumo-tui/`](./src/sumo-tui/) — built around a Yoga flex layout tree, a cell compositor with frame diff, a modal layer, and a headless test backend. SumoTUI replaces Pi's line-concatenation `Container` for surfaces that require flex layout, in-app scroll, modal overlays, mouse routing, and signal-clean cleanup.
 
-it's been my daily-drive shell for the last two months.
+Three themes ship: Cathedral (default), Amber CRT, and Obsidian Temple. Cycle with `Ctrl+Shift+T`; choice persists across machines.
 
-## theme tour
+## Theme tour
 
 <table>
 <tr>
 <td align="center" width="33%">
 <img src="./docs/marketing/02-cathedral-active.png" alt="Cathedral theme">
-<br><strong>cathedral</strong>
-<br><sub>warm walnut chassis, burnt-orange accent, fleur-de-lis bullets, rounded chrome. default.</sub>
+<br><strong>Cathedral</strong>
+<br><sub>Warm walnut chassis, burnt-orange accent, fleur-de-lis bullets, rounded chrome.</sub>
 </td>
 <td align="center" width="33%">
 <img src="./docs/marketing/04-amber-crt.png" alt="Amber CRT theme">
-<br><strong>amber CRT</strong>
-<br><sub>warm dark brown chassis, P3 amber phosphor, double-line ASCII chrome, P1 green / cyan / red phosphor states.</sub>
+<br><strong>Amber CRT</strong>
+<br><sub>Warm dark brown chassis, P3 amber phosphor, double-line ASCII chrome, P1 phosphor states.</sub>
 </td>
 <td align="center" width="33%">
 <img src="./docs/marketing/05-obsidian-temple.png" alt="Obsidian Temple theme">
-<br><strong>obsidian temple</strong>
-<br><sub>deep obsidian background, electrum gold + neon cyan + magenta, Egyptian section glyphs.</sub>
+<br><strong>Obsidian Temple</strong>
+<br><sub>Deep obsidian background, electrum gold accent, neon cyan and magenta, Egyptian section glyphs.</sub>
 </td>
 </tr>
 </table>
 
-## what makes it personal
+## Features
 
-<table>
-<tr>
-<td width="50%" valign="top">
+| Feature | Description |
+|---|---|
+| **Memory Scriptorium** | Persistent agent memory across six panels (identity, preferences, workflow, projects, system, general). Inline forget (`d`), search (`/`), retreat (`⎋`). Read-back on every new session. Open with `/sumo:memory`. |
+| **Five preattentive states** | `idle`, `thinking`, `tool`, `approval`, `learning`. Each maps to a distinct theme-defined colour, surfaced in the footer dot and working indicator. |
+| **Owned-shell mode** | Full altscreen ownership: retained renderer, in-app scroll, modal layer, mouse routing, OSC 52 cell-precise selection. Pi reduced to LLM, tools, sessions through adapters in [`src/sumo-tui/pi-compat/`](./src/sumo-tui/pi-compat/). |
+| **`/sumo:reload`** | Hot-reload via launcher loop and exit code 100. Strips `--resume`, replaces with `--continue`. Resumes the in-flight session. |
+| **Cathedral approval modal** | Pattern-gated approval for dangerous bash commands. Default patterns cover `rm -rf`, `sudo`, `git push --force`, mutating `gh` calls. Configurable via `ApprovalGateConfig`. Modal height capped at 12 visible command rows. |
+| **Sidebar** | Three sections at width ≥ 120: context (token meter, session cost), MCP (server roster), memory (persisted bullets). Hidden in portrait orientation per [`SUMO_TUI_PORTRAIT_SIDEBAR_POLICY.md`](./docs/SUMO_TUI_PORTRAIT_SIDEBAR_POLICY.md). |
+| **Theme system** | Three first-party themes plus a chrome contract: each theme defines its own glyph set (`frame`, `sectionGlyphs`, `bullet`, `ruleChar`, `tabActive` / `tabInactive`) and an 8-frame working indicator. |
+| **Diagnostics flight recorder** | `SUMO_TUI_DIAG_FILE=/path/file.jsonl` enables a 19-event-type structured trace covering runtime lifecycle, terminal state, upstream Pi events, owned-shell transitions, and module-load provenance. |
 
-### ❈  memory scriptorium
+## In action
 
-facts the agent learned about you, organised like a manuscript. six panels (identity, preferences, workflow, projects, system, general). `d` to forget a line, `/` to search, `⎋` to retreat. inline revise is a planned addition; for now use `/sumo:memory forget <id>` + `/sumo:memory add <text>`. the agent reads from the manuscript on every new session.
+<div align="center">
 
-<sub>open with `/sumo:memory`</sub>
+<img src="./docs/marketing/02-cathedral-active.png" alt="SumoCode mid-session — user asks SUMO to refactor an auth flow; SUMO reads, edits, then runs the test suite directly via [read], [edit], [bash] tool calls" width="900">
 
-</td>
-<td width="50%" valign="top">
+</div>
 
-### ●  five preattentive states
+A real working session, mid-flow. The user asks SUMO to refactor `src/auth/session.ts`. SUMO executes a `[read]` to understand the current pattern, an `[edit]` to apply the change, and a `[bash]` invocation to run the test suite — each tool call inline, framed in its parent SUMO message. The sidebar tracks the live context window (`42k / 200k`), session cost (`$0.42 · 3.4M cumul`), and MCP server roster on the right. Footer state dot reads `READY` (idle) on the active theme's idle phosphor. The same cell layout, glyph chrome, and state colours adapt to the active theme.
 
-idle / thinking / tool / approval / learning. each gets a distinct colour drawn from the active theme. you can read the state out of the corner of your eye while your hands are typing.
+## Architecture
 
-<sub>set in `src/themes/*.ts`, surfaced in the footer dot + working indicator</sub>
+### SumoTUI
 
-</td>
-</tr>
-<tr>
-<td width="50%" valign="top">
+Pi's built-in TUI is a vertical line-concatenation `Container`. It does not provide flex layout, in-app scroll, mouse routing, or modal overlays. Workarounds — manual padding math for splash centering, footers floating wherever the linear renderer left them, mouse-wheel translating to arrow keys, kitty keyboard escapes leaking on signal exit — accumulated until they stopped scaling.
 
-### ▣  owned-shell mode
+[**SumoTUI**](./src/sumo-tui/) replaces that path with a Node-native retained renderer that:
 
-every cell that paints is mine. retained renderer, in-app scroll, modal layer, mouse routing, OSC 52 selection. Pi is reduced to LLM/tools/sessions through clean adapters; the seam lives in one directory (`src/sumo-tui/pi-compat/`).
+- Owns the altscreen lifecycle, mouse SGR routing, cursor state, and signal cleanup.
+- Runs a Yoga flex layout tree (top chrome, chat row with sidebar, blank, input frame, hint, footer, bottom safe row).
+- Composites cells through a frame diff that only repaints changed regions.
+- Provides a modal layer that composites over the chat without losing focus.
+- Wraps Pi's `CustomEditor` as a `PiEditorLeaf` so autocomplete, IME, kill-ring, undo-stack, and history continue to work.
 
-<sub>see [`docs/SUMO_TUI_PI_PATCH_STRATEGY.md`](./docs/SUMO_TUI_PI_PATCH_STRATEGY.md)</sub>
+Reasoning is documented in [ADR 0001](./docs/adr/0001-sumo-tui-framework.md).
 
-</td>
-<td width="50%" valign="top">
+### The seam
 
-### ↻  /sumo:reload
+SumoTUI must initialise before Pi's `InteractiveMode` is constructed. Pi's public extension API does not expose that hook — it composes on top of the existing TUI rather than replacing it. SumoCode therefore carries a 36-line pnpm patch against `@earendil-works/pi-coding-agent`'s `dist/main.js` ([`patches/@earendil-works__pi-coding-agent@0.74.0.patch`](./patches/)):
 
-hard-reload the shell while keeping your terminal context. exits with code 100, the launcher loop respawns with `--continue`. iterating on the renderer no longer means losing the session.
+```js
+const useSumoTui = isTruthyEnvFlag(process.env.SUMO_TUI) || parsed.unknownFlags.has("sumo-tui");
+const interactiveMode = useSumoTui
+  ? await loadSumoInteractiveMode(runtime, interactiveOptions)
+  : new InteractiveMode(runtime, interactiveOptions);
+```
 
-<sub>also strips `--resume` and replaces with `--continue`</sub>
+`loadSumoInteractiveMode` dynamically imports `@dhruvkelawala/sumocode/sumo-interactive-mode` (or `$SUMO_TUI_MODULE` in dev). Without `SUMO_TUI=1` the patch is a no-op; plain Pi loads. Maintenance contract: [`docs/SUMO_TUI_PI_PATCH_STRATEGY.md`](./docs/SUMO_TUI_PI_PATCH_STRATEGY.md). The patch is removed when Pi exposes a public `interactiveMode` injection API.
 
-</td>
-</tr>
-<tr>
-<td width="50%" valign="top">
+### Kernel contracts
 
-### ✾  cathedral approval modal
+Six contracts came out of the SumoTUI consolidation epic. Each is small, owns one responsibility, and is enforced by tests.
 
-cathedral-styled gate for dangerous bash commands. patterns are configurable per session — `rm -rf`, `sudo`, `git push --force`, mutating gh CLI calls, plus your own. long commands get capped at 12 visible rows so the modal never overflows the terminal.
+| Contract | Responsibility | Code | Doc |
+|---|---|---|---|
+| **TerminalSessionOwner** | Altscreen lifecycle, mouse and cursor reporting, signal cleanup, stdin and raw-mode handling. Split: terminal output ownership in `terminal-controller.ts`; stdin and raw-mode in `lifecycle.ts`. | [`src/sumo-tui/runtime/terminal-controller.ts`](./src/sumo-tui/runtime/terminal-controller.ts) + [`lifecycle.ts`](./src/sumo-tui/runtime/lifecycle.ts) | (in ADR + audit) |
+| **InteractionRegistry** | Single registration point for keybindings, shortcuts, slash commands, with collision detection. Paired with a focus-aware key router. | [`src/interaction-registry.ts`](./src/interaction-registry.ts) + [`src/sumo-tui/input/key-router.ts`](./src/sumo-tui/input/key-router.ts) | (in ADR) |
+| **Cancellable WorkerRuntime** | Background jobs that respect `Ctrl+C` and do not leak across session switches. | [`src/sumo-tui/runtime/worker-runtime.ts`](./src/sumo-tui/runtime/worker-runtime.ts) | (in ADR) |
+| **Typed render primitives** | `Style`, `Span`, `Line` types for cell-correct rendering. Eliminates stale-style and cell-width bugs. | [`src/sumo-tui/render/primitives.ts`](./src/sumo-tui/render/primitives.ts) | [`SUMO_TUI_RENDER_PRIMITIVES.md`](./docs/SUMO_TUI_RENDER_PRIMITIVES.md) |
+| **Headless TestBackend** | Test harness for retained-renderer behaviour without parsing real PTY bytes. | [`src/sumo-tui/testing/test-backend.ts`](./src/sumo-tui/testing/test-backend.ts) | [`SUMO_TUI_TEST_BACKEND.md`](./docs/SUMO_TUI_TEST_BACKEND.md) |
+| **Structured TranscriptViewModel** | Typed `ChatBlock` taxonomy (markdown, code, tool, skill, question, delegation) replacing flattened message strings. | [`src/sumo-tui/transcript/view-model.ts`](./src/sumo-tui/transcript/view-model.ts) | [`SUMO_TUI_TRANSCRIPT_MODEL.md`](./docs/SUMO_TUI_TRANSCRIPT_MODEL.md) |
 
-<sub>configurable via `ApprovalGateConfig`</sub>
+The **scriptorium modal chrome** ([`docs/cathedral/SCRIPTORIUM_CHROME.md`](./docs/cathedral/SCRIPTORIUM_CHROME.md)) is the shared lifted-bg overlay used by Divine Query, Approval, and Memory Scriptorium. It is the reason the three modals look like the same thing.
 
-</td>
-<td width="50%" valign="top">
+### Visual parity contract
 
-### ▦  sidebar with intent
+Three rendering paths agree, cell for cell, against the same Bible mockups. [`docs/visual/parity/CONTRACT.md`](./docs/visual/parity/CONTRACT.md) defines the three lanes:
 
-three sections: context (token meter, session cost), MCP (server roster and current state), memory (persisted bullets the agent keeps). 30 columns wide; appears at terminal width 120+. portrait policy hides it deliberately. live MCP health surfacing is on the roadmap once Pi exposes it; today the section reflects the configured server list.
+| Lane | Input | Purpose |
+|---|---|---|
+| `component` | Deterministic fixture → ANSI | Isolated TUI component captures. |
+| `fixture` | `TranscriptViewModel` fixture → full-scene ANSI | Deterministic completed / tool / overlay states without live Pi. |
+| `runtime` | `bin/sumocode.sh` via `node-pty` | Real end-to-end runtime captures. |
 
-<sub>appears automatically at 120+ columns</sub>
+All three converge through `@xterm/headless` into a per-cell `{ char, fg, bg, bold, dim }` grid. Verification is **styled-cell diff** (text-level, deterministic) plus a **geometry audit** that classifies each row and bounds it against the spec. PNG diffs exist for human review packs but they are not the gate.
 
-</td>
-</tr>
-</table>
+```bash
+pnpm visual:ci
+cat docs/visual/out/parity/<scenario>/raw/styled-cell-diff.txt
+```
 
-## reading the source
+### Layout policy
 
-this is a personal Pi extension. it runs in my fork of Pi with a small private patch (`patches/@earendil-works__pi-coding-agent@0.74.0.patch`, 36 lines) that lets SumoCode own the root TUI. the package isn't designed to drop into your machine clean — but the source is yours to read, fork, and lift from. the patch is small and well-documented.
+Sidebar docks at terminal width ≥ 120. Below 120, the sidebar disappears and project / branch context moves into the hint row. Portrait — the canonical 60 × 100 viewport — has its own policy: no sidebar regardless of width. See [`SUMO_TUI_PORTRAIT_SIDEBAR_POLICY.md`](./docs/SUMO_TUI_PORTRAIT_SIDEBAR_POLICY.md).
 
-if you want to actually run it, [`DEV_LOOP.md`](./DEV_LOOP.md) walks the dev loop and [`SETUP.md`](./SETUP.md) is what i run on a new machine. you'll need the public companion config too: [`dhruvkelawala/sumocode-config`](https://github.com/dhruvkelawala/sumocode-config) is private and personal, so you'd be writing your own.
-
-## how it's built
+### The bigger picture
 
 ```
 ┌──────────────────────────────────────────────────────────┐
@@ -135,12 +150,16 @@ if you want to actually run it, [`DEV_LOOP.md`](./DEV_LOOP.md) walks the dev loo
                           ▼
 ┌──────────────────────────────────────────────────────────┐
 │  SumoCode  ·  this repo                                  │
-│   · retained terminal renderer (yoga flex layout)        │
-│   · cathedral / amber CRT / obsidian themes              │
-│   · memory scriptorium                                   │
-│   · approval modal · divine query · skill pills          │
-│   · cell-precise selection + OSC 52 auto-copy            │
-│   · 5 preattentive status states + working indicator     │
+│   ┌─ src/sumo-tui/  retained renderer kernel ─────────┐  │
+│   │  yoga flex layout · cell compositor · frame diff │  │
+│   │  modal layer · mouse routing · OSC 52 selection   │  │
+│   └─ headless TestBackend · typed render primitives ──┘  │
+│   ┌─ src/themes/    Cathedral / Amber CRT / Obsidian ─┐  │
+│   │  palette + chrome glyphs + working indicator      │  │
+│   └─ Ctrl+Shift+T to cycle, persisted via Pi ─────────┘  │
+│   ┌─ src/cathedral/, src/memory-editor.ts, etc. ──────┐  │
+│   │  Cathedral surfaces · Memory Scriptorium ·        │  │
+│   └─ approval modal · Divine Query · skill pills ─────┘  │
 └──────────────────────────────────────────────────────────┘
                           ▲
                           │ symlink into ~/.pi/agent/
@@ -151,21 +170,41 @@ if you want to actually run it, [`DEV_LOOP.md`](./DEV_LOOP.md) walks the dev loo
 └──────────────────────────────────────────────────────────┘
 ```
 
-the design history lives in [`docs/prd.md`](./docs/prd.md) (PRD), [`docs/adr/0001-sumo-tui-framework.md`](./docs/adr/0001-sumo-tui-framework.md) (the retained-renderer ADR), and [`docs/ui/CATHEDRAL_UX_SPEC_V2.md`](./docs/ui/CATHEDRAL_UX_SPEC_V2.md) (the visual canon).
+Design trail: [PRD](./docs/prd.md) · [ADR 0001](./docs/adr/0001-sumo-tui-framework.md) · [Pi patch strategy](./docs/SUMO_TUI_PI_PATCH_STRATEGY.md) · [render primitives contract](./docs/SUMO_TUI_RENDER_PRIMITIVES.md) · [transcript view-model](./docs/SUMO_TUI_TRANSCRIPT_MODEL.md) · [test backend](./docs/SUMO_TUI_TEST_BACKEND.md) · [scriptorium chrome](./docs/cathedral/SCRIPTORIUM_CHROME.md) · [visual parity contract](./docs/visual/parity/CONTRACT.md) · [V2 UX spec](./docs/ui/CATHEDRAL_UX_SPEC_V2.md) · [Pi tool architecture](./docs/PI_TOOL_ARCHITECTURE.md) · [portrait sidebar policy](./docs/SUMO_TUI_PORTRAIT_SIDEBAR_POLICY.md).
 
-## credits
+## Development
 
-* [Mario Zechner](https://github.com/badlogicgames) and the [@earendil-works](https://github.com/earendil-works) team for [Pi](https://github.com/earendil-works/pi). every cell SumoCode paints sits on top of Pi's agent loop, model registry, and extension API. the patch is 36 lines because Pi was already designed to be extended.
-* [OpenCode](https://opencode.ai/) for the visual language i love and openly mirror.
-* the AI agents that helped me write this — anthropic claude opus, openai codex, deepseek v4, kimi. several thousand commits' worth of pair programming.
-* built in london, on a mac mini in portrait orientation, in cmux.
+This is a personal Pi extension, not a clean drop-in. The patch is small and well-documented; the renderer is open for reading, forking, and lifting.
 
-## license
+| Document | Purpose |
+|---|---|
+| [`DEV_LOOP.md`](./DEV_LOOP.md) | Edit / test / release workflow. |
+| [`SETUP.md`](./SETUP.md) | What the maintainer runs on a new machine. |
+| [`CHANGELOG.md`](./CHANGELOG.md) | Keep-a-Changelog format, retroactive for v0.1.0 → v0.2.0 → v0.3.0. |
+| [`AGENTS.md`](./AGENTS.md) | Engineering conventions and AI-agent contract for this repo. |
+
+The companion config lives at [`dhruvkelawala/sumocode-config`](https://github.com/dhruvkelawala/sumocode-config) and is private. Bring your own.
+
+### Build and test
+
+```bash
+pnpm install                       # installs Pi peer deps + applies the patch
+pnpm exec tsc --noEmit             # typecheck (no emit; Pi loads TS via jiti)
+pnpm test                          # 807 unit tests
+pnpm test:integration              # 32 integration tests via node-pty
+pnpm visual:ci                     # V2 parity gate
+pnpm dead-code                     # knip non-blocking dead-code scan
+pnpm perf:startup                  # startup perf snapshot → docs/perf/startup.md
+```
+
+## Acknowledgements
+
+[Mario Zechner](https://github.com/badlogicgames) and the [@earendil-works](https://github.com/earendil-works) team built [Pi](https://github.com/earendil-works/pi). Every cell SumoCode paints sits on top of Pi's agent loop, model registry, and extension API. The patch is 36 lines because Pi was already designed to be extended.
+
+[OpenCode](https://opencode.ai/) provides the visual language SumoCode openly mirrors.
+
+The renderer was built with significant assistance from frontier coding agents: Anthropic Claude Opus, OpenAI Codex, DeepSeek v4, and Kimi.
+
+## License
 
 MIT — see [LICENSE](./LICENSE).
-
-<br>
-
-<div align="center">
-<sub>made by <a href="https://github.com/dhruvkelawala">@dhruvkelawala</a> · personal project, take whatever's useful</sub>
-</div>

@@ -9,7 +9,7 @@ a future release, see "Capturing live shots" below.
 | File | Theme | Surface | Source mockup |
 |---|---|---|---|
 | `01-cathedral-splash.png` | Cathedral | Splash + DIVINE INVOCATION | `docs/ui/bible/03-splash.html` |
-| `02-cathedral-active.png` | Cathedral | Active scroll/scribe delegation, sidebar visible | `docs/ui/bible/scene-active-scroll-scribe.html` |
+| `02-cathedral-active.png` | Cathedral | Active read/edit/bash flow, sidebar visible | `docs/ui/bible/scene-active.html` |
 | `03-memory-scriptorium.png` | Cathedral | Memory Scriptorium overlay over a live chat | `docs/ui/bible/scene-memory-scriptorium-overlay.html` |
 | `04-amber-crt.png` | Amber CRT | Active landscape with sidebar | `docs/ui/bible/scene-active-amber-crt.html` |
 | `05-obsidian-temple.png` | Obsidian Temple | Active landscape with sidebar | `docs/ui/bible/scene-active-obsidian.html` |
@@ -33,7 +33,7 @@ a new tokens CSS file plus a `scene-active-<theme>.html` and re-running
 pnpm render:bible           # regenerates docs/ui/bible/renders/*.png
 # Then refresh the marketing copies:
 cp docs/ui/bible/renders/03-splash.png                          docs/marketing/01-cathedral-splash.png
-cp docs/ui/bible/renders/scene-active-scroll-scribe.png         docs/marketing/02-cathedral-active.png
+cp docs/ui/bible/renders/scene-active.png                       docs/marketing/02-cathedral-active.png
 cp docs/ui/bible/renders/scene-memory-scriptorium-overlay.png   docs/marketing/03-memory-scriptorium.png
 cp docs/ui/bible/renders/scene-active-amber-crt.png             docs/marketing/04-amber-crt.png
 cp docs/ui/bible/renders/scene-active-obsidian.png              docs/marketing/05-obsidian-temple.png
@@ -66,9 +66,11 @@ ask for nothing." These five do the heavy lifting:
 
 1. **Splash** — establishes the visual language in one frame: SUMO cat,
    wordmark, Cathedral palette, the DIVINE INVOCATION input frame.
-2. **Active scroll/scribe** — proves the renderer can hold a real working
-   session: nested tool blocks, sidebar with live registry, footer cost
-   metering, structured chat frames.
+2. **Active read/edit/bash** — proves the renderer can hold a real working
+   session: framed user/SUMO chat blocks, inline tool calls (`[read]`,
+   `[edit]`, `[bash]`), sidebar with context + cost meter, footer with
+   the active state dot. The basic execution flow without delegation
+   wrapping.
 3. **Memory Scriptorium** — the most distinctive surface. Sells the
    "persistent memory across sessions" line in the announce thread.
 4. **Amber CRT** — proves the theme system isn't just a colour swap.

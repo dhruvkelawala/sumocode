@@ -9,6 +9,8 @@ import {
 	getCachedMcpRoster,
 	loadConfiguredMcpServers,
 	resolveMcpConfigCandidates,
+	setMcpDiagnosticHandler,
+	type McpDiagnosticHandler,
 } from "./mcp-config-reader.js";
 
 let tmpRoot: string;
@@ -21,6 +23,7 @@ beforeEach(() => {
 afterEach(() => {
 	rmSync(tmpRoot, { recursive: true, force: true });
 	clearCachedMcpRoster();
+	setMcpDiagnosticHandler(undefined);
 });
 
 function writeJson(path: string, value: unknown): void {
@@ -121,6 +124,50 @@ describe("loadConfiguredMcpServers", () => {
 		mkdirSync(cwd, { recursive: true });
 		writeJson(join(piAgentDir, "mcp.json"), { settings: { toolPrefix: "server" } });
 		expect(loadConfiguredMcpServers({ cwd, piAgentDir })).toEqual([]);
+	});
+
+	it("emits an mcp_imports_unresolved diagnostic when imports are present but stays non-fatal", () => {
+		// pi-mcp-adapter's `imports` field pulls server configs from host-specific files
+		// (cursor, claude-code, vscode, etc.). This reader doesn't resolve those, so when
+		// imports are present we emit a diagnostic so the gap is traceable in
+		// SUMO_TUI_DIAG_FILE traces. Workaround for users: run `pi-mcp-adapter init` to
+		// expand imports into mcpServers in-place.
+		const cwd = join(tmpRoot, "project");
+		const piAgentDir = join(tmpRoot, ".pi", "agent");
+		mkdirSync(cwd, { recursive: true });
+		writeJson(join(piAgentDir, "mcp.json"), {
+			imports: ["cursor", "claude-code"],
+			mcpServers: { github: {} },
+		});
+
+		const events: Parameters<McpDiagnosticHandler>[0][] = [];
+		setMcpDiagnosticHandler((event) => {
+			events.push(event);
+		});
+
+		const roster = loadConfiguredMcpServers({ cwd, piAgentDir });
+		// Explicit servers still load.
+		expect(roster.map((s) => s.name)).toEqual(["github"]);
+		expect(events).toHaveLength(1);
+		expect(events[0]).toMatchObject({
+			type: "mcp_imports_unresolved",
+			importsCount: 2,
+		});
+		expect(events[0]?.path).toContain("mcp.json");
+	});
+
+	it("empty imports array does NOT emit a diagnostic", () => {
+		const cwd = join(tmpRoot, "project");
+		const piAgentDir = join(tmpRoot, ".pi", "agent");
+		mkdirSync(cwd, { recursive: true });
+		writeJson(join(piAgentDir, "mcp.json"), { imports: [], mcpServers: { github: {} } });
+
+		const events: Parameters<McpDiagnosticHandler>[0][] = [];
+		setMcpDiagnosticHandler((event) => events.push(event));
+
+		const roster = loadConfiguredMcpServers({ cwd, piAgentDir });
+		expect(roster.map((s) => s.name)).toEqual(["github"]);
+		expect(events).toHaveLength(0);
 	});
 
 	it("non-object mcpServers (string, array) is skipped instead of producing bogus synthetic keys", () => {

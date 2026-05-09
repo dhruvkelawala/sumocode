@@ -2,7 +2,7 @@ import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
-import { getCachedMcpRoster } from "./mcp-config-reader.js";
+import { getCachedMcpRoster, setMcpDiagnosticHandler } from "./mcp-config-reader.js";
 import {
 	getGitBranch as getCachedGitBranch,
 	getSessionUsage as getCachedSessionUsage,
@@ -54,6 +54,13 @@ export const PLACEHOLDER_MCP: readonly McpServerSnapshot[] = [
 function resolvePiAgentDir(): string {
 	return process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent");
 }
+
+// Wire pi-mcp-adapter `imports` diagnostics through the existing diagnostics
+// pipeline. Module-level so the handler is set exactly once when sidebar.ts
+// loads, before any sidebar snapshot triggers a config read.
+setMcpDiagnosticHandler((event) => {
+	logDiagnostic(event.type, { path: event.path, importsCount: event.importsCount });
+});
 
 export { SIDEBAR_SUB_TABS };
 export type { McpServerSnapshot, SidebarSessionSnapshot, SidebarSubTab };

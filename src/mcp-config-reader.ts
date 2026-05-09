@@ -16,18 +16,32 @@ import type { McpServerSnapshot } from "./sumo-tui/cathedral/sidebar-rendering.j
  * Files are read in that order; later sources merge over earlier ones by
  * server name. The result is a roster of configured servers, each with a
  * status of `"idle"`. Pi 0.74's `ExtensionAPI` does not expose runtime MCP
- * connection state \u2014 see `docs/research/pi-fork-upgrade.md` and the comment
+ * connection state — see `docs/research/pi-fork-upgrade.md` and the comment
  * in `src/sidebar.ts` for the longer reasoning. `"idle"` is honest: it
  * reflects the configured-but-unconnected default for `pi-mcp-adapter`'s
  * lazy lifecycle.
  *
  * The reader tolerates missing files, malformed JSON, and missing
- * `mcpServers` keys silently \u2014 a broken or absent config should never
+ * `mcpServers` keys silently — a broken or absent config should never
  * crash sidebar rendering.
+ *
+ * Known limitation: pi-mcp-adapter's `imports` field (which pulls server
+ * configs from host-specific files like `cursor`, `claude-code`,
+ * `claude-desktop`, `vscode`, `windsurf`, `codex`) is NOT resolved here.
+ * Each host has its own config path layout per platform; replicating that
+ * resolution is several hundred lines of host-aware code that v0.3 doesn't
+ * carry. Users with `imports` in their config will see only the explicitly
+ * listed `mcpServers`. The workaround is to run `pi-mcp-adapter init`,
+ * which expands imports into `mcpServers` in `<piAgentDir>/mcp.json`
+ * directly — once expanded, this reader picks them up. When `imports` is
+ * present, `loadConfiguredMcpServers` emits a diagnostic event
+ * (`mcp_imports_unresolved`) so the gap is visible in `SUMO_TUI_DIAG_FILE`
+ * traces.
  */
 
 interface McpConfigFile {
 	readonly mcpServers?: Record<string, unknown>;
+	readonly imports?: unknown;
 }
 
 export interface LoadMcpServersOptions {
@@ -73,14 +87,47 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function hasNonEmptyImports(cfg: McpConfigFile): boolean {
+	return Array.isArray(cfg.imports) && cfg.imports.length > 0;
+}
+
+/**
+ * Hook for emitting a diagnostic when `imports` are present but unresolved.
+ * Imported by tests via `setMcpDiagnosticHandler`; production wiring goes
+ * through `src/sumo-tui/runtime/diagnostics.ts` via `setMcpDiagnosticHandler`
+ * called once at extension boot. Keeping the dependency injected here
+ * avoids a hard import cycle between this module and the runtime layer.
+ */
+export type McpDiagnosticHandler = (event: {
+	readonly type: "mcp_imports_unresolved";
+	readonly path: string;
+	readonly importsCount: number;
+}) => void;
+
+let mcpDiagnosticHandler: McpDiagnosticHandler | undefined;
+
+export function setMcpDiagnosticHandler(handler: McpDiagnosticHandler | undefined): void {
+	mcpDiagnosticHandler = handler;
+}
+
 export function loadConfiguredMcpServers(opts: LoadMcpServersOptions): readonly McpServerSnapshot[] {
 	const merged = new Map<string, McpServerSnapshot>();
 	for (const path of resolveMcpConfigCandidates(opts)) {
 		const cfg = readMcpConfig(path);
+		if (!cfg) continue;
+		if (hasNonEmptyImports(cfg)) {
+			// pi-mcp-adapter would expand these at runtime; this reader doesn't.
+			// Emit a diagnostic so the gap is traceable.
+			mcpDiagnosticHandler?.({
+				type: "mcp_imports_unresolved",
+				path,
+				importsCount: (cfg.imports as readonly unknown[]).length,
+			});
+		}
 		// Guard against `mcpServers` being any non-object shape (string, array, number).
 		// `Object.keys("oops")` produces synthetic numeric keys; `Object.keys(["github"])`
 		// produces `["0"]`. Either would corrupt the roster with bogus server names.
-		if (!cfg || !isPlainObject(cfg.mcpServers)) continue;
+		if (!isPlainObject(cfg.mcpServers)) continue;
 		for (const name of Object.keys(cfg.mcpServers)) {
 			merged.set(name, { name, status: "idle" });
 		}

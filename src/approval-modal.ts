@@ -288,8 +288,6 @@ export async function showApprovalModal(
 export interface ApprovalGateConfig {
 	/** Regex patterns for dangerous bash commands. */
 	readonly dangerousPatterns: readonly RegExp[];
-	/** Regex patterns for mutating gh CLI commands. */
-	readonly ghMutatingPatterns: readonly RegExp[];
 	/** Extra user-supplied patterns (appended to dangerous). */
 	readonly extraPatterns: readonly RegExp[];
 	/** Commands to always allow (bypass all patterns). */
@@ -307,17 +305,8 @@ const DEFAULT_DANGEROUS_PATTERNS: readonly RegExp[] = [
 	/\bgit\s+(reset\s+--hard|clean\s+-fd)/i,
 ];
 
-const DEFAULT_GH_MUTATING_PATTERNS: readonly RegExp[] = [
-	/\bgh\s+pr\s+(create|merge|close|edit|ready|review)\b/i,
-	/\bgh\s+issue\s+(create|close|edit|delete|transfer|pin)\b/i,
-	/\bgh\s+release\s+(create|delete|edit)\b/i,
-	/\bgh\s+repo\s+(create|delete|fork|rename|archive)\b/i,
-	/\bgh\s+api\b.*(-X\s+(POST|PUT|PATCH|DELETE)|--method\s+(POST|PUT|PATCH|DELETE))/i,
-];
-
 export const DEFAULT_APPROVAL_CONFIG: ApprovalGateConfig = {
 	dangerousPatterns: DEFAULT_DANGEROUS_PATTERNS,
-	ghMutatingPatterns: DEFAULT_GH_MUTATING_PATTERNS,
 	extraPatterns: [],
 	allowList: [],
 };
@@ -335,7 +324,6 @@ export function getApprovalConfig(): ApprovalGateConfig {
 export function isDangerousBashCommand(command: string): boolean {
 	if (activeConfig.allowList.some((p) => p.test(command))) return false;
 	return activeConfig.dangerousPatterns.some((p) => p.test(command))
-		|| activeConfig.ghMutatingPatterns.some((p) => p.test(command))
 		|| activeConfig.extraPatterns.some((p) => p.test(command));
 }
 
@@ -346,9 +334,6 @@ export function isDangerousBashCommand(command: string): boolean {
 const sessionAllowSet = new Set<string>();
 
 function describeCommand(command: string): { command: string; description: string[] } {
-	if (activeConfig.ghMutatingPatterns.some((p) => p.test(command))) {
-		return { command, description: ["This GitHub CLI command will modify remote state."] };
-	}
 	if (/\brm\b/.test(command)) {
 		return { command, description: ["This will permanently delete files."] };
 	}
@@ -375,11 +360,9 @@ function describeCommand(command: string): { command: string; description: strin
  *   - chmod/chown 777
  *   - git push --force (without --force-with-lease)
  *   - git reset --hard / git clean -fd
- *   - gh pr create/merge/close, gh issue create/close/delete, etc.
- *
  * NOT gated:
  *   - edit, write, read (regular agent iteration)
- *   - gh pr list, gh issue view (read-only gh commands)
+ *   - gh CLI commands (agents need free access to GitHub)
  *   - pnpm/npm/node (build commands)
  *   - git add/commit/push (normal git)
  */

@@ -198,20 +198,12 @@ describe("isDangerousBashCommand", () => {
 		expect(isDangerousBashCommand("git reset --hard HEAD~1")).toBe(true);
 	});
 
-	it("flags mutating gh CLI commands", () => {
-		expect(isDangerousBashCommand("gh pr create --title 'test'")).toBe(true);
-		expect(isDangerousBashCommand("gh pr merge 42")).toBe(true);
-		expect(isDangerousBashCommand("gh issue create --title 'bug'")).toBe(true);
-		expect(isDangerousBashCommand("gh issue close 99")).toBe(true);
-		expect(isDangerousBashCommand("gh repo delete foo")).toBe(true);
-		expect(isDangerousBashCommand("gh release create v1.0")).toBe(true);
-	});
-
-	it("does NOT flag read-only gh commands", () => {
+	it("does NOT flag gh CLI commands", () => {
+		expect(isDangerousBashCommand("gh pr create --title 'test'")).toBe(false);
+		expect(isDangerousBashCommand("gh pr merge 42")).toBe(false);
+		expect(isDangerousBashCommand("gh issue create --title 'bug'")).toBe(false);
 		expect(isDangerousBashCommand("gh pr list")).toBe(false);
 		expect(isDangerousBashCommand("gh issue view 42")).toBe(false);
-		expect(isDangerousBashCommand("gh pr view 99 --json state")).toBe(false);
-		expect(isDangerousBashCommand("gh run list")).toBe(false);
 		expect(isDangerousBashCommand("gh api /repos/foo/bar")).toBe(false);
 	});
 

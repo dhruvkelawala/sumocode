@@ -56,7 +56,7 @@ Type-safe and unit coverage green, but **not fully green** — one PTY test time
 
 - **ADR + research quality.** `docs/adr/0001-sumo-tui-framework.md` and `docs/research/sumo-tui-spike/**` capture the architectural lessons (altscreen requires app-owned scrollback) and the edge-case catalog. Keep this discipline; reference it when seam bugs reappear.
 - **Real primitives, real tests.** `TerminalController`, `LifecycleRuntime`, `FrameScheduler`, `SumoNode`+Yoga, `CellBuffer`+ANSI writer+diff, `ScrollBox`+`ChatPager`, `PiEditorLeaf` cursor remap, `RegionRegistry`, `SumoExtensionUIAdapter`. This is a real terminal app framework in progress.
-- **Perf is in budget.** Retained render p50 ~1.08 ms / p95 ~1.41 ms, streaming p95 ~9 ms, idle CPU ~0.30 %, idle RSS delta ~19 MiB vs bare Pi. (See `docs/research/sumo-tui-performance.md` and `sumo-tui-cpu-diagnosis.md`.)
+- **Perf is in budget.** Retained render p50 ~1.08 ms / p95 ~1.41 ms, streaming p95 ~9 ms, idle CPU ~0.30 %, idle RSS delta ~19 MiB vs bare Pi. (Original perf research notes were removed in the v0.3 release-prep cleanup; the current snapshot lives in `docs/perf/startup.md`.)
 - **Visual harness.** Terminal UIs regress in ways unit tests miss (stray bg cells, line overflow, missing cursor, stale ANSI). `pnpm visual:ci` already catches these classes. Worth keeping.
 
 ---
@@ -272,7 +272,7 @@ Decide whether `src/sumo-tui` becomes `@sumodeus/sumo-tui` · publish architectu
 ### Removed
 
 - **Ink reference.** v1 itself said "do not start there." Cut.
-- **Section 6 feature ideas (25 items).** Moved to `docs/IDEAS.md` so this audit stays a roadmap, not a buffet.
+- **Section 6 feature ideas (25 items).** Cut from this audit so it stays a roadmap, not a buffet. Survivors landed as filed issues / shipped features.
 
 ---
 
@@ -280,7 +280,7 @@ Decide whether `src/sumo-tui` becomes `@sumodeus/sumo-tui` · publish architectu
 
 ### OpenCode / OpenTUI
 
-Already covered in `docs/research/sumo-tui-spike/01-opencode.md` and `02-opentui.md`. Steal: app-owned `ScrollBox` with sticky-bottom, prompt outside scrollbox, snap-to-bottom after async load/submit, message-boundary navigation, responsive sidebar (dock wide / overlay narrow), theme tokens for every semantic surface, central renderer lifecycle, hit grid + focus manager + mouse dispatcher, selection-aware mouse handling. Don't copy: Bun/OpenTUI as direct runtime dep; fixed-FPS loop as default.
+Already covered in `docs/research/sumo-tui-spike/01-opencode.md` (the opentui spike notes were removed in the v0.3 release-prep cleanup once the renderer shipped). Steal: app-owned `ScrollBox` with sticky-bottom, prompt outside scrollbox, snap-to-bottom after async load/submit, message-boundary navigation, responsive sidebar (dock wide / overlay narrow), theme tokens for every semantic surface, central renderer lifecycle, hit grid + focus manager + mouse dispatcher, selection-aware mouse handling. Don't copy: Bun/OpenTUI as direct runtime dep; fixed-FPS loop as default.
 
 ### Bubble Tea
 

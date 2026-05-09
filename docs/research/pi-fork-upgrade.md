@@ -87,5 +87,5 @@ SumoCode currently pins Pi `0.74.0` plus Dhruv's tiny constructor patch. The pat
 
 - Never push to `badlogic/pi-mono`.
 - Do not open upstream PRs for this fork unless Dhruv explicitly asks.
-- If upstream moves the constructor site, update `docs/research/interactive-mode-map.md` with new line citations before patching.
+- If upstream moves the constructor site, update the patch hunks at `patches/@earendil-works__pi-coding-agent@<version>.patch` to match the new line offsets, and re-run the smoke matrix in `scripts/smoke-pi-versions.sh`.
 - If Pi adds a public renderer injection API, stop and evaluate ADR Q4:C before carrying the patch forward.

@@ -30,7 +30,7 @@ It does not replace Pi. It does not fork Pi. It loads as a regular Pi package an
 
 1. **Establish a consistent identity.** A persona layer (Zeus, in the Temple of SumoDeus) lives in `APPEND_SYSTEM.md` and is appended to every Pi session's system prompt. The agent introduces itself the same way, talks the same way, has the same memory of who I am — across every session, every day, every machine.
 
-2. **Show what's happening.** A custom footer replaces Pi's default with a concise status line: `~/repo (main) · ↑12k ↓8k · $0.42 · 42%/200k · ● <state> · <model>`. The `●` dot uses one of five preattentive colors (idle / thinking / tool-running / needs-approval / learning-write) — the kind of color-coding a production observability tool uses, brought to a coding agent. A right-sidebar overlay (auto-hidden on narrow terminals, repositionable to bottom on portrait monitors) shows live context: project name, token usage, cost, MCP server health, and top relevant memory facts.
+2. **Show what's happening.** A custom footer replaces Pi's default with a concise status line: `~/repo (main) · ↑12k ↓8k · $0.42 · 42%/200k · ● <state> · <model>`. The `●` dot uses one of five preattentive colors (idle / thinking / tool-running / needs-approval / learning-write) — the kind of color-coding a production observability tool uses, brought to a coding agent. A right-sidebar overlay (auto-hidden on narrow terminals, repositionable to bottom on portrait monitors) shows live context: project name, token usage, cost, MCP server roster, and top relevant memory facts. (MCP runtime health is a v0.4+ goal once Pi or `pi-mcp-adapter` exposes server state to extensions; v0.3 ships the configured roster only.)
 
 3. **Remember me across sessions.** A local Remnic daemon (built on QMD, which I already use for OpenClaw) auto-extracts durable facts from each session — preferences, project context, decisions made — and injects the relevant ones back into future sessions. Memory storage is plain markdown, git-syncable via the same private repo as my settings and extensions.
 
@@ -59,7 +59,7 @@ The end state: I open a terminal on either machine, run `pi`, and SumoCode greet
 
 2. As a developer, I want to glance at the footer and know whether the agent is idle / thinking / running a tool / waiting for my approval / writing to memory, in under 250ms, so that I can keep working without breaking flow.
 
-3. As a developer, I want the sidebar to show the current project, token usage, cost, connected MCP servers (with their health), and my top 5 most-relevant memory facts, so that I have permanent situational awareness without typing a query.
+3. As a developer, I want the sidebar to show the current project, token usage, cost, the MCP servers configured for this project (live health when the toolchain exposes it, otherwise the configured roster), and my top 5 most-relevant memory facts, so that I have permanent situational awareness without typing a query.
 
 4. As a developer working at 80-character terminal width, I want the sidebar to auto-hide so it doesn't crowd my chat area, but I want it to come back as soon as I widen my window past 120 cols.
 

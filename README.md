@@ -57,7 +57,7 @@ it's been my daily-drive shell for the last two months.
 
 ### ❈  memory scriptorium
 
-facts the agent learned about you, edited like a manuscript. six panels (identity, preferences, workflow, projects, system, general). `e` to revise a line, `d` to forget. groups by topic, search inline. the agent reads from it on every new session.
+facts the agent learned about you, organised like a manuscript. six panels (identity, preferences, workflow, projects, system, general). `d` to forget a line, `/` to search, `⎋` to retreat. inline revise is a planned addition; for now use `/sumo:memory forget <id>` + `/sumo:memory add <text>`. the agent reads from the manuscript on every new session.
 
 <sub>open with `/sumo:memory`</sub>
 
@@ -106,7 +106,7 @@ cathedral-styled gate for dangerous bash commands. patterns are configurable per
 
 ### ▦  sidebar with intent
 
-three sections: context (token meter, session cost), MCP (live status dots per server), memory (persisted bullets the agent keeps). 30 columns wide; appears at terminal width 120+. portrait policy hides it deliberately.
+three sections: context (token meter, session cost), MCP (server roster and current state), memory (persisted bullets the agent keeps). 30 columns wide; appears at terminal width 120+. portrait policy hides it deliberately. live MCP health surfacing is on the roadmap once Pi exposes it; today the section reflects the configured server list.
 
 <sub>appears automatically at 120+ columns</sub>
 

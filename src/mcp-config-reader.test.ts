@@ -122,6 +122,27 @@ describe("loadConfiguredMcpServers", () => {
 		writeJson(join(piAgentDir, "mcp.json"), { settings: { toolPrefix: "server" } });
 		expect(loadConfiguredMcpServers({ cwd, piAgentDir })).toEqual([]);
 	});
+
+	it("non-object mcpServers (string, array) is skipped instead of producing bogus synthetic keys", () => {
+		// `Object.keys("oops")` returns `["0","1","2","3"]` and `Object.keys(["github"])` returns
+		// `["0"]`. Without the type guard we'd register servers named "0", "1", "2", "3" —
+		// codex caught this on PR #250 as a real edge case for hand-edited config files.
+		const cwd = join(tmpRoot, "project");
+		const piAgentDir = join(tmpRoot, ".pi", "agent");
+		mkdirSync(cwd, { recursive: true });
+
+		writeJson(join(piAgentDir, "mcp.json"), { mcpServers: "oops" });
+		expect(loadConfiguredMcpServers({ cwd, piAgentDir })).toEqual([]);
+
+		writeJson(join(piAgentDir, "mcp.json"), { mcpServers: ["github", "railway"] });
+		expect(loadConfiguredMcpServers({ cwd, piAgentDir })).toEqual([]);
+
+		writeJson(join(piAgentDir, "mcp.json"), { mcpServers: 42 });
+		expect(loadConfiguredMcpServers({ cwd, piAgentDir })).toEqual([]);
+
+		writeJson(join(piAgentDir, "mcp.json"), { mcpServers: null });
+		expect(loadConfiguredMcpServers({ cwd, piAgentDir })).toEqual([]);
+	});
 });
 
 describe("getCachedMcpRoster", () => {

@@ -69,11 +69,18 @@ function readMcpConfig(path: string): McpConfigFile | undefined {
  * a higher-precedence file (project) overrides a lower-precedence one (user
  * global) for a given server name.
  */
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 export function loadConfiguredMcpServers(opts: LoadMcpServersOptions): readonly McpServerSnapshot[] {
 	const merged = new Map<string, McpServerSnapshot>();
 	for (const path of resolveMcpConfigCandidates(opts)) {
 		const cfg = readMcpConfig(path);
-		if (!cfg?.mcpServers) continue;
+		// Guard against `mcpServers` being any non-object shape (string, array, number).
+		// `Object.keys("oops")` produces synthetic numeric keys; `Object.keys(["github"])`
+		// produces `["0"]`. Either would corrupt the roster with bogus server names.
+		if (!cfg || !isPlainObject(cfg.mcpServers)) continue;
 		for (const name of Object.keys(cfg.mcpServers)) {
 			merged.set(name, { name, status: "idle" });
 		}

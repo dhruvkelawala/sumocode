@@ -28,7 +28,7 @@ Three competing paths were evaluated in `docs/research/sumo-tui-spike/`:
 | Use [opentui-island](https://github.com/benvinegar/opentui-island) as runtime dep | OpenTUI components inside pi-tui via Bun sidecar IPC | Days for prototype, weeks for full coverage | ~120ms cold start / island, ~100MB RSS, fixed-height surface limit, bus factor 1 |
 | Build sumo-tui (this ADR) | Node-native retained renderer with Yoga layout, owns altscreen + scroll + mouse, wraps Pi's editor as a leaf | ~38 working days, 8–10 calendar weeks | Maintenance ownership; correctness depends on Pi internals stability |
 
-Four codebases were studied in detail for patterns to adopt or avoid (`docs/research/sumo-tui-spike/01-opencode.md`, `02-opentui.md`, `03-opentui-island.md`, `04-pi-tui.md`).
+Four codebases were studied in detail for patterns to adopt or avoid — OpenCode (`docs/research/sumo-tui-spike/01-opencode.md`), OpenTUI (research notes deleted with the v0.3 release-prep cleanup), opentui-island (also deleted), and Pi's own TUI (`docs/research/sumo-tui-spike/04-pi-tui.md`). The OpenTUI / opentui-island spike notes were removed once the build-vs-adopt decision was settled and the resulting renderer shipped; the OpenCode and pi-tui notes survived because the renderer code still cites them.
 
 ## Decision
 
@@ -125,16 +125,16 @@ Four codebases were studied in detail for patterns to adopt or avoid (`docs/rese
 
 ## References
 
-### Research artifacts
+### Research artifacts (still in tree)
 
 - `docs/research/sumo-tui-spike/01-opencode.md` — anomalyco/opencode chat scrollbox + altscreen + mouse + sidebar reflow + textarea + autocomplete (~32 KB, file:line citations)
-- `docs/research/sumo-tui-spike/02-opentui.md` — `@opentui/core` renderer + Yoga + Bun FFI/Zig dependencies
-- `docs/research/sumo-tui-spike/03-opentui-island.md` — Surface bridge + Bun sidecar JSON-lines IPC + frame transport
 - `docs/research/sumo-tui-spike/04-pi-tui.md` — pi-tui internals + integration boundary
-- `docs/research/sumo-tui-spike/SUMO_TUI_RESEARCH_AND_SPEC.md` — synthesis + roadmap
 - `docs/research/sumo-tui-spike/EDGE_CASES.md` — 52 edge cases across 17 categories
 - `docs/research/sumo-tui-spike/IMPLEMENTATION_PLAN.md` — phase-by-phase breakdown with daily tasks, tests, gates
-- `docs/research/CANONICAL_REPOS.md` — reference repo URLs
+- `docs/research/OPENTUI_COMPARISON.md` — cited from `src/sumo-tui/render/diff.ts`; OpenTUI cell-diff comparison that informed the partial-row paint strategy
+
+The OpenTUI / opentui-island deep-dives, the synthesis spec, and the canonical-repos cheat sheet were removed in the v0.3 release-prep cleanup once the renderer had shipped and they were no longer cited from any current source.
+
 
 ### External sources
 
@@ -146,8 +146,7 @@ Four codebases were studied in detail for patterns to adopt or avoid (`docs/rese
 
 ### Cathedral product context
 
-- `docs/ui/CATHEDRAL_DECISIONS.md` — 10 cathedral elements locked in grill-me
-- `docs/ui/CATHEDRAL_UX_SPEC.md` v2 — mockup-anchored spec
+- `docs/ui/CATHEDRAL_UX_SPEC_V2.md` — current canonical UX spec for the V2 chrome (supersedes the V1 spec + decisions log that were both removed in the v0.3 release-prep cleanup)
 - `docs/ui/stitch/cathedral/v1-html/splash.html` — Stitch HTML mockup ground truth
 
 ### Visual

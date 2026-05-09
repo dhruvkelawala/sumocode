@@ -1,0 +1,52 @@
+{
+	"$schema": "https://unpkg.com/knip@5/schema.json",
+	"entry": [
+		"src/extension.ts",
+		"src/sumo-tui/pi-compat/sumo-interactive-mode.ts",
+		"sumo-interactive-mode.js",
+		"src/**/*.test.ts",
+		"test/integration/**/*.test.ts",
+		"scripts/render-bible.mjs",
+		"scripts/perf-startup.mjs",
+		"scripts/measure-resume-perf.mjs",
+		"scripts/visual.mjs",
+		"scripts/visual-real-runtime.mjs",
+		"scripts/export-bible-static.mjs",
+		"scripts/visual-v2/index.mjs",
+		"scripts/visual-v2/promote-golden.mjs",
+		"scripts/bench-diff-bytes.mjs",
+		"scripts/bible-server.mjs",
+		"scripts/diag-summary.mjs",
+		"scripts/gen-bible-*.mjs"
+	],
+	"project": [
+		"src/**/*.{ts,tsx}",
+		"test/**/*.{ts,tsx}",
+		"scripts/**/*.{mjs,js}"
+	],
+	"ignore": [
+		"docs/**",
+		"node_modules/**",
+		"dist/**",
+		"patches/**"
+	],
+	"ignoreBinaries": [
+		"chafa",
+		"vhs",
+		"tesseract"
+	],
+	"ignoreDependencies": [
+		"@xterm/headless",
+		"playwright",
+		"pixelmatch",
+		"pngjs",
+		"node-pty"
+	],
+	"vitest": {
+		"config": "vitest.config.ts",
+		"entry": [
+			"src/**/*.test.ts",
+			"test/integration/**/*.test.ts"
+		]
+	}
+}

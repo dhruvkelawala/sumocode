@@ -2,7 +2,7 @@
 
 > Generated 2026-04-25 from a 14-question grilling session.
 > Decision rationale lives in [PLAN.md](../PLAN.md).
-> Visual reference lives in [docs/ui/DESIGN.md](./ui/DESIGN.md), [docs/ui/claude-design/](./ui/claude-design/), [docs/ui/stitch/](./ui/stitch/).
+> Visual reference lives in [docs/ui/CATHEDRAL_UX_SPEC_V2.md](./ui/CATHEDRAL_UX_SPEC_V2.md) and the Bible mockups under [docs/ui/bible/](./ui/bible/). The hero screenshots that ship with the announce live in [docs/marketing/](./marketing/).
 
 ---
 
@@ -368,11 +368,11 @@ The two repos are independent. Sumocode-config is bootstrapped first on a new ma
 
 ### Visual references
 
-- `docs/ui/DESIGN.md` — canonical 9-section design system (Cathedral direction baseline).
-- `docs/ui/CLAUDE_DESIGN_PROMPT.md` — paste-ready prompt for re-running Claude Design.
-- `docs/ui/claude-design/` — current Claude Design HTML+CSS prototype (open `SumoCode Terminal.html`).
-- `docs/ui/stitch/cathedral/` — Stitch-generated screens for Cathedral direction.
-- `docs/ui/stitch/amber-crt/` — Stitch-generated idle for Amber CRT.
+- `docs/ui/CATHEDRAL_UX_SPEC_V2.md` — current canonical UX spec for the V2 chrome.
+- `docs/ui/bible/` — pixel-accurate HTML mockups, one per element + scene composition.
+- `docs/marketing/` — 5 hero PNGs that ship with the v0.3 announce.
+- `docs/ui/stitch/cathedral/v1-html/splash.html` — Stitch HTML splash mockup ground truth (cited from `src/cathedral/input-frame.ts`).
+- `docs/ui/stitch/obsidian-temple/DESIGN.md` — Stitch design ref for Obsidian Temple (cited from `src/themes/obsidian.ts`).
 - `docs/ui/stitch/obsidian-temple/` — Stitch-generated idle for Obsidian Temple.
 
 ### Decision history

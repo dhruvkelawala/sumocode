@@ -14,16 +14,31 @@ import {
 } from "./mcp-config-reader.js";
 
 let tmpRoot: string;
+let originalHome: string | undefined;
+let originalUserProfile: string | undefined;
 
 beforeEach(() => {
 	tmpRoot = mkdtempSync(join(tmpdir(), "sumocode-mcp-test-"));
 	clearCachedMcpRoster();
+	// Sandbox `homedir()` so the test never reads a real `~/.config/mcp/mcp.json`
+	// that the developer or CI runner happens to have. `homedir()` consults
+	// `HOME` on POSIX and `USERPROFILE` on Windows; override both.
+	originalHome = process.env.HOME;
+	originalUserProfile = process.env.USERPROFILE;
+	process.env.HOME = tmpRoot;
+	process.env.USERPROFILE = tmpRoot;
 });
 
 afterEach(() => {
 	rmSync(tmpRoot, { recursive: true, force: true });
 	clearCachedMcpRoster();
 	setMcpDiagnosticHandler(undefined);
+	// Restore the real `homedir()` resolution for any unrelated tests in the
+	// same vitest worker.
+	if (originalHome === undefined) delete process.env.HOME;
+	else process.env.HOME = originalHome;
+	if (originalUserProfile === undefined) delete process.env.USERPROFILE;
+	else process.env.USERPROFILE = originalUserProfile;
 });
 
 function writeJson(path: string, value: unknown): void {
@@ -37,8 +52,9 @@ describe("resolveMcpConfigCandidates", () => {
 		const piAgentDir = "/tmp/.pi/agent";
 		const candidates = resolveMcpConfigCandidates({ cwd, piAgentDir });
 		expect(candidates).toHaveLength(4);
-		// User-global shared MCP config wins lowest precedence.
-		expect(candidates[0]).toMatch(/\.config\/mcp\/mcp\.json$/);
+		// User-global shared MCP config wins lowest precedence. `homedir()` is
+		// sandboxed to `tmpRoot` in beforeEach, so this candidate lives there.
+		expect(candidates[0]).toBe(join(tmpRoot, ".config", "mcp", "mcp.json"));
 		// Pi global override second.
 		expect(candidates[1]).toBe("/tmp/.pi/agent/mcp.json");
 		// Project-local shared third.

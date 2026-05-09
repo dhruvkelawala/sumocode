@@ -16,6 +16,16 @@ a future release, see "Capturing live shots" below.
 
 Resolution: 2496 × 1640 (1248 × 820 logical, retina 2×).
 
+## Social preview
+
+`social-preview.png` is the 1280 × 640 GitHub social card. Cathedral palette, wordmark left, terminal mockup right showing the read/edit/bash flow, and three preattentive-state dots for `v0.3.0` (idle), `Pi 0.74` (thinking), `MIT` (gold accent).
+
+Upload to GitHub via repo Settings → Social preview. Source HTML at `_social-preview.html`; regenerate with:
+
+```bash
+node -e "import('playwright').then(async ({chromium}) => { const b = await chromium.launch(); const c = await b.newContext({ viewport: { width: 1280, height: 640 }, deviceScaleFactor: 1 }); const p = await c.newPage(); await p.goto('file://' + process.cwd() + '/docs/marketing/_social-preview.html', { waitUntil: 'networkidle' }); await p.evaluate(() => document.fonts.ready); await p.waitForTimeout(150); await p.screenshot({ path: 'docs/marketing/social-preview.png' }); await b.close(); })"
+```
+
 ## Theme provenance
 
 - **Cathedral** is the default theme. Source of truth: `src/themes/cathedral.ts` + `docs/ui/CATHEDRAL_UX_SPEC_V2.md`.

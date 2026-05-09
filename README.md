@@ -59,7 +59,7 @@ it's been my daily-drive shell for the last two months.
 
 facts the agent learned about you, edited like a manuscript. six panels (identity, preferences, workflow, projects, system, general). `e` to revise a line, `d` to forget. groups by topic, search inline. the agent reads from it on every new session.
 
-<sub>open with `Ctrl+M` or `/sumo:memory`</sub>
+<sub>open with `/sumo:memory`</sub>
 
 </td>
 <td width="50%" valign="top">
@@ -108,7 +108,7 @@ cathedral-styled gate for dangerous bash commands. patterns are configurable per
 
 three sections: context (token meter, session cost), MCP (live status dots per server), memory (persisted bullets the agent keeps). 30 columns wide; appears at terminal width 120+. portrait policy hides it deliberately.
 
-<sub>position cycles with `Ctrl+Shift+S`</sub>
+<sub>appears automatically at 120+ columns</sub>
 
 </td>
 </tr>

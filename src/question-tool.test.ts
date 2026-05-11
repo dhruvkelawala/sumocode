@@ -11,8 +11,8 @@ describe("normalizeQuestionOptions", () => {
 			{ label: "Mention losses", description: "show real-money context" },
 			"  ",
 		])).toEqual([
-			"Keep it high-level",
-			"Mention losses — show real-money context",
+			{ label: "Keep it high-level", value: "Keep it high-level" },
+			{ label: "Mention losses — show real-money context", value: "Mention losses" },
 		]);
 	});
 
@@ -57,6 +57,35 @@ describe("question tool options", () => {
 		expect(stripAnsi(rendered)).toContain("C) Type something…");
 		expect(result.details).toMatchObject({ answer: "Keep it high-level", wasCustom: false });
 		expect(result.content[0]?.text).toBe("User answered: Keep it high-level");
+	});
+
+	it("returns the raw option label when an object option has helper text", async () => {
+		let tool: { execute: (...args: unknown[]) => Promise<{ content: { text: string }[]; details: { answer?: string; wasCustom?: boolean } }> } | undefined;
+		const pi = {
+			registerTool: vi.fn((definition) => { tool = definition; }),
+		};
+		let rendered = "";
+		const ctx = {
+			hasUI: true,
+			ui: {
+				custom: vi.fn((factory) => new Promise((resolve) => {
+					const component = factory({ requestRender: vi.fn(), terminal: { rows: 24 } }, themeStub(), {}, resolve);
+					rendered = component.render(80).join("\n");
+					component.handleInput("enter");
+				})),
+			},
+		};
+
+		installQuestionTool(pi as never);
+		const result = await tool!.execute("call-1", {
+			question: "Approve?",
+			options: [{ label: "approve", description: "safe to proceed" }],
+		}, undefined, undefined, ctx);
+
+		const plain = stripAnsi(rendered);
+		expect(plain).toContain("A) approve — safe to proceed");
+		expect(result.details).toMatchObject({ answer: "approve", wasCustom: false });
+		expect(result.content[0]?.text).toBe("User answered: approve");
 	});
 
 	it("treats a real option named like the free-text label as a selectable option", async () => {

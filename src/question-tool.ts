@@ -46,28 +46,37 @@ type QuestionEntry = {
 	options?: QuestionOptionParam[];
 };
 
-type DialogOption = {
+export type NormalizedQuestionOption = {
+	/** Text rendered in Divine Query. May include helper description. */
 	label: string;
+	/** Raw option value returned to the tool caller. Never includes description. */
+	value: string;
+};
+
+type DialogOption = NormalizedQuestionOption & {
 	isFreeText: boolean;
 };
 
-export function normalizeQuestionOptions(options: readonly QuestionOptionParam[] | undefined): string[] {
+export function normalizeQuestionOptions(options: readonly QuestionOptionParam[] | undefined): NormalizedQuestionOption[] {
 	if (!options?.length) return [];
 	return options
-		.map((option) => {
-			if (typeof option === "string") return option.trim();
-			const label = option.label.trim();
+		.map((option): NormalizedQuestionOption => {
+			if (typeof option === "string") {
+				const label = option.trim();
+				return { label, value: label };
+			}
+			const value = option.label.trim();
 			const description = option.description?.trim();
-			return description ? `${label} — ${description}` : label;
+			return { label: description ? `${value} — ${description}` : value, value };
 		})
-		.filter((option) => option.length > 0);
+		.filter((option) => option.value.length > 0);
 }
 
 function dialogOptionsFor(options: readonly QuestionOptionParam[] | undefined): DialogOption[] {
 	const normalized = normalizeQuestionOptions(options);
 	return [
-		...normalized.map((label) => ({ label, isFreeText: false })),
-		{ label: FREE_TEXT_LABEL, isFreeText: true },
+		...normalized.map((option) => ({ ...option, isFreeText: false })),
+		{ label: FREE_TEXT_LABEL, value: "", isFreeText: true },
 	];
 }
 
@@ -172,7 +181,7 @@ async function showCathedralQuestion(
 						refresh();
 						return;
 					}
-					done({ answer: selected?.label ?? "", wasCustom: false });
+					done({ answer: selected?.value ?? "", wasCustom: false });
 					return;
 				}
 

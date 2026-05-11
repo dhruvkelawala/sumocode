@@ -13,14 +13,24 @@ import { Editor, type EditorTheme, Key, matchesKey, Text } from "@earendil-works
 import { Type } from "typebox";
 import { renderDivineQuery, updateDivineQuery, type DivineQuerySnapshot, DIVINE_QUERY_OVERLAY_OPTIONS } from "./divine-query.js";
 
+const OptionParam = Type.Union([
+	Type.String({ description: "Option label shown to the user" }),
+	Type.Object({
+		label: Type.String({ description: "Option label shown to the user" }),
+		description: Type.Optional(Type.String({ description: "Optional helper text for the option" })),
+	}),
+]);
+
 const QuestionParams = Type.Object({
 	question: Type.String({ description: "The question to ask the user" }),
 	context: Type.Optional(Type.String({ description: "Optional context/help text shown under the question" })),
+	options: Type.Optional(Type.Array(OptionParam, { description: "Options for the user to choose from. Do not prefix with A)/B)/1./2.; the UI adds labels automatically." })),
 	questions: Type.Optional(
 		Type.Array(
 			Type.Object({
 				question: Type.String({ description: "Question text to ask the user" }),
 				context: Type.Optional(Type.String({ description: "Optional context/help text shown under the question" })),
+				options: Type.Optional(Type.Array(OptionParam, { description: "Options for this question. Omit for free-text input." })),
 			}),
 			{ minItems: 1, description: "Questions to ask, in order" },
 		),
@@ -28,6 +38,47 @@ const QuestionParams = Type.Object({
 });
 
 const FREE_TEXT_LABEL = "Type something…";
+
+type QuestionOptionParam = string | { label: string; description?: string };
+type QuestionEntry = {
+	question: string;
+	context?: string;
+	options?: QuestionOptionParam[];
+};
+
+export type NormalizedQuestionOption = {
+	/** Text rendered in Divine Query. May include helper description. */
+	label: string;
+	/** Raw option value returned to the tool caller. Never includes description. */
+	value: string;
+};
+
+type DialogOption = NormalizedQuestionOption & {
+	isFreeText: boolean;
+};
+
+export function normalizeQuestionOptions(options: readonly QuestionOptionParam[] | undefined): NormalizedQuestionOption[] {
+	if (!options?.length) return [];
+	return options
+		.map((option): NormalizedQuestionOption => {
+			if (typeof option === "string") {
+				const label = option.trim();
+				return { label, value: label };
+			}
+			const value = option.label.trim();
+			const description = option.description?.trim();
+			return { label: description ? `${value} — ${description}` : value, value };
+		})
+		.filter((option) => option.value.length > 0);
+}
+
+function dialogOptionsFor(options: readonly QuestionOptionParam[] | undefined): DialogOption[] {
+	const normalized = normalizeQuestionOptions(options);
+	return [
+		...normalized.map((option) => ({ ...option, isFreeText: false })),
+		{ label: FREE_TEXT_LABEL, value: "", isFreeText: true },
+	];
+}
 
 /**
  * Pi's `Editor` renders with its own theme tokens — its default cursor and
@@ -56,18 +107,17 @@ interface QuestionResult {
 async function showCathedralQuestion(
 	ctx: ExtensionContext,
 	title: string,
-	options: readonly string[],
+	options: readonly DialogOption[],
 ): Promise<QuestionResult | null> {
-	// If the only "option" is the free-text placeholder, start directly in
-	// edit mode so the user sees an auto-focused input — no dummy
-	// "A) Type something…" row.
-	const freeTextOnly = options.length === 1 && options[0] === FREE_TEXT_LABEL;
+	// If the only option is the free-text sentinel, start directly in edit mode
+	// so the user sees an auto-focused input — no dummy "A) Type something…" row.
+	const freeTextOnly = options.length === 1 && options[0]?.isFreeText === true;
 
 	return ctx.ui.custom<QuestionResult | null>(
 		(tui, theme, _kb, done) => {
 			// When freeTextOnly, render the query with NO options (empty array)
 			// so the option list is hidden; the editor is shown immediately.
-			let snapshot: DivineQuerySnapshot = { title, options: freeTextOnly ? [] : options, focusedIndex: 0 };
+			let snapshot: DivineQuerySnapshot = { title, options: freeTextOnly ? [] : options.map((option) => option.label), focusedIndex: 0 };
 			let editMode = freeTextOnly;
 			let cachedLines: string[] | undefined;
 
@@ -126,12 +176,12 @@ async function showCathedralQuestion(
 						return;
 					}
 					const selected = options[result.done];
-					if (selected === FREE_TEXT_LABEL) {
+					if (selected?.isFreeText) {
 						editMode = true;
 						refresh();
 						return;
 					}
-					done({ answer: selected ?? "", wasCustom: false });
+					done({ answer: selected?.value ?? "", wasCustom: false });
 					return;
 				}
 
@@ -173,7 +223,7 @@ export function installQuestionTool(pi: ExtensionAPI): void {
 	pi.registerTool({
 		name: "question",
 		label: "Question",
-		description: "Ask the user a question and let them pick from options. Use when you need user input to proceed. Do NOT prefix options with A)/B)/1./2. — the Cathedral UI adds labels automatically.",
+		description: "Ask the user a question and let them pick from options, or omit options for free-text input. Use when you need user input to proceed. Do NOT prefix options with A)/B)/1./2. — the Cathedral UI adds labels automatically.",
 		parameters: QuestionParams,
 
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
@@ -184,11 +234,13 @@ export function installQuestionTool(pi: ExtensionAPI): void {
 				};
 			}
 
-			// Normalize: support both single question and questions array
-			const questions = params.questions?.length
+			// Normalize: support both single question and questions array.
+			// Top-level `options` belongs to the single-question form; sequential
+			// questions can each specify their own `options`.
+			const questions: QuestionEntry[] = params.questions?.length
 				? params.questions
 				: params.question
-					? [{ question: params.question, context: params.context }]
+					? [{ question: params.question, context: params.context, options: params.options }]
 					: [];
 
 			if (questions.length === 0) {
@@ -202,8 +254,7 @@ export function installQuestionTool(pi: ExtensionAPI): void {
 			if (questions.length === 1) {
 				const q = questions[0];
 				const title = q.context ? `${q.question}\n${q.context}` : q.question;
-				// No predefined options — just free text via the "Type something…" option
-				const result = await showCathedralQuestion(ctx, title, [FREE_TEXT_LABEL]);
+				const result = await showCathedralQuestion(ctx, title, dialogOptionsFor(q.options));
 
 				if (!result) {
 					return {
@@ -222,7 +273,7 @@ export function installQuestionTool(pi: ExtensionAPI): void {
 			const answers: { question: string; answer: string }[] = [];
 			for (const q of questions) {
 				const title = q.context ? `${q.question}\n${q.context}` : q.question;
-				const result = await showCathedralQuestion(ctx, title, [FREE_TEXT_LABEL]);
+				const result = await showCathedralQuestion(ctx, title, dialogOptionsFor(q.options));
 
 				if (!result) {
 					return {

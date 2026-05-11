@@ -78,6 +78,7 @@ describe("InteractionRegistry", () => {
 			"slate",
 			"sumo:approval",
 			"sumo:cursor",
+			"sumo:diff",
 			"sumo:memory",
 			"sumo:persona",
 			"sumo:query",
@@ -88,7 +89,7 @@ describe("InteractionRegistry", () => {
 			"sumo:theme-check",
 		]);
 		expect(snapshot.shortcuts.map(([id]) => id).sort()).toEqual(["alt+t", "ctrl+/", "ctrl+1", "ctrl+2", "ctrl+shift+t"]);
-		expect(pi.registerCommand).toHaveBeenCalledTimes(12);
+		expect(pi.registerCommand).toHaveBeenCalledTimes(13);
 		expect(pi.registerShortcut).toHaveBeenCalledTimes(5);
 	});
 });

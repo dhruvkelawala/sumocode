@@ -58,10 +58,17 @@ async function showCathedralQuestion(
 	title: string,
 	options: readonly string[],
 ): Promise<QuestionResult | null> {
+	// If the only "option" is the free-text placeholder, start directly in
+	// edit mode so the user sees an auto-focused input — no dummy
+	// "A) Type something…" row.
+	const freeTextOnly = options.length === 1 && options[0] === FREE_TEXT_LABEL;
+
 	return ctx.ui.custom<QuestionResult | null>(
 		(tui, theme, _kb, done) => {
-			let snapshot: DivineQuerySnapshot = { title, options, focusedIndex: 0 };
-			let editMode = false;
+			// When freeTextOnly, render the query with NO options (empty array)
+			// so the option list is hidden; the editor is shown immediately.
+			let snapshot: DivineQuerySnapshot = { title, options: freeTextOnly ? [] : options, focusedIndex: 0 };
+			let editMode = freeTextOnly;
 			let cachedLines: string[] | undefined;
 
 			const editorTheme: EditorTheme = {
@@ -95,6 +102,11 @@ async function showCathedralQuestion(
 			function handleInput(data: string): void {
 				if (editMode) {
 					if (matchesKey(data, Key.escape)) {
+						if (freeTextOnly) {
+							// No options to fall back to — dismiss the modal.
+							done(null);
+							return;
+						}
 						editMode = false;
 						editor.setText("");
 						refresh();

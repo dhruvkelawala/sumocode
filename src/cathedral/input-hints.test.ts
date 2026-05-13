@@ -4,10 +4,12 @@ import { installInputHints } from "./input-hints.js";
 type Handler = (...args: unknown[]) => unknown;
 
 describe("installInputHints", () => {
-	it("subscribes to session_start", () => {
+	it("subscribes to session_start and selector updates", () => {
 		const on = vi.fn();
 		installInputHints({ on } as never);
 		expect(on).toHaveBeenCalledWith("session_start", expect.any(Function));
+		expect(on).toHaveBeenCalledWith("model_select", expect.any(Function));
+		expect(on).toHaveBeenCalledWith("thinking_level_select", expect.any(Function));
 	});
 
 	it("on session_start, registers a widget below the editor", () => {
@@ -114,8 +116,43 @@ describe("installInputHints", () => {
 		const lines = component!.render(120);
 		expect(lines.length).toBe(1);
 		const stripped = lines[0]!.replace(/\u001b\[[0-9;]*m/g, "");
-		expect(stripped).toContain("╰─ AWAITING PROMPT");
+		expect(stripped).toContain("╰─ no model · thinking");
 		expect(stripped).toContain("CTRL+/ · COMMANDS");
+		expect(stripped).not.toContain("AWAITING PROMPT");
 		expect(stripped).not.toContain("TAB · AGENTS");
+	});
+
+	it("updates splash hint when model or thinking changes", () => {
+		const handlers = new Map<string, Handler[]>();
+		const on = vi.fn((event: string, handler: Handler) => {
+			const list = handlers.get(event) ?? [];
+			list.push(handler);
+			handlers.set(event, list);
+		});
+		installInputHints({ on } as never);
+
+		let factory: ((tui: { requestRender: () => void }, theme: unknown) => { render(width: number): string[] }) | undefined;
+		const setWidget = vi.fn((_key: string, f: typeof factory) => {
+			factory = f;
+		});
+		const ctx = {
+			hasUI: true,
+			ui: { setWidget },
+			model: { id: "claude-sonnet-4.6" },
+			sessionManager: { getBranch: () => [{ type: "thinking_level_change", thinkingLevel: "high" }] },
+		} as unknown;
+		for (const handler of handlers.get("session_start") ?? []) handler({ type: "session_start" }, ctx);
+
+		const requestRender = vi.fn();
+		const component = factory!({ requestRender }, undefined);
+		const initial = component.render(120)[0]!.replace(/\u001b\[[0-9;]*m/g, "");
+		expect(initial).toContain("╰─ claude-sonnet-4.6 · high");
+
+		for (const handler of handlers.get("model_select") ?? []) handler({ type: "model_select", model: { id: "gpt-5.3-codex" } });
+		for (const handler of handlers.get("thinking_level_select") ?? []) handler({ type: "thinking_level_select", level: "xhigh" });
+
+		const updated = component.render(120)[0]!.replace(/\u001b\[[0-9;]*m/g, "");
+		expect(updated).toContain("╰─ gpt-5.3-codex · xhigh");
+		expect(requestRender).toHaveBeenCalledTimes(2);
 	});
 });

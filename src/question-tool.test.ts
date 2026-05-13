@@ -142,6 +142,33 @@ describe("question tool options", () => {
 		expect(plain).not.toContain("A) Type something…");
 		expect(result.details).toMatchObject({ cancelled: true });
 	});
+
+	it("keeps free-text-only questions editable after an empty submit", async () => {
+		let tool: { execute: (...args: unknown[]) => Promise<{ details: { cancelled?: boolean } }> } | undefined;
+		const pi = {
+			registerTool: vi.fn((definition) => { tool = definition; }),
+		};
+		let renderedAfterEmptySubmit = "";
+		const ctx = {
+			hasUI: true,
+			ui: {
+				custom: vi.fn((factory) => new Promise((resolve) => {
+					const component = factory({ requestRender: vi.fn(), terminal: { rows: 24 } }, themeStub(), {}, resolve);
+					component.handleInput("enter");
+					renderedAfterEmptySubmit = component.render(80).join("\n");
+					component.handleInput("\u001b");
+				})),
+			},
+		};
+
+		installQuestionTool(pi as never);
+		const result = await tool!.execute("call-1", { question: "What should I do?" }, undefined, undefined, ctx);
+
+		const plain = stripAnsi(renderedAfterEmptySubmit);
+		expect(plain).toContain("Your answer:");
+		expect(plain).not.toContain("A) Type something…");
+		expect(result.details).toMatchObject({ cancelled: true });
+	});
 });
 
 describe("withCathedralForeground", () => {

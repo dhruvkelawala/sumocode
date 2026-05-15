@@ -25,6 +25,7 @@ const PORTRAIT_CHAT_GUTTER_MIN_WIDTH = 80;
 const STREAMING_CHAT_RENDER_COALESCE_MS = 100;
 const MOUSE_CHAT_RENDER_COALESCE_MS = 50;
 const BOTTOM_CHROME_SPACERS_INSTALLED = Symbol("sumo-tui.bottom-chrome-spacers-installed");
+const ANSI_PATTERN = /\u001b(?:\[[0-?]*[ -/]*[@-~]|\][^\u0007]*(?:\u0007|\u001b\\))/g;
 export const ACTIVE_BOTTOM_CHROME_SPACER_ROWS = 2;
 
 interface PiRenderableComponent {
@@ -37,6 +38,10 @@ interface PiChatContainer {
 	invalidate?(): void;
 	render?(width: number): string[];
 	addChild?(component: unknown): void;
+}
+
+interface ForeignRenderableLike {
+	render(width: number): string[];
 }
 
 interface PiTuiLike {
@@ -334,6 +339,21 @@ function countUserMessages(messages: readonly unknown[]): number {
 	return messages.filter(isUserMessage).length;
 }
 
+function isForeignRenderableLike(value: unknown): value is ForeignRenderableLike {
+	return !!value && typeof value === "object" && typeof (value as { render?: unknown }).render === "function";
+}
+
+function renderForeignSystemText(component: ForeignRenderableLike, width: number): string {
+	try {
+		return component.render(width)
+			.map((line) => line.replace(ANSI_PATTERN, "").trimEnd())
+			.join("\n")
+			.trim();
+	} catch {
+		return "";
+	}
+}
+
 /**
  * Deep Module for the retained chat viewport seam.
  *
@@ -412,8 +432,14 @@ export class ChatViewportController {
 		return lines;
 	}
 
-	public attachForeignBashComponent(component: unknown): void {
-		this.bashMirror.attach(component);
+	public attachForeignChatComponent(component: unknown): void {
+		if (this.bashMirror.attach(component)) return;
+		if (!isForeignRenderableLike(component)) return;
+		const text = renderForeignSystemText(component, this.host.ui?.terminal?.columns ?? this.lastChatWidth);
+		if (text.length === 0) return;
+		this.chat.addMessage("system", text);
+		this.markRenderDirty();
+		this.runtime.requestRender();
 	}
 
 	public clear(): void {
@@ -973,14 +999,14 @@ export function installChatViewportBridge(upstream: unknown, runtime: ChatViewpo
 		chatContainer.addChild = (component: unknown): void => {
 			originalAddChild(component);
 			if (replayingSessionHistory) return;
-			if (isOwnedShellActive()) controller.attachForeignBashComponent(component);
+			if (isOwnedShellActive()) controller.attachForeignChatComponent(component);
 		};
 	}
 	if (pendingMessagesContainer && originalPendingAddChild) {
 		pendingMessagesContainer.addChild = (component: unknown): void => {
 			originalPendingAddChild(component);
 			if (replayingSessionHistory) return;
-			if (isOwnedShellActive()) controller.attachForeignBashComponent(component);
+			if (isOwnedShellActive()) controller.attachForeignChatComponent(component);
 		};
 	}
 	chatContainer.render = (width: number): string[] => {

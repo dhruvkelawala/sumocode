@@ -354,6 +354,10 @@ function renderForeignSystemText(component: ForeignRenderableLike, width: number
 	}
 }
 
+function shouldMirrorForeignSystemText(text: string): boolean {
+	return text.startsWith("Share URL: ") || text.startsWith("Gist: ") || text.startsWith("Failed to create gist:") || text.startsWith("Failed to parse gist ID from gh output");
+}
+
 /**
  * Deep Module for the retained chat viewport seam.
  *
@@ -436,7 +440,7 @@ export class ChatViewportController {
 		if (this.bashMirror.attach(component)) return;
 		if (!isForeignRenderableLike(component)) return;
 		const text = renderForeignSystemText(component, this.host.ui?.terminal?.columns ?? this.lastChatWidth);
-		if (text.length === 0) return;
+		if (text.length === 0 || !shouldMirrorForeignSystemText(text)) return;
 		this.chat.addMessage("system", text);
 		this.markRenderDirty();
 		this.runtime.requestRender();

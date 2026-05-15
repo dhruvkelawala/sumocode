@@ -464,7 +464,7 @@ describe("ChatViewportController", () => {
 		root.dispose();
 	});
 
-	it("mirrors Pi status text into retained system messages when owned-shell is active", async () => {
+	it("mirrors Pi share status text into retained system messages when owned-shell is active", async () => {
 		const yoga = await loadYoga();
 		const root = new SumoNode(yoga.Node.create());
 		const chat = ChatPager.create(yoga, root);
@@ -499,6 +499,43 @@ describe("ChatViewportController", () => {
 		expect(messages).toHaveLength(1);
 		expect(messages[0]).toMatchObject({ role: "system", text: "Share URL: https://pi.dev/session/abc\nGist: https://gist.github.com/me/abc" });
 		expect(runtime.requestRender).toHaveBeenCalledTimes(1);
+
+		cleanup?.();
+		root.dispose();
+	});
+
+	it("does not mirror generic Pi status text into retained chat on splash", async () => {
+		const yoga = await loadYoga();
+		const root = new SumoNode(yoga.Node.create());
+		const chat = ChatPager.create(yoga, root);
+		const host = {
+			ui: { terminal: { rows: 24, columns: 120 }, requestRender: vi.fn() },
+			chatContainer: {
+				children: [] as unknown[],
+				addChild(child: unknown) {
+					this.children.push(child);
+				},
+				render: vi.fn(() => []),
+				clear: vi.fn(),
+				invalidate: vi.fn(),
+			},
+		};
+		const runtime = {
+			getSnapshot: () => ({ chat }),
+			setExternalRenderControls: vi.fn(),
+			renderChatLines: vi.fn(() => []),
+			writeChatViewport: vi.fn(() => true),
+			requestRender: vi.fn(),
+			setEmptyChatQuoteState: vi.fn(),
+			noteUserMessage: vi.fn(),
+			isOwnedShellActive: () => true,
+		};
+
+		const cleanup = installChatViewportBridge(host, runtime);
+		host.chatContainer.addChild({ render: (_width: number) => ["✓ New session started"] });
+
+		expect(chat.hasMessages()).toBe(false);
+		expect(runtime.requestRender).not.toHaveBeenCalled();
 
 		cleanup?.();
 		root.dispose();

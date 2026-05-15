@@ -5,22 +5,23 @@
  *   right-aligned dim:    TAB · AGENTS  CTRL+/ · COMMANDS
  *
  * Splash state (Element 3):
- *   left dim flavour:     └─ AWAITING DIVINE INVOCATION
- *   right-aligned dim:    TAB · AGENTS  CTRL+/ · COMMANDS
+ *   left dim context:     ╰─ <model> · <thinking>
+ *   right-aligned dim:    CTRL+/ · COMMANDS
  *
  * Mounted via `setWidget(..., { placement: "belowEditor" })`.
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { Component } from "@earendil-works/pi-tui";
+import type { Component, TUI } from "@earendil-works/pi-tui";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { formatCwd } from "../footer.js";
 import { getGitBranch, sessionHasMessages as cachedSessionHasMessages } from "../session-cache.js";
-import { INPUT_FRAME_HINT_AWAITING, renderInputHints } from "./input-frame.js";
+import { renderInputHints } from "./input-frame.js";
 
 const SPLASH_INPUT_FRAME_WIDTH = 60;
 const ACTIVE_HINT_HORIZONTAL_PADDING = 1;
 const ANSI_PATTERN = /\u001b\[[0-9;]*m/g;
+type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
 
 function centerAnsi(line: string, width: number): string {
 	const visible = visibleWidth(line.replace(ANSI_PATTERN, ""));
@@ -33,6 +34,7 @@ function centerAnsi(line: string, width: number): string {
 class InputHintsComponent implements Component {
 	constructor(
 		private readonly isSplash: () => boolean,
+		private readonly splashLeftHint: () => string,
 		private readonly activeLeftHint: () => string | undefined,
 	) {}
 	invalidate(): void {}
@@ -42,7 +44,7 @@ class InputHintsComponent implements Component {
 			// block. Return just the hint (no leading blank) so Pi's belowEditor
 			// slot stays compact and the input frame sits close to the content.
 			const frameWidth = Math.min(width, SPLASH_INPUT_FRAME_WIDTH);
-			return [centerAnsi(renderInputHints(frameWidth, { leftHint: INPUT_FRAME_HINT_AWAITING }), width)];
+			return [centerAnsi(renderInputHints(frameWidth, { leftHint: this.splashLeftHint(), leftHintStyle: "model-thinking" }), width)];
 		}
 		// Active bottom breathing rows are owned by the retained shell layout shim,
 		// not by the hint component. This keeps the component semantic: one hint row.
@@ -61,6 +63,26 @@ function activeContextHint(ctx: ExtensionContext): string | undefined {
 	return branch ? `${project} (${branch})` : project;
 }
 
+function latestThinkingLevel(ctx: ExtensionContext): ThinkingLevel | undefined {
+	let latest: ThinkingLevel | undefined;
+	try {
+		for (const entry of ctx.sessionManager.getBranch()) {
+			if (entry.type === "thinking_level_change") latest = entry.thinkingLevel as ThinkingLevel;
+		}
+	} catch {
+		return undefined;
+	}
+	return latest;
+}
+
+function modelDisplayName(ctx: ExtensionContext): string {
+	return ctx.model?.id ?? "no model";
+}
+
+function splashInvocationHint(modelId: string, thinkingLevel: ThinkingLevel | undefined): string {
+	return `╰─ ${modelId} · ${thinkingLevel ?? "thinking"}`;
+}
+
 function sessionHasMessages(ctx: ExtensionContext): boolean {
 	try {
 		return cachedSessionHasMessages(ctx);
@@ -70,12 +92,35 @@ function sessionHasMessages(ctx: ExtensionContext): boolean {
 }
 
 export function installInputHints(pi: ExtensionAPI): void {
+	let requestRender: (() => void) | undefined;
+	let currentModelId = "no model";
+	let currentThinkingLevel: ThinkingLevel | undefined;
+
 	pi.on("session_start", (_event, ctx) => {
 		if (!ctx.hasUI) return;
+		currentModelId = modelDisplayName(ctx);
+		currentThinkingLevel = latestThinkingLevel(ctx);
 		ctx.ui.setWidget(
 			"sumocode-input-hints",
-			() => new InputHintsComponent(() => !sessionHasMessages(ctx), () => activeContextHint(ctx)),
+			(tui: TUI) => {
+				requestRender = () => tui.requestRender();
+				return new InputHintsComponent(
+					() => !sessionHasMessages(ctx),
+					() => splashInvocationHint(currentModelId, currentThinkingLevel),
+					() => activeContextHint(ctx),
+				);
+			},
 			{ placement: "belowEditor" },
 		);
+	});
+
+	pi.on("model_select", (event) => {
+		currentModelId = event.model.id;
+		requestRender?.();
+	});
+
+	pi.on("thinking_level_select", (event) => {
+		currentThinkingLevel = event.level;
+		requestRender?.();
 	});
 }

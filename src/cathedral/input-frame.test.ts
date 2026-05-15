@@ -178,6 +178,15 @@ describe("renderInputHints", () => {
 		expect(line).toContain("\u001b[38;2;139;122;99m (main)");
 	});
 
+	it("colors splash model with accent and leaves thinking dim", () => {
+		const line = renderInputHints(80, {
+			leftHint: "╰─ claude-sonnet-4.6 · high",
+			leftHintStyle: "model-thinking",
+		});
+		expect(line).toContain("\u001b[38;2;217;119;6mclaude-sonnet-4.6");
+		expect(line).toContain("\u001b[38;2;139;122;99m · high");
+	});
+
 	it("colors CTRL+/ modifier key in accent (#D97706)", () => {
 		const line = renderInputHints(80);
 		expect(line).not.toContain("TAB");

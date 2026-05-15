@@ -180,8 +180,8 @@ export type InputHintsOptions = {
 	leftHint?: string;
 	/** When set, truncate the left hint instead of dropping it at narrow widths. */
 	leftHintOverflow?: "drop" | "truncate";
-	/** Project context renders project in foreground and branch in dim. */
-	leftHintStyle?: "dim" | "project-branch";
+	/** Project context renders project in foreground and branch in dim; splash invocation highlights model with theme accent. */
+	leftHintStyle?: "dim" | "project-branch" | "model-thinking";
 };
 
 /**
@@ -206,6 +206,17 @@ export function renderInputHints(width: number, options: InputHintsOptions = {})
 	// Build the colored right-hand string: CTRL+/ in accent, label in dim.
 	const rightColored = `${accent}CTRL+/${RESET} ${dimFg}· COMMANDS${RESET}`;
 	const colorLeftHint = (text: string): string => {
+		if (options.leftHintStyle === "model-thinking") {
+			const prefix = "╰─ ";
+			const separator = " · ";
+			if (!text.startsWith(prefix)) return `${dimFg}${text}${RESET}`;
+			const rest = text.slice(prefix.length);
+			const separatorIndex = rest.lastIndexOf(separator);
+			if (separatorIndex === -1) return `${dimFg}${prefix}${RESET}${color(rest, activeThemeColors().accent)}`;
+			const model = rest.slice(0, separatorIndex);
+			const thinking = rest.slice(separatorIndex + separator.length);
+			return `${dimFg}${prefix}${RESET}${color(model, activeThemeColors().accent)}${dimFg}${separator}${thinking}${RESET}`;
+		}
 		if (options.leftHintStyle !== "project-branch") return `${dimFg}${text}${RESET}`;
 		const branchStart = text.indexOf(" (");
 		if (branchStart === -1) return color(text, activeThemeColors().foreground);

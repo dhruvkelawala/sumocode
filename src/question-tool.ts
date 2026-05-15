@@ -137,6 +137,9 @@ async function showCathedralQuestion(
 				const trimmed = value.trim();
 				if (trimmed) {
 					done({ answer: trimmed, wasCustom: true });
+				} else if (freeTextOnly) {
+					editor.setText("");
+					refresh();
 				} else {
 					editMode = false;
 					editor.setText("");

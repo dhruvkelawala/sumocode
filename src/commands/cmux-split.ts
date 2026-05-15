@@ -147,30 +147,20 @@ async function waitForNewSurface(
 		if (!panesResult.ok) return undefined;
 
 		// Prefer the new pane created by the split — its ref won't be in our
-		// pre-split snapshot. Once we see it, only inspect *its* surfaces;
-		// scanning other panes risks picking up an unrelated surface that
-		// appeared concurrently (e.g. user opens a tab in another pane).
-		let foundNewPane = false;
+		// pre-split snapshot. Only inspect *its* surfaces; scanning other
+		// panes risks picking up an unrelated surface that appeared
+		// concurrently (e.g. user opens a tab in another pane).
 		for (const pane of panesResult.panes) {
 			if (pane.ref && !previousPaneRefs.has(pane.ref)) {
-				foundNewPane = true;
 				if (pane.selected_surface_ref) return pane.selected_surface_ref;
 				const firstNew = pane.surface_refs?.find((ref) => !previousSurfaceRefs.has(ref));
 				if (firstNew) return firstNew;
 			}
 		}
 
-		// Fallback: only scan existing panes when no new pane ref has appeared
-		// yet. This covers the edge case where cmux adds a surface to an
-		// existing pane instead of creating a new one.
-		if (!foundNewPane) {
-			for (const pane of panesResult.panes) {
-				for (const surfaceRef of pane.surface_refs ?? []) {
-					if (!previousSurfaceRefs.has(surfaceRef)) return surfaceRef;
-				}
-			}
-		}
-
+		// Safety over guessing: while waiting for the split to appear, never
+		// select surfaces from pre-existing panes. Doing so can target an
+		// unrelated surface created concurrently elsewhere in the workspace.
 		await delay(SPLIT_READY_DELAY_MS);
 	}
 

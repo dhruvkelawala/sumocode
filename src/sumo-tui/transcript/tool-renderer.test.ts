@@ -61,7 +61,7 @@ describe("tool renderer", () => {
 		const rows = renderToolBlockRows({
 			name: "read",
 			status: "success",
-			input: { path: "/Volumes/SumoDeus NVMe/openclaw/workspace/sumocode/src/sumo-tui/pi-compat/sumo-interactive-mode.ts" },
+			input: { path: "/Volumes/SumoDeus NVMe/code/sumocode/src/sumo-tui/pi-compat/sumo-interactive-mode.ts" },
 			details: { lineCount: 184 },
 			expanded: false,
 		}, 80);

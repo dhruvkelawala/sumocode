@@ -64,7 +64,7 @@ You should see:
 
 ### Development clone (only on machines where I want to author changes)
 
-The dev repo lives at `/Volumes/SumoDeus NVMe/openclaw/workspace/sumocode` on my Mac mini. If I want to author changes from another machine, clone it there too:
+The dev repo lives at `/Volumes/SumoDeus NVMe/code/sumocode` on my Mac mini. If I want to author changes from another machine, clone it there too:
 
 ```bash
 mkdir -p ~/code && cd ~/code
@@ -125,7 +125,7 @@ See [README.md](./README.md) for architecture and roadmap.
 
 | File | Managed by | Location |
 |------|-----------|----------|
-| Extension code | this repo | `/Volumes/SumoDeus NVMe/openclaw/workspace/sumocode/` (dev) + `~/.pi/agent/git/github.com/dhruvkelawala/sumocode/` (installed) |
+| Extension code | this repo | `/Volumes/SumoDeus NVMe/code/sumocode/` (dev) + `~/.pi/agent/git/github.com/dhruvkelawala/sumocode/` (installed) |
 | Synced config (settings, mcp, extensions, persona) | sumocode-config repo | `~/sumocode-config/`, symlinked to `~/.pi/agent/` |
 | Local secrets (auth.json, API keys) | local only, never synced | `~/.pi/agent/auth.json`, `~/.zshrc` |
 | Skills (mattpocock, stitch-kit, etc.) | auto-cloned by `pi install` | `~/.pi/agent/git/github.com/…` |

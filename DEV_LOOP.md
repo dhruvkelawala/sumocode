@@ -6,7 +6,7 @@ How I edit, test, and release SumoCode. This is the workflow I actually use, not
 
 ## Where the repo lives
 
-**Dev repo (authoring):** `/Volumes/SumoDeus NVMe/openclaw/workspace/sumocode/`
+**Dev repo (authoring):** `/Volumes/SumoDeus NVMe/code/sumocode/`
 
 **Installed version (consumed by Pi):** `~/.pi/agent/git/github.com/dhruvkelawala/sumocode/` (clone managed by `pi install`)
 
@@ -22,7 +22,7 @@ These are two different directories on purpose:
 ### 1. Edit at the dev repo
 
 ```bash
-cd "/Volumes/SumoDeus NVMe/openclaw/workspace/sumocode"
+cd "/Volumes/SumoDeus NVMe/code/sumocode"
 # open src/extension.ts or wherever the change lives
 ```
 
@@ -116,7 +116,7 @@ For a feature change, verify the specific surface I just touched.
 ### 4. Commit to the dev repo
 
 ```bash
-cd "/Volumes/SumoDeus NVMe/openclaw/workspace/sumocode"
+cd "/Volumes/SumoDeus NVMe/code/sumocode"
 git add -A
 git commit -m "feat: add custom footer with memory-count indicator"
 ```
@@ -224,7 +224,7 @@ Fallback when running plain `pi -e .` or when the reload signal is unavailable. 
 ### Need to see what Pi actually has for the extension
 
 ```bash
-ls -la "/Volumes/SumoDeus NVMe/openclaw/workspace/sumocode/src/"
+ls -la "/Volumes/SumoDeus NVMe/code/sumocode/src/"
 # Then compare to:
 ls -la ~/.pi/agent/git/github.com/dhruvkelawala/sumocode/src/
 ```

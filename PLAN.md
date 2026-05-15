@@ -227,7 +227,7 @@ The 3 theme bundles live at `src/themes/cathedral.ts`, `src/themes/amber-crt.ts`
 
 ### Done
 - [x] Resolve Q1–Q7 via grilling session 1 (2026-04-24)
-- [x] Scaffold `sumocode` repo at `/Volumes/SumoDeus NVMe/openclaw/workspace/sumocode`
+- [x] Scaffold `sumocode` repo at `/Volumes/SumoDeus NVMe/code/sumocode`
 - [x] Write v0.1.0 hello-world extension
 - [x] Publish to `github.com/dhruvkelawala/sumocode` (public)
 - [x] Tag v0.1.0

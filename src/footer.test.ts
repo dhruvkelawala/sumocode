@@ -156,7 +156,7 @@ describe("formatCwd", () => {
 	});
 
 	it("returns just the basename for paths outside $HOME", () => {
-		expect(formatCwd("/Volumes/SumoDeus NVMe/openclaw/workspace/sumocode")).toBe("sumocode");
+		expect(formatCwd("/Volumes/SumoDeus NVMe/code/sumocode")).toBe("sumocode");
 		expect(formatCwd("/opt/homebrew/etc")).toBe("etc");
 	});
 

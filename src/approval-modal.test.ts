@@ -89,7 +89,7 @@ describe("renderApprovalModal", () => {
 	});
 
 	it("wraps long commands and descriptions inside the modal width", () => {
-		const longCommand = `cd \"/Volumes/SumoDeus NVMe/openclaw/workspace/sumocode\" && gh issue create --title \"Approval modal leaks long commands across the terminal\" --body \"long quoted body with spaces\"`;
+		const longCommand = `cd \"/Volumes/SumoDeus NVMe/code/sumocode\" && gh issue create --title \"Approval modal leaks long commands across the terminal\" --body \"long quoted body with spaces\"`;
 		const lines = renderApprovalModal(snapshot({
 			command: longCommand,
 			descriptionLines: ["This command mutates GitHub state and has a very long quoted body that should wrap inside the lifted modal without leaking past the terminal edge."],

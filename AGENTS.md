@@ -11,7 +11,7 @@ User-specific state (persona, memory, settings, MCP, skills) lives in the separa
 ## Non-negotiables
 
 - Do not delete branches, force-push, merge PRs, remove files, or run destructive cleanup unless Dhruv explicitly approves it.
-- Always quote paths with spaces. The primary dev tree is `/Volumes/SumoDeus NVMe/openclaw/workspace/sumocode`.
+- Always quote paths with spaces. The primary dev tree is `/Volumes/SumoDeus NVMe/code/sumocode`.
 - Preserve the public/private split: this repo is public MIT; secrets and personal config belong in `sumocode-config`.
 - Visual UI work is not done until the relevant capture/review evidence is produced and Dhruv approves any golden promotion.
 - Use the project's existing patterns before introducing new abstractions.

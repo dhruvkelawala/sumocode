@@ -3,7 +3,7 @@ import { buildReviewPrompt, DEFAULT_REVIEW_MODEL, extractModelAlias, MODEL_ALIAS
 
 describe("/sumo:review", () => {
 	describe("resolveReviewModel", () => {
-		it("uses deepseek v4 pro by default", () => {
+		it("uses gpt-5.3-codex by default", () => {
 			expect(resolveReviewModel({})).toBe(DEFAULT_REVIEW_MODEL);
 			expect(DEFAULT_REVIEW_MODEL).toBe("openai-codex/gpt-5.3-codex");
 		});
@@ -81,9 +81,10 @@ describe("/sumo:review", () => {
 			expect(prompt).toContain("git diff main...HEAD");
 		});
 
-		it("includes relentless review loop and model", () => {
+		it("includes relentless review loop, model, and xhigh thinking", () => {
 			const prompt = buildReviewPrompt("", "deepseek/deepseek-v4-pro");
 			expect(prompt).toContain("model deepseek/deepseek-v4-pro");
+			expect(prompt).toContain('thinking="xhigh"');
 			expect(prompt).toContain("Relentlessly repeat review -> fix -> review until the scribe returns a GREEN signal");
 		});
 

@@ -105,7 +105,7 @@ export function buildReviewPrompt(args: string, model = DEFAULT_REVIEW_MODEL): s
 
 Main-agent protocol:
 - Do not perform the final review yourself. Invoke the task tool as a scroll/scribe reviewer with model ${model}.
-- Use task type="single" with one task. Pass model="${model}" and thinking="high".
+- Use task type="single" with one task. Pass model="${model}" and thinking="xhigh".
 - The scribe must inspect the requested scope directly with git commands and file reads.
 - If the scribe returns P0, P1, or P2 findings, fix the issues or ask me before making product-risk changes, then call the review task again.
 - Relentlessly repeat review -> fix -> review until the scribe returns a GREEN signal.

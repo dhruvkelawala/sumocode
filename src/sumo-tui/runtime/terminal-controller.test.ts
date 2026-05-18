@@ -436,10 +436,10 @@ describe("TerminalSessionOwner", () => {
 		expect(terminal.restored).toBe(true);
 	});
 
-	it("catches EPIPE silently and suppresses later writes (EC-5.5)", () => {
+	it.each(["EPIPE", "EIO", "ENOTTY"] as const)("catches %s silently and suppresses later writes (EC-5.5)", (code) => {
 		const write = vi.fn(() => {
-			const error = new Error("broken pipe") as NodeJS.ErrnoException;
-			error.code = "EPIPE";
+			const error = new Error(code) as NodeJS.ErrnoException;
+			error.code = code;
 			throw error;
 		});
 		const output: TerminalOutput = { isTTY: true, write };

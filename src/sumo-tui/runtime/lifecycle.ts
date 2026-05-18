@@ -6,6 +6,7 @@ import { consumeActiveEditorDraftClear } from "../../cathedral/editor-draft-stat
 import { instrumentPiEventEmitter, logDiagnostic } from "./diagnostics.js";
 import { FrameScheduler, type FrameRenderCallback } from "./frame-scheduler.js";
 import { defaultTerminalSessionOwner, TerminalSessionOwner } from "./terminal-controller.js";
+import { isTerminalIoError } from "./terminal-errors.js";
 
 export type LifecycleSignal = "SIGINT" | "SIGTERM" | "SIGHUP" | "SIGQUIT" | "SIGTSTP" | "SIGCONT";
 export type LifecycleProcessEvent = LifecycleSignal | "exit" | "uncaughtException";
@@ -240,7 +241,12 @@ export class LifecycleRuntime {
 
 	public restoreTerminal(): void {
 		this.releaseRawMode();
-		this.terminalSession.exitTerminal();
+		try {
+			this.terminalSession.exitTerminal();
+		} catch (error) {
+			if (!isTerminalIoError(error)) throw error;
+			// Terminal teardown is best-effort once the PTY/stdout has gone away.
+		}
 	}
 
 	private registerReraisingSignal(signal: (typeof EXIT_SIGNALS)[number]): void {

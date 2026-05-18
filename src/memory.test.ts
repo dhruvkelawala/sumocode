@@ -125,6 +125,30 @@ describe("RemnicMemoryClient.add / forget", () => {
 		await expect(remnic.forget("mem_1")).resolves.toBeUndefined();
 		expect(fetch).toHaveBeenCalledTimes(3);
 	});
+
+	it("observes agent messages for Remnic extraction", async () => {
+		const fetch = fetchMock(jsonResponse({ accepted: true }, { status: 202 }));
+
+		await expect(client(fetch).observe("session-123", [
+			{ role: "user", content: "remember I prefer pnpm" },
+			{ role: "assistant", content: "noted" },
+		])).resolves.toBeUndefined();
+
+		expect(fetch).toHaveBeenCalledWith(
+			"http://remnic.test/engram/v1/observe",
+			expect.objectContaining({
+				method: "POST",
+				headers: expect.objectContaining({ authorization: "Bearer token-123" }),
+				body: JSON.stringify({
+					sessionKey: "session-123",
+					messages: [
+						{ role: "user", content: "remember I prefer pnpm" },
+						{ role: "assistant", content: "noted" },
+					],
+				}),
+			}),
+		);
+	});
 });
 
 describe("MemoryClientError", () => {

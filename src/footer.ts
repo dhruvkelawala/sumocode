@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { homedir } from "node:os";
 import { basename } from "node:path";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, ReadonlyFooterDataProvider } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 
 /**
@@ -190,6 +190,8 @@ export function renderFooterBlock(snapshot: FooterSnapshot, width = 160): string
 export function installFooter(pi: ExtensionAPI): void {
 	let state: SumoCodeState = "idle";
 	let render: (() => void) | undefined;
+	let activeCtx: ExtensionContext | undefined;
+	let activeFooterData: Pick<ReadonlyFooterDataProvider, "getGitBranch"> | undefined;
 
 	const setState = (next: SumoCodeState): void => {
 		state = next;
@@ -198,10 +200,13 @@ export function installFooter(pi: ExtensionAPI): void {
 
 	pi.on("session_start", (_event, ctx) => {
 		if (!ctx.hasUI) return;
+		activeCtx = ctx;
 
 		ctx.ui.setFooter((tui, _theme, footerData) => {
-			render = () => tui.requestRender();
-			const unsubscribe = footerData.onBranchChange(render);
+			activeFooterData = footerData;
+			const componentRender = (): void => tui.requestRender();
+			render = componentRender;
+			const unsubscribe = footerData.onBranchChange(componentRender);
 
 			// Bridge Pi's file-watcher-driven branch provider into the shared
 			// session-cache so the sidebar and input-hints also see live updates
@@ -212,11 +217,16 @@ export function installFooter(pi: ExtensionAPI): void {
 				dispose(): void {
 					unsubscribe();
 					unlinkBranchProvider();
-					if (render) render = undefined;
+					if (render === componentRender) render = undefined;
+					if (activeCtx === ctx) activeCtx = undefined;
+					if (activeFooterData === footerData) activeFooterData = undefined;
 				},
 				invalidate(): void {},
 				render(width: number): string[] {
-					return renderFooterBlock(createSnapshot(pi, ctx, footerData.getGitBranch(), state), width);
+					const renderCtx = resolveRenderContext(activeCtx, ctx);
+					const branchProvider = activeFooterData ?? footerData;
+					const branch = safeRead(() => branchProvider.getGitBranch(), null);
+					return renderFooterBlock(createSnapshot(pi, renderCtx, branch, state), width);
 				},
 			};
 		});
@@ -229,11 +239,40 @@ export function installFooter(pi: ExtensionAPI): void {
 	pi.on("agent_end", () => setState("idle"));
 }
 
-function createSnapshot(pi: ExtensionAPI, ctx: ExtensionContext, branch: string | null, state: SumoCodeState): FooterSnapshot {
+
+function resolveRenderContext(...candidates: Array<ExtensionContext | undefined>): ExtensionContext | undefined {
+	for (const candidate of candidates) {
+		if (!candidate) continue;
+		if (!safeRead(() => {
+			void candidate.cwd;
+			return true;
+		}, false)) continue;
+		return candidate;
+	}
+	return undefined;
+}
+
+function createSnapshot(pi: ExtensionAPI, ctx: ExtensionContext | undefined, branch: string | null, state: SumoCodeState): FooterSnapshot {
+	if (!ctx) {
+		return {
+			cwd: "",
+			branch,
+			inputTokens: 0,
+			outputTokens: 0,
+			contextTokens: 0,
+			contextWindow: 0,
+			costUsd: 0,
+			state,
+			modelId: "no-model",
+			thinkingLevel: "medium",
+			isSplash: false,
+		};
+	}
+
 	const usage = getSessionUsage(ctx);
 
 	return {
-		cwd: ctx.cwd,
+		cwd: safeRead(() => ctx.cwd, ""),
 		branch,
 		inputTokens: usage.input,
 		outputTokens: usage.output,
@@ -241,10 +280,18 @@ function createSnapshot(pi: ExtensionAPI, ctx: ExtensionContext, branch: string 
 		contextWindow: getContextWindow(ctx),
 		costUsd: usage.cost,
 		state,
-		modelId: ctx.model?.id ?? "no-model",
+		modelId: safeRead(() => ctx.model?.id, undefined) ?? "no-model",
 		thinkingLevel: getThinkingLevel(pi, ctx),
 		isSplash: !sessionHasMessages(ctx),
 	};
+}
+
+function safeRead<T>(read: () => T, fallback: T): T {
+	try {
+		return read();
+	} catch {
+		return fallback;
+	}
 }
 
 function sessionHasMessages(ctx: ExtensionContext): boolean {
@@ -272,16 +319,13 @@ function getThinkingLevel(pi: ExtensionAPI, ctx: ExtensionContext): ThinkingLeve
 		// fall through
 	}
 	// Legacy probe (kept so older Pi versions / mocked contexts still work).
-	const ctxGetter = (ctx as { getThinkingLevel?: () => ThinkingLevel }).getThinkingLevel;
-	if (typeof ctxGetter === "function") {
-		try {
-			return ctxGetter.call(ctx);
-		} catch {
-			// fall through
-		}
+	try {
+		const ctxGetter = (ctx as { getThinkingLevel?: () => ThinkingLevel }).getThinkingLevel;
+		if (typeof ctxGetter === "function") return ctxGetter.call(ctx);
+	} catch {
+		// fall through
 	}
-	const legacy = (ctx as { thinkingLevel?: ThinkingLevel }).thinkingLevel;
-	return legacy ?? "medium";
+	return safeRead(() => (ctx as { thinkingLevel?: ThinkingLevel }).thinkingLevel, undefined) ?? "medium";
 }
 
 function getContextTokens(ctx: ExtensionContext, usage: Usage): number {
@@ -301,12 +345,16 @@ function getContextWindow(ctx: ExtensionContext): number {
 	} catch {
 		// fall through
 	}
-	return ctx.model?.contextWindow ?? 0;
+	return safeRead(() => ctx.model?.contextWindow, undefined) ?? 0;
 }
 
 function getSessionUsage(ctx: ExtensionContext): Usage {
-	const cached = getCachedSessionUsage(ctx);
-	return { input: cached.input, output: cached.output, cost: cached.cost };
+	try {
+		const cached = getCachedSessionUsage(ctx);
+		return { input: cached.input, output: cached.output, cost: cached.cost };
+	} catch {
+		return { input: 0, output: 0, cost: 0 };
+	}
 }
 
 function defaultGitRunner(args: string[], cwd: string): string {

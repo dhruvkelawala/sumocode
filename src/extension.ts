@@ -16,6 +16,7 @@ import { installCathedralEditor } from "./cathedral/cathedral-editor.js";
 import { registerSumoReloadCommand } from "./commands/reload.js";
 import { installSumoInteractions } from "./interaction-registry.js";
 import { installFooter } from "./footer.js";
+import { installMemoryExtraction } from "./memory-extraction.js";
 import { installRenderDiagnostics } from "./render-diagnostics.js";
 import { installSessionCache } from "./session-cache.js";
 import { installSplash } from "./splash.js";
@@ -126,6 +127,7 @@ export default function sumocode(pi: ExtensionAPI): void {
 	installTopChrome(pi);
 	installSplash(pi);
 	installFooter(pi);
+	installMemoryExtraction(pi);
 	installCathedralEditor(pi);
 	installInputHints(pi);
 	installApprovalGate(pi);

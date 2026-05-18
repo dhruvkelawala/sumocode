@@ -23,6 +23,7 @@ function memoryClient(query: RemnicMemoryClient["query"]): RemnicMemoryClient {
 		status: vi.fn(),
 		add: vi.fn(),
 		forget: vi.fn(),
+		observe: vi.fn(async () => undefined),
 		browse: vi.fn(async () => []),
 	};
 }

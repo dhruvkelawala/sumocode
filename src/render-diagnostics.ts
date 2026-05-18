@@ -27,6 +27,7 @@ import { createRequire } from "node:module";
 import { performance } from "node:perf_hooks";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { isDiagnosticsEnabled, logDiagnostic } from "./sumo-tui/runtime/diagnostics.js";
+import { isTerminalIoError } from "./sumo-tui/runtime/terminal-errors.js";
 
 /** Render durations >= this (ms) get logged individually as `render_sample`. */
 const SLOW_RENDER_THRESHOLD_MS = 4;
@@ -356,6 +357,39 @@ export const renderDiagnosticsCounters = {
 
 type RenderableComponent = { render(width: number): string[] };
 
+type WritableWrite = (...args: any[]) => boolean;
+
+function withTerminalIoGuard(
+	write: WritableWrite,
+	args: unknown[],
+	onSuccess: () => void,
+	onTerminalUnavailable: () => void,
+): boolean {
+	const nextArgs = [...args];
+	const last = nextArgs.at(-1);
+	if (typeof last === "function") {
+		nextArgs[nextArgs.length - 1] = (error?: unknown): unknown => {
+			if (isTerminalIoError(error)) {
+				onTerminalUnavailable();
+				return undefined;
+			}
+			return (last as (error?: unknown) => unknown)(error);
+		};
+	}
+	try {
+		const result = write(...nextArgs);
+		onSuccess();
+		return result;
+	} catch (error) {
+		onSuccess();
+		if (isTerminalIoError(error)) {
+			onTerminalUnavailable();
+			return false;
+		}
+		throw error;
+	}
+}
+
 function patchRender(target: RenderTarget, component: RenderableComponent): void {
 	const original = component.render.bind(component);
 	component.render = (width: number): string[] => {
@@ -459,14 +493,22 @@ function instrumentWritable(stream: NodeJS.WriteStream, label: "stdout" | "stder
 	const target = stream as unknown as { [key: string]: unknown; write: NodeJS.WriteStream["write"] };
 	if (target[marker]) return;
 	const original = target.write.bind(stream) as NodeJS.WriteStream["write"];
+	let streamUnavailable = false;
 	target.write = ((chunk: string | Uint8Array, ...rest: unknown[]): boolean => {
+		if (streamUnavailable) return false;
 		const bytes = typeof chunk === "string" ? Buffer.byteLength(chunk) : chunk.byteLength;
 		const start = performance.now();
-		// eslint-disable-next-line @typescript-eslint/no-explicit-any
-		const result = (original as unknown as (...args: any[]) => boolean)(chunk, ...(rest as unknown[]));
-		const duration = performance.now() - start;
-		stats.recordWrite(label, bytes, duration);
-		return result;
+		return withTerminalIoGuard(
+			original as unknown as WritableWrite,
+			[chunk, ...rest],
+			() => {
+			const duration = performance.now() - start;
+			stats.recordWrite(label, bytes, duration);
+			},
+			() => {
+				streamUnavailable = true;
+			},
+		);
 	}) as NodeJS.WriteStream["write"];
 	target[marker] = true;
 }
@@ -543,15 +585,23 @@ function instrumentStdin(): void {
 	if (stdoutTarget[stdoutPatchedKey]) return;
 	stdoutTarget[stdoutPatchedKey] = true;
 	const originalWrite = stdoutTarget.write.bind(process.stdout) as NodeJS.WriteStream["write"];
+	let stdoutUnavailable = false;
 	stdoutTarget.write = ((chunk: string | Uint8Array, ...rest: unknown[]): boolean => {
+		if (stdoutUnavailable) return false;
 		if (pendingSince !== undefined) {
 			const duration = performance.now() - pendingSince;
 			stats.recordKeystrokeLatency(duration, pendingBytes);
 			pendingSince = undefined;
 			pendingBytes = 0;
 		}
-		// eslint-disable-next-line @typescript-eslint/no-explicit-any
-		return (originalWrite as unknown as (...args: any[]) => boolean)(chunk, ...(rest as unknown[]));
+		return withTerminalIoGuard(
+			originalWrite as unknown as WritableWrite,
+			[chunk, ...rest],
+			() => undefined,
+			() => {
+				stdoutUnavailable = true;
+			},
+		);
 	}) as NodeJS.WriteStream["write"];
 }
 

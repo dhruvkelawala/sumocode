@@ -9,6 +9,7 @@
  */
 
 import { logDiagnostic } from "./diagnostics.js";
+import { isTerminalIoError } from "./terminal-errors.js";
 
 // Kitty keyboard mode and xterm modifyOtherKeys are per-screen. pi-tui pushes
 // `\x1b[>7u` (or falls back to `\x1b[>4;2m`) on the main screen at startup; the
@@ -89,10 +90,6 @@ export interface TerminalSessionOwnerState {
 	readonly restored: boolean;
 }
 
-function isBrokenPipeError(error: unknown): boolean {
-	return typeof error === "object" && error !== null && "code" in error && (error as { code?: unknown }).code === "EPIPE";
-}
-
 function cursorColorSetSequence(hex: string): string {
 	return `\x1b]12;${hex}\x1b\\`;
 }
@@ -109,7 +106,7 @@ export class TerminalSessionOwner {
 	public restored = false;
 	private readonly output: TerminalOutput;
 	private readonly paintBackground: boolean;
-	private brokenPipe = false;
+	private terminalUnavailable = false;
 	private altscreenActive = false;
 	private mouseSGREnabled = false;
 	private backgroundPainted = false;
@@ -298,14 +295,15 @@ export class TerminalSessionOwner {
 	}
 
 	private write(data: string): void {
-		if (this.brokenPipe) return;
+		if (this.terminalUnavailable) return;
 		try {
 			this.output.write(data);
 		} catch (error) {
-			// Edge case 5.5: terminal/PTY disconnected. Nothing useful can be
-			// written after EPIPE, so silence it and make future writes no-ops.
-			if (isBrokenPipeError(error)) {
-				this.brokenPipe = true;
+			// Edge case 5.5 / NVMe stalls: terminal/PTY disconnected or unable to
+			// accept writes. Nothing useful can be written after these errors, and
+			// teardown writes can otherwise cascade into an uncaught-exception flood.
+			if (isTerminalIoError(error)) {
+				this.terminalUnavailable = true;
 				return;
 			}
 			throw error;

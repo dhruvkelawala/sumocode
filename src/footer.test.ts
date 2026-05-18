@@ -2,11 +2,13 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ExtensionAPI, ExtensionContext, ReadonlyFooterDataProvider } from "@earendil-works/pi-coding-agent";
 import { SUMOCODE_STATES, type SumoCodeState } from "./tokens.js";
 import {
 	formatCwd,
 	formatFooterLine,
+	installFooter,
 	renderFooterBlock,
 	renderSplashVersionLine,
 	resolveGitBranch,
@@ -50,6 +52,115 @@ function tmpGitRepo(): string {
 
 afterEach(() => {
 	for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+});
+
+type FooterComponent = { render(width: number): string[]; dispose?(): void };
+type FooterFactory = (
+	tui: { requestRender(): void },
+	theme: unknown,
+	footerData: Pick<ReadonlyFooterDataProvider, "getGitBranch" | "onBranchChange">,
+) => FooterComponent;
+
+function installFooterHarness(): {
+	setFooter(factory: FooterFactory | undefined): void;
+	fireSessionStart(ctx: ExtensionContext): void;
+	latestFactory(): FooterFactory;
+} {
+	const handlers = new Map<string, Array<(event: unknown, ctx: ExtensionContext) => void>>();
+	let factory: FooterFactory | undefined;
+	const pi = {
+		on: vi.fn((eventName: string, handler: (event: unknown, ctx: ExtensionContext) => void) => {
+			const list = handlers.get(eventName) ?? [];
+			list.push(handler);
+			handlers.set(eventName, list);
+		}),
+		getThinkingLevel: () => "medium",
+	} as unknown as ExtensionAPI;
+	installFooter(pi);
+	return {
+		setFooter(next: FooterFactory | undefined): void {
+			factory = next;
+		},
+		fireSessionStart(ctx: ExtensionContext): void {
+			for (const handler of handlers.get("session_start") ?? []) handler({ type: "session_start" }, ctx);
+		},
+		latestFactory(): FooterFactory {
+			if (!factory) throw new Error("footer factory was not registered");
+			return factory;
+		},
+	};
+}
+
+function footerCtx(options: { cwd?: string; modelId?: string; throwOnSnapshot?: boolean; setFooter?: (factory: FooterFactory | undefined) => void }): ExtensionContext {
+	const branch = [{ type: "message", message: { role: "assistant", usage: { input: 10, output: 5, cost: { total: 0.01 } } } }];
+	const ctx = {
+		hasUI: true,
+		ui: {
+			setFooter: options.setFooter ?? (() => undefined),
+		},
+		sessionManager: {
+			getBranch: () => {
+				if (options.throwOnSnapshot) throw new Error("stale extension ctx");
+				return branch;
+			},
+		},
+		getContextUsage: () => {
+			if (options.throwOnSnapshot) throw new Error("stale extension ctx");
+			return { tokens: 15, contextWindow: 1000 };
+		},
+	};
+	Object.defineProperties(ctx, {
+		cwd: {
+			get() {
+				if (options.throwOnSnapshot) throw new Error("stale extension ctx");
+				return options.cwd ?? "/tmp/sumocode";
+			},
+		},
+		model: {
+			get() {
+				if (options.throwOnSnapshot) throw new Error("stale extension ctx");
+				return { id: options.modelId ?? "test-model", contextWindow: 1000 };
+			},
+		},
+	});
+	return ctx as unknown as ExtensionContext;
+}
+
+function footerData(branch: string | null, throwOnRead = false): Pick<ReadonlyFooterDataProvider, "getGitBranch" | "onBranchChange"> {
+	return {
+		getGitBranch: () => {
+			if (throwOnRead) throw new Error("stale footer data");
+			return branch;
+		},
+		onBranchChange: () => () => undefined,
+	};
+}
+
+describe("installFooter", () => {
+	it("renders old footer components against the latest session context after replacement", () => {
+		const harness = installFooterHarness();
+		const tui = { requestRender: vi.fn() };
+		const staleCtx = footerCtx({ throwOnSnapshot: true, setFooter: harness.setFooter });
+		harness.fireSessionStart(staleCtx);
+		const staleComponent = harness.latestFactory()(tui, {}, footerData("old", true));
+
+		const freshCtx = footerCtx({ modelId: "fresh-model", setFooter: harness.setFooter });
+		harness.fireSessionStart(freshCtx);
+		harness.latestFactory()(tui, {}, footerData("fresh"));
+
+		const plain = staleComponent.render(100).join("\n").replace(ANSI, "");
+		expect(plain).toContain("fresh-model");
+		expect(plain).toContain("15/1.0k");
+	});
+
+	it("falls back instead of throwing when the only footer context is stale", () => {
+		const harness = installFooterHarness();
+		const staleCtx = footerCtx({ throwOnSnapshot: true, setFooter: harness.setFooter });
+		harness.fireSessionStart(staleCtx);
+		const component = harness.latestFactory()({ requestRender: vi.fn() }, {}, footerData("old", true));
+
+		expect(() => component.render(100)).not.toThrow();
+	});
 });
 
 describe("formatFooterLine — F1 two-zone layout", () => {

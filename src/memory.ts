@@ -31,6 +31,11 @@ export type MemoryStatus = {
 	error?: string;
 };
 
+export type MemoryObservationMessage = {
+	role: "user" | "assistant";
+	content: string;
+};
+
 export type MemoryClientErrorCode =
 	| "daemon_down"
 	| "unauthorized"
@@ -63,6 +68,7 @@ export type RemnicMemoryClient = {
 	status(): Promise<MemoryStatus>;
 	add(text: string, category?: string): Promise<MemoryFact>;
 	forget(factId: string): Promise<void>;
+	observe(sessionKey: string, messages: readonly MemoryObservationMessage[]): Promise<void>;
 	/**
 	 * List all memories (newest first by default) for the cathedral memory editor.
 	 * Uses Remnic's GET /engram/v1/memories endpoint with status / q / limit / offset
@@ -246,6 +252,19 @@ export function createRemnicMemoryClient(options: RemnicMemoryClientOptions = {}
 					memoryId: factId,
 					status: "archived",
 					reasonCode: "sumocode_forget",
+				}),
+			});
+		},
+
+		async observe(sessionKey: string, messages: readonly MemoryObservationMessage[]): Promise<void> {
+			await requestJson("/engram/v1/observe", {
+				method: "POST",
+				body: JSON.stringify({
+					sessionKey,
+					messages: messages.map((message) => ({
+						role: message.role,
+						content: message.content,
+					})),
 				}),
 			});
 		},

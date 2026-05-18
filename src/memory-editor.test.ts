@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
 	MEMORY_EDITOR_HINTS,
 	MemoryEditorComponent,
+	formatMemoryStatus,
 	registerMemoryCommand,
 	renderMemoryEditor,
 	type MemoryEditorSnapshot,
@@ -326,6 +327,18 @@ describe("MemoryEditorComponent — interaction", () => {
 	});
 });
 
+describe("formatMemoryStatus", () => {
+	it("shows fact count and last extraction timestamp", () => {
+		expect(formatMemoryStatus({ ok: true, factCount: 6, lastExtractionAt: "2026-04-26T14:41:40.725Z" }))
+			.toBe("memory ok · 6 facts · last extraction 2026-04-26T14:41:40.725Z");
+	});
+
+	it("shows degraded status tersely", () => {
+		expect(formatMemoryStatus({ ok: false, factCount: 0, error: "memory unavailable" }))
+			.toBe("memory unavailable: memory unavailable");
+	});
+});
+
 describe("registerMemoryCommand", () => {
 	it("registers the /sumo:memory slash command", () => {
 		const registerCommand = vi.fn();
@@ -348,5 +361,22 @@ describe("registerMemoryCommand", () => {
 		await handler!("", { ui: { custom, notify } });
 
 		expect(custom.mock.calls.length + notify.mock.calls.length).toBeGreaterThan(0);
+	});
+
+	it("/sumo:memory status exposes Remnic extraction freshness", async () => {
+		let handler: ((args: string, ctx: unknown) => Promise<void>) | undefined;
+		const registerCommand = vi.fn((_name: string, opts: { handler: typeof handler }) => {
+			handler = opts.handler;
+		});
+		const client = fakeClient({
+			status: vi.fn(async () => ({ ok: true, factCount: 3, lastExtractionAt: "2026-04-26T14:41:40.725Z" })),
+		});
+		registerMemoryCommand({ registerCommand } as never, () => client);
+
+		const notify = vi.fn();
+		await handler!("status", { ui: { notify } });
+
+		expect(client.status).toHaveBeenCalledTimes(1);
+		expect(notify).toHaveBeenCalledWith("memory ok · 3 facts · last extraction 2026-04-26T14:41:40.725Z", "info");
 	});
 });

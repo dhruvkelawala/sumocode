@@ -22,6 +22,7 @@ import {
 	createRemnicMemoryClient,
 	MemoryClientError,
 	type MemoryFact,
+	type MemoryStatus,
 	type RemnicMemoryClient,
 } from "./memory.js";
 import {
@@ -408,13 +409,20 @@ export async function showMemoryEditor(
 	);
 }
 
-export function registerMemoryCommand(pi: ExtensionAPI): void {
+export function formatMemoryStatus(status: MemoryStatus): string {
+	if (!status.ok) return `memory unavailable${status.error ? `: ${status.error}` : ""}`;
+	const count = `${status.factCount} ${status.factCount === 1 ? "fact" : "facts"}`;
+	const latest = status.lastExtractionAt ? ` · last extraction ${status.lastExtractionAt}` : " · no extraction recorded";
+	return `memory ok · ${count}${latest}`;
+}
+
+export function registerMemoryCommand(pi: ExtensionAPI, createClient: () => RemnicMemoryClient = createRemnicMemoryClient): void {
 	pi.registerCommand("sumo:memory", {
-		description: "open the cathedral memory scriptorium (or `add` / `forget` for direct ops)",
+		description: "open the cathedral memory scriptorium (or `add` / `forget` / `status` for direct ops)",
 		handler: async (args: string, ctx: ExtensionCommandContext) => {
 			const arg = args.trim().split(/\s+/)[0]?.toLowerCase() ?? "";
 			if (arg === "" || arg === "edit") {
-				await showMemoryEditor(ctx);
+				await showMemoryEditor(ctx, createClient());
 				return;
 			}
 			if (arg === "add") {
@@ -424,7 +432,7 @@ export function registerMemoryCommand(pi: ExtensionAPI): void {
 					return;
 				}
 				try {
-					const client = createRemnicMemoryClient();
+					const client = createClient();
 					await client.add(text);
 					ctx.ui.notify(`memory added: ${text.slice(0, 40)}${text.length > 40 ? "\u2026" : ""}`, "info");
 				} catch (err) {
@@ -442,7 +450,7 @@ export function registerMemoryCommand(pi: ExtensionAPI): void {
 					return;
 				}
 				try {
-					const client = createRemnicMemoryClient();
+					const client = createClient();
 					await client.forget(id);
 					ctx.ui.notify(`memory forgotten: ${id}`, "info");
 				} catch (err) {
@@ -453,7 +461,16 @@ export function registerMemoryCommand(pi: ExtensionAPI): void {
 				}
 				return;
 			}
-			ctx.ui.notify("usage: /sumo:memory [edit|add <text>|forget <id>]", "info");
+			if (arg === "status") {
+				try {
+					const client = createClient();
+					ctx.ui.notify(formatMemoryStatus(await client.status()), "info");
+				} catch (err) {
+					ctx.ui.notify(`memory status failed: ${err instanceof Error ? err.message : String(err)}`, "warning");
+				}
+				return;
+			}
+			ctx.ui.notify("usage: /sumo:memory [edit|add <text>|forget <id>|status]", "info");
 		},
 	});
 }

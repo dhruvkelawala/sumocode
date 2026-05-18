@@ -279,6 +279,20 @@ describe("LifecycleRuntime", () => {
 		expect(output.writes).toEqual([TERMINAL_CLEANUP_SEQUENCE]);
 	});
 
+	it("restoreTerminal swallows terminal I/O failures during teardown", () => {
+		const fakeProcess = new FakeProcess();
+		const output = outputStub();
+		const terminalSession = new TerminalSessionOwner({ output });
+		const error = new Error("write EIO") as NodeJS.ErrnoException;
+		error.code = "EIO";
+		vi.spyOn(terminalSession, "exitTerminal").mockImplementation(() => {
+			throw error;
+		});
+		const runtime = createLifecycleRuntime({ process: fakeProcess, terminalSession });
+
+		expect(() => runtime.restoreTerminal()).not.toThrow();
+	});
+
 	it("SIGINT restores once, unregisters itself, and re-raises (EC-5.1)", () => {
 		const fakeProcess = new FakeProcess();
 		const output = outputStub();

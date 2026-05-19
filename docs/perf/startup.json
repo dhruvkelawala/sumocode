@@ -1,6 +1,6 @@
 {
-  "generatedAt": "2026-05-19T10:53:50.031Z",
-  "commit": "0af672f perf(startup): defer upstream interactive import",
+  "generatedAt": "2026-05-19T10:57:14.693Z",
+  "commit": "da525c7 perf(startup): import lifecycle directly",
   "runs": 3,
   "measurements": [
     {
@@ -8,78 +8,78 @@
       "samples": [
         {
           "ok": true,
-          "durationMs": 34.04554200172424,
+          "durationMs": 34.66825008392334,
           "code": 0,
           "signal": null,
           "stderr": ""
         },
         {
           "ok": true,
-          "durationMs": 31.618834018707275,
+          "durationMs": 31.796875,
           "code": 0,
           "signal": null,
           "stderr": ""
         },
         {
           "ok": true,
-          "durationMs": 30.51308298110962,
+          "durationMs": 28.014958143234253,
           "code": 0,
           "signal": null,
           "stderr": ""
         }
       ],
-      "avgMiddleMs": 31.6,
-      "minMs": 30.5,
-      "maxMs": 34
+      "avgMiddleMs": 31.8,
+      "minMs": 28,
+      "maxMs": 34.7
     },
     {
       "label": "print-mode",
       "samples": [
         {
           "ok": true,
-          "durationMs": 6368.494666099548,
+          "durationMs": 5924.319875001907,
           "code": 0,
           "signal": null,
           "stderr": ""
         },
         {
           "ok": true,
-          "durationMs": 6550.178584098816,
+          "durationMs": 6451.015958070755,
           "code": 0,
           "signal": null,
           "stderr": ""
         },
         {
           "ok": true,
-          "durationMs": 6033.398124933243,
+          "durationMs": 5939.650500059128,
           "code": 0,
           "signal": null,
           "stderr": ""
         }
       ],
-      "avgMiddleMs": 6368.5,
-      "minMs": 6033.4,
-      "maxMs": 6550.2
+      "avgMiddleMs": 5939.7,
+      "minMs": 5924.3,
+      "maxMs": 6451
     },
     {
       "label": "first-frame",
       "samples": [
         {
           "ok": true,
-          "durationMs": 2024.1457080841064
+          "durationMs": 1853.203500032425
         },
         {
           "ok": true,
-          "durationMs": 2034.6499581336975
+          "durationMs": 1859.136334180832
         },
         {
           "ok": true,
-          "durationMs": 2017.830374956131
+          "durationMs": 1829.315041065216
         }
       ],
-      "avgMiddleMs": 2024.1,
-      "minMs": 2017.8,
-      "maxMs": 2034.6
+      "avgMiddleMs": 1853.2,
+      "minMs": 1829.3,
+      "maxMs": 1859.1
     }
   ]
 }

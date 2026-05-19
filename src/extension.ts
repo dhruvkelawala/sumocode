@@ -3,21 +3,14 @@ import { homedir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { installInputHints } from "./cathedral/input-hints.js";
 
 import { loadSumoCodeConfig } from "./config/sumocode-config.js";
 import { getTheme, setActiveTheme } from "./themes/index.js";
 import { installLifecycle } from "./sumo-tui/runtime/lifecycle.js";
-import { installCathedralEditor } from "./cathedral/cathedral-editor.js";
 import { registerSumoReloadCommand } from "./commands/reload.js";
-import { installFooter } from "./footer.js";
 import { installMemoryExtraction } from "./memory-extraction.js";
 import { installRenderDiagnostics } from "./render-diagnostics.js";
 import { installSessionCache } from "./session-cache.js";
-import { installSplash } from "./splash.js";
-import { installTopChrome } from "./top-chrome.js";
-import { installWorkingIndicator } from "./working-indicator.js";
-import { installCompactionIndicator } from "./compaction-indicator.js";
 
 const SUMOCODE_PACKAGE_NAME = "@dhruvkelawala/sumocode";
 const LEGACY_TASK_TOOL_EXTENSION_PATH = join(".pi", "agent", "extensions", "task-tool", "index.ts");
@@ -89,16 +82,35 @@ export function shouldInstallNativeTaskTool(options: Pick<DuplicateInstalledExte
 	return !hasLegacyTaskToolExtension(options);
 }
 
+function replaySessionStartPi(pi: ExtensionAPI, event: unknown, ctx: unknown): ExtensionAPI {
+	const originalOn = pi.on.bind(pi) as (name: unknown, handler: (...args: unknown[]) => unknown, ...args: unknown[]) => unknown;
+	return {
+		...pi,
+		on(name: string, handler: (...args: unknown[]) => unknown, ...args: unknown[]): unknown {
+			const result = originalOn(name, handler, ...args);
+			if (name === "session_start") handler(event, ctx);
+			return result;
+		},
+	} as ExtensionAPI;
+}
+
 function installDeferredFeatures(pi: ExtensionAPI): void {
 	let installed = false;
-	pi.on("session_start", () => {
+	pi.on("session_start", (event, ctx) => {
 		if (installed) return;
 		installed = true;
-		setTimeout(() => installDeferredFeaturesNow(pi), 0).unref?.();
+		setTimeout(() => installDeferredFeaturesNow(replaySessionStartPi(pi, event, ctx)), 0).unref?.();
 	});
 }
 
 function installDeferredFeaturesNow(pi: ExtensionAPI): void {
+		void import("./top-chrome.js").then(({ installTopChrome }) => installTopChrome(pi));
+		void import("./splash.js").then(({ installSplash }) => installSplash(pi));
+		void import("./footer.js").then(({ installFooter }) => installFooter(pi));
+		void import("./cathedral/cathedral-editor.js").then(({ installCathedralEditor }) => installCathedralEditor(pi));
+		void import("./cathedral/input-hints.js").then(({ installInputHints }) => installInputHints(pi));
+		void import("./working-indicator.js").then(({ installWorkingIndicator }) => installWorkingIndicator(pi));
+		void import("./compaction-indicator.js").then(({ installCompactionIndicator }) => installCompactionIndicator(pi));
 		void import("./approval-modal.js").then(({ installApprovalGate }) => installApprovalGate(pi));
 		void import("./question-tool.js").then(({ installQuestionTool }) => installQuestionTool(pi));
 		void import("./answer-tool.js").then(({ installAnswerTool }) => installAnswerTool(pi));
@@ -162,14 +174,7 @@ export default function sumocode(pi: ExtensionAPI): void {
 	// invalidation handlers run alongside their state updates on lifecycle events.
 	installSessionCache(pi);
 	installLifecycle(pi);
-	installTopChrome(pi);
-	installSplash(pi);
-	installFooter(pi);
 	installMemoryExtraction(pi);
-	installCathedralEditor(pi);
-	installInputHints(pi);
-	installWorkingIndicator(pi);
-	installCompactionIndicator(pi);
 	registerSumoReloadCommand(pi);
 	installDeferredFeatures(pi);
 }

@@ -1,6 +1,6 @@
 {
-  "generatedAt": "2026-05-19T10:52:04.972Z",
-  "commit": "fd5c7e6 perf(startup): enable node compile cache",
+  "generatedAt": "2026-05-19T10:53:50.031Z",
+  "commit": "0af672f perf(startup): defer upstream interactive import",
   "runs": 3,
   "measurements": [
     {
@@ -8,77 +8,78 @@
       "samples": [
         {
           "ok": true,
-          "durationMs": 30.01379084587097,
+          "durationMs": 34.04554200172424,
           "code": 0,
           "signal": null,
           "stderr": ""
         },
         {
           "ok": true,
-          "durationMs": 28.230124950408936,
+          "durationMs": 31.618834018707275,
           "code": 0,
           "signal": null,
           "stderr": ""
         },
         {
           "ok": true,
-          "durationMs": 29.057875156402588,
+          "durationMs": 30.51308298110962,
           "code": 0,
           "signal": null,
           "stderr": ""
         }
       ],
-      "avgMiddleMs": 29.1,
-      "minMs": 28.2,
-      "maxMs": 30
+      "avgMiddleMs": 31.6,
+      "minMs": 30.5,
+      "maxMs": 34
     },
     {
       "label": "print-mode",
       "samples": [
         {
           "ok": true,
-          "durationMs": 6516.183082818985,
+          "durationMs": 6368.494666099548,
           "code": 0,
           "signal": null,
           "stderr": ""
         },
         {
           "ok": true,
-          "durationMs": 6113.224750041962,
+          "durationMs": 6550.178584098816,
           "code": 0,
           "signal": null,
           "stderr": ""
         },
         {
-          "ok": false,
-          "durationMs": 15002.13004207611,
-          "error": "print-mode timed out",
+          "ok": true,
+          "durationMs": 6033.398124933243,
+          "code": 0,
+          "signal": null,
           "stderr": ""
         }
       ],
-      "avgMiddleMs": 6516.2,
-      "minMs": 6113.2,
-      "maxMs": 15002.1
+      "avgMiddleMs": 6368.5,
+      "minMs": 6033.4,
+      "maxMs": 6550.2
     },
     {
       "label": "first-frame",
       "samples": [
         {
           "ok": true,
-          "durationMs": 2235.4966249465942
+          "durationMs": 2024.1457080841064
         },
         {
           "ok": true,
-          "durationMs": 2164.7688751220703
+          "durationMs": 2034.6499581336975
         },
         {
           "ok": true,
-          "durationMs": 2164.984791994095
+          "durationMs": 2017.830374956131
         }
       ],
-      "avgMiddleMs": 2165,
-      "minMs": 2164.8,
-      "maxMs": 2235.5
+      "avgMiddleMs": 2024.1,
+      "minMs": 2017.8,
+      "maxMs": 2034.6
     }
   ]
 }

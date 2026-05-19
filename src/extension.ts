@@ -7,7 +7,7 @@ import { installInputHints } from "./cathedral/input-hints.js";
 
 import { loadSumoCodeConfig } from "./config/sumocode-config.js";
 import { getTheme, setActiveTheme } from "./themes/index.js";
-import { installAltscreen } from "./cathedral/altscreen.js";
+import { installLifecycle } from "./sumo-tui/runtime/lifecycle.js";
 import { installCathedralEditor } from "./cathedral/cathedral-editor.js";
 import { registerSumoReloadCommand } from "./commands/reload.js";
 import { installFooter } from "./footer.js";
@@ -161,7 +161,7 @@ export default function sumocode(pi: ExtensionAPI): void {
 	// Cache must install before any consumer (footer/sidebar/top-chrome) so its
 	// invalidation handlers run alongside their state updates on lifecycle events.
 	installSessionCache(pi);
-	installAltscreen(pi);
+	installLifecycle(pi);
 	installTopChrome(pi);
 	installSplash(pi);
 	installFooter(pi);

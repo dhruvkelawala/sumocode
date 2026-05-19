@@ -59,6 +59,7 @@
 		<p>Second cut: deferred ChatPager/notification/shell-transition imports until immediately after the eager splash paint. A 3-run startup snapshot reported first-frame at 2.19s avg middle runs (min 2.12s, max 2.23s). This moves visible splash closer to the observed ~1.98s Pi+SumoTUI baseline without the SumoCode extension.</p>
 		<p>Third cut: enable Node's built-in compile cache by default under <code>node_modules/.cache/node-compile-cache</code>. It is a warm-start optimization only and does not add a SumoCode build step. Follow-up experiments deferring more extension modules and the extension UI adapter were rejected because they either delayed current-session setup or made first-frame timings worse.</p>
 		<p>Fourth cut: changed <code>sumo-interactive-mode.ts</code> to import Pi's <code>InteractiveMode</code> dynamically after eager splash. In diagnostic runs this moved <code>sumo_module_import_end</code> earlier and splash landed around 2.32s from process preload. The benchmark stayed around 2.16s, close to the observed no-extension baseline.</p>
+		<p>Fifth cut: removed the tiny <code>cathedral/altscreen.ts</code> wrapper from the startup import graph and imported the lifecycle installer directly. The 3-run benchmark reported first-frame at 2.02s average (min 2.018s, max 2.035s), effectively matching the observed Pi+SumoTUI no-extension baseline.</p>
 	</section>
 </body>
 </html>

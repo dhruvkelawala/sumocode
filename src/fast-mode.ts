@@ -1,5 +1,6 @@
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
+	clampThinkingLevel,
 	streamOpenAICodexResponses,
 	streamOpenAIResponses,
 	streamSimpleOpenAICodexResponses,
@@ -11,7 +12,6 @@ import {
 	type OpenAICodexResponsesOptions,
 	type OpenAIResponsesOptions,
 	type SimpleStreamOptions,
-	type ThinkingLevel,
 } from "@earendil-works/pi-ai";
 
 const SERVICE_TIER = "priority";
@@ -29,7 +29,7 @@ type FastModeConfig = {
 	models: readonly string[];
 };
 
-type FastModeModel = Pick<Model<Api>, "provider" | "id" | "api" | "maxTokens" | "thinkingLevelMap">;
+type FastModeModel = Pick<Model<Api>, "provider" | "id" | "api" | "maxTokens" | "contextWindow" | "thinkingLevelMap">;
 
 type FastModeStreamers = {
 	streamOpenAIResponses: typeof streamOpenAIResponses;
@@ -69,18 +69,24 @@ export function shouldApplyFastMode(config: FastModeConfig, model: FastModeModel
 	return config.enabled && isConfiguredFastModel(config, model) && SUPPORTED_APIS.has(model?.api ?? "");
 }
 
-function defaultMaxTokens(model: Pick<Model<Api>, "maxTokens">): number | undefined {
-	return model.maxTokens > 0 ? Math.min(model.maxTokens, 32_000) : undefined;
+const DEFAULT_MAX_OUTPUT_TOKENS = 32_000;
+const CONTEXT_WINDOW_OUTPUT_TOLERANCE = 1024;
+
+/**
+ * Match Pi's native `buildBaseOptions` default-maxTokens logic:
+ * only cap at 32k when `maxTokens >= contextWindow - tolerance` (sentinel
+ * meaning "context window IS the output limit"). Otherwise preserve the
+ * model's own maxTokens so 64k/128k output budgets are not silently reduced.
+ */
+function defaultMaxTokens(model: Pick<Model<Api>, "maxTokens" | "contextWindow">): number | undefined {
+	if (model.maxTokens <= 0) return undefined;
+	if (model.maxTokens >= model.contextWindow - CONTEXT_WINDOW_OUTPUT_TOLERANCE) {
+		return Math.min(model.maxTokens, DEFAULT_MAX_OUTPUT_TOKENS);
+	}
+	return model.maxTokens;
 }
 
-function mapReasoningEffort(model: FastModeModel, reasoning: ThinkingLevel | undefined): ThinkingLevel | undefined {
-	if (!reasoning) return undefined;
-	const mapped = model.thinkingLevelMap?.[reasoning];
-	if (mapped === null) return undefined;
-	return reasoning;
-}
-
-function buildBaseProviderOptions(model: Pick<Model<Api>, "maxTokens">, options: SimpleStreamOptions | undefined) {
+function buildBaseProviderOptions(model: Pick<Model<Api>, "maxTokens" | "contextWindow">, options: SimpleStreamOptions | undefined) {
 	return {
 		temperature: options?.temperature,
 		maxTokens: options?.maxTokens ?? defaultMaxTokens(model),
@@ -100,17 +106,19 @@ function buildBaseProviderOptions(model: Pick<Model<Api>, "maxTokens">, options:
 }
 
 export function buildOpenAIResponsesFastOptions(model: Model<Api>, options: SimpleStreamOptions | undefined): OpenAIResponsesOptions {
+	const clamped = options?.reasoning ? clampThinkingLevel(model, options.reasoning) : undefined;
 	return {
 		...buildBaseProviderOptions(model, options),
-		reasoningEffort: mapReasoningEffort(model, options?.reasoning) as OpenAIResponsesOptions["reasoningEffort"],
+		reasoningEffort: clamped as OpenAIResponsesOptions["reasoningEffort"],
 		serviceTier: SERVICE_TIER,
 	};
 }
 
 export function buildOpenAICodexResponsesFastOptions(model: Model<Api>, options: SimpleStreamOptions | undefined): OpenAICodexResponsesOptions {
+	const clamped = options?.reasoning ? clampThinkingLevel(model, options.reasoning) : undefined;
 	return {
 		...buildBaseProviderOptions(model, options),
-		reasoningEffort: mapReasoningEffort(model, options?.reasoning) as OpenAICodexResponsesOptions["reasoningEffort"],
+		reasoningEffort: clamped as OpenAICodexResponsesOptions["reasoningEffort"],
 		serviceTier: SERVICE_TIER,
 	};
 }

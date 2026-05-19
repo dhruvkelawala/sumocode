@@ -9,6 +9,7 @@ function model(overrides: Partial<Model<Api>> = {}): Model<Api> {
 		name: "GPT 5.5",
 		api: "openai-codex-responses",
 		baseUrl: "https://example.test",
+		contextWindow: 1_000_000,
 		maxTokens: 128_000,
 		reasoning: true,
 		thinkingLevelMap: {},
@@ -49,5 +50,42 @@ describe("fast mode", () => {
 			reasoningEffort: "high",
 			serviceTier: "priority",
 		});
+	});
+
+	it("preserves model maxTokens when below contextWindow (does not cap at 32k)", () => {
+		// Model with 64k maxTokens, 1M contextWindow → should keep 64k, not cap at 32k
+		const largeOutputModel = model({ api: "openai-responses", maxTokens: 64_000, contextWindow: 1_000_000 });
+		const result = buildOpenAIResponsesFastOptions(largeOutputModel, undefined);
+		expect(result.maxTokens).toBe(64_000);
+	});
+
+	it("caps maxTokens at 32k when maxTokens ≈ contextWindow (sentinel)", () => {
+		// Model where maxTokens == contextWindow → sentinel, cap at 32k
+		const sentinelModel = model({ api: "openai-responses", maxTokens: 200_000, contextWindow: 200_000 });
+		const result = buildOpenAIResponsesFastOptions(sentinelModel, undefined);
+		expect(result.maxTokens).toBe(32_000);
+	});
+
+	it("clamps unsupported reasoning levels via clampThinkingLevel", () => {
+		// Model whose thinkingLevelMap maps xhigh → max (supported)
+		const supportedModel = model({
+			api: "openai-responses",
+			thinkingLevelMap: { xhigh: "max" },
+		});
+		const result = buildOpenAIResponsesFastOptions(supportedModel, { reasoning: "xhigh" });
+		expect(result.reasoningEffort).toBe("xhigh");
+
+		// Model with empty thinkingLevelMap — xhigh is unsupported, should be clamped down
+		const unsupportedModel = model({
+			api: "openai-responses",
+			thinkingLevelMap: {},
+		});
+		const clamped = buildOpenAIResponsesFastOptions(unsupportedModel, { reasoning: "xhigh" });
+		expect(clamped.reasoningEffort).not.toBe("xhigh");
+	});
+
+	it("omits reasoning when not provided in options", () => {
+		const result = buildOpenAICodexResponsesFastOptions(model(), undefined);
+		expect(result.reasoningEffort).toBeUndefined();
 	});
 });

@@ -6,8 +6,8 @@ A Pi extension that ships its own retained terminal renderer (SumoTUI), three th
 
 [![MIT License](https://img.shields.io/badge/license-MIT-2D211A?style=flat-square)](./LICENSE)
 [![Version](https://img.shields.io/badge/v0.3.0-B85A22?style=flat-square)](./CHANGELOG.md)
-[![Pi 0.74](https://img.shields.io/badge/pi-0.74.0-4A6B3A?style=flat-square)](https://github.com/earendil-works/pi)
-[![Tests](https://img.shields.io/badge/tests-807%20passing-4A6B3A?style=flat-square)](./test)
+[![Pi 0.75](https://img.shields.io/badge/pi-0.75.3-4A6B3A?style=flat-square)](https://github.com/earendil-works/pi)
+[![Tests](https://img.shields.io/badge/tests-868%20passing-4A6B3A?style=flat-square)](./test)
 
 <br>
 
@@ -55,6 +55,7 @@ Three themes ship: Cathedral (default), Amber CRT, and Obsidian Temple. Cycle wi
 | **Five preattentive states** | `idle`, `thinking`, `tool`, `approval`, `learning`. Each maps to a distinct theme-defined colour, surfaced in the footer dot and working indicator. |
 | **Owned-shell mode** | Full altscreen ownership: retained renderer, in-app scroll, modal layer, mouse routing, OSC 52 cell-precise selection. Pi reduced to LLM, tools, sessions through adapters in [`src/sumo-tui/pi-compat/`](./src/sumo-tui/pi-compat/). |
 | **`/sumo:reload`** | Hot-reload via launcher loop and exit code 100. Strips `--resume`, replaces with `--continue`. Resumes the in-flight session. |
+| **`/fast`** | Session-local OpenAI/Codex fast-mode toggle. Wraps Pi's native `openai-responses` and `openai-codex-responses` streamers and passes `serviceTier: "priority"` through provider options instead of patching raw payloads. |
 | **Cathedral approval modal** | Pattern-gated approval for dangerous bash commands. Default patterns cover `rm -rf`, `sudo`, `git push --force`, mutating `gh` calls. Configurable via `ApprovalGateConfig`. Modal height capped at 12 visible command rows. |
 | **Sidebar** | Three sections at width ≥ 120: context (token meter, session cost), MCP (server roster), memory (persisted bullets). Hidden in portrait orientation per [`SUMO_TUI_PORTRAIT_SIDEBAR_POLICY.md`](./docs/SUMO_TUI_PORTRAIT_SIDEBAR_POLICY.md). |
 | **Theme system** | Three first-party themes plus a chrome contract: each theme defines its own glyph set (`frame`, `sectionGlyphs`, `bullet`, `ruleChar`, `tabActive` / `tabInactive`) and an 8-frame working indicator. |
@@ -88,7 +89,7 @@ Reasoning is documented in [ADR 0001](./docs/adr/0001-sumo-tui-framework.md).
 
 ### The seam
 
-SumoTUI must initialise before Pi's `InteractiveMode` is constructed. Pi's public extension API does not expose that hook — it composes on top of the existing TUI rather than replacing it. SumoCode therefore carries a 36-line pnpm patch against `@earendil-works/pi-coding-agent`'s `dist/main.js` ([`patches/@earendil-works__pi-coding-agent@0.74.0.patch`](./patches/)):
+SumoTUI must initialise before Pi's `InteractiveMode` is constructed. Pi's public extension API does not expose that hook — it composes on top of the existing TUI rather than replacing it. SumoCode therefore carries a 36-line pnpm patch against `@earendil-works/pi-coding-agent`'s `dist/main.js` ([`patches/@earendil-works__pi-coding-agent@0.75.3.patch`](./patches/)):
 
 ```js
 const useSumoTui = isTruthyEnvFlag(process.env.SUMO_TUI) || parsed.unknownFlags.has("sumo-tui");
@@ -139,7 +140,7 @@ Sidebar docks at terminal width ≥ 120. Below 120, the sidebar disappears and p
 
 ```
 ┌──────────────────────────────────────────────────────────┐
-│  Pi  ·  @earendil-works/pi-coding-agent@0.74.0           │
+│  Pi  ·  @earendil-works/pi-coding-agent@0.75.3           │
 │   · LLM abstraction (pi-ai)                              │
 │   · agent loop + tools (pi-agent-core)                   │
 │   · sessions, compaction, auth, skills, MCP              │

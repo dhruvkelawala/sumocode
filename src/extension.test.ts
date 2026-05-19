@@ -20,6 +20,7 @@ function buildPiStub() {
 		registerCommand: vi.fn(),
 		registerShortcut: vi.fn(),
 		registerTool: vi.fn(),
+		registerProvider: vi.fn(),
 		registerMessageRenderer: vi.fn(),
 		sendMessage: vi.fn(),
 	};

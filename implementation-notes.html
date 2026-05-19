@@ -55,7 +55,8 @@
 		<h2>Follow-up: diagnose instead of pre-painting</h2>
 		<p>Launcher pre-paint was reverted. Added early process diagnostics and used <code>sumocode -d</code> traces to split startup into Pi process/module load, SumoCode extension import, retained runtime import, and actual splash paint.</p>
 		<p>Findings: with the extension loaded, first visible splash was about 4.45s in Dhruv's trace. Without <code>-e src/extension.ts</code>, the same retained runtime reached splash around 1.98s, so the SumoCode extension import graph was a major contributor.</p>
-		<p>Changes: deferred heavy post-splash imports from <code>sumo-interactive-mode.ts</code>; removed a top-chrome static import of the retained runtime; deferred heavy tool/command/sidebar registration until after <code>session_start</code>. The benchmark now reports first-frame around 2.42s. Remaining cost is mostly Pi baseline plus retained runtime import; further cuts likely require deeper runtime splitting or upstream Pi startup work.</p>
+		<p>Changes: deferred heavy post-splash imports from <code>sumo-interactive-mode.ts</code>; removed a top-chrome static import of the retained runtime; deferred heavy tool/command/sidebar registration until after <code>session_start</code>. The benchmark reported first-frame around 2.42s at this point. Remaining cost is mostly Pi baseline plus retained runtime import; further cuts likely require deeper runtime splitting or upstream Pi startup work.</p>
+		<p>Second cut: deferred ChatPager/notification/shell-transition imports until immediately after the eager splash paint. A 3-run startup snapshot reported first-frame at 2.19s avg middle runs (min 2.12s, max 2.23s). This moves visible splash closer to the observed ~1.98s Pi+SumoTUI baseline without the SumoCode extension.</p>
 	</section>
 </body>
 </html>

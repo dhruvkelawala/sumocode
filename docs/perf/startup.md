@@ -2,12 +2,12 @@
 
 Report-only startup measurements for the current checkout. These numbers are intentionally not CI gates; use them to compare phase-by-phase deltas.
 
-- commit: `d334c48 perf(startup): defer post-splash tui imports`
-- runs: 5
-- generated: 2026-05-19T10:26:29.153Z
+- commit: `8982b30 perf(startup): defer heavy extension registration`
+- runs: 3
+- generated: 2026-05-19T10:30:41.939Z
 
 | Measurement | Avg middle runs | Min | Max | Runs |
 | --- | ---: | ---: | ---: | ---: |
-| launcher-dry-run | 27.6ms | 25.4ms | 28.6ms | 5 |
-| print-mode | 6487.6ms | 6228.4ms | 7349.2ms | 5 |
-| first-frame | 2422.9ms | 2371.2ms | 2458.8ms | 5 |
+| launcher-dry-run | 26.2ms | 25ms | 27.9ms | 3 |
+| print-mode | 6072.1ms | 6071.4ms | 6072.4ms | 3 |
+| first-frame | 2193.7ms | 2120.7ms | 2230.4ms | 3 |

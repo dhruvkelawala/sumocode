@@ -48,9 +48,9 @@ import { logDiagnostic, logRuntimeStart } from "../runtime/diagnostics.js";
 import { FrameScheduler } from "../runtime/frame-scheduler.js";
 import { emitResumeBudgetOverlay, measureMaybe, ResumeProfiler, type ResumeProfileMetadata } from "../runtime/resume-profiler.js";
 import { defaultTerminalSessionOwner, TerminalSessionOwner, type TerminalOutput } from "../runtime/terminal-controller.js";
-import { ChatPager } from "../widgets/chat-pager.js";
-import { NotificationCenter } from "../widgets/notification.js";
-import { PiComponentLeaf } from "../widgets/pi-component-leaf.js";
+import type { ChatPager } from "../widgets/chat-pager.js";
+import type { NotificationCenter } from "../widgets/notification.js";
+import type { PiComponentLeaf } from "../widgets/pi-component-leaf.js";
 import type { installChatViewportBridge } from "./chat-viewport-controller.js";
 import {
 	filterPiNoiseChildren,
@@ -70,7 +70,7 @@ export {
 	shouldHidePiNoise,
 	type PiNoiseFilterState,
 } from "./pi-interactive-adapter.js";
-import { RetainedShellTransition } from "./retained-shell-transition.js";
+import type { RetainedShellTransition } from "./retained-shell-transition.js";
 import type { OwnedShellRenderer } from "./owned-shell-renderer.js";
 import { SumoExtensionUIAdapter, type SumoExtensionUIAdapterOptions } from "./extension-ui-adapter.js";
 import { createForeignAwareUIContext, type ForeignAwareUIOptions } from "./foreign-extension-warning.js";
@@ -227,6 +227,25 @@ export class SumoInteractiveRuntime {
 		logDiagnostic("runtime_yoga_load_end");
 		this.root = new SumoNode(this.yoga.Node.create());
 		this.root.flexDirection = FLEX_DIRECTION_COLUMN;
+		this.splash = createSplashTree(this.yoga, this.root, () => defaultSplashSnapshot(this.chat?.hasMessages() ?? false));
+		logDiagnostic("runtime_tree_ready");
+		// Retained SumoInteractiveMode owns the application terminal contract.
+		// The extension lifecycle shim also enters altscreen when loaded, but the
+		// runtime must not depend on extension ordering: mouse wheel chat scrolling
+		// only works reliably when SGR mouse mode is enabled before Pi's first
+		// interactive frame.
+		logDiagnostic("terminal_retained_session_start");
+		this.terminal.startRetainedSession();
+		logDiagnostic("terminal_retained_session_end");
+		this.paintEagerSplashFrame();
+		logDiagnostic("runtime_deferred_widgets_import_start");
+		const [{ ChatPager }, { NotificationCenter }, { PiComponentLeaf }, { RetainedShellTransition }] = await Promise.all([
+			import("../widgets/chat-pager.js"),
+			import("../widgets/notification.js"),
+			import("../widgets/pi-component-leaf.js"),
+			import("./retained-shell-transition.js"),
+		]);
+		logDiagnostic("runtime_deferred_widgets_import_end");
 		this.chat = ChatPager.create(this.yoga, undefined, {
 			primaryAgentName: sumocodeConfig.primaryAgentName,
 			renderControls: {
@@ -234,7 +253,6 @@ export class SumoInteractiveRuntime {
 				setStreamingMode: (enabled) => this.setStreamingMode(enabled),
 			},
 		});
-		this.splash = createSplashTree(this.yoga, undefined, () => defaultSplashSnapshot(this.chat?.hasMessages() ?? false));
 		this.emptyChatQuote = new EmptyChatQuoteNode(this.yoga.Node.create(), () => this.emptyChatQuoteSnapshot());
 		this.selectionNotifications = new NotificationCenter({ onChange: () => this.requestRender() });
 		this.selectionNotificationNode = PiComponentLeaf.create(this.yoga, this.selectionNotifications, this.root);
@@ -254,16 +272,6 @@ export class SumoInteractiveRuntime {
 			reducedMotion: !this.output.isTTY || process.env.SUMOCODE_REDUCED_MOTION === "1",
 		});
 		this.syncChatSlot();
-		logDiagnostic("runtime_tree_ready");
-		// Retained SumoInteractiveMode owns the application terminal contract.
-		// The extension lifecycle shim also enters altscreen when loaded, but the
-		// runtime must not depend on extension ordering: mouse wheel chat scrolling
-		// only works reliably when SGR mouse mode is enabled before Pi's first
-		// interactive frame.
-		logDiagnostic("terminal_retained_session_start");
-		this.terminal.startRetainedSession();
-		logDiagnostic("terminal_retained_session_end");
-		this.paintEagerSplashFrame();
 		logRuntimeStart({
 			terminal: {
 				columns: this.output.columns ?? null,

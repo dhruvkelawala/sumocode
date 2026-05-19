@@ -88,4 +88,21 @@ describe("fast mode", () => {
 		const result = buildOpenAICodexResponsesFastOptions(model(), undefined);
 		expect(result.reasoningEffort).toBeUndefined();
 	});
+
+	it("converts clamped 'off' reasoning to undefined (matches Pi native path)", () => {
+		// Model that only supports "off" — clampThinkingLevel will return "off"
+		// for any input, and fast mode must convert that to undefined
+		const offOnlyModel = model({
+			api: "openai-responses",
+			thinkingLevelMap: { off: null, minimal: null, low: null, medium: null, high: null, xhigh: null },
+		});
+		const result = buildOpenAIResponsesFastOptions(offOnlyModel, { reasoning: "high" });
+		expect(result.reasoningEffort).toBeUndefined();
+
+		const codexResult = buildOpenAICodexResponsesFastOptions(
+			{ ...offOnlyModel, api: "openai-codex-responses" } as typeof offOnlyModel,
+			{ reasoning: "medium" },
+		);
+		expect(codexResult.reasoningEffort).toBeUndefined();
+	});
 });

@@ -105,20 +105,29 @@ function buildBaseProviderOptions(model: Pick<Model<Api>, "maxTokens" | "context
 	};
 }
 
+/**
+ * Clamp reasoning and convert "off" → undefined to match Pi's native
+ * streamSimple* path. OpenAI Responses does not accept "off" as a valid
+ * reasoning effort — Pi drops it before calling the provider stream.
+ */
+function clampReasoning(model: Model<Api>, reasoning: SimpleStreamOptions["reasoning"]): OpenAIResponsesOptions["reasoningEffort"] {
+	if (!reasoning) return undefined;
+	const clamped = clampThinkingLevel(model, reasoning);
+	return (clamped === "off" ? undefined : clamped) as OpenAIResponsesOptions["reasoningEffort"];
+}
+
 export function buildOpenAIResponsesFastOptions(model: Model<Api>, options: SimpleStreamOptions | undefined): OpenAIResponsesOptions {
-	const clamped = options?.reasoning ? clampThinkingLevel(model, options.reasoning) : undefined;
 	return {
 		...buildBaseProviderOptions(model, options),
-		reasoningEffort: clamped as OpenAIResponsesOptions["reasoningEffort"],
+		reasoningEffort: clampReasoning(model, options?.reasoning),
 		serviceTier: SERVICE_TIER,
 	};
 }
 
 export function buildOpenAICodexResponsesFastOptions(model: Model<Api>, options: SimpleStreamOptions | undefined): OpenAICodexResponsesOptions {
-	const clamped = options?.reasoning ? clampThinkingLevel(model, options.reasoning) : undefined;
 	return {
 		...buildBaseProviderOptions(model, options),
-		reasoningEffort: clamped as OpenAICodexResponsesOptions["reasoningEffort"],
+		reasoningEffort: clampReasoning(model, options?.reasoning) as OpenAICodexResponsesOptions["reasoningEffort"],
 		serviceTier: SERVICE_TIER,
 	};
 }

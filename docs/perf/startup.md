@@ -2,12 +2,12 @@
 
 Report-only startup measurements for the current checkout. These numbers are intentionally not CI gates; use them to compare phase-by-phase deltas.
 
-- commit: `f247f97 perf(startup): defer chat shell imports past splash`
-- runs: 5
-- generated: 2026-05-19T10:49:09.915Z
+- commit: `fd5c7e6 perf(startup): enable node compile cache`
+- runs: 3
+- generated: 2026-05-19T10:52:04.972Z
 
 | Measurement | Avg middle runs | Min | Max | Runs |
 | --- | ---: | ---: | ---: | ---: |
-| launcher-dry-run | 36.5ms | 32.9ms | 41.2ms | 5 |
-| print-mode | 6562.6ms | 6224.8ms | 10748.4ms | 5 |
-| first-frame | 2207.1ms | 2146.6ms | 2264.9ms | 5 |
+| launcher-dry-run | 29.1ms | 28.2ms | 30ms | 3 |
+| print-mode | 6516.2ms | 6113.2ms | 15002.1ms | 3 |
+| first-frame | 2165ms | 2164.8ms | 2235.5ms | 3 |

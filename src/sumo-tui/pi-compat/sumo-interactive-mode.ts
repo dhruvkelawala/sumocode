@@ -27,9 +27,7 @@
  * SOFTWARE.
  */
 
-import type { AgentSessionRuntime, InteractiveModeOptions } from "@earendil-works/pi-coding-agent";
-import { InteractiveMode } from "@earendil-works/pi-coding-agent";
-import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
+import type { AgentSessionRuntime, ExtensionUIContext, InteractiveMode, InteractiveModeOptions } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
 import { loadSumoCodeConfig } from "../../config/sumocode-config.js";
 import { onThemeChanged } from "../../themes/index.js";
@@ -668,7 +666,7 @@ export class SumoInteractiveMode {
 		logDiagnostic("sumo_mode_init_begin");
 		await this.retainedRuntime.start();
 		logDiagnostic("sumo_mode_retained_runtime_ready");
-		const upstream = this.ensureUpstream();
+		const upstream = await this.ensureUpstream();
 		await this.installChatViewportBridge(upstream);
 		logDiagnostic("upstream_init_start");
 		await upstream.init();
@@ -682,7 +680,7 @@ export class SumoInteractiveMode {
 		await this.init();
 		debugLog("SumoInteractiveMode.run() delegating to Pi session loop");
 		logDiagnostic("upstream_run_start");
-		await this.ensureUpstream().run();
+		await (await this.ensureUpstream()).run();
 		logDiagnostic("upstream_run_end");
 	}
 
@@ -716,8 +714,11 @@ export class SumoInteractiveMode {
 		return this.options.retainedExtensionUI === true;
 	}
 
-	private ensureUpstream(): InteractiveMode {
+	private async ensureUpstream(): Promise<InteractiveMode> {
 		if (!this.upstream) {
+			logDiagnostic("upstream_import_start");
+			const { InteractiveMode } = await import("@earendil-works/pi-coding-agent");
+			logDiagnostic("upstream_import_end");
 			logDiagnostic("upstream_construct_start");
 			if (shouldForceHardwareCursor() && process.env.PI_HARDWARE_CURSOR === undefined) process.env.PI_HARDWARE_CURSOR = "1";
 			this.upstream = new InteractiveMode(this.runtimeHost, this.options);

@@ -4,17 +4,12 @@ import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { installInputHints } from "./cathedral/input-hints.js";
-import { installAnswerTool } from "./answer-tool.js";
-import { installApprovalGate } from "./approval-modal.js";
-import { installQuestionTool } from "./question-tool.js";
-import { taskTool } from "./native-task-tool.js";
 
 import { loadSumoCodeConfig } from "./config/sumocode-config.js";
 import { getTheme, setActiveTheme } from "./themes/index.js";
 import { installAltscreen } from "./cathedral/altscreen.js";
 import { installCathedralEditor } from "./cathedral/cathedral-editor.js";
 import { registerSumoReloadCommand } from "./commands/reload.js";
-import { installSumoInteractions } from "./interaction-registry.js";
 import { installFooter } from "./footer.js";
 import { installMemoryExtraction } from "./memory-extraction.js";
 import { installRenderDiagnostics } from "./render-diagnostics.js";
@@ -94,6 +89,49 @@ export function shouldInstallNativeTaskTool(options: Pick<DuplicateInstalledExte
 	return !hasLegacyTaskToolExtension(options);
 }
 
+function installDeferredFeatures(pi: ExtensionAPI): void {
+	let installed = false;
+	pi.on("session_start", () => {
+		if (installed) return;
+		installed = true;
+		setTimeout(() => installDeferredFeaturesNow(pi), 0).unref?.();
+	});
+}
+
+function installDeferredFeaturesNow(pi: ExtensionAPI): void {
+		void import("./approval-modal.js").then(({ installApprovalGate }) => installApprovalGate(pi));
+		void import("./question-tool.js").then(({ installQuestionTool }) => installQuestionTool(pi));
+		void import("./answer-tool.js").then(({ installAnswerTool }) => installAnswerTool(pi));
+		void import("./interaction-registry.js").then(({ installSumoInteractions }) => installSumoInteractions(pi));
+		// The old global `~/.pi/agent/extensions/task-tool` extension registers the
+		// same `task` tool name and Pi treats duplicate tools as fatal. Until the
+		// user removes/disables that legacy extension, defer to it instead of
+		// crashing SumoCode startup. Native task takes over automatically once the
+		// legacy wrapper is gone.
+		if (shouldInstallNativeTaskTool({ force: process.env.SUMOCODE_NATIVE_TASK })) {
+			void import("./native-task-tool.js").then(({ taskTool }) => {
+				taskTool({
+					name: "task",
+					label: "Task",
+					description: [
+						"Run isolated pi subprocess tasks (single, chain, or parallel).",
+						"Optional model override (provider/modelId).",
+					].join(" "),
+					maxParallelTasks: 8,
+					maxConcurrency: 4,
+					collapsedItemCount: 10,
+					skillListLimit: 30,
+					systemPromptPatches: [
+						{
+							match: /\n\s*\n\s*in addition to the tools above, you may have access to other custom tools depending on the project\./i,
+							replace: "\n- task: never run this tool unless it's a skill run or I explictly ask you to",
+						},
+					],
+				})(pi);
+			});
+		}
+}
+
 /**
  * SumoCode — cathedral-themed Pi extension entry point.
  *
@@ -130,39 +168,8 @@ export default function sumocode(pi: ExtensionAPI): void {
 	installMemoryExtraction(pi);
 	installCathedralEditor(pi);
 	installInputHints(pi);
-	installApprovalGate(pi);
-	// The old global `~/.pi/agent/extensions/task-tool` extension registers the
-	// same `task` tool name and Pi treats duplicate tools as fatal. Until the
-	// user removes/disables that legacy extension, defer to it instead of
-	// crashing SumoCode startup. Native task takes over automatically once the
-	// legacy wrapper is gone.
-	if (shouldInstallNativeTaskTool({ force: process.env.SUMOCODE_NATIVE_TASK })) {
-		taskTool({
-			name: "task",
-			label: "Task",
-			description: [
-				"Run isolated pi subprocess tasks (single, chain, or parallel).",
-				"Optional model override (provider/modelId).",
-			].join(" "),
-			maxParallelTasks: 8,
-			maxConcurrency: 4,
-			collapsedItemCount: 10,
-			skillListLimit: 30,
-			systemPromptPatches: [
-				{
-					match: /\n\s*\n\s*in addition to the tools above, you may have access to other custom tools depending on the project\./i,
-					replace: "\n- task: never run this tool unless it's a skill run or I explictly ask you to",
-				},
-			],
-		})(pi);
-	}
-	installQuestionTool(pi);
-	installAnswerTool(pi);
-
-
-
 	installWorkingIndicator(pi);
 	installCompactionIndicator(pi);
 	registerSumoReloadCommand(pi);
-	installSumoInteractions(pi);
+	installDeferredFeatures(pi);
 }

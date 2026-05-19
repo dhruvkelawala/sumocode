@@ -97,16 +97,19 @@ describe("sumocode extension", () => {
 		expect(shouldInstallNativeTaskTool({ homeDir: "/home/user", exists: () => true, force: "1" })).toBe(true);
 	});
 
-	it("registers a native task tool when forced", () => {
+	it("registers a native task tool when forced", async () => {
 		const previous = process.env.SUMOCODE_NATIVE_TASK;
 		process.env.SUMOCODE_NATIVE_TASK = "1";
 		try {
-			const { pi } = buildPiStub();
+			const { pi, handlers } = buildPiStub();
 
 			sumocode(pi as never);
-
-			const toolNames = pi.registerTool.mock.calls.map((call) => (call[0] as { name: string }).name);
-			expect(toolNames).toContain("task");
+			const sessionStart = handlers.get("session_start") ?? [];
+			for (const handler of sessionStart) handler({ type: "session_start" }, buildCtxStub() as never);
+			await vi.waitFor(() => {
+				const toolNames = pi.registerTool.mock.calls.map((call) => (call[0] as { name: string }).name);
+				expect(toolNames).toContain("task");
+			});
 		} finally {
 			if (previous === undefined) delete process.env.SUMOCODE_NATIVE_TASK;
 			else process.env.SUMOCODE_NATIVE_TASK = previous;

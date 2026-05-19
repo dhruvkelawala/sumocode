@@ -23,8 +23,19 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import type { Component } from "@earendil-works/pi-tui";
 import { isTopChromeHidden } from "./commands/tabs.js";
 import { sessionHasMessages as cachedSessionHasMessages } from "./session-cache.js";
-import { getActiveSumoRuntime } from "./sumo-tui/pi-compat/sumo-interactive-mode.js";
 import { activeThemeColors, type SumoCodeState } from "./themes/index.js";
+
+const ACTIVE_SUMO_RUNTIME_KEY = Symbol.for("sumocode.activeSumoRuntime");
+
+type TopChromeRuntime = {
+	setTopChromeComponent(component: Component | undefined): void;
+	requestRender(): void;
+};
+
+function getActiveTopChromeRuntime(): TopChromeRuntime | undefined {
+	const host = globalThis as unknown as Record<symbol, { runtime?: TopChromeRuntime } | undefined>;
+	return host[ACTIVE_SUMO_RUNTIME_KEY]?.runtime;
+}
 
 const RESET = "\u001b[0m";
 const ANSI_PATTERN = /\u001b\[[0-9;]*m/g;
@@ -255,7 +266,7 @@ export function installTopChrome(pi: ExtensionAPI, loader?: TopChromeLoader): vo
 			() => (loader ? loader() : defaultSnapshot(ctx, state)),
 			() => sessionHasMessages(ctx),
 		);
-		const runtime = getActiveSumoRuntime();
+		const runtime = getActiveTopChromeRuntime();
 		if (runtime) runtime.setTopChromeComponent(component);
 
 		ctx.ui.setHeader((tui) => {
@@ -301,7 +312,7 @@ export function installTopChrome(pi: ExtensionAPI, loader?: TopChromeLoader): vo
 	pi.on("message_start", () => render?.());
 	pi.on("message_end", () => render?.());
 	pi.on("session_shutdown", () => {
-		getActiveSumoRuntime()?.setTopChromeComponent(undefined);
+		getActiveTopChromeRuntime()?.setTopChromeComponent(undefined);
 		render = undefined;
 	});
 }

@@ -50,5 +50,12 @@
 		</ul>
 		<p>Tradeoff: the launcher improvement is intentionally narrow and low risk. It does not hide that print mode and first-frame time remain dominated by upstream Pi startup/model/session work and retained-runtime TypeScript import cost.</p>
 	</section>
+
+	<section>
+		<h2>Follow-up: diagnose instead of pre-painting</h2>
+		<p>Launcher pre-paint was reverted. Added early process diagnostics and used <code>sumocode -d</code> traces to split startup into Pi process/module load, SumoCode extension import, retained runtime import, and actual splash paint.</p>
+		<p>Findings: with the extension loaded, first visible splash was about 4.45s in Dhruv's trace. Without <code>-e src/extension.ts</code>, the same retained runtime reached splash around 1.98s, so the SumoCode extension import graph was a major contributor.</p>
+		<p>Changes: deferred heavy post-splash imports from <code>sumo-interactive-mode.ts</code>; removed a top-chrome static import of the retained runtime; deferred heavy tool/command/sidebar registration until after <code>session_start</code>. The benchmark now reports first-frame around 2.42s. Remaining cost is mostly Pi baseline plus retained runtime import; further cuts likely require deeper runtime splitting or upstream Pi startup work.</p>
+	</section>
 </body>
 </html>

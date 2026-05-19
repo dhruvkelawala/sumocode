@@ -15,6 +15,14 @@ SCRIPT_DIR="$(cd "$(dirname "${SOURCE}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 export SUMO_TUI="${SUMO_TUI:-1}"
+# Node 22+ can persist V8 compile cache for CommonJS/ESM modules. SumoCode and
+# Pi execute TypeScript through jiti at runtime, so warm launches benefit from
+# Node's built-in bytecode cache without adding a project build step.
+if [[ -z "${NODE_COMPILE_CACHE:-}" ]]; then
+	NODE_COMPILE_CACHE="${ROOT_DIR}/node_modules/.cache/node-compile-cache"
+	mkdir -p "${NODE_COMPILE_CACHE}" 2>/dev/null || true
+	export NODE_COMPILE_CACHE
+fi
 # Set so the SumoCode `/sumo:reload` slash command knows it's running under
 # the loop-respawn launcher and can exit with the reload signal.
 export SUMOCODE_LAUNCHER="${SOURCE}"

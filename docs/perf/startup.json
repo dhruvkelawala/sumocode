@@ -1,85 +1,121 @@
 {
-  "generatedAt": "2026-05-19T10:30:41.939Z",
-  "commit": "8982b30 perf(startup): defer heavy extension registration",
-  "runs": 3,
+  "generatedAt": "2026-05-19T10:49:09.915Z",
+  "commit": "f247f97 perf(startup): defer chat shell imports past splash",
+  "runs": 5,
   "measurements": [
     {
       "label": "launcher-dry-run",
       "samples": [
         {
           "ok": true,
-          "durationMs": 26.213833808898926,
+          "durationMs": 41.24962520599365,
           "code": 0,
           "signal": null,
           "stderr": ""
         },
         {
           "ok": true,
-          "durationMs": 25.04658317565918,
+          "durationMs": 38.879584074020386,
           "code": 0,
           "signal": null,
           "stderr": ""
         },
         {
           "ok": true,
-          "durationMs": 27.938291788101196,
+          "durationMs": 33.15916705131531,
+          "code": 0,
+          "signal": null,
+          "stderr": ""
+        },
+        {
+          "ok": true,
+          "durationMs": 32.883708000183105,
+          "code": 0,
+          "signal": null,
+          "stderr": ""
+        },
+        {
+          "ok": true,
+          "durationMs": 37.39533305168152,
           "code": 0,
           "signal": null,
           "stderr": ""
         }
       ],
-      "avgMiddleMs": 26.2,
-      "minMs": 25,
-      "maxMs": 27.9
+      "avgMiddleMs": 36.5,
+      "minMs": 32.9,
+      "maxMs": 41.2
     },
     {
       "label": "print-mode",
       "samples": [
         {
           "ok": true,
-          "durationMs": 6071.367750167847,
+          "durationMs": 10748.367249965668,
           "code": 0,
           "signal": null,
           "stderr": ""
         },
         {
           "ok": true,
-          "durationMs": 6072.368124961853,
+          "durationMs": 6224.830874919891,
           "code": 0,
           "signal": null,
           "stderr": ""
         },
         {
           "ok": true,
-          "durationMs": 6072.072834014893,
+          "durationMs": 6483.07937502861,
+          "code": 0,
+          "signal": null,
+          "stderr": ""
+        },
+        {
+          "ok": true,
+          "durationMs": 6952.6924159526825,
+          "code": 0,
+          "signal": null,
+          "stderr": ""
+        },
+        {
+          "ok": true,
+          "durationMs": 6252.130917072296,
           "code": 0,
           "signal": null,
           "stderr": ""
         }
       ],
-      "avgMiddleMs": 6072.1,
-      "minMs": 6071.4,
-      "maxMs": 6072.4
+      "avgMiddleMs": 6562.6,
+      "minMs": 6224.8,
+      "maxMs": 10748.4
     },
     {
       "label": "first-frame",
       "samples": [
         {
           "ok": true,
-          "durationMs": 2230.4069588184357
+          "durationMs": 2264.937833070755
         },
         {
           "ok": true,
-          "durationMs": 2193.7132499217987
+          "durationMs": 2233.5061659812927
         },
         {
           "ok": true,
-          "durationMs": 2120.6582498550415
+          "durationMs": 2223.7825841903687
+        },
+        {
+          "ok": true,
+          "durationMs": 2164.0630419254303
+        },
+        {
+          "ok": true,
+          "durationMs": 2146.5504579544067
         }
       ],
-      "avgMiddleMs": 2193.7,
-      "minMs": 2120.7,
-      "maxMs": 2230.4
+      "avgMiddleMs": 2207.1,
+      "minMs": 2146.6,
+      "maxMs": 2264.9
     }
   ]
 }

@@ -2,12 +2,12 @@
 
 Report-only startup measurements for the current checkout. These numbers are intentionally not CI gates; use them to compare phase-by-phase deltas.
 
-- commit: `8982b30 perf(startup): defer heavy extension registration`
-- runs: 3
-- generated: 2026-05-19T10:30:41.939Z
+- commit: `f247f97 perf(startup): defer chat shell imports past splash`
+- runs: 5
+- generated: 2026-05-19T10:49:09.915Z
 
 | Measurement | Avg middle runs | Min | Max | Runs |
 | --- | ---: | ---: | ---: | ---: |
-| launcher-dry-run | 26.2ms | 25ms | 27.9ms | 3 |
-| print-mode | 6072.1ms | 6071.4ms | 6072.4ms | 3 |
-| first-frame | 2193.7ms | 2120.7ms | 2230.4ms | 3 |
+| launcher-dry-run | 36.5ms | 32.9ms | 41.2ms | 5 |
+| print-mode | 6562.6ms | 6224.8ms | 10748.4ms | 5 |
+| first-frame | 2207.1ms | 2146.6ms | 2264.9ms | 5 |

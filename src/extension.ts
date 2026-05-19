@@ -8,7 +8,6 @@ import { loadSumoCodeConfig } from "./config/sumocode-config.js";
 import { getTheme, setActiveTheme } from "./themes/index.js";
 import { installLifecycle } from "./sumo-tui/runtime/lifecycle.js";
 import { registerSumoReloadCommand } from "./commands/reload.js";
-import { installMemoryExtraction } from "./memory-extraction.js";
 import { installRenderDiagnostics } from "./render-diagnostics.js";
 import { installSessionCache } from "./session-cache.js";
 
@@ -104,6 +103,7 @@ function installDeferredFeatures(pi: ExtensionAPI): void {
 }
 
 function installDeferredFeaturesNow(pi: ExtensionAPI): void {
+		void import("./memory-extraction.js").then(({ installMemoryExtraction }) => installMemoryExtraction(pi));
 		void import("./top-chrome.js").then(({ installTopChrome }) => installTopChrome(pi));
 		void import("./splash.js").then(({ installSplash }) => installSplash(pi));
 		void import("./footer.js").then(({ installFooter }) => installFooter(pi));
@@ -174,7 +174,6 @@ export default function sumocode(pi: ExtensionAPI): void {
 	// invalidation handlers run alongside their state updates on lifecycle events.
 	installSessionCache(pi);
 	installLifecycle(pi);
-	installMemoryExtraction(pi);
 	registerSumoReloadCommand(pi);
 	installDeferredFeatures(pi);
 }

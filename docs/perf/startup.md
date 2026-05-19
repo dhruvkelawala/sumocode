@@ -2,12 +2,12 @@
 
 Report-only startup measurements for the current checkout. These numbers are intentionally not CI gates; use them to compare phase-by-phase deltas.
 
-- commit: `da525c7 perf(startup): import lifecycle directly`
-- runs: 3
-- generated: 2026-05-19T10:57:14.693Z
+- commit: `6570f8a perf(startup): lazy-load chrome after splash`
+- runs: 5
+- generated: 2026-05-19T10:59:54.733Z
 
 | Measurement | Avg middle runs | Min | Max | Runs |
 | --- | ---: | ---: | ---: | ---: |
-| launcher-dry-run | 31.8ms | 28ms | 34.7ms | 3 |
-| print-mode | 5939.7ms | 5924.3ms | 6451ms | 3 |
-| first-frame | 1853.2ms | 1829.3ms | 1859.1ms | 3 |
+| launcher-dry-run | 33.2ms | 29.2ms | 34.9ms | 5 |
+| print-mode | 6170.6ms | 5783.7ms | 7007.2ms | 5 |
+| first-frame | 1960.2ms | 1794.1ms | 2127.5ms | 5 |

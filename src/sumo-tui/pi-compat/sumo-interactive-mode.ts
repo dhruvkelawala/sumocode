@@ -51,8 +51,7 @@ import { defaultTerminalSessionOwner, TerminalSessionOwner, type TerminalOutput 
 import { ChatPager } from "../widgets/chat-pager.js";
 import { NotificationCenter } from "../widgets/notification.js";
 import { PiComponentLeaf } from "../widgets/pi-component-leaf.js";
-import { SIDEBAR_MIN_TERMINAL_WIDTH } from "../../sidebar.js";
-import { installChatViewportBridge } from "./chat-viewport-controller.js";
+import type { installChatViewportBridge } from "./chat-viewport-controller.js";
 import {
 	filterPiNoiseChildren,
 	forceHardwareCursorVisible,
@@ -72,7 +71,7 @@ export {
 	type PiNoiseFilterState,
 } from "./pi-interactive-adapter.js";
 import { RetainedShellTransition } from "./retained-shell-transition.js";
-import { OwnedShellRenderer } from "./owned-shell-renderer.js";
+import type { OwnedShellRenderer } from "./owned-shell-renderer.js";
 import { SumoExtensionUIAdapter, type SumoExtensionUIAdapterOptions } from "./extension-ui-adapter.js";
 import { createForeignAwareUIContext, type ForeignAwareUIOptions } from "./foreign-extension-warning.js";
 
@@ -115,6 +114,11 @@ export interface TopChromePublication {
 // different module copies. Cross those copies with a globalThis symbol so a
 // single instance is observable from anywhere.
 const ACTIVE_SUMO_RUNTIME_KEY = Symbol.for("sumocode.activeSumoRuntime");
+// Keep this local instead of importing ../../sidebar.js on the pre-splash path.
+// sidebar.ts pulls in memory/MCP/sidebar rendering dependencies that are not
+// needed just to decide whether the empty-chat quote should reserve sidebar
+// space. AGENTS.md documents 120 as the canonical wide-sidebar threshold.
+const SIDEBAR_MIN_TERMINAL_WIDTH = 120;
 
 interface ActiveRuntimeBox { runtime: SumoInteractiveRuntime | undefined }
 
@@ -622,6 +626,7 @@ export class SumoInteractiveMode {
 	private readonly piNoiseFilterState: PiNoiseFilterState = { removedNodes: [], skipNextSpacer: false };
 	private retainedUIContext: ExtensionUIContext | undefined;
 	private chatViewportBridgeCleanup: (() => void) | undefined;
+	private chatViewportBridgeInstaller: typeof installChatViewportBridge | undefined;
 	private ownedShell: OwnedShellRenderer | undefined;
 	private ownedShellOriginalDoRender: (() => void) | undefined;
 	private themeUnsubscribe: (() => void) | undefined;
@@ -656,11 +661,11 @@ export class SumoInteractiveMode {
 		await this.retainedRuntime.start();
 		logDiagnostic("sumo_mode_retained_runtime_ready");
 		const upstream = this.ensureUpstream();
-		this.configureUpstreamBeforeInit(upstream);
+		await this.installChatViewportBridge(upstream);
 		logDiagnostic("upstream_init_start");
 		await upstream.init();
 		logDiagnostic("upstream_init_end");
-		this.configureUpstreamAfterInit(upstream);
+		await this.configureUpstreamAfterInit(upstream);
 		logDiagnostic("sumo_mode_init_end");
 	}
 
@@ -709,27 +714,32 @@ export class SumoInteractiveMode {
 			if (shouldForceHardwareCursor() && process.env.PI_HARDWARE_CURSOR === undefined) process.env.PI_HARDWARE_CURSOR = "1";
 			this.upstream = new InteractiveMode(this.runtimeHost, this.options);
 			logDiagnostic("upstream_construct_end");
-			this.configureUpstreamBeforeInit(this.upstream);
+			if (shouldHidePiNoise()) installPiNoiseFilter(this.upstream, this.piNoiseFilterState);
+			if (shouldForceHardwareCursor()) forceHardwareCursorVisible(this.upstream);
 		}
 		return this.upstream;
 	}
 
-	private configureUpstreamBeforeInit(upstream: InteractiveMode): void {
-		if (shouldHidePiNoise()) installPiNoiseFilter(upstream, this.piNoiseFilterState);
-		if (!this.chatViewportBridgeCleanup) this.chatViewportBridgeCleanup = installChatViewportBridge(upstream, this.retainedRuntime);
-		if (shouldForceHardwareCursor()) forceHardwareCursorVisible(upstream);
+	private async installChatViewportBridge(upstream: InteractiveMode): Promise<void> {
+		if (this.chatViewportBridgeCleanup) return;
+		if (!this.chatViewportBridgeInstaller) {
+			logDiagnostic("chat_viewport_bridge_import_start");
+			this.chatViewportBridgeInstaller = (await import("./chat-viewport-controller.js")).installChatViewportBridge;
+			logDiagnostic("chat_viewport_bridge_import_end");
+		}
+		this.chatViewportBridgeCleanup = this.chatViewportBridgeInstaller(upstream, this.retainedRuntime);
 	}
 
-	private configureUpstreamAfterInit(upstream: InteractiveMode): void {
+	private async configureUpstreamAfterInit(upstream: InteractiveMode): Promise<void> {
 		if (shouldHidePiNoise()) {
 			const chatContainer = getUpstreamChatContainer(upstream);
 			if (chatContainer) filterPiNoiseChildren(chatContainer, this.piNoiseFilterState);
 		}
 		if (shouldForceHardwareCursor()) forceHardwareCursorVisible(upstream);
-		this.installOwnedShell(upstream);
+		await this.installOwnedShell(upstream);
 	}
 
-	private installOwnedShell(upstream: InteractiveMode): void {
+	private async installOwnedShell(upstream: InteractiveMode): Promise<void> {
 		const yoga = this.retainedRuntime.getYoga();
 		const snapshot = this.retainedRuntime.getSnapshot();
 		const host = upstream as unknown as {
@@ -767,6 +777,9 @@ export class SumoInteractiveMode {
 
 		const dimensions = host.ui.terminal ?? { columns: process.stdout.columns ?? 80, rows: process.stdout.rows ?? 24 };
 		const selectionPass = this.retainedRuntime.getSelectionController();
+		logDiagnostic("owned_shell_import_start");
+		const { OwnedShellRenderer } = await import("./owned-shell-renderer.js");
+		logDiagnostic("owned_shell_import_end");
 		this.ownedShell = new OwnedShellRenderer({
 			yoga,
 			chat: snapshot.chat,

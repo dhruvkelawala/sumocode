@@ -265,6 +265,12 @@ if [[ "${DEBUG_MODE}" == "1" ]]; then
 	if [[ "${CLEAR_DIAG}" == "1" && "${DRY_RUN}" != "1" ]]; then rm -f "${SUMO_TUI_DIAG_FILE}"; fi
 	export SUMO_TUI_DIAG_FILE
 	export SUMO_TUI_DEBUG="${SUMO_TUI_DEBUG:-1}"
+	STARTUP_PRELOAD="${ROOT_DIR}/scripts/startup-diagnostics-preload.cjs"
+	if [[ -f "${STARTUP_PRELOAD}" ]]; then
+		# Quote the path inside NODE_OPTIONS because the primary dev tree contains a
+		# space. Node's option parser honours these quotes.
+		export NODE_OPTIONS="${NODE_OPTIONS:-} --require \"${STARTUP_PRELOAD}\""
+	fi
 	if command -v git >/dev/null 2>&1 && git -C "${ROOT_DIR}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
 		export SUMOCODE_DEBUG_BRANCH="$(git -C "${ROOT_DIR}" branch --show-current 2>/dev/null || true)"
 		export SUMOCODE_DEBUG_COMMIT="$(git -C "${ROOT_DIR}" log --oneline -1 2>/dev/null || true)"

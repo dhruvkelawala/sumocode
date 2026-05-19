@@ -1,11 +1,11 @@
 diff --git a/dist/main.js b/dist/main.js
-index 0000000..0000000 100644
+index f0669ad..c166c33 100644
 --- a/dist/main.js
 +++ b/dist/main.js
-@@ -539,14 +539,18 @@ export async function main(args, options) {
-                 .join(", ");
-             console.log(chalk.dim(`Model scope: ${modelList} ${chalk.gray("(Ctrl+P to cycle)")}`));
-         }
+@@ -533,14 +533,18 @@ export async function main(args, options) {
+         await runRpcMode(runtime);
+     }
+     else if (appMode === "interactive") {
 -        const interactiveMode = new InteractiveMode(runtime, {
 +        const interactiveOptions = {
              migratedProviders,
@@ -23,7 +23,7 @@ index 0000000..0000000 100644
          if (startupBenchmark) {
              await interactiveMode.init();
              time("interactiveMode.init");
-@@ -580,4 +584,9 @@ export async function main(args, options) {
+@@ -574,4 +578,9 @@ export async function main(args, options) {
          return;
      }
  }

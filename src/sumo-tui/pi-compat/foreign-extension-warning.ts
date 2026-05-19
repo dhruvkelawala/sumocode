@@ -121,7 +121,7 @@ export class ForeignExtensionWarning {
 /**
  * Best-effort foreign extension UI guard.
  *
- * Pi 0.74.0 gives `ExtensionRunner` one shared UI context for all handlers
+ * Pi 0.75.3 gives `ExtensionRunner` one shared UI context for all handlers
  * (`dist/core/extensions/runner.js:372-411`), so Phase 4 cannot receive the
  * extension id as an argument without the interactive-mode fork. This wrapper
  * accepts an injected caller resolver (the fork can provide one; tests can fake

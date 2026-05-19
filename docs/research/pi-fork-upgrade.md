@@ -2,15 +2,15 @@
 
 > Active strategy: [`docs/SUMO_TUI_PI_PATCH_STRATEGY.md`](../SUMO_TUI_PI_PATCH_STRATEGY.md). This file is the step-by-step upgrade runbook.
 
-SumoCode currently pins Pi `0.74.0` plus Dhruv's tiny constructor patch. The patch is carried as a pnpm patch against the published `@earendil-works/pi-coding-agent` package because pnpm's GitHub subdirectory installs pack `packages/coding-agent` without untracked `dist/` output.
+SumoCode currently pins Pi `0.75.3` plus Dhruv's tiny constructor patch. Pi `0.75.x` requires Node `>=22.19.0`, so SumoCode's `engines.node` tracks that floor. The patch is carried as a pnpm patch against the published `@earendil-works/pi-coding-agent` package because pnpm's GitHub subdirectory installs pack `packages/coding-agent` without untracked `dist/` output.
 
 ## Current activation model
 
 - Runtime flag: `SUMO_TUI=1`
 - Optional module override: `SUMO_TUI_MODULE=file:///.../sumo-interactive-mode.js`
 - SumoCode wrapper: `bin/sumocode.sh`
-- Local package patch: `patches/@earendil-works__pi-coding-agent@0.74.0.patch`
-- Patched constructor site: `@earendil-works/pi-coding-agent@0.74.0/dist/main.js` around the interactive-mode construction block
+- Local package patch: `patches/@earendil-works__pi-coding-agent@0.75.3.patch`
+- Patched constructor site: `@earendil-works/pi-coding-agent@0.75.3/dist/main.js` around the interactive-mode construction block
 
 ## Upgrade checklist for future Pi bumps
 
@@ -54,6 +54,7 @@ SumoCode currently pins Pi `0.74.0` plus Dhruv's tiny constructor patch. The pat
    - `devDependencies.@earendil-works/pi-coding-agent` -> `<version>`
    - `devDependencies.@earendil-works/pi-ai` -> matching Pi version
    - `devDependencies.@earendil-works/pi-tui` -> matching Pi version
+   - `engines.node` -> Pi's published Node floor when it changes
    - `pnpm.patchedDependencies` key/path -> new patch file
 
 5. Install and verify the patch is present:

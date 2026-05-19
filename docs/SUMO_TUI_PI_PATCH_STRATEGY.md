@@ -15,7 +15,7 @@ Revisit removal when Pi exposes a public interactive-mode/runtime injection API,
 
 ## Audited seam
 
-### `patches/@earendil-works__pi-coding-agent@0.74.0.patch`
+### `patches/@earendil-works__pi-coding-agent@0.75.3.patch`
 
 The patch changes Pi's `dist/main.js` constructor site from direct `new InteractiveMode(...)` to:
 
@@ -124,7 +124,7 @@ The private patch is allowed only under these rules:
 1. **Patch stays tiny.** Keep the Pi diff limited to the interactive constructor switch and dynamic loader. Target under ~30 changed lines.
 2. **Default path stays upstream.** When `SUMO_TUI` is unset/false and `--sumo-tui` is absent, Pi must instantiate upstream `InteractiveMode` normally.
 3. **Wrapper validates activation.** `bin/sumocode.sh` must keep checking for `loadSumoInteractiveMode` before exporting `SUMO_TUI_MODULE`.
-4. **Patch file tracks exact Pi package version.** A Pi bump must create a new `patches/@earendil-works__pi-coding-agent@<version>.patch` and update `package.json` `pnpm.patchedDependencies` in the same PR.
+4. **Patch file tracks exact Pi package version.** A Pi bump must create a new `patches/@earendil-works__pi-coding-agent@<version>.patch` and update `package.json` `pnpm.patchedDependencies` in the same PR. If Pi raises its Node engine floor, SumoCode's `engines.node` must move with it.
 5. **No silent major drift.** If the constructor site moves or the patch stops applying cleanly, stop and update the strategy before shipping.
 6. **No upstream default behavior change.** The patch must remain opt-in and non-breaking for normal Pi users.
 7. **Smoke matrix is mandatory for Pi bumps.** Every Pi version change must run the matrix below and record results in the PR body.

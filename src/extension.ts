@@ -81,6 +81,12 @@ export function findActiveSumoDevTree(cwd: string, options: Pick<DuplicateInstal
 export function shouldNoopDuplicateInstalledExtension(options: DuplicateInstalledExtensionOptions = {}): boolean {
 	const moduleUrl = options.moduleUrl ?? import.meta.url;
 	if (!isInstalledPiAgentGitModule(moduleUrl, options.homeDir ?? homedir())) return false;
+	// When the sumocode launcher (`bin/sumocode.sh`) is active it always loads
+	// the dev-tree extension via `-e`. The CWD-based dev-tree check only works
+	// when the user happens to be inside the sumocode checkout — bail out
+	// unconditionally when the launcher env var is present so the installed copy
+	// never double-registers tools regardless of the working directory.
+	if (process.env.SUMOCODE_LAUNCHER) return true;
 	return findActiveSumoDevTree(options.cwd ?? process.cwd(), options) !== undefined;
 }
 

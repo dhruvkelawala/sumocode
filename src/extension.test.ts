@@ -88,6 +88,25 @@ describe("duplicate installed extension guard", () => {
 			}),
 		).toBe(false);
 	});
+
+	it("noops the installed copy when SUMOCODE_LAUNCHER is set even if cwd is not the dev tree", () => {
+		const prev = process.env.SUMOCODE_LAUNCHER;
+		process.env.SUMOCODE_LAUNCHER = "/Users/dev/development/sumocode/bin/sumocode.sh";
+		try {
+			expect(
+				shouldNoopDuplicateInstalledExtension({
+					moduleUrl: "file:///Users/dev/.pi/agent/git/github.com/dhruvkelawala/sumocode/src/extension.ts",
+					homeDir: "/Users/dev",
+					cwd: "/some/other/project",
+					exists: () => false,
+					readFile: () => "",
+				}),
+			).toBe(true);
+		} finally {
+			if (prev === undefined) delete process.env.SUMOCODE_LAUNCHER;
+			else process.env.SUMOCODE_LAUNCHER = prev;
+		}
+	});
 });
 
 describe("sumocode extension", () => {

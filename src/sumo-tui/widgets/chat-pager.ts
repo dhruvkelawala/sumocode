@@ -52,6 +52,27 @@ function prepareChatMessage(message: ChatMessageViewModel): PreparedChatMessage 
 	};
 }
 
+function hasRenderablePlainText(message: ChatMessageViewModel): boolean {
+	for (const block of message.blocks) {
+		switch (block.type) {
+			case "markdown":
+				if (block.text.length > 0) return true;
+				break;
+			case "thinking":
+				if (block.hidden || block.text.length > 0) return true;
+				break;
+			case "code":
+				return true;
+			case "tool":
+			case "skill":
+			case "question":
+			case "delegation":
+				return true;
+		}
+	}
+	return false;
+}
+
 /** Stateful chat scrollback wrapper: messages + ScrollBox + unread banner. */
 export class ChatPager extends SumoNode {
 	public readonly scrollBox: ScrollBox;
@@ -111,16 +132,15 @@ export class ChatPager extends SumoNode {
 		const width = this.scrollBox.getComputedWidth();
 		const renderedWindow: PreparedChatMessage[] = [];
 		let acceptedMessages = 0;
-		for (const message of messages) {
-			const prepared = prepareChatMessage(message);
-			if (prepared.text.length === 0) continue;
-			const windowSlot = acceptedMessages % this.maxRenderedMessages;
+		for (let index = messages.length - 1; index >= 0; index -= 1) {
+			const message = messages[index];
+			if (!message || !hasRenderablePlainText(message)) continue;
 			acceptedMessages += 1;
-			if (renderedWindow.length < this.maxRenderedMessages) renderedWindow.push(prepared);
-			else renderedWindow[windowSlot] = prepared;
+			if (renderedWindow.length < this.maxRenderedMessages) {
+				renderedWindow.push(prepareChatMessage(message));
+			}
 		}
-		const windowStart = acceptedMessages > renderedWindow.length ? acceptedMessages % this.maxRenderedMessages : 0;
-		const orderedWindow = windowStart === 0 ? renderedWindow : [...renderedWindow.slice(windowStart), ...renderedWindow.slice(0, windowStart)];
+		const orderedWindow = renderedWindow.reverse();
 		this.disposeMessageNodes();
 		this.activeMessages.length = 0;
 		this.archivedMessages = [];

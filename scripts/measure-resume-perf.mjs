@@ -112,6 +112,31 @@ async function measureIncrementalHydrate(modules, yoga, messages) {
 	}
 }
 
+async function measureNewSession(modules, yoga, messages) {
+	const { root, chat } = createChat(modules, yoga);
+	const transcript = modules.transcriptFromSessionContext({ messages });
+	chat.replaceViewModels(transcript.messages);
+	root.yogaNode.calculateLayout(WIDTH, HEIGHT, modules.DIRECTION_LTR);
+	modules.composite(root, new modules.CellBuffer(HEIGHT, WIDTH));
+
+	const profiler = new modules.ResumeProfiler();
+	try {
+		profiler.measure("session_scan", () => []);
+		profiler.measure("transcript_model", () => undefined);
+		profiler.measure("transcript_hydrate", () => chat.clearMessages());
+		profiler.measure("yoga_first_layout", () => root.yogaNode.calculateLayout(WIDTH, HEIGHT, modules.DIRECTION_LTR));
+		profiler.measure("first_frame_render", () => modules.composite(root, new modules.CellBuffer(HEIGHT, WIDTH)));
+		return profiler.finish({
+			sourceMessages: 0,
+			acceptedMessages: 0,
+			renderedMessages: chat.getRenderedMessages().length,
+			archivedMessages: chat.getArchivedMessageCount(),
+		});
+	} finally {
+		root.dispose();
+	}
+}
+
 function stageTable(summary) {
 	const rows = [
 		["session_scan", summary.stages.session_scan],
@@ -142,15 +167,20 @@ async function main() {
 	const legacyMessages = syntheticMessages(LEGACY_MESSAGE_COUNT);
 	const bulkProfiles = [];
 	const legacyProfiles = [];
+	const newSessionProfiles = [];
 
 	for (let index = 0; index < ITERATIONS; index += 1) {
 		bulkProfiles.push(await measureBulk(modules, yoga, bulkMessages));
+	}
+	for (let index = 0; index < ITERATIONS; index += 1) {
+		newSessionProfiles.push(await measureNewSession(modules, yoga, bulkMessages));
 	}
 	for (let index = 0; index < LEGACY_ITERATIONS; index += 1) {
 		legacyProfiles.push(await measureIncrementalHydrate(modules, yoga, legacyMessages));
 	}
 
 	const bulkSummary = modules.summarizeResumeProfiles(bulkProfiles);
+	const newSessionSummary = modules.summarizeResumeProfiles(newSessionProfiles);
 	const legacySummary = modules.summarizeResumeProfiles(legacyProfiles);
 	const latest = bulkProfiles[bulkProfiles.length - 1];
 	const generatedAt = new Date().toISOString();
@@ -168,6 +198,12 @@ Budget: p95 < 500ms. Result: **${pass}** at p95 ${formatMs(bulkSummary.total.p95
 ${stageTable(bulkSummary)}
 
 Latest retained transcript stats: ${latest?.metadata.acceptedMessages ?? 0} accepted, ${latest?.metadata.renderedMessages ?? 0} rendered nodes, ${latest?.metadata.archivedMessages ?? 0} archived behind the placeholder.
+
+## New Session Clear Path (from ${MESSAGE_COUNT} hydrated messages, ${ITERATIONS} iterations)
+
+This is the Sumo-owned part of switching to \`/new\`: clear the retained chat pager, recalculate layout, and paint the empty session frame without rebuilding a transcript model.
+
+${stageTable(newSessionSummary)}
 
 ## Legacy Incremental Replay Proxy (${LEGACY_MESSAGE_COUNT} messages, ${LEGACY_ITERATIONS} iterations)
 

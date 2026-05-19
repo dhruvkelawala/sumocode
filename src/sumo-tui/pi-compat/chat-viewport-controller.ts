@@ -595,6 +595,20 @@ export class ChatViewportController {
 		const messages = measureMaybe(profile, "session_scan", () => sessionMessages(sessionContext));
 		this.markRenderDirty();
 		this.runtime.setEmptyChatQuoteState({ active: messages.length === 0, userMessageCount: countUserMessages(messages) });
+		if (messages.length === 0) {
+			this.viewModelMapper.reset();
+			measureMaybe(profile, "transcript_model", () => undefined);
+			measureMaybe(profile, "transcript_hydrate", () => this.chat.clearMessages());
+			if (profile) {
+				this.runtime.completeResumeHydration?.(profile, {
+					sourceMessages: 0,
+					acceptedMessages: 0,
+					renderedMessages: 0,
+					archivedMessages: 0,
+				});
+			}
+			return;
+		}
 		const transcript = measureMaybe(profile, "transcript_model", () => {
 			this.viewModelMapper.reset();
 			return this.viewModelMapper.transcriptFromSessionContext(sessionContext);

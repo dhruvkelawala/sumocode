@@ -477,6 +477,36 @@ EOF
 	exit 0
 fi
 
+paint_launcher_splash() {
+	[[ -t 1 ]] || return 0
+	is_truthy_env_flag "${SUMO_TUI:-}" || return 0
+	local cols rows top line pad
+	cols="${COLUMNS:-80}"
+	rows="${LINES:-24}"
+	if [[ ! "${cols}" =~ ^[0-9]+$ || "${cols}" -lt 1 ]]; then cols=80; fi
+	if [[ ! "${rows}" =~ ^[0-9]+$ || "${rows}" -lt 1 ]]; then rows=24; fi
+	top=$(( rows / 2 - 2 ))
+	if [[ "${top}" -lt 1 ]]; then top=1; fi
+	printf '\033[?1049h\033[?2004h\033[>7u\033[>4;2m\033[?25h\033[H\033]11;#1A1511\033\\\033[2J\033[38;2;217;119;6m'
+	for line in "SUMOCODE" "cathedral runtime loading" "" "press ctrl+c to exit"; do
+		pad=$(( (cols - ${#line}) / 2 ))
+		if [[ "${pad}" -lt 0 ]]; then pad=0; fi
+		printf '\033[%s;1H\033[2K%*s%s' "${top}" "${pad}" "" "${line:0:${cols}}"
+		top=$(( top + 1 ))
+	done
+	printf '\033[0m'
+}
+
+cleanup_launcher_splash() {
+	[[ -t 1 ]] || return 0
+	printf '\033[<u\033[>4;0m\033[?2004l\033[?1003l\033[?1002l\033[?1006l\033[?1000l\033[?1049l\033[?25h\033[0m'
+}
+
+paint_launcher_splash
+trap cleanup_launcher_splash EXIT
+trap 'cleanup_launcher_splash; exit 130' INT
+trap 'cleanup_launcher_splash; exit 143' TERM
+
 # `/sumo:reload` exits the inner pi with this code so we re-launch in place.
 # Other exit codes propagate normally.
 SUMOCODE_RELOAD_EXIT_CODE=100

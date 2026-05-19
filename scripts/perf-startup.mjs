@@ -89,6 +89,7 @@ async function measureFirstFrame() {
 					const durationMs = nowMs() - start;
 					child.kill("SIGINT");
 					setTimeout(() => child.kill("SIGTERM"), 250).unref?.();
+					setTimeout(() => child.kill("SIGKILL"), 750).unref?.();
 					settle({ ok: true, durationMs });
 				}
 			});

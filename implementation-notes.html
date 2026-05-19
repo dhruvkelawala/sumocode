@@ -50,14 +50,5 @@
 		</ul>
 		<p>Tradeoff: the launcher improvement is intentionally narrow and low risk. It does not hide that print mode and first-frame time remain dominated by upstream Pi startup/model/session work and retained-runtime TypeScript import cost.</p>
 	</section>
-
-	<section>
-		<h2>Follow-up: visible splash must happen before Pi/TS startup</h2>
-		<p>Dhruv reported the real symptom: the splash itself was still not visible for 3–5s. Diagnostics showed the retained runtime's real eager splash painted only after Pi had loaded extensions and <code>sumo-interactive-mode.js</code> had imported the TypeScript retained runtime through jiti.</p>
-		<p>Decision: paint a tiny launcher-owned altscreen splash directly from <code>bin/sumocode.sh</code> before spawning Pi, then let the retained runtime replace it with the real Cathedral splash. This is intentionally a visual placeholder only; no app state is initialized there.</p>
-		<p>Tradeoff: the launcher now participates in terminal cleanup with EXIT/INT/TERM traps because it enters altscreen before Pi's lifecycle owner is installed. The real retained runtime still owns the final terminal contract once it starts.</p>
-		<p>Also changed <code>sumo-interactive-mode.js</code> into a lazy wrapper: importing the module no longer top-level imports the TypeScript runtime. The wrapper paints an emergency early splash and loads the real runtime on <code>init()</code>/<code>run()</code>.</p>
-		<p>New <code>node scripts/perf-startup.mjs</code> snapshot: <code>first-frame</code> average middle runs dropped to 45.8ms (min 30.2ms, max 53.5ms). This measures visible launcher splash, not full app readiness.</p>
-	</section>
 </body>
 </html>

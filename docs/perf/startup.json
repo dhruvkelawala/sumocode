@@ -1,6 +1,6 @@
 {
-  "generatedAt": "2026-05-19T10:05:55.203Z",
-  "commit": "78c8a29 perf(sumo-tui): optimize resume and new session hydration",
+  "generatedAt": "2026-05-19T09:36:37.195Z",
+  "commit": "3f84472 chore(pi): update backend to 0.75.3",
   "runs": 5,
   "measurements": [
     {
@@ -8,114 +8,114 @@
       "samples": [
         {
           "ok": true,
-          "durationMs": 31.417999982833862,
+          "durationMs": 28.323582887649536,
           "code": 0,
           "signal": null,
           "stderr": ""
         },
         {
           "ok": true,
-          "durationMs": 30.44933295249939,
+          "durationMs": 29.49383282661438,
           "code": 0,
           "signal": null,
           "stderr": ""
         },
         {
           "ok": true,
-          "durationMs": 26.156541109085083,
+          "durationMs": 26.862541913986206,
           "code": 0,
           "signal": null,
           "stderr": ""
         },
         {
           "ok": true,
-          "durationMs": 26.920000076293945,
+          "durationMs": 24.208374977111816,
           "code": 0,
           "signal": null,
           "stderr": ""
         },
         {
           "ok": true,
-          "durationMs": 26.698708057403564,
+          "durationMs": 24.582542181015015,
           "code": 0,
           "signal": null,
           "stderr": ""
         }
       ],
-      "avgMiddleMs": 28,
-      "minMs": 26.2,
-      "maxMs": 31.4
+      "avgMiddleMs": 26.6,
+      "minMs": 24.2,
+      "maxMs": 29.5
     },
     {
       "label": "print-mode",
       "samples": [
         {
           "ok": true,
-          "durationMs": 6380.082750082016,
+          "durationMs": 7273.766832828522,
           "code": 0,
           "signal": null,
           "stderr": ""
         },
         {
           "ok": true,
-          "durationMs": 7451.81124997139,
+          "durationMs": 6368.458666086197,
           "code": 0,
           "signal": null,
           "stderr": ""
         },
         {
           "ok": true,
-          "durationMs": 8086.304459095001,
+          "durationMs": 6546.512792110443,
           "code": 0,
           "signal": null,
           "stderr": ""
         },
         {
           "ok": true,
-          "durationMs": 6434.71829199791,
+          "durationMs": 7105.255542039871,
           "code": 0,
           "signal": null,
           "stderr": ""
         },
         {
           "ok": true,
-          "durationMs": 7029.179834127426,
+          "durationMs": 7240.000874996185,
           "code": 0,
           "signal": null,
           "stderr": ""
         }
       ],
-      "avgMiddleMs": 6971.9,
-      "minMs": 6380.1,
-      "maxMs": 8086.3
+      "avgMiddleMs": 6963.9,
+      "minMs": 6368.5,
+      "maxMs": 7273.8
     },
     {
       "label": "first-frame",
       "samples": [
         {
           "ok": true,
-          "durationMs": 36.89937496185303
+          "durationMs": 3774.683624982834
         },
         {
           "ok": true,
-          "durationMs": 52.677666902542114
+          "durationMs": 3865.7232921123505
         },
         {
           "ok": true,
-          "durationMs": 47.718291997909546
+          "durationMs": 3707.334042072296
         },
         {
           "ok": true,
-          "durationMs": 53.4696249961853
+          "durationMs": 3744.263750076294
         },
         {
           "ok": true,
-          "durationMs": 30.219833850860596
+          "durationMs": 3751.751667022705
         }
       ],
-      "avgMiddleMs": 45.8,
-      "minMs": 30.2,
-      "maxMs": 53.5
+      "avgMiddleMs": 3756.9,
+      "minMs": 3707.3,
+      "maxMs": 3865.7
     }
   ]
 }

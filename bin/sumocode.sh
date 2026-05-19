@@ -304,10 +304,24 @@ is_truthy_env_flag() {
 
 pi_main_file() {
 	local bin="$1"
-	local resolved dir cli_target cli_path main_file fallback
+	local resolved dir cli_target cli_path main_file fallback local_main
+
+	# Fast path for the project-local launcher. This is the common `sumocode`
+	# dev/install path and avoids parsing pnpm's shell shim on every startup.
+	local_main="${ROOT_DIR}/node_modules/@earendil-works/pi-coding-agent/dist/main.js"
+	if [[ "${bin}" == "${ROOT_DIR}/node_modules/.bin/pi" && -f "${local_main}" ]]; then
+		realpath "${local_main}"
+		return 0
+	fi
+
 	resolved="$(realpath "${bin}" 2>/dev/null || true)"
 	[[ -n "${resolved}" ]] || return 1
 	dir="$(dirname "${resolved}")"
+
+	if [[ "${resolved}" == "$(realpath "${ROOT_DIR}/node_modules/.bin/pi" 2>/dev/null || true)" && -f "${local_main}" ]]; then
+		realpath "${local_main}"
+		return 0
+	fi
 
 	# Direct installs may expose dist/main.js next to the resolved binary.
 	for fallback in "${dir}/main.js" "${dir}/../dist/main.js"; do
@@ -341,7 +355,7 @@ path_to_file_url() {
 pi_has_sumo_tui_patch() {
 	local main_file
 	main_file="$(pi_main_file "$1" 2>/dev/null || true)"
-	[[ -n "${main_file}" ]] && grep -q "loadSumoInteractiveMode" "${main_file}"
+	[[ -n "${main_file}" ]] && grep -Fq "loadSumoInteractiveMode" "${main_file}"
 }
 
 run_diag_summary() {

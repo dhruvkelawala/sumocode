@@ -70,24 +70,30 @@ async function measureFirstFrame() {
 			env: { ...process.env, TERM: "xterm-256color", SUMO_TUI: "1" },
 		});
 		let output = "";
+		let settled = false;
 		const sample = await new Promise((resolveSample) => {
+			const settle = (result) => {
+				if (settled) return;
+				settled = true;
+				clearTimeout(timer);
+				resolveSample(result);
+			};
 			const timer = setTimeout(() => {
 				child.kill("SIGTERM");
-				resolveSample({ ok: false, durationMs: nowMs() - start, error: "first frame timed out", output: output.slice(-1200) });
+				settle({ ok: false, durationMs: nowMs() - start, error: "first frame timed out", output: output.slice(-1200) });
 			}, TIMEOUT_MS);
 			child.onData((data) => {
 				output += data;
 				if (output.length > 20_000) output = output.slice(-10_000);
 				if (data.includes("\x1b[?1049h") || data.includes("\x1b[?2026h") || output.includes("DIVINE INVOCATION")) {
-					clearTimeout(timer);
 					const durationMs = nowMs() - start;
 					child.kill("SIGINT");
-					resolveSample({ ok: true, durationMs });
+					setTimeout(() => child.kill("SIGTERM"), 250).unref?.();
+					settle({ ok: true, durationMs });
 				}
 			});
 			child.onExit(({ exitCode, signal }) => {
-				clearTimeout(timer);
-				resolveSample({ ok: false, durationMs: nowMs() - start, exitCode, signal, output: output.slice(-1200) });
+				settle({ ok: false, durationMs: nowMs() - start, exitCode, signal, output: output.slice(-1200) });
 			});
 		});
 		samples.push(sample);

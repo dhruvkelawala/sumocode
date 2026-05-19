@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<title>SumoCode startup implementation notes</title>
+	<style>
+		body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; max-width: 860px; margin: 40px auto; line-height: 1.55; color: #1f2933; }
+		code { background: #f3f4f6; padding: 0.1rem 0.3rem; border-radius: 4px; }
+		section { border-top: 1px solid #e5e7eb; padding-top: 1rem; margin-top: 1.5rem; }
+		.decision { border-left: 4px solid #0f766e; padding-left: 1rem; }
+	</style>
+</head>
+<body>
+	<h1>SumoCode startup implementation notes</h1>
+	<p>Running notes for the startup-time work on the <code>sumocode</code> launcher.</p>
+
+	<section>
+		<h2>2026-05-19 baseline</h2>
+		<p>Used the existing <code>scripts/perf-startup.mjs</code> node-pty benchmark. Baseline on commit <code>3f84472 chore(pi): update backend to 0.75.3</code>:</p>
+		<ul>
+			<li><code>launcher-dry-run</code>: ~40.5ms average middle runs</li>
+			<li><code>print-mode</code>: ~6.78s average middle runs</li>
+			<li><code>first-frame</code>: ~3.79s average middle runs</li>
+		</ul>
+		<p>Debug diagnostics show roughly 1.5s before extension diagnostics install, then about 1.0s in the jiti import of <code>src/sumo-tui/pi-compat/sumo-interactive-mode.ts</code>, then retained runtime reaches eager splash paint quickly.</p>
+	</section>
+
+	<section class="decision">
+		<h2>Decision: optimize launcher work first</h2>
+		<p>The largest remaining first-frame cost is upstream Pi startup plus jiti importing the retained runtime. The safest low-risk win is reducing repeated shell work in <code>bin/sumocode.sh</code>, especially the retained-TUI patch probe used on every <code>sumocode</code> launch and dry run. Bigger changes like precompiling the retained runtime would conflict with the repo's no-build-step convention and need a separate design decision.</p>
+	</section>
+
+	<section>
+		<h2>Change: project-local Pi main fast path</h2>
+		<p><code>bin/sumocode.sh</code> now resolves <code>node_modules/@earendil-works/pi-coding-agent/dist/main.js</code> directly when using the project-local <code>node_modules/.bin/pi</code>. This avoids grepping the pnpm shell shim on the hot path. Manual timing of <code>bin/sumocode.sh --dry-run --offline --no-extensions --no-session</code> improved from roughly 40–50ms to roughly 25–30ms after the first filesystem-cold run.</p>
+	</section>
+
+	<section>
+		<h2>Change: benchmark cleanup</h2>
+		<p><code>scripts/perf-startup.mjs</code> now settles first-frame samples only once and sends a follow-up termination signal after capturing the first retained-frame marker. The previous benchmark could print results but keep node-pty handles alive long enough for the wrapper command to time out.</p>
+	</section>
+
+	<section>
+		<h2>Post-change snapshot</h2>
+		<p>Ran <code>node scripts/perf-startup.mjs</code>:</p>
+		<ul>
+			<li><code>launcher-dry-run</code>: 26.6ms average middle runs</li>
+			<li><code>print-mode</code>: 6963.9ms average middle runs</li>
+			<li><code>first-frame</code>: 3756.9ms average middle runs</li>
+		</ul>
+		<p>Tradeoff: the launcher improvement is intentionally narrow and low risk. It does not hide that print mode and first-frame time remain dominated by upstream Pi startup/model/session work and retained-runtime TypeScript import cost.</p>
+	</section>
+</body>
+</html>

@@ -9,6 +9,7 @@ import { registerSlateCommand } from "./commands/slate.js";
 import { registerPersonaCommand } from "./commands/persona.js";
 import { registerReviewCommand } from "./commands/review.js";
 import { registerSpinnerCommand } from "./commands/spinner.js";
+import { registerSumoSyncCommand } from "./commands/sync.js";
 import { registerTabsCommand } from "./commands/tabs.js";
 import { registerThemeCommand } from "./commands/theme.js";
 import { registerThemeCheckCommand } from "./commands/theme-check.js";
@@ -137,6 +138,7 @@ export function installSumoInteractions(pi: ExtensionAPI, options: InstallSumoIn
 	registry.install("commands.persona", registerPersonaCommand);
 	registry.install("commands.review", registerReviewCommand);
 	registry.install("commands.spinner", registerSpinnerCommand);
+	registry.install("commands.sync", registerSumoSyncCommand);
 	registry.install("commands.tabs", registerTabsCommand);
 	registry.install("commands.theme", registerThemeCommand);
 	registry.install("commands.theme-check", registerThemeCheckCommand);

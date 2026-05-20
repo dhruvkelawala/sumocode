@@ -84,12 +84,13 @@ describe("InteractionRegistry", () => {
 			"sumo:query",
 			"sumo:review",
 			"sumo:spinner",
+			"sumo:sync",
 			"sumo:tabs",
 			"sumo:theme",
 			"sumo:theme-check",
 		]);
 		expect(snapshot.shortcuts.map(([id]) => id).sort()).toEqual(["alt+t", "ctrl+/", "ctrl+1", "ctrl+2", "ctrl+shift+t"]);
-		expect(pi.registerCommand).toHaveBeenCalledTimes(13);
+		expect(pi.registerCommand).toHaveBeenCalledTimes(14);
 		expect(pi.registerShortcut).toHaveBeenCalledTimes(5);
 	});
 });

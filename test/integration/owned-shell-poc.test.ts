@@ -62,16 +62,17 @@ describe("owned-shell POC (issue #195 / #161 Slice A)", () => {
 			//   row N-7: input row
 			//   row N-6: bottom of input frame
 			//   row N-5: breathing row
-			//   row N-4: hint row
+			//   row N-4: model / command hint row
 			//   row N-3: breathing row
 			//   row N-2: footer (blank in splash)
 			//   row N-1: terminal-bottom safe row
 			//
 			// Pi 0.74 added the extra breathing row between input frame and hint;
-			// previous layout had `└` at N-5 and DIVINE INVOCATION at N-7.
+			// current splash chrome labels the hint row with the active model instead
+			// of the older `AWAITING PROMPT` copy.
 			expect(lines[rows - 8]?.includes("DIVINE INVOCATION")).toBe(true);
 			expect(lines[rows - 6]?.includes("└")).toBe(true);
-			expect(lines[rows - 4]?.includes("AWAITING PROMPT")).toBe(true);
+			expect(lines[rows - 4]).toMatch(/claude|gpt|CTRL\+\/|COMMANDS/);
 
 			const footerRow = lines[rows - 2];
 			expect(typeof footerRow).toBe("string");

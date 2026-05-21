@@ -67,8 +67,12 @@ export const MEMORY_EDITOR_HINTS = "\u2191\u2193 wander    /  search    e  revis
 
 export const MEMORY_EDITOR_OVERLAY_OPTIONS: OverlayOptions = {
 	anchor: "center",
-	width: "85%",
-	minWidth: 80,
+	// Match the V2 Bible and the other Cathedral modals: the Scriptorium
+	// content is designed as a 100-column panel. Percentage sizing made it
+	// balloon across landscape terminals while the inner two-column grid stayed
+	// sparse and awkward.
+	width: 100,
+	minWidth: 56,
 	maxHeight: "90%",
 };
 

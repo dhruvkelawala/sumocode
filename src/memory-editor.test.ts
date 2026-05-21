@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
 	MEMORY_EDITOR_HINTS,
+	MEMORY_EDITOR_OVERLAY_OPTIONS,
 	MemoryEditorComponent,
 	formatMemoryStatus,
 	registerMemoryCommand,
@@ -49,6 +50,13 @@ function fakeClient(overrides: Partial<RemnicMemoryClient> = {}): RemnicMemoryCl
 		...overrides,
 	} as RemnicMemoryClient;
 }
+
+describe("MEMORY_EDITOR_OVERLAY_OPTIONS", () => {
+	it("uses the fixed Bible panel width instead of landscape percentage sizing", () => {
+		expect(MEMORY_EDITOR_OVERLAY_OPTIONS.width).toBe(100);
+		expect(MEMORY_EDITOR_OVERLAY_OPTIONS.minWidth).toBe(56);
+	});
+});
 
 describe("renderMemoryEditor — title + dividers", () => {
 	it("renders MEMORY SCRIPTORIUM title centered with floral marks", () => {

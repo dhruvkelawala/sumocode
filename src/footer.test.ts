@@ -210,6 +210,20 @@ describe("formatFooterLine — F1 two-zone layout", () => {
 		}
 	});
 
+	it("appends fast after thinking when fast mode applies", () => {
+		const line = withoutAnsi(formatFooterLine(snapshot({ modelId: "gpt-5.5", thinkingLevel: "high", showFastMode: true })));
+		expect(line).toContain("gpt-5.5");
+		expect(line).toContain("high");
+		expect(line).toContain("fast");
+		expect(line.indexOf("high")).toBeLessThan(line.indexOf("fast"));
+	});
+
+	it("omits fast label when showFastMode is false", () => {
+		const line = withoutAnsi(formatFooterLine(snapshot({ thinkingLevel: "high", showFastMode: false })));
+		expect(line).toContain("high");
+		expect(line).not.toContain("fast");
+	});
+
 	it("omits project and git branch to avoid duplicating sidebar/hint row", () => {
 		const line = withoutAnsi(formatFooterLine(snapshot()));
 

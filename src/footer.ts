@@ -9,6 +9,7 @@ import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
  * as a direct dep. Mirrors the upstream definition exactly.
  */
 export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+import { shouldApplyFastMode, type FastModeState } from "./fast-mode.js";
 import { getSessionUsage as getCachedSessionUsage, sessionHasMessages as cachedSessionHasMessages, linkGitBranchProvider } from "./session-cache.js";
 import { activeThemeColors, type SumoCodeState } from "./themes/index.js";
 import { VOICE } from "./voice.js";
@@ -30,6 +31,8 @@ export type FooterSnapshot = {
 	state: SumoCodeState;
 	modelId: string;
 	thinkingLevel: ThinkingLevel;
+	/** When true, append a `fast` label after thinking when active fast mode applies. */
+	showFastMode?: boolean;
 	/**
 	 * When true, an additional dim version line is rendered below the main
 	 * footer row. Per Q5.2, this only happens on the splash empty state.
@@ -91,7 +94,7 @@ export function resolveGitBranch(cwd: string, runGit: GitRunner = defaultGitRunn
 /**
  * F1 two-zone footer layout (Element 5 from CATHEDRAL_DECISIONS.md).
  *
- *   left zone  = agent state:    ● <STATE> · <model> · <thinking>
+ *   left zone  = agent state:    ● <STATE> · <model> · <thinking> [· fast]
  *   right zone = session metrics: <ctx>/<window> · $<cost>
  *
  * Zones are separated by spaces sized to fill width. Project/branch are not
@@ -119,7 +122,9 @@ function formatFooterLineInner(snapshot: FooterSnapshot, width: number): string 
 	const thinking = colorHex(snapshot.thinkingLevel, activeThemeColors().foreground);
 	const sep = colorHex(" · ", activeThemeColors().foregroundDim);
 
-	const leftZone = [`${dot} ${stateLabel}`, model, thinking].join(sep);
+	const leftParts = [`${dot} ${stateLabel}`, model, thinking];
+	if (snapshot.showFastMode) leftParts.push(colorHex("fast", activeThemeColors().foreground));
+	const leftZone = leftParts.join(sep);
 	const leftLen = visibleWidth(leftZone);
 
 	const contextTokens = snapshot.contextTokens ?? snapshot.inputTokens + snapshot.outputTokens;
@@ -187,7 +192,7 @@ export function renderFooterBlock(snapshot: FooterSnapshot, width = 160): string
 	];
 }
 
-export function installFooter(pi: ExtensionAPI): void {
+export function installFooter(pi: ExtensionAPI, options: { fastModeState?: FastModeState } = {}): () => void {
 	let state: SumoCodeState = "idle";
 	let render: (() => void) | undefined;
 	let activeCtx: ExtensionContext | undefined;
@@ -226,7 +231,7 @@ export function installFooter(pi: ExtensionAPI): void {
 					const renderCtx = resolveRenderContext(activeCtx, ctx);
 					const branchProvider = activeFooterData ?? footerData;
 					const branch = safeRead(() => branchProvider.getGitBranch(), null);
-					return renderFooterBlock(createSnapshot(pi, renderCtx, branch, state), width);
+					return renderFooterBlock(createSnapshot(pi, renderCtx, branch, state, options.fastModeState), width);
 				},
 			};
 		});
@@ -237,6 +242,9 @@ export function installFooter(pi: ExtensionAPI): void {
 	pi.on("tool_call", () => setState("tool"));
 	pi.on("tool_result", () => setState("thinking"));
 	pi.on("agent_end", () => setState("idle"));
+	pi.on("model_select", () => render?.());
+
+	return () => render?.();
 }
 
 
@@ -252,7 +260,13 @@ function resolveRenderContext(...candidates: Array<ExtensionContext | undefined>
 	return undefined;
 }
 
-function createSnapshot(pi: ExtensionAPI, ctx: ExtensionContext | undefined, branch: string | null, state: SumoCodeState): FooterSnapshot {
+function createSnapshot(
+	pi: ExtensionAPI,
+	ctx: ExtensionContext | undefined,
+	branch: string | null,
+	state: SumoCodeState,
+	fastModeState?: FastModeState,
+): FooterSnapshot {
 	if (!ctx) {
 		return {
 			cwd: "",
@@ -265,11 +279,13 @@ function createSnapshot(pi: ExtensionAPI, ctx: ExtensionContext | undefined, bra
 			state,
 			modelId: "no-model",
 			thinkingLevel: "medium",
+			showFastMode: false,
 			isSplash: false,
 		};
 	}
 
 	const usage = getSessionUsage(ctx);
+	const model = safeRead(() => ctx.model, undefined);
 
 	return {
 		cwd: safeRead(() => ctx.cwd, ""),
@@ -280,10 +296,15 @@ function createSnapshot(pi: ExtensionAPI, ctx: ExtensionContext | undefined, bra
 		contextWindow: getContextWindow(ctx),
 		costUsd: usage.cost,
 		state,
-		modelId: safeRead(() => ctx.model?.id, undefined) ?? "no-model",
+		modelId: model?.id ?? "no-model",
 		thinkingLevel: getThinkingLevel(pi, ctx),
+		showFastMode: shouldShowFastModeInFooter(fastModeState, model),
 		isSplash: !sessionHasMessages(ctx),
 	};
+}
+
+function shouldShowFastModeInFooter(fastModeState: FastModeState | undefined, model: ExtensionContext["model"] | undefined): boolean {
+	return shouldApplyFastMode(fastModeState ?? { enabled: false, models: [] }, model);
 }
 
 function safeRead<T>(read: () => T, fallback: T): T {

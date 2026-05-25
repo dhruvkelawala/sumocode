@@ -23,6 +23,7 @@ import { installSplash } from "./splash.js";
 import { installTopChrome } from "./top-chrome.js";
 import { installWorkingIndicator } from "./working-indicator.js";
 import { installCompactionIndicator } from "./compaction-indicator.js";
+import { installFastMode } from "./fast-mode.js";
 
 const SUMOCODE_PACKAGE_NAME = "@dhruvkelawala/sumocode";
 const LEGACY_TASK_TOOL_EXTENSION_PATH = join(".pi", "agent", "extensions", "task-tool", "index.ts");
@@ -132,7 +133,9 @@ export default function sumocode(pi: ExtensionAPI): void {
 	installAltscreen(pi);
 	installTopChrome(pi);
 	installSplash(pi);
-	installFooter(pi);
+	let requestFooterRender: (() => void) | undefined;
+	const fastModeState = installFastMode(pi, { onChange: () => requestFooterRender?.() });
+	requestFooterRender = installFooter(pi, { fastModeState });
 	installMemoryExtraction(pi);
 	installCathedralEditor(pi);
 	installInputHints(pi);
@@ -164,8 +167,6 @@ export default function sumocode(pi: ExtensionAPI): void {
 	}
 	installQuestionTool(pi);
 	installAnswerTool(pi);
-
-
 
 	installWorkingIndicator(pi);
 	installCompactionIndicator(pi);

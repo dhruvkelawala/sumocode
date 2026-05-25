@@ -106,6 +106,30 @@ describe("fast mode", () => {
 		expect(codexResult.reasoningEffort).toBeUndefined();
 	});
 
+	it("delegates unsupported OpenAI APIs to Pi's native simple stream", () => {
+		const fallbackStream = {};
+		const streamUnsupportedApi = vi.fn(() => fallbackStream as never);
+		const registerProvider = vi.fn();
+		installFastMode({
+			on: vi.fn(),
+			registerCommand: vi.fn(),
+			registerProvider,
+		} as never, {
+			initialEnabled: true,
+			streamers: { streamUnsupportedApi },
+		});
+
+		const openAIProvider = registerProvider.mock.calls.find(([provider]) => provider === "openai")?.[1];
+		const unsupportedModel = model({ provider: "openai", id: "gpt-legacy", api: "openai-completions" });
+		const context = {} as never;
+		const options = { maxTokens: 123 };
+
+		const result = openAIProvider.streamSimple(unsupportedModel, context, options);
+
+		expect(result).toBe(fallbackStream);
+		expect(streamUnsupportedApi).toHaveBeenCalledWith(unsupportedModel, context, options);
+	});
+
 	it("resets enabled state on each session_start", async () => {
 		const handlers = new Map<string, Array<(...args: unknown[]) => unknown>>();
 		const pi = {

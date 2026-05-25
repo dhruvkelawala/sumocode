@@ -1,6 +1,7 @@
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
 	clampThinkingLevel,
+	getApiProvider,
 	streamOpenAICodexResponses,
 	streamOpenAIResponses,
 	streamSimpleOpenAICodexResponses,
@@ -36,6 +37,7 @@ type FastModeStreamers = {
 	streamSimpleOpenAIResponses: typeof streamSimpleOpenAIResponses;
 	streamOpenAICodexResponses: typeof streamOpenAICodexResponses;
 	streamSimpleOpenAICodexResponses: typeof streamSimpleOpenAICodexResponses;
+	streamUnsupportedApi: (model: Model<Api>, context: Context, options?: SimpleStreamOptions) => AssistantMessageEventStream;
 };
 
 export type FastModeState = {
@@ -43,11 +45,18 @@ export type FastModeState = {
 	models: readonly string[];
 };
 
+function streamNativeApiProvider(model: Model<Api>, context: Context, options?: SimpleStreamOptions): AssistantMessageEventStream {
+	const provider = getApiProvider(model.api);
+	if (!provider) throw new Error(`sumocode fast mode: unsupported API override ${String(model.api)}`);
+	return provider.streamSimple(model, context, options);
+}
+
 const DEFAULT_STREAMERS: FastModeStreamers = {
 	streamOpenAIResponses,
 	streamSimpleOpenAIResponses,
 	streamOpenAICodexResponses,
 	streamSimpleOpenAICodexResponses,
+	streamUnsupportedApi: streamNativeApiProvider,
 };
 
 function normalizeModelRef(ref: string): string {
@@ -145,7 +154,7 @@ function createFastModeStream(config: () => FastModeConfig, streamers: FastModeS
 				? streamers.streamOpenAICodexResponses(model as Model<"openai-codex-responses">, context, buildOpenAICodexResponsesFastOptions(model, options))
 				: streamers.streamSimpleOpenAICodexResponses(model as Model<"openai-codex-responses">, context, options);
 		}
-		throw new Error(`sumocode fast mode: unsupported API override ${String(model.api)}`);
+		return streamers.streamUnsupportedApi(model, context, options);
 	};
 }
 

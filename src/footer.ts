@@ -31,7 +31,7 @@ export type FooterSnapshot = {
 	state: SumoCodeState;
 	modelId: string;
 	thinkingLevel: ThinkingLevel;
-	/** When true, append a `fast` label after thinking (openai-codex + active fast mode). */
+	/** When true, append a `fast` label after thinking when active fast mode applies. */
 	showFastMode?: boolean;
 	/**
 	 * When true, an additional dim version line is rendered below the main
@@ -304,8 +304,7 @@ function createSnapshot(
 }
 
 function shouldShowFastModeInFooter(fastModeState: FastModeState | undefined, model: ExtensionContext["model"] | undefined): boolean {
-	if (!fastModeState || !model || model.provider !== "openai-codex") return false;
-	return shouldApplyFastMode(fastModeState, model);
+	return shouldApplyFastMode(fastModeState ?? { enabled: false, models: [] }, model);
 }
 
 function safeRead<T>(read: () => T, fallback: T): T {

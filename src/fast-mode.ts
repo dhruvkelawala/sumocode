@@ -2,6 +2,7 @@ import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@e
 import {
 	clampThinkingLevel,
 	getApiProvider,
+	registerApiProvider,
 	streamOpenAICodexResponses,
 	streamOpenAIResponses,
 	streamSimpleOpenAICodexResponses,
@@ -24,6 +25,8 @@ const DEFAULT_FAST_MODELS = [
 	"openai-codex/gpt-5.4",
 	"openai-codex/gpt-5.5",
 ];
+const OPENAI_RESPONSES_FAST_SOURCE = "sumocode:fast-mode:openai-responses";
+const OPENAI_CODEX_RESPONSES_FAST_SOURCE = "sumocode:fast-mode:openai-codex-responses";
 
 type FastModeConfig = {
 	enabled: boolean;
@@ -180,19 +183,28 @@ export function installFastMode(
 		models: DEFAULT_FAST_MODELS,
 	};
 	let currentModel: FastModeModel | undefined;
+	const nativeOpenAIResponses = getApiProvider("openai-responses");
+	const nativeOpenAICodexResponses = getApiProvider("openai-codex-responses");
 	const streamSimple = createFastModeStream(
 		() => state,
-		{ ...DEFAULT_STREAMERS, ...options.streamers },
+		{
+			...DEFAULT_STREAMERS,
+			streamSimpleOpenAIResponses: nativeOpenAIResponses?.streamSimple ?? DEFAULT_STREAMERS.streamSimpleOpenAIResponses,
+			streamSimpleOpenAICodexResponses: nativeOpenAICodexResponses?.streamSimple ?? DEFAULT_STREAMERS.streamSimpleOpenAICodexResponses,
+			...options.streamers,
+		},
 	);
 
-	pi.registerProvider("openai", {
+	registerApiProvider({
 		api: "openai-responses",
+		stream: nativeOpenAIResponses?.stream ?? ((model, context, streamOptions) => streamOpenAIResponses(model as Model<"openai-responses">, context, streamOptions as OpenAIResponsesOptions | undefined)),
 		streamSimple,
-	});
-	pi.registerProvider("openai-codex", {
+	}, OPENAI_RESPONSES_FAST_SOURCE);
+	registerApiProvider({
 		api: "openai-codex-responses",
+		stream: nativeOpenAICodexResponses?.stream ?? ((model, context, streamOptions) => streamOpenAICodexResponses(model as Model<"openai-codex-responses">, context, streamOptions as OpenAICodexResponsesOptions | undefined)),
 		streamSimple,
-	});
+	}, OPENAI_CODEX_RESPONSES_FAST_SOURCE);
 
 	pi.on("session_start", async (_event, ctx: ExtensionContext) => {
 		state.enabled = false;

@@ -210,7 +210,7 @@ describe("formatFooterLine — F1 two-zone layout", () => {
 		}
 	});
 
-	it("appends fast after thinking when openai-codex fast mode is active", () => {
+	it("appends fast after thinking when fast mode applies", () => {
 		const line = withoutAnsi(formatFooterLine(snapshot({ modelId: "gpt-5.5", thinkingLevel: "high", showFastMode: true })));
 		expect(line).toContain("gpt-5.5");
 		expect(line).toContain("high");

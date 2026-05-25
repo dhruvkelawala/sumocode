@@ -1,5 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
-import type { Api, Model, SimpleStreamOptions } from "@earendil-works/pi-ai";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { getApiProvider, resetApiProviders, type Api, type Model, type SimpleStreamOptions } from "@earendil-works/pi-ai";
 import { buildOpenAICodexResponsesFastOptions, buildOpenAIResponsesFastOptions, installFastMode, isConfiguredFastModel, shouldApplyFastMode } from "./fast-mode.js";
 
 function model(overrides: Partial<Model<Api>> = {}): Model<Api> {
@@ -16,6 +16,10 @@ function model(overrides: Partial<Model<Api>> = {}): Model<Api> {
 		...overrides,
 	} as Model<Api>;
 }
+
+afterEach(() => {
+	resetApiProviders();
+});
 
 describe("fast mode", () => {
 	it("matches configured provider-qualified and bare model ids", () => {
@@ -106,28 +110,27 @@ describe("fast mode", () => {
 		expect(codexResult.reasoningEffort).toBeUndefined();
 	});
 
-	it("delegates unsupported OpenAI APIs to Pi's native simple stream", () => {
-		const fallbackStream = {};
-		const streamUnsupportedApi = vi.fn(() => fallbackStream as never);
-		const registerProvider = vi.fn();
+	it("leaves non-Responses OpenAI APIs on their native simple stream", () => {
+		const nativeOpenAICompletions = getApiProvider("openai-completions")?.streamSimple;
 		installFastMode({
 			on: vi.fn(),
 			registerCommand: vi.fn(),
-			registerProvider,
-		} as never, {
-			initialEnabled: true,
-			streamers: { streamUnsupportedApi },
-		});
+		} as never, { initialEnabled: true });
 
-		const openAIProvider = registerProvider.mock.calls.find(([provider]) => provider === "openai")?.[1];
-		const unsupportedModel = model({ provider: "openai", id: "gpt-legacy", api: "openai-completions" });
-		const context = {} as never;
-		const options = { maxTokens: 123 };
+		expect(getApiProvider("openai-completions")?.streamSimple).toBe(nativeOpenAICompletions);
+	});
 
-		const result = openAIProvider.streamSimple(unsupportedModel, context, options);
+	it("registers API wrappers without overriding provider defaults", () => {
+		const pi = {
+			on: vi.fn(),
+			registerCommand: vi.fn(),
+			registerProvider: vi.fn(),
+		};
+		installFastMode(pi as never);
 
-		expect(result).toBe(fallbackStream);
-		expect(streamUnsupportedApi).toHaveBeenCalledWith(unsupportedModel, context, options);
+		expect(pi.registerProvider).not.toHaveBeenCalled();
+		expect(getApiProvider("openai-responses")?.streamSimple).toBeDefined();
+		expect(getApiProvider("openai-codex-responses")?.streamSimple).toBeDefined();
 	});
 
 	it("resets enabled state on each session_start", async () => {

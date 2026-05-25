@@ -162,7 +162,10 @@ function notify(ctx: Pick<ExtensionCommandContext, "hasUI" | "ui">, message: str
 	if (ctx.hasUI) ctx.ui.notify(message, level);
 }
 
-export function installFastMode(pi: ExtensionAPI, options: { streamers?: Partial<FastModeStreamers>; initialEnabled?: boolean } = {}): FastModeState {
+export function installFastMode(
+	pi: ExtensionAPI,
+	options: { streamers?: Partial<FastModeStreamers>; initialEnabled?: boolean; onChange?: () => void } = {},
+): FastModeState {
 	const state: FastModeState = {
 		enabled: options.initialEnabled ?? false,
 		models: DEFAULT_FAST_MODELS,
@@ -185,6 +188,7 @@ export function installFastMode(pi: ExtensionAPI, options: { streamers?: Partial
 	pi.on("session_start", async (_event, ctx: ExtensionContext) => {
 		state.enabled = false;
 		currentModel = ctx.model as FastModeModel | undefined;
+		options.onChange?.();
 	});
 	pi.on("model_select", async (event) => {
 		currentModel = event.model as FastModeModel;
@@ -205,6 +209,7 @@ export function installFastMode(pi: ExtensionAPI, options: { streamers?: Partial
 				notify(ctx, "Usage: /fast [on|off|toggle|status]", "error");
 				return;
 			}
+			options.onChange?.();
 			notify(ctx, describeFastMode(state, currentModel), state.enabled ? "warning" : "info");
 		},
 	});

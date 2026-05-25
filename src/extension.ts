@@ -127,7 +127,9 @@ export default function sumocode(pi: ExtensionAPI): void {
 	installAltscreen(pi);
 	installTopChrome(pi);
 	installSplash(pi);
-	installFooter(pi);
+	let requestFooterRender: (() => void) | undefined;
+	const fastModeState = installFastMode(pi, { onChange: () => requestFooterRender?.() });
+	requestFooterRender = installFooter(pi, { fastModeState });
 	installMemoryExtraction(pi);
 	installCathedralEditor(pi);
 	installInputHints(pi);
@@ -159,7 +161,6 @@ export default function sumocode(pi: ExtensionAPI): void {
 	}
 	installQuestionTool(pi);
 	installAnswerTool(pi);
-	installFastMode(pi);
 
 	installWorkingIndicator(pi);
 	installCompactionIndicator(pi);

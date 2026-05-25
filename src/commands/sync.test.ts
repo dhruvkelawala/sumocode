@@ -58,17 +58,20 @@ describe("/sumo:sync", () => {
 	it("reports the first failed step", async () => {
 		const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
 		const context = ctx();
-		await executeSumoSync(context as never, {
+		const exec = vi.fn(async (file: string) => {
+			if (file === "git") throw Object.assign(new Error("dirty tree"), { stderr: "local changes" });
+			return { stdout: "", stderr: "" };
+		});
+		const results = await executeSumoSync(context as never, {
 			env: { SUMOCODE_CONFIG_DIR: "/config" },
 			cwd: "/tmp",
 			moduleUrl: "file:///repo/sumocode/src/commands/sync.ts",
 			exists: () => false,
-			exec: async (file) => {
-				if (file === "git") throw Object.assign(new Error("dirty tree"), { stderr: "local changes" });
-				return { stdout: "", stderr: "" };
-			},
+			exec,
 		});
 
+		expect(results).toHaveLength(1);
+		expect(exec).toHaveBeenCalledTimes(1);
 		expect(context.ui.notify).toHaveBeenLastCalledWith(
 			"/sumo:sync failed at sumocode-config git pull; inspect terminal output",
 			"warning",

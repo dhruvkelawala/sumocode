@@ -183,6 +183,7 @@ export function installFastMode(pi: ExtensionAPI, options: { streamers?: Partial
 	});
 
 	pi.on("session_start", async (_event, ctx: ExtensionContext) => {
+		state.enabled = false;
 		currentModel = ctx.model as FastModeModel | undefined;
 	});
 	pi.on("model_select", async (event) => {

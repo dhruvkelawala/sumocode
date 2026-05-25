@@ -115,9 +115,24 @@ export async function executeSumoSync(ctx: ExtensionCommandContext, deps: SumoSy
 	const steps: SyncStepResult[] = [];
 
 	ctx.ui.notify("syncing SumoCode config + extensions…", "info");
-	steps.push(await runStep("sumocode-config git pull", "git", ["pull", "--ff-only"], { cwd: configRepo }, deps));
-	steps.push(await runStep("sumocode source git pull", "git", ["pull", "--ff-only"], { cwd: sumocodeRepo }, deps));
-	steps.push(await runStep("sumocode-config bootstrap", join(configRepo, "bootstrap.sh"), [], { cwd: configRepo, timeout: 240_000 }, deps));
+
+	const plannedSteps = [
+		{ label: "sumocode-config git pull", file: "git", args: ["pull", "--ff-only"] as const, cwd: configRepo },
+		{ label: "sumocode source git pull", file: "git", args: ["pull", "--ff-only"] as const, cwd: sumocodeRepo },
+		{
+			label: "sumocode-config bootstrap",
+			file: join(configRepo, "bootstrap.sh"),
+			args: [] as const,
+			cwd: configRepo,
+			timeout: 240_000,
+		},
+	];
+
+	for (const step of plannedSteps) {
+		const result = await runStep(step.label, step.file, step.args, { cwd: step.cwd, timeout: step.timeout }, deps);
+		steps.push(result);
+		if (!result.ok) break;
+	}
 
 	const failed = steps.filter((step) => !step.ok);
 	if (failed.length > 0) {

@@ -1,6 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { Api, Model, SimpleStreamOptions } from "@earendil-works/pi-ai";
-import { buildOpenAICodexResponsesFastOptions, buildOpenAIResponsesFastOptions, isConfiguredFastModel, shouldApplyFastMode } from "./fast-mode.js";
+import { buildOpenAICodexResponsesFastOptions, buildOpenAIResponsesFastOptions, installFastMode, isConfiguredFastModel, shouldApplyFastMode } from "./fast-mode.js";
 
 function model(overrides: Partial<Model<Api>> = {}): Model<Api> {
 	return {
@@ -104,5 +104,25 @@ describe("fast mode", () => {
 			{ reasoning: "medium" },
 		);
 		expect(codexResult.reasoningEffort).toBeUndefined();
+	});
+
+	it("resets enabled state on each session_start", async () => {
+		const handlers = new Map<string, Array<(...args: unknown[]) => unknown>>();
+		const pi = {
+			on: vi.fn((event: string, handler: (...args: unknown[]) => unknown) => {
+				const list = handlers.get(event) ?? [];
+				list.push(handler);
+				handlers.set(event, list);
+			}),
+			registerCommand: vi.fn(),
+			registerProvider: vi.fn(),
+		};
+		const state = installFastMode(pi as never, { initialEnabled: true });
+		expect(state.enabled).toBe(true);
+
+		for (const handler of handlers.get("session_start") ?? []) {
+			await handler({}, { model: model() });
+		}
+		expect(state.enabled).toBe(false);
 	});
 });

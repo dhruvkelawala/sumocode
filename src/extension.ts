@@ -123,6 +123,29 @@ export function shouldNoopHelperSubprocess(options: HelperSubprocessGuardOptions
 	return env.PI_CMUX_CHILD === "1" || env.SUMOCODE_BG_CHILD === "1";
 }
 
+export interface TaskModeOptions {
+	readonly env?: NodeJS.ProcessEnv;
+}
+
+/**
+ * SumoCode runs in "task mode" when launched as `sumocode task "<prompt>"`.
+ *
+ * In that mode the session is a hand-off from an orchestrator: Pi receives
+ * the prompt as a kickoff user message and starts the agent turn immediately.
+ * We skip the splash screen and any other UI that would either delay or
+ * intercept that kickoff (e.g. splash captures stdin briefly, which queues
+ * the kickoff into a steering buffer instead of firing the first turn).
+ *
+ * The wrapper script `bin/sumocode.sh` sets `SUMOCODE_TASK_MODE=1` for the
+ * task subcommand. Everything else (footer, top chrome, working indicator,
+ * editor) stays installed — task panes are still full SumoCode sessions,
+ * just without the welcome surface.
+ */
+export function isTaskMode(options: TaskModeOptions = {}): boolean {
+	const env = options.env ?? process.env;
+	return env.SUMOCODE_TASK_MODE === "1";
+}
+
 /**
  * SumoCode — cathedral-themed Pi extension entry point.
  *
@@ -161,7 +184,13 @@ export default function sumocode(pi: ExtensionAPI): void {
 	installSessionCache(pi);
 	installAltscreen(pi);
 	installTopChrome(pi);
-	installSplash(pi);
+	if (!isTaskMode()) {
+		// Splash intercepts the boot sequence and can queue Pi's kickoff prompt
+		// into a steering buffer instead of firing the first turn. In task mode
+		// we're explicitly handing off a prompt, so skip the splash so the
+		// agent turn starts immediately.
+		installSplash(pi);
+	}
 	let requestFooterRender: (() => void) | undefined;
 	const fastModeState = installFastMode(pi, { onChange: () => requestFooterRender?.() });
 	requestFooterRender = installFooter(pi, { fastModeState });

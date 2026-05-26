@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import sumocode, {
 	findActiveSumoDevTree,
 	isInstalledPiAgentGitModule,
+	isTaskMode,
 	shouldInstallNativeTaskTool,
 	shouldNoopDuplicateInstalledExtension,
 	shouldNoopHelperSubprocess,
@@ -108,6 +109,18 @@ describe("duplicate installed extension guard", () => {
 			if (prev === undefined) delete process.env.SUMOCODE_LAUNCHER;
 			else process.env.SUMOCODE_LAUNCHER = prev;
 		}
+	});
+});
+
+describe("task mode", () => {
+	it("detects SUMOCODE_TASK_MODE=1 as task mode", () => {
+		expect(isTaskMode({ env: { SUMOCODE_TASK_MODE: "1" } })).toBe(true);
+	});
+
+	it("is false when SUMOCODE_TASK_MODE is unset or any other value", () => {
+		expect(isTaskMode({ env: {} })).toBe(false);
+		expect(isTaskMode({ env: { SUMOCODE_TASK_MODE: "0" } })).toBe(false);
+		expect(isTaskMode({ env: { SUMOCODE_TASK_MODE: "true" } })).toBe(false);
 	});
 });
 

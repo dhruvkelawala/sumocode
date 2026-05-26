@@ -76,27 +76,31 @@ export function buildVisibleTaskScript(options: VisibleTaskCommandOptions): stri
 }
 
 /**
- * Build the bare launch command for a visible pi/sumocode agent pane.
+ * Build the launch command for a visible pi/sumocode agent pane.
  *
- * We intentionally do NOT pass the prompt as a positional argument here.
- * Passing it through the cmux respawn-pane shell layer, then the sumocode
- * wrapper script, then pi's CLI parser is fragile — quoted prompts with
- * colons, backticks, or multi-line content can get mangled at any layer and
- * end up either as a path or as garbled steering input.
+ * The prompt is passed as a positional argument that Pi treats as the
+ * kickoff user message (see `pi --help`: `[messages...]`). For the sumocode
+ * runner we use the dedicated `task` subcommand so the wrapper sets
+ * `SUMOCODE_TASK_MODE=1` — that tells the extension to skip the splash, so
+ * the kickoff prompt isn't intercepted/queued into a steering buffer.
  *
- * The proven pattern (opencode-cmux, pi-collaborating-agents, HazAT) is to
- * launch the agent bare and then type the prompt into the running TUI via
- * `cmux send` + `cmux send-key return` once the editor is ready. That keeps
- * the prompt as opaque terminal input — no shell escaping, no arg length
- * limit, no positional-vs-message ambiguity.
+ * The shell escaping below is a single layer (the outer `cmux respawn-pane
+ * --command` shell). The child sees one clean argv element with the full
+ * prompt, no further re-escaping needed. No `cmux send`, no readiness
+ * polling, no cold-boot delay — the agent turn fires the moment Pi loads.
  */
-export function buildVisibleAgentCommand(options: Pick<VisibleTaskCommandOptions, "cwd" | "runner">): string {
+export function buildVisibleAgentCommand(options: Pick<VisibleTaskCommandOptions, "cwd" | "command" | "runner">): string {
 	const runner = options.runner ?? "shell";
 	if (runner !== "pi" && runner !== "sumocode") {
 		throw new Error("visible agent commands require runner=pi or runner=sumocode");
 	}
 
-	return [`cd`, shellEscape(options.cwd), `&&`, `exec`, runner].join(" ");
+	const promptArg = shellEscape(options.command);
+	const parts =
+		runner === "sumocode"
+			? ["cd", shellEscape(options.cwd), "&&", "exec", "sumocode", "task", promptArg]
+			: ["cd", shellEscape(options.cwd), "&&", "exec", "pi", promptArg];
+	return parts.join(" ");
 }
 
 /**

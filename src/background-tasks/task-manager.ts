@@ -24,35 +24,6 @@ import {
 const POLL_INTERVAL_MS = 500;
 const DEFAULT_VISIBLE_DIRECTION: CmuxSplitDirection = "right";
 
-/**
- * Fixed cold-boot delay before injecting the prompt into a freshly-created
- * cmux pane running sumocode/pi.
- *
- * `cmux read-screen` polling is unreliable in the first ~15s after pane
- * creation — ghostty surfaces for programmatically-created terminals take
- * noticeably longer to initialise than user-driven ones, so the terminal
- * buffer reads as empty even though the underlying process is alive and
- * accepting input (documented in joelhooks/pi-cmux). We sidestep this by
- * just waiting a known-good interval and then sending unconditionally:
- * cmux send/send-key go to the underlying pty regardless of ghostty's
- * buffer state, and the terminal happily absorbs typeahead.
- *
- * 5 seconds covers the SumoCode cathedral chrome boot (typically 1–3s on
- * a warm system, up to ~5s cold). If the user's machine is genuinely
- * slower, they can retype the prompt into the pane manually — the pane
- * stays open and ready.
- */
-const AGENT_COLD_BOOT_DELAY_MS = 5_000;
-/** Best-effort readiness probe after the cold-boot delay. */
-const AGENT_READY_PROBE_TIMEOUT_MS = 8_000;
-const AGENT_READY_POLL_MS = 500;
-/**
- * Substrings that indicate sumocode/pi's interactive TUI has finished
- * booting. Either the SumoCode footer state label or Pi's own editor
- * border is enough — we only need one to confirm liveness before send.
- */
-const AGENT_READY_MARKERS = ["MEDITATING", "READY", "ILLUMINATING", "DEFERRING", "INSCRIBING", "COMMANDS", "CTRL+"];
-
 interface InternalTask extends BackgroundTask {
 	child?: ChildProcess;
 	pollTimer?: ReturnType<typeof setInterval>;
@@ -273,78 +244,12 @@ export class BackgroundTaskManager {
 			task.pollTimer = setInterval(() => {
 				this.pollVisibleTask(task);
 			}, POLL_INTERVAL_MS);
-		} else if (task.runner === "pi" || task.runner === "sumocode") {
-			void this.injectAgentPrompt(task);
 		}
-	}
-
-	/**
-	 * Inject the prompt into a freshly-launched visible agent pane.
-	 *
-	 * Two-phase: a fixed cold-boot delay (working around ghostty's slow
-	 * read-screen-on-fresh-surface behavior), then a best-effort readiness
-	 * probe, then unconditional send. The send happens whether or not the
-	 * probe saw a TUI marker — cmux send writes to the underlying pty and
-	 * the terminal will absorb keystrokes as typeahead even before the
-	 * editor surface renders.
-	 *
-	 * Best-effort throughout: any failure is logged to the task log but
-	 * never crashes the manager or fails the task. The pane stays open
-	 * either way so the user can re-type the prompt manually if needed.
-	 */
-	private async injectAgentPrompt(task: InternalTask): Promise<void> {
-		if (!task.cmux) return;
-		const { workspaceRef, surfaceRef } = task.cmux;
-
-		await new Promise((resolve) => setTimeout(resolve, AGENT_COLD_BOOT_DELAY_MS));
-
-		const readyByMs = Date.now() + AGENT_READY_PROBE_TIMEOUT_MS;
-		let ready = false;
-		while (Date.now() < readyByMs) {
-			try {
-				const result = await this.pi.exec(
-					"cmux",
-					["read-screen", "--workspace", workspaceRef, "--surface", surfaceRef, "--lines", "40"],
-					{ timeout: 3000 },
-				);
-				if (result.code === 0 && AGENT_READY_MARKERS.some((marker) => result.stdout.includes(marker))) {
-					ready = true;
-					break;
-				}
-			} catch {
-				// ignore transient read-screen failures during boot
-			}
-			await new Promise((resolve) => setTimeout(resolve, AGENT_READY_POLL_MS));
-		}
-
-		if (!ready) {
-			appendLogLine(
-				task.logFile,
-				`[bg-task] could not confirm ${task.runner} editor readiness; sending prompt anyway (ghostty surface buffer may still be initializing)\n`,
-			);
-		}
-
-		try {
-			await this.pi.exec(
-				"cmux",
-				["send", "--workspace", workspaceRef, "--surface", surfaceRef, task.command],
-				{ timeout: 5000 },
-			);
-			await this.pi.exec(
-				"cmux",
-				["send-key", "--workspace", workspaceRef, "--surface", surfaceRef, "return"],
-				{ timeout: 5000 },
-			);
-			task.updatedAt = Date.now();
-			writeTaskMeta(task);
-			appendLogLine(
-				task.logFile,
-				`[bg-task] injected prompt into ${task.runner} pane (${surfaceRef})${ready ? " after ready marker" : " without ready marker"}\n`,
-			);
-		} catch (error) {
-			const message = error instanceof Error ? error.message : String(error);
-			appendLogLine(task.logFile, `[bg-task] failed to inject prompt via cmux send: ${message}\n`);
-		}
+		// runner=pi|sumocode: nothing to do. The pane was launched with the
+		// prompt baked in as Pi's kickoff message (see buildVisibleAgentCommand).
+		// The agent turn fires immediately on child boot — no readiness polling,
+		// no cmux send tricks. Status stays "running" until the user closes the
+		// pane or stops the task; we don't track child agent lifecycle.
 	}
 
 	private pollVisibleTask(task: InternalTask): void {

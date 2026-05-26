@@ -203,16 +203,9 @@ describe("BackgroundTaskManager", () => {
 		});
 	});
 
-	it("launches visible sumocode bare and injects the prompt via cmux send once the editor is ready", async () => {
+	it("launches visible sumocode through the task subcommand with prompt baked in", async () => {
 		process.env.CMUX_SURFACE_ID = "surface:1";
 		const pi = buildPiStub();
-		// Mock read-screen to immediately report the editor is ready.
-		pi.exec.mockImplementation(async (cmd: string, args: string[]) => {
-			if (cmd === "cmux" && args[0] === "read-screen") {
-				return { code: 0, stdout: " ● READY · gpt-5.5 · xhigh    17/272k · $0.00 ", stderr: "", killed: false };
-			}
-			return { code: 0, stdout: "", stderr: "", killed: false };
-		});
 		const cmuxSplit = await import("../commands/cmux-split.js");
 		const openSplit = vi.spyOn(cmuxSplit, "openCommandInNewSplitWithRefs").mockResolvedValue({
 			ok: true,
@@ -222,7 +215,7 @@ describe("BackgroundTaskManager", () => {
 
 		const manager = new BackgroundTaskManager(pi as never);
 		const task = manager.spawnTask({
-			command: "Review the diff: with colons & quotes",
+			command: "Review the diff: with colons & 'quotes'",
 			cwd: "/repo with spaces",
 			visible: true,
 			runner: "sumocode",
@@ -236,31 +229,18 @@ describe("BackgroundTaskManager", () => {
 		expect(openSplit).toHaveBeenCalledWith(
 			pi,
 			"right",
-			"cd '/repo with spaces' && exec sumocode",
+			"cd '/repo with spaces' && exec sumocode task 'Review the diff: with colons & '\\''quotes'\\'''",
 		);
 		expect(task.exitFile).toBeDefined();
 		expect(existsSync(task.exitFile!.replace("exit.code", "run.sh"))).toBe(false);
 
-		// Verify the prompt was typed into the pane via cmux send + send-key return.
-		// Use a generous timeout because injection is gated on the 5s cold-boot delay
-		// that compensates for ghostty's slow surface-initialization on fresh panes.
-		await vi.waitFor(
-			() => {
-				const sendCall = pi.exec.mock.calls.find(
-					(call) => call[0] === "cmux" && (call[1] as string[])[0] === "send",
-				);
-				expect(sendCall, "expected cmux send call with prompt text").toBeDefined();
-				expect(sendCall![1] as string[]).toContain("Review the diff: with colons & quotes");
-
-				const sendKeyCall = pi.exec.mock.calls.find(
-					(call) => call[0] === "cmux" && (call[1] as string[])[0] === "send-key",
-				);
-				expect(sendKeyCall, "expected cmux send-key return to submit prompt").toBeDefined();
-				expect(sendKeyCall![1] as string[]).toContain("return");
-			},
-			{ timeout: 10_000 },
+		// No cmux send / send-key hacks: the prompt is the kickoff message, baked
+		// into the launch command itself. The agent turn fires the moment Pi loads.
+		const sendCall = pi.exec.mock.calls.find(
+			(call) => call[0] === "cmux" && Array.isArray(call[1]) && (call[1] as string[])[0] === "send",
 		);
-	}, 15_000);
+		expect(sendCall, "agent panes should NOT use cmux send for prompt injection").toBeUndefined();
+	});
 
 	it("lists and clears finished tasks", async () => {
 		spawnMock.mockReturnValue(mockChild(0));

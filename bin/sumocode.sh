@@ -27,6 +27,7 @@ USAGE
   sumocode [options] [path]
   sumocode doctor [options]
   sumocode diag [file]
+  sumocode task <prompt> [path]
 
 ARGUMENTS
   path
@@ -46,6 +47,16 @@ COMMANDS
 
   diag [file]
       Summarize a diagnostics JSONL file. Defaults to /tmp/sumocode-manual.jsonl.
+
+  task <prompt> [path]
+      Open SumoCode and immediately start an agent turn on <prompt>.
+      Skips the splash screen, forwards <prompt> to Pi as the kickoff user
+      message, and stays interactive afterwards. Designed for the orchestrator
+      bg_task hand-off flow: the spawned cmux pane goes straight into the
+      agent loop with no manual typing.
+
+      Sets SUMOCODE_TASK_MODE=1 in the launched process so the extension
+      knows to skip splash and other onboarding UI.
 
 OPTIONS
   -d, --debug
@@ -189,11 +200,12 @@ DEBUG_MODE=0
 CLEAR_DIAG=1
 DRY_RUN=0
 COMMAND="run"
+IS_TASK_LAUNCH=0
 DIAG_FILE="${SUMO_TUI_DIAG_FILE:-}"
 SUMOCODE_ARGS=()
 while [[ $# -gt 0 ]]; do
 	case "$1" in
-		doctor|diag)
+		doctor|diag|task)
 			if [[ "${COMMAND}" != "run" ]]; then usage_error "Only one command may be specified."; fi
 			COMMAND="$1"
 			shift
@@ -258,6 +270,13 @@ if [[ "${COMMAND}" == "doctor" && "${#SUMOCODE_ARGS[@]}" -gt 0 ]]; then
 fi
 if [[ "${COMMAND}" == "diag" && "${#SUMOCODE_ARGS[@]}" -gt 1 ]]; then
 	usage_error "diag accepts at most one diagnostics file path."
+fi
+if [[ "${COMMAND}" == "task" ]]; then
+	if [[ "${#SUMOCODE_ARGS[@]}" -eq 0 ]]; then
+		usage_error "task requires a prompt argument. Example: sumocode task \"review the diff\"."
+	fi
+	IS_TASK_LAUNCH=1
+	export SUMOCODE_TASK_MODE=1
 fi
 
 if [[ "${DEBUG_MODE}" == "1" ]]; then
@@ -476,6 +495,14 @@ while :; do
 	fi
 	if [[ "${code}" -ne "${SUMOCODE_RELOAD_EXIT_CODE}" ]]; then
 		exit "${code}"
+	fi
+	# After the kickoff turn has fired, do NOT re-pass the task prompt on
+	# `/sumo:reload`. The reload loop adds `--continue` to resume the existing
+	# session, and re-injecting the original prompt would send it again as a
+	# new user message in the resumed session.
+	if [[ "${IS_TASK_LAUNCH}" -eq 1 ]]; then
+		SUMOCODE_ARGS=()
+		IS_TASK_LAUNCH=0
 	fi
 	# Re-launch with --continue so the in-progress session resumes after the
 	# code change.

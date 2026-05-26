@@ -10,20 +10,23 @@
  *
  * Behavior:
  *
- * - On the first `agent_end` after launch, schedule `ctx.shutdown()` after
- *   a grace period (default 15s) so the user has time to read the response.
+ * - On the first `agent_end` after launch, schedule a close after a grace
+ *   period (default 10s) so the user has time to read the response.
  * - During the grace period, a status entry in the footer counts down
- *   ("auto-closing in 14s · type to cancel").
+ *   ("auto-closing in 9s · type to cancel").
  * - If the user types anything in the editor (source=interactive), cancel
  *   the auto-exit permanently for this session. User has taken over.
  * - Opt out entirely with `SUMOCODE_TASK_KEEP_OPEN=1`.
  *
- * Once sumocode exits, the cmux pane's leading process is gone and the
- * pane closes — provided the launch command used `exec sumocode` so there
- * is no surviving shell wrapper holding the pane open.
+ * Closing the pane uses `cmux close-surface` (no args; cmux defaults to
+ * `$CMUX_SURFACE_ID` which is auto-set in every cmux terminal). This is
+ * cmux's documented "close this pane" method and bypasses Pi's deferred
+ * `ctx.shutdown()` semantics, which in practice do not reliably terminate
+ * Pi from inside an extension handler.
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { isInCmux } from "./commands/cmux-split.js";
 
 const STATUS_KEY = "sumocode-task-auto-exit";
 const DEFAULT_GRACE_MS = 10_000;
@@ -73,6 +76,20 @@ export function installTaskModeAutoExit(pi: ExtensionAPI, options: TaskModeAutoE
 		}
 	};
 
+	const closeOwnSurface = async (): Promise<void> => {
+		// `cmux close-surface` with no args defaults to $CMUX_SURFACE_ID, which
+		// is auto-set in every cmux terminal. From inside the child pane this
+		// is the documented way to ask cmux to tear down the surface we are
+		// running in. cmux then signals the pane's leading process; the bash
+		// wrapper and pi both exit cleanly without any process.exit() hack.
+		if (!isInCmux()) return;
+		try {
+			await pi.exec("cmux", ["close-surface"], { timeout: 5000 });
+		} catch {
+			// best-effort — if cmux is unreachable, leave the pane open
+		}
+	};
+
 	pi.on("input", (event, ctx) => {
 		// Only count actual interactive typing as a take-over. Kickoff prompts
 		// from the CLI positional / sendUserMessage shouldn't disarm the timer.
@@ -107,7 +124,7 @@ export function installTaskModeAutoExit(pi: ExtensionAPI, options: TaskModeAutoE
 
 		const shutdown = setTimeout(() => {
 			cancelPending(ctx, "fired");
-			ctx.shutdown();
+			void closeOwnSurface();
 		}, graceMs);
 
 		pending = { tick, shutdown };

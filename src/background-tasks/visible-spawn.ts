@@ -14,6 +14,7 @@ export interface VisibleTaskPaths {
 	exitFile: string;
 	markerFile: string;
 	scriptFile: string;
+	metaFile: string;
 }
 
 export interface VisibleTaskCommandOptions {
@@ -32,6 +33,7 @@ export function buildVisibleTaskPaths(taskId: string, startedAtMs: number, baseD
 		exitFile: join(dir, "exit.code"),
 		markerFile: join(dir, "started.marker"),
 		scriptFile: join(dir, "run.sh"),
+		metaFile: join(dir, "meta.json"),
 	};
 }
 
@@ -62,6 +64,9 @@ export function buildVisibleTaskScript(options: VisibleTaskCommandOptions): stri
 	return [
 		...header,
 		`set -o pipefail`,
+		// Forward fork-bomb guard into the child command — if it invokes pi or
+		// sumocode, that nested process bails on the helper-subprocess check.
+		`export SUMOCODE_BG_CHILD=1`,
 		`echo "[sumocode-bg] task=${taskId} started" | tee -a ${shellEscape(logFile)}`,
 		`(`,
 		`  ${command}`,

@@ -55,6 +55,24 @@ function readLogTail(logFile: string, maxChars = 10_000): string {
 	return content.slice(-maxChars);
 }
 
+/**
+ * Persist the task snapshot as `meta.json` next to the log/exit files.
+ *
+ * Each spawn already owns a private directory under `$TMPDIR/sumocode-bg/`,
+ * so dropping a snapshot file there lets external tools (a future `/bg-tail`,
+ * a sidebar widget, a recovery command after `/reload`) discover live tasks
+ * without depending on a running SumoCode session. Best-effort — swallow
+ * any write error so a transient FS issue never crashes the spawn path.
+ */
+function writeTaskMeta(task: BackgroundTask): void {
+	if (!task.metaFile) return;
+	try {
+		writeFileSync(task.metaFile, `${JSON.stringify(toBackgroundTaskSnapshot(task), null, 2)}\n`);
+	} catch {
+		// best-effort — meta.json is observational, not load-bearing
+	}
+}
+
 export class BackgroundTaskManager {
 	private tasks = new Map<string, InternalTask>();
 	private counter = 0;
@@ -128,12 +146,14 @@ export class BackgroundTaskManager {
 			updatedAt: now,
 			logFile: paths.logFile,
 			exitFile: paths.exitFile,
+			metaFile: paths.metaFile,
 			visible,
 			runner,
 			notifyOnExit: options.notifyOnExit !== false,
 		};
 
 		this.tasks.set(id, task);
+		writeTaskMeta(task);
 
 		if (visible) {
 			void this.spawnVisibleTask(task, options.direction ?? DEFAULT_VISIBLE_DIRECTION, paths);
@@ -215,6 +235,7 @@ export class BackgroundTaskManager {
 			surfaceRef: splitResult.surfaceRef,
 		};
 		task.updatedAt = Date.now();
+		writeTaskMeta(task);
 
 		if (task.runner === "shell") {
 			task.pollTimer = setInterval(() => {
@@ -269,6 +290,8 @@ export class BackgroundTaskManager {
 			task.status = "failed";
 		}
 
+		writeTaskMeta(task);
+
 		if (task.notifyOnExit && reason === "self-exit") {
 			const label = task.title ?? task.command;
 			const cmuxHint = task.cmux ? ` (cmux ${task.cmux.surfaceRef})` : "";
@@ -278,7 +301,31 @@ export class BackgroundTaskManager {
 			} catch {
 				this.pi.sendUserMessage(message);
 			}
+			this.fireCmuxNotify(task);
 		}
+	}
+
+	/**
+	 * Surface task completion through cmux so the user sees it across workspaces
+	 * and across SumoCode session reloads. `pi.sendUserMessage` only reaches the
+	 * orchestrator while it's alive in this process; `cmux notify` survives.
+	 * Best-effort, fire-and-forget — never throws into the finalize path.
+	 */
+	private fireCmuxNotify(task: BackgroundTask): void {
+		if (!isInCmux()) return;
+		const status = summarizeStatus(task);
+		const title = `bg-task ${task.id} · ${status}`;
+		const body = task.title ?? task.command;
+		const args: string[] = ["notify", "--title", title, "--body", body];
+		if (task.cmux?.workspaceRef) {
+			args.push("--workspace", task.cmux.workspaceRef);
+		}
+		if (task.cmux?.surfaceRef) {
+			args.push("--surface", task.cmux.surfaceRef);
+		}
+		void this.pi
+			.exec("cmux", args, { timeout: 5000 })
+			.catch(() => undefined);
 	}
 
 	stopTask(task: InternalTask): { ok: true; message: string } | { ok: false; message: string } {

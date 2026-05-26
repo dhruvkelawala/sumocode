@@ -20,6 +20,7 @@ export interface BackgroundTask {
 	exitCode?: number | null;
 	logFile: string;
 	exitFile?: string;
+	metaFile?: string;
 	visible: boolean;
 	runner: BackgroundTaskRunner;
 	cmux?: BackgroundTaskCmuxRefs;
@@ -47,6 +48,7 @@ export interface BackgroundTaskSnapshot {
 	updatedAt: number;
 	exitCode?: number | null;
 	logFile: string;
+	metaFile?: string;
 	visible: boolean;
 	runner: BackgroundTaskRunner;
 	cmux?: BackgroundTaskCmuxRefs;
@@ -64,6 +66,7 @@ export function toBackgroundTaskSnapshot(task: BackgroundTask): BackgroundTaskSn
 		updatedAt: task.updatedAt,
 		exitCode: task.exitCode,
 		logFile: task.logFile,
+		metaFile: task.metaFile,
 		visible: task.visible,
 		runner: task.runner,
 		cmux: task.cmux,

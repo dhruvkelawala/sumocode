@@ -14,6 +14,19 @@ describe("visible-spawn", () => {
 		expect(paths.logFile).toBe("/tmp/test-bg/bg-1-1700000000000/output.log");
 		expect(paths.exitFile).toBe("/tmp/test-bg/bg-1-1700000000000/exit.code");
 		expect(paths.scriptFile).toBe("/tmp/test-bg/bg-1-1700000000000/run.sh");
+		expect(paths.metaFile).toBe("/tmp/test-bg/bg-1-1700000000000/meta.json");
+	});
+
+	it("buildVisibleTaskScript exports SUMOCODE_BG_CHILD to guard nested pi/sumocode invocations", () => {
+		const paths = buildVisibleTaskPaths("bg-6", 999, "/tmp/test-bg");
+		const script = buildVisibleTaskScript({
+			cwd: "/repo",
+			command: "pnpm test",
+			paths,
+			taskId: "bg-6",
+		});
+
+		expect(script).toContain("export SUMOCODE_BG_CHILD=1");
 	});
 
 	it("buildVisibleTaskCommand runs only the wrapper script to keep cmux panes readable", () => {

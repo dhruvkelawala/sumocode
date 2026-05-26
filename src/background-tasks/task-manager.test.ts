@@ -14,7 +14,12 @@ vi.mock("node:child_process", () => ({
 function buildPiStub() {
 	return {
 		sendUserMessage: vi.fn(),
-		exec: vi.fn(async () => ({ code: 0, stdout: "", stderr: "", killed: false })),
+		exec: vi.fn(async (_cmd: string, _args: string[], _opts?: unknown) => ({
+			code: 0,
+			stdout: "",
+			stderr: "",
+			killed: false,
+		})),
 	};
 }
 
@@ -74,6 +79,76 @@ describe("BackgroundTaskManager", () => {
 		expect(spawnMock).toHaveBeenCalledOnce();
 		expect(readFileSync(task.logFile, "utf8")).toContain("hello");
 		expect(pi.sendUserMessage).toHaveBeenCalled();
+	});
+
+	it("writes meta.json on spawn and again on completion", async () => {
+		spawnMock.mockReturnValue(mockChild(0));
+		const pi = buildPiStub();
+		const manager = new BackgroundTaskManager(pi as never);
+
+		const task = manager.spawnTask({
+			command: "echo meta",
+			cwd: "/tmp/project",
+			title: "meta probe",
+		});
+
+		expect(task.metaFile).toBeDefined();
+		expect(existsSync(task.metaFile!)).toBe(true);
+		const initial = JSON.parse(readFileSync(task.metaFile!, "utf8"));
+		expect(initial.id).toBe(task.id);
+		expect(initial.command).toBe("echo meta");
+		expect(initial.runner).toBe("shell");
+		expect(initial.status).toBe("running");
+
+		await vi.waitFor(() => expect(task.status).toBe("completed"));
+
+		const final = JSON.parse(readFileSync(task.metaFile!, "utf8"));
+		expect(final.status).toBe("completed");
+		expect(final.exitCode).toBe(0);
+	});
+
+	it("fires cmux notify on shell task exit when inside cmux", async () => {
+		process.env.CMUX_SURFACE_ID = "surface:99";
+		spawnMock.mockReturnValue(mockChild(0));
+		const pi = buildPiStub();
+		const manager = new BackgroundTaskManager(pi as never);
+
+		const task = manager.spawnTask({
+			command: "echo notify",
+			cwd: "/tmp/project",
+			title: "build artifacts",
+		});
+
+		await vi.waitFor(() => expect(task.status).toBe("completed"));
+
+		const notifyCall = pi.exec.mock.calls.find(
+			(call) => call[0] === "cmux" && Array.isArray(call[1]) && (call[1] as string[])[0] === "notify",
+		);
+		expect(notifyCall, "expected a cmux notify exec call").toBeDefined();
+		const args = notifyCall![1] as string[];
+		expect(args).toContain("--title");
+		expect(args.some((a) => a.includes(task.id))).toBe(true);
+		expect(args).toContain("--body");
+		expect(args).toContain("build artifacts");
+	});
+
+	it("does not fire cmux notify outside cmux", async () => {
+		delete process.env.CMUX_SURFACE_ID;
+		spawnMock.mockReturnValue(mockChild(0));
+		const pi = buildPiStub();
+		const manager = new BackgroundTaskManager(pi as never);
+
+		const task = manager.spawnTask({
+			command: "echo silent",
+			cwd: "/tmp/project",
+		});
+
+		await vi.waitFor(() => expect(task.status).toBe("completed"));
+
+		const notifyCall = pi.exec.mock.calls.find(
+			(call) => call[0] === "cmux" && Array.isArray(call[1]) && (call[1] as string[])[0] === "notify",
+		);
+		expect(notifyCall).toBeUndefined();
 	});
 
 	it("rejects visible spawn outside cmux", () => {

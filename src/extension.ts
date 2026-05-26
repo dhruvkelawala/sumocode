@@ -102,6 +102,27 @@ export function shouldInstallNativeTaskTool(options: Pick<DuplicateInstalledExte
 	return !hasLegacyTaskToolExtension(options);
 }
 
+export interface HelperSubprocessGuardOptions {
+	readonly env?: NodeJS.ProcessEnv;
+}
+
+/**
+ * Bail out of SumoCode installation when we are running inside a Pi helper
+ * subprocess. Mirrors `pi-cmux`'s `PI_CMUX_CHILD` pattern — helper spawns
+ * (session naming, turn summaries, etc.) launch Pi with `--no-extensions`
+ * conceptually but can still inherit our extension via `-e`. Loading the
+ * full Cathedral UI inside them wastes startup time and risks recursive
+ * tool registration.
+ *
+ * The same env var is also set by SumoCode's own `bg_task` shell-task
+ * wrapper so a user command that invokes `pi`/`sumocode` does not
+ * recursively install another SumoCode runtime layer.
+ */
+export function shouldNoopHelperSubprocess(options: HelperSubprocessGuardOptions = {}): boolean {
+	const env = options.env ?? process.env;
+	return env.PI_CMUX_CHILD === "1" || env.SUMOCODE_BG_CHILD === "1";
+}
+
 /**
  * SumoCode — cathedral-themed Pi extension entry point.
  *
@@ -112,6 +133,13 @@ export function shouldInstallNativeTaskTool(options: Pick<DuplicateInstalledExte
  * so ownership and startup conflict diagnostics have one registry seam.
  */
 export default function sumocode(pi: ExtensionAPI): void {
+	if (shouldNoopHelperSubprocess()) {
+		// Helper subprocesses (pi-cmux session naming, SumoCode bg_task shell
+		// wrappers, etc.) signal themselves via PI_CMUX_CHILD / SUMOCODE_BG_CHILD.
+		// Bail before installing anything so they stay lightweight and we don't
+		// recursively spawn another SumoCode UI layer.
+		return;
+	}
 	if (shouldNoopDuplicateInstalledExtension()) {
 		console.warn("[sumocode] Skipping installed SumoCode extension because this session is already inside an active SumoCode dev checkout.");
 		return;

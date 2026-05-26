@@ -4,6 +4,7 @@ import sumocode, {
 	isInstalledPiAgentGitModule,
 	shouldInstallNativeTaskTool,
 	shouldNoopDuplicateInstalledExtension,
+	shouldNoopHelperSubprocess,
 } from "./extension.js";
 
 type Handler = (...args: unknown[]) => unknown;
@@ -106,6 +107,36 @@ describe("duplicate installed extension guard", () => {
 		} finally {
 			if (prev === undefined) delete process.env.SUMOCODE_LAUNCHER;
 			else process.env.SUMOCODE_LAUNCHER = prev;
+		}
+	});
+});
+
+describe("helper subprocess guard", () => {
+	it("bails when PI_CMUX_CHILD=1 (pi-cmux helper subprocess)", () => {
+		expect(shouldNoopHelperSubprocess({ env: { PI_CMUX_CHILD: "1" } })).toBe(true);
+	});
+
+	it("bails when SUMOCODE_BG_CHILD=1 (nested under a SumoCode shell task)", () => {
+		expect(shouldNoopHelperSubprocess({ env: { SUMOCODE_BG_CHILD: "1" } })).toBe(true);
+	});
+
+	it("does not bail when neither env var is set", () => {
+		expect(shouldNoopHelperSubprocess({ env: {} })).toBe(false);
+		expect(shouldNoopHelperSubprocess({ env: { PI_CMUX_CHILD: "0" } })).toBe(false);
+	});
+
+	it("skips installation entirely when PI_CMUX_CHILD is set", () => {
+		const prev = process.env.PI_CMUX_CHILD;
+		process.env.PI_CMUX_CHILD = "1";
+		try {
+			const { pi } = buildPiStub();
+			sumocode(pi as never);
+			expect(pi.registerTool).not.toHaveBeenCalled();
+			expect(pi.registerCommand).not.toHaveBeenCalled();
+			expect(pi.on).not.toHaveBeenCalled();
+		} finally {
+			if (prev === undefined) delete process.env.PI_CMUX_CHILD;
+			else process.env.PI_CMUX_CHILD = prev;
 		}
 	});
 });

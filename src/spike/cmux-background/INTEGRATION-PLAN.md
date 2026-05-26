@@ -9,18 +9,11 @@ Follow-on implementation plan after spike approval. This spike does **not** impl
 - [x] `visible-spawn.ts` wrapper builder + tests
 - [x] Visual explainer HTML
 
-## Phase 1 — SumoCode `bg_task` module (implemented)
+## Phase 1 — Fork package (estimated 2–3 days)
 
-- [x] `src/background-tasks/` with invisible + visible spawn paths
-- [x] `bg_task` tool + `/bg` / `/bg-run` commands wired in `src/extension.ts`
-- [x] cmux split hardening in `src/commands/cmux-split.ts` (parse split stdout, new-pane-only lookup)
-- [x] Unit tests for adapter, visible wrapper, task manager, tool registration
+1. Vendor or fork `vanillagreencom/vstack/pi-extensions/pi-background-tasks` into `packages/pi-background-cmux/` (or private sumocode-config extension path — prefer **public sumocode repo** under `packages/` if we want MIT propagation).
 
-## Phase 2 — SumoCode UX (follow-on)
-
-- [ ] Transcript renderer for `bg_task` in SumoTUI
-- [ ] Footer hint when visible tasks are running
-- [ ] Command palette entries
+2. Add settings schema:
 
 ```json
 {

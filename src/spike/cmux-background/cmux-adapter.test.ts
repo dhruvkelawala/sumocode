@@ -3,7 +3,6 @@ import {
 	buildShellCommand,
 	identifyCmuxCaller,
 	openVisibleTaskInSplit,
-	parseNewSplitOutput,
 	shellEscape,
 	waitForNewCmuxSurface,
 	type CmuxExecFn,
@@ -28,16 +27,9 @@ describe("cmux-adapter spike", () => {
 		expect(shellEscape("it's fine")).toBe("'it'\\''s fine'");
 	});
 
-	it("buildShellCommand cd + exec bash -lc", () => {
+	it("buildShellCommand cd + exec sh -lc", () => {
 		expect(buildShellCommand("/repo", "pnpm test")).toContain("cd '/repo'");
-		expect(buildShellCommand("/repo", "pnpm test")).toContain("exec bash -lc 'pnpm test'");
-	});
-
-	it("parseNewSplitOutput reads surface ref from split stdout", () => {
-		expect(parseNewSplitOutput("OK surface:2 workspace:1")).toEqual({
-			surfaceRef: "surface:2",
-			workspaceRef: "workspace:1",
-		});
+		expect(buildShellCommand("/repo", "pnpm test")).toContain("exec sh -lc 'pnpm test'");
 	});
 
 	it("identifyCmuxCaller parses workspace and surface refs", async () => {
@@ -91,6 +83,21 @@ describe("cmux-adapter spike", () => {
 
 		const surface = await waitForNewCmuxSurface(execCmux, "workspace:1", before, 3, 0);
 		expect(surface).toBe("surface:2");
+	});
+
+	it("waitForNewCmuxSurface ignores new surfaces on existing panes", async () => {
+		const before: CmuxPaneInfo[] = [{ ref: "pane:1", surface_refs: ["surface:1"] }];
+		const after: CmuxPaneInfo[] = [{ ref: "pane:1", surface_refs: ["surface:1", "surface:other"] }];
+
+		const execCmux: CmuxExecFn = vi.fn(async (args) => {
+			if (args[0] === "--json" && args[1] === "list-panes") {
+				return { ok: true, stdout: JSON.stringify({ panes: after }), stderr: "" };
+			}
+			throw new Error(`unexpected: ${args.join(" ")}`);
+		});
+
+		const surface = await waitForNewCmuxSurface(execCmux, "workspace:1", before, 1, 0);
+		expect(surface).toBeUndefined();
 	});
 
 	it("openVisibleTaskInSplit runs new-split then respawn-pane", async () => {

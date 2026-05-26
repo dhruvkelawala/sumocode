@@ -72,6 +72,7 @@ describe("visible-spawn", () => {
 
 		expect(cmd).toBe(
 			"cd '/repo with spaces' && " +
+				"SUMOCODE_TASK_MODE=1 " +
 				"SUMOCODE_TASK_RESPONSE_FILE='/tmp/test-bg/bg-4-456/response.md' " +
 				"SUMOCODE_TASK_DIAG_FILE='/tmp/test-bg/bg-4-456/diag.jsonl' " +
 				"exec sumocode task --prompt-file '/tmp/test-bg/bg-4-456/prompt.txt'",
@@ -116,6 +117,7 @@ describe("visible-spawn", () => {
 
 		expect(cmd).toBe(
 			"cd '/repo' && " +
+				"SUMOCODE_TASK_MODE=1 " +
 				"SUMOCODE_TASK_RESPONSE_FILE='/tmp/test-bg/bg-5-456/response.md' " +
 				"SUMOCODE_TASK_DIAG_FILE='/tmp/test-bg/bg-5-456/diag.jsonl' " +
 				"exec pi 'Review the diff'",

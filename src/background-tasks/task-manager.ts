@@ -1,5 +1,16 @@
 import { type ChildProcess, spawn } from "node:child_process";
-import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+	chmodSync,
+	closeSync,
+	existsSync,
+	mkdirSync,
+	openSync,
+	readFileSync,
+	readSync,
+	statSync,
+	unlinkSync,
+	writeFileSync,
+} from "node:fs";
 import { dirname } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
@@ -19,16 +30,33 @@ import {
 	buildVisibleTaskScript,
 	parseExitMarkerLine,
 	readExitCodeFromFile,
+	shellEscape as shellEscapeForBash,
 } from "./visible-spawn.js";
 
 const POLL_INTERVAL_MS = 500;
 const RESPONSE_POLL_INTERVAL_MS = 750;
 const DEFAULT_VISIBLE_DIRECTION: CmuxSplitDirection = "right";
 
+/** Max grace period before stopTask escalates SIGTERM to SIGKILL. */
+const STOP_SIGTERM_GRACE_MS = 5_000;
+/** Default upper bound on agent-runner response.md harvest before failing. */
+const DEFAULT_AGENT_WATCHDOG_MS = 10 * 60 * 1000; // 10 minutes
+/** Bounded tail-read for poll/harvest — avoids O(file_size) re-reads. */
+const LOG_TAIL_READ_BYTES = 16 * 1024;
+
 interface InternalTask extends BackgroundTask {
 	child?: ChildProcess;
 	pollTimer?: ReturnType<typeof setInterval>;
 	responseTimer?: ReturnType<typeof setInterval>;
+	watchdogDeadline?: number;
+	/**
+	 * Promise that resolves once the visible-spawn coroutine finishes (success
+	 * OR caught failure). `stopTask` awaits this so it can never finalize a task
+	 * while a `new-split`/`respawn-pane` is still in flight — otherwise the
+	 * stopped-then-launched race leaves a runaway pane.
+	 */
+	spawnPromise?: Promise<void>;
+	stopRequested?: boolean;
 	finalized?: boolean;
 }
 
@@ -50,12 +78,54 @@ function appendLogLine(logFile: string, line: string): void {
 	writeFileSync(logFile, line, { flag: "a" });
 }
 
-function readLogTail(logFile: string, maxChars = 10_000): string {
+/**
+ * Read the tail of `logFile` without slurping the whole file.
+ *
+ * Visible shell tasks emit unbounded output and the poll loop runs every
+ * 500ms. A naive `readFileSync` of multi-MB build logs would spike CPU/IO
+ * and block the event loop. Instead, stat the file and seek to the last
+ * `maxBytes`, returning only that region. Newline-trim the leading slice
+ * to avoid surfacing a half-line at the top.
+ */
+function readLogTail(logFile: string, maxBytes = LOG_TAIL_READ_BYTES): string {
 	if (!existsSync(logFile)) return "";
-	const content = readFileSync(logFile, "utf8");
-	if (content.length <= maxChars) return content;
-	return content.slice(-maxChars);
+	let fd: number | null = null;
+	try {
+		const { size } = statSync(logFile);
+		if (size === 0) return "";
+		const readSize = Math.min(size, maxBytes);
+		const offset = size - readSize;
+		fd = openSync(logFile, "r");
+		const buf = Buffer.allocUnsafe(readSize);
+		readSync(fd, buf, 0, readSize, offset);
+		let text = buf.toString("utf8");
+		if (offset > 0) {
+			const firstNewline = text.indexOf("\n");
+			if (firstNewline !== -1 && firstNewline < text.length - 1) {
+				text = text.slice(firstNewline + 1);
+			}
+		}
+		return text;
+	} catch {
+		// Fall back to a tiny full-read on stat/read failure (e.g. file truncated
+		// between stat and open).
+		try {
+			return readFileSync(logFile, "utf8").slice(-maxBytes);
+		} catch {
+			return "";
+		}
+	} finally {
+		if (fd !== null) {
+			try {
+				closeSync(fd);
+			} catch {
+				// ignore
+			}
+		}
+	}
 }
+
+
 
 /**
  * Persist the task snapshot as `meta.json` next to the log/exit files.
@@ -127,6 +197,15 @@ export class BackgroundTaskManager {
 
 		const visible = options.visible === true;
 		const runner = options.runner ?? "shell";
+		// Reject visible=false with an agent runner. The non-visible code path
+		// just executes `command` as a shell string, which would treat a natural-
+		// language prompt as bash and produce 'command not found' (or worse).
+		// Agent runners require a visible cmux pane by design.
+		if (!visible && (runner === "pi" || runner === "sumocode")) {
+			throw new Error(
+				`runner='${runner}' requires visible=true — agent prompts cannot be executed as shell commands. Set visible=true or use runner='shell' for shell commands.`,
+			);
+		}
 		if (visible && !isInCmux()) {
 			throw new Error("visible background tasks require a cmux surface (CMUX_SURFACE_ID or CMUX_WORKSPACE_ID)");
 		}
@@ -163,7 +242,19 @@ export class BackgroundTaskManager {
 		writeTaskMeta(task);
 
 		if (visible) {
-			void this.spawnVisibleTask(task, options.direction ?? DEFAULT_VISIBLE_DIRECTION, paths);
+			// Capture the spawn coroutine on the task so stopTask can await it.
+			// Catch lets a thrown `openCommandInNewSplitWithRefs` (e.g. cmux
+			// unreachable) finalize the task as failed instead of becoming an
+			// unhandled rejection that leaves status="running" forever.
+			task.spawnPromise = this.spawnVisibleTask(
+				task,
+				options.direction ?? DEFAULT_VISIBLE_DIRECTION,
+				paths,
+			).catch((error) => {
+				const message = error instanceof Error ? error.message : String(error);
+				appendLogLine(task.logFile, `\n[bg-task] visible spawn failed: ${message}\n`);
+				this.finalizeTask(task, 1, "self-exit");
+			});
 		} else {
 			this.spawnInvisibleTask(task, command, cwd, paths.logFile);
 		}
@@ -173,10 +264,25 @@ export class BackgroundTaskManager {
 
 	private spawnInvisibleTask(task: InternalTask, command: string, cwd: string, logFile: string): void {
 		const { shell, args } = getShellConfig();
-		const child = spawn(shell, [...args, command], {
+		const detached = process.platform !== "win32";
+
+		// Detached children with parent-piped stdio do not always survive parent
+		// teardown on macOS/Linux — the OS keeps the kernel pipe ends tied to
+		// the parent, so if SumoCode exits or its session reloads, a long
+		// build/test child can die mid-run. Use `stdio: "ignore"` and have the
+		// shell wrapper redirect output into the log file directly. The child
+		// is then truly orphan-able and persists across orchestrator restarts.
+		const wrappedCommand = detached
+			? `( ${command} ) >>${shellEscapeForBash(logFile)} 2>&1`
+			: command;
+		const childStdio: "ignore" | ["ignore", "pipe", "pipe"] = detached
+			? "ignore"
+			: ["ignore", "pipe", "pipe"];
+
+		const child = spawn(shell, [...args, wrappedCommand], {
 			cwd,
-			detached: process.platform !== "win32",
-			stdio: ["ignore", "pipe", "pipe"],
+			detached,
+			stdio: childStdio,
 			// Match the visible shell wrapper: forward the fork-bomb guard into the
 			// child env so any nested pi/sumocode invocation bails on the
 			// helper-subprocess check in extension.ts.
@@ -186,13 +292,17 @@ export class BackgroundTaskManager {
 		task.pid = child.pid ?? undefined;
 		task.child = child;
 
-		const handleChunk = (chunk: Buffer) => {
-			appendLogLine(logFile, chunk.toString());
-			task.updatedAt = Date.now();
-		};
+		if (!detached) {
+			// On platforms where we kept stdio pipes (Windows), tee chunks into the
+			// log file. On detached platforms the shell does the redirection.
+			const handleChunk = (chunk: Buffer) => {
+				appendLogLine(logFile, chunk.toString());
+				task.updatedAt = Date.now();
+			};
+			child.stdout?.on("data", handleChunk);
+			child.stderr?.on("data", handleChunk);
+		}
 
-		child.stdout?.on("data", handleChunk);
-		child.stderr?.on("data", handleChunk);
 		child.on("close", (code) => {
 			this.finalizeTask(task, typeof code === "number" ? code : null, "self-exit");
 		});
@@ -201,7 +311,7 @@ export class BackgroundTaskManager {
 			this.finalizeTask(task, 1, "self-exit");
 		});
 
-		if (process.platform !== "win32" && child.pid) {
+		if (detached && child.pid) {
 			child.unref();
 		}
 	}
@@ -211,6 +321,12 @@ export class BackgroundTaskManager {
 		direction: CmuxSplitDirection,
 		paths: ReturnType<typeof buildVisibleTaskPaths>,
 	): Promise<void> {
+		// stopTask may have been called between spawnTask returning and this
+		// coroutine running. Skip the split entirely in that case.
+		if (task.stopRequested) {
+			this.finalizeTask(task, null, "stopped");
+			return;
+		}
 		if (task.runner === "shell") {
 			writeFileSync(
 				paths.scriptFile,
@@ -252,6 +368,27 @@ export class BackgroundTaskManager {
 			this.finalizeTask(task, 1, "self-exit");
 			return;
 		}
+		if (task.stopRequested) {
+			// Stop arrived while we were waiting for cmux. Close the surface we
+			// just created so it doesn't become orphaned, then finalize stopped.
+			try {
+				await this.pi.exec(
+					"cmux",
+					[
+						"close-surface",
+						"--workspace",
+						splitResult.workspaceRef,
+						"--surface",
+						splitResult.surfaceRef,
+					],
+					{ timeout: 5000 },
+				);
+			} catch {
+				// best-effort
+			}
+			this.finalizeTask(task, null, "stopped");
+			return;
+		}
 
 		task.cmux = {
 			workspaceRef: splitResult.workspaceRef,
@@ -269,6 +406,7 @@ export class BackgroundTaskManager {
 			// first agent_end fires (see src/task-mode.ts). On creation, we
 			// transition the task to "completed" and persist the updated
 			// snapshot so `bg_task list` and `bg_task log` reflect the harvest.
+			task.watchdogDeadline = Date.now() + DEFAULT_AGENT_WATCHDOG_MS;
 			this.armResponseWatcher(task);
 		}
 	}
@@ -277,7 +415,10 @@ export class BackgroundTaskManager {
 	 * Poll for the child agent's `response.md`. Pi has no cross-process event
 	 * bus we could subscribe to, so a 750ms file-poll is the simplest reliable
 	 * way to detect a hand-off completion. The interval is cancelled once the
-	 * file appears, or on task stop/manager shutdown.
+	 * file appears, on stop/shutdown, or after the watchdog deadline (default
+	 * 10 min). Watchdog expiry covers the case where the child crashes before
+	 * `agent_end` fires — without it, the task would stay `running` forever
+	 * and the orchestrator would poll "still working" indefinitely.
 	 */
 	private armResponseWatcher(task: InternalTask): void {
 		if (!task.responseFile) return;
@@ -288,13 +429,24 @@ export class BackgroundTaskManager {
 				task.responseTimer = undefined;
 				return;
 			}
-			if (!task.responseFile || !existsSync(task.responseFile)) return;
-			if (task.responseTimer) clearInterval(task.responseTimer);
-			task.responseTimer = undefined;
-			task.status = "completed";
-			task.exitCode = 0;
-			task.updatedAt = Date.now();
-			writeTaskMeta(task);
+			if (task.responseFile && existsSync(task.responseFile)) {
+				if (task.responseTimer) clearInterval(task.responseTimer);
+				task.responseTimer = undefined;
+				task.status = "completed";
+				task.exitCode = 0;
+				task.updatedAt = Date.now();
+				writeTaskMeta(task);
+				return;
+			}
+			if (task.watchdogDeadline && Date.now() > task.watchdogDeadline) {
+				if (task.responseTimer) clearInterval(task.responseTimer);
+				task.responseTimer = undefined;
+				appendLogLine(
+					task.logFile,
+					`[bg-task] watchdog timeout: response.md not written within ${Math.round(DEFAULT_AGENT_WATCHDOG_MS / 1000)}s; marking task failed (agent may have crashed before agent_end)\n`,
+				);
+				this.finalizeTask(task, null, "self-exit");
+			}
 		}, RESPONSE_POLL_INTERVAL_MS);
 		if (typeof task.responseTimer.unref === "function") {
 			task.responseTimer.unref();
@@ -343,10 +495,16 @@ export class BackgroundTaskManager {
 		task.exitCode = exitCode;
 		task.updatedAt = Date.now();
 
-		if (reason === "stopped") {
+		if (reason === "stopped" || task.stopRequested) {
+			// A user-initiated stop may resolve via `child.on("close")` AFTER
+			// `stopTask` has signalled, in which case `reason` is still
+			// "self-exit". Honor the original stop intent.
 			task.status = "stopped";
 		} else if (exitCode === 0) {
+			// For agent runners, exitCode=null + self-exit means watchdog timeout.
 			task.status = "completed";
+		} else if (exitCode === null) {
+			task.status = "failed";
 		} else {
 			task.status = "failed";
 		}
@@ -389,35 +547,123 @@ export class BackgroundTaskManager {
 			.catch(() => undefined);
 	}
 
-	stopTask(task: InternalTask): { ok: true; message: string } | { ok: false; message: string } {
+	async stopTask(
+		task: InternalTask,
+	): Promise<{ ok: true; message: string } | { ok: false; message: string }> {
 		if (task.status !== "running") {
 			return { ok: false, message: `Task ${task.id} is already ${task.status}.` };
 		}
 
-		if (task.child?.pid) {
+		// Race protection: if a visible spawn is still mid-flight (no cmux refs
+		// yet), mark the request and wait for the spawn coroutine to settle. The
+		// coroutine checks stopRequested at every yield point and closes its own
+		// surface if it created one.
+		task.stopRequested = true;
+		if (task.visible && task.spawnPromise && !task.finalized && !task.cmux) {
 			try {
-				if (process.platform !== "win32") {
-					process.kill(-task.child.pid, "SIGTERM");
-				} else {
-					task.child.kill("SIGTERM");
-				}
+				await task.spawnPromise;
 			} catch {
-				try {
-					task.child.kill("SIGKILL");
-				} catch {
-					// best effort
-				}
+				// catch was attached at spawnTask; spawnPromise itself never rejects
 			}
-		} else if (task.visible && task.cmux) {
-			void this.pi.exec(
-				"cmux",
-				["close-surface", "--workspace", task.cmux.workspaceRef, "--surface", task.cmux.surfaceRef],
-				{ timeout: 5000 },
-			);
+			if (task.finalized) {
+				return { ok: true, message: `Stopped background task ${task.id} (cancelled before launch).` };
+			}
 		}
 
+		if (task.child?.pid) {
+			const killed = await this.terminateChildAndWait(task.child);
+			if (!killed) {
+				return {
+					ok: false,
+					message: `Failed to stop task ${task.id}: child process (pid ${task.child.pid}) did not exit after SIGTERM + SIGKILL within ${Math.round(STOP_SIGTERM_GRACE_MS / 1000)}s.`,
+				};
+			}
+			// finalizeTask is already called via child.on("close"), but ensure it
+			// transitions to "stopped" rather than "failed" by short-circuiting.
+			if (!task.finalized) {
+				this.finalizeTask(task, null, "stopped");
+			}
+			return { ok: true, message: `Stopped background task ${task.id}.` };
+		}
+
+		if (task.visible && task.cmux) {
+			const result = await this.pi
+				.exec(
+					"cmux",
+					["close-surface", "--workspace", task.cmux.workspaceRef, "--surface", task.cmux.surfaceRef],
+					{ timeout: 5000 },
+				)
+				.catch((error: unknown) => ({
+					code: -1,
+					stdout: "",
+					stderr: error instanceof Error ? error.message : String(error),
+					killed: false,
+				}));
+			if (result.code !== 0) {
+				return {
+					ok: false,
+					message: `Failed to close cmux surface ${task.cmux.surfaceRef}: ${result.stderr || result.stdout || `cmux close-surface exited ${result.code}`}`,
+				};
+			}
+			this.finalizeTask(task, null, "stopped");
+			return { ok: true, message: `Stopped background task ${task.id} (closed cmux ${task.cmux.surfaceRef}).` };
+		}
+
+		// No child process and no cmux ref — nothing to actually kill (rare).
 		this.finalizeTask(task, null, "stopped");
-		return { ok: true, message: `Stopped background task ${task.id}.` };
+		return { ok: true, message: `Stopped background task ${task.id} (no process attached).` };
+	}
+
+	/**
+	 * Send SIGTERM, wait up to `STOP_SIGTERM_GRACE_MS`, escalate to SIGKILL,
+	 * then wait a final short window for the kernel to clean up. Returns true
+	 * if the process exited, false otherwise.
+	 */
+	private async terminateChildAndWait(child: ChildProcess): Promise<boolean> {
+		const sendSignal = (signal: NodeJS.Signals): void => {
+			// Prefer process-group SIGTERM (negative pid) on POSIX so any
+			// children of the detached shell wrapper also receive the signal.
+			// Fall through to child.kill() if process.kill() throws — the most
+			// common case is the process or pgid no longer existing.
+			let groupKilled = false;
+			if (process.platform !== "win32" && child.pid != null) {
+				try {
+					process.kill(-child.pid, signal);
+					groupKilled = true;
+				} catch {
+					groupKilled = false;
+				}
+			}
+			if (!groupKilled) {
+				try {
+					child.kill(signal);
+				} catch {
+					// process already gone
+				}
+			}
+		};
+
+		const awaitExit = (timeoutMs: number): Promise<boolean> =>
+			new Promise<boolean>((resolve) => {
+				if (child.exitCode !== null || child.signalCode !== null) {
+					resolve(true);
+					return;
+				}
+				const onClose = (): void => {
+					clearTimeout(timer);
+					resolve(true);
+				};
+				const timer = setTimeout(() => {
+					child.off("close", onClose);
+					resolve(false);
+				}, timeoutMs);
+				child.once("close", onClose);
+			});
+
+		sendSignal("SIGTERM");
+		if (await awaitExit(STOP_SIGTERM_GRACE_MS)) return true;
+		sendSignal("SIGKILL");
+		return await awaitExit(2_000);
 	}
 
 	clearFinishedTasks(): number {

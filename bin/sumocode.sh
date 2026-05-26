@@ -547,9 +547,15 @@ while :; do
 	# `/sumo:reload`. The reload loop adds `--continue` to resume the existing
 	# session, and re-injecting the original prompt would send it again as a
 	# new user message in the resumed session.
+	#
+	# Also clear SUMOCODE_TASK_MODE so the auto-exit lifecycle does NOT
+	# re-arm on the next agent_end. The original hand-off was the kickoff;
+	# anything happening in this session after a reload is the user actively
+	# working in the pane and should not be auto-closed.
 	if [[ "${IS_TASK_LAUNCH}" -eq 1 ]]; then
 		SUMOCODE_ARGS=()
 		IS_TASK_LAUNCH=0
+		unset SUMOCODE_TASK_MODE
 	fi
 	# Re-launch with --continue so the in-progress session resumes after the
 	# code change.

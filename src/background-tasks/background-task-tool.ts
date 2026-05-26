@@ -20,8 +20,19 @@ function makeToolResult(text: string, details?: unknown) {
 export function installBackgroundTasks(pi: ExtensionAPI): BackgroundTaskManager {
 	const manager = new BackgroundTaskManager(pi);
 
-	pi.on("session_shutdown", () => {
-		manager.shutdown();
+	// `session_shutdown` fires not only on process exit but also during
+	// /reload, /new, /resume, /fork (Pi tears down and rebinds the extension
+	// runtime). If we killed every running task on those events, a user
+	// reloading SumoCode would lose every long-running `bg_task spawn` job
+	// they had in flight. Only kill on a real process-quit shutdown; on
+	// session replacement, leave the child processes running (they're already
+	// detached / cmux-owned) and let the new manager start with an empty
+	// in-memory map. Recovery from disk-stored meta.json is a future feature.
+	pi.on("session_shutdown", (event) => {
+		const reason = (event as { reason?: string } | null | undefined)?.reason;
+		if (reason === "quit" || reason === undefined) {
+			manager.shutdown();
+		}
 	});
 
 	pi.registerTool({
@@ -187,7 +198,7 @@ export function installBackgroundTasks(pi: ExtensionAPI): BackgroundTaskManager 
 				});
 			}
 
-			const stopped = manager.stopTask(task);
+			const stopped = await manager.stopTask(task);
 			if (!stopped.ok) {
 				throw new Error(stopped.message);
 			}

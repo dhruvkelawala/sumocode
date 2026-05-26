@@ -59,15 +59,15 @@ export function buildVisibleTaskScript(options: VisibleTaskCommandOptions): stri
 
 	const { logFile, exitFile, markerFile } = paths;
 	const dir = dirname(logFile);
-	const header = [
+
+	return [
 		`#!/usr/bin/env bash`,
 		`mkdir -p ${shellEscape(dir)}`,
 		`touch ${shellEscape(markerFile)}`,
-		`cd ${shellEscape(cwd)}`,
-	];
-
-	return [
-		...header,
+		// Fail fast if cwd is missing/unreadable. Without this guard, `cd`
+		// failure is silent and the task ends up running from $HOME, potentially
+		// writing to the wrong project while still reporting a clean lifecycle.
+		`cd ${shellEscape(cwd)} || { echo "[sumocode-bg] task=${taskId} cwd-missing: ${cwd}" | tee -a ${shellEscape(logFile)}; printf '%s' 1 > ${shellEscape(exitFile)}; exit 1; }`,
 		`set -o pipefail`,
 		// Forward fork-bomb guard into the child command — if it invokes pi or
 		// sumocode, that nested process bails on the helper-subprocess check.
@@ -116,7 +116,12 @@ export function buildVisibleAgentCommand(
 		throw new Error("visible agent commands require runner=pi or runner=sumocode");
 	}
 
+	// Both runners need SUMOCODE_TASK_MODE=1 so the SumoCode extension's
+	// task-mode auto-exit + response-harvest lifecycle installs in the child.
+	// The sumocode wrapper sets this itself via the `task` subcommand, but the
+	// bare pi runner doesn't go through the wrapper — it has to be set here.
 	const envPrefix: string[] = [
+		`SUMOCODE_TASK_MODE=1`,
 		`SUMOCODE_TASK_RESPONSE_FILE=${shellEscape(options.paths.responseFile)}`,
 		`SUMOCODE_TASK_DIAG_FILE=${shellEscape(options.paths.diagFile)}`,
 	];

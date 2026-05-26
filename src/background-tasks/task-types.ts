@@ -1,6 +1,7 @@
 export type BackgroundTaskStatus = "running" | "completed" | "failed" | "stopped";
 
 export type SplitDirection = "right" | "down";
+export type BackgroundTaskRunner = "shell" | "pi" | "sumocode";
 
 export interface BackgroundTaskCmuxRefs {
 	workspaceRef: string;
@@ -20,6 +21,7 @@ export interface BackgroundTask {
 	logFile: string;
 	exitFile?: string;
 	visible: boolean;
+	runner: BackgroundTaskRunner;
 	cmux?: BackgroundTaskCmuxRefs;
 	notifyOnExit: boolean;
 }
@@ -30,6 +32,7 @@ export interface SpawnBackgroundTaskOptions {
 	title?: string;
 	visible?: boolean;
 	direction?: SplitDirection;
+	runner?: BackgroundTaskRunner;
 	notifyOnExit?: boolean;
 }
 
@@ -45,6 +48,7 @@ export interface BackgroundTaskSnapshot {
 	exitCode?: number | null;
 	logFile: string;
 	visible: boolean;
+	runner: BackgroundTaskRunner;
 	cmux?: BackgroundTaskCmuxRefs;
 }
 
@@ -61,6 +65,7 @@ export function toBackgroundTaskSnapshot(task: BackgroundTask): BackgroundTaskSn
 		exitCode: task.exitCode,
 		logFile: task.logFile,
 		visible: task.visible,
+		runner: task.runner,
 		cmux: task.cmux,
 	};
 }

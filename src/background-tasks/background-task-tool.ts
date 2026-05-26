@@ -33,6 +33,7 @@ export function installBackgroundTasks(pi: ExtensionAPI): BackgroundTaskManager 
 		promptGuidelines: [
 			"Use bg_task instead of bash backgrounding when the user wants long-running work to continue while the conversation stays usable.",
 			"Pass visible=true when the user wants to watch output in a cmux split.",
+			"Use runner=sumocode or runner=pi for visible agent tasks so the pane shows the native agent UI instead of a shell wrapper.",
 			"Use bg_task list/log/stop to inspect or terminate tracked tasks.",
 		],
 		parameters: Type.Object({
@@ -45,6 +46,11 @@ export function installBackgroundTasks(pi: ExtensionAPI): BackgroundTaskManager 
 			pid: Type.Optional(Type.Number({ description: "PID for action=log or action=stop" })),
 			visible: Type.Optional(
 				Type.Boolean({ description: "When true, run in a new cmux split (requires cmux surface)." }),
+			),
+			runner: Type.Optional(
+				StringEnum(["shell", "pi", "sumocode"] as const, {
+					description: "How to run the task: shell command, pi prompt, or sumocode prompt. Default: shell.",
+				}),
 			),
 			direction: Type.Optional(
 				StringEnum(["right", "down"] as const, {
@@ -76,6 +82,7 @@ export function installBackgroundTasks(pi: ExtensionAPI): BackgroundTaskManager 
 					title: params.title,
 					visible: params.visible,
 					direction: params.direction,
+					runner: params.runner,
 					notifyOnExit: params.notifyOnExit,
 				});
 

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
 	buildVisibleTaskCommand,
 	buildVisibleTaskPaths,
+	buildVisibleTaskScript,
 	parseExitMarkerLine,
 	readExitCodeFromFile,
 } from "./visible-spawn.js";
@@ -11,9 +12,10 @@ describe("visible-spawn", () => {
 		const paths = buildVisibleTaskPaths("bg-1", 1_700_000_000_000, "/tmp/test-bg");
 		expect(paths.logFile).toBe("/tmp/test-bg/bg-1-1700000000000/output.log");
 		expect(paths.exitFile).toBe("/tmp/test-bg/bg-1-1700000000000/exit.code");
+		expect(paths.scriptFile).toBe("/tmp/test-bg/bg-1-1700000000000/run.sh");
 	});
 
-	it("buildVisibleTaskCommand uses bash -lc with pipefail", () => {
+	it("buildVisibleTaskCommand runs only the wrapper script to keep cmux panes readable", () => {
 		const paths = buildVisibleTaskPaths("bg-2", 123, "/tmp/test-bg");
 		const cmd = buildVisibleTaskCommand({
 			cwd: "/Volumes/SumoDeus NVMe/code/sumocode",
@@ -22,11 +24,39 @@ describe("visible-spawn", () => {
 			taskId: "bg-2",
 		});
 
-		expect(cmd).toContain("exec bash -lc");
-		expect(cmd).toContain("set -o pipefail");
-		expect(cmd).not.toContain("exec sh -lc");
-		expect(cmd).toContain("pnpm test");
-		expect(cmd).toContain("[sumocode-bg] task=bg-2 exit:$code");
+		expect(cmd).toBe("exec bash '/tmp/test-bg/bg-2-123/run.sh'");
+		expect(cmd).not.toContain("pnpm test");
+		expect(cmd).not.toContain("pipefail");
+	});
+
+	it("buildVisibleTaskScript uses bash pipefail for shell tasks", () => {
+		const paths = buildVisibleTaskPaths("bg-2", 123, "/tmp/test-bg");
+		const script = buildVisibleTaskScript({
+			cwd: "/Volumes/SumoDeus NVMe/code/sumocode",
+			command: "pnpm test",
+			paths,
+			taskId: "bg-2",
+		});
+
+		expect(script).toContain("#!/usr/bin/env bash");
+		expect(script).toContain("set -o pipefail");
+		expect(script).toContain("pnpm test");
+		expect(script).toContain("[sumocode-bg] task=bg-2 exit:$code");
+	});
+
+	it("buildVisibleTaskScript launches sumocode directly for agent tasks", () => {
+		const paths = buildVisibleTaskPaths("bg-4", 456, "/tmp/test-bg");
+		const script = buildVisibleTaskScript({
+			cwd: "/repo",
+			command: "Review the diff",
+			paths,
+			taskId: "bg-4",
+			runner: "sumocode",
+		});
+
+		expect(script).toContain("sumocode 'Review the diff'");
+		expect(script).not.toContain("tee -a");
+		expect(script).toContain("exit.code");
 	});
 
 	it("readExitCodeFromFile parses numeric exit codes", () => {

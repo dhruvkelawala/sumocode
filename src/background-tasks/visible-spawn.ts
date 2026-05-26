@@ -7,10 +7,13 @@
 
 import { dirname, join } from "node:path";
 
+export type VisibleTaskRunner = "shell" | "pi" | "sumocode";
+
 export interface VisibleTaskPaths {
 	logFile: string;
 	exitFile: string;
 	markerFile: string;
+	scriptFile: string;
 }
 
 export interface VisibleTaskCommandOptions {
@@ -18,6 +21,7 @@ export interface VisibleTaskCommandOptions {
 	command: string;
 	paths: VisibleTaskPaths;
 	taskId: string;
+	runner?: VisibleTaskRunner;
 }
 
 export function buildVisibleTaskPaths(taskId: string, startedAtMs: number, baseDir?: string): VisibleTaskPaths {
@@ -27,6 +31,7 @@ export function buildVisibleTaskPaths(taskId: string, startedAtMs: number, baseD
 		logFile: join(dir, "output.log"),
 		exitFile: join(dir, "exit.code"),
 		markerFile: join(dir, "started.marker"),
+		scriptFile: join(dir, "run.sh"),
 	};
 }
 
@@ -34,20 +39,39 @@ export function shellEscape(value: string): string {
 	return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
-/**
- * Returns a single bash -lc command suitable for cmux respawn-pane --command.
- *
- * Uses bash (not sh) because pipefail is required for accurate exit codes.
- */
-export function buildVisibleTaskCommand(options: VisibleTaskCommandOptions): string {
-	const { cwd, command, paths, taskId } = options;
+function buildPromptArg(command: string): string {
+	const trimmed = command.trim();
+	return trimmed ? ` ${shellEscape(trimmed)}` : "";
+}
+
+export function buildVisibleTaskScript(options: VisibleTaskCommandOptions): string {
+	const { cwd, command, paths, taskId, runner = "shell" } = options;
 	const { logFile, exitFile, markerFile } = paths;
 	const dir = dirname(logFile);
 
-	const inner = [
-		`set -o pipefail`,
+	const header = [
+		`#!/usr/bin/env bash`,
 		`mkdir -p ${shellEscape(dir)}`,
 		`touch ${shellEscape(markerFile)}`,
+		`cd ${shellEscape(cwd)}`,
+	];
+
+	if (runner === "pi" || runner === "sumocode") {
+		const binary = runner === "sumocode" ? "sumocode" : "pi";
+		return [
+			...header,
+			`printf '[sumocode-bg] task=%s started runner=${runner}\\n' ${shellEscape(taskId)} >> ${shellEscape(logFile)}`,
+			`${binary}${buildPromptArg(command)}`,
+			`code=$?`,
+			`printf '%s' "$code" > ${shellEscape(exitFile)}`,
+			`printf '[sumocode-bg] task=%s exit:%s\\n' ${shellEscape(taskId)} "$code" >> ${shellEscape(logFile)}`,
+			`exit "$code"`,
+		].join("\n");
+	}
+
+	return [
+		...header,
+		`set -o pipefail`,
 		`echo "[sumocode-bg] task=${taskId} started" | tee -a ${shellEscape(logFile)}`,
 		`(`,
 		`  ${command}`,
@@ -57,8 +81,15 @@ export function buildVisibleTaskCommand(options: VisibleTaskCommandOptions): str
 		`echo "[sumocode-bg] task=${taskId} exit:$code" | tee -a ${shellEscape(logFile)}`,
 		`exit "$code"`,
 	].join("\n");
+}
 
-	return ["cd", shellEscape(cwd), "&&", "exec", "bash", "-lc", shellEscape(inner)].join(" ");
+/**
+ * Returns a short command suitable for cmux respawn-pane --command.
+ * The actual wrapper lives in scriptFile so the cmux pane does not show a huge
+ * quoted shell payload before useful output.
+ */
+export function buildVisibleTaskCommand(options: VisibleTaskCommandOptions): string {
+	return ["exec", "bash", shellEscape(options.paths.scriptFile)].join(" ");
 }
 
 export function readExitCodeFromFile(contents: string): number | null {

@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -108,6 +108,9 @@ describe("BackgroundTaskManager", () => {
 			expect(task.cmux).toEqual({ workspaceRef: "workspace:1", surfaceRef: "surface:2" });
 		});
 		expect(task.exitFile).toBeDefined();
+		const scriptFile = task.exitFile!.replace("exit.code", "run.sh");
+		expect(existsSync(scriptFile)).toBe(true);
+		expect(readFileSync(scriptFile, "utf8")).toContain("pnpm test");
 		writeFileSync(task.exitFile!, "0");
 
 		await vi.waitFor(() => {

@@ -1,5 +1,5 @@
 import { type ChildProcess, spawn } from "node:child_process";
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
@@ -16,6 +16,7 @@ import {
 import {
 	buildVisibleTaskCommand,
 	buildVisibleTaskPaths,
+	buildVisibleTaskScript,
 	parseExitMarkerLine,
 	readExitCodeFromFile,
 } from "./visible-spawn.js";
@@ -105,6 +106,7 @@ export class BackgroundTaskManager {
 		}
 
 		const visible = options.visible === true;
+		const runner = options.runner ?? "shell";
 		if (visible && !isInCmux()) {
 			throw new Error("visible background tasks require a cmux surface (CMUX_SURFACE_ID or CMUX_WORKSPACE_ID)");
 		}
@@ -127,6 +129,7 @@ export class BackgroundTaskManager {
 			logFile: paths.logFile,
 			exitFile: paths.exitFile,
 			visible,
+			runner,
 			notifyOnExit: options.notifyOnExit !== false,
 		};
 
@@ -178,11 +181,24 @@ export class BackgroundTaskManager {
 		direction: CmuxSplitDirection,
 		paths: ReturnType<typeof buildVisibleTaskPaths>,
 	): Promise<void> {
+		writeFileSync(
+			paths.scriptFile,
+			buildVisibleTaskScript({
+				cwd: task.cwd,
+				command: task.command,
+				paths,
+				taskId: task.id,
+				runner: task.runner,
+			}),
+		);
+		chmodSync(paths.scriptFile, 0o700);
+
 		const respawnCommand = buildVisibleTaskCommand({
 			cwd: task.cwd,
 			command: task.command,
 			paths,
 			taskId: task.id,
+			runner: task.runner,
 		});
 
 		const splitResult = await openCommandInNewSplitWithRefs(this.pi, direction, respawnCommand);

@@ -3,6 +3,7 @@ import {
 	buildShellCommand,
 	identifyCmuxCaller,
 	openVisibleTaskInSplit,
+	parseNewSplitOutput,
 	shellEscape,
 	waitForNewCmuxSurface,
 	type CmuxExecFn,
@@ -27,9 +28,16 @@ describe("cmux-adapter spike", () => {
 		expect(shellEscape("it's fine")).toBe("'it'\\''s fine'");
 	});
 
-	it("buildShellCommand cd + exec sh -lc", () => {
+	it("buildShellCommand cd + exec bash -lc", () => {
 		expect(buildShellCommand("/repo", "pnpm test")).toContain("cd '/repo'");
-		expect(buildShellCommand("/repo", "pnpm test")).toContain("exec sh -lc 'pnpm test'");
+		expect(buildShellCommand("/repo", "pnpm test")).toContain("exec bash -lc 'pnpm test'");
+	});
+
+	it("parseNewSplitOutput reads surface ref from split stdout", () => {
+		expect(parseNewSplitOutput("OK surface:2 workspace:1")).toEqual({
+			surfaceRef: "surface:2",
+			workspaceRef: "workspace:1",
+		});
 	});
 
 	it("identifyCmuxCaller parses workspace and surface refs", async () => {

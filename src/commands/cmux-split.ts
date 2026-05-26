@@ -1,5 +1,9 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
+export function isInCmux(): boolean {
+	return Boolean(process.env.CMUX_WORKSPACE_ID || process.env.CMUX_SURFACE_ID);
+}
+
 /**
  * cmux split helpers — ported from `pi-cmux@0.1.8` (MIT, Javier Molina,
  * https://github.com/javiermolinar/pi-cmux) with light adaptation for the
@@ -169,17 +173,43 @@ async function waitForNewSurface(
 
 export type OpenSplitResult = { ok: true } | { ok: false; error: string };
 
+export type OpenSplitWithRefsResult =
+	| { ok: true; workspaceRef: string; surfaceRef: string }
+	| { ok: false; error: string };
+
+/** Parse `cmux new-split` stdout, e.g. `OK surface:2 workspace:1`. */
+export function parseNewSplitOutput(stdout: string): { surfaceRef?: string; workspaceRef?: string } {
+	const surfaceMatch = stdout.match(/surface:\S+/);
+	const workspaceMatch = stdout.match(/workspace:\S+/);
+	return {
+		surfaceRef: surfaceMatch?.[0],
+		workspaceRef: workspaceMatch?.[0],
+	};
+}
+
+async function resolveNewSplitSurface(
+	pi: ExtensionAPI,
+	workspaceRef: string,
+	beforePanes: readonly CmuxPaneInfo[],
+	splitStdout: string,
+): Promise<string | undefined> {
+	const parsed = parseNewSplitOutput(splitStdout);
+	if (parsed.surfaceRef) {
+		return parsed.surfaceRef;
+	}
+	return waitForNewSurface(pi, workspaceRef, beforePanes);
+}
+
 /**
  * Create a new cmux split next to the current surface and run `command`
- * in it. Returns `ok: false` with a human-readable error message if any
- * step fails. Caller decides how to surface the error (typically via
- * `ctx.ui.notify`).
+ * in it. Returns surface refs when successful so callers can track the
+ * visible pane (background tasks, notifications, etc.).
  */
-export async function openCommandInNewSplit(
+export async function openCommandInNewSplitWithRefs(
 	pi: ExtensionAPI,
 	direction: SplitDirection,
 	command: string,
-): Promise<OpenSplitResult> {
+): Promise<OpenSplitWithRefsResult> {
 	const callerResult = await getCallerInfo(pi);
 	if (!callerResult.ok) return callerResult;
 
@@ -199,7 +229,12 @@ export async function openCommandInNewSplit(
 		return { ok: false, error: splitResult.error ?? "Failed to create cmux split" };
 	}
 
-	const newSurfaceRef = await waitForNewSurface(pi, workspaceRef, beforePanesResult.panes);
+	const newSurfaceRef = await resolveNewSplitSurface(
+		pi,
+		workspaceRef,
+		beforePanesResult.panes,
+		splitResult.stdout,
+	);
 	if (!newSurfaceRef) {
 		return { ok: false, error: "Created split, but could not find the new cmux surface" };
 	}
@@ -219,5 +254,21 @@ export async function openCommandInNewSplit(
 		return { ok: false, error: respawnResult.error ?? "Failed to run command in the new split" };
 	}
 
+	return { ok: true, workspaceRef, surfaceRef: newSurfaceRef };
+}
+
+/**
+ * Create a new cmux split next to the current surface and run `command`
+ * in it. Returns `ok: false` with a human-readable error message if any
+ * step fails. Caller decides how to surface the error (typically via
+ * `ctx.ui.notify`).
+ */
+export async function openCommandInNewSplit(
+	pi: ExtensionAPI,
+	direction: SplitDirection,
+	command: string,
+): Promise<OpenSplitResult> {
+	const result = await openCommandInNewSplitWithRefs(pi, direction, command);
+	if (!result.ok) return result;
 	return { ok: true };
 }

@@ -3,12 +3,14 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="color-scheme" content="light dark">
 <title>SumoCode × cmux background tasks — spike</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet">
 <style>
 :root {
+	color-scheme: light dark;
 	--bg: #f4f1ea;
 	--surface: #fffdf8;
 	--grid: rgba(30, 58, 95, 0.08);
@@ -18,9 +20,33 @@
 	--accent-2: #c45c26;
 	--accent-3: #2d6a4f;
 	--line: rgba(30, 58, 95, 0.18);
+	--card-bg: rgba(255, 255, 255, 0.6);
+	--meta-bg: rgba(30, 58, 95, 0.04);
+	--th-bg: rgba(30, 58, 95, 0.06);
+	--mermaid-bg: rgba(255, 255, 255, 0.5);
+	--code-bg: rgba(30, 58, 95, 0.05);
 	--mono: "IBM Plex Mono", ui-monospace, monospace;
 	--sans: "IBM Plex Sans", system-ui, sans-serif;
 	--serif: "Instrument Serif", Georgia, serif;
+}
+
+@media (prefers-color-scheme: dark) {
+	:root {
+		--bg: #12100e;
+		--surface: #1a1614;
+		--grid: rgba(245, 230, 200, 0.05);
+		--text: #e8dcc8;
+		--muted: #9a8b78;
+		--accent: #f5e6c8;
+		--accent-2: #d97706;
+		--accent-3: #6aa86f;
+		--line: rgba(245, 230, 200, 0.14);
+		--card-bg: rgba(255, 255, 255, 0.04);
+		--meta-bg: rgba(245, 230, 200, 0.06);
+		--th-bg: rgba(245, 230, 200, 0.06);
+		--mermaid-bg: rgba(0, 0, 0, 0.25);
+		--code-bg: rgba(245, 230, 200, 0.06);
+	}
 }
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body {
@@ -67,7 +93,7 @@ body {
 .meta span {
 	border: 1px solid var(--line);
 	padding: 6px 10px;
-	background: rgba(30, 58, 95, 0.04);
+	background: var(--meta-bg);
 }
 section {
 	border: 1px solid var(--line);
@@ -101,7 +127,7 @@ li { margin: 6px 0; }
 .card {
 	border: 1px solid var(--line);
 	padding: 18px;
-	background: rgba(255,255,255,0.6);
+	background: var(--card-bg);
 }
 .card strong { display: block; margin-bottom: 6px; color: var(--accent); }
 .card code, .mono { font-family: var(--mono); font-size: 0.88em; }
@@ -124,7 +150,7 @@ th, td {
 	vertical-align: top;
 }
 th {
-	background: rgba(30, 58, 95, 0.06);
+	background: var(--th-bg);
 	font-weight: 600;
 	color: var(--accent);
 }
@@ -143,7 +169,7 @@ th {
 	padding: 20px;
 	margin-top: 16px;
 	overflow-x: auto;
-	background: rgba(255,255,255,0.5);
+	background: var(--mermaid-bg);
 }
 .flow-row {
 	display: flex; flex-wrap: wrap; align-items: stretch; gap: 10px; margin-top: 16px;
@@ -152,7 +178,7 @@ th {
 	flex: 1 1 180px;
 	border: 1px solid var(--line);
 	padding: 14px;
-	background: #fff;
+	background: var(--surface);
 	position: relative;
 }
 .flow-box .label {
@@ -170,6 +196,14 @@ footer {
 	font: 12px/1.5 var(--mono);
 	color: var(--muted);
 	text-align: center;
+}
+.code-block {
+	background: var(--code-bg);
+	border: 1px solid var(--line);
+	padding: 14px;
+	overflow: auto;
+	margin-top: 10px;
+	font-size: 0.85rem;
 }
 </style>
 </head>
@@ -327,7 +361,7 @@ sequenceDiagram
 			<li><code class="mono">RESEARCH.md</code> + <code class="mono">INTEGRATION-PLAN.md</code></li>
 		</ul>
 		<h3>Proposed bg_task API extension</h3>
-		<pre class="mono" style="background:rgba(30,58,95,0.05);border:1px solid var(--line);padding:14px;overflow:auto;margin-top:10px;font-size:0.85rem">{
+		<pre class="mono code-block">{
   "action": "spawn",
   "command": "pnpm test",
   "visible": true,
@@ -350,20 +384,70 @@ sequenceDiagram
 </div>
 <script type="module">
 import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
-mermaid.initialize({
-	startOnLoad: true,
-	theme: "base",
-	themeVariables: {
-		fontFamily: "IBM Plex Sans, sans-serif",
-		fontSize: "15px",
-		primaryColor: "#fffdf8",
-		primaryBorderColor: "#1e3a5f",
-		lineColor: "#64748b",
-		actorBkg: "#fffdf8",
-		actorBorder: "#1e3a5f",
-		noteBkgColor: "#f4f1ea",
-		noteTextColor: "#1e293b",
-	},
+
+const lightTheme = {
+	fontFamily: "IBM Plex Sans, sans-serif",
+	fontSize: "15px",
+	primaryColor: "#fffdf8",
+	primaryBorderColor: "#1e3a5f",
+	lineColor: "#64748b",
+	actorBkg: "#fffdf8",
+	actorBorder: "#1e3a5f",
+	noteBkgColor: "#f4f1ea",
+	noteTextColor: "#1e293b",
+	textColor: "#1e293b",
+	mainBkg: "#fffdf8",
+};
+
+const darkTheme = {
+	fontFamily: "IBM Plex Sans, sans-serif",
+	fontSize: "15px",
+	primaryColor: "#1a1614",
+	primaryBorderColor: "#d97706",
+	lineColor: "#9a8b78",
+	actorBkg: "#1a1614",
+	actorBorder: "#d97706",
+	noteBkgColor: "#12100e",
+	noteTextColor: "#e8dcc8",
+	textColor: "#e8dcc8",
+	mainBkg: "#1a1614",
+};
+
+function isDarkMode() {
+	return window.matchMedia("(prefers-color-scheme: dark)").matches;
+}
+
+function storeMermaidSources() {
+	document.querySelectorAll(".mermaid").forEach((node) => {
+		if (!node.dataset.source) {
+			node.dataset.source = node.textContent?.trim() ?? "";
+		}
+	});
+}
+
+function resetMermaidNodes() {
+	document.querySelectorAll(".mermaid").forEach((node) => {
+		node.removeAttribute("data-processed");
+		node.textContent = node.dataset.source ?? "";
+	});
+}
+
+async function renderMermaid() {
+	const dark = isDarkMode();
+	mermaid.initialize({
+		startOnLoad: false,
+		theme: "base",
+		themeVariables: dark ? darkTheme : lightTheme,
+	});
+	resetMermaidNodes();
+	await mermaid.run({ querySelector: ".mermaid" });
+}
+
+storeMermaidSources();
+await renderMermaid();
+
+window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", async () => {
+	await renderMermaid();
 });
 </script>
 </body>

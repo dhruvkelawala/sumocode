@@ -1,20 +1,22 @@
 # Spike: cmux-visible background tasks
 
-Research spike for SumoCode orchestrator-visible background work via cmux splits, built on a fork of `@vanillagreen/pi-background-tasks`.
+Research spike for SumoCode orchestrator-visible background work via cmux splits.
+
+**Production implementation:** `src/background-tasks/` (`bg_task` tool, visible spawn, cmux split integration).
 
 ## Contents
 
 | File | Purpose |
 |---|---|
 | [RESEARCH.md](./RESEARCH.md) | Deep comparison of pi-subagents, pi-cmux, opencode-cmux, pi-background-tasks |
-| [INTEGRATION-PLAN.md](./INTEGRATION-PLAN.md) | Proposed fork + SumoCode wiring plan |
-| [cmux-adapter.ts](./cmux-adapter.ts) | Portable cmux CLI adapter (PoC) |
-| [visible-spawn.ts](./visible-spawn.ts) | Log-tee wrapper command builder for visible tasks |
+| [INTEGRATION-PLAN.md](./INTEGRATION-PLAN.md) | Rollout plan (Phase 0–2 implemented in `src/background-tasks/`) |
+| [cmux-adapter.ts](./cmux-adapter.ts) | Portable cmux CLI adapter (PoC — mirrored in `src/commands/cmux-split.ts`) |
+| [visible-spawn.ts](./visible-spawn.ts) | Log-tee wrapper (promoted to `src/background-tasks/visible-spawn.ts`) |
 | [visual-explainer.html](./visual-explainer.html) | Architecture diagram + decision matrix |
 
 ## Status
 
-**Spike only** — nothing in this directory is imported by SumoCode production code. Promote by moving the adapter into a real package and forking `pi-background-tasks`.
+**Spike + production module shipped.** Use `bg_task` from SumoCode; spike files remain for research evidence only.
 
 ## Quick validation
 

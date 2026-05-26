@@ -66,7 +66,17 @@ export function shellEscape(value: string): string {
 }
 
 export function buildShellCommand(cwd: string, command: string): string {
-	return ["cd", shellEscape(cwd), "&&", "exec", "sh", "-lc", shellEscape(command)].join(" ");
+	return ["cd", shellEscape(cwd), "&&", "exec", "bash", "-lc", shellEscape(command)].join(" ");
+}
+
+/** Parse `cmux new-split` stdout, e.g. `OK surface:2 workspace:1`. */
+export function parseNewSplitOutput(stdout: string): { surfaceRef?: string; workspaceRef?: string } {
+	const surfaceMatch = stdout.match(/surface:\S+/);
+	const workspaceMatch = stdout.match(/workspace:\S+/);
+	return {
+		surfaceRef: surfaceMatch?.[0],
+		workspaceRef: workspaceMatch?.[0],
+	};
 }
 
 function delay(ms: number): Promise<void> {
@@ -218,13 +228,16 @@ export async function openVisibleTaskInSplit(options: OpenVisibleTaskOptions): P
 		return { ok: false, error: splitResult.error ?? "Failed to create cmux split" };
 	}
 
-	const newSurfaceRef = await waitForNewCmuxSurface(
-		execCmux,
-		workspaceRef,
-		beforePanesResult.panes,
-		splitReadyAttempts,
-		splitReadyDelayMs,
-	);
+	const parsedSplit = parseNewSplitOutput(splitResult.stdout);
+	const newSurfaceRef =
+		parsedSplit.surfaceRef ??
+		(await waitForNewCmuxSurface(
+			execCmux,
+			workspaceRef,
+			beforePanesResult.panes,
+			splitReadyAttempts,
+			splitReadyDelayMs,
+		));
 	if (!newSurfaceRef) {
 		return { ok: false, error: "Created split, but could not find the new cmux surface" };
 	}

@@ -48,6 +48,7 @@ describe("BackgroundTaskManager", () => {
 	});
 
 	afterEach(() => {
+		vi.restoreAllMocks();
 		rmSync(baseDir, { recursive: true, force: true });
 		if (originalCmuxSurface === undefined) {
 			delete process.env.CMUX_SURFACE_ID;
@@ -116,6 +117,38 @@ describe("BackgroundTaskManager", () => {
 		await vi.waitFor(() => {
 			expect(task.status).toBe("completed");
 		});
+	});
+
+	it("launches visible sumocode tasks directly without writing run.sh", async () => {
+		process.env.CMUX_SURFACE_ID = "surface:1";
+		const pi = buildPiStub();
+		const cmuxSplit = await import("../commands/cmux-split.js");
+		const openSplit = vi.spyOn(cmuxSplit, "openCommandInNewSplitWithRefs").mockResolvedValue({
+			ok: true,
+			workspaceRef: "workspace:1",
+			surfaceRef: "surface:2",
+		});
+
+		const manager = new BackgroundTaskManager(pi as never);
+		const task = manager.spawnTask({
+			command: "Review the diff",
+			cwd: "/repo with spaces",
+			visible: true,
+			runner: "sumocode",
+			notifyOnExit: false,
+		});
+
+		await vi.waitFor(() => {
+			expect(task.cmux).toEqual({ workspaceRef: "workspace:1", surfaceRef: "surface:2" });
+		});
+
+		expect(openSplit).toHaveBeenCalledWith(
+			pi,
+			"right",
+			"cd '/repo with spaces' && exec sumocode 'Review the diff'",
+		);
+		expect(task.exitFile).toBeDefined();
+		expect(existsSync(task.exitFile!.replace("exit.code", "run.sh"))).toBe(false);
 	});
 
 	it("lists and clears finished tasks", async () => {

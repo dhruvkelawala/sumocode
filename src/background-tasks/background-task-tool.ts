@@ -28,8 +28,8 @@ export function installBackgroundTasks(pi: ExtensionAPI): BackgroundTaskManager 
 		name: "bg_task",
 		label: "Background Task",
 		description:
-			"Spawn, inspect, and stop non-blocking shell tasks. Use visible=true inside cmux to open a live split pane. Tasks write persistent logs and can wake the agent on exit.",
-		promptSnippet: "Spawn and manage non-blocking background shell tasks.",
+			"Spawn, inspect, and stop non-blocking shell tasks or visible pi/sumocode agent panes. Shell tasks write persistent logs and can wake the agent on exit.",
+		promptSnippet: "Spawn and manage non-blocking background shell tasks or visible agent panes.",
 		promptGuidelines: [
 			"Use bg_task instead of bash backgrounding when the user wants long-running work to continue while the conversation stays usable.",
 			"Pass visible=true when the user wants to watch output in a cmux split.",

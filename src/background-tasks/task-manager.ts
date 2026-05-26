@@ -181,17 +181,19 @@ export class BackgroundTaskManager {
 		direction: CmuxSplitDirection,
 		paths: ReturnType<typeof buildVisibleTaskPaths>,
 	): Promise<void> {
-		writeFileSync(
-			paths.scriptFile,
-			buildVisibleTaskScript({
-				cwd: task.cwd,
-				command: task.command,
-				paths,
-				taskId: task.id,
-				runner: task.runner,
-			}),
-		);
-		chmodSync(paths.scriptFile, 0o700);
+		if (task.runner === "shell") {
+			writeFileSync(
+				paths.scriptFile,
+				buildVisibleTaskScript({
+					cwd: task.cwd,
+					command: task.command,
+					paths,
+					taskId: task.id,
+					runner: task.runner,
+				}),
+			);
+			chmodSync(paths.scriptFile, 0o700);
+		}
 
 		const respawnCommand = buildVisibleTaskCommand({
 			cwd: task.cwd,
@@ -214,9 +216,11 @@ export class BackgroundTaskManager {
 		};
 		task.updatedAt = Date.now();
 
-		task.pollTimer = setInterval(() => {
-			this.pollVisibleTask(task);
-		}, POLL_INTERVAL_MS);
+		if (task.runner === "shell") {
+			task.pollTimer = setInterval(() => {
+				this.pollVisibleTask(task);
+			}, POLL_INTERVAL_MS);
+		}
 	}
 
 	private pollVisibleTask(task: InternalTask): void {

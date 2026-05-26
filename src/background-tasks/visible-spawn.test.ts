@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+	buildVisibleAgentCommand,
 	buildVisibleTaskCommand,
 	buildVisibleTaskPaths,
 	buildVisibleTaskScript,
@@ -44,19 +45,43 @@ describe("visible-spawn", () => {
 		expect(script).toContain("[sumocode-bg] task=bg-2 exit:$code");
 	});
 
-	it("buildVisibleTaskScript launches sumocode directly for agent tasks", () => {
+	it("buildVisibleAgentCommand launches sumocode directly without a wrapper", () => {
+		const cmd = buildVisibleAgentCommand({
+			cwd: "/repo with spaces",
+			command: "Review the diff",
+			runner: "sumocode",
+		});
+
+		expect(cmd).toBe("cd '/repo with spaces' && exec sumocode 'Review the diff'");
+		expect(cmd).not.toContain("run.sh");
+		expect(cmd).not.toContain("tee -a");
+	});
+
+	it("buildVisibleTaskCommand launches pi runner directly", () => {
 		const paths = buildVisibleTaskPaths("bg-4", 456, "/tmp/test-bg");
-		const script = buildVisibleTaskScript({
+		const cmd = buildVisibleTaskCommand({
 			cwd: "/repo",
 			command: "Review the diff",
 			paths,
 			taskId: "bg-4",
-			runner: "sumocode",
+			runner: "pi",
 		});
 
-		expect(script).toContain("sumocode 'Review the diff'");
-		expect(script).not.toContain("tee -a");
-		expect(script).toContain("exit.code");
+		expect(cmd).toBe("cd '/repo' && exec pi 'Review the diff'");
+		expect(cmd).not.toContain("/tmp/test-bg/bg-4-456/run.sh");
+	});
+
+	it("buildVisibleTaskScript rejects agent runners", () => {
+		const paths = buildVisibleTaskPaths("bg-5", 789, "/tmp/test-bg");
+		expect(() =>
+			buildVisibleTaskScript({
+				cwd: "/repo",
+				command: "Review the diff",
+				paths,
+				taskId: "bg-5",
+				runner: "sumocode",
+			}),
+		).toThrow(/launch directly/i);
 	});
 
 	it("readExitCodeFromFile parses numeric exit codes", () => {

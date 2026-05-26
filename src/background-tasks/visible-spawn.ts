@@ -46,28 +46,18 @@ function buildPromptArg(command: string): string {
 
 export function buildVisibleTaskScript(options: VisibleTaskCommandOptions): string {
 	const { cwd, command, paths, taskId, runner = "shell" } = options;
+	if (runner !== "shell") {
+		throw new Error("visible pi/sumocode tasks launch directly and do not use run.sh");
+	}
+
 	const { logFile, exitFile, markerFile } = paths;
 	const dir = dirname(logFile);
-
 	const header = [
 		`#!/usr/bin/env bash`,
 		`mkdir -p ${shellEscape(dir)}`,
 		`touch ${shellEscape(markerFile)}`,
 		`cd ${shellEscape(cwd)}`,
 	];
-
-	if (runner === "pi" || runner === "sumocode") {
-		const binary = runner === "sumocode" ? "sumocode" : "pi";
-		return [
-			...header,
-			`printf '[sumocode-bg] task=%s started runner=${runner}\\n' ${shellEscape(taskId)} >> ${shellEscape(logFile)}`,
-			`${binary}${buildPromptArg(command)}`,
-			`code=$?`,
-			`printf '%s' "$code" > ${shellEscape(exitFile)}`,
-			`printf '[sumocode-bg] task=%s exit:%s\\n' ${shellEscape(taskId)} "$code" >> ${shellEscape(logFile)}`,
-			`exit "$code"`,
-		].join("\n");
-	}
 
 	return [
 		...header,
@@ -83,12 +73,27 @@ export function buildVisibleTaskScript(options: VisibleTaskCommandOptions): stri
 	].join("\n");
 }
 
+export function buildVisibleAgentCommand(options: Pick<VisibleTaskCommandOptions, "cwd" | "command" | "runner">): string {
+	const runner = options.runner ?? "shell";
+	if (runner !== "pi" && runner !== "sumocode") {
+		throw new Error("visible agent commands require runner=pi or runner=sumocode");
+	}
+
+	return [`cd`, shellEscape(options.cwd), `&&`, `exec`, runner, buildPromptArg(options.command).trimStart()]
+		.filter(Boolean)
+		.join(" ");
+}
+
 /**
- * Returns a short command suitable for cmux respawn-pane --command.
- * The actual wrapper lives in scriptFile so the cmux pane does not show a huge
- * quoted shell payload before useful output.
+ * Returns a command suitable for cmux respawn-pane --command.
+ * Shell tasks use a short run.sh wrapper for logging/exit tracking. Agent
+ * tasks launch the native pi/sumocode command directly so the pane is readable.
  */
 export function buildVisibleTaskCommand(options: VisibleTaskCommandOptions): string {
+	const runner = options.runner ?? "shell";
+	if (runner === "pi" || runner === "sumocode") {
+		return buildVisibleAgentCommand(options);
+	}
 	return ["exec", "bash", shellEscape(options.paths.scriptFile)].join(" ");
 }
 

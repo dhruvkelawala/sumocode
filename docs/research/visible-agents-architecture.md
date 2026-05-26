@@ -281,20 +281,60 @@ Ordered by ROI, smallest first.
 1. **Document the boundary.** In `bg_task` description and skill docs,
    state explicitly: shell tasks are tracked, agent panes are handed off.
    This prevents users (and the LLM) from expecting agent result harvest.
+   — ✅ shipped in `55bd424`.
 2. **Detect `PI_CMUX_CHILD=1`** in the SumoCode entry point and skip
    re-installing `bg_task`. Symmetric with `pi-cmux`. Cheap fork-bomb guard
    if a child sumocode session ever spawns another.
+   — ✅ shipped in `90e997d`.
 3. **Use `cmux notify`** on shell task exit when `notifyOnExit=true`. The
    current path uses `pi.sendUserMessage`, which only works while the
    orchestrator session is live. cmux notifications survive session
    reload and show across workspaces.
+   — ✅ shipped in `cea7153`.
 4. **For shell tasks, write `<dir>/meta.json`** with `taskId`, `command`,
    `cwd`, `startedAt`, `runner`, `cmux refs`. Lets future tools (a
    `/bg-tail`, a sidebar widget, etc.) discover live tasks without a
    running SumoCode session.
-5. **Add a thin `subagent` tool later**, wrapping `pi-subagents`' EventBus
+   — ✅ shipped in `cea7153`.
+5. **Propagate `SUMOCODE_BG_CHILD=1`** to invisible shell task children so
+   they can detect they are running inside a managed bg_task context. The
+   extension entry point checks this to skip UI registration that would
+   conflict with the parent orchestrator.
+   — ✅ shipped in `7195f34`.
+6. **Add a thin `subagent` tool later**, wrapping `pi-subagents`' EventBus
    RPC (`pi.events.emit("subagents:rpc:spawn", { task, ... })`). Keep
    `bg_task` focused on the hand-off case.
+
+## 7a. The `sumocode task` subcommand (`ee7551c`)
+
+We landed `sumocode task '<prompt>'` as the delegation primitive for visible
+agent panes. When `bg_task` spawns a `runner=sumocode` or `runner=pi` pane,
+the command it executes in the cmux split is now
+`sumocode task '<prompt>'` rather than the earlier `cmux send` / `send-key`
+approach.
+
+The `bin/sumocode.sh` wrapper detects the `task` subcommand and sets
+`SUMOCODE_TASK_MODE=1` before launching Pi. This env var signals task mode
+to the extension entry point: the `isTaskMode()` guard skips
+`installSplash()`, which was the root cause of a showstopper bug. In normal
+interactive sessions the splash screen intercepts Pi's kickoff prompt and
+queues it into a "Steering" buffer for the Cathedral UX. In task mode that
+interception swallowed the delegated prompt entirely, so the child session
+never fired its first turn. Skipping splash lets Pi receive the positional
+argument as a kickoff user message — the `[messages...]` positional
+documented in `pi --help`.
+
+This replaced an earlier approach where we used `cmux send` / `send-key` to
+type the prompt into a cold-booted sumocode pane. That path was fragile:
+it required arbitrary delays to wait for shell init and Ghostty's slow
+surface initialization, and terminal-input typing mangled long prompts or
+raced the shell. Passing the prompt as a CLI positional is deterministic
+and zero-latency.
+
+The reload loop in `bin/sumocode.sh` also required a fix: when the user
+triggers `/sumo:reload`, the wrapper strips the task prompt from the
+relaunch arguments so the original delegated prompt is not replayed into
+the resumed session (which continues via `--continue`).
 
 ## 8. What we explicitly do not build
 

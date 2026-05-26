@@ -218,6 +218,43 @@ Required crops gate against committed approved runtime goldens. Bible diffs rema
 - Voice is enforced by `src/voice.ts`. State labels are uppercase Cathedral verbs (`READY / MEDITATING / ILLUMINATING / DEFERRING / INSCRIBING`); other product copy is lowercase, terse, no exclamation marks, no apologies, no decorative emoji.
 - `src/spike/` is throwaway exploration. Do not import from `spike/` outside its own directory; promote a spike by moving it into a real module.
 
+## Visual conventions
+
+When generating HTML diagrams, visual explainers, architecture docs, plan reviews, or any output from the `visual-explainer` skill for SumoCode, default to the **Blueprint** aesthetic. The skill's "vary the choice each time" rule is cross-project guidance — for SumoCode we want a recognizable house style across architecture docs, PR companions, and research notes.
+
+**Palette (dark, default):**
+
+- `--bg: #0a1929` — deep navy with a 32px CSS grid background (`rgba(140, 190, 230, 0.045)` grid lines) and faint cyan + gold radial glows in the corners
+- `--surface: #0f1f33` · `--surface-elevated: #14283f` · `--surface-recessed: #0c1a2b`
+- `--border: rgba(140, 190, 230, 0.10)` · `--border-bright: rgba(140, 190, 230, 0.22)`
+- `--text: #e6edf6` · `--text-dim: #8ea4be` · `--text-faint: #5a6e88`
+- Accents: cyan `#4ab3d9` (primary, blueprint-line), gold `#d4a73a` (draft label / hero), rust `#d07b5a` (warning), sage `#87b58e` (shipped / approve)
+
+**Palette (light):** parchment cream `#f4ede0` background with deep slate ink `#18334d`, same grid pattern at higher contrast (`rgba(30, 55, 80, 0.06)`), accents shifted darker (cyan `#185e7d`, gold `#99761b`, rust `#a4502d`, sage `#3e6a47`).
+
+**Typography:**
+
+- Body: `IBM Plex Sans` (weights 300–700)
+- Mono: `IBM Plex Mono` (weights 300–600)
+- Section labels and code: monospace, 10–11px, uppercase, letter-spacing 0.12–0.18em
+- Headlines: weight 500–600, letter-spacing −0.015 to −0.02em, line-height 1.05–1.15
+
+**Components (all required for the recognizable look):**
+
+- Header **stamp**: 1px gold border, uppercase mono label with leading gold dot — e.g. `SumoCode · Final Product Spec`
+- Section labels: cyan dot · gold two-digit number · uppercase mono title · thin horizontal rule filling remaining width
+- **AXIOM callout** for thesis statements: surface-elevated card with a small `AXIOM` mono tag floating on the top border
+- Card depth tiers: hero (gold top-border, gold-dim background wash) → default (cyan top-border) → recessed (no border accent, surface-recessed bg)
+- Terminal mockups: two-pane split with `cmux · workspace:N` headlining, monospace body, blinking cursor as a 7×12px filled block
+- Tables: sticky mono `<thead>` with letter-spaced uppercase labels; hover row uses `--surface-elevated`
+- Footer signoff: mono, 11px, project name in gold + date + brief sign-off (e.g. `zeus ⚡ · sumodeus temple`)
+
+**Animation:** staggered fadeUp on sections (~100ms stagger), cursor blink only. No glowing shadows, no gradient text, no continuous animations.
+
+**Forbidden in SumoCode visuals:** Inter or Roboto body font, indigo/violet/fuchsia accents, gradient text on headings, emoji section icons, three-dot window chrome on code blocks, neon dashboard aesthetic.
+
+Reference exemplar: `~/.agent/diagrams/sumocode-bg-task-final-product.html` — copy its CSS custom properties block, font links, and section/stamp/AXIOM markup verbatim as the starting point for new pages. Deviate only when the user explicitly asks for a different aesthetic.
+
 ## Decision trail
 
 - `PLAN.md` — Q1–Q14 grilling decisions.

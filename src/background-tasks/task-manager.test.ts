@@ -230,7 +230,10 @@ describe("BackgroundTaskManager", () => {
 
 		// The cmux respawn command embeds the prompt-file PATH, never the prompt text.
 		const respawnArg = openSplit.mock.calls[0]?.[2] as string;
-		expect(respawnArg).toContain("cd '/repo with spaces' && exec sumocode task --prompt-file '");
+		expect(respawnArg).toContain("cd '/repo with spaces' && ");
+		expect(respawnArg).toContain("SUMOCODE_TASK_RESPONSE_FILE=");
+		expect(respawnArg).toContain("SUMOCODE_TASK_DIAG_FILE=");
+		expect(respawnArg).toContain("exec sumocode task --prompt-file '");
 		expect(respawnArg).toContain("/prompt.txt'");
 		expect(respawnArg).not.toContain("quotes");
 		expect(respawnArg).not.toContain("backticks");
@@ -251,6 +254,126 @@ describe("BackgroundTaskManager", () => {
 			(call) => call[0] === "cmux" && Array.isArray(call[1]) && (call[1] as string[])[0] === "send",
 		);
 		expect(sendCall, "agent panes should NOT use cmux send for prompt injection").toBeUndefined();
+
+		// Task snapshot exposes the harvest paths so future tooling can find them.
+		expect(task.responseFile).toBe(task.exitFile!.replace("exit.code", "response.md"));
+		expect(task.diagFile).toBe(task.exitFile!.replace("exit.code", "diag.jsonl"));
+		expect(task.promptFile).toBe(promptFile);
+	});
+
+	it("forwards model and thinking flags into the cmux respawn command", async () => {
+		process.env.CMUX_SURFACE_ID = "surface:1";
+		const pi = buildPiStub();
+		const cmuxSplit = await import("../commands/cmux-split.js");
+		const openSplit = vi.spyOn(cmuxSplit, "openCommandInNewSplitWithRefs").mockResolvedValue({
+			ok: true,
+			workspaceRef: "workspace:1",
+			surfaceRef: "surface:2",
+		});
+
+		const manager = new BackgroundTaskManager(pi as never);
+		const task = manager.spawnTask({
+			command: "review",
+			cwd: "/repo",
+			visible: true,
+			runner: "sumocode",
+			model: "openai/gpt-4o-mini",
+			thinking: "low",
+			notifyOnExit: false,
+		});
+
+		await vi.waitFor(() => {
+			expect(task.cmux).toBeDefined();
+		});
+
+		const respawnArg = openSplit.mock.calls[0]?.[2] as string;
+		expect(respawnArg).toContain("--model 'openai/gpt-4o-mini'");
+		expect(respawnArg).toContain("--thinking 'low'");
+		expect(task.model).toBe("openai/gpt-4o-mini");
+		expect(task.thinking).toBe("low");
+	});
+
+	it("transitions agent task to status=completed when response.md appears", async () => {
+		process.env.CMUX_SURFACE_ID = "surface:1";
+		const pi = buildPiStub();
+		const cmuxSplit = await import("../commands/cmux-split.js");
+		vi.spyOn(cmuxSplit, "openCommandInNewSplitWithRefs").mockResolvedValue({
+			ok: true,
+			workspaceRef: "workspace:1",
+			surfaceRef: "surface:2",
+		});
+
+		const manager = new BackgroundTaskManager(pi as never);
+		const task = manager.spawnTask({
+			command: "hello",
+			cwd: "/repo",
+			visible: true,
+			runner: "sumocode",
+			notifyOnExit: false,
+		});
+
+		await vi.waitFor(() => expect(task.cmux).toBeDefined());
+		expect(task.status).toBe("running");
+
+		// Simulate the child writing response.md
+		writeFileSync(task.responseFile!, "hello world\n");
+
+		await vi.waitFor(
+			() => {
+				expect(task.status).toBe("completed");
+				expect(task.exitCode).toBe(0);
+			},
+			{ timeout: 3_000 },
+		);
+
+		const meta = JSON.parse(readFileSync(task.metaFile!, "utf8"));
+		expect(meta.status).toBe("completed");
+		expect(meta.responseFile).toBe(task.responseFile);
+	});
+
+	it("getTaskHarvest returns response.md for agent runners when ready", async () => {
+		process.env.CMUX_SURFACE_ID = "surface:1";
+		const pi = buildPiStub();
+		const cmuxSplit = await import("../commands/cmux-split.js");
+		vi.spyOn(cmuxSplit, "openCommandInNewSplitWithRefs").mockResolvedValue({
+			ok: true,
+			workspaceRef: "workspace:1",
+			surfaceRef: "surface:2",
+		});
+		const manager = new BackgroundTaskManager(pi as never);
+		const task = manager.spawnTask({
+			command: "hi",
+			cwd: "/repo",
+			visible: true,
+			runner: "sumocode",
+			notifyOnExit: false,
+		});
+		await vi.waitFor(() => expect(task.cmux).toBeDefined());
+
+		// Before response is written
+		let harvest = manager.getTaskHarvest(task);
+		expect(harvest.kind).toBe("response");
+		expect(harvest.ready).toBe(false);
+		expect(harvest.content).toBe("");
+
+		writeFileSync(task.responseFile!, "## Review\n\nLooks good\n");
+		harvest = manager.getTaskHarvest(task);
+		expect(harvest.kind).toBe("response");
+		expect(harvest.ready).toBe(true);
+		expect(harvest.content).toContain("## Review");
+	});
+
+	it("getTaskHarvest returns output.log for shell runners", async () => {
+		spawnMock.mockReturnValue(mockChild(0));
+		const pi = buildPiStub();
+		const manager = new BackgroundTaskManager(pi as never);
+		const task = manager.spawnTask({ command: "echo harvest-shell", cwd: "/tmp" });
+		await vi.waitFor(() => expect(task.status).toBe("completed"));
+
+		const harvest = manager.getTaskHarvest(task);
+		expect(harvest.kind).toBe("log");
+		expect(harvest.ready).toBe(true);
+		expect(harvest.content).toContain("hello");
 	});
 
 	it("lists and clears finished tasks", async () => {

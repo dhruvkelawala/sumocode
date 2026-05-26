@@ -25,7 +25,7 @@
  * Pi from inside an extension handler.
  */
 
-import { appendFileSync } from "node:fs";
+import { appendFileSync, writeFileSync } from "node:fs";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { isInCmux } from "./commands/cmux-split.js";
 
@@ -45,6 +45,60 @@ function diagLog(event: string, detail?: Record<string, unknown>): void {
 		);
 	} catch {
 		// diagnostics must never crash the extension
+	}
+}
+
+/**
+ * Pull the final assistant text out of an agent_end message bundle.
+ *
+ * Pi's agent_end fires with `event.messages` for the just-completed turn.
+ * The terminal assistant message holds the response we want to harvest;
+ * earlier assistant messages are intermediate tool-calling turns.
+ * Content is a block array (text blocks, tool_use blocks, etc.) — we
+ * concatenate all text blocks of the last assistant message.
+ */
+export function extractFinalAssistantText(messages: unknown[]): string {
+	if (!Array.isArray(messages)) return "";
+	for (let i = messages.length - 1; i >= 0; i -= 1) {
+		const msg = messages[i] as { role?: unknown; content?: unknown } | null;
+		if (!msg || msg.role !== "assistant" || !Array.isArray(msg.content)) continue;
+		const parts: string[] = [];
+		for (const block of msg.content as Array<{ type?: unknown; text?: unknown }>) {
+			if (block && block.type === "text" && typeof block.text === "string") {
+				parts.push(block.text);
+			}
+		}
+		if (parts.length > 0) return parts.join("\n").trim();
+	}
+	return "";
+}
+
+/**
+ * Persist the agent's final response so the orchestrating session can read it.
+ *
+ * Writes to `$SUMOCODE_TASK_RESPONSE_FILE` which the bg_task spawn pipeline
+ * sets when it launches a visible agent pane. The orchestrator polls this
+ * path; when it appears, the task transitions to status=completed and the
+ * `bg_task log` action returns this file's contents.
+ */
+function persistResponse(messages: unknown[]): void {
+	const file = process.env.SUMOCODE_TASK_RESPONSE_FILE;
+	if (!file) {
+		diagLog("response_skipped", { reason: "no_env" });
+		return;
+	}
+	const text = extractFinalAssistantText(messages);
+	if (!text) {
+		diagLog("response_skipped", { reason: "no_text" });
+		return;
+	}
+	try {
+		writeFileSync(file, `${text}\n`);
+		diagLog("response_written", { file, bytes: text.length });
+	} catch (error) {
+		diagLog("response_write_failed", {
+			message: error instanceof Error ? error.message : String(error),
+		});
 	}
 }
 
@@ -145,7 +199,7 @@ export function installTaskModeAutoExit(pi: ExtensionAPI, options: TaskModeAutoE
 		}
 	});
 
-	pi.on("agent_end", (_event, ctx) => {
+	pi.on("agent_end", (event, ctx) => {
 		diagLog("agent_end", { userTookOver, armed });
 		if (userTookOver) return;
 		// Only auto-exit on the FIRST agent_end after launch. Subsequent
@@ -153,6 +207,11 @@ export function installTaskModeAutoExit(pi: ExtensionAPI, options: TaskModeAutoE
 		// during the grace period (input handler would already have cancelled).
 		if (armed) return;
 		armed = true;
+
+		// Persist the final assistant text to disk so the orchestrator can
+		// harvest the delegated work's output. Best-effort — if SUMOCODE_TASK_RESPONSE_FILE
+		// isn't set (running outside the bg_task pipeline), this no-ops.
+		persistResponse((event as { messages?: unknown[] }).messages ?? []);
 
 		let remaining = Math.ceil(graceMs / 1000);
 		ctx.ui.setStatus(STATUS_KEY, `task done · auto-closing in ${remaining}s · type to cancel`);

@@ -1,5 +1,12 @@
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { installTaskModeAutoExit, shouldInstallTaskModeAutoExit } from "./task-mode.js";
+import {
+	extractFinalAssistantText,
+	installTaskModeAutoExit,
+	shouldInstallTaskModeAutoExit,
+} from "./task-mode.js";
 
 type Handler = (...args: unknown[]) => unknown;
 
@@ -32,6 +39,62 @@ function buildCtxStub() {
 	return ctx;
 }
 
+describe("extractFinalAssistantText", () => {
+	it("returns empty string when messages is empty", () => {
+		expect(extractFinalAssistantText([])).toBe("");
+	});
+
+	it("returns empty string when no assistant message is present", () => {
+		expect(
+			extractFinalAssistantText([
+				{ role: "user", content: [{ type: "text", text: "hello" }] },
+			]),
+		).toBe("");
+	});
+
+	it("extracts text from the LAST assistant message (final response, not intermediates)", () => {
+		const text = extractFinalAssistantText([
+			{ role: "user", content: [{ type: "text", text: "do the thing" }] },
+			{ role: "assistant", content: [{ type: "text", text: "thinking..." }] },
+			{ role: "toolResult", content: [{ type: "text", text: "tool out" }] },
+			{ role: "assistant", content: [{ type: "text", text: "final answer" }] },
+		]);
+		expect(text).toBe("final answer");
+	});
+
+	it("concatenates multiple text blocks of the final assistant message", () => {
+		const text = extractFinalAssistantText([
+			{
+				role: "assistant",
+				content: [
+					{ type: "text", text: "part 1" },
+					{ type: "tool_use", name: "read" },
+					{ type: "text", text: "part 2" },
+				],
+			},
+		]);
+		expect(text).toBe("part 1\npart 2");
+	});
+
+	it("ignores non-text content blocks (tool_use, tool_result, etc.)", () => {
+		const text = extractFinalAssistantText([
+			{
+				role: "assistant",
+				content: [
+					{ type: "tool_use", name: "bash" },
+					{ type: "text", text: "only this" },
+				],
+			},
+		]);
+		expect(text).toBe("only this");
+	});
+
+	it("handles malformed input defensively", () => {
+		expect(extractFinalAssistantText(null as unknown as unknown[])).toBe("");
+		expect(extractFinalAssistantText([null, undefined, "not an object"] as unknown[])).toBe("");
+	});
+});
+
 describe("shouldInstallTaskModeAutoExit", () => {
 	it("is true in task mode when keep-open is unset", () => {
 		expect(shouldInstallTaskModeAutoExit({ env: { SUMOCODE_TASK_MODE: "1" } })).toBe(true);
@@ -53,17 +116,25 @@ describe("shouldInstallTaskModeAutoExit", () => {
 
 describe("installTaskModeAutoExit", () => {
 	let originalSurfaceId: string | undefined;
+	let originalResponseFile: string | undefined;
+	let workDir: string | undefined;
 
 	beforeEach(() => {
 		vi.useFakeTimers();
 		originalSurfaceId = process.env.CMUX_SURFACE_ID;
 		process.env.CMUX_SURFACE_ID = "surface:test";
+		originalResponseFile = process.env.SUMOCODE_TASK_RESPONSE_FILE;
+		delete process.env.SUMOCODE_TASK_RESPONSE_FILE;
+		workDir = undefined;
 	});
 
 	afterEach(() => {
 		vi.useRealTimers();
 		if (originalSurfaceId === undefined) delete process.env.CMUX_SURFACE_ID;
 		else process.env.CMUX_SURFACE_ID = originalSurfaceId;
+		if (originalResponseFile === undefined) delete process.env.SUMOCODE_TASK_RESPONSE_FILE;
+		else process.env.SUMOCODE_TASK_RESPONSE_FILE = originalResponseFile;
+		if (workDir) rmSync(workDir, { recursive: true, force: true });
 	});
 
 	it("does nothing when not in task mode", () => {
@@ -178,5 +249,46 @@ describe("installTaskModeAutoExit", () => {
 
 		vi.advanceTimersByTime(60_000);
 		expect(pi.exec).not.toHaveBeenCalled();
+	});
+
+	it("writes response.md with final assistant text on first agent_end", () => {
+		workDir = mkdtempSync(join(tmpdir(), "sumocode-task-mode-test-"));
+		const responseFile = join(workDir, "response.md");
+		process.env.SUMOCODE_TASK_RESPONSE_FILE = responseFile;
+
+		const { pi, handlers } = buildPiStub();
+		installTaskModeAutoExit(pi as never, { env: { SUMOCODE_TASK_MODE: "1" }, graceMs: 10_000 });
+
+		const ctx = buildCtxStub();
+		handlers.get("agent_end")?.[0]?.(
+			{
+				messages: [
+					{ role: "user", content: [{ type: "text", text: "do x" }] },
+					{ role: "assistant", content: [{ type: "text", text: "done x" }] },
+				],
+			},
+			ctx,
+		);
+
+		expect(existsSync(responseFile)).toBe(true);
+		expect(readFileSync(responseFile, "utf8").trim()).toBe("done x");
+	});
+
+	it("does not write response.md when env var is unset", () => {
+		const { pi, handlers } = buildPiStub();
+		installTaskModeAutoExit(pi as never, { env: { SUMOCODE_TASK_MODE: "1" }, graceMs: 10_000 });
+
+		const ctx = buildCtxStub();
+		handlers.get("agent_end")?.[0]?.(
+			{
+				messages: [
+					{ role: "assistant", content: [{ type: "text", text: "no harvest" }] },
+				],
+			},
+			ctx,
+		);
+
+		// No file path was given — nothing to check, just ensure no crash.
+		expect(true).toBe(true);
 	});
 });

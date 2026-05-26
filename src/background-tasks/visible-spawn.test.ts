@@ -16,6 +16,8 @@ describe("visible-spawn", () => {
 		expect(paths.scriptFile).toBe("/tmp/test-bg/bg-1-1700000000000/run.sh");
 		expect(paths.metaFile).toBe("/tmp/test-bg/bg-1-1700000000000/meta.json");
 		expect(paths.promptFile).toBe("/tmp/test-bg/bg-1-1700000000000/prompt.txt");
+		expect(paths.responseFile).toBe("/tmp/test-bg/bg-1-1700000000000/response.md");
+		expect(paths.diagFile).toBe("/tmp/test-bg/bg-1-1700000000000/diag.jsonl");
 	});
 
 	it("buildVisibleTaskScript exports SUMOCODE_BG_CHILD to guard nested pi/sumocode invocations", () => {
@@ -59,7 +61,7 @@ describe("visible-spawn", () => {
 		expect(script).toContain("[sumocode-bg] task=bg-2 exit:$code");
 	});
 
-	it("buildVisibleAgentCommand routes sumocode through --prompt-file so the command stays short", () => {
+	it("buildVisibleAgentCommand routes sumocode through --prompt-file with response harvest env vars", () => {
 		const paths = buildVisibleTaskPaths("bg-4", 456, "/tmp/test-bg");
 		const cmd = buildVisibleAgentCommand({
 			cwd: "/repo with spaces",
@@ -69,7 +71,10 @@ describe("visible-spawn", () => {
 		});
 
 		expect(cmd).toBe(
-			"cd '/repo with spaces' && exec sumocode task --prompt-file '/tmp/test-bg/bg-4-456/prompt.txt'",
+			"cd '/repo with spaces' && " +
+				"SUMOCODE_TASK_RESPONSE_FILE='/tmp/test-bg/bg-4-456/response.md' " +
+				"SUMOCODE_TASK_DIAG_FILE='/tmp/test-bg/bg-4-456/diag.jsonl' " +
+				"exec sumocode task --prompt-file '/tmp/test-bg/bg-4-456/prompt.txt'",
 		);
 		// Prompt contents must NOT appear in the cmux respawn command — that's
 		// the whole point of file-based passing.
@@ -78,6 +83,25 @@ describe("visible-spawn", () => {
 		expect(cmd).not.toContain("wall of text");
 		expect(cmd).not.toContain("run.sh");
 		expect(cmd).not.toContain("tee -a");
+	});
+
+	it("buildVisibleAgentCommand forwards model and thinking flags to sumocode", () => {
+		const paths = buildVisibleTaskPaths("bg-7", 789, "/tmp/test-bg");
+		const cmd = buildVisibleAgentCommand({
+			cwd: "/repo",
+			command: "review diff",
+			runner: "sumocode",
+			paths,
+			model: "openai/gpt-4o-mini",
+			thinking: "low",
+		});
+
+		expect(cmd).toContain("--model 'openai/gpt-4o-mini'");
+		expect(cmd).toContain("--thinking 'low'");
+		// Flags must precede --prompt-file so pi sees them as options not messages.
+		const modelIdx = cmd.indexOf("--model");
+		const promptIdx = cmd.indexOf("--prompt-file");
+		expect(modelIdx).toBeLessThan(promptIdx);
 	});
 
 	it("buildVisibleTaskCommand launches pi runner with prompt as kickoff message (inline, no prompt file)", () => {
@@ -90,8 +114,31 @@ describe("visible-spawn", () => {
 			runner: "pi",
 		});
 
-		expect(cmd).toBe("cd '/repo' && exec pi 'Review the diff'");
+		expect(cmd).toBe(
+			"cd '/repo' && " +
+				"SUMOCODE_TASK_RESPONSE_FILE='/tmp/test-bg/bg-5-456/response.md' " +
+				"SUMOCODE_TASK_DIAG_FILE='/tmp/test-bg/bg-5-456/diag.jsonl' " +
+				"exec pi 'Review the diff'",
+		);
 		expect(cmd).not.toContain("/tmp/test-bg/bg-5-456/run.sh");
+	});
+
+	it("buildVisibleAgentCommand forwards model and thinking flags to pi runner before the inline prompt", () => {
+		const paths = buildVisibleTaskPaths("bg-8", 100, "/tmp/test-bg");
+		const cmd = buildVisibleAgentCommand({
+			cwd: "/repo",
+			command: "summarize",
+			runner: "pi",
+			paths,
+			model: "anthropic/claude-sonnet-4-5",
+			thinking: "high",
+		});
+
+		expect(cmd).toContain("--model 'anthropic/claude-sonnet-4-5'");
+		expect(cmd).toContain("--thinking 'high'");
+		const modelIdx = cmd.indexOf("--model");
+		const promptIdx = cmd.indexOf("'summarize'");
+		expect(modelIdx).toBeLessThan(promptIdx);
 	});
 
 	it("buildVisibleTaskScript rejects agent runners", () => {

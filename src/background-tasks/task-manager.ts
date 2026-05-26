@@ -22,11 +22,13 @@ import {
 } from "./visible-spawn.js";
 
 const POLL_INTERVAL_MS = 500;
+const RESPONSE_POLL_INTERVAL_MS = 750;
 const DEFAULT_VISIBLE_DIRECTION: CmuxSplitDirection = "right";
 
 interface InternalTask extends BackgroundTask {
 	child?: ChildProcess;
 	pollTimer?: ReturnType<typeof setInterval>;
+	responseTimer?: ReturnType<typeof setInterval>;
 	finalized?: boolean;
 }
 
@@ -147,8 +149,13 @@ export class BackgroundTaskManager {
 			logFile: paths.logFile,
 			exitFile: paths.exitFile,
 			metaFile: paths.metaFile,
+			promptFile: runner === "shell" ? undefined : paths.promptFile,
+			responseFile: runner === "shell" ? undefined : paths.responseFile,
+			diagFile: runner === "shell" ? undefined : paths.diagFile,
 			visible,
 			runner,
+			model: options.model?.trim() || undefined,
+			thinking: options.thinking,
 			notifyOnExit: options.notifyOnExit !== false,
 		};
 
@@ -223,6 +230,10 @@ export class BackgroundTaskManager {
 			// --prompt-file <path>` reads this file and forwards its contents as
 			// Pi's kickoff [messages...] positional.
 			writeFileSync(paths.promptFile, task.command);
+		} else if (task.runner === "pi") {
+			// Bare pi runner uses inline positional, but we still drop a prompt.txt
+			// for debugging parity with the sumocode runner.
+			writeFileSync(paths.promptFile, task.command);
 		}
 
 		const respawnCommand = buildVisibleTaskCommand({
@@ -231,6 +242,8 @@ export class BackgroundTaskManager {
 			paths,
 			taskId: task.id,
 			runner: task.runner,
+			model: task.model,
+			thinking: task.thinking,
 		});
 
 		const splitResult = await openCommandInNewSplitWithRefs(this.pi, direction, respawnCommand);
@@ -251,12 +264,41 @@ export class BackgroundTaskManager {
 			task.pollTimer = setInterval(() => {
 				this.pollVisibleTask(task);
 			}, POLL_INTERVAL_MS);
+		} else if (task.responseFile) {
+			// Agent runners: watch for the child to write response.md when its
+			// first agent_end fires (see src/task-mode.ts). On creation, we
+			// transition the task to "completed" and persist the updated
+			// snapshot so `bg_task list` and `bg_task log` reflect the harvest.
+			this.armResponseWatcher(task);
 		}
-		// runner=pi|sumocode: nothing to do. The pane was launched with the
-		// prompt baked in as Pi's kickoff message (see buildVisibleAgentCommand).
-		// The agent turn fires immediately on child boot — no readiness polling,
-		// no cmux send tricks. Status stays "running" until the user closes the
-		// pane or stops the task; we don't track child agent lifecycle.
+	}
+
+	/**
+	 * Poll for the child agent's `response.md`. Pi has no cross-process event
+	 * bus we could subscribe to, so a 750ms file-poll is the simplest reliable
+	 * way to detect a hand-off completion. The interval is cancelled once the
+	 * file appears, or on task stop/manager shutdown.
+	 */
+	private armResponseWatcher(task: InternalTask): void {
+		if (!task.responseFile) return;
+		if (task.responseTimer) clearInterval(task.responseTimer);
+		task.responseTimer = setInterval(() => {
+			if (task.finalized) {
+				if (task.responseTimer) clearInterval(task.responseTimer);
+				task.responseTimer = undefined;
+				return;
+			}
+			if (!task.responseFile || !existsSync(task.responseFile)) return;
+			if (task.responseTimer) clearInterval(task.responseTimer);
+			task.responseTimer = undefined;
+			task.status = "completed";
+			task.exitCode = 0;
+			task.updatedAt = Date.now();
+			writeTaskMeta(task);
+		}, RESPONSE_POLL_INTERVAL_MS);
+		if (typeof task.responseTimer.unref === "function") {
+			task.responseTimer.unref();
+		}
 	}
 
 	private pollVisibleTask(task: InternalTask): void {
@@ -292,6 +334,10 @@ export class BackgroundTaskManager {
 		if (task.pollTimer) {
 			clearInterval(task.pollTimer);
 			task.pollTimer = undefined;
+		}
+		if (task.responseTimer) {
+			clearInterval(task.responseTimer);
+			task.responseTimer = undefined;
 		}
 
 		task.exitCode = exitCode;
@@ -378,13 +424,40 @@ export class BackgroundTaskManager {
 		let removed = 0;
 		for (const [id, task] of this.tasks) {
 			if (task.status === "running") continue;
-			if (task.pollTimer) {
-				clearInterval(task.pollTimer);
-			}
+			if (task.pollTimer) clearInterval(task.pollTimer);
+			if (task.responseTimer) clearInterval(task.responseTimer);
 			this.tasks.delete(id);
 			removed += 1;
 		}
 		return removed;
+	}
+
+	/**
+	 * For agent runners (sumocode/pi), the harvest output lives in `response.md`
+	 * written by the child on first agent_end. For shell runners it lives in
+	 * `output.log`. This wrapper returns the right one per runner.
+	 */
+	getTaskHarvest(task: BackgroundTask, maxChars = 50_000): {
+		kind: "response" | "log";
+		content: string;
+		ready: boolean;
+	} {
+		if (task.runner !== "shell" && task.responseFile) {
+			if (existsSync(task.responseFile)) {
+				const content = readFileSync(task.responseFile, "utf8");
+				return {
+					kind: "response",
+					content: content.length <= maxChars ? content : content.slice(-maxChars),
+					ready: true,
+				};
+			}
+			return {
+				kind: "response",
+				content: "",
+				ready: false,
+			};
+		}
+		return { kind: "log", content: readLogTail(task.logFile, maxChars), ready: true };
 	}
 
 	shutdown(): void {
@@ -401,9 +474,8 @@ export class BackgroundTaskManager {
 					// ignore shutdown errors
 				}
 			}
-			if (task.pollTimer) {
-				clearInterval(task.pollTimer);
-			}
+			if (task.pollTimer) clearInterval(task.pollTimer);
+			if (task.responseTimer) clearInterval(task.responseTimer);
 		}
 	}
 }

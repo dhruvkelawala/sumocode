@@ -16,6 +16,8 @@ export interface VisibleTaskPaths {
 	scriptFile: string;
 	metaFile: string;
 	promptFile: string;
+	responseFile: string;
+	diagFile: string;
 }
 
 export interface VisibleTaskCommandOptions {
@@ -24,6 +26,8 @@ export interface VisibleTaskCommandOptions {
 	paths: VisibleTaskPaths;
 	taskId: string;
 	runner?: VisibleTaskRunner;
+	model?: string;
+	thinking?: string;
 }
 
 export function buildVisibleTaskPaths(taskId: string, startedAtMs: number, baseDir?: string): VisibleTaskPaths {
@@ -36,6 +40,8 @@ export function buildVisibleTaskPaths(taskId: string, startedAtMs: number, baseD
 		scriptFile: join(dir, "run.sh"),
 		metaFile: join(dir, "meta.json"),
 		promptFile: join(dir, "prompt.txt"),
+		responseFile: join(dir, "response.md"),
+		diagFile: join(dir, "diag.jsonl"),
 	};
 }
 
@@ -80,38 +86,71 @@ export function buildVisibleTaskScript(options: VisibleTaskCommandOptions): stri
 /**
  * Build the launch command for a visible pi/sumocode agent pane.
  *
+ * Three pieces are stitched together as a single bash one-liner that cmux
+ * runs via `respawn-pane --command <cmd>`:
+ *
+ *   1. `SUMOCODE_TASK_RESPONSE_FILE=...` (and optionally
+ *      `SUMOCODE_TASK_DIAG_FILE=...`) env-var prefix — so the child can
+ *      write its final assistant message back to a known path and emit
+ *      lifecycle diagnostics. The orchestrator reads response.md to
+ *      harvest the delegated work's output.
+ *   2. `cd '<cwd>'` so the child opens in the right project.
+ *   3. `exec sumocode task [--model X] [--thinking Y] --prompt-file '<path>'`
+ *      (or `exec pi [--model X] [--thinking Y] '<inline prompt>'` for the
+ *      bare pi runner). exec ensures the wrapper shell is replaced by the
+ *      child process; when the child exits the cmux pane closes.
+ *
  * For the sumocode runner, the prompt is passed via `--prompt-file <abs path>`
- * so the cmux respawn-pane command stays short and fixed-length regardless
- * of prompt size. Without this, a long prompt would briefly echo as a wall
- * of text in the pane before Pi takes over the screen. The wrapper reads
- * the file, sets `SUMOCODE_TASK_MODE=1` (so the extension skips splash),
- * and forwards the contents as Pi's kickoff `[messages...]` positional.
+ * so the cmux respawn command stays short and fixed-length regardless of
+ * prompt size. Without this, a long prompt would briefly echo as a wall of
+ * text in the pane before Pi takes over the screen.
  *
  * For the pi runner, we keep the inline positional. Pi has no `--prompt-file`
- * flag of its own, and adding a bash wrapper just to read the file would
- * obscure the command in another layer. Pi-runner consumers should keep
- * their prompts compact.
+ * flag of its own; long-prompt users should prefer the sumocode runner.
  */
-export function buildVisibleAgentCommand(options: Pick<VisibleTaskCommandOptions, "cwd" | "command" | "runner" | "paths">): string {
+export function buildVisibleAgentCommand(
+	options: Pick<VisibleTaskCommandOptions, "cwd" | "command" | "runner" | "paths" | "model" | "thinking">,
+): string {
 	const runner = options.runner ?? "shell";
 	if (runner !== "pi" && runner !== "sumocode") {
 		throw new Error("visible agent commands require runner=pi or runner=sumocode");
 	}
+
+	const envPrefix: string[] = [
+		`SUMOCODE_TASK_RESPONSE_FILE=${shellEscape(options.paths.responseFile)}`,
+		`SUMOCODE_TASK_DIAG_FILE=${shellEscape(options.paths.diagFile)}`,
+	];
+
+	const modelFlags: string[] = options.model ? ["--model", shellEscape(options.model)] : [];
+	const thinkingFlags: string[] = options.thinking ? ["--thinking", shellEscape(options.thinking)] : [];
 
 	if (runner === "sumocode") {
 		return [
 			"cd",
 			shellEscape(options.cwd),
 			"&&",
+			...envPrefix,
 			"exec",
 			"sumocode",
 			"task",
+			...modelFlags,
+			...thinkingFlags,
 			"--prompt-file",
 			shellEscape(options.paths.promptFile),
 		].join(" ");
 	}
 
-	return ["cd", shellEscape(options.cwd), "&&", "exec", "pi", shellEscape(options.command)].join(" ");
+	return [
+		"cd",
+		shellEscape(options.cwd),
+		"&&",
+		...envPrefix,
+		"exec",
+		"pi",
+		...modelFlags,
+		...thinkingFlags,
+		shellEscape(options.command),
+	].join(" ");
 }
 
 /**

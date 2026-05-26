@@ -8,6 +8,8 @@ export interface BackgroundTaskCmuxRefs {
 	surfaceRef: string;
 }
 
+export type BackgroundTaskThinking = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+
 export interface BackgroundTask {
 	id: string;
 	pid?: number;
@@ -21,8 +23,13 @@ export interface BackgroundTask {
 	logFile: string;
 	exitFile?: string;
 	metaFile?: string;
+	promptFile?: string;
+	responseFile?: string;
+	diagFile?: string;
 	visible: boolean;
 	runner: BackgroundTaskRunner;
+	model?: string;
+	thinking?: BackgroundTaskThinking;
 	cmux?: BackgroundTaskCmuxRefs;
 	notifyOnExit: boolean;
 }
@@ -34,6 +41,8 @@ export interface SpawnBackgroundTaskOptions {
 	visible?: boolean;
 	direction?: SplitDirection;
 	runner?: BackgroundTaskRunner;
+	model?: string;
+	thinking?: BackgroundTaskThinking;
 	notifyOnExit?: boolean;
 }
 
@@ -49,8 +58,13 @@ export interface BackgroundTaskSnapshot {
 	exitCode?: number | null;
 	logFile: string;
 	metaFile?: string;
+	promptFile?: string;
+	responseFile?: string;
+	diagFile?: string;
 	visible: boolean;
 	runner: BackgroundTaskRunner;
+	model?: string;
+	thinking?: BackgroundTaskThinking;
 	cmux?: BackgroundTaskCmuxRefs;
 }
 
@@ -67,8 +81,13 @@ export function toBackgroundTaskSnapshot(task: BackgroundTask): BackgroundTaskSn
 		exitCode: task.exitCode,
 		logFile: task.logFile,
 		metaFile: task.metaFile,
+		promptFile: task.promptFile,
+		responseFile: task.responseFile,
+		diagFile: task.diagFile,
 		visible: task.visible,
 		runner: task.runner,
+		model: task.model,
+		thinking: task.thinking,
 		cmux: task.cmux,
 	};
 }

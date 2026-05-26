@@ -306,11 +306,17 @@ if [[ "${COMMAND}" == "task" ]]; then
 		# Read the file contents as a single positional argument. `$(<file)`
 		# strips a trailing newline, which is what we want — Pi treats the
 		# positional as one message.
+		#
+		# Append to SUMOCODE_ARGS so the prompt is the LAST argument when
+		# pi sees it. Pi's CLI is `pi [options] [@files...] [messages...]`,
+		# so flags forwarded by the caller (e.g. --model, --thinking) must
+		# appear before the positional message for the parser to bind them
+		# correctly.
 		prompt_text="$(<"${PROMPT_FILE}")"
 		if [[ "${#SUMOCODE_ARGS[@]}" -eq 0 ]]; then
 			SUMOCODE_ARGS=("${prompt_text}")
 		else
-			SUMOCODE_ARGS=("${prompt_text}" "${SUMOCODE_ARGS[@]}")
+			SUMOCODE_ARGS=("${SUMOCODE_ARGS[@]}" "${prompt_text}")
 		fi
 	fi
 	if [[ "${#SUMOCODE_ARGS[@]}" -eq 0 ]]; then

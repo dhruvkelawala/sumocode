@@ -34,12 +34,15 @@ const hasFlag = (name) => args.includes(name);
 const graceMs = Number.parseInt(arg("--grace", "10000"), 10);
 const slackMs = Number.parseInt(arg("--slack", "8000"), 10);
 const keepPaneOnFail = hasFlag("--keep-pane-on-fail");
+const model = arg("--model", null);
+const thinking = arg("--thinking", null);
 
 const runId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
 const workDir = join(tmpdir(), "sumocode-task-diag", runId);
 mkdirSync(workDir, { recursive: true });
 const promptFile = join(workDir, "prompt.txt");
 const diagFile = join(workDir, "diag.jsonl");
+const responseFile = join(workDir, "response.md");
 
 const PROMPT = "Reply with exactly: diag-ping";
 writeFileSync(promptFile, PROMPT);
@@ -118,8 +121,16 @@ async function main() {
 		beforePanes.flatMap((p) => [p.selected_surface_ref, ...(p.surface_refs ?? [])]).filter(Boolean),
 	);
 
-	// 3. Build the launch command. Identical shape to bg_task's spawn.
-	const launchCmd = `cd '${ROOT}' && SUMOCODE_TASK_DIAG_FILE='${diagFile}' exec sumocode task --prompt-file '${promptFile}'`;
+	// 3. Build the launch command. Mirrors what bg_task spawns for runner=sumocode
+	// with the prompt-file + response-file + diag-file env vars and optional
+	// model/thinking flags so we exercise the full pipeline.
+	const envPrefix = [
+		`SUMOCODE_TASK_DIAG_FILE='${diagFile}'`,
+		`SUMOCODE_TASK_RESPONSE_FILE='${responseFile}'`,
+	].join(" ");
+	const modelFlags = model ? ` --model '${model}'` : "";
+	const thinkingFlags = thinking ? ` --thinking '${thinking}'` : "";
+	const launchCmd = `cd '${ROOT}' && ${envPrefix} exec sumocode task${modelFlags}${thinkingFlags} --prompt-file '${promptFile}'`;
 
 	// 4. Open the new split.
 	const splitResult = cmux(
@@ -212,12 +223,20 @@ async function main() {
 	}
 
 	const dtClose = closeObservedAt ? closeObservedAt - t0 : null;
+	const responseWritten = existsSync(responseFile);
+	const responsePreview = responseWritten
+		? readFileSync(responseFile, "utf8").slice(0, 200)
+		: null;
 	const result = {
 		closed: closeObservedAt !== null,
 		dt_close_ms: dtClose,
 		agent_end_seen,
 		timer_fired,
 		close_invoked,
+		response_written: responseWritten,
+		response_preview: responsePreview,
+		model: model ?? "(default)",
+		thinking: thinking ?? "(default)",
 	};
 	log("result", result);
 
@@ -227,7 +246,8 @@ async function main() {
 		log("cleanup", { closedManually: true });
 	}
 
-	process.exit(result.closed ? 0 : 1);
+	// Success = pane closed AND response was harvested.
+	process.exit(result.closed && result.response_written ? 0 : 1);
 }
 
 main().catch((error) => {

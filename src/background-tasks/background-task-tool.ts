@@ -1,7 +1,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { BackgroundTaskManager } from "./task-manager.js";
-import { toBackgroundTaskSnapshot } from "./task-types.js";
+import { type BackgroundTaskThinking, toBackgroundTaskSnapshot } from "./task-types.js";
 
 const StringEnum = <T extends readonly string[]>(values: T, options?: { description?: string }) =>
 	Type.Unsafe<T[number]>({
@@ -28,44 +28,85 @@ export function installBackgroundTasks(pi: ExtensionAPI): BackgroundTaskManager 
 		name: "bg_task",
 		label: "Background Task",
 		description: [
-			"Spawn long-running work in the background. Two distinct modes:",
-			"• runner=shell (default): MANAGED — the command is wrapped, output is tee'd to a log file, exit code is tracked, and completion wakes the orchestrator via a follow-up message plus a cmux notification.",
-			"• runner=sumocode | runner=pi (visible required): HANDED OFF — launches a clean native command in a cmux split. NO output capture, NO exit polling, NO result harvest. The pane IS the deliverable.",
-			"Use list/log/stop/clear to manage shell tasks. Agent panes appear in list at launch time and stay 'running' until manually stopped — their actual session is owned by the child agent.",
-			"For programmatic agent result harvest, use a subagent tool (separate from this), not bg_task.",
+			"Spawn long-running work in a background process or a visible cmux pane. Two modes:",
+			"",
+			"• SHELL (runner='shell', default) — spawn a managed shell command. Output is tee'd to a log file, exit code is captured, and completion wakes the orchestrator via a follow-up message and cmux notification. Use for builds, tests, deploys, watchers, anything you want to fire-and-forget.",
+			"",
+			"• AGENT (runner='sumocode' or 'pi', visible=true required) — spawn a child agent in a new cmux split. The prompt is delivered as the kickoff message, the child opens straight into the agent loop (no splash). Optional model/thinking flags override the child's defaults. The child writes its FINAL assistant message to response.md; the orchestrator reads it via bg_task log. Task transitions to status='completed' as soon as response.md appears. After 10s idle, the pane auto-closes via cmux close-surface.",
+			"",
+			"Actions:",
+			"  spawn  — start a task. Returns task id + paths.",
+			"  list   — list tracked tasks with status, runner, cmux refs.",
+			"  log    — read the task's output. For shell, returns output.log tail. For agent, returns response.md (the harvested final assistant message) when present, or a 'still working' marker if the agent hasn't responded yet. Poll until ready.",
+			"  stop   — SIGTERM a shell task, or cmux close-surface for an agent pane.",
+			"  clear  — remove finished/stopped tasks from the in-memory list.",
 		].join("\n"),
-		promptSnippet: "Spawn managed shell tasks or hand off work to a visible pi/sumocode agent pane.",
+		promptSnippet:
+			"Spawn managed shell tasks or hand off prompts to a visible pi/sumocode agent pane (with model/thinking override and harvestable response).",
 		promptGuidelines: [
 			"Use bg_task when the user wants long-running work to continue while the conversation stays usable.",
-			"For shell commands (build, test, deploy, watchers), use runner=shell (the default) — output is logged and the orchestrator is notified on exit.",
-			"For 'spin up sumocode/pi to work on X in a split', use runner=sumocode (or pi) with visible=true — the cmux pane is the UI, no result is captured.",
-			"Do not call bg_task expecting to read the agent's final response — visible agent panes are hand-offs, not subagents.",
-			"Use bg_task list/log/stop to inspect or terminate tracked shell tasks; stopping an agent pane closes its cmux surface.",
+			"For shell commands (build, test, deploy, watchers), use bg_task with runner='shell' (the default) — output is logged and the orchestrator is notified on exit.",
+			"To delegate a prompt to a child agent, use bg_task with runner='sumocode' and visible=true. The child opens in a cmux split, runs the prompt, and writes its response back. Read it with bg_task action='log' once status='completed'.",
+			"Pass model and thinking to bg_task when delegating an agent task to override the child's defaults (e.g. model='openai/gpt-4o-mini' thinking='low' for a cheap quick task, or model='anthropic/claude-opus-4-6' thinking='xhigh' for deep work).",
+			"To read a delegated agent's response, call bg_task with action='log' and id='bg-N'. If the response isn't ready yet, the result will indicate 'still working' — poll again. List with bg_task action='list' to see which tasks have status='completed'.",
+			"Use bg_task action='stop' to cancel a task. For agent panes this closes the cmux surface, preserving any response that was already written.",
 		],
 		parameters: Type.Object({
 			action: StringEnum(["spawn", "list", "log", "stop", "clear"] as const, {
-				description: "spawn=start, list=show tasks, log=tail output, stop=terminate, clear=remove finished",
+				description:
+					"spawn = start a task. list = show tracked tasks. log = read output (response.md for agents, output.log for shell). stop = terminate. clear = drop finished tasks.",
 			}),
-			command: Type.Optional(Type.String({ description: "Shell command for action=spawn" })),
-			cwd: Type.Optional(Type.String({ description: "Working directory for action=spawn" })),
-			id: Type.Optional(Type.String({ description: "Task id for action=log or action=stop" })),
-			pid: Type.Optional(Type.Number({ description: "PID for action=log or action=stop" })),
+			command: Type.Optional(
+				Type.String({
+					description:
+						"Required for action=spawn. For runner='shell' this is the bash command (e.g. 'pnpm test'). For runner='sumocode' or 'pi' this is the prompt the child agent will receive as its kickoff message.",
+				}),
+			),
+			cwd: Type.Optional(
+				Type.String({
+					description:
+						"Working directory for the spawned task. Defaults to the orchestrator's cwd. For agent runners this is the project the child opens in.",
+				}),
+			),
+			id: Type.Optional(Type.String({ description: "Task id (e.g. 'bg-1') for action=log or action=stop." })),
+			pid: Type.Optional(Type.Number({ description: "Alternative to id: lookup by spawned pid." })),
 			visible: Type.Optional(
-				Type.Boolean({ description: "When true, run in a new cmux split (requires cmux surface)." }),
+				Type.Boolean({
+					description:
+						"Open in a new cmux split. REQUIRED when runner='sumocode' or runner='pi'. Defaults to false for shell tasks (invisible managed child).",
+				}),
 			),
 			runner: Type.Optional(
 				StringEnum(["shell", "pi", "sumocode"] as const, {
-					description: "How to run the task: shell command, pi prompt, or sumocode prompt. Default: shell.",
+					description:
+						"'shell' (default) = managed bash command. 'sumocode' = visible delegated agent pane with response harvest. 'pi' = visible bare pi pane with response harvest.",
+				}),
+			),
+			model: Type.Optional(
+				Type.String({
+					description:
+						"Pi model pattern for agent runners. Examples: 'openai/gpt-4o-mini', 'anthropic/claude-sonnet-4-5', 'cursor/composer-2.5'. Forwarded as --model to the child. Ignored for runner='shell'.",
+				}),
+			),
+			thinking: Type.Optional(
+				StringEnum(["off", "minimal", "low", "medium", "high", "xhigh"] as const, {
+					description:
+						"Pi thinking level for agent runners. Forwarded as --thinking to the child. Ignored for runner='shell'.",
 				}),
 			),
 			direction: Type.Optional(
 				StringEnum(["right", "down"] as const, {
-					description: "Cmux split direction when visible=true (default: right).",
+					description: "Cmux split direction when visible=true. Default: right.",
 				}),
 			),
-			title: Type.Optional(Type.String({ description: "Optional display label for action=spawn" })),
+			title: Type.Optional(
+				Type.String({ description: "Optional human-readable label shown in bg_task list and notifications." }),
+			),
 			notifyOnExit: Type.Optional(
-				Type.Boolean({ description: "Wake the agent when the task exits. Defaults to true." }),
+				Type.Boolean({
+					description:
+						"For runner='shell': wake the orchestrator with a follow-up message + cmux notification on exit. Defaults to true. Has no effect for agent runners (they always set status='completed' when response.md is harvested).",
+				}),
 			),
 		}),
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx: ExtensionContext) {
@@ -89,6 +130,8 @@ export function installBackgroundTasks(pi: ExtensionAPI): BackgroundTaskManager 
 					visible: params.visible,
 					direction: params.direction,
 					runner: params.runner,
+					model: params.model,
+					thinking: params.thinking as BackgroundTaskThinking | undefined,
 					notifyOnExit: params.notifyOnExit,
 				});
 
@@ -97,9 +140,16 @@ export function installBackgroundTasks(pi: ExtensionAPI): BackgroundTaskManager 
 					? `\nCmux: ${task.cmux.surfaceRef} (${task.cmux.workspaceRef})`
 					: "";
 				const pidLine = task.pid != null ? `\nPid: ${task.pid}` : "";
+				const harvestHint =
+					task.runner !== "shell"
+						? `\nHarvest: bg_task action=log id=${task.id} (returns response.md when ready)`
+						: "";
+				const modelLine = task.model || task.thinking
+					? `\nModel: ${task.model ?? "(inherit)"}${task.thinking ? ` thinking=${task.thinking}` : ""}`
+					: "";
 
 				return makeToolResult(
-					`Started ${task.id} in the background.\nCommand: ${task.command}\nCwd: ${task.cwd}\nLog: ${task.logFile}${pidLine}${cmuxLine}`,
+					`Started ${task.id} in the background.\nCommand: ${task.command}\nCwd: ${task.cwd}\nRunner: ${task.runner}${modelLine}\nLog: ${task.logFile}${pidLine}${cmuxLine}${harvestHint}`,
 					{ action: "spawn", task: snapshot },
 				);
 			}
@@ -110,10 +160,30 @@ export function installBackgroundTasks(pi: ExtensionAPI): BackgroundTaskManager 
 			}
 
 			if (params.action === "log") {
-				const output = manager.getTaskOutput(task);
-				return makeToolResult(output || "(no output yet)", {
+				const harvest = manager.getTaskHarvest(task);
+				const snapshot = toBackgroundTaskSnapshot(task);
+				if (harvest.kind === "response") {
+					if (!harvest.ready) {
+						const paneHint = task.cmux
+							? ` (cmux pane ${task.cmux.surfaceRef})`
+							: "";
+						return makeToolResult(
+							`Agent ${task.id} is still working${paneHint}. response.md not written yet — poll bg_task action=log again, or check bg_task action=list for status.`,
+							{ action: "log", task: snapshot, kind: "response", ready: false },
+						);
+					}
+					return makeToolResult(harvest.content || "(empty response)", {
+						action: "log",
+						task: snapshot,
+						kind: "response",
+						ready: true,
+					});
+				}
+				return makeToolResult(harvest.content || "(no output yet)", {
 					action: "log",
-					task: toBackgroundTaskSnapshot(task),
+					task: snapshot,
+					kind: "log",
+					ready: true,
 				});
 			}
 

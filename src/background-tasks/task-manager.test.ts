@@ -576,6 +576,42 @@ describe("BackgroundTaskManager", () => {
 		expect(task.status).toBe("running");
 	});
 
+	it("getTaskHarvest reports ready=true (empty content) once an agent task reaches a terminal state without response.md", async () => {
+		process.env.CMUX_SURFACE_ID = "surface:1";
+		const pi = buildPiStub();
+		const cmuxSplit = await import("../commands/cmux-split.js");
+		vi.spyOn(cmuxSplit, "openCommandInNewSplitWithRefs").mockResolvedValue({
+			ok: true,
+			workspaceRef: "workspace:1",
+			surfaceRef: "surface:9",
+		});
+
+		const manager = new BackgroundTaskManager(pi as never);
+		const task = manager.spawnTask({
+			command: "hi",
+			cwd: "/repo",
+			visible: true,
+			runner: "sumocode",
+			notifyOnExit: false,
+		});
+		await vi.waitFor(() => expect(task.cmux).toBeDefined());
+
+		// While running with no response.md: ready=false (poll again).
+		let harvest = manager.getTaskHarvest(task);
+		expect(harvest.kind).toBe("response");
+		expect(harvest.ready).toBe(false);
+		expect(harvest.content).toBe("");
+
+		// Simulate a terminal failure (e.g. watchdog timeout) WITHOUT response.md.
+		// The harvest should now report ready=true so callers don't poll forever.
+		task.status = "failed";
+		task.exitCode = null;
+		harvest = manager.getTaskHarvest(task);
+		expect(harvest.kind).toBe("response");
+		expect(harvest.ready).toBe(true);
+		expect(harvest.content).toBe("");
+	});
+
 	it("transitions agent task to failed when response.md never appears (watchdog timeout)", async () => {
 		vi.useFakeTimers();
 		try {

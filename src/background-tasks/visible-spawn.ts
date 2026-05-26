@@ -67,7 +67,11 @@ export function buildVisibleTaskScript(options: VisibleTaskCommandOptions): stri
 		// Fail fast if cwd is missing/unreadable. Without this guard, `cd`
 		// failure is silent and the task ends up running from $HOME, potentially
 		// writing to the wrong project while still reporting a clean lifecycle.
-		`cd ${shellEscape(cwd)} || { echo "[sumocode-bg] task=${taskId} cwd-missing: ${cwd}" | tee -a ${shellEscape(logFile)}; printf '%s' 1 > ${shellEscape(exitFile)}; exit 1; }`,
+		//
+		// Both `cd <cwd>` and the diagnostic `echo` shell-escape `cwd` so that
+		// a cwd containing `"` or `$(...)` cannot trigger command substitution
+		// when the wrapper script runs.
+		`cd ${shellEscape(cwd)} || { echo ${shellEscape(`[sumocode-bg] task=${taskId} cwd-missing: ${cwd}`)} | tee -a ${shellEscape(logFile)}; printf '%s' 1 > ${shellEscape(exitFile)}; exit 1; }`,
 		`set -o pipefail`,
 		// Forward fork-bomb guard into the child command — if it invokes pi or
 		// sumocode, that nested process bails on the helper-subprocess check.

@@ -675,16 +675,22 @@ export class BackgroundTaskManager {
 	}
 
 	/**
-	 * For agent runners (sumocode/pi), the harvest output lives in `response.md`
+	 * For the sumocode runner, the harvest output lives in `response.md`
 	 * written by the child on first agent_end. For shell runners it lives in
 	 * `output.log`. This wrapper returns the right one per runner.
+	 *
+	 * `ready: false` means the harvest is pending AND the task is still
+	 * running. If the task has transitioned to a terminal state (failed via
+	 * watchdog, stopped by user, etc.) without ever writing response.md,
+	 * callers should NOT poll forever — we return `ready: true` with empty
+	 * content and the terminal state surfaces via task.status.
 	 */
 	getTaskHarvest(task: BackgroundTask, maxChars = 50_000): {
 		kind: "response" | "log";
 		content: string;
 		ready: boolean;
 	} {
-		if (task.runner !== "shell" && task.responseFile) {
+		if (task.runner === "sumocode" && task.responseFile) {
 			if (existsSync(task.responseFile)) {
 				const content = readFileSync(task.responseFile, "utf8");
 				return {
@@ -696,7 +702,9 @@ export class BackgroundTaskManager {
 			return {
 				kind: "response",
 				content: "",
-				ready: false,
+				// Terminal-state guard: don't keep telling callers "still working"
+				// once the task has failed/stopped without writing response.md.
+				ready: task.status !== "running",
 			};
 		}
 		return { kind: "log", content: readLogTail(task.logFile, maxChars), ready: true };

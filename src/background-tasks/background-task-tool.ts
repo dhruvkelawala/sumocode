@@ -1,7 +1,24 @@
+import { existsSync, readFileSync } from "node:fs";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { BackgroundTaskManager } from "./task-manager.js";
-import { type BackgroundTaskThinking, toBackgroundTaskSnapshot } from "./task-types.js";
+import { type BackgroundTask, type BackgroundTaskThinking, toBackgroundTaskSnapshot } from "./task-types.js";
+
+/**
+ * Read the last ~2KB of an agent task's output.log when surfacing a terminal
+ * state without response.md. The log captures the watchdog-timeout message
+ * (and any other bg-task instrumentation) so the caller can see WHY harvest
+ * never completed instead of just "ended without response.md".
+ */
+function readLogTailForAgent(task: BackgroundTask, maxChars = 2048): string {
+	if (!task.logFile || !existsSync(task.logFile)) return "";
+	try {
+		const content = readFileSync(task.logFile, "utf8");
+		return content.length <= maxChars ? content : content.slice(-maxChars);
+	} catch {
+		return "";
+	}
+}
 
 const StringEnum = <T extends readonly string[]>(values: T, options?: { description?: string }) =>
 	Type.Unsafe<T[number]>({
@@ -174,21 +191,38 @@ export function installBackgroundTasks(pi: ExtensionAPI): BackgroundTaskManager 
 				const harvest = manager.getTaskHarvest(task);
 				const snapshot = toBackgroundTaskSnapshot(task);
 				if (harvest.kind === "response") {
-					if (!harvest.ready) {
-						const paneHint = task.cmux
-							? ` (cmux pane ${task.cmux.surfaceRef})`
-							: "";
+					if (harvest.ready && harvest.content) {
+						return makeToolResult(harvest.content, {
+							action: "log",
+							task: snapshot,
+							kind: "response",
+							ready: true,
+						});
+					}
+					// No response.md content. Either the task is still running (poll
+					// again) or it reached a terminal state without writing response.md
+					// (watchdog, stop, crash). Surface the actual state so callers don't
+					// poll forever.
+					if (task.status === "running") {
+						const paneHint = task.cmux ? ` (cmux pane ${task.cmux.surfaceRef})` : "";
 						return makeToolResult(
 							`Agent ${task.id} is still working${paneHint}. response.md not written yet — poll bg_task action=log again, or check bg_task action=list for status.`,
 							{ action: "log", task: snapshot, kind: "response", ready: false },
 						);
 					}
-					return makeToolResult(harvest.content || "(empty response)", {
-						action: "log",
-						task: snapshot,
-						kind: "response",
-						ready: true,
-					});
+					const exitDetail = task.exitCode != null ? ` (exitCode=${task.exitCode})` : "";
+					const logTail = readLogTailForAgent(task);
+					const logFooter = logTail ? `\n\n--- output.log tail ---\n${logTail}` : "";
+					return makeToolResult(
+						`Agent ${task.id} ended without writing response.md (status=${task.status}${exitDetail}). The agent may have crashed, been stopped, or hit the harvest watchdog before its first agent_end fired.${logFooter}`,
+						{
+							action: "log",
+							task: snapshot,
+							kind: "response",
+							ready: true,
+							terminal: true,
+						},
+					);
 				}
 				return makeToolResult(harvest.content || "(no output yet)", {
 					action: "log",

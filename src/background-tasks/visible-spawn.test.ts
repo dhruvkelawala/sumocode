@@ -20,6 +20,28 @@ describe("visible-spawn", () => {
 		expect(paths.diagFile).toBe("/tmp/test-bg/bg-1-1700000000000/diag.jsonl");
 	});
 
+	it("buildVisibleTaskScript shell-escapes cwd in the cwd-missing echo (no command substitution)", () => {
+		// A cwd containing $(...) or backticks must NOT be evaluated at run.sh
+		// execution time. Without escaping, bash would expand the substitution
+		// in the diagnostic echo and could execute arbitrary code.
+		const paths = buildVisibleTaskPaths("bg-x", 1, "/tmp/test-bg");
+		const script = buildVisibleTaskScript({
+			cwd: "/repo/$(rm -rf /)/and-quotes",
+			command: "pnpm test",
+			paths,
+			taskId: "bg-x",
+		});
+
+		// The dangerous substring must only appear inside single-quoted segments.
+		// shellEscape wraps both the cwd and the diagnostic echo in '...', so
+		// bash treats $(rm -rf /) as a literal.
+		expect(script).toContain("cd '/repo/$(rm -rf /)/and-quotes'");
+		expect(script).toContain("echo '[sumocode-bg] task=bg-x cwd-missing: /repo/$(rm -rf /)/and-quotes'");
+		// No DOUBLE-quoted occurrence (which would let bash expand the substitution).
+		expect(script).not.toContain('"$(rm');
+		expect(script).not.toMatch(/cwd-missing:[^']*\$\(rm[^']*"/);
+	});
+
 	it("buildVisibleTaskScript exports SUMOCODE_BG_CHILD to guard nested pi/sumocode invocations", () => {
 		const paths = buildVisibleTaskPaths("bg-6", 999, "/tmp/test-bg");
 		const script = buildVisibleTaskScript({

@@ -65,23 +65,16 @@ describe("visible-spawn", () => {
 		const paths = buildVisibleTaskPaths("bg-4", 456, "/tmp/test-bg");
 		const cmd = buildVisibleAgentCommand({
 			cwd: "/repo with spaces",
-			command: "A long prompt with 'quotes', colons:, $vars, `backticks`, and multi-line\ncontent that would otherwise echo as a wall of text in the cmux pane.",
 			runner: "sumocode",
 			paths,
 		});
 
 		expect(cmd).toBe(
 			"cd '/repo with spaces' && " +
-				"SUMOCODE_TASK_MODE=1 " +
 				"SUMOCODE_TASK_RESPONSE_FILE='/tmp/test-bg/bg-4-456/response.md' " +
 				"SUMOCODE_TASK_DIAG_FILE='/tmp/test-bg/bg-4-456/diag.jsonl' " +
 				"exec sumocode task --prompt-file '/tmp/test-bg/bg-4-456/prompt.txt'",
 		);
-		// Prompt contents must NOT appear in the cmux respawn command — that's
-		// the whole point of file-based passing.
-		expect(cmd).not.toContain("quotes");
-		expect(cmd).not.toContain("backticks");
-		expect(cmd).not.toContain("wall of text");
 		expect(cmd).not.toContain("run.sh");
 		expect(cmd).not.toContain("tee -a");
 	});
@@ -90,7 +83,6 @@ describe("visible-spawn", () => {
 		const paths = buildVisibleTaskPaths("bg-7", 789, "/tmp/test-bg");
 		const cmd = buildVisibleAgentCommand({
 			cwd: "/repo",
-			command: "review diff",
 			runner: "sumocode",
 			paths,
 			model: "openai/gpt-4o-mini",
@@ -99,48 +91,23 @@ describe("visible-spawn", () => {
 
 		expect(cmd).toContain("--model 'openai/gpt-4o-mini'");
 		expect(cmd).toContain("--thinking 'low'");
-		// Flags must precede --prompt-file so pi sees them as options not messages.
+		// Flags must precede --prompt-file so the wrapper forwards them to pi as
+		// options before the positional message.
 		const modelIdx = cmd.indexOf("--model");
 		const promptIdx = cmd.indexOf("--prompt-file");
 		expect(modelIdx).toBeLessThan(promptIdx);
 	});
 
-	it("buildVisibleTaskCommand launches pi runner with prompt as kickoff message (inline, no prompt file)", () => {
-		const paths = buildVisibleTaskPaths("bg-5", 456, "/tmp/test-bg");
-		const cmd = buildVisibleTaskCommand({
-			cwd: "/repo",
-			command: "Review the diff",
-			paths,
-			taskId: "bg-5",
-			runner: "pi",
-		});
-
-		expect(cmd).toBe(
-			"cd '/repo' && " +
-				"SUMOCODE_TASK_MODE=1 " +
-				"SUMOCODE_TASK_RESPONSE_FILE='/tmp/test-bg/bg-5-456/response.md' " +
-				"SUMOCODE_TASK_DIAG_FILE='/tmp/test-bg/bg-5-456/diag.jsonl' " +
-				"exec pi 'Review the diff'",
-		);
-		expect(cmd).not.toContain("/tmp/test-bg/bg-5-456/run.sh");
-	});
-
-	it("buildVisibleAgentCommand forwards model and thinking flags to pi runner before the inline prompt", () => {
-		const paths = buildVisibleTaskPaths("bg-8", 100, "/tmp/test-bg");
-		const cmd = buildVisibleAgentCommand({
-			cwd: "/repo",
-			command: "summarize",
-			runner: "pi",
-			paths,
-			model: "anthropic/claude-sonnet-4-5",
-			thinking: "high",
-		});
-
-		expect(cmd).toContain("--model 'anthropic/claude-sonnet-4-5'");
-		expect(cmd).toContain("--thinking 'high'");
-		const modelIdx = cmd.indexOf("--model");
-		const promptIdx = cmd.indexOf("'summarize'");
-		expect(modelIdx).toBeLessThan(promptIdx);
+	it("buildVisibleAgentCommand rejects unsupported runners (e.g. bare 'pi') with a clear error", () => {
+		const paths = buildVisibleTaskPaths("bg-x", 1, "/tmp/test-bg");
+		expect(() =>
+			buildVisibleAgentCommand({
+				cwd: "/repo",
+				// @ts-expect-error — 'pi' was removed as a supported runner; this guards regressions.
+				runner: "pi",
+				paths,
+			}),
+		).toThrow(/sumocode/);
 	});
 
 	it("buildVisibleTaskScript rejects agent runners", () => {

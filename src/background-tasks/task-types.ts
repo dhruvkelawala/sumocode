@@ -1,7 +1,17 @@
 export type BackgroundTaskStatus = "running" | "completed" | "failed" | "stopped";
 
 export type SplitDirection = "right" | "down";
-export type BackgroundTaskRunner = "shell" | "pi" | "sumocode";
+/**
+ * - `shell`: managed bash command, output captured to log file.
+ * - `sumocode`: handed-off agent pane via the `sumocode task` wrapper.
+ *
+ * A bare `pi` runner was considered and rejected: it would need a duplicate
+ * code path for prompt passing (no `--prompt-file` flag), would require
+ * bypassing `shouldNoopDuplicateInstalledExtension`'s launcher dedup, and
+ * provides no unique value over the `sumocode` runner since every
+ * orchestrator that uses `bg_task` is already running SumoCode.
+ */
+export type BackgroundTaskRunner = "shell" | "sumocode";
 
 export interface BackgroundTaskCmuxRefs {
 	workspaceRef: string;

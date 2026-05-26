@@ -308,10 +308,20 @@ Ordered by ROI, smallest first.
 ## 7a. The `sumocode task` subcommand (`ee7551c`)
 
 We landed `sumocode task '<prompt>'` as the delegation primitive for visible
-agent panes. When `bg_task` spawns a `runner=sumocode` or `runner=pi` pane,
-the command it executes in the cmux split is now
-`sumocode task '<prompt>'` rather than the earlier `cmux send` / `send-key`
-approach.
+agent panes. When `bg_task` spawns a `runner=sumocode` pane, the command it
+executes in the cmux split is `sumocode task --prompt-file '<path>'` rather
+than the earlier `cmux send` / `send-key` approach.
+
+**On the bare `pi` runner:** an early version of `bg_task` also exposed
+`runner=pi` for launching plain Pi (no SumoCode wrapper). We removed it.
+The bare-pi path required (a) a duplicate prompt-passing branch since Pi
+has no `--prompt-file` flag, and (b) bypassing
+`shouldNoopDuplicateInstalledExtension` so the auto-discovered installed
+SumoCode would load in the child and write `response.md`. Neither buys
+anything over the `sumocode` runner since every `bg_task` user is already
+running SumoCode — the bare-pi runner just duplicates the cathedral
+lifecycle minus the wrapper. The supported runner enum is now
+`shell | sumocode` only.
 
 The `bin/sumocode.sh` wrapper detects the `task` subcommand and sets
 `SUMOCODE_TASK_MODE=1` before launching Pi. This env var signals task mode

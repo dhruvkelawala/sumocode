@@ -197,13 +197,13 @@ export class BackgroundTaskManager {
 
 		const visible = options.visible === true;
 		const runner = options.runner ?? "shell";
-		// Reject visible=false with an agent runner. The non-visible code path
-		// just executes `command` as a shell string, which would treat a natural-
-		// language prompt as bash and produce 'command not found' (or worse).
-		// Agent runners require a visible cmux pane by design.
-		if (!visible && (runner === "pi" || runner === "sumocode")) {
+		// Reject visible=false with the sumocode runner. The non-visible code
+		// path just executes `command` as a shell string, which would treat a
+		// natural-language prompt as bash and produce 'command not found' (or
+		// worse). The sumocode runner requires a visible cmux pane by design.
+		if (!visible && runner === "sumocode") {
 			throw new Error(
-				`runner='${runner}' requires visible=true — agent prompts cannot be executed as shell commands. Set visible=true or use runner='shell' for shell commands.`,
+				`runner='sumocode' requires visible=true — agent prompts cannot be executed as shell commands. Set visible=true or use runner='shell' for shell commands.`,
 			);
 		}
 		if (visible && !isInCmux()) {
@@ -345,10 +345,6 @@ export class BackgroundTaskManager {
 			// of text in the pane before Pi takes over the screen. `sumocode task
 			// --prompt-file <path>` reads this file and forwards its contents as
 			// Pi's kickoff [messages...] positional.
-			writeFileSync(paths.promptFile, task.command);
-		} else if (task.runner === "pi") {
-			// Bare pi runner uses inline positional, but we still drop a prompt.txt
-			// for debugging parity with the sumocode runner.
 			writeFileSync(paths.promptFile, task.command);
 		}
 

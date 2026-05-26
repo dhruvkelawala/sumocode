@@ -435,7 +435,7 @@ describe("BackgroundTaskManager", () => {
 		expect(harvest.content).toContain("echo output");
 	});
 
-	it("rejects spawn when visible=false and runner is pi/sumocode (prompt would be misread as shell)", () => {
+	it("rejects spawn when visible=false and runner is sumocode (prompt would be misread as shell)", () => {
 		const manager = new BackgroundTaskManager(buildPiStub() as never);
 		expect(() =>
 			manager.spawnTask({
@@ -443,14 +443,6 @@ describe("BackgroundTaskManager", () => {
 				cwd: "/repo",
 				visible: false,
 				runner: "sumocode",
-			}),
-		).toThrow(/requires visible=true/);
-		expect(() =>
-			manager.spawnTask({
-				command: "Reply with: hello",
-				cwd: "/repo",
-				visible: false,
-				runner: "pi",
 			}),
 		).toThrow(/requires visible=true/);
 	});

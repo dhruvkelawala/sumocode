@@ -7,7 +7,7 @@
 
 import { dirname, join } from "node:path";
 
-export type VisibleTaskRunner = "shell" | "pi" | "sumocode";
+export type VisibleTaskRunner = "shell" | "sumocode";
 
 export interface VisibleTaskPaths {
 	logFile: string;
@@ -84,44 +84,42 @@ export function buildVisibleTaskScript(options: VisibleTaskCommandOptions): stri
 }
 
 /**
- * Build the launch command for a visible pi/sumocode agent pane.
+ * Build the launch command for a visible sumocode agent pane.
  *
  * Three pieces are stitched together as a single bash one-liner that cmux
  * runs via `respawn-pane --command <cmd>`:
  *
- *   1. `SUMOCODE_TASK_RESPONSE_FILE=...` (and optionally
- *      `SUMOCODE_TASK_DIAG_FILE=...`) env-var prefix — so the child can
- *      write its final assistant message back to a known path and emit
- *      lifecycle diagnostics. The orchestrator reads response.md to
- *      harvest the delegated work's output.
+ *   1. Env-var prefix — `SUMOCODE_TASK_RESPONSE_FILE` (where the child writes
+ *      its final assistant message) and `SUMOCODE_TASK_DIAG_FILE` (lifecycle
+ *      diagnostics). `SUMOCODE_TASK_MODE=1` is set by the wrapper itself via
+ *      the `task` subcommand. The orchestrator reads response.md to harvest
+ *      the delegated work's output.
  *   2. `cd '<cwd>'` so the child opens in the right project.
- *   3. `exec sumocode task [--model X] [--thinking Y] --prompt-file '<path>'`
- *      (or `exec pi [--model X] [--thinking Y] '<inline prompt>'` for the
- *      bare pi runner). exec ensures the wrapper shell is replaced by the
- *      child process; when the child exits the cmux pane closes.
+ *   3. `exec sumocode task [--model X] [--thinking Y] --prompt-file '<path>'`.
+ *      `exec` ensures the wrapper shell is replaced by the sumocode process;
+ *      when the child exits the cmux pane closes.
  *
- * For the sumocode runner, the prompt is passed via `--prompt-file <abs path>`
- * so the cmux respawn command stays short and fixed-length regardless of
- * prompt size. Without this, a long prompt would briefly echo as a wall of
- * text in the pane before Pi takes over the screen.
+ * The prompt is passed via `--prompt-file <abs path>` so the cmux respawn
+ * command stays short and fixed-length regardless of prompt size. Without
+ * this, a long prompt would briefly echo as a wall of text in the pane
+ * before Pi takes over the screen.
  *
- * For the pi runner, we keep the inline positional. Pi has no `--prompt-file`
- * flag of its own; long-prompt users should prefer the sumocode runner.
+ * We intentionally do NOT support a bare `pi` runner: it would require
+ * duplicate prompt-passing code (no --prompt-file flag), would need to
+ * bypass shouldNoopDuplicateInstalledExtension's launcher dedup so the
+ * auto-discovered SumoCode would install in the child, and provides no
+ * unique value over the sumocode runner since every bg_task user is
+ * running SumoCode anyway.
  */
 export function buildVisibleAgentCommand(
-	options: Pick<VisibleTaskCommandOptions, "cwd" | "command" | "runner" | "paths" | "model" | "thinking">,
+	options: Pick<VisibleTaskCommandOptions, "cwd" | "runner" | "paths" | "model" | "thinking">,
 ): string {
 	const runner = options.runner ?? "shell";
-	if (runner !== "pi" && runner !== "sumocode") {
-		throw new Error("visible agent commands require runner=pi or runner=sumocode");
+	if (runner !== "sumocode") {
+		throw new Error("visible agent commands require runner=sumocode");
 	}
 
-	// Both runners need SUMOCODE_TASK_MODE=1 so the SumoCode extension's
-	// task-mode auto-exit + response-harvest lifecycle installs in the child.
-	// The sumocode wrapper sets this itself via the `task` subcommand, but the
-	// bare pi runner doesn't go through the wrapper — it has to be set here.
 	const envPrefix: string[] = [
-		`SUMOCODE_TASK_MODE=1`,
 		`SUMOCODE_TASK_RESPONSE_FILE=${shellEscape(options.paths.responseFile)}`,
 		`SUMOCODE_TASK_DIAG_FILE=${shellEscape(options.paths.diagFile)}`,
 	];
@@ -129,43 +127,29 @@ export function buildVisibleAgentCommand(
 	const modelFlags: string[] = options.model ? ["--model", shellEscape(options.model)] : [];
 	const thinkingFlags: string[] = options.thinking ? ["--thinking", shellEscape(options.thinking)] : [];
 
-	if (runner === "sumocode") {
-		return [
-			"cd",
-			shellEscape(options.cwd),
-			"&&",
-			...envPrefix,
-			"exec",
-			"sumocode",
-			"task",
-			...modelFlags,
-			...thinkingFlags,
-			"--prompt-file",
-			shellEscape(options.paths.promptFile),
-		].join(" ");
-	}
-
 	return [
 		"cd",
 		shellEscape(options.cwd),
 		"&&",
 		...envPrefix,
 		"exec",
-		"pi",
+		"sumocode",
+		"task",
 		...modelFlags,
 		...thinkingFlags,
-		shellEscape(options.command),
+		"--prompt-file",
+		shellEscape(options.paths.promptFile),
 	].join(" ");
 }
 
 /**
  * Returns a command suitable for cmux respawn-pane --command.
  * Shell tasks use a short run.sh wrapper for logging/exit tracking. Agent
- * tasks launch the native pi/sumocode command directly so the pane is readable.
+ * tasks launch sumocode directly so the pane is readable.
  */
 export function buildVisibleTaskCommand(options: VisibleTaskCommandOptions): string {
 	const runner = options.runner ?? "shell";
-	if (runner === "pi" || runner === "sumocode") {
+	if (runner === "sumocode") {
 		return buildVisibleAgentCommand(options);
 	}
 	return ["exec", "bash", shellEscape(options.paths.scriptFile)].join(" ");

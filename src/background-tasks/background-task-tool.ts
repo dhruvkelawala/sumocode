@@ -43,7 +43,7 @@ export function installBackgroundTasks(pi: ExtensionAPI): BackgroundTaskManager 
 			"",
 			"• SHELL (runner='shell', default) — spawn a managed shell command. Output is tee'd to a log file, exit code is captured, and completion wakes the orchestrator via a follow-up message and cmux notification. Use for builds, tests, deploys, watchers, anything you want to fire-and-forget.",
 			"",
-			"• AGENT (runner='sumocode' or 'pi', visible=true required) — spawn a child agent in a new cmux split. The prompt is delivered as the kickoff message, the child opens straight into the agent loop (no splash). Optional model/thinking flags override the child's defaults. The child writes its FINAL assistant message to response.md; the orchestrator reads it via bg_task log. Task transitions to status='completed' as soon as response.md appears. After 10s idle, the pane auto-closes via cmux close-surface.",
+			"• AGENT (runner='sumocode', visible=true required) — spawn a child SumoCode agent in a new cmux split. The prompt is delivered as the kickoff message, the child opens straight into the agent loop (no splash). Optional model/thinking flags override the child's defaults. The child writes its FINAL assistant message to response.md; the orchestrator reads it via bg_task log. Task transitions to status='completed' as soon as response.md appears. After 10s idle, the pane auto-closes via cmux close-surface.",
 			"",
 			"Actions:",
 			"  spawn  — start a task. Returns task id + paths.",
@@ -53,11 +53,11 @@ export function installBackgroundTasks(pi: ExtensionAPI): BackgroundTaskManager 
 			"  clear  — remove finished/stopped tasks from the in-memory list.",
 		].join("\n"),
 		promptSnippet:
-			"Spawn managed shell tasks or hand off prompts to a visible pi/sumocode agent pane (with model/thinking override and harvestable response).",
+			"Spawn managed shell tasks or hand off prompts to a visible SumoCode agent pane (with model/thinking override and harvestable response).",
 		promptGuidelines: [
 			"Use bg_task when the user wants long-running work to continue while the conversation stays usable.",
 			"For shell commands (build, test, deploy, watchers), use bg_task with runner='shell' (the default) — output is logged and the orchestrator is notified on exit.",
-			"To delegate a prompt to a child agent, use bg_task with runner='sumocode' and visible=true. The child opens in a cmux split, runs the prompt, and writes its response back. Read it with bg_task action='log' once status='completed'.",
+			"To delegate a prompt to a child SumoCode agent, use bg_task with runner='sumocode' and visible=true. The child opens in a cmux split, runs the prompt, and writes its response back. Read it with bg_task action='log' once status='completed'.",
 			"Pass model and thinking to bg_task when delegating an agent task to override the child's defaults (e.g. model='openai/gpt-4o-mini' thinking='low' for a cheap quick task, or model='anthropic/claude-opus-4-6' thinking='xhigh' for deep work).",
 			"To read a delegated agent's response, call bg_task with action='log' and id='bg-N'. If the response isn't ready yet, the result will indicate 'still working' — poll again. List with bg_task action='list' to see which tasks have status='completed'.",
 			"Use bg_task action='stop' to cancel a task. For agent panes this closes the cmux surface, preserving any response that was already written.",
@@ -70,7 +70,7 @@ export function installBackgroundTasks(pi: ExtensionAPI): BackgroundTaskManager 
 			command: Type.Optional(
 				Type.String({
 					description:
-						"Required for action=spawn. For runner='shell' this is the bash command (e.g. 'pnpm test'). For runner='sumocode' or 'pi' this is the prompt the child agent will receive as its kickoff message.",
+						"Required for action=spawn. For runner='shell' this is the bash command (e.g. 'pnpm test'). For runner='sumocode' this is the prompt the child agent will receive as its kickoff message.",
 				}),
 			),
 			cwd: Type.Optional(
@@ -84,25 +84,25 @@ export function installBackgroundTasks(pi: ExtensionAPI): BackgroundTaskManager 
 			visible: Type.Optional(
 				Type.Boolean({
 					description:
-						"Open in a new cmux split. REQUIRED when runner='sumocode' or runner='pi'. Defaults to false for shell tasks (invisible managed child).",
+						"Open in a new cmux split. REQUIRED when runner='sumocode'. Defaults to false for shell tasks (invisible managed child).",
 				}),
 			),
 			runner: Type.Optional(
-				StringEnum(["shell", "pi", "sumocode"] as const, {
+				StringEnum(["shell", "sumocode"] as const, {
 					description:
-						"'shell' (default) = managed bash command. 'sumocode' = visible delegated agent pane with response harvest. 'pi' = visible bare pi pane with response harvest.",
+						"'shell' (default) = managed bash command. 'sumocode' = visible delegated SumoCode agent pane with response harvest.",
 				}),
 			),
 			model: Type.Optional(
 				Type.String({
 					description:
-						"Pi model pattern for agent runners. Examples: 'openai/gpt-4o-mini', 'anthropic/claude-sonnet-4-5', 'cursor/composer-2.5'. Forwarded as --model to the child. Ignored for runner='shell'.",
+						"Pi model pattern for runner='sumocode'. Examples: 'openai/gpt-4o-mini', 'anthropic/claude-sonnet-4-5', 'cursor/composer-2.5'. Forwarded as --model to the child. Ignored for runner='shell'.",
 				}),
 			),
 			thinking: Type.Optional(
 				StringEnum(["off", "minimal", "low", "medium", "high", "xhigh"] as const, {
 					description:
-						"Pi thinking level for agent runners. Forwarded as --thinking to the child. Ignored for runner='shell'.",
+						"Pi thinking level for runner='sumocode'. Forwarded as --thinking to the child. Ignored for runner='shell'.",
 				}),
 			),
 			direction: Type.Optional(
@@ -152,7 +152,7 @@ export function installBackgroundTasks(pi: ExtensionAPI): BackgroundTaskManager 
 					: "";
 				const pidLine = task.pid != null ? `\nPid: ${task.pid}` : "";
 				const harvestHint =
-					task.runner !== "shell"
+					task.runner === "sumocode"
 						? `\nHarvest: bg_task action=log id=${task.id} (returns response.md when ready)`
 						: "";
 				const modelLine = task.model || task.thinking

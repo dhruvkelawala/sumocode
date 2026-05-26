@@ -25,8 +25,28 @@
  * Pi from inside an extension handler.
  */
 
+import { appendFileSync } from "node:fs";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { isInCmux } from "./commands/cmux-split.js";
+
+/**
+ * Env-gated diagnostic logging. Set `SUMOCODE_TASK_DIAG_FILE=/tmp/xxx.jsonl`
+ * to capture every lifecycle event the auto-exit goes through. Used by
+ * `scripts/diag-task-auto-exit.mjs` to figure out where the close stalls.
+ * No-op when the env var is unset (production default).
+ */
+function diagLog(event: string, detail?: Record<string, unknown>): void {
+	const file = process.env.SUMOCODE_TASK_DIAG_FILE;
+	if (!file) return;
+	try {
+		appendFileSync(
+			file,
+			`${JSON.stringify({ t: Date.now(), pid: process.pid, event, ...(detail ?? {}) })}\n`,
+		);
+	} catch {
+		// diagnostics must never crash the extension
+	}
+}
 
 const STATUS_KEY = "sumocode-task-auto-exit";
 const DEFAULT_GRACE_MS = 10_000;
@@ -58,12 +78,25 @@ export function shouldInstallTaskModeAutoExit(options: TaskModeAutoExitOptions =
  * grace-period cycle handles the close.
  */
 export function installTaskModeAutoExit(pi: ExtensionAPI, options: TaskModeAutoExitOptions = {}): void {
-	if (!shouldInstallTaskModeAutoExit(options)) return;
+	if (!shouldInstallTaskModeAutoExit(options)) {
+		diagLog("install_skipped", {
+			taskMode: process.env.SUMOCODE_TASK_MODE,
+			keepOpen: process.env.SUMOCODE_TASK_KEEP_OPEN,
+		});
+		return;
+	}
 
 	const graceMs = options.graceMs ?? DEFAULT_GRACE_MS;
 	let userTookOver = false;
 	let pending: { tick: ReturnType<typeof setInterval>; shutdown: ReturnType<typeof setTimeout> } | undefined;
 	let armed = false;
+
+	diagLog("install", {
+		graceMs,
+		inCmux: isInCmux(),
+		cmuxSurfaceId: process.env.CMUX_SURFACE_ID,
+		cmuxWorkspaceId: process.env.CMUX_WORKSPACE_ID,
+	});
 
 	const cancelPending = (ctx: { ui: { setStatus: (key: string, value?: string) => void } }, reason: "user" | "fired"): void => {
 		if (!pending) return;
@@ -82,38 +115,48 @@ export function installTaskModeAutoExit(pi: ExtensionAPI, options: TaskModeAutoE
 		// is the documented way to ask cmux to tear down the surface we are
 		// running in. cmux then signals the pane's leading process; the bash
 		// wrapper and pi both exit cleanly without any process.exit() hack.
-		if (!isInCmux()) return;
+		if (!isInCmux()) {
+			diagLog("close_skipped", { reason: "not_in_cmux" });
+			return;
+		}
+		diagLog("close_invoking", { surface: process.env.CMUX_SURFACE_ID });
 		try {
-			await pi.exec("cmux", ["close-surface"], { timeout: 5000 });
-		} catch {
-			// best-effort — if cmux is unreachable, leave the pane open
+			const result = await pi.exec("cmux", ["close-surface"], { timeout: 5000 });
+			diagLog("close_result", { code: result.code, stdout: result.stdout?.slice(0, 200), stderr: result.stderr?.slice(0, 200), killed: result.killed });
+		} catch (error) {
+			diagLog("close_threw", { message: error instanceof Error ? error.message : String(error) });
 		}
 	};
 
 	pi.on("input", (event, ctx) => {
-		// Only count actual interactive typing as a take-over. Kickoff prompts
-		// from the CLI positional / sendUserMessage shouldn't disarm the timer.
+		diagLog("input", { source: event.source, armed });
+		// Ignore input until the first agent_end has armed the timer. Pi
+		// delivers the CLI kickoff prompt as an `input` event with source
+		// `interactive` — same shape as a real user keypress — so we can't
+		// distinguish them by source alone. The agent_end-gated check is the
+		// reliable boundary: anything before the first agent_end is either
+		// the kickoff or steering during the kickoff turn (which is still
+		// part of the delegated turn the orchestrator handed off).
+		if (!armed) return;
 		if (event.source !== "interactive") return;
 		if (pending) {
 			cancelPending(ctx, "user");
 			ctx.ui.notify("task auto-exit cancelled — pane will stay open", "info");
-		} else {
-			// User started typing before agent_end fired — preempt the first
-			// auto-exit attempt entirely.
-			userTookOver = true;
 		}
 	});
 
 	pi.on("agent_end", (_event, ctx) => {
+		diagLog("agent_end", { userTookOver, armed });
 		if (userTookOver) return;
 		// Only auto-exit on the FIRST agent_end after launch. Subsequent
-		// agent_end events (multi-turn sessions) mean the user has engaged
-		// even if they haven't typed yet.
+		// agent_end events fire because the user typed follow-up prompts
+		// during the grace period (input handler would already have cancelled).
 		if (armed) return;
 		armed = true;
 
 		let remaining = Math.ceil(graceMs / 1000);
 		ctx.ui.setStatus(STATUS_KEY, `task done · auto-closing in ${remaining}s · type to cancel`);
+		diagLog("timer_armed", { graceMs, remaining });
 
 		const tick = setInterval(() => {
 			remaining -= 1;
@@ -123,6 +166,7 @@ export function installTaskModeAutoExit(pi: ExtensionAPI, options: TaskModeAutoE
 		}, TICK_MS);
 
 		const shutdown = setTimeout(() => {
+			diagLog("timer_fired");
 			cancelPending(ctx, "fired");
 			void closeOwnSurface();
 		}, graceMs);
@@ -131,6 +175,7 @@ export function installTaskModeAutoExit(pi: ExtensionAPI, options: TaskModeAutoE
 	});
 
 	pi.on("session_shutdown", (_event, ctx) => {
+		diagLog("session_shutdown");
 		// Defensive cleanup if shutdown is triggered by a different path
 		// (e.g. user hits Ctrl+D while our timer is running).
 		cancelPending(ctx, "fired");

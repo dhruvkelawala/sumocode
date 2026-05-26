@@ -128,19 +128,38 @@ describe("installTaskModeAutoExit", () => {
 		);
 	});
 
-	it("ignores non-interactive input (kickoff prompts, extension messages)", async () => {
+	it("ignores input that fires BEFORE the first agent_end (this is the CLI kickoff)", async () => {
 		const { pi, handlers } = buildPiStub();
 		installTaskModeAutoExit(pi as never, { env: { SUMOCODE_TASK_MODE: "1" }, graceMs: 10_000 });
 
 		const ctx = buildCtxStub();
-		// Kickoff prompt arrives as "extension" source
-		handlers.get("input")?.[0]?.({ source: "extension", text: "kickoff" }, ctx);
+		// Pi delivers the CLI positional kickoff as input with source=interactive.
+		// This must NOT cancel the auto-exit — it's the orchestrator's prompt,
+		// not the user typing.
+		handlers.get("input")?.[0]?.({ source: "interactive", text: "kickoff prompt" }, ctx);
 		handlers.get("agent_end")?.[0]?.({ messages: [] }, ctx);
 
-		// Auto-exit should still proceed because user didn't actually type
 		vi.advanceTimersByTime(10_000);
 		await Promise.resolve();
 		expect(pi.exec).toHaveBeenCalledWith("cmux", ["close-surface"], { timeout: 5000 });
+	});
+
+	it("cancels auto-exit when the user types AFTER the first agent_end (real follow-up)", () => {
+		const { pi, handlers } = buildPiStub();
+		installTaskModeAutoExit(pi as never, { env: { SUMOCODE_TASK_MODE: "1" }, graceMs: 10_000 });
+
+		const ctx = buildCtxStub();
+		// Kickoff input (ignored)
+		handlers.get("input")?.[0]?.({ source: "interactive", text: "kickoff" }, ctx);
+		// First agent_end arms the timer
+		handlers.get("agent_end")?.[0]?.({ messages: [] }, ctx);
+		// User types during grace period
+		vi.advanceTimersByTime(3_000);
+		handlers.get("input")?.[0]?.({ source: "interactive", text: "follow-up" }, ctx);
+		// Run remaining time — close must NOT fire
+		vi.advanceTimersByTime(20_000);
+		expect(pi.exec).not.toHaveBeenCalled();
+		expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("auto-exit cancelled"), "info");
 	});
 
 	it("does not re-arm on subsequent agent_end events", () => {

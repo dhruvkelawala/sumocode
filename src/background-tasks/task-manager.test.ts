@@ -242,20 +242,25 @@ describe("BackgroundTaskManager", () => {
 		expect(existsSync(task.exitFile!.replace("exit.code", "run.sh"))).toBe(false);
 
 		// Verify the prompt was typed into the pane via cmux send + send-key return.
-		await vi.waitFor(() => {
-			const sendCall = pi.exec.mock.calls.find(
-				(call) => call[0] === "cmux" && (call[1] as string[])[0] === "send",
-			);
-			expect(sendCall, "expected cmux send call with prompt text").toBeDefined();
-			expect(sendCall![1] as string[]).toContain("Review the diff: with colons & quotes");
+		// Use a generous timeout because injection is gated on the 5s cold-boot delay
+		// that compensates for ghostty's slow surface-initialization on fresh panes.
+		await vi.waitFor(
+			() => {
+				const sendCall = pi.exec.mock.calls.find(
+					(call) => call[0] === "cmux" && (call[1] as string[])[0] === "send",
+				);
+				expect(sendCall, "expected cmux send call with prompt text").toBeDefined();
+				expect(sendCall![1] as string[]).toContain("Review the diff: with colons & quotes");
 
-			const sendKeyCall = pi.exec.mock.calls.find(
-				(call) => call[0] === "cmux" && (call[1] as string[])[0] === "send-key",
-			);
-			expect(sendKeyCall, "expected cmux send-key return to submit prompt").toBeDefined();
-			expect(sendKeyCall![1] as string[]).toContain("return");
-		});
-	});
+				const sendKeyCall = pi.exec.mock.calls.find(
+					(call) => call[0] === "cmux" && (call[1] as string[])[0] === "send-key",
+				);
+				expect(sendKeyCall, "expected cmux send-key return to submit prompt").toBeDefined();
+				expect(sendKeyCall![1] as string[]).toContain("return");
+			},
+			{ timeout: 10_000 },
+		);
+	}, 15_000);
 
 	it("lists and clears finished tasks", async () => {
 		spawnMock.mockReturnValue(mockChild(0));

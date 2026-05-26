@@ -27,14 +27,20 @@ export function installBackgroundTasks(pi: ExtensionAPI): BackgroundTaskManager 
 	pi.registerTool({
 		name: "bg_task",
 		label: "Background Task",
-		description:
-			"Spawn, inspect, and stop non-blocking shell tasks or visible pi/sumocode agent panes. Shell tasks write persistent logs and can wake the agent on exit.",
-		promptSnippet: "Spawn and manage non-blocking background shell tasks or visible agent panes.",
+		description: [
+			"Spawn long-running work in the background. Two distinct modes:",
+			"• runner=shell (default): MANAGED — the command is wrapped, output is tee'd to a log file, exit code is tracked, and completion wakes the orchestrator via a follow-up message plus a cmux notification.",
+			"• runner=sumocode | runner=pi (visible required): HANDED OFF — launches a clean native command in a cmux split. NO output capture, NO exit polling, NO result harvest. The pane IS the deliverable.",
+			"Use list/log/stop/clear to manage shell tasks. Agent panes appear in list at launch time and stay 'running' until manually stopped — their actual session is owned by the child agent.",
+			"For programmatic agent result harvest, use a subagent tool (separate from this), not bg_task.",
+		].join("\n"),
+		promptSnippet: "Spawn managed shell tasks or hand off work to a visible pi/sumocode agent pane.",
 		promptGuidelines: [
-			"Use bg_task instead of bash backgrounding when the user wants long-running work to continue while the conversation stays usable.",
-			"Pass visible=true when the user wants to watch output in a cmux split.",
-			"Use runner=sumocode or runner=pi for visible agent tasks so the pane shows the native agent UI instead of a shell wrapper.",
-			"Use bg_task list/log/stop to inspect or terminate tracked tasks.",
+			"Use bg_task when the user wants long-running work to continue while the conversation stays usable.",
+			"For shell commands (build, test, deploy, watchers), use runner=shell (the default) — output is logged and the orchestrator is notified on exit.",
+			"For 'spin up sumocode/pi to work on X in a split', use runner=sumocode (or pi) with visible=true — the cmux pane is the UI, no result is captured.",
+			"Do not call bg_task expecting to read the agent's final response — visible agent panes are hand-offs, not subagents.",
+			"Use bg_task list/log/stop to inspect or terminate tracked shell tasks; stopping an agent pane closes its cmux surface.",
 		],
 		parameters: Type.Object({
 			action: StringEnum(["spawn", "list", "log", "stop", "clear"] as const, {

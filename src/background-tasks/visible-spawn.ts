@@ -41,10 +41,7 @@ export function shellEscape(value: string): string {
 	return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
-function buildPromptArg(command: string): string {
-	const trimmed = command.trim();
-	return trimmed ? ` ${shellEscape(trimmed)}` : "";
-}
+
 
 export function buildVisibleTaskScript(options: VisibleTaskCommandOptions): string {
 	const { cwd, command, paths, taskId, runner = "shell" } = options;
@@ -78,15 +75,28 @@ export function buildVisibleTaskScript(options: VisibleTaskCommandOptions): stri
 	].join("\n");
 }
 
-export function buildVisibleAgentCommand(options: Pick<VisibleTaskCommandOptions, "cwd" | "command" | "runner">): string {
+/**
+ * Build the bare launch command for a visible pi/sumocode agent pane.
+ *
+ * We intentionally do NOT pass the prompt as a positional argument here.
+ * Passing it through the cmux respawn-pane shell layer, then the sumocode
+ * wrapper script, then pi's CLI parser is fragile — quoted prompts with
+ * colons, backticks, or multi-line content can get mangled at any layer and
+ * end up either as a path or as garbled steering input.
+ *
+ * The proven pattern (opencode-cmux, pi-collaborating-agents, HazAT) is to
+ * launch the agent bare and then type the prompt into the running TUI via
+ * `cmux send` + `cmux send-key return` once the editor is ready. That keeps
+ * the prompt as opaque terminal input — no shell escaping, no arg length
+ * limit, no positional-vs-message ambiguity.
+ */
+export function buildVisibleAgentCommand(options: Pick<VisibleTaskCommandOptions, "cwd" | "runner">): string {
 	const runner = options.runner ?? "shell";
 	if (runner !== "pi" && runner !== "sumocode") {
 		throw new Error("visible agent commands require runner=pi or runner=sumocode");
 	}
 
-	return [`cd`, shellEscape(options.cwd), `&&`, `exec`, runner, buildPromptArg(options.command).trimStart()]
-		.filter(Boolean)
-		.join(" ");
+	return [`cd`, shellEscape(options.cwd), `&&`, `exec`, runner].join(" ");
 }
 
 /**

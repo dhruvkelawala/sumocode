@@ -24,6 +24,16 @@ import {
 const POLL_INTERVAL_MS = 500;
 const DEFAULT_VISIBLE_DIRECTION: CmuxSplitDirection = "right";
 
+/** How long to wait for sumocode/pi's editor to become ready before injecting the prompt. */
+const AGENT_READY_TIMEOUT_MS = 12_000;
+const AGENT_READY_POLL_MS = 400;
+/**
+ * Substrings that indicate sumocode/pi's interactive TUI has finished booting
+ * and is ready to receive typed input. Either the SumoCode footer status
+ * label or Pi's own editor border is enough — we only need one.
+ */
+const AGENT_READY_MARKERS = ["MEDITATING", "READY", "ILLUMINATING", "DEFERRING", "INSCRIBING"];
+
 interface InternalTask extends BackgroundTask {
 	child?: ChildProcess;
 	pollTimer?: ReturnType<typeof setInterval>;
@@ -244,6 +254,67 @@ export class BackgroundTaskManager {
 			task.pollTimer = setInterval(() => {
 				this.pollVisibleTask(task);
 			}, POLL_INTERVAL_MS);
+		} else if (task.runner === "pi" || task.runner === "sumocode") {
+			void this.injectAgentPrompt(task);
+		}
+	}
+
+	/**
+	 * Inject the prompt into a freshly-launched visible agent pane.
+	 *
+	 * Polls the cmux surface until sumocode/pi has finished booting (footer
+	 * state label or editor border visible), then types the prompt and submits
+	 * with Return. Best-effort — failures are appended to the task log but
+	 * never crash the manager or fail the task. The pane will still be there
+	 * for the user to type into manually.
+	 */
+	private async injectAgentPrompt(task: InternalTask): Promise<void> {
+		if (!task.cmux) return;
+		const { workspaceRef, surfaceRef } = task.cmux;
+
+		const readyByMs = Date.now() + AGENT_READY_TIMEOUT_MS;
+		let ready = false;
+		while (Date.now() < readyByMs) {
+			try {
+				const result = await this.pi.exec(
+					"cmux",
+					["read-screen", "--workspace", workspaceRef, "--surface", surfaceRef, "--lines", "40"],
+					{ timeout: 3000 },
+				);
+				if (result.code === 0 && AGENT_READY_MARKERS.some((marker) => result.stdout.includes(marker))) {
+					ready = true;
+					break;
+				}
+			} catch {
+				// ignore transient read-screen failures during boot
+			}
+			await new Promise((resolve) => setTimeout(resolve, AGENT_READY_POLL_MS));
+		}
+
+		if (!ready) {
+			appendLogLine(
+				task.logFile,
+				`[bg-task] timed out waiting for ${task.runner} editor to become ready; prompt not injected\n`,
+			);
+			return;
+		}
+
+		try {
+			await this.pi.exec(
+				"cmux",
+				["send", "--workspace", workspaceRef, "--surface", surfaceRef, task.command],
+				{ timeout: 5000 },
+			);
+			await this.pi.exec(
+				"cmux",
+				["send-key", "--workspace", workspaceRef, "--surface", surfaceRef, "return"],
+				{ timeout: 5000 },
+			);
+			task.updatedAt = Date.now();
+			writeTaskMeta(task);
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			appendLogLine(task.logFile, `[bg-task] failed to inject prompt via cmux send: ${message}\n`);
 		}
 	}
 

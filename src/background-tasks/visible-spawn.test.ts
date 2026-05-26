@@ -58,19 +58,19 @@ describe("visible-spawn", () => {
 		expect(script).toContain("[sumocode-bg] task=bg-2 exit:$code");
 	});
 
-	it("buildVisibleAgentCommand launches sumocode directly without a wrapper", () => {
+	it("buildVisibleAgentCommand launches sumocode bare so the prompt can be cmux-sent later", () => {
 		const cmd = buildVisibleAgentCommand({
 			cwd: "/repo with spaces",
-			command: "Review the diff",
 			runner: "sumocode",
 		});
 
-		expect(cmd).toBe("cd '/repo with spaces' && exec sumocode 'Review the diff'");
+		expect(cmd).toBe("cd '/repo with spaces' && exec sumocode");
+		expect(cmd).not.toContain("Review");
 		expect(cmd).not.toContain("run.sh");
 		expect(cmd).not.toContain("tee -a");
 	});
 
-	it("buildVisibleTaskCommand launches pi runner directly", () => {
+	it("buildVisibleTaskCommand launches pi runner bare (prompt typed in via cmux send)", () => {
 		const paths = buildVisibleTaskPaths("bg-4", 456, "/tmp/test-bg");
 		const cmd = buildVisibleTaskCommand({
 			cwd: "/repo",
@@ -80,7 +80,8 @@ describe("visible-spawn", () => {
 			runner: "pi",
 		});
 
-		expect(cmd).toBe("cd '/repo' && exec pi 'Review the diff'");
+		expect(cmd).toBe("cd '/repo' && exec pi");
+		expect(cmd).not.toContain("Review the diff");
 		expect(cmd).not.toContain("/tmp/test-bg/bg-4-456/run.sh");
 	});
 

@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SumoCode × cmux background tasks — spike</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet">
+<style>
+:root {
+	--bg: #f4f1ea;
+	--surface: #fffdf8;
+	--grid: rgba(30, 58, 95, 0.08);
+	--text: #1e293b;
+	--muted: #64748b;
+	--accent: #1e3a5f;
+	--accent-2: #c45c26;
+	--accent-3: #2d6a4f;
+	--line: rgba(30, 58, 95, 0.18);
+	--mono: "IBM Plex Mono", ui-monospace, monospace;
+	--sans: "IBM Plex Sans", system-ui, sans-serif;
+	--serif: "Instrument Serif", Georgia, serif;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+	font-family: var(--sans);
+	background-color: var(--bg);
+	background-image:
+		linear-gradient(var(--grid) 1px, transparent 1px),
+		linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+	background-size: 24px 24px;
+	color: var(--text);
+	line-height: 1.55;
+	padding: 48px 24px 80px;
+}
+.wrap { max-width: 1080px; margin: 0 auto; }
+.hero {
+	border: 1px solid var(--line);
+	background: var(--surface);
+	padding: 40px 36px;
+	margin-bottom: 28px;
+	position: relative;
+}
+.hero::before {
+	content: "SPIKE / RESEARCH";
+	position: absolute;
+	top: 12px; right: 16px;
+	font: 500 11px/1 var(--mono);
+	letter-spacing: 0.12em;
+	color: var(--accent-2);
+}
+.hero h1 {
+	font-family: var(--serif);
+	font-size: clamp(2rem, 4vw, 2.8rem);
+	font-weight: 400;
+	margin-bottom: 10px;
+	color: var(--accent);
+}
+.hero p { max-width: 70ch; color: var(--muted); }
+.meta {
+	display: flex; flex-wrap: wrap; gap: 12px;
+	margin-top: 20px;
+	font: 500 12px/1 var(--mono);
+	color: var(--accent);
+}
+.meta span {
+	border: 1px solid var(--line);
+	padding: 6px 10px;
+	background: rgba(30, 58, 95, 0.04);
+}
+section {
+	border: 1px solid var(--line);
+	background: var(--surface);
+	padding: 28px 32px;
+	margin-bottom: 24px;
+}
+section h2 {
+	font-family: var(--serif);
+	font-size: 1.6rem;
+	font-weight: 400;
+	margin-bottom: 14px;
+	color: var(--accent);
+}
+section h3 {
+	font-size: 0.95rem;
+	text-transform: uppercase;
+	letter-spacing: 0.08em;
+	color: var(--accent-2);
+	margin: 22px 0 10px;
+}
+p, li { color: var(--text); }
+ul { padding-left: 1.2rem; margin: 8px 0 0; }
+li { margin: 6px 0; }
+.grid-2 {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+	gap: 16px;
+	margin-top: 16px;
+}
+.card {
+	border: 1px solid var(--line);
+	padding: 18px;
+	background: rgba(255,255,255,0.6);
+}
+.card strong { display: block; margin-bottom: 6px; color: var(--accent); }
+.card code, .mono { font-family: var(--mono); font-size: 0.88em; }
+.verdict {
+	border-left: 4px solid var(--accent-3);
+	padding-left: 14px;
+	margin-top: 12px;
+}
+.verdict.warn { border-color: var(--accent-2); }
+table {
+	width: 100%;
+	border-collapse: collapse;
+	margin-top: 12px;
+	font-size: 0.92rem;
+}
+th, td {
+	border: 1px solid var(--line);
+	padding: 10px 12px;
+	text-align: left;
+	vertical-align: top;
+}
+th {
+	background: rgba(30, 58, 95, 0.06);
+	font-weight: 600;
+	color: var(--accent);
+}
+.tag {
+	display: inline-block;
+	font: 500 10px/1 var(--mono);
+	padding: 3px 6px;
+	border: 1px solid var(--line);
+	margin-right: 4px;
+}
+.tag.yes { color: var(--accent-3); border-color: rgba(45,106,79,0.35); }
+.tag.no { color: var(--accent-2); border-color: rgba(196,92,38,0.35); }
+.tag.partial { color: var(--accent); }
+.mermaid-wrap {
+	border: 1px dashed var(--line);
+	padding: 20px;
+	margin-top: 16px;
+	overflow-x: auto;
+	background: rgba(255,255,255,0.5);
+}
+.flow-row {
+	display: flex; flex-wrap: wrap; align-items: stretch; gap: 10px; margin-top: 16px;
+}
+.flow-box {
+	flex: 1 1 180px;
+	border: 1px solid var(--line);
+	padding: 14px;
+	background: #fff;
+	position: relative;
+}
+.flow-box .label {
+	font: 500 10px/1 var(--mono);
+	color: var(--accent-2);
+	margin-bottom: 8px;
+}
+.arrow {
+	align-self: center;
+	font: 600 18px/1 var(--mono);
+	color: var(--muted);
+}
+footer {
+	margin-top: 32px;
+	font: 12px/1.5 var(--mono);
+	color: var(--muted);
+	text-align: center;
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+	<header class="hero">
+		<h1>cmux-visible background tasks</h1>
+		<p>
+			Research spike for SumoCode: let the orchestrator spawn long shell work via
+			<code class="mono">bg_task</code>, track logs and wakeups in the parent session,
+			and optionally mirror execution into a live cmux split — without pi-subagents overhead.
+		</p>
+		<div class="meta">
+			<span>branch: spike/cmux-background-tasks</span>
+			<span>base: pi-background-tasks v1.5.0</span>
+			<span>cmux ref: pi-cmux + opencode-cmux</span>
+		</div>
+	</header>
+
+	<section>
+		<h2>Problem → proposal</h2>
+		<div class="grid-2">
+			<div class="card">
+				<strong>What Dhruv wants</strong>
+				Orchestrator starts background shell work. Parent keeps chatting. Optional visible cmux split/tab to watch live output.
+			</div>
+			<div class="card">
+				<strong>What we reject</strong>
+				pi-subagents for every test run. External tmux orchestration outside Pi tools. Slash-only pi-cmux without model access.
+			</div>
+		</div>
+		<p class="verdict" style="margin-top:18px">
+			<strong>Proposal:</strong> fork <code class="mono">@vanillagreen/pi-background-tasks</code>, add
+			<code class="mono">visible: true</code> spawn path using cmux split + log-tee wrapper (this spike’s PoC).
+		</p>
+	</section>
+
+	<section>
+		<h2>Candidate matrix</h2>
+		<table>
+			<thead>
+				<tr>
+					<th>Package</th>
+					<th>Orchestrator tool</th>
+					<th>Visible cmux</th>
+					<th>Logs + wake</th>
+					<th>Verdict</th>
+				</tr>
+			</thead>
+			<tbody>
+				<tr>
+					<td><code class="mono">pi-subagents</code></td>
+					<td><span class="tag yes">subagent</span></td>
+					<td><span class="tag no">no</span></td>
+					<td><span class="tag partial">async Pi child</span></td>
+					<td>Keep for reviewer/scout roles — not shell bg primitive</td>
+				</tr>
+				<tr>
+					<td><code class="mono">pi-cmux</code></td>
+					<td><span class="tag no">slash only</span></td>
+					<td><span class="tag yes">/cmo /cmv</span></td>
+					<td><span class="tag no">no</span></td>
+					<td>Reuse cmux CLI sequence; wrap in bg_task</td>
+				</tr>
+				<tr>
+					<td><code class="mono">opencode-cmux</code></td>
+					<td><span class="tag partial">events</span></td>
+					<td><span class="tag yes">attach split</span></td>
+					<td><span class="tag partial">notify/status</span></td>
+					<td>Reference for split grid + notifications; attach ≠ shell</td>
+				</tr>
+				<tr>
+					<td><code class="mono">pi-background-tasks</code></td>
+					<td><span class="tag yes">bg_task</span></td>
+					<td><span class="tag no">no</span></td>
+					<td><span class="tag yes">full</span></td>
+					<td><strong>Fork base</strong></td>
+				</tr>
+				<tr>
+					<td><code class="mono">SumoCode task</code></td>
+					<td><span class="tag yes">task</span></td>
+					<td><span class="tag no">no</span></td>
+					<td><span class="tag partial">Pi child</span></td>
+					<td>Keep for structured delegation blocks</td>
+				</tr>
+			</tbody>
+		</table>
+	</section>
+
+	<section>
+		<h2>Two spawn modes</h2>
+		<div class="flow-row">
+			<div class="flow-box">
+				<div class="label">invisible (today)</div>
+				<strong>child_process.spawn</strong>
+				<p style="margin-top:8px;font-size:0.92rem;color:var(--muted)">stdout piped → log file. Detached PGID. Wake on exit/output match.</p>
+			</div>
+			<div class="arrow">→</div>
+			<div class="flow-box">
+				<div class="label">visible (fork)</div>
+				<strong>cmux respawn-pane</strong>
+				<p style="margin-top:8px;font-size:0.92rem;color:var(--muted)">Command runs in split. Wrapper tees to log. Parent tails log + exit marker.</p>
+			</div>
+		</div>
+
+		<h3>Sequence — visible spawn</h3>
+		<div class="mermaid-wrap">
+			<pre class="mermaid">
+sequenceDiagram
+  participant O as SumoCode orchestrator
+  participant B as bg_task fork
+  participant C as cmux CLI
+  participant S as cmux split surface
+  participant L as log + exit files
+
+  O->>B: spawn(visible=true, command)
+  B->>C: identify + list-panes
+  B->>C: new-split right
+  B->>C: respawn-pane (wrapper cmd)
+  C->>S: live terminal output
+  S->>L: tee stdout/stderr
+  B->>L: tail log / read exit.code
+  B->>O: wake on completion
+			</pre>
+		</div>
+	</section>
+
+	<section>
+		<h2>opencode-cmux vs our fork</h2>
+		<div class="grid-2">
+			<div class="card">
+				<strong>opencode-cmux pattern</strong>
+				Listens for <code class="mono">session.created</code> with <code class="mono">parentID</code>.
+				Opens split, types <code class="mono">opencode attach … --session</code>.
+				Works because child is a resumable agent session.
+			</div>
+			<div class="card">
+				<strong>SumoCode shell pattern</strong>
+				No attach target. Use pi-cmux’s <code class="mono">respawn-pane --command</code> with
+				<code class="mono">buildVisibleTaskCommand()</code> (tee + exit marker).
+				Store <code class="mono">surfaceRef</code> on task snapshot.
+			</div>
+		</div>
+		<p class="verdict warn" style="margin-top:16px">
+			cmux <code class="mono">hooks pi install</code> is for session restore — not split creation. Both opencode-cmux and pi-cmux call the cmux CLI directly.
+		</p>
+	</section>
+
+	<section>
+		<h2>Spike artifacts</h2>
+		<ul>
+			<li><code class="mono">cmux-adapter.ts</code> — identify, split, respawn, notify/status helpers</li>
+			<li><code class="mono">visible-spawn.ts</code> — log-tee wrapper builder + exit marker parser</li>
+			<li><code class="mono">cmux-adapter.test.ts</code> — mocked cmux exec flow</li>
+			<li><code class="mono">RESEARCH.md</code> + <code class="mono">INTEGRATION-PLAN.md</code></li>
+		</ul>
+		<h3>Proposed bg_task API extension</h3>
+		<pre class="mono" style="background:rgba(30,58,95,0.05);border:1px solid var(--line);padding:14px;overflow:auto;margin-top:10px;font-size:0.85rem">{
+  "action": "spawn",
+  "command": "pnpm test",
+  "visible": true,
+  "cmuxDirection": "right",
+  "notifyOnExit": true
+}</pre>
+	</section>
+
+	<section>
+		<h2>Phased rollout</h2>
+		<ol style="padding-left:1.2rem">
+			<li><strong>Phase 0 (this PR):</strong> spike + tests + visual explainer</li>
+			<li><strong>Phase 1:</strong> fork package, wire visible spawn + settings</li>
+			<li><strong>Phase 2:</strong> SumoTUI <code class="mono">bg_task</code> renderer + palette hints</li>
+			<li><strong>Phase 3:</strong> manual cmux smoke + optional fixture capture</li>
+		</ol>
+	</section>
+
+	<footer>SumoCode spike · open in browser: src/spike/cmux-background/visual-explainer.html</footer>
+</div>
+<script type="module">
+import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+mermaid.initialize({
+	startOnLoad: true,
+	theme: "base",
+	themeVariables: {
+		fontFamily: "IBM Plex Sans, sans-serif",
+		fontSize: "15px",
+		primaryColor: "#fffdf8",
+		primaryBorderColor: "#1e3a5f",
+		lineColor: "#64748b",
+		actorBkg: "#fffdf8",
+		actorBorder: "#1e3a5f",
+		noteBkgColor: "#f4f1ea",
+		noteTextColor: "#1e293b",
+	},
+});
+</script>
+</body>
+</html>

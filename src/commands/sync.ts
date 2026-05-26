@@ -1,5 +1,5 @@
 import { execFile as execFileCallback } from "node:child_process";
-import { existsSync, readFileSync, realpathSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -8,6 +8,20 @@ import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-c
 
 const execFile = promisify(execFileCallback);
 const DEFAULT_TIMEOUT_MS = 120_000;
+const CONFIG_REPO_NAME = "sumocode";
+const CONFIG_REPO_URL = "git@github.com:dhruvkelawala/sumocode-config.git";
+const MANAGED_CONFIG_ITEMS = [
+	"APPEND_SYSTEM.md",
+	"settings.json",
+	"mcp.json",
+	"models.json",
+	"sumocode.json",
+	"xl0-pi-lovely-web.json",
+	"extensions",
+	"themes",
+	"prompts",
+	"skills",
+] as const;
 
 export interface SyncStepResult {
 	readonly label: string;
@@ -22,7 +36,7 @@ export interface SumoSyncDeps {
 	readonly moduleUrl?: string;
 	readonly exists?: (path: string) => boolean;
 	readonly readFile?: (path: string, encoding: BufferEncoding) => string;
-	readonly realpath?: (path: string) => string;
+	readonly linkConfig?: (configRepo: string, agentDir: string) => SyncStepResult;
 	readonly exec?: (file: string, args: readonly string[], options: { cwd?: string; timeout: number }) => Promise<{ stdout: string; stderr: string }>;
 }
 
@@ -35,25 +49,24 @@ function packageRootFromModule(moduleUrl: string): string {
 	return resolve(dirname(moduleUrlToPath(moduleUrl)), "..", "..");
 }
 
+/** Resolve the private config repo that backs SumoCode's ~/.pi/agent symlinks. */
 function resolveConfigRepo(deps: SumoSyncDeps): string {
 	const env = deps.env ?? process.env;
-	const homeDir = deps.homeDir ?? homedir();
-	const exists = deps.exists ?? existsSync;
-	const realpath = deps.realpath ?? realpathSync;
 	if (env.SUMOCODE_CONFIG_DIR) return resolve(env.SUMOCODE_CONFIG_DIR);
 
-	const linkedSettings = join(homeDir, ".pi", "agent", "settings.json");
-	if (exists(linkedSettings)) {
-		try {
-			const resolvedSettings = realpath(linkedSettings);
-			return resolve(dirname(resolvedSettings), "..");
-		} catch {
-			// Fall through to conventional locations.
-		}
-	}
+	const homeDir = deps.homeDir ?? homedir();
+	return join(homeDir, ".config", CONFIG_REPO_NAME);
+}
 
-	const candidates = [join(homeDir, "sumocode-config"), join(homeDir, "development", "sumocode-config")];
-	return candidates.find((candidate) => exists(join(candidate, "bootstrap.sh"))) ?? candidates[0];
+function resolvePiAgentDir(deps: SumoSyncDeps): string {
+	const homeDir = deps.homeDir ?? homedir();
+	return join(homeDir, ".pi", "agent");
+}
+
+/** Check if a directory is inside a git repo */
+function isGitRepo(dir: string, deps: SumoSyncDeps): boolean {
+	const exists = deps.exists ?? existsSync;
+	return exists(join(dir, ".git"));
 }
 
 function packageNameAt(dir: string, deps: SumoSyncDeps): string | undefined {
@@ -88,6 +101,78 @@ function resolveSumoCodeRepo(deps: SumoSyncDeps): string {
 	return packageRootFromModule(deps.moduleUrl ?? import.meta.url);
 }
 
+function pathExists(path: string): boolean {
+	try {
+		lstatSync(path);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+function resolvesToSamePath(left: string, right: string): boolean {
+	try {
+		return realpathSync(left) === realpathSync(right);
+	} catch {
+		return false;
+	}
+}
+
+function ensureConfigSymlinks(configRepo: string, agentDir: string): SyncStepResult {
+	mkdirSync(agentDir, { recursive: true });
+	let backupDir: string | undefined;
+	let linked = 0;
+	let backedUp = 0;
+
+	for (const item of MANAGED_CONFIG_ITEMS) {
+		const source = join(configRepo, item);
+		if (!pathExists(source)) continue;
+
+		const target = join(agentDir, item);
+		if (pathExists(target)) {
+			if (resolvesToSamePath(source, target)) {
+				linked += 1;
+				continue;
+			}
+			const targetStat = lstatSync(target);
+			if (targetStat.isSymbolicLink()) {
+				rmSync(target);
+			} else {
+				backupDir ??= join(
+					agentDir,
+					"pre-sumocode-backup",
+					`sync-${new Date().toISOString().replace(/[:.]/g, "-")}`,
+				);
+				mkdirSync(backupDir, { recursive: true });
+				renameSync(target, join(backupDir, item));
+				backedUp += 1;
+			}
+		}
+
+		symlinkSync(source, target);
+		linked += 1;
+	}
+
+	return {
+		label: "config symlinks",
+		ok: true,
+		output: `Linked ${linked} config item(s) into ${agentDir}${backedUp > 0 ? `; backed up ${backedUp} existing item(s) to ${backupDir}` : ""}`,
+	};
+}
+
+function runConfigLinkStep(configRepo: string, agentDir: string, deps: SumoSyncDeps): SyncStepResult {
+	const linkConfig = deps.linkConfig ?? ensureConfigSymlinks;
+	try {
+		return linkConfig(configRepo, agentDir);
+	} catch (error) {
+		return {
+			label: "config symlinks",
+			ok: false,
+			output: error instanceof Error ? error.message : String(error),
+		};
+	}
+}
+
 async function runStep(
 	label: string,
 	file: string,
@@ -109,40 +194,45 @@ async function runStep(
 	}
 }
 
+function notifyFailure(command: "sync" | "bootstrap", ctx: ExtensionCommandContext, step: SyncStepResult): void {
+	ctx.ui.notify(`/sumo:${command} failed at ${step.label}`, "warning");
+}
+
 export async function executeSumoSync(ctx: ExtensionCommandContext, deps: SumoSyncDeps = {}): Promise<readonly SyncStepResult[]> {
 	const configRepo = resolveConfigRepo(deps);
+	const agentDir = resolvePiAgentDir(deps);
 	const sumocodeRepo = resolveSumoCodeRepo(deps);
 	const steps: SyncStepResult[] = [];
 
-	ctx.ui.notify("syncing SumoCode config + extensions…", "info");
+	ctx.ui.notify("syncing SumoCode config + source…", "info");
 
-	const plannedSteps = [
-		{ label: "sumocode-config git pull", file: "git", args: ["pull", "--ff-only"] as const, cwd: configRepo },
-		{ label: "sumocode source git pull", file: "git", args: ["pull", "--ff-only"] as const, cwd: sumocodeRepo },
-		{
-			label: "sumocode-config bootstrap",
-			file: join(configRepo, "bootstrap.sh"),
-			args: [] as const,
-			cwd: configRepo,
-			timeout: 240_000,
-		},
-	];
-
-	for (const step of plannedSteps) {
-		const result = await runStep(step.label, step.file, step.args, { cwd: step.cwd, timeout: step.timeout }, deps);
-		steps.push(result);
-		if (!result.ok) break;
+	if (isGitRepo(configRepo, deps)) {
+		steps.push(await runStep("config repo git pull", "git", ["pull", "--ff-only"], { cwd: configRepo }, deps));
+	} else {
+		steps.push({
+			label: "config repo git pull",
+			ok: false,
+			output: `No git repo at ${configRepo}. Run /sumo:bootstrap first.`,
+		});
+	}
+	if (!steps[steps.length - 1]!.ok) {
+		notifyFailure("sync", ctx, steps[steps.length - 1]!);
+		return steps;
 	}
 
-	const failed = steps.filter((step) => !step.ok);
-	if (failed.length > 0) {
-		ctx.ui.notify(`/sumo:sync failed at ${failed[0]?.label}; inspect terminal output`, "warning");
-		process.stdout.write(formatSyncResults(steps));
+	steps.push(runConfigLinkStep(configRepo, agentDir, deps));
+	if (!steps[steps.length - 1]!.ok) {
+		notifyFailure("sync", ctx, steps[steps.length - 1]!);
+		return steps;
+	}
+
+	steps.push(await runStep("sumocode source git pull", "git", ["pull", "--ff-only"], { cwd: sumocodeRepo }, deps));
+	if (!steps[steps.length - 1]!.ok) {
+		notifyFailure("sync", ctx, steps[steps.length - 1]!);
 		return steps;
 	}
 
 	ctx.ui.notify("SumoCode sync complete — run /sumo:reload if source changed", "info");
-	process.stdout.write(formatSyncResults(steps));
 	return steps;
 }
 
@@ -156,11 +246,66 @@ export function formatSyncResults(results: readonly SyncStepResult[]): string {
 		.join("\n\n")}\n`;
 }
 
+export async function executeSumoBootstrap(ctx: ExtensionCommandContext, deps: SumoSyncDeps = {}): Promise<readonly SyncStepResult[]> {
+	const configRepo = resolveConfigRepo(deps);
+	const agentDir = resolvePiAgentDir(deps);
+	const steps: SyncStepResult[] = [];
+
+	ctx.ui.notify("bootstrapping SumoCode on this machine…", "info");
+
+	if (!isGitRepo(configRepo, deps)) {
+		const exists = deps.exists ?? existsSync;
+		if (exists(configRepo)) {
+			steps.push({
+				label: "clone sumocode-config",
+				ok: false,
+				output: `${configRepo} already exists but is not a git repo. Move it aside or set SUMOCODE_CONFIG_DIR to a valid sumocode-config checkout.`,
+			});
+		} else {
+			steps.push(await runStep("clone sumocode-config", "git", ["clone", CONFIG_REPO_URL, configRepo], {}, deps));
+		}
+	} else {
+		steps.push({ label: "clone sumocode-config", ok: true, output: `Already exists at ${configRepo}` });
+	}
+	if (!steps[steps.length - 1]!.ok) {
+		notifyFailure("bootstrap", ctx, steps[steps.length - 1]!);
+		return steps;
+	}
+
+	steps.push(await runStep("pull latest config", "git", ["pull", "--ff-only"], { cwd: configRepo }, deps));
+	if (!steps[steps.length - 1]!.ok) {
+		notifyFailure("bootstrap", ctx, steps[steps.length - 1]!);
+		return steps;
+	}
+
+	steps.push(runConfigLinkStep(configRepo, agentDir, deps));
+	if (!steps[steps.length - 1]!.ok) {
+		notifyFailure("bootstrap", ctx, steps[steps.length - 1]!);
+		return steps;
+	}
+
+	steps.push({
+		label: "next step",
+		ok: true,
+		output: "Restart SumoCode. Keep PI_CODING_AGENT_DIR unset so Pi sessions and package caches remain under ~/.pi/agent.",
+	});
+
+	ctx.ui.notify("SumoCode bootstrap complete — restart; keep PI_CODING_AGENT_DIR unset", "info");
+	return steps;
+}
+
 export function registerSumoSyncCommand(pi: ExtensionAPI, deps: SumoSyncDeps = {}): void {
 	pi.registerCommand("sumo:sync", {
-		description: "Pull SumoCode config/source, hydrate extensions, and update Pi packages",
+		description: "Pull SumoCode config/source and refresh ~/.pi/agent symlinks",
 		handler: async (_args: string, ctx: ExtensionCommandContext) => {
 			await executeSumoSync(ctx, deps);
+		},
+	});
+
+	pi.registerCommand("sumo:bootstrap", {
+		description: "First-time SumoCode setup: clone config repo and link it into ~/.pi/agent",
+		handler: async (_args: string, ctx: ExtensionCommandContext) => {
+			await executeSumoBootstrap(ctx, deps);
 		},
 	});
 }

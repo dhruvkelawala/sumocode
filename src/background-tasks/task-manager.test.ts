@@ -81,6 +81,15 @@ describe("BackgroundTaskManager", () => {
 		expect(pi.sendUserMessage).toHaveBeenCalled();
 	});
 
+	it("propagates SUMOCODE_BG_CHILD=1 to invisible task children", () => {
+		spawnMock.mockReturnValue(mockChild(0));
+		const manager = new BackgroundTaskManager(buildPiStub() as never);
+		manager.spawnTask({ command: "echo guard", cwd: "/tmp" });
+
+		const spawnOptions = spawnMock.mock.calls[0]?.[2] as { env?: NodeJS.ProcessEnv } | undefined;
+		expect(spawnOptions?.env?.SUMOCODE_BG_CHILD).toBe("1");
+	});
+
 	it("writes meta.json on spawn and again on completion", async () => {
 		spawnMock.mockReturnValue(mockChild(0));
 		const pi = buildPiStub();

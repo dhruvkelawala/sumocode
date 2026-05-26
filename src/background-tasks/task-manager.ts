@@ -170,7 +170,10 @@ export class BackgroundTaskManager {
 			cwd,
 			detached: process.platform !== "win32",
 			stdio: ["ignore", "pipe", "pipe"],
-			env: process.env,
+			// Match the visible shell wrapper: forward the fork-bomb guard into the
+			// child env so any nested pi/sumocode invocation bails on the
+			// helper-subprocess check in extension.ts.
+			env: { ...process.env, SUMOCODE_BG_CHILD: "1" },
 		});
 
 		task.pid = child.pid ?? undefined;

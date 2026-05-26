@@ -216,6 +216,13 @@ export class BackgroundTaskManager {
 				}),
 			);
 			chmodSync(paths.scriptFile, 0o700);
+		} else if (task.runner === "sumocode") {
+			// The cmux respawn-pane command embeds the prompt-file path, NOT the
+			// prompt itself — keeps the command short so it doesn't flash a wall
+			// of text in the pane before Pi takes over the screen. `sumocode task
+			// --prompt-file <path>` reads this file and forwards its contents as
+			// Pi's kickoff [messages...] positional.
+			writeFileSync(paths.promptFile, task.command);
 		}
 
 		const respawnCommand = buildVisibleTaskCommand({

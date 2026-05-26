@@ -15,6 +15,7 @@ export interface VisibleTaskPaths {
 	markerFile: string;
 	scriptFile: string;
 	metaFile: string;
+	promptFile: string;
 }
 
 export interface VisibleTaskCommandOptions {
@@ -34,6 +35,7 @@ export function buildVisibleTaskPaths(taskId: string, startedAtMs: number, baseD
 		markerFile: join(dir, "started.marker"),
 		scriptFile: join(dir, "run.sh"),
 		metaFile: join(dir, "meta.json"),
+		promptFile: join(dir, "prompt.txt"),
 	};
 }
 
@@ -78,29 +80,38 @@ export function buildVisibleTaskScript(options: VisibleTaskCommandOptions): stri
 /**
  * Build the launch command for a visible pi/sumocode agent pane.
  *
- * The prompt is passed as a positional argument that Pi treats as the
- * kickoff user message (see `pi --help`: `[messages...]`). For the sumocode
- * runner we use the dedicated `task` subcommand so the wrapper sets
- * `SUMOCODE_TASK_MODE=1` — that tells the extension to skip the splash, so
- * the kickoff prompt isn't intercepted/queued into a steering buffer.
+ * For the sumocode runner, the prompt is passed via `--prompt-file <abs path>`
+ * so the cmux respawn-pane command stays short and fixed-length regardless
+ * of prompt size. Without this, a long prompt would briefly echo as a wall
+ * of text in the pane before Pi takes over the screen. The wrapper reads
+ * the file, sets `SUMOCODE_TASK_MODE=1` (so the extension skips splash),
+ * and forwards the contents as Pi's kickoff `[messages...]` positional.
  *
- * The shell escaping below is a single layer (the outer `cmux respawn-pane
- * --command` shell). The child sees one clean argv element with the full
- * prompt, no further re-escaping needed. No `cmux send`, no readiness
- * polling, no cold-boot delay — the agent turn fires the moment Pi loads.
+ * For the pi runner, we keep the inline positional. Pi has no `--prompt-file`
+ * flag of its own, and adding a bash wrapper just to read the file would
+ * obscure the command in another layer. Pi-runner consumers should keep
+ * their prompts compact.
  */
-export function buildVisibleAgentCommand(options: Pick<VisibleTaskCommandOptions, "cwd" | "command" | "runner">): string {
+export function buildVisibleAgentCommand(options: Pick<VisibleTaskCommandOptions, "cwd" | "command" | "runner" | "paths">): string {
 	const runner = options.runner ?? "shell";
 	if (runner !== "pi" && runner !== "sumocode") {
 		throw new Error("visible agent commands require runner=pi or runner=sumocode");
 	}
 
-	const promptArg = shellEscape(options.command);
-	const parts =
-		runner === "sumocode"
-			? ["cd", shellEscape(options.cwd), "&&", "exec", "sumocode", "task", promptArg]
-			: ["cd", shellEscape(options.cwd), "&&", "exec", "pi", promptArg];
-	return parts.join(" ");
+	if (runner === "sumocode") {
+		return [
+			"cd",
+			shellEscape(options.cwd),
+			"&&",
+			"exec",
+			"sumocode",
+			"task",
+			"--prompt-file",
+			shellEscape(options.paths.promptFile),
+		].join(" ");
+	}
+
+	return ["cd", shellEscape(options.cwd), "&&", "exec", "pi", shellEscape(options.command)].join(" ");
 }
 
 /**

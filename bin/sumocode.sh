@@ -49,11 +49,18 @@ COMMANDS
       Summarize a diagnostics JSONL file. Defaults to /tmp/sumocode-manual.jsonl.
 
   task <prompt> [path]
+  task --prompt-file <abs-path> [path]
       Open SumoCode and immediately start an agent turn on <prompt>.
       Skips the splash screen, forwards <prompt> to Pi as the kickoff user
       message, and stays interactive afterwards. Designed for the orchestrator
       bg_task hand-off flow: the spawned cmux pane goes straight into the
       agent loop with no manual typing.
+
+      Use --prompt-file <path> instead of an inline prompt when the prompt is
+      long or contains shell metacharacters — the wrapper reads the file and
+      forwards its contents as the kickoff message. This keeps the cmux
+      respawn-pane command short so it doesn't flash a wall of text in the
+      pane before Pi takes over the screen.
 
       Sets SUMOCODE_TASK_MODE=1 in the launched process so the extension
       knows to skip splash and other onboarding UI.
@@ -82,6 +89,12 @@ OPTIONS
   --no-clear-diag
       Do not delete the diagnostics file at debug startup. By default, debug
       mode starts with a fresh trace.
+
+  --prompt-file <path>
+      Used with 'sumocode task'. Reads the file at <path> and forwards its
+      contents as the kickoff user message. The file must exist when the
+      wrapper runs. Contents are read as a single argument (newlines and
+      shell metacharacters survive intact).
 
   --no-sumo-tui
       Disable the retained SumoTUI runtime for this launch. Equivalent to
@@ -202,6 +215,7 @@ DRY_RUN=0
 COMMAND="run"
 IS_TASK_LAUNCH=0
 DIAG_FILE="${SUMO_TUI_DIAG_FILE:-}"
+PROMPT_FILE=""
 SUMOCODE_ARGS=()
 while [[ $# -gt 0 ]]; do
 	case "$1" in
@@ -228,6 +242,16 @@ while [[ $# -gt 0 ]]; do
 			;;
 		--no-clear-diag)
 			CLEAR_DIAG=0
+			shift
+			;;
+		--prompt-file)
+			[[ $# -ge 2 ]] || usage_error "--prompt-file requires a path."
+			PROMPT_FILE="$2"
+			shift 2
+			;;
+		--prompt-file=*)
+			PROMPT_FILE="${1#--prompt-file=}"
+			[[ -n "${PROMPT_FILE}" ]] || usage_error "--prompt-file requires a path."
 			shift
 			;;
 		--no-sumo-tui)
@@ -271,9 +295,26 @@ fi
 if [[ "${COMMAND}" == "diag" && "${#SUMOCODE_ARGS[@]}" -gt 1 ]]; then
 	usage_error "diag accepts at most one diagnostics file path."
 fi
+if [[ -n "${PROMPT_FILE}" && "${COMMAND}" != "task" ]]; then
+	usage_error "--prompt-file is only valid with the 'task' subcommand."
+fi
 if [[ "${COMMAND}" == "task" ]]; then
+	if [[ -n "${PROMPT_FILE}" ]]; then
+		if [[ ! -f "${PROMPT_FILE}" ]]; then
+			usage_error "--prompt-file path does not exist: ${PROMPT_FILE}"
+		fi
+		# Read the file contents as a single positional argument. `$(<file)`
+		# strips a trailing newline, which is what we want — Pi treats the
+		# positional as one message.
+		prompt_text="$(<"${PROMPT_FILE}")"
+		if [[ "${#SUMOCODE_ARGS[@]}" -eq 0 ]]; then
+			SUMOCODE_ARGS=("${prompt_text}")
+		else
+			SUMOCODE_ARGS=("${prompt_text}" "${SUMOCODE_ARGS[@]}")
+		fi
+	fi
 	if [[ "${#SUMOCODE_ARGS[@]}" -eq 0 ]]; then
-		usage_error "task requires a prompt argument. Example: sumocode task \"review the diff\"."
+		usage_error "task requires a prompt argument or --prompt-file <path>. Example: sumocode task \"review the diff\"."
 	fi
 	IS_TASK_LAUNCH=1
 	export SUMOCODE_TASK_MODE=1

@@ -203,7 +203,7 @@ describe("BackgroundTaskManager", () => {
 		});
 	});
 
-	it("launches visible sumocode through the task subcommand with prompt baked in", async () => {
+	it("writes prompt.txt and launches sumocode with --prompt-file so the cmux command stays short", async () => {
 		process.env.CMUX_SURFACE_ID = "surface:1";
 		const pi = buildPiStub();
 		const cmuxSplit = await import("../commands/cmux-split.js");
@@ -213,9 +213,11 @@ describe("BackgroundTaskManager", () => {
 			surfaceRef: "surface:2",
 		});
 
+		const longPrompt = "A long delegation prompt with 'quotes', colons:, $vars, `backticks`,\nand multi-line content that would otherwise echo as a wall of text in the cmux pane.";
+
 		const manager = new BackgroundTaskManager(pi as never);
 		const task = manager.spawnTask({
-			command: "Review the diff: with colons & 'quotes'",
+			command: longPrompt,
 			cwd: "/repo with spaces",
 			visible: true,
 			runner: "sumocode",
@@ -226,16 +228,25 @@ describe("BackgroundTaskManager", () => {
 			expect(task.cmux).toEqual({ workspaceRef: "workspace:1", surfaceRef: "surface:2" });
 		});
 
-		expect(openSplit).toHaveBeenCalledWith(
-			pi,
-			"right",
-			"cd '/repo with spaces' && exec sumocode task 'Review the diff: with colons & '\\''quotes'\\'''",
-		);
+		// The cmux respawn command embeds the prompt-file PATH, never the prompt text.
+		const respawnArg = openSplit.mock.calls[0]?.[2] as string;
+		expect(respawnArg).toContain("cd '/repo with spaces' && exec sumocode task --prompt-file '");
+		expect(respawnArg).toContain("/prompt.txt'");
+		expect(respawnArg).not.toContain("quotes");
+		expect(respawnArg).not.toContain("backticks");
+		expect(respawnArg).not.toContain("wall of text");
+
+		// prompt.txt must contain the full prompt as a single file.
 		expect(task.exitFile).toBeDefined();
+		const promptFile = task.exitFile!.replace("exit.code", "prompt.txt");
+		expect(existsSync(promptFile)).toBe(true);
+		expect(readFileSync(promptFile, "utf8")).toBe(longPrompt);
+
+		// No run.sh for agent tasks.
 		expect(existsSync(task.exitFile!.replace("exit.code", "run.sh"))).toBe(false);
 
-		// No cmux send / send-key hacks: the prompt is the kickoff message, baked
-		// into the launch command itself. The agent turn fires the moment Pi loads.
+		// No cmux send / send-key hacks: the prompt is read from the file by
+		// the wrapper and becomes Pi's kickoff message.
 		const sendCall = pi.exec.mock.calls.find(
 			(call) => call[0] === "cmux" && Array.isArray(call[1]) && (call[1] as string[])[0] === "send",
 		);

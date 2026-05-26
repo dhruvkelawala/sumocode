@@ -35,7 +35,7 @@ export function shellEscape(value: string): string {
 }
 
 /**
- * Returns a single sh -lc command suitable for cmux respawn-pane --command.
+ * Returns a single bash -lc command suitable for cmux respawn-pane --command.
  *
  * Writes:
  * - full combined stdout/stderr to logFile via tee
@@ -48,11 +48,11 @@ export function buildVisibleTaskCommand(options: VisibleTaskCommandOptions): str
 	const dir = dirname(logFile);
 
 	const inner = [
+		`set -o pipefail`,
 		`mkdir -p ${shellEscape(dir)}`,
 		`touch ${shellEscape(markerFile)}`,
 		`echo "[sumocode-bg] task=${taskId} started" | tee -a ${shellEscape(logFile)}`,
 		`(`,
-		`  set -o pipefail`,
 		`  ${command}`,
 		`) 2>&1 | tee -a ${shellEscape(logFile)}`,
 		`code=$?`,
@@ -61,7 +61,7 @@ export function buildVisibleTaskCommand(options: VisibleTaskCommandOptions): str
 		`exit "$code"`,
 	].join("\n");
 
-	return ["cd", shellEscape(cwd), "&&", "exec", "sh", "-lc", shellEscape(inner)].join(" ");
+	return ["cd", shellEscape(cwd), "&&", "exec", "bash", "-lc", shellEscape(inner)].join(" ");
 }
 
 export function readExitCodeFromFile(contents: string): number | null {

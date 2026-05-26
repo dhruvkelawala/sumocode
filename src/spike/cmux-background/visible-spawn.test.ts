@@ -24,6 +24,8 @@ describe("visible-spawn spike", () => {
 		});
 
 		expect(cmd).toContain("cd '/Volumes/SumoDeus NVMe/code/sumocode'");
+		expect(cmd).toContain("exec bash -lc");
+		expect(cmd).toContain("set -o pipefail");
 		expect(cmd).toContain("pnpm test");
 		expect(cmd).toContain("tee -a");
 		expect(cmd).toContain("exit.code");

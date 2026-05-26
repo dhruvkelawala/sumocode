@@ -173,14 +173,6 @@ export async function waitForNewCmuxSurface(
 			}
 		}
 
-		for (const pane of panesResult.panes) {
-			for (const surfaceRef of pane.surface_refs ?? []) {
-				if (!previousSurfaceRefs.has(surfaceRef)) {
-					return surfaceRef;
-				}
-			}
-		}
-
 		await delay(delayMs);
 	}
 

@@ -85,6 +85,21 @@ describe("cmux-adapter spike", () => {
 		expect(surface).toBe("surface:2");
 	});
 
+	it("waitForNewCmuxSurface ignores new surfaces on existing panes", async () => {
+		const before: CmuxPaneInfo[] = [{ ref: "pane:1", surface_refs: ["surface:1"] }];
+		const after: CmuxPaneInfo[] = [{ ref: "pane:1", surface_refs: ["surface:1", "surface:other"] }];
+
+		const execCmux: CmuxExecFn = vi.fn(async (args) => {
+			if (args[0] === "--json" && args[1] === "list-panes") {
+				return { ok: true, stdout: JSON.stringify({ panes: after }), stderr: "" };
+			}
+			throw new Error(`unexpected: ${args.join(" ")}`);
+		});
+
+		const surface = await waitForNewCmuxSurface(execCmux, "workspace:1", before, 1, 0);
+		expect(surface).toBeUndefined();
+	});
+
 	it("openVisibleTaskInSplit runs new-split then respawn-pane", async () => {
 		const calls: string[] = [];
 		const execCmux: CmuxExecFn = vi.fn(async (args) => {

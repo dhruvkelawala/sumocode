@@ -28,18 +28,18 @@
     ]
   },
   "peerDependencies": {
-    "@earendil-works/pi-ai": "~0.75.0",
-    "@earendil-works/pi-coding-agent": "~0.75.0",
-    "@earendil-works/pi-tui": "~0.75.0",
+    "@earendil-works/pi-ai": "~0.78.0",
+    "@earendil-works/pi-coding-agent": "~0.78.0",
+    "@earendil-works/pi-tui": "~0.78.0",
     "typebox": "*"
   },
   "engines": {
     "node": ">=22.19.0"
   },
   "devDependencies": {
-    "@earendil-works/pi-ai": "0.75.3",
-    "@earendil-works/pi-coding-agent": "0.75.3",
-    "@earendil-works/pi-tui": "0.75.3",
+    "@earendil-works/pi-ai": "0.78.0",
+    "@earendil-works/pi-coding-agent": "0.78.0",
+    "@earendil-works/pi-tui": "0.78.0",
     "@types/node": "^25.6.0",
     "@xterm/headless": "^6.0.0",
     "node-pty": "^1.1.0",
@@ -80,7 +80,7 @@
       "node-pty"
     ],
     "patchedDependencies": {
-      "@earendil-works/pi-coding-agent@0.75.3": "patches/@earendil-works__pi-coding-agent@0.75.3.patch"
+      "@earendil-works/pi-coding-agent@0.78.0": "patches/@earendil-works__pi-coding-agent@0.78.0.patch"
     }
   }
 }

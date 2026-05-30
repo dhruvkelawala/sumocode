@@ -98,9 +98,9 @@ function normalizeNotificationLevel(level: "info" | "warning" | "error" | undefi
  * compatibility layer for extension UI surfaces that are not yet permanent
  * chrome siblings.
  *
- * Source: Pi 0.75.3's interactive mode exposes this surface from
+ * Source: Pi 0.78.0's interactive mode exposes this surface from
  * `createExtensionUIContext()` at
- * `node_modules/.pnpm/@earendil-works+pi-coding-agent@0.75.3.../dist/modes/interactive/interactive-mode.js:1522-1557`.
+ * `node_modules/.pnpm/@earendil-works+pi-coding-agent@0.78.0.../dist/modes/interactive/interactive-mode.js`.
  * Dialog/editor/custom behaviours mirror the upstream editor-container and
  * overlay paths at `interactive-mode.js:1584-1774`.
  */

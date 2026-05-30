@@ -1,8 +1,8 @@
 diff --git a/dist/main.js b/dist/main.js
-index f0669ad..c166c33 100644
+index 3f0b5e3..34f487f 100644
 --- a/dist/main.js
 +++ b/dist/main.js
-@@ -533,14 +533,18 @@ export async function main(args, options) {
+@@ -587,14 +587,18 @@ export async function main(args, options) {
          await runRpcMode(runtime);
      }
      else if (appMode === "interactive") {
@@ -23,7 +23,7 @@ index f0669ad..c166c33 100644
          if (startupBenchmark) {
              await interactiveMode.init();
              time("interactiveMode.init");
-@@ -574,4 +578,9 @@ export async function main(args, options) {
+@@ -628,4 +632,9 @@ export async function main(args, options) {
          return;
      }
  }

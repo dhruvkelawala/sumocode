@@ -99,9 +99,12 @@ export function buildVisibleTaskScript(options: VisibleTaskCommandOptions): stri
  *      the `task` subcommand. The orchestrator reads response.md to harvest
  *      the delegated work's output.
  *   2. `cd '<cwd>'` so the child opens in the right project.
- *   3. `exec sumocode task [--model X] [--thinking Y] --prompt-file '<path>'`.
+ *   3. `exec sumocode task --model X --thinking Y --prompt-file '<path>'`.
  *      `exec` ensures the wrapper shell is replaced by the sumocode process;
- *      when the child exits the cmux pane closes.
+ *      when the child exits the cmux pane closes. If the tool caller omits
+ *      model/thinking, BackgroundTaskManager resolves defaults first:
+ *      `openai-codex/gpt-5.5` with `low` thinking, configurable via
+ *      `SUMOCODE_BG_AGENT_MODEL` and `SUMOCODE_BG_AGENT_THINKING`.
  *
  * The prompt is passed via `--prompt-file <abs path>` so the cmux respawn
  * command stays short and fixed-length regardless of prompt size. Without

@@ -21,6 +21,7 @@ import {
 import {
 	type BackgroundTask,
 	type BackgroundTaskSnapshot,
+	type BackgroundTaskThinking,
 	type SpawnBackgroundTaskOptions,
 	toBackgroundTaskSnapshot,
 } from "./task-types.js";
@@ -36,6 +37,18 @@ import {
 const POLL_INTERVAL_MS = 500;
 const RESPONSE_POLL_INTERVAL_MS = 750;
 const DEFAULT_VISIBLE_DIRECTION: CmuxSplitDirection = "right";
+export const DEFAULT_SUMOCODE_AGENT_MODEL = "openai-codex/gpt-5.5";
+export const DEFAULT_SUMOCODE_AGENT_THINKING: BackgroundTaskThinking = "low";
+const AGENT_MODEL_ENV = "SUMOCODE_BG_AGENT_MODEL";
+const AGENT_THINKING_ENV = "SUMOCODE_BG_AGENT_THINKING";
+const THINKING_LEVELS = new Set<BackgroundTaskThinking>([
+	"off",
+	"minimal",
+	"low",
+	"medium",
+	"high",
+	"xhigh",
+]);
 
 /** Max grace period before stopTask escalates SIGTERM to SIGKILL. */
 const STOP_SIGTERM_GRACE_MS = 5_000;
@@ -72,6 +85,25 @@ function summarizeStatus(task: Pick<BackgroundTask, "status" | "exitCode">): str
 	if (task.status === "stopped") return "stopped";
 	if (task.exitCode === 0) return "completed";
 	return "failed";
+}
+
+function normalizeThinking(value: string | undefined): BackgroundTaskThinking | undefined {
+	if (!value) return undefined;
+	const normalized = value.trim() as BackgroundTaskThinking;
+	return THINKING_LEVELS.has(normalized) ? normalized : undefined;
+}
+
+function resolveAgentModel(runner: BackgroundTask["runner"], model: string | undefined): string | undefined {
+	if (runner !== "sumocode") return model?.trim() || undefined;
+	return model?.trim() || process.env[AGENT_MODEL_ENV]?.trim() || DEFAULT_SUMOCODE_AGENT_MODEL;
+}
+
+function resolveAgentThinking(
+	runner: BackgroundTask["runner"],
+	thinking: BackgroundTaskThinking | undefined,
+): BackgroundTaskThinking | undefined {
+	if (runner !== "sumocode") return thinking;
+	return thinking ?? normalizeThinking(process.env[AGENT_THINKING_ENV]) ?? DEFAULT_SUMOCODE_AGENT_THINKING;
 }
 
 function appendLogLine(logFile: string, line: string): void {
@@ -233,8 +265,8 @@ export class BackgroundTaskManager {
 			diagFile: runner === "shell" ? undefined : paths.diagFile,
 			visible,
 			runner,
-			model: options.model?.trim() || undefined,
-			thinking: options.thinking,
+			model: resolveAgentModel(runner, options.model),
+			thinking: resolveAgentThinking(runner, options.thinking),
 			notifyOnExit: options.notifyOnExit !== false,
 		};
 
@@ -426,12 +458,7 @@ export class BackgroundTaskManager {
 				return;
 			}
 			if (task.responseFile && existsSync(task.responseFile)) {
-				if (task.responseTimer) clearInterval(task.responseTimer);
-				task.responseTimer = undefined;
-				task.status = "completed";
-				task.exitCode = 0;
-				task.updatedAt = Date.now();
-				writeTaskMeta(task);
+				this.finalizeTask(task, 0, "self-exit");
 				return;
 			}
 			if (task.watchdogDeadline && Date.now() > task.watchdogDeadline) {

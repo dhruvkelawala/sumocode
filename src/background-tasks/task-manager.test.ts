@@ -3,7 +3,11 @@ import { appendFileSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFil
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { BackgroundTaskManager } from "./task-manager.js";
+import {
+	BackgroundTaskManager,
+	DEFAULT_SUMOCODE_AGENT_MODEL,
+	DEFAULT_SUMOCODE_AGENT_THINKING,
+} from "./task-manager.js";
 
 const spawnMock = vi.hoisted(() => vi.fn());
 
@@ -88,22 +92,34 @@ function mockLongLivedChild(opts: { unkillable?: boolean; pid?: number } = {}) {
 describe("BackgroundTaskManager", () => {
 	let baseDir: string;
 	let originalCmuxSurface: string | undefined;
+	let originalAgentModel: string | undefined;
+	let originalAgentThinking: string | undefined;
 
 	beforeEach(() => {
 		spawnMock.mockReset();
 		baseDir = mkdtempSync(join(tmpdir(), "sumocode-bg-test-"));
 		originalCmuxSurface = process.env.CMUX_SURFACE_ID;
+		originalAgentModel = process.env.SUMOCODE_BG_AGENT_MODEL;
+		originalAgentThinking = process.env.SUMOCODE_BG_AGENT_THINKING;
 		delete process.env.CMUX_WORKSPACE_ID;
+		delete process.env.SUMOCODE_BG_AGENT_MODEL;
+		delete process.env.SUMOCODE_BG_AGENT_THINKING;
 	});
+
+	function restoreEnv(name: "CMUX_SURFACE_ID" | "SUMOCODE_BG_AGENT_MODEL" | "SUMOCODE_BG_AGENT_THINKING", value: string | undefined): void {
+		if (value === undefined) {
+			delete process.env[name];
+		} else {
+			process.env[name] = value;
+		}
+	}
 
 	afterEach(() => {
 		vi.restoreAllMocks();
 		rmSync(baseDir, { recursive: true, force: true });
-		if (originalCmuxSurface === undefined) {
-			delete process.env.CMUX_SURFACE_ID;
-		} else {
-			process.env.CMUX_SURFACE_ID = originalCmuxSurface;
-		}
+		restoreEnv("CMUX_SURFACE_ID", originalCmuxSurface);
+		restoreEnv("SUMOCODE_BG_AGENT_MODEL", originalAgentModel);
+		restoreEnv("SUMOCODE_BG_AGENT_THINKING", originalAgentThinking);
 	});
 
 	it("spawns invisible tasks via shell-redirect to logFile (detached survives parent teardown)", async () => {
@@ -288,8 +304,10 @@ describe("BackgroundTaskManager", () => {
 		expect(respawnArg).toContain("cd '/repo with spaces' && ");
 		expect(respawnArg).toContain("SUMOCODE_TASK_RESPONSE_FILE=");
 		expect(respawnArg).toContain("SUMOCODE_TASK_DIAG_FILE=");
-		expect(respawnArg).toContain("exec sumocode task --prompt-file '");
+		expect(respawnArg).toContain(`exec sumocode task --model '${DEFAULT_SUMOCODE_AGENT_MODEL}' --thinking '${DEFAULT_SUMOCODE_AGENT_THINKING}' --prompt-file '`);
 		expect(respawnArg).toContain("/prompt.txt'");
+		expect(task.model).toBe(DEFAULT_SUMOCODE_AGENT_MODEL);
+		expect(task.thinking).toBe(DEFAULT_SUMOCODE_AGENT_THINKING);
 		expect(respawnArg).not.toContain("quotes");
 		expect(respawnArg).not.toContain("backticks");
 		expect(respawnArg).not.toContain("wall of text");
@@ -314,6 +332,38 @@ describe("BackgroundTaskManager", () => {
 		expect(task.responseFile).toBe(task.exitFile!.replace("exit.code", "response.md"));
 		expect(task.diagFile).toBe(task.exitFile!.replace("exit.code", "diag.jsonl"));
 		expect(task.promptFile).toBe(promptFile);
+	});
+
+	it("uses environment-configurable model and thinking defaults for sumocode agents", async () => {
+		process.env.CMUX_SURFACE_ID = "surface:1";
+		process.env.SUMOCODE_BG_AGENT_MODEL = "anthropic/claude-sonnet-4-5";
+		process.env.SUMOCODE_BG_AGENT_THINKING = "medium";
+		const pi = buildPiStub();
+		const cmuxSplit = await import("../commands/cmux-split.js");
+		const openSplit = vi.spyOn(cmuxSplit, "openCommandInNewSplitWithRefs").mockResolvedValue({
+			ok: true,
+			workspaceRef: "workspace:1",
+			surfaceRef: "surface:2",
+		});
+
+		const manager = new BackgroundTaskManager(pi as never);
+		const task = manager.spawnTask({
+			command: "review",
+			cwd: "/repo",
+			visible: true,
+			runner: "sumocode",
+			notifyOnExit: false,
+		});
+
+		await vi.waitFor(() => {
+			expect(task.cmux).toBeDefined();
+		});
+
+		const respawnArg = openSplit.mock.calls[0]?.[2] as string;
+		expect(respawnArg).toContain("--model 'anthropic/claude-sonnet-4-5'");
+		expect(respawnArg).toContain("--thinking 'medium'");
+		expect(task.model).toBe("anthropic/claude-sonnet-4-5");
+		expect(task.thinking).toBe("medium");
 	});
 
 	it("forwards model and thinking flags into the cmux respawn command", async () => {
@@ -384,6 +434,54 @@ describe("BackgroundTaskManager", () => {
 		const meta = JSON.parse(readFileSync(task.metaFile!, "utf8"));
 		expect(meta.status).toBe("completed");
 		expect(meta.responseFile).toBe(task.responseFile);
+	});
+
+	it("wakes the orchestrator exactly once when an agent response is harvested", async () => {
+		vi.useFakeTimers();
+		try {
+			process.env.CMUX_SURFACE_ID = "surface:1";
+			const pi = buildPiStub();
+			const cmuxSplit = await import("../commands/cmux-split.js");
+			vi.spyOn(cmuxSplit, "openCommandInNewSplitWithRefs").mockResolvedValue({
+				ok: true,
+				workspaceRef: "workspace:1",
+				surfaceRef: "surface:2",
+			});
+
+			const manager = new BackgroundTaskManager(pi as never);
+			const task = manager.spawnTask({
+				command: "summarize the diff",
+				cwd: "/repo",
+				visible: true,
+				runner: "sumocode",
+				title: "agent review",
+			});
+
+			await vi.waitFor(() => expect(task.cmux).toBeDefined());
+			writeFileSync(task.responseFile!, "done\n");
+
+			await vi.advanceTimersByTimeAsync(750);
+
+			expect(task.status).toBe("completed");
+			expect(task.exitCode).toBe(0);
+			expect(pi.sendUserMessage).toHaveBeenCalledTimes(1);
+			expect(pi.sendUserMessage).toHaveBeenCalledWith(
+				expect.stringContaining(`background task ${task.id} completed: agent review (cmux surface:2)`),
+				{ deliverAs: "followUp" },
+			);
+			const notifyCall = pi.exec.mock.calls.find(
+				(call) => call[0] === "cmux" && Array.isArray(call[1]) && (call[1] as string[])[0] === "notify",
+			);
+			expect(notifyCall, "expected a cmux notify exec call").toBeDefined();
+
+			// The response watcher is cleared by finalization, so the watchdog cannot
+			// later emit a second completion/failure notification for the same task.
+			await vi.advanceTimersByTimeAsync(11 * 60 * 1000);
+			expect(task.status).toBe("completed");
+			expect(pi.sendUserMessage).toHaveBeenCalledTimes(1);
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it("getTaskHarvest returns response.md for agent runners when ready", async () => {

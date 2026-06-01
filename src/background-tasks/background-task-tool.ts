@@ -1,7 +1,11 @@
 import { existsSync, readFileSync } from "node:fs";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { BackgroundTaskManager } from "./task-manager.js";
+import {
+	BackgroundTaskManager,
+	DEFAULT_SUMOCODE_AGENT_MODEL,
+	DEFAULT_SUMOCODE_AGENT_THINKING,
+} from "./task-manager.js";
 import { type BackgroundTask, type BackgroundTaskThinking, toBackgroundTaskSnapshot } from "./task-types.js";
 
 /**
@@ -60,7 +64,7 @@ export function installBackgroundTasks(pi: ExtensionAPI): BackgroundTaskManager 
 			"",
 			"• SHELL (runner='shell', default) — spawn a managed shell command. Output is tee'd to a log file, exit code is captured, and completion wakes the orchestrator via a follow-up message and cmux notification. Use for builds, tests, deploys, watchers, anything you want to fire-and-forget.",
 			"",
-			"• AGENT (runner='sumocode', visible=true required) — spawn a child SumoCode agent in a new cmux split. The prompt is delivered as the kickoff message, the child opens straight into the agent loop (no splash). Optional model/thinking flags override the child's defaults. The child writes its FINAL assistant message to response.md; the orchestrator reads it via bg_task log. Task transitions to status='completed' as soon as response.md appears. After 10s idle, the pane auto-closes via cmux close-surface.",
+			`• AGENT (runner='sumocode', visible=true required) — spawn a child SumoCode agent in a new cmux split. The prompt is delivered as the kickoff message, the child opens straight into the agent loop (no splash). If model/thinking are omitted, SumoCode uses ${DEFAULT_SUMOCODE_AGENT_MODEL} with ${DEFAULT_SUMOCODE_AGENT_THINKING} thinking (override process-wide with SUMOCODE_BG_AGENT_MODEL / SUMOCODE_BG_AGENT_THINKING). Explicit model/thinking params override those defaults. The child writes its FINAL assistant message to response.md; the orchestrator reads it via bg_task log. Task transitions to status='completed' as soon as response.md appears. After 10s idle, the pane auto-closes via cmux close-surface.`,
 			"",
 			"Actions:",
 			"  spawn  — start a task. Returns task id + paths.",
@@ -74,8 +78,8 @@ export function installBackgroundTasks(pi: ExtensionAPI): BackgroundTaskManager 
 		promptGuidelines: [
 			"Use bg_task when the user wants long-running work to continue while the conversation stays usable.",
 			"For shell commands (build, test, deploy, watchers), use bg_task with runner='shell' (the default) — output is logged and the orchestrator is notified on exit.",
-			"To delegate a prompt to a child SumoCode agent, use bg_task with runner='sumocode' and visible=true. The child opens in a cmux split, runs the prompt, and writes its response back. Read it with bg_task action='log' once status='completed'.",
-			"Pass model and thinking to bg_task when delegating an agent task to override the child's defaults (e.g. model='openai/gpt-4o-mini' thinking='low' for a cheap quick task, or model='anthropic/claude-opus-4-6' thinking='xhigh' for deep work).",
+			`To delegate a prompt to a child SumoCode agent, use bg_task with runner='sumocode' and visible=true. If the user does not specify a model, omit model/thinking and let the child default to ${DEFAULT_SUMOCODE_AGENT_MODEL} with ${DEFAULT_SUMOCODE_AGENT_THINKING} thinking. The child opens in a cmux split, runs the prompt, and writes its response back. Read it with bg_task action='log' once status='completed'.`,
+			`Pass model and thinking to bg_task only when the user explicitly wants to override the agent defaults (${DEFAULT_SUMOCODE_AGENT_MODEL}, thinking=${DEFAULT_SUMOCODE_AGENT_THINKING}); process-wide defaults can be set with SUMOCODE_BG_AGENT_MODEL and SUMOCODE_BG_AGENT_THINKING.`,
 			"To read a delegated agent's response, call bg_task with action='log' and id='bg-N'. If the response isn't ready yet, the result will indicate 'still working' — poll again. List with bg_task action='list' to see which tasks have status='completed'.",
 			"Use bg_task action='stop' to cancel a task. For agent panes this closes the cmux surface, preserving any response that was already written.",
 		],
@@ -113,13 +117,13 @@ export function installBackgroundTasks(pi: ExtensionAPI): BackgroundTaskManager 
 			model: Type.Optional(
 				Type.String({
 					description:
-						"Pi model pattern for runner='sumocode'. Examples: 'openai/gpt-4o-mini', 'anthropic/claude-sonnet-4-5', 'cursor/composer-2.5'. Forwarded as --model to the child. Ignored for runner='shell'.",
+						`Pi model pattern for runner='sumocode'. Defaults to ${DEFAULT_SUMOCODE_AGENT_MODEL} when omitted (or SUMOCODE_BG_AGENT_MODEL if set). Forwarded as --model to the child. Ignored for runner='shell'.`,
 				}),
 			),
 			thinking: Type.Optional(
 				StringEnum(["off", "minimal", "low", "medium", "high", "xhigh"] as const, {
 					description:
-						"Pi thinking level for runner='sumocode'. Forwarded as --thinking to the child. Ignored for runner='shell'.",
+						`Pi thinking level for runner='sumocode'. Defaults to ${DEFAULT_SUMOCODE_AGENT_THINKING} when omitted (or SUMOCODE_BG_AGENT_THINKING if set). Forwarded as --thinking to the child. Ignored for runner='shell'.`,
 				}),
 			),
 			direction: Type.Optional(
@@ -133,7 +137,7 @@ export function installBackgroundTasks(pi: ExtensionAPI): BackgroundTaskManager 
 			notifyOnExit: Type.Optional(
 				Type.Boolean({
 					description:
-						"For runner='shell': wake the orchestrator with a follow-up message + cmux notification on exit. Defaults to true. Has no effect for agent runners (they always set status='completed' when response.md is harvested).",
+						"Wake the orchestrator with a follow-up message + cmux notification when the task reaches a terminal state. Defaults to true. For agent runners, this fires when response.md is harvested or the watchdog fails.",
 				}),
 			),
 		}),

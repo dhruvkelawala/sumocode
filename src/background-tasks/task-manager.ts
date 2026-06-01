@@ -1,9 +1,10 @@
-import { type ChildProcess, spawn } from "node:child_process";
+import { execFileSync, type ChildProcess, spawn } from "node:child_process";
 import {
 	chmodSync,
 	closeSync,
 	existsSync,
 	mkdirSync,
+	readdirSync,
 	openSync,
 	readFileSync,
 	readSync,
@@ -11,7 +12,7 @@ import {
 	unlinkSync,
 	writeFileSync,
 } from "node:fs";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
 	isInCmux,
@@ -19,6 +20,7 @@ import {
 	type SplitDirection as CmuxSplitDirection,
 } from "../commands/cmux-split.js";
 import {
+	BACKGROUND_TASK_META_SCHEMA_VERSION,
 	type BackgroundTask,
 	type BackgroundTaskSnapshot,
 	type BackgroundTaskThinking,
@@ -177,19 +179,186 @@ function writeTaskMeta(task: BackgroundTask): void {
 	}
 }
 
+function getTaskRootDir(): string {
+	return join(process.env.TMPDIR ?? "/tmp", "sumocode-bg");
+}
+
+function generateTaskId(): string {
+	return `bg-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function isProcessAlive(pid: number | undefined): boolean {
+	if (pid == null) return false;
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+function getProcessStartTime(pid: number | undefined): string | undefined {
+	if (pid == null) return undefined;
+	try {
+		if (process.platform === "win32") {
+			return execFileSync(
+				"powershell.exe",
+				["-NoProfile", "-Command", `(Get-CimInstance Win32_Process -Filter \"ProcessId=${pid}\").CreationDate`],
+				{ encoding: "utf8" },
+			).trim() || undefined;
+		}
+		return execFileSync("ps", ["-p", String(pid), "-o", "lstart="], { encoding: "utf8" }).trim() || undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+function getProcessIdentityStatus(
+	pid: number | undefined,
+	expectedStartTime: string | undefined,
+): "same" | "different" | "unknown" {
+	if (!isProcessAlive(pid)) return "different";
+	if (!expectedStartTime) return "unknown";
+	const actualStartTime = getProcessStartTime(pid);
+	if (!actualStartTime) return "unknown";
+	return actualStartTime === expectedStartTime ? "same" : "different";
+}
+
+function signalProcessOrGroup(pid: number, signal: NodeJS.Signals): void {
+	let groupKilled = false;
+	if (process.platform !== "win32") {
+		try {
+			process.kill(-pid, signal);
+			groupKilled = true;
+		} catch {
+			groupKilled = false;
+		}
+	}
+	if (!groupKilled) {
+		try {
+			process.kill(pid, signal);
+		} catch {
+			// process already gone
+		}
+	}
+}
+
+function parseRecoveredTask(raw: unknown, metaFile: string): InternalTask | undefined {
+	if (!raw || typeof raw !== "object") return undefined;
+	const snapshot = raw as Partial<BackgroundTaskSnapshot>;
+	if (snapshot.schemaVersion !== BACKGROUND_TASK_META_SCHEMA_VERSION) return undefined;
+	const status = snapshot.status;
+	if (status !== "running" && status !== "completed" && status !== "failed" && status !== "stopped") return undefined;
+	if (
+		typeof snapshot.id !== "string" ||
+		typeof snapshot.command !== "string" ||
+		typeof snapshot.cwd !== "string" ||
+		typeof snapshot.startedAt !== "number" ||
+		typeof snapshot.updatedAt !== "number" ||
+		typeof snapshot.logFile !== "string" ||
+		typeof snapshot.visible !== "boolean" ||
+		(snapshot.runner !== "shell" && snapshot.runner !== "sumocode")
+	) {
+		return undefined;
+	}
+	return {
+		id: snapshot.id,
+		pid: snapshot.pid,
+		command: snapshot.command,
+		cwd: snapshot.cwd,
+		title: snapshot.title,
+		status,
+		startedAt: snapshot.startedAt,
+		updatedAt: snapshot.updatedAt,
+		exitCode: snapshot.exitCode,
+		logFile: snapshot.logFile,
+		exitFile: snapshot.exitFile,
+		metaFile,
+		promptFile: snapshot.promptFile,
+		responseFile: snapshot.responseFile,
+		diagFile: snapshot.diagFile,
+		processStartTime: snapshot.processStartTime,
+		visible: snapshot.visible,
+		runner: snapshot.runner,
+		model: snapshot.model,
+		thinking: snapshot.thinking,
+		cmux: snapshot.cmux,
+		notifyOnExit: snapshot.notifyOnExit !== false,
+	};
+}
+
 export class BackgroundTaskManager {
 	private tasks = new Map<string, InternalTask>();
-	private counter = 0;
 	private readonly pi: ExtensionAPI;
 
 	constructor(pi: ExtensionAPI) {
 		this.pi = pi;
+		this.recoverTasks();
 	}
 
 	listTasks(): BackgroundTaskSnapshot[] {
 		return [...this.tasks.values()]
 			.sort((a, b) => b.startedAt - a.startedAt)
 			.map(toBackgroundTaskSnapshot);
+	}
+
+	private recoverTasks(): void {
+		const root = getTaskRootDir();
+		if (!existsSync(root)) return;
+		let entries: string[];
+		try {
+			entries = readdirSync(root);
+		} catch {
+			return;
+		}
+		for (const entry of entries) {
+			const metaFile = join(root, entry, "meta.json");
+			if (!existsSync(metaFile)) continue;
+			try {
+				const task = parseRecoveredTask(JSON.parse(readFileSync(metaFile, "utf8")), metaFile);
+				if (!task || this.tasks.has(task.id)) continue;
+				this.reconcileRecoveredTask(task);
+				this.tasks.set(task.id, task);
+			} catch {
+				// Ignore malformed/unknown legacy metadata; recovery is best-effort.
+			}
+		}
+	}
+
+	private reconcileRecoveredTask(task: InternalTask): void {
+		if (task.status !== "running") {
+			task.finalized = true;
+			return;
+		}
+
+		const exitCode = task.exitFile && existsSync(task.exitFile)
+			? readExitCodeFromFile(readFileSync(task.exitFile, "utf8"))
+			: null;
+		if (exitCode != null) {
+			this.finalizeTask(task, exitCode, "self-exit");
+			return;
+		}
+
+		if (task.runner === "sumocode" && task.responseFile && existsSync(task.responseFile)) {
+			this.finalizeTask(task, 0, "self-exit");
+			return;
+		}
+
+		if (task.runner === "shell" && !task.visible && task.pid != null && task.processStartTime) {
+			const identityStatus = getProcessIdentityStatus(task.pid, task.processStartTime);
+			if (identityStatus === "different") {
+				this.finalizeTask(task, null, "self-exit");
+				return;
+			}
+		}
+
+		if (task.runner === "shell") {
+			task.pollTimer = setInterval(() => this.pollVisibleTask(task), POLL_INTERVAL_MS);
+			if (typeof task.pollTimer.unref === "function") task.pollTimer.unref();
+		} else if (task.responseFile) {
+			task.watchdogDeadline = Date.now() + DEFAULT_AGENT_WATCHDOG_MS;
+			this.armResponseWatcher(task);
+		}
 	}
 
 	findTask(id?: string, pid?: number): InternalTask | undefined {
@@ -242,7 +411,8 @@ export class BackgroundTaskManager {
 			throw new Error("visible background tasks require a cmux surface (CMUX_SURFACE_ID or CMUX_WORKSPACE_ID)");
 		}
 
-		const id = `bg-${++this.counter}`;
+		let id = generateTaskId();
+		while (this.tasks.has(id)) id = generateTaskId();
 		const now = Date.now();
 		const cwd = options.cwd.trim() || process.cwd();
 		const paths = buildVisibleTaskPaths(id, now);
@@ -305,7 +475,7 @@ export class BackgroundTaskManager {
 		// shell wrapper redirect output into the log file directly. The child
 		// is then truly orphan-able and persists across orchestrator restarts.
 		const wrappedCommand = detached
-			? `( ${command} ) >>${shellEscapeForBash(logFile)} 2>&1`
+			? `{ ( ${command} ); code=$?; printf '%s' "$code" > ${shellEscapeForBash(task.exitFile ?? `${logFile}.exit`)}; exit "$code"; } >>${shellEscapeForBash(logFile)} 2>&1`
 			: command;
 		const childStdio: "ignore" | ["ignore", "pipe", "pipe"] = detached
 			? "ignore"
@@ -322,6 +492,7 @@ export class BackgroundTaskManager {
 		});
 
 		task.pid = child.pid ?? undefined;
+		task.processStartTime = getProcessStartTime(task.pid);
 		task.child = child;
 
 		if (!detached) {
@@ -342,6 +513,12 @@ export class BackgroundTaskManager {
 			appendLogLine(logFile, `\n[spawn error] ${error.message}\n`);
 			this.finalizeTask(task, 1, "self-exit");
 		});
+
+		if (task.pid != null && !task.processStartTime) {
+			appendLogLine(logFile, "\n[bg-task] warning: failed to capture process identity; recovered stop will require identity recapture\n");
+		}
+
+		writeTaskMeta(task);
 
 		if (detached && child.pid) {
 			child.unref();
@@ -596,6 +773,7 @@ export class BackgroundTaskManager {
 		if (task.child?.pid) {
 			const killed = await this.terminateChildAndWait(task.child);
 			if (!killed) {
+				task.stopRequested = false;
 				return {
 					ok: false,
 					message: `Failed to stop task ${task.id}: child process (pid ${task.child.pid}) did not exit after SIGTERM + SIGKILL within ${Math.round(STOP_SIGTERM_GRACE_MS / 1000)}s.`,
@@ -607,6 +785,39 @@ export class BackgroundTaskManager {
 				this.finalizeTask(task, null, "stopped");
 			}
 			return { ok: true, message: `Stopped background task ${task.id}.` };
+		}
+
+		if (!task.visible && task.pid != null) {
+			if (!task.processStartTime) {
+				task.processStartTime = getProcessStartTime(task.pid);
+				if (task.processStartTime) writeTaskMeta(task);
+			}
+			const identityStatus = getProcessIdentityStatus(task.pid, task.processStartTime);
+			if (identityStatus === "unknown") {
+				task.stopRequested = false;
+				return {
+					ok: false,
+					message: `Refusing to stop task ${task.id}: recovered pid ${task.pid} process identity could not be verified.`,
+				};
+			}
+			if (identityStatus === "different") {
+				task.stopRequested = false;
+				this.finalizeTask(task, null, "self-exit");
+				return {
+					ok: false,
+					message: `Refusing to stop task ${task.id}: recovered pid ${task.pid} no longer matches the original background process.`,
+				};
+			}
+			const killed = await this.terminatePidAndWait(task.pid);
+			if (!killed) {
+				task.stopRequested = false;
+				return {
+					ok: false,
+					message: `Failed to stop task ${task.id}: recovered process (pid ${task.pid}) did not exit after SIGTERM + SIGKILL within ${Math.round(STOP_SIGTERM_GRACE_MS / 1000)}s.`,
+				};
+			}
+			this.finalizeTask(task, null, "stopped");
+			return { ok: true, message: `Stopped background task ${task.id} (pid ${task.pid}).` };
 		}
 
 		if (task.visible && task.cmux) {
@@ -623,6 +834,7 @@ export class BackgroundTaskManager {
 					killed: false,
 				}));
 			if (result.code !== 0) {
+				task.stopRequested = false;
 				return {
 					ok: false,
 					message: `Failed to close cmux surface ${task.cmux.surfaceRef}: ${result.stderr || result.stdout || `cmux close-surface exited ${result.code}`}`,
@@ -642,6 +854,34 @@ export class BackgroundTaskManager {
 	 * then wait a final short window for the kernel to clean up. Returns true
 	 * if the process exited, false otherwise.
 	 */
+	private async terminatePidAndWait(pid: number): Promise<boolean> {
+		const awaitExit = (timeoutMs: number): Promise<boolean> =>
+			new Promise<boolean>((resolve) => {
+				if (!isProcessAlive(pid)) {
+					resolve(true);
+					return;
+				}
+				const startedAt = Date.now();
+				const timer = setInterval(() => {
+					if (!isProcessAlive(pid)) {
+						clearInterval(timer);
+						resolve(true);
+						return;
+					}
+					if (Date.now() - startedAt >= timeoutMs) {
+						clearInterval(timer);
+						resolve(false);
+					}
+				}, 50);
+				if (typeof timer.unref === "function") timer.unref();
+			});
+
+		signalProcessOrGroup(pid, "SIGTERM");
+		if (await awaitExit(STOP_SIGTERM_GRACE_MS)) return true;
+		signalProcessOrGroup(pid, "SIGKILL");
+		return await awaitExit(2_000);
+	}
+
 	private async terminateChildAndWait(child: ChildProcess): Promise<boolean> {
 		const sendSignal = (signal: NodeJS.Signals): void => {
 			// Prefer process-group SIGTERM (negative pid) on POSIX so any
@@ -695,6 +935,7 @@ export class BackgroundTaskManager {
 			if (task.status === "running") continue;
 			if (task.pollTimer) clearInterval(task.pollTimer);
 			if (task.responseTimer) clearInterval(task.responseTimer);
+			if (task.metaFile) removePathIfExists(task.metaFile);
 			this.tasks.delete(id);
 			removed += 1;
 		}
@@ -749,6 +990,14 @@ export class BackgroundTaskManager {
 					}
 				} catch {
 					// ignore shutdown errors
+				}
+			} else if (!task.visible && task.pid != null) {
+				if (!task.processStartTime) {
+					task.processStartTime = getProcessStartTime(task.pid);
+					if (task.processStartTime) writeTaskMeta(task);
+				}
+				if (getProcessIdentityStatus(task.pid, task.processStartTime) === "same") {
+					signalProcessOrGroup(task.pid, "SIGTERM");
 				}
 			}
 			if (task.pollTimer) clearInterval(task.pollTimer);

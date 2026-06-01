@@ -47,8 +47,8 @@ export function installBackgroundTasks(pi: ExtensionAPI): BackgroundTaskManager 
 	// reloading SumoCode would lose every long-running `bg_task spawn` job
 	// they had in flight. Only kill on a real process-quit shutdown; on
 	// session replacement, leave the child processes running (they're already
-	// detached / cmux-owned) and let the new manager start with an empty
-	// in-memory map. Recovery from disk-stored meta.json is a future feature.
+	// detached / cmux-owned) and let the new manager recover from disk-stored
+	// meta.json on startup.
 	pi.on("session_shutdown", (event) => {
 		const reason = (event as { reason?: string } | null | undefined)?.reason;
 		if (reason === "quit" || reason === undefined) {

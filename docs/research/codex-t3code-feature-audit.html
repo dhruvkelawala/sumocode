@@ -1,0 +1,534 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Codex App + T3 Code · Feature Audit for SumoCode</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --font-body: 'IBM Plex Sans', system-ui, -apple-system, sans-serif;
+    --font-mono: 'IBM Plex Mono', 'SF Mono', 'JetBrains Mono', Consolas, monospace;
+
+    --bg: #0a1929;
+    --bg-deep: #060f1c;
+    --surface: #0f1f33;
+    --surface-elevated: #14283f;
+    --surface-recessed: #0c1a2b;
+    --border: rgba(140, 190, 230, 0.10);
+    --border-bright: rgba(140, 190, 230, 0.22);
+    --grid: rgba(140, 190, 230, 0.045);
+    --text: #e6edf6;
+    --text-dim: #8ea4be;
+    --text-faint: #5a6e88;
+
+    --cyan: #4ab3d9;
+    --cyan-dim: rgba(74, 179, 217, 0.14);
+    --gold: #d4a73a;
+    --gold-dim: rgba(212, 167, 58, 0.14);
+    --rust: #d07b5a;
+    --rust-dim: rgba(208, 123, 90, 0.14);
+    --sage: #87b58e;
+    --sage-dim: rgba(135, 181, 142, 0.14);
+
+    --max: 1240px;
+    --pad: clamp(20px, 4vw, 48px);
+    --radius: 4px;
+  }
+
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #f4ede0;
+      --bg-deep: #ebe1cd;
+      --surface: #f9f2e4;
+      --surface-elevated: #ffffff;
+      --surface-recessed: #ede2cd;
+      --border: rgba(30, 55, 80, 0.12);
+      --border-bright: rgba(30, 55, 80, 0.28);
+      --grid: rgba(30, 55, 80, 0.06);
+      --text: #18334d;
+      --text-dim: #4d6580;
+      --text-faint: #7a8d9f;
+      --cyan: #185e7d;
+      --cyan-dim: rgba(24, 94, 125, 0.12);
+      --gold: #99761b;
+      --gold-dim: rgba(153, 118, 27, 0.12);
+      --rust: #a4502d;
+      --rust-dim: rgba(164, 80, 45, 0.12);
+      --sage: #3e6a47;
+      --sage-dim: rgba(62, 106, 71, 0.12);
+    }
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+
+  body {
+    font-family: var(--font-body);
+    color: var(--text);
+    background: var(--bg);
+    background-image:
+      linear-gradient(var(--grid) 1px, transparent 1px),
+      linear-gradient(90deg, var(--grid) 1px, transparent 1px),
+      radial-gradient(ellipse at 20% 0%, var(--cyan-dim) 0%, transparent 55%),
+      radial-gradient(ellipse at 90% 80%, var(--gold-dim) 0%, transparent 55%);
+    background-size: 32px 32px, 32px 32px, 100% 100%, 100% 100%;
+    background-attachment: fixed;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    min-height: 100vh;
+  }
+
+  .shell {
+    max-width: var(--max);
+    margin: 0 auto;
+    padding: clamp(28px, 5vw, 56px) var(--pad);
+    display: grid;
+    grid-template-columns: 200px minmax(0, 1fr);
+    gap: clamp(32px, 5vw, 64px);
+  }
+  @media (max-width: 880px) { .shell { grid-template-columns: 1fr; gap: 24px; } }
+
+  nav.toc {
+    position: sticky; top: 32px; align-self: start;
+    font-family: var(--font-mono); font-size: 11px;
+    letter-spacing: 0.06em; text-transform: uppercase;
+    color: var(--text-dim); border-left: 1px solid var(--border-bright);
+    padding-left: 16px; line-height: 2;
+  }
+  nav.toc ol { list-style: none; margin: 0; padding: 0; counter-reset: tocnum; }
+  nav.toc li { counter-increment: tocnum; }
+  nav.toc li::before { content: counter(tocnum, decimal-leading-zero) "  "; color: var(--cyan); font-weight: 500; }
+  nav.toc a { color: var(--text-dim); text-decoration: none; transition: color 120ms ease; }
+  nav.toc a:hover { color: var(--text); }
+  nav.toc .label { color: var(--gold); font-weight: 600; margin-bottom: 8px; display: block; border-bottom: 1px solid var(--border); padding-bottom: 8px; }
+  @media (max-width: 880px) {
+    nav.toc { position: relative; top: 0; border-left: 0; border-top: 1px solid var(--border-bright); border-bottom: 1px solid var(--border-bright); padding: 12px 0; overflow-x: auto; white-space: nowrap; }
+    nav.toc ol { display: inline-flex; gap: 24px; }
+    nav.toc .label { display: none; }
+  }
+
+  main { min-width: 0; }
+
+  .stamp {
+    font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.18em;
+    text-transform: uppercase; color: var(--gold); display: inline-flex;
+    align-items: center; gap: 10px; padding: 6px 12px; border: 1px solid var(--gold);
+    border-radius: 2px; margin-bottom: 24px;
+  }
+  .stamp::before { content: ''; width: 6px; height: 6px; background: var(--gold); border-radius: 50%; }
+
+  h1 { font-family: var(--font-body); font-weight: 600; font-size: clamp(36px, 5.5vw, 60px); line-height: 1.05; letter-spacing: -0.02em; margin: 0 0 16px; color: var(--text); }
+  h1 .hl { font-family: var(--font-mono); font-weight: 500; color: var(--cyan); font-size: 0.78em; letter-spacing: -0.01em; }
+
+  .lede { font-size: clamp(17px, 1.4vw, 19px); color: var(--text-dim); max-width: 62ch; margin: 0 0 32px; line-height: 1.55; }
+  .lede strong { color: var(--text); font-weight: 600; }
+
+  .meta { display: flex; flex-wrap: wrap; gap: 12px 24px; font-family: var(--font-mono); font-size: 11px; color: var(--text-faint); padding: 12px 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); margin-bottom: 56px; }
+  .meta span b { color: var(--text-dim); font-weight: 500; }
+
+  section { margin-bottom: 64px; scroll-margin-top: 24px; }
+
+  .section-label { display: flex; align-items: center; gap: 12px; font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--cyan); margin-bottom: 14px; }
+  .section-label .dot { width: 7px; height: 7px; background: var(--cyan); border-radius: 50%; flex-shrink: 0; }
+  .section-label .num { font-weight: 500; color: var(--gold); }
+  .section-label .rule { flex: 1; height: 1px; background: var(--border-bright); }
+
+  h2 { font-family: var(--font-body); font-weight: 500; font-size: clamp(26px, 3vw, 34px); line-height: 1.15; letter-spacing: -0.015em; margin: 0 0 12px; color: var(--text); }
+  .subhead { color: var(--text-dim); font-size: 15px; margin: 0 0 28px; max-width: 72ch; line-height: 1.55; }
+  p.body { color: var(--text-dim); font-size: 14.5px; max-width: 72ch; line-height: 1.6; }
+  p.body strong { color: var(--text); font-weight: 600; }
+  p.body code, li code { font-family: var(--font-mono); font-size: 12px; background: var(--surface-recessed); color: var(--cyan); padding: 1px 6px; border-radius: 2px; border: 1px solid var(--border); }
+
+  .boundary { background: var(--surface); border: 1px solid var(--border-bright); border-radius: var(--radius); padding: clamp(24px, 3vw, 36px); margin-bottom: 56px; position: relative; }
+  .boundary::before { content: 'AXIOM'; position: absolute; top: -10px; left: 20px; font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.2em; color: var(--gold); background: var(--bg); padding: 0 8px; }
+  .boundary p { font-family: var(--font-body); font-size: clamp(18px, 2vw, 22px); line-height: 1.5; color: var(--text); margin: 0; max-width: 72ch; }
+  .boundary .accent { color: var(--gold); font-weight: 500; }
+  .boundary .accent-2 { color: var(--cyan); font-weight: 500; }
+
+  /* Two-tool diptych */
+  .diptych { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-bottom: 32px; }
+  @media (max-width: 760px) { .diptych { grid-template-columns: 1fr; } }
+  .tool-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 24px; display: flex; flex-direction: column; gap: 14px; }
+  .tool-card.codex { border-top: 2px solid var(--cyan); }
+  .tool-card.t3 { border-top: 2px solid var(--gold); }
+  .tool-card .role { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--text-faint); }
+  .tool-card .role .runner { color: var(--cyan); }
+  .tool-card.t3 .role .runner { color: var(--gold); }
+  .tool-card h3 { font-family: var(--font-mono); font-weight: 500; font-size: 18px; margin: 0; color: var(--text); letter-spacing: -0.01em; }
+  .tool-card .pitch { color: var(--text-dim); font-size: 14px; line-height: 1.55; margin: 0; }
+  .tool-card ul { list-style: none; padding: 0; margin: 4px 0 0; display: flex; flex-direction: column; gap: 8px; }
+  .tool-card li { color: var(--text); font-size: 13px; line-height: 1.5; padding-left: 18px; position: relative; }
+  .tool-card li::before { content: ''; position: absolute; left: 0; top: 9px; width: 8px; height: 1px; background: var(--cyan); }
+  .tool-card.t3 li::before { background: var(--gold); }
+
+  /* Layer / verdict rows */
+  .layers { display: grid; grid-template-columns: 1fr; gap: 8px; }
+  .layer { display: grid; grid-template-columns: 150px 1fr 132px; align-items: center; gap: 20px; padding: 16px 20px; background: var(--surface); border: 1px solid var(--border); border-left: 3px solid var(--border-bright); border-radius: var(--radius); }
+  @media (max-width: 680px) { .layer { grid-template-columns: 1fr; gap: 6px; } .layer .owner { text-align: left; } }
+  .layer .id { font-family: var(--font-mono); font-size: 14px; font-weight: 500; color: var(--cyan); letter-spacing: -0.01em; }
+  .layer .who { font-family: var(--font-body); font-weight: 500; color: var(--text); font-size: 14.5px; margin: 0 0 4px; }
+  .layer .what { color: var(--text-dim); font-size: 13px; margin: 0; }
+  .layer .owner { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; text-align: right; color: var(--text-faint); }
+  .layer .owner .own-have { color: var(--sage); }
+  .layer .owner .own-partial { color: var(--gold); }
+  .layer .owner .own-gap { color: var(--rust); }
+  .layer.have { border-left-color: var(--sage); background: linear-gradient(to right, var(--sage-dim) 0%, var(--surface) 30%); }
+  .layer.partial { border-left-color: var(--gold); background: linear-gradient(to right, var(--gold-dim) 0%, var(--surface) 30%); }
+  .layer.gap { border-left-color: var(--rust); background: linear-gradient(to right, var(--rust-dim) 0%, var(--surface) 30%); }
+
+  /* Tables */
+  .tbl-wrap { border: 1px solid var(--border-bright); border-radius: var(--radius); overflow: hidden; background: var(--surface); margin-bottom: 12px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  thead th { background: var(--surface-recessed); font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-dim); text-align: left; padding: 12px 16px; border-bottom: 1px solid var(--border-bright); font-weight: 500; position: sticky; top: 0; }
+  tbody td { padding: 14px 16px; border-bottom: 1px solid var(--border); vertical-align: top; color: var(--text); line-height: 1.5; }
+  tbody tr:last-child td { border-bottom: 0; }
+  tbody tr:hover td { background: var(--surface-elevated); }
+  td code, th code { font-family: var(--font-mono); font-size: 11.5px; background: var(--surface-recessed); color: var(--cyan); padding: 2px 6px; border-radius: 2px; border: 1px solid var(--border); white-space: nowrap; }
+  .pill { font-family: var(--font-mono); font-size: 9.5px; letter-spacing: 0.1em; text-transform: uppercase; padding: 2px 8px; border-radius: 2px; white-space: nowrap; }
+  .pill.have { color: var(--sage); border: 1px solid var(--sage); background: var(--sage-dim); }
+  .pill.partial { color: var(--gold); border: 1px solid var(--gold); background: var(--gold-dim); }
+  .pill.gap { color: var(--rust); border: 1px solid var(--rust); background: var(--rust-dim); }
+
+  /* Priority cards */
+  .prio { display: grid; grid-template-columns: 1fr; gap: 14px; }
+  .pcard { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 22px 24px; position: relative; }
+  .pcard.p1 { border-top: 2px solid var(--gold); background: linear-gradient(to bottom, var(--gold-dim) 0%, var(--surface) 40%); }
+  .pcard.p2 { border-top: 2px solid var(--cyan); }
+  .pcard.p3 { border-top: 2px solid var(--border-bright); background: var(--surface-recessed); }
+  .pcard .ptag { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--text-faint); display: flex; gap: 12px; align-items: center; margin-bottom: 10px; }
+  .pcard.p1 .ptag .rank { color: var(--gold); }
+  .pcard.p2 .ptag .rank { color: var(--cyan); }
+  .pcard h3 { font-family: var(--font-body); font-weight: 600; font-size: 19px; margin: 0 0 8px; color: var(--text); letter-spacing: -0.01em; }
+  .pcard p { color: var(--text-dim); font-size: 14px; line-height: 1.6; margin: 0 0 10px; max-width: 74ch; }
+  .pcard p:last-child { margin-bottom: 0; }
+  .pcard .why { font-family: var(--font-mono); font-size: 11.5px; color: var(--text-faint); }
+  .pcard .why b { color: var(--cyan); font-weight: 500; }
+  .pcard code { font-family: var(--font-mono); font-size: 12px; background: var(--surface-recessed); color: var(--cyan); padding: 1px 6px; border-radius: 2px; border: 1px solid var(--border); }
+  .pcard.p1 code { color: var(--gold); }
+
+  .signoff { margin-top: 64px; padding-top: 24px; border-top: 1px solid var(--border-bright); display: flex; justify-content: space-between; align-items: baseline; font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.06em; color: var(--text-faint); flex-wrap: wrap; gap: 12px; }
+  .signoff .lhs b { color: var(--gold); }
+  .signoff .rhs { color: var(--text-dim); }
+
+  @media (prefers-reduced-motion: no-preference) {
+    section, .boundary, .meta { animation: rise 600ms ease both; }
+    section:nth-of-type(2) { animation-delay: 100ms; }
+    section:nth-of-type(3) { animation-delay: 200ms; }
+    section:nth-of-type(4) { animation-delay: 300ms; }
+    section:nth-of-type(5) { animation-delay: 400ms; }
+    section:nth-of-type(6) { animation-delay: 500ms; }
+    section:nth-of-type(7) { animation-delay: 600ms; }
+    @keyframes rise { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
+  }
+</style>
+</head>
+<body>
+
+<div class="shell">
+
+  <nav class="toc" aria-label="Table of contents">
+    <span class="label">Contents</span>
+    <ol>
+      <li><a href="#thesis">The thesis</a></li>
+      <li><a href="#tools">The two tools</a></li>
+      <li><a href="#matrix">Feature matrix</a></li>
+      <li><a href="#worktree">Worktree + review</a></li>
+      <li><a href="#sleepers">Sleeper features</a></li>
+      <li><a href="#adopt">What to adopt</a></li>
+      <li><a href="#skip">What to skip</a></li>
+    </ol>
+  </nav>
+
+  <main>
+
+    <header>
+      <span class="stamp">SumoCode · Competitive Feature Audit</span>
+      <h1>
+        Codex App &amp; T3 Code,<br>
+        read through a <span class="hl">terminal-native</span> lens.
+      </h1>
+      <p class="lede">
+        Both apps are <strong>GUI orchestration shells</strong> wrapped around agent backends.
+        SumoCode is a retained <strong>TUI</strong> inside a cmux surface. The features that
+        translate are the <em>workflow primitives</em> — worktree isolation, turn-scoped review,
+        one-shot ship — not the Electron chrome. This audit maps every notable feature to what
+        SumoCode already has, what's partial, and what's worth building.
+      </p>
+      <div class="meta">
+        <span><b>Sources</b> developers.openai.com/codex · github.com/t3-oss/t3-code</span>
+        <span><b>Reviewed</b> Codex app, T3 Code v0.x</span>
+        <span><b>SumoCode</b> v0.3.0 · Pi 0.75.3</span>
+        <span><b>Date</b> 2026-05-28</span>
+      </div>
+    </header>
+
+    <section id="thesis">
+      <div class="section-label"><span class="dot"></span><span class="num">01</span> The thesis <span class="rule"></span></div>
+      <div class="boundary">
+        <p>
+          Codex and T3 Code both solve the same friction: <span class="accent-2">run agents in parallel
+          without them stomping each other, then review and ship the result without leaving the app.</span>
+          SumoCode already owns the hard part — a real retained renderer and a background-task tool.
+          What's missing is the <span class="accent">git-isolation + structured-review loop</span> that
+          turns "an agent edited my files" into "an agent worked in its own worktree and I shipped its
+          diff in one keystroke."
+        </p>
+      </div>
+      <p class="body">
+        Read the two products differently. <strong>Codex app</strong> is the mature reference design — its
+        worktree handoff model, review pane with inline comments, and automations are the canonical spec.
+        <strong>T3 Code</strong> is the lean OSS take — it proves the same primitives (worktree-per-task,
+        one-click commit→push→PR, per-turn diff) ship in a small surface. SumoCode should borrow Codex's
+        <em>model</em> and T3's <em>scope discipline</em>.
+      </p>
+    </section>
+
+    <section id="tools">
+      <div class="section-label"><span class="dot"></span><span class="num">02</span> The two tools <span class="rule"></span></div>
+      <div class="diptych">
+        <div class="tool-card codex">
+          <div class="role">REFERENCE · <span class="runner">OpenAI Codex app</span></div>
+          <h3>codex.app</h3>
+          <p class="pitch">Electron desktop "command center for agentic coding." Mature, broad, ChatGPT-account gated. The feature spec everyone copies.</p>
+          <ul>
+            <li>Three thread modes: <b>Local / Worktree / Cloud</b></li>
+            <li>Worktree handoff between background &amp; foreground</li>
+            <li>Review pane: inline comments, stage/revert per hunk</li>
+            <li><code>/review</code> code review → inline findings</li>
+            <li>Commit / push / open PR in-app</li>
+            <li>Automations + thread automations (cron + heartbeat)</li>
+            <li>Integrated terminal scoped per thread (Cmd+J)</li>
+            <li>In-app browser w/ element comments; computer use</li>
+            <li>Voice dictation, image gen/input, pop-out window</li>
+            <li>Skills, MCP, memories shared across app/CLI/IDE</li>
+          </ul>
+        </div>
+        <div class="tool-card t3">
+          <div class="role">LEAN OSS · <span class="runner">T3 Code (Theo / t3-oss)</span></div>
+          <h3>t3-oss/t3-code</h3>
+          <p class="pitch">Free, open-source, BYOK GUI front-end for existing agents (Codex now; Claude Code, Cursor, Gemini planned). Proves the primitives in a small surface.</p>
+          <ul>
+            <li>Three-panel layout: projects · threads · chat</li>
+            <li>Multi-repo, multi-agent parallelism</li>
+            <li>Native <b>git worktree</b> per task</li>
+            <li>One-click <b>commit → push → create PR</b></li>
+            <li>Per-turn diff viewer (unified + split)</li>
+            <li>Thread sidebar reflects PR status (open/merged/closed)</li>
+            <li>Custom quick actions (project-scoped shell buttons)</li>
+            <li>Auto-run setup actions on new worktree (<code>npm install</code>)</li>
+            <li>Chat vs plan mode; supervised vs full-access</li>
+            <li>Integrated terminal; skills + headless mode planned</li>
+          </ul>
+        </div>
+      </div>
+      <p class="body">
+        The overlap is the signal. Both independently shipped <strong>worktree-per-task</strong>,
+        <strong>one-shot ship</strong>, and <strong>structured diff review</strong> as their headline
+        features. That convergence is the strongest argument for adopting those three in SumoCode.
+      </p>
+    </section>
+
+    <section id="matrix">
+      <div class="section-label"><span class="dot"></span><span class="num">03</span> Feature matrix vs SumoCode <span class="rule"></span></div>
+      <p class="subhead">Every notable feature from both products, scored against what SumoCode ships today (v0.3.0). <span style="color:var(--sage)">HAVE</span> = exists · <span style="color:var(--gold)">PARTIAL</span> = adjacent primitive exists · <span style="color:var(--rust)">GAP</span> = not present.</p>
+      <div class="tbl-wrap">
+        <table>
+          <thead>
+            <tr><th>Feature</th><th>Codex</th><th>T3</th><th>SumoCode today</th><th style="text-align:right">Status</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><b>Worktree-per-task isolation</b></td><td>✓</td><td>✓</td><td>No git worktree mgmt; bg_task runs in cwd</td><td style="text-align:right"><span class="pill gap">Gap</span></td></tr>
+            <tr><td><b>Handoff (worktree ⇄ local)</b></td><td>✓</td><td>—</td><td>No branch-relocation flow yet</td><td style="text-align:right"><span class="pill gap">Gap</span></td></tr>
+            <tr><td><b>Structured diff review</b></td><td>✓ pane</td><td>✓ per-turn</td><td><code>/sumo:diff</code> opens hunkdiff in split</td><td style="text-align:right"><span class="pill partial">Partial</span></td></tr>
+            <tr><td><b>Agent-driven code review</b></td><td><code>/review</code></td><td>—</td><td><code>/sumo:review</code> scribe loop until GREEN</td><td style="text-align:right"><span class="pill have">Have+</span></td></tr>
+            <tr><td><b>Inline review comments → agent</b></td><td>✓</td><td>—</td><td>None — review is text findings only</td><td style="text-align:right"><span class="pill gap">Gap</span></td></tr>
+            <tr><td><b>Commit / push / open PR in-app</b></td><td>✓</td><td>✓ 1-click</td><td>Agent can run <code>gh</code> via bash; no UI flow</td><td style="text-align:right"><span class="pill partial">Partial</span></td></tr>
+            <tr><td><b>PR status on thread sidebar</b></td><td>✓</td><td>✓</td><td>Sidebar has no PR/git surface</td><td style="text-align:right"><span class="pill gap">Gap</span></td></tr>
+            <tr><td><b>Parallel agents / projects</b></td><td>✓</td><td>✓</td><td>bg_task sumocode panes + pi-subagents</td><td style="text-align:right"><span class="pill have">Have</span></td></tr>
+            <tr><td><b>Integrated terminal per task</b></td><td>✓</td><td>✓</td><td>cmux splits already are this</td><td style="text-align:right"><span class="pill have">Have</span></td></tr>
+            <tr><td><b>Quick actions (shell buttons)</b></td><td>✓ actions</td><td>✓</td><td>Slash commands; no per-project buttons</td><td style="text-align:right"><span class="pill partial">Partial</span></td></tr>
+            <tr><td><b>Auto-run setup on new env</b></td><td>✓ local env</td><td>✓</td><td>None (no worktree lifecycle)</td><td style="text-align:right"><span class="pill gap">Gap</span></td></tr>
+            <tr><td><b>Scheduled automations (cron)</b></td><td>✓</td><td>—</td><td>None</td><td style="text-align:right"><span class="pill gap">Gap</span></td></tr>
+            <tr><td><b>Thread automations (heartbeat)</b></td><td>✓</td><td>—</td><td>bg_task wakeups are completion-only</td><td style="text-align:right"><span class="pill gap">Gap</span></td></tr>
+            <tr><td><b>Plan vs chat mode</b></td><td>—</td><td>✓</td><td>fast-mode + task-mode toggles exist</td><td style="text-align:right"><span class="pill have">Have</span></td></tr>
+            <tr><td><b>Supervised vs full-access</b></td><td>✓ sandbox</td><td>✓</td><td>Pi approvals + Divine Query modal</td><td style="text-align:right"><span class="pill have">Have</span></td></tr>
+            <tr><td><b>Skills</b></td><td>✓</td><td>planned</td><td>Pi skills surfaced in SumoCode</td><td style="text-align:right"><span class="pill have">Have</span></td></tr>
+            <tr><td><b>MCP shared config</b></td><td>✓</td><td>—</td><td>mcp-config-reader + gateway</td><td style="text-align:right"><span class="pill have">Have</span></td></tr>
+            <tr><td><b>Memories across threads</b></td><td>✓</td><td>—</td><td>Memory surface + categorization</td><td style="text-align:right"><span class="pill have">Have+</span></td></tr>
+            <tr><td><b>Voice dictation</b></td><td>✓</td><td>—</td><td>None</td><td style="text-align:right"><span class="pill gap">Gap</span></td></tr>
+            <tr><td><b>In-app browser + element comments</b></td><td>✓</td><td>—</td><td>agent_browser tool (no comment loop)</td><td style="text-align:right"><span class="pill partial">Partial</span></td></tr>
+            <tr><td><b>Image gen / input</b></td><td>✓</td><td>—</td><td>Pi handles image input</td><td style="text-align:right"><span class="pill partial">Partial</span></td></tr>
+            <tr><td><b>Inline image rendering in chat</b></td><td>✓</td><td>—</td><td>SumoTUI drops image content parts — no block type</td><td style="text-align:right"><span class="pill gap">Gap</span></td></tr>
+            <tr><td><b>Image paste placeholder in editor</b></td><td>✓</td><td>—</td><td>Pastes raw temp file path as literal text</td><td style="text-align:right"><span class="pill gap">Gap</span></td></tr>
+            <tr><td><b>Pop-out / always-on-top window</b></td><td>✓</td><td>—</td><td>N/A — terminal-native</td><td style="text-align:right"><span class="pill gap">N/A</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="body">
+        SumoCode is already strong on <strong>parallelism, review intelligence, memory, and approvals</strong>.
+        The clustered red is all one theme: <strong>git-isolation and the diff-to-ship loop</strong>. That's the
+        seam worth investing in.
+      </p>
+    </section>
+
+    <section id="worktree">
+      <div class="section-label"><span class="dot"></span><span class="num">04</span> The feature you liked: worktree + review <span class="rule"></span></div>
+      <h2>Codex's worktree model, decoded</h2>
+      <p class="subhead">This is the mechanic you responded to. Here's exactly how Codex implements it — and what maps cleanly onto SumoCode's cmux foundation. The default is a <em>plain interactive pane</em>, not a delegated task.</p>
+      <div class="layers">
+        <div class="layer have">
+          <div class="id">Modes</div>
+          <div><p class="who">Local / Worktree / Cloud at thread start</p><p class="what">Worktree creates a 2nd checkout in <code>$CODEX_HOME/worktrees</code>, detached HEAD, so branches stay clean.</p></div>
+          <div class="owner"><span class="own-have">cmux fits</span></div>
+        </div>
+        <div class="layer have">
+          <div class="id">Isolation</div>
+          <div><p class="who">Each worktree = own files, shared <code>.git</code></p><p class="what">A second sumocode session edits a feature branch while you keep working on main. No conflicts.</p></div>
+          <div class="owner"><span class="own-have">cmux pane fits</span></div>
+        </div>
+        <div class="layer partial">
+          <div class="id">Handoff</div>
+          <div><p class="who">Move a thread between Worktree ⇄ Local</p><p class="what">Codex runs the git plumbing to relocate work safely (one branch per worktree). SumoCode has no relocation flow yet.</p></div>
+          <div class="owner"><span class="own-partial">net-new git glue</span></div>
+        </div>
+        <div class="layer have">
+          <div class="id">Review</div>
+          <div><p class="who">Diff pane: uncommitted / branch / last-turn scopes</p><p class="what">Toggle staged/unstaged. Stage, unstage, revert per file or per hunk.</p></div>
+          <div class="owner"><span class="own-have">hunkdiff fits</span></div>
+        </div>
+        <div class="layer gap">
+          <div class="id">Inline</div>
+          <div><p class="who">+ button on any diff line → comment → agent fixes it</p><p class="what">Line-specific guidance beats a general instruction. <code>/review</code> findings land inline too.</p></div>
+          <div class="owner"><span class="own-gap">net-new</span></div>
+        </div>
+        <div class="layer gap">
+          <div class="id">Cleanup</div>
+          <div><p class="who">Keeps 15 most-recent worktrees; snapshots before delete</p><p class="what">Auto-prunes disposable worktrees, restores on demand. Permanent worktrees opt out.</p></div>
+          <div class="owner"><span class="own-gap">net-new</span></div>
+        </div>
+      </div>
+      <div class="boundary" style="margin-top:28px;margin-bottom:0">
+        <p>
+          <strong>bg_task is not required here.</strong> The default <code>/sumo:worktree &lt;task&gt;</code> just opens
+          a <span class="accent-2">plain interactive cmux pane</span> running sumocode inside a fresh git worktree —
+          the same <code>openCommandInNewSplit</code> plumbing <code>/sumo:diff</code> already uses. You drive that
+          session directly. bg_task only earns its place when you want to <span class="accent">dispatch-and-walk-away</span>
+          and have the orchestrator harvest the result.
+        </p>
+      </div>
+      <p class="body" style="margin-top:24px">
+        <strong>The win for SumoCode:</strong> <code>/sumo:worktree &lt;task&gt;</code> creates a git worktree under a
+        managed dir, opens a cmux split running sumocode in it, and auto-runs a configured setup action. You review
+        with the existing <code>/sumo:diff</code> + <code>/sumo:review</code>, then <code>/sumo:ship</code> does
+        commit→push→PR. Every piece is plumbing you already own — no delegation layer needed for the interactive path.
+      </p>
+    </section>
+
+    <section id="sleepers">
+      <div class="section-label"><span class="dot"></span><span class="num">05</span> Sleeper features you didn't ask about <span class="rule"></span></div>
+      <p class="subhead">Things buried in the docs that are quietly the most interesting for a power user.</p>
+      <div class="diptych">
+        <div class="tool-card codex">
+          <div class="role">CODEX · <span class="runner">underrated</span></div>
+          <h3>Thread automations</h3>
+          <p class="pitch">Recurring "wake-up calls" that <b>preserve a thread's context</b> — heartbeat polling, long-running follow-up loops, "check on this every hour and continue." This is more than cron: it's stateful resumption. SumoCode's bg_task only wakes on completion; a scheduled context-preserving wake is genuinely new.</p>
+        </div>
+        <div class="tool-card codex">
+          <div class="role">CODEX · <span class="runner">underrated</span></div>
+          <h3>Terminal output as context</h3>
+          <p class="pitch">Codex can <b>read the integrated terminal's live output</b> — check a dev server's status, refer back to a failed build — without you pasting it. cmux already hosts the terminal; piping a pane's scrollback into the agent's context on request is a small, high-leverage bridge.</p>
+        </div>
+        <div class="tool-card t3">
+          <div class="role">T3 · <span class="runner">underrated</span></div>
+          <h3>Quick actions on worktree create</h3>
+          <p class="pitch">Project-scoped shell buttons (<code>npm run dev</code>) with optional keybindings, and crucially <b>auto-run on new worktree</b>. This is the setup-script primitive that makes worktrees actually usable — a fresh checkout needs <code>install</code> before the agent can build.</p>
+        </div>
+        <div class="tool-card t3">
+          <div class="role">T3 · <span class="runner">underrated</span></div>
+          <h3>PR status on the thread list</h3>
+          <p class="pitch">The thread's sidebar icon reflects <b>open / merged / closed</b> PR state. Tiny touch, big orientation win when juggling several parallel agents. SumoCode's sidebar could surface a git/PR badge per session with one <code>gh</code> poll.</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="adopt">
+      <div class="section-label"><span class="dot"></span><span class="num">06</span> Recommended: what to adopt <span class="rule"></span></div>
+      <p class="subhead">Ranked by leverage-to-effort, scoped to SumoCode's terminal-native reality. Each builds on primitives you already ship.</p>
+      <div class="prio">
+        <div class="pcard p1">
+          <div class="ptag"><span class="rank">PRIORITY 01</span> · highest leverage</div>
+          <h3>The worktree → review → ship loop</h3>
+          <p><code>/sumo:worktree &lt;task&gt;</code> creates a git worktree under a managed dir, opens a <b>plain interactive sumocode pane</b> inside it via a cmux split, and auto-runs a configured setup action. You drive that session directly. Review with the existing <code>/sumo:diff</code> + <code>/sumo:review</code>, then <code>/sumo:ship</code> commits, pushes, and opens the PR.</p>
+          <p class="why"><b>Why first:</b> it's the convergent feature both products lead with, it's exactly what you flagged, and every piece (cmux splits via <code>openCommandInNewSplit</code>, hunkdiff, review scribe, gh) already exists. <b>No bg_task needed</b> — the interactive pane is the same plumbing <code>/sumo:diff</code> uses. This is assembly, not invention.</p>
+        </div>
+        <div class="pcard p2">
+          <div class="ptag"><span class="rank">PRIORITY 02</span> · strong follow-up</div>
+          <h3>Handoff + an optional detached flavor</h3>
+          <p>Two things here. (a) <b>Handoff</b>: git glue to relocate a worktree's branch into the main session for inspection, or push a foreground thread into a background worktree — Codex's value is the safe one-branch-per-worktree enforcement. (b) An opt-in <code>/sumo:worktree --detach</code> that routes through <b>bg_task's sumocode runner</b> for the genuine dispatch-and-walk-away / fan-out-N-agents case, where the orchestrator harvests results.</p>
+          <p class="why"><b>Why:</b> the interactive pane (P1) covers the common case; bg_task is the right tool only when you want programmatic result collection, not babysitting.</p>
+        </div>
+        <div class="pcard p2">
+          <div class="ptag"><span class="rank">PRIORITY 03</span> · self-contained quick win</div>
+          <h3>Inline image rendering in the transcript</h3>
+          <p>Pi ships an <code>Image</code> TUI component that renders in Kitty / iTerm2 / Ghostty / WezTerm — and cmux embeds libghostty, so it qualifies. SumoTUI's retained renderer never wired it up: <code>ChatBlock</code> has no image variant, and <code>blocksFromContentPart</code> hits its <code>default:</code> case for <code>type: "image"</code> parts and drops them. Add an <code>image</code> block type, carry the base64 + MIME through the view-model, and render via Pi's <code>Image</code> in the scroll-renderer.</p>
+          <p class="why"><b>Why:</b> pasted/generated images currently vanish in default mode — Pi's classic renderer would have shown them. No new dependency (the component is Pi's), no protocol work, no git surface. Pure assembly inside <code>src/sumo-tui/transcript</code>.</p>
+        </div>
+        <div class="pcard p2">
+          <div class="ptag"><span class="rank">PRIORITY 04</span> · editor polish · OpenCode-style</div>
+          <h3>Show <code>[Image 1]</code> in the editor on image paste</h3>
+          <p>Pi's <code>handleClipboardImagePaste()</code> writes the clipboard image to a temp file and does <code>insertTextAtCursor(filePath)</code> — so the composer shows a raw <code>/var/folders/…/pi-clipboard-&lt;uuid&gt;.png</code> path as literal text. OpenCode instead inserts a readable <code>[Image #1]</code> token, keeps a side-map of token→path, and expands tokens back into real attachments on submit.</p>
+          <p class="why"><b>Why · distinct from P3:</b> P3 renders a <em>sent</em> image in the transcript; this keeps the <em>input</em> legible while composing and lets you stack several. Touches three points — intercept <code>onPasteImage</code>, hold token→path in <code>editor-draft-state.ts</code>, expand on submit. Medium effort: it overrides Pi-default behavior, so the non-SumoTUI path must stay intact.</p>
+        </div>
+        <div class="pcard p2">
+          <div class="ptag"><span class="rank">PRIORITY 05</span> · cheap, high-orientation</div>
+          <h3>Git/PR badge in the sidebar + quick actions</h3>
+          <p>Surface per-session branch + PR status (open/merged/closed) in the sidebar via a cached <code>gh</code> poll. Add project-scoped quick actions (configurable shell buttons, auto-run on worktree create) — the T3 setup-script primitive.</p>
+          <p class="why"><b>Why:</b> small surface, big day-to-day clarity when several agents run in parallel.</p>
+        </div>
+        <div class="pcard p3">
+          <div class="ptag"><span class="rank">PRIORITY 06</span> · exploratory</div>
+          <h3>Stateful scheduled automations</h3>
+          <p>Context-preserving thread wake-ups (cron + heartbeat) on top of bg_task. Plus a "read this cmux pane's output into context" bridge. Genuinely new capability, but heavier and less requested — stage it after the core loop proves out.</p>
+          <p class="why"><b>Why last:</b> highest novelty, lowest certainty of payoff; revisit once the worktree loop is daily-driven.</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="skip">
+      <div class="section-label"><span class="dot"></span><span class="num">07</span> What to skip <span class="rule"></span></div>
+      <p class="subhead">Features that don't translate to a terminal-native tool, or that SumoCode already covers better elsewhere.</p>
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr><th>Feature</th><th>Why skip</th></tr></thead>
+          <tbody>
+            <tr><td><b>Pop-out / always-on-top window</b></td><td>GUI-only affordance. cmux/tmux pane management already covers spatial arrangement.</td></tr>
+            <tr><td><b>In-app browser + element comments</b></td><td>Heavy. <code>agent_browser</code> + <code>chrome-devtools</code> MCP already give SumoCode real browser control; element-comment UX isn't worth a custom renderer.</td></tr>
+            <tr><td><b>Computer use (drive macOS apps)</b></td><td>Large surface, narrow payoff, region-restricted even in Codex. Out of scope for a coding TUI.</td></tr>
+            <tr><td><b>Image generation in-thread</b></td><td>Nice-to-have, not workflow-critical. Pi handles image input already; generation is a model/provider concern.</td></tr>
+            <tr><td><b>Cloud thread mode</b></td><td>Requires hosted infra. SumoCode is local-first by design; bg_task + worktrees give the parallelism without a backend.</td></tr>
+            <tr><td><b>Voice dictation</b></td><td>OS-level dictation already exists; low marginal value inside the TUI.</td></tr>
+            <tr><td><b>Three-panel Electron layout</b></td><td>SumoTUI's sidebar + transcript + footer is the terminal-native equivalent and is already the house design.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="body">
+        The discipline here mirrors T3's: don't rebuild Electron chrome in a terminal. Adopt the
+        <strong>workflow primitives</strong> that convergent products validated, lean on MCP for the
+        browser/vision surface, and keep SumoCode's identity — a fast, retained, cmux-native renderer.
+      </p>
+    </section>
+
+    <div class="signoff">
+      <div class="lhs"><b>SumoCode</b> · codex + t3code feature audit · v0.3.0</div>
+      <div class="rhs">zeus ⚡ · sumodeus temple · 2026-05-28</div>
+    </div>
+
+  </main>
+</div>
+
+</body>
+</html>

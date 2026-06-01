@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { appendFileSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -10,8 +10,10 @@ import {
 } from "./task-manager.js";
 
 const spawnMock = vi.hoisted(() => vi.fn());
+const execFileSyncMock = vi.hoisted(() => vi.fn(() => "Mon Jun  1 10:00:00 2026\n"));
 
 vi.mock("node:child_process", () => ({
+	execFileSync: execFileSyncMock,
 	spawn: spawnMock,
 }));
 
@@ -92,13 +94,18 @@ function mockLongLivedChild(opts: { unkillable?: boolean; pid?: number } = {}) {
 describe("BackgroundTaskManager", () => {
 	let baseDir: string;
 	let originalCmuxSurface: string | undefined;
+	let originalTmpdir: string | undefined;
 	let originalAgentModel: string | undefined;
 	let originalAgentThinking: string | undefined;
 
 	beforeEach(() => {
 		spawnMock.mockReset();
+		execFileSyncMock.mockReset();
+		execFileSyncMock.mockReturnValue("Mon Jun  1 10:00:00 2026\n");
 		baseDir = mkdtempSync(join(tmpdir(), "sumocode-bg-test-"));
 		originalCmuxSurface = process.env.CMUX_SURFACE_ID;
+		originalTmpdir = process.env.TMPDIR;
+		process.env.TMPDIR = baseDir;
 		originalAgentModel = process.env.SUMOCODE_BG_AGENT_MODEL;
 		originalAgentThinking = process.env.SUMOCODE_BG_AGENT_THINKING;
 		delete process.env.CMUX_WORKSPACE_ID;
@@ -106,7 +113,7 @@ describe("BackgroundTaskManager", () => {
 		delete process.env.SUMOCODE_BG_AGENT_THINKING;
 	});
 
-	function restoreEnv(name: "CMUX_SURFACE_ID" | "SUMOCODE_BG_AGENT_MODEL" | "SUMOCODE_BG_AGENT_THINKING", value: string | undefined): void {
+	function restoreEnv(name: "CMUX_SURFACE_ID" | "TMPDIR" | "SUMOCODE_BG_AGENT_MODEL" | "SUMOCODE_BG_AGENT_THINKING", value: string | undefined): void {
 		if (value === undefined) {
 			delete process.env[name];
 		} else {
@@ -118,6 +125,7 @@ describe("BackgroundTaskManager", () => {
 		vi.restoreAllMocks();
 		rmSync(baseDir, { recursive: true, force: true });
 		restoreEnv("CMUX_SURFACE_ID", originalCmuxSurface);
+		restoreEnv("TMPDIR", originalTmpdir);
 		restoreEnv("SUMOCODE_BG_AGENT_MODEL", originalAgentModel);
 		restoreEnv("SUMOCODE_BG_AGENT_THINKING", originalAgentThinking);
 	});
@@ -137,7 +145,7 @@ describe("BackgroundTaskManager", () => {
 		});
 
 		expect(spawnMock).toHaveBeenCalledOnce();
-		// On POSIX the shell wraps the command with `( cmd ) >>logFile 2>&1`
+		// On POSIX the shell wraps the command with log redirection + exit.code persistence
 		// so the orphaned process can keep writing to the log even if the
 		// orchestrator exits. Verify that shape rather than the file contents
 		// (the mocked spawn does not actually run a shell).
@@ -146,6 +154,7 @@ describe("BackgroundTaskManager", () => {
 		if (process.platform !== "win32") {
 			expect(commandStr).toContain("echo hello");
 			expect(commandStr).toContain(`>>'${task.logFile}'`);
+			expect(commandStr).toContain(`> '${task.exitFile}'`);
 			expect(commandStr).toContain("2>&1");
 			expect(spawnArgs[2]?.stdio).toBe("ignore");
 		}
@@ -175,7 +184,10 @@ describe("BackgroundTaskManager", () => {
 		expect(task.metaFile).toBeDefined();
 		expect(existsSync(task.metaFile!)).toBe(true);
 		const initial = JSON.parse(readFileSync(task.metaFile!, "utf8"));
+		expect(initial.schemaVersion).toBe(2);
 		expect(initial.id).toBe(task.id);
+		expect(initial.pid).toBe(4242);
+		expect(initial.processStartTime).toBe("Mon Jun  1 10:00:00 2026");
 		expect(initial.command).toBe("echo meta");
 		expect(initial.runner).toBe("shell");
 		expect(initial.status).toBe("running");
@@ -744,6 +756,416 @@ describe("BackgroundTaskManager", () => {
 		}
 	});
 
+	it("preserves notifyOnExit flag across recovery", () => {
+		const root = join(baseDir, "sumocode-bg", "bg-notify-false-1000");
+		mkdirSync(root, { recursive: true });
+		const logFile = join(root, "output.log");
+		const metaFile = join(root, "meta.json");
+		writeFileSync(logFile, "running\n");
+		writeFileSync(metaFile, `${JSON.stringify({
+			schemaVersion: 2,
+			id: "bg-notify-false",
+			command: "echo quiet",
+			cwd: "/tmp",
+			status: "running",
+			startedAt: 1000,
+			updatedAt: 1000,
+			logFile,
+			metaFile,
+			visible: false,
+			runner: "shell",
+			notifyOnExit: false,
+		}, null, 2)}\n`);
+
+		const manager = new BackgroundTaskManager(buildPiStub() as never);
+
+		expect(manager.findTask("bg-notify-false")?.notifyOnExit).toBe(false);
+	});
+
+	it("notifies when a recovered running task completes after reload", async () => {
+		const root = join(baseDir, "sumocode-bg", "bg-notify-true-1000");
+		mkdirSync(root, { recursive: true });
+		const logFile = join(root, "output.log");
+		const exitFile = join(root, "exit.code");
+		const metaFile = join(root, "meta.json");
+		writeFileSync(logFile, "running\n");
+		writeFileSync(metaFile, `${JSON.stringify({
+			schemaVersion: 2,
+			id: "bg-notify-true",
+			command: "echo loud",
+			cwd: "/tmp",
+			status: "running",
+			startedAt: 1000,
+			updatedAt: 1000,
+			logFile,
+			exitFile,
+			metaFile,
+			visible: false,
+			runner: "shell",
+			notifyOnExit: true,
+		}, null, 2)}\n`);
+		const pi = buildPiStub();
+		const manager = new BackgroundTaskManager(pi as never);
+		const task = manager.findTask("bg-notify-true");
+
+		writeFileSync(exitFile, "0");
+		await vi.waitFor(() => expect(task?.status).toBe("completed"));
+
+		expect(pi.sendUserMessage).toHaveBeenCalled();
+	});
+
+	it("recovers shell tasks and reconciles exit.code after reload", () => {
+		const root = join(baseDir, "sumocode-bg", "bg-recovered-1-1000");
+		mkdirSync(root, { recursive: true });
+		const logFile = join(root, "output.log");
+		const exitFile = join(root, "exit.code");
+		const metaFile = join(root, "meta.json");
+		writeFileSync(logFile, "done\n");
+		writeFileSync(exitFile, "0");
+		writeFileSync(metaFile, `${JSON.stringify({
+			schemaVersion: 2,
+			id: "bg-recovered-1",
+			command: "echo recovered",
+			cwd: "/tmp",
+			status: "running",
+			startedAt: 1000,
+			updatedAt: 1000,
+			logFile,
+			exitFile,
+			metaFile,
+			visible: false,
+			runner: "shell",
+		}, null, 2)}\n`);
+
+		const pi = buildPiStub();
+		const manager = new BackgroundTaskManager(pi as never);
+		const task = manager.findTask("bg-recovered-1");
+
+		expect(task?.status).toBe("completed");
+		expect(task?.exitCode).toBe(0);
+		expect(manager.getTaskHarvest(task!, 1000).content).toContain("done");
+		expect(pi.sendUserMessage).toHaveBeenCalledWith(
+			expect.stringContaining("background task bg-recovered-1 completed"),
+			{ deliverAs: "followUp" },
+		);
+	});
+
+	it("keeps new invisible shell tasks running when process identity cannot be captured", () => {
+		execFileSyncMock.mockImplementation(() => {
+			throw new Error("ps unavailable");
+		});
+		const child = mockLongLivedChild({ pid: 6161 });
+		spawnMock.mockReturnValue(child);
+		const manager = new BackgroundTaskManager(buildPiStub() as never);
+
+		const task = manager.spawnTask({ command: "sleep 100", cwd: "/tmp", notifyOnExit: false });
+
+		expect(task.status).toBe("running");
+		expect(child.kill).not.toHaveBeenCalled();
+		expect(readFileSync(task.logFile, "utf8")).toContain("failed to capture process identity");
+	});
+
+	it("stops recovered invisible shell tasks by persisted pid", async () => {
+		const root = join(baseDir, "sumocode-bg", "bg-recovered-running-1000");
+		mkdirSync(root, { recursive: true });
+		const logFile = join(root, "output.log");
+		const exitFile = join(root, "exit.code");
+		const metaFile = join(root, "meta.json");
+		writeFileSync(logFile, "running\n");
+		writeFileSync(metaFile, `${JSON.stringify({
+			schemaVersion: 2,
+			id: "bg-recovered-running",
+			pid: 7777,
+			processStartTime: "Mon Jun  1 10:00:00 2026",
+			command: "sleep 100",
+			cwd: "/tmp",
+			status: "running",
+			startedAt: 1000,
+			updatedAt: 1000,
+			logFile,
+			exitFile,
+			metaFile,
+			visible: false,
+			runner: "shell",
+		}, null, 2)}\n`);
+		let alive = true;
+		const processKill = vi.spyOn(process, "kill").mockImplementation(((pid: number, signal?: string | number) => {
+			if (signal === 0) {
+				if (alive && (pid === 7777 || pid === -7777)) return true;
+				throw new Error("not alive");
+			}
+			if (pid === -7777 && signal === "SIGTERM") {
+				alive = false;
+				return true;
+			}
+			return true;
+		}) as typeof process.kill);
+		try {
+			const manager = new BackgroundTaskManager(buildPiStub() as never);
+			const task = manager.findTask("bg-recovered-running");
+
+			expect(task?.status).toBe("running");
+			const result = await manager.stopTask(task!);
+
+			expect(result.ok).toBe(true);
+			expect(task?.status).toBe("stopped");
+			expect(processKill).toHaveBeenCalledWith(-7777, "SIGTERM");
+		} finally {
+			processKill.mockRestore();
+		}
+	});
+
+	it("recaptures missing recovered process identity before stopping", async () => {
+		const root = join(baseDir, "sumocode-bg", "bg-unverified-pid-1000");
+		mkdirSync(root, { recursive: true });
+		const logFile = join(root, "output.log");
+		const exitFile = join(root, "exit.code");
+		const metaFile = join(root, "meta.json");
+		writeFileSync(logFile, "still here\n");
+		writeFileSync(metaFile, `${JSON.stringify({
+			schemaVersion: 2,
+			id: "bg-unverified-pid",
+			pid: 6666,
+			command: "sleep 100",
+			cwd: "/tmp",
+			status: "running",
+			startedAt: 1000,
+			updatedAt: 1000,
+			logFile,
+			exitFile,
+			metaFile,
+			visible: false,
+			runner: "shell",
+		}, null, 2)}\n`);
+		let alive = true;
+		const processKill = vi.spyOn(process, "kill").mockImplementation(((pid: number, signal?: string | number) => {
+			if (signal === 0) {
+				if (alive && (pid === 6666 || pid === -6666)) return true;
+				throw new Error("not alive");
+			}
+			if (pid === -6666 && signal === "SIGTERM") {
+				alive = false;
+				return true;
+			}
+			return true;
+		}) as typeof process.kill);
+		try {
+			const manager = new BackgroundTaskManager(buildPiStub() as never);
+			const task = manager.findTask("bg-unverified-pid");
+
+			expect(task?.status).toBe("running");
+			expect(manager.getTaskHarvest(task!, 1000).content).toContain("still here");
+			expect(await manager.stopTask(task!)).toMatchObject({ ok: true });
+			expect(task?.status).toBe("stopped");
+			expect(processKill).toHaveBeenCalledWith(-6666, "SIGTERM");
+		} finally {
+			processKill.mockRestore();
+		}
+	});
+
+	it("leaves recovered shell task running when stop identity probe fails", async () => {
+		const root = join(baseDir, "sumocode-bg", "bg-probe-fails-1000");
+		mkdirSync(root, { recursive: true });
+		const logFile = join(root, "output.log");
+		const exitFile = join(root, "exit.code");
+		const metaFile = join(root, "meta.json");
+		writeFileSync(logFile, "running\n");
+		writeFileSync(metaFile, `${JSON.stringify({
+			schemaVersion: 2,
+			id: "bg-probe-fails",
+			pid: 5555,
+			processStartTime: "Mon Jun  1 10:00:00 2026",
+			command: "sleep 100",
+			cwd: "/tmp",
+			status: "running",
+			startedAt: 1000,
+			updatedAt: 1000,
+			logFile,
+			exitFile,
+			metaFile,
+			visible: false,
+			runner: "shell",
+		}, null, 2)}\n`);
+		execFileSyncMock.mockImplementation(() => {
+			throw new Error("ps unavailable");
+		});
+		const processKill = vi.spyOn(process, "kill").mockImplementation(((pid: number, signal?: string | number) => {
+			if (signal === 0 && (pid === 5555 || pid === -5555)) return true;
+			return true;
+		}) as typeof process.kill);
+		try {
+			const manager = new BackgroundTaskManager(buildPiStub() as never);
+			const task = manager.findTask("bg-probe-fails");
+
+			expect(task?.status).toBe("running");
+			expect(await manager.stopTask(task!)).toMatchObject({ ok: false });
+			expect(task?.status).toBe("running");
+			expect(processKill).not.toHaveBeenCalledWith(-5555, "SIGTERM");
+
+			writeFileSync(exitFile, "0");
+			await vi.waitFor(() => expect(task?.status).toBe("completed"));
+		} finally {
+			processKill.mockRestore();
+		}
+	});
+
+	it("refuses to stop a recovered shell task when pid identity changed", async () => {
+		const root = join(baseDir, "sumocode-bg", "bg-reused-pid-1000");
+		mkdirSync(root, { recursive: true });
+		const logFile = join(root, "output.log");
+		const exitFile = join(root, "exit.code");
+		const metaFile = join(root, "meta.json");
+		writeFileSync(logFile, "running\n");
+		writeFileSync(metaFile, `${JSON.stringify({
+			schemaVersion: 2,
+			id: "bg-reused-pid",
+			pid: 8888,
+			processStartTime: "Mon Jun  1 10:00:00 2026",
+			command: "sleep 100",
+			cwd: "/tmp",
+			status: "running",
+			startedAt: 1000,
+			updatedAt: 1000,
+			logFile,
+			exitFile,
+			metaFile,
+			visible: false,
+			runner: "shell",
+		}, null, 2)}\n`);
+		execFileSyncMock.mockReturnValue("Mon Jun  1 11:00:00 2026\n");
+		const processKill = vi.spyOn(process, "kill").mockImplementation(((pid: number, signal?: string | number) => {
+			if (signal === 0 && (pid === 8888 || pid === -8888)) return true;
+			return true;
+		}) as typeof process.kill);
+		try {
+			const manager = new BackgroundTaskManager(buildPiStub() as never);
+			const task = manager.findTask("bg-reused-pid");
+
+			expect(task?.status).toBe("failed");
+			expect(await manager.stopTask(task!)).toMatchObject({ ok: false });
+			expect(processKill).not.toHaveBeenCalledWith(-8888, "SIGTERM");
+		} finally {
+			processKill.mockRestore();
+		}
+	});
+
+	it("shutdown signals recovered invisible shell tasks by verified pid", () => {
+		const root = join(baseDir, "sumocode-bg", "bg-shutdown-1000");
+		mkdirSync(root, { recursive: true });
+		const logFile = join(root, "output.log");
+		const metaFile = join(root, "meta.json");
+		writeFileSync(logFile, "running\n");
+		writeFileSync(metaFile, `${JSON.stringify({
+			schemaVersion: 2,
+			id: "bg-shutdown",
+			pid: 4444,
+			processStartTime: "Mon Jun  1 10:00:00 2026",
+			command: "sleep 100",
+			cwd: "/tmp",
+			status: "running",
+			startedAt: 1000,
+			updatedAt: 1000,
+			logFile,
+			metaFile,
+			visible: false,
+			runner: "shell",
+		}, null, 2)}\n`);
+		const processKill = vi.spyOn(process, "kill").mockImplementation(((pid: number, signal?: string | number) => {
+			if (signal === 0 && pid === 4444) return true;
+			return true;
+		}) as typeof process.kill);
+		try {
+			const manager = new BackgroundTaskManager(buildPiStub() as never);
+
+			manager.shutdown();
+
+			expect(processKill).toHaveBeenCalledWith(-4444, "SIGTERM");
+		} finally {
+			processKill.mockRestore();
+		}
+	});
+
+	it("recovers completed agent tasks from response.md after reload", () => {
+		const root = join(baseDir, "sumocode-bg", "bg-agent-1-1000");
+		mkdirSync(root, { recursive: true });
+		const logFile = join(root, "output.log");
+		const responseFile = join(root, "response.md");
+		const metaFile = join(root, "meta.json");
+		writeFileSync(logFile, "agent started\n");
+		writeFileSync(responseFile, "final answer\n");
+		writeFileSync(metaFile, `${JSON.stringify({
+			schemaVersion: 2,
+			id: "bg-agent-1",
+			command: "do work",
+			cwd: "/tmp",
+			status: "running",
+			startedAt: 1000,
+			updatedAt: 1000,
+			logFile,
+			metaFile,
+			responseFile,
+			visible: true,
+			runner: "sumocode",
+			cmux: { workspaceRef: "workspace:1", surfaceRef: "surface:2" },
+		}, null, 2)}\n`);
+
+		const manager = new BackgroundTaskManager(buildPiStub() as never);
+		const task = manager.findTask("bg-agent-1");
+
+		expect(task?.status).toBe("completed");
+		expect(task?.exitCode).toBe(0);
+		expect(manager.getTaskHarvest(task!, 1000)).toMatchObject({ kind: "response", content: "final answer\n", ready: true });
+	});
+
+	it("ignores older meta schema versions during recovery", () => {
+		const root = join(baseDir, "sumocode-bg", "bg-v1-1-1000");
+		mkdirSync(root, { recursive: true });
+		writeFileSync(join(root, "meta.json"), JSON.stringify({
+			schemaVersion: 1,
+			id: "bg-v1-1",
+			pid: 9999,
+			command: "sleep 100",
+			cwd: "/tmp",
+			status: "running",
+			startedAt: 1000,
+			updatedAt: 1000,
+			logFile: join(root, "output.log"),
+			visible: false,
+			runner: "shell",
+		}));
+
+		const manager = new BackgroundTaskManager(buildPiStub() as never);
+
+		expect(manager.findTask("bg-v1-1")).toBeUndefined();
+	});
+
+	it("ignores unknown meta schema versions during recovery", () => {
+		const root = join(baseDir, "sumocode-bg", "bg-legacy-1-1000");
+		mkdirSync(root, { recursive: true });
+		writeFileSync(join(root, "meta.json"), JSON.stringify({ schemaVersion: 999, id: "bg-legacy-1" }));
+
+		const manager = new BackgroundTaskManager(buildPiStub() as never);
+
+		expect(manager.findTask("bg-legacy-1")).toBeUndefined();
+	});
+
+	it("generates stable non-counter IDs that do not collide after reload", () => {
+		spawnMock.mockReturnValue(mockLongLivedChild({ pid: 9001 }));
+		const processKill = vi.spyOn(process, "kill").mockImplementation(((pid: number, signal?: string | number) => {
+			if (signal === 0 && pid === 9001) return true;
+			return true;
+		}) as typeof process.kill);
+		try {
+			const first = new BackgroundTaskManager(buildPiStub() as never).spawnTask({ command: "sleep 10", cwd: "/tmp" });
+			const second = new BackgroundTaskManager(buildPiStub() as never).spawnTask({ command: "echo next", cwd: "/tmp" });
+
+			expect(second.id).not.toBe(first.id);
+			expect(second.id).toMatch(/^bg-[a-z0-9]+-[a-z0-9]+$/);
+		} finally {
+			processKill.mockRestore();
+		}
+	});
+
 	it("readLogTail returns only the tail bytes of a large log", async () => {
 		// Direct sanity check on the perf fix: write a 200KB file and confirm
 		// readLogTail returns < 20KB. The pollVisibleTask used to readFileSync
@@ -766,11 +1188,13 @@ describe("BackgroundTaskManager", () => {
 	it("lists and clears finished tasks", async () => {
 		spawnMock.mockReturnValue(mockChild(0));
 		const manager = new BackgroundTaskManager(buildPiStub() as never);
-		manager.spawnTask({ command: "echo one", cwd: "/tmp" });
+		const task = manager.spawnTask({ command: "echo one", cwd: "/tmp" });
 		await vi.waitFor(() => expect(manager.listTasks()[0]?.status).toBe("completed"));
 
 		expect(manager.listTasks()).toHaveLength(1);
 		expect(manager.clearFinishedTasks()).toBe(1);
 		expect(manager.listTasks()).toHaveLength(0);
+		expect(existsSync(task.metaFile!)).toBe(false);
+		expect(new BackgroundTaskManager(buildPiStub() as never).listTasks()).toHaveLength(0);
 	});
 });

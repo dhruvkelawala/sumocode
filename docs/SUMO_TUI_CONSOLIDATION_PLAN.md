@@ -114,7 +114,7 @@ Decision doc: [`docs/SUMO_TUI_PI_PATCH_STRATEGY.md`](./SUMO_TUI_PI_PATCH_STRATEG
 
 Scope:
 
-- Audit `patches/@earendil-works__pi-coding-agent@0.78.0.patch` and `loadSumoInteractiveMode` usage.
+- Audit `patches/@earendil-works__pi-coding-agent@*.patch` and `loadSumoInteractiveMode` usage.
 - Decide whether public Pi APIs can replace the patch.
 - If not, document the patch maintenance contract and Pi bump smoke matrix.
 

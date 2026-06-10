@@ -1,0 +1,37 @@
+diff --git a/dist/main.js b/dist/main.js
+index bcef400..3d5c6f1 100644
+--- a/dist/main.js
++++ b/dist/main.js
+@@ -615,7 +615,7 @@ export async function main(args, options) {
+         await runRpcMode(runtime);
+     }
+     else if (appMode === "interactive") {
+-        const interactiveMode = new InteractiveMode(runtime, {
++        const interactiveOptions = {
+             migratedProviders,
+             modelFallbackMessage,
+             autoTrustOnReloadCwd,
+@@ -623,7 +623,11 @@ export async function main(args, options) {
+             initialImages,
+             initialMessages: parsed.messages,
+             verbose: parsed.verbose,
+-        });
++        };
++        const useSumoTui = isTruthyEnvFlag(process.env.SUMO_TUI) || parsed.unknownFlags.has("sumo-tui");
++        const interactiveMode = useSumoTui
++            ? await loadSumoInteractiveMode(runtime, interactiveOptions)
++            : new InteractiveMode(runtime, interactiveOptions);
+         if (startupBenchmark) {
+             await interactiveMode.init();
+             time("interactiveMode.init");
+@@ -657,4 +661,9 @@ export async function main(args, options) {
+         return;
+     }
+ }
++async function loadSumoInteractiveMode(...args) {
++    const specifier = process.env.SUMO_TUI_MODULE ?? "@dhruvkelawala/sumocode/sumo-interactive-mode";
++    const { SumoInteractiveMode } = await import(specifier);
++    return new SumoInteractiveMode(...args);
++}
+ //# sourceMappingURL=main.js.map
+\ No newline at end of file

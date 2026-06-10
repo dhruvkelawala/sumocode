@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-VERSIONS=("${@:-0.78.0}")
+VERSIONS=("${@:-0.79.1}")
 
 for VERSION in ${VERSIONS[*]}; do
 	WORK_DIR="/tmp/sumo-pi-${VERSION}"

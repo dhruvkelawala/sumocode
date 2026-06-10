@@ -71,6 +71,17 @@ function parseTerminalState(buffer: string): TerminalStateProbe {
 }
 
 /**
+ * Pi 0.79 asks about project trust before retained-mode boot whenever a
+ * project or ancestor has trust-gated inputs. Integration tests exercise
+ * SumoCode runtime behavior, not the trust prompt, so approve for the child
+ * PTY unless a test explicitly supplies a trust override.
+ */
+function applyDefaultProjectTrustOverride(args: readonly string[]): string[] {
+	if (args.some((arg) => arg === "--approve" || arg === "-a" || arg === "--no-approve" || arg === "-na")) return [...args];
+	return [...args, "--approve"];
+}
+
+/**
  * SumoCode debug env vars that leak retained-mode wiring or diagnostics into
  * spawned tests when set in the developer's shell (e.g. `sumocode -d`). They
  * must NOT be inherited by integration child processes unless a test
@@ -102,7 +113,8 @@ export function spawnPiPty(options: SpawnPiPtyOptions = {}): SpawnedPiPty {
 	ensureNodePtySpawnHelperExecutable();
 
 	const cwd = resolve(options.cwd ?? process.cwd());
-	const child: IPty = spawn(process.env.PI_BIN ?? "pi", options.args ?? ["--offline", "--no-extensions", "-e", "./src/extension.ts", "--no-session"], {
+	const args = applyDefaultProjectTrustOverride(options.args ?? ["--offline", "--no-extensions", "-e", "./src/extension.ts", "--no-session"]);
+	const child: IPty = spawn(process.env.PI_BIN ?? "pi", args, {
 		name: "xterm-256color",
 		cols: options.cols ?? 100,
 		rows: options.rows ?? 30,

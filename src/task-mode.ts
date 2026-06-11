@@ -112,6 +112,19 @@ export function writeTaskExitMarker(code: number, env: NodeJS.ProcessEnv = proce
 	}
 }
 
+export function writeTaskStartedMarker(env: NodeJS.ProcessEnv = process.env): void {
+	const file = env.SUMOCODE_TASK_STARTED_FILE;
+	if (!file) return;
+	try {
+		writeFileSync(file, `${process.pid}\n`);
+		diagLog("started_marker_written", { file });
+	} catch (error) {
+		diagLog("started_marker_write_failed", {
+			message: error instanceof Error ? error.message : String(error),
+		});
+	}
+}
+
 function installTaskExitMarker(env: NodeJS.ProcessEnv = process.env): void {
 	if (!env.SUMOCODE_TASK_EXIT_FILE) return;
 	process.once("exit", (code) => writeTaskExitMarker(typeof code === "number" ? code : 0, env));
@@ -147,10 +160,16 @@ export function shouldInstallTaskModeAutoExit(options: TaskModeAutoExitOptions =
  * grace-period cycle handles the close.
  */
 export function installTaskModeAutoExit(pi: ExtensionAPI, options: TaskModeAutoExitOptions = {}): void {
+	const env = options.env ?? process.env;
+	if (isActive(env)) {
+		writeTaskStartedMarker(env);
+		installTaskExitMarker(env);
+	}
+
 	if (!shouldInstallTaskModeAutoExit(options)) {
 		diagLog("install_skipped", {
-			taskMode: process.env.SUMOCODE_TASK_MODE,
-			keepOpen: process.env.SUMOCODE_TASK_KEEP_OPEN,
+			taskMode: env.SUMOCODE_TASK_MODE,
+			keepOpen: env.SUMOCODE_TASK_KEEP_OPEN,
 		});
 		return;
 	}
@@ -159,8 +178,6 @@ export function installTaskModeAutoExit(pi: ExtensionAPI, options: TaskModeAutoE
 	let userTookOver = false;
 	let pending: { tick: ReturnType<typeof setInterval>; shutdown: ReturnType<typeof setTimeout> } | undefined;
 	let armed = false;
-
-	installTaskExitMarker(options.env ?? process.env);
 	diagLog("install", {
 		graceMs,
 		cmuxSurfaceId: process.env.CMUX_SURFACE_ID,

@@ -130,6 +130,7 @@ export function buildVisibleAgentCommand(
 	const envPrefix: string[] = [
 		`SUMOCODE_TASK_RESPONSE_FILE=${shellEscape(options.paths.responseFile)}`,
 		`SUMOCODE_TASK_EXIT_FILE=${shellEscape(options.paths.exitFile)}`,
+		`SUMOCODE_TASK_STARTED_FILE=${shellEscape(options.paths.markerFile)}`,
 		`SUMOCODE_TASK_DIAG_FILE=${shellEscape(options.paths.diagFile)}`,
 	];
 

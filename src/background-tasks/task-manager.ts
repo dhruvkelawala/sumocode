@@ -40,6 +40,7 @@ import {
 
 const POLL_INTERVAL_MS = 500;
 const RESPONSE_POLL_INTERVAL_MS = 750;
+const DEFAULT_AGENT_STARTUP_TIMEOUT_MS = 2 * 60 * 1000;
 const DEFAULT_VISIBLE_DIRECTION: CmuxSplitDirection = "right";
 export const DEFAULT_SUMOCODE_AGENT_MODEL = "openai-codex/gpt-5.5";
 export const DEFAULT_SUMOCODE_AGENT_THINKING: BackgroundTaskThinking = "low";
@@ -70,6 +71,7 @@ interface InternalTask extends BackgroundTask {
 	pollTimer?: ReturnType<typeof setInterval>;
 	responseTimer?: ReturnType<typeof setInterval>;
 	logCapTimer?: ReturnType<typeof setInterval>;
+	startupDeadline?: number;
 	/**
 	 * Promise that resolves once the visible-spawn coroutine finishes (success
 	 * OR caught failure). `stopTask` awaits this so it can never finalize a task
@@ -338,6 +340,7 @@ function parseRecoveredTask(raw: unknown, metaFile: string): InternalTask | unde
 		logFile: snapshot.logFile,
 		exitFile: snapshot.exitFile,
 		metaFile,
+		markerFile: snapshot.markerFile,
 		promptFile: snapshot.promptFile,
 		responseFile: snapshot.responseFile,
 		diagFile: snapshot.diagFile,
@@ -453,6 +456,7 @@ export class BackgroundTaskManager {
 			task.pollTimer = setInterval(() => this.pollVisibleTask(task), POLL_INTERVAL_MS);
 			if (typeof task.pollTimer.unref === "function") task.pollTimer.unref();
 		} else if (task.exitFile) {
+			this.armAgentStartupDeadline(task);
 			this.armResponseWatcher(task);
 		}
 	}
@@ -588,6 +592,7 @@ export class BackgroundTaskManager {
 			logFile: paths.logFile,
 			exitFile: paths.exitFile,
 			metaFile: paths.metaFile,
+			markerFile: runner === "shell" ? undefined : paths.markerFile,
 			promptFile: runner === "shell" ? undefined : paths.promptFile,
 			responseFile: runner === "shell" ? undefined : paths.responseFile,
 			diagFile: runner === "shell" ? undefined : paths.diagFile,
@@ -771,8 +776,17 @@ export class BackgroundTaskManager {
 			// Completion is keyed to the real process-exit marker written by
 			// src/task-mode.ts so multi-turn child sessions are not marked done on
 			// their first agent_end.
+			this.armAgentStartupDeadline(task);
 			this.armResponseWatcher(task);
 		}
+	}
+
+	private armAgentStartupDeadline(task: InternalTask): void {
+		if (!task.markerFile || existsSync(task.markerFile)) {
+			task.startupDeadline = undefined;
+			return;
+		}
+		task.startupDeadline = task.startedAt + DEFAULT_AGENT_STARTUP_TIMEOUT_MS;
 	}
 
 	/**
@@ -780,9 +794,12 @@ export class BackgroundTaskManager {
 	 * bus we could subscribe to, so a 750ms file-poll is the simplest reliable
 	 * way to detect hand-off completion. The interval is cancelled once the
 	 * exit marker appears, on explicit stop, or on manager shutdown. Absence of
-	 * the marker is deliberately non-terminal: visible child agents may run for
-	 * longer than a fixed response-era timeout, and some panes are intentionally
-	 * left open for user takeover.
+	 * the exit marker is deliberately non-terminal after the child writes its
+	 * task-mode started marker: visible child agents may run for longer than a
+	 * fixed response-era timeout, and some panes are intentionally left open for
+	 * user takeover. Before that started marker appears, a bounded startup
+	 * timeout catches launcher/Pi crashes that happened before task-mode could
+	 * install the exit marker.
 	 */
 	private armResponseWatcher(task: InternalTask): void {
 		if (!task.exitFile) return;
@@ -797,6 +814,16 @@ export class BackgroundTaskManager {
 				const exitCode = readExitCodeFromFile(readFileSync(task.exitFile, "utf8"));
 				this.finalizeTask(task, exitCode, "self-exit");
 				return;
+			}
+			if (task.markerFile && existsSync(task.markerFile)) {
+				task.startupDeadline = undefined;
+			} else if (task.startupDeadline && Date.now() > task.startupDeadline) {
+				appendLogLine(
+					task.logFile,
+					`[bg-task] startup timeout: task-mode started marker not written within ${Math.round(DEFAULT_AGENT_STARTUP_TIMEOUT_MS / 1000)}s; marking task failed before handoff became live\n`,
+					this.logMaxBytes,
+				);
+				this.finalizeTask(task, null, "self-exit");
 			}
 		}, RESPONSE_POLL_INTERVAL_MS);
 		if (typeof task.responseTimer.unref === "function") {

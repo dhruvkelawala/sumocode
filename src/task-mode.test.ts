@@ -7,6 +7,7 @@ import {
 	installTaskModeAutoExit,
 	shouldInstallTaskModeAutoExit,
 	writeTaskExitMarker,
+	writeTaskStartedMarker,
 } from "./task-mode.js";
 
 type Handler = (...args: unknown[]) => unknown;
@@ -119,6 +120,7 @@ describe("installTaskModeAutoExit", () => {
 	let originalSurfaceId: string | undefined;
 	let originalResponseFile: string | undefined;
 	let originalExitFile: string | undefined;
+	let originalStartedFile: string | undefined;
 	let workDir: string | undefined;
 
 	beforeEach(() => {
@@ -127,8 +129,10 @@ describe("installTaskModeAutoExit", () => {
 		process.env.CMUX_SURFACE_ID = "surface:test";
 		originalResponseFile = process.env.SUMOCODE_TASK_RESPONSE_FILE;
 		originalExitFile = process.env.SUMOCODE_TASK_EXIT_FILE;
+		originalStartedFile = process.env.SUMOCODE_TASK_STARTED_FILE;
 		delete process.env.SUMOCODE_TASK_RESPONSE_FILE;
 		delete process.env.SUMOCODE_TASK_EXIT_FILE;
+		delete process.env.SUMOCODE_TASK_STARTED_FILE;
 		workDir = undefined;
 	});
 
@@ -140,6 +144,8 @@ describe("installTaskModeAutoExit", () => {
 		else process.env.SUMOCODE_TASK_RESPONSE_FILE = originalResponseFile;
 		if (originalExitFile === undefined) delete process.env.SUMOCODE_TASK_EXIT_FILE;
 		else process.env.SUMOCODE_TASK_EXIT_FILE = originalExitFile;
+		if (originalStartedFile === undefined) delete process.env.SUMOCODE_TASK_STARTED_FILE;
+		else process.env.SUMOCODE_TASK_STARTED_FILE = originalStartedFile;
 		if (workDir) rmSync(workDir, { recursive: true, force: true });
 	});
 
@@ -296,6 +302,27 @@ describe("installTaskModeAutoExit", () => {
 
 		expect(readFileSync(responseFile, "utf8").trim()).toBe("second");
 		expect(ctx.ui.setStatus).toHaveBeenCalledTimes(1);
+	});
+
+	it("writes a task-started marker for manager startup liveness", () => {
+		workDir = mkdtempSync(join(tmpdir(), "sumocode-task-mode-test-"));
+		const startedFile = join(workDir, "started.marker");
+		writeTaskStartedMarker({ SUMOCODE_TASK_STARTED_FILE: startedFile } as NodeJS.ProcessEnv);
+
+		expect(readFileSync(startedFile, "utf8").trim()).toBe(String(process.pid));
+	});
+
+	it("writes a task-started marker during task-mode install", () => {
+		workDir = mkdtempSync(join(tmpdir(), "sumocode-task-mode-test-"));
+		const startedFile = join(workDir, "started.marker");
+		const { pi } = buildPiStub();
+
+		installTaskModeAutoExit(pi as never, {
+			env: { SUMOCODE_TASK_MODE: "1", SUMOCODE_TASK_STARTED_FILE: startedFile },
+			graceMs: 10_000,
+		});
+
+		expect(readFileSync(startedFile, "utf8").trim()).toBe(String(process.pid));
 	});
 
 	it("writes a real-exit marker for the manager to harvest", () => {

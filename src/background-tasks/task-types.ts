@@ -40,6 +40,7 @@ export interface BackgroundTask {
 	logFile: string;
 	exitFile?: string;
 	metaFile?: string;
+	markerFile?: string;
 	promptFile?: string;
 	responseFile?: string;
 	diagFile?: string;
@@ -84,6 +85,7 @@ export interface BackgroundTaskSnapshot {
 	logFile: string;
 	exitFile?: string;
 	metaFile?: string;
+	markerFile?: string;
 	promptFile?: string;
 	responseFile?: string;
 	diagFile?: string;
@@ -112,6 +114,7 @@ export function toBackgroundTaskSnapshot(task: BackgroundTask): BackgroundTaskSn
 		logFile: task.logFile,
 		exitFile: task.exitFile,
 		metaFile: task.metaFile,
+		markerFile: task.markerFile,
 		promptFile: task.promptFile,
 		responseFile: task.responseFile,
 		diagFile: task.diagFile,

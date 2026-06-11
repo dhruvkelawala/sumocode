@@ -35,7 +35,7 @@ describe("/sumo:worktree", () => {
 		expect(create).toHaveBeenCalledWith({ repoRoot: "/repo", task: "ship v0.4", baseRef: "HEAD" });
 		expect(openSplit).toHaveBeenCalledWith(pi, "down", expect.stringContaining("cd '/repo.wt/sumo__task'"));
 		const openedCommand = (openSplit.mock.calls[0] as unknown[] | undefined)?.[2] as string;
-		expect(openedCommand).toContain("pnpm install && exec sumocode task");
+		expect(openedCommand).toContain("pnpm install && SUMOCODE_TASK_KEEP_OPEN=1 exec sumocode task");
 		expect(openedCommand).toContain("ship v0.4");
 		expect(notify).toHaveBeenCalledWith(expect.stringContaining("opened sumo/task in down split"), "info");
 	});

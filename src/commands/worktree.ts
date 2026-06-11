@@ -43,7 +43,7 @@ function notify(ctx: ExtensionContext, message: string, type: "info" | "warning"
 function commandForWorktree(task: string, setupAction: string): string {
 	const setup = setupAction.trim();
 	const setupPrefix = setup ? `${setup} && ` : "";
-	return `${setupPrefix}exec sumocode task ${shellEscape(task)}`;
+	return `${setupPrefix}SUMOCODE_TASK_KEEP_OPEN=1 exec sumocode task ${shellEscape(task)}`;
 }
 
 async function handlePrune(

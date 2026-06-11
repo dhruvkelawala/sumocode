@@ -58,8 +58,6 @@ const THINKING_LEVELS = new Set<BackgroundTaskThinking>([
 
 /** Max grace period before stopTask escalates SIGTERM to SIGKILL. */
 const STOP_SIGTERM_GRACE_MS = 5_000;
-/** Default upper bound on agent-runner response.md harvest before failing. */
-const DEFAULT_AGENT_WATCHDOG_MS = 10 * 60 * 1000; // 10 minutes
 /** Bounded tail-read for poll/harvest — avoids O(file_size) re-reads. */
 const LOG_TAIL_READ_BYTES = 16 * 1024;
 export const DEFAULT_BACKGROUND_TASK_LOG_MAX_BYTES = 2 * 1024 * 1024;
@@ -72,7 +70,6 @@ interface InternalTask extends BackgroundTask {
 	pollTimer?: ReturnType<typeof setInterval>;
 	responseTimer?: ReturnType<typeof setInterval>;
 	logCapTimer?: ReturnType<typeof setInterval>;
-	watchdogDeadline?: number;
 	/**
 	 * Promise that resolves once the visible-spawn coroutine finishes (success
 	 * OR caught failure). `stopTask` awaits this so it can never finalize a task
@@ -455,8 +452,7 @@ export class BackgroundTaskManager {
 		if (task.runner === "shell") {
 			task.pollTimer = setInterval(() => this.pollVisibleTask(task), POLL_INTERVAL_MS);
 			if (typeof task.pollTimer.unref === "function") task.pollTimer.unref();
-		} else if (task.responseFile) {
-			task.watchdogDeadline = Date.now() + DEFAULT_AGENT_WATCHDOG_MS;
+		} else if (task.exitFile) {
 			this.armResponseWatcher(task);
 		}
 	}
@@ -775,7 +771,6 @@ export class BackgroundTaskManager {
 			// Completion is keyed to the real process-exit marker written by
 			// src/task-mode.ts so multi-turn child sessions are not marked done on
 			// their first agent_end.
-			task.watchdogDeadline = Date.now() + DEFAULT_AGENT_WATCHDOG_MS;
 			this.armResponseWatcher(task);
 		}
 	}
@@ -784,10 +779,10 @@ export class BackgroundTaskManager {
 	 * Poll for the child agent's real exit marker. Pi has no cross-process event
 	 * bus we could subscribe to, so a 750ms file-poll is the simplest reliable
 	 * way to detect hand-off completion. The interval is cancelled once the
-	 * exit marker appears, on stop/shutdown, or after the watchdog deadline
-	 * (default 10 min). Watchdog expiry covers the case where the child dies
-	 * before writing the marker — without it, the task would stay `running`
-	 * forever and the orchestrator would poll "still working" indefinitely.
+	 * exit marker appears, on explicit stop, or on manager shutdown. Absence of
+	 * the marker is deliberately non-terminal: visible child agents may run for
+	 * longer than a fixed response-era timeout, and some panes are intentionally
+	 * left open for user takeover.
 	 */
 	private armResponseWatcher(task: InternalTask): void {
 		if (!task.exitFile) return;
@@ -802,16 +797,6 @@ export class BackgroundTaskManager {
 				const exitCode = readExitCodeFromFile(readFileSync(task.exitFile, "utf8"));
 				this.finalizeTask(task, exitCode, "self-exit");
 				return;
-			}
-			if (task.watchdogDeadline && Date.now() > task.watchdogDeadline) {
-				if (task.responseTimer) clearInterval(task.responseTimer);
-				task.responseTimer = undefined;
-				appendLogLine(
-					task.logFile,
-					`[bg-task] watchdog timeout: exit marker not written within ${Math.round(DEFAULT_AGENT_WATCHDOG_MS / 1000)}s; marking task failed (agent may have crashed before process exit)\n`,
-					this.logMaxBytes,
-				);
-				this.finalizeTask(task, null, "self-exit");
 			}
 		}, RESPONSE_POLL_INTERVAL_MS);
 		if (typeof task.responseTimer.unref === "function") {
@@ -868,7 +853,6 @@ export class BackgroundTaskManager {
 			// "self-exit". Honor the original stop intent.
 			task.status = "stopped";
 		} else if (exitCode === 0) {
-			// For agent runners, exitCode=null + self-exit means watchdog timeout.
 			task.status = "completed";
 		} else if (exitCode === null) {
 			task.status = "failed";
@@ -1140,8 +1124,8 @@ export class BackgroundTaskManager {
 	 * returns the right one per runner.
 	 *
 	 * `ready: false` means the harvest is pending AND the task is still
-	 * running. If the task has transitioned to a terminal state (failed via
-	 * watchdog, stopped by user, etc.) without ever writing response.md,
+	 * running. If the task has transitioned to a terminal state (stopped by
+	 * user, crashed/nonzero exit, etc.) without ever writing response.md,
 	 * callers should NOT poll forever — we return `ready: true` with empty
 	 * content and the terminal state surfaces via task.status.
 	 */

@@ -577,8 +577,8 @@ describe("BackgroundTaskManager", () => {
 			);
 			expect(notifyCall, "expected a cmux notify exec call").toBeDefined();
 
-			// The response watcher is cleared by finalization, so the watchdog cannot
-			// later emit a second completion/failure notification for the same task.
+			// The response watcher is cleared by finalization, so later polling cannot
+			// emit a second completion/failure notification for the same task.
 			await vi.advanceTimersByTimeAsync(11 * 60 * 1000);
 			expect(task.status).toBe("completed");
 			expect(pi.sendUserMessage).toHaveBeenCalledTimes(1);
@@ -810,7 +810,7 @@ describe("BackgroundTaskManager", () => {
 		expect(harvest.ready).toBe(false);
 		expect(harvest.content).toBe("");
 
-		// Simulate a terminal failure (e.g. watchdog timeout) WITHOUT response.md.
+		// Simulate a terminal failure WITHOUT response.md.
 		// The harvest should now report ready=true so callers don't poll forever.
 		task.status = "failed";
 		task.exitCode = null;
@@ -820,7 +820,7 @@ describe("BackgroundTaskManager", () => {
 		expect(harvest.content).toBe("");
 	});
 
-	it("transitions agent task to failed when response.md never appears (watchdog timeout)", async () => {
+	it("keeps agent task running when no exit marker appears after the old watchdog window", async () => {
 		vi.useFakeTimers();
 		try {
 			process.env.CMUX_SURFACE_ID = "surface:1";
@@ -834,7 +834,7 @@ describe("BackgroundTaskManager", () => {
 
 			const manager = new BackgroundTaskManager(pi as never);
 			const task = manager.spawnTask({
-				command: "crashy prompt",
+				command: "long-running prompt",
 				cwd: "/repo",
 				visible: true,
 				runner: "sumocode",
@@ -844,11 +844,14 @@ describe("BackgroundTaskManager", () => {
 			await vi.advanceTimersByTimeAsync(50);
 			expect(task.status).toBe("running");
 
-			// Walk past the watchdog deadline (10 min default).
+			// Walk past the previous 10-minute response-era watchdog window. Agent
+			// completion is now real process exit, so missing marker means still
+			// running/unknown rather than failed.
 			await vi.advanceTimersByTimeAsync(11 * 60 * 1000);
 
-			expect(task.status).toBe("failed");
-			expect(readFileSync(task.logFile, "utf8")).toContain("watchdog timeout");
+			expect(task.status).toBe("running");
+			expect(readFileSync(task.logFile, "utf8")).not.toContain("watchdog timeout");
+			manager.shutdown();
 		} finally {
 			vi.useRealTimers();
 		}

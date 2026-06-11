@@ -11,9 +11,9 @@ import { type BackgroundTask, type BackgroundTaskThinking, toBackgroundTaskSnaps
 
 /**
  * Read the last ~2KB of an agent task's output.log when surfacing a terminal
- * state without response.md. The log captures the watchdog-timeout message
- * (and any other bg-task instrumentation) so the caller can see WHY harvest
- * never completed instead of just "ended without response.md".
+ * state without response.md. The log captures bg-task instrumentation so the
+ * caller can see WHY harvest never completed instead of just "ended without
+ * response.md".
  */
 function readLogTailForAgent(task: BackgroundTask, maxChars = 2048): string {
 	if (!task.logFile || !existsSync(task.logFile)) return "";
@@ -164,7 +164,7 @@ export function installBackgroundTasks(pi: ExtensionAPI): BackgroundTaskManager 
 			notifyOnExit: Type.Optional(
 				Type.Boolean({
 					description:
-						"Wake the orchestrator with a follow-up message + cmux notification when the task reaches a terminal state. Defaults to true. For agent runners, this fires when response.md is harvested or the watchdog fails.",
+						"Wake the orchestrator with a follow-up message + cmux notification when the task reaches a terminal state. Defaults to true. For agent runners, this fires after the real process-exit marker is harvested.",
 				}),
 			),
 		}),
@@ -246,8 +246,8 @@ export function installBackgroundTasks(pi: ExtensionAPI): BackgroundTaskManager 
 					}
 					// No response.md content. Either the task is still running (poll
 					// again) or it reached a terminal state without writing response.md
-					// (watchdog, stop, crash). Surface the actual state so callers don't
-					// poll forever.
+					// (stop, crash/nonzero exit). Surface the actual state so callers
+					// don't poll forever.
 					if (task.status === "running") {
 						const paneHint = task.cmux ? ` (cmux pane ${task.cmux.surfaceRef})` : "";
 						return makeToolResult(
@@ -259,7 +259,7 @@ export function installBackgroundTasks(pi: ExtensionAPI): BackgroundTaskManager 
 					const logTail = readLogTailForAgent(task);
 					const logFooter = logTail ? `\n\n--- output.log tail ---\n${logTail}` : "";
 					return makeToolResult(
-						`Agent ${task.id} ended without writing response.md (status=${task.status}${exitDetail}). The agent may have crashed, been stopped, or hit the harvest watchdog before its first agent_end fired.${logFooter}`,
+						`Agent ${task.id} ended without writing response.md (status=${task.status}${exitDetail}). The agent may have crashed, been stopped, or exited before its first agent_end fired.${logFooter}`,
 						{
 							action: "log",
 							task: snapshot,

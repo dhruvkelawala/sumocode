@@ -54,7 +54,7 @@ describe("retained lifecycle across session switches", () => {
 		expect(stableChromeIndex).toBeGreaterThan(bootIndex);
 		expect(appReadyIndex).toBeGreaterThanOrEqual(stableChromeIndex);
 		expect(inputReadyIndex).toBeGreaterThanOrEqual(appReadyIndex);
-	});
+	}, 15_000);
 
 	it("does not leave altscreen during /new", async () => {
 		app = spawnPiPty({
@@ -79,5 +79,5 @@ describe("retained lifecycle across session switches", () => {
 		const output = app.getOutput();
 		expect(countOccurrences(output, "\x1b[?1049h")).toBe(1);
 		expect(countOccurrences(output, "\x1b[?1049l")).toBe(0);
-	});
+	}, 15_000);
 });

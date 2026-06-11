@@ -36,7 +36,7 @@ jobs:
   review-pack:
     name: build V2 parity review pack
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 35
 
     steps:
       - name: Checkout

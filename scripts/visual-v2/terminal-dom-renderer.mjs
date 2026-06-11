@@ -10,7 +10,11 @@ export async function renderTerminalSnapshot(snapshot, outputPng, options = {}) 
 	const html = terminalSnapshotHtml(snapshot, options);
 	writeFile(htmlPath, html);
 
-	const browser = await chromium.launch({ headless: true });
+	const chromiumExecutablePath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH;
+	const browser = await chromium.launch({
+		headless: true,
+		...(chromiumExecutablePath ? { executablePath: chromiumExecutablePath } : {}),
+	});
 	try {
 		const page = await browser.newPage({
 			viewport: { width: 2200, height: 2200 },

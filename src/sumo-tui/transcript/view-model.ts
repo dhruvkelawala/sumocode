@@ -45,6 +45,7 @@ export type ChatBlock =
 	| { readonly type: "markdown"; readonly text: string }
 	| { readonly type: "thinking"; readonly text: string; readonly hidden?: boolean }
 	| { readonly type: "code"; readonly lang: string; readonly source: string; readonly collapsed?: boolean }
+	| { readonly type: "image"; readonly data: string; readonly mime: string; readonly filename?: string }
 	| { readonly type: "tool"; readonly tool: ToolCallViewModel }
 	| { readonly type: "skill"; readonly name: string; readonly expanded: boolean }
 	| { readonly type: "question"; readonly question: QuestionViewModel }
@@ -198,6 +199,14 @@ function skillBlockFromRecord(record: Record<string, unknown>): ChatBlock {
 		name: firstString(record.name, record.skill, record.skillName) ?? "unknown-skill",
 		expanded: asBoolean(record.expanded) ?? false,
 	};
+}
+
+function imageBlockFromRecord(record: Record<string, unknown>): ChatBlock[] {
+	const source = asRecord(record.source);
+	const data = firstString(record.data, record.base64, record.base64Data, source?.data, source?.base64, source?.base64Data);
+	const mime = firstString(record.mime, record.mimeType, record.mediaType, record.media_type, source?.mime, source?.mimeType, source?.mediaType, source?.media_type);
+	if (!data || !mime) return [];
+	return [{ type: "image", data, mime, filename: firstString(record.filename, record.name, source?.filename) }];
 }
 
 function questionBlockFromRecord(record: Record<string, unknown>): ChatBlock {
@@ -585,6 +594,9 @@ function blocksFromContentPart(part: unknown): ChatBlock[] {
 		case "thinking_delta":
 		case "reasoning_delta":
 			return thinkingBlockFromRecord(record);
+		case "image":
+		case "input_image":
+			return imageBlockFromRecord(record);
 		case "toolCall":
 		case "tool_call":
 		case "tool":
@@ -701,6 +713,8 @@ export function chatMessageViewModelToPlainText(message: ChatMessageViewModel): 
 					return block.hidden ? "Thinking..." : block.text;
 				case "code":
 					return `\`\`\`${block.lang}\n${block.source}\n\`\`\``;
+				case "image":
+					return `[image] ${block.mime}`;
 				case "tool":
 					return renderCompactToolPill(block.tool);
 				case "skill":

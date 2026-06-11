@@ -1,4 +1,5 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { chooseDiffSplitDirection, type TerminalSize } from "./diff.js";
 
 export const DEFAULT_REVIEW_MODEL = "openai-codex/gpt-5.3-codex";
 
@@ -9,6 +10,42 @@ export const MODEL_ALIASES: Record<string, string> = {
 	sonnet: "anthropic/claude-sonnet-4.6",
 	deepseek: "deepseek/deepseek-v4-pro",
 };
+
+export interface ReviewTaskSpawnOptions {
+	readonly command: string;
+	readonly cwd: string;
+	readonly title?: string;
+	readonly visible?: boolean;
+	readonly direction?: "right" | "down";
+	readonly runner?: "shell" | "sumocode";
+	readonly model?: string;
+	readonly thinking?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+	readonly notifyOnExit?: boolean;
+}
+
+export interface ReviewTaskHandle {
+	readonly id: string;
+	readonly cmux?: {
+		readonly surfaceRef: string;
+		readonly workspaceRef: string;
+	};
+}
+
+export interface ReviewTaskSpawner {
+	spawnTask(options: ReviewTaskSpawnOptions): ReviewTaskHandle;
+}
+
+export interface RegisterReviewCommandOptions {
+	readonly taskSpawner?: ReviewTaskSpawner;
+	readonly terminalSize?: () => TerminalSize;
+}
+
+function getTerminalSize(): TerminalSize {
+	return {
+		columns: process.stdout.columns,
+		rows: process.stdout.rows,
+	};
+}
 
 export function resolveReviewModel(env: NodeJS.ProcessEnv = process.env): string {
 	return env.SUMOCODE_REVIEW_MODEL?.trim() || DEFAULT_REVIEW_MODEL;
@@ -63,6 +100,12 @@ function scopeDescription(scope: ReviewScope): string {
 	return scope.raw;
 }
 
+export function reviewScopeLabel(scope: ReviewScope): string {
+	if (scope.kind === "working-tree") return "branch diff";
+	if (scope.kind === "pr") return `PR #${scope.number}`;
+	return scope.raw;
+}
+
 function inspectInstructions(scope: ReviewScope): string {
 	if (scope.kind === "pr") {
 		return `\
@@ -103,17 +146,8 @@ export function buildReviewPrompt(args: string, model = DEFAULT_REVIEW_MODEL): s
 
 	return `Run SumoCode diff review for ${description}.
 
-Main-agent protocol:
-- Do not perform the final review yourself. Invoke the task tool as a scroll/scribe reviewer with model ${model}.
-- Use task type="single" with one task. Pass model="${model}" and thinking="xhigh".
-- The scribe must inspect the requested scope directly with git commands and file reads.
-- If the scribe returns P0, P1, or P2 findings, fix the issues or ask me before making product-risk changes, then call the review task again.
-- Relentlessly repeat review -> fix -> review until the scribe returns a GREEN signal.
-- Stop only when there is a GREEN signal or when blocked by missing requirements/permissions.
-
----
-
-Scribe instructions — read carefully before reviewing:
+You are the reviewer running in your own tracked SumoCode background task with model ${model}.
+Review only: inspect the requested scope directly, report findings precisely, and stop after one complete review pass. Do not fix code in this child task unless the parent explicitly asks in a later turn.
 
 Project context:
 - Language: TypeScript (strict, no emit — jiti runs TS directly)
@@ -185,21 +219,41 @@ function notify(ctx: ExtensionContext, message: string, type: "info" | "warning"
 	process.stdout.write(`${message}\n`);
 }
 
-export function registerReviewCommand(pi: ExtensionAPI): void {
+export function registerReviewCommand(pi: ExtensionAPI, options: RegisterReviewCommandOptions = {}): void {
+	const terminalSize = options.terminalSize ?? getTerminalSize;
 	pi.registerCommand("sumo:review", {
-		description: `Run scroll/scribe diff review until GREEN. Args: [${Object.keys(MODEL_ALIASES).join("|")}] [scope]. Scope: empty=branch diff, #51=PR, or git range/path`,
+		description: `Run a tracked bg_task diff review. Args: [${Object.keys(MODEL_ALIASES).join("|")}] [scope]. Scope: empty=branch diff, #51=PR, or git range/path`,
 		handler: async (args, ctx) => {
-			const { model: aliasModel, scopeArgs } = extractModelAlias(args);
+			const taskSpawner = options.taskSpawner;
+			if (!taskSpawner) {
+				notify(ctx, "/sumo:review cannot start: bg_task manager is not available", "warning");
+				return;
+			}
+
+			const { model: aliasModel, scopeArgs } = extractModelAlias(args ?? "");
 			const model = aliasModel ?? resolveReviewModel();
 			const prompt = buildReviewPrompt(scopeArgs, model);
 			const scope = parseReviewScope(scopeArgs);
-			const label = scope.kind === "pr" ? `PR #${scope.number}` : scope.kind === "explicit" ? scope.raw : "branch diff";
+			const label = reviewScopeLabel(scope);
+			const direction = chooseDiffSplitDirection(terminalSize());
 			try {
-				pi.sendUserMessage(prompt, { deliverAs: "followUp" });
-			} catch {
-				pi.sendUserMessage(prompt);
+				const task = taskSpawner.spawnTask({
+					command: prompt,
+					cwd: ctx.cwd,
+					title: `review: ${label} · ${model}`,
+					visible: true,
+					direction: direction as "right" | "down",
+					runner: "sumocode",
+					model,
+					thinking: "xhigh",
+					notifyOnExit: true,
+				});
+				const paneHint = task.cmux ? ` · ${task.cmux.surfaceRef}` : "";
+				notify(ctx, `review started: ${task.id}${paneHint} · ${model} · ${label}. read: bg_task action=log id=${task.id}; stop: bg_task action=stop id=${task.id}`);
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				notify(ctx, `/sumo:review failed to start bg_task: ${message}`, "warning");
 			}
-			notify(ctx, `review queued: ${model} · ${label}`);
 		},
 	});
 }

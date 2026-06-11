@@ -15,13 +15,47 @@ import { buildShellCommand, openCommandInNewSplit, type SplitDirection } from ".
  * `npm i -g hunkdiff` or `brew install modem-dev/tap/hunk`). When either is
  * missing, the command notifies and exits without side effects.
  *
- * Split direction is `right` so the diff lands next to the active SUMO
- * session. Users who prefer a downward split can use pi-cmux's `/cmoh hunk
- * diff` instead.
+ * Split direction follows terminal orientation: portrait terminals split
+ * down to preserve diff width; landscape/square terminals split right.
+ * `/sumo:diff --down` and `/sumo:diff --right` force a direction.
  */
 
 /** First-token subcommands hunk supports as documented in its README. */
 const HUNK_SUBCOMMANDS: ReadonlySet<string> = new Set(["diff", "show", "patch", "pager"]);
+const SPLIT_FLAG_PATTERN = /(^|\s)(--down|--right)(?=\s|$)/g;
+
+export interface TerminalSize {
+	readonly columns?: number;
+	readonly rows?: number;
+}
+
+export interface ParsedDiffArgs {
+	readonly hunkArgs: string;
+	readonly forcedDirection?: SplitDirection;
+}
+
+export function parseDiffArgs(rawArgs: string): ParsedDiffArgs {
+	let forcedDirection: SplitDirection | undefined;
+	for (const match of rawArgs.matchAll(SPLIT_FLAG_PATTERN)) {
+		forcedDirection = match[2] === "--down" ? "down" : "right";
+	}
+	const hunkArgs = rawArgs.replace(SPLIT_FLAG_PATTERN, " ").trim();
+	return { hunkArgs, forcedDirection };
+}
+
+export function chooseDiffSplitDirection(size: TerminalSize, forcedDirection?: SplitDirection): SplitDirection {
+	if (forcedDirection) return forcedDirection;
+	const columns = size.columns ?? 0;
+	const rows = size.rows ?? 0;
+	return rows > columns ? "down" : "right";
+}
+
+function getTerminalSize(): TerminalSize {
+	return {
+		columns: process.stdout.columns,
+		rows: process.stdout.rows,
+	};
+}
 
 export function buildHunkCommand(rawArgs: string): string {
 	const trimmed = rawArgs.trim();
@@ -51,7 +85,7 @@ async function isHunkInstalled(pi: ExtensionAPI): Promise<boolean> {
 
 export function registerDiffCommand(pi: ExtensionAPI): void {
 	pi.registerCommand("sumo:diff", {
-		description: "Open hunk diff in a new cmux split (right) for quick review",
+		description: "Open hunk diff in an orientation-aware cmux split for quick review",
 		handler: async (args: string | undefined, ctx: ExtensionContext) => {
 			// All failure paths must go through `ctx.ui.notify` per the
 			// SumoCode slash-command contract — no exception should ever
@@ -72,9 +106,10 @@ export function registerDiffCommand(pi: ExtensionAPI): void {
 					return;
 				}
 
-				const hunkCmd = buildHunkCommand(args ?? "");
+				const { hunkArgs, forcedDirection } = parseDiffArgs(args ?? "");
+				const hunkCmd = buildHunkCommand(hunkArgs);
 				const shellCmd = buildShellCommand(ctx.cwd, hunkCmd);
-				const direction: SplitDirection = "right";
+				const direction = chooseDiffSplitDirection(getTerminalSize(), forcedDirection);
 
 				const result = await openCommandInNewSplit(pi, direction, shellCmd);
 				if (result.ok) {

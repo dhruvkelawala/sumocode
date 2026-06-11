@@ -41,7 +41,7 @@ import { CustomEditor } from "@earendil-works/pi-coding-agent";
 import { CURSOR_MARKER, truncateToWidth, visibleWidth, type EditorTheme, type TUI } from "@earendil-works/pi-tui";
 import { sessionHasMessages as cachedSessionHasMessages } from "../session-cache.js";
 import { activeThemeColors } from "../themes/index.js";
-import { setActiveEditorDraftController } from "./editor-draft-state.js";
+import { EditorImageDraftState, isLikelyClipboardImagePath, setActiveEditorDraftController } from "./editor-draft-state.js";
 import {
 	INPUT_FRAME_LABEL_ACTIVE,
 	INPUT_FRAME_LABEL_SPLASH,
@@ -218,6 +218,8 @@ function isPiBorderRow(row: string): boolean {
 
 class CathedralEditor extends CustomEditor {
 	private lastPrintableInputAt = 0;
+	private readonly imageDraftState = new EditorImageDraftState();
+	private submitHandler: ((text: string) => void) | undefined;
 
 	constructor(
 		private readonly cathedralTui: TUI,
@@ -226,13 +228,37 @@ class CathedralEditor extends CustomEditor {
 		private readonly isSplash: () => boolean,
 	) {
 		super(cathedralTui, theme, keybindings);
+		delete (this as { onSubmit?: unknown }).onSubmit;
+		Object.defineProperty(this, "onSubmit", {
+			configurable: true,
+			get: () => this.submitHandler,
+			set: (handler: ((text: string) => void) | undefined) => {
+				this.submitHandler = handler
+					? (text: string) => {
+						handler(this.imageDraftState.expandTokensToPaths(text));
+						this.imageDraftState.clear();
+					}
+					: undefined;
+			},
+		});
 		setActiveEditorDraftController({
 			hasDraft: () => this.getText().length > 0,
 			clearDraft: () => {
 				this.setText("");
+				this.imageDraftState.clear();
 				this.cathedralTui.requestRender();
 			},
 		});
+	}
+
+	override insertTextAtCursor(text: string): void {
+		if (isLikelyClipboardImagePath(text)) {
+			const token = this.imageDraftState.addImage(text.trim());
+			super.insertTextAtCursor(token);
+			this.cathedralTui.requestRender();
+			return;
+		}
+		super.insertTextAtCursor(text);
 	}
 
 	override handleInput(data: string): void {
@@ -245,6 +271,7 @@ class CathedralEditor extends CustomEditor {
 		const normalized = normalizeRawMultilinePasteInput(data);
 		if (/[^\x00-\x1f\x7f]/.test(normalized)) this.lastPrintableInputAt = now;
 		super.handleInput(normalized);
+		this.imageDraftState.pruneMissingTokens(this.getText());
 	}
 
 	override render(width: number): string[] {

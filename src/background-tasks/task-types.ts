@@ -18,6 +18,13 @@ export interface BackgroundTaskCmuxRefs {
 	surfaceRef: string;
 }
 
+export interface BackgroundTaskWorktreeRef {
+	path: string;
+	branch: string;
+	baseRef: string;
+	repoRoot: string;
+}
+
 export type BackgroundTaskThinking = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
 
 export interface BackgroundTask {
@@ -42,6 +49,7 @@ export interface BackgroundTask {
 	model?: string;
 	thinking?: BackgroundTaskThinking;
 	cmux?: BackgroundTaskCmuxRefs;
+	worktree?: BackgroundTaskWorktreeRef;
 	notifyOnExit: boolean;
 }
 
@@ -54,6 +62,9 @@ export interface SpawnBackgroundTaskOptions {
 	runner?: BackgroundTaskRunner;
 	model?: string;
 	thinking?: BackgroundTaskThinking;
+	worktree?: boolean;
+	branch?: string;
+	baseRef?: string;
 	notifyOnExit?: boolean;
 }
 
@@ -82,6 +93,7 @@ export interface BackgroundTaskSnapshot {
 	model?: string;
 	thinking?: BackgroundTaskThinking;
 	cmux?: BackgroundTaskCmuxRefs;
+	worktree?: BackgroundTaskWorktreeRef;
 	notifyOnExit?: boolean;
 }
 
@@ -109,6 +121,7 @@ export function toBackgroundTaskSnapshot(task: BackgroundTask): BackgroundTaskSn
 		model: task.model,
 		thinking: task.thinking,
 		cmux: task.cmux,
+		worktree: task.worktree,
 		notifyOnExit: task.notifyOnExit,
 	};
 }

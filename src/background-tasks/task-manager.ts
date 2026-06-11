@@ -8,6 +8,7 @@ import {
 	openSync,
 	readFileSync,
 	readSync,
+	rmSync,
 	statSync,
 	unlinkSync,
 	writeFileSync,
@@ -19,6 +20,7 @@ import {
 	openCommandInNewSplitWithRefs,
 	type SplitDirection as CmuxSplitDirection,
 } from "../commands/cmux-split.js";
+import { createWorktreeSync, removeWorktreeSync } from "../git/worktree.js";
 import {
 	BACKGROUND_TASK_META_SCHEMA_VERSION,
 	type BackgroundTask,
@@ -43,6 +45,8 @@ export const DEFAULT_SUMOCODE_AGENT_MODEL = "openai-codex/gpt-5.5";
 export const DEFAULT_SUMOCODE_AGENT_THINKING: BackgroundTaskThinking = "low";
 const AGENT_MODEL_ENV = "SUMOCODE_BG_AGENT_MODEL";
 const AGENT_THINKING_ENV = "SUMOCODE_BG_AGENT_THINKING";
+const AGENT_CAPACITY_ENV = "SUMOCODE_BG_AGENT_CAPACITY";
+export const DEFAULT_SUMOCODE_AGENT_CAPACITY = 4;
 const THINKING_LEVELS = new Set<BackgroundTaskThinking>([
 	"off",
 	"minimal",
@@ -58,11 +62,16 @@ const STOP_SIGTERM_GRACE_MS = 5_000;
 const DEFAULT_AGENT_WATCHDOG_MS = 10 * 60 * 1000; // 10 minutes
 /** Bounded tail-read for poll/harvest — avoids O(file_size) re-reads. */
 const LOG_TAIL_READ_BYTES = 16 * 1024;
+export const DEFAULT_BACKGROUND_TASK_LOG_MAX_BYTES = 2 * 1024 * 1024;
+const LOG_CAP_INTERVAL_MS = 2_000;
+const DEFAULT_FINISHED_TASK_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+const DEFAULT_MAX_RECOVERED_FINISHED_TASKS = 100;
 
 interface InternalTask extends BackgroundTask {
 	child?: ChildProcess;
 	pollTimer?: ReturnType<typeof setInterval>;
 	responseTimer?: ReturnType<typeof setInterval>;
+	logCapTimer?: ReturnType<typeof setInterval>;
 	watchdogDeadline?: number;
 	/**
 	 * Promise that resolves once the visible-spawn coroutine finishes (success
@@ -73,6 +82,38 @@ interface InternalTask extends BackgroundTask {
 	spawnPromise?: Promise<void>;
 	stopRequested?: boolean;
 	finalized?: boolean;
+}
+
+export interface BackgroundTaskManagerOptions {
+	readonly agentCapacity?: number;
+	readonly logMaxBytes?: number;
+	readonly finishedTaskMaxAgeMs?: number;
+	readonly maxRecoveredFinishedTasks?: number;
+}
+
+export interface AgentCapacityTaskSummary {
+	readonly id: string;
+	readonly title?: string;
+	readonly status: BackgroundTask["status"];
+	readonly ageMs: number;
+}
+
+export interface AgentCapacityDetails {
+	readonly status: "at_capacity";
+	readonly capacity: number;
+	readonly runningCount: number;
+	readonly running: readonly AgentCapacityTaskSummary[];
+	readonly retryHint: string;
+}
+
+export class BackgroundTaskCapacityError extends Error {
+	public readonly details: AgentCapacityDetails;
+
+	public constructor(details: AgentCapacityDetails) {
+		super(`agent capacity reached (${details.runningCount}/${details.capacity})`);
+		this.name = "BackgroundTaskCapacityError";
+		this.details = details;
+	}
 }
 
 function getShellConfig(): { shell: string; args: string[] } {
@@ -108,8 +149,34 @@ function resolveAgentThinking(
 	return thinking ?? normalizeThinking(process.env[AGENT_THINKING_ENV]) ?? DEFAULT_SUMOCODE_AGENT_THINKING;
 }
 
-function appendLogLine(logFile: string, line: string): void {
+function resolveAgentCapacity(value: number | undefined): number {
+	if (typeof value === "number" && Number.isFinite(value) && value >= 1) return Math.floor(value);
+	const fromEnv = Number.parseInt(process.env[AGENT_CAPACITY_ENV] ?? "", 10);
+	return Number.isFinite(fromEnv) && fromEnv >= 1 ? fromEnv : DEFAULT_SUMOCODE_AGENT_CAPACITY;
+}
+
+function normalizePositiveInteger(value: number | undefined, fallback: number): number {
+	return typeof value === "number" && Number.isFinite(value) && value >= 1 ? Math.floor(value) : fallback;
+}
+
+function enforceLogSizeCap(logFile: string, maxBytes: number): void {
+	if (!existsSync(logFile)) return;
+	try {
+		const { size } = statSync(logFile);
+		if (size <= maxBytes) return;
+		const keepBytes = Math.max(0, maxBytes - 80);
+		const tail = readLogTail(logFile, keepBytes);
+		const prefix = `[sumocode-bg] log truncated to last ${keepBytes} bytes\n`;
+		const next = `${prefix}${tail}`;
+		writeFileSync(logFile, next.length <= maxBytes ? next : next.slice(-maxBytes));
+	} catch {
+		// best-effort; logging must never interrupt task lifecycle
+	}
+}
+
+function appendLogLine(logFile: string, line: string, maxBytes = DEFAULT_BACKGROUND_TASK_LOG_MAX_BYTES): void {
 	writeFileSync(logFile, line, { flag: "a" });
+	enforceLogSizeCap(logFile, maxBytes);
 }
 
 /**
@@ -283,6 +350,7 @@ function parseRecoveredTask(raw: unknown, metaFile: string): InternalTask | unde
 		model: snapshot.model,
 		thinking: snapshot.thinking,
 		cmux: snapshot.cmux,
+		worktree: snapshot.worktree,
 		notifyOnExit: snapshot.notifyOnExit !== false,
 	};
 }
@@ -290,9 +358,17 @@ function parseRecoveredTask(raw: unknown, metaFile: string): InternalTask | unde
 export class BackgroundTaskManager {
 	private tasks = new Map<string, InternalTask>();
 	private readonly pi: ExtensionAPI;
+	private readonly agentCapacity: number;
+	private readonly logMaxBytes: number;
+	private readonly finishedTaskMaxAgeMs: number;
+	private readonly maxRecoveredFinishedTasks: number;
 
-	constructor(pi: ExtensionAPI) {
+	constructor(pi: ExtensionAPI, options: BackgroundTaskManagerOptions = {}) {
 		this.pi = pi;
+		this.agentCapacity = resolveAgentCapacity(options.agentCapacity);
+		this.logMaxBytes = normalizePositiveInteger(options.logMaxBytes, DEFAULT_BACKGROUND_TASK_LOG_MAX_BYTES);
+		this.finishedTaskMaxAgeMs = normalizePositiveInteger(options.finishedTaskMaxAgeMs, DEFAULT_FINISHED_TASK_MAX_AGE_MS);
+		this.maxRecoveredFinishedTasks = normalizePositiveInteger(options.maxRecoveredFinishedTasks, DEFAULT_MAX_RECOVERED_FINISHED_TASKS);
 		this.recoverTasks();
 	}
 
@@ -311,6 +387,7 @@ export class BackgroundTaskManager {
 		} catch {
 			return;
 		}
+		const recovered: InternalTask[] = [];
 		for (const entry of entries) {
 			const metaFile = join(root, entry, "meta.json");
 			if (!existsSync(metaFile)) continue;
@@ -318,29 +395,52 @@ export class BackgroundTaskManager {
 				const task = parseRecoveredTask(JSON.parse(readFileSync(metaFile, "utf8")), metaFile);
 				if (!task || this.tasks.has(task.id)) continue;
 				this.reconcileRecoveredTask(task);
-				this.tasks.set(task.id, task);
+				recovered.push(task);
 			} catch {
 				// Ignore malformed/unknown legacy metadata; recovery is best-effort.
 			}
 		}
+		for (const task of this.pruneRecoveredFinishedTasks(recovered)) {
+			this.tasks.set(task.id, task);
+		}
+	}
+
+	private pruneRecoveredFinishedTasks(tasks: readonly InternalTask[]): InternalTask[] {
+		const now = Date.now();
+		const finished = tasks
+			.filter((task) => task.status !== "running")
+			.sort((a, b) => b.updatedAt - a.updatedAt);
+		const keepFinished = new Set(finished.slice(0, this.maxRecoveredFinishedTasks).map((task) => task.id));
+		const kept: InternalTask[] = [];
+		for (const task of tasks) {
+			if (task.status === "running") {
+				kept.push(task);
+				continue;
+			}
+			const tooOld = now - task.updatedAt > this.finishedTaskMaxAgeMs;
+			const overCount = !keepFinished.has(task.id);
+			if (tooOld || overCount) {
+				this.removeTaskArtifacts(task);
+				continue;
+			}
+			kept.push(task);
+		}
+		return kept;
 	}
 
 	private reconcileRecoveredTask(task: InternalTask): void {
 		if (task.status !== "running") {
 			task.finalized = true;
+			enforceLogSizeCap(task.logFile, this.logMaxBytes);
 			return;
 		}
+		this.armLogCap(task);
 
 		const exitCode = task.exitFile && existsSync(task.exitFile)
 			? readExitCodeFromFile(readFileSync(task.exitFile, "utf8"))
 			: null;
 		if (exitCode != null) {
 			this.finalizeTask(task, exitCode, "self-exit");
-			return;
-		}
-
-		if (task.runner === "sumocode" && task.responseFile && existsSync(task.responseFile)) {
-			this.finalizeTask(task, 0, "self-exit");
 			return;
 		}
 
@@ -384,10 +484,53 @@ export class BackgroundTaskManager {
 			.map((task) => {
 				const label = task.title ?? task.command;
 				const cmux = task.cmux ? ` · cmux ${task.cmux.surfaceRef}` : "";
+				const worktree = task.worktree ? ` · ${task.worktree.branch}` : "";
 				const pid = task.pid != null ? ` · pid ${task.pid}` : "";
-				return `${task.id} · ${summarizeStatus(task)}${pid}${cmux} · ${label}`;
+				return `${task.id} · ${summarizeStatus(task)}${pid}${cmux}${worktree} · ${label}`;
 			})
 			.join("\n");
+	}
+
+	getAgentCapacityDetails(): AgentCapacityDetails {
+		const now = Date.now();
+		const running = [...this.tasks.values()]
+			.filter((task) => task.runner === "sumocode" && task.status === "running")
+			.sort((a, b) => a.startedAt - b.startedAt)
+			.map((task) => ({
+				id: task.id,
+				title: task.title,
+				status: task.status,
+				ageMs: Math.max(0, now - task.startedAt),
+			}));
+		return {
+			status: "at_capacity",
+			capacity: this.agentCapacity,
+			runningCount: running.length,
+			running,
+			retryHint: "poll bg_task action=log on a running task until one completes, then retry this spawn; stop an unneeded task with bg_task action=stop",
+		};
+	}
+
+	private assertAgentCapacityAvailable(runner: BackgroundTask["runner"]): void {
+		if (runner !== "sumocode") return;
+		const details = this.getAgentCapacityDetails();
+		if (details.runningCount >= details.capacity) {
+			throw new BackgroundTaskCapacityError(details);
+		}
+	}
+
+	private armLogCap(task: InternalTask): void {
+		if (task.logCapTimer || task.status !== "running") return;
+		enforceLogSizeCap(task.logFile, this.logMaxBytes);
+		task.logCapTimer = setInterval(() => enforceLogSizeCap(task.logFile, this.logMaxBytes), LOG_CAP_INTERVAL_MS);
+		if (typeof task.logCapTimer.unref === "function") task.logCapTimer.unref();
+	}
+
+	private clearLogCap(task: InternalTask): void {
+		if (!task.logCapTimer) return;
+		clearInterval(task.logCapTimer);
+		task.logCapTimer = undefined;
+		enforceLogSizeCap(task.logFile, this.logMaxBytes);
 	}
 
 	spawnTask(options: SpawnBackgroundTaskOptions): BackgroundTask {
@@ -410,11 +553,30 @@ export class BackgroundTaskManager {
 		if (visible && !isInCmux()) {
 			throw new Error("visible background tasks require a cmux surface (CMUX_SURFACE_ID or CMUX_WORKSPACE_ID)");
 		}
+		this.assertAgentCapacityAvailable(runner);
 
 		let id = generateTaskId();
 		while (this.tasks.has(id)) id = generateTaskId();
 		const now = Date.now();
-		const cwd = options.cwd.trim() || process.cwd();
+		let cwd = options.cwd.trim() || process.cwd();
+		let worktree: BackgroundTask["worktree"];
+		if (options.worktree === true) {
+			const repoRoot = cwd;
+			if (runner !== "sumocode" || !visible) {
+				throw new Error("worktree=true requires runner='sumocode' and visible=true");
+			}
+			const created = createWorktreeSync({
+				repoRoot: cwd,
+				branch: options.branch,
+				baseRef: options.baseRef,
+				task: options.title ?? command,
+			});
+			if (!created.ok) {
+				throw new Error(`failed to create worktree: ${created.message}`);
+			}
+			worktree = { path: created.path, branch: created.branch, baseRef: created.baseRef, repoRoot };
+			cwd = created.path;
+		}
 		const paths = buildVisibleTaskPaths(id, now);
 		mkdirSync(dirname(paths.logFile), { recursive: true });
 		writeFileSync(paths.logFile, "");
@@ -437,11 +599,13 @@ export class BackgroundTaskManager {
 			runner,
 			model: resolveAgentModel(runner, options.model),
 			thinking: resolveAgentThinking(runner, options.thinking),
+			worktree,
 			notifyOnExit: options.notifyOnExit !== false,
 		};
 
 		this.tasks.set(id, task);
 		writeTaskMeta(task);
+		this.armLogCap(task);
 
 		if (visible) {
 			// Capture the spawn coroutine on the task so stopTask can await it.
@@ -454,7 +618,7 @@ export class BackgroundTaskManager {
 				paths,
 			).catch((error) => {
 				const message = error instanceof Error ? error.message : String(error);
-				appendLogLine(task.logFile, `\n[bg-task] visible spawn failed: ${message}\n`);
+				appendLogLine(task.logFile, `\n[bg-task] visible spawn failed: ${message}\n`, this.logMaxBytes);
 				this.finalizeTask(task, 1, "self-exit");
 			});
 		} else {
@@ -499,7 +663,7 @@ export class BackgroundTaskManager {
 			// On platforms where we kept stdio pipes (Windows), tee chunks into the
 			// log file. On detached platforms the shell does the redirection.
 			const handleChunk = (chunk: Buffer) => {
-				appendLogLine(logFile, chunk.toString());
+				appendLogLine(logFile, chunk.toString(), this.logMaxBytes);
 				task.updatedAt = Date.now();
 			};
 			child.stdout?.on("data", handleChunk);
@@ -510,12 +674,12 @@ export class BackgroundTaskManager {
 			this.finalizeTask(task, typeof code === "number" ? code : null, "self-exit");
 		});
 		child.on("error", (error) => {
-			appendLogLine(logFile, `\n[spawn error] ${error.message}\n`);
+			appendLogLine(logFile, `\n[spawn error] ${error.message}\n`, this.logMaxBytes);
 			this.finalizeTask(task, 1, "self-exit");
 		});
 
 		if (task.pid != null && !task.processStartTime) {
-			appendLogLine(logFile, "\n[bg-task] warning: failed to capture process identity; recovered stop will require identity recapture\n");
+			appendLogLine(logFile, "\n[bg-task] warning: failed to capture process identity; recovered stop will require identity recapture\n", this.logMaxBytes);
 		}
 
 		writeTaskMeta(task);
@@ -569,7 +733,7 @@ export class BackgroundTaskManager {
 
 		const splitResult = await openCommandInNewSplitWithRefs(this.pi, direction, respawnCommand);
 		if (!splitResult.ok) {
-			appendLogLine(task.logFile, `\n[cmux error] ${splitResult.error}\n`);
+			appendLogLine(task.logFile, `\n[cmux error] ${splitResult.error}\n`, this.logMaxBytes);
 			this.finalizeTask(task, 1, "self-exit");
 			return;
 		}
@@ -606,27 +770,27 @@ export class BackgroundTaskManager {
 			task.pollTimer = setInterval(() => {
 				this.pollVisibleTask(task);
 			}, POLL_INTERVAL_MS);
-		} else if (task.responseFile) {
-			// Agent runners: watch for the child to write response.md when its
-			// first agent_end fires (see src/task-mode.ts). On creation, we
-			// transition the task to "completed" and persist the updated
-			// snapshot so `bg_task list` and `bg_task log` reflect the harvest.
+		} else if (task.exitFile) {
+			// Agent runners: response.md is only the latest assistant response.
+			// Completion is keyed to the real process-exit marker written by
+			// src/task-mode.ts so multi-turn child sessions are not marked done on
+			// their first agent_end.
 			task.watchdogDeadline = Date.now() + DEFAULT_AGENT_WATCHDOG_MS;
 			this.armResponseWatcher(task);
 		}
 	}
 
 	/**
-	 * Poll for the child agent's `response.md`. Pi has no cross-process event
+	 * Poll for the child agent's real exit marker. Pi has no cross-process event
 	 * bus we could subscribe to, so a 750ms file-poll is the simplest reliable
-	 * way to detect a hand-off completion. The interval is cancelled once the
-	 * file appears, on stop/shutdown, or after the watchdog deadline (default
-	 * 10 min). Watchdog expiry covers the case where the child crashes before
-	 * `agent_end` fires — without it, the task would stay `running` forever
-	 * and the orchestrator would poll "still working" indefinitely.
+	 * way to detect hand-off completion. The interval is cancelled once the
+	 * exit marker appears, on stop/shutdown, or after the watchdog deadline
+	 * (default 10 min). Watchdog expiry covers the case where the child dies
+	 * before writing the marker — without it, the task would stay `running`
+	 * forever and the orchestrator would poll "still working" indefinitely.
 	 */
 	private armResponseWatcher(task: InternalTask): void {
-		if (!task.responseFile) return;
+		if (!task.exitFile) return;
 		if (task.responseTimer) clearInterval(task.responseTimer);
 		task.responseTimer = setInterval(() => {
 			if (task.finalized) {
@@ -634,8 +798,9 @@ export class BackgroundTaskManager {
 				task.responseTimer = undefined;
 				return;
 			}
-			if (task.responseFile && existsSync(task.responseFile)) {
-				this.finalizeTask(task, 0, "self-exit");
+			if (task.exitFile && existsSync(task.exitFile)) {
+				const exitCode = readExitCodeFromFile(readFileSync(task.exitFile, "utf8"));
+				this.finalizeTask(task, exitCode, "self-exit");
 				return;
 			}
 			if (task.watchdogDeadline && Date.now() > task.watchdogDeadline) {
@@ -643,7 +808,8 @@ export class BackgroundTaskManager {
 				task.responseTimer = undefined;
 				appendLogLine(
 					task.logFile,
-					`[bg-task] watchdog timeout: response.md not written within ${Math.round(DEFAULT_AGENT_WATCHDOG_MS / 1000)}s; marking task failed (agent may have crashed before agent_end)\n`,
+					`[bg-task] watchdog timeout: exit marker not written within ${Math.round(DEFAULT_AGENT_WATCHDOG_MS / 1000)}s; marking task failed (agent may have crashed before process exit)\n`,
+					this.logMaxBytes,
 				);
 				this.finalizeTask(task, null, "self-exit");
 			}
@@ -691,6 +857,7 @@ export class BackgroundTaskManager {
 			clearInterval(task.responseTimer);
 			task.responseTimer = undefined;
 		}
+		this.clearLogCap(task);
 
 		task.exitCode = exitCode;
 		task.updatedAt = Date.now();
@@ -929,13 +1096,37 @@ export class BackgroundTaskManager {
 		return await awaitExit(2_000);
 	}
 
-	clearFinishedTasks(): number {
+	private taskArtifactDir(task: BackgroundTask): string | undefined {
+		if (task.metaFile) return dirname(task.metaFile);
+		if (task.logFile) return dirname(task.logFile);
+		return undefined;
+	}
+
+	private removeTaskArtifacts(task: BackgroundTask): void {
+		const dir = this.taskArtifactDir(task);
+		if (!dir) return;
+		try {
+			rmSync(dir, { recursive: true, force: true });
+		} catch {
+			// best-effort cleanup; never fail clear/recovery on filesystem races
+		}
+	}
+
+	clearFinishedTasks(options: { pruneWorktrees?: boolean } = {}): number {
 		let removed = 0;
 		for (const [id, task] of this.tasks) {
 			if (task.status === "running") continue;
 			if (task.pollTimer) clearInterval(task.pollTimer);
 			if (task.responseTimer) clearInterval(task.responseTimer);
-			if (task.metaFile) removePathIfExists(task.metaFile);
+			this.clearLogCap(task);
+			if (options.pruneWorktrees && task.worktree) {
+				const pruned = removeWorktreeSync({ path: task.worktree.path, repoRoot: task.worktree.repoRoot });
+				if (!pruned.ok) {
+					appendLogLine(task.logFile, `\n[bg-task] worktree prune failed: ${pruned.message}\n`, this.logMaxBytes);
+					continue;
+				}
+			}
+			this.removeTaskArtifacts(task);
 			this.tasks.delete(id);
 			removed += 1;
 		}
@@ -943,9 +1134,10 @@ export class BackgroundTaskManager {
 	}
 
 	/**
-	 * For the sumocode runner, the harvest output lives in `response.md`
-	 * written by the child on first agent_end. For shell runners it lives in
-	 * `output.log`. This wrapper returns the right one per runner.
+	 * For the sumocode runner, the harvest output lives in `response.md`, but
+	 * that file is harvestable only after the child writes its real process-exit
+	 * marker. For shell runners output lives in `output.log`. This wrapper
+	 * returns the right one per runner.
 	 *
 	 * `ready: false` means the harvest is pending AND the task is still
 	 * running. If the task has transitioned to a terminal state (failed via
@@ -959,19 +1151,12 @@ export class BackgroundTaskManager {
 		ready: boolean;
 	} {
 		if (task.runner === "sumocode" && task.responseFile) {
-			if (existsSync(task.responseFile)) {
-				const content = readFileSync(task.responseFile, "utf8");
-				return {
-					kind: "response",
-					content: content.length <= maxChars ? content : content.slice(-maxChars),
-					ready: true,
-				};
-			}
+			const content = existsSync(task.responseFile) ? readFileSync(task.responseFile, "utf8") : "";
 			return {
 				kind: "response",
-				content: "",
-				// Terminal-state guard: don't keep telling callers "still working"
-				// once the task has failed/stopped without writing response.md.
+				content: content.length <= maxChars ? content : content.slice(-maxChars),
+				// response.md may be written before a child truly exits. Treat it as
+				// harvestable only after the real exit marker has finalized the task.
 				ready: task.status !== "running",
 			};
 		}
@@ -1002,6 +1187,7 @@ export class BackgroundTaskManager {
 			}
 			if (task.pollTimer) clearInterval(task.pollTimer);
 			if (task.responseTimer) clearInterval(task.responseTimer);
+			this.clearLogCap(task);
 		}
 	}
 }

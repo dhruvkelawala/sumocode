@@ -94,6 +94,7 @@ describe("visible-spawn", () => {
 		expect(cmd).toBe(
 			"cd '/repo with spaces' && " +
 				"SUMOCODE_TASK_RESPONSE_FILE='/tmp/test-bg/bg-4-456/response.md' " +
+				"SUMOCODE_TASK_EXIT_FILE='/tmp/test-bg/bg-4-456/exit.code' " +
 				"SUMOCODE_TASK_DIAG_FILE='/tmp/test-bg/bg-4-456/diag.jsonl' " +
 				"exec sumocode task --prompt-file '/tmp/test-bg/bg-4-456/prompt.txt'",
 		);

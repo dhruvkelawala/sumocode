@@ -226,11 +226,11 @@ export default function sumocode(pi: ExtensionAPI): void {
 	}
 	installQuestionTool(pi);
 	installAnswerTool(pi);
-	installBackgroundTasks(pi);
+	const backgroundTaskManager = installBackgroundTasks(pi);
 	installTaskModeAutoExit(pi);
 
 	installWorkingIndicator(pi);
 	installCompactionIndicator(pi);
 	registerSumoReloadCommand(pi);
-	installSumoInteractions(pi);
+	installSumoInteractions(pi, { backgroundTaskManager });
 }

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { buildHunkCommand, registerDiffCommand } from "./diff.js";
+import { buildHunkCommand, chooseDiffSplitDirection, parseDiffArgs, registerDiffCommand } from "./diff.js";
 
 afterEach(() => {
 	vi.restoreAllMocks();
@@ -30,6 +30,31 @@ describe("buildHunkCommand", () => {
 		// We only trim the outer whitespace; multi-space arg separators stay intact
 		// because hunk's own argv parser handles them.
 		expect(buildHunkCommand("show  HEAD~1")).toBe("hunk show  HEAD~1");
+	});
+});
+
+describe("parseDiffArgs", () => {
+	it("extracts split override flags without treating them as hunk args", () => {
+		expect(parseDiffArgs("--down")).toEqual({ hunkArgs: "", forcedDirection: "down" });
+		expect(parseDiffArgs("--right show HEAD~1")).toEqual({ hunkArgs: "show HEAD~1", forcedDirection: "right" });
+		expect(parseDiffArgs("show --down HEAD~1")).toEqual({ hunkArgs: "show  HEAD~1", forcedDirection: "down" });
+	});
+
+	it("uses the last split override when both are present", () => {
+		expect(parseDiffArgs("--down --right HEAD~1")).toEqual({ hunkArgs: "HEAD~1", forcedDirection: "right" });
+	});
+});
+
+describe("chooseDiffSplitDirection", () => {
+	it("uses down for portrait terminals and right for landscape or square terminals", () => {
+		expect(chooseDiffSplitDirection({ columns: 80, rows: 120 })).toBe("down");
+		expect(chooseDiffSplitDirection({ columns: 160, rows: 45 })).toBe("right");
+		expect(chooseDiffSplitDirection({ columns: 80, rows: 80 })).toBe("right");
+	});
+
+	it("lets explicit flags override terminal orientation", () => {
+		expect(chooseDiffSplitDirection({ columns: 80, rows: 120 }, "right")).toBe("right");
+		expect(chooseDiffSplitDirection({ columns: 160, rows: 45 }, "down")).toBe("down");
 	});
 });
 
@@ -129,6 +154,78 @@ describe("registerDiffCommand", () => {
 		const [message, level] = notifyMock.mock.calls[0] ?? [];
 		expect(message).toContain("boom: cmux blew up");
 		expect(level).toBe("warning");
+	});
+
+	it("opens a down split in portrait terminals", async () => {
+		const calls: Array<{ cmd: string; args: string[] }> = [];
+		const originalColumns = process.stdout.columns;
+		const originalRows = process.stdout.rows;
+		process.stdout.columns = 80;
+		process.stdout.rows = 120;
+		try {
+			const { pi, handlers } = makePi(async (cmd, args) => {
+				calls.push({ cmd, args });
+				if (cmd === "sh") return { code: 0, killed: false, stdout: "", stderr: "" };
+				if (cmd === "cmux" && args[1] === "identify") {
+					return { code: 0, killed: false, stdout: JSON.stringify({ caller: { workspace_ref: "workspace:1", surface_ref: "surface:1" } }), stderr: "" };
+				}
+				if (cmd === "cmux" && args[1] === "list-panes") {
+					return { code: 0, killed: false, stdout: JSON.stringify({ panes: [{ ref: "pane:1", selected_surface_ref: "surface:1" }] }), stderr: "" };
+				}
+				if (cmd === "cmux" && args[0] === "new-split") {
+					return { code: 0, killed: false, stdout: "OK surface:surface:2 workspace:workspace:1", stderr: "" };
+				}
+				return { code: 0, killed: false, stdout: "", stderr: "" };
+			});
+			registerDiffCommand(pi as never);
+
+			const { ctx, notifyMock } = makeCtx();
+			await handlers.get("sumo:diff")?.("HEAD~1", ctx);
+
+			const newSplitCall = calls.find((call) => call.cmd === "cmux" && call.args[0] === "new-split");
+			expect(newSplitCall?.args[1]).toBe("down");
+			expect(notifyMock).toHaveBeenCalledWith("opened hunk diff HEAD~1 in a new cmux pane", "info");
+		} finally {
+			process.stdout.columns = originalColumns;
+			process.stdout.rows = originalRows;
+		}
+	});
+
+	it("lets --right force a right split and removes the flag before building the hunk command", async () => {
+		const calls: Array<{ cmd: string; args: string[] }> = [];
+		const originalColumns = process.stdout.columns;
+		const originalRows = process.stdout.rows;
+		process.stdout.columns = 80;
+		process.stdout.rows = 120;
+		try {
+			const { pi, handlers } = makePi(async (cmd, args) => {
+				calls.push({ cmd, args });
+				if (cmd === "sh") return { code: 0, killed: false, stdout: "", stderr: "" };
+				if (cmd === "cmux" && args[1] === "identify") {
+					return { code: 0, killed: false, stdout: JSON.stringify({ caller: { workspace_ref: "workspace:1", surface_ref: "surface:1" } }), stderr: "" };
+				}
+				if (cmd === "cmux" && args[1] === "list-panes") {
+					return { code: 0, killed: false, stdout: JSON.stringify({ panes: [{ ref: "pane:1", selected_surface_ref: "surface:1" }] }), stderr: "" };
+				}
+				if (cmd === "cmux" && args[0] === "new-split") {
+					return { code: 0, killed: false, stdout: "OK surface:surface:2 workspace:workspace:1", stderr: "" };
+				}
+				return { code: 0, killed: false, stdout: "", stderr: "" };
+			});
+			registerDiffCommand(pi as never);
+
+			const { ctx } = makeCtx();
+			await handlers.get("sumo:diff")?.("--right --watch", ctx);
+
+			const newSplitCall = calls.find((call) => call.cmd === "cmux" && call.args[0] === "new-split");
+			const respawnCall = calls.find((call) => call.cmd === "cmux" && call.args[0] === "respawn-pane");
+			expect(newSplitCall?.args[1]).toBe("right");
+			expect(respawnCall?.args.at(-1)).toContain("hunk diff --watch");
+			expect(respawnCall?.args.at(-1)).not.toContain("--right");
+		} finally {
+			process.stdout.columns = originalColumns;
+			process.stdout.rows = originalRows;
+		}
 	});
 
 	it("notifies with cmux error when not inside a cmux surface", async () => {

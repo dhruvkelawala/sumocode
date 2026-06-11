@@ -257,6 +257,19 @@ describe("structured transcript view model", () => {
 		});
 	});
 
+	it("maps image content parts instead of dropping them", () => {
+		const message = chatMessageViewModelFromPiMessage({
+			role: "assistant",
+			content: [
+				{ type: "text", text: "before" },
+				{ type: "image", data: "iVBORw0KGgo=", mimeType: "image/png", filename: "one.png" },
+			],
+		});
+
+		expect(message?.blocks).toContainEqual({ type: "image", data: "iVBORw0KGgo=", mime: "image/png", filename: "one.png" });
+		expect(message ? chatMessageViewModelToPlainText(message) : "").toContain("[image] image/png");
+	});
+
 	it("maps skill blocks", () => {
 		const message = chatMessageViewModelFromPiMessage({
 			role: "assistant",

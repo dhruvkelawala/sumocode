@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { buildReviewPrompt, DEFAULT_REVIEW_MODEL, extractModelAlias, MODEL_ALIASES, parseReviewScope, registerReviewCommand, resolveReviewModel } from "./review.js";
+import { buildReviewPrompt, DEFAULT_REVIEW_MODEL, extractModelAlias, MODEL_ALIASES, parseReviewScope, registerReviewCommand, resolveReviewModel, reviewScopeLabel } from "./review.js";
 
 describe("/sumo:review", () => {
 	describe("resolveReviewModel", () => {
@@ -60,6 +60,14 @@ describe("/sumo:review", () => {
 		});
 	});
 
+	describe("reviewScopeLabel", () => {
+		it("formats user-facing scope labels", () => {
+			expect(reviewScopeLabel({ kind: "working-tree" })).toBe("branch diff");
+			expect(reviewScopeLabel({ kind: "pr", number: "42" })).toBe("PR #42");
+			expect(reviewScopeLabel({ kind: "explicit", raw: "src/foo.ts" })).toBe("src/foo.ts");
+		});
+	});
+
 	describe("buildReviewPrompt", () => {
 		it("working-tree: instructs scribe to fall back to branch diff when working tree is empty", () => {
 			const prompt = buildReviewPrompt("", "deepseek/deepseek-v4-pro");
@@ -81,11 +89,13 @@ describe("/sumo:review", () => {
 			expect(prompt).toContain("git diff main...HEAD");
 		});
 
-		it("includes relentless review loop, model, and xhigh thinking", () => {
+		it("is direct reviewer guidance for a tracked background task", () => {
 			const prompt = buildReviewPrompt("", "deepseek/deepseek-v4-pro");
-			expect(prompt).toContain("model deepseek/deepseek-v4-pro");
-			expect(prompt).toContain('thinking="xhigh"');
-			expect(prompt).toContain("Relentlessly repeat review -> fix -> review until the scribe returns a GREEN signal");
+			expect(prompt).toContain("tracked SumoCode background task with model deepseek/deepseek-v4-pro");
+			expect(prompt).toContain("Review only");
+			expect(prompt).not.toContain("Main-agent protocol");
+			expect(prompt).not.toContain("Use task type");
+			expect(prompt).not.toContain("Relentlessly repeat review -> fix -> review");
 		});
 
 		it("includes P0/P1/P2 severity rubric", () => {
@@ -95,10 +105,12 @@ describe("/sumo:review", () => {
 			expect(prompt).toContain("P2: should fix before merge");
 		});
 
-		it("prohibits the scribe from delegating via task tool", () => {
+		it("prohibits delegation and no longer instructs task-tool use", () => {
 			const prompt = buildReviewPrompt("", "deepseek/deepseek-v4-pro");
 			expect(prompt).toContain("Do NOT use the task tool");
 			expect(prompt).toContain("Perform the entire review yourself");
+			expect(prompt).not.toContain("Invoke the task tool");
+			expect(prompt).not.toContain("Use task type=\"single\"");
 		});
 
 		it("includes DO NOT flag list to suppress noise", () => {
@@ -144,51 +156,90 @@ describe("/sumo:review", () => {
 	});
 
 	describe("registerReviewCommand", () => {
-		it("registers a command that queues the review prompt as a follow-up", async () => {
-			let handler: ((args: string, ctx: { hasUI: boolean; ui: { notify: ReturnType<typeof vi.fn> } }) => Promise<void>) | undefined;
+		function setup(taskSpawner = { spawnTask: vi.fn(() => ({ id: "bg-42", cmux: { surfaceRef: "surface:2", workspaceRef: "workspace:1" } })) }) {
+			let handler: ((args: string, ctx: { hasUI: boolean; cwd: string; ui: { notify: ReturnType<typeof vi.fn> } }) => Promise<void>) | undefined;
 			const sendUserMessage = vi.fn();
 			const registerCommand = vi.fn((_name: string, options: { handler: typeof handler }) => {
 				handler = options.handler;
 			});
 			const notify = vi.fn();
+			registerReviewCommand({ registerCommand, sendUserMessage } as never, {
+				taskSpawner,
+				terminalSize: () => ({ columns: 80, rows: 120 }),
+			});
+			const ctx = { hasUI: true, cwd: "/tmp/sumo-fixture", ui: { notify } };
+			return { handler, registerCommand, sendUserMessage, notify, taskSpawner, ctx };
+		}
 
-			registerReviewCommand({ registerCommand, sendUserMessage } as never);
-			await handler?.("src/foo.ts", { hasUI: true, ui: { notify } });
+		it("registers a command that spawns a tracked visible bg_task review", async () => {
+			const { handler, registerCommand, sendUserMessage, notify, taskSpawner, ctx } = setup();
+
+			await handler?.("src/foo.ts", ctx);
 
 			expect(registerCommand).toHaveBeenCalledWith("sumo:review", expect.objectContaining({ description: expect.any(String) }));
-			expect(sendUserMessage).toHaveBeenCalledWith(expect.stringContaining("git diff src/foo.ts"), { deliverAs: "followUp" });
-			expect(notify).toHaveBeenCalledWith(expect.stringContaining("openai-codex/gpt-5.3-codex"), "info");
+			expect(sendUserMessage).not.toHaveBeenCalled();
+			expect(taskSpawner.spawnTask).toHaveBeenCalledWith(expect.objectContaining({
+				command: expect.stringContaining("git diff src/foo.ts"),
+				cwd: "/tmp/sumo-fixture",
+				title: "review: src/foo.ts · openai-codex/gpt-5.3-codex",
+				visible: true,
+				direction: "down",
+				runner: "sumocode",
+				model: "openai-codex/gpt-5.3-codex",
+				thinking: "xhigh",
+				notifyOnExit: true,
+			}));
+			expect(notify).toHaveBeenCalledWith(expect.stringContaining("review started: bg-42"), "info");
+			expect(notify).toHaveBeenCalledWith(expect.stringContaining("bg_task action=log id=bg-42"), "info");
 		});
 
-		it("includes scope label in notify for PR args", async () => {
-			let handler: ((args: string, ctx: { hasUI: boolean; ui: { notify: ReturnType<typeof vi.fn> } }) => Promise<void>) | undefined;
-			const sendUserMessage = vi.fn();
-			const registerCommand = vi.fn((_name: string, options: { handler: typeof handler }) => {
-				handler = options.handler;
-			});
-			const notify = vi.fn();
+		it("includes scope label in bg_task title and notify for PR args", async () => {
+			const { handler, notify, taskSpawner, ctx } = setup();
 
-			registerReviewCommand({ registerCommand, sendUserMessage } as never);
-			await handler?.("#42", { hasUI: true, ui: { notify } });
+			await handler?.("#42", ctx);
 
-			expect(sendUserMessage).toHaveBeenCalledWith(expect.stringContaining("gh pr diff 42"), { deliverAs: "followUp" });
+			expect(taskSpawner.spawnTask).toHaveBeenCalledWith(expect.objectContaining({
+				command: expect.stringContaining("gh pr diff 42"),
+				title: "review: PR #42 · openai-codex/gpt-5.3-codex",
+			}));
 			expect(notify).toHaveBeenCalledWith(expect.stringContaining("PR #42"), "info");
 		});
 
 		it("uses alias model when provided as first arg", async () => {
-			let handler: ((args: string, ctx: { hasUI: boolean; ui: { notify: ReturnType<typeof vi.fn> } }) => Promise<void>) | undefined;
+			const { handler, notify, taskSpawner, ctx } = setup();
+
+			await handler?.("opus #42", ctx);
+
+			expect(taskSpawner.spawnTask).toHaveBeenCalledWith(expect.objectContaining({
+				command: expect.stringContaining("anthropic/claude-opus-4.6"),
+				model: "anthropic/claude-opus-4.6",
+				title: "review: PR #42 · anthropic/claude-opus-4.6",
+			}));
+			expect(notify).toHaveBeenCalledWith(expect.stringContaining("anthropic/claude-opus-4.6"), "info");
+		});
+
+		it("reports a clear warning if bg_task spawn fails", async () => {
+			const failingSpawner = { spawnTask: vi.fn(() => { throw new Error("cmux unavailable"); }) };
+			const { handler, notify, ctx } = setup(failingSpawner);
+
+			await handler?.("", ctx);
+
+			expect(notify).toHaveBeenCalledWith("/sumo:review failed to start bg_task: cmux unavailable", "warning");
+		});
+
+		it("does not fall back to queuing a main-agent prompt when bg_task is unavailable", async () => {
+			let handler: ((args: string, ctx: { hasUI: boolean; cwd: string; ui: { notify: ReturnType<typeof vi.fn> } }) => Promise<void>) | undefined;
 			const sendUserMessage = vi.fn();
 			const registerCommand = vi.fn((_name: string, options: { handler: typeof handler }) => {
 				handler = options.handler;
 			});
 			const notify = vi.fn();
-
 			registerReviewCommand({ registerCommand, sendUserMessage } as never);
-			await handler?.("opus #42", { hasUI: true, ui: { notify } });
 
-			expect(sendUserMessage).toHaveBeenCalledWith(expect.stringContaining("anthropic/claude-opus-4.6"), { deliverAs: "followUp" });
-			expect(sendUserMessage).toHaveBeenCalledWith(expect.stringContaining("gh pr diff 42"), { deliverAs: "followUp" });
-			expect(notify).toHaveBeenCalledWith(expect.stringContaining("anthropic/claude-opus-4.6"), "info");
+			await handler?.("", { hasUI: true, cwd: "/tmp/sumo-fixture", ui: { notify } });
+
+			expect(sendUserMessage).not.toHaveBeenCalled();
+			expect(notify).toHaveBeenCalledWith("/sumo:review cannot start: bg_task manager is not available", "warning");
 		});
 	});
 });

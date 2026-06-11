@@ -104,6 +104,24 @@ describe("sumo interactive Pi noise filtering", () => {
 		runtime.stop();
 	});
 
+	it("emits a boot_screen_frame diagnostic when the eager splash paints", async () => {
+		const previousDiagFile = process.env.SUMO_TUI_DIAG_FILE;
+		const diagFile = join(mkdtempSync(join(tmpdir(), "sumocode-boot-diag-")), "diag.jsonl");
+		process.env.SUMO_TUI_DIAG_FILE = diagFile;
+		const runtime = new SumoInteractiveRuntime({ isTTY: true, columns: 100, rows: 30, write: vi.fn() });
+		try {
+			await runtime.start();
+			const events = readFileSync(diagFile, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line) as Record<string, unknown>);
+			expect(events).toEqual(expect.arrayContaining([
+				expect.objectContaining({ event: "boot_screen_frame", surface: "retained_splash", width: 100, height: 30 }),
+			]));
+		} finally {
+			runtime.stop();
+			if (previousDiagFile === undefined) delete process.env.SUMO_TUI_DIAG_FILE;
+			else process.env.SUMO_TUI_DIAG_FILE = previousDiagFile;
+		}
+	});
+
 	it("shares the terminal owner with lifecycle startup without duplicate mode writes", async () => {
 		const write = vi.fn();
 		const output = { isTTY: true, columns: 100, rows: 30, write };

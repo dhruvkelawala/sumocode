@@ -32,6 +32,30 @@ describe("retained lifecycle across session switches", () => {
 		app = undefined;
 	});
 
+	it("emits boot and app-ready diagnostics in order on startup", async () => {
+		app = spawnPiPty({
+			args: ["--offline", "--no-extensions", "-e", "./src/extension.ts", "--no-session"],
+			env: retainedModeEnv(),
+		});
+		await app.waitForOutput(/DIVINE INVOCATION/, 12_000);
+		await new Promise((resolve) => setTimeout(resolve, 300));
+
+		const events = readFileSync(retainedModeEnv().SUMO_TUI_DIAG_FILE, "utf8")
+			.split("\n")
+			.filter(Boolean)
+			.map((line) => JSON.parse(line) as { event?: string });
+		const names = events.map((event) => event.event).filter((event): event is string => typeof event === "string");
+		const bootIndex = names.indexOf("boot_screen_frame");
+		const appReadyIndex = names.indexOf("app_ready");
+		const stableChromeIndex = names.indexOf("stable_chrome_ready");
+		const inputReadyIndex = names.indexOf("input_ready");
+
+		expect(bootIndex).toBeGreaterThanOrEqual(0);
+		expect(stableChromeIndex).toBeGreaterThan(bootIndex);
+		expect(appReadyIndex).toBeGreaterThanOrEqual(stableChromeIndex);
+		expect(inputReadyIndex).toBeGreaterThanOrEqual(appReadyIndex);
+	});
+
 	it("does not leave altscreen during /new", async () => {
 		app = spawnPiPty({
 			args: ["--offline", "--no-extensions", "-e", "./src/extension.ts", "--no-session"],

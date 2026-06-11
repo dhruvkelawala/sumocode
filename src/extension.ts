@@ -26,6 +26,7 @@ import { installCompactionIndicator } from "./compaction-indicator.js";
 import { installFastMode } from "./fast-mode.js";
 import { installBackgroundTasks } from "./background-tasks/index.js";
 import { installTaskModeAutoExit } from "./task-mode.js";
+import { logDiagnostic } from "./sumo-tui/runtime/diagnostics.js";
 
 const SUMOCODE_PACKAGE_NAME = "@dhruvkelawala/sumocode";
 const LEGACY_TASK_TOOL_EXTENSION_PATH = join(".pi", "agent", "extensions", "task-tool", "index.ts");
@@ -157,6 +158,11 @@ export function isTaskMode(options: TaskModeOptions = {}): boolean {
  * so ownership and startup conflict diagnostics have one registry seam.
  */
 export default function sumocode(pi: ExtensionAPI): void {
+	logDiagnostic("extension_activate_begin", {
+		taskMode: isTaskMode(),
+		sumoTui: process.env.SUMO_TUI ?? null,
+		launcher: process.env.SUMOCODE_LAUNCHER ?? null,
+	});
 	if (shouldNoopHelperSubprocess()) {
 		// Helper subprocesses (pi-cmux session naming, SumoCode bg_task shell
 		// wrappers, etc.) signal themselves via PI_CMUX_CHILD / SUMOCODE_BG_CHILD.
@@ -233,4 +239,9 @@ export default function sumocode(pi: ExtensionAPI): void {
 	installCompactionIndicator(pi);
 	registerSumoReloadCommand(pi);
 	installSumoInteractions(pi, { backgroundTaskManager });
+	logDiagnostic("extension_activate_end", {
+		taskMode: isTaskMode(),
+		nativeTaskInstalled: shouldInstallNativeTaskTool({ force: process.env.SUMOCODE_NATIVE_TASK }),
+		hasBackgroundTasks: backgroundTaskManager !== undefined,
+	});
 }

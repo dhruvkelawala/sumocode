@@ -522,7 +522,10 @@ export class SumoInteractiveRuntime {
 		this.renderedVersion = this.frameVersion;
 		this.renderedWidth = width;
 		this.renderedHeight = height;
-		logDiagnostic("eager_splash_paint", { width, height, patchCount: patches.length, layoutMs: Math.round(layoutMs * 100) / 100, compositeMs: Math.round(compositeMs * 100) / 100 });
+		const layoutRoundedMs = Math.round(layoutMs * 100) / 100;
+		const compositeRoundedMs = Math.round(compositeMs * 100) / 100;
+		logDiagnostic("eager_splash_paint", { width, height, patchCount: patches.length, layoutMs: layoutRoundedMs, compositeMs: compositeRoundedMs });
+		logDiagnostic("boot_screen_frame", { width, height, patchCount: patches.length, layoutMs: layoutRoundedMs, compositeMs: compositeRoundedMs, surface: "retained_splash" });
 	}
 
 	private emptyChatQuoteSnapshot(): EmptyChatQuoteSnapshot {
@@ -825,7 +828,12 @@ export class SumoInteractiveMode {
 		process.nextTick(() => {
 			logDiagnostic("owned_shell_initial_render_start");
 			this.ownedShell?.render();
-			logDiagnostic("owned_shell_initial_render_end");
+			const cols = dimensions.columns ?? null;
+			const rows = dimensions.rows ?? null;
+			logDiagnostic("owned_shell_initial_render_end", { cols, rows });
+			logDiagnostic("stable_chrome_ready", { cols, rows, surface: "owned_shell" });
+			logDiagnostic("app_ready", { cols, rows, surface: "owned_shell" });
+			logDiagnostic("input_ready", { cols, rows, surface: "owned_shell" });
 		});
 
 		logDiagnostic("owned_shell_installed", {

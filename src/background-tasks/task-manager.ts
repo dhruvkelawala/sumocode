@@ -702,7 +702,7 @@ export class BackgroundTaskManager {
 				path: task.worktree.path,
 			});
 			if (!created.ok) {
-				appendLogLine(task.logFile, `\n[bg-task] worktree create failed: ${created.message}\n`, this.logMaxBytes);
+				appendLogLine(task.logFile, `\n[bg-task] worktree create failed: ${created.message}\n`);
 				this.finalizeTask(task, 1, "self-exit");
 				return;
 			}
@@ -831,7 +831,6 @@ export class BackgroundTaskManager {
 					appendLogLine(
 						task.logFile,
 						`[bg-task] agent process ${pid} is gone and no exit marker was written; marking task failed (likely SIGKILL/crash)\n`,
-						this.logMaxBytes,
 					);
 					this.finalizeTask(task, null, "self-exit");
 					return;

@@ -62,7 +62,6 @@ const STOP_SIGTERM_GRACE_MS = 5_000;
 /** Bounded tail-read for poll/harvest — avoids O(file_size) re-reads. */
 const LOG_TAIL_READ_BYTES = 16 * 1024;
 const DEFAULT_BACKGROUND_TASK_LOG_MAX_BYTES = 2 * 1024 * 1024;
-const LOG_CAP_INTERVAL_MS = 2_000;
 const DEFAULT_FINISHED_TASK_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const DEFAULT_MAX_RECOVERED_FINISHED_TASKS = 100;
 
@@ -70,7 +69,6 @@ interface InternalTask extends BackgroundTask {
 	child?: ChildProcess;
 	pollTimer?: ReturnType<typeof setInterval>;
 	responseTimer?: ReturnType<typeof setInterval>;
-	logCapTimer?: ReturnType<typeof setInterval>;
 	startupDeadline?: number;
 	/**
 	 * Promise that resolves once the visible-spawn coroutine finishes (success
@@ -174,9 +172,8 @@ function enforceLogSizeCap(logFile: string, maxBytes: number): void {
 	}
 }
 
-function appendLogLine(logFile: string, line: string, maxBytes = DEFAULT_BACKGROUND_TASK_LOG_MAX_BYTES): void {
+function appendLogLine(logFile: string, line: string): void {
 	writeFileSync(logFile, line, { flag: "a" });
-	enforceLogSizeCap(logFile, maxBytes);
 }
 
 /**
@@ -447,8 +444,6 @@ export class BackgroundTaskManager {
 			enforceLogSizeCap(task.logFile, this.logMaxBytes);
 			return;
 		}
-		this.armLogCap(task);
-
 		const exitCode = task.exitFile && existsSync(task.exitFile)
 			? readExitCodeFromFile(readFileSync(task.exitFile, "utf8"))
 			: null;
@@ -532,20 +527,6 @@ export class BackgroundTaskManager {
 		}
 	}
 
-	private armLogCap(task: InternalTask): void {
-		if (task.logCapTimer || task.status !== "running") return;
-		enforceLogSizeCap(task.logFile, this.logMaxBytes);
-		task.logCapTimer = setInterval(() => enforceLogSizeCap(task.logFile, this.logMaxBytes), LOG_CAP_INTERVAL_MS);
-		if (typeof task.logCapTimer.unref === "function") task.logCapTimer.unref();
-	}
-
-	private clearLogCap(task: InternalTask): void {
-		if (!task.logCapTimer) return;
-		clearInterval(task.logCapTimer);
-		task.logCapTimer = undefined;
-		enforceLogSizeCap(task.logFile, this.logMaxBytes);
-	}
-
 	spawnTask(options: SpawnBackgroundTaskOptions): BackgroundTask {
 		const command = options.command.trim();
 		if (!command) {
@@ -619,7 +600,6 @@ export class BackgroundTaskManager {
 
 		this.tasks.set(id, task);
 		writeTaskMeta(task);
-		this.armLogCap(task);
 
 		if (visible) {
 			// Capture the spawn coroutine on the task so stopTask can await it.
@@ -632,7 +612,7 @@ export class BackgroundTaskManager {
 				paths,
 			).catch((error) => {
 				const message = error instanceof Error ? error.message : String(error);
-				appendLogLine(task.logFile, `\n[bg-task] visible spawn failed: ${message}\n`, this.logMaxBytes);
+				appendLogLine(task.logFile, `\n[bg-task] visible spawn failed: ${message}\n`);
 				this.finalizeTask(task, 1, "self-exit");
 			});
 		} else {
@@ -677,7 +657,7 @@ export class BackgroundTaskManager {
 			// On platforms where we kept stdio pipes (Windows), tee chunks into the
 			// log file. On detached platforms the shell does the redirection.
 			const handleChunk = (chunk: Buffer) => {
-				appendLogLine(logFile, chunk.toString(), this.logMaxBytes);
+				appendLogLine(logFile, chunk.toString());
 				task.updatedAt = Date.now();
 			};
 			child.stdout?.on("data", handleChunk);
@@ -688,12 +668,12 @@ export class BackgroundTaskManager {
 			this.finalizeTask(task, typeof code === "number" ? code : null, "self-exit");
 		});
 		child.on("error", (error) => {
-			appendLogLine(logFile, `\n[spawn error] ${error.message}\n`, this.logMaxBytes);
+			appendLogLine(logFile, `\n[spawn error] ${error.message}\n`);
 			this.finalizeTask(task, 1, "self-exit");
 		});
 
 		if (task.pid != null && !task.processStartTime) {
-			appendLogLine(logFile, "\n[bg-task] warning: failed to capture process identity; recovered stop will require identity recapture\n", this.logMaxBytes);
+			appendLogLine(logFile, "\n[bg-task] warning: failed to capture process identity; recovered stop will require identity recapture\n");
 		}
 
 		writeTaskMeta(task);
@@ -763,7 +743,7 @@ export class BackgroundTaskManager {
 
 		const splitResult = await openCommandInNewSplitWithRefs(this.pi, direction, respawnCommand);
 		if (!splitResult.ok) {
-			appendLogLine(task.logFile, `\n[cmux error] ${splitResult.error}\n`, this.logMaxBytes);
+			appendLogLine(task.logFile, `\n[cmux error] ${splitResult.error}\n`);
 			this.finalizeTask(task, 1, "self-exit");
 			return;
 		}
@@ -860,7 +840,6 @@ export class BackgroundTaskManager {
 				appendLogLine(
 					task.logFile,
 					`[bg-task] startup timeout: task-mode started marker not written within ${Math.round(DEFAULT_AGENT_STARTUP_TIMEOUT_MS / 1000)}s; marking task failed before handoff became live\n`,
-					this.logMaxBytes,
 				);
 				this.finalizeTask(task, null, "self-exit");
 			}
@@ -908,7 +887,11 @@ export class BackgroundTaskManager {
 			clearInterval(task.responseTimer);
 			task.responseTimer = undefined;
 		}
-		this.clearLogCap(task);
+		// Cap the log exactly once, now that the task is finalized and no external
+		// writer (the visible-shell `tee -a` pipeline / detached shell redirect) is
+		// still appending to output.log. Capping while the writer is live would race
+		// it across processes and corrupt the log.
+		enforceLogSizeCap(task.logFile, this.logMaxBytes);
 
 		task.exitCode = exitCode;
 		task.updatedAt = Date.now();
@@ -1168,11 +1151,10 @@ export class BackgroundTaskManager {
 			if (task.status === "running") continue;
 			if (task.pollTimer) clearInterval(task.pollTimer);
 			if (task.responseTimer) clearInterval(task.responseTimer);
-			this.clearLogCap(task);
 			if (options.pruneWorktrees && task.worktree) {
 				const pruned = removeWorktreeSync({ path: task.worktree.path, repoRoot: task.worktree.repoRoot });
 				if (!pruned.ok) {
-					appendLogLine(task.logFile, `\n[bg-task] worktree prune failed: ${pruned.message}\n`, this.logMaxBytes);
+					appendLogLine(task.logFile, `\n[bg-task] worktree prune failed: ${pruned.message}\n`);
 					continue;
 				}
 			}
@@ -1237,7 +1219,6 @@ export class BackgroundTaskManager {
 			}
 			if (task.pollTimer) clearInterval(task.pollTimer);
 			if (task.responseTimer) clearInterval(task.responseTimer);
-			this.clearLogCap(task);
 		}
 	}
 }

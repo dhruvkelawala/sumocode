@@ -1527,7 +1527,24 @@ describe("BackgroundTaskManager", () => {
 		expect(existsSync(runningRoot)).toBe(true);
 	});
 
-	it("caps output.log size for running tasks", async () => {
+	it("caps output.log size once a task finishes", () => {
+		const child = mockLongLivedChild();
+		spawnMock.mockReturnValue(child);
+		const manager = new BackgroundTaskManager(buildPiStub() as never, { logMaxBytes: 512 });
+		const task = manager.spawnTask({ command: "watch", cwd: "/tmp", notifyOnExit: false });
+		appendFileSync(task.logFile, "x".repeat(4096));
+
+		// The cap is enforced once, when the task finalizes — i.e. after the
+		// external writer (here the mock child) has exited, never while it is
+		// still appending. Driving the child to close finalizes the task.
+		child.forceExit(0);
+
+		const finished = readFileSync(task.logFile, "utf8");
+		expect(finished.length).toBeLessThanOrEqual(512);
+		expect(finished.startsWith("[sumocode-bg] log truncated")).toBe(true);
+	});
+
+	it("does not rewrite a running task's log out from under it", async () => {
 		const child = mockLongLivedChild();
 		spawnMock.mockReturnValue(child);
 		vi.useFakeTimers();
@@ -1536,10 +1553,14 @@ describe("BackgroundTaskManager", () => {
 			const task = manager.spawnTask({ command: "watch", cwd: "/tmp", notifyOnExit: false });
 			appendFileSync(task.logFile, "x".repeat(4096));
 
-			await vi.advanceTimersByTimeAsync(2_000);
+			// There is no periodic cap timer anymore. Advancing well past the old
+			// 2s cadence must NOT truncate a still-running task's log, because an
+			// external writer (tee / shell redirect) may be mid-append.
+			await vi.advanceTimersByTimeAsync(10_000);
 
-			expect(readFileSync(task.logFile, "utf8").length).toBeLessThanOrEqual(512);
-			expect(readFileSync(task.logFile, "utf8")).toContain("log truncated");
+			const running = readFileSync(task.logFile, "utf8");
+			expect(running.length).toBe(4096);
+			expect(running).not.toContain("log truncated");
 		} finally {
 			vi.useRealTimers();
 		}

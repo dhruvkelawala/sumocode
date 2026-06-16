@@ -7,7 +7,7 @@ A Pi extension that ships its own retained terminal renderer (SumoTUI), three th
 [![MIT License](https://img.shields.io/badge/license-MIT-2D211A?style=flat-square)](./LICENSE)
 [![Version](https://img.shields.io/badge/v0.4.0-B85A22?style=flat-square)](./CHANGELOG.md)
 [![Pi 0.79](https://img.shields.io/badge/pi-0.79-4A6B3A?style=flat-square)](https://github.com/earendil-works/pi)
-[![Tests](https://img.shields.io/badge/tests-1015%20passing-4A6B3A?style=flat-square)](./test)
+[![Tests](https://img.shields.io/badge/tests-1022%20passing-4A6B3A?style=flat-square)](./test)
 
 <br>
 

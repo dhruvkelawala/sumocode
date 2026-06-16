@@ -3,6 +3,7 @@ export interface ActiveEditorDraftController {
 	clearDraft(): void;
 }
 
+// Forward-looking accessor: exposed for editor-draft-state.test.ts and future attachment UI.
 export interface EditorImageAttachment {
 	readonly token: string;
 	readonly path: string;

@@ -47,7 +47,7 @@ export const DEFAULT_SUMOCODE_AGENT_THINKING: BackgroundTaskThinking = "low";
 const AGENT_MODEL_ENV = "SUMOCODE_BG_AGENT_MODEL";
 const AGENT_THINKING_ENV = "SUMOCODE_BG_AGENT_THINKING";
 const AGENT_CAPACITY_ENV = "SUMOCODE_BG_AGENT_CAPACITY";
-export const DEFAULT_SUMOCODE_AGENT_CAPACITY = 4;
+const DEFAULT_SUMOCODE_AGENT_CAPACITY = 4;
 const THINKING_LEVELS = new Set<BackgroundTaskThinking>([
 	"off",
 	"minimal",
@@ -61,7 +61,7 @@ const THINKING_LEVELS = new Set<BackgroundTaskThinking>([
 const STOP_SIGTERM_GRACE_MS = 5_000;
 /** Bounded tail-read for poll/harvest — avoids O(file_size) re-reads. */
 const LOG_TAIL_READ_BYTES = 16 * 1024;
-export const DEFAULT_BACKGROUND_TASK_LOG_MAX_BYTES = 2 * 1024 * 1024;
+const DEFAULT_BACKGROUND_TASK_LOG_MAX_BYTES = 2 * 1024 * 1024;
 const LOG_CAP_INTERVAL_MS = 2_000;
 const DEFAULT_FINISHED_TASK_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const DEFAULT_MAX_RECOVERED_FINISHED_TASKS = 100;

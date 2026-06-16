@@ -132,7 +132,7 @@ function branchExistsSync(repoRoot: string, branch: string): boolean {
 	return gitOkSync(repoRoot, ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`]);
 }
 
-function resolveCreateOptions(options: CreateWorktreeOptions): { branch: string; baseRef: string; path: string } {
+export function resolveCreateOptions(options: CreateWorktreeOptions): { branch: string; baseRef: string; path: string } {
 	const baseRef = options.baseRef ?? "HEAD";
 	const branch = options.branch ?? `sumo/${slugifyBranch(options.task ?? "task")}`;
 	const path = options.path ?? join(worktreeRoot(options.repoRoot), pathSegmentForBranch(branch));

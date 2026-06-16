@@ -20,7 +20,7 @@ import {
 	openCommandInNewSplitWithRefs,
 	type SplitDirection as CmuxSplitDirection,
 } from "../commands/cmux-split.js";
-import { createWorktreeSync, removeWorktreeSync } from "../git/worktree.js";
+import { createWorktree, removeWorktreeSync, resolveCreateOptions } from "../git/worktree.js";
 import {
 	BACKGROUND_TASK_META_SCHEMA_VERSION,
 	type BackgroundTask,
@@ -79,6 +79,7 @@ interface InternalTask extends BackgroundTask {
 	 * stopped-then-launched race leaves a runaway pane.
 	 */
 	spawnPromise?: Promise<void>;
+	worktreePending?: boolean;
 	stopRequested?: boolean;
 	finalized?: boolean;
 }
@@ -560,22 +561,21 @@ export class BackgroundTaskManager {
 		const now = Date.now();
 		let cwd = options.cwd.trim() || process.cwd();
 		let worktree: BackgroundTask["worktree"];
+		let worktreePending = false;
 		if (options.worktree === true) {
-			const repoRoot = cwd;
 			if (runner !== "sumocode" || !visible) {
 				throw new Error("worktree=true requires runner='sumocode' and visible=true");
 			}
-			const created = createWorktreeSync({
-				repoRoot: cwd,
+			const repoRoot = cwd;
+			const target = resolveCreateOptions({
+				repoRoot,
 				branch: options.branch,
 				baseRef: options.baseRef,
 				task: options.title ?? command,
 			});
-			if (!created.ok) {
-				throw new Error(`failed to create worktree: ${created.message}`);
-			}
-			worktree = { path: created.path, branch: created.branch, baseRef: created.baseRef, repoRoot };
-			cwd = created.path;
+			worktree = { path: target.path, branch: target.branch, baseRef: target.baseRef, repoRoot };
+			cwd = target.path;
+			worktreePending = true;
 		}
 		const paths = buildVisibleTaskPaths(id, now);
 		mkdirSync(dirname(paths.logFile), { recursive: true });
@@ -601,6 +601,7 @@ export class BackgroundTaskManager {
 			model: resolveAgentModel(runner, options.model),
 			thinking: resolveAgentThinking(runner, options.thinking),
 			worktree,
+			worktreePending,
 			notifyOnExit: options.notifyOnExit !== false,
 		};
 
@@ -700,6 +701,22 @@ export class BackgroundTaskManager {
 		if (task.stopRequested) {
 			this.finalizeTask(task, null, "stopped");
 			return;
+		}
+		if (task.worktreePending && task.worktree) {
+			const created = await createWorktree({
+				repoRoot: task.worktree.repoRoot,
+				branch: task.worktree.branch,
+				baseRef: task.worktree.baseRef,
+				path: task.worktree.path,
+			});
+			if (!created.ok) {
+				appendLogLine(task.logFile, `\n[bg-task] worktree create failed: ${created.message}\n`, this.logMaxBytes);
+				this.finalizeTask(task, 1, "self-exit");
+				return;
+			}
+			task.worktreePending = false;
+			task.updatedAt = Date.now();
+			writeTaskMeta(task);
 		}
 		if (task.runner === "shell") {
 			writeFileSync(

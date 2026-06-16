@@ -472,9 +472,9 @@ describe("BackgroundTaskManager", () => {
 			surfaceRef: "surface:2",
 		});
 		const worktree = await import("../git/worktree.js");
-		const create = vi.spyOn(worktree, "createWorktreeSync").mockReturnValue({
+		const create = vi.spyOn(worktree, "createWorktree").mockResolvedValue({
 			ok: true,
-			path: "/repo/.worktrees/sumo__review",
+			path: "/repo.sumo-worktrees/sumo__review",
 			branch: "sumo/review",
 			baseRef: "HEAD",
 		});
@@ -491,11 +491,43 @@ describe("BackgroundTaskManager", () => {
 		});
 		await vi.waitFor(() => expect(task.cmux).toBeDefined());
 
-		expect(create).toHaveBeenCalledWith({ repoRoot: "/repo", branch: undefined, baseRef: undefined, task: "review" });
-		expect(task.cwd).toBe("/repo/.worktrees/sumo__review");
-		expect(task.worktree).toEqual({ path: "/repo/.worktrees/sumo__review", branch: "sumo/review", baseRef: "HEAD", repoRoot: "/repo" });
-		expect(openSplit.mock.calls[0]?.[2]).toContain("cd '/repo/.worktrees/sumo__review'");
+		expect(create).toHaveBeenCalledWith({ repoRoot: "/repo", branch: "sumo/review", baseRef: "HEAD", path: "/repo.sumo-worktrees/sumo__review" });
+		expect(task.cwd).toBe("/repo.sumo-worktrees/sumo__review");
+		expect(task.worktree).toEqual({ path: "/repo.sumo-worktrees/sumo__review", branch: "sumo/review", baseRef: "HEAD", repoRoot: "/repo" });
+		expect(openSplit.mock.calls[0]?.[2]).toContain("cd '/repo.sumo-worktrees/sumo__review'");
 		expect(JSON.parse(readFileSync(task.metaFile!, "utf8")).worktree).toEqual(task.worktree);
+	});
+
+	it("finalizes the task as failed when deferred worktree creation fails", async () => {
+		process.env.CMUX_SURFACE_ID = "surface:1";
+		const pi = buildPiStub();
+		const cmuxSplit = await import("../commands/cmux-split.js");
+		const openSplit = vi.spyOn(cmuxSplit, "openCommandInNewSplitWithRefs").mockResolvedValue({
+			ok: true,
+			workspaceRef: "workspace:1",
+			surfaceRef: "surface:2",
+		});
+		const worktree = await import("../git/worktree.js");
+		vi.spyOn(worktree, "createWorktree").mockResolvedValue({
+			ok: false,
+			error: "branch_already_exists",
+			message: "branch already exists: sumo/x",
+		});
+
+		const manager = new BackgroundTaskManager(pi as never);
+		const task = manager.spawnTask({
+			command: "review",
+			cwd: "/repo",
+			visible: true,
+			runner: "sumocode",
+			worktree: true,
+			title: "review",
+			notifyOnExit: false,
+		});
+		await vi.waitFor(() => expect(task.status).toBe("failed"));
+
+		expect(openSplit).not.toHaveBeenCalled();
+		expect(readFileSync(task.logFile, "utf8")).toContain("worktree create failed: branch already exists: sumo/x");
 	});
 
 	it("keeps agent task running when response.md appears before real process exit", async () => {

@@ -2,6 +2,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { buildShellCommand, isInCmux, openCommandInNewSplit, shellEscape, type SplitDirection } from "./cmux-split.js";
 import { chooseDiffSplitDirection, type TerminalSize } from "./diff.js";
 import { createWorktree, listWorktrees, removeWorktree, type CreateWorktreeResult, type ListWorktreesResult, type RemoveWorktreeResult } from "../git/worktree.js";
+import { getActiveSumoRuntime } from "../sumo-tui/pi-compat/sumo-interactive-mode.js";
 
 const DEFAULT_SETUP_ACTION = "pnpm install";
 
@@ -32,8 +33,18 @@ export function parseWorktreeArgs(args: string): ParsedWorktreeArgs {
 	return { mode: "open", task: trimmed };
 }
 
-function notify(ctx: ExtensionContext, message: string, type: "info" | "warning" = "info"): void {
+function notify(pi: Pick<ExtensionAPI, "sendMessage">, ctx: ExtensionContext, message: string, type: "info" | "warning" = "info"): void {
 	if (ctx.hasUI) {
+		getActiveSumoRuntime()?.showNotice(message, type);
+		pi.sendMessage(
+			{
+				customType: "sumo:worktree",
+				content: message,
+				display: true,
+				details: { type, message },
+			},
+			{ triggerTurn: false },
+		);
 		ctx.ui.notify(message, type);
 		return;
 	}
@@ -47,6 +58,7 @@ function commandForWorktree(task: string, setupAction: string): string {
 }
 
 async function handlePrune(
+	pi: Pick<ExtensionAPI, "sendMessage">,
 	ctx: ExtensionContext,
 	target: string,
 	list: typeof listWorktrees,
@@ -54,30 +66,30 @@ async function handlePrune(
 ): Promise<void> {
 	const listed = await list(ctx.cwd);
 	if (!listed.ok) {
-		notify(ctx, `/sumo:worktree prune: ${listed.message}`, "warning");
+		notify(pi, ctx, `/sumo:worktree prune: ${listed.message}`, "warning");
 		return;
 	}
 	const sumoWorktrees = listed.worktrees.filter((worktree) => worktree.branch?.startsWith("sumo/"));
 	if (!target) {
 		if (sumoWorktrees.length === 0) {
-			notify(ctx, "no sumo worktrees found");
+			notify(pi, ctx, "no sumo worktrees found");
 			return;
 		}
 		const lines = sumoWorktrees.map((worktree) => `${worktree.branch ?? "detached"} · ${worktree.path}`);
-		notify(ctx, `sumo worktrees:\n${lines.join("\n")}\nrun /sumo:worktree prune <branch-or-path> to remove one`);
+		notify(pi, ctx, `sumo worktrees:\n${lines.join("\n")}\nrun /sumo:worktree prune <branch-or-path> to remove one`);
 		return;
 	}
 	const match = sumoWorktrees.find((worktree) => worktree.path === target || worktree.branch === target);
 	if (!match) {
-		notify(ctx, `/sumo:worktree prune: no tracked sumo worktree matched ${target}`, "warning");
+		notify(pi, ctx, `/sumo:worktree prune: no tracked sumo worktree matched ${target}`, "warning");
 		return;
 	}
 	const removed = await remove({ repoRoot: ctx.cwd, path: match.path });
 	if (!removed.ok) {
-		notify(ctx, `/sumo:worktree prune: ${removed.message}`, "warning");
+		notify(pi, ctx, `/sumo:worktree prune: ${removed.message}`, "warning");
 		return;
 	}
-	notify(ctx, `removed worktree ${match.branch ?? match.path}`);
+	notify(pi, ctx, `removed worktree ${match.branch ?? match.path}`);
 }
 
 export function registerWorktreeCommand(pi: ExtensionAPI, options: WorktreeCommandOptions = {}): void {
@@ -95,25 +107,25 @@ export function registerWorktreeCommand(pi: ExtensionAPI, options: WorktreeComma
 			try {
 				const parsed = parseWorktreeArgs(args ?? "");
 				if (parsed.mode === "prune") {
-					await handlePrune(ctx, parsed.task, list, remove);
+					await handlePrune(pi, ctx, parsed.task, list, remove);
 					return;
 				}
 				if (!ctx.hasUI) {
-					notify(ctx, "/sumo:worktree requires interactive UI", "warning");
+					notify(pi, ctx, "/sumo:worktree requires interactive UI", "warning");
 					return;
 				}
 				if (!isInsideCmux()) {
-					notify(ctx, "/sumo:worktree requires a cmux surface", "warning");
+					notify(pi, ctx, "/sumo:worktree requires a cmux surface", "warning");
 					return;
 				}
 				if (!parsed.task) {
-					notify(ctx, "Usage: /sumo:worktree <task> or /sumo:worktree prune <branch-or-path>", "warning");
+					notify(pi, ctx, "Usage: /sumo:worktree <task> or /sumo:worktree prune <branch-or-path>", "warning");
 					return;
 				}
 
 				const created: CreateWorktreeResult = await create({ repoRoot: ctx.cwd, task: parsed.task, baseRef: "HEAD" });
 				if (!created.ok) {
-					notify(ctx, `/sumo:worktree: ${created.message}`, "warning");
+					notify(pi, ctx, `/sumo:worktree: ${created.message}`, "warning");
 					return;
 				}
 
@@ -121,13 +133,13 @@ export function registerWorktreeCommand(pi: ExtensionAPI, options: WorktreeComma
 				const command = buildShellCommand(created.path, commandForWorktree(parsed.task, setupAction));
 				const opened = await openSplit(pi, direction, command);
 				if (!opened.ok) {
-					notify(ctx, `/sumo:worktree: ${opened.error}`, "warning");
+					notify(pi, ctx, `/sumo:worktree: ${opened.error}`, "warning");
 					return;
 				}
-				notify(ctx, `opened ${created.branch} in ${direction} split · setup: ${setupAction || "none"}`);
+				notify(pi, ctx, `opened ${created.branch} in ${direction} split · setup: ${setupAction || "none"}`);
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);
-				notify(ctx, `/sumo:worktree: ${message}`, "warning");
+				notify(pi, ctx, `/sumo:worktree: ${message}`, "warning");
 			}
 		},
 	});

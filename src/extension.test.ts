@@ -177,6 +177,17 @@ describe("sumocode extension", () => {
 		}
 	});
 
+	it("registers the v0.4 slash commands during full extension install", () => {
+		const { pi } = buildPiStub();
+
+		sumocode(pi as never);
+
+		const commandNames = pi.registerCommand.mock.calls.map((call) => call[0]);
+		expect(commandNames).toContain("sumo:review");
+		expect(commandNames).toContain("sumo:ship");
+		expect(commandNames).toContain("sumo:worktree");
+	});
+
 	it("does not push a 'SumoCode loaded' notification on session_start", () => {
 		const { pi, handlers } = buildPiStub();
 

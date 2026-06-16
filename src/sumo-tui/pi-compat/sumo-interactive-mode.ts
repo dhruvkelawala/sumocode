@@ -322,6 +322,12 @@ export class SumoInteractiveRuntime {
 		return this.selection;
 	}
 
+	public showNotice(message: string, type: "info" | "warning" = "info"): void {
+		const text = type === "warning" ? `Warning: ${message}` : message;
+		this.chat?.addMessage("system", text, new Date());
+		this.requestRender();
+	}
+
 	public setSelectionFrameSource(source: (() => CellBuffer | undefined) | undefined): void {
 		this.selectionFrameSource = source;
 	}

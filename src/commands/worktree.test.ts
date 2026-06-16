@@ -6,7 +6,8 @@ function makePi() {
 	const registerCommand = vi.fn((_name: string, options: { handler: typeof handler }) => {
 		handler = options.handler;
 	});
-	return { pi: { registerCommand }, handler: () => handler, registerCommand };
+	const sendMessage = vi.fn();
+	return { pi: { registerCommand, sendMessage }, handler: () => handler, registerCommand, sendMessage };
 }
 
 describe("/sumo:worktree", () => {
@@ -17,7 +18,7 @@ describe("/sumo:worktree", () => {
 	});
 
 	it("creates a named worktree and opens an interactive sumocode pane with setup", async () => {
-		const { pi, handler, registerCommand } = makePi();
+		const { pi, handler, registerCommand, sendMessage } = makePi();
 		const create = vi.fn(async () => ({ ok: true as const, path: "/repo.wt/sumo__task", branch: "sumo/task", baseRef: "HEAD" }));
 		const openSplit = vi.fn(async () => ({ ok: true as const }));
 		const notify = vi.fn();
@@ -37,6 +38,10 @@ describe("/sumo:worktree", () => {
 		const openedCommand = (openSplit.mock.calls[0] as unknown[] | undefined)?.[2] as string;
 		expect(openedCommand).toContain("pnpm install && SUMOCODE_TASK_KEEP_OPEN=1 exec sumocode task");
 		expect(openedCommand).toContain("ship v0.4");
+		expect(sendMessage).toHaveBeenCalledWith(
+			expect.objectContaining({ customType: "sumo:worktree", content: expect.stringContaining("opened sumo/task in down split"), display: true }),
+			{ triggerTurn: false },
+		);
 		expect(notify).toHaveBeenCalledWith(expect.stringContaining("opened sumo/task in down split"), "info");
 	});
 

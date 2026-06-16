@@ -147,11 +147,15 @@ export class SumoExtensionUIAdapter implements ExtensionUIContext {
 		this.onWorkingIndicator = options.setWorkingIndicator;
 		this.onHiddenThinkingLabel = options.setHiddenThinkingLabel;
 		this.requestRender = options.onRenderRequest ?? (() => this.tui.requestRender?.());
-		this.regionRegistry.mountOverlay("__notifications", this.notifications, {
+		const notificationOverlayOptions: OverlayOptions = {
 			anchor: "top-right",
 			width: "45%",
 			maxHeight: 6,
-		});
+			nonCapturing: true,
+			visible: () => this.notifications.getToasts().length > 0,
+		};
+		this.tui.showOverlay?.(this.notifications, notificationOverlayOptions);
+		this.regionRegistry.mountOverlay("__notifications", this.notifications, notificationOverlayOptions);
 		if (this.modals instanceof ModalLayer) {
 			this.regionRegistry.mountOverlay("__modal", this.modals, {
 				row: 0,

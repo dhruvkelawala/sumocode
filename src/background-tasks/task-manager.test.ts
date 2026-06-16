@@ -892,6 +892,76 @@ describe("BackgroundTaskManager", () => {
 		}
 	});
 
+	it("reaps a started agent task whose process has died without an exit marker", async () => {
+		vi.useFakeTimers();
+		const processKill = vi.spyOn(process, "kill").mockImplementation(((pid: number, signal?: string | number) => {
+			if (pid === 43210 && signal === 0) throw new Error("ESRCH");
+			return true;
+		}) as typeof process.kill);
+		try {
+			process.env.CMUX_SURFACE_ID = "surface:1";
+			const pi = buildPiStub();
+			const cmuxSplit = await import("../commands/cmux-split.js");
+			vi.spyOn(cmuxSplit, "openCommandInNewSplitWithRefs").mockResolvedValue({
+				ok: true,
+				workspaceRef: "workspace:1",
+				surfaceRef: "surface:8",
+			});
+
+			const manager = new BackgroundTaskManager(pi as never);
+			const task = manager.spawnTask({
+				command: "crashy prompt",
+				cwd: "/repo",
+				visible: true,
+				runner: "sumocode",
+				notifyOnExit: false,
+			});
+			await vi.advanceTimersByTimeAsync(50);
+			writeFileSync(task.markerFile!, "43210\n");
+
+			await vi.advanceTimersByTimeAsync(1000);
+
+			expect(task.status).toBe("failed");
+			expect(readFileSync(task.logFile, "utf8")).toContain("is gone and no exit marker");
+			manager.shutdown();
+		} finally {
+			processKill.mockRestore();
+			vi.useRealTimers();
+		}
+	});
+
+	it("keeps a started agent task running while its process is alive", async () => {
+		vi.useFakeTimers();
+		try {
+			process.env.CMUX_SURFACE_ID = "surface:1";
+			const pi = buildPiStub();
+			const cmuxSplit = await import("../commands/cmux-split.js");
+			vi.spyOn(cmuxSplit, "openCommandInNewSplitWithRefs").mockResolvedValue({
+				ok: true,
+				workspaceRef: "workspace:1",
+				surfaceRef: "surface:8",
+			});
+
+			const manager = new BackgroundTaskManager(pi as never);
+			const task = manager.spawnTask({
+				command: "long-running prompt",
+				cwd: "/repo",
+				visible: true,
+				runner: "sumocode",
+				notifyOnExit: false,
+			});
+			await vi.advanceTimersByTimeAsync(50);
+			writeFileSync(task.markerFile!, `${process.pid}\n`);
+
+			await vi.advanceTimersByTimeAsync(1000);
+
+			expect(task.status).toBe("running");
+			manager.shutdown();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("fails agent task when task-mode never writes started marker", async () => {
 		vi.useFakeTimers();
 		try {

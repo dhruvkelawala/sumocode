@@ -264,6 +264,18 @@ function isProcessAlive(pid: number | undefined): boolean {
 	}
 }
 
+function readStartedMarkerPid(markerFile: string | undefined): number | undefined {
+	if (!markerFile || !existsSync(markerFile)) return undefined;
+	try {
+		const first = readFileSync(markerFile, "utf8").trim().split("\n")[0] ?? "";
+		if (!/^\d+$/.test(first)) return undefined;
+		const pid = Number.parseInt(first, 10);
+		return Number.isFinite(pid) && pid > 0 ? pid : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
 function getProcessStartTime(pid: number | undefined): string | undefined {
 	if (pid == null) return undefined;
 	try {
@@ -834,6 +846,16 @@ export class BackgroundTaskManager {
 			}
 			if (task.markerFile && existsSync(task.markerFile)) {
 				task.startupDeadline = undefined;
+				const pid = readStartedMarkerPid(task.markerFile);
+				if (pid !== undefined && !isProcessAlive(pid)) {
+					appendLogLine(
+						task.logFile,
+						`[bg-task] agent process ${pid} is gone and no exit marker was written; marking task failed (likely SIGKILL/crash)\n`,
+						this.logMaxBytes,
+					);
+					this.finalizeTask(task, null, "self-exit");
+					return;
+				}
 			} else if (task.startupDeadline && Date.now() > task.startupDeadline) {
 				appendLogLine(
 					task.logFile,

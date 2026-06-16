@@ -26,22 +26,22 @@ describe("/sumo:ship", () => {
 		const calls: Array<{ cmd: string; args: string[] }> = [];
 		const { handler, ask, notify, ctx } = setup(async (cmd, args) => {
 			calls.push({ cmd, args });
-			if (cmd === "git" && args[0] === "status") return { code: 0, stdout: " M src/a.ts\n?? src/b.ts\n", stderr: "", killed: false };
+			if (cmd === "git" && args[0] === "status") return { code: 0, stdout: " M src/a.ts\0?? src/b.ts\0", stderr: "", killed: false };
 			if (cmd === "git" && args[0] === "branch") return { code: 0, stdout: "sumo/worktree-fanout\n", stderr: "", killed: false };
 			return { code: 0, stdout: "", stderr: "", killed: false };
-		}, ["Push", "Open PR"]);
+		}, ["Commit", "Push", "Open PR"]);
 
 		await handler?.("", ctx);
 
 		expect(calls.map((call) => `${call.cmd} ${call.args.join(" ")}`)).toEqual([
-			"git status --porcelain",
+			"git status --porcelain -z",
 			"git branch --show-current",
 			"git add -A",
 			"git commit -m chore(worktree-fanout): update 2 files",
 			"git push -u origin HEAD",
 			"gh pr create --fill",
 		]);
-		expect(ask).toHaveBeenCalledTimes(2);
+		expect(ask).toHaveBeenCalledTimes(3);
 		expect(notify).toHaveBeenCalledWith(expect.stringContaining("committed locally"), "info");
 		expect(notify).toHaveBeenCalledWith("PR opened for sumo/worktree-fanout", "info");
 	});
@@ -50,16 +50,16 @@ describe("/sumo:ship", () => {
 		const calls: Array<{ cmd: string; args: string[] }> = [];
 		const { handler, ask, notify, ctx } = setup(async (cmd, args) => {
 			calls.push({ cmd, args });
-			if (cmd === "git" && args[0] === "status") return { code: 0, stdout: " M src/a.ts\n", stderr: "", killed: false };
+			if (cmd === "git" && args[0] === "status") return { code: 0, stdout: " M src/a.ts\0", stderr: "", killed: false };
 			if (cmd === "git" && args[0] === "branch") return { code: 0, stdout: "sumo/no-push\n", stderr: "", killed: false };
 			return { code: 0, stdout: "", stderr: "", killed: false };
-		}, ["Cancel"]);
+		}, ["Commit", "Cancel"]);
 
 		await handler?.("", ctx);
 
 		expect(calls.some((call) => call.cmd === "git" && call.args[0] === "push")).toBe(false);
 		expect(calls.some((call) => call.cmd === "gh")).toBe(false);
-		expect(ask).toHaveBeenCalledTimes(1);
+		expect(ask).toHaveBeenCalledTimes(2);
 		expect(notify).toHaveBeenCalledWith("/sumo:ship stopped before push", "info");
 	});
 
@@ -67,10 +67,10 @@ describe("/sumo:ship", () => {
 		const calls: Array<{ cmd: string; args: string[] }> = [];
 		const { handler, notify, ctx } = setup(async (cmd, args) => {
 			calls.push({ cmd, args });
-			if (cmd === "git" && args[0] === "status") return { code: 0, stdout: " M src/a.ts\n", stderr: "", killed: false };
+			if (cmd === "git" && args[0] === "status") return { code: 0, stdout: " M src/a.ts\0", stderr: "", killed: false };
 			if (cmd === "git" && args[0] === "branch") return { code: 0, stdout: "sumo/no-pr\n", stderr: "", killed: false };
 			return { code: 0, stdout: "", stderr: "", killed: false };
-		}, ["Push", "Cancel"]);
+		}, ["Commit", "Push", "Cancel"]);
 
 		await handler?.("", ctx);
 
@@ -79,13 +79,46 @@ describe("/sumo:ship", () => {
 		expect(notify).toHaveBeenCalledWith("/sumo:ship stopped before PR creation", "info");
 	});
 
+	it("stops before commit when commit confirmation is declined", async () => {
+		const calls: Array<{ cmd: string; args: string[] }> = [];
+		const { handler, notify, ctx } = setup(async (cmd, args) => {
+			calls.push({ cmd, args });
+			if (cmd === "git" && args[0] === "status") return { code: 0, stdout: " M src/a.ts\0", stderr: "", killed: false };
+			if (cmd === "git" && args[0] === "branch") return { code: 0, stdout: "sumo/no-commit\n", stderr: "", killed: false };
+			return { code: 0, stdout: "", stderr: "", killed: false };
+		}, ["Cancel"]);
+
+		await handler?.("", ctx);
+
+		expect(calls.some((call) => call.cmd === "git" && call.args[0] === "add")).toBe(false);
+		expect(calls.some((call) => call.cmd === "git" && call.args[0] === "commit")).toBe(false);
+		expect(calls.some((call) => call.cmd === "git" && call.args[0] === "push")).toBe(false);
+		expect(calls.some((call) => call.cmd === "gh")).toBe(false);
+		expect(notify).toHaveBeenCalledWith("/sumo:ship stopped before commit", "info");
+	});
+
+	it("counts rename records as one changed file", async () => {
+		const calls: Array<{ cmd: string; args: string[] }> = [];
+		const { handler, notify, ctx } = setup(async (cmd, args) => {
+			calls.push({ cmd, args });
+			if (cmd === "git" && args[0] === "status") return { code: 0, stdout: "R  new name.ts\0old name.ts\0 M src/b.ts\0", stderr: "", killed: false };
+			if (cmd === "git" && args[0] === "branch") return { code: 0, stdout: "sumo/rename\n", stderr: "", killed: false };
+			return { code: 0, stdout: "", stderr: "", killed: false };
+		}, ["Commit", "Cancel"]);
+
+		await handler?.("", ctx);
+
+		expect(calls.map((call) => `${call.cmd} ${call.args.join(" ")}`)).toContain("git commit -m chore(rename): update 2 files");
+		expect(notify).toHaveBeenCalledWith(expect.stringContaining("committed locally: chore(rename): update 2 files · new name.ts, src/b.ts"), "info");
+	});
+
 	it("reports gh failures clearly", async () => {
 		const { handler, notify, ctx } = setup(async (cmd, args) => {
-			if (cmd === "git" && args[0] === "status") return { code: 0, stdout: " M src/a.ts\n", stderr: "", killed: false };
+			if (cmd === "git" && args[0] === "status") return { code: 0, stdout: " M src/a.ts\0", stderr: "", killed: false };
 			if (cmd === "git" && args[0] === "branch") return { code: 0, stdout: "sumo/ship\n", stderr: "", killed: false };
 			if (cmd === "gh") return { code: 127, stdout: "", stderr: "gh: command not found", killed: false };
 			return { code: 0, stdout: "", stderr: "", killed: false };
-		}, ["Push", "Open PR"]);
+		}, ["Commit", "Push", "Open PR"]);
 
 		await handler?.("", ctx);
 

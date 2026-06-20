@@ -528,6 +528,11 @@ describe("BackgroundTaskManager", () => {
 
 		expect(openSplit).not.toHaveBeenCalled();
 		expect(readFileSync(task.logFile, "utf8")).toContain("worktree create failed: branch already exists: sumo/x");
+		// Fix A: the speculative worktree ref must be cleared so a later prune
+		// does not try to remove a nonexistent worktree and get stuck.
+		expect(task.worktree).toBeUndefined();
+		expect(manager.clearFinishedTasks({ pruneWorktrees: true })).toBe(1);
+		expect(manager.findTask(task.id)).toBeUndefined();
 	});
 
 	it("keeps agent task running when response.md appears before real process exit", async () => {
@@ -1094,7 +1099,7 @@ describe("BackgroundTaskManager", () => {
 		}
 	});
 
-	it("recovers shell tasks and reconciles exit.code after reload", () => {
+	it("recovers shell tasks and reconciles exit.code after reload without injecting a message-queue followUp", () => {
 		const root = join(baseDir, "sumocode-bg", "bg-recovered-1-1000");
 		mkdirSync(root, { recursive: true });
 		const logFile = join(root, "output.log");
@@ -1124,10 +1129,7 @@ describe("BackgroundTaskManager", () => {
 		expect(task?.status).toBe("completed");
 		expect(task?.exitCode).toBe(0);
 		expect(manager.getTaskHarvest(task!, 1000).content).toContain("done");
-		expect(pi.sendUserMessage).toHaveBeenCalledWith(
-			expect.stringContaining("background task bg-recovered-1 completed"),
-			{ deliverAs: "followUp" },
-		);
+		expect(pi.sendUserMessage).not.toHaveBeenCalled();
 	});
 
 	it("keeps new invisible shell tasks running when process identity cannot be captured", () => {

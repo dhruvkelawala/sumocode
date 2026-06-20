@@ -372,6 +372,13 @@ export class BackgroundTaskManager {
 	private readonly logMaxBytes: number;
 	private readonly finishedTaskMaxAgeMs: number;
 	private readonly maxRecoveredFinishedTasks: number;
+	/**
+	 * True only while `recoverTasks` is reconciling persisted state on
+	 * startup/reload. Used by `finalizeTask` to suppress the message-queue
+	 * followUp injection (which would wake the agent with a turn the user never
+	 * requested) while still allowing the passive cmux desktop notify to fire.
+	 */
+	private recovering = false;
 
 	constructor(pi: ExtensionAPI, options: BackgroundTaskManagerOptions = {}) {
 		this.pi = pi;
@@ -397,21 +404,26 @@ export class BackgroundTaskManager {
 		} catch {
 			return;
 		}
-		const recovered: InternalTask[] = [];
-		for (const entry of entries) {
-			const metaFile = join(root, entry, "meta.json");
-			if (!existsSync(metaFile)) continue;
-			try {
-				const task = parseRecoveredTask(JSON.parse(readFileSync(metaFile, "utf8")), metaFile);
-				if (!task || this.tasks.has(task.id)) continue;
-				this.reconcileRecoveredTask(task);
-				recovered.push(task);
-			} catch {
-				// Ignore malformed/unknown legacy metadata; recovery is best-effort.
+		this.recovering = true;
+		try {
+			const recovered: InternalTask[] = [];
+			for (const entry of entries) {
+				const metaFile = join(root, entry, "meta.json");
+				if (!existsSync(metaFile)) continue;
+				try {
+					const task = parseRecoveredTask(JSON.parse(readFileSync(metaFile, "utf8")), metaFile);
+					if (!task || this.tasks.has(task.id)) continue;
+					this.reconcileRecoveredTask(task);
+					recovered.push(task);
+				} catch {
+					// Ignore malformed/unknown legacy metadata; recovery is best-effort.
+				}
 			}
-		}
-		for (const task of this.pruneRecoveredFinishedTasks(recovered)) {
-			this.tasks.set(task.id, task);
+			for (const task of this.pruneRecoveredFinishedTasks(recovered)) {
+				this.tasks.set(task.id, task);
+			}
+		} finally {
+			this.recovering = false;
 		}
 	}
 
@@ -703,6 +715,11 @@ export class BackgroundTaskManager {
 			});
 			if (!created.ok) {
 				appendLogLine(task.logFile, `\n[bg-task] worktree create failed: ${created.message}\n`);
+				// No worktree exists on disk; drop the speculative ref so a later
+				// clearFinishedTasks({ pruneWorktrees: true }) does not try to remove
+				// a nonexistent worktree and get stuck.
+				task.worktree = undefined;
+				task.worktreePending = false;
 				this.finalizeTask(task, 1, "self-exit");
 				return;
 			}
@@ -911,13 +928,20 @@ export class BackgroundTaskManager {
 		writeTaskMeta(task);
 
 		if (task.notifyOnExit && reason === "self-exit") {
-			const label = task.title ?? task.command;
-			const cmuxHint = task.cmux ? ` (cmux ${task.cmux.surfaceRef})` : "";
-			const message = `background task ${task.id} ${summarizeStatus(task)}: ${label}${cmuxHint}`;
-			try {
-				this.pi.sendUserMessage(message, { deliverAs: "followUp" });
-			} catch {
-				this.pi.sendUserMessage(message);
+			// During startup recovery we reconcile state silently — injecting a
+			// followUp here would wake the agent with a message the user never asked
+			// for. The cmux notify still fires so a completion that happened while the
+			// session was down is still surfaced (it is a passive desktop toast, not a
+			// message-queue turn).
+			if (!this.recovering) {
+				const label = task.title ?? task.command;
+				const cmuxHint = task.cmux ? ` (cmux ${task.cmux.surfaceRef})` : "";
+				const message = `background task ${task.id} ${summarizeStatus(task)}: ${label}${cmuxHint}`;
+				try {
+					this.pi.sendUserMessage(message, { deliverAs: "followUp" });
+				} catch {
+					this.pi.sendUserMessage(message);
+				}
 			}
 			this.fireCmuxNotify(task);
 		}

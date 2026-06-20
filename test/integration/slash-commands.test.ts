@@ -72,12 +72,18 @@ describe("Phase 4 slash command pipe", () => {
 			args: ["--offline", "--no-extensions", "-e", "./src/extension.ts", "--no-session"],
 			env: retainedModeEnv(),
 		});
-		await app.waitForOutput(/DIVINE INVOCATION/, 12_000);
+		await app.waitForOutput(/DIVINE INVOCATION/, 20_000);
 
 		app.sendInput("/sumo:worktree build thing");
-		await new Promise((resolve) => setTimeout(resolve, 75));
+		// Wait for the editor to render the full command before submitting, then
+		// clear the 50ms raw-paste CR window (RAW_PASTE_CR_WINDOW_MS in
+		// cathedral-editor.ts) with ample margin. A separate "\r" that lands within
+		// that window is treated as pasted text, not Enter — under CI load the old
+		// fixed 75ms delay was too tight and the command never submitted.
+		await app.waitForOutput(/\/sumo:worktree build thing/, 20_000);
+		await new Promise((resolve) => setTimeout(resolve, 200));
 		app.sendInput("\r");
 
-		await app.waitForOutput(/\/sumo:worktree requires a cmux surface/, 12_000);
-	}, 25_000);
+		await app.waitForOutput(/\/sumo:worktree requires a cmux surface/, 20_000);
+	}, 45_000);
 });

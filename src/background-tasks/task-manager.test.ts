@@ -140,6 +140,7 @@ describe("BackgroundTaskManager", () => {
 		const task = manager.spawnTask({
 			command: "echo hello",
 			cwd: "/tmp/project",
+			notifyOnExit: true,
 		});
 
 		await vi.waitFor(() => {
@@ -224,6 +225,31 @@ describe("BackgroundTaskManager", () => {
 		expect(args.some((a) => a.includes(task.id))).toBe(true);
 		expect(args).toContain("--body");
 		expect(args).toContain("build artifacts");
+
+		// New default: a fire-and-forget shell task must NOT wake the agent. The
+		// passive cmux toast above is decoupled from the message-queue follow-up.
+		expect(pi.sendUserMessage).not.toHaveBeenCalled();
+	});
+
+	it("does not wake the orchestrator for a default fire-and-forget task", async () => {
+		spawnMock.mockReturnValue(mockChild(0));
+		const pi = buildPiStub();
+		const manager = new BackgroundTaskManager(pi as never);
+
+		const task = manager.spawnTask({
+			command: "echo quiet",
+			cwd: "/tmp/project",
+		});
+
+		await vi.waitFor(() => {
+			expect(task.status).toBe("completed");
+		});
+
+		// notifyOnExit defaults to false: completion must NOT inject a
+		// message-queue follow-up that wakes the agent. (The in-cmux
+		// passive-notify-still-fires angle is covered above; this is the plain
+		// no-wake default.)
+		expect(pi.sendUserMessage).not.toHaveBeenCalled();
 	});
 
 	it("does not fire cmux notify outside cmux", async () => {
@@ -596,6 +622,7 @@ describe("BackgroundTaskManager", () => {
 				visible: true,
 				runner: "sumocode",
 				title: "agent review",
+				notifyOnExit: true,
 			});
 
 			await vi.waitFor(() => expect(task.cmux).toBeDefined());

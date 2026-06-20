@@ -361,7 +361,7 @@ function parseRecoveredTask(raw: unknown, metaFile: string): InternalTask | unde
 		thinking: snapshot.thinking,
 		cmux: snapshot.cmux,
 		worktree: snapshot.worktree,
-		notifyOnExit: snapshot.notifyOnExit !== false,
+		notifyOnExit: snapshot.notifyOnExit === true,
 	};
 }
 
@@ -607,7 +607,7 @@ export class BackgroundTaskManager {
 			thinking: resolveAgentThinking(runner, options.thinking),
 			worktree,
 			worktreePending,
-			notifyOnExit: options.notifyOnExit !== false,
+			notifyOnExit: options.notifyOnExit === true,
 		};
 
 		this.tasks.set(id, task);
@@ -927,13 +927,18 @@ export class BackgroundTaskManager {
 
 		writeTaskMeta(task);
 
-		if (task.notifyOnExit && reason === "self-exit") {
-			// During startup recovery we reconcile state silently — injecting a
-			// followUp here would wake the agent with a message the user never asked
-			// for. The cmux notify still fires so a completion that happened while the
-			// session was down is still surfaced (it is a passive desktop toast, not a
-			// message-queue turn).
-			if (!this.recovering) {
+		if (reason === "self-exit") {
+			// Passive completion signal: a cmux desktop toast that informs the user
+			// (across workspaces and reloads) WITHOUT waking the agent. Fires for every
+			// terminal self-exit, including fire-and-forget tasks and during startup
+			// recovery.
+			this.fireCmuxNotify(task);
+
+			// Active wake: inject a follow-up turn so the orchestrator agent reacts to
+			// the result (e.g. to continue chained background work). Opt-in only —
+			// notifyOnExit defaults to false — and never during startup recovery, where
+			// it would wake the agent for a task the user never started this session.
+			if (task.notifyOnExit && !this.recovering) {
 				const label = task.title ?? task.command;
 				const cmuxHint = task.cmux ? ` (cmux ${task.cmux.surfaceRef})` : "";
 				const message = `background task ${task.id} ${summarizeStatus(task)}: ${label}${cmuxHint}`;
@@ -943,7 +948,6 @@ export class BackgroundTaskManager {
 					this.pi.sendUserMessage(message);
 				}
 			}
-			this.fireCmuxNotify(task);
 		}
 	}
 

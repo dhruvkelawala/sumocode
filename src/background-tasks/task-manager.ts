@@ -10,6 +10,7 @@ import {
 	readSync,
 	rmSync,
 	statSync,
+	truncateSync,
 	unlinkSync,
 	writeFileSync,
 } from "node:fs";
@@ -40,6 +41,8 @@ import {
 
 const POLL_INTERVAL_MS = 500;
 const RESPONSE_POLL_INTERVAL_MS = 750;
+/** How often the running-task log size guard runs (writer-safe truncate). */
+const LOG_CAP_INTERVAL_MS = 5_000;
 const DEFAULT_AGENT_STARTUP_TIMEOUT_MS = 2 * 60 * 1000;
 const DEFAULT_VISIBLE_DIRECTION: CmuxSplitDirection = "right";
 export const DEFAULT_SUMOCODE_AGENT_MODEL = "openai-codex/gpt-5.5";
@@ -69,6 +72,7 @@ interface InternalTask extends BackgroundTask {
 	child?: ChildProcess;
 	pollTimer?: ReturnType<typeof setInterval>;
 	responseTimer?: ReturnType<typeof setInterval>;
+	logCapTimer?: ReturnType<typeof setInterval>;
 	startupDeadline?: number;
 	/**
 	 * Promise that resolves once the visible-spawn coroutine finishes (success
@@ -167,6 +171,25 @@ function enforceLogSizeCap(logFile: string, maxBytes: number): void {
 		const prefix = `[sumocode-bg] log truncated to last ${keepBytes} bytes\n`;
 		const next = `${prefix}${tail}`;
 		writeFileSync(logFile, next.length <= maxBytes ? next : next.slice(-maxBytes));
+	} catch {
+		// best-effort; logging must never interrupt task lifecycle
+	}
+}
+
+/**
+ * Writer-safe running cap. While a task is live its output.log is written by an
+ * EXTERNAL O_APPEND writer (the visible-shell `tee -a` pipeline or the detached
+ * shell's `>>` redirect). We must NOT rewrite the file from this process the way
+ * `enforceLogSizeCap` does — that races the writer and corrupts the log, which is
+ * why `enforceLogSizeCap` only runs at finalize. `truncate(0)` writes no bytes, so
+ * an O_APPEND writer simply resumes at the new EOF: it bounds disk without
+ * clobbering. History is dropped (not a tail-keep) precisely because keeping a
+ * tail would require writing bytes back into a file another process is appending.
+ */
+function truncateLogIfOverCap(logFile: string, maxBytes: number): void {
+	if (!existsSync(logFile)) return;
+	try {
+		if (statSync(logFile).size > maxBytes) truncateSync(logFile, 0);
 	} catch {
 		// best-effort; logging must never interrupt task lifecycle
 	}
@@ -472,6 +495,8 @@ export class BackgroundTaskManager {
 			}
 		}
 
+		this.armLogCap(task);
+
 		if (task.runner === "shell") {
 			task.pollTimer = setInterval(() => this.pollVisibleTask(task), POLL_INTERVAL_MS);
 			if (typeof task.pollTimer.unref === "function") task.pollTimer.unref();
@@ -612,6 +637,7 @@ export class BackgroundTaskManager {
 
 		this.tasks.set(id, task);
 		writeTaskMeta(task);
+		this.armLogCap(task);
 
 		if (visible) {
 			// Capture the spawn coroutine on the task so stopTask can await it.
@@ -891,6 +917,23 @@ export class BackgroundTaskManager {
 		}
 	}
 
+	/**
+	 * Arm a writer-safe periodic size guard for a running task so a long-lived
+	 * watcher cannot grow output.log without bound between finalizations.
+	 */
+	private armLogCap(task: InternalTask): void {
+		if (task.logCapTimer || task.status !== "running") return;
+		truncateLogIfOverCap(task.logFile, this.logMaxBytes);
+		task.logCapTimer = setInterval(() => truncateLogIfOverCap(task.logFile, this.logMaxBytes), LOG_CAP_INTERVAL_MS);
+		if (typeof task.logCapTimer.unref === "function") task.logCapTimer.unref();
+	}
+
+	private clearLogCap(task: InternalTask): void {
+		if (!task.logCapTimer) return;
+		clearInterval(task.logCapTimer);
+		task.logCapTimer = undefined;
+	}
+
 	private finalizeTask(task: InternalTask, exitCode: number | null, reason: "self-exit" | "stopped"): void {
 		if (task.finalized) return;
 		task.finalized = true;
@@ -903,10 +946,11 @@ export class BackgroundTaskManager {
 			clearInterval(task.responseTimer);
 			task.responseTimer = undefined;
 		}
+		this.clearLogCap(task);
 		// Cap the log exactly once, now that the task is finalized and no external
 		// writer (the visible-shell `tee -a` pipeline / detached shell redirect) is
-		// still appending to output.log. Capping while the writer is live would race
-		// it across processes and corrupt the log.
+		// still appending to output.log. The running guard only truncates-to-zero
+		// (writer-safe); here, with no live writer, we keep the tail.
 		enforceLogSizeCap(task.logFile, this.logMaxBytes);
 
 		task.exitCode = exitCode;
@@ -1178,6 +1222,7 @@ export class BackgroundTaskManager {
 			if (task.status === "running") continue;
 			if (task.pollTimer) clearInterval(task.pollTimer);
 			if (task.responseTimer) clearInterval(task.responseTimer);
+			this.clearLogCap(task);
 			if (options.pruneWorktrees && task.worktree) {
 				const pruned = removeWorktreeSync({ path: task.worktree.path, repoRoot: task.worktree.repoRoot });
 				if (!pruned.ok) {
@@ -1246,6 +1291,7 @@ export class BackgroundTaskManager {
 			}
 			if (task.pollTimer) clearInterval(task.pollTimer);
 			if (task.responseTimer) clearInterval(task.responseTimer);
+			this.clearLogCap(task);
 		}
 	}
 }

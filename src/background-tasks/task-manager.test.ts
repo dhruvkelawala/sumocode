@@ -1573,7 +1573,7 @@ describe("BackgroundTaskManager", () => {
 		expect(finished.startsWith("[sumocode-bg] log truncated")).toBe(true);
 	});
 
-	it("does not rewrite a running task's log out from under it", async () => {
+	it("bounds a running task's log writer-safely: truncates to zero, never rewrites", async () => {
 		const child = mockLongLivedChild();
 		spawnMock.mockReturnValue(child);
 		vi.useFakeTimers();
@@ -1582,14 +1582,33 @@ describe("BackgroundTaskManager", () => {
 			const task = manager.spawnTask({ command: "watch", cwd: "/tmp", notifyOnExit: false });
 			appendFileSync(task.logFile, "x".repeat(4096));
 
-			// There is no periodic cap timer anymore. Advancing well past the old
-			// 2s cadence must NOT truncate a still-running task's log, because an
-			// external writer (tee / shell redirect) may be mid-append.
-			await vi.advanceTimersByTimeAsync(10_000);
+			// The running guard is writer-safe: it truncates to zero (which a live
+			// O_APPEND writer can resume past) rather than rewriting the file with a
+			// tail, which would race the tee/redirect writer and corrupt the log.
+			await vi.advanceTimersByTimeAsync(5_500);
 
 			const running = readFileSync(task.logFile, "utf8");
-			expect(running.length).toBe(4096);
+			expect(running.length).toBe(0);
 			expect(running).not.toContain("log truncated");
+			manager.shutdown();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("leaves a running task's log untouched while it is under the cap", async () => {
+		const child = mockLongLivedChild();
+		spawnMock.mockReturnValue(child);
+		vi.useFakeTimers();
+		try {
+			const manager = new BackgroundTaskManager(buildPiStub() as never, { logMaxBytes: 4096 });
+			const task = manager.spawnTask({ command: "watch", cwd: "/tmp", notifyOnExit: false });
+			appendFileSync(task.logFile, "y".repeat(1024));
+
+			await vi.advanceTimersByTimeAsync(15_000);
+
+			expect(readFileSync(task.logFile, "utf8").length).toBe(1024);
+			manager.shutdown();
 		} finally {
 			vi.useRealTimers();
 		}

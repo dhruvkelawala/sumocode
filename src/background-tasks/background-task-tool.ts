@@ -79,7 +79,7 @@ export function installBackgroundTasks(pi: ExtensionAPI): BackgroundTaskManager 
 		description: [
 			"Spawn long-running work in a background process or a visible cmux pane. Two modes:",
 			"",
-			"• SHELL (runner='shell', default) — spawn a managed shell command. Output is tee'd to a log file, exit code is captured, and completion wakes the orchestrator via a follow-up message and cmux notification. Use for builds, tests, deploys, watchers, anything you want to fire-and-forget.",
+			"• SHELL (runner='shell', default) — spawn a managed shell command. Output is tee'd to a log file, exit code is captured, and completion fires a passive cmux notification; pass notifyOnExit:true to also wake the orchestrator with a follow-up so the agent acts on the result. Use for builds, tests, deploys, watchers, anything you want to fire-and-forget.",
 			"",
 			`• AGENT (runner='sumocode', visible=true required) — spawn a child SumoCode agent in a new cmux split. The prompt is delivered as the kickoff message, the child opens straight into the agent loop (no splash). If model/thinking are omitted, SumoCode uses ${DEFAULT_SUMOCODE_AGENT_MODEL} with ${DEFAULT_SUMOCODE_AGENT_THINKING} thinking (override process-wide with SUMOCODE_BG_AGENT_MODEL / SUMOCODE_BG_AGENT_THINKING). Explicit model/thinking params override those defaults. The child writes its latest assistant message to response.md and writes an exit marker on real process exit; the orchestrator reads the final response via bg_task log after completion. The cmux pane remains open until explicitly stopped/closed.`,
 			"",
@@ -94,7 +94,7 @@ export function installBackgroundTasks(pi: ExtensionAPI): BackgroundTaskManager 
 			"Spawn managed shell tasks or hand off prompts to a visible SumoCode agent pane (with model/thinking override and harvestable response).",
 		promptGuidelines: [
 			"Use bg_task when the user wants long-running work to continue while the conversation stays usable.",
-			"For shell commands (build, test, deploy, watchers), use bg_task with runner='shell' (the default) — output is logged and the orchestrator is notified on exit.",
+			"For shell commands (build, test, deploy, watchers), use bg_task with runner='shell' (the default) — output is logged and a passive cmux toast fires on exit; pass notifyOnExit:true to wake the agent on completion.",
 			`To delegate a prompt to a child SumoCode agent, use bg_task with runner='sumocode' and visible=true. If the user does not specify a model, omit model/thinking and let the child default to ${DEFAULT_SUMOCODE_AGENT_MODEL} with ${DEFAULT_SUMOCODE_AGENT_THINKING} thinking. The child opens in a cmux split, runs the prompt, and writes its response back. Read it with bg_task action='log' once status='completed'.`,
 			`Pass model and thinking to bg_task only when the user explicitly wants to override the agent defaults (${DEFAULT_SUMOCODE_AGENT_MODEL}, thinking=${DEFAULT_SUMOCODE_AGENT_THINKING}); process-wide defaults can be set with SUMOCODE_BG_AGENT_MODEL and SUMOCODE_BG_AGENT_THINKING.`,
 			"To read a delegated agent's response, call bg_task with action='log' and id='bg-N'. If the response isn't ready yet, the result will indicate 'still working' — poll again. List with bg_task action='list' to see which tasks have status='completed'.",
@@ -164,7 +164,7 @@ export function installBackgroundTasks(pi: ExtensionAPI): BackgroundTaskManager 
 			notifyOnExit: Type.Optional(
 				Type.Boolean({
 					description:
-						"Wake the orchestrator with a follow-up message + cmux notification when the task reaches a terminal state. Defaults to true. For agent runners, this fires after the real process-exit marker is harvested.",
+						"Wake the orchestrator with a follow-up turn when the task finishes, so the agent acts on the result (e.g. chaining background work). Defaults to FALSE — set true only when you intend to react to completion. A passive cmux notification fires regardless of this flag. For agent runners the follow-up fires after the real process-exit marker is harvested.",
 				}),
 			),
 		}),

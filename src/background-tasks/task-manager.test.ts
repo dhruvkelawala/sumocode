@@ -140,6 +140,7 @@ describe("BackgroundTaskManager", () => {
 		const task = manager.spawnTask({
 			command: "echo hello",
 			cwd: "/tmp/project",
+			notifyOnExit: true,
 		});
 
 		await vi.waitFor(() => {
@@ -224,6 +225,31 @@ describe("BackgroundTaskManager", () => {
 		expect(args.some((a) => a.includes(task.id))).toBe(true);
 		expect(args).toContain("--body");
 		expect(args).toContain("build artifacts");
+
+		// New default: a fire-and-forget shell task must NOT wake the agent. The
+		// passive cmux toast above is decoupled from the message-queue follow-up.
+		expect(pi.sendUserMessage).not.toHaveBeenCalled();
+	});
+
+	it("does not wake the orchestrator for a default fire-and-forget task", async () => {
+		spawnMock.mockReturnValue(mockChild(0));
+		const pi = buildPiStub();
+		const manager = new BackgroundTaskManager(pi as never);
+
+		const task = manager.spawnTask({
+			command: "echo quiet",
+			cwd: "/tmp/project",
+		});
+
+		await vi.waitFor(() => {
+			expect(task.status).toBe("completed");
+		});
+
+		// notifyOnExit defaults to false: completion must NOT inject a
+		// message-queue follow-up that wakes the agent. (The in-cmux
+		// passive-notify-still-fires angle is covered above; this is the plain
+		// no-wake default.)
+		expect(pi.sendUserMessage).not.toHaveBeenCalled();
 	});
 
 	it("does not fire cmux notify outside cmux", async () => {
@@ -472,9 +498,9 @@ describe("BackgroundTaskManager", () => {
 			surfaceRef: "surface:2",
 		});
 		const worktree = await import("../git/worktree.js");
-		const create = vi.spyOn(worktree, "createWorktreeSync").mockReturnValue({
+		const create = vi.spyOn(worktree, "createWorktree").mockResolvedValue({
 			ok: true,
-			path: "/repo/.worktrees/sumo__review",
+			path: "/repo.sumo-worktrees/sumo__review",
 			branch: "sumo/review",
 			baseRef: "HEAD",
 		});
@@ -491,11 +517,48 @@ describe("BackgroundTaskManager", () => {
 		});
 		await vi.waitFor(() => expect(task.cmux).toBeDefined());
 
-		expect(create).toHaveBeenCalledWith({ repoRoot: "/repo", branch: undefined, baseRef: undefined, task: "review" });
-		expect(task.cwd).toBe("/repo/.worktrees/sumo__review");
-		expect(task.worktree).toEqual({ path: "/repo/.worktrees/sumo__review", branch: "sumo/review", baseRef: "HEAD", repoRoot: "/repo" });
-		expect(openSplit.mock.calls[0]?.[2]).toContain("cd '/repo/.worktrees/sumo__review'");
+		expect(create).toHaveBeenCalledWith({ repoRoot: "/repo", branch: "sumo/review", baseRef: "HEAD", path: "/repo.sumo-worktrees/sumo__review" });
+		expect(task.cwd).toBe("/repo.sumo-worktrees/sumo__review");
+		expect(task.worktree).toEqual({ path: "/repo.sumo-worktrees/sumo__review", branch: "sumo/review", baseRef: "HEAD", repoRoot: "/repo" });
+		expect(openSplit.mock.calls[0]?.[2]).toContain("cd '/repo.sumo-worktrees/sumo__review'");
 		expect(JSON.parse(readFileSync(task.metaFile!, "utf8")).worktree).toEqual(task.worktree);
+	});
+
+	it("finalizes the task as failed when deferred worktree creation fails", async () => {
+		process.env.CMUX_SURFACE_ID = "surface:1";
+		const pi = buildPiStub();
+		const cmuxSplit = await import("../commands/cmux-split.js");
+		const openSplit = vi.spyOn(cmuxSplit, "openCommandInNewSplitWithRefs").mockResolvedValue({
+			ok: true,
+			workspaceRef: "workspace:1",
+			surfaceRef: "surface:2",
+		});
+		const worktree = await import("../git/worktree.js");
+		vi.spyOn(worktree, "createWorktree").mockResolvedValue({
+			ok: false,
+			error: "branch_already_exists",
+			message: "branch already exists: sumo/x",
+		});
+
+		const manager = new BackgroundTaskManager(pi as never);
+		const task = manager.spawnTask({
+			command: "review",
+			cwd: "/repo",
+			visible: true,
+			runner: "sumocode",
+			worktree: true,
+			title: "review",
+			notifyOnExit: false,
+		});
+		await vi.waitFor(() => expect(task.status).toBe("failed"));
+
+		expect(openSplit).not.toHaveBeenCalled();
+		expect(readFileSync(task.logFile, "utf8")).toContain("worktree create failed: branch already exists: sumo/x");
+		// Fix A: the speculative worktree ref must be cleared so a later prune
+		// does not try to remove a nonexistent worktree and get stuck.
+		expect(task.worktree).toBeUndefined();
+		expect(manager.clearFinishedTasks({ pruneWorktrees: true })).toBe(1);
+		expect(manager.findTask(task.id)).toBeUndefined();
 	});
 
 	it("keeps agent task running when response.md appears before real process exit", async () => {
@@ -559,6 +622,7 @@ describe("BackgroundTaskManager", () => {
 				visible: true,
 				runner: "sumocode",
 				title: "agent review",
+				notifyOnExit: true,
 			});
 
 			await vi.waitFor(() => expect(task.cmux).toBeDefined());
@@ -860,6 +924,76 @@ describe("BackgroundTaskManager", () => {
 		}
 	});
 
+	it("reaps a started agent task whose process has died without an exit marker", async () => {
+		vi.useFakeTimers();
+		const processKill = vi.spyOn(process, "kill").mockImplementation(((pid: number, signal?: string | number) => {
+			if (pid === 43210 && signal === 0) throw new Error("ESRCH");
+			return true;
+		}) as typeof process.kill);
+		try {
+			process.env.CMUX_SURFACE_ID = "surface:1";
+			const pi = buildPiStub();
+			const cmuxSplit = await import("../commands/cmux-split.js");
+			vi.spyOn(cmuxSplit, "openCommandInNewSplitWithRefs").mockResolvedValue({
+				ok: true,
+				workspaceRef: "workspace:1",
+				surfaceRef: "surface:8",
+			});
+
+			const manager = new BackgroundTaskManager(pi as never);
+			const task = manager.spawnTask({
+				command: "crashy prompt",
+				cwd: "/repo",
+				visible: true,
+				runner: "sumocode",
+				notifyOnExit: false,
+			});
+			await vi.advanceTimersByTimeAsync(50);
+			writeFileSync(task.markerFile!, "43210\n");
+
+			await vi.advanceTimersByTimeAsync(1000);
+
+			expect(task.status).toBe("failed");
+			expect(readFileSync(task.logFile, "utf8")).toContain("is gone and no exit marker");
+			manager.shutdown();
+		} finally {
+			processKill.mockRestore();
+			vi.useRealTimers();
+		}
+	});
+
+	it("keeps a started agent task running while its process is alive", async () => {
+		vi.useFakeTimers();
+		try {
+			process.env.CMUX_SURFACE_ID = "surface:1";
+			const pi = buildPiStub();
+			const cmuxSplit = await import("../commands/cmux-split.js");
+			vi.spyOn(cmuxSplit, "openCommandInNewSplitWithRefs").mockResolvedValue({
+				ok: true,
+				workspaceRef: "workspace:1",
+				surfaceRef: "surface:8",
+			});
+
+			const manager = new BackgroundTaskManager(pi as never);
+			const task = manager.spawnTask({
+				command: "long-running prompt",
+				cwd: "/repo",
+				visible: true,
+				runner: "sumocode",
+				notifyOnExit: false,
+			});
+			await vi.advanceTimersByTimeAsync(50);
+			writeFileSync(task.markerFile!, `${process.pid}\n`);
+
+			await vi.advanceTimersByTimeAsync(1000);
+
+			expect(task.status).toBe("running");
+			manager.shutdown();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("fails agent task when task-mode never writes started marker", async () => {
 		vi.useFakeTimers();
 		try {
@@ -992,7 +1126,7 @@ describe("BackgroundTaskManager", () => {
 		}
 	});
 
-	it("recovers shell tasks and reconciles exit.code after reload", () => {
+	it("recovers shell tasks and reconciles exit.code after reload without injecting a message-queue followUp", () => {
 		const root = join(baseDir, "sumocode-bg", "bg-recovered-1-1000");
 		mkdirSync(root, { recursive: true });
 		const logFile = join(root, "output.log");
@@ -1022,10 +1156,7 @@ describe("BackgroundTaskManager", () => {
 		expect(task?.status).toBe("completed");
 		expect(task?.exitCode).toBe(0);
 		expect(manager.getTaskHarvest(task!, 1000).content).toContain("done");
-		expect(pi.sendUserMessage).toHaveBeenCalledWith(
-			expect.stringContaining("background task bg-recovered-1 completed"),
-			{ deliverAs: "followUp" },
-		);
+		expect(pi.sendUserMessage).not.toHaveBeenCalled();
 	});
 
 	it("keeps new invisible shell tasks running when process identity cannot be captured", () => {
@@ -1425,7 +1556,24 @@ describe("BackgroundTaskManager", () => {
 		expect(existsSync(runningRoot)).toBe(true);
 	});
 
-	it("caps output.log size for running tasks", async () => {
+	it("caps output.log size once a task finishes", () => {
+		const child = mockLongLivedChild();
+		spawnMock.mockReturnValue(child);
+		const manager = new BackgroundTaskManager(buildPiStub() as never, { logMaxBytes: 512 });
+		const task = manager.spawnTask({ command: "watch", cwd: "/tmp", notifyOnExit: false });
+		appendFileSync(task.logFile, "x".repeat(4096));
+
+		// The cap is enforced once, when the task finalizes — i.e. after the
+		// external writer (here the mock child) has exited, never while it is
+		// still appending. Driving the child to close finalizes the task.
+		child.forceExit(0);
+
+		const finished = readFileSync(task.logFile, "utf8");
+		expect(finished.length).toBeLessThanOrEqual(512);
+		expect(finished.startsWith("[sumocode-bg] log truncated")).toBe(true);
+	});
+
+	it("bounds a running task's log writer-safely: truncates to zero, never rewrites", async () => {
 		const child = mockLongLivedChild();
 		spawnMock.mockReturnValue(child);
 		vi.useFakeTimers();
@@ -1434,10 +1582,33 @@ describe("BackgroundTaskManager", () => {
 			const task = manager.spawnTask({ command: "watch", cwd: "/tmp", notifyOnExit: false });
 			appendFileSync(task.logFile, "x".repeat(4096));
 
-			await vi.advanceTimersByTimeAsync(2_000);
+			// The running guard is writer-safe: it truncates to zero (which a live
+			// O_APPEND writer can resume past) rather than rewriting the file with a
+			// tail, which would race the tee/redirect writer and corrupt the log.
+			await vi.advanceTimersByTimeAsync(5_500);
 
-			expect(readFileSync(task.logFile, "utf8").length).toBeLessThanOrEqual(512);
-			expect(readFileSync(task.logFile, "utf8")).toContain("log truncated");
+			const running = readFileSync(task.logFile, "utf8");
+			expect(running.length).toBe(0);
+			expect(running).not.toContain("log truncated");
+			manager.shutdown();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("leaves a running task's log untouched while it is under the cap", async () => {
+		const child = mockLongLivedChild();
+		spawnMock.mockReturnValue(child);
+		vi.useFakeTimers();
+		try {
+			const manager = new BackgroundTaskManager(buildPiStub() as never, { logMaxBytes: 4096 });
+			const task = manager.spawnTask({ command: "watch", cwd: "/tmp", notifyOnExit: false });
+			appendFileSync(task.logFile, "y".repeat(1024));
+
+			await vi.advanceTimersByTimeAsync(15_000);
+
+			expect(readFileSync(task.logFile, "utf8").length).toBe(1024);
+			manager.shutdown();
 		} finally {
 			vi.useRealTimers();
 		}

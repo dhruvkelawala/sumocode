@@ -10,6 +10,7 @@ import {
 	readSync,
 	rmSync,
 	statSync,
+	truncateSync,
 	unlinkSync,
 	writeFileSync,
 } from "node:fs";
@@ -20,7 +21,7 @@ import {
 	openCommandInNewSplitWithRefs,
 	type SplitDirection as CmuxSplitDirection,
 } from "../commands/cmux-split.js";
-import { createWorktreeSync, removeWorktreeSync } from "../git/worktree.js";
+import { createWorktree, removeWorktreeSync, resolveCreateOptions } from "../git/worktree.js";
 import {
 	BACKGROUND_TASK_META_SCHEMA_VERSION,
 	type BackgroundTask,
@@ -40,6 +41,8 @@ import {
 
 const POLL_INTERVAL_MS = 500;
 const RESPONSE_POLL_INTERVAL_MS = 750;
+/** How often the running-task log size guard runs (writer-safe truncate). */
+const LOG_CAP_INTERVAL_MS = 5_000;
 const DEFAULT_AGENT_STARTUP_TIMEOUT_MS = 2 * 60 * 1000;
 const DEFAULT_VISIBLE_DIRECTION: CmuxSplitDirection = "right";
 export const DEFAULT_SUMOCODE_AGENT_MODEL = "openai-codex/gpt-5.5";
@@ -47,7 +50,7 @@ export const DEFAULT_SUMOCODE_AGENT_THINKING: BackgroundTaskThinking = "low";
 const AGENT_MODEL_ENV = "SUMOCODE_BG_AGENT_MODEL";
 const AGENT_THINKING_ENV = "SUMOCODE_BG_AGENT_THINKING";
 const AGENT_CAPACITY_ENV = "SUMOCODE_BG_AGENT_CAPACITY";
-export const DEFAULT_SUMOCODE_AGENT_CAPACITY = 4;
+const DEFAULT_SUMOCODE_AGENT_CAPACITY = 4;
 const THINKING_LEVELS = new Set<BackgroundTaskThinking>([
 	"off",
 	"minimal",
@@ -61,8 +64,7 @@ const THINKING_LEVELS = new Set<BackgroundTaskThinking>([
 const STOP_SIGTERM_GRACE_MS = 5_000;
 /** Bounded tail-read for poll/harvest — avoids O(file_size) re-reads. */
 const LOG_TAIL_READ_BYTES = 16 * 1024;
-export const DEFAULT_BACKGROUND_TASK_LOG_MAX_BYTES = 2 * 1024 * 1024;
-const LOG_CAP_INTERVAL_MS = 2_000;
+const DEFAULT_BACKGROUND_TASK_LOG_MAX_BYTES = 2 * 1024 * 1024;
 const DEFAULT_FINISHED_TASK_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const DEFAULT_MAX_RECOVERED_FINISHED_TASKS = 100;
 
@@ -79,6 +81,7 @@ interface InternalTask extends BackgroundTask {
 	 * stopped-then-launched race leaves a runaway pane.
 	 */
 	spawnPromise?: Promise<void>;
+	worktreePending?: boolean;
 	stopRequested?: boolean;
 	finalized?: boolean;
 }
@@ -173,9 +176,27 @@ function enforceLogSizeCap(logFile: string, maxBytes: number): void {
 	}
 }
 
-function appendLogLine(logFile: string, line: string, maxBytes = DEFAULT_BACKGROUND_TASK_LOG_MAX_BYTES): void {
+/**
+ * Writer-safe running cap. While a task is live its output.log is written by an
+ * EXTERNAL O_APPEND writer (the visible-shell `tee -a` pipeline or the detached
+ * shell's `>>` redirect). We must NOT rewrite the file from this process the way
+ * `enforceLogSizeCap` does — that races the writer and corrupts the log, which is
+ * why `enforceLogSizeCap` only runs at finalize. `truncate(0)` writes no bytes, so
+ * an O_APPEND writer simply resumes at the new EOF: it bounds disk without
+ * clobbering. History is dropped (not a tail-keep) precisely because keeping a
+ * tail would require writing bytes back into a file another process is appending.
+ */
+function truncateLogIfOverCap(logFile: string, maxBytes: number): void {
+	if (!existsSync(logFile)) return;
+	try {
+		if (statSync(logFile).size > maxBytes) truncateSync(logFile, 0);
+	} catch {
+		// best-effort; logging must never interrupt task lifecycle
+	}
+}
+
+function appendLogLine(logFile: string, line: string): void {
 	writeFileSync(logFile, line, { flag: "a" });
-	enforceLogSizeCap(logFile, maxBytes);
 }
 
 /**
@@ -260,6 +281,18 @@ function isProcessAlive(pid: number | undefined): boolean {
 		return true;
 	} catch {
 		return false;
+	}
+}
+
+function readStartedMarkerPid(markerFile: string | undefined): number | undefined {
+	if (!markerFile || !existsSync(markerFile)) return undefined;
+	try {
+		const first = readFileSync(markerFile, "utf8").trim().split("\n")[0] ?? "";
+		if (!/^\d+$/.test(first)) return undefined;
+		const pid = Number.parseInt(first, 10);
+		return Number.isFinite(pid) && pid > 0 ? pid : undefined;
+	} catch {
+		return undefined;
 	}
 }
 
@@ -351,7 +384,7 @@ function parseRecoveredTask(raw: unknown, metaFile: string): InternalTask | unde
 		thinking: snapshot.thinking,
 		cmux: snapshot.cmux,
 		worktree: snapshot.worktree,
-		notifyOnExit: snapshot.notifyOnExit !== false,
+		notifyOnExit: snapshot.notifyOnExit === true,
 	};
 }
 
@@ -362,6 +395,13 @@ export class BackgroundTaskManager {
 	private readonly logMaxBytes: number;
 	private readonly finishedTaskMaxAgeMs: number;
 	private readonly maxRecoveredFinishedTasks: number;
+	/**
+	 * True only while `recoverTasks` is reconciling persisted state on
+	 * startup/reload. Used by `finalizeTask` to suppress the message-queue
+	 * followUp injection (which would wake the agent with a turn the user never
+	 * requested) while still allowing the passive cmux desktop notify to fire.
+	 */
+	private recovering = false;
 
 	constructor(pi: ExtensionAPI, options: BackgroundTaskManagerOptions = {}) {
 		this.pi = pi;
@@ -387,21 +427,26 @@ export class BackgroundTaskManager {
 		} catch {
 			return;
 		}
-		const recovered: InternalTask[] = [];
-		for (const entry of entries) {
-			const metaFile = join(root, entry, "meta.json");
-			if (!existsSync(metaFile)) continue;
-			try {
-				const task = parseRecoveredTask(JSON.parse(readFileSync(metaFile, "utf8")), metaFile);
-				if (!task || this.tasks.has(task.id)) continue;
-				this.reconcileRecoveredTask(task);
-				recovered.push(task);
-			} catch {
-				// Ignore malformed/unknown legacy metadata; recovery is best-effort.
+		this.recovering = true;
+		try {
+			const recovered: InternalTask[] = [];
+			for (const entry of entries) {
+				const metaFile = join(root, entry, "meta.json");
+				if (!existsSync(metaFile)) continue;
+				try {
+					const task = parseRecoveredTask(JSON.parse(readFileSync(metaFile, "utf8")), metaFile);
+					if (!task || this.tasks.has(task.id)) continue;
+					this.reconcileRecoveredTask(task);
+					recovered.push(task);
+				} catch {
+					// Ignore malformed/unknown legacy metadata; recovery is best-effort.
+				}
 			}
-		}
-		for (const task of this.pruneRecoveredFinishedTasks(recovered)) {
-			this.tasks.set(task.id, task);
+			for (const task of this.pruneRecoveredFinishedTasks(recovered)) {
+				this.tasks.set(task.id, task);
+			}
+		} finally {
+			this.recovering = false;
 		}
 	}
 
@@ -434,8 +479,6 @@ export class BackgroundTaskManager {
 			enforceLogSizeCap(task.logFile, this.logMaxBytes);
 			return;
 		}
-		this.armLogCap(task);
-
 		const exitCode = task.exitFile && existsSync(task.exitFile)
 			? readExitCodeFromFile(readFileSync(task.exitFile, "utf8"))
 			: null;
@@ -451,6 +494,8 @@ export class BackgroundTaskManager {
 				return;
 			}
 		}
+
+		this.armLogCap(task);
 
 		if (task.runner === "shell") {
 			task.pollTimer = setInterval(() => this.pollVisibleTask(task), POLL_INTERVAL_MS);
@@ -519,20 +564,6 @@ export class BackgroundTaskManager {
 		}
 	}
 
-	private armLogCap(task: InternalTask): void {
-		if (task.logCapTimer || task.status !== "running") return;
-		enforceLogSizeCap(task.logFile, this.logMaxBytes);
-		task.logCapTimer = setInterval(() => enforceLogSizeCap(task.logFile, this.logMaxBytes), LOG_CAP_INTERVAL_MS);
-		if (typeof task.logCapTimer.unref === "function") task.logCapTimer.unref();
-	}
-
-	private clearLogCap(task: InternalTask): void {
-		if (!task.logCapTimer) return;
-		clearInterval(task.logCapTimer);
-		task.logCapTimer = undefined;
-		enforceLogSizeCap(task.logFile, this.logMaxBytes);
-	}
-
 	spawnTask(options: SpawnBackgroundTaskOptions): BackgroundTask {
 		const command = options.command.trim();
 		if (!command) {
@@ -560,22 +591,21 @@ export class BackgroundTaskManager {
 		const now = Date.now();
 		let cwd = options.cwd.trim() || process.cwd();
 		let worktree: BackgroundTask["worktree"];
+		let worktreePending = false;
 		if (options.worktree === true) {
-			const repoRoot = cwd;
 			if (runner !== "sumocode" || !visible) {
 				throw new Error("worktree=true requires runner='sumocode' and visible=true");
 			}
-			const created = createWorktreeSync({
-				repoRoot: cwd,
+			const repoRoot = cwd;
+			const target = resolveCreateOptions({
+				repoRoot,
 				branch: options.branch,
 				baseRef: options.baseRef,
 				task: options.title ?? command,
 			});
-			if (!created.ok) {
-				throw new Error(`failed to create worktree: ${created.message}`);
-			}
-			worktree = { path: created.path, branch: created.branch, baseRef: created.baseRef, repoRoot };
-			cwd = created.path;
+			worktree = { path: target.path, branch: target.branch, baseRef: target.baseRef, repoRoot };
+			cwd = target.path;
+			worktreePending = true;
 		}
 		const paths = buildVisibleTaskPaths(id, now);
 		mkdirSync(dirname(paths.logFile), { recursive: true });
@@ -601,7 +631,8 @@ export class BackgroundTaskManager {
 			model: resolveAgentModel(runner, options.model),
 			thinking: resolveAgentThinking(runner, options.thinking),
 			worktree,
-			notifyOnExit: options.notifyOnExit !== false,
+			worktreePending,
+			notifyOnExit: options.notifyOnExit === true,
 		};
 
 		this.tasks.set(id, task);
@@ -619,7 +650,7 @@ export class BackgroundTaskManager {
 				paths,
 			).catch((error) => {
 				const message = error instanceof Error ? error.message : String(error);
-				appendLogLine(task.logFile, `\n[bg-task] visible spawn failed: ${message}\n`, this.logMaxBytes);
+				appendLogLine(task.logFile, `\n[bg-task] visible spawn failed: ${message}\n`);
 				this.finalizeTask(task, 1, "self-exit");
 			});
 		} else {
@@ -664,7 +695,7 @@ export class BackgroundTaskManager {
 			// On platforms where we kept stdio pipes (Windows), tee chunks into the
 			// log file. On detached platforms the shell does the redirection.
 			const handleChunk = (chunk: Buffer) => {
-				appendLogLine(logFile, chunk.toString(), this.logMaxBytes);
+				appendLogLine(logFile, chunk.toString());
 				task.updatedAt = Date.now();
 			};
 			child.stdout?.on("data", handleChunk);
@@ -675,12 +706,12 @@ export class BackgroundTaskManager {
 			this.finalizeTask(task, typeof code === "number" ? code : null, "self-exit");
 		});
 		child.on("error", (error) => {
-			appendLogLine(logFile, `\n[spawn error] ${error.message}\n`, this.logMaxBytes);
+			appendLogLine(logFile, `\n[spawn error] ${error.message}\n`);
 			this.finalizeTask(task, 1, "self-exit");
 		});
 
 		if (task.pid != null && !task.processStartTime) {
-			appendLogLine(logFile, "\n[bg-task] warning: failed to capture process identity; recovered stop will require identity recapture\n", this.logMaxBytes);
+			appendLogLine(logFile, "\n[bg-task] warning: failed to capture process identity; recovered stop will require identity recapture\n");
 		}
 
 		writeTaskMeta(task);
@@ -700,6 +731,27 @@ export class BackgroundTaskManager {
 		if (task.stopRequested) {
 			this.finalizeTask(task, null, "stopped");
 			return;
+		}
+		if (task.worktreePending && task.worktree) {
+			const created = await createWorktree({
+				repoRoot: task.worktree.repoRoot,
+				branch: task.worktree.branch,
+				baseRef: task.worktree.baseRef,
+				path: task.worktree.path,
+			});
+			if (!created.ok) {
+				appendLogLine(task.logFile, `\n[bg-task] worktree create failed: ${created.message}\n`);
+				// No worktree exists on disk; drop the speculative ref so a later
+				// clearFinishedTasks({ pruneWorktrees: true }) does not try to remove
+				// a nonexistent worktree and get stuck.
+				task.worktree = undefined;
+				task.worktreePending = false;
+				this.finalizeTask(task, 1, "self-exit");
+				return;
+			}
+			task.worktreePending = false;
+			task.updatedAt = Date.now();
+			writeTaskMeta(task);
 		}
 		if (task.runner === "shell") {
 			writeFileSync(
@@ -734,7 +786,7 @@ export class BackgroundTaskManager {
 
 		const splitResult = await openCommandInNewSplitWithRefs(this.pi, direction, respawnCommand);
 		if (!splitResult.ok) {
-			appendLogLine(task.logFile, `\n[cmux error] ${splitResult.error}\n`, this.logMaxBytes);
+			appendLogLine(task.logFile, `\n[cmux error] ${splitResult.error}\n`);
 			this.finalizeTask(task, 1, "self-exit");
 			return;
 		}
@@ -817,11 +869,19 @@ export class BackgroundTaskManager {
 			}
 			if (task.markerFile && existsSync(task.markerFile)) {
 				task.startupDeadline = undefined;
+				const pid = readStartedMarkerPid(task.markerFile);
+				if (pid !== undefined && !isProcessAlive(pid)) {
+					appendLogLine(
+						task.logFile,
+						`[bg-task] agent process ${pid} is gone and no exit marker was written; marking task failed (likely SIGKILL/crash)\n`,
+					);
+					this.finalizeTask(task, null, "self-exit");
+					return;
+				}
 			} else if (task.startupDeadline && Date.now() > task.startupDeadline) {
 				appendLogLine(
 					task.logFile,
 					`[bg-task] startup timeout: task-mode started marker not written within ${Math.round(DEFAULT_AGENT_STARTUP_TIMEOUT_MS / 1000)}s; marking task failed before handoff became live\n`,
-					this.logMaxBytes,
 				);
 				this.finalizeTask(task, null, "self-exit");
 			}
@@ -857,6 +917,23 @@ export class BackgroundTaskManager {
 		}
 	}
 
+	/**
+	 * Arm a writer-safe periodic size guard for a running task so a long-lived
+	 * watcher cannot grow output.log without bound between finalizations.
+	 */
+	private armLogCap(task: InternalTask): void {
+		if (task.logCapTimer || task.status !== "running") return;
+		truncateLogIfOverCap(task.logFile, this.logMaxBytes);
+		task.logCapTimer = setInterval(() => truncateLogIfOverCap(task.logFile, this.logMaxBytes), LOG_CAP_INTERVAL_MS);
+		if (typeof task.logCapTimer.unref === "function") task.logCapTimer.unref();
+	}
+
+	private clearLogCap(task: InternalTask): void {
+		if (!task.logCapTimer) return;
+		clearInterval(task.logCapTimer);
+		task.logCapTimer = undefined;
+	}
+
 	private finalizeTask(task: InternalTask, exitCode: number | null, reason: "self-exit" | "stopped"): void {
 		if (task.finalized) return;
 		task.finalized = true;
@@ -870,6 +947,11 @@ export class BackgroundTaskManager {
 			task.responseTimer = undefined;
 		}
 		this.clearLogCap(task);
+		// Cap the log exactly once, now that the task is finalized and no external
+		// writer (the visible-shell `tee -a` pipeline / detached shell redirect) is
+		// still appending to output.log. The running guard only truncates-to-zero
+		// (writer-safe); here, with no live writer, we keep the tail.
+		enforceLogSizeCap(task.logFile, this.logMaxBytes);
 
 		task.exitCode = exitCode;
 		task.updatedAt = Date.now();
@@ -889,16 +971,27 @@ export class BackgroundTaskManager {
 
 		writeTaskMeta(task);
 
-		if (task.notifyOnExit && reason === "self-exit") {
-			const label = task.title ?? task.command;
-			const cmuxHint = task.cmux ? ` (cmux ${task.cmux.surfaceRef})` : "";
-			const message = `background task ${task.id} ${summarizeStatus(task)}: ${label}${cmuxHint}`;
-			try {
-				this.pi.sendUserMessage(message, { deliverAs: "followUp" });
-			} catch {
-				this.pi.sendUserMessage(message);
-			}
+		if (reason === "self-exit") {
+			// Passive completion signal: a cmux desktop toast that informs the user
+			// (across workspaces and reloads) WITHOUT waking the agent. Fires for every
+			// terminal self-exit, including fire-and-forget tasks and during startup
+			// recovery.
 			this.fireCmuxNotify(task);
+
+			// Active wake: inject a follow-up turn so the orchestrator agent reacts to
+			// the result (e.g. to continue chained background work). Opt-in only —
+			// notifyOnExit defaults to false — and never during startup recovery, where
+			// it would wake the agent for a task the user never started this session.
+			if (task.notifyOnExit && !this.recovering) {
+				const label = task.title ?? task.command;
+				const cmuxHint = task.cmux ? ` (cmux ${task.cmux.surfaceRef})` : "";
+				const message = `background task ${task.id} ${summarizeStatus(task)}: ${label}${cmuxHint}`;
+				try {
+					this.pi.sendUserMessage(message, { deliverAs: "followUp" });
+				} catch {
+					this.pi.sendUserMessage(message);
+				}
+			}
 		}
 	}
 
@@ -1133,7 +1226,7 @@ export class BackgroundTaskManager {
 			if (options.pruneWorktrees && task.worktree) {
 				const pruned = removeWorktreeSync({ path: task.worktree.path, repoRoot: task.worktree.repoRoot });
 				if (!pruned.ok) {
-					appendLogLine(task.logFile, `\n[bg-task] worktree prune failed: ${pruned.message}\n`, this.logMaxBytes);
+					appendLogLine(task.logFile, `\n[bg-task] worktree prune failed: ${pruned.message}\n`);
 					continue;
 				}
 			}

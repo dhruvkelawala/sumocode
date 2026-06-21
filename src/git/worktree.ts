@@ -132,7 +132,7 @@ function branchExistsSync(repoRoot: string, branch: string): boolean {
 	return gitOkSync(repoRoot, ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`]);
 }
 
-function resolveCreateOptions(options: CreateWorktreeOptions): { branch: string; baseRef: string; path: string } {
+export function resolveCreateOptions(options: CreateWorktreeOptions): { branch: string; baseRef: string; path: string } {
 	const baseRef = options.baseRef ?? "HEAD";
 	const branch = options.branch ?? `sumo/${slugifyBranch(options.task ?? "task")}`;
 	const path = options.path ?? join(worktreeRoot(options.repoRoot), pathSegmentForBranch(branch));
@@ -233,6 +233,7 @@ export async function removeWorktree(options: RemoveWorktreeOptions): Promise<Re
 	}
 }
 
+// Forward-looking: worktree reconcile/ship loop helpers; currently covered by worktree.test.ts only.
 export async function isClean(path: string): Promise<CleanResult> {
 	try {
 		const { stdout } = await git(path, ["status", "--porcelain"]);
@@ -242,6 +243,7 @@ export async function isClean(path: string): Promise<CleanResult> {
 	}
 }
 
+// Forward-looking: worktree reconcile/ship loop helpers; currently covered by worktree.test.ts only.
 export async function headAdvanced(path: string, baseRef: string): Promise<HeadAdvancedResult> {
 	try {
 		const head = (await git(path, ["rev-parse", "HEAD"])).stdout.trim();

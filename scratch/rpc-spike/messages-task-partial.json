@@ -1,0 +1,101 @@
+[
+  {
+    "content": [
+      {
+        "text": "RPC_TASK_PARTIAL call the task tool.",
+        "type": "text"
+      }
+    ],
+    "role": "user",
+    "timestamp": 1782827709585
+  },
+  {
+    "api": "sumocode-rpc-spike-api",
+    "content": [
+      {
+        "thinking": "Need to run the requested shell command.",
+        "type": "thinking"
+      },
+      {
+        "arguments": {
+          "prompt": "Summarize the task partial fixture."
+        },
+        "id": "rpc-spike-task-1",
+        "name": "task",
+        "type": "toolCall"
+      }
+    ],
+    "model": "deterministic",
+    "provider": "sumocode-rpc-spike",
+    "role": "assistant",
+    "stopReason": "toolUse",
+    "timestamp": 1782827709589,
+    "usage": {
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "cost": {
+        "cacheRead": 0,
+        "cacheWrite": 0,
+        "input": 0,
+        "output": 0,
+        "total": 0
+      },
+      "input": 0,
+      "output": 0,
+      "totalTokens": 0
+    }
+  },
+  {
+    "content": [
+      {
+        "text": "task final output",
+        "type": "text"
+      }
+    ],
+    "details": {
+      "mode": "single",
+      "results": [
+        {
+          "exitCode": 0,
+          "finalOutput": "task final output",
+          "messages": [],
+          "prompt": "Summarize the task partial fixture.",
+          "toolEvents": []
+        }
+      ]
+    },
+    "isError": false,
+    "role": "toolResult",
+    "timestamp": 1782827709592,
+    "toolCallId": "rpc-spike-task-1",
+    "toolName": "task"
+  },
+  {
+    "api": "sumocode-rpc-spike-api",
+    "content": [
+      {
+        "text": "The requested command finished.",
+        "type": "text"
+      }
+    ],
+    "model": "deterministic",
+    "provider": "sumocode-rpc-spike",
+    "role": "assistant",
+    "stopReason": "stop",
+    "timestamp": 1782827709592,
+    "usage": {
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "cost": {
+        "cacheRead": 0,
+        "cacheWrite": 0,
+        "input": 0,
+        "output": 0,
+        "total": 0
+      },
+      "input": 0,
+      "output": 0,
+      "totalTokens": 0
+    }
+  }
+]

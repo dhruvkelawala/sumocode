@@ -1,0 +1,89 @@
+[
+  {
+    "content": [
+      {
+        "text": "Call the bash tool for the deterministic RPC tool scenario.",
+        "type": "text"
+      }
+    ],
+    "role": "user",
+    "timestamp": 1782827709530
+  },
+  {
+    "api": "sumocode-rpc-spike-api",
+    "content": [
+      {
+        "thinking": "Need to run the requested shell command.",
+        "type": "thinking"
+      },
+      {
+        "arguments": {
+          "command": "printf 'rpc-tool-ok\\n'"
+        },
+        "id": "rpc-spike-bash-1",
+        "name": "bash",
+        "type": "toolCall"
+      }
+    ],
+    "model": "deterministic",
+    "provider": "sumocode-rpc-spike",
+    "role": "assistant",
+    "stopReason": "toolUse",
+    "timestamp": 1782827709533,
+    "usage": {
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "cost": {
+        "cacheRead": 0,
+        "cacheWrite": 0,
+        "input": 0,
+        "output": 0,
+        "total": 0
+      },
+      "input": 0,
+      "output": 0,
+      "totalTokens": 0
+    }
+  },
+  {
+    "content": [
+      {
+        "text": "rpc-tool-ok\n",
+        "type": "text"
+      }
+    ],
+    "isError": false,
+    "role": "toolResult",
+    "timestamp": 1782827709558,
+    "toolCallId": "rpc-spike-bash-1",
+    "toolName": "bash"
+  },
+  {
+    "api": "sumocode-rpc-spike-api",
+    "content": [
+      {
+        "text": "The requested command finished.",
+        "type": "text"
+      }
+    ],
+    "model": "deterministic",
+    "provider": "sumocode-rpc-spike",
+    "role": "assistant",
+    "stopReason": "stop",
+    "timestamp": 1782827709559,
+    "usage": {
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "cost": {
+        "cacheRead": 0,
+        "cacheWrite": 0,
+        "input": 0,
+        "output": 0,
+        "total": 0
+      },
+      "input": 0,
+      "output": 0,
+      "totalTokens": 0
+    }
+  }
+]

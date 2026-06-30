@@ -1,0 +1,19 @@
+[
+  {
+    "content": "{\"questions\":[{\"prompt\":\"What is your name?\"},{\"prompt\":\"Which city should we use?\"}]}",
+    "customType": "answer-rpc-spike-result",
+    "details": {
+      "questions": [
+        {
+          "prompt": "What is your name?"
+        },
+        {
+          "prompt": "Which city should we use?"
+        }
+      ]
+    },
+    "display": true,
+    "role": "custom",
+    "timestamp": 1782827788150
+  }
+]

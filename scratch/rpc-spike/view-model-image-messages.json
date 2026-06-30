@@ -1,0 +1,29 @@
+{
+  "messages": [
+    {
+      "blocks": [
+        {
+          "text": "Describe this image in one short sentence.",
+          "type": "markdown"
+        },
+        {
+          "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/lUzpWQAAAABJRU5ErkJggg==",
+          "mime": "image/png",
+          "type": "image"
+        }
+      ],
+      "id": "message-0",
+      "role": "user"
+    },
+    {
+      "blocks": [
+        {
+          "text": "The image is a one-pixel PNG fixture.",
+          "type": "markdown"
+        }
+      ],
+      "id": "message-1",
+      "role": "sumo"
+    }
+  ]
+}

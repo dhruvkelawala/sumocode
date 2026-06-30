@@ -1,0 +1,61 @@
+{
+  "messages": [
+    {
+      "blocks": [
+        {
+          "text": "Call the bash tool for the deterministic RPC tool scenario.",
+          "type": "markdown"
+        }
+      ],
+      "id": "message-0",
+      "role": "user"
+    },
+    {
+      "blocks": [
+        {
+          "hidden": false,
+          "text": "Need to run the requested shell command.",
+          "type": "thinking"
+        },
+        {
+          "tool": {
+            "id": "rpc-spike-bash-1",
+            "input": {
+              "command": "printf 'rpc-tool-ok\\n'"
+            },
+            "name": "bash",
+            "status": "running"
+          },
+          "type": "tool"
+        }
+      ],
+      "id": "message-1",
+      "role": "sumo"
+    },
+    {
+      "blocks": [
+        {
+          "tool": {
+            "id": "rpc-spike-bash-1",
+            "name": "bash",
+            "output": "rpc-tool-ok\n",
+            "status": "success"
+          },
+          "type": "tool"
+        }
+      ],
+      "id": "rpc-spike-bash-1",
+      "role": "system"
+    },
+    {
+      "blocks": [
+        {
+          "text": "The requested command finished.",
+          "type": "markdown"
+        }
+      ],
+      "id": "message-3",
+      "role": "sumo"
+    }
+  ]
+}

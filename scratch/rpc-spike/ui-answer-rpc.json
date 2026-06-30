@@ -1,0 +1,78 @@
+[
+  {
+    "id": "4fc84eac-9c33-4d56-89ce-fab0fd42b195",
+    "method": "setStatus",
+    "statusKey": "claude-oauth-ready",
+    "type": "extension_ui_request"
+  },
+  {
+    "id": "0b2f00dc-d60e-4183-a66b-a1b2891f8dd8",
+    "method": "setStatus",
+    "statusKey": "claude-oauth-issue",
+    "type": "extension_ui_request"
+  },
+  {
+    "id": "bb73c804-3b20-4c9c-ac12-efafa37b0529",
+    "method": "setStatus",
+    "statusKey": "mcp",
+    "statusText": "\u001b[38;5;172mMCP: 0/5 servers\u001b[39m",
+    "type": "extension_ui_request"
+  },
+  {
+    "id": "963198f0-753e-49d5-87d8-6e95911663f2",
+    "method": "setStatus",
+    "statusKey": "cursor",
+    "statusText": "cursor fast",
+    "type": "extension_ui_request"
+  },
+  {
+    "id": "ce2dd024-09a5-4669-9ee3-cf90c1532f60",
+    "method": "setWidget",
+    "type": "extension_ui_request",
+    "widgetKey": "subagent-async"
+  },
+  {
+    "id": "05e1361c-435b-488e-a061-739810728be1",
+    "method": "setStatus",
+    "statusKey": "pi-goal",
+    "statusText": "",
+    "type": "extension_ui_request"
+  },
+  {
+    "id": "bced33e4-a915-4f06-b247-08cb07560c97",
+    "method": "setStatus",
+    "statusKey": "plannotator",
+    "type": "extension_ui_request"
+  },
+  {
+    "id": "892baf31-ea31-44f5-b6f5-29aa0adfd019",
+    "method": "setWidget",
+    "type": "extension_ui_request",
+    "widgetKey": "plannotator-progress"
+  },
+  {
+    "id": "b41fdb06-7093-404b-8930-63567d37aae1",
+    "method": "setStatus",
+    "statusKey": "claude-oauth-ready",
+    "type": "extension_ui_request"
+  },
+  {
+    "id": "6eec3897-101f-4ae4-963c-f47c9cd4800f",
+    "method": "setStatus",
+    "statusKey": "claude-oauth-issue",
+    "type": "extension_ui_request"
+  },
+  {
+    "id": "75578805-4911-4c96-bf66-8d1dc7722dd9",
+    "method": "setStatus",
+    "statusKey": "cursor",
+    "type": "extension_ui_request"
+  },
+  {
+    "id": "cd62f8ce-418f-4df2-953b-50fda1a3386b",
+    "message": "answer-rpc-spike:{\"questions\":[{\"prompt\":\"What is your name?\"},{\"prompt\":\"Which city should we use?\"}]}",
+    "method": "notify",
+    "notifyType": "info",
+    "type": "extension_ui_request"
+  }
+]

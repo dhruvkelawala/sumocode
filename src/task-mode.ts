@@ -3,31 +3,28 @@
  *
  * When SumoCode launches via `sumocode task "<prompt>"` (i.e.
  * `SUMOCODE_TASK_MODE=1`), the session is a hand-off from an orchestrator:
- * do one delegated turn, then close. This module wires the lifecycle that
- * makes the pane close itself after the agent finishes — without leaving
- * the user staring at an idle editor in a child pane they probably don't
- * want to interact with.
+ * do one delegated turn, then shut down the child process. This module wires
+ * the lifecycle that exits the agent while leaving the cmux pane itself as a
+ * preserved viewport the orchestrator/human can inspect.
  *
  * Behavior:
  *
- * - On the first `agent_end` after launch, schedule a close after a grace
- *   period (default 10s) so the user has time to read the response.
+ * - On each `agent_end`, write the latest assistant response for the parent.
+ * - On the first `agent_end` after launch, schedule process shutdown after a
+ *   grace period (default 10s) so the user has time to read the response.
  * - During the grace period, a status entry in the footer counts down
- *   ("auto-closing in 9s · type to cancel").
+ *   ("exiting in 9s · type to cancel").
  * - If the user types anything in the editor (source=interactive), cancel
  *   the auto-exit permanently for this session. User has taken over.
  * - Opt out entirely with `SUMOCODE_TASK_KEEP_OPEN=1`.
  *
- * Closing the pane uses `cmux close-surface` (no args; cmux defaults to
- * `$CMUX_SURFACE_ID` which is auto-set in every cmux terminal). This is
- * cmux's documented "close this pane" method and bypasses Pi's deferred
- * `ctx.shutdown()` semantics, which in practice do not reliably terminate
- * Pi from inside an extension handler.
+ * Shutdown uses Pi's `ctx.shutdown()` instead of `cmux close-surface`: task
+ * completion belongs to the child process lifecycle, while pane close is an
+ * explicit orchestrator/user decision (`bg_task stop`).
  */
 
 import { appendFileSync, writeFileSync } from "node:fs";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { isInCmux } from "./commands/cmux-split.js";
 
 /**
  * Env-gated diagnostic logging. Set `SUMOCODE_TASK_DIAG_FILE=/tmp/xxx.jsonl`
@@ -102,6 +99,37 @@ function persistResponse(messages: unknown[]): void {
 	}
 }
 
+export function writeTaskExitMarker(code: number, env: NodeJS.ProcessEnv = process.env): void {
+	const file = env.SUMOCODE_TASK_EXIT_FILE;
+	if (!file) return;
+	try {
+		writeFileSync(file, `${code}\n`);
+		diagLog("exit_marker_written", { file, code });
+	} catch (error) {
+		diagLog("exit_marker_write_failed", {
+			message: error instanceof Error ? error.message : String(error),
+		});
+	}
+}
+
+export function writeTaskStartedMarker(env: NodeJS.ProcessEnv = process.env): void {
+	const file = env.SUMOCODE_TASK_STARTED_FILE;
+	if (!file) return;
+	try {
+		writeFileSync(file, `${process.pid}\n`);
+		diagLog("started_marker_written", { file });
+	} catch (error) {
+		diagLog("started_marker_write_failed", {
+			message: error instanceof Error ? error.message : String(error),
+		});
+	}
+}
+
+function installTaskExitMarker(env: NodeJS.ProcessEnv = process.env): void {
+	if (!env.SUMOCODE_TASK_EXIT_FILE) return;
+	process.once("exit", (code) => writeTaskExitMarker(typeof code === "number" ? code : 0, env));
+}
+
 const STATUS_KEY = "sumocode-task-auto-exit";
 const DEFAULT_GRACE_MS = 10_000;
 const TICK_MS = 1_000;
@@ -132,10 +160,16 @@ export function shouldInstallTaskModeAutoExit(options: TaskModeAutoExitOptions =
  * grace-period cycle handles the close.
  */
 export function installTaskModeAutoExit(pi: ExtensionAPI, options: TaskModeAutoExitOptions = {}): void {
+	const env = options.env ?? process.env;
+	if (isActive(env)) {
+		writeTaskStartedMarker(env);
+		installTaskExitMarker(env);
+	}
+
 	if (!shouldInstallTaskModeAutoExit(options)) {
 		diagLog("install_skipped", {
-			taskMode: process.env.SUMOCODE_TASK_MODE,
-			keepOpen: process.env.SUMOCODE_TASK_KEEP_OPEN,
+			taskMode: env.SUMOCODE_TASK_MODE,
+			keepOpen: env.SUMOCODE_TASK_KEEP_OPEN,
 		});
 		return;
 	}
@@ -144,10 +178,8 @@ export function installTaskModeAutoExit(pi: ExtensionAPI, options: TaskModeAutoE
 	let userTookOver = false;
 	let pending: { tick: ReturnType<typeof setInterval>; shutdown: ReturnType<typeof setTimeout> } | undefined;
 	let armed = false;
-
 	diagLog("install", {
 		graceMs,
-		inCmux: isInCmux(),
 		cmuxSurfaceId: process.env.CMUX_SURFACE_ID,
 		cmuxWorkspaceId: process.env.CMUX_WORKSPACE_ID,
 	});
@@ -160,25 +192,6 @@ export function installTaskModeAutoExit(pi: ExtensionAPI, options: TaskModeAutoE
 		ctx.ui.setStatus(STATUS_KEY, undefined);
 		if (reason === "user") {
 			userTookOver = true;
-		}
-	};
-
-	const closeOwnSurface = async (): Promise<void> => {
-		// `cmux close-surface` with no args defaults to $CMUX_SURFACE_ID, which
-		// is auto-set in every cmux terminal. From inside the child pane this
-		// is the documented way to ask cmux to tear down the surface we are
-		// running in. cmux then signals the pane's leading process; the bash
-		// wrapper and pi both exit cleanly without any process.exit() hack.
-		if (!isInCmux()) {
-			diagLog("close_skipped", { reason: "not_in_cmux" });
-			return;
-		}
-		diagLog("close_invoking", { surface: process.env.CMUX_SURFACE_ID });
-		try {
-			const result = await pi.exec("cmux", ["close-surface"], { timeout: 5000 });
-			diagLog("close_result", { code: result.code, stdout: result.stdout?.slice(0, 200), stderr: result.stderr?.slice(0, 200), killed: result.killed });
-		} catch (error) {
-			diagLog("close_threw", { message: error instanceof Error ? error.message : String(error) });
 		}
 	};
 
@@ -201,6 +214,10 @@ export function installTaskModeAutoExit(pi: ExtensionAPI, options: TaskModeAutoE
 
 	pi.on("agent_end", (event, ctx) => {
 		diagLog("agent_end", { userTookOver, armed });
+		// Always persist the latest completed turn. Completion is keyed off the
+		// real process-exit marker, so response.md can be overwritten safely if a
+		// human takes over and sends follow-up turns before shutdown.
+		persistResponse((event as { messages?: unknown[] }).messages ?? []);
 		if (userTookOver) return;
 		// Only auto-exit on the FIRST agent_end after launch. Subsequent
 		// agent_end events fire because the user typed follow-up prompts
@@ -208,26 +225,21 @@ export function installTaskModeAutoExit(pi: ExtensionAPI, options: TaskModeAutoE
 		if (armed) return;
 		armed = true;
 
-		// Persist the final assistant text to disk so the orchestrator can
-		// harvest the delegated work's output. Best-effort — if SUMOCODE_TASK_RESPONSE_FILE
-		// isn't set (running outside the bg_task pipeline), this no-ops.
-		persistResponse((event as { messages?: unknown[] }).messages ?? []);
-
 		let remaining = Math.ceil(graceMs / 1000);
-		ctx.ui.setStatus(STATUS_KEY, `task done · auto-closing in ${remaining}s · type to cancel`);
+		ctx.ui.setStatus(STATUS_KEY, `task done · exiting in ${remaining}s · type to cancel`);
 		diagLog("timer_armed", { graceMs, remaining });
 
 		const tick = setInterval(() => {
 			remaining -= 1;
 			if (remaining > 0) {
-				ctx.ui.setStatus(STATUS_KEY, `task done · auto-closing in ${remaining}s · type to cancel`);
+				ctx.ui.setStatus(STATUS_KEY, `task done · exiting in ${remaining}s · type to cancel`);
 			}
 		}, TICK_MS);
 
 		const shutdown = setTimeout(() => {
 			diagLog("timer_fired");
 			cancelPending(ctx, "fired");
-			void closeOwnSurface();
+			ctx.shutdown();
 		}, graceMs);
 
 		pending = { tick, shutdown };

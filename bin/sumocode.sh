@@ -15,6 +15,14 @@ SCRIPT_DIR="$(cd "$(dirname "${SOURCE}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 export SUMO_TUI="${SUMO_TUI:-1}"
+# Node 22+ can persist V8 compile cache for CommonJS/ESM modules. SumoCode and
+# Pi execute TypeScript through jiti at runtime, so warm launches benefit from
+# Node's built-in bytecode cache without adding a project build step.
+if [[ -z "${NODE_COMPILE_CACHE:-}" ]]; then
+	NODE_COMPILE_CACHE="${ROOT_DIR}/node_modules/.cache/node-compile-cache"
+	mkdir -p "${NODE_COMPILE_CACHE}" 2>/dev/null || true
+	export NODE_COMPILE_CACHE
+fi
 # Set so the SumoCode `/sumo:reload` slash command knows it's running under
 # the loop-respawn launcher and can exit with the reload signal.
 export SUMOCODE_LAUNCHER="${SOURCE}"
@@ -145,13 +153,19 @@ EXAMPLES
 
 DIAGNOSTICS EVENTS
   Debug mode may record events such as:
-      runtime_start       process, cwd, branch, commit, terminal size
-      render_frame        retained render timings
-      slow_frame          render frame over the slow-frame threshold
-      render_patches      terminal patch count and cursor placement
-      mouse_batch         parsed SGR mouse bytes per stdin batch
-      mouse_dispatch      chat hit-testing and scroll offset transitions
-      pi_event            Pi lifecycle events observed by SumoCode
+      process_preload_start  Node preload + argv baseline for startup traces
+      process_module_load_*  slow module imports + aggregate module-load summary
+      runtime_start          process, cwd, branch, commit, terminal size
+      boot_screen_frame      first retained splash/boot frame written to terminal
+      app_ready              first owned-shell render with the real session UI
+      stable_chrome_ready    same reveal point, split out for startup budgeting
+      input_ready            editor/input mounted and interactive
+      render_frame           retained render timings
+      slow_frame             render frame over the slow-frame threshold
+      render_patches         terminal patch count and cursor placement
+      mouse_batch            parsed SGR mouse bytes per stdin batch
+      mouse_dispatch         chat hit-testing and scroll offset transitions
+      pi_event               Pi lifecycle events observed by SumoCode
 
   Event payloads are truncated/sanitized so logs stay readable and diagnostics
   never interrupt the interactive session.
@@ -331,6 +345,12 @@ if [[ "${DEBUG_MODE}" == "1" ]]; then
 	if [[ "${CLEAR_DIAG}" == "1" && "${DRY_RUN}" != "1" ]]; then rm -f "${SUMO_TUI_DIAG_FILE}"; fi
 	export SUMO_TUI_DIAG_FILE
 	export SUMO_TUI_DEBUG="${SUMO_TUI_DEBUG:-1}"
+	STARTUP_PRELOAD="${ROOT_DIR}/scripts/startup-diagnostics-preload.cjs"
+	if [[ -f "${STARTUP_PRELOAD}" ]]; then
+		# Quote the path inside NODE_OPTIONS because the primary dev tree contains a
+		# space. Node's option parser honours these quotes.
+		export NODE_OPTIONS="${NODE_OPTIONS:-} --require \"${STARTUP_PRELOAD}\""
+	fi
 	if command -v git >/dev/null 2>&1 && git -C "${ROOT_DIR}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
 		export SUMOCODE_DEBUG_BRANCH="$(git -C "${ROOT_DIR}" branch --show-current 2>/dev/null || true)"
 		export SUMOCODE_DEBUG_COMMIT="$(git -C "${ROOT_DIR}" log --oneline -1 2>/dev/null || true)"
@@ -370,10 +390,24 @@ is_truthy_env_flag() {
 
 pi_main_file() {
 	local bin="$1"
-	local resolved dir cli_target cli_path main_file fallback
+	local resolved dir cli_target cli_path main_file fallback local_main
+
+	# Fast path for the project-local launcher. This is the common `sumocode`
+	# dev/install path and avoids parsing pnpm's shell shim on every startup.
+	local_main="${ROOT_DIR}/node_modules/@earendil-works/pi-coding-agent/dist/main.js"
+	if [[ "${bin}" == "${ROOT_DIR}/node_modules/.bin/pi" && -f "${local_main}" ]]; then
+		realpath "${local_main}"
+		return 0
+	fi
+
 	resolved="$(realpath "${bin}" 2>/dev/null || true)"
 	[[ -n "${resolved}" ]] || return 1
 	dir="$(dirname "${resolved}")"
+
+	if [[ "${resolved}" == "$(realpath "${ROOT_DIR}/node_modules/.bin/pi" 2>/dev/null || true)" && -f "${local_main}" ]]; then
+		realpath "${local_main}"
+		return 0
+	fi
 
 	# Direct installs may expose dist/main.js next to the resolved binary.
 	for fallback in "${dir}/main.js" "${dir}/../dist/main.js"; do
@@ -407,7 +441,7 @@ path_to_file_url() {
 pi_has_sumo_tui_patch() {
 	local main_file
 	main_file="$(pi_main_file "$1" 2>/dev/null || true)"
-	[[ -n "${main_file}" ]] && grep -q "loadSumoInteractiveMode" "${main_file}"
+	[[ -n "${main_file}" ]] && grep -Fq "loadSumoInteractiveMode" "${main_file}"
 }
 
 run_diag_summary() {

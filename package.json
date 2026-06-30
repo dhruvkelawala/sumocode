@@ -1,6 +1,6 @@
 {
   "name": "@dhruvkelawala/sumocode",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "SumoCode — a Pi extension that makes the terminal AI coding experience feel personal. OpenCode visual language + persistent memory + preattentive status signals.",
   "keywords": [
     "pi-package",

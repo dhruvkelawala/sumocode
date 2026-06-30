@@ -94,10 +94,11 @@ export function buildVisibleTaskScript(options: VisibleTaskCommandOptions): stri
  * runs via `respawn-pane --command <cmd>`:
  *
  *   1. Env-var prefix — `SUMOCODE_TASK_RESPONSE_FILE` (where the child writes
- *      its final assistant message) and `SUMOCODE_TASK_DIAG_FILE` (lifecycle
- *      diagnostics). `SUMOCODE_TASK_MODE=1` is set by the wrapper itself via
- *      the `task` subcommand. The orchestrator reads response.md to harvest
- *      the delegated work's output.
+ *      its latest assistant message), `SUMOCODE_TASK_EXIT_FILE` (real process
+ *      exit marker), and `SUMOCODE_TASK_DIAG_FILE` (lifecycle diagnostics).
+ *      `SUMOCODE_TASK_MODE=1` is set by the wrapper itself via the `task`
+ *      subcommand. The orchestrator reads response.md to harvest the delegated
+ *      work's output only after the exit marker appears.
  *   2. `cd '<cwd>'` so the child opens in the right project.
  *   3. `exec sumocode task --model X --thinking Y --prompt-file '<path>'`.
  *      `exec` ensures the wrapper shell is replaced by the sumocode process;
@@ -128,6 +129,8 @@ export function buildVisibleAgentCommand(
 
 	const envPrefix: string[] = [
 		`SUMOCODE_TASK_RESPONSE_FILE=${shellEscape(options.paths.responseFile)}`,
+		`SUMOCODE_TASK_EXIT_FILE=${shellEscape(options.paths.exitFile)}`,
+		`SUMOCODE_TASK_STARTED_FILE=${shellEscape(options.paths.markerFile)}`,
 		`SUMOCODE_TASK_DIAG_FILE=${shellEscape(options.paths.diagFile)}`,
 	];
 

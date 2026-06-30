@@ -36,7 +36,7 @@ jobs:
   review-pack:
     name: build V2 parity review pack
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 35
 
     steps:
       - name: Checkout
@@ -56,8 +56,20 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Install Playwright Chromium
-        run: pnpm exec playwright install --with-deps chromium
+      - name: Select runner Chrome
+        shell: bash
+        run: |
+          set -euo pipefail
+          for candidate in google-chrome google-chrome-stable chromium chromium-browser; do
+            if command -v "$candidate" >/dev/null 2>&1; then
+              chrome_path="$(command -v "$candidate")"
+              "$chrome_path" --version
+              echo "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=$chrome_path" >> "$GITHUB_ENV"
+              exit 0
+            fi
+          done
+          echo "No runner Chrome executable found" >&2
+          exit 1
 
       - name: Render Visual Bible targets
         run: pnpm render:bible

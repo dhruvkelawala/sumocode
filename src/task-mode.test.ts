@@ -6,6 +6,8 @@ import {
 	extractFinalAssistantText,
 	installTaskModeAutoExit,
 	shouldInstallTaskModeAutoExit,
+	writeTaskExitMarker,
+	writeTaskStartedMarker,
 } from "./task-mode.js";
 
 type Handler = (...args: unknown[]) => unknown;
@@ -117,6 +119,8 @@ describe("shouldInstallTaskModeAutoExit", () => {
 describe("installTaskModeAutoExit", () => {
 	let originalSurfaceId: string | undefined;
 	let originalResponseFile: string | undefined;
+	let originalExitFile: string | undefined;
+	let originalStartedFile: string | undefined;
 	let workDir: string | undefined;
 
 	beforeEach(() => {
@@ -124,7 +128,11 @@ describe("installTaskModeAutoExit", () => {
 		originalSurfaceId = process.env.CMUX_SURFACE_ID;
 		process.env.CMUX_SURFACE_ID = "surface:test";
 		originalResponseFile = process.env.SUMOCODE_TASK_RESPONSE_FILE;
+		originalExitFile = process.env.SUMOCODE_TASK_EXIT_FILE;
+		originalStartedFile = process.env.SUMOCODE_TASK_STARTED_FILE;
 		delete process.env.SUMOCODE_TASK_RESPONSE_FILE;
+		delete process.env.SUMOCODE_TASK_EXIT_FILE;
+		delete process.env.SUMOCODE_TASK_STARTED_FILE;
 		workDir = undefined;
 	});
 
@@ -134,6 +142,10 @@ describe("installTaskModeAutoExit", () => {
 		else process.env.CMUX_SURFACE_ID = originalSurfaceId;
 		if (originalResponseFile === undefined) delete process.env.SUMOCODE_TASK_RESPONSE_FILE;
 		else process.env.SUMOCODE_TASK_RESPONSE_FILE = originalResponseFile;
+		if (originalExitFile === undefined) delete process.env.SUMOCODE_TASK_EXIT_FILE;
+		else process.env.SUMOCODE_TASK_EXIT_FILE = originalExitFile;
+		if (originalStartedFile === undefined) delete process.env.SUMOCODE_TASK_STARTED_FILE;
+		else process.env.SUMOCODE_TASK_STARTED_FILE = originalStartedFile;
 		if (workDir) rmSync(workDir, { recursive: true, force: true });
 	});
 
@@ -151,7 +163,7 @@ describe("installTaskModeAutoExit", () => {
 		expect(pi.on).not.toHaveBeenCalled();
 	});
 
-	it("schedules cmux close-surface after the grace period on first agent_end", async () => {
+	it("schedules process shutdown after the grace period on first agent_end", async () => {
 		const { pi, handlers } = buildPiStub();
 		installTaskModeAutoExit(pi as never, { env: { SUMOCODE_TASK_MODE: "1" }, graceMs: 10_000 });
 
@@ -164,7 +176,7 @@ describe("installTaskModeAutoExit", () => {
 		// status is set immediately with full grace countdown
 		expect(ctx.ui.setStatus).toHaveBeenCalledWith(
 			"sumocode-task-auto-exit",
-			expect.stringContaining("auto-closing in 10s"),
+			expect.stringContaining("exiting in 10s"),
 		);
 
 		// nothing has fired yet
@@ -176,8 +188,8 @@ describe("installTaskModeAutoExit", () => {
 		vi.advanceTimersByTime(1);
 		// Let the floated promise inside the timer callback settle
 		await Promise.resolve();
-		expect(pi.exec).toHaveBeenCalledWith("cmux", ["close-surface"], { timeout: 5000 });
-		expect(ctx.shutdown).not.toHaveBeenCalled();
+		expect(pi.exec).not.toHaveBeenCalled();
+		expect(ctx.shutdown).toHaveBeenCalledTimes(1);
 	});
 
 	it("cancels auto-exit when the user types interactively during the grace period", () => {
@@ -212,7 +224,8 @@ describe("installTaskModeAutoExit", () => {
 
 		vi.advanceTimersByTime(10_000);
 		await Promise.resolve();
-		expect(pi.exec).toHaveBeenCalledWith("cmux", ["close-surface"], { timeout: 5000 });
+		expect(pi.exec).not.toHaveBeenCalled();
+		expect(ctx.shutdown).toHaveBeenCalledTimes(1);
 	});
 
 	it("cancels auto-exit when the user types AFTER the first agent_end (real follow-up)", () => {
@@ -272,6 +285,52 @@ describe("installTaskModeAutoExit", () => {
 
 		expect(existsSync(responseFile)).toBe(true);
 		expect(readFileSync(responseFile, "utf8").trim()).toBe("done x");
+	});
+
+	it("updates response.md on later agent_end events without re-arming shutdown", () => {
+		workDir = mkdtempSync(join(tmpdir(), "sumocode-task-mode-test-"));
+		const responseFile = join(workDir, "response.md");
+		process.env.SUMOCODE_TASK_RESPONSE_FILE = responseFile;
+
+		const { pi, handlers } = buildPiStub();
+		installTaskModeAutoExit(pi as never, { env: { SUMOCODE_TASK_MODE: "1" }, graceMs: 10_000 });
+
+		const ctx = buildCtxStub();
+		const onAgentEnd = handlers.get("agent_end")?.[0];
+		onAgentEnd?.({ messages: [{ role: "assistant", content: [{ type: "text", text: "first" }] }] }, ctx);
+		onAgentEnd?.({ messages: [{ role: "assistant", content: [{ type: "text", text: "second" }] }] }, ctx);
+
+		expect(readFileSync(responseFile, "utf8").trim()).toBe("second");
+		expect(ctx.ui.setStatus).toHaveBeenCalledTimes(1);
+	});
+
+	it("writes a task-started marker for manager startup liveness", () => {
+		workDir = mkdtempSync(join(tmpdir(), "sumocode-task-mode-test-"));
+		const startedFile = join(workDir, "started.marker");
+		writeTaskStartedMarker({ SUMOCODE_TASK_STARTED_FILE: startedFile } as NodeJS.ProcessEnv);
+
+		expect(readFileSync(startedFile, "utf8").trim()).toBe(String(process.pid));
+	});
+
+	it("writes a task-started marker during task-mode install", () => {
+		workDir = mkdtempSync(join(tmpdir(), "sumocode-task-mode-test-"));
+		const startedFile = join(workDir, "started.marker");
+		const { pi } = buildPiStub();
+
+		installTaskModeAutoExit(pi as never, {
+			env: { SUMOCODE_TASK_MODE: "1", SUMOCODE_TASK_STARTED_FILE: startedFile },
+			graceMs: 10_000,
+		});
+
+		expect(readFileSync(startedFile, "utf8").trim()).toBe(String(process.pid));
+	});
+
+	it("writes a real-exit marker for the manager to harvest", () => {
+		workDir = mkdtempSync(join(tmpdir(), "sumocode-task-mode-test-"));
+		const exitFile = join(workDir, "exit.code");
+		writeTaskExitMarker(0, { SUMOCODE_TASK_EXIT_FILE: exitFile } as NodeJS.ProcessEnv);
+
+		expect(readFileSync(exitFile, "utf8").trim()).toBe("0");
 	});
 
 	it("does not write response.md when env var is unset", () => {

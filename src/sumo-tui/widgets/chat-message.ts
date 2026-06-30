@@ -1,4 +1,4 @@
-import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { Image, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { DEFAULT_SUMOCODE_CONFIG } from "../../config/sumocode-config.js";
 import { activeThemeChrome, activeThemeColors } from "../../themes/index.js";
 import { fgHex, RESET } from "../cathedral/ansi.js";
@@ -240,6 +240,16 @@ function renderQuestionRows(block: Extract<ChatBlock, { type: "question" }>): st
 	return [`[question] ${block.question.prompt}`, ...block.question.choices.map((choice) => `- ${choice}`)];
 }
 
+function renderImageRows(block: Extract<ChatBlock, { type: "image" }>, width: number): string[] {
+	const image = new Image(
+		block.data,
+		block.mime,
+		{ fallbackColor: (value) => `${fgHex(activeThemeColors().foregroundDim)}${value}${RESET}` },
+		{ maxWidthCells: Math.max(1, width), maxHeightCells: 24, filename: block.filename },
+	);
+	return image.render(width).map((row) => visibleWidth(row) > width ? truncateToWidth(row, width, "") : row);
+}
+
 function renderDelegationRows(block: Extract<ChatBlock, { type: "delegation" }>, width: number): string[] {
 	return renderScrollBlock(block.delegation, width);
 }
@@ -261,6 +271,9 @@ function renderBlockRows(blocks: readonly ChatBlock[], width: number): string[] 
 				break;
 			case "code":
 				rows.push(...renderCodeRows(block, width));
+				break;
+			case "image":
+				rows.push(...renderImageRows(block, width));
 				break;
 			case "tool":
 				rows.push(...renderToolBlockRows(block.tool, width));

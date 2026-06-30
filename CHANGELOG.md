@@ -8,6 +8,43 @@ Per the PRD's versioning roadmap (`docs/prd.md` § Versioning), `v0.2.x` and
 `v0.3.x` are documented retroactively for the chrome and theme work that
 landed between the original scaffold and this release.
 
+## [0.4.0] — 2026-06-10
+
+The worktree fan-out release. SumoCode can now run visible background review
+jobs, fan out agents into named git worktrees, keep durable task metadata across
+reloads, and gate the ship leg through explicit human confirmations.
+
+### Added
+- **Orientation-aware `/sumo:diff`** — portrait terminals open hunk in a down
+  split; landscape stays right; `--down` / `--right` override.
+- **Tracked `/sumo:review`** — review now launches a visible `bg_task`
+  `runner=sumocode` pane instead of queueing a main-agent task-tool loop.
+- **bg_task hardening** — real process-exit completion for agent panes,
+  orchestrator-owned pane lifecycle, agent concurrency backpressure
+  (`status=at_capacity`), clear-time task-dir cleanup, startup stale-dir prune,
+  and bounded log files.
+- **Git worktree module** (`src/git/worktree.ts`) — execFile-based create/list/
+  remove helpers, branch slugging, clean/head-advanced checks, and path-with-
+  spaces coverage.
+- **`bg_task worktree=true`** — named-branch worktree creation, persisted
+  worktree refs in `meta.json`, no auto-remove, explicit prune via clear.
+- **`/sumo:worktree`** — opens an interactive SumoCode pane inside a new
+  worktree with setup action, plus explicit prune listing/removal.
+- **`/sumo:ship`** — stages and commits locally, then requires confirmation
+  before push and again before `gh pr create`.
+- **Image plumbing** — retained transcript image blocks render through Pi TUI's
+  Image component with fallback, and editor image paste uses `[Image N]` tokens
+  while composing.
+- **Fan-out decision docs** — synthesis-vs-production boundary and pi-cmux
+  compatibility stance documented under `docs/research/`.
+
+### Changed
+- `bg_task` agent harvest waits for the child process exit marker rather than
+  first `response.md`, so multi-turn/kept-open child panes are not marked done
+  too early.
+- Completed agent panes stay open for inspection until explicitly stopped or
+  closed.
+
 ## [0.3.0] — 2026-05-07
 
 The "feature-complete personal shell" release. Three themes ship, the agent's

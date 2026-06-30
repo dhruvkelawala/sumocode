@@ -72,7 +72,11 @@ if (htmls.length === 0) {
 console.log(`[render-bible] ${htmls.length} mockup(s) → ${renderDir}`);
 console.log("");
 
-const browser = await chromium.launch({ headless: true });
+const chromiumExecutablePath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH;
+const browser = await chromium.launch({
+	headless: true,
+	...(chromiumExecutablePath ? { executablePath: chromiumExecutablePath } : {}),
+});
 const context = await browser.newContext({
 	viewport: { width: 1800, height: 1200 },
 	deviceScaleFactor: 2, // retina-quality goldens

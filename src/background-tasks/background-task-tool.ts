@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import {
+	BackgroundTaskCapacityError,
 	BackgroundTaskManager,
 	DEFAULT_SUMOCODE_AGENT_MODEL,
 	DEFAULT_SUMOCODE_AGENT_THINKING,
@@ -10,9 +11,9 @@ import { type BackgroundTask, type BackgroundTaskThinking, toBackgroundTaskSnaps
 
 /**
  * Read the last ~2KB of an agent task's output.log when surfacing a terminal
- * state without response.md. The log captures the watchdog-timeout message
- * (and any other bg-task instrumentation) so the caller can see WHY harvest
- * never completed instead of just "ended without response.md".
+ * state without response.md. The log captures bg-task instrumentation so the
+ * caller can see WHY harvest never completed instead of just "ended without
+ * response.md".
  */
 function readLogTailForAgent(task: BackgroundTask, maxChars = 2048): string {
 	if (!task.logFile || !existsSync(task.logFile)) return "";
@@ -36,6 +37,22 @@ function makeToolResult(text: string, details?: unknown) {
 		content: [{ type: "text" as const, text }],
 		details,
 	};
+}
+
+function formatAtCapacity(error: BackgroundTaskCapacityError): ReturnType<typeof makeToolResult> {
+	const details = error.details;
+	const runningLines = details.running.length > 0
+		? details.running.map((task) => `- ${task.id}${task.title ? ` · ${task.title}` : ""} · ${task.status} · ${Math.round(task.ageMs / 1000)}s`).join("\n")
+		: "- (no running agent tasks found)";
+	return makeToolResult(
+		[
+			`status=at_capacity — this is expected, not a failure. ${details.runningCount}/${details.capacity} SumoCode agent slots are in use.`,
+			"Running agent tasks:",
+			runningLines,
+			`Next action: ${details.retryHint}.`,
+		].join("\n"),
+		{ action: "spawn", ...details },
+	);
 }
 
 export function installBackgroundTasks(pi: ExtensionAPI): BackgroundTaskManager {
@@ -62,26 +79,28 @@ export function installBackgroundTasks(pi: ExtensionAPI): BackgroundTaskManager 
 		description: [
 			"Spawn long-running work in a background process or a visible cmux pane. Two modes:",
 			"",
-			"• SHELL (runner='shell', default) — spawn a managed shell command. Output is tee'd to a log file, exit code is captured, and completion wakes the orchestrator via a follow-up message and cmux notification. Use for builds, tests, deploys, watchers, anything you want to fire-and-forget.",
+			"• SHELL (runner='shell', default) — spawn a managed shell command. Output is tee'd to a log file, exit code is captured, and completion fires a passive cmux notification; pass notifyOnExit:true to also wake the orchestrator with a follow-up so the agent acts on the result. Use for builds, tests, deploys, watchers, anything you want to fire-and-forget.",
 			"",
-			`• AGENT (runner='sumocode', visible=true required) — spawn a child SumoCode agent in a new cmux split. The prompt is delivered as the kickoff message, the child opens straight into the agent loop (no splash). If model/thinking are omitted, SumoCode uses ${DEFAULT_SUMOCODE_AGENT_MODEL} with ${DEFAULT_SUMOCODE_AGENT_THINKING} thinking (override process-wide with SUMOCODE_BG_AGENT_MODEL / SUMOCODE_BG_AGENT_THINKING). Explicit model/thinking params override those defaults. The child writes its FINAL assistant message to response.md; the orchestrator reads it via bg_task log. Task transitions to status='completed' as soon as response.md appears. After 10s idle, the pane auto-closes via cmux close-surface.`,
+			`• AGENT (runner='sumocode', visible=true required) — spawn a child SumoCode agent in a new cmux split. The prompt is delivered as the kickoff message, the child opens straight into the agent loop (no splash). If model/thinking are omitted, SumoCode uses ${DEFAULT_SUMOCODE_AGENT_MODEL} with ${DEFAULT_SUMOCODE_AGENT_THINKING} thinking (override process-wide with SUMOCODE_BG_AGENT_MODEL / SUMOCODE_BG_AGENT_THINKING). Explicit model/thinking params override those defaults. The child writes its latest assistant message to response.md and writes an exit marker on real process exit; the orchestrator reads the final response via bg_task log after completion. The cmux pane remains open until explicitly stopped/closed.`,
 			"",
 			"Actions:",
 			"  spawn  — start a task. Returns task id + paths.",
 			"  list   — list tracked tasks with status, runner, cmux refs.",
-			"  log    — read the task's output. For shell, returns output.log tail. For agent, returns response.md (the harvested final assistant message) when present, or a 'still working' marker if the agent hasn't responded yet. Poll until ready.",
+			"  log    — read the task's output. For shell, returns output.log tail. For agent, returns response.md after real process exit, or a 'still working' marker while the child is still alive. Poll until ready.",
 			"  stop   — SIGTERM a shell task, or cmux close-surface for an agent pane.",
-			"  clear  — remove finished/stopped tasks from the in-memory list.",
+			"  clear  — remove finished/stopped tasks from the registry and delete their on-disk task dirs. Worktrees are preserved unless pruneWorktree=true.",
 		].join("\n"),
 		promptSnippet:
 			"Spawn managed shell tasks or hand off prompts to a visible SumoCode agent pane (with model/thinking override and harvestable response).",
 		promptGuidelines: [
 			"Use bg_task when the user wants long-running work to continue while the conversation stays usable.",
-			"For shell commands (build, test, deploy, watchers), use bg_task with runner='shell' (the default) — output is logged and the orchestrator is notified on exit.",
+			"For shell commands (build, test, deploy, watchers), use bg_task with runner='shell' (the default) — output is logged and a passive cmux toast fires on exit; pass notifyOnExit:true to wake the agent on completion.",
 			`To delegate a prompt to a child SumoCode agent, use bg_task with runner='sumocode' and visible=true. If the user does not specify a model, omit model/thinking and let the child default to ${DEFAULT_SUMOCODE_AGENT_MODEL} with ${DEFAULT_SUMOCODE_AGENT_THINKING} thinking. The child opens in a cmux split, runs the prompt, and writes its response back. Read it with bg_task action='log' once status='completed'.`,
 			`Pass model and thinking to bg_task only when the user explicitly wants to override the agent defaults (${DEFAULT_SUMOCODE_AGENT_MODEL}, thinking=${DEFAULT_SUMOCODE_AGENT_THINKING}); process-wide defaults can be set with SUMOCODE_BG_AGENT_MODEL and SUMOCODE_BG_AGENT_THINKING.`,
 			"To read a delegated agent's response, call bg_task with action='log' and id='bg-N'. If the response isn't ready yet, the result will indicate 'still working' — poll again. List with bg_task action='list' to see which tasks have status='completed'.",
-			"Use bg_task action='stop' to cancel a task. For agent panes this closes the cmux surface, preserving any response that was already written.",
+			"If runner='sumocode' spawn returns status='at_capacity', treat it as expected backpressure: wait for a listed agent task to complete or stop one, then retry the spawn. Shell tasks are not blocked by this agent cap.",
+			"Use worktree=true with runner='sumocode' to spawn an agent in a named git worktree; worktrees are never auto-removed and require explicit pruneWorktree=true on clear (or a future worktree prune command).",
+			"Use bg_task action='stop' to cancel a task. For agent panes this closes the cmux surface; completed panes are otherwise left open for inspection.",
 		],
 		parameters: Type.Object({
 			action: StringEnum(["spawn", "list", "log", "stop", "clear"] as const, {
@@ -126,6 +145,14 @@ export function installBackgroundTasks(pi: ExtensionAPI): BackgroundTaskManager 
 						`Pi thinking level for runner='sumocode'. Defaults to ${DEFAULT_SUMOCODE_AGENT_THINKING} when omitted (or SUMOCODE_BG_AGENT_THINKING if set). Forwarded as --thinking to the child. Ignored for runner='shell'.`,
 				}),
 			),
+			worktree: Type.Optional(
+				Type.Boolean({
+					description: "Create a named git worktree before spawning runner='sumocode', then launch the child in that worktree. Never auto-removes the worktree.",
+				}),
+			),
+			branch: Type.Optional(Type.String({ description: "Optional branch name for worktree=true. Defaults to sumo/<slug>." })),
+			baseRef: Type.Optional(Type.String({ description: "Optional base ref for worktree=true. Defaults to HEAD." })),
+			pruneWorktree: Type.Optional(Type.Boolean({ description: "For action=clear, explicitly remove tracked worktrees for finished tasks. Defaults false." })),
 			direction: Type.Optional(
 				StringEnum(["right", "down"] as const, {
 					description: "Cmux split direction when visible=true. Default: right.",
@@ -137,7 +164,7 @@ export function installBackgroundTasks(pi: ExtensionAPI): BackgroundTaskManager 
 			notifyOnExit: Type.Optional(
 				Type.Boolean({
 					description:
-						"Wake the orchestrator with a follow-up message + cmux notification when the task reaches a terminal state. Defaults to true. For agent runners, this fires when response.md is harvested or the watchdog fails.",
+						"Wake the orchestrator with a follow-up turn when the task finishes, so the agent acts on the result (e.g. chaining background work). Defaults to FALSE — set true only when you intend to react to completion. A passive cmux notification fires regardless of this flag. For agent runners the follow-up fires after the real process-exit marker is harvested.",
 				}),
 			),
 		}),
@@ -150,22 +177,33 @@ export function installBackgroundTasks(pi: ExtensionAPI): BackgroundTaskManager 
 			}
 
 			if (params.action === "clear") {
-				const removed = manager.clearFinishedTasks();
-				return makeToolResult(`Removed ${removed} finished background task(s).`, { action: "clear", removed });
+				const removed = manager.clearFinishedTasks({ pruneWorktrees: params.pruneWorktree === true });
+				return makeToolResult(`Removed ${removed} finished background task(s).`, { action: "clear", removed, pruneWorktree: params.pruneWorktree === true });
 			}
 
 			if (params.action === "spawn") {
-				const task = manager.spawnTask({
-					command: params.command ?? "",
-					cwd: params.cwd ?? ctx.cwd,
-					title: params.title,
-					visible: params.visible,
-					direction: params.direction,
-					runner: params.runner,
-					model: params.model,
-					thinking: params.thinking as BackgroundTaskThinking | undefined,
-					notifyOnExit: params.notifyOnExit,
-				});
+				let task: BackgroundTask;
+				try {
+					task = manager.spawnTask({
+						command: params.command ?? "",
+						cwd: params.cwd ?? ctx.cwd,
+						title: params.title,
+						visible: params.visible,
+						direction: params.direction,
+						runner: params.runner,
+						model: params.model,
+						thinking: params.thinking as BackgroundTaskThinking | undefined,
+						worktree: params.worktree,
+						branch: params.branch,
+						baseRef: params.baseRef,
+						notifyOnExit: params.notifyOnExit,
+					});
+				} catch (error) {
+					if (error instanceof BackgroundTaskCapacityError) {
+						return formatAtCapacity(error);
+					}
+					throw error;
+				}
 
 				const snapshot = toBackgroundTaskSnapshot(task);
 				const cmuxLine = task.cmux
@@ -176,12 +214,15 @@ export function installBackgroundTasks(pi: ExtensionAPI): BackgroundTaskManager 
 					task.runner === "sumocode"
 						? `\nHarvest: bg_task action=log id=${task.id} (returns response.md when ready)`
 						: "";
+				const worktreeLine = task.worktree
+					? `\nWorktree: ${task.worktree.branch} at ${task.worktree.path}`
+					: "";
 				const modelLine = task.model || task.thinking
 					? `\nModel: ${task.model ?? "(inherit)"}${task.thinking ? ` thinking=${task.thinking}` : ""}`
 					: "";
 
 				return makeToolResult(
-					`Started ${task.id} in the background.\nCommand: ${task.command}\nCwd: ${task.cwd}\nRunner: ${task.runner}${modelLine}\nLog: ${task.logFile}${pidLine}${cmuxLine}${harvestHint}`,
+					`Started ${task.id} in the background.\nCommand: ${task.command}\nCwd: ${task.cwd}\nRunner: ${task.runner}${modelLine}${worktreeLine}\nLog: ${task.logFile}${pidLine}${cmuxLine}${harvestHint}`,
 					{ action: "spawn", task: snapshot },
 				);
 			}
@@ -205,12 +246,12 @@ export function installBackgroundTasks(pi: ExtensionAPI): BackgroundTaskManager 
 					}
 					// No response.md content. Either the task is still running (poll
 					// again) or it reached a terminal state without writing response.md
-					// (watchdog, stop, crash). Surface the actual state so callers don't
-					// poll forever.
+					// (stop, crash/nonzero exit). Surface the actual state so callers
+					// don't poll forever.
 					if (task.status === "running") {
 						const paneHint = task.cmux ? ` (cmux pane ${task.cmux.surfaceRef})` : "";
 						return makeToolResult(
-							`Agent ${task.id} is still working${paneHint}. response.md not written yet — poll bg_task action=log again, or check bg_task action=list for status.`,
+							`Agent ${task.id} is still working${paneHint}. Waiting for real process exit before harvesting final response — poll bg_task action=log again, or check bg_task action=list for status.`,
 							{ action: "log", task: snapshot, kind: "response", ready: false },
 						);
 					}
@@ -218,7 +259,7 @@ export function installBackgroundTasks(pi: ExtensionAPI): BackgroundTaskManager 
 					const logTail = readLogTailForAgent(task);
 					const logFooter = logTail ? `\n\n--- output.log tail ---\n${logTail}` : "";
 					return makeToolResult(
-						`Agent ${task.id} ended without writing response.md (status=${task.status}${exitDetail}). The agent may have crashed, been stopped, or hit the harvest watchdog before its first agent_end fired.${logFooter}`,
+						`Agent ${task.id} ended without writing response.md (status=${task.status}${exitDetail}). The agent may have crashed, been stopped, or exited before its first agent_end fired.${logFooter}`,
 						{
 							action: "log",
 							task: snapshot,

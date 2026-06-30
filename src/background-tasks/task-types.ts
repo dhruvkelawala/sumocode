@@ -18,6 +18,13 @@ export interface BackgroundTaskCmuxRefs {
 	surfaceRef: string;
 }
 
+export interface BackgroundTaskWorktreeRef {
+	path: string;
+	branch: string;
+	baseRef: string;
+	repoRoot: string;
+}
+
 export type BackgroundTaskThinking = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
 
 export interface BackgroundTask {
@@ -33,6 +40,7 @@ export interface BackgroundTask {
 	logFile: string;
 	exitFile?: string;
 	metaFile?: string;
+	markerFile?: string;
 	promptFile?: string;
 	responseFile?: string;
 	diagFile?: string;
@@ -42,6 +50,7 @@ export interface BackgroundTask {
 	model?: string;
 	thinking?: BackgroundTaskThinking;
 	cmux?: BackgroundTaskCmuxRefs;
+	worktree?: BackgroundTaskWorktreeRef;
 	notifyOnExit: boolean;
 }
 
@@ -54,6 +63,9 @@ export interface SpawnBackgroundTaskOptions {
 	runner?: BackgroundTaskRunner;
 	model?: string;
 	thinking?: BackgroundTaskThinking;
+	worktree?: boolean;
+	branch?: string;
+	baseRef?: string;
 	notifyOnExit?: boolean;
 }
 
@@ -73,6 +85,7 @@ export interface BackgroundTaskSnapshot {
 	logFile: string;
 	exitFile?: string;
 	metaFile?: string;
+	markerFile?: string;
 	promptFile?: string;
 	responseFile?: string;
 	diagFile?: string;
@@ -82,6 +95,7 @@ export interface BackgroundTaskSnapshot {
 	model?: string;
 	thinking?: BackgroundTaskThinking;
 	cmux?: BackgroundTaskCmuxRefs;
+	worktree?: BackgroundTaskWorktreeRef;
 	notifyOnExit?: boolean;
 }
 
@@ -100,6 +114,7 @@ export function toBackgroundTaskSnapshot(task: BackgroundTask): BackgroundTaskSn
 		logFile: task.logFile,
 		exitFile: task.exitFile,
 		metaFile: task.metaFile,
+		markerFile: task.markerFile,
 		promptFile: task.promptFile,
 		responseFile: task.responseFile,
 		diagFile: task.diagFile,
@@ -109,6 +124,7 @@ export function toBackgroundTaskSnapshot(task: BackgroundTask): BackgroundTaskSn
 		model: task.model,
 		thinking: task.thinking,
 		cmux: task.cmux,
+		worktree: task.worktree,
 		notifyOnExit: task.notifyOnExit,
 	};
 }

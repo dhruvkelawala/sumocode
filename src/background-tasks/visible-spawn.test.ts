@@ -15,6 +15,7 @@ describe("visible-spawn", () => {
 		expect(paths.exitFile).toBe("/tmp/test-bg/bg-1-1700000000000/exit.code");
 		expect(paths.scriptFile).toBe("/tmp/test-bg/bg-1-1700000000000/run.sh");
 		expect(paths.metaFile).toBe("/tmp/test-bg/bg-1-1700000000000/meta.json");
+		expect(paths.markerFile).toBe("/tmp/test-bg/bg-1-1700000000000/started.marker");
 		expect(paths.promptFile).toBe("/tmp/test-bg/bg-1-1700000000000/prompt.txt");
 		expect(paths.responseFile).toBe("/tmp/test-bg/bg-1-1700000000000/response.md");
 		expect(paths.diagFile).toBe("/tmp/test-bg/bg-1-1700000000000/diag.jsonl");
@@ -94,6 +95,8 @@ describe("visible-spawn", () => {
 		expect(cmd).toBe(
 			"cd '/repo with spaces' && " +
 				"SUMOCODE_TASK_RESPONSE_FILE='/tmp/test-bg/bg-4-456/response.md' " +
+				"SUMOCODE_TASK_EXIT_FILE='/tmp/test-bg/bg-4-456/exit.code' " +
+				"SUMOCODE_TASK_STARTED_FILE='/tmp/test-bg/bg-4-456/started.marker' " +
 				"SUMOCODE_TASK_DIAG_FILE='/tmp/test-bg/bg-4-456/diag.jsonl' " +
 				"exec sumocode task --prompt-file '/tmp/test-bg/bg-4-456/prompt.txt'",
 		);

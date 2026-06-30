@@ -1,9 +1,10 @@
 import { EventEmitter } from "node:events";
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+	BackgroundTaskCapacityError,
 	BackgroundTaskManager,
 	DEFAULT_SUMOCODE_AGENT_MODEL,
 	DEFAULT_SUMOCODE_AGENT_THINKING,
@@ -13,6 +14,7 @@ const spawnMock = vi.hoisted(() => vi.fn());
 const execFileSyncMock = vi.hoisted(() => vi.fn(() => "Mon Jun  1 10:00:00 2026\n"));
 
 vi.mock("node:child_process", () => ({
+	execFile: vi.fn(),
 	execFileSync: execFileSyncMock,
 	spawn: spawnMock,
 }));
@@ -138,6 +140,7 @@ describe("BackgroundTaskManager", () => {
 		const task = manager.spawnTask({
 			command: "echo hello",
 			cwd: "/tmp/project",
+			notifyOnExit: true,
 		});
 
 		await vi.waitFor(() => {
@@ -222,6 +225,31 @@ describe("BackgroundTaskManager", () => {
 		expect(args.some((a) => a.includes(task.id))).toBe(true);
 		expect(args).toContain("--body");
 		expect(args).toContain("build artifacts");
+
+		// New default: a fire-and-forget shell task must NOT wake the agent. The
+		// passive cmux toast above is decoupled from the message-queue follow-up.
+		expect(pi.sendUserMessage).not.toHaveBeenCalled();
+	});
+
+	it("does not wake the orchestrator for a default fire-and-forget task", async () => {
+		spawnMock.mockReturnValue(mockChild(0));
+		const pi = buildPiStub();
+		const manager = new BackgroundTaskManager(pi as never);
+
+		const task = manager.spawnTask({
+			command: "echo quiet",
+			cwd: "/tmp/project",
+		});
+
+		await vi.waitFor(() => {
+			expect(task.status).toBe("completed");
+		});
+
+		// notifyOnExit defaults to false: completion must NOT inject a
+		// message-queue follow-up that wakes the agent. (The in-cmux
+		// passive-notify-still-fires angle is covered above; this is the plain
+		// no-wake default.)
+		expect(pi.sendUserMessage).not.toHaveBeenCalled();
 	});
 
 	it("does not fire cmux notify outside cmux", async () => {
@@ -315,6 +343,7 @@ describe("BackgroundTaskManager", () => {
 		const respawnArg = openSplit.mock.calls[0]?.[2] as string;
 		expect(respawnArg).toContain("cd '/repo with spaces' && ");
 		expect(respawnArg).toContain("SUMOCODE_TASK_RESPONSE_FILE=");
+		expect(respawnArg).toContain("SUMOCODE_TASK_STARTED_FILE=");
 		expect(respawnArg).toContain("SUMOCODE_TASK_DIAG_FILE=");
 		expect(respawnArg).toContain(`exec sumocode task --model '${DEFAULT_SUMOCODE_AGENT_MODEL}' --thinking '${DEFAULT_SUMOCODE_AGENT_THINKING}' --prompt-file '`);
 		expect(respawnArg).toContain("/prompt.txt'");
@@ -342,6 +371,7 @@ describe("BackgroundTaskManager", () => {
 
 		// Task snapshot exposes the harvest paths so future tooling can find them.
 		expect(task.responseFile).toBe(task.exitFile!.replace("exit.code", "response.md"));
+		expect(task.markerFile).toBe(task.exitFile!.replace("exit.code", "started.marker"));
 		expect(task.diagFile).toBe(task.exitFile!.replace("exit.code", "diag.jsonl"));
 		expect(task.promptFile).toBe(promptFile);
 	});
@@ -410,7 +440,128 @@ describe("BackgroundTaskManager", () => {
 		expect(task.thinking).toBe("low");
 	});
 
-	it("transitions agent task to status=completed when response.md appears", async () => {
+	it("rejects over-capacity agent spawns with structured backpressure while allowing shell tasks", async () => {
+		process.env.CMUX_SURFACE_ID = "surface:1";
+		spawnMock.mockReturnValue(mockLongLivedChild());
+		const pi = buildPiStub();
+		const cmuxSplit = await import("../commands/cmux-split.js");
+		vi.spyOn(cmuxSplit, "openCommandInNewSplitWithRefs").mockResolvedValue({
+			ok: true,
+			workspaceRef: "workspace:1",
+			surfaceRef: "surface:2",
+		});
+
+		const manager = new BackgroundTaskManager(pi as never, { agentCapacity: 1 });
+		const first = manager.spawnTask({
+			command: "review one",
+			cwd: "/repo",
+			visible: true,
+			runner: "sumocode",
+			title: "agent one",
+			notifyOnExit: false,
+		});
+		await vi.waitFor(() => expect(first.cmux).toBeDefined());
+
+		let capacityError: unknown;
+		try {
+			manager.spawnTask({
+				command: "review two",
+				cwd: "/repo",
+				visible: true,
+				runner: "sumocode",
+				notifyOnExit: false,
+			});
+		} catch (error) {
+			capacityError = error;
+		}
+
+		expect(capacityError).toBeInstanceOf(BackgroundTaskCapacityError);
+		expect((capacityError as BackgroundTaskCapacityError).details).toMatchObject({
+			status: "at_capacity",
+			capacity: 1,
+			runningCount: 1,
+		});
+		expect((capacityError as BackgroundTaskCapacityError).details.running[0]?.id).toBe(first.id);
+		expect(manager.listTasks().filter((task) => task.runner === "sumocode")).toHaveLength(1);
+
+		const shellTask = manager.spawnTask({ command: "sleep 100", cwd: "/repo", notifyOnExit: false });
+		expect(shellTask.runner).toBe("shell");
+	});
+
+	it("creates and persists a worktree before spawning a sumocode agent", async () => {
+		process.env.CMUX_SURFACE_ID = "surface:1";
+		const pi = buildPiStub();
+		const cmuxSplit = await import("../commands/cmux-split.js");
+		const openSplit = vi.spyOn(cmuxSplit, "openCommandInNewSplitWithRefs").mockResolvedValue({
+			ok: true,
+			workspaceRef: "workspace:1",
+			surfaceRef: "surface:2",
+		});
+		const worktree = await import("../git/worktree.js");
+		const create = vi.spyOn(worktree, "createWorktree").mockResolvedValue({
+			ok: true,
+			path: "/repo.sumo-worktrees/sumo__review",
+			branch: "sumo/review",
+			baseRef: "HEAD",
+		});
+
+		const manager = new BackgroundTaskManager(pi as never);
+		const task = manager.spawnTask({
+			command: "review",
+			cwd: "/repo",
+			visible: true,
+			runner: "sumocode",
+			worktree: true,
+			title: "review",
+			notifyOnExit: false,
+		});
+		await vi.waitFor(() => expect(task.cmux).toBeDefined());
+
+		expect(create).toHaveBeenCalledWith({ repoRoot: "/repo", branch: "sumo/review", baseRef: "HEAD", path: "/repo.sumo-worktrees/sumo__review" });
+		expect(task.cwd).toBe("/repo.sumo-worktrees/sumo__review");
+		expect(task.worktree).toEqual({ path: "/repo.sumo-worktrees/sumo__review", branch: "sumo/review", baseRef: "HEAD", repoRoot: "/repo" });
+		expect(openSplit.mock.calls[0]?.[2]).toContain("cd '/repo.sumo-worktrees/sumo__review'");
+		expect(JSON.parse(readFileSync(task.metaFile!, "utf8")).worktree).toEqual(task.worktree);
+	});
+
+	it("finalizes the task as failed when deferred worktree creation fails", async () => {
+		process.env.CMUX_SURFACE_ID = "surface:1";
+		const pi = buildPiStub();
+		const cmuxSplit = await import("../commands/cmux-split.js");
+		const openSplit = vi.spyOn(cmuxSplit, "openCommandInNewSplitWithRefs").mockResolvedValue({
+			ok: true,
+			workspaceRef: "workspace:1",
+			surfaceRef: "surface:2",
+		});
+		const worktree = await import("../git/worktree.js");
+		vi.spyOn(worktree, "createWorktree").mockResolvedValue({
+			ok: false,
+			error: "branch_already_exists",
+			message: "branch already exists: sumo/x",
+		});
+
+		const manager = new BackgroundTaskManager(pi as never);
+		const task = manager.spawnTask({
+			command: "review",
+			cwd: "/repo",
+			visible: true,
+			runner: "sumocode",
+			worktree: true,
+			title: "review",
+			notifyOnExit: false,
+		});
+		await vi.waitFor(() => expect(task.status).toBe("failed"));
+
+		expect(openSplit).not.toHaveBeenCalled();
+		expect(readFileSync(task.logFile, "utf8")).toContain("worktree create failed: branch already exists: sumo/x");
+		// Fix A: the speculative worktree ref must be cleared so a later prune
+		// does not try to remove a nonexistent worktree and get stuck.
+		expect(task.worktree).toBeUndefined();
+		expect(manager.clearFinishedTasks({ pruneWorktrees: true })).toBe(1);
+		expect(manager.findTask(task.id)).toBeUndefined();
+	});
+
+	it("keeps agent task running when response.md appears before real process exit", async () => {
 		process.env.CMUX_SURFACE_ID = "surface:1";
 		const pi = buildPiStub();
 		const cmuxSplit = await import("../commands/cmux-split.js");
@@ -432,9 +583,13 @@ describe("BackgroundTaskManager", () => {
 		await vi.waitFor(() => expect(task.cmux).toBeDefined());
 		expect(task.status).toBe("running");
 
-		// Simulate the child writing response.md
+		// Simulate the child writing response.md on agent_end. The task must not
+		// complete until task-mode writes the real process-exit marker.
 		writeFileSync(task.responseFile!, "hello world\n");
+		await new Promise((resolve) => setTimeout(resolve, 800));
+		expect(task.status).toBe("running");
 
+		writeFileSync(task.exitFile!, "0\n");
 		await vi.waitFor(
 			() => {
 				expect(task.status).toBe("completed");
@@ -467,10 +622,12 @@ describe("BackgroundTaskManager", () => {
 				visible: true,
 				runner: "sumocode",
 				title: "agent review",
+				notifyOnExit: true,
 			});
 
 			await vi.waitFor(() => expect(task.cmux).toBeDefined());
 			writeFileSync(task.responseFile!, "done\n");
+			writeFileSync(task.exitFile!, "0\n");
 
 			await vi.advanceTimersByTimeAsync(750);
 
@@ -486,8 +643,8 @@ describe("BackgroundTaskManager", () => {
 			);
 			expect(notifyCall, "expected a cmux notify exec call").toBeDefined();
 
-			// The response watcher is cleared by finalization, so the watchdog cannot
-			// later emit a second completion/failure notification for the same task.
+			// The response watcher is cleared by finalization, so later polling cannot
+			// emit a second completion/failure notification for the same task.
 			await vi.advanceTimersByTimeAsync(11 * 60 * 1000);
 			expect(task.status).toBe("completed");
 			expect(pi.sendUserMessage).toHaveBeenCalledTimes(1);
@@ -522,6 +679,13 @@ describe("BackgroundTaskManager", () => {
 		expect(harvest.content).toBe("");
 
 		writeFileSync(task.responseFile!, "## Review\n\nLooks good\n");
+		harvest = manager.getTaskHarvest(task);
+		expect(harvest.kind).toBe("response");
+		expect(harvest.ready).toBe(false);
+		expect(harvest.content).toContain("## Review");
+
+		writeFileSync(task.exitFile!, "0\n");
+		await vi.waitFor(() => expect(task.status).toBe("completed"));
 		harvest = manager.getTaskHarvest(task);
 		expect(harvest.kind).toBe("response");
 		expect(harvest.ready).toBe(true);
@@ -712,7 +876,7 @@ describe("BackgroundTaskManager", () => {
 		expect(harvest.ready).toBe(false);
 		expect(harvest.content).toBe("");
 
-		// Simulate a terminal failure (e.g. watchdog timeout) WITHOUT response.md.
+		// Simulate a terminal failure WITHOUT response.md.
 		// The harvest should now report ready=true so callers don't poll forever.
 		task.status = "failed";
 		task.exitCode = null;
@@ -722,7 +886,115 @@ describe("BackgroundTaskManager", () => {
 		expect(harvest.content).toBe("");
 	});
 
-	it("transitions agent task to failed when response.md never appears (watchdog timeout)", async () => {
+	it("keeps started agent task running when no exit marker appears after the old watchdog window", async () => {
+		vi.useFakeTimers();
+		try {
+			process.env.CMUX_SURFACE_ID = "surface:1";
+			const pi = buildPiStub();
+			const cmuxSplit = await import("../commands/cmux-split.js");
+			vi.spyOn(cmuxSplit, "openCommandInNewSplitWithRefs").mockResolvedValue({
+				ok: true,
+				workspaceRef: "workspace:1",
+				surfaceRef: "surface:8",
+			});
+
+			const manager = new BackgroundTaskManager(pi as never);
+			const task = manager.spawnTask({
+				command: "long-running prompt",
+				cwd: "/repo",
+				visible: true,
+				runner: "sumocode",
+				notifyOnExit: false,
+			});
+			// Let the spawn microtask settle so the response watcher is armed.
+			await vi.advanceTimersByTimeAsync(50);
+			expect(task.status).toBe("running");
+			writeFileSync(task.markerFile!, `${process.pid}\n`);
+
+			// Walk past the previous 10-minute response-era watchdog window. Once
+			// task-mode writes started.marker, missing exit marker means still
+			// running/unknown rather than failed.
+			await vi.advanceTimersByTimeAsync(11 * 60 * 1000);
+
+			expect(task.status).toBe("running");
+			expect(readFileSync(task.logFile, "utf8")).not.toContain("startup timeout");
+			manager.shutdown();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("reaps a started agent task whose process has died without an exit marker", async () => {
+		vi.useFakeTimers();
+		const processKill = vi.spyOn(process, "kill").mockImplementation(((pid: number, signal?: string | number) => {
+			if (pid === 43210 && signal === 0) throw new Error("ESRCH");
+			return true;
+		}) as typeof process.kill);
+		try {
+			process.env.CMUX_SURFACE_ID = "surface:1";
+			const pi = buildPiStub();
+			const cmuxSplit = await import("../commands/cmux-split.js");
+			vi.spyOn(cmuxSplit, "openCommandInNewSplitWithRefs").mockResolvedValue({
+				ok: true,
+				workspaceRef: "workspace:1",
+				surfaceRef: "surface:8",
+			});
+
+			const manager = new BackgroundTaskManager(pi as never);
+			const task = manager.spawnTask({
+				command: "crashy prompt",
+				cwd: "/repo",
+				visible: true,
+				runner: "sumocode",
+				notifyOnExit: false,
+			});
+			await vi.advanceTimersByTimeAsync(50);
+			writeFileSync(task.markerFile!, "43210\n");
+
+			await vi.advanceTimersByTimeAsync(1000);
+
+			expect(task.status).toBe("failed");
+			expect(readFileSync(task.logFile, "utf8")).toContain("is gone and no exit marker");
+			manager.shutdown();
+		} finally {
+			processKill.mockRestore();
+			vi.useRealTimers();
+		}
+	});
+
+	it("keeps a started agent task running while its process is alive", async () => {
+		vi.useFakeTimers();
+		try {
+			process.env.CMUX_SURFACE_ID = "surface:1";
+			const pi = buildPiStub();
+			const cmuxSplit = await import("../commands/cmux-split.js");
+			vi.spyOn(cmuxSplit, "openCommandInNewSplitWithRefs").mockResolvedValue({
+				ok: true,
+				workspaceRef: "workspace:1",
+				surfaceRef: "surface:8",
+			});
+
+			const manager = new BackgroundTaskManager(pi as never);
+			const task = manager.spawnTask({
+				command: "long-running prompt",
+				cwd: "/repo",
+				visible: true,
+				runner: "sumocode",
+				notifyOnExit: false,
+			});
+			await vi.advanceTimersByTimeAsync(50);
+			writeFileSync(task.markerFile!, `${process.pid}\n`);
+
+			await vi.advanceTimersByTimeAsync(1000);
+
+			expect(task.status).toBe("running");
+			manager.shutdown();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("fails agent task when task-mode never writes started marker", async () => {
 		vi.useFakeTimers();
 		try {
 			process.env.CMUX_SURFACE_ID = "surface:1";
@@ -742,15 +1014,13 @@ describe("BackgroundTaskManager", () => {
 				runner: "sumocode",
 				notifyOnExit: false,
 			});
-			// Let the spawn microtask settle so the response watcher is armed.
 			await vi.advanceTimersByTimeAsync(50);
 			expect(task.status).toBe("running");
 
-			// Walk past the watchdog deadline (10 min default).
-			await vi.advanceTimersByTimeAsync(11 * 60 * 1000);
+			await vi.advanceTimersByTimeAsync(3 * 60 * 1000);
 
 			expect(task.status).toBe("failed");
-			expect(readFileSync(task.logFile, "utf8")).toContain("watchdog timeout");
+			expect(readFileSync(task.logFile, "utf8")).toContain("startup timeout");
 		} finally {
 			vi.useRealTimers();
 		}
@@ -814,7 +1084,49 @@ describe("BackgroundTaskManager", () => {
 		expect(pi.sendUserMessage).toHaveBeenCalled();
 	});
 
-	it("recovers shell tasks and reconciles exit.code after reload", () => {
+	it("recovers agent tasks and fails startup if task-mode never writes started marker", async () => {
+		vi.useFakeTimers();
+		try {
+			const startedAt = Date.now();
+			const root = join(baseDir, "sumocode-bg", `bg-recovered-agent-${startedAt}`);
+			mkdirSync(root, { recursive: true });
+			const logFile = join(root, "output.log");
+			const exitFile = join(root, "exit.code");
+			const markerFile = join(root, "started.marker");
+			const responseFile = join(root, "response.md");
+			const metaFile = join(root, "meta.json");
+			writeFileSync(logFile, "running\n");
+			writeFileSync(metaFile, `${JSON.stringify({
+				schemaVersion: 2,
+				id: "bg-recovered-agent",
+				command: "recover agent",
+				cwd: "/tmp",
+				status: "running",
+				startedAt,
+				updatedAt: startedAt,
+				logFile,
+				exitFile,
+				markerFile,
+				responseFile,
+				metaFile,
+				visible: true,
+				runner: "sumocode",
+			}, null, 2)}\n`);
+
+			const manager = new BackgroundTaskManager(buildPiStub() as never);
+			const task = manager.findTask("bg-recovered-agent");
+			expect(task?.status).toBe("running");
+
+			await vi.advanceTimersByTimeAsync(3 * 60 * 1000);
+
+			expect(task?.status).toBe("failed");
+			expect(readFileSync(logFile, "utf8")).toContain("startup timeout");
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("recovers shell tasks and reconciles exit.code after reload without injecting a message-queue followUp", () => {
 		const root = join(baseDir, "sumocode-bg", "bg-recovered-1-1000");
 		mkdirSync(root, { recursive: true });
 		const logFile = join(root, "output.log");
@@ -844,10 +1156,7 @@ describe("BackgroundTaskManager", () => {
 		expect(task?.status).toBe("completed");
 		expect(task?.exitCode).toBe(0);
 		expect(manager.getTaskHarvest(task!, 1000).content).toContain("done");
-		expect(pi.sendUserMessage).toHaveBeenCalledWith(
-			expect.stringContaining("background task bg-recovered-1 completed"),
-			{ deliverAs: "followUp" },
-		);
+		expect(pi.sendUserMessage).not.toHaveBeenCalled();
 	});
 
 	it("keeps new invisible shell tasks running when process identity cannot be captured", () => {
@@ -1085,14 +1394,16 @@ describe("BackgroundTaskManager", () => {
 		}
 	});
 
-	it("recovers completed agent tasks from response.md after reload", () => {
+	it("recovers completed agent tasks from the real-exit marker after reload", () => {
 		const root = join(baseDir, "sumocode-bg", "bg-agent-1-1000");
 		mkdirSync(root, { recursive: true });
 		const logFile = join(root, "output.log");
 		const responseFile = join(root, "response.md");
+		const exitFile = join(root, "exit.code");
 		const metaFile = join(root, "meta.json");
 		writeFileSync(logFile, "agent started\n");
 		writeFileSync(responseFile, "final answer\n");
+		writeFileSync(exitFile, "0\n");
 		writeFileSync(metaFile, `${JSON.stringify({
 			schemaVersion: 2,
 			id: "bg-agent-1",
@@ -1103,6 +1414,7 @@ describe("BackgroundTaskManager", () => {
 			updatedAt: 1000,
 			logFile,
 			metaFile,
+			exitFile,
 			responseFile,
 			visible: true,
 			runner: "sumocode",
@@ -1195,6 +1507,110 @@ describe("BackgroundTaskManager", () => {
 		expect(manager.clearFinishedTasks()).toBe(1);
 		expect(manager.listTasks()).toHaveLength(0);
 		expect(existsSync(task.metaFile!)).toBe(false);
+		expect(existsSync(task.logFile)).toBe(false);
+		expect(existsSync(dirname(task.logFile))).toBe(false);
 		expect(new BackgroundTaskManager(buildPiStub() as never).listTasks()).toHaveLength(0);
+	});
+
+	it("prunes stale finished task dirs during recovery without touching running tasks", () => {
+		const staleRoot = join(baseDir, "sumocode-bg", "bg-stale-1000");
+		const runningRoot = join(baseDir, "sumocode-bg", "bg-running-1000");
+		mkdirSync(staleRoot, { recursive: true });
+		mkdirSync(runningRoot, { recursive: true });
+		const staleLog = join(staleRoot, "output.log");
+		const runningLog = join(runningRoot, "output.log");
+		writeFileSync(staleLog, "old\n");
+		writeFileSync(runningLog, "still running\n");
+		writeFileSync(join(staleRoot, "meta.json"), `${JSON.stringify({
+			schemaVersion: 2,
+			id: "bg-stale",
+			command: "old",
+			cwd: "/tmp",
+			status: "completed",
+			startedAt: 1000,
+			updatedAt: 1000,
+			logFile: staleLog,
+			metaFile: join(staleRoot, "meta.json"),
+			visible: false,
+			runner: "shell",
+		}, null, 2)}\n`);
+		writeFileSync(join(runningRoot, "meta.json"), `${JSON.stringify({
+			schemaVersion: 2,
+			id: "bg-running",
+			command: "sleep 100",
+			cwd: "/tmp",
+			status: "running",
+			startedAt: 1000,
+			updatedAt: 1000,
+			logFile: runningLog,
+			metaFile: join(runningRoot, "meta.json"),
+			visible: false,
+			runner: "shell",
+		}, null, 2)}\n`);
+
+		const manager = new BackgroundTaskManager(buildPiStub() as never, { finishedTaskMaxAgeMs: 1 });
+
+		expect(manager.findTask("bg-stale")).toBeUndefined();
+		expect(existsSync(staleRoot)).toBe(false);
+		expect(manager.findTask("bg-running")).toBeDefined();
+		expect(existsSync(runningRoot)).toBe(true);
+	});
+
+	it("caps output.log size once a task finishes", () => {
+		const child = mockLongLivedChild();
+		spawnMock.mockReturnValue(child);
+		const manager = new BackgroundTaskManager(buildPiStub() as never, { logMaxBytes: 512 });
+		const task = manager.spawnTask({ command: "watch", cwd: "/tmp", notifyOnExit: false });
+		appendFileSync(task.logFile, "x".repeat(4096));
+
+		// The cap is enforced once, when the task finalizes — i.e. after the
+		// external writer (here the mock child) has exited, never while it is
+		// still appending. Driving the child to close finalizes the task.
+		child.forceExit(0);
+
+		const finished = readFileSync(task.logFile, "utf8");
+		expect(finished.length).toBeLessThanOrEqual(512);
+		expect(finished.startsWith("[sumocode-bg] log truncated")).toBe(true);
+	});
+
+	it("bounds a running task's log writer-safely: truncates to zero, never rewrites", async () => {
+		const child = mockLongLivedChild();
+		spawnMock.mockReturnValue(child);
+		vi.useFakeTimers();
+		try {
+			const manager = new BackgroundTaskManager(buildPiStub() as never, { logMaxBytes: 512 });
+			const task = manager.spawnTask({ command: "watch", cwd: "/tmp", notifyOnExit: false });
+			appendFileSync(task.logFile, "x".repeat(4096));
+
+			// The running guard is writer-safe: it truncates to zero (which a live
+			// O_APPEND writer can resume past) rather than rewriting the file with a
+			// tail, which would race the tee/redirect writer and corrupt the log.
+			await vi.advanceTimersByTimeAsync(5_500);
+
+			const running = readFileSync(task.logFile, "utf8");
+			expect(running.length).toBe(0);
+			expect(running).not.toContain("log truncated");
+			manager.shutdown();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("leaves a running task's log untouched while it is under the cap", async () => {
+		const child = mockLongLivedChild();
+		spawnMock.mockReturnValue(child);
+		vi.useFakeTimers();
+		try {
+			const manager = new BackgroundTaskManager(buildPiStub() as never, { logMaxBytes: 4096 });
+			const task = manager.spawnTask({ command: "watch", cwd: "/tmp", notifyOnExit: false });
+			appendFileSync(task.logFile, "y".repeat(1024));
+
+			await vi.advanceTimersByTimeAsync(15_000);
+
+			expect(readFileSync(task.logFile, "utf8").length).toBe(1024);
+			manager.shutdown();
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 });

@@ -1,4 +1,5 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { BackgroundTaskManager } from "./background-tasks/task-manager.js";
 import { installCommandPalette } from "./command-palette.js";
 import { registerApprovalCommand } from "./commands/approval.js";
 import { registerCursorCommand } from "./commands/cursor.js";
@@ -6,6 +7,7 @@ import { registerDiffCommand } from "./commands/diff.js";
 import { registerDivineQueryCommand } from "./commands/divine-query.js";
 import { registerExitCommand } from "./commands/exit.js";
 import { registerSlateCommand } from "./commands/slate.js";
+import { registerShipCommand } from "./commands/ship.js";
 import { registerPersonaCommand } from "./commands/persona.js";
 import { registerReviewCommand } from "./commands/review.js";
 import { registerSpinnerCommand } from "./commands/spinner.js";
@@ -13,6 +15,7 @@ import { registerSumoSyncCommand } from "./commands/sync.js";
 import { registerTabsCommand } from "./commands/tabs.js";
 import { registerThemeCommand } from "./commands/theme.js";
 import { registerThemeCheckCommand } from "./commands/theme-check.js";
+import { registerWorktreeCommand } from "./commands/worktree.js";
 import { registerMemoryCommand } from "./memory-editor.js";
 import { installSidebar } from "./sidebar.js";
 
@@ -119,6 +122,7 @@ export class InteractionRegistry {
 
 export interface InstallSumoInteractionsOptions {
 	readonly reporter?: InteractionDiagnosticReporter;
+	readonly backgroundTaskManager?: BackgroundTaskManager;
 }
 
 export function createInteractionRegistry(pi: ExtensionAPI, reporter?: InteractionDiagnosticReporter): InteractionRegistry {
@@ -136,12 +140,14 @@ export function installSumoInteractions(pi: ExtensionAPI, options: InstallSumoIn
 	registry.install("commands.exit", registerExitCommand);
 	registry.install("commands.slate", registerSlateCommand);
 	registry.install("commands.persona", registerPersonaCommand);
-	registry.install("commands.review", registerReviewCommand);
+	registry.install("commands.review", (targetPi) => registerReviewCommand(targetPi, { taskSpawner: options.backgroundTaskManager }));
+	registry.install("commands.ship", registerShipCommand);
 	registry.install("commands.spinner", registerSpinnerCommand);
 	registry.install("commands.sync", registerSumoSyncCommand);
 	registry.install("commands.tabs", registerTabsCommand);
 	registry.install("commands.theme", registerThemeCommand);
 	registry.install("commands.theme-check", registerThemeCheckCommand);
+	registry.install("commands.worktree", registerWorktreeCommand);
 	registry.install("commands.memory", registerMemoryCommand);
 	registry.flushDiagnostics();
 	return registry.getSnapshot();

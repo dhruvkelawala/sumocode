@@ -53,7 +53,7 @@ DONE and the security test in 005 is green.
 
 | # | Plan | Phase | Size | Depends on | Status | Issue |
 |---|---|---|---|---|---|---|
-| 001 | [RPC fidelity spike + go/no-go](001-rpc-fidelity-spike.md) | 0 | M | — | TODO | [#289](https://github.com/dhruvkelawala/sumocode/issues/289) |
+| 001 | [RPC fidelity spike + go/no-go](001-rpc-fidelity-spike.md) | 0 | M | — | DONE — GO with caveats in [verdict](001-VERDICT.md) | [#289](https://github.com/dhruvkelawala/sumocode/issues/289) |
 | 002 | [Host shell + transcript + chrome on RPC](002-host-shell-transcript-chrome.md) | 1 | M | 001 PASS | TODO | [#290](https://github.com/dhruvkelawala/sumocode/issues/290) |
 | 003 | [extension_ui responder + selectors + controls](003-extension-ui-responder-selectors.md) | 2 | M | 002 | TODO | [#291](https://github.com/dhruvkelawala/sumocode/issues/291) |
 | 004 | [Editor internalization](004-editor-internalization.md) | 3 | L | 003 | TODO | [#292](https://github.com/dhruvkelawala/sumocode/issues/292) |

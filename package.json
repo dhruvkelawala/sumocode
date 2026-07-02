@@ -64,6 +64,7 @@
     "vitest": "vitest",
     "visual": "node scripts/visual.mjs",
     "visual:review": "node scripts/visual-v2/index.mjs review",
+    "visual:compare": "node scripts/visual-v2/compare-captures.mjs",
     "visual:ci": "node scripts/visual-v2/index.mjs ci",
     "visual:promote": "node scripts/visual-v2/promote-golden.mjs",
     "test:visual:real-runtime": "node scripts/visual-real-runtime.mjs"

@@ -13,7 +13,7 @@ This document defines what the V2 Cathedral Visual Harness is allowed to assert.
 3. **Runtime goldens** (`docs/visual/parity/approved-runtime/**`) are approved implementation checkpoints, not design targets.
 4. **Review packs** (`docs/visual/out/parity/index.html`) are evidence for human review and remain uncommitted artifacts.
 
-If these disagree, update the Bible/manifest first, then regenerate review evidence, then promote a runtime golden only after explicit developer approval. RPC-default UI parity is not approved until required crop gates pass, the styled-cell diff and geometry audit have no unapproved drift, and a human reviewer has compared the review pack against the current original UX.
+If these disagree, update the Bible/manifest first, then regenerate review evidence, then promote a runtime golden only after explicit developer approval. RPC-default UI parity is not approved until required crop gates pass, the styled-cell diff and geometry audit have no unapproved drift, and a human reviewer has compared the review pack against the current original UX. During the RPC migration, the current `main` retained TUI is the canonical product baseline: candidate RPC captures must be compared against a freshly captured `main` review root before parity is claimed.
 
 ## 2. Capture engine and verification layers
 
@@ -55,6 +55,8 @@ Runtime scenarios invoke SumoCode through the user-facing entry contract:
 
 Runtime scenarios must set deterministic terminal env in the manifest (`PI_OFFLINE=1`, `SUMO_TUI=1`, `TERM=xterm-256color`, `COLORTERM=truecolor`, `FORCE_COLOR=3`). Fixture scenarios do not spawn Pi; they render deterministic `TranscriptViewModel` state through the same SumoTUI scene primitives and then enter the same ANSI replay/DOM/crop pipeline. Use fixtures for completed assistant/tool states that cannot be reached deterministically through offline runtime capture.
 
+Runtime-labelled scenarios must not use `SUMOCODE_VISUAL_RPC_FIXTURE` or any other completed-state injection. If a scenario needs a deterministic completed assistant/tool transcript, it belongs in the `fixture` lane with a name that makes the fixture source obvious. Runtime scenarios may still script real keyboard input through `runtime.inputs`.
+
 For RPC reviewer evidence, run the same scenario review command rather than a separate golden path:
 
 ```bash
@@ -63,6 +65,16 @@ pnpm visual:review -- --scenario active-landscape-runtime
 ```
 
 Those commands print the review pack and results paths and write PNG poster frames under `docs/visual/out/parity/<scenario>/runtime-full.png`. These outputs are ignored review artifacts, not Bible goldens. Optional video evidence may live under `/tmp/sumocode-rpc-demo`, but it does not replace the required crop, styled-cell, geometry, and human-review checks.
+
+For RPC migration acceptance, capture the same runtime scenarios on `main` and on the candidate branch, then compare the two review roots:
+
+```bash
+pnpm visual:compare -- --baseline-root /tmp/sumocode-main-visual/parity --candidate-root docs/visual/out/parity --lane runtime
+```
+
+The comparison first validates that both capture roots were produced from the same scenario contract (lane, dimensions, runtime command/env/inputs, fixture source, and crop definitions). It then writes `docs/visual/out/parity-main-rpc/` with per-scenario contract validation, styled-cell diffs, copied geometry audit summaries, PNG crop diffs, and `results.json`. The current duplicate RPC shell is expected to fail this comparison before the portable-shell plans land; Plan 024 is the final sign-off point where it must pass or list approved deviations.
+
+Final RPC migration evidence should use compatible capture roots that include `capture-metadata.json.scenarioContract`, even when the baseline runs `main` code. The compare helper accepts older runtime capture metadata only as a diagnostic bridge after checking command, args, dimensions, and runtime input count; synthetic active roots that skipped scripted runtime input should fail contract validation instead of being compared as product evidence.
 
 Runtime crash and error strings belong in `rejectIfOutputMatches`. Temporary RPC shell placeholders such as `SUMOCODE RPC`, `empty transcript`, and `sumocode · rpc host` belong in `rejectIfFinalScreenMatches` so startup transitions can still produce review evidence while settled placeholder screens fail parity.
 

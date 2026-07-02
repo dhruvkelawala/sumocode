@@ -80,7 +80,11 @@ async function runScenario(scenario) {
 			? await captureFixtureScenario(scenario)
 			: await captureRuntimeScenario(scenario);
 	writeFile(resolve(rawOut, "runtime-output.ansi"), capture.bytes);
-	writeJson(resolve(rawOut, "capture-metadata.json"), capture.metadata ?? {});
+	const captureMetadata = {
+		...(capture.metadata ?? {}),
+		scenarioContract: scenarioContractForMetadata(scenario),
+	};
+	writeJson(resolve(rawOut, "capture-metadata.json"), captureMetadata);
 
 	const snapshot = await replayAnsi(capture.bytes, scenario.dimensions);
 	writeJson(resolve(rawOut, "terminal-snapshot.json"), snapshotForJson(snapshot));
@@ -169,7 +173,7 @@ async function runScenario(scenario) {
 		result: scenarioResult(cropResults, finalScreenRejection),
 		dimensions: scenario.dimensions,
 		bibleTarget: scenario.bibleTarget,
-		capture: capture.metadata,
+		capture: captureMetadata,
 		finalScreenRejection,
 		render: runtimeRender.metrics,
 		geometryAudit: { passed: audit.passed, summary: audit.summary, mismatchCount: audit.mismatches.length },
@@ -180,6 +184,38 @@ async function runScenario(scenario) {
 		},
 		crops: cropResults,
 	};
+}
+
+function scenarioContractForMetadata(scenario) {
+	return {
+		id: scenario.id,
+		lane: scenario.lane,
+		dimensions: {
+			cols: scenario.dimensions.cols,
+			rows: scenario.dimensions.rows,
+		},
+		runtime: scenario.runtime ? {
+			command: scenario.runtime.command,
+			args: scenario.runtime.args ?? [],
+			env: sortedRecord(scenario.runtime.env ?? {}),
+			inputs: scenario.runtime.inputs ?? [],
+		} : null,
+		fixture: scenario.fixture ?? null,
+		crops: scenario.crops.map((crop) => ({
+			id: crop.id,
+			status: crop.status,
+			threshold: crop.threshold,
+			targetImage: crop.targetImage,
+			targetCropId: crop.targetCropId,
+			runtimeCropId: crop.runtimeCropId,
+			targetDimensions: crop.targetDimensions ?? null,
+			runtimeDimensions: crop.runtimeDimensions ?? null,
+		})),
+	};
+}
+
+function sortedRecord(record) {
+	return Object.fromEntries(Object.entries(record).sort(([left], [right]) => left.localeCompare(right)));
 }
 
 function cropStyledCellDiff(crop, runtimeGrid, rawOut) {

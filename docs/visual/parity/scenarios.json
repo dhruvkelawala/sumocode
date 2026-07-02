@@ -280,10 +280,20 @@
 					"SUMO_TUI": "1",
 					"TERM": "xterm-256color",
 					"COLORTERM": "truecolor",
-					"FORCE_COLOR": "3",
-					"SUMOCODE_VISUAL_RPC_FIXTURE": "completed-active",
-					"SUMOCODE_VISUAL_RPC_INPUT_PREVIEW": "review src/auth/session.ts and tighten the return type"
-				}
+					"FORCE_COLOR": "3"
+				},
+				"inputs": [
+					{
+						"afterMs": 250,
+						"type": "text",
+						"value": "review src/auth/session.ts and tighten the return type"
+					},
+					{
+						"afterMs": 250,
+						"type": "key",
+						"value": "\u001b[13u"
+					}
+				]
 			},
 			"rejectIfOutputMatches": [
 				"ERR_MODULE_NOT_FOUND",
@@ -396,9 +406,20 @@
 					"COLORTERM": "truecolor",
 					"FORCE_COLOR": "3",
 					"COLUMNS": "60",
-					"LINES": "100",
-					"SUMOCODE_VISUAL_RPC_FIXTURE": "completed-active"
-				}
+					"LINES": "100"
+				},
+				"inputs": [
+					{
+						"afterMs": 250,
+						"type": "text",
+						"value": "review src/auth/session.ts and tighten the return type"
+					},
+					{
+						"afterMs": 250,
+						"type": "key",
+						"value": "\u001b[13u"
+					}
+				]
 			},
 			"rejectIfOutputMatches": [
 				"ERR_MODULE_NOT_FOUND",

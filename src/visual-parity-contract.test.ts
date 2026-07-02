@@ -1,4 +1,6 @@
-import { existsSync, readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { SIDEBAR_MIN_TERMINAL_WIDTH, SIDEBAR_WIDTH } from "./sidebar.js";
@@ -36,6 +38,9 @@ type Scenario = {
 			value: string;
 		}>;
 	};
+	fixture?: {
+		id: string;
+	};
 	rejectIfOutputMatches?: string[];
 	rejectIfFinalScreenMatches?: string[];
 	crops: ScenarioCrop[];
@@ -66,6 +71,25 @@ function requiredCropIds(id: string): string[] {
 	return scenario(id).crops
 		.filter((crop) => (crop.status ?? scenario(id).status) === "required")
 		.map((crop) => crop.id);
+}
+
+function writeJson(path: string, value: unknown): void {
+	mkdirSync(join(path, ".."), { recursive: true });
+	writeFileSync(path, `${JSON.stringify(value, null, "\t")}\n`);
+}
+
+function writeOnePixelPng(path: string): void {
+	mkdirSync(join(path, ".."), { recursive: true });
+	writeFileSync(path, Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==", "base64"));
+}
+
+function blankSnapshot(cols: number, rows: number): unknown {
+	const cell = { char: " ", fg: "#f5e6c8", bg: "#1a1511", bold: false, dim: false };
+	return {
+		cols,
+		rows,
+		cells: Array.from({ length: rows }, () => Array.from({ length: cols }, () => cell)),
+	};
 }
 
 describe("V2 visual parity contract", () => {
@@ -112,6 +136,7 @@ describe("V2 visual parity contract", () => {
 	it("keeps active landscape runtime composition crops present", () => {
 		const active = scenario("active-landscape-runtime");
 
+		expect(active.runtime?.env).not.toHaveProperty("SUMOCODE_VISUAL_RPC_FIXTURE");
 		expect(active.runtime?.inputs?.at(-1)).toEqual({
 			afterMs: 250,
 			type: "key",
@@ -150,6 +175,11 @@ describe("V2 visual parity contract", () => {
 		const portrait = scenario("active-portrait-runtime");
 
 		expect(portrait.dimensions.cols).toBeLessThan(SIDEBAR_MIN_TERMINAL_WIDTH);
+		expect(portrait.runtime?.env).toMatchObject({
+			COLUMNS: "60",
+			LINES: "100",
+		});
+		expect(portrait.runtime?.env).not.toHaveProperty("SUMOCODE_VISUAL_RPC_FIXTURE");
 		expect(portrait.runtime?.inputs?.at(-1)).toEqual({
 			afterMs: 250,
 			type: "key",
@@ -191,6 +221,8 @@ describe("V2 visual parity contract", () => {
 		expect(scenario("fixture-completed-portrait")).toMatchObject({ status: "review" });
 		expect(scenario("fixture-command-palette-overlay")).toMatchObject({ status: "review" });
 		expect(scenario("fixture-tool-ledger-landscape")).toMatchObject({ status: "review" });
+		expect(scenario("fixture-completed-landscape").fixture?.id).toBe("completed-active");
+		expect(scenario("fixture-completed-portrait").fixture?.id).toBe("completed-active");
 		expect(scenario("fixture-completed-landscape").crops.map((crop) => crop.id)).toEqual([
 			"full",
 			"top-bar",
@@ -202,6 +234,93 @@ describe("V2 visual parity contract", () => {
 		]);
 		expect(scenario("fixture-command-palette-overlay").crops.map((crop) => crop.id)).toEqual(["full", "overlay-center"]);
 		expect(cropDefinition("overlay-center")).toEqual({ x: 40, y: 14, cols: 80, rows: 17 });
+	});
+
+	it("keeps runtime scenarios real and exposes the main-vs-branch compare harness", () => {
+		const runtimeScenarios = manifest.scenarios.filter((item) => item.lane === "runtime");
+		for (const item of runtimeScenarios) {
+			expect(item.runtime?.env).not.toHaveProperty("SUMOCODE_VISUAL_RPC_FIXTURE");
+			expect(item.runtime?.env).not.toHaveProperty("SUMOCODE_VISUAL_RPC_INPUT_PREVIEW");
+		}
+		expect(existsSync(join(process.cwd(), "scripts/visual-v2/compare-captures.mjs"))).toBe(true);
+	});
+
+	it("allows main-vs-branch comparison to consume legacy main runtime metadata", () => {
+		const tmp = mkdtempSync(join(tmpdir(), "sumocode-compare-contract-"));
+		try {
+			const baseline = join(tmp, "baseline");
+			const candidate = join(tmp, "candidate");
+			const out = join(tmp, "out");
+			for (const root of [baseline, candidate]) {
+				writeJson(join(root, "splash-runtime/raw/capture-metadata.json"), {
+					command: "./bin/sumocode.sh",
+					args: ["--offline", "--no-extensions", "--no-session"],
+					cols: 160,
+					rows: 45,
+					inputCount: 0,
+				});
+				writeJson(join(root, "splash-runtime/raw/terminal-snapshot.json"), blankSnapshot(160, 45));
+				writeOnePixelPng(join(root, "splash-runtime/crops/full-runtime.png"));
+			}
+
+			execFileSync("node", [
+				join(process.cwd(), "scripts/visual-v2/compare-captures.mjs"),
+				"--baseline-root",
+				baseline,
+				"--candidate-root",
+				candidate,
+				"--scenario",
+				"splash-runtime",
+				"--out",
+				out,
+			], { cwd: process.cwd(), stdio: "pipe" });
+
+			const validation = readFileSync(join(out, "splash-runtime/raw/contract-validation.txt"), "utf8");
+			expect(validation).toContain("legacy capture metadata accepted");
+		} finally {
+			rmSync(tmp, { recursive: true, force: true });
+		}
+	});
+
+	it("rejects legacy active captures that skipped scripted runtime input", () => {
+		const tmp = mkdtempSync(join(tmpdir(), "sumocode-compare-contract-"));
+		try {
+			const baseline = join(tmp, "baseline");
+			const candidate = join(tmp, "candidate");
+			const out = join(tmp, "out");
+			for (const root of [baseline, candidate]) {
+				writeJson(join(root, "active-landscape-runtime/raw/capture-metadata.json"), {
+					command: "./bin/sumocode.sh",
+					args: ["--offline", "--no-extensions", "--no-session"],
+					cols: 160,
+					rows: 45,
+					inputCount: 0,
+				});
+			}
+
+			let failed = false;
+			try {
+				execFileSync("node", [
+					join(process.cwd(), "scripts/visual-v2/compare-captures.mjs"),
+					"--baseline-root",
+					baseline,
+					"--candidate-root",
+					candidate,
+					"--scenario",
+					"active-landscape-runtime",
+					"--out",
+					out,
+				], { cwd: process.cwd(), stdio: "pipe" });
+			} catch {
+				failed = true;
+			}
+
+			const validation = readFileSync(join(out, "active-landscape-runtime/raw/contract-validation.txt"), "utf8");
+			expect(failed).toBe(true);
+			expect(validation).toContain("legacy metadata inputCount differs from current manifest: 0 !== 2");
+		} finally {
+			rmSync(tmp, { recursive: true, force: true });
+		}
 	});
 
 	it("keeps required crop gates explicit and preserves promoted goldens", () => {
@@ -227,6 +346,10 @@ describe("V2 visual parity contract", () => {
 			"active-portrait-runtime/input-frame",
 			"active-portrait-runtime/hint-row",
 			"active-portrait-runtime/footer",
+			"fixture-tool-ledger-landscape/chat-area",
+			"fixture-scroll-scribe-landscape/chat-area",
+			"fixture-skill-pill-landscape/chat-area",
+			"fixture-code-block-landscape/chat-area",
 		]);
 
 		const promotedGoldenCrops = requiredCrops.filter(({ scenarioId }) =>

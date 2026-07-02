@@ -1,6 +1,6 @@
 # Plans
 
-Executor-grade, self-contained implementation plans for SumoCode. Three independent tracks:
+Executor-grade, self-contained implementation plans for SumoCode. Four independent tracks:
 
 - **Track A — Pi RPC migration (001–006)**: migrate off the Pi `dist/main.js` InteractiveMode
   patch onto Pi's native `--mode rpc`, with SumoCode as the host. Gated; advisory.
@@ -9,6 +9,9 @@ Executor-grade, self-contained implementation plans for SumoCode. Three independ
   family). Independently shippable on the current architecture.
 - **Track C — No-seam RPC UX parity (014–017)**: remove the legacy retained-renderer fallback
   entirely, then make RPC UX parity with current SumoCode chrome a reviewer-owned visual gate.
+- **Track D — Portable TUI/backend reset (018–025)**: supersedes the Track C shell-parity
+  execution. Keep current main TUI as the canonical product surface, extract portable shell/input/
+  transcript/region boundaries, and make RPC a backend adapter.
 
 **Written against commit:** `ae03bc0` (SumoCode 0.4.0, Pi 0.79.1 pinned)
 
@@ -161,14 +164,73 @@ RPC, and finally re-verify Track B's 007–013 UI work under that stricter harne
         │
         ▼
 017 reverify Track B UI parity on RPC
+        │
+        ▼
+018-025 portable TUI/backend reset
 ```
 
 | # | Plan | Priority | Effort | Depends on | Status |
 |---|---|---|---|---|---|
 | 014 | [Remove legacy seam fallback](014-remove-legacy-seam-fallback.md) | P0 | M | 006 | DONE — executed in `65f70c0`, stale references retired in `7f71f85`; reviewer verified gates |
 | 015 | [RPC UX parity verification harness](015-rpc-ux-parity-verification-harness.md) | P0 | M | 014 | DONE — executed in `dcd99c1`; reviewer verified expected failing RPC parity gates |
-| 016 | [Cathedral shell UX parity](016-rpc-cathedral-shell-ux-parity.md) | P0 | L | 014, 015 | DONE — executed in this branch; reviewer verified RPC splash/landscape/portrait runtime parity gates |
-| 017 | [Reverify Track B UI parity on RPC](017-reverify-track-b-ui-parity-on-rpc.md) | P1 | M | 014, 015, 016 | DONE — required stable Track B fixture crops and RPC live-tool folding verified |
+| 016 | [Cathedral shell UX parity](016-rpc-cathedral-shell-ux-parity.md) | P0 | L | 014, 015 | REJECTED — restored shell appearance by duplicating composition in RPC runtime instead of making the existing retained shell portable |
+| 017 | [Reverify Track B UI parity on RPC](017-reverify-track-b-ui-parity-on-rpc.md) | P1 | M | 014, 015, 016 | REJECTED — depends on rejected 016 evidence; Track B must be reverified after Track D |
+
+---
+
+## Track D — Portable TUI/backend reset
+
+Track D is based on the audit in
+[`docs/research/rpc-portable-tui-audit.md`](../docs/research/rpc-portable-tui-audit.md).
+It accepts the user's direction: the current main branch retained TUI is good enough; the work is
+to make TUI and backend portable, not to keep reimplementing shell details in RPC.
+
+```
+018 canonical main-TUI baseline and duplicate-RPC rejection      025A + 025B1-B2 hardening,
+        │                                                         abort control, tier module
+        ▼                                                         (parallel, no shell dep)
+019 extract backend-neutral retained shell
+        │
+        ▼
+020 port RPC runtime onto portable shell
+        │
+        ├──────────────┬──────────────┐
+        ▼              ▼              ▼
+021 transcript      022 extension    023 input/keybinding/  ──▶ 025B3-B4 wire interrupt
+    controller          regions +        mouse/selection +       tiers into 023's router
+        │               modal fixes  │   slash honesty           (hard dep on 023)
+        └──────────────┴──────────────┘
+                       ▼
+024 real-runtime UI parity approval gate (incl. behavioral PTY evidence)
+```
+
+| # | Plan | Priority | Effort | Depends on | Status |
+|---|---|---|---|---|---|
+| 018 | [Canonical TUI baseline and RPC rejection](018-canonical-tui-baseline-and-rpc-rejection.md) | P0 | M | 014 | DONE — compatible main-code baseline captured under `/tmp/sumocode-main-visual-plan018-contract/parity`; clean duplicate-shell branch capture under `/tmp/sumocode-branch-visual-plan018-contract/parity`; `pnpm visual:compare -- --baseline-root /tmp/sumocode-main-visual-plan018-contract/parity --candidate-root /tmp/sumocode-branch-visual-plan018-contract/parity --lane runtime` correctly fails the duplicate RPC shell with reports in `docs/visual/out/parity-main-rpc/` |
+| 019 | [Extract portable owned shell](019-extract-portable-owned-shell.md) | P0 | L | 018 | TODO |
+| 020 | [Port RPC runtime to portable shell](020-port-rpc-runtime-to-portable-shell.md) | P0 | L | 018, 019 | TODO |
+| 021 | [Extract shared transcript controller](021-extract-shared-transcript-controller.md) | P1 | L | 019, 020 | TODO |
+| 022 | [Shared extension regions and chrome publication](022-shared-extension-regions-and-chrome-publication.md) | P1 | M | 019, 020 | TODO |
+| 023 | [Shared input routing, keybindings, and selection](023-shared-input-routing-keybindings-and-selection.md) | P0 | M/L | 019, 020, 022 | TODO |
+| 024 | [Real runtime UI parity approval gate](024-real-runtime-ui-parity-approval-gate.md) | P0 | M | 018-023, 025 | TODO |
+| 025 | [RPC backend hardening and interrupt semantics](025-rpc-backend-hardening-and-interrupt.md) | P0 | M | Part A + B1-B2: none (parallel with 018-019); Part B3-B4: 023 (hard) | TODO |
+
+### Archived single-plan draft
+
+The 2026-07-02 branch audit of `codex/rpc-migration-no-seam` (at `a3966a7`) found the RPC backend
+sound (fail-closed approvals, working transport) but the hand-rolled host shell in
+`src/sumo-tui/rpc/runtime.ts` broken across the board: no interrupt/abort (Ctrl-C hard-exits, even
+mid-modal), no mouse scroll (SGR bytes leak into the editor), modal clobbering that can wedge the
+child extension, one-row truncated approval prompts, unhandled-rejection process crashes, an
+orphaned child on transport errors, ~16 dead advertised slash commands with no `/quit`, and a full
+transcript remap per streaming token. Verdict: architecture rework, not point fixes — Pi RPC stays
+the backend; the host shell is rebuilt by composing the mature SumoTUI modules (FrameScheduler,
+KeyRouter, mouse parser, ModalLayer, ChatPager/ScrollBox, RegionRegistry) that the retired seam
+runtime already proved out. One plan carries all eleven audit findings as acceptance criteria.
+
+| # | Plan | Priority | Effort | Depends on | Status |
+|---|---|---|---|---|---|
+| draft | [Rebuild the RPC host shell on the SumoTUI main-brain runtime](draft-rpc-host-main-brain-rebuild.md) | P0 | L | 014-017 | REJECTED — superseded by the 018-025 split because it mixes baseline, shell, input, modal, transcript, and acceptance work into one execution plan. Its behavioral content was reconciled into Track D: hardening + interrupt → 025; modal fixes + Cathedral approval routing → 022 (Steps 3b/3c); pump perf requirements → 021; slash honesty → 023 (Step 4); behavioral PTY evidence → 024 (Step 1b). Keep the file as the audit-evidence source those plans cite. |
 
 ## Verification gates
 
@@ -195,8 +257,22 @@ promotion still requires Dhruv's explicit approval.
 - **Track B**: 012 requires 007 (uses the skill `content` field + `renderSkillRows`) and 009 (toggles
   the `summary` block kind). 013 has no plan dependency but is gated on its own Step 0 investigation.
 - **Track C**: 014 intentionally removes rollback plumbing before additional UI work. 015 must fail
-  the current placeholder RPC shell before 016 is accepted. 017 assumes 007–013 are already present
-  in the source stack and rechecks them under RPC-default runtime evidence.
+  the current placeholder RPC shell before 016 is accepted. 016/017 are now rejected by the
+  2026-07-02 portable TUI audit because they left a duplicated RPC shell and synthetic runtime
+  evidence.
+- **Track D**: 018 must run before further UI implementation so future executors have a main-vs-RPC
+  rejection harness. 019 and 020 put RPC on the shared shell; 021-023 close behavior gaps; 024 is
+  the approval evidence gate. 025 Part A (client hardening, crash-proofing) and B1-B2 (abort
+  control + pure tier module) have no shell dependency and can run in parallel with 018-019 — they
+  protect live sessions immediately. 025 Part B3-B4 (tier wiring + integration test) **hard-depends
+  on 023**: 023 exposes a pre-editor interception point in the shared router; 025 wires the tiers
+  there. Wiring interrupts into the legacy runtime handler and re-homing later is explicitly
+  disallowed (both plans say so). 023 does not depend on 025. 022 must fix the base `ModalManager` (Step 3b)
+  before routing extension dialogs into it, or concurrent `extension_ui_request`s keep wedging the
+  child. 019's dual-backend question is **decided (Dhruv, 2026-07-02): main-as-reference** — no
+  live in-process adapter on this branch; the Pi adapter stays compiling/contract-tested only, RPC
+  is the sole live consumer (014 removed the in-process host). 021's Pi-bridge delegation is scoped
+  down accordingly.
 - **Cross-track**: 009's live compaction insert and 013's live tool handling both live in
   `chat-viewport-controller.ts`'s event pump, which Track A plan 002 rewires. If 002 lands after
   them, re-point the live inserts at the RPC `onEvent` pump and re-verify dedup. Track C is the
@@ -217,3 +293,22 @@ TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED (with one-
 - **Keep `SUMO_LEGACY=1` as a one-release rollback** (Track C): rejected for the no-seam feature
   branch. Plan 014 removes the fallback completely while preserving supported direct Pi paths for
   non-interactive execution.
+- **"Visual parity gates are toothless — golden check excludes runtime crops"** (2026-07-02 branch
+  audit): rejected — `scripts/visual-v2/index.mjs:203-217` gates required crops against the Bible
+  target before golden promotion and exits 1 on failure; the unit test's golden-existence filter
+  intentionally covers only promoted scenarios (promotion needs Dhruv's approval per AGENTS.md).
+- **"Approval fails open under RPC"** (pre-migration landmine): verified closed — cancel, timeout,
+  malformed values, thrown errors, and missing UI all normalize to "no" and block
+  (`src/approval-modal.ts` `showRpcApprovalPrompt` + `installApprovalGate`). Track D may change
+  presentation or region mounting, but must not weaken the gate logic.
+- **Reuse `chat-viewport-controller` / `installChatViewportBridge` in the RPC host** (2026-07-02
+  audit): rejected as a direct import because it bridges into Pi InteractiveMode internals that do
+  not exist under RPC. Track D instead extracts shared transcript/input behavior from it and adapts
+  RPC through backend-neutral contracts.
+- **Point-fix plans for the 2026-07-02 audit findings**: superseded by decision — the active Track D
+  split handles the findings as boundary work across 018-025 instead of one-off UI patches.
+  Reconciled 2026-07-02: the behavioral findings that the structural split did not cover are now
+  explicit — backend hardening + interrupt semantics (025), modal queueing/legibility/sanitization
+  and Cathedral approval routing (022 Steps 3b/3c), transcript-pump performance requirements (021),
+  slash-command honesty (023 Step 4), and behavioral PTY acceptance evidence (024 Step 1b).
+  Evidence lives in [draft-rpc-host-main-brain-rebuild.md](draft-rpc-host-main-brain-rebuild.md).

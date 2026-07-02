@@ -29,6 +29,10 @@ export interface RpcHostInput {
 	resume?(): void;
 }
 
+export interface RpcHostInputHandler {
+	handleInput(data: string): boolean;
+}
+
 export interface RpcHostRuntimeOptions {
 	readonly output?: RpcHostTerminalOutput;
 	readonly input?: RpcHostInput;
@@ -37,7 +41,9 @@ export interface RpcHostRuntimeOptions {
 	readonly initialTranscript?: TranscriptViewModel;
 	readonly editor?: Component;
 	readonly modal?: Component & { getActiveKind?(): string | undefined };
+	readonly overlay?: Component & { getActiveKind?(): string | undefined };
 	readonly notifications?: Component;
+	readonly inputHandler?: RpcHostInputHandler;
 }
 
 export interface RpcHostRuntimeSnapshot {
@@ -154,6 +160,7 @@ function paintAnsiLines(target: CellBuffer, lines: readonly string[], top: numbe
 interface RpcHostRuntimeSurfaces {
 	readonly editor?: Component;
 	readonly modal?: Component;
+	readonly overlay?: Component;
 	readonly notifications?: Component;
 }
 
@@ -232,6 +239,11 @@ function renderRpcFrame(
 	if (surfaces.notifications) {
 		paintAnsiLines(buffer, surfaces.notifications.render(columns), TOP_CHROME_ROWS, columns);
 	}
+	if (surfaces.overlay) {
+		const overlayLines = surfaces.overlay.render(columns);
+		const overlayTop = Math.max(TOP_CHROME_ROWS, Math.floor((rows - overlayLines.length) / 2));
+		paintAnsiLines(buffer, overlayLines, overlayTop, columns);
+	}
 	if (surfaces.modal) {
 		const modalLines = surfaces.modal.render(columns);
 		const modalTop = Math.max(TOP_CHROME_ROWS, Math.floor((rows - modalLines.length) / 2));
@@ -246,7 +258,9 @@ export class RpcHostRuntime {
 	private readonly terminal: TerminalSessionOwner;
 	private readonly editor: Component | undefined;
 	private readonly modal: (Component & { getActiveKind?(): string | undefined }) | undefined;
+	private readonly overlay: (Component & { getActiveKind?(): string | undefined }) | undefined;
 	private readonly notifications: Component | undefined;
+	private readonly inputHandler: RpcHostInputHandler | undefined;
 	private state: RpcHostChromeState;
 	private transcript: TranscriptViewModel;
 	private transcriptRenderer: RpcTranscriptFrameRenderer | undefined;
@@ -267,6 +281,15 @@ export class RpcHostRuntime {
 			this.render();
 			return;
 		}
+		if (this.overlay?.getActiveKind?.()) {
+			this.overlay.handleInput?.(text);
+			this.render();
+			return;
+		}
+		if (this.inputHandler?.handleInput(text)) {
+			this.render();
+			return;
+		}
 		if (this.editor) {
 			this.editor.handleInput?.(text);
 			this.render();
@@ -283,7 +306,9 @@ export class RpcHostRuntime {
 		this.transcript = options.initialTranscript ?? EMPTY_TRANSCRIPT;
 		this.editor = options.editor;
 		this.modal = options.modal;
+		this.overlay = options.overlay;
 		this.notifications = options.notifications;
+		this.inputHandler = options.inputHandler;
 	}
 
 	public async start(): Promise<void> {
@@ -347,7 +372,7 @@ export class RpcHostRuntime {
 			terminalColumns(this.output),
 			terminalRows(this.output),
 			this.transcriptRenderer,
-			{ editor: this.editor, modal: this.modal, notifications: this.notifications },
+			{ editor: this.editor, modal: this.modal, overlay: this.overlay, notifications: this.notifications },
 		);
 		const patches = diffFrames(this.previousFrame, frame, { detectScroll: false });
 		this.terminal.writeFramePatches(patches, null);

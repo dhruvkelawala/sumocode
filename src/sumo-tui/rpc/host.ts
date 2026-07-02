@@ -5,6 +5,8 @@ import { SumoRpcClient } from "./client.js";
 import { RpcHostControls } from "./controls.js";
 import { RpcHostEditorController } from "./editor.js";
 import { createRpcExtensionUiResponder } from "./extension-ui-responder.js";
+import { RpcHostActions } from "./host-actions.js";
+import { RpcHostOverlayManager } from "./host-overlays.js";
 import { readGitBranch } from "./git.js";
 import { RpcHostRuntime } from "./runtime.js";
 import { responseData } from "./response.js";
@@ -72,13 +74,16 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 	let runtime: RpcHostRuntime | undefined;
 	const requestRender = (): void => runtime?.requestRender();
 	const modals = new ModalManager({ onChange: requestRender });
+	const overlays = new RpcHostOverlayManager(requestRender);
 	const notifications = new NotificationCenter({ onChange: requestRender });
+	let actions: RpcHostActions | undefined;
 	const editor = new RpcHostEditorController({
 		controls,
 		cwd,
 		onRenderRequest: requestRender,
 		onSubmit: async (message) => {
 			if (message.trim().length === 0) return;
+			if (await actions?.handleSubmittedText(message)) return;
 			const state = stateStore.getSnapshot();
 			const response = state.isStreaming
 				? await client.send({ type: "prompt", message, streamingBehavior: "followUp" })
@@ -93,6 +98,16 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		onRenderRequest: requestRender,
 	});
 	client.setUiRequestHandler((request) => uiResponder.handle(request));
+	actions = new RpcHostActions({
+		controls,
+		stateStore,
+		modals,
+		overlays,
+		notifications,
+		editorText: editor,
+		onStateChange: requestRender,
+		onRenderRequest: requestRender,
+	});
 	let statsTimer: NodeJS.Timeout | undefined;
 	let statsInFlight = false;
 
@@ -143,7 +158,9 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 			initialTranscript: transcript,
 			editor,
 			modal: modals,
+			overlay: overlays,
 			notifications,
+			inputHandler: actions,
 		});
 		await runtime.start();
 		await refreshStats();

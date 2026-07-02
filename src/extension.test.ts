@@ -40,6 +40,7 @@ function buildCtxStub() {
 		model: undefined,
 		ui: {
 			notify: vi.fn(),
+			select: vi.fn(() => Promise.resolve(undefined)),
 			custom: vi.fn(() => Promise.resolve()),
 			setFooter: vi.fn(),
 			setHeader: vi.fn(),
@@ -132,7 +133,7 @@ describe("rpc child profile", () => {
 		expect(isRpcChildProfile({ env: { SUMOCODE_RPC_CHILD: "0" } })).toBe(false);
 	});
 
-	it("keeps tools and commands but skips retained chrome and the custom approval gate", async () => {
+	it("keeps tools and commands, installs fail-closed approval, and skips retained chrome", async () => {
 		const previousRpc = process.env.SUMOCODE_RPC_CHILD;
 		const previousTask = process.env.SUMOCODE_NATIVE_TASK;
 		process.env.SUMOCODE_RPC_CHILD = "1";
@@ -149,10 +150,22 @@ describe("rpc child profile", () => {
 			expect(commandNames).toContain("sumo:ship");
 			expect(toolNames).toContain("task");
 			expect(toolNames).toContain("question");
-			expect(eventNames).not.toContain("tool_call");
+			expect(eventNames).toContain("tool_call");
 			expect(shortcutNames).not.toContain("ctrl+/");
 
-			const ctx = buildCtxStub();
+			const ctx = { ...buildCtxStub(), mode: "rpc" };
+			const toolCallResults = await Promise.all((handlers.get("tool_call") ?? []).map((handler) =>
+				handler({
+					toolName: "bash",
+					input: { command: "rm -rf node_modules/" },
+				}, ctx as never),
+			));
+			expect(toolCallResults).toContainEqual({
+				block: true,
+				reason: "user denied via cathedral approval modal",
+			});
+			expect(ctx.ui.select).toHaveBeenCalled();
+
 			for (const handler of handlers.get("session_start") ?? []) {
 				await handler({ type: "session_start" }, ctx as never);
 			}

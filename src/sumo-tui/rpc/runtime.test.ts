@@ -1,3 +1,4 @@
+import type { Component } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "vitest";
 import { TerminalSessionOwner } from "../runtime/terminal-controller.js";
 import { renderRpcHostFrameForTest, RpcHostRuntime } from "./runtime.js";
@@ -34,6 +35,44 @@ class FakeOutput {
 
 	public on(_event: "resize", _listener: () => void): void {}
 	public off(_event: "resize", _listener: () => void): void {}
+}
+
+class FakeInput {
+	public readonly isTTY = true;
+	public readonly rawModes: boolean[] = [];
+	private listener: ((data: string | Buffer) => void) | undefined;
+
+	public on(_event: "data", listener: (data: string | Buffer) => void): void {
+		this.listener = listener;
+	}
+
+	public off(_event: "data", listener: (data: string | Buffer) => void): void {
+		if (this.listener === listener) this.listener = undefined;
+	}
+
+	public setRawMode(enabled: boolean): void {
+		this.rawModes.push(enabled);
+	}
+
+	public resume(): void {}
+
+	public emit(data: string): void {
+		this.listener?.(data);
+	}
+}
+
+class FakeEditor implements Component {
+	public readonly inputs: string[] = [];
+
+	public invalidate(): void {}
+
+	public handleInput(data: string): void {
+		this.inputs.push(data);
+	}
+
+	public render(width: number): string[] {
+		return [`${" ".repeat(Math.max(0, width - 6))}editor`];
+	}
 }
 
 describe("RPC host retained runtime frame", () => {
@@ -99,5 +138,31 @@ describe("RPC host retained runtime frame", () => {
 		expect(terminalOutput).toContain("SUMO");
 		expect(terminalOutput).toContain("updated rpc transcript body");
 		expect(terminalOutput).not.toContain("1 message transcript");
+	});
+
+	it("keeps q as editor input when the retained editor is active and still cleans up on ctrl-c", async () => {
+		const output = new FakeOutput();
+		const input = new FakeInput();
+		const editor = new FakeEditor();
+		const terminal = new TerminalSessionOwner({ output });
+		const runtime = new RpcHostRuntime({
+			output,
+			input,
+			terminal,
+			editor,
+			initialState: state(),
+			initialTranscript: { messages: [] },
+		});
+
+		await runtime.start();
+		input.emit("q");
+
+		expect(editor.inputs).toEqual(["q"]);
+		expect(input.rawModes).toEqual([true]);
+
+		input.emit("\u0003");
+		await expect(runtime.waitForExit()).resolves.toBe(130);
+		expect(input.rawModes).toEqual([true, false]);
+		expect(terminal.getState()).toMatchObject({ restored: true });
 	});
 });

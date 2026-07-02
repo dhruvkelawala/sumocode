@@ -156,6 +156,7 @@ export function isRpcChildProfile(options: TaskModeOptions = {}): boolean {
 function installRpcChildProfile(pi: ExtensionAPI): void {
 	installMemoryExtraction(pi);
 	installFastMode(pi);
+	installApprovalGate(pi);
 	if (shouldInstallNativeTaskTool({ force: process.env.SUMOCODE_NATIVE_TASK })) {
 		taskTool({
 			name: "task",

@@ -12,6 +12,8 @@ describe("buildSpawnEnv", () => {
 				SUMO_TUI_DIAG_FILE: "/tmp/sumocode-manual.jsonl",
 				SUMO_TUI_MODULE: "file:///tmp/fake.js",
 				SUMO_TUI_HIDE_PI_NOISE: "1",
+				SUMO_RPC: "1",
+				SUMOCODE_RPC_CHILD: "1",
 				SUMOCODE_REDUCED_MOTION: "1",
 				SUMOCODE_DEBUG_BRANCH: "feature/x",
 				SUMOCODE_DEBUG_COMMIT: "abc123",
@@ -24,6 +26,8 @@ describe("buildSpawnEnv", () => {
 		expect(env.SUMO_TUI_DIAG_FILE).toBeUndefined();
 		expect(env.SUMO_TUI_MODULE).toBeUndefined();
 		expect(env.SUMO_TUI_HIDE_PI_NOISE).toBeUndefined();
+		expect(env.SUMO_RPC).toBeUndefined();
+		expect(env.SUMOCODE_RPC_CHILD).toBeUndefined();
 		expect(env.SUMOCODE_REDUCED_MOTION).toBeUndefined();
 		expect(env.SUMOCODE_DEBUG_BRANCH).toBeUndefined();
 		expect(env.SUMOCODE_DEBUG_COMMIT).toBeUndefined();

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import sumocode, {
 	findActiveSumoDevTree,
 	isInstalledPiAgentGitModule,
+	isRpcChildProfile,
 	isTaskMode,
 	shouldInstallNativeTaskTool,
 	shouldNoopDuplicateInstalledExtension,
@@ -121,6 +122,50 @@ describe("task mode", () => {
 		expect(isTaskMode({ env: {} })).toBe(false);
 		expect(isTaskMode({ env: { SUMOCODE_TASK_MODE: "0" } })).toBe(false);
 		expect(isTaskMode({ env: { SUMOCODE_TASK_MODE: "true" } })).toBe(false);
+	});
+});
+
+describe("rpc child profile", () => {
+	it("detects SUMOCODE_RPC_CHILD=1 as the rpc child profile", () => {
+		expect(isRpcChildProfile({ env: { SUMOCODE_RPC_CHILD: "1" } })).toBe(true);
+		expect(isRpcChildProfile({ env: {} })).toBe(false);
+		expect(isRpcChildProfile({ env: { SUMOCODE_RPC_CHILD: "0" } })).toBe(false);
+	});
+
+	it("keeps tools and commands but skips retained chrome and the custom approval gate", async () => {
+		const previousRpc = process.env.SUMOCODE_RPC_CHILD;
+		const previousTask = process.env.SUMOCODE_NATIVE_TASK;
+		process.env.SUMOCODE_RPC_CHILD = "1";
+		process.env.SUMOCODE_NATIVE_TASK = "1";
+		try {
+			const { pi, handlers } = buildPiStub();
+			sumocode(pi as never);
+
+			const commandNames = pi.registerCommand.mock.calls.map((call) => call[0]);
+			const toolNames = pi.registerTool.mock.calls.map((call) => (call[0] as { name: string }).name);
+			const eventNames = pi.on.mock.calls.map((call) => call[0]);
+			expect(commandNames).toContain("sumo:review");
+			expect(commandNames).toContain("sumo:ship");
+			expect(toolNames).toContain("task");
+			expect(toolNames).toContain("question");
+			expect(eventNames).not.toContain("tool_call");
+
+			const ctx = buildCtxStub();
+			for (const handler of handlers.get("session_start") ?? []) {
+				await handler({ type: "session_start" }, ctx as never);
+			}
+
+			expect(ctx.ui.setFooter).not.toHaveBeenCalled();
+			expect(ctx.ui.setHeader).not.toHaveBeenCalled();
+			expect(ctx.ui.setEditorComponent).not.toHaveBeenCalled();
+			expect(ctx.ui.setWorkingIndicator).not.toHaveBeenCalled();
+			expect(ctx.ui.setWidget).not.toHaveBeenCalled();
+		} finally {
+			if (previousRpc === undefined) delete process.env.SUMOCODE_RPC_CHILD;
+			else process.env.SUMOCODE_RPC_CHILD = previousRpc;
+			if (previousTask === undefined) delete process.env.SUMOCODE_NATIVE_TASK;
+			else process.env.SUMOCODE_NATIVE_TASK = previousTask;
+		}
 	});
 });
 

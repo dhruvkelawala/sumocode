@@ -148,6 +148,42 @@ export function isTaskMode(options: TaskModeOptions = {}): boolean {
 	return env.SUMOCODE_TASK_MODE === "1";
 }
 
+export function isRpcChildProfile(options: TaskModeOptions = {}): boolean {
+	const env = options.env ?? process.env;
+	return env.SUMOCODE_RPC_CHILD === "1";
+}
+
+function installRpcChildProfile(pi: ExtensionAPI): void {
+	installMemoryExtraction(pi);
+	installFastMode(pi);
+	if (shouldInstallNativeTaskTool({ force: process.env.SUMOCODE_NATIVE_TASK })) {
+		taskTool({
+			name: "task",
+			label: "Task",
+			description: [
+				"Run isolated pi subprocess tasks (single, chain, or parallel).",
+				"Optional model override (provider/modelId).",
+			].join(" "),
+			maxParallelTasks: 8,
+			maxConcurrency: 4,
+			collapsedItemCount: 10,
+			skillListLimit: 30,
+			systemPromptPatches: [
+				{
+					match: /\n\s*\n\s*in addition to the tools above, you may have access to other custom tools depending on the project\./i,
+					replace: "\n- task: never run this tool unless it's a skill run or I explictly ask you to",
+				},
+			],
+		})(pi);
+	}
+	installQuestionTool(pi);
+	installAnswerTool(pi);
+	const backgroundTaskManager = installBackgroundTasks(pi);
+	installTaskModeAutoExit(pi);
+	registerSumoReloadCommand(pi);
+	installSumoInteractions(pi, { backgroundTaskManager, includeUiSurfaces: false });
+}
+
 /**
  * SumoCode — cathedral-themed Pi extension entry point.
  *
@@ -180,6 +216,15 @@ export default function sumocode(pi: ExtensionAPI): void {
 	// tests and non-runtime module imports; runtime fallback stays Obsidian.
 	const configuredThemeName = loadSumoCodeConfig().config.themeName;
 	setActiveTheme(configuredThemeName && getTheme(configuredThemeName) ? configuredThemeName : "obsidian");
+
+	if (isRpcChildProfile()) {
+		installRpcChildProfile(pi);
+		logDiagnostic("extension_activate_end", {
+			profile: "rpc-child",
+			nativeTaskInstalled: shouldInstallNativeTaskTool({ force: process.env.SUMOCODE_NATIVE_TASK }),
+		});
+		return;
+	}
 
 	// Render diagnostics must install BEFORE any consumer so its `setFooter` /
 	// `setHeader` / `setEditorComponent` / `setWidget` wrappers are in place

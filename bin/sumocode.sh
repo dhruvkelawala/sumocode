@@ -175,6 +175,11 @@ ENVIRONMENT
       Defaults to 1. Set SUMO_TUI=0 to bypass the retained SumoTUI runtime and
       fall back to legacy Pi UI behavior.
 
+  SUMO_RPC
+      Defaults to unset. Set SUMO_RPC=1 to launch the experimental SumoCode RPC
+      host path. This is opt-in; the patched retained SumoTUI path remains the
+      default until the cutover plan flips it.
+
   SUMO_TUI_MODULE
       Optional override for the retained SumoInteractiveMode module URL. Normally
       set automatically by this launcher when the patched Pi binary is detected.
@@ -530,6 +535,11 @@ EOF
 	exit 70
 fi
 
+if is_truthy_env_flag "${SUMO_RPC:-}"; then
+	export SUMO_TUI=0
+	unset SUMO_TUI_MODULE
+fi
+
 if is_truthy_env_flag "${SUMO_TUI}"; then
 	if pi_has_sumo_tui_patch "${PI_BIN}"; then
 		if [[ -z "${SUMO_TUI_MODULE:-}" ]]; then
@@ -553,12 +563,13 @@ sumocode dry run
 PI_BIN=${PI_BIN}
 ROOT_DIR=${ROOT_DIR}
 SUMO_TUI=${SUMO_TUI:-}
+SUMO_RPC=${SUMO_RPC:-}
 SUMO_TUI_MODULE=${SUMO_TUI_MODULE:-}
 SUMO_TUI_DIAG_FILE=${SUMO_TUI_DIAG_FILE:-}
 SUMO_TUI_DEBUG=${SUMO_TUI_DEBUG:-}
 COMMAND=${COMMAND}
 ARGS=${SUMOCODE_ARGS[*]:-}
-exec ${PI_BIN} -e ${ROOT_DIR}/src/extension.ts ${SUMOCODE_ARGS[*]:-}
+exec $(if is_truthy_env_flag "${SUMO_RPC:-}"; then printf 'node %s' "${ROOT_DIR}/sumo-rpc-host.js"; else printf '%s -e %s/src/extension.ts' "${PI_BIN}" "${ROOT_DIR}"; fi) ${SUMOCODE_ARGS[*]:-}
 EOF
 	exit 0
 fi
@@ -566,6 +577,10 @@ fi
 # `/sumo:reload` exits the inner pi with this code so we re-launch in place.
 # Other exit codes propagate normally.
 SUMOCODE_RELOAD_EXIT_CODE=100
+
+if is_truthy_env_flag "${SUMO_RPC:-}"; then
+	exec env SUMOCODE_ROOT_DIR="${ROOT_DIR}" SUMOCODE_PROJECT_CWD="${PWD}" PI_BIN="${PI_BIN}" node "${ROOT_DIR}/sumo-rpc-host.js" "${SUMOCODE_ARGS[@]}"
+fi
 
 while :; do
 	code=0

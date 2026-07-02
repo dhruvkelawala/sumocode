@@ -15,6 +15,7 @@ export interface TerminalStateProbe {
 }
 
 export interface SpawnPiPtyOptions {
+	readonly command?: string;
 	readonly cwd?: string;
 	readonly cols?: number;
 	readonly rows?: number;
@@ -93,6 +94,8 @@ const SUMO_DEBUG_ENV_KEYS = [
 	"SUMO_TUI_DIAG_FILE",
 	"SUMO_TUI_MODULE",
 	"SUMO_TUI_HIDE_PI_NOISE",
+	"SUMO_RPC",
+	"SUMOCODE_RPC_CHILD",
 	"SUMOCODE_REDUCED_MOTION",
 	"SUMOCODE_DEBUG_BRANCH",
 	"SUMOCODE_DEBUG_COMMIT",
@@ -113,8 +116,9 @@ export function spawnPiPty(options: SpawnPiPtyOptions = {}): SpawnedPiPty {
 	ensureNodePtySpawnHelperExecutable();
 
 	const cwd = resolve(options.cwd ?? process.cwd());
+	const command = options.command ?? process.env.PI_BIN ?? "pi";
 	const args = applyDefaultProjectTrustOverride(options.args ?? ["--offline", "--no-extensions", "-e", "./src/extension.ts", "--no-session"]);
-	const child: IPty = spawn(process.env.PI_BIN ?? "pi", args, {
+	const child: IPty = spawn(command, args, {
 		name: "xterm-256color",
 		cols: options.cols ?? 100,
 		rows: options.rows ?? 30,
@@ -198,3 +202,15 @@ export function spawnPiPty(options: SpawnPiPtyOptions = {}): SpawnedPiPty {
 }
 
 export const PI_BOOT_SEQUENCE = ALTSCREEN_ENTER_SEQUENCE;
+
+export function spawnSumocodePty(options: SpawnPiPtyOptions = {}): SpawnedPiPty {
+	return spawnPiPty({
+		...options,
+		command: options.command ?? resolve(process.cwd(), "bin/sumocode.sh"),
+		args: options.args ?? ["--offline", "--no-extensions", "--no-session", "--approve"],
+		env: {
+			...(options.env ?? {}),
+			SUMO_RPC: "1",
+		},
+	});
+}

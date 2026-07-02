@@ -4,7 +4,7 @@
 **Size:** L · **Depends on:** 003 · **Blocks:** 006 (parallel with 004)
 **Issue:** [#293](https://github.com/dhruvkelawala/sumocode/issues/293)
 **Design doc:** [`docs/research/pi-rpc-migration.md`](../docs/research/pi-rpc-migration.md)
-**⚠️ SECURITY-CRITICAL — read the security note below before starting.**
+**SECURITY-CRITICAL — read the security note below before starting.**
 
 ## Why this exists
 
@@ -25,12 +25,13 @@ final typed value via an `extension_ui` round-trip** (and `{block:true}` for app
 
 ## SECURITY NOTE (do not skip)
 
-The approval-gate rewrite is the single highest-risk item in the whole migration. The RPC
-path MUST NOT be shippable — even behind a flag — until a regression test proves a dangerous
-command is blocked when the user answers "No" (or does not answer). The failure mode is
+The approval-gate rewrite is the single highest-risk item in the whole migration. It no longer
+blocks starting Phase 1, but it still blocks any default/shared cutover unless the product
+explicitly removes dangerous-command approval from the RPC surface. The failure mode is
 *fail-open*, which is worse than crashing. Treat "block on uncertainty" as the invariant:
 any ambiguous, missing, timed-out, or malformed response must resolve to **blocked**, never
-to proceed.
+to proceed. Until this plan lands, RPC paths that would require approval must be disabled,
+deferred, or reported unsupported rather than silently allowed.
 
 ## Background facts (verified — current `custom<>` sites)
 

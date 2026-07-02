@@ -29,6 +29,23 @@ Executor-grade, self-contained implementation plans for SumoCode. Two independen
 These plans are advisory. They do **not** authorize starting the migration — Phase 0 is a
 go/no-go gate; everything after it is contingent on that gate passing.
 
+### Post-spike execution notes
+
+Phase 0 returned **GO with caveats**. Those caveats affect sequencing:
+
+- Phase 1 may proceed, and has now been executed in
+  `codex/rpc-host-shell-002-exec` (`c643b75`, `6bdf876`). The approval-gate issue did
+  **not** block the host shell/transcript/chrome slice, because that slice keeps editor and
+  custom-overlay flows disabled in RPC.
+- Do not let approval fail open. Until Plan 005 lands, any approval-dependent RPC path must be
+  disabled, deferred, or explicitly reported unsupported; it must never silently allow a dangerous
+  command because `ctx.ui.custom()` returned `undefined`.
+- Treat performance as an observed metric, not a promised win. The spike showed JSONL parsing was
+  cheap in a deterministic stream, but real startup/streaming perf still needs measurement.
+- From Phase 1 onward, every Track A plan needs a repeatable runtime proof. Prefer extending the
+  existing `test/integration/spawn-pi-pty.ts` harness so `SUMO_RPC=1 bin/sumocode.sh ...` boots,
+  stays alive, and cleans up under node-pty.
+
 ```
 001 (Phase 0: spike + go/no-go)   ← MUST pass before any of 002–006
         │
@@ -54,7 +71,7 @@ DONE and the security test in 005 is green.
 | # | Plan | Phase | Size | Depends on | Status | Issue |
 |---|---|---|---|---|---|---|
 | 001 | [RPC fidelity spike + go/no-go](001-rpc-fidelity-spike.md) | 0 | M | — | DONE — GO with caveats in [verdict](001-VERDICT.md) | [#289](https://github.com/dhruvkelawala/sumocode/issues/289) |
-| 002 | [Host shell + transcript + chrome on RPC](002-host-shell-transcript-chrome.md) | 1 | M | 001 PASS | TODO | [#290](https://github.com/dhruvkelawala/sumocode/issues/290) |
+| 002 | [Host shell + transcript + chrome on RPC](002-host-shell-transcript-chrome.md) | 1 | M | 001 PASS | DONE — executed in `codex/rpc-host-shell-002-exec` (`c643b75`, `6bdf876`) | [#290](https://github.com/dhruvkelawala/sumocode/issues/290) |
 | 003 | [extension_ui responder + selectors + controls](003-extension-ui-responder-selectors.md) | 2 | M | 002 | TODO | [#291](https://github.com/dhruvkelawala/sumocode/issues/291) |
 | 004 | [Editor internalization](004-editor-internalization.md) | 3 | L | 003 | TODO | [#292](https://github.com/dhruvkelawala/sumocode/issues/292) |
 | 005 | [Overlays + approval-gate rewrite](005-overlays-approval-rewrite.md) | 4 | L | 003 | TODO | [#293](https://github.com/dhruvkelawala/sumocode/issues/293) |
@@ -113,6 +130,7 @@ STOP; they never run `pnpm visual:promote`.
 ## Dependency notes
 
 - **Track A**: 002 requires 001 PASS; 003 requires 002; 004 and 005 require 003; 006 requires 002–005.
+  The approval caveat is accepted for starting 002, but not for final cutover.
 - **Track B**: 012 requires 007 (uses the skill `content` field + `renderSkillRows`) and 009 (toggles
   the `summary` block kind). 013 has no plan dependency but is gated on its own Step 0 investigation.
 - **Cross-track**: 009's live compaction insert and 013's live tool handling both live in

@@ -7,6 +7,22 @@ Overall verdict: **GO with caveats**
 
 This spike did not touch production code. The harness lives under `scratch/rpc-spike/`, and the directory is ignored by `.gitignore`.
 
+## Follow-up Decisions
+
+- **Start the migration despite the approval caveat.** The approval-gate caveat no longer blocks
+  Phase 1 execution. It still blocks any default/shared cutover unless the gate is either
+  reworked to fail closed (Plan 005) or the product explicitly removes dangerous-command approval
+  from the RPC surface. No phase may silently turn a missing approval answer into "allow".
+- **Treat perf as a measured upside, not the reason to migrate.** The spike found no host-side
+  JSON parsing bottleneck in a deterministic long stream, but it did not prove real-provider
+  latency or startup will improve. Every implementation phase must keep the compile/build gate
+  and include a real SumoCode runtime proof; Phase 1 should establish the reusable node-pty RPC
+  smoke harness.
+- **Use live events for live fidelity.** `get_messages` is sufficient for cold load and final
+  transcript backfill, but it does not preserve partial task/tool progress. The RPC host must
+  drive live transcript state from `AgentEvent` streaming and use `get_messages` only for
+  hydration/resume.
+
 ## Claim Results
 
 | Claim | Result | Evidence |

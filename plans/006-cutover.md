@@ -8,10 +8,13 @@
 ## Why this exists
 
 Flip the RPC host from opt-in to default, then delete the patch and its machinery — but only
-after the full visual smoke matrix and the security test pass, and with a one-release
+after the full visual smoke matrix and the approval policy are settled, and with a one-release
 rollback ready. This is the irreversible-feeling step; treat it conservatively.
 
-**Do not start until 002–005 are all DONE and Plan 005's security regression test is green.**
+**Do not start until 002–005 are all DONE.** If dangerous-command approval remains part of the
+RPC product surface, Plan 005's security regression test must be green before this starts. If
+approval is intentionally removed/deferred for RPC instead, that product decision must be
+documented in this plan first and the RPC path must prove it does not silently fail open.
 
 ## Background facts (verified)
 

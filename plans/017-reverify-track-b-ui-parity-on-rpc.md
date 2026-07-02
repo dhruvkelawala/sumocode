@@ -217,14 +217,14 @@ crop was skipped or downgraded to review-only.
 
 ALL must hold:
 
-- [ ] Every 007-013 feature maps to at least one unit test and one visual
+- [x] Every 007-013 feature maps to at least one unit test and one visual
   fixture/runtime scenario.
-- [ ] Track B feature crops are required where stable.
-- [ ] `pnpm vitest run ...` focused Track B suite passes.
-- [ ] `pnpm visual:review -- --lane fixture` passes required Track B crops.
-- [ ] `pnpm visual:ci` exits 0 after Plan 016.
-- [ ] Review evidence path is reported.
-- [ ] No visual goldens are promoted without Dhruv approval.
+- [x] Track B feature crops are required where stable.
+- [x] `pnpm vitest run ...` focused Track B suite passes.
+- [x] `pnpm visual:review -- --lane fixture` passes required Track B crops.
+- [x] `pnpm visual:ci` exits 0 after Plan 016.
+- [x] Review evidence path is reported.
+- [x] No visual goldens are promoted without Dhruv approval.
 
 ## STOP conditions
 
@@ -241,3 +241,39 @@ This plan is the "do not regress the transcript while fixing the shell" pass.
 The reviewer should compare the fixture review pack, not only the active
 runtime screenshot. Small shell differences can hide transcript regressions if
 the crop is too broad.
+
+## Execution review
+
+**Status:** DONE on `codex/rpc-migration-no-seam`.
+
+**Advisor verdict:** APPROVE with one documented visual-evidence caveat. The
+accepted slice makes stable Track B fixture crops required for skill pills,
+code/edit/tool ledger, scroll/scribe, expand-hint, and live-tool surfaces. It
+also adds RPC transcript-pump coverage for non-task live tool execution folding
+so running/final tool updates merge into the existing SUMO message by
+`toolCallId` instead of creating duplicate system tool rows.
+
+**Feature map:**
+
+- 007 skill pill: `view-model.test.ts`, `chat-message.test.ts`, required `fixture-skill-pill-landscape` chat crop.
+- 008 edit diff / tool rendering: `tool-renderer.test.ts`, required `fixture-tool-ledger-landscape` chat crop.
+- 009 branch + compaction summaries: `view-model.test.ts`, `chat-viewport-controller.test.ts`, review-only `fixture-track-b-transcript-landscape`.
+- 010 extension/custom labels: `view-model.test.ts`, review-only `fixture-track-b-transcript-landscape`.
+- 011 Markdown rendering: `chat-message.test.ts`, `fixture-code-block-landscape`, review-only `fixture-track-b-transcript-landscape`.
+- 012 dynamic expand hints: `tool-renderer.test.ts`, `code-renderer.test.ts`, `chat-message.test.ts`, required fixture chat crops containing expand hints.
+- 013 live tool execution: `chat-viewport-controller.test.ts`, `transcript-pump.test.ts`, required `fixture-tool-ledger-landscape` and `fixture-scroll-scribe-landscape` chat crops.
+
+**Verification rerun by advisor:**
+
+- `pnpm vitest run src/sumo-tui/transcript/view-model.test.ts src/sumo-tui/transcript/tool-renderer.test.ts src/sumo-tui/transcript/code-renderer.test.ts src/sumo-tui/widgets/chat-message.test.ts src/sumo-tui/pi-compat/chat-viewport-controller.test.ts src/sumo-tui/rpc/transcript-pump.test.ts src/sumo-tui/rpc/runtime.test.ts` — passed, 7 files / 97 tests.
+- `pnpm exec tsc --noEmit && pnpm build` — passed.
+- `pnpm test:integration` — passed, 15 files / 33 tests.
+- `pnpm visual:review -- --lane fixture` — passed required fixture crops; review pack at `docs/visual/out/parity/index.html`.
+- `pnpm visual:ci` — passed 17 scenarios.
+- `git diff --check` — passed.
+
+**Review notes:** no visual goldens were promoted. The combined branch/
+compaction/custom-label/Markdown transcript scenario is intentionally
+review-only because the existing Visual Bible set does not yet include a
+matching canonical target for those exact Track B transcript surfaces; the
+stable feature targets that do exist are required gates.

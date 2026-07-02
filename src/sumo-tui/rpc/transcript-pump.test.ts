@@ -64,4 +64,93 @@ describe("RpcTranscriptPump", () => {
 			},
 		});
 	});
+
+	it("folds non-task live tool execution updates into one SUMO block by toolCallId", () => {
+		const pump = new RpcTranscriptPump();
+		pump.handleAgentEvent({
+			type: "message_start",
+			message: {
+				role: "assistant",
+				content: [
+					{ type: "text", text: "Reading." },
+					{ type: "toolCall", id: "read-1", name: "read", arguments: { path: "src/auth/session.ts" } },
+				],
+			},
+		});
+		pump.handleAgentEvent({
+			type: "message_end",
+			message: {
+				role: "assistant",
+				content: [
+					{ type: "text", text: "Reading." },
+					{ type: "toolCall", id: "read-1", name: "read", arguments: { path: "src/auth/session.ts" } },
+				],
+			},
+		});
+		pump.handleAgentEvent({
+			type: "tool_execution_start",
+			toolCallId: "read-1",
+			toolName: "read",
+			args: { path: "src/auth/session.ts" },
+		});
+
+		let transcript = pump.viewModel();
+		let toolBlocks = transcript.messages.flatMap((message) => message.blocks).filter((block) => block.type === "tool");
+		expect(transcript.messages).toHaveLength(1);
+		expect(toolBlocks).toHaveLength(1);
+		expect(toolBlocks[0]).toMatchObject({
+			type: "tool",
+			tool: { id: "read-1", name: "read", status: "running", input: { path: "src/auth/session.ts" }, output: undefined },
+		});
+
+		pump.handleAgentEvent({
+			type: "tool_execution_update",
+			toolCallId: "read-1",
+			toolName: "read",
+			args: { path: "src/auth/session.ts" },
+			partialResult: { content: [{ type: "text", text: "partial file contents" }] },
+		});
+		expect(pump.viewModel().messages[0]?.blocks[1]).toMatchObject({
+			type: "tool",
+			tool: { id: "read-1", status: "running", output: "partial file contents" },
+		});
+
+		pump.handleAgentEvent({
+			type: "tool_execution_end",
+			toolCallId: "read-1",
+			toolName: "read",
+			args: { path: "src/auth/session.ts" },
+			result: { content: [{ type: "text", text: "final file contents" }] },
+			isError: false,
+		});
+		pump.handleAgentEvent({
+			type: "message_start",
+			message: {
+				role: "toolResult",
+				toolCallId: "read-1",
+				toolName: "read",
+				content: [{ type: "text", text: "final file contents" }],
+				isError: false,
+			},
+		});
+
+		transcript = pump.viewModel();
+		toolBlocks = transcript.messages.flatMap((message) => message.blocks).filter((block) => block.type === "tool");
+		expect(transcript.messages).toHaveLength(1);
+		expect(transcript.messages[0]?.role).toBe("sumo");
+		expect(toolBlocks).toHaveLength(1);
+		expect(toolBlocks[0]).toEqual({
+			type: "tool",
+			tool: {
+				id: "read-1",
+				name: "read",
+				status: "success",
+				input: { path: "src/auth/session.ts" },
+				output: "final file contents",
+				details: undefined,
+				error: undefined,
+				expanded: true,
+			},
+		});
+	});
 });

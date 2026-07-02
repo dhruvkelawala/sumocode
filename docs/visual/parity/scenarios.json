@@ -764,7 +764,8 @@
 				{
 					"id": "chat-area",
 					"targetCrop": "chat-area",
-					"runtimeCrop": "chat-area"
+					"runtimeCrop": "chat-area",
+					"status": "required"
 				},
 				{
 					"id": "input-frame",
@@ -861,7 +862,8 @@
 				{
 					"id": "chat-area",
 					"targetCrop": "chat-area",
-					"runtimeCrop": "chat-area"
+					"runtimeCrop": "chat-area",
+					"status": "required"
 				}
 			]
 		},
@@ -886,7 +888,8 @@
 				{
 					"id": "chat-area",
 					"targetCrop": "chat-area",
-					"runtimeCrop": "chat-area"
+					"runtimeCrop": "chat-area",
+					"status": "required"
 				}
 			]
 		},
@@ -901,6 +904,32 @@
 			"bibleTarget": "scene-active-code-block.png",
 			"fixture": {
 				"id": "code-block"
+			},
+			"crops": [
+				{
+					"id": "full",
+					"targetCrop": "full",
+					"runtimeCrop": "full"
+				},
+				{
+					"id": "chat-area",
+					"targetCrop": "chat-area",
+					"runtimeCrop": "chat-area",
+					"status": "required"
+				}
+			]
+		},
+		{
+			"id": "fixture-track-b-transcript-landscape",
+			"lane": "fixture",
+			"status": "review",
+			"dimensions": {
+				"cols": 160,
+				"rows": 45
+			},
+			"bibleTarget": "scene-active.png",
+			"fixture": {
+				"id": "track-b-transcript"
 			},
 			"crops": [
 				{

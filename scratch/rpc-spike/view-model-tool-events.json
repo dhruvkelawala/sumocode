@@ -24,7 +24,8 @@
               "command": "printf 'rpc-tool-ok\\n'"
             },
             "name": "bash",
-            "status": "running"
+            "output": "rpc-tool-ok\n",
+            "status": "success"
           },
           "type": "tool"
         }
@@ -35,26 +36,11 @@
     {
       "blocks": [
         {
-          "tool": {
-            "id": "rpc-spike-bash-1",
-            "name": "bash",
-            "output": "rpc-tool-ok\n",
-            "status": "success"
-          },
-          "type": "tool"
-        }
-      ],
-      "id": "rpc-spike-bash-1",
-      "role": "system"
-    },
-    {
-      "blocks": [
-        {
           "text": "The requested command finished.",
           "type": "markdown"
         }
       ],
-      "id": "message-3",
+      "id": "message-2",
       "role": "sumo"
     }
   ]

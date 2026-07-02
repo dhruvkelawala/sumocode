@@ -168,7 +168,7 @@ RPC, and finally re-verify Track B's 007–013 UI work under that stricter harne
 | 014 | [Remove legacy seam fallback](014-remove-legacy-seam-fallback.md) | P0 | M | 006 | DONE — executed in `65f70c0`, stale references retired in `7f71f85`; reviewer verified gates |
 | 015 | [RPC UX parity verification harness](015-rpc-ux-parity-verification-harness.md) | P0 | M | 014 | DONE — executed in `dcd99c1`; reviewer verified expected failing RPC parity gates |
 | 016 | [Cathedral shell UX parity](016-rpc-cathedral-shell-ux-parity.md) | P0 | L | 014, 015 | DONE — executed in this branch; reviewer verified RPC splash/landscape/portrait runtime parity gates |
-| 017 | [Reverify Track B UI parity on RPC](017-reverify-track-b-ui-parity-on-rpc.md) | P1 | M | 014, 015, 016 | TODO |
+| 017 | [Reverify Track B UI parity on RPC](017-reverify-track-b-ui-parity-on-rpc.md) | P1 | M | 014, 015, 016 | DONE — required stable Track B fixture crops and RPC live-tool folding verified |
 
 ## Verification gates
 

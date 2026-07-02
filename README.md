@@ -87,18 +87,11 @@ Pi's built-in TUI is a vertical line-concatenation `Container`. It does not prov
 
 Reasoning is documented in [ADR 0001](./docs/adr/0001-sumo-tui-framework.md).
 
-### The seam
+### The runtime seam
 
-SumoTUI must initialise before Pi's `InteractiveMode` is constructed. Pi's public extension API does not expose that hook — it composes on top of the existing TUI rather than replacing it. SumoCode therefore carries a 36-line pnpm patch against `@earendil-works/pi-coding-agent`'s `dist/main.js` ([`patches/@earendil-works__pi-coding-agent@0.75.3.patch`](./patches/)):
+SumoCode's interactive runtime is the foreground RPC host. `bin/sumocode.sh` launches `sumo-rpc-host.js` for interactive TTY sessions, and the host starts Pi in `--mode rpc` with the SumoCode extension loaded. Pi keeps the agent loop, LLM, sessions, MCP, skills, and provider/runtime machinery; SumoCode owns terminal rendering, editor input, chrome, overlays, transcript display, and retained state in the host process.
 
-```js
-const useSumoTui = isTruthyEnvFlag(process.env.SUMO_TUI) || parsed.unknownFlags.has("sumo-tui");
-const interactiveMode = useSumoTui
-  ? await loadSumoInteractiveMode(runtime, interactiveOptions)
-  : new InteractiveMode(runtime, interactiveOptions);
-```
-
-`loadSumoInteractiveMode` dynamically imports `@dhruvkelawala/sumocode/sumo-interactive-mode` (or `$SUMO_TUI_MODULE` in dev). Without `SUMO_TUI=1` the patch is a no-op; plain Pi loads. Maintenance contract: [`docs/SUMO_TUI_PI_PATCH_STRATEGY.md`](./docs/SUMO_TUI_PI_PATCH_STRATEGY.md). The patch is removed when Pi exposes a public `interactiveMode` injection API.
+Non-interactive Pi behavior stays direct: `--print`, explicit `--mode`, non-TTY stdout, and the diagnostic `--no-sumo-tui` flag bypass the foreground host and execute Pi directly with `-e src/extension.ts`. The old private Pi constructor patch is retired; see [`docs/SUMO_TUI_PI_PATCH_STRATEGY.md`](./docs/SUMO_TUI_PI_PATCH_STRATEGY.md) for the historical note.
 
 ### Kernel contracts
 

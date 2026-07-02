@@ -106,17 +106,16 @@ Scope:
 - Move memory refresh and sidebar async probes through workers.
 - Cancel stale refreshes when a newer prompt/session supersedes them.
 
-### P0-D — Decide Pi patch strategy
+### P0-D — Retired Pi patch strategy
 
-**Goal:** make the private Pi patch seam explicit and maintainable, or remove it.
+**Goal:** record the private Pi patch decision. This item is historical: Plan 014 removed the private patch seam and made the RPC host the only interactive runtime.
 
 Decision doc: [`docs/SUMO_TUI_PI_PATCH_STRATEGY.md`](./SUMO_TUI_PI_PATCH_STRATEGY.md)
 
 Scope:
 
-- Audit `patches/@earendil-works__pi-coding-agent@*.patch` and `loadSumoInteractiveMode` usage.
-- Decide whether public Pi APIs can replace the patch.
-- If not, document the patch maintenance contract and Pi bump smoke matrix.
+- Keep the retired strategy note as historical context.
+- Route future Pi bump work through RPC contract verification and direct-Pi bypass checks.
 
 ### P0-F — Decide portrait sidebar policy
 

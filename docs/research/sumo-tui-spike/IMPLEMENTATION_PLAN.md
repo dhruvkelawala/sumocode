@@ -1,5 +1,7 @@
 # Sumo-Tui Implementation Plan
 
+> Historical spike note: this plan describes the original in-process retained-runtime fork. Plan 014 retired that private activation seam; current interactive SumoCode runs through the RPC host.
+
 **Decisions locked** (from grill questions):
 - Q1 = A with B prepared as fallback (PiEditorLeaf + cursor remap; native textarea fallback if drift > 1 frame per input)
 - Q2 = C (sumo-tui supports SumoCode's extensions only in v1; 3rd-party Pi extensions degrade gracefully with warning; full compat in Phase 7)
@@ -358,7 +360,7 @@ This is the highest-risk phase. We're modifying private Pi code.
 3. Document in `docs/research/interactive-mode-map.md`.
 
 #### Day 2 — Vendor + minimize fork
-1. Vendor only the parts we need into `src/sumo-tui/pi-compat/sumo-interactive-mode.ts`.
+1. Historical fork plan: vendor only the parts we need into `src/sumo-tui/pi-compat/sumo-interactive-mode.ts`.
 2. Replace pi-tui TUI construction with sumo-tui Runtime construction.
 3. Keep the rest (session bind, agent, extensions) unchanged.
 4. License compliance: pi-mono is MIT, copy LICENSE notice.
@@ -420,7 +422,7 @@ User runs full daily session — sends messages, runs slash commands, opens comm
 ### File structure
 ```
 src/sumo-tui/pi-compat/
-├── sumo-interactive-mode.ts (vendored fork ~500 lines)
+├── sumo-interactive-mode.ts (historical vendored fork ~500 lines; deleted after RPC-host cutover)
 ├── region-registry.ts
 ├── extension-ui-adapter.ts
 └── foreign-extension-warning.ts

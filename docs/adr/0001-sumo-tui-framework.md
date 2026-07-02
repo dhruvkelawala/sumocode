@@ -183,7 +183,8 @@ Total: ~38 working days across ~8–10 calendar weeks.
 ## Status notes
 
 - 2026-04-27 — Drafted, accepted by @dhruvkelawala. Phase 0 issues filed. Phase 1 sprint begins.
-- 2026-04-27 — Phase 4b landed the Pi `0.70.2` fork activation path. `SUMO_TUI=1` now switches Pi's interactive constructor to SumoCode's `SumoInteractiveMode`; local worktrees use `SUMO_TUI_MODULE=file://.../sumo-interactive-mode.js`, and pnpm applies the equivalent published-package patch because GitHub subdirectory installs omit Pi's untracked `dist/` output.
+- 2026-04-27 — Historical: Phase 4b landed the Pi `0.70.2` fork activation path. `SUMO_TUI=1` switched Pi's interactive constructor to SumoCode's `SumoInteractiveMode`; local worktrees used `SUMO_TUI_MODULE=file://.../sumo-interactive-mode.js`, and pnpm applied the equivalent published-package patch because GitHub subdirectory installs omit Pi's untracked `dist/` output.
 - 2026-05-05 — Pi dependency and constructor patch upgraded to `0.73.0`; the retained-runtime activation seam stayed identical apart from line offset drift.
 - 2026-05-08 — Pi packages migrated to the `@earendil-works/*` namespace; SumoCode tracks `@earendil-works/pi-coding-agent@0.74.0`. Patch surface re-applied identically (line offsets shifted from 545/590 to 539/584). The local `@mariozechner/jiti` fork was dropped in favour of upstream `jiti@^2.7.0` per Pi 0.74's peer dep list. Old patch file `patches/@mariozechner__pi-coding-agent@0.73.0.patch` deleted; new file `patches/@earendil-works__pi-coding-agent@0.74.0.patch` carries the same logical edits.
+- 2026-07-02 — Plan 014 retired the private Pi constructor activation seam. Interactive SumoCode now runs through the RPC host; the old retained-fork references above are historical status notes.
 - (revisit dates / re-evaluations to be appended below)

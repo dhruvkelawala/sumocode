@@ -12,6 +12,7 @@
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { activeThemeColors } from "../../themes/index.js";
 import { lineToAnsi, span, textLine, withPersistentStyle, type Span } from "../render/primitives.js";
+import { expandKey } from "./expand-key.js";
 
 const MAX_VISIBLE_LINES = 20;
 const GUTTER_WIDTH = 4; // "  1 " — 4 chars (right-aligned 3 + space)
@@ -189,7 +190,7 @@ function codeBodyRow(lineNumber: number, syntaxSpans: SyntaxSpan[], width: numbe
 }
 
 function collapsedRow(remaining: number, width: number): string {
-	const text = `… ${remaining} lines collapsed · ⌘O expand`;
+	const text = `… ${remaining} lines collapsed · ${expandKey()} expand`;
 	const innerWidth = Math.max(0, width - 4);
 	const pad = Math.max(0, innerWidth - GUTTER_WIDTH - visibleWidth(text));
 	const inner = withPersistentStyle(

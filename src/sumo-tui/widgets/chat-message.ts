@@ -1,4 +1,4 @@
-import { Image, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { Image, Markdown, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { DEFAULT_SUMOCODE_CONFIG } from "../../config/sumocode-config.js";
 import { activeThemeChrome, activeThemeColors } from "../../themes/index.js";
 import { fgHex, RESET } from "../cathedral/ansi.js";
@@ -7,6 +7,8 @@ import { MEASURE_MODE_EXACTLY, type MeasureMode, type Yoga, type YogaNode } from
 import type { CellBuffer, Rect } from "../render/buffer.js";
 import { lineToAnsi, span, textLine, type Span } from "../render/primitives.js";
 import { renderCathedralCodeBlock } from "../transcript/code-renderer.js";
+import { expandKey } from "../transcript/expand-key.js";
+import { cathedralMarkdownTheme } from "../transcript/markdown-theme.js";
 import { renderScrollBlock } from "../transcript/scroll-renderer.js";
 import { renderToolBlockRows } from "../transcript/tool-renderer.js";
 import type { ChatBlock } from "../transcript/view-model.js";
@@ -30,6 +32,7 @@ export interface ChatMessageOptions {
 }
 
 const MIN_BOX_WIDTH = 8;
+const DIM = "\x1b[2m";
 
 interface TextSegmenter {
 	segment(input: string): Iterable<{ segment: string }>;
@@ -219,20 +222,44 @@ function frameBottom(width: number): string {
 	]), { width });
 }
 
-function renderSkillRow(block: Extract<ChatBlock, { type: "skill" }>): string {
-	const hint = block.expanded ? "(expanded)" : "(⌘O to expand)";
-	return lineToAnsi(textLine([
+function renderSkillRows(block: Extract<ChatBlock, { type: "skill" }>, width: number): string[] {
+	const hint = block.expanded ? `(${expandKey()} to collapse)` : `(${expandKey()} to expand)`;
+	const header = lineToAnsi(textLine([
 		span("[skill]", { fg: activeThemeColors().accent }),
 		span(` ${block.name} `, { fg: activeThemeColors().foreground }),
 		span(hint, { fg: activeThemeColors().foregroundDim }),
 	]));
+	if (!block.expanded || !block.content) return [header];
+	const body = wrapPlainText(block.content, width).map((row) => lineToAnsi(textLine([
+		span(row, { fg: activeThemeColors().foregroundDim }),
+	]), { width }));
+	return [header, ...body];
+}
+
+function renderSummaryRows(block: Extract<ChatBlock, { type: "summary" }>, width: number): string[] {
+	const hint = block.expanded ? `(${expandKey()} to collapse)` : `(${expandKey()} to expand)`;
+	const header = lineToAnsi(textLine([
+		span(block.label, { fg: activeThemeColors().accent }),
+		span(" "),
+		span(hint, { fg: activeThemeColors().foregroundDim }),
+	]));
+	if (!block.expanded || !block.content) return [header];
+	const body = wrapPlainText(block.content, width).map((row) => lineToAnsi(textLine([
+		span(row, { fg: activeThemeColors().foregroundDim }),
+	]), { width }));
+	return [header, ...body];
 }
 
 function renderThinkingRows(block: Extract<ChatBlock, { type: "thinking" }>, width: number): string[] {
 	const prefix = block.hidden ? "◌ " : "✦ ";
-	return wrapPlainText(block.text, Math.max(1, width - visibleWidth(prefix))).map((row) => lineToAnsi(textLine([
+	const contentWidth = Math.max(1, width - visibleWidth(prefix));
+	const lines = new Markdown(block.text, 0, 0, cathedralMarkdownTheme(), {
+		italic: true,
+		color: (text) => `${DIM}${fgHex(activeThemeColors().states.thinking)}${text}${RESET}`,
+	}).render(contentWidth);
+	return (lines.length > 0 ? lines : [""]).map((row) => lineToAnsi(textLine([
 		span(prefix, { fg: activeThemeColors().states.thinking, dim: true }),
-		span(row, { fg: activeThemeColors().states.thinking, italic: true, dim: true }),
+		span(row),
 	]), { width }));
 }
 
@@ -258,14 +285,20 @@ function renderCodeRows(block: Extract<ChatBlock, { type: "code" }>, width: numb
 	return renderCathedralCodeBlock(block.lang, block.source, width);
 }
 
+function renderMarkdownRows(text: string, width: number): string[] {
+	const lines = new Markdown(text, 0, 0, cathedralMarkdownTheme()).render(width);
+	return lines.length > 0 ? lines : [""];
+}
+
 function renderBlockRows(blocks: readonly ChatBlock[], width: number): string[] {
 	const rows: string[] = [];
 	for (const block of blocks) {
 		if (rows.length > 0) rows.push("");
 		switch (block.type) {
-			case "markdown":
-				rows.push(...wrapPlainText(block.text, width));
+			case "markdown": {
+				rows.push(...renderMarkdownRows(block.text, width));
 				break;
+			}
 			case "thinking":
 				rows.push(...renderThinkingRows(block, width));
 				break;
@@ -279,7 +312,10 @@ function renderBlockRows(blocks: readonly ChatBlock[], width: number): string[] 
 				rows.push(...renderToolBlockRows(block.tool, width));
 				break;
 			case "skill":
-				rows.push(renderSkillRow(block));
+				rows.push(...renderSkillRows(block, width));
+				break;
+			case "summary":
+				rows.push(...renderSummaryRows(block, width));
 				break;
 			case "question":
 				rows.push(...renderQuestionRows(block));
@@ -292,7 +328,7 @@ function renderBlockRows(blocks: readonly ChatBlock[], width: number): string[] 
 	return rows.length === 0 ? [""] : rows;
 }
 
-/** One V2 framed chat message. Markdown block parsing lands in #89/#90. */
+/** One V2 framed chat message. */
 export class ChatMessage extends SumoNode {
 	public readonly timestamp: Date;
 	private measuring = false;
@@ -331,8 +367,14 @@ export class ChatMessage extends SumoNode {
 	}
 
 	public setToolExpansion(expanded: boolean): boolean {
-		if (!this.blocks?.some((block) => block.type === "tool")) return false;
-		this.blocks = this.blocks.map((block) => block.type === "tool" ? { ...block, tool: { ...block.tool, expanded } } : block);
+		const expandable = (block: ChatBlock): boolean => block.type === "tool" || block.type === "skill" || block.type === "summary";
+		if (!this.blocks?.some(expandable)) return false;
+		this.blocks = this.blocks.map((block) => {
+			if (block.type === "tool") return { ...block, tool: { ...block.tool, expanded } };
+			if (block.type === "skill") return { ...block, expanded };
+			if (block.type === "summary") return { ...block, expanded };
+			return block;
+		});
 		this.markDirty();
 		return true;
 	}

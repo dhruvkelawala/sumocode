@@ -1,8 +1,13 @@
 import { resolve } from "node:path";
-import type { RpcResponse, RpcSessionState } from "@earendil-works/pi-coding-agent";
+import { ModalManager } from "../widgets/modal.js";
+import { NotificationCenter } from "../widgets/notification.js";
 import { SumoRpcClient } from "./client.js";
+import { RpcHostControls } from "./controls.js";
+import { RpcHostEditorController } from "./editor.js";
+import { createRpcExtensionUiResponder } from "./extension-ui-responder.js";
 import { readGitBranch } from "./git.js";
 import { RpcHostRuntime } from "./runtime.js";
+import { responseData } from "./response.js";
 import { RpcHostStateStore } from "./state.js";
 import { RpcTranscriptPump } from "./transcript-pump.js";
 
@@ -16,14 +21,6 @@ export interface RpcHostMainOptions {
 
 function writeLine(stream: Pick<NodeJS.WriteStream, "write">, line: string): void {
 	stream.write(`${line}\n`);
-}
-
-function responseData(response: RpcResponse, command: RpcResponse["command"]): unknown {
-	if (response.command !== command || response.success !== true) {
-		const error = response.success === false ? response.error : `Unexpected response for ${command}`;
-		throw new Error(error);
-	}
-	return (response as { data?: unknown }).data;
 }
 
 function hostRoot(env: NodeJS.ProcessEnv): string {
@@ -71,7 +68,31 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 	});
 	const transcriptPump = new RpcTranscriptPump();
 	const stateStore = new RpcHostStateStore();
+	const controls = new RpcHostControls(client, stateStore);
 	let runtime: RpcHostRuntime | undefined;
+	const requestRender = (): void => runtime?.requestRender();
+	const modals = new ModalManager({ onChange: requestRender });
+	const notifications = new NotificationCenter({ onChange: requestRender });
+	const editor = new RpcHostEditorController({
+		controls,
+		cwd,
+		onRenderRequest: requestRender,
+		onSubmit: async (message) => {
+			if (message.trim().length === 0) return;
+			const state = stateStore.getSnapshot();
+			const response = state.isStreaming
+				? await client.send({ type: "prompt", message, streamingBehavior: "followUp" })
+				: await client.send({ type: "prompt", message });
+			responseData(response, "prompt");
+		},
+	});
+	const uiResponder = createRpcExtensionUiResponder({
+		modals,
+		notifications,
+		editorText: editor,
+		onRenderRequest: requestRender,
+	});
+	client.setUiRequestHandler((request) => uiResponder.handle(request));
 	let statsTimer: NodeJS.Timeout | undefined;
 	let statsInFlight = false;
 
@@ -109,14 +130,21 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 	try {
 		await client.start();
 		const branch = await readGitBranch(cwd);
-		const stateResponse = await client.send({ type: "get_state" });
-		const rpcState = responseData(stateResponse, "get_state") as RpcSessionState;
-		stateStore.hydrateFromRpcState(rpcState, branch);
+		await controls.refreshState(branch);
+		await editor.configureAutocomplete(controls);
 		const messagesResponse = await client.send({ type: "get_messages" });
-		const messages = (responseData(messagesResponse, "get_messages") as { messages: unknown[] }).messages;
+		const messages = responseData(messagesResponse, "get_messages").messages;
 		const transcript = transcriptPump.replaceFromMessages(messages);
 		const state = stateStore.getSnapshot();
-		runtime = new RpcHostRuntime({ output: stdout, input: stdin, initialState: state, initialTranscript: transcript });
+		runtime = new RpcHostRuntime({
+			output: stdout,
+			input: stdin,
+			initialState: state,
+			initialTranscript: transcript,
+			editor,
+			modal: modals,
+			notifications,
+		});
 		await runtime.start();
 		await refreshStats();
 		statsTimer = setInterval(() => { void refreshStats(); }, 5_000);

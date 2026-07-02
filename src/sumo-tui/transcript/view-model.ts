@@ -1,3 +1,5 @@
+import { parseSkillBlock } from "@earendil-works/pi-coding-agent";
+import { expandKey } from "./expand-key.js";
 import { renderCompactToolPill } from "./tool-renderer.js";
 
 export type ChatMessageRole = "user" | "sumo" | "system";
@@ -47,7 +49,8 @@ export type ChatBlock =
 	| { readonly type: "code"; readonly lang: string; readonly source: string; readonly collapsed?: boolean }
 	| { readonly type: "image"; readonly data: string; readonly mime: string; readonly filename?: string }
 	| { readonly type: "tool"; readonly tool: ToolCallViewModel }
-	| { readonly type: "skill"; readonly name: string; readonly expanded: boolean }
+	| { readonly type: "skill"; readonly name: string; readonly expanded: boolean; readonly content?: string }
+	| { readonly type: "summary"; readonly kind: "branch" | "compaction"; readonly label: string; readonly content: string; readonly expanded: boolean }
 	| { readonly type: "question"; readonly question: QuestionViewModel }
 	| { readonly type: "delegation"; readonly delegation: DelegationViewModel };
 
@@ -199,6 +202,15 @@ function skillBlockFromRecord(record: Record<string, unknown>): ChatBlock {
 		name: firstString(record.name, record.skill, record.skillName) ?? "unknown-skill",
 		expanded: asBoolean(record.expanded) ?? false,
 	};
+}
+
+function summaryBlockFromRecord(record: Record<string, unknown>, kind: "branch" | "compaction"): ChatBlock {
+	const content = firstString(record.summary, record.text, asString(record.content)) ?? "";
+	const tokens = typeof record.tokensBefore === "number" ? record.tokensBefore.toLocaleString() : undefined;
+	const label = kind === "compaction"
+		? (tokens ? `[compaction] Compacted from ${tokens} tokens` : "[compaction] Compacted")
+		: "[branch] Branch summary";
+	return { type: "summary", kind, label, content, expanded: false };
 }
 
 function imageBlockFromRecord(record: Record<string, unknown>): ChatBlock[] {
@@ -629,6 +641,8 @@ function blocksFromContent(content: unknown): ChatBlock[] {
 }
 
 function blocksFromMessage(record: Record<string, unknown>): ChatBlock[] {
+	if (record.role === "branchSummary") return [summaryBlockFromRecord(record, "branch")];
+	if (record.role === "compactionSummary") return [summaryBlockFromRecord(record, "compaction")];
 	if (record.role === "bashExecution") {
 		const status = record.cancelled === true ? "cancelled" : record.exitCode === 0 || record.exitCode === undefined ? "success" : "error";
 		return [toolBlockFromRecord({ ...record, type: "tool", name: "bash", status }, status)];
@@ -642,6 +656,20 @@ function blocksFromMessage(record: Record<string, unknown>): ChatBlock[] {
 		if (record.customType === "skill") return [skillBlockFromRecord(asRecord(record.details) ?? record)];
 		if (record.customType === "question") return [questionBlockFromRecord(asRecord(record.details) ?? record)];
 		if (record.customType === "delegation") return [delegationBlockFromRecord(asRecord(record.details) ?? record)];
+		// Unrecognized custom type: preserve provenance (mirrors Pi's CustomMessageComponent default).
+		const labeled: ChatBlock[] = [{ type: "markdown", text: `[${record.customType}]` }];
+		labeled.push(...blocksFromContent(record.content));
+		return labeled;
+	}
+
+	if (record.role === "user") {
+		const text = textFromContent(record.content);
+		const skill = parseSkillBlock(text);
+		if (skill) {
+			const blocks: ChatBlock[] = [{ type: "skill", name: skill.name, expanded: false, content: skill.content }];
+			if (skill.userMessage) blocks.push(...markdownAndCodeBlocksFromText(skill.userMessage));
+			return blocks;
+		}
 	}
 
 	const blocks = blocksFromContent(record.content);
@@ -718,7 +746,9 @@ export function chatMessageViewModelToPlainText(message: ChatMessageViewModel): 
 				case "tool":
 					return renderCompactToolPill(block.tool);
 				case "skill":
-					return `[skill] ${block.name}${block.expanded ? " (expanded)" : " (⌘O to expand)"}`;
+					return `[skill] ${block.name}${block.expanded ? " (expanded)" : ` (${expandKey()} to expand)`}`;
+				case "summary":
+					return block.label;
 				case "question":
 					return [`[question] ${block.question.prompt}`, ...block.question.choices.map((choice) => `- ${choice}`)].join("\n");
 				case "delegation":

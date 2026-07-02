@@ -144,11 +144,13 @@ describe("rpc child profile", () => {
 			const commandNames = pi.registerCommand.mock.calls.map((call) => call[0]);
 			const toolNames = pi.registerTool.mock.calls.map((call) => (call[0] as { name: string }).name);
 			const eventNames = pi.on.mock.calls.map((call) => call[0]);
+			const shortcutNames = pi.registerShortcut.mock.calls.map((call) => call[0]);
 			expect(commandNames).toContain("sumo:review");
 			expect(commandNames).toContain("sumo:ship");
 			expect(toolNames).toContain("task");
 			expect(toolNames).toContain("question");
 			expect(eventNames).not.toContain("tool_call");
+			expect(shortcutNames).not.toContain("ctrl+/");
 
 			const ctx = buildCtxStub();
 			for (const handler of handlers.get("session_start") ?? []) {

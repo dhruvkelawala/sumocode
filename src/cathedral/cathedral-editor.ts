@@ -216,7 +216,11 @@ function isPiBorderRow(row: string): boolean {
 	return false;
 }
 
-class CathedralEditor extends CustomEditor {
+export interface CathedralEditorOptions {
+	readonly isSplash?: () => boolean;
+}
+
+export class CathedralEditor extends CustomEditor {
 	private lastPrintableInputAt = 0;
 	private readonly imageDraftState = new EditorImageDraftState();
 	private submitHandler: ((text: string) => void) | undefined;
@@ -355,6 +359,15 @@ class CathedralEditor extends CustomEditor {
 	}
 }
 
+export function createCathedralEditor(
+	tui: TUI,
+	theme: EditorTheme,
+	keybindings: KeybindingsManager,
+	options: CathedralEditorOptions = {},
+): CathedralEditor {
+	return new CathedralEditor(tui, theme, keybindings, options.isSplash ?? (() => false));
+}
+
 function sessionHasMessages(ctx: ExtensionContext): boolean {
 	try {
 		return cachedSessionHasMessages(ctx);
@@ -377,7 +390,7 @@ export function installCathedralEditor(pi: ExtensionAPI): void {
 		// session_start calls can observe whether another extension already owns it.
 		(ctx.ui as { getEditorComponent?: () => unknown }).getEditorComponent?.();
 		ctx.ui.setEditorComponent((tui, theme, keybindings) => {
-			return new CathedralEditor(tui, theme, keybindings, () => !sessionHasMessages(ctx));
+			return createCathedralEditor(tui, theme, keybindings, { isSplash: () => !sessionHasMessages(ctx) });
 		});
 	});
 }

@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { activeThemeColors } from "../../themes/index.js";
 import { CATHEDRAL_TOKENS } from "../../tokens.js";
+import { fgHex, stripAnsi } from "../cathedral/ansi.js";
 import { SumoNode } from "../layout/node.js";
 import { DIRECTION_LTR, FLEX_DIRECTION_COLUMN, loadYoga } from "../layout/yoga.js";
 import { CellBuffer } from "../render/buffer.js";
@@ -8,6 +10,10 @@ import { SelectionController } from "../input/selection.js";
 import { ChatMessage } from "./chat-message.js";
 
 const FIXED_TIME = new Date("2026-04-30T11:42:00.000");
+
+function renderRows(message: ChatMessage, width: number): string[] {
+	return (message as unknown as { renderRows(width: number): string[] }).renderRows(width);
+}
 
 describe("ChatMessage", () => {
 	it("renders V2 rounded transparent message frames", async () => {
@@ -220,7 +226,60 @@ describe("ChatMessage", () => {
 		root.dispose();
 	});
 
-	it("renders skill blocks as styled inline pills", async () => {
+	it("renders bold and headings as styled, not literal markdown", async () => {
+		const yoga = await loadYoga();
+		const root = new SumoNode(yoga.Node.create());
+		const message = ChatMessage.create(yoga, "sumo", "", root, FIXED_TIME, [
+			{ type: "markdown", text: "# Title\n**bold** text" },
+		]);
+
+		const rows = renderRows(message, 48);
+		const raw = rows.join("\n");
+		const plain = stripAnsi(raw);
+
+		expect(plain).toContain("Title");
+		expect(plain).toContain("bold text");
+		expect(plain).not.toContain("# Title");
+		expect(plain).not.toContain("**bold**");
+		expect(raw).toContain("\x1b[1m");
+		root.dispose();
+	});
+
+	it("renders a bullet list with a styled bullet", async () => {
+		const yoga = await loadYoga();
+		const root = new SumoNode(yoga.Node.create());
+		const message = ChatMessage.create(yoga, "sumo", "", root, FIXED_TIME, [
+			{ type: "markdown", text: "- one\n- two" },
+		]);
+
+		const rows = renderRows(message, 40);
+		const raw = rows.join("\n");
+		const plain = stripAnsi(raw);
+
+		expect(plain).toContain("- one");
+		expect(plain).toContain("- two");
+		expect(raw).toContain(`${fgHex(activeThemeColors().accent)}- `);
+		root.dispose();
+	});
+
+	it("renders thinking markdown as styled thinking text", async () => {
+		const yoga = await loadYoga();
+		const root = new SumoNode(yoga.Node.create());
+		const message = ChatMessage.create(yoga, "sumo", "", root, FIXED_TIME, [
+			{ type: "thinking", text: "**hidden** thought", hidden: false },
+		]);
+
+		const rows = renderRows(message, 48);
+		const raw = rows.join("\n");
+		const plain = stripAnsi(raw);
+
+		expect(plain).toContain("✦ hidden thought");
+		expect(plain).not.toContain("**hidden**");
+		expect(raw).toContain("\x1b[3m");
+		root.dispose();
+	});
+
+	it("renders collapsed skill blocks as a single styled inline pill", async () => {
 		const yoga = await loadYoga();
 		const root = new SumoNode(yoga.Node.create());
 		root.flexDirection = FLEX_DIRECTION_COLUMN;
@@ -235,7 +294,51 @@ describe("ChatMessage", () => {
 		composite(root, buffer);
 
 		const row = buffer.toPlainRow(1);
-		expect(row).toContain("[skill] frontend-design (⌘O to expand)");
+		expect(row).toContain("[skill] frontend-design (ctrl+o to expand)");
+		expect(buffer.toPlainRow(2)).toMatch(/^╰─+╯$/);
+		root.dispose();
+	});
+
+	it("renders expanded skill blocks with wrapped body rows", async () => {
+		const yoga = await loadYoga();
+		const root = new SumoNode(yoga.Node.create());
+		root.flexDirection = FLEX_DIRECTION_COLUMN;
+		root.width = 48;
+		root.height = 8;
+		ChatMessage.create(yoga, "sumo", "", root, FIXED_TIME, [
+			{
+				type: "skill",
+				name: "deep-research",
+				expanded: true,
+				content: "full body line 1\nfull body line 2",
+			},
+		]);
+
+		root.yogaNode.calculateLayout(48, 8, DIRECTION_LTR);
+		const buffer = new CellBuffer(8, 48);
+		composite(root, buffer);
+
+		expect(buffer.toPlainRow(1)).toContain("[skill] deep-research (ctrl+o to collapse)");
+		expect(buffer.toPlainRow(2)).toBe(`│ full body line 1${" ".repeat(28)} │`);
+		expect(buffer.toPlainRow(3)).toBe(`│ full body line 2${" ".repeat(28)} │`);
+		root.dispose();
+	});
+
+	it("expands every collapsible block kind through the tool expansion bridge", async () => {
+		const yoga = await loadYoga();
+		const root = new SumoNode(yoga.Node.create());
+		const message = ChatMessage.create(yoga, "sumo", "", root, FIXED_TIME, [
+			{ type: "tool", tool: { name: "read", status: "success", input: { path: "src/auth/session.ts" }, expanded: false } },
+			{ type: "skill", name: "frontend-design", expanded: false, content: "design notes" },
+			{ type: "summary", kind: "branch", label: "[branch]", content: "summary notes", expanded: false },
+		]);
+
+		expect(message.setToolExpansion(true)).toBe(true);
+		expect(message.toSnapshot().blocks).toMatchObject([
+			{ type: "tool", tool: { expanded: true } },
+			{ type: "skill", expanded: true },
+			{ type: "summary", expanded: true },
+		]);
 		root.dispose();
 	});
 });

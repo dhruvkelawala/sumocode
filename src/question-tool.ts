@@ -222,6 +222,43 @@ async function showCathedralQuestion(
 	);
 }
 
+async function showRpcQuestion(
+	ctx: ExtensionContext,
+	title: string,
+	options: readonly DialogOption[],
+): Promise<QuestionResult | null> {
+	const realOptions = options.filter((option) => !option.isFreeText);
+
+	async function askForText(): Promise<QuestionResult | null> {
+		const answer = await ctx.ui.input(title, "type your answer");
+		const trimmed = answer?.trim() ?? "";
+		if (!trimmed) return null;
+		return { answer: trimmed, wasCustom: true };
+	}
+
+	if (realOptions.length === 0) return askForText();
+
+	const selected = await ctx.ui.select(title, [
+		...realOptions.map((option) => option.label),
+		FREE_TEXT_LABEL,
+	]);
+	if (selected === undefined) return null;
+
+	const selectedOption = realOptions.find((option) => option.label === selected);
+	if (selectedOption) return { answer: selectedOption.value, wasCustom: false };
+	if (selected === FREE_TEXT_LABEL) return askForText();
+	return null;
+}
+
+async function askQuestion(
+	ctx: ExtensionContext,
+	title: string,
+	options: readonly DialogOption[],
+): Promise<QuestionResult | null> {
+	if (ctx.mode === "rpc") return showRpcQuestion(ctx, title, options);
+	return showCathedralQuestion(ctx, title, options);
+}
+
 export function installQuestionTool(pi: ExtensionAPI): void {
 	pi.registerTool({
 		name: "question",
@@ -257,7 +294,7 @@ export function installQuestionTool(pi: ExtensionAPI): void {
 			if (questions.length === 1) {
 				const q = questions[0];
 				const title = q.context ? `${q.question}\n${q.context}` : q.question;
-				const result = await showCathedralQuestion(ctx, title, dialogOptionsFor(q.options));
+				const result = await askQuestion(ctx, title, dialogOptionsFor(q.options));
 
 				if (!result) {
 					return {
@@ -276,7 +313,7 @@ export function installQuestionTool(pi: ExtensionAPI): void {
 			const answers: { question: string; answer: string }[] = [];
 			for (const q of questions) {
 				const title = q.context ? `${q.question}\n${q.context}` : q.question;
-				const result = await showCathedralQuestion(ctx, title, dialogOptionsFor(q.options));
+				const result = await askQuestion(ctx, title, dialogOptionsFor(q.options));
 
 				if (!result) {
 					return {

@@ -578,9 +578,23 @@ export class ChatViewportController {
 			case "compaction_start":
 				setCompactionReason(record.reason as CompactionReason);
 				break;
-			case "compaction_end":
+			case "compaction_end": {
 				setCompactionReason(null);
+				const result = asRecord(record.result);
+				if (typeof result?.summary === "string") {
+					const viewModel = this.viewModelMapper.messageFromPiMessage({
+						role: "compactionSummary",
+						summary: result.summary,
+						tokensBefore: result.tokensBefore,
+					});
+					if (viewModel) {
+						this.markRenderDirty();
+						addViewModel(this.chat, viewModel);
+						this.runtime.requestRender();
+					}
+				}
 				break;
+			}
 		}
 	}
 
@@ -611,21 +625,36 @@ export class ChatViewportController {
 	}
 
 	private handleToolExecutionEvent(record: Record<string, unknown>): void {
-		if (record.toolName !== "task") return;
 		this.markRenderDirty();
-		if (record.type !== "tool_execution_end" && record.partialResult === undefined) return;
-		const result = record.type === "tool_execution_end" ? record.result : record.partialResult;
+		const isEnd = record.type === "tool_execution_end";
+		const toolName = typeof record.toolName === "string" ? record.toolName : "tool";
+		const result = isEnd ? record.result : record.partialResult;
 		const resultRecord = asRecord(result);
-		const viewModel = this.viewModelMapper.messageFromPiMessage({
-			role: "toolResult",
-			toolCallId: record.toolCallId,
-			toolName: "task",
-			name: "task",
-			arguments: record.args,
-			content: resultRecord?.content ?? [],
-			details: resultRecord?.details,
-			isError: record.isError,
-		});
+		const viewModel = this.viewModelMapper.messageFromPiMessage(
+			isEnd
+				? {
+					role: "toolResult",
+					toolCallId: record.toolCallId,
+					toolName,
+					name: toolName,
+					arguments: record.args,
+					content: resultRecord?.content ?? [],
+					details: resultRecord?.details,
+					isError: record.isError,
+				}
+				: {
+					role: "assistant",
+					content: [{
+						type: "tool",
+						name: toolName,
+						toolCallId: record.toolCallId,
+						status: "running",
+						arguments: record.args,
+						content: resultRecord?.content ?? [],
+						details: resultRecord?.details,
+					}],
+				},
+		);
 		if (!viewModel || !isFoldableOnlyViewModel(viewModel) || !this.liveAssistant) return;
 		this.foldBlocksIntoAssistant(viewModel.blocks);
 		this.runtime.requestRender();

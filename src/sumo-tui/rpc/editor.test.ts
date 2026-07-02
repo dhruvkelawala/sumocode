@@ -1,0 +1,251 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { getPackageDir, type KeybindingsManager } from "@earendil-works/pi-coding-agent";
+import type { EditorTheme, TUI } from "@earendil-works/pi-tui";
+import { describe, expect, it, vi } from "vitest";
+import { SumoTuiTestBackend, type TestBackendFrame } from "../testing/test-backend.js";
+import { PiEditorLeaf } from "../widgets/pi-editor-leaf.js";
+import type { RpcModelOption, RpcSlashCommand } from "./controls.js";
+import {
+	PI_0_79_1_BUILTIN_SLASH_COMMANDS,
+	RpcHostEditorController,
+	buildRpcAutocompleteCommands,
+	createRpcAutocompleteProvider,
+	createRpcHostEditorController,
+	type RpcEditorAutocompleteControls,
+} from "./editor.js";
+
+const ANSI_PATTERN = /\x1b\][^\x07]*(?:\x07|\x1b\\)|\x1b\[[0-?]*[ -/]*[@-~]|\x1b[()][A-Za-z0-9]/g;
+
+function fakeTui(requestRender = vi.fn()): TUI {
+	return { requestRender, terminal: { columns: 80, rows: 24, setTitle: vi.fn() } } as unknown as TUI;
+}
+
+function fakeEditorTheme(): EditorTheme {
+	const identity = (value: string): string => value;
+	return {
+		borderColor: identity,
+		selectList: {
+			selectedPrefix: identity,
+			selectedText: identity,
+			description: identity,
+			scrollInfo: identity,
+			noMatch: identity,
+		},
+	};
+}
+
+function fakeKeybindings(): KeybindingsManager {
+	return { matches: () => false } as unknown as KeybindingsManager;
+}
+
+function rpcCommand(name: string, description?: string, source: RpcSlashCommand["source"] = "extension"): RpcSlashCommand {
+	return {
+		name,
+		description,
+		source,
+		sourceInfo: {
+			path: `/tmp/${name}`,
+			source,
+			scope: "project",
+			origin: "top-level",
+		},
+	};
+}
+
+function controlsFor(options: {
+	commands?: readonly RpcSlashCommand[];
+	models?: readonly RpcModelOption[];
+} = {}): RpcEditorAutocompleteControls {
+	return {
+		getCommands: vi.fn(async () => [...(options.commands ?? [])]),
+		getAvailableModels: vi.fn(async () => [...(options.models ?? [])]),
+	};
+}
+
+async function mountController(controller: RpcHostEditorController, cols = 64, rows = 10): Promise<SumoTuiTestBackend> {
+	const backend = await SumoTuiTestBackend.create({ cols, rows });
+	const leaf = PiEditorLeaf.create(backend.yoga, controller.editor, backend.root);
+	leaf.width = "100%";
+	backend.setFocus(controller);
+	controller.focus();
+	return backend;
+}
+
+function plainFrame(frame: TestBackendFrame): string {
+	const dimensions = frame.current.getDimensions();
+	return Array.from({ length: dimensions.rows }, (_, row) => frame.current.toPlainRow(row)).join("\n");
+}
+
+function stripAnsi(value: string): string {
+	return value.replace(ANSI_PATTERN, "");
+}
+
+async function waitForRenderedText(controller: RpcHostEditorController, text: string, width = 64): Promise<string> {
+	let rendered = "";
+	for (let attempt = 0; attempt < 20; attempt += 1) {
+		rendered = controller.render(width).map(stripAnsi).join("\n");
+		if (rendered.includes(text)) return rendered;
+		await new Promise((resolve) => setTimeout(resolve, 0));
+	}
+	return rendered;
+}
+
+function readInstalledPiBuiltinSlashCommands(): readonly { name: string; description: string }[] {
+	const source = readFileSync(join(getPackageDir(), "dist/core/slash-commands.js"), "utf8");
+	const start = source.indexOf("export const BUILTIN_SLASH_COMMANDS = [");
+	const end = source.indexOf("];", start);
+	expect(start).toBeGreaterThanOrEqual(0);
+	expect(end).toBeGreaterThan(start);
+	const arraySource = source.slice(start, end);
+	const commands: { name: string; description: string }[] = [];
+	const commandPattern = /\{\s*name:\s*"([^"]+)",\s*description:\s*(?:"([^"]*)"|`([^`]*)`)\s*\}/g;
+	for (const match of arraySource.matchAll(commandPattern)) {
+		const description = (match[2] ?? match[3] ?? "").replaceAll("${APP_NAME}", "pi");
+		commands.push({ name: match[1]!, description });
+	}
+	return commands;
+}
+
+describe("RPC editor controller", () => {
+	it("typing printable characters updates text and moves the hardware cursor through PiEditorLeaf", async () => {
+		const controller = new RpcHostEditorController({
+			tui: fakeTui(),
+			theme: fakeEditorTheme(),
+			keybindings: fakeKeybindings(),
+		});
+		const backend = await mountController(controller);
+		try {
+			const initialCursor = backend.render().cursor;
+			backend.pilot.text("hi");
+			const cursor = backend.cursor;
+
+			expect(controller.getText()).toBe("hi");
+			expect(initialCursor).not.toBeNull();
+			expect(cursor).not.toBeNull();
+			expect(cursor!.row).toBe(initialCursor!.row);
+			expect(cursor!.col).toBe(initialCursor!.col + 2);
+		} finally {
+			backend.dispose();
+		}
+	});
+
+	it("inserts multiline input and renders both lines headlessly", async () => {
+		const controller = new RpcHostEditorController({
+			tui: fakeTui(),
+			theme: fakeEditorTheme(),
+			keybindings: fakeKeybindings(),
+		});
+		const backend = await mountController(controller);
+		try {
+			controller.handleInput("line one");
+			controller.handleInput("\x1b[13;2u");
+			controller.handleInput("line two");
+
+			const frame = backend.render();
+			const plain = plainFrame(frame);
+
+			expect(controller.getText()).toBe("line one\nline two");
+			expect(plain).toContain("line one");
+			expect(plain).toContain("line two");
+		} finally {
+			backend.dispose();
+		}
+	});
+
+	it("setText and paste update the same editor text controller", () => {
+		const requestRender = vi.fn();
+		const controller = new RpcHostEditorController({
+			tui: fakeTui(requestRender),
+			theme: fakeEditorTheme(),
+			keybindings: fakeKeybindings(),
+		});
+
+		controller.setText("alpha");
+		controller.paste("\nbeta");
+
+		expect(controller.getText()).toBe("alpha\nbeta");
+		expect(requestRender).toHaveBeenCalled();
+	});
+
+	it("submit invokes the injected callback and preserves Pi editor clear-on-submit behavior", () => {
+		const submitted: string[] = [];
+		const controller = new RpcHostEditorController({
+			tui: fakeTui(),
+			theme: fakeEditorTheme(),
+			keybindings: fakeKeybindings(),
+			onSubmit: (text) => {
+				submitted.push(text);
+			},
+		});
+
+		controller.setText("send this");
+		controller.handleInput("\r");
+
+		expect(submitted).toEqual(["send this"]);
+		expect(controller.getText()).toBe("");
+	});
+
+	it("renders command autocomplete suggestions from Pi built-ins and RPC commands", async () => {
+		const controls = controlsFor({ commands: [rpcCommand("deploy", "Deploy current workspace")] });
+		const controller = await createRpcHostEditorController({
+			controls,
+			tui: fakeTui(),
+			theme: fakeEditorTheme(),
+			keybindings: fakeKeybindings(),
+			cwd: process.cwd(),
+		});
+
+		controller.handleInput("/");
+		controller.handleInput("d");
+		controller.handleInput("e");
+
+		const rendered = await waitForRenderedText(controller, "deploy");
+
+		expect(rendered).toContain("deploy");
+		expect(controls.getCommands).toHaveBeenCalledTimes(1);
+	});
+
+	it("provides /model argument suggestions from RpcHostControls model options", async () => {
+		const controls = controlsFor({
+			models: [
+				{ provider: "openai", id: "gpt-5", label: "openai/gpt-5", active: true },
+				{ provider: "anthropic", id: "claude-sonnet-5", label: "anthropic/claude-sonnet-5", active: false },
+			],
+		});
+		const provider = createRpcAutocompleteProvider(buildRpcAutocompleteCommands([], { controls }), { cwd: process.cwd() });
+
+		const suggestions = await provider.getSuggestions(["/model "], 0, "/model ".length, {
+			signal: new AbortController().signal,
+		});
+
+		expect(suggestions?.prefix).toBe("");
+		expect(suggestions?.items.map((item) => item.label)).toEqual([
+			"openai/gpt-5",
+			"anthropic/claude-sonnet-5",
+		]);
+		expect(controls.getAvailableModels).toHaveBeenCalledTimes(1);
+	});
+});
+
+describe("RPC autocomplete command construction", () => {
+	it("keeps Pi built-ins ahead of conflicting RPC commands and includes non-conflicting RPC commands", async () => {
+		const commands = buildRpcAutocompleteCommands([
+			rpcCommand("compact", "Extension compact should not replace built-in"),
+			rpcCommand("/ship", "Ship it", "prompt"),
+		]);
+		const compactCommands = commands.filter((command) => command.name === "compact");
+		const provider = createRpcAutocompleteProvider(commands, { cwd: process.cwd() });
+		const suggestions = await provider.getSuggestions(["/sh"], 0, 3, {
+			signal: new AbortController().signal,
+		});
+
+		expect(compactCommands).toEqual([{ name: "compact", description: "Manually compact the session context" }]);
+		expect(commands.some((command) => command.name === "ship")).toBe(true);
+		expect(suggestions?.items.map((item) => item.value)).toContain("ship");
+	});
+
+	it("keeps the frozen Pi 0.79.1 built-in slash command list in sync with the installed Pi package", () => {
+		expect(PI_0_79_1_BUILTIN_SLASH_COMMANDS).toEqual(readInstalledPiBuiltinSlashCommands());
+	});
+});

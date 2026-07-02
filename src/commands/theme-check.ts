@@ -17,6 +17,10 @@ export function registerThemeCheckCommand(pi: ExtensionAPI): void {
 				process.stdout.write("theme-check requires a TTY\n");
 				return;
 			}
+			if (ctx.mode === "rpc") {
+				ctx.ui.notify("theme-check overlay unavailable in RPC mode", "warning");
+				return;
+			}
 
 			await ctx.ui.custom<void>(
 				(tui, theme: Theme, _keybindings, done): Component => {

@@ -91,6 +91,58 @@ describe("SumoRpcClient", () => {
 		}
 	});
 
+	it("writes custom extension UI responses without breaking command id correlation", async () => {
+		const script = `
+			const readline = require("node:readline");
+			const rl = readline.createInterface({ input: process.stdin });
+			let pendingState;
+			rl.on("line", (line) => {
+				const parsed = JSON.parse(line);
+				if (parsed.type === "get_state") {
+					pendingState = parsed;
+					process.stdout.write(JSON.stringify({ type: "extension_ui_request", id: "ui-custom", method: "select", title: "Pick", options: ["alpha", "beta"] }) + "\\n");
+					return;
+				}
+				if (parsed.type === "get_commands") {
+					process.stdout.write(JSON.stringify({ type: "response", id: parsed.id, command: "get_commands", success: true, data: { commands: [{ name: "doctor", source: "extension", sourceInfo: {} }] } }) + "\\n");
+					return;
+				}
+				if (parsed.type === "extension_ui_response") {
+					process.stdout.write(JSON.stringify({ type: "ui_response_seen", response: parsed }) + "\\n");
+					process.stdout.write(JSON.stringify({ type: "response", id: pendingState.id, command: "get_state", success: true, data: {
+						thinkingLevel: "high",
+						isStreaming: false,
+						isCompacting: false,
+						steeringMode: "all",
+						followUpMode: "all",
+						sessionId: "session-custom-ui",
+						autoCompactionEnabled: true,
+						messageCount: 0,
+						pendingMessageCount: 0
+					} }) + "\\n");
+				}
+			});
+		`;
+		const client = nodeRpcClient(script);
+		const events: unknown[] = [];
+		client.onEvent((event) => events.push(event));
+		client.setUiRequestHandler((request) => ({ type: "extension_ui_response", id: request.id, value: "beta" }));
+		try {
+			await client.start();
+			const statePromise = client.send({ type: "get_state", id: "state-request" });
+			const commandsPromise = client.send({ type: "get_commands", id: "commands-request" });
+			const [commands, state] = await Promise.all([commandsPromise, statePromise]);
+			expect(commands).toMatchObject({ id: "commands-request", command: "get_commands", success: true });
+			expect(state).toMatchObject({ id: "state-request", command: "get_state", success: true });
+			expect(events).toContainEqual({
+				type: "ui_response_seen",
+				response: { type: "extension_ui_response", id: "ui-custom", value: "beta" },
+			});
+		} finally {
+			await client.stop();
+		}
+	});
+
 	it("stops the child process on shutdown", async () => {
 		const client = nodeRpcClient("setInterval(() => undefined, 1000);");
 		await client.start();

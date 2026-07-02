@@ -27,6 +27,23 @@ describe("/sumo:query slash command", () => {
 		expect(notify).toHaveBeenCalledWith("Divine Query selected: Looks good — ship it", "info");
 	});
 
+	it("uses primitive select in RPC mode and reports the selected option", async () => {
+		let handler: ((args: string[], ctx: unknown) => Promise<void>) | undefined;
+		const registerCommand = vi.fn((_name: string, options: { handler: typeof handler }) => {
+			handler = options.handler;
+		});
+		const select = vi.fn(async () => "Needs visual polish");
+		const custom = vi.fn();
+		const notify = vi.fn();
+		registerDivineQueryCommand({ registerCommand } as never);
+
+		await handler?.([], { hasUI: true, mode: "rpc", ui: { select, custom, notify } });
+
+		expect(select).toHaveBeenCalledTimes(1);
+		expect(custom).not.toHaveBeenCalled();
+		expect(notify).toHaveBeenCalledWith("Divine Query selected: Needs visual polish", "info");
+	});
+
 	it("prints a message in non-interactive mode", async () => {
 		let handler: ((args: string[], ctx: unknown) => Promise<void>) | undefined;
 		const registerCommand = vi.fn((_name: string, options: { handler: typeof handler }) => {

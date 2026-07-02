@@ -24,6 +24,56 @@ describe("structured transcript view model", () => {
 		expect(message?.timestamp?.getTime()).toBe(1_700_000_000_000);
 	});
 
+	it("parses a skill envelope into a collapsed skill block", () => {
+		const message = chatMessageViewModelFromPiMessage({
+			id: "u-skill",
+			role: "user",
+			content: '<skill name="deep-research" location="/skills/dr/SKILL.md">\nfull body line 1\nfull body line 2\n</skill>\n\nplease research foxes',
+		});
+
+		expect(message?.blocks).toEqual([
+			{ type: "skill", name: "deep-research", expanded: false, content: "full body line 1\nfull body line 2" },
+			{ type: "markdown", text: "please research foxes" },
+		]);
+	});
+
+	it("leaves a non-envelope skill-looking user message as markdown", () => {
+		const message = chatMessageViewModelFromPiMessage({
+			id: "u-skill-literal",
+			role: "user",
+			content: 'pasted code with <skill name="demo"> inside it',
+		});
+
+		expect(message?.blocks).toEqual([{ type: "markdown", text: 'pasted code with <skill name="demo"> inside it' }]);
+	});
+
+	it("maps a compactionSummary message to a summary pill", () => {
+		const message = chatMessageViewModelFromPiMessage({
+			id: "c1",
+			role: "compactionSummary",
+			summary: "did stuff",
+			tokensBefore: 120000,
+		});
+
+		expect(message?.blocks).toEqual([
+			{ type: "summary", kind: "compaction", label: "[compaction] Compacted from 120,000 tokens", content: "did stuff", expanded: false },
+		]);
+		expect(message ? chatMessageViewModelToPlainText(message) : "").toBe("[compaction] Compacted from 120,000 tokens");
+	});
+
+	it("maps a branchSummary message to a summary pill", () => {
+		const message = chatMessageViewModelFromPiMessage({
+			id: "b1",
+			role: "branchSummary",
+			summary: "branch did stuff",
+		});
+
+		expect(message?.blocks).toEqual([
+			{ type: "summary", kind: "branch", label: "[branch] Branch summary", content: "branch did stuff", expanded: false },
+		]);
+		expect(message ? chatMessageViewModelToPlainText(message) : "").toBe("[branch] Branch summary");
+	});
+
 	it("splits fenced code blocks out of markdown", () => {
 		const blocks = markdownAndCodeBlocksFromText("before\n```ts\nconst x = 1;\n```\nafter");
 
@@ -301,6 +351,28 @@ describe("structured transcript view model", () => {
 		]);
 	});
 
+	it("labels an unrecognized custom message with its customType", () => {
+		const message = chatMessageViewModelFromPiMessage({ id: "x1", role: "custom", customType: "sumocode-theme-result", display: true, content: "switched to obsidian" });
+
+		expect(message?.blocks).toEqual([
+			{ type: "markdown", text: "[sumocode-theme-result]" },
+			{ type: "markdown", text: "switched to obsidian" },
+		]);
+	});
+
+	it("rescues a renderer-only custom message (empty content) via the label", () => {
+		const message = chatMessageViewModelFromPiMessage({ id: "x2", role: "custom", customType: "answers", display: true, content: "" });
+
+		expect(message?.blocks).toEqual([{ type: "markdown", text: "[answers]" }]);
+		expect(chatMessageViewModelToPlainText(message!)).toContain("[answers]");
+	});
+
+	it("still hides display:false custom messages", () => {
+		const message = chatMessageViewModelFromPiMessage({ id: "x3", role: "custom", customType: "answers", display: false, content: "secret" });
+
+		expect(message).toBeUndefined();
+	});
+
 	it("converts session contexts into transcript view models and skips hidden custom messages", () => {
 		const transcript = transcriptFromSessionContext({
 			messages: [
@@ -324,6 +396,6 @@ describe("structured transcript view model", () => {
 			],
 		});
 
-		expect(message ? chatMessageViewModelToPlainText(message) : "").toContain("[skill] tdd");
+		expect(message ? chatMessageViewModelToPlainText(message) : "").toContain("[skill] tdd (ctrl+o to expand)");
 	});
 });

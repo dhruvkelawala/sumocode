@@ -1,0 +1,259 @@
+import type { KeybindingsManager } from "@earendil-works/pi-coding-agent";
+import {
+	CombinedAutocompleteProvider,
+	fuzzyFilter,
+	type AutocompleteItem,
+	type AutocompleteProvider,
+	type Component,
+	type EditorTheme,
+	type SlashCommand,
+	type TUI,
+} from "@earendil-works/pi-tui";
+import { createCathedralEditor, type CathedralEditor } from "../../cathedral/cathedral-editor.js";
+import type { KeyEvent, KeyTarget } from "../input/key-router.js";
+import type { EditorTextController } from "../pi-compat/extension-ui-adapter.js";
+import type { RpcHostControls, RpcModelOption, RpcSlashCommand } from "./controls.js";
+
+interface BuiltinSlashCommand {
+	readonly name: string;
+	readonly description: string;
+}
+
+export type RpcEditorAutocompleteControls = Pick<RpcHostControls, "getCommands" | "getAvailableModels">;
+type RpcModelCompletionControls = Pick<RpcHostControls, "getAvailableModels">;
+
+export interface RpcEditorAutocompleteOptions {
+	readonly controls?: RpcModelCompletionControls;
+}
+
+export interface RpcAutocompleteProviderOptions {
+	readonly cwd?: string;
+	readonly fdPath?: string | null;
+}
+
+export interface RpcHostEditorControllerOptions extends RpcAutocompleteProviderOptions {
+	readonly controls?: RpcEditorAutocompleteControls;
+	readonly tui?: TUI;
+	readonly theme?: EditorTheme;
+	readonly keybindings?: KeybindingsManager;
+	readonly isSplash?: () => boolean;
+	readonly onSubmit?: (text: string) => void | Promise<void>;
+	readonly onRenderRequest?: () => void;
+	readonly autocompleteMaxVisible?: number;
+}
+
+const identity = (text: string): string => text;
+
+export const PI_0_79_1_BUILTIN_SLASH_COMMANDS: readonly BuiltinSlashCommand[] = Object.freeze([
+	{ name: "settings", description: "Open settings menu" },
+	{ name: "model", description: "Select model (opens selector UI)" },
+	{ name: "scoped-models", description: "Enable/disable models for Ctrl+P cycling" },
+	{ name: "export", description: "Export session (HTML default, or specify path: .html/.jsonl)" },
+	{ name: "import", description: "Import and resume a session from a JSONL file" },
+	{ name: "share", description: "Share session as a secret GitHub gist" },
+	{ name: "copy", description: "Copy last agent message to clipboard" },
+	{ name: "name", description: "Set session display name" },
+	{ name: "session", description: "Show session info and stats" },
+	{ name: "changelog", description: "Show changelog entries" },
+	{ name: "hotkeys", description: "Show all keyboard shortcuts" },
+	{ name: "fork", description: "Create a new fork from a previous user message" },
+	{ name: "clone", description: "Duplicate the current session at the current position" },
+	{ name: "tree", description: "Navigate session tree (switch branches)" },
+	{ name: "trust", description: "Save project trust decision for future sessions" },
+	{ name: "login", description: "Configure provider authentication" },
+	{ name: "logout", description: "Remove provider authentication" },
+	{ name: "new", description: "Start a new session" },
+	{ name: "compact", description: "Manually compact the session context" },
+	{ name: "resume", description: "Resume a different session" },
+	{ name: "reload", description: "Reload keybindings, extensions, skills, prompts, and themes" },
+	{ name: "quit", description: "Quit pi" },
+]);
+
+export function buildRpcAutocompleteCommands(
+	rpcCommands: readonly RpcSlashCommand[] = [],
+	options: RpcEditorAutocompleteOptions = {},
+): SlashCommand[] {
+	const seen = new Set<string>();
+	const commands: SlashCommand[] = PI_0_79_1_BUILTIN_SLASH_COMMANDS.map((command) => {
+		seen.add(command.name);
+		return { name: command.name, description: command.description };
+	});
+	const modelCommand = commands.find((command) => command.name === "model");
+	if (modelCommand && options.controls) {
+		modelCommand.getArgumentCompletions = (prefix) => getModelArgumentCompletions(options.controls!, prefix);
+	}
+
+	for (const command of rpcCommands) {
+		const name = normalizeCommandName(command.name);
+		if (!name || seen.has(name)) continue;
+		seen.add(name);
+		commands.push({
+			name,
+			description: command.description,
+		});
+	}
+
+	return commands;
+}
+
+export async function loadRpcAutocompleteCommands(controls: RpcEditorAutocompleteControls): Promise<SlashCommand[]> {
+	return buildRpcAutocompleteCommands(await controls.getCommands(), { controls });
+}
+
+export function createRpcAutocompleteProvider(
+	commands: readonly SlashCommand[],
+	options: RpcAutocompleteProviderOptions = {},
+): CombinedAutocompleteProvider {
+	return new CombinedAutocompleteProvider([...commands], options.cwd ?? process.cwd(), options.fdPath ?? null);
+}
+
+export async function createRpcAutocompleteProviderFromControls(
+	controls: RpcEditorAutocompleteControls,
+	options: RpcAutocompleteProviderOptions = {},
+): Promise<CombinedAutocompleteProvider> {
+	return createRpcAutocompleteProvider(await loadRpcAutocompleteCommands(controls), options);
+}
+
+export class RpcHostEditorController implements EditorTextController, KeyTarget {
+	public readonly editor: CathedralEditor;
+	private readonly tui: TUI;
+	private readonly controls: RpcEditorAutocompleteControls | undefined;
+	private readonly cwd: string | undefined;
+	private readonly fdPath: string | null | undefined;
+	private readonly onSubmit: (text: string) => void | Promise<void>;
+
+	public constructor(options: RpcHostEditorControllerOptions = {}) {
+		this.tui = options.tui ?? createFallbackTui(options.onRenderRequest);
+		this.controls = options.controls;
+		this.cwd = options.cwd;
+		this.fdPath = options.fdPath;
+		this.onSubmit = options.onSubmit ?? (() => undefined);
+		this.editor = createCathedralEditor(
+			this.tui,
+			options.theme ?? createFallbackEditorTheme(),
+			options.keybindings ?? createNoopKeybindings(),
+			{ isSplash: options.isSplash ?? (() => false) },
+		);
+		this.editor.focused = true;
+		this.editor.onChange = () => this.tui.requestRender();
+		this.editor.onSubmit = (text) => {
+			void Promise.resolve(this.onSubmit(text));
+		};
+		if (options.autocompleteMaxVisible !== undefined) this.editor.setAutocompleteMaxVisible(options.autocompleteMaxVisible);
+	}
+
+	public async configureAutocomplete(controls: RpcEditorAutocompleteControls | undefined = this.controls): Promise<void> {
+		if (!controls) return;
+		this.setAutocompleteProvider(await createRpcAutocompleteProviderFromControls(controls, {
+			cwd: this.cwd,
+			fdPath: this.fdPath,
+		}));
+	}
+
+	public setAutocompleteProvider(provider: AutocompleteProvider): void {
+		this.editor.setAutocompleteProvider(provider);
+	}
+
+	public focus(): Component {
+		this.editor.focused = true;
+		return this.editor;
+	}
+
+	public blur(): void {
+		this.editor.focused = false;
+	}
+
+	public invalidate(): void {
+		this.editor.invalidate();
+	}
+
+	public handleKey(event: KeyEvent): boolean {
+		this.handleInput(keyEventToEditorInput(event));
+		return true;
+	}
+
+	public handleInput(data: string): void {
+		this.editor.handleInput(data);
+	}
+
+	public render(width: number): string[] {
+		return this.editor.render(width);
+	}
+
+	public paste(text: string): void {
+		this.editor.insertTextAtCursor(text);
+		this.tui.requestRender();
+	}
+
+	public setText(text: string): void {
+		this.editor.setText(text);
+		this.tui.requestRender();
+	}
+
+	public getText(): string {
+		return this.editor.getText();
+	}
+}
+
+export async function createRpcHostEditorController(
+	options: RpcHostEditorControllerOptions = {},
+): Promise<RpcHostEditorController> {
+	const controller = new RpcHostEditorController(options);
+	await controller.configureAutocomplete(options.controls);
+	return controller;
+}
+
+function normalizeCommandName(name: string): string {
+	return name.trim().replace(/^\/+/, "");
+}
+
+function keyEventToEditorInput(event: KeyEvent): string {
+	if (event.sequence !== undefined) return event.sequence;
+	if (event.key === "enter" || event.key === "Enter") return "\r";
+	return event.key;
+}
+
+async function getModelArgumentCompletions(
+	controls: RpcModelCompletionControls,
+	prefix: string,
+): Promise<AutocompleteItem[] | null> {
+	const models = await controls.getAvailableModels();
+	if (models.length === 0) return null;
+	const items = models.map(modelToAutocompleteItem);
+	const filtered = fuzzyFilter(items, prefix, (item) => `${item.value} ${item.description ?? ""}`);
+	return filtered.length > 0 ? filtered : null;
+}
+
+function modelToAutocompleteItem(model: RpcModelOption): AutocompleteItem {
+	return {
+		value: model.label,
+		label: model.label,
+		description: model.active ? "active" : undefined,
+	};
+}
+
+function createFallbackTui(onRenderRequest: (() => void) | undefined): TUI {
+	return {
+		requestRender: () => onRenderRequest?.(),
+		terminal: { columns: 80, rows: 24, setTitle: () => undefined },
+	} as unknown as TUI;
+}
+
+function createFallbackEditorTheme(): EditorTheme {
+	return {
+		borderColor: identity,
+		selectList: {
+			selectedPrefix: identity,
+			selectedText: identity,
+			description: identity,
+			scrollInfo: identity,
+			noMatch: identity,
+		},
+	};
+}
+
+function createNoopKeybindings(): KeybindingsManager {
+	return {
+		matches: () => false,
+	} as unknown as KeybindingsManager;
+}

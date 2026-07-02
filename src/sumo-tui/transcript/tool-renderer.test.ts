@@ -7,7 +7,7 @@ describe("tool renderer", () => {
 	it("renders compact Cathedral tool pills", () => {
 		const line = renderCompactToolPill({ name: "read", status: "success", input: { path: "src/auth/session.ts" } });
 
-		expect(stripAnsi(line)).toBe("✓ [read]  src/auth/session.ts  · ⌘O expand");
+		expect(stripAnsi(line)).toBe("✓ [read]  src/auth/session.ts  · ctrl+o expand");
 		expect(line).toContain("\u001b[38;2;127;176;105m✓");
 		expect(line).toContain("\u001b[38;2;217;119;6m[read]");
 	});
@@ -31,12 +31,12 @@ describe("tool renderer", () => {
 
 	it("covers compact read/edit/write/bash status variants", () => {
 		const cases = [
-			[{ name: "read", status: "success", input: { path: "src/auth/session.ts" }, details: { lineCount: 184 } }, "✓ [read]  src/auth/session.ts  · 184 lines  · ⌘O expand"],
-			[{ name: "edit", status: "success", input: { path: "src/auth/session.ts" }, output: "+14 -6" }, "✓ [edit]  src/auth/session.ts  · +14 -6  · ⌘O diff"],
-			[{ name: "write", status: "success", input: { path: "src/auth/new.ts" }, details: { lineCount: 47 } }, "✓ [write]  src/auth/new.ts  · 47 lines  · ⌘O expand"],
-			[{ name: "bash", status: "success", input: { command: "pnpm test" }, details: { summary: "22 tests, 1.2s" } }, "✓ [bash]  pnpm test  · 22 tests, 1.2s  · ⌘O output"],
-			[{ name: "bash", status: "error", input: { command: "pnpm test" }, error: "1 failed" }, "✗ [bash]  pnpm test  · 1 failed  · ⌘O error"],
-			[{ name: "bash", status: "running", input: { command: "pnpm test" } }, "▶ [bash]  pnpm test  · ⌘O output"],
+			[{ name: "read", status: "success", input: { path: "src/auth/session.ts" }, details: { lineCount: 184 } }, "✓ [read]  src/auth/session.ts  · 184 lines  · ctrl+o expand"],
+			[{ name: "edit", status: "success", input: { path: "src/auth/session.ts" }, output: "+14 -6" }, "✓ [edit]  src/auth/session.ts  · +14 -6  · ctrl+o diff"],
+			[{ name: "write", status: "success", input: { path: "src/auth/new.ts" }, details: { lineCount: 47 } }, "✓ [write]  src/auth/new.ts  · 47 lines  · ctrl+o expand"],
+			[{ name: "bash", status: "success", input: { command: "pnpm test" }, details: { summary: "22 tests, 1.2s" } }, "✓ [bash]  pnpm test  · 22 tests, 1.2s  · ctrl+o output"],
+			[{ name: "bash", status: "error", input: { command: "pnpm test" }, error: "1 failed" }, "✗ [bash]  pnpm test  · 1 failed  · ctrl+o error"],
+			[{ name: "bash", status: "running", input: { command: "pnpm test" } }, "▶ [bash]  pnpm test  · ctrl+o output"],
 		] as const;
 
 		for (const [tool, expected] of cases) {
@@ -98,6 +98,32 @@ describe("tool renderer", () => {
 		expect(plain).toContain("… 8 lines collapsed");
 		expect(rows.join("\n")).toContain("38;2;193;68;62m");
 		expect(rows.join("\n")).toContain("38;2;127;176;105m");
+	});
+
+	it("renders Pi's string diff with +/- coloring and embedded line numbers", () => {
+		const rows = renderToolLedgerRows({
+			name: "edit",
+			status: "success",
+			input: { path: "src/x.ts" },
+			details: { diff: " 12 const a = 1;\n-14 const old = 2;\n+14 const next = 3;" },
+		}, 80).map(stripAnsi);
+
+		expect(rows.some((row) => row.includes("+1") && row.includes("-1"))).toBe(true);
+		expect(rows.some((row) => row.includes("-14 const old = 2;"))).toBe(true);
+		expect(rows.some((row) => row.includes("+14 const next = 3;"))).toBe(true);
+		const addedRow = rows.find((row) => row.includes("+14 const next = 3;"));
+		expect(addedRow).not.toMatch(/^\│\s+\d+\s+\+14/);
+	});
+
+	it("still falls back to the +N/-N summary when no diff string is present", () => {
+		const rows = renderToolLedgerRows({
+			name: "edit",
+			status: "success",
+			input: { path: "src/x.ts" },
+			output: "+14 -6 session flow updated",
+		}, 80).map(stripAnsi);
+
+		expect(rows.some((row) => row.includes("+14") && row.includes("-6"))).toBe(true);
 	});
 
 	it("uses tool color for running bash rows", () => {

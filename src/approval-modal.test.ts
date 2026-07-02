@@ -5,6 +5,7 @@ import {
 	isDangerousBashCommand,
 	renderApprovalModal,
 	setApprovalConfig,
+	showApprovalModal,
 	updateApprovalSnapshot,
 	type ApprovalModalSnapshot,
 } from "./approval-modal.js";
@@ -242,9 +243,153 @@ describe("approval config", () => {
 });
 
 describe("installApprovalGate — Pi event subscription", () => {
+	type ApprovalHandler = (
+		event: { toolName: string; input: { command: string } },
+		ctx: unknown,
+	) => Promise<unknown>;
+
+	function captureApprovalHandler(): ApprovalHandler {
+		let handler: ApprovalHandler | undefined;
+		const on = vi.fn((_eventName: string, callback: ApprovalHandler) => {
+			handler = callback;
+		});
+		installApprovalGate({ on } as never);
+		expect(on).toHaveBeenCalledWith("tool_call", expect.any(Function));
+		expect(handler).toBeDefined();
+		return handler!;
+	}
+
+	it("uses RPC select and fails closed on cancellation, undefined, errors, and malformed values", async () => {
+		const custom = vi.fn();
+		for (const select of [
+			vi.fn(async () => "No"),
+			vi.fn(async () => undefined),
+			vi.fn(async () => "Allow"),
+			vi.fn(async () => {
+				throw new Error("cancelled");
+			}),
+		]) {
+			const result = await showApprovalModal(
+				{ mode: "rpc", ui: { custom, select } } as never,
+				{ command: "rm -rf node_modules/", descriptionLines: ["This will permanently delete files."] },
+			);
+
+			expect(result).toBe("no");
+			expect(select).toHaveBeenCalledWith(
+				expect.stringContaining("APPROVAL REQUIRED"),
+				["No", "Yes", "Always"],
+				{ timeout: 60_000 },
+			);
+		}
+		expect(custom).not.toHaveBeenCalled();
+	});
+
+	it("maps RPC Yes and Always selections to approval choices", async () => {
+		const yesSelect = vi.fn(async () => "Yes");
+		const alwaysSelect = vi.fn(async () => "Always");
+
+		await expect(showApprovalModal(
+			{ mode: "rpc", ui: { select: yesSelect } } as never,
+			{ command: "rm -rf node_modules/", descriptionLines: ["This will permanently delete files."] },
+		)).resolves.toBe("yes");
+		await expect(showApprovalModal(
+			{ mode: "rpc", ui: { select: alwaysSelect } } as never,
+			{ command: "rm -rf node_modules/", descriptionLines: ["This will permanently delete files."] },
+		)).resolves.toBe("always");
+	});
+
 	it("subscribes to tool_call", () => {
 		const on = vi.fn();
 		installApprovalGate({ on } as never);
 		expect(on).toHaveBeenCalledWith("tool_call", expect.any(Function));
+	});
+
+	it("blocks dangerous RPC bash when the selection is No", async () => {
+		const handler = captureApprovalHandler();
+		const custom = vi.fn();
+		const select = vi.fn(async () => "No");
+
+		const result = await handler(
+			{ toolName: "bash", input: { command: "rm -rf node_modules/" } },
+			{ hasUI: true, mode: "rpc", ui: { custom, select } },
+		);
+
+		expect(result).toEqual({ block: true, reason: "user denied via cathedral approval modal" });
+		expect(custom).not.toHaveBeenCalled();
+	});
+
+	it("blocks dangerous RPC bash when the selection is cancelled or unanswered", async () => {
+		const handler = captureApprovalHandler();
+		const select = vi.fn(async () => undefined);
+
+		const result = await handler(
+			{ toolName: "bash", input: { command: "sudo rm -rf /tmp/sumocode-cancelled" } },
+			{ hasUI: true, mode: "rpc", ui: { select } },
+		);
+
+		expect(result).toEqual({ block: true, reason: "user denied via cathedral approval modal" });
+	});
+
+	it("blocks dangerous RPC bash when the approval prompt throws", async () => {
+		const handler = captureApprovalHandler();
+		const select = vi.fn(async () => {
+			throw new Error("transport closed");
+		});
+
+		const result = await handler(
+			{ toolName: "bash", input: { command: "sudo rm -rf /tmp/sumocode-error" } },
+			{ hasUI: true, mode: "rpc", ui: { select } },
+		);
+
+		expect(result).toEqual({ block: true, reason: "user denied via cathedral approval modal" });
+	});
+
+	it("blocks dangerous bash when no UI is available", async () => {
+		const handler = captureApprovalHandler();
+
+		const result = await handler(
+			{ toolName: "bash", input: { command: "sudo rm -rf /tmp/sumocode-no-ui" } },
+			{ hasUI: false, mode: "rpc", ui: {} },
+		);
+
+		expect(result).toEqual({ block: true, reason: "approval modal unavailable; blocked dangerous command" });
+	});
+
+	it("allows dangerous RPC bash only when the selection is Yes or Always", async () => {
+		const handler = captureApprovalHandler();
+		const yesSelect = vi.fn(async () => "Yes");
+		const alwaysSelect = vi.fn(async () => "Always");
+		const deniedAfterAlways = vi.fn(async () => "No");
+		const alwaysCommand = "sudo sumocode-always-test";
+
+		await expect(handler(
+			{ toolName: "bash", input: { command: "rm -rf /tmp/sumocode-yes" } },
+			{ hasUI: true, mode: "rpc", ui: { select: yesSelect } },
+		)).resolves.toBeUndefined();
+		await expect(handler(
+			{ toolName: "bash", input: { command: alwaysCommand } },
+			{ hasUI: true, mode: "rpc", ui: { select: alwaysSelect } },
+		)).resolves.toBeUndefined();
+		await expect(handler(
+			{ toolName: "bash", input: { command: alwaysCommand } },
+			{ hasUI: true, mode: "rpc", ui: { select: deniedAfterAlways } },
+		)).resolves.toBeUndefined();
+
+		expect(yesSelect).toHaveBeenCalledTimes(1);
+		expect(alwaysSelect).toHaveBeenCalledTimes(1);
+		expect(deniedAfterAlways).not.toHaveBeenCalled();
+	});
+
+	it("opens the TUI approval modal and blocks when the user selects no", async () => {
+		const handler = captureApprovalHandler();
+		const custom = vi.fn(async () => "no");
+
+		const result = await handler(
+			{ toolName: "bash", input: { command: "rm -rf node_modules/" } },
+			{ hasUI: true, mode: "tui", ui: { custom } },
+		);
+
+		expect(custom).toHaveBeenCalledTimes(1);
+		expect(result).toEqual({ block: true, reason: "user denied via cathedral approval modal" });
 	});
 });

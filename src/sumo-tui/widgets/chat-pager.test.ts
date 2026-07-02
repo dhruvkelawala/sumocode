@@ -179,7 +179,7 @@ describe("ChatPager", () => {
 
 		chat.setToolExpansion(false);
 		frame = buffer();
-		expect(frame.toPlainRow(1)).toContain("✓ [read]  src/auth/session.ts  · ⌘O expand");
+		expect(frame.toPlainRow(1)).toContain("✓ [read]  src/auth/session.ts  · ctrl+o expand");
 		expect(frame.toPlainRow(2)).toMatch(/^╰─+╯/);
 		root.dispose();
 	});

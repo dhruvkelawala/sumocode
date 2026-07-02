@@ -238,6 +238,11 @@ export async function showDivineQuery(
 	title: string,
 	options: readonly string[],
 ): Promise<string | undefined> {
+	if (ctx.mode === "rpc") {
+		const selected = await ctx.ui.select(title, [...options]);
+		return selected === undefined ? undefined : selected;
+	}
+
 	const initialSnapshot: DivineQuerySnapshot = {
 		title,
 		options,

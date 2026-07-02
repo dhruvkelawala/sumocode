@@ -1,0 +1,128 @@
+import type { RpcCommand, RpcResponse, RpcSessionState } from "@earendil-works/pi-coding-agent";
+import { responseData, type RpcResponseData } from "./response.js";
+import { RpcHostStateStore, type RpcHostChromeState } from "./state.js";
+
+export interface RpcCommandClient {
+	send(command: RpcCommand, timeoutMs?: number): Promise<RpcResponse>;
+}
+
+export type RpcAvailableModel = RpcResponseData<"get_available_models">["models"][number];
+export type RpcThinkingLevel = RpcSessionState["thinkingLevel"];
+export type RpcSlashCommand = RpcResponseData<"get_commands">["commands"][number];
+export type RpcForkMessage = RpcResponseData<"get_fork_messages">["messages"][number];
+
+export interface RpcModelOption {
+	readonly provider: string;
+	readonly id: string;
+	readonly label: string;
+	readonly active: boolean;
+}
+
+type ModelIdentity = Pick<RpcAvailableModel, "provider" | "id">;
+
+function modelLabel(model: ModelIdentity): string {
+	return `${model.provider}/${model.id}`;
+}
+
+function currentModelLabel(currentModel?: ModelIdentity | string): string | undefined {
+	return typeof currentModel === "string" ? currentModel : currentModel ? modelLabel(currentModel) : undefined;
+}
+
+export function modelOptionsFrom(models: readonly RpcAvailableModel[], currentModel?: ModelIdentity | string): RpcModelOption[] {
+	const activeLabel = currentModelLabel(currentModel);
+	return models.map((model) => {
+		const label = modelLabel(model);
+		return {
+			provider: model.provider,
+			id: model.id,
+			label,
+			active: label === activeLabel,
+		};
+	});
+}
+
+export class RpcHostControls {
+	public constructor(
+		private readonly client: RpcCommandClient,
+		private readonly stateStore: RpcHostStateStore = new RpcHostStateStore(),
+	) {}
+
+	public async refreshState(gitBranch?: string): Promise<RpcHostChromeState> {
+		const state = responseData(await this.client.send({ type: "get_state" }), "get_state");
+		return this.stateStore.hydrateFromRpcState(state, gitBranch);
+	}
+
+	public async getAvailableModels(): Promise<RpcModelOption[]> {
+		const data = responseData(await this.client.send({ type: "get_available_models" }), "get_available_models");
+		return modelOptionsFrom(data.models, this.stateStore.getSnapshot().modelLabel);
+	}
+
+	public async setModel(provider: string, modelId: string): Promise<RpcHostChromeState> {
+		responseData(await this.client.send({ type: "set_model", provider, modelId }), "set_model");
+		return await this.refreshState();
+	}
+
+	public async cycleModel(): Promise<RpcHostChromeState> {
+		responseData(await this.client.send({ type: "cycle_model" }), "cycle_model");
+		return await this.refreshState();
+	}
+
+	public async setThinkingLevel(level: RpcThinkingLevel): Promise<RpcHostChromeState> {
+		responseData(await this.client.send({ type: "set_thinking_level", level }), "set_thinking_level");
+		return await this.refreshState();
+	}
+
+	public async cycleThinkingLevel(): Promise<RpcHostChromeState> {
+		responseData(await this.client.send({ type: "cycle_thinking_level" }), "cycle_thinking_level");
+		return await this.refreshState();
+	}
+
+	public async newSession(parentSession?: string): Promise<RpcResponseData<"new_session">> {
+		const command: RpcCommand = parentSession === undefined ? { type: "new_session" } : { type: "new_session", parentSession };
+		return responseData(await this.client.send(command), "new_session");
+	}
+
+	public async switchSession(sessionPath: string): Promise<RpcResponseData<"switch_session">> {
+		return responseData(await this.client.send({ type: "switch_session", sessionPath }), "switch_session");
+	}
+
+	public async fork(entryId: string): Promise<RpcResponseData<"fork">> {
+		return responseData(await this.client.send({ type: "fork", entryId }), "fork");
+	}
+
+	public async clone(): Promise<RpcResponseData<"clone">> {
+		return responseData(await this.client.send({ type: "clone" }), "clone");
+	}
+
+	public async getForkMessages(): Promise<RpcForkMessage[]> {
+		const data = responseData(await this.client.send({ type: "get_fork_messages" }), "get_fork_messages");
+		return data.messages;
+	}
+
+	public async getLastAssistantText(): Promise<string | null> {
+		const data = responseData(await this.client.send({ type: "get_last_assistant_text" }), "get_last_assistant_text");
+		return data.text;
+	}
+
+	public async setSessionName(name: string): Promise<void> {
+		responseData(await this.client.send({ type: "set_session_name", name }), "set_session_name");
+	}
+
+	public async compact(customInstructions?: string): Promise<RpcResponseData<"compact">> {
+		const command: RpcCommand = customInstructions === undefined ? { type: "compact" } : { type: "compact", customInstructions };
+		return responseData(await this.client.send(command), "compact");
+	}
+
+	public async setAutoCompaction(enabled: boolean): Promise<void> {
+		responseData(await this.client.send({ type: "set_auto_compaction", enabled }), "set_auto_compaction");
+	}
+
+	public async setAutoRetry(enabled: boolean): Promise<void> {
+		responseData(await this.client.send({ type: "set_auto_retry", enabled }), "set_auto_retry");
+	}
+
+	public async getCommands(): Promise<RpcSlashCommand[]> {
+		const data = responseData(await this.client.send({ type: "get_commands" }), "get_commands");
+		return data.commands;
+	}
+}

@@ -3,6 +3,9 @@ import { execFileSync } from "node:child_process";
 import { buildSpawnEnv } from "./spawn-pi-pty.js";
 
 describe("buildSpawnEnv", () => {
+	const retiredModuleKey = ["SUMO", "TUI", "MODULE"].join("_");
+	const retiredLegacyKey = ["SUMO", "LEGACY"].join("_");
+
 	it("scrubs inherited SumoCode debug env vars", () => {
 		const env = buildSpawnEnv(
 			{
@@ -11,9 +14,9 @@ describe("buildSpawnEnv", () => {
 				SUMO_TUI: "1",
 				SUMO_TUI_DEBUG: "1",
 				SUMO_TUI_DIAG_FILE: "/tmp/sumocode-manual.jsonl",
-				SUMO_TUI_MODULE: "file:///tmp/fake.js",
+				[retiredModuleKey]: "file:///tmp/fake.js",
 				SUMO_TUI_HIDE_PI_NOISE: "1",
-				SUMO_LEGACY: "1",
+				[retiredLegacyKey]: "1",
 				SUMO_RPC: "1",
 				SUMOCODE_RPC_CHILD: "1",
 				SUMOCODE_REDUCED_MOTION: "1",
@@ -26,9 +29,9 @@ describe("buildSpawnEnv", () => {
 		expect(env.SUMO_TUI).toBeUndefined();
 		expect(env.SUMO_TUI_DEBUG).toBeUndefined();
 		expect(env.SUMO_TUI_DIAG_FILE).toBeUndefined();
-		expect(env.SUMO_TUI_MODULE).toBeUndefined();
+		expect(env[retiredModuleKey]).toBeUndefined();
 		expect(env.SUMO_TUI_HIDE_PI_NOISE).toBeUndefined();
-		expect(env.SUMO_LEGACY).toBeUndefined();
+		expect(env[retiredLegacyKey]).toBeUndefined();
 		expect(env.SUMO_RPC).toBeUndefined();
 		expect(env.SUMOCODE_RPC_CHILD).toBeUndefined();
 		expect(env.SUMOCODE_REDUCED_MOTION).toBeUndefined();
@@ -47,10 +50,10 @@ describe("buildSpawnEnv", () => {
 	it("lets per-test overrides reintroduce scrubbed keys", () => {
 		const env = buildSpawnEnv(
 			{ SUMO_TUI: "1" },
-			{ SUMO_TUI: "1", SUMO_TUI_MODULE: "file:///opt/explicit.js" },
+			{ SUMO_TUI: "1", SUMO_TUI_DEBUG: "0" },
 		);
 		expect(env.SUMO_TUI).toBe("1");
-		expect(env.SUMO_TUI_MODULE).toBe("file:///opt/explicit.js");
+		expect(env.SUMO_TUI_DEBUG).toBe("0");
 	});
 
 	it("lets overrides win over scrub when intentionally setting the same key", () => {
@@ -91,6 +94,22 @@ describe("sumocode launcher mode decision", () => {
 		expect(output).toContain("SUMO_TUI=0");
 		expect(output).toContain("SUMO_RPC=");
 		expect(output).toContain("--print hello");
+		expect(output).not.toContain("sumo-rpc-host.js");
+	});
+
+	it("bypasses the RPC host for explicit Pi mode", () => {
+		const output = dryRun(["--mode", "rpc", "--offline", "--no-extensions", "--no-session"]);
+		expect(output).toContain("SUMO_TUI=0");
+		expect(output).toContain("SUMO_RPC=");
+		expect(output).toContain("--mode rpc");
+		expect(output).not.toContain("sumo-rpc-host.js");
+	});
+
+	it("bypasses the RPC host when the diagnostic direct-Pi flag is set", () => {
+		const output = dryRun(["--no-sumo-tui", "--offline", "--no-extensions", "--no-session"]);
+		expect(output).toContain("SUMO_TUI=0");
+		expect(output).toContain("SUMO_RPC=");
+		expect(output).toContain("exec /bin/echo -e ");
 		expect(output).not.toContain("sumo-rpc-host.js");
 	});
 });

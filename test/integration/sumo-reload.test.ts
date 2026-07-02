@@ -29,14 +29,13 @@ interface PtySession {
 function spawnLauncherWithMockPi(stateFile: string, extraArgs: string[] = []): PtySession {
 	const launcher = resolve(process.cwd(), "bin/sumocode.sh");
 	const mockPi = resolve(process.cwd(), "test/integration/fixtures/mock-pi-reload.sh");
-	const child: IPty = spawn(launcher, extraArgs, {
+	const child: IPty = spawn(launcher, ["--no-sumo-tui", ...extraArgs], {
 		name: "xterm-256color",
 		cols: 100,
 		rows: 30,
 		cwd: process.cwd(),
 		env: buildSpawnEnv(process.env, {
 			PI_BIN: mockPi,
-			SUMO_LEGACY: "1",
 			SUMO_TUI: "0",
 			SUMOCODE_RELOAD_TEST_STATE: stateFile,
 		}),

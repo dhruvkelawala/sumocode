@@ -42,21 +42,24 @@ describe("sumocode RPC host shell integration", () => {
 		expect(cleanState.cursorVisible).toBe(true);
 	}, 30_000);
 
-	it("boots the patched retained path when SUMO_LEGACY=1 requests rollback", async () => {
-		const agentDir = await mkdtemp(join(tmpdir(), "sumocode-legacy-agent-"));
+	it("ignores stale legacy environment and still boots the RPC host", async () => {
+		const agentDir = await mkdtemp(join(tmpdir(), "sumocode-stale-env-agent-"));
+		const staleLegacyKey = ["SUMO", "LEGACY"].join("_");
 		app = spawnSumocodePty({
-			env: { PI_CODING_AGENT_DIR: agentDir, SUMO_LEGACY: "1" },
+			env: { PI_CODING_AGENT_DIR: agentDir, [staleLegacyKey]: "1" },
 			cols: 100,
 			rows: 30,
 		});
 
 		await app.waitForOutput(PI_BOOT_SEQUENCE, 15_000);
-		await app.waitForOutput(/DIVINE INVOCATION/, 15_000);
+		await app.waitForOutput("SUMOCODE", 15_000);
+		await app.waitForOutput("RPC", 15_000);
+		await app.waitForOutput("empty transcript", 15_000);
 		await delay(250);
 
 		const output = app.getOutput();
-		expect(output).toContain("DIVINE INVOCATION");
-		expect(output).not.toContain("sumocode · rpc host");
+		expect(output).toContain("sumocode");
+		expect(output).toContain("rpc host");
 
 		const activeState = app.getCurrentTerminalState();
 		expect(activeState.altscreenActive).toBe(true);

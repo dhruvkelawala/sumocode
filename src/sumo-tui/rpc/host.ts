@@ -45,7 +45,6 @@ function childEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 		SUMOCODE_RPC_CHILD: "1",
 		SUMO_TUI: "0",
 	};
-	delete next.SUMO_TUI_MODULE;
 	return next;
 }
 

@@ -1,10 +1,9 @@
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { pathToFileURL } from "node:url";
 import xterm from "@xterm/headless";
 import { afterEach, describe, expect, it } from "vitest";
-import { PI_BOOT_SEQUENCE, spawnPiPty, type SpawnedPiPty } from "./spawn-pi-pty.js";
+import { PI_BOOT_SEQUENCE, spawnSumocodePty, type SpawnedPiPty } from "./spawn-pi-pty.js";
 
 let app: SpawnedPiPty | undefined;
 
@@ -13,78 +12,49 @@ afterEach(() => {
 	app = undefined;
 });
 
-interface ReplayedCursor {
-	readonly row: number;
-	readonly col: number;
-}
-
-async function replayCursor(output: string, cols = 100, rows = 30): Promise<ReplayedCursor> {
+async function replayRows(output: string, cols = 100, rows = 30): Promise<string[]> {
 	const term = new xterm.Terminal({ cols, rows, allowProposedApi: true, scrollback: 0 });
 	await new Promise<void>((resolve) => term.write(output, () => resolve()));
 	const buffer = term.buffer.active;
-	return { row: buffer.cursorY, col: buffer.cursorX };
-}
-
-async function waitForCursorVisible(pty: SpawnedPiPty): Promise<void> {
-	const deadline = Date.now() + 10_000;
-	while (Date.now() < deadline) {
-		if (pty.getCurrentTerminalState().cursorVisible) return;
-		await new Promise((resolve) => setTimeout(resolve, 50));
+	const lines: string[] = [];
+	for (let row = 0; row < rows; row += 1) {
+		const line = buffer.getLine(row);
+		let text = "";
+		for (let col = 0; col < cols; col += 1) text += line?.getCell(col)?.getChars() ?? " ";
+		lines.push(text);
 	}
-	throw new Error(`Timed out waiting for hardware cursor to become visible. Last output: ${JSON.stringify(pty.getOutput().slice(-1200))}`);
+	return lines;
 }
 
-async function waitForCursorAdvance(pty: SpawnedPiPty, previousColumn: number, text: string): Promise<number> {
+async function waitForEditorText(pty: SpawnedPiPty, text: string): Promise<void> {
 	const deadline = Date.now() + 5_000;
 	while (Date.now() < deadline) {
-		const output = pty.getOutput();
-		const { col } = await replayCursor(output);
-		// Replay-based cursor extraction is deterministic regardless of whether
-		// the renderer paints via Pi's `\x1b[<col>G` form or SumoTUI's owned-shell
-		// `\x1b[<row>;<col>H` synchronized patches.
-		if (col > previousColumn) return col;
+		const rows = await replayRows(pty.getOutput());
+		if (rows.some((row) => row.includes(text))) return;
 		await new Promise((resolve) => setTimeout(resolve, 50));
 	}
-	throw new Error(`Timed out waiting for visible cursor after ${JSON.stringify(text)}. Last output: ${JSON.stringify(pty.getOutput().slice(-1200))}`);
+	throw new Error(`Timed out waiting for editor text ${JSON.stringify(text)}. Last output: ${JSON.stringify(pty.getOutput().slice(-1200))}`);
 }
 
-describe("sumo-tui cursor visibility integration", () => {
-	it("shows the hardware cursor and advances it with each typed character", async () => {
+describe("sumo-tui editor cursor integration", () => {
+	it("renders typed RPC editor text with the software caret active", async () => {
 		const agentDir = await mkdtemp(join(tmpdir(), "sumocode-pi-agent-"));
-		app = spawnPiPty({
+		app = spawnSumocodePty({
 			env: {
 				PI_CODING_AGENT_DIR: agentDir,
-				PI_HARDWARE_CURSOR: "1",
-				SUMO_TUI: "1",
-				SUMO_TUI_HIDE_PI_NOISE: "1",
-				SUMO_TUI_MODULE: pathToFileURL(join(process.cwd(), "sumo-interactive-mode.js")).href,
 			},
 		});
 
 		await app.waitForOutput(PI_BOOT_SEQUENCE, 10_000);
-		await app.waitForOutput("DIVINE INVOCATION", 10_000);
-		await waitForCursorVisible(app);
-		expect(app.getCurrentTerminalState().cursorVisible).toBe(true);
+		await app.waitForOutput("SUMOCODE", 10_000);
+		await app.waitForOutput("RPC", 10_000);
 
-		// Warm up: the empty editor renders with placeholder text
-		// ("Ask anything... \"Refactor the auth flow.\"") which sits past the
-		// prompt prefix. The cursor starts at the END of the placeholder. The
-		// first real keystroke clears the placeholder and the cursor snaps back
-		// to the start of the line. Subsequent keystrokes move the cursor right.
-		app.sendInput("_");
-		await new Promise((resolve) => setTimeout(resolve, 300));
-		const output = app.getOutput();
-		let previousColumn = await replayCursor(output).then((c) => c.col);
-		expect(previousColumn).toBeGreaterThan(0);
+		const typed = "_ZQXJW";
+		app.sendInput(typed);
+		await waitForEditorText(app, typed);
 
-		let typed = "_";
-		for (const char of "ZQXJW") {
-			typed += char;
-			app.sendInput(char);
-			const nextColumn = await waitForCursorAdvance(app, previousColumn, typed);
-			expect(nextColumn).toBeGreaterThan(previousColumn);
-			previousColumn = nextColumn;
-			expect(app.getCurrentTerminalState().cursorVisible).toBe(true);
-		}
+		const activeState = app.getCurrentTerminalState();
+		expect(activeState.altscreenActive).toBe(true);
+		expect(activeState.cursorVisible).toBe(false);
 	}, 30_000);
 });

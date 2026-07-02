@@ -1,6 +1,6 @@
 # Pi RPC migration: dropping the InteractiveMode patch for `pi --mode rpc`
 
-**Status:** RPC default staged; `SUMO_LEGACY=1` rollback retained for one release
+**Status:** RPC default active; old retained fallback removed
 **Date:** 2026-06-30; updated 2026-07-02 for Phase 5 cutover
 **Written against:** SumoCode `0.4.0` (commit `ae03bc0`), Pi `0.79.1` pinned; latest Pi `0.80.2`
 **Companion to:** [`docs/SUMO_TUI_PI_PATCH_STRATEGY.md`](../SUMO_TUI_PI_PATCH_STRATEGY.md), [`docs/research/pi-fork-upgrade.md`](pi-fork-upgrade.md)
@@ -15,23 +15,23 @@ constraint: **the UI must remain the same or better.**
 
 ## Bottom line
 
-**Feasible and now staged as the default runtime path.** The Phase 0–5 migration work has
+**Feasible and now active as the only interactive runtime path.** The Phase 0–5 migration work has
 proved the host shell, controls, editor, overlays, and security-critical approval path well
-enough to flip the launcher default to the RPC host. This remains a conservative cutover:
-the patch machinery is still present for one release behind `SUMO_LEGACY=1`.
+enough to make the launcher default the RPC host and remove the old retained fallback.
 
 - The transcript (the largest visual surface) ports nearly verbatim.
 - The editor de-risks to a **library re-host** (pi-tui exports), not a rebuild.
 - The **approval gate + rich overlays** are the dominant, *security-critical* workstream
   because of a protocol gap confirmed by reading Pi's compiled source.
 
-The strategic prize remains: delete the `dist/main.js` patch, the per-Pi-version-bump fragility,
-and ~400 lines of `chatContainer`/`handleEvent`/`renderSessionContext` monkeypatching in
+The strategic prize has landed: SumoCode deleted the `dist/main.js` patch, the
+per-Pi-version-bump fragility, and the old in-process runtime loader. Remaining UI parity
+work should improve the RPC host and shared renderers, not revive the
+`chatContainer`/`handleEvent`/`renderSessionContext` monkeypatching in
 [`src/sumo-tui/pi-compat/chat-viewport-controller.ts`](../../src/sumo-tui/pi-compat/chat-viewport-controller.ts),
-and ride Pi's first-class, Pi-maintained RPC branch instead. That deletion is deliberately
-deferred until the RPC default survives the stability window.
+or the retired constructor seam.
 
-## Why the patch-strategy doc's rejection does not apply
+## Why the retired patch-strategy doc's rejection does not apply
 
 [`SUMO_TUI_PI_PATCH_STRATEGY.md`](../SUMO_TUI_PI_PATCH_STRATEGY.md) rejected "remove patch
 now", but it only evaluated **reverting to in-process public extension chrome**. Every
@@ -165,9 +165,8 @@ tui}`.
 - **RPC contract is byte-stable** 0.79.1 → 0.80.2 (`rpc-types.d.ts` identical, 71 commands;
   `rpc-mode.js` changed by one character — an id-correlation bugfix). `custom()` is still a
   no-op → **the three landmines are unchanged.**
-- **Patch seam moved** (`new InteractiveMode(...)` ~line 618 → 645) → the patch needs
-  regenerating for 0.80; reconfirms the version-bump tax (0.79 alone shipped 10 patch
-  releases).
+- **Patch seam moved** (`new InteractiveMode(...)` ~line 618 → 645) → the retired patch
+  would have needed regenerating for 0.80; this reconfirmed the version-bump tax.
 - **`@earendil-works/pi-orchestrator`** (experimental, *not yet on npm*) ships
   `RpcProcessInstance` (`packages/orchestrator/src/rpc-process.ts`): a host-side supervisor
   that spawns `pi --mode rpc`, does JSONL framing, id-correlated request/response, event
@@ -182,8 +181,8 @@ conclusions:
 
 - **No new `custom()` sites** — `/ship` and `/worktree` route through the existing
   `divine-query` overlay.
-- **Seam coupling unchanged** — `sumo-interactive-mode.ts` only gained `showNotice()` +
-  boot diagnostics.
+- **Seam coupling unchanged at the time** — the old in-process runtime only gained
+  `showNotice()` + boot diagnostics before removal.
 - **Transcript reinforced** — image-block parsing makes the view-model more
   input-source-agnostic (good for RPC; adds an image-turn case Phase 0 must replay).
 - **Bigger bg-task/worktree re-test surface** (`task-manager.ts` +434, new
@@ -193,8 +192,8 @@ conclusions:
   [`pi-cmux-agent-command-boundary.md`](pi-cmux-agent-command-boundary.md)). Under RPC each
   pane simply becomes `sumocode`-host → `pi`-rpc-child — compatible, not a new risk
   category. Synthesis fan-out (in-process `pi-subagents`) is unaffected.
-- **Launcher more patch-invested** (`bin/sumocode.sh` hard-checks `loadSumoInteractiveMode`,
-  adds `NODE_COMPILE_CACHE`) **but** added startup-readiness instrumentation
+- **Launcher had become more patch-invested** before retirement, but added
+  startup-readiness instrumentation
   (`boot_screen_frame`/`app_ready`/`input_ready`, `docs/perf/startup.json`) — a baseline for
   the Phase-0 "same-or-better" perf gate.
 - **Open item:** `extension.ts` child-bail guard (`PI_CMUX_CHILD`/`SUMOCODE_BG_CHILD`,
@@ -211,19 +210,18 @@ See [`plans/`](../../plans/README.md) for executor-grade detail. Summary:
 | 2 | `extension_ui` responder + selectors + session/model/compaction controls | M |
 | 3 | Editor internalization (re-host pi-tui `Editor`) | L |
 | 4 | Overlays + approval-gate rewrite + answer/question-tool refactor (security-critical) | L |
-| 5 | Cutover (flag flip, visual smoke matrix, rollback) | M |
+| 5 | Cutover (flag flip, visual smoke matrix, patch removal) | M |
 
 ## Recommendation
 
-**RPC default is staged.** The launcher should boot `sumo-rpc-host.js` by default and
-reserve the patched retained path for `SUMO_LEGACY=1` rollback. Keep
-`patches/@earendil-works__pi-coding-agent@*.patch`, `pnpm.patchedDependencies`,
-`sumo-interactive-mode.js`, and the in-process bridges until the rollback window closes.
+**RPC default is active.** The launcher boots `sumo-rpc-host.js` by default for
+interactive TTY use. The old retained path, package patch metadata, loader, and
+in-process runtime bridge are removed.
 
-During that window, Pi version bumps primarily need: (1) re-verify the RPC contract
+Pi version bumps primarily need: (1) re-verify the RPC contract
 (`rpc-types.d.ts` diff), (2) re-check the hardcoded builtin slash list used by the RPC
-editor, (3) rerun the approval/security regression test, and (4) regenerate the patch only
-while the `SUMO_LEGACY=1` fallback is kept.
+editor, (3) rerun the approval/security regression test, and (4) confirm direct Pi
+non-interactive bypasses still work.
 
 ## Biggest unknown
 

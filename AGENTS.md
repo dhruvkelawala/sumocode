@@ -19,7 +19,7 @@ User-specific state (persona, memory, settings, MCP, skills) lives in the separa
 ## Commands
 
 ```bash
-pnpm install                       # installs Pi peer deps + applies pi-coding-agent patch
+pnpm install                       # installs Pi peer deps
 pnpm typecheck                     # tsc --noEmit
 pnpm build                         # alias for typecheck — Pi runs TS via jiti; no emitted dist
 pnpm test                          # vitest run, src/**/*.test.ts
@@ -35,7 +35,7 @@ pi -e .                            # ephemeral install of THIS checkout — clas
 bin/sumocode.sh                    # local SumoCode CLI wrapper (RPC host by default)
 bin/sumocode.sh -h                 # full CLI help
 bin/sumocode.sh -d .               # debug/diagnostics mode for manual testing
-bin/sumocode.sh doctor             # check RPC host + legacy patch/module/diagnostics health
+bin/sumocode.sh doctor             # check RPC host + Pi/diagnostics health
 bin/sumocode.sh diag               # summarize /tmp/sumocode-manual.jsonl
 ```
 
@@ -90,24 +90,21 @@ This codebase contains two UI layers at different maturity levels:
 
 When adding a feature, decide which layer it belongs to. Anything needing flex layout, in-app scroll, sticky footers, mouse routing, modal layers, deterministic visual capture, or retained state belongs in `src/sumo-tui/`. Simple status text, extension commands, and lightweight classic Pi UI can stay in the classic layer. The `src/sumo-tui/pi-compat/` directory is the only place the two layers should meet.
 
-### Pi patch seam
+### Pi runtime seam
 
-SumoCode now defaults to the RPC host for interactive TTY launches. Non-interactive Pi behavior (`--print`, explicit `--mode`, or stdout that is not a TTY) bypasses the RPC host and executes Pi directly with the extension loaded. The tiny Pi constructor patch documented in `docs/SUMO_TUI_PI_PATCH_STRATEGY.md` is kept for one release as the `SUMO_LEGACY=1` rollback path only.
+SumoCode's interactive runtime is the RPC host. Non-interactive Pi behavior (`--print`, explicit `--mode`, or stdout that is not a TTY) bypasses the foreground RPC host and executes Pi directly with the extension loaded. The old private Pi constructor patch is removed; `docs/SUMO_TUI_PI_PATCH_STRATEGY.md` is retained only as a historical note.
 
 The user-facing wrapper is `bin/sumocode.sh` and, when linked/installed, the `sumocode` command:
 
-- defaults interactive TTY launches to the RPC host (`sumo-rpc-host.js`) and does not require `loadSumoInteractiveMode`
+- defaults interactive TTY launches to the RPC host (`sumo-rpc-host.js`) and does not require a private Pi constructor hook
 - preserves non-interactive Pi modes by bypassing RPC for `--print`, `--mode`, and non-TTY stdout
-- supports `SUMO_LEGACY=1 sumocode ...` to boot the patched retained SumoTUI rollback path
 - accepts `sumocode [options] [path]`, with at most one project path
 - supports `-h/--help`, `-v/--version`, `doctor`, `diag [file]`, `-d/--debug`, `--diag-file`, `--no-clear-diag`, `--dry-run`, and `--no-sumo-tui`
-- verifies the selected Pi binary contains `loadSumoInteractiveMode` only when `SUMO_LEGACY=1` requests the rollback path
-- sets `SUMO_TUI_MODULE` to the checkout-local `sumo-interactive-mode.js` only for that legacy rollback path
-- falls back to classic Pi behavior if `SUMO_LEGACY=1` is requested but the patch is missing
+- treats `--no-sumo-tui` as a diagnostic direct-Pi bypass, not as an alternate retained runtime
 
 Manual-test diagnostics are opt-in via `sumocode -d` / `bin/sumocode.sh -d`. Debug mode writes JSONL to `/tmp/sumocode-manual.jsonl` by default, or to `--diag-file <path>` / `SUMO_TUI_DIAG_FILE`. The launcher clears the diagnostics file at startup unless `--no-clear-diag` is set. Use `sumocode diag` or `node scripts/diag-summary.mjs /tmp/sumocode-manual.jsonl` to summarize a run. Diagnostics must stay no-op unless `SUMO_TUI_DIAG_FILE` is set.
 
-Do not casually change `patches/@earendil-works__pi-coding-agent@*.patch`, `SUMO_LEGACY`, `SUMO_TUI`, `SUMO_TUI_MODULE`, or `sumo-interactive-mode.js`. During the rollback window, Pi version bumps must re-verify the RPC contract (`rpc-types.d.ts`), re-check the hardcoded builtin slash list, rerun the approval/security regression test, and regenerate the patch only while the `SUMO_LEGACY=1` fallback is kept. After the stability window, patch retirement needs a separate plan.
+Do not casually change the launcher runtime selection, `SUMO_RPC`, `SUMO_TUI`, or `sumo-rpc-host.js`. Pi version bumps must re-verify the RPC contract (`rpc-types.d.ts`), re-check the hardcoded builtin slash list, rerun the approval/security regression test, and preserve the direct-Pi bypass for `--print`, explicit `--mode`, and non-TTY stdout.
 
 ### Pi ↔ SumoCode tool boundary
 

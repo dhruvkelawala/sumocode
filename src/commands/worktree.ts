@@ -2,7 +2,6 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { buildShellCommand, isInCmux, openCommandInNewSplit, shellEscape, type SplitDirection } from "./cmux-split.js";
 import { chooseDiffSplitDirection, type TerminalSize } from "./diff.js";
 import { createWorktree, listWorktrees, removeWorktree, type CreateWorktreeResult, type ListWorktreesResult, type RemoveWorktreeResult } from "../git/worktree.js";
-import { getActiveSumoRuntime } from "../sumo-tui/pi-compat/sumo-interactive-mode.js";
 
 const DEFAULT_SETUP_ACTION = "pnpm install";
 
@@ -35,7 +34,6 @@ export function parseWorktreeArgs(args: string): ParsedWorktreeArgs {
 
 function notify(pi: Pick<ExtensionAPI, "sendMessage">, ctx: ExtensionContext, message: string, type: "info" | "warning" = "info"): void {
 	if (ctx.hasUI) {
-		getActiveSumoRuntime()?.showNotice(message, type);
 		pi.sendMessage(
 			{
 				customType: "sumo:worktree",

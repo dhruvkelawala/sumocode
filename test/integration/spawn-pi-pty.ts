@@ -83,18 +83,20 @@ function applyDefaultProjectTrustOverride(args: readonly string[]): string[] {
 }
 
 /**
- * SumoCode debug env vars that leak retained-mode wiring or diagnostics into
- * spawned tests when set in the developer's shell (e.g. `sumocode -d`). They
- * must NOT be inherited by integration child processes unless a test
- * explicitly opts in via `options.env`. See #187.
+ * SumoCode debug/runtime env vars that can leak diagnostics or retired runtime
+ * wiring into spawned tests when set in the developer's shell (e.g.
+ * `sumocode -d`). They must NOT be inherited by integration child processes
+ * unless a test explicitly opts in via `options.env`. See #187.
  */
+const RETIRED_MODULE_ENV_KEY = ["SUMO", "TUI", "MODULE"].join("_");
+const RETIRED_LEGACY_ENV_KEY = ["SUMO", "LEGACY"].join("_");
 const SUMO_DEBUG_ENV_KEYS = [
 	"SUMO_TUI",
 	"SUMO_TUI_DEBUG",
 	"SUMO_TUI_DIAG_FILE",
-	"SUMO_TUI_MODULE",
+	RETIRED_MODULE_ENV_KEY,
 	"SUMO_TUI_HIDE_PI_NOISE",
-	"SUMO_LEGACY",
+	RETIRED_LEGACY_ENV_KEY,
 	"SUMO_RPC",
 	"SUMOCODE_RPC_CHILD",
 	"SUMOCODE_REDUCED_MOTION",

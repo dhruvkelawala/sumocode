@@ -103,13 +103,13 @@ For manual runtime/debug sessions, use diagnostics mode:
 ./bin/sumocode.sh -d .
 sumocode -d .                    # if globally linked
 sumocode diag                    # summarizes /tmp/sumocode-manual.jsonl
-sumocode doctor                  # checks RPC host + legacy patch/module/diagnostics health
+sumocode doctor                  # checks RPC host + Pi/diagnostics health
 ```
 
 Expected signals on a healthy interactive boot:
 - The default launcher renders the RPC host shell (`SUMOCODE RPC` / `sumocode · rpc host`)
-- `SUMO_TUI_MODULE` is unset on the default path
-- `SUMO_LEGACY=1 ./bin/sumocode.sh --offline --no-extensions --no-session --approve` still boots the patched retained rollback path with `DIVINE INVOCATION`
+- no retired retained-runtime module is required on the default path
+- `./bin/sumocode.sh --no-sumo-tui --offline --no-extensions --no-session --approve` bypasses the foreground RPC host and executes Pi directly for diagnostics
 
 Expected non-interactive behavior:
 - `./bin/sumocode.sh --offline --no-extensions --no-session --print hello` bypasses the foreground RPC host and runs Pi directly
@@ -260,16 +260,15 @@ If the installed version is stale, `pi update git:github.com/dhruvkelawala/sumoc
 
 Don't. That's what tagged releases are for. Keep the mini as the dev machine, MacBook as a consumer. If something's broken on MacBook but not mini, it's likely an environment diff worth investigating, not a dev/test issue.
 
-### Emergency rollback
+### Emergency recovery
 
-During the RPC-default rollback window, use the one-release runtime rollback without changing installed versions:
+There is no alternate retained runtime path in this branch. To compare or diagnose Pi behavior without the foreground RPC host, use the direct-Pi bypass:
 
 ```bash
-SUMO_LEGACY=1 sumocode
-SUMO_LEGACY=1 ./bin/sumocode.sh --offline --no-extensions --no-session --approve
+./bin/sumocode.sh --no-sumo-tui --offline --no-extensions --no-session --approve
 ```
 
-This must boot the patched retained path. Keep it until the RPC default has survived 30 stable days; then write a separate patch-retirement plan before deleting `patches/@earendil-works__pi-coding-agent@*.patch`, `pnpm.patchedDependencies`, `sumo-interactive-mode.js`, or the legacy bridges.
+For product recovery to older behavior, install a previous tagged SumoCode release instead of resurrecting the removed private Pi patch.
 
 On any machine:
 
@@ -300,7 +299,7 @@ Rule of thumb:
 - **Perf snapshot.** `pnpm perf:startup` produces a markdown report under `docs/perf/`.
 - **Scribe diff review.** `/sumo:review` runs an in-session reviewer (default `openai-codex/gpt-5.3-codex`) on the current branch diff. Repeat until GREEN before merging.
 - **CHANGELOG.** Keep-a-Changelog format; one section per release, retroactively documented for v0.1.0 → v0.2.0 → v0.3.0.
-- **Pi version smoke.** During the rollback window, Pi bumps re-verify the RPC contract, re-check the RPC editor builtin slash list, rerun the approval/security regression, and regenerate the patch only while `SUMO_LEGACY=1` remains supported. `scripts/smoke-pi-versions.sh` still catches the legacy seam patch breaking before a fallback session does.
+- **Pi version smoke.** Pi bumps re-verify the RPC contract, re-check the RPC editor builtin slash list, rerun the approval/security regression, and confirm the direct-Pi non-interactive bypass still works. `scripts/smoke-pi-versions.sh` should focus on package install and RPC compatibility, not private patch work.
 
 ## What's NOT in the dev loop yet
 

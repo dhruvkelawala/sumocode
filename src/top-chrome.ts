@@ -23,7 +23,6 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import type { Component } from "@earendil-works/pi-tui";
 import { isTopChromeHidden } from "./commands/tabs.js";
 import { sessionHasMessages as cachedSessionHasMessages } from "./session-cache.js";
-import { getActiveSumoRuntime } from "./sumo-tui/pi-compat/sumo-interactive-mode.js";
 import { activeThemeColors, type SumoCodeState } from "./themes/index.js";
 
 const RESET = "\u001b[0m";
@@ -231,10 +230,9 @@ class TopChromeComponent implements Component {
 }
 
 /**
- * Mounts top chrome as a retained owned-shell component when SumoTUI is active,
- * while also registering Pi's `ctx.ui.setHeader` for plain Pi/non-retained runs.
- * OwnedShellRenderer prefers the retained publication over Pi's header container.
- * Listens to lifecycle events to update the active session state in real time.
+ * Registers Pi's `ctx.ui.setHeader` for direct Pi runs. The RPC host owns the
+ * interactive foreground and renders its own top chrome from RPC state.
+ * Lifecycle events still update the active session state in real time.
  *
  * The actual recents + active-session-name resolution is delegated to the
  * caller-supplied `loadSnapshot` so this module stays unit-testable. In
@@ -255,12 +253,9 @@ export function installTopChrome(pi: ExtensionAPI, loader?: TopChromeLoader): vo
 			() => (loader ? loader() : defaultSnapshot(ctx, state)),
 			() => sessionHasMessages(ctx),
 		);
-		const runtime = getActiveSumoRuntime();
-		if (runtime) runtime.setTopChromeComponent(component);
 
 		ctx.ui.setHeader((tui) => {
 			render = () => {
-				runtime?.requestRender();
 				tui.requestRender();
 			};
 
@@ -301,7 +296,6 @@ export function installTopChrome(pi: ExtensionAPI, loader?: TopChromeLoader): vo
 	pi.on("message_start", () => render?.());
 	pi.on("message_end", () => render?.());
 	pi.on("session_shutdown", () => {
-		getActiveSumoRuntime()?.setTopChromeComponent(undefined);
 		render = undefined;
 	});
 }

@@ -47,12 +47,20 @@ import { ChatPager } from "../widgets/chat-pager.js";
 import { PiComponentLeaf } from "../widgets/pi-component-leaf.js";
 import { PiEditorLeaf } from "../widgets/pi-editor-leaf.js";
 import type { SplashTree } from "../cathedral/splash-tree.js";
-import type { SidebarPublication, TopChromePublication } from "./sumo-interactive-mode.js";
 import { SIDEBAR_WIDTH, sidebarGutterWidth } from "../../sidebar-placement.js";
 
 export interface OwnedShellRendererTerminal {
 	readonly columns?: number;
 	readonly rows?: number;
+}
+
+export interface SidebarPublication {
+	readonly component: Component;
+	readonly isVisible: (cols: number, rows: number) => boolean;
+}
+
+export interface TopChromePublication {
+	readonly component: Component;
 }
 
 interface OverlayEntry {

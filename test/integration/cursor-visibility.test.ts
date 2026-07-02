@@ -46,8 +46,7 @@ describe("sumo-tui editor cursor integration", () => {
 		});
 
 		await app.waitForOutput(PI_BOOT_SEQUENCE, 10_000);
-		await app.waitForOutput("SUMOCODE", 10_000);
-		await app.waitForOutput("RPC", 10_000);
+		await app.waitForOutput("DIVINE INVOCATION", 10_000);
 
 		const typed = "_ZQXJW";
 		app.sendInput(typed);

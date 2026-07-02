@@ -53,6 +53,12 @@ describe("renderInputFrame — active state (no label, no placeholder)", () => {
 		expect(lines.join("\n")).toContain("\u001b[38;2;217;119;6m");
 	});
 
+	it("can render the Bible scene cursor as an accent-background cell", () => {
+		const lines = renderInputFrame("test", 40, { cursorStyle: "cell" });
+		expect(stripAnsi(lines[1]!)).toContain("> test ");
+		expect(lines.join("\n")).toContain("\u001b[48;2;217;119;6m");
+	});
+
 	it("paints the inner content with the recess background (#120D0A)", () => {
 		const lines = renderInputFrame("hi", 40);
 		// recess #120D0A -> 18;13;10 as bg = 48;2;18;13;10

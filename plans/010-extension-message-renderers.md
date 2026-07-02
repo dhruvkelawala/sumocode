@@ -17,6 +17,8 @@
 - **Category**: bug
 - **Planned at**: commit `ae03bc0`, 2026-06-30
 - **Issue**: https://github.com/dhruvkelawala/sumocode/issues/298
+- **Execution**: DONE in `codex/rpc-precutover-stack-clean-exec` (`c256f6e`); advisor
+  verification accepted in the combined Track A/Track B review.
 
 ## Why this matters
 

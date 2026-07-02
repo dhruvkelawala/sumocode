@@ -18,6 +18,8 @@
 - **Category**: bug
 - **Planned at**: commit `ae03bc0`, 2026-06-30
 - **Issue**: https://github.com/dhruvkelawala/sumocode/issues/299
+- **Execution**: DONE in `codex/rpc-precutover-stack-clean-exec` (`c256f6e`). Visual
+  evidence was produced by `pnpm visual:ci`; no golden promotion was run.
 
 ## Why this matters
 

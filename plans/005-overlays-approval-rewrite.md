@@ -133,3 +133,33 @@ the security regression test in the required gate and reference it in
 `docs/SUMO_TUI_PI_PATCH_STRATEGY.md`'s smoke matrix. Any future change to the approval flow
 must re-run it. Document the host-render + `extension_ui` round-trip pattern as the canonical
 replacement for `ctx.ui.custom()` so new overlays do not reintroduce the no-op trap.
+
+## Execution review
+
+**Status:** DONE — accepted in `codex/rpc-precutover-stack-clean-exec` (`c256f6e`,
+`573248c`), based on approved Plan 002 branch `codex/rpc-host-shell-002-exec`.
+
+**Advisor verdict:** APPROVE after revision. The first reviewed stack was rejected because it
+returned `yes` from `showApprovalModal()` in RPC mode and skipped the approval gate for
+`ctx.mode === "rpc"`, recreating the exact fail-open caveat. The accepted revision installs
+`installApprovalGate()` in the RPC child profile and normalizes every non-`Yes`/`Always`
+approval outcome to blocked. `No`, cancel, timeout, malformed values, thrown prompt errors,
+and missing UI all block dangerous bash.
+
+The accepted revision also adds host-owned replacements for the bespoke custom-overlay
+surfaces: command palette, theme check, memory editor, approval preview, model/thinking/
+session/settings selectors, and answer/question/divine-query RPC branches through the
+`extension_ui` back-channel or retained host overlays.
+
+**Verification rerun by advisor:**
+
+- Focused RPC/security/runtime suite — passed, 10 files / 96 tests.
+- `pnpm exec tsc --noEmit && pnpm build` — passed.
+- `pnpm test:integration` — passed, 20 files / 36 tests.
+- `pnpm visual:ci` — exited 0; review pack produced in the worker worktree.
+- `pnpm test` — all 119 files / 1112 tests passed, but Vitest exited 1 from the known
+  unrelated background-task temp `output.log` ENOENT unhandled error.
+
+**Scope review:** no `plans/` or `docs/` diffs were present in the accepted source branch.
+The branch remained descended from `codex/rpc-host-shell-002-exec` and preserved
+`src/sumo-tui/rpc/runtime.ts`.

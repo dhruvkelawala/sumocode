@@ -122,6 +122,7 @@ async function runScenario(scenario) {
 	const runtimeFull = resolve(scenarioOut, "runtime-full.png");
 	const runtimeRender = await renderTerminalSnapshot(snapshot, runtimeFull, {
 		deviceScaleFactor: scenario.dimensions.deviceScaleFactor,
+		glyphBaselineShiftPx: scenario.lane === "runtime" ? 1 : 0,
 	});
 
 	const cropResults = [];
@@ -143,6 +144,8 @@ async function runScenario(scenario) {
 			threshold: crop.threshold,
 			outPaths,
 			dimensions: scenario.dimensions,
+			targetDimensions: crop.targetDimensions,
+			runtimeDimensions: crop.runtimeDimensions,
 		});
 		const styledCellDiff = cropStyledCellDiff(crop, runtimeGrid, rawOut);
 		const result = cropResult(crop, comparison);

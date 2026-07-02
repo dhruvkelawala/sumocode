@@ -104,3 +104,25 @@ The hardcoded builtin slash list is a maintenance liability — a Pi version bum
 add/rename builtins. Add a CI check (or a doctor check) that diffs the hardcoded list against
 Pi's actual builtins so drift is caught at upgrade time (tie into the smoke matrix in
 `docs/SUMO_TUI_PI_PATCH_STRATEGY.md`).
+
+## Execution review
+
+**Status:** DONE — accepted in `codex/rpc-precutover-stack-clean-exec` (`c256f6e`,
+`573248c`), based on approved Plan 002 branch `codex/rpc-host-shell-002-exec`.
+
+**Advisor verdict:** APPROVE. The implementation keeps the retained RPC runtime and mounts a
+host-owned `RpcHostEditorController` that wraps the Cathedral editor around pi-tui editor
+behavior, feeds slash completions from RPC command discovery plus host builtins, reconstructs
+`/model` completions from `get_available_models`, and sends ordinary submitted text through
+the RPC `prompt` command. Host slash controls are intercepted before prompt submission.
+
+**Verification rerun by advisor:**
+
+- Focused RPC/security/runtime suite — passed, 10 files / 96 tests.
+- `pnpm exec tsc --noEmit && pnpm build` — passed.
+- `pnpm test:integration` — passed, 20 files / 36 tests.
+- `pnpm visual:ci` — exited 0; review pack produced in the worker worktree.
+- `pnpm test` — all assertions passed, but command exited 1 from the known unrelated
+  background-task temp `output.log` ENOENT unhandled error.
+
+**Scope review:** no `plans/` or `docs/` diffs were present in the accepted source branch.

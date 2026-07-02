@@ -82,6 +82,9 @@ function bgFromStyle(style) {
 }
 
 function parentBgFromAttrs(attrs) {
+	if (/\bbg-recess\b/.test(attrs)) return "#120D0A";
+	if (/\bbg-surface\b/.test(attrs)) return "#241D17";
+	if (/\bbg-lifted\b/.test(attrs)) return "#3D3024";
 	return bgFromStyle(attrs) ?? DEFAULT_BG;
 }
 
@@ -265,7 +268,7 @@ export function parseBibleStyledGrid(htmlPath) {
 	}
 
 	// Extract grid blocks in document order
-	const gridPattern = /<pre class="grid"[^>]*>([\s\S]*?)<\/pre>/g;
+	const gridPattern = /<pre class="[^"]*\bgrid\b[^"]*"[^>]*>([\s\S]*?)<\/pre>/g;
 	// Find the opening tag, then capture everything from there to the end of the
 	// enclosing .stage div. The scene container depth varies across bible pages.
 	const openIdx = html.indexOf('data-render-rect');

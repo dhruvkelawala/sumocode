@@ -42,8 +42,7 @@ async function expectNarrowBoot(cols: number, rows: number): Promise<void> {
 		},
 	});
 
-	await app.waitForOutput("SUMOCODE", 10_000);
-	await app.waitForOutput("RPC", 10_000);
+	await app.waitForOutput("DIVINE INVOCATION", 10_000);
 	await new Promise((resolve) => setTimeout(resolve, 250));
 
 	const output = app.getOutput();

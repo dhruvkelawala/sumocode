@@ -12,6 +12,7 @@ import { RpcHostRuntime } from "./runtime.js";
 import { responseData } from "./response.js";
 import { RpcHostStateStore } from "./state.js";
 import { RpcTranscriptPump } from "./transcript-pump.js";
+import { rpcVisualFixtureFromEnv } from "./visual-fixtures.js";
 
 export interface RpcHostMainOptions {
 	readonly argv?: readonly string[];
@@ -60,6 +61,7 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 	}
 	const root = hostRoot(env);
 	const cwd = hostCwd(env);
+	const visualFixture = rpcVisualFixtureFromEnv(env);
 	const extensionPath = resolve(root, "src/extension.ts");
 	const client = new SumoRpcClient({
 		command: piBinary(env),
@@ -81,6 +83,7 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		cwd,
 		onRenderRequest: requestRender,
 		onSubmit: async (message) => {
+			if (visualFixture) return;
 			if (message.trim().length === 0) return;
 			if (await actions?.handleSubmittedText(message)) return;
 			const state = stateStore.getSnapshot();
@@ -111,6 +114,7 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 	let statsInFlight = false;
 
 	client.onEvent((event) => {
+		if (visualFixture) return;
 		const transcript = transcriptPump.handleAgentEvent(event);
 		const state = stateStore.handleAgentEvent(event);
 		runtime?.update({ state, transcript });
@@ -146,15 +150,16 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		const branch = await readGitBranch(cwd);
 		await controls.refreshState(branch);
 		await editor.configureAutocomplete(controls);
-		const messagesResponse = await client.send({ type: "get_messages" });
-		const messages = responseData(messagesResponse, "get_messages").messages;
-		const transcript = transcriptPump.replaceFromMessages(messages);
-		const state = stateStore.getSnapshot();
+		const transcript = visualFixture
+			? visualFixture.transcript
+			: transcriptPump.replaceFromMessages(responseData(await client.send({ type: "get_messages" }), "get_messages").messages);
+		const state = visualFixture ? visualFixture.state : stateStore.getSnapshot();
 		runtime = new RpcHostRuntime({
 			output: stdout,
 			input: stdin,
 			initialState: state,
 			initialTranscript: transcript,
+			inputPreview: visualFixture?.inputPreview,
 			editor,
 			modal: modals,
 			overlay: overlays,
@@ -162,8 +167,10 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 			inputHandler: actions,
 		});
 		await runtime.start();
-		await refreshStats();
-		statsTimer = setInterval(() => { void refreshStats(); }, 5_000);
+		if (!visualFixture) {
+			await refreshStats();
+			statsTimer = setInterval(() => { void refreshStats(); }, 5_000);
+		}
 		return await runtime.waitForExit();
 	} catch (error) {
 		writeLine(stderr, `[sumocode-rpc] ${error instanceof Error ? error.message : String(error)}`);

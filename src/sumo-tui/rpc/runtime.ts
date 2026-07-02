@@ -1,12 +1,26 @@
+import { homedir } from "node:os";
+import { basename, join, resolve } from "node:path";
 import { visibleWidth, type Component } from "@earendil-works/pi-tui";
-import { activeThemeColors } from "../../themes/index.js";
+import { INPUT_FRAME_HINT_AWAITING, INPUT_FRAME_PLACEHOLDER, renderInputFrame, renderInputHints } from "../../cathedral/input-frame.js";
+import {
+	formatCwd,
+	renderFooterBlock,
+	renderSplashVersionLine,
+	type FooterSnapshot,
+	type ThinkingLevel,
+} from "../../footer.js";
+import { getCachedMcpRoster } from "../../mcp-config-reader.js";
+import { SIDEBAR_GUTTER_WIDTH, SIDEBAR_MIN_TERMINAL_WIDTH, SIDEBAR_WIDTH } from "../../sidebar-placement.js";
+import { renderTopChrome, type TopChromeSnapshot } from "../../top-chrome.js";
+import { activeThemeColors, type SumoCodeState } from "../../themes/index.js";
+import { createSidebarTree, type SidebarLayoutSnapshot } from "../cathedral/sidebar-tree.js";
+import { createSplashTree, defaultSplashSnapshot, getSplashContentHeight } from "../cathedral/splash-tree.js";
 import { SumoNode } from "../layout/node.js";
 import { DIRECTION_LTR, FLEX_DIRECTION_COLUMN, loadYoga, type Yoga } from "../layout/yoga.js";
 import { CellBuffer } from "../render/buffer.js";
 import { createAttrs } from "../render/cell.js";
 import { composite } from "../render/compositor.js";
 import { diffFrames } from "../render/diff.js";
-import { lineToAnsi, renderRule, span, textLine, type Line, type Span, type Style } from "../render/primitives.js";
 import { logDiagnostic } from "../runtime/diagnostics.js";
 import { defaultTerminalSessionOwner, type TerminalOutput, type TerminalSessionOwner } from "../runtime/terminal-controller.js";
 import type { TranscriptViewModel } from "../transcript/view-model.js";
@@ -40,6 +54,7 @@ export interface RpcHostRuntimeOptions {
 	readonly terminal?: TerminalSessionOwner;
 	readonly initialState?: RpcHostChromeState;
 	readonly initialTranscript?: TranscriptViewModel;
+	readonly inputPreview?: string;
 	readonly editor?: Component;
 	readonly modal?: Component & { getActiveKind?(): string | undefined };
 	readonly overlay?: Component & { getActiveKind?(): string | undefined };
@@ -50,6 +65,7 @@ export interface RpcHostRuntimeOptions {
 export interface RpcHostRuntimeSnapshot {
 	readonly state: RpcHostChromeState;
 	readonly transcript: TranscriptViewModel;
+	readonly inputPreview?: string;
 }
 
 const EMPTY_TRANSCRIPT: TranscriptViewModel = { messages: [] };
@@ -62,9 +78,17 @@ const FALLBACK_STATE: RpcHostChromeState = {
 	taskPartialCount: 0,
 	costUsd: 0,
 };
-const TOP_CHROME_ROWS = 2;
-const FOOTER_ROWS = 2;
-const EDITOR_ROWS = 4;
+const ACTIVE_TOP_ROWS = 3;
+const SPLASH_BOTTOM_RESERVED_ROWS = 8;
+const SPLASH_INPUT_FRAME_WIDTH = 60;
+const PORTRAIT_CHAT_GUTTER_WIDTH = 1;
+const ANSI_PATTERN = /\u001b(?:\[[0-?]*[ -/]*[@-~]|\][^\u0007]*(?:\u0007|\u001b\\)|_[^\u0007]*(?:\u0007|\u001b\\))/g;
+
+const THINKING_LEVELS = new Set<ThinkingLevel>(["off", "minimal", "low", "medium", "high", "xhigh"]);
+
+interface SplashAwareComponent extends Component {
+	setSplashProvider?(provider: () => boolean): void;
+}
 
 class RpcTranscriptFrameRenderer {
 	private readonly root: SumoNode;
@@ -86,47 +110,36 @@ class RpcTranscriptFrameRenderer {
 		this.chat.replaceViewModels(transcript.messages);
 	}
 
-	public render(columns: number, rows: number): CellBuffer {
+	public getYoga(): Yoga {
+		return this.yoga;
+	}
+
+	public renderChatRegion(state: RpcHostChromeState, columns: number, rows: number): CellBuffer {
 		const width = Math.max(1, columns);
 		const height = Math.max(0, rows);
-		this.root.width = width;
-		this.root.height = height;
-		this.root.yogaNode.calculateLayout(width, height, DIRECTION_LTR);
 		const buffer = new CellBuffer(height, width);
-		composite(this.root, buffer);
+		paintBackground(buffer, width, height);
+		if (height === 0) return buffer;
+
+		const root = new SumoNode(this.yoga.Node.create());
+		root.flexDirection = FLEX_DIRECTION_COLUMN;
+		root.width = width;
+		root.height = height;
+		const sidebarSnapshot = sidebarLayoutSnapshot(state, width, height, this.chat.hasMessages());
+		const tree = createSidebarTree(this.yoga, root, sidebarSnapshot);
+		tree.chat.marginRight = sidebarGutterFor(width, height, sidebarSnapshot.sessionHasMessages);
+		tree.chat.addChild(this.chat);
+		root.yogaNode.calculateLayout(width, height, DIRECTION_LTR);
+		composite(root, buffer);
+		if (this.chat.parent === tree.chat) tree.chat.removeChild(this.chat);
+		root.dispose();
 		return buffer;
 	}
 
 	public dispose(): void {
+		this.chat.dispose();
 		this.root.dispose();
 	}
-}
-
-function tokenText(value: number | undefined): string {
-	if (value === undefined || !Number.isFinite(value)) return "?";
-	if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}m`;
-	if (value >= 1_000) return `${Math.round(value / 100) / 10}k`;
-	return String(Math.max(0, Math.floor(value)));
-}
-
-function linePartsWidth(parts: readonly Span[]): number {
-	return parts.reduce((width, part) => width + visibleWidth(part.text), 0);
-}
-
-function centeredLine(parts: readonly Span[], width: number, style: Style): Line {
-	const padding = Math.max(0, Math.floor((width - linePartsWidth(parts)) / 2));
-	return textLine([span(" ".repeat(padding), style), ...parts], style);
-}
-
-function splitLine(left: readonly Span[], right: readonly Span[], width: number, style: Style): Line {
-	const gap = Math.max(1, width - linePartsWidth(left) - linePartsWidth(right));
-	return textLine([...left, span(" ".repeat(gap), style), ...right], style);
-}
-
-function stateLabel(state: RpcHostChromeState): string {
-	if (state.isCompacting) return "INSCRIBING";
-	if (state.isStreaming) return "MEDITATING";
-	return "READY";
 }
 
 function terminalColumns(output: RpcHostTerminalOutput): number {
@@ -150,12 +163,36 @@ function paintBuffer(target: CellBuffer, source: CellBuffer, top: number, left: 
 	}
 }
 
+function paintBackground(buffer: CellBuffer, columns: number, rows: number): void {
+	const colors = activeThemeColors();
+	buffer.setDefaultForeground(colors.foreground);
+	buffer.setDefaultBackground(colors.background);
+	buffer.paint({ top: 0, left: 0, width: columns, height: rows }, {
+		char: " ",
+		fg: colors.foreground,
+		bg: colors.background,
+		attrs: createAttrs(),
+	});
+}
+
 function paintAnsiLines(target: CellBuffer, lines: readonly string[], top: number, columns: number): void {
 	for (let index = 0; index < lines.length; index += 1) {
 		const row = top + index;
 		if (row < 0 || row >= target.getDimensions().rows) continue;
 		target.paintRow(row, lines[index] ?? "", 0, columns);
 	}
+}
+
+function centerAnsi(line: string, width: number): string {
+	const visible = visibleWidth(line);
+	if (visible >= width) return line;
+	const left = Math.floor((width - visible) / 2);
+	const right = width - visible - left;
+	return `${" ".repeat(left)}${line}${" ".repeat(right)}`;
+}
+
+function stripAnsi(value: string): string {
+	return value.replace(ANSI_PATTERN, "");
 }
 
 interface RpcHostRuntimeSurfaces {
@@ -165,6 +202,238 @@ interface RpcHostRuntimeSurfaces {
 	readonly notifications?: Component;
 }
 
+function hostCwd(env: NodeJS.ProcessEnv = process.env): string {
+	return resolve(env.SUMOCODE_PROJECT_CWD ?? process.cwd());
+}
+
+function resolvePiAgentDir(env: NodeJS.ProcessEnv = process.env): string {
+	return env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent");
+}
+
+function normalizeThinkingLevel(value: string | undefined): ThinkingLevel {
+	return THINKING_LEVELS.has(value as ThinkingLevel) ? value as ThinkingLevel : "medium";
+}
+
+function sumoState(state: RpcHostChromeState): SumoCodeState {
+	if (state.isCompacting) return "learning";
+	if (state.lastEventType === "tool_call" || state.lastEventType === "tool_execution_update") return "tool";
+	if (state.isStreaming) return "thinking";
+	return "idle";
+}
+
+function sessionLabel(state: RpcHostChromeState): string {
+	return state.sessionName ?? state.sessionId?.slice(0, 8) ?? "session";
+}
+
+function topChromeSnapshot(state: RpcHostChromeState): TopChromeSnapshot {
+	return {
+		activeSession: {
+			id: state.sessionId ?? "rpc-session",
+			label: sessionLabel(state),
+			state: sumoState(state),
+		},
+		recentSessions: [],
+		hidden: false,
+	};
+}
+
+function footerSnapshot(state: RpcHostChromeState, isSplash: boolean): FooterSnapshot {
+	const contextTokens = state.contextTokens ?? 0;
+	return {
+		cwd: hostCwd(),
+		branch: state.gitBranch ?? null,
+		inputTokens: contextTokens,
+		outputTokens: 0,
+		contextTokens,
+		contextWindow: state.contextWindow,
+		costUsd: state.costUsd,
+		state: sumoState(state),
+		modelId: state.modelLabel ?? "no-model",
+		thinkingLevel: normalizeThinkingLevel(state.thinkingLevel),
+		isSplash,
+	};
+}
+
+function sidebarLayoutSnapshot(
+	state: RpcHostChromeState,
+	terminalWidth: number,
+	terminalHeight: number,
+	hasMessages: boolean,
+): SidebarLayoutSnapshot {
+	const cwd = hostCwd();
+	const contextTokens = state.contextTokens ?? 0;
+	const sidebarEnabled = hasMessages && terminalWidth >= SIDEBAR_MIN_TERMINAL_WIDTH;
+	return {
+		terminalWidth,
+		terminalHeight,
+		sessionHasMessages: sidebarEnabled,
+		dockMinWidth: SIDEBAR_MIN_TERMINAL_WIDTH,
+		sidebarWidth: SIDEBAR_WIDTH,
+		projectName: basename(cwd) || cwd,
+		branch: state.gitBranch,
+		inputTokens: contextTokens,
+		outputTokens: 0,
+		currentContextTokens: state.contextTokens,
+		contextWindow: state.contextWindow ?? 0,
+		costUsd: state.costUsd,
+		mcpServers: getCachedMcpRoster({ cwd, piAgentDir: resolvePiAgentDir() }),
+		memory: [],
+		memoryTotal: 0,
+		activeSubTab: "CONTEXT",
+		sessions: [{ name: sessionLabel(state), branch: state.gitBranch, active: true }],
+	};
+}
+
+function sidebarGutterFor(columns: number, _rows: number, sidebarEnabled: boolean): number {
+	if (sidebarEnabled) return SIDEBAR_GUTTER_WIDTH;
+	return columns < SIDEBAR_MIN_TERMINAL_WIDTH ? PORTRAIT_CHAT_GUTTER_WIDTH : 0;
+}
+
+function renderActiveHint(state: RpcHostChromeState, width: number, sidebarVisible: boolean): string {
+	const pad = width > 2 ? 1 : 0;
+	const innerWidth = Math.max(0, width - pad * 2);
+	const project = formatCwd(hostCwd());
+	const branch = state.gitBranch;
+	const leftHint = sidebarVisible ? undefined : branch ? `${project} (${branch})` : project;
+	const hint = renderInputHints(innerWidth, {
+		leftHint,
+		leftHintOverflow: "truncate",
+		leftHintStyle: "project-branch",
+	});
+	return `${" ".repeat(pad)}${hint}${" ".repeat(pad)}`;
+}
+
+function renderSplashHint(width: number): string {
+	const frameWidth = Math.min(width, SPLASH_INPUT_FRAME_WIDTH);
+	const hint = renderInputHints(frameWidth, {
+		leftHint: INPUT_FRAME_HINT_AWAITING,
+	});
+	return centerAnsi(hint, width);
+}
+
+function paintSplashCursor(buffer: CellBuffer, editorRows: readonly string[], editorTop: number, columns: number): void {
+	const contentRowIndex = editorRows.findIndex((row) => stripAnsi(row).includes(INPUT_FRAME_PLACEHOLDER));
+	if (contentRowIndex === -1) return;
+	const frameWidth = Math.min(columns, SPLASH_INPUT_FRAME_WIDTH);
+	const frameLeft = Math.max(0, Math.floor((columns - frameWidth) / 2));
+	const cursorCol = frameLeft + 4 + Math.min(INPUT_FRAME_PLACEHOLDER.length, Math.max(0, frameWidth - 7));
+	const colors = activeThemeColors();
+	buffer.setCell(editorTop + contentRowIndex, cursorCol, {
+		char: " ",
+		fg: colors.background,
+		bg: colors.accent,
+		attrs: createAttrs(),
+	});
+}
+
+function activeTopRows(state: RpcHostChromeState, width: number): string[] {
+	return ["", renderTopChrome(topChromeSnapshot(state), width), ""];
+}
+
+function latestUserPrompt(transcript: TranscriptViewModel): string | undefined {
+	for (let index = transcript.messages.length - 1; index >= 0; index -= 1) {
+		const message = transcript.messages[index];
+		if (message?.role !== "user") continue;
+		const text = message.blocks
+			.filter((block) => block.type === "markdown")
+			.map((block) => block.text)
+			.join("\n")
+			.trim();
+		if (text.length > 0) return text;
+	}
+	return undefined;
+}
+
+function activeEditorIsEmpty(rows: readonly string[]): boolean {
+	const content = rows.find((row) => stripAnsi(row).startsWith("│ >"));
+	if (!content) return false;
+	return /^│ >\s+│$/.test(stripAnsi(content));
+}
+
+function activeEditorRows(snapshot: RpcHostRuntimeSnapshot, width: number, surfaces: RpcHostRuntimeSurfaces): string[] {
+	const rows = surfaces.editor?.render(width) ?? [];
+	if (activeEditorIsEmpty(rows)) {
+		const submittedPrompt = snapshot.inputPreview ?? (width >= SIDEBAR_MIN_TERMINAL_WIDTH ? latestUserPrompt(snapshot.transcript) : undefined);
+		return renderInputFrame(submittedPrompt ?? "", width, { promptColor: "accent", cursorStyle: "cell" });
+	}
+	return rows;
+}
+
+function activeBottomRows(snapshot: RpcHostRuntimeSnapshot, width: number, hasMessages: boolean, surfaces: RpcHostRuntimeSurfaces): string[] {
+	const state = snapshot.state;
+	const sidebarVisible = hasMessages && width >= SIDEBAR_MIN_TERMINAL_WIDTH;
+	return [
+		"",
+		...activeEditorRows(snapshot, width, surfaces),
+		renderActiveHint(state, width, sidebarVisible),
+		"",
+		...renderFooterBlock(footerSnapshot(state, false), width),
+		"",
+	];
+}
+
+function renderSplashFrame(
+	columns: number,
+	rows: number,
+	transcriptRenderer: RpcTranscriptFrameRenderer,
+	surfaces: RpcHostRuntimeSurfaces,
+): CellBuffer {
+	const buffer = new CellBuffer(rows, columns);
+	paintBackground(buffer, columns, rows);
+
+	const splashAreaHeight = Math.max(1, rows - SPLASH_BOTTOM_RESERVED_ROWS);
+	const yoga = transcriptRenderer.getYoga();
+	const root = new SumoNode(yoga.Node.create());
+	root.flexDirection = FLEX_DIRECTION_COLUMN;
+	root.width = columns;
+	root.height = splashAreaHeight;
+	const splashSnapshot = defaultSplashSnapshot(false);
+	const splash = createSplashTree(yoga, root, () => splashSnapshot);
+	root.yogaNode.calculateLayout(columns, splashAreaHeight, DIRECTION_LTR);
+	const splashBuffer = new CellBuffer(splashAreaHeight, columns);
+	paintBackground(splashBuffer, columns, splashAreaHeight);
+	composite(root, splashBuffer);
+	paintBuffer(buffer, splashBuffer, -1, 0);
+	const contentTop = splash.content.getComputedTop();
+	const contentHeight = getSplashContentHeight(splashSnapshot, columns);
+	root.dispose();
+
+	const editorRows = surfaces.editor?.render(columns) ?? [];
+	const editorTop = Math.min(
+		Math.max(0, rows - editorRows.length),
+		Math.max(0, contentTop + contentHeight + 1),
+	);
+	paintAnsiLines(buffer, editorRows, editorTop, columns);
+	paintSplashCursor(buffer, editorRows, editorTop, columns);
+	const hintTop = Math.min(rows - 1, editorTop + editorRows.length + 1);
+	paintAnsiLines(buffer, [renderSplashHint(columns)], hintTop, columns);
+	const versionTop = Math.min(rows - 1, hintTop + 3);
+	const version = renderSplashVersionLine(columns);
+	if (version !== "") paintAnsiLines(buffer, [version], versionTop, columns);
+
+	return buffer;
+}
+
+function renderActiveFrame(
+	snapshot: RpcHostRuntimeSnapshot,
+	columns: number,
+	rows: number,
+	transcriptRenderer: RpcTranscriptFrameRenderer,
+	surfaces: RpcHostRuntimeSurfaces,
+): CellBuffer {
+	const buffer = new CellBuffer(rows, columns);
+	paintBackground(buffer, columns, rows);
+	const topRows = activeTopRows(snapshot.state, columns);
+	const bottomRows = activeBottomRows(snapshot, columns, true, surfaces);
+	const chatHeight = Math.max(0, rows - topRows.length - bottomRows.length);
+	paintAnsiLines(buffer, topRows, 0, columns);
+	if (chatHeight > 0) {
+		paintBuffer(buffer, transcriptRenderer.renderChatRegion(snapshot.state, columns, chatHeight), topRows.length, 0);
+	}
+	paintAnsiLines(buffer, bottomRows, topRows.length + chatHeight, columns);
+	return buffer;
+}
+
 function renderRpcFrame(
 	snapshot: RpcHostRuntimeSnapshot,
 	columns: number,
@@ -172,82 +441,22 @@ function renderRpcFrame(
 	transcriptRenderer?: RpcTranscriptFrameRenderer,
 	surfaces: RpcHostRuntimeSurfaces = {},
 ): CellBuffer {
-	const colors = activeThemeColors();
-	const base: Style = { fg: colors.foreground, bg: colors.background };
-	const dim: Style = { fg: colors.foregroundDim, bg: colors.background };
-	const accent: Style = { fg: colors.accent, bg: colors.background, bold: true };
-	const idle: Style = { fg: colors.states.idle, bg: colors.background, bold: true };
-	const tool: Style = { fg: colors.states.tool, bg: colors.background, bold: true };
-	const divider: Style = { fg: colors.divider, bg: colors.background };
-	const buffer = new CellBuffer(rows, columns);
-	buffer.paint({ top: 0, left: 0, width: columns, height: rows }, { char: " ", fg: colors.foreground, bg: colors.background, attrs: createAttrs() });
-
-	const state = snapshot.state;
-	const transcript = snapshot.transcript;
-	const label = stateLabel(state);
-	const model = state.modelLabel ?? "model pending";
-	const session = state.sessionName ?? state.sessionId ?? "ephemeral session";
-	const branch = state.gitBranch ? `branch ${state.gitBranch}` : "branch unknown";
-	const context = `${tokenText(state.contextTokens)}/${tokenText(state.contextWindow)}`;
-	const footerLeft = `${label} · ${branch}`;
-	const footerRight = `${context} · $${state.costUsd.toFixed(2)}`;
-	const centerRow = Math.max(4, Math.floor(rows / 2) - 3);
-	const hasMessages = transcript.messages.length > 0;
-	const editorRows = surfaces.editor ? Math.min(EDITOR_ROWS, Math.max(0, rows - TOP_CHROME_ROWS - FOOTER_ROWS)) : 0;
-	const editorTop = Math.max(TOP_CHROME_ROWS, rows - FOOTER_ROWS - editorRows);
-	const lines: Array<{ row: number; line: Line }> = [
-		{
-			row: 0,
-			line: splitLine(
-				[span(" sumocode", accent), span(" · rpc host", dim)],
-				[span(label, label === "READY" ? idle : tool), span(" ", base)],
-				columns,
-				base,
-			),
-		},
-		{ row: 1, line: renderRule(columns, { char: "─", style: divider, lineStyle: base }) },
-		{ row: rows - 2, line: renderRule(columns, { char: "─", style: divider, lineStyle: base }) },
-		{
-			row: rows - 1,
-			line: splitLine(
-				[span(` ${footerLeft}`, label === "READY" ? idle : tool)],
-				[span(footerRight, dim), span(" ", base)],
-				columns,
-				base,
-			),
-		},
-	];
-	if (!hasMessages) {
-		lines.push(
-			{ row: centerRow, line: centeredLine([span("SUMOCODE", accent), span(" RPC", tool)], columns, base) },
-			{ row: centerRow + 2, line: centeredLine([span("empty transcript", dim)], columns, base) },
-			{ row: centerRow + 3, line: centeredLine([span(session, base)], columns, base) },
-			{ row: centerRow + 4, line: centeredLine([span(model, dim)], columns, base) },
-		);
-	} else if (transcriptRenderer) {
-		const chatTop = TOP_CHROME_ROWS;
-		const chatHeight = Math.max(0, rows - TOP_CHROME_ROWS - FOOTER_ROWS - editorRows);
-		if (chatHeight > 0) paintBuffer(buffer, transcriptRenderer.render(columns, chatHeight), chatTop, 0);
-	}
-
-	for (const { row, line } of lines) {
-		if (row < 0 || row >= rows) continue;
-		buffer.paintRow(row, lineToAnsi(line, { width: columns, style: base }));
-	}
-	if (surfaces.editor && editorRows > 0) {
-		paintAnsiLines(buffer, surfaces.editor.render(columns).slice(0, editorRows), editorTop, columns);
-	}
+	const hasMessages = snapshot.transcript.messages.length > 0 || snapshot.state.hasMessages;
+	const buffer = !hasMessages
+		? renderSplashFrame(columns, rows, transcriptRenderer!, surfaces)
+		: renderActiveFrame(snapshot, columns, rows, transcriptRenderer!, surfaces);
+	const overlayBaseTop = hasMessages ? ACTIVE_TOP_ROWS : 0;
 	if (surfaces.notifications) {
-		paintAnsiLines(buffer, surfaces.notifications.render(columns), TOP_CHROME_ROWS, columns);
+		paintAnsiLines(buffer, surfaces.notifications.render(columns), overlayBaseTop, columns);
 	}
 	if (surfaces.overlay) {
 		const overlayLines = surfaces.overlay.render(columns);
-		const overlayTop = Math.max(TOP_CHROME_ROWS, Math.floor((rows - overlayLines.length) / 2));
+		const overlayTop = Math.max(overlayBaseTop, Math.floor((rows - overlayLines.length) / 2));
 		paintAnsiLines(buffer, overlayLines, overlayTop, columns);
 	}
 	if (surfaces.modal) {
 		const modalLines = surfaces.modal.render(columns);
-		const modalTop = Math.max(TOP_CHROME_ROWS, Math.floor((rows - modalLines.length) / 2));
+		const modalTop = Math.max(overlayBaseTop, Math.floor((rows - modalLines.length) / 2));
 		paintAnsiLines(buffer, modalLines, modalTop, columns);
 	}
 	return buffer;
@@ -262,6 +471,7 @@ export class RpcHostRuntime {
 	private readonly overlay: (Component & { getActiveKind?(): string | undefined }) | undefined;
 	private readonly notifications: Component | undefined;
 	private readonly inputHandler: RpcHostInputHandler | undefined;
+	private readonly inputPreview: string | undefined;
 	private state: RpcHostChromeState;
 	private transcript: TranscriptViewModel;
 	private transcriptRenderer: RpcTranscriptFrameRenderer | undefined;
@@ -305,7 +515,9 @@ export class RpcHostRuntime {
 		this.terminal = options.terminal ?? defaultTerminalSessionOwner;
 		this.state = options.initialState ?? FALLBACK_STATE;
 		this.transcript = options.initialTranscript ?? EMPTY_TRANSCRIPT;
+		this.inputPreview = options.inputPreview;
 		this.editor = options.editor;
+		(this.editor as SplashAwareComponent | undefined)?.setSplashProvider?.(() => this.transcript.messages.length === 0 && !this.state.hasMessages);
 		this.modal = options.modal;
 		this.overlay = options.overlay;
 		this.notifications = options.notifications;
@@ -374,7 +586,7 @@ export class RpcHostRuntime {
 		if (!this.started || this.stopped) return;
 		if (!this.transcriptRenderer) return;
 		const frame = renderRpcFrame(
-			{ state: this.state, transcript: this.transcript },
+			{ state: this.state, transcript: this.transcript, inputPreview: this.inputPreview },
 			terminalColumns(this.output),
 			terminalRows(this.output),
 			this.transcriptRenderer,

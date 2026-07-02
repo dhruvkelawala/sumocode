@@ -20,7 +20,7 @@ export async function renderTerminalSnapshot(snapshot, outputPng, options = {}) 
 			viewport: { width: 2200, height: 2200 },
 			deviceScaleFactor: options.deviceScaleFactor ?? 2,
 		});
-		await page.goto(pathToFileURL(htmlPath).href, { waitUntil: "networkidle" });
+	await page.goto(pathToFileURL(htmlPath).href, { waitUntil: "networkidle" });
 		await page.evaluate(() => document.fonts.ready);
 		await page.waitForTimeout(80);
 		const rect = await page.$("[data-render-rect]");
@@ -53,6 +53,7 @@ export async function renderTerminalSnapshot(snapshot, outputPng, options = {}) 
 export function terminalSnapshotHtml(snapshot, options = {}) {
 	const tokens = readFileSync(bibleTokensCss, "utf8");
 	const fontUrl = pathToFileURL(bibleFontPath).href;
+	const glyphBaselineShiftPx = Number(options.glyphBaselineShiftPx ?? 0);
 	const rows = snapshot.cells.map((row) => `<div class="row" style="background:${rowBackground(row)}">${renderRow(row)}</div>`).join("\n");
 	return `<!doctype html>
 <html>
@@ -76,6 +77,7 @@ html, body { min-height: 100%; }
   line-height: var(--cell-h);
   white-space: pre;
   vertical-align: top;
+  transform: translateY(${glyphBaselineShiftPx}px);
   /* Force exact cell-count width so narrow glyphs (e.g. NARROW NO-BREAK
      SPACE used by sidebar tracked() headers) cannot collapse a run
      below its terminal cell footprint. */

@@ -107,6 +107,8 @@ function normalizeCropRef(crop, scenario, crops, defaults) {
 		runtimeCropId: crop.runtimeCrop ?? crop.id,
 		targetCrop: resolveCrop(crop.targetCrop ?? crop.id, crops),
 		runtimeCrop: resolveCrop(crop.runtimeCrop ?? crop.id, crops),
+		targetDimensions: crop.targetDimensions,
+		runtimeDimensions: crop.runtimeDimensions,
 		goldenPath,
 		goldenExists: existsSync(goldenPath),
 	};

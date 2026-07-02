@@ -66,6 +66,10 @@ function color(text: string, hex: string): string {
 	return `${fg(hex)}${text}${RESET}`;
 }
 
+function cursorCell(): string {
+	return `${fg(activeThemeColors().background)}${bg(activeThemeColors().accent)} ${RESET}`;
+}
+
 function withBackground(line: string, hex: string): string {
 	const bgCode = bg(hex);
 	// Inner color() calls use RESET, which clears background too. Re-apply the
@@ -97,6 +101,8 @@ export type InputFrameOptions = {
 	 * working prompt. Defaults to oxidized.
 	 */
 	promptColor?: "oxidized" | "accent";
+	/** Render the cursor as an accent-background cell, matching Bible scene markup. */
+	cursorStyle?: "glyph" | "cell";
 };
 
 /**
@@ -133,14 +139,14 @@ export function renderInputFrame(input: string, width: number, options: InputFra
 
 	// Content row: `> <text>█` or `> <placeholder>█`. The full row gets the
 	// recess (#120D0A) background to match the Bible `bg-recess` frame block.
-	// Cursor is accent █.
+	// Cursor is accent █ unless a caller requests the Bible scene cursor cell.
 	const showPlaceholder = input.length === 0 && options.placeholder !== undefined;
 	const promptHex =
 		options.promptColor === "accent"
 			? activeThemeColors().accent
 			: activeThemeColors().foregroundDim;
 	const promptArrow = color(">", promptHex);
-	const cursor = color("█", activeThemeColors().accent);
+	const cursor = options.cursorStyle === "cell" ? cursorCell() : color("█", activeThemeColors().accent);
 	const rawText = showPlaceholder ? options.placeholder! : input;
 	const textColor = showPlaceholder ? activeThemeColors().foregroundDim : activeThemeColors().foreground;
 	let innerContent: string;

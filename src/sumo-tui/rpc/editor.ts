@@ -121,6 +121,7 @@ export class RpcHostEditorController implements EditorTextController, KeyTarget 
 	private readonly cwd: string | undefined;
 	private readonly fdPath: string | null | undefined;
 	private readonly onSubmit: (text: string) => void | Promise<void>;
+	private isSplashProvider: () => boolean;
 
 	public constructor(options: RpcHostEditorControllerOptions = {}) {
 		this.tui = options.tui ?? createFallbackTui(options.onRenderRequest);
@@ -128,11 +129,12 @@ export class RpcHostEditorController implements EditorTextController, KeyTarget 
 		this.cwd = options.cwd;
 		this.fdPath = options.fdPath;
 		this.onSubmit = options.onSubmit ?? (() => undefined);
+		this.isSplashProvider = options.isSplash ?? (() => false);
 		this.editor = createCathedralEditor(
 			this.tui,
 			options.theme ?? createFallbackEditorTheme(),
 			options.keybindings ?? createNoopKeybindings(),
-			{ isSplash: options.isSplash ?? (() => false) },
+			{ isSplash: () => this.isSplashProvider() },
 		);
 		this.editor.focused = true;
 		this.editor.onChange = () => this.tui.requestRender();
@@ -165,6 +167,11 @@ export class RpcHostEditorController implements EditorTextController, KeyTarget 
 
 	public invalidate(): void {
 		this.editor.invalidate();
+	}
+
+	public setSplashProvider(provider: () => boolean): void {
+		this.isSplashProvider = provider;
+		this.tui.requestRender();
 	}
 
 	public handleKey(event: KeyEvent): boolean {

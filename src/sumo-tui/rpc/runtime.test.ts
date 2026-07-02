@@ -79,18 +79,18 @@ class FakeEditor implements Component {
 }
 
 describe("RPC host retained runtime frame", () => {
-	it("renders a recognizable empty shell with footer state", async () => {
+	it("renders the Cathedral splash instead of the provisional empty shell", async () => {
 		const frame = await renderRpcHostFrameForTest({
 			state: state(),
 			transcript: { messages: [] },
-		}, 80, 24);
+		}, 160, 45);
 
-		const plain = Array.from({ length: 24 }, (_, row) => frame.toPlainRow(row)).join("\n");
-		expect(plain).toContain("sumocode · rpc host");
-		expect(plain).toContain("SUMOCODE RPC");
-		expect(plain).toContain("empty transcript");
-		expect(plain).toContain("READY · branch codex/rpc-host");
-		expect(plain).toContain("0/100k · $0.00");
+		const plain = Array.from({ length: 45 }, (_, row) => frame.toPlainRow(row)).join("\n");
+		expect(plain).toContain('"Meow meow meow... meow meow"');
+		expect(plain).toContain("SUMOCODE V0.3.0");
+		expect(plain).not.toContain("SUMOCODE RPC");
+		expect(plain).not.toContain("empty transcript");
+		expect(plain).not.toContain("rpc host");
 	});
 
 	it("renders transcript messages through the retained ChatPager buffer", async () => {
@@ -110,6 +110,73 @@ describe("RPC host retained runtime frame", () => {
 		expect(plain).toContain("USER");
 		expect(plain).toContain("visible rpc transcript body");
 		expect(plain).not.toContain("1 message transcript");
+	});
+
+	it("reserves the V2 sidebar columns in active landscape", async () => {
+		const frame = await renderRpcHostFrameForTest({
+			state: state({ messageCount: 1, hasMessages: true }),
+			transcript: {
+				messages: [{
+					id: "message-1",
+					role: "user",
+					displayName: "YOU",
+					blocks: [{ type: "markdown", text: "landscape chat body" }],
+				}],
+			},
+		}, 160, 45);
+
+		const sidebarText = Array.from({ length: 34 }, (_, row) => frame.toPlainRow(row + 3).slice(130)).join("\n");
+		const chatText = Array.from({ length: 34 }, (_, row) => frame.toPlainRow(row + 3).slice(0, 128)).join("\n");
+		expect(sidebarText).toContain("REGISTRY");
+		expect(sidebarText).toContain("sumocode");
+		expect(chatText).toContain("landscape chat body");
+	});
+
+	it("hides the sidebar in portrait and moves project context to the hint row", async () => {
+		const frame = await renderRpcHostFrameForTest({
+			state: state({ messageCount: 1, hasMessages: true }),
+			transcript: {
+				messages: [{
+					id: "message-1",
+					role: "user",
+					displayName: "YOU",
+					blocks: [{ type: "markdown", text: "portrait chat body" }],
+				}],
+			},
+		}, 60, 100);
+
+		const plain = Array.from({ length: 100 }, (_, row) => frame.toPlainRow(row)).join("\n");
+		expect(plain).toContain("portrait chat body");
+		expect(plain).toContain("sumocode");
+		expect(plain).not.toContain("REGISTRY");
+	});
+
+	it("maps streaming and compacting state to Cathedral footer labels", async () => {
+		const streaming = await renderRpcHostFrameForTest({
+			state: state({ messageCount: 1, hasMessages: true, isStreaming: true }),
+			transcript: {
+				messages: [{
+					id: "message-1",
+					role: "user",
+					displayName: "YOU",
+					blocks: [{ type: "markdown", text: "state body" }],
+				}],
+			},
+		}, 90, 24);
+		const compacting = await renderRpcHostFrameForTest({
+			state: state({ messageCount: 1, hasMessages: true, isCompacting: true }),
+			transcript: {
+				messages: [{
+					id: "message-1",
+					role: "user",
+					displayName: "YOU",
+					blocks: [{ type: "markdown", text: "state body" }],
+				}],
+			},
+		}, 90, 24);
+
+		expect(Array.from({ length: 24 }, (_, row) => streaming.toPlainRow(row)).join("\n")).toContain("MEDITATING");
+		expect(Array.from({ length: 24 }, (_, row) => compacting.toPlainRow(row)).join("\n")).toContain("INSCRIBING");
 	});
 
 	it("renders updated runtime transcripts through terminal frame patches", async () => {

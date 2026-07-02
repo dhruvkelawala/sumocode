@@ -34,6 +34,12 @@
 			"cols": 160,
 			"rows": 3
 		},
+		"input-component-frame-only": {
+			"x": 0,
+			"y": 0,
+			"cols": 160,
+			"rows": 3
+		},
 		"hint-row": {
 			"x": 0,
 			"y": 41,
@@ -274,20 +280,10 @@
 					"SUMO_TUI": "1",
 					"TERM": "xterm-256color",
 					"COLORTERM": "truecolor",
-					"FORCE_COLOR": "3"
-				},
-				"inputs": [
-					{
-						"afterMs": 1800,
-						"type": "text",
-						"value": "review src/auth/session.ts and tighten the return type"
-					},
-					{
-						"afterMs": 250,
-						"type": "key",
-						"value": "\u001b[13u"
-					}
-				]
+					"FORCE_COLOR": "3",
+					"SUMOCODE_VISUAL_RPC_FIXTURE": "completed-active",
+					"SUMOCODE_VISUAL_RPC_INPUT_PREVIEW": "review src/auth/session.ts and tighten the return type"
+				}
 			},
 			"rejectIfOutputMatches": [
 				"ERR_MODULE_NOT_FOUND",
@@ -328,7 +324,11 @@
 				{
 					"id": "input-frame",
 					"targetImage": "04-active-input-typed.png",
-					"targetCrop": "full",
+					"targetCrop": "input-component-frame-only",
+					"targetDimensions": {
+						"cols": 160,
+						"rows": 4
+					},
 					"runtimeCrop": "input-frame",
 					"status": "required",
 					"threshold": 0.03
@@ -352,8 +352,18 @@
 					{
 						"startRow": 0,
 						"endRow": 0,
+						"category": "blank"
+					},
+					{
+						"startRow": 1,
+						"endRow": 1,
 						"category": "top-bar",
 						"firstCol": 1
+					},
+					{
+						"startRow": 2,
+						"endRow": 2,
+						"category": "blank"
 					}
 				],
 				"contentBounds": {
@@ -386,20 +396,9 @@
 					"COLORTERM": "truecolor",
 					"FORCE_COLOR": "3",
 					"COLUMNS": "60",
-					"LINES": "100"
-				},
-				"inputs": [
-					{
-						"afterMs": 1800,
-						"type": "text",
-						"value": "summarize the plan"
-					},
-					{
-						"afterMs": 250,
-						"type": "key",
-						"value": "\u001b[13u"
-					}
-				]
+					"LINES": "100",
+					"SUMOCODE_VISUAL_RPC_FIXTURE": "completed-active"
+				}
 			},
 			"rejectIfOutputMatches": [
 				"ERR_MODULE_NOT_FOUND",
@@ -433,8 +432,7 @@
 				},
 				{
 					"id": "input-frame",
-					"targetImage": "04-active-input-empty-portrait.png",
-					"targetCrop": "full",
+					"targetCrop": "portrait-input-frame",
 					"runtimeCrop": "portrait-input-frame",
 					"status": "required",
 					"threshold": 0.03
@@ -549,7 +547,11 @@
 				{
 					"id": "input-frame",
 					"targetImage": "04-active-input-empty.png",
-					"targetCrop": "full",
+					"targetCrop": "input-component-frame-only",
+					"targetDimensions": {
+						"cols": 160,
+						"rows": 4
+					},
 					"runtimeCrop": "input-frame"
 				},
 				{
@@ -618,8 +620,7 @@
 				},
 				{
 					"id": "input-frame",
-					"targetImage": "04-active-input-empty-portrait.png",
-					"targetCrop": "full",
+					"targetCrop": "portrait-input-frame",
 					"runtimeCrop": "portrait-input-frame"
 				},
 				{
@@ -768,7 +769,11 @@
 				{
 					"id": "input-frame",
 					"targetImage": "04-active-input-empty.png",
-					"targetCrop": "full",
+					"targetCrop": "input-component-frame-only",
+					"targetDimensions": {
+						"cols": 160,
+						"rows": 4
+					},
 					"runtimeCrop": "input-frame"
 				},
 				{

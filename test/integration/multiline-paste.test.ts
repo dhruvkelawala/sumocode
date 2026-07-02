@@ -91,8 +91,7 @@ describe("multiline paste and newline handling", () => {
 		});
 
 		await app.waitForOutput(BRACKETED_PASTE_ENABLE, 10_000);
-		await app.waitForOutput("SUMOCODE", 10_000);
-		await app.waitForOutput("RPC", 10_000);
+		await app.waitForOutput("DIVINE INVOCATION", 10_000);
 
 		app.sendInput('\x1b[200~echo "a\nb\nc"\x1b[201~');
 		await app.waitForOutput("c\"", 5_000);

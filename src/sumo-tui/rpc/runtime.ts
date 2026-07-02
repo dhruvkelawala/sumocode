@@ -1,11 +1,15 @@
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { activeThemeColors } from "../../themes/index.js";
+import { SumoNode } from "../layout/node.js";
+import { DIRECTION_LTR, FLEX_DIRECTION_COLUMN, loadYoga, type Yoga } from "../layout/yoga.js";
 import { CellBuffer } from "../render/buffer.js";
 import { createAttrs } from "../render/cell.js";
+import { composite } from "../render/compositor.js";
 import { diffFrames } from "../render/diff.js";
 import { lineToAnsi, renderRule, span, textLine, type Line, type Span, type Style } from "../render/primitives.js";
 import { defaultTerminalSessionOwner, type TerminalOutput, type TerminalSessionOwner } from "../runtime/terminal-controller.js";
 import type { TranscriptViewModel } from "../transcript/view-model.js";
+import { ChatPager } from "../widgets/chat-pager.js";
 import type { RpcHostChromeState } from "./state.js";
 
 export interface RpcHostTerminalOutput extends TerminalOutput {
@@ -48,6 +52,44 @@ const FALLBACK_STATE: RpcHostChromeState = {
 	taskPartialCount: 0,
 	costUsd: 0,
 };
+const TOP_CHROME_ROWS = 2;
+const FOOTER_ROWS = 2;
+
+class RpcTranscriptFrameRenderer {
+	private readonly root: SumoNode;
+	private readonly chat: ChatPager;
+
+	private constructor(private readonly yoga: Yoga, transcript: TranscriptViewModel) {
+		this.root = new SumoNode(this.yoga.Node.create());
+		this.root.flexDirection = FLEX_DIRECTION_COLUMN;
+		this.chat = ChatPager.create(this.yoga, this.root);
+		this.replaceTranscript(transcript);
+	}
+
+	public static async create(transcript: TranscriptViewModel): Promise<RpcTranscriptFrameRenderer> {
+		const yoga = await loadYoga();
+		return new RpcTranscriptFrameRenderer(yoga, transcript);
+	}
+
+	public replaceTranscript(transcript: TranscriptViewModel): void {
+		this.chat.replaceViewModels(transcript.messages);
+	}
+
+	public render(columns: number, rows: number): CellBuffer {
+		const width = Math.max(1, columns);
+		const height = Math.max(0, rows);
+		this.root.width = width;
+		this.root.height = height;
+		this.root.yogaNode.calculateLayout(width, height, DIRECTION_LTR);
+		const buffer = new CellBuffer(height, width);
+		composite(this.root, buffer);
+		return buffer;
+	}
+
+	public dispose(): void {
+		this.root.dispose();
+	}
+}
 
 function tokenText(value: number | undefined): string {
 	if (value === undefined || !Number.isFinite(value)) return "?";
@@ -84,7 +126,20 @@ function terminalRows(output: RpcHostTerminalOutput): number {
 	return Math.max(1, Math.floor(output.rows ?? 24));
 }
 
-function renderRpcFrame(snapshot: RpcHostRuntimeSnapshot, columns: number, rows: number): CellBuffer {
+function paintBuffer(target: CellBuffer, source: CellBuffer, top: number, left: number): void {
+	const dimensions = source.getDimensions();
+	for (let row = 0; row < dimensions.rows; row += 1) {
+		for (let col = 0; col < dimensions.cols; col += 1) {
+			const targetRow = top + row;
+			const targetCol = left + col;
+			target.setCell(targetRow, targetCol, source.getCell(row, col));
+			const selectionMeta = source.getSelectionMeta(row, col);
+			if (selectionMeta) target.setSelectionMeta(targetRow, targetCol, selectionMeta);
+		}
+	}
+}
+
+function renderRpcFrame(snapshot: RpcHostRuntimeSnapshot, columns: number, rows: number, transcriptRenderer?: RpcTranscriptFrameRenderer): CellBuffer {
 	const colors = activeThemeColors();
 	const base: Style = { fg: colors.foreground, bg: colors.background };
 	const dim: Style = { fg: colors.foregroundDim, bg: colors.background };
@@ -105,6 +160,7 @@ function renderRpcFrame(snapshot: RpcHostRuntimeSnapshot, columns: number, rows:
 	const footerLeft = `${label} · ${branch}`;
 	const footerRight = `${context} · $${state.costUsd.toFixed(2)}`;
 	const centerRow = Math.max(4, Math.floor(rows / 2) - 3);
+	const hasMessages = transcript.messages.length > 0;
 	const lines: Array<{ row: number; line: Line }> = [
 		{
 			row: 0,
@@ -116,10 +172,6 @@ function renderRpcFrame(snapshot: RpcHostRuntimeSnapshot, columns: number, rows:
 			),
 		},
 		{ row: 1, line: renderRule(columns, { char: "─", style: divider, lineStyle: base }) },
-		{ row: centerRow, line: centeredLine([span("SUMOCODE", accent), span(" RPC", tool)], columns, base) },
-		{ row: centerRow + 2, line: centeredLine([span(transcript.messages.length === 0 ? "empty transcript" : `${transcript.messages.length} message transcript`, dim)], columns, base) },
-		{ row: centerRow + 3, line: centeredLine([span(session, base)], columns, base) },
-		{ row: centerRow + 4, line: centeredLine([span(model, dim)], columns, base) },
 		{ row: rows - 2, line: renderRule(columns, { char: "─", style: divider, lineStyle: base }) },
 		{
 			row: rows - 1,
@@ -131,6 +183,18 @@ function renderRpcFrame(snapshot: RpcHostRuntimeSnapshot, columns: number, rows:
 			),
 		},
 	];
+	if (!hasMessages) {
+		lines.push(
+			{ row: centerRow, line: centeredLine([span("SUMOCODE", accent), span(" RPC", tool)], columns, base) },
+			{ row: centerRow + 2, line: centeredLine([span("empty transcript", dim)], columns, base) },
+			{ row: centerRow + 3, line: centeredLine([span(session, base)], columns, base) },
+			{ row: centerRow + 4, line: centeredLine([span(model, dim)], columns, base) },
+		);
+	} else if (transcriptRenderer) {
+		const chatTop = TOP_CHROME_ROWS;
+		const chatHeight = Math.max(0, rows - TOP_CHROME_ROWS - FOOTER_ROWS);
+		if (chatHeight > 0) paintBuffer(buffer, transcriptRenderer.render(columns, chatHeight), chatTop, 0);
+	}
 
 	for (const { row, line } of lines) {
 		if (row < 0 || row >= rows) continue;
@@ -145,6 +209,7 @@ export class RpcHostRuntime {
 	private readonly terminal: TerminalSessionOwner;
 	private state: RpcHostChromeState;
 	private transcript: TranscriptViewModel;
+	private transcriptRenderer: RpcTranscriptFrameRenderer | undefined;
 	private previousFrame: CellBuffer | undefined;
 	private started = false;
 	private stopped = false;
@@ -165,7 +230,7 @@ export class RpcHostRuntime {
 		this.transcript = options.initialTranscript ?? EMPTY_TRANSCRIPT;
 	}
 
-	public start(): void {
+	public async start(): Promise<void> {
 		if (this.started) return;
 		this.started = true;
 		this.terminal.startRetainedSession();
@@ -175,12 +240,22 @@ export class RpcHostRuntime {
 			this.input.on("data", this.handleInput);
 		}
 		this.output.on?.("resize", this.handleResize);
+		const transcriptRenderer = await RpcTranscriptFrameRenderer.create(this.transcript);
+		if (this.stopped) {
+			transcriptRenderer.dispose();
+			return;
+		}
+		transcriptRenderer.replaceTranscript(this.transcript);
+		this.transcriptRenderer = transcriptRenderer;
 		this.render();
 	}
 
 	public update(snapshot: Partial<RpcHostRuntimeSnapshot>): void {
 		if (snapshot.state) this.state = snapshot.state;
-		if (snapshot.transcript) this.transcript = snapshot.transcript;
+		if (snapshot.transcript) {
+			this.transcript = snapshot.transcript;
+			this.transcriptRenderer?.replaceTranscript(snapshot.transcript);
+		}
 		this.render();
 	}
 
@@ -198,13 +273,16 @@ export class RpcHostRuntime {
 		else this.input?.removeListener?.("data", this.handleInput);
 		if (this.output.off) this.output.off("resize", this.handleResize);
 		else this.output.removeListener?.("resize", this.handleResize);
+		this.transcriptRenderer?.dispose();
+		this.transcriptRenderer = undefined;
 		this.terminal.exitTerminal();
 		for (const resolve of this.waiters.splice(0)) resolve(code);
 	}
 
 	private render(): void {
 		if (!this.started || this.stopped) return;
-		const frame = renderRpcFrame({ state: this.state, transcript: this.transcript }, terminalColumns(this.output), terminalRows(this.output));
+		if (!this.transcriptRenderer) return;
+		const frame = renderRpcFrame({ state: this.state, transcript: this.transcript }, terminalColumns(this.output), terminalRows(this.output), this.transcriptRenderer);
 		const patches = diffFrames(this.previousFrame, frame, { detectScroll: false });
 		this.terminal.writeFramePatches(patches, null);
 		this.previousFrame = frame.clone();
@@ -215,6 +293,11 @@ export class RpcHostRuntime {
 	}
 }
 
-export function renderRpcHostFrameForTest(snapshot: RpcHostRuntimeSnapshot, columns: number, rows: number): CellBuffer {
-	return renderRpcFrame(snapshot, columns, rows);
+export async function renderRpcHostFrameForTest(snapshot: RpcHostRuntimeSnapshot, columns: number, rows: number): Promise<CellBuffer> {
+	const transcriptRenderer = await RpcTranscriptFrameRenderer.create(snapshot.transcript);
+	try {
+		return renderRpcFrame(snapshot, columns, rows, transcriptRenderer);
+	} finally {
+		transcriptRenderer.dispose();
+	}
 }

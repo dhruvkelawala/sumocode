@@ -117,7 +117,7 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		const transcript = transcriptPump.replaceFromMessages(messages);
 		const state = stateStore.getSnapshot();
 		runtime = new RpcHostRuntime({ output: stdout, input: stdin, initialState: state, initialTranscript: transcript });
-		runtime.start();
+		await runtime.start();
 		await refreshStats();
 		statsTimer = setInterval(() => { void refreshStats(); }, 5_000);
 		return await runtime.waitForExit();

@@ -1,4 +1,7 @@
 import type { Component } from "@earendil-works/pi-tui";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { TerminalSessionOwner } from "../runtime/terminal-controller.js";
 import { renderRpcHostFrameForTest, RpcHostRuntime } from "./runtime.js";
@@ -138,6 +141,44 @@ describe("RPC host retained runtime frame", () => {
 		expect(terminalOutput).toContain("SUMO");
 		expect(terminalOutput).toContain("updated rpc transcript body");
 		expect(terminalOutput).not.toContain("1 message transcript");
+	});
+
+	it("emits startup readiness diagnostics after the first retained render", async () => {
+		const previousDiagFile = process.env.SUMO_TUI_DIAG_FILE;
+		const dir = mkdtempSync(join(tmpdir(), "sumocode-rpc-runtime-diag-"));
+		const diagFile = join(dir, "diag.jsonl");
+		process.env.SUMO_TUI_DIAG_FILE = diagFile;
+		try {
+			const output = new FakeOutput();
+			const terminal = new TerminalSessionOwner({ output });
+			const runtime = new RpcHostRuntime({
+				output,
+				input: { isTTY: false, on: () => undefined },
+				terminal,
+				initialState: state(),
+				initialTranscript: { messages: [] },
+			});
+
+			await runtime.start();
+			runtime.stop();
+
+			const events = readFileSync(diagFile, "utf8")
+				.trim()
+				.split("\n")
+				.map((line) => JSON.parse(line) as { event: string; surface?: string; cols?: number; rows?: number });
+			for (const event of ["boot_screen_frame", "stable_chrome_ready", "app_ready", "input_ready"]) {
+				expect(events).toContainEqual(expect.objectContaining({
+					event,
+					surface: "rpc_host",
+					cols: 90,
+					rows: 24,
+				}));
+			}
+		} finally {
+			if (previousDiagFile === undefined) delete process.env.SUMO_TUI_DIAG_FILE;
+			else process.env.SUMO_TUI_DIAG_FILE = previousDiagFile;
+			rmSync(dir, { recursive: true, force: true });
+		}
 	});
 
 	it("keeps q as editor input when the retained editor is active and still cleans up on ctrl-c", async () => {

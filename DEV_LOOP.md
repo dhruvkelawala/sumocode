@@ -34,7 +34,7 @@ Classic extension-only smoke:
 pi -e .
 ```
 
-Retained SumoTUI smoke (preferred for daily-driver UI work):
+RPC-host SumoCode smoke (preferred for daily-driver UI work):
 
 ```bash
 ./bin/sumocode.sh
@@ -103,13 +103,17 @@ For manual runtime/debug sessions, use diagnostics mode:
 ./bin/sumocode.sh -d .
 sumocode -d .                    # if globally linked
 sumocode diag                    # summarizes /tmp/sumocode-manual.jsonl
-sumocode doctor                  # checks Pi patch/module/diagnostics health
+sumocode doctor                  # checks RPC host + legacy patch/module/diagnostics health
 ```
 
-Expected signals on a healthy boot:
-- Splash centered with version line `SUMOCODE V0.3.0 · CATHEDRAL · 160 × 45 MONOSPACE`
-- Sidebar paints in landscape (terminal width ≥ 120 cols)
-- Footer dot reads `● READY` in the active theme's idle colour
+Expected signals on a healthy interactive boot:
+- The default launcher renders the RPC host shell (`SUMOCODE RPC` / `sumocode · rpc host`)
+- `SUMO_TUI_MODULE` is unset on the default path
+- `SUMO_LEGACY=1 ./bin/sumocode.sh --offline --no-extensions --no-session --approve` still boots the patched retained rollback path with `DIVINE INVOCATION`
+
+Expected non-interactive behavior:
+- `./bin/sumocode.sh --offline --no-extensions --no-session --print hello` bypasses the foreground RPC host and runs Pi directly
+- explicit `--mode` invocations also bypass the foreground RPC host so Pi's own non-interactive/RPC modes remain available
 
 For a feature change, verify the specific surface I just touched.
 
@@ -258,6 +262,15 @@ Don't. That's what tagged releases are for. Keep the mini as the dev machine, Ma
 
 ### Emergency rollback
 
+During the RPC-default rollback window, use the one-release runtime rollback without changing installed versions:
+
+```bash
+SUMO_LEGACY=1 sumocode
+SUMO_LEGACY=1 ./bin/sumocode.sh --offline --no-extensions --no-session --approve
+```
+
+This must boot the patched retained path. Keep it until the RPC default has survived 30 stable days; then write a separate patch-retirement plan before deleting `patches/@earendil-works__pi-coding-agent@*.patch`, `pnpm.patchedDependencies`, `sumo-interactive-mode.js`, or the legacy bridges.
+
 On any machine:
 
 ```bash
@@ -287,7 +300,7 @@ Rule of thumb:
 - **Perf snapshot.** `pnpm perf:startup` produces a markdown report under `docs/perf/`.
 - **Scribe diff review.** `/sumo:review` runs an in-session reviewer (default `openai-codex/gpt-5.3-codex`) on the current branch diff. Repeat until GREEN before merging.
 - **CHANGELOG.** Keep-a-Changelog format; one section per release, retroactively documented for v0.1.0 → v0.2.0 → v0.3.0.
-- **Pi version smoke.** `scripts/smoke-pi-versions.sh` runs `pi --version` against the pinned + adjacent Pi versions to catch the seam patch breaking on a Pi bump before a real session does.
+- **Pi version smoke.** During the rollback window, Pi bumps re-verify the RPC contract, re-check the RPC editor builtin slash list, rerun the approval/security regression, and regenerate the patch only while `SUMO_LEGACY=1` remains supported. `scripts/smoke-pi-versions.sh` still catches the legacy seam patch breaking before a fallback session does.
 
 ## What's NOT in the dev loop yet
 

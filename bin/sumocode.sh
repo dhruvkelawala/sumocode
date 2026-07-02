@@ -14,6 +14,8 @@ done
 SCRIPT_DIR="$(cd "$(dirname "${SOURCE}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
+# The patched retained path is still kept for one release as the explicit
+# SUMO_LEGACY=1 rollback. Default launches go through the RPC host below.
 export SUMO_TUI="${SUMO_TUI:-1}"
 # Node 22+ can persist V8 compile cache for CommonJS/ESM modules. SumoCode and
 # Pi execute TypeScript through jiti at runtime, so warm launches benefit from
@@ -50,8 +52,8 @@ ARGUMENTS
 COMMANDS
   doctor
       Check local SumoCode/Pi installation health: Node version, Pi binary,
-      retained-TUI patch availability, module resolution, and diagnostics path
-      writability.
+      RPC host availability, legacy retained-TUI rollback readiness, module
+      resolution, and diagnostics path writability.
 
   diag [file]
       Summarize a diagnostics JSONL file. Defaults to /tmp/sumocode-manual.jsonl.
@@ -105,8 +107,9 @@ OPTIONS
       shell metacharacters survive intact).
 
   --no-sumo-tui
-      Disable the retained SumoTUI runtime for this launch. Equivalent to
-      SUMO_TUI=0 sumocode ... and useful for comparing against legacy Pi UI.
+      Disable the SumoCode retained runtime for this launch. Equivalent to
+      SUMO_LEGACY=1 SUMO_TUI=0 sumocode ... and useful for comparing against
+      legacy Pi UI.
 
   --dry-run
       Print the resolved launch configuration and exit without starting Pi.
@@ -172,17 +175,22 @@ DIAGNOSTICS EVENTS
 
 ENVIRONMENT
   SUMO_TUI
-      Defaults to 1. Set SUMO_TUI=0 to bypass the retained SumoTUI runtime and
+      Defaults to 1 only inside the SUMO_LEGACY=1 rollback path. Set
+      SUMO_TUI=0 with SUMO_LEGACY=1 to bypass the retained SumoTUI runtime and
       fall back to legacy Pi UI behavior.
 
+  SUMO_LEGACY
+      Defaults to unset. Set SUMO_LEGACY=1 to use the patched retained
+      SumoTUI path for one-release rollback.
+
   SUMO_RPC
-      Defaults to unset. Set SUMO_RPC=1 to launch the experimental SumoCode RPC
-      host path. This is opt-in; the patched retained SumoTUI path remains the
-      default until the cutover plan flips it.
+      Set automatically by the launcher for the default RPC host path.
+      SUMO_LEGACY=1 takes precedence when the rollback path is requested.
 
   SUMO_TUI_MODULE
       Optional override for the retained SumoInteractiveMode module URL. Normally
-      set automatically by this launcher when the patched Pi binary is detected.
+      set automatically by this launcher when SUMO_LEGACY=1 selects a patched
+      Pi binary.
 
   SUMO_TUI_DIAG_FILE
       Path to the diagnostics JSONL file used by --debug. Defaults to
@@ -202,9 +210,14 @@ NOTES
   SumoCode wraps the project-local Pi binary when available:
       ./node_modules/.bin/pi
 
-  If that Pi binary is missing the Sumo retained-TUI patch, the launcher prints
-  a warning and falls back to legacy Pi splash behavior rather than failing the
-  session.
+  Interactive TTY launches use the SumoCode RPC host and do not require the
+  Sumo retained-TUI patch. Non-interactive Pi modes such as --print or --mode,
+  and launches where stdout is not a TTY, bypass the RPC host and execute Pi
+  directly with the SumoCode extension loaded.
+
+  If SUMO_LEGACY=1 requests the rollback path and the Pi binary is missing that
+  patch, the launcher prints a warning and falls back to legacy Pi splash
+  behavior rather than failing the session.
 EOF
 }
 
@@ -275,6 +288,7 @@ while [[ $# -gt 0 ]]; do
 			;;
 		--no-sumo-tui)
 			export SUMO_TUI=0
+			export SUMO_LEGACY=1
 			shift
 			;;
 		--dry-run)
@@ -393,6 +407,15 @@ is_truthy_env_flag() {
 	esac
 }
 
+args_request_noninteractive_pi() {
+	for arg in "${SUMOCODE_ARGS[@]}"; do
+		case "${arg}" in
+			--print|-p|--mode|--mode=*) return 0 ;;
+		esac
+	done
+	return 1
+}
+
 pi_main_file() {
 	local bin="$1"
 	local resolved dir cli_target cli_path main_file fallback local_main
@@ -456,6 +479,8 @@ run_diag_summary() {
 
 run_doctor() {
 	local failures=0
+	local legacy_requested=0
+	if is_truthy_env_flag "${SUMO_LEGACY:-}"; then legacy_requested=1; fi
 	printf "SumoCode doctor\n\n"
 	printf "Version: %s\n" "$(package_version)"
 	printf "Root: %s\n" "${ROOT_DIR}"
@@ -481,18 +506,33 @@ run_doctor() {
 		printf "✗ Pi main: could not resolve\n"
 		failures=$((failures + 1))
 	fi
-	if [[ -n "${PI_BIN}" ]] && pi_has_sumo_tui_patch "${PI_BIN}"; then
-		printf "✓ retained-TUI patch: detected\n"
+	local rpc_host_path="${ROOT_DIR}/sumo-rpc-host.js"
+	if [[ -f "${rpc_host_path}" ]]; then
+		printf "✓ RPC host: %s\n" "${rpc_host_path}"
 	else
-		printf "✗ retained-TUI patch: missing\n"
+		printf "✗ RPC host: missing at %s\n" "${rpc_host_path}"
 		failures=$((failures + 1))
+	fi
+	if [[ -n "${PI_BIN}" ]] && pi_has_sumo_tui_patch "${PI_BIN}"; then
+		printf "✓ legacy retained-TUI patch: detected\n"
+	else
+		if [[ "${legacy_requested}" -eq 1 ]]; then
+			printf "✗ legacy retained-TUI patch: missing (required when SUMO_LEGACY=1)\n"
+			failures=$((failures + 1))
+		else
+			printf "! legacy retained-TUI patch: missing (only required for SUMO_LEGACY=1 rollback)\n"
+		fi
 	fi
 	local module_path="${ROOT_DIR}/sumo-interactive-mode.js"
 	if [[ -f "${module_path}" ]]; then
-		printf "✓ Sumo module: %s\n" "${module_path}"
+		printf "✓ legacy Sumo module: %s\n" "${module_path}"
 	else
-		printf "✗ Sumo module: missing at %s\n" "${module_path}"
-		failures=$((failures + 1))
+		if [[ "${legacy_requested}" -eq 1 ]]; then
+			printf "✗ legacy Sumo module: missing at %s\n" "${module_path}"
+			failures=$((failures + 1))
+		else
+			printf "! legacy Sumo module: missing at %s (only required for SUMO_LEGACY=1 rollback)\n" "${module_path}"
+		fi
 	fi
 	local diag_path="${DIAG_FILE:-${SUMO_TUI_DIAG_FILE:-/tmp/sumocode-manual.jsonl}}"
 	local diag_dir
@@ -535,12 +575,33 @@ EOF
 	exit 70
 fi
 
-if is_truthy_env_flag "${SUMO_RPC:-}"; then
-	export SUMO_TUI=0
-	unset SUMO_TUI_MODULE
+LEGACY_REQUESTED=0
+if is_truthy_env_flag "${SUMO_LEGACY:-}"; then
+	LEGACY_REQUESTED=1
 fi
 
-if is_truthy_env_flag "${SUMO_TUI}"; then
+USE_RPC_HOST=1
+if [[ "${LEGACY_REQUESTED}" -eq 1 ]]; then
+	USE_RPC_HOST=0
+elif [[ ! -t 1 ]]; then
+	USE_RPC_HOST=0
+elif args_request_noninteractive_pi; then
+	USE_RPC_HOST=0
+fi
+
+if [[ "${USE_RPC_HOST}" -eq 1 ]]; then
+	export SUMO_RPC=1
+	export SUMO_TUI=0
+	unset SUMO_TUI_MODULE
+else
+	unset SUMO_RPC
+	if [[ "${LEGACY_REQUESTED}" -eq 0 ]]; then
+		export SUMO_TUI=0
+		unset SUMO_TUI_MODULE
+	fi
+fi
+
+if [[ "${LEGACY_REQUESTED}" -eq 1 ]] && is_truthy_env_flag "${SUMO_TUI}"; then
 	if pi_has_sumo_tui_patch "${PI_BIN}"; then
 		if [[ -z "${SUMO_TUI_MODULE:-}" ]]; then
 			SUMO_TUI_MODULE="$(path_to_file_url "${ROOT_DIR}/sumo-interactive-mode.js")"
@@ -548,9 +609,9 @@ if is_truthy_env_flag "${SUMO_TUI}"; then
 		fi
 	else
 		cat >&2 <<EOF
-[sumocode] Selected Pi binary is missing the Sumo retained-TUI patch: ${PI_BIN}
+[sumocode] SUMO_LEGACY=1 requested the patched retained-TUI rollback, but the selected Pi binary is missing the Sumo retained-TUI patch: ${PI_BIN}
 [sumocode] Falling back to legacy Pi splash so the empty-state remains visible.
-[sumocode] Run 'pnpm install' in ${ROOT_DIR} to use the retained Sumo TUI.
+[sumocode] Run 'pnpm install' in ${ROOT_DIR} to use the retained Sumo TUI rollback.
 EOF
 		export SUMO_TUI=0
 		unset SUMO_TUI_MODULE
@@ -563,13 +624,14 @@ sumocode dry run
 PI_BIN=${PI_BIN}
 ROOT_DIR=${ROOT_DIR}
 SUMO_TUI=${SUMO_TUI:-}
+SUMO_LEGACY=${SUMO_LEGACY:-}
 SUMO_RPC=${SUMO_RPC:-}
 SUMO_TUI_MODULE=${SUMO_TUI_MODULE:-}
 SUMO_TUI_DIAG_FILE=${SUMO_TUI_DIAG_FILE:-}
 SUMO_TUI_DEBUG=${SUMO_TUI_DEBUG:-}
 COMMAND=${COMMAND}
 ARGS=${SUMOCODE_ARGS[*]:-}
-exec $(if is_truthy_env_flag "${SUMO_RPC:-}"; then printf 'node %s' "${ROOT_DIR}/sumo-rpc-host.js"; else printf '%s -e %s/src/extension.ts' "${PI_BIN}" "${ROOT_DIR}"; fi) ${SUMOCODE_ARGS[*]:-}
+exec $(if [[ "${USE_RPC_HOST}" -eq 1 ]]; then printf 'node %s' "${ROOT_DIR}/sumo-rpc-host.js"; else printf '%s -e %s/src/extension.ts' "${PI_BIN}" "${ROOT_DIR}"; fi) ${SUMOCODE_ARGS[*]:-}
 EOF
 	exit 0
 fi
@@ -578,8 +640,12 @@ fi
 # Other exit codes propagate normally.
 SUMOCODE_RELOAD_EXIT_CODE=100
 
-if is_truthy_env_flag "${SUMO_RPC:-}"; then
-	exec env SUMOCODE_ROOT_DIR="${ROOT_DIR}" SUMOCODE_PROJECT_CWD="${PWD}" PI_BIN="${PI_BIN}" node "${ROOT_DIR}/sumo-rpc-host.js" "${SUMOCODE_ARGS[@]}"
+if [[ "${USE_RPC_HOST}" -eq 1 ]]; then
+	if [[ "${#SUMOCODE_ARGS[@]}" -eq 0 ]]; then
+		exec env SUMOCODE_ROOT_DIR="${ROOT_DIR}" SUMOCODE_PROJECT_CWD="${PWD}" PI_BIN="${PI_BIN}" node "${ROOT_DIR}/sumo-rpc-host.js"
+	else
+		exec env SUMOCODE_ROOT_DIR="${ROOT_DIR}" SUMOCODE_PROJECT_CWD="${PWD}" PI_BIN="${PI_BIN}" node "${ROOT_DIR}/sumo-rpc-host.js" "${SUMOCODE_ARGS[@]}"
+	fi
 fi
 
 while :; do

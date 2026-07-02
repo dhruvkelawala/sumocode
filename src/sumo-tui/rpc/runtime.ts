@@ -7,6 +7,7 @@ import { createAttrs } from "../render/cell.js";
 import { composite } from "../render/compositor.js";
 import { diffFrames } from "../render/diff.js";
 import { lineToAnsi, renderRule, span, textLine, type Line, type Span, type Style } from "../render/primitives.js";
+import { logDiagnostic } from "../runtime/diagnostics.js";
 import { defaultTerminalSessionOwner, type TerminalOutput, type TerminalSessionOwner } from "../runtime/terminal-controller.js";
 import type { TranscriptViewModel } from "../transcript/view-model.js";
 import { ChatPager } from "../widgets/chat-pager.js";
@@ -328,7 +329,12 @@ export class RpcHostRuntime {
 		}
 		transcriptRenderer.replaceTranscript(this.transcript);
 		this.transcriptRenderer = transcriptRenderer;
+		const cols = terminalColumns(this.output);
+		const rows = terminalRows(this.output);
 		this.render();
+		for (const event of ["boot_screen_frame", "stable_chrome_ready", "app_ready", "input_ready"]) {
+			logDiagnostic(event, { surface: "rpc_host", cols, rows });
+		}
 	}
 
 	public update(snapshot: Partial<RpcHostRuntimeSnapshot>): void {

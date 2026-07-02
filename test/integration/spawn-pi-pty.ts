@@ -94,6 +94,7 @@ const SUMO_DEBUG_ENV_KEYS = [
 	"SUMO_TUI_DIAG_FILE",
 	"SUMO_TUI_MODULE",
 	"SUMO_TUI_HIDE_PI_NOISE",
+	"SUMO_LEGACY",
 	"SUMO_RPC",
 	"SUMOCODE_RPC_CHILD",
 	"SUMOCODE_REDUCED_MOTION",
@@ -208,9 +209,6 @@ export function spawnSumocodePty(options: SpawnPiPtyOptions = {}): SpawnedPiPty 
 		...options,
 		command: options.command ?? resolve(process.cwd(), "bin/sumocode.sh"),
 		args: options.args ?? ["--offline", "--no-extensions", "--no-session", "--approve"],
-		env: {
-			...(options.env ?? {}),
-			SUMO_RPC: "1",
-		},
+		env: options.env,
 	});
 }

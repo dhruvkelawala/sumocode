@@ -1,17 +1,17 @@
 # SumoTUI Pi Patch Strategy
 
-**Status:** accepted maintenance decision for P0-D / #103  
-**Date:** 2026-04-29  
-**Parent:** #98 SumoTUI consolidation  
-**Related:** `docs/SUMO_TUI_CONSOLIDATION_PLAN.md`, `docs/research/pi-fork-upgrade.md`
+**Status:** legacy rollback-only maintenance contract
+**Date:** 2026-04-29; updated 2026-07-02 for RPC-default cutover
+**Parent:** #98 SumoTUI consolidation
+**Related:** `docs/SUMO_TUI_CONSOLIDATION_PLAN.md`, `docs/research/pi-fork-upgrade.md`, `docs/research/pi-rpc-migration.md`
 
 ## Decision
 
-Keep the private Pi constructor patch for now, but treat it as an explicit maintenance contract instead of an incidental hack.
+Keep the private Pi constructor patch for one release as an explicit `SUMO_LEGACY=1` rollback path, but remove it from the default activation path.
 
-Current public Pi extension APIs are not sufficient to replace the patch while preserving SumoTUI's retained chat/runtime behavior. The patch remains acceptable because it is tiny, default-off for normal Pi, runtime-gated by `SUMO_TUI`, and checked by the wrapper before use.
+SumoCode now defaults interactive TTY launches to the RPC host (`sumo-rpc-host.js`) and drives Pi through `--mode rpc`. Non-interactive Pi modes (`--print`, explicit `--mode`, or stdout that is not a TTY) bypass the RPC host and execute Pi directly with the extension loaded. Default startup does not require the constructor patch or `SUMO_TUI_MODULE`. The patch remains acceptable during the rollback window because it is tiny, default-off for normal Pi, runtime-gated by `SUMO_LEGACY=1` + `SUMO_TUI`, and checked by the wrapper before use.
 
-Revisit removal when Pi exposes a public interactive-mode/runtime injection API, or when SumoCode no longer needs to replace/bridge Pi's chat viewport.
+Delete the patch in a separate retirement plan after the RPC default has survived the documented stability window.
 
 ## Audited seam
 
@@ -25,7 +25,7 @@ The patch changes Pi's `dist/main.js` constructor site from direct `new Interact
 - instantiate `new SumoInteractiveMode(runtime, interactiveOptions)` when enabled
 - leave the upstream `new InteractiveMode(...)` path untouched when disabled
 
-This is the only place SumoCode currently gains control before Pi's interactive loop is constructed.
+This is the only place the legacy rollback path gains control before Pi's interactive loop is constructed. The default RPC host no longer uses this seam.
 
 ### `bin/sumocode.sh`
 
@@ -33,29 +33,31 @@ The wrapper is the user-facing activation contract. When the package is linked o
 
 Core responsibilities:
 
-- defaults `SUMO_TUI=1`
+- defaults interactive TTY launches to the RPC host
+- bypasses the RPC host for `--print`, explicit `--mode`, and non-TTY stdout so Pi non-interactive flows keep working
 - accepts `sumocode [options] [path]`, forwarding the optional project path to Pi unchanged
 - resolves the repo-local Pi binary first
-- inspects Pi's `dist/main.js` for `loadSumoInteractiveMode`
-- sets `SUMO_TUI_MODULE=file://.../sumo-interactive-mode.js` for checkout-local runtime loading
-- falls back to `SUMO_TUI=0` with a warning if the selected Pi binary is not patched
-- executes Pi with `-e src/extension.ts`
+- executes `sumo-rpc-host.js`, which spawns Pi with `--mode rpc -e src/extension.ts`
+- selects the patched retained path only when `SUMO_LEGACY=1` is set
+- inspects Pi's `dist/main.js` for `loadSumoInteractiveMode` before legacy activation
+- sets `SUMO_TUI_MODULE=file://.../sumo-interactive-mode.js` for checkout-local legacy runtime loading
+- falls back to `SUMO_TUI=0` with a warning if `SUMO_LEGACY=1` is requested but the selected Pi binary is not patched
 
 CLI/operator features:
 
 - `sumocode -h` / `sumocode --help` — full launcher reference
 - `sumocode -v` / `sumocode --version` — package version + git commit when available
-- `sumocode doctor` — validates Node, Pi binary, Pi main file, retained-TUI patch, Sumo module, diagnostics path, and TTY status
+- `sumocode doctor` — validates Node, Pi binary, Pi main file, RPC host, legacy retained-TUI patch/module readiness, diagnostics path, and TTY status
 - `sumocode diag [file]` — summarizes diagnostics JSONL via `scripts/diag-summary.mjs`
 - `sumocode -d` / `sumocode --debug` — enables manual-test diagnostics
 - `sumocode --diag-file <path>` — custom diagnostics path and implies debug mode
 - `sumocode --no-clear-diag` — append to the diagnostics file instead of starting fresh
 - `sumocode --dry-run` — print the resolved launch config without starting Pi
-- `sumocode --no-sumo-tui` — per-launch fallback equivalent to `SUMO_TUI=0`
+- `sumocode --no-sumo-tui` — per-launch fallback equivalent to `SUMO_LEGACY=1 SUMO_TUI=0`
 
 Debug mode writes JSONL diagnostics to `/tmp/sumocode-manual.jsonl` by default and clears that file at startup unless `--no-clear-diag` is set. Diagnostics are intentionally no-op unless `SUMO_TUI_DIAG_FILE` is set.
 
-This wrapper prevents accidental use of stale installed SumoCode code during local development and avoids hard failure when the patch is missing.
+This wrapper prevents accidental use of stale installed SumoCode code during local development, avoids requiring the patch for default RPC startup, and avoids hard failure when the rollback patch is missing.
 
 ### `sumo-interactive-mode.js`
 
@@ -119,20 +121,33 @@ Therefore, removing the patch today would regress retained ChatPager/mouse-scrol
 
 ## Maintenance contract
 
-The private patch is allowed only under these rules:
+During the one-release rollback window, the private patch is allowed only under these rules:
 
 1. **Patch stays tiny.** Keep the Pi diff limited to the interactive constructor switch and dynamic loader. Target under ~30 changed lines.
 2. **Default path stays upstream.** When `SUMO_TUI` is unset/false and `--sumo-tui` is absent, Pi must instantiate upstream `InteractiveMode` normally.
-3. **Wrapper validates activation.** `bin/sumocode.sh` must keep checking for `loadSumoInteractiveMode` before exporting `SUMO_TUI_MODULE`.
-4. **Patch file tracks exact Pi package version.** A Pi bump must create a new `patches/@earendil-works__pi-coding-agent@<version>.patch` and update `package.json` `pnpm.patchedDependencies` in the same PR. If Pi raises its Node engine floor, SumoCode's `engines.node` must move with it.
-5. **No silent major drift.** If the constructor site moves or the patch stops applying cleanly, stop and update the strategy before shipping.
-6. **No upstream default behavior change.** The patch must remain opt-in and non-breaking for normal Pi users.
-7. **Smoke matrix is mandatory for Pi bumps.** Every Pi version change must run the matrix below and record results in the PR body.
-8. **Prefer a public hook when available.** If Pi adds a supported runtime/mode injection or chat viewport API, create a removal plan instead of carrying the patch forward by default.
+3. **RPC default does not depend on the patch.** `bin/sumocode.sh` must not check `loadSumoInteractiveMode` before default RPC startup.
+4. **Wrapper validates legacy activation.** `bin/sumocode.sh` must keep checking for `loadSumoInteractiveMode` before exporting `SUMO_TUI_MODULE` when `SUMO_LEGACY=1` requests rollback.
+5. **Patch file tracks exact Pi package version while rollback exists.** A Pi bump must create a new `patches/@earendil-works__pi-coding-agent@<version>.patch` and update `package.json` `pnpm.patchedDependencies` only while the legacy rollback is kept. If Pi raises its Node engine floor, SumoCode's `engines.node` must move with it.
+6. **No silent major drift.** If the constructor site moves or the patch stops applying cleanly, stop and update the strategy before shipping.
+7. **No upstream default behavior change.** The patch must remain opt-in and non-breaking for normal Pi users.
+8. **Smoke matrix is mandatory for Pi bumps.** Every Pi version change must run the matrix below and record results in the PR body.
+9. **Prefer removal after stability.** After the RPC default stability window, write a patch-retirement plan instead of carrying the rollback forward by default.
 
-## Pi bump smoke matrix
+## Pi bump smoke matrix during rollback window
 
 For every Pi bump PR:
+
+### RPC contract and builtins
+
+```bash
+# Compare the pinned Pi RPC contract against the candidate version.
+diff -u <old-rpc-types.d.ts> <new-rpc-types.d.ts>
+
+# Re-check the hardcoded builtin slash list used by the RPC editor.
+rg "BUILTIN|slash" src/sumo-tui/rpc src
+```
+
+Expected: RPC contract differences are intentional and the builtin slash list still matches Pi.
 
 ### Patch presence
 
@@ -141,20 +156,29 @@ pnpm install
 rg "SUMO_TUI_MODULE|loadSumoInteractiveMode" node_modules/@earendil-works/pi-coding-agent/dist/main.js
 ```
 
-Expected: both markers exist for the patched target version.
+Expected: both markers exist for the patched target version while `SUMO_LEGACY=1` rollback is kept.
 
-### Default Pi path still works
+### Default RPC path still works
 
 ```bash
-SUMO_TUI=0 ./bin/sumocode.sh --offline --no-session --no-extensions
+./bin/sumocode.sh --offline --no-session --no-extensions --approve
 ```
 
-Expected: no Sumo retained runtime activation; Pi remains usable or exits according to normal offline behavior.
+Expected: RPC host boots in an interactive TTY, `SUMO_TUI_MODULE` is not exported, and startup does not require `loadSumoInteractiveMode`.
 
-### Sumo wrapper activation
+### Non-interactive Pi path still works
 
 ```bash
-./bin/sumocode.sh --offline --no-extensions --no-session
+./bin/sumocode.sh --offline --no-extensions --no-session --print hello
+./bin/sumocode.sh --mode rpc --offline --no-extensions --no-session
+```
+
+Expected: the wrapper bypasses the foreground RPC host and executes Pi directly with the extension path; these paths do not require the retained-TUI patch.
+
+### Legacy rollback activation
+
+```bash
+SUMO_LEGACY=1 ./bin/sumocode.sh --offline --no-extensions --no-session --approve
 ```
 
 Expected:
@@ -162,6 +186,7 @@ Expected:
 - no `ERR_MODULE_NOT_FOUND`
 - no `Skipping installed SumoCode extension...` warning in normal wrapper path
 - `DIVINE INVOCATION` appears
+- `SUMO_TUI_MODULE` resolves to the checkout-local `sumo-interactive-mode.js`
 - clean Ctrl+C restores altscreen and cursor
 
 ### Integration and unit suite
@@ -172,7 +197,7 @@ pnpm test:integration
 pnpm exec tsc --noEmit && pnpm build
 ```
 
-Expected: all pass.
+Expected: all pass, including the RPC approval/security regression test that blocks dangerous bash unless the user explicitly selects Yes or Always.
 
 ### V2 visual smoke
 
@@ -200,8 +225,8 @@ If older supported versions are tested without the patch, the script should cont
 
 Create a patch-removal issue when either condition becomes true:
 
-1. Pi exposes a public API to select/replace interactive mode at CLI startup.
-2. Pi exposes enough public chat viewport/render-loop APIs that SumoCode can run retained chat without private `InteractiveMode` field access.
+1. The RPC default has survived 30 stable days without fallback to `SUMO_LEGACY=1`.
+2. Pi exposes enough public chat viewport/render-loop APIs that SumoCode can run retained chat without private `InteractiveMode` field access and the RPC host is no longer the desired path.
 
 Removal plan:
 
@@ -215,6 +240,12 @@ Removal plan:
 
 ## Operational fallback
 
-If a Pi bump breaks the patch and there is no immediate fix, ship a fallback with `SUMO_TUI=0` through `bin/sumocode.sh`. This preserves public-extension SumoCode chrome where possible and avoids bricking the CLI, but it is not visually equivalent to retained SumoTUI.
+During the rollback window, use:
+
+```bash
+SUMO_LEGACY=1 sumocode
+```
+
+If a Pi bump breaks the patch and there is no immediate fix, the legacy branch can still fall back to `SUMO_TUI=0` through `bin/sumocode.sh`. This preserves public-extension SumoCode chrome where possible and avoids bricking the CLI, but it is not visually equivalent to retained SumoTUI.
 
 This fallback is acceptable only for emergency restore-to-service releases. It does not satisfy V2 retained runtime parity.

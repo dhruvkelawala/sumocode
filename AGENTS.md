@@ -32,10 +32,10 @@ pnpm visual:promote                # promote runtime crop status/golden; require
 pnpm test:visual:real-runtime      # legacy real-runtime smoke harness
 
 pi -e .                            # ephemeral install of THIS checkout — classic Pi extension dev loop
-bin/sumocode.sh                    # local SumoCode CLI wrapper (retained SumoTUI by default)
+bin/sumocode.sh                    # local SumoCode CLI wrapper (RPC host by default)
 bin/sumocode.sh -h                 # full CLI help
 bin/sumocode.sh -d .               # debug/diagnostics mode for manual testing
-bin/sumocode.sh doctor             # check Pi patch/module/diagnostics health
+bin/sumocode.sh doctor             # check RPC host + legacy patch/module/diagnostics health
 bin/sumocode.sh diag               # summarize /tmp/sumocode-manual.jsonl
 ```
 
@@ -69,7 +69,7 @@ pnpm visual:ci
 
 The canonical workflow lives in `DEV_LOOP.md`.
 
-Short version: edit in this checkout → `pi -e .` for classic extension-only checks or `bin/sumocode.sh` / globally linked `sumocode` for retained SumoTUI checks → commit → for releases bump `package.json` version + `VERSION` in `src/extension.ts`, tag, push tags, then `pi update git:github.com/dhruvkelawala/sumocode` on consumer machines. Tagged releases are the only thing that propagates; pushes to `main` do not.
+Short version: edit in this checkout → `pi -e .` for classic extension-only checks or `bin/sumocode.sh` / globally linked `sumocode` for RPC-host SumoCode checks → commit → for releases bump `package.json` version + `VERSION` in `src/extension.ts`, tag, push tags, then `pi update git:github.com/dhruvkelawala/sumocode` on consumer machines. Tagged releases are the only thing that propagates; pushes to `main` do not.
 
 Never edit `~/.pi/agent/git/github.com/dhruvkelawala/sumocode/` — that is the installed clone, not the source of truth.
 
@@ -92,20 +92,22 @@ When adding a feature, decide which layer it belongs to. Anything needing flex l
 
 ### Pi patch seam
 
-SumoTUI activation currently requires the tiny Pi constructor patch documented in `docs/SUMO_TUI_PI_PATCH_STRATEGY.md`.
+SumoCode now defaults to the RPC host for interactive TTY launches. Non-interactive Pi behavior (`--print`, explicit `--mode`, or stdout that is not a TTY) bypasses the RPC host and executes Pi directly with the extension loaded. The tiny Pi constructor patch documented in `docs/SUMO_TUI_PI_PATCH_STRATEGY.md` is kept for one release as the `SUMO_LEGACY=1` rollback path only.
 
 The user-facing wrapper is `bin/sumocode.sh` and, when linked/installed, the `sumocode` command:
 
-- defaults `SUMO_TUI=1`
+- defaults interactive TTY launches to the RPC host (`sumo-rpc-host.js`) and does not require `loadSumoInteractiveMode`
+- preserves non-interactive Pi modes by bypassing RPC for `--print`, `--mode`, and non-TTY stdout
+- supports `SUMO_LEGACY=1 sumocode ...` to boot the patched retained SumoTUI rollback path
 - accepts `sumocode [options] [path]`, with at most one project path
 - supports `-h/--help`, `-v/--version`, `doctor`, `diag [file]`, `-d/--debug`, `--diag-file`, `--no-clear-diag`, `--dry-run`, and `--no-sumo-tui`
-- verifies the selected Pi binary contains `loadSumoInteractiveMode`
-- sets `SUMO_TUI_MODULE` to the checkout-local `sumo-interactive-mode.js`
-- falls back to classic Pi behavior if the patch is missing
+- verifies the selected Pi binary contains `loadSumoInteractiveMode` only when `SUMO_LEGACY=1` requests the rollback path
+- sets `SUMO_TUI_MODULE` to the checkout-local `sumo-interactive-mode.js` only for that legacy rollback path
+- falls back to classic Pi behavior if `SUMO_LEGACY=1` is requested but the patch is missing
 
 Manual-test diagnostics are opt-in via `sumocode -d` / `bin/sumocode.sh -d`. Debug mode writes JSONL to `/tmp/sumocode-manual.jsonl` by default, or to `--diag-file <path>` / `SUMO_TUI_DIAG_FILE`. The launcher clears the diagnostics file at startup unless `--no-clear-diag` is set. Use `sumocode diag` or `node scripts/diag-summary.mjs /tmp/sumocode-manual.jsonl` to summarize a run. Diagnostics must stay no-op unless `SUMO_TUI_DIAG_FILE` is set.
 
-Do not casually change `patches/@earendil-works__pi-coding-agent@*.patch`, `SUMO_TUI`, `SUMO_TUI_MODULE`, or `sumo-interactive-mode.js`. Pi version bumps must follow `docs/research/pi-fork-upgrade.md` and the smoke matrix in `docs/SUMO_TUI_PI_PATCH_STRATEGY.md`.
+Do not casually change `patches/@earendil-works__pi-coding-agent@*.patch`, `SUMO_LEGACY`, `SUMO_TUI`, `SUMO_TUI_MODULE`, or `sumo-interactive-mode.js`. During the rollback window, Pi version bumps must re-verify the RPC contract (`rpc-types.d.ts`), re-check the hardcoded builtin slash list, rerun the approval/security regression test, and regenerate the patch only while the `SUMO_LEGACY=1` fallback is kept. After the stability window, patch retirement needs a separate plan.
 
 ### Pi ↔ SumoCode tool boundary
 

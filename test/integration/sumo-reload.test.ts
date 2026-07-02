@@ -36,6 +36,7 @@ function spawnLauncherWithMockPi(stateFile: string, extraArgs: string[] = []): P
 		cwd: process.cwd(),
 		env: buildSpawnEnv(process.env, {
 			PI_BIN: mockPi,
+			SUMO_LEGACY: "1",
 			SUMO_TUI: "0",
 			SUMOCODE_RELOAD_TEST_STATE: stateFile,
 		}),

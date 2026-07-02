@@ -1,7 +1,7 @@
 # Pi RPC migration: dropping the InteractiveMode patch for `pi --mode rpc`
 
-**Status:** research / decision-grade assessment (not yet committed work)
-**Date:** 2026-06-30
+**Status:** RPC default staged; `SUMO_LEGACY=1` rollback retained for one release
+**Date:** 2026-06-30; updated 2026-07-02 for Phase 5 cutover
 **Written against:** SumoCode `0.4.0` (commit `ae03bc0`), Pi `0.79.1` pinned; latest Pi `0.80.2`
 **Companion to:** [`docs/SUMO_TUI_PI_PATCH_STRATEGY.md`](../SUMO_TUI_PI_PATCH_STRATEGY.md), [`docs/research/pi-fork-upgrade.md`](pi-fork-upgrade.md)
 **Executable handoff:** [`plans/README.md`](../../plans/README.md) (Phase 0–5 plans, also published as issues)
@@ -15,19 +15,21 @@ constraint: **the UI must remain the same or better.**
 
 ## Bottom line
 
-**Feasible, worth doing, size ≈ Large (~6–9 focused engineer-weeks), gated on a 1-week
-Phase-0 spike with a hard go/no-go.** It is *not* an XL "reimplement Pi" effort and *not*
-the "delete the bridge and re-source a few feeds" job it first looks like.
+**Feasible and now staged as the default runtime path.** The Phase 0–5 migration work has
+proved the host shell, controls, editor, overlays, and security-critical approval path well
+enough to flip the launcher default to the RPC host. This remains a conservative cutover:
+the patch machinery is still present for one release behind `SUMO_LEGACY=1`.
 
 - The transcript (the largest visual surface) ports nearly verbatim.
 - The editor de-risks to a **library re-host** (pi-tui exports), not a rebuild.
 - The **approval gate + rich overlays** are the dominant, *security-critical* workstream
   because of a protocol gap confirmed by reading Pi's compiled source.
 
-The strategic prize: delete the `dist/main.js` patch, the per-Pi-version-bump fragility,
+The strategic prize remains: delete the `dist/main.js` patch, the per-Pi-version-bump fragility,
 and ~400 lines of `chatContainer`/`handleEvent`/`renderSessionContext` monkeypatching in
 [`src/sumo-tui/pi-compat/chat-viewport-controller.ts`](../../src/sumo-tui/pi-compat/chat-viewport-controller.ts),
-and ride Pi's first-class, Pi-maintained RPC branch instead.
+and ride Pi's first-class, Pi-maintained RPC branch instead. That deletion is deliberately
+deferred until the RPC default survives the stability window.
 
 ## Why the patch-strategy doc's rejection does not apply
 
@@ -213,17 +215,15 @@ See [`plans/`](../../plans/README.md) for executor-grade detail. Summary:
 
 ## Recommendation
 
-**Proceed — but gate the commitment on the Phase-0 spike.** Three things must be proven
-live in Phase 0 or the project is no-go: (1) an in-Pi `tool_call` handler blocks a dangerous
-command via a host-answered `confirm`/`select` (the current gate fails open); (2)
-`answer-tool.complete()` runs over RPC once lifted out of the `custom()` closure; (3) the
-per-delta snapshot serialization + backpressure does not regress streaming responsiveness on
-long messages. Spike against `RpcProcessInstance` as the reference host, not the bare
-`RpcClient`. You have to bump Pi to 0.80.x and regen the patch anyway — use that forced
-version touch as the Phase-0 trigger. Ship everything behind an env flag with the patched
-build as default until the full visual smoke matrix **and** the security test pass; keep a
-one-release rollback. **Do not flip the default until the approval gate is provably closed
-and every overlay crop-matches.**
+**RPC default is staged.** The launcher should boot `sumo-rpc-host.js` by default and
+reserve the patched retained path for `SUMO_LEGACY=1` rollback. Keep
+`patches/@earendil-works__pi-coding-agent@*.patch`, `pnpm.patchedDependencies`,
+`sumo-interactive-mode.js`, and the in-process bridges until the rollback window closes.
+
+During that window, Pi version bumps primarily need: (1) re-verify the RPC contract
+(`rpc-types.d.ts` diff), (2) re-check the hardcoded builtin slash list used by the RPC
+editor, (3) rerun the approval/security regression test, and (4) regenerate the patch only
+while the `SUMO_LEGACY=1` fallback is kept.
 
 ## Biggest unknown
 

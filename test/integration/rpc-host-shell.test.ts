@@ -41,4 +41,26 @@ describe("sumocode RPC host shell integration", () => {
 		expect(cleanState.mouseSGRActive).toBe(false);
 		expect(cleanState.cursorVisible).toBe(true);
 	}, 30_000);
+
+	it("boots the patched retained path when SUMO_LEGACY=1 requests rollback", async () => {
+		const agentDir = await mkdtemp(join(tmpdir(), "sumocode-legacy-agent-"));
+		app = spawnSumocodePty({
+			env: { PI_CODING_AGENT_DIR: agentDir, SUMO_LEGACY: "1" },
+			cols: 100,
+			rows: 30,
+		});
+
+		await app.waitForOutput(PI_BOOT_SEQUENCE, 15_000);
+		await app.waitForOutput(/DIVINE INVOCATION/, 15_000);
+		await delay(250);
+
+		const output = app.getOutput();
+		expect(output).toContain("DIVINE INVOCATION");
+		expect(output).not.toContain("sumocode · rpc host");
+
+		const activeState = app.getCurrentTerminalState();
+		expect(activeState.altscreenActive).toBe(true);
+		expect(activeState.mouseSGRActive).toBe(true);
+		expect(activeState.cleanupSequenceSeen).toBe(false);
+	}, 30_000);
 });

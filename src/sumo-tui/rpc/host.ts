@@ -138,7 +138,7 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		await client.stop();
 	};
 	const handleSigint = (): void => { void stop(130).then(() => process.exit(130)); };
-	const handleSigterm = (): void => { void stop(143).then(() => process.exit(143)); };
+	const handleSigterm = (): void => { void stop(0).then(() => process.exit(0)); };
 	process.once("SIGINT", handleSigint);
 	process.once("SIGTERM", handleSigterm);
 

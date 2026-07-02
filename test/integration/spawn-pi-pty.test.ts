@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { execFileSync } from "node:child_process";
 import { buildSpawnEnv } from "./spawn-pi-pty.js";
 
 describe("buildSpawnEnv", () => {
@@ -12,6 +13,7 @@ describe("buildSpawnEnv", () => {
 				SUMO_TUI_DIAG_FILE: "/tmp/sumocode-manual.jsonl",
 				SUMO_TUI_MODULE: "file:///tmp/fake.js",
 				SUMO_TUI_HIDE_PI_NOISE: "1",
+				SUMO_LEGACY: "1",
 				SUMO_RPC: "1",
 				SUMOCODE_RPC_CHILD: "1",
 				SUMOCODE_REDUCED_MOTION: "1",
@@ -26,6 +28,7 @@ describe("buildSpawnEnv", () => {
 		expect(env.SUMO_TUI_DIAG_FILE).toBeUndefined();
 		expect(env.SUMO_TUI_MODULE).toBeUndefined();
 		expect(env.SUMO_TUI_HIDE_PI_NOISE).toBeUndefined();
+		expect(env.SUMO_LEGACY).toBeUndefined();
 		expect(env.SUMO_RPC).toBeUndefined();
 		expect(env.SUMOCODE_RPC_CHILD).toBeUndefined();
 		expect(env.SUMOCODE_REDUCED_MOTION).toBeUndefined();
@@ -62,5 +65,32 @@ describe("buildSpawnEnv", () => {
 		const env = buildSpawnEnv({ HOME: "/Users/parent" }, { PI_CODING_AGENT_DIR: "/tmp/foo" });
 		expect(env.HOME).toBe("/Users/parent");
 		expect(env.PI_CODING_AGENT_DIR).toBe("/tmp/foo");
+	});
+});
+
+describe("sumocode launcher mode decision", () => {
+	function dryRun(args: string[]): string {
+		return execFileSync("bin/sumocode.sh", ["--dry-run", ...args], {
+			cwd: process.cwd(),
+			env: buildSpawnEnv(process.env, { PI_BIN: "/bin/echo" }),
+			encoding: "utf8",
+		});
+	}
+
+	it("bypasses the RPC host for non-TTY dry-runs without requiring the retained patch", () => {
+		const output = dryRun([]);
+		expect(output).toContain("SUMO_TUI=0");
+		expect(output).toContain("SUMO_RPC=");
+		expect(output).toContain("exec /bin/echo -e ");
+		expect(output).not.toContain("sumo-rpc-host.js");
+		expect(output).not.toContain("missing the Sumo retained-TUI patch");
+	});
+
+	it("bypasses the RPC host for Pi print mode", () => {
+		const output = dryRun(["--offline", "--no-extensions", "--no-session", "--print", "hello"]);
+		expect(output).toContain("SUMO_TUI=0");
+		expect(output).toContain("SUMO_RPC=");
+		expect(output).toContain("--print hello");
+		expect(output).not.toContain("sumo-rpc-host.js");
 	});
 });

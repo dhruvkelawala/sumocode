@@ -237,11 +237,18 @@
 				"Skipping installed SumoCode extension because this session is already inside an active SumoCode dev checkout",
 				"Error \\["
 			],
+			"rejectIfFinalScreenMatches": [
+				"SUMOCODE RPC",
+				"empty transcript",
+				"sumocode \\u00b7 rpc host"
+			],
 			"crops": [
 				{
 					"id": "full",
 					"targetCrop": "full",
-					"runtimeCrop": "full"
+					"runtimeCrop": "full",
+					"status": "required",
+					"threshold": 0.03
 				}
 			]
 		},
@@ -276,9 +283,9 @@
 						"value": "review src/auth/session.ts and tighten the return type"
 					},
 					{
-						"afterMs": 150,
+						"afterMs": 250,
 						"type": "key",
-						"value": "\r"
+						"value": "\u001b[13u"
 					}
 				]
 			},
@@ -287,6 +294,11 @@
 				"Rendered line .* exceeds terminal width",
 				"Skipping installed SumoCode extension because this session is already inside an active SumoCode dev checkout",
 				"Error \\["
+			],
+			"rejectIfFinalScreenMatches": [
+				"SUMOCODE RPC",
+				"empty transcript",
+				"sumocode \\u00b7 rpc host"
 			],
 			"crops": [
 				{
@@ -297,33 +309,42 @@
 				{
 					"id": "top-bar",
 					"targetCrop": "top-bar",
-					"runtimeCrop": "top-bar"
+					"runtimeCrop": "top-bar",
+					"status": "required",
+					"threshold": 0.08
 				},
 				{
 					"id": "sidebar",
 					"targetCrop": "sidebar",
-					"runtimeCrop": "sidebar"
+					"runtimeCrop": "sidebar",
+					"status": "required"
 				},
 				{
 					"id": "chat-area",
 					"targetCrop": "chat-area",
-					"runtimeCrop": "chat-area"
+					"runtimeCrop": "chat-area",
+					"status": "required"
 				},
 				{
 					"id": "input-frame",
 					"targetImage": "04-active-input-typed.png",
 					"targetCrop": "full",
-					"runtimeCrop": "input-frame"
+					"runtimeCrop": "input-frame",
+					"status": "required",
+					"threshold": 0.03
 				},
 				{
 					"id": "hint-row",
 					"targetCrop": "hint-row",
-					"runtimeCrop": "hint-row"
+					"runtimeCrop": "hint-row",
+					"status": "required"
 				},
 				{
 					"id": "footer",
 					"targetCrop": "footer",
-					"runtimeCrop": "footer"
+					"runtimeCrop": "footer",
+					"status": "required",
+					"threshold": 0.045
 				}
 			],
 			"geometrySpec": {
@@ -374,9 +395,9 @@
 						"value": "summarize the plan"
 					},
 					{
-						"afterMs": 150,
+						"afterMs": 250,
 						"type": "key",
-						"value": "\r"
+						"value": "\u001b[13u"
 					}
 				]
 			},
@@ -385,6 +406,11 @@
 				"Rendered line .* exceeds terminal width",
 				"Skipping installed SumoCode extension because this session is already inside an active SumoCode dev checkout",
 				"Error \\["
+			],
+			"rejectIfFinalScreenMatches": [
+				"SUMOCODE RPC",
+				"empty transcript",
+				"sumocode \\u00b7 rpc host"
 			],
 			"crops": [
 				{
@@ -395,28 +421,36 @@
 				{
 					"id": "top-bar",
 					"targetCrop": "portrait-top-bar",
-					"runtimeCrop": "portrait-top-bar"
+					"runtimeCrop": "portrait-top-bar",
+					"status": "required",
+					"threshold": 0.08
 				},
 				{
 					"id": "chat-area",
 					"targetCrop": "portrait-chat-area",
-					"runtimeCrop": "portrait-chat-area"
+					"runtimeCrop": "portrait-chat-area",
+					"status": "required"
 				},
 				{
 					"id": "input-frame",
 					"targetImage": "04-active-input-empty-portrait.png",
 					"targetCrop": "full",
-					"runtimeCrop": "portrait-input-frame"
+					"runtimeCrop": "portrait-input-frame",
+					"status": "required",
+					"threshold": 0.03
 				},
 				{
 					"id": "hint-row",
 					"targetCrop": "portrait-hint-row",
-					"runtimeCrop": "portrait-hint-row"
+					"runtimeCrop": "portrait-hint-row",
+					"status": "required"
 				},
 				{
 					"id": "footer",
 					"targetCrop": "portrait-footer",
-					"runtimeCrop": "portrait-footer"
+					"runtimeCrop": "portrait-footer",
+					"status": "required",
+					"threshold": 0.045
 				}
 			],
 			"geometrySpec": {

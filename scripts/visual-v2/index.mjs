@@ -4,7 +4,7 @@ import { spawnSync } from "node:child_process";
 import { resolve } from "node:path";
 import { captureComponentScenario } from "./component-capture.mjs";
 import { captureFixtureScenario } from "./fixture-capture.mjs";
-import { captureRuntimeScenario } from "./runtime-capture.mjs";
+import { captureRuntimeScenario, findRejection } from "./runtime-capture.mjs";
 import { replayAnsi } from "./ansi-replay.mjs";
 import { renderTerminalSnapshot } from "./terminal-dom-renderer.mjs";
 import { compareCropPair } from "./image-compare.mjs";
@@ -84,6 +84,10 @@ async function runScenario(scenario) {
 
 	const snapshot = await replayAnsi(capture.bytes, scenario.dimensions);
 	writeJson(resolve(rawOut, "terminal-snapshot.json"), snapshotForJson(snapshot));
+	const finalScreenRejection = findRejection(snapshot.plainText, scenario.rejectIfFinalScreenMatches ?? []);
+	if (finalScreenRejection) {
+		writeJson(resolve(rawOut, "final-screen-rejection.json"), finalScreenRejection);
+	}
 
 	const geometrySpec = scenario.geometrySpec ?? null;
 	const audit = auditGeometry(snapshot, geometrySpec);
@@ -159,10 +163,11 @@ async function runScenario(scenario) {
 		id: scenario.id,
 		lane: scenario.lane,
 		status: scenario.status,
-		result: scenarioResult(cropResults),
+		result: scenarioResult(cropResults, finalScreenRejection),
 		dimensions: scenario.dimensions,
 		bibleTarget: scenario.bibleTarget,
 		capture: capture.metadata,
+		finalScreenRejection,
 		render: runtimeRender.metrics,
 		geometryAudit: { passed: audit.passed, summary: audit.summary, mismatchCount: audit.mismatches.length },
 		cellDiff: cellDiff ? { passed: cellDiff.passed, diffRows: cellDiff.rowDiffs?.length ?? 0 } : null,
@@ -198,7 +203,8 @@ function cropResult(crop, comparison) {
 	const goldenPassed = comparison.golden?.passed ?? true;
 	// Required crops are regression gates. Once an approved runtime golden exists,
 	// CI should fail on drift from that golden, while Bible drift remains review
-	// evidence until the design target and implementation converge exactly.
+	// evidence until the design target and implementation converge exactly. Before
+	// golden promotion, required crops gate directly against the Bible target.
 	if (crop.status === "required") {
 		if (hasGolden) return goldenPassed ? (biblePassed ? "passed" : "review-diff") : "failed";
 		return biblePassed ? "passed" : "failed";
@@ -207,7 +213,8 @@ function cropResult(crop, comparison) {
 	return "passed";
 }
 
-function scenarioResult(crops) {
+function scenarioResult(crops, finalScreenRejection = null) {
+	if (finalScreenRejection) return "failed";
 	if (crops.some((crop) => crop.result === "failed")) return "failed";
 	if (crops.some((crop) => crop.result === "review-diff")) return "review";
 	return "passed";

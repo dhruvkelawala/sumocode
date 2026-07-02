@@ -13,7 +13,7 @@ This document defines what the V2 Cathedral Visual Harness is allowed to assert.
 3. **Runtime goldens** (`docs/visual/parity/approved-runtime/**`) are approved implementation checkpoints, not design targets.
 4. **Review packs** (`docs/visual/out/parity/index.html`) are evidence for human review and remain uncommitted artifacts.
 
-If these disagree, update the Bible/manifest first, then regenerate review evidence, then promote a runtime golden only after explicit developer approval.
+If these disagree, update the Bible/manifest first, then regenerate review evidence, then promote a runtime golden only after explicit developer approval. RPC-default UI parity is not approved until required crop gates pass, the styled-cell diff and geometry audit have no unapproved drift, and a human reviewer has compared the review pack against the current original UX.
 
 ## 2. Capture engine and verification layers
 
@@ -54,6 +54,17 @@ Runtime scenarios invoke SumoCode through the user-facing entry contract:
 ```
 
 Runtime scenarios must set deterministic terminal env in the manifest (`PI_OFFLINE=1`, `SUMO_TUI=1`, `TERM=xterm-256color`, `COLORTERM=truecolor`, `FORCE_COLOR=3`). Fixture scenarios do not spawn Pi; they render deterministic `TranscriptViewModel` state through the same SumoTUI scene primitives and then enter the same ANSI replay/DOM/crop pipeline. Use fixtures for completed assistant/tool states that cannot be reached deterministically through offline runtime capture.
+
+For RPC reviewer evidence, run the same scenario review command rather than a separate golden path:
+
+```bash
+pnpm visual:review -- --scenario splash-runtime
+pnpm visual:review -- --scenario active-landscape-runtime
+```
+
+Those commands print the review pack and results paths and write PNG poster frames under `docs/visual/out/parity/<scenario>/runtime-full.png`. These outputs are ignored review artifacts, not Bible goldens. Optional video evidence may live under `/tmp/sumocode-rpc-demo`, but it does not replace the required crop, styled-cell, geometry, and human-review checks.
+
+Runtime crash and error strings belong in `rejectIfOutputMatches`. Temporary RPC shell placeholders such as `SUMOCODE RPC`, `empty transcript`, and `sumocode · rpc host` belong in `rejectIfFinalScreenMatches` so startup transitions can still produce review evidence while settled placeholder screens fail parity.
 
 ## 3. V2 dimensions and layout constants
 
@@ -98,14 +109,14 @@ Each crop resolves its status from the crop entry or its parent scenario:
 
 - `review` — compare Bible/runtime/golden where available, report drift, do not fail CI on pixels.
 - `approved` — a runtime golden is present and drift is visible in review packs, but pixel drift remains non-blocking.
-- `required` — a runtime golden is present and drift from that golden fails CI when the threshold is exceeded.
+- `required` — drift fails CI when the threshold is exceeded. If a runtime golden is present, the golden is the regression gate; otherwise the crop gates directly against the Bible target.
 
-For `required` crops, the runtime golden is the regression gate. Bible diffs remain review evidence until implementation and design converge. Required crops must not be added without a committed approved runtime golden.
+For `required` crops with runtime goldens, the runtime golden is the regression gate and Bible diffs remain review evidence until implementation and design converge. Required RPC runtime crops may be added before golden promotion so the harness fails loudly against the Bible target during cutover work.
 
 Hard failures always fail, regardless of crop status:
 
 - invalid scenario manifest
-- missing Bible target or required runtime golden
+- missing Bible target
 - runtime capture crash
 - known error screen/output rejection
 - blank capture
@@ -113,13 +124,28 @@ Hard failures always fail, regardless of crop status:
 - crop out of bounds
 - malformed result metadata
 
-## 6. Current required runtime goldens
+## 6. Current required gates
 
-The required V2 crop gates currently are:
+The required V2 crop gates with committed runtime goldens currently are:
 
 - `input-typed-component/input-frame` — threshold `0.03`
 - `footer-ready-component/footer` — threshold `0.04`
 - `top-bar-default-component/top-bar` — threshold `0.08`
+
+The RPC-default original-UX runtime scenarios also have required gates before golden promotion:
+
+- `splash-runtime/full`
+- `active-landscape-runtime/top-bar`
+- `active-landscape-runtime/sidebar`
+- `active-landscape-runtime/chat-area`
+- `active-landscape-runtime/input-frame`
+- `active-landscape-runtime/hint-row`
+- `active-landscape-runtime/footer`
+- `active-portrait-runtime/top-bar`
+- `active-portrait-runtime/chat-area`
+- `active-portrait-runtime/input-frame`
+- `active-portrait-runtime/hint-row`
+- `active-portrait-runtime/footer`
 
 Sidebar editorial parity is review-approved by inspection but not yet promoted as a required crop.
 
@@ -139,4 +165,4 @@ pnpm render:bible
 pnpm visual:review -- --scenario <scenario-id>
 ```
 
-Use `/bible-verify/` for local visual review when available. Raw review-pack artifacts stay gitignored; only approved runtime goldens and manifest status changes are committed.
+Use `/bible-verify/` for local visual review when available. Raw review-pack artifacts stay gitignored; only approved runtime goldens and manifest status changes are committed. Golden promotion requires explicit Dhruv approval.

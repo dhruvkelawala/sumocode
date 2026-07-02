@@ -54,6 +54,8 @@ function validateManifest(manifest, manifestPath) {
 		if (!scenario.bibleTarget || typeof scenario.bibleTarget !== "string") throw new Error(`Scenario ${scenario.id} needs bibleTarget`);
 		if (scenario.lane === "fixture" && (!scenario.fixture || typeof scenario.fixture.id !== "string")) throw new Error(`Fixture scenario ${scenario.id} needs fixture.id`);
 		if (!scenario.dimensions || !Number.isInteger(scenario.dimensions.cols)) throw new Error(`Scenario ${scenario.id} needs integer dimensions.cols`);
+		validatePatternArray(scenario, "rejectIfOutputMatches");
+		validatePatternArray(scenario, "rejectIfFinalScreenMatches");
 		if (!Array.isArray(scenario.crops) || scenario.crops.length === 0) throw new Error(`Scenario ${scenario.id} needs crop definitions`);
 		for (const crop of scenario.crops) {
 			if (!crop.id || typeof crop.id !== "string") throw new Error(`Scenario ${scenario.id} has crop without id`);
@@ -62,6 +64,15 @@ function validateManifest(manifest, manifestPath) {
 			if (targetCrop !== "full" && !manifest.crops[targetCrop]) throw new Error(`Scenario ${scenario.id} references unknown target crop: ${targetCrop}`);
 			if (runtimeCrop !== "full" && !manifest.crops[runtimeCrop]) throw new Error(`Scenario ${scenario.id} references unknown runtime crop: ${runtimeCrop}`);
 		}
+	}
+}
+
+function validatePatternArray(scenario, field) {
+	const patterns = scenario[field];
+	if (patterns === undefined) return;
+	if (!Array.isArray(patterns)) throw new Error(`Scenario ${scenario.id} ${field} must be an array`);
+	for (const pattern of patterns) {
+		if (typeof pattern !== "string" || pattern.length === 0) throw new Error(`Scenario ${scenario.id} ${field} entries must be non-empty strings`);
 	}
 }
 
@@ -112,7 +123,6 @@ export function assertScenarioTargetsExist(scenarios) {
 		if (!existsSync(scenario.bibleTargetPath)) missing.push(scenario.bibleTargetPath);
 		for (const crop of scenario.crops) {
 			if (!existsSync(crop.targetPath)) missing.push(crop.targetPath);
-			if (crop.status === "required" && !existsSync(crop.goldenPath)) missing.push(crop.goldenPath);
 		}
 	}
 	if (missing.length > 0) {

@@ -217,7 +217,7 @@ function deterministicEnv(extra = {}) {
 	return env;
 }
 
-function findRejection(text, patterns) {
+export function findRejection(text, patterns) {
 	for (const pattern of patterns) {
 		const regex = new RegExp(pattern, "m");
 		const match = text.match(regex);

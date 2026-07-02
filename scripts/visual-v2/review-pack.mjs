@@ -96,7 +96,7 @@ function reviewGuideHtml() {
     <li>Review <strong>Component scenarios</strong> first. They are small, deterministic, and intended to become the first promoted crops.</li>
     <li>For each card, primarily compare <strong>Bible target</strong> → <strong>Current capture</strong>. That is the human review path.</li>
     <li><strong>Debug pixel diffs</strong> are diagnostic/gating artifacts. They are useful for agents and CI, but they are not the main human approval surface.</li>
-    <li><strong>review</strong> means drift is reported but does not fail CI. <strong>required</strong> means drift will fail CI after explicit promotion.</li>
+    <li><strong>review</strong> means drift is reported but does not fail CI. <strong>required</strong> means drift fails CI against an approved runtime golden when present, otherwise against the Bible target.</li>
     <li>Visual mismatch is expected today. Bad signs are blank captures, stack traces, missing images, or crops pointed at the wrong region.</li>
   </ol>
 </section>`;
@@ -117,7 +117,7 @@ function scenarioGroupsHtml(results) {
 	const component = results.scenarios.filter((scenario) => scenario.lane === "component");
 	const fixture = results.scenarios.filter((scenario) => scenario.lane === "fixture");
 	const runtime = results.scenarios.filter((scenario) => scenario.lane === "runtime");
-	return `${scenarioSectionHtml("Component scenarios — review these first", "Small deterministic component captures. Use these cards to decide whether the harness is useful for component-by-component V2 work.", component)}\n${scenarioSectionHtml("Fixture scenes — deterministic completed states", "Full-scene captures from TranscriptViewModel fixtures. These cover completed assistant/tool states without live model or tool nondeterminism.", fixture)}\n${scenarioSectionHtml("Runtime scenarios — informational for now", "Real SumoCode runtime captures. These are expected to differ until V2 primitives and scene composition are implemented.", runtime)}`;
+	return `${scenarioSectionHtml("Component scenarios — review these first", "Small deterministic component captures. Use these cards to decide whether the harness is useful for component-by-component V2 work.", component)}\n${scenarioSectionHtml("Fixture scenes — deterministic completed states", "Full-scene captures from TranscriptViewModel fixtures. These cover completed assistant/tool states without live model or tool nondeterminism.", fixture)}\n${scenarioSectionHtml("Runtime scenarios — required RPC parity gates", "Real SumoCode runtime captures. Required crops fail CI when RPC-default UI drifts from the original Cathedral UX target.", runtime)}`;
 }
 
 function scenarioSectionHtml(title, note, scenarios) {
@@ -136,6 +136,7 @@ function scenarioHtml(scenario) {
   </div>
   <div class="scenario-description">${escapeHtml(scenarioDescription(scenario))}</div>
   ${scenario.error ? `<pre>${escapeHtml(scenario.error)}</pre>` : ""}
+  ${finalScreenRejectionHtml(scenario.finalScreenRejection)}
   <div class="artifacts">
     ${artifact("Bible target", scenario.artifacts?.targetFull)}
     ${artifact(scenario.lane === "fixture" ? "Fixture capture" : "Runtime", scenario.artifacts?.runtimeFull)}
@@ -144,12 +145,17 @@ function scenarioHtml(scenario) {
 </section>`;
 }
 
+function finalScreenRejectionHtml(rejection) {
+	if (!rejection) return "";
+	return `<pre>Final-screen rejection matched ${escapeHtml(JSON.stringify(rejection.pattern))}\n${escapeHtml(rejection.snippet)}</pre>`;
+}
+
 function scenarioDescription(scenario) {
 	const descriptions = {
 		"input-typed-component": "Focused component capture for the active typed input frame. Review this before input-frame implementation work.",
 		"footer-ready-component": "Focused component capture for the Cathedral footer status row. Review state labels, dot ownership, and spacing.",
 		"sidebar-editorial-component": "Focused component capture for the editorial REGISTRY sidebar. Review width, masthead, section rhythm, and hierarchy.",
-		"splash-runtime": "Real runtime splash capture. Informational until splash parity and startup edge cases are addressed.",
+		"splash-runtime": "Real runtime splash capture. Required full-frame gate for the RPC-default splash surface.",
 		"active-landscape-runtime": "Real 160x45 post-submit active-working capture. Offline runtime is expected to show SUMO working/meditating, not a completed model answer.",
 		"active-portrait-runtime": "Real portrait post-submit active-working capture. Offline runtime is expected to show SUMO working/meditating, not a completed model answer.",
 		"fixture-completed-landscape": "Deterministic 160x45 completed transcript fixture with read/edit/bash tool blocks.",

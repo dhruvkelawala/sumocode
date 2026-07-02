@@ -1,4 +1,4 @@
-import type { Component, OverlayOptions } from "@earendil-works/pi-tui";
+import { CURSOR_MARKER, type Component, type OverlayOptions } from "@earendil-works/pi-tui";
 import { describe, expect, it, vi } from "vitest";
 import { loadYoga } from "../layout/yoga.js";
 import { TerminalSessionOwner, type TerminalPatch } from "../runtime/terminal-controller.js";
@@ -25,6 +25,16 @@ class StaticEditor implements Component {
 		const mid = `│ > ${" ".repeat(Math.max(0, width - 5))}│`;
 		const bot = `└${"─".repeat(Math.max(0, width - 2))}┘`;
 		return [top, mid, bot, ...this.extraRows];
+	}
+}
+
+class CursorEditor implements Component {
+	public invalidate(): void {}
+	public render(width: number): string[] {
+		const top = `┌${"─".repeat(Math.max(0, width - 2))}┐`;
+		const mid = `│ > ${CURSOR_MARKER}${" ".repeat(Math.max(0, width - 5))}│`;
+		const bot = `└${"─".repeat(Math.max(0, width - 2))}┘`;
+		return [top, mid, bot];
 	}
 }
 
@@ -170,6 +180,154 @@ describe("OwnedShellRenderer", () => {
 		expect(lines[0]?.startsWith("TOP")).toBe(true);
 		expect(lines[1]?.trim()).toBe("");
 		expect(lines.slice(2).some((line) => line.includes("SIDE"))).toBe(true);
+		renderer.dispose();
+	});
+
+	it("keeps the active shell row categories in the same order after extraction", async () => {
+		const yoga = await loadYoga();
+		const chat = ChatPager.create(yoga);
+		chat.addMessage("user", "row-category-message");
+		const fakeTerminal = new FakeTerminal();
+		const renderer = new OwnedShellRenderer({
+			yoga,
+			chat,
+			editorContainer: () => new StaticEditor() as Component,
+			headerContainer: () => new StaticComponent(["TOP"]),
+			widgetContainerAbove: () => new StaticComponent(["SPACER-LEAD", "WORKING"]),
+			widgetContainerBelow: () => new StaticComponent(["HINT"]),
+			footer: () => new StaticComponent(["FOOTER"]),
+			terminal: fakeTerminal.owner,
+			dimensions: { columns: 40, rows: 16 },
+		});
+
+		renderer.render();
+		const categories = fakeTerminal.patches.map((patch) => classifyShellRow(stripAnsi(patch.ansi)));
+
+		expect(categories[0]).toBe("top-chrome");
+		expect(categories[1]).toBe("blank");
+		expect(categories).toContain("chat");
+		expect(categories).toContain("above-editor-widget");
+		expect(categories).toContain("editor-top");
+		expect(categories).toContain("editor-bottom");
+		expect(categories).toContain("hint");
+		expect(categories).toContain("footer");
+		expect(categories.at(-1)).toBe("blank");
+		expect(categories.indexOf("chat")).toBeLessThan(categories.indexOf("above-editor-widget"));
+		expect(categories.indexOf("above-editor-widget")).toBeLessThan(categories.indexOf("editor-top"));
+		expect(categories.indexOf("editor-bottom")).toBeLessThan(categories.indexOf("hint"));
+		expect(categories.indexOf("hint")).toBeLessThan(categories.indexOf("footer"));
+		renderer.dispose();
+	});
+
+	it("propagates the editor hardware cursor through the shell compositor", async () => {
+		const yoga = await loadYoga();
+		const chat = ChatPager.create(yoga);
+		const fakeTerminal = new FakeTerminal();
+		const renderer = new OwnedShellRenderer({
+			yoga,
+			chat,
+			editorContainer: () => new CursorEditor() as Component,
+			headerContainer: () => new StaticComponent(["TOP"]),
+			widgetContainerBelow: () => new StaticComponent(["HINT"]),
+			footer: () => new StaticComponent(["FOOTER"]),
+			terminal: fakeTerminal.owner,
+			dimensions: { columns: 24, rows: 12 },
+		});
+
+		renderer.render();
+		expect(fakeTerminal.cursors.at(-1)).toEqual({ row: 6, col: 4 });
+		renderer.dispose();
+	});
+
+	it("keeps the sidebar as a reserved sibling of chat instead of painting over it", async () => {
+		const yoga = await loadYoga();
+		const chat = ChatPager.create(yoga);
+		chat.addMessage("assistant", "chat-structural-sibling");
+		const fakeTerminal = new FakeTerminal();
+		const renderer = new OwnedShellRenderer({
+			yoga,
+			chat,
+			editorContainer: () => new StaticEditor() as Component,
+			headerContainer: () => new StaticComponent(["TOP"]),
+			widgetContainerBelow: () => new StaticComponent(["HINT"]),
+			footer: () => new StaticComponent(["FOOTER"]),
+			terminal: fakeTerminal.owner,
+			dimensions: { columns: 80, rows: 14 },
+			sidebarPublication: () => ({
+				component: new StaticComponent(["SIDE"]),
+				isVisible: () => true,
+			}),
+		});
+
+		renderer.render();
+		const chatRect = renderer.getChatRect();
+		expect(chatRect).toBeDefined();
+		expect(chatRect?.left).toBe(0);
+		expect(chatRect?.width).toBeLessThan(80);
+		const lines = fakeTerminal.patches.map((patch) => stripAnsi(patch.ansi));
+		expect(lines.some((line) => line.includes("SIDE"))).toBe(true);
+		renderer.dispose();
+	});
+
+	it("centers splash input while keeping active input full width", async () => {
+		const yoga = await loadYoga();
+		const chat = ChatPager.create(yoga);
+		const splash = createSplashTree(yoga, undefined, () => defaultSplashSnapshot(chat.hasMessages()));
+		const fakeTerminal = new FakeTerminal();
+		const renderer = new OwnedShellRenderer({
+			yoga,
+			chat,
+			splash,
+			editorContainer: () => new StaticEditor() as Component,
+			headerContainer: () => new StaticComponent(["TOP"]),
+			widgetContainerBelow: () => new StaticComponent(["HINT"]),
+			footer: () => new StaticComponent(["FOOTER"]),
+			terminal: fakeTerminal.owner,
+			dimensions: { columns: 80, rows: 25 },
+		});
+
+		renderer.render();
+		const splashLines = fakeTerminal.patches.map((patch) => stripAnsi(patch.ansi));
+		const splashInput = splashLines.find((line) => line.includes("┌") && line.includes("┐"));
+		expect(splashInput?.startsWith("          ┌")).toBe(true);
+
+		chat.addMessage("user", "activate");
+		renderer.invalidatePreviousFrame();
+		renderer.render();
+		const activeLines = fakeTerminal.patches.map((patch) => stripAnsi(patch.ansi));
+		const activeInput = activeLines.find((line) => line.startsWith("┌") && line.includes("┐"));
+		expect(activeInput?.startsWith("┌")).toBe(true);
+		expect(activeInput?.length).toBe(80);
+		renderer.dispose();
+	});
+
+	it("hides the editor hardware cursor while overlays are visible", async () => {
+		const yoga = await loadYoga();
+		const chat = ChatPager.create(yoga);
+		const fakeTerminal = new FakeTerminal();
+		const overlayHost = {
+			overlayStack: [
+				{
+					component: new StaticComponent(["MODAL"]),
+					options: { width: 10, anchor: "center" } satisfies OverlayOptions,
+					focusOrder: 1,
+				},
+			],
+		};
+		const renderer = new OwnedShellRenderer({
+			yoga,
+			chat,
+			editorContainer: () => new CursorEditor() as Component,
+			headerContainer: () => new StaticComponent(["TOP"]),
+			widgetContainerBelow: () => new StaticComponent(["HINT"]),
+			footer: () => new StaticComponent(["FOOTER"]),
+			terminal: fakeTerminal.owner,
+			dimensions: { columns: 24, rows: 12 },
+			overlayHost,
+		});
+
+		renderer.render();
+		expect(fakeTerminal.cursors.at(-1)).toBeNull();
 		renderer.dispose();
 	});
 
@@ -425,4 +583,16 @@ describe("OwnedShellRenderer", () => {
 
 function stripAnsi(text: string): string {
 	return text.replace(/\u001b\[[0-9;]*m/g, "");
+}
+
+function classifyShellRow(line: string): string {
+	if (line.startsWith("TOP")) return "top-chrome";
+	if (line.startsWith("WORKING")) return "above-editor-widget";
+	if (line.startsWith("┌")) return "editor-top";
+	if (line.startsWith("└")) return "editor-bottom";
+	if (line.startsWith("HINT")) return "hint";
+	if (line.startsWith("FOOTER")) return "footer";
+	if (line.includes("row-category-message")) return "chat";
+	if (line.trim() === "") return "blank";
+	return "other";
 }

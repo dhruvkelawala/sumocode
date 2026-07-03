@@ -21,6 +21,7 @@ type Notification = { message: string; level: NotificationLevel };
 // These are the actual legacy VT sequences a real terminal sends.
 const SELECTOR_DOWN = "\x1b[B";
 const SELECTOR_ENTER = "\r";
+const SELECTOR_ESCAPE = "\x1b";
 
 class FakeInlineEditor {
 	public text = "";
@@ -326,22 +327,21 @@ describe("RpcHostActions", () => {
 		expect(notifications).toContainEqual({ message: "thinking: minimal", level: "info" });
 	});
 
-	it("handles session controls through modal selectors and editor text handoff", async () => {
-		const { actions, controls, modals, inlineSelectors, editorText, rehydrateCalls } = setup();
+	it("handles session controls through in-place selectors and editor text handoff", async () => {
+		const { actions, controls, inlineSelectors, editorText, rehydrateCalls } = setup();
 
 		const session = actions.handleSubmittedText("/sessions");
 		await flush();
-		// Top-level "Session controls" list now renders in place (plan 036).
+		// Top-level "Session controls" list renders in place (plan 036).
 		expect(inlineSelectors.getActiveKind()).toBe("select");
 		inlineSelectors.handleInput(SELECTOR_DOWN);
 		inlineSelectors.handleInput(SELECTOR_DOWN);
 		inlineSelectors.handleInput(SELECTOR_ENTER);
 		await flush();
 
-		// "Fork from message" -> openForkSelector, still on modals.select at
-		// this migration stage.
-		expect(modals.getActiveKind()).toBe("select");
-		modals.handleInput(Key.enter);
+		// "Fork from message" -> openForkSelector, also in place.
+		expect(inlineSelectors.getActiveKind()).toBe("select");
+		inlineSelectors.handleInput(SELECTOR_ENTER);
 		await session;
 
 		expect(controls.calls).toEqual([
@@ -374,7 +374,7 @@ describe("RpcHostActions", () => {
 
 		const forkPromise = actions.handleSubmittedText("/fork");
 		await flush();
-		modals.handleInput(Key.enter);
+		inlineSelectors.handleInput(SELECTOR_ENTER);
 		await forkPromise;
 		expect(rehydrateCalls).toHaveLength(4);
 	});
@@ -400,18 +400,18 @@ describe("RpcHostActions", () => {
 
 		const forkPromise = actions.handleSubmittedText("/fork");
 		await flush();
-		modals.handleInput(Key.enter);
+		inlineSelectors.handleInput(SELECTOR_ENTER);
 		await forkPromise;
 
 		expect(rehydrateCalls).toHaveLength(0);
 	});
 
 	it("does not rehydrate the transcript when the fork selector is dismissed without a selection", async () => {
-		const { actions, modals, rehydrateCalls } = setup();
+		const { actions, inlineSelectors, rehydrateCalls } = setup();
 
 		const forkPromise = actions.handleSubmittedText("/fork");
 		await flush();
-		modals.handleInput(Key.escape);
+		inlineSelectors.handleInput(SELECTOR_ESCAPE);
 		await forkPromise;
 
 		expect(rehydrateCalls).toHaveLength(0);

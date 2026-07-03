@@ -414,7 +414,7 @@ export class RpcHostActions {
 			return;
 		}
 		const labels = messages.map((message, index) => `${index + 1}. ${message.text.slice(0, 72)}`);
-		const selected = await this.modals.select("Fork from message", labels);
+		const selected = await this.inlineSelectors.select("Fork from message", labels);
 		if (!selected) return;
 		const index = labels.indexOf(selected);
 		const message = messages[index];

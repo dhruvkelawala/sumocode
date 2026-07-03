@@ -108,7 +108,7 @@ describe("RpcExtensionUiResponder", () => {
 		await expect(response).resolves.toEqual({ type: "extension_ui_response", id: "confirm-1", confirmed: false });
 	});
 
-	it("round-trips input and editor values through the modal layer", async () => {
+	it("round-trips input responses through the modal layer", async () => {
 		const modals = new ModalManager();
 		const editorText = new RpcHostEditorBuffer();
 		const responder = new RpcExtensionUiResponder({ modals, editorText });
@@ -125,19 +125,100 @@ describe("RpcExtensionUiResponder", () => {
 		modals.handleInput("enter");
 
 		await expect(inputResponse).resolves.toEqual({ type: "extension_ui_response", id: "input-1", value: "ok" });
+	});
+
+	it("returns the editor prefill verbatim on immediate Enter without touching the host draft", async () => {
+		const modals = new ModalManager();
+		const editorText = new RpcHostEditorBuffer();
+		editorText.setText("user is mid-typing this");
+		const responder = new RpcExtensionUiResponder({ modals, editorText });
 
 		const editorResponse = responder.handle(request({
 			type: "extension_ui_request",
-			id: "editor-1",
+			id: "editor-prefill",
 			method: "editor",
 			title: "Edit",
 			prefill: "draft",
 		}));
 
+		// The modal's value must be seeded with the prefill (not just its placeholder), so an
+		// immediate Enter returns the prefill unchanged rather than an empty string.
+		modals.handleInput("enter");
+
+		await expect(editorResponse).resolves.toEqual({ type: "extension_ui_response", id: "editor-prefill", value: "draft" });
+		// The host's real chat-draft editor is a separate surface and must never be touched by
+		// the editor() dialog flow.
+		expect(editorText.getText()).toBe("user is mid-typing this");
+	});
+
+	it("returns the edited editor value when the user changes the prefill", async () => {
+		const modals = new ModalManager();
+		const editorText = new RpcHostEditorBuffer();
+		editorText.setText("user is mid-typing this");
+		const responder = new RpcExtensionUiResponder({ modals, editorText });
+
+		const editorResponse = responder.handle(request({
+			type: "extension_ui_request",
+			id: "editor-edit",
+			method: "editor",
+			title: "Edit",
+			prefill: "draft",
+		}));
+
+		modals.handleInput("backspace");
+		modals.handleInput("backspace");
+		modals.handleInput("backspace");
+		modals.handleInput("backspace");
+		modals.handleInput("backspace");
+		modals.handleInput("ablist");
+		modals.handleInput("enter");
+
+		await expect(editorResponse).resolves.toEqual({ type: "extension_ui_response", id: "editor-edit", value: "ablist" });
+		expect(editorText.getText()).toBe("user is mid-typing this");
+	});
+
+	it("cancels the editor dialog on escape without touching the host draft at any point", async () => {
+		const modals = new ModalManager();
+		const editorText = new RpcHostEditorBuffer();
+		editorText.setText("user is mid-typing this");
+		const responder = new RpcExtensionUiResponder({ modals, editorText });
+
+		const editorResponse = responder.handle(request({
+			type: "extension_ui_request",
+			id: "editor-cancel",
+			method: "editor",
+			title: "Edit",
+			prefill: "draft",
+		}));
+
+		// Draft must be untouched before, during, and after the dialog.
+		expect(editorText.getText()).toBe("user is mid-typing this");
 		modals.handleInput("escape");
 
-		await expect(editorResponse).resolves.toEqual({ type: "extension_ui_response", id: "editor-1", cancelled: true });
-		expect(responder.getSnapshot().editorText).toBe("draft");
+		await expect(editorResponse).resolves.toEqual({ type: "extension_ui_response", id: "editor-cancel", cancelled: true });
+		expect(editorText.getText()).toBe("user is mid-typing this");
+		expect(responder.getSnapshot().editorText).toBe("user is mid-typing this");
+	});
+
+	it("responds cancelled and logs a diagnostic for an unrecognized extension_ui method", async () => {
+		const modals = new ModalManager();
+		const responder = new RpcExtensionUiResponder({ modals });
+		const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+		try {
+			// Cast through unknown: the wire payload from Pi's child process is untyped JSON, so a
+			// future Pi upgrade can send a method this responder's exhaustive switch doesn't know
+			// about. Simulate that here even though the current RpcExtensionUIRequest union is closed.
+			const response = responder.handle(
+				{ type: "extension_ui_request", id: "future-1", method: "future_method", title: "New" } as unknown as RpcExtensionUIRequest,
+			);
+
+			await expect(response).resolves.toEqual({ type: "extension_ui_response", id: "future-1", cancelled: true });
+			expect(consoleError).toHaveBeenCalledTimes(1);
+			expect(consoleError.mock.calls[0]?.[0]).toContain("future_method");
+		} finally {
+			consoleError.mockRestore();
+		}
 	});
 
 	it("routes nonblocking requests into host-owned surfaces without responding", async () => {

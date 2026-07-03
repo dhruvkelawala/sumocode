@@ -162,9 +162,13 @@ export class RpcExtensionUiResponder {
 				return valueResponse(request.id, value);
 			}
 			case "editor": {
-				if (request.prefill !== undefined) this.editorText.setText(request.prefill);
-				const value = await this.modals.input(request.title, request.prefill);
-				if (value !== undefined) this.editorText.setText(value);
+				// Pi's editor() contract: open an editor prefilled with `request.prefill`, return
+				// the edited text verbatim on submit. The modal's value (not just its placeholder)
+				// must be seeded so pressing Enter immediately round-trips the prefill unchanged.
+				// The host's real chat-draft editor is intentionally left untouched here: this is
+				// a standalone dialog flow, not a mirror of the user's in-progress draft, and
+				// clobbering it would silently discard whatever the user was mid-typing.
+				const value = await this.modals.input(request.title, request.prefill, { initialValue: request.prefill });
 				return valueResponse(request.id, value);
 			}
 			case "notify":
@@ -191,6 +195,20 @@ export class RpcExtensionUiResponder {
 				this.editorText.setText(request.text);
 				this.onRenderRequest();
 				return undefined;
+			default: {
+				// The `RpcExtensionUIRequest` union is exhaustive at the type level, but the wire
+				// payload is untyped JSON from the Pi child process: a Pi upgrade can add a new
+				// extension_ui method this responder doesn't know about yet. Without this branch
+				// `handle()` would resolve `void` and (pre-fix) leave the request unanswered,
+				// wedging Pi's rpc-mode.js pendingExtensionRequests entry forever. Return an
+				// explicit cancelled response and log so the gap surfaces during a Pi upgrade
+				// instead of silently hanging.
+				const unknownRequest = request as { method?: unknown; id: string };
+				console.error(
+					`[sumocode] extension_ui request with unrecognized method "${String(unknownRequest.method)}" (id=${unknownRequest.id}); responding cancelled. This likely means Pi added a new extension_ui method that RpcExtensionUiResponder needs to implement.`,
+				);
+				return { type: "extension_ui_response", id: unknownRequest.id, cancelled: true };
+			}
 		}
 	}
 

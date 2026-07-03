@@ -5,6 +5,15 @@ export interface ModalDialogOptions {
 	readonly timeout?: number;
 }
 
+export interface ModalInputOptions extends ModalDialogOptions {
+	/**
+	 * Seeds the input modal's editable value (not just its placeholder). Used for round-tripping
+	 * prefilled text (e.g. Pi's `editor` extension_ui method): pressing Enter immediately returns
+	 * this value verbatim, matching a placeholder-only prefill would not.
+	 */
+	readonly initialValue?: string;
+}
+
 export type ModalResult = boolean | string | undefined;
 
 type ActiveModal =
@@ -156,13 +165,13 @@ export class ModalManager implements Component {
 		});
 	}
 
-	public input(title: string, placeholder?: string, opts?: ModalDialogOptions): Promise<string | undefined> {
+	public input(title: string, placeholder?: string, opts?: ModalInputOptions): Promise<string | undefined> {
 		return new Promise<string | undefined>((resolve) => {
 			const entry: ActiveModal = {
 				kind: "input",
 				title: sanitizeModalText(title),
 				placeholder: placeholder === undefined ? undefined : sanitizeSingleLineModalText(placeholder),
-				value: "",
+				value: opts?.initialValue === undefined ? "" : sanitizeSingleLineModalText(opts.initialValue),
 				resolve,
 				cleanup: () => undefined,
 			};

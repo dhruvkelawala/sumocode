@@ -122,4 +122,38 @@ describe("ModalManager", () => {
 
 		await expect(result).resolves.toBe("/Volumes/SumoDeus NVMe/code/sumocode");
 	});
+
+	it("seeds the input modal's editable value so Enter returns it verbatim", async () => {
+		const modals = new ModalManager();
+		const result = modals.input("Edit", undefined, { initialValue: "draft text" });
+
+		expect(stripAnsi(modals.render(80).join("\n"))).toContain("> draft text");
+
+		modals.handleInput("enter");
+
+		await expect(result).resolves.toBe("draft text");
+	});
+
+	it("lets the user edit a seeded input value before submitting", async () => {
+		const modals = new ModalManager();
+		const result = modals.input("Edit", undefined, { initialValue: "draft" });
+
+		for (let i = 0; i < "draft".length; i += 1) modals.handleInput("backspace");
+		modals.handleInput("final");
+		modals.handleInput("enter");
+
+		await expect(result).resolves.toBe("final");
+	});
+
+	it("sanitizes a seeded initial value the same as typed input", async () => {
+		const modals = new ModalManager();
+		const result = modals.input("Edit", undefined, { initialValue: "line one\nline two" });
+
+		const rendered = stripAnsi(modals.render(80).join("\n"));
+		expect(rendered).toContain("line one line two");
+
+		modals.handleInput("enter");
+
+		await expect(result).resolves.toBe("line one line two");
+	});
 });

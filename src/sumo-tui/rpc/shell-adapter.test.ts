@@ -161,6 +161,24 @@ describe("RpcShellAdapter chat update", () => {
 			adapter.dispose();
 		}
 	});
+
+	// app.tools.expand (Ctrl+O) wiring: host.ts's createToolsExpandToggleHandler
+	// calls through RpcHostRuntime.setToolExpansion -> here -> the live
+	// ChatPager, mirroring the writeClipboardSequence indirection this adapter
+	// already uses for terminal-owned state. Pins the adapter's passthrough
+	// actually reaches ChatPager.setToolExpansion (not just that it compiles).
+	it("setToolExpansion forwards to the live ChatPager", async () => {
+		const adapter = await makeAdapter();
+		const setToolExpansion = vi.spyOn(ChatPager.prototype, "setToolExpansion");
+		try {
+			setToolExpansion.mockClear();
+			adapter.setToolExpansion(true);
+			expect(setToolExpansion).toHaveBeenCalledWith(true);
+		} finally {
+			setToolExpansion.mockRestore();
+			adapter.dispose();
+		}
+	});
 });
 
 describe("RpcShellAdapter mouse drag-select + OSC52 copy", () => {

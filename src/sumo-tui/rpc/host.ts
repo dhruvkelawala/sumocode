@@ -370,6 +370,116 @@ export function createRpcHostInterruptHandler(deps: RpcHostInterruptDependencies
 	};
 }
 
+export interface RpcHostModelCycleDependencies {
+	readonly controls: Pick<RpcHostControls, "cycleModel" | "getAvailableModels" | "setModel">;
+	readonly notifications: Pick<NotificationCenter, "notify">;
+	readonly onStateChange?: () => void;
+}
+
+/**
+ * Builds the `app.model.cycleForward` (Ctrl+P by default) action handler:
+ * calls the same `cycleModel()` RPC command `/model` with no args falls back
+ * to via `openModelSelector`'s sibling commands, then notifies with the
+ * resulting model label -- same "model: provider/id" message shape
+ * `openModelSelector`'s success path already uses, for consistency. Factored
+ * out (rather than inlined in runRpcHost) so it is independently unit
+ * testable, mirroring `createRpcHostInterruptHandler` above.
+ */
+export function createModelCycleForwardHandler(deps: RpcHostModelCycleDependencies): () => void {
+	return (): void => {
+		void notifyOnError(async () => {
+			const state = await deps.controls.cycleModel();
+			deps.onStateChange?.();
+			if (state.modelLabel) deps.notifications.notify(`model: ${state.modelLabel}`, "info");
+		}, deps.notifications);
+	};
+}
+
+/**
+ * Builds the `app.model.cycleBackward` (Shift+Ctrl+P by default) action
+ * handler. Pi's `cycle_model` RPC command is forward-only (verified against
+ * `rpc-types.d.ts`: the `cycle_model` request shape carries no direction
+ * field) -- there is no backward primitive to call directly. An earlier
+ * version of this handler called `cycleModel()` `(N - 1)` times to land one
+ * position back on the ring; that is wrong for this codebase specifically,
+ * because `getAvailableModels()` returns the SAME list `/model` shows the
+ * user (confirmed live at 531 entries), which would mean ~530 sequential RPC
+ * round-trips on every press -- a multi-second freeze, not a fix. Since
+ * `RpcModelOption` already carries `provider`/`id`/`active` per entry and
+ * `RpcHostControls.setModel(provider, id)` sets a model directly, backward
+ * cycling is instead computed locally (find the active index, step back one
+ * with wraparound) and applied with exactly one RPC call, regardless of list
+ * size. A single-model list (N<=1) is a no-op: there is nowhere else to
+ * cycle to. If `active` matches nothing (stale/renamed current model), falls
+ * back to the last entry rather than throwing.
+ */
+export function createModelCycleBackwardHandler(deps: RpcHostModelCycleDependencies): () => void {
+	return (): void => {
+		void notifyOnError(async () => {
+			const models = await deps.controls.getAvailableModels();
+			if (models.length <= 1) {
+				if (models.length === 0) deps.notifications.notify("no models available", "warning");
+				return;
+			}
+			const activeIndex = models.findIndex((model) => model.active);
+			const baseIndex = activeIndex < 0 ? 0 : activeIndex;
+			const previousIndex = (baseIndex - 1 + models.length) % models.length;
+			const previous = models[previousIndex];
+			const state = await deps.controls.setModel(previous.provider, previous.id);
+			deps.onStateChange?.();
+			if (state.modelLabel) deps.notifications.notify(`model: ${state.modelLabel}`, "info");
+		}, deps.notifications);
+	};
+}
+
+export interface RpcHostThinkingCycleDependencies {
+	readonly controls: Pick<RpcHostControls, "cycleThinkingLevel">;
+	readonly notifications: Pick<NotificationCenter, "notify">;
+	readonly onStateChange?: () => void;
+}
+
+/**
+ * Builds the `app.thinking.cycle` (Shift+Tab by default) action handler --
+ * one of the two exact chords the user's diagnostic capture showed as dead
+ * (pressed repeatedly, routed to "editor", no effect). Calls the same
+ * `cycleThinkingLevel()` RPC command `/thinking` with no args falls back to,
+ * then notifies with the resulting level -- same "thinking: <level>" message
+ * shape `setThinkingFromText` already uses.
+ */
+export function createThinkingCycleHandler(deps: RpcHostThinkingCycleDependencies): () => void {
+	return (): void => {
+		void notifyOnError(async () => {
+			const state = await deps.controls.cycleThinkingLevel();
+			deps.onStateChange?.();
+			if (state.thinkingLevel) deps.notifications.notify(`thinking: ${state.thinkingLevel}`, "info");
+		}, deps.notifications);
+	};
+}
+
+export interface RpcHostToolsExpandDependencies {
+	readonly setToolExpansion: (expanded: boolean) => void;
+	readonly requestRender: () => void;
+}
+
+/**
+ * Builds the `app.tools.expand` (Ctrl+O by default) action handler: flips a
+ * host-held boolean and applies it via `setToolExpansion` -- threaded through
+ * from `RpcHostRuntime.setToolExpansion` (-> `RpcShellAdapter.setToolExpansion`
+ * -> the live `ChatPager`), the same indirection `getChatSink`/
+ * `writeClipboardSequence` already use for other runtime-owned state, since
+ * neither this handler nor `RpcHostActions` holds a direct reference to the
+ * adapter. Starts collapsed (`false`) to match `ChatPager`'s own default
+ * tool-expansion state.
+ */
+export function createToolsExpandToggleHandler(deps: RpcHostToolsExpandDependencies): () => void {
+	let expanded = false;
+	return (): void => {
+		expanded = !expanded;
+		deps.setToolExpansion(expanded);
+		deps.requestRender();
+	};
+}
+
 export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<number> {
 	const argv = [...(options.argv ?? process.argv.slice(2))];
 	const env = options.env ?? process.env;
@@ -524,6 +634,25 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		}
 	};
 	const keybindings = createRpcKeybindingsManager({ env });
+	const handleModelCycleForward = createModelCycleForwardHandler({
+		controls,
+		notifications,
+		onStateChange: requestRender,
+	});
+	const handleModelCycleBackward = createModelCycleBackwardHandler({
+		controls,
+		notifications,
+		onStateChange: requestRender,
+	});
+	const handleThinkingCycle = createThinkingCycleHandler({
+		controls,
+		notifications,
+		onStateChange: requestRender,
+	});
+	const handleToolsExpandToggle = createToolsExpandToggleHandler({
+		setToolExpansion: (expanded) => runtime?.setToolExpansion(expanded),
+		requestRender,
+	});
 	const editor = new RpcHostEditorController({
 		controls,
 		cwd,
@@ -540,6 +669,22 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		// the interrupt tier module (see `handleAppInterrupt` above).
 		onInterrupt: () => handleAppInterrupt(),
 		onSubmit: submitFromEditor,
+		// app.model.cycleForward / app.model.cycleBackward / app.thinking.cycle
+		// / app.tools.expand: registered via CustomEditor's generic
+		// `onAction` map (see editor.ts's onModelCycleForward etc. doc
+		// comments) rather than a dedicated callback prop.
+		onModelCycleForward: handleModelCycleForward,
+		onModelCycleBackward: handleModelCycleBackward,
+		// app.model.select (Ctrl+L by default): opens the same in-place model
+		// selector `/model` with no args and the command palette's "MODEL"
+		// entry both already use. `actions` is a forward reference (assigned
+		// below, after `editor` -- same closure-captures-later-assignment
+		// pattern `submitFromEditor` above already relies on for `actions`)
+		// since `RpcHostActions` itself needs `editorText: editor` to
+		// construct.
+		onModelSelect: () => { void notifyOnError(async () => { await actions?.openModelSelector(); }, notifications); },
+		onThinkingCycle: handleThinkingCycle,
+		onToolsExpandToggle: handleToolsExpandToggle,
 	});
 	// In-place selector surface (plan 036): occupies the editor's Yoga slot for
 	// `/model`, `/thinking`, `/sessions`, `/settings`, and `/fork` instead of

@@ -207,6 +207,18 @@ export class RpcShellAdapter {
 		return this.chat;
 	}
 
+	/**
+	 * Applies `app.tools.expand`'s toggled expansion state directly to this
+	 * adapter's live `ChatPager` -- the same pattern `writeClipboardSequence`
+	 * uses for OSC52 (`host-actions.ts`/`RpcHostActions` has no direct handle
+	 * on adapter-owned state, only `RpcHostRuntime` does, so `host.ts` wires
+	 * this through as a callback rather than exposing the `ChatPager` type
+	 * itself past this adapter).
+	 */
+	public setToolExpansion(expanded: boolean): void {
+		this.chat.setToolExpansion(expanded);
+	}
+
 	public render(): void {
 		this.renderer.render();
 	}

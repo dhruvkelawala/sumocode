@@ -61,6 +61,22 @@ export interface RpcHostEditorControllerOptions extends RpcAutocompleteProviderO
 	 * is NOT showing (else Escape falls through to close the dropdown).
 	 */
 	readonly onInterrupt?: () => void;
+	/**
+	 * `app.model.cycleForward` (Ctrl+P by default). Unlike `onExit`/`onInterrupt`
+	 * (which map to `CustomEditor`'s dedicated `onCtrlD`/`onEscape` props), this
+	 * and the handlers below are registered via the generic `editor.onAction(...)`
+	 * map `CustomEditor.handleInput` also consults (see custom-editor.js) --
+	 * there is no dedicated callback prop for these actions.
+	 */
+	readonly onModelCycleForward?: () => void;
+	/** `app.model.cycleBackward` (Shift+Ctrl+P by default). */
+	readonly onModelCycleBackward?: () => void;
+	/** `app.model.select` (Ctrl+L by default). */
+	readonly onModelSelect?: () => void;
+	/** `app.thinking.cycle` (Shift+Tab by default). */
+	readonly onThinkingCycle?: () => void;
+	/** `app.tools.expand` (Ctrl+O by default). */
+	readonly onToolsExpandToggle?: () => void;
 }
 
 const identity = (text: string): string => text;
@@ -144,6 +160,15 @@ export class RpcHostEditorController implements EditorTextController, KeyTarget 
 		// (e.g. `app.suspend`) that CustomEditor's `handleInput` also consults.
 		if (options.onExit) this.editor.onCtrlD = options.onExit;
 		if (options.onInterrupt) this.editor.onEscape = options.onInterrupt;
+		// Generic `app.*` actions: registered through `onAction` (the map
+		// `CustomEditor.handleInput`'s fallback loop consults for every action
+		// other than `app.interrupt`/`app.exit`) rather than a dedicated prop --
+		// see each option's doc comment above.
+		if (options.onModelCycleForward) this.editor.onAction("app.model.cycleForward", options.onModelCycleForward);
+		if (options.onModelCycleBackward) this.editor.onAction("app.model.cycleBackward", options.onModelCycleBackward);
+		if (options.onModelSelect) this.editor.onAction("app.model.select", options.onModelSelect);
+		if (options.onThinkingCycle) this.editor.onAction("app.thinking.cycle", options.onThinkingCycle);
+		if (options.onToolsExpandToggle) this.editor.onAction("app.tools.expand", options.onToolsExpandToggle);
 		this.editor.focused = true;
 		this.editor.onChange = () => this.tui.requestRender();
 		this.editor.onSubmit = (text) => {

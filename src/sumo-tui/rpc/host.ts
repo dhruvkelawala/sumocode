@@ -1,6 +1,7 @@
 import { resolve } from "node:path";
 import { isCtrlCInput, isEscapeInput } from "../input/shared-input-router.js";
 import { loadYoga } from "../layout/yoga.js";
+import { applyStartupTheme } from "../../themes/index.js";
 import { ExtensionStatusPublication, RegionRegistry } from "../pi-compat/region-registry.js";
 import { ModalLayer } from "../widgets/modal-layer.js";
 import { NotificationCenter } from "../widgets/notification.js";
@@ -115,6 +116,13 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 	}
 	const root = hostRoot(env);
 	const cwd = hostCwd(env);
+	// Resolve and apply the configured theme before the runtime/shell is
+	// constructed so the host's first frame already renders the user's theme
+	// instead of the registry default (Cathedral). The RPC child process never
+	// renders, so main's extension.ts theme-init (which the child also runs)
+	// has no visible effect here — the host must apply it independently, via
+	// the same shared resolution `extension.ts` uses.
+	applyStartupTheme({ cwd });
 	const visualFixture = rpcVisualFixtureFromEnv(env);
 	const extensionPath = resolve(root, "src/extension.ts");
 	const client = new SumoRpcClient({

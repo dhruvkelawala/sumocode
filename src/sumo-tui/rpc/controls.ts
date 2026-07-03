@@ -71,24 +71,35 @@ export class RpcHostControls {
 		return modelOptionsFrom(data.models, this.stateStore.getSnapshot().modelLabel);
 	}
 
+	// set_model/cycle_model/cycle_thinking_level's own responses already carry
+	// the resulting model/level inline (see rpc-types.d.ts) -- these apply
+	// that payload straight to the state store instead of following up with a
+	// second get_state round-trip, halving the RPC latency the footer/chrome
+	// waits on before it can show the change. set_thinking_level's response
+	// has no data at all, but on success the level we asked for IS the
+	// result, so it's applied directly with no round-trip beyond the command
+	// itself.
+
 	public async setModel(provider: string, modelId: string): Promise<RpcHostChromeState> {
-		responseData(await this.client.send({ type: "set_model", provider, modelId }), "set_model");
-		return await this.refreshState();
+		const model = responseData(await this.client.send({ type: "set_model", provider, modelId }), "set_model");
+		return this.stateStore.applyModelChange(model);
 	}
 
 	public async cycleModel(): Promise<RpcHostChromeState> {
-		responseData(await this.client.send({ type: "cycle_model" }), "cycle_model");
-		return await this.refreshState();
+		const data = responseData(await this.client.send({ type: "cycle_model" }), "cycle_model");
+		if (!data) return this.stateStore.getSnapshot();
+		return this.stateStore.applyModelChange(data.model, data.thinkingLevel);
 	}
 
 	public async setThinkingLevel(level: RpcThinkingLevel): Promise<RpcHostChromeState> {
 		responseData(await this.client.send({ type: "set_thinking_level", level }), "set_thinking_level");
-		return await this.refreshState();
+		return this.stateStore.applyThinkingLevel(level);
 	}
 
 	public async cycleThinkingLevel(): Promise<RpcHostChromeState> {
-		responseData(await this.client.send({ type: "cycle_thinking_level" }), "cycle_thinking_level");
-		return await this.refreshState();
+		const data = responseData(await this.client.send({ type: "cycle_thinking_level" }), "cycle_thinking_level");
+		if (!data) return this.stateStore.getSnapshot();
+		return this.stateStore.applyThinkingLevel(data.level);
 	}
 
 	public async newSession(parentSession?: string): Promise<RpcResponseData<"new_session">> {

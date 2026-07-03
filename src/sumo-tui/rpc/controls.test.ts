@@ -95,52 +95,40 @@ describe("RpcHostControls", () => {
 		expect(client.commands).toEqual([{ type: "get_available_models" }]);
 	});
 
-	it("sets the model and refreshes state after success", async () => {
+	it("sets the model by patching state locally from the response, with no follow-up get_state round-trip", async () => {
 		const client = new FakeClient(
 			{ type: "response", command: "set_model", success: true, data: model("anthropic", "claude-opus-4-8") },
-			stateResponse({ model: model("anthropic", "claude-opus-4-8") }),
 		);
 		const controls = new RpcHostControls(client);
 
 		await expect(controls.setModel("anthropic", "claude-opus-4-8")).resolves.toMatchObject({
 			modelLabel: "anthropic/claude-opus-4-8",
 		});
-		expect(client.commands).toEqual([
-			{ type: "set_model", provider: "anthropic", modelId: "claude-opus-4-8" },
-			{ type: "get_state" },
-		]);
+		expect(client.commands).toEqual([{ type: "set_model", provider: "anthropic", modelId: "claude-opus-4-8" }]);
 	});
 
-	it("cycles models for null and non-null Pi responses and refreshes state", async () => {
+	it("cycles models for null and non-null Pi responses by patching state locally, with no follow-up get_state round-trip", async () => {
 		const client = new FakeClient(
 			{ type: "response", command: "cycle_model", success: true, data: null },
-			stateResponse(),
 			{
 				type: "response",
 				command: "cycle_model",
 				success: true,
 				data: { model: model("google", "gemini-3"), thinkingLevel: "high", isScoped: false },
 			},
-			stateResponse({ model: model("google", "gemini-3"), thinkingLevel: "high" }),
 		);
 		const controls = new RpcHostControls(client);
 
-		await expect(controls.cycleModel()).resolves.toMatchObject({ modelLabel: "openai/gpt-5" });
+		// null (nothing to cycle to) leaves the store's existing snapshot untouched -- no RPC round-trip at all beyond cycle_model itself.
+		await expect(controls.cycleModel()).resolves.not.toHaveProperty("modelLabel");
 		await expect(controls.cycleModel()).resolves.toMatchObject({ modelLabel: "google/gemini-3", thinkingLevel: "high" });
-		expect(client.commands).toEqual([
-			{ type: "cycle_model" },
-			{ type: "get_state" },
-			{ type: "cycle_model" },
-			{ type: "get_state" },
-		]);
+		expect(client.commands).toEqual([{ type: "cycle_model" }, { type: "cycle_model" }]);
 	});
 
-	it("sets and cycles thinking level before refreshing state", async () => {
+	it("sets and cycles thinking level by patching state locally, with no follow-up get_state round-trip", async () => {
 		const client = new FakeClient(
 			{ type: "response", command: "set_thinking_level", success: true },
-			stateResponse({ thinkingLevel: "high" }),
 			{ type: "response", command: "cycle_thinking_level", success: true, data: { level: "minimal" } },
-			stateResponse({ thinkingLevel: "minimal" }),
 		);
 		const controls = new RpcHostControls(client);
 
@@ -148,10 +136,18 @@ describe("RpcHostControls", () => {
 		await expect(controls.cycleThinkingLevel()).resolves.toMatchObject({ thinkingLevel: "minimal" });
 		expect(client.commands).toEqual([
 			{ type: "set_thinking_level", level: "high" },
-			{ type: "get_state" },
 			{ type: "cycle_thinking_level" },
-			{ type: "get_state" },
 		]);
+	});
+
+	it("cycle_thinking_level's null response (nothing to cycle to) leaves state untouched with no follow-up round-trip", async () => {
+		const client = new FakeClient({ type: "response", command: "cycle_thinking_level", success: true, data: null });
+		const store = new RpcHostStateStore();
+		store.hydrateFromRpcState(rpcState({ thinkingLevel: "medium" }));
+		const controls = new RpcHostControls(client, store);
+
+		await expect(controls.cycleThinkingLevel()).resolves.toMatchObject({ thinkingLevel: "medium" });
+		expect(client.commands).toEqual([{ type: "cycle_thinking_level" }]);
 	});
 
 	it("sends exact session control payloads and decodes their responses", async () => {

@@ -27,10 +27,15 @@ export interface RpcHostChromeState {
 	readonly costUsd: number;
 }
 
-function modelLabelFrom(state: RpcSessionState): string | undefined {
-	const model = state.model as { provider?: unknown; id?: unknown } | undefined;
+type ModelIdentityLike = { provider?: unknown; id?: unknown } | undefined;
+
+function modelLabelFromModel(model: ModelIdentityLike): string | undefined {
 	if (!model || typeof model.id !== "string") return undefined;
 	return typeof model.provider === "string" ? `${model.provider}/${model.id}` : model.id;
+}
+
+function modelLabelFrom(state: RpcSessionState): string | undefined {
+	return modelLabelFromModel(state.model as ModelIdentityLike);
 }
 
 function eventType(event: unknown): string | undefined {
@@ -135,6 +140,37 @@ export class RpcHostStateStore {
 
 	public setGitBranch(gitBranch: string | undefined): RpcHostChromeState {
 		this.state = { ...this.state, gitBranch };
+		return this.getSnapshot();
+	}
+
+	/**
+	 * Patches `modelLabel` (and optionally `thinkingLevel`) directly from a
+	 * mutating RPC response's own inline payload -- `set_model`/`cycle_model`
+	 * already return the resulting model (and `cycle_model` the resulting
+	 * thinking level too), so callers can apply it here instead of issuing a
+	 * second `get_state` round-trip just to read back what the first response
+	 * already told them. Fixes a real perceived-latency bug: the footer used
+	 * to sit on the stale value until a full extra RPC round-trip completed.
+	 */
+	public applyModelChange(model: ModelIdentityLike, thinkingLevel?: string): RpcHostChromeState {
+		const modelLabel = modelLabelFromModel(model);
+		this.state = {
+			...this.state,
+			...(modelLabel !== undefined ? { modelLabel } : {}),
+			...(thinkingLevel !== undefined ? { thinkingLevel } : {}),
+		};
+		return this.getSnapshot();
+	}
+
+	/**
+	 * Patches `thinkingLevel` directly -- used after `set_thinking_level`
+	 * (whose response carries no data at all, so the level we asked for IS
+	 * the result on success) and after `cycle_thinking_level` (whose response
+	 * already includes the resulting level inline). Same round-trip-avoidance
+	 * rationale as `applyModelChange`.
+	 */
+	public applyThinkingLevel(level: string): RpcHostChromeState {
+		this.state = { ...this.state, thinkingLevel: level };
 		return this.getSnapshot();
 	}
 

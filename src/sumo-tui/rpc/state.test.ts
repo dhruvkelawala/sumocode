@@ -102,4 +102,69 @@ describe("RpcHostStateStore", () => {
 			lastEventType: "tool_execution_update",
 		});
 	});
+
+	it("applyModelChange patches modelLabel (and thinkingLevel, if given) directly, without touching other state", () => {
+		const store = new RpcHostStateStore();
+		store.hydrateFromRpcState({
+			model: { provider: "openai", id: "gpt-5.5" } as never,
+			thinkingLevel: "medium",
+			isStreaming: false,
+			isCompacting: false,
+			steeringMode: "all",
+			followUpMode: "one-at-a-time",
+			sessionId: "session-1",
+			sessionName: "Migration",
+			autoCompactionEnabled: true,
+			messageCount: 2,
+			pendingMessageCount: 1,
+		});
+
+		const afterModelOnly = store.applyModelChange({ provider: "anthropic", id: "claude-opus-4-8" });
+		expect(afterModelOnly).toMatchObject({
+			modelLabel: "anthropic/claude-opus-4-8",
+			thinkingLevel: "medium",
+			sessionId: "session-1",
+		});
+
+		const afterBoth = store.applyModelChange({ provider: "google", id: "gemini-3" }, "high");
+		expect(afterBoth).toMatchObject({ modelLabel: "google/gemini-3", thinkingLevel: "high" });
+	});
+
+	it("applyModelChange leaves modelLabel untouched when given an unresolvable model", () => {
+		const store = new RpcHostStateStore();
+		store.hydrateFromRpcState({
+			model: { provider: "openai", id: "gpt-5.5" } as never,
+			thinkingLevel: "medium",
+			isStreaming: false,
+			isCompacting: false,
+			steeringMode: "all",
+			followUpMode: "one-at-a-time",
+			sessionId: "session-1",
+			sessionName: "Migration",
+			autoCompactionEnabled: true,
+			messageCount: 2,
+			pendingMessageCount: 1,
+		});
+
+		expect(store.applyModelChange(undefined)).toMatchObject({ modelLabel: "openai/gpt-5.5" });
+	});
+
+	it("applyThinkingLevel patches thinkingLevel directly, without touching other state", () => {
+		const store = new RpcHostStateStore();
+		store.hydrateFromRpcState({
+			model: { provider: "openai", id: "gpt-5.5" } as never,
+			thinkingLevel: "medium",
+			isStreaming: false,
+			isCompacting: false,
+			steeringMode: "all",
+			followUpMode: "one-at-a-time",
+			sessionId: "session-1",
+			sessionName: "Migration",
+			autoCompactionEnabled: true,
+			messageCount: 2,
+			pendingMessageCount: 1,
+		});
+
+		expect(store.applyThinkingLevel("xhigh")).toMatchObject({ thinkingLevel: "xhigh", sessionId: "session-1" });
+	});
 });

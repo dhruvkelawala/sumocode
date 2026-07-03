@@ -238,6 +238,7 @@
 				}
 			},
 			"rejectIfOutputMatches": [
+				"Warning: No models match pattern",
 				"ERR_MODULE_NOT_FOUND",
 				"Rendered line .* exceeds terminal width",
 				"Skipping installed SumoCode extension because this session is already inside an active SumoCode dev checkout",
@@ -296,6 +297,7 @@
 				]
 			},
 			"rejectIfOutputMatches": [
+				"Warning: No models match pattern",
 				"ERR_MODULE_NOT_FOUND",
 				"Rendered line .* exceeds terminal width",
 				"Skipping installed SumoCode extension because this session is already inside an active SumoCode dev checkout",
@@ -422,6 +424,7 @@
 				]
 			},
 			"rejectIfOutputMatches": [
+				"Warning: No models match pattern",
 				"ERR_MODULE_NOT_FOUND",
 				"Rendered line .* exceeds terminal width",
 				"Skipping installed SumoCode extension because this session is already inside an active SumoCode dev checkout",

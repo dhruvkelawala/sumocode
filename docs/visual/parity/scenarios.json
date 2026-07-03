@@ -267,7 +267,7 @@
 				"cols": 160,
 				"rows": 45
 			},
-			"bibleTarget": "scene-active.png",
+			"bibleTarget": "scene-active-runtime.png",
 			"runtime": {
 				"command": "./bin/sumocode.sh",
 				"args": [
@@ -368,12 +368,7 @@
 				},
 				{
 					"id": "input-frame",
-					"targetImage": "04-active-input-typed.png",
-					"targetCrop": "input-component-frame-only",
-					"targetDimensions": {
-						"cols": 160,
-						"rows": 4
-					},
+					"targetCrop": "input-frame",
 					"runtimeCrop": "input-frame",
 					"status": "required",
 					"threshold": 0.03
@@ -425,7 +420,7 @@
 				"cols": 60,
 				"rows": 100
 			},
-			"bibleTarget": "scene-active-portrait.png",
+			"bibleTarget": "scene-active-runtime-portrait.png",
 			"runtime": {
 				"command": "./bin/sumocode.sh",
 				"args": [

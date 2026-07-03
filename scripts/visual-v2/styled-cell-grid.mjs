@@ -201,19 +201,77 @@ function extractPreGridRows(html, parentBg = DEFAULT_BG) {
 	return [...html.matchAll(PRE_GRID_PATTERN)].flatMap((match) => parseGridContent(match[2], parentBgFromAttrs(match[1]) ?? parentBg));
 }
 
-function parseScenePaletteOverlayGrid(html, cols, rows) {
-	const grid = emptyStyledGrid(cols, rows);
-	const gridRowStarts = new Map([
+function sceneGridRowStarts(rows) {
+	const middleRows = rows - 11;
+	return new Map([
 		[1, 0],
 		[2, 1],
 		[3, 2],
-		[5, 37],
-		[6, 38],
-		[7, 41],
-		[8, 42],
-		[9, 43],
-		[10, 44],
+		[4, 3],
+		[5, 3 + middleRows],
+		[6, 4 + middleRows],
+		[7, 7 + middleRows],
+		[8, 8 + middleRows],
+		[9, 9 + middleRows],
+		[10, 10 + middleRows],
 	]);
+}
+
+function parseMiddleColumns(html, cols) {
+	const match = html.match(/grid-template-columns:\s*([^;]+);/);
+	const widths = match ? [...match[1].matchAll(/(\d+)ch/g)].map((entry) => Number(entry[1])) : [];
+	const chatCols = widths[0] ?? cols;
+	const gutterCols = widths[1] ?? 0;
+	const sidebarCols = widths[2] ?? 0;
+	return {
+		chatCols,
+		sidebarStart: sidebarCols > 0 ? chatCols + gutterCols : null,
+	};
+}
+
+function writeCellsClipped(target, startRow, startCol, sourceRows, maxRows) {
+	writeCells(target, startRow, startCol, sourceRows.slice(0, Math.max(0, maxRows)));
+}
+
+function parseSceneGrid(html, cols, rows) {
+	const grid = emptyStyledGrid(cols, rows);
+	const rowStarts = sceneGridRowStarts(rows);
+	const middleRows = rows - 11;
+	const { sidebarStart } = parseMiddleColumns(html, cols);
+
+	const chatMatch = html.match(/<div class="chat-col">([\s\S]*?)<\/div>\s*<div class="gutter-col">/);
+	if (chatMatch) {
+		let row = rowStarts.get(4) ?? 3;
+		const maxRow = row + middleRows;
+		for (const match of chatMatch[1].matchAll(PRE_GRID_PATTERN)) {
+			if (row >= maxRow) break;
+			const parsed = parseGridContent(match[2], parentBgFromAttrs(match[1] ?? ""));
+			writeCellsClipped(grid, row, 0, parsed, maxRow - row);
+			row += parsed.length;
+		}
+	}
+
+	const sidebarMatch = html.match(/<div class="sidebar-col">([\s\S]*?)<\/div>/);
+	if (sidebarMatch && sidebarStart !== null) {
+		const sidebarRows = extractPreGridRows(sidebarMatch[1], DEFAULT_BG);
+		writeCellsClipped(grid, rowStarts.get(4) ?? 3, sidebarStart, sidebarRows, middleRows);
+	}
+
+	for (const match of html.matchAll(PRE_GRID_PATTERN)) {
+		const attrs = match[1] ?? "";
+		const gridRow = attrs.match(/grid-row:\s*(\d+)/)?.[1];
+		if (!gridRow) continue;
+		const startRow = rowStarts.get(Number(gridRow));
+		if (startRow === undefined) continue;
+		writeCells(grid, startRow, 0, parseGridContent(match[2], parentBgFromAttrs(attrs)));
+	}
+
+	return { cols, rows, grid };
+}
+
+function parseScenePaletteOverlayGrid(html, cols, rows) {
+	const grid = emptyStyledGrid(cols, rows);
+	const gridRowStarts = sceneGridRowStarts(rows);
 
 	for (const match of html.matchAll(PRE_GRID_PATTERN)) {
 		const attrs = match[1] ?? "";
@@ -263,8 +321,12 @@ export function parseBibleStyledGrid(htmlPath) {
 	const cols = colsMatch ? parseInt(colsMatch[1], 10) : 160;
 	const rows = rowsMatch ? parseInt(rowsMatch[1], 10) : 45;
 
-	if (htmlPath.endsWith("scene-palette-overlay.html")) {
+	if (html.includes('class="modal-overlay"')) {
 		return parseScenePaletteOverlayGrid(html, cols, rows);
+	}
+
+	if (/\bclass="[^"]*\bterm\b[^"]*\bscene\b/.test(html) && html.includes('class="middle"')) {
+		return parseSceneGrid(html, cols, rows);
 	}
 
 	// Extract grid blocks in document order

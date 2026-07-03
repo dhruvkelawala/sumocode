@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import { SIDEBAR_MIN_TERMINAL_WIDTH, SIDEBAR_WIDTH } from "./sidebar.js";
 
@@ -44,6 +45,7 @@ type Scenario = {
 	id: string;
 	lane: "component" | "runtime" | "fixture";
 	status: "review" | "approved" | "required";
+	bibleTarget: string;
 	dimensions: {
 		cols: number;
 		rows: number;
@@ -182,6 +184,8 @@ describe("V2 visual parity contract", () => {
 	it("keeps active landscape runtime composition crops present", () => {
 		const active = scenario("active-landscape-runtime");
 
+		expect(active.bibleTarget).toBe("scene-active-runtime.png");
+		expect(active.bibleTarget).not.toBe("scene-active.png");
 		expect(active.runtime?.args).toEqual([
 			"--offline",
 			"--no-extensions",
@@ -230,6 +234,8 @@ describe("V2 visual parity contract", () => {
 	it("keeps the V1 portrait runtime no-sidebar with crop-level evidence", () => {
 		const portrait = scenario("active-portrait-runtime");
 
+		expect(portrait.bibleTarget).toBe("scene-active-runtime-portrait.png");
+		expect(portrait.bibleTarget).not.toBe("scene-active-portrait.png");
 		expect(portrait.dimensions.cols).toBeLessThan(SIDEBAR_MIN_TERMINAL_WIDTH);
 		expect(portrait.runtime?.env).toMatchObject({
 			COLUMNS: "60",
@@ -282,11 +288,57 @@ describe("V2 visual parity contract", () => {
 		expect(cropDefinition("portrait-footer")).toEqual({ x: 0, y: 98, cols: 60, rows: 1 });
 	});
 
+	it("places active runtime Bible input rows at terminal coordinates", () => {
+		const parserUrl = pathToFileURL(join(process.cwd(), "scripts/visual-v2/styled-cell-grid.mjs")).href;
+		const htmlPath = join(process.cwd(), "docs/ui/bible/scene-active-runtime.html");
+		const script = `
+			import { parseBibleStyledGrid } from ${JSON.stringify(parserUrl)};
+			const parsed = parseBibleStyledGrid(${JSON.stringify(htmlPath)});
+			const rows = [38, 39, 40].map((row) => ({
+				text: parsed.grid[row].map((cell) => cell.char).join(""),
+				cursorBg: parsed.grid[row][4]?.bg,
+			}));
+			console.log(JSON.stringify(rows));
+		`;
+		const rows = JSON.parse(execFileSync(process.execPath, ["--input-type=module", "--eval", script], {
+			cwd: process.cwd(),
+			encoding: "utf8",
+		})) as Array<{ text: string; cursorBg: string }>;
+
+		expect(rows[0]?.text.startsWith("┌")).toBe(true);
+		expect(rows[0]?.text.endsWith("┐")).toBe(true);
+		expect(rows[1]?.text).toContain("│ >");
+		expect(rows[1]?.cursorBg).toBe("#D97706");
+		expect(rows[1]?.text.endsWith("│")).toBe(true);
+		expect(rows[2]?.text.startsWith("└")).toBe(true);
+		expect(rows[2]?.text.endsWith("┘")).toBe(true);
+	});
+
+	it("keeps modal overlay Bible scenes on overlay target rows", () => {
+		const parserUrl = pathToFileURL(join(process.cwd(), "scripts/visual-v2/styled-cell-grid.mjs")).href;
+		const htmlPath = join(process.cwd(), "docs/ui/bible/scene-divine-query-overlay.html");
+		const script = `
+			import { parseBibleStyledGrid, cropStyledGrid } from ${JSON.stringify(parserUrl)};
+			const parsed = parseBibleStyledGrid(${JSON.stringify(htmlPath)});
+			const crop = cropStyledGrid(parsed, { x: 40, y: 14, cols: 80, rows: 17 });
+			console.log(JSON.stringify(crop.grid.map((row) => row.map((cell) => cell.char).join(""))));
+		`;
+		const rows = JSON.parse(execFileSync(process.execPath, ["--input-type=module", "--eval", script], {
+			cwd: process.cwd(),
+			encoding: "utf8",
+		})) as string[];
+
+		expect(rows.join("\n")).toContain("DIVINE QUERY");
+		expect(rows.join("\n")).toContain("fetchUser");
+	});
+
 	it("keeps fixture scenes deterministic and review-only", () => {
 		expect(scenario("fixture-completed-landscape")).toMatchObject({ status: "review" });
 		expect(scenario("fixture-completed-portrait")).toMatchObject({ status: "review" });
 		expect(scenario("fixture-command-palette-overlay")).toMatchObject({ status: "review" });
 		expect(scenario("fixture-tool-ledger-landscape")).toMatchObject({ status: "review" });
+		expect(scenario("fixture-completed-landscape").bibleTarget).toBe("scene-active.png");
+		expect(scenario("fixture-completed-portrait").bibleTarget).toBe("scene-active-portrait.png");
 		expect(scenario("fixture-completed-landscape").fixture?.id).toBe("completed-active");
 		expect(scenario("fixture-completed-portrait").fixture?.id).toBe("completed-active");
 		expect(scenario("fixture-completed-landscape").crops.map((crop) => crop.id)).toEqual([

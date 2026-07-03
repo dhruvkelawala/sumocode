@@ -59,6 +59,8 @@ Runtime-labelled scenarios must not use `SUMOCODE_VISUAL_RPC_FIXTURE` or any oth
 
 Active runtime scenarios additionally pass the explicit harness extension `-e ./scripts/visual-v2/runtime-faux-provider.mjs --model sumocode-visual/active-working`. This is a local non-secret provider used only to keep Pi in a streaming active-working state after real startup, typing, and submit; it is not a completed transcript fixture and must not be used for completed-response assertions. Active runtime inputs use a readiness wait, a logical `Enter` key mapped by the capture harness, and a final-screen wait that rejects splash/error markers such as `No API key found`, `rpc error: prompt failed`, `DIVINE INVOCATION`, `unknown · off`, and raw `^[[13u` echoes.
 
+Active runtime scenarios compare against dedicated live-submitted Bible targets: `scene-active-runtime.png` and `scene-active-runtime-portrait.png`. Those targets contain only the submitted prompt (`review src/auth/session.ts and tighten the return type`) plus the faux-provider active text (`inspecting src/auth/session.ts`). The richer `scene-active.png` and `scene-active-portrait.png` targets remain completed/tool transcript canon for fixture and review lanes; runtime lanes must not inject those completed assistant/tool rows.
+
 For RPC reviewer evidence, run the same scenario review command rather than a separate golden path:
 
 ```bash

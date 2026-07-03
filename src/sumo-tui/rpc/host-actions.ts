@@ -33,7 +33,7 @@ import type { ModalManager } from "../widgets/modal.js";
 import type { NotificationCenter, NotificationLevel } from "../widgets/notification.js";
 import type { RpcHostControls, RpcModelOption, RpcSessionStats, RpcThinkingLevel } from "./controls.js";
 import type { RpcHostOverlayManager } from "./host-overlays.js";
-import type { InlineSelectorHost } from "./inline-selector.js";
+import type { InlineSelectorHost, InlineSelectorItem } from "./inline-selector.js";
 import { notifyOnError } from "./safe-send.js";
 import { buildSessionTree, listSessions, type SessionEntryLike, type SessionListInfo, type SessionTreeNode } from "./session-reader.js";
 import type { RpcHostStateStore } from "./state.js";
@@ -141,8 +141,8 @@ function notify(notifications: HostNotifications, message: string, level: Notifi
 	notifications.notify(message, level);
 }
 
-function modelLabel(model: RpcModelOption): string {
-	return model.active ? `Current: ${model.label}` : model.label;
+function modelSelectorItem(model: RpcModelOption): InlineSelectorItem {
+	return { value: model.label, label: model.label, isCurrent: model.active };
 }
 
 function parseModelLabel(label: string): { provider: string; id: string } | undefined {
@@ -550,8 +550,8 @@ export class RpcHostActions {
 			notify(this.notifications, "no models available", "warning");
 			return;
 		}
-		const labels = models.map(modelLabel);
-		const selected = await this.inlineSelectors.select("Choose model", labels);
+		const items = models.map(modelSelectorItem);
+		const selected = await this.inlineSelectors.select("Choose model", items);
 		if (selected === undefined) return;
 		const parsed = parseModelLabel(selected);
 		if (!parsed) {
@@ -564,13 +564,25 @@ export class RpcHostActions {
 	}
 
 	public async openThinkingSelector(): Promise<void> {
-		const selected = await this.inlineSelectors.select("Set thinking level", [...THINKING_LEVELS]);
+		const currentLevel = this.stateStore.getSnapshot().thinkingLevel;
+		const items: InlineSelectorItem[] = THINKING_LEVELS.map((level) => ({
+			value: level,
+			label: level,
+			isCurrent: level === currentLevel,
+		}));
+		const selected = await this.inlineSelectors.select("Set thinking level", items);
 		if (selected === undefined) return;
 		await this.setThinkingFromText(selected);
 	}
 
 	public async openThemeSelector(): Promise<void> {
-		const selected = await this.inlineSelectors.select("Choose SumoCode theme", listThemes().map((theme) => theme.name));
+		const currentTheme = getActiveTheme().name;
+		const items: InlineSelectorItem[] = listThemes().map((theme) => ({
+			value: theme.name,
+			label: theme.name,
+			isCurrent: theme.name === currentTheme,
+		}));
+		const selected = await this.inlineSelectors.select("Choose SumoCode theme", items);
 		if (selected) this.setThemeFromText(selected);
 	}
 
@@ -645,7 +657,12 @@ export class RpcHostActions {
 			return;
 		}
 		const labels = sessions.map((session) => resumeSessionLabel(session));
-		const selected = await this.inlineSelectors.select("Resume session", labels);
+		const items: InlineSelectorItem[] = sessions.map((session, index) => ({
+			value: labels[index]!,
+			label: labels[index]!,
+			isCurrent: session.path === sessionFile,
+		}));
+		const selected = await this.inlineSelectors.select("Resume session", items);
 		if (!selected) return;
 		const index = labels.indexOf(selected);
 		const session = sessions[index];

@@ -473,8 +473,9 @@ describe("RpcShellAdapter inline selector composition (plan 036 regression guard
 			const rows = Array.from({ length: 45 }, (_, row) => frame!.toPlainRow(row));
 			const text = rows.join("\n");
 
-			// The selector itself rendered, in the editor's band.
-			expect(text).toContain("Choose model");
+			// The selector itself rendered, in the editor's band. (Title renders
+			// uppercase per the Cathedral header treatment -- plan 037.)
+			expect(text).toContain("CHOOSE MODEL");
 			expect(text).toContain("openai/gpt-5");
 
 			// Regression guard: transcript body is still composited (a full

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { FOCUSED_MARK, UNFOCUSED_MARK } from "../../cathedral/scriptorium-chrome.js";
 import { InlineSelectorComponent, InlineSelectorHost } from "./inline-selector.js";
 
 // pi-tui's `SelectList.handleInput` matches raw terminal byte sequences via
@@ -43,12 +44,13 @@ class FakeEditor {
 }
 
 describe("InlineSelectorComponent", () => {
-	it("renders a dim title heading above the list rows", () => {
+	it("renders a Cathedral-styled title heading above the list rows", () => {
 		const component = new InlineSelectorComponent("Choose model", ["a", "b"], () => undefined);
 		const rows = component.render(40);
-		expect(rows[0]).toContain("Choose model");
-		expect(rows.join("\n")).toContain("a");
-		expect(rows.join("\n")).toContain("b");
+		const stripped = rows.join("\n").replace(/\[[0-9;]*m/g, "");
+		expect(stripped).toContain("CHOOSE MODEL");
+		expect(stripped).toContain("a");
+		expect(stripped).toContain("b");
 	});
 
 	it("resolves with the selected option's exact string on Enter", () => {
@@ -64,6 +66,101 @@ describe("InlineSelectorComponent", () => {
 		const component = new InlineSelectorComponent("Pick", ["alpha", "beta"], done);
 		component.handleInput(ESCAPE);
 		expect(done).toHaveBeenCalledWith(undefined);
+	});
+});
+
+describe("InlineSelectorComponent Cathedral styling (plan 037)", () => {
+	it("P0: every row carries the panel background SGR, not just the title", () => {
+		const component = new InlineSelectorComponent("Choose model", ["a", "b"], () => undefined);
+		const rows = component.render(40);
+		expect(rows.length).toBeGreaterThan(3);
+		for (const row of rows) {
+			expect(row).toMatch(/\x1b\[48;2;\d+;\d+;\d+m/);
+		}
+	});
+
+	it("P0: the focused row uses the Cathedral glyph, not pi-tui's stock arrow", () => {
+		const component = new InlineSelectorComponent("Pick", ["alpha", "beta"], () => undefined);
+		const rows = component.render(40).join("\n");
+		expect(rows).toContain(FOCUSED_MARK);
+		expect(rows).not.toContain("→ "); // "-> " -- SelectList.renderItem's old hard-coded prefix
+	});
+
+	it("P0: unfocused rows carry the dim unfocused marker and a dim SGR, not raw text", () => {
+		const component = new InlineSelectorComponent("Pick", ["alpha", "beta", "gamma"], () => undefined);
+		const rows = component.render(40);
+		const unfocusedRows = rows.filter((row) => row.includes("beta") || row.includes("gamma"));
+		expect(unfocusedRows.length).toBe(2);
+		for (const row of unfocusedRows) {
+			expect(row).toContain(UNFOCUSED_MARK);
+			// foregroundDim SGR precedes the label text on every unfocused row.
+			expect(row).toMatch(/\x1b\[38;2;\d+;\d+;\d+m[^\x1b]*(beta|gamma)/);
+		}
+	});
+
+	it("P1: the header is a centered, accent-colored title with the ornamental glyph convention and a rule divider beneath", () => {
+		const component = new InlineSelectorComponent("choose model", ["a"], () => undefined);
+		const rows = component.render(60);
+		const titleRow = rows.find((row) => row.includes("CHOOSE MODEL"));
+		expect(titleRow).toBeDefined();
+		expect(titleRow).toContain("✦"); // "✦" ornamental glyph flanking the title
+		const ruleRow = rows.find((row) => row.replace(/\x1b\[[0-9;]*m/g, "").includes("─"));
+		expect(ruleRow).toBeDefined();
+	});
+
+	it("P1: a footer hint row (↑↓ choose / ⏎ select / ⎋ cancel) is appended after the list", () => {
+		const component = new InlineSelectorComponent("Pick", ["a", "b"], () => undefined);
+		const rows = component.render(60).join("\n").replace(/\x1b\[[0-9;]*m/g, "");
+		expect(rows).toContain("↑↓ choose");
+		expect(rows).toContain("⏎ select");
+		expect(rows).toContain("⎋ cancel");
+	});
+
+	it("P1: a description renders right-aligned in a second column", () => {
+		const component = new InlineSelectorComponent(
+			"Set thinking level",
+			[
+				{ value: "off", label: "off", description: "no reasoning" },
+				{ value: "xhigh", label: "xhigh", description: "max reasoning" },
+			],
+			() => undefined,
+		);
+		const rows = component.render(70).join("\n").replace(/\x1b\[[0-9;]*m/g, "");
+		expect(rows).toContain("off");
+		expect(rows).toContain("no reasoning");
+		const offRow = rows.split("\n").find((row) => row.includes("off"));
+		expect(offRow?.indexOf("no reasoning")).toBeGreaterThan(offRow!.indexOf("off") + 2);
+	});
+
+	it("P2: the option matching live state gets a current-selection marker independent of cursor position", () => {
+		const component = new InlineSelectorComponent(
+			"Choose model",
+			[
+				{ value: "anthropic/opus", label: "anthropic/opus" },
+				{ value: "openai/gpt-5", label: "openai/gpt-5", isCurrent: true },
+			],
+			() => undefined,
+		);
+		// Cursor starts on row 0 (anthropic/opus), but the *current* marker
+		// belongs to row 1 (openai/gpt-5) regardless of cursor position.
+		const rows = component.render(60);
+		const currentRow = rows.find((row) => row.includes("openai/gpt-5"));
+		const otherRow = rows.find((row) => row.includes("anthropic/opus"));
+		expect(currentRow).toContain("●"); // "●" current-value dot
+		expect(otherRow).not.toContain("●");
+	});
+
+	it("P2: the scroll-overflow indicator picks up the panel background and an explicit dim foreground", () => {
+		const options = Array.from({ length: 10 }, (_, index) => `option-${index}`);
+		const component = new InlineSelectorComponent("Pick", options, () => undefined, 3);
+		const rows = component.render(40);
+		const scrollRow = rows.find((row) => row.includes("/10)"));
+		expect(scrollRow).toBeDefined();
+		// Panel background persists onto the scroll-indicator row...
+		expect(scrollRow).toMatch(/\x1b\[48;2;\d+;\d+;\d+m/);
+		// ...and the indicator text itself is explicitly dim-colored, not
+		// pi-tui's plain unstyled "(N/M)".
+		expect(scrollRow).toMatch(/\x1b\[38;2;\d+;\d+;\d+m\s*\(\d+\/10\)/);
 	});
 });
 
@@ -89,8 +186,9 @@ describe("InlineSelectorHost", () => {
 		expect(host.isActive()).toBe(true);
 
 		const rendered = host.render(80).join("\n");
-		expect(rendered).toContain("Choose model");
-		expect(rendered).toContain("openai/gpt-5");
+		const stripped = rendered.replace(/\[[0-9;]*m/g, "");
+		expect(stripped).toContain("CHOOSE MODEL");
+		expect(stripped).toContain("openai/gpt-5");
 		expect(rendered).not.toContain("editor:80");
 
 		host.handleInput("x");
@@ -134,11 +232,11 @@ describe("InlineSelectorHost", () => {
 		const first = host.select("First", ["a", "b"]);
 		const second = host.select("Second", ["c", "d"]);
 
-		expect(host.render(80).join("\n")).toContain("First");
+		expect(host.render(80).join("\n").replace(/\[[0-9;]*m/g, "")).toContain("FIRST");
 		host.handleInput(ENTER);
 		await expect(first).resolves.toBe("a");
 
-		expect(host.render(80).join("\n")).toContain("Second");
+		expect(host.render(80).join("\n").replace(/\[[0-9;]*m/g, "")).toContain("SECOND");
 		host.handleInput(ENTER);
 		await expect(second).resolves.toBe("c");
 

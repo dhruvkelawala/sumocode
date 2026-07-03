@@ -10,6 +10,7 @@ import { InlineSelectorComponent, InlineSelectorHost } from "./inline-selector.j
 const ARROW_DOWN = "[B";
 const ENTER = "\r";
 const ESCAPE = "";
+const BACKSPACE = "\x7f";
 
 class FakeEditor {
 	public text = "";
@@ -191,9 +192,16 @@ describe("InlineSelectorHost", () => {
 		expect(stripped).toContain("openai/gpt-5");
 		expect(rendered).not.toContain("editor:80");
 
+		// "x" is now a search keystroke (plan 038): it narrows the filtered
+		// list rather than falling through anywhere, so the probe here checks
+		// only that it never reaches the wrapped editor -- see the dedicated
+		// "search-as-you-type" describe block below for filtering behavior.
 		host.handleInput("x");
 		expect(editor.inputs).toEqual([]); // routed to the selector, not the editor
 
+		// Backspace clears the search keystroke above so Enter resolves against
+		// the original (unfiltered) list.
+		host.handleInput(BACKSPACE);
 		host.handleInput(ENTER);
 		await expect(resultPromise).resolves.toBe("openai/gpt-5");
 

@@ -1,5 +1,5 @@
 import type { Component } from "@earendil-works/pi-tui";
-import { getKeybindings, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { decodeKittyPrintable, fuzzyFilter, getKeybindings, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { activeThemeColors } from "../../themes/index.js";
 import {
 	FOCUSED_MARK,
@@ -43,6 +43,23 @@ import {
  * `tui.select.*`) are reused, via direct calls, to keep exact behavioral parity
  * with every other pi-tui select surface (custom keybinding overrides, wrap-around
  * arrow navigation, etc.).
+ *
+ * Search-as-you-type (plan 038): with long option lists (e.g. 500+ models)
+ * scrolling one row at a time is unusable, so a `query` string narrows `items`
+ * before any scroll-window/selection math runs -- mirrors `command-palette.ts`'s
+ * `searchQuery`/`filterPaletteRows` shape (a visible search row above the list,
+ * backspace/printable-character handling that resets the cursor to index 0).
+ * Filtering uses pi-tui's own `fuzzyFilter` (already used by this codebase for
+ * the model-argument autocomplete in `editor.ts`) rather than a plain substring
+ * match: a synthetic 540-item model-list check (`fuzzy-check` script, see report)
+ * showed substring matching returns zero results for out-of-order queries like
+ * "seed16" or "gpt5mini" (no literal hyphen/no digit-before-letter), while
+ * `fuzzyFilter`'s token-based scoring (with its built-in alpha/digit swap
+ * heuristic) finds them -- worth the tradeoff since model IDs are exactly the
+ * kind of hyphenated/slashed identifiers users mistype the separators of.
+ * `SelectList.setFilter` (`select-list.js:25-30`) is the reference for
+ * resetting `selectedIndex` to 0 on every filter change, reproduced here as
+ * `setQuery`.
  */
 
 export const INLINE_SELECTOR_HINT_ROW = "↑↓ choose    ⏎ select    ⎋ cancel";
@@ -107,6 +124,8 @@ function currentTag(isCurrent: boolean): string {
 export class InlineSelectorComponent implements Component {
 	private readonly items: NormalizedItem[];
 	private selectedIndex = 0;
+	/** Search-as-you-type query (plan 038); reset to "" per selector open (see constructor). */
+	private query = "";
 
 	public constructor(
 		private readonly title: string,
@@ -121,44 +140,74 @@ export class InlineSelectorComponent implements Component {
 		// No cached state to invalidate currently.
 	}
 
+	/** Items narrowed by `query`, in `fuzzyFilter`'s best-match-first order (identity order when `query` is empty). */
+	private filteredItems(): NormalizedItem[] {
+		return fuzzyFilter(this.items, this.query, (item) => item.label);
+	}
+
+	/** Sets `query` and resets `selectedIndex` to 0, mirroring `SelectList.setFilter`. */
+	private setQuery(query: string): void {
+		this.query = query;
+		this.selectedIndex = 0;
+	}
+
 	public handleInput(data: string): void {
 		const kb = getKeybindings();
+		const items = this.filteredItems();
 		if (kb.matches(data, "tui.select.up")) {
-			this.selectedIndex = this.selectedIndex === 0 ? this.items.length - 1 : this.selectedIndex - 1;
+			this.selectedIndex = items.length === 0 ? 0 : this.selectedIndex === 0 ? items.length - 1 : this.selectedIndex - 1;
 			return;
 		}
 		if (kb.matches(data, "tui.select.down")) {
-			this.selectedIndex = this.selectedIndex === this.items.length - 1 ? 0 : this.selectedIndex + 1;
+			this.selectedIndex = items.length === 0 ? 0 : this.selectedIndex === items.length - 1 ? 0 : this.selectedIndex + 1;
 			return;
 		}
 		if (kb.matches(data, "tui.select.confirm")) {
-			const item = this.items[this.selectedIndex];
+			const item = items[this.selectedIndex];
 			this.done(item?.value);
 			return;
 		}
 		if (kb.matches(data, "tui.select.cancel")) {
 			this.done(undefined);
+			return;
+		}
+		if (matchesKey(data, "backspace")) {
+			this.setQuery(this.query.slice(0, -1));
+			return;
+		}
+		// Printable text: raw single-byte input (legacy terminals) or a Kitty
+		// CSI-u sequence decoded back to its character (mirrors
+		// `command-palette.ts`'s `data.length === 1 && !/\p{Cc}/u.test(data)`
+		// check, extended to also accept Kitty-protocol printable sequences so
+		// search still works under terminals that report keys via CSI-u).
+		const printable = data.length === 1 && !/\p{Cc}/u.test(data) ? data : decodeKittyPrintable(data);
+		if (printable !== undefined) {
+			this.setQuery(`${this.query}${printable}`);
 		}
 	}
 
 	public render(width: number): string[] {
 		const w = Math.max(1, Math.floor(width));
 		const lines: string[] = [];
+		const items = this.filteredItems();
 
 		lines.push(wrapPanelRow("", w));
 		lines.push(wrapPanelRow(center(`${fg("✦", activeThemeColors().accent)}  ${fg(this.title.toUpperCase(), activeThemeColors().accent)}  ${fg("✦", activeThemeColors().accent)}`, w), w));
 		lines.push(wrapPanelRow(splitRule(w), w));
 		lines.push(wrapPanelRow("", w));
+		lines.push(wrapPanelRow(this.renderSearchRow(), w));
+		lines.push(wrapPanelRow("", w));
 
-		if (this.items.length === 0) {
-			lines.push(wrapPanelRow(`     ${fg(UNFOCUSED_MARK, activeThemeColors().divider)}   ${fg("no matching option", activeThemeColors().foregroundDim)}`, w));
+		if (items.length === 0) {
+			const message = this.query.length > 0 ? "no matches" : "no matching option";
+			lines.push(wrapPanelRow(`     ${fg(UNFOCUSED_MARK, activeThemeColors().divider)}   ${fg(message, activeThemeColors().foregroundDim)}`, w));
 		} else {
-			const { startIndex, endIndex } = this.visibleRange();
+			const { startIndex, endIndex } = this.visibleRange(items.length);
 			for (let index = startIndex; index < endIndex; index++) {
-				lines.push(wrapPanelRow(this.renderRow(this.items[index]!, index === this.selectedIndex, w), w));
+				lines.push(wrapPanelRow(this.renderRow(items[index]!, index === this.selectedIndex, w), w));
 			}
-			if (startIndex > 0 || endIndex < this.items.length) {
-				const scrollText = `  (${this.selectedIndex + 1}/${this.items.length})`;
+			if (startIndex > 0 || endIndex < items.length) {
+				const scrollText = `  (${this.selectedIndex + 1}/${items.length})`;
 				lines.push(wrapPanelRow(fg(truncateToWidth(scrollText, w - 2, ""), activeThemeColors().foregroundDim), w));
 			}
 		}
@@ -170,10 +219,20 @@ export class InlineSelectorComponent implements Component {
 		return lines;
 	}
 
-	private visibleRange(): { startIndex: number; endIndex: number } {
+	/** Search row: typed query in normal text, or a dim placeholder when empty (mirrors `command-palette.ts`'s search row). */
+	private renderSearchRow(): string {
+		const colors = activeThemeColors();
+		const marker = fg("❯", colors.accent);
+		const hasQuery = this.query.length > 0;
+		const text = hasQuery ? this.query : "type to search…";
+		const styled = hasQuery ? fg(text, colors.foreground) : fg(text, colors.foregroundDim);
+		return `     ${marker}  ${styled}`;
+	}
+
+	private visibleRange(itemCount: number): { startIndex: number; endIndex: number } {
 		const maxVisible = Math.max(1, this.maxVisible);
-		const startIndex = Math.max(0, Math.min(this.selectedIndex - Math.floor(maxVisible / 2), this.items.length - maxVisible));
-		const endIndex = Math.min(startIndex + maxVisible, this.items.length);
+		const startIndex = Math.max(0, Math.min(this.selectedIndex - Math.floor(maxVisible / 2), itemCount - maxVisible));
+		const endIndex = Math.min(startIndex + maxVisible, itemCount);
 		return { startIndex, endIndex };
 	}
 

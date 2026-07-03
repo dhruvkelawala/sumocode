@@ -410,4 +410,43 @@ describe("SumoRpcClient", () => {
 		expect(child.stdin.listenerCount("error")).toBeGreaterThan(0);
 		await client.stop();
 	});
+
+	it("a throwing event listener does not prevent later listeners or later events", async () => {
+		const script = `
+			const readline = require("node:readline");
+			const rl = readline.createInterface({ input: process.stdin });
+			rl.on("line", (line) => {
+				const command = JSON.parse(line);
+				if (command.type === "abort") {
+					process.stdout.write(JSON.stringify({ type: "agent_start" }) + "\\n");
+					process.stdout.write(JSON.stringify({ type: "agent_end" }) + "\\n");
+					process.stdout.write(JSON.stringify({ type: "response", id: command.id, command: "abort", success: true }) + "\\n");
+				}
+			});
+		`;
+		const client = nodeRpcClient(script);
+		const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+		const seenByFirst: string[] = [];
+		const seenBySecond: string[] = [];
+		client.onEvent((event) => {
+			seenByFirst.push(event.type);
+			throw new Error("listener boom");
+		});
+		client.onEvent((event) => seenBySecond.push(event.type));
+		try {
+			await client.start();
+			await client.send({ type: "abort" });
+
+			// Both events reached the second listener even though the first
+			// listener threw on every single one -- a poisoned event never
+			// stops the remaining listeners in its own dispatch, nor any event
+			// that comes after it.
+			expect(seenByFirst).toEqual(["agent_start", "agent_end"]);
+			expect(seenBySecond).toEqual(["agent_start", "agent_end"]);
+			expect(consoleError).toHaveBeenCalled();
+		} finally {
+			consoleError.mockRestore();
+			await client.stop();
+		}
+	});
 });

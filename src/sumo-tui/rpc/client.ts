@@ -247,7 +247,30 @@ export class SumoRpcClient {
 			return;
 		}
 
-		for (const listener of this.eventListeners) listener(parsed as AgentSessionEvent);
+		this.dispatchEvent(parsed as AgentSessionEvent);
+	}
+
+	/**
+	 * Runs each event listener in its own try/catch: this is a synchronous
+	 * dispatch loop invoked straight from the child's stdout 'data' handler
+	 * (via handleStdout -> handleLine), and the host's own client.onEvent
+	 * listener synchronously runs transcript ingestion + a full render. A
+	 * throw partway through the loop -- from a bad event shape, a rendering
+	 * bug, whatever -- would otherwise propagate out of the 'data' event
+	 * emission and, with no listener further up, crash the whole host
+	 * (there was previously only an `unhandledRejection` handler, which does
+	 * not catch synchronous throws). Catching per-listener also means one
+	 * poisoned event can't stop the remaining listeners in the same dispatch
+	 * from running, and never prevents the *next* event from being handled.
+	 */
+	private dispatchEvent(event: AgentSessionEvent): void {
+		for (const listener of this.eventListeners) {
+			try {
+				listener(event);
+			} catch (error) {
+				console.error(`[sumocode-rpc] event listener threw for event type "${String((event as { type?: unknown }).type)}": ${toError(error).message}`);
+			}
+		}
 	}
 
 	private async handleUiRequest(request: RpcExtensionUIRequest): Promise<void> {

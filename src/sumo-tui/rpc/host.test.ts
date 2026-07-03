@@ -116,6 +116,33 @@ describe("RPC host unhandled rejection shutdown", () => {
 		expect(exit).toHaveBeenCalledOnce();
 		expect(exit).toHaveBeenCalledWith(1);
 	});
+
+	it("runs the same stop()-then-exit(1) path for a sync throw (uncaughtException) as for a rejection", async () => {
+		// runRpcHost wires this exact handler instance to both process.on("unhandledRejection", ...)
+		// and process.once("uncaughtException", ...) -- a sync throw from the event -> render path
+		// must restore the terminal via the same stopHost() cleanup an unhandled rejection uses, not
+		// fall through with no handler at all (the pre-fix state: only unhandledRejection was wired).
+		const writes: string[] = [];
+		const cleanup = vi.fn(async (_code: number) => undefined);
+		const exit = vi.fn((_code: number) => undefined);
+		const handler = createUnhandledRejectionHandler({
+			stderr: { write: (chunk: string) => { writes.push(chunk); return true; } },
+			cleanup,
+			exit,
+		});
+
+		// Simulates process.once("uncaughtException", handler) firing with a
+		// real Error (Node calls uncaughtException listeners with (error, origin)
+		// but this handler only reads the first argument, same as for a rejection reason).
+		handler(new Error("sync render throw"));
+		await flush();
+
+		expect(cleanup).toHaveBeenCalledOnce();
+		expect(cleanup).toHaveBeenCalledWith(1);
+		expect(exit).toHaveBeenCalledOnce();
+		expect(exit).toHaveBeenCalledWith(1);
+		expect(writes.join("")).toContain("unhandled rejection: Error: sync render throw");
+	});
 });
 
 function exitDeps(overrides: Partial<RpcHostExitDependencies> = {}): RpcHostExitDependencies {

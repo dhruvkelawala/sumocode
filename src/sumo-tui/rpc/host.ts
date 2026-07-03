@@ -273,6 +273,15 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		exit: (code) => process.exit(code),
 	});
 	process.on("unhandledRejection", handleUnhandledRejection);
+	// A synchronous throw from the event -> render path (e.g. a listener
+	// registered via client.onEvent, which runs transcript ingestion + a full
+	// render synchronously) is an uncaughtException, not an unhandledRejection
+	// -- Plan 025 only installed the latter, so a sync throw there had no
+	// terminal-restoring handler at all and could leave the terminal in raw
+	// mode / altscreen after the process died. Reuse the exact same handler
+	// (same stop()-then-exit(1) path, same duplicate-event guard) for both
+	// events so a sync throw and an async rejection are torn down identically.
+	process.once("uncaughtException", handleUnhandledRejection);
 	const requestRender = (): void => runtime?.requestRender();
 	const hostTerminal = {
 		get columns(): number {
@@ -501,6 +510,7 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		process.removeListener("SIGINT", handleSigint);
 		process.removeListener("SIGTERM", handleSigterm);
 		process.removeListener("unhandledRejection", handleUnhandledRejection);
+		process.removeListener("uncaughtException", handleUnhandledRejection);
 		await stop();
 	}
 }

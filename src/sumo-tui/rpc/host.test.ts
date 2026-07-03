@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createRpcHostInterruptHandler, createUnhandledRejectionHandler, type RpcHostInterruptDependencies } from "./host.js";
+import { createRpcExitHandler, createRpcHostInterruptHandler, createUnhandledRejectionHandler, type RpcHostExitDependencies, type RpcHostInterruptDependencies } from "./host.js";
 
 function flush(): Promise<void> {
 	return Promise.resolve().then(() => Promise.resolve());
@@ -115,5 +115,71 @@ describe("RPC host unhandled rejection shutdown", () => {
 
 		expect(exit).toHaveBeenCalledOnce();
 		expect(exit).toHaveBeenCalledWith(1);
+	});
+});
+
+function exitDeps(overrides: Partial<RpcHostExitDependencies> = {}): RpcHostExitDependencies {
+	return {
+		modals: { close: vi.fn() },
+		overlays: { close: vi.fn() },
+		stateStore: { getSnapshot: () => ({ isStreaming: true, isCompacting: true }) as never },
+		notifications: { notify: vi.fn() },
+		requestRender: vi.fn(),
+		stopHost: vi.fn(async () => undefined),
+		exit: vi.fn(),
+		updateRuntimeState: vi.fn(),
+		shutdownDelayMs: 0,
+		...overrides,
+	};
+}
+
+describe("RPC host client-exit shutdown", () => {
+	it("closes modals and overlays, clears streaming state, and notifies with a bounded message", () => {
+		const modals = { close: vi.fn() };
+		const overlays = { close: vi.fn() };
+		const updateRuntimeState = vi.fn();
+		const notifications = { notify: vi.fn() };
+		const handle = createRpcExitHandler(exitDeps({ modals, overlays, updateRuntimeState, notifications }));
+
+		const hugeStderr = "x".repeat(70_000);
+		handle(new Error(`RPC child exited code=1 signal=null. stderr=${hugeStderr}`));
+
+		expect(modals.close).toHaveBeenCalledOnce();
+		expect(overlays.close).toHaveBeenCalledOnce();
+		expect(updateRuntimeState).toHaveBeenCalledWith(expect.objectContaining({ isStreaming: false, isCompacting: false }));
+		expect(notifications.notify).toHaveBeenCalledOnce();
+		const [message] = notifications.notify.mock.calls[0] as [string, string, number];
+		expect(message.length).toBeLessThan(600);
+		expect(message).toContain("RPC child exited unexpectedly");
+	});
+
+	it("stops the runtime with a nonzero exit code after the shutdown delay", async () => {
+		vi.useFakeTimers();
+		try {
+			const stopHost = vi.fn(async (_code: number) => undefined);
+			const exit = vi.fn((_code: number) => undefined);
+			const handle = createRpcExitHandler(exitDeps({ stopHost, exit, shutdownDelayMs: 750 }));
+
+			handle(new Error("child crashed"));
+			expect(stopHost).not.toHaveBeenCalled();
+
+			await vi.advanceTimersByTimeAsync(750);
+
+			expect(stopHost).toHaveBeenCalledOnce();
+			expect(stopHost.mock.calls[0]?.[0]).toBeGreaterThan(0);
+			expect(exit).toHaveBeenCalledOnce();
+			expect(exit.mock.calls[0]?.[0]).toBeGreaterThan(0);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("requests a render immediately so the notification is visible before shutdown", () => {
+		const requestRender = vi.fn();
+		const handle = createRpcExitHandler(exitDeps({ requestRender }));
+
+		handle(new Error("child crashed"));
+
+		expect(requestRender).toHaveBeenCalled();
 	});
 });

@@ -5,7 +5,7 @@ import { applyStartupTheme } from "../../themes/index.js";
 import { ExtensionStatusPublication, RegionRegistry } from "../pi-compat/region-registry.js";
 import { ModalLayer } from "../widgets/modal-layer.js";
 import { NotificationCenter } from "../widgets/notification.js";
-import { SumoRpcClient } from "./client.js";
+import { SumoRpcClient, truncateForNotification } from "./client.js";
 import { RpcHostControls } from "./controls.js";
 import { RpcHostEditorController } from "./editor.js";
 import { createRpcExtensionUiResponder } from "./extension-ui-responder.js";
@@ -16,7 +16,7 @@ import { readGitBranch } from "./git.js";
 import { RpcHostRuntime } from "./runtime.js";
 import { responseData } from "./response.js";
 import { notifyOnError } from "./safe-send.js";
-import { RpcHostStateStore } from "./state.js";
+import { RpcHostStateStore, type RpcHostChromeState } from "./state.js";
 import { RpcTranscriptPump } from "./transcript-pump.js";
 import { rpcVisualFixtureFromEnv } from "./visual-fixtures.js";
 
@@ -102,6 +102,50 @@ export async function submitRpcPrompt(message: string, options: RpcPromptSubmitO
 		? await options.client.send({ type: "prompt", message, streamingBehavior: "followUp" })
 		: await options.client.send({ type: "prompt", message });
 	responseData(response, "prompt");
+}
+
+export interface RpcHostExitDependencies {
+	readonly modals: Pick<ModalLayer, "close">;
+	readonly overlays: Pick<RpcHostOverlayManager, "close">;
+	readonly stateStore: Pick<RpcHostStateStore, "getSnapshot">;
+	readonly notifications: Pick<NotificationCenter, "notify">;
+	readonly requestRender: () => void;
+	readonly stopHost: (code: number) => Promise<void>;
+	readonly exit: (code: number) => void;
+	readonly updateRuntimeState: (state: RpcHostChromeState) => void;
+	readonly setTimeout?: typeof setTimeout;
+	readonly shutdownDelayMs?: number;
+	readonly exitCode?: number;
+}
+
+/**
+ * Builds the RPC host's `client.onExit` handler as an injectable function of
+ * its dependencies, mirroring `createRpcHostInterruptHandler` below: the RPC
+ * child is the whole agent, so if it dies outside of a deliberate stop() the
+ * host cannot keep functioning. Closing modals/overlays via their normal
+ * close() resolves any pending approval/select/input promise the same way an
+ * interactive dismiss would (confirm -> false, select/input -> undefined; for
+ * the approval overlay this already normalizes to "No"/deny, the correct
+ * fail-safe). The runtime is stopped with a nonzero exit code after a short
+ * delay so the terse notification is actually visible before the terminal is
+ * restored -- a zombie shell with a dead child behind it cannot do anything
+ * useful, so keeping it alive indefinitely is not an option.
+ */
+export function createRpcExitHandler(deps: RpcHostExitDependencies): (error: Error) => void {
+	const scheduleTimeout = deps.setTimeout ?? setTimeout;
+	const shutdownDelayMs = deps.shutdownDelayMs ?? 750;
+	const exitCode = deps.exitCode ?? 1;
+	return (error: Error): void => {
+		deps.modals.close();
+		deps.overlays.close();
+		deps.updateRuntimeState({ ...deps.stateStore.getSnapshot(), isStreaming: false, isCompacting: false });
+		deps.notifications.notify(`RPC child exited unexpectedly: ${truncateForNotification(error.message)}`, "error", 0);
+		deps.requestRender();
+		const timer = scheduleTimeout(() => {
+			void deps.stopHost(exitCode).then(() => deps.exit(exitCode));
+		}, shutdownDelayMs);
+		(timer as { unref?: () => void }).unref?.();
+	};
 }
 
 export interface RpcHostInterruptDependencies {
@@ -347,6 +391,26 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		const transcript = transcriptPump.handleAgentEvent(event);
 		const state = stateStore.handleAgentEvent(event);
 		runtime?.update({ state, transcript });
+	});
+
+	// The RPC child is the whole agent -- without this, the host has no signal
+	// at all when it dies while idle (no pending request to reject) and keeps
+	// rendering against a corpse forever; see createRpcExitHandler for why each
+	// step (close modals/overlays, clear streaming state, notify, exit
+	// nonzero) is needed.
+	const handleClientExit = createRpcExitHandler({
+		modals,
+		overlays,
+		stateStore,
+		notifications,
+		requestRender,
+		stopHost: (code) => stopHost(code),
+		exit: (code) => process.exit(code),
+		updateRuntimeState: (state) => runtime?.update({ state }),
+	});
+	client.onExit((error) => {
+		if (visualFixture) return;
+		handleClientExit(error);
 	});
 
 	const refreshStats = async (): Promise<void> => {

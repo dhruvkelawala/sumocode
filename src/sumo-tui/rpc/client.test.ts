@@ -355,4 +355,40 @@ describe("SumoRpcClient", () => {
 			await client.stop();
 		}
 	});
+
+	it("fires onExit exactly once when the child crashes while idle", async () => {
+		const client = nodeRpcClient("setTimeout(() => process.exit(1), 100);");
+		const errors: Error[] = [];
+		client.onEvent(() => undefined); // idle: no pending request to reject
+		client.onExit((error) => errors.push(error));
+		await client.start();
+		await waitFor(() => errors.length > 0);
+		await new Promise((resolve) => setTimeout(resolve, 50));
+
+		expect(errors).toHaveLength(1);
+		expect(errors[0]?.message).toContain("RPC child exited");
+	});
+
+	it("does not fire onExit for a deliberate stop()", async () => {
+		const client = nodeRpcClient("setInterval(() => undefined, 1000);");
+		const errors: Error[] = [];
+		client.onExit((error) => errors.push(error));
+		await client.start();
+		await client.stop();
+		await new Promise((resolve) => setTimeout(resolve, 50));
+
+		expect(errors).toHaveLength(0);
+	});
+
+	it("unsubscribes onExit listeners via the returned disposer", async () => {
+		const client = nodeRpcClient("setTimeout(() => process.exit(1), 100);");
+		const errors: Error[] = [];
+		const unsubscribe = client.onExit((error) => errors.push(error));
+		unsubscribe();
+		await client.start();
+		await new Promise((resolve) => setTimeout(resolve, 200));
+
+		expect(errors).toHaveLength(0);
+	});
+
 });

@@ -18,6 +18,7 @@ type PendingRequest = {
 export type RpcEventListener = (event: AgentSessionEvent) => void;
 export type RpcUiRequestHandler = (request: RpcExtensionUIRequest, client: SumoRpcClient) => RpcExtensionUIResponse | void | Promise<RpcExtensionUIResponse | void>;
 export type RpcProtocolErrorHandler = (line: string, error: Error) => void;
+export type RpcExitListener = (error: Error) => void;
 
 export interface SumoRpcClientOptions {
 	readonly command: string;
@@ -31,9 +32,22 @@ export interface SumoRpcClientOptions {
 const MAX_CONSECUTIVE_PROTOCOL_ERRORS = 3;
 const MAX_STDERR_BUFFER_LENGTH = 64 * 1024;
 const CHILD_STOP_GRACE_MS = 2_000;
+/**
+ * Notification-facing messages (toasts, modal text) must stay terse -- the
+ * full stderr buffer (up to MAX_STDERR_BUFFER_LENGTH = 64 KiB) is fine for the
+ * process-exit stderr dump written straight to the real stderr stream, but
+ * embedding that much text in a rendered notification would blow out the UI.
+ */
+export const NOTIFICATION_STDERR_LIMIT = 500;
 
 function toError(value: unknown): Error {
 	return value instanceof Error ? value : new Error(String(value));
+}
+
+/** Truncates a message's tail to a bounded length for user-facing surfaces (notifications, toasts). */
+export function truncateForNotification(message: string, limit = NOTIFICATION_STDERR_LIMIT): string {
+	if (message.length <= limit) return message;
+	return `${message.slice(0, limit)}…`;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -57,7 +71,9 @@ export class SumoRpcClient {
 	private exited = false;
 	private readonly pending = new Map<string, PendingRequest>();
 	private readonly eventListeners = new Set<RpcEventListener>();
+	private readonly exitListeners = new Set<RpcExitListener>();
 	private uiRequestHandler: RpcUiRequestHandler | undefined;
+	private exitNotified = false;
 
 	public constructor(private readonly options: SumoRpcClientOptions) {}
 
@@ -74,6 +90,21 @@ export class SumoRpcClient {
 		return () => this.eventListeners.delete(listener);
 	}
 
+	/**
+	 * Fires exactly once when the child exits or errors outside of a deliberate
+	 * `stop()` call (i.e. the same path `handleExit` already uses to reject
+	 * in-flight requests). Without this, a child that dies while idle -- no
+	 * pending request to reject -- leaves the host with no signal at all: it
+	 * keeps rendering against a corpse, modals/overlays dangle forever, and
+	 * `refreshStats` silently swallows the resulting "not running" error on
+	 * every poll. `stop()` (deliberate host-initiated shutdown) does not fire
+	 * this listener.
+	 */
+	public onExit(listener: RpcExitListener): () => void {
+		this.exitListeners.add(listener);
+		return () => this.exitListeners.delete(listener);
+	}
+
 	public setUiRequestHandler(handler: RpcUiRequestHandler | undefined): void {
 		this.uiRequestHandler = handler;
 	}
@@ -81,6 +112,7 @@ export class SumoRpcClient {
 	public async start(): Promise<void> {
 		if (this.child) throw new Error("RPC child already started");
 		this.exited = false;
+		this.exitNotified = false;
 		const child = spawn(this.options.command, [...this.options.args], {
 			cwd: this.options.cwd,
 			env: { ...process.env, ...this.options.env },
@@ -108,6 +140,12 @@ export class SumoRpcClient {
 	public async stop(): Promise<void> {
 		const child = this.child;
 		if (!child || this.exited) return;
+		// A deliberate stop() must not also fire onExit: the child's own
+		// once("exit", ...) listener registered in start() still runs and calls
+		// handleExit for this same exit, and without this guard that would fire
+		// a spurious "child crashed" notification (and duplicate teardown) for
+		// what is actually an intentional shutdown (SIGINT/SIGTERM/normal quit).
+		this.exitNotified = true;
 		child.stdin.end();
 		child.kill("SIGTERM");
 		await Promise.race([
@@ -213,6 +251,9 @@ export class SumoRpcClient {
 		if (child) this.terminateChild(child);
 		this.child = undefined;
 		this.rejectPending(error);
+		if (this.exitNotified) return;
+		this.exitNotified = true;
+		for (const listener of this.exitListeners) listener(error);
 	}
 
 	private terminateChild(child: ChildProcessWithoutNullStreams): void {

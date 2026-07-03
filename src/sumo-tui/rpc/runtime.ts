@@ -3,6 +3,7 @@ import type { CellBuffer } from "../render/buffer.js";
 import { logDiagnostic } from "../runtime/diagnostics.js";
 import { defaultTerminalSessionOwner, type TerminalOutput, type TerminalSessionOwner } from "../runtime/terminal-controller.js";
 import type { TranscriptViewModel } from "../transcript/view-model.js";
+import { isCtrlCInput, isEscapeInput, SharedInputRouter } from "../input/shared-input-router.js";
 import { RpcShellAdapter } from "./shell-adapter.js";
 import type { RpcHostChromeState } from "./state.js";
 
@@ -24,7 +25,8 @@ export interface RpcHostInput {
 }
 
 export interface RpcHostInputHandler {
-	handleInput(data: string): boolean;
+	handleInput?(data: string): boolean;
+	openCommandPalette?(): void | Promise<void>;
 }
 
 export interface RpcHostRuntimeOptions {
@@ -44,6 +46,7 @@ export interface RpcHostRuntimeOptions {
 		readonly sidebar?: Component;
 	};
 	readonly inputHandler?: RpcHostInputHandler;
+	readonly preEditorInputHandler?: (data: string) => boolean | void;
 }
 
 export interface RpcHostRuntimeSnapshot {
@@ -81,7 +84,9 @@ export class RpcHostRuntime {
 	private readonly notifications: Component | undefined;
 	private readonly extensionRegions: RpcHostRuntimeOptions["extensionRegions"];
 	private readonly inputHandler: RpcHostInputHandler | undefined;
+	private readonly preEditorInputHandler: ((data: string) => boolean | void) | undefined;
 	private readonly inputPreview: string | undefined;
+	private readonly inputRouter: SharedInputRouter;
 	private state: RpcHostChromeState;
 	private transcript: TranscriptViewModel;
 	private shell: RpcShellAdapter | undefined;
@@ -92,30 +97,7 @@ export class RpcHostRuntime {
 	private readonly handleResize = (): void => this.render();
 	private readonly handleInput = (data: string | Buffer): void => {
 		const text = typeof data === "string" ? data : data.toString("utf8");
-		if (text.includes("\u0003")) {
-			this.requestExit(130);
-			return;
-		}
-		if (this.modal?.getActiveKind?.()) {
-			this.modal.handleInput?.(text);
-			this.render();
-			return;
-		}
-		if (this.overlay?.getActiveKind?.()) {
-			this.overlay.handleInput?.(text);
-			this.render();
-			return;
-		}
-		if (this.inputHandler?.handleInput(text)) {
-			this.render();
-			return;
-		}
-		if (this.editor) {
-			this.editor.handleInput?.(text);
-			this.render();
-			return;
-		}
-		if (text.includes("q") || text.includes("\u001b")) this.requestExit(0);
+		this.inputRouter.handleInput(text);
 	};
 
 	public constructor(options: RpcHostRuntimeOptions = {}) {
@@ -131,6 +113,50 @@ export class RpcHostRuntime {
 		this.notifications = options.notifications;
 		this.extensionRegions = options.extensionRegions;
 		this.inputHandler = options.inputHandler;
+		this.preEditorInputHandler = options.preEditorInputHandler;
+		this.inputRouter = new SharedInputRouter({
+			openCommandPalette: () => {
+				if (this.inputHandler?.openCommandPalette) {
+					void this.inputHandler.openCommandPalette();
+					return;
+				}
+				this.inputHandler?.handleInput?.("\u001f");
+			},
+			requestRender: () => this.render(),
+			handleFocusedModalInput: (data) => {
+				if (!this.modal?.getActiveKind?.()) return false;
+				this.modal.handleInput?.(data);
+				return true;
+			},
+			handleFocusedOverlayInput: (data) => {
+				if (!this.overlay?.getActiveKind?.()) return false;
+				this.overlay.handleInput?.(data);
+				return true;
+			},
+			handleMouseEvent: (event) => this.shell?.handleMouseEvent(event) === true,
+			scheduleMouseRender: () => this.render(),
+			handleChatScrollKey: (event) => this.shell?.handleChatKey(event) === true,
+			handlePreEditorInput: (data) => {
+				if (this.preEditorInputHandler?.(data) === true) return true;
+				if (isCtrlCInput(data)) {
+					this.requestExit(130);
+					return true;
+				}
+				return false;
+			},
+			forwardToEditor: (data) => {
+				if (!this.editor) return false;
+				this.editor.handleInput?.(data);
+				return true;
+			},
+			handleUnhandledInput: (data) => {
+				if (data.includes("q") || isEscapeInput(data)) {
+					this.requestExit(0);
+					return true;
+				}
+				return false;
+			},
+		});
 	}
 
 	public async start(): Promise<void> {

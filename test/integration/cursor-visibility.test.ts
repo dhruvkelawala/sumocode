@@ -37,7 +37,7 @@ async function waitForEditorText(pty: SpawnedPiPty, text: string): Promise<void>
 }
 
 describe("sumo-tui editor cursor integration", () => {
-	it("renders typed RPC editor text with the software caret active", async () => {
+	it("renders typed RPC editor text with the shell-owned cursor active", async () => {
 		const agentDir = await mkdtemp(join(tmpdir(), "sumocode-pi-agent-"));
 		app = spawnSumocodePty({
 			env: {
@@ -54,6 +54,6 @@ describe("sumo-tui editor cursor integration", () => {
 
 		const activeState = app.getCurrentTerminalState();
 		expect(activeState.altscreenActive).toBe(true);
-		expect(activeState.cursorVisible).toBe(false);
+		expect(activeState.cursorVisible).toBe(true);
 	}, 30_000);
 });

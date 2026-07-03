@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { INPUT_FRAME_PLACEHOLDER } from "../../cathedral/input-frame.js";
 import { activeThemeColors } from "../../themes/index.js";
+import { SharedInputRouter } from "../input/shared-input-router.js";
 import { TerminalSessionOwner } from "../runtime/terminal-controller.js";
 import { RpcHostEditorController } from "./editor.js";
 import { submitRpcPrompt } from "./host.js";
@@ -84,11 +85,35 @@ class FakeEditor implements Component {
 	}
 }
 
+class CursorCaptureTerminal {
+	public readonly cursors: ({ row: number; col: number } | null)[] = [];
+
+	public startRetainedSession(): void {}
+	public exitTerminal(): void {}
+	public writeFramePatches(_patches: readonly unknown[], cursor: { row: number; col: number } | null): void {
+		this.cursors.push(cursor);
+	}
+}
+
 class StaticComponent implements Component {
 	public constructor(private readonly rows: readonly string[]) {}
 	public invalidate(): void {}
 	public render(_width: number): string[] {
 		return [...this.rows];
+	}
+}
+
+class ActiveModalComponent implements Component {
+	public readonly inputs: string[] = [];
+	public invalidate(): void {}
+	public getActiveKind(): string {
+		return "select";
+	}
+	public handleInput(data: string): void {
+		this.inputs.push(data);
+	}
+	public render(_width: number): string[] {
+		return ["active modal"];
 	}
 }
 
@@ -120,7 +145,7 @@ describe("RPC host retained runtime frame", () => {
 		const cursorBg = activeThemeColors().accent.toLowerCase();
 		const { cols } = frame.getDimensions();
 		const hasSoftwareCursor = Array.from({ length: cols }, (_value, col) => frame.getCell(placeholderRow!, col))
-			.some((cell) => cell.char === " " && cell.bg?.toLowerCase() === cursorBg);
+			.some((cell) => cell.bg?.toLowerCase() === cursorBg);
 		expect(hasSoftwareCursor).toBe(true);
 	});
 
@@ -146,7 +171,7 @@ describe("RPC host retained runtime frame", () => {
 		const cursorBg = activeThemeColors().accent.toLowerCase();
 		const { cols } = frame.getDimensions();
 		const hasSoftwareCursor = Array.from({ length: cols }, (_value, col) => frame.getCell(editorRow!, col))
-			.some((cell) => cell.char === " " && cell.bg?.toLowerCase() === cursorBg);
+			.some((cell) => cell.bg?.toLowerCase() === cursorBg);
 		expect(hasSoftwareCursor).toBe(true);
 	});
 
@@ -426,6 +451,204 @@ describe("RPC host retained runtime frame", () => {
 		await expect(runtime.waitForExit()).resolves.toBe(130);
 		expect(input.rawModes).toEqual([true, false]);
 		expect(terminal.getState()).toMatchObject({ restored: true });
+	});
+
+	it("keeps Ctrl-C as a global exit request while a modal is focused", async () => {
+		const output = new FakeOutput();
+		const input = new FakeInput();
+		const modal = new ActiveModalComponent();
+		const terminal = new TerminalSessionOwner({ output });
+		const runtime = new RpcHostRuntime({
+			output,
+			input,
+			terminal,
+			modal,
+			initialState: state(),
+			initialTranscript: { messages: [] },
+		});
+
+		await runtime.start();
+		input.emit("\u0003");
+
+		await expect(runtime.waitForExit()).resolves.toBe(130);
+		expect(modal.inputs).toEqual([]);
+	});
+
+	it("does not dispatch initial bare ESC when buffering split SGR mouse input", () => {
+		const handleFocusedModalInput = vi.fn(() => true);
+		const handleFocusedOverlayInput = vi.fn(() => true);
+		const handlePreEditorInput = vi.fn(() => true);
+		const forwardToEditor = vi.fn(() => true);
+		const handleUnhandledInput = vi.fn(() => true);
+		const handleMouseEvent = vi.fn(() => true);
+		const scheduleMouseRender = vi.fn();
+		const router = new SharedInputRouter({
+			handleFocusedModalInput,
+			handleFocusedOverlayInput,
+			handlePreEditorInput,
+			forwardToEditor,
+			handleUnhandledInput,
+			handleMouseEvent,
+			scheduleMouseRender,
+		});
+
+		expect(router.handleInput("\x1b")).toEqual({ consume: true });
+		expect(handleFocusedModalInput).not.toHaveBeenCalled();
+		expect(handleFocusedOverlayInput).not.toHaveBeenCalled();
+		expect(handlePreEditorInput).not.toHaveBeenCalled();
+		expect(forwardToEditor).not.toHaveBeenCalled();
+		expect(handleUnhandledInput).not.toHaveBeenCalled();
+
+		expect(router.handleInput("[<64;10;5M")).toEqual({ consume: true });
+		expect(handleMouseEvent).toHaveBeenCalledWith({
+			type: "scroll",
+			button: 64,
+			scrollDir: "up",
+			row: 4,
+			col: 9,
+			modifiers: { shift: false, alt: false, ctrl: false },
+		});
+		expect(scheduleMouseRender).toHaveBeenCalledTimes(1);
+	});
+
+	it("defers a trailing bare ESC that is coalesced after SGR mouse input", async () => {
+		vi.useFakeTimers();
+		const handlePreEditorInput = vi.fn(() => true);
+		const forwardToEditor = vi.fn(() => true);
+		const handleUnhandledInput = vi.fn(() => true);
+		const handleMouseEvent = vi.fn(() => true);
+		const scheduleMouseRender = vi.fn();
+		const dispatchDelayedInput = vi.fn(() => true);
+		const router = new SharedInputRouter({
+			handlePreEditorInput,
+			forwardToEditor,
+			handleUnhandledInput,
+			handleMouseEvent,
+			scheduleMouseRender,
+			dispatchDelayedInput,
+		});
+
+		try {
+			expect(router.handleInput("\x1b[<64;10;5M\x1b")).toEqual({ consume: true });
+			expect(handleMouseEvent).toHaveBeenCalledWith({
+				type: "scroll",
+				button: 64,
+				scrollDir: "up",
+				row: 4,
+				col: 9,
+				modifiers: { shift: false, alt: false, ctrl: false },
+			});
+			expect(scheduleMouseRender).toHaveBeenCalledTimes(1);
+			expect(dispatchDelayedInput).not.toHaveBeenCalled();
+			expect(handlePreEditorInput).not.toHaveBeenCalled();
+			expect(forwardToEditor).not.toHaveBeenCalled();
+			expect(handleUnhandledInput).not.toHaveBeenCalled();
+
+			await vi.advanceTimersByTimeAsync(25);
+
+			expect(dispatchDelayedInput).toHaveBeenCalledWith("\x1b");
+			expect(handlePreEditorInput).not.toHaveBeenCalled();
+			expect(forwardToEditor).not.toHaveBeenCalled();
+			expect(handleUnhandledInput).not.toHaveBeenCalled();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it.each(["\u001f", "\x1b[47;5u"])("opens the RPC command palette from Ctrl+/ variant %#", async (inputBytes) => {
+		const output = new FakeOutput();
+		const input = new FakeInput();
+		const editor = new FakeEditor();
+		const openCommandPalette = vi.fn();
+		const terminal = new TerminalSessionOwner({ output });
+		const runtime = new RpcHostRuntime({
+			output,
+			input,
+			terminal,
+			editor,
+			inputHandler: { openCommandPalette },
+			initialState: state(),
+			initialTranscript: { messages: [] },
+		});
+
+		await runtime.start();
+		input.emit(inputBytes);
+		runtime.stop();
+
+		expect(openCommandPalette).toHaveBeenCalledTimes(1);
+		expect(editor.inputs).toEqual([]);
+	});
+
+	it("normalizes raw multiline paste before forwarding to the RPC editor", async () => {
+		const output = new FakeOutput();
+		const input = new FakeInput();
+		const editor = new FakeEditor();
+		const terminal = new TerminalSessionOwner({ output });
+		const runtime = new RpcHostRuntime({
+			output,
+			input,
+			terminal,
+			editor,
+			initialState: state(),
+			initialTranscript: { messages: [] },
+		});
+
+		await runtime.start();
+		input.emit("line one\rline two");
+		runtime.stop();
+
+		expect(editor.inputs).toEqual(["line one\nline two"]);
+	});
+
+	it("exposes a pre-editor interception point for raw Escape after the mouse ambiguity window and Ctrl-C", async () => {
+		const output = new FakeOutput();
+		const input = new FakeInput();
+		const editor = new FakeEditor();
+		const preEditorInputHandler = vi.fn((data: string) => data === "\x1b" || data === "\u0003");
+		const terminal = new TerminalSessionOwner({ output });
+		const runtime = new RpcHostRuntime({
+			output,
+			input,
+			terminal,
+			editor,
+			preEditorInputHandler,
+			initialState: state(),
+			initialTranscript: { messages: [] },
+		});
+
+		await runtime.start();
+		vi.useFakeTimers();
+		try {
+			input.emit("\x1b");
+			expect(preEditorInputHandler).not.toHaveBeenCalledWith("\x1b");
+			await vi.advanceTimersByTimeAsync(25);
+			input.emit("\u0003");
+		} finally {
+			runtime.stop();
+			vi.useRealTimers();
+		}
+
+		expect(preEditorInputHandler).toHaveBeenCalledWith("\x1b");
+		expect(preEditorInputHandler).toHaveBeenCalledWith("\u0003");
+		expect(editor.inputs).toEqual([]);
+	});
+
+	it("passes the shell-owned editor cursor to terminal frame patches", async () => {
+		const output = new FakeOutput();
+		const terminal = new CursorCaptureTerminal();
+		const runtime = new RpcHostRuntime({
+			output,
+			input: { isTTY: false, on: () => undefined },
+			terminal: terminal as unknown as TerminalSessionOwner,
+			editor: new RpcHostEditorController(),
+			initialState: state(),
+			initialTranscript: { messages: [] },
+		});
+
+		await runtime.start();
+		runtime.stop();
+
+		expect(terminal.cursors.some((cursor) => cursor !== null)).toBe(true);
 	});
 
 	it("keeps the duplicate RPC full-frame compositor out of runtime.ts", () => {

@@ -28,11 +28,16 @@ import { activeThemeColors, getActiveTheme, listThemes, setActiveTheme } from ".
 import type { EditorTextController } from "../pi-compat/extension-ui-adapter.js";
 import type { ModalManager } from "../widgets/modal.js";
 import type { NotificationCenter, NotificationLevel } from "../widgets/notification.js";
-import type { RpcHostControls, RpcModelOption, RpcThinkingLevel } from "./controls.js";
+import type { RpcHostControls, RpcModelOption, RpcSessionStats, RpcThinkingLevel } from "./controls.js";
 import type { RpcHostOverlayManager } from "./host-overlays.js";
 import type { RpcHostStateStore } from "./state.js";
 
 export const RPC_HOST_COMMAND_PALETTE_INPUT = "\u001f";
+
+export interface RpcHostSlashCommand {
+	readonly name: string;
+	readonly description: string;
+}
 
 type HostModals = Pick<ModalManager, "select" | "confirm" | "input">;
 type HostNotifications = Pick<NotificationCenter, "notify">;
@@ -51,6 +56,31 @@ export interface RpcHostActionsOptions {
 }
 
 const THINKING_LEVELS: readonly RpcThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh"];
+
+export const RPC_HOST_SLASH_COMMANDS: readonly RpcHostSlashCommand[] = Object.freeze([
+	{ name: "settings", description: "Open RPC settings" },
+	{ name: "model", description: "Select model or set provider/model" },
+	{ name: "thinking", description: "Select thinking level" },
+	{ name: "theme", description: "Select SumoCode theme" },
+	{ name: "sumo:theme", description: "Select SumoCode theme" },
+	{ name: "compact", description: "Manually compact the session context" },
+	{ name: "new", description: "Start a new session" },
+	{ name: "clone", description: "Duplicate the current session" },
+	{ name: "fork", description: "Fork from a previous user message" },
+	{ name: "sessions", description: "Open session controls" },
+	{ name: "session", description: "Show session info and stats" },
+	{ name: "name", description: "Rename the current session" },
+	{ name: "sumo:memory", description: "Open or update SumoCode memory" },
+	{ name: "sumo:theme-check", description: "Preview current theme tokens" },
+	{ name: "sumo:approval", description: "Preview approval overlay" },
+	{ name: "sumo:palette", description: "Open the command palette" },
+]);
+
+const RPC_HOST_SLASH_COMMAND_NAMES = new Set(RPC_HOST_SLASH_COMMANDS.map((command) => command.name));
+
+export function isRpcHostSlashCommandName(name: string): boolean {
+	return RPC_HOST_SLASH_COMMAND_NAMES.has(normalizeCommandName(name));
+}
 
 function notify(notifications: HostNotifications, message: string, level: NotificationLevel = "info"): void {
 	notifications.notify(message, level);
@@ -71,6 +101,10 @@ function firstArg(input: string): { command: string; args: string } {
 	const trimmed = input.trim();
 	const match = /^(\S+)(?:\s+([\s\S]*))?$/.exec(trimmed);
 	return { command: match?.[1]?.toLowerCase() ?? "", args: match?.[2] ?? "" };
+}
+
+function normalizeCommandName(name: string): string {
+	return name.trim().replace(/^\/+/, "").toLowerCase();
 }
 
 function ansi(hex: string, channel: 38 | 48): string {
@@ -115,6 +149,19 @@ function themeReader(): ThemeReader {
 		fg: (slot, text) => color(text, slotColor(slot)),
 		bg: (slot, text) => colorBg(color(text, activeThemeColors().foreground), bgSlotColor(slot)),
 	};
+}
+
+function formatInteger(value: number): string {
+	return Number.isFinite(value) ? Math.round(value).toLocaleString("en-US") : "0";
+}
+
+function formatCost(value: number): string {
+	if (!Number.isFinite(value)) return "$0.00";
+	return `$${value.toFixed(value > 0 && value < 0.01 ? 4 : 2)}`;
+}
+
+function formatSessionStats(stats: RpcSessionStats): string {
+	return `session: ${formatInteger(stats.totalMessages)} messages | ${formatInteger(stats.tokens.total)} tokens | ${formatCost(stats.cost)}`;
 }
 
 class LinesOverlayComponent implements Component {
@@ -218,9 +265,14 @@ export class RpcHostActions {
 			case "/fork":
 				await this.openForkSelector();
 				return true;
-			case "/sessions":
 			case "/session":
+				await this.showSessionStats();
+				return true;
+			case "/sessions":
 				await this.openSessionControls();
+				return true;
+			case "/name":
+				await this.renameSession();
 				return true;
 			case "/settings":
 				await this.openSettings();
@@ -238,6 +290,11 @@ export class RpcHostActions {
 				await this.openCommandPalette();
 				return true;
 			default:
+				if (command.startsWith("/")) {
+					if (await this.childCanExecuteCommand(command)) return false;
+					notify(this.notifications, `unknown command: ${command}`, "warning");
+					return true;
+				}
 				return false;
 		}
 	}
@@ -498,6 +555,13 @@ export class RpcHostActions {
 		}
 	}
 
+	private async showSessionStats(): Promise<void> {
+		const stats = await this.controls.getSessionStats();
+		this.stateStore.hydrateFromSessionStats(stats);
+		this.onStateChange();
+		notify(this.notifications, formatSessionStats(stats), "info");
+	}
+
 	private async renameSession(): Promise<void> {
 		const name = await this.modals.input("Rename session", "session name");
 		const trimmed = name?.trim() ?? "";
@@ -519,5 +583,12 @@ export class RpcHostActions {
 		await this.controls.setAutoRetry(enabled);
 		this.onStateChange();
 		notify(this.notifications, `auto retry ${enabled ? "enabled" : "disabled"}`, "info");
+	}
+
+	private async childCanExecuteCommand(command: string): Promise<boolean> {
+		const name = normalizeCommandName(command);
+		if (!name) return false;
+		const commands = await this.controls.getCommands();
+		return commands.some((childCommand) => normalizeCommandName(childCommand.name) === name);
 	}
 }

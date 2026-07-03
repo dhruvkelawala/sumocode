@@ -27,6 +27,8 @@ import type { ShellOverlayEntry, ShellRenderable, ShellTerminalSessionOwner, She
 import { RetainedShellRenderer } from "../shell/retained-shell-renderer.js";
 import type { TranscriptViewModel } from "../transcript/view-model.js";
 import { ChatPager } from "../widgets/chat-pager.js";
+import type { KeyEvent } from "../input/key-router.js";
+import type { MouseEvent } from "../input/mouse.js";
 import type { RpcHostChromeState } from "./state.js";
 
 export interface RpcShellAdapterOptions {
@@ -57,15 +59,6 @@ interface SplashAwareComponent extends Component {
 
 interface TextReadableComponent extends Component {
 	getText?(): string;
-}
-
-class RpcHardwareCursorSuppressor implements ShellTerminalSessionOwner {
-	public constructor(private readonly terminal: ShellTerminalSessionOwner) {}
-
-	public writeFramePatches(...args: Parameters<ShellTerminalSessionOwner["writeFramePatches"]>): void {
-		const [patches] = args;
-		this.terminal.writeFramePatches(patches, null);
-	}
 }
 
 const ANSI_PATTERN = /\u001b(?:\[[0-?]*[ -/]*[@-~]|\][^\u0007]*(?:\u0007|\u001b\\)|_[^\u0007]*(?:\u0007|\u001b\\))/g;
@@ -119,7 +112,7 @@ export class RpcShellAdapter {
 			belowEditorWidgets: () => new RpcHintComponent(this),
 			aboveEditorWidgets: () => new RpcAboveEditorComponent(this),
 			footer: () => new RpcFooterComponent(this),
-			terminal: new RpcHardwareCursorSuppressor(options.terminal),
+			terminal: options.terminal,
 			viewport: options.viewport,
 			overlayHost: new RpcOverlayHost(this),
 			sidebar: () => this.sidebarPublication(),
@@ -141,6 +134,14 @@ export class RpcShellAdapter {
 
 	public render(): void {
 		this.renderer.render();
+	}
+
+	public handleMouseEvent(event: MouseEvent): boolean {
+		return this.renderer.handleMouseEvent(event);
+	}
+
+	public handleChatKey(event: KeyEvent): boolean {
+		return this.chat.handleKey(event);
 	}
 
 	public getLastFrame(): CellBuffer | undefined {
@@ -179,6 +180,7 @@ export class RpcShellAdapter {
 
 	public renderEditor(width: number, inputPreview: string | undefined): string[] {
 		const rows = this.editor?.render(width) ?? [];
+		if (this.editor && rows.length > 0) return rows;
 		if (!this.isActive()) {
 			if (rows.length > 0 && !isSimpleSplashEditorFrame(rows)) return rows;
 			return renderSplashEditorFrame(width, readEditorText(this.editor));

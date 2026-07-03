@@ -70,4 +70,16 @@ describe("sumocode RPC host shell integration", () => {
 		expect(activeState.mouseSGRActive).toBe(true);
 		expect(activeState.cleanupSequenceSeen).toBe(false);
 	}, 30_000);
+
+	it("opens the host command palette from Ctrl+/", async () => {
+		const agentDir = await mkdtemp(join(tmpdir(), "sumocode-rpc-palette-agent-"));
+		app = spawnSumocodePty({ env: { PI_CODING_AGENT_DIR: agentDir }, cols: 100, rows: 30 });
+
+		await app.waitForOutput(PI_BOOT_SEQUENCE, 15_000);
+		await app.waitForOutput("DIVINE INVOCATION", 15_000);
+		await app.waitForOutput("AWAITING PROMPT", 15_000);
+		app.sendInput("\u001f");
+
+		await app.waitForOutput("host controls", 10_000);
+	}, 30_000);
 });

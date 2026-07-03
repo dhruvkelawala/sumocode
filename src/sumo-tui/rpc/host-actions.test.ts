@@ -20,6 +20,7 @@ class FakeControls {
 		{ provider: "anthropic", id: "claude-opus-4-8", label: "anthropic/claude-opus-4-8", active: true },
 	];
 	public forkMessages = [{ entryId: "entry-1", text: "forkable message text" }];
+	public commands: RpcSlashCommand[] = [];
 
 	public async refreshState(): Promise<Record<string, unknown>> {
 		this.calls.push("refreshState");
@@ -71,6 +72,21 @@ class FakeControls {
 		return this.forkMessages;
 	}
 
+	public async getSessionStats(): Promise<Record<string, unknown>> {
+		this.calls.push("getSessionStats");
+		return {
+			sessionFile: "/tmp/session.jsonl",
+			sessionId: "session-1",
+			userMessages: 1,
+			assistantMessages: 1,
+			toolCalls: 0,
+			toolResults: 0,
+			totalMessages: 2,
+			tokens: { input: 1000, output: 2000, cacheRead: 0, cacheWrite: 0, total: 3000 },
+			cost: 0.42,
+		};
+	}
+
 	public async setSessionName(name: string): Promise<void> {
 		this.calls.push(`setSessionName:${name}`);
 	}
@@ -85,7 +101,7 @@ class FakeControls {
 
 	public async getCommands(): Promise<RpcSlashCommand[]> {
 		this.calls.push("getCommands");
-		return [];
+		return this.commands;
 	}
 }
 
@@ -190,15 +206,29 @@ function setup() {
 	return { actions, controls, modals, overlays, notifications, memory, editorText };
 }
 
+function rpcCommand(name: string): RpcSlashCommand {
+	return {
+		name,
+		description: `Run ${name}`,
+		source: "prompt",
+		sourceInfo: {
+			path: `/tmp/${name}`,
+			source: "prompt",
+			scope: "project",
+			origin: "top-level",
+		},
+	};
+}
+
 afterEach(() => {
 	resetThemeRegistryForTests();
 });
 
 describe("RpcHostActions", () => {
-	it("opens the host command palette from the runtime hotkey and routes model selection to RPC controls", async () => {
+	it.each([RPC_HOST_COMMAND_PALETTE_INPUT, "\x1b[47;5u"])("opens the host command palette from runtime hotkey variant %#", async (hotkey) => {
 		const { actions, controls, modals, overlays, notifications } = setup();
 
-		expect(actions.handleInput(RPC_HOST_COMMAND_PALETTE_INPUT)).toBe(true);
+		expect(actions.handleInput(hotkey)).toBe(true);
 		expect(overlays.getActiveKind()).toBe("commandPalette");
 
 		overlays.handleInput(Key.enter);
@@ -241,7 +271,7 @@ describe("RpcHostActions", () => {
 	it("handles session controls through modal selectors and editor text handoff", async () => {
 		const { actions, controls, modals, editorText } = setup();
 
-		const session = actions.handleSubmittedText("/session");
+		const session = actions.handleSubmittedText("/sessions");
 		await flush();
 		expect(modals.getActiveKind()).toBe("select");
 		modals.handleInput(Key.down);
@@ -258,6 +288,25 @@ describe("RpcHostActions", () => {
 			"fork:entry-1",
 		]);
 		expect(editorText.getText()).toBe("fork from here");
+	});
+
+	it("handles /session stats and /name rename as host commands", async () => {
+		const { actions, controls, modals, notifications } = setup();
+
+		await expect(actions.handleSubmittedText("/session")).resolves.toBe(true);
+		expect(controls.calls).toContain("getSessionStats");
+		expect(notifications).toContainEqual({ message: "session: 2 messages | 3,000 tokens | $0.42", level: "info" });
+
+		const rename = actions.handleSubmittedText("/name");
+		await flush();
+		expect(modals.getActiveKind()).toBe("input");
+		modals.handleInput("Plan 023");
+		modals.handleInput(Key.enter);
+		await rename;
+
+		expect(controls.calls).toContain("setSessionName:Plan 023");
+		expect(controls.calls).toContain("refreshState");
+		expect(notifications).toContainEqual({ message: "session name: Plan 023", level: "info" });
 	});
 
 	it("renders theme check, approval preview, and memory editor as host overlays", async () => {
@@ -303,5 +352,16 @@ describe("RpcHostActions", () => {
 		]);
 		expect(getActiveTheme().name).toBe("amber-crt");
 		expect(notifications).toContainEqual({ message: "theme: amber-crt", level: "info" });
+	});
+
+	it("notifies for unknown slash commands instead of letting them become model prompts", async () => {
+		const { actions, controls, notifications } = setup();
+
+		await expect(actions.handleSubmittedText("/hotkeys")).resolves.toBe(true);
+		expect(controls.calls).toContain("getCommands");
+		expect(notifications).toContainEqual({ message: "unknown command: /hotkeys", level: "warning" });
+
+		controls.commands = [rpcCommand("deploy")];
+		await expect(actions.handleSubmittedText("/deploy prod")).resolves.toBe(false);
 	});
 });

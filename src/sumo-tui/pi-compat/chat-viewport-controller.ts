@@ -1,5 +1,5 @@
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import { parseSgrMouseStream, type MouseEvent } from "../input/mouse.js";
+import type { MouseEvent } from "../input/mouse.js";
 import type { KeyEvent } from "../input/key-router.js";
 import { logDiagnostic } from "../runtime/diagnostics.js";
 import { measureMaybe, ResumeProfiler, type ResumeProfileMetadata } from "../runtime/resume-profiler.js";
@@ -13,11 +13,10 @@ import {
 } from "../transcript/view-model.js";
 import { ChatPager } from "../widgets/chat-pager.js";
 import { BashExecutionMirror } from "./bash-execution-mirror.js";
-import { chatScrollCommandFromInput } from "../widgets/chat-scroll-command.js";
 import { SIDEBAR_MIN_TERMINAL_WIDTH, SIDEBAR_WIDTH } from "../../sidebar.js";
 import { sidebarGutterWidth } from "../../sidebar-placement.js";
-import { normalizeRawMultilinePasteInput } from "../../cathedral/multiline-paste.js";
 import { setCompactionReason, type CompactionReason } from "../../compaction-state.js";
+import { SharedInputRouter } from "../input/shared-input-router.js";
 
 const CHAT_VIEWPORT_BRIDGE_INSTALLED = Symbol("sumo-tui.chat-viewport-bridge-installed");
 const PORTRAIT_STATUS_MIN_WIDTH = 80;
@@ -50,6 +49,7 @@ interface PiTuiLike {
 	addChild?(component: unknown): void;
 	requestRender?(force?: boolean): void;
 	addInputListener?(listener: (data: string) => { consume?: boolean; data?: string } | void): () => void;
+	handleInput?(data: string): void;
 	[BOTTOM_CHROME_SPACERS_INSTALLED]?: true;
 }
 
@@ -103,50 +103,6 @@ interface ChatViewportBridgeHost extends ChatViewportHost {
 	handleEvent?(event: unknown): unknown;
 	renderSessionContext?(sessionContext: unknown, options?: unknown): unknown;
 	[CHAT_VIEWPORT_BRIDGE_INSTALLED]?: () => void;
-}
-
-interface MouseInputDiagnosticsFields {
-	readonly dataLength: number;
-	readonly sourceLength: number;
-	readonly eventCount: number;
-	readonly consumed: boolean;
-	readonly pendingLength: number;
-	readonly leftoverLength: number;
-	readonly sourceHex: string;
-	readonly leftoverHex: string;
-}
-
-const COMPLETE_SGR_MOUSE_SEQUENCE = /\x1b\[<\d+;\d+;\d+[Mm]/g;
-/**
- * Match a trailing prefix of an SGR mouse sequence so we can buffer partial
- * input across stdin chunks. Matches any of:
- *
- *   ESC, ESC [, ESC [ <, ESC [ < digits, ESC [ < digits ; digits ...
- *
- * The terminating M / m is intentionally absent — that's what makes it a
- * prefix. Anchored to end-of-string only.
- */
-const SGR_MOUSE_PREFIX_TAIL_PATTERN = /(?:\x1b(?:\[(?:<\d*(?:;\d*){0,2})?)?)$/;
-
-function toHex(value: string): string {
-	let hex = "";
-	for (let index = 0; index < value.length; index += 1) {
-		hex += value.charCodeAt(index).toString(16).padStart(2, "0");
-	}
-	return hex;
-}
-
-function diagnoseMouseInput(fields: MouseInputDiagnosticsFields): void {
-	logDiagnostic("sumo_mouse_input", {
-		data_length: fields.dataLength,
-		source_length: fields.sourceLength,
-		events: fields.eventCount,
-		consumed: fields.consumed,
-		pending_length: fields.pendingLength,
-		leftover_length: fields.leftoverLength,
-		source_hex: fields.sourceHex,
-		leftover_hex: fields.leftoverHex,
-	});
 }
 
 function clampRenderedLine(line: string, width: number): string {
@@ -372,13 +328,14 @@ export class ChatViewportController {
 	private lastChatTop = 0;
 	private lastChatWidth = 1;
 	private lastChatHeight = 1;
-	private pendingMouseInput = "";
 	private pendingMouseRender: ReturnType<typeof setTimeout> | undefined;
 	private lastMouseRenderAt = 0;
 	private lastMouseInputAt = 0;
 	private renderRevision = 0;
 	private readonly bashMirror: BashExecutionMirror;
+	private readonly inputRouter: SharedInputRouter;
 	private readonly viewModelMapper = createTranscriptViewModelMapper();
+	private redispatchingDelayedInput = false;
 	private cachedRender: { revision: number; requestedWidth: number; chatTop: number; chatWidth: number; chatHeight: number; terminalRows: number; lines: string[] } | undefined;
 
 	public constructor(
@@ -389,6 +346,23 @@ export class ChatViewportController {
 		this.bashMirror = new BashExecutionMirror(this.chat, {
 			requestRender: () => this.runtime.requestRender(),
 			markRenderDirty: () => this.markRenderDirty(),
+		});
+		this.inputRouter = new SharedInputRouter({
+			handleMouseEvent: (event) => this.handleMouse(event, { deferRender: true }),
+			scheduleMouseRender: () => this.scheduleMouseChatViewportRender(),
+			handleChatScrollKey: (event) => {
+				if (!this.chat.handleKey(event)) return false;
+				this.markRenderDirty();
+				this.renderChatViewportOrRequest();
+				return true;
+			},
+			handleSelectionKey: (event) => {
+				if (this.runtime.handleSelectionKey?.(event, this.lastChatWidth, this.lastChatHeight) !== true) return false;
+				this.markRenderDirty();
+				this.renderChatViewportOrRequest();
+				return true;
+			},
+			dispatchDelayedInput: (data) => this.redispatchDelayedInput(data),
 		});
 	}
 
@@ -452,105 +426,13 @@ export class ChatViewportController {
 		this.lastAssistantText = "";
 		this.liveAssistant = undefined;
 		this.liveAssistantBlocks = [];
-		this.pendingMouseInput = "";
+		this.inputRouter.clearPendingMouseInput();
 		this.runtime.setEmptyChatQuoteState({ active: false, userMessageCount: 0 });
 	}
 
 	public handleInput(data: string): { consume?: boolean; data?: string } | void {
-		const source = this.pendingMouseInput + data;
-		this.pendingMouseInput = "";
-		let nextData = source;
-		let consumed = false;
-
-		if (source.includes("\x1b")) {
-			const parsed = parseSgrMouseStream(source);
-			logDiagnostic("mouse_batch", {
-				rawBytes: source.length,
-				events: parsed.events.length,
-				types: parsed.events.map((event) => event.type),
-			});
-			let mouseViewportDirty = false;
-			for (const event of parsed.events) {
-				mouseViewportDirty = this.handleMouse(event, { deferRender: true }) || mouseViewportDirty;
-			}
-			if (mouseViewportDirty) this.scheduleMouseChatViewportRender();
-
-			// Strip every complete SGR mouse sequence — including wheel-left/right
-			// (button codes 66/67) and any other variants the parser may not
-			// recognize. Anything matching `\x1b[<\d+;\d+;\d+[Mm]` is mouse input
-			// and must never reach Pi's editor as visible text.
-			const beforeCompleteStrip = nextData;
-			nextData = nextData.replace(COMPLETE_SGR_MOUSE_SEQUENCE, "");
-			if (nextData !== beforeCompleteStrip) consumed = true;
-
-			// Buffer trailing partial mouse sequences across chunks.
-			const tailMatch = nextData.match(SGR_MOUSE_PREFIX_TAIL_PATTERN);
-			if (tailMatch && tailMatch[0].length > 0) {
-				this.pendingMouseInput = tailMatch[0];
-				nextData = nextData.slice(0, nextData.length - tailMatch[0].length);
-				consumed = true;
-			}
-
-			// Anything else starting with `\x1b[<` is a corrupt/stale mouse
-			// fragment. Drop it instead of forwarding raw bytes to Pi's editor.
-			if (nextData.includes("\x1b[<")) {
-				const stripped = nextData.replace(/\x1b\[<[\d;]*[Mm]?/g, "");
-				if (stripped !== nextData) {
-					nextData = stripped;
-					consumed = true;
-				}
-			}
-
-			diagnoseMouseInput({
-				dataLength: data.length,
-				sourceLength: source.length,
-				eventCount: parsed.events.length,
-				consumed,
-				pendingLength: this.pendingMouseInput.length,
-				leftoverLength: nextData.length,
-				sourceHex: toHex(source.slice(0, 64)),
-				leftoverHex: toHex(nextData.slice(0, 64)),
-			});
-		}
-
-		const normalizedPasteData = normalizeRawMultilinePasteInput(nextData);
-		if (normalizedPasteData !== nextData) {
-			logDiagnostic("raw_multiline_paste_normalized", { sourceLength: nextData.length, normalizedLength: normalizedPasteData.length });
-			nextData = normalizedPasteData;
-			consumed = true;
-		}
-
-		const keyEvent = chatScrollCommandFromInput(nextData);
-		if (keyEvent && this.chat.handleKey(keyEvent)) {
-			this.markRenderDirty();
-			this.renderChatViewportOrRequest();
-			return { consume: true };
-		}
-
-		const selectionKey = selectionCopyKeyFromInput(nextData);
-		if (selectionKey && this.runtime.handleSelectionKey?.(selectionKey, this.lastChatWidth, this.lastChatHeight) === true) {
-			this.markRenderDirty();
-			this.renderChatViewportOrRequest();
-			return { consume: true };
-		}
-
-		// Diagnostic: log the bridge handleInput verdict for ESC-prefixed chunks
-		// so investigators can see whether the bridge consumed/rewrote/forwarded
-		// modifier-aware sequences like \x1b[13;2u (Shift+Enter, kitty CSI u).
-		if (data.includes("\x1b") || data !== nextData || consumed) {
-			logDiagnostic("bridge_input_verdict", {
-				inLen: data.length,
-				outLen: nextData.length,
-				consumed,
-				rewritten: nextData !== data,
-				inHex: toHex(data.slice(0, 32)),
-				outHex: toHex(nextData.slice(0, 32)),
-			});
-		}
-
-		if (nextData.length === 0 && consumed) return { consume: true };
-		if (nextData !== data) return { data: nextData };
-		return undefined;
+		if (this.redispatchingDelayedInput) return { data };
+		return this.inputRouter.handleInput(data);
 	}
 
 	public handleAgentEvent(event: unknown): void {
@@ -602,7 +484,7 @@ export class ChatViewportController {
 		this.lastAssistantText = "";
 		this.liveAssistant = undefined;
 		this.liveAssistantBlocks = [];
-		this.pendingMouseInput = "";
+		this.inputRouter.clearPendingMouseInput();
 		// Resume uses bulk transcript replacement instead of `clear()` + per-message
 		// replay; `replaceViewModels()` resets the chat-side scroll/banner state.
 		const profile = this.runtime.startResumeProfile?.();
@@ -905,13 +787,18 @@ export class ChatViewportController {
 			activeBottomSpacerRows;
 		return Math.max(1, terminalRows - chromeRows);
 	}
-}
 
-function selectionCopyKeyFromInput(data: string): KeyEvent | undefined {
-	if (data.length === 0) return undefined;
-	const lower = data.toLowerCase();
-	if (lower === "cmd+c" || lower === "command+c" || lower === "meta+c") return { key: "c", sequence: data, meta: true };
-	return undefined;
+	private redispatchDelayedInput(data: string): boolean {
+		const ui = this.host.ui;
+		if (!ui?.handleInput) return false;
+		this.redispatchingDelayedInput = true;
+		try {
+			ui.handleInput(data);
+			return true;
+		} finally {
+			this.redispatchingDelayedInput = false;
+		}
+	}
 }
 
 export function installChatViewportBridge(upstream: unknown, runtime: ChatViewportBridgeRuntime): (() => void) | undefined {

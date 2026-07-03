@@ -10,6 +10,7 @@ export type RpcAvailableModel = RpcResponseData<"get_available_models">["models"
 export type RpcThinkingLevel = RpcSessionState["thinkingLevel"];
 export type RpcSlashCommand = RpcResponseData<"get_commands">["commands"][number];
 export type RpcForkMessage = RpcResponseData<"get_fork_messages">["messages"][number];
+export type RpcSessionStats = RpcResponseData<"get_session_stats">;
 
 export interface RpcModelOption {
 	readonly provider: string;
@@ -102,6 +103,10 @@ export class RpcHostControls {
 	public async getLastAssistantText(): Promise<string | null> {
 		const data = responseData(await this.client.send({ type: "get_last_assistant_text" }), "get_last_assistant_text");
 		return data.text;
+	}
+
+	public async getSessionStats(): Promise<RpcSessionStats> {
+		return responseData(await this.client.send({ type: "get_session_stats" }), "get_session_stats");
 	}
 
 	public async setSessionName(name: string): Promise<void> {

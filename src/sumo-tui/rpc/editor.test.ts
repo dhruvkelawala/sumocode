@@ -1,19 +1,17 @@
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
-import { getPackageDir, type KeybindingsManager } from "@earendil-works/pi-coding-agent";
+import type { KeybindingsManager } from "@earendil-works/pi-coding-agent";
 import type { EditorTheme, TUI } from "@earendil-works/pi-tui";
 import { describe, expect, it, vi } from "vitest";
 import { SumoTuiTestBackend, type TestBackendFrame } from "../testing/test-backend.js";
 import { PiEditorLeaf } from "../widgets/pi-editor-leaf.js";
 import type { RpcModelOption, RpcSlashCommand } from "./controls.js";
 import {
-	PI_0_79_1_BUILTIN_SLASH_COMMANDS,
 	RpcHostEditorController,
 	buildRpcAutocompleteCommands,
 	createRpcAutocompleteProvider,
 	createRpcHostEditorController,
 	type RpcEditorAutocompleteControls,
 } from "./editor.js";
+import { isRpcHostSlashCommandName } from "./host-actions.js";
 
 const ANSI_PATTERN = /\x1b\][^\x07]*(?:\x07|\x1b\\)|\x1b\[[0-?]*[ -/]*[@-~]|\x1b[()][A-Za-z0-9]/g;
 
@@ -89,22 +87,6 @@ async function waitForRenderedText(controller: RpcHostEditorController, text: st
 		await new Promise((resolve) => setTimeout(resolve, 0));
 	}
 	return rendered;
-}
-
-function readInstalledPiBuiltinSlashCommands(): readonly { name: string; description: string }[] {
-	const source = readFileSync(join(getPackageDir(), "dist/core/slash-commands.js"), "utf8");
-	const start = source.indexOf("export const BUILTIN_SLASH_COMMANDS = [");
-	const end = source.indexOf("];", start);
-	expect(start).toBeGreaterThanOrEqual(0);
-	expect(end).toBeGreaterThan(start);
-	const arraySource = source.slice(start, end);
-	const commands: { name: string; description: string }[] = [];
-	const commandPattern = /\{\s*name:\s*"([^"]+)",\s*description:\s*(?:"([^"]*)"|`([^`]*)`)\s*\}/g;
-	for (const match of arraySource.matchAll(commandPattern)) {
-		const description = (match[2] ?? match[3] ?? "").replaceAll("${APP_NAME}", "pi");
-		commands.push({ name: match[1]!, description });
-	}
-	return commands;
 }
 
 describe("RPC editor controller", () => {
@@ -245,7 +227,7 @@ describe("RPC editor controller", () => {
 		expect(controller.getText()).toBe("");
 	});
 
-	it("renders command autocomplete suggestions from Pi built-ins and RPC commands", async () => {
+	it("renders command autocomplete suggestions from host commands and RPC commands", async () => {
 		const controls = controlsFor({ commands: [rpcCommand("deploy", "Deploy current workspace")] });
 		const controller = await createRpcHostEditorController({
 			controls,
@@ -288,7 +270,7 @@ describe("RPC editor controller", () => {
 });
 
 describe("RPC autocomplete command construction", () => {
-	it("keeps Pi built-ins ahead of conflicting RPC commands and includes non-conflicting RPC commands", async () => {
+	it("keeps host commands ahead of conflicting RPC commands and includes non-conflicting RPC commands", async () => {
 		const commands = buildRpcAutocompleteCommands([
 			rpcCommand("compact", "Extension compact should not replace built-in"),
 			rpcCommand("/ship", "Ship it", "prompt"),
@@ -304,7 +286,19 @@ describe("RPC autocomplete command construction", () => {
 		expect(suggestions?.items.map((item) => item.value)).toContain("ship");
 	});
 
-	it("keeps the frozen Pi 0.79.1 built-in slash command list in sync with the installed Pi package", () => {
-		expect(PI_0_79_1_BUILTIN_SLASH_COMMANDS).toEqual(readInstalledPiBuiltinSlashCommands());
+	it("advertises only host-implemented or child-executable slash commands", () => {
+		const childCommands = [
+			rpcCommand("deploy", "Deploy current workspace"),
+			rpcCommand("export", "Child executable export", "prompt"),
+		];
+		const commands = buildRpcAutocompleteCommands(childCommands);
+		const childNames = new Set(childCommands.map((command) => command.name.replace(/^\/+/, "")));
+
+		for (const command of commands) {
+			expect(isRpcHostSlashCommandName(command.name) || childNames.has(command.name)).toBe(true);
+		}
+		expect(commands.some((command) => command.name === "export")).toBe(true);
+		expect(commands.some((command) => command.name === "quit")).toBe(false);
+		expect(commands.some((command) => command.name === "hotkeys")).toBe(false);
 	});
 });

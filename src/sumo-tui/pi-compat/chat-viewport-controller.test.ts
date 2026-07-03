@@ -145,6 +145,60 @@ describe("ChatViewportController", () => {
 		root.dispose();
 	});
 
+	it("buffers SGR mouse sequences split before the ESC prefix completes", async () => {
+		const { root, chat, controller } = await makeController({ terminalRows: 12, terminalColumns: 80 });
+		for (let index = 0; index < 50; index += 1) chat.addMessage("user", `message ${index}`);
+		controller.render(80);
+		const bottom = chat.scrollBox.scrollOffset;
+
+		expect(controller.handleInput("\x1b")).toEqual({ consume: true });
+		expect(controller.handleInput("[<64;10;5M")).toEqual({ consume: true });
+
+		expect(chat.scrollBox.scrollOffset).toBe(bottom - 2);
+		root.dispose();
+	});
+
+	it("redispatches delayed bare Escape back to Pi input after the mouse ambiguity window", async () => {
+		vi.useFakeTimers();
+		const { root, host, controller } = await makeController({ terminalRows: 12, terminalColumns: 80 });
+		const redispatchedResults: Array<{ consume?: boolean; data?: string } | void> = [];
+		host.ui!.handleInput = (data: string): void => {
+			redispatchedResults.push(controller.handleInput(data));
+		};
+
+		try {
+			expect(controller.handleInput("\x1b")).toEqual({ consume: true });
+			expect(redispatchedResults).toEqual([]);
+
+			await vi.advanceTimersByTimeAsync(25);
+
+			expect(redispatchedResults).toEqual([{ data: "\x1b" }]);
+		} finally {
+			root.dispose();
+			vi.useRealTimers();
+		}
+	});
+
+	it("buffers SGR mouse sequences split after the CSI prefix", async () => {
+		const { root, chat, controller } = await makeController({ terminalRows: 12, terminalColumns: 80 });
+		for (let index = 0; index < 50; index += 1) chat.addMessage("user", `message ${index}`);
+		controller.render(80);
+		const bottom = chat.scrollBox.scrollOffset;
+
+		expect(controller.handleInput("\x1b[")).toEqual({ consume: true });
+		expect(controller.handleInput("<64;10;5M")).toEqual({ consume: true });
+
+		expect(chat.scrollBox.scrollOffset).toBe(bottom - 2);
+		root.dispose();
+	});
+
+	it("normalizes raw multiline paste before forwarding data back to Pi", async () => {
+		const { root, controller } = await makeController({ terminalRows: 12, terminalColumns: 80 });
+
+		expect(controller.handleInput("line one\rline two")).toEqual({ data: "line one\nline two" });
+		root.dispose();
+	});
+
 	it("coalesces batched wheel mouse bytes into one viewport repaint", async () => {
 		const { root, chat, runtime, controller } = await makeController({ terminalRows: 12, terminalColumns: 80 });
 		for (let index = 0; index < 50; index += 1) chat.addMessage("user", `message ${index}`);

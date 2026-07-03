@@ -115,6 +115,7 @@ export const RPC_HOST_SLASH_COMMANDS: readonly RpcHostSlashCommand[] = Object.fr
 	{ name: "sumo:theme-check", description: "Preview current theme tokens" },
 	{ name: "sumo:approval", description: "Preview approval overlay" },
 	{ name: "sumo:palette", description: "Open the command palette" },
+	{ name: "hotkeys", description: "Show the RPC host's keyboard shortcuts" },
 ]);
 
 const RPC_HOST_SLASH_COMMAND_NAMES = new Set(RPC_HOST_SLASH_COMMANDS.map((command) => command.name));
@@ -203,6 +204,58 @@ function formatCost(value: number): string {
 
 function formatSessionStats(stats: RpcSessionStats): string {
 	return `session: ${formatInteger(stats.totalMessages)} messages | ${formatInteger(stats.tokens.total)} tokens | ${formatCost(stats.cost)}`;
+}
+
+/**
+ * `/hotkeys` -- documents the RPC HOST's own keymap, not Pi's. The host owns
+ * terminal input routing end-to-end (`RpcHostRuntime`'s `handleInput` ->
+ * `createRpcHostInterruptHandler`/`RpcShellAdapter`), so these bindings are
+ * SumoCode's, verified against:
+ *  - `RPC_HOST_COMMAND_PALETTE_INPUT`/`Key.ctrl("/")` (this file's
+ *    `handleInput`) for the command palette.
+ *  - `decideRpcInterrupt` (interrupt.ts) for the Ctrl-C tiers: a modal/overlay
+ *    dismisses first, then a non-empty draft clears, then an in-flight stream
+ *    aborts, then a first press arms quit and a second press (within the
+ *    armed window) actually quits.
+ *  - `chatScrollCommandFromKey`/`chatScrollCommandFromInput`
+ *    (widgets/chat-scroll-command.ts) for the transcript scroll keys.
+ *  - `isCopyKey` (input/selection.ts) for the selection-copy binding the B10
+ *    OSC52 path uses.
+ * Modeled on `openThemeCheck`'s `LinesOverlayComponent` (static content
+ * overlay, closes on any key) rather than inventing new overlay machinery.
+ */
+function renderHotkeysOverlay(theme: ThemeReader, width: number): string[] {
+	const heading = (text: string) => theme.fg("accent", text);
+	const dim = (text: string) => theme.fg("muted", text);
+	const row = (keys: string, description: string) => `  ${theme.fg("borderAccent", keys.padEnd(18))} ${description}`;
+
+	const lines: string[] = [];
+	lines.push(heading("SUMOCODE RPC HOST HOTKEYS"));
+	lines.push("");
+	lines.push(heading("GLOBAL"));
+	lines.push(row("Ctrl+/", "Open the command palette"));
+	lines.push("");
+	lines.push(heading("INTERRUPT (Ctrl-C / Escape)"));
+	lines.push(row("Ctrl-C / Esc", "Dismiss an open modal, overlay, or selector"));
+	lines.push(row("Ctrl-C", "Clear a non-empty draft"));
+	lines.push(row("Ctrl-C / Esc", "Abort an in-flight response"));
+	lines.push(row("Ctrl-C (1st)", "Arm quit (press again to confirm)"));
+	lines.push(row("Ctrl-C (2nd)", "Quit SumoCode"));
+	lines.push(dim("  Esc alone never quits -- only Ctrl-C arms/confirms exit."));
+	lines.push("");
+	lines.push(heading("TRANSCRIPT SCROLL"));
+	lines.push(row("PageUp / PageDown", "Scroll the transcript by a page"));
+	lines.push(row("Home", "Jump to the top of the transcript"));
+	lines.push(row("End / Shift+Down", "Jump to the bottom of the transcript"));
+	lines.push("");
+	lines.push(heading("SELECTOR / EDITOR"));
+	lines.push(row("Up / Down", "Move the selection in an open selector"));
+	lines.push(row("Enter", "Confirm the highlighted selector option"));
+	lines.push(row("Esc", "Cancel the open selector, return to the editor"));
+	lines.push(row("Cmd/Ctrl+C", "Copy the current terminal selection (OSC52)"));
+	lines.push("");
+	lines.push(dim("Press any key to close."));
+	return lines.map((line) => (line.length > width ? line.slice(0, width) : line));
 }
 
 function resumeSessionLabel(session: SessionListInfo): string {
@@ -383,6 +436,9 @@ export class RpcHostActions {
 				return true;
 			case "/tree":
 				await this.openTreeBrowser();
+				return true;
+			case "/hotkeys":
+				await this.openHotkeys();
 				return true;
 			case "/quit":
 				this.onExitRequest(0);
@@ -583,6 +639,16 @@ export class RpcHostActions {
 			"themeCheck",
 			(done) => new LinesOverlayComponent(
 				(width) => renderThemeCheck(themeReader(), Math.max(40, Math.min(width, 120))),
+				done,
+			),
+		);
+	}
+
+	public async openHotkeys(): Promise<void> {
+		await this.overlays.show<void>(
+			"hotkeys",
+			(done) => new LinesOverlayComponent(
+				(width) => renderHotkeysOverlay(themeReader(), Math.max(40, Math.min(width, 120))),
 				done,
 			),
 		);

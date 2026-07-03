@@ -352,7 +352,12 @@ describe("RPC autocomplete command construction", () => {
 		}
 		expect(commands.some((command) => command.name === "export")).toBe(true);
 		expect(commands.some((command) => command.name === "quit")).toBe(true);
-		expect(commands.some((command) => command.name === "hotkeys")).toBe(false);
+		// /hotkeys is now host-implemented (plan 035 phase 1) and advertised;
+		// /login is a Phase-3, upstream-Pi-only command this host still doesn't
+		// implement, so it must NOT be advertised unless the child itself
+		// exposes it via get_commands (not the case here).
+		expect(commands.some((command) => command.name === "hotkeys")).toBe(true);
+		expect(commands.some((command) => command.name === "login")).toBe(false);
 	});
 });
 

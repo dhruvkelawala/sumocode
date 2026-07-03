@@ -680,6 +680,21 @@ describe("RpcHostActions", () => {
 		expect(memory.calls).toContain("browse");
 	});
 
+	it("renders the RPC host's own hotkey reference as an overlay, closing on any key", async () => {
+		const { actions, overlays } = setup();
+
+		const hotkeys = actions.handleSubmittedText("/hotkeys");
+		await flush();
+		expect(overlays.getActiveKind()).toBe("hotkeys");
+		const rendered = renderOverlayText(overlays);
+		expect(rendered).toContain("SUMOCODE RPC HOST HOTKEYS");
+		expect(rendered).toContain("Ctrl+/");
+		expect(rendered).toContain("PageUp / PageDown");
+		overlays.handleInput("x");
+		await hotkeys;
+		expect(overlays.getActiveKind()).toBeUndefined();
+	});
+
 	it("supports direct host memory and theme commands without falling through to Pi prompt text", async () => {
 		const { actions, memory, notifications } = setup();
 
@@ -724,9 +739,9 @@ describe("RpcHostActions", () => {
 	it("notifies for unknown slash commands instead of letting them become model prompts", async () => {
 		const { actions, controls, notifications } = setup();
 
-		await expect(actions.handleSubmittedText("/hotkeys")).resolves.toBe(true);
+		await expect(actions.handleSubmittedText("/sumo:does-not-exist")).resolves.toBe(true);
 		expect(controls.calls).toContain("getCommands");
-		expect(notifications).toContainEqual({ message: "unknown command: /hotkeys", level: "warning" });
+		expect(notifications).toContainEqual({ message: "unknown command: /sumo:does-not-exist", level: "warning" });
 
 		controls.commands = [rpcCommand("deploy")];
 		await expect(actions.handleSubmittedText("/deploy prod")).resolves.toBe(false);

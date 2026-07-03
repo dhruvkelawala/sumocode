@@ -104,6 +104,86 @@ export async function submitRpcPrompt(message: string, options: RpcPromptSubmitO
 	responseData(response, "prompt");
 }
 
+export interface RpcHostInterruptDependencies {
+	readonly modals: Pick<ModalLayer, "getActiveKind" | "close">;
+	readonly overlays: Pick<RpcHostOverlayManager, "getActiveKind" | "close">;
+	readonly editor: Pick<RpcHostEditorController, "getText" | "setText" | "isAutocompleteOpen">;
+	readonly stateStore: Pick<RpcHostStateStore, "getSnapshot">;
+	readonly controls: Pick<RpcHostControls, "abort">;
+	readonly notifications: Pick<NotificationCenter, "notify">;
+	readonly requestHostExit: (code: number) => void;
+	/**
+	 * True in the window between a prompt submission and the RPC child's
+	 * `agent_start` event, when `stateStore`'s `isStreaming` bit has not yet
+	 * flipped. Without this, a Ctrl-C sent in that window is treated as the
+	 * pre-streaming arm-quit tier instead of an abort.
+	 */
+	readonly submitInFlight?: () => boolean;
+	readonly now?: () => number;
+}
+
+/**
+ * Builds the RPC host's pre-editor Ctrl-C/Escape handler as an injectable
+ * function of its dependencies, factored out of `runRpcHost`'s closure so
+ * the interrupt-decision wiring (which state each input kind reads, and
+ * what each decision does) can be unit tested without booting the full host.
+ */
+export function createRpcHostInterruptHandler(deps: RpcHostInterruptDependencies): (data: string) => boolean {
+	const now = deps.now ?? Date.now;
+	let armedQuitUntil: number | undefined;
+	const inputKind = (data: string): RpcInterruptInputKind | undefined => {
+		if (isCtrlCInput(data)) return "ctrl-c";
+		if (isEscapeInput(data)) return "escape";
+		return undefined;
+	};
+	return (data: string): boolean => {
+		const kind = inputKind(data);
+		if (!kind) return false;
+		const nowMs = now();
+		const modalActive = deps.modals.getActiveKind() !== undefined;
+		const overlayActive = deps.overlays.getActiveKind() !== undefined;
+		const isStreaming = deps.stateStore.getSnapshot().isStreaming || deps.submitInFlight?.() === true;
+		const decision = decideRpcInterrupt(kind, {
+			modalActive,
+			overlayActive,
+			draftNonEmpty: deps.editor.getText().trim().length > 0,
+			isStreaming,
+			autocompleteOpen: deps.editor.isAutocompleteOpen(),
+			armedUntil: armedQuitUntil,
+			now: nowMs,
+		});
+		switch (decision) {
+			case "dismiss-modal":
+				armedQuitUntil = undefined;
+				if (modalActive) deps.modals.close();
+				else deps.overlays.close();
+				return true;
+			case "clear-draft":
+				armedQuitUntil = undefined;
+				deps.editor.setText("");
+				deps.notifications.notify("draft cleared", "info");
+				return true;
+			case "abort":
+				armedQuitUntil = undefined;
+				void notifyOnError(async () => {
+					await deps.controls.abort();
+					deps.notifications.notify("abort requested", "info");
+				}, deps.notifications);
+				return true;
+			case "arm-quit":
+				armedQuitUntil = nowMs + 1_500;
+				deps.notifications.notify("press ctrl-c again to quit", "info");
+				return true;
+			case "quit":
+				armedQuitUntil = undefined;
+				deps.requestHostExit(130);
+				return true;
+			case "pass":
+				return false;
+		}
+	};
+}
+
 export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<number> {
 	const argv = [...(options.argv ?? process.argv.slice(2))];
 	const env = options.env ?? process.env;
@@ -176,30 +256,48 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 	let actions: RpcHostActions | undefined;
 	let regionRegistryDisposed = false;
 	let requestHostExit: (code: number) => void = () => undefined;
+	// Set the instant a prompt is submitted, cleared once the RPC child's
+	// `agent_start` event lands (via stateStore.handleAgentEvent, see
+	// client.onEvent below) or the send itself fails. `stateStore`'s
+	// `isStreaming` bit only flips on `agent_start`, so without this flag a
+	// Ctrl-C sent in the submit -> agent_start window reads as pre-streaming
+	// and arms quit instead of aborting (defect: double Ctrl-C quits the app
+	// instead of aborting the in-flight send).
+	let submitInFlight = false;
 	const editor = new RpcHostEditorController({
 		controls,
 		cwd,
 		onRenderRequest: requestRender,
 		errorNotifier: notifications,
 		onSubmit: async (message) => {
-			await submitRpcPrompt(message, {
-				visualFixture,
-				actions,
-				stateStore,
-				client,
-				onBeforeSend: () => {
-					const state = stateStore.getSnapshot();
-					runtime?.update({
-						state: {
-							...state,
-							isStreaming: true,
-							pendingMessageCount: Math.max(1, state.pendingMessageCount),
-							hasMessages: true,
-							lastEventType: "agent_start",
-						},
-					});
-				},
-			});
+			submitInFlight = true;
+			try {
+				await submitRpcPrompt(message, {
+					visualFixture,
+					actions,
+					stateStore,
+					client,
+					onBeforeSend: () => {
+						const state = stateStore.getSnapshot();
+						runtime?.update({
+							state: {
+								...state,
+								isStreaming: true,
+								pendingMessageCount: Math.max(1, state.pendingMessageCount),
+								hasMessages: true,
+								lastEventType: "agent_start",
+							},
+						});
+					},
+				});
+			} catch (error) {
+				submitInFlight = false;
+				// The synthetic isStreaming:true painted into runtime.update above
+				// would otherwise stay stuck until the next 5s stats poll. Reset it
+				// immediately so the UI and interrupt gating agree the send failed.
+				runtime?.update({ state: stateStore.getSnapshot() });
+				throw error;
+			}
 		},
 	});
 	const uiResponder = createRpcExtensionUiResponder({
@@ -237,11 +335,11 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 	});
 	let statsTimer: NodeJS.Timeout | undefined;
 	let statsInFlight = false;
-	let armedQuitUntil: number | undefined;
 	let stopPromise: Promise<void> | undefined;
 
 	client.onEvent((event) => {
 		if (visualFixture) return;
+		if ((event as { type?: unknown }).type === "agent_start") submitInFlight = false;
 		const transcript = transcriptPump.handleAgentEvent(event);
 		const state = stateStore.handleAgentEvent(event);
 		runtime?.update({ state, transcript });
@@ -278,55 +376,16 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 	requestHostExit = (code: number): void => {
 		runtime?.stop(code);
 	};
-	const inputKind = (data: string): RpcInterruptInputKind | undefined => {
-		if (isCtrlCInput(data)) return "ctrl-c";
-		if (isEscapeInput(data)) return "escape";
-		return undefined;
-	};
-	const handlePreEditorInput = (data: string): boolean => {
-		const kind = inputKind(data);
-		if (!kind) return false;
-		const now = Date.now();
-		const modalActive = modals.getActiveKind() !== undefined;
-		const overlayActive = overlays.getActiveKind() !== undefined;
-		const decision = decideRpcInterrupt(kind, {
-			modalActive,
-			overlayActive,
-			draftNonEmpty: editor.getText().trim().length > 0,
-			isStreaming: stateStore.getSnapshot().isStreaming,
-			armedUntil: armedQuitUntil,
-			now,
-		});
-		switch (decision) {
-			case "dismiss-modal":
-				armedQuitUntil = undefined;
-				if (modalActive) modals.close();
-				else overlays.close();
-				return true;
-			case "clear-draft":
-				armedQuitUntil = undefined;
-				editor.setText("");
-				notifications.notify("draft cleared", "info");
-				return true;
-			case "abort":
-				armedQuitUntil = undefined;
-				void notifyOnError(async () => {
-					await controls.abort();
-					notifications.notify("abort requested", "info");
-				}, notifications);
-				return true;
-			case "arm-quit":
-				armedQuitUntil = now + 1_500;
-				notifications.notify("press ctrl-c again to quit", "info");
-				return true;
-			case "quit":
-				armedQuitUntil = undefined;
-				requestHostExit(130);
-				return true;
-			case "pass":
-				return false;
-		}
-	};
+	const handlePreEditorInput = createRpcHostInterruptHandler({
+		modals,
+		overlays,
+		editor,
+		stateStore,
+		controls,
+		notifications,
+		requestHostExit: (code) => requestHostExit(code),
+		submitInFlight: () => submitInFlight,
+	});
 	const handleSigint = (): void => { void stop(130).then(() => process.exit(130)); };
 	const handleSigterm = (): void => { void stop(0).then(() => process.exit(0)); };
 	process.once("SIGINT", handleSigint);

@@ -270,6 +270,30 @@ describe("RPC editor controller", () => {
 		expect(controls.getCommands).toHaveBeenCalledTimes(1);
 	});
 
+	it("reports isAutocompleteOpen() while the slash-command dropdown is visible and false once dismissed", async () => {
+		const controls = controlsFor({ commands: [rpcCommand("deploy", "Deploy current workspace")] });
+		const controller = await createRpcHostEditorController({
+			controls,
+			tui: fakeTui(),
+			theme: fakeEditorTheme(),
+			keybindings: fakeKeybindings(),
+			cwd: process.cwd(),
+		});
+
+		expect(controller.isAutocompleteOpen()).toBe(false);
+
+		controller.handleInput("/");
+		controller.handleInput("d");
+		controller.handleInput("e");
+		await waitForRenderedText(controller, "deploy");
+
+		expect(controller.isAutocompleteOpen()).toBe(true);
+
+		controller.handleInput("\x1b"); // Escape cancels the autocomplete in Pi's editor.
+
+		expect(controller.isAutocompleteOpen()).toBe(false);
+	});
+
 	it("provides /model argument suggestions from RpcHostControls model options", async () => {
 		const controls = controlsFor({
 			models: [

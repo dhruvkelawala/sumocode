@@ -39,4 +39,17 @@ describe("decideRpcInterrupt", () => {
 		expect(decideRpcInterrupt("escape", state({ draftNonEmpty: true }))).toBe("pass");
 		expect(decideRpcInterrupt("escape", state())).toBe("pass");
 	});
+
+	it("passes Escape to the editor when the autocomplete dropdown is open, even while streaming", () => {
+		expect(decideRpcInterrupt("escape", state({ isStreaming: true, autocompleteOpen: true }))).toBe("pass");
+		expect(decideRpcInterrupt("escape", state({ isStreaming: false, autocompleteOpen: true }))).toBe("pass");
+	});
+
+	it("still dismisses a modal/overlay on Escape even when autocomplete is (implausibly) reported open", () => {
+		expect(decideRpcInterrupt("escape", state({ modalActive: true, autocompleteOpen: true }))).toBe("dismiss-modal");
+	});
+
+	it("still aborts streaming on Escape when autocomplete is closed", () => {
+		expect(decideRpcInterrupt("escape", state({ isStreaming: true, autocompleteOpen: false }))).toBe("abort");
+	});
 });

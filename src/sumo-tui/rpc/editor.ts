@@ -182,6 +182,16 @@ export class RpcHostEditorController implements EditorTextController, KeyTarget 
 	public getText(): string {
 		return this.editor.getText();
 	}
+
+	/**
+	 * True while the editor's autocomplete dropdown (slash commands, agent
+	 * mentions, file paths) is visible. Mirrors pi's CustomEditor gate on
+	 * `app.interrupt`: Esc must reach the editor to close the dropdown
+	 * instead of being treated as a streaming-abort/quit interrupt.
+	 */
+	public isAutocompleteOpen(): boolean {
+		return this.editor.isShowingAutocomplete();
+	}
 }
 
 export async function createRpcHostEditorController(

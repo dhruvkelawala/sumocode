@@ -446,6 +446,7 @@ function buildScene(variant) {
 	const toolStyle = variant.toolStyle ?? "inline";
 	const isRuntimeTarget = toolStyle === "runtime";
 	const chatHTML = buildChatHTML(CHAT_COLS, toolStyle);
+	const chatLeadHTML = isRuntimeTarget && !sidebarVisible ? `<pre class="grid"> </pre>\n` : "";
 	const inputRows = buildInputFrameRows(cols);
 	const hintRow = buildHintRow(cols, sidebarVisible);
 	const footerRow = buildFooterRow(cols, sidebarVisible, { visualHarnessFooter: isRuntimeTarget });
@@ -508,7 +509,7 @@ ${stageIntroHTML}  <div data-render-rect class="term scene" style="--term-cols: 
     <pre class="grid" style="grid-row: 2;">${topBarRow}</pre>
     <pre class="grid" style="grid-row: 3;"> </pre>
     <div class="middle">
-      <div class="chat-col">${chatHTML}</div>
+      <div class="chat-col">${chatLeadHTML}${chatHTML}</div>
       <div class="gutter-col"></div>
 ${sidebarColumnHTML}    </div>
     <pre class="grid" style="grid-row: 5;"> </pre>

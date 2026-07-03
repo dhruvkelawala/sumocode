@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { createRpcExitHandler, createRpcHostInterruptHandler, createUnhandledRejectionHandler, type RpcHostExitDependencies, type RpcHostInterruptDependencies } from "./host.js";
+import type { ChatMessageViewModel } from "../transcript/view-model.js";
+import { createLazyChatSink, createRpcExitHandler, createRpcHostInterruptHandler, createUnhandledRejectionHandler, type RpcHostExitDependencies, type RpcHostInterruptDependencies } from "./host.js";
 
 function flush(): Promise<void> {
 	return Promise.resolve().then(() => Promise.resolve());
@@ -260,5 +261,68 @@ describe("RPC host client-exit shutdown", () => {
 		handle(new Error("child crashed"));
 
 		expect(requestRender).toHaveBeenCalled();
+	});
+});
+
+describe("createLazyChatSink (B9 host wiring)", () => {
+	const message: ChatMessageViewModel = { id: "m1", role: "sumo", displayName: "SUMO", blocks: [{ type: "markdown", text: "hi" }] };
+
+	it("is a safe no-op (with fallback stats) before the runtime/shell exist", () => {
+		const sink = createLazyChatSink(() => undefined);
+
+		const stats = sink.replaceViewModels([message]);
+		expect(stats).toEqual({ sourceMessages: 1, acceptedMessages: 1, renderedMessages: 1, archivedMessages: 0 });
+		// Must not throw even with no live pager to forward to.
+		expect(() => sink.addViewModel(message)).not.toThrow();
+		expect(() => sink.replaceLastWithViewModel(message)).not.toThrow();
+	});
+
+	it("is a safe no-op when the runtime exists but its shell hasn't resolved yet (getChatSink returns undefined)", () => {
+		const runtime = { getChatSink: () => undefined };
+		const sink = createLazyChatSink(() => runtime);
+
+		expect(() => sink.addViewModel(message)).not.toThrow();
+		expect(sink.replaceViewModels([message])).toEqual({ sourceMessages: 1, acceptedMessages: 1, renderedMessages: 1, archivedMessages: 0 });
+	});
+
+	it("forwards every call to the live pager once the runtime's chat sink exists", () => {
+		const pager = {
+			replaceViewModels: vi.fn(() => ({ sourceMessages: 1, acceptedMessages: 1, renderedMessages: 1, archivedMessages: 0 })),
+			addViewModel: vi.fn(),
+			replaceLastWithViewModel: vi.fn(),
+		};
+		const runtime = { getChatSink: () => pager };
+		const sink = createLazyChatSink(() => runtime);
+
+		sink.addViewModel(message);
+		sink.replaceLastWithViewModel(message);
+		sink.replaceViewModels([message]);
+
+		expect(pager.addViewModel).toHaveBeenCalledWith(message);
+		expect(pager.replaceLastWithViewModel).toHaveBeenCalledWith(message);
+		expect(pager.replaceViewModels).toHaveBeenCalledWith([message]);
+	});
+
+	it("re-resolves the runtime/pager on every call (picks up the shell once it appears mid-session)", () => {
+		let runtime: { getChatSink: () => import("../transcript/controller.js").TranscriptControllerChatSink | undefined } | undefined;
+		const sink = createLazyChatSink(() => runtime);
+
+		// Before the runtime exists: swallowed.
+		sink.addViewModel(message);
+
+		// The shell resolves mid-session (mirrors runtime.start()'s async
+		// RpcShellAdapter.create landing after some events already fired).
+		const addViewModel = vi.fn();
+		runtime = {
+			getChatSink: () => ({
+				addViewModel,
+				replaceViewModels: vi.fn(() => ({ sourceMessages: 0, acceptedMessages: 0, renderedMessages: 0, archivedMessages: 0 })),
+				replaceLastWithViewModel: vi.fn(),
+			}),
+		};
+		sink.addViewModel(message);
+
+		expect(addViewModel).toHaveBeenCalledTimes(1);
+		expect(addViewModel).toHaveBeenCalledWith(message);
 	});
 });

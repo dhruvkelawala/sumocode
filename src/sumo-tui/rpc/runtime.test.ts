@@ -406,6 +406,61 @@ describe("RPC host retained runtime frame", () => {
 		}
 	});
 
+	it("exposes the shell's chat sink only once start() has resolved, undefined before/after", async () => {
+		const output = new FakeOutput();
+		const terminal = new TerminalSessionOwner({ output });
+		const runtime = new RpcHostRuntime({
+			output,
+			input: { isTTY: false, on: () => undefined },
+			terminal,
+			initialState: state(),
+			initialTranscript: { messages: [] },
+		});
+
+		expect(runtime.getChatSink()).toBeUndefined();
+		await runtime.start();
+		expect(runtime.getChatSink()).toBeDefined();
+		runtime.stop();
+		expect(runtime.getChatSink()).toBeUndefined();
+	});
+
+	it("skips the pager's replaceViewModels end-to-end when update() carries a transcriptRevision (host.ts's B9 sink-wiring contract)", async () => {
+		const replaceViewModels = vi.spyOn(ChatPager.prototype, "replaceViewModels");
+		const output = new FakeOutput();
+		const terminal = new TerminalSessionOwner({ output });
+		const runtime = new RpcHostRuntime({
+			output,
+			input: { isTTY: false, on: () => undefined },
+			terminal,
+			initialState: state(),
+			initialTranscript: { messages: [] },
+		});
+
+		try {
+			await runtime.start();
+			replaceViewModels.mockClear();
+
+			// Simulate host.ts: the controller already pushed this message into
+			// the pager directly via getChatSink() before runtime.update() is
+			// ever called (this is what the lazy sink + transcriptRevision
+			// contract guarantees in production).
+			const message = { id: "m1", role: "sumo" as const, displayName: "SUMO", blocks: [{ type: "markdown" as const, text: "sink-applied" }] };
+			runtime.getChatSink()?.addViewModel(message);
+
+			runtime.update({
+				state: state({ messageCount: 1, hasMessages: true }),
+				transcript: { messages: [message] },
+				transcriptRevision: 1,
+			});
+			await Promise.resolve();
+
+			expect(replaceViewModels).not.toHaveBeenCalled();
+		} finally {
+			runtime.stop();
+			replaceViewModels.mockRestore();
+		}
+	});
+
 	it("coalesces any number of update()/requestRender() calls in one synchronous turn into a single render", async () => {
 		const output = new FakeOutput();
 		const terminal = new TerminalSessionOwner({ output });

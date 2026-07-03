@@ -3,6 +3,9 @@ import { containsCtrlCToken, isEscapeInput } from "../input/shared-input-router.
 import { loadYoga } from "../layout/yoga.js";
 import { applyStartupTheme } from "../../themes/index.js";
 import { ExtensionStatusPublication, RegionRegistry } from "../pi-compat/region-registry.js";
+import type { TranscriptControllerChatSink } from "../transcript/controller.js";
+import type { ChatMessageViewModel } from "../transcript/view-model.js";
+import type { ChatPagerReplaceStats } from "../widgets/chat-pager.js";
 import { ModalLayer } from "../widgets/modal-layer.js";
 import { NotificationCenter } from "../widgets/notification.js";
 import { SumoRpcClient, truncateForNotification } from "./client.js";
@@ -82,6 +85,39 @@ function childEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 		SUMO_TUI: "0",
 	};
 	return next;
+}
+
+function fallbackChatSinkStats(messages: readonly ChatMessageViewModel[]): ChatPagerReplaceStats {
+	return {
+		sourceMessages: messages.length,
+		acceptedMessages: messages.length,
+		renderedMessages: messages.length,
+		archivedMessages: 0,
+	};
+}
+
+/**
+ * A `TranscriptControllerChatSink` that forwards to whatever
+ * `RpcHostRuntime.getChatSink()` currently returns. Needed because
+ * `RpcTranscriptPump` (which owns the `TranscriptController` that this sink
+ * is attached to at construction time, see `TranscriptControllerOptions.chat`)
+ * is created synchronously near the top of `runRpcHost`, well before
+ * `RpcHostRuntime` (and its async `RpcShellAdapter.create`, which happens
+ * after `client.start()`) exists at all. Before the runtime/adapter exist,
+ * writes are no-ops -- any events the controller processes in that window
+ * still update its OWN internal state correctly (see `TranscriptController`),
+ * they just have no live pager to push into yet; the adapter's constructor
+ * separately seeds the pager from `initialTranscript` once it IS created
+ * (from a `transcriptPump.replaceFromMessages` snapshot taken right before),
+ * so nothing from that narrow startup window is lost, only deferred to the
+ * normal hydration path.
+ */
+export function createLazyChatSink(getRuntime: () => { getChatSink(): TranscriptControllerChatSink | undefined } | undefined): TranscriptControllerChatSink {
+	return {
+		replaceViewModels: (messages) => getRuntime()?.getChatSink()?.replaceViewModels(messages) ?? fallbackChatSinkStats(messages),
+		addViewModel: (message) => getRuntime()?.getChatSink()?.addViewModel(message),
+		replaceLastWithViewModel: (message) => getRuntime()?.getChatSink()?.replaceLastWithViewModel(message),
+	};
 }
 
 export interface RpcPromptSubmitOptions {
@@ -259,10 +295,18 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		cwd,
 		env: childEnv(env),
 	});
-	const transcriptPump = new RpcTranscriptPump();
+	let runtime: RpcHostRuntime | undefined;
+	// The B9 diffing chat sink: `TranscriptController` (owned by
+	// `transcriptPump`) is constructed here, before `runtime`/its
+	// `RpcShellAdapter` exist (that happens async, later, after
+	// `client.start()`) -- see `createLazyChatSink`'s doc comment for why
+	// this indirection is needed instead of passing the pager directly.
+	const transcriptPump = new RpcTranscriptPump({
+		chat: createLazyChatSink(() => runtime),
+		scheduleRender: () => runtime?.requestRender(),
+	});
 	const stateStore = new RpcHostStateStore();
 	const controls = new RpcHostControls(client, stateStore);
-	let runtime: RpcHostRuntime | undefined;
 	let stopHost: (code: number) => Promise<void> = async (code: number): Promise<void> => {
 		runtime?.stop(code);
 		await client.stop();
@@ -398,7 +442,7 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 	const rehydrateTranscript = async (): Promise<void> => {
 		const messages = responseData(await client.send({ type: "get_messages" }), "get_messages").messages;
 		const transcript = transcriptPump.replaceFromMessages(messages);
-		runtime?.update({ transcript });
+		runtime?.update({ transcript, transcriptRevision: transcriptPump.getRevision() });
 	};
 	actions = new RpcHostActions({
 		controls,
@@ -421,7 +465,7 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		if ((event as { type?: unknown }).type === "agent_start") submitInFlight = false;
 		const transcript = transcriptPump.handleAgentEvent(event);
 		const state = stateStore.handleAgentEvent(event);
-		runtime?.update({ state, transcript });
+		runtime?.update({ state, transcript, transcriptRevision: transcriptPump.getRevision() });
 	});
 
 	// The RPC child is the whole agent -- without this, the host has no signal

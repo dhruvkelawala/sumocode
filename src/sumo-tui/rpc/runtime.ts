@@ -2,6 +2,7 @@ import type { Component } from "@earendil-works/pi-tui";
 import type { CellBuffer } from "../render/buffer.js";
 import { logDiagnostic } from "../runtime/diagnostics.js";
 import { defaultTerminalSessionOwner, type TerminalOutput, type TerminalSessionOwner } from "../runtime/terminal-controller.js";
+import type { TranscriptControllerChatSink } from "../transcript/controller.js";
 import type { TranscriptViewModel } from "../transcript/view-model.js";
 import { containsCtrlCToken, isAppleTerminalSession, isEscapeInput, normalizeAppleTerminalInput, SharedInputRouter } from "../input/shared-input-router.js";
 import { RpcShellAdapter } from "./shell-adapter.js";
@@ -263,6 +264,18 @@ export class RpcHostRuntime {
 
 	public requestRender(): void {
 		this.scheduleRender();
+	}
+
+	/**
+	 * Exposes the live shell's `ChatPager` as a `TranscriptControllerChatSink`,
+	 * or `undefined` before `start()`'s async `RpcShellAdapter.create` has
+	 * resolved (or after `stop()`). `host.ts` wraps this behind a lazy sink
+	 * (see its `createLazyChatSink`) so the `TranscriptController` it
+	 * constructs synchronously, well before this runtime exists, can still be
+	 * built with a `chat` option pointing at it.
+	 */
+	public getChatSink(): TranscriptControllerChatSink | undefined {
+		return this.shell?.getChatSink();
 	}
 
 	public waitForExit(): Promise<number> {

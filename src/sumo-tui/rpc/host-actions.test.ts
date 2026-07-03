@@ -167,7 +167,10 @@ function renderOverlayText(overlays: RpcHostOverlayManager, width = 100): string
 	return overlays.render(width).join("\n").replace(/\u001b\[[0-9;]*m/g, "");
 }
 
-function setup() {
+function setup(options: {
+	readonly memory?: FakeMemoryClient;
+	readonly onExitRequest?: (code: number) => void;
+} = {}) {
 	const controls = new FakeControls();
 	const stateStore = new RpcHostStateStore();
 	stateStore.hydrateFromRpcState({
@@ -186,7 +189,7 @@ function setup() {
 	const modals = new ModalManager();
 	const overlays = new RpcHostOverlayManager();
 	const notifications: Notification[] = [];
-	const memory = new FakeMemoryClient();
+	const memory = options.memory ?? new FakeMemoryClient();
 	const editorText = new FakeEditorText();
 	const actions = new RpcHostActions({
 		controls: controls as unknown as RpcHostControls,
@@ -201,6 +204,7 @@ function setup() {
 		},
 		editorText,
 		createMemoryClient: () => memory,
+		onExitRequest: options.onExitRequest,
 	});
 
 	return { actions, controls, modals, overlays, notifications, memory, editorText };
@@ -352,6 +356,29 @@ describe("RpcHostActions", () => {
 		]);
 		expect(getActiveTheme().name).toBe("amber-crt");
 		expect(notifications).toContainEqual({ message: "theme: amber-crt", level: "info" });
+	});
+
+	it("notifies memory client failures without throwing from direct memory commands", async () => {
+		const memory = new FakeMemoryClient();
+		memory.add = async (text: string) => {
+			memory.calls.push(`add:${text}`);
+			throw new Error("memory offline");
+		};
+		const { actions, notifications } = setup({ memory });
+
+		await expect(actions.handleSubmittedText("/sumo:memory add remember this")).resolves.toBe(true);
+
+		expect(memory.calls).toEqual(["add:remember this"]);
+		expect(notifications).toContainEqual({ message: "rpc error: memory offline", level: "warning" });
+	});
+
+	it("handles /quit through the injected exit request", async () => {
+		const exits: number[] = [];
+		const { actions } = setup({ onExitRequest: (code) => exits.push(code) });
+
+		await expect(actions.handleSubmittedText("/quit")).resolves.toBe(true);
+
+		expect(exits).toEqual([0]);
 	});
 
 	it("notifies for unknown slash commands instead of letting them become model prompts", async () => {

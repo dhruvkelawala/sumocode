@@ -2,6 +2,7 @@ import type { KeybindingsManager } from "@earendil-works/pi-coding-agent";
 import type { EditorTheme, TUI } from "@earendil-works/pi-tui";
 import { describe, expect, it, vi } from "vitest";
 import { SumoTuiTestBackend, type TestBackendFrame } from "../testing/test-backend.js";
+import type { NotificationLevel } from "../widgets/notification.js";
 import { PiEditorLeaf } from "../widgets/pi-editor-leaf.js";
 import type { RpcModelOption, RpcSlashCommand } from "./controls.js";
 import {
@@ -168,6 +169,28 @@ describe("RPC editor controller", () => {
 		expect(controller.getText()).toBe("");
 	});
 
+	it("notifies rejected submits without creating an unhandled rejection", async () => {
+		const notifications: Array<{ message: string; level?: NotificationLevel }> = [];
+		const controller = new RpcHostEditorController({
+			tui: fakeTui(),
+			theme: fakeEditorTheme(),
+			keybindings: fakeKeybindings(),
+			onSubmit: async () => {
+				throw new Error("prompt timed out");
+			},
+			errorNotifier: {
+				notify: (message, level) => notifications.push({ message, level }),
+			},
+		});
+
+		controller.setText("send this");
+		controller.handleInput("\r");
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		expect(notifications).toEqual([{ message: "rpc error: prompt timed out", level: "warning" }]);
+		expect(controller.getText()).toBe("");
+	});
+
 	it("submits exact CSI-u Enter as normal Enter", () => {
 		const submitted: string[] = [];
 		const controller = new RpcHostEditorController({
@@ -298,7 +321,7 @@ describe("RPC autocomplete command construction", () => {
 			expect(isRpcHostSlashCommandName(command.name) || childNames.has(command.name)).toBe(true);
 		}
 		expect(commands.some((command) => command.name === "export")).toBe(true);
-		expect(commands.some((command) => command.name === "quit")).toBe(false);
+		expect(commands.some((command) => command.name === "quit")).toBe(true);
 		expect(commands.some((command) => command.name === "hotkeys")).toBe(false);
 	});
 });

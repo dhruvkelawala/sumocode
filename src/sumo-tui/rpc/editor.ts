@@ -14,6 +14,7 @@ import type { KeyEvent, KeyTarget } from "../input/key-router.js";
 import type { EditorTextController } from "../pi-compat/extension-ui-adapter.js";
 import type { RpcHostControls, RpcModelOption, RpcSlashCommand } from "./controls.js";
 import { RPC_HOST_SLASH_COMMANDS } from "./host-actions.js";
+import { notifyOnError, type ErrorNotifier } from "./safe-send.js";
 
 export type RpcEditorAutocompleteControls = Pick<RpcHostControls, "getCommands" | "getAvailableModels">;
 type RpcModelCompletionControls = Pick<RpcHostControls, "getAvailableModels">;
@@ -34,6 +35,7 @@ export interface RpcHostEditorControllerOptions extends RpcAutocompleteProviderO
 	readonly keybindings?: KeybindingsManager;
 	readonly isSplash?: () => boolean;
 	readonly onSubmit?: (text: string) => void | Promise<void>;
+	readonly errorNotifier?: ErrorNotifier;
 	readonly onRenderRequest?: () => void;
 	readonly autocompleteMaxVisible?: number;
 }
@@ -93,6 +95,7 @@ export class RpcHostEditorController implements EditorTextController, KeyTarget 
 	private readonly cwd: string | undefined;
 	private readonly fdPath: string | null | undefined;
 	private readonly onSubmit: (text: string) => void | Promise<void>;
+	private readonly errorNotifier: ErrorNotifier | undefined;
 	private isSplashProvider: () => boolean;
 
 	public constructor(options: RpcHostEditorControllerOptions = {}) {
@@ -101,6 +104,7 @@ export class RpcHostEditorController implements EditorTextController, KeyTarget 
 		this.cwd = options.cwd;
 		this.fdPath = options.fdPath;
 		this.onSubmit = options.onSubmit ?? (() => undefined);
+		this.errorNotifier = options.errorNotifier;
 		this.isSplashProvider = options.isSplash ?? (() => false);
 		this.editor = createCathedralEditor(
 			this.tui,
@@ -111,7 +115,11 @@ export class RpcHostEditorController implements EditorTextController, KeyTarget 
 		this.editor.focused = true;
 		this.editor.onChange = () => this.tui.requestRender();
 		this.editor.onSubmit = (text) => {
-			void Promise.resolve(this.onSubmit(text));
+			if (this.errorNotifier) {
+				void notifyOnError(() => this.onSubmit(text), this.errorNotifier);
+				return;
+			}
+			void Promise.resolve(this.onSubmit(text)).catch(() => undefined);
 		};
 		if (options.autocompleteMaxVisible !== undefined) this.editor.setAutocompleteMaxVisible(options.autocompleteMaxVisible);
 	}

@@ -1,12 +1,26 @@
-import { describe, expect, it } from "vitest";
-import { SumoRpcClient } from "./client.js";
+import type { ChildProcessWithoutNullStreams } from "node:child_process";
+import { describe, expect, it, vi } from "vitest";
+import { SumoRpcClient, type SumoRpcClientOptions } from "./client.js";
 
-function nodeRpcClient(script: string): SumoRpcClient {
+function nodeRpcClient(script: string, options: Partial<Omit<SumoRpcClientOptions, "command" | "args">> = {}): SumoRpcClient {
 	return new SumoRpcClient({
 		command: process.execPath,
 		args: ["-e", script],
 		requestTimeoutMs: 2_000,
+		...options,
 	});
+}
+
+function clientChild(client: SumoRpcClient): ChildProcessWithoutNullStreams {
+	return (client as unknown as { child: ChildProcessWithoutNullStreams }).child;
+}
+
+async function waitFor(predicate: () => boolean): Promise<void> {
+	for (let attempt = 0; attempt < 40; attempt += 1) {
+		if (predicate()) return;
+		await new Promise((resolve) => setTimeout(resolve, 25));
+	}
+	throw new Error("condition was not met");
 }
 
 describe("SumoRpcClient", () => {
@@ -151,5 +165,81 @@ describe("SumoRpcClient", () => {
 		await client.stop();
 		await new Promise((resolve) => setTimeout(resolve, 50));
 		expect(() => process.kill(pid!, 0)).toThrow();
+	});
+
+	it("tolerates one malformed protocol line between valid responses", async () => {
+		const protocolErrors: Array<{ line: string; message: string }> = [];
+		const script = `
+			const readline = require("node:readline");
+			const rl = readline.createInterface({ input: process.stdin });
+			rl.on("line", (line) => {
+				const command = JSON.parse(line);
+				if (command.type !== "get_state") return;
+				process.stdout.write("stray extension noise\\n");
+				process.stdout.write(JSON.stringify({ type: "response", id: command.id, command: "get_state", success: true, data: {
+					thinkingLevel: "minimal",
+					isStreaming: false,
+					isCompacting: false,
+					steeringMode: "all",
+					followUpMode: "all",
+					sessionId: "session-protocol-noise",
+					autoCompactionEnabled: true,
+					messageCount: 0,
+					pendingMessageCount: 0
+				} }) + "\\n");
+			});
+		`;
+		const client = nodeRpcClient(script, {
+			onProtocolError: (line, error) => protocolErrors.push({ line, message: error.message }),
+		});
+		try {
+			await client.start();
+			const response = await client.send({ type: "get_state" });
+
+			expect(response).toMatchObject({ command: "get_state", success: true });
+			expect(protocolErrors).toHaveLength(1);
+			expect(protocolErrors[0]?.line).toBe("stray extension noise");
+			expect(protocolErrors[0]?.message).toContain("Unexpected token");
+		} finally {
+			await client.stop();
+		}
+	});
+
+	it("kills the child after three consecutive malformed protocol lines", async () => {
+		const script = `
+			const readline = require("node:readline");
+			const rl = readline.createInterface({ input: process.stdin });
+			rl.on("line", () => {
+				process.stdout.write("bad one\\n");
+				process.stdout.write("bad two\\n");
+				process.stdout.write("bad three\\n");
+			});
+			setInterval(() => undefined, 1000);
+		`;
+		const client = nodeRpcClient(script);
+		await client.start();
+		const child = clientChild(client);
+		const killSpy = vi.spyOn(child, "kill");
+
+		await expect(client.send({ type: "get_state" })).rejects.toThrow("Failed to parse 3 consecutive RPC lines");
+		expect(killSpy).toHaveBeenCalledWith("SIGTERM");
+		await waitFor(() => child.exitCode !== null || child.signalCode !== null);
+	});
+
+	it("keeps only the stderr tail up to 64 KiB", async () => {
+		const client = nodeRpcClient(`
+			process.stderr.write("a".repeat(1000));
+			process.stderr.write("b".repeat(70000));
+			setInterval(() => undefined, 1000);
+		`);
+		try {
+			await client.start();
+			await waitFor(() => client.stderr.length === 65536);
+
+			expect(client.stderr).toHaveLength(65536);
+			expect(client.stderr).toBe("b".repeat(65536));
+		} finally {
+			await client.stop();
+		}
 	});
 });

@@ -1,4 +1,5 @@
 import { resolve } from "node:path";
+import { isCtrlCInput, isEscapeInput } from "../input/shared-input-router.js";
 import { loadYoga } from "../layout/yoga.js";
 import { ExtensionStatusPublication, RegionRegistry } from "../pi-compat/region-registry.js";
 import { ModalLayer } from "../widgets/modal-layer.js";
@@ -9,9 +10,11 @@ import { RpcHostEditorController } from "./editor.js";
 import { createRpcExtensionUiResponder } from "./extension-ui-responder.js";
 import { RpcHostActions } from "./host-actions.js";
 import { RpcHostOverlayManager } from "./host-overlays.js";
+import { decideRpcInterrupt, type RpcInterruptInputKind } from "./interrupt.js";
 import { readGitBranch } from "./git.js";
 import { RpcHostRuntime } from "./runtime.js";
 import { responseData } from "./response.js";
+import { notifyOnError } from "./safe-send.js";
 import { RpcHostStateStore } from "./state.js";
 import { RpcTranscriptPump } from "./transcript-pump.js";
 import { rpcVisualFixtureFromEnv } from "./visual-fixtures.js";
@@ -30,6 +33,31 @@ function writeLine(stream: Pick<NodeJS.WriteStream, "write">, line: string): voi
 
 function writeTerminalTitle(stream: Pick<NodeJS.WriteStream, "write">, title: string): void {
 	stream.write(`\u001b]0;${title.replace(/[\x00-\x1F\x7F-\x9F]/g, "")}\u0007`);
+}
+
+function formatUnknownError(error: unknown): string {
+	return error instanceof Error ? error.stack ?? error.message : String(error);
+}
+
+export interface UnhandledRejectionShutdownOptions {
+	readonly stderr: Pick<NodeJS.WriteStream, "write">;
+	readonly cleanup: (code: number) => Promise<void>;
+	readonly exit: (code: number) => void;
+}
+
+export function createUnhandledRejectionHandler(options: UnhandledRejectionShutdownOptions): (reason: unknown) => void {
+	let shutdown: Promise<void> | undefined;
+	return (reason: unknown): void => {
+		if (shutdown) return;
+		shutdown = (async () => {
+			writeLine(options.stderr, `[sumocode-rpc] unhandled rejection: ${formatUnknownError(reason)}`);
+			await options.cleanup(1);
+			options.exit(1);
+		})().catch((error) => {
+			writeLine(options.stderr, `[sumocode-rpc] unhandled rejection cleanup failed: ${formatUnknownError(error)}`);
+			options.exit(1);
+		});
+	};
 }
 
 function hostRoot(env: NodeJS.ProcessEnv): string {
@@ -99,6 +127,16 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 	const stateStore = new RpcHostStateStore();
 	const controls = new RpcHostControls(client, stateStore);
 	let runtime: RpcHostRuntime | undefined;
+	let stopHost: (code: number) => Promise<void> = async (code: number): Promise<void> => {
+		runtime?.stop(code);
+		await client.stop();
+	};
+	const handleUnhandledRejection = createUnhandledRejectionHandler({
+		stderr,
+		cleanup: (code) => stopHost(code),
+		exit: (code) => process.exit(code),
+	});
+	process.on("unhandledRejection", handleUnhandledRejection);
 	const requestRender = (): void => runtime?.requestRender();
 	const hostTerminal = {
 		get columns(): number {
@@ -129,10 +167,12 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 	const notifications = new NotificationCenter({ onChange: requestRender });
 	let actions: RpcHostActions | undefined;
 	let regionRegistryDisposed = false;
+	let requestHostExit: (code: number) => void = () => undefined;
 	const editor = new RpcHostEditorController({
 		controls,
 		cwd,
 		onRenderRequest: requestRender,
+		errorNotifier: notifications,
 		onSubmit: async (message) => {
 			await submitRpcPrompt(message, {
 				visualFixture,
@@ -174,9 +214,12 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		editorText: editor,
 		onStateChange: requestRender,
 		onRenderRequest: requestRender,
+		onExitRequest: (code) => requestHostExit(code),
 	});
 	let statsTimer: NodeJS.Timeout | undefined;
 	let statsInFlight = false;
+	let armedQuitUntil: number | undefined;
+	let stopPromise: Promise<void> | undefined;
 
 	client.onEvent((event) => {
 		if (visualFixture) return;
@@ -201,13 +244,69 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 	};
 
 	const stop = async (code = 0): Promise<void> => {
-		if (statsTimer) clearInterval(statsTimer);
+		stopPromise ??= (async () => {
+			if (statsTimer) clearInterval(statsTimer);
+			runtime?.stop(code);
+			if (!regionRegistryDisposed) {
+				regionRegistryDisposed = true;
+				regionRegistry.dispose();
+			}
+			await client.stop();
+		})();
+		await stopPromise;
+	};
+	stopHost = stop;
+	requestHostExit = (code: number): void => {
 		runtime?.stop(code);
-		if (!regionRegistryDisposed) {
-			regionRegistryDisposed = true;
-			regionRegistry.dispose();
+	};
+	const inputKind = (data: string): RpcInterruptInputKind | undefined => {
+		if (isCtrlCInput(data)) return "ctrl-c";
+		if (isEscapeInput(data)) return "escape";
+		return undefined;
+	};
+	const handlePreEditorInput = (data: string): boolean => {
+		const kind = inputKind(data);
+		if (!kind) return false;
+		const now = Date.now();
+		const modalActive = modals.getActiveKind() !== undefined;
+		const overlayActive = overlays.getActiveKind() !== undefined;
+		const decision = decideRpcInterrupt(kind, {
+			modalActive,
+			overlayActive,
+			draftNonEmpty: editor.getText().trim().length > 0,
+			isStreaming: stateStore.getSnapshot().isStreaming,
+			armedUntil: armedQuitUntil,
+			now,
+		});
+		switch (decision) {
+			case "dismiss-modal":
+				armedQuitUntil = undefined;
+				if (modalActive) modals.close();
+				else overlays.close();
+				return true;
+			case "clear-draft":
+				armedQuitUntil = undefined;
+				editor.setText("");
+				notifications.notify("draft cleared", "info");
+				return true;
+			case "abort":
+				armedQuitUntil = undefined;
+				void notifyOnError(async () => {
+					await controls.abort();
+					notifications.notify("abort requested", "info");
+				}, notifications);
+				return true;
+			case "arm-quit":
+				armedQuitUntil = now + 1_500;
+				notifications.notify("press ctrl-c again to quit", "info");
+				return true;
+			case "quit":
+				armedQuitUntil = undefined;
+				requestHostExit(130);
+				return true;
+			case "pass":
+				return false;
 		}
-		await client.stop();
 	};
 	const handleSigint = (): void => { void stop(130).then(() => process.exit(130)); };
 	const handleSigterm = (): void => { void stop(0).then(() => process.exit(0)); };
@@ -239,6 +338,7 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 				sidebar: regionRegistry.createSlotPublication("sidebar").component,
 			},
 			inputHandler: actions,
+			preEditorInputHandler: handlePreEditorInput,
 		});
 		await runtime.start();
 		if (!visualFixture) {
@@ -253,6 +353,7 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 	} finally {
 		process.removeListener("SIGINT", handleSigint);
 		process.removeListener("SIGTERM", handleSigterm);
+		process.removeListener("unhandledRejection", handleUnhandledRejection);
 		await stop();
 	}
 }

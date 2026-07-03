@@ -22,6 +22,7 @@ export interface RpcHostInput {
 	removeListener?(event: "data", listener: (data: string | Buffer) => void): unknown;
 	setRawMode?(enabled: boolean): void;
 	resume?(): void;
+	pause?(): void;
 }
 
 export interface RpcHostInputHandler {
@@ -221,6 +222,7 @@ export class RpcHostRuntime {
 		this.input?.setRawMode?.(false);
 		if (this.input?.off) this.input.off("data", this.handleInput);
 		else this.input?.removeListener?.("data", this.handleInput);
+		this.input?.pause?.();
 		if (this.output.off) this.output.off("resize", this.handleResize);
 		else this.output.removeListener?.("resize", this.handleResize);
 		this.shell?.dispose();

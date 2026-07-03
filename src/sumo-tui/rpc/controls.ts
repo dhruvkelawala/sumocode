@@ -95,6 +95,10 @@ export class RpcHostControls {
 		return responseData(await this.client.send({ type: "clone" }), "clone");
 	}
 
+	public async abort(): Promise<void> {
+		responseData(await this.client.send({ type: "abort" }), "abort");
+	}
+
 	public async getForkMessages(): Promise<RpcForkMessage[]> {
 		const data = responseData(await this.client.send({ type: "get_fork_messages" }), "get_fork_messages");
 		return data.messages;

@@ -17,6 +17,7 @@ type PendingRequest = {
 
 export type RpcEventListener = (event: AgentSessionEvent) => void;
 export type RpcUiRequestHandler = (request: RpcExtensionUIRequest, client: SumoRpcClient) => RpcExtensionUIResponse | void | Promise<RpcExtensionUIResponse | void>;
+export type RpcProtocolErrorHandler = (line: string, error: Error) => void;
 
 export interface SumoRpcClientOptions {
 	readonly command: string;
@@ -24,7 +25,12 @@ export interface SumoRpcClientOptions {
 	readonly cwd?: string;
 	readonly env?: NodeJS.ProcessEnv;
 	readonly requestTimeoutMs?: number;
+	readonly onProtocolError?: RpcProtocolErrorHandler;
 }
+
+const MAX_CONSECUTIVE_PROTOCOL_ERRORS = 3;
+const MAX_STDERR_BUFFER_LENGTH = 64 * 1024;
+const CHILD_STOP_GRACE_MS = 2_000;
 
 function toError(value: unknown): Error {
 	return value instanceof Error ? value : new Error(String(value));
@@ -54,6 +60,7 @@ export class SumoRpcClient {
 	private stdoutBuffer = "";
 	private stderrBuffer = "";
 	private nextRequestId = 0;
+	private consecutiveProtocolErrors = 0;
 	private exited = false;
 	private readonly pending = new Map<string, PendingRequest>();
 	private readonly eventListeners = new Set<RpcEventListener>();
@@ -92,6 +99,9 @@ export class SumoRpcClient {
 		child.stderr.setEncoding("utf8");
 		child.stderr.on("data", (chunk: string) => {
 			this.stderrBuffer += chunk;
+			if (this.stderrBuffer.length > MAX_STDERR_BUFFER_LENGTH) {
+				this.stderrBuffer = this.stderrBuffer.slice(-MAX_STDERR_BUFFER_LENGTH);
+			}
 		});
 		child.once("error", (error) => this.handleExit(toError(error)));
 		child.once("exit", (code, signal) => {
@@ -160,9 +170,15 @@ export class SumoRpcClient {
 		try {
 			parsed = JSON.parse(line);
 		} catch (error) {
-			this.handleExit(new Error(`Failed to parse RPC line: ${toError(error).message}. line=${line}`));
+			const parseError = toError(error);
+			this.consecutiveProtocolErrors += 1;
+			this.options.onProtocolError?.(line, parseError);
+			if (this.consecutiveProtocolErrors >= MAX_CONSECUTIVE_PROTOCOL_ERRORS) {
+				this.handleExit(new Error(`Failed to parse ${MAX_CONSECUTIVE_PROTOCOL_ERRORS} consecutive RPC lines: ${parseError.message}. line=${line}`));
+			}
 			return;
 		}
+		this.consecutiveProtocolErrors = 0;
 
 		if (isResponse(parsed)) {
 			const pending = parsed.id ? this.pending.get(parsed.id) : undefined;
@@ -193,8 +209,18 @@ export class SumoRpcClient {
 
 	private handleExit(error: Error): void {
 		this.exited = true;
+		const child = this.child;
+		if (child) this.terminateChild(child);
 		this.child = undefined;
 		this.rejectPending(error);
+	}
+
+	private terminateChild(child: ChildProcessWithoutNullStreams): void {
+		if (child.exitCode !== null || child.signalCode !== null) return;
+		child.kill("SIGTERM");
+		const forceKill = setTimeout(() => child.kill("SIGKILL"), CHILD_STOP_GRACE_MS);
+		forceKill.unref?.();
+		child.once("exit", () => clearTimeout(forceKill));
 	}
 
 	private rejectPending(error: Error): void {

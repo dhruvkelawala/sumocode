@@ -50,6 +50,7 @@ class FakeOutput {
 class FakeInput {
 	public readonly isTTY = true;
 	public readonly rawModes: boolean[] = [];
+	public pauseCount = 0;
 	private listener: ((data: string | Buffer) => void) | undefined;
 
 	public on(_event: "data", listener: (data: string | Buffer) => void): void {
@@ -65,6 +66,10 @@ class FakeInput {
 	}
 
 	public resume(): void {}
+
+	public pause(): void {
+		this.pauseCount += 1;
+	}
 
 	public emit(data: string): void {
 		this.listener?.(data);
@@ -450,6 +455,7 @@ describe("RPC host retained runtime frame", () => {
 		input.emit("\u0003");
 		await expect(runtime.waitForExit()).resolves.toBe(130);
 		expect(input.rawModes).toEqual([true, false]);
+		expect(input.pauseCount).toBe(1);
 		expect(terminal.getState()).toMatchObject({ restored: true });
 	});
 

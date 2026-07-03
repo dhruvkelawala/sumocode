@@ -206,6 +206,14 @@ describe("RpcHostControls", () => {
 		]);
 	});
 
+	it("sends the abort control payload", async () => {
+		const client = new FakeClient({ type: "response", command: "abort", success: true });
+		const controls = new RpcHostControls(client);
+
+		await expect(controls.abort()).resolves.toBeUndefined();
+		expect(client.commands).toEqual([{ type: "abort" }]);
+	});
+
 	it("throws Pi error responses with the failed command and server text", async () => {
 		const client = new FakeClient({
 			type: "response",

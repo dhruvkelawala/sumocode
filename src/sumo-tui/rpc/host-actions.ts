@@ -30,6 +30,7 @@ import type { ModalManager } from "../widgets/modal.js";
 import type { NotificationCenter, NotificationLevel } from "../widgets/notification.js";
 import type { RpcHostControls, RpcModelOption, RpcSessionStats, RpcThinkingLevel } from "./controls.js";
 import type { RpcHostOverlayManager } from "./host-overlays.js";
+import { notifyOnError } from "./safe-send.js";
 import type { RpcHostStateStore } from "./state.js";
 
 export const RPC_HOST_COMMAND_PALETTE_INPUT = "\u001f";
@@ -53,6 +54,7 @@ export interface RpcHostActionsOptions {
 	readonly createMemoryClient?: MemoryClientFactory;
 	readonly onStateChange?: () => void;
 	readonly onRenderRequest?: () => void;
+	readonly onExitRequest?: (code: number) => void;
 }
 
 const THINKING_LEVELS: readonly RpcThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh"];
@@ -70,6 +72,7 @@ export const RPC_HOST_SLASH_COMMANDS: readonly RpcHostSlashCommand[] = Object.fr
 	{ name: "sessions", description: "Open session controls" },
 	{ name: "session", description: "Show session info and stats" },
 	{ name: "name", description: "Rename the current session" },
+	{ name: "quit", description: "Quit SumoCode" },
 	{ name: "sumo:memory", description: "Open or update SumoCode memory" },
 	{ name: "sumo:theme-check", description: "Preview current theme tokens" },
 	{ name: "sumo:approval", description: "Preview approval overlay" },
@@ -215,6 +218,7 @@ export class RpcHostActions {
 	private readonly createMemoryClient: MemoryClientFactory;
 	private readonly onStateChange: () => void;
 	private readonly onRenderRequest: () => void;
+	private readonly onExitRequest: (code: number) => void;
 
 	public constructor(options: RpcHostActionsOptions) {
 		this.controls = options.controls;
@@ -226,11 +230,12 @@ export class RpcHostActions {
 		this.createMemoryClient = options.createMemoryClient ?? createRemnicMemoryClient;
 		this.onStateChange = options.onStateChange ?? (() => undefined);
 		this.onRenderRequest = options.onRenderRequest ?? (() => undefined);
+		this.onExitRequest = options.onExitRequest ?? (() => undefined);
 	}
 
 	public handleInput(data: string): boolean {
 		if (data === RPC_HOST_COMMAND_PALETTE_INPUT || data === "ctrl+/" || matchesKey(data, Key.ctrl("/"))) {
-			void this.openCommandPalette();
+			void notifyOnError(() => this.openCommandPalette(), this.notifications);
 			return true;
 		}
 		return false;
@@ -276,6 +281,9 @@ export class RpcHostActions {
 				return true;
 			case "/settings":
 				await this.openSettings();
+				return true;
+			case "/quit":
+				this.onExitRequest(0);
 				return true;
 			case "/sumo:memory":
 				await this.handleMemoryCommand(args);
@@ -445,7 +453,9 @@ export class RpcHostActions {
 			return;
 		}
 		if (command === "status") {
-			notify(this.notifications, formatMemoryStatus(await client.status()), "info");
+			await notifyOnError(async () => {
+				notify(this.notifications, formatMemoryStatus(await client.status()), "info");
+			}, this.notifications);
 			return;
 		}
 		if (command === "add") {
@@ -454,8 +464,10 @@ export class RpcHostActions {
 				notify(this.notifications, "usage: /sumo:memory add <text>", "info");
 				return;
 			}
-			await client.add(text);
-			notify(this.notifications, `memory added: ${text.slice(0, 40)}${text.length > 40 ? "…" : ""}`, "info");
+			await notifyOnError(async () => {
+				await client.add(text);
+				notify(this.notifications, `memory added: ${text.slice(0, 40)}${text.length > 40 ? "…" : ""}`, "info");
+			}, this.notifications);
 			return;
 		}
 		if (command === "forget") {
@@ -464,8 +476,10 @@ export class RpcHostActions {
 				notify(this.notifications, "usage: /sumo:memory forget <fact-id>", "info");
 				return;
 			}
-			await client.forget(id);
-			notify(this.notifications, `memory forgotten: ${id}`, "info");
+			await notifyOnError(async () => {
+				await client.forget(id);
+				notify(this.notifications, `memory forgotten: ${id}`, "info");
+			}, this.notifications);
 			return;
 		}
 		notify(this.notifications, "usage: /sumo:memory [edit|add <text>|forget <id>|status]", "info");

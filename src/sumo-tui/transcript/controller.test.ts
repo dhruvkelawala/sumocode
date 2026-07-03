@@ -130,6 +130,29 @@ describe("TranscriptController live-state clearing", () => {
 		expect(controller.getLiveStateSnapshot()).toMatchObject({ liveTools: 0, taskPartials: 0, draftMessage: false });
 	});
 
+	it("clears a tool still mid-execution when agent_end fires (e.g. an aborted run)", () => {
+		const controller = new TranscriptController();
+		controller.handleAgentEvent({ type: "agent_start" });
+		controller.handleAgentEvent({
+			type: "tool_execution_start",
+			toolCallId: "tool-running",
+			toolName: "bash",
+			args: { command: "long-running-command" },
+		});
+
+		expect(controller.getLiveStateSnapshot()).toMatchObject({ liveTools: 1 });
+
+		controller.handleAgentEvent({
+			type: "agent_end",
+			messages: [{ id: "u1", role: "user", content: "q" }, { id: "a1", role: "assistant", content: "aborted", stopReason: "aborted" }],
+		});
+
+		// agent_end means the run truly ended -- the authoritative messages array
+		// is now the source of truth, so no live tool state should remain even for
+		// a tool that never reached tool_execution_end.
+		expect(controller.getLiveStateSnapshot()).toMatchObject({ liveTools: 0 });
+	});
+
 	it("clears live task partials on rehydrate", () => {
 		const controller = new TranscriptController();
 		controller.handleAgentEvent({

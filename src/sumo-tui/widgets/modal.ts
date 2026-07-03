@@ -78,6 +78,10 @@ function sanitizeModalText(text: string): string {
 		.replace(CONTROL_PATTERN, "");
 }
 
+function sanitizeSingleLineModalText(text: string): string {
+	return sanitizeModalText(text).replace(/\n/g, " ");
+}
+
 function sanitizeInputChunk(text: string): string {
 	return sanitizeModalText(text)
 		.replaceAll(BRACKETED_PASTE_START, "")
@@ -142,7 +146,7 @@ export class ModalManager implements Component {
 			const entry: ActiveModal = {
 				kind: "select",
 				title: sanitizeModalText(title),
-				options: options.map((option) => ({ label: sanitizeModalText(option), value: option })),
+				options: options.map((option) => ({ label: sanitizeSingleLineModalText(option), value: option })),
 				selectedIndex: 0,
 				resolve,
 				cleanup: () => undefined,
@@ -157,7 +161,7 @@ export class ModalManager implements Component {
 			const entry: ActiveModal = {
 				kind: "input",
 				title: sanitizeModalText(title),
-				placeholder: placeholder === undefined ? undefined : sanitizeModalText(placeholder),
+				placeholder: placeholder === undefined ? undefined : sanitizeSingleLineModalText(placeholder),
 				value: "",
 				resolve,
 				cleanup: () => undefined,

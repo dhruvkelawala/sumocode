@@ -81,17 +81,36 @@ describe("ModalManager", () => {
 
 	it("displays sanitized select labels but resolves the original raw option value", async () => {
 		const modals = new ModalManager();
-		const rawOption = "\u001b[31mStyled\tChoice\u001b[0m\u0007";
+		const rawOption = "\u001b[31mStyled\tChoice\u001b[0m\nextra\u0007";
 		const result = modals.select("Pick", [rawOption]);
 
-		const rendered = modals.render(80).join("\n");
+		const renderedLines = modals.render(80);
+		const rendered = renderedLines.join("\n");
+		const optionRows = renderedLines.filter((line) => line.includes("Styled") || line.includes("extra"));
 
-		expect(rendered).toContain("Styled Choice");
+		expect(optionRows).toHaveLength(1);
+		expect(optionRows[0]).toContain("Styled Choice extra");
 		expect(rendered).not.toContain("\u001b[31m");
 		expect(rendered).not.toContain("\u0007");
+		expect(renderedLines.every((line) => !line.includes("\n") && !line.includes("\r"))).toBe(true);
 
 		modals.handleInput("enter");
 		await expect(result).resolves.toBe(rawOption);
+	});
+
+	it("renders input placeholder newlines and control bytes as a single sanitized row", () => {
+		const modals = new ModalManager();
+		void modals.input("Path", "Line one\n\u001b[31mline two\u001b[0m\u0001");
+
+		const renderedLines = modals.render(80);
+		const rendered = renderedLines.join("\n");
+		const placeholderRows = renderedLines.filter((line) => line.includes("Line one") || line.includes("line two"));
+
+		expect(placeholderRows).toHaveLength(1);
+		expect(placeholderRows[0]).toContain("> Line one line two");
+		expect(rendered).not.toContain("\u001b[31m");
+		expect(rendered).not.toContain("\u0001");
+		expect(renderedLines.every((line) => !line.includes("\n") && !line.includes("\r"))).toBe(true);
 	});
 
 	it("accepts multi-character pasted text in input modals", async () => {

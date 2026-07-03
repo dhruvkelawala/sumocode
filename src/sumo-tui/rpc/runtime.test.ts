@@ -11,6 +11,7 @@ import { TerminalSessionOwner } from "../runtime/terminal-controller.js";
 import { RpcHostEditorController } from "./editor.js";
 import { submitRpcPrompt } from "./host.js";
 import { renderRpcHostFrameForTest, RpcHostRuntime } from "./runtime.js";
+import { RpcShellAdapter } from "./shell-adapter.js";
 import type { RpcHostChromeState } from "./state.js";
 import { rpcVisualFixtureFromEnv } from "./visual-fixtures.js";
 import { ChatPager } from "../widgets/chat-pager.js";
@@ -843,6 +844,31 @@ describe("RPC host retained runtime frame", () => {
 		runtime.stop();
 
 		expect(terminal.cursors.some((cursor) => cursor !== null)).toBe(true);
+	});
+
+	it("wires the copy-key input token through to the shell's selection controller (handleSelectionKey)", async () => {
+		const output = new FakeOutput();
+		const input = new FakeInput();
+		const terminal = new TerminalSessionOwner({ output });
+		const handleSelectionKey = vi.spyOn(RpcShellAdapter.prototype, "handleSelectionKey");
+		const runtime = new RpcHostRuntime({
+			output,
+			input,
+			terminal,
+			initialState: state(),
+			initialTranscript: { messages: [] },
+		});
+
+		try {
+			await runtime.start();
+			handleSelectionKey.mockClear();
+			input.emit("cmd+c");
+
+			expect(handleSelectionKey).toHaveBeenCalledWith({ key: "c", sequence: "cmd+c", meta: true });
+		} finally {
+			runtime.stop();
+			handleSelectionKey.mockRestore();
+		}
 	});
 
 	it("keeps the duplicate RPC full-frame compositor out of runtime.ts", () => {

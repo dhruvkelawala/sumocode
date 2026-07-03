@@ -290,7 +290,7 @@ describe("RpcHostActions", () => {
 	});
 
 	it("handles RPC path slash controls for model, thinking, compaction, and settings", async () => {
-		const { actions, controls, modals, notifications } = setup();
+		const { actions, controls, inlineSelectors, notifications } = setup();
 
 		await expect(actions.handleSubmittedText("/model openai/gpt-5")).resolves.toBe(true);
 		await expect(actions.handleSubmittedText("/thinking high")).resolves.toBe(true);
@@ -298,9 +298,9 @@ describe("RpcHostActions", () => {
 
 		const settings = actions.handleSubmittedText("/settings");
 		await flush();
-		expect(modals.getActiveKind()).toBe("select");
-		modals.handleInput(Key.down);
-		modals.handleInput(Key.enter);
+		expect(inlineSelectors.getActiveKind()).toBe("select");
+		inlineSelectors.handleInput(SELECTOR_DOWN);
+		inlineSelectors.handleInput(SELECTOR_ENTER);
 		await settings;
 
 		expect(controls.calls).toContain("setModel:openai/gpt-5");

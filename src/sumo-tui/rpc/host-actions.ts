@@ -395,7 +395,7 @@ export class RpcHostActions {
 	}
 
 	public async openSettings(): Promise<void> {
-		const selected = await this.modals.select("RPC settings", [
+		const selected = await this.inlineSelectors.select("RPC settings", [
 			"Enable auto compaction",
 			"Disable auto compaction",
 			"Enable auto retry",

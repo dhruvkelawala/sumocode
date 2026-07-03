@@ -480,6 +480,32 @@ describe("RPC host retained runtime frame", () => {
 		expect(input.encodings).toEqual(["utf8"]);
 	});
 
+	it("wires Apple Terminal input normalization ahead of routing (documented no-op today: no public shift-detection API)", async () => {
+		const output = new FakeOutput();
+		const input = new FakeInput();
+		const editor = new FakeEditor();
+		const runtime = new RpcHostRuntime({
+			output,
+			input,
+			editor,
+			env: { TERM_PROGRAM: "Apple_Terminal" } as NodeJS.ProcessEnv,
+			initialState: state(),
+			initialTranscript: { messages: [] },
+		});
+
+		await runtime.start();
+		input.emit("\r");
+
+		// Because isShiftPressed is hardcoded false (no public API to detect
+		// the shift modifier on Apple Terminal -- see
+		// normalizeAppleTerminalInput's doc comment in shared-input-router.ts),
+		// a bare \r reaches the editor unchanged rather than being rewritten to
+		// the CSI-u Shift+Enter sequence. This pins today's documented
+		// limitation; a future native-modifier probe would change this
+		// assertion, not the wiring.
+		expect(editor.inputs).toEqual(["\r"]);
+	});
+
 	// The RpcHostInput fake above emits whole strings, so it can't reproduce
 	// a real pty splitting a multibyte UTF-8 codepoint's bytes across two
 	// separate 'data' events. What actually fixes defect 4 is calling

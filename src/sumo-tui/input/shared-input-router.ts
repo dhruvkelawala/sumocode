@@ -170,6 +170,55 @@ export function isEscapeInput(data: string): boolean {
 	return data === "\u001b" || data === "escape" || data === "esc" || matchesKey(data, Key.escape);
 }
 
+const APPLE_TERMINAL_SHIFT_ENTER_SEQUENCE = "\x1b[13;2u";
+
+/**
+ * True on macOS's Terminal.app. Apple Terminal doesn't support the Kitty
+ * keyboard protocol or xterm's modifyOtherKeys, so a Shift+Enter keypress
+ * there arrives as a bare `\r` -- indistinguishable from plain Enter -- with
+ * no way to recover the Shift modifier from the byte stream alone.
+ *
+ * This is a local, from-scratch reimplementation of the equivalent check in
+ * pi-tui's `terminal.ts` (`process.platform === "darwin" && process.env
+ * .TERM_PROGRAM === "Apple_Terminal"`), NOT an import of it: that function
+ * lives in an internal, non-exported module
+ * (`@earendil-works/pi-tui/dist/terminal.js`) -- only `ProcessTerminal`/
+ * `Terminal` are re-exported from pi-tui's public package entrypoint
+ * (`dist/index.js`) -- and reaching into it would mean depending on pi-tui
+ * internals with no stability guarantee.
+ */
+export function isAppleTerminalSession(env: NodeJS.ProcessEnv = process.env): boolean {
+	return process.platform === "darwin" && env.TERM_PROGRAM === "Apple_Terminal";
+}
+
+/**
+ * Rewrites a bare Enter (`\r`) into the CSI-u Shift+Enter sequence the
+ * editor already recognizes as "insert newline" (see editor.ts's
+ * `CSI_U_ENTER` / cathedral-editor's multiline handling) when running in an
+ * Apple Terminal session with Shift held.
+ *
+ * Local reimplementation of the equivalent function in pi-tui's
+ * `terminal.ts` (same non-exported-module rationale as
+ * `isAppleTerminalSession` above).
+ *
+ * LIMITATION: `isShiftPressed` has no public-API way to be determined on
+ * Apple Terminal. Pi-tui's own implementation resolves it via
+ * `isNativeModifierPressed`, which loads a compiled, platform-specific
+ * native addon (`native/darwin/prebuilds/.../darwin-modifiers.node`) that is
+ * not part of pi-tui's exported surface and cannot be vendored without
+ * bundling a native binary ourselves. Every call site in this codebase
+ * currently passes `isShiftPressed: false`, so this function is a no-op on
+ * Apple Terminal today (bare `\r` stays bare `\r`) -- Shift+Enter cannot be
+ * distinguished from plain Enter there. This does not regress anything
+ * (nothing was normalized before this change either); it establishes the
+ * correct call shape so a future native-modifier probe can be substituted
+ * without touching call sites.
+ */
+export function normalizeAppleTerminalInput(data: string, isAppleTerminal: boolean, isShiftPressed: boolean): string {
+	if (isAppleTerminal && data === "\r" && isShiftPressed) return APPLE_TERMINAL_SHIFT_ENTER_SEQUENCE;
+	return data;
+}
+
 /**
  * True when a possibly multi-token, coalesced stdin chunk contains a
  * discrete Ctrl-C key token once split into individual input tokens.

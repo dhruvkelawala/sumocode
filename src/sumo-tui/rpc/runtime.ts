@@ -3,7 +3,7 @@ import type { CellBuffer } from "../render/buffer.js";
 import { logDiagnostic } from "../runtime/diagnostics.js";
 import { defaultTerminalSessionOwner, type TerminalOutput, type TerminalSessionOwner } from "../runtime/terminal-controller.js";
 import type { TranscriptViewModel } from "../transcript/view-model.js";
-import { containsCtrlCToken, isEscapeInput, SharedInputRouter } from "../input/shared-input-router.js";
+import { containsCtrlCToken, isAppleTerminalSession, isEscapeInput, normalizeAppleTerminalInput, SharedInputRouter } from "../input/shared-input-router.js";
 import { RpcShellAdapter } from "./shell-adapter.js";
 import type { RpcHostChromeState } from "./state.js";
 
@@ -60,6 +60,7 @@ export interface RpcHostRuntimeOptions {
 	};
 	readonly inputHandler?: RpcHostInputHandler;
 	readonly preEditorInputHandler?: (data: string) => boolean | void;
+	readonly env?: NodeJS.ProcessEnv;
 }
 
 export interface RpcHostRuntimeSnapshot {
@@ -107,6 +108,7 @@ export class RpcHostRuntime {
 	private stopped = false;
 	private exitCode: number | undefined;
 	private readonly waiters: Array<(code: number) => void> = [];
+	private readonly isAppleTerminal: boolean;
 	private readonly handleResize = (): void => this.render();
 	private readonly handleInput = (data: string | Buffer): void => {
 		// With setEncoding('utf8') applied in start(), a real stdin stream's
@@ -118,13 +120,21 @@ export class RpcHostRuntime {
 		// across two Buffers), since toString('utf8') per-chunk cannot
 		// reassemble a split sequence.
 		const text = typeof data === "string" ? data : data.toString("utf8");
-		this.inputRouter.handleInput(text);
+		// Apple Terminal sends a bare \r for both plain Enter and Shift+Enter
+		// (no Kitty protocol / modifyOtherKeys support), so without a shift
+		// probe this is a no-op today -- see normalizeAppleTerminalInput's
+		// doc comment for why isShiftPressed is hardcoded false. Applied
+		// before routing so both the interrupt gates and the editor see the
+		// normalized sequence uniformly with pi's own input path.
+		const normalized = normalizeAppleTerminalInput(text, this.isAppleTerminal, false);
+		this.inputRouter.handleInput(normalized);
 	};
 
 	public constructor(options: RpcHostRuntimeOptions = {}) {
 		this.output = options.output ?? process.stdout;
 		this.input = options.input ?? (process.stdin as RpcHostInput);
 		this.terminal = options.terminal ?? defaultTerminalSessionOwner;
+		this.isAppleTerminal = isAppleTerminalSession(options.env ?? process.env);
 		this.state = options.initialState ?? FALLBACK_STATE;
 		this.transcript = options.initialTranscript ?? EMPTY_TRANSCRIPT;
 		this.inputPreview = options.inputPreview;

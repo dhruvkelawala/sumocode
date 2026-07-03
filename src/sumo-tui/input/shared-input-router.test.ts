@@ -1,5 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
-import { containsCtrlCToken, filterKeyReleaseEvents, isCtrlCInput, SharedInputRouter, splitInputTokens } from "./shared-input-router.js";
+import {
+	containsCtrlCToken,
+	filterKeyReleaseEvents,
+	isAppleTerminalSession,
+	isCtrlCInput,
+	normalizeAppleTerminalInput,
+	SharedInputRouter,
+	splitInputTokens,
+} from "./shared-input-router.js";
 
 const CTRL_SLASH = "";
 
@@ -289,5 +297,42 @@ describe("SharedInputRouter paste containing a literal Ctrl-C byte", () => {
 
 		expect(triggeredWith).toEqual([CSI_U_CTRL_C]);
 		expect(forwardToEditor).not.toHaveBeenCalled();
+	});
+});
+
+describe("isAppleTerminalSession / normalizeAppleTerminalInput (TERM_PROGRAM stubbed)", () => {
+	it("is true only on darwin with TERM_PROGRAM=Apple_Terminal", () => {
+		const appleTerminalEnv = { TERM_PROGRAM: "Apple_Terminal" } as NodeJS.ProcessEnv;
+		const otherTerminalEnv = { TERM_PROGRAM: "iTerm.app" } as NodeJS.ProcessEnv;
+		const noTerminalEnv = {} as NodeJS.ProcessEnv;
+
+		// isAppleTerminalSession also gates on process.platform === "darwin", which
+		// this test cannot stub -- assert against the actual runtime platform so
+		// the test is meaningful on darwin CI/dev machines and still correct
+		// (vacuously false) on any other platform.
+		const onDarwin = process.platform === "darwin";
+		expect(isAppleTerminalSession(appleTerminalEnv)).toBe(onDarwin);
+		expect(isAppleTerminalSession(otherTerminalEnv)).toBe(false);
+		expect(isAppleTerminalSession(noTerminalEnv)).toBe(false);
+	});
+
+	it("rewrites bare Enter to the CSI-u Shift+Enter sequence only when Apple Terminal AND shift are both true", () => {
+		expect(normalizeAppleTerminalInput("\r", true, true)).toBe("\x1b[13;2u");
+	});
+
+	it("leaves bare Enter untouched when not an Apple Terminal session", () => {
+		expect(normalizeAppleTerminalInput("\r", false, true)).toBe("\r");
+	});
+
+	it("leaves bare Enter untouched when shift is not detected -- the current, documented limitation (no public shift-detection API)", () => {
+		// Every call site in this codebase passes isShiftPressed: false today
+		// (see runtime.ts), because there is no public API to detect the shift
+		// modifier on Apple Terminal. This assertion pins that no-op behavior.
+		expect(normalizeAppleTerminalInput("\r", true, false)).toBe("\r");
+	});
+
+	it("leaves non-Enter input untouched regardless of Apple Terminal / shift state", () => {
+		expect(normalizeAppleTerminalInput("x", true, true)).toBe("x");
+		expect(normalizeAppleTerminalInput("\n", true, true)).toBe("\n");
 	});
 });

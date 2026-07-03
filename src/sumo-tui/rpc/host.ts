@@ -407,6 +407,7 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		runtime = new RpcHostRuntime({
 			output: stdout,
 			input: stdin,
+			env,
 			initialState: state,
 			initialTranscript: transcript,
 			inputPreview: visualFixture?.inputPreview,

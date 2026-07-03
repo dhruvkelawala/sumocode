@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ChatMessageViewModel } from "../transcript/view-model.js";
-import { createLazyChatSink, createRpcExitHandler, createRpcHostInterruptHandler, createUnhandledRejectionHandler, type RpcHostExitDependencies, type RpcHostInterruptDependencies } from "./host.js";
+import { SUMOCODE_RELOAD_EXIT_CODE } from "../../commands/reload.js";
+import { RpcChildExitError } from "./client.js";
+import { createLazyChatSink, createRpcExitHandler, createRpcHostInterruptHandler, createUnhandledRejectionHandler, submitInitialPromptFromEnv, type RpcHostExitDependencies, type RpcHostInterruptDependencies } from "./host.js";
 
 function flush(): Promise<void> {
 	return Promise.resolve().then(() => Promise.resolve());
@@ -262,6 +264,70 @@ describe("RPC host client-exit shutdown", () => {
 
 		expect(requestRender).toHaveBeenCalled();
 	});
+
+	// /sumo:reload (src/commands/reload.ts) process.exit(100)s the RPC child
+	// deliberately. bin/sumocode.sh's respawn loop only relaunches when the
+	// HOST process itself exits 100, so the host must propagate that exact
+	// code -- and must not show the "exited unexpectedly" crash notification
+	// for what is a routine, user-requested reload.
+	it("exits the host with code 100 (no crash notification) when the child exits via /sumo:reload", async () => {
+		vi.useFakeTimers();
+		try {
+			const notifications = { notify: vi.fn() };
+			const stopHost = vi.fn(async (_code: number) => undefined);
+			const exit = vi.fn((_code: number) => undefined);
+			const handle = createRpcExitHandler(exitDeps({ notifications, stopHost, exit, shutdownDelayMs: 750 }));
+
+			handle(new RpcChildExitError(`RPC child exited code=${SUMOCODE_RELOAD_EXIT_CODE} signal=null.`, { code: SUMOCODE_RELOAD_EXIT_CODE, signal: null }));
+			await flush();
+
+			expect(notifications.notify).not.toHaveBeenCalled();
+			expect(stopHost).toHaveBeenCalledWith(SUMOCODE_RELOAD_EXIT_CODE);
+			expect(exit).toHaveBeenCalledWith(SUMOCODE_RELOAD_EXIT_CODE);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("does not wait out the shutdown delay for a reload exit (no notification needs time to render)", async () => {
+		vi.useFakeTimers();
+		try {
+			const stopHost = vi.fn(async (_code: number) => undefined);
+			const exit = vi.fn((_code: number) => undefined);
+			const handle = createRpcExitHandler(exitDeps({ stopHost, exit, shutdownDelayMs: 750 }));
+
+			handle(new RpcChildExitError("reload", { code: SUMOCODE_RELOAD_EXIT_CODE, signal: null }));
+			await flush();
+
+			expect(stopHost).toHaveBeenCalledOnce();
+			expect(exit).toHaveBeenCalledOnce();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("still shows the crash notification and uses the configured (not the child's) exit code for a real crash carrying a structured exit code", async () => {
+		vi.useFakeTimers();
+		try {
+			const notifications = { notify: vi.fn() };
+			const stopHost = vi.fn(async (_code: number) => undefined);
+			const exit = vi.fn((_code: number) => undefined);
+			// exitCode: 7 is distinct from both the child's own crash code (2) and
+			// the default (1), so a pass here can't be a coincidence of the two
+			// numbers happening to match -- it proves the handler used the
+			// configured host exitCode, not error.code, for a non-100 exit.
+			const handle = createRpcExitHandler(exitDeps({ notifications, stopHost, exit, shutdownDelayMs: 750, exitCode: 7 }));
+
+			handle(new RpcChildExitError("RPC child exited code=2 signal=null.", { code: 2, signal: null }));
+			await vi.advanceTimersByTimeAsync(750);
+
+			expect(notifications.notify).toHaveBeenCalledOnce();
+			expect(stopHost).toHaveBeenCalledWith(7);
+			expect(exit).toHaveBeenCalledWith(7);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
 });
 
 describe("createLazyChatSink (B9 host wiring)", () => {
@@ -324,5 +390,47 @@ describe("createLazyChatSink (B9 host wiring)", () => {
 
 		expect(addViewModel).toHaveBeenCalledTimes(1);
 		expect(addViewModel).toHaveBeenCalledWith(message);
+	});
+});
+
+describe("submitInitialPromptFromEnv (SUMOCODE_INITIAL_PROMPT seam)", () => {
+	// bin/sumocode.sh strips a task/prompt positional out of the argv it
+	// forwards to `pi --mode rpc` (which never reads argv positionals -- only
+	// InteractiveMode does) and hands it to the host via this env var instead.
+	// runRpcHost submits it through `submitFromEditor`, the exact same function
+	// wired as the editor's onSubmit, once client.start() + initial hydration
+	// have completed.
+
+	it("submits exactly one prompt after start when SUMOCODE_INITIAL_PROMPT is set", async () => {
+		const submit = vi.fn(async (_message: string) => undefined);
+
+		await submitInitialPromptFromEnv({ SUMOCODE_INITIAL_PROMPT: "review the diff" }, submit);
+
+		expect(submit).toHaveBeenCalledOnce();
+		expect(submit).toHaveBeenCalledWith("review the diff");
+	});
+
+	it("submits nothing when SUMOCODE_INITIAL_PROMPT is absent", async () => {
+		const submit = vi.fn(async (_message: string) => undefined);
+
+		await submitInitialPromptFromEnv({}, submit);
+
+		expect(submit).not.toHaveBeenCalled();
+	});
+
+	it("submits nothing when SUMOCODE_INITIAL_PROMPT is blank", async () => {
+		const submit = vi.fn(async (_message: string) => undefined);
+
+		await submitInitialPromptFromEnv({ SUMOCODE_INITIAL_PROMPT: "" }, submit);
+
+		expect(submit).not.toHaveBeenCalled();
+	});
+
+	it("propagates a submit failure instead of swallowing it", async () => {
+		const submit = vi.fn(async (_message: string) => {
+			throw new Error("child not ready");
+		});
+
+		await expect(submitInitialPromptFromEnv({ SUMOCODE_INITIAL_PROMPT: "review the diff" }, submit)).rejects.toThrow("child not ready");
 	});
 });

@@ -18,6 +18,38 @@ type PendingRequest = {
 export type RpcEventListener = (event: AgentSessionEvent) => void;
 export type RpcUiRequestHandler = (request: RpcExtensionUIRequest, client: SumoRpcClient) => RpcExtensionUIResponse | void | Promise<RpcExtensionUIResponse | void>;
 export type RpcProtocolErrorHandler = (line: string, error: Error) => void;
+
+/**
+ * The RPC child's process exit code/signal, structurally exposed alongside
+ * the formatted `onExit` error instead of requiring callers to regex-parse
+ * `error.message` (previously the only way to tell "child exited 100 for a
+ * deliberate `/sumo:reload`" apart from "child crashed" -- see
+ * RpcChildExitError and createRpcExitHandler in host.ts).
+ */
+export interface RpcChildExitInfo {
+	readonly code: number | null;
+	readonly signal: NodeJS.Signals | null;
+}
+
+/**
+ * `onExit`'s error for a normal child-process "exit" event carries the
+ * process's exit code/signal as typed fields (`undefined` for the "error"
+ * event case, e.g. spawn failure, which has no process exit code). Consumers
+ * that only care about the message keep working unchanged since this is
+ * still a plain `Error`.
+ */
+export class RpcChildExitError extends Error {
+	public readonly code: number | null | undefined;
+	public readonly signal: NodeJS.Signals | null | undefined;
+
+	public constructor(message: string, info?: RpcChildExitInfo) {
+		super(message);
+		this.name = "RpcChildExitError";
+		this.code = info?.code;
+		this.signal = info?.signal;
+	}
+}
+
 export type RpcExitListener = (error: Error) => void;
 
 export interface SumoRpcClientOptions {
@@ -142,7 +174,7 @@ export class SumoRpcClient {
 		});
 		child.once("error", (error) => this.handleExit(toError(error)));
 		child.once("exit", (code, signal) => {
-			this.handleExit(new Error(`RPC child exited code=${code ?? "null"} signal=${signal ?? "null"}. stderr=${this.stderrBuffer}`));
+			this.handleExit(new RpcChildExitError(`RPC child exited code=${code ?? "null"} signal=${signal ?? "null"}. stderr=${this.stderrBuffer}`, { code, signal }));
 		});
 
 		await new Promise((resolve) => setTimeout(resolve, 50));

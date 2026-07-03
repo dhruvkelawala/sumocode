@@ -397,6 +397,56 @@ args_request_noninteractive_pi() {
 	return 1
 }
 
+# Extracts the first plain (non-flag) positional from SUMOCODE_ARGS, matching
+# Pi's own CLI contract: `parsed.messages[0]` (the first bare positional in
+# argv order -- see @earendil-works/pi-coding-agent's cli/args.js and
+# cli/initial-message.js) becomes the kickoff/initial message in interactive
+# mode. `--mode rpc` never reads this positional at all (rpc-mode.js only
+# consumes stdin JSON commands), so on the RPC path this positional would
+# silently vanish unless the launcher forwards it through a side channel.
+#
+# Sets EXTRACTED_INITIAL_PROMPT to the found value (empty if none) and
+# rewrites SUMOCODE_ARGS in place with that single element removed, preserving
+# order of everything else. Only the FIRST plain positional is extracted --
+# this mirrors Pi's own single-`initialMessage` behavior and intentionally
+# does not attempt to replicate `initialMessages` (multi-message replay) for
+# any remaining positionals; those still forward to the RPC child's argv
+# unchanged (and are still silently ignored there, same as before this fix,
+# which is a pre-existing multi-positional limitation out of scope here).
+#
+# KNOWN LIMITATION (pre-existing, not introduced by this function): this
+# wrapper's own arg loop above forwards every unrecognized `-*` flag to
+# SUMOCODE_ARGS opaquely -- it does not know which of those flags consume a
+# following value (e.g. `--model foo/bar`), unlike Pi's own cli/args.js, which
+# has an explicit per-flag table for this. So `sumocode --model foo/bar "review
+# the diff"` on the RPC path extracts `foo/bar` (the flag's value) as the
+# "first plain positional" instead of the real prompt. This exact ordering
+# already behaves surprisingly today on the direct-Pi path too, just
+# differently (Pi's own parser resolves it correctly there because Pi *does*
+# know --model takes a value) -- it is a structural fact about this wrapper's
+# opaque-forwarding model for unknown flags, not something this seam can fix
+# without duplicating Pi's entire flag table here. Placing the prompt as the
+# ONLY positional (`sumocode "prompt"`, `sumocode task "prompt"`) is unaffected
+# and is the documented, common case this fix targets.
+extract_first_positional() {
+	EXTRACTED_INITIAL_PROMPT=""
+	local -a kept=()
+	local found=0
+	local arg
+	for arg in "${SUMOCODE_ARGS[@]:-}"; do
+		if [[ "${found}" -eq 0 && -n "${arg}" && "${arg}" != -* ]]; then
+			EXTRACTED_INITIAL_PROMPT="${arg}"
+			found=1
+			continue
+		fi
+		kept+=("${arg}")
+	done
+	SUMOCODE_ARGS=("${kept[@]:-}")
+	if [[ "${#SUMOCODE_ARGS[@]}" -eq 1 && -z "${SUMOCODE_ARGS[0]}" ]]; then
+		SUMOCODE_ARGS=()
+	fi
+}
+
 pi_main_file() {
 	local bin="$1"
 	local resolved dir cli_target cli_path main_file fallback local_main
@@ -537,6 +587,15 @@ else
 fi
 
 if [[ "${DRY_RUN}" == "1" ]]; then
+	# Mirror the real RPC-path argv rewrite (see extract_first_positional and
+	# its call site below) so --dry-run output shows exactly what will be
+	# forwarded to the RPC host/child, including the SUMOCODE_INITIAL_PROMPT
+	# side channel, instead of the pre-extraction argv.
+	DRY_RUN_INITIAL_PROMPT=""
+	if [[ "${USE_RPC_HOST}" -eq 1 ]]; then
+		extract_first_positional
+		DRY_RUN_INITIAL_PROMPT="${EXTRACTED_INITIAL_PROMPT}"
+	fi
 	cat <<EOF
 sumocode dry run
 PI_BIN=${PI_BIN}
@@ -547,6 +606,7 @@ SUMO_TUI_DIAG_FILE=${SUMO_TUI_DIAG_FILE:-}
 SUMO_TUI_DEBUG=${SUMO_TUI_DEBUG:-}
 COMMAND=${COMMAND}
 ARGS=${SUMOCODE_ARGS[*]:-}
+SUMOCODE_INITIAL_PROMPT=${DRY_RUN_INITIAL_PROMPT}
 exec $(if [[ "${USE_RPC_HOST}" -eq 1 ]]; then printf 'node %s' "${ROOT_DIR}/sumo-rpc-host.js"; else printf '%s -e %s/src/extension.ts' "${PI_BIN}" "${ROOT_DIR}"; fi) ${SUMOCODE_ARGS[*]:-}
 EOF
 	exit 0
@@ -557,16 +617,122 @@ fi
 SUMOCODE_RELOAD_EXIT_CODE=100
 
 if [[ "${USE_RPC_HOST}" -eq 1 ]]; then
-	if [[ "${#SUMOCODE_ARGS[@]}" -eq 0 ]]; then
-		exec env SUMOCODE_ROOT_DIR="${ROOT_DIR}" SUMOCODE_PROJECT_CWD="${PWD}" PI_BIN="${PI_BIN}" node "${ROOT_DIR}/sumo-rpc-host.js"
-	else
-		exec env SUMOCODE_ROOT_DIR="${ROOT_DIR}" SUMOCODE_PROJECT_CWD="${PWD}" PI_BIN="${PI_BIN}" node "${ROOT_DIR}/sumo-rpc-host.js" "${SUMOCODE_ARGS[@]}"
-	fi
+	# `pi --mode rpc` (spawned by the RPC host as its child) never reads argv
+	# positionals as a kickoff message -- rpc-mode.js only consumes stdin JSON
+	# commands (see extract_first_positional's comment). Pull the first plain
+	# positional out of SUMOCODE_ARGS here and hand it to the host via
+	# SUMOCODE_INITIAL_PROMPT instead, so runRpcHost can submit it through the
+	# same onSubmit/submitRpcPrompt path a normal editor submit uses once the
+	# child is up and hydrated. Must run BEFORE the argv is forwarded so the
+	# child does not also see (and silently drop) the same positional.
+	#
+	# This extraction happens ONCE, outside the respawn loop below: on a
+	# `/sumo:reload` respawn we deliberately do not want to re-submit the
+	# original kickoff prompt into the resumed session (same reasoning as the
+	# existing IS_TASK_LAUNCH handling inside the loop), so SUMOCODE_ARGS no
+	# longer carries a prompt positional by the time the loop's first
+	# iteration runs, and SUMOCODE_INITIAL_PROMPT is only ever exported on
+	# that first iteration (see the loop body below).
+	extract_first_positional
 fi
+
+RPC_INITIAL_PROMPT="${EXTRACTED_INITIAL_PROMPT:-}"
+
+# The RPC host previously ran via `exec`, which replaced this shell's own pid
+# outright -- the child WAS this script's pid, so a real terminal's Ctrl-C/
+# SIGTERM (kernel/tty-driver-level, delivered to the whole foreground process
+# group) and a PID-targeted kill (e.g. node-pty's `.kill()`, which calls
+# `process.kill(pid)` on the pid node-pty itself spawned -- this script)
+# landed on the exact same process either way. Switching the RPC-host branch
+# to a plain foreground command (needed so the exit-100 respawn below can see
+# it -- `exec` never returns) reintroduces bash as a separate live parent
+# process: a PID-targeted kill now reaches only this shell, not its `node`
+# child, unless this shell explicitly forwards the signal. Run the RPC host
+# backgrounded + `wait`ed (only for this branch -- the direct-Pi branch below
+# is unchanged, still a plain foreground command, since it already worked
+# correctly via real terminals' process-group-wide delivery before this fix)
+# so RPC_CHILD_PID is known to the trap below while it's running.
+RPC_CHILD_PID=""
+forward_signal_to_rpc_child() {
+	local sig="$1"
+	if [[ -n "${RPC_CHILD_PID}" ]] && kill -0 "${RPC_CHILD_PID}" 2>/dev/null; then
+		kill "-${sig}" "${RPC_CHILD_PID}" 2>/dev/null || true
+	fi
+}
+trap 'forward_signal_to_rpc_child INT' INT
+trap 'forward_signal_to_rpc_child TERM' TERM
+
+# `wait` on a backgrounded job can return as soon as the trap handler above
+# runs (bash reports the interrupted `wait` itself, not necessarily the
+# child's actual termination), well before the forwarded signal has actually
+# reached and been handled by the RPC host's own graceful-shutdown path
+# (terminal cleanup escape sequence, altscreen exit, etc. -- see host.ts's
+# SIGINT/SIGTERM handlers). Exiting this script the instant that first `wait`
+# call returns would race the child's cleanup and can leave the terminal in a
+# dirty state.
+#
+# Deliberately does NOT re-invoke `wait "${pid}"` in a loop to confirm actual
+# exit: bash's `wait PID` only blocks correctly the FIRST time for a given
+# pid -- once that pid has been reaped from bash's job table (which can
+# happen on the very first call, independent of whether the process has
+# actually exited yet, on some bash versions/platforms), every subsequent
+# `wait` on the same pid returns immediately without blocking, which turns a
+# naive "loop wait until kill -0 fails" into a tight CPU-spinning busy loop.
+# Polling `kill -0` with a short sleep is slower to notice exit than a true
+# blocking wait, but is portable and never spins.
+#
+# Sets WAIT_FOR_CHILD_EXIT_STATUS instead of returning via `echo` + command
+# substitution: `$(...)` always forks a subshell, and the INT/TERM traps set
+# on this script (needed to forward signals to RPC_CHILD_PID -- see above)
+# are not reliably applied inside that forked subshell, which would leave
+# nothing able to react to a signal while this function's own `wait`/poll
+# loop is running. Calling this as a plain function (no substitution) keeps
+# everything in this script's own process, where the traps are already live.
+WAIT_FOR_CHILD_EXIT_STATUS=0
+wait_for_child_exit() {
+	local pid="$1"
+	local status=0
+	# `|| status=$?` guards this under `set -e`: a nonzero exit status (the
+	# normal case for a signal-terminated or nonzero-exiting child) would
+	# otherwise abort this function -- and the whole script -- via -e
+	# immediately, before the kill -0 polling loop below ever runs.
+	wait "${pid}" || status=$?
+	while kill -0 "${pid}" 2>/dev/null; do
+		sleep 0.05
+	done
+	WAIT_FOR_CHILD_EXIT_STATUS="${status}"
+}
 
 while :; do
 	code=0
-	if [[ "${#SUMOCODE_ARGS[@]}" -eq 0 ]]; then
+	if [[ "${USE_RPC_HOST}" -eq 1 ]]; then
+		# The RPC host previously ran via `exec`, which replaced this shell
+		# entirely -- so the respawn loop below was unreachable on the default
+		# (RPC) launch path, and `/sumo:reload`'s exit(100) inside the RPC
+		# child (surfaced to the host via client.onExit, then re-thrown as the
+		# host's own process.exit(100) -- see host.ts's createRpcExitHandler /
+		# runRpcHost) had nowhere to be caught. Running the host as a plain
+		# foreground command (not exec) inside this same loop lets that exit
+		# code fall through to the identical respawn handling the direct-Pi
+		# path already has below.
+		# `<&0`: without job control (`set -m`, off by default in scripts), bash
+		# redirects a backgrounded command's stdin from /dev/null unless given
+		# an explicit redirection -- silently starving the RPC host of the PTY
+		# input a real interactive session depends on (keystrokes, Ctrl+/,
+		# etc.). The explicit `<&0` overrides that default and reconnects the
+		# backgrounded child to this script's own inherited stdin (the real
+		# terminal/PTY), restoring identical input behavior to the pre-`&`
+		# plain-foreground invocation.
+		if [[ "${#SUMOCODE_ARGS[@]}" -eq 0 ]]; then
+			env SUMOCODE_ROOT_DIR="${ROOT_DIR}" SUMOCODE_PROJECT_CWD="${PWD}" SUMOCODE_INITIAL_PROMPT="${RPC_INITIAL_PROMPT}" PI_BIN="${PI_BIN}" node "${ROOT_DIR}/sumo-rpc-host.js" <&0 &
+		else
+			env SUMOCODE_ROOT_DIR="${ROOT_DIR}" SUMOCODE_PROJECT_CWD="${PWD}" SUMOCODE_INITIAL_PROMPT="${RPC_INITIAL_PROMPT}" PI_BIN="${PI_BIN}" node "${ROOT_DIR}/sumo-rpc-host.js" "${SUMOCODE_ARGS[@]}" <&0 &
+		fi
+		RPC_CHILD_PID=$!
+		wait_for_child_exit "${RPC_CHILD_PID}"
+		code="${WAIT_FOR_CHILD_EXIT_STATUS}"
+		RPC_CHILD_PID=""
+	elif [[ "${#SUMOCODE_ARGS[@]}" -eq 0 ]]; then
 		"${PI_BIN}" -e "${ROOT_DIR}/src/extension.ts" || code=$?
 	else
 		"${PI_BIN}" -e "${ROOT_DIR}/src/extension.ts" "${SUMOCODE_ARGS[@]}" || code=$?
@@ -574,6 +740,10 @@ while :; do
 	if [[ "${code}" -ne "${SUMOCODE_RELOAD_EXIT_CODE}" ]]; then
 		exit "${code}"
 	fi
+	# Only the first iteration's kickoff prompt (if any) is ever submitted;
+	# a reload respawn resumes the existing session via --continue below and
+	# must not re-submit it as a new message.
+	RPC_INITIAL_PROMPT=""
 	# After the kickoff turn has fired, do NOT re-pass the task prompt on
 	# `/sumo:reload`. The reload loop adds `--continue` to resume the existing
 	# session, and re-injecting the original prompt would send it again as a

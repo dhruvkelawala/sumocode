@@ -1,6 +1,6 @@
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { describe, expect, it, vi } from "vitest";
-import { SumoRpcClient, type SumoRpcClientOptions } from "./client.js";
+import { RpcChildExitError, SumoRpcClient, type SumoRpcClientOptions } from "./client.js";
 
 function nodeRpcClient(script: string, options: Partial<Omit<SumoRpcClientOptions, "command" | "args">> = {}): SumoRpcClient {
 	return new SumoRpcClient({
@@ -367,6 +367,37 @@ describe("SumoRpcClient", () => {
 
 		expect(errors).toHaveLength(1);
 		expect(errors[0]?.message).toContain("RPC child exited");
+	});
+
+	it("exposes the child's exit code/signal structurally on the onExit error (not just in the message)", async () => {
+		const client = nodeRpcClient("setTimeout(() => process.exit(1), 100);");
+		const errors: Error[] = [];
+		client.onEvent(() => undefined);
+		client.onExit((error) => errors.push(error));
+		await client.start();
+		await waitFor(() => errors.length > 0);
+
+		const error = errors[0];
+		expect(error).toBeInstanceOf(RpcChildExitError);
+		expect((error as RpcChildExitError).code).toBe(1);
+		expect((error as RpcChildExitError).signal).toBeNull();
+	});
+
+	it("surfaces exit code 100 (the /sumo:reload signal) structurally, distinguishable from a crash", async () => {
+		// SUMOCODE_RELOAD_EXIT_CODE (src/commands/reload.ts): the RPC child
+		// process.exit(100)s on a deliberate /sumo:reload. The host's onExit
+		// handler must be able to tell this apart from an actual crash without
+		// parsing error.message -- see createRpcExitHandler in host.ts.
+		const client = nodeRpcClient("setTimeout(() => process.exit(100), 100);");
+		const errors: Error[] = [];
+		client.onEvent(() => undefined);
+		client.onExit((error) => errors.push(error));
+		await client.start();
+		await waitFor(() => errors.length > 0);
+
+		const error = errors[0];
+		expect(error).toBeInstanceOf(RpcChildExitError);
+		expect((error as RpcChildExitError).code).toBe(100);
 	});
 
 	it("does not fire onExit for a deliberate stop()", async () => {

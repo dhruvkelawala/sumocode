@@ -1,4 +1,5 @@
 import { resolve } from "node:path";
+import { SUMOCODE_RELOAD_EXIT_CODE } from "../../commands/reload.js";
 import { containsCtrlCToken, isEscapeInput } from "../input/shared-input-router.js";
 import { loadYoga } from "../layout/yoga.js";
 import { applyStartupTheme } from "../../themes/index.js";
@@ -8,7 +9,7 @@ import type { ChatMessageViewModel } from "../transcript/view-model.js";
 import type { ChatPagerReplaceStats } from "../widgets/chat-pager.js";
 import { ModalLayer } from "../widgets/modal-layer.js";
 import { NotificationCenter } from "../widgets/notification.js";
-import { SumoRpcClient, truncateForNotification } from "./client.js";
+import { RpcChildExitError, SumoRpcClient, truncateForNotification } from "./client.js";
 import { RpcHostControls } from "./controls.js";
 import { createRpcKeybindingsManager, RpcHostEditorController } from "./editor.js";
 import { createRpcExtensionUiResponder } from "./extension-ui-responder.js";
@@ -140,6 +141,24 @@ export async function submitRpcPrompt(message: string, options: RpcPromptSubmitO
 	responseData(response, "prompt");
 }
 
+/**
+ * Submits `SUMOCODE_INITIAL_PROMPT` (set by `bin/sumocode.sh` when a task/
+ * prompt positional was destined for `pi --mode rpc`, which never reads argv
+ * positionals -- only InteractiveMode does; rpc-mode.js reads only stdin JSON
+ * commands) via `submit`, the SAME function the host wires as the editor's
+ * `onSubmit` (see `submitFromEditor` in `runRpcHost`), so streaming state,
+ * transcript, and interrupt flags all engage exactly as they would for a real
+ * editor submit instead of the prompt silently vanishing.
+ *
+ * A no-op when the env var is absent or blank -- the common case for every
+ * launch that isn't `sumocode <prompt>` / `sumocode task <prompt>`.
+ */
+export async function submitInitialPromptFromEnv(env: NodeJS.ProcessEnv, submit: (message: string) => Promise<void>): Promise<void> {
+	const message = env.SUMOCODE_INITIAL_PROMPT;
+	if (!message) return;
+	await submit(message);
+}
+
 export interface RpcHostExitDependencies {
 	readonly modals: Pick<ModalLayer, "close">;
 	readonly overlays: Pick<RpcHostOverlayManager, "close">;
@@ -162,21 +181,42 @@ export interface RpcHostExitDependencies {
  * close() resolves any pending approval/select/input promise the same way an
  * interactive dismiss would (confirm -> false, select/input -> undefined; for
  * the approval overlay this already normalizes to "No"/deny, the correct
- * fail-safe). The runtime is stopped with a nonzero exit code after a short
- * delay so the terse notification is actually visible before the terminal is
- * restored -- a zombie shell with a dead child behind it cannot do anything
- * useful, so keeping it alive indefinitely is not an option.
+ * fail-safe).
+ *
+ * Exit code SUMOCODE_RELOAD_EXIT_CODE (100) is a deliberate `/sumo:reload`
+ * (src/commands/reload.ts: the RPC child process.exit(100)s itself), not a
+ * crash -- see `RpcChildExitError` in client.ts for how that code reaches
+ * here structurally instead of via message-parsing. bin/sumocode.sh's respawn
+ * loop only re-launches on THIS process (the host) exiting 100, so the host
+ * must propagate that same code and skip the scary "exited unexpectedly"
+ * notification, which would otherwise flash on every routine reload.
+ *
+ * For any other exit, the runtime is stopped with a nonzero exit code after a
+ * short delay so the terse notification is actually visible before the
+ * terminal is restored -- a zombie shell with a dead child behind it cannot
+ * do anything useful, so keeping it alive indefinitely is not an option.
  */
 export function createRpcExitHandler(deps: RpcHostExitDependencies): (error: Error) => void {
 	const scheduleTimeout = deps.setTimeout ?? setTimeout;
 	const shutdownDelayMs = deps.shutdownDelayMs ?? 750;
 	const exitCode = deps.exitCode ?? 1;
 	return (error: Error): void => {
+		const reloadCode = error instanceof RpcChildExitError && error.code === SUMOCODE_RELOAD_EXIT_CODE ? error.code : undefined;
 		deps.modals.close();
 		deps.overlays.close();
 		deps.updateRuntimeState({ ...deps.stateStore.getSnapshot(), isStreaming: false, isCompacting: false });
-		deps.notifications.notify(`RPC child exited unexpectedly: ${truncateForNotification(error.message)}`, "error", 0);
+		if (reloadCode === undefined) {
+			deps.notifications.notify(`RPC child exited unexpectedly: ${truncateForNotification(error.message)}`, "error", 0);
+		}
 		deps.requestRender();
+		if (reloadCode !== undefined) {
+			// Deliberate reload: exit the host itself with the same code right
+			// away (no shutdown delay -- there is no scary notification to give
+			// time to render) so bin/sumocode.sh's respawn loop sees exit 100 and
+			// relaunches with --continue.
+			void deps.stopHost(reloadCode).then(() => deps.exit(reloadCode));
+			return;
+		}
 		const timer = scheduleTimeout(() => {
 			void deps.stopHost(exitCode).then(() => deps.exit(exitCode));
 		}, shutdownDelayMs);
@@ -376,6 +416,40 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 	// and arms quit instead of aborting (defect: double Ctrl-C quits the app
 	// instead of aborting the in-flight send).
 	let submitInFlight = false;
+	// Named (not inlined into the editor's onSubmit option) so the
+	// SUMOCODE_INITIAL_PROMPT seam below can submit through the exact same
+	// path -- streaming-state painting, submitInFlight bookkeeping, and error
+	// recovery -- as a real editor submit, instead of duplicating this logic.
+	const submitFromEditor = async (message: string): Promise<void> => {
+		submitInFlight = true;
+		try {
+			await submitRpcPrompt(message, {
+				visualFixture,
+				actions,
+				stateStore,
+				client,
+				onBeforeSend: () => {
+					const state = stateStore.getSnapshot();
+					runtime?.update({
+						state: {
+							...state,
+							isStreaming: true,
+							pendingMessageCount: Math.max(1, state.pendingMessageCount),
+							hasMessages: true,
+							lastEventType: "agent_start",
+						},
+					});
+				},
+			});
+		} catch (error) {
+			submitInFlight = false;
+			// The synthetic isStreaming:true painted into runtime.update above
+			// would otherwise stay stuck until the next 5s stats poll. Reset it
+			// immediately so the UI and interrupt gating agree the send failed.
+			runtime?.update({ state: stateStore.getSnapshot() });
+			throw error;
+		}
+	};
 	const keybindings = createRpcKeybindingsManager({ env });
 	const editor = new RpcHostEditorController({
 		controls,
@@ -392,36 +466,7 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		// app.interrupt (Escape by default, or the user's remap): replay into
 		// the interrupt tier module (see `handleAppInterrupt` above).
 		onInterrupt: () => handleAppInterrupt(),
-		onSubmit: async (message) => {
-			submitInFlight = true;
-			try {
-				await submitRpcPrompt(message, {
-					visualFixture,
-					actions,
-					stateStore,
-					client,
-					onBeforeSend: () => {
-						const state = stateStore.getSnapshot();
-						runtime?.update({
-							state: {
-								...state,
-								isStreaming: true,
-								pendingMessageCount: Math.max(1, state.pendingMessageCount),
-								hasMessages: true,
-								lastEventType: "agent_start",
-							},
-						});
-					},
-				});
-			} catch (error) {
-				submitInFlight = false;
-				// The synthetic isStreaming:true painted into runtime.update above
-				// would otherwise stay stuck until the next 5s stats poll. Reset it
-				// immediately so the UI and interrupt gating agree the send failed.
-				runtime?.update({ state: stateStore.getSnapshot() });
-				throw error;
-			}
-		},
+		onSubmit: submitFromEditor,
 	});
 	const uiResponder = createRpcExtensionUiResponder({
 		modals,
@@ -570,6 +615,13 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		});
 		await runtime.start();
 		if (!visualFixture) {
+			// Submit the launcher's kickoff prompt (if any) only after start() +
+			// initial hydration above, so the transcript/UI are already in a
+			// normal steady state when the submit's streaming-state painting and
+			// event handling kick in -- see submitInitialPromptFromEnv's doc
+			// comment for why this reuses submitFromEditor instead of a bespoke
+			// path.
+			await submitInitialPromptFromEnv(env, submitFromEditor);
 			await refreshStats();
 			statsTimer = setInterval(() => { void refreshStats(); }, 5_000);
 		}

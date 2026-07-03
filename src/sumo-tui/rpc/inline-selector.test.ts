@@ -165,6 +165,179 @@ describe("InlineSelectorComponent Cathedral styling (plan 037)", () => {
 	});
 });
 
+/**
+ * A synthetic long fixture standing in for the real /model list this plan
+ * is fixing (531 entries, unnavigable by arrow-key scrolling alone). Built
+ * from real-shaped provider/model-id pairs, including deliberately
+ * hyphenated/slashed IDs (e.g. "bytedance-seed/seed-1.6") to exercise the
+ * fuzzyFilter-vs-substring gap the report calls out.
+ */
+function buildLongModelFixture(): string[] {
+	const providers = [
+		"openai",
+		"anthropic",
+		"openrouter",
+		"bytedance-seed",
+		"google",
+		"mistral",
+		"meta-llama",
+		"cohere",
+		"together",
+		"fireworks",
+	];
+	const modelNames = [
+		"gpt-5",
+		"gpt-5-mini",
+		"claude-opus-4-7",
+		"claude-sonnet-5",
+		"seed-1.6",
+		"seed-1.6-flash",
+		"gemini-3-pro",
+		"mixtral-8x22b",
+		"llama-4-maverick",
+		"command-r-plus",
+		"qwen3-max",
+		"deepseek-v4",
+	];
+	const items: string[] = [];
+	for (const provider of providers) {
+		for (const modelName of modelNames) {
+			items.push(`${provider}/${modelName}`);
+		}
+	}
+	let index = 0;
+	while (items.length < 540) {
+		items.push(`filler-provider/filler-model-${index++}`);
+	}
+	return items;
+}
+
+describe("InlineSelectorComponent search-as-you-type (plan 038)", () => {
+	it("narrows a 540-item fixture to matching rows as a query is typed, and keeps the scroll window in-bounds over the filtered set", () => {
+		const items = buildLongModelFixture();
+		expect(items.length).toBeGreaterThan(500);
+
+		const component = new InlineSelectorComponent("Choose model", items, () => undefined);
+
+		// Type "seed16" one character at a time -- out of order relative to the
+		// literal "seed-1.6" spelling (no hyphen, no dot) -- the exact case
+		// plain substring matching fails on (see report).
+		for (const char of "seed16") component.handleInput(char);
+
+		const rows = component.render(80);
+		const stripped = rows.join("\n").replace(/\x1b\[[0-9;]*m/g, "");
+
+		// The typed query itself renders in the search row.
+		expect(stripped).toContain("seed16");
+		// The filtered list narrows to seed-1.6 variants, not the full 540.
+		expect(stripped).toContain("seed-1.6");
+		expect(stripped).not.toContain("gpt-5");
+		expect(stripped).not.toContain("filler-provider");
+
+		// Scroll-window math must be computed over the FILTERED set: "seed-1.6"
+		// matches 20 rows across the 10 synthetic providers (more than
+		// DEFAULT_MAX_VISIBLE, so a scroll indicator does render), and its
+		// total must read 20 -- if the window were still being computed
+		// against the original 540-item fixture this would read "(n/540)".
+		const scrollRow = rows.find((row) => /\(\d+\/\d+\)/.test(row.replace(/\x1b\[[0-9;]*m/g, "")));
+		expect(scrollRow).toBeDefined();
+		const stripedScrollRow = scrollRow!.replace(/\x1b\[[0-9;]*m/g, "");
+		const match = stripedScrollRow.match(/\((\d+)\/(\d+)\)/);
+		expect(match).not.toBeNull();
+		const [, position, total] = match!;
+		expect(Number(total)).toBe(20);
+		expect(Number(position)).toBeGreaterThanOrEqual(1);
+		expect(Number(position)).toBeLessThanOrEqual(20);
+	});
+
+	it("keeps the scroll window in-bounds when a query still matches more items than fit on screen", () => {
+		const items = buildLongModelFixture();
+		const component = new InlineSelectorComponent("Choose model", items, () => undefined, 5);
+
+		// "e" alone matches far more than 5 items across the 540-item fixture.
+		component.handleInput("e");
+		// Push the cursor down repeatedly to move the scroll window away from index 0.
+		for (let i = 0; i < 12; i++) component.handleInput("[B");
+
+		const rows = component.render(80);
+		const stripped = rows.join("\n").replace(/\x1b\[[0-9;]*m/g, "");
+		const scrollMatch = stripped.match(/\((\d+)\/(\d+)\)/);
+		expect(scrollMatch).not.toBeNull();
+		const [, position, total] = scrollMatch!;
+		// The total in the scroll indicator must reflect the FILTERED count,
+		// not the original 540-item fixture.
+		expect(Number(total)).toBeLessThan(540);
+		expect(Number(position)).toBeGreaterThanOrEqual(1);
+		expect(Number(position)).toBeLessThanOrEqual(Number(total));
+	});
+
+	it("resets selection to index 0 whenever the query changes", () => {
+		const done = vi.fn();
+		const items = buildLongModelFixture();
+		const component = new InlineSelectorComponent("Choose model", items, done);
+
+		component.handleInput("[B");
+		component.handleInput("[B");
+		component.handleInput("[B"); // selectedIndex now 3 in the unfiltered list
+
+		component.handleInput("q"); // narrows to "qwen3-max" rows; must reset to index 0
+		component.handleInput("\r"); // confirm
+		expect(done).toHaveBeenCalledWith(expect.stringContaining("qwen3-max"));
+	});
+
+	it("backspace narrows the query back out and restores previously-hidden rows", () => {
+		const items = ["openai/gpt-5", "anthropic/claude-opus-4-7"];
+		const component = new InlineSelectorComponent("Choose model", items, () => undefined);
+
+		component.handleInput("x"); // matches neither -- filtered list becomes empty
+		let rows = component.render(60).join("\n").replace(/\x1b\[[0-9;]*m/g, "");
+		expect(rows).toContain("no matches");
+
+		component.handleInput("\x7f"); // backspace clears the query
+		rows = component.render(60).join("\n").replace(/\x1b\[[0-9;]*m/g, "");
+		expect(rows).toContain("openai/gpt-5");
+		expect(rows).toContain("anthropic/claude-opus-4-7");
+		expect(rows).not.toContain("no matches");
+	});
+
+	it("shows a distinct 'no matches' row (not the empty-list placeholder) when a query matches nothing", () => {
+		const component = new InlineSelectorComponent("Pick", ["alpha", "beta"], () => undefined);
+		component.handleInput("z");
+		const rows = component.render(60).join("\n").replace(/\x1b\[[0-9;]*m/g, "");
+		expect(rows).toContain("no matches");
+		expect(rows).not.toContain("alpha");
+		expect(rows).not.toContain("beta");
+	});
+
+	it("renders a dim placeholder in the search row when the query is empty, and the typed query once non-empty", () => {
+		const component = new InlineSelectorComponent("Pick", ["alpha", "beta"], () => undefined);
+		const before = component.render(60).join("\n").replace(/\x1b\[[0-9;]*m/g, "");
+		expect(before).toContain("type to search");
+
+		component.handleInput("a");
+		const after = component.render(60).join("\n").replace(/\x1b\[[0-9;]*m/g, "");
+		expect(after).not.toContain("type to search");
+		const searchRow = component.render(60).find((row) => row.includes("❯"));
+		expect(searchRow?.replace(/\x1b\[[0-9;]*m/g, "")).toContain("a");
+	});
+
+	it("still marks the current-value item with the current marker when the list is filtered", () => {
+		const component = new InlineSelectorComponent(
+			"Choose model",
+			[
+				{ value: "openai/gpt-5", label: "openai/gpt-5" },
+				{ value: "anthropic/claude-opus-4-7", label: "anthropic/claude-opus-4-7", isCurrent: true },
+			],
+			() => undefined,
+		);
+		for (const char of "claude") component.handleInput(char);
+		const rows = component.render(70);
+		const currentRow = rows.find((row) => row.includes("anthropic/claude-opus-4-7"));
+		expect(currentRow).toContain("●");
+		expect(rows.some((row) => row.includes("openai/gpt-5"))).toBe(false);
+	});
+});
+
 describe("InlineSelectorHost", () => {
 	it("passes through render/handleInput to the wrapped editor when no selector is active", () => {
 		const editor = new FakeEditor();

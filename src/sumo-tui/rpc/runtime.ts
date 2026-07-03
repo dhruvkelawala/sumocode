@@ -268,6 +268,16 @@ export class RpcHostRuntime {
 	}
 
 	/**
+	 * Writes a raw OSC52 clipboard sequence via the terminal session owner this
+	 * runtime holds. `/copy` (host-actions.ts) has no direct handle on the
+	 * terminal -- only `RpcHostRuntime` does -- so `host.ts` wires this method
+	 * through as `RpcHostActionsOptions.writeClipboardSequence`.
+	 */
+	public writeClipboardSequence(sequence: string): boolean {
+		return this.terminal.writeClipboardSequence(sequence);
+	}
+
+	/**
 	 * Exposes the live shell's `ChatPager` as a `TranscriptControllerChatSink`,
 	 * or `undefined` before `start()`'s async `RpcShellAdapter.create` has
 	 * resolved (or after `stop()`). `host.ts` wraps this behind a lazy sink

@@ -25,6 +25,7 @@ import {
 } from "../../memory-editor.js";
 import { renderThemeCheck, type ThemeBgSlot, type ThemeFgSlot, type ThemeReader } from "../../theme-check.js";
 import { activeThemeColors, getActiveTheme, listThemes, setActiveTheme } from "../../themes/index.js";
+import { createOsc52Sequence } from "../input/selection.js";
 import type { EditorTextController } from "../pi-compat/extension-ui-adapter.js";
 import type { ModalManager } from "../widgets/modal.js";
 import type { NotificationCenter, NotificationLevel } from "../widgets/notification.js";
@@ -68,6 +69,17 @@ export interface RpcHostActionsOptions {
 	readonly onRenderRequest?: () => void;
 	readonly onExitRequest?: (code: number) => void;
 	/**
+	 * Writes a raw OSC52 clipboard sequence to the real terminal, for `/copy`.
+	 * Mirrors the B10 selection-copy path (`SelectionController`'s
+	 * `emitClipboard` in `shell-adapter.ts`), which writes through
+	 * `ShellTerminalSessionOwner.writeClipboardSequence`. `RpcHostActions` has
+	 * no direct handle on the terminal owner (that lives on `RpcHostRuntime`),
+	 * so `host.ts` wires this callback through instead. Returns `true` when the
+	 * sequence was actually written (a real TTY), `false` otherwise (matches
+	 * `writeClipboardSequence`'s own return contract).
+	 */
+	readonly writeClipboardSequence?: (sequence: string) => boolean;
+	/**
 	 * Called after a session operation (new/switch/clone/fork) succeeds, so the
 	 * host can refetch `get_messages` from the child and push a fresh transcript
 	 * into the runtime. Without this the old session's messages stay on screen
@@ -92,6 +104,7 @@ export const RPC_HOST_SLASH_COMMANDS: readonly RpcHostSlashCommand[] = Object.fr
 	{ name: "sessions", description: "Open session controls" },
 	{ name: "session", description: "Show session info and stats" },
 	{ name: "name", description: "Rename the current session" },
+	{ name: "copy", description: "Copy the last assistant response to the clipboard" },
 	{ name: "quit", description: "Quit SumoCode" },
 	{ name: "sumo:memory", description: "Open or update SumoCode memory" },
 	{ name: "sumo:theme-check", description: "Preview current theme tokens" },
@@ -241,6 +254,7 @@ export class RpcHostActions {
 	private readonly onRenderRequest: () => void;
 	private readonly onExitRequest: (code: number) => void;
 	private readonly rehydrateTranscript: () => Promise<void>;
+	private readonly writeClipboardSequence: (sequence: string) => boolean;
 
 	public constructor(options: RpcHostActionsOptions) {
 		this.controls = options.controls;
@@ -255,6 +269,7 @@ export class RpcHostActions {
 		this.onRenderRequest = options.onRenderRequest ?? (() => undefined);
 		this.onExitRequest = options.onExitRequest ?? (() => undefined);
 		this.rehydrateTranscript = options.rehydrateTranscript ?? (() => Promise.resolve());
+		this.writeClipboardSequence = options.writeClipboardSequence ?? (() => false);
 	}
 
 	public handleInput(data: string): boolean {
@@ -305,6 +320,9 @@ export class RpcHostActions {
 				return true;
 			case "/settings":
 				await this.openSettings();
+				return true;
+			case "/copy":
+				await this.copyLastAssistantText();
 				return true;
 			case "/quit":
 				this.onExitRequest(0);
@@ -604,6 +622,20 @@ export class RpcHostActions {
 		this.stateStore.hydrateFromSessionStats(stats);
 		this.onStateChange();
 		notify(this.notifications, formatSessionStats(stats), "info");
+	}
+
+	private async copyLastAssistantText(): Promise<void> {
+		const text = await this.controls.getLastAssistantText();
+		if (!text) {
+			notify(this.notifications, "no assistant response to copy", "warning");
+			return;
+		}
+		const wrote = this.writeClipboardSequence(createOsc52Sequence(text));
+		if (!wrote) {
+			notify(this.notifications, "copy unavailable (not a TTY)", "warning");
+			return;
+		}
+		notify(this.notifications, "copied", "success");
 	}
 
 	private async renameSession(): Promise<void> {

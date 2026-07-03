@@ -133,6 +133,13 @@ class FakeControls {
 		this.calls.push("getCommands");
 		return this.commands;
 	}
+
+	public lastAssistantText: string | null = "last assistant response";
+
+	public async getLastAssistantText(): Promise<string | null> {
+		this.calls.push("getLastAssistantText");
+		return this.lastAssistantText;
+	}
 }
 
 class FakeMemoryClient implements RemnicMemoryClient {
@@ -200,6 +207,7 @@ function renderOverlayText(overlays: RpcHostOverlayManager, width = 100): string
 function setup(options: {
 	readonly memory?: FakeMemoryClient;
 	readonly onExitRequest?: (code: number) => void;
+	readonly writeClipboardSequence?: (sequence: string) => boolean;
 } = {}) {
 	const controls = new FakeControls();
 	const stateStore = new RpcHostStateStore();
@@ -242,6 +250,7 @@ function setup(options: {
 		createMemoryClient: () => memory,
 		onExitRequest: options.onExitRequest,
 		rehydrateTranscript,
+		writeClipboardSequence: options.writeClipboardSequence,
 	});
 
 	return { actions, controls, modals, overlays, inlineSelectors, notifications, memory, editorText, rehydrateCalls };
@@ -434,6 +443,49 @@ describe("RpcHostActions", () => {
 		expect(controls.calls).toContain("setSessionName:Plan 023");
 		expect(controls.calls).toContain("refreshState");
 		expect(notifications).toContainEqual({ message: "session name: Plan 023", level: "info" });
+	});
+
+	it("copies the last assistant response via OSC52 and shows a terse toast", async () => {
+		const sequences: string[] = [];
+		const { actions, controls, notifications } = setup({
+			writeClipboardSequence: (sequence) => {
+				sequences.push(sequence);
+				return true;
+			},
+		});
+		controls.lastAssistantText = "here is the answer";
+
+		await expect(actions.handleSubmittedText("/copy")).resolves.toBe(true);
+
+		expect(controls.calls).toContain("getLastAssistantText");
+		expect(sequences).toHaveLength(1);
+		expect(sequences[0]).toContain("\x1b]52;c;");
+		expect(sequences[0]).toContain(Buffer.from("here is the answer", "utf8").toString("base64"));
+		expect(notifications).toContainEqual({ message: "copied", level: "success" });
+	});
+
+	it("warns instead of copying when there is no assistant response yet", async () => {
+		const sequences: string[] = [];
+		const { actions, controls, notifications } = setup({
+			writeClipboardSequence: (sequence) => {
+				sequences.push(sequence);
+				return true;
+			},
+		});
+		controls.lastAssistantText = null;
+
+		await expect(actions.handleSubmittedText("/copy")).resolves.toBe(true);
+
+		expect(sequences).toHaveLength(0);
+		expect(notifications).toContainEqual({ message: "no assistant response to copy", level: "warning" });
+	});
+
+	it("warns when the clipboard write is unavailable (non-TTY host)", async () => {
+		const { actions, notifications } = setup({ writeClipboardSequence: () => false });
+
+		await expect(actions.handleSubmittedText("/copy")).resolves.toBe(true);
+
+		expect(notifications).toContainEqual({ message: "copy unavailable (not a TTY)", level: "warning" });
 	});
 
 	it("renders theme check, approval preview, and memory editor as host overlays", async () => {

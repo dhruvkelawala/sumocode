@@ -607,7 +607,7 @@ SUMO_TUI_DEBUG=${SUMO_TUI_DEBUG:-}
 COMMAND=${COMMAND}
 ARGS=${SUMOCODE_ARGS[*]:-}
 SUMOCODE_INITIAL_PROMPT=${DRY_RUN_INITIAL_PROMPT}
-$(if [[ "${USE_RPC_HOST}" -eq 1 ]]; then printf 'run (inside respawn loop, for /sumo:reload): node %s' "${ROOT_DIR}/sumo-rpc-host.js"; else printf 'run (inside respawn loop, for /sumo:reload): %s -e %s/src/extension.ts' "${PI_BIN}" "${ROOT_DIR}"; fi) ${SUMOCODE_ARGS[*]:-}
+exec $(if [[ "${USE_RPC_HOST}" -eq 1 ]]; then printf 'node %s' "${ROOT_DIR}/sumo-rpc-host.js"; else printf '%s -e %s/src/extension.ts' "${PI_BIN}" "${ROOT_DIR}"; fi) ${SUMOCODE_ARGS[*]:-}
 EOF
 	exit 0
 fi
@@ -638,6 +638,71 @@ fi
 
 RPC_INITIAL_PROMPT="${EXTRACTED_INITIAL_PROMPT:-}"
 
+# The RPC host previously ran via `exec`, which replaced this shell's own pid
+# outright -- the child WAS this script's pid, so a real terminal's Ctrl-C/
+# SIGTERM (kernel/tty-driver-level, delivered to the whole foreground process
+# group) and a PID-targeted kill (e.g. node-pty's `.kill()`, which calls
+# `process.kill(pid)` on the pid node-pty itself spawned -- this script)
+# landed on the exact same process either way. Switching the RPC-host branch
+# to a plain foreground command (needed so the exit-100 respawn below can see
+# it -- `exec` never returns) reintroduces bash as a separate live parent
+# process: a PID-targeted kill now reaches only this shell, not its `node`
+# child, unless this shell explicitly forwards the signal. Run the RPC host
+# backgrounded + `wait`ed (only for this branch -- the direct-Pi branch below
+# is unchanged, still a plain foreground command, since it already worked
+# correctly via real terminals' process-group-wide delivery before this fix)
+# so RPC_CHILD_PID is known to the trap below while it's running.
+RPC_CHILD_PID=""
+forward_signal_to_rpc_child() {
+	local sig="$1"
+	if [[ -n "${RPC_CHILD_PID}" ]] && kill -0 "${RPC_CHILD_PID}" 2>/dev/null; then
+		kill "-${sig}" "${RPC_CHILD_PID}" 2>/dev/null || true
+	fi
+}
+trap 'forward_signal_to_rpc_child INT' INT
+trap 'forward_signal_to_rpc_child TERM' TERM
+
+# `wait` on a backgrounded job can return as soon as the trap handler above
+# runs (bash reports the interrupted `wait` itself, not necessarily the
+# child's actual termination), well before the forwarded signal has actually
+# reached and been handled by the RPC host's own graceful-shutdown path
+# (terminal cleanup escape sequence, altscreen exit, etc. -- see host.ts's
+# SIGINT/SIGTERM handlers). Exiting this script the instant that first `wait`
+# call returns would race the child's cleanup and can leave the terminal in a
+# dirty state.
+#
+# Deliberately does NOT re-invoke `wait "${pid}"` in a loop to confirm actual
+# exit: bash's `wait PID` only blocks correctly the FIRST time for a given
+# pid -- once that pid has been reaped from bash's job table (which can
+# happen on the very first call, independent of whether the process has
+# actually exited yet, on some bash versions/platforms), every subsequent
+# `wait` on the same pid returns immediately without blocking, which turns a
+# naive "loop wait until kill -0 fails" into a tight CPU-spinning busy loop.
+# Polling `kill -0` with a short sleep is slower to notice exit than a true
+# blocking wait, but is portable and never spins.
+#
+# Sets WAIT_FOR_CHILD_EXIT_STATUS instead of returning via `echo` + command
+# substitution: `$(...)` always forks a subshell, and the INT/TERM traps set
+# on this script (needed to forward signals to RPC_CHILD_PID -- see above)
+# are not reliably applied inside that forked subshell, which would leave
+# nothing able to react to a signal while this function's own `wait`/poll
+# loop is running. Calling this as a plain function (no substitution) keeps
+# everything in this script's own process, where the traps are already live.
+WAIT_FOR_CHILD_EXIT_STATUS=0
+wait_for_child_exit() {
+	local pid="$1"
+	local status=0
+	# `|| status=$?` guards this under `set -e`: a nonzero exit status (the
+	# normal case for a signal-terminated or nonzero-exiting child) would
+	# otherwise abort this function -- and the whole script -- via -e
+	# immediately, before the kill -0 polling loop below ever runs.
+	wait "${pid}" || status=$?
+	while kill -0 "${pid}" 2>/dev/null; do
+		sleep 0.05
+	done
+	WAIT_FOR_CHILD_EXIT_STATUS="${status}"
+}
+
 while :; do
 	code=0
 	if [[ "${USE_RPC_HOST}" -eq 1 ]]; then
@@ -650,11 +715,23 @@ while :; do
 		# foreground command (not exec) inside this same loop lets that exit
 		# code fall through to the identical respawn handling the direct-Pi
 		# path already has below.
+		# `<&0`: without job control (`set -m`, off by default in scripts), bash
+		# redirects a backgrounded command's stdin from /dev/null unless given
+		# an explicit redirection -- silently starving the RPC host of the PTY
+		# input a real interactive session depends on (keystrokes, Ctrl+/,
+		# etc.). The explicit `<&0` overrides that default and reconnects the
+		# backgrounded child to this script's own inherited stdin (the real
+		# terminal/PTY), restoring identical input behavior to the pre-`&`
+		# plain-foreground invocation.
 		if [[ "${#SUMOCODE_ARGS[@]}" -eq 0 ]]; then
-			env SUMOCODE_ROOT_DIR="${ROOT_DIR}" SUMOCODE_PROJECT_CWD="${PWD}" SUMOCODE_INITIAL_PROMPT="${RPC_INITIAL_PROMPT}" PI_BIN="${PI_BIN}" node "${ROOT_DIR}/sumo-rpc-host.js" || code=$?
+			env SUMOCODE_ROOT_DIR="${ROOT_DIR}" SUMOCODE_PROJECT_CWD="${PWD}" SUMOCODE_INITIAL_PROMPT="${RPC_INITIAL_PROMPT}" PI_BIN="${PI_BIN}" node "${ROOT_DIR}/sumo-rpc-host.js" <&0 &
 		else
-			env SUMOCODE_ROOT_DIR="${ROOT_DIR}" SUMOCODE_PROJECT_CWD="${PWD}" SUMOCODE_INITIAL_PROMPT="${RPC_INITIAL_PROMPT}" PI_BIN="${PI_BIN}" node "${ROOT_DIR}/sumo-rpc-host.js" "${SUMOCODE_ARGS[@]}" || code=$?
+			env SUMOCODE_ROOT_DIR="${ROOT_DIR}" SUMOCODE_PROJECT_CWD="${PWD}" SUMOCODE_INITIAL_PROMPT="${RPC_INITIAL_PROMPT}" PI_BIN="${PI_BIN}" node "${ROOT_DIR}/sumo-rpc-host.js" "${SUMOCODE_ARGS[@]}" <&0 &
 		fi
+		RPC_CHILD_PID=$!
+		wait_for_child_exit "${RPC_CHILD_PID}"
+		code="${WAIT_FOR_CHILD_EXIT_STATUS}"
+		RPC_CHILD_PID=""
 	elif [[ "${#SUMOCODE_ARGS[@]}" -eq 0 ]]; then
 		"${PI_BIN}" -e "${ROOT_DIR}/src/extension.ts" || code=$?
 	else

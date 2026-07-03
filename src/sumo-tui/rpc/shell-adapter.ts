@@ -194,7 +194,6 @@ export class RpcShellAdapter {
 		return createTopChromePublication(
 			() => topChromeSnapshot(this.state),
 			() => this.isActive(),
-			{ leadingBlankAtWidth: 80 },
 		);
 	}
 

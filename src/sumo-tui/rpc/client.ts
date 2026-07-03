@@ -48,13 +48,6 @@ function isExtensionUiRequest(value: unknown): value is RpcExtensionUIRequest {
 	return isRecord(value) && value.type === "extension_ui_request" && typeof value.id === "string";
 }
 
-function defaultUiResponse(request: RpcExtensionUIRequest): RpcExtensionUIResponse | undefined {
-	if (request.method === "select" || request.method === "input" || request.method === "editor" || request.method === "confirm") {
-		return { type: "extension_ui_response", id: request.id, cancelled: true };
-	}
-	return undefined;
-}
-
 export class SumoRpcClient {
 	private child: ChildProcessWithoutNullStreams | undefined;
 	private stdoutBuffer = "";
@@ -199,11 +192,18 @@ export class SumoRpcClient {
 
 	private async handleUiRequest(request: RpcExtensionUIRequest): Promise<void> {
 		try {
-			const response = await (this.uiRequestHandler?.(request, this) ?? defaultUiResponse(request));
-			if (response) this.sendUiResponse(response);
+			const response = await this.uiRequestHandler?.(request, this);
+			// No handler installed, or the handler produced no response object: this covers
+			// unknown/future Pi extension_ui methods falling through an exhaustive switch, as well
+			// as deliberate fire-and-forget methods (notify/setStatus/setWidget/setTitle/
+			// set_editor_text) whose handlers resolve void by design. Sending an unconditional
+			// cancelled response is safe for both: Pi's rpc-mode.js drops extension_ui_response for
+			// ids it has no pending request for (pendingExtensionRequests.get(...) returns
+			// undefined -> early return, no error), and it unwedges any dialog-style request that
+			// would otherwise block the child forever.
+			this.sendUiResponse(response ?? { type: "extension_ui_response", id: request.id, cancelled: true });
 		} catch {
-			const response = defaultUiResponse(request);
-			if (response) this.sendUiResponse(response);
+			this.sendUiResponse({ type: "extension_ui_response", id: request.id, cancelled: true });
 		}
 	}
 

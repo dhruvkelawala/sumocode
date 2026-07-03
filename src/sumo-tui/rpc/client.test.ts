@@ -157,6 +157,119 @@ describe("SumoRpcClient", () => {
 		}
 	});
 
+	it("cancels an unknown extension UI method instead of wedging the child forever", async () => {
+		// Simulates a handler (like RpcExtensionUiResponder) that has no case for a future/unknown
+		// Pi extension_ui method and resolves void. The client must still answer with a cancelled
+		// response so Pi's rpc-mode.js pendingExtensionRequests entry settles instead of hanging.
+		const script = `
+			const readline = require("node:readline");
+			const rl = readline.createInterface({ input: process.stdin });
+			let pendingState;
+			rl.on("line", (line) => {
+				const parsed = JSON.parse(line);
+				if (parsed.type === "get_state") {
+					pendingState = parsed;
+					process.stdout.write(JSON.stringify({ type: "extension_ui_request", id: "ui-unknown", method: "future_method", title: "New" }) + "\\n");
+					return;
+				}
+				if (parsed.type === "extension_ui_response") {
+					process.stdout.write(JSON.stringify({ type: "ui_response_seen", response: parsed }) + "\\n");
+					process.stdout.write(JSON.stringify({ type: "response", id: pendingState.id, command: "get_state", success: true, data: {
+						thinkingLevel: "high",
+						isStreaming: false,
+						isCompacting: false,
+						steeringMode: "all",
+						followUpMode: "all",
+						sessionId: "session-unknown-method",
+						autoCompactionEnabled: true,
+						messageCount: 0,
+						pendingMessageCount: 0
+					} }) + "\\n");
+				}
+			});
+		`;
+		const client = nodeRpcClient(script);
+		const events: unknown[] = [];
+		client.onEvent((event) => events.push(event));
+		// Handler mimics RpcExtensionUiResponder.handle: known methods get responses, unknown
+		// methods fall through the switch and resolve void.
+		client.setUiRequestHandler((request) => {
+			if (request.method === "select") return { type: "extension_ui_response", id: request.id, value: "n/a" };
+			return undefined;
+		});
+		try {
+			await client.start();
+			const state = await client.send({ type: "get_state" });
+			expect(state.success).toBe(true);
+			expect(events).toContainEqual({
+				type: "ui_response_seen",
+				response: { type: "extension_ui_response", id: "ui-unknown", cancelled: true },
+			});
+		} finally {
+			await client.stop();
+		}
+	});
+
+	it("still sends a cancelled response for fire-and-forget methods the responder handles (harmless per rpc-mode.js)", async () => {
+		// notify/setStatus/setWidget/setTitle/set_editor_text handlers deliberately resolve void.
+		// Verified against rpc-mode.js: pendingExtensionRequests.get(id) is undefined for these
+		// (their ids are never registered as pending), so the child's extension_ui_response branch
+		// just no-ops (`if (pending) {...}` guards the resolve) and returns without logging or
+		// crashing. Sending the unconditional cancel here is therefore safe.
+		const script = `
+			const readline = require("node:readline");
+			const rl = readline.createInterface({ input: process.stdin });
+			let pendingState;
+			rl.on("line", (line) => {
+				const parsed = JSON.parse(line);
+				if (parsed.type === "get_state") {
+					pendingState = parsed;
+					process.stdout.write(JSON.stringify({ type: "extension_ui_request", id: "ui-notify", method: "notify", message: "hi", notifyType: "info" }) + "\\n");
+					return;
+				}
+				if (parsed.type === "extension_ui_response") {
+					process.stdout.write(JSON.stringify({ type: "ui_response_seen", response: parsed }) + "\\n");
+					// Fire-and-forget ids are not pending in rpc-mode.js; it never awaits this
+					// response to unblock get_state, so respond to get_state independently.
+					process.stdout.write(JSON.stringify({ type: "response", id: pendingState.id, command: "get_state", success: true, data: {
+						thinkingLevel: "high",
+						isStreaming: false,
+						isCompacting: false,
+						steeringMode: "all",
+						followUpMode: "all",
+						sessionId: "session-fire-and-forget",
+						autoCompactionEnabled: true,
+						messageCount: 0,
+						pendingMessageCount: 0
+					} }) + "\\n");
+				}
+			});
+		`;
+		const client = nodeRpcClient(script);
+		const events: unknown[] = [];
+		client.onEvent((event) => events.push(event));
+		const notify = vi.fn();
+		client.setUiRequestHandler((request) => {
+			if (request.method === "notify") {
+				notify(request.message);
+				return undefined;
+			}
+			return undefined;
+		});
+		try {
+			await client.start();
+			const state = await client.send({ type: "get_state" });
+			expect(state.success).toBe(true);
+			expect(notify).toHaveBeenCalledWith("hi");
+			expect(events).toContainEqual({
+				type: "ui_response_seen",
+				response: { type: "extension_ui_response", id: "ui-notify", cancelled: true },
+			});
+		} finally {
+			await client.stop();
+		}
+	});
+
 	it("stops the child process on shutdown", async () => {
 		const client = nodeRpcClient("setInterval(() => undefined, 1000);");
 		await client.start();

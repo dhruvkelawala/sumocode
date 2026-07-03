@@ -105,6 +105,7 @@ export const RPC_HOST_SLASH_COMMANDS: readonly RpcHostSlashCommand[] = Object.fr
 	{ name: "session", description: "Show session info and stats" },
 	{ name: "name", description: "Rename the current session" },
 	{ name: "copy", description: "Copy the last assistant response to the clipboard" },
+	{ name: "export", description: "Export the session transcript to HTML" },
 	{ name: "quit", description: "Quit SumoCode" },
 	{ name: "sumo:memory", description: "Open or update SumoCode memory" },
 	{ name: "sumo:theme-check", description: "Preview current theme tokens" },
@@ -323,6 +324,9 @@ export class RpcHostActions {
 				return true;
 			case "/copy":
 				await this.copyLastAssistantText();
+				return true;
+			case "/export":
+				await this.exportHtml();
 				return true;
 			case "/quit":
 				this.onExitRequest(0);
@@ -636,6 +640,11 @@ export class RpcHostActions {
 			return;
 		}
 		notify(this.notifications, "copied", "success");
+	}
+
+	private async exportHtml(): Promise<void> {
+		const result = await this.controls.exportHtml();
+		notify(this.notifications, `exported: ${result.path}`, "info");
 	}
 
 	private async renameSession(): Promise<void> {

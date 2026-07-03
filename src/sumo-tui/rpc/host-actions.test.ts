@@ -140,6 +140,13 @@ class FakeControls {
 		this.calls.push("getLastAssistantText");
 		return this.lastAssistantText;
 	}
+
+	public exportedPath = "/tmp/sumocode-session.html";
+
+	public async exportHtml(): Promise<{ path: string }> {
+		this.calls.push("exportHtml");
+		return { path: this.exportedPath };
+	}
 }
 
 class FakeMemoryClient implements RemnicMemoryClient {
@@ -486,6 +493,16 @@ describe("RpcHostActions", () => {
 		await expect(actions.handleSubmittedText("/copy")).resolves.toBe(true);
 
 		expect(notifications).toContainEqual({ message: "copy unavailable (not a TTY)", level: "warning" });
+	});
+
+	it("exports the session to HTML and notifies with the resulting path", async () => {
+		const { actions, controls, notifications } = setup();
+		controls.exportedPath = "/tmp/custom-export.html";
+
+		await expect(actions.handleSubmittedText("/export")).resolves.toBe(true);
+
+		expect(controls.calls).toContain("exportHtml");
+		expect(notifications).toContainEqual({ message: "exported: /tmp/custom-export.html", level: "info" });
 	});
 
 	it("renders theme check, approval preview, and memory editor as host overlays", async () => {

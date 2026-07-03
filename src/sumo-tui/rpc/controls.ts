@@ -126,6 +126,11 @@ export class RpcHostControls {
 		return responseData(await this.client.send({ type: "get_session_stats" }), "get_session_stats");
 	}
 
+	public async exportHtml(outputPath?: string): Promise<RpcResponseData<"export_html">> {
+		const command: RpcCommand = outputPath === undefined ? { type: "export_html" } : { type: "export_html", outputPath };
+		return responseData(await this.client.send(command, SESSION_COMMAND_TIMEOUT_MS), "export_html");
+	}
+
 	public async setSessionName(name: string): Promise<void> {
 		responseData(await this.client.send({ type: "set_session_name", name }), "set_session_name");
 	}

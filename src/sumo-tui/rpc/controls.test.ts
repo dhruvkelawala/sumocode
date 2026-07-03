@@ -187,6 +187,21 @@ describe("RpcHostControls", () => {
 		]);
 	});
 
+	it("sends exact export_html payloads and decodes the returned path", async () => {
+		const client = new FakeClient(
+			{ type: "response", command: "export_html", success: true, data: { path: "/tmp/session.html" } },
+			{ type: "response", command: "export_html", success: true, data: { path: "/tmp/custom.html" } },
+		);
+		const controls = new RpcHostControls(client);
+
+		await expect(controls.exportHtml()).resolves.toEqual({ path: "/tmp/session.html" });
+		await expect(controls.exportHtml("/tmp/custom.html")).resolves.toEqual({ path: "/tmp/custom.html" });
+		expect(client.commands).toEqual([
+			{ type: "export_html" },
+			{ type: "export_html", outputPath: "/tmp/custom.html" },
+		]);
+	});
+
 	it("sends exact compaction, retry, and command-discovery payloads", async () => {
 		const client = new FakeClient(
 			{ type: "response", command: "compact", success: true, data: { summary: "done" } as never },

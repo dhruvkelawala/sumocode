@@ -206,7 +206,7 @@ describe("RPC host retained runtime frame", () => {
 		}, 160, 45);
 
 		const plain = Array.from({ length: 45 }, (_, row) => frame.toPlainRow(row)).join("\n");
-		expect(frame.toPlainRow(1)).toContain("SUMOCODE");
+		expect(frame.toPlainRow(0)).toContain("SUMOCODE");
 		expect(plain).toContain("READY");
 		expect(plain).not.toContain('"Meow meow meow... meow meow"');
 		expect(plain).not.toContain("DIVINE INVOCATION");

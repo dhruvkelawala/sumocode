@@ -273,9 +273,14 @@
 				"args": [
 					"--offline",
 					"--no-extensions",
-					"--no-session"
+					"--no-session",
+					"-e",
+					"./scripts/visual-v2/runtime-faux-provider.mjs",
+					"--model",
+					"sumocode-visual/active-working"
 				],
-				"settleMs": 1800,
+				"settleMs": 0,
+				"emptyOutputGraceMs": 0,
 				"env": {
 					"PI_OFFLINE": "1",
 					"SUMO_TUI": "1",
@@ -285,14 +290,37 @@
 				},
 				"inputs": [
 					{
-						"afterMs": 250,
+						"type": "waitForFinalScreenMatches",
+						"include": [
+							"DIVINE INVOCATION"
+						],
+						"timeoutMs": 10000
+					},
+					{
+						"afterMs": 100,
 						"type": "text",
 						"value": "review src/auth/session.ts and tighten the return type"
 					},
 					{
-						"afterMs": 250,
+						"afterMs": 100,
 						"type": "key",
-						"value": "\u001b[13u"
+						"value": "Enter"
+					},
+					{
+						"type": "waitForFinalScreenMatches",
+						"include": [
+							"SUMOCODE",
+							"MEDITATING",
+							"review src/auth/session\\.ts and tighten the return type"
+						],
+						"exclude": [
+							"No API key found",
+							"rpc error: prompt failed",
+							"DIVINE INVOCATION",
+							"unknown · off",
+							"\\^\\[\\[13u"
+						],
+						"timeoutMs": 10000
 					}
 				]
 			},
@@ -304,6 +332,11 @@
 				"Error \\["
 			],
 			"rejectIfFinalScreenMatches": [
+				"No API key found",
+				"rpc error: prompt failed",
+				"DIVINE INVOCATION",
+				"unknown · off",
+				"\\^\\[\\[13u",
 				"SUMOCODE RPC",
 				"empty transcript",
 				"sumocode \\u00b7 rpc host"
@@ -398,9 +431,14 @@
 				"args": [
 					"--offline",
 					"--no-extensions",
-					"--no-session"
+					"--no-session",
+					"-e",
+					"./scripts/visual-v2/runtime-faux-provider.mjs",
+					"--model",
+					"sumocode-visual/active-working"
 				],
-				"settleMs": 1800,
+				"settleMs": 0,
+				"emptyOutputGraceMs": 0,
 				"env": {
 					"PI_OFFLINE": "1",
 					"SUMO_TUI": "1",
@@ -412,14 +450,37 @@
 				},
 				"inputs": [
 					{
-						"afterMs": 250,
+						"type": "waitForFinalScreenMatches",
+						"include": [
+							"DIVINE INVOCATION"
+						],
+						"timeoutMs": 10000
+					},
+					{
+						"afterMs": 100,
 						"type": "text",
 						"value": "review src/auth/session.ts and tighten the return type"
 					},
 					{
-						"afterMs": 250,
+						"afterMs": 100,
 						"type": "key",
-						"value": "\u001b[13u"
+						"value": "Enter"
+					},
+					{
+						"type": "waitForFinalScreenMatches",
+						"include": [
+							"SUMOCODE",
+							"MEDITATING",
+							"review src/auth/session\\.ts and tighten the return type"
+						],
+						"exclude": [
+							"No API key found",
+							"rpc error: prompt failed",
+							"DIVINE INVOCATION",
+							"unknown · off",
+							"\\^\\[\\[13u"
+						],
+						"timeoutMs": 10000
 					}
 				]
 			},
@@ -431,6 +492,11 @@
 				"Error \\["
 			],
 			"rejectIfFinalScreenMatches": [
+				"No API key found",
+				"rpc error: prompt failed",
+				"DIVINE INVOCATION",
+				"unknown · off",
+				"\\^\\[\\[13u",
 				"SUMOCODE RPC",
 				"empty transcript",
 				"sumocode \\u00b7 rpc host"

@@ -31,7 +31,7 @@ Use it to review component-by-component implementation slices. Promote crops onl
 - Splash left hint is `╰─ AWAITING PROMPT`.
 - `TAB · AGENTS` is deferred until agent switching is functional; V2 hints show `CTRL+/ · COMMANDS` only.
 - Full-screen scene targets reserve one blank breathing row above the top bar and one below the footer.
-- Active runtime scenarios submit the prompt with Enter and capture deterministic offline active-working state. Completed response scenes require fixture-backed follow-up work.
+- Active runtime scenarios wait for the splash editor, submit the prompt with manifest logical Enter, and capture deterministic active-working state through the visual-only faux provider extension. Completed response scenes require fixture-backed follow-up work.
 
 ## Local verification
 

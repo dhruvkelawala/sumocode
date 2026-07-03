@@ -20,6 +20,26 @@ type ScenarioCrop = {
 	threshold?: number;
 };
 
+type RuntimeInput =
+	| {
+			afterMs?: number;
+			type: "text" | "key";
+			value: string;
+	  }
+	| {
+			afterMs?: number;
+			type: "waitForOutput";
+			pattern: string;
+			timeoutMs?: number;
+	  }
+	| {
+			afterMs?: number;
+			type: "waitForFinalScreenMatches";
+			include: string[];
+			exclude?: string[];
+			timeoutMs?: number;
+	  };
+
 type Scenario = {
 	id: string;
 	lane: "component" | "runtime" | "fixture";
@@ -32,11 +52,7 @@ type Scenario = {
 		command: string;
 		args: string[];
 		env?: Record<string, string>;
-		inputs?: Array<{
-			afterMs?: number;
-			type: "text" | "key";
-			value: string;
-		}>;
+		inputs?: RuntimeInput[];
 	};
 	fixture?: {
 		id: string;
@@ -71,6 +87,36 @@ function requiredCropIds(id: string): string[] {
 	return scenario(id).crops
 		.filter((crop) => (crop.status ?? scenario(id).status) === "required")
 		.map((crop) => crop.id);
+}
+
+function assertActiveRuntimeInputContract(active: Scenario): void {
+	const inputs = active.runtime?.inputs ?? [];
+	expect(inputs.some((input) => "value" in input && input.value === "\u001b[13u")).toBe(false);
+	expect(inputs[0]).toMatchObject({
+		type: "waitForFinalScreenMatches",
+		include: expect.arrayContaining(["DIVINE INVOCATION"]),
+	});
+	expect(inputs).toEqual(expect.arrayContaining([
+		expect.objectContaining({
+			type: "key",
+			value: "Enter",
+		}),
+		expect.objectContaining({
+			type: "waitForFinalScreenMatches",
+			include: expect.arrayContaining([
+				"SUMOCODE",
+				"MEDITATING",
+				"review src/auth/session\\.ts and tighten the return type",
+			]),
+			exclude: expect.arrayContaining([
+				"No API key found",
+				"rpc error: prompt failed",
+				"DIVINE INVOCATION",
+				"unknown · off",
+				"\\^\\[\\[13u",
+			]),
+		}),
+	]));
 }
 
 function writeJson(path: string, value: unknown): void {
@@ -136,12 +182,17 @@ describe("V2 visual parity contract", () => {
 	it("keeps active landscape runtime composition crops present", () => {
 		const active = scenario("active-landscape-runtime");
 
+		expect(active.runtime?.args).toEqual([
+			"--offline",
+			"--no-extensions",
+			"--no-session",
+			"-e",
+			"./scripts/visual-v2/runtime-faux-provider.mjs",
+			"--model",
+			"sumocode-visual/active-working",
+		]);
 		expect(active.runtime?.env).not.toHaveProperty("SUMOCODE_VISUAL_RPC_FIXTURE");
-		expect(active.runtime?.inputs?.at(-1)).toEqual({
-			afterMs: 250,
-			type: "key",
-			value: "\u001b[13u",
-		});
+		assertActiveRuntimeInputContract(active);
 		expect(active.crops.map((crop) => crop.id)).toEqual([
 			"full",
 			"top-bar",
@@ -157,6 +208,11 @@ describe("V2 visual parity contract", () => {
 			"sumocode \\u00b7 rpc host",
 		]));
 		expect(active.rejectIfFinalScreenMatches).toEqual(expect.arrayContaining([
+			"No API key found",
+			"rpc error: prompt failed",
+			"DIVINE INVOCATION",
+			"unknown · off",
+			"\\^\\[\\[13u",
 			"SUMOCODE RPC",
 			"empty transcript",
 			"sumocode \\u00b7 rpc host",
@@ -180,11 +236,16 @@ describe("V2 visual parity contract", () => {
 			LINES: "100",
 		});
 		expect(portrait.runtime?.env).not.toHaveProperty("SUMOCODE_VISUAL_RPC_FIXTURE");
-		expect(portrait.runtime?.inputs?.at(-1)).toEqual({
-			afterMs: 250,
-			type: "key",
-			value: "\u001b[13u",
-		});
+		expect(portrait.runtime?.args).toEqual([
+			"--offline",
+			"--no-extensions",
+			"--no-session",
+			"-e",
+			"./scripts/visual-v2/runtime-faux-provider.mjs",
+			"--model",
+			"sumocode-visual/active-working",
+		]);
+		assertActiveRuntimeInputContract(portrait);
 		expect(portrait.crops.map((crop) => crop.id)).toEqual([
 			"full",
 			"top-bar",
@@ -200,6 +261,11 @@ describe("V2 visual parity contract", () => {
 			"sumocode \\u00b7 rpc host",
 		]));
 		expect(portrait.rejectIfFinalScreenMatches).toEqual(expect.arrayContaining([
+			"No API key found",
+			"rpc error: prompt failed",
+			"DIVINE INVOCATION",
+			"unknown · off",
+			"\\^\\[\\[13u",
 			"SUMOCODE RPC",
 			"empty transcript",
 			"sumocode \\u00b7 rpc host",
@@ -317,7 +383,7 @@ describe("V2 visual parity contract", () => {
 
 			const validation = readFileSync(join(out, "active-landscape-runtime/raw/contract-validation.txt"), "utf8");
 			expect(failed).toBe(true);
-			expect(validation).toContain("legacy metadata inputCount differs from current manifest: 0 !== 2");
+			expect(validation).toContain("legacy metadata inputCount differs from current manifest: 0 !== 4");
 		} finally {
 			rmSync(tmp, { recursive: true, force: true });
 		}

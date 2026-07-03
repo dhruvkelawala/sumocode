@@ -57,6 +57,8 @@ Runtime scenarios must set deterministic terminal env in the manifest (`PI_OFFLI
 
 Runtime-labelled scenarios must not use `SUMOCODE_VISUAL_RPC_FIXTURE` or any other completed-state injection. If a scenario needs a deterministic completed assistant/tool transcript, it belongs in the `fixture` lane with a name that makes the fixture source obvious. Runtime scenarios may still script real keyboard input through `runtime.inputs`.
 
+Active runtime scenarios additionally pass the explicit harness extension `-e ./scripts/visual-v2/runtime-faux-provider.mjs --model sumocode-visual/active-working`. This is a local non-secret provider used only to keep Pi in a streaming active-working state after real startup, typing, and submit; it is not a completed transcript fixture and must not be used for completed-response assertions. Active runtime inputs use a readiness wait, a logical `Enter` key mapped by the capture harness, and a final-screen wait that rejects splash/error markers such as `No API key found`, `rpc error: prompt failed`, `DIVINE INVOCATION`, `unknown · off`, and raw `^[[13u` echoes.
+
 For RPC reviewer evidence, run the same scenario review command rather than a separate golden path:
 
 ```bash

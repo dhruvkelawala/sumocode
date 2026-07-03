@@ -3,7 +3,7 @@
 Issue: #86  
 Parent: #80  
 Scenario: `active-landscape-runtime`  
-Runtime contract: `./bin/sumocode.sh --offline --no-extensions --no-session`
+Runtime contract: `./bin/sumocode.sh --offline --no-extensions --no-session -e ./scripts/visual-v2/runtime-faux-provider.mjs --model sumocode-visual/active-working`
 
 ## Decision
 
@@ -22,7 +22,9 @@ This is not a promotion to strict scene parity. No active-landscape crop is mark
 
 ## Current scene semantics
 
-`active-landscape-runtime` submits a deterministic offline prompt and captures the active-working state. This remains intentionally different from completed-response fixture scenes because `--offline --no-session` cannot produce a deterministic final model answer.
+`active-landscape-runtime` waits for the real splash editor, types the deterministic prompt, submits it with the manifest logical `Enter` key, and captures the active-working state. The active stream comes from the committed visual-only faux provider extension so captures do not depend on user API keys or private Pi config.
+
+This remains intentionally different from completed-response fixture scenes because runtime-labelled scenarios do not inject completed assistant/tool transcripts.
 
 The current runtime scene therefore validates composition and layout under real startup/input/submit behavior, while future slices handle richer deterministic content:
 

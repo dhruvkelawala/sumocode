@@ -3,6 +3,7 @@ import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { spawn } from "node-pty";
+import { replayAnsi } from "./ansi-replay.mjs";
 import { repoRoot } from "./paths.mjs";
 
 const DEFAULT_MAX_ATTEMPTS = 2;
@@ -76,9 +77,14 @@ async function runOneAttempt(scenario, runtime, attempt) {
 			const wait = Math.max(0, Number(input.afterMs ?? 0));
 			await sleep(wait);
 			if (exited) break;
-			if (input.type === "text") child.write(input.value ?? "");
-			else if (input.type === "key") child.write(input.value ?? "");
-			else throw new Error(`Unsupported runtime input type in ${scenario.id}: ${input.type}`);
+			await applyRuntimeInput({
+				scenario,
+				input,
+				child,
+				dimensions,
+				getOutput: () => output,
+				hasExited: () => exited,
+			});
 		}
 
 		const settleMs = Math.max(0, Number(runtime.settleMs ?? 500));
@@ -169,6 +175,96 @@ async function runOneAttempt(scenario, runtime, attempt) {
 	}
 }
 
+async function applyRuntimeInput({ scenario, input, child, dimensions, getOutput, hasExited }) {
+	if (input.type === "text") {
+		child.write(input.value ?? "");
+		return;
+	}
+	if (input.type === "key") {
+		child.write(runtimeKeyBytes(input.value ?? ""));
+		return;
+	}
+	if (input.type === "waitForOutput") {
+		await waitForOutputMatch(scenario, input, getOutput, hasExited);
+		return;
+	}
+	if (input.type === "waitForFinalScreenMatches") {
+		await waitForFinalScreenMatches(scenario, input, dimensions, getOutput, hasExited);
+		return;
+	}
+	throw new Error(`Unsupported runtime input type in ${scenario.id}: ${input.type}`);
+}
+
+function runtimeKeyBytes(value) {
+	if (value === "Enter") return "\r";
+	return value;
+}
+
+async function waitForOutputMatch(scenario, input, getOutput, hasExited) {
+	const timeoutMs = Math.max(1, Number(input.timeoutMs ?? 5000));
+	const pattern = input.pattern ?? input.value;
+	if (typeof pattern !== "string" || pattern.length === 0) {
+		throw new Error(`Runtime waitForOutput input in ${scenario.id} needs a non-empty pattern`);
+	}
+	const regex = new RegExp(pattern, "m");
+	const started = Date.now();
+	let lastPlain = "";
+	while (Date.now() - started < timeoutMs) {
+		if (hasExited()) break;
+		lastPlain = stripAnsi(getOutput());
+		if (regex.test(lastPlain)) return;
+		await sleep(50);
+	}
+	const error = new Error(`Runtime capture ${scenario.id} timed out waiting for output pattern ${JSON.stringify(pattern)}`);
+	error.retryable = true;
+	error.diagnostics = { pattern, outputTail: lastPlain.slice(-512) };
+	throw error;
+}
+
+async function waitForFinalScreenMatches(scenario, input, dimensions, getOutput, hasExited) {
+	const timeoutMs = Math.max(1, Number(input.timeoutMs ?? 5000));
+	const include = compilePatternList(scenario, input.include ?? input.patterns ?? [], "include");
+	const exclude = compilePatternList(scenario, input.exclude ?? [], "exclude");
+	if (include.length === 0) {
+		throw new Error(`Runtime waitForFinalScreenMatches input in ${scenario.id} needs at least one include pattern`);
+	}
+	const started = Date.now();
+	let lastText = "";
+	let lastMissing = include.map((entry) => entry.source);
+	let lastUnexpected = [];
+	while (Date.now() - started < timeoutMs) {
+		if (hasExited()) break;
+		const snapshot = await replayAnsi(getOutput(), dimensions);
+		lastText = snapshot.plainText;
+		lastMissing = include.filter((entry) => !entry.regex.test(lastText)).map((entry) => entry.source);
+		lastUnexpected = exclude.filter((entry) => entry.regex.test(lastText)).map((entry) => entry.source);
+		if (lastMissing.length === 0 && lastUnexpected.length === 0) return;
+		if (lastMissing.length === 0 && lastUnexpected.length > 0) {
+			const error = new Error(`Runtime capture ${scenario.id} reached active screen with rejected marker(s): ${lastUnexpected.map((entry) => JSON.stringify(entry)).join(", ")}`);
+			error.retryable = false;
+			error.diagnostics = { unexpected: lastUnexpected, finalScreenTail: lastText.slice(-512) };
+			throw error;
+		}
+		await sleep(50);
+	}
+	const error = new Error(`Runtime capture ${scenario.id} timed out waiting for final screen patterns. Missing: ${lastMissing.map((entry) => JSON.stringify(entry)).join(", ") || "(none)"}; unexpected: ${lastUnexpected.map((entry) => JSON.stringify(entry)).join(", ") || "(none)"}`);
+	error.retryable = true;
+	error.diagnostics = { missing: lastMissing, unexpected: lastUnexpected, finalScreenTail: lastText.slice(-512) };
+	throw error;
+}
+
+function compilePatternList(scenario, patterns, field) {
+	if (!Array.isArray(patterns)) {
+		throw new Error(`Runtime final-screen wait in ${scenario.id} ${field} must be an array`);
+	}
+	return patterns.map((pattern) => {
+		if (typeof pattern !== "string" || pattern.length === 0) {
+			throw new Error(`Runtime final-screen wait in ${scenario.id} ${field} entries must be non-empty strings`);
+		}
+		return { source: pattern, regex: new RegExp(pattern, "m") };
+	});
+}
+
 async function waitForStableOutput(getLength, hasMeaningfulOutput, hasExited, totalTimeoutMs, stabilizeMs) {
 	const pollMs = 50;
 	const started = Date.now();
@@ -226,7 +322,6 @@ function deterministicEnv(extra = {}) {
 		FORCE_COLOR: "3",
 		PI_OFFLINE: "1",
 		SUMO_TUI: "1",
-		SUMOCODE_HARNESS: "1",
 		...extra,
 	};
 	delete env.NO_COLOR;

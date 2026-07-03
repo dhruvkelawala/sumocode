@@ -52,4 +52,37 @@ describe("decideRpcInterrupt", () => {
 	it("still aborts streaming on Escape when autocomplete is closed", () => {
 		expect(decideRpcInterrupt("escape", state({ isStreaming: true, autocompleteOpen: false }))).toBe("abort");
 	});
+
+	// `app.clear` (Ctrl+C, declared in editor.ts's APP_KEYBINDING_DEFINITIONS)
+	// is never wired via editor.onAction("app.clear", ...) -- confirmed by
+	// grep -rn "\.onAction(" src/sumo-tui/rpc/ returning zero matches for it.
+	// This is intentional, not a gap: shared-input-router.ts's
+	// routeNonMouseInput gates on containsCtrlCToken BEFORE the editor ever
+	// sees the input (`if (containsCtrlCToken(nextData) &&
+	// this.callbacks.handlePreEditorInput?.(nextData) === true) return
+	// { consume: true };`), and handlePreEditorInput (host.ts's
+	// createRpcHostInterruptHandler) ultimately calls this exact
+	// decideRpcInterrupt function with kind "ctrl-c". Every branch below
+	// returns a real decision (dismiss-modal/clear-draft/abort/quit/arm-quit)
+	// -- there is no state combination under which "ctrl-c" resolves to
+	// "pass". So a raw Ctrl-C keypress can never fall through to
+	// CustomEditor's actionHandlers loop: the router's interrupt tier always
+	// consumes it first. Even in the hypothetical case this handler were
+	// absent, runtime.ts's own handlePreEditorInput fallback
+	// (`if (containsCtrlCToken(data)) { this.requestExit(130); return true; }`)
+	// would still consume it before forwardToEditor. Wiring
+	// editor.onAction("app.clear", ...) would install a second, unreachable
+	// handler.
+	it("never resolves Ctrl-C to pass-through -- the router's interrupt tier always consumes it before the editor (app.clear is dead-by-design)", () => {
+		const allCtrlCOutcomes = [
+			decideRpcInterrupt("ctrl-c", state({ modalActive: true })),
+			decideRpcInterrupt("ctrl-c", state({ overlayActive: true })),
+			decideRpcInterrupt("ctrl-c", state({ draftNonEmpty: true })),
+			decideRpcInterrupt("ctrl-c", state({ isStreaming: true })),
+			decideRpcInterrupt("ctrl-c", state({ armedUntil: 1_200 })),
+			decideRpcInterrupt("ctrl-c", state({ armedUntil: 999 })),
+			decideRpcInterrupt("ctrl-c", state()),
+		];
+		expect(allCtrlCOutcomes).not.toContain("pass");
+	});
 });

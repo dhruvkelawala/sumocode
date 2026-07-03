@@ -21,6 +21,19 @@ export interface RpcModelOption {
 
 type ModelIdentity = Pick<RpcAvailableModel, "provider" | "id">;
 
+// SumoRpcClient#send defaults to a 30s timeout, which is fine for quick
+// getters/setters but too short for commands that do real work on Pi's side:
+// compact in particular waits for an LLM-driven summarization pass that can
+// legitimately run well past 30s on a large session, and the client was
+// timing the request out while Pi kept working -- the reply for a real
+// compaction just never arrived within the default window. fork,
+// switch_session, and new_session all touch disk/session state (loading or
+// forking a whole session transcript) and can be slow for the same reason,
+// so give them a longer, explicit budget too. Quick getters (get_state,
+// get_commands, etc.) are intentionally left on the client's default.
+const COMPACT_TIMEOUT_MS = 300_000;
+const SESSION_COMMAND_TIMEOUT_MS = 60_000;
+
 function modelLabel(model: ModelIdentity): string {
 	return `${model.provider}/${model.id}`;
 }
@@ -80,15 +93,15 @@ export class RpcHostControls {
 
 	public async newSession(parentSession?: string): Promise<RpcResponseData<"new_session">> {
 		const command: RpcCommand = parentSession === undefined ? { type: "new_session" } : { type: "new_session", parentSession };
-		return responseData(await this.client.send(command), "new_session");
+		return responseData(await this.client.send(command, SESSION_COMMAND_TIMEOUT_MS), "new_session");
 	}
 
 	public async switchSession(sessionPath: string): Promise<RpcResponseData<"switch_session">> {
-		return responseData(await this.client.send({ type: "switch_session", sessionPath }), "switch_session");
+		return responseData(await this.client.send({ type: "switch_session", sessionPath }, SESSION_COMMAND_TIMEOUT_MS), "switch_session");
 	}
 
 	public async fork(entryId: string): Promise<RpcResponseData<"fork">> {
-		return responseData(await this.client.send({ type: "fork", entryId }), "fork");
+		return responseData(await this.client.send({ type: "fork", entryId }, SESSION_COMMAND_TIMEOUT_MS), "fork");
 	}
 
 	public async clone(): Promise<RpcResponseData<"clone">> {
@@ -119,7 +132,7 @@ export class RpcHostControls {
 
 	public async compact(customInstructions?: string): Promise<RpcResponseData<"compact">> {
 		const command: RpcCommand = customInstructions === undefined ? { type: "compact" } : { type: "compact", customInstructions };
-		return responseData(await this.client.send(command), "compact");
+		return responseData(await this.client.send(command, COMPACT_TIMEOUT_MS), "compact");
 	}
 
 	public async setAutoCompaction(enabled: boolean): Promise<void> {

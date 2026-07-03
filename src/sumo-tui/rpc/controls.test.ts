@@ -5,14 +5,16 @@ import { RpcHostStateStore } from "./state.js";
 
 class FakeClient implements RpcCommandClient {
 	public readonly commands: RpcCommand[] = [];
+	public readonly timeouts: Array<number | undefined> = [];
 	private readonly responses: RpcResponse[];
 
 	public constructor(...responses: RpcResponse[]) {
 		this.responses = [...responses];
 	}
 
-	public async send(command: RpcCommand): Promise<RpcResponse> {
+	public async send(command: RpcCommand, timeoutMs?: number): Promise<RpcResponse> {
 		this.commands.push(command);
+		this.timeouts.push(timeoutMs);
 		const response = this.responses.shift();
 		if (!response) throw new Error(`No fake response queued for ${command.type}`);
 		return response;
@@ -225,5 +227,42 @@ describe("RpcHostControls", () => {
 
 		await expect(controls.setModel("missing", "nope")).rejects.toThrow("set_model failed: Model not found: missing/nope");
 		expect(client.commands).toEqual([{ type: "set_model", provider: "missing", modelId: "nope" }]);
+	});
+
+	it("passes a generous explicit timeout for compact instead of the client's 30s default", async () => {
+		const client = new FakeClient({ type: "response", command: "compact", success: true, data: { summary: "done" } as never });
+		const controls = new RpcHostControls(client);
+
+		await controls.compact();
+
+		expect(client.timeouts).toEqual([300_000]);
+	});
+
+	it("passes explicit long timeouts for fork, switch_session, and new_session", async () => {
+		const client = new FakeClient(
+			{ type: "response", command: "new_session", success: true, data: { cancelled: false } },
+			{ type: "response", command: "switch_session", success: true, data: { cancelled: false } },
+			{ type: "response", command: "fork", success: true, data: { text: "x", cancelled: false } },
+		);
+		const controls = new RpcHostControls(client);
+
+		await controls.newSession();
+		await controls.switchSession("session.jsonl");
+		await controls.fork("entry-1");
+
+		expect(client.timeouts).toEqual([60_000, 60_000, 60_000]);
+	});
+
+	it("leaves quick getters and setters on the client's default timeout", async () => {
+		const client = new FakeClient(
+			{ type: "response", command: "get_state", success: true, data: {} as never },
+			{ type: "response", command: "abort", success: true },
+		);
+		const controls = new RpcHostControls(client);
+
+		await controls.refreshState();
+		await controls.abort();
+
+		expect(client.timeouts).toEqual([undefined, undefined]);
 	});
 });

@@ -39,6 +39,10 @@ export type TopChromeSnapshot = {
 	dotSize?: TopChromeDotSize;
 };
 
+export type TopChromePublication = {
+	readonly component: Component;
+};
+
 function visibleLength(text: string): number {
 	return text.replace(ANSI_PATTERN, "").length;
 }
@@ -219,13 +223,17 @@ class TopChromeComponent implements Component {
 	public constructor(
 		private readonly loadSnapshot: () => TopChromeSnapshot,
 		private readonly shouldRender: () => boolean,
+		private readonly opts: { leadingBlankAtWidth?: number } = {},
 	) {}
 
 	public invalidate(): void {}
 
 	public render(width: number): string[] {
 		if (!this.shouldRender()) return [];
-		return renderTopChromeBlock(this.loadSnapshot(), width);
+		const block = renderTopChromeBlock(this.loadSnapshot(), width);
+		return this.opts.leadingBlankAtWidth !== undefined && width >= this.opts.leadingBlankAtWidth
+			? ["", ...block]
+			: block;
 	}
 }
 
@@ -241,6 +249,16 @@ class TopChromeComponent implements Component {
  */
 export type TopChromeLoader = () => TopChromeSnapshot;
 
+export function createTopChromePublication(
+	loader: TopChromeLoader,
+	shouldRender: () => boolean,
+	opts: { leadingBlankAtWidth?: number } = {},
+): TopChromePublication {
+	return {
+		component: new TopChromeComponent(loader, shouldRender, opts),
+	};
+}
+
 export function installTopChrome(pi: ExtensionAPI, loader?: TopChromeLoader): void {
 	let state: SumoCodeState = "idle";
 	let render: (() => void) | undefined;
@@ -249,7 +267,7 @@ export function installTopChrome(pi: ExtensionAPI, loader?: TopChromeLoader): vo
 		if (!ctx.hasUI) return;
 		state = "idle";
 
-		const component = new TopChromeComponent(
+		const publication = createTopChromePublication(
 			() => (loader ? loader() : defaultSnapshot(ctx, state)),
 			() => sessionHasMessages(ctx),
 		);
@@ -265,7 +283,7 @@ export function installTopChrome(pi: ExtensionAPI, loader?: TopChromeLoader): vo
 				},
 				invalidate(): void {},
 				render(width: number): string[] {
-					return component.render(width);
+					return publication.component.render(width);
 				},
 			};
 		});

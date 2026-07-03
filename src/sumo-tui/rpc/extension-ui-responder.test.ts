@@ -1,5 +1,8 @@
 import type { RpcExtensionUIRequest } from "@earendil-works/pi-coding-agent";
+import type { Component } from "@earendil-works/pi-tui";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { RPC_APPROVAL_TITLE_MARKER } from "../../approval-modal.js";
+import { ExtensionStatusPublication } from "../pi-compat/region-registry.js";
 import { ModalManager } from "../widgets/modal.js";
 import { NotificationCenter } from "../widgets/notification.js";
 import { RpcHostEditorController } from "./editor.js";
@@ -7,6 +10,29 @@ import { RpcExtensionUiResponder, RpcHostEditorBuffer } from "./extension-ui-res
 
 function request<T extends RpcExtensionUIRequest>(request: T): T {
 	return request;
+}
+
+class TestOverlayHost {
+	public active: Component | undefined;
+	public kind: string | undefined;
+	private finish: ((value: unknown) => void) | undefined;
+
+	public show<T>(kind: string, create: (done: (value: T) => void) => Component): Promise<T> {
+		this.kind = kind;
+		return new Promise<T>((resolve) => {
+			this.finish = (value) => {
+				this.active = undefined;
+				this.kind = undefined;
+				this.finish = undefined;
+				resolve(value as T);
+			};
+			this.active = create((value) => this.finish?.(value));
+		});
+	}
+
+	public close(value?: unknown): void {
+		this.finish?.(value);
+	}
 }
 
 afterEach(() => {
@@ -118,12 +144,14 @@ describe("RpcExtensionUiResponder", () => {
 		const notify = vi.fn();
 		const setTitle = vi.fn();
 		const setStatus = vi.fn();
+		const statusPublication = new ExtensionStatusPublication();
 		const mountWidget = vi.fn();
 		const onRenderRequest = vi.fn();
 		const responder = new RpcExtensionUiResponder({
 			notifications: { notify },
 			terminal: { setTitle },
 			setStatus,
+			statusPublication,
 			regionRegistry: { mountWidget },
 			onRenderRequest,
 		});
@@ -165,6 +193,7 @@ describe("RpcExtensionUiResponder", () => {
 
 		expect(notify).toHaveBeenCalledWith("saved", "warning");
 		expect(setStatus).toHaveBeenCalledWith("fast-mode", "fast");
+		expect(statusPublication.render(80)).toEqual(["fast-mode: fast"]);
 		expect(mountWidget).toHaveBeenCalledWith("sumocode-widget", ["one"], { placement: "belowEditor" });
 		expect(setTitle).toHaveBeenCalledWith("SumoCode");
 		expect(responder.getSnapshot()).toMatchObject({
@@ -216,5 +245,70 @@ describe("RpcExtensionUiResponder", () => {
 		}));
 
 		expect(notifications.getToasts()).toMatchObject([{ message: "hello", level: "info" }]);
+	});
+
+	it("routes approval-marked selects through the Cathedral overlay host", async () => {
+		const overlay = new TestOverlayHost();
+		const modals = new ModalManager();
+		const responder = new RpcExtensionUiResponder({ approvalOverlay: overlay, modals });
+		const response = responder.handle(request({
+			type: "extension_ui_request",
+			id: "approval-1",
+			method: "select",
+			title: `${RPC_APPROVAL_TITLE_MARKER}\n\nrm -rf node_modules\n\nThis will permanently delete files.`,
+			options: ["No", "Yes", "Always"],
+		}));
+
+		expect(overlay.kind).toBe("approval");
+		expect(overlay.active?.render(80).join("\n")).toContain("APPROVAL REQUIRED");
+		expect(overlay.active?.render(80).join("\n")).toContain("rm -rf node_modules");
+
+		overlay.active?.handleInput?.("y");
+
+		await expect(response).resolves.toEqual({ type: "extension_ui_response", id: "approval-1", value: "Yes" });
+		expect(modals.getActiveKind()).toBeUndefined();
+	});
+
+	it("strips approval command and description control sequences before overlay rendering", async () => {
+		const overlay = new TestOverlayHost();
+		const responder = new RpcExtensionUiResponder({ approvalOverlay: overlay });
+		const response = responder.handle(request({
+			type: "extension_ui_request",
+			id: "approval-sanitize",
+			method: "select",
+			title: `${RPC_APPROVAL_TITLE_MARKER}\n\nrm -rf \u001b]2;spoofed-title\u0007node_modules\u001b[2J\n\nThis will delete\u0000 files\u001b[?25l.`,
+			options: ["No", "Yes", "Always"],
+		}));
+
+		const rendered = overlay.active?.render(100).join("\n") ?? "";
+
+		expect(rendered).toContain("rm -rf node_modules");
+		expect(rendered).toContain("This will delete files.");
+		expect(rendered).not.toContain("\u001b]2;spoofed-title\u0007");
+		expect(rendered).not.toContain("\u001b[2J");
+		expect(rendered).not.toContain("\u001b[?25l");
+		expect(rendered).not.toContain("\u0000");
+
+		overlay.active?.handleInput?.("n");
+		await expect(response).resolves.toEqual({ type: "extension_ui_response", id: "approval-sanitize", value: "No" });
+	});
+
+	it("falls back to generic select when approval options do not match exactly", async () => {
+		const overlay = new TestOverlayHost();
+		const modals = new ModalManager();
+		const responder = new RpcExtensionUiResponder({ approvalOverlay: overlay, modals });
+		const response = responder.handle(request({
+			type: "extension_ui_request",
+			id: "approval-mismatch",
+			method: "select",
+			title: `${RPC_APPROVAL_TITLE_MARKER}\n\nrm -rf node_modules`,
+			options: ["Allow", "Deny"],
+		}));
+
+		expect(overlay.kind).toBeUndefined();
+		expect(modals.getActiveKind()).toBe("select");
+		modals.handleInput("enter");
+
+		await expect(response).resolves.toEqual({ type: "extension_ui_response", id: "approval-mismatch", value: "Allow" });
 	});
 });

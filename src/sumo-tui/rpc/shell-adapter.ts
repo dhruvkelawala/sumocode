@@ -17,8 +17,8 @@ import {
 } from "../../footer.js";
 import { getCachedMcpRoster } from "../../mcp-config-reader.js";
 import { SIDEBAR_MIN_TERMINAL_WIDTH } from "../../sidebar-placement.js";
-import { PLACEHOLDER_MCP, renderSidebar } from "../../sidebar.js";
-import { renderTopChromeBlock, type TopChromeSnapshot } from "../../top-chrome.js";
+import { PLACEHOLDER_MCP, createSidebarPublication, type SidebarSnapshot } from "../../sidebar.js";
+import { createTopChromePublication, type TopChromeSnapshot } from "../../top-chrome.js";
 import { type SumoCodeState } from "../../themes/index.js";
 import { createSplashTree, defaultSplashSnapshot, type SplashTree } from "../cathedral/splash-tree.js";
 import { loadYoga, type Yoga } from "../layout/yoga.js";
@@ -39,6 +39,11 @@ export interface RpcShellAdapterOptions {
 	readonly modal?: Component & { getActiveKind?(): string | undefined };
 	readonly overlay?: Component & { getActiveKind?(): string | undefined };
 	readonly notifications?: Component;
+	readonly extensionRegions?: {
+		readonly aboveEditor?: Component;
+		readonly belowEditor?: Component;
+		readonly sidebar?: Component;
+	};
 }
 
 export interface RpcShellAdapterSnapshot {
@@ -74,13 +79,6 @@ const VISUAL_SIDEBAR_COST_USD = 0.42;
 const VISUAL_MODEL_LABEL = "gpt-5.5";
 const VISUAL_THINKING_LEVEL: ThinkingLevel = "medium";
 
-const EMPTY_COMPONENT: ShellRenderable = {
-	render(): string[] {
-		return [];
-	},
-	invalidate(): void {},
-};
-
 export class RpcShellAdapter {
 	private readonly chat: ChatPager;
 	private readonly splash: SplashTree;
@@ -89,6 +87,9 @@ export class RpcShellAdapter {
 	private readonly modal: (Component & { getActiveKind?(): string | undefined }) | undefined;
 	private readonly overlay: (Component & { getActiveKind?(): string | undefined }) | undefined;
 	private readonly notifications: Component | undefined;
+	private readonly extensionAboveEditor: Component | undefined;
+	private readonly extensionBelowEditor: Component | undefined;
+	private readonly extensionSidebar: Component | undefined;
 	private state: RpcHostChromeState;
 	private transcript: TranscriptViewModel;
 
@@ -99,6 +100,9 @@ export class RpcShellAdapter {
 		this.modal = options.modal;
 		this.overlay = options.overlay;
 		this.notifications = options.notifications;
+		this.extensionAboveEditor = options.extensionRegions?.aboveEditor;
+		this.extensionBelowEditor = options.extensionRegions?.belowEditor;
+		this.extensionSidebar = options.extensionRegions?.sidebar;
 		this.chat = ChatPager.create(yoga);
 		this.chat.replaceViewModels(this.transcript.messages);
 		this.splash = createSplashTree(yoga, undefined, () => defaultSplashSnapshot(this.isActive()));
@@ -110,10 +114,10 @@ export class RpcShellAdapter {
 			splash: { tree: this.splash },
 			isActive: () => this.isActive(),
 			editor: () => editorComponent,
-			topChromeFallback: () => ({ component: this.topChromeComponent() }),
-			topChrome: () => ({ component: this.topChromeComponent() }),
+			topChromeFallback: () => this.topChromePublication(),
+			topChrome: () => this.topChromePublication(),
 			belowEditorWidgets: () => new RpcHintComponent(this),
-			aboveEditorWidgets: () => EMPTY_COMPONENT,
+			aboveEditorWidgets: () => new RpcAboveEditorComponent(this),
 			footer: () => new RpcFooterComponent(this),
 			terminal: new RpcHardwareCursorSuppressor(options.terminal),
 			viewport: options.viewport,
@@ -184,16 +188,29 @@ export class RpcShellAdapter {
 		return renderInputFrame(submittedPrompt ?? "", width, { promptColor: "accent", cursorStyle: "cell" });
 	}
 
-	private topChromeComponent(): ShellRenderable {
-		return new RpcTopChromeComponent(this);
+	private topChromePublication(): { component: ShellRenderable } {
+		return createTopChromePublication(
+			() => topChromeSnapshot(this.state),
+			() => this.isActive(),
+			{ leadingBlankAtWidth: 80 },
+		);
 	}
 
 	private sidebarPublication(): { component: ShellRenderable; isVisible: (cols: number, rows: number) => boolean } | undefined {
 		if (!this.isActive()) return undefined;
-		return {
-			component: new RpcSidebarComponent(this),
-			isVisible: (cols, _rows) => this.isActive() && cols >= SIDEBAR_MIN_TERMINAL_WIDTH,
-		};
+		return createSidebarPublication(
+			() => sidebarSnapshot(this.state),
+			(cols, _rows) => this.isActive() && cols >= SIDEBAR_MIN_TERMINAL_WIDTH,
+			this.extensionSidebar,
+		);
+	}
+
+	public renderExtensionAboveEditor(width: number): string[] {
+		return this.extensionAboveEditor?.render(width) ?? [];
+	}
+
+	public renderExtensionBelowEditor(width: number): string[] {
+		return this.extensionBelowEditor?.render(width) ?? [];
 	}
 }
 
@@ -242,6 +259,27 @@ function topChromeSnapshot(state: RpcHostChromeState): TopChromeSnapshot {
 		},
 		recentSessions: [],
 		hidden: false,
+	};
+}
+
+function sidebarSnapshot(state: RpcHostChromeState): SidebarSnapshot {
+	const cwd = hostCwd();
+	const visualHarness = isVisualHarness();
+	const contextTokens = visualHarness ? VISUAL_SIDEBAR_CONTEXT_TOKENS : state.contextTokens ?? 0;
+	return {
+		projectName: basename(cwd) || cwd,
+		branch: visualHarness ? "main" : state.gitBranch,
+		inputTokens: contextTokens,
+		outputTokens: 0,
+		currentContextTokens: contextTokens,
+		contextWindow: visualHarness ? VISUAL_SIDEBAR_CONTEXT_WINDOW : state.contextWindow ?? 0,
+		cumulativeTokens: visualHarness ? VISUAL_SIDEBAR_CUMULATIVE_TOKENS : undefined,
+		costUsd: visualHarness ? VISUAL_SIDEBAR_COST_USD : state.costUsd,
+		mcpServers: visualHarness ? PLACEHOLDER_MCP : getCachedMcpRoster({ cwd, piAgentDir: resolvePiAgentDir() }),
+		memory: [],
+		memoryTotal: 0,
+		activeSubTab: "CONTEXT",
+		sessions: [{ name: sessionLabel(state), branch: state.gitBranch, active: true }],
 	};
 }
 
@@ -354,16 +392,6 @@ function centerRows(rows: readonly string[], width: number): string[] {
 	return rows.map((row) => centerAnsi(row, width));
 }
 
-class RpcTopChromeComponent implements ShellRenderable {
-	public constructor(private readonly adapter: RpcShellAdapter) {}
-	public invalidate(): void {}
-	public render(width: number): string[] {
-		if (!this.adapter.isActive()) return [];
-		const block = renderTopChromeBlock(topChromeSnapshot(this.adapter.getState()), width);
-		return width >= 80 ? ["", ...block] : block;
-	}
-}
-
 class RpcEditorShellComponent implements ShellRenderable {
 	public constructor(
 		private readonly adapter: RpcShellAdapter,
@@ -379,9 +407,20 @@ class RpcHintComponent implements ShellRenderable {
 	public constructor(private readonly adapter: RpcShellAdapter) {}
 	public invalidate(): void {}
 	public render(width: number): string[] {
+		const extensionRows = this.adapter.renderExtensionBelowEditor(width).filter((row) => stripAnsi(row).trim().length > 0);
+		if (extensionRows.length > 0) return [extensionRows[0]!];
 		if (!this.adapter.isActive()) return [renderSplashHint(width)];
 		const sidebarVisible = width >= SIDEBAR_MIN_TERMINAL_WIDTH;
 		return [renderActiveHint(this.adapter.getState(), width, sidebarVisible)];
+	}
+}
+
+class RpcAboveEditorComponent implements ShellRenderable {
+	public constructor(private readonly adapter: RpcShellAdapter) {}
+	public invalidate(): void {}
+	public render(width: number): string[] {
+		const rows = this.adapter.renderExtensionAboveEditor(width);
+		return rows.length > 0 ? ["", ...rows] : [];
 	}
 }
 
@@ -394,34 +433,6 @@ class RpcFooterComponent implements ShellRenderable {
 			return version ? [version] : [""];
 		}
 		return renderFooterBlock(footerSnapshot(this.adapter.getState(), false), width);
-	}
-}
-
-class RpcSidebarComponent implements ShellRenderable {
-	public constructor(private readonly adapter: RpcShellAdapter) {}
-	public invalidate(): void {}
-	public render(width: number): string[] {
-		const cwd = hostCwd();
-		const state = this.adapter.getState();
-		const visualHarness = isVisualHarness();
-		// Runtime captures still submit through the live RPC prompt path; only
-		// volatile sidebar metadata is normalized to keep required crop gates stable.
-		const contextTokens = visualHarness ? VISUAL_SIDEBAR_CONTEXT_TOKENS : state.contextTokens ?? 0;
-		return renderSidebar({
-			projectName: basename(cwd) || cwd,
-			branch: visualHarness ? "main" : state.gitBranch,
-			inputTokens: contextTokens,
-			outputTokens: 0,
-			currentContextTokens: contextTokens,
-			contextWindow: visualHarness ? VISUAL_SIDEBAR_CONTEXT_WINDOW : state.contextWindow ?? 0,
-			cumulativeTokens: visualHarness ? VISUAL_SIDEBAR_CUMULATIVE_TOKENS : undefined,
-			costUsd: visualHarness ? VISUAL_SIDEBAR_COST_USD : state.costUsd,
-			mcpServers: visualHarness ? PLACEHOLDER_MCP : getCachedMcpRoster({ cwd, piAgentDir: resolvePiAgentDir() }),
-			memory: [],
-			memoryTotal: 0,
-			activeSubTab: "CONTEXT",
-			sessions: [{ name: sessionLabel(state), branch: state.gitBranch, active: true }],
-		}, width);
 	}
 }
 
@@ -451,7 +462,7 @@ class RpcOverlayHost {
 		if (modal) {
 			entries.push({
 				component: modal,
-				options: { anchor: "center", width: "80%", maxHeight: "80%" },
+				options: { anchor: "top-left", row: 0, col: 0, width: "100%", maxHeight: "100%" },
 				hidden: !modal.getActiveKind?.(),
 				focusOrder: 30,
 			});

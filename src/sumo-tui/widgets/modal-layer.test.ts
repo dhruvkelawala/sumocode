@@ -40,6 +40,24 @@ describe("ModalLayer", () => {
 		expect(layer.getActiveKind()).toBeUndefined();
 	});
 
+	it("routes input to the visible modal while later modals are queued", async () => {
+		const layer = new ModalLayer({ getTerminalSize: () => ({ columns: 80, rows: 24 }) });
+		const input = layer.input("PATH");
+		const select = layer.select("NEXT", ["alpha", "beta"]);
+
+		layer.handleInput("/tmp/sumocode");
+		expect(layer.render(80).join("\n")).toContain("/tmp/sumocode");
+		expect(layer.render(80).join("\n")).not.toContain("NEXT");
+
+		layer.handleInput("enter");
+		await expect(input).resolves.toBe("/tmp/sumocode");
+		expect(layer.render(80).join("\n")).toContain("NEXT");
+
+		layer.handleInput("down");
+		layer.handleInput("enter");
+		await expect(select).resolves.toBe("beta");
+	});
+
 	it("RegionRegistry mounts custom modals above all content with backdrop", async () => {
 		const yoga = await loadYoga();
 		const root = new SumoNode(yoga.Node.create());

@@ -38,6 +38,11 @@ export interface RpcHostRuntimeOptions {
 	readonly modal?: Component & { getActiveKind?(): string | undefined };
 	readonly overlay?: Component & { getActiveKind?(): string | undefined };
 	readonly notifications?: Component;
+	readonly extensionRegions?: {
+		readonly aboveEditor?: Component;
+		readonly belowEditor?: Component;
+		readonly sidebar?: Component;
+	};
 	readonly inputHandler?: RpcHostInputHandler;
 }
 
@@ -74,6 +79,7 @@ export class RpcHostRuntime {
 	private readonly modal: (Component & { getActiveKind?(): string | undefined }) | undefined;
 	private readonly overlay: (Component & { getActiveKind?(): string | undefined }) | undefined;
 	private readonly notifications: Component | undefined;
+	private readonly extensionRegions: RpcHostRuntimeOptions["extensionRegions"];
 	private readonly inputHandler: RpcHostInputHandler | undefined;
 	private readonly inputPreview: string | undefined;
 	private state: RpcHostChromeState;
@@ -123,6 +129,7 @@ export class RpcHostRuntime {
 		this.modal = options.modal;
 		this.overlay = options.overlay;
 		this.notifications = options.notifications;
+		this.extensionRegions = options.extensionRegions;
 		this.inputHandler = options.inputHandler;
 	}
 
@@ -146,6 +153,7 @@ export class RpcHostRuntime {
 			modal: this.modal,
 			overlay: this.overlay,
 			notifications: this.notifications,
+			extensionRegions: this.extensionRegions,
 		});
 		if (this.stopped) {
 			shell.dispose();
@@ -209,7 +217,7 @@ export async function renderRpcHostFrameForTest(
 	snapshot: RpcHostRuntimeSnapshot,
 	columns: number,
 	rows: number,
-	options: Pick<RpcHostRuntimeOptions, "editor"> = {},
+	options: Pick<RpcHostRuntimeOptions, "editor" | "extensionRegions" | "notifications"> = {},
 ): Promise<CellBuffer> {
 	const shell = await RpcShellAdapter.create({
 		terminal: { writeFramePatches: () => undefined },
@@ -218,6 +226,8 @@ export async function renderRpcHostFrameForTest(
 		initialTranscript: snapshot.transcript,
 		inputPreview: snapshot.inputPreview,
 		editor: options.editor,
+		notifications: options.notifications,
+		extensionRegions: options.extensionRegions,
 	});
 	try {
 		shell.render();

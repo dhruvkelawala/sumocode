@@ -70,6 +70,54 @@ export function renderSidebar(snapshot: SidebarSnapshot, width: number): string[
 	return renderRegistrySidebarLines(snapshot, width).map((line) => surfaceLine(line, width));
 }
 
+export type SidebarPublication = {
+	readonly component: Component;
+	readonly isVisible: (cols: number, rows: number) => boolean;
+};
+
+class SidebarComponent implements Component {
+	public constructor(
+		private readonly loadSnapshot: () => SidebarSnapshot,
+		private readonly extra?: Component,
+		private readonly targetRows?: () => number,
+	) {}
+
+	public invalidate(): void {
+		this.extra?.invalidate?.();
+	}
+
+	public render(width: number): string[] {
+		const lines = renderSidebar(this.loadSnapshot(), width);
+		const extraLines = this.extra?.render(width) ?? [];
+		const rows = extraLines.length > 0 ? [...lines, ...extraLines] : lines;
+		const targetRows = this.targetRows?.() ?? rows.length;
+		return [
+			...rows,
+			...Array.from({ length: Math.max(0, targetRows - rows.length) }, () => surfaceLine("", width)),
+		];
+	}
+}
+
+export function createSidebarComponent(
+	loadSnapshot: () => SidebarSnapshot,
+	extra?: Component,
+	targetRows?: () => number,
+): Component {
+	return new SidebarComponent(loadSnapshot, extra, targetRows);
+}
+
+export function createSidebarPublication(
+	loadSnapshot: () => SidebarSnapshot,
+	isVisible: (cols: number, rows: number) => boolean,
+	extra?: Component,
+	targetRows?: () => number,
+): SidebarPublication {
+	return {
+		component: createSidebarComponent(loadSnapshot, extra, targetRows),
+		isVisible,
+	};
+}
+
 export type SidebarMemoryCache = {
 	/** Refreshes Remnic facts and returns true when the rendered memory snapshot changed. */
 	refresh(prompt: string): Promise<boolean>;
@@ -262,21 +310,11 @@ export function installSidebar(pi: ExtensionAPI): void {
 					if (sessionHasMessages(ctx)) requestRender?.();
 				});
 			}
-			const sidebarComponent: Component = {
-				invalidate(): void {},
-				render(width: number): string[] {
-					const lines = renderSidebar(
-						snapshotFromContext(ctx, memoryCache?.snapshot() ?? { memory: [] }, activeSubTab, metricsHud.snapshot()),
-						width,
-					);
-					const terminalRows = (tui.terminal as { rows?: number } | undefined)?.rows ?? lines.length;
-					const targetRows = Math.max(lines.length, sidebarOverlayTargetRows(terminalRows));
-					return [
-						...lines,
-						...Array.from({ length: Math.max(0, targetRows - lines.length) }, () => surfaceLine("", width)),
-					];
-				},
-			};
+			const sidebarComponent = createSidebarComponent(
+				() => snapshotFromContext(ctx, memoryCache?.snapshot() ?? { memory: [] }, activeSubTab, metricsHud.snapshot()),
+				undefined,
+				() => sidebarOverlayTargetRows((tui.terminal as { rows?: number } | undefined)?.rows ?? 0),
+			);
 			const overlay = installNonCapturingSidebarOverlay(tui, sidebarComponent, () => sessionHasMessages(ctx));
 			return {
 				invalidate(): void {},

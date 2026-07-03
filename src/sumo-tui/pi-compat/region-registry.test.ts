@@ -5,7 +5,7 @@ import { DIRECTION_LTR, loadYoga } from "../layout/yoga.js";
 import { CellBuffer } from "../render/buffer.js";
 import { composite } from "../render/compositor.js";
 import { ChatPager } from "../widgets/chat-pager.js";
-import { RegionRegistry } from "./region-registry.js";
+import { ExtensionStatusPublication, RegionRegistry } from "./region-registry.js";
 
 class TestComponent implements Component {
 	public readonly dispose = vi.fn();
@@ -122,6 +122,30 @@ describe("RegionRegistry", () => {
 		expect(registry.getSlot("chat").children).toContain(chat);
 		expect(frame.toPlainRow(0)).toContain("╭ USER");
 		expect(frame.toPlainRow(1)).toContain("hello retained chat");
+		registry.dispose();
+	});
+
+	it("publishes mounted slot components as backend-neutral renderables", async () => {
+		const registry = await makeRegistry();
+		registry.mountWidget("above-a", ["first"], { placement: "aboveEditor" });
+		registry.mountWidget("above-b", ["second"], { placement: "aboveEditor" });
+		registry.mountWidget("side", ["sidebar widget"], { placement: "sidebar" });
+
+		expect(registry.createSlotPublication("aboveEditor").component.render(20)).toEqual(["first", "second"]);
+		expect(registry.createSlotPublication("sidebar").component.render(20)).toEqual(["sidebar widget"]);
+		registry.dispose();
+	});
+
+	it("publishes extension statuses as a renderable status component", async () => {
+		const registry = await makeRegistry();
+		const statuses = new ExtensionStatusPublication();
+		registry.mountStatus(statuses.component);
+
+		statuses.setStatus("task-mode", "done");
+		statuses.setStatus("empty", undefined);
+
+		expect(registry.createSlotPublication("status").component.render(40)).toEqual(["task-mode: done"]);
+		expect(statuses.getStatuses().get("task-mode")).toBe("done");
 		registry.dispose();
 	});
 });

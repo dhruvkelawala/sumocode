@@ -46,6 +46,24 @@ export type WidgetMount =
 	| DisposableComponent
 	| ((tui: TUI, theme: Theme) => DisposableComponent);
 
+export interface RegionSlotPublication {
+	readonly component: DisposableComponent;
+}
+
+export interface RegionSidebarPublication extends RegionSlotPublication {
+	readonly isVisible: (cols: number, rows: number) => boolean;
+}
+
+export interface RegionStatusPublication extends RegionSlotPublication {
+	setStatus(key: string, text: string | undefined): void;
+	getStatuses(): ReadonlyMap<string, string>;
+}
+
+export interface RegionOverlayPublication extends RegionSlotPublication {
+	readonly focusOrder?: number;
+	readonly isVisible?: (cols: number, rows: number) => boolean;
+}
+
 export interface RegionRegistryOptions {
 	readonly yoga: Yoga;
 	readonly tui: TUI;
@@ -57,7 +75,7 @@ export interface RegionRegistryOptions {
 	readonly onChange?: () => void;
 }
 
-interface MountedRegion {
+export interface MountedRegion {
 	readonly key: string;
 	readonly slot: RegionSlotName | "overlay";
 	readonly node: SumoNode;
@@ -69,6 +87,44 @@ class StaticTextComponent implements Component {
 	public invalidate(): void {}
 	public render(_width: number): string[] {
 		return [...this.lines];
+	}
+}
+
+class RegionSlotComponent implements Component {
+	public constructor(
+		private readonly loadMounts: () => readonly MountedRegion[],
+		private readonly filterBlankRows = false,
+	) {}
+	public invalidate(): void {
+		for (const mount of this.loadMounts()) mount.component.invalidate?.();
+	}
+	public render(width: number): string[] {
+		const rows: string[] = [];
+		for (const mount of this.loadMounts()) {
+			const rendered = mount.component.render(width);
+			rows.push(...(this.filterBlankRows ? rendered.filter((row) => row.trim().length > 0) : rendered));
+		}
+		return rows;
+	}
+}
+
+export class ExtensionStatusPublication implements RegionStatusPublication {
+	private readonly statuses = new Map<string, string>();
+	public readonly component: DisposableComponent = this;
+
+	public setStatus(key: string, text: string | undefined): void {
+		if (text === undefined || text.length === 0) this.statuses.delete(key);
+		else this.statuses.set(key, text);
+	}
+
+	public getStatuses(): ReadonlyMap<string, string> {
+		return new Map(this.statuses);
+	}
+
+	public invalidate(): void {}
+
+	public render(_width: number): string[] {
+		return [...this.statuses.entries()].map(([key, text]) => `${key}: ${text}`);
 	}
 }
 
@@ -180,12 +236,35 @@ export class RegionRegistry {
 		return this.mounts.get(key);
 	}
 
+	public getMountedInSlot(slot: RegionSlotName): MountedRegion[] {
+		return [...this.mounts.values()].filter((mount) => mount.slot === slot);
+	}
+
+	public createSlotPublication(slot: RegionSlotName, opts: { filterBlankRows?: boolean } = {}): RegionSlotPublication {
+		return {
+			component: new RegionSlotComponent(() => this.getMountedInSlot(slot), opts.filterBlankRows ?? false),
+		};
+	}
+
+	public createStackPublication(slots: readonly RegionSlotName[], opts: { filterBlankRows?: boolean } = {}): RegionSlotPublication {
+		return {
+			component: new RegionSlotComponent(
+				() => slots.flatMap((slot) => this.getMountedInSlot(slot)),
+				opts.filterBlankRows ?? false,
+			),
+		};
+	}
+
 	public mountHeader(content: HeaderMount | undefined): void {
 		this.mount("__header", "header", content === undefined ? undefined : this.resolveHeader(content));
 	}
 
 	public mountFooter(content: FooterMount | undefined): void {
 		this.mount("__footer", "footer", content === undefined ? undefined : this.resolveFooter(content));
+	}
+
+	public mountStatus(content: WidgetMount | undefined): void {
+		this.mount("__status", "status", content === undefined ? undefined : this.resolveWidget(content));
 	}
 
 	public mountEditor(factory: ((tui: TUI, theme: EditorTheme, keybindings: KeybindingsManager) => EditorComponent) | undefined): void {

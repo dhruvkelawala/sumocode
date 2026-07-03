@@ -84,6 +84,14 @@ class FakeEditor implements Component {
 	}
 }
 
+class StaticComponent implements Component {
+	public constructor(private readonly rows: readonly string[]) {}
+	public invalidate(): void {}
+	public render(_width: number): string[] {
+		return [...this.rows];
+	}
+}
+
 describe("RPC host retained runtime frame", () => {
 	it("renders the Cathedral splash instead of the provisional empty shell", async () => {
 		const frame = await renderRpcHostFrameForTest({
@@ -192,6 +200,49 @@ describe("RPC host retained runtime frame", () => {
 		expect(sidebarText).toContain("REGISTRY");
 		expect(sidebarText).toContain("sumocode");
 		expect(chatText).toContain("landscape chat body");
+	});
+
+	it("renders RPC extension widgets and statuses through shared shell regions", async () => {
+		const frame = await renderRpcHostFrameForTest({
+			state: state({ messageCount: 1, hasMessages: true }),
+			transcript: {
+				messages: [{
+					id: "message-1",
+					role: "user",
+					displayName: "YOU",
+					blocks: [{ type: "markdown", text: "region body" }],
+				}],
+			},
+		}, 160, 45, {
+			extensionRegions: {
+				aboveEditor: new StaticComponent(["fast-mode: fast", "rpc above widget"]),
+				sidebar: new StaticComponent(["rpc sidebar widget"]),
+			},
+		});
+
+		const plain = Array.from({ length: 45 }, (_, row) => frame.toPlainRow(row)).join("\n");
+		expect(plain).toContain("fast-mode: fast");
+		expect(plain).toContain("rpc above widget");
+		expect(plain).toContain("rpc sidebar widget");
+	});
+
+	it("renders RPC notifications through the overlay layer", async () => {
+		const frame = await renderRpcHostFrameForTest({
+			state: state({ messageCount: 1, hasMessages: true }),
+			transcript: {
+				messages: [{
+					id: "message-1",
+					role: "user",
+					displayName: "YOU",
+					blocks: [{ type: "markdown", text: "notification body" }],
+				}],
+			},
+		}, 100, 30, {
+			notifications: new StaticComponent(["rpc notification toast"]),
+		});
+
+		const plain = Array.from({ length: 30 }, (_, row) => frame.toPlainRow(row)).join("\n");
+		expect(plain).toContain("rpc notification toast");
 	});
 
 	it("hides the sidebar in portrait and moves project context to the hint row", async () => {

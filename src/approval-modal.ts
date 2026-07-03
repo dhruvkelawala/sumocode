@@ -57,6 +57,7 @@ const BIBLE_COMMAND_BOX_WIDTH_AT_80 = 68;
 const MAX_COMMAND_ROWS = 12;
 const MAX_DESCRIPTION_ROWS = 4;
 const RPC_APPROVAL_TIMEOUT_MS = 60_000;
+export const RPC_APPROVAL_TITLE_MARKER = "APPROVAL REQUIRED";
 
 const panelRow = wrapPanelRow;
 
@@ -266,7 +267,7 @@ function rpcApprovalTitle(snapshot: Omit<ApprovalModalSnapshot, "activeButton">)
 	const description = snapshot.descriptionLines.length > 0
 		? `\n\n${snapshot.descriptionLines.join("\n")}`
 		: "";
-	return `APPROVAL REQUIRED\n\n${snapshot.command}${description}`;
+	return `${RPC_APPROVAL_TITLE_MARKER}\n\n${snapshot.command}${description}`;
 }
 
 export async function showRpcApprovalPrompt(

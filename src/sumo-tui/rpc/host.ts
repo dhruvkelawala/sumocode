@@ -1,5 +1,7 @@
 import { resolve } from "node:path";
-import { ModalManager } from "../widgets/modal.js";
+import { loadYoga } from "../layout/yoga.js";
+import { ExtensionStatusPublication, RegionRegistry } from "../pi-compat/region-registry.js";
+import { ModalLayer } from "../widgets/modal-layer.js";
 import { NotificationCenter } from "../widgets/notification.js";
 import { SumoRpcClient } from "./client.js";
 import { RpcHostControls } from "./controls.js";
@@ -24,6 +26,10 @@ export interface RpcHostMainOptions {
 
 function writeLine(stream: Pick<NodeJS.WriteStream, "write">, line: string): void {
 	stream.write(`${line}\n`);
+}
+
+function writeTerminalTitle(stream: Pick<NodeJS.WriteStream, "write">, title: string): void {
+	stream.write(`\u001b]0;${title.replace(/[\x00-\x1F\x7F-\x9F]/g, "")}\u0007`);
 }
 
 function hostRoot(env: NodeJS.ProcessEnv): string {
@@ -94,10 +100,35 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 	const controls = new RpcHostControls(client, stateStore);
 	let runtime: RpcHostRuntime | undefined;
 	const requestRender = (): void => runtime?.requestRender();
-	const modals = new ModalManager({ onChange: requestRender });
+	const hostTerminal = {
+		get columns(): number {
+			return Math.max(1, stdout.columns ?? 80);
+		},
+		get rows(): number {
+			return Math.max(1, stdout.rows ?? 24);
+		},
+		setTitle(title: string): void {
+			writeTerminalTitle(stdout, title);
+		},
+	};
+	const regionRegistry = new RegionRegistry({
+		yoga: await loadYoga(),
+		tui: { requestRender, terminal: hostTerminal } as never,
+		theme: {} as never,
+		editorTheme: { borderColor: (value: string) => value, selectList: {} } as never,
+		keybindings: {} as never,
+		onChange: requestRender,
+	});
+	const statusPublication = new ExtensionStatusPublication();
+	regionRegistry.mountStatus(statusPublication.component);
+	const modals = new ModalLayer({
+		onChange: requestRender,
+		getTerminalSize: () => ({ columns: hostTerminal.columns, rows: hostTerminal.rows }),
+	});
 	const overlays = new RpcHostOverlayManager(requestRender);
 	const notifications = new NotificationCenter({ onChange: requestRender });
 	let actions: RpcHostActions | undefined;
+	let regionRegistryDisposed = false;
 	const editor = new RpcHostEditorController({
 		controls,
 		cwd,
@@ -126,7 +157,11 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 	const uiResponder = createRpcExtensionUiResponder({
 		modals,
 		notifications,
+		approvalOverlay: overlays,
+		regionRegistry,
+		statusPublication,
 		editorText: editor,
+		terminal: hostTerminal,
 		onRenderRequest: requestRender,
 	});
 	client.setUiRequestHandler((request) => uiResponder.handle(request));
@@ -168,6 +203,10 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 	const stop = async (code = 0): Promise<void> => {
 		if (statsTimer) clearInterval(statsTimer);
 		runtime?.stop(code);
+		if (!regionRegistryDisposed) {
+			regionRegistryDisposed = true;
+			regionRegistry.dispose();
+		}
 		await client.stop();
 	};
 	const handleSigint = (): void => { void stop(130).then(() => process.exit(130)); };
@@ -194,6 +233,11 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 			modal: modals,
 			overlay: overlays,
 			notifications,
+			extensionRegions: {
+				aboveEditor: regionRegistry.createStackPublication(["status", "widgets-default", "aboveEditor"]).component,
+				belowEditor: regionRegistry.createStackPublication(["belowEditor"], { filterBlankRows: true }).component,
+				sidebar: regionRegistry.createSlotPublication("sidebar").component,
+			},
 			inputHandler: actions,
 		});
 		await runtime.start();

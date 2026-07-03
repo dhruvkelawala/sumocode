@@ -1,4 +1,4 @@
-import { Key, matchesKey, type Component, type KeyId } from "@earendil-works/pi-tui";
+import { Key, matchesKey, truncateToWidth, visibleWidth, type Component, type KeyId } from "@earendil-works/pi-tui";
 
 export interface ModalDialogOptions {
 	readonly signal?: AbortSignal;
@@ -14,15 +14,15 @@ type ActiveModal =
 			readonly message: string;
 			selectedIndex: number;
 			readonly resolve: (value: boolean) => void;
-			readonly cleanup: () => void;
+			cleanup: () => void;
 	  }
 	| {
 			readonly kind: "select";
 			readonly title: string;
-			readonly options: readonly string[];
+			readonly options: readonly SelectOption[];
 			selectedIndex: number;
 			readonly resolve: (value: string | undefined) => void;
-			readonly cleanup: () => void;
+			cleanup: () => void;
 	  }
 	| {
 			readonly kind: "input";
@@ -30,13 +30,18 @@ type ActiveModal =
 			readonly placeholder: string | undefined;
 			value: string;
 			readonly resolve: (value: string | undefined) => void;
-			readonly cleanup: () => void;
+			cleanup: () => void;
 	  };
 
 export interface ModalManagerOptions {
 	readonly setTimeout?: typeof setTimeout;
 	readonly clearTimeout?: typeof clearTimeout;
 	readonly onChange?: () => void;
+}
+
+interface SelectOption {
+	readonly label: string;
+	readonly value: string;
 }
 
 function keyEq(data: string, ...ids: readonly string[]): boolean {
@@ -52,13 +57,55 @@ function border(width: number): string {
 }
 
 function truncate(text: string, width: number): string {
-	if (text.length <= width) return text;
-	if (width <= 1) return "…";
-	return `${text.slice(0, width - 1)}…`;
+	return visibleWidth(text) <= width ? text : truncateToWidth(text, width);
 }
 
 function pad(text: string, width: number): string {
-	return text.length >= width ? text : `${text}${" ".repeat(width - text.length)}`;
+	const visible = visibleWidth(text);
+	return visible >= width ? text : `${text}${" ".repeat(width - visible)}`;
+}
+
+const ANSI_PATTERN = /\u001b(?:\[[0-?]*[ -/]*[@-~]|\][^\u0007]*(?:\u0007|\u001b\\)|_[^\u0007]*(?:\u0007|\u001b\\))/g;
+const CONTROL_PATTERN = /[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]/g;
+const BRACKETED_PASTE_START = "\u001b[200~";
+const BRACKETED_PASTE_END = "\u001b[201~";
+
+function sanitizeModalText(text: string): string {
+	return text
+		.replace(/\r\n?/g, "\n")
+		.replace(ANSI_PATTERN, "")
+		.replace(/\t/g, " ")
+		.replace(CONTROL_PATTERN, "");
+}
+
+function sanitizeInputChunk(text: string): string {
+	return sanitizeModalText(text)
+		.replaceAll(BRACKETED_PASTE_START, "")
+		.replaceAll(BRACKETED_PASTE_END, "")
+		.replace(/\n/g, "");
+}
+
+function wrapText(text: string, width: number): string[] {
+	if (width <= 0) return [""];
+	const rows: string[] = [];
+	for (const raw of text.split("\n")) {
+		if (raw.length === 0) {
+			rows.push("");
+			continue;
+		}
+		let current = "";
+		for (const char of [...raw]) {
+			const next = `${current}${char}`;
+			if (visibleWidth(next) <= width) {
+				current = next;
+				continue;
+			}
+			rows.push(current);
+			current = char.trim().length === 0 ? "" : char;
+		}
+		rows.push(current);
+	}
+	return rows.length > 0 ? rows : [""];
 }
 
 /** Basic retained modal layer for Phase 4 confirm/select/input flows. */
@@ -67,6 +114,7 @@ export class ModalManager implements Component {
 	private readonly clearTimer: typeof clearTimeout;
 	private readonly onChange: () => void;
 	private active: ActiveModal | undefined;
+	private readonly queue: ActiveModal[] = [];
 
 	public constructor(options: ModalManagerOptions = {}) {
 		this.setTimer = options.setTimeout ?? setTimeout;
@@ -76,25 +124,46 @@ export class ModalManager implements Component {
 
 	public confirm(title: string, message: string, opts?: ModalDialogOptions): Promise<boolean> {
 		return new Promise<boolean>((resolve) => {
-			const cleanup = this.installDismissal(opts, () => this.finish(false));
-			this.active = { kind: "confirm", title, message, selectedIndex: 0, resolve, cleanup };
-			this.onChange();
+			const entry: ActiveModal = {
+				kind: "confirm",
+				title: sanitizeModalText(title),
+				message: sanitizeModalText(message),
+				selectedIndex: 0,
+				resolve,
+				cleanup: () => undefined,
+			};
+			entry.cleanup = this.installDismissal(opts, () => this.finishEntry(entry, false));
+			this.enqueue(entry);
 		});
 	}
 
 	public select(title: string, options: readonly string[], opts?: ModalDialogOptions): Promise<string | undefined> {
 		return new Promise<string | undefined>((resolve) => {
-			const cleanup = this.installDismissal(opts, () => this.finish(undefined));
-			this.active = { kind: "select", title, options, selectedIndex: 0, resolve, cleanup };
-			this.onChange();
+			const entry: ActiveModal = {
+				kind: "select",
+				title: sanitizeModalText(title),
+				options: options.map((option) => ({ label: sanitizeModalText(option), value: option })),
+				selectedIndex: 0,
+				resolve,
+				cleanup: () => undefined,
+			};
+			entry.cleanup = this.installDismissal(opts, () => this.finishEntry(entry, undefined));
+			this.enqueue(entry);
 		});
 	}
 
 	public input(title: string, placeholder?: string, opts?: ModalDialogOptions): Promise<string | undefined> {
 		return new Promise<string | undefined>((resolve) => {
-			const cleanup = this.installDismissal(opts, () => this.finish(undefined));
-			this.active = { kind: "input", title, placeholder, value: "", resolve, cleanup };
-			this.onChange();
+			const entry: ActiveModal = {
+				kind: "input",
+				title: sanitizeModalText(title),
+				placeholder: placeholder === undefined ? undefined : sanitizeModalText(placeholder),
+				value: "",
+				resolve,
+				cleanup: () => undefined,
+			};
+			entry.cleanup = this.installDismissal(opts, () => this.finishEntry(entry, undefined));
+			this.enqueue(entry);
 		});
 	}
 
@@ -130,7 +199,7 @@ export class ModalManager implements Component {
 		}
 		if (keyEq(data, Key.enter, "return", "enter")) {
 			if (this.active.kind === "confirm") this.finish(this.active.selectedIndex === 0);
-			else this.finish(this.active.options[this.active.selectedIndex]);
+			else this.finish(this.active.options[this.active.selectedIndex]?.value);
 		}
 	}
 
@@ -139,16 +208,20 @@ export class ModalManager implements Component {
 		const modalWidth = Math.min(width, Math.max(32, Math.floor(width * 0.6)));
 		const left = " ".repeat(Math.max(0, Math.floor((width - modalWidth) / 2)));
 		const line = (text: string) => `${left}${pad(truncate(text, modalWidth), modalWidth)}`;
-		const lines: string[] = [line(border(modalWidth)), line(this.active.title), line(border(modalWidth))];
+		const lines: string[] = [
+			line(border(modalWidth)),
+			...wrapText(this.active.title, modalWidth).map(line),
+			line(border(modalWidth)),
+		];
 
 		if (this.active.kind === "confirm") {
-			lines.push(...this.active.message.split("\n").map(line));
+			lines.push(...wrapText(this.active.message, modalWidth).map(line));
 			const yes = this.active.selectedIndex === 0 ? "▶ Yes" : "  Yes";
 			const no = this.active.selectedIndex === 1 ? "▶ No" : "  No";
 			lines.push(line(`${yes}    ${no}`));
 		} else if (this.active.kind === "select") {
 			for (const [index, option] of this.active.options.entries()) {
-				lines.push(line(`${index === this.active.selectedIndex ? "▶" : " "} ${option}`));
+				lines.push(line(`${index === this.active.selectedIndex ? "▶" : " "} ${option.label}`));
 			}
 		} else {
 			const value = this.active.value || this.active.placeholder || "";
@@ -172,6 +245,12 @@ export class ModalManager implements Component {
 		if (data.length === 1 && !/\p{Cc}/u.test(data)) {
 			modal.value += data;
 			this.onChange();
+			return;
+		}
+		const printable = sanitizeInputChunk(data);
+		if (printable.length > 0) {
+			modal.value += printable;
+			this.onChange();
 		}
 	}
 
@@ -186,11 +265,33 @@ export class ModalManager implements Component {
 	private finish(value: ModalResult): void {
 		const modal = this.active;
 		if (!modal) return;
-		this.active = undefined;
+		this.finishEntry(modal, value);
+	}
+
+	private enqueue(modal: ActiveModal): void {
+		if (this.active) this.queue.push(modal);
+		else this.active = modal;
+		this.onChange();
+	}
+
+	private finishEntry(modal: ActiveModal, value: ModalResult): void {
+		if (this.active === modal) {
+			this.active = undefined;
+		} else {
+			const index = this.queue.indexOf(modal);
+			if (index === -1) return;
+			this.queue.splice(index, 1);
+		}
 		modal.cleanup();
 		if (modal.kind === "confirm") modal.resolve(value === true);
 		else modal.resolve(typeof value === "string" ? value : undefined);
+		this.activateNext();
 		this.onChange();
+	}
+
+	private activateNext(): void {
+		if (this.active) return;
+		this.active = this.queue.shift();
 	}
 
 	private installDismissal(opts: ModalDialogOptions | undefined, dismiss: () => void): () => void {

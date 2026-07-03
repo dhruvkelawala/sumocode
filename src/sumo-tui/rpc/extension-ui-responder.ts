@@ -1,6 +1,14 @@
 import type { RpcExtensionUIRequest, RpcExtensionUIResponse } from "@earendil-works/pi-coding-agent";
+import type { Component } from "@earendil-works/pi-tui";
+import {
+	RPC_APPROVAL_TITLE_MARKER,
+	renderApprovalModal,
+	updateApprovalSnapshot,
+	type ApprovalChoice,
+	type ApprovalModalSnapshot,
+} from "../../approval-modal.js";
 import type { EditorTextController } from "../pi-compat/extension-ui-adapter.js";
-import type { RegionRegistry, WidgetPlacement } from "../pi-compat/region-registry.js";
+import type { ExtensionStatusPublication, RegionRegistry, WidgetPlacement } from "../pi-compat/region-registry.js";
 import { ModalManager } from "../widgets/modal.js";
 import { NotificationCenter, type NotificationLevel } from "../widgets/notification.js";
 
@@ -8,11 +16,17 @@ type DialogModals = Pick<ModalManager, "select" | "confirm" | "input">;
 type ToastCenter = Pick<NotificationCenter, "notify">;
 type TerminalTitle = { setTitle?(title: string): void };
 type StatusSink = (key: string, text: string | undefined) => void;
+type ApprovalOverlayHost = {
+	show<T>(kind: string, create: (done: (value: T) => void) => Component): Promise<T>;
+	close?(value?: unknown): void;
+};
 
 export interface RpcExtensionUiResponderOptions {
 	readonly modals?: DialogModals;
 	readonly notifications?: ToastCenter;
+	readonly approvalOverlay?: ApprovalOverlayHost;
 	readonly regionRegistry?: Pick<RegionRegistry, "mountWidget">;
+	readonly statusPublication?: Pick<ExtensionStatusPublication, "setStatus">;
 	readonly editorText?: EditorTextController;
 	readonly terminal?: TerminalTitle;
 	readonly setStatus?: StatusSink;
@@ -50,10 +64,65 @@ function notifyLevel(level: "info" | "warning" | "error" | undefined): Notificat
 	return level ?? "info";
 }
 
+const RPC_APPROVAL_OPTIONS = ["No", "Yes", "Always"] as const;
+const ANSI_PATTERN = /\u001b(?:\[[0-?]*[ -/]*[@-~]|\][^\u0007]*(?:\u0007|\u001b\\)|_[^\u0007]*(?:\u0007|\u001b\\))/g;
+const CONTROL_PATTERN = /[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]/g;
+
+function isApprovalSelect(title: string, options: readonly string[]): boolean {
+	return title.startsWith(RPC_APPROVAL_TITLE_MARKER)
+		&& options.length === RPC_APPROVAL_OPTIONS.length
+		&& options.every((option, index) => option === RPC_APPROVAL_OPTIONS[index]);
+}
+
+function approvalOption(choice: ApprovalChoice): string {
+	if (choice === "yes") return "Yes";
+	if (choice === "always") return "Always";
+	return "No";
+}
+
+function sanitizeApprovalText(text: string): string {
+	return text
+		.replace(/\r\n?/g, "\n")
+		.replace(ANSI_PATTERN, "")
+		.replace(/\t/g, " ")
+		.replace(CONTROL_PATTERN, "");
+}
+
+function approvalSnapshotFromTitle(title: string): ApprovalModalSnapshot {
+	const body = sanitizeApprovalText(title.slice(RPC_APPROVAL_TITLE_MARKER.length)).replace(/^\s+/, "");
+	const sections = body.split(/\n\s*\n/);
+	const command = sections.shift()?.trim() ?? "";
+	const description = sections.join("\n\n").trim();
+	const descriptionLines = description.length > 0 ? description.split("\n") : [];
+	return {
+		command,
+		descriptionLines,
+		activeButton: "no",
+	};
+}
+
+class RpcApprovalOverlayComponent implements Component {
+	public constructor(
+		private snapshot: ApprovalModalSnapshot,
+		private readonly done: (choice: ApprovalChoice) => void,
+	) {}
+	public invalidate(): void {}
+	public handleInput(data: string): void {
+		const result = updateApprovalSnapshot(this.snapshot, data);
+		this.snapshot = result.snapshot;
+		if (result.done) this.done(result.done);
+	}
+	public render(width: number): string[] {
+		return renderApprovalModal(this.snapshot, width);
+	}
+}
+
 export class RpcExtensionUiResponder {
 	private readonly modals: DialogModals;
 	private readonly notifications: ToastCenter;
+	private readonly approvalOverlay: ApprovalOverlayHost | undefined;
 	private readonly regionRegistry: Pick<RegionRegistry, "mountWidget"> | undefined;
+	private readonly statusPublication: Pick<ExtensionStatusPublication, "setStatus"> | undefined;
 	private readonly editorText: EditorTextController;
 	private readonly terminal: TerminalTitle | undefined;
 	private readonly onStatus: StatusSink | undefined;
@@ -65,7 +134,9 @@ export class RpcExtensionUiResponder {
 	public constructor(options: RpcExtensionUiResponderOptions = {}) {
 		this.modals = options.modals ?? new ModalManager({ onChange: options.onRenderRequest });
 		this.notifications = options.notifications ?? new NotificationCenter({ onChange: options.onRenderRequest });
+		this.approvalOverlay = options.approvalOverlay;
 		this.regionRegistry = options.regionRegistry;
+		this.statusPublication = options.statusPublication;
 		this.editorText = options.editorText ?? new RpcHostEditorBuffer();
 		this.terminal = options.terminal;
 		this.onStatus = options.setStatus;
@@ -75,6 +146,10 @@ export class RpcExtensionUiResponder {
 	public async handle(request: RpcExtensionUIRequest): Promise<RpcExtensionUIResponse | void> {
 		switch (request.method) {
 			case "select": {
+				if (this.approvalOverlay && isApprovalSelect(request.title, request.options)) {
+					const value = await this.showApprovalSelect(request.title, request.timeout);
+					return valueResponse(request.id, value);
+				}
 				const value = await this.modals.select(request.title, request.options, { timeout: request.timeout });
 				return valueResponse(request.id, value);
 			}
@@ -98,6 +173,7 @@ export class RpcExtensionUiResponder {
 				return undefined;
 			case "setStatus":
 				this.statuses.set(request.statusKey, request.statusText);
+				this.statusPublication?.setStatus(request.statusKey, request.statusText);
 				this.onStatus?.(request.statusKey, request.statusText);
 				this.onRenderRequest();
 				return undefined;
@@ -115,6 +191,35 @@ export class RpcExtensionUiResponder {
 				this.editorText.setText(request.text);
 				this.onRenderRequest();
 				return undefined;
+		}
+	}
+
+	private async showApprovalSelect(title: string, timeout: number | undefined): Promise<string> {
+		const overlay = this.approvalOverlay;
+		if (!overlay) return "No";
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		try {
+			const choice = overlay.show<ApprovalChoice>(
+				"approval",
+				(done) => new RpcApprovalOverlayComponent(approvalSnapshotFromTitle(title), done),
+			);
+			const resolved = timeout !== undefined && timeout > 0
+				? await Promise.race([
+					choice,
+					new Promise<ApprovalChoice>((resolve) => {
+						timer = setTimeout(() => {
+							overlay.close?.("no");
+							resolve("no");
+						}, timeout);
+						timer.unref?.();
+					}),
+				])
+				: await choice;
+			return approvalOption(resolved);
+		} catch {
+			return "No";
+		} finally {
+			if (timer) clearTimeout(timer);
 		}
 	}
 

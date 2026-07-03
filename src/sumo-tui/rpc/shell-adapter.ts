@@ -1,6 +1,6 @@
 import { homedir } from "node:os";
 import { basename, join, resolve } from "node:path";
-import { visibleWidth, type Component } from "@earendil-works/pi-tui";
+import { truncateToWidth, visibleWidth, type Component } from "@earendil-works/pi-tui";
 import {
 	INPUT_FRAME_HINT_AWAITING,
 	INPUT_FRAME_LABEL_SPLASH,
@@ -9,6 +9,7 @@ import {
 	renderInputHints,
 } from "../../cathedral/input-frame.js";
 import {
+	colorHex,
 	formatCwd,
 	renderFooterBlock,
 	renderSplashVersionLine,
@@ -19,7 +20,8 @@ import { getCachedMcpRoster } from "../../mcp-config-reader.js";
 import { SIDEBAR_MIN_TERMINAL_WIDTH } from "../../sidebar-placement.js";
 import { PLACEHOLDER_MCP, createSidebarPublication, type SidebarSnapshot } from "../../sidebar.js";
 import { createTopChromePublication, type TopChromeSnapshot } from "../../top-chrome.js";
-import { type SumoCodeState } from "../../themes/index.js";
+import { activeThemeColors, getActiveTheme, type SumoCodeState } from "../../themes/index.js";
+import { renderIndicator, shouldInstallWorkingIndicator } from "../../working-indicator.js";
 import { createSplashTree, defaultSplashSnapshot, type SplashTree } from "../cathedral/splash-tree.js";
 import { loadYoga, type Yoga } from "../layout/yoga.js";
 import type { CellBuffer } from "../render/buffer.js";
@@ -85,7 +87,6 @@ const VISUAL_SIDEBAR_CONTEXT_WINDOW = 200_000;
 const VISUAL_SIDEBAR_CUMULATIVE_TOKENS = 3_400_000;
 const VISUAL_SIDEBAR_COST_USD = 0.42;
 const VISUAL_MODEL_LABEL = "gpt-5.5";
-const VISUAL_THINKING_LEVEL: ThinkingLevel = "medium";
 
 export class RpcShellAdapter {
 	private readonly chat: ChatPager;
@@ -101,6 +102,15 @@ export class RpcShellAdapter {
 	private readonly selection: SelectionController;
 	private state: RpcHostChromeState;
 	private transcript: TranscriptViewModel;
+	/**
+	 * Animation tick for the above-editor working indicator. `RetainedShellRenderer`
+	 * resolves `aboveEditorWidgets()` fresh on every render (see `LazyComponentProxy`
+	 * in retained-shell-renderer.ts), so a new `RpcAboveEditorComponent` instance is
+	 * constructed each frame -- any per-frame animation state has to live here, on
+	 * the adapter that persists across renders, not on the widget itself.
+	 */
+	private workingIndicatorTick = 0;
+	private wasWorkingIndicatorBusy = false;
 
 	private constructor(yoga: Yoga, options: RpcShellAdapterOptions) {
 		this.state = options.initialState;
@@ -299,6 +309,45 @@ export class RpcShellAdapter {
 		return this.extensionAboveEditor?.render(width) ?? [];
 	}
 
+	/**
+	 * Above-editor working indicator (D3 parity item): the Pi child process
+	 * that the RPC host spawns runs `installRpcChildProfile` (see
+	 * `src/extension.ts`), which deliberately skips `installWorkingIndicator`
+	 * -- RPC-child extensions own no chrome, the host does. So this can't
+	 * rely on the extension's `ctx.ui.setWidget(..., { placement: "aboveEditor" })`
+	 * path (that's what the pre-RPC owned shell used); it has to derive the
+	 * same visual directly from `RpcHostChromeState` the way the footer/topbar
+	 * already do. Mirrors `WorkingIndicatorComponent` in working-indicator.ts:
+	 * one row, empty while idle, animated theme frame + dim "Working…" label
+	 * while busy.
+	 */
+	public renderWorkingIndicator(width: number): string[] {
+		// V1 scope: the working indicator is a landscape affordance. Portrait's
+		// 60-column width reserves the pre-input breathing row instead (see
+		// shouldInstallWorkingIndicator's doc comment in working-indicator.ts) --
+		// main's owned-shell extension gated on this via `ctx.hasUI` +
+		// `shouldInstallWorkingIndicator()` before ever mounting the aboveEditor
+		// widget, so narrow captures never showed it. Mirror that gate here too,
+		// or portrait would show a landscape-only affordance main never did.
+		const busy = sumoState(this.state) !== "idle" && shouldInstallWorkingIndicator(width);
+		if (!busy) {
+			this.wasWorkingIndicatorBusy = false;
+			this.workingIndicatorTick = 0;
+			return [""];
+		}
+		if (!this.wasWorkingIndicatorBusy) {
+			this.wasWorkingIndicatorBusy = true;
+			this.workingIndicatorTick = 0;
+		} else {
+			this.workingIndicatorTick += 1;
+		}
+		const theme = getActiveTheme();
+		const frame = renderIndicator(this.workingIndicatorTick, theme.workingIndicator.frames, theme.tokens.colors.accent);
+		const label = colorHex("Working…", activeThemeColors().foregroundDim);
+		const line = ` ${frame} ${label}`;
+		return width > 0 ? [truncateToWidth(line, width)] : [line];
+	}
+
 	public renderExtensionBelowEditor(width: number): string[] {
 		return this.extensionBelowEditor?.render(width) ?? [];
 	}
@@ -375,6 +424,18 @@ function sidebarSnapshot(state: RpcHostChromeState): SidebarSnapshot {
 
 function footerSnapshot(state: RpcHostChromeState, isSplash: boolean): FooterSnapshot {
 	if (isVisualHarness() && !isSplash) {
+		// Tokens/cost/branch are frozen here because they're genuinely
+		// non-deterministic across real sessions (see VISUAL_SIDEBAR_* above).
+		// `state`/`modelId`/`thinkingLevel` are NOT: they're driven by real RPC
+		// session events (agent_start/agent_end/tool_call/model_select), so a
+		// scripted harness scenario (e.g. the active-working faux-provider
+		// scenario) reproduces them exactly every run. Freezing them to "idle" /
+		// VISUAL_MODEL_LABEL regardless of actual activity was correct back when
+		// only the splash scenario existed (no agent ever ran), but went stale
+		// once active-working scenarios started actually streaming -- main's
+		// captured footer shows the real busy state ("MEDITATING"/live model),
+		// so the RPC harness footer must too or the two are comparing different
+		// things.
 		return {
 			cwd: hostCwd(),
 			branch: "main",
@@ -383,9 +444,9 @@ function footerSnapshot(state: RpcHostChromeState, isSplash: boolean): FooterSna
 			contextTokens: VISUAL_SIDEBAR_CONTEXT_TOKENS,
 			contextWindow: VISUAL_SIDEBAR_CONTEXT_WINDOW,
 			costUsd: VISUAL_SIDEBAR_COST_USD,
-			state: "idle",
-			modelId: VISUAL_MODEL_LABEL,
-			thinkingLevel: VISUAL_THINKING_LEVEL,
+			state: sumoState(state),
+			modelId: footerModelId(state.modelLabel) ?? VISUAL_MODEL_LABEL,
+			thinkingLevel: normalizeThinkingLevel(state.thinkingLevel),
 			isSplash,
 		};
 	}
@@ -399,10 +460,27 @@ function footerSnapshot(state: RpcHostChromeState, isSplash: boolean): FooterSna
 		contextWindow: state.contextWindow,
 		costUsd: state.costUsd,
 		state: sumoState(state),
-		modelId: state.modelLabel ?? "no-model",
+		modelId: footerModelId(state.modelLabel) ?? "no-model",
 		thinkingLevel: normalizeThinkingLevel(state.thinkingLevel),
 		isSplash,
 	};
+}
+
+/**
+ * `RpcHostChromeState.modelLabel` is `provider/id` (see `modelLabelFrom` in
+ * state.ts) -- the fuller form the model-picker overlay wants so providers
+ * sharing a model id stay distinguishable (host-actions.ts's MODEL row).
+ * The footer, however, is shared render code (footer.ts's `formatFooterLineInner`)
+ * with the pre-RPC extension-owned footer, which only ever had `ctx.model?.id`
+ * (no provider) to work with -- so main's footer has always shown the bare
+ * model id. Stripping the provider prefix here (footer-display only) keeps
+ * that convention instead of introducing a new "provider/id" footer format
+ * RPC-only sessions would show and main never did.
+ */
+function footerModelId(modelLabel: string | undefined): string | undefined {
+	if (!modelLabel) return undefined;
+	const slash = modelLabel.indexOf("/");
+	return slash >= 0 ? modelLabel.slice(slash + 1) : modelLabel;
 }
 
 function stripAnsi(value: string): string {
@@ -509,8 +587,11 @@ class RpcAboveEditorComponent implements ShellRenderable {
 	public constructor(private readonly adapter: RpcShellAdapter) {}
 	public invalidate(): void {}
 	public render(width: number): string[] {
-		const rows = this.adapter.renderExtensionAboveEditor(width);
-		return rows.length > 0 ? ["", ...rows] : [];
+		const extensionRows = this.adapter.renderExtensionAboveEditor(width);
+		if (extensionRows.length > 0) return ["", ...extensionRows];
+		if (!this.adapter.isActive()) return [];
+		const indicatorRows = this.adapter.renderWorkingIndicator(width).filter((row) => row.length > 0);
+		return indicatorRows.length > 0 ? ["", ...indicatorRows] : [];
 	}
 }
 

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CellBuffer } from "../render/buffer.js";
 import type { MouseEvent } from "../input/mouse.js";
 import { ChatPager } from "../widgets/chat-pager.js";
@@ -278,6 +278,158 @@ describe("RpcShellAdapter mouse drag-select + OSC52 copy", () => {
 			// A scroll event must never be interpreted as a selection drag: no
 			// clipboard write should ever happen from wheel input alone.
 			expect(terminal.clipboardSequences.length).toBe(0);
+		} finally {
+			adapter.dispose();
+		}
+	});
+});
+
+describe("RpcShellAdapter above-editor working indicator (D3 parity)", () => {
+	// D3: the RPC child process's Pi extension runs `installRpcChildProfile`
+	// (src/extension.ts), which deliberately never calls
+	// `installWorkingIndicator` -- RPC-child extensions own no chrome, the
+	// host does. Before this fix, `renderWorkingIndicator` didn't exist and
+	// `RpcAboveEditorComponent` only ever forwarded `extensionAboveEditor`
+	// (always empty under RPC), so the above-editor row that main's owned
+	// shell painted during active-working (`⊚ Working…`) was silently blank
+	// in the RPC candidate.
+	it("renders a non-blank working-indicator row above the editor while busy (isStreaming)", async () => {
+		const adapter = await RpcShellAdapter.create({
+			terminal: { writeFramePatches: () => undefined },
+			viewport: { columns: 160, rows: 45 },
+			initialState: state({ messageCount: 1, hasMessages: true, isStreaming: true }),
+			initialTranscript: { messages: [{ id: "m1", role: "sumo", displayName: "SUMO", blocks: [{ type: "markdown", text: "hi" }] }] },
+		});
+		try {
+			adapter.render();
+			const frame = adapter.getLastFrame();
+			expect(frame).toBeDefined();
+			const text = Array.from({ length: 45 }, (_, row) => frame!.toPlainRow(row)).join("\n");
+			expect(text).toContain("Working…");
+		} finally {
+			adapter.dispose();
+		}
+	});
+
+	it("stays suppressed in portrait (60-col) even while busy -- V1 landscape-only affordance", async () => {
+		// Regression check for the width-gate: main's owned-shell extension only
+		// ever mounted the aboveEditor widget when
+		// `shouldInstallWorkingIndicator()` (width >= 80) was true, so narrow
+		// captures never showed it. An early version of this fix rendered the
+		// indicator unconditionally, which showed it in portrait where main
+		// never did -- a brand-new drift the D3 fix would have introduced.
+		const adapter = await RpcShellAdapter.create({
+			terminal: { writeFramePatches: () => undefined },
+			viewport: { columns: 60, rows: 100 },
+			initialState: state({ messageCount: 1, hasMessages: true, isStreaming: true }),
+			initialTranscript: { messages: [{ id: "m1", role: "sumo", displayName: "SUMO", blocks: [{ type: "markdown", text: "hi" }] }] },
+		});
+		try {
+			expect(adapter.renderWorkingIndicator(60)).toEqual([""]);
+		} finally {
+			adapter.dispose();
+		}
+	});
+
+	it("renders nothing above the editor while idle", async () => {
+		const adapter = await RpcShellAdapter.create({
+			terminal: { writeFramePatches: () => undefined },
+			viewport: { columns: 160, rows: 45 },
+			initialState: state({ messageCount: 1, hasMessages: true, isStreaming: false }),
+			initialTranscript: { messages: [{ id: "m1", role: "sumo", displayName: "SUMO", blocks: [{ type: "markdown", text: "hi" }] }] },
+		});
+		try {
+			adapter.render();
+			const frame = adapter.getLastFrame();
+			expect(frame).toBeDefined();
+			const text = Array.from({ length: 45 }, (_, row) => frame!.toPlainRow(row)).join("\n");
+			expect(text).not.toContain("Working…");
+		} finally {
+			adapter.dispose();
+		}
+	});
+
+	it("resets the animation tick to 0 when re-entering the busy state after going idle", async () => {
+		const adapter = await RpcShellAdapter.create({
+			terminal: { writeFramePatches: () => undefined },
+			viewport: { columns: 160, rows: 45 },
+			initialState: state({ messageCount: 1, hasMessages: true, isStreaming: true }),
+			initialTranscript: { messages: [{ id: "m1", role: "sumo", displayName: "SUMO", blocks: [{ type: "markdown", text: "hi" }] }] },
+		});
+		try {
+			const firstFrame = adapter.renderWorkingIndicator(160).join("");
+			// Advancing renders while still busy should be able to move the tick
+			// (not asserted here -- frame identity is timer/theme dependent), but
+			// going idle then busy again must restart from the same first frame.
+			adapter.update({ state: state({ messageCount: 1, hasMessages: true, isStreaming: false }), transcript: { messages: [] } });
+			expect(adapter.renderWorkingIndicator(160)).toEqual([""]);
+			adapter.update({ state: state({ messageCount: 1, hasMessages: true, isStreaming: true }), transcript: { messages: [] } });
+			expect(adapter.renderWorkingIndicator(160).join("")).toBe(firstFrame);
+		} finally {
+			adapter.dispose();
+		}
+	});
+});
+
+describe("RpcShellAdapter visual-harness footer (D4 live-state fix)", () => {
+	const ORIGINAL_HARNESS_ENV = process.env.SUMOCODE_HARNESS;
+
+	beforeEach(() => {
+		process.env.SUMOCODE_HARNESS = "1";
+	});
+
+	afterEach(() => {
+		if (ORIGINAL_HARNESS_ENV === undefined) delete process.env.SUMOCODE_HARNESS;
+		else process.env.SUMOCODE_HARNESS = ORIGINAL_HARNESS_ENV;
+	});
+
+	// Before this fix, `footerSnapshot` under SUMOCODE_HARNESS always reported
+	// `state: "idle"` / `modelId: VISUAL_MODEL_LABEL` regardless of the real
+	// RPC session state -- correct back when only the splash scenario ran
+	// under the harness (no agent ever active), but stale once the
+	// active-working faux-provider scenario started actually streaming: main's
+	// captured footer shows the real busy state ("MEDITATING"), so comparing
+	// it against a hardcoded "READY" was comparing two different things.
+	// Deterministic-but-genuinely-variable fields (tokens/cost/branch) stay
+	// frozen; state/model/thinking now come from real RPC state.
+	it("reflects the real busy state instead of a hardcoded idle footer while streaming", async () => {
+		const adapter = await RpcShellAdapter.create({
+			terminal: { writeFramePatches: () => undefined },
+			viewport: { columns: 160, rows: 45 },
+			initialState: state({ messageCount: 1, hasMessages: true, isStreaming: true, modelLabel: "sumocode-visual/active-working", thinkingLevel: "off" }),
+			initialTranscript: { messages: [{ id: "m1", role: "sumo", displayName: "SUMO", blocks: [{ type: "markdown", text: "hi" }] }] },
+		});
+		try {
+			adapter.render();
+			const frame = adapter.getLastFrame();
+			expect(frame).toBeDefined();
+			const text = Array.from({ length: 45 }, (_, row) => frame!.toPlainRow(row)).join("\n");
+			expect(text).toContain("MEDITATING");
+			// Footer shows the bare model id (no "provider/" prefix), matching
+			// main's pre-RPC extension-owned footer -- see footerModelId's doc
+			// comment in shell-adapter.ts.
+			expect(text).toContain("active-working");
+			expect(text).not.toContain("sumocode-visual/active-working");
+			// Deterministic harness constants (unaffected by the live-state fix).
+			expect(text).toContain("$0.42");
+		} finally {
+			adapter.dispose();
+		}
+	});
+
+	it("still shows the deterministic idle footer while genuinely idle", async () => {
+		const adapter = await RpcShellAdapter.create({
+			terminal: { writeFramePatches: () => undefined },
+			viewport: { columns: 160, rows: 45 },
+			initialState: state({ messageCount: 1, hasMessages: true, isStreaming: false }),
+			initialTranscript: { messages: [{ id: "m1", role: "sumo", displayName: "SUMO", blocks: [{ type: "markdown", text: "hi" }] }] },
+		});
+		try {
+			adapter.render();
+			const frame = adapter.getLastFrame();
+			expect(frame).toBeDefined();
+			const text = Array.from({ length: 45 }, (_, row) => frame!.toPlainRow(row)).join("\n");
+			expect(text).toContain("READY");
 		} finally {
 			adapter.dispose();
 		}

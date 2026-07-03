@@ -8,6 +8,193 @@ import { cropStyledGrid, diffStyledGrids, runtimeStyledGrid, styledDiffToText } 
 import { ensureDir, readJson, resetDir, writeFile, writeJson } from "./fs-utils.mjs";
 import { repoRoot } from "./paths.mjs";
 
+/**
+ * Known-mechanical equivalence declarations for main-vs-RPC-candidate
+ * comparison (plan 024 parity gate). Each region is narrow — a specific
+ * row/col rectangle plus a content pattern the target/runtime row text must
+ * still match — so it only suppresses the exact class of difference it
+ * documents, never a blanket row/scenario suppression. Coordinates are
+ * absolute (full-grid, 0-indexed), matching `terminal-snapshot.json` cell
+ * coordinates; `cropEquivalentRegions` translates them into a crop's local
+ * coordinate space.
+ *
+ * These are declared here (not in `styled-cell-grid.mjs`'s `EQUIVALENT_PAIRS`)
+ * because that table suppresses Bible-mockup-vs-runtime color differences —
+ * a different comparison (Bible target vs one runtime capture). This table
+ * suppresses main-baseline-vs-candidate-capture differences that are known
+ * to be mechanical/non-content: random session ids, live timestamps,
+ * blink-phase cursor cells, capture-environment working-dir/branch text, and
+ * harness-determinism constants. See `plans/024-EVIDENCE.md` for the
+ * one-line justification of each entry restated for human review.
+ */
+const KNOWN_EQUIVALENT_REGIONS = {
+	"splash-runtime": [
+		{
+			// Cursor caret cell inside the splash placeholder text — fg/bg swap
+			// is the blink-phase indicator; which phase lands in a given capture
+			// is timing-dependent, not a content difference.
+			rows: [32, 32],
+			cols: [54, 54],
+			targetPattern: /Ask anything/,
+			runtimePattern: /Ask anything/,
+			reason: "cursor-blink-phase cell (splash placeholder caret)",
+		},
+	],
+	"active-landscape-runtime": [
+		{
+			// Top-bar session-id: random per process, only the 8 hex chars change.
+			rows: [0, 0],
+			cols: [21, 22],
+			targetPattern: /•\s+[0-9a-f]{8}\s+║/,
+			runtimePattern: /•\s+[0-9a-f]{8}\s+║/,
+			reason: "session-id chars in top bar (random per run)",
+		},
+		{
+			// Chat frame top border timestamp: "HH:MM", only minutes vary here.
+			rows: [6, 6],
+			cols: [123, 124],
+			targetPattern: /\d{2}:\d{2}\s+─┐/,
+			runtimePattern: /\d{2}:\d{2}\s+─┐/,
+			reason: "timestamp minutes in message box border",
+		},
+		{
+			// Working-indicator spark glyph: cycles through an animation frame
+			// set: timing-dependent, which frame lands in a given capture varies.
+			rows: [36, 36],
+			cols: [1, 1],
+			targetPattern: /Working…/,
+			runtimePattern: /Working…/,
+			reason: "working-indicator animation-phase glyph (timing-dependent)",
+		},
+		{
+			// Input caret cell: same fg/bg swap phase-dependent cell as splash.
+			rows: [39, 39],
+			cols: [4, 4],
+			targetPattern: /│ >/,
+			runtimePattern: /│ >/,
+			reason: "cursor-blink-phase cell (input caret)",
+		},
+		{
+			// Hint row cwd/branch segment. On landscape the sidebar is visible,
+			// so by design (AGENTS.md: "Project/branch live in the sidebar when
+			// visible") the candidate's hint row omits this text entirely while
+			// main's older chrome still rendered it in the hint row. Static
+			// "CTRL+/ · COMMANDS" segment (cols 143+) is NOT covered by this
+			// region and remains compared.
+			rows: [41, 41],
+			cols: [1, 130],
+			targetPattern: /CTRL\+\/ · COMMANDS/,
+			runtimePattern: /CTRL\+\/ · COMMANDS/,
+			reason: "hint-row cwd/branch segment (capture-environment working dir; sidebar-visible layout omits it by design)",
+		},
+		{
+			// Sidebar cwd/branch lines mirror the same capture-environment
+			// working-dir/branch variability as the hint row, just rendered in
+			// the sidebar column instead when the sidebar is visible.
+			rows: [10, 11],
+			cols: [130, 159],
+			reason: "sidebar cwd/branch segment (capture-environment working dir)",
+		},
+		{
+			// D4 deterministic harness constants: candidate freezes
+			// 42k/200k · $0.42 by design (SUMOCODE_HARNESS visual-capture
+			// determinism guard in shell-adapter.ts); main shows whatever the
+			// live, non-harness-aware session state happened to be
+			// (14/128k · $0.00 in the captured baseline).
+			rows: [14, 18],
+			cols: [130, 159],
+			reason: "D4 deterministic constants: sidebar token/cost gauge (harness determinism vs main's live session state)",
+		},
+		{
+			rows: [43, 43],
+			cols: [143, 158],
+			targetPattern: /MEDITATING/,
+			runtimePattern: /MEDITATING/,
+			reason: "D4 deterministic constants: footer token/cost cell range (harness determinism vs main's live session state)",
+		},
+		{
+			// MCP connector roster + its background wash. The candidate's RPC
+			// shell (src/sumo-tui/rpc/shell-adapter.ts) added a
+			// SUMOCODE_HARNESS-gated PLACEHOLDER_MCP roster (github/stitch/
+			// context7/chrome-dev, fixed) specifically so visual captures don't
+			// leak the live per-machine ~/.pi/agent/mcp.json roster (see
+			// src/mcp-config-reader.ts, src/sidebar.ts PLACEHOLDER_MCP). Main's
+			// sidebar code path predates this guard and the clean baseline
+			// capture environment simply had no MCP config configured, so main
+			// shows blank rows here. Same root cause as the D4 constants class:
+			// candidate freezes a deterministic placeholder, main is
+			// capture-environment-dependent.
+			rows: [24, 34],
+			cols: [130, 159],
+			reason: "MCP roster placeholder (harness determinism vs main's pre-placeholder/live sidebar state)",
+		},
+	],
+	"active-portrait-runtime": [
+		{
+			rows: [1, 1],
+			cols: [21, 22],
+			targetPattern: /•\s+[0-9a-f]{8}\s+║/,
+			runtimePattern: /•\s+[0-9a-f]{8}\s+║/,
+			reason: "session-id chars in top bar (random per run)",
+		},
+		{
+			rows: [8, 8],
+			cols: [55, 56],
+			targetPattern: /\d{2}:\d{2}\s+─┐/,
+			runtimePattern: /\d{2}:\d{2}\s+─┐/,
+			reason: "timestamp minutes in message box border",
+		},
+		{
+			rows: [94, 94],
+			cols: [4, 4],
+			targetPattern: /│ >/,
+			runtimePattern: /│ >/,
+			reason: "cursor-blink-phase cell (input caret)",
+		},
+		{
+			// Portrait hides the sidebar, so the hint row DOES carry cwd/branch
+			// text in both captures; only the variable segment is masked, the
+			// static "CTRL+/ · COMMANDS" text stays compared.
+			rows: [96, 96],
+			cols: [1, 34],
+			targetPattern: /CTRL\+\/ · COMMANDS/,
+			runtimePattern: /CTRL\+\/ · COMMANDS/,
+			reason: "hint-row cwd/branch segment (capture-environment working dir)",
+		},
+		{
+			rows: [98, 98],
+			cols: [43, 58],
+			targetPattern: /MEDITATING/,
+			runtimePattern: /MEDITATING/,
+			reason: "D4 deterministic constants: footer token/cost cell range (harness determinism vs main's live session state)",
+		},
+	],
+};
+
+function cropEquivalentRegions(scenarioId, crop) {
+	const regions = KNOWN_EQUIVALENT_REGIONS[scenarioId] ?? [];
+	const runtimeCrop = crop.runtimeCrop;
+	if (!runtimeCrop || runtimeCrop.kind === "full") return regions;
+	const cropRowLo = runtimeCrop.y;
+	const cropRowHi = runtimeCrop.y + runtimeCrop.rows - 1;
+	const cropColLo = runtimeCrop.x;
+	const cropColHi = runtimeCrop.x + runtimeCrop.cols - 1;
+	const translated = [];
+	for (const region of regions) {
+		const rowLo = Math.max(region.rows[0], cropRowLo);
+		const rowHi = Math.min(region.rows[1], cropRowHi);
+		const colLo = Math.max(region.cols[0], cropColLo);
+		const colHi = Math.min(region.cols[1], cropColHi);
+		if (rowLo > rowHi || colLo > colHi) continue; // region doesn't intersect this crop
+		translated.push({
+			...region,
+			rows: [rowLo - cropRowLo, rowHi - cropRowLo],
+			cols: [colLo - cropColLo, colHi - cropColLo],
+		});
+	}
+	return translated;
+}
+
 const args = parseArgs(process.argv.slice(2));
 const baselineRoot = resolvePathArg(args.baselineRoot, "baseline-root");
 const candidateRoot = resolvePathArg(args.candidateRoot, "candidate-root");
@@ -79,7 +266,9 @@ function compareScenario(scenario) {
 	const candidateSnapshot = readSnapshot(candidateRoot, scenario.id);
 	const baselineGrid = runtimeStyledGrid(baselineSnapshot);
 	const candidateGrid = runtimeStyledGrid(candidateSnapshot);
-	const fullDiff = diffStyledGrids(baselineGrid, candidateGrid);
+	const fullDiff = diffStyledGrids(baselineGrid, candidateGrid, {
+		equivalentRegions: KNOWN_EQUIVALENT_REGIONS[scenario.id] ?? [],
+	});
 	writeFile(resolve(rawOut, "styled-cell-diff.txt"), styledDiffToText(fullDiff));
 	writeFile(resolve(rawOut, "geometry-audit.txt"), geometrySummary(baselineRoot, candidateRoot, scenario.id));
 
@@ -108,16 +297,24 @@ function compareScenario(scenario) {
 
 function compareCrop(scenario, crop, baselineGrid, candidateGrid, scenarioOut) {
 	const cropOut = resolve(scenarioOut, "crops");
+	const equivalentRegions = cropEquivalentRegions(scenario.id, crop);
 	const cellDiff = diffStyledGrids(
 		cropStyledGrid(baselineGrid, crop.runtimeCrop),
 		cropStyledGrid(candidateGrid, crop.runtimeCrop),
+		{ equivalentRegions },
 	);
 	const styledArtifact = resolve(scenarioOut, "raw", `styled-cell-diff-${crop.id}.txt`);
 	writeFile(styledArtifact, styledDiffToText(cellDiff));
 
 	const baselinePngPath = resolve(baselineRoot, scenario.id, "crops", `${crop.id}-runtime.png`);
 	const candidatePngPath = resolve(candidateRoot, scenario.id, "crops", `${crop.id}-runtime.png`);
-	const png = comparePngFiles(baselinePngPath, candidatePngPath, resolve(cropOut, `${crop.id}-diff.png`), crop.threshold);
+	const png = comparePngFiles(
+		baselinePngPath,
+		candidatePngPath,
+		resolve(cropOut, `${crop.id}-diff.png`),
+		crop.threshold,
+		{ equivalentRegions, cropCellDimensions: crop.runtimeCrop && crop.runtimeCrop.kind !== "full" ? { cols: crop.runtimeCrop.cols, rows: crop.runtimeCrop.rows } : null },
+	);
 	return {
 		id: crop.id,
 		status: crop.status,
@@ -285,11 +482,48 @@ function geometrySummary(baseline, candidate, scenarioId) {
 	].join("\n");
 }
 
-function comparePngFiles(baselinePath, candidatePath, diffPath, threshold) {
+/**
+ * Blank a declared-equivalent cell region to an identical neutral color in
+ * both images before pixel diffing. This carries the SAME narrow, declared
+ * equivalence used by the styled-cell-diff gate through to the PNG gate that
+ * covers the same crop — it does not add a new equivalence system, and it
+ * only touches the exact rectangle a declared region names (converted from
+ * cell coordinates to pixel coordinates via the crop's own cols/rows). Cell
+ * ranges without a corresponding pixel-mappable `cropCellDimensions` (e.g.
+ * full-scenario diffs with no single crop grid) are left untouched.
+ */
+function applyPixelMask(png, region, cellDimensions) {
+	if (!cellDimensions) return;
+	const cellWidth = png.width / cellDimensions.cols;
+	const cellHeight = png.height / cellDimensions.rows;
+	const x0 = Math.max(0, Math.floor(region.cols[0] * cellWidth));
+	const x1 = Math.min(png.width, Math.ceil((region.cols[1] + 1) * cellWidth));
+	const y0 = Math.max(0, Math.floor(region.rows[0] * cellHeight));
+	const y1 = Math.min(png.height, Math.ceil((region.rows[1] + 1) * cellHeight));
+	for (let y = y0; y < y1; y += 1) {
+		for (let x = x0; x < x1; x += 1) {
+			const index = (y * png.width + x) * 4;
+			png.data[index] = 26;
+			png.data[index + 1] = 21;
+			png.data[index + 2] = 17;
+			png.data[index + 3] = 255;
+		}
+	}
+}
+
+function comparePngFiles(baselinePath, candidatePath, diffPath, threshold, options = {}) {
 	if (!existsSync(baselinePath)) throw new Error(`Missing baseline crop: ${baselinePath}`);
 	if (!existsSync(candidatePath)) throw new Error(`Missing candidate crop: ${candidatePath}`);
 	const baseline = PNG.sync.read(readFileSync(baselinePath));
 	const candidate = PNG.sync.read(readFileSync(candidatePath));
+	const equivalentRegions = options.equivalentRegions ?? [];
+	const cropCellDimensions = options.cropCellDimensions ?? null;
+	if (cropCellDimensions) {
+		for (const region of equivalentRegions) {
+			applyPixelMask(baseline, region, cropCellDimensions);
+			applyPixelMask(candidate, region, cropCellDimensions);
+		}
+	}
 	const width = Math.max(baseline.width, candidate.width);
 	const height = Math.max(baseline.height, candidate.height);
 	const paddedBaseline = padPng(baseline, width, height);

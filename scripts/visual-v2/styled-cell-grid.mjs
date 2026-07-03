@@ -406,18 +406,60 @@ export function cropStyledGrid(source, crop) {
 // ── Diff ──────────────────────────────────────────────────────────
 
 /**
+ * A narrow, declared region of the grid where target/runtime cells are known
+ * to legitimately differ for a mechanical (non-content) reason — e.g. a
+ * random session id, a live timestamp, a blink-phase cursor cell, or a
+ * capture-environment-dependent segment. Regions are rectangular (row/col
+ * ranges, inclusive) and MUST supply `targetPattern`/`runtimePattern` regexes
+ * that the target/runtime cell TEXT for the affected row (within the region's
+ * column span) must match. This is the over-masking guard: a region only
+ * suppresses a diff when the surrounding text still looks like the expected
+ * shape, so an unrelated content change landing in the same rectangle still
+ * fails instead of being silently swallowed.
+ *
+ * @typedef {object} EquivalentRegion
+ * @property {[number, number]} rows inclusive [lo, hi] row range
+ * @property {[number, number]} cols inclusive [lo, hi] col range
+ * @property {RegExp} [targetPattern] must match the target row's text (full row) for the region to apply
+ * @property {RegExp} [runtimePattern] must match the runtime row's text (full row) for the region to apply
+ * @property {string} reason human-readable justification
+ */
+
+function cellInRegion(region, row, col) {
+	return row >= region.rows[0] && row <= region.rows[1] && col >= region.cols[0] && col <= region.cols[1];
+}
+
+function regionApplies(region, targetRowText, runtimeRowText) {
+	if (region.targetPattern && !region.targetPattern.test(targetRowText)) return false;
+	if (region.runtimePattern && !region.runtimePattern.test(runtimeRowText)) return false;
+	return true;
+}
+
+function findApplicableRegion(regions, row, col, targetRowText, runtimeRowText) {
+	for (const region of regions) {
+		if (!cellInRegion(region, row, col)) continue;
+		if (regionApplies(region, targetRowText, runtimeRowText)) return region;
+	}
+	return null;
+}
+
+/**
  * Diff two styled cell grids. Returns per-row diffs with cell-level detail.
  */
 export function diffStyledGrids(target, runtime, options = {}) {
 	const ignoreColors = options.ignoreColors ?? false;
+	const equivalentRegions = options.equivalentRegions ?? [];
 	const rows = Math.max(target.grid.length, runtime.grid.length);
 	const cols = Math.max(target.cols, runtime.cols);
 	const rowDiffs = [];
+	const suppressedByRegion = new Map();
 
 	for (let r = 0; r < rows; r++) {
 		const tRow = target.grid[r] ?? [];
 		const rRow = runtime.grid[r] ?? [];
 		const cellDiffs = [];
+		const targetRowText = tRow.map((c) => c.char).join("");
+		const runtimeRowText = rRow.map((c) => c.char).join("");
 
 		for (let c = 0; c < cols; c++) {
 			const t = tRow[c] ?? { char: " ", fg: DEFAULT_FG, bg: DEFAULT_BG };
@@ -428,6 +470,14 @@ export function diffStyledGrids(target, runtime, options = {}) {
 			const bgMatch = ignoreColors || colorsEquivalent(t.bg, rc.bg);
 
 			if (!charMatch || !fgMatch || !bgMatch) {
+				const region = equivalentRegions.length > 0
+					? findApplicableRegion(equivalentRegions, r, c, targetRowText, runtimeRowText)
+					: null;
+				if (region) {
+					const key = region.reason;
+					suppressedByRegion.set(key, (suppressedByRegion.get(key) ?? 0) + 1);
+					continue;
+				}
 				cellDiffs.push({
 					col: c,
 					char: charMatch ? null : { target: t.char, runtime: rc.char },
@@ -449,7 +499,13 @@ export function diffStyledGrids(target, runtime, options = {}) {
 	}
 
 	const passed = rowDiffs.length === 0;
-	return { passed, rowDiffs, totalRows: rows, totalCols: cols };
+	return {
+		passed,
+		rowDiffs,
+		totalRows: rows,
+		totalCols: cols,
+		suppressed: [...suppressedByRegion.entries()].map(([reason, count]) => ({ reason, count })),
+	};
 }
 
 /**
@@ -461,6 +517,14 @@ export function styledDiffToText(diff) {
 		? `Styled cell diff: MATCH (${diff.totalRows}×${diff.totalCols})`
 		: `Styled cell diff: ${diff.rowDiffs.length} row(s) differ out of ${diff.totalRows}`);
 	lines.push("");
+
+	if (diff.suppressed && diff.suppressed.length > 0) {
+		lines.push("Suppressed by declared equivalence (narrow, pattern-guarded):");
+		for (const s of diff.suppressed) {
+			lines.push(`  - ${s.reason}: ${s.count} cell(s)`);
+		}
+		lines.push("");
+	}
 
 	for (const rd of diff.rowDiffs.slice(0, 30)) {
 		lines.push(`row ${String(rd.row).padStart(3)}  (${rd.diffCount} cell diffs)`);

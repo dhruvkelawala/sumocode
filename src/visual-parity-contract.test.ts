@@ -1,10 +1,21 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import { SIDEBAR_MIN_TERMINAL_WIDTH, SIDEBAR_WIDTH } from "./sidebar.js";
+
+// `pngjs` has no bundled type declarations and this repo intentionally does
+// not add a project-wide ambient module for it (see scripts/visual-v2/*.mjs,
+// which consume it untyped via plain JS). Loading it through `createRequire`
+// keeps this single test file's PNG-fixture helper out of strict-mode's way
+// without adding a new type dependency or a repo-wide `declare module`.
+const require = createRequire(import.meta.url);
+type PngInstance = { width: number; height: number; data: Buffer };
+type PngCtor = (new (opts: { width: number; height: number }) => PngInstance) & { sync: { write: (png: PngInstance) => Buffer } };
+const { PNG } = require("pngjs") as { PNG: PngCtor };
 
 type CropDefinition =
 	| { kind: "full" }
@@ -138,6 +149,62 @@ function blankSnapshot(cols: number, rows: number): unknown {
 		rows,
 		cells: Array.from({ length: rows }, () => Array.from({ length: cols }, () => cell)),
 	};
+}
+
+type CellOverride = { row: number; col: number; char?: string; fg?: string; bg?: string };
+
+/** A blank snapshot with independent (non-shared) cell objects per position,
+ * so callers can mutate individual cells via `writeRowText` without
+ * accidentally rewriting the whole grid. `blankSnapshot` above intentionally
+ * shares one cell object across every position — fine for read-only fixtures,
+ * unsafe for mutation. */
+function mutableBlankSnapshot(cols: number, rows: number): any {
+	return {
+		cols,
+		rows,
+		cells: Array.from({ length: rows }, () =>
+			Array.from({ length: cols }, () => ({ char: " ", fg: "#f5e6c8", bg: "#1a1511", bold: false, dim: false }))),
+	};
+}
+
+/** Blank snapshot with individual cell text overrides applied — lets a test
+ * write specific characters into specific rows/cols without hand-building
+ * the full 160/60-wide cell grid. */
+function snapshotWithText(cols: number, rows: number, overrides: readonly CellOverride[]): any {
+	const snapshot = mutableBlankSnapshot(cols, rows);
+	for (const override of overrides) {
+		const cell = snapshot.cells[override.row]?.[override.col];
+		if (!cell) throw new Error(`snapshotWithText override out of bounds: row ${override.row} col ${override.col}`);
+		if (override.char !== undefined) cell.char = override.char;
+		if (override.fg !== undefined) cell.fg = override.fg;
+		if (override.bg !== undefined) cell.bg = override.bg;
+	}
+	return snapshot;
+}
+
+/** Write a row of text starting at `col` into a snapshot's given row. */
+function writeRowText(snapshot: any, row: number, col: number, text: string): void {
+	for (let index = 0; index < text.length; index += 1) {
+		const cell = snapshot.cells[row]?.[col + index];
+		if (cell) cell.char = text[index];
+	}
+}
+
+/** Write a solid-color PNG sized for a crop's pixel dimensions (cellWidth/cellHeight
+ * px per terminal cell, matching the harness's own crop screenshot convention). */
+function writeCropPng(path: string, cropCols: number, cropRows: number, rgb: readonly [number, number, number]): void {
+	mkdirSync(join(path, ".."), { recursive: true });
+	const cellPx = 8;
+	const width = cropCols * cellPx;
+	const height = cropRows * cellPx;
+	const png = new PNG({ width, height });
+	for (let index = 0; index < png.data.length; index += 4) {
+		png.data[index] = rgb[0];
+		png.data[index + 1] = rgb[1];
+		png.data[index + 2] = rgb[2];
+		png.data[index + 3] = 255;
+	}
+	writeFileSync(path, PNG.sync.write(png));
 }
 
 describe("V2 visual parity contract", () => {
@@ -442,6 +509,176 @@ describe("V2 visual parity contract", () => {
 		} finally {
 			rmSync(tmp, { recursive: true, force: true });
 		}
+	});
+
+	describe("plan-024 known-equivalent-region declarations (over-masking guard)", () => {
+		const active = scenario("active-landscape-runtime");
+		const cropIds = active.crops.map((crop) => crop.id);
+
+		function writeActiveLandscapeCapture(root: string, snapshot: unknown, pngColorByCrop: Record<string, [number, number, number]>): void {
+			writeJson(join(root, "active-landscape-runtime/raw/capture-metadata.json"), {
+				command: active.runtime!.command,
+				args: active.runtime!.args,
+				cols: active.dimensions.cols,
+				rows: active.dimensions.rows,
+				inputCount: active.runtime!.inputs!.length,
+			});
+			writeJson(join(root, "active-landscape-runtime/raw/terminal-snapshot.json"), snapshot);
+			for (const cropId of cropIds) {
+				const namedCrop = cropId === "full" ? null : (cropDefinition(cropId) as { x: number; y: number; cols: number; rows: number });
+				const dims = namedCrop ?? { cols: active.dimensions.cols, rows: active.dimensions.rows };
+				writeCropPng(
+					join(root, "active-landscape-runtime/crops", `${cropId}-runtime.png`),
+					dims.cols,
+					dims.rows,
+					pngColorByCrop[cropId] ?? [30, 24, 18],
+				);
+			}
+		}
+
+		// Base scene: only the five declared-equivalent regions differ between
+		// baseline and candidate (session id, timestamp, cursor-caret swap,
+		// hint-row/sidebar cwd+branch text, D4 constants, MCP roster). Everything
+		// else — including the sidebar row immediately below the masked cwd/branch
+		// lines — is byte-identical.
+		function baseLandscapeSnapshot(sessionId: string, timestampMinute: string, projectLine: string): unknown {
+			const snap = snapshotWithText(160, 45, []);
+			// Column offsets below are copied verbatim from a real
+			// active-landscape-runtime capture so the synthetic fixture exercises
+			// the SAME absolute cell coordinates the declared regions cover.
+			writeRowText(snap, 0, 0, ` SUMOCODE  ║ • ${sessionId} ║`);
+			writeRowText(snap, 6, 0, `┌ SUMO ${"─".repeat(112)} ${timestampMinute} ─┐`);
+			writeRowText(snap, 10, 132, projectLine);
+			writeRowText(snap, 36, 1, "⊚ Working…"); // stable, NOT masked at cols >=3 — must match both sides
+			writeRowText(snap, 39, 0, "│ >");
+			writeRowText(snap, 41, 1, `${"".padEnd(128)}CTRL+/ · COMMANDS`);
+			writeRowText(snap, 43, 1, `${"● MEDITATING · active-working · off".padEnd(142)}42k/200k · $0.42`);
+			return snap;
+		}
+
+		it("suppresses only the declared plan-024 mechanical regions and still passes", () => {
+			const tmp = mkdtempSync(join(tmpdir(), "sumocode-equivalence-contract-"));
+			try {
+				const baseline = join(tmp, "baseline");
+				const candidate = join(tmp, "candidate");
+				const out = join(tmp, "out");
+
+				const baselineSnapshot = baseLandscapeSnapshot("019f2893", "16:22", "sumocode-main-recapture");
+				const candidateSnapshot = baseLandscapeSnapshot("019f28ad", "16:51", ""); // hint/sidebar text legitimately blank in candidate
+
+				writeActiveLandscapeCapture(baseline, baselineSnapshot, {});
+				writeActiveLandscapeCapture(candidate, candidateSnapshot, {});
+
+				execFileSync("node", [
+					join(process.cwd(), "scripts/visual-v2/compare-captures.mjs"),
+					"--baseline-root", baseline,
+					"--candidate-root", candidate,
+					"--scenario", "active-landscape-runtime",
+					"--out", out,
+				], { cwd: process.cwd(), stdio: "pipe" });
+
+				const results = JSON.parse(readFileSync(join(out, "results.json"), "utf8"));
+				const scenarioResult = results.scenarios.find((item: { id: string }) => item.id === "active-landscape-runtime");
+				expect(scenarioResult.result).toBe("passed");
+
+				const diffText = readFileSync(join(out, "active-landscape-runtime/raw/styled-cell-diff.txt"), "utf8");
+				expect(diffText).toContain("Suppressed by declared equivalence");
+				expect(diffText).toContain("session-id chars in top bar");
+			} finally {
+				rmSync(tmp, { recursive: true, force: true });
+			}
+		});
+
+		it("does NOT suppress a real content change adjacent to a masked region", () => {
+			const tmp = mkdtempSync(join(tmpdir(), "sumocode-equivalence-contract-"));
+			try {
+				const baseline = join(tmp, "baseline");
+				const candidate = join(tmp, "candidate");
+				const out = join(tmp, "out");
+
+				const baselineSnapshot = baseLandscapeSnapshot("019f2893", "16:22", "sumocode-main-recapture");
+				const candidateSnapshot = baseLandscapeSnapshot("019f28ad", "16:51", "");
+
+				// Sabotage: alter message text one row below the masked sidebar
+				// cwd/branch region (row 12, still inside the sidebar column band
+				// 130-159, but OUTSIDE the declared [10,11] row range). A real
+				// editorial/content change here must still fail the gate — this is
+				// the over-masking guard.
+				writeRowText(candidateSnapshot as any, 12, 130, "unexpected content drift".padEnd(30));
+
+				writeActiveLandscapeCapture(baseline, baselineSnapshot, {});
+				writeActiveLandscapeCapture(candidate, candidateSnapshot, {});
+
+				let failed = false;
+				try {
+					execFileSync("node", [
+						join(process.cwd(), "scripts/visual-v2/compare-captures.mjs"),
+						"--baseline-root", baseline,
+						"--candidate-root", candidate,
+						"--scenario", "active-landscape-runtime",
+						"--out", out,
+					], { cwd: process.cwd(), stdio: "pipe" });
+				} catch {
+					failed = true;
+				}
+
+				expect(failed).toBe(true);
+				const results = JSON.parse(readFileSync(join(out, "results.json"), "utf8"));
+				const scenarioResult = results.scenarios.find((item: { id: string }) => item.id === "active-landscape-runtime");
+				expect(scenarioResult.result).toBe("failed");
+
+				const diffText = readFileSync(join(out, "active-landscape-runtime/raw/styled-cell-diff.txt"), "utf8");
+				expect(diffText).toContain("row  12");
+				// Row text is truncated to 80 chars from col 0 in the report, so the
+				// sabotaged text (which starts at col 130) shows up as per-cell char
+				// diffs instead of in the truncated row-text preview.
+				expect(diffText).toContain('char: " "→"u"');
+
+				const sidebarCropDiff = readFileSync(join(out, "active-landscape-runtime/raw/styled-cell-diff-sidebar.txt"), "utf8");
+				expect(sidebarCropDiff).not.toContain("Styled cell diff: MATCH");
+			} finally {
+				rmSync(tmp, { recursive: true, force: true });
+			}
+		});
+
+		it("does NOT suppress a real content change inside the working-indicator row outside its masked column", () => {
+			const tmp = mkdtempSync(join(tmpdir(), "sumocode-equivalence-contract-"));
+			try {
+				const baseline = join(tmp, "baseline");
+				const candidate = join(tmp, "candidate");
+				const out = join(tmp, "out");
+
+				const baselineSnapshot = baseLandscapeSnapshot("019f2893", "16:22", "sumocode-main-recapture");
+				const candidateSnapshot = baseLandscapeSnapshot("019f28ad", "16:51", "");
+
+				// The working-indicator glyph region only covers row 36 col 1. Altering
+				// the WORD text right after it (cols 3+) is a real content change and
+				// must still fail even though col 1 on the same row is legitimately masked.
+				writeRowText(candidateSnapshot as any, 36, 3, "Rewriting…");
+
+				writeActiveLandscapeCapture(baseline, baselineSnapshot, {});
+				writeActiveLandscapeCapture(candidate, candidateSnapshot, {});
+
+				let failed = false;
+				try {
+					execFileSync("node", [
+						join(process.cwd(), "scripts/visual-v2/compare-captures.mjs"),
+						"--baseline-root", baseline,
+						"--candidate-root", candidate,
+						"--scenario", "active-landscape-runtime",
+						"--out", out,
+					], { cwd: process.cwd(), stdio: "pipe" });
+				} catch {
+					failed = true;
+				}
+
+				expect(failed).toBe(true);
+				const diffText = readFileSync(join(out, "active-landscape-runtime/raw/styled-cell-diff.txt"), "utf8");
+				expect(diffText).toContain("row  36");
+			} finally {
+				rmSync(tmp, { recursive: true, force: true });
+			}
+		});
 	});
 
 	it("keeps required crop gates explicit and preserves promoted goldens", () => {

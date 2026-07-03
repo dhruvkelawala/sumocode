@@ -213,12 +213,6 @@ export class SharedInputRouter {
 
 		if (nextData.length === 0 && consumed) return { consume: true };
 
-		if (isCommandPaletteInput(nextData)) {
-			void this.callbacks.openCommandPalette?.();
-			this.callbacks.requestRender?.();
-			return { consume: true };
-		}
-
 		if (isCtrlCInput(nextData) && this.callbacks.handlePreEditorInput?.(nextData) === true) {
 			this.callbacks.requestRender?.();
 			return { consume: true };
@@ -230,6 +224,12 @@ export class SharedInputRouter {
 		}
 
 		if (this.callbacks.handleFocusedOverlayInput?.(nextData) === true) {
+			this.callbacks.requestRender?.();
+			return { consume: true };
+		}
+
+		if (isCommandPaletteInput(nextData)) {
+			void this.callbacks.openCommandPalette?.();
 			this.callbacks.requestRender?.();
 			return { consume: true };
 		}

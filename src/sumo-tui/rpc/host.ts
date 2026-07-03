@@ -213,6 +213,16 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		onRenderRequest: requestRender,
 	});
 	client.setUiRequestHandler((request) => uiResponder.handle(request));
+	// After new/switch/clone/fork the child's message list changed out from
+	// under the host, but nothing repaints the transcript on its own -- the
+	// old session's messages otherwise stay on screen as a "ghost transcript".
+	// Refetch get_messages and push the result through the same
+	// replaceFromMessages/runtime.update path used for initial hydration below.
+	const rehydrateTranscript = async (): Promise<void> => {
+		const messages = responseData(await client.send({ type: "get_messages" }), "get_messages").messages;
+		const transcript = transcriptPump.replaceFromMessages(messages);
+		runtime?.update({ transcript });
+	};
 	actions = new RpcHostActions({
 		controls,
 		stateStore,
@@ -223,6 +233,7 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		onStateChange: requestRender,
 		onRenderRequest: requestRender,
 		onExitRequest: (code) => requestHostExit(code),
+		rehydrateTranscript,
 	});
 	let statsTimer: NodeJS.Timeout | undefined;
 	let statsInFlight = false;

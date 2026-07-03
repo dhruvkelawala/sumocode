@@ -515,6 +515,72 @@ describe("RpcHostActions", () => {
 		});
 	});
 
+	describe("/tree", () => {
+		function jsonl(lines: readonly unknown[]): string {
+			return `${lines.map((line) => JSON.stringify(line)).join("\n")}\n`;
+		}
+
+		function writeBranchedFixture(dir: string): string {
+			const path = join(dir, "2026-07-02T22-00-00-000Z_branched.jsonl");
+			writeFileSync(path, jsonl([
+				{ type: "session", version: 3, id: "branched", timestamp: "2026-07-02T22:00:00.000Z", cwd: "/repo" },
+				{ type: "message", id: "root", parentId: null, timestamp: "2026-07-02T22:00:01.000Z", message: { role: "user", content: "root message" } },
+				{ type: "message", id: "child-a", parentId: "root", timestamp: "2026-07-02T22:00:02.000Z", message: { role: "assistant", content: "first branch reply" } },
+				{ type: "message", id: "child-b", parentId: "root", timestamp: "2026-07-02T22:00:03.000Z", message: { role: "assistant", content: "second branch reply" } },
+			]));
+			return path;
+		}
+
+		it("builds a navigable, indented tree and forks from the chosen node", async () => {
+			const dir = mkdtempSync(join(tmpdir(), "sumocode-tree-test-"));
+			try {
+				const sessionFile = writeBranchedFixture(dir);
+				const { actions, controls, inlineSelectors, editorText, rehydrateCalls } = setup({ sessionFile });
+
+				const treePromise = actions.handleSubmittedText("/tree");
+				await flushIO();
+				expect(inlineSelectors.getActiveKind()).toBe("select");
+
+				inlineSelectors.handleInput(SELECTOR_DOWN); // root -> child-a
+				inlineSelectors.handleInput(SELECTOR_DOWN); // child-a -> child-b
+				inlineSelectors.handleInput(SELECTOR_ENTER);
+				await treePromise;
+
+				expect(controls.calls).toEqual(["fork:child-b"]);
+				expect(editorText.getText()).toBe("fork from here");
+				expect(rehydrateCalls).toHaveLength(1);
+			} finally {
+				rmSync(dir, { recursive: true, force: true });
+			}
+		});
+
+		it("labels every row as a fork action, not a fake navigate-to-node", async () => {
+			const dir = mkdtempSync(join(tmpdir(), "sumocode-tree-label-test-"));
+			try {
+				const sessionFile = writeBranchedFixture(dir);
+				const { actions, inlineSelectors } = setup({ sessionFile });
+
+				const treePromise = actions.handleSubmittedText("/tree");
+				await flushIO();
+				const rendered = inlineSelectors.render(100).join("\n").replace(/\[[0-9;]*m/g, "");
+				expect(rendered).toContain("Fork from:");
+
+				inlineSelectors.handleInput(SELECTOR_ESCAPE);
+				await treePromise;
+			} finally {
+				rmSync(dir, { recursive: true, force: true });
+			}
+		});
+
+		it("warns when there is no session file to browse", async () => {
+			const { actions, notifications } = setup();
+
+			await expect(actions.handleSubmittedText("/tree")).resolves.toBe(true);
+
+			expect(notifications).toContainEqual({ message: "no session file available to browse", level: "warning" });
+		});
+	});
+
 	it("handles /session stats and /name rename as host commands", async () => {
 		const { actions, controls, modals, notifications } = setup();
 

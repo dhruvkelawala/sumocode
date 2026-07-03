@@ -34,7 +34,7 @@ import type { RpcHostControls, RpcModelOption, RpcSessionStats, RpcThinkingLevel
 import type { RpcHostOverlayManager } from "./host-overlays.js";
 import type { InlineSelectorHost } from "./inline-selector.js";
 import { notifyOnError } from "./safe-send.js";
-import { listSessions, type SessionListInfo } from "./session-reader.js";
+import { buildSessionTree, listSessions, type SessionEntryLike, type SessionListInfo, type SessionTreeNode } from "./session-reader.js";
 import type { RpcHostStateStore } from "./state.js";
 
 export const RPC_HOST_COMMAND_PALETTE_INPUT = "\u001f";
@@ -105,6 +105,7 @@ export const RPC_HOST_SLASH_COMMANDS: readonly RpcHostSlashCommand[] = Object.fr
 	{ name: "fork", description: "Fork from a previous user message" },
 	{ name: "sessions", description: "Open session controls" },
 	{ name: "resume", description: "Resume a previous session from this project" },
+	{ name: "tree", description: "Browse the session branch tree and fork from a node" },
 	{ name: "session", description: "Show session info and stats" },
 	{ name: "name", description: "Rename the current session" },
 	{ name: "copy", description: "Copy the last assistant response to the clipboard" },
@@ -208,6 +209,46 @@ function resumeSessionLabel(session: SessionListInfo): string {
 	const when = Number.isNaN(session.modified.getTime()) ? "" : session.modified.toISOString().slice(0, 16).replace("T", " ");
 	const title = session.name?.trim() || session.firstMessage.slice(0, 60);
 	return `${when} — ${title} (${formatInteger(session.messageCount)} msgs)`;
+}
+
+interface TreeRow {
+	readonly node: SessionTreeNode;
+	readonly depth: number;
+}
+
+/** Depth-first flatten of `buildSessionTree`'s roots, preserving the oldest-first child order the port already sorts by. */
+function flattenSessionTree(roots: readonly SessionTreeNode[]): TreeRow[] {
+	const rows: TreeRow[] = [];
+	const visit = (node: SessionTreeNode, depth: number): void => {
+		rows.push({ node, depth });
+		for (const child of node.children) visit(child, depth + 1);
+	};
+	for (const root of roots) visit(root, 0);
+	return rows;
+}
+
+function entryMessageText(entry: SessionEntryLike): string | undefined {
+	const message = entry.message as { role?: unknown; content?: unknown } | undefined;
+	if (!message || typeof message !== "object" || typeof message.role !== "string") return undefined;
+	const content = message.content;
+	const text = typeof content === "string"
+		? content
+		: Array.isArray(content)
+			? content
+				.filter((block): block is { type: string; text: string } => typeof block === "object" && block !== null && (block as { type?: unknown }).type === "text")
+				.map((block) => block.text)
+				.join(" ")
+			: "";
+	return text ? `${message.role}: ${text}` : undefined;
+}
+
+/** One-line summary for a tree row: label bookmark if present, else the message text, else the entry type. */
+function treeNodeSummary(node: SessionTreeNode): string {
+	const summary = node.label
+		? `[${node.label}] `
+		: "";
+	const body = node.entry.type === "message" ? entryMessageText(node.entry) : undefined;
+	return `${summary}${(body ?? node.entry.type).slice(0, 72)}`;
 }
 
 class LinesOverlayComponent implements Component {
@@ -339,6 +380,9 @@ export class RpcHostActions {
 				return true;
 			case "/resume":
 				await this.openResumeSelector();
+				return true;
+			case "/tree":
+				await this.openTreeBrowser();
 				return true;
 			case "/quit":
 				this.onExitRequest(0);
@@ -496,6 +540,42 @@ export class RpcHostActions {
 			this.onStateChange();
 			notify(this.notifications, "session resumed", "info");
 		}
+	}
+
+	/**
+	 * `/tree` -- browses the current session's branch structure (ported via
+	 * `session-reader.ts`'s `buildSessionTree`, a faithful copy of Pi's
+	 * `SessionManager.getTree()`). RPC has no "navigate to node" verb (that's
+	 * Phase 3, tracked separately -- switching the LEAF pointer without loading
+	 * a whole session isn't exposed here), so the only real action on a picked
+	 * node is forking from it via the existing `fork(entryId)` control. The
+	 * selector option for each row is explicitly labeled "Fork from ..." so
+	 * this doesn't read as a fake in-place jump.
+	 */
+	public async openTreeBrowser(): Promise<void> {
+		const sessionFile = this.stateStore.getSnapshot().sessionFile;
+		if (!sessionFile) {
+			notify(this.notifications, "no session file available to browse", "warning");
+			return;
+		}
+		const tree = await buildSessionTree(sessionFile);
+		if (tree.length === 0) {
+			notify(this.notifications, "session has no entries yet", "warning");
+			return;
+		}
+		const rows = flattenSessionTree(tree);
+		const labels = rows.map((row) => `${"  ".repeat(row.depth)}Fork from: ${treeNodeSummary(row.node)}`);
+		const selected = await this.inlineSelectors.select("Session tree (fork from a node)", labels);
+		if (!selected) return;
+		const index = labels.indexOf(selected);
+		const row = rows[index];
+		if (!row) return;
+		const result = await this.controls.fork(row.node.entry.id);
+		if (!result.cancelled) {
+			if (result.text) this.editorText?.setText(result.text);
+			await this.rehydrateTranscript();
+		}
+		this.onStateChange();
 	}
 
 	public async openThemeCheck(): Promise<void> {

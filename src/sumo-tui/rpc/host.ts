@@ -140,6 +140,24 @@ export async function submitRpcPrompt(message: string, options: RpcPromptSubmitO
 	responseData(response, "prompt");
 }
 
+/**
+ * Submits `SUMOCODE_INITIAL_PROMPT` (set by `bin/sumocode.sh` when a task/
+ * prompt positional was destined for `pi --mode rpc`, which never reads argv
+ * positionals -- only InteractiveMode does; rpc-mode.js reads only stdin JSON
+ * commands) via `submit`, the SAME function the host wires as the editor's
+ * `onSubmit` (see `submitFromEditor` in `runRpcHost`), so streaming state,
+ * transcript, and interrupt flags all engage exactly as they would for a real
+ * editor submit instead of the prompt silently vanishing.
+ *
+ * A no-op when the env var is absent or blank -- the common case for every
+ * launch that isn't `sumocode <prompt>` / `sumocode task <prompt>`.
+ */
+export async function submitInitialPromptFromEnv(env: NodeJS.ProcessEnv, submit: (message: string) => Promise<void>): Promise<void> {
+	const message = env.SUMOCODE_INITIAL_PROMPT;
+	if (!message) return;
+	await submit(message);
+}
+
 export interface RpcHostExitDependencies {
 	readonly modals: Pick<ModalLayer, "close">;
 	readonly overlays: Pick<RpcHostOverlayManager, "close">;
@@ -376,6 +394,40 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 	// and arms quit instead of aborting (defect: double Ctrl-C quits the app
 	// instead of aborting the in-flight send).
 	let submitInFlight = false;
+	// Named (not inlined into the editor's onSubmit option) so the
+	// SUMOCODE_INITIAL_PROMPT seam below can submit through the exact same
+	// path -- streaming-state painting, submitInFlight bookkeeping, and error
+	// recovery -- as a real editor submit, instead of duplicating this logic.
+	const submitFromEditor = async (message: string): Promise<void> => {
+		submitInFlight = true;
+		try {
+			await submitRpcPrompt(message, {
+				visualFixture,
+				actions,
+				stateStore,
+				client,
+				onBeforeSend: () => {
+					const state = stateStore.getSnapshot();
+					runtime?.update({
+						state: {
+							...state,
+							isStreaming: true,
+							pendingMessageCount: Math.max(1, state.pendingMessageCount),
+							hasMessages: true,
+							lastEventType: "agent_start",
+						},
+					});
+				},
+			});
+		} catch (error) {
+			submitInFlight = false;
+			// The synthetic isStreaming:true painted into runtime.update above
+			// would otherwise stay stuck until the next 5s stats poll. Reset it
+			// immediately so the UI and interrupt gating agree the send failed.
+			runtime?.update({ state: stateStore.getSnapshot() });
+			throw error;
+		}
+	};
 	const keybindings = createRpcKeybindingsManager({ env });
 	const editor = new RpcHostEditorController({
 		controls,
@@ -392,36 +444,7 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		// app.interrupt (Escape by default, or the user's remap): replay into
 		// the interrupt tier module (see `handleAppInterrupt` above).
 		onInterrupt: () => handleAppInterrupt(),
-		onSubmit: async (message) => {
-			submitInFlight = true;
-			try {
-				await submitRpcPrompt(message, {
-					visualFixture,
-					actions,
-					stateStore,
-					client,
-					onBeforeSend: () => {
-						const state = stateStore.getSnapshot();
-						runtime?.update({
-							state: {
-								...state,
-								isStreaming: true,
-								pendingMessageCount: Math.max(1, state.pendingMessageCount),
-								hasMessages: true,
-								lastEventType: "agent_start",
-							},
-						});
-					},
-				});
-			} catch (error) {
-				submitInFlight = false;
-				// The synthetic isStreaming:true painted into runtime.update above
-				// would otherwise stay stuck until the next 5s stats poll. Reset it
-				// immediately so the UI and interrupt gating agree the send failed.
-				runtime?.update({ state: stateStore.getSnapshot() });
-				throw error;
-			}
-		},
+		onSubmit: submitFromEditor,
 	});
 	const uiResponder = createRpcExtensionUiResponder({
 		modals,
@@ -570,6 +593,13 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		});
 		await runtime.start();
 		if (!visualFixture) {
+			// Submit the launcher's kickoff prompt (if any) only after start() +
+			// initial hydration above, so the transcript/UI are already in a
+			// normal steady state when the submit's streaming-state painting and
+			// event handling kick in -- see submitInitialPromptFromEnv's doc
+			// comment for why this reuses submitFromEditor instead of a bespoke
+			// path.
+			await submitInitialPromptFromEnv(env, submitFromEditor);
 			await refreshStats();
 			statsTimer = setInterval(() => { void refreshStats(); }, 5_000);
 		}

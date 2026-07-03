@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ChatMessageViewModel } from "../transcript/view-model.js";
-import { createLazyChatSink, createRpcExitHandler, createRpcHostInterruptHandler, createUnhandledRejectionHandler, type RpcHostExitDependencies, type RpcHostInterruptDependencies } from "./host.js";
+import { createLazyChatSink, createRpcExitHandler, createRpcHostInterruptHandler, createUnhandledRejectionHandler, submitInitialPromptFromEnv, type RpcHostExitDependencies, type RpcHostInterruptDependencies } from "./host.js";
 
 function flush(): Promise<void> {
 	return Promise.resolve().then(() => Promise.resolve());
@@ -324,5 +324,47 @@ describe("createLazyChatSink (B9 host wiring)", () => {
 
 		expect(addViewModel).toHaveBeenCalledTimes(1);
 		expect(addViewModel).toHaveBeenCalledWith(message);
+	});
+});
+
+describe("submitInitialPromptFromEnv (SUMOCODE_INITIAL_PROMPT seam)", () => {
+	// bin/sumocode.sh strips a task/prompt positional out of the argv it
+	// forwards to `pi --mode rpc` (which never reads argv positionals -- only
+	// InteractiveMode does) and hands it to the host via this env var instead.
+	// runRpcHost submits it through `submitFromEditor`, the exact same function
+	// wired as the editor's onSubmit, once client.start() + initial hydration
+	// have completed.
+
+	it("submits exactly one prompt after start when SUMOCODE_INITIAL_PROMPT is set", async () => {
+		const submit = vi.fn(async (_message: string) => undefined);
+
+		await submitInitialPromptFromEnv({ SUMOCODE_INITIAL_PROMPT: "review the diff" }, submit);
+
+		expect(submit).toHaveBeenCalledOnce();
+		expect(submit).toHaveBeenCalledWith("review the diff");
+	});
+
+	it("submits nothing when SUMOCODE_INITIAL_PROMPT is absent", async () => {
+		const submit = vi.fn(async (_message: string) => undefined);
+
+		await submitInitialPromptFromEnv({}, submit);
+
+		expect(submit).not.toHaveBeenCalled();
+	});
+
+	it("submits nothing when SUMOCODE_INITIAL_PROMPT is blank", async () => {
+		const submit = vi.fn(async (_message: string) => undefined);
+
+		await submitInitialPromptFromEnv({ SUMOCODE_INITIAL_PROMPT: "" }, submit);
+
+		expect(submit).not.toHaveBeenCalled();
+	});
+
+	it("propagates a submit failure instead of swallowing it", async () => {
+		const submit = vi.fn(async (_message: string) => {
+			throw new Error("child not ready");
+		});
+
+		await expect(submitInitialPromptFromEnv({ SUMOCODE_INITIAL_PROMPT: "review the diff" }, submit)).rejects.toThrow("child not ready");
 	});
 });

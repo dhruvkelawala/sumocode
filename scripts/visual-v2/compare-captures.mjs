@@ -39,6 +39,35 @@ const KNOWN_EQUIVALENT_REGIONS = {
 			runtimePattern: /Ask anything/,
 			reason: "cursor-blink-phase cell (splash placeholder caret)",
 		},
+		{
+			// main-is-stale: candidate matches ratified splash canon
+			// (Bible 03-splash.html + src/cathedral/input-frame.ts
+			// INPUT_FRAME_HINT_AWAITING); main's older chrome still renders the
+			// legacy `unknown · off` status, which this scenario's own
+			// rejectIfFinalScreenMatches contract lists as an error marker.
+			// Adjudicated earlier in this track (plans/README.md); expires when
+			// main absorbs integrate/track-d. Pattern-locked on BOTH sides —
+			// if either side renders any third string, the mask does not apply
+			// and the gate fails again.
+			rows: [34, 34],
+			cols: [53, 67],
+			targetPattern: /╰─ unknown · off/,
+			runtimePattern: /╰─ AWAITING PROMPT/,
+			reason: "main-is-stale: splash hint row (candidate matches ratified canon AWAITING PROMPT; expires when main absorbs integrate/track-d)",
+		},
+		{
+			// main-is-stale: candidate renders the ratified splash version line
+			// (Bible 03-splash.html + src/footer.ts SPLASH_VERSION_LINE); main's
+			// baseline capture is missing the row entirely. Adjudicated earlier
+			// in this track (plans/README.md); expires when main absorbs
+			// integrate/track-d. Pattern-locked on BOTH sides: baseline row must
+			// be blank AND candidate row must be the exact canon version line.
+			rows: [43, 43],
+			cols: [56, 103],
+			targetPattern: /^\s*$/,
+			runtimePattern: /SUMOCODE V0\.3\.0 · CATHEDRAL · 160 × 45 MONOSPACE/,
+			reason: "main-is-stale: splash version line (candidate matches ratified canon SPLASH_VERSION_LINE; expires when main absorbs integrate/track-d)",
+		},
 	],
 	"active-landscape-runtime": [
 		{

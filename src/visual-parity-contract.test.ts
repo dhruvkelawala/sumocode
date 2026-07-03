@@ -679,6 +679,95 @@ describe("V2 visual parity contract", () => {
 				rmSync(tmp, { recursive: true, force: true });
 			}
 		});
+
+		// Sixth class (main-is-stale splash rows): the mask is pattern-locked to
+		// EXACTLY `unknown · off` (baseline) vs `AWAITING PROMPT` (candidate).
+		// Any third string on either side must fail the gate.
+		function writeSplashCapture(root: string, snapshot: unknown): void {
+			writeJson(join(root, "splash-runtime/raw/capture-metadata.json"), {
+				command: "./bin/sumocode.sh",
+				args: ["--offline", "--no-extensions", "--no-session"],
+				cols: 160,
+				rows: 45,
+				inputCount: 0,
+			});
+			writeJson(join(root, "splash-runtime/raw/terminal-snapshot.json"), snapshot);
+			writeOnePixelPng(join(root, "splash-runtime/crops/full-runtime.png"));
+		}
+
+		function baseSplashSnapshot(hintText: string, versionLine: string): unknown {
+			const snap = snapshotWithText(160, 45, []);
+			// Column offsets copied from a real splash-runtime capture: the hint
+			// row's `╰─ <status>` opens at col 50 (variable segment at cols 53+),
+			// and the version line starts at col 56.
+			writeRowText(snap, 34, 50, `╰─ ${hintText}`);
+			if (versionLine.length > 0) writeRowText(snap, 43, 56, versionLine);
+			return snap;
+		}
+
+		it("suppresses the adjudicated main-is-stale splash rows when both sides match their locked patterns", () => {
+			const tmp = mkdtempSync(join(tmpdir(), "sumocode-equivalence-contract-"));
+			try {
+				const baseline = join(tmp, "baseline");
+				const candidate = join(tmp, "candidate");
+				const out = join(tmp, "out");
+
+				writeSplashCapture(baseline, baseSplashSnapshot("unknown · off", ""));
+				writeSplashCapture(candidate, baseSplashSnapshot("AWAITING PROMPT", "SUMOCODE V0.3.0 · CATHEDRAL · 160 × 45 MONOSPACE"));
+
+				execFileSync("node", [
+					join(process.cwd(), "scripts/visual-v2/compare-captures.mjs"),
+					"--baseline-root", baseline,
+					"--candidate-root", candidate,
+					"--scenario", "splash-runtime",
+					"--out", out,
+				], { cwd: process.cwd(), stdio: "pipe" });
+
+				const diffText = readFileSync(join(out, "splash-runtime/raw/styled-cell-diff.txt"), "utf8");
+				expect(diffText).toContain("Styled cell diff: MATCH");
+				expect(diffText).toContain("main-is-stale: splash hint row");
+				expect(diffText).toContain("main-is-stale: splash version line");
+			} finally {
+				rmSync(tmp, { recursive: true, force: true });
+			}
+		});
+
+		it("does NOT suppress a third splash hint string that matches neither locked pattern", () => {
+			const tmp = mkdtempSync(join(tmpdir(), "sumocode-equivalence-contract-"));
+			try {
+				const baseline = join(tmp, "baseline");
+				const candidate = join(tmp, "candidate");
+				const out = join(tmp, "out");
+
+				// Candidate renders a THIRD string — neither the baseline's locked
+				// `unknown · off` nor the canon `AWAITING PROMPT`. The mask's
+				// runtimePattern no longer matches, so the diff must surface.
+				writeSplashCapture(baseline, baseSplashSnapshot("unknown · off", ""));
+				writeSplashCapture(candidate, baseSplashSnapshot("SCRIPTOR OFFLINE", "SUMOCODE V0.3.0 · CATHEDRAL · 160 × 45 MONOSPACE"));
+
+				let failed = false;
+				try {
+					execFileSync("node", [
+						join(process.cwd(), "scripts/visual-v2/compare-captures.mjs"),
+						"--baseline-root", baseline,
+						"--candidate-root", candidate,
+						"--scenario", "splash-runtime",
+						"--out", out,
+					], { cwd: process.cwd(), stdio: "pipe" });
+				} catch {
+					failed = true;
+				}
+
+				expect(failed).toBe(true);
+				const results = JSON.parse(readFileSync(join(out, "results.json"), "utf8"));
+				const scenarioResult = results.scenarios.find((item: { id: string }) => item.id === "splash-runtime");
+				expect(scenarioResult.result).toBe("failed");
+				const diffText = readFileSync(join(out, "splash-runtime/raw/styled-cell-diff.txt"), "utf8");
+				expect(diffText).toContain("row  34");
+			} finally {
+				rmSync(tmp, { recursive: true, force: true });
+			}
+		});
 	});
 
 	it("keeps required crop gates explicit and preserves promoted goldens", () => {

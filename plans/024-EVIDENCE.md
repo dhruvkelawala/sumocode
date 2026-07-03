@@ -24,13 +24,15 @@ Main baseline used: `/tmp/sumocode-main-parity-clean` (pre-existing clean captur
 
 ## Gate result
 
-`pnpm visual:compare` — **exit 1** (see STOP note below; 2 of 3 scenarios pass, all their crops pass).
+`pnpm visual:compare` — **exit 0. 3/3 scenarios passed, 14/14 crops passed.**
 
-| Scenario | Result | Crops (7/7/6) |
+| Scenario | Result | Crops |
 |---|---|---|
-| `splash-runtime` | **FAILED** | `full` failed — 2 diff rows OUTSIDE the 5 declared classes (see STOP) |
-| `active-landscape-runtime` | **PASSED** | all 7 crops passed (`full`, `top-bar`, `sidebar`, `chat-area`, `input-frame`, `hint-row`, `footer`) |
-| `active-portrait-runtime` | **PASSED** | all 6 crops passed (`full`, `top-bar`, `chat-area`, `input-frame`, `hint-row`, `footer`) |
+| `splash-runtime` | **PASSED** | 1/1 (`full`) |
+| `active-landscape-runtime` | **PASSED** | 7/7 (`full`, `top-bar`, `sidebar`, `chat-area`, `input-frame`, `hint-row`, `footer`) |
+| `active-portrait-runtime` | **PASSED** | 6/6 (`full`, `top-bar`, `chat-area`, `input-frame`, `hint-row`, `footer`) |
+
+An initial run STOPPED on two splash rows outside the five mechanical classes; the reviewer adjudicated them as an already-recorded "main-is-stale vs ratified canon" difference and authorized a sixth, tightly scoped class (see table below and the resolution note).
 
 `pnpm visual:review -- --lane runtime`: `splash-runtime` passed; `active-landscape-runtime` / `active-portrait-runtime` FAIL — expected, only against the demoted pre-D1 Bible target (plan 032 debt, per CONTRACT.md line 79 anticipation of this exact gap).
 
@@ -48,17 +50,11 @@ Location: `scripts/visual-v2/compare-captures.mjs` — new `KNOWN_EQUIVALENT_REG
 | Sidebar cwd/branch lines | landscape rows 10-11 cols 130-159 | Same capture-environment working-dir/branch variability as the hint row, rendered in the sidebar column instead. |
 | D4 deterministic constants (token/cost gauge) | landscape rows 14-18 and row 43 cols 143-158; portrait row 98 cols 43-58 | Candidate freezes `42k/200k · $0.42` under `SUMOCODE_HARNESS=1` visual-capture determinism; main shows whatever its live (non-harness-aware) session state happened to be (`14/128k · $0.00`) in the captured baseline. |
 | MCP roster placeholder | landscape rows 24-34 cols 130-159 | Candidate's RPC shell (`src/sumo-tui/rpc/shell-adapter.ts`) added a `SUMOCODE_HARNESS`-gated `PLACEHOLDER_MCP` roster (`github/stitch/context7/chrome-dev`, fixed — see `src/sidebar.ts`) specifically so visual captures don't leak the live per-machine `~/.pi/agent/mcp.json` roster (`src/mcp-config-reader.ts`). Main's sidebar code predates this guard (`src/sumo-tui/rpc/` does not exist on `main`); the clean baseline capture environment simply had no MCP config, so main shows blank rows. Same root-cause family as the D4 constants class: candidate freezes a deterministic placeholder, main is capture-environment-dependent. Traced and confirmed via direct code read of `src/mcp-config-reader.ts` and `src/sumo-tui/rpc/shell-adapter.ts:373-417`. |
+| **main-is-stale splash rows (sixth class — reviewer-authorized)** | splash row 34 cols 53-67; splash row 43 cols 56-103 | Candidate matches ratified splash canon (Bible `03-splash.html` + `src/footer.ts` `SPLASH_VERSION_LINE` + `src/cathedral/input-frame.ts` `AWAITING PROMPT` hint); main is the stale side, per prior adjudication in this track (`plans/README.md`). Pattern-locked on BOTH sides (baseline must show exactly `╰─ unknown · off` / a blank row; candidate must show exactly `╰─ AWAITING PROMPT` / the exact canon version line) — any third string on either side breaks the mask and the gate fails again. **Expires when main absorbs `integrate/track-d`.** |
 
-## STOP — genuinely out-of-scope diff (not masked)
+## Resolution of the initial STOP
 
-`splash-runtime` has 2 diff rows that do **not** fit any of the five declared classes, confirmed by exhaustive cell-by-cell classification of every differing cell across all three scenarios:
-
-- **Row 34** (15 cells): main renders `╰─ unknown · off`; candidate renders `╰─ AWAITING PROMPT`. `AWAITING PROMPT` is the Bible-canonical splash hint (`docs/ui/bible/03-splash.html`, `src/cathedral/input-frame.ts:43`, `docs/visual/parity/BASELINE_REVIEW.md:31`) and `unknown · off` is literally listed as an error-marker string in this same scenario's own `rejectIfFinalScreenMatches` contract (`src/visual-parity-contract.test.ts:117`). Main is stale/incorrect here, not mechanically different.
-- **Row 43** (48 cells): candidate renders the Bible-canonical version-line row (`SUMOCODE V0.3.0 · CATHEDRAL · 160 × 45 MONOSPACE`, per `src/footer.ts:46`, `docs/ui/bible/03-splash.html:54`); main's clean baseline capture is missing this row entirely.
-
-Both are the candidate being *more correct* relative to Bible canon, not incidental capture noise — this is a real product difference, outside the five mechanical classes this task authorized, and not something a narrow content mask can honestly express without inventing a sixth "main has a bug/is behind canon" equivalence class. Per plan instructions, this is reported rather than masked. `active-landscape-runtime` and `active-portrait-runtime` have **zero** unclassified cells (verified by scripted cell-diff classification against every declared region) — those two scenarios are fully covered by the five declared classes and pass cleanly, including PNG crop diffs.
-
-Recommendation: either (a) recapture the main baseline root after confirming main's actual current splash render (if `unknown · off` there is itself already fixed upstream and the clean baseline is stale), or (b) get Dhruv's explicit sign-off to add a sixth declared class for "candidate matches Bible canon, main is behind" — scoped only to `splash-runtime` rows 34/43 — before promoting this gate to a hard CI requirement.
+The first gate run stopped on splash rows 34 (`unknown · off` vs `AWAITING PROMPT`, 15 cells) and 43 (missing version line, 48 cells) — real content differences outside the five mechanical classes, where the candidate matches Bible canon and main does not (`unknown · off` is even listed as an error marker in this scenario's own `rejectIfFinalScreenMatches` contract). The reviewer confirmed these were already adjudicated earlier in this track as "main-is-stale vs ratified canon" and authorized the sixth class above, scoped to exactly those two rows with both-side pattern locks and an explicit expiry (main absorbing `integrate/track-d`). All other scenarios had **zero** unclassified cells (verified by scripted cell-by-cell classification against every declared region).
 
 ## Over-masking guard test
 
@@ -67,12 +63,14 @@ Added to `src/visual-parity-contract.test.ts`, `describe("plan-024 known-equival
 1. **"suppresses only the declared plan-024 mechanical regions and still passes"** — synthetic `active-landscape-runtime` baseline/candidate snapshot pair that differs *only* within the declared regions (real column offsets copied from an actual capture) passes `compare-captures.mjs` end-to-end, with the suppression list printed in `styled-cell-diff.txt`.
 2. **"does NOT suppress a real content change adjacent to a masked region"** — same fixture, but with sabotaged text one row below the masked sidebar cwd/branch region (row 12, same column band, outside the declared `[10,11]` row range) — the gate still fails, `results.json` marks the scenario `failed`, and the sidebar crop's styled-cell diff no longer reports `MATCH`.
 3. **"does NOT suppress a real content change inside the working-indicator row outside its masked column"** — sabotages text at row 36 col 3+ (the masked cell is only col 1) — still fails.
+4. **"suppresses the adjudicated main-is-stale splash rows when both sides match their locked patterns"** — synthetic splash pair (`unknown · off`/blank baseline vs `AWAITING PROMPT`/canon version line candidate) passes, with both sixth-class suppressions reported.
+5. **"does NOT suppress a third splash hint string that matches neither locked pattern"** — candidate renders `SCRIPTOR OFFLINE` instead of `AWAITING PROMPT`; the mask's both-side pattern lock fails to apply and the gate fails with row 34 surfaced.
 
-All three pass; full `src/visual-parity-contract.test.ts` suite: 14/14 passed.
+All five pass; full `src/visual-parity-contract.test.ts` suite: 16/16 passed.
 
 ## Verification battery
 
-- `pnpm vitest run src/sumo-tui/ src/visual-parity-contract.test.ts` — 1 failed (`runtime.test.ts` sidebar dir-name assert, pre-existing on `6886e5a` before this branch's changes — confirmed via `git stash`), 625 passed.
+- `pnpm vitest run src/sumo-tui/ src/visual-parity-contract.test.ts` — 627 passed, 1 failed (`runtime.test.ts` sidebar dir-name assert, pre-existing on `6886e5a` before this branch's changes — confirmed via `git stash`; on the allowed-failures list).
 - `pnpm exec tsc --noEmit && pnpm build` — clean.
 - `pnpm test:integration` — 44/44 passed (one isolated rerun needed for `rpc-kitty-release.test.ts`, matching the documented PTY flake protocol; passed clean on full-suite rerun).
 - `pnpm test` (full `src/**/*.test.ts`) — 1332/1333 passed; the 1 failure is the same pre-existing `runtime.test.ts` sidebar dir-name assert plus a `background-tasks` ENOENT teardown race, both explicitly on the allowed-failures list.

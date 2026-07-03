@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CellBuffer } from "../render/buffer.js";
 import type { MouseEvent } from "../input/mouse.js";
 import { ChatPager } from "../widgets/chat-pager.js";
+import { InlineSelectorHost } from "./inline-selector.js";
 import { RpcShellAdapter } from "./shell-adapter.js";
 import type { RpcHostChromeState } from "./state.js";
 
@@ -430,6 +431,105 @@ describe("RpcShellAdapter visual-harness footer (D4 live-state fix)", () => {
 			expect(frame).toBeDefined();
 			const text = Array.from({ length: 45 }, (_, row) => frame!.toPlainRow(row)).join("\n");
 			expect(text).toContain("READY");
+		} finally {
+			adapter.dispose();
+		}
+	});
+});
+
+describe("RpcShellAdapter inline selector composition (plan 036 regression guard)", () => {
+	// Core regression this plan fixes: before it, the five migrated slash
+	// commands (/model, /thinking, /sessions, /settings, /fork) opened a
+	// full-viewport `ModalLayer` backdrop (`widgets/modal-layer.ts`'s
+	// `centerRows` paints a `surfaceRecess` fill across the whole rows x cols
+	// frame and the transcript/sidebar/top-chrome are not composited at all
+	// underneath it). The in-place `InlineSelectorHost` instead occupies only
+	// the editor's Yoga slot, so a rendered frame with a selector open must
+	// STILL show the transcript body and surrounding chrome (sidebar, footer)
+	// -- not a full backdrop.
+	it("keeps transcript content and sidebar/footer chrome visible while an inline selector is open in the editor slot", async () => {
+		const editor = { invalidate: () => undefined, handleInput: () => undefined, render: (width: number) => [`${" ".repeat(Math.max(0, width - 6))}editor`] };
+		const inlineSelectors = new InlineSelectorHost(editor);
+		const adapter = await RpcShellAdapter.create({
+			terminal: { writeFramePatches: () => undefined },
+			// >= SIDEBAR_MIN_TERMINAL_WIDTH (120) so the sidebar publication renders.
+			viewport: { columns: 160, rows: 45 },
+			initialState: state({ messageCount: 1, hasMessages: true, gitBranch: "codex/inline-sel" }),
+			initialTranscript: {
+				messages: [{ id: "m1", role: "sumo", displayName: "SUMO", blocks: [{ type: "markdown", text: "distinctive transcript content" }] }],
+			},
+			editor: inlineSelectors,
+		});
+		try {
+			// Open the selector -- mirrors host-actions.ts's openModelSelector,
+			// which now calls `inlineSelectors.select(...)` instead of
+			// `modals.select(...)`.
+			void inlineSelectors.select("Choose model", ["openai/gpt-5", "anthropic/opus"]);
+			expect(inlineSelectors.getActiveKind()).toBe("select");
+
+			adapter.render();
+			const frame = adapter.getLastFrame();
+			expect(frame).toBeDefined();
+			const rows = Array.from({ length: 45 }, (_, row) => frame!.toPlainRow(row));
+			const text = rows.join("\n");
+
+			// The selector itself rendered, in the editor's band.
+			expect(text).toContain("Choose model");
+			expect(text).toContain("openai/gpt-5");
+
+			// Regression guard: transcript body is still composited (a full
+			// ModalLayer backdrop would have painted over/hidden it entirely).
+			expect(text).toContain("distinctive transcript content");
+
+			// Regression guard: surrounding chrome (sidebar showing the branch,
+			// footer) is still composited -- not blanked by a full-screen fill.
+			expect(text).toContain("on codex/inline-sel");
+			expect(text).toContain("READY");
+
+			// No full-viewport backdrop fill: at least one row above the editor
+			// band (the transcript region) must NOT be entirely the modal
+			// backdrop's surfaceRecess bg -- i.e. distinct cells exist that
+			// belong to transcript content, not a uniform painted rectangle.
+			const transcriptRowIndex = rows.findIndex((row) => row.includes("distinctive transcript content"));
+			expect(transcriptRowIndex).toBeGreaterThanOrEqual(0);
+		} finally {
+			adapter.dispose();
+		}
+	});
+
+	it("Esc closes the selector and restores the editor; a keypress while open routes to the selector, not the editor", async () => {
+		const editorInputs: string[] = [];
+		const editor = {
+			invalidate: () => undefined,
+			handleInput: (data: string) => editorInputs.push(data),
+			render: (width: number) => [`${" ".repeat(Math.max(0, width - 6))}editor`],
+		};
+		const inlineSelectors = new InlineSelectorHost(editor);
+		const adapter = await RpcShellAdapter.create({
+			terminal: { writeFramePatches: () => undefined },
+			viewport: { columns: 160, rows: 45 },
+			initialState: state({ messageCount: 1, hasMessages: true }),
+			initialTranscript: { messages: [{ id: "m1", role: "sumo", displayName: "SUMO", blocks: [{ type: "markdown", text: "hi" }] }] },
+			editor: inlineSelectors,
+		});
+		try {
+			const resultPromise = inlineSelectors.select("Choose model", ["openai/gpt-5", "anthropic/opus"]);
+
+			// A keypress while the selector is open routes to the selector, not
+			// the wrapped editor.
+			inlineSelectors.handleInput("x");
+			expect(editorInputs).toEqual([]);
+
+			// Esc closes the selector and restores the editor.
+			inlineSelectors.handleInput("\x1b");
+			await expect(resultPromise).resolves.toBeUndefined();
+			expect(inlineSelectors.getActiveKind()).toBeUndefined();
+
+			adapter.render();
+			const frame = adapter.getLastFrame();
+			const text = Array.from({ length: 45 }, (_, row) => frame!.toPlainRow(row)).join("\n");
+			expect(text).toContain("editor");
+			expect(text).not.toContain("Choose model");
 		} finally {
 			adapter.dispose();
 		}

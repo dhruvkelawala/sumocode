@@ -30,6 +30,7 @@ import type { ModalManager } from "../widgets/modal.js";
 import type { NotificationCenter, NotificationLevel } from "../widgets/notification.js";
 import type { RpcHostControls, RpcModelOption, RpcSessionStats, RpcThinkingLevel } from "./controls.js";
 import type { RpcHostOverlayManager } from "./host-overlays.js";
+import type { InlineSelectorHost } from "./inline-selector.js";
 import { notifyOnError } from "./safe-send.js";
 import type { RpcHostStateStore } from "./state.js";
 
@@ -41,6 +42,7 @@ export interface RpcHostSlashCommand {
 }
 
 type HostModals = Pick<ModalManager, "select" | "confirm" | "input">;
+type HostInlineSelectors = Pick<InlineSelectorHost, "select">;
 type HostNotifications = Pick<NotificationCenter, "notify">;
 type MemoryClientFactory = () => RemnicMemoryClient;
 
@@ -49,6 +51,16 @@ export interface RpcHostActionsOptions {
 	readonly stateStore: RpcHostStateStore;
 	readonly modals: HostModals;
 	readonly overlays: RpcHostOverlayManager;
+	/**
+	 * In-place selector surface (plan 036): `openModelSelector`,
+	 * `openThinkingSelector`, `openSessionControls`, `openSettings`, and
+	 * `openForkSelector` present through this instead of `modals.select(...)`,
+	 * so they render in the editor's band with the transcript/chrome still
+	 * visible instead of a full-screen `ModalLayer` backdrop. `modals` is kept
+	 * for confirm/input and the genuinely-blocking approval/confirm/input
+	 * flows elsewhere in the host -- only these five selectors moved.
+	 */
+	readonly inlineSelectors: HostInlineSelectors;
 	readonly notifications: HostNotifications;
 	readonly editorText?: EditorTextController;
 	readonly createMemoryClient?: MemoryClientFactory;
@@ -221,6 +233,7 @@ export class RpcHostActions {
 	private readonly stateStore: RpcHostStateStore;
 	private readonly modals: HostModals;
 	private readonly overlays: RpcHostOverlayManager;
+	private readonly inlineSelectors: HostInlineSelectors;
 	private readonly notifications: HostNotifications;
 	private readonly editorText: EditorTextController | undefined;
 	private readonly createMemoryClient: MemoryClientFactory;
@@ -234,6 +247,7 @@ export class RpcHostActions {
 		this.stateStore = options.stateStore;
 		this.modals = options.modals;
 		this.overlays = options.overlays;
+		this.inlineSelectors = options.inlineSelectors;
 		this.notifications = options.notifications;
 		this.editorText = options.editorText;
 		this.createMemoryClient = options.createMemoryClient ?? createRemnicMemoryClient;
@@ -342,7 +356,7 @@ export class RpcHostActions {
 			return;
 		}
 		const labels = models.map(modelLabel);
-		const selected = await this.modals.select("Choose model", labels);
+		const selected = await this.inlineSelectors.select("Choose model", labels);
 		if (selected === undefined) return;
 		const parsed = parseModelLabel(selected);
 		if (!parsed) {

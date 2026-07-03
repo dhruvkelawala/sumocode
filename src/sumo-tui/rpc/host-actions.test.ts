@@ -9,9 +9,32 @@ import type { NotificationLevel } from "../widgets/notification.js";
 import type { RpcHostControls, RpcModelOption, RpcSlashCommand } from "./controls.js";
 import { RpcHostActions, RPC_HOST_COMMAND_PALETTE_INPUT } from "./host-actions.js";
 import { RpcHostOverlayManager } from "./host-overlays.js";
+import { InlineSelectorHost } from "./inline-selector.js";
 import { RpcHostStateStore } from "./state.js";
 
 type Notification = { message: string; level: NotificationLevel };
+
+// `InlineSelectorHost`'s selector wraps pi-tui's real `SelectList`, which
+// matches raw terminal byte sequences via its own `getKeybindings()` (see
+// select-list.js) -- NOT the lenient symbolic strings (`Key.down`, i.e. the
+// literal string "down") `ModalManager.handleInput`'s bespoke `keyEq` accepts.
+// These are the actual legacy VT sequences a real terminal sends.
+const SELECTOR_ENTER = "\r";
+
+class FakeInlineEditor {
+	public text = "";
+	public invalidate(): void {}
+	public handleInput(): void {}
+	public render(): string[] {
+		return ["editor"];
+	}
+	public getText(): string {
+		return this.text;
+	}
+	public setText(text: string): void {
+		this.text = text;
+	}
+}
 
 class FakeControls {
 	public readonly calls: string[] = [];
@@ -193,6 +216,7 @@ function setup(options: {
 	});
 	const modals = new ModalManager();
 	const overlays = new RpcHostOverlayManager();
+	const inlineSelectors = new InlineSelectorHost(new FakeInlineEditor());
 	const notifications: Notification[] = [];
 	const memory = options.memory ?? new FakeMemoryClient();
 	const editorText = new FakeEditorText();
@@ -205,6 +229,7 @@ function setup(options: {
 		stateStore,
 		modals,
 		overlays,
+		inlineSelectors,
 		notifications: {
 			notify: (message, level = "info") => {
 				notifications.push({ message, level });
@@ -217,7 +242,7 @@ function setup(options: {
 		rehydrateTranscript,
 	});
 
-	return { actions, controls, modals, overlays, notifications, memory, editorText, rehydrateCalls };
+	return { actions, controls, modals, overlays, inlineSelectors, notifications, memory, editorText, rehydrateCalls };
 }
 
 function rpcCommand(name: string): RpcSlashCommand {
@@ -240,20 +265,22 @@ afterEach(() => {
 
 describe("RpcHostActions", () => {
 	it.each([RPC_HOST_COMMAND_PALETTE_INPUT, "\x1b[47;5u"])("opens the host command palette from runtime hotkey variant %#", async (hotkey) => {
-		const { actions, controls, modals, overlays, notifications } = setup();
+		const { actions, controls, overlays, inlineSelectors, notifications } = setup();
 
 		expect(actions.handleInput(hotkey)).toBe(true);
 		expect(overlays.getActiveKind()).toBe("commandPalette");
 
 		overlays.handleInput(Key.enter);
 		await flush();
-		expect(modals.getActiveKind()).toBe("select");
+		// The palette's MODEL row now opens the in-place selector (plan 036),
+		// not the full-screen ModalLayer.
+		expect(inlineSelectors.getActiveKind()).toBe("select");
 
-		modals.handleInput(Key.enter);
+		inlineSelectors.handleInput(SELECTOR_ENTER);
 		await flush();
 
 		expect(overlays.getActiveKind()).toBeUndefined();
-		expect(modals.getActiveKind()).toBeUndefined();
+		expect(inlineSelectors.getActiveKind()).toBeUndefined();
 		expect(controls.calls).toEqual([
 			"getAvailableModels",
 			"setModel:openai/gpt-5",

@@ -16,6 +16,7 @@ import { createRpcKeybindingsManager, RpcHostEditorController } from "./editor.j
 import { createRpcExtensionUiResponder } from "./extension-ui-responder.js";
 import { RpcHostActions } from "./host-actions.js";
 import { RpcHostOverlayManager } from "./host-overlays.js";
+import { InlineSelectorHost } from "./inline-selector.js";
 import { decideRpcInterrupt, type RpcInterruptInputKind } from "./interrupt.js";
 import { readGitBranch } from "./git.js";
 import { RpcHostRuntime } from "./runtime.js";
@@ -199,6 +200,8 @@ export async function submitInitialPromptFromEnv(env: NodeJS.ProcessEnv, submit:
 export interface RpcHostExitDependencies {
 	readonly modals: Pick<ModalLayer, "close">;
 	readonly overlays: Pick<RpcHostOverlayManager, "close">;
+	/** Closed alongside modals/overlays -- see `RpcHostInterruptDependencies.selector`'s doc comment for why the inline selector needs the same fail-safe treatment. */
+	readonly selector?: Pick<InlineSelectorHost, "close">;
 	readonly stateStore: Pick<RpcHostStateStore, "getSnapshot">;
 	readonly notifications: Pick<NotificationCenter, "notify">;
 	readonly requestRender: () => void;
@@ -241,6 +244,7 @@ export function createRpcExitHandler(deps: RpcHostExitDependencies): (error: Err
 		const reloadCode = error instanceof RpcChildExitError && error.code === SUMOCODE_RELOAD_EXIT_CODE ? error.code : undefined;
 		deps.modals.close();
 		deps.overlays.close();
+		deps.selector?.close();
 		deps.updateRuntimeState({ ...deps.stateStore.getSnapshot(), isStreaming: false, isCompacting: false });
 		if (reloadCode === undefined) {
 			deps.notifications.notify(`RPC child exited unexpectedly: ${truncateForNotification(error.message)}`, "error", 0);
@@ -264,6 +268,20 @@ export function createRpcExitHandler(deps: RpcHostExitDependencies): (error: Err
 export interface RpcHostInterruptDependencies {
 	readonly modals: Pick<ModalLayer, "getActiveKind" | "close">;
 	readonly overlays: Pick<RpcHostOverlayManager, "getActiveKind" | "close">;
+	/**
+	 * The in-place selector surface (plan 036's `InlineSelectorHost`) that
+	 * occupies the editor slot for `/model`, `/thinking`, `/sessions`,
+	 * `/settings`, and `/fork`. It is neither `modals` nor `overlays` (it
+	 * mounts in the editor's Yoga leaf, not the modal/overlay stack -- see
+	 * `inline-selector.ts`), so without this it would be invisible to
+	 * `decideRpcInterrupt`: a Ctrl-C/Escape while a selector is open would
+	 * fall through to the streaming-abort/arm-quit tiers instead of just
+	 * dismissing the selector, a behavior the old `ModalLayer`-backed
+	 * `modals.select(...)` call sites got for free via `modalActive`.
+	 * Optional so existing callers/tests that construct this handler without
+	 * ever mounting a selector (or before plan 036) keep working unchanged.
+	 */
+	readonly selector?: Pick<InlineSelectorHost, "getActiveKind" | "close">;
 	readonly editor: Pick<RpcHostEditorController, "getText" | "setText" | "isAutocompleteOpen">;
 	readonly stateStore: Pick<RpcHostStateStore, "getSnapshot">;
 	readonly controls: Pick<RpcHostControls, "abort">;
@@ -303,9 +321,15 @@ export function createRpcHostInterruptHandler(deps: RpcHostInterruptDependencies
 		const nowMs = now();
 		const modalActive = deps.modals.getActiveKind() !== undefined;
 		const overlayActive = deps.overlays.getActiveKind() !== undefined;
+		const selectorActive = deps.selector?.getActiveKind() !== undefined;
 		const isStreaming = deps.stateStore.getSnapshot().isStreaming || deps.submitInFlight?.() === true;
 		const decision = decideRpcInterrupt(kind, {
-			modalActive,
+			// `decideRpcInterrupt` only distinguishes "some modal-ish surface is
+			// active" (-> dismiss-modal) from "nothing is" -- it never reads
+			// modalActive/overlayActive individually to pick between them, so
+			// folding selectorActive into modalActive here is safe and keeps
+			// the pure decision function's tested contract untouched.
+			modalActive: modalActive || selectorActive,
 			overlayActive,
 			draftNonEmpty: deps.editor.getText().trim().length > 0,
 			isStreaming,
@@ -316,7 +340,8 @@ export function createRpcHostInterruptHandler(deps: RpcHostInterruptDependencies
 		switch (decision) {
 			case "dismiss-modal":
 				armedQuitUntil = undefined;
-				if (modalActive) deps.modals.close();
+				if (selectorActive) deps.selector?.close();
+				else if (modalActive) deps.modals.close();
 				else deps.overlays.close();
 				return true;
 			case "clear-draft":
@@ -516,6 +541,16 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		onInterrupt: () => handleAppInterrupt(),
 		onSubmit: submitFromEditor,
 	});
+	// In-place selector surface (plan 036): occupies the editor's Yoga slot for
+	// `/model`, `/thinking`, `/sessions`, `/settings`, and `/fork` instead of
+	// the old full-screen `ModalLayer` backdrop -- see inline-selector.ts's
+	// doc comment. Wraps `editor` (not replaces it): `editorText`/
+	// `handlePreEditorInput`/`uiResponder` below all keep pointing at the real
+	// `RpcHostEditorController` directly, since none of them care which
+	// component currently occupies the visual editor slot. Only the
+	// `RpcHostRuntime`'s `editor` prop (the shell's rendered/input-routed
+	// component) needs to see the wrapper.
+	const inlineSelectors = new InlineSelectorHost(editor, requestRender);
 	const uiResponder = createRpcExtensionUiResponder({
 		modals,
 		notifications,
@@ -542,6 +577,7 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		stateStore,
 		modals,
 		overlays,
+		inlineSelectors,
 		notifications,
 		editorText: editor,
 		onStateChange: requestRender,
@@ -569,6 +605,7 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 	const handleClientExit = createRpcExitHandler({
 		modals,
 		overlays,
+		selector: inlineSelectors,
 		stateStore,
 		notifications,
 		requestRender,
@@ -615,6 +652,7 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 	const handlePreEditorInput = createRpcHostInterruptHandler({
 		modals,
 		overlays,
+		selector: inlineSelectors,
 		editor,
 		stateStore,
 		controls,
@@ -649,7 +687,11 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 			initialState: state,
 			initialTranscript: transcript,
 			inputPreview: visualFixture?.inputPreview,
-			editor,
+			// The wrapper, not the bare controller: while an inline selector
+			// (plan 036) is open it renders/handles-input in the editor's
+			// place, then hands the slot back to `editor` on close -- see
+			// `InlineSelectorHost`'s doc comment.
+			editor: inlineSelectors,
 			modal: modals,
 			overlay: overlays,
 			notifications,

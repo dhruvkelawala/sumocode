@@ -15,6 +15,14 @@ export interface ShellViewport {
 
 export interface ShellTerminalSessionOwner {
 	writeFramePatches(patches: readonly TerminalPatch[], cursor: { row: number; col: number } | null): void;
+	/**
+	 * Writes a raw OSC52 clipboard sequence to the terminal. Optional: the
+	 * real `TerminalSessionOwner` implements this (see
+	 * `runtime/terminal-controller.ts`), but shell-only test doubles that
+	 * never exercise selection copy don't need to. `RpcShellAdapter`'s
+	 * `SelectionController` wiring checks for it before calling.
+	 */
+	writeClipboardSequence?(sequence: string): boolean;
 }
 
 export interface ShellChatSurface {

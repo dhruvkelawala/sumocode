@@ -182,6 +182,7 @@ export class RpcHostRuntime {
 			handleMouseEvent: (event) => this.shell?.handleMouseEvent(event) === true,
 			scheduleMouseRender: () => this.scheduleRender(),
 			handleChatScrollKey: (event) => this.shell?.handleChatKey(event) === true,
+			handleSelectionKey: (event) => this.shell?.handleSelectionKey(event) === true,
 			handlePreEditorInput: (data) => {
 				if (this.preEditorInputHandler?.(data) === true) return true;
 				// Fallback for when there's no host-level interrupt handler wired

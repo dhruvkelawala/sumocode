@@ -30,6 +30,8 @@ import type { TranscriptViewModel } from "../transcript/view-model.js";
 import { ChatPager } from "../widgets/chat-pager.js";
 import type { KeyEvent } from "../input/key-router.js";
 import type { MouseEvent } from "../input/mouse.js";
+import { SelectionController } from "../input/selection.js";
+import type { NotificationLevel } from "../widgets/notification.js";
 import type { RpcHostChromeState } from "./state.js";
 
 export interface RpcShellAdapterOptions {
@@ -41,7 +43,7 @@ export interface RpcShellAdapterOptions {
 	readonly editor?: Component;
 	readonly modal?: Component & { getActiveKind?(): string | undefined };
 	readonly overlay?: Component & { getActiveKind?(): string | undefined };
-	readonly notifications?: Component;
+	readonly notifications?: Component & { notify?(message: string, level?: NotificationLevel, timeoutMs?: number): unknown };
 	readonly extensionRegions?: {
 		readonly aboveEditor?: Component;
 		readonly belowEditor?: Component;
@@ -92,10 +94,11 @@ export class RpcShellAdapter {
 	private readonly editor: Component | undefined;
 	private readonly modal: (Component & { getActiveKind?(): string | undefined }) | undefined;
 	private readonly overlay: (Component & { getActiveKind?(): string | undefined }) | undefined;
-	private readonly notifications: Component | undefined;
+	private readonly notifications: (Component & { notify?(message: string, level?: NotificationLevel, timeoutMs?: number): unknown }) | undefined;
 	private readonly extensionAboveEditor: Component | undefined;
 	private readonly extensionBelowEditor: Component | undefined;
 	private readonly extensionSidebar: Component | undefined;
+	private readonly selection: SelectionController;
 	private state: RpcHostChromeState;
 	private transcript: TranscriptViewModel;
 
@@ -114,6 +117,17 @@ export class RpcShellAdapter {
 		this.splash = createSplashTree(yoga, undefined, () => defaultSplashSnapshot(this.isActive()));
 		(this.editor as SplashAwareComponent | undefined)?.setSplashProvider?.(() => !this.isActive());
 		const editorComponent = new RpcEditorShellComponent(this, options.inputPreview);
+		this.selection = new SelectionController({
+			readBuffer: () => this.renderer.getLastFrame(),
+			emitClipboard: (sequence) => {
+				options.terminal.writeClipboardSequence?.(sequence);
+			},
+			onCopied: () => {
+				this.notifications?.notify?.("copied", "success", 1_400);
+				this.renderer.invalidatePreviousFrame();
+			},
+			onSelectionChanged: () => this.renderer.invalidatePreviousFrame(),
+		});
 		this.renderer = new RetainedShellRenderer({
 			yoga,
 			chat: { pager: this.chat },
@@ -129,6 +143,7 @@ export class RpcShellAdapter {
 			viewport: options.viewport,
 			overlayHost: new RpcOverlayHost(this),
 			sidebar: () => this.sidebarPublication(),
+			selection: this.selection,
 			paintHardwareCursorAsSoftware: true,
 		});
 	}
@@ -155,6 +170,17 @@ export class RpcShellAdapter {
 			if (snapshot.transcriptRevision === undefined) {
 				this.chat.replaceViewModels(snapshot.transcript.messages);
 			}
+			// Every transcript-carrying update repaints some of the chat
+			// viewport's rows -- whether via the sink's incremental
+			// addViewModel/replaceLastWithViewModel (B9 path) or the full
+			// replaceViewModels above. A held selection's anchor/focus are
+			// row/col coordinates into that same viewport, so leaving it in
+			// place would keep highlighting/copying whatever now happens to
+			// render at those coordinates instead of the text the user
+			// actually dragged over. Clearing unconditionally on any
+			// transcript application is the simplest rule that stays correct
+			// for both paths.
+			this.selection.clear();
 		}
 	}
 
@@ -174,11 +200,37 @@ export class RpcShellAdapter {
 	}
 
 	public handleMouseEvent(event: MouseEvent): boolean {
-		return this.renderer.handleMouseEvent(event);
+		// Wheel scroll and drag-select are mutually exclusive over the same SGR
+		// mouse stream: `ScrollBox.handleMouseEvent` (reached via
+		// `renderer.handleMouseEvent`) only ever claims `type === "scroll"`
+		// events, so routing scroll through the renderer first and every other
+		// event type (down/drag/up/move) to the selection controller keeps
+		// wheel scroll and drag-select from fighting over the same bytes.
+		if (event.type === "scroll") {
+			const handled = this.renderer.handleMouseEvent(event);
+			// Scrolling repaints different transcript content into the same
+			// absolute viewport rows the selection's anchor/focus point into --
+			// see the matching comment in update() for why any repaint of the
+			// selected region clears it.
+			if (handled) this.selection.clear();
+			return handled;
+		}
+		const selectionHandled = this.selection.handleMouseEvent(event);
+		const shellHandled = this.renderer.handleMouseEvent(event);
+		return selectionHandled || shellHandled;
 	}
 
 	public handleChatKey(event: KeyEvent): boolean {
-		return this.chat.handleKey(event);
+		const handled = this.chat.handleKey(event);
+		// See handleMouseEvent's scroll branch: a key-driven scroll command
+		// (page-up/page-down/jump-top/jump-bottom) repaints the same rows a
+		// held selection anchors into.
+		if (handled) this.selection.clear();
+		return handled;
+	}
+
+	public handleSelectionKey(event: KeyEvent): boolean {
+		return this.selection.handleKey(event);
 	}
 
 	public getLastFrame(): CellBuffer | undefined {

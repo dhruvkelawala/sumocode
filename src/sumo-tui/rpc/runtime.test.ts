@@ -2,6 +2,7 @@ import type { Component } from "@earendil-works/pi-tui";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { StringDecoder } from "node:string_decoder";
 import { describe, expect, it, vi } from "vitest";
 import { INPUT_FRAME_PLACEHOLDER } from "../../cathedral/input-frame.js";
 import { activeThemeColors } from "../../themes/index.js";
@@ -50,6 +51,7 @@ class FakeOutput {
 class FakeInput {
 	public readonly isTTY = true;
 	public readonly rawModes: boolean[] = [];
+	public readonly encodings: string[] = [];
 	public pauseCount = 0;
 	private listener: ((data: string | Buffer) => void) | undefined;
 
@@ -65,13 +67,17 @@ class FakeInput {
 		this.rawModes.push(enabled);
 	}
 
+	public setEncoding(encoding: "utf8"): void {
+		this.encodings.push(encoding);
+	}
+
 	public resume(): void {}
 
 	public pause(): void {
 		this.pauseCount += 1;
 	}
 
-	public emit(data: string): void {
+	public emit(data: string | Buffer): void {
 		this.listener?.(data);
 	}
 }
@@ -457,6 +463,53 @@ describe("RPC host retained runtime frame", () => {
 		expect(input.rawModes).toEqual([true, false]);
 		expect(input.pauseCount).toBe(1);
 		expect(terminal.getState()).toMatchObject({ restored: true });
+	});
+
+	it("sets stdin to utf8 encoding on start so Node reassembles multibyte input split across chunks", async () => {
+		const output = new FakeOutput();
+		const input = new FakeInput();
+		const runtime = new RpcHostRuntime({
+			output,
+			input,
+			initialState: state(),
+			initialTranscript: { messages: [] },
+		});
+
+		await runtime.start();
+
+		expect(input.encodings).toEqual(["utf8"]);
+	});
+
+	// The RpcHostInput fake above emits whole strings, so it can't reproduce
+	// a real pty splitting a multibyte UTF-8 codepoint's bytes across two
+	// separate 'data' events. What actually fixes defect 4 is calling
+	// process.stdin.setEncoding('utf8') (asserted above) so Node's own
+	// StringDecoder -- not our handleInput -- does the reassembly. This test
+	// exercises that exact StringDecoder contract directly: feeding a 3-byte
+	// UTF-8 character (e.g. "字", U+5B57, E5 AD 97) split across two Buffer
+	// chunks must yield the correct character only once the full sequence has
+	// arrived, with no U+FFFD replacement character in between.
+	it("StringDecoder (what setEncoding('utf8') delegates to) reassembles a multibyte codepoint split across two chunks", () => {
+		const decoder = new StringDecoder("utf8");
+		const codepoint = "字"; // U+5B57, encodes to 3 bytes in UTF-8: 0xE5 0xAD 0x97
+		const bytes = Buffer.from(codepoint, "utf8");
+		expect(bytes.length).toBe(3);
+
+		const firstChunk = bytes.subarray(0, 2); // 0xE5 0xAD: an incomplete sequence
+		const secondChunk = bytes.subarray(2); // 0x97: completes it
+
+		const firstResult = decoder.write(firstChunk);
+		// The incomplete trailing sequence is buffered internally, not flushed
+		// as garbage -- this is precisely what a per-chunk toString('utf8')
+		// (the pre-fix behavior) gets wrong, emitting U+FFFD instead.
+		expect(firstResult).toBe("");
+		expect(firstResult).not.toContain("�");
+
+		const secondResult = decoder.write(secondChunk);
+		expect(secondResult).toBe(codepoint);
+		expect(secondResult).not.toContain("�");
+
+		expect(firstResult + secondResult).toBe(codepoint);
 	});
 
 	it("keeps Ctrl-C as a global exit request while a modal is focused", async () => {

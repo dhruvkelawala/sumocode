@@ -23,6 +23,18 @@ export interface RpcHostInput {
 	setRawMode?(enabled: boolean): void;
 	resume?(): void;
 	pause?(): void;
+	/**
+	 * Node's Readable#setEncoding. When present, the host calls this with
+	 * "utf8" so Node's internal StringDecoder reassembles multibyte
+	 * codepoints (CJK, emoji, etc.) that a terminal/pty can legitimately
+	 * split across separate stdin chunks -- without it, each Buffer is
+	 * decoded independently via toString('utf8') and a split codepoint
+	 * becomes U+FFFD replacement-character garbage. Optional so fakes/test
+	 * doubles that emit whole strings (never split multibyte input) don't
+	 * need to implement it; handleInput's Buffer branch below is the
+	 * fallback for those.
+	 */
+	setEncoding?(encoding: "utf8"): void;
 }
 
 export interface RpcHostInputHandler {
@@ -97,6 +109,14 @@ export class RpcHostRuntime {
 	private readonly waiters: Array<(code: number) => void> = [];
 	private readonly handleResize = (): void => this.render();
 	private readonly handleInput = (data: string | Buffer): void => {
+		// With setEncoding('utf8') applied in start(), a real stdin stream's
+		// "data" events are already reassembled strings (Node's StringDecoder
+		// buffers any trailing partial multibyte sequence until the next
+		// chunk). The Buffer branch is a fallback for input doubles that don't
+		// implement setEncoding and emit raw Buffers instead -- those must
+		// only ever emit whole, complete chunks (never a codepoint split
+		// across two Buffers), since toString('utf8') per-chunk cannot
+		// reassemble a split sequence.
 		const text = typeof data === "string" ? data : data.toString("utf8");
 		this.inputRouter.handleInput(text);
 	};
@@ -170,6 +190,13 @@ export class RpcHostRuntime {
 		this.terminal.startRetainedSession();
 		if (this.input?.isTTY === true) {
 			this.input.setRawMode?.(true);
+			// Mirrors pi-tui's ProcessTerminal, which calls
+			// process.stdin.setEncoding('utf8') so Node's StringDecoder
+			// reassembles multibyte codepoints split across "data" events. Without
+			// this, handleInput's toString('utf8') fallback below decodes each
+			// Buffer independently and a split CJK/emoji codepoint becomes
+			// U+FFFD garbage instead of the intended character.
+			this.input.setEncoding?.("utf8");
 			this.input.resume?.();
 			this.input.on("data", this.handleInput);
 		}

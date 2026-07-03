@@ -212,8 +212,51 @@ function formatCost(value: number): string {
 	return `$${value.toFixed(value > 0 && value < 0.01 ? 4 : 2)}`;
 }
 
-function formatSessionStats(stats: RpcSessionStats): string {
-	return `session: ${formatInteger(stats.totalMessages)} messages | ${formatInteger(stats.tokens.total)} tokens | ${formatCost(stats.cost)}`;
+/**
+ * `/session` -- renders the FULL `get_session_stats` payload (message
+ * breakdown, token breakdown, cost, context window usage, session file) as a
+ * multi-line panel, replacing the old one-line toast. Modeled on
+ * `openThemeCheck`'s `LinesOverlayComponent`.
+ */
+function renderSessionPanel(theme: ThemeReader, stats: RpcSessionStats, width: number): string[] {
+	const heading = (text: string) => theme.fg("accent", text);
+	const dim = (text: string) => theme.fg("muted", text);
+	const row = (label: string, value: string) => `  ${theme.fg("muted", label.padEnd(16))} ${value}`;
+
+	const lines: string[] = [];
+	lines.push(heading("SESSION"));
+	lines.push("");
+	lines.push(row("Session ID", stats.sessionId));
+	if (stats.sessionFile) lines.push(row("File", stats.sessionFile));
+	lines.push("");
+	lines.push(heading("MESSAGES"));
+	lines.push(row("Total", formatInteger(stats.totalMessages)));
+	lines.push(row("User", formatInteger(stats.userMessages)));
+	lines.push(row("Assistant", formatInteger(stats.assistantMessages)));
+	lines.push(row("Tool calls", formatInteger(stats.toolCalls)));
+	lines.push(row("Tool results", formatInteger(stats.toolResults)));
+	lines.push("");
+	lines.push(heading("TOKENS"));
+	lines.push(row("Input", formatInteger(stats.tokens.input)));
+	lines.push(row("Output", formatInteger(stats.tokens.output)));
+	lines.push(row("Cache read", formatInteger(stats.tokens.cacheRead)));
+	lines.push(row("Cache write", formatInteger(stats.tokens.cacheWrite)));
+	lines.push(row("Total", formatInteger(stats.tokens.total)));
+	lines.push("");
+	lines.push(heading("COST"));
+	lines.push(row("Session cost", formatCost(stats.cost)));
+	if (stats.contextUsage) {
+		lines.push("");
+		lines.push(heading("CONTEXT WINDOW"));
+		const used = stats.contextUsage.tokens;
+		const percent = stats.contextUsage.percent;
+		lines.push(row("Used", used === null ? "unknown" : formatInteger(used)));
+		lines.push(row("Window", formatInteger(stats.contextUsage.contextWindow)));
+		lines.push(row("Percent", percent === null ? "unknown" : `${percent.toFixed(1)}%`));
+	}
+	lines.push("");
+	lines.push(dim("Press any key to close."));
+	return lines.map((line) => (line.length > width ? line.slice(0, width) : line));
 }
 
 /**
@@ -858,7 +901,13 @@ export class RpcHostActions {
 		const stats = await this.controls.getSessionStats();
 		this.stateStore.hydrateFromSessionStats(stats);
 		this.onStateChange();
-		notify(this.notifications, formatSessionStats(stats), "info");
+		await this.overlays.show<void>(
+			"session",
+			(done) => new LinesOverlayComponent(
+				(width) => renderSessionPanel(themeReader(), stats, Math.max(40, Math.min(width, 120))),
+				done,
+			),
+		);
 	}
 
 	private async copyLastAssistantText(): Promise<void> {

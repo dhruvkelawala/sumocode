@@ -583,12 +583,26 @@ describe("RpcHostActions", () => {
 		});
 	});
 
-	it("handles /session stats and /name rename as host commands", async () => {
-		const { actions, controls, modals, notifications } = setup();
+	it("renders the full /session stats payload as a multi-line panel, not a one-line toast", async () => {
+		const { actions, controls, overlays } = setup();
 
-		await expect(actions.handleSubmittedText("/session")).resolves.toBe(true);
+		const session = actions.handleSubmittedText("/session");
+		await flush();
 		expect(controls.calls).toContain("getSessionStats");
-		expect(notifications).toContainEqual({ message: "session: 2 messages | 3,000 tokens | $0.42", level: "info" });
+		expect(overlays.getActiveKind()).toBe("session");
+		const rendered = renderOverlayText(overlays);
+		expect(rendered).toContain("SESSION");
+		expect(rendered).toContain("MESSAGES");
+		expect(rendered).toContain("TOKENS");
+		expect(rendered).toContain("COST");
+		expect(rendered).toContain("session-1");
+		overlays.handleInput("x");
+		await session;
+		expect(overlays.getActiveKind()).toBeUndefined();
+	});
+
+	it("handles /name rename as a host command", async () => {
+		const { actions, controls, modals, notifications } = setup();
 
 		const rename = actions.handleSubmittedText("/name");
 		await flush();

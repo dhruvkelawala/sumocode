@@ -251,6 +251,13 @@ export class SharedInputRouter {
 	}
 
 	public handleInput(data: string): SharedInputRouterResult | void {
+		// Unconditional raw-input trace (no-ops unless SUMO_TUI_DIAG_FILE is
+		// set): ground truth for "keybindings are broken" reports, since a
+		// terminal's actual byte encoding (plain vs Kitty CSI-u press/repeat/
+		// release) can only be confirmed by capturing what it really sends.
+		// Run `sumocode -d .`, reproduce the broken key, then `sumocode diag`
+		// or grep the diag file for "raw_key_input" to see the exact bytes.
+		logDiagnostic("raw_key_input", { hex: toHex(data), length: data.length });
 		let pendingMouseInput = this.pendingMouseInput;
 		if (pendingMouseInput === "\x1b" && !data.startsWith("[")) {
 			this.clearPendingBareEscapeTimer();
@@ -368,21 +375,25 @@ export class SharedInputRouter {
 		if (nextData.length === 0 && consumed) return { consume: true };
 
 		if (containsCtrlCToken(nextData) && this.callbacks.handlePreEditorInput?.(nextData) === true) {
+			logDiagnostic("route_verdict", { target: "ctrlCPreEditor", hex: toHex(nextData) });
 			this.callbacks.requestRender?.();
 			return { consume: true };
 		}
 
 		if (this.callbacks.handleFocusedModalInput?.(nextData) === true) {
+			logDiagnostic("route_verdict", { target: "focusedModal", hex: toHex(nextData) });
 			this.callbacks.requestRender?.();
 			return { consume: true };
 		}
 
 		if (this.callbacks.handleFocusedOverlayInput?.(nextData) === true) {
+			logDiagnostic("route_verdict", { target: "focusedOverlay", hex: toHex(nextData) });
 			this.callbacks.requestRender?.();
 			return { consume: true };
 		}
 
 		if (isCommandPaletteInput(nextData)) {
+			logDiagnostic("route_verdict", { target: "commandPalette", hex: toHex(nextData) });
 			void this.callbacks.openCommandPalette?.();
 			this.callbacks.requestRender?.();
 			return { consume: true };
@@ -390,31 +401,37 @@ export class SharedInputRouter {
 
 		const keyEvent = chatScrollCommandFromInput(nextData);
 		if (keyEvent && this.callbacks.handleChatScrollKey?.(keyEvent) === true) {
+			logDiagnostic("route_verdict", { target: "chatScroll", hex: toHex(nextData), keyEvent: keyEvent.key });
 			this.callbacks.requestRender?.();
 			return { consume: true };
 		}
 
 		const selectionKey = selectionCopyKeyFromInput(nextData);
 		if (selectionKey && this.callbacks.handleSelectionKey?.(selectionKey) === true) {
+			logDiagnostic("route_verdict", { target: "selectionCopy", hex: toHex(nextData) });
 			this.callbacks.requestRender?.();
 			return { consume: true };
 		}
 
 		if (this.callbacks.handlePreEditorInput?.(nextData) === true) {
+			logDiagnostic("route_verdict", { target: "preEditor", hex: toHex(nextData) });
 			this.callbacks.requestRender?.();
 			return { consume: true };
 		}
 
 		if (this.callbacks.forwardToEditor?.(nextData) === true) {
+			logDiagnostic("route_verdict", { target: "editor", hex: toHex(nextData) });
 			this.callbacks.requestRender?.();
 			return { consume: true, forwarded: true };
 		}
 
 		if (this.callbacks.forwardToPi?.(nextData) === true) {
+			logDiagnostic("route_verdict", { target: "forwardToPi", hex: toHex(nextData) });
 			return { consume: true, forwarded: true };
 		}
 
 		if (this.callbacks.handleUnhandledInput?.(nextData) === true) {
+			logDiagnostic("route_verdict", { target: "unhandledFallback", hex: toHex(nextData) });
 			this.callbacks.requestRender?.();
 			return { consume: true };
 		}
@@ -430,7 +447,11 @@ export class SharedInputRouter {
 			});
 		}
 
-		if (nextData !== originalData) return { data: nextData };
+		if (nextData !== originalData) {
+			logDiagnostic("route_verdict", { target: "noOpForwarded", hex: toHex(nextData) });
+			return { data: nextData };
+		}
+		logDiagnostic("route_verdict", { target: "dropped", hex: toHex(nextData) });
 		return undefined;
 	}
 }

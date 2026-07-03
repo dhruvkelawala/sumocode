@@ -1,4 +1,5 @@
 import { resolve } from "node:path";
+import { SUMOCODE_RELOAD_EXIT_CODE } from "../../commands/reload.js";
 import { containsCtrlCToken, isEscapeInput } from "../input/shared-input-router.js";
 import { loadYoga } from "../layout/yoga.js";
 import { applyStartupTheme } from "../../themes/index.js";
@@ -8,7 +9,7 @@ import type { ChatMessageViewModel } from "../transcript/view-model.js";
 import type { ChatPagerReplaceStats } from "../widgets/chat-pager.js";
 import { ModalLayer } from "../widgets/modal-layer.js";
 import { NotificationCenter } from "../widgets/notification.js";
-import { SumoRpcClient, truncateForNotification } from "./client.js";
+import { RpcChildExitError, SumoRpcClient, truncateForNotification } from "./client.js";
 import { RpcHostControls } from "./controls.js";
 import { createRpcKeybindingsManager, RpcHostEditorController } from "./editor.js";
 import { createRpcExtensionUiResponder } from "./extension-ui-responder.js";
@@ -180,21 +181,42 @@ export interface RpcHostExitDependencies {
  * close() resolves any pending approval/select/input promise the same way an
  * interactive dismiss would (confirm -> false, select/input -> undefined; for
  * the approval overlay this already normalizes to "No"/deny, the correct
- * fail-safe). The runtime is stopped with a nonzero exit code after a short
- * delay so the terse notification is actually visible before the terminal is
- * restored -- a zombie shell with a dead child behind it cannot do anything
- * useful, so keeping it alive indefinitely is not an option.
+ * fail-safe).
+ *
+ * Exit code SUMOCODE_RELOAD_EXIT_CODE (100) is a deliberate `/sumo:reload`
+ * (src/commands/reload.ts: the RPC child process.exit(100)s itself), not a
+ * crash -- see `RpcChildExitError` in client.ts for how that code reaches
+ * here structurally instead of via message-parsing. bin/sumocode.sh's respawn
+ * loop only re-launches on THIS process (the host) exiting 100, so the host
+ * must propagate that same code and skip the scary "exited unexpectedly"
+ * notification, which would otherwise flash on every routine reload.
+ *
+ * For any other exit, the runtime is stopped with a nonzero exit code after a
+ * short delay so the terse notification is actually visible before the
+ * terminal is restored -- a zombie shell with a dead child behind it cannot
+ * do anything useful, so keeping it alive indefinitely is not an option.
  */
 export function createRpcExitHandler(deps: RpcHostExitDependencies): (error: Error) => void {
 	const scheduleTimeout = deps.setTimeout ?? setTimeout;
 	const shutdownDelayMs = deps.shutdownDelayMs ?? 750;
 	const exitCode = deps.exitCode ?? 1;
 	return (error: Error): void => {
+		const reloadCode = error instanceof RpcChildExitError && error.code === SUMOCODE_RELOAD_EXIT_CODE ? error.code : undefined;
 		deps.modals.close();
 		deps.overlays.close();
 		deps.updateRuntimeState({ ...deps.stateStore.getSnapshot(), isStreaming: false, isCompacting: false });
-		deps.notifications.notify(`RPC child exited unexpectedly: ${truncateForNotification(error.message)}`, "error", 0);
+		if (reloadCode === undefined) {
+			deps.notifications.notify(`RPC child exited unexpectedly: ${truncateForNotification(error.message)}`, "error", 0);
+		}
 		deps.requestRender();
+		if (reloadCode !== undefined) {
+			// Deliberate reload: exit the host itself with the same code right
+			// away (no shutdown delay -- there is no scary notification to give
+			// time to render) so bin/sumocode.sh's respawn loop sees exit 100 and
+			// relaunches with --continue.
+			void deps.stopHost(reloadCode).then(() => deps.exit(reloadCode));
+			return;
+		}
 		const timer = scheduleTimeout(() => {
 			void deps.stopHost(exitCode).then(() => deps.exit(exitCode));
 		}, shutdownDelayMs);

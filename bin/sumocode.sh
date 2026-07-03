@@ -607,7 +607,7 @@ SUMO_TUI_DEBUG=${SUMO_TUI_DEBUG:-}
 COMMAND=${COMMAND}
 ARGS=${SUMOCODE_ARGS[*]:-}
 SUMOCODE_INITIAL_PROMPT=${DRY_RUN_INITIAL_PROMPT}
-exec $(if [[ "${USE_RPC_HOST}" -eq 1 ]]; then printf 'node %s' "${ROOT_DIR}/sumo-rpc-host.js"; else printf '%s -e %s/src/extension.ts' "${PI_BIN}" "${ROOT_DIR}"; fi) ${SUMOCODE_ARGS[*]:-}
+$(if [[ "${USE_RPC_HOST}" -eq 1 ]]; then printf 'run (inside respawn loop, for /sumo:reload): node %s' "${ROOT_DIR}/sumo-rpc-host.js"; else printf 'run (inside respawn loop, for /sumo:reload): %s -e %s/src/extension.ts' "${PI_BIN}" "${ROOT_DIR}"; fi) ${SUMOCODE_ARGS[*]:-}
 EOF
 	exit 0
 fi
@@ -625,17 +625,37 @@ if [[ "${USE_RPC_HOST}" -eq 1 ]]; then
 	# same onSubmit/submitRpcPrompt path a normal editor submit uses once the
 	# child is up and hydrated. Must run BEFORE the argv is forwarded so the
 	# child does not also see (and silently drop) the same positional.
+	#
+	# This extraction happens ONCE, outside the respawn loop below: on a
+	# `/sumo:reload` respawn we deliberately do not want to re-submit the
+	# original kickoff prompt into the resumed session (same reasoning as the
+	# existing IS_TASK_LAUNCH handling inside the loop), so SUMOCODE_ARGS no
+	# longer carries a prompt positional by the time the loop's first
+	# iteration runs, and SUMOCODE_INITIAL_PROMPT is only ever exported on
+	# that first iteration (see the loop body below).
 	extract_first_positional
-	if [[ "${#SUMOCODE_ARGS[@]}" -eq 0 ]]; then
-		exec env SUMOCODE_ROOT_DIR="${ROOT_DIR}" SUMOCODE_PROJECT_CWD="${PWD}" SUMOCODE_INITIAL_PROMPT="${EXTRACTED_INITIAL_PROMPT}" PI_BIN="${PI_BIN}" node "${ROOT_DIR}/sumo-rpc-host.js"
-	else
-		exec env SUMOCODE_ROOT_DIR="${ROOT_DIR}" SUMOCODE_PROJECT_CWD="${PWD}" SUMOCODE_INITIAL_PROMPT="${EXTRACTED_INITIAL_PROMPT}" PI_BIN="${PI_BIN}" node "${ROOT_DIR}/sumo-rpc-host.js" "${SUMOCODE_ARGS[@]}"
-	fi
 fi
+
+RPC_INITIAL_PROMPT="${EXTRACTED_INITIAL_PROMPT:-}"
 
 while :; do
 	code=0
-	if [[ "${#SUMOCODE_ARGS[@]}" -eq 0 ]]; then
+	if [[ "${USE_RPC_HOST}" -eq 1 ]]; then
+		# The RPC host previously ran via `exec`, which replaced this shell
+		# entirely -- so the respawn loop below was unreachable on the default
+		# (RPC) launch path, and `/sumo:reload`'s exit(100) inside the RPC
+		# child (surfaced to the host via client.onExit, then re-thrown as the
+		# host's own process.exit(100) -- see host.ts's createRpcExitHandler /
+		# runRpcHost) had nowhere to be caught. Running the host as a plain
+		# foreground command (not exec) inside this same loop lets that exit
+		# code fall through to the identical respawn handling the direct-Pi
+		# path already has below.
+		if [[ "${#SUMOCODE_ARGS[@]}" -eq 0 ]]; then
+			env SUMOCODE_ROOT_DIR="${ROOT_DIR}" SUMOCODE_PROJECT_CWD="${PWD}" SUMOCODE_INITIAL_PROMPT="${RPC_INITIAL_PROMPT}" PI_BIN="${PI_BIN}" node "${ROOT_DIR}/sumo-rpc-host.js" || code=$?
+		else
+			env SUMOCODE_ROOT_DIR="${ROOT_DIR}" SUMOCODE_PROJECT_CWD="${PWD}" SUMOCODE_INITIAL_PROMPT="${RPC_INITIAL_PROMPT}" PI_BIN="${PI_BIN}" node "${ROOT_DIR}/sumo-rpc-host.js" "${SUMOCODE_ARGS[@]}" || code=$?
+		fi
+	elif [[ "${#SUMOCODE_ARGS[@]}" -eq 0 ]]; then
 		"${PI_BIN}" -e "${ROOT_DIR}/src/extension.ts" || code=$?
 	else
 		"${PI_BIN}" -e "${ROOT_DIR}/src/extension.ts" "${SUMOCODE_ARGS[@]}" || code=$?
@@ -643,6 +663,10 @@ while :; do
 	if [[ "${code}" -ne "${SUMOCODE_RELOAD_EXIT_CODE}" ]]; then
 		exit "${code}"
 	fi
+	# Only the first iteration's kickoff prompt (if any) is ever submitted;
+	# a reload respawn resumes the existing session via --continue below and
+	# must not re-submit it as a new message.
+	RPC_INITIAL_PROMPT=""
 	# After the kickoff turn has fired, do NOT re-pass the task prompt on
 	# `/sumo:reload`. The reload loop adds `--continue` to resume the existing
 	# session, and re-injecting the original prompt would send it again as a

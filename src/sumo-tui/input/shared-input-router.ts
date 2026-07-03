@@ -153,12 +153,41 @@ function isCommandPaletteInput(data: string): boolean {
 		|| matchesKey(data, Key.ctrl("/"));
 }
 
+/**
+ * True only for a single, discrete Ctrl-C key token: a bare 0x03 byte or a
+ * CSI-u ctrl-c press (e.g. `\x1b[99;5u`). Deliberately NOT a substring test --
+ * `data` here may be a whole coalesced stdin chunk, and a bracketed-paste
+ * block or other pasted terminal output can legitimately contain a literal
+ * 0x03 byte in its content without being an interrupt keypress. Callers that
+ * receive multi-token chunks must split with `splitInputTokens` first and
+ * test each token individually (see `containsCtrlCToken` below).
+ */
 export function isCtrlCInput(data: string): boolean {
-	return data.includes("\u0003") || matchesKey(data, Key.ctrl("c"));
+	return data === "\u0003" || matchesKey(data, Key.ctrl("c"));
 }
 
 export function isEscapeInput(data: string): boolean {
 	return data === "\u001b" || data === "escape" || data === "esc" || matchesKey(data, Key.escape);
+}
+
+/**
+ * True when a possibly multi-token, coalesced stdin chunk contains a
+ * discrete Ctrl-C key token once split into individual input tokens.
+ * `splitInputTokens` keeps bracketed-paste blocks whole (never splitting
+ * their interior into separate tokens), so a paste containing a literal
+ * 0x03 byte in its content is a single paste token -- never mistaken for
+ * `isCtrlCInput` -- and cannot hijack the whole chunk into the interrupt
+ * tier. A bare Ctrl-C token, or a CSI-u ctrl-c press, still triggers it.
+ */
+export function containsCtrlCToken(data: string): boolean {
+	// Belt-and-suspenders: even before token-splitting, a chunk carrying a
+	// bracketed-paste start marker is never treated as an interrupt keypress.
+	// splitInputTokens already keeps paste blocks whole (so isCtrlCInput would
+	// not match their single combined token either), but this guard makes the
+	// "paste content never triggers the interrupt tier" invariant explicit and
+	// independent of the tokenizer's internals.
+	if (data.includes("\x1b[200~")) return false;
+	return splitInputTokens(data).some((token) => isCtrlCInput(token));
 }
 
 export class SharedInputRouter {
@@ -289,7 +318,7 @@ export class SharedInputRouter {
 
 		if (nextData.length === 0 && consumed) return { consume: true };
 
-		if (isCtrlCInput(nextData) && this.callbacks.handlePreEditorInput?.(nextData) === true) {
+		if (containsCtrlCToken(nextData) && this.callbacks.handlePreEditorInput?.(nextData) === true) {
 			this.callbacks.requestRender?.();
 			return { consume: true };
 		}

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { filterKeyReleaseEvents, isCtrlCInput, SharedInputRouter, splitInputTokens } from "./shared-input-router.js";
+import { containsCtrlCToken, filterKeyReleaseEvents, isCtrlCInput, SharedInputRouter, splitInputTokens } from "./shared-input-router.js";
 
 const CTRL_SLASH = "";
 
@@ -200,5 +200,94 @@ describe("SharedInputRouter key-release filtering", () => {
 		router.handleInput(H_RELEASE);
 
 		expect(handleFocusedOverlayInput).not.toHaveBeenCalled();
+	});
+});
+
+// Defect: isCtrlCInput used to be `data.includes("\x03")`, a substring test
+// that hijacked ANY chunk containing a literal 0x03 byte -- including a
+// bracketed-paste block whose *content* happens to contain that byte (e.g.
+// pasted terminal output, a binary-ish clipboard snippet) -- into the
+// interrupt tier, so the paste never reached the editor. containsCtrlCToken
+// token-splits first (splitInputTokens keeps paste blocks whole) and only
+// treats a genuine, discrete Ctrl-C key token as a trigger.
+const BARE_CTRL_C = "\x03";
+const CSI_U_CTRL_C = "\x1b[99;5u";
+const PASTE_CONTAINING_BARE_CTRL_C = "\x1b[200~before\x03after\x1b[201~";
+
+describe("containsCtrlCToken", () => {
+	it("triggers on a bare 0x03 byte", () => {
+		expect(containsCtrlCToken(BARE_CTRL_C)).toBe(true);
+	});
+
+	it("triggers on a CSI-u ctrl-c press", () => {
+		expect(containsCtrlCToken(CSI_U_CTRL_C)).toBe(true);
+	});
+
+	it("does NOT trigger on a bracketed-paste block whose content contains a literal 0x03 byte", () => {
+		expect(containsCtrlCToken(PASTE_CONTAINING_BARE_CTRL_C)).toBe(false);
+	});
+});
+
+describe("SharedInputRouter paste containing a literal Ctrl-C byte", () => {
+	// A realistic host-level handler only claims ctrl-c/escape input (mirrors
+	// host.ts's createRpcHostInterruptHandler, which returns false/undefined
+	// for anything it doesn't classify as one of those two kinds). The router
+	// also calls `handlePreEditorInput` a second, unconditional time later in
+	// its fallback chain (for non-ctrl-c input like plain Escape), so a fake
+	// that unconditionally returns `true` cannot distinguish "was this treated
+	// as an interrupt" from "was this called at all" -- hence the kind-aware
+	// fake here instead of a bare `vi.fn(() => true)`.
+	function interruptOnlyHandler(triggeredWith: string[]): (data: string) => boolean {
+		return (data: string): boolean => {
+			if (data === BARE_CTRL_C || data === CSI_U_CTRL_C) {
+				triggeredWith.push(data);
+				return true;
+			}
+			return false;
+		};
+	}
+
+	it("delivers the paste block to the editor unmodified and does not trigger the interrupt tier", () => {
+		const triggeredWith: string[] = [];
+		const forwardToEditor = vi.fn(() => true);
+		const router = new SharedInputRouter({
+			handlePreEditorInput: interruptOnlyHandler(triggeredWith),
+			forwardToEditor,
+		});
+
+		const result = router.handleInput(PASTE_CONTAINING_BARE_CTRL_C);
+
+		expect(triggeredWith).toEqual([]);
+		expect(forwardToEditor).toHaveBeenCalledTimes(1);
+		expect(forwardToEditor).toHaveBeenCalledWith(PASTE_CONTAINING_BARE_CTRL_C);
+		expect(result).toEqual({ consume: true, forwarded: true });
+	});
+
+	it("still routes a bare Ctrl-C keypress to the pre-editor interrupt handler", () => {
+		const triggeredWith: string[] = [];
+		const forwardToEditor = vi.fn(() => true);
+		const router = new SharedInputRouter({
+			handlePreEditorInput: interruptOnlyHandler(triggeredWith),
+			forwardToEditor,
+		});
+
+		router.handleInput(BARE_CTRL_C);
+
+		expect(triggeredWith).toEqual([BARE_CTRL_C]);
+		expect(forwardToEditor).not.toHaveBeenCalled();
+	});
+
+	it("still routes a CSI-u Ctrl-C keypress to the pre-editor interrupt handler", () => {
+		const triggeredWith: string[] = [];
+		const forwardToEditor = vi.fn(() => true);
+		const router = new SharedInputRouter({
+			handlePreEditorInput: interruptOnlyHandler(triggeredWith),
+			forwardToEditor,
+		});
+
+		router.handleInput(CSI_U_CTRL_C);
+
+		expect(triggeredWith).toEqual([CSI_U_CTRL_C]);
+		expect(forwardToEditor).not.toHaveBeenCalled();
 	});
 });

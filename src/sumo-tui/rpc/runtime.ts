@@ -3,7 +3,7 @@ import type { CellBuffer } from "../render/buffer.js";
 import { logDiagnostic } from "../runtime/diagnostics.js";
 import { defaultTerminalSessionOwner, type TerminalOutput, type TerminalSessionOwner } from "../runtime/terminal-controller.js";
 import type { TranscriptViewModel } from "../transcript/view-model.js";
-import { isCtrlCInput, isEscapeInput, SharedInputRouter } from "../input/shared-input-router.js";
+import { containsCtrlCToken, isEscapeInput, SharedInputRouter } from "../input/shared-input-router.js";
 import { RpcShellAdapter } from "./shell-adapter.js";
 import type { RpcHostChromeState } from "./state.js";
 
@@ -139,7 +139,11 @@ export class RpcHostRuntime {
 			handleChatScrollKey: (event) => this.shell?.handleChatKey(event) === true,
 			handlePreEditorInput: (data) => {
 				if (this.preEditorInputHandler?.(data) === true) return true;
-				if (isCtrlCInput(data)) {
+				// Fallback for when there's no host-level interrupt handler wired
+				// (e.g. bare RpcHostRuntime in tests): containsCtrlCToken, not a
+				// substring/equality test, so pasted content containing a literal
+				// 0x03 byte cannot be mistaken for a Ctrl-C keypress here either.
+				if (containsCtrlCToken(data)) {
 					this.requestExit(130);
 					return true;
 				}

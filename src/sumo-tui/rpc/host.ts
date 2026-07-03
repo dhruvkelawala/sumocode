@@ -1,5 +1,5 @@
 import { resolve } from "node:path";
-import { isCtrlCInput, isEscapeInput } from "../input/shared-input-router.js";
+import { containsCtrlCToken, isEscapeInput } from "../input/shared-input-router.js";
 import { loadYoga } from "../layout/yoga.js";
 import { applyStartupTheme } from "../../themes/index.js";
 import { ExtensionStatusPublication, RegionRegistry } from "../pi-compat/region-registry.js";
@@ -132,7 +132,11 @@ export function createRpcHostInterruptHandler(deps: RpcHostInterruptDependencies
 	const now = deps.now ?? Date.now;
 	let armedQuitUntil: number | undefined;
 	const inputKind = (data: string): RpcInterruptInputKind | undefined => {
-		if (isCtrlCInput(data)) return "ctrl-c";
+		// containsCtrlCToken (not a raw substring/equality test): `data` may be
+		// a coalesced multi-token stdin chunk, and must only classify as
+		// ctrl-c when a discrete Ctrl-C key token is actually present -- never
+		// because pasted content happens to contain a literal 0x03 byte.
+		if (containsCtrlCToken(data)) return "ctrl-c";
 		if (isEscapeInput(data)) return "escape";
 		return undefined;
 	};

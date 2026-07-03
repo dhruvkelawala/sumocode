@@ -358,6 +358,10 @@ describe("RPC host retained runtime frame", () => {
 				}],
 			},
 		});
+		// update() coalesces its render onto a microtask (see runtime.ts's
+		// scheduleRender) instead of painting synchronously -- flush it before
+		// asserting on terminal output.
+		await Promise.resolve();
 		runtime.stop();
 
 		const terminalOutput = output.chunks.join("");
@@ -391,12 +395,62 @@ describe("RPC host retained runtime frame", () => {
 			output.chunks.length = 0;
 
 			runtime.update({ state: state({ messageCount: 1, hasMessages: true, isStreaming: true }) });
+			// See the coalescing note above: flush the scheduled render.
+			await Promise.resolve();
 
 			expect(replaceViewModels).not.toHaveBeenCalled();
 			expect(output.chunks.join("")).toContain("MEDITATING");
 		} finally {
 			runtime.stop();
 			replaceViewModels.mockRestore();
+		}
+	});
+
+	it("coalesces any number of update()/requestRender() calls in one synchronous turn into a single render", async () => {
+		const output = new FakeOutput();
+		const terminal = new TerminalSessionOwner({ output });
+		let scheduled: (() => void) | undefined;
+		const renderScheduler = vi.fn((callback: () => void) => {
+			scheduled = callback;
+		});
+		const runtime = new RpcHostRuntime({
+			output,
+			input: { isTTY: false, on: () => undefined },
+			terminal,
+			initialState: state(),
+			initialTranscript: { messages: [] },
+			renderScheduler,
+		});
+
+		try {
+			await runtime.start();
+			renderScheduler.mockClear();
+			const renderSpy = vi.spyOn(output, "write");
+			renderSpy.mockClear();
+
+			// A burst of updates in the same synchronous turn (e.g. several
+			// per-delta agent events processed back to back) must schedule
+			// exactly one coalesced render, not one per call.
+			for (let index = 0; index < 5; index += 1) {
+				runtime.update({
+					state: state({ messageCount: 1, hasMessages: true }),
+					transcript: { messages: [{ id: `m${index}`, role: "sumo", displayName: "SUMO", blocks: [{ type: "markdown", text: `chunk ${index}` }] }] },
+				});
+			}
+			runtime.requestRender();
+
+			expect(renderScheduler).toHaveBeenCalledTimes(1);
+			expect(renderSpy).not.toHaveBeenCalled(); // nothing painted yet -- still coalesced, not flushed
+
+			scheduled?.();
+			expect(renderSpy).toHaveBeenCalledTimes(1); // exactly one render for the whole burst
+
+			// The next update after the scheduled render ran must schedule again.
+			renderScheduler.mockClear();
+			runtime.requestRender();
+			expect(renderScheduler).toHaveBeenCalledTimes(1);
+		} finally {
+			runtime.stop();
 		}
 	});
 

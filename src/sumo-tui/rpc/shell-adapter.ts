@@ -25,6 +25,7 @@ import { loadYoga, type Yoga } from "../layout/yoga.js";
 import type { CellBuffer } from "../render/buffer.js";
 import type { ShellOverlayEntry, ShellRenderable, ShellTerminalSessionOwner, ShellViewport } from "../shell/contracts.js";
 import { RetainedShellRenderer } from "../shell/retained-shell-renderer.js";
+import type { TranscriptControllerChatSink } from "../transcript/controller.js";
 import type { TranscriptViewModel } from "../transcript/view-model.js";
 import { ChatPager } from "../widgets/chat-pager.js";
 import type { KeyEvent } from "../input/key-router.js";
@@ -51,6 +52,18 @@ export interface RpcShellAdapterOptions {
 export interface RpcShellAdapterSnapshot {
 	readonly state: RpcHostChromeState;
 	readonly transcript: TranscriptViewModel;
+	/**
+	 * `TranscriptController.getRevision()` at the moment `transcript` was
+	 * produced. When a `TranscriptControllerChatSink` (see `getChatSink`) is
+	 * wired directly to this adapter's pager, the controller already pushed
+	 * this exact transcript's changes into the pager incrementally — passing
+	 * the revision here lets `update` recognize that and skip the redundant
+	 * (and expensive: dispose/recreate every message) `replaceViewModels`
+	 * call. Omit it (or wire no sink) to keep the old always-replace
+	 * behavior, e.g. for callers/tests that push transcripts without going
+	 * through the sink at all.
+	 */
+	readonly transcriptRevision?: number;
 }
 
 interface SplashAwareComponent extends Component {
@@ -128,8 +141,32 @@ export class RpcShellAdapter {
 		if (snapshot.state) this.state = snapshot.state;
 		if (snapshot.transcript) {
 			this.transcript = snapshot.transcript;
-			this.chat.replaceViewModels(snapshot.transcript.messages);
+			// A `transcriptRevision` means this transcript came from a
+			// `TranscriptController` wired to THIS adapter's pager via
+			// `getChatSink()` -- every path that bumps the controller's revision
+			// (`handleAgentEvent`'s diffing publish AND the hydration/session-op
+			// full-replace publish) already pushed the corresponding change into
+			// `this.chat` before returning. Calling `replaceViewModels` again
+			// here would be the exact full teardown/rebuild per event that B9
+			// exists to avoid, so only fall back to a full replace when no
+			// revision is present at all (no sink wired for this call -- the
+			// pre-B9 behavior, kept for callers/tests that push transcripts
+			// without going through a revisioned controller).
+			if (snapshot.transcriptRevision === undefined) {
+				this.chat.replaceViewModels(snapshot.transcript.messages);
+			}
 		}
+	}
+
+	/**
+	 * Exposes this adapter's `ChatPager` as a `TranscriptControllerChatSink`
+	 * for `host.ts` to wire directly into the `TranscriptController` that
+	 * drives this session, so streaming deltas apply incrementally
+	 * (replaceLastWithViewModel/addViewModel) instead of only ever reaching
+	 * the pager through this adapter's own full `replaceViewModels` path.
+	 */
+	public getChatSink(): TranscriptControllerChatSink {
+		return this.chat;
 	}
 
 	public render(): void {

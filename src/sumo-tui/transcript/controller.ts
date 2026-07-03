@@ -321,6 +321,17 @@ export class TranscriptController {
 	 * from a known pager state.
 	 */
 	private lastPublishedToChat: readonly ChatMessageViewModel[] | undefined;
+	/**
+	 * Bumped on every `publish`/`publishFullReplace`, i.e. every time
+	 * `lastTranscript` changes. A consumer that also receives the raw
+	 * `TranscriptViewModel` out-of-band (e.g. `RpcShellAdapter.update`, which
+	 * gets it via `RpcHostRuntime`) can compare this against the revision it
+	 * last applied through its OWN full-replace path to tell whether the
+	 * transcript it was just handed was already pushed into the same chat
+	 * sink incrementally (skip the redundant replace) or arrived through some
+	 * other route, e.g. before the sink was wired up (apply it).
+	 */
+	private revision = 0;
 
 	public constructor(private readonly options: TranscriptControllerOptions = {}) {
 		this.mapper = options.mapper ?? createTranscriptViewModelMapper();
@@ -454,6 +465,18 @@ export class TranscriptController {
 		};
 	}
 
+	/**
+	 * Monotonically increasing counter bumped every time `lastTranscript`
+	 * changes (whether the change was applied to the chat sink incrementally
+	 * or via a full replace). Lets an out-of-band consumer of the raw
+	 * `TranscriptViewModel` (see `RpcShellAdapter.update`) tell whether it
+	 * already reflects the sink-applied state without deep-comparing message
+	 * arrays.
+	 */
+	public getRevision(): number {
+		return this.revision;
+	}
+
 	private setCommittedMessages(messages: readonly unknown[]): void {
 		this.committedMessages = [...messages];
 		this.currentRunStartIndex = undefined;
@@ -491,6 +514,7 @@ export class TranscriptController {
 	/** Incremental publish path: used by `handleAgentEvent` for every live event. */
 	private publish(transcript: TranscriptViewModel): TranscriptViewModel {
 		this.lastTranscript = transcript;
+		this.revision += 1;
 		this.diffAndApplyToChat(transcript.messages);
 		return transcript;
 	}
@@ -504,6 +528,7 @@ export class TranscriptController {
 	 */
 	private publishFullReplace(transcript: TranscriptViewModel): TranscriptViewModel {
 		this.lastTranscript = transcript;
+		this.revision += 1;
 		this.replaceChatFully(transcript);
 		return transcript;
 	}

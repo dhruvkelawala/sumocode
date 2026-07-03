@@ -35,4 +35,8 @@ export class RpcTranscriptPump {
 	public getLiveStateSnapshot(): TranscriptControllerLiveStateSnapshot {
 		return this.controller.getLiveStateSnapshot();
 	}
+
+	public getRevision(): number {
+		return this.controller.getRevision();
+	}
 }

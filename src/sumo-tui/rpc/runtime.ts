@@ -61,12 +61,23 @@ export interface RpcHostRuntimeOptions {
 	readonly inputHandler?: RpcHostInputHandler;
 	readonly preEditorInputHandler?: (data: string) => boolean | void;
 	readonly env?: NodeJS.ProcessEnv;
+	/**
+	 * Schedules a callback to run once, coalescing any number of renders
+	 * requested within the same synchronous turn into a single actual paint
+	 * (see `scheduleRender`). Defaults to `queueMicrotask`. Test-only
+	 * injection point: production code should never need to override this --
+	 * tests use it to make coalescing deterministic (drive the microtask
+	 * queue explicitly) instead of racing real microtask timing.
+	 */
+	readonly renderScheduler?: (callback: () => void) => void;
 }
 
 export interface RpcHostRuntimeSnapshot {
 	readonly state: RpcHostChromeState;
 	readonly transcript: TranscriptViewModel;
 	readonly inputPreview?: string;
+	/** Forwarded to `RpcShellAdapter.update` -- see `RpcShellAdapterSnapshot.transcriptRevision`. */
+	readonly transcriptRevision?: number;
 }
 
 const EMPTY_TRANSCRIPT: TranscriptViewModel = { messages: [] };
@@ -101,6 +112,8 @@ export class RpcHostRuntime {
 	private readonly preEditorInputHandler: ((data: string) => boolean | void) | undefined;
 	private readonly inputPreview: string | undefined;
 	private readonly inputRouter: SharedInputRouter;
+	private readonly renderScheduler: (callback: () => void) => void;
+	private renderScheduled = false;
 	private state: RpcHostChromeState;
 	private transcript: TranscriptViewModel;
 	private shell: RpcShellAdapter | undefined;
@@ -145,6 +158,7 @@ export class RpcHostRuntime {
 		this.extensionRegions = options.extensionRegions;
 		this.inputHandler = options.inputHandler;
 		this.preEditorInputHandler = options.preEditorInputHandler;
+		this.renderScheduler = options.renderScheduler ?? queueMicrotask;
 		this.inputRouter = new SharedInputRouter({
 			openCommandPalette: () => {
 				if (this.inputHandler?.openCommandPalette) {
@@ -153,7 +167,7 @@ export class RpcHostRuntime {
 				}
 				this.inputHandler?.handleInput?.("\u001f");
 			},
-			requestRender: () => this.render(),
+			requestRender: () => this.scheduleRender(),
 			handleFocusedModalInput: (data) => {
 				if (!this.modal?.getActiveKind?.()) return false;
 				this.modal.handleInput?.(data);
@@ -165,7 +179,7 @@ export class RpcHostRuntime {
 				return true;
 			},
 			handleMouseEvent: (event) => this.shell?.handleMouseEvent(event) === true,
-			scheduleMouseRender: () => this.render(),
+			scheduleMouseRender: () => this.scheduleRender(),
 			handleChatScrollKey: (event) => this.shell?.handleChatKey(event) === true,
 			handlePreEditorInput: (data) => {
 				if (this.preEditorInputHandler?.(data) === true) return true;
@@ -242,13 +256,13 @@ export class RpcHostRuntime {
 			this.transcript = snapshot.transcript;
 		}
 		this.shell?.update(snapshot.transcript
-			? { state: this.state, transcript: this.transcript }
+			? { state: this.state, transcript: this.transcript, transcriptRevision: snapshot.transcriptRevision }
 			: { state: this.state });
-		this.render();
+		this.scheduleRender();
 	}
 
 	public requestRender(): void {
-		this.render();
+		this.scheduleRender();
 	}
 
 	public waitForExit(): Promise<number> {
@@ -275,6 +289,39 @@ export class RpcHostRuntime {
 	private render(): void {
 		if (!this.started || this.stopped) return;
 		this.shell?.render();
+	}
+
+	/**
+	 * Coalesces renders: any number of `update()`/`requestRender()` calls
+	 * within the same synchronous turn (e.g. a burst of per-delta
+	 * `message_update` events processed back to back, or a run of buffered
+	 * keystrokes) collapse into exactly one `render()`, scheduled via
+	 * `renderScheduler` (a microtask by default). Without this, every single
+	 * event from the RPC child triggered its own synchronous full render --
+	 * audit defect C.
+	 *
+	 * Microtask, not `setImmediate`/`setTimeout`: a microtask still flushes
+	 * before the process yields to the next I/O/timer phase, so a render
+	 * requested from a keystroke's `data` handler still paints before any
+	 * other I/O in that turn -- no perceptible input-echo latency regression.
+	 * `setImmediate` would defer behind any other already-queued
+	 * immediates/timers/I/O callbacks, which is unnecessary latency for a
+	 * pure in-process repaint that depends on nothing async.
+	 *
+	 * The resize handler and the first paint in `start()` intentionally call
+	 * `render()` directly (not this method): a resize is already a discrete,
+	 * infrequent, low-volume event with no burst-coalescing benefit and
+	 * terminal geometry changes should be reflected as fast as possible;
+	 * the first paint has nothing to coalesce with and startup-readiness
+	 * diagnostics are keyed to it happening synchronously inside `start()`.
+	 */
+	private scheduleRender(): void {
+		if (this.renderScheduled) return;
+		this.renderScheduled = true;
+		this.renderScheduler(() => {
+			this.renderScheduled = false;
+			this.render();
+		});
 	}
 
 	private requestExit(code: number): void {

@@ -26,6 +26,10 @@ export interface TranscriptControllerLiveStateSnapshot {
 
 export interface TranscriptControllerChatSink {
 	replaceViewModels(messages: readonly ChatMessageViewModel[]): ChatPagerReplaceStats;
+	/** Append one new message to the end of the pager without touching scroll/read state. */
+	addViewModel(message: ChatMessageViewModel): unknown;
+	/** Replace the pager's current last message in place (scroll/read state preserved). */
+	replaceLastWithViewModel(message: ChatMessageViewModel): unknown;
 }
 
 export interface TranscriptControllerOptions {
@@ -306,6 +310,17 @@ export class TranscriptController {
 	 * end of `committedMessages`, i.e. append-only.
 	 */
 	private currentRunStartIndex: number | undefined;
+	/**
+	 * The exact message array last handed to `options.chat`. Used to compute
+	 * the minimal incremental pager operation instead of a full
+	 * `replaceViewModels` on every event — see `diffAndApplyToChat` and
+	 * `messageContentKey` for why this is compared by rendered content, not
+	 * object reference. `undefined` until the first publish, and reset to
+	 * `undefined` whenever a full replace is the only correct option (e.g.
+	 * `replaceFromMessages`), so the next publish always re-derives the diff
+	 * from a known pager state.
+	 */
+	private lastPublishedToChat: readonly ChatMessageViewModel[] | undefined;
 
 	public constructor(private readonly options: TranscriptControllerOptions = {}) {
 		this.mapper = options.mapper ?? createTranscriptViewModelMapper();
@@ -313,7 +328,7 @@ export class TranscriptController {
 
 	public replaceFromMessages(messages: readonly unknown[]): TranscriptViewModel {
 		this.setCommittedMessages(messages);
-		return this.publish(this.viewModel());
+		return this.publishFullReplace(this.viewModel());
 	}
 
 	public replaceFromSessionContext(sessionContext: unknown): TranscriptViewModel {
@@ -322,7 +337,7 @@ export class TranscriptController {
 		this.options.setEmptyChatQuoteState?.({ active: messages.length === 0, userMessageCount: countUserMessages(messages) });
 		this.setCommittedMessages(messages);
 		const transcript = measureMaybe(profile, "transcript_model", () => this.viewModel());
-		const stats = measureMaybe(profile, "transcript_hydrate", () => this.publishToChat(transcript));
+		const stats = measureMaybe(profile, "transcript_hydrate", () => this.replaceChatFully(transcript));
 		this.lastTranscript = transcript;
 		if (profile) {
 			this.options.completeResumeHydration?.(profile, {
@@ -473,15 +488,153 @@ export class TranscriptController {
 		return this.committedViewModelCache;
 	}
 
+	/** Incremental publish path: used by `handleAgentEvent` for every live event. */
 	private publish(transcript: TranscriptViewModel): TranscriptViewModel {
 		this.lastTranscript = transcript;
-		this.publishToChat(transcript);
+		this.diffAndApplyToChat(transcript.messages);
 		return transcript;
 	}
 
-	private publishToChat(transcript: TranscriptViewModel): ChatPagerReplaceStats {
+	/**
+	 * Full-replace publish path: used ONLY by hydration/session-op callers
+	 * (`replaceFromMessages`, `replaceFromSessionContext`) — the one
+	 * legitimate use of `chat.replaceViewModels`, matching main's
+	 * chat-viewport-controller contract (full replace resets scroll/read
+	 * state, which is correct exactly here).
+	 */
+	private publishFullReplace(transcript: TranscriptViewModel): TranscriptViewModel {
+		this.lastTranscript = transcript;
+		this.replaceChatFully(transcript);
+		return transcript;
+	}
+
+	private replaceChatFully(transcript: TranscriptViewModel): ChatPagerReplaceStats {
 		const stats = this.options.chat?.replaceViewModels(transcript.messages) ?? fallbackReplaceStats(transcript);
+		this.lastPublishedToChat = this.options.chat ? transcript.messages : undefined;
 		if (this.options.chat) this.options.scheduleRender?.();
 		return stats;
 	}
+
+	/**
+	 * Computes the minimal pager operation to go from `lastPublishedToChat` to
+	 * `next` and applies it, instead of always calling `replaceViewModels`
+	 * (which disposes/recreates every rendered ChatMessage and resets
+	 * scroll/unread state on every single agent event — audit defects A/B/C).
+	 *
+	 * Diff strategy: content equality, not reference equality. `viewModel()`
+	 * rebuilds its messages array via `[...ensureCommittedViewModels()]` on
+	 * every call, but `ensureCommittedViewModels` re-runs the ENTIRE mapper
+	 * from scratch whenever its cache is invalidated (message_end, agent_end,
+	 * compaction_end) -- committed messages that did not change still get a
+	 * brand new object identity in that case (the mapper carries ordered
+	 * task-metadata state, so a partial/incremental remap would risk
+	 * desyncing it -- out of scope for B9, which must not touch B7's
+	 * reconciliation). So reference identity cannot be trusted across a
+	 * message_end/agent_end boundary; `messageContentKey` compares the
+	 * rendered id/role/blocks instead, which is cheap (no ANSI rendering) and
+	 * stable for a message whose content truly did not change:
+	 *
+	 *   - same length, only the LAST entry's content differs, everything
+	 *     before is content-identical -> `replaceLastWithViewModel(next[last])`
+	 *     (the common `message_update` streaming-delta case, and the common
+	 *     `message_end` case where the committed message renders the same as
+	 *     the draft it replaced).
+	 *   - next is exactly one longer, and every one of the previous messages
+	 *     is still content-identical at the same index -> optionally
+	 *     replace-last (if the old last message's content also changed) then
+	 *     `addViewModel(next[newLast])` (a fresh message started after the
+	 *     previous one finished).
+	 *   - anything else (an earlier message changed, or the array shrank, or
+	 *     more than one message changed under a length that isn't `+1`) means
+	 *     history was actually rewritten (e.g. agent_end's run-suffix splice
+	 *     changing an already-committed entry's rendered content, or
+	 *     live-tool folding touching a message that isn't the last one) ->
+	 *     fall back to a full `replaceViewModels`, the only operation that can
+	 *     express an arbitrary rewrite.
+	 *
+	 * The very first publish (no prior `lastPublishedToChat`) always falls
+	 * back to a full replace too, since there is nothing to diff against yet.
+	 */
+	private diffAndApplyToChat(next: readonly ChatMessageViewModel[]): void {
+		const chat = this.options.chat;
+		if (!chat) {
+			this.lastPublishedToChat = undefined;
+			return;
+		}
+		const previous = this.lastPublishedToChat;
+		const operations = previous ? planChatDiff(previous, next) : undefined;
+		if (!operations) {
+			chat.replaceViewModels(next);
+			this.lastPublishedToChat = next;
+			this.options.scheduleRender?.();
+			return;
+		}
+		for (const operation of operations) {
+			if (operation.kind === "replace-last") chat.replaceLastWithViewModel(operation.message);
+			else chat.addViewModel(operation.message);
+		}
+		this.lastPublishedToChat = next;
+		if (operations.length > 0) this.options.scheduleRender?.();
+	}
+}
+
+type ChatDiffOperation =
+	| { readonly kind: "replace-last"; readonly message: ChatMessageViewModel }
+	| { readonly kind: "append"; readonly message: ChatMessageViewModel };
+
+/**
+ * Returns the minimal ordered list of incremental pager operations to turn
+ * `previous` into `next`, or `undefined` when the change cannot be expressed
+ * incrementally (history was rewritten) and the caller must fall back to a
+ * full `replaceViewModels`. See `diffAndApplyToChat` for the full contract.
+ */
+function planChatDiff(
+	previous: readonly ChatMessageViewModel[],
+	next: readonly ChatMessageViewModel[],
+): ChatDiffOperation[] | undefined {
+	if (next.length === previous.length) {
+		if (next.length === 0) return [];
+		if (!sameContentExceptLast(previous, next)) return undefined;
+		const last = next[next.length - 1]!;
+		if (messageContentKey(last) === messageContentKey(previous[previous.length - 1])) return [];
+		return [{ kind: "replace-last", message: last }];
+	}
+
+	if (next.length === previous.length + 1) {
+		if (!sameContentExceptLast(previous, next.slice(0, previous.length))) return undefined;
+		const operations: ChatDiffOperation[] = [];
+		const previousLast = previous[previous.length - 1];
+		const stillPreviousLast = previousLast === undefined ? undefined : next[previous.length - 1];
+		if (previousLast !== undefined && messageContentKey(stillPreviousLast) !== messageContentKey(previousLast)) {
+			operations.push({ kind: "replace-last", message: stillPreviousLast! });
+		}
+		operations.push({ kind: "append", message: next[next.length - 1]! });
+		return operations;
+	}
+
+	return undefined;
+}
+
+/** True when every index except the last renders identically between the two arrays (which must be the same length). */
+function sameContentExceptLast(previous: readonly ChatMessageViewModel[], next: readonly ChatMessageViewModel[]): boolean {
+	if (previous.length !== next.length) return false;
+	for (let index = 0; index < previous.length - 1; index += 1) {
+		if (messageContentKey(previous[index]) !== messageContentKey(next[index])) return false;
+	}
+	return true;
+}
+
+/**
+ * Cheap, stable content fingerprint for a `ChatMessageViewModel`: id + role +
+ * blocks (which fully determine what the pager renders). Deliberately
+ * excludes `displayName`/`timestamp` since those are re-derived
+ * deterministically from `role`/the source message and are not meaningful
+ * signals of a content change on their own. Two messages with the same key
+ * render identically, so the diff can treat them as unchanged even if the
+ * committed-message remap (see `diffAndApplyToChat`'s doc comment) gave them
+ * a new object identity.
+ */
+function messageContentKey(message: ChatMessageViewModel | undefined): string {
+	if (!message) return "";
+	return JSON.stringify([message.id, message.role, message.blocks]);
 }

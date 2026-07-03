@@ -1,7 +1,8 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { describe, expect, it } from "vitest";
-import { TranscriptController } from "./controller.js";
+import { describe, expect, it, vi } from "vitest";
+import { TranscriptController, type TranscriptControllerChatSink } from "./controller.js";
+import type { ChatMessageViewModel } from "./view-model.js";
 
 function readJsonl(path: string): unknown[] {
 	return readFileSync(resolve(process.cwd(), path), "utf8")
@@ -168,5 +169,173 @@ describe("TranscriptController live-state clearing", () => {
 		controller.replaceFromMessages([{ id: "rehydrated", role: "user", content: "hi" }]);
 
 		expect(controller.getLiveStateSnapshot()).toMatchObject({ liveTools: 0, taskPartials: 0, draftMessage: false });
+	});
+});
+
+function fakeChatSink(): TranscriptControllerChatSink & {
+	replaceViewModels: ReturnType<typeof vi.fn>;
+	addViewModel: ReturnType<typeof vi.fn>;
+	replaceLastWithViewModel: ReturnType<typeof vi.fn>;
+} {
+	return {
+		replaceViewModels: vi.fn((messages: readonly ChatMessageViewModel[]) => ({
+			sourceMessages: messages.length,
+			acceptedMessages: messages.length,
+			renderedMessages: messages.length,
+			archivedMessages: 0,
+		})),
+		addViewModel: vi.fn((_message: ChatMessageViewModel) => undefined),
+		replaceLastWithViewModel: vi.fn((_message: ChatMessageViewModel) => undefined),
+	};
+}
+
+describe("TranscriptController incremental chat sink (B9)", () => {
+	it("replaces the full pager on the very first publish (nothing to diff against yet)", () => {
+		const chat = fakeChatSink();
+		const controller = new TranscriptController({ chat });
+
+		controller.handleAgentEvent({ type: "message_start", message: { id: "u1", role: "user", content: "hi" } });
+
+		expect(chat.replaceViewModels).toHaveBeenCalledTimes(1);
+		expect(chat.addViewModel).not.toHaveBeenCalled();
+		expect(chat.replaceLastWithViewModel).not.toHaveBeenCalled();
+	});
+
+	it("message_update draft deltas call replaceLastWithViewModel, never replaceViewModels", () => {
+		const chat = fakeChatSink();
+		const controller = new TranscriptController({ chat });
+
+		controller.handleAgentEvent({ type: "agent_start" });
+		controller.handleAgentEvent({ type: "message_start", message: { id: "draft", role: "assistant", content: "he" } });
+		chat.replaceViewModels.mockClear();
+		chat.addViewModel.mockClear();
+
+		controller.handleAgentEvent({ type: "message_update", message: { id: "draft", role: "assistant", content: "hell" } });
+		controller.handleAgentEvent({ type: "message_update", message: { id: "draft", role: "assistant", content: "hello" } });
+
+		expect(chat.replaceViewModels).not.toHaveBeenCalled();
+		expect(chat.addViewModel).not.toHaveBeenCalled();
+		expect(chat.replaceLastWithViewModel).toHaveBeenCalledTimes(2);
+		const lastCallText = chat.replaceLastWithViewModel.mock.calls.at(-1)?.[0]?.blocks?.[0]?.text;
+		expect(lastCallText).toBe("hello");
+	});
+
+	it("message_end committing the draft appends via addViewModel, not a full replace", () => {
+		const chat = fakeChatSink();
+		const controller = new TranscriptController({ chat });
+
+		controller.handleAgentEvent({ type: "agent_start" });
+		controller.handleAgentEvent({ type: "message_start", message: { id: "u1", role: "user", content: "question" } });
+		chat.replaceViewModels.mockClear();
+		chat.addViewModel.mockClear();
+
+		controller.handleAgentEvent({ type: "message_end", message: { id: "u1", role: "user", content: "question" } });
+
+		expect(chat.replaceViewModels).not.toHaveBeenCalled();
+		expect(chat.addViewModel).not.toHaveBeenCalled(); // no new draft yet; message_end just commits the same last entry
+		// message_end's committed message renders identically to the draft it replaces, so
+		// the diff sees no reference/content change at the last slot and applies no-op.
+	});
+
+	it("a fresh message starting after a committed one appends via addViewModel", () => {
+		const chat = fakeChatSink();
+		const controller = new TranscriptController({ chat });
+
+		controller.handleAgentEvent({ type: "agent_start" });
+		controller.handleAgentEvent({ type: "message_start", message: { id: "u1", role: "user", content: "question" } });
+		controller.handleAgentEvent({ type: "message_end", message: { id: "u1", role: "user", content: "question" } });
+		chat.replaceViewModels.mockClear();
+		chat.addViewModel.mockClear();
+
+		controller.handleAgentEvent({ type: "message_start", message: { id: "a1", role: "assistant", content: "reply" } });
+
+		expect(chat.replaceViewModels).not.toHaveBeenCalled();
+		expect(chat.addViewModel).toHaveBeenCalledTimes(1);
+		expect(chat.addViewModel.mock.calls[0]?.[0]?.id).toBe("a1");
+	});
+
+	it("replaceFromMessages (hydration) always calls replaceViewModels", () => {
+		const chat = fakeChatSink();
+		const controller = new TranscriptController({ chat });
+
+		controller.handleAgentEvent({ type: "agent_start" });
+		controller.handleAgentEvent({ type: "message_start", message: { id: "u1", role: "user", content: "question" } });
+		chat.replaceViewModels.mockClear();
+
+		controller.replaceFromMessages([{ id: "rehydrated", role: "user", content: "hi" }]);
+
+		expect(chat.replaceViewModels).toHaveBeenCalledTimes(1);
+	});
+
+	it("falls back to a full replace when agent_end rewrites already-committed history (not just the run suffix)", () => {
+		const chat = fakeChatSink();
+		const controller = new TranscriptController({ chat });
+
+		// First exchange committed.
+		controller.handleAgentEvent({ type: "agent_start" });
+		controller.handleAgentEvent({ type: "message_start", message: { id: "u1", role: "user", content: "first question" } });
+		controller.handleAgentEvent({ type: "message_end", message: { id: "u1", role: "user", content: "first question" } });
+		controller.handleAgentEvent({ type: "message_start", message: { id: "a1", role: "assistant", content: "first answer" } });
+		controller.handleAgentEvent({ type: "message_end", message: { id: "a1", role: "assistant", content: "first answer" } });
+		controller.handleAgentEvent({
+			type: "agent_end",
+			messages: [
+				{ id: "u1", role: "user", content: "first question" },
+				{ id: "a1", role: "assistant", content: "first answer" },
+			],
+		});
+		chat.replaceViewModels.mockClear();
+
+		// Second exchange: agent_end's run-suffix splice only touches messages
+		// from this run onward, so committed history before it is untouched by
+		// reference -- the common case stays incremental.
+		controller.handleAgentEvent({ type: "agent_start" });
+		controller.handleAgentEvent({ type: "message_start", message: { id: "u2", role: "user", content: "second question" } });
+		controller.handleAgentEvent({ type: "message_end", message: { id: "u2", role: "user", content: "second question" } });
+		controller.handleAgentEvent({ type: "message_start", message: { id: "a2", role: "assistant", content: "second answer" } });
+		controller.handleAgentEvent({ type: "message_end", message: { id: "a2", role: "assistant", content: "second answer" } });
+		chat.replaceViewModels.mockClear();
+
+		controller.handleAgentEvent({
+			type: "agent_end",
+			messages: [
+				{ id: "u2", role: "user", content: "second question" },
+				{ id: "a2", role: "assistant", content: "second answer" },
+			],
+		});
+
+		expect(chat.replaceViewModels).not.toHaveBeenCalled();
+
+		// Now force an actual history rewrite: a rehydrate/replay whose agent_end
+		// messages diverge from an earlier point than the run start (defensive
+		// edge case) must fall back to a full replace rather than silently
+		// dropping/misplacing history.
+		chat.replaceViewModels.mockClear();
+		controller.handleAgentEvent({ type: "agent_start" });
+		controller.handleAgentEvent({
+			type: "agent_end",
+			messages: [
+				{ id: "u1", role: "user", content: "first question -- rewritten" },
+				{ id: "a1", role: "assistant", content: "first answer" },
+				{ id: "u2", role: "user", content: "second question" },
+				{ id: "a2", role: "assistant", content: "second answer" },
+			],
+		});
+		expect(chat.replaceViewModels).toHaveBeenCalledTimes(1);
+	});
+
+	it("does not schedule a render when an event produces no visible diff", () => {
+		const chat = fakeChatSink();
+		const scheduleRender = vi.fn();
+		const controller = new TranscriptController({ chat, scheduleRender });
+
+		controller.handleAgentEvent({ type: "agent_start" });
+		scheduleRender.mockClear();
+
+		// compaction_start with no reason handler side effect and no message
+		// change should not force a render through the chat sink.
+		controller.handleAgentEvent({ type: "compaction_start", reason: "manual" });
+
+		expect(scheduleRender).not.toHaveBeenCalled();
 	});
 });

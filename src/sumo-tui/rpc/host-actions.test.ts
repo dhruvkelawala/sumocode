@@ -327,16 +327,19 @@ describe("RpcHostActions", () => {
 	});
 
 	it("handles session controls through modal selectors and editor text handoff", async () => {
-		const { actions, controls, modals, editorText, rehydrateCalls } = setup();
+		const { actions, controls, modals, inlineSelectors, editorText, rehydrateCalls } = setup();
 
 		const session = actions.handleSubmittedText("/sessions");
 		await flush();
-		expect(modals.getActiveKind()).toBe("select");
-		modals.handleInput(Key.down);
-		modals.handleInput(Key.down);
-		modals.handleInput(Key.enter);
+		// Top-level "Session controls" list now renders in place (plan 036).
+		expect(inlineSelectors.getActiveKind()).toBe("select");
+		inlineSelectors.handleInput(SELECTOR_DOWN);
+		inlineSelectors.handleInput(SELECTOR_DOWN);
+		inlineSelectors.handleInput(SELECTOR_ENTER);
 		await flush();
 
+		// "Fork from message" -> openForkSelector, still on modals.select at
+		// this migration stage.
 		expect(modals.getActiveKind()).toBe("select");
 		modals.handleInput(Key.enter);
 		await session;
@@ -350,7 +353,7 @@ describe("RpcHostActions", () => {
 	});
 
 	it("rehydrates the transcript exactly once after /new, /clone, switch, and a successful fork", async () => {
-		const { actions, controls, modals, rehydrateCalls } = setup();
+		const { actions, controls, modals, inlineSelectors, rehydrateCalls } = setup();
 
 		await expect(actions.handleSubmittedText("/new")).resolves.toBe(true);
 		expect(rehydrateCalls).toHaveLength(1);
@@ -360,10 +363,10 @@ describe("RpcHostActions", () => {
 
 		const switchPromise = actions.handleSubmittedText("/sessions");
 		await flush();
-		modals.handleInput(Key.down); // Switch session by path
-		modals.handleInput(Key.enter);
+		inlineSelectors.handleInput(SELECTOR_DOWN); // Switch session by path
+		inlineSelectors.handleInput(SELECTOR_ENTER);
 		await flush();
-		modals.handleInput("/tmp/other-session.jsonl");
+		modals.handleInput("/tmp/other-session.jsonl"); // modals.input -- blocking prompt, unchanged
 		modals.handleInput(Key.enter);
 		await switchPromise;
 		expect(controls.calls).toContain("switchSession:/tmp/other-session.jsonl");
@@ -377,7 +380,7 @@ describe("RpcHostActions", () => {
 	});
 
 	it("does not rehydrate the transcript when a session operation is cancelled", async () => {
-		const { actions, controls, modals, rehydrateCalls } = setup();
+		const { actions, controls, modals, inlineSelectors, rehydrateCalls } = setup();
 		controls.newSessionCancelled = true;
 		controls.cloneCancelled = true;
 		controls.switchSessionCancelled = true;
@@ -388,8 +391,8 @@ describe("RpcHostActions", () => {
 
 		const switchPromise = actions.handleSubmittedText("/sessions");
 		await flush();
-		modals.handleInput(Key.down);
-		modals.handleInput(Key.enter);
+		inlineSelectors.handleInput(SELECTOR_DOWN);
+		inlineSelectors.handleInput(SELECTOR_ENTER);
 		await flush();
 		modals.handleInput("/tmp/other-session.jsonl");
 		modals.handleInput(Key.enter);

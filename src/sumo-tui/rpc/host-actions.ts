@@ -380,7 +380,7 @@ export class RpcHostActions {
 	}
 
 	public async openSessionControls(): Promise<void> {
-		const selected = await this.modals.select("Session controls", [
+		const selected = await this.inlineSelectors.select("Session controls", [
 			"New session",
 			"Switch session by path",
 			"Fork from message",

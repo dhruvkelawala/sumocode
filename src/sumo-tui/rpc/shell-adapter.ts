@@ -17,7 +17,7 @@ import {
 	type ThinkingLevel,
 } from "../../footer.js";
 import { getCachedMcpRoster } from "../../mcp-config-reader.js";
-import { SIDEBAR_MIN_TERMINAL_WIDTH } from "../../sidebar-placement.js";
+import { SIDEBAR_MIN_TERMINAL_WIDTH, sidebarOverlayTargetRows } from "../../sidebar-placement.js";
 import { PLACEHOLDER_MCP, createSidebarPublication, type SidebarSnapshot } from "../../sidebar.js";
 import { createTopChromePublication, type TopChromeSnapshot } from "../../top-chrome.js";
 import { activeThemeColors, getActiveTheme, type SumoCodeState } from "../../themes/index.js";
@@ -99,6 +99,7 @@ export class RpcShellAdapter {
 	private readonly extensionAboveEditor: Component | undefined;
 	private readonly extensionBelowEditor: Component | undefined;
 	private readonly extensionSidebar: Component | undefined;
+	private readonly viewport: ShellViewport;
 	private readonly selection: SelectionController;
 	private state: RpcHostChromeState;
 	private transcript: TranscriptViewModel;
@@ -122,6 +123,7 @@ export class RpcShellAdapter {
 		this.extensionAboveEditor = options.extensionRegions?.aboveEditor;
 		this.extensionBelowEditor = options.extensionRegions?.belowEditor;
 		this.extensionSidebar = options.extensionRegions?.sidebar;
+		this.viewport = options.viewport;
 		this.chat = ChatPager.create(yoga);
 		this.chat.replaceViewModels(this.transcript.messages);
 		this.splash = createSplashTree(yoga, undefined, () => defaultSplashSnapshot(this.isActive()));
@@ -302,6 +304,16 @@ export class RpcShellAdapter {
 			() => sidebarSnapshot(this.state),
 			(cols, _rows) => this.isActive() && cols >= SIDEBAR_MIN_TERMINAL_WIDTH,
 			this.extensionSidebar,
+			// Matches main's classic `installSidebar` (src/sidebar.ts), which reads
+			// the live Pi TUI terminal's row count inside the sidebar component's
+			// own `render` closure and pads with background-filled empty rows down
+			// to `sidebarOverlayTargetRows(terminalRows)`. The RPC shell has no
+			// equivalent "ask the terminal" hook inside the component itself, but
+			// `this.viewport` (the live `ShellViewport` passed in at construction,
+			// see `RpcHostRuntime.start`'s `viewport: this.output`) exposes the same
+			// current row count, so read it here instead -- same target, same
+			// formula, without widening `ShellRenderable.render` to take a height.
+			() => sidebarOverlayTargetRows(this.viewport.rows ?? 24),
 		);
 	}
 

@@ -239,6 +239,47 @@ describe("RPC host retained runtime frame", () => {
 		expect(chatText).toContain("landscape chat body");
 	});
 
+	// Regression test for the sidebar-fill-height bug: a fixed 45-row capture
+	// never exercises the tail of the sidebar's column because the sidebar's
+	// own content (REGISTRY/CONTEXT/MCP sections) already reaches close to 45
+	// rows. The bug only shows up once the terminal is meaningfully taller
+	// than the sidebar's rendered content -- the RPC shell painted only the
+	// content rows the sidebar component returned and left everything below
+	// that as bare terminal background, instead of extending the sidebar's own
+	// surface/frame styling down to the bottom of its reserved column (main's
+	// classic `installSidebar` fills down to `sidebarOverlayTargetRows`). Use
+	// 160x100, well beyond the 45-row parity scenario, so the fill gap can't
+	// hide inside the sidebar's own content.
+	it("fills the sidebar column's background to the bottom of its region at a tall terminal size", async () => {
+		const frame = await renderRpcHostFrameForTest({
+			state: state({ messageCount: 1, hasMessages: true }),
+			transcript: {
+				messages: [{
+					id: "message-1",
+					role: "user",
+					displayName: "YOU",
+					blocks: [{ type: "markdown", text: "landscape chat body" }],
+				}],
+			},
+		}, 160, 100);
+
+		// The sidebar column sits within chatRow, which is sandwiched between
+		// the top-chrome (2 rows) and the editor/hint/footer rows at the
+		// bottom (see RetainedShellRenderer's composition comment): at 100
+		// terminal rows, chatRow (and therefore the sidebar leaf, height:
+		// "100%" of it) spans rows 2..91 inclusive. Assert the LAST few rows
+		// of that region still carry the sidebar's own surface background,
+		// not the bare terminal default -- this is exactly the tail segment
+		// that a 45-row capture never reaches.
+		const sidebarSurfaceBg = activeThemeColors().surface.toLowerCase();
+		const sidebarCol = 135;
+		const lastSidebarRows = [86, 87, 88, 89, 90, 91];
+		for (const row of lastSidebarRows) {
+			const cell = frame.getCell(row, sidebarCol);
+			expect(cell.bg?.toLowerCase(), `row ${row} col ${sidebarCol} should carry the sidebar surface bg`).toBe(sidebarSurfaceBg);
+		}
+	});
+
 	it("renders RPC extension widgets and statuses through shared shell regions", async () => {
 		const frame = await renderRpcHostFrameForTest({
 			state: state({ messageCount: 1, hasMessages: true }),

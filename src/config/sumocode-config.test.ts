@@ -185,4 +185,41 @@ describe("sumocode-config", () => {
 			},
 		})).toMatchObject({ success: false, error: "EACCES" });
 	});
+
+	describe("PI_CODING_AGENT_DIR isolation", () => {
+		it("resolves the global config under PI_CODING_AGENT_DIR when set, ignoring homeDir", () => {
+			const homeDir = "/home/user";
+			const piCodingAgentDir = "/tmp/sumocode-visual-pi-abc123";
+			expect(resolveGlobalSumoCodeConfigPath(homeDir, { PI_CODING_AGENT_DIR: piCodingAgentDir })).toBe(join(piCodingAgentDir, "sumocode.json"));
+		});
+
+		it("falls back to <homeDir>/.pi/agent/sumocode.json when PI_CODING_AGENT_DIR is unset", () => {
+			const homeDir = "/home/user";
+			expect(resolveGlobalSumoCodeConfigPath(homeDir, {})).toBe(join(homeDir, ".pi", "agent", "sumocode.json"));
+		});
+
+		it("isolates loadSumoCodeConfig's global candidate so a harness-style temp PI dir hides the developer's real global config", () => {
+			const root = mkdtempSync(join(tmpdir(), "sumocode-config-pi-dir-isolation-"));
+			const cwd = join(root, "project");
+			const realHomeDir = join(root, "home");
+			const isolatedPiDir = join(root, "isolated-pi-agent-dir");
+			mkdirSync(cwd, { recursive: true });
+			mkdirSync(isolatedPiDir, { recursive: true });
+
+			// Simulate the developer's real global config carrying a personal theme.
+			writeJson(resolveGlobalSumoCodeConfigPath(realHomeDir, {}), { primaryAgentName: "RealGlobal", themeName: "amber-crt" });
+			// The isolated PI dir has no sumocode.json at all (harness default).
+
+			try {
+				const isolated = loadSumoCodeConfig({ cwd, homeDir: realHomeDir, env: { PI_CODING_AGENT_DIR: isolatedPiDir } });
+				expect(isolated).toEqual({ config: DEFAULT_SUMOCODE_CONFIG, source: "defaults" });
+
+				// Without the env var, the same cwd/homeDir picks up the real global config.
+				const nonIsolated = loadSumoCodeConfig({ cwd, homeDir: realHomeDir, env: {} });
+				expect(nonIsolated).toMatchObject({ config: { primaryAgentName: "RealGlobal", themeName: "amber-crt" }, source: "global" });
+			} finally {
+				rmSync(root, { recursive: true, force: true });
+			}
+		});
+	});
 });

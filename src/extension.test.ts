@@ -112,6 +112,72 @@ describe("duplicate installed extension guard", () => {
 			else process.env.SUMOCODE_LAUNCHER = prev;
 		}
 	});
+
+	// Regression coverage for the launcher self-noop landmine: when
+	// `~/.pi/agent/git/.../sumocode` is a symlink straight back into the dev
+	// tree (a common local setup — see `bin/sumocode.sh`'s `SUMOCODE_ROOT_DIR`
+	// export), the module path passes the `.pi/agent/git` prefix test even
+	// though it IS the launcher's own dev tree. An unconditional noop there
+	// would skip `installApprovalGate` in the RPC child profile — the
+	// approval gate must still install.
+	describe("SUMOCODE_ROOT_DIR-aware launcher self-noop", () => {
+		const identityRealpath = (path: string): string => path;
+
+		it("noops when SUMOCODE_ROOT_DIR resolves elsewhere (dev-tree-wins existing behavior)", () => {
+			expect(
+				shouldNoopDuplicateInstalledExtension({
+					moduleUrl: "file:///Users/dev/.pi/agent/git/github.com/dhruvkelawala/sumocode/src/extension.ts",
+					homeDir: "/Users/dev",
+					env: { SUMOCODE_ROOT_DIR: "/Users/dev/some/other/sumocode-checkout" },
+					realpath: identityRealpath,
+				}),
+			).toBe(true);
+		});
+
+		it("does NOT noop when SUMOCODE_ROOT_DIR resolves to the same checkout (launcher loading its own dev tree via a symlinked agent-git path)", () => {
+			expect(
+				shouldNoopDuplicateInstalledExtension({
+					moduleUrl: "file:///Users/dev/.pi/agent/git/github.com/dhruvkelawala/sumocode/src/extension.ts",
+					homeDir: "/Users/dev",
+					env: { SUMOCODE_ROOT_DIR: "/Users/dev/.pi/agent/git/github.com/dhruvkelawala/sumocode" },
+					realpath: identityRealpath,
+				}),
+			).toBe(false);
+		});
+
+		it("does NOT noop when both paths canonicalize to the same real directory through a symlink", () => {
+			const realSymlinkMap: Record<string, string> = {
+				"/Users/dev/.pi/agent/git/github.com/dhruvkelawala/sumocode/src/extension.ts": "/Volumes/dev-disk/code/sumocode/src/extension.ts",
+				"/Users/dev/.pi/agent/git/github.com/dhruvkelawala/sumocode": "/Volumes/dev-disk/code/sumocode",
+			};
+			const realpath = (path: string): string => {
+				const hit = realSymlinkMap[path];
+				if (hit) return hit;
+				throw new Error(`ENOENT: no such file, lstat '${path}'`);
+			};
+			expect(
+				shouldNoopDuplicateInstalledExtension({
+					moduleUrl: "file:///Users/dev/.pi/agent/git/github.com/dhruvkelawala/sumocode/src/extension.ts",
+					homeDir: "/Users/dev",
+					env: { SUMOCODE_ROOT_DIR: "/Users/dev/.pi/agent/git/github.com/dhruvkelawala/sumocode" },
+					realpath,
+				}),
+			).toBe(false);
+		});
+
+		it("preserves existing SUMOCODE_LAUNCHER behavior when SUMOCODE_ROOT_DIR is absent", () => {
+			expect(
+				shouldNoopDuplicateInstalledExtension({
+					moduleUrl: "file:///Users/dev/.pi/agent/git/github.com/dhruvkelawala/sumocode/src/extension.ts",
+					homeDir: "/Users/dev",
+					cwd: "/some/other/project",
+					exists: () => false,
+					readFile: () => "",
+					env: { SUMOCODE_LAUNCHER: "/Users/dev/development/sumocode/bin/sumocode.sh" },
+				}),
+			).toBe(true);
+		});
+	});
 });
 
 describe("task mode", () => {

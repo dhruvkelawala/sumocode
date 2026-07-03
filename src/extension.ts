@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -32,6 +32,7 @@ const LEGACY_TASK_TOOL_EXTENSION_PATH = join(".pi", "agent", "extensions", "task
 
 type ExistsFn = (path: string) => boolean;
 type ReadFileFn = (path: string, encoding: BufferEncoding) => string;
+type RealpathFn = (path: string) => string;
 
 export interface DuplicateInstalledExtensionOptions {
 	readonly moduleUrl?: string;
@@ -39,6 +40,23 @@ export interface DuplicateInstalledExtensionOptions {
 	readonly homeDir?: string;
 	readonly exists?: ExistsFn;
 	readonly readFile?: ReadFileFn;
+	readonly env?: NodeJS.ProcessEnv;
+	readonly realpath?: RealpathFn;
+}
+
+/**
+ * Resolves a path to its canonical form, following symlinks, so two
+ * differently-spelled paths to the same file (e.g. a `~/.pi/agent/git/...`
+ * path that is actually a symlink straight back into a dev checkout) compare
+ * equal. Falls back to plain `resolve()` when the path does not exist on disk
+ * (e.g. in unit tests against a fake filesystem) instead of throwing.
+ */
+function canonicalize(path: string, realpath: RealpathFn): string {
+	try {
+		return realpath(path);
+	} catch {
+		return resolve(path);
+	}
 }
 
 function moduleUrlToPath(moduleUrl: string): string {
@@ -84,12 +102,30 @@ export function findActiveSumoDevTree(cwd: string, options: Pick<DuplicateInstal
 export function shouldNoopDuplicateInstalledExtension(options: DuplicateInstalledExtensionOptions = {}): boolean {
 	const moduleUrl = options.moduleUrl ?? import.meta.url;
 	if (!isInstalledPiAgentGitModule(moduleUrl, options.homeDir ?? homedir())) return false;
-	// When the sumocode launcher (`bin/sumocode.sh`) is active it always loads
-	// the dev-tree extension via `-e`. The CWD-based dev-tree check only works
-	// when the user happens to be inside the sumocode checkout — bail out
-	// unconditionally when the launcher env var is present so the installed copy
-	// never double-registers tools regardless of the working directory.
-	if (process.env.SUMOCODE_LAUNCHER) return true;
+	const env = options.env ?? process.env;
+	const launcherRoot = env.SUMOCODE_ROOT_DIR;
+	if (launcherRoot) {
+		// The sumocode launcher (`bin/sumocode.sh`) always loads its own dev-tree
+		// extension via `-e ${ROOT_DIR}/src/extension.ts` and exports
+		// SUMOCODE_ROOT_DIR alongside SUMOCODE_LAUNCHER for exactly this check.
+		// `~/.pi/agent/git/.../sumocode` can itself be a symlink straight back
+		// into that same dev tree (a common local setup), in which case the
+		// module path both matches the `.pi/agent/git` prefix test above AND
+		// canonicalizes to the launcher's own root — that is the launcher
+		// loading itself, not a genuinely separate installed copy, so it must
+		// NOT noop (an unconditional noop here would skip the RPC child's
+		// `installApprovalGate`, silently disabling the approval gate). Compare
+		// realpath-canonicalized paths on both sides so symlinks can't fool
+		// either direction of this check.
+		const realpath = options.realpath ?? ((path: string) => realpathSync(path));
+		const modulePath = canonicalize(moduleUrlToPath(moduleUrl), realpath);
+		const moduleDir = dirname(modulePath); // strip /src/extension.ts to compare tree roots
+		const grandparent = dirname(moduleDir); // .../sumocode/src -> .../sumocode
+		const canonicalLauncherRoot = canonicalize(launcherRoot, realpath);
+		if (grandparent === canonicalLauncherRoot) return false;
+		return true;
+	}
+	if (env.SUMOCODE_LAUNCHER) return true;
 	return findActiveSumoDevTree(options.cwd ?? process.cwd(), options) !== undefined;
 }
 

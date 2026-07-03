@@ -297,6 +297,15 @@ export class TranscriptController {
 	private readonly taskPartials = new Map<string, TaskPartialUpdate>();
 	private readonly liveTools = new Map<string, LiveToolExecution>();
 	private lastTranscript: TranscriptViewModel = { messages: [] };
+	/**
+	 * Index into `committedMessages` where the in-flight run's messages begin.
+	 * Set on `agent_start` so `agent_end` can reconcile only the current run's
+	 * suffix instead of discarding history accumulated by earlier runs. When
+	 * undefined (no `agent_start` observed yet — e.g. a replay starting
+	 * mid-stream) `agent_end` treats the run as having started at the current
+	 * end of `committedMessages`, i.e. append-only.
+	 */
+	private currentRunStartIndex: number | undefined;
 
 	public constructor(private readonly options: TranscriptControllerOptions = {}) {
 		this.mapper = options.mapper ?? createTranscriptViewModelMapper();
@@ -336,6 +345,9 @@ export class TranscriptController {
 		if (liveTool) this.liveTools.set(liveTool.toolCallId, liveTool);
 
 		switch (record.type) {
+			case "agent_start":
+				this.currentRunStartIndex = this.committedMessages.length;
+				break;
 			case "message_start":
 			case "message_update":
 				this.draftMessage = eventMessage(record);
@@ -353,9 +365,19 @@ export class TranscriptController {
 			case "agent_end": {
 				const messages = eventMessages(record);
 				if (messages) {
-					this.committedMessages = [...messages];
+					// `agent_end.messages` carries only the CURRENT RUN's messages, not
+					// the whole session (see pi-agent-core's agentLoop, which seeds
+					// `newMessages` from the prompt and never includes prior context).
+					// Reconcile by replacing just the suffix that belongs to this run —
+					// everything committed before the run started must survive. Most of
+					// this suffix was already appended incrementally via `message_end`;
+					// this also authoritatively resolves any messages that a `message_end`
+					// missed (e.g. an aborted/error turn) using the run's final list.
+					const runStart = this.currentRunStartIndex ?? this.committedMessages.length;
+					this.committedMessages = [...this.committedMessages.slice(0, runStart), ...messages];
 					this.invalidateCommittedCache();
 				}
+				this.currentRunStartIndex = undefined;
 				this.draftMessage = undefined;
 				this.liveTools.clear();
 				this.taskPartials.clear();
@@ -419,6 +441,7 @@ export class TranscriptController {
 
 	private setCommittedMessages(messages: readonly unknown[]): void {
 		this.committedMessages = [...messages];
+		this.currentRunStartIndex = undefined;
 		this.draftMessage = undefined;
 		this.liveTools.clear();
 		this.taskPartials.clear();

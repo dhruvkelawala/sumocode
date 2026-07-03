@@ -1,0 +1,172 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { describe, expect, it } from "vitest";
+import { TranscriptController } from "./controller.js";
+
+function readJsonl(path: string): unknown[] {
+	return readFileSync(resolve(process.cwd(), path), "utf8")
+		.trim()
+		.split("\n")
+		.filter(Boolean)
+		.map((line) => JSON.parse(line) as unknown);
+}
+
+describe("TranscriptController agent_end reconciliation", () => {
+	it("keeps a prior committed exchange visible after a second agent_end", () => {
+		const controller = new TranscriptController();
+
+		// First exchange.
+		controller.handleAgentEvent({ type: "agent_start" });
+		controller.handleAgentEvent({ type: "message_start", message: { id: "u1", role: "user", content: "first question" } });
+		controller.handleAgentEvent({ type: "message_end", message: { id: "u1", role: "user", content: "first question" } });
+		controller.handleAgentEvent({ type: "message_start", message: { id: "a1", role: "assistant", content: "first answer" } });
+		controller.handleAgentEvent({ type: "message_end", message: { id: "a1", role: "assistant", content: "first answer" } });
+		controller.handleAgentEvent({
+			type: "agent_end",
+			messages: [
+				{ id: "u1", role: "user", content: "first question" },
+				{ id: "a1", role: "assistant", content: "first answer" },
+			],
+		});
+
+		expect(controller.viewModel().messages.map((m) => m.id)).toEqual(["u1", "a1"]);
+
+		// Second exchange.
+		controller.handleAgentEvent({ type: "agent_start" });
+		controller.handleAgentEvent({ type: "message_start", message: { id: "u2", role: "user", content: "second question" } });
+		controller.handleAgentEvent({ type: "message_end", message: { id: "u2", role: "user", content: "second question" } });
+		controller.handleAgentEvent({ type: "message_start", message: { id: "a2", role: "assistant", content: "second answer" } });
+		controller.handleAgentEvent({ type: "message_end", message: { id: "a2", role: "assistant", content: "second answer" } });
+		const transcript = controller.handleAgentEvent({
+			type: "agent_end",
+			messages: [
+				{ id: "u2", role: "user", content: "second question" },
+				{ id: "a2", role: "assistant", content: "second answer" },
+			],
+		});
+
+		// Both exchanges must remain visible — the first must not have been wiped.
+		expect(transcript.messages.map((m) => m.id)).toEqual(["u1", "a1", "u2", "a2"]);
+	});
+
+	it("replays a long-stream fixture preceded by a synthetic committed exchange and keeps the prior exchange", () => {
+		const controller = new TranscriptController();
+
+		controller.replaceFromMessages([
+			{ id: "prior-user", role: "user", content: "earlier question" },
+			{ id: "prior-assistant", role: "assistant", content: "earlier answer" },
+		]);
+
+		for (const event of readJsonl("scratch/rpc-spike/events-perf-long-stream.jsonl")) {
+			controller.handleAgentEvent(event);
+		}
+
+		const ids = controller.viewModel().messages.map((m) => m.id);
+		expect(ids[0]).toBe("prior-user");
+		expect(ids[1]).toBe("prior-assistant");
+		// The fixture's run messages (user prompt + long assistant reply) must be appended after prior history.
+		expect(ids.length).toBe(4);
+	});
+
+	it("does not resurrect stale runStart tracking across a rehydrate", () => {
+		const controller = new TranscriptController();
+		controller.handleAgentEvent({ type: "agent_start" });
+		controller.handleAgentEvent({ type: "message_start", message: { id: "u1", role: "user", content: "q" } });
+		controller.handleAgentEvent({ type: "message_end", message: { id: "u1", role: "user", content: "q" } });
+
+		// A session switch/rehydrate happens mid-run (defensive edge case). The
+		// rehydrated baseline becomes the new floor: without an intervening
+		// agent_start, agent_end reconciliation falls back to appending after it
+		// rather than reaching back before the rehydrate point.
+		controller.replaceFromMessages([{ id: "fresh", role: "user", content: "fresh session" }]);
+
+		const transcript = controller.handleAgentEvent({
+			type: "agent_end",
+			messages: [{ id: "reply", role: "assistant", content: "reply" }],
+		});
+
+		expect(transcript.messages.map((m) => m.id)).toEqual(["fresh", "reply"]);
+	});
+
+	it("reconciles even without a preceding agent_start by appending after existing committed history", () => {
+		const controller = new TranscriptController();
+		controller.replaceFromMessages([{ id: "old", role: "user", content: "old session" }]);
+
+		const transcript = controller.handleAgentEvent({
+			type: "agent_end",
+			messages: [{ id: "new-u", role: "user", content: "new question" }, { id: "new-a", role: "assistant", content: "new answer" }],
+		});
+
+		expect(transcript.messages.map((m) => m.id)).toEqual(["old", "new-u", "new-a"]);
+	});
+});
+
+describe("TranscriptController live-state clearing", () => {
+	it("clears finished live tools on agent_end since authoritative messages now carry them", () => {
+		const controller = new TranscriptController();
+		controller.handleAgentEvent({ type: "agent_start" });
+		controller.handleAgentEvent({
+			type: "tool_execution_start",
+			toolCallId: "tool-1",
+			toolName: "read",
+			args: { path: "src/auth.ts" },
+		});
+		controller.handleAgentEvent({
+			type: "tool_execution_end",
+			toolCallId: "tool-1",
+			toolName: "read",
+			args: { path: "src/auth.ts" },
+			result: { content: [{ type: "text", text: "file contents" }] },
+			isError: false,
+		});
+
+		expect(controller.getLiveStateSnapshot()).toMatchObject({ liveTools: 1 });
+
+		controller.handleAgentEvent({
+			type: "agent_end",
+			messages: [{ id: "final", role: "assistant", content: "done" }],
+		});
+
+		expect(controller.getLiveStateSnapshot()).toMatchObject({ liveTools: 0, taskPartials: 0, draftMessage: false });
+	});
+
+	it("clears a tool still mid-execution when agent_end fires (e.g. an aborted run)", () => {
+		const controller = new TranscriptController();
+		controller.handleAgentEvent({ type: "agent_start" });
+		controller.handleAgentEvent({
+			type: "tool_execution_start",
+			toolCallId: "tool-running",
+			toolName: "bash",
+			args: { command: "long-running-command" },
+		});
+
+		expect(controller.getLiveStateSnapshot()).toMatchObject({ liveTools: 1 });
+
+		controller.handleAgentEvent({
+			type: "agent_end",
+			messages: [{ id: "u1", role: "user", content: "q" }, { id: "a1", role: "assistant", content: "aborted", stopReason: "aborted" }],
+		});
+
+		// agent_end means the run truly ended -- the authoritative messages array
+		// is now the source of truth, so no live tool state should remain even for
+		// a tool that never reached tool_execution_end.
+		expect(controller.getLiveStateSnapshot()).toMatchObject({ liveTools: 0 });
+	});
+
+	it("clears live task partials on rehydrate", () => {
+		const controller = new TranscriptController();
+		controller.handleAgentEvent({
+			type: "tool_execution_update",
+			toolCallId: "task-1",
+			toolName: "task",
+			args: { prompt: "do work" },
+			partialResult: { content: [{ type: "text", text: "partial" }] },
+		});
+
+		expect(controller.getLiveStateSnapshot()).toMatchObject({ liveTools: 1, taskPartials: 1 });
+
+		controller.replaceFromMessages([{ id: "rehydrated", role: "user", content: "hi" }]);
+
+		expect(controller.getLiveStateSnapshot()).toMatchObject({ liveTools: 0, taskPartials: 0, draftMessage: false });
+	});
+});

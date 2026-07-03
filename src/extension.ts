@@ -9,8 +9,7 @@ import { installApprovalGate } from "./approval-modal.js";
 import { installQuestionTool } from "./question-tool.js";
 import { taskTool } from "./native-task-tool.js";
 
-import { loadSumoCodeConfig } from "./config/sumocode-config.js";
-import { getTheme, setActiveTheme } from "./themes/index.js";
+import { applyStartupTheme } from "./themes/index.js";
 import { installAltscreen } from "./cathedral/altscreen.js";
 import { installCathedralEditor } from "./cathedral/cathedral-editor.js";
 import { registerSumoReloadCommand } from "./commands/reload.js";
@@ -215,8 +214,9 @@ export default function sumocode(pi: ExtensionAPI): void {
 	// Restore the persisted runtime theme before installing any UI surfaces so
 	// first paint uses the chosen palette. Registry default stays Cathedral for
 	// tests and non-runtime module imports; runtime fallback stays Obsidian.
-	const configuredThemeName = loadSumoCodeConfig().config.themeName;
-	setActiveTheme(configuredThemeName && getTheme(configuredThemeName) ? configuredThemeName : "obsidian");
+	// Shared with the RPC host boot path (sumo-tui/rpc/host.ts) via
+	// applyStartupTheme so both processes resolve the same theme the same way.
+	applyStartupTheme();
 
 	if (isRpcChildProfile()) {
 		installRpcChildProfile(pi);

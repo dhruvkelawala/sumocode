@@ -47,24 +47,29 @@ class FakeControls {
 		return {};
 	}
 
+	public newSessionCancelled = false;
+	public switchSessionCancelled = false;
+	public forkCancelled = false;
+	public cloneCancelled = false;
+
 	public async newSession(): Promise<{ cancelled: boolean }> {
 		this.calls.push("newSession");
-		return { cancelled: false };
+		return { cancelled: this.newSessionCancelled };
 	}
 
 	public async switchSession(sessionPath: string): Promise<{ cancelled: boolean }> {
 		this.calls.push(`switchSession:${sessionPath}`);
-		return { cancelled: false };
+		return { cancelled: this.switchSessionCancelled };
 	}
 
 	public async fork(entryId: string): Promise<{ cancelled: boolean; text?: string }> {
 		this.calls.push(`fork:${entryId}`);
-		return { cancelled: false, text: "fork from here" };
+		return { cancelled: this.forkCancelled, text: this.forkCancelled ? undefined : "fork from here" };
 	}
 
 	public async clone(): Promise<{ cancelled: boolean }> {
 		this.calls.push("clone");
-		return { cancelled: false };
+		return { cancelled: this.cloneCancelled };
 	}
 
 	public async getForkMessages(): Promise<typeof this.forkMessages> {
@@ -191,6 +196,10 @@ function setup(options: {
 	const notifications: Notification[] = [];
 	const memory = options.memory ?? new FakeMemoryClient();
 	const editorText = new FakeEditorText();
+	const rehydrateCalls: number[] = [];
+	const rehydrateTranscript = async (): Promise<void> => {
+		rehydrateCalls.push(rehydrateCalls.length + 1);
+	};
 	const actions = new RpcHostActions({
 		controls: controls as unknown as RpcHostControls,
 		stateStore,
@@ -205,9 +214,10 @@ function setup(options: {
 		editorText,
 		createMemoryClient: () => memory,
 		onExitRequest: options.onExitRequest,
+		rehydrateTranscript,
 	});
 
-	return { actions, controls, modals, overlays, notifications, memory, editorText };
+	return { actions, controls, modals, overlays, notifications, memory, editorText, rehydrateCalls };
 }
 
 function rpcCommand(name: string): RpcSlashCommand {
@@ -273,7 +283,7 @@ describe("RpcHostActions", () => {
 	});
 
 	it("handles session controls through modal selectors and editor text handoff", async () => {
-		const { actions, controls, modals, editorText } = setup();
+		const { actions, controls, modals, editorText, rehydrateCalls } = setup();
 
 		const session = actions.handleSubmittedText("/sessions");
 		await flush();
@@ -292,6 +302,72 @@ describe("RpcHostActions", () => {
 			"fork:entry-1",
 		]);
 		expect(editorText.getText()).toBe("fork from here");
+		expect(rehydrateCalls).toHaveLength(1);
+	});
+
+	it("rehydrates the transcript exactly once after /new, /clone, switch, and a successful fork", async () => {
+		const { actions, controls, modals, rehydrateCalls } = setup();
+
+		await expect(actions.handleSubmittedText("/new")).resolves.toBe(true);
+		expect(rehydrateCalls).toHaveLength(1);
+
+		await expect(actions.handleSubmittedText("/clone")).resolves.toBe(true);
+		expect(rehydrateCalls).toHaveLength(2);
+
+		const switchPromise = actions.handleSubmittedText("/sessions");
+		await flush();
+		modals.handleInput(Key.down); // Switch session by path
+		modals.handleInput(Key.enter);
+		await flush();
+		modals.handleInput("/tmp/other-session.jsonl");
+		modals.handleInput(Key.enter);
+		await switchPromise;
+		expect(controls.calls).toContain("switchSession:/tmp/other-session.jsonl");
+		expect(rehydrateCalls).toHaveLength(3);
+
+		const forkPromise = actions.handleSubmittedText("/fork");
+		await flush();
+		modals.handleInput(Key.enter);
+		await forkPromise;
+		expect(rehydrateCalls).toHaveLength(4);
+	});
+
+	it("does not rehydrate the transcript when a session operation is cancelled", async () => {
+		const { actions, controls, modals, rehydrateCalls } = setup();
+		controls.newSessionCancelled = true;
+		controls.cloneCancelled = true;
+		controls.switchSessionCancelled = true;
+		controls.forkCancelled = true;
+
+		await expect(actions.handleSubmittedText("/new")).resolves.toBe(true);
+		await expect(actions.handleSubmittedText("/clone")).resolves.toBe(true);
+
+		const switchPromise = actions.handleSubmittedText("/sessions");
+		await flush();
+		modals.handleInput(Key.down);
+		modals.handleInput(Key.enter);
+		await flush();
+		modals.handleInput("/tmp/other-session.jsonl");
+		modals.handleInput(Key.enter);
+		await switchPromise;
+
+		const forkPromise = actions.handleSubmittedText("/fork");
+		await flush();
+		modals.handleInput(Key.enter);
+		await forkPromise;
+
+		expect(rehydrateCalls).toHaveLength(0);
+	});
+
+	it("does not rehydrate the transcript when the fork selector is dismissed without a selection", async () => {
+		const { actions, modals, rehydrateCalls } = setup();
+
+		const forkPromise = actions.handleSubmittedText("/fork");
+		await flush();
+		modals.handleInput(Key.escape);
+		await forkPromise;
+
+		expect(rehydrateCalls).toHaveLength(0);
 	});
 
 	it("handles /session stats and /name rename as host commands", async () => {

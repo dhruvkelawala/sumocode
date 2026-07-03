@@ -55,6 +55,14 @@ export interface RpcHostActionsOptions {
 	readonly onStateChange?: () => void;
 	readonly onRenderRequest?: () => void;
 	readonly onExitRequest?: (code: number) => void;
+	/**
+	 * Called after a session operation (new/switch/clone/fork) succeeds, so the
+	 * host can refetch `get_messages` from the child and push a fresh transcript
+	 * into the runtime. Without this the old session's messages stay on screen
+	 * ("ghost transcript") after switching sessions. Not called when the
+	 * operation is cancelled or throws.
+	 */
+	readonly rehydrateTranscript?: () => Promise<void>;
 }
 
 const THINKING_LEVELS: readonly RpcThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh"];
@@ -219,6 +227,7 @@ export class RpcHostActions {
 	private readonly onStateChange: () => void;
 	private readonly onRenderRequest: () => void;
 	private readonly onExitRequest: (code: number) => void;
+	private readonly rehydrateTranscript: () => Promise<void>;
 
 	public constructor(options: RpcHostActionsOptions) {
 		this.controls = options.controls;
@@ -231,6 +240,7 @@ export class RpcHostActions {
 		this.onStateChange = options.onStateChange ?? (() => undefined);
 		this.onRenderRequest = options.onRenderRequest ?? (() => undefined);
 		this.onExitRequest = options.onExitRequest ?? (() => undefined);
+		this.rehydrateTranscript = options.rehydrateTranscript ?? (() => Promise.resolve());
 	}
 
 	public handleInput(data: string): boolean {
@@ -396,7 +406,10 @@ export class RpcHostActions {
 		const message = messages[index];
 		if (!message) return;
 		const result = await this.controls.fork(message.entryId);
-		if (!result.cancelled && result.text) this.editorText?.setText(result.text);
+		if (!result.cancelled) {
+			if (result.text) this.editorText?.setText(result.text);
+			await this.rehydrateTranscript();
+		}
 		this.onStateChange();
 	}
 
@@ -543,6 +556,7 @@ export class RpcHostActions {
 		const result = await this.controls.newSession();
 		if (!result.cancelled) {
 			await this.controls.refreshState();
+			await this.rehydrateTranscript();
 			this.onStateChange();
 			notify(this.notifications, "new session", "info");
 		}
@@ -555,6 +569,7 @@ export class RpcHostActions {
 		const result = await this.controls.switchSession(trimmed);
 		if (!result.cancelled) {
 			await this.controls.refreshState();
+			await this.rehydrateTranscript();
 			this.onStateChange();
 			notify(this.notifications, "session switched", "info");
 		}
@@ -564,6 +579,7 @@ export class RpcHostActions {
 		const result = await this.controls.clone();
 		if (!result.cancelled) {
 			await this.controls.refreshState();
+			await this.rehydrateTranscript();
 			this.onStateChange();
 			notify(this.notifications, "session cloned", "info");
 		}

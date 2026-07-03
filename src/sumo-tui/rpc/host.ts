@@ -1,6 +1,7 @@
 import { resolve } from "node:path";
 import { isCtrlCInput, isEscapeInput } from "../input/shared-input-router.js";
 import { loadYoga } from "../layout/yoga.js";
+import { applyStartupTheme } from "../../themes/index.js";
 import { ExtensionStatusPublication, RegionRegistry } from "../pi-compat/region-registry.js";
 import { ModalLayer } from "../widgets/modal-layer.js";
 import { NotificationCenter } from "../widgets/notification.js";
@@ -115,6 +116,13 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 	}
 	const root = hostRoot(env);
 	const cwd = hostCwd(env);
+	// Resolve and apply the configured theme before the runtime/shell is
+	// constructed so the host's first frame already renders the user's theme
+	// instead of the registry default (Cathedral). The RPC child process never
+	// renders, so main's extension.ts theme-init (which the child also runs)
+	// has no visible effect here — the host must apply it independently, via
+	// the same shared resolution `extension.ts` uses.
+	applyStartupTheme({ cwd });
 	const visualFixture = rpcVisualFixtureFromEnv(env);
 	const extensionPath = resolve(root, "src/extension.ts");
 	const client = new SumoRpcClient({
@@ -205,6 +213,16 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		onRenderRequest: requestRender,
 	});
 	client.setUiRequestHandler((request) => uiResponder.handle(request));
+	// After new/switch/clone/fork the child's message list changed out from
+	// under the host, but nothing repaints the transcript on its own -- the
+	// old session's messages otherwise stay on screen as a "ghost transcript".
+	// Refetch get_messages and push the result through the same
+	// replaceFromMessages/runtime.update path used for initial hydration below.
+	const rehydrateTranscript = async (): Promise<void> => {
+		const messages = responseData(await client.send({ type: "get_messages" }), "get_messages").messages;
+		const transcript = transcriptPump.replaceFromMessages(messages);
+		runtime?.update({ transcript });
+	};
 	actions = new RpcHostActions({
 		controls,
 		stateStore,
@@ -215,6 +233,7 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		onStateChange: requestRender,
 		onRenderRequest: requestRender,
 		onExitRequest: (code) => requestHostExit(code),
+		rehydrateTranscript,
 	});
 	let statsTimer: NodeJS.Timeout | undefined;
 	let statsInFlight = false;

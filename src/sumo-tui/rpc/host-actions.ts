@@ -1,3 +1,4 @@
+import { dirname } from "node:path";
 import type { Component } from "@earendil-works/pi-tui";
 import { Key, matchesKey } from "@earendil-works/pi-tui";
 import {
@@ -33,6 +34,7 @@ import type { RpcHostControls, RpcModelOption, RpcSessionStats, RpcThinkingLevel
 import type { RpcHostOverlayManager } from "./host-overlays.js";
 import type { InlineSelectorHost } from "./inline-selector.js";
 import { notifyOnError } from "./safe-send.js";
+import { listSessions, type SessionListInfo } from "./session-reader.js";
 import type { RpcHostStateStore } from "./state.js";
 
 export const RPC_HOST_COMMAND_PALETTE_INPUT = "\u001f";
@@ -102,6 +104,7 @@ export const RPC_HOST_SLASH_COMMANDS: readonly RpcHostSlashCommand[] = Object.fr
 	{ name: "clone", description: "Duplicate the current session" },
 	{ name: "fork", description: "Fork from a previous user message" },
 	{ name: "sessions", description: "Open session controls" },
+	{ name: "resume", description: "Resume a previous session from this project" },
 	{ name: "session", description: "Show session info and stats" },
 	{ name: "name", description: "Rename the current session" },
 	{ name: "copy", description: "Copy the last assistant response to the clipboard" },
@@ -199,6 +202,12 @@ function formatCost(value: number): string {
 
 function formatSessionStats(stats: RpcSessionStats): string {
 	return `session: ${formatInteger(stats.totalMessages)} messages | ${formatInteger(stats.tokens.total)} tokens | ${formatCost(stats.cost)}`;
+}
+
+function resumeSessionLabel(session: SessionListInfo): string {
+	const when = Number.isNaN(session.modified.getTime()) ? "" : session.modified.toISOString().slice(0, 16).replace("T", " ");
+	const title = session.name?.trim() || session.firstMessage.slice(0, 60);
+	return `${when} — ${title} (${formatInteger(session.messageCount)} msgs)`;
 }
 
 class LinesOverlayComponent implements Component {
@@ -328,6 +337,9 @@ export class RpcHostActions {
 			case "/export":
 				await this.exportHtml();
 				return true;
+			case "/resume":
+				await this.openResumeSelector();
+				return true;
 			case "/quit":
 				this.onExitRequest(0);
 				return true;
@@ -447,6 +459,43 @@ export class RpcHostActions {
 			await this.rehydrateTranscript();
 		}
 		this.onStateChange();
+	}
+
+	/**
+	 * `/resume` -- lists every session (`.jsonl` file) sitting alongside the
+	 * current one on disk and lets the user pick one to load. Pi's RPC surface
+	 * has no "list sessions" verb, so this reads the session directory
+	 * directly (`session-reader.ts`'s `listSessions`, a faithful port of Pi's
+	 * own `SessionManager.list`/`buildSessionInfo`), deriving the directory
+	 * from `sessionFile` (threaded through `get_state` -- see state.ts). The
+	 * chosen path is loaded through the existing `switch_session` control, the
+	 * same path `/sessions` -> "Switch session by path" already uses, so
+	 * rehydration/state-refresh behavior is identical.
+	 */
+	public async openResumeSelector(): Promise<void> {
+		const sessionFile = this.stateStore.getSnapshot().sessionFile;
+		if (!sessionFile) {
+			notify(this.notifications, "no session file available to resume from", "warning");
+			return;
+		}
+		const sessions = await listSessions(dirname(sessionFile));
+		if (sessions.length === 0) {
+			notify(this.notifications, "no sessions found", "warning");
+			return;
+		}
+		const labels = sessions.map((session) => resumeSessionLabel(session));
+		const selected = await this.inlineSelectors.select("Resume session", labels);
+		if (!selected) return;
+		const index = labels.indexOf(selected);
+		const session = sessions[index];
+		if (!session) return;
+		const result = await this.controls.switchSession(session.path);
+		if (!result.cancelled) {
+			await this.controls.refreshState();
+			await this.rehydrateTranscript();
+			this.onStateChange();
+			notify(this.notifications, "session resumed", "info");
+		}
 	}
 
 	public async openThemeCheck(): Promise<void> {

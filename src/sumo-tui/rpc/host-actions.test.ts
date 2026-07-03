@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { RpcSessionState } from "@earendil-works/pi-coding-agent";
 import { Key } from "@earendil-works/pi-tui";
 import { afterEach, describe, expect, it } from "vitest";
@@ -207,6 +210,18 @@ function flush(): Promise<void> {
 	return Promise.resolve().then(() => Promise.resolve());
 }
 
+/**
+ * `/resume` reads the session directory off real disk (`node:fs/promises`
+ * `readdir`, then a `readline` stream per fixture file), which resolves via
+ * libuv's thread pool across several chained async hops -- more than
+ * `flush()`'s two `Promise.resolve()` microtask hops (or a single
+ * `setImmediate`) reliably drains. A short real-time wait is simplest here
+ * given how small the fixture files are.
+ */
+function flushIO(): Promise<void> {
+	return new Promise((resolve) => setTimeout(resolve, 20));
+}
+
 function renderOverlayText(overlays: RpcHostOverlayManager, width = 100): string {
 	return overlays.render(width).join("\n").replace(/\u001b\[[0-9;]*m/g, "");
 }
@@ -215,6 +230,7 @@ function setup(options: {
 	readonly memory?: FakeMemoryClient;
 	readonly onExitRequest?: (code: number) => void;
 	readonly writeClipboardSequence?: (sequence: string) => boolean;
+	readonly sessionFile?: string;
 } = {}) {
 	const controls = new FakeControls();
 	const stateStore = new RpcHostStateStore();
@@ -227,6 +243,7 @@ function setup(options: {
 		followUpMode: "one-at-a-time",
 		sessionId: "session-1",
 		sessionName: "Migration",
+		sessionFile: options.sessionFile,
 		autoCompactionEnabled: true,
 		messageCount: 2,
 		pendingMessageCount: 0,
@@ -431,6 +448,71 @@ describe("RpcHostActions", () => {
 		await forkPromise;
 
 		expect(rehydrateCalls).toHaveLength(0);
+	});
+
+	describe("/resume", () => {
+		function jsonl(lines: readonly unknown[]): string {
+			return `${lines.map((line) => JSON.stringify(line)).join("\n")}\n`;
+		}
+
+		function writeFixtureSession(dir: string, fileName: string, id: string, timestamp: string, firstMessage: string): string {
+			const path = join(dir, fileName);
+			writeFileSync(path, jsonl([
+				{ type: "session", version: 3, id, timestamp, cwd: "/repo" },
+				{
+					type: "message",
+					id: "e1",
+					parentId: null,
+					timestamp,
+					message: { role: "user", content: firstMessage, timestamp: new Date(timestamp).getTime() },
+				},
+			]));
+			return path;
+		}
+
+		it("lists fixture sessions from the current session's directory and loads the chosen path", async () => {
+			const dir = mkdtempSync(join(tmpdir(), "sumocode-resume-test-"));
+			try {
+				const currentFile = writeFixtureSession(dir, "2026-07-02T20-00-00-000Z_current.jsonl", "current", "2026-07-02T20:00:00.000Z", "current session first message");
+				const olderPath = writeFixtureSession(dir, "2026-07-02T19-00-00-000Z_older.jsonl", "older", "2026-07-02T19:00:00.000Z", "older session first message");
+
+				const { actions, controls, inlineSelectors, rehydrateCalls } = setup({ sessionFile: currentFile });
+
+				const resumePromise = actions.handleSubmittedText("/resume");
+				await flushIO();
+				expect(inlineSelectors.getActiveKind()).toBe("select");
+				inlineSelectors.handleInput(SELECTOR_DOWN); // move to the older session
+				inlineSelectors.handleInput(SELECTOR_ENTER);
+				await resumePromise;
+
+				expect(controls.calls).toContain(`switchSession:${olderPath}`);
+				expect(controls.calls).toContain("refreshState");
+				expect(rehydrateCalls).toHaveLength(1);
+			} finally {
+				rmSync(dir, { recursive: true, force: true });
+			}
+		});
+
+		it("warns when there is no session file to resume from", async () => {
+			const { actions, notifications } = setup();
+
+			await expect(actions.handleSubmittedText("/resume")).resolves.toBe(true);
+
+			expect(notifications).toContainEqual({ message: "no session file available to resume from", level: "warning" });
+		});
+
+		it("warns when the session directory has no sessions", async () => {
+			const dir = mkdtempSync(join(tmpdir(), "sumocode-resume-empty-test-"));
+			try {
+				const { actions, notifications } = setup({ sessionFile: join(dir, "2026-07-02T20-00-00-000Z_missing.jsonl") });
+
+				await expect(actions.handleSubmittedText("/resume")).resolves.toBe(true);
+
+				expect(notifications).toContainEqual({ message: "no sessions found", level: "warning" });
+			} finally {
+				rmSync(dir, { recursive: true, force: true });
+			}
+		});
 	});
 
 	it("handles /session stats and /name rename as host commands", async () => {

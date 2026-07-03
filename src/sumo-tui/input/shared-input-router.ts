@@ -1,4 +1,4 @@
-import { Key, matchesKey } from "@earendil-works/pi-tui";
+import { isKeyRelease, Key, matchesKey } from "@earendil-works/pi-tui";
 import { normalizeRawMultilinePasteInput } from "../../cathedral/multiline-paste.js";
 import { logDiagnostic } from "../runtime/diagnostics.js";
 import { chatScrollCommandFromInput } from "../widgets/chat-scroll-command.js";
@@ -40,6 +40,73 @@ interface MouseInputDiagnosticsFields {
 }
 
 const COMPLETE_SGR_MOUSE_SEQUENCE = /\x1b\[<\d+;\d+;\d+[Mm]/g;
+const BRACKETED_PASTE_BLOCK_PATTERN = /\x1b\[200~[\s\S]*?\x1b\[201~/g;
+// CSI (`ESC [ ... final-byte`) and SS3 (`ESC O <letter>`) sequences are single
+// discrete key events. This mirrors pi-tui's Kitty CSI-u / arrow / func /
+// home-end grammar (keys.js `parseKittySequence`): digits, `;`, and `:`
+// separators followed by one CSI final byte (letters or `~`). Matching the
+// whole sequence as one token is required so `isKeyRelease` — which greps for
+// `:3u`/`:3~`/`:3<letter>` substrings on its input — is only ever asked about
+// one key event at a time, never a coalesced chunk that also contains an
+// unrelated press.
+const CSI_OR_SS3_SEQUENCE_PATTERN = /\x1b(?:\[[0-9;:]*[A-Za-z~]|O[A-Za-z])/g;
+
+/**
+ * Split a raw (post mouse-extraction) input chunk into discrete input
+ * "tokens": bracketed-paste blocks pass through whole, CSI/SS3 escape
+ * sequences are single tokens, and any other bytes are individual
+ * characters. This is the granularity pi-tui's own `StdinBuffer` emits
+ * `data` events at (see `@earendil-works/pi-tui/dist/stdin-buffer.d.ts`) —
+ * the RPC host bypasses that buffer and reads raw stdin chunks directly, so
+ * the router has to reconstruct the same per-event granularity itself
+ * before it can safely ask `isKeyRelease` about any one token.
+ */
+export function splitInputTokens(data: string): string[] {
+	const tokens: string[] = [];
+	let index = 0;
+	while (index < data.length) {
+		BRACKETED_PASTE_BLOCK_PATTERN.lastIndex = index;
+		const pasteMatch = BRACKETED_PASTE_BLOCK_PATTERN.exec(data);
+		const pasteStart = pasteMatch && pasteMatch.index === index ? index : -1;
+
+		if (pasteStart === index && pasteMatch) {
+			tokens.push(pasteMatch[0]);
+			index += pasteMatch[0].length;
+			continue;
+		}
+
+		if (data[index] === "\x1b") {
+			CSI_OR_SS3_SEQUENCE_PATTERN.lastIndex = index;
+			const escMatch = CSI_OR_SS3_SEQUENCE_PATTERN.exec(data);
+			if (escMatch && escMatch.index === index) {
+				tokens.push(escMatch[0]);
+				index += escMatch[0].length;
+				continue;
+			}
+		}
+
+		tokens.push(data[index] ?? "");
+		index += 1;
+	}
+	return tokens;
+}
+
+/**
+ * Drop Kitty/xterm key-release tokens (flag 2 report-event-types sends a
+ * `:3` suffixed CSI-u/arrow/func sequence on key-up). Repeats (`:2`) and
+ * presses pass through unchanged. Bracketed-paste tokens are never filtered
+ * (and `isKeyRelease` itself refuses to match inside `\x1b[200~`, so a pasted
+ * MAC address like `90:62:3F:A5` is safe either way).
+ *
+ * This is the RPC host's substitute for pi-tui's own release filtering in
+ * `tui.js` (`if (isKeyRelease(data) && !this.focusedComponent.wantsKeyRelease)
+ * return;`), which the RPC host bypasses entirely (stub TUI, no
+ * `focusedComponent.handleInput` loop).
+ */
+export function filterKeyReleaseEvents(data: string): string {
+	const tokens = splitInputTokens(data);
+	return tokens.filter((token) => !isKeyRelease(token)).join("");
+}
 const BARE_ESCAPE_DISPATCH_DELAY_MS = 25;
 /**
  * Match a trailing prefix of an SGR mouse sequence so we can buffer partial
@@ -204,6 +271,15 @@ export class SharedInputRouter {
 	}
 
 	private routeNonMouseInput(nextData: string, originalData: string, consumed: boolean): SharedInputRouterResult | void {
+		const releaseFilteredData = filterKeyReleaseEvents(nextData);
+		if (releaseFilteredData !== nextData) {
+			logDiagnostic("key_release_filtered", { sourceLength: nextData.length, filteredLength: releaseFilteredData.length });
+			nextData = releaseFilteredData;
+			consumed = true;
+		}
+
+		if (nextData.length === 0 && consumed) return { consume: true };
+
 		const normalizedPasteData = normalizeRawMultilinePasteInput(nextData);
 		if (normalizedPasteData !== nextData) {
 			logDiagnostic("raw_multiline_paste_normalized", { sourceLength: nextData.length, normalizedLength: normalizedPasteData.length });

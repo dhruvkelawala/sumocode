@@ -310,7 +310,7 @@
 						"type": "waitForFinalScreenMatches",
 						"include": [
 							"SUMOCODE",
-							"MEDITATING",
+							"inspecting src/auth/session\\.ts",
 							"review src/auth/session\\.ts and tighten the return type"
 						],
 						"exclude": [
@@ -470,7 +470,7 @@
 						"type": "waitForFinalScreenMatches",
 						"include": [
 							"SUMOCODE",
-							"MEDITATING",
+							"inspecting src/auth/session\\.ts",
 							"review src/auth/session\\.ts and tighten the return type"
 						],
 						"exclude": [

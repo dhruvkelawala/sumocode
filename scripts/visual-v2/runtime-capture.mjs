@@ -322,6 +322,7 @@ function deterministicEnv(extra = {}) {
 		FORCE_COLOR: "3",
 		PI_OFFLINE: "1",
 		SUMO_TUI: "1",
+		SUMOCODE_HARNESS: "1",
 		...extra,
 	};
 	delete env.NO_COLOR;

@@ -105,7 +105,7 @@ function assertActiveRuntimeInputContract(active: Scenario): void {
 			type: "waitForFinalScreenMatches",
 			include: expect.arrayContaining([
 				"SUMOCODE",
-				"MEDITATING",
+				"inspecting src/auth/session\\.ts",
 				"review src/auth/session\\.ts and tighten the return type",
 			]),
 			exclude: expect.arrayContaining([
@@ -308,6 +308,9 @@ describe("V2 visual parity contract", () => {
 			expect(item.runtime?.env).not.toHaveProperty("SUMOCODE_VISUAL_RPC_FIXTURE");
 			expect(item.runtime?.env).not.toHaveProperty("SUMOCODE_VISUAL_RPC_INPUT_PREVIEW");
 		}
+		const runtimeCaptureSource = readFileSync(join(process.cwd(), "scripts/visual-v2/runtime-capture.mjs"), "utf8");
+		expect(runtimeCaptureSource).toContain('SUMOCODE_HARNESS: "1"');
+		expect(runtimeCaptureSource).not.toContain("SUMOCODE_HARNESS_FIXTURE");
 		expect(existsSync(join(process.cwd(), "scripts/visual-v2/compare-captures.mjs"))).toBe(true);
 	});
 

@@ -782,6 +782,39 @@ wait_for_child_exit() {
 	WAIT_FOR_CHILD_EXIT_STATUS="${status}"
 }
 
+# WORKAROUND for a verified-unreliable bash 3.2 (macOS's system bash) `wait`
+# builtin: on a SIGTERM-graceful shutdown, host.ts resolves and intends to
+# exit with code 0 (see host.ts's handleSigterm -> exitProcess(0)), but
+# wait_for_child_exit above was observed reporting 143 (128+SIGTERM) instead
+# -- i.e. bash's own recovery of the backgrounded job's status does not
+# reliably reflect the child's own chosen exit code across this signal path
+# in this environment.
+#
+# The host writes its REAL final exit code to a file at
+# SUMOCODE_EXIT_CODE_FILE (see host.ts's writeExitCodeFile / exitProcess --
+# every host exit path, including this one, funnels through it) just before
+# calling process.exit/returning. read_child_exit_code_file reads that file
+# AFTER wait_for_child_exit has already confirmed the process is gone, so
+# there is no race with the write. Only trusted when present and it parses as
+# a plain non-negative integer; any other case (missing, empty, garbage) falls
+# back to bash's own WAIT_FOR_CHILD_EXIT_STATUS, so a write failure (e.g.
+# read-only tmp, disk full) degrades to the pre-existing (imperfect) behavior
+# instead of the launcher itself failing.
+read_child_exit_code_file() {
+	local path="$1"
+	local fallback="$2"
+	local contents
+	if [[ -n "${path}" && -f "${path}" ]]; then
+		contents="$(cat "${path}" 2>/dev/null || true)"
+		rm -f "${path}" 2>/dev/null || true
+		if [[ "${contents}" =~ ^[0-9]+$ ]]; then
+			printf '%s' "${contents}"
+			return 0
+		fi
+	fi
+	printf '%s' "${fallback}"
+}
+
 while :; do
 	code=0
 	if [[ "${USE_RPC_HOST}" -eq 1 ]]; then
@@ -802,14 +835,19 @@ while :; do
 		# backgrounded child to this script's own inherited stdin (the real
 		# terminal/PTY), restoring identical input behavior to the pre-`&`
 		# plain-foreground invocation.
+		# See read_child_exit_code_file's comment above for why this file exists.
+		# A fresh mktemp path per iteration so a stale file from a prior loop
+		# iteration (or a previous run entirely) can never be misread as this
+		# iteration's exit code.
+		SUMOCODE_EXIT_CODE_FILE="$(mktemp "${TMPDIR:-/tmp}/sumocode-exit-code.XXXXXX")"
 		if [[ "${#SUMOCODE_ARGS[@]}" -eq 0 ]]; then
-			env SUMOCODE_ROOT_DIR="${ROOT_DIR}" SUMOCODE_PROJECT_CWD="${PWD}" SUMOCODE_INITIAL_PROMPT="${RPC_INITIAL_PROMPT}" PI_BIN="${PI_BIN}" node "${ROOT_DIR}/sumo-rpc-host.js" <&0 &
+			env SUMOCODE_ROOT_DIR="${ROOT_DIR}" SUMOCODE_PROJECT_CWD="${PWD}" SUMOCODE_INITIAL_PROMPT="${RPC_INITIAL_PROMPT}" PI_BIN="${PI_BIN}" SUMOCODE_EXIT_CODE_FILE="${SUMOCODE_EXIT_CODE_FILE}" node "${ROOT_DIR}/sumo-rpc-host.js" <&0 &
 		else
-			env SUMOCODE_ROOT_DIR="${ROOT_DIR}" SUMOCODE_PROJECT_CWD="${PWD}" SUMOCODE_INITIAL_PROMPT="${RPC_INITIAL_PROMPT}" PI_BIN="${PI_BIN}" node "${ROOT_DIR}/sumo-rpc-host.js" "${SUMOCODE_ARGS[@]}" <&0 &
+			env SUMOCODE_ROOT_DIR="${ROOT_DIR}" SUMOCODE_PROJECT_CWD="${PWD}" SUMOCODE_INITIAL_PROMPT="${RPC_INITIAL_PROMPT}" PI_BIN="${PI_BIN}" SUMOCODE_EXIT_CODE_FILE="${SUMOCODE_EXIT_CODE_FILE}" node "${ROOT_DIR}/sumo-rpc-host.js" "${SUMOCODE_ARGS[@]}" <&0 &
 		fi
 		RPC_CHILD_PID=$!
 		wait_for_child_exit "${RPC_CHILD_PID}"
-		code="${WAIT_FOR_CHILD_EXIT_STATUS}"
+		code="$(read_child_exit_code_file "${SUMOCODE_EXIT_CODE_FILE}" "${WAIT_FOR_CHILD_EXIT_STATUS}")"
 		RPC_CHILD_PID=""
 	elif [[ "${#SUMOCODE_ARGS[@]}" -eq 0 ]]; then
 		"${PI_BIN}" -e "${ROOT_DIR}/src/extension.ts" || code=$?

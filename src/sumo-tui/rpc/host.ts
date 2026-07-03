@@ -1,3 +1,4 @@
+import { writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { SUMOCODE_RELOAD_EXIT_CODE } from "../../commands/reload.js";
 import { containsCtrlCToken, isEscapeInput } from "../input/shared-input-router.js";
@@ -86,6 +87,42 @@ function childEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 		SUMO_TUI: "0",
 	};
 	return next;
+}
+
+/**
+ * Writes this host process's final exit code to the out-of-band file
+ * bin/sumocode.sh points at via SUMOCODE_EXIT_CODE_FILE, so the launcher's
+ * respawn loop can read the host's REAL exit code instead of trusting bash
+ * 3.2's `wait`-based recovery (`wait_for_child_exit` in bin/sumocode.sh),
+ * which was verified unreliable in this environment: a SIGTERM-graceful
+ * shutdown that this host resolves as exit 0 was observed surfacing to the
+ * launcher as 143 (128+SIGTERM) instead, because the backgrounded job's
+ * status as bash's `wait` builtin reports it does not always reflect the
+ * process's own chosen exit code on a graceful signal-triggered shutdown path
+ * under macOS bash 3.2.
+ *
+ * This is the SINGLE choke point every host exit path funnels through
+ * (normal return via main(), the reload exit-100 path, every
+ * process.exit(...) call site, and both signal handlers) -- see runRpcHost
+ * and main() below for each call site. Synchronous by design: an async write
+ * racing a subsequent process.exit(code) could be truncated or dropped
+ * entirely before it reaches disk.
+ *
+ * Silently no-ops (never throws) when the env var is unset (e.g. under
+ * vitest/unit tests that construct runRpcHost's dependencies directly,
+ * pre-existing manual runs of sumo-rpc-host.js without the launcher, or a
+ * write failure) -- this is a best-effort side channel the launcher falls
+ * back away from when absent or unparseable, never a hard requirement for
+ * the host to actually exit.
+ */
+export function writeExitCodeFile(env: NodeJS.ProcessEnv, code: number): void {
+	const path = env.SUMOCODE_EXIT_CODE_FILE;
+	if (!path) return;
+	try {
+		writeFileSync(path, String(code));
+	} catch {
+		// Best-effort; the launcher falls back to bash's own wait status.
+	}
 }
 
 function fallbackChatSinkStats(messages: readonly ChatMessageViewModel[]): ChatPagerReplaceStats {
@@ -314,7 +351,18 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 	const stdout = options.stdout ?? process.stdout;
 	const stdin = options.stdin ?? process.stdin;
 	const stderr = options.stderr ?? process.stderr;
+	// Every host exit path funnels its final code through this one closure --
+	// see writeExitCodeFile's doc comment for why the launcher needs this
+	// out-of-band signal instead of trusting bash 3.2's `wait`-based recovery.
+	// Wraps process.exit itself (rather than being threaded through each
+	// dependency-injection object below) so this is the single place that can
+	// never be bypassed by a new exit call site added later.
+	const exitProcess = (code: number): void => {
+		writeExitCodeFile(env, code);
+		process.exit(code);
+	};
 	if (stdout.isTTY !== true) {
+		writeExitCodeFile(env, 70);
 		writeLine(stderr, "[sumocode-rpc] RPC host requires a TTY; use node-pty or an interactive terminal.");
 		return 70;
 	}
@@ -354,7 +402,7 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 	const handleUnhandledRejection = createUnhandledRejectionHandler({
 		stderr,
 		cleanup: (code) => stopHost(code),
-		exit: (code) => process.exit(code),
+		exit: exitProcess,
 	});
 	process.on("unhandledRejection", handleUnhandledRejection);
 	// A synchronous throw from the event -> render path (e.g. a listener
@@ -525,7 +573,7 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		notifications,
 		requestRender,
 		stopHost: (code) => stopHost(code),
-		exit: (code) => process.exit(code),
+		exit: exitProcess,
 		updateRuntimeState: (state) => runtime?.update({ state }),
 	});
 	client.onExit((error) => {
@@ -580,8 +628,8 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 	// `handleAppInterrupt` declaration above for why this is the correct reuse
 	// point instead of a second, editor-local interrupt implementation.
 	handleAppInterrupt = (): void => { handlePreEditorInput("\x1b"); };
-	const handleSigint = (): void => { void stop(130).then(() => process.exit(130)); };
-	const handleSigterm = (): void => { void stop(0).then(() => process.exit(0)); };
+	const handleSigint = (): void => { void stop(130).then(() => exitProcess(130)); };
+	const handleSigterm = (): void => { void stop(0).then(() => exitProcess(0)); };
 	process.once("SIGINT", handleSigint);
 	process.once("SIGTERM", handleSigterm);
 
@@ -641,5 +689,12 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 
 export async function main(): Promise<void> {
 	const code = await runRpcHost();
+	// Covers every runRpcHost path that returns a code naturally instead of
+	// calling process.exit directly (the plain `runtime.waitForExit()` return
+	// and the top-level catch's `return 1`) -- the explicit process.exit call
+	// sites inside runRpcHost (SIGINT/SIGTERM, unhandledRejection/
+	// uncaughtException, createRpcExitHandler's reload/crash paths) already
+	// write via exitProcess before this point is ever reached.
+	writeExitCodeFile(process.env, code);
 	process.exitCode = code;
 }

@@ -1,8 +1,11 @@
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { ChatMessageViewModel } from "../transcript/view-model.js";
 import { SUMOCODE_RELOAD_EXIT_CODE } from "../../commands/reload.js";
 import { RpcChildExitError } from "./client.js";
-import { createLazyChatSink, createRpcExitHandler, createRpcHostInterruptHandler, createUnhandledRejectionHandler, submitInitialPromptFromEnv, type RpcHostExitDependencies, type RpcHostInterruptDependencies } from "./host.js";
+import { createLazyChatSink, createRpcExitHandler, createRpcHostInterruptHandler, createUnhandledRejectionHandler, submitInitialPromptFromEnv, writeExitCodeFile, type RpcHostExitDependencies, type RpcHostInterruptDependencies } from "./host.js";
 
 function flush(): Promise<void> {
 	return Promise.resolve().then(() => Promise.resolve());
@@ -432,5 +435,45 @@ describe("submitInitialPromptFromEnv (SUMOCODE_INITIAL_PROMPT seam)", () => {
 		});
 
 		await expect(submitInitialPromptFromEnv({ SUMOCODE_INITIAL_PROMPT: "review the diff" }, submit)).rejects.toThrow("child not ready");
+	});
+});
+
+describe("writeExitCodeFile (SUMOCODE_EXIT_CODE_FILE out-of-band exit-code channel)", () => {
+	// bin/sumocode.sh's wait_for_child_exit was verified unreliable under macOS
+	// bash 3.2: a SIGTERM-graceful shutdown that the host resolves as exit 0
+	// can surface to the launcher as 143 via bash's own `wait` status. This is
+	// the single choke point every host exit path (SIGINT/SIGTERM,
+	// unhandledRejection/uncaughtException, createRpcExitHandler's reload/crash
+	// paths, and main()'s natural-return path) funnels through -- see
+	// runRpcHost's `exitProcess` and main() for the call sites.
+
+	it("writes the exit code to the path given by SUMOCODE_EXIT_CODE_FILE", () => {
+		const dir = mkdtempSync(join(tmpdir(), "sumocode-exit-code-"));
+		const file = join(dir, "exit-code");
+		try {
+			writeExitCodeFile({ SUMOCODE_EXIT_CODE_FILE: file }, 0);
+			expect(readFileSync(file, "utf8")).toBe("0");
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("writes a nonzero/reload code just as faithfully as 0", () => {
+		const dir = mkdtempSync(join(tmpdir(), "sumocode-exit-code-"));
+		const file = join(dir, "exit-code");
+		try {
+			writeExitCodeFile({ SUMOCODE_EXIT_CODE_FILE: file }, SUMOCODE_RELOAD_EXIT_CODE);
+			expect(readFileSync(file, "utf8")).toBe(String(SUMOCODE_RELOAD_EXIT_CODE));
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("does not throw when SUMOCODE_EXIT_CODE_FILE is unset", () => {
+		expect(() => writeExitCodeFile({}, 0)).not.toThrow();
+	});
+
+	it("does not throw when the target directory does not exist (best-effort side channel)", () => {
+		expect(() => writeExitCodeFile({ SUMOCODE_EXIT_CODE_FILE: "/nonexistent-dir-xyz/exit-code" }, 1)).not.toThrow();
 	});
 });

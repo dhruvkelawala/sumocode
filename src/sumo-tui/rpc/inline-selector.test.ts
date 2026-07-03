@@ -43,12 +43,13 @@ class FakeEditor {
 }
 
 describe("InlineSelectorComponent", () => {
-	it("renders a dim title heading above the list rows", () => {
+	it("renders a Cathedral-styled title heading above the list rows", () => {
 		const component = new InlineSelectorComponent("Choose model", ["a", "b"], () => undefined);
 		const rows = component.render(40);
-		expect(rows[0]).toContain("Choose model");
-		expect(rows.join("\n")).toContain("a");
-		expect(rows.join("\n")).toContain("b");
+		const stripped = rows.join("\n").replace(/\[[0-9;]*m/g, "");
+		expect(stripped).toContain("CHOOSE MODEL");
+		expect(stripped).toContain("a");
+		expect(stripped).toContain("b");
 	});
 
 	it("resolves with the selected option's exact string on Enter", () => {
@@ -89,8 +90,9 @@ describe("InlineSelectorHost", () => {
 		expect(host.isActive()).toBe(true);
 
 		const rendered = host.render(80).join("\n");
-		expect(rendered).toContain("Choose model");
-		expect(rendered).toContain("openai/gpt-5");
+		const stripped = rendered.replace(/\[[0-9;]*m/g, "");
+		expect(stripped).toContain("CHOOSE MODEL");
+		expect(stripped).toContain("openai/gpt-5");
 		expect(rendered).not.toContain("editor:80");
 
 		host.handleInput("x");
@@ -134,11 +136,11 @@ describe("InlineSelectorHost", () => {
 		const first = host.select("First", ["a", "b"]);
 		const second = host.select("Second", ["c", "d"]);
 
-		expect(host.render(80).join("\n")).toContain("First");
+		expect(host.render(80).join("\n").replace(/\[[0-9;]*m/g, "")).toContain("FIRST");
 		host.handleInput(ENTER);
 		await expect(first).resolves.toBe("a");
 
-		expect(host.render(80).join("\n")).toContain("Second");
+		expect(host.render(80).join("\n").replace(/\[[0-9;]*m/g, "")).toContain("SECOND");
 		host.handleInput(ENTER);
 		await expect(second).resolves.toBe("c");
 

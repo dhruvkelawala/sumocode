@@ -369,7 +369,7 @@ export class RpcHostActions {
 	}
 
 	public async openThinkingSelector(): Promise<void> {
-		const selected = await this.modals.select("Set thinking level", [...THINKING_LEVELS]);
+		const selected = await this.inlineSelectors.select("Set thinking level", [...THINKING_LEVELS]);
 		if (selected === undefined) return;
 		await this.setThinkingFromText(selected);
 	}

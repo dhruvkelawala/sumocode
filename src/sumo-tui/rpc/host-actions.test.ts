@@ -19,6 +19,7 @@ type Notification = { message: string; level: NotificationLevel };
 // select-list.js) -- NOT the lenient symbolic strings (`Key.down`, i.e. the
 // literal string "down") `ModalManager.handleInput`'s bespoke `keyEq` accepts.
 // These are the actual legacy VT sequences a real terminal sends.
+const SELECTOR_DOWN = "\x1b[B";
 const SELECTOR_ENTER = "\r";
 
 class FakeInlineEditor {
@@ -307,6 +308,22 @@ describe("RpcHostActions", () => {
 		expect(controls.calls).toContain("compact:keep branch summary");
 		expect(controls.calls).toContain("setAutoCompaction:false");
 		expect(notifications).toContainEqual({ message: "auto compaction disabled", level: "info" });
+	});
+
+	it("opens the in-place selector for bare /thinking (no args) and applies the chosen level", async () => {
+		const { actions, controls, inlineSelectors, notifications } = setup();
+
+		const thinking = actions.handleSubmittedText("/thinking");
+		await flush();
+		expect(inlineSelectors.getActiveKind()).toBe("select");
+
+		inlineSelectors.handleInput(SELECTOR_DOWN); // off -> minimal
+		inlineSelectors.handleInput(SELECTOR_ENTER);
+		await thinking;
+
+		expect(inlineSelectors.getActiveKind()).toBeUndefined();
+		expect(controls.calls).toContain("setThinking:minimal");
+		expect(notifications).toContainEqual({ message: "thinking: minimal", level: "info" });
 	});
 
 	it("handles session controls through modal selectors and editor text handoff", async () => {

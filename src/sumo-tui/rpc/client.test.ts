@@ -391,4 +391,23 @@ describe("SumoRpcClient", () => {
 		expect(errors).toHaveLength(0);
 	});
 
+	it("does not throw when sendUiResponse is called after the child's stdin is destroyed", async () => {
+		const client = nodeRpcClient("setInterval(() => undefined, 1000);");
+		await client.start();
+		const child = clientChild(client);
+		child.stdin.destroy();
+		await waitFor(() => !child.stdin.writable);
+
+		expect(() => client.sendUiResponse({ type: "extension_ui_response", id: "x", cancelled: true })).not.toThrow();
+		await client.stop();
+	});
+
+	it("attaches an error listener to child.stdin at start()", async () => {
+		const client = nodeRpcClient("setInterval(() => undefined, 1000);");
+		await client.start();
+		const child = clientChild(client);
+
+		expect(child.stdin.listenerCount("error")).toBeGreaterThan(0);
+		await client.stop();
+	});
 });

@@ -128,6 +128,18 @@ export class SumoRpcClient {
 				this.stderrBuffer = this.stderrBuffer.slice(-MAX_STDERR_BUFFER_LENGTH);
 			}
 		});
+		// Without this listener, an EPIPE on the kernel pipe (child closed stdin,
+		// or died in the window before Node's 'exit' event lands) is an unhandled
+		// 'error' event on the stdin stream, which Node treats as fatal and
+		// crashes the host process. A logging no-op is enough: send() and
+		// sendUiResponse() already guard on child/exited state and have their own
+		// write-callback error handling, so this listener only needs to swallow
+		// the stream-level error so it never throws, not react to it further --
+		// the child's 'exit'/'error' event (handleExit) is what actually notifies
+		// the rest of the host.
+		child.stdin.on("error", (error) => {
+			console.error(`[sumocode-rpc] child stdin error: ${toError(error).message}`);
+		});
 		child.once("error", (error) => this.handleExit(toError(error)));
 		child.once("exit", (code, signal) => {
 			this.handleExit(new Error(`RPC child exited code=${code ?? "null"} signal=${signal ?? "null"}. stderr=${this.stderrBuffer}`));
@@ -182,7 +194,17 @@ export class SumoRpcClient {
 
 	public sendUiResponse(response: RpcExtensionUIResponse): void {
 		if (!this.child || this.exited) return;
-		this.child.stdin.write(`${JSON.stringify(response)}\n`);
+		// Same guard style as send(): the post-'exit' state is covered by the
+		// `this.exited` check above, but the kernel pipe can already be closed
+		// (child.stdin.writable === false) in the window before Node delivers
+		// the 'exit' event. Without the writable check and an error callback,
+		// this write can throw/EPIPE synchronously or emit an unhandled 'error'
+		// on the stream and crash the host for what is, from the UI's
+		// perspective, a fire-and-forget response.
+		if (!this.child.stdin.writable) return;
+		this.child.stdin.write(`${JSON.stringify(response)}\n`, (error) => {
+			if (error) console.error(`[sumocode-rpc] sendUiResponse write failed: ${toError(error).message}`);
+		});
 	}
 
 	private handleStdout(chunk: string): void {

@@ -6,6 +6,17 @@ export interface RpcChildFixtureOptions {
 	readonly sessionName?: string;
 	readonly messages?: readonly unknown[];
 	readonly holdPromptUntilAbort?: boolean;
+	/**
+	 * When set, a `prompt` command streams these chunks as successive
+	 * `message_update` events (each appended onto the previous, mirroring a
+	 * real token stream), `chunkDelayMs` apart, before the run finishes.
+	 * Replaces the fixture's default single `message_update` + 100ms finish.
+	 * Models `scripts/visual-v2/runtime-faux-provider.mjs`'s slow real-stream
+	 * shape for tests that need to observe intermediate streaming states
+	 * (e.g. scrolling up mid-stream) rather than just start/end.
+	 */
+	readonly streamChunks?: readonly string[];
+	readonly chunkDelayMs?: number;
 }
 
 export async function createRpcChildFixture(prefix: string, options: RpcChildFixtureOptions = {}): Promise<string> {
@@ -19,6 +30,8 @@ let messages = ${JSON.stringify(options.messages ?? [])};
 let isStreaming = false;
 let pendingPrompt = null;
 let holdNextPromptUntilAbort = ${options.holdPromptUntilAbort ? "true" : "false"};
+const streamChunks = ${JSON.stringify(options.streamChunks ?? null)};
+const chunkDelayMs = ${JSON.stringify(options.chunkDelayMs ?? 500)};
 
 function write(payload) {
 	process.stdout.write(JSON.stringify(payload) + "\\n");
@@ -93,6 +106,22 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 		];
 		isStreaming = true;
 		write({ type: "agent_start" });
+		if (streamChunks) {
+			let text = "";
+			let index = 0;
+			const pump = () => {
+				if (index >= streamChunks.length) {
+					finishPrompt(command, text);
+					return;
+				}
+				text += streamChunks[index];
+				index += 1;
+				write({ type: "message_update", message: { id: "fixture-draft", role: "assistant", content: text } });
+				setTimeout(pump, chunkDelayMs);
+			};
+			setTimeout(pump, chunkDelayMs);
+			return;
+		}
 		write({ type: "message_update", message: { id: "fixture-draft", role: "assistant", content: "streaming fixture response" } });
 		if (holdNextPromptUntilAbort) {
 			holdNextPromptUntilAbort = false;

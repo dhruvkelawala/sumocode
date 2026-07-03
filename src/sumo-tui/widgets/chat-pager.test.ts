@@ -260,4 +260,30 @@ describe("ChatPager", () => {
 		expect(controls.setStreamingMode).toHaveBeenCalledWith(true);
 		root.dispose();
 	});
+
+	it("replaceLastWithViewModel folds a role change into the message and its rendered frame", async () => {
+		const { root, chat } = await makeChat(40, 6);
+		chat.addMessage("system", "running tool...");
+		const last = chat.getLastMessage();
+		expect(last?.role).toBe("system");
+
+		// A viewModel whose blocks are tool-only folds role "system" -> "tool"
+		// (see chatRoleFromViewModel). This exercises the `last.setRole(...)`
+		// call in replaceLastWithViewModel, which must invalidate the ChatMessage
+		// render memo — otherwise the frame keeps showing the stale "SYSTEM" label.
+		chat.replaceLastWithViewModel({
+			id: "msg-1",
+			role: "system",
+			displayName: "system",
+			blocks: [{ type: "tool", tool: { name: "read", status: "success", input: { path: "a.ts" }, expanded: false } }],
+		});
+
+		expect(chat.getLastMessage()).toBe(last);
+		expect(last?.role).toBe("tool");
+
+		const rows = (last as unknown as { renderRows(width: number): string[] }).renderRows(40);
+		expect(rows[0]).toMatch(/TOOL/);
+		expect(rows[0]).not.toMatch(/SYSTEM/);
+		root.dispose();
+	});
 });

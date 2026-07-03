@@ -1,6 +1,6 @@
 import { Image, Markdown, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { DEFAULT_SUMOCODE_CONFIG } from "../../config/sumocode-config.js";
-import { activeThemeChrome, activeThemeColors } from "../../themes/index.js";
+import { activeThemeChrome, activeThemeColors, getThemeVersion } from "../../themes/index.js";
 import { fgHex, RESET } from "../cathedral/ansi.js";
 import { SumoNode } from "../layout/node.js";
 import { MEASURE_MODE_EXACTLY, type MeasureMode, type Yoga, type YogaNode } from "../layout/yoga.js";
@@ -33,6 +33,25 @@ export interface ChatMessageOptions {
 
 const MIN_BOX_WIDTH = 8;
 const DIM = "\x1b[2m";
+
+/**
+ * Memoized `renderRows` cache entry. `renderRows` is called from
+ * `getEstimatedHeight`, `measure`, AND `render` — often several times per
+ * frame per message — and its body path runs the `Markdown` parser (plus
+ * `Image` construction), which is not cheap. We cache the last computed rows
+ * per `(width, contentVersion, themeVersion)` so unchanged messages skip
+ * recompute entirely. Rows are read-only string arrays; sharing the cached
+ * array reference across calls is safe as nothing mutates it in place.
+ */
+interface RenderRowsCacheEntry {
+	width: number;
+	contentVersion: number;
+	themeVersion: number;
+	rows: string[];
+}
+
+/** Keep only the current + previous width entries: resize churns width, not content. */
+const RENDER_ROWS_CACHE_LIMIT = 2;
 
 interface TextSegmenter {
 	segment(input: string): Iterable<{ segment: string }>;
@@ -334,6 +353,16 @@ export class ChatMessage extends SumoNode {
 	private measuring = false;
 	private lastMeasure: ChatMessageMeasure = { width: 0, height: 1 };
 
+	/**
+	 * Bumped by every mutator that changes what `renderRows` produces
+	 * (`setRole`/`setText`/`appendText`/`setBlocks`/`setToolExpansion`). This is
+	 * the content half of the `renderRows` memo key — see `renderRowsCache`.
+	 * A missed bump site means a stale frame, so if you add a new mutator that
+	 * changes rendered output, bump this in it too.
+	 */
+	private contentVersion = 0;
+	private renderRowsCache: RenderRowsCacheEntry[] = [];
+
 	public constructor(
 		yogaNode: YogaNode,
 		public role: ChatMessageRole,
@@ -353,17 +382,29 @@ export class ChatMessage extends SumoNode {
 		return new ChatMessage(yoga.Node.create(), role, text, parent, timestamp, blocks, options);
 	}
 
+	/**
+	 * Chat pagers may reassign the role of an existing message in place (e.g.
+	 * `replaceLastWithViewModel` folding a streamed placeholder into its final
+	 * role). Route that through a setter rather than direct `.role =` so the
+	 * render memo invalidates — `frameTop` reads `role` for the label/color.
+	 */
+	public setRole(role: ChatMessageRole): void {
+		if (this.role === role) return;
+		this.role = role;
+		this.invalidateRenderCache();
+	}
+
 	public setText(text: string): void {
 		if (this.text === text && this.blocks === undefined) return;
 		this.text = text;
 		this.blocks = undefined;
-		this.markDirty();
+		this.invalidateRenderCache();
 	}
 
 	public setBlocks(blocks: readonly ChatBlock[], text: string): void {
 		this.blocks = blocks;
 		this.text = text;
-		this.markDirty();
+		this.invalidateRenderCache();
 	}
 
 	public setToolExpansion(expanded: boolean): boolean {
@@ -375,7 +416,7 @@ export class ChatMessage extends SumoNode {
 			if (block.type === "summary") return { ...block, expanded };
 			return block;
 		});
-		this.markDirty();
+		this.invalidateRenderCache();
 		return true;
 	}
 
@@ -383,11 +424,17 @@ export class ChatMessage extends SumoNode {
 		if (chunk.length === 0) return;
 		this.blocks = undefined;
 		this.text += chunk;
-		this.markDirty();
+		this.invalidateRenderCache();
 	}
 
 	public toSnapshot(): ChatMessageSnapshot {
 		return { role: this.role, text: this.text, timestamp: this.timestamp, blocks: this.blocks };
+	}
+
+	/** Bumps the content version (invalidating the render memo) and marks Yoga layout dirty. */
+	private invalidateRenderCache(): void {
+		this.contentVersion += 1;
+		this.markDirty();
 	}
 
 	public getEstimatedHeight(width = this.getComputedWidth()): number {
@@ -427,8 +474,30 @@ export class ChatMessage extends SumoNode {
 		}
 	}
 
+	/**
+	 * Memoized entry point: called from `getEstimatedHeight`, `measure`, AND
+	 * `render` — several times per message per frame. Recomputing from scratch
+	 * every call re-runs the `Markdown` parse (and `Image` construction) on
+	 * the hot path, so we cache the last few width->rows results keyed by
+	 * `(width, contentVersion, themeVersion)`. Cache hit returns the same rows
+	 * array reference; this is purely a compute cache and must never change
+	 * rendered output.
+	 */
 	private renderRows(width: number): string[] {
 		const renderWidth = normalizeWidth(width);
+		const themeVersion = getThemeVersion();
+		const cached = this.renderRowsCache.find(
+			(entry) => entry.width === renderWidth && entry.contentVersion === this.contentVersion && entry.themeVersion === themeVersion,
+		);
+		if (cached) return cached.rows;
+
+		const rows = this.computeRenderRows(renderWidth);
+		const entry: RenderRowsCacheEntry = { width: renderWidth, contentVersion: this.contentVersion, themeVersion, rows };
+		this.renderRowsCache = [entry, ...this.renderRowsCache.filter((existing) => existing.width !== renderWidth)].slice(0, RENDER_ROWS_CACHE_LIMIT);
+		return rows;
+	}
+
+	private computeRenderRows(renderWidth: number): string[] {
 		if (renderWidth <= 0) return [""];
 		if (renderWidth < MIN_BOX_WIDTH) return [fitCellText(this.text, renderWidth)];
 

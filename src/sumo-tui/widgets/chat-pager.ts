@@ -184,7 +184,7 @@ export class ChatPager extends SumoNode {
 			this.addViewModel(message);
 			return;
 		}
-		last.role = chatRoleFromViewModel(message);
+		last.setRole(chatRoleFromViewModel(message));
 		this.updateLast(last, () => last.setBlocks(message.blocks, chatMessageViewModelToPlainText(message)));
 	}
 

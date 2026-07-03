@@ -585,6 +585,7 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		onExitRequest: (code) => requestHostExit(code),
 		rehydrateTranscript,
 		writeClipboardSequence: (sequence) => runtime?.writeClipboardSequence(sequence) ?? false,
+		changelogRoot: root,
 	});
 	let statsTimer: NodeJS.Timeout | undefined;
 	let statsInFlight = false;

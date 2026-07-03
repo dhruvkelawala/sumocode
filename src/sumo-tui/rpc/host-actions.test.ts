@@ -231,6 +231,7 @@ function setup(options: {
 	readonly onExitRequest?: (code: number) => void;
 	readonly writeClipboardSequence?: (sequence: string) => boolean;
 	readonly sessionFile?: string;
+	readonly changelogRoot?: string;
 } = {}) {
 	const controls = new FakeControls();
 	const stateStore = new RpcHostStateStore();
@@ -275,6 +276,7 @@ function setup(options: {
 		onExitRequest: options.onExitRequest,
 		rehydrateTranscript,
 		writeClipboardSequence: options.writeClipboardSequence,
+		changelogRoot: options.changelogRoot,
 	});
 
 	return { actions, controls, modals, overlays, inlineSelectors, notifications, memory, editorText, rehydrateCalls };
@@ -693,6 +695,41 @@ describe("RpcHostActions", () => {
 		overlays.handleInput("x");
 		await hotkeys;
 		expect(overlays.getActiveKind()).toBeUndefined();
+	});
+
+	describe("/changelog", () => {
+		it("reads CHANGELOG.md from the changelog root and renders it as an overlay", async () => {
+			const dir = mkdtempSync(join(tmpdir(), "sumocode-changelog-test-"));
+			try {
+				writeFileSync(join(dir, "CHANGELOG.md"), "# Changelog\n\n## [0.9.0]\n- Added something great\n");
+				const { actions, overlays } = setup({ changelogRoot: dir });
+
+				const changelog = actions.handleSubmittedText("/changelog");
+				await flush();
+				expect(overlays.getActiveKind()).toBe("changelog");
+				const rendered = renderOverlayText(overlays);
+				expect(rendered).toContain("# Changelog");
+				expect(rendered).toContain("Added something great");
+				overlays.handleInput("x");
+				await changelog;
+				expect(overlays.getActiveKind()).toBeUndefined();
+			} finally {
+				rmSync(dir, { recursive: true, force: true });
+			}
+		});
+
+		it("warns when CHANGELOG.md is missing from the changelog root", async () => {
+			const dir = mkdtempSync(join(tmpdir(), "sumocode-changelog-missing-test-"));
+			try {
+				const { actions, notifications } = setup({ changelogRoot: dir });
+
+				await expect(actions.handleSubmittedText("/changelog")).resolves.toBe(true);
+
+				expect(notifications).toContainEqual({ message: "CHANGELOG.md not found", level: "warning" });
+			} finally {
+				rmSync(dir, { recursive: true, force: true });
+			}
+		});
 	});
 
 	it("supports direct host memory and theme commands without falling through to Pi prompt text", async () => {

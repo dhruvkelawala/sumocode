@@ -1,4 +1,5 @@
-import { dirname } from "node:path";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import type { Component } from "@earendil-works/pi-tui";
 import { Key, matchesKey } from "@earendil-works/pi-tui";
 import {
@@ -82,6 +83,14 @@ export interface RpcHostActionsOptions {
 	 */
 	readonly writeClipboardSequence?: (sequence: string) => boolean;
 	/**
+	 * SumoCode's own installation root (host.ts's `hostRoot`, i.e.
+	 * `SUMOCODE_ROOT_DIR` or `process.cwd()` at launch -- the directory
+	 * `src/extension.ts` resolves from, NOT the user's project `cwd`). `/changelog`
+	 * reads `CHANGELOG.md` from here so it works regardless of which project
+	 * directory the host was launched against.
+	 */
+	readonly changelogRoot?: string;
+	/**
 	 * Called after a session operation (new/switch/clone/fork) succeeds, so the
 	 * host can refetch `get_messages` from the child and push a fresh transcript
 	 * into the runtime. Without this the old session's messages stay on screen
@@ -116,6 +125,7 @@ export const RPC_HOST_SLASH_COMMANDS: readonly RpcHostSlashCommand[] = Object.fr
 	{ name: "sumo:approval", description: "Preview approval overlay" },
 	{ name: "sumo:palette", description: "Open the command palette" },
 	{ name: "hotkeys", description: "Show the RPC host's keyboard shortcuts" },
+	{ name: "changelog", description: "Show SumoCode's changelog" },
 ]);
 
 const RPC_HOST_SLASH_COMMAND_NAMES = new Set(RPC_HOST_SLASH_COMMANDS.map((command) => command.name));
@@ -359,6 +369,7 @@ export class RpcHostActions {
 	private readonly onExitRequest: (code: number) => void;
 	private readonly rehydrateTranscript: () => Promise<void>;
 	private readonly writeClipboardSequence: (sequence: string) => boolean;
+	private readonly changelogRoot: string;
 
 	public constructor(options: RpcHostActionsOptions) {
 		this.controls = options.controls;
@@ -374,6 +385,7 @@ export class RpcHostActions {
 		this.onExitRequest = options.onExitRequest ?? (() => undefined);
 		this.rehydrateTranscript = options.rehydrateTranscript ?? (() => Promise.resolve());
 		this.writeClipboardSequence = options.writeClipboardSequence ?? (() => false);
+		this.changelogRoot = options.changelogRoot ?? process.cwd();
 	}
 
 	public handleInput(data: string): boolean {
@@ -439,6 +451,9 @@ export class RpcHostActions {
 				return true;
 			case "/hotkeys":
 				await this.openHotkeys();
+				return true;
+			case "/changelog":
+				await this.openChangelog();
 				return true;
 			case "/quit":
 				this.onExitRequest(0);
@@ -649,6 +664,29 @@ export class RpcHostActions {
 			"hotkeys",
 			(done) => new LinesOverlayComponent(
 				(width) => renderHotkeysOverlay(themeReader(), Math.max(40, Math.min(width, 120))),
+				done,
+			),
+		);
+	}
+
+	/**
+	 * `/changelog` -- reads and renders SumoCode's own `CHANGELOG.md` (repo
+	 * root, resolved from `changelogRoot`, NOT the user's project `cwd`) as an
+	 * overlay. Plain local file read; no RPC round-trip needed.
+	 */
+	public async openChangelog(): Promise<void> {
+		let content: string;
+		try {
+			content = readFileSync(join(this.changelogRoot, "CHANGELOG.md"), "utf8");
+		} catch {
+			notify(this.notifications, "CHANGELOG.md not found", "warning");
+			return;
+		}
+		const lines = content.split("\n");
+		await this.overlays.show<void>(
+			"changelog",
+			(done) => new LinesOverlayComponent(
+				(width) => lines.map((line) => (line.length > width ? line.slice(0, width) : line)),
 				done,
 			),
 		);

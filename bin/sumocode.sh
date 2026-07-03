@@ -414,33 +414,112 @@ args_request_noninteractive_pi() {
 # unchanged (and are still silently ignored there, same as before this fix,
 # which is a pre-existing multi-positional limitation out of scope here).
 #
-# KNOWN LIMITATION (pre-existing, not introduced by this function): this
-# wrapper's own arg loop above forwards every unrecognized `-*` flag to
-# SUMOCODE_ARGS opaquely -- it does not know which of those flags consume a
-# following value (e.g. `--model foo/bar`), unlike Pi's own cli/args.js, which
-# has an explicit per-flag table for this. So `sumocode --model foo/bar "review
-# the diff"` on the RPC path extracts `foo/bar` (the flag's value) as the
-# "first plain positional" instead of the real prompt. This exact ordering
-# already behaves surprisingly today on the direct-Pi path too, just
-# differently (Pi's own parser resolves it correctly there because Pi *does*
-# know --model takes a value) -- it is a structural fact about this wrapper's
-# opaque-forwarding model for unknown flags, not something this seam can fix
-# without duplicating Pi's entire flag table here. Placing the prompt as the
-# ONLY positional (`sumocode "prompt"`, `sumocode task "prompt"`) is unaffected
-# and is the documented, common case this fix targets.
+# VALUE-CONSUMING FLAG TABLE -- mirrors
+# node_modules/@earendil-works/pi-coding-agent/dist/cli/args.js parseArgs()
+# (pi-coding-agent 0.79.1) EXACTLY, so that this wrapper skips a flag's value
+# together with the flag itself instead of mistaking the value for the first
+# plain positional. This is the same reason the wrapper's own arg loop above
+# never needs to worry about ITS OWN value-taking flags (--diag-file,
+# --prompt-file): those are consumed at the wrapper's parse stage before
+# anything reaches SUMOCODE_ARGS. Only Pi's flags need a table here, since
+# Pi's own unrecognized/unknown flags are forwarded opaquely by this wrapper.
+#
+# PI-BUMP NOTE: if @earendil-works/pi-coding-agent is upgraded, re-diff
+# cli/args.js's parseArgs() against this table (`git diff` the file, or just
+# re-read it) -- any newly added value-taking flag must be added below, or it
+# will silently reintroduce this same bug for that flag.
+#
+# Unconditional space-form value flags (always consume `args[++i]` when a
+# next token exists, per args.js -- note --mode consumes its next token even
+# if the value is invalid, since the `i+1 < args.length` check runs before
+# validity is checked):
+#   --mode, --provider, --model, --api-key, --system-prompt,
+#   --append-system-prompt, --name/-n, --session, --session-id, --fork,
+#   --session-dir, --models, --tools/-t, --exclude-tools/-xt, --thinking,
+#   --export, --extension/-e, --skill, --prompt-template, --theme
+#
+# Conditional space-form value flags (args.js only consumes the next token if
+# it doesn't look like a flag or @file -- mirrored with the same lookahead
+# here so we don't eat a following real positional):
+#   --print/-p, --list-models
+#
+# `--flag=value` forms (any flag, per args.js's generic `--` handler) are
+# already a single token and need no table entry -- skipped as-is below.
 extract_first_positional() {
 	EXTRACTED_INITIAL_PROMPT=""
 	local -a kept=()
 	local found=0
-	local arg
-	for arg in "${SUMOCODE_ARGS[@]:-}"; do
+	local i=0
+	local n="${#SUMOCODE_ARGS[@]}"
+	local arg next
+
+	# Pi flags that always consume the following token as a value (space
+	# form). See the flag table comment above for the args.js citation.
+	local -a value_flags=(
+		--mode --provider --model --api-key --system-prompt
+		--append-system-prompt --name -n --session --session-id --fork
+		--session-dir --models --tools -t --exclude-tools -xt --thinking
+		--export --extension -e --skill --prompt-template --theme
+	)
+	# Pi flags that conditionally consume the following token only if it does
+	# not look like another flag or an @file argument.
+	local -a conditional_value_flags=(--print -p --list-models)
+
+	while [[ "${i}" -lt "${n}" ]]; do
+		arg="${SUMOCODE_ARGS[i]}"
+
+		if [[ "${arg}" == --*=* ]]; then
+			# `--flag=value` is already one token; nothing to skip alongside it.
+			kept+=("${arg}")
+			i=$((i + 1))
+			continue
+		fi
+
+		local is_value_flag=0
+		local f
+		for f in "${value_flags[@]}"; do
+			if [[ "${arg}" == "${f}" ]]; then is_value_flag=1; break; fi
+		done
+		if [[ "${is_value_flag}" -eq 1 ]]; then
+			kept+=("${arg}")
+			if [[ $((i + 1)) -lt "${n}" ]]; then
+				kept+=("${SUMOCODE_ARGS[i+1]}")
+				i=$((i + 2))
+			else
+				i=$((i + 1))
+			fi
+			continue
+		fi
+
+		local is_conditional_flag=0
+		for f in "${conditional_value_flags[@]}"; do
+			if [[ "${arg}" == "${f}" ]]; then is_conditional_flag=1; break; fi
+		done
+		if [[ "${is_conditional_flag}" -eq 1 ]]; then
+			kept+=("${arg}")
+			if [[ $((i + 1)) -lt "${n}" ]]; then
+				next="${SUMOCODE_ARGS[i+1]}"
+				if [[ -n "${next}" && "${next}" != -* && "${next}" != @* ]]; then
+					kept+=("${next}")
+					i=$((i + 2))
+					continue
+				fi
+			fi
+			i=$((i + 1))
+			continue
+		fi
+
 		if [[ "${found}" -eq 0 && -n "${arg}" && "${arg}" != -* ]]; then
 			EXTRACTED_INITIAL_PROMPT="${arg}"
 			found=1
+			i=$((i + 1))
 			continue
 		fi
+
 		kept+=("${arg}")
+		i=$((i + 1))
 	done
+
 	SUMOCODE_ARGS=("${kept[@]:-}")
 	if [[ "${#SUMOCODE_ARGS[@]}" -eq 1 && -z "${SUMOCODE_ARGS[0]}" ]]; then
 		SUMOCODE_ARGS=()

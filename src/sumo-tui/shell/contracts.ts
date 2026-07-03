@@ -101,4 +101,5 @@ export interface RetainedShellRendererOptions {
 	readonly overlayHost?: ShellOverlayHost;
 	readonly selection?: ShellSelectionPass;
 	readonly sidebar?: ShellSidebarPublicationProvider;
+	readonly paintHardwareCursorAsSoftware?: boolean;
 }

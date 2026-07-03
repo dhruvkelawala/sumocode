@@ -204,6 +204,30 @@ describe("RPC editor controller", () => {
 		expect(controller.getText()).toBe("");
 	});
 
+	it("accepts slash autocomplete before submitting standalone CSI-u Enter", async () => {
+		const submitted: string[] = [];
+		const controller = await createRpcHostEditorController({
+			controls: controlsFor(),
+			tui: fakeTui(),
+			theme: fakeEditorTheme(),
+			keybindings: fakeKeybindings(),
+			cwd: process.cwd(),
+			onSubmit: (text) => {
+				submitted.push(text);
+			},
+		});
+
+		controller.handleInput("/");
+		controller.handleInput("m");
+		controller.handleInput("o");
+		controller.handleInput("d");
+		await waitForRenderedText(controller, "model");
+		controller.handleInput("\x1b[13u");
+
+		expect(submitted).toEqual(["/model"]);
+		expect(controller.getText()).toBe("");
+	});
+
 	it("coalesces text followed by CSI-u Enter into insertion plus submit", () => {
 		const submitted: string[] = [];
 		const controller = new RpcHostEditorController({

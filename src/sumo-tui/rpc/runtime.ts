@@ -165,7 +165,9 @@ export class RpcHostRuntime {
 		if (snapshot.transcript) {
 			this.transcript = snapshot.transcript;
 		}
-		this.shell?.update({ state: this.state, transcript: this.transcript });
+		this.shell?.update(snapshot.transcript
+			? { state: this.state, transcript: this.transcript }
+			: { state: this.state });
 		this.render();
 	}
 

@@ -119,6 +119,7 @@ export class RpcShellAdapter {
 			viewport: options.viewport,
 			overlayHost: new RpcOverlayHost(this),
 			sidebar: () => this.sidebarPublication(),
+			paintHardwareCursorAsSoftware: true,
 		});
 	}
 

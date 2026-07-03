@@ -11,6 +11,7 @@ import { submitRpcPrompt } from "./host.js";
 import { renderRpcHostFrameForTest, RpcHostRuntime } from "./runtime.js";
 import type { RpcHostChromeState } from "./state.js";
 import { rpcVisualFixtureFromEnv } from "./visual-fixtures.js";
+import { ChatPager } from "../widgets/chat-pager.js";
 
 function state(overrides: Partial<RpcHostChromeState> = {}): RpcHostChromeState {
 	return {
@@ -111,6 +112,32 @@ describe("RPC host retained runtime frame", () => {
 		const cursorBg = activeThemeColors().accent.toLowerCase();
 		const { cols } = frame.getDimensions();
 		const hasSoftwareCursor = Array.from({ length: cols }, (_value, col) => frame.getCell(placeholderRow!, col))
+			.some((cell) => cell.char === " " && cell.bg?.toLowerCase() === cursorBg);
+		expect(hasSoftwareCursor).toBe(true);
+	});
+
+	it("paints a software cursor for live active RPC editor rows", async () => {
+		const editor = new RpcHostEditorController();
+		editor.setText("editing prompt");
+		const frame = await renderRpcHostFrameForTest({
+			state: state({ messageCount: 1, hasMessages: true }),
+			transcript: {
+				messages: [{
+					id: "message-1",
+					role: "user",
+					displayName: "YOU",
+					blocks: [{ type: "markdown", text: "active chat body" }],
+				}],
+			},
+		}, 90, 24, { editor });
+
+		const editorRow = Array.from({ length: 24 }, (_value, row) => row)
+			.find((row) => frame.toPlainRow(row).includes("│ > editing prompt"));
+		expect(editorRow).toBeDefined();
+
+		const cursorBg = activeThemeColors().accent.toLowerCase();
+		const { cols } = frame.getDimensions();
+		const hasSoftwareCursor = Array.from({ length: cols }, (_value, col) => frame.getCell(editorRow!, col))
 			.some((cell) => cell.char === " " && cell.bg?.toLowerCase() === cursorBg);
 		expect(hasSoftwareCursor).toBe(true);
 	});
@@ -250,6 +277,40 @@ describe("RPC host retained runtime frame", () => {
 		expect(terminalOutput).toContain("SUMO");
 		expect(terminalOutput).toContain("updated rpc transcript body");
 		expect(terminalOutput).not.toContain("1 message transcript");
+	});
+
+	it("updates runtime chrome without replacing retained chat state on state-only updates", async () => {
+		const replaceViewModels = vi.spyOn(ChatPager.prototype, "replaceViewModels");
+		const output = new FakeOutput();
+		const terminal = new TerminalSessionOwner({ output });
+		const runtime = new RpcHostRuntime({
+			output,
+			input: { isTTY: false, on: () => undefined },
+			terminal,
+			initialState: state({ messageCount: 1, hasMessages: true }),
+			initialTranscript: {
+				messages: [{
+					id: "message-3",
+					role: "sumo",
+					displayName: "SUMO",
+					blocks: [{ type: "markdown", text: "retained scroll transcript body" }],
+				}],
+			},
+		});
+
+		try {
+			await runtime.start();
+			replaceViewModels.mockClear();
+			output.chunks.length = 0;
+
+			runtime.update({ state: state({ messageCount: 1, hasMessages: true, isStreaming: true }) });
+
+			expect(replaceViewModels).not.toHaveBeenCalled();
+			expect(output.chunks.join("")).toContain("MEDITATING");
+		} finally {
+			runtime.stop();
+			replaceViewModels.mockRestore();
+		}
 	});
 
 	it("emits startup readiness diagnostics after the first retained render", async () => {

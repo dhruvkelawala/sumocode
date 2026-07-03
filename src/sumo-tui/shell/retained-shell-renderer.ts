@@ -85,6 +85,7 @@ export class RetainedShellRenderer {
 	private readonly resolveSidebarPublication: ShellSidebarPublicationProvider;
 	private readonly resolveTopChromePublication: ShellTopChromeProvider;
 	private readonly selection: CompositeSelectionPass | undefined;
+	private readonly paintHardwareCursorAsSoftware: boolean;
 	private lastFrame: CellBuffer | undefined;
 	private previousFrame: CellBuffer | undefined;
 	private readonly headerLeaf: PiComponentLeaf;
@@ -139,6 +140,7 @@ export class RetainedShellRenderer {
 		this.resolveSidebarPublication = options.sidebar ?? (() => undefined);
 		this.resolveTopChromePublication = options.topChrome ?? (() => undefined);
 		this.selection = options.selection;
+		this.paintHardwareCursorAsSoftware = options.paintHardwareCursorAsSoftware ?? false;
 		this.resolveActivity = options.isActive ?? (() => this.chat.hasMessages());
 
 		this.root = new SumoNode(this.yoga.Node.create());
@@ -440,6 +442,7 @@ export class RetainedShellRenderer {
 		// Hide the hardware cursor when an overlay (modal/notification) is visible
 		// so the editor's cursor doesn't bleed through the modal's text.
 		const cursor: HardwareCursor | null = overlayCount > 0 ? null : result.hardwareCursor;
+		if (cursor && this.paintHardwareCursorAsSoftware) this.paintSoftwareCursor(frame, cursor);
 		// Owned-shell has independently pinned regions (chat, sidebar, input,
 		// footer). Terminal scroll-region optimization moves the whole screen and
 		// corrupts those siblings during ChatPager scroll. Use row diffs only.
@@ -474,6 +477,19 @@ export class RetainedShellRenderer {
 				bottomSafe: this.nodeRect(this.bottomSafeSpacer),
 			},
 			hardwareCursor: cursor ? { row: cursor.row, col: cursor.col } : null,
+		});
+	}
+
+	private paintSoftwareCursor(frame: CellBuffer, cursor: HardwareCursor): void {
+		const { rows, cols } = frame.getDimensions();
+		if (cursor.row < 0 || cursor.row >= rows || cursor.col < 0 || cursor.col >= cols) return;
+		const cell = frame.getCell(cursor.row, cursor.col);
+		frame.setCell(cursor.row, cursor.col, {
+			...cell,
+			char: cell.char.length > 0 ? cell.char : " ",
+			fg: activeThemeColors().background,
+			bg: activeThemeColors().accent,
+			attrs: { ...cell.attrs, inverse: false },
 		});
 	}
 

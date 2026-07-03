@@ -182,8 +182,7 @@ export class RpcHostEditorController implements EditorTextController, KeyTarget 
 
 	public handleInput(data: string): void {
 		for (const chunk of splitCsiUEnter(data)) {
-			if (chunk === "\r") this.submitCsiUEnter();
-			else this.editor.handleInput(chunk);
+			this.editor.handleInput(chunk);
 		}
 	}
 
@@ -203,13 +202,6 @@ export class RpcHostEditorController implements EditorTextController, KeyTarget 
 
 	public getText(): string {
 		return this.editor.getText();
-	}
-
-	private submitCsiUEnter(): void {
-		const text = this.editor.getText();
-		this.editor.onSubmit?.(text);
-		this.editor.setText("");
-		this.tui.requestRender();
 	}
 }
 
@@ -242,7 +234,7 @@ function splitCsiUEnter(data: string): string[] {
 			break;
 		}
 		if (index > 0) chunks.push(remaining.slice(0, index));
-		chunks.push("\r");
+		chunks.push(CSI_U_ENTER);
 		remaining = remaining.slice(index + CSI_U_ENTER.length);
 	}
 	return chunks;

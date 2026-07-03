@@ -274,7 +274,10 @@ describe("RpcExtensionUiResponder", () => {
 
 		expect(notify).toHaveBeenCalledWith("saved", "warning");
 		expect(setStatus).toHaveBeenCalledWith("fast-mode", "fast");
-		expect(statusPublication.render(80)).toEqual(["fast-mode: fast"]);
+		// ExtensionStatusPublication tracks statuses (see getStatuses()/getSnapshot() below)
+		// but must not render them as a visible strip -- main never paints setStatus() text
+		// anywhere (see region-registry.ts's ExtensionStatusPublication doc comment).
+		expect(statusPublication.render(80)).toEqual([]);
 		expect(mountWidget).toHaveBeenCalledWith("sumocode-widget", ["one"], { placement: "belowEditor" });
 		expect(setTitle).toHaveBeenCalledWith("SumoCode");
 		expect(responder.getSnapshot()).toMatchObject({

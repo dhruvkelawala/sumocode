@@ -136,7 +136,13 @@ describe("RegionRegistry", () => {
 		registry.dispose();
 	});
 
-	it("publishes extension statuses as a renderable status component", async () => {
+	it("tracks extension statuses without painting them as a visible status strip", async () => {
+		// Main (classic InteractiveMode) never renders `ctx.ui.setStatus()` text anywhere:
+		// SumoCode's custom footer (`installFooter` in src/footer.ts) replaces Pi's default
+		// footer and never queries extension statuses, and `SumoExtensionUIAdapter.onStatus`
+		// is never wired to a sink on main. `ExtensionStatusPublication` exists only so RPC
+		// mode's `getStatuses()` still gives a readback -- it must not render a raw "key:
+		// text" strip above the editor, since that has no equivalent on main.
 		const registry = await makeRegistry();
 		const statuses = new ExtensionStatusPublication();
 		registry.mountStatus(statuses.component);
@@ -144,7 +150,7 @@ describe("RegionRegistry", () => {
 		statuses.setStatus("task-mode", "done");
 		statuses.setStatus("empty", undefined);
 
-		expect(registry.createSlotPublication("status").component.render(40)).toEqual(["task-mode: done"]);
+		expect(registry.createSlotPublication("status").component.render(40)).toEqual([]);
 		expect(statuses.getStatuses().get("task-mode")).toBe("done");
 		registry.dispose();
 	});

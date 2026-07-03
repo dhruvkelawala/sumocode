@@ -108,6 +108,30 @@ class RegionSlotComponent implements Component {
 	}
 }
 
+/**
+ * Extension-status sink for RPC mode's `ctx.ui.setStatus()`.
+ *
+ * On main (classic `InteractiveMode`), extension statuses are surfaced only
+ * through Pi's own default footer (`FooterComponent`, which reads
+ * `footerData.getExtensionStatuses()`). SumoCode replaces that default footer
+ * with its own fixed one-line footer via `installFooter()`/`ctx.ui.setFooter`
+ * (see `src/footer.ts`) -- a footer that, by design, never queries extension
+ * statuses ("Keeping the footer to one semantic row lets plain Pi and
+ * SumoTUI share the same footer renderer"). Main never wires `setStatus`'s
+ * callback either (`SumoExtensionUIAdapter`'s `onStatus` stays `undefined`),
+ * so on main `setStatus()` is a complete no-op: nothing stores it, nothing
+ * renders it, anywhere.
+ *
+ * This class exists so RPC mode's `getStatuses()` still gives extensions
+ * (and tests) a place to read back the latest value they set, matching the
+ * quiet key-value-store shape Pi's own `FooterDataProvider` uses internally.
+ * But `render()` must NOT paint anything: RPC mode has no footer slot wired
+ * to read `getStatuses()` the way Pi's `FooterComponent` does, so mounting
+ * this as a visible component (as `host.ts` does, into the `status` slot
+ * above the editor) would show a raw, unstyled "key: text" strip that has
+ * no equivalent on main. Keep it a no-op renderable until/unless SumoCode
+ * grows a footer slot that actually consumes `getStatuses()`.
+ */
 export class ExtensionStatusPublication implements RegionStatusPublication {
 	private readonly statuses = new Map<string, string>();
 	public readonly component: DisposableComponent = this;
@@ -124,7 +148,7 @@ export class ExtensionStatusPublication implements RegionStatusPublication {
 	public invalidate(): void {}
 
 	public render(_width: number): string[] {
-		return [...this.statuses.entries()].map(([key, text]) => `${key}: ${text}`);
+		return [];
 	}
 }
 

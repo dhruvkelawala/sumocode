@@ -1,4 +1,5 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { RpcSessionState } from "@earendil-works/pi-coding-agent";
@@ -10,7 +11,7 @@ import type { EditorTextController } from "../pi-compat/extension-ui-adapter.js"
 import { ModalManager } from "../widgets/modal.js";
 import type { NotificationLevel } from "../widgets/notification.js";
 import type { RpcHostControls, RpcModelOption, RpcSlashCommand } from "./controls.js";
-import { RpcHostActions, RPC_HOST_COMMAND_PALETTE_INPUT } from "./host-actions.js";
+import { isRpcHostSlashCommandName, RpcHostActions, RPC_HOST_COMMAND_PALETTE_INPUT, RPC_HOST_SLASH_COMMANDS } from "./host-actions.js";
 import { RpcHostOverlayManager } from "./host-overlays.js";
 import { InlineSelectorHost } from "./inline-selector.js";
 import { RpcHostStateStore } from "./state.js";
@@ -811,5 +812,34 @@ describe("RpcHostActions", () => {
 
 		controls.commands = [rpcCommand("deploy")];
 		await expect(actions.handleSubmittedText("/deploy prod")).resolves.toBe(false);
+	});
+
+	it("does not advertise Phase-3 upstream-Pi-only commands the host still doesn't implement", async () => {
+		const { actions, controls, notifications } = setup();
+
+		// /login, /import, /reload, and the .jsonl variant of /export are all
+		// Phase-3 items (plan 035): they need Pi primitives this RPC surface
+		// doesn't expose yet, so they must fall through to "unknown command"
+		// rather than being silently advertised in autocomplete with no
+		// handler behind them.
+		for (const name of ["login", "import", "reload"]) {
+			expect(isRpcHostSlashCommandName(name)).toBe(false);
+			await expect(actions.handleSubmittedText(`/${name}`)).resolves.toBe(true);
+			expect(notifications).toContainEqual({ message: `unknown command: /${name}`, level: "warning" });
+		}
+		expect(controls.calls.filter((call) => call === "getCommands")).toHaveLength(3);
+	});
+
+	it("keeps RPC_HOST_SLASH_COMMANDS and handleSubmittedText's switch in exact 1:1 correspondence", async () => {
+		// Every advertised command must have a real handler (no dead
+		// advertising -- task 11), and nothing handled here should be missing
+		// from the advertised list. This is a static shape check against the
+		// module's own source rather than invoking every command (several open
+		// blocking pickers/overlays that would hang without simulated input).
+		const hostActionsSource = await readFile(new URL("./host-actions.ts", import.meta.url), "utf8");
+		const switchCaseNames = [...hostActionsSource.matchAll(/case "\/([a-z0-9:_-]+)":/g)].map((match) => match[1]);
+		const advertisedNames = RPC_HOST_SLASH_COMMANDS.map((command) => command.name);
+
+		expect(new Set(switchCaseNames)).toEqual(new Set(advertisedNames));
 	});
 });

@@ -388,6 +388,108 @@ describe("RpcShellAdapter above-editor working indicator (D3 parity)", () => {
 			adapter.dispose();
 		}
 	});
+
+	// Regression coverage for the reported bug: the indicator used to advance
+	// its tick inside renderWorkingIndicator itself, so its speed was tied to
+	// render frequency -- racing during a burst of streaming deltas (many
+	// renders per real second) and freezing solid while "thinking" (no
+	// deltas, so nothing ever called render). It must now be a real
+	// wall-clock timer, decoupled from render calls entirely.
+	describe("animation is timer-driven, not render-driven", () => {
+		beforeEach(() => {
+			vi.useFakeTimers();
+		});
+
+		afterEach(() => {
+			vi.useRealTimers();
+		});
+
+		it("advances the frame on a wall-clock cadence even with zero render calls in between (the 'thinking' freeze case)", async () => {
+			const adapter = await RpcShellAdapter.create({
+				terminal: { writeFramePatches: () => undefined },
+				viewport: { columns: 160, rows: 45 },
+				initialState: state({ messageCount: 1, hasMessages: true, isStreaming: true }),
+				initialTranscript: { messages: [] },
+			});
+			try {
+				const firstFrame = adapter.renderWorkingIndicator(160).join("");
+				// No render() calls at all in between -- purely waiting on the clock,
+				// mirroring a silent "thinking" gap with no streaming deltas.
+				vi.advanceTimersByTime(150 * 5);
+				const laterFrame = adapter.renderWorkingIndicator(160).join("");
+				expect(laterFrame).not.toBe(firstFrame);
+			} finally {
+				adapter.dispose();
+			}
+		});
+
+		it("does not advance faster than the timer cadence no matter how many renders happen per tick (the 'streaming' race case)", async () => {
+			const adapter = await RpcShellAdapter.create({
+				terminal: { writeFramePatches: () => undefined },
+				viewport: { columns: 160, rows: 45 },
+				initialState: state({ messageCount: 1, hasMessages: true, isStreaming: true }),
+				initialTranscript: { messages: [] },
+			});
+			try {
+				// A burst of renders within the same tick window (simulating a flood
+				// of streaming deltas) must all read the same frame.
+				const framesWithinOneTick = Array.from({ length: 50 }, () => adapter.renderWorkingIndicator(160).join(""));
+				expect(new Set(framesWithinOneTick).size).toBe(1);
+			} finally {
+				adapter.dispose();
+			}
+		});
+
+		it("stops ticking as soon as the state goes idle, even if the clock keeps running", async () => {
+			const adapter = await RpcShellAdapter.create({
+				terminal: { writeFramePatches: () => undefined },
+				viewport: { columns: 160, rows: 45 },
+				initialState: state({ messageCount: 1, hasMessages: true, isStreaming: true }),
+				initialTranscript: { messages: [] },
+			});
+			try {
+				adapter.update({ state: state({ messageCount: 1, hasMessages: true, isStreaming: false }), transcript: { messages: [] } });
+				vi.advanceTimersByTime(150 * 10);
+				expect(adapter.renderWorkingIndicator(160)).toEqual([""]);
+			} finally {
+				adapter.dispose();
+			}
+		});
+
+		it("requests a repaint on every tick so the animation actually reaches the screen unprompted", async () => {
+			const requestRender = vi.fn();
+			const adapter = await RpcShellAdapter.create({
+				terminal: { writeFramePatches: () => undefined },
+				viewport: { columns: 160, rows: 45 },
+				initialState: state({ messageCount: 1, hasMessages: true, isStreaming: true }),
+				initialTranscript: { messages: [] },
+				requestRender,
+			});
+			try {
+				vi.advanceTimersByTime(150 * 3);
+				expect(requestRender.mock.calls.length).toBeGreaterThanOrEqual(3);
+			} finally {
+				adapter.dispose();
+			}
+		});
+
+		it("clears the timer on dispose so it doesn't keep firing (and requesting renders) after teardown", async () => {
+			const requestRender = vi.fn();
+			const adapter = await RpcShellAdapter.create({
+				terminal: { writeFramePatches: () => undefined },
+				viewport: { columns: 160, rows: 45 },
+				initialState: state({ messageCount: 1, hasMessages: true, isStreaming: true }),
+				initialTranscript: { messages: [] },
+				requestRender,
+			});
+			adapter.dispose();
+			requestRender.mockClear();
+
+			vi.advanceTimersByTime(150 * 10);
+
+			expect(requestRender).not.toHaveBeenCalled();
+		});
+	});
 });
 
 describe("RpcShellAdapter visual-harness footer (D4 live-state fix)", () => {

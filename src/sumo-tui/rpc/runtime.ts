@@ -238,6 +238,7 @@ export class RpcHostRuntime {
 			overlay: this.overlay,
 			notifications: this.notifications,
 			extensionRegions: this.extensionRegions,
+			requestRender: () => this.scheduleRender(),
 		});
 		if (this.stopped) {
 			shell.dispose();

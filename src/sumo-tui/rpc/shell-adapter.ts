@@ -20,7 +20,7 @@ import { getCachedMcpRoster } from "../../mcp-config-reader.js";
 import { SIDEBAR_MIN_TERMINAL_WIDTH, sidebarOverlayTargetRows } from "../../sidebar-placement.js";
 import { PLACEHOLDER_MCP, createSidebarPublication, type SidebarSnapshot } from "../../sidebar.js";
 import { createTopChromePublication, type TopChromeSnapshot } from "../../top-chrome.js";
-import { activeThemeColors, getActiveTheme, type SumoCodeState } from "../../themes/index.js";
+import { activeThemeColors, getActiveTheme, onThemeChanged, type SumoCodeState } from "../../themes/index.js";
 import { renderIndicator, shouldInstallWorkingIndicator } from "../../working-indicator.js";
 import { createSplashTree, defaultSplashSnapshot, type SplashTree } from "../cathedral/splash-tree.js";
 import { loadYoga, type Yoga } from "../layout/yoga.js";
@@ -51,6 +51,13 @@ export interface RpcShellAdapterOptions {
 		readonly belowEditor?: Component;
 		readonly sidebar?: Component;
 	};
+	/**
+	 * Triggers a repaint outside of `update()`'s own call chain -- needed so
+	 * the working-indicator timer (see `workingIndicatorTimer`) can animate on
+	 * a real wall-clock cadence instead of only advancing when some other
+	 * event happens to call `render()`.
+	 */
+	readonly requestRender?: () => void;
 }
 
 export interface RpcShellAdapterSnapshot {
@@ -109,9 +116,19 @@ export class RpcShellAdapter {
 	 * in retained-shell-renderer.ts), so a new `RpcAboveEditorComponent` instance is
 	 * constructed each frame -- any per-frame animation state has to live here, on
 	 * the adapter that persists across renders, not on the widget itself.
+	 *
+	 * Driven by `workingIndicatorTimer` (a real `setInterval`, see
+	 * `syncWorkingIndicatorTimer`), NOT by `renderWorkingIndicator` being
+	 * called -- render frequency tracks agent activity (bursts of deltas
+	 * while streaming, near-silence while waiting on a tool/first token), so
+	 * ticking on render made the animation race during streaming and freeze
+	 * during "thinking". `renderWorkingIndicator` now only reads this value.
 	 */
 	private workingIndicatorTick = 0;
 	private wasWorkingIndicatorBusy = false;
+	private workingIndicatorTimer: ReturnType<typeof setInterval> | undefined;
+	private readonly requestRender: (() => void) | undefined;
+	private readonly workingIndicatorThemeUnsubscribe: () => void;
 
 	private constructor(yoga: Yoga, options: RpcShellAdapterOptions) {
 		this.state = options.initialState;
@@ -124,6 +141,14 @@ export class RpcShellAdapter {
 		this.extensionBelowEditor = options.extensionRegions?.belowEditor;
 		this.extensionSidebar = options.extensionRegions?.sidebar;
 		this.viewport = options.viewport;
+		this.requestRender = options.requestRender;
+		// Mirrors WorkingIndicatorComponent.restartTimer in working-indicator.ts:
+		// a mid-turn theme swap (Ctrl+Shift+T) should pick up the new
+		// frames/cadence immediately rather than finishing out the old
+		// theme's interval.
+		this.workingIndicatorThemeUnsubscribe = onThemeChanged(() => {
+			if (this.wasWorkingIndicatorBusy) this.startWorkingIndicatorTimer();
+		});
 		this.chat = ChatPager.create(yoga);
 		this.chat.replaceViewModels(this.transcript.messages);
 		this.splash = createSplashTree(yoga, undefined, () => defaultSplashSnapshot(this.isActive()));
@@ -158,6 +183,11 @@ export class RpcShellAdapter {
 			selection: this.selection,
 			paintHardwareCursorAsSoftware: true,
 		});
+		// Covers construction with an already-busy initialState (e.g.
+		// reattaching mid-turn) -- without this, the timer would only start on
+		// the NEXT idle->busy transition, leaving the current turn's entire
+		// remaining duration frozen on frame 0.
+		this.syncWorkingIndicatorTimer();
 	}
 
 	public static async create(options: RpcShellAdapterOptions): Promise<RpcShellAdapter> {
@@ -165,7 +195,10 @@ export class RpcShellAdapter {
 	}
 
 	public update(snapshot: Partial<RpcShellAdapterSnapshot>): void {
-		if (snapshot.state) this.state = snapshot.state;
+		if (snapshot.state) {
+			this.state = snapshot.state;
+			this.syncWorkingIndicatorTimer();
+		}
 		if (snapshot.transcript) {
 			this.transcript = snapshot.transcript;
 			// A `transcriptRevision` means this transcript came from a
@@ -262,6 +295,8 @@ export class RpcShellAdapter {
 	}
 
 	public dispose(): void {
+		this.clearWorkingIndicatorTimer();
+		this.workingIndicatorThemeUnsubscribe();
 		this.renderer.dispose();
 		this.chat.dispose();
 		this.splash.root.dispose();
@@ -353,23 +388,54 @@ export class RpcShellAdapter {
 		// `shouldInstallWorkingIndicator()` before ever mounting the aboveEditor
 		// widget, so narrow captures never showed it. Mirror that gate here too,
 		// or portrait would show a landscape-only affordance main never did.
-		const busy = sumoState(this.state) !== "idle" && shouldInstallWorkingIndicator(width);
-		if (!busy) {
-			this.wasWorkingIndicatorBusy = false;
-			this.workingIndicatorTick = 0;
-			return [""];
-		}
-		if (!this.wasWorkingIndicatorBusy) {
-			this.wasWorkingIndicatorBusy = true;
-			this.workingIndicatorTick = 0;
-		} else {
-			this.workingIndicatorTick += 1;
-		}
+		//
+		// This is a pure read: the tick itself is advanced by
+		// `workingIndicatorTimer` (see `syncWorkingIndicatorTimer`), on a real
+		// wall-clock cadence, not by how often this method happens to get
+		// called -- render frequency tracks agent activity, which is bursty
+		// (many renders while streaming, none while waiting on a first token),
+		// and ticking here made the animation race during streaming and
+		// visibly freeze during "thinking".
+		if (sumoState(this.state) === "idle" || !shouldInstallWorkingIndicator(width)) return [""];
 		const theme = getActiveTheme();
 		const frame = renderIndicator(this.workingIndicatorTick, theme.workingIndicator.frames, theme.tokens.colors.accent);
 		const label = colorHex("Working…", activeThemeColors().foregroundDim);
 		const line = ` ${frame} ${label}`;
 		return width > 0 ? [truncateToWidth(line, width)] : [line];
+	}
+
+	/**
+	 * Starts/stops the wall-clock timer driving `workingIndicatorTick` when
+	 * `sumoState` crosses the idle/busy boundary; a no-op otherwise (e.g. a
+	 * `message_update` delta arriving mid-turn doesn't restart the timer or
+	 * reset the tick). Width is deliberately NOT part of this decision --
+	 * "is the agent busy" and "is the indicator currently visible at this
+	 * render width" are independent; a resize mid-turn shouldn't reset the
+	 * animation, only whether `renderWorkingIndicator` currently shows it.
+	 */
+	private syncWorkingIndicatorTimer(): void {
+		const busy = sumoState(this.state) !== "idle";
+		if (busy === this.wasWorkingIndicatorBusy) return;
+		this.wasWorkingIndicatorBusy = busy;
+		this.workingIndicatorTick = 0;
+		if (busy) this.startWorkingIndicatorTimer();
+		else this.clearWorkingIndicatorTimer();
+	}
+
+	private startWorkingIndicatorTimer(): void {
+		this.clearWorkingIndicatorTimer();
+		const intervalMs = getActiveTheme().workingIndicator.intervalMs;
+		this.workingIndicatorTimer = setInterval(() => {
+			this.workingIndicatorTick += 1;
+			this.requestRender?.();
+		}, intervalMs);
+	}
+
+	private clearWorkingIndicatorTimer(): void {
+		if (this.workingIndicatorTimer !== undefined) {
+			clearInterval(this.workingIndicatorTimer);
+			this.workingIndicatorTimer = undefined;
+		}
 	}
 
 	public renderExtensionBelowEditor(width: number): string[] {

@@ -515,4 +515,103 @@ describe("RPC editor controller app-level action wiring", () => {
 
 		expect(controller.getText()).toBe("abXc");
 	});
+
+	// Root cause of "keybindings are broken": these 5 app.* actions were
+	// declared in APP_KEYBINDING_DEFINITIONS (so KeybindingsManager.matches()
+	// recognizes their chords) but runRpcHost never called editor.onAction(...)
+	// to register a handler -- CustomEditor.handleInput's fallback loop
+	// (custom-editor.js) found no entry in actionHandlers and silently fell
+	// through to super.handleInput with no effect. These tests pin each
+	// handler actually fires on its default chord once wired.
+	it("invokes onThinkingCycle via Shift+Tab (app.thinking.cycle -- one of the two exact reported-broken chords)", () => {
+		const onThinkingCycle = vi.fn();
+		const controller = new RpcHostEditorController({
+			tui: fakeTui(),
+			theme: fakeEditorTheme(),
+			keybindings: createRpcKeybindingsManager({ env: {} }),
+			onThinkingCycle,
+		});
+
+		controller.handleInput("\x1b[Z"); // shift+tab
+		expect(onThinkingCycle).toHaveBeenCalledTimes(1);
+	});
+
+	it("invokes onModelCycleForward via Ctrl+P", () => {
+		const onModelCycleForward = vi.fn();
+		const controller = new RpcHostEditorController({
+			tui: fakeTui(),
+			theme: fakeEditorTheme(),
+			keybindings: createRpcKeybindingsManager({ env: {} }),
+			onModelCycleForward,
+		});
+
+		controller.handleInput("\x10"); // ctrl+p
+		expect(onModelCycleForward).toHaveBeenCalledTimes(1);
+	});
+
+	it("invokes onModelCycleBackward via Shift+Ctrl+P (the other exact reported-broken chord)", () => {
+		const onModelCycleBackward = vi.fn();
+		const controller = new RpcHostEditorController({
+			tui: fakeTui(),
+			theme: fakeEditorTheme(),
+			keybindings: createRpcKeybindingsManager({ env: {} }),
+			onModelCycleBackward,
+		});
+
+		controller.handleInput("\x1b[80;6u"); // CSI-u shift+ctrl+p
+		expect(onModelCycleBackward).toHaveBeenCalledTimes(1);
+	});
+
+	it("invokes onModelSelect via Ctrl+L", () => {
+		const onModelSelect = vi.fn();
+		const controller = new RpcHostEditorController({
+			tui: fakeTui(),
+			theme: fakeEditorTheme(),
+			keybindings: createRpcKeybindingsManager({ env: {} }),
+			onModelSelect,
+		});
+
+		controller.handleInput("\x0c"); // ctrl+l
+		expect(onModelSelect).toHaveBeenCalledTimes(1);
+	});
+
+	it("invokes onToolsExpandToggle via Ctrl+O", () => {
+		const onToolsExpandToggle = vi.fn();
+		const controller = new RpcHostEditorController({
+			tui: fakeTui(),
+			theme: fakeEditorTheme(),
+			keybindings: createRpcKeybindingsManager({ env: {} }),
+			onToolsExpandToggle,
+		});
+
+		controller.handleInput("\x0f"); // ctrl+o
+		expect(onToolsExpandToggle).toHaveBeenCalledTimes(1);
+	});
+
+	it("regression guard: an unbound key still reaches the editor as normal text after wiring app.* actions", () => {
+		const onModelCycleForward = vi.fn();
+		const onModelCycleBackward = vi.fn();
+		const onModelSelect = vi.fn();
+		const onThinkingCycle = vi.fn();
+		const onToolsExpandToggle = vi.fn();
+		const controller = new RpcHostEditorController({
+			tui: fakeTui(),
+			theme: fakeEditorTheme(),
+			keybindings: createRpcKeybindingsManager({ env: {} }),
+			onModelCycleForward,
+			onModelCycleBackward,
+			onModelSelect,
+			onThinkingCycle,
+			onToolsExpandToggle,
+		});
+
+		controller.handleInput("hello world");
+
+		expect(controller.getText()).toBe("hello world");
+		expect(onModelCycleForward).not.toHaveBeenCalled();
+		expect(onModelCycleBackward).not.toHaveBeenCalled();
+		expect(onModelSelect).not.toHaveBeenCalled();
+		expect(onThinkingCycle).not.toHaveBeenCalled();
+		expect(onToolsExpandToggle).not.toHaveBeenCalled();
+	});
 });

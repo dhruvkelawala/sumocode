@@ -17,4 +17,5 @@ export {
 	type SetThemeResult,
 	type ThemeChangedListener,
 } from "./registry.js";
+export { applyStartupTheme, resolveStartupThemeName } from "./startup.js";
 export { DEFAULT_CHROME, SUMOCODE_STATE_NAMES, type SumoCodeState, type Theme, type ThemeChrome, type ThemeColors, type ThemeTokens, type ThemeWorkingIndicator } from "./types.js";

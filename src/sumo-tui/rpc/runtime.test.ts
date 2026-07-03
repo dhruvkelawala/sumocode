@@ -466,6 +466,40 @@ describe("RPC host retained runtime frame", () => {
 		expect(runtime.getChatSink()).toBeUndefined();
 	});
 
+	// app.tools.expand (Ctrl+O) wiring: host.ts's createToolsExpandToggleHandler
+	// calls runtime.setToolExpansion(expanded), which must reach the live
+	// shell's ChatPager only once start() has resolved, and be a safe no-op
+	// otherwise -- same lifecycle window as getChatSink() above.
+	it("setToolExpansion is a no-op before start()/after stop(), and forwards to the live ChatPager once started", async () => {
+		const setToolExpansion = vi.spyOn(ChatPager.prototype, "setToolExpansion");
+		const output = new FakeOutput();
+		const terminal = new TerminalSessionOwner({ output });
+		const runtime = new RpcHostRuntime({
+			output,
+			input: { isTTY: false, on: () => undefined },
+			terminal,
+			initialState: state(),
+			initialTranscript: { messages: [] },
+		});
+
+		try {
+			expect(() => runtime.setToolExpansion(true)).not.toThrow();
+			expect(setToolExpansion).not.toHaveBeenCalled();
+
+			await runtime.start();
+			setToolExpansion.mockClear();
+			runtime.setToolExpansion(true);
+			expect(setToolExpansion).toHaveBeenCalledWith(true);
+
+			runtime.stop();
+			setToolExpansion.mockClear();
+			expect(() => runtime.setToolExpansion(false)).not.toThrow();
+			expect(setToolExpansion).not.toHaveBeenCalled();
+		} finally {
+			setToolExpansion.mockRestore();
+		}
+	});
+
 	it("skips the pager's replaceViewModels end-to-end when update() carries a transcriptRevision (host.ts's B9 sink-wiring contract)", async () => {
 		const replaceViewModels = vi.spyOn(ChatPager.prototype, "replaceViewModels");
 		const output = new FakeOutput();

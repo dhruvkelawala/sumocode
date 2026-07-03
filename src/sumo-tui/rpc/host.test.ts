@@ -5,7 +5,20 @@ import { describe, expect, it, vi } from "vitest";
 import type { ChatMessageViewModel } from "../transcript/view-model.js";
 import { SUMOCODE_RELOAD_EXIT_CODE } from "../../commands/reload.js";
 import { RpcChildExitError } from "./client.js";
-import { createLazyChatSink, createRpcExitHandler, createRpcHostInterruptHandler, createUnhandledRejectionHandler, submitInitialPromptFromEnv, writeExitCodeFile, type RpcHostExitDependencies, type RpcHostInterruptDependencies } from "./host.js";
+import {
+	createLazyChatSink,
+	createModelCycleBackwardHandler,
+	createModelCycleForwardHandler,
+	createRpcExitHandler,
+	createRpcHostInterruptHandler,
+	createThinkingCycleHandler,
+	createToolsExpandToggleHandler,
+	createUnhandledRejectionHandler,
+	submitInitialPromptFromEnv,
+	writeExitCodeFile,
+	type RpcHostExitDependencies,
+	type RpcHostInterruptDependencies,
+} from "./host.js";
 
 function flush(): Promise<void> {
 	return Promise.resolve().then(() => Promise.resolve());
@@ -215,6 +228,131 @@ describe("app.interrupt action wiring reuses the interrupt tier module", () => {
 		handleAppInterrupt();
 
 		expect(modals.close).toHaveBeenCalledOnce();
+	});
+});
+
+// Root cause of "keybindings are broken": these actions were declared in
+// editor.ts's APP_KEYBINDING_DEFINITIONS (so KeybindingsManager.matches()
+// recognizes their chords) but runRpcHost never registered a handler via
+// editor.onAction(...), so CustomEditor's actionHandlers loop found nothing
+// and pressing the chord was a silent no-op. These tests pin the BEFORE (a
+// bare invocation of each factory's returned handler with no wiring at all
+// would previously not exist as an export -- createModelCycleForwardHandler/
+// createModelCycleBackwardHandler/createThinkingCycleHandler/
+// createToolsExpandToggleHandler did not exist prior to this fix) vs AFTER
+// (the handler now calls through to the real RpcHostControls/runtime
+// methods) behavior for each of the 4 host-side actions wired via host.ts.
+describe("createModelCycleForwardHandler (app.model.cycleForward)", () => {
+	it("calls controls.cycleModel() and notifies with the resulting model label", async () => {
+		const cycleModel = vi.fn(async () => ({ modelLabel: "anthropic/claude-opus-4-8" }) as never);
+		const notifications = { notify: vi.fn() };
+		const onStateChange = vi.fn();
+		const handle = createModelCycleForwardHandler({
+			controls: { cycleModel, getAvailableModels: vi.fn() },
+			notifications,
+			onStateChange,
+		});
+
+		handle();
+		await flush();
+
+		expect(cycleModel).toHaveBeenCalledOnce();
+		expect(onStateChange).toHaveBeenCalledOnce();
+		expect(notifications.notify).toHaveBeenCalledWith("model: anthropic/claude-opus-4-8", "info");
+	});
+
+	it("notifies a warning instead of throwing when the RPC call fails", async () => {
+		const notifications = { notify: vi.fn() };
+		const handle = createModelCycleForwardHandler({
+			controls: { cycleModel: vi.fn(async () => { throw new Error("boom"); }), getAvailableModels: vi.fn() },
+			notifications,
+		});
+
+		handle();
+		await flush();
+
+		expect(notifications.notify).toHaveBeenCalledWith(expect.stringContaining("boom"), "warning");
+	});
+});
+
+describe("createModelCycleBackwardHandler (app.model.cycleBackward -- the other exact reported-broken chord)", () => {
+	it("cycles forward (N-1) times to land one step back, then notifies with the resulting model label", async () => {
+		const models = [{ label: "a", active: false }, { label: "b", active: true }, { label: "c", active: false }] as never[];
+		const getAvailableModels = vi.fn(async () => models);
+		const cycleModel = vi.fn(async () => ({ modelLabel: "final" }) as never);
+		const notifications = { notify: vi.fn() };
+		const handle = createModelCycleBackwardHandler({
+			controls: { cycleModel, getAvailableModels },
+			notifications,
+		});
+
+		handle();
+		await flush();
+
+		// 3 models -> N-1 = 2 forward cycles to land one step back.
+		expect(cycleModel).toHaveBeenCalledTimes(2);
+		expect(notifications.notify).toHaveBeenCalledWith("model: final", "info");
+	});
+
+	it("is a no-op when there is only one (or zero) models available", async () => {
+		const cycleModel = vi.fn(async () => ({ modelLabel: "x" }) as never);
+		const notifications = { notify: vi.fn() };
+		const handle = createModelCycleBackwardHandler({
+			controls: { cycleModel, getAvailableModels: vi.fn(async () => [{ label: "only", active: true }] as never[]) },
+			notifications,
+		});
+
+		handle();
+		await flush();
+
+		expect(cycleModel).not.toHaveBeenCalled();
+	});
+
+	it("warns instead of cycling when no models are available at all", async () => {
+		const cycleModel = vi.fn(async () => ({ modelLabel: "x" }) as never);
+		const notifications = { notify: vi.fn() };
+		const handle = createModelCycleBackwardHandler({
+			controls: { cycleModel, getAvailableModels: vi.fn(async () => []) },
+			notifications,
+		});
+
+		handle();
+		await flush();
+
+		expect(cycleModel).not.toHaveBeenCalled();
+		expect(notifications.notify).toHaveBeenCalledWith("no models available", "warning");
+	});
+});
+
+describe("createThinkingCycleHandler (app.thinking.cycle -- one of the two exact reported-broken chords)", () => {
+	it("calls controls.cycleThinkingLevel() and notifies with the resulting level", async () => {
+		const cycleThinkingLevel = vi.fn(async () => ({ thinkingLevel: "high" }) as never);
+		const notifications = { notify: vi.fn() };
+		const onStateChange = vi.fn();
+		const handle = createThinkingCycleHandler({ controls: { cycleThinkingLevel }, notifications, onStateChange });
+
+		handle();
+		await flush();
+
+		expect(cycleThinkingLevel).toHaveBeenCalledOnce();
+		expect(onStateChange).toHaveBeenCalledOnce();
+		expect(notifications.notify).toHaveBeenCalledWith("thinking: high", "info");
+	});
+});
+
+describe("createToolsExpandToggleHandler (app.tools.expand)", () => {
+	it("flips expansion state on each call, starting from collapsed", () => {
+		const setToolExpansion = vi.fn();
+		const requestRender = vi.fn();
+		const handle = createToolsExpandToggleHandler({ setToolExpansion, requestRender });
+
+		handle();
+		expect(setToolExpansion).toHaveBeenNthCalledWith(1, true);
+		handle();
+		expect(setToolExpansion).toHaveBeenNthCalledWith(2, false);
+		handle();
+		expect(setToolExpansion).toHaveBeenNthCalledWith(3, true);
+		expect(requestRender).toHaveBeenCalledTimes(3);
 	});
 });
 

@@ -289,6 +289,16 @@ export class RpcHostRuntime {
 		return this.shell?.getChatSink();
 	}
 
+	/**
+	 * Applies `app.tools.expand`'s toggled expansion state to the live shell's
+	 * `ChatPager`, via `RpcShellAdapter.setToolExpansion` -- a no-op before
+	 * `start()`'s async `RpcShellAdapter.create` has resolved (or after
+	 * `stop()`), same lifecycle window as `getChatSink()` above.
+	 */
+	public setToolExpansion(expanded: boolean): void {
+		this.shell?.setToolExpansion(expanded);
+	}
+
 	public waitForExit(): Promise<number> {
 		if (this.exitCode !== undefined) return Promise.resolve(this.exitCode);
 		return new Promise((resolve) => this.waiters.push(resolve));

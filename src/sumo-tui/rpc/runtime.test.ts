@@ -2,10 +2,15 @@ import type { Component } from "@earendil-works/pi-tui";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { INPUT_FRAME_PLACEHOLDER } from "../../cathedral/input-frame.js";
+import { activeThemeColors } from "../../themes/index.js";
 import { TerminalSessionOwner } from "../runtime/terminal-controller.js";
+import { RpcHostEditorController } from "./editor.js";
+import { submitRpcPrompt } from "./host.js";
 import { renderRpcHostFrameForTest, RpcHostRuntime } from "./runtime.js";
 import type { RpcHostChromeState } from "./state.js";
+import { rpcVisualFixtureFromEnv } from "./visual-fixtures.js";
 
 function state(overrides: Partial<RpcHostChromeState> = {}): RpcHostChromeState {
 	return {
@@ -93,6 +98,23 @@ describe("RPC host retained runtime frame", () => {
 		expect(plain).not.toContain("rpc host");
 	});
 
+	it("paints a software cursor for live RPC splash editor rows", async () => {
+		const frame = await renderRpcHostFrameForTest({
+			state: state(),
+			transcript: { messages: [] },
+		}, 160, 45, { editor: new RpcHostEditorController() });
+
+		const placeholderRow = Array.from({ length: 45 }, (_value, row) => row)
+			.find((row) => frame.toPlainRow(row).includes(INPUT_FRAME_PLACEHOLDER));
+		expect(placeholderRow).toBeDefined();
+
+		const cursorBg = activeThemeColors().accent.toLowerCase();
+		const { cols } = frame.getDimensions();
+		const hasSoftwareCursor = Array.from({ length: cols }, (_value, col) => frame.getCell(placeholderRow!, col))
+			.some((cell) => cell.char === " " && cell.bg?.toLowerCase() === cursorBg);
+		expect(hasSoftwareCursor).toBe(true);
+	});
+
 	it("renders transcript messages through the retained ChatPager buffer", async () => {
 		const frame = await renderRpcHostFrameForTest({
 			state: state({ messageCount: 1, hasMessages: true }),
@@ -110,6 +132,19 @@ describe("RPC host retained runtime frame", () => {
 		expect(plain).toContain("USER");
 		expect(plain).toContain("visible rpc transcript body");
 		expect(plain).not.toContain("1 message transcript");
+	});
+
+	it("mounts the active chat shell when host state is active but the transcript is still empty", async () => {
+		const frame = await renderRpcHostFrameForTest({
+			state: state({ messageCount: 1, hasMessages: true }),
+			transcript: { messages: [] },
+		}, 160, 45);
+
+		const plain = Array.from({ length: 45 }, (_, row) => frame.toPlainRow(row)).join("\n");
+		expect(frame.toPlainRow(1)).toContain("SUMOCODE");
+		expect(plain).toContain("READY");
+		expect(plain).not.toContain('"Meow meow meow... meow meow"');
+		expect(plain).not.toContain("DIVINE INVOCATION");
 	});
 
 	it("reserves the V2 sidebar columns in active landscape", async () => {
@@ -133,22 +168,29 @@ describe("RPC host retained runtime frame", () => {
 	});
 
 	it("hides the sidebar in portrait and moves project context to the hint row", async () => {
-		const frame = await renderRpcHostFrameForTest({
-			state: state({ messageCount: 1, hasMessages: true }),
-			transcript: {
-				messages: [{
-					id: "message-1",
-					role: "user",
-					displayName: "YOU",
-					blocks: [{ type: "markdown", text: "portrait chat body" }],
-				}],
-			},
-		}, 60, 100);
+		const previousCwd = process.env.SUMOCODE_PROJECT_CWD;
+		process.env.SUMOCODE_PROJECT_CWD = "/Volumes/SumoDeus NVMe/code/sumocode";
+		try {
+			const frame = await renderRpcHostFrameForTest({
+				state: state({ messageCount: 1, hasMessages: true }),
+				transcript: {
+					messages: [{
+						id: "message-1",
+						role: "user",
+						displayName: "YOU",
+						blocks: [{ type: "markdown", text: "portrait chat body" }],
+					}],
+				},
+			}, 60, 100);
 
-		const plain = Array.from({ length: 100 }, (_, row) => frame.toPlainRow(row)).join("\n");
-		expect(plain).toContain("portrait chat body");
-		expect(plain).toContain("sumocode");
-		expect(plain).not.toContain("REGISTRY");
+			const plain = Array.from({ length: 100 }, (_, row) => frame.toPlainRow(row)).join("\n");
+			expect(plain).toContain("portrait chat body");
+			expect(plain).toContain("sumocode");
+			expect(plain).not.toContain("REGISTRY");
+		} finally {
+			if (previousCwd === undefined) delete process.env.SUMOCODE_PROJECT_CWD;
+			else process.env.SUMOCODE_PROJECT_CWD = previousCwd;
+		}
 	});
 
 	it("maps streaming and compacting state to Cathedral footer labels", async () => {
@@ -272,5 +314,51 @@ describe("RPC host retained runtime frame", () => {
 		await expect(runtime.waitForExit()).resolves.toBe(130);
 		expect(input.rawModes).toEqual([true, false]);
 		expect(terminal.getState()).toMatchObject({ restored: true });
+	});
+
+	it("keeps the duplicate RPC full-frame compositor out of runtime.ts", () => {
+		const source = readFileSync(new URL("./runtime.ts", import.meta.url), "utf8");
+
+		expect(source).toContain("RpcShellAdapter");
+		expect(source).not.toMatch(/\b(renderRpcFrame|renderSplashFrame|renderActiveFrame|activeBottomRows|activeEditorRows|sidebarLayoutSnapshot)\b/);
+		expect(source).not.toContain("../../cathedral/input-frame.js");
+		expect(source).not.toContain("../../footer.js");
+		expect(source).not.toContain("../../top-chrome.js");
+		expect(source).not.toContain("../cathedral/sidebar-tree.js");
+	});
+
+	it("sends submitted prompts in harness/offline mode unless an explicit visual fixture is active", async () => {
+		const send = vi.fn(async () => ({
+			type: "response",
+			id: "prompt",
+			command: "prompt",
+			success: true,
+		} as const));
+		const onBeforeSend = vi.fn();
+		const visualFixture = rpcVisualFixtureFromEnv({
+			SUMOCODE_HARNESS: "1",
+			PI_OFFLINE: "1",
+		} as NodeJS.ProcessEnv);
+
+		expect(visualFixture).toBeUndefined();
+
+		await submitRpcPrompt("real runtime prompt", {
+			visualFixture,
+			stateStore: { getSnapshot: () => state() },
+			client: { send },
+			onBeforeSend,
+		});
+
+		expect(onBeforeSend).toHaveBeenCalledWith("real runtime prompt");
+		expect(send).toHaveBeenCalledWith({ type: "prompt", message: "real runtime prompt" });
+
+		send.mockClear();
+		await submitRpcPrompt("fixture prompt", {
+			visualFixture: { state: state({ hasMessages: true, messageCount: 1 }), transcript: { messages: [] } },
+			stateStore: { getSnapshot: () => state() },
+			client: { send },
+		});
+
+		expect(send).not.toHaveBeenCalled();
 	});
 });

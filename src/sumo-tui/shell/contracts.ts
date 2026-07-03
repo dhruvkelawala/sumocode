@@ -88,6 +88,7 @@ export interface RetainedShellRendererOptions {
 	readonly yoga: import("../layout/yoga.js").Yoga;
 	readonly chat: ShellChatSurface;
 	readonly splash?: ShellSplashSurface;
+	readonly isActive?: () => boolean;
 	readonly editor: ShellEditorProvider;
 	readonly topChromeFallback: ShellTopChromeProvider;
 	readonly topChrome?: ShellTopChromeProvider;

@@ -43,6 +43,7 @@ export interface RpcHostEditorControllerOptions extends RpcAutocompleteProviderO
 }
 
 const identity = (text: string): string => text;
+const CSI_U_ENTER = "\x1b[13u";
 
 export const PI_0_79_1_BUILTIN_SLASH_COMMANDS: readonly BuiltinSlashCommand[] = Object.freeze([
 	{ name: "settings", description: "Open settings menu" },
@@ -180,7 +181,10 @@ export class RpcHostEditorController implements EditorTextController, KeyTarget 
 	}
 
 	public handleInput(data: string): void {
-		this.editor.handleInput(data);
+		for (const chunk of splitCsiUEnter(data)) {
+			if (chunk === "\r") this.submitCsiUEnter();
+			else this.editor.handleInput(chunk);
+		}
 	}
 
 	public render(width: number): string[] {
@@ -200,6 +204,13 @@ export class RpcHostEditorController implements EditorTextController, KeyTarget 
 	public getText(): string {
 		return this.editor.getText();
 	}
+
+	private submitCsiUEnter(): void {
+		const text = this.editor.getText();
+		this.editor.onSubmit?.(text);
+		this.editor.setText("");
+		this.tui.requestRender();
+	}
 }
 
 export async function createRpcHostEditorController(
@@ -218,6 +229,23 @@ function keyEventToEditorInput(event: KeyEvent): string {
 	if (event.sequence !== undefined) return event.sequence;
 	if (event.key === "enter" || event.key === "Enter") return "\r";
 	return event.key;
+}
+
+function splitCsiUEnter(data: string): string[] {
+	if (!data.includes(CSI_U_ENTER)) return [data];
+	const chunks: string[] = [];
+	let remaining = data;
+	while (remaining.length > 0) {
+		const index = remaining.indexOf(CSI_U_ENTER);
+		if (index === -1) {
+			chunks.push(remaining);
+			break;
+		}
+		if (index > 0) chunks.push(remaining.slice(0, index));
+		chunks.push("\r");
+		remaining = remaining.slice(index + CSI_U_ENTER.length);
+	}
+	return chunks;
 }
 
 async function getModelArgumentCompletions(

@@ -49,6 +49,26 @@ function childEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 	return next;
 }
 
+export interface RpcPromptSubmitOptions {
+	readonly visualFixture?: unknown;
+	readonly actions?: Pick<RpcHostActions, "handleSubmittedText">;
+	readonly stateStore: Pick<RpcHostStateStore, "getSnapshot">;
+	readonly client: Pick<SumoRpcClient, "send">;
+	readonly onBeforeSend?: (message: string) => void;
+}
+
+export async function submitRpcPrompt(message: string, options: RpcPromptSubmitOptions): Promise<void> {
+	if (options.visualFixture) return;
+	if (message.trim().length === 0) return;
+	if (await options.actions?.handleSubmittedText(message)) return;
+	const state = options.stateStore.getSnapshot();
+	options.onBeforeSend?.(message);
+	const response = state.isStreaming
+		? await options.client.send({ type: "prompt", message, streamingBehavior: "followUp" })
+		: await options.client.send({ type: "prompt", message });
+	responseData(response, "prompt");
+}
+
 export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<number> {
 	const argv = [...(options.argv ?? process.argv.slice(2))];
 	const env = options.env ?? process.env;
@@ -83,14 +103,24 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		cwd,
 		onRenderRequest: requestRender,
 		onSubmit: async (message) => {
-			if (visualFixture) return;
-			if (message.trim().length === 0) return;
-			if (await actions?.handleSubmittedText(message)) return;
-			const state = stateStore.getSnapshot();
-			const response = state.isStreaming
-				? await client.send({ type: "prompt", message, streamingBehavior: "followUp" })
-				: await client.send({ type: "prompt", message });
-			responseData(response, "prompt");
+			await submitRpcPrompt(message, {
+				visualFixture,
+				actions,
+				stateStore,
+				client,
+				onBeforeSend: () => {
+					const state = stateStore.getSnapshot();
+					runtime?.update({
+						state: {
+							...state,
+							isStreaming: true,
+							pendingMessageCount: Math.max(1, state.pendingMessageCount),
+							hasMessages: true,
+							lastEventType: "agent_start",
+						},
+					});
+				},
+			});
 		},
 	});
 	const uiResponder = createRpcExtensionUiResponder({

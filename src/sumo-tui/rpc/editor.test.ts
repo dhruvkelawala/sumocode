@@ -186,6 +186,41 @@ describe("RPC editor controller", () => {
 		expect(controller.getText()).toBe("");
 	});
 
+	it("submits exact CSI-u Enter as normal Enter", () => {
+		const submitted: string[] = [];
+		const controller = new RpcHostEditorController({
+			tui: fakeTui(),
+			theme: fakeEditorTheme(),
+			keybindings: fakeKeybindings(),
+			onSubmit: (text) => {
+				submitted.push(text);
+			},
+		});
+
+		controller.setText("send via csi-u");
+		controller.handleInput("\x1b[13u");
+
+		expect(submitted).toEqual(["send via csi-u"]);
+		expect(controller.getText()).toBe("");
+	});
+
+	it("coalesces text followed by CSI-u Enter into insertion plus submit", () => {
+		const submitted: string[] = [];
+		const controller = new RpcHostEditorController({
+			tui: fakeTui(),
+			theme: fakeEditorTheme(),
+			keybindings: fakeKeybindings(),
+			onSubmit: (text) => {
+				submitted.push(text);
+			},
+		});
+
+		controller.handleInput("coalesced submit\x1b[13u");
+
+		expect(submitted).toEqual(["coalesced submit"]);
+		expect(controller.getText()).toBe("");
+	});
+
 	it("renders command autocomplete suggestions from Pi built-ins and RPC commands", async () => {
 		const controls = controlsFor({ commands: [rpcCommand("deploy", "Deploy current workspace")] });
 		const controller = await createRpcHostEditorController({

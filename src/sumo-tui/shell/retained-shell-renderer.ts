@@ -123,6 +123,7 @@ export class RetainedShellRenderer {
 	private readonly bottomSafeSpacer: SumoNode;
 	private readonly chat: ChatPager;
 	private readonly splash: SplashTree | undefined;
+	private readonly resolveActivity: () => boolean;
 	private mountedChatChild: "chat" | "splash" | undefined;
 	private mountedSidebar = false;
 	private inputMountedInSplash: boolean | undefined;
@@ -138,6 +139,7 @@ export class RetainedShellRenderer {
 		this.resolveSidebarPublication = options.sidebar ?? (() => undefined);
 		this.resolveTopChromePublication = options.topChrome ?? (() => undefined);
 		this.selection = options.selection;
+		this.resolveActivity = options.isActive ?? (() => this.chat.hasMessages());
 
 		this.root = new SumoNode(this.yoga.Node.create());
 		this.root.flexDirection = FLEX_DIRECTION_COLUMN;
@@ -291,7 +293,7 @@ export class RetainedShellRenderer {
 	}
 
 	private syncInputPlacement(): void {
-		const centerWithSplash = !!this.splash && !this.chat.hasMessages();
+		const centerWithSplash = !!this.splash && !this.resolveActivity();
 		if (centerWithSplash === this.inputMountedInSplash) return;
 
 		const movableNodes: SumoNode[] = [
@@ -344,7 +346,7 @@ export class RetainedShellRenderer {
 	}
 
 	private syncChatRowChildren(cols: number, rows: number): void {
-		const wantSplash = !!this.splash && !this.chat.hasMessages();
+		const wantSplash = !!this.splash && !this.resolveActivity();
 		const desired: "chat" | "splash" = wantSplash ? "splash" : "chat";
 		this.topChromeGapSpacer.height = desired === "chat" ? SHELL_TOP_CHROME_GAP_ROW : 0;
 		const sidebarVisible = desired === "chat" && this.isSidebarVisible(cols, rows);

@@ -3,6 +3,15 @@ import type { AgentSessionEvent, RpcSessionState } from "@earendil-works/pi-codi
 export interface RpcHostChromeState {
 	readonly sessionId?: string;
 	readonly sessionName?: string;
+	/**
+	 * Path to the current session's on-disk `.jsonl` file, as reported by Pi's
+	 * `get_state` RPC response (`RpcSessionState.sessionFile`). Threaded through
+	 * so host-side commands that need to read the session directory or the
+	 * current file directly (`/resume`, `/tree`) don't have to re-derive it
+	 * from `sessionId` -- Pi already resolves the real path (including the
+	 * `parentSession`-aware default-dir lookup), so the host just carries it.
+	 */
+	readonly sessionFile?: string;
 	readonly modelLabel?: string;
 	readonly thinkingLevel?: string;
 	readonly isStreaming: boolean;
@@ -44,6 +53,7 @@ export class RpcHostStateStore {
 			...this.state,
 			sessionId: rpcState.sessionId,
 			sessionName: rpcState.sessionName,
+			sessionFile: rpcState.sessionFile,
 			modelLabel: modelLabelFrom(rpcState),
 			thinkingLevel: rpcState.thinkingLevel,
 			isStreaming: rpcState.isStreaming,

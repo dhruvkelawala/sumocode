@@ -32,6 +32,44 @@ describe("RpcHostStateStore", () => {
 		});
 	});
 
+	it("surfaces sessionFile from a get_state payload", () => {
+		const store = new RpcHostStateStore();
+		const state = store.hydrateFromRpcState({
+			model: { provider: "openai", id: "gpt-5.5" } as never,
+			thinkingLevel: "high",
+			isStreaming: false,
+			isCompacting: false,
+			steeringMode: "all",
+			followUpMode: "one-at-a-time",
+			sessionFile: "/Users/sumo-deus/.pi/agent/sessions/--test--/2026-07-02T20-24-17-673Z_019f2480.jsonl",
+			sessionId: "session-1",
+			autoCompactionEnabled: true,
+			messageCount: 0,
+			pendingMessageCount: 0,
+		});
+
+		expect(state.sessionFile).toBe(
+			"/Users/sumo-deus/.pi/agent/sessions/--test--/2026-07-02T20-24-17-673Z_019f2480.jsonl",
+		);
+	});
+
+	it("keeps sessionFile undefined when the payload omits it", () => {
+		const store = new RpcHostStateStore();
+		const state = store.hydrateFromRpcState({
+			thinkingLevel: "high",
+			isStreaming: false,
+			isCompacting: false,
+			steeringMode: "all",
+			followUpMode: "one-at-a-time",
+			sessionId: "session-1",
+			autoCompactionEnabled: true,
+			messageCount: 0,
+			pendingMessageCount: 0,
+		});
+
+		expect(state.sessionFile).toBeUndefined();
+	});
+
 	it("tracks working and compaction lifecycle events", () => {
 		const store = new RpcHostStateStore();
 

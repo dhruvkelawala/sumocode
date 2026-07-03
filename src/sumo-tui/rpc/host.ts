@@ -371,7 +371,7 @@ export function createRpcHostInterruptHandler(deps: RpcHostInterruptDependencies
 }
 
 export interface RpcHostModelCycleDependencies {
-	readonly controls: Pick<RpcHostControls, "cycleModel" | "getAvailableModels">;
+	readonly controls: Pick<RpcHostControls, "cycleModel" | "getAvailableModels" | "setModel">;
 	readonly notifications: Pick<NotificationCenter, "notify">;
 	readonly onStateChange?: () => void;
 }
@@ -399,18 +399,19 @@ export function createModelCycleForwardHandler(deps: RpcHostModelCycleDependenci
  * Builds the `app.model.cycleBackward` (Shift+Ctrl+P by default) action
  * handler. Pi's `cycle_model` RPC command is forward-only (verified against
  * `rpc-types.d.ts`: the `cycle_model` request shape carries no direction
- * field) -- there is no backward primitive to call directly. This
- * implements backward as `cycleModel()` called `(N - 1)` times: on a ring of
- * N models, moving forward N-1 times always lands exactly one position
- * before wherever you started, regardless of the current index -- so the
- * current model's position never needs to be resolved. Judgment call: only
- * sound because the model list is realistically small (a handful of
- * configured/enabled provider models, not hundreds); with N=20 this is 19
- * sequential RPC round-trips, which is why this handler stops and reports a
- * gap instead of shipping if the list were large. `getAvailableModels()` is
- * re-fetched fresh each time this handler fires (not cached), so `N` always
- * reflects the current list even if it changed since the last cycle. A
- * single-model list (N<=1) is a no-op: there is nowhere else to cycle to.
+ * field) -- there is no backward primitive to call directly. An earlier
+ * version of this handler called `cycleModel()` `(N - 1)` times to land one
+ * position back on the ring; that is wrong for this codebase specifically,
+ * because `getAvailableModels()` returns the SAME list `/model` shows the
+ * user (confirmed live at 531 entries), which would mean ~530 sequential RPC
+ * round-trips on every press -- a multi-second freeze, not a fix. Since
+ * `RpcModelOption` already carries `provider`/`id`/`active` per entry and
+ * `RpcHostControls.setModel(provider, id)` sets a model directly, backward
+ * cycling is instead computed locally (find the active index, step back one
+ * with wraparound) and applied with exactly one RPC call, regardless of list
+ * size. A single-model list (N<=1) is a no-op: there is nowhere else to
+ * cycle to. If `active` matches nothing (stale/renamed current model), falls
+ * back to the last entry rather than throwing.
  */
 export function createModelCycleBackwardHandler(deps: RpcHostModelCycleDependencies): () => void {
 	return (): void => {
@@ -420,12 +421,13 @@ export function createModelCycleBackwardHandler(deps: RpcHostModelCycleDependenc
 				if (models.length === 0) deps.notifications.notify("no models available", "warning");
 				return;
 			}
-			let state: RpcHostChromeState | undefined;
-			for (let i = 0; i < models.length - 1; i += 1) {
-				state = await deps.controls.cycleModel();
-			}
+			const activeIndex = models.findIndex((model) => model.active);
+			const baseIndex = activeIndex < 0 ? 0 : activeIndex;
+			const previousIndex = (baseIndex - 1 + models.length) % models.length;
+			const previous = models[previousIndex];
+			const state = await deps.controls.setModel(previous.provider, previous.id);
 			deps.onStateChange?.();
-			if (state?.modelLabel) deps.notifications.notify(`model: ${state.modelLabel}`, "info");
+			if (state.modelLabel) deps.notifications.notify(`model: ${state.modelLabel}`, "info");
 		}, deps.notifications);
 	};
 }

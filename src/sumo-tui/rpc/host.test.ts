@@ -248,7 +248,7 @@ describe("createModelCycleForwardHandler (app.model.cycleForward)", () => {
 		const notifications = { notify: vi.fn() };
 		const onStateChange = vi.fn();
 		const handle = createModelCycleForwardHandler({
-			controls: { cycleModel, getAvailableModels: vi.fn() },
+			controls: { cycleModel, getAvailableModels: vi.fn(), setModel: vi.fn() },
 			notifications,
 			onStateChange,
 		});
@@ -264,7 +264,7 @@ describe("createModelCycleForwardHandler (app.model.cycleForward)", () => {
 	it("notifies a warning instead of throwing when the RPC call fails", async () => {
 		const notifications = { notify: vi.fn() };
 		const handle = createModelCycleForwardHandler({
-			controls: { cycleModel: vi.fn(async () => { throw new Error("boom"); }), getAvailableModels: vi.fn() },
+			controls: { cycleModel: vi.fn(async () => { throw new Error("boom"); }), getAvailableModels: vi.fn(), setModel: vi.fn() },
 			notifications,
 		});
 
@@ -276,29 +276,83 @@ describe("createModelCycleForwardHandler (app.model.cycleForward)", () => {
 });
 
 describe("createModelCycleBackwardHandler (app.model.cycleBackward -- the other exact reported-broken chord)", () => {
-	it("cycles forward (N-1) times to land one step back, then notifies with the resulting model label", async () => {
-		const models = [{ label: "a", active: false }, { label: "b", active: true }, { label: "c", active: false }] as never[];
+	it("computes the previous model locally and applies it with a single setModel call", async () => {
+		const models = [
+			{ provider: "p", id: "a", label: "a", active: false },
+			{ provider: "p", id: "b", label: "b", active: true },
+			{ provider: "p", id: "c", label: "c", active: false },
+		] as never[];
 		const getAvailableModels = vi.fn(async () => models);
-		const cycleModel = vi.fn(async () => ({ modelLabel: "final" }) as never);
+		const cycleModel = vi.fn();
+		const setModel = vi.fn(async () => ({ modelLabel: "a" }) as never);
 		const notifications = { notify: vi.fn() };
 		const handle = createModelCycleBackwardHandler({
-			controls: { cycleModel, getAvailableModels },
+			controls: { cycleModel, getAvailableModels, setModel },
 			notifications,
 		});
 
 		handle();
 		await flush();
 
-		// 3 models -> N-1 = 2 forward cycles to land one step back.
-		expect(cycleModel).toHaveBeenCalledTimes(2);
-		expect(notifications.notify).toHaveBeenCalledWith("model: final", "info");
+		// active is index 1 ("b") -> previous is index 0 ("a"), one direct call.
+		expect(cycleModel).not.toHaveBeenCalled();
+		expect(setModel).toHaveBeenCalledOnce();
+		expect(setModel).toHaveBeenCalledWith("p", "a");
+		expect(notifications.notify).toHaveBeenCalledWith("model: a", "info");
+	});
+
+	it("wraps around to the last model when the active model is first in the list", async () => {
+		const models = [
+			{ provider: "p", id: "a", label: "a", active: true },
+			{ provider: "p", id: "b", label: "b", active: false },
+			{ provider: "p", id: "c", label: "c", active: false },
+		] as never[];
+		const setModel = vi.fn(async () => ({ modelLabel: "c" }) as never);
+		const notifications = { notify: vi.fn() };
+		const handle = createModelCycleBackwardHandler({
+			controls: { cycleModel: vi.fn(), getAvailableModels: vi.fn(async () => models), setModel },
+			notifications,
+		});
+
+		handle();
+		await flush();
+
+		expect(setModel).toHaveBeenCalledWith("p", "c");
+	});
+
+	it("stays a single RPC call regardless of list size (regression guard for the N-1 loop this replaced)", async () => {
+		const models = Array.from({ length: 531 }, (_, i) => ({
+			provider: "p",
+			id: `m${i}`,
+			label: `m${i}`,
+			active: i === 200,
+		})) as never[];
+		const cycleModel = vi.fn();
+		const setModel = vi.fn(async () => ({ modelLabel: "m199" }) as never);
+		const notifications = { notify: vi.fn() };
+		const handle = createModelCycleBackwardHandler({
+			controls: { cycleModel, getAvailableModels: vi.fn(async () => models), setModel },
+			notifications,
+		});
+
+		handle();
+		await flush();
+
+		expect(cycleModel).not.toHaveBeenCalled();
+		expect(setModel).toHaveBeenCalledTimes(1);
+		expect(setModel).toHaveBeenCalledWith("p", "m199");
 	});
 
 	it("is a no-op when there is only one (or zero) models available", async () => {
-		const cycleModel = vi.fn(async () => ({ modelLabel: "x" }) as never);
+		const cycleModel = vi.fn();
+		const setModel = vi.fn();
 		const notifications = { notify: vi.fn() };
 		const handle = createModelCycleBackwardHandler({
-			controls: { cycleModel, getAvailableModels: vi.fn(async () => [{ label: "only", active: true }] as never[]) },
+			controls: {
+				cycleModel,
+				setModel,
+				getAvailableModels: vi.fn(async () => [{ provider: "p", id: "only", label: "only", active: true }] as never[]),
+			},
 			notifications,
 		});
 
@@ -306,13 +360,15 @@ describe("createModelCycleBackwardHandler (app.model.cycleBackward -- the other 
 		await flush();
 
 		expect(cycleModel).not.toHaveBeenCalled();
+		expect(setModel).not.toHaveBeenCalled();
 	});
 
 	it("warns instead of cycling when no models are available at all", async () => {
-		const cycleModel = vi.fn(async () => ({ modelLabel: "x" }) as never);
+		const cycleModel = vi.fn();
+		const setModel = vi.fn();
 		const notifications = { notify: vi.fn() };
 		const handle = createModelCycleBackwardHandler({
-			controls: { cycleModel, getAvailableModels: vi.fn(async () => []) },
+			controls: { cycleModel, setModel, getAvailableModels: vi.fn(async () => []) },
 			notifications,
 		});
 
@@ -320,6 +376,7 @@ describe("createModelCycleBackwardHandler (app.model.cycleBackward -- the other 
 		await flush();
 
 		expect(cycleModel).not.toHaveBeenCalled();
+		expect(setModel).not.toHaveBeenCalled();
 		expect(notifications.notify).toHaveBeenCalledWith("no models available", "warning");
 	});
 });

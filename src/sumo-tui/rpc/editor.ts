@@ -1,11 +1,18 @@
+import { existsSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join, resolve } from "node:path";
 import type { KeybindingsManager } from "@earendil-works/pi-coding-agent";
 import {
 	CombinedAutocompleteProvider,
 	fuzzyFilter,
+	KeybindingsManager as PiTuiKeybindingsManager,
+	TUI_KEYBINDINGS,
 	type AutocompleteItem,
 	type AutocompleteProvider,
 	type Component,
 	type EditorTheme,
+	type KeybindingDefinitions,
+	type KeybindingsConfig,
 	type SlashCommand,
 	type TUI,
 } from "@earendil-works/pi-tui";
@@ -38,6 +45,22 @@ export interface RpcHostEditorControllerOptions extends RpcAutocompleteProviderO
 	readonly errorNotifier?: ErrorNotifier;
 	readonly onRenderRequest?: () => void;
 	readonly autocompleteMaxVisible?: number;
+	/**
+	 * Manager-driven `app.exit` action (Ctrl+D by default, or the user's
+	 * `keybindings.json` remap). Mirrors pi's `CustomEditor.handleInput`:
+	 * `CustomEditor` only invokes this when the editor text is EMPTY (see
+	 * `custom-editor.js`: `if (this.getText().length === 0) { ...handler(); }`,
+	 * else it falls through to delete-char-forward) -- the empty-only gate is
+	 * pi's own semantic, enforced inside `CustomEditor`/`CathedralEditor`
+	 * itself, not something this controller needs to re-check.
+	 */
+	readonly onExit?: () => void;
+	/**
+	 * Manager-driven `app.interrupt` action (Escape by default, or the user's
+	 * remap). `CustomEditor` only invokes this when the autocomplete dropdown
+	 * is NOT showing (else Escape falls through to close the dropdown).
+	 */
+	readonly onInterrupt?: () => void;
 }
 
 const identity = (text: string): string => text;
@@ -112,6 +135,15 @@ export class RpcHostEditorController implements EditorTextController, KeyTarget 
 			options.keybindings ?? createNoopKeybindings(),
 			{ isSplash: () => this.isSplashProvider() },
 		);
+		// Manager-driven app actions: `CustomEditor` (which `CathedralEditor`
+		// extends) already gates these on the injected `KeybindingsManager` --
+		// `onCtrlD`/`onEscape` are its special-cased callback props for
+		// `app.exit`/`app.interrupt` (see custom-editor.js), each with pi's own
+		// empty-editor / autocomplete-closed guard already enforced internally.
+		// `onAction` is the generic per-action handler map for everything else
+		// (e.g. `app.suspend`) that CustomEditor's `handleInput` also consults.
+		if (options.onExit) this.editor.onCtrlD = options.onExit;
+		if (options.onInterrupt) this.editor.onEscape = options.onInterrupt;
 		this.editor.focused = true;
 		this.editor.onChange = () => this.tui.requestRender();
 		this.editor.onSubmit = (text) => {
@@ -272,4 +304,157 @@ function createNoopKeybindings(): KeybindingsManager {
 	return {
 		matches: () => false,
 	} as unknown as KeybindingsManager;
+}
+
+/**
+ * `app.*` keybinding defaults, mirrored from
+ * `@earendil-works/pi-coding-agent`'s internal `KEYBINDINGS` table
+ * (`dist/core/keybindings.js`). That table -- and the `KeybindingsManager`
+ * subclass that merges it with `TUI_KEYBINDINGS` and loads the user's
+ * `keybindings.json` (`KeybindingsManager.create(agentDir)`) -- is NOT
+ * reachable from the package's public surface: `package.json#exports`
+ * restricts the package to its `"."` entry point only (verified: importing
+ * `@earendil-works/pi-coding-agent/dist/core/keybindings.js` throws Node's
+ * `ERR_PACKAGE_PATH_NOT_EXPORTED` at runtime, under both ESM and CJS
+ * resolution), and the main index only re-exports `KeybindingsManager` as a
+ * TYPE (`export type { ... KeybindingsManager ... }`), not a value --
+ * `typeof (await import("@earendil-works/pi-coding-agent")).KeybindingsManager
+ * === "undefined"` confirms this empirically. Pi's own interactive mode only
+ * ever constructs it via a deep relative import internal to the package
+ * (`../../core/keybindings.js`), never through its own public entry point.
+ *
+ * `@earendil-works/pi-tui`'s `KeybindingsManager` (imported below as
+ * `PiTuiKeybindingsManager`) IS a public value export with no `exports`
+ * restriction, and it is the exact base class pi-coding-agent's manager
+ * extends -- `matches()`, the method `CustomEditor.handleInput` actually
+ * calls, is implemented there, not overridden. Constructing
+ * `PiTuiKeybindingsManager` directly with `TUI_KEYBINDINGS` (also public)
+ * merged with this locally-declared `app.*` table reproduces the same
+ * `matches()` behavior pi's real manager provides, including honoring a
+ * user's `keybindings.json` override merged in as `userBindings` -- without
+ * depending on an internal module path Node refuses to resolve.
+ *
+ * Judgment call: `migrateKeybindingsConfig` (renames legacy pre-namespaced
+ * keys like `"exit"` -> `"app.exit"`) is also internal-only and is not
+ * reimplemented here. `keybindings.json` files written against the current,
+ * namespaced action names (`"app.exit"`, `"app.interrupt"`, ...) -- the only
+ * form documented/produced today -- are unaffected; only pre-migration
+ * legacy key names would silently fail to apply.
+ */
+const APP_KEYBINDING_DEFINITIONS: KeybindingDefinitions = {
+	"app.interrupt": { defaultKeys: "escape", description: "Cancel or abort" },
+	"app.clear": { defaultKeys: "ctrl+c", description: "Clear editor" },
+	"app.exit": { defaultKeys: "ctrl+d", description: "Exit when editor is empty" },
+	"app.suspend": { defaultKeys: process.platform === "win32" ? [] : "ctrl+z", description: "Suspend to background" },
+	"app.thinking.cycle": { defaultKeys: "shift+tab", description: "Cycle thinking level" },
+	"app.model.cycleForward": { defaultKeys: "ctrl+p", description: "Cycle to next model" },
+	"app.model.cycleBackward": { defaultKeys: "shift+ctrl+p", description: "Cycle to previous model" },
+	"app.model.select": { defaultKeys: "ctrl+l", description: "Open model selector" },
+	"app.tools.expand": { defaultKeys: "ctrl+o", description: "Toggle tool output" },
+	"app.thinking.toggle": { defaultKeys: "ctrl+t", description: "Toggle thinking blocks" },
+	"app.session.toggleNamedFilter": { defaultKeys: "ctrl+n", description: "Toggle named session filter" },
+	"app.editor.external": { defaultKeys: "ctrl+g", description: "Open external editor" },
+	"app.message.followUp": { defaultKeys: "alt+enter", description: "Queue follow-up message" },
+	"app.message.dequeue": { defaultKeys: "alt+up", description: "Restore queued messages" },
+	"app.clipboard.pasteImage": { defaultKeys: process.platform === "win32" ? "alt+v" : "ctrl+v", description: "Paste image from clipboard" },
+	"app.session.new": { defaultKeys: [], description: "Start a new session" },
+	"app.session.tree": { defaultKeys: [], description: "Open session tree" },
+	"app.session.fork": { defaultKeys: [], description: "Fork current session" },
+	"app.session.resume": { defaultKeys: [], description: "Resume a session" },
+	"app.tree.foldOrUp": { defaultKeys: ["ctrl+left", "alt+left"], description: "Fold tree branch or move up" },
+	"app.tree.unfoldOrDown": { defaultKeys: ["ctrl+right", "alt+right"], description: "Unfold tree branch or move down" },
+	"app.tree.editLabel": { defaultKeys: "shift+l", description: "Edit tree label" },
+	"app.tree.toggleLabelTimestamp": { defaultKeys: "shift+t", description: "Toggle tree label timestamps" },
+	"app.session.togglePath": { defaultKeys: "ctrl+p", description: "Toggle session path display" },
+	"app.session.toggleSort": { defaultKeys: "ctrl+s", description: "Toggle session sort mode" },
+	"app.session.rename": { defaultKeys: "ctrl+r", description: "Rename session" },
+	"app.session.delete": { defaultKeys: "ctrl+d", description: "Delete session" },
+	"app.session.deleteNoninvasive": { defaultKeys: "ctrl+backspace", description: "Delete session when query is empty" },
+	"app.models.save": { defaultKeys: "ctrl+s", description: "Save model selection" },
+	"app.models.enableAll": { defaultKeys: "ctrl+a", description: "Enable all models" },
+	"app.models.clearAll": { defaultKeys: "ctrl+x", description: "Clear all models" },
+	"app.models.toggleProvider": { defaultKeys: "ctrl+p", description: "Toggle all models for provider" },
+	"app.models.reorderUp": { defaultKeys: "alt+up", description: "Move model up in order" },
+	"app.models.reorderDown": { defaultKeys: "alt+down", description: "Move model down in order" },
+	"app.tree.filter.default": { defaultKeys: "ctrl+d", description: "Tree filter: default view" },
+	"app.tree.filter.noTools": { defaultKeys: "ctrl+t", description: "Tree filter: hide tool results" },
+	"app.tree.filter.userOnly": { defaultKeys: "ctrl+u", description: "Tree filter: user messages only" },
+	"app.tree.filter.labeledOnly": { defaultKeys: "ctrl+l", description: "Tree filter: labeled entries only" },
+	"app.tree.filter.all": { defaultKeys: "ctrl+a", description: "Tree filter: show all entries" },
+	"app.tree.filter.cycleForward": { defaultKeys: "ctrl+o", description: "Tree filter: cycle forward" },
+	"app.tree.filter.cycleBackward": { defaultKeys: "shift+ctrl+o", description: "Tree filter: cycle backward" },
+};
+
+const RPC_KEYBINDING_DEFINITIONS: KeybindingDefinitions = { ...TUI_KEYBINDINGS, ...APP_KEYBINDING_DEFINITIONS };
+
+export interface ResolveRpcAgentDirOptions {
+	readonly homeDir?: string;
+	readonly env?: NodeJS.ProcessEnv;
+}
+
+/**
+ * Resolve pi's agent config directory the same env-aware way pi's own
+ * `getAgentDir()` does (`core/config.js`: check `PI_CODING_AGENT_DIR` first,
+ * else `<homeDir>/.pi/agent`) -- and the same pattern
+ * `resolveGlobalSumoCodeConfigPath` in `src/config/sumocode-config.ts` uses
+ * for SumoCode's own config file, so an isolated `PI_CODING_AGENT_DIR` (used
+ * by the visual harness and other tooling to sandbox a whole agent dir)
+ * redirects `keybindings.json` resolution the same way it redirects
+ * `sumocode.json`.
+ */
+export function resolveRpcAgentDir(options: ResolveRpcAgentDirOptions = {}): string {
+	const env = options.env ?? process.env;
+	const piAgentDir = env.PI_CODING_AGENT_DIR;
+	if (piAgentDir) return resolve(piAgentDir);
+	return join(resolve(options.homeDir ?? homedir()), ".pi", "agent");
+}
+
+function isKeyIdLike(value: unknown): value is string | string[] {
+	if (typeof value === "string") return true;
+	return Array.isArray(value) && value.every((entry) => typeof entry === "string");
+}
+
+/**
+ * Load and validate the user's `keybindings.json` override from the
+ * resolved agent dir. Missing file, unreadable file, invalid JSON, or a
+ * non-object root all resolve to "no overrides" rather than throwing --
+ * a malformed keybindings file must not prevent the RPC host from starting.
+ * Per-key values that aren't a `KeyId` or `KeyId[]` are dropped individually
+ * (mirrors pi's own `toKeybindingsConfig` filtering).
+ */
+export function loadRpcKeybindingsOverrides(agentDir: string): KeybindingsConfig {
+	const path = join(agentDir, "keybindings.json");
+	if (!existsSync(path)) return {};
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(readFileSync(path, "utf8"));
+	} catch {
+		return {};
+	}
+	if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return {};
+	// User-authored keybindings.json is untyped JSON at the boundary -- `KeyId`
+	// is a template-literal union pi-tui validates internally via `matches()`
+	// at lookup time, not something we can narrow to statically here. Filtering
+	// to string/string[] shapes (mirrors pi's own `toKeybindingsConfig`) is the
+	// same validation depth pi's real loader applies before this cast.
+	const config: KeybindingsConfig = {};
+	for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+		if (isKeyIdLike(value)) config[key] = value as never;
+	}
+	return config;
+}
+
+export interface CreateRpcKeybindingsManagerOptions extends ResolveRpcAgentDirOptions {}
+
+/**
+ * Construct the RPC host's real `KeybindingsManager`: `pi-tui`'s public
+ * manager class, seeded with pi's `app.*` action defaults merged with
+ * `TUI_KEYBINDINGS`, with the user's `keybindings.json` overrides loaded
+ * from the (env-aware) agent dir. See `APP_KEYBINDING_DEFINITIONS` above for
+ * why this can't just call pi-coding-agent's own `KeybindingsManager.create`.
+ */
+export function createRpcKeybindingsManager(options: CreateRpcKeybindingsManagerOptions = {}): KeybindingsManager {
+	const agentDir = resolveRpcAgentDir(options);
+	const userBindings = loadRpcKeybindingsOverrides(agentDir);
+	return new PiTuiKeybindingsManager(RPC_KEYBINDING_DEFINITIONS, userBindings) as unknown as KeybindingsManager;
 }

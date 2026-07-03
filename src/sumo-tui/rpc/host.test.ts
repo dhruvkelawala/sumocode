@@ -160,6 +160,58 @@ function exitDeps(overrides: Partial<RpcHostExitDependencies> = {}): RpcHostExit
 	};
 }
 
+describe("app.interrupt action wiring reuses the interrupt tier module", () => {
+	// runRpcHost wires the editor's manager-driven `app.interrupt` action
+	// (fired by CathedralEditor/CustomEditor once pi's KeybindingsManager
+	// confirms the user's app.interrupt binding -- default Escape, or a
+	// keybindings.json remap -- was pressed, and autocomplete is closed) to
+	// `handlePreEditorInput("\x1b")`: a canonical escape token replayed through
+	// the SAME `createRpcHostInterruptHandler` instance Ctrl-C/raw-Escape use.
+	// These tests pin that a canonical escape token alone (independent of
+	// whatever raw bytes the user's actual remapped key produces) drives the
+	// exact same tier decisions real Escape input already does.
+	it("replaying a canonical escape token aborts an in-flight stream via the interrupt tier", async () => {
+		const controls = { abort: vi.fn(async () => undefined) };
+		const handle = createRpcHostInterruptHandler(interruptDeps({
+			stateStore: { getSnapshot: () => ({ isStreaming: true }) as never },
+			editor: { getText: () => "", setText: vi.fn(), isAutocompleteOpen: () => false },
+			controls,
+		}));
+
+		const handleAppInterrupt = (): void => { handle("\x1b"); };
+		handleAppInterrupt();
+		await flush();
+
+		expect(controls.abort).toHaveBeenCalledOnce();
+	});
+
+	it("replaying a canonical escape token is a no-op (pass) when not streaming", () => {
+		const requestHostExit = vi.fn();
+		const notifications = { notify: vi.fn() };
+		const handle = createRpcHostInterruptHandler(interruptDeps({
+			stateStore: { getSnapshot: () => ({ isStreaming: false }) as never },
+			notifications,
+			requestHostExit,
+		}));
+
+		const handleAppInterrupt = (): void => { handle("\x1b"); };
+		handleAppInterrupt();
+
+		expect(requestHostExit).not.toHaveBeenCalled();
+		expect(notifications.notify).not.toHaveBeenCalled();
+	});
+
+	it("replaying a canonical escape token still dismisses an active modal via the interrupt tier", () => {
+		const modals = { getActiveKind: () => "confirm" as const, close: vi.fn() };
+		const handle = createRpcHostInterruptHandler(interruptDeps({ modals }));
+
+		const handleAppInterrupt = (): void => { handle("\x1b"); };
+		handleAppInterrupt();
+
+		expect(modals.close).toHaveBeenCalledOnce();
+	});
+});
+
 describe("RPC host client-exit shutdown", () => {
 	it("closes modals and overlays, clears streaming state, and notifies with a bounded message", () => {
 		const modals = { close: vi.fn() };

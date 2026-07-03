@@ -7,7 +7,7 @@ import { ModalLayer } from "../widgets/modal-layer.js";
 import { NotificationCenter } from "../widgets/notification.js";
 import { SumoRpcClient, truncateForNotification } from "./client.js";
 import { RpcHostControls } from "./controls.js";
-import { RpcHostEditorController } from "./editor.js";
+import { createRpcKeybindingsManager, RpcHostEditorController } from "./editor.js";
 import { createRpcExtensionUiResponder } from "./extension-ui-responder.js";
 import { RpcHostActions } from "./host-actions.js";
 import { RpcHostOverlayManager } from "./host-overlays.js";
@@ -313,6 +313,17 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 	let actions: RpcHostActions | undefined;
 	let regionRegistryDisposed = false;
 	let requestHostExit: (code: number) => void = () => undefined;
+	// Forward reference: the editor's `onInterrupt` callback (registered below,
+	// on construction) must route `app.interrupt` through the same interrupt
+	// tier module Ctrl-C/Escape already use (`createRpcHostInterruptHandler`,
+	// built further down once its own dependencies -- including `editor`
+	// itself -- exist). `app.interrupt`'s default key is Escape, so replaying
+	// a canonical escape token into that handler reuses its existing
+	// modal/overlay/streaming/autocomplete decision logic instead of
+	// duplicating it -- this stays correct even when the user has remapped
+	// `app.interrupt` to a different key, since by the time `onInterrupt`
+	// fires pi's own manager has already confirmed that binding was pressed.
+	let handleAppInterrupt: () => void = () => undefined;
 	// Set the instant a prompt is submitted, cleared once the RPC child's
 	// `agent_start` event lands (via stateStore.handleAgentEvent, see
 	// client.onEvent below) or the send itself fails. `stateStore`'s
@@ -321,11 +332,22 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 	// and arms quit instead of aborting (defect: double Ctrl-C quits the app
 	// instead of aborting the in-flight send).
 	let submitInFlight = false;
+	const keybindings = createRpcKeybindingsManager({ env });
 	const editor = new RpcHostEditorController({
 		controls,
 		cwd,
+		keybindings,
 		onRenderRequest: requestRender,
 		errorNotifier: notifications,
+		// app.exit (Ctrl+D by default, or the user's keybindings.json remap):
+		// CustomEditor only invokes this when the editor is empty (enforced
+		// inside CustomEditor itself -- see editor.ts's onExit doc comment).
+		// Same clean-shutdown path as `/quit` (host-actions.ts: `onExitRequest(0)`
+		// -> here, `requestHostExit(0)` -> `runtime?.stop(0)`).
+		onExit: () => requestHostExit(0),
+		// app.interrupt (Escape by default, or the user's remap): replay into
+		// the interrupt tier module (see `handleAppInterrupt` above).
+		onInterrupt: () => handleAppInterrupt(),
 		onSubmit: async (message) => {
 			submitInFlight = true;
 			try {
@@ -463,6 +485,12 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		requestHostExit: (code) => requestHostExit(code),
 		submitInFlight: () => submitInFlight,
 	});
+	// A canonical escape token replays the exact same classification
+	// (dismiss-modal / abort / arm-quit / quit / pass) `handlePreEditorInput`
+	// already applies to a real Ctrl-C/Escape keypress -- see the
+	// `handleAppInterrupt` declaration above for why this is the correct reuse
+	// point instead of a second, editor-local interrupt implementation.
+	handleAppInterrupt = (): void => { handlePreEditorInput("\x1b"); };
 	const handleSigint = (): void => { void stop(130).then(() => process.exit(130)); };
 	const handleSigterm = (): void => { void stop(0).then(() => process.exit(0)); };
 	process.once("SIGINT", handleSigint);

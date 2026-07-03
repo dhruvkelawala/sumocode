@@ -1,6 +1,9 @@
 import type { KeybindingsManager } from "@earendil-works/pi-coding-agent";
 import type { EditorTheme, TUI } from "@earendil-works/pi-tui";
-import { describe, expect, it, vi } from "vitest";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SumoTuiTestBackend, type TestBackendFrame } from "../testing/test-backend.js";
 import type { NotificationLevel } from "../widgets/notification.js";
 import { PiEditorLeaf } from "../widgets/pi-editor-leaf.js";
@@ -10,6 +13,9 @@ import {
 	buildRpcAutocompleteCommands,
 	createRpcAutocompleteProvider,
 	createRpcHostEditorController,
+	createRpcKeybindingsManager,
+	loadRpcKeybindingsOverrides,
+	resolveRpcAgentDir,
 	type RpcEditorAutocompleteControls,
 } from "./editor.js";
 import { isRpcHostSlashCommandName } from "./host-actions.js";
@@ -347,5 +353,161 @@ describe("RPC autocomplete command construction", () => {
 		expect(commands.some((command) => command.name === "export")).toBe(true);
 		expect(commands.some((command) => command.name === "quit")).toBe(true);
 		expect(commands.some((command) => command.name === "hotkeys")).toBe(false);
+	});
+});
+
+describe("RPC keybindings manager construction", () => {
+	let agentDir: string;
+
+	beforeEach(() => {
+		agentDir = mkdtempSync(join(tmpdir(), "sumocode-rpc-keybindings-test-"));
+	});
+
+	afterEach(() => {
+		rmSync(agentDir, { recursive: true, force: true });
+	});
+
+	it("resolves the agent dir from PI_CODING_AGENT_DIR when set, else <homeDir>/.pi/agent", () => {
+		expect(resolveRpcAgentDir({ env: { PI_CODING_AGENT_DIR: agentDir } })).toBe(agentDir);
+		expect(resolveRpcAgentDir({ homeDir: "/home/test", env: {} })).toBe(join("/home/test", ".pi", "agent"));
+	});
+
+	it("loads no overrides when keybindings.json is absent", () => {
+		expect(loadRpcKeybindingsOverrides(agentDir)).toEqual({});
+	});
+
+	it("loads no overrides when keybindings.json is malformed JSON", () => {
+		writeFileSync(join(agentDir, "keybindings.json"), "{ not json", "utf8");
+		expect(loadRpcKeybindingsOverrides(agentDir)).toEqual({});
+	});
+
+	it("loads a stubbed user keybindings.json override, dropping invalid entries", () => {
+		writeFileSync(
+			join(agentDir, "keybindings.json"),
+			JSON.stringify({ "app.exit": "ctrl+q", "app.interrupt": ["ctrl+g", "f2"], "app.bogus": 42 }),
+			"utf8",
+		);
+		expect(loadRpcKeybindingsOverrides(agentDir)).toEqual({
+			"app.exit": "ctrl+q",
+			"app.interrupt": ["ctrl+g", "f2"],
+		});
+	});
+
+	it("constructs a real manager whose matches() honors the remapped app.exit binding over the default", () => {
+		writeFileSync(join(agentDir, "keybindings.json"), JSON.stringify({ "app.exit": "ctrl+q" }), "utf8");
+		const manager = createRpcKeybindingsManager({ env: { PI_CODING_AGENT_DIR: agentDir } });
+
+		expect(manager.matches("\x11", "app.exit" as never)).toBe(true); // ctrl+q
+		expect(manager.matches("\x04", "app.exit" as never)).toBe(false); // default ctrl+d no longer bound
+	});
+
+	it("constructs a real manager that honors default app.* bindings when no override is present", () => {
+		const manager = createRpcKeybindingsManager({ env: { PI_CODING_AGENT_DIR: agentDir } });
+
+		expect(manager.matches("\x04", "app.exit" as never)).toBe(true); // default ctrl+d
+		expect(manager.matches("\x1b", "app.interrupt" as never)).toBe(true); // default escape
+	});
+
+	it("still resolves tui.* editor bindings (undisturbed by app.* merge)", () => {
+		const manager = createRpcKeybindingsManager({ env: { PI_CODING_AGENT_DIR: agentDir } });
+
+		expect(manager.matches("\x02", "tui.editor.cursorLeft" as never)).toBe(true); // ctrl+b
+	});
+});
+
+describe("RPC editor controller app-level action wiring", () => {
+	it("invokes onExit via Ctrl+D only when the editor is empty (pi's own CustomEditor gate)", () => {
+		const onExit = vi.fn();
+		const controller = new RpcHostEditorController({
+			tui: fakeTui(),
+			theme: fakeEditorTheme(),
+			keybindings: createRpcKeybindingsManager({ env: {} }),
+			onExit,
+		});
+
+		controller.setText("draft in progress");
+		controller.handleInput("\x04"); // ctrl+d
+		expect(onExit).not.toHaveBeenCalled();
+		// Pi's own semantic falls through to delete-char-forward when non-empty;
+		// the draft is unaffected here because ctrl+d deletes forward from the
+		// cursor, which sits at the end of the inserted text.
+		expect(controller.getText()).toBe("draft in progress");
+
+		controller.setText("");
+		controller.handleInput("\x04"); // ctrl+d on an empty editor
+		expect(onExit).toHaveBeenCalledTimes(1);
+	});
+
+	it("invokes onInterrupt via Escape when autocomplete is not open", () => {
+		const onInterrupt = vi.fn();
+		const controller = new RpcHostEditorController({
+			tui: fakeTui(),
+			theme: fakeEditorTheme(),
+			keybindings: createRpcKeybindingsManager({ env: {} }),
+			onInterrupt,
+		});
+
+		controller.handleInput("\x1b"); // escape, no autocomplete showing
+		expect(onInterrupt).toHaveBeenCalledTimes(1);
+	});
+
+	it("does not invoke onInterrupt via Escape while the autocomplete dropdown is open", async () => {
+		const onInterrupt = vi.fn();
+		const controls = controlsFor({ commands: [rpcCommand("deploy", "Deploy current workspace")] });
+		const controller = await createRpcHostEditorController({
+			controls,
+			tui: fakeTui(),
+			theme: fakeEditorTheme(),
+			keybindings: createRpcKeybindingsManager({ env: {} }),
+			cwd: process.cwd(),
+			onInterrupt,
+		});
+
+		controller.handleInput("/");
+		controller.handleInput("d");
+		controller.handleInput("e");
+		await waitForRenderedText(controller, "deploy");
+		expect(controller.isAutocompleteOpen()).toBe(true);
+
+		controller.handleInput("\x1b");
+
+		expect(onInterrupt).not.toHaveBeenCalled();
+		expect(controller.isAutocompleteOpen()).toBe(false);
+	});
+
+	it("honors a remapped app.exit binding from keybindings.json instead of the default ctrl+d", () => {
+		const agentDir = mkdtempSync(join(tmpdir(), "sumocode-rpc-keybindings-wiring-test-"));
+		try {
+			writeFileSync(join(agentDir, "keybindings.json"), JSON.stringify({ "app.exit": "ctrl+q" }), "utf8");
+			const onExit = vi.fn();
+			const controller = new RpcHostEditorController({
+				tui: fakeTui(),
+				theme: fakeEditorTheme(),
+				keybindings: createRpcKeybindingsManager({ env: { PI_CODING_AGENT_DIR: agentDir } }),
+				onExit,
+			});
+
+			controller.handleInput("\x04"); // default ctrl+d no longer triggers app.exit
+			expect(onExit).not.toHaveBeenCalled();
+
+			controller.handleInput("\x11"); // remapped ctrl+q
+			expect(onExit).toHaveBeenCalledTimes(1);
+		} finally {
+			rmSync(agentDir, { recursive: true, force: true });
+		}
+	});
+
+	it("leaves editor internals (arrow keys, undo) unaffected by the real keybindings manager", () => {
+		const controller = new RpcHostEditorController({
+			tui: fakeTui(),
+			theme: fakeEditorTheme(),
+			keybindings: createRpcKeybindingsManager({ env: {} }),
+		});
+
+		controller.handleInput("abc");
+		controller.handleInput("\x1b[D"); // left arrow
+		controller.handleInput("X");
+
+		expect(controller.getText()).toBe("abXc");
 	});
 });

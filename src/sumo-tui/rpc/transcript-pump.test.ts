@@ -1,6 +1,8 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { TranscriptController } from "../transcript/controller.js";
+import { chatMessageViewModelToPlainText, createTranscriptViewModelMapper } from "../transcript/view-model.js";
 import { RpcTranscriptPump } from "./transcript-pump.js";
 
 function readJson(path: string): unknown {
@@ -52,7 +54,10 @@ describe("RpcTranscriptPump", () => {
 
 	it("captures live task partial output from tool_execution_update.partialResult", () => {
 		const pump = new RpcTranscriptPump();
-		for (const event of readJsonl("scratch/rpc-spike/events-task-partial.jsonl")) pump.handleAgentEvent(event);
+		for (const event of readJsonl("scratch/rpc-spike/events-task-partial.jsonl")) {
+			pump.handleAgentEvent(event);
+			if ((event as { type?: unknown }).type === "tool_execution_update") break;
+		}
 
 		const partials = pump.getTaskPartials();
 		expect(partials).toHaveLength(1);
@@ -61,6 +66,183 @@ describe("RpcTranscriptPump", () => {
 			toolName: "task",
 			partialResult: {
 				content: [{ type: "text", text: "task partial output" }],
+			},
+		});
+	});
+
+	it("maps committed messages once while replacing only the live draft across streaming updates", () => {
+		const mapper = createTranscriptViewModelMapper();
+		const originalMessageFromPiMessage = mapper.messageFromPiMessage.bind(mapper);
+		const messageFromPiMessage = vi.fn(originalMessageFromPiMessage);
+		mapper.messageFromPiMessage = messageFromPiMessage;
+		const controller = new TranscriptController({ mapper });
+
+		controller.replaceFromMessages([
+			{ id: "u1", role: "user", content: "question" },
+			{ id: "a1", role: "assistant", content: "committed answer" },
+		]);
+		messageFromPiMessage.mockClear();
+
+		for (let index = 0; index < 5; index += 1) {
+			controller.handleAgentEvent({
+				type: "message_update",
+				message: { id: "draft", role: "assistant", content: `draft ${index}` },
+			});
+		}
+
+		expect(messageFromPiMessage).toHaveBeenCalledTimes(5);
+		expect(messageFromPiMessage.mock.calls.map(([message]) => (message as { id?: string }).id)).toEqual(["draft", "draft", "draft", "draft", "draft"]);
+	});
+
+	it("prunes live tool and task partial state after authoritative agent_end messages arrive", () => {
+		const pump = new RpcTranscriptPump();
+		pump.handleAgentEvent({
+			type: "tool_execution_update",
+			toolCallId: "task-1",
+			toolName: "task",
+			args: { prompt: "Track task output" },
+			partialResult: { content: [{ type: "text", text: "partial" }] },
+		});
+		pump.handleAgentEvent({
+			type: "tool_execution_start",
+			toolCallId: "read-1",
+			toolName: "read",
+			args: { path: "src/auth.ts" },
+		});
+
+		expect(pump.getTaskPartials()).toHaveLength(1);
+		expect(pump.getLiveStateSnapshot()).toMatchObject({ liveTools: 2, taskPartials: 1 });
+
+		pump.handleAgentEvent({
+			type: "agent_end",
+			messages: [{ id: "final", role: "assistant", content: "done" }],
+		});
+
+		expect(pump.getTaskPartials()).toHaveLength(0);
+		expect(pump.getLiveStateSnapshot()).toMatchObject({ liveTools: 0, taskPartials: 0, draftMessage: false });
+		expect(pump.viewModel().messages.map((message) => message.id)).toEqual(["final"]);
+	});
+
+	it("drops the committed-message cache on rehydration so old session messages cannot ghost", () => {
+		const pump = new RpcTranscriptPump();
+
+		expect(pump.replaceFromMessages([{ id: "old", role: "user", content: "old session" }]).messages.map((message) => message.id)).toEqual(["old"]);
+		expect(pump.getLiveStateSnapshot().committedCacheMessages).toBe(1);
+
+		const next = pump.replaceFromMessages([{ id: "new", role: "user", content: "new session" }]);
+
+		expect(next.messages.map((message) => message.id)).toEqual(["new"]);
+		expect(next.messages.map((message) => chatMessageViewModelToPlainText(message))).toEqual(["new session"]);
+	});
+
+	it("preserves Track B transcript blocks through the RPC controller", () => {
+		const pump = new RpcTranscriptPump();
+		const transcript = pump.replaceFromMessages([
+			{
+				id: "skill-user",
+				role: "user",
+				content: "<skill name=\"deep-research\" location=\"/skills/dr/SKILL.md\">\nbody\n</skill>\n\nplease research",
+			},
+			{
+				id: "markdown-code",
+				role: "assistant",
+				content: "Before code.\n```ts\nconst value = 1;\n```\nAfter code.",
+			},
+			{
+				id: "edit-call",
+				role: "assistant",
+				content: [{ type: "toolCall", id: "edit-1", name: "edit", arguments: { path: "src/auth.ts" } }],
+			},
+			{
+				role: "toolResult",
+				toolCallId: "edit-1",
+				toolName: "edit",
+				name: "edit",
+				content: [{ type: "text", text: "+1 -1" }],
+				details: { diff: "- old\n+ new" },
+			},
+			{ id: "custom", role: "custom", customType: "sumocode-theme-result", display: true, content: "switched to obsidian" },
+			{ id: "compaction", role: "compactionSummary", summary: "Kept the important state.", tokensBefore: 42000 },
+		]);
+
+		expect(transcript.messages).toHaveLength(5);
+		expect(transcript.messages[0]?.blocks).toEqual([
+			{ type: "skill", name: "deep-research", expanded: false, content: "body" },
+			{ type: "markdown", text: "please research" },
+		]);
+		expect(transcript.messages[1]?.blocks).toEqual([
+			{ type: "markdown", text: "Before code.\n" },
+			{ type: "code", lang: "ts", source: "const value = 1;" },
+			{ type: "markdown", text: "\nAfter code." },
+		]);
+		expect(transcript.messages[2]?.blocks).toEqual([{
+			type: "tool",
+			tool: {
+				id: "edit-1",
+				name: "edit",
+				status: "success",
+				input: { path: "src/auth.ts" },
+				output: "+1 -1",
+				details: { diff: "- old\n+ new" },
+				error: undefined,
+				expanded: true,
+			},
+		}]);
+		expect(chatMessageViewModelToPlainText(transcript.messages[2]!)).toContain("ctrl+o diff");
+		expect(transcript.messages[3]?.blocks).toEqual([
+			{ type: "markdown", text: "[sumocode-theme-result]" },
+			{ type: "markdown", text: "switched to obsidian" },
+		]);
+		expect(transcript.messages[4]?.blocks).toEqual([{
+			type: "summary",
+			kind: "compaction",
+			label: "[compaction] Compacted from 42,000 tokens",
+			content: "Kept the important state.",
+			expanded: false,
+		}]);
+	});
+
+	it("folds live task execution partial details into the active delegation block", () => {
+		const pump = new RpcTranscriptPump();
+		const taskCall = {
+			type: "toolCall",
+			id: "tc-task",
+			name: "task",
+			arguments: { type: "single", tasks: [{ prompt: "## Audit auth\n\nFind risky files." }] },
+		};
+
+		pump.handleAgentEvent({ type: "message_start", message: { role: "assistant", content: "" } });
+		pump.handleAgentEvent({ type: "message_update", message: { role: "assistant", content: [taskCall] } });
+		const transcript = pump.handleAgentEvent({
+			type: "tool_execution_update",
+			toolCallId: "tc-task",
+			toolName: "task",
+			args: taskCall.arguments,
+			partialResult: {
+				content: [{ type: "text", text: "reading auth files" }],
+				details: {
+					mode: "single",
+					results: [{
+						prompt: "## Audit auth\n\nFind risky files.",
+						exitCode: -1,
+						messages: [],
+						toolEvents: [{ id: "read-1", name: "read", args: { path: "src/auth.ts" }, status: "running" }],
+						usage: { input: 0, output: 0 },
+						model: "openai-codex/gpt-5.5",
+						thinking: "high",
+					}],
+				},
+			},
+		});
+
+		expect(transcript.messages[0]?.blocks[0]).toMatchObject({
+			type: "delegation",
+			delegation: {
+				title: "Audit auth",
+				model: "openai-codex/gpt-5.5",
+				thinking: "high",
+				status: "running",
+				nestedTools: [{ id: "read-1", name: "read", status: "running", input: { path: "src/auth.ts" } }],
 			},
 		});
 	});

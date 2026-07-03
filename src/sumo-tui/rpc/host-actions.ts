@@ -56,13 +56,16 @@ export interface RpcHostActionsOptions {
 	readonly modals: HostModals;
 	readonly overlays: RpcHostOverlayManager;
 	/**
-	 * In-place selector surface (plan 036): `openModelSelector`,
-	 * `openThinkingSelector`, `openSessionControls`, `openSettings`, and
-	 * `openForkSelector` present through this instead of `modals.select(...)`,
-	 * so they render in the editor's band with the transcript/chrome still
-	 * visible instead of a full-screen `ModalLayer` backdrop. `modals` is kept
-	 * for confirm/input and the genuinely-blocking approval/confirm/input
-	 * flows elsewhere in the host -- only these five selectors moved.
+	 * In-place selector surface (plan 036, extended by plan 035 phase 1):
+	 * `openModelSelector`, `openThinkingSelector`, `openSessionControls`,
+	 * `openSettings`, `openForkSelector`, and `openThemeSelector` (migrated off
+	 * `modals.select` for consistency -- task 10) present through this instead
+	 * of `modals.select(...)`, so they render in the editor's band with the
+	 * transcript/chrome still visible instead of a full-screen `ModalLayer`
+	 * backdrop. `openResumeSelector` and `openTreeBrowser` (session-reader-backed,
+	 * added in plan 035 phase 1) also use this surface. `modals` is kept for
+	 * confirm/input and the genuinely-blocking approval/confirm/input flows
+	 * elsewhere in the host -- only these selectors moved.
 	 */
 	readonly inlineSelectors: HostInlineSelectors;
 	readonly notifications: HostNotifications;
@@ -567,7 +570,7 @@ export class RpcHostActions {
 	}
 
 	public async openThemeSelector(): Promise<void> {
-		const selected = await this.modals.select("Choose SumoCode theme", listThemes().map((theme) => theme.name));
+		const selected = await this.inlineSelectors.select("Choose SumoCode theme", listThemes().map((theme) => theme.name));
 		if (selected) this.setThemeFromText(selected);
 	}
 

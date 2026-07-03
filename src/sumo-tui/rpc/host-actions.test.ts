@@ -764,6 +764,21 @@ describe("RpcHostActions", () => {
 		expect(notifications).toContainEqual({ message: "theme: amber-crt", level: "info" });
 	});
 
+	it("opens /theme's picker through the in-place InlineSelectorHost, not modals.select", async () => {
+		const { actions, modals, inlineSelectors, notifications } = setup();
+
+		const themePromise = actions.handleSubmittedText("/theme");
+		await flush();
+		expect(inlineSelectors.getActiveKind()).toBe("select");
+		expect(modals.getActiveKind()).toBeUndefined();
+		inlineSelectors.handleInput(SELECTOR_DOWN); // cathedral -> amber-crt
+		inlineSelectors.handleInput(SELECTOR_ENTER);
+		await themePromise;
+
+		expect(getActiveTheme().name).toBe("amber-crt");
+		expect(notifications).toContainEqual({ message: "theme: amber-crt", level: "info" });
+	});
+
 	it("notifies memory client failures without throwing from direct memory commands", async () => {
 		const memory = new FakeMemoryClient();
 		memory.add = async (text: string) => {

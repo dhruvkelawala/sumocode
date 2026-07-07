@@ -220,23 +220,30 @@ describe("RPC host retained runtime frame", () => {
 	});
 
 	it("reserves the V2 sidebar columns in active landscape", async () => {
-		const frame = await renderRpcHostFrameForTest({
-			state: state({ messageCount: 1, hasMessages: true }),
-			transcript: {
-				messages: [{
-					id: "message-1",
-					role: "user",
-					displayName: "YOU",
-					blocks: [{ type: "markdown", text: "landscape chat body" }],
-				}],
-			},
-		}, 160, 45);
+		const previousCwd = process.env.SUMOCODE_PROJECT_CWD;
+		process.env.SUMOCODE_PROJECT_CWD = "/tmp/sumocode";
+		try {
+			const frame = await renderRpcHostFrameForTest({
+				state: state({ messageCount: 1, hasMessages: true }),
+				transcript: {
+					messages: [{
+						id: "message-1",
+						role: "user",
+						displayName: "YOU",
+						blocks: [{ type: "markdown", text: "landscape chat body" }],
+					}],
+				},
+			}, 160, 45);
 
-		const sidebarText = Array.from({ length: 34 }, (_, row) => frame.toPlainRow(row + 3).slice(130)).join("\n");
-		const chatText = Array.from({ length: 34 }, (_, row) => frame.toPlainRow(row + 3).slice(0, 128)).join("\n");
-		expect(sidebarText).toContain("REGISTRY");
-		expect(sidebarText).toContain("sumocode");
-		expect(chatText).toContain("landscape chat body");
+			const sidebarText = Array.from({ length: 34 }, (_, row) => frame.toPlainRow(row + 3).slice(130)).join("\n");
+			const chatText = Array.from({ length: 34 }, (_, row) => frame.toPlainRow(row + 3).slice(0, 128)).join("\n");
+			expect(sidebarText).toContain("REGISTRY");
+			expect(sidebarText).toContain("sumocode");
+			expect(chatText).toContain("landscape chat body");
+		} finally {
+			if (previousCwd === undefined) delete process.env.SUMOCODE_PROJECT_CWD;
+			else process.env.SUMOCODE_PROJECT_CWD = previousCwd;
+		}
 	});
 
 	// Regression test for the sidebar-fill-height bug: a fixed 45-row capture

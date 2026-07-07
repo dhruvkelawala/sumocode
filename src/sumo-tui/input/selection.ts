@@ -244,7 +244,6 @@ export class SelectionController {
 			focus: this.focus,
 			selectedChars: text.length,
 			selectedLines: text.length === 0 ? 0 : text.split("\n").length,
-			preview: text.slice(0, 120),
 		});
 		this.copyCurrentSelection(buffer);
 		return true;
@@ -260,7 +259,7 @@ export class SelectionController {
 		}
 		this.options.emitClipboard?.(sequence.sequence, text);
 		this.options.onCopied?.(text);
-		logDiagnostic("selection_copy_success", { chars: text.length, preview: text.slice(0, 80) });
+		logDiagnostic("selection_copy_success", { chars: text.length });
 		return true;
 	}
 

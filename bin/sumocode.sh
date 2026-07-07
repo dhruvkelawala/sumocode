@@ -349,6 +349,13 @@ fi
 if [[ "${DEBUG_MODE}" == "1" ]]; then
 	SUMO_TUI_DIAG_FILE="${DIAG_FILE:-/tmp/sumocode-manual.jsonl}"
 	if [[ "${CLEAR_DIAG}" == "1" && "${DRY_RUN}" != "1" ]]; then rm -f "${SUMO_TUI_DIAG_FILE}"; fi
+	if [[ "${DRY_RUN}" != "1" ]]; then
+		# Pre-create the trace owner-only (0600): it records low-level input
+		# events, and the runtime's append mode only applies at file creation.
+		# `>>` keeps existing content intact on the --no-clear-diag path; the
+		# chmod tightens a pre-existing file at the predictable /tmp location.
+		(umask 177 && : >>"${SUMO_TUI_DIAG_FILE}" && chmod 600 "${SUMO_TUI_DIAG_FILE}") 2>/dev/null || true
+	fi
 	export SUMO_TUI_DIAG_FILE
 	export SUMO_TUI_DEBUG="${SUMO_TUI_DEBUG:-1}"
 	STARTUP_PRELOAD="${ROOT_DIR}/scripts/startup-diagnostics-preload.cjs"

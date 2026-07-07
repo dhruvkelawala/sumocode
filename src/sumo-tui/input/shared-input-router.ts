@@ -192,27 +192,18 @@ export function isAppleTerminalSession(env: NodeJS.ProcessEnv = process.env): bo
 }
 
 /**
- * Rewrites a bare Enter (`\r`) into the CSI-u Shift+Enter sequence the
- * editor already recognizes as "insert newline" (see editor.ts's
- * `CSI_U_ENTER` / cathedral-editor's multiline handling) when running in an
- * Apple Terminal session with Shift held.
+ * Rewrites a bare Apple Terminal Enter (`\r`) into the CSI-u Shift+Enter
+ * sequence the editor already recognizes as "insert newline" (see editor.ts's
+ * `CSI_U_ENTER` / cathedral-editor's multiline handling) when the caller has
+ * observed Shift held.
  *
- * Local reimplementation of the equivalent function in pi-tui's
+ * Local reimplementation of pi-tui's `normalizeAppleTerminalInput` in
  * `terminal.ts` (same non-exported-module rationale as
- * `isAppleTerminalSession` above).
- *
- * LIMITATION: `isShiftPressed` has no public-API way to be determined on
- * Apple Terminal. Pi-tui's own implementation resolves it via
- * `isNativeModifierPressed`, which loads a compiled, platform-specific
- * native addon (`native/darwin/prebuilds/.../darwin-modifiers.node`) that is
- * not part of pi-tui's exported surface and cannot be vendored without
- * bundling a native binary ourselves. Every call site in this codebase
- * currently passes `isShiftPressed: false`, so this function is a no-op on
- * Apple Terminal today (bare `\r` stays bare `\r`) -- Shift+Enter cannot be
- * distinguished from plain Enter there. This does not regress anything
- * (nothing was normalized before this change either); it establishes the
- * correct call shape so a future native-modifier probe can be substituted
- * without touching call sites.
+ * `isAppleTerminalSession` above). Pi's real Apple Terminal path first checks
+ * that the incoming sequence is bare `\r`, then calls
+ * `isNativeModifierPressed("shift")` from pi-tui's Darwin native modifier
+ * helper and passes that boolean here. Keeping this helper pure makes the
+ * runtime call site the only place that reaches into the native probe.
  */
 export function normalizeAppleTerminalInput(data: string, isAppleTerminal: boolean, isShiftPressed: boolean): string {
 	if (isAppleTerminal && data === "\r" && isShiftPressed) return APPLE_TERMINAL_SHIFT_ENTER_SEQUENCE;
@@ -229,13 +220,8 @@ export function normalizeAppleTerminalInput(data: string, isAppleTerminal: boole
  * tier. A bare Ctrl-C token, or a CSI-u ctrl-c press, still triggers it.
  */
 export function containsCtrlCToken(data: string): boolean {
-	// Belt-and-suspenders: even before token-splitting, a chunk carrying a
-	// bracketed-paste start marker is never treated as an interrupt keypress.
-	// splitInputTokens already keeps paste blocks whole (so isCtrlCInput would
-	// not match their single combined token either), but this guard makes the
-	// "paste content never triggers the interrupt tier" invariant explicit and
-	// independent of the tokenizer's internals.
-	if (data.includes("\x1b[200~")) return false;
+	// Tokenization is the single authority: paste blocks stay whole, while a
+	// coalesced real Ctrl-C after a paste becomes its own token.
 	return splitInputTokens(data).some((token) => isCtrlCInput(token));
 }
 

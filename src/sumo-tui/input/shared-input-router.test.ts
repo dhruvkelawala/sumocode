@@ -221,6 +221,8 @@ describe("SharedInputRouter key-release filtering", () => {
 const BARE_CTRL_C = "\x03";
 const CSI_U_CTRL_C = "\x1b[99;5u";
 const PASTE_CONTAINING_BARE_CTRL_C = "\x1b[200~before\x03after\x1b[201~";
+const PASTE_WITH_EMBEDDED_BARE_CTRL_C = "\x1b[200~abc\x03def\x1b[201~";
+const PASTE_THEN_BARE_CTRL_C = "\x1b[200~abc\x1b[201~\x03";
 
 describe("containsCtrlCToken", () => {
 	it("triggers on a bare 0x03 byte", () => {
@@ -233,6 +235,16 @@ describe("containsCtrlCToken", () => {
 
 	it("does NOT trigger on a bracketed-paste block whose content contains a literal 0x03 byte", () => {
 		expect(containsCtrlCToken(PASTE_CONTAINING_BARE_CTRL_C)).toBe(false);
+	});
+
+	it("does NOT trigger on a complete paste block whose content contains a literal 0x03 byte", () => {
+		expect(containsCtrlCToken(PASTE_WITH_EMBEDDED_BARE_CTRL_C)).toBe(false);
+	});
+
+	it("does trigger when a completed paste block and a real Ctrl-C coalesce into one stdin chunk", () => {
+		// This regressed while containsCtrlCToken had a blanket paste-start guard:
+		// the complete paste suppressed the trailing real Ctrl-C before tokenization.
+		expect(containsCtrlCToken(PASTE_THEN_BARE_CTRL_C)).toBe(true);
 	});
 });
 
@@ -324,10 +336,7 @@ describe("isAppleTerminalSession / normalizeAppleTerminalInput (TERM_PROGRAM stu
 		expect(normalizeAppleTerminalInput("\r", false, true)).toBe("\r");
 	});
 
-	it("leaves bare Enter untouched when shift is not detected -- the current, documented limitation (no public shift-detection API)", () => {
-		// Every call site in this codebase passes isShiftPressed: false today
-		// (see runtime.ts), because there is no public API to detect the shift
-		// modifier on Apple Terminal. This assertion pins that no-op behavior.
+	it("leaves bare Enter untouched when shift is not detected", () => {
 		expect(normalizeAppleTerminalInput("\r", true, false)).toBe("\r");
 	});
 

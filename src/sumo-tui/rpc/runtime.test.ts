@@ -16,6 +16,7 @@ import type { RpcHostChromeState } from "./state.js";
 import { rpcVisualFixtureFromEnv } from "./visual-fixtures.js";
 import { ChatPager } from "../widgets/chat-pager.js";
 
+
 function state(overrides: Partial<RpcHostChromeState> = {}): RpcHostChromeState {
 	return {
 		sessionId: "session-a",
@@ -665,14 +666,16 @@ describe("RPC host retained runtime frame", () => {
 		expect(input.encodings).toEqual(["utf8"]);
 	});
 
-	it("wires Apple Terminal input normalization ahead of routing (documented no-op today: no public shift-detection API)", async () => {
+	it("leaves Apple Terminal Enter unchanged when Pi's native Shift probe is false", async () => {
 		const output = new FakeOutput();
 		const input = new FakeInput();
 		const editor = new FakeEditor();
+		const nativeModifierProbe = vi.fn(() => false);
 		const runtime = new RpcHostRuntime({
 			output,
 			input,
 			editor,
+			nativeModifierProbe,
 			env: { TERM_PROGRAM: "Apple_Terminal" } as NodeJS.ProcessEnv,
 			initialState: state(),
 			initialTranscript: { messages: [] },
@@ -681,13 +684,66 @@ describe("RPC host retained runtime frame", () => {
 		await runtime.start();
 		input.emit("\r");
 
-		// Because isShiftPressed is hardcoded false (no public API to detect
-		// the shift modifier on Apple Terminal -- see
-		// normalizeAppleTerminalInput's doc comment in shared-input-router.ts),
-		// a bare \r reaches the editor unchanged rather than being rewritten to
-		// the CSI-u Shift+Enter sequence. This pins today's documented
-		// limitation; a future native-modifier probe would change this
-		// assertion, not the wiring.
+		if (process.platform === "darwin") {
+			expect(nativeModifierProbe).toHaveBeenCalledWith("shift");
+		} else {
+			expect(nativeModifierProbe).not.toHaveBeenCalled();
+		}
+		expect(editor.inputs).toEqual(["\r"]);
+	});
+
+	it("rewrites Apple Terminal Shift+Enter at the runtime input path when Pi's native Shift probe is true", async () => {
+		const output = new FakeOutput();
+		const input = new FakeInput();
+		const editor = new FakeEditor();
+		const nativeModifierProbe = vi.fn(() => true);
+		const runtime = new RpcHostRuntime({
+			output,
+			input,
+			editor,
+			nativeModifierProbe,
+			env: { TERM_PROGRAM: "Apple_Terminal" } as NodeJS.ProcessEnv,
+			initialState: state(),
+			initialTranscript: { messages: [] },
+		});
+
+		await runtime.start();
+		input.emit("\r");
+
+		if (process.platform === "darwin") {
+			expect(nativeModifierProbe).toHaveBeenCalledWith("shift");
+			expect(editor.inputs).toEqual(["\x1b[13;2u"]);
+		} else {
+			expect(nativeModifierProbe).not.toHaveBeenCalled();
+			expect(editor.inputs).toEqual(["\r"]);
+		}
+	});
+
+	it("falls back to plain Enter when Pi's native Shift probe throws", async () => {
+		const output = new FakeOutput();
+		const input = new FakeInput();
+		const editor = new FakeEditor();
+		const nativeModifierProbe = vi.fn(() => {
+			throw new Error("native modifier probe unavailable");
+		});
+		const runtime = new RpcHostRuntime({
+			output,
+			input,
+			editor,
+			nativeModifierProbe,
+			env: { TERM_PROGRAM: "Apple_Terminal" } as NodeJS.ProcessEnv,
+			initialState: state(),
+			initialTranscript: { messages: [] },
+		});
+
+		await runtime.start();
+		expect(() => input.emit("\r")).not.toThrow();
+
+		if (process.platform === "darwin") {
+			expect(nativeModifierProbe).toHaveBeenCalledWith("shift");
+		} else {
+			expect(nativeModifierProbe).not.toHaveBeenCalled();
+		}
 		expect(editor.inputs).toEqual(["\r"]);
 	});
 

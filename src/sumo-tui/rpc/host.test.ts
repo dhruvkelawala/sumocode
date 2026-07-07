@@ -3,8 +3,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { ChatMessageViewModel } from "../transcript/view-model.js";
+import { normalizeApprovalChoice, RPC_APPROVAL_TITLE_MARKER } from "../../approval-modal.js";
 import { SUMOCODE_RELOAD_EXIT_CODE } from "../../commands/reload.js";
 import { RpcChildExitError } from "./client.js";
+import { RpcExtensionUiResponder } from "./extension-ui-responder.js";
 import { RpcHostOverlayManager } from "./host-overlays.js";
 import {
 	createLazyChatSink,
@@ -438,6 +440,33 @@ describe("RPC host client-exit shutdown", () => {
 		const [message] = notifications.notify.mock.calls[0] as [string, string, number];
 		expect(message.length).toBeLessThan(600);
 		expect(message).toContain("RPC child exited unexpectedly");
+	});
+
+	// Plan 051: the composed fail-closed contract. During crash teardown
+	// overlays.drain() resolves the pending approval promise with undefined --
+	// that is only safe because the responder maps undefined -> "No". Assert
+	// the actual outbound RESPONSE the RPC child would receive (via the gate's
+	// real normalizeApprovalChoice mapping), not just that the overlay closed.
+	it("settles a pending approval prompt to a deny response when the child exits mid-prompt", async () => {
+		const overlays = new RpcHostOverlayManager();
+		const responder = new RpcExtensionUiResponder({ approvalOverlay: overlays });
+		const response = responder.handle({
+			type: "extension_ui_request",
+			id: "approval-mid-crash",
+			method: "select",
+			title: `${RPC_APPROVAL_TITLE_MARKER}\n\nsudo rm -rf /tmp/scratch`,
+			options: ["No", "Yes", "Always"],
+		});
+		expect(overlays.getActiveKind()).toBe("approval");
+
+		const handle = createRpcExitHandler(exitDeps({ overlays }));
+		handle(new Error("RPC child exited code=1 signal=null."));
+
+		const resolved = await response;
+		expect(resolved).toEqual({ type: "extension_ui_response", id: "approval-mid-crash", value: "No" });
+		if (resolved === undefined || !("value" in resolved)) throw new Error("approval response must carry a value");
+		expect(normalizeApprovalChoice(resolved.value)).toBe("no");
+		expect(overlays.getActiveKind()).toBeUndefined();
 	});
 
 	it("stops the runtime with a nonzero exit code after the shutdown delay", async () => {

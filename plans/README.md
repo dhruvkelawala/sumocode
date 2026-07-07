@@ -13,7 +13,9 @@ Executor-grade, self-contained implementation plans for SumoCode. Four independe
   execution. Keep current main TUI as the canonical product surface, extract portable shell/input/
   transcript/region boundaries, and make RPC a backend adapter.
 
-**Written against commit:** `ae03bc0` (SumoCode 0.4.0, Pi 0.79.1 pinned)
+**Written against commit:** `ae03bc0` (SumoCode 0.4.0, Pi 0.79.1 pinned).
+**Ledger reconciled:** 2026-07-07 at `86e5062` — Track D statuses corrected against git
+history/plan files; 026–039 indexed; audit-loop plans 040–056 added.
 
 > **Track relationship**: The RPC migration (Track A) explicitly **keeps SumoCode's transcript
 > view-model engine** — `docs/research/pi-rpc-migration.md` lists "the transcript view-model
@@ -207,13 +209,82 @@ to make TUI and backend portable, not to keep reimplementing shell details in RP
 | # | Plan | Priority | Effort | Depends on | Status |
 |---|---|---|---|---|---|
 | 018 | [Canonical TUI baseline and RPC rejection](018-canonical-tui-baseline-and-rpc-rejection.md) | P0 | M | 014 | DONE — compatible main-code baseline captured under `/tmp/sumocode-main-visual-plan018-contract/parity`; clean duplicate-shell branch capture under `/tmp/sumocode-branch-visual-plan018-contract/parity`; `pnpm visual:compare -- --baseline-root /tmp/sumocode-main-visual-plan018-contract/parity --candidate-root /tmp/sumocode-branch-visual-plan018-contract/parity --lane runtime` correctly fails the duplicate RPC shell with reports in `docs/visual/out/parity-main-rpc/` |
-| 019 | [Extract portable owned shell](019-extract-portable-owned-shell.md) | P0 | L | 018 | TODO |
-| 020 | [Port RPC runtime to portable shell](020-port-rpc-runtime-to-portable-shell.md) | P0 | L | 018, 019 | TODO |
-| 021 | [Extract shared transcript controller](021-extract-shared-transcript-controller.md) | P1 | L | 019, 020 | TODO |
-| 022 | [Shared extension regions and chrome publication](022-shared-extension-regions-and-chrome-publication.md) | P1 | M | 019, 020 | TODO |
-| 023 | [Shared input routing, keybindings, and selection](023-shared-input-routing-keybindings-and-selection.md) | P0 | M/L | 019, 020, 022 | TODO |
-| 024 | [Real runtime UI parity approval gate](024-real-runtime-ui-parity-approval-gate.md) | P0 | M | 018-023, 025 | TODO |
-| 025 | [RPC backend hardening and interrupt semantics](025-rpc-backend-hardening-and-interrupt.md) | P0 | M | Part A + B1-B2: none (parallel with 018-019); Part B3-B4: 023 (hard) | TODO |
+| 019 | [Extract portable owned shell](019-extract-portable-owned-shell.md) | P0 | L | 018 | DONE — `3d611f3` (refactor: extract backend-neutral retained shell) |
+| 020 | [Port RPC runtime to portable shell](020-port-rpc-runtime-to-portable-shell.md) | P0 | L | 018, 019 | DONE — `2ef5945` + scroll-state follow-up `36c18d9` |
+| 021 | [Extract shared transcript controller](021-extract-shared-transcript-controller.md) | P1 | L | 019, 020 | DONE — `94d92ce` (refactor: share rpc transcript ingestion) |
+| 022 | [Shared extension regions and chrome publication](022-shared-extension-regions-and-chrome-publication.md) | P1 | M | 019, 020 | DONE — `3b4d8c0` + modal sanitization follow-up `457ca33` |
+| 023 | [Shared input routing, keybindings, and selection](023-shared-input-routing-keybindings-and-selection.md) | P0 | M/L | 019, 020, 022 | DONE — `d1982eb` (fix: share terminal input routing) |
+| 024 | [Real runtime UI parity approval gate](024-real-runtime-ui-parity-approval-gate.md) | P0 | M | 018-023, 025 | EVIDENCE READY — [024-EVIDENCE.md](024-EVIDENCE.md): main-vs-RPC runtime compare green (3/3 scenarios, 14/14 crops); golden promotion awaits Dhruv's explicit approval; the "main-is-stale splash rows" equivalence expires when main absorbs this branch |
+| 025 | [RPC backend hardening and interrupt semantics](025-rpc-backend-hardening-and-interrupt.md) | P0 | M | Part A + B1-B2: none; Part B3-B4: 023 (hard) | DONE — `93e1449` (Implement RPC hardening and interrupt semantics) |
+
+### Track D follow-on plans (026–039)
+
+Indexed 2026-07-07 (previously tracked only in the dogfood ledger below).
+
+| # | Plan | Status |
+|---|---|---|
+| 026 | [Deterministic active-runtime reachability](026-deterministic-active-runtime-reachability.md) | DONE — 2026-07-03, per plan file |
+| 027 | [Align active-runtime bible contract](027-align-active-runtime-bible-contract.md) | DONE — 2026-07-03, per plan file |
+| 028 | [Close main-RPC visual drift](028-close-main-rpc-visual-drift.md) | DONE — evidenced by 024-EVIDENCE.md runtime compare green (`ef4c550`, `549095d`) |
+| 029 | [Filter kitty key-release events](029-filter-kitty-release-events.md) | DONE — merged `e094811` (`17091ed`) |
+| 030 | [Adopt pi-tui input pipeline](030-adopt-pi-tui-input-pipeline.md) | TODO — no landing commit found; verify before dispatch |
+| 031 | [Keybinding matrix audit](031-keybinding-matrix-audit.md) | TODO — DF-4 instrumentation landed (`138ed98`); awaiting a real user capture |
+| 032 | [Bible demotion and regeneration](032-bible-demotion-and-regeneration.md) | TODO — status not recorded in plan file; verify before dispatch |
+| 033 | [Track D integration branch](033-track-d-integration-branch.md) | DONE — `integrate/track-d` is this branch |
+| 034 | [Legacy cleanup](034-legacy-cleanup.md) | TODO — approval-gated; do not start until APPROVED-TO-RUN (Dhruv) |
+| 035 | [Restore Pi command family](035-restore-pi-command-family.md) | IN PROGRESS — Phase 1 DONE (`9405422`); Phase 2 (/trust, /share, 2 settings toggles) pending; Phase 3 blocked upstream |
+| 036 | [Inline selector parity](036-inline-selector-parity.md) | DONE — `7b77b94`, merged |
+| 037 | [Cathedral selector styling](037-cathedral-selector-styling.md) | DONE — `4383f37`, merged `149f58c` |
+| 038 | [Wire app.* action keybindings](038-wire-app-action-keybindings.md) | DONE — merged `fcd2224` (incl. cycleBackward fix `a20532e`) |
+| 039 | [Selector search-as-you-type](039-selector-search-as-you-type.md) | DONE — `7fbc0c9` |
+
+## Audit-loop plans (040–056) — 2026-07-07 deep branch audit
+
+Written against `86e5062` from the 2026-07-07 deep audit of `integrate/track-d`
+(28 vetted findings; two user-reported). Executed via dispatched executor
+worktrees on `advisor/NNN-*` branches; the reviewer maintains this table.
+Wave-2/3 plans STACK on their parent's branch — merge order below.
+
+```
+wave 1 (parallel, base 86e5062):
+  040 test-gate   041 optimistic-chrome   042 selector-values   043 replace-semantics
+  044 input-router   046 extension-ui   049 renderer-tests   052 test-honesty   054 contract-env
+wave 2 (each stacks on its parent):
+  045 diag-hardening ← 044      047 streaming-perf ← 043     048 resume-bounded ← 042
+  050 indicator-repaint ← 049   051 approval-tests ← 046     053 hardening-batch ← 042
+wave 3:  055 agent-end-reconcile ← 047
+last:    056 claude-oauth-401 (user-deferred to end)
+```
+
+| Plan | Title | Priority | Effort | Depends on | Status |
+|------|-------|----------|--------|------------|--------|
+| 040 | [Fix unit-test exit gate](040-fix-unit-test-exit-gate.md) | P1 | S | — | DONE (reviewer-approved) — `advisor/040-fix-unit-test-exit-gate` `6734ff5`; `pnpm test` exits 0 twice (1419 tests); also made the sidebar runtime test hermetic |
+| 041 | [Optimistic model/thinking chrome](041-optimistic-model-thinking-chrome.md) | P1 | M | — | DONE (reviewer-approved) — `advisor/041-optimistic-model-thinking-chrome` `4a0c9f0`; optimistic apply + reconcile + error-rollback push, model-list cache, hydration reset; 101 tests |
+| 042 | [Stable session selector values](042-stable-session-selector-values.md) | P1 | S | — | DONE (reviewer-approved) — `advisor/042-stable-session-selector-values` `de9c7cd`; /resume, /tree, /fork by stable id + duplicate-label regressions; scope amended to include openForkSelector |
+| 043 | [Transcript replace semantics](043-transcript-replace-semantics.md) | P1 | M | — | DONE (reviewer-approved) — `advisor/043-transcript-replace-semantics` `8914623`; expansion + timestamp survive replace; 60 tests |
+| 044 | [Input router interrupt fixes](044-input-router-interrupt-fixes.md) | P2 | M | — | DONE (reviewer-approved) — `advisor/044-input-router-interrupt-fixes` `eabbf5a`; paste-then-Ctrl-C fixed; Apple Terminal Shift+Enter via guarded lazy pi-tui native probe (case a) with fallback stub |
+| 045 | [Diagnostics file hardening](045-diagnostics-file-hardening.md) | P2 | S | 044 | DONE (reviewer-approved) — `advisor/045-diagnostics-file-hardening` `392648a`; 0600 trace file, selection previews dropped |
+| 046 | [extension_ui protocol hardening](046-extension-ui-protocol-hardening.md) | P1 | M | — | DONE (reviewer-approved) — `advisor/046-extension-ui-protocol-hardening` `ffeae01`; multiline editor(), overlays.drain() on teardown, logged handler errors; 91 tests |
+| 047 | [Streaming pipeline perf](047-streaming-pipeline-perf.md) | P2 | M | 043 | DONE (reviewer-approved) — `advisor/047-streaming-pipeline-perf` `12bb229`; WeakMap key memo + op-hint diff + bounded archive dispose |
+| 048 | [/resume bounded metadata](048-resume-bounded-metadata.md) | P2 | M | 042 | DONE (reviewer-approved) — `advisor/048-resume-bounded-metadata` `22d4303`; byte-capped scan + N+ labels + concurrency 8 |
+| 049 | [Renderer characterization tests](049-renderer-characterization-tests.md) | P2 | M | — | DONE (reviewer-approved) — `advisor/049-renderer-characterization-tests` `144acce`; 6 mutation-tested renderer contracts |
+| 050 | [Indicator narrow invalidation](050-indicator-narrow-invalidation.md) | P2 | M | 049 | DONE (reviewer-approved) — `advisor/050-indicator-narrow-invalidation` `7d2dbff`; scoped repaintRegion, no relayout on tick, overlay/selection fallback, frame convergence proven |
+| 051 | [Approval dismissal tests](051-approval-dismissal-tests.md) | P1 | S | 046 | DONE (reviewer-approved) — `advisor/051-approval-dismissal-tests` `6999b88`; five dismissal paths pinned deny-equivalent; no bypass found |
+| 052 | [Test honesty fixes](052-test-honesty-fixes.md) | P3 | M | — | DONE (reviewer-approved) — `advisor/052-test-honesty-fixes` `f2d1124`; real-dispatch invariant (probe-proven), PTY sleeps → screen predicates; 0 dead-advertised commands found |
+| 053 | [Small hardening batch](053-small-hardening-batch.md) | P3 | S | 042 | DONE (reviewer-approved) — `advisor/053-small-hardening-batch` `cb47187`; 100KB OSC52 cap, per-query selector filter memo, 2s git timeout |
+| 054 | [Visual contract env alignment](054-visual-contract-env-alignment.md) | P3 | S | — | DONE (reviewer-approved) — `advisor/054-visual-contract-env-alignment-v2` `f2da097`; v2 coordinated 4-surface SUMO_TUI=0 flip; capture smoke inert |
+| 055 | [agent_end suffix reconcile](055-agent-end-suffix-reconcile.md) | P2 | M | 047 | DONE (reviewer-approved) — `advisor/055-agent-end-suffix-reconcile` `6d29d16`; Step 0 proved by-design (Pi always carries mid-run followUp in agent_end.messages); pinned with test + evidence comment |
+| 056 | [OAuth auth-failure surfacing](056-oauth-auth-failure-surfacing.md) | P1 | M | 041 | IN PROGRESS — `advisor/056-oauth-retry`; root cause diagnosed live: user's anthropic OAuth token expired (~19d), refresh not recovering, Pi fails at auth resolution before any provider request (adapter blameless). Plan surfaces the failure (doctor expiry check + visible RPC run error) |
+
+### Audit findings not planned (2026-07-07, for the record)
+
+- README/AGENTS/DEV_LOOP stale patch-story mentions + knip entrypoint gaps:
+  already inventoried for plan 034 (2026-07-03 audit); knip false-dead leads
+  re-confirmed live at `86e5062` — 034's executor must fix knip config first.
+- Approval gate re-verified end-to-end at `86e5062` across all new dismissal
+  paths: no bypass found (plan 051 adds the guarding tests).
+- `visual-parity-contract.test.ts` "declared equivalences" pattern verified
+  NOT assert-nothing (sabotage guards exist) — no action.
 
 ### Archived single-plan draft
 

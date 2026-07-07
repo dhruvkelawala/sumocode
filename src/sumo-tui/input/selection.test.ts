@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CellBuffer } from "../render/buffer.js";
-import { SelectionController } from "./selection.js";
+import { MAX_CLIPBOARD_BYTES, SelectionController, tryCreateOsc52Sequence } from "./selection.js";
 
 function bufferWithRow(text: string, cols = text.length): CellBuffer {
 	const buffer = new CellBuffer(1, cols);
@@ -177,6 +177,27 @@ describe("SelectionController", () => {
 		const range = selection.getRange();
 		expect(range?.focus.row).toBe(2);
 		expect(range?.focus.col).toBe(12);
+	});
+
+	it("rejects OSC52 payloads over the 100,000-byte clipboard cap before emitting", () => {
+		const oversizedText = "é".repeat(MAX_CLIPBOARD_BYTES / 2 + 1);
+		const buffer = bufferWithRow(oversizedText);
+		const onCopied = vi.fn();
+		const emitClipboard = vi.fn();
+		const selection = new SelectionController({ onCopied, emitClipboard });
+
+		selection.handleMouseEvent({ type: "down", button: 0, row: 0, col: 0, modifiers: { shift: false, alt: false, ctrl: false } }, buffer);
+		selection.handleMouseEvent({ type: "drag", button: 0, row: 0, col: oversizedText.length - 1, modifiers: { shift: false, alt: false, ctrl: false } }, buffer);
+
+		expect(selection.copyCurrentSelection(buffer)).toBe(false);
+		expect(emitClipboard).not.toHaveBeenCalled();
+		expect(onCopied).not.toHaveBeenCalled();
+	});
+
+	it("reports UTF-8 byte length when refusing to build an oversized OSC52 sequence", () => {
+		const oversizedText = "é".repeat(MAX_CLIPBOARD_BYTES / 2 + 1);
+
+		expect(tryCreateOsc52Sequence(oversizedText)).toEqual({ ok: false, bytes: MAX_CLIPBOARD_BYTES + 2 });
 	});
 
 	it("emits a copied callback after OSC 52 copy succeeds", () => {

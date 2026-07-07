@@ -1,6 +1,20 @@
+import type * as PiTui from "@earendil-works/pi-tui";
 import { describe, expect, it, vi } from "vitest";
 import { FOCUSED_MARK, UNFOCUSED_MARK } from "../../cathedral/scriptorium-chrome.js";
 import { InlineSelectorComponent, InlineSelectorHost } from "./inline-selector.js";
+
+const fuzzyFilterCalls = vi.hoisted(() => ({ queries: [] as string[] }));
+
+vi.mock("@earendil-works/pi-tui", async (importOriginal) => {
+	const actual = await importOriginal<typeof PiTui>();
+	return {
+		...actual,
+		fuzzyFilter: <T>(items: T[], query: string, getText: (item: T) => string): T[] => {
+			fuzzyFilterCalls.queries.push(query);
+			return actual.fuzzyFilter(items, query, getText);
+		},
+	};
+});
 
 // pi-tui's `SelectList.handleInput` matches raw terminal byte sequences via
 // its own `getKeybindings()` (see select-list.js), not the symbolic `Key.*`
@@ -213,6 +227,30 @@ function buildLongModelFixture(): string[] {
 }
 
 describe("InlineSelectorComponent search-as-you-type (plan 038)", () => {
+	it("computes filtered rows once for a printable keypress shared by input handling and render", () => {
+		const component = new InlineSelectorComponent("Pick", ["alpha", "beta"], () => undefined);
+		component.render(60);
+		fuzzyFilterCalls.queries.length = 0;
+
+		component.handleInput("a");
+		const rows = component.render(60).join("\n").replace(/\x1b\[[0-9;]*m/g, "");
+
+		expect(rows).toContain("alpha");
+		expect(fuzzyFilterCalls.queries).toEqual(["a"]);
+	});
+
+	it("reuses the cached filtered rows for navigation keys when the query is unchanged", () => {
+		const component = new InlineSelectorComponent("Pick", ["alpha", "beta", "gamma"], () => undefined);
+		component.render(60);
+		fuzzyFilterCalls.queries.length = 0;
+
+		component.handleInput(ARROW_DOWN);
+		const rows = component.render(60).join("\n").replace(/\x1b\[[0-9;]*m/g, "");
+
+		expect(rows).toContain("beta");
+		expect(fuzzyFilterCalls.queries).toEqual([]);
+	});
+
 	it("narrows a 540-item fixture to matching rows as a query is typed, and keeps the scroll window in-bounds over the filtered set", () => {
 		const items = buildLongModelFixture();
 		expect(items.length).toBeGreaterThan(500);

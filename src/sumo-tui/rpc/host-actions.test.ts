@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { MemoryFact, MemoryStatus, RemnicMemoryClient } from "../../memory.js";
 import { getActiveTheme, resetThemeRegistryForTests } from "../../themes/index.js";
 import type { EditorTextController } from "../pi-compat/extension-ui-adapter.js";
+import { MAX_CLIPBOARD_BYTES } from "../input/selection.js";
 import { ModalManager } from "../widgets/modal.js";
 import type { NotificationLevel } from "../widgets/notification.js";
 import type { RpcHostControls, RpcModelOption, RpcSlashCommand } from "./controls.js";
@@ -758,6 +759,23 @@ describe("RpcHostActions", () => {
 		expect(sequences[0]).toContain("\x1b]52;c;");
 		expect(sequences[0]).toContain(Buffer.from("here is the answer", "utf8").toString("base64"));
 		expect(notifications).toContainEqual({ message: "copied", level: "success" });
+	});
+
+	it("refuses to copy oversized assistant responses without sending a clipboard sequence", async () => {
+		const sequences: string[] = [];
+		const { actions, controls, notifications } = setup({
+			writeClipboardSequence: (sequence) => {
+				sequences.push(sequence);
+				return true;
+			},
+		});
+		controls.lastAssistantText = "x".repeat(MAX_CLIPBOARD_BYTES + 1);
+
+		await expect(actions.handleSubmittedText("/copy")).resolves.toBe(true);
+
+		expect(controls.calls).toContain("getLastAssistantText");
+		expect(sequences).toHaveLength(0);
+		expect(notifications).toContainEqual({ message: "response too large to copy", level: "warning" });
 	});
 
 	it("warns instead of copying when there is no assistant response yet", async () => {

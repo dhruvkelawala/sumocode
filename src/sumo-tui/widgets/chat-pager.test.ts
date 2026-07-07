@@ -104,11 +104,42 @@ describe("ChatPager", () => {
 		const { root, chat } = await makeChat();
 		for (let index = 0; index < 5000; index += 1) chat.addMessage("sumo", `message ${index}`);
 
-		expect(chat.archivedMessages).toHaveLength(4800);
+		expect(chat.archivedMessages).toHaveLength(0);
 		expect(chat.getArchivedMessageCount()).toBe(4800);
 		expect(chat.getRenderedMessages()).toHaveLength(200);
+		expect(chat.getLastMessage()?.text).toBe("message 4999");
 		expect(chat.scrollBox.children).toHaveLength(201);
 		expect(chat.scrollBox.children[0]).toMatchObject({ text: "── 4800 earlier messages ──" });
+		root.dispose();
+	});
+
+	it("bounds incremental archives and disposes each evicted message once", async () => {
+		const yoga = await loadYoga();
+		const root = new SumoNode(yoga.Node.create());
+		const chat = ChatPager.create(yoga, root, { maxRenderedMessages: 10 });
+		const disposeFns: Array<() => void> = [];
+
+		for (let index = 0; index < 60; index += 1) {
+			const rendered = chat.addViewModel({
+				id: `message-${index}`,
+				role: "sumo",
+				displayName: "SUMO",
+				blocks: [{ type: "markdown", text: `message ${index}` }],
+			});
+			const dispose = rendered.dispose.bind(rendered);
+			rendered.dispose = vi.fn(() => dispose());
+			disposeFns.push(rendered.dispose);
+		}
+
+		expect(chat.archivedMessages).toHaveLength(0);
+		expect(chat.getArchivedMessageCount()).toBe(50);
+		expect(chat.getRenderedMessages()).toHaveLength(10);
+		expect(chat.getRenderedMessages().length).toBeLessThanOrEqual(10);
+		expect(chat.getRenderedMessages()[0]?.text).toBe("message 50");
+		expect(chat.getRenderedMessages().at(-1)?.text).toBe("message 59");
+		expect(chat.scrollBox.children[0]).toMatchObject({ text: "── 50 earlier messages ──" });
+		for (let index = 0; index < 50; index += 1) expect(disposeFns[index]).toHaveBeenCalledTimes(1);
+		for (let index = 50; index < 60; index += 1) expect(disposeFns[index]).not.toHaveBeenCalled();
 		root.dispose();
 	});
 

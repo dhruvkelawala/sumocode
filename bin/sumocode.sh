@@ -573,6 +573,67 @@ run_diag_summary() {
 	exec node "${ROOT_DIR}/scripts/diag-summary.mjs" "${file}"
 }
 
+print_auth_expiry_result() {
+	local provider="$1"
+	local expires="$2"
+	local now_ms="$3"
+	if [[ -z "${provider}" || ! "${expires}" =~ ^[0-9]+$ ]]; then return 0; fi
+	if [[ "${expires}" -ge "${now_ms}" ]]; then return 0; fi
+	local days_ago
+	days_ago=$(((now_ms - expires) / 86400000))
+	printf "✗ %s oauth token expired %s days ago — run pi and /login to re-authenticate\n" "${provider}" "${days_ago}"
+	return 1
+}
+
+check_auth_expiry_with_grep() {
+	local auth_file="$1"
+	local now_ms="$2"
+	local expired=0
+	local provider=""
+	local line
+	while IFS= read -r line; do
+		if [[ "${line}" =~ ^[[:space:]]*\"([^\"]+)\"[[:space:]]*:[[:space:]]*\{ ]]; then
+			provider="${BASH_REMATCH[1]}"
+		fi
+		if [[ -n "${provider}" && "${line}" =~ \"expires\"[[:space:]]*:[[:space:]]*([0-9]+) ]]; then
+			if ! print_auth_expiry_result "${provider}" "${BASH_REMATCH[1]}" "${now_ms}"; then expired=1; fi
+		fi
+	done < "${auth_file}"
+	return "${expired}"
+}
+
+check_auth_expiry() {
+	local auth_dir="${PI_CODING_AGENT_DIR:-${HOME}/.pi/agent}"
+	local auth_file="${auth_dir}/auth.json"
+	if [[ ! -r "${auth_file}" ]]; then
+		printf -- "- auth: no auth.json (nothing to check)\n"
+		return 0
+	fi
+
+	local now_ms
+	now_ms=$(($(date +%s) * 1000))
+	local expired=0
+	if command -v jq >/dev/null 2>&1; then
+		local entries provider expires
+		if entries="$(jq -r 'to_entries[] | select(.value | type == "object") | select(.value.expires? | type == "number") | [.key, (.value.expires | tostring)] | @tsv' "${auth_file}" 2>/dev/null)"; then
+			while IFS="$(printf '\t')" read -r provider expires; do
+				if [[ -z "${provider}" ]]; then continue; fi
+				if ! print_auth_expiry_result "${provider}" "${expires}" "${now_ms}"; then expired=1; fi
+			done <<< "${entries}"
+		else
+			check_auth_expiry_with_grep "${auth_file}" "${now_ms}" || expired=1
+		fi
+	else
+		check_auth_expiry_with_grep "${auth_file}" "${now_ms}" || expired=1
+	fi
+
+	if [[ "${expired}" -eq 0 ]]; then
+		printf "✓ auth: no expired oauth tokens\n"
+		return 0
+	fi
+	return 1
+}
+
 run_doctor() {
 	local failures=0
 	printf "SumoCode doctor\n\n"
@@ -614,6 +675,11 @@ run_doctor() {
 		printf "✓ diagnostics path writable: %s\n" "${diag_path}"
 	else
 		printf "✗ diagnostics directory not writable: %s\n" "${diag_dir}"
+		failures=$((failures + 1))
+	fi
+	if check_auth_expiry; then
+		:
+	else
 		failures=$((failures + 1))
 	fi
 	if [[ -t 1 ]]; then

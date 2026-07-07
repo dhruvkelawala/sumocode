@@ -151,6 +151,37 @@ describe("TranscriptController agent_end reconciliation", () => {
 
 		expect(transcript.messages.map((m) => m.id)).toEqual(["old", "new-u", "new-a"]);
 	});
+
+	it("renders provider auth-resolution errors with a /login hint", () => {
+		const controller = new TranscriptController();
+		const userMessage = { id: "u1", role: "user", content: "hi" };
+		const assistantError = {
+			id: "a1",
+			role: "assistant",
+			content: [],
+			api: "anthropic-messages",
+			provider: "anthropic",
+			model: "claude-fable-5",
+			stopReason: "error",
+			errorMessage: "No API key for provider: anthropic",
+		};
+		const expectedHint = "anthropic auth failed — run pi directly and /login to re-authenticate";
+
+		controller.handleAgentEvent({ type: "agent_start" });
+		controller.handleAgentEvent({ type: "message_start", message: userMessage });
+		controller.handleAgentEvent({ type: "message_end", message: userMessage });
+
+		controller.handleAgentEvent({ type: "message_start", message: assistantError });
+		expect(controller.viewModel().messages.at(-1)?.blocks).toContainEqual({ type: "markdown", text: expectedHint });
+
+		controller.handleAgentEvent({ type: "message_end", message: assistantError });
+		const transcript = controller.handleAgentEvent({
+			type: "agent_end",
+			messages: [userMessage, assistantError],
+		});
+
+		expect(transcript.messages.at(-1)?.blocks).toContainEqual({ type: "markdown", text: expectedHint });
+	});
 });
 
 describe("TranscriptController live-state clearing", () => {

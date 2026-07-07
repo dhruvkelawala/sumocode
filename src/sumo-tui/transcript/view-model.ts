@@ -167,6 +167,13 @@ function textFromContent(content: unknown): string {
 		.join("");
 }
 
+function authFailureHintFromMessage(record: Record<string, unknown>): string | undefined {
+	const errorMessage = asString(record.errorMessage) ?? asString(record.error);
+	const provider = asString(record.provider) ?? errorMessage?.match(/^No API key for provider: ([A-Za-z0-9_-]+)$/)?.[1];
+	if (!errorMessage || !provider || !errorMessage.includes(`No API key for provider: ${provider}`)) return undefined;
+	return `${provider} auth failed — run pi directly and /login to re-authenticate`;
+}
+
 function thinkingBlockFromRecord(record: Record<string, unknown>): ChatBlock[] {
 	const text = firstString(record.thinking, record.reasoning, record.text, record.content, record.delta);
 	const hidden = record.hidden === true || record.redacted === true || record.encrypted === true;
@@ -674,6 +681,8 @@ function blocksFromMessage(record: Record<string, unknown>): ChatBlock[] {
 
 	const blocks = blocksFromContent(record.content);
 	if (blocks.length > 0) return blocks;
+	const authFailureHint = authFailureHintFromMessage(record);
+	if (authFailureHint) return [{ type: "markdown", text: authFailureHint }];
 	const errorMessage = asString(record.errorMessage);
 	return errorMessage ? [{ type: "markdown", text: errorMessage }] : [];
 }

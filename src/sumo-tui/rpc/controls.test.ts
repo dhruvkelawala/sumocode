@@ -268,6 +268,39 @@ describe("RpcHostControls", () => {
 		expect(store.getSnapshot()).toMatchObject({ modelLabel: "openai/gpt-5" });
 	});
 
+	it("pushes the rolled-back state through onOptimisticChange when setModel fails", async () => {
+		const setModelResponse = deferred<RpcResponse>();
+		const refreshResponse = deferred<RpcResponse>();
+		const client = new DeferredFakeClient(setModelResponse, refreshResponse);
+		const store = new RpcHostStateStore();
+		store.hydrateFromRpcState(rpcState({ model: model("openai", "gpt-5") }));
+		const optimisticStates: RpcHostChromeState[] = [];
+		const controls = new RpcHostControls(client, store, {
+			onOptimisticChange: (state) => optimisticStates.push(state),
+		});
+		const originalError = new Error("set_model failed");
+
+		const result = controls.setModel("anthropic", "claude-opus-4-8");
+
+		expect(optimisticStates).toHaveLength(1);
+		expect(optimisticStates[0]).toMatchObject({ modelLabel: "anthropic/claude-opus-4-8" });
+
+		setModelResponse.reject(originalError);
+		await Promise.resolve();
+
+		expect(client.commands).toEqual([
+			{ type: "set_model", provider: "anthropic", modelId: "claude-opus-4-8" },
+			{ type: "get_state" },
+		]);
+
+		refreshResponse.resolve(stateResponse({ model: model("openai", "gpt-5") }));
+
+		await expect(result).rejects.toBe(originalError);
+		expect(optimisticStates).toHaveLength(2);
+		expect(optimisticStates[1]).toMatchObject({ modelLabel: "openai/gpt-5" });
+		expect(store.getSnapshot()).toMatchObject({ modelLabel: "openai/gpt-5" });
+	});
+
 	it("cycles models for null and non-null Pi responses by patching state locally, with no follow-up get_state round-trip", async () => {
 		const client = new FakeClient(
 			{ type: "response", command: "cycle_model", success: true, data: null },
@@ -359,6 +392,39 @@ describe("RpcHostControls", () => {
 		setThinkingLevelResponse.resolve({ type: "response", command: "set_thinking_level", success: true });
 
 		await expect(result).resolves.toMatchObject({ thinkingLevel: "high" });
+	});
+
+	it("pushes the rolled-back state through onOptimisticChange when setThinkingLevel fails", async () => {
+		const setThinkingLevelResponse = deferred<RpcResponse>();
+		const refreshResponse = deferred<RpcResponse>();
+		const client = new DeferredFakeClient(setThinkingLevelResponse, refreshResponse);
+		const store = new RpcHostStateStore();
+		store.hydrateFromRpcState(rpcState({ thinkingLevel: "medium" }));
+		const optimisticStates: RpcHostChromeState[] = [];
+		const controls = new RpcHostControls(client, store, {
+			onOptimisticChange: (state) => optimisticStates.push(state),
+		});
+		const originalError = new Error("set_thinking_level failed");
+
+		const result = controls.setThinkingLevel("high");
+
+		expect(optimisticStates).toHaveLength(1);
+		expect(optimisticStates[0]).toMatchObject({ thinkingLevel: "high" });
+
+		setThinkingLevelResponse.reject(originalError);
+		await Promise.resolve();
+
+		expect(client.commands).toEqual([
+			{ type: "set_thinking_level", level: "high" },
+			{ type: "get_state" },
+		]);
+
+		refreshResponse.resolve(stateResponse({ thinkingLevel: "medium" }));
+
+		await expect(result).rejects.toBe(originalError);
+		expect(optimisticStates).toHaveLength(2);
+		expect(optimisticStates[1]).toMatchObject({ thinkingLevel: "medium" });
+		expect(store.getSnapshot()).toMatchObject({ thinkingLevel: "medium" });
 	});
 
 	it("cycle_thinking_level's null response (nothing to cycle to) leaves state untouched with no follow-up round-trip", async () => {

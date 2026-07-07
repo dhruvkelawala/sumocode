@@ -107,7 +107,8 @@ export class RpcHostControls {
 			this.invalidateAvailableModelsIfMissing(model);
 			return this.stateStore.applyModelChange(model);
 		} catch (error) {
-			await this.refreshState();
+			const rolledBackState = await this.refreshState();
+			this.options.onOptimisticChange?.(rolledBackState);
 			throw error;
 		}
 	}
@@ -126,7 +127,8 @@ export class RpcHostControls {
 			responseData(await this.client.send({ type: "set_thinking_level", level }), "set_thinking_level");
 			return this.stateStore.getSnapshot();
 		} catch (error) {
-			await this.refreshState();
+			const rolledBackState = await this.refreshState();
+			this.options.onOptimisticChange?.(rolledBackState);
 			throw error;
 		}
 	}

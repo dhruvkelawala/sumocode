@@ -239,6 +239,11 @@ export class RpcHostRuntime {
 			notifications: this.notifications,
 			extensionRegions: this.extensionRegions,
 			requestRender: () => this.scheduleRender(),
+			requestIndicatorRepaint: () => {
+				const liveShell = this.shell;
+				if (liveShell) liveShell.repaintWorkingIndicator();
+				else this.scheduleRender();
+			},
 		});
 		if (this.stopped) {
 			shell.dispose();

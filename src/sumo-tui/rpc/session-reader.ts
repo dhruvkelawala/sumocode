@@ -204,14 +204,18 @@ export async function listSessions(sessionDir: string): Promise<SessionListInfo[
  * Reads every entry (excluding the header) from a session file, in file
  * order.
  */
-async function readSessionEntries(filePath: string): Promise<SessionEntryLike[]> {
+async function readSessionEntries(filePath: string): Promise<SessionEntryLike[] | undefined> {
 	const entries: SessionEntryLike[] = [];
-	const rl = createInterface({ input: createReadStream(filePath, { encoding: "utf8" }), crlfDelay: Number.POSITIVE_INFINITY });
-	for await (const line of rl) {
-		const entry = parseLine(line);
-		if (!entry) continue;
-		if (isHeader(entry)) continue;
-		entries.push(entry);
+	try {
+		const rl = createInterface({ input: createReadStream(filePath, { encoding: "utf8" }), crlfDelay: Number.POSITIVE_INFINITY });
+		for await (const line of rl) {
+			const entry = parseLine(line);
+			if (!entry) continue;
+			if (isHeader(entry)) continue;
+			entries.push(entry);
+		}
+	} catch {
+		return undefined;
 	}
 	return entries;
 }
@@ -225,8 +229,9 @@ async function readSessionEntries(filePath: string): Promise<SessionEntryLike[]>
  * `_buildIndex`'s label bookkeeping); children are sorted oldest-first by
  * timestamp.
  */
-export async function buildSessionTree(sessionFile: string): Promise<SessionTreeNode[]> {
+export async function buildSessionTree(sessionFile: string): Promise<SessionTreeNode[] | undefined> {
 	const entries = await readSessionEntries(sessionFile);
+	if (!entries) return undefined;
 
 	const labelsById = new Map<string, string>();
 	const labelTimestampsById = new Map<string, string>();

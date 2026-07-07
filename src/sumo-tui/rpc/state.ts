@@ -67,6 +67,8 @@ export class RpcHostStateStore {
 			pendingMessageCount: rpcState.pendingMessageCount,
 			hasMessages: rpcState.messageCount > 0,
 			gitBranch,
+			lastEventType: undefined,
+			taskPartialCount: 0,
 		};
 		return this.getSnapshot();
 	}

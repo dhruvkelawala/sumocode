@@ -888,6 +888,7 @@ describe("BackgroundTaskManager", () => {
 
 	it("keeps started agent task running when no exit marker appears after the old watchdog window", async () => {
 		vi.useFakeTimers();
+		let manager: BackgroundTaskManager | undefined;
 		try {
 			process.env.CMUX_SURFACE_ID = "surface:1";
 			const pi = buildPiStub();
@@ -898,7 +899,7 @@ describe("BackgroundTaskManager", () => {
 				surfaceRef: "surface:8",
 			});
 
-			const manager = new BackgroundTaskManager(pi as never);
+			manager = new BackgroundTaskManager(pi as never);
 			const task = manager.spawnTask({
 				command: "long-running prompt",
 				cwd: "/repo",
@@ -918,14 +919,15 @@ describe("BackgroundTaskManager", () => {
 
 			expect(task.status).toBe("running");
 			expect(readFileSync(task.logFile, "utf8")).not.toContain("startup timeout");
-			manager.shutdown();
 		} finally {
+			manager?.shutdown();
 			vi.useRealTimers();
 		}
 	});
 
 	it("reaps a started agent task whose process has died without an exit marker", async () => {
 		vi.useFakeTimers();
+		let manager: BackgroundTaskManager | undefined;
 		const processKill = vi.spyOn(process, "kill").mockImplementation(((pid: number, signal?: string | number) => {
 			if (pid === 43210 && signal === 0) throw new Error("ESRCH");
 			return true;
@@ -940,7 +942,7 @@ describe("BackgroundTaskManager", () => {
 				surfaceRef: "surface:8",
 			});
 
-			const manager = new BackgroundTaskManager(pi as never);
+			manager = new BackgroundTaskManager(pi as never);
 			const task = manager.spawnTask({
 				command: "crashy prompt",
 				cwd: "/repo",
@@ -955,8 +957,8 @@ describe("BackgroundTaskManager", () => {
 
 			expect(task.status).toBe("failed");
 			expect(readFileSync(task.logFile, "utf8")).toContain("is gone and no exit marker");
-			manager.shutdown();
 		} finally {
+			manager?.shutdown();
 			processKill.mockRestore();
 			vi.useRealTimers();
 		}
@@ -964,6 +966,7 @@ describe("BackgroundTaskManager", () => {
 
 	it("keeps a started agent task running while its process is alive", async () => {
 		vi.useFakeTimers();
+		let manager: BackgroundTaskManager | undefined;
 		try {
 			process.env.CMUX_SURFACE_ID = "surface:1";
 			const pi = buildPiStub();
@@ -974,7 +977,7 @@ describe("BackgroundTaskManager", () => {
 				surfaceRef: "surface:8",
 			});
 
-			const manager = new BackgroundTaskManager(pi as never);
+			manager = new BackgroundTaskManager(pi as never);
 			const task = manager.spawnTask({
 				command: "long-running prompt",
 				cwd: "/repo",
@@ -988,14 +991,15 @@ describe("BackgroundTaskManager", () => {
 			await vi.advanceTimersByTimeAsync(1000);
 
 			expect(task.status).toBe("running");
-			manager.shutdown();
 		} finally {
+			manager?.shutdown();
 			vi.useRealTimers();
 		}
 	});
 
 	it("fails agent task when task-mode never writes started marker", async () => {
 		vi.useFakeTimers();
+		let manager: BackgroundTaskManager | undefined;
 		try {
 			process.env.CMUX_SURFACE_ID = "surface:1";
 			const pi = buildPiStub();
@@ -1006,7 +1010,7 @@ describe("BackgroundTaskManager", () => {
 				surfaceRef: "surface:8",
 			});
 
-			const manager = new BackgroundTaskManager(pi as never);
+			manager = new BackgroundTaskManager(pi as never);
 			const task = manager.spawnTask({
 				command: "crashy prompt",
 				cwd: "/repo",
@@ -1022,6 +1026,7 @@ describe("BackgroundTaskManager", () => {
 			expect(task.status).toBe("failed");
 			expect(readFileSync(task.logFile, "utf8")).toContain("startup timeout");
 		} finally {
+			manager?.shutdown();
 			vi.useRealTimers();
 		}
 	});

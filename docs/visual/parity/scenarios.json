@@ -231,7 +231,7 @@
 				"settleMs": 3000,
 				"env": {
 					"PI_OFFLINE": "1",
-					"SUMO_TUI": "1",
+					"SUMO_TUI": "0",
 					"TERM": "xterm-256color",
 					"COLORTERM": "truecolor",
 					"FORCE_COLOR": "3"
@@ -283,7 +283,7 @@
 				"emptyOutputGraceMs": 0,
 				"env": {
 					"PI_OFFLINE": "1",
-					"SUMO_TUI": "1",
+					"SUMO_TUI": "0",
 					"TERM": "xterm-256color",
 					"COLORTERM": "truecolor",
 					"FORCE_COLOR": "3"
@@ -436,7 +436,7 @@
 				"emptyOutputGraceMs": 0,
 				"env": {
 					"PI_OFFLINE": "1",
-					"SUMO_TUI": "1",
+					"SUMO_TUI": "0",
 					"TERM": "xterm-256color",
 					"COLORTERM": "truecolor",
 					"FORCE_COLOR": "3",

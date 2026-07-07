@@ -347,13 +347,11 @@ export function createRpcHostInterruptHandler(deps: RpcHostInterruptDependencies
 			case "clear-draft":
 				armedQuitUntil = undefined;
 				deps.editor.setText("");
-				deps.notifications.notify("draft cleared", "info");
 				return true;
 			case "abort":
 				armedQuitUntil = undefined;
 				void notifyOnError(async () => {
 					await deps.controls.abort();
-					deps.notifications.notify("abort requested", "info");
 				}, deps.notifications);
 				return true;
 			case "arm-quit":
@@ -378,10 +376,10 @@ export interface RpcHostModelCycleDependencies {
 
 /**
  * Builds the `app.model.cycleForward` (Ctrl+P by default) action handler:
- * calls the same `cycleModel()` RPC command `/model` with no args falls back
- * to via `openModelSelector`'s sibling commands, then notifies with the
- * resulting model label -- same "model: provider/id" message shape
- * `openModelSelector`'s success path already uses, for consistency. Factored
+ * calls the same `cycleModel()` RPC command that `/model` with no args falls
+ * back to via `openModelSelector`'s sibling commands, then hands the returned
+ * chrome state to the caller. The footer reflects the model change, so this
+ * handler deliberately stays toast-free on success. Factored
  * out (rather than inlined in runRpcHost) so it is independently unit
  * testable, mirroring `createRpcHostInterruptHandler` above.
  */
@@ -390,7 +388,6 @@ export function createModelCycleForwardHandler(deps: RpcHostModelCycleDependenci
 		void notifyOnError(async () => {
 			const state = await deps.controls.cycleModel();
 			deps.onStateChange?.(state);
-			if (state.modelLabel) deps.notifications.notify(`model: ${state.modelLabel}`, "info");
 		}, deps.notifications);
 	};
 }
@@ -427,7 +424,6 @@ export function createModelCycleBackwardHandler(deps: RpcHostModelCycleDependenc
 			const previous = models[previousIndex];
 			const state = await deps.controls.setModel(previous.provider, previous.id);
 			deps.onStateChange?.(state);
-			if (state.modelLabel) deps.notifications.notify(`model: ${state.modelLabel}`, "info");
 		}, deps.notifications);
 	};
 }
@@ -443,15 +439,14 @@ export interface RpcHostThinkingCycleDependencies {
  * one of the two exact chords the user's diagnostic capture showed as dead
  * (pressed repeatedly, routed to "editor", no effect). Calls the same
  * `cycleThinkingLevel()` RPC command `/thinking` with no args falls back to,
- * then notifies with the resulting level -- same "thinking: <level>" message
- * shape `setThinkingFromText` already uses.
+ * then hands the returned state to the caller. The footer reflects the
+ * thinking level, so success stays toast-free.
  */
 export function createThinkingCycleHandler(deps: RpcHostThinkingCycleDependencies): () => void {
 	return (): void => {
 		void notifyOnError(async () => {
 			const state = await deps.controls.cycleThinkingLevel();
 			deps.onStateChange?.(state);
-			if (state.thinkingLevel) deps.notifications.notify(`thinking: ${state.thinkingLevel}`, "info");
 		}, deps.notifications);
 	};
 }

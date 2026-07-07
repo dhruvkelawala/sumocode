@@ -310,7 +310,7 @@ afterEach(() => {
 });
 
 describe("RpcHostActions", () => {
-	it.each([RPC_HOST_COMMAND_PALETTE_INPUT, "\x1b[47;5u"])("opens the host command palette from runtime hotkey variant %#", async (hotkey) => {
+	it.each([RPC_HOST_COMMAND_PALETTE_INPUT, "\x1b[47;5u"])("opens the host command palette and applies the model selector without a toast from runtime hotkey variant %#", async (hotkey) => {
 		const { actions, controls, overlays, inlineSelectors, notifications } = setup();
 
 		expect(actions.handleInput(hotkey)).toBe(true);
@@ -331,7 +331,7 @@ describe("RpcHostActions", () => {
 			"getAvailableModels",
 			"setModel:openai/gpt-5",
 		]);
-		expect(notifications).toContainEqual({ message: "model: openai/gpt-5", level: "info" });
+		expect(notifications).toEqual([]);
 	});
 
 	it("handles RPC path slash controls for model, thinking, compaction, and settings", async () => {
@@ -838,7 +838,7 @@ describe("RpcHostActions", () => {
 		expect(renderOverlayText(overlays)).toContain("APPROVAL REQUIRED");
 		overlays.handleInput("n");
 		await approval;
-		expect(notifications).toContainEqual({ message: "approval selected: no", level: "warning" });
+		expect(notifications).toContainEqual({ message: "command blocked", level: "warning" });
 
 		const memoryEditor = actions.handleSubmittedText("/sumo:memory");
 		await flush();
@@ -847,6 +847,18 @@ describe("RpcHostActions", () => {
 		overlays.handleInput(Key.escape);
 		await memoryEditor;
 		expect(memory.calls).toContain("browse");
+	});
+
+	it("does not notify when approval preview is allowed", async () => {
+		const { actions, overlays, notifications } = setup();
+
+		const approval = actions.handleSubmittedText("/sumo:approval");
+		await flush();
+		expect(overlays.getActiveKind()).toBe("approvalPreview");
+		overlays.handleInput("y");
+		await approval;
+
+		expect(notifications).toEqual([]);
 	});
 
 	it("renders the RPC host's own hotkey reference as an overlay, closing on any key", async () => {

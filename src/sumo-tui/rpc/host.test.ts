@@ -290,7 +290,7 @@ describe("app.interrupt action wiring reuses the interrupt tier module", () => {
 // (the handler now calls through to the real RpcHostControls/runtime
 // methods) behavior for each of the 4 host-side actions wired via host.ts.
 describe("createModelCycleForwardHandler (app.model.cycleForward)", () => {
-	it("passes the cycleModel chrome state to the injected state-change callback", async () => {
+	it("passes the cycleModel chrome state to the injected state-change callback without a confirmation toast", async () => {
 		const state = { modelLabel: "x/y" } as never;
 		const cycleModel = vi.fn(async () => state);
 		const notifications = { notify: vi.fn() };
@@ -307,7 +307,7 @@ describe("createModelCycleForwardHandler (app.model.cycleForward)", () => {
 		expect(cycleModel).toHaveBeenCalledOnce();
 		expect(onStateChange).toHaveBeenCalledOnce();
 		expect(onStateChange.mock.calls[0]?.[0]).toBe(state);
-		expect(notifications.notify).toHaveBeenCalledWith("model: x/y", "info");
+		expect(notifications.notify).not.toHaveBeenCalled();
 	});
 
 	it("notifies a warning instead of throwing when the RPC call fails", async () => {
@@ -347,7 +347,7 @@ describe("createModelCycleBackwardHandler (app.model.cycleBackward -- the other 
 		expect(cycleModel).not.toHaveBeenCalled();
 		expect(setModel).toHaveBeenCalledOnce();
 		expect(setModel).toHaveBeenCalledWith("p", "a");
-		expect(notifications.notify).toHaveBeenCalledWith("model: a", "info");
+		expect(notifications.notify).not.toHaveBeenCalled();
 	});
 
 	it("wraps around to the last model when the active model is first in the list", async () => {
@@ -456,13 +456,12 @@ describe("createModelCycleBackwardHandler (app.model.cycleBackward -- the other 
 			{ type: "set_model", provider: "p", modelId: "a" },
 			{ type: "set_model", provider: "p", modelId: "c" },
 		]);
-		expect(notifications.notify).toHaveBeenCalledWith("model: p/a", "info");
-		expect(notifications.notify).toHaveBeenCalledWith("model: p/c", "info");
+		expect(notifications.notify).not.toHaveBeenCalled();
 	});
 });
 
 describe("createThinkingCycleHandler (app.thinking.cycle -- one of the two exact reported-broken chords)", () => {
-	it("calls controls.cycleThinkingLevel() and notifies with the resulting level", async () => {
+	it("calls controls.cycleThinkingLevel() and updates state without a confirmation toast", async () => {
 		const cycleThinkingLevel = vi.fn(async () => ({ thinkingLevel: "high" }) as never);
 		const notifications = { notify: vi.fn() };
 		const onStateChange = vi.fn();
@@ -473,7 +472,7 @@ describe("createThinkingCycleHandler (app.thinking.cycle -- one of the two exact
 
 		expect(cycleThinkingLevel).toHaveBeenCalledOnce();
 		expect(onStateChange).toHaveBeenCalledOnce();
-		expect(notifications.notify).toHaveBeenCalledWith("thinking: high", "info");
+		expect(notifications.notify).not.toHaveBeenCalled();
 	});
 });
 

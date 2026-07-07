@@ -560,7 +560,6 @@ export class RpcHostActions {
 		}
 		await this.controls.setModel(parsed.provider, parsed.id);
 		this.onStateChange();
-		notify(this.notifications, `model: ${parsed.provider}/${parsed.id}`, "info");
 	}
 
 	public async openThinkingSelector(): Promise<void> {
@@ -673,7 +672,6 @@ export class RpcHostActions {
 			await this.controls.refreshState();
 			await this.rehydrateTranscript();
 			this.onStateChange();
-			notify(this.notifications, "session resumed", "info");
 		}
 	}
 
@@ -767,7 +765,7 @@ export class RpcHostActions {
 			"approvalPreview",
 			(done) => new HostApprovalPreviewComponent(command, done),
 		);
-		notify(this.notifications, `approval selected: ${choice}`, choice === "no" ? "warning" : "info");
+		if (choice === "no") notify(this.notifications, "command blocked", "warning");
 	}
 
 	public async openMemoryEditor(): Promise<void> {

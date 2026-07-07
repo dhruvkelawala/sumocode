@@ -103,6 +103,25 @@ describe("session-reader", () => {
 	});
 
 	describe("buildSessionTree", () => {
+		it("returns undefined for a missing session file", async () => {
+			expect(await buildSessionTree(join(dir, "does-not-exist.jsonl"))).toBeUndefined();
+		});
+
+		it("skips malformed JSONL lines while building valid entries", async () => {
+			const file = join(dir, "2026-07-02T21-55-00-000Z_malformed.jsonl");
+			writeFileSync(file, [
+				JSON.stringify({ type: "session", version: 3, id: "malformed", timestamp: "2026-07-02T21:55:00.000Z", cwd: "/repo" }),
+				"{not json",
+				JSON.stringify({ type: "message", id: "e1", parentId: null, timestamp: "2026-07-02T21:55:01.000Z", message: { role: "user", content: "valid entry" } }),
+				"",
+			].join("\n"));
+
+			const tree = await buildSessionTree(file);
+
+			expect(tree).toHaveLength(1);
+			expect(tree?.[0]?.entry.id).toBe("e1");
+		});
+
 		it("builds a branched session into a parent/child tree, oldest child first", async () => {
 			const file = join(dir, "2026-07-02T22-00-00-000Z_branched.jsonl");
 			writeFileSync(file, jsonl([
@@ -116,7 +135,7 @@ describe("session-reader", () => {
 			const tree = await buildSessionTree(file);
 
 			expect(tree).toHaveLength(1);
-			const root = tree[0];
+			const root = tree?.[0];
 			expect(root?.entry.id).toBe("root");
 			expect(root?.children.map((child) => child.entry.id)).toEqual(["child-a", "child-b"]);
 			const firstBranch = root?.children[0];
@@ -134,7 +153,7 @@ describe("session-reader", () => {
 			const tree = await buildSessionTree(file);
 
 			expect(tree).toHaveLength(1);
-			expect(tree[0]?.entry.id).toBe("e1");
+			expect(tree?.[0]?.entry.id).toBe("e1");
 		});
 
 		it("resolves the latest label onto its target node, honoring an explicit clear", async () => {
@@ -150,7 +169,7 @@ describe("session-reader", () => {
 
 			const tree = await buildSessionTree(file);
 
-			const root = tree[0];
+			const root = tree?.[0];
 			expect(root?.entry.id).toBe("e1");
 			expect(root?.label).toBe("bookmark");
 			const messageNode = root?.children.find((child) => child.entry.id === "e2");

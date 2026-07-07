@@ -620,11 +620,13 @@ export class RpcHostActions {
 			notify(this.notifications, "no forkable messages", "warning");
 			return;
 		}
-		const labels = messages.map((message, index) => `${index + 1}. ${message.text.slice(0, 72)}`);
-		const selected = await this.inlineSelectors.select("Fork from message", labels);
+		const items: InlineSelectorItem[] = messages.map((message, index) => ({
+			value: message.entryId,
+			label: `${index + 1}. ${message.text.slice(0, 72)}`,
+		}));
+		const selected = await this.inlineSelectors.select("Fork from message", items);
 		if (!selected) return;
-		const index = labels.indexOf(selected);
-		const message = messages[index];
+		const message = messages.find((candidate) => candidate.entryId === selected);
 		if (!message) return;
 		const result = await this.controls.fork(message.entryId);
 		if (!result.cancelled) {
@@ -658,14 +660,13 @@ export class RpcHostActions {
 		}
 		const labels = sessions.map((session) => resumeSessionLabel(session));
 		const items: InlineSelectorItem[] = sessions.map((session, index) => ({
-			value: labels[index]!,
+			value: session.path,
 			label: labels[index]!,
 			isCurrent: session.path === sessionFile,
 		}));
 		const selected = await this.inlineSelectors.select("Resume session", items);
 		if (!selected) return;
-		const index = labels.indexOf(selected);
-		const session = sessions[index];
+		const session = sessions.find((candidate) => candidate.path === selected);
 		if (!session) return;
 		const result = await this.controls.switchSession(session.path);
 		if (!result.cancelled) {
@@ -693,16 +694,22 @@ export class RpcHostActions {
 			return;
 		}
 		const tree = await buildSessionTree(sessionFile);
+		if (!tree) {
+			notify(this.notifications, "session tree unavailable", "warning");
+			return;
+		}
 		if (tree.length === 0) {
 			notify(this.notifications, "session has no entries yet", "warning");
 			return;
 		}
 		const rows = flattenSessionTree(tree);
-		const labels = rows.map((row) => `${"  ".repeat(row.depth)}Fork from: ${treeNodeSummary(row.node)}`);
-		const selected = await this.inlineSelectors.select("Session tree (fork from a node)", labels);
+		const items: InlineSelectorItem[] = rows.map((row) => ({
+			value: row.node.entry.id,
+			label: `${"  ".repeat(row.depth)}Fork from: ${treeNodeSummary(row.node)}`,
+		}));
+		const selected = await this.inlineSelectors.select("Session tree (fork from a node)", items);
 		if (!selected) return;
-		const index = labels.indexOf(selected);
-		const row = rows[index];
+		const row = rows.find((candidate) => candidate.node.entry.id === selected);
 		if (!row) return;
 		const result = await this.controls.fork(row.node.entry.id);
 		if (!result.cancelled) {

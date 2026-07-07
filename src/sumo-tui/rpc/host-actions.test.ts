@@ -453,6 +453,25 @@ describe("RpcHostActions", () => {
 		expect(rehydrateCalls).toHaveLength(0);
 	});
 
+	it("forks from the selected entry id when fork message summaries collide", async () => {
+		const { actions, controls, inlineSelectors, editorText, rehydrateCalls } = setup();
+		controls.forkMessages = [
+			{ entryId: "entry-a", text: "same visible fork summary" },
+			{ entryId: "entry-b", text: "same visible fork summary" },
+		];
+
+		const forkPromise = actions.handleSubmittedText("/fork");
+		await flush();
+		expect(inlineSelectors.getActiveKind()).toBe("select");
+		inlineSelectors.handleInput(SELECTOR_DOWN);
+		inlineSelectors.handleInput(SELECTOR_ENTER);
+		await forkPromise;
+
+		expect(controls.calls).toEqual(["getForkMessages", "fork:entry-b"]);
+		expect(editorText.getText()).toBe("fork from here");
+		expect(rehydrateCalls).toHaveLength(1);
+	});
+
 	describe("/resume", () => {
 		function jsonl(lines: readonly unknown[]): string {
 			return `${lines.map((line) => JSON.stringify(line)).join("\n")}\n`;
@@ -490,6 +509,30 @@ describe("RpcHostActions", () => {
 
 				expect(controls.calls).toContain(`switchSession:${olderPath}`);
 				expect(controls.calls).toContain("refreshState");
+				expect(rehydrateCalls).toHaveLength(1);
+			} finally {
+				rmSync(dir, { recursive: true, force: true });
+			}
+		});
+
+		it("loads the selected path when session labels collide", async () => {
+			const dir = mkdtempSync(join(tmpdir(), "sumocode-resume-collision-test-"));
+			try {
+				const newerPath = writeFixtureSession(dir, "2026-07-02T20-00-30-000Z_newer.jsonl", "newer", "2026-07-02T20:00:30.000Z", "same visible title");
+				const olderPath = writeFixtureSession(dir, "2026-07-02T20-00-10-000Z_older.jsonl", "older", "2026-07-02T20:00:10.000Z", "same visible title");
+				const { actions, controls, inlineSelectors, rehydrateCalls } = setup({ sessionFile: newerPath });
+
+				const resumePromise = actions.handleSubmittedText("/resume");
+				await flushIO();
+				expect(inlineSelectors.getActiveKind()).toBe("select");
+				inlineSelectors.handleInput(SELECTOR_DOWN);
+				inlineSelectors.handleInput(SELECTOR_ENTER);
+				await resumePromise;
+
+				// Both visible labels are identical; the old labels.indexOf(selected)
+				// path switched to the first row even after selecting the second.
+				expect(controls.calls).toContain(`switchSession:${olderPath}`);
+				expect(controls.calls).not.toContain(`switchSession:${newerPath}`);
 				expect(rehydrateCalls).toHaveLength(1);
 			} finally {
 				rmSync(dir, { recursive: true, force: true });
@@ -557,6 +600,32 @@ describe("RpcHostActions", () => {
 			}
 		});
 
+		it("forks from the selected entry id when tree summaries collide", async () => {
+			const dir = mkdtempSync(join(tmpdir(), "sumocode-tree-collision-test-"));
+			try {
+				const sessionFile = join(dir, "2026-07-02T22-05-00-000Z_colliding-tree.jsonl");
+				writeFileSync(sessionFile, jsonl([
+					{ type: "session", version: 3, id: "colliding-tree", timestamp: "2026-07-02T22:05:00.000Z", cwd: "/repo" },
+					{ type: "message", id: "root", parentId: null, timestamp: "2026-07-02T22:05:01.000Z", message: { role: "user", content: "root message" } },
+					{ type: "message", id: "child-a", parentId: "root", timestamp: "2026-07-02T22:05:02.000Z", message: { role: "assistant", content: "same branch summary" } },
+					{ type: "message", id: "child-b", parentId: "root", timestamp: "2026-07-02T22:05:03.000Z", message: { role: "assistant", content: "same branch summary" } },
+				]));
+				const { actions, controls, inlineSelectors } = setup({ sessionFile });
+
+				const treePromise = actions.handleSubmittedText("/tree");
+				await flushIO();
+				expect(inlineSelectors.getActiveKind()).toBe("select");
+				inlineSelectors.handleInput(SELECTOR_DOWN); // root -> child-a
+				inlineSelectors.handleInput(SELECTOR_DOWN); // child-a -> child-b
+				inlineSelectors.handleInput(SELECTOR_ENTER);
+				await treePromise;
+
+				expect(controls.calls).toEqual(["fork:child-b"]);
+			} finally {
+				rmSync(dir, { recursive: true, force: true });
+			}
+		});
+
 		it("labels every row as a fork action, not a fake navigate-to-node", async () => {
 			const dir = mkdtempSync(join(tmpdir(), "sumocode-tree-label-test-"));
 			try {
@@ -581,6 +650,20 @@ describe("RpcHostActions", () => {
 			await expect(actions.handleSubmittedText("/tree")).resolves.toBe(true);
 
 			expect(notifications).toContainEqual({ message: "no session file available to browse", level: "warning" });
+		});
+
+		it("warns instead of rejecting when the session file cannot be read", async () => {
+			const dir = mkdtempSync(join(tmpdir(), "sumocode-tree-missing-test-"));
+			try {
+				const { actions, controls, notifications } = setup({ sessionFile: join(dir, "missing.jsonl") });
+
+				await expect(actions.handleSubmittedText("/tree")).resolves.toBe(true);
+
+				expect(notifications).toContainEqual({ message: "session tree unavailable", level: "warning" });
+				expect(controls.calls.some((call) => call.startsWith("fork:"))).toBe(false);
+			} finally {
+				rmSync(dir, { recursive: true, force: true });
+			}
 		});
 	});
 

@@ -129,6 +129,44 @@ describe("RpcHostControls", () => {
 		expect(client.commands).toEqual([{ type: "get_available_models" }]);
 	});
 
+	it("caches available models until refreshState invalidates the cache", async () => {
+		const client = new FakeClient(
+			{
+				type: "response",
+				command: "get_available_models",
+				success: true,
+				data: { models: [model("openai", "gpt-5"), model("anthropic", "claude-opus-4-8")] },
+			},
+			stateResponse({ model: model("anthropic", "claude-opus-4-8") }),
+			{
+				type: "response",
+				command: "get_available_models",
+				success: true,
+				data: { models: [model("anthropic", "claude-opus-4-8"), model("google", "gemini-3")] },
+			},
+		);
+		const controls = new RpcHostControls(client);
+
+		await expect(controls.getAvailableModels()).resolves.toEqual([
+			{ provider: "openai", id: "gpt-5", label: "openai/gpt-5", active: false },
+			{ provider: "anthropic", id: "claude-opus-4-8", label: "anthropic/claude-opus-4-8", active: false },
+		]);
+		await expect(controls.getAvailableModels()).resolves.toEqual([
+			{ provider: "openai", id: "gpt-5", label: "openai/gpt-5", active: false },
+			{ provider: "anthropic", id: "claude-opus-4-8", label: "anthropic/claude-opus-4-8", active: false },
+		]);
+		await expect(controls.refreshState()).resolves.toMatchObject({ modelLabel: "anthropic/claude-opus-4-8" });
+		await expect(controls.getAvailableModels()).resolves.toEqual([
+			{ provider: "anthropic", id: "claude-opus-4-8", label: "anthropic/claude-opus-4-8", active: true },
+			{ provider: "google", id: "gemini-3", label: "google/gemini-3", active: false },
+		]);
+		expect(client.commands).toEqual([
+			{ type: "get_available_models" },
+			{ type: "get_state" },
+			{ type: "get_available_models" },
+		]);
+	});
+
 	it("sets the model by patching state locally from the response, with no follow-up get_state round-trip", async () => {
 		const client = new FakeClient(
 			{ type: "response", command: "set_model", success: true, data: model("anthropic", "claude-opus-4-8") },
@@ -166,6 +204,40 @@ describe("RpcHostControls", () => {
 
 		await expect(result).resolves.toMatchObject({ modelLabel: "google/gemini-3" });
 		expect(store.getSnapshot()).toMatchObject({ modelLabel: "google/gemini-3" });
+	});
+
+	it("invalidates cached models when setModel reconciles to a model missing from the cached list", async () => {
+		const client = new FakeClient(
+			{
+				type: "response",
+				command: "get_available_models",
+				success: true,
+				data: { models: [model("openai", "gpt-5"), model("anthropic", "claude-opus-4-8")] },
+			},
+			{ type: "response", command: "set_model", success: true, data: model("google", "gemini-3") },
+			{
+				type: "response",
+				command: "get_available_models",
+				success: true,
+				data: { models: [model("openai", "gpt-5"), model("anthropic", "claude-opus-4-8"), model("google", "gemini-3")] },
+			},
+		);
+		const store = new RpcHostStateStore();
+		store.hydrateFromRpcState(rpcState({ model: model("openai", "gpt-5") }));
+		const controls = new RpcHostControls(client, store);
+
+		await controls.getAvailableModels();
+		await expect(controls.setModel("anthropic", "claude-opus-4-8")).resolves.toMatchObject({ modelLabel: "google/gemini-3" });
+		await expect(controls.getAvailableModels()).resolves.toEqual([
+			{ provider: "openai", id: "gpt-5", label: "openai/gpt-5", active: false },
+			{ provider: "anthropic", id: "claude-opus-4-8", label: "anthropic/claude-opus-4-8", active: false },
+			{ provider: "google", id: "gemini-3", label: "google/gemini-3", active: true },
+		]);
+		expect(client.commands).toEqual([
+			{ type: "get_available_models" },
+			{ type: "set_model", provider: "anthropic", modelId: "claude-opus-4-8" },
+			{ type: "get_available_models" },
+		]);
 	});
 
 	it("refreshes state and propagates the original error when setModel fails after the optimistic patch", async () => {
@@ -212,6 +284,45 @@ describe("RpcHostControls", () => {
 		await expect(controls.cycleModel()).resolves.not.toHaveProperty("modelLabel");
 		await expect(controls.cycleModel()).resolves.toMatchObject({ modelLabel: "google/gemini-3", thinkingLevel: "high" });
 		expect(client.commands).toEqual([{ type: "cycle_model" }, { type: "cycle_model" }]);
+	});
+
+	it("invalidates cached models when cycleModel returns a model missing from the cached list", async () => {
+		const client = new FakeClient(
+			{
+				type: "response",
+				command: "get_available_models",
+				success: true,
+				data: { models: [model("openai", "gpt-5"), model("anthropic", "claude-opus-4-8")] },
+			},
+			{
+				type: "response",
+				command: "cycle_model",
+				success: true,
+				data: { model: model("google", "gemini-3"), thinkingLevel: "high", isScoped: false },
+			},
+			{
+				type: "response",
+				command: "get_available_models",
+				success: true,
+				data: { models: [model("openai", "gpt-5"), model("anthropic", "claude-opus-4-8"), model("google", "gemini-3")] },
+			},
+		);
+		const store = new RpcHostStateStore();
+		store.hydrateFromRpcState(rpcState({ model: model("openai", "gpt-5") }));
+		const controls = new RpcHostControls(client, store);
+
+		await controls.getAvailableModels();
+		await expect(controls.cycleModel()).resolves.toMatchObject({ modelLabel: "google/gemini-3", thinkingLevel: "high" });
+		await expect(controls.getAvailableModels()).resolves.toEqual([
+			{ provider: "openai", id: "gpt-5", label: "openai/gpt-5", active: false },
+			{ provider: "anthropic", id: "claude-opus-4-8", label: "anthropic/claude-opus-4-8", active: false },
+			{ provider: "google", id: "gemini-3", label: "google/gemini-3", active: true },
+		]);
+		expect(client.commands).toEqual([
+			{ type: "get_available_models" },
+			{ type: "cycle_model" },
+			{ type: "get_available_models" },
+		]);
 	});
 
 	it("sets and cycles thinking level by patching state locally, with no follow-up get_state round-trip", async () => {

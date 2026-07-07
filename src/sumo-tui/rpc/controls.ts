@@ -60,6 +60,8 @@ export function modelOptionsFrom(models: readonly RpcAvailableModel[], currentMo
 }
 
 export class RpcHostControls {
+	private availableModelsCache: readonly RpcAvailableModel[] | undefined;
+
 	public constructor(
 		private readonly client: RpcCommandClient,
 		private readonly stateStore: RpcHostStateStore = new RpcHostStateStore(),
@@ -67,13 +69,25 @@ export class RpcHostControls {
 	) {}
 
 	public async refreshState(gitBranch?: string): Promise<RpcHostChromeState> {
+		this.availableModelsCache = undefined;
 		const state = responseData(await this.client.send({ type: "get_state" }), "get_state");
 		return this.stateStore.hydrateFromRpcState(state, gitBranch);
 	}
 
 	public async getAvailableModels(): Promise<RpcModelOption[]> {
-		const data = responseData(await this.client.send({ type: "get_available_models" }), "get_available_models");
-		return modelOptionsFrom(data.models, this.stateStore.getSnapshot().modelLabel);
+		if (!this.availableModelsCache) {
+			const data = responseData(await this.client.send({ type: "get_available_models" }), "get_available_models");
+			this.availableModelsCache = data.models;
+		}
+		return modelOptionsFrom(this.availableModelsCache, this.stateStore.getSnapshot().modelLabel);
+	}
+
+	private invalidateAvailableModelsIfMissing(model: ModelIdentity): void {
+		const models = this.availableModelsCache;
+		if (!models) return;
+		if (!models.some((cached) => cached.provider === model.provider && cached.id === model.id)) {
+			this.availableModelsCache = undefined;
+		}
 	}
 
 	// set_model/cycle_model/cycle_thinking_level's own responses already carry
@@ -90,6 +104,7 @@ export class RpcHostControls {
 		this.options.onOptimisticChange?.(optimisticState);
 		try {
 			const model = responseData(await this.client.send({ type: "set_model", provider, modelId }), "set_model");
+			this.invalidateAvailableModelsIfMissing(model);
 			return this.stateStore.applyModelChange(model);
 		} catch (error) {
 			await this.refreshState();
@@ -100,6 +115,7 @@ export class RpcHostControls {
 	public async cycleModel(): Promise<RpcHostChromeState> {
 		const data = responseData(await this.client.send({ type: "cycle_model" }), "cycle_model");
 		if (!data) return this.stateStore.getSnapshot();
+		this.invalidateAvailableModelsIfMissing(data.model);
 		return this.stateStore.applyModelChange(data.model, data.thinkingLevel);
 	}
 

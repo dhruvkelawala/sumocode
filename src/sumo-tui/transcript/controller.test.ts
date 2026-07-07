@@ -56,6 +56,51 @@ describe("TranscriptController agent_end reconciliation", () => {
 		expect(transcript.messages.map((m) => m.id)).toEqual(["u1", "a1", "u2", "a2"]);
 	});
 
+	it("keeps a mid-run follow-up because agent_end always carries it (pinned Pi 0.79.1 behavior)", () => {
+		// Pinned against @earendil-works/pi-agent-core 0.79.1: `runLoop` is the
+		// ONLY emitter of `message_end` for a mid-run queued (steer/followUp)
+		// message, and the same block pushes that message into `newMessages`
+		// (dist/agent-loop.js:95-103; follow-up drain at :157-161) — the exact
+		// array every `agent_end` carries (dist/agent-loop.js:109,151,166). So an
+		// agent_end arriving after a mid-run follow-up ALWAYS includes it, and
+		// the run-suffix splice cannot drop it. If a Pi upgrade breaks this
+		// invariant, this test's premise (and the splice in `handleAgentEvent`'s
+		// agent_end branch) must be revisited.
+		const controller = new TranscriptController();
+
+		controller.handleAgentEvent({ type: "agent_start" });
+		controller.handleAgentEvent({ type: "message_start", message: { id: "u1", role: "user", content: "question" } });
+		controller.handleAgentEvent({ type: "message_end", message: { id: "u1", role: "user", content: "question" } });
+		controller.handleAgentEvent({ type: "message_start", message: { id: "a1", role: "assistant", content: "working on it" } });
+		controller.handleAgentEvent({ type: "message_end", message: { id: "a1", role: "assistant", content: "working on it" } });
+		// User submits mid-run with streamingBehavior "followUp"; the loop drains
+		// the queue and injects it (message_start/message_end + newMessages push).
+		controller.handleAgentEvent({ type: "message_start", message: { id: "fu1", role: "user", content: "also do X" } });
+		controller.handleAgentEvent({ type: "message_end", message: { id: "fu1", role: "user", content: "also do X" } });
+		controller.handleAgentEvent({ type: "message_start", message: { id: "a2", role: "assistant", content: "done, including X" } });
+		controller.handleAgentEvent({ type: "message_end", message: { id: "a2", role: "assistant", content: "done, including X" } });
+
+		const before = controller.viewModel().messages;
+
+		// agent_end.messages === the loop's newMessages: the injected follow-up
+		// is present, in interleaved order.
+		const transcript = controller.handleAgentEvent({
+			type: "agent_end",
+			messages: [
+				{ id: "u1", role: "user", content: "question" },
+				{ id: "a1", role: "assistant", content: "working on it" },
+				{ id: "fu1", role: "user", content: "also do X" },
+				{ id: "a2", role: "assistant", content: "done, including X" },
+			],
+		});
+
+		// The reconcile must be an identity operation: same messages, same
+		// order, the follow-up present exactly once.
+		expect(transcript.messages.map((m) => m.id)).toEqual(["u1", "a1", "fu1", "a2"]);
+		expect(transcript.messages).toEqual(before);
+		expect(transcript.messages.filter((m) => m.id === "fu1")).toHaveLength(1);
+	});
+
 	it("replays a long-stream fixture preceded by a synthetic committed exchange and keeps the prior exchange", () => {
 		const controller = new TranscriptController();
 

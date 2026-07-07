@@ -274,7 +274,18 @@ last:    056 claude-oauth-401 (user-deferred to end)
 | 053 | [Small hardening batch](053-small-hardening-batch.md) | P3 | S | 042 | DONE (reviewer-approved) — `advisor/053-small-hardening-batch` `cb47187`; 100KB OSC52 cap, per-query selector filter memo, 2s git timeout |
 | 054 | [Visual contract env alignment](054-visual-contract-env-alignment.md) | P3 | S | — | DONE (reviewer-approved) — `advisor/054-visual-contract-env-alignment-v2` `f2da097`; v2 coordinated 4-surface SUMO_TUI=0 flip; capture smoke inert |
 | 055 | [agent_end suffix reconcile](055-agent-end-suffix-reconcile.md) | P2 | M | 047 | DONE (reviewer-approved) — `advisor/055-agent-end-suffix-reconcile` `6d29d16`; Step 0 proved by-design (Pi always carries mid-run followUp in agent_end.messages); pinned with test + evidence comment |
-| 056 | [OAuth auth-failure surfacing](056-oauth-auth-failure-surfacing.md) | P1 | M | 041 | IN PROGRESS — `advisor/056-oauth-retry`; root cause diagnosed live: user's anthropic OAuth token expired (~19d), refresh not recovering, Pi fails at auth resolution before any provider request (adapter blameless). Plan surfaces the failure (doctor expiry check + visible RPC run error) |
+| 056 | [OAuth auth-failure surfacing](056-oauth-auth-failure-surfacing.md) | P1 | M | 041 | DONE (reviewer-approved) — `advisor/056-oauth-retry` `a9b656`; root-caused live (user's anthropic OAuth token expired ~19d, refresh not recovering, Pi fails at auth resolution before any provider request — adapter blameless). Renders the stdout auth error in-transcript with a `/login` hint + adds a `sumocode doctor` expiry check (flagged the live expired token, exit 70) |
+
+### Model-UX + splash parity (057–059, 2026-07-07 — second user-reported batch)
+
+Reported live by Dhruv after the first merge. All reviewer-approved and merged into `integrate/track-d`.
+
+| Plan | Title | Status |
+|------|-------|--------|
+| 057 | [Scope model cycling to enabledModels](057-enabled-models-scope.md) | DONE (approved) — `advisor/057-enabled-models-scope` `17f529e`; forward `cycle_model` already respected `enabledModels` (child scope-seeded), but cycle-backward + `/model` selector used the full 531. New dependency-free `enabled-models.ts` (off-disk `enabledModels` + faithful resolveModelScope-subset glob/exact filter); forward+backward+selector now share one enabled ring; empty→full fallback; 113 tests |
+| 058 | [Remove action-confirmation toasts](058-remove-action-confirmation-toasts.md) | DONE (approved) — `advisor/058-remove-action-confirmation-toasts` `243744e`; dropped the 8 SumoCode-self info toasts (model/thinking/draft/abort/session-resumed/approval-allow) that main never showed; kept warning/error feedback, the quit hint, and the extension_ui notify path; approval deny → terse `command blocked` warning |
+| 059 | [Splash live-model footer + bible](059-splash-live-model-footer-and-bible.md) | DONE (approved) — `advisor/059-splash-live-model-footer-and-bible` `f476412`; RPC splash footer now renders live `╰─ <model> · <thinking>` (was static `AWAITING PROMPT`); bible `03-splash*` regenerated (live-model footer, version line removed); `splash-runtime` visual scenario passes. GOLDEN NOTE: splash-runtime golden promotion is Dhruv's call after reviewing the review pack; active-landscape/portrait-runtime `visual:ci` fail on PRE-EXISTING golden/theme-palette drift (`#1A1511`→`#050308`), unrelated to this change |
+| fix | editor.test fake controls (`getEnabledModels`) | DONE (approved) — `advisor/fix-editor-fake` `db76dce`; cross-plan fixture gap: 052's dispatcher-invariant fake lacked 057's new `getEnabledModels`; full `pnpm test` back to green |
 
 ### Audit findings not planned (2026-07-07, for the record)
 

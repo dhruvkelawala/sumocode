@@ -6,6 +6,10 @@ export interface RpcCommandClient {
 	send(command: RpcCommand, timeoutMs?: number): Promise<RpcResponse>;
 }
 
+export interface RpcHostControlsOptions {
+	readonly onOptimisticChange?: (state: RpcHostChromeState) => void;
+}
+
 export type RpcAvailableModel = RpcResponseData<"get_available_models">["models"][number];
 export type RpcThinkingLevel = RpcSessionState["thinkingLevel"];
 export type RpcSlashCommand = RpcResponseData<"get_commands">["commands"][number];
@@ -56,19 +60,34 @@ export function modelOptionsFrom(models: readonly RpcAvailableModel[], currentMo
 }
 
 export class RpcHostControls {
+	private availableModelsCache: readonly RpcAvailableModel[] | undefined;
+
 	public constructor(
 		private readonly client: RpcCommandClient,
 		private readonly stateStore: RpcHostStateStore = new RpcHostStateStore(),
+		private readonly options: RpcHostControlsOptions = {},
 	) {}
 
 	public async refreshState(gitBranch?: string): Promise<RpcHostChromeState> {
+		this.availableModelsCache = undefined;
 		const state = responseData(await this.client.send({ type: "get_state" }), "get_state");
 		return this.stateStore.hydrateFromRpcState(state, gitBranch);
 	}
 
 	public async getAvailableModels(): Promise<RpcModelOption[]> {
-		const data = responseData(await this.client.send({ type: "get_available_models" }), "get_available_models");
-		return modelOptionsFrom(data.models, this.stateStore.getSnapshot().modelLabel);
+		if (!this.availableModelsCache) {
+			const data = responseData(await this.client.send({ type: "get_available_models" }), "get_available_models");
+			this.availableModelsCache = data.models;
+		}
+		return modelOptionsFrom(this.availableModelsCache, this.stateStore.getSnapshot().modelLabel);
+	}
+
+	private invalidateAvailableModelsIfMissing(model: ModelIdentity): void {
+		const models = this.availableModelsCache;
+		if (!models) return;
+		if (!models.some((cached) => cached.provider === model.provider && cached.id === model.id)) {
+			this.availableModelsCache = undefined;
+		}
 	}
 
 	// set_model/cycle_model/cycle_thinking_level's own responses already carry
@@ -81,19 +100,37 @@ export class RpcHostControls {
 	// itself.
 
 	public async setModel(provider: string, modelId: string): Promise<RpcHostChromeState> {
-		const model = responseData(await this.client.send({ type: "set_model", provider, modelId }), "set_model");
-		return this.stateStore.applyModelChange(model);
+		const optimisticState = this.stateStore.applyModelChange({ provider, id: modelId });
+		this.options.onOptimisticChange?.(optimisticState);
+		try {
+			const model = responseData(await this.client.send({ type: "set_model", provider, modelId }), "set_model");
+			this.invalidateAvailableModelsIfMissing(model);
+			return this.stateStore.applyModelChange(model);
+		} catch (error) {
+			const rolledBackState = await this.refreshState();
+			this.options.onOptimisticChange?.(rolledBackState);
+			throw error;
+		}
 	}
 
 	public async cycleModel(): Promise<RpcHostChromeState> {
 		const data = responseData(await this.client.send({ type: "cycle_model" }), "cycle_model");
 		if (!data) return this.stateStore.getSnapshot();
+		this.invalidateAvailableModelsIfMissing(data.model);
 		return this.stateStore.applyModelChange(data.model, data.thinkingLevel);
 	}
 
 	public async setThinkingLevel(level: RpcThinkingLevel): Promise<RpcHostChromeState> {
-		responseData(await this.client.send({ type: "set_thinking_level", level }), "set_thinking_level");
-		return this.stateStore.applyThinkingLevel(level);
+		const optimisticState = this.stateStore.applyThinkingLevel(level);
+		this.options.onOptimisticChange?.(optimisticState);
+		try {
+			responseData(await this.client.send({ type: "set_thinking_level", level }), "set_thinking_level");
+			return this.stateStore.getSnapshot();
+		} catch (error) {
+			const rolledBackState = await this.refreshState();
+			this.options.onOptimisticChange?.(rolledBackState);
+			throw error;
+		}
 	}
 
 	public async cycleThinkingLevel(): Promise<RpcHostChromeState> {
@@ -142,8 +179,9 @@ export class RpcHostControls {
 		return responseData(await this.client.send(command, SESSION_COMMAND_TIMEOUT_MS), "export_html");
 	}
 
-	public async setSessionName(name: string): Promise<void> {
+	public async setSessionName(name: string): Promise<RpcHostChromeState> {
 		responseData(await this.client.send({ type: "set_session_name", name }), "set_session_name");
+		return this.stateStore.applySessionName(name);
 	}
 
 	public async compact(customInstructions?: string): Promise<RpcResponseData<"compact">> {

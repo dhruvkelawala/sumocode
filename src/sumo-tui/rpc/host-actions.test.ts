@@ -15,7 +15,7 @@ import type { RpcHostControls, RpcModelOption, RpcSlashCommand } from "./control
 import { isRpcHostSlashCommandName, RpcHostActions, RPC_HOST_COMMAND_PALETTE_INPUT, RPC_HOST_SLASH_COMMANDS } from "./host-actions.js";
 import { RpcHostOverlayManager } from "./host-overlays.js";
 import { InlineSelectorHost } from "./inline-selector.js";
-import { RpcHostStateStore } from "./state.js";
+import { RpcHostStateStore, type RpcHostChromeState } from "./state.js";
 
 type Notification = { message: string; level: NotificationLevel };
 
@@ -122,8 +122,9 @@ class FakeControls {
 		};
 	}
 
-	public async setSessionName(name: string): Promise<void> {
+	public async setSessionName(name: string): Promise<Record<string, unknown>> {
 		this.calls.push(`setSessionName:${name}`);
+		return { sessionName: name };
 	}
 
 	public async setAutoCompaction(enabled: boolean): Promise<void> {
@@ -234,6 +235,7 @@ function setup(options: {
 	readonly writeClipboardSequence?: (sequence: string) => boolean;
 	readonly sessionFile?: string;
 	readonly changelogRoot?: string;
+	readonly onStateChange?: (state?: RpcHostChromeState) => void;
 } = {}) {
 	const controls = new FakeControls();
 	const stateStore = new RpcHostStateStore();
@@ -261,6 +263,7 @@ function setup(options: {
 	const rehydrateTranscript = async (): Promise<void> => {
 		rehydrateCalls.push(rehydrateCalls.length + 1);
 	};
+	const stateChanges: Array<RpcHostChromeState | undefined> = [];
 	const actions = new RpcHostActions({
 		controls: controls as unknown as RpcHostControls,
 		stateStore,
@@ -276,12 +279,16 @@ function setup(options: {
 		editorText,
 		createMemoryClient: () => memory,
 		onExitRequest: options.onExitRequest,
+		onStateChange: (state) => {
+			stateChanges.push(state);
+			options.onStateChange?.(state);
+		},
 		rehydrateTranscript,
 		writeClipboardSequence: options.writeClipboardSequence,
 		changelogRoot: options.changelogRoot,
 	});
 
-	return { actions, controls, modals, overlays, inlineSelectors, notifications, memory, editorText, rehydrateCalls };
+	return { actions, controls, modals, overlays, inlineSelectors, notifications, memory, editorText, rehydrateCalls, stateChanges };
 }
 
 function rpcCommand(name: string): RpcSlashCommand {
@@ -328,7 +335,7 @@ describe("RpcHostActions", () => {
 	});
 
 	it("handles RPC path slash controls for model, thinking, compaction, and settings", async () => {
-		const { actions, controls, inlineSelectors, notifications } = setup();
+		const { actions, controls, inlineSelectors, notifications, stateChanges } = setup();
 
 		await expect(actions.handleSubmittedText("/model openai/gpt-5")).resolves.toBe(true);
 		await expect(actions.handleSubmittedText("/thinking high")).resolves.toBe(true);
@@ -341,10 +348,13 @@ describe("RpcHostActions", () => {
 		inlineSelectors.handleInput(SELECTOR_ENTER);
 		await settings;
 
-		expect(controls.calls).toContain("setModel:openai/gpt-5");
-		expect(controls.calls).toContain("setThinking:high");
-		expect(controls.calls).toContain("compact:keep branch summary");
-		expect(controls.calls).toContain("setAutoCompaction:false");
+		expect(controls.calls).toEqual([
+			"setModel:openai/gpt-5",
+			"setThinking:high",
+			"compact:keep branch summary",
+			"setAutoCompaction:false",
+		]);
+		expect(stateChanges).toEqual([undefined, undefined, undefined]);
 		expect(notifications).toContainEqual({ message: "auto compaction disabled", level: "info" });
 	});
 
@@ -728,7 +738,7 @@ describe("RpcHostActions", () => {
 	});
 
 	it("handles /name rename as a host command", async () => {
-		const { actions, controls, modals, notifications } = setup();
+		const { actions, controls, modals, notifications, stateChanges } = setup();
 
 		const rename = actions.handleSubmittedText("/name");
 		await flush();
@@ -737,8 +747,8 @@ describe("RpcHostActions", () => {
 		modals.handleInput(Key.enter);
 		await rename;
 
-		expect(controls.calls).toContain("setSessionName:Plan 023");
-		expect(controls.calls).toContain("refreshState");
+		expect(controls.calls).toEqual(["setSessionName:Plan 023"]);
+		expect(stateChanges).toEqual([{ sessionName: "Plan 023" }]);
 		expect(notifications).toContainEqual({ message: "session name: Plan 023", level: "info" });
 	});
 

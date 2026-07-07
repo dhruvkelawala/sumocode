@@ -103,6 +103,41 @@ describe("RpcHostStateStore", () => {
 		});
 	});
 
+	it("resets transient event chrome when hydrating fresh RPC state", () => {
+		const store = new RpcHostStateStore();
+
+		const beforeHydrate = store.handleAgentEvent({
+			type: "tool_execution_update",
+			toolCallId: "task-1",
+			toolName: "task",
+			partialResult: { content: [{ type: "text", text: "partial" }] },
+		});
+		expect(beforeHydrate).toMatchObject({
+			taskPartialCount: 1,
+			lastEventType: "tool_execution_update",
+		});
+
+		const hydrated = store.hydrateFromRpcState({
+			model: { provider: "openai", id: "gpt-5.5" } as never,
+			thinkingLevel: "medium",
+			isStreaming: true,
+			isCompacting: false,
+			steeringMode: "all",
+			followUpMode: "one-at-a-time",
+			sessionId: "session-1",
+			sessionName: "Migration",
+			autoCompactionEnabled: true,
+			messageCount: 2,
+			pendingMessageCount: 1,
+		});
+
+		expect(hydrated).toMatchObject({
+			isStreaming: true,
+			taskPartialCount: 0,
+		});
+		expect(hydrated.lastEventType).toBeUndefined();
+	});
+
 	it("applyModelChange patches modelLabel (and thinkingLevel, if given) directly, without touching other state", () => {
 		const store = new RpcHostStateStore();
 		store.hydrateFromRpcState({
@@ -147,6 +182,30 @@ describe("RpcHostStateStore", () => {
 		});
 
 		expect(store.applyModelChange(undefined)).toMatchObject({ modelLabel: "openai/gpt-5.5" });
+	});
+
+	it("applySessionName patches sessionName directly, without touching other state", () => {
+		const store = new RpcHostStateStore();
+		store.hydrateFromRpcState({
+			model: { provider: "openai", id: "gpt-5.5" } as never,
+			thinkingLevel: "medium",
+			isStreaming: false,
+			isCompacting: false,
+			steeringMode: "all",
+			followUpMode: "one-at-a-time",
+			sessionId: "session-1",
+			sessionName: "Migration",
+			autoCompactionEnabled: true,
+			messageCount: 2,
+			pendingMessageCount: 1,
+		});
+
+		expect(store.applySessionName("Plan 041")).toMatchObject({
+			sessionId: "session-1",
+			sessionName: "Plan 041",
+			modelLabel: "openai/gpt-5.5",
+			thinkingLevel: "medium",
+		});
 	});
 
 	it("applyThinkingLevel patches thinkingLevel directly, without touching other state", () => {

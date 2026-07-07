@@ -36,7 +36,7 @@ import type { RpcHostOverlayManager } from "./host-overlays.js";
 import type { InlineSelectorHost, InlineSelectorItem } from "./inline-selector.js";
 import { notifyOnError } from "./safe-send.js";
 import { buildSessionTree, listSessions, type SessionEntryLike, type SessionListInfo, type SessionTreeNode } from "./session-reader.js";
-import type { RpcHostStateStore } from "./state.js";
+import type { RpcHostChromeState, RpcHostStateStore } from "./state.js";
 
 export const RPC_HOST_COMMAND_PALETTE_INPUT = "\u001f";
 
@@ -71,7 +71,7 @@ export interface RpcHostActionsOptions {
 	readonly notifications: HostNotifications;
 	readonly editorText?: EditorTextController;
 	readonly createMemoryClient?: MemoryClientFactory;
-	readonly onStateChange?: () => void;
+	readonly onStateChange?: (state?: RpcHostChromeState) => void;
 	readonly onRenderRequest?: () => void;
 	readonly onExitRequest?: (code: number) => void;
 	/**
@@ -410,7 +410,7 @@ export class RpcHostActions {
 	private readonly notifications: HostNotifications;
 	private readonly editorText: EditorTextController | undefined;
 	private readonly createMemoryClient: MemoryClientFactory;
-	private readonly onStateChange: () => void;
+	private readonly onStateChange: (state?: RpcHostChromeState) => void;
 	private readonly onRenderRequest: () => void;
 	private readonly onExitRequest: (code: number) => void;
 	private readonly rehydrateTranscript: () => Promise<void>;
@@ -965,16 +965,13 @@ export class RpcHostActions {
 		const name = await this.modals.input("Rename session", "session name");
 		const trimmed = name?.trim() ?? "";
 		if (!trimmed) return;
-		await this.controls.setSessionName(trimmed);
-		await this.controls.refreshState();
-		this.onStateChange();
+		const state = await this.controls.setSessionName(trimmed);
+		this.onStateChange(state);
 		notify(this.notifications, `session name: ${trimmed}`, "info");
 	}
 
 	private async setAutoCompaction(enabled: boolean): Promise<void> {
 		await this.controls.setAutoCompaction(enabled);
-		await this.controls.refreshState();
-		this.onStateChange();
 		notify(this.notifications, `auto compaction ${enabled ? "enabled" : "disabled"}`, "info");
 	}
 

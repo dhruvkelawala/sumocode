@@ -373,7 +373,7 @@ export function createRpcHostInterruptHandler(deps: RpcHostInterruptDependencies
 export interface RpcHostModelCycleDependencies {
 	readonly controls: Pick<RpcHostControls, "cycleModel" | "getAvailableModels" | "setModel">;
 	readonly notifications: Pick<NotificationCenter, "notify">;
-	readonly onStateChange?: () => void;
+	readonly onStateChange?: (state?: RpcHostChromeState) => void;
 }
 
 /**
@@ -389,7 +389,7 @@ export function createModelCycleForwardHandler(deps: RpcHostModelCycleDependenci
 	return (): void => {
 		void notifyOnError(async () => {
 			const state = await deps.controls.cycleModel();
-			deps.onStateChange?.();
+			deps.onStateChange?.(state);
 			if (state.modelLabel) deps.notifications.notify(`model: ${state.modelLabel}`, "info");
 		}, deps.notifications);
 	};
@@ -426,7 +426,7 @@ export function createModelCycleBackwardHandler(deps: RpcHostModelCycleDependenc
 			const previousIndex = (baseIndex - 1 + models.length) % models.length;
 			const previous = models[previousIndex];
 			const state = await deps.controls.setModel(previous.provider, previous.id);
-			deps.onStateChange?.();
+			deps.onStateChange?.(state);
 			if (state.modelLabel) deps.notifications.notify(`model: ${state.modelLabel}`, "info");
 		}, deps.notifications);
 	};
@@ -435,7 +435,7 @@ export function createModelCycleBackwardHandler(deps: RpcHostModelCycleDependenc
 export interface RpcHostThinkingCycleDependencies {
 	readonly controls: Pick<RpcHostControls, "cycleThinkingLevel">;
 	readonly notifications: Pick<NotificationCenter, "notify">;
-	readonly onStateChange?: () => void;
+	readonly onStateChange?: (state?: RpcHostChromeState) => void;
 }
 
 /**
@@ -450,7 +450,7 @@ export function createThinkingCycleHandler(deps: RpcHostThinkingCycleDependencie
 	return (): void => {
 		void notifyOnError(async () => {
 			const state = await deps.controls.cycleThinkingLevel();
-			deps.onStateChange?.();
+			deps.onStateChange?.(state);
 			if (state.thinkingLevel) deps.notifications.notify(`thinking: ${state.thinkingLevel}`, "info");
 		}, deps.notifications);
 	};
@@ -529,7 +529,11 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		scheduleRender: () => runtime?.requestRender(),
 	});
 	const stateStore = new RpcHostStateStore();
-	const controls = new RpcHostControls(client, stateStore);
+	const requestRender = (): void => runtime?.requestRender();
+	const pushState = (state?: RpcHostChromeState): void => {
+		runtime?.update({ state: state ?? stateStore.getSnapshot() });
+	};
+	const controls = new RpcHostControls(client, stateStore, { onOptimisticChange: pushState });
 	let stopHost: (code: number) => Promise<void> = async (code: number): Promise<void> => {
 		runtime?.stop(code);
 		await client.stop();
@@ -549,7 +553,6 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 	// (same stop()-then-exit(1) path, same duplicate-event guard) for both
 	// events so a sync throw and an async rejection are torn down identically.
 	process.once("uncaughtException", handleUnhandledRejection);
-	const requestRender = (): void => runtime?.requestRender();
 	const hostTerminal = {
 		get columns(): number {
 			return Math.max(1, stdout.columns ?? 80);
@@ -637,17 +640,17 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 	const handleModelCycleForward = createModelCycleForwardHandler({
 		controls,
 		notifications,
-		onStateChange: requestRender,
+		onStateChange: pushState,
 	});
 	const handleModelCycleBackward = createModelCycleBackwardHandler({
 		controls,
 		notifications,
-		onStateChange: requestRender,
+		onStateChange: pushState,
 	});
 	const handleThinkingCycle = createThinkingCycleHandler({
 		controls,
 		notifications,
-		onStateChange: requestRender,
+		onStateChange: pushState,
 	});
 	const handleToolsExpandToggle = createToolsExpandToggleHandler({
 		setToolExpansion: (expanded) => runtime?.setToolExpansion(expanded),
@@ -725,7 +728,7 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		inlineSelectors,
 		notifications,
 		editorText: editor,
-		onStateChange: requestRender,
+		onStateChange: pushState,
 		onRenderRequest: requestRender,
 		onExitRequest: (code) => requestHostExit(code),
 		rehydrateTranscript,

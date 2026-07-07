@@ -4,10 +4,13 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { RemnicMemoryClient } from "../../memory.js";
+import { resetThemeRegistryForTests } from "../../themes/index.js";
 import { SumoTuiTestBackend, type TestBackendFrame } from "../testing/test-backend.js";
+import { ModalManager } from "../widgets/modal.js";
 import type { NotificationLevel } from "../widgets/notification.js";
 import { PiEditorLeaf } from "../widgets/pi-editor-leaf.js";
-import type { RpcModelOption, RpcSlashCommand } from "./controls.js";
+import type { RpcHostControls, RpcModelOption, RpcSlashCommand } from "./controls.js";
 import {
 	RpcHostEditorController,
 	buildRpcAutocompleteCommands,
@@ -18,7 +21,10 @@ import {
 	resolveRpcAgentDir,
 	type RpcEditorAutocompleteControls,
 } from "./editor.js";
-import { isRpcHostSlashCommandName } from "./host-actions.js";
+import { isRpcHostSlashCommandName, RpcHostActions, RPC_HOST_SLASH_COMMANDS } from "./host-actions.js";
+import { RpcHostOverlayManager } from "./host-overlays.js";
+import { InlineSelectorHost } from "./inline-selector.js";
+import { RpcHostStateStore } from "./state.js";
 
 const ANSI_PATTERN = /\x1b\][^\x07]*(?:\x07|\x1b\\)|\x1b\[[0-?]*[ -/]*[@-~]|\x1b[()][A-Za-z0-9]/g;
 
@@ -339,7 +345,7 @@ describe("RPC autocomplete command construction", () => {
 		expect(suggestions?.items.map((item) => item.value)).toContain("ship");
 	});
 
-	it("advertises only host-implemented or child-executable slash commands", () => {
+	it("advertises commands sourced only from the host list or the child's get_commands, excluding /login", () => {
 		const childCommands = [
 			rpcCommand("deploy", "Deploy current workspace"),
 			rpcCommand("export", "Child executable export", "prompt"),
@@ -347,6 +353,11 @@ describe("RPC autocomplete command construction", () => {
 		const commands = buildRpcAutocompleteCommands(childCommands);
 		const childNames = new Set(childCommands.map((command) => command.name.replace(/^\/+/, "")));
 
+		// Source-set check only: no advertised command may come from anywhere
+		// but the host list or the child's own get_commands. Whether the host
+		// list itself is honest (every entry actually dispatches) is proven by
+		// the "advertised host slash-command dispatch invariant" suite below,
+		// which drives the REAL RpcHostActions.handleSubmittedText.
 		for (const command of commands) {
 			expect(isRpcHostSlashCommandName(command.name) || childNames.has(command.name)).toBe(true);
 		}
@@ -359,6 +370,184 @@ describe("RPC autocomplete command construction", () => {
 		expect(commands.some((command) => command.name === "hotkeys")).toBe(true);
 		expect(commands.some((command) => command.name === "login")).toBe(false);
 	});
+});
+
+describe("advertised host slash-command dispatch invariant", () => {
+	/**
+	 * Minimal control surface for driving `handleSubmittedText`. Only the
+	 * methods the escape-dismissed dispatch paths actually reach are
+	 * implemented; an advertised command reaching an unimplemented method
+	 * rejects the dispatch and fails its test loudly with the command name.
+	 */
+	class FakeDispatchControls {
+		public readonly calls: string[] = [];
+
+		public async refreshState(): Promise<Record<string, unknown>> {
+			this.calls.push("refreshState");
+			return {};
+		}
+
+		public async getAvailableModels(): Promise<RpcModelOption[]> {
+			this.calls.push("getAvailableModels");
+			return [{ provider: "openai", id: "gpt-5", label: "openai/gpt-5", active: true }];
+		}
+
+		public async compact(): Promise<Record<string, unknown>> {
+			this.calls.push("compact");
+			return {};
+		}
+
+		public async newSession(): Promise<{ cancelled: boolean }> {
+			this.calls.push("newSession");
+			return { cancelled: false };
+		}
+
+		public async clone(): Promise<{ cancelled: boolean }> {
+			this.calls.push("clone");
+			return { cancelled: false };
+		}
+
+		public async getForkMessages(): Promise<{ entryId: string; text: string }[]> {
+			this.calls.push("getForkMessages");
+			return [{ entryId: "entry-1", text: "forkable message text" }];
+		}
+
+		public async getSessionStats(): Promise<Record<string, unknown>> {
+			this.calls.push("getSessionStats");
+			return {
+				sessionFile: "/tmp/session.jsonl",
+				sessionId: "session-1",
+				userMessages: 1,
+				assistantMessages: 1,
+				toolCalls: 0,
+				toolResults: 0,
+				totalMessages: 2,
+				tokens: { input: 1000, output: 2000, cacheRead: 0, cacheWrite: 0, total: 3000 },
+				cost: 0.42,
+			};
+		}
+
+		public async getCommands(): Promise<RpcSlashCommand[]> {
+			this.calls.push("getCommands");
+			return [];
+		}
+
+		public async getLastAssistantText(): Promise<string | null> {
+			this.calls.push("getLastAssistantText");
+			return "last assistant response";
+		}
+
+		public async exportHtml(): Promise<{ path: string }> {
+			this.calls.push("exportHtml");
+			return { path: "/tmp/sumocode-session.html" };
+		}
+	}
+
+	class FakeSelectorEditor {
+		public invalidate(): void {}
+		public handleInput(): void {}
+		public render(): string[] {
+			return ["editor"];
+		}
+	}
+
+	interface DispatchHarness {
+		readonly actions: RpcHostActions;
+		readonly controls: FakeDispatchControls;
+		readonly modals: ModalManager;
+		readonly overlays: RpcHostOverlayManager;
+		readonly inlineSelectors: InlineSelectorHost;
+		readonly notifications: { message: string; level: NotificationLevel }[];
+	}
+
+	function dispatchHarness(changelogRoot: string): DispatchHarness {
+		const controls = new FakeDispatchControls();
+		const modals = new ModalManager();
+		const overlays = new RpcHostOverlayManager();
+		const inlineSelectors = new InlineSelectorHost(new FakeSelectorEditor());
+		const notifications: { message: string; level: NotificationLevel }[] = [];
+		const memoryClient = { browse: async () => [] } as unknown as RemnicMemoryClient;
+		const actions = new RpcHostActions({
+			controls: controls as unknown as RpcHostControls,
+			// Fresh store, deliberately unhydrated: `sessionFile` stays undefined,
+			// so /resume and /tree take their deterministic warning branches
+			// instead of reading real session files off disk.
+			stateStore: new RpcHostStateStore(),
+			modals,
+			overlays,
+			inlineSelectors,
+			notifications: {
+				notify: (message, level = "info") => {
+					notifications.push({ message, level });
+					return notifications.length;
+				},
+			},
+			createMemoryClient: () => memoryClient,
+			changelogRoot,
+		});
+		return { actions, controls, modals, overlays, inlineSelectors, notifications };
+	}
+
+	function flushMicrotasks(): Promise<void> {
+		return Promise.resolve().then(() => Promise.resolve());
+	}
+
+	/**
+	 * Drives `handleSubmittedText` to completion by cancelling every host
+	 * surface (inline selector, overlay, modal prompt) the command opens.
+	 * Bounded by iteration count, not wall-clock time: every dismissal is a
+	 * synchronous `close()` between microtask drains.
+	 */
+	async function dispatchToCompletion(harness: DispatchHarness, text: string): Promise<boolean> {
+		let outcome: { handled: boolean } | { error: unknown } | undefined;
+		void harness.actions.handleSubmittedText(text).then(
+			(handled) => {
+				outcome = { handled };
+			},
+			(error: unknown) => {
+				outcome = { error };
+			},
+		);
+		for (let attempt = 0; attempt < 32 && outcome === undefined; attempt += 1) {
+			await flushMicrotasks();
+			if (harness.inlineSelectors.getActiveKind() !== undefined) harness.inlineSelectors.close();
+			else if (harness.overlays.getActiveKind() !== undefined) harness.overlays.close();
+			else if (harness.modals.getActiveKind() !== undefined) harness.modals.close();
+		}
+		if (outcome === undefined) throw new Error(`dispatch of "${text}" did not settle after dismissing all host surfaces`);
+		if ("error" in outcome) throw outcome.error;
+		return outcome.handled;
+	}
+
+	let changelogRoot: string;
+
+	beforeEach(() => {
+		changelogRoot = mkdtempSync(join(tmpdir(), "sumocode-rpc-dispatch-test-"));
+		writeFileSync(join(changelogRoot, "CHANGELOG.md"), "# Changelog\n\n- test entry\n", "utf8");
+	});
+
+	afterEach(() => {
+		rmSync(changelogRoot, { recursive: true, force: true });
+		resetThemeRegistryForTests();
+	});
+
+	it.each(RPC_HOST_SLASH_COMMANDS.map((command) => command.name))(
+		"the real dispatcher handles advertised host command /%s without unknown-command fallthrough",
+		async (name) => {
+			const harness = dispatchHarness(changelogRoot);
+
+			const handled = await dispatchToCompletion(harness, `/${name}`);
+
+			// A dead-advertised command ALSO resolves `true`: it falls into the
+			// dispatcher's default branch, which (with no child commands) emits
+			// the "unknown command: /<name>" warning. The discriminating
+			// assertion is therefore the absence of that warning, not the
+			// return value alone.
+			expect(handled).toBe(true);
+			const fallthrough = harness.notifications.filter((notification) => notification.message.startsWith("unknown command:"));
+			expect(fallthrough).toEqual([]);
+		},
+	);
 });
 
 describe("RPC keybindings manager construction", () => {

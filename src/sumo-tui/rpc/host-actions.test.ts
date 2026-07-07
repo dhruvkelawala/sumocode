@@ -492,6 +492,29 @@ describe("RpcHostActions", () => {
 			return path;
 		}
 
+		function writeLargeFixtureSession(dir: string, fileName: string, id: string, timestamp: string, firstMessage: string): string {
+			const path = join(dir, fileName);
+			const prefix = jsonl([
+				{ type: "session", version: 3, id, timestamp, cwd: "/repo" },
+				{
+					type: "message",
+					id: "e1",
+					parentId: null,
+					timestamp,
+					message: { role: "user", content: firstMessage, timestamp: new Date(timestamp).getTime() },
+				},
+			]);
+			const hiddenMessage = JSON.stringify({
+				type: "message",
+				id: "e2",
+				parentId: "e1",
+				timestamp,
+				message: { role: "assistant", content: "x".repeat(300 * 1024), timestamp: new Date(timestamp).getTime() },
+			});
+			writeFileSync(path, `${prefix}${hiddenMessage}\n`);
+			return path;
+		}
+
 		it("lists fixture sessions from the current session's directory and loads the chosen path", async () => {
 			const dir = mkdtempSync(join(tmpdir(), "sumocode-resume-test-"));
 			try {
@@ -510,6 +533,24 @@ describe("RpcHostActions", () => {
 				expect(controls.calls).toContain(`switchSession:${olderPath}`);
 				expect(controls.calls).toContain("refreshState");
 				expect(rehydrateCalls).toHaveLength(1);
+			} finally {
+				rmSync(dir, { recursive: true, force: true });
+			}
+		});
+
+		it("marks truncated session counts as floors in resume labels", async () => {
+			const dir = mkdtempSync(join(tmpdir(), "sumocode-resume-truncated-label-test-"));
+			try {
+				const sessionFile = writeLargeFixtureSession(dir, "2026-07-02T20-00-00-000Z_large.jsonl", "large", "2026-07-02T20:00:00.000Z", "large session first message");
+				const { actions, inlineSelectors } = setup({ sessionFile });
+
+				const resumePromise = actions.handleSubmittedText("/resume");
+				await flushIO();
+				expect(inlineSelectors.getActiveKind()).toBe("select");
+				const rendered = inlineSelectors.render(120).join("\n").replace(/\u001b\[[0-9;]*m/g, "");
+				expect(rendered).toContain("(1+ msgs)");
+				inlineSelectors.handleInput(SELECTOR_ESCAPE);
+				await resumePromise;
 			} finally {
 				rmSync(dir, { recursive: true, force: true });
 			}

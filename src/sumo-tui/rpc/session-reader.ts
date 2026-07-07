@@ -56,6 +56,17 @@ export interface SessionListInfo {
 	readonly modified: Date;
 	readonly messageCount: number;
 	readonly firstMessage: string;
+	readonly truncatedScan: boolean;
+}
+export interface ReadSessionInfoOptions {
+	readonly maxBytes?: number;
+}
+
+type SessionInfoReader = (filePath: string) => Promise<SessionListInfo | undefined>;
+
+export interface ListSessionsOptions {
+	readonly concurrency?: number;
+	readonly reader?: SessionInfoReader;
 }
 
 export interface SessionTreeNode {
@@ -106,21 +117,25 @@ function messageActivityTime(entry: SessionEntryLike): number | undefined {
 }
 
 /**
- * Streams a single session `.jsonl` file and extracts list-view metadata:
- * session id/cwd, the latest `session_info` display name (explicit clears
- * included -- "use latest" per Pi's own comment), message count, and the
- * first user message text. Ports `buildSessionInfo` from
- * `session-manager.js` line-for-line; returns `undefined` for a missing
+ * Streams a bounded prefix of a single session `.jsonl` file and extracts
+ * list-view metadata: session id/cwd, the latest in-window `session_info`
+ * display name (explicit clears included -- "use latest" per Pi's own
+ * comment), an in-window message-count floor, and the first user message text.
+ * This deliberately diverges from Pi's full-file `buildSessionInfo` scan so
+ * `/resume` can open without reading every byte of long sessions; tree browsing
+ * below still reads full files for fidelity. Returns `undefined` for a missing
  * header or unreadable file instead of throwing, matching Pi's `catch { return
  * null; }`.
  */
-export async function readSessionInfo(filePath: string): Promise<SessionListInfo | undefined> {
+export async function readSessionInfo(filePath: string, { maxBytes = 256 * 1024 }: ReadSessionInfoOptions = {}): Promise<SessionListInfo | undefined> {
 	let stats: ReturnType<typeof statSync>;
 	try {
 		stats = statSync(filePath);
 	} catch {
 		return undefined;
 	}
+	const truncatedScan = stats.size > maxBytes;
+
 
 	let header: SessionFileHeader | undefined;
 	let messageCount = 0;
@@ -129,7 +144,7 @@ export async function readSessionInfo(filePath: string): Promise<SessionListInfo
 	let lastActivityTime: number | undefined;
 
 	try {
-		const rl = createInterface({ input: createReadStream(filePath, { encoding: "utf8" }), crlfDelay: Number.POSITIVE_INFINITY });
+		const rl = createInterface({ input: createReadStream(filePath, { encoding: "utf8", start: 0, end: maxBytes - 1 }), crlfDelay: Number.POSITIVE_INFINITY });
 		for await (const line of rl) {
 			const entry = parseLine(line);
 			if (!entry) continue;
@@ -163,9 +178,11 @@ export async function readSessionInfo(filePath: string): Promise<SessionListInfo
 	const headerTime = typeof header.timestamp === "string" ? new Date(header.timestamp).getTime() : Number.NaN;
 	const modified = typeof lastActivityTime === "number" && lastActivityTime > 0
 		? new Date(lastActivityTime)
-		: !Number.isNaN(headerTime)
-			? new Date(headerTime)
-			: stats.mtime;
+		: truncatedScan
+			? stats.mtime
+			: !Number.isNaN(headerTime)
+				? new Date(headerTime)
+				: stats.mtime;
 
 	return {
 		path: filePath,
@@ -177,6 +194,7 @@ export async function readSessionInfo(filePath: string): Promise<SessionListInfo
 		modified,
 		messageCount,
 		firstMessage: firstMessage || "(no messages)",
+		truncatedScan,
 	};
 }
 
@@ -186,7 +204,32 @@ export async function readSessionInfo(filePath: string): Promise<SessionListInfo
  * filter, which the host doesn't need since `sessionDir` here is already the
  * cwd-scoped directory derived from the current session's path).
  */
-export async function listSessions(sessionDir: string): Promise<SessionListInfo[]> {
+async function readSessionInfosWithLimit(
+	files: readonly string[],
+	concurrency: number,
+	reader: SessionInfoReader,
+): Promise<(SessionListInfo | undefined)[]> {
+	const infos: (SessionListInfo | undefined)[] = new Array(files.length);
+	const normalizedConcurrency = Number.isFinite(concurrency) ? Math.max(1, Math.floor(concurrency)) : 1;
+	const workerCount = Math.min(files.length, normalizedConcurrency);
+	let nextIndex = 0;
+
+	const runWorker = async (): Promise<void> => {
+		for (;;) {
+			const index = nextIndex;
+			nextIndex += 1;
+			if (index >= files.length) return;
+			infos[index] = await reader(files[index]!);
+		}
+	};
+
+	const workers: Promise<void>[] = [];
+	for (let index = 0; index < workerCount; index += 1) workers.push(runWorker());
+	for (const worker of workers) await worker;
+	return infos;
+}
+
+export async function listSessions(sessionDir: string, { concurrency = 8, reader = readSessionInfo }: ListSessionsOptions = {}): Promise<SessionListInfo[]> {
 	let entries: string[];
 	try {
 		entries = await readdir(sessionDir);
@@ -194,7 +237,7 @@ export async function listSessions(sessionDir: string): Promise<SessionListInfo[
 		return [];
 	}
 	const files = entries.filter((name) => name.endsWith(".jsonl")).map((name) => join(sessionDir, name));
-	const infos = await Promise.all(files.map((file) => readSessionInfo(file)));
+	const infos = await readSessionInfosWithLimit(files, concurrency, reader);
 	const sessions = infos.filter((info): info is SessionListInfo => info !== undefined);
 	sessions.sort((a, b) => b.modified.getTime() - a.modified.getTime());
 	return sessions;

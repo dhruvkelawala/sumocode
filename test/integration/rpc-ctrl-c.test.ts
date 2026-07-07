@@ -3,11 +3,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { TERMINAL_CLEANUP_SEQUENCE } from "../../src/sumo-tui/runtime/terminal-controller.js";
-import { PI_BOOT_SEQUENCE, spawnSumocodePty, type SpawnedPiPty } from "./spawn-pi-pty.js";
+import { PI_BOOT_SEQUENCE, spawnSumocodePty, waitForScreen, type SpawnedPiPty } from "./spawn-pi-pty.js";
 import { createRpcChildFixture } from "./rpc-child-fixture.js";
 
 const CTRL_C = "\x1b[99;5u";
 const CSI_U_ENTER = "\x1b[13u";
+const COLS = 100;
+const ROWS = 30;
 
 let app: SpawnedPiPty | undefined;
 
@@ -16,13 +18,9 @@ afterEach(() => {
 	app = undefined;
 });
 
-function delay(ms: number): Promise<void> {
-	return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 async function bootRpcHost(prefix: string): Promise<SpawnedPiPty> {
 	const agentDir = await mkdtemp(join(tmpdir(), prefix));
-	const spawned = spawnSumocodePty({ env: { PI_CODING_AGENT_DIR: agentDir }, cols: 100, rows: 30 });
+	const spawned = spawnSumocodePty({ env: { PI_CODING_AGENT_DIR: agentDir }, cols: COLS, rows: ROWS });
 	await spawned.waitForOutput(PI_BOOT_SEQUENCE, 15_000);
 	await spawned.waitForOutput("DIVINE INVOCATION", 15_000);
 	await spawned.waitForOutput("AWAITING PROMPT", 15_000);
@@ -36,8 +34,8 @@ async function bootRpcHostWithPiFixture(prefix: string, piBin: string): Promise<
 			PI_CODING_AGENT_DIR: agentDir,
 			PI_BIN: piBin,
 		},
-		cols: 100,
-		rows: 30,
+		cols: COLS,
+		rows: ROWS,
 	});
 	await spawned.waitForOutput(PI_BOOT_SEQUENCE, 15_000);
 	await spawned.waitForOutput("DIVINE INVOCATION", 15_000);
@@ -56,12 +54,17 @@ describe("sumocode RPC Ctrl-C semantics", () => {
 		await app.waitForOutput("draft cleared", 5_000);
 
 		app.sendInput("after-ctrl-c\r");
-		await app.waitForOutput("after-ctrl-c", 5_000);
-		await delay(300);
-
-		const output = app.getOutput();
-		expect(output).toContain("after-ctrl-c");
-		expect(output).not.toContain("draft-before-clearafter-ctrl-c");
+		// If Ctrl-C had NOT cleared the draft, the editor's text would be the
+		// concatenation "draft-before-clearafter-ctrl-c" -- so any screen frame
+		// showing "after-ctrl-c" would show it inside the merged string.
+		// Asserting absence on the same stable frame that contains the new text
+		// is therefore race-free, with no fixed sleep.
+		const screen = await waitForScreen(
+			app,
+			(current) => current.text.includes("after-ctrl-c"),
+			{ cols: COLS, rows: ROWS, timeoutMs: 5_000 },
+		);
+		expect(screen.text).not.toContain("draft-before-clearafter-ctrl-c");
 	}, 30_000);
 
 	it("exits cleanly on double Ctrl-C with no draft", async () => {

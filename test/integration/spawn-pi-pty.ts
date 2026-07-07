@@ -1,6 +1,7 @@
 import { chmodSync, existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
+import xterm from "@xterm/headless";
 import { spawn, type IPty } from "node-pty";
 import { ALTSCREEN_ENTER_SEQUENCE, MOUSE_SGR_DISABLE_SEQUENCE, MOUSE_SGR_ENABLE_SEQUENCE, TERMINAL_CLEANUP_SEQUENCE } from "../../src/sumo-tui/runtime/terminal-controller.js";
 
@@ -213,4 +214,74 @@ export function spawnSumocodePty(options: SpawnPiPtyOptions = {}): SpawnedPiPty 
 		args: options.args ?? ["--offline", "--no-extensions", "--no-session", "--approve"],
 		env: options.env,
 	});
+}
+
+/** Plain-text snapshot of the replayed terminal screen (one string per visible row; xterm already decoded all ANSI). */
+export interface ScreenSnapshot {
+	readonly rows: readonly string[];
+	readonly text: string;
+}
+
+export interface WaitForScreenOptions {
+	/** Terminal width the PTY was spawned with -- the replay must match it. */
+	readonly cols: number;
+	/** Terminal height the PTY was spawned with -- the replay must match it. */
+	readonly rows: number;
+	readonly timeoutMs?: number;
+	readonly pollIntervalMs?: number;
+}
+
+export class WaitForScreenTimeoutError extends Error {
+	public override readonly name = "WaitForScreenTimeoutError";
+
+	public constructor(timeoutMs: number, lastScreen: string) {
+		super(`waitForScreen: predicate did not hold for two consecutive polls within ${timeoutMs}ms. Last screen:\n${lastScreen}`);
+	}
+}
+
+/** Replays the PTY's raw byte stream through a headless xterm and returns the visible rows as plain text. */
+export async function replayScreenRows(output: string, cols: number, rows: number): Promise<string[]> {
+	const term = new xterm.Terminal({ cols, rows, allowProposedApi: true, scrollback: 0 });
+	await new Promise<void>((resolve) => term.write(output, () => resolve()));
+	const buffer = term.buffer.active;
+	const lines: string[] = [];
+	for (let row = 0; row < rows; row += 1) {
+		const line = buffer.getLine(row);
+		let text = "";
+		for (let col = 0; col < cols; col += 1) text += line?.getCell(col)?.getChars() ?? " ";
+		lines.push(text);
+	}
+	term.dispose();
+	return lines;
+}
+
+/**
+ * Polls the replayed xterm screen until `predicate` holds for two
+ * consecutive polls (guarding against matching a mid-repaint frame), or
+ * times out with a `WaitForScreenTimeoutError` carrying the last screen.
+ * The poll interval is a sampling cadence, not a "let it settle" sleep:
+ * the wait ends as soon as the condition is observably true and stable.
+ */
+export async function waitForScreen(
+	pty: SpawnedPiPty,
+	predicate: (screen: ScreenSnapshot) => boolean,
+	options: WaitForScreenOptions,
+): Promise<ScreenSnapshot> {
+	const timeoutMs = options.timeoutMs ?? 5_000;
+	const pollIntervalMs = options.pollIntervalMs ?? 25;
+	const deadline = Date.now() + timeoutMs;
+	let consecutive = 0;
+	let snapshot: ScreenSnapshot = { rows: [], text: "" };
+	for (;;) {
+		const rows = await replayScreenRows(pty.getOutput(), options.cols, options.rows);
+		snapshot = { rows, text: rows.join("\n") };
+		if (predicate(snapshot)) {
+			consecutive += 1;
+			if (consecutive >= 2) return snapshot;
+		} else {
+			consecutive = 0;
+		}
+		if (Date.now() >= deadline) throw new WaitForScreenTimeoutError(timeoutMs, snapshot.text);
+		await new Promise<void>((resolve) => setTimeout(resolve, pollIntervalMs));
+	}
 }

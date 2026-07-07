@@ -17,6 +17,17 @@ export interface RpcChildFixtureOptions {
 	 */
 	readonly streamChunks?: readonly string[];
 	readonly chunkDelayMs?: number;
+	/**
+	 * When true (with `streamChunks`), each streamed chunk N additionally
+	 * emits `session_info_changed` with the name `stream-chunk-<N>-landed`
+	 * right after its `message_update`. The session name renders in the
+	 * host's always-visible chrome, giving PTY tests an ON-SCREEN sentinel
+	 * for "chunk N has been processed" even while the transcript viewport is
+	 * scrolled away from the streaming tail -- off-screen draft rows are
+	 * never painted, so no byte-stream pattern can signal chunk arrival in
+	 * that state.
+	 */
+	readonly streamChunkSentinels?: boolean;
 }
 
 export async function createRpcChildFixture(prefix: string, options: RpcChildFixtureOptions = {}): Promise<string> {
@@ -32,6 +43,7 @@ let pendingPrompt = null;
 let holdNextPromptUntilAbort = ${options.holdPromptUntilAbort ? "true" : "false"};
 const streamChunks = ${JSON.stringify(options.streamChunks ?? null)};
 const chunkDelayMs = ${JSON.stringify(options.chunkDelayMs ?? 500)};
+const streamChunkSentinels = ${options.streamChunkSentinels ? "true" : "false"};
 
 function write(payload) {
 	process.stdout.write(JSON.stringify(payload) + "\\n");
@@ -117,6 +129,7 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 				text += streamChunks[index];
 				index += 1;
 				write({ type: "message_update", message: { id: "fixture-draft", role: "assistant", content: text } });
+				if (streamChunkSentinels) write({ type: "session_info_changed", name: "stream-chunk-" + index + "-landed" });
 				setTimeout(pump, chunkDelayMs);
 			};
 			setTimeout(pump, chunkDelayMs);

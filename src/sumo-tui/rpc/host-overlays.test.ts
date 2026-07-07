@@ -100,6 +100,30 @@ describe("RpcHostOverlayManager", () => {
 		expect(overlays.getActiveKind()).toBeUndefined();
 	});
 
+	it("drain() resolves active and queued overlays without activating queued entries", async () => {
+		const onChange = vi.fn();
+		const overlays = new RpcHostOverlayManager(onChange);
+		const createA = vi.fn(() => new FakeOverlayComponent("A"));
+		const createB = vi.fn(() => new FakeOverlayComponent("B"));
+		const createC = vi.fn(() => new FakeOverlayComponent("C"));
+
+		const a = overlays.show<string | undefined>("A", createA);
+		const b = overlays.show<string | undefined>("B", createB);
+		const c = overlays.show<string | undefined>("C", createC);
+		onChange.mockClear();
+
+		overlays.drain();
+
+		await expect(a).resolves.toBeUndefined();
+		await expect(b).resolves.toBeUndefined();
+		await expect(c).resolves.toBeUndefined();
+		expect(overlays.getActiveKind()).toBeUndefined();
+		expect(createA).toHaveBeenCalledOnce();
+		expect(createB).not.toHaveBeenCalled();
+		expect(createC).not.toHaveBeenCalled();
+		expect(onChange).toHaveBeenCalledOnce();
+	});
+
 	it("regression: Ctrl-C interrupt-tier dismissal (close on the active overlay) cancels only the active overlay, queued ones stay pending", async () => {
 		// Mirrors host.ts's handlePreEditorInput "dismiss-modal" branch, which
 		// calls overlays.close() when an overlay has focus during a Ctrl-C

@@ -156,4 +156,43 @@ describe("ModalManager", () => {
 
 		await expect(result).resolves.toBe("line one line two");
 	});
+
+	it("preserves editor multiline prefill on immediate submit", async () => {
+		const modals = new ModalManager();
+		const result = modals.editor("Edit", "line one\nline two");
+
+		const renderedLines = modals.render(80).map(stripAnsi);
+		expect(renderedLines.some((line) => line.includes("> line one"))).toBe(true);
+		expect(renderedLines.some((line) => line.includes("> line two"))).toBe(true);
+
+		modals.handleInput("enter");
+
+		await expect(result).resolves.toBe("line one\nline two");
+	});
+
+	it("sanitizes editor control sequences without collapsing newlines", async () => {
+		const modals = new ModalManager();
+		const result = modals.editor("Edit", "line one\n\u001b[31mline two\u001b[0m\u0001");
+
+		const rendered = stripAnsi(modals.render(80).join("\n"));
+		expect(rendered).toContain("line one");
+		expect(rendered).toContain("line two");
+		expect(rendered).not.toContain("\u001b[31m");
+		expect(rendered).not.toContain("\u0001");
+
+		modals.handleInput("shift+enter");
+		modals.handleInput("\u001b[200~tail\u0007\u001b[201~");
+		modals.handleInput("enter");
+
+		await expect(result).resolves.toBe("line one\nline two\ntail");
+	});
+
+	it("cancels editor modals with undefined", async () => {
+		const modals = new ModalManager();
+		const result = modals.editor("Edit", "draft");
+
+		modals.handleInput("escape");
+
+		await expect(result).resolves.toBeUndefined();
+	});
 });

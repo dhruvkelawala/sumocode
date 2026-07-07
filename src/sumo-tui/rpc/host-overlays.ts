@@ -10,6 +10,7 @@ export class RpcHostOverlayManager implements Component {
 	private active: Component | undefined;
 	private activeKind: string | undefined;
 	private finish: ((value: unknown) => void) | undefined;
+	private activeResolve: ((value: unknown) => void) | undefined;
 	private readonly queue: QueuedOverlay[] = [];
 
 	public constructor(private readonly onChange: () => void = () => undefined) {}
@@ -40,8 +41,22 @@ export class RpcHostOverlayManager implements Component {
 		this.active = undefined;
 		this.activeKind = undefined;
 		this.finish = undefined;
+		this.activeResolve = undefined;
 		finish?.(value);
 		this.activateNext();
+		this.onChange();
+	}
+
+	public drain(value?: unknown): void {
+		const activeResolve = this.activeResolve;
+		const queued = this.queue.splice(0);
+		if (!this.active && !this.finish && activeResolve === undefined && queued.length === 0) return;
+		this.active = undefined;
+		this.activeKind = undefined;
+		this.finish = undefined;
+		this.activeResolve = undefined;
+		activeResolve?.(value);
+		for (const entry of queued) entry.resolve(value);
 		this.onChange();
 	}
 
@@ -65,10 +80,12 @@ export class RpcHostOverlayManager implements Component {
 
 	private activate(entry: QueuedOverlay): void {
 		this.activeKind = entry.kind;
+		this.activeResolve = entry.resolve;
 		this.finish = (value: unknown) => {
 			this.active = undefined;
 			this.activeKind = undefined;
 			this.finish = undefined;
+			this.activeResolve = undefined;
 			entry.resolve(value);
 			this.activateNext();
 			this.onChange();

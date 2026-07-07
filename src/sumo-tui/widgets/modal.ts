@@ -7,9 +7,9 @@ export interface ModalDialogOptions {
 
 export interface ModalInputOptions extends ModalDialogOptions {
 	/**
-	 * Seeds the input modal's editable value (not just its placeholder). Used for round-tripping
-	 * prefilled text (e.g. Pi's `editor` extension_ui method): pressing Enter immediately returns
-	 * this value verbatim, matching a placeholder-only prefill would not.
+	 * Seeds the single-line input modal's editable value (not just its placeholder). Pressing
+	 * Enter immediately returns this value verbatim after single-line sanitization; callers
+	 * that need multiline text should use `editor()`.
 	 */
 	readonly initialValue?: string;
 }
@@ -37,6 +37,13 @@ type ActiveModal =
 			readonly kind: "input";
 			readonly title: string;
 			readonly placeholder: string | undefined;
+			value: string;
+			readonly resolve: (value: string | undefined) => void;
+			cleanup: () => void;
+	  }
+	| {
+			readonly kind: "editor";
+			readonly title: string;
 			value: string;
 			readonly resolve: (value: string | undefined) => void;
 			cleanup: () => void;
@@ -97,6 +104,7 @@ function sanitizeInputChunk(text: string): string {
 		.replaceAll(BRACKETED_PASTE_END, "")
 		.replace(/\n/g, "");
 }
+
 
 function wrapText(text: string, width: number): string[] {
 	if (width <= 0) return [""];
@@ -180,6 +188,19 @@ export class ModalManager implements Component {
 		});
 	}
 
+	public editor(title: string, prefill: string): Promise<string | undefined> {
+		return new Promise<string | undefined>((resolve) => {
+			const entry: ActiveModal = {
+				kind: "editor",
+				title: sanitizeModalText(title),
+				value: sanitizeModalText(prefill),
+				resolve,
+				cleanup: () => undefined,
+			};
+			this.enqueue(entry);
+		});
+	}
+
 	public close(): void {
 		this.finish(undefined);
 	}
@@ -199,6 +220,10 @@ export class ModalManager implements Component {
 
 		if (this.active.kind === "input") {
 			this.handleInputModal(data, this.active);
+			return;
+		}
+		if (this.active.kind === "editor") {
+			this.handleEditorModal(data, this.active);
 			return;
 		}
 
@@ -236,9 +261,13 @@ export class ModalManager implements Component {
 			for (const [index, option] of this.active.options.entries()) {
 				lines.push(line(`${index === this.active.selectedIndex ? "▶" : " "} ${option.label}`));
 			}
-		} else {
+		} else if (this.active.kind === "input") {
 			const value = this.active.value || this.active.placeholder || "";
 			lines.push(line(`> ${value}`));
+		} else {
+			for (const valueLine of this.active.value.split("\n")) {
+				lines.push(line(`> ${valueLine}`));
+			}
 		}
 
 		lines.push(line(border(modalWidth)));
@@ -267,8 +296,35 @@ export class ModalManager implements Component {
 		}
 	}
 
+	private handleEditorModal(data: string, modal: Extract<ActiveModal, { kind: "editor" }>): void {
+		if (keyEq(data, Key.shift("enter"), "shift+enter")) {
+			modal.value += "\n";
+			this.onChange();
+			return;
+		}
+		if (keyEq(data, Key.enter, "return", "enter")) {
+			this.finish(modal.value);
+			return;
+		}
+		if (keyEq(data, Key.backspace, "backspace")) {
+			modal.value = modal.value.slice(0, -1);
+			this.onChange();
+			return;
+		}
+		if (data.length === 1 && !/\p{Cc}/u.test(data)) {
+			modal.value += data;
+			this.onChange();
+			return;
+		}
+		const printable = sanitizeModalText(data.replaceAll(BRACKETED_PASTE_START, "").replaceAll(BRACKETED_PASTE_END, ""));
+		if (printable.length > 0) {
+			modal.value += printable;
+			this.onChange();
+		}
+	}
+
 	private moveSelection(delta: -1 | 1): void {
-		if (!this.active || this.active.kind === "input") return;
+		if (!this.active || this.active.kind === "input" || this.active.kind === "editor") return;
 		const count = this.active.kind === "confirm" ? 2 : this.active.options.length;
 		if (count === 0) return;
 		this.active.selectedIndex = (this.active.selectedIndex + delta + count) % count;

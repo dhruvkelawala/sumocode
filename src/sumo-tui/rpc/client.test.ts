@@ -210,6 +210,56 @@ describe("SumoRpcClient", () => {
 		}
 	});
 
+	it("logs handler failures while cancelling the extension UI request", async () => {
+		const script = `
+			const readline = require("node:readline");
+			const rl = readline.createInterface({ input: process.stdin });
+			let pendingState;
+			rl.on("line", (line) => {
+				const parsed = JSON.parse(line);
+				if (parsed.type === "get_state") {
+					pendingState = parsed;
+					process.stdout.write(JSON.stringify({ type: "extension_ui_request", id: "ui-throw", method: "select", title: "Pick", options: ["A"] }) + "\\n");
+					return;
+				}
+				if (parsed.type === "extension_ui_response") {
+					process.stdout.write(JSON.stringify({ type: "ui_response_seen", response: parsed }) + "\\n");
+					process.stdout.write(JSON.stringify({ type: "response", id: pendingState.id, command: "get_state", success: true, data: {
+						thinkingLevel: "high",
+						isStreaming: false,
+						isCompacting: false,
+						steeringMode: "all",
+						followUpMode: "all",
+						sessionId: "session-throwing-ui-handler",
+						autoCompactionEnabled: true,
+						messageCount: 0,
+						pendingMessageCount: 0
+					} }) + "\\n");
+				}
+			});
+		`;
+		const client = nodeRpcClient(script);
+		const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+		const events: unknown[] = [];
+		client.onEvent((event) => events.push(event));
+		client.setUiRequestHandler(() => {
+			throw new Error("handler boom");
+		});
+		try {
+			await client.start();
+			const state = await client.send({ type: "get_state" });
+			expect(state.success).toBe(true);
+			expect(events).toContainEqual({
+				type: "ui_response_seen",
+				response: { type: "extension_ui_response", id: "ui-throw", cancelled: true },
+			});
+			expect(consoleError).toHaveBeenCalledWith(expect.stringContaining('[sumocode-rpc] extension_ui handler failed for method "select": handler boom'));
+		} finally {
+			consoleError.mockRestore();
+			await client.stop();
+		}
+	});
+
 	it("still sends a cancelled response for fire-and-forget methods the responder handles (harmless per rpc-mode.js)", async () => {
 		// notify/setStatus/setWidget/setTitle/set_editor_text handlers deliberately resolve void.
 		// Verified against rpc-mode.js: pendingExtensionRequests.get(id) is undefined for these

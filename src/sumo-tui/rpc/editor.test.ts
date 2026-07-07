@@ -67,10 +67,11 @@ function rpcCommand(name: string, description?: string, source: RpcSlashCommand[
 function controlsFor(options: {
 	commands?: readonly RpcSlashCommand[];
 	models?: readonly RpcModelOption[];
-} = {}): RpcEditorAutocompleteControls {
+} = {}): RpcEditorAutocompleteControls & Pick<RpcHostControls, "getEnabledModels"> {
 	return {
 		getCommands: vi.fn(async () => [...(options.commands ?? [])]),
 		getAvailableModels: vi.fn(async () => [...(options.models ?? [])]),
+		getEnabledModels: vi.fn(async () => [...(options.models ?? [])]),
 	};
 }
 
@@ -389,6 +390,11 @@ describe("advertised host slash-command dispatch invariant", () => {
 
 		public async getAvailableModels(): Promise<RpcModelOption[]> {
 			this.calls.push("getAvailableModels");
+			return [{ provider: "openai", id: "gpt-5", label: "openai/gpt-5", active: true }];
+		}
+
+		public async getEnabledModels(): Promise<RpcModelOption[]> {
+			this.calls.push("getEnabledModels");
 			return [{ provider: "openai", id: "gpt-5", label: "openai/gpt-5", active: true }];
 		}
 

@@ -1,4 +1,7 @@
 import type { RpcCommand, RpcResponse, RpcSessionState } from "@earendil-works/pi-coding-agent";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { modelOptionsFrom, RpcHostControls, type RpcAvailableModel, type RpcCommandClient } from "./controls.js";
 import { RpcHostStateStore, type RpcHostChromeState } from "./state.js";
@@ -84,6 +87,12 @@ function stateResponse(overrides: Partial<RpcSessionState> = {}): RpcResponse {
 	return { type: "response", command: "get_state", success: true, data: rpcState(overrides) };
 }
 
+function writeAgentSettings(content: Record<string, unknown>): { dir: string; env: NodeJS.ProcessEnv } {
+	const dir = mkdtempSync(join(tmpdir(), "sumocode-controls-enabled-models-"));
+	writeFileSync(join(dir, "settings.json"), JSON.stringify(content));
+	return { dir, env: { PI_CODING_AGENT_DIR: dir } };
+}
+
 describe("RpcHostControls", () => {
 	it("hydrates the supplied state store when refreshing state", async () => {
 		const store = new RpcHostStateStore();
@@ -127,6 +136,56 @@ describe("RpcHostControls", () => {
 			{ provider: "google", id: "gemini-3", label: "google/gemini-3", active: true },
 		]);
 		expect(client.commands).toEqual([{ type: "get_available_models" }]);
+	});
+
+	it("returns enabled models in settings order while preserving the active model and reusing the available-model cache", async () => {
+		const settings = writeAgentSettings({ enabledModels: ["google/gemini-3", "openai/gpt-5"] });
+		try {
+			const store = new RpcHostStateStore();
+			store.hydrateFromRpcState(rpcState({ model: model("google", "gemini-3") }));
+			const client = new FakeClient({
+				type: "response",
+				command: "get_available_models",
+				success: true,
+				data: { models: [model("openai", "gpt-5"), model("anthropic", "claude-opus-4-8"), model("google", "gemini-3")] },
+			});
+			const controls = new RpcHostControls(client, store);
+
+			await expect(controls.getEnabledModels(settings.env)).resolves.toEqual([
+				{ provider: "google", id: "gemini-3", label: "google/gemini-3", active: true },
+				{ provider: "openai", id: "gpt-5", label: "openai/gpt-5", active: false },
+			]);
+			await expect(controls.getEnabledModels(settings.env)).resolves.toEqual([
+				{ provider: "google", id: "gemini-3", label: "google/gemini-3", active: true },
+				{ provider: "openai", id: "gpt-5", label: "openai/gpt-5", active: false },
+			]);
+			expect(client.commands).toEqual([{ type: "get_available_models" }]);
+		} finally {
+			rmSync(settings.dir, { recursive: true, force: true });
+		}
+	});
+
+	it("falls back to the full available list when settings has no enabled models", async () => {
+		const settings = writeAgentSettings({ enabledModels: [] });
+		try {
+			const store = new RpcHostStateStore();
+			store.hydrateFromRpcState(rpcState({ model: model("anthropic", "claude-opus-4-8") }));
+			const client = new FakeClient({
+				type: "response",
+				command: "get_available_models",
+				success: true,
+				data: { models: [model("openai", "gpt-5"), model("anthropic", "claude-opus-4-8")] },
+			});
+			const controls = new RpcHostControls(client, store);
+
+			await expect(controls.getEnabledModels(settings.env)).resolves.toEqual([
+				{ provider: "openai", id: "gpt-5", label: "openai/gpt-5", active: false },
+				{ provider: "anthropic", id: "claude-opus-4-8", label: "anthropic/claude-opus-4-8", active: true },
+			]);
+			expect(client.commands).toEqual([{ type: "get_available_models" }]);
+		} finally {
+			rmSync(settings.dir, { recursive: true, force: true });
+		}
 	});
 
 	it("caches available models until refreshState invalidates the cache", async () => {

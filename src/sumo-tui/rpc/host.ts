@@ -347,13 +347,11 @@ export function createRpcHostInterruptHandler(deps: RpcHostInterruptDependencies
 			case "clear-draft":
 				armedQuitUntil = undefined;
 				deps.editor.setText("");
-				deps.notifications.notify("draft cleared", "info");
 				return true;
 			case "abort":
 				armedQuitUntil = undefined;
 				void notifyOnError(async () => {
 					await deps.controls.abort();
-					deps.notifications.notify("abort requested", "info");
 				}, deps.notifications);
 				return true;
 			case "arm-quit":
@@ -371,63 +369,53 @@ export function createRpcHostInterruptHandler(deps: RpcHostInterruptDependencies
 }
 
 export interface RpcHostModelCycleDependencies {
-	readonly controls: Pick<RpcHostControls, "cycleModel" | "getAvailableModels" | "setModel">;
+	readonly controls: Pick<RpcHostControls, "getEnabledModels" | "setModel">;
 	readonly notifications: Pick<NotificationCenter, "notify">;
 	readonly onStateChange?: (state?: RpcHostChromeState) => void;
 }
 
+async function applyModelCycleStep(deps: RpcHostModelCycleDependencies, direction: -1 | 1): Promise<void> {
+	const models = await deps.controls.getEnabledModels();
+	if (models.length <= 1) {
+		if (models.length === 0) deps.notifications.notify("no models available", "warning");
+		return;
+	}
+	const activeIndex = models.findIndex((model) => model.active);
+	const baseIndex = activeIndex < 0 ? 0 : activeIndex;
+	const nextIndex = (baseIndex + direction + models.length) % models.length;
+	const next = models[nextIndex];
+	const state = await deps.controls.setModel(next.provider, next.id);
+	deps.onStateChange?.(state);
+}
+
 /**
- * Builds the `app.model.cycleForward` (Ctrl+P by default) action handler:
- * calls the same `cycleModel()` RPC command `/model` with no args falls back
- * to via `openModelSelector`'s sibling commands, then notifies with the
- * resulting model label -- same "model: provider/id" message shape
- * `openModelSelector`'s success path already uses, for consistency. Factored
- * out (rather than inlined in runRpcHost) so it is independently unit
- * testable, mirroring `createRpcHostInterruptHandler` above.
+ * Builds the `app.model.cycleForward` (Ctrl+P by default) action handler.
+ * Forward and backward cycling both step through the host-resolved
+ * enabledModels list so the hotkeys and `/model` selector share one visible
+ * ring. The footer reflects the model change, so this handler deliberately
+ * stays toast-free on success.
  */
 export function createModelCycleForwardHandler(deps: RpcHostModelCycleDependencies): () => void {
 	return (): void => {
 		void notifyOnError(async () => {
-			const state = await deps.controls.cycleModel();
-			deps.onStateChange?.(state);
-			if (state.modelLabel) deps.notifications.notify(`model: ${state.modelLabel}`, "info");
+			await applyModelCycleStep(deps, 1);
 		}, deps.notifications);
 	};
 }
 
 /**
  * Builds the `app.model.cycleBackward` (Shift+Ctrl+P by default) action
- * handler. Pi's `cycle_model` RPC command is forward-only (verified against
- * `rpc-types.d.ts`: the `cycle_model` request shape carries no direction
- * field) -- there is no backward primitive to call directly. An earlier
- * version of this handler called `cycleModel()` `(N - 1)` times to land one
- * position back on the ring; that is wrong for this codebase specifically,
- * because `getAvailableModels()` returns the SAME list `/model` shows the
- * user (confirmed live at 531 entries), which would mean ~530 sequential RPC
- * round-trips on every press -- a multi-second freeze, not a fix. Since
- * `RpcModelOption` already carries `provider`/`id`/`active` per entry and
- * `RpcHostControls.setModel(provider, id)` sets a model directly, backward
- * cycling is instead computed locally (find the active index, step back one
- * with wraparound) and applied with exactly one RPC call, regardless of list
- * size. A single-model list (N<=1) is a no-op: there is nowhere else to
- * cycle to. If `active` matches nothing (stale/renamed current model), falls
- * back to the last entry rather than throwing.
+ * handler. Pi's `cycle_model` RPC command is forward-only and scoped state is
+ * private to the child, so the host computes the previous enabled model
+ * locally and applies it with exactly one `set_model` RPC call. A single-model
+ * list (N<=1) is a no-op: there is nowhere else to cycle to. If `active`
+ * matches nothing (stale/renamed current model), backward falls back from the
+ * first entry to the last entry, mirroring Pi's scoped-cycle behavior.
  */
 export function createModelCycleBackwardHandler(deps: RpcHostModelCycleDependencies): () => void {
 	return (): void => {
 		void notifyOnError(async () => {
-			const models = await deps.controls.getAvailableModels();
-			if (models.length <= 1) {
-				if (models.length === 0) deps.notifications.notify("no models available", "warning");
-				return;
-			}
-			const activeIndex = models.findIndex((model) => model.active);
-			const baseIndex = activeIndex < 0 ? 0 : activeIndex;
-			const previousIndex = (baseIndex - 1 + models.length) % models.length;
-			const previous = models[previousIndex];
-			const state = await deps.controls.setModel(previous.provider, previous.id);
-			deps.onStateChange?.(state);
-			if (state.modelLabel) deps.notifications.notify(`model: ${state.modelLabel}`, "info");
+			await applyModelCycleStep(deps, -1);
 		}, deps.notifications);
 	};
 }
@@ -443,15 +431,14 @@ export interface RpcHostThinkingCycleDependencies {
  * one of the two exact chords the user's diagnostic capture showed as dead
  * (pressed repeatedly, routed to "editor", no effect). Calls the same
  * `cycleThinkingLevel()` RPC command `/thinking` with no args falls back to,
- * then notifies with the resulting level -- same "thinking: <level>" message
- * shape `setThinkingFromText` already uses.
+ * then hands the returned state to the caller. The footer reflects the
+ * thinking level, so success stays toast-free.
  */
 export function createThinkingCycleHandler(deps: RpcHostThinkingCycleDependencies): () => void {
 	return (): void => {
 		void notifyOnError(async () => {
 			const state = await deps.controls.cycleThinkingLevel();
 			deps.onStateChange?.(state);
-			if (state.thinkingLevel) deps.notifications.notify(`thinking: ${state.thinkingLevel}`, "info");
 		}, deps.notifications);
 	};
 }

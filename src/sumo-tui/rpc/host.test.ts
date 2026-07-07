@@ -1,5 +1,5 @@
 import type { RpcCommand, RpcResponse, RpcSessionState } from "@earendil-works/pi-coding-agent";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -290,13 +290,25 @@ describe("app.interrupt action wiring reuses the interrupt tier module", () => {
 // (the handler now calls through to the real RpcHostControls/runtime
 // methods) behavior for each of the 4 host-side actions wired via host.ts.
 describe("createModelCycleForwardHandler (app.model.cycleForward)", () => {
-	it("passes the cycleModel chrome state to the injected state-change callback", async () => {
-		const state = { modelLabel: "x/y" } as never;
-		const cycleModel = vi.fn(async () => state);
+	it("moves forward within the enabled model ring with wraparound instead of calling Pi's full-list cycle_model", async () => {
+		const enabledModels = [
+			{ provider: "anthropic", id: "claude-opus-4", label: "anthropic/claude-opus-4", active: false },
+			{ provider: "google", id: "gemini-3", label: "google/gemini-3", active: false },
+			{ provider: "openai", id: "gpt-5", label: "openai/gpt-5", active: true },
+		];
+		const controls = {
+			cycleModel: vi.fn(async () => { throw new Error("cycle_model should not be used for scoped cycling"); }),
+			getAvailableModels: vi.fn(async () => [
+				{ provider: "disabled", id: "outside-scope", label: "disabled/outside-scope", active: false },
+				...enabledModels,
+			]),
+			getEnabledModels: vi.fn(async () => enabledModels),
+			setModel: vi.fn(async () => ({ modelLabel: "anthropic/claude-opus-4" }) as never),
+		};
 		const notifications = { notify: vi.fn() };
 		const onStateChange = vi.fn();
 		const handle = createModelCycleForwardHandler({
-			controls: { cycleModel, getAvailableModels: vi.fn(), setModel: vi.fn() },
+			controls: controls as never,
 			notifications,
 			onStateChange,
 		});
@@ -304,16 +316,24 @@ describe("createModelCycleForwardHandler (app.model.cycleForward)", () => {
 		handle();
 		await flush();
 
-		expect(cycleModel).toHaveBeenCalledOnce();
-		expect(onStateChange).toHaveBeenCalledOnce();
-		expect(onStateChange.mock.calls[0]?.[0]).toBe(state);
-		expect(notifications.notify).toHaveBeenCalledWith("model: x/y", "info");
+		expect(controls.getEnabledModels).toHaveBeenCalledOnce();
+		expect(controls.getAvailableModels).not.toHaveBeenCalled();
+		expect(controls.cycleModel).not.toHaveBeenCalled();
+		expect(controls.setModel).toHaveBeenCalledOnce();
+		expect(controls.setModel).toHaveBeenCalledWith("anthropic", "claude-opus-4");
+		expect(onStateChange).toHaveBeenCalledWith({ modelLabel: "anthropic/claude-opus-4" });
+		expect(notifications.notify).not.toHaveBeenCalled();
 	});
 
-	it("notifies a warning instead of throwing when the RPC call fails", async () => {
+	it("notifies a warning instead of throwing when enabled-model discovery fails", async () => {
 		const notifications = { notify: vi.fn() };
 		const handle = createModelCycleForwardHandler({
-			controls: { cycleModel: vi.fn(async () => { throw new Error("boom"); }), getAvailableModels: vi.fn(), setModel: vi.fn() },
+			controls: {
+				cycleModel: vi.fn(),
+				getAvailableModels: vi.fn(),
+				getEnabledModels: vi.fn(async () => { throw new Error("boom"); }),
+				setModel: vi.fn(),
+			} as never,
 			notifications,
 		});
 
@@ -325,144 +345,153 @@ describe("createModelCycleForwardHandler (app.model.cycleForward)", () => {
 });
 
 describe("createModelCycleBackwardHandler (app.model.cycleBackward -- the other exact reported-broken chord)", () => {
-	it("computes the previous model locally and applies it with a single setModel call", async () => {
-		const models = [
-			{ provider: "p", id: "a", label: "a", active: false },
-			{ provider: "p", id: "b", label: "b", active: true },
-			{ provider: "p", id: "c", label: "c", active: false },
-		] as never[];
-		const getAvailableModels = vi.fn(async () => models);
-		const cycleModel = vi.fn();
-		const setModel = vi.fn(async () => ({ modelLabel: "a" }) as never);
+	it("moves backward within the enabled model ring in the opposite direction with wraparound", async () => {
+		const enabledModels = [
+			{ provider: "anthropic", id: "claude-opus-4", label: "anthropic/claude-opus-4", active: true },
+			{ provider: "google", id: "gemini-3", label: "google/gemini-3", active: false },
+			{ provider: "openai", id: "gpt-5", label: "openai/gpt-5", active: false },
+		];
+		const controls = {
+			cycleModel: vi.fn(),
+			getAvailableModels: vi.fn(async () => [
+				...enabledModels,
+				{ provider: "disabled", id: "outside-scope", label: "disabled/outside-scope", active: false },
+			]),
+			getEnabledModels: vi.fn(async () => enabledModels),
+			setModel: vi.fn(async () => ({ modelLabel: "openai/gpt-5" }) as never),
+		};
 		const notifications = { notify: vi.fn() };
+		const onStateChange = vi.fn();
 		const handle = createModelCycleBackwardHandler({
-			controls: { cycleModel, getAvailableModels, setModel },
+			controls: controls as never,
 			notifications,
+			onStateChange,
 		});
 
 		handle();
 		await flush();
 
-		// active is index 1 ("b") -> previous is index 0 ("a"), one direct call.
-		expect(cycleModel).not.toHaveBeenCalled();
-		expect(setModel).toHaveBeenCalledOnce();
-		expect(setModel).toHaveBeenCalledWith("p", "a");
-		expect(notifications.notify).toHaveBeenCalledWith("model: a", "info");
+		expect(controls.getEnabledModels).toHaveBeenCalledOnce();
+		expect(controls.getAvailableModels).not.toHaveBeenCalled();
+		expect(controls.cycleModel).not.toHaveBeenCalled();
+		expect(controls.setModel).toHaveBeenCalledOnce();
+		expect(controls.setModel).toHaveBeenCalledWith("openai", "gpt-5");
+		expect(onStateChange).toHaveBeenCalledWith({ modelLabel: "openai/gpt-5" });
+		expect(notifications.notify).not.toHaveBeenCalled();
 	});
 
-	it("wraps around to the last model when the active model is first in the list", async () => {
-		const models = [
-			{ provider: "p", id: "a", label: "a", active: true },
-			{ provider: "p", id: "b", label: "b", active: false },
-			{ provider: "p", id: "c", label: "c", active: false },
-		] as never[];
-		const setModel = vi.fn(async () => ({ modelLabel: "c" }) as never);
-		const notifications = { notify: vi.fn() };
-		const handle = createModelCycleBackwardHandler({
-			controls: { cycleModel: vi.fn(), getAvailableModels: vi.fn(async () => models), setModel },
-			notifications,
-		});
-
-		handle();
-		await flush();
-
-		expect(setModel).toHaveBeenCalledWith("p", "c");
-	});
-
-	it("stays a single RPC call regardless of list size (regression guard for the N-1 loop this replaced)", async () => {
+	it("stays a single setModel call regardless of scoped list size", async () => {
 		const models = Array.from({ length: 531 }, (_, i) => ({
 			provider: "p",
 			id: `m${i}`,
-			label: `m${i}`,
+			label: `p/m${i}`,
 			active: i === 200,
-		})) as never[];
-		const cycleModel = vi.fn();
-		const setModel = vi.fn(async () => ({ modelLabel: "m199" }) as never);
+		}));
+		const controls = {
+			cycleModel: vi.fn(),
+			getAvailableModels: vi.fn(),
+			getEnabledModels: vi.fn(async () => models),
+			setModel: vi.fn(async () => ({ modelLabel: "p/m199" }) as never),
+		};
 		const notifications = { notify: vi.fn() };
 		const handle = createModelCycleBackwardHandler({
-			controls: { cycleModel, getAvailableModels: vi.fn(async () => models), setModel },
+			controls: controls as never,
 			notifications,
 		});
 
 		handle();
 		await flush();
 
-		expect(cycleModel).not.toHaveBeenCalled();
-		expect(setModel).toHaveBeenCalledTimes(1);
-		expect(setModel).toHaveBeenCalledWith("p", "m199");
+		expect(controls.cycleModel).not.toHaveBeenCalled();
+		expect(controls.setModel).toHaveBeenCalledTimes(1);
+		expect(controls.setModel).toHaveBeenCalledWith("p", "m199");
 	});
 
-	it("is a no-op when there is only one (or zero) models available", async () => {
-		const cycleModel = vi.fn();
-		const setModel = vi.fn();
+	it("is a no-op when there is only one enabled model", async () => {
+		const controls = {
+			cycleModel: vi.fn(),
+			getAvailableModels: vi.fn(),
+			getEnabledModels: vi.fn(async () => [{ provider: "p", id: "only", label: "p/only", active: true }]),
+			setModel: vi.fn(),
+		};
 		const notifications = { notify: vi.fn() };
 		const handle = createModelCycleBackwardHandler({
-			controls: {
-				cycleModel,
-				setModel,
-				getAvailableModels: vi.fn(async () => [{ provider: "p", id: "only", label: "only", active: true }] as never[]),
-			},
+			controls: controls as never,
 			notifications,
 		});
 
 		handle();
 		await flush();
 
-		expect(cycleModel).not.toHaveBeenCalled();
-		expect(setModel).not.toHaveBeenCalled();
+		expect(controls.cycleModel).not.toHaveBeenCalled();
+		expect(controls.setModel).not.toHaveBeenCalled();
+		expect(notifications.notify).not.toHaveBeenCalled();
 	});
 
-	it("warns instead of cycling when no models are available at all", async () => {
-		const cycleModel = vi.fn();
-		const setModel = vi.fn();
+	it("warns instead of cycling when no enabled models are available at all", async () => {
+		const controls = {
+			cycleModel: vi.fn(),
+			getAvailableModels: vi.fn(),
+			getEnabledModels: vi.fn(async () => []),
+			setModel: vi.fn(),
+		};
 		const notifications = { notify: vi.fn() };
 		const handle = createModelCycleBackwardHandler({
-			controls: { cycleModel, setModel, getAvailableModels: vi.fn(async () => []) },
+			controls: controls as never,
 			notifications,
 		});
 
 		handle();
 		await flush();
 
-		expect(cycleModel).not.toHaveBeenCalled();
-		expect(setModel).not.toHaveBeenCalled();
+		expect(controls.cycleModel).not.toHaveBeenCalled();
+		expect(controls.setModel).not.toHaveBeenCalled();
 		expect(notifications.notify).toHaveBeenCalledWith("no models available", "warning");
 	});
 
-	it("uses RpcHostControls' model cache across repeated backward-cycle handler invocations", async () => {
-		const client = new FakeRpcCommandClient(
-			{
-				type: "response",
-				command: "get_available_models",
-				success: true,
-				data: { models: [rpcModel("p", "a"), rpcModel("p", "b"), rpcModel("p", "c")] },
-			},
-			{ type: "response", command: "set_model", success: true, data: rpcModel("p", "a") },
-			{ type: "response", command: "set_model", success: true, data: rpcModel("p", "c") },
-		);
-		const store = new RpcHostStateStore();
-		store.hydrateFromRpcState(rpcState());
-		const controls = new RpcHostControls(client, store);
-		const notifications = { notify: vi.fn() };
-		const handle = createModelCycleBackwardHandler({ controls, notifications });
+	it("uses RpcHostControls' enabled-model cache across repeated backward-cycle handler invocations", async () => {
+		const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+		const dir = mkdtempSync(join(tmpdir(), "sumocode-host-enabled-models-"));
+		writeFileSync(join(dir, "settings.json"), JSON.stringify({ enabledModels: ["p/c", "p/a", "p/b"] }));
+		process.env.PI_CODING_AGENT_DIR = dir;
+		try {
+			const client = new FakeRpcCommandClient(
+				{
+					type: "response",
+					command: "get_available_models",
+					success: true,
+					data: { models: [rpcModel("p", "disabled"), rpcModel("p", "a"), rpcModel("p", "b"), rpcModel("p", "c")] },
+				},
+				{ type: "response", command: "set_model", success: true, data: rpcModel("p", "a") },
+				{ type: "response", command: "set_model", success: true, data: rpcModel("p", "c") },
+			);
+			const store = new RpcHostStateStore();
+			store.hydrateFromRpcState(rpcState({ model: rpcModel("p", "b") }));
+			const controls = new RpcHostControls(client, store);
+			const notifications = { notify: vi.fn() };
+			const handle = createModelCycleBackwardHandler({ controls, notifications });
 
-		handle();
-		await flush();
-		handle();
-		await flush();
+			handle();
+			await flush();
+			handle();
+			await flush();
 
-		expect(client.commands).toEqual([
-			{ type: "get_available_models" },
-			{ type: "set_model", provider: "p", modelId: "a" },
-			{ type: "set_model", provider: "p", modelId: "c" },
-		]);
-		expect(notifications.notify).toHaveBeenCalledWith("model: p/a", "info");
-		expect(notifications.notify).toHaveBeenCalledWith("model: p/c", "info");
+			expect(client.commands).toEqual([
+				{ type: "get_available_models" },
+				{ type: "set_model", provider: "p", modelId: "a" },
+				{ type: "set_model", provider: "p", modelId: "c" },
+			]);
+			expect(notifications.notify).not.toHaveBeenCalled();
+		} finally {
+			if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+			else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+			rmSync(dir, { recursive: true, force: true });
+		}
 	});
 });
 
 describe("createThinkingCycleHandler (app.thinking.cycle -- one of the two exact reported-broken chords)", () => {
-	it("calls controls.cycleThinkingLevel() and notifies with the resulting level", async () => {
+	it("calls controls.cycleThinkingLevel() and updates state without a confirmation toast", async () => {
 		const cycleThinkingLevel = vi.fn(async () => ({ thinkingLevel: "high" }) as never);
 		const notifications = { notify: vi.fn() };
 		const onStateChange = vi.fn();
@@ -473,7 +502,7 @@ describe("createThinkingCycleHandler (app.thinking.cycle -- one of the two exact
 
 		expect(cycleThinkingLevel).toHaveBeenCalledOnce();
 		expect(onStateChange).toHaveBeenCalledOnce();
-		expect(notifications.notify).toHaveBeenCalledWith("thinking: high", "info");
+		expect(notifications.notify).not.toHaveBeenCalled();
 	});
 });
 

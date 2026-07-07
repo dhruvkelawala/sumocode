@@ -64,6 +64,55 @@ function mouseEvent(type: MouseEvent["type"], row: number, col: number): MouseEv
 	return { type, button: 0, row, col, modifiers: { shift: false, alt: false, ctrl: false } };
 }
 
+describe("RpcShellAdapter splash hint", () => {
+	it("renders live model and thinking from chrome state with model-thinking colors", async () => {
+		const adapter = await RpcShellAdapter.create({
+			terminal: { writeFramePatches: () => undefined },
+			viewport: { columns: 160, rows: 45 },
+			initialState: state({ hasMessages: false, modelLabel: "openai/gpt-5.5", thinkingLevel: "high" }),
+			initialTranscript: { messages: [] },
+		});
+		try {
+			adapter.render();
+			const frame = adapter.getLastFrame();
+			expect(frame).toBeDefined();
+			const text = Array.from({ length: 45 }, (_value, row) => frame!.toPlainRow(row)).join("\n");
+			expect(text).toContain("╰─ gpt-5.5 · high");
+			expect(text).toContain("CTRL+/ · COMMANDS");
+			expect(text).not.toContain("AWAITING PROMPT");
+			expect(text).not.toContain("openai/gpt-5.5");
+
+			const model = findText(frame!, "gpt-5.5");
+			expect(frame!.getCell(model.row, model.col).fg?.toLowerCase()).toBe("#d97706");
+			expect(frame!.getCell(model.row, model.col - 3).fg?.toLowerCase()).toBe("#8b7a63");
+			const thinking = findText(frame!, "high");
+			expect(frame!.getCell(thinking.row, thinking.col).fg?.toLowerCase()).toBe("#8b7a63");
+		} finally {
+			adapter.dispose();
+		}
+	});
+
+	it("renders no-model fallback when chrome state has no model label", async () => {
+		const adapter = await RpcShellAdapter.create({
+			terminal: { writeFramePatches: () => undefined },
+			viewport: { columns: 160, rows: 45 },
+			initialState: state({ hasMessages: false, modelLabel: undefined, thinkingLevel: undefined }),
+			initialTranscript: { messages: [] },
+		});
+		try {
+			adapter.render();
+			const frame = adapter.getLastFrame();
+			expect(frame).toBeDefined();
+			const text = Array.from({ length: 45 }, (_value, row) => frame!.toPlainRow(row)).join("\n");
+			expect(text).toContain("╰─ no model · thinking");
+			expect(text).toContain("CTRL+/ · COMMANDS");
+			expect(text).not.toContain("AWAITING PROMPT");
+		} finally {
+			adapter.dispose();
+		}
+	});
+});
+
 describe("RpcShellAdapter chat update", () => {
 	it("replaces the pager when no transcriptRevision is supplied (back-compat: no sink wired)", async () => {
 		const adapter = await makeAdapter();

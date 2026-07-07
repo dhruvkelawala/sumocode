@@ -126,6 +126,8 @@ export class InlineSelectorComponent implements Component {
 	private selectedIndex = 0;
 	/** Search-as-you-type query (plan 038); reset to "" per selector open (see constructor). */
 	private query = "";
+	private filteredCache: { readonly query: string; readonly result: NormalizedItem[] } | undefined;
+
 
 	public constructor(
 		private readonly title: string,
@@ -134,21 +136,27 @@ export class InlineSelectorComponent implements Component {
 		private readonly maxVisible: number = DEFAULT_MAX_VISIBLE,
 	) {
 		this.items = normalizeItems(options);
+		this.invalidate();
 	}
 
 	public invalidate(): void {
-		// No cached state to invalidate currently.
+		this.filteredCache = undefined;
 	}
 
 	/** Items narrowed by `query`, in `fuzzyFilter`'s best-match-first order (identity order when `query` is empty). */
 	private filteredItems(): NormalizedItem[] {
-		return fuzzyFilter(this.items, this.query, (item) => item.label);
+		const cached = this.filteredCache;
+		if (cached?.query === this.query) return cached.result;
+		const result = fuzzyFilter(this.items, this.query, (item) => item.label);
+		this.filteredCache = { query: this.query, result };
+		return result;
 	}
 
 	/** Sets `query` and resets `selectedIndex` to 0, mirroring `SelectList.setFilter`. */
 	private setQuery(query: string): void {
 		this.query = query;
 		this.selectedIndex = 0;
+		this.invalidate();
 	}
 
 	public handleInput(data: string): void {

@@ -30,6 +30,8 @@ interface OrderedRange {
 const PRIMARY_BUTTON = 0;
 const OSC52_PREFIX = "\x1b]52;c;";
 const OSC52_SUFFIX = "\x1b\\";
+export const MAX_CLIPBOARD_BYTES = 100_000;
+
 
 function orderedRange(anchor: SelectionPoint, focus: SelectionPoint): OrderedRange {
 	if (anchor.row < focus.row) return { start: anchor, end: focus };
@@ -148,6 +150,12 @@ export function createOsc52Sequence(text: string): string {
 	return `${OSC52_PREFIX}${Buffer.from(text, "utf8").toString("base64")}${OSC52_SUFFIX}`;
 }
 
+export function tryCreateOsc52Sequence(text: string): { ok: true; sequence: string } | { ok: false; bytes: number } {
+	const bytes = Buffer.byteLength(text, "utf8");
+	if (bytes > MAX_CLIPBOARD_BYTES) return { ok: false, bytes };
+	return { ok: true, sequence: createOsc52Sequence(text) };
+}
+
 export class SelectionController {
 	private anchor: SelectionPoint | undefined;
 	private focus: SelectionPoint | undefined;
@@ -245,7 +253,12 @@ export class SelectionController {
 	public copyCurrentSelection(buffer = this.options.readBuffer?.()): boolean {
 		const text = this.extractSelectedText(buffer);
 		if (text.length === 0) return false;
-		this.options.emitClipboard?.(createOsc52Sequence(text), text);
+		const sequence = tryCreateOsc52Sequence(text);
+		if (!sequence.ok) {
+			logDiagnostic("selection_copy_too_large", { chars: text.length, bytes: sequence.bytes, limit: MAX_CLIPBOARD_BYTES, preview: text.slice(0, 80) });
+			return false;
+		}
+		this.options.emitClipboard?.(sequence.sequence, text);
 		this.options.onCopied?.(text);
 		logDiagnostic("selection_copy_success", { chars: text.length, preview: text.slice(0, 80) });
 		return true;

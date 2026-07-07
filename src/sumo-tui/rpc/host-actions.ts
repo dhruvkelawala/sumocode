@@ -27,7 +27,7 @@ import {
 } from "../../memory-editor.js";
 import { renderThemeCheck, type ThemeBgSlot, type ThemeFgSlot, type ThemeReader } from "../../theme-check.js";
 import { activeThemeColors, getActiveTheme, listThemes, setActiveTheme } from "../../themes/index.js";
-import { createOsc52Sequence } from "../input/selection.js";
+import { tryCreateOsc52Sequence } from "../input/selection.js";
 import type { EditorTextController } from "../pi-compat/extension-ui-adapter.js";
 import type { ModalManager } from "../widgets/modal.js";
 import type { NotificationCenter, NotificationLevel } from "../widgets/notification.js";
@@ -943,7 +943,12 @@ export class RpcHostActions {
 			notify(this.notifications, "no assistant response to copy", "warning");
 			return;
 		}
-		const wrote = this.writeClipboardSequence(createOsc52Sequence(text));
+		const sequence = tryCreateOsc52Sequence(text);
+		if (!sequence.ok) {
+			notify(this.notifications, "response too large to copy", "warning");
+			return;
+		}
+		const wrote = this.writeClipboardSequence(sequence.sequence);
 		if (!wrote) {
 			notify(this.notifications, "copy unavailable (not a TTY)", "warning");
 			return;

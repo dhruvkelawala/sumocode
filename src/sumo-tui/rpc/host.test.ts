@@ -243,8 +243,9 @@ describe("app.interrupt action wiring reuses the interrupt tier module", () => {
 // (the handler now calls through to the real RpcHostControls/runtime
 // methods) behavior for each of the 4 host-side actions wired via host.ts.
 describe("createModelCycleForwardHandler (app.model.cycleForward)", () => {
-	it("calls controls.cycleModel() and notifies with the resulting model label", async () => {
-		const cycleModel = vi.fn(async () => ({ modelLabel: "anthropic/claude-opus-4-8" }) as never);
+	it("passes the cycleModel chrome state to the injected state-change callback", async () => {
+		const state = { modelLabel: "x/y" } as never;
+		const cycleModel = vi.fn(async () => state);
 		const notifications = { notify: vi.fn() };
 		const onStateChange = vi.fn();
 		const handle = createModelCycleForwardHandler({
@@ -258,7 +259,8 @@ describe("createModelCycleForwardHandler (app.model.cycleForward)", () => {
 
 		expect(cycleModel).toHaveBeenCalledOnce();
 		expect(onStateChange).toHaveBeenCalledOnce();
-		expect(notifications.notify).toHaveBeenCalledWith("model: anthropic/claude-opus-4-8", "info");
+		expect(onStateChange.mock.calls[0]?.[0]).toBe(state);
+		expect(notifications.notify).toHaveBeenCalledWith("model: x/y", "info");
 	});
 
 	it("notifies a warning instead of throwing when the RPC call fails", async () => {

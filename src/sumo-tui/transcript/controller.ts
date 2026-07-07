@@ -417,6 +417,20 @@ export class TranscriptController {
 					// this suffix was already appended incrementally via `message_end`;
 					// this also authoritatively resolves any messages that a `message_end`
 					// missed (e.g. an aborted/error turn) using the run's final list.
+					//
+					// Mid-run user messages (steer/followUp) are NOT dropped by this
+					// splice — pinned @earendil-works/pi-agent-core 0.79.1: the loop's
+					// `runLoop` is the ONLY emitter of `message_end` for a queued
+					// message mid-run, and the same block pushes that message into
+					// `newMessages` (dist/agent-loop.js:95-103; follow-up drain at
+					// :157-161); every `agent_end` carries exactly that array
+					// (dist/agent-loop.js:109,151,166; prompts seeded at :43,50-53).
+					// A queued message the loop never drained gets no `message_end`
+					// (nothing committed here to drop) and instead seeds the NEXT
+					// run's prompts (pi-agent-core dist/agent.js:233-242). The session
+					// never emits its own `message_end` while streaming (pi-coding-agent
+					// dist/core/agent-session.js:988-1004). Pinned by the "mid-run
+					// follow-up" test in controller.test.ts.
 					const runStart = this.currentRunStartIndex ?? this.committedMessages.length;
 					this.committedMessages = [...this.committedMessages.slice(0, runStart), ...messages];
 					this.invalidateCommittedCache();

@@ -1,10 +1,16 @@
+import type { RpcCommand, RpcResponse, RpcSessionState } from "@earendil-works/pi-coding-agent";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { ChatMessageViewModel } from "../transcript/view-model.js";
+import { normalizeApprovalChoice, RPC_APPROVAL_TITLE_MARKER } from "../../approval-modal.js";
 import { SUMOCODE_RELOAD_EXIT_CODE } from "../../commands/reload.js";
 import { RpcChildExitError } from "./client.js";
+import { RpcExtensionUiResponder } from "./extension-ui-responder.js";
+import { RpcHostOverlayManager } from "./host-overlays.js";
+import { RpcHostControls, type RpcAvailableModel } from "./controls.js";
+import { RpcHostStateStore } from "./state.js";
 import {
 	createLazyChatSink,
 	createModelCycleBackwardHandler,
@@ -22,6 +28,47 @@ import {
 
 function flush(): Promise<void> {
 	return Promise.resolve().then(() => Promise.resolve());
+}
+
+class FakeRpcCommandClient {
+	public readonly commands: RpcCommand[] = [];
+	private readonly responses: RpcResponse[];
+
+	public constructor(...responses: RpcResponse[]) {
+		this.responses = [...responses];
+	}
+
+	public async send(command: RpcCommand): Promise<RpcResponse> {
+		this.commands.push(command);
+		const response = this.responses.shift();
+		if (!response) throw new Error(`No fake response queued for ${command.type}`);
+		return response;
+	}
+}
+
+function rpcModel(provider: string, id: string): RpcAvailableModel {
+	return {
+		provider,
+		id,
+		name: `${provider} ${id}`,
+	} as RpcAvailableModel;
+}
+
+function rpcState(overrides: Partial<RpcSessionState> = {}): RpcSessionState {
+	return {
+		model: rpcModel("p", "b"),
+		thinkingLevel: "medium",
+		isStreaming: false,
+		isCompacting: false,
+		steeringMode: "all",
+		followUpMode: "one-at-a-time",
+		sessionId: "session-1",
+		sessionName: "Migration",
+		autoCompactionEnabled: true,
+		messageCount: 3,
+		pendingMessageCount: 1,
+		...overrides,
+	};
 }
 
 function interruptDeps(overrides: Partial<RpcHostInterruptDependencies> = {}): RpcHostInterruptDependencies {
@@ -167,7 +214,7 @@ describe("RPC host unhandled rejection shutdown", () => {
 function exitDeps(overrides: Partial<RpcHostExitDependencies> = {}): RpcHostExitDependencies {
 	return {
 		modals: { close: vi.fn() },
-		overlays: { close: vi.fn() },
+		overlays: { drain: vi.fn() },
 		stateStore: { getSnapshot: () => ({ isStreaming: true, isCompacting: true }) as never },
 		notifications: { notify: vi.fn() },
 		requestRender: vi.fn(),
@@ -243,8 +290,9 @@ describe("app.interrupt action wiring reuses the interrupt tier module", () => {
 // (the handler now calls through to the real RpcHostControls/runtime
 // methods) behavior for each of the 4 host-side actions wired via host.ts.
 describe("createModelCycleForwardHandler (app.model.cycleForward)", () => {
-	it("calls controls.cycleModel() and notifies with the resulting model label", async () => {
-		const cycleModel = vi.fn(async () => ({ modelLabel: "anthropic/claude-opus-4-8" }) as never);
+	it("passes the cycleModel chrome state to the injected state-change callback", async () => {
+		const state = { modelLabel: "x/y" } as never;
+		const cycleModel = vi.fn(async () => state);
 		const notifications = { notify: vi.fn() };
 		const onStateChange = vi.fn();
 		const handle = createModelCycleForwardHandler({
@@ -258,7 +306,8 @@ describe("createModelCycleForwardHandler (app.model.cycleForward)", () => {
 
 		expect(cycleModel).toHaveBeenCalledOnce();
 		expect(onStateChange).toHaveBeenCalledOnce();
-		expect(notifications.notify).toHaveBeenCalledWith("model: anthropic/claude-opus-4-8", "info");
+		expect(onStateChange.mock.calls[0]?.[0]).toBe(state);
+		expect(notifications.notify).toHaveBeenCalledWith("model: x/y", "info");
 	});
 
 	it("notifies a warning instead of throwing when the RPC call fails", async () => {
@@ -379,6 +428,37 @@ describe("createModelCycleBackwardHandler (app.model.cycleBackward -- the other 
 		expect(setModel).not.toHaveBeenCalled();
 		expect(notifications.notify).toHaveBeenCalledWith("no models available", "warning");
 	});
+
+	it("uses RpcHostControls' model cache across repeated backward-cycle handler invocations", async () => {
+		const client = new FakeRpcCommandClient(
+			{
+				type: "response",
+				command: "get_available_models",
+				success: true,
+				data: { models: [rpcModel("p", "a"), rpcModel("p", "b"), rpcModel("p", "c")] },
+			},
+			{ type: "response", command: "set_model", success: true, data: rpcModel("p", "a") },
+			{ type: "response", command: "set_model", success: true, data: rpcModel("p", "c") },
+		);
+		const store = new RpcHostStateStore();
+		store.hydrateFromRpcState(rpcState());
+		const controls = new RpcHostControls(client, store);
+		const notifications = { notify: vi.fn() };
+		const handle = createModelCycleBackwardHandler({ controls, notifications });
+
+		handle();
+		await flush();
+		handle();
+		await flush();
+
+		expect(client.commands).toEqual([
+			{ type: "get_available_models" },
+			{ type: "set_model", provider: "p", modelId: "a" },
+			{ type: "set_model", provider: "p", modelId: "c" },
+		]);
+		expect(notifications.notify).toHaveBeenCalledWith("model: p/a", "info");
+		expect(notifications.notify).toHaveBeenCalledWith("model: p/c", "info");
+	});
 });
 
 describe("createThinkingCycleHandler (app.thinking.cycle -- one of the two exact reported-broken chords)", () => {
@@ -414,9 +494,12 @@ describe("createToolsExpandToggleHandler (app.tools.expand)", () => {
 });
 
 describe("RPC host client-exit shutdown", () => {
-	it("closes modals and overlays, clears streaming state, and notifies with a bounded message", () => {
+	it("closes modals, drains overlays without promotion, clears streaming state, and notifies with a bounded message", async () => {
 		const modals = { close: vi.fn() };
-		const overlays = { close: vi.fn() };
+		const overlays = new RpcHostOverlayManager();
+		const queuedCreate = vi.fn(() => ({ invalidate: () => undefined, render: () => ["queued"] }));
+		const active = overlays.show<string | undefined>("active", () => ({ invalidate: () => undefined, render: () => ["active"] }));
+		const queued = overlays.show<string | undefined>("queued", queuedCreate);
 		const updateRuntimeState = vi.fn();
 		const notifications = { notify: vi.fn() };
 		const handle = createRpcExitHandler(exitDeps({ modals, overlays, updateRuntimeState, notifications }));
@@ -425,12 +508,42 @@ describe("RPC host client-exit shutdown", () => {
 		handle(new Error(`RPC child exited code=1 signal=null. stderr=${hugeStderr}`));
 
 		expect(modals.close).toHaveBeenCalledOnce();
-		expect(overlays.close).toHaveBeenCalledOnce();
+		await expect(active).resolves.toBeUndefined();
+		await expect(queued).resolves.toBeUndefined();
+		expect(queuedCreate).not.toHaveBeenCalled();
+		expect(overlays.getActiveKind()).toBeUndefined();
 		expect(updateRuntimeState).toHaveBeenCalledWith(expect.objectContaining({ isStreaming: false, isCompacting: false }));
 		expect(notifications.notify).toHaveBeenCalledOnce();
 		const [message] = notifications.notify.mock.calls[0] as [string, string, number];
 		expect(message.length).toBeLessThan(600);
 		expect(message).toContain("RPC child exited unexpectedly");
+	});
+
+	// Plan 051: the composed fail-closed contract. During crash teardown
+	// overlays.drain() resolves the pending approval promise with undefined --
+	// that is only safe because the responder maps undefined -> "No". Assert
+	// the actual outbound RESPONSE the RPC child would receive (via the gate's
+	// real normalizeApprovalChoice mapping), not just that the overlay closed.
+	it("settles a pending approval prompt to a deny response when the child exits mid-prompt", async () => {
+		const overlays = new RpcHostOverlayManager();
+		const responder = new RpcExtensionUiResponder({ approvalOverlay: overlays });
+		const response = responder.handle({
+			type: "extension_ui_request",
+			id: "approval-mid-crash",
+			method: "select",
+			title: `${RPC_APPROVAL_TITLE_MARKER}\n\nsudo rm -rf /tmp/scratch`,
+			options: ["No", "Yes", "Always"],
+		});
+		expect(overlays.getActiveKind()).toBe("approval");
+
+		const handle = createRpcExitHandler(exitDeps({ overlays }));
+		handle(new Error("RPC child exited code=1 signal=null."));
+
+		const resolved = await response;
+		expect(resolved).toEqual({ type: "extension_ui_response", id: "approval-mid-crash", value: "No" });
+		if (resolved === undefined || !("value" in resolved)) throw new Error("approval response must carry a value");
+		expect(normalizeApprovalChoice(resolved.value)).toBe("no");
+		expect(overlays.getActiveKind()).toBeUndefined();
 	});
 
 	it("stops the runtime with a nonzero exit code after the shutdown delay", async () => {

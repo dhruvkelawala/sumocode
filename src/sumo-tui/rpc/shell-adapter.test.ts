@@ -456,6 +456,26 @@ describe("RpcShellAdapter above-editor working indicator (D3 parity)", () => {
 			}
 		});
 
+		it("requests the narrow indicator repaint on every tick so animation reaches the screen without a full render", async () => {
+			const requestRender = vi.fn();
+			const requestIndicatorRepaint = vi.fn();
+			const adapter = await RpcShellAdapter.create({
+				terminal: { writeFramePatches: () => undefined },
+				viewport: { columns: 160, rows: 45 },
+				initialState: state({ messageCount: 1, hasMessages: true, isStreaming: true }),
+				initialTranscript: { messages: [] },
+				requestRender,
+				requestIndicatorRepaint,
+			});
+			try {
+				vi.advanceTimersByTime(150 * 3);
+				expect(requestIndicatorRepaint.mock.calls.length).toBeGreaterThanOrEqual(3);
+				expect(requestRender).not.toHaveBeenCalled();
+			} finally {
+				adapter.dispose();
+			}
+		});
+
 		it("requests a repaint on every tick so the animation actually reaches the screen unprompted", async () => {
 			const requestRender = vi.fn();
 			const adapter = await RpcShellAdapter.create({

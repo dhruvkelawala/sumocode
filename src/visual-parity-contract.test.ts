@@ -228,7 +228,7 @@ describe("V2 visual parity contract", () => {
 
 		expect(splash.runtime?.command).toBe("./bin/sumocode.sh");
 		expect(splash.runtime?.args).toEqual(["--offline", "--no-extensions", "--no-session"]);
-		expect(splash.runtime?.env).toMatchObject({ SUMO_TUI: "1", PI_OFFLINE: "1" });
+		expect(splash.runtime?.env).toMatchObject({ SUMO_TUI: "0", PI_OFFLINE: "1" });
 		expect(splash.rejectIfOutputMatches).toEqual(expect.arrayContaining([
 			"ERR_MODULE_NOT_FOUND",
 			"Rendered line .* exceeds terminal width",

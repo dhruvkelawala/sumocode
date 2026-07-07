@@ -199,7 +199,7 @@ export async function submitInitialPromptFromEnv(env: NodeJS.ProcessEnv, submit:
 
 export interface RpcHostExitDependencies {
 	readonly modals: Pick<ModalLayer, "close">;
-	readonly overlays: Pick<RpcHostOverlayManager, "close">;
+	readonly overlays: Pick<RpcHostOverlayManager, "drain">;
 	/** Closed alongside modals/overlays -- see `RpcHostInterruptDependencies.selector`'s doc comment for why the inline selector needs the same fail-safe treatment. */
 	readonly selector?: Pick<InlineSelectorHost, "close">;
 	readonly stateStore: Pick<RpcHostStateStore, "getSnapshot">;
@@ -217,11 +217,11 @@ export interface RpcHostExitDependencies {
  * Builds the RPC host's `client.onExit` handler as an injectable function of
  * its dependencies, mirroring `createRpcHostInterruptHandler` below: the RPC
  * child is the whole agent, so if it dies outside of a deliberate stop() the
- * host cannot keep functioning. Closing modals/overlays via their normal
- * close() resolves any pending approval/select/input promise the same way an
- * interactive dismiss would (confirm -> false, select/input -> undefined; for
- * the approval overlay this already normalizes to "No"/deny, the correct
- * fail-safe).
+ * host cannot keep functioning. Closing modals via their normal close() path
+ * and draining overlays resolves any pending approval/select/input promise
+ * without promoting queued overlay work during crash teardown; for the
+ * approval overlay this already normalizes to "No"/deny, the correct
+ * fail-safe.
  *
  * Exit code SUMOCODE_RELOAD_EXIT_CODE (100) is a deliberate `/sumo:reload`
  * (src/commands/reload.ts: the RPC child process.exit(100)s itself), not a
@@ -243,7 +243,7 @@ export function createRpcExitHandler(deps: RpcHostExitDependencies): (error: Err
 	return (error: Error): void => {
 		const reloadCode = error instanceof RpcChildExitError && error.code === SUMOCODE_RELOAD_EXIT_CODE ? error.code : undefined;
 		deps.modals.close();
-		deps.overlays.close();
+		deps.overlays.drain();
 		deps.selector?.close();
 		deps.updateRuntimeState({ ...deps.stateStore.getSnapshot(), isStreaming: false, isCompacting: false });
 		if (reloadCode === undefined) {
@@ -373,7 +373,7 @@ export function createRpcHostInterruptHandler(deps: RpcHostInterruptDependencies
 export interface RpcHostModelCycleDependencies {
 	readonly controls: Pick<RpcHostControls, "cycleModel" | "getAvailableModels" | "setModel">;
 	readonly notifications: Pick<NotificationCenter, "notify">;
-	readonly onStateChange?: () => void;
+	readonly onStateChange?: (state?: RpcHostChromeState) => void;
 }
 
 /**
@@ -389,7 +389,7 @@ export function createModelCycleForwardHandler(deps: RpcHostModelCycleDependenci
 	return (): void => {
 		void notifyOnError(async () => {
 			const state = await deps.controls.cycleModel();
-			deps.onStateChange?.();
+			deps.onStateChange?.(state);
 			if (state.modelLabel) deps.notifications.notify(`model: ${state.modelLabel}`, "info");
 		}, deps.notifications);
 	};
@@ -426,7 +426,7 @@ export function createModelCycleBackwardHandler(deps: RpcHostModelCycleDependenc
 			const previousIndex = (baseIndex - 1 + models.length) % models.length;
 			const previous = models[previousIndex];
 			const state = await deps.controls.setModel(previous.provider, previous.id);
-			deps.onStateChange?.();
+			deps.onStateChange?.(state);
 			if (state.modelLabel) deps.notifications.notify(`model: ${state.modelLabel}`, "info");
 		}, deps.notifications);
 	};
@@ -435,7 +435,7 @@ export function createModelCycleBackwardHandler(deps: RpcHostModelCycleDependenc
 export interface RpcHostThinkingCycleDependencies {
 	readonly controls: Pick<RpcHostControls, "cycleThinkingLevel">;
 	readonly notifications: Pick<NotificationCenter, "notify">;
-	readonly onStateChange?: () => void;
+	readonly onStateChange?: (state?: RpcHostChromeState) => void;
 }
 
 /**
@@ -450,7 +450,7 @@ export function createThinkingCycleHandler(deps: RpcHostThinkingCycleDependencie
 	return (): void => {
 		void notifyOnError(async () => {
 			const state = await deps.controls.cycleThinkingLevel();
-			deps.onStateChange?.();
+			deps.onStateChange?.(state);
 			if (state.thinkingLevel) deps.notifications.notify(`thinking: ${state.thinkingLevel}`, "info");
 		}, deps.notifications);
 	};
@@ -529,7 +529,11 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		scheduleRender: () => runtime?.requestRender(),
 	});
 	const stateStore = new RpcHostStateStore();
-	const controls = new RpcHostControls(client, stateStore);
+	const requestRender = (): void => runtime?.requestRender();
+	const pushState = (state?: RpcHostChromeState): void => {
+		runtime?.update({ state: state ?? stateStore.getSnapshot() });
+	};
+	const controls = new RpcHostControls(client, stateStore, { onOptimisticChange: pushState });
 	let stopHost: (code: number) => Promise<void> = async (code: number): Promise<void> => {
 		runtime?.stop(code);
 		await client.stop();
@@ -549,7 +553,6 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 	// (same stop()-then-exit(1) path, same duplicate-event guard) for both
 	// events so a sync throw and an async rejection are torn down identically.
 	process.once("uncaughtException", handleUnhandledRejection);
-	const requestRender = (): void => runtime?.requestRender();
 	const hostTerminal = {
 		get columns(): number {
 			return Math.max(1, stdout.columns ?? 80);
@@ -637,17 +640,17 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 	const handleModelCycleForward = createModelCycleForwardHandler({
 		controls,
 		notifications,
-		onStateChange: requestRender,
+		onStateChange: pushState,
 	});
 	const handleModelCycleBackward = createModelCycleBackwardHandler({
 		controls,
 		notifications,
-		onStateChange: requestRender,
+		onStateChange: pushState,
 	});
 	const handleThinkingCycle = createThinkingCycleHandler({
 		controls,
 		notifications,
-		onStateChange: requestRender,
+		onStateChange: pushState,
 	});
 	const handleToolsExpandToggle = createToolsExpandToggleHandler({
 		setToolExpansion: (expanded) => runtime?.setToolExpansion(expanded),
@@ -725,7 +728,7 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		inlineSelectors,
 		notifications,
 		editorText: editor,
-		onStateChange: requestRender,
+		onStateChange: pushState,
 		onRenderRequest: requestRender,
 		onExitRequest: (code) => requestHostExit(code),
 		rehydrateTranscript,

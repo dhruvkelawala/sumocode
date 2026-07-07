@@ -8,13 +8,14 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { MemoryFact, MemoryStatus, RemnicMemoryClient } from "../../memory.js";
 import { getActiveTheme, resetThemeRegistryForTests } from "../../themes/index.js";
 import type { EditorTextController } from "../pi-compat/extension-ui-adapter.js";
+import { MAX_CLIPBOARD_BYTES } from "../input/selection.js";
 import { ModalManager } from "../widgets/modal.js";
 import type { NotificationLevel } from "../widgets/notification.js";
 import type { RpcHostControls, RpcModelOption, RpcSlashCommand } from "./controls.js";
 import { isRpcHostSlashCommandName, RpcHostActions, RPC_HOST_COMMAND_PALETTE_INPUT, RPC_HOST_SLASH_COMMANDS } from "./host-actions.js";
 import { RpcHostOverlayManager } from "./host-overlays.js";
 import { InlineSelectorHost } from "./inline-selector.js";
-import { RpcHostStateStore } from "./state.js";
+import { RpcHostStateStore, type RpcHostChromeState } from "./state.js";
 
 type Notification = { message: string; level: NotificationLevel };
 
@@ -121,8 +122,9 @@ class FakeControls {
 		};
 	}
 
-	public async setSessionName(name: string): Promise<void> {
+	public async setSessionName(name: string): Promise<Record<string, unknown>> {
 		this.calls.push(`setSessionName:${name}`);
+		return { sessionName: name };
 	}
 
 	public async setAutoCompaction(enabled: boolean): Promise<void> {
@@ -233,6 +235,7 @@ function setup(options: {
 	readonly writeClipboardSequence?: (sequence: string) => boolean;
 	readonly sessionFile?: string;
 	readonly changelogRoot?: string;
+	readonly onStateChange?: (state?: RpcHostChromeState) => void;
 } = {}) {
 	const controls = new FakeControls();
 	const stateStore = new RpcHostStateStore();
@@ -260,6 +263,7 @@ function setup(options: {
 	const rehydrateTranscript = async (): Promise<void> => {
 		rehydrateCalls.push(rehydrateCalls.length + 1);
 	};
+	const stateChanges: Array<RpcHostChromeState | undefined> = [];
 	const actions = new RpcHostActions({
 		controls: controls as unknown as RpcHostControls,
 		stateStore,
@@ -275,12 +279,16 @@ function setup(options: {
 		editorText,
 		createMemoryClient: () => memory,
 		onExitRequest: options.onExitRequest,
+		onStateChange: (state) => {
+			stateChanges.push(state);
+			options.onStateChange?.(state);
+		},
 		rehydrateTranscript,
 		writeClipboardSequence: options.writeClipboardSequence,
 		changelogRoot: options.changelogRoot,
 	});
 
-	return { actions, controls, modals, overlays, inlineSelectors, notifications, memory, editorText, rehydrateCalls };
+	return { actions, controls, modals, overlays, inlineSelectors, notifications, memory, editorText, rehydrateCalls, stateChanges };
 }
 
 function rpcCommand(name: string): RpcSlashCommand {
@@ -327,7 +335,7 @@ describe("RpcHostActions", () => {
 	});
 
 	it("handles RPC path slash controls for model, thinking, compaction, and settings", async () => {
-		const { actions, controls, inlineSelectors, notifications } = setup();
+		const { actions, controls, inlineSelectors, notifications, stateChanges } = setup();
 
 		await expect(actions.handleSubmittedText("/model openai/gpt-5")).resolves.toBe(true);
 		await expect(actions.handleSubmittedText("/thinking high")).resolves.toBe(true);
@@ -340,10 +348,13 @@ describe("RpcHostActions", () => {
 		inlineSelectors.handleInput(SELECTOR_ENTER);
 		await settings;
 
-		expect(controls.calls).toContain("setModel:openai/gpt-5");
-		expect(controls.calls).toContain("setThinking:high");
-		expect(controls.calls).toContain("compact:keep branch summary");
-		expect(controls.calls).toContain("setAutoCompaction:false");
+		expect(controls.calls).toEqual([
+			"setModel:openai/gpt-5",
+			"setThinking:high",
+			"compact:keep branch summary",
+			"setAutoCompaction:false",
+		]);
+		expect(stateChanges).toEqual([undefined, undefined, undefined]);
 		expect(notifications).toContainEqual({ message: "auto compaction disabled", level: "info" });
 	});
 
@@ -453,6 +464,25 @@ describe("RpcHostActions", () => {
 		expect(rehydrateCalls).toHaveLength(0);
 	});
 
+	it("forks from the selected entry id when fork message summaries collide", async () => {
+		const { actions, controls, inlineSelectors, editorText, rehydrateCalls } = setup();
+		controls.forkMessages = [
+			{ entryId: "entry-a", text: "same visible fork summary" },
+			{ entryId: "entry-b", text: "same visible fork summary" },
+		];
+
+		const forkPromise = actions.handleSubmittedText("/fork");
+		await flush();
+		expect(inlineSelectors.getActiveKind()).toBe("select");
+		inlineSelectors.handleInput(SELECTOR_DOWN);
+		inlineSelectors.handleInput(SELECTOR_ENTER);
+		await forkPromise;
+
+		expect(controls.calls).toEqual(["getForkMessages", "fork:entry-b"]);
+		expect(editorText.getText()).toBe("fork from here");
+		expect(rehydrateCalls).toHaveLength(1);
+	});
+
 	describe("/resume", () => {
 		function jsonl(lines: readonly unknown[]): string {
 			return `${lines.map((line) => JSON.stringify(line)).join("\n")}\n`;
@@ -473,6 +503,29 @@ describe("RpcHostActions", () => {
 			return path;
 		}
 
+		function writeLargeFixtureSession(dir: string, fileName: string, id: string, timestamp: string, firstMessage: string): string {
+			const path = join(dir, fileName);
+			const prefix = jsonl([
+				{ type: "session", version: 3, id, timestamp, cwd: "/repo" },
+				{
+					type: "message",
+					id: "e1",
+					parentId: null,
+					timestamp,
+					message: { role: "user", content: firstMessage, timestamp: new Date(timestamp).getTime() },
+				},
+			]);
+			const hiddenMessage = JSON.stringify({
+				type: "message",
+				id: "e2",
+				parentId: "e1",
+				timestamp,
+				message: { role: "assistant", content: "x".repeat(300 * 1024), timestamp: new Date(timestamp).getTime() },
+			});
+			writeFileSync(path, `${prefix}${hiddenMessage}\n`);
+			return path;
+		}
+
 		it("lists fixture sessions from the current session's directory and loads the chosen path", async () => {
 			const dir = mkdtempSync(join(tmpdir(), "sumocode-resume-test-"));
 			try {
@@ -490,6 +543,48 @@ describe("RpcHostActions", () => {
 
 				expect(controls.calls).toContain(`switchSession:${olderPath}`);
 				expect(controls.calls).toContain("refreshState");
+				expect(rehydrateCalls).toHaveLength(1);
+			} finally {
+				rmSync(dir, { recursive: true, force: true });
+			}
+		});
+
+		it("marks truncated session counts as floors in resume labels", async () => {
+			const dir = mkdtempSync(join(tmpdir(), "sumocode-resume-truncated-label-test-"));
+			try {
+				const sessionFile = writeLargeFixtureSession(dir, "2026-07-02T20-00-00-000Z_large.jsonl", "large", "2026-07-02T20:00:00.000Z", "large session first message");
+				const { actions, inlineSelectors } = setup({ sessionFile });
+
+				const resumePromise = actions.handleSubmittedText("/resume");
+				await flushIO();
+				expect(inlineSelectors.getActiveKind()).toBe("select");
+				const rendered = inlineSelectors.render(120).join("\n").replace(/\u001b\[[0-9;]*m/g, "");
+				expect(rendered).toContain("(1+ msgs)");
+				inlineSelectors.handleInput(SELECTOR_ESCAPE);
+				await resumePromise;
+			} finally {
+				rmSync(dir, { recursive: true, force: true });
+			}
+		});
+
+		it("loads the selected path when session labels collide", async () => {
+			const dir = mkdtempSync(join(tmpdir(), "sumocode-resume-collision-test-"));
+			try {
+				const newerPath = writeFixtureSession(dir, "2026-07-02T20-00-30-000Z_newer.jsonl", "newer", "2026-07-02T20:00:30.000Z", "same visible title");
+				const olderPath = writeFixtureSession(dir, "2026-07-02T20-00-10-000Z_older.jsonl", "older", "2026-07-02T20:00:10.000Z", "same visible title");
+				const { actions, controls, inlineSelectors, rehydrateCalls } = setup({ sessionFile: newerPath });
+
+				const resumePromise = actions.handleSubmittedText("/resume");
+				await flushIO();
+				expect(inlineSelectors.getActiveKind()).toBe("select");
+				inlineSelectors.handleInput(SELECTOR_DOWN);
+				inlineSelectors.handleInput(SELECTOR_ENTER);
+				await resumePromise;
+
+				// Both visible labels are identical; the old labels.indexOf(selected)
+				// path switched to the first row even after selecting the second.
+				expect(controls.calls).toContain(`switchSession:${olderPath}`);
+				expect(controls.calls).not.toContain(`switchSession:${newerPath}`);
 				expect(rehydrateCalls).toHaveLength(1);
 			} finally {
 				rmSync(dir, { recursive: true, force: true });
@@ -557,6 +652,32 @@ describe("RpcHostActions", () => {
 			}
 		});
 
+		it("forks from the selected entry id when tree summaries collide", async () => {
+			const dir = mkdtempSync(join(tmpdir(), "sumocode-tree-collision-test-"));
+			try {
+				const sessionFile = join(dir, "2026-07-02T22-05-00-000Z_colliding-tree.jsonl");
+				writeFileSync(sessionFile, jsonl([
+					{ type: "session", version: 3, id: "colliding-tree", timestamp: "2026-07-02T22:05:00.000Z", cwd: "/repo" },
+					{ type: "message", id: "root", parentId: null, timestamp: "2026-07-02T22:05:01.000Z", message: { role: "user", content: "root message" } },
+					{ type: "message", id: "child-a", parentId: "root", timestamp: "2026-07-02T22:05:02.000Z", message: { role: "assistant", content: "same branch summary" } },
+					{ type: "message", id: "child-b", parentId: "root", timestamp: "2026-07-02T22:05:03.000Z", message: { role: "assistant", content: "same branch summary" } },
+				]));
+				const { actions, controls, inlineSelectors } = setup({ sessionFile });
+
+				const treePromise = actions.handleSubmittedText("/tree");
+				await flushIO();
+				expect(inlineSelectors.getActiveKind()).toBe("select");
+				inlineSelectors.handleInput(SELECTOR_DOWN); // root -> child-a
+				inlineSelectors.handleInput(SELECTOR_DOWN); // child-a -> child-b
+				inlineSelectors.handleInput(SELECTOR_ENTER);
+				await treePromise;
+
+				expect(controls.calls).toEqual(["fork:child-b"]);
+			} finally {
+				rmSync(dir, { recursive: true, force: true });
+			}
+		});
+
 		it("labels every row as a fork action, not a fake navigate-to-node", async () => {
 			const dir = mkdtempSync(join(tmpdir(), "sumocode-tree-label-test-"));
 			try {
@@ -582,6 +703,20 @@ describe("RpcHostActions", () => {
 
 			expect(notifications).toContainEqual({ message: "no session file available to browse", level: "warning" });
 		});
+
+		it("warns instead of rejecting when the session file cannot be read", async () => {
+			const dir = mkdtempSync(join(tmpdir(), "sumocode-tree-missing-test-"));
+			try {
+				const { actions, controls, notifications } = setup({ sessionFile: join(dir, "missing.jsonl") });
+
+				await expect(actions.handleSubmittedText("/tree")).resolves.toBe(true);
+
+				expect(notifications).toContainEqual({ message: "session tree unavailable", level: "warning" });
+				expect(controls.calls.some((call) => call.startsWith("fork:"))).toBe(false);
+			} finally {
+				rmSync(dir, { recursive: true, force: true });
+			}
+		});
 	});
 
 	it("renders the full /session stats payload as a multi-line panel, not a one-line toast", async () => {
@@ -603,7 +738,7 @@ describe("RpcHostActions", () => {
 	});
 
 	it("handles /name rename as a host command", async () => {
-		const { actions, controls, modals, notifications } = setup();
+		const { actions, controls, modals, notifications, stateChanges } = setup();
 
 		const rename = actions.handleSubmittedText("/name");
 		await flush();
@@ -612,8 +747,8 @@ describe("RpcHostActions", () => {
 		modals.handleInput(Key.enter);
 		await rename;
 
-		expect(controls.calls).toContain("setSessionName:Plan 023");
-		expect(controls.calls).toContain("refreshState");
+		expect(controls.calls).toEqual(["setSessionName:Plan 023"]);
+		expect(stateChanges).toEqual([{ sessionName: "Plan 023" }]);
 		expect(notifications).toContainEqual({ message: "session name: Plan 023", level: "info" });
 	});
 
@@ -634,6 +769,23 @@ describe("RpcHostActions", () => {
 		expect(sequences[0]).toContain("\x1b]52;c;");
 		expect(sequences[0]).toContain(Buffer.from("here is the answer", "utf8").toString("base64"));
 		expect(notifications).toContainEqual({ message: "copied", level: "success" });
+	});
+
+	it("refuses to copy oversized assistant responses without sending a clipboard sequence", async () => {
+		const sequences: string[] = [];
+		const { actions, controls, notifications } = setup({
+			writeClipboardSequence: (sequence) => {
+				sequences.push(sequence);
+				return true;
+			},
+		});
+		controls.lastAssistantText = "x".repeat(MAX_CLIPBOARD_BYTES + 1);
+
+		await expect(actions.handleSubmittedText("/copy")).resolves.toBe(true);
+
+		expect(controls.calls).toContain("getLastAssistantText");
+		expect(sequences).toHaveLength(0);
+		expect(notifications).toContainEqual({ message: "response too large to copy", level: "warning" });
 	});
 
 	it("warns instead of copying when there is no assistant response yet", async () => {

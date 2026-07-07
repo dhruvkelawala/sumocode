@@ -1,7 +1,13 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { describe, expect, it, vi } from "vitest";
-import { TranscriptController, type TranscriptControllerChatSink } from "./controller.js";
+import { describe, expect, it, type Mock, vi } from "vitest";
+import {
+	TranscriptController,
+	getMessageContentKeyCacheMissesForTests,
+	planChatDiff,
+	resetMessageContentKeyCacheForTests,
+	type TranscriptControllerChatSink,
+} from "./controller.js";
 import type { ChatMessageViewModel } from "./view-model.js";
 
 function readJsonl(path: string): unknown[] {
@@ -48,6 +54,51 @@ describe("TranscriptController agent_end reconciliation", () => {
 
 		// Both exchanges must remain visible — the first must not have been wiped.
 		expect(transcript.messages.map((m) => m.id)).toEqual(["u1", "a1", "u2", "a2"]);
+	});
+
+	it("keeps a mid-run follow-up because agent_end always carries it (pinned Pi 0.79.1 behavior)", () => {
+		// Pinned against @earendil-works/pi-agent-core 0.79.1: `runLoop` is the
+		// ONLY emitter of `message_end` for a mid-run queued (steer/followUp)
+		// message, and the same block pushes that message into `newMessages`
+		// (dist/agent-loop.js:95-103; follow-up drain at :157-161) — the exact
+		// array every `agent_end` carries (dist/agent-loop.js:109,151,166). So an
+		// agent_end arriving after a mid-run follow-up ALWAYS includes it, and
+		// the run-suffix splice cannot drop it. If a Pi upgrade breaks this
+		// invariant, this test's premise (and the splice in `handleAgentEvent`'s
+		// agent_end branch) must be revisited.
+		const controller = new TranscriptController();
+
+		controller.handleAgentEvent({ type: "agent_start" });
+		controller.handleAgentEvent({ type: "message_start", message: { id: "u1", role: "user", content: "question" } });
+		controller.handleAgentEvent({ type: "message_end", message: { id: "u1", role: "user", content: "question" } });
+		controller.handleAgentEvent({ type: "message_start", message: { id: "a1", role: "assistant", content: "working on it" } });
+		controller.handleAgentEvent({ type: "message_end", message: { id: "a1", role: "assistant", content: "working on it" } });
+		// User submits mid-run with streamingBehavior "followUp"; the loop drains
+		// the queue and injects it (message_start/message_end + newMessages push).
+		controller.handleAgentEvent({ type: "message_start", message: { id: "fu1", role: "user", content: "also do X" } });
+		controller.handleAgentEvent({ type: "message_end", message: { id: "fu1", role: "user", content: "also do X" } });
+		controller.handleAgentEvent({ type: "message_start", message: { id: "a2", role: "assistant", content: "done, including X" } });
+		controller.handleAgentEvent({ type: "message_end", message: { id: "a2", role: "assistant", content: "done, including X" } });
+
+		const before = controller.viewModel().messages;
+
+		// agent_end.messages === the loop's newMessages: the injected follow-up
+		// is present, in interleaved order.
+		const transcript = controller.handleAgentEvent({
+			type: "agent_end",
+			messages: [
+				{ id: "u1", role: "user", content: "question" },
+				{ id: "a1", role: "assistant", content: "working on it" },
+				{ id: "fu1", role: "user", content: "also do X" },
+				{ id: "a2", role: "assistant", content: "done, including X" },
+			],
+		});
+
+		// The reconcile must be an identity operation: same messages, same
+		// order, the follow-up present exactly once.
+		expect(transcript.messages.map((m) => m.id)).toEqual(["u1", "a1", "fu1", "a2"]);
+		expect(transcript.messages).toEqual(before);
+		expect(transcript.messages.filter((m) => m.id === "fu1")).toHaveLength(1);
 	});
 
 	it("replays a long-stream fixture preceded by a synthetic committed exchange and keeps the prior exchange", () => {
@@ -99,6 +150,37 @@ describe("TranscriptController agent_end reconciliation", () => {
 		});
 
 		expect(transcript.messages.map((m) => m.id)).toEqual(["old", "new-u", "new-a"]);
+	});
+
+	it("renders provider auth-resolution errors with a /login hint", () => {
+		const controller = new TranscriptController();
+		const userMessage = { id: "u1", role: "user", content: "hi" };
+		const assistantError = {
+			id: "a1",
+			role: "assistant",
+			content: [],
+			api: "anthropic-messages",
+			provider: "anthropic",
+			model: "claude-fable-5",
+			stopReason: "error",
+			errorMessage: "No API key for provider: anthropic",
+		};
+		const expectedHint = "anthropic auth failed — run pi directly and /login to re-authenticate";
+
+		controller.handleAgentEvent({ type: "agent_start" });
+		controller.handleAgentEvent({ type: "message_start", message: userMessage });
+		controller.handleAgentEvent({ type: "message_end", message: userMessage });
+
+		controller.handleAgentEvent({ type: "message_start", message: assistantError });
+		expect(controller.viewModel().messages.at(-1)?.blocks).toContainEqual({ type: "markdown", text: expectedHint });
+
+		controller.handleAgentEvent({ type: "message_end", message: assistantError });
+		const transcript = controller.handleAgentEvent({
+			type: "agent_end",
+			messages: [userMessage, assistantError],
+		});
+
+		expect(transcript.messages.at(-1)?.blocks).toContainEqual({ type: "markdown", text: expectedHint });
 	});
 });
 
@@ -172,11 +254,13 @@ describe("TranscriptController live-state clearing", () => {
 	});
 });
 
-function fakeChatSink(): TranscriptControllerChatSink & {
-	replaceViewModels: ReturnType<typeof vi.fn>;
-	addViewModel: ReturnType<typeof vi.fn>;
-	replaceLastWithViewModel: ReturnType<typeof vi.fn>;
-} {
+type FakeChatSink = TranscriptControllerChatSink & {
+	replaceViewModels: Mock;
+	addViewModel: Mock;
+	replaceLastWithViewModel: Mock;
+};
+
+function fakeChatSink(): FakeChatSink {
 	return {
 		replaceViewModels: vi.fn((messages: readonly ChatMessageViewModel[]) => ({
 			sourceMessages: messages.length,
@@ -190,6 +274,37 @@ function fakeChatSink(): TranscriptControllerChatSink & {
 }
 
 describe("TranscriptController incremental chat sink (B9)", () => {
+	it("memoizes fallback content keys per reused view-model object", () => {
+		resetMessageContentKeyCacheForTests();
+		const prefix = Array.from({ length: 50 }, (_, index): ChatMessageViewModel => ({
+			id: `prefix-${index}`,
+			role: "sumo",
+			displayName: "SUMO",
+			blocks: [{ type: "markdown", text: `prefix ${index}` }],
+		}));
+		const previousLast: ChatMessageViewModel = {
+			id: "draft",
+			role: "sumo",
+			displayName: "SUMO",
+			blocks: [{ type: "markdown", text: "old" }],
+		};
+		const nextLast: ChatMessageViewModel = {
+			id: "draft",
+			role: "sumo",
+			displayName: "SUMO",
+			blocks: [{ type: "markdown", text: "new" }],
+		};
+		const previous = [...prefix, previousLast];
+		const next = [...prefix, nextLast];
+
+		expect(planChatDiff(previous, next)).toEqual([{ kind: "replace-last", message: nextLast }]);
+		const missesAfterColdDiff = getMessageContentKeyCacheMissesForTests();
+		expect(missesAfterColdDiff).toBe(52);
+
+		expect(planChatDiff(previous, next)).toEqual([{ kind: "replace-last", message: nextLast }]);
+		expect(getMessageContentKeyCacheMissesForTests()).toBe(missesAfterColdDiff);
+	});
+
 	it("replaces the full pager on the very first publish (nothing to diff against yet)", () => {
 		const chat = fakeChatSink();
 		const controller = new TranscriptController({ chat });
@@ -218,6 +333,72 @@ describe("TranscriptController incremental chat sink (B9)", () => {
 		expect(chat.replaceLastWithViewModel).toHaveBeenCalledTimes(2);
 		const lastCallText = chat.replaceLastWithViewModel.mock.calls.at(-1)?.[0]?.blocks?.[0]?.text;
 		expect(lastCallText).toBe("hello");
+	});
+
+	it("message_update uses the O(1) hinted boundary diff without prefix key misses", () => {
+		const chat = fakeChatSink();
+		const controller = new TranscriptController({ chat });
+		const history = Array.from({ length: 200 }, (_, index) => ({
+			id: `history-${index}`,
+			role: index % 2 === 0 ? "user" : "assistant",
+			content: `message ${index}`,
+		}));
+		controller.replaceFromMessages(history);
+		controller.handleAgentEvent({ type: "agent_start" });
+		controller.handleAgentEvent({ type: "message_start", message: { id: "draft", role: "assistant", content: "hello" } });
+		chat.replaceViewModels.mockClear();
+		chat.addViewModel.mockClear();
+		chat.replaceLastWithViewModel.mockClear();
+		resetMessageContentKeyCacheForTests();
+
+		controller.handleAgentEvent({ type: "message_update", message: { id: "draft", role: "assistant", content: "hello stream" } });
+
+		expect(chat.replaceViewModels).not.toHaveBeenCalled();
+		expect(chat.addViewModel).not.toHaveBeenCalled();
+		expect(chat.replaceLastWithViewModel).toHaveBeenCalledTimes(1);
+		expect(chat.replaceLastWithViewModel.mock.calls[0]?.[0]?.blocks).toEqual([{ type: "markdown", text: "hello stream" }]);
+		// Only the previous and next draft boundary messages were keyed; the 200-message prefix stayed untouched.
+		expect(getMessageContentKeyCacheMissesForTests()).toBe(2);
+	});
+
+	it("message_update timestamp-only changes on the last message call replaceLastWithViewModel", () => {
+		const chat = fakeChatSink();
+		const controller = new TranscriptController({ chat });
+
+		controller.handleAgentEvent({ type: "agent_start" });
+		controller.handleAgentEvent({
+			type: "message_start",
+			message: {
+				id: "draft",
+				role: "assistant",
+				content: "hello",
+				timestamp: "2026-04-30T11:42:00.000Z",
+			},
+		});
+		chat.replaceViewModels.mockClear();
+		chat.addViewModel.mockClear();
+		chat.replaceLastWithViewModel.mockClear();
+
+		// Timestamps are deterministic view-model provenance (view-model.ts:692),
+		// so a changed rendered minute is a visible last-message diff.
+		controller.handleAgentEvent({
+			type: "message_update",
+			message: {
+				id: "draft",
+				role: "assistant",
+				content: "hello",
+				timestamp: "2026-04-30T11:43:00.000Z",
+			},
+		});
+
+		expect(chat.replaceViewModels).not.toHaveBeenCalled();
+		expect(chat.addViewModel).not.toHaveBeenCalled();
+		expect(chat.replaceLastWithViewModel).toHaveBeenCalledTimes(1);
+		expect(chat.replaceLastWithViewModel.mock.calls[0]?.[0]).toMatchObject({
+			id: "draft",
+			timestamp: new Date("2026-04-30T11:43:00.000Z"),
+			blocks: [{ type: "markdown", text: "hello" }],
+		});
 	});
 
 	it("message_end committing the draft appends via addViewModel, not a full replace", () => {
@@ -322,6 +503,32 @@ describe("TranscriptController incremental chat sink (B9)", () => {
 			],
 		});
 		expect(chat.replaceViewModels).toHaveBeenCalledTimes(1);
+	});
+	it("agent_end history rewrites still fall back to replaceViewModels after streamed updates", () => {
+		const chat = fakeChatSink();
+		const controller = new TranscriptController({ chat });
+
+		controller.handleAgentEvent({ type: "agent_start" });
+		controller.handleAgentEvent({ type: "message_start", message: { id: "u1", role: "user", content: "question" } });
+		controller.handleAgentEvent({ type: "message_end", message: { id: "u1", role: "user", content: "question" } });
+		controller.handleAgentEvent({ type: "message_start", message: { id: "a1", role: "assistant", content: "draft" } });
+		controller.handleAgentEvent({ type: "message_update", message: { id: "a1", role: "assistant", content: "answer" } });
+		controller.handleAgentEvent({ type: "message_end", message: { id: "a1", role: "assistant", content: "answer" } });
+		chat.replaceViewModels.mockClear();
+		chat.addViewModel.mockClear();
+		chat.replaceLastWithViewModel.mockClear();
+
+		controller.handleAgentEvent({
+			type: "agent_end",
+			messages: [
+				{ id: "u1", role: "user", content: "question rewritten" },
+				{ id: "a1", role: "assistant", content: "answer" },
+			],
+		});
+
+		expect(chat.replaceViewModels).toHaveBeenCalledTimes(1);
+		expect(chat.addViewModel).not.toHaveBeenCalled();
+		expect(chat.replaceLastWithViewModel).not.toHaveBeenCalled();
 	});
 
 	it("does not schedule a render when an event produces no visible diff", () => {

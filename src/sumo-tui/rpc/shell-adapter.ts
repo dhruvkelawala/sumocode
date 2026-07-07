@@ -58,6 +58,13 @@ export interface RpcShellAdapterOptions {
 	 * event happens to call `render()`.
 	 */
 	readonly requestRender?: () => void;
+	/**
+	 * Optional narrow repaint path for working-indicator ticks. Runtime owners
+	 * that can reach the retained renderer install this so the animation avoids
+	 * scheduling a full shell render; tests/callers without it fall back to
+	 * `requestRender`.
+	 */
+	readonly requestIndicatorRepaint?: () => void;
 }
 
 export interface RpcShellAdapterSnapshot {
@@ -128,6 +135,7 @@ export class RpcShellAdapter {
 	private wasWorkingIndicatorBusy = false;
 	private workingIndicatorTimer: ReturnType<typeof setInterval> | undefined;
 	private readonly requestRender: (() => void) | undefined;
+	private readonly requestIndicatorRepaint: (() => void) | undefined;
 	private readonly workingIndicatorThemeUnsubscribe: () => void;
 
 	private constructor(yoga: Yoga, options: RpcShellAdapterOptions) {
@@ -142,6 +150,7 @@ export class RpcShellAdapter {
 		this.extensionSidebar = options.extensionRegions?.sidebar;
 		this.viewport = options.viewport;
 		this.requestRender = options.requestRender;
+		this.requestIndicatorRepaint = options.requestIndicatorRepaint;
 		// Mirrors WorkingIndicatorComponent.restartTimer in working-indicator.ts:
 		// a mid-turn theme swap (Ctrl+Shift+T) should pick up the new
 		// frames/cadence immediately rather than finishing out the old
@@ -254,6 +263,10 @@ export class RpcShellAdapter {
 
 	public render(): void {
 		this.renderer.render();
+	}
+
+	public repaintWorkingIndicator(): void {
+		this.renderer.repaintRegion("aboveEditor");
 	}
 
 	public handleMouseEvent(event: MouseEvent): boolean {
@@ -427,7 +440,7 @@ export class RpcShellAdapter {
 		const intervalMs = getActiveTheme().workingIndicator.intervalMs;
 		this.workingIndicatorTimer = setInterval(() => {
 			this.workingIndicatorTick += 1;
-			this.requestRender?.();
+			(this.requestIndicatorRepaint ?? this.requestRender)?.();
 		}, intervalMs);
 	}
 

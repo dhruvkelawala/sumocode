@@ -321,7 +321,9 @@ function deterministicEnv(extra = {}) {
 		COLORTERM: "truecolor",
 		FORCE_COLOR: "3",
 		PI_OFFLINE: "1",
-		SUMO_TUI: "1",
+		// The launcher (bin/sumocode.sh) exports SUMO_TUI=0 itself; this default
+		// documents the effective env rather than fighting it.
+		SUMO_TUI: "0",
 		SUMOCODE_HARNESS: "1",
 		...extra,
 	};

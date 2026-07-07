@@ -27,7 +27,7 @@ import {
 } from "../../memory-editor.js";
 import { renderThemeCheck, type ThemeBgSlot, type ThemeFgSlot, type ThemeReader } from "../../theme-check.js";
 import { activeThemeColors, getActiveTheme, listThemes, setActiveTheme } from "../../themes/index.js";
-import { createOsc52Sequence } from "../input/selection.js";
+import { tryCreateOsc52Sequence } from "../input/selection.js";
 import type { EditorTextController } from "../pi-compat/extension-ui-adapter.js";
 import type { ModalManager } from "../widgets/modal.js";
 import type { NotificationCenter, NotificationLevel } from "../widgets/notification.js";
@@ -36,7 +36,7 @@ import type { RpcHostOverlayManager } from "./host-overlays.js";
 import type { InlineSelectorHost, InlineSelectorItem } from "./inline-selector.js";
 import { notifyOnError } from "./safe-send.js";
 import { buildSessionTree, listSessions, type SessionEntryLike, type SessionListInfo, type SessionTreeNode } from "./session-reader.js";
-import type { RpcHostStateStore } from "./state.js";
+import type { RpcHostChromeState, RpcHostStateStore } from "./state.js";
 
 export const RPC_HOST_COMMAND_PALETTE_INPUT = "\u001f";
 
@@ -71,7 +71,7 @@ export interface RpcHostActionsOptions {
 	readonly notifications: HostNotifications;
 	readonly editorText?: EditorTextController;
 	readonly createMemoryClient?: MemoryClientFactory;
-	readonly onStateChange?: () => void;
+	readonly onStateChange?: (state?: RpcHostChromeState) => void;
 	readonly onRenderRequest?: () => void;
 	readonly onExitRequest?: (code: number) => void;
 	/**
@@ -317,7 +317,7 @@ function renderHotkeysOverlay(theme: ThemeReader, width: number): string[] {
 function resumeSessionLabel(session: SessionListInfo): string {
 	const when = Number.isNaN(session.modified.getTime()) ? "" : session.modified.toISOString().slice(0, 16).replace("T", " ");
 	const title = session.name?.trim() || session.firstMessage.slice(0, 60);
-	return `${when} — ${title} (${formatInteger(session.messageCount)} msgs)`;
+	return `${when} — ${title} (${formatInteger(session.messageCount)}${session.truncatedScan ? "+" : ""} msgs)`;
 }
 
 interface TreeRow {
@@ -410,7 +410,7 @@ export class RpcHostActions {
 	private readonly notifications: HostNotifications;
 	private readonly editorText: EditorTextController | undefined;
 	private readonly createMemoryClient: MemoryClientFactory;
-	private readonly onStateChange: () => void;
+	private readonly onStateChange: (state?: RpcHostChromeState) => void;
 	private readonly onRenderRequest: () => void;
 	private readonly onExitRequest: (code: number) => void;
 	private readonly rehydrateTranscript: () => Promise<void>;
@@ -620,11 +620,13 @@ export class RpcHostActions {
 			notify(this.notifications, "no forkable messages", "warning");
 			return;
 		}
-		const labels = messages.map((message, index) => `${index + 1}. ${message.text.slice(0, 72)}`);
-		const selected = await this.inlineSelectors.select("Fork from message", labels);
+		const items: InlineSelectorItem[] = messages.map((message, index) => ({
+			value: message.entryId,
+			label: `${index + 1}. ${message.text.slice(0, 72)}`,
+		}));
+		const selected = await this.inlineSelectors.select("Fork from message", items);
 		if (!selected) return;
-		const index = labels.indexOf(selected);
-		const message = messages[index];
+		const message = messages.find((candidate) => candidate.entryId === selected);
 		if (!message) return;
 		const result = await this.controls.fork(message.entryId);
 		if (!result.cancelled) {
@@ -658,14 +660,13 @@ export class RpcHostActions {
 		}
 		const labels = sessions.map((session) => resumeSessionLabel(session));
 		const items: InlineSelectorItem[] = sessions.map((session, index) => ({
-			value: labels[index]!,
+			value: session.path,
 			label: labels[index]!,
 			isCurrent: session.path === sessionFile,
 		}));
 		const selected = await this.inlineSelectors.select("Resume session", items);
 		if (!selected) return;
-		const index = labels.indexOf(selected);
-		const session = sessions[index];
+		const session = sessions.find((candidate) => candidate.path === selected);
 		if (!session) return;
 		const result = await this.controls.switchSession(session.path);
 		if (!result.cancelled) {
@@ -693,16 +694,22 @@ export class RpcHostActions {
 			return;
 		}
 		const tree = await buildSessionTree(sessionFile);
+		if (!tree) {
+			notify(this.notifications, "session tree unavailable", "warning");
+			return;
+		}
 		if (tree.length === 0) {
 			notify(this.notifications, "session has no entries yet", "warning");
 			return;
 		}
 		const rows = flattenSessionTree(tree);
-		const labels = rows.map((row) => `${"  ".repeat(row.depth)}Fork from: ${treeNodeSummary(row.node)}`);
-		const selected = await this.inlineSelectors.select("Session tree (fork from a node)", labels);
+		const items: InlineSelectorItem[] = rows.map((row) => ({
+			value: row.node.entry.id,
+			label: `${"  ".repeat(row.depth)}Fork from: ${treeNodeSummary(row.node)}`,
+		}));
+		const selected = await this.inlineSelectors.select("Session tree (fork from a node)", items);
 		if (!selected) return;
-		const index = labels.indexOf(selected);
-		const row = rows[index];
+		const row = rows.find((candidate) => candidate.node.entry.id === selected);
 		if (!row) return;
 		const result = await this.controls.fork(row.node.entry.id);
 		if (!result.cancelled) {
@@ -936,7 +943,12 @@ export class RpcHostActions {
 			notify(this.notifications, "no assistant response to copy", "warning");
 			return;
 		}
-		const wrote = this.writeClipboardSequence(createOsc52Sequence(text));
+		const sequence = tryCreateOsc52Sequence(text);
+		if (!sequence.ok) {
+			notify(this.notifications, "response too large to copy", "warning");
+			return;
+		}
+		const wrote = this.writeClipboardSequence(sequence.sequence);
 		if (!wrote) {
 			notify(this.notifications, "copy unavailable (not a TTY)", "warning");
 			return;
@@ -953,16 +965,13 @@ export class RpcHostActions {
 		const name = await this.modals.input("Rename session", "session name");
 		const trimmed = name?.trim() ?? "";
 		if (!trimmed) return;
-		await this.controls.setSessionName(trimmed);
-		await this.controls.refreshState();
-		this.onStateChange();
+		const state = await this.controls.setSessionName(trimmed);
+		this.onStateChange(state);
 		notify(this.notifications, `session name: ${trimmed}`, "info");
 	}
 
 	private async setAutoCompaction(enabled: boolean): Promise<void> {
 		await this.controls.setAutoCompaction(enabled);
-		await this.controls.refreshState();
-		this.onStateChange();
 		notify(this.notifications, `auto compaction ${enabled ? "enabled" : "disabled"}`, "info");
 	}
 

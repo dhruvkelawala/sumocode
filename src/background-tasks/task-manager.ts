@@ -196,7 +196,11 @@ function truncateLogIfOverCap(logFile: string, maxBytes: number): void {
 }
 
 function appendLogLine(logFile: string, line: string): void {
-	writeFileSync(logFile, line, { flag: "a" });
+	try {
+		writeFileSync(logFile, line, { flag: "a" });
+	} catch {
+		// best-effort; logging must never interrupt task lifecycle
+	}
 }
 
 /**

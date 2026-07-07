@@ -62,6 +62,7 @@ export class ChatPager extends SumoNode {
 	private readonly maxRenderedMessages: number;
 	private readonly chatMessageOptions: ChatMessageOptions;
 	private readonly activeMessages: ChatMessage[] = [];
+	private toolExpansionOverride: boolean | undefined;
 	private placeholder: ChatMessage | undefined;
 	private virtualArchivedCount = 0;
 	private unreadCount = 0;
@@ -185,10 +186,15 @@ export class ChatPager extends SumoNode {
 			return;
 		}
 		last.setRole(chatRoleFromViewModel(message));
-		this.updateLast(last, () => last.setBlocks(message.blocks, chatMessageViewModelToPlainText(message)));
+		this.updateLast(last, () => {
+			last.setBlocks(message.blocks, chatMessageViewModelToPlainText(message));
+			if (message.timestamp) last.setTimestamp(message.timestamp);
+			if (this.toolExpansionOverride !== undefined) last.setToolExpansion(this.toolExpansionOverride);
+		});
 	}
 
 	public setToolExpansion(expanded: boolean): void {
+		this.toolExpansionOverride = expanded;
 		const width = this.scrollBox.getComputedWidth();
 		let beforeHeight = 0;
 		let afterHeight = 0;
@@ -227,7 +233,7 @@ export class ChatPager extends SumoNode {
 	}
 
 	public getLastMessage(): ChatMessage | undefined {
-		return this.activeMessages[this.activeMessages.length - 1] ?? this.archivedMessages[this.archivedMessages.length - 1];
+		return this.activeMessages[this.activeMessages.length - 1];
 	}
 
 	public getUnreadCount(): number {
@@ -271,7 +277,7 @@ export class ChatPager extends SumoNode {
 	}
 
 	private createChatMessage(message: PreparedChatMessage): ChatMessage {
-		return ChatMessage.create(
+		const chatMessage = ChatMessage.create(
 			this.yoga,
 			message.role,
 			message.text,
@@ -280,6 +286,8 @@ export class ChatPager extends SumoNode {
 			message.blocks,
 			this.chatMessageOptions,
 		);
+		if (this.toolExpansionOverride !== undefined) chatMessage.setToolExpansion(this.toolExpansionOverride);
+		return chatMessage;
 	}
 
 	private updateLast(message: ChatMessage, update: () => void): void {
@@ -320,8 +328,9 @@ export class ChatPager extends SumoNode {
 			const archived = this.activeMessages.shift();
 			if (!archived) break;
 			removedLines += archived.getEstimatedHeight(width);
-			this.archivedMessages.push(archived);
 			if (archived.parent === this.scrollBox) this.scrollBox.removeChild(archived);
+			archived.dispose();
+			this.virtualArchivedCount += 1;
 			archivedAny = true;
 		}
 

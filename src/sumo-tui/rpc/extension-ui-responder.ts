@@ -12,7 +12,7 @@ import type { ExtensionStatusPublication, RegionRegistry, WidgetPlacement } from
 import { ModalManager } from "../widgets/modal.js";
 import { NotificationCenter, type NotificationLevel } from "../widgets/notification.js";
 
-type DialogModals = Pick<ModalManager, "select" | "confirm" | "input">;
+type DialogModals = Pick<ModalManager, "select" | "confirm" | "input" | "editor">;
 type ToastCenter = Pick<NotificationCenter, "notify">;
 type TerminalTitle = { setTitle?(title: string): void };
 type StatusSink = (key: string, text: string | undefined) => void;
@@ -163,12 +163,11 @@ export class RpcExtensionUiResponder {
 			}
 			case "editor": {
 				// Pi's editor() contract: open an editor prefilled with `request.prefill`, return
-				// the edited text verbatim on submit. The modal's value (not just its placeholder)
-				// must be seeded so pressing Enter immediately round-trips the prefill unchanged.
-				// The host's real chat-draft editor is intentionally left untouched here: this is
-				// a standalone dialog flow, not a mirror of the user's in-progress draft, and
-				// clobbering it would silently discard whatever the user was mid-typing.
-				const value = await this.modals.input(request.title, request.prefill, { initialValue: request.prefill });
+				// the edited text verbatim on submit. The host's real chat-draft editor is
+				// intentionally left untouched here: this is a standalone dialog flow, not a
+				// mirror of the user's in-progress draft, and clobbering it would silently discard
+				// whatever the user was mid-typing.
+				const value = await this.modals.editor(request.title, request.prefill ?? "");
 				return valueResponse(request.id, value);
 			}
 			case "notify":

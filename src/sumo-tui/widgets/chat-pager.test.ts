@@ -8,6 +8,7 @@ import { composite } from "../render/compositor.js";
 import { SelectionController } from "../input/selection.js";
 import { PiEditorLeaf } from "./pi-editor-leaf.js";
 import { ChatPager, type ChatPagerRenderControls } from "./chat-pager.js";
+import type { ChatMessageViewModel } from "../transcript/view-model.js";
 
 class FakeEditor implements Component {
 	public constructor(private readonly rows: string[]) {}
@@ -37,6 +38,16 @@ async function makeChat(width = 32, height = 6): Promise<{ root: SumoNode; chat:
 			composite(root, frame);
 			return frame;
 		},
+	};
+}
+
+function toolViewModel(id: string, path: string, expanded = true, timestamp = new Date("2026-04-30T11:42:00.000Z")): ChatMessageViewModel {
+	return {
+		id,
+		role: "sumo",
+		displayName: "SUMO",
+		timestamp,
+		blocks: [{ type: "tool", tool: { name: "read", status: "success", input: { path }, expanded } }],
 	};
 }
 
@@ -93,11 +104,42 @@ describe("ChatPager", () => {
 		const { root, chat } = await makeChat();
 		for (let index = 0; index < 5000; index += 1) chat.addMessage("sumo", `message ${index}`);
 
-		expect(chat.archivedMessages).toHaveLength(4800);
+		expect(chat.archivedMessages).toHaveLength(0);
 		expect(chat.getArchivedMessageCount()).toBe(4800);
 		expect(chat.getRenderedMessages()).toHaveLength(200);
+		expect(chat.getLastMessage()?.text).toBe("message 4999");
 		expect(chat.scrollBox.children).toHaveLength(201);
 		expect(chat.scrollBox.children[0]).toMatchObject({ text: "── 4800 earlier messages ──" });
+		root.dispose();
+	});
+
+	it("bounds incremental archives and disposes each evicted message once", async () => {
+		const yoga = await loadYoga();
+		const root = new SumoNode(yoga.Node.create());
+		const chat = ChatPager.create(yoga, root, { maxRenderedMessages: 10 });
+		const disposeFns: Array<() => void> = [];
+
+		for (let index = 0; index < 60; index += 1) {
+			const rendered = chat.addViewModel({
+				id: `message-${index}`,
+				role: "sumo",
+				displayName: "SUMO",
+				blocks: [{ type: "markdown", text: `message ${index}` }],
+			});
+			const dispose = rendered.dispose.bind(rendered);
+			rendered.dispose = vi.fn(() => dispose());
+			disposeFns.push(rendered.dispose);
+		}
+
+		expect(chat.archivedMessages).toHaveLength(0);
+		expect(chat.getArchivedMessageCount()).toBe(50);
+		expect(chat.getRenderedMessages()).toHaveLength(10);
+		expect(chat.getRenderedMessages().length).toBeLessThanOrEqual(10);
+		expect(chat.getRenderedMessages()[0]?.text).toBe("message 50");
+		expect(chat.getRenderedMessages().at(-1)?.text).toBe("message 59");
+		expect(chat.scrollBox.children[0]).toMatchObject({ text: "── 50 earlier messages ──" });
+		for (let index = 0; index < 50; index += 1) expect(disposeFns[index]).toHaveBeenCalledTimes(1);
+		for (let index = 50; index < 60; index += 1) expect(disposeFns[index]).not.toHaveBeenCalled();
 		root.dispose();
 	});
 
@@ -181,6 +223,81 @@ describe("ChatPager", () => {
 		frame = buffer();
 		expect(frame.toPlainRow(1)).toContain("✓ [read]  src/auth/session.ts  · ctrl+o expand");
 		expect(frame.toPlainRow(2)).toMatch(/^╰─+╯/);
+		root.dispose();
+	});
+
+	it("keeps the global collapsed tool policy when replacing the last view model", async () => {
+		const { root, chat, buffer } = await makeChat(90, 8);
+		chat.addViewModel(toolViewModel("tool-1", "src/original.ts", true));
+		chat.setToolExpansion(false);
+
+		// This fails against the pre-change code: replaceLastWithViewModel copied
+		// the incoming expanded=true block and forgot the pager-wide override.
+		chat.replaceLastWithViewModel(toolViewModel("tool-1", "src/replaced.ts", true));
+		const frame = buffer();
+
+		expect(chat.getLastMessage()?.toSnapshot().blocks).toMatchObject([{ type: "tool", tool: { expanded: false } }]);
+		expect(frame.toPlainRow(1)).toContain("src/replaced.ts");
+		expect(frame.toPlainRow(1)).toContain("ctrl+o expand");
+		expect(frame.toPlainRow(2)).toMatch(/^╰─+╯/);
+		root.dispose();
+	});
+
+	it("applies the collapsed tool policy to subsequently added view models", async () => {
+		const { root, chat, buffer } = await makeChat(90, 8);
+		chat.setToolExpansion(false);
+
+		chat.addViewModel(toolViewModel("tool-after-toggle", "src/appended.ts", true));
+		const frame = buffer();
+
+		expect(chat.getLastMessage()?.toSnapshot().blocks).toMatchObject([{ type: "tool", tool: { expanded: false } }]);
+		expect(frame.toPlainRow(1)).toContain("src/appended.ts");
+		expect(frame.toPlainRow(1)).toContain("ctrl+o expand");
+		expect(frame.toPlainRow(2)).toMatch(/^╰─+╯/);
+		root.dispose();
+	});
+
+	it("applies the collapsed tool policy during replaceViewModels hydration", async () => {
+		const { root, chat, buffer } = await makeChat(90, 8);
+		chat.setToolExpansion(false);
+
+		chat.replaceViewModels([
+			toolViewModel("hydrated-1", "src/hydrated-one.ts", true),
+			toolViewModel("hydrated-2", "src/hydrated-two.ts", true),
+		]);
+		const frame = buffer();
+
+		expect(chat.getRenderedMessages().map((message) => message.toSnapshot().blocks)).toMatchObject([
+			[{ type: "tool", tool: { expanded: false } }],
+			[{ type: "tool", tool: { expanded: false } }],
+		]);
+		expect(frame.toPlainRow(1)).toContain("src/hydrated-one.ts");
+		expect(frame.toPlainRow(1)).toContain("ctrl+o expand");
+		expect(frame.toPlainRow(5)).toContain("src/hydrated-two.ts");
+		expect(frame.toPlainRow(5)).toContain("ctrl+o expand");
+		root.dispose();
+	});
+
+	it("replaceLastWithViewModel adopts the view-model timestamp in the existing rendered message", async () => {
+		const { root, chat, buffer } = await makeChat(44, 6);
+		const originalTimestamp = new Date("2026-04-30T11:42:00.000");
+		const replacementTimestamp = new Date("2026-04-30T12:07:00.000");
+		chat.addMessage("sumo", "draft", originalTimestamp);
+		const last = chat.getLastMessage();
+
+		chat.replaceLastWithViewModel({
+			id: "reply-1",
+			role: "sumo",
+			displayName: "SUMO",
+			timestamp: replacementTimestamp,
+			blocks: [{ type: "markdown", text: "final answer" }],
+		});
+		const frame = buffer();
+
+		expect(chat.getLastMessage()).toBe(last);
+		expect(last?.timestamp).toEqual(replacementTimestamp);
+		expect(frame.toPlainRow(0)).toContain("12:07");
+		expect(frame.toPlainRow(0)).not.toContain("11:42");
 		root.dispose();
 	});
 

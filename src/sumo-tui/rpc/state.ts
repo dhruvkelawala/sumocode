@@ -67,6 +67,8 @@ export class RpcHostStateStore {
 			pendingMessageCount: rpcState.pendingMessageCount,
 			hasMessages: rpcState.messageCount > 0,
 			gitBranch,
+			lastEventType: undefined,
+			taskPartialCount: 0,
 		};
 		return this.getSnapshot();
 	}
@@ -171,6 +173,11 @@ export class RpcHostStateStore {
 	 */
 	public applyThinkingLevel(level: string): RpcHostChromeState {
 		this.state = { ...this.state, thinkingLevel: level };
+		return this.getSnapshot();
+	}
+
+	public applySessionName(name: string): RpcHostChromeState {
+		this.state = { ...this.state, sessionName: name };
 		return this.getSnapshot();
 	}
 

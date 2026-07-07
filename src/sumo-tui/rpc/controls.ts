@@ -6,6 +6,10 @@ export interface RpcCommandClient {
 	send(command: RpcCommand, timeoutMs?: number): Promise<RpcResponse>;
 }
 
+export interface RpcHostControlsOptions {
+	readonly onOptimisticChange?: (state: RpcHostChromeState) => void;
+}
+
 export type RpcAvailableModel = RpcResponseData<"get_available_models">["models"][number];
 export type RpcThinkingLevel = RpcSessionState["thinkingLevel"];
 export type RpcSlashCommand = RpcResponseData<"get_commands">["commands"][number];
@@ -59,6 +63,7 @@ export class RpcHostControls {
 	public constructor(
 		private readonly client: RpcCommandClient,
 		private readonly stateStore: RpcHostStateStore = new RpcHostStateStore(),
+		private readonly options: RpcHostControlsOptions = {},
 	) {}
 
 	public async refreshState(gitBranch?: string): Promise<RpcHostChromeState> {
@@ -81,8 +86,15 @@ export class RpcHostControls {
 	// itself.
 
 	public async setModel(provider: string, modelId: string): Promise<RpcHostChromeState> {
-		const model = responseData(await this.client.send({ type: "set_model", provider, modelId }), "set_model");
-		return this.stateStore.applyModelChange(model);
+		const optimisticState = this.stateStore.applyModelChange({ provider, id: modelId });
+		this.options.onOptimisticChange?.(optimisticState);
+		try {
+			const model = responseData(await this.client.send({ type: "set_model", provider, modelId }), "set_model");
+			return this.stateStore.applyModelChange(model);
+		} catch (error) {
+			await this.refreshState();
+			throw error;
+		}
 	}
 
 	public async cycleModel(): Promise<RpcHostChromeState> {
@@ -92,8 +104,15 @@ export class RpcHostControls {
 	}
 
 	public async setThinkingLevel(level: RpcThinkingLevel): Promise<RpcHostChromeState> {
-		responseData(await this.client.send({ type: "set_thinking_level", level }), "set_thinking_level");
-		return this.stateStore.applyThinkingLevel(level);
+		const optimisticState = this.stateStore.applyThinkingLevel(level);
+		this.options.onOptimisticChange?.(optimisticState);
+		try {
+			responseData(await this.client.send({ type: "set_thinking_level", level }), "set_thinking_level");
+			return this.stateStore.getSnapshot();
+		} catch (error) {
+			await this.refreshState();
+			throw error;
+		}
 	}
 
 	public async cycleThinkingLevel(): Promise<RpcHostChromeState> {

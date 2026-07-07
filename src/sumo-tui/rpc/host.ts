@@ -529,7 +529,11 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		scheduleRender: () => runtime?.requestRender(),
 	});
 	const stateStore = new RpcHostStateStore();
-	const controls = new RpcHostControls(client, stateStore);
+	const requestRender = (): void => runtime?.requestRender();
+	const pushState = (state?: RpcHostChromeState): void => {
+		runtime?.update({ state: state ?? stateStore.getSnapshot() });
+	};
+	const controls = new RpcHostControls(client, stateStore, { onOptimisticChange: pushState });
 	let stopHost: (code: number) => Promise<void> = async (code: number): Promise<void> => {
 		runtime?.stop(code);
 		await client.stop();
@@ -549,10 +553,6 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 	// (same stop()-then-exit(1) path, same duplicate-event guard) for both
 	// events so a sync throw and an async rejection are torn down identically.
 	process.once("uncaughtException", handleUnhandledRejection);
-	const requestRender = (): void => runtime?.requestRender();
-	const pushState = (state?: RpcHostChromeState): void => {
-		runtime?.update({ state: state ?? stateStore.getSnapshot() });
-	};
 	const hostTerminal = {
 		get columns(): number {
 			return Math.max(1, stdout.columns ?? 80);

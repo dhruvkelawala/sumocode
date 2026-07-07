@@ -1,7 +1,7 @@
 import type { RpcCommand, RpcResponse, RpcSessionState } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 import { modelOptionsFrom, RpcHostControls, type RpcAvailableModel, type RpcCommandClient } from "./controls.js";
-import { RpcHostStateStore } from "./state.js";
+import { RpcHostStateStore, type RpcHostChromeState } from "./state.js";
 
 class FakeClient implements RpcCommandClient {
 	public readonly commands: RpcCommand[] = [];
@@ -18,6 +18,40 @@ class FakeClient implements RpcCommandClient {
 		const response = this.responses.shift();
 		if (!response) throw new Error(`No fake response queued for ${command.type}`);
 		return response;
+	}
+}
+
+interface Deferred<T> {
+	readonly promise: Promise<T>;
+	resolve(value: T): void;
+	reject(error: unknown): void;
+}
+
+function deferred<T>(): Deferred<T> {
+	let resolve!: (value: T) => void;
+	let reject!: (error: unknown) => void;
+	const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+		resolve = resolvePromise;
+		reject = rejectPromise;
+	});
+	return { promise, resolve, reject };
+}
+
+class DeferredFakeClient implements RpcCommandClient {
+	public readonly commands: RpcCommand[] = [];
+	public readonly timeouts: Array<number | undefined> = [];
+	private readonly responses: Array<Deferred<RpcResponse>>;
+
+	public constructor(...responses: Array<Deferred<RpcResponse>>) {
+		this.responses = [...responses];
+	}
+
+	public send(command: RpcCommand, timeoutMs?: number): Promise<RpcResponse> {
+		this.commands.push(command);
+		this.timeouts.push(timeoutMs);
+		const response = this.responses.shift();
+		if (!response) return Promise.reject(new Error(`No fake response queued for ${command.type}`));
+		return response.promise;
 	}
 }
 
@@ -107,6 +141,61 @@ describe("RpcHostControls", () => {
 		expect(client.commands).toEqual([{ type: "set_model", provider: "anthropic", modelId: "claude-opus-4-8" }]);
 	});
 
+	it("optimistically patches setModel before the RPC response, then reconciles from the response payload", async () => {
+		const setModelResponse = deferred<RpcResponse>();
+		const client = new DeferredFakeClient(setModelResponse);
+		const store = new RpcHostStateStore();
+		store.hydrateFromRpcState(rpcState({ model: model("openai", "gpt-5") }));
+		const optimisticStates: RpcHostChromeState[] = [];
+		const controls = new RpcHostControls(client, store, {
+			onOptimisticChange: (state) => optimisticStates.push(state),
+		});
+
+		const result = controls.setModel("anthropic", "claude-opus-4-8");
+
+		expect(client.commands).toEqual([{ type: "set_model", provider: "anthropic", modelId: "claude-opus-4-8" }]);
+		expect(store.getSnapshot()).toMatchObject({ modelLabel: "anthropic/claude-opus-4-8" });
+		expect(optimisticStates[0]).toMatchObject({ modelLabel: "anthropic/claude-opus-4-8" });
+
+		setModelResponse.resolve({
+			type: "response",
+			command: "set_model",
+			success: true,
+			data: model("google", "gemini-3"),
+		});
+
+		await expect(result).resolves.toMatchObject({ modelLabel: "google/gemini-3" });
+		expect(store.getSnapshot()).toMatchObject({ modelLabel: "google/gemini-3" });
+	});
+
+	it("refreshes state and propagates the original error when setModel fails after the optimistic patch", async () => {
+		const setModelResponse = deferred<RpcResponse>();
+		const refreshResponse = deferred<RpcResponse>();
+		const client = new DeferredFakeClient(setModelResponse, refreshResponse);
+		const store = new RpcHostStateStore();
+		store.hydrateFromRpcState(rpcState({ model: model("openai", "gpt-5") }));
+		const controls = new RpcHostControls(client, store);
+		const originalError = new Error("set_model failed");
+
+		const result = controls.setModel("anthropic", "claude-opus-4-8");
+
+		expect(client.commands).toEqual([{ type: "set_model", provider: "anthropic", modelId: "claude-opus-4-8" }]);
+		expect(store.getSnapshot()).toMatchObject({ modelLabel: "anthropic/claude-opus-4-8" });
+
+		setModelResponse.reject(originalError);
+		await Promise.resolve();
+
+		expect(client.commands).toEqual([
+			{ type: "set_model", provider: "anthropic", modelId: "claude-opus-4-8" },
+			{ type: "get_state" },
+		]);
+
+		refreshResponse.resolve(stateResponse({ model: model("openai", "gpt-5") }));
+
+		await expect(result).rejects.toBe(originalError);
+		expect(store.getSnapshot()).toMatchObject({ modelLabel: "openai/gpt-5" });
+	});
+
 	it("cycles models for null and non-null Pi responses by patching state locally, with no follow-up get_state round-trip", async () => {
 		const client = new FakeClient(
 			{ type: "response", command: "cycle_model", success: true, data: null },
@@ -138,6 +227,27 @@ describe("RpcHostControls", () => {
 			{ type: "set_thinking_level", level: "high" },
 			{ type: "cycle_thinking_level" },
 		]);
+	});
+
+	it("optimistically patches setThinkingLevel before the RPC response", async () => {
+		const setThinkingLevelResponse = deferred<RpcResponse>();
+		const client = new DeferredFakeClient(setThinkingLevelResponse);
+		const store = new RpcHostStateStore();
+		store.hydrateFromRpcState(rpcState({ thinkingLevel: "medium" }));
+		const optimisticStates: RpcHostChromeState[] = [];
+		const controls = new RpcHostControls(client, store, {
+			onOptimisticChange: (state) => optimisticStates.push(state),
+		});
+
+		const result = controls.setThinkingLevel("high");
+
+		expect(client.commands).toEqual([{ type: "set_thinking_level", level: "high" }]);
+		expect(store.getSnapshot()).toMatchObject({ thinkingLevel: "high" });
+		expect(optimisticStates[0]).toMatchObject({ thinkingLevel: "high" });
+
+		setThinkingLevelResponse.resolve({ type: "response", command: "set_thinking_level", success: true });
+
+		await expect(result).resolves.toMatchObject({ thinkingLevel: "high" });
 	});
 
 	it("cycle_thinking_level's null response (nothing to cycle to) leaves state untouched with no follow-up round-trip", async () => {
@@ -228,16 +338,19 @@ describe("RpcHostControls", () => {
 	});
 
 	it("throws Pi error responses with the failed command and server text", async () => {
-		const client = new FakeClient({
-			type: "response",
-			command: "set_model",
-			success: false,
-			error: "Model not found: missing/nope",
-		});
+		const client = new FakeClient(
+			{
+				type: "response",
+				command: "set_model",
+				success: false,
+				error: "Model not found: missing/nope",
+			},
+			stateResponse(),
+		);
 		const controls = new RpcHostControls(client);
 
 		await expect(controls.setModel("missing", "nope")).rejects.toThrow("set_model failed: Model not found: missing/nope");
-		expect(client.commands).toEqual([{ type: "set_model", provider: "missing", modelId: "nope" }]);
+		expect(client.commands).toEqual([{ type: "set_model", provider: "missing", modelId: "nope" }, { type: "get_state" }]);
 	});
 
 	it("passes a generous explicit timeout for compact instead of the client's 30s default", async () => {

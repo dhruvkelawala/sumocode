@@ -177,8 +177,9 @@ export class RpcHostControls {
 		return responseData(await this.client.send(command, SESSION_COMMAND_TIMEOUT_MS), "export_html");
 	}
 
-	public async setSessionName(name: string): Promise<void> {
+	public async setSessionName(name: string): Promise<RpcHostChromeState> {
 		responseData(await this.client.send({ type: "set_session_name", name }), "set_session_name");
+		return this.stateStore.applySessionName(name);
 	}
 
 	public async compact(customInstructions?: string): Promise<RpcResponseData<"compact">> {

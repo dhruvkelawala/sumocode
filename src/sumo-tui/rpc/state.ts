@@ -174,6 +174,11 @@ export class RpcHostStateStore {
 		return this.getSnapshot();
 	}
 
+	public applySessionName(name: string): RpcHostChromeState {
+		this.state = { ...this.state, sessionName: name };
+		return this.getSnapshot();
+	}
+
 	public getSnapshot(): RpcHostChromeState {
 		return { ...this.state };
 	}

@@ -149,6 +149,30 @@ describe("RpcHostStateStore", () => {
 		expect(store.applyModelChange(undefined)).toMatchObject({ modelLabel: "openai/gpt-5.5" });
 	});
 
+	it("applySessionName patches sessionName directly, without touching other state", () => {
+		const store = new RpcHostStateStore();
+		store.hydrateFromRpcState({
+			model: { provider: "openai", id: "gpt-5.5" } as never,
+			thinkingLevel: "medium",
+			isStreaming: false,
+			isCompacting: false,
+			steeringMode: "all",
+			followUpMode: "one-at-a-time",
+			sessionId: "session-1",
+			sessionName: "Migration",
+			autoCompactionEnabled: true,
+			messageCount: 2,
+			pendingMessageCount: 1,
+		});
+
+		expect(store.applySessionName("Plan 041")).toMatchObject({
+			sessionId: "session-1",
+			sessionName: "Plan 041",
+			modelLabel: "openai/gpt-5.5",
+			thinkingLevel: "medium",
+		});
+	});
+
 	it("applyThinkingLevel patches thinkingLevel directly, without touching other state", () => {
 		const store = new RpcHostStateStore();
 		store.hydrateFromRpcState({

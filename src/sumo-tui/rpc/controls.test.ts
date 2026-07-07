@@ -371,6 +371,21 @@ describe("RpcHostControls", () => {
 		expect(client.commands).toEqual([{ type: "cycle_thinking_level" }]);
 	});
 
+	it("sets session name by patching state locally, with no follow-up get_state round-trip", async () => {
+		const store = new RpcHostStateStore();
+		store.hydrateFromRpcState(rpcState({ sessionId: "session-rename", sessionName: "Migration" }));
+		const client = new FakeClient({ type: "response", command: "set_session_name", success: true });
+		const controls = new RpcHostControls(client, store);
+
+		await expect(controls.setSessionName("Plan 041")).resolves.toMatchObject({
+			sessionId: "session-rename",
+			sessionName: "Plan 041",
+			modelLabel: "openai/gpt-5",
+		});
+		expect(store.getSnapshot()).toMatchObject({ sessionId: "session-rename", sessionName: "Plan 041" });
+		expect(client.commands).toEqual([{ type: "set_session_name", name: "Plan 041" }]);
+	});
+
 	it("sends exact session control payloads and decodes their responses", async () => {
 		const client = new FakeClient(
 			{ type: "response", command: "new_session", success: true, data: { cancelled: false } },
@@ -391,7 +406,7 @@ describe("RpcHostControls", () => {
 		await expect(controls.clone()).resolves.toEqual({ cancelled: false });
 		await expect(controls.getForkMessages()).resolves.toEqual([{ entryId: "entry-1", text: "hello" }]);
 		await expect(controls.getLastAssistantText()).resolves.toBe("last answer");
-		await expect(controls.setSessionName("renamed")).resolves.toBeUndefined();
+		await expect(controls.setSessionName("renamed")).resolves.toMatchObject({ sessionName: "renamed" });
 		expect(client.commands).toEqual([
 			{ type: "new_session" },
 			{ type: "new_session", parentSession: "parent-session.jsonl" },

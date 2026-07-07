@@ -651,15 +651,16 @@ function sameContentExceptLast(previous: readonly ChatMessageViewModel[], next: 
 
 /**
  * Cheap, stable content fingerprint for a `ChatMessageViewModel`: id + role +
- * blocks (which fully determine what the pager renders). Deliberately
- * excludes `displayName`/`timestamp` since those are re-derived
- * deterministically from `role`/the source message and are not meaningful
- * signals of a content change on their own. Two messages with the same key
- * render identically, so the diff can treat them as unchanged even if the
- * committed-message remap (see `diffAndApplyToChat`'s doc comment) gave them
- * a new object identity.
+ * timestamp + blocks (which fully determine what the pager renders).
+ * Deliberately excludes `displayName` since it is re-derived deterministically
+ * from `role` and is not a meaningful signal of a content change on its own.
+ * `timestamp` is parsed from the source message, and assistant/sumo timestamps
+ * are rendered chrome, so timestamp changes are visible content changes. Two
+ * messages with the same key render identically, so the diff can treat them as
+ * unchanged even if the committed-message remap (see `diffAndApplyToChat`'s doc
+ * comment) gave them a new object identity.
  */
 function messageContentKey(message: ChatMessageViewModel | undefined): string {
 	if (!message) return "";
-	return JSON.stringify([message.id, message.role, message.blocks]);
+	return JSON.stringify([message.id, message.role, message.timestamp?.getTime() ?? null, message.blocks]);
 }

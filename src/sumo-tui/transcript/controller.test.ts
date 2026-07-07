@@ -220,6 +220,46 @@ describe("TranscriptController incremental chat sink (B9)", () => {
 		expect(lastCallText).toBe("hello");
 	});
 
+	it("message_update timestamp-only changes on the last message call replaceLastWithViewModel", () => {
+		const chat = fakeChatSink();
+		const controller = new TranscriptController({ chat });
+
+		controller.handleAgentEvent({ type: "agent_start" });
+		controller.handleAgentEvent({
+			type: "message_start",
+			message: {
+				id: "draft",
+				role: "assistant",
+				content: "hello",
+				timestamp: "2026-04-30T11:42:00.000Z",
+			},
+		});
+		chat.replaceViewModels.mockClear();
+		chat.addViewModel.mockClear();
+		chat.replaceLastWithViewModel.mockClear();
+
+		// Timestamps are deterministic view-model provenance (view-model.ts:692),
+		// so a changed rendered minute is a visible last-message diff.
+		controller.handleAgentEvent({
+			type: "message_update",
+			message: {
+				id: "draft",
+				role: "assistant",
+				content: "hello",
+				timestamp: "2026-04-30T11:43:00.000Z",
+			},
+		});
+
+		expect(chat.replaceViewModels).not.toHaveBeenCalled();
+		expect(chat.addViewModel).not.toHaveBeenCalled();
+		expect(chat.replaceLastWithViewModel).toHaveBeenCalledTimes(1);
+		expect(chat.replaceLastWithViewModel.mock.calls[0]?.[0]).toMatchObject({
+			id: "draft",
+			timestamp: new Date("2026-04-30T11:43:00.000Z"),
+			blocks: [{ type: "markdown", text: "hello" }],
+		});
+	});
+
 	it("message_end committing the draft appends via addViewModel, not a full replace", () => {
 		const chat = fakeChatSink();
 		const controller = new TranscriptController({ chat });

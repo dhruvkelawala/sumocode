@@ -349,16 +349,16 @@ function renderBlockRows(blocks: readonly ChatBlock[], width: number): string[] 
 
 /** One V2 framed chat message. */
 export class ChatMessage extends SumoNode {
-	public readonly timestamp: Date;
+	private timestampValue: Date;
 	private measuring = false;
 	private lastMeasure: ChatMessageMeasure = { width: 0, height: 1 };
 
 	/**
 	 * Bumped by every mutator that changes what `renderRows` produces
-	 * (`setRole`/`setText`/`appendText`/`setBlocks`/`setToolExpansion`). This is
-	 * the content half of the `renderRows` memo key — see `renderRowsCache`.
-	 * A missed bump site means a stale frame, so if you add a new mutator that
-	 * changes rendered output, bump this in it too.
+	 * (`setRole`/`setText`/`appendText`/`setBlocks`/`setToolExpansion`/
+	 * `setTimestamp`). This is the content half of the `renderRows` memo key —
+	 * see `renderRowsCache`. A missed bump site means a stale frame, so if you
+	 * add a new mutator that changes rendered output, bump this in it too.
 	 */
 	private contentVersion = 0;
 	private renderRowsCache: RenderRowsCacheEntry[] = [];
@@ -373,13 +373,23 @@ export class ChatMessage extends SumoNode {
 		private readonly options: ChatMessageOptions = {},
 	) {
 		super(yogaNode, parent);
-		this.timestamp = timestamp;
+		this.timestampValue = timestamp;
 		this.marginBottom = 1;
 		this.setMeasureFunc((width, widthMode, height, heightMode) => this.measure(width, widthMode, height, heightMode));
 	}
 
 	public static create(yoga: Yoga, role: ChatMessageRole, text: string, parent?: SumoNode, timestamp?: Date, blocks?: readonly ChatBlock[], options?: ChatMessageOptions): ChatMessage {
 		return new ChatMessage(yoga.Node.create(), role, text, parent, timestamp, blocks, options);
+	}
+
+	public get timestamp(): Date {
+		return this.timestampValue;
+	}
+
+	public setTimestamp(next: Date): void {
+		const renderedMinuteChanged = formatTime(this.timestampValue) !== formatTime(next);
+		this.timestampValue = next;
+		if (renderedMinuteChanged) this.invalidateRenderCache();
 	}
 
 	/**

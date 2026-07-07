@@ -16,6 +16,15 @@ function renderRows(message: ChatMessage, width: number): string[] {
 	return (message as unknown as { renderRows(width: number): string[] }).renderRows(width);
 }
 
+function setTimestamp(message: ChatMessage, timestamp: Date): void {
+	const candidate: unknown = message;
+	if (candidate && typeof candidate === "object" && "setTimestamp" in candidate && typeof candidate.setTimestamp === "function") {
+		candidate.setTimestamp(timestamp);
+		return;
+	}
+	throw new TypeError("ChatMessage.setTimestamp is not available");
+}
+
 describe("ChatMessage", () => {
 	it("renders V2 rounded transparent message frames", async () => {
 		const yoga = await loadYoga();
@@ -408,6 +417,37 @@ describe("ChatMessage", () => {
 			message.setRole("sumo");
 			const afterSetRole = renderRows(message, 40);
 			expect(afterSetRole).not.toEqual(afterSetBlocks);
+		});
+
+		it("setTimestamp invalidates the renderRows memo when the rendered minute changes", async () => {
+			const yoga = await loadYoga();
+			const root = new SumoNode(yoga.Node.create());
+			const message = ChatMessage.create(yoga, "sumo", "timestamped", root, new Date("2026-04-30T11:42:00.000"));
+
+			const before = renderRows(message, 44);
+			setTimestamp(message, new Date("2026-04-30T11:43:00.000"));
+			const after = renderRows(message, 44);
+
+			expect(after).not.toBe(before);
+			expect(stripAnsi(after[0] ?? "")).toContain("11:43");
+			expect(stripAnsi(after[0] ?? "")).not.toContain("11:42");
+			root.dispose();
+		});
+
+		it("setTimestamp preserves the memoized rows reference when the rendered minute is unchanged", async () => {
+			const yoga = await loadYoga();
+			const root = new SumoNode(yoga.Node.create());
+			const sameMinute = new Date("2026-04-30T11:42:59.000");
+			const message = ChatMessage.create(yoga, "sumo", "timestamped", root, new Date("2026-04-30T11:42:00.000"));
+
+			const before = renderRows(message, 44);
+			setTimestamp(message, sameMinute);
+			const after = renderRows(message, 44);
+
+			expect(after).toBe(before);
+			expect(message.toSnapshot().timestamp).toEqual(sameMinute);
+			expect(stripAnsi(after[0] ?? "")).toContain("11:42");
+			root.dispose();
 		});
 
 		it("invalidates the memo on theme switch", async () => {

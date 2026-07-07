@@ -293,6 +293,20 @@ function fallbackReplaceStats(transcript: TranscriptViewModel): ChatPagerReplace
 	};
 }
 
+type ChatDiffHint = "incremental" | "rewrite";
+
+let messageContentKeyCache = new WeakMap<ChatMessageViewModel, string>();
+let messageContentKeyCacheMisses = 0;
+
+export function resetMessageContentKeyCacheForTests(): void {
+	messageContentKeyCache = new WeakMap<ChatMessageViewModel, string>();
+	messageContentKeyCacheMisses = 0;
+}
+
+export function getMessageContentKeyCacheMissesForTests(): number {
+	return messageContentKeyCacheMisses;
+}
+
 export class TranscriptController {
 	private readonly mapper: TranscriptViewModelMapper;
 	private committedMessages: unknown[] = [];
@@ -321,6 +335,7 @@ export class TranscriptController {
 	 * from a known pager state.
 	 */
 	private lastPublishedToChat: readonly ChatMessageViewModel[] | undefined;
+	private pendingChatOp: ChatDiffHint | undefined;
 	/**
 	 * Bumped on every `publish`/`publishFullReplace`, i.e. every time
 	 * `lastTranscript` changes. A consumer that also receives the raw
@@ -362,9 +377,9 @@ export class TranscriptController {
 	}
 
 	public handleAgentEvent(event: AgentSessionEvent | unknown): TranscriptViewModel {
+		this.pendingChatOp = undefined;
 		const record = asRecord(event);
 		if (!record || typeof record.type !== "string") return this.lastTranscript;
-
 		const taskPartial = taskPartialFromEvent(record);
 		if (taskPartial) this.taskPartials.set(taskPartial.toolCallId, taskPartial);
 		const liveTool = liveToolExecutionFromEvent(record);
@@ -376,10 +391,12 @@ export class TranscriptController {
 				break;
 			case "message_start":
 			case "message_update":
+				this.pendingChatOp = "incremental";
 				this.draftMessage = eventMessage(record);
 				if (asRecord(this.draftMessage)?.role === "user") this.options.noteUserMessage?.();
 				break;
 			case "message_end": {
+				this.pendingChatOp = "incremental";
 				const message = eventMessage(record);
 				if (message !== undefined) {
 					this.committedMessages.push(message);
@@ -389,6 +406,7 @@ export class TranscriptController {
 				break;
 			}
 			case "agent_end": {
+				this.pendingChatOp = "rewrite";
 				const messages = eventMessages(record);
 				if (messages) {
 					// `agent_end.messages` carries only the CURRENT RUN's messages, not
@@ -481,6 +499,7 @@ export class TranscriptController {
 		this.committedMessages = [...messages];
 		this.currentRunStartIndex = undefined;
 		this.draftMessage = undefined;
+		this.pendingChatOp = undefined;
 		this.liveTools.clear();
 		this.taskPartials.clear();
 		this.invalidateCommittedCache();
@@ -581,13 +600,19 @@ export class TranscriptController {
 	 * back to a full replace too, since there is nothing to diff against yet.
 	 */
 	private diffAndApplyToChat(next: readonly ChatMessageViewModel[]): void {
+		const hint = this.pendingChatOp;
+		this.pendingChatOp = undefined;
 		const chat = this.options.chat;
 		if (!chat) {
 			this.lastPublishedToChat = undefined;
 			return;
 		}
 		const previous = this.lastPublishedToChat;
-		const operations = previous ? planChatDiff(previous, next) : undefined;
+		const operations = previous
+			? hint === "incremental"
+				? planHintedIncrementalChatDiff(previous, next) ?? planChatDiff(previous, next)
+				: planChatDiff(previous, next)
+			: undefined;
 		if (!operations) {
 			chat.replaceViewModels(next);
 			this.lastPublishedToChat = next;
@@ -603,9 +628,35 @@ export class TranscriptController {
 	}
 }
 
-type ChatDiffOperation =
+export type ChatDiffOperation =
 	| { readonly kind: "replace-last"; readonly message: ChatMessageViewModel }
 	| { readonly kind: "append"; readonly message: ChatMessageViewModel };
+
+function planHintedIncrementalChatDiff(
+	previous: readonly ChatMessageViewModel[],
+	next: readonly ChatMessageViewModel[],
+): ChatDiffOperation[] | undefined {
+	const lengthDelta = next.length - previous.length;
+	if (lengthDelta === 0) {
+		if (next.length === 0) return [];
+		const last = next[next.length - 1]!;
+		if (messageContentKey(last) === messageContentKey(previous[previous.length - 1])) return [];
+		return [{ kind: "replace-last", message: last }];
+	}
+
+	if (lengthDelta === 1) {
+		const operations: ChatDiffOperation[] = [];
+		const previousLast = previous[previous.length - 1];
+		const stillPreviousLast = previousLast === undefined ? undefined : next[previous.length - 1];
+		if (previousLast !== undefined && messageContentKey(stillPreviousLast) !== messageContentKey(previousLast)) {
+			operations.push({ kind: "replace-last", message: stillPreviousLast! });
+		}
+		operations.push({ kind: "append", message: next[next.length - 1]! });
+		return operations;
+	}
+
+	return undefined;
+}
 
 /**
  * Returns the minimal ordered list of incremental pager operations to turn
@@ -613,7 +664,7 @@ type ChatDiffOperation =
  * incrementally (history was rewritten) and the caller must fall back to a
  * full `replaceViewModels`. See `diffAndApplyToChat` for the full contract.
  */
-function planChatDiff(
+export function planChatDiff(
 	previous: readonly ChatMessageViewModel[],
 	next: readonly ChatMessageViewModel[],
 ): ChatDiffOperation[] | undefined {
@@ -662,5 +713,10 @@ function sameContentExceptLast(previous: readonly ChatMessageViewModel[], next: 
  */
 function messageContentKey(message: ChatMessageViewModel | undefined): string {
 	if (!message) return "";
-	return JSON.stringify([message.id, message.role, message.timestamp?.getTime() ?? null, message.blocks]);
+	const cached = messageContentKeyCache.get(message);
+	if (cached !== undefined) return cached;
+	const key = JSON.stringify([message.id, message.role, message.timestamp?.getTime() ?? null, message.blocks]);
+	messageContentKeyCache.set(message, key);
+	messageContentKeyCacheMisses += 1;
+	return key;
 }

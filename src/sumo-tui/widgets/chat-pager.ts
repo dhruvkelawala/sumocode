@@ -233,7 +233,7 @@ export class ChatPager extends SumoNode {
 	}
 
 	public getLastMessage(): ChatMessage | undefined {
-		return this.activeMessages[this.activeMessages.length - 1] ?? this.archivedMessages[this.archivedMessages.length - 1];
+		return this.activeMessages[this.activeMessages.length - 1];
 	}
 
 	public getUnreadCount(): number {
@@ -328,8 +328,9 @@ export class ChatPager extends SumoNode {
 			const archived = this.activeMessages.shift();
 			if (!archived) break;
 			removedLines += archived.getEstimatedHeight(width);
-			this.archivedMessages.push(archived);
 			if (archived.parent === this.scrollBox) this.scrollBox.removeChild(archived);
+			archived.dispose();
+			this.virtualArchivedCount += 1;
 			archivedAny = true;
 		}
 

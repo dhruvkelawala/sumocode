@@ -1,4 +1,5 @@
 import type { Component } from "@earendil-works/pi-tui";
+import { createRequire } from "node:module";
 import type { CellBuffer } from "../render/buffer.js";
 import { logDiagnostic } from "../runtime/diagnostics.js";
 import { defaultTerminalSessionOwner, type TerminalOutput, type TerminalSessionOwner } from "../runtime/terminal-controller.js";
@@ -63,6 +64,11 @@ export interface RpcHostRuntimeOptions {
 	readonly preEditorInputHandler?: (data: string) => boolean | void;
 	readonly env?: NodeJS.ProcessEnv;
 	/**
+	 * Test seam for Apple Terminal's private Pi-native Shift probe. Production
+	 * leaves this unset and uses the guarded pi-tui dist resolver below.
+	 */
+	readonly nativeModifierProbe?: NativeModifierProbe;
+	/**
 	 * Schedules a callback to run once, coalescing any number of renders
 	 * requested within the same synchronous turn into a single actual paint
 	 * (see `scheduleRender`). Defaults to `queueMicrotask`. Test-only
@@ -100,6 +106,49 @@ function terminalRows(output: RpcHostTerminalOutput): number {
 	return Math.max(1, Math.floor(output.rows ?? 24));
 }
 
+type NativeModifierKey = "shift" | "command" | "control" | "option";
+type NativeModifierProbe = (key: NativeModifierKey) => boolean;
+interface NativeModifierModule {
+	readonly isNativeModifierPressed: NativeModifierProbe;
+}
+
+const nativeModifierUnavailable: NativeModifierProbe = () => false;
+const requireFromRuntime = createRequire(import.meta.url);
+let cachedPiNativeModifierProbe: NativeModifierProbe | undefined;
+
+function isNativeModifierModule(value: unknown): value is NativeModifierModule {
+	if (!value || typeof value !== "object") return false;
+	if (!("isNativeModifierPressed" in value)) return false;
+	return typeof value.isNativeModifierPressed === "function";
+}
+
+function readNativeModifier(probe: NativeModifierProbe, key: NativeModifierKey): boolean {
+	try {
+		return probe(key) === true;
+	} catch {
+		return false;
+	}
+}
+
+function resolvePiNativeModifierProbe(): NativeModifierProbe {
+	if (cachedPiNativeModifierProbe) return cachedPiNativeModifierProbe;
+	// PI-BUMP NOTE: AGENTS.md's Pi-version-bump re-verify checklist must include
+	// this private pi-tui dist path. Guard it so a future Pi bump that moves or
+	// removes the native probe degrades to plain Enter behavior instead of
+	// crashing the RPC host at boot.
+	try {
+		const nativeModifiersModule = requireFromRuntime("@earendil-works/pi-tui/dist/native-modifiers.js") as unknown;
+		if (isNativeModifierModule(nativeModifiersModule)) {
+			cachedPiNativeModifierProbe = (key) => readNativeModifier(nativeModifiersModule.isNativeModifierPressed, key);
+			return cachedPiNativeModifierProbe;
+		}
+	} catch {
+		// Missing or incompatible private pi-tui internals: keep the host usable.
+	}
+	cachedPiNativeModifierProbe = nativeModifierUnavailable;
+	return cachedPiNativeModifierProbe;
+}
+
 export class RpcHostRuntime {
 	private readonly output: RpcHostTerminalOutput;
 	private readonly input: RpcHostInput | undefined;
@@ -123,6 +172,7 @@ export class RpcHostRuntime {
 	private exitCode: number | undefined;
 	private readonly waiters: Array<(code: number) => void> = [];
 	private readonly isAppleTerminal: boolean;
+	private nativeModifierProbe: NativeModifierProbe | undefined;
 	private readonly handleResize = (): void => this.render();
 	private readonly handleInput = (data: string | Buffer): void => {
 		// With setEncoding('utf8') applied in start(), a real stdin stream's
@@ -134,13 +184,15 @@ export class RpcHostRuntime {
 		// across two Buffers), since toString('utf8') per-chunk cannot
 		// reassemble a split sequence.
 		const text = typeof data === "string" ? data : data.toString("utf8");
-		// Apple Terminal sends a bare \r for both plain Enter and Shift+Enter
-		// (no Kitty protocol / modifyOtherKeys support), so without a shift
-		// probe this is a no-op today -- see normalizeAppleTerminalInput's
-		// doc comment for why isShiftPressed is hardcoded false. Applied
-		// before routing so both the interrupt gates and the editor see the
-		// normalized sequence uniformly with pi's own input path.
-		const normalized = normalizeAppleTerminalInput(text, this.isAppleTerminal, false);
+		// Match pi-tui's Apple Terminal path: Apple Terminal reports both Enter
+		// and Shift+Enter as bare \r, so Pi polls its native modifier helper at
+		// the moment that bare Enter arrives and rewrites only when Shift is down.
+		const isAppleTerminalEnter = this.isAppleTerminal && text === "\r";
+		const normalized = normalizeAppleTerminalInput(
+			text,
+			isAppleTerminalEnter,
+			isAppleTerminalEnter && readNativeModifier(this.nativeModifierProbe ??= resolvePiNativeModifierProbe(), "shift"),
+		);
 		this.inputRouter.handleInput(normalized);
 	};
 
@@ -159,6 +211,7 @@ export class RpcHostRuntime {
 		this.extensionRegions = options.extensionRegions;
 		this.inputHandler = options.inputHandler;
 		this.preEditorInputHandler = options.preEditorInputHandler;
+		this.nativeModifierProbe = options.nativeModifierProbe;
 		this.renderScheduler = options.renderScheduler ?? queueMicrotask;
 		this.inputRouter = new SharedInputRouter({
 			openCommandPalette: () => {

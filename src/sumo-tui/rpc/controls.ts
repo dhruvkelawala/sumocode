@@ -1,5 +1,6 @@
 import type { RpcCommand, RpcResponse, RpcSessionState } from "@earendil-works/pi-coding-agent";
 import { responseData, type RpcResponseData } from "./response.js";
+import { filterToEnabled, readEnabledModelPatterns } from "./enabled-models.js";
 import { RpcHostStateStore, type RpcHostChromeState } from "./state.js";
 
 export interface RpcCommandClient {
@@ -80,6 +81,10 @@ export class RpcHostControls {
 			this.availableModelsCache = data.models;
 		}
 		return modelOptionsFrom(this.availableModelsCache, this.stateStore.getSnapshot().modelLabel);
+	}
+
+	public async getEnabledModels(env: NodeJS.ProcessEnv = process.env): Promise<RpcModelOption[]> {
+		return filterToEnabled(await this.getAvailableModels(), readEnabledModelPatterns(env));
 	}
 
 	private invalidateAvailableModelsIfMissing(model: ModelIdentity): void {

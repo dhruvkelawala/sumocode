@@ -49,6 +49,8 @@ class FakeControls {
 		{ provider: "openai", id: "gpt-5", label: "openai/gpt-5", active: false },
 		{ provider: "anthropic", id: "claude-opus-4-8", label: "anthropic/claude-opus-4-8", active: true },
 	];
+	public enabledModels: RpcModelOption[] | undefined;
+
 	public forkMessages = [{ entryId: "entry-1", text: "forkable message text" }];
 	public commands: RpcSlashCommand[] = [];
 
@@ -60,6 +62,11 @@ class FakeControls {
 	public async getAvailableModels(): Promise<RpcModelOption[]> {
 		this.calls.push("getAvailableModels");
 		return this.models;
+	}
+
+	public async getEnabledModels(): Promise<RpcModelOption[]> {
+		this.calls.push("getEnabledModels");
+		return this.enabledModels ?? this.models;
 	}
 
 	public async setModel(provider: string, modelId: string): Promise<Record<string, unknown>> {
@@ -328,10 +335,52 @@ describe("RpcHostActions", () => {
 		expect(overlays.getActiveKind()).toBeUndefined();
 		expect(inlineSelectors.getActiveKind()).toBeUndefined();
 		expect(controls.calls).toEqual([
-			"getAvailableModels",
+			"getEnabledModels",
 			"setModel:openai/gpt-5",
 		]);
 		expect(notifications).toEqual([]);
+	});
+
+	it("populates the bare /model selector from getEnabledModels instead of the full available-model list", async () => {
+		const { actions, controls, inlineSelectors } = setup();
+		controls.models = [
+			{ provider: "disabled", id: "outside-scope", label: "disabled/outside-scope", active: false },
+			{ provider: "anthropic", id: "claude-opus-4-8", label: "anthropic/claude-opus-4-8", active: true },
+			{ provider: "google", id: "gemini-3", label: "google/gemini-3", active: false },
+		];
+		controls.enabledModels = [
+			{ provider: "anthropic", id: "claude-opus-4-8", label: "anthropic/claude-opus-4-8", active: true },
+			{ provider: "google", id: "gemini-3", label: "google/gemini-3", active: false },
+		];
+
+		const model = actions.handleSubmittedText("/model");
+		await flush();
+		expect(inlineSelectors.getActiveKind()).toBe("select");
+
+		inlineSelectors.handleInput(SELECTOR_ENTER);
+		await model;
+
+		expect(controls.calls).toEqual([
+			"getEnabledModels",
+			"setModel:anthropic/claude-opus-4-8",
+		]);
+	});
+
+	it("lets the bare /model selector show the full list when getEnabledModels falls back to the full list", async () => {
+		const { actions, controls, inlineSelectors } = setup();
+		controls.enabledModels = controls.models;
+
+		const model = actions.handleSubmittedText("/model");
+		await flush();
+		expect(inlineSelectors.getActiveKind()).toBe("select");
+
+		inlineSelectors.handleInput(SELECTOR_ENTER);
+		await model;
+
+		expect(controls.calls).toEqual([
+			"getEnabledModels",
+			"setModel:openai/gpt-5",
+		]);
 	});
 
 	it("handles RPC path slash controls for model, thinking, compaction, and settings", async () => {

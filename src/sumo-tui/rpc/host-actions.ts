@@ -545,7 +545,7 @@ export class RpcHostActions {
 	}
 
 	public async openModelSelector(): Promise<void> {
-		const models = await this.controls.getAvailableModels();
+		const models = await this.controls.getEnabledModels();
 		if (models.length === 0) {
 			notify(this.notifications, "no models available", "warning");
 			return;

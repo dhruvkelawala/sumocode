@@ -9,8 +9,8 @@
 //   - SUMOCODE wordmark (letter-spaced or pixel-block, accent)
 //   - quote: "perfection is achieved..." — saint-exupéry
 //   - DIVINE INVOCATION input frame with rotating placeholder
-//   - hint row: AWAITING PROMPT (left) + keybinds (right), constrained to invocation frame width
-//   - version line at bottom (splash only): SUMOCODE V0.3.0 · CATHEDRAL · 160×45 MONOSPACE
+//   - hint row: live model · thinking (left) + keybinds (right), constrained to invocation frame width
+//   - no bottom version line; RPC splash leaves the lower breathing rows blank
 
 import { writeFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
@@ -81,6 +81,9 @@ const PLACEHOLDERS = [
 	`Ask anything... "Show me what changed since yesterday."`,
 ];
 
+const SPLASH_MODEL_ID = "gpt-5.5";
+const SPLASH_THINKING_LEVEL = "high";
+
 // ─── Build splash content rows for given dimensions ─────────────────────
 function buildSplash({ cols, rows: totalRows, placeholderIndex = 0 }) {
 	const lines = [];
@@ -148,22 +151,22 @@ function buildSplash({ cols, rows: totalRows, placeholderIndex = 0 }) {
 
 	// 5. Hint row: constrained to the invocation frame width.
 	// Human review reads this as a pair attached to the frame, not terminal-edge chrome.
-	const left = `╰─ AWAITING PROMPT`;
+	const leftPlain = `╰─ ${SPLASH_MODEL_ID} · ${SPLASH_THINKING_LEVEL}`;
 	const right = `CTRL+/ · COMMANDS`;
+	const leftHTML =
+		`<span class="fg-dim">╰─ </span>` +
+		`<span class="fg-accent">${SPLASH_MODEL_ID}</span>` +
+		`<span class="fg-dim"> · ${SPLASH_THINKING_LEVEL}</span>`;
 	const rightHTML =
 		`<span class="fg-accent">CTRL+/</span>` +
 		`<span class="fg-dim"> · COMMANDS</span>`;
 	const inputFrameLeftPad = Math.floor((cols - innerWidth) / 2);
-	const hintMid = innerWidth - left.length - right.length;
+	const hintMid = innerWidth - leftPlain.length - right.length;
 	const hintRow =
 		rep(" ", inputFrameLeftPad) +
-		`<span class="fg-dim">${left}</span>` +
+		leftHTML +
 		rep(" ", Math.max(1, hintMid)) +
 		rightHTML;
-
-	// 6. Version line: SUMOCODE V0.3.0 · CATHEDRAL · 160 × 45 MONOSPACE
-	const versionText = `SUMOCODE V0.3.0 · CATHEDRAL · ${cols} × ${totalRows} MONOSPACE`;
-	const versionRow = center(`<span class="fg-dim">${versionText}</span>`, cols);
 
 	// ─── compose with spacing ───────────────────────────────────────────
 	const out = [];
@@ -173,10 +176,10 @@ function buildSplash({ cols, rows: totalRows, placeholderIndex = 0 }) {
 	const contentRows =
 		CAT_HTML_LINES.length + // 12
 		2 + WORDMARK_LINES.length + // 5
-		2 + QUOTE_LINES.length + // 3
+		2 + QUOTE_LINES.length + // 2
 		2 + 3 + // input frame
 		1 + 1 + // hint
-		2 + 1; // version
+		2 + 1; // trailing breathing rows; version text row is intentionally blank
 	const topPad = Math.max(2, Math.floor((totalRows - contentRows) / 2));
 	for (let i = 0; i < topPad; i++) out.push(blank);
 
@@ -204,8 +207,8 @@ function buildSplash({ cols, rows: totalRows, placeholderIndex = 0 }) {
 	out.push(blank);
 	out.push(blank);
 
-	// Version line
-	out.push(versionRow);
+	// No version line: leave the lower breathing row blank.
+	out.push(blank);
 
 	// Bottom padding to reach totalRows (or trim if over)
 	while (out.length < totalRows) out.push(blank);
@@ -242,14 +245,14 @@ const variants = [
 		filename: "03-splash.html",
 		title: "Bible · Element 3 · SPLASH (landscape)",
 		label: "element 3 · splash · 160×45 landscape",
-		blurb: "splash renders only when session has zero messages. cat hero (24×14 chafa render placeholder), SUMOCODE wordmark accent, quote dim italic, DIVINE INVOCATION input frame with rotating placeholder, frame-constrained hint row, version line at bottom.",
+		blurb: "splash renders only when session has zero messages. cat hero (24×14 chafa render placeholder), SUMOCODE wordmark accent, quote dim italic, DIVINE INVOCATION input frame with rotating placeholder, and frame footer showing the live model · thinking.",
 		cols: 160, rows: 45, placeholderIndex: 0,
 	},
 	{
 		filename: "03-splash-portrait.html",
 		title: "Bible · Element 3 · SPLASH (portrait)",
 		label: "element 3 · splash · 60×100 portrait",
-		blurb: "portrait variant of splash for Mac mini orientation. same content, narrower DIVINE INVOCATION frame.",
+		blurb: "portrait variant of splash for Mac mini orientation. same content, narrower DIVINE INVOCATION frame, and live model · thinking in the frame footer.",
 		cols: 60, rows: 100, placeholderIndex: 1,
 	},
 ];

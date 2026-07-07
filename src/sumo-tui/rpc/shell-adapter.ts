@@ -2,12 +2,12 @@ import { homedir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { truncateToWidth, visibleWidth, type Component } from "@earendil-works/pi-tui";
 import {
-	INPUT_FRAME_HINT_AWAITING,
 	INPUT_FRAME_LABEL_SPLASH,
 	INPUT_FRAME_PLACEHOLDER,
 	renderInputFrame,
 	renderInputHints,
 } from "../../cathedral/input-frame.js";
+import { splashInvocationHint } from "../../cathedral/input-hints.js";
 import {
 	colorHex,
 	formatCwd,
@@ -645,9 +645,13 @@ function renderActiveHint(state: RpcHostChromeState, width: number, sidebarVisib
 	return `${" ".repeat(pad)}${hint}${" ".repeat(pad)}`;
 }
 
-function renderSplashHint(width: number): string {
+function renderSplashHint(state: RpcHostChromeState, width: number): string {
 	const frameWidth = Math.min(width, SPLASH_INPUT_FRAME_WIDTH);
-	const hint = renderInputHints(frameWidth, { leftHint: INPUT_FRAME_HINT_AWAITING });
+	const modelId = state.modelLabel ? state.modelLabel.split("/").pop()! : "no model";
+	const hint = renderInputHints(frameWidth, {
+		leftHint: splashInvocationHint(modelId, state.thinkingLevel),
+		leftHintStyle: "model-thinking",
+	});
 	return centerAnsi(hint, width);
 }
 
@@ -680,7 +684,7 @@ class RpcHintComponent implements ShellRenderable {
 	public render(width: number): string[] {
 		const extensionRows = this.adapter.renderExtensionBelowEditor(width).filter((row) => stripAnsi(row).trim().length > 0);
 		if (extensionRows.length > 0) return [extensionRows[0]!];
-		if (!this.adapter.isActive()) return [renderSplashHint(width)];
+		if (!this.adapter.isActive()) return [renderSplashHint(this.adapter.getState(), width)];
 		const sidebarVisible = width >= SIDEBAR_MIN_TERMINAL_WIDTH;
 		return [renderActiveHint(this.adapter.getState(), width, sidebarVisible)];
 	}

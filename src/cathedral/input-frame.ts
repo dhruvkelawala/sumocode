@@ -16,7 +16,7 @@
  *   ┌─ DIVINE INVOCATION ───────────────────────────────────────┐
  *   │ > Ask anything... "Refactor the auth flow."  █            │
  *   └───────────────────────────────────────────────────────────┘
- *   ╰─ AWAITING PROMPT                         CTRL+/ · COMMANDS
+ *   ╰─ <model> · <thinking>                  CTRL+/ · COMMANDS
  *
  * Token map (from Stitch CSS variables):
  *   border       → divider  (#5A4D3C)  — dim, not accent
@@ -40,7 +40,6 @@ export const INPUT_FRAME_LABEL_SPLASH = "DIVINE INVOCATION";
 export const INPUT_FRAME_LABEL_ACTIVE = "";
 export const INPUT_FRAME_PLACEHOLDER = 'Ask anything... "Refactor the auth flow."';
 export const INPUT_FRAME_HINT_KEYBINDS = "CTRL+/ · COMMANDS";
-export const INPUT_FRAME_HINT_AWAITING = "╰─ AWAITING PROMPT";
 
 function visibleLength(text: string): number {
 	return text.replace(ANSI_PATTERN, "").length;
@@ -180,8 +179,8 @@ export function renderInputFrame(input: string, width: number, options: InputFra
 
 export type InputHintsOptions = {
 	/**
-	 * Left-side hint. Splash uses `╰─ AWAITING PROMPT`; portrait active state
-	 * uses project/branch context when the sidebar is hidden.
+	 * Left-side hint. Splash uses `╰─ <model> · <thinking>`; portrait active
+	 * state uses project/branch context when the sidebar is hidden.
 	 */
 	leftHint?: string;
 	/** When set, truncate the left hint instead of dropping it at narrow widths. */

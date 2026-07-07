@@ -79,7 +79,7 @@ function modelDisplayName(ctx: ExtensionContext): string {
 	return ctx.model?.id ?? "no model";
 }
 
-function splashInvocationHint(modelId: string, thinkingLevel: ThinkingLevel | undefined): string {
+export function splashInvocationHint(modelId: string, thinkingLevel: string | undefined): string {
 	return `╰─ ${modelId} · ${thinkingLevel ?? "thinking"}`;
 }
 

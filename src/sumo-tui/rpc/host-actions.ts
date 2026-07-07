@@ -317,7 +317,7 @@ function renderHotkeysOverlay(theme: ThemeReader, width: number): string[] {
 function resumeSessionLabel(session: SessionListInfo): string {
 	const when = Number.isNaN(session.modified.getTime()) ? "" : session.modified.toISOString().slice(0, 16).replace("T", " ");
 	const title = session.name?.trim() || session.firstMessage.slice(0, 60);
-	return `${when} — ${title} (${formatInteger(session.messageCount)} msgs)`;
+	return `${when} — ${title} (${formatInteger(session.messageCount)}${session.truncatedScan ? "+" : ""} msgs)`;
 }
 
 interface TreeRow {

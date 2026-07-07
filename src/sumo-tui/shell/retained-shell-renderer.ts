@@ -38,7 +38,8 @@ import { activeThemeColors } from "../../themes/index.js";
 import { withPersistentStyle } from "../render/primitives.js";
 import { CellBuffer, type Rect } from "../render/buffer.js";
 import { composite, dispatchMouseEvent, type CompositeSelectionPass, type HardwareCursor } from "../render/compositor.js";
-import { diffFrames } from "../render/diff.js";
+import { cellRowToAnsi } from "../render/ansi-writer.js";
+import { diffFrames, type FrameDiffPatch } from "../render/diff.js";
 import { logDiagnostic } from "../runtime/diagnostics.js";
 import type { MouseEvent } from "../input/mouse.js";
 import type { ChatPager } from "../widgets/chat-pager.js";
@@ -88,6 +89,8 @@ export class RetainedShellRenderer {
 	private readonly paintHardwareCursorAsSoftware: boolean;
 	private lastFrame: CellBuffer | undefined;
 	private previousFrame: CellBuffer | undefined;
+	private lastOverlayCount = 0;
+	private lastCursor: HardwareCursor | null = null;
 	private readonly headerLeaf: PiComponentLeaf;
 	private readonly topChromeGapSpacer: SumoNode;
 	private readonly resolvePendingMessages: (() => ShellRenderable) | undefined;
@@ -442,6 +445,8 @@ export class RetainedShellRenderer {
 		// Hide the hardware cursor when an overlay (modal/notification) is visible
 		// so the editor's cursor doesn't bleed through the modal's text.
 		const cursor: HardwareCursor | null = overlayCount > 0 ? null : result.hardwareCursor;
+		this.lastOverlayCount = overlayCount;
+		this.lastCursor = cursor;
 		if (cursor && this.paintHardwareCursorAsSoftware) this.paintSoftwareCursor(frame, cursor);
 		// Owned-shell has independently pinned regions (chat, sidebar, input,
 		// footer). Terminal scroll-region optimization moves the whole screen and
@@ -480,6 +485,38 @@ export class RetainedShellRenderer {
 		});
 	}
 
+	public repaintRegion(leaf: "aboveEditor"): void {
+		if (this.disposed) return;
+		if (leaf !== "aboveEditor") return;
+		const cols = Math.max(1, Math.floor(this.dimensions.columns ?? 80));
+		const rows = Math.max(1, Math.floor(this.dimensions.rows ?? 24));
+		const previous = this.previousFrame;
+		if (!previous || !this.frameMatchesViewport(previous, rows, cols) || this.aboveEditorLeaf.parent === undefined) {
+			this.render();
+			return;
+		}
+		if (this.lastOverlayCount > 0 || this.visibleOverlayEntries(cols, rows).length > 0) {
+			this.render();
+			return;
+		}
+
+		const rect = this.clampedNodeRect(this.aboveEditorLeaf, rows, cols);
+		if (!rect || rect.height <= 0 || rect.width <= 0) return;
+
+		const frame = previous.clone();
+		frame.clear(rect);
+		this.aboveEditorLeaf.render(frame, rect);
+		const selectedFrame = this.withSelectionForNarrowRepaint(frame, rect.top, rect.height);
+		if (!selectedFrame) {
+			this.render();
+			return;
+		}
+		const patches = this.diffRowSpan(previous, selectedFrame, rect.top, rect.height);
+		this.terminal.writeFramePatches(patches, this.lastCursor);
+		this.previousFrame = selectedFrame.clone();
+		this.lastFrame = selectedFrame;
+	}
+
 	private paintSoftwareCursor(frame: CellBuffer, cursor: HardwareCursor): void {
 		const { rows, cols } = frame.getDimensions();
 		if (cursor.row < 0 || cursor.row >= rows || cursor.col < 0 || cursor.col >= cols) return;
@@ -503,12 +540,7 @@ export class RetainedShellRenderer {
 	 * stack and paint each visible overlay into the cell buffer.
 	 */
 	private compositeOverlays(frame: CellBuffer, termWidth: number, termHeight: number): number {
-		const stack = this.overlayHost?.overlayStack;
-		if (!stack || stack.length === 0) return 0;
-		const visibleEntries = stack
-			.filter((entry) => this.isOverlayVisible(entry, termWidth, termHeight))
-			.slice()
-			.sort((left, right) => (left.focusOrder ?? 0) - (right.focusOrder ?? 0));
+		const visibleEntries = this.visibleOverlayEntries(termWidth, termHeight);
 		if (visibleEntries.length === 0) return 0;
 
 		for (const entry of visibleEntries) {
@@ -587,6 +619,54 @@ export class RetainedShellRenderer {
 			}
 		}
 		return true;
+	}
+
+	private visibleOverlayEntries(termWidth: number, termHeight: number): ShellOverlayEntry[] {
+		const stack = this.overlayHost?.overlayStack;
+		if (!stack || stack.length === 0) return [];
+		return stack
+			.filter((entry) => this.isOverlayVisible(entry, termWidth, termHeight))
+			.slice()
+			.sort((left, right) => (left.focusOrder ?? 0) - (right.focusOrder ?? 0));
+	}
+
+	private frameMatchesViewport(frame: CellBuffer, rows: number, cols: number): boolean {
+		const dimensions = frame.getDimensions();
+		return dimensions.rows === rows && dimensions.cols === cols;
+	}
+
+	private clampedNodeRect(node: SumoNode, rows: number, cols: number): Rect | undefined {
+		const rect = this.nodeRect(node);
+		const top = Math.max(0, Math.min(rows, rect.top));
+		const left = Math.max(0, Math.min(cols, rect.left));
+		const bottom = Math.max(top, Math.min(rows, rect.top + rect.height));
+		const right = Math.max(left, Math.min(cols, rect.left + rect.width));
+		if (bottom <= top || right <= left) return undefined;
+		return { top, left, width: right - left, height: bottom - top };
+	}
+
+	private withSelectionForNarrowRepaint(frame: CellBuffer, top: number, height: number): CellBuffer | undefined {
+		if (!this.selection) return frame;
+		const selected = frame.clone();
+		this.selection.applySelectionHighlight(selected);
+		const end = top + height;
+		const { rows } = selected.getDimensions();
+		for (let row = 0; row < rows; row += 1) {
+			if (row >= top && row < end) continue;
+			if (!frame.rowEquals(selected, row)) return undefined;
+		}
+		return selected;
+	}
+
+	private diffRowSpan(previous: CellBuffer, next: CellBuffer, top: number, height: number): FrameDiffPatch[] {
+		const patches: FrameDiffPatch[] = [];
+		const { rows } = next.getDimensions();
+		const end = Math.min(rows, top + height);
+		for (let row = Math.max(0, top); row < end; row += 1) {
+			if (previous.rowEquals(next, row)) continue;
+			patches.push({ row, startCol: 0, ansi: cellRowToAnsi(next, row), type: "row" });
+		}
+		return patches;
 	}
 
 	public invalidatePreviousFrame(): void {

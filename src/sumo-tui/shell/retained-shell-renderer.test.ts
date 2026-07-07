@@ -1,5 +1,5 @@
 import { CURSOR_MARKER } from "@earendil-works/pi-tui";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { loadYoga, type Yoga } from "../layout/yoga.js";
 import type { TerminalPatch } from "../runtime/terminal-controller.js";
 import { ChatPager } from "../widgets/chat-pager.js";
@@ -32,6 +32,17 @@ class StaticComponent implements ShellRenderable {
 	public invalidate(): void {}
 	public render(width: number): string[] {
 		return this.rows.map((row) => (row.length >= width ? row.slice(0, width) : row.padEnd(width, " ")));
+	}
+}
+
+class CountingComponent extends StaticComponent {
+	public renderCalls = 0;
+	public override render(width: number): string[] {
+		this.renderCalls += 1;
+		return super.render(width);
+	}
+	public resetRenderCalls(): void {
+		this.renderCalls = 0;
 	}
 }
 
@@ -102,6 +113,34 @@ async function createHarness(
 
 function stripAnsi(text: string): string {
 	return text.replace(/\u001b\[[0-9;]*m/g, "");
+}
+
+type RootYogaNodeForTest = {
+	readonly calculateLayout: (...args: unknown[]) => unknown;
+};
+
+type RendererInternalsForTest = {
+	readonly root: {
+		readonly yogaNode: RootYogaNodeForTest;
+	};
+};
+
+function rootYogaNodeForTest(renderer: RetainedShellRenderer): RootYogaNodeForTest {
+	// Test-only access to the renderer's root Yoga node is the observable seam
+	// for Plan 050's layout-skipping contract.
+	const rendererInternals = renderer as unknown as RendererInternalsForTest;
+	return rendererInternals.root.yogaNode;
+}
+
+function frameRows(renderer: RetainedShellRenderer): string[] {
+	const frame = renderer.getLastFrame();
+	if (!frame) throw new Error("renderer did not produce a frame");
+	const { rows } = frame.getDimensions();
+	return Array.from({ length: rows }, (_, row) => frame.toPlainRow(row));
+}
+
+function rowsContaining(rows: readonly string[], needle: string): number[] {
+	return rows.flatMap((row, index) => (row.includes(needle) ? [index] : []));
 }
 
 describe("RetainedShellRenderer", () => {
@@ -297,6 +336,128 @@ describe("RetainedShellRenderer", () => {
 			expect(terminal.patches[0]?.type).toBe("row");
 
 			renderer.dispose();
+		});
+	});
+
+	describe("above-editor narrow repaint", () => {
+		it("repaints changed above-editor rows without relayout and converges with a full render", async () => {
+			const aboveEditor = new StaticComponent(["", "INDICATOR-A"]);
+			const { terminal, renderer } = await createHarness({ aboveEditorWidgets: () => aboveEditor });
+			const calculateLayout = vi.spyOn(rootYogaNodeForTest(renderer), "calculateLayout");
+			let fresh: Harness | undefined;
+			try {
+				renderer.render();
+				const initialRows = frameRows(renderer);
+				const aboveRows = rowsContaining(initialRows, "INDICATOR-A");
+				expect(aboveRows).toEqual([expect.any(Number)]);
+				const aboveStart = aboveRows[0];
+				if (aboveStart === undefined) throw new Error("above-editor row was not rendered");
+				const aboveEnd = aboveRows.at(-1);
+				if (aboveEnd === undefined) throw new Error("above-editor row was not rendered");
+
+				calculateLayout.mockClear();
+				aboveEditor.rows = ["", "INDICATOR-B"];
+				renderer.repaintRegion("aboveEditor");
+
+				expect(calculateLayout).not.toHaveBeenCalled();
+				expect(terminal.patches).toHaveLength(1);
+				for (const patch of terminal.patches) {
+					expect(patch.type).toBe("row");
+					expect(patch.row).toBeGreaterThanOrEqual(aboveStart);
+					expect(patch.row).toBeLessThanOrEqual(aboveEnd);
+				}
+				expect(stripAnsi(terminal.patches[0]?.ansi ?? "")).toContain("INDICATOR-B");
+
+				const narrowRows = frameRows(renderer);
+				expect(narrowRows.join("\n")).not.toContain("INDICATOR-A");
+				expect(rowsContaining(narrowRows, "INDICATOR-B")).toEqual(aboveRows);
+
+				calculateLayout.mockRestore();
+				renderer.render();
+				fresh = await createHarness({ aboveEditorWidgets: () => new StaticComponent(["", "INDICATOR-B"]) });
+				fresh.renderer.render();
+
+				expect(narrowRows).toEqual(frameRows(fresh.renderer));
+				expect(frameRows(renderer)).toEqual(frameRows(fresh.renderer));
+			} finally {
+				calculateLayout.mockRestore();
+				fresh?.renderer.dispose();
+				renderer.dispose();
+			}
+		});
+
+		it("falls back to a full render when an overlay is visible during repaint", async () => {
+			const aboveEditor = new StaticComponent(["", "INDICATOR-A"]);
+			const { renderer } = await createHarness({
+				aboveEditorWidgets: () => aboveEditor,
+				overlayHost: {
+					overlayStack: [
+						{
+							component: new StaticComponent(["MODAL"]),
+							options: { width: 10, anchor: "center" },
+						},
+					],
+				},
+			});
+			const calculateLayout = vi.spyOn(rootYogaNodeForTest(renderer), "calculateLayout");
+			try {
+				renderer.render();
+				calculateLayout.mockClear();
+
+				aboveEditor.rows = ["", "INDICATOR-B"];
+				renderer.repaintRegion("aboveEditor");
+
+				expect(calculateLayout).toHaveBeenCalledTimes(1);
+				expect(frameRows(renderer).join("\n")).toContain("MODAL");
+				expect(frameRows(renderer).join("\n")).toContain("INDICATOR-B");
+			} finally {
+				calculateLayout.mockRestore();
+				renderer.dispose();
+			}
+		});
+
+		it("uses only the above-editor leaf for ten static indicator repaints, with no relayout or full-root composite", async () => {
+			const topChrome = new CountingComponent(["TOP"]);
+			const aboveEditor = new CountingComponent(["", "STATIC-INDICATOR-0"]);
+			const editor = new CountingComponent(["┌EDITOR┐", "│ >    │", "└EDITOR┘"]);
+			const belowEditor = new CountingComponent(["HINT"]);
+			const footer = new CountingComponent(["FOOTER"]);
+			const { terminal, renderer } = await createHarness({
+				topChromeFallback: () => ({ component: topChrome }),
+				aboveEditorWidgets: () => aboveEditor,
+				editor: () => editor,
+				belowEditorWidgets: () => belowEditor,
+				footer: () => footer,
+			});
+			const calculateLayout = vi.spyOn(rootYogaNodeForTest(renderer), "calculateLayout");
+			try {
+				renderer.render();
+				calculateLayout.mockClear();
+				for (const component of [topChrome, aboveEditor, editor, belowEditor, footer]) {
+					component.resetRenderCalls();
+				}
+
+				for (let tick = 1; tick <= 10; tick += 1) {
+					aboveEditor.rows = ["", `STATIC-INDICATOR-${tick}`];
+					renderer.repaintRegion("aboveEditor");
+				}
+
+				expect(calculateLayout).not.toHaveBeenCalled();
+				// Spying on the imported compositor is not robust after RetainedShellRenderer
+				// captures the ESM binding. A full-root composite would re-render these
+				// sibling leaves; ten narrow repaints leave them untouched.
+				expect(topChrome.renderCalls).toBe(0);
+				expect(editor.renderCalls).toBe(0);
+				expect(belowEditor.renderCalls).toBe(0);
+				expect(footer.renderCalls).toBe(0);
+				expect(aboveEditor.renderCalls).toBe(10);
+				expect(terminal.patches).toHaveLength(1);
+				expect(terminal.patches[0]?.type).toBe("row");
+				expect(stripAnsi(terminal.patches[0]?.ansi ?? "")).toContain("STATIC-INDICATOR-10");
+			} finally {
+				calculateLayout.mockRestore();
+				renderer.dispose();
+			}
 		});
 	});
 

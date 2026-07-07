@@ -70,7 +70,7 @@ describe("SelectionController", () => {
 		expect(buffer.getCell(0, 6).attrs.inverse).toBe(false);
 	});
 
-	describe("selection_highlight diagnostic", () => {
+	describe("selection diagnostics", () => {
 		let tmp: string;
 		let diagFile: string;
 		let previousDiag: string | undefined;
@@ -125,6 +125,25 @@ describe("SelectionController", () => {
 				cellsInverted: 2,
 			});
 			expect(highlight.sampleRows).toEqual([{ row: 0, ranges: [[2, 3]] }]);
+		});
+
+		it("logs selection copy metadata without a plaintext preview", () => {
+			const buffer = bufferWithRow("secret text", 16);
+			const selection = new SelectionController();
+
+			selection.handleMouseEvent({ type: "down", button: 0, row: 0, col: 0, modifiers: { shift: false, alt: false, ctrl: false } }, buffer);
+			selection.handleMouseEvent({ type: "up", button: 0, row: 0, col: 10, modifiers: { shift: false, alt: false, ctrl: false } }, buffer);
+
+			const events = readFileSync(diagFile, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+			const copy = events.find((event) => event.event === "selection_copy_success");
+			expect(copy).toBeDefined();
+			expect(copy.chars).toBeGreaterThan(0);
+			expect(copy).not.toHaveProperty("preview");
+			const finish = events.find((event) => event.event === "selection_finish");
+			expect(finish).toBeDefined();
+			expect(finish.selectedChars).toBeGreaterThan(0);
+			expect(finish).not.toHaveProperty("preview");
+			expect(readFileSync(diagFile, "utf8")).not.toContain("secret text");
 		});
 	});
 

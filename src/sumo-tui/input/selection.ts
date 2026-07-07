@@ -255,7 +255,7 @@ export class SelectionController {
 		if (text.length === 0) return false;
 		const sequence = tryCreateOsc52Sequence(text);
 		if (!sequence.ok) {
-			logDiagnostic("selection_copy_too_large", { chars: text.length, bytes: sequence.bytes, limit: MAX_CLIPBOARD_BYTES, preview: text.slice(0, 80) });
+			logDiagnostic("selection_copy_too_large", { chars: text.length, bytes: sequence.bytes, limit: MAX_CLIPBOARD_BYTES });
 			return false;
 		}
 		this.options.emitClipboard?.(sequence.sequence, text);

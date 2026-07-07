@@ -317,7 +317,8 @@ export class SumoRpcClient {
 			// undefined -> early return, no error), and it unwedges any dialog-style request that
 			// would otherwise block the child forever.
 			this.sendUiResponse(response ?? { type: "extension_ui_response", id: request.id, cancelled: true });
-		} catch {
+		} catch (error) {
+			console.error(`[sumocode-rpc] extension_ui handler failed for method "${request.method}": ${truncateForNotification(toError(error).message)}`);
 			this.sendUiResponse({ type: "extension_ui_response", id: request.id, cancelled: true });
 		}
 	}

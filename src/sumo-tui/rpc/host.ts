@@ -199,7 +199,7 @@ export async function submitInitialPromptFromEnv(env: NodeJS.ProcessEnv, submit:
 
 export interface RpcHostExitDependencies {
 	readonly modals: Pick<ModalLayer, "close">;
-	readonly overlays: Pick<RpcHostOverlayManager, "close">;
+	readonly overlays: Pick<RpcHostOverlayManager, "drain">;
 	/** Closed alongside modals/overlays -- see `RpcHostInterruptDependencies.selector`'s doc comment for why the inline selector needs the same fail-safe treatment. */
 	readonly selector?: Pick<InlineSelectorHost, "close">;
 	readonly stateStore: Pick<RpcHostStateStore, "getSnapshot">;
@@ -217,11 +217,11 @@ export interface RpcHostExitDependencies {
  * Builds the RPC host's `client.onExit` handler as an injectable function of
  * its dependencies, mirroring `createRpcHostInterruptHandler` below: the RPC
  * child is the whole agent, so if it dies outside of a deliberate stop() the
- * host cannot keep functioning. Closing modals/overlays via their normal
- * close() resolves any pending approval/select/input promise the same way an
- * interactive dismiss would (confirm -> false, select/input -> undefined; for
- * the approval overlay this already normalizes to "No"/deny, the correct
- * fail-safe).
+ * host cannot keep functioning. Closing modals via their normal close() path
+ * and draining overlays resolves any pending approval/select/input promise
+ * without promoting queued overlay work during crash teardown; for the
+ * approval overlay this already normalizes to "No"/deny, the correct
+ * fail-safe.
  *
  * Exit code SUMOCODE_RELOAD_EXIT_CODE (100) is a deliberate `/sumo:reload`
  * (src/commands/reload.ts: the RPC child process.exit(100)s itself), not a
@@ -243,7 +243,7 @@ export function createRpcExitHandler(deps: RpcHostExitDependencies): (error: Err
 	return (error: Error): void => {
 		const reloadCode = error instanceof RpcChildExitError && error.code === SUMOCODE_RELOAD_EXIT_CODE ? error.code : undefined;
 		deps.modals.close();
-		deps.overlays.close();
+		deps.overlays.drain();
 		deps.selector?.close();
 		deps.updateRuntimeState({ ...deps.stateStore.getSnapshot(), isStreaming: false, isCompacting: false });
 		if (reloadCode === undefined) {

@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { ChatMessageViewModel } from "../transcript/view-model.js";
 import { SUMOCODE_RELOAD_EXIT_CODE } from "../../commands/reload.js";
 import { RpcChildExitError } from "./client.js";
+import { RpcHostOverlayManager } from "./host-overlays.js";
 import {
 	createLazyChatSink,
 	createModelCycleBackwardHandler,
@@ -167,7 +168,7 @@ describe("RPC host unhandled rejection shutdown", () => {
 function exitDeps(overrides: Partial<RpcHostExitDependencies> = {}): RpcHostExitDependencies {
 	return {
 		modals: { close: vi.fn() },
-		overlays: { close: vi.fn() },
+		overlays: { drain: vi.fn() },
 		stateStore: { getSnapshot: () => ({ isStreaming: true, isCompacting: true }) as never },
 		notifications: { notify: vi.fn() },
 		requestRender: vi.fn(),
@@ -414,9 +415,12 @@ describe("createToolsExpandToggleHandler (app.tools.expand)", () => {
 });
 
 describe("RPC host client-exit shutdown", () => {
-	it("closes modals and overlays, clears streaming state, and notifies with a bounded message", () => {
+	it("closes modals, drains overlays without promotion, clears streaming state, and notifies with a bounded message", async () => {
 		const modals = { close: vi.fn() };
-		const overlays = { close: vi.fn() };
+		const overlays = new RpcHostOverlayManager();
+		const queuedCreate = vi.fn(() => ({ invalidate: () => undefined, render: () => ["queued"] }));
+		const active = overlays.show<string | undefined>("active", () => ({ invalidate: () => undefined, render: () => ["active"] }));
+		const queued = overlays.show<string | undefined>("queued", queuedCreate);
 		const updateRuntimeState = vi.fn();
 		const notifications = { notify: vi.fn() };
 		const handle = createRpcExitHandler(exitDeps({ modals, overlays, updateRuntimeState, notifications }));
@@ -425,7 +429,10 @@ describe("RPC host client-exit shutdown", () => {
 		handle(new Error(`RPC child exited code=1 signal=null. stderr=${hugeStderr}`));
 
 		expect(modals.close).toHaveBeenCalledOnce();
-		expect(overlays.close).toHaveBeenCalledOnce();
+		await expect(active).resolves.toBeUndefined();
+		await expect(queued).resolves.toBeUndefined();
+		expect(queuedCreate).not.toHaveBeenCalled();
+		expect(overlays.getActiveKind()).toBeUndefined();
 		expect(updateRuntimeState).toHaveBeenCalledWith(expect.objectContaining({ isStreaming: false, isCompacting: false }));
 		expect(notifications.notify).toHaveBeenCalledOnce();
 		const [message] = notifications.notify.mock.calls[0] as [string, string, number];

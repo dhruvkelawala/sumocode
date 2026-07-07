@@ -127,7 +127,7 @@ describe("RpcExtensionUiResponder", () => {
 		await expect(inputResponse).resolves.toEqual({ type: "extension_ui_response", id: "input-1", value: "ok" });
 	});
 
-	it("returns the editor prefill verbatim on immediate Enter without touching the host draft", async () => {
+	it("returns the editor multiline prefill verbatim on immediate Enter without touching the host draft", async () => {
 		const modals = new ModalManager();
 		const editorText = new RpcHostEditorBuffer();
 		editorText.setText("user is mid-typing this");
@@ -138,14 +138,14 @@ describe("RpcExtensionUiResponder", () => {
 			id: "editor-prefill",
 			method: "editor",
 			title: "Edit",
-			prefill: "draft",
+			prefill: "a\nb\nc",
 		}));
 
 		// The modal's value must be seeded with the prefill (not just its placeholder), so an
-		// immediate Enter returns the prefill unchanged rather than an empty string.
+		// immediate Enter returns the prefill unchanged rather than an empty string or flattened text.
 		modals.handleInput("enter");
 
-		await expect(editorResponse).resolves.toEqual({ type: "extension_ui_response", id: "editor-prefill", value: "draft" });
+		await expect(editorResponse).resolves.toEqual({ type: "extension_ui_response", id: "editor-prefill", value: "a\nb\nc" });
 		// The host's real chat-draft editor is a separate surface and must never be touched by
 		// the editor() dialog flow.
 		expect(editorText.getText()).toBe("user is mid-typing this");

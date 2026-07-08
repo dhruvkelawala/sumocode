@@ -132,6 +132,12 @@ describe("RpcShellAdapter queued messages banner", () => {
 			const text = Array.from({ length: 30 }, (_value, row) => frame!.toPlainRow(row)).join("\n");
 			expect(text).toContain("first queued prompt");
 			expect(text).toContain("second queued prompt");
+
+			// Banner rows get the Cathedral dim-on-lifted treatment (same as
+			// main's pending-messages painter), not loose unstyled text.
+			const queuedCell = findText(frame!, "first queued prompt");
+			expect(frame!.getCell(queuedCell.row, queuedCell.col).bg?.toLowerCase()).toBe("#3d3024");
+			expect(frame!.getCell(queuedCell.row, queuedCell.col).fg?.toLowerCase()).toBe("#8b7a63");
 		} finally {
 			adapter.dispose();
 		}

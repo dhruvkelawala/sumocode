@@ -25,6 +25,7 @@ import { renderIndicator, shouldInstallWorkingIndicator } from "../../working-in
 import { createSplashTree, defaultSplashSnapshot, type SplashTree } from "../cathedral/splash-tree.js";
 import { loadYoga, type Yoga } from "../layout/yoga.js";
 import type { CellBuffer } from "../render/buffer.js";
+import { withPersistentStyle } from "../render/primitives.js";
 import type { ShellOverlayEntry, ShellRenderable, ShellTerminalSessionOwner, ShellViewport } from "../shell/contracts.js";
 import { RetainedShellRenderer } from "../shell/retained-shell-renderer.js";
 import type { TranscriptControllerChatSink } from "../transcript/controller.js";
@@ -425,12 +426,18 @@ export class RpcShellAdapter {
 	 */
 	public renderQueuedMessages(width: number): string[] {
 		const queued = this.state.queuedMessages;
-		if (!queued || queued.length === 0) return [];
+		if (!queued || queued.length === 0 || width <= 0) return [];
 		const colors = activeThemeColors();
+		const accent = getActiveTheme().tokens.colors.accent;
 		return queued.map((text) => {
 			const single = text.replace(/\s+/g, " ").trim();
-			const line = ` ${colorHex("↳", getActiveTheme().tokens.colors.accent)} ${colorHex(single, colors.foregroundDim)}`;
-			return width > 0 ? truncateToWidth(line, width) : line;
+			const line = truncateToWidth(` ${colorHex("↳", accent)} ${single}`, width);
+			const padded = `${line}${" ".repeat(Math.max(0, width - visibleWidth(line)))}`;
+			// Full-width dim-on-lifted banner row — same Cathedral treatment as
+			// main's pending-messages painter (owned-shell-renderer
+			// paintPendingMessages), so queued prompts read as a distinct layer
+			// between the transcript and the editor instead of loose text.
+			return withPersistentStyle(padded, colors.foregroundDim, colors.surfaceLifted);
 		});
 	}
 

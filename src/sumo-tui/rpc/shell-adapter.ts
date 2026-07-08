@@ -418,6 +418,23 @@ export class RpcShellAdapter {
 	}
 
 	/**
+	 * Render messages queued behind the current turn (steer/follow-up) as
+	 * dim rows above the editor, mirroring main's pending-messages banner.
+	 * Pi's `queue_update` event keeps `state.queuedMessages` truthful, so a
+	 * row disappears exactly when its user message enters the transcript.
+	 */
+	public renderQueuedMessages(width: number): string[] {
+		const queued = this.state.queuedMessages;
+		if (!queued || queued.length === 0) return [];
+		const colors = activeThemeColors();
+		return queued.map((text) => {
+			const single = text.replace(/\s+/g, " ").trim();
+			const line = ` ${colorHex("↳", getActiveTheme().tokens.colors.accent)} ${colorHex(single, colors.foregroundDim)}`;
+			return width > 0 ? truncateToWidth(line, width) : line;
+		});
+	}
+
+	/**
 	 * Starts/stops the wall-clock timer driving `workingIndicatorTick` when
 	 * `sumoState` crosses the idle/busy boundary; a no-op otherwise (e.g. a
 	 * `message_update` delta arriving mid-turn doesn't restart the timer or
@@ -694,11 +711,17 @@ class RpcAboveEditorComponent implements ShellRenderable {
 	public constructor(private readonly adapter: RpcShellAdapter) {}
 	public invalidate(): void {}
 	public render(width: number): string[] {
+		// Queued steer/follow-up messages render above everything else in this
+		// region (visually: bottom of the chat area), including when an
+		// extension region (e.g. approval prompt) is active — a queued message
+		// must never silently vanish from view.
+		const queuedRows = this.adapter.renderQueuedMessages(width);
 		const extensionRows = this.adapter.renderExtensionAboveEditor(width);
-		if (extensionRows.length > 0) return ["", ...extensionRows];
-		if (!this.adapter.isActive()) return [];
+		if (extensionRows.length > 0) return ["", ...queuedRows, ...extensionRows];
+		if (!this.adapter.isActive()) return queuedRows.length > 0 ? ["", ...queuedRows] : [];
 		const indicatorRows = this.adapter.renderWorkingIndicator(width).filter((row) => row.length > 0);
-		return indicatorRows.length > 0 ? ["", ...indicatorRows] : [];
+		const rows = [...queuedRows, ...indicatorRows];
+		return rows.length > 0 ? ["", ...rows] : [];
 	}
 }
 

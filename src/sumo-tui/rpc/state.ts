@@ -22,6 +22,16 @@ export interface RpcHostChromeState {
 	readonly gitBranch?: string;
 	readonly lastEventType?: string;
 	readonly taskPartialCount: number;
+	/**
+	 * Messages queued while the agent is streaming (steer + follow-up), as
+	 * reported by Pi's `queue_update` session event. Pi is the source of
+	 * truth: it emits the full arrays on every enqueue AND on every dequeue
+	 * (a queued message is removed when its user message starts), so the host
+	 * just mirrors the latest snapshot. Rendered as a banner above the editor
+	 * -- without this the RPC host silently swallows queued submits (the
+	 * owned-shell path painted Pi's pending-messages container instead).
+	 */
+	readonly queuedMessages?: readonly string[];
 	readonly contextTokens?: number;
 	readonly contextWindow?: number;
 	readonly costUsd: number;
@@ -51,6 +61,7 @@ export class RpcHostStateStore {
 		hasMessages: false,
 		taskPartialCount: 0,
 		costUsd: 0,
+		queuedMessages: [],
 	};
 
 	public hydrateFromRpcState(rpcState: RpcSessionState, gitBranch = this.state.gitBranch): RpcHostChromeState {
@@ -123,6 +134,20 @@ export class RpcHostStateStore {
 			case "compaction_end":
 				this.state = { ...this.state, isCompacting: false, lastEventType: type };
 				break;
+			case "queue_update": {
+				const { steering, followUp } = event as { steering?: unknown; followUp?: unknown };
+				const queuedMessages = [
+					...(Array.isArray(steering) ? steering : []),
+					...(Array.isArray(followUp) ? followUp : []),
+				].filter((entry): entry is string => typeof entry === "string");
+				this.state = {
+					...this.state,
+					queuedMessages,
+					pendingMessageCount: queuedMessages.length,
+					lastEventType: type,
+				};
+				break;
+			}
 			case "session_info_changed":
 				this.state = { ...this.state, sessionName: (event as { name?: string }).name, lastEventType: type };
 				break;

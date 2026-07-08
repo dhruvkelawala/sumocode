@@ -113,6 +113,56 @@ describe("RpcShellAdapter splash hint", () => {
 	});
 });
 
+describe("RpcShellAdapter queued messages banner", () => {
+	it("renders queued steer/follow-up messages above the editor while streaming", async () => {
+		const adapter = await RpcShellAdapter.create({
+			terminal: { writeFramePatches: () => undefined },
+			viewport: { columns: 100, rows: 30 },
+			initialState: state({
+				isStreaming: true,
+				hasMessages: true,
+				queuedMessages: ["first queued prompt", "second queued prompt"],
+			}),
+			initialTranscript: { messages: [{ id: "m1", role: "user", displayName: "YOU", blocks: [{ type: "markdown", text: "hello" }] }] },
+		});
+		try {
+			adapter.render();
+			const frame = adapter.getLastFrame();
+			expect(frame).toBeDefined();
+			const text = Array.from({ length: 30 }, (_value, row) => frame!.toPlainRow(row)).join("\n");
+			expect(text).toContain("first queued prompt");
+			expect(text).toContain("second queued prompt");
+		} finally {
+			adapter.dispose();
+		}
+	});
+
+	it("clears the banner when a queue_update drains queuedMessages", async () => {
+		const adapter = await RpcShellAdapter.create({
+			terminal: { writeFramePatches: () => undefined },
+			viewport: { columns: 100, rows: 30 },
+			initialState: state({
+				isStreaming: true,
+				hasMessages: true,
+				queuedMessages: ["vanish me"],
+			}),
+			initialTranscript: { messages: [{ id: "m1", role: "user", displayName: "YOU", blocks: [{ type: "markdown", text: "hello" }] }] },
+		});
+		try {
+			adapter.render();
+			let text = Array.from({ length: 30 }, (_value, row) => adapter.getLastFrame()!.toPlainRow(row)).join("\n");
+			expect(text).toContain("vanish me");
+
+			adapter.update({ state: state({ isStreaming: true, hasMessages: true, queuedMessages: [] }) });
+			adapter.render();
+			text = Array.from({ length: 30 }, (_value, row) => adapter.getLastFrame()!.toPlainRow(row)).join("\n");
+			expect(text).not.toContain("vanish me");
+		} finally {
+			adapter.dispose();
+		}
+	});
+});
+
 describe("RpcShellAdapter chat update", () => {
 	it("replaces the pager when no transcriptRevision is supplied (back-compat: no sink wired)", async () => {
 		const adapter = await makeAdapter();

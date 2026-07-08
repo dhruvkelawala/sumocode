@@ -83,6 +83,36 @@ describe("RpcHostStateStore", () => {
 		});
 	});
 
+	it("mirrors queue_update steer/follow-up snapshots into queuedMessages", () => {
+		const store = new RpcHostStateStore();
+
+		const queued = store.handleAgentEvent({
+			type: "queue_update",
+			steering: ["steer me"],
+			followUp: ["then this", "and this"],
+		});
+		expect(queued.queuedMessages).toEqual(["steer me", "then this", "and this"]);
+		expect(queued.pendingMessageCount).toBe(3);
+
+		// Unrelated events must not clear the queue…
+		expect(store.handleAgentEvent({ type: "agent_start" }).queuedMessages).toEqual(["steer me", "then this", "and this"]);
+
+		// …and Pi's next snapshot (after a dequeue) is mirrored verbatim.
+		const drained = store.handleAgentEvent({ type: "queue_update", steering: [], followUp: ["and this"] });
+		expect(drained.queuedMessages).toEqual(["and this"]);
+		expect(drained.pendingMessageCount).toBe(1);
+
+		const empty = store.handleAgentEvent({ type: "queue_update", steering: [], followUp: [] });
+		expect(empty.queuedMessages).toEqual([]);
+		expect(empty.pendingMessageCount).toBe(0);
+	});
+
+	it("ignores malformed queue_update payloads without crashing", () => {
+		const store = new RpcHostStateStore();
+		const state = store.handleAgentEvent({ type: "queue_update", steering: "nope", followUp: [42, "ok"] });
+		expect(state.queuedMessages).toEqual(["ok"]);
+	});
+
 	it("tracks session/thinking updates and task partial counts", () => {
 		const store = new RpcHostStateStore();
 

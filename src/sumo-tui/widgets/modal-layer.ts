@@ -1,4 +1,6 @@
 import { truncateToWidth, visibleWidth, type Component } from "@earendil-works/pi-tui";
+import { renderDivineQuery } from "../../divine-query.js";
+import { fg as scriptoriumFg } from "../../cathedral/scriptorium-chrome.js";
 import { SumoNode } from "../layout/node.js";
 import type { YogaNode } from "../layout/yoga.js";
 import type { CellBuffer, Rect } from "../render/buffer.js";
@@ -103,9 +105,47 @@ export class ModalLayer extends ModalManager {
 		if (!this.getActiveKind()) return [];
 		const frameWidth = Math.max(1, width || this.getTerminalSize().columns);
 		const modalWidth = Math.min(80, frameWidth);
-		// Clamp: RpcOverlayHost probes visibility with render(1); the inner
-		// content width must stay ≥ 1 or the probe sees zero rows and hides
-		// the modal entirely.
+
+		// Bible parity (docs/ui/bible scene-divine-query-overlay): the RPC
+		// child's question tool and slash flows arrive here as generic
+		// select/confirm/input requests — render them in the same Divine Query
+		// language the owned shell used, not a bare debug card.
+		const dialog = this.getActiveDialogSnapshot();
+		if (dialog?.kind === "select" && dialog.options) {
+			return renderDivineQuery(
+				{ title: dialog.title, options: dialog.options, focusedIndex: dialog.selectedIndex },
+				modalWidth,
+			);
+		}
+		if (dialog?.kind === "confirm") {
+			const title = dialog.message ? `${dialog.title}\n\n${dialog.message}` : dialog.title;
+			return renderDivineQuery(
+				{ title, options: ["Yes", "No"], focusedIndex: dialog.selectedIndex },
+				modalWidth,
+			);
+		}
+		if (dialog?.kind === "input") {
+			const colors = activeThemeColors();
+			const shown = dialog.value
+				? scriptoriumFg(`> ${dialog.value}█`, colors.foreground)
+				: scriptoriumFg(`> ${dialog.placeholder ?? ""}█`, colors.foregroundDim);
+			return renderDivineQuery(
+				{ title: dialog.title, options: [], focusedIndex: 0 },
+				modalWidth,
+				{
+					extras: [
+						`     ${shown}`,
+						"",
+						`     ${scriptoriumFg("⏎ submit · ⎋ retreat", colors.foregroundDim)}`,
+						"",
+					],
+				},
+			);
+		}
+
+		// Editor kind (rare) keeps the generic bordered card. Clamp: the
+		// overlay host probes visibility with render(1); the inner content
+		// width must stay ≥ 1 or the probe sees zero rows and hides the modal.
 		const surface = new ModalSurfaceComponent({
 			invalidate: () => undefined,
 			handleInput: (data: string) => this.handleInput(data),

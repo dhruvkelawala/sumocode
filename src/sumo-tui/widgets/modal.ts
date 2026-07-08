@@ -209,6 +209,36 @@ export class ModalManager implements Component {
 		return this.active?.kind;
 	}
 
+	/**
+	 * Read-only projection of the active dialog for themed renderers
+	 * (ModalLayer renders select/confirm/input in the Divine Query language;
+	 * see docs/ui/bible scene-divine-query-overlay).
+	 */
+	public getActiveDialogSnapshot():
+		| {
+			readonly kind: ActiveModal["kind"];
+			readonly title: string;
+			readonly message?: string;
+			readonly options?: readonly string[];
+			readonly selectedIndex: number;
+			readonly value?: string;
+			readonly placeholder?: string;
+		}
+		| undefined {
+		const active = this.active;
+		if (!active) return undefined;
+		switch (active.kind) {
+			case "confirm":
+				return { kind: active.kind, title: active.title, message: active.message, selectedIndex: active.selectedIndex };
+			case "select":
+				return { kind: active.kind, title: active.title, options: active.options.map((option) => option.label), selectedIndex: active.selectedIndex };
+			case "input":
+				return { kind: active.kind, title: active.title, value: active.value, placeholder: active.placeholder, selectedIndex: 0 };
+			default:
+				return { kind: active.kind, title: active.title, value: active.value, selectedIndex: 0 };
+		}
+	}
+
 	public invalidate(): void {}
 
 	public handleInput(data: string): void {
@@ -227,11 +257,20 @@ export class ModalManager implements Component {
 			return;
 		}
 
-		if (keyEq(data, Key.up, Key.left, "up", "left")) {
+		// Divine Query parity: a/b/c… selects an option directly (letters take
+		// priority over j/k nav, exactly like updateDivineQuery).
+		if (this.active.kind === "select" && data.length === 1) {
+			const letterIndex = data.toLowerCase().charCodeAt(0) - 97;
+			if (letterIndex >= 0 && letterIndex < this.active.options.length) {
+				this.finish(this.active.options[letterIndex]?.value);
+				return;
+			}
+		}
+		if (keyEq(data, Key.up, Key.left, "up", "left") || data === "k") {
 			this.moveSelection(-1);
 			return;
 		}
-		if (keyEq(data, Key.down, Key.right, "down", "right")) {
+		if (keyEq(data, Key.down, Key.right, "down", "right") || data === "j" || data === "\t") {
 			this.moveSelection(1);
 			return;
 		}

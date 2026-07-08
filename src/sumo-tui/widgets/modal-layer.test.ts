@@ -19,18 +19,41 @@ class CloseOnEnterComponent implements Component {
 }
 
 describe("ModalLayer", () => {
-	it("renders only the bordered card (no full-frame backdrop) so the UI behind stays visible", () => {
+	it("renders confirm dialogs as a Divine Query panel (no full-frame backdrop)", () => {
 		const layer = new ModalLayer({ getTerminalSize: () => ({ columns: 80, rows: 24 }) });
 		void layer.confirm("APPROVAL", "Continue?");
 		const rows = layer.render(80);
 
-		// Card rows only — positioning belongs to the overlay renderer
+		// Panel rows only — positioning belongs to the overlay renderer
 		// (anchor: center). A 24-row full-frame fill here previously blacked
 		// out the entire terminal behind the modal.
 		expect(rows.length).toBeGreaterThan(2);
 		expect(rows.length).toBeLessThan(24);
-		expect(rows.join("\n")).toContain("APPROVAL");
-		expect(rows.join("\n")).toContain("╭");
+		const text = rows.join("\n");
+		expect(text).toContain("DIVINE QUERY");
+		expect(text).toContain("APPROVAL");
+		expect(text).toContain("Continue?");
+		expect(text).toContain("A) Yes");
+		expect(text).toContain("B) No");
+	});
+
+	it("renders select dialogs in the Divine Query language with lettered options", () => {
+		const layer = new ModalLayer({ getTerminalSize: () => ({ columns: 80, rows: 24 }) });
+		void layer.select("Which treatment do you want?", ["bordered card", "hint line"]);
+		const text = layer.render(80).join("\n");
+
+		expect(text).toContain("DIVINE QUERY");
+		expect(text).toContain("Which treatment do you want?");
+		expect(text).toContain("A) bordered card");
+		expect(text).toContain("B) hint line");
+	});
+
+	it("selects an option directly via its letter (Divine Query parity)", async () => {
+		const layer = new ModalLayer({ getTerminalSize: () => ({ columns: 80, rows: 24 }) });
+		const result = layer.select("PICK", ["alpha", "beta"]);
+
+		layer.handleInput("b");
+		await expect(result).resolves.toBe("beta");
 	});
 
 	it("traps focus until Escape closes the active modal", async () => {

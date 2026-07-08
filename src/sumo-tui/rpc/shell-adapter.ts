@@ -785,11 +785,13 @@ class RpcOverlayHost {
 		if (modal) {
 			entries.push({
 				component: modal,
-				// Centered card, NOT a full-screen surface: ModalLayer renders just
-				// the bordered card and the renderer anchors it, so the transcript
-				// and chrome stay visible behind the modal (the old 100%×100%
-				// entry + full-frame surfaceRecess fill blacked out the entire UI).
-				options: { anchor: "center", width: "70%", maxHeight: "80%" },
+				// Centered card, NOT a full-screen surface: ModalLayer renders the
+				// Divine Query panel (or generic card for editor kind) and the
+				// renderer anchors it, so the transcript and chrome stay visible
+				// behind the modal. Geometry mirrors DIVINE_QUERY_OVERLAY_OPTIONS
+				// (divine-query.ts) so RPC-path dialogs sit exactly where the
+				// owned shell put them.
+				options: { anchor: "center", width: 80, minWidth: 56, maxHeight: "65%" },
 				hidden: !modal.getActiveKind?.(),
 				focusOrder: 30,
 			});

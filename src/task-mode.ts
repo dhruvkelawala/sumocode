@@ -27,13 +27,55 @@ import { appendFileSync, writeFileSync } from "node:fs";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 /**
+ * Marker-file env vars set by the bg_task visible-agent spawn pipeline. They
+ * are a contract between the orchestrator and THIS process only: if they leak
+ * to subprocesses (bash tool commands, integration-test PTY children, nested
+ * pi runs), those descendants write their own lifecycle into OUR marker
+ * files — e.g. a SIGTERM'd test child writes 143 to SUMOCODE_TASK_EXIT_FILE
+ * and the orchestrator falsely declares this agent dead. At install time the
+ * values are captured into a module-level snapshot and deleted from the env
+ * so descendants never see them.
+ */
+const TASK_MARKER_ENV_KEYS = [
+	"SUMOCODE_TASK_RESPONSE_FILE",
+	"SUMOCODE_TASK_EXIT_FILE",
+	"SUMOCODE_TASK_STARTED_FILE",
+	"SUMOCODE_TASK_DIAG_FILE",
+] as const;
+
+let capturedMarkerEnv: NodeJS.ProcessEnv | undefined;
+
+/**
+ * Capture the marker-file env vars into a snapshot and scrub them from the
+ * given env (typically `process.env`). Returns the snapshot. Exposed for
+ * tests; production code calls this once via `installTaskModeAutoExit`.
+ */
+export function captureAndScrubTaskMarkerEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+	const snapshot: NodeJS.ProcessEnv = {};
+	for (const key of TASK_MARKER_ENV_KEYS) {
+		const value = env[key];
+		if (value !== undefined) {
+			snapshot[key] = value;
+			delete env[key];
+		}
+	}
+	capturedMarkerEnv = snapshot;
+	return snapshot;
+}
+
+/** Test seam: forget the captured marker snapshot. */
+export function resetTaskMarkerEnvForTests(): void {
+	capturedMarkerEnv = undefined;
+}
+
+/**
  * Env-gated diagnostic logging. Set `SUMOCODE_TASK_DIAG_FILE=/tmp/xxx.jsonl`
  * to capture every lifecycle event the auto-exit goes through. Used by
  * `scripts/diag-task-auto-exit.mjs` to figure out where the close stalls.
  * No-op when the env var is unset (production default).
  */
 function diagLog(event: string, detail?: Record<string, unknown>): void {
-	const file = process.env.SUMOCODE_TASK_DIAG_FILE;
+	const file = capturedMarkerEnv?.SUMOCODE_TASK_DIAG_FILE ?? process.env.SUMOCODE_TASK_DIAG_FILE;
 	if (!file) return;
 	try {
 		appendFileSync(
@@ -79,7 +121,7 @@ export function extractFinalAssistantText(messages: unknown[]): string {
  * `bg_task log` action returns this file's contents.
  */
 function persistResponse(messages: unknown[]): void {
-	const file = process.env.SUMOCODE_TASK_RESPONSE_FILE;
+	const file = capturedMarkerEnv?.SUMOCODE_TASK_RESPONSE_FILE ?? process.env.SUMOCODE_TASK_RESPONSE_FILE;
 	if (!file) {
 		diagLog("response_skipped", { reason: "no_env" });
 		return;
@@ -162,8 +204,11 @@ export function shouldInstallTaskModeAutoExit(options: TaskModeAutoExitOptions =
 export function installTaskModeAutoExit(pi: ExtensionAPI, options: TaskModeAutoExitOptions = {}): void {
 	const env = options.env ?? process.env;
 	if (isActive(env)) {
-		writeTaskStartedMarker(env);
-		installTaskExitMarker(env);
+		// Capture marker paths, then scrub them from the env so subprocesses
+		// spawned by this agent cannot clobber the orchestrator's marker files.
+		const markers = captureAndScrubTaskMarkerEnv(env);
+		writeTaskStartedMarker(markers);
+		installTaskExitMarker(markers);
 	}
 
 	if (!shouldInstallTaskModeAutoExit(options)) {

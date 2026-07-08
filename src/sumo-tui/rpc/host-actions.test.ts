@@ -407,6 +407,17 @@ describe("RpcHostActions", () => {
 		expect(notifications).toContainEqual({ message: "auto compaction disabled", level: "info" });
 	});
 
+	it("does not swallow filesystem paths as unknown commands (image-only submits)", async () => {
+		const { actions, notifications } = setup();
+
+		// An image-only submit expands to a bare clipboard path — starts with
+		// "/" but is a prompt, not a command attempt. handleSubmittedText must
+		// return false so the caller forwards it to the agent.
+		await expect(actions.handleSubmittedText("/var/folders/ab/pi-clipboard-123.png")).resolves.toBe(false);
+		await expect(actions.handleSubmittedText("/tmp/pi-clipboard-9f.png what is this?")).resolves.toBe(false);
+		expect(notifications).not.toContainEqual(expect.objectContaining({ level: "warning" }));
+	});
+
 	it("opens the in-place selector for bare /thinking (no args) and applies the chosen level", async () => {
 		const { actions, controls, inlineSelectors, notifications } = setup();
 

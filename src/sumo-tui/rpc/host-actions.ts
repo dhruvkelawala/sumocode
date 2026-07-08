@@ -518,6 +518,12 @@ export class RpcHostActions {
 				return true;
 			default:
 				if (command.startsWith("/")) {
+					// Filesystem paths start with "/" too — e.g. an image-only submit
+					// expands to /tmp/pi-clipboard-….png (see EditorImageDraftState).
+					// Only single-segment /command[:sub] shapes are command attempts;
+					// anything with a second slash is a prompt, not an unknown command
+					// to swallow.
+					if (!/^\/[\w:.-]+$/.test(command)) return false;
 					if (await this.childCanExecuteCommand(command)) return false;
 					notify(this.notifications, `unknown command: ${command}`, "warning");
 					return true;

@@ -445,7 +445,10 @@ export class RpcShellAdapter {
 
 		const textAvail = Math.max(1, width - 6); // "│ ↳ " + " │"
 		const rows = queued.map((text) => {
-			const single = truncateToWidth(text.replace(/\s+/g, " ").trim(), textAvail);
+			// Clipboard-image paths are an implementation detail — show a compact
+			// [image] tag instead of the raw /tmp/pi-clipboard-….png path.
+			const display = text.replace(/\S*pi-clipboard-[\w-]+\.(?:png|jpe?g|gif|webp)/gi, "[image]");
+			const single = truncateToWidth(display.replace(/\s+/g, " ").trim(), textAvail);
 			const pad = " ".repeat(Math.max(0, textAvail - visibleWidth(single)));
 			return `${divider(frame.vertical)} ${colorHex("↳", accent)} ${colorHex(single, colors.foregroundDim)}${pad} ${divider(frame.vertical)}`;
 		});

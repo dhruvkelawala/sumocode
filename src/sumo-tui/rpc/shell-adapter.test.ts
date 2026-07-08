@@ -146,6 +146,28 @@ describe("RpcShellAdapter queued messages banner", () => {
 		}
 	});
 
+	it("displays clipboard-image paths as a compact [image] tag", async () => {
+		const adapter = await RpcShellAdapter.create({
+			terminal: { writeFramePatches: () => undefined },
+			viewport: { columns: 100, rows: 30 },
+			initialState: state({
+				isStreaming: true,
+				hasMessages: true,
+				queuedMessages: ["/var/folders/ab/pi-clipboard-9f3a.png", "look at /tmp/pi-clipboard-77.jpeg please"],
+			}),
+			initialTranscript: { messages: [{ id: "m1", role: "user", displayName: "YOU", blocks: [{ type: "markdown", text: "hello" }] }] },
+		});
+		try {
+			adapter.render();
+			const text = Array.from({ length: 30 }, (_value, row) => adapter.getLastFrame()!.toPlainRow(row)).join("\n");
+			expect(text).toContain("↳ [image]");
+			expect(text).toContain("look at [image] please");
+			expect(text).not.toContain("pi-clipboard");
+		} finally {
+			adapter.dispose();
+		}
+	});
+
 	it("clears the banner when a queue_update drains queuedMessages", async () => {
 		const adapter = await RpcShellAdapter.create({
 			terminal: { writeFramePatches: () => undefined },

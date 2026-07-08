@@ -287,6 +287,72 @@ Reported live by Dhruv after the first merge. All reviewer-approved and merged i
 | 059 | [Splash live-model footer + bible](059-splash-live-model-footer-and-bible.md) | DONE (approved) — `advisor/059-splash-live-model-footer-and-bible` `f476412`; RPC splash footer now renders live `╰─ <model> · <thinking>` (was static `AWAITING PROMPT`); bible `03-splash*` regenerated (live-model footer, version line removed); `splash-runtime` visual scenario passes. GOLDEN NOTE: splash-runtime golden promotion is Dhruv's call after reviewing the review pack; active-landscape/portrait-runtime `visual:ci` fail on PRE-EXISTING golden/theme-palette drift (`#1A1511`→`#050308`), unrelated to this change |
 | fix | editor.test fake controls (`getEnabledModels`) | DONE (approved) — `advisor/fix-editor-fake` `db76dce`; cross-plan fixture gap: 052's dispatcher-invariant fake lacked 057's new `getEnabledModels`; full `pnpm test` back to green |
 
+## Startup-perf plans (060–063) — 2026-07-08 performance & startup audit
+
+Written against `0dc25c7` from a focused performance/startup audit of `integrate/track-d`.
+Measured reality at that commit: bash launcher ~50ms → host module import via jiti
+~900–1350ms (~650–900ms of it pure jiti resolver/stat overhead; all 94 files fsCache
+hits; `tryNative: true` measured no better) → Pi RPC child boot ~2200–2800ms
+(extension-independent) → serial hydration round trips → **first frame only after all
+of it** (`runtime.ts:309` emits all four readiness events at one instant). Net: a
+blank terminal for ~3–4s. The committed `docs/perf/startup.md` baseline predates the
+RPC cutover and measures the retired retained runtime.
+
+Design constraint accepted from Dhruv: the early splash must not compromise UI
+fidelity — 061 renders the one child-dependent splash line (`╰─ <model> · <thinking>`)
+optimistically from a host-side last-known cache (plan-041 pattern), byte-identical to
+today's splash in the common case; a dim bare rail only on genuinely cache-less first runs.
+
+```
+060 baseline & phase instrumentation   (first — evidence harness for the rest)
+        │
+        ▼
+061 pre-spawn child + splash-before-hydration + parallel hydration + chrome cache
+        │
+        ▼
+062 esbuild-bundled host entry (jiti stays as dev fallback)   ← rewrites sumo-rpc-host.js after 061
+
+063 Pi child-boot profile spike (independent; read-only; most valuable after 061)
+```
+
+| Plan | Title | Priority | Effort | Depends on | Status |
+|------|-------|----------|--------|------------|--------|
+| 060 | [Startup perf baseline refresh](060-startup-perf-baseline-refresh.md) | P1 | S | — | IN PROGRESS — executor `bg-mrbyfbqj-qtdmsd` in worktree `advisor/060-startup-perf-baseline-refresh` (base `8a08494`) |
+| 061 | [Early first frame + parallel hydration](061-early-first-frame-and-parallel-hydration.md) | P1 | M | 060 | TODO |
+| 062 | [Pre-bundled RPC host entry](062-prebundled-rpc-host-entry.md) | P2 | M | 061 | TODO |
+| 063 | [Pi child boot profile spike](063-pi-child-boot-profile-spike.md) | P2 | S | — (read-only) | TODO |
+
+Dependency notes: 060 first so 061/062 have provable before/after numbers. 061 and 062
+both rewrite `sumo-rpc-host.js` (061 adds the pre-spawn contract 062 must preserve) —
+strict order. 063 changes no code and can run anytime; its outcome is a
+`docs/research/` doc plus an upstream issue **draft** (filing needs Dhruv's approval).
+Expected end state: first paint ~0.4–0.5s (post-062), fully interactive bounded by the
+Pi child boot (~2.3s) which 063 investigates.
+
+## Chat feature plans (064) — 2026-07-08 live smoke session
+
+| Plan | Title | Priority | Effort | Depends on | Status |
+|------|-------|----------|--------|------------|--------|
+| 064 | [Inline images in the retained renderer](064-inline-images-in-retained-renderer.md) | P2 | L | — (coordinate with renderer perf work) | TODO |
+
+Context: the retained CellBuffer renderer strips Kitty/iTerm2 graphics escapes, so
+images can't render inline (verified empirically — blank rows, no APC in patches).
+Tier-1 mitigation is ALREADY LANDED outside this plan: tool-result image blocks map
+into the transcript and `runRpcHost` pins pi-tui image capabilities off so the
+`[Image: …]` fallback chip renders deterministically. Plan 064 is the real feature:
+a post-patch graphics pass with placement tracking and Kitty image lifecycle.
+
+Startup-perf findings considered and rejected (2026-07-08, so nobody re-audits them):
+
+- **jiti fsCache misconfigured / cold**: rejected — verified warm, 94/94 cache hits,
+  transpile ~0.1ms/file; the cost is jiti's resolution machinery, hence 062's bundle.
+- **`tryNative: true` as a cheap win**: rejected — measured ~equal (~905–968ms).
+- **5s `get_session_stats` poll as a perf drag**: rejected — guarded by `statsInFlight`,
+  cheap, post-startup only.
+- **SumoCode extension slows the child**: rejected — child boot measured identical with
+  and without `-e src/extension.ts`; the cost is Pi itself (→ 063).
+- **Streaming/resume pipeline perf**: already handled (plans 047/048, DONE).
+
 ### Audit findings not planned (2026-07-07, for the record)
 
 - README/AGENTS/DEV_LOOP stale patch-story mentions + knip entrypoint gaps:

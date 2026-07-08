@@ -307,6 +307,21 @@ describe("structured transcript view model", () => {
 		});
 	});
 
+	it("keeps image parts from tool results as sibling image blocks (Read on a PNG)", () => {
+		const message = chatMessageViewModelFromPiMessage({
+			role: "toolResult",
+			toolCallId: "call-1",
+			toolName: "read",
+			content: [
+				{ type: "text", text: "Read image file [image/png]" },
+				{ type: "image", data: "iVBORw0KGgo=", mimeType: "image/png", filename: "shot.png" },
+			],
+			isError: false,
+		});
+		expect(message?.blocks.some((block) => block.type === "tool")).toBe(true);
+		expect(message?.blocks).toContainEqual({ type: "image", data: "iVBORw0KGgo=", mime: "image/png", filename: "shot.png" });
+	});
+
 	it("maps image content parts instead of dropping them", () => {
 		const message = chatMessageViewModelFromPiMessage({
 			role: "assistant",

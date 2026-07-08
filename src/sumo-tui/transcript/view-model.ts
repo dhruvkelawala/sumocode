@@ -228,6 +228,23 @@ function imageBlockFromRecord(record: Record<string, unknown>): ChatBlock[] {
 	return [{ type: "image", data, mime, filename: firstString(record.filename, record.name, source?.filename) }];
 }
 
+/**
+ * Extract just the image blocks from a content array. Used for tool results
+ * (e.g. Read on a PNG), whose text is folded into the tool pill's `output`
+ * while any image parts would otherwise be dropped on the floor — they
+ * become sibling image blocks so the chat card renders them (inline pixels
+ * where supported, `[Image: …]` chip otherwise).
+ */
+function imageBlocksFromContent(content: unknown): ChatBlock[] {
+	if (!Array.isArray(content)) return [];
+	return content.flatMap((part) => {
+		const record = asRecord(part);
+		if (!record) return [];
+		if (record.type === "image" || record.type === "input_image") return imageBlockFromRecord(record);
+		return [];
+	});
+}
+
 function questionBlockFromRecord(record: Record<string, unknown>): ChatBlock {
 	return {
 		type: "question",
@@ -624,7 +641,7 @@ function blocksFromContentPart(part: unknown): ChatBlock[] {
 		case "toolResult":
 		case "tool_result":
 			if (asString(record.name) === "task") return [taskBlockFromRecord(record, "success")];
-			return [toolBlockFromRecord(record, "success")];
+			return [toolBlockFromRecord(record, "success"), ...imageBlocksFromContent(record.content)];
 		case "skill":
 		case "skill_invocation":
 			return [skillBlockFromRecord(record)];
@@ -657,7 +674,7 @@ function blocksFromMessage(record: Record<string, unknown>): ChatBlock[] {
 	if (record.role === "toolResult") {
 		const toolName = firstString(asString(record.toolName), asString(record.name));
 		if (toolName === "task") return [taskBlockFromRecord(record, "success")];
-		return [toolBlockFromRecord(record, "success")];
+		return [toolBlockFromRecord(record, "success"), ...imageBlocksFromContent(record.content)];
 	}
 	if (record.role === "custom" && typeof record.customType === "string") {
 		if (record.customType === "skill") return [skillBlockFromRecord(asRecord(record.details) ?? record)];

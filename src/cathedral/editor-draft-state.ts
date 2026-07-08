@@ -32,7 +32,10 @@ export class EditorImageDraftState {
 	expandTokensToPaths(text: string): string {
 		let expanded = text;
 		for (const [token, path] of this.images) {
-			expanded = expanded.split(token).join(path);
+			// Quote paths containing whitespace so the agent (and any tool it
+			// forwards the path to) sees an unambiguous boundary.
+			const replacement = /\s/.test(path) ? `"${path}"` : path;
+			expanded = expanded.split(token).join(replacement);
 		}
 		return expanded;
 	}
@@ -55,6 +58,23 @@ export class EditorImageDraftState {
 
 export function isLikelyClipboardImagePath(value: string): boolean {
 	return IMAGE_PATH_PATTERN.test(value.trim());
+}
+
+/**
+ * Normalize a pasted/dropped path candidate: strip surrounding quotes (some
+ * terminals quote dropped files) and unescape backslash-escaped spaces
+ * (macOS terminals escape `Screenshot 2026….png` as `Screenshot\ 2026….png`
+ * when a file is dragged or its path pasted). Returns the real on-disk path.
+ */
+export function normalizePastedImagePath(value: string): string {
+	let candidate = value.trim();
+	if (
+		candidate.length >= 2
+		&& ((candidate.startsWith('"') && candidate.endsWith('"')) || (candidate.startsWith("'") && candidate.endsWith("'")))
+	) {
+		candidate = candidate.slice(1, -1);
+	}
+	return candidate.replace(/\\ /g, " ");
 }
 
 let activeController: ActiveEditorDraftController | undefined;

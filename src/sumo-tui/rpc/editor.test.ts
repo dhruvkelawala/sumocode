@@ -329,6 +329,53 @@ describe("RPC editor controller", () => {
 	});
 });
 
+describe("RPC editor image paste collapse", () => {
+	it("collapses a bracketed-paste image path (escaped spaces) into an [Image N] token and expands it quoted on submit", async () => {
+		const submitted: string[] = [];
+		const controller = new RpcHostEditorController({
+			tui: fakeTui(),
+			theme: fakeEditorTheme(),
+			keybindings: fakeKeybindings(),
+			onSubmit: (text) => {
+				submitted.push(text);
+			},
+		});
+
+		// Terminal paste (Cmd+V) of a dragged screenshot: bracketed paste with
+		// backslash-escaped spaces. Must collapse, not splatter the raw path.
+		controller.editor.handleInput("\x1b[200~/Users/me/Desktop/Screenshot\\ 2026-07-08\\ at\\ 12.10.57.png\x1b[201~");
+		expect(controller.getText()).toBe("[Image 1]");
+
+		// Outrun the raw-paste CR guard (Enter within 50ms of printable input
+		// is treated as a pasted newline, see RAW_PASTE_CR_WINDOW_MS).
+		await new Promise((resolve) => setTimeout(resolve, 60));
+		controller.editor.handleInput("\r");
+		expect(submitted).toEqual(['"/Users/me/Desktop/Screenshot 2026-07-08 at 12.10.57.png"']);
+	});
+
+	it("collapses macOS screencapture temp paths pasted via bracketed paste", async () => {
+		const controller = new RpcHostEditorController({
+			tui: fakeTui(),
+			theme: fakeEditorTheme(),
+			keybindings: fakeKeybindings(),
+		});
+
+		controller.editor.handleInput("\x1b[200~/var/folders/jy/x/T/TemporaryItems/NSIRD_screencaptureui_XgfkPD/Screenshot\\ 2026-07-08\\ at\\ 12.28.42.png\x1b[201~");
+		expect(controller.getText()).toBe("[Image 1]");
+	});
+
+	it("leaves non-path pastes to the normal paste pipeline", async () => {
+		const controller = new RpcHostEditorController({
+			tui: fakeTui(),
+			theme: fakeEditorTheme(),
+			keybindings: fakeKeybindings(),
+		});
+
+		controller.editor.handleInput("\x1b[200~just some pasted text\x1b[201~");
+		expect(controller.getText()).toBe("just some pasted text");
+	});
+});
+
 describe("RPC autocomplete command construction", () => {
 	it("keeps host commands ahead of conflicting RPC commands and includes non-conflicting RPC commands", async () => {
 		const commands = buildRpcAutocompleteCommands([

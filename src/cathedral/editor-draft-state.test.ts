@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { EditorImageDraftState, isLikelyClipboardImagePath } from "./editor-draft-state.js";
+import { EditorImageDraftState, isLikelyClipboardImagePath, normalizePastedImagePath } from "./editor-draft-state.js";
 
 describe("EditorImageDraftState", () => {
 	it("detects Pi clipboard image temp paths", () => {
@@ -19,6 +19,19 @@ describe("EditorImageDraftState", () => {
 		// Non-path words ending in an image extension must not collapse.
 		expect(isLikelyClipboardImagePath("logo.png")).toBe(false);
 		expect(isLikelyClipboardImagePath("/etc/passwd")).toBe(false);
+	});
+
+	it("normalizes terminal paste forms: escaped spaces and surrounding quotes", () => {
+		expect(normalizePastedImagePath("/Users/me/Desktop/Screenshot\\ 2026-07-08\\ at\\ 12.10.57.png")).toBe("/Users/me/Desktop/Screenshot 2026-07-08 at 12.10.57.png");
+		expect(normalizePastedImagePath('"/tmp/with space.png"')).toBe("/tmp/with space.png");
+		expect(normalizePastedImagePath("'/tmp/with space.png'")).toBe("/tmp/with space.png");
+		expect(normalizePastedImagePath("  /tmp/plain.png  ")).toBe("/tmp/plain.png");
+	});
+
+	it("expands tokens for paths with spaces as quoted paths", () => {
+		const state = new EditorImageDraftState();
+		const token = state.addImage("/Users/me/Desktop/Screenshot 2026-07-08 at 12.10.57.png");
+		expect(state.expandTokensToPaths(`see ${token}`)).toBe('see "/Users/me/Desktop/Screenshot 2026-07-08 at 12.10.57.png"');
 	});
 
 	it("allocates readable image tokens and expands them back to paths on submit", () => {

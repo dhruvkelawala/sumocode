@@ -329,6 +329,33 @@ describe("RPC editor controller", () => {
 	});
 });
 
+describe("RPC editor theme cycling", () => {
+	it("fires onThemeCycle for Ctrl+Shift+T (kitty CSI-u) and Alt+T through the real keybindings manager", () => {
+		const cycles: number[] = [];
+		const controller = new RpcHostEditorController({
+			tui: fakeTui(),
+			theme: fakeEditorTheme(),
+			keybindings: createRpcKeybindingsManager({ env: {} }),
+			onThemeCycle: () => {
+				cycles.push(cycles.length + 1);
+			},
+		});
+
+		// Kitty CSI-u encoding of Ctrl+Shift+T: codepoint 116, modifiers 1+shift(1)+ctrl(4)=6.
+		controller.editor.handleInput("\x1b[116;6u");
+		expect(cycles).toHaveLength(1);
+
+		// Legacy fallback for terminals that grab Ctrl+Shift chords: Alt+T.
+		controller.editor.handleInput("\x1bt");
+		expect(cycles).toHaveLength(2);
+
+		// Plain "t" types into the editor, does not cycle.
+		controller.editor.handleInput("t");
+		expect(cycles).toHaveLength(2);
+		expect(controller.getText()).toBe("t");
+	});
+});
+
 describe("RPC editor image paste collapse", () => {
 	it("collapses a bracketed-paste image path (escaped spaces) into an [Image N] token and expands it quoted on submit", async () => {
 		const submitted: string[] = [];

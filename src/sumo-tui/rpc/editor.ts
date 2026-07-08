@@ -78,6 +78,8 @@ export interface RpcHostEditorControllerOptions extends RpcAutocompleteProviderO
 	readonly onThinkingCycle?: () => void;
 	/** `app.tools.expand` (Ctrl+O by default). */
 	readonly onToolsExpandToggle?: () => void;
+	/** `app.theme.cycle` (Shift+Ctrl+T / Alt+T by default). */
+	readonly onThemeCycle?: () => void;
 }
 
 const identity = (text: string): string => text;
@@ -170,6 +172,11 @@ export class RpcHostEditorController implements EditorTextController, KeyTarget 
 		if (options.onModelSelect) this.editor.onAction("app.model.select", options.onModelSelect);
 		if (options.onThinkingCycle) this.editor.onAction("app.thinking.cycle", options.onThinkingCycle);
 		if (options.onToolsExpandToggle) this.editor.onAction("app.tools.expand", options.onToolsExpandToggle);
+		// Cast: `app.theme.cycle` is a SumoCode-custom action, not part of pi's
+		// AppKeybinding union. CustomEditor's action map is string-keyed at
+		// runtime and `matches()` consults OUR merged keybindings table (which
+		// defines the action above), so only the declared signature is narrow.
+		if (options.onThemeCycle) (this.editor.onAction as (action: string, handler: () => void) => void)("app.theme.cycle", options.onThemeCycle);
 		// Ctrl+V → app.clipboard.pasteImage: read the clipboard image to a
 		// pi-clipboard-* temp file and insert its path; CathedralEditor's
 		// insertTextAtCursor collapses it into a compact [Image N] token
@@ -391,6 +398,9 @@ const APP_KEYBINDING_DEFINITIONS: KeybindingDefinitions = {
 	"app.model.select": { defaultKeys: "ctrl+l", description: "Open model selector" },
 	"app.tools.expand": { defaultKeys: "ctrl+o", description: "Toggle tool output" },
 	"app.thinking.toggle": { defaultKeys: "ctrl+t", description: "Toggle thinking blocks" },
+	// alt+t mirrors the classic extension's fallback for terminals that grab
+	// Ctrl+Shift chords; shift+ctrl order matches app.model.cycleBackward.
+	"app.theme.cycle": { defaultKeys: ["shift+ctrl+t", "alt+t"], description: "Cycle SumoCode theme" },
 	"app.session.toggleNamedFilter": { defaultKeys: "ctrl+n", description: "Toggle named session filter" },
 	"app.editor.external": { defaultKeys: "ctrl+g", description: "Open external editor" },
 	"app.message.followUp": { defaultKeys: "alt+enter", description: "Queue follow-up message" },

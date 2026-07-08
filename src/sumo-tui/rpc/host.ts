@@ -684,6 +684,10 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		onModelSelect: () => { void notifyOnError(async () => { await actions?.openModelSelector(); }, notifications); },
 		onThinkingCycle: handleThinkingCycle,
 		onToolsExpandToggle: handleToolsExpandToggle,
+		// app.theme.cycle (Shift+Ctrl+T / Alt+T): host-side — the child
+		// extension's pi.registerShortcut never receives keys in RPC mode.
+		// Same forward-reference pattern as onModelSelect above.
+		onThemeCycle: () => actions?.cycleTheme(),
 	});
 	// In-place selector surface (plan 036): occupies the editor's Yoga slot for
 	// `/model`, `/thinking`, `/sessions`, `/settings`, and `/fork` instead of

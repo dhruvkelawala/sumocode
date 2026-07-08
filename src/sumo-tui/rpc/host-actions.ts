@@ -26,7 +26,8 @@ import {
 	type MemoryEditorSnapshot,
 } from "../../memory-editor.js";
 import { renderThemeCheck, type ThemeBgSlot, type ThemeFgSlot, type ThemeReader } from "../../theme-check.js";
-import { activeThemeColors, getActiveTheme, listThemes, setActiveTheme } from "../../themes/index.js";
+import { activeThemeColors, getActiveTheme, listThemes, nextThemeName, setActiveTheme } from "../../themes/index.js";
+import { saveSumoCodeConfigPatch } from "../../config/sumocode-config.js";
 import { tryCreateOsc52Sequence } from "../input/selection.js";
 import type { EditorTextController } from "../pi-compat/extension-ui-adapter.js";
 import type { ModalManager } from "../widgets/modal.js";
@@ -101,6 +102,13 @@ export interface RpcHostActionsOptions {
 	 * operation is cancelled or throws.
 	 */
 	readonly rehydrateTranscript?: () => Promise<void>;
+	/**
+	 * Persists the chosen theme name to ~/.pi/agent/sumocode.json so the next
+	 * boot's applyStartupTheme resolves it. Injectable so tests never write
+	 * the developer's real config; production defaults to
+	 * saveSumoCodeConfigPatch.
+	 */
+	readonly persistTheme?: (name: string) => { success: boolean; error?: string };
 }
 
 const THINKING_LEVELS: readonly RpcThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh"];
@@ -416,6 +424,7 @@ export class RpcHostActions {
 	private readonly rehydrateTranscript: () => Promise<void>;
 	private readonly writeClipboardSequence: (sequence: string) => boolean;
 	private readonly changelogRoot: string;
+	private readonly persistTheme: (name: string) => { success: boolean; error?: string };
 
 	public constructor(options: RpcHostActionsOptions) {
 		this.controls = options.controls;
@@ -432,6 +441,7 @@ export class RpcHostActions {
 		this.rehydrateTranscript = options.rehydrateTranscript ?? (() => Promise.resolve());
 		this.writeClipboardSequence = options.writeClipboardSequence ?? (() => false);
 		this.changelogRoot = options.changelogRoot ?? process.cwd();
+		this.persistTheme = options.persistTheme ?? ((name) => saveSumoCodeConfigPatch({ themeName: name }));
 	}
 
 	public handleInput(data: string): boolean {
@@ -885,8 +895,25 @@ export class RpcHostActions {
 			notify(this.notifications, result.error, "warning");
 			return;
 		}
+		// Persist so the next boot's applyStartupTheme resolves the same theme
+		// from ~/.pi/agent/sumocode.json — without this, /theme and the theme
+		// selector changed the live palette but reverted on restart.
+		const persisted = this.persistTheme(result.theme.name);
 		this.onRenderRequest();
-		notify(this.notifications, `theme: ${result.theme.name}`, "info");
+		if (persisted.success) {
+			notify(this.notifications, `theme: ${result.theme.name}`, "info");
+		} else {
+			notify(this.notifications, `theme: ${result.theme.name} (not persisted: ${persisted.error})`, "warning");
+		}
+	}
+
+	/**
+	 * Cycle to the next registered theme (host-side Ctrl+Shift+T / Alt+T).
+	 * The child extension's pi.registerShortcut variant never fires in RPC
+	 * mode — the host owns the terminal — so the cycle lives here.
+	 */
+	public cycleTheme(): void {
+		this.setThemeFromText(nextThemeName());
 	}
 
 	private async compact(instructions: string): Promise<void> {

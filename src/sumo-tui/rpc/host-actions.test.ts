@@ -271,6 +271,7 @@ function setup(options: {
 		rehydrateCalls.push(rehydrateCalls.length + 1);
 	};
 	const stateChanges: Array<RpcHostChromeState | undefined> = [];
+	const persistedThemes: string[] = [];
 	const actions = new RpcHostActions({
 		controls: controls as unknown as RpcHostControls,
 		stateStore,
@@ -293,9 +294,14 @@ function setup(options: {
 		rehydrateTranscript,
 		writeClipboardSequence: options.writeClipboardSequence,
 		changelogRoot: options.changelogRoot,
+		// Never write the developer's real ~/.pi/agent/sumocode.json from tests.
+		persistTheme: (name) => {
+			persistedThemes.push(name);
+			return { success: true };
+		},
 	});
 
-	return { actions, controls, modals, overlays, inlineSelectors, notifications, memory, editorText, rehydrateCalls, stateChanges };
+	return { actions, controls, modals, overlays, inlineSelectors, notifications, memory, editorText, rehydrateCalls, stateChanges, persistedThemes };
 }
 
 function rpcCommand(name: string): RpcSlashCommand {
@@ -969,6 +975,33 @@ describe("RpcHostActions", () => {
 				rmSync(dir, { recursive: true, force: true });
 			}
 		});
+	});
+
+	it("persists theme changes and cycles themes host-side (Ctrl+Shift+T path)", async () => {
+		const { actions, notifications, persistedThemes } = setup();
+
+		// /sumo:theme <name> applies AND persists.
+		await expect(actions.handleSubmittedText("/sumo:theme amber-crt")).resolves.toBe(true);
+		expect(getActiveTheme().name).toBe("amber-crt");
+		expect(persistedThemes).toEqual(["amber-crt"]);
+
+		// cycleTheme (the host keybinding handler) advances the registry and
+		// persists the new choice too.
+		const before = getActiveTheme().name;
+		actions.cycleTheme();
+		const after = getActiveTheme().name;
+		expect(after).not.toBe(before);
+		expect(persistedThemes).toEqual(["amber-crt", after]);
+		expect(notifications).toContainEqual({ message: `theme: ${after}`, level: "info" });
+	});
+
+	it("warns when theme persistence fails but still applies the theme", async () => {
+		const { actions, notifications } = setup();
+		(actions as unknown as { persistTheme: (name: string) => { success: boolean; error?: string } }).persistTheme = () => ({ success: false, error: "disk full" });
+
+		await expect(actions.handleSubmittedText("/sumo:theme amber-crt")).resolves.toBe(true);
+		expect(getActiveTheme().name).toBe("amber-crt");
+		expect(notifications).toContainEqual({ message: "theme: amber-crt (not persisted: disk full)", level: "warning" });
 	});
 
 	it("supports direct host memory and theme commands without falling through to Pi prompt text", async () => {

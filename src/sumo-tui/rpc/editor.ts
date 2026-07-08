@@ -17,6 +17,7 @@ import {
 	type TUI,
 } from "@earendil-works/pi-tui";
 import { createCathedralEditor, type CathedralEditor } from "../../cathedral/cathedral-editor.js";
+import { pasteClipboardImageToTempFile } from "./clipboard-paste.js";
 import type { KeyEvent, KeyTarget } from "../input/key-router.js";
 import type { EditorTextController } from "../pi-compat/extension-ui-adapter.js";
 import type { RpcHostControls, RpcModelOption, RpcSlashCommand } from "./controls.js";
@@ -169,6 +170,19 @@ export class RpcHostEditorController implements EditorTextController, KeyTarget 
 		if (options.onModelSelect) this.editor.onAction("app.model.select", options.onModelSelect);
 		if (options.onThinkingCycle) this.editor.onAction("app.thinking.cycle", options.onThinkingCycle);
 		if (options.onToolsExpandToggle) this.editor.onAction("app.tools.expand", options.onToolsExpandToggle);
+		// Ctrl+V → app.clipboard.pasteImage: read the clipboard image to a
+		// pi-clipboard-* temp file and insert its path; CathedralEditor's
+		// insertTextAtCursor collapses it into a compact [Image N] token
+		// (expanded back to the real path on submit). Without this wiring
+		// CustomEditor.handleInput swallows the keybinding as a no-op.
+		this.editor.onPasteImage = () => {
+			void (async () => {
+				const path = await pasteClipboardImageToTempFile();
+				if (!path) return;
+				this.editor.insertTextAtCursor(path);
+				this.tui.requestRender();
+			})();
+		};
 		this.editor.focused = true;
 		this.editor.onChange = () => this.tui.requestRender();
 		this.editor.onSubmit = (text) => {

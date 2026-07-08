@@ -243,9 +243,12 @@ export class ModalManager implements Component {
 
 	public render(width: number): string[] {
 		if (!this.active || width <= 0) return [];
-		const modalWidth = Math.min(width, Math.max(32, Math.floor(width * 0.6)));
-		const left = " ".repeat(Math.max(0, Math.floor((width - modalWidth) / 2)));
-		const line = (text: string) => `${left}${pad(truncate(text, modalWidth), modalWidth)}`;
+		// Use the full width the caller gives us: ModalLayer (and any other
+		// wrapper) already sized the card. Re-shrinking to 60% here compounded
+		// with ModalLayer's own sizing — content ended up ~36% of the frame,
+		// hard-truncating option labels with a phantom inner margin.
+		const modalWidth = Math.max(1, width);
+		const line = (text: string) => pad(truncate(text, modalWidth), modalWidth);
 		const lines: string[] = [
 			line(border(modalWidth)),
 			...wrapText(this.active.title, modalWidth).map(line),

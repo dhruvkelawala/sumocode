@@ -19,15 +19,18 @@ class CloseOnEnterComponent implements Component {
 }
 
 describe("ModalLayer", () => {
-	it("renders a full-screen dim backdrop and centered modal card", () => {
+	it("renders only the bordered card (no full-frame backdrop) so the UI behind stays visible", () => {
 		const layer = new ModalLayer({ getTerminalSize: () => ({ columns: 80, rows: 24 }) });
 		void layer.confirm("APPROVAL", "Continue?");
 		const rows = layer.render(80);
 
-		expect(rows).toHaveLength(24);
+		// Card rows only — positioning belongs to the overlay renderer
+		// (anchor: center). A 24-row full-frame fill here previously blacked
+		// out the entire terminal behind the modal.
+		expect(rows.length).toBeGreaterThan(2);
+		expect(rows.length).toBeLessThan(24);
 		expect(rows.join("\n")).toContain("APPROVAL");
 		expect(rows.join("\n")).toContain("╭");
-		expect(rows[0]).toContain("\u001b[48;2;18;13;10m");
 	});
 
 	it("traps focus until Escape closes the active modal", async () => {

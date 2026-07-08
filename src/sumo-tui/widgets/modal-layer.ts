@@ -42,20 +42,6 @@ function padVisible(text: string, width: number): string {
 	return `${clipped}${" ".repeat(pad)}`;
 }
 
-function centerRows(rows: readonly string[], width: number, height: number): string[] {
-	const blank = `${bg(activeThemeColors().surfaceRecess)}${" ".repeat(width)}${RESET}`;
-	const out = Array.from({ length: height }, () => blank);
-	if (rows.length === 0) return [];
-	const top = Math.max(0, Math.floor((height - rows.length) / 2));
-	for (let index = 0; index < rows.length && top + index < out.length; index += 1) {
-		const row = rows[index] ?? "";
-		const left = Math.max(0, Math.floor((width - visibleWidth(row)) / 2));
-		const right = Math.max(0, width - left - visibleWidth(row));
-		out[top + index] = `${bg(activeThemeColors().surfaceRecess)}${" ".repeat(left)}${row}${" ".repeat(right)}${RESET}`;
-	}
-	return out;
-}
-
 export class ModalSurfaceComponent implements Component {
 	public constructor(private readonly inner: Component & { dispose?(): void }) {}
 	public invalidate(): void {
@@ -98,7 +84,13 @@ export class ModalBackdropNode extends SumoNode {
 	}
 }
 
-/** Full-screen modal manager component with backdrop, centered card, Esc close. */
+/**
+ * Modal manager component rendered as a bordered card. The card is the ONLY
+ * thing returned — positioning is the overlay renderer's job (the RPC host
+ * registers this with `anchor: "center"`), and the UI behind it stays
+ * visible. The previous full-frame `surfaceRecess` fill blacked out the
+ * whole terminal behind the card.
+ */
 export class ModalLayer extends ModalManager {
 	private readonly getTerminalSize: () => TerminalSizeProvider;
 
@@ -109,15 +101,16 @@ export class ModalLayer extends ModalManager {
 
 	public override render(width: number): string[] {
 		if (!this.getActiveKind()) return [];
-		const size = this.getTerminalSize();
-		const frameWidth = Math.max(1, width || size.columns);
-		const frameHeight = Math.max(1, size.rows);
-		const modalWidth = Math.min(80, Math.max(32, Math.floor(frameWidth * 0.6)));
+		const frameWidth = Math.max(1, width || this.getTerminalSize().columns);
+		const modalWidth = Math.min(80, frameWidth);
+		// Clamp: RpcOverlayHost probes visibility with render(1); the inner
+		// content width must stay ≥ 1 or the probe sees zero rows and hides
+		// the modal entirely.
 		const surface = new ModalSurfaceComponent({
 			invalidate: () => undefined,
 			handleInput: (data: string) => this.handleInput(data),
-			render: () => super.render(modalWidth - 2),
+			render: () => super.render(Math.max(1, modalWidth - 2)),
 		});
-		return centerRows(surface.render(modalWidth), frameWidth, frameHeight);
+		return surface.render(modalWidth);
 	}
 }

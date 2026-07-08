@@ -785,7 +785,11 @@ class RpcOverlayHost {
 		if (modal) {
 			entries.push({
 				component: modal,
-				options: { anchor: "top-left", row: 0, col: 0, width: "100%", maxHeight: "100%" },
+				// Centered card, NOT a full-screen surface: ModalLayer renders just
+				// the bordered card and the renderer anchors it, so the transcript
+				// and chrome stay visible behind the modal (the old 100%×100%
+				// entry + full-frame surfaceRecess fill blacked out the entire UI).
+				options: { anchor: "center", width: "70%", maxHeight: "80%" },
 				hidden: !modal.getActiveKind?.(),
 				focusOrder: 30,
 			});

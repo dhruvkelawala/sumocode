@@ -340,13 +340,16 @@ describe("BackgroundTaskManager", () => {
 		});
 
 		// The cmux respawn command embeds the prompt-file PATH, never the prompt text.
+		// cmux spawns argv[0] directly (no shell), so the compound launch line is
+		// wrapped in bash -lc and its inner quotes are '\'' escaped.
 		const respawnArg = openSplit.mock.calls[0]?.[2] as string;
-		expect(respawnArg).toContain("cd '/repo with spaces' && ");
+		expect(respawnArg.startsWith("bash -lc '")).toBe(true);
+		expect(respawnArg).toContain(`cd '\\''/repo with spaces'\\'' && `);
 		expect(respawnArg).toContain("SUMOCODE_TASK_RESPONSE_FILE=");
 		expect(respawnArg).toContain("SUMOCODE_TASK_STARTED_FILE=");
 		expect(respawnArg).toContain("SUMOCODE_TASK_DIAG_FILE=");
-		expect(respawnArg).toContain(`exec sumocode task --model '${DEFAULT_SUMOCODE_AGENT_MODEL}' --thinking '${DEFAULT_SUMOCODE_AGENT_THINKING}' --prompt-file '`);
-		expect(respawnArg).toContain("/prompt.txt'");
+		expect(respawnArg).toContain(`exec sumocode task --model '\\''${DEFAULT_SUMOCODE_AGENT_MODEL}'\\'' --thinking '\\''${DEFAULT_SUMOCODE_AGENT_THINKING}'\\'' --prompt-file '\\''`);
+		expect(respawnArg).toContain("/prompt.txt");
 		expect(task.model).toBe(DEFAULT_SUMOCODE_AGENT_MODEL);
 		expect(task.thinking).toBe(DEFAULT_SUMOCODE_AGENT_THINKING);
 		expect(respawnArg).not.toContain("quotes");
@@ -402,8 +405,8 @@ describe("BackgroundTaskManager", () => {
 		});
 
 		const respawnArg = openSplit.mock.calls[0]?.[2] as string;
-		expect(respawnArg).toContain("--model 'anthropic/claude-sonnet-4-5'");
-		expect(respawnArg).toContain("--thinking 'medium'");
+		expect(respawnArg).toContain(`--model '\\''anthropic/claude-sonnet-4-5'\\''`);
+		expect(respawnArg).toContain(`--thinking '\\''medium'\\''`);
 		expect(task.model).toBe("anthropic/claude-sonnet-4-5");
 		expect(task.thinking).toBe("medium");
 	});
@@ -434,8 +437,8 @@ describe("BackgroundTaskManager", () => {
 		});
 
 		const respawnArg = openSplit.mock.calls[0]?.[2] as string;
-		expect(respawnArg).toContain("--model 'openai/gpt-4o-mini'");
-		expect(respawnArg).toContain("--thinking 'low'");
+		expect(respawnArg).toContain(`--model '\\''openai/gpt-4o-mini'\\''`);
+		expect(respawnArg).toContain(`--thinking '\\''low'\\''`);
 		expect(task.model).toBe("openai/gpt-4o-mini");
 		expect(task.thinking).toBe("low");
 	});
@@ -520,7 +523,7 @@ describe("BackgroundTaskManager", () => {
 		expect(create).toHaveBeenCalledWith({ repoRoot: "/repo", branch: "sumo/review", baseRef: "HEAD", path: "/repo.sumo-worktrees/sumo__review" });
 		expect(task.cwd).toBe("/repo.sumo-worktrees/sumo__review");
 		expect(task.worktree).toEqual({ path: "/repo.sumo-worktrees/sumo__review", branch: "sumo/review", baseRef: "HEAD", repoRoot: "/repo" });
-		expect(openSplit.mock.calls[0]?.[2]).toContain("cd '/repo.sumo-worktrees/sumo__review'");
+		expect(openSplit.mock.calls[0]?.[2]).toContain(`cd '\\''/repo.sumo-worktrees/sumo__review'\\''`);
 		expect(JSON.parse(readFileSync(task.metaFile!, "utf8")).worktree).toEqual(task.worktree);
 	});
 

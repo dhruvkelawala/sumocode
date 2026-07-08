@@ -107,6 +107,11 @@ export function buildVisibleTaskScript(options: VisibleTaskCommandOptions): stri
  *      `openai-codex/gpt-5.5` with `low` thinking, configurable via
  *      `SUMOCODE_BG_AGENT_MODEL` and `SUMOCODE_BG_AGENT_THINKING`.
  *
+ * The returned string is a shell command line, NOT directly spawnable: cmux
+ * respawn-pane does not run commands through a shell, so
+ * buildVisibleTaskCommand wraps this in `bash -c '<...>'` before handing it
+ * to cmux.
+ *
  * The prompt is passed via `--prompt-file <abs path>` so the cmux respawn
  * command stays short and fixed-length regardless of prompt size. Without
  * this, a long prompt would briefly echo as a wall of text in the pane
@@ -156,13 +161,26 @@ export function buildVisibleAgentCommand(
  * Returns a command suitable for cmux respawn-pane --command.
  * Shell tasks use a short run.sh wrapper for logging/exit tracking. Agent
  * tasks launch sumocode directly so the pane is readable.
+ *
+ * IMPORTANT: cmux `respawn-pane --command` does NOT interpret the command
+ * through a shell. It tokenizes the string (respecting quotes) and spawns
+ * argv[0] directly, so shell builtins (`cd`, `exec`), `&&` chains, and
+ * `VAR=x` env prefixes silently fail and the surface closes before anything
+ * runs. Every command returned here must therefore start with a real binary:
+ * shell tasks spawn `bash -l <run.sh>` and agent tasks wrap their compound
+ * launch line in `bash -lc '<...>'`.
+ *
+ * `-l` (login shell) matters too: cmux spawns panes with a minimal PATH that
+ * lacks /opt/homebrew/bin and friends, so a plain `bash -c` cannot find
+ * `sumocode`, `node`, `pnpm`, etc. (exit 127). A login shell sources the
+ * user's profile and restores their real PATH.
  */
 export function buildVisibleTaskCommand(options: VisibleTaskCommandOptions): string {
 	const runner = options.runner ?? "shell";
 	if (runner === "sumocode") {
-		return buildVisibleAgentCommand(options);
+		return ["bash", "-lc", shellEscape(buildVisibleAgentCommand(options))].join(" ");
 	}
-	return ["exec", "bash", shellEscape(options.paths.scriptFile)].join(" ");
+	return ["bash", "-l", shellEscape(options.paths.scriptFile)].join(" ");
 }
 
 export function readExitCodeFromFile(contents: string): number | null {

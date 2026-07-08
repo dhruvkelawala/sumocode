@@ -64,9 +64,33 @@ describe("visible-spawn", () => {
 			taskId: "bg-2",
 		});
 
-		expect(cmd).toBe("exec bash '/tmp/test-bg/bg-2-123/run.sh'");
+		// cmux respawn-pane does not run --command through a shell: argv[0] must
+		// be a real binary (`bash`), not the `exec` builtin. `-l` restores the
+		// user's PATH (cmux panes spawn with a minimal env).
+		expect(cmd).toBe("bash -l '/tmp/test-bg/bg-2-123/run.sh'");
 		expect(cmd).not.toContain("pnpm test");
 		expect(cmd).not.toContain("pipefail");
+	});
+
+	it("buildVisibleTaskCommand wraps agent launches in bash -c for cmux direct spawn", () => {
+		const paths = buildVisibleTaskPaths("bg-8", 321, "/tmp/test-bg");
+		const cmd = buildVisibleTaskCommand({
+			cwd: "/repo with spaces",
+			command: "ignored prompt text",
+			paths,
+			taskId: "bg-8",
+			runner: "sumocode",
+			model: "openai-codex/gpt-5.5",
+			thinking: "low",
+		});
+
+		// The compound launch line (cd && env-prefix exec …) only works inside a
+		// shell; cmux spawns argv[0] directly, so the whole thing must be a
+		// single-quoted bash -c payload.
+		expect(cmd.startsWith("bash -lc '")).toBe(true);
+		expect(cmd).toContain("cd '\\''/repo with spaces'\\''");
+		expect(cmd).toContain("exec sumocode task");
+		expect(cmd.endsWith("'")).toBe(true);
 	});
 
 	it("buildVisibleTaskScript uses bash pipefail for shell tasks", () => {

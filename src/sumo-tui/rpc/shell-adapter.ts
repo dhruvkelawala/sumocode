@@ -20,12 +20,11 @@ import { getCachedMcpRoster } from "../../mcp-config-reader.js";
 import { SIDEBAR_MIN_TERMINAL_WIDTH, sidebarOverlayTargetRows } from "../../sidebar-placement.js";
 import { PLACEHOLDER_MCP, createSidebarPublication, type SidebarSnapshot } from "../../sidebar.js";
 import { createTopChromePublication, type TopChromeSnapshot } from "../../top-chrome.js";
-import { activeThemeColors, getActiveTheme, onThemeChanged, type SumoCodeState } from "../../themes/index.js";
+import { activeThemeChrome, activeThemeColors, getActiveTheme, onThemeChanged, type SumoCodeState } from "../../themes/index.js";
 import { renderIndicator, shouldInstallWorkingIndicator } from "../../working-indicator.js";
 import { createSplashTree, defaultSplashSnapshot, type SplashTree } from "../cathedral/splash-tree.js";
 import { loadYoga, type Yoga } from "../layout/yoga.js";
 import type { CellBuffer } from "../render/buffer.js";
-import { withPersistentStyle } from "../render/primitives.js";
 import type { ShellOverlayEntry, ShellRenderable, ShellTerminalSessionOwner, ShellViewport } from "../shell/contracts.js";
 import { RetainedShellRenderer } from "../shell/retained-shell-renderer.js";
 import type { TranscriptControllerChatSink } from "../transcript/controller.js";
@@ -426,19 +425,32 @@ export class RpcShellAdapter {
 	 */
 	public renderQueuedMessages(width: number): string[] {
 		const queued = this.state.queuedMessages;
-		if (!queued || queued.length === 0 || width <= 0) return [];
+		if (!queued || queued.length === 0 || width < 8) return [];
 		const colors = activeThemeColors();
 		const accent = getActiveTheme().tokens.colors.accent;
-		return queued.map((text) => {
-			const single = text.replace(/\s+/g, " ").trim();
-			const line = truncateToWidth(` ${colorHex("↳", accent)} ${single}`, width);
-			const padded = `${line}${" ".repeat(Math.max(0, width - visibleWidth(line)))}`;
-			// Full-width dim-on-lifted banner row — same Cathedral treatment as
-			// main's pending-messages painter (owned-shell-renderer
-			// paintPendingMessages), so queued prompts read as a distinct layer
-			// between the transcript and the editor instead of loose text.
-			return withPersistentStyle(padded, colors.foregroundDim, colors.surfaceLifted);
+		const frame = activeThemeChrome().frame;
+		const divider = (glyphs: string) => colorHex(glyphs, colors.divider);
+
+		// Bordered card in the same visual language as the USER/SUMO chat
+		// cards (dim divider frame, dim body), so queued prompts read as part
+		// of the conversation surface rather than loose banner rows:
+		//
+		//   ╭ QUEUED (2) ──────────────────────╮
+		//   │ ↳ first queued prompt              │
+		//   ╰──────────────────────────────────╯
+		const label = `QUEUED (${queued.length})`;
+		const topRule = Math.max(0, width - 4 - label.length);
+		const top = `${divider(`${frame.topLeft} `)}${colorHex(label, colors.foregroundDim)}${divider(` ${frame.horizontal.repeat(topRule)}${frame.topRight}`)}`;
+		const bottom = divider(`${frame.bottomLeft}${frame.horizontal.repeat(Math.max(0, width - 2))}${frame.bottomRight}`);
+
+		const textAvail = Math.max(1, width - 6); // "│ ↳ " + " │"
+		const rows = queued.map((text) => {
+			const single = truncateToWidth(text.replace(/\s+/g, " ").trim(), textAvail);
+			const pad = " ".repeat(Math.max(0, textAvail - visibleWidth(single)));
+			return `${divider(frame.vertical)} ${colorHex("↳", accent)} ${colorHex(single, colors.foregroundDim)}${pad} ${divider(frame.vertical)}`;
 		});
+
+		return [top, ...rows, bottom];
 	}
 
 	/**

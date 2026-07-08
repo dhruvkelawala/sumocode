@@ -307,6 +307,33 @@ describe("structured transcript view model", () => {
 		});
 	});
 
+	it("collapses image paths in user-message display to [Image: name] tags", () => {
+		const quoted = chatMessageViewModelFromPiMessage({
+			role: "user",
+			content: 'check this "/Users/me/Desktop/Screenshot 2026-07-08 at 12.10.57.png" please',
+		});
+		expect(quoted?.blocks).toEqual([
+			{ type: "markdown", text: "check this [Image: Screenshot 2026-07-08 at 12.10.57.png] please" },
+		]);
+
+		const bare = chatMessageViewModelFromPiMessage({
+			role: "user",
+			content: "/tmp/pi-clipboard-9f.png what is this?",
+		});
+		expect(bare?.blocks).toEqual([
+			{ type: "markdown", text: "[Image: pi-clipboard-9f.png] what is this?" },
+		]);
+
+		// Non-image user text is untouched, and assistant text is NEVER rewritten.
+		const assistant = chatMessageViewModelFromPiMessage({
+			role: "assistant",
+			content: [{ type: "text", text: "run rm /tmp/pi-clipboard-9f.png now" }],
+		});
+		expect(assistant?.blocks).toEqual([
+			{ type: "markdown", text: "run rm /tmp/pi-clipboard-9f.png now" },
+		]);
+	});
+
 	it("keeps image parts from tool results as sibling image blocks (Read on a PNG)", () => {
 		const message = chatMessageViewModelFromPiMessage({
 			role: "toolResult",

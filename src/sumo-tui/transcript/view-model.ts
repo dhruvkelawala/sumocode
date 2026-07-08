@@ -229,6 +229,24 @@ function imageBlockFromRecord(record: Record<string, unknown>): ChatBlock[] {
 }
 
 /**
+ * Display-only collapse of image file paths in USER message text. The
+ * Cathedral editor expands `[Image N]` tokens into (quoted, when spaced)
+ * real paths on submit; showing those temp paths verbatim in the user card
+ * is noise. Matches quoted paths (`"/…/Screenshot 2026….png"`) and bare
+ * absolute/home paths ending in an image extension, replacing each with
+ * `[Image: <basename>]`. Scoped to user-role display — assistant/tool text
+ * is never rewritten (paths inside code or command output must stay exact).
+ */
+export function collapseImagePathsForDisplay(text: string): string {
+	const pattern = /"((?:\/|~\/)[^"\n]+\.(?:png|jpe?g|gif|webp))"|(?<=^|\s)((?:\/|~\/)[^\s"'\n]+\.(?:png|jpe?g|gif|webp))(?=$|\s)/gim;
+	return text.replace(pattern, (_match, quoted: string | undefined, bare: string | undefined) => {
+		const path = quoted ?? bare ?? "";
+		const basename = path.split("/").pop() ?? path;
+		return `[Image: ${basename}]`;
+	});
+}
+
+/**
  * Extract just the image blocks from a content array. Used for tool results
  * (e.g. Read on a PNG), whose text is folded into the tool pill's `output`
  * while any image parts would otherwise be dropped on the floor — they
@@ -694,6 +712,13 @@ function blocksFromMessage(record: Record<string, unknown>): ChatBlock[] {
 			if (skill.userMessage) blocks.push(...markdownAndCodeBlocksFromText(skill.userMessage));
 			return blocks;
 		}
+		// Display-only: the editor collapses pasted screenshots to [Image N]
+		// but expands them back to (quoted) paths on submit for the agent.
+		// Mirror the collapse in the transcript so the user card shows a
+		// compact tag instead of a wall of temp path. The underlying message
+		// (what the agent and session file contain) is untouched.
+		const display = collapseImagePathsForDisplay(text);
+		if (display !== text) return markdownAndCodeBlocksFromText(display);
 	}
 
 	const blocks = blocksFromContent(record.content);

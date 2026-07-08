@@ -57,7 +57,7 @@ describe("sumocode RPC host Kitty key-release filtering", () => {
 
 		await app.waitForOutput(PI_BOOT_SEQUENCE, 15_000);
 		await app.waitForOutput("DIVINE INVOCATION", 15_000);
-		await app.waitForOutput("AWAITING PROMPT", 15_000);
+		await app.waitForOutput(/CTRL\+\/[\s\S]*COMMANDS/, 15_000);
 
 		typeWordAsPlainPressWithKittyRelease(app, "hello");
 		await app.waitForOutput("hello", 5_000);
@@ -76,7 +76,7 @@ describe("sumocode RPC host Kitty key-release filtering", () => {
 
 		await app.waitForOutput(PI_BOOT_SEQUENCE, 15_000);
 		await app.waitForOutput("DIVINE INVOCATION", 15_000);
-		await app.waitForOutput("AWAITING PROMPT", 15_000);
+		await app.waitForOutput(/CTRL\+\/[\s\S]*COMMANDS/, 15_000);
 
 		// Plain press, then two CSI-u repeat events (event type 2), then a
 		// CSI-u release. Whether the repeats themselves insert additional

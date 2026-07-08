@@ -23,7 +23,7 @@ describe("sumocode RPC host shell integration", () => {
 
 		await app.waitForOutput(PI_BOOT_SEQUENCE, 15_000);
 		await app.waitForOutput("DIVINE INVOCATION", 15_000);
-		await app.waitForOutput("AWAITING PROMPT", 15_000);
+		await app.waitForOutput(/CTRL\+\/[\s\S]*COMMANDS/, 15_000);
 		await delay(250);
 
 		const output = app.getOutput();
@@ -57,7 +57,7 @@ describe("sumocode RPC host shell integration", () => {
 
 		await app.waitForOutput(PI_BOOT_SEQUENCE, 15_000);
 		await app.waitForOutput("DIVINE INVOCATION", 15_000);
-		await app.waitForOutput("AWAITING PROMPT", 15_000);
+		await app.waitForOutput(/CTRL\+\/[\s\S]*COMMANDS/, 15_000);
 		await delay(250);
 
 		const output = app.getOutput();
@@ -77,7 +77,7 @@ describe("sumocode RPC host shell integration", () => {
 
 		await app.waitForOutput(PI_BOOT_SEQUENCE, 15_000);
 		await app.waitForOutput("DIVINE INVOCATION", 15_000);
-		await app.waitForOutput("AWAITING PROMPT", 15_000);
+		await app.waitForOutput(/CTRL\+\/[\s\S]*COMMANDS/, 15_000);
 		app.sendInput("\u001f");
 
 		await app.waitForOutput("host controls", 10_000);

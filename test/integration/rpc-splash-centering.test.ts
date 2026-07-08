@@ -5,6 +5,7 @@ import xterm from "@xterm/headless";
 import { afterEach, describe, expect, it } from "vitest";
 import { createRpcChildFixture } from "./rpc-child-fixture.js";
 import { spawnSumocodePty, type SpawnedPiPty } from "./spawn-pi-pty.js";
+import { INPUT_FRAME_HINT_KEYBINDS } from "../../src/cathedral/input-frame.js";
 
 let app: SpawnedPiPty | undefined;
 
@@ -61,14 +62,14 @@ describe("sumocode RPC splash centering", () => {
 		});
 
 		await app.waitForOutput("DIVINE INVOCATION", 15_000);
-		await app.waitForOutput("AWAITING PROMPT", 15_000);
+		await app.waitForOutput(/CTRL\+\/[\s\S]*COMMANDS/, 15_000);
 		await app.waitForOutput("SUMOCODE V", 5_000);
 
 		const lines = await replayTerminalRows(app.getOutput(), cols, rows);
 		const catRows = rowIndexes(lines, containsCatFaceGlyph);
 		const wordmarkEdgeRows = rowIndexes(lines, (line) => line.includes("█████ █"));
 		const invocationRow = lines.findIndex((line) => line.includes("DIVINE INVOCATION"));
-		const hintRow = lines.findIndex((line) => line.includes("AWAITING PROMPT"));
+		const hintRow = lines.findIndex((line) => line.includes("╰─") && line.includes(INPUT_FRAME_HINT_KEYBINDS));
 		const versionRow = lines.findIndex((line) => line.includes("SUMOCODE V"));
 		const wordmarkTopRow = Math.min(...wordmarkEdgeRows);
 		const wordmarkBottomRow = Math.max(...wordmarkEdgeRows);

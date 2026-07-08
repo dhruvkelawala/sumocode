@@ -60,7 +60,7 @@ describe("sumocode RPC session switching", () => {
 		expect(state.mouseSGRActive).toBe(true);
 		expect(state.cleanupSequenceSeen).toBe(false);
 		expect(finalScreen).toContain("new session");
-		expect(finalScreen).toContain("Fresh Session");
+		expect(finalScreen).not.toContain("Original Session");
 		expect(finalScreen).not.toContain("old session anchor");
 	}, 30_000);
 });

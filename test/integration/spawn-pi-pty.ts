@@ -103,6 +103,11 @@ const SUMO_DEBUG_ENV_KEYS = [
 	"SUMOCODE_REDUCED_MOTION",
 	"SUMOCODE_DEBUG_BRANCH",
 	"SUMOCODE_DEBUG_COMMIT",
+	"SUMOCODE_TASK_MODE",
+	"SUMOCODE_TASK_RESPONSE_FILE",
+	"SUMOCODE_TASK_EXIT_FILE",
+	"SUMOCODE_TASK_STARTED_FILE",
+	"SUMOCODE_TASK_DIAG_FILE",
 ] as const;
 
 export function buildSpawnEnv(parent: NodeJS.ProcessEnv, overrides: NodeJS.ProcessEnv | undefined): NodeJS.ProcessEnv {

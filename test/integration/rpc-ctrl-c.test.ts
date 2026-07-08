@@ -23,7 +23,7 @@ async function bootRpcHost(prefix: string): Promise<SpawnedPiPty> {
 	const spawned = spawnSumocodePty({ env: { PI_CODING_AGENT_DIR: agentDir }, cols: COLS, rows: ROWS });
 	await spawned.waitForOutput(PI_BOOT_SEQUENCE, 15_000);
 	await spawned.waitForOutput("DIVINE INVOCATION", 15_000);
-	await spawned.waitForOutput("AWAITING PROMPT", 15_000);
+	await spawned.waitForOutput(/CTRL\+\/[\s\S]*COMMANDS/, 15_000);
 	return spawned;
 }
 
@@ -39,7 +39,7 @@ async function bootRpcHostWithPiFixture(prefix: string, piBin: string): Promise<
 	});
 	await spawned.waitForOutput(PI_BOOT_SEQUENCE, 15_000);
 	await spawned.waitForOutput("DIVINE INVOCATION", 15_000);
-	await spawned.waitForOutput("AWAITING PROMPT", 15_000);
+	await spawned.waitForOutput(/CTRL\+\/[\s\S]*COMMANDS/, 15_000);
 	return spawned;
 }
 
@@ -51,7 +51,11 @@ describe("sumocode RPC Ctrl-C semantics", () => {
 		await app.waitForOutput("draft-before-clear", 5_000);
 
 		app.sendInput(CTRL_C);
-		await app.waitForOutput("draft cleared", 5_000);
+		await waitForScreen(
+			app,
+			(current) => current.text.includes('Ask anything... "Refactor the auth flow."') && !current.text.includes("draft-before-clear"),
+			{ cols: COLS, rows: ROWS, timeoutMs: 5_000 },
+		);
 
 		app.sendInput("after-ctrl-c\r");
 		// If Ctrl-C had NOT cleared the draft, the editor's text would be the
@@ -93,7 +97,6 @@ describe("sumocode RPC Ctrl-C semantics", () => {
 		await app.waitForOutput("streaming fixture response", 5_000);
 
 		app.sendInput(CTRL_C);
-		await app.waitForOutput("abort requested", 5_000);
 		await app.waitForOutput("aborted by fixture", 5_000);
 
 		app.sendInput(`second prompt after abort${CSI_U_ENTER}`);

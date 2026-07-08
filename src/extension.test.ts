@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import sumocode, {
 	findActiveSumoDevTree,
 	isInstalledPiAgentGitModule,
@@ -10,6 +10,46 @@ import sumocode, {
 } from "./extension.js";
 
 type Handler = (...args: unknown[]) => unknown;
+
+/**
+ * Ambient SumoCode/Pi env vars that change `sumocode(pi)` install behavior.
+ * When this suite runs INSIDE a live SumoCode session (e.g. smoke-testing a
+ * branch from the branch's own build), the session leaks SUMOCODE_LAUNCHER /
+ * SUMOCODE_RPC_CHILD / SUMOCODE_ROOT_DIR etc. into the test process, making
+ * the extension noop or pick the wrong profile and failing install
+ * assertions. Snapshot and scrub them so every test starts from a neutral
+ * environment; tests that need a specific profile set vars explicitly.
+ */
+const AMBIENT_ENV_KEYS = [
+	"SUMOCODE_LAUNCHER",
+	"SUMOCODE_ROOT_DIR",
+	"SUMOCODE_RPC_CHILD",
+	"SUMOCODE_BG_CHILD",
+	"PI_CMUX_CHILD",
+	"SUMOCODE_TASK_MODE",
+	"SUMOCODE_NATIVE_TASK",
+	"SUMOCODE_TASK_RESPONSE_FILE",
+	"SUMOCODE_TASK_EXIT_FILE",
+	"SUMOCODE_TASK_STARTED_FILE",
+	"SUMOCODE_TASK_DIAG_FILE",
+] as const;
+
+let ambientEnvSnapshot: Map<string, string | undefined>;
+
+beforeEach(() => {
+	ambientEnvSnapshot = new Map();
+	for (const key of AMBIENT_ENV_KEYS) {
+		ambientEnvSnapshot.set(key, process.env[key]);
+		delete process.env[key];
+	}
+});
+
+afterEach(() => {
+	for (const [key, value] of ambientEnvSnapshot) {
+		if (value === undefined) delete process.env[key];
+		else process.env[key] = value;
+	}
+});
 
 function buildPiStub() {
 	const handlers = new Map<string, Handler[]>();

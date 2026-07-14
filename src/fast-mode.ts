@@ -14,7 +14,7 @@ import {
 	type OpenAICodexResponsesOptions,
 	type OpenAIResponsesOptions,
 	type SimpleStreamOptions,
-} from "@earendil-works/pi-ai";
+} from "@earendil-works/pi-ai/compat";
 
 const SERVICE_TIER = "priority";
 const SUPPORTED_PROVIDERS = new Set(["openai", "openai-codex"]);

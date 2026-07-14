@@ -27,6 +27,7 @@ import {
 	type BackgroundTask,
 	type BackgroundTaskSnapshot,
 	type BackgroundTaskThinking,
+	buildBackgroundTaskWakeMessage,
 	type SpawnBackgroundTaskOptions,
 	toBackgroundTaskSnapshot,
 } from "./task-types.js";
@@ -989,7 +990,7 @@ export class BackgroundTaskManager {
 			if (task.notifyOnExit && !this.recovering) {
 				const label = task.title ?? task.command;
 				const cmuxHint = task.cmux ? ` (cmux ${task.cmux.surfaceRef})` : "";
-				const message = `background task ${task.id} ${summarizeStatus(task)}: ${label}${cmuxHint}`;
+				const message = buildBackgroundTaskWakeMessage(task.id, summarizeStatus(task), label, cmuxHint);
 				try {
 					this.pi.sendUserMessage(message, { deliverAs: "followUp" });
 				} catch {

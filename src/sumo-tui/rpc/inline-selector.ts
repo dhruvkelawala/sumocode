@@ -134,8 +134,13 @@ export class InlineSelectorComponent implements Component {
 		options: readonly (string | InlineSelectorItem)[],
 		private readonly done: (value: string | undefined) => void,
 		private readonly maxVisible: number = DEFAULT_MAX_VISIBLE,
+		initialValue?: string,
 	) {
 		this.items = normalizeItems(options);
+		if (initialValue !== undefined) {
+			const initialIndex = this.items.findIndex((item) => item.value === initialValue);
+			if (initialIndex >= 0) this.selectedIndex = initialIndex;
+		}
 		this.invalidate();
 	}
 
@@ -294,11 +299,20 @@ export class InlineSelectorHost implements EditorLikeComponent {
 		private readonly onChange: () => void = () => undefined,
 	) {}
 
-	/** Opens an inline selector; resolves with the chosen option, or `undefined` on Esc/cancel. */
-	public select(title: string, options: readonly (string | InlineSelectorItem)[], maxVisible?: number): Promise<string | undefined> {
+	/**
+	 * Opens an inline selector; resolves with the chosen option, or
+	 * `undefined` on Esc/cancel. `opts.initialValue` preselects the item with
+	 * that value (e.g. /fork starts on the LATEST user message, matching pi).
+	 */
+	public select(
+		title: string,
+		options: readonly (string | InlineSelectorItem)[],
+		opts?: number | { maxVisible?: number; initialValue?: string },
+	): Promise<string | undefined> {
+		const normalized = typeof opts === "number" ? { maxVisible: opts } : opts ?? {};
 		return new Promise<string | undefined>((resolve) => {
 			const entry: QueuedSelector = {
-				create: (done) => new InlineSelectorComponent(title, options, done as (value: string | undefined) => void, maxVisible),
+				create: (done) => new InlineSelectorComponent(title, options, done as (value: string | undefined) => void, normalized.maxVisible, normalized.initialValue),
 				resolve: resolve as (value: unknown) => void,
 			};
 			if (this.active) {

@@ -530,7 +530,7 @@ describe("RpcHostActions", () => {
 		expect(rehydrateCalls).toHaveLength(0);
 	});
 
-	it("forks from the selected entry id when fork message summaries collide", async () => {
+	it("forks from the selected entry id when fork message summaries collide, preselecting the latest", async () => {
 		const { actions, controls, inlineSelectors, editorText, rehydrateCalls } = setup();
 		controls.forkMessages = [
 			{ entryId: "entry-a", text: "same visible fork summary" },
@@ -540,12 +540,36 @@ describe("RpcHostActions", () => {
 		const forkPromise = actions.handleSubmittedText("/fork");
 		await flush();
 		expect(inlineSelectors.getActiveKind()).toBe("select");
-		inlineSelectors.handleInput(SELECTOR_DOWN);
+		// pi parity: the LATEST user message is preselected — Enter forks it
+		// directly, and colliding labels still resolve by entryId, not text.
 		inlineSelectors.handleInput(SELECTOR_ENTER);
 		await forkPromise;
 
 		expect(controls.calls).toEqual(["getForkMessages", "fork:entry-b"]);
 		expect(editorText.getText()).toBe("fork from here");
+		expect(rehydrateCalls).toHaveLength(1);
+	});
+
+	it("filters bg-task wake messages out of the fork list and normalizes labels", async () => {
+		const { actions, controls, inlineSelectors, rehydrateCalls } = setup();
+		controls.forkMessages = [
+			{ entryId: "entry-real", text: 'check "/tmp/pi-clipboard-9f.png"\nand this\nmultiline prompt' },
+			{ entryId: "entry-wake", text: "background task bg-abc123 failed: smoke tests (cmux surface:41)" },
+		];
+
+		const forkPromise = actions.handleSubmittedText("/fork");
+		await flush();
+		expect(inlineSelectors.getActiveKind()).toBe("select");
+		const rendered = inlineSelectors.render(100).join("\n");
+		// Synthetic orchestrator wake messages are not forkable nodes.
+		expect(rendered).not.toContain("background task bg-abc123");
+		// Labels are single-line with image paths collapsed, plus N-of-M metadata.
+		expect(rendered).toContain("check [Image: pi-clipboard-9f.png] and this multiline prompt");
+		expect(rendered).toContain("1 of 1");
+
+		inlineSelectors.handleInput(SELECTOR_ENTER);
+		await forkPromise;
+		expect(controls.calls).toEqual(["getForkMessages", "fork:entry-real"]);
 		expect(rehydrateCalls).toHaveLength(1);
 	});
 

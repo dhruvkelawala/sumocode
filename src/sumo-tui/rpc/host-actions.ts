@@ -19,7 +19,9 @@ import {
 	type MemoryFact,
 	type RemnicMemoryClient,
 } from "../../memory.js";
+import { isBackgroundTaskWakeMessage } from "../../background-tasks/task-types.js";
 import { groupFactsByPanel } from "../../memory-categorization.js";
+import { collapseImagePathsForDisplay } from "../transcript/view-model.js";
 import {
 	MemoryEditorComponent,
 	formatMemoryStatus,
@@ -629,17 +631,30 @@ export class RpcHostActions {
 		else if (selected === "Disable auto retry") await this.setAutoRetry(false);
 	}
 
+	/**
+	 * `/fork` — pick a USER message to branch from, mirroring pi's
+	 * interactive UserMessageSelector: the data source is pi's own
+	 * `get_fork_messages` (user prompts only), synthetic bg-task wake
+	 * messages are filtered out (they're user-ROLE but orchestrator-injected,
+	 * not something anyone forks from), labels are single-line with image
+	 * paths collapsed, each row carries `N of M` positional metadata, and the
+	 * LATEST message is preselected — all matching pi's UX.
+	 */
 	public async openForkSelector(): Promise<void> {
-		const messages = await this.controls.getForkMessages();
+		const messages = (await this.controls.getForkMessages())
+			.filter((message) => !isBackgroundTaskWakeMessage(message.text));
 		if (messages.length === 0) {
 			notify(this.notifications, "no forkable messages", "warning");
 			return;
 		}
 		const items: InlineSelectorItem[] = messages.map((message, index) => ({
 			value: message.entryId,
-			label: `${index + 1}. ${message.text.slice(0, 72)}`,
+			label: collapseImagePathsForDisplay(message.text).replace(/\s+/g, " ").trim().slice(0, 72),
+			description: `${index + 1} of ${messages.length}`,
 		}));
-		const selected = await this.inlineSelectors.select("Fork from message", items);
+		const selected = await this.inlineSelectors.select("Fork from message", items, {
+			initialValue: messages[messages.length - 1]?.entryId,
+		});
 		if (!selected) return;
 		const message = messages.find((candidate) => candidate.entryId === selected);
 		if (!message) return;

@@ -464,6 +464,15 @@ export class ChatMessage extends SumoNode {
 	}
 
 	private markBodyRowSelectable(buffer: CellBuffer, row: number, left: number, width: number): void {
+		const nestedCodeRange = this.nestedCodeSelectionRange(buffer, row, left, width);
+		if (nestedCodeRange === null) return;
+		if (nestedCodeRange) {
+			for (let col = nestedCodeRange.startCol; col <= nestedCodeRange.endCol; col += 1) {
+				buffer.setSelectionMeta(row, col, { selectable: true });
+			}
+			return;
+		}
+
 		const startCol = left + 2;
 		const endCol = left + Math.max(1, width - 3);
 		let contentEnd: number | undefined;
@@ -482,6 +491,44 @@ export class ChatMessage extends SumoNode {
 		for (let col = startCol; col <= lastSelectable; col += 1) {
 			buffer.setSelectionMeta(row, col, { selectable: true });
 		}
+	}
+
+	/**
+	 * Recognize rows emitted by `renderCathedralCodeBlock` inside the outer
+	 * message frame. Code-frame rows and the collapsed-lines affordance are UI
+	 * chrome, so they return `null`. Source rows return only the source columns,
+	 * excluding the nested vertical borders and four-cell line-number gutter.
+	 * Other body rows return `undefined` and use normal message selection.
+	 */
+	private nestedCodeSelectionRange(
+		buffer: CellBuffer,
+		row: number,
+		left: number,
+		width: number,
+	): { startCol: number; endCol: number } | null | undefined {
+		const codeStart = left + 2;
+		const codeEnd = left + width - 3;
+		const first = buffer.getCell(row, codeStart).char;
+		const last = buffer.getCell(row, codeEnd).char;
+		if ((first === "╭" && last === "╮") || (first === "╰" && last === "╯")) return null;
+		if (first !== "│" || last !== "│" || buffer.getCell(row, codeStart + 1).char !== " ") return undefined;
+
+		let gutter = "";
+		for (let col = codeStart + 2; col <= codeStart + 5; col += 1) {
+			gutter += buffer.getCell(row, col).char || " ";
+		}
+		const sourceStart = codeStart + 6;
+		if (!/^ {0,2}\d{1,3} $/.test(gutter)) {
+			let chromeText = "";
+			for (let col = sourceStart; col < codeEnd; col += 1) chromeText += buffer.getCell(row, col).char;
+			return chromeText.trimStart().startsWith("… ") && chromeText.includes(" lines collapsed · ") ? null : undefined;
+		}
+
+		let sourceEnd = sourceStart;
+		for (let col = sourceStart; col < codeEnd; col += 1) {
+			if (buffer.getCell(row, col).char.trim().length > 0) sourceEnd = col;
+		}
+		return { startCol: sourceStart, endCol: sourceEnd };
 	}
 
 	/**

@@ -104,6 +104,46 @@ describe("ChatMessage", () => {
 		root.dispose();
 	});
 
+	it("semantic code selection excludes nested frames and line-number gutters", async () => {
+		const yoga = await loadYoga();
+		const root = new SumoNode(yoga.Node.create());
+		root.flexDirection = FLEX_DIRECTION_COLUMN;
+		root.width = 42;
+		root.height = 6;
+		ChatMessage.create(
+			yoga,
+			"sumo",
+			"",
+			root,
+			FIXED_TIME,
+			[{ type: "code", lang: "sh", source: "  alpha\nbeta" }],
+		);
+
+		root.yogaNode.calculateLayout(42, 6, DIRECTION_LTR);
+		const buffer = new CellBuffer(6, 42);
+		composite(root, buffer);
+
+		// Outer chat frame: rows 0/5. Nested code frame: rows 1/4.
+		// The code gutter occupies columns 4..7; source begins at column 8.
+		for (let col = 0; col < 42; col += 1) {
+			expect(buffer.getSelectionMeta(1, col)).toBeUndefined();
+			expect(buffer.getSelectionMeta(4, col)).toBeUndefined();
+		}
+		for (let col = 4; col <= 7; col += 1) {
+			expect(buffer.getSelectionMeta(2, col)).toBeUndefined();
+			expect(buffer.getSelectionMeta(3, col)).toBeUndefined();
+		}
+		expect(buffer.getSelectionMeta(2, 8)).toEqual({ selectable: true });
+		expect(buffer.getSelectionMeta(3, 8)).toEqual({ selectable: true });
+
+		const selection = new SelectionController();
+		selection.handleMouseEvent({ type: "down", button: 0, row: 2, col: 8, modifiers: { shift: false, alt: false, ctrl: false } }, buffer);
+		selection.handleMouseEvent({ type: "drag", button: 0, row: 3, col: 11, modifiers: { shift: false, alt: false, ctrl: false } }, buffer);
+
+		expect(selection.extractSelectedText(buffer)).toBe("  alpha\nbeta");
+		root.dispose();
+	});
+
 	it("semantic chat selection cannot start from the frame and highlights only content", async () => {
 		const yoga = await loadYoga();
 		const root = new SumoNode(yoga.Node.create());

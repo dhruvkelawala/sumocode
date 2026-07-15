@@ -719,7 +719,7 @@ describe("RpcHostActions", () => {
 			return path;
 		}
 
-		it("builds a navigable, indented tree and forks from the chosen node", async () => {
+		it("builds a navigable, indented tree, preselects the last node, and forks from the chosen node", async () => {
 			const dir = mkdtempSync(join(tmpdir(), "sumocode-tree-test-"));
 			try {
 				const sessionFile = writeBranchedFixture(dir);
@@ -729,14 +729,51 @@ describe("RpcHostActions", () => {
 				await flushIO();
 				expect(inlineSelectors.getActiveKind()).toBe("select");
 
-				inlineSelectors.handleInput(SELECTOR_DOWN); // root -> child-a
-				inlineSelectors.handleInput(SELECTOR_DOWN); // child-a -> child-b
+				// Latest node (child-b) is preselected — Enter forks it directly.
 				inlineSelectors.handleInput(SELECTOR_ENTER);
 				await treePromise;
 
 				expect(controls.calls).toEqual(["fork:child-b"]);
 				expect(editorText.getText()).toBe("fork from here");
 				expect(rehydrateCalls).toHaveLength(1);
+			} finally {
+				rmSync(dir, { recursive: true, force: true });
+			}
+		});
+
+		it("hides bookkeeping entries, tool results, textless assistant turns, and wake messages; keeps structural depth flat on linear chains", async () => {
+			const dir = mkdtempSync(join(tmpdir(), "sumocode-tree-filter-test-"));
+			try {
+				const sessionFile = join(dir, "2026-07-02T23-00-00-000Z_noisy.jsonl");
+				writeFileSync(sessionFile, jsonl([
+					{ type: "session", version: 3, id: "noisy", timestamp: "2026-07-02T23:00:00.000Z", cwd: "/repo" },
+					{ type: "message", id: "u1", parentId: null, timestamp: "2026-07-02T23:00:01.000Z", message: { role: "user", content: "real prompt\nwith newline" } },
+					{ type: "message", id: "a1", parentId: "u1", timestamp: "2026-07-02T23:00:02.000Z", message: { role: "assistant", content: [{ type: "toolCall", id: "t1", name: "bash" }] } },
+					{ type: "message", id: "tr1", parentId: "a1", timestamp: "2026-07-02T23:00:03.000Z", message: { role: "toolResult", content: [{ type: "text", text: "tool output noise" }] } },
+					{ type: "model_change", id: "mc1", parentId: "tr1", timestamp: "2026-07-02T23:00:04.000Z" },
+					{ type: "message", id: "a2", parentId: "mc1", timestamp: "2026-07-02T23:00:05.000Z", message: { role: "assistant", content: [{ type: "text", text: "assistant reply" }] } },
+					{ type: "message", id: "wake", parentId: "a2", timestamp: "2026-07-02T23:00:06.000Z", message: { role: "user", content: "background task bg-x1 completed: smoke" } },
+				]));
+				const { actions, inlineSelectors } = setup({ sessionFile });
+
+				const treePromise = actions.handleSubmittedText("/tree");
+				await flushIO();
+				const rendered = inlineSelectors.render(120).join("\n").replace(/\u001b\[[0-9;]*m/g, "");
+
+				expect(rendered).toContain("user: real prompt with newline");
+				expect(rendered).toContain("assistant: assistant reply");
+				expect(rendered).not.toContain("tool output noise");
+				expect(rendered).not.toContain("model_change");
+				expect(rendered).not.toContain("background task bg-x1");
+				// Linear chain: no runaway indentation — both visible rows start at
+				// the SAME column (panel padding is uniform; depth adds none here).
+				const lines = rendered.split("\n");
+				const userCol = lines.find((line) => line.includes("user: real prompt"))!.indexOf("user: real prompt");
+				const assistantCol = lines.find((line) => line.includes("assistant: assistant reply"))!.indexOf("assistant: assistant reply");
+				expect(userCol).toBe(assistantCol);
+
+				inlineSelectors.handleInput(SELECTOR_ESCAPE);
+				await treePromise;
 			} finally {
 				rmSync(dir, { recursive: true, force: true });
 			}
@@ -757,8 +794,8 @@ describe("RpcHostActions", () => {
 				const treePromise = actions.handleSubmittedText("/tree");
 				await flushIO();
 				expect(inlineSelectors.getActiveKind()).toBe("select");
-				inlineSelectors.handleInput(SELECTOR_DOWN); // root -> child-a
-				inlineSelectors.handleInput(SELECTOR_DOWN); // child-a -> child-b
+				// Preselected on child-b (latest) — Enter must fork by entryId even
+				// though child-a renders the identical summary text.
 				inlineSelectors.handleInput(SELECTOR_ENTER);
 				await treePromise;
 
@@ -768,7 +805,7 @@ describe("RpcHostActions", () => {
 			}
 		});
 
-		it("labels every row as a fork action, not a fake navigate-to-node", async () => {
+		it("communicates the fork action through the title and indents branch children", async () => {
 			const dir = mkdtempSync(join(tmpdir(), "sumocode-tree-label-test-"));
 			try {
 				const sessionFile = writeBranchedFixture(dir);
@@ -777,7 +814,13 @@ describe("RpcHostActions", () => {
 				const treePromise = actions.handleSubmittedText("/tree");
 				await flushIO();
 				const rendered = inlineSelectors.render(100).join("\n").replace(/\[[0-9;]*m/g, "");
-				expect(rendered).toContain("Fork from:");
+				expect(rendered).toContain("FORK FROM A NODE");
+				// root has two children — the branch replies indent one level (+2
+				// columns) relative to the root row.
+				const lines = rendered.split("\n");
+				const rootCol = lines.find((line) => line.includes("user: root message"))!.indexOf("user: root message");
+				const branchCol = lines.find((line) => line.includes("assistant: first branch reply"))!.indexOf("assistant: first branch reply");
+				expect(branchCol).toBe(rootCol + 2);
 
 				inlineSelectors.handleInput(SELECTOR_ESCAPE);
 				await treePromise;

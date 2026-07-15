@@ -336,17 +336,7 @@ interface TreeRow {
 }
 
 /** Depth-first flatten of `buildSessionTree`'s roots, preserving the oldest-first child order the port already sorts by. */
-function flattenSessionTree(roots: readonly SessionTreeNode[]): TreeRow[] {
-	const rows: TreeRow[] = [];
-	const visit = (node: SessionTreeNode, depth: number): void => {
-		rows.push({ node, depth });
-		for (const child of node.children) visit(child, depth + 1);
-	};
-	for (const root of roots) visit(root, 0);
-	return rows;
-}
-
-function entryMessageText(entry: SessionEntryLike): string | undefined {
+function treeEntryRoleAndText(entry: SessionEntryLike): { role: string; text: string } | undefined {
 	const message = entry.message as { role?: unknown; content?: unknown } | undefined;
 	if (!message || typeof message !== "object" || typeof message.role !== "string") return undefined;
 	const content = message.content;
@@ -358,16 +348,59 @@ function entryMessageText(entry: SessionEntryLike): string | undefined {
 				.map((block) => block.text)
 				.join(" ")
 			: "";
-	return text ? `${message.role}: ${text}` : undefined;
+	return text ? { role: message.role, text } : undefined;
 }
 
-/** One-line summary for a tree row: label bookmark if present, else the message text, else the entry type. */
+/**
+ * Default tree visibility, mirroring pi's tree-selector default mode: only
+ * conversation-spine entries appear — user prompts (minus orchestrator
+ * bg-task wake messages, same rule as /fork) and assistant replies that have
+ * actual text (assistant messages that are pure tool-call envelopes are
+ * hidden). Settings/bookkeeping entries (label, custom, model_change,
+ * thinking_level_change, session_info), tool results, and bash executions
+ * never render as nodes. Labeled bookmarks are always shown regardless.
+ */
+function isTreeNodeVisible(node: SessionTreeNode): boolean {
+	if (node.label) return true;
+	if (node.entry.type !== "message") return false;
+	const extracted = treeEntryRoleAndText(node.entry);
+	if (!extracted) return false;
+	if (extracted.role === "user") return !isBackgroundTaskWakeMessage(extracted.text);
+	return extracted.role === "assistant";
+}
+
+/**
+ * Flattens the tree into visible rows with STRUCTURAL depth: indentation
+ * increases only at real fork points (a node with multiple children), not
+ * per chain link — session entries chain parent→child linearly, so per-link
+ * depth pushed labels off-screen within ~40 entries. A linear session is a
+ * flat list; each branch adds one indent level.
+ */
+function flattenSessionTree(roots: readonly SessionTreeNode[]): TreeRow[] {
+	const rows: TreeRow[] = [];
+	const visit = (node: SessionTreeNode, depth: number): void => {
+		if (isTreeNodeVisible(node)) rows.push({ node, depth });
+		const childDepth = node.children.length > 1 ? depth + 1 : depth;
+		for (const child of node.children) visit(child, childDepth);
+	};
+	for (const root of roots) visit(root, 0);
+	return rows;
+}
+
+/** One-line summary for a tree row: label bookmark if present, then `role: text` (image paths collapsed, whitespace normalized). */
 function treeNodeSummary(node: SessionTreeNode): string {
-	const summary = node.label
-		? `[${node.label}] `
-		: "";
-	const body = node.entry.type === "message" ? entryMessageText(node.entry) : undefined;
-	return `${summary}${(body ?? node.entry.type).slice(0, 72)}`;
+	const bookmark = node.label ? `[${node.label}] ` : "";
+	const extracted = node.entry.type === "message" ? treeEntryRoleAndText(node.entry) : undefined;
+	const body = extracted
+		? `${extracted.role}: ${collapseImagePathsForDisplay(extracted.text).replace(/\s+/g, " ").trim()}`
+		: node.entry.type;
+	return `${bookmark}${body}`.slice(0, 72);
+}
+
+function treeRowTimestamp(entry: SessionEntryLike): string {
+	const time = new Date(entry.timestamp);
+	if (Number.isNaN(time.getTime())) return "";
+	return `${String(time.getHours()).padStart(2, "0")}:${String(time.getMinutes()).padStart(2, "0")}`;
 }
 
 class LinesOverlayComponent implements Component {
@@ -732,11 +765,18 @@ export class RpcHostActions {
 			return;
 		}
 		const rows = flattenSessionTree(tree);
+		if (rows.length === 0) {
+			notify(this.notifications, "session has no forkable nodes yet", "warning");
+			return;
+		}
 		const items: InlineSelectorItem[] = rows.map((row) => ({
 			value: row.node.entry.id,
-			label: `${"  ".repeat(row.depth)}Fork from: ${treeNodeSummary(row.node)}`,
+			label: `${"  ".repeat(row.depth)}${treeNodeSummary(row.node)}`,
+			description: treeRowTimestamp(row.node.entry),
 		}));
-		const selected = await this.inlineSelectors.select("Session tree (fork from a node)", items);
+		const selected = await this.inlineSelectors.select("Session tree (fork from a node)", items, {
+			initialValue: rows[rows.length - 1]?.node.entry.id,
+		});
 		if (!selected) return;
 		const row = rows.find((candidate) => candidate.node.entry.id === selected);
 		if (!row) return;

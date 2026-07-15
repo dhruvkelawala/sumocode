@@ -324,15 +324,47 @@ function renderHotkeysOverlay(theme: ThemeReader, width: number): string[] {
 	return lines.map((line) => (line.length > width ? line.slice(0, width) : line));
 }
 
-function resumeSessionLabel(session: SessionListInfo): string {
-	const when = Number.isNaN(session.modified.getTime()) ? "" : session.modified.toISOString().slice(0, 16).replace("T", " ");
-	const title = session.name?.trim() || session.firstMessage.slice(0, 60);
-	return `${when} — ${title} (${formatInteger(session.messageCount)}${session.truncatedScan ? "+" : ""} msgs)`;
+/**
+ * Compact relative timestamp for selector rows: "now", "5m ago", "3h ago",
+ * "yesterday", "4d ago", then the plain date. Exported for tests.
+ */
+export function formatRelativeTime(date: Date, now: Date = new Date()): string {
+	if (Number.isNaN(date.getTime())) return "";
+	const deltaMs = now.getTime() - date.getTime();
+	if (deltaMs < 0) return date.toISOString().slice(0, 10);
+	const minutes = Math.floor(deltaMs / 60_000);
+	if (minutes < 1) return "now";
+	if (minutes < 60) return `${minutes}m ago`;
+	const hours = Math.floor(minutes / 60);
+	if (hours < 24) return `${hours}h ago`;
+	const days = Math.floor(hours / 24);
+	if (days === 1) return "yesterday";
+	if (days < 7) return `${days}d ago`;
+	return date.toISOString().slice(0, 10);
+}
+
+/**
+ * One selector row per session: the NAME (or first-message excerpt) is the
+ * label; the identifier lives in the right-aligned description — short
+ * session id, message count, relative age — so two sessions with the same
+ * title remain distinguishable (the old single-string label had no id at
+ * all).
+ */
+function resumeSessionRow(session: SessionListInfo, now: Date = new Date()): { label: string; description: string } {
+	const title = session.name?.trim() || collapseImagePathsForDisplay(session.firstMessage).replace(/\s+/g, " ").trim().slice(0, 56) || "(empty session)";
+	const parts = [
+		session.id.slice(0, 8),
+		`${formatInteger(session.messageCount)}${session.truncatedScan ? "+" : ""} ${session.messageCount === 1 && !session.truncatedScan ? "msg" : "msgs"}`,
+		formatRelativeTime(session.modified, now),
+	].filter((part) => part.length > 0);
+	return { label: title, description: parts.join(" · ") };
 }
 
 interface TreeRow {
 	readonly node: SessionTreeNode;
 	readonly depth: number;
+	/** Box-drawing connector prefix (`│  `, `├─ `, `└─ `) for this row. */
+	readonly prefix: string;
 }
 
 /** Depth-first flatten of `buildSessionTree`'s roots, preserving the oldest-first child order the port already sorts by. */
@@ -378,29 +410,65 @@ function isTreeNodeVisible(node: SessionTreeNode): boolean {
  */
 function flattenSessionTree(roots: readonly SessionTreeNode[]): TreeRow[] {
 	const rows: TreeRow[] = [];
-	const visit = (node: SessionTreeNode, depth: number): void => {
-		if (isTreeNodeVisible(node)) rows.push({ node, depth });
-		const childDepth = node.children.length > 1 ? depth + 1 : depth;
-		for (const child of node.children) visit(child, childDepth);
+	// `pendingGlyph` carries a `├─ `/`└─ ` branch connector until the first
+	// VISIBLE row of that branch consumes it — filtered nodes (tool results,
+	// bookkeeping entries) must not eat the connector or branches would look
+	// like linear runs. Linear runs render at their branch's indent with no
+	// glyph, so a session with no forks stays perfectly flat while every fork
+	// point fans out like a real tree.
+	// The connector renders at the PARENT's indent (`glyphIndent`); once the
+	// first visible row of a branch consumes it, the rest of that branch's
+	// rows sit at the branch's own `indent` (which carries the `│  `/`   `
+	// continuation).
+	const visit = (node: SessionTreeNode, depth: number, indent: string, glyphIndent: string, pendingGlyph: string): string => {
+		let glyph = pendingGlyph;
+		if (isTreeNodeVisible(node)) {
+			rows.push({ node, depth, prefix: glyph ? `${glyphIndent}${glyph}` : indent });
+			glyph = "";
+		}
+		if (node.children.length > 1) {
+			for (const [index, child] of node.children.entries()) {
+				const last = index === node.children.length - 1;
+				visit(child, depth + 1, `${indent}${last ? "   " : "│  "}`, indent, last ? "└─ " : "├─ ");
+			}
+		} else if (node.children.length === 1) {
+			glyph = visit(node.children[0]!, depth, indent, glyphIndent, glyph);
+		}
+		return glyph;
 	};
-	for (const root of roots) visit(root, 0);
+	for (const root of roots) visit(root, 0, "", "", "");
 	return rows;
 }
 
 /** One-line summary for a tree row: label bookmark if present, then `role: text` (image paths collapsed, whitespace normalized). */
+/**
+ * One-line summary for a tree row: role glyph (▷ you, ✦ sumo), bookmark
+ * label if present, then the message excerpt (image paths collapsed,
+ * whitespace normalized).
+ */
 function treeNodeSummary(node: SessionTreeNode): string {
 	const bookmark = node.label ? `[${node.label}] ` : "";
 	const extracted = node.entry.type === "message" ? treeEntryRoleAndText(node.entry) : undefined;
+	const glyph = extracted?.role === "user" ? "▷ " : extracted?.role === "assistant" ? "✦ " : "· ";
 	const body = extracted
-		? `${extracted.role}: ${collapseImagePathsForDisplay(extracted.text).replace(/\s+/g, " ").trim()}`
+		? collapseImagePathsForDisplay(extracted.text).replace(/\s+/g, " ").trim()
 		: node.entry.type;
-	return `${bookmark}${body}`.slice(0, 72);
+	return `${glyph}${bookmark}${body}`.slice(0, 72);
 }
 
-function treeRowTimestamp(entry: SessionEntryLike): string {
-	const time = new Date(entry.timestamp);
-	if (Number.isNaN(time.getTime())) return "";
-	return `${String(time.getHours()).padStart(2, "0")}:${String(time.getMinutes()).padStart(2, "0")}`;
+function treeRowTimestamp(entry: SessionEntryLike, now: Date = new Date()): string {
+	return formatRelativeTime(new Date(entry.timestamp), now);
+}
+
+/** Best-effort entryId → timestamp map from the on-disk session, for enriching RPC fork rows (the RPC payload has no timestamps). */
+function entryTimestampsFromTree(roots: readonly SessionTreeNode[]): Map<string, string> {
+	const map = new Map<string, string>();
+	const visit = (node: SessionTreeNode): void => {
+		if (typeof node.entry.id === "string" && typeof node.entry.timestamp === "string") map.set(node.entry.id, node.entry.timestamp);
+		for (const child of node.children) visit(child);
+	};
+	for (const root of roots) visit(root);
+	return map;
 }
 
 class LinesOverlayComponent implements Component {
@@ -680,11 +748,20 @@ export class RpcHostActions {
 			notify(this.notifications, "no forkable messages", "warning");
 			return;
 		}
-		const items: InlineSelectorItem[] = messages.map((message, index) => ({
-			value: message.entryId,
-			label: collapseImagePathsForDisplay(message.text).replace(/\s+/g, " ").trim().slice(0, 72),
-			description: `${index + 1} of ${messages.length}`,
-		}));
+		// Timestamps aren't in the RPC fork payload; read them (best-effort)
+		// from the on-disk session so rows carry "when", not just "what".
+		const forkSessionFile = this.stateStore.getSnapshot().sessionFile;
+		const forkTree = forkSessionFile ? await buildSessionTree(forkSessionFile).catch(() => undefined) : undefined;
+		const timestamps = forkTree ? entryTimestampsFromTree(forkTree) : new Map<string, string>();
+		const forkNow = new Date();
+		const items: InlineSelectorItem[] = messages.map((message, index) => {
+			const timestamp = timestamps.get(message.entryId);
+			return {
+				value: message.entryId,
+				label: `▷ ${collapseImagePathsForDisplay(message.text).replace(/\s+/g, " ").trim().slice(0, 70)}`,
+				description: timestamp ? formatRelativeTime(new Date(timestamp), forkNow) : `${index + 1} of ${messages.length}`,
+			};
+		});
 		const selected = await this.inlineSelectors.select("Fork from message", items, {
 			initialValue: messages[messages.length - 1]?.entryId,
 		});
@@ -721,12 +798,16 @@ export class RpcHostActions {
 			notify(this.notifications, "no sessions found", "warning");
 			return;
 		}
-		const labels = sessions.map((session) => resumeSessionLabel(session));
-		const items: InlineSelectorItem[] = sessions.map((session, index) => ({
-			value: session.path,
-			label: labels[index]!,
-			isCurrent: session.path === sessionFile,
-		}));
+		const now = new Date();
+		const items: InlineSelectorItem[] = sessions.map((session) => {
+			const row = resumeSessionRow(session, now);
+			return {
+				value: session.path,
+				label: row.label,
+				description: row.description,
+				isCurrent: session.path === sessionFile,
+			};
+		});
 		const selected = await this.inlineSelectors.select("Resume session", items);
 		if (!selected) return;
 		const session = sessions.find((candidate) => candidate.path === selected);
@@ -769,10 +850,11 @@ export class RpcHostActions {
 			notify(this.notifications, "session has no forkable nodes yet", "warning");
 			return;
 		}
+		const treeNow = new Date();
 		const items: InlineSelectorItem[] = rows.map((row) => ({
 			value: row.node.entry.id,
-			label: `${"  ".repeat(row.depth)}${treeNodeSummary(row.node)}`,
-			description: treeRowTimestamp(row.node.entry),
+			label: `${row.prefix}${treeNodeSummary(row.node)}`,
+			description: treeRowTimestamp(row.node.entry, treeNow),
 		}));
 		const selected = await this.inlineSelectors.select("Session tree (fork from a node)", items, {
 			initialValue: rows[rows.length - 1]?.node.entry.id,

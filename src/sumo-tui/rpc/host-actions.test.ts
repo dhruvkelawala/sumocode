@@ -649,7 +649,9 @@ describe("RpcHostActions", () => {
 				await flushIO();
 				expect(inlineSelectors.getActiveKind()).toBe("select");
 				const rendered = inlineSelectors.render(120).join("\n").replace(/\u001b\[[0-9;]*m/g, "");
-				expect(rendered).toContain("(1+ msgs)");
+				// Identifier block: short id · floor-marked count · relative age.
+				expect(rendered).toContain("1+ msgs");
+				expect(rendered).toContain("large ·");
 				inlineSelectors.handleInput(SELECTOR_ESCAPE);
 				await resumePromise;
 			} finally {
@@ -760,17 +762,19 @@ describe("RpcHostActions", () => {
 				await flushIO();
 				const rendered = inlineSelectors.render(120).join("\n").replace(/\u001b\[[0-9;]*m/g, "");
 
-				expect(rendered).toContain("user: real prompt with newline");
-				expect(rendered).toContain("assistant: assistant reply");
+				expect(rendered).toContain("▷ real prompt with newline");
+				expect(rendered).toContain("✦ assistant reply");
 				expect(rendered).not.toContain("tool output noise");
 				expect(rendered).not.toContain("model_change");
 				expect(rendered).not.toContain("background task bg-x1");
 				// Linear chain: no runaway indentation — both visible rows start at
-				// the SAME column (panel padding is uniform; depth adds none here).
+				// the SAME column (no connectors on a session with no forks).
 				const lines = rendered.split("\n");
-				const userCol = lines.find((line) => line.includes("user: real prompt"))!.indexOf("user: real prompt");
-				const assistantCol = lines.find((line) => line.includes("assistant: assistant reply"))!.indexOf("assistant: assistant reply");
+				const userCol = lines.find((line) => line.includes("▷ real prompt"))!.indexOf("▷ real prompt");
+				const assistantCol = lines.find((line) => line.includes("✦ assistant reply"))!.indexOf("✦ assistant reply");
 				expect(userCol).toBe(assistantCol);
+				expect(rendered).not.toContain("├─");
+				expect(rendered).not.toContain("└─");
 
 				inlineSelectors.handleInput(SELECTOR_ESCAPE);
 				await treePromise;
@@ -815,12 +819,14 @@ describe("RpcHostActions", () => {
 				await flushIO();
 				const rendered = inlineSelectors.render(100).join("\n").replace(/\[[0-9;]*m/g, "");
 				expect(rendered).toContain("FORK FROM A NODE");
-				// root has two children — the branch replies indent one level (+2
-				// columns) relative to the root row.
+				// root has two children — each branch head gets a box-drawing
+				// connector: first branch ├─, last branch └─.
+				expect(rendered).toContain("├─ ✦ first branch reply");
+				expect(rendered).toContain("└─ ✦ second branch reply");
 				const lines = rendered.split("\n");
-				const rootCol = lines.find((line) => line.includes("user: root message"))!.indexOf("user: root message");
-				const branchCol = lines.find((line) => line.includes("assistant: first branch reply"))!.indexOf("assistant: first branch reply");
-				expect(branchCol).toBe(rootCol + 2);
+				const rootCol = lines.find((line) => line.includes("▷ root message"))!.indexOf("▷ root message");
+				const branchCol = lines.find((line) => line.includes("├─ ✦ first branch reply"))!.indexOf("├─");
+				expect(branchCol).toBe(rootCol);
 
 				inlineSelectors.handleInput(SELECTOR_ESCAPE);
 				await treePromise;

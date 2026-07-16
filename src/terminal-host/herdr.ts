@@ -32,4 +32,3 @@ export const herdrTerminalHost: TerminalHost = {
 		await pi.exec("herdr", ["notification", "show", title, "--body", body, "--sound", "done"], { timeout: 5000 }).catch(() => undefined);
 	},
 };
-

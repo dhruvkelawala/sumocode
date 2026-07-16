@@ -189,7 +189,7 @@ describe("/sumo:review", () => {
 				thinking: "xhigh",
 				notifyOnExit: true,
 			}));
-			expect(notify).toHaveBeenCalledWith(expect.stringContaining("review started: bg-42"), "info");
+			expect(notify).toHaveBeenCalledWith(expect.stringContaining("review started: bg-42 · cmux surface:2"), "info");
 			expect(notify).toHaveBeenCalledWith(expect.stringContaining("bg_task action=log id=bg-42"), "info");
 		});
 

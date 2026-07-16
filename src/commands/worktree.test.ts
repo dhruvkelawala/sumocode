@@ -1,20 +1,22 @@
 import { describe, expect, it, vi } from "vitest";
 import { parseWorktreeArgs, registerWorktreeCommand } from "./worktree.js";
+import type { TerminalHost, TerminalHostKind } from "../terminal-host/index.js";
 
 type OpenSplitMock = ReturnType<typeof vi.fn>;
 type OpenCurrentMock = ReturnType<typeof vi.fn>;
 
-function makeTerminalHost(openSplit: OpenSplitMock = vi.fn(async () => ({ ok: true as const })), openCurrent?: OpenCurrentMock) {
+function makeTerminalHost(openSplit: OpenSplitMock = vi.fn(async () => ({ ok: true as const })), openCurrent?: OpenCurrentMock, kind: TerminalHostKind = "cmux"): TerminalHost {
 	return {
-		kind: "cmux" as const,
+		kind,
 		openCommandInSplit: async (pi: never, direction: "right" | "down", options: { shellCommand: string }) => {
 			const result = await (openSplit as unknown as (pi: never, direction: "right" | "down", command: string) => Promise<{ ok: true } | { ok: false; error: string }>)(pi, direction, options.shellCommand);
-			return result.ok ? { ok: true as const, pane: { host: "cmux" as const, paneId: "legacy" } } : result;
+			const paneHost = kind === "herdr" ? "herdr" as const : "cmux" as const;
+			return result.ok ? { ok: true as const, pane: { host: paneHost, paneId: "legacy" } } : result;
 		},
 		replaceCurrentPane: openCurrent ? async (pi: never, options: { shellCommand: string }) => (openCurrent as unknown as (pi: never, command: string) => Promise<{ ok: true } | { ok: false; error: string }>)(pi, options.shellCommand) : undefined,
 		closePane: vi.fn(async () => ({ ok: true as const })),
 		notify: vi.fn(async () => undefined),
-	} as const;
+	};
 }
 
 const noneHost = {
@@ -142,6 +144,28 @@ describe("/sumo:worktree", () => {
 		expect(openCurrent).toHaveBeenCalledWith(pi, expect.stringMatching(/^bash -lc /));
 		expect((openCurrent.mock.calls[0] as unknown[] | undefined)?.[1]).toContain("/repo.wt/sumo__fresh");
 		expect(openSplit).not.toHaveBeenCalled();
+	});
+
+	it("falls back to opening a herdr split for a fresh worktree launched from the splash", async () => {
+		const { pi, handler } = makePi();
+		const create = vi.fn(async () => ({ ok: true as const, path: "/repo.wt/sumo__fresh", branch: "sumo/fresh", baseRef: "HEAD" }));
+		const openSplit = vi.fn(async () => ({ ok: true as const }));
+		registerWorktreeCommand(pi as never, {
+			create,
+			terminalHost: makeTerminalHost(openSplit, undefined, "herdr"),
+			setupAction: "pnpm install",
+		});
+
+		await handler()?.("new fresh", {
+			hasUI: true,
+			cwd: "/repo",
+			ui: { notify: vi.fn() },
+			sessionManager: { getBranch: () => [] },
+		});
+
+		expect(create).toHaveBeenCalledWith({ repoRoot: "/repo", task: "fresh", baseRef: "HEAD" });
+		expect(openSplit).toHaveBeenCalledWith(pi, "right", expect.stringMatching(/^bash -lc /));
+		expect((openSplit.mock.calls[0] as unknown[] | undefined)?.[2]).toContain("/repo.wt/sumo__fresh");
 	});
 
 	it("warns without falling back to a split when current-pane replacement fails", async () => {

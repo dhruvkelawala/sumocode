@@ -1,7 +1,6 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { buildShellCommand } from "./cmux-split.js";
 import { getTerminalHost, type SplitDirection, type TerminalHost } from "../terminal-host/index.js";
-import { cmuxTerminalHost } from "../terminal-host/cmux.js";
 
 /**
  * `/sumo:diff` — open `hunkdiff` in a new terminal-host split pane for quick review.
@@ -120,8 +119,7 @@ export function registerDiffCommand(pi: ExtensionAPI, options: DiffCommandOption
 				const shellCmd = buildShellCommand(ctx.cwd, hunkCmd);
 				const direction = chooseDiffSplitDirection(getSize(), forcedDirection);
 
-				const detectedHost = getTerminalHost();
-				const host = configuredTerminalHost ?? (detectedHost.kind === "none" ? cmuxTerminalHost : detectedHost);
+				const host = configuredTerminalHost ?? getTerminalHost();
 				const result = await host.openCommandInSplit(pi, direction, { cwd: ctx.cwd, shellCommand: shellCmd });
 				if (result.ok) {
 					ctx.ui.notify(`opened ${hunkCmd} in a new ${host.kind} pane`, "info");

@@ -1,6 +1,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { buildShellCommand } from "./cmux-split.js";
-import { getTerminalHost, type SplitDirection } from "../terminal-host/index.js";
+import { getTerminalHost, type SplitDirection, type TerminalHost } from "../terminal-host/index.js";
+import { cmuxTerminalHost } from "../terminal-host/cmux.js";
 
 /**
  * `/sumo:diff` — open `hunkdiff` in a new terminal-host split pane for quick review.
@@ -84,7 +85,14 @@ async function isHunkInstalled(pi: ExtensionAPI): Promise<boolean> {
 	}
 }
 
-export function registerDiffCommand(pi: ExtensionAPI): void {
+export interface DiffCommandOptions {
+	readonly terminalHost?: TerminalHost;
+	readonly terminalSize?: () => TerminalSize;
+}
+
+export function registerDiffCommand(pi: ExtensionAPI, options: DiffCommandOptions = {}): void {
+	const configuredTerminalHost = options.terminalHost;
+	const getSize = options.terminalSize ?? getTerminalSize;
 	pi.registerCommand("sumo:diff", {
 		description: "Open hunk diff in an orientation-aware terminal-host split for quick review",
 		handler: async (args: string | undefined, ctx: ExtensionContext) => {
@@ -110,13 +118,13 @@ export function registerDiffCommand(pi: ExtensionAPI): void {
 				const { hunkArgs, forcedDirection } = parseDiffArgs(args ?? "");
 				const hunkCmd = buildHunkCommand(hunkArgs);
 				const shellCmd = buildShellCommand(ctx.cwd, hunkCmd);
-				const direction = chooseDiffSplitDirection(getTerminalSize(), forcedDirection);
+				const direction = chooseDiffSplitDirection(getSize(), forcedDirection);
 
-				const host = getTerminalHost();
+				const detectedHost = getTerminalHost();
+				const host = configuredTerminalHost ?? (detectedHost.kind === "none" ? cmuxTerminalHost : detectedHost);
 				const result = await host.openCommandInSplit(pi, direction, { cwd: ctx.cwd, shellCommand: shellCmd });
 				if (result.ok) {
-					const paneLabel = host.kind === "cmux" ? "cmux" : "terminal-host";
-					ctx.ui.notify(`opened ${hunkCmd} in a new ${paneLabel} pane`, "info");
+					ctx.ui.notify(`opened ${hunkCmd} in a new ${host.kind} pane`, "info");
 				} else {
 					ctx.ui.notify(`/sumo:diff: ${result.error}`, "warning");
 				}

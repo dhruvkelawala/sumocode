@@ -1,7 +1,6 @@
 import type { HostResult, PaneRef, PiExecLike, SplitDirection, TerminalHost } from "./types.js";
 
 interface HerdrEnvelope { result?: unknown }
-interface HerdrPaneResult { pane?: { pane_id?: string; workspace_id?: string } }
 interface HerdrAgentResult { agent?: { pane_id?: string; workspace_id?: string } }
 
 function parseEnvelope<T>(stdout: string): HostResult<T> {
@@ -34,10 +33,3 @@ export const herdrTerminalHost: TerminalHost = {
 	},
 };
 
-export function parseHerdrPaneSplit(stdout: string): HostResult<{ pane: PaneRef }> {
-	const parsed = parseEnvelope<HerdrPaneResult>(stdout);
-	if (!parsed.ok) return parsed;
-	const paneId = parsed.pane?.pane_id;
-	if (!paneId) return { ok: false, error: "herdr pane split did not return a pane_id" };
-	return { ok: true, pane: { host: "herdr", paneId, workspaceId: parsed.pane?.workspace_id } };
-}

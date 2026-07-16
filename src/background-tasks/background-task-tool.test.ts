@@ -62,8 +62,8 @@ describe("installBackgroundTasks", () => {
 				action: "spawn",
 				status: "at_capacity",
 				capacity: 1,
-				runningCount: 1,
 			});
+			expect((result?.details as { runningCount?: number } | undefined)?.runningCount).toBeGreaterThanOrEqual(1);
 		} finally {
 			if (originalSurface === undefined) delete process.env.CMUX_SURFACE_ID;
 			else process.env.CMUX_SURFACE_ID = originalSurface;

@@ -807,7 +807,6 @@ export class BackgroundTaskManager {
 		}
 
 		task.pane = splitResult.pane;
-		task.cmux = splitResult.pane.host === "cmux" ? { workspaceRef: splitResult.pane.workspaceId ?? "", surfaceRef: splitResult.pane.paneId } : undefined;
 		task.updatedAt = Date.now();
 		writeTaskMeta(task);
 

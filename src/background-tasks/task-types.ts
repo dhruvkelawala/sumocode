@@ -52,8 +52,6 @@ export interface BackgroundTask {
 	model?: string;
 	thinking?: BackgroundTaskThinking;
 	pane?: PaneRef;
-	/** Legacy v2 field, accepted during recovery only. */
-	cmux?: BackgroundTaskCmuxRefs;
 	worktree?: BackgroundTaskWorktreeRef;
 	notifyOnExit: boolean;
 }

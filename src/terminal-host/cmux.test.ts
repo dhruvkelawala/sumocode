@@ -16,4 +16,8 @@ describe("cmuxTerminalHost", () => {
 		const result = await cmuxTerminalHost.openCommandInSplit(fake as never, "right", { cwd: "/tmp", shellCommand: "echo ok" });
 		expect(result).toEqual({ ok: true, pane: { host: "cmux", paneId: "surface:2", workspaceId: "workspace:1" } });
 	});
+	it("notify is best-effort when exec rejects", async () => {
+		const fake = { exec: vi.fn(async () => { throw new Error("no cmux"); }) };
+		await expect(cmuxTerminalHost.notify(fake as never, "title", "body")).resolves.toBeUndefined();
+	});
 });

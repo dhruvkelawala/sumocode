@@ -16,6 +16,10 @@ Executor-grade, self-contained implementation plans for SumoCode. Four independe
 **Written against commit:** `ae03bc0` (SumoCode 0.4.0, Pi 0.79.1 pinned).
 **Ledger reconciled:** 2026-07-07 at `86e5062` — Track D statuses corrected against git
 history/plan files; 026–039 indexed; audit-loop plans 040–056 added.
+**Ledger reconciled:** 2026-07-15 at `eea1ac6` (pre main-merge) — 060 executor lost without
+landing (worktree/branch gone, no commits; back to TODO); DF-1 fix verified landed on
+`integrate/track-d` as `e055c3b` (remote `fix/sidebar-fill-height` tip is a stale unrelated
+commit — branch deletable); Orchestration v2 track 065–071 indexed with issues #303–#309.
 
 > **Track relationship**: The RPC migration (Track A) explicitly **keeps SumoCode's transcript
 > view-model engine** — `docs/research/pi-rpc-migration.md` lists "the transcript view-model
@@ -317,7 +321,7 @@ today's splash in the common case; a dim bare rail only on genuinely cache-less 
 
 | Plan | Title | Priority | Effort | Depends on | Status |
 |------|-------|----------|--------|------------|--------|
-| 060 | [Startup perf baseline refresh](060-startup-perf-baseline-refresh.md) | P1 | S | — | IN PROGRESS — executor `bg-mrbyfbqj-qtdmsd` in worktree `advisor/060-startup-perf-baseline-refresh` (base `8a08494`) |
+| 060 | [Startup perf baseline refresh](060-startup-perf-baseline-refresh.md) | P1 | S | — | TODO — prior executor `bg-mrbyfbqj-qtdmsd` lost (worktree `advisor/060-startup-perf-baseline-refresh` gone, no commits landed); re-dispatch from current HEAD |
 | 061 | [Early first frame + parallel hydration](061-early-first-frame-and-parallel-hydration.md) | P1 | M | 060 | TODO |
 | 062 | [Pre-bundled RPC host entry](062-prebundled-rpc-host-entry.md) | P2 | M | 061 | TODO |
 | 063 | [Pi child boot profile spike](063-pi-child-boot-profile-spike.md) | P2 | S | — (read-only) | TODO |
@@ -386,7 +390,7 @@ Real-window testing surfaced parity gaps the fixed-size (45/100-row) captures ne
 
 | # | Finding | Status |
 |---|---|---|
-| DF-1 | ✅ FIXED (`e055c3b` on `fix/sidebar-fill-height`, reviewer-verified: tall-window test fails-without/passes-with; before bg=#1a1511 bare → after #241d17 sidebar surface; no crop regressed). The sidebar component already had a `targetRows` pad callback (main feeds it `tui.terminal.rows`); RPC path just never wired it. Sidebar doesn't fill vertically — renders content height (~26 rows) then stops; main renders a full-height column. Root: `ShellRenderable.render(width)` has no height param; `PiComponentLeaf` paints only `min(contentRows, rect.height)`. | FIX IN PROGRESS — `fix/sidebar-fill-height` off 549095d, with a tall-window (160×100) regression test |
+| DF-1 | ✅ FIXED (`e055c3b` on `fix/sidebar-fill-height`, reviewer-verified: tall-window test fails-without/passes-with; before bg=#1a1511 bare → after #241d17 sidebar surface; no crop regressed). The sidebar component already had a `targetRows` pad callback (main feeds it `tui.terminal.rows`); RPC path just never wired it. Sidebar doesn't fill vertically — renders content height (~26 rows) then stops; main renders a full-height column. Root: `ShellRenderable.render(width)` has no height param; `PiComponentLeaf` paints only `min(contentRows, rect.height)`. | LANDED — `e055c3b` on `integrate/track-d` (2026-07-15 verify: commit is ancestor of HEAD; remote `fix/sidebar-fill-height` tip `e07c3d0` is an old unrelated commit — branch deletable) |
 | DF-2 | Stray `mcp: MCP: 0/5 servers` line above the editor — `ExtensionStatusPublication.render` (region-registry.ts:126, RPC-only class not on main) dumps every `setStatus(key,text)` as a literal `key: text` row; redundant with the sidebar MCP list. | QUEUED — dogfood parity polish batch |
 | DF-3 | Keybinding capture RESOLVED as not-a-decode-bug: pi-tui `parseKey` correctly decodes the user's real Kitty bytes (arrow `[1;1:1C`→"right"; `:3` releases flagged). Any residual nav issue is router→editor wiring → plan 030 fixes, plan 031's matrix catches. | UNDERSTOOD — folded into 030/031 |
 | AUDIT-A | ✅ PHASE 1 DONE — 035 P1 executed (`9405422`, merged): `/copy`, `/export`(HTML), `/resume` (on-disk session reader + switch_session), `/tree` (browse, fork-only), `/hotkeys`, `/changelog`, `/session` panel, `/theme` in-place. session-reader verified vs REAL session files. Blocked (still honestly notify): /login /import /reload /export-jsonl /tree-navigate = Phase 3 upstream-Pi asks. Phase 2 (/trust /share) pending. Missing/degraded Pi command family: /resume, /tree NOT handled (and blocked — RPC protocol has no session-list/tree primitive); /fork present but degraded (basic modal vs Pi's rich Session Tree); /export, /copy buildable from primitives (export_html, get_last_assistant_text) but not built. | AUDITING — findings → plan 035 |

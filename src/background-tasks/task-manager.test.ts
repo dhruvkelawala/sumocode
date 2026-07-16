@@ -187,7 +187,7 @@ describe("BackgroundTaskManager", () => {
 		expect(task.metaFile).toBeDefined();
 		expect(existsSync(task.metaFile!)).toBe(true);
 		const initial = JSON.parse(readFileSync(task.metaFile!, "utf8"));
-		expect(initial.schemaVersion).toBe(2);
+		expect(initial.schemaVersion).toBe(3);
 		expect(initial.id).toBe(task.id);
 		expect(initial.pid).toBe(4242);
 		expect(initial.processStartTime).toBe("Mon Jun  1 10:00:00 2026");
@@ -280,7 +280,7 @@ describe("BackgroundTaskManager", () => {
 				cwd: "/tmp/project",
 				visible: true,
 			}),
-		).toThrow(/cmux surface/i);
+		).toThrow(/terminal host/i);
 	});
 
 	it("polls visible task exit marker files", async () => {

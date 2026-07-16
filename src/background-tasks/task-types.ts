@@ -1,3 +1,5 @@
+import type { PaneRef } from "../terminal-host/index.js";
+
 export type BackgroundTaskStatus = "running" | "completed" | "failed" | "stopped";
 
 export type SplitDirection = "right" | "down";
@@ -49,6 +51,8 @@ export interface BackgroundTask {
 	runner: BackgroundTaskRunner;
 	model?: string;
 	thinking?: BackgroundTaskThinking;
+	pane?: PaneRef;
+	/** Legacy v2 field, accepted during recovery only. */
 	cmux?: BackgroundTaskCmuxRefs;
 	worktree?: BackgroundTaskWorktreeRef;
 	notifyOnExit: boolean;
@@ -69,7 +73,7 @@ export interface SpawnBackgroundTaskOptions {
 	notifyOnExit?: boolean;
 }
 
-export const BACKGROUND_TASK_META_SCHEMA_VERSION = 2;
+export const BACKGROUND_TASK_META_SCHEMA_VERSION = 3;
 
 export interface BackgroundTaskSnapshot {
 	schemaVersion: number;
@@ -94,6 +98,8 @@ export interface BackgroundTaskSnapshot {
 	runner: BackgroundTaskRunner;
 	model?: string;
 	thinking?: BackgroundTaskThinking;
+	pane?: PaneRef;
+	/** Legacy v2 field, accepted during recovery only. */
 	cmux?: BackgroundTaskCmuxRefs;
 	worktree?: BackgroundTaskWorktreeRef;
 	notifyOnExit?: boolean;
@@ -123,7 +129,7 @@ export function toBackgroundTaskSnapshot(task: BackgroundTask): BackgroundTaskSn
 		runner: task.runner,
 		model: task.model,
 		thinking: task.thinking,
-		cmux: task.cmux,
+		pane: task.pane,
 		worktree: task.worktree,
 		notifyOnExit: task.notifyOnExit,
 	};
@@ -136,8 +142,8 @@ export function toBackgroundTaskSnapshot(task: BackgroundTask): BackgroundTaskSn
  * uses the recognizer to keep these synthetic user-role messages out of the
  * "fork from message" list.
  */
-export function buildBackgroundTaskWakeMessage(taskId: string, status: string, label: string, cmuxHint = ""): string {
-	return `background task ${taskId} ${status}: ${label}${cmuxHint}`;
+export function buildBackgroundTaskWakeMessage(taskId: string, status: string, label: string, paneHint = ""): string {
+	return `background task ${taskId} ${status}: ${label}${paneHint}`;
 }
 
 const WAKE_MESSAGE_PATTERN = /^background task bg-[\w-]+ \w[\w-]*: /;

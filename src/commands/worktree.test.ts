@@ -175,7 +175,7 @@ describe("/sumo:worktree", () => {
 		await handler()?.("do work", { hasUI: true, cwd: "/repo", ui: { notify } });
 
 		expect(create).not.toHaveBeenCalled();
-		expect(notify).toHaveBeenCalledWith("/sumo:worktree requires a cmux surface", "warning");
+		expect(notify).toHaveBeenCalledWith("/sumo:worktree requires a terminal host (cmux or herdr)", "warning");
 	});
 
 	it("guards fresh and reopen sessions before touching worktrees", async () => {
@@ -196,7 +196,7 @@ describe("/sumo:worktree", () => {
 		await outsideCmux.handler()?.("open sumo/one", { hasUI: true, cwd: "/repo", ui: { notify } });
 
 		expect(list).not.toHaveBeenCalled();
-		expect(notify).toHaveBeenCalledWith("/sumo:worktree requires a cmux surface", "warning");
+		expect(notify).toHaveBeenCalledWith("/sumo:worktree requires a terminal host (cmux or herdr)", "warning");
 	});
 
 	it.each([

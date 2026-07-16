@@ -1,8 +1,9 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { buildShellCommand, openCommandInNewSplit, type SplitDirection } from "./cmux-split.js";
+import { buildShellCommand } from "./cmux-split.js";
+import { getTerminalHost, type SplitDirection } from "../terminal-host/index.js";
 
 /**
- * `/sumo:diff` — open `hunkdiff` in a new cmux split pane for quick review.
+ * `/sumo:diff` — open `hunkdiff` in a new terminal-host split pane for quick review.
  *
  *   /sumo:diff                  → `hunk diff`           (working tree)
  *   /sumo:diff --watch          → `hunk diff --watch`   (auto-reload as files change)
@@ -85,7 +86,7 @@ async function isHunkInstalled(pi: ExtensionAPI): Promise<boolean> {
 
 export function registerDiffCommand(pi: ExtensionAPI): void {
 	pi.registerCommand("sumo:diff", {
-		description: "Open hunk diff in an orientation-aware cmux split for quick review",
+		description: "Open hunk diff in an orientation-aware terminal-host split for quick review",
 		handler: async (args: string | undefined, ctx: ExtensionContext) => {
 			// All failure paths must go through `ctx.ui.notify` per the
 			// SumoCode slash-command contract — no exception should ever
@@ -111,9 +112,11 @@ export function registerDiffCommand(pi: ExtensionAPI): void {
 				const shellCmd = buildShellCommand(ctx.cwd, hunkCmd);
 				const direction = chooseDiffSplitDirection(getTerminalSize(), forcedDirection);
 
-				const result = await openCommandInNewSplit(pi, direction, shellCmd);
+				const host = getTerminalHost();
+				const result = await host.openCommandInSplit(pi, direction, { cwd: ctx.cwd, shellCommand: shellCmd });
 				if (result.ok) {
-					ctx.ui.notify(`opened ${hunkCmd} in a new cmux pane`, "info");
+					const paneLabel = host.kind === "cmux" ? "cmux" : "terminal-host";
+					ctx.ui.notify(`opened ${hunkCmd} in a new ${paneLabel} pane`, "info");
 				} else {
 					ctx.ui.notify(`/sumo:diff: ${result.error}`, "warning");
 				}

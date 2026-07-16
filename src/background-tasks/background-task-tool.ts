@@ -77,30 +77,30 @@ export function installBackgroundTasks(pi: ExtensionAPI): BackgroundTaskManager 
 		name: "bg_task",
 		label: "Background Task",
 		description: [
-			"Spawn long-running work in a background process or a visible cmux pane. Two modes:",
+			"Spawn long-running work in a background process or a visible terminal-host pane. Two modes:",
 			"",
-			"• SHELL (runner='shell', default) — spawn a managed shell command. Output is tee'd to a log file, exit code is captured, and completion fires a passive cmux notification; pass notifyOnExit:true to also wake the orchestrator with a follow-up so the agent acts on the result. Use for builds, tests, deploys, watchers, anything you want to fire-and-forget.",
+			"• SHELL (runner='shell', default) — spawn a managed shell command. Output is tee'd to a log file, exit code is captured, and completion fires a passive terminal-host notification; pass notifyOnExit:true to also wake the orchestrator with a follow-up so the agent acts on the result. Use for builds, tests, deploys, watchers, anything you want to fire-and-forget.",
 			"",
-			`• AGENT (runner='sumocode', visible=true required) — spawn a child SumoCode agent in a new cmux split. The prompt is delivered as the kickoff message, the child opens straight into the agent loop (no splash). If model/thinking are omitted, SumoCode uses ${DEFAULT_SUMOCODE_AGENT_MODEL} with ${DEFAULT_SUMOCODE_AGENT_THINKING} thinking (override process-wide with SUMOCODE_BG_AGENT_MODEL / SUMOCODE_BG_AGENT_THINKING). Explicit model/thinking params override those defaults. The child writes its latest assistant message to response.md and writes an exit marker on real process exit; the orchestrator reads the final response via bg_task log after completion. The cmux pane remains open until explicitly stopped/closed.`,
+			`• AGENT (runner='sumocode', visible=true required) — spawn a child SumoCode agent in a new terminal-host split. The prompt is delivered as the kickoff message, the child opens straight into the agent loop (no splash). If model/thinking are omitted, SumoCode uses ${DEFAULT_SUMOCODE_AGENT_MODEL} with ${DEFAULT_SUMOCODE_AGENT_THINKING} thinking (override process-wide with SUMOCODE_BG_AGENT_MODEL / SUMOCODE_BG_AGENT_THINKING). Explicit model/thinking params override those defaults. The child writes its latest assistant message to response.md and writes an exit marker on real process exit; the orchestrator reads the final response via bg_task log after completion. The terminal-host pane remains open until explicitly stopped/closed.`,
 			"",
 			"Actions:",
 			"  spawn  — start a task. Returns task id + paths.",
-			"  list   — list tracked tasks with status, runner, cmux refs.",
+			"  list   — list tracked tasks with status, runner, pane refs.",
 			"  log    — read the task's output. For shell, returns output.log tail. For agent, returns response.md after real process exit, or a 'still working' marker while the child is still alive. Poll until ready.",
-			"  stop   — SIGTERM a shell task, or cmux close-surface for an agent pane.",
+			"  stop   — SIGTERM a shell task, or terminal-host pane close for an agent pane.",
 			"  clear  — remove finished/stopped tasks from the registry and delete their on-disk task dirs. Worktrees are preserved unless pruneWorktree=true.",
 		].join("\n"),
 		promptSnippet:
 			"Spawn managed shell tasks or hand off prompts to a visible SumoCode agent pane (with model/thinking override and harvestable response).",
 		promptGuidelines: [
 			"Use bg_task when the user wants long-running work to continue while the conversation stays usable.",
-			"For shell commands (build, test, deploy, watchers), use bg_task with runner='shell' (the default) — output is logged and a passive cmux toast fires on exit; pass notifyOnExit:true to wake the agent on completion.",
-			`To delegate a prompt to a child SumoCode agent, use bg_task with runner='sumocode' and visible=true. If the user does not specify a model, omit model/thinking and let the child default to ${DEFAULT_SUMOCODE_AGENT_MODEL} with ${DEFAULT_SUMOCODE_AGENT_THINKING} thinking. The child opens in a cmux split, runs the prompt, and writes its response back. Read it with bg_task action='log' once status='completed'.`,
+			"For shell commands (build, test, deploy, watchers), use bg_task with runner='shell' (the default) — output is logged and a passive terminal-host notification fires on exit; pass notifyOnExit:true to wake the agent on completion.",
+			`To delegate a prompt to a child SumoCode agent, use bg_task with runner='sumocode' and visible=true. If the user does not specify a model, omit model/thinking and let the child default to ${DEFAULT_SUMOCODE_AGENT_MODEL} with ${DEFAULT_SUMOCODE_AGENT_THINKING} thinking. The child opens in a terminal-host split, runs the prompt, and writes its response back. Read it with bg_task action='log' once status='completed'.`,
 			`Pass model and thinking to bg_task only when the user explicitly wants to override the agent defaults (${DEFAULT_SUMOCODE_AGENT_MODEL}, thinking=${DEFAULT_SUMOCODE_AGENT_THINKING}); process-wide defaults can be set with SUMOCODE_BG_AGENT_MODEL and SUMOCODE_BG_AGENT_THINKING.`,
 			"To read a delegated agent's response, call bg_task with action='log' and id='bg-N'. If the response isn't ready yet, the result will indicate 'still working' — poll again. List with bg_task action='list' to see which tasks have status='completed'.",
 			"If runner='sumocode' spawn returns status='at_capacity', treat it as expected backpressure: wait for a listed agent task to complete or stop one, then retry the spawn. Shell tasks are not blocked by this agent cap.",
 			"Use worktree=true with runner='sumocode' to spawn an agent in a named git worktree; worktrees are never auto-removed and require explicit pruneWorktree=true on clear (or a future worktree prune command).",
-			"Use bg_task action='stop' to cancel a task. For agent panes this closes the cmux surface; completed panes are otherwise left open for inspection.",
+			"Use bg_task action='stop' to cancel a task. For agent panes this closes the terminal-host pane; completed panes are otherwise left open for inspection.",
 		],
 		parameters: Type.Object({
 			action: StringEnum(["spawn", "list", "log", "stop", "clear"] as const, {
@@ -124,7 +124,7 @@ export function installBackgroundTasks(pi: ExtensionAPI): BackgroundTaskManager 
 			visible: Type.Optional(
 				Type.Boolean({
 					description:
-						"Open in a new cmux split. REQUIRED when runner='sumocode'. Defaults to false for shell tasks (invisible managed child).",
+						"Open in a new terminal-host split. REQUIRED when runner='sumocode'. Defaults to false for shell tasks (invisible managed child).",
 				}),
 			),
 			runner: Type.Optional(
@@ -164,7 +164,7 @@ export function installBackgroundTasks(pi: ExtensionAPI): BackgroundTaskManager 
 			notifyOnExit: Type.Optional(
 				Type.Boolean({
 					description:
-						"Wake the orchestrator with a follow-up turn when the task finishes, so the agent acts on the result (e.g. chaining background work). Defaults to FALSE — set true only when you intend to react to completion. A passive cmux notification fires regardless of this flag. For agent runners the follow-up fires after the real process-exit marker is harvested.",
+						"Wake the orchestrator with a follow-up turn when the task finishes, so the agent acts on the result (e.g. chaining background work). Defaults to FALSE — set true only when you intend to react to completion. A passive terminal-host notification fires regardless of this flag. For agent runners the follow-up fires after the real process-exit marker is harvested.",
 				}),
 			),
 		}),
@@ -206,8 +206,8 @@ export function installBackgroundTasks(pi: ExtensionAPI): BackgroundTaskManager 
 				}
 
 				const snapshot = toBackgroundTaskSnapshot(task);
-				const cmuxLine = task.cmux
-					? `\nCmux: ${task.cmux.surfaceRef} (${task.cmux.workspaceRef})`
+				const cmuxLine = task.pane
+					? `\nPane: ${task.pane.host} ${task.pane.paneId}${task.pane.workspaceId ? ` (${task.pane.workspaceId})` : ""}`
 					: "";
 				const pidLine = task.pid != null ? `\nPid: ${task.pid}` : "";
 				const harvestHint =
@@ -249,7 +249,7 @@ export function installBackgroundTasks(pi: ExtensionAPI): BackgroundTaskManager 
 					// (stop, crash/nonzero exit). Surface the actual state so callers
 					// don't poll forever.
 					if (task.status === "running") {
-						const paneHint = task.cmux ? ` (cmux pane ${task.cmux.surfaceRef})` : "";
+						const paneHint = task.pane ? ` (${task.pane.host} pane ${task.pane.paneId})` : "";
 						return makeToolResult(
 							`Agent ${task.id} is still working${paneHint}. Waiting for real process exit before harvesting final response — poll bg_task action=log again, or check bg_task action=list for status.`,
 							{ action: "log", task: snapshot, kind: "response", ready: false },

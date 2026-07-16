@@ -25,9 +25,10 @@ export interface ReviewTaskSpawnOptions {
 
 export interface ReviewTaskHandle {
 	readonly id: string;
-	readonly cmux?: {
-		readonly surfaceRef: string;
-		readonly workspaceRef: string;
+	readonly pane?: {
+		readonly host: "cmux" | "herdr";
+		readonly paneId: string;
+		readonly workspaceId?: string;
 	};
 }
 
@@ -248,7 +249,7 @@ export function registerReviewCommand(pi: ExtensionAPI, options: RegisterReviewC
 					thinking: "xhigh",
 					notifyOnExit: true,
 				});
-				const paneHint = task.cmux ? ` · ${task.cmux.surfaceRef}` : "";
+				const paneHint = task.pane ? ` · ${task.pane.host} ${task.pane.paneId}` : "";
 				notify(ctx, `review started: ${task.id}${paneHint} · ${model} · ${label}. read: bg_task action=log id=${task.id}; stop: bg_task action=stop id=${task.id}`);
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);

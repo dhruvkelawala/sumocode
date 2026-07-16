@@ -146,6 +146,7 @@ Current harness: **95 mockups** rendered by `pnpm render:bible`.
   - `scene-approval-overlay.html`
   - `scene-divine-query-overlay.html`
   - `scene-memory-scriptorium-overlay.html`
+  - `scene-session-selectors.html`
   - `scene-palette-overlay.html`
 
 ### Element 12 — Scroll + scribe delegated work

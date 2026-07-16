@@ -339,8 +339,24 @@ export function formatRelativeTime(date: Date, now: Date = new Date()): string {
 	if (hours < 24) return `${hours}h ago`;
 	const days = Math.floor(hours / 24);
 	if (days === 1) return "yesterday";
-	if (days < 7) return `${days}d ago`;
+	if (days < 30) return `${days}d ago`;
 	return date.toISOString().slice(0, 10);
+}
+
+/**
+ * Human excerpt of a message for selector rows: skill invocations render as
+ * their slash command (raw `<skill …>` XML must never leak into a list),
+ * image paths collapse, whitespace normalizes, and over-long text truncates
+ * on an ellipsis instead of mid-word.
+ */
+export function sessionExcerpt(text: string, maxLength: number): string {
+	const cleaned = collapseImagePathsForDisplay(text)
+		.replace(/<skill\s+name="([^"]+)"[^>]*>/gi, "/$1 ")
+		.replace(/<\/skill>/gi, " ")
+		.replace(/\s+/g, " ")
+		.trim();
+	if (cleaned.length <= maxLength) return cleaned;
+	return `${cleaned.slice(0, Math.max(1, maxLength - 1)).trimEnd()}…`;
 }
 
 /**
@@ -348,16 +364,18 @@ export function formatRelativeTime(date: Date, now: Date = new Date()): string {
  * label; the identifier lives in the right-aligned description — short
  * session id, message count, relative age — so two sessions with the same
  * title remain distinguishable (the old single-string label had no id at
- * all).
+ * all). Count and age are padded to per-list column widths so the
+ * description blocks line up as real columns instead of a ragged edge.
  */
-function resumeSessionRow(session: SessionListInfo, now: Date = new Date()): { label: string; description: string } {
-	const title = session.name?.trim() || collapseImagePathsForDisplay(session.firstMessage).replace(/\s+/g, " ").trim().slice(0, 56) || "(empty session)";
-	const parts = [
-		session.id.slice(0, 8),
-		`${formatInteger(session.messageCount)}${session.truncatedScan ? "+" : ""} ${session.messageCount === 1 && !session.truncatedScan ? "msg" : "msgs"}`,
-		formatRelativeTime(session.modified, now),
-	].filter((part) => part.length > 0);
-	return { label: title, description: parts.join(" · ") };
+function resumeSessionRows(sessions: readonly SessionListInfo[], now: Date = new Date()): { label: string; description: string }[] {
+	const counts = sessions.map((session) => `${formatInteger(session.messageCount)}${session.truncatedScan ? "+" : ""} ${session.messageCount === 1 && !session.truncatedScan ? "msg" : "msgs"}`);
+	const ages = sessions.map((session) => formatRelativeTime(session.modified, now));
+	const countWidth = Math.max(...counts.map((count) => count.length));
+	const ageWidth = Math.max(...ages.map((age) => age.length));
+	return sessions.map((session, index) => ({
+		label: session.name?.trim() || sessionExcerpt(session.firstMessage, 52) || "(empty session)",
+		description: `${session.id.slice(0, 8)} · ${counts[index]!.padStart(countWidth)} · ${ages[index]!.padStart(ageWidth)}`,
+	}));
 }
 
 interface TreeRow {
@@ -450,10 +468,8 @@ function treeNodeSummary(node: SessionTreeNode): string {
 	const bookmark = node.label ? `[${node.label}] ` : "";
 	const extracted = node.entry.type === "message" ? treeEntryRoleAndText(node.entry) : undefined;
 	const glyph = extracted?.role === "user" ? "▷ " : extracted?.role === "assistant" ? "✦ " : "· ";
-	const body = extracted
-		? collapseImagePathsForDisplay(extracted.text).replace(/\s+/g, " ").trim()
-		: node.entry.type;
-	return `${glyph}${bookmark}${body}`.slice(0, 72);
+	const body = extracted ? sessionExcerpt(extracted.text, 68) : node.entry.type;
+	return `${glyph}${bookmark}${body}`;
 }
 
 function treeRowTimestamp(entry: SessionEntryLike, now: Date = new Date()): string {
@@ -754,12 +770,14 @@ export class RpcHostActions {
 		const forkTree = forkSessionFile ? await buildSessionTree(forkSessionFile).catch(() => undefined) : undefined;
 		const timestamps = forkTree ? entryTimestampsFromTree(forkTree) : new Map<string, string>();
 		const forkNow = new Date();
+		const indexWidth = String(messages.length).length;
 		const items: InlineSelectorItem[] = messages.map((message, index) => {
 			const timestamp = timestamps.get(message.entryId);
+			const age = timestamp ? formatRelativeTime(new Date(timestamp), forkNow) : "";
 			return {
 				value: message.entryId,
-				label: `▷ ${collapseImagePathsForDisplay(message.text).replace(/\s+/g, " ").trim().slice(0, 70)}`,
-				description: timestamp ? formatRelativeTime(new Date(timestamp), forkNow) : `${index + 1} of ${messages.length}`,
+				label: `▷ ${sessionExcerpt(message.text, 66)}`,
+				description: age ? `#${String(index + 1).padStart(indexWidth)} · ${age}` : `#${String(index + 1).padStart(indexWidth)}`,
 			};
 		});
 		const selected = await this.inlineSelectors.select("Fork from message", items, {
@@ -798,16 +816,13 @@ export class RpcHostActions {
 			notify(this.notifications, "no sessions found", "warning");
 			return;
 		}
-		const now = new Date();
-		const items: InlineSelectorItem[] = sessions.map((session) => {
-			const row = resumeSessionRow(session, now);
-			return {
-				value: session.path,
-				label: row.label,
-				description: row.description,
-				isCurrent: session.path === sessionFile,
-			};
-		});
+		const rows = resumeSessionRows(sessions);
+		const items: InlineSelectorItem[] = sessions.map((session, index) => ({
+			value: session.path,
+			label: rows[index]!.label,
+			description: rows[index]!.description,
+			isCurrent: session.path === sessionFile,
+		}));
 		const selected = await this.inlineSelectors.select("Resume session", items);
 		if (!selected) return;
 		const session = sessions.find((candidate) => candidate.path === selected);
@@ -851,11 +866,19 @@ export class RpcHostActions {
 			return;
 		}
 		const treeNow = new Date();
-		const items: InlineSelectorItem[] = rows.map((row) => ({
-			value: row.node.entry.id,
-			label: `${row.prefix}${treeNodeSummary(row.node)}`,
-			description: treeRowTimestamp(row.node.entry, treeNow),
-		}));
+		// Deduplicate consecutive identical ages: a burst of rows from the same
+		// minutes reads as one dim timestamp instead of a column of repeats.
+		let previousAge = "";
+		const items: InlineSelectorItem[] = rows.map((row) => {
+			const age = treeRowTimestamp(row.node.entry, treeNow);
+			const description = age === previousAge ? "" : age;
+			previousAge = age;
+			return {
+				value: row.node.entry.id,
+				label: `${row.prefix}${treeNodeSummary(row.node)}`,
+				description,
+			};
+		});
 		const selected = await this.inlineSelectors.select("Session tree (fork from a node)", items, {
 			initialValue: rows[rows.length - 1]?.node.entry.id,
 		});

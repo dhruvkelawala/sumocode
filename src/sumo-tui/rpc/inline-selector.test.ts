@@ -169,13 +169,13 @@ describe("InlineSelectorComponent Cathedral styling (plan 037)", () => {
 		const options = Array.from({ length: 10 }, (_, index) => `option-${index}`);
 		const component = new InlineSelectorComponent("Pick", options, () => undefined, 3);
 		const rows = component.render(40);
-		const scrollRow = rows.find((row) => row.includes("/10)"));
+		const scrollRow = rows.find((row) => row.includes("of 10"));
 		expect(scrollRow).toBeDefined();
 		// Panel background persists onto the scroll-indicator row...
 		expect(scrollRow).toMatch(/\x1b\[48;2;\d+;\d+;\d+m/);
-		// ...and the indicator text itself is explicitly dim-colored, not
-		// pi-tui's plain unstyled "(N/M)".
-		expect(scrollRow).toMatch(/\x1b\[38;2;\d+;\d+;\d+m\s*\(\d+\/10\)/);
+		// ...and the indicator text itself is explicitly dim-colored and
+		// aligned with the option gutter, not pi-tui's plain "(N/M)".
+		expect(scrollRow).toMatch(/\x1b\[38;2;\d+;\d+;\d+m\s+·\s+\d+ of 10/);
 	});
 });
 
@@ -277,10 +277,10 @@ describe("InlineSelectorComponent search-as-you-type (plan 038)", () => {
 		// DEFAULT_MAX_VISIBLE, so a scroll indicator does render), and its
 		// total must read 20 -- if the window were still being computed
 		// against the original 540-item fixture this would read "(n/540)".
-		const scrollRow = rows.find((row) => /\(\d+\/\d+\)/.test(row.replace(/\x1b\[[0-9;]*m/g, "")));
+		const scrollRow = rows.find((row) => /\d+ of \d+/.test(row.replace(/\x1b\[[0-9;]*m/g, "")));
 		expect(scrollRow).toBeDefined();
 		const stripedScrollRow = scrollRow!.replace(/\x1b\[[0-9;]*m/g, "");
-		const match = stripedScrollRow.match(/\((\d+)\/(\d+)\)/);
+		const match = stripedScrollRow.match(/(\d+) of (\d+)/);
 		expect(match).not.toBeNull();
 		const [, position, total] = match!;
 		expect(Number(total)).toBe(20);
@@ -299,7 +299,7 @@ describe("InlineSelectorComponent search-as-you-type (plan 038)", () => {
 
 		const rows = component.render(80);
 		const stripped = rows.join("\n").replace(/\x1b\[[0-9;]*m/g, "");
-		const scrollMatch = stripped.match(/\((\d+)\/(\d+)\)/);
+		const scrollMatch = stripped.match(/(\d+) of (\d+)/);
 		expect(scrollMatch).not.toBeNull();
 		const [, position, total] = scrollMatch!;
 		// The total in the scroll indicator must reflect the FILTERED count,

@@ -563,9 +563,10 @@ describe("RpcHostActions", () => {
 		const rendered = inlineSelectors.render(100).join("\n");
 		// Synthetic orchestrator wake messages are not forkable nodes.
 		expect(rendered).not.toContain("background task bg-abc123");
-		// Labels are single-line with image paths collapsed, plus N-of-M metadata.
-		expect(rendered).toContain("check [Image: pi-clipboard-9f.png] and this multiline prompt");
-		expect(rendered).toContain("1 of 1");
+		// Labels are single-line with a role glyph and image paths collapsed,
+		// plus a #N index identifier.
+		expect(rendered).toContain("▷ check [Image: pi-clipboard-9f.png] and this multiline prompt");
+		expect(rendered).toContain("#1");
 
 		inlineSelectors.handleInput(SELECTOR_ENTER);
 		await forkPromise;

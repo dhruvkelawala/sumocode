@@ -220,7 +220,9 @@ export class InlineSelectorComponent implements Component {
 				lines.push(wrapPanelRow(this.renderRow(items[index]!, index === this.selectedIndex, w), w));
 			}
 			if (startIndex > 0 || endIndex < items.length) {
-				const scrollText = `  (${this.selectedIndex + 1}/${items.length})`;
+				// Aligned under the option labels (same 5-space + marker gutter the
+				// rows use) instead of hugging the panel's left edge.
+				const scrollText = `     ·   ${this.selectedIndex + 1} of ${items.length}`;
 				lines.push(wrapPanelRow(fg(truncateToWidth(scrollText, w - 2, ""), activeThemeColors().foregroundDim), w));
 			}
 		}

@@ -1,0 +1,77 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Bible · Scene · session selectors (/resume · /tree · /fork) · 100 cols</title>
+<link rel="stylesheet" href="_assets/tokens.css">
+<style>
+  .stage-blurb { max-width: 100ch; color: var(--foreground-dim); font-size: 11px; line-height: 1.6; padding: 0 8px; text-align: center; }
+  .stack { display: flex; flex-direction: column; gap: 24px; align-items: center; }
+</style>
+</head>
+<body>
+<div class="stage">
+  <div class="stage-label">scene · session selectors · /resume · /tree · /fork · 100 cols</div>
+  <div class="stage-blurb">the three session-navigation selectors render in the editor band (inline-selector scriptorium panel, NOT a centered modal). /resume: session name or first-message excerpt as the label; right column is a fixed-width identifier block — short session id · message count (+ marks a truncated-scan floor) · relative age — column-aligned across rows, newest first, ● marks the current session. /tree: box-drawing connectors (├─/└─ at the parent indent, │ continuation) appear ONLY at fork points — linear runs stay flat; ▷ you / ✦ sumo role glyphs; consecutive identical ages dedupe to one dim timestamp. /fork: ▷ rows with #N index + relative age. skill invocations render as their /slash command, never raw XML; over-long text truncates on an ellipsis; scroll indicator sits in the option gutter as 'n of N'.</div>
+  <div class="stack">
+
+  <div data-render-rect class="term" style="--term-cols: 100; --term-rows: 17;">
+    <pre class="grid" style="background: var(--surface-lifted)">                                                                                                    
+                                        <span class="fg-accent">✦</span>  <span class="fg-accent">RESUME SESSION</span>  <span class="fg-accent">✦</span>                                        
+                 <span class="fg-divider">──────────────────────────────</span>  <span class="fg-divider">·</span>  <span class="fg-divider">──────────────────────────────</span>                 
+                                                                                                    
+     <span class="fg-accent">❯</span>  <span class="fg-dim">type to search…</span>                                                                              
+                                                                                                    
+     <span class="fg-accent">❈</span>   <span class="fg-fg">● Track D smoke session</span>                            <span class="fg-fg">019f662a · 109+ msgs ·       now</span>     
+     <span class="fg-divider">·</span>   <span class="fg-dim">/improve survey the codebase as a senior advisor…</span>  <span class="fg-dim">019f4136 ·  43+ msgs ·   15m ago</span>     
+     <span class="fg-divider">·</span>   <span class="fg-dim">Fix stale integration tests on branch integrate/…</span>  <span class="fg-dim">019f4140 ·   58 msgs ·   22h ago</span>     
+     <span class="fg-divider">·</span>   <span class="fg-dim">Quick verification task: run `git log --oneline…</span>   <span class="fg-dim">019f4152 ·    6 msgs ·  yesterday</span>    
+     <span class="fg-divider">·</span>   <span class="fg-dim">Visual parity audit</span>                                <span class="fg-dim">019f4130 ·   20 msgs ·     8d ago</span>    
+     <span class="fg-divider">·</span>   <span class="fg-dim">1 of 159</span>                                                                                    
+                                                                                                    
+                 <span class="fg-divider">──────────────────────────────</span>  <span class="fg-divider">·</span>  <span class="fg-divider">──────────────────────────────</span>                 
+                                 <span class="fg-dim">↑↓ choose    ⏎ select    ⎋ cancel</span>                                  
+                                                                                                    </pre>
+  </div>
+
+  <div data-render-rect class="term" style="--term-cols: 100; --term-rows: 18;">
+    <pre class="grid" style="background: var(--surface-lifted)">                                                                                                    
+                                <span class="fg-accent">✦</span>  <span class="fg-accent">SESSION TREE (FORK FROM A NODE)</span>  <span class="fg-accent">✦</span>                                
+                 <span class="fg-divider">──────────────────────────────</span>  <span class="fg-divider">·</span>  <span class="fg-divider">──────────────────────────────</span>                 
+                                                                                                    
+     <span class="fg-accent">❯</span>  <span class="fg-dim">type to search…</span>                                                                              
+                                                                                                    
+     <span class="fg-divider">·</span>   <span class="fg-dim">▷ run the smoke tests on this branch</span>                                       <span class="fg-dim">5h ago</span>       
+     <span class="fg-divider">·</span>   <span class="fg-dim">✦ Running the suite now — 1541 tests green.</span>                                             
+     <span class="fg-divider">·</span>   <span class="fg-dim">▷ fix the queued messages UI</span>                                               <span class="fg-dim">4h ago</span>       
+     <span class="fg-divider">·</span>   <span class="fg-dim">├─ ✦ Rendered as lifted banner rows above the editor.</span>                                    
+     <span class="fg-divider">·</span>   <span class="fg-dim">└─ ✦ Rendered as a bordered QUEUED chat card instead.</span>                     <span class="fg-dim">3h ago</span>       
+     <span class="fg-divider">·</span>   <span class="fg-dim">   ▷ [refactor] now fix image paste collapse</span>                                            
+     <span class="fg-divider">·</span>   <span class="fg-dim">   ├─ ✦ Shadowed handlePaste to collapse bracketed paste.</span>                 <span class="fg-dim">2h ago</span>       
+     <span class="fg-accent">❈</span>   <span class="fg-fg">   └─ ✦ Alternative: normalize in insertTextAtCursor only.</span>                <span class="fg-fg">1h ago</span>       
+                                                                                                    
+                 <span class="fg-divider">──────────────────────────────</span>  <span class="fg-divider">·</span>  <span class="fg-divider">──────────────────────────────</span>                 
+                                 <span class="fg-dim">↑↓ choose    ⏎ select    ⎋ cancel</span>                                  
+                                                                                                    </pre>
+  </div>
+
+  <div data-render-rect class="term" style="--term-cols: 100; --term-rows: 13;">
+    <pre class="grid" style="background: var(--surface-lifted)">                                                                                                    
+                                      <span class="fg-accent">✦</span>  <span class="fg-accent">FORK FROM MESSAGE</span>  <span class="fg-accent">✦</span>                                      
+                 <span class="fg-divider">──────────────────────────────</span>  <span class="fg-divider">·</span>  <span class="fg-divider">──────────────────────────────</span>                 
+                                                                                                    
+     <span class="fg-accent">❯</span>  <span class="fg-dim">type to search…</span>                                                                              
+                                                                                                    
+     <span class="fg-divider">·</span>   <span class="fg-dim">▷ run the smoke tests on this branch</span>                                 <span class="fg-dim">#1 · 5h ago</span>      
+     <span class="fg-divider">·</span>   <span class="fg-dim">▷ fix the queued messages UI</span>                                         <span class="fg-dim">#2 · 4h ago</span>      
+     <span class="fg-accent">❈</span>   <span class="fg-fg">▷ now fix image paste collapse</span>                                       <span class="fg-fg">#3 · 3h ago</span>      
+                                                                                                    
+                 <span class="fg-divider">──────────────────────────────</span>  <span class="fg-divider">·</span>  <span class="fg-divider">──────────────────────────────</span>                 
+                                 <span class="fg-dim">↑↓ choose    ⏎ select    ⎋ cancel</span>                                  
+                                                                                                    </pre>
+  </div>
+
+  </div>
+</div>
+</body>
+</html>

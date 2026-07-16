@@ -176,10 +176,14 @@ export async function readSessionInfo(filePath: string, { maxBytes = 256 * 1024 
 
 	const cwd = typeof header.cwd === "string" ? header.cwd : "";
 	const headerTime = typeof header.timestamp === "string" ? new Date(header.timestamp).getTime() : Number.NaN;
-	const modified = typeof lastActivityTime === "number" && lastActivityTime > 0
-		? new Date(lastActivityTime)
-		: truncatedScan
-			? stats.mtime
+	// Truncated scans only see a PREFIX of the file, so any in-window
+	// activity time is stale by construction — a long-running session would
+	// sort (and display its age) as of its early messages, not its latest.
+	// The filesystem mtime is the authoritative "last written" signal there.
+	const modified = truncatedScan
+		? stats.mtime
+		: typeof lastActivityTime === "number" && lastActivityTime > 0
+			? new Date(lastActivityTime)
 			: !Number.isNaN(headerTime)
 				? new Date(headerTime)
 				: stats.mtime;

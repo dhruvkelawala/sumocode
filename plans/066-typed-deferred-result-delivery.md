@@ -20,6 +20,7 @@
 - **Depends on**: plans/065-subagents-core.md
 - **Category**: direction
 - **Planned at**: commit `d4ce41d`, 2026-07-15
+- **Issue**: https://github.com/dhruvkelawala/sumocode/issues/304
 
 ## Why this matters
 

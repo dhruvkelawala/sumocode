@@ -20,6 +20,7 @@
 - **Depends on**: none (independent of 065–070; touches different files)
 - **Category**: direction
 - **Planned at**: commit `d4ce41d`, 2026-07-15
+- **Issue**: https://github.com/dhruvkelawala/sumocode/issues/309
 
 ## Why this matters
 

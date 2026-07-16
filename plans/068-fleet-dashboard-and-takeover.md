@@ -20,6 +20,7 @@
 - **Depends on**: plans/065-subagents-core.md, plans/066-typed-deferred-result-delivery.md, plans/067-background-terminals-regrammar.md
 - **Category**: direction
 - **Planned at**: commit `d4ce41d`, 2026-07-15
+- **Issue**: https://github.com/dhruvkelawala/sumocode/issues/306
 
 ## Why this matters
 

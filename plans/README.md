@@ -485,15 +485,15 @@ manifests, then retirement of the `bg_task` mega-tool and delegation routing amb
 
 **Planned at:** `d4ce41d`, 2026-07-15.
 
-| Plan | Title | Priority | Effort | Depends on | Status |
-|------|-------|----------|--------|------------|--------|
-| 065 | [Subagents core: domain, manager, pi backend, five verb tools](065-subagents-core.md) | P1 | L | — | TODO |
-| 066 | [Typed deferred result delivery](066-typed-deferred-result-delivery.md) | P1 | M | 065 | TODO |
-| 067 | [Background terminals verb regrammar](067-background-terminals-regrammar.md) | P2 | M | 066 | TODO |
-| 068 | [/subagents dashboard, takeover view, /ps](068-fleet-dashboard-and-takeover.md) | P2 | L | 065, 066, 067 | TODO |
-| 069 | [Worktree isolation + completion manifest](069-worktree-isolation-and-manifest.md) | P2 | M | 065, 066 | TODO |
-| 070 | [Migration: retire bg_task + routing guidance](070-orchestration-migration.md) | P3 | M | 065–069 + operator gate | TODO |
-| 071 | [On-demand interactive worktrees (fresh/reopen)](071-on-demand-interactive-worktrees.md) | P2 | S | — (independent) | TODO |
+| Plan | Title | Priority | Effort | Depends on | Issue | Status |
+|------|-------|----------|--------|------------|-------|--------|
+| 065 | [Subagents core: domain, manager, pi backend, five verb tools](065-subagents-core.md) | P1 | L | — | [#303](https://github.com/dhruvkelawala/sumocode/issues/303) | TODO |
+| 066 | [Typed deferred result delivery](066-typed-deferred-result-delivery.md) | P1 | M | 065 | [#304](https://github.com/dhruvkelawala/sumocode/issues/304) | TODO |
+| 067 | [Background terminals verb regrammar](067-background-terminals-regrammar.md) | P2 | M | 066 | [#305](https://github.com/dhruvkelawala/sumocode/issues/305) | TODO |
+| 068 | [/subagents dashboard, takeover view, /ps](068-fleet-dashboard-and-takeover.md) | P2 | L | 065, 066, 067 | [#306](https://github.com/dhruvkelawala/sumocode/issues/306) | TODO |
+| 069 | [Worktree isolation + completion manifest](069-worktree-isolation-and-manifest.md) | P2 | M | 065, 066 | [#307](https://github.com/dhruvkelawala/sumocode/issues/307) | TODO |
+| 070 | [Migration: retire bg_task + routing guidance](070-orchestration-migration.md) | P3 | M | 065–069 + operator gate | [#308](https://github.com/dhruvkelawala/sumocode/issues/308) | TODO |
+| 071 | [On-demand interactive worktrees (fresh/reopen)](071-on-demand-interactive-worktrees.md) | P2 | S | — (independent) | [#309](https://github.com/dhruvkelawala/sumocode/issues/309) | TODO |
 
 ### Dependency notes
 

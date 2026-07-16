@@ -20,6 +20,7 @@
 - **Depends on**: plans/065-subagents-core.md, plans/066-typed-deferred-result-delivery.md, plans/067-background-terminals-regrammar.md, plans/068-fleet-dashboard-and-takeover.md, plans/069-worktree-isolation-and-manifest.md
 - **Category**: migration
 - **Planned at**: commit `d4ce41d`, 2026-07-15
+- **Issue**: https://github.com/dhruvkelawala/sumocode/issues/308
 
 > **Gate**: Do NOT start this plan until the operator (Dhruv) confirms he has
 > used the new `subagent_*`/`bg_*` tools for real work and considers them at

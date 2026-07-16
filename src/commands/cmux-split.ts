@@ -77,13 +77,16 @@ export function shellEscape(value: string): string {
 }
 
 /**
- * Build a `cd <cwd> && exec sh -lc <command>` string for `cmux respawn-pane`'s
- * `--command` argument. Two layers of escaping: cwd is escaped once for the
- * outer shell, command is escaped once more so the inner `sh -lc` sees it as
- * a single string argument.
+ * Build a command suitable for `cmux respawn-pane --command`.
+ *
+ * cmux tokenizes the command and spawns argv[0] directly, so the returned
+ * string must begin with a real executable rather than `cd`, `exec`, an env
+ * assignment, or another shell construct. A login bash restores the user's
+ * PATH before changing directory and running the requested command.
  */
 export function buildShellCommand(cwd: string, command: string): string {
-	return ["cd", shellEscape(cwd), "&&", "exec", "sh", "-lc", shellEscape(command)].join(" ");
+	const shellCommand = ["cd", shellEscape(cwd), "&&", command].join(" ");
+	return ["bash", "-lc", shellEscape(shellCommand)].join(" ");
 }
 
 function collectSurfaceRefs(panes: readonly CmuxPaneInfo[]): Set<string> {

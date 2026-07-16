@@ -1,7 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
-import { openCommandInCurrentSurface, parseNewSplitOutput } from "./cmux-split.js";
+import { buildShellCommand, openCommandInCurrentSurface, parseNewSplitOutput } from "./cmux-split.js";
 
 describe("cmux-split", () => {
+	it("builds respawn commands with a real executable before shell operators", () => {
+		const command = buildShellCommand("/repo worktree", "pnpm install && exec sumocode");
+
+		expect(command).toMatch(/^bash -lc /);
+		expect(command).toContain("cd '\\''/repo worktree'\\'' && pnpm install && exec sumocode");
+	});
+
 	it("parseNewSplitOutput extracts surface and workspace refs", () => {
 		expect(parseNewSplitOutput("OK surface:2 workspace:1\n")).toEqual({
 			surfaceRef: "surface:2",

@@ -47,8 +47,9 @@ describe("/sumo:worktree", () => {
 
 		expect(registerCommand).toHaveBeenCalledWith("sumo:worktree", expect.objectContaining({ description: expect.any(String) }));
 		expect(create).toHaveBeenCalledWith({ repoRoot: "/repo", task: "ship v0.4", baseRef: "HEAD" });
-		expect(openSplit).toHaveBeenCalledWith(pi, "down", expect.stringContaining("cd '/repo.wt/sumo__task'"));
+		expect(openSplit).toHaveBeenCalledWith(pi, "down", expect.stringMatching(/^bash -lc /));
 		const openedCommand = (openSplit.mock.calls[0] as unknown[] | undefined)?.[2] as string;
+		expect(openedCommand).toContain("/repo.wt/sumo__task");
 		expect(openedCommand).toContain("pnpm install && SUMOCODE_TASK_KEEP_OPEN=1 exec sumocode task");
 		expect(openedCommand).toContain("ship v0.4");
 		expect(sendMessage).toHaveBeenCalledWith(
@@ -119,7 +120,8 @@ describe("/sumo:worktree", () => {
 			sessionManager: { getBranch: () => [] },
 		});
 
-		expect(openCurrent).toHaveBeenCalledWith(pi, expect.stringContaining("cd '/repo.wt/sumo__fresh'"));
+		expect(openCurrent).toHaveBeenCalledWith(pi, expect.stringMatching(/^bash -lc /));
+		expect((openCurrent.mock.calls[0] as unknown[] | undefined)?.[1]).toContain("/repo.wt/sumo__fresh");
 		expect(openSplit).not.toHaveBeenCalled();
 	});
 
@@ -222,7 +224,8 @@ describe("/sumo:worktree", () => {
 		await handler()?.(`open ${target}`, { hasUI: true, cwd: "/repo", ui: { notify } });
 
 		expect(create).not.toHaveBeenCalled();
-		expect(openSplit).toHaveBeenCalledWith(pi, expect.any(String), expect.stringContaining("cd '/repo.wt/sumo__one'"));
+		expect(openSplit).toHaveBeenCalledWith(pi, expect.any(String), expect.stringMatching(/^bash -lc /));
+		expect((openSplit.mock.calls[0] as unknown[] | undefined)?.[2]).toContain("/repo.wt/sumo__one");
 		expect((openSplit.mock.calls[0] as unknown[] | undefined)?.[2]).toContain("pnpm install && exec sumocode");
 		expect(notify).toHaveBeenCalledWith(expect.stringContaining("reopened sumo/one in"), "info");
 	});

@@ -498,6 +498,7 @@ manifests, then retirement of the `bg_task` mega-tool and delegation routing amb
 | 069 | [Worktree isolation + completion manifest](069-worktree-isolation-and-manifest.md) | P2 | M | 065, 066 | [#307](https://github.com/dhruvkelawala/sumocode/issues/307) | TODO |
 | 070 | [Migration: retire bg_task + routing guidance](070-orchestration-migration.md) | P3 | M | 065–069 + operator gate | [#308](https://github.com/dhruvkelawala/sumocode/issues/308) | TODO |
 | 071 | [On-demand interactive worktrees (fresh/reopen)](071-on-demand-interactive-worktrees.md) | P2 | S | — (independent) | [#309](https://github.com/dhruvkelawala/sumocode/issues/309) | TODO |
+| 072 | [Terminal-host abstraction: herdr + cmux](072-terminal-host-abstraction-herdr.md) | P2 | M | 071 (same file) | — | TODO |
 
 ### Dependency notes
 
@@ -506,6 +507,10 @@ manifests, then retirement of the `bg_task` mega-tool and delegation routing amb
 - 069 is parallel to 067/068 (different files) — coordinate only on `src/subagents/index.ts`.
 - 070 is gated on explicit operator confirmation of real-work parity — it deletes working
   functionality (`bg_task` tool, `runner=sumocode` spawn path, `notifyOnExit` prose wake).
+- 072 makes every pane/notification surface (worktree, diff, review, visible bg tasks) work under
+  herdr (herdr.dev) as well as cmux via a `TerminalHost` facade; land after 071 (shared
+  `worktree.ts`). Herdr-native worktree workspaces and `wait agent-status` orchestration hooks
+  are recorded follow-ups, not v1 scope.
 - 071 is fully independent (touches only `src/commands/worktree.ts` + test) and can run first
   — it extends the existing `/sumo:worktree` with Codex/T3-style plain interactive sessions
   (bare/`new [name]`/`--base <ref>`) and `open <branch-or-path>` reopen, keeping the delegated

@@ -473,6 +473,44 @@ promotion still requires Dhruv's explicit approval.
   them, re-point the live inserts at the RPC `onEvent` pump and re-verify dedup. Track C is the
   final cross-track acceptance gate for this: no 1:1 parity sign-off without 017 evidence.
 
+## Orchestration v2 — one grammar for subagents and background work (065–070)
+
+**Design rationale:** [`docs/research/SUMOCODE_ORCHESTRATION_BENCHMARK_2026.md`](../docs/research/SUMOCODE_ORCHESTRATION_BENCHMARK_2026.md)
+(primary-source benchmark of Claude Code, Codex, Oh My Pi, OpenCode, Cursor, Copilot coding
+agent + the `davis7dotsh/my-pi-setup` reference implementation). Decided shape: verb-per-tool
+surfaces (`subagent_spawn/check/wait/cancel/list`, `bg_start/bg_status/bg_kill/bg_list`), typed
+deferred result delivery with consumed-tracking (no fake-user prose), an in-app dashboard +
+takeover view instead of mandatory cmux panes, worktree isolation + host-derived completion
+manifests, then retirement of the `bg_task` mega-tool and delegation routing ambiguity.
+
+**Planned at:** `d4ce41d`, 2026-07-15.
+
+| Plan | Title | Priority | Effort | Depends on | Status |
+|------|-------|----------|--------|------------|--------|
+| 065 | [Subagents core: domain, manager, pi backend, five verb tools](065-subagents-core.md) | P1 | L | — | TODO |
+| 066 | [Typed deferred result delivery](066-typed-deferred-result-delivery.md) | P1 | M | 065 | TODO |
+| 067 | [Background terminals verb regrammar](067-background-terminals-regrammar.md) | P2 | M | 066 | TODO |
+| 068 | [/subagents dashboard, takeover view, /ps](068-fleet-dashboard-and-takeover.md) | P2 | L | 065, 066, 067 | TODO |
+| 069 | [Worktree isolation + completion manifest](069-worktree-isolation-and-manifest.md) | P2 | M | 065, 066 | TODO |
+| 070 | [Migration: retire bg_task + routing guidance](070-orchestration-migration.md) | P3 | M | 065–069 + operator gate | TODO |
+| 071 | [On-demand interactive worktrees (fresh/reopen)](071-on-demand-interactive-worktrees.md) | P2 | S | — (independent) | TODO |
+
+### Dependency notes
+
+- 066 needs 065's manager/consumed-set; 067 reuses 066's delivery buffer and flusher.
+- 068 needs 067 only for `/ps`; the `/subagents` half can start after 066 if sequencing demands.
+- 069 is parallel to 067/068 (different files) — coordinate only on `src/subagents/index.ts`.
+- 070 is gated on explicit operator confirmation of real-work parity — it deletes working
+  functionality (`bg_task` tool, `runner=sumocode` spawn path, `notifyOnExit` prose wake).
+- 071 is fully independent (touches only `src/commands/worktree.ts` + test) and can run first
+  — it extends the existing `/sumo:worktree` with Codex/T3-style plain interactive sessions
+  (bare/`new [name]`/`--base <ref>`) and `open <branch-or-path>` reopen, keeping the delegated
+  `<task>` form and `prune` back-compatible.
+- Deliberately deferred (recorded in 065/068/069/070/071 maintenance notes): durable subagent
+  recovery across reloads, claude/codex harness backends, steering into live children, cmux
+  panes as optional task views, the diff→apply/discard result loop, worktree pruning UI/status
+  badges, and local⇄worktree handoff.
+
 ## Status values
 
 TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED (with one-line rationale)

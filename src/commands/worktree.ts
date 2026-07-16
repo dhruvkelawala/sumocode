@@ -1,7 +1,15 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { buildShellCommand, isInCmux, openCommandInNewSplit, shellEscape, type SplitDirection } from "./cmux-split.js";
 import { chooseDiffSplitDirection, type TerminalSize } from "./diff.js";
-import { createWorktree, listWorktrees, removeWorktree, type CreateWorktreeResult, type ListWorktreesResult, type RemoveWorktreeResult } from "../git/worktree.js";
+import {
+	createWorktree,
+	listWorktrees,
+	removeWorktree,
+	type CreateWorktreeResult,
+	type ListWorktreesResult,
+	type RemoveWorktreeResult,
+	type WorktreeInfo,
+} from "../git/worktree.js";
 
 const DEFAULT_SETUP_ACTION = "pnpm install";
 
@@ -16,8 +24,10 @@ export interface WorktreeCommandOptions {
 }
 
 export interface ParsedWorktreeArgs {
-	readonly mode: "open" | "prune";
-	readonly task: string;
+	readonly mode: "fresh" | "reopen" | "delegate" | "prune";
+	/** delegate: task prompt · fresh: optional name · reopen/prune: branch-or-path target */
+	readonly value: string;
+	readonly baseRef?: string;
 }
 
 function terminalSize(): TerminalSize {
@@ -26,10 +36,23 @@ function terminalSize(): TerminalSize {
 
 export function parseWorktreeArgs(args: string): ParsedWorktreeArgs {
 	const trimmed = args.trim();
-	if (trimmed === "prune" || trimmed.startsWith("prune ")) {
-		return { mode: "prune", task: trimmed.slice("prune".length).trim() };
+	const baseMatch = /(^|\s)--base(?:\s+(\S+))?(?=\s|$)/.exec(trimmed);
+	const baseRef = baseMatch ? (baseMatch[2] ?? "") : undefined;
+	const withoutBase = baseMatch
+		? [trimmed.slice(0, baseMatch.index).trimEnd(), trimmed.slice(baseMatch.index + baseMatch[0].length).trimStart()].filter(Boolean).join(" ")
+		: trimmed;
+	const parsedBase = baseRef === undefined ? {} : { baseRef };
+
+	if (!withoutBase || withoutBase === "new" || withoutBase.startsWith("new ")) {
+		return { mode: "fresh", value: withoutBase.slice("new".length).trim(), ...parsedBase };
 	}
-	return { mode: "open", task: trimmed };
+	if (withoutBase === "open" || withoutBase.startsWith("open ")) {
+		return { mode: "reopen", value: withoutBase.slice("open".length).trim(), ...parsedBase };
+	}
+	if (withoutBase === "prune" || withoutBase.startsWith("prune ")) {
+		return { mode: "prune", value: withoutBase.slice("prune".length).trim(), ...parsedBase };
+	}
+	return { mode: "delegate", value: withoutBase, ...parsedBase };
 }
 
 function notify(pi: Pick<ExtensionAPI, "sendMessage">, ctx: ExtensionContext, message: string, type: "info" | "warning" = "info"): void {
@@ -55,6 +78,20 @@ function commandForWorktree(task: string, setupAction: string): string {
 	return `${setupPrefix}SUMOCODE_TASK_KEEP_OPEN=1 exec sumocode task ${shellEscape(task)}`;
 }
 
+function commandForFreshWorktree(setupAction: string): string {
+	const setup = setupAction.trim();
+	const setupPrefix = setup ? `${setup} && ` : "";
+	return `${setupPrefix}exec sumocode`;
+}
+
+function listSumoWorktrees(worktrees: readonly WorktreeInfo[]): readonly WorktreeInfo[] {
+	return worktrees.filter((worktree) => worktree.branch?.startsWith("sumo/"));
+}
+
+function findSumoWorktree(worktrees: readonly WorktreeInfo[], target: string): WorktreeInfo | undefined {
+	return listSumoWorktrees(worktrees).find((worktree) => worktree.path === target || worktree.branch === target);
+}
+
 async function handlePrune(
 	pi: Pick<ExtensionAPI, "sendMessage">,
 	ctx: ExtensionContext,
@@ -67,7 +104,7 @@ async function handlePrune(
 		notify(pi, ctx, `/sumo:worktree prune: ${listed.message}`, "warning");
 		return;
 	}
-	const sumoWorktrees = listed.worktrees.filter((worktree) => worktree.branch?.startsWith("sumo/"));
+	const sumoWorktrees = listSumoWorktrees(listed.worktrees);
 	if (!target) {
 		if (sumoWorktrees.length === 0) {
 			notify(pi, ctx, "no sumo worktrees found");
@@ -77,7 +114,7 @@ async function handlePrune(
 		notify(pi, ctx, `sumo worktrees:\n${lines.join("\n")}\nrun /sumo:worktree prune <branch-or-path> to remove one`);
 		return;
 	}
-	const match = sumoWorktrees.find((worktree) => worktree.path === target || worktree.branch === target);
+	const match = findSumoWorktree(listed.worktrees, target);
 	if (!match) {
 		notify(pi, ctx, `/sumo:worktree prune: no tracked sumo worktree matched ${target}`, "warning");
 		return;
@@ -100,12 +137,20 @@ export function registerWorktreeCommand(pi: ExtensionAPI, options: WorktreeComma
 	const setupAction = options.setupAction ?? process.env.SUMOCODE_WORKTREE_SETUP ?? DEFAULT_SETUP_ACTION;
 
 	pi.registerCommand("sumo:worktree", {
-		description: "Create a named git worktree and open an interactive SumoCode pane, or prune explicit sumo worktrees",
+		description: "Open a fresh worktree session, reopen one with open <target>, delegate <task>, or prune [target]; fresh/delegate accept --base <ref>",
 		handler: async (args, ctx) => {
 			try {
 				const parsed = parseWorktreeArgs(args ?? "");
+				if (parsed.baseRef === "") {
+					notify(pi, ctx, "Usage: /sumo:worktree [new [name] | open <branch-or-path> | <task> | prune [branch-or-path]] [--base <ref>]", "warning");
+					return;
+				}
+				if (parsed.baseRef !== undefined && (parsed.mode === "reopen" || parsed.mode === "prune")) {
+					notify(pi, ctx, "/sumo:worktree: --base is only valid for fresh or delegated worktrees", "warning");
+					return;
+				}
 				if (parsed.mode === "prune") {
-					await handlePrune(pi, ctx, parsed.task, list, remove);
+					await handlePrune(pi, ctx, parsed.value, list, remove);
 					return;
 				}
 				if (!ctx.hasUI) {
@@ -116,25 +161,55 @@ export function registerWorktreeCommand(pi: ExtensionAPI, options: WorktreeComma
 					notify(pi, ctx, "/sumo:worktree requires a cmux surface", "warning");
 					return;
 				}
-				if (!parsed.task) {
-					notify(pi, ctx, "Usage: /sumo:worktree <task> or /sumo:worktree prune <branch-or-path>", "warning");
+				if (parsed.mode === "reopen") {
+					if (!parsed.value) {
+						notify(pi, ctx, "Usage: /sumo:worktree open <branch-or-path>", "warning");
+						return;
+					}
+					const listed = await list(ctx.cwd);
+					if (!listed.ok) {
+						notify(pi, ctx, `/sumo:worktree open: ${listed.message}`, "warning");
+						return;
+					}
+					const match = findSumoWorktree(listed.worktrees, parsed.value);
+					if (!match) {
+						const available = listSumoWorktrees(listed.worktrees).map((worktree) => worktree.branch ?? worktree.path);
+						notify(
+							pi,
+							ctx,
+							`/sumo:worktree open: no tracked sumo worktree matched ${parsed.value} · available: ${available.join(", ") || "none"}`,
+							"warning",
+						);
+						return;
+					}
+					const direction: SplitDirection = chooseDiffSplitDirection(getTerminalSize());
+					const command = buildShellCommand(match.path, commandForFreshWorktree(setupAction));
+					const opened = await openSplit(pi, direction, command);
+					if (!opened.ok) {
+						notify(pi, ctx, `/sumo:worktree: ${opened.error}`, "warning");
+						return;
+					}
+					notify(pi, ctx, `reopened ${match.branch ?? match.path} in ${direction} split`);
 					return;
 				}
 
-				const created: CreateWorktreeResult = await create({ repoRoot: ctx.cwd, task: parsed.task, baseRef: "HEAD" });
+				const task = parsed.mode === "fresh" ? (parsed.value || `wt-${Date.now().toString(36)}`) : parsed.value;
+				const created: CreateWorktreeResult = await create({ repoRoot: ctx.cwd, task, baseRef: parsed.baseRef ?? "HEAD" });
 				if (!created.ok) {
 					notify(pi, ctx, `/sumo:worktree: ${created.message}`, "warning");
 					return;
 				}
 
 				const direction: SplitDirection = chooseDiffSplitDirection(getTerminalSize());
-				const command = buildShellCommand(created.path, commandForWorktree(parsed.task, setupAction));
+				const paneCommand = parsed.mode === "fresh" ? commandForFreshWorktree(setupAction) : commandForWorktree(parsed.value, setupAction);
+				const command = buildShellCommand(created.path, paneCommand);
 				const opened = await openSplit(pi, direction, command);
 				if (!opened.ok) {
 					notify(pi, ctx, `/sumo:worktree: ${opened.error}`, "warning");
 					return;
 				}
-				notify(pi, ctx, `opened ${created.branch} in ${direction} split · setup: ${setupAction || "none"}`);
+				const freshLabel = parsed.mode === "fresh" ? " (fresh session)" : "";
+				notify(pi, ctx, `opened ${created.branch}${freshLabel} in ${direction} split · setup: ${setupAction || "none"}`);
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);
 				notify(pi, ctx, `/sumo:worktree: ${message}`, "warning");

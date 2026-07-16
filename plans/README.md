@@ -497,7 +497,7 @@ manifests, then retirement of the `bg_task` mega-tool and delegation routing amb
 | 068 | [/subagents dashboard, takeover view, /ps](068-fleet-dashboard-and-takeover.md) | P2 | L | 065, 066, 067 | [#306](https://github.com/dhruvkelawala/sumocode/issues/306) | TODO |
 | 069 | [Worktree isolation + completion manifest](069-worktree-isolation-and-manifest.md) | P2 | M | 065, 066 | [#307](https://github.com/dhruvkelawala/sumocode/issues/307) | TODO |
 | 070 | [Migration: retire bg_task + routing guidance](070-orchestration-migration.md) | P3 | M | 065–069 + operator gate | [#308](https://github.com/dhruvkelawala/sumocode/issues/308) | TODO |
-| 071 | [On-demand interactive worktrees (fresh/reopen)](071-on-demand-interactive-worktrees.md) | P2 | S | — (independent) | [#309](https://github.com/dhruvkelawala/sumocode/issues/309) | TODO |
+| 071 | [On-demand interactive worktrees (fresh/reopen)](071-on-demand-interactive-worktrees.md) | P2 | S | — (independent) | [#309](https://github.com/dhruvkelawala/sumocode/issues/309) | DONE |
 
 ### Dependency notes
 

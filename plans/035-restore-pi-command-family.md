@@ -144,22 +144,30 @@ and its unit test green.
 Record these in the report as upstream requests; do not attempt host-side
 hacks that fake them:
 
-- **`/scoped-models`** — DEFINITIVE VERDICT (2026-07-03 exhaustive audit,
-  agent a9b39209aaddc2311, evidence chain fully traced): genuinely blocked,
-  no host-side workaround is honest. Pi's scoped-model state
-  (`_scopedModels`) is a **private in-process field on `AgentSession`**
-  (`agent-session.js:64,120,589-594`), seeded only from the `--models` CLI
-  flag at construction and consulted internally by `cycleModel()`
-  (`agent-session.js:1113-1141`). The RPC protocol's 28-verb command union
-  has `set_model`/`cycle_model`/`get_available_models` and nothing else
-  model-related — no `get_scoped_models`/`set_scoped_models` pair exists, so
-  the host cannot even READ the current scope, let alone write it. A
-  host-side "fake scoping" UI would silently diverge from Pi's real semantics
-  (session-only persistence, per-scoped-model thinking-level override,
-  provider-auth filtering) and wouldn't touch Pi's actual Ctrl+P binding at
-  all. Needs a new RPC verb pair upstream. Do not build a client-side
-  imitation — file the upstream ask and leave `/scoped-models` notifying
-  "unknown command" until Pi exposes it.
+- **`/scoped-models`** — ~~DEFINITIVE VERDICT (2026-07-03): blocked~~
+  **RE-VERDICT 2026-07-15: buildable host-side; moved to Phase 2.** The
+  2026-07-03 audit's narrow facts stand — `_scopedModels` is a private
+  in-process `AgentSession` field (`agent-session.js:64,120,589-594`), seeded
+  only from `--models` at construction, and the RPC union has no
+  `get_scoped_models`/`set_scoped_models` — but its conclusion conflated
+  "cannot mirror Pi's private state" with "cannot implement the feature."
+  Plan 057 (`17f529e`, landed after the audit) proved the single-authority
+  pattern the audit dismissed: a host-owned ring
+  (`src/sumo-tui/rpc/enabled-models.ts`, faithful resolveModelScope-subset
+  filter) already drives backward cycle and the `/model` selector via
+  `set_model`, and the child's internal scope is spawn-seeded from the same
+  `enabledModels` so forward `cycle_model` agrees. Divergence only occurs if
+  two authorities are live; host-as-sole-authority dissolves it.
+  Build plan: (1) make the ring session-scoped and mutable, edited by
+  `/scoped-models`, persisted host-side per session; (2) precondition: move
+  forward Ctrl+P off `cycle_model` (`controls.ts:121`) onto the host ring +
+  `set_model`, so Pi's spawn-frozen internal ring becomes irrelevant rather
+  than divergent; (3) reimplement session-only persistence and
+  per-scoped-model thinking overrides host-side (`set_thinking_level` after
+  `set_model`); (4) optionally re-seed `--models` on resume/respawn.
+  Residual caveat (acceptable): Pi's `_scopedModels` stays frozen at spawn
+  value — harmless once no code path consults it. The upstream
+  `get/set_scoped_models` verb ask remains nice-to-have, not a blocker.
 
 - **`/login` / `/logout`** — needs new OAuth RPC verbs (`login_start`,
   `login_poll`, `logout`, `get_auth_providers`); no `extension_ui` method

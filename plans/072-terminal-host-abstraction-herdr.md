@@ -22,6 +22,7 @@
 - **Depends on**: plans/071-on-demand-interactive-worktrees.md (same file: `src/commands/worktree.ts`; land 071 first)
 - **Category**: direction
 - **Planned at**: commit `9a2f458`, 2026-07-16
+- **Issue**: https://github.com/dhruvkelawala/sumocode/issues/311
 
 ## Why this matters
 

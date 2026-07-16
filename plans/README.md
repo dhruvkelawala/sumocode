@@ -1,4 +1,4 @@
-# Plans
+| 072 | [Terminal-host abstraction: herdr + cmux](072-terminal-host-abstraction-herdr.md) | P2 | M | 071 (same file) | [#311](https://github.com/dhruvkelawala/sumocode/issues/311) |# Plans
 
 Executor-grade, self-contained implementation plans for SumoCode. Four independent tracks:
 

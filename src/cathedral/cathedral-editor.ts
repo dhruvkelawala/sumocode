@@ -41,7 +41,7 @@ import { CustomEditor } from "@earendil-works/pi-coding-agent";
 import { CURSOR_MARKER, truncateToWidth, visibleWidth, type EditorTheme, type TUI } from "@earendil-works/pi-tui";
 import { sessionHasMessages as cachedSessionHasMessages } from "../session-cache.js";
 import { activeThemeColors } from "../themes/index.js";
-import { EditorImageDraftState, isLikelyClipboardImagePath, setActiveEditorDraftController } from "./editor-draft-state.js";
+import { EditorImageDraftState, isLikelyClipboardImagePath, normalizePastedImagePath, setActiveEditorDraftController } from "./editor-draft-state.js";
 import {
 	INPUT_FRAME_LABEL_ACTIVE,
 	INPUT_FRAME_LABEL_SPLASH,
@@ -216,7 +216,11 @@ function isPiBorderRow(row: string): boolean {
 	return false;
 }
 
-class CathedralEditor extends CustomEditor {
+export interface CathedralEditorOptions {
+	readonly isSplash?: () => boolean;
+}
+
+export class CathedralEditor extends CustomEditor {
 	private lastPrintableInputAt = 0;
 	private readonly imageDraftState = new EditorImageDraftState();
 	private submitHandler: ((text: string) => void) | undefined;
@@ -228,6 +232,9 @@ class CathedralEditor extends CustomEditor {
 		private readonly isSplash: () => boolean,
 	) {
 		super(cathedralTui, theme, keybindings);
+		// Shadow pi-tui Editor's private handlePaste with the image-collapsing
+		// interceptor (see cathedralHandlePaste's doc comment).
+		(this as unknown as { handlePaste: (text: string) => void }).handlePaste = this.cathedralHandlePaste;
 		delete (this as { onSubmit?: unknown }).onSubmit;
 		Object.defineProperty(this, "onSubmit", {
 			configurable: true,
@@ -252,14 +259,42 @@ class CathedralEditor extends CustomEditor {
 	}
 
 	override insertTextAtCursor(text: string): void {
-		if (isLikelyClipboardImagePath(text)) {
-			const token = this.imageDraftState.addImage(text.trim());
-			super.insertTextAtCursor(token);
-			this.cathedralTui.requestRender();
-			return;
-		}
+		if (this.collapseImagePath(text)) return;
 		super.insertTextAtCursor(text);
 	}
+
+	/**
+	 * Collapse a pasted/dropped image path into an `[Image N]` token. Returns
+	 * true when the text was consumed. Candidates are normalized first
+	 * (surrounding quotes stripped, `\ ` escapes unescaped) so terminal
+	 * drag/paste forms of paths with spaces still collapse and the draft
+	 * state stores the real on-disk path.
+	 */
+	private collapseImagePath(text: string): boolean {
+		const candidate = normalizePastedImagePath(text);
+		if (!isLikelyClipboardImagePath(candidate)) return false;
+		const token = this.imageDraftState.addImage(candidate);
+		super.insertTextAtCursor(token);
+		this.cathedralTui.requestRender();
+		return true;
+	}
+
+	/**
+	 * Bracketed-paste interception. Terminal paste (Cmd+V) and file drops
+	 * arrive as bracketed paste and flow through pi-tui `Editor.handlePaste`
+	 * → `insertTextAtCursorInternal`, BYPASSING the public
+	 * `insertTextAtCursor` override above — so image paths pasted that way
+	 * splattered as raw text. `handlePaste` is declared private in pi-tui's
+	 * d.ts but is a regular prototype method at runtime; this instance
+	 * property shadows it (`this.handlePaste(...)` inside Editor.handleInput
+	 * resolves to the instance property first). Kept as an assigned arrow
+	 * rather than a method declaration because TypeScript refuses subclass
+	 * overrides of private-declared members.
+	 */
+	private readonly cathedralHandlePaste = (pastedText: string): void => {
+		if (this.collapseImagePath(pastedText)) return;
+		(CustomEditor.prototype as unknown as { handlePaste(text: string): void }).handlePaste.call(this, pastedText);
+	};
 
 	override handleInput(data: string): void {
 		const now = Date.now();
@@ -355,6 +390,15 @@ class CathedralEditor extends CustomEditor {
 	}
 }
 
+export function createCathedralEditor(
+	tui: TUI,
+	theme: EditorTheme,
+	keybindings: KeybindingsManager,
+	options: CathedralEditorOptions = {},
+): CathedralEditor {
+	return new CathedralEditor(tui, theme, keybindings, options.isSplash ?? (() => false));
+}
+
 function sessionHasMessages(ctx: ExtensionContext): boolean {
 	try {
 		return cachedSessionHasMessages(ctx);
@@ -377,7 +421,7 @@ export function installCathedralEditor(pi: ExtensionAPI): void {
 		// session_start calls can observe whether another extension already owns it.
 		(ctx.ui as { getEditorComponent?: () => unknown }).getEditorComponent?.();
 		ctx.ui.setEditorComponent((tui, theme, keybindings) => {
-			return new CathedralEditor(tui, theme, keybindings, () => !sessionHasMessages(ctx));
+			return createCathedralEditor(tui, theme, keybindings, { isSplash: () => !sessionHasMessages(ctx) });
 		});
 	});
 }

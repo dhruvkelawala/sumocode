@@ -123,6 +123,7 @@ export class InteractionRegistry {
 export interface InstallSumoInteractionsOptions {
 	readonly reporter?: InteractionDiagnosticReporter;
 	readonly backgroundTaskManager?: BackgroundTaskManager;
+	readonly includeUiSurfaces?: boolean;
 }
 
 export function createInteractionRegistry(pi: ExtensionAPI, reporter?: InteractionDiagnosticReporter): InteractionRegistry {
@@ -131,8 +132,10 @@ export function createInteractionRegistry(pi: ExtensionAPI, reporter?: Interacti
 
 export function installSumoInteractions(pi: ExtensionAPI, options: InstallSumoInteractionsOptions = {}): InteractionRegistrySnapshot {
 	const registry = createInteractionRegistry(pi, options.reporter);
-	registry.install("command-palette", installCommandPalette);
-	registry.install("sidebar", installSidebar);
+	if (options.includeUiSurfaces !== false) {
+		registry.install("command-palette", installCommandPalette);
+		registry.install("sidebar", installSidebar);
+	}
 	registry.install("commands.approval", registerApprovalCommand);
 	registry.install("commands.cursor", registerCursorCommand);
 	registry.install("commands.diff", registerDiffCommand);

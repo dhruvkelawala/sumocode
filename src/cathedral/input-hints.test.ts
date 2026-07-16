@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { installInputHints } from "./input-hints.js";
+import { installInputHints, splashInvocationHint } from "./input-hints.js";
 
 type Handler = (...args: unknown[]) => unknown;
 
@@ -154,5 +154,15 @@ describe("installInputHints", () => {
 		const updated = component.render(120)[0]!.replace(/\u001b\[[0-9;]*m/g, "");
 		expect(updated).toContain("╰─ gpt-5.3-codex · xhigh");
 		expect(requestRender).toHaveBeenCalledTimes(2);
+	});
+});
+
+describe("splashInvocationHint", () => {
+	it("formats model and thinking level for the splash footer", () => {
+		expect(splashInvocationHint("gpt-5.5", "high")).toBe("╰─ gpt-5.5 · high");
+	});
+
+	it("falls back to thinking when the level is unavailable", () => {
+		expect(splashInvocationHint("no model", undefined)).toBe("╰─ no model · thinking");
 	});
 });

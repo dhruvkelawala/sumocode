@@ -1,10 +1,9 @@
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { pathToFileURL } from "node:url";
 import { Editor, type EditorTheme, type TUI } from "@earendil-works/pi-tui";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { spawnPiPty, type SpawnedPiPty } from "./spawn-pi-pty.js";
+import { spawnPiPty, spawnSumocodePty, type SpawnedPiPty } from "./spawn-pi-pty.js";
 
 const ANSI_PATTERN = /\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\)|_[^\x07]*(?:\x07|\x1b\\))/g;
 const BRACKETED_PASTE_ENABLE = "\x1b[?2004h";
@@ -81,16 +80,13 @@ describe("multiline paste and newline handling", () => {
 		expect(plain).not.toContain("Error:");
 	}, 20_000);
 
-	it("enables bracketed paste in the real SumoCode runtime and does not submit pasted newlines", async () => {
+	it("enables bracketed paste in the RPC SumoCode runtime and does not submit pasted newlines", async () => {
 		const agentDir = await mkdtemp(join(tmpdir(), "sumocode-pi-agent-"));
-		app = spawnPiPty({
+		app = spawnSumocodePty({
 			cols: 80,
 			rows: 30,
 			env: {
 				PI_CODING_AGENT_DIR: agentDir,
-				SUMO_TUI: "1",
-				SUMO_TUI_HIDE_PI_NOISE: "1",
-				SUMO_TUI_MODULE: pathToFileURL(join(process.cwd(), "sumo-interactive-mode.js")).href,
 			},
 		});
 

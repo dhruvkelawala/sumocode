@@ -21,7 +21,7 @@ import { renderInputHints } from "./input-frame.js";
 const SPLASH_INPUT_FRAME_WIDTH = 60;
 const ACTIVE_HINT_HORIZONTAL_PADDING = 1;
 const ANSI_PATTERN = /\u001b\[[0-9;]*m/g;
-type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
 function centerAnsi(line: string, width: number): string {
 	const visible = visibleWidth(line.replace(ANSI_PATTERN, ""));
@@ -79,7 +79,7 @@ function modelDisplayName(ctx: ExtensionContext): string {
 	return ctx.model?.id ?? "no model";
 }
 
-function splashInvocationHint(modelId: string, thinkingLevel: ThinkingLevel | undefined): string {
+export function splashInvocationHint(modelId: string, thinkingLevel: string | undefined): string {
 	return `╰─ ${modelId} · ${thinkingLevel ?? "thinking"}`;
 }
 

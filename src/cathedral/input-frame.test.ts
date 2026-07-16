@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
 	INPUT_FRAME_HINT_KEYBINDS,
-	INPUT_FRAME_HINT_AWAITING,
 	renderInputFrame,
 	renderInputHints,
 } from "./input-frame.js";
 
 const ANSI = /\u001b\[[0-9;]*m/g;
 const stripAnsi = (s: string): string => s.replace(ANSI, "");
+const SPLASH_HINT = "╰─ gpt-5.5 · high";
 
 describe("renderInputFrame — active state (no label, no placeholder)", () => {
 	it("renders 3 rows: top + content + bottom", () => {
@@ -51,6 +51,12 @@ describe("renderInputFrame — active state (no label, no placeholder)", () => {
 		const lines = renderInputFrame("test", 40);
 		// accent #D97706 -> 217;119;6
 		expect(lines.join("\n")).toContain("\u001b[38;2;217;119;6m");
+	});
+
+	it("can render the Bible scene cursor as an accent-background cell", () => {
+		const lines = renderInputFrame("test", 40, { cursorStyle: "cell" });
+		expect(stripAnsi(lines[1]!)).toContain("> test ");
+		expect(lines.join("\n")).toContain("\u001b[48;2;217;119;6m");
 	});
 
 	it("paints the inner content with the recess background (#120D0A)", () => {
@@ -136,25 +142,25 @@ describe("renderInputHints", () => {
 	});
 
 	it("renders both hints when leftHint provided (splash style)", () => {
-		const line = renderInputHints(80, { leftHint: INPUT_FRAME_HINT_AWAITING });
+		const line = renderInputHints(80, { leftHint: SPLASH_HINT });
 		const plain = stripAnsi(line);
-		expect(plain).toContain(INPUT_FRAME_HINT_AWAITING);
+		expect(plain).toContain(SPLASH_HINT);
 		expect(plain).toContain(INPUT_FRAME_HINT_KEYBINDS);
 		// Left hint comes before right hint
-		expect(plain.indexOf(INPUT_FRAME_HINT_AWAITING)).toBeLessThan(plain.indexOf(INPUT_FRAME_HINT_KEYBINDS));
+		expect(plain.indexOf(SPLASH_HINT)).toBeLessThan(plain.indexOf(INPUT_FRAME_HINT_KEYBINDS));
 	});
 
 	it("hints use foregroundDim", () => {
-		const line = renderInputHints(80, { leftHint: INPUT_FRAME_HINT_AWAITING });
+		const line = renderInputHints(80, { leftHint: SPLASH_HINT });
 		// foregroundDim #8B7A63 -> 139;122;99
 		expect(line).toContain("\u001b[38;2;139;122;99m");
 	});
 
 	it("at narrow width, drops left hint first", () => {
 		// Only enough room for keybinds
-		const line = stripAnsi(renderInputHints(30, { leftHint: INPUT_FRAME_HINT_AWAITING }));
+		const line = stripAnsi(renderInputHints(30, { leftHint: SPLASH_HINT }));
 		expect(line).toContain(INPUT_FRAME_HINT_KEYBINDS);
-		expect(line).not.toContain("AWAITING");
+		expect(line).not.toContain("gpt-5.5");
 	});
 
 	it("can truncate active left context instead of dropping it", () => {
@@ -200,12 +206,8 @@ describe("renderInputHints", () => {
 	});
 });
 
-describe("INPUT_FRAME_HINT_KEYBINDS / INPUT_FRAME_HINT_AWAITING constants", () => {
+describe("INPUT_FRAME_HINT_KEYBINDS constant", () => {
 	it("exposes locked keybind hint string", () => {
 		expect(INPUT_FRAME_HINT_KEYBINDS).toBe("CTRL+/ · COMMANDS");
-	});
-
-	it("exposes locked awaiting hint string", () => {
-		expect(INPUT_FRAME_HINT_AWAITING).toBe("╰─ AWAITING PROMPT");
 	});
 });

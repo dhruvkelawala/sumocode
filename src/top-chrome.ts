@@ -23,7 +23,6 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import type { Component } from "@earendil-works/pi-tui";
 import { isTopChromeHidden } from "./commands/tabs.js";
 import { sessionHasMessages as cachedSessionHasMessages } from "./session-cache.js";
-import { getActiveSumoRuntime } from "./sumo-tui/pi-compat/sumo-interactive-mode.js";
 import { activeThemeColors, type SumoCodeState } from "./themes/index.js";
 
 const RESET = "\u001b[0m";
@@ -38,6 +37,10 @@ export type TopChromeSnapshot = {
 	recentSessions: readonly { id: string; label: string }[];
 	hidden: boolean;
 	dotSize?: TopChromeDotSize;
+};
+
+export type TopChromePublication = {
+	readonly component: Component;
 };
 
 function visibleLength(text: string): number {
@@ -220,21 +223,24 @@ class TopChromeComponent implements Component {
 	public constructor(
 		private readonly loadSnapshot: () => TopChromeSnapshot,
 		private readonly shouldRender: () => boolean,
+		private readonly opts: { leadingBlankAtWidth?: number } = {},
 	) {}
 
 	public invalidate(): void {}
 
 	public render(width: number): string[] {
 		if (!this.shouldRender()) return [];
-		return renderTopChromeBlock(this.loadSnapshot(), width);
+		const block = renderTopChromeBlock(this.loadSnapshot(), width);
+		return this.opts.leadingBlankAtWidth !== undefined && width >= this.opts.leadingBlankAtWidth
+			? ["", ...block]
+			: block;
 	}
 }
 
 /**
- * Mounts top chrome as a retained owned-shell component when SumoTUI is active,
- * while also registering Pi's `ctx.ui.setHeader` for plain Pi/non-retained runs.
- * OwnedShellRenderer prefers the retained publication over Pi's header container.
- * Listens to lifecycle events to update the active session state in real time.
+ * Registers Pi's `ctx.ui.setHeader` for direct Pi runs. The RPC host owns the
+ * interactive foreground and renders its own top chrome from RPC state.
+ * Lifecycle events still update the active session state in real time.
  *
  * The actual recents + active-session-name resolution is delegated to the
  * caller-supplied `loadSnapshot` so this module stays unit-testable. In
@@ -242,6 +248,16 @@ class TopChromeComponent implements Component {
  * the session manager + LLM-summarized name cache.
  */
 export type TopChromeLoader = () => TopChromeSnapshot;
+
+export function createTopChromePublication(
+	loader: TopChromeLoader,
+	shouldRender: () => boolean,
+	opts: { leadingBlankAtWidth?: number } = {},
+): TopChromePublication {
+	return {
+		component: new TopChromeComponent(loader, shouldRender, opts),
+	};
+}
 
 export function installTopChrome(pi: ExtensionAPI, loader?: TopChromeLoader): void {
 	let state: SumoCodeState = "idle";
@@ -251,16 +267,13 @@ export function installTopChrome(pi: ExtensionAPI, loader?: TopChromeLoader): vo
 		if (!ctx.hasUI) return;
 		state = "idle";
 
-		const component = new TopChromeComponent(
+		const publication = createTopChromePublication(
 			() => (loader ? loader() : defaultSnapshot(ctx, state)),
 			() => sessionHasMessages(ctx),
 		);
-		const runtime = getActiveSumoRuntime();
-		if (runtime) runtime.setTopChromeComponent(component);
 
 		ctx.ui.setHeader((tui) => {
 			render = () => {
-				runtime?.requestRender();
 				tui.requestRender();
 			};
 
@@ -270,7 +283,7 @@ export function installTopChrome(pi: ExtensionAPI, loader?: TopChromeLoader): vo
 				},
 				invalidate(): void {},
 				render(width: number): string[] {
-					return component.render(width);
+					return publication.component.render(width);
 				},
 			};
 		});
@@ -301,7 +314,6 @@ export function installTopChrome(pi: ExtensionAPI, loader?: TopChromeLoader): vo
 	pi.on("message_start", () => render?.());
 	pi.on("message_end", () => render?.());
 	pi.on("session_shutdown", () => {
-		getActiveSumoRuntime()?.setTopChromeComponent(undefined);
 		render = undefined;
 	});
 }

@@ -1,0 +1,41 @@
+[
+  {
+    "content": [
+      {
+        "text": "RPC_ABORT_STREAM count slowly from 1 to 200, writing one number per line.",
+        "type": "text"
+      }
+    ],
+    "role": "user",
+    "timestamp": 1782827747258
+  },
+  {
+    "api": "sumocode-rpc-spike-api",
+    "content": [
+      {
+        "text": "token-1 token-2 token-3 token-4 token-5 token-6 token-7 token-8 token-9 token-10 ",
+        "type": "text"
+      }
+    ],
+    "errorMessage": "aborted by spike host",
+    "model": "deterministic",
+    "provider": "sumocode-rpc-spike",
+    "role": "assistant",
+    "stopReason": "aborted",
+    "timestamp": 1782827748278,
+    "usage": {
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "cost": {
+        "cacheRead": 0,
+        "cacheWrite": 0,
+        "input": 0,
+        "output": 0,
+        "total": 0
+      },
+      "input": 0,
+      "output": 0,
+      "totalTokens": 0
+    }
+  }
+]

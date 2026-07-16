@@ -21,8 +21,7 @@ import {
 } from "./sumo-tui/cathedral/sidebar-rendering.js";
 import { surfaceLine } from "./sumo-tui/cathedral/ansi.js";
 import { logDiagnostic } from "./sumo-tui/runtime/diagnostics.js";
-import { installNonCapturingSidebarOverlay, SIDEBAR_MIN_TERMINAL_WIDTH, sidebarOverlayTargetRows } from "./sidebar-placement.js";
-import { getActiveSumoRuntime } from "./sumo-tui/pi-compat/sumo-interactive-mode.js";
+import { installNonCapturingSidebarOverlay, sidebarOverlayTargetRows } from "./sidebar-placement.js";
 export {
 	SIDEBAR_MIN_TERMINAL_WIDTH,
 	SIDEBAR_WIDTH,
@@ -69,6 +68,54 @@ export type SidebarSnapshot = RegistrySidebarSnapshot;
 
 export function renderSidebar(snapshot: SidebarSnapshot, width: number): string[] {
 	return renderRegistrySidebarLines(snapshot, width).map((line) => surfaceLine(line, width));
+}
+
+export type SidebarPublication = {
+	readonly component: Component;
+	readonly isVisible: (cols: number, rows: number) => boolean;
+};
+
+class SidebarComponent implements Component {
+	public constructor(
+		private readonly loadSnapshot: () => SidebarSnapshot,
+		private readonly extra?: Component,
+		private readonly targetRows?: () => number,
+	) {}
+
+	public invalidate(): void {
+		this.extra?.invalidate?.();
+	}
+
+	public render(width: number): string[] {
+		const lines = renderSidebar(this.loadSnapshot(), width);
+		const extraLines = this.extra?.render(width) ?? [];
+		const rows = extraLines.length > 0 ? [...lines, ...extraLines] : lines;
+		const targetRows = this.targetRows?.() ?? rows.length;
+		return [
+			...rows,
+			...Array.from({ length: Math.max(0, targetRows - rows.length) }, () => surfaceLine("", width)),
+		];
+	}
+}
+
+export function createSidebarComponent(
+	loadSnapshot: () => SidebarSnapshot,
+	extra?: Component,
+	targetRows?: () => number,
+): Component {
+	return new SidebarComponent(loadSnapshot, extra, targetRows);
+}
+
+export function createSidebarPublication(
+	loadSnapshot: () => SidebarSnapshot,
+	isVisible: (cols: number, rows: number) => boolean,
+	extra?: Component,
+	targetRows?: () => number,
+): SidebarPublication {
+	return {
+		component: createSidebarComponent(loadSnapshot, extra, targetRows),
+		isVisible,
+	};
 }
 
 export type SidebarMemoryCache = {
@@ -263,32 +310,12 @@ export function installSidebar(pi: ExtensionAPI): void {
 					if (sessionHasMessages(ctx)) requestRender?.();
 				});
 			}
-			const sidebarComponent: Component = {
-				invalidate(): void {},
-				render(width: number): string[] {
-					const lines = renderSidebar(
-						snapshotFromContext(ctx, memoryCache?.snapshot() ?? { memory: [] }, activeSubTab, metricsHud.snapshot()),
-						width,
-					);
-					const terminalRows = (tui.terminal as { rows?: number } | undefined)?.rows ?? lines.length;
-					const targetRows = Math.max(lines.length, sidebarOverlayTargetRows(terminalRows));
-					return [
-						...lines,
-						...Array.from({ length: Math.max(0, targetRows - lines.length) }, () => surfaceLine("", width)),
-					];
-				},
-			};
-			// Owned-shell mounts the sidebar as a real Yoga sibling of the chat
-			// region. Publish the component to the runtime so it can pin its
-			// columns structurally instead of relying on overlay compositing
-			// (which is unsafe across chat scroll, resize, and full-frame diff).
-			const runtime = getActiveSumoRuntime();
-			const overlay = runtime
-				? undefined
-				: installNonCapturingSidebarOverlay(tui, sidebarComponent, () => sessionHasMessages(ctx));
-			if (runtime) {
-				runtime.setSidebarComponent(sidebarComponent, (cols) => cols >= SIDEBAR_MIN_TERMINAL_WIDTH && sessionHasMessages(ctx));
-			}
+			const sidebarComponent = createSidebarComponent(
+				() => snapshotFromContext(ctx, memoryCache?.snapshot() ?? { memory: [] }, activeSubTab, metricsHud.snapshot()),
+				undefined,
+				() => sidebarOverlayTargetRows((tui.terminal as { rows?: number } | undefined)?.rows ?? 0),
+			);
+			const overlay = installNonCapturingSidebarOverlay(tui, sidebarComponent, () => sessionHasMessages(ctx));
 			return {
 				invalidate(): void {},
 				render(): string[] {
@@ -298,7 +325,6 @@ export function installSidebar(pi: ExtensionAPI): void {
 					metricsHud.stop();
 					if (activeMetricsHud === metricsHud) activeMetricsHud = undefined;
 					overlay?.hide();
-					runtime?.setSidebarComponent(undefined);
 					requestRender = undefined;
 				},
 			};

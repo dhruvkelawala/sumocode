@@ -1,5 +1,5 @@
 export const MAX_PARALLEL_TASKS = 8;
-export const VALID_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"] as const;
+export const VALID_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 export const VALID_THINKING_OPTIONS = ["inherit", ...VALID_THINKING_LEVELS] as const;
 
 export type ThinkingLevel = (typeof VALID_THINKING_LEVELS)[number];

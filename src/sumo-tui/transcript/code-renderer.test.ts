@@ -68,7 +68,7 @@ describe("Cathedral code block renderer", () => {
 		// 1 top + 20 body + 1 collapsed + 1 bottom = 23
 		expect(rows).toHaveLength(23);
 		expect(plain[21]).toContain("… 10 lines collapsed");
-		expect(plain[21]).toContain("⌘O expand");
+		expect(plain[21]).toContain("ctrl+o expand");
 	});
 
 	it("renders surfaceRecess background on body rows", () => {

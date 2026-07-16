@@ -375,6 +375,11 @@ export async function showMemoryEditor(
 	ctx: ExtensionCommandContext,
 	client: RemnicMemoryClient = createRemnicMemoryClient(),
 ): Promise<void> {
+	if (ctx.mode === "rpc") {
+		ctx.ui.notify("memory editor overlay unavailable in RPC mode; use status/add/forget", "warning");
+		return;
+	}
+
 	let facts: MemoryFact[] = [];
 	let unavailable: string | null = null;
 	try {

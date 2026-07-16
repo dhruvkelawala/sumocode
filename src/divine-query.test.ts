@@ -1,6 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
 	renderDivineQuery,
+	showDivineQuery,
 	updateDivineQuery,
 	type DivineQuerySnapshot,
 } from "./divine-query.js";
@@ -184,5 +185,45 @@ describe("updateDivineQuery — enter + escape", () => {
 	it("escape returns -1 (retreat)", () => {
 		const r = updateDivineQuery(snapshot(), "escape");
 		expect(r.done).toBe(-1);
+	});
+});
+
+describe("showDivineQuery", () => {
+	it("uses RPC select and returns the selected string without custom UI", async () => {
+		const select = vi.fn(async () => "No, leave it as-is");
+		const custom = vi.fn();
+
+		const result = await showDivineQuery(
+			{ mode: "rpc", ui: { select, custom } } as never,
+			"Should I rename it?",
+			snapshot().options,
+		);
+
+		expect(result).toBe("No, leave it as-is");
+		expect(select).toHaveBeenCalledWith("Should I rename it?", [...snapshot().options]);
+		expect(custom).not.toHaveBeenCalled();
+	});
+
+	it("returns undefined when RPC select is cancelled", async () => {
+		const result = await showDivineQuery(
+			{ mode: "rpc", ui: { select: vi.fn(async () => undefined), custom: vi.fn() } } as never,
+			"Should I rename it?",
+			snapshot().options,
+		);
+
+		expect(result).toBeUndefined();
+	});
+
+	it("keeps the TUI custom overlay and maps the selected index to an option", async () => {
+		const custom = vi.fn(async () => 2);
+
+		const result = await showDivineQuery(
+			{ mode: "tui", ui: { custom } } as never,
+			"Should I rename it?",
+			snapshot().options,
+		);
+
+		expect(custom).toHaveBeenCalledTimes(1);
+		expect(result).toBe("Use a different name");
 	});
 });

@@ -6,6 +6,7 @@
 > Context: OpenCode (canonical agent: `anomalyco/opencode`) uses OpenTUI as its rendering layer. OpenTUI is the rendering library; OpenCode is the agent that consumes it. The rendering-layer analog in our repo is `src/sumo-tui/`.
 >
 > Companion to: `docs/SUMO_TUI_AUDIT.md`, `docs/SUMO_TUI_AUDIT_V2.md`, `docs/research/sumo-tui-spike/02-opentui.md` (the original 2026-04 spike).
+> Historical note: references to the old Pi compatibility fork are descriptive. Plan 014 retired the private activation seam; current interactive SumoCode runs through the RPC host.
 
 ## TL;DR
 
@@ -142,7 +143,7 @@ Honest list. Only items that are genuinely better in SumoTUI's context (Pi exten
 SumoTUI starts in <100ms cold; OpenTUI-core hits FFI ABI checks (`platform/ffi.ts`) and platform-binary resolution. For a Pi extension that loads on every session start, this is meaningful UX. No `npm install` per-platform binary downloads, no Apple-silicon vs Intel forks.
 
 ### C2. Pi adapter-first design
-`pi-compat/` (`chat-viewport-controller`, `region-registry`, `sumo-interactive-mode`) lets SumoTUI coexist with Pi's existing scrollback, editor, and tool registry. OpenTUI assumes it owns the screen; its "split-footer" mode (`renderer.zig:91, 697-844`) is an after-thought and far more complex than `writeChatViewport`.
+Historically, `pi-compat/` let SumoTUI coexist with Pi's existing scrollback, editor, and tool registry. OpenTUI assumes it owns the screen; its "split-footer" mode (`renderer.zig:91, 697-844`) is an after-thought and far more complex than `writeChatViewport`. The old private activation seam is retired; the current product path is the RPC host.
 
 ### C3. Honest scroll-detection in pure TS
 `render/diff.ts:53-91` actually computes scroll-up/down ANSI and emits region-scroll sequences when they're cheaper than full row repaints. **OpenTUI does not do this** — it always emits per-cell ANSI runs. For a chat-heavy session with 200-row scrollback, this is a real byte-saving in SumoTUI's favour.

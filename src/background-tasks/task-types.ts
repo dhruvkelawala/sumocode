@@ -128,3 +128,21 @@ export function toBackgroundTaskSnapshot(task: BackgroundTask): BackgroundTaskSn
 		notifyOnExit: task.notifyOnExit,
 	};
 }
+
+/**
+ * Composes the follow-up wake message injected when a notifyOnExit task
+ * finishes (task-manager.ts). Kept next to `isBackgroundTaskWakeMessage` so
+ * the composer and the recognizer can never drift apart — the fork selector
+ * uses the recognizer to keep these synthetic user-role messages out of the
+ * "fork from message" list.
+ */
+export function buildBackgroundTaskWakeMessage(taskId: string, status: string, label: string, cmuxHint = ""): string {
+	return `background task ${taskId} ${status}: ${label}${cmuxHint}`;
+}
+
+const WAKE_MESSAGE_PATTERN = /^background task bg-[\w-]+ \w[\w-]*: /;
+
+/** True for messages produced by `buildBackgroundTaskWakeMessage`. */
+export function isBackgroundTaskWakeMessage(text: string): boolean {
+	return WAKE_MESSAGE_PATTERN.test(text);
+}

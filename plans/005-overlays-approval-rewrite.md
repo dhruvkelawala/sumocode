@@ -4,7 +4,7 @@
 **Size:** L · **Depends on:** 003 · **Blocks:** 006 (parallel with 004)
 **Issue:** [#293](https://github.com/dhruvkelawala/sumocode/issues/293)
 **Design doc:** [`docs/research/pi-rpc-migration.md`](../docs/research/pi-rpc-migration.md)
-**⚠️ SECURITY-CRITICAL — read the security note below before starting.**
+**SECURITY-CRITICAL — read the security note below before starting.**
 
 ## Why this exists
 
@@ -25,12 +25,13 @@ final typed value via an `extension_ui` round-trip** (and `{block:true}` for app
 
 ## SECURITY NOTE (do not skip)
 
-The approval-gate rewrite is the single highest-risk item in the whole migration. The RPC
-path MUST NOT be shippable — even behind a flag — until a regression test proves a dangerous
-command is blocked when the user answers "No" (or does not answer). The failure mode is
+The approval-gate rewrite is the single highest-risk item in the whole migration. It no longer
+blocks starting Phase 1, but it still blocks any default/shared cutover unless the product
+explicitly removes dangerous-command approval from the RPC surface. The failure mode is
 *fail-open*, which is worse than crashing. Treat "block on uncertainty" as the invariant:
 any ambiguous, missing, timed-out, or malformed response must resolve to **blocked**, never
-to proceed.
+to proceed. Until this plan lands, RPC paths that would require approval must be disabled,
+deferred, or reported unsupported rather than silently allowed.
 
 ## Background facts (verified — current `custom<>` sites)
 
@@ -132,3 +133,33 @@ the security regression test in the required gate and reference it in
 `docs/SUMO_TUI_PI_PATCH_STRATEGY.md`'s smoke matrix. Any future change to the approval flow
 must re-run it. Document the host-render + `extension_ui` round-trip pattern as the canonical
 replacement for `ctx.ui.custom()` so new overlays do not reintroduce the no-op trap.
+
+## Execution review
+
+**Status:** DONE — accepted in `codex/rpc-precutover-stack-clean-exec` (`c256f6e`,
+`573248c`), based on approved Plan 002 branch `codex/rpc-host-shell-002-exec`.
+
+**Advisor verdict:** APPROVE after revision. The first reviewed stack was rejected because it
+returned `yes` from `showApprovalModal()` in RPC mode and skipped the approval gate for
+`ctx.mode === "rpc"`, recreating the exact fail-open caveat. The accepted revision installs
+`installApprovalGate()` in the RPC child profile and normalizes every non-`Yes`/`Always`
+approval outcome to blocked. `No`, cancel, timeout, malformed values, thrown prompt errors,
+and missing UI all block dangerous bash.
+
+The accepted revision also adds host-owned replacements for the bespoke custom-overlay
+surfaces: command palette, theme check, memory editor, approval preview, model/thinking/
+session/settings selectors, and answer/question/divine-query RPC branches through the
+`extension_ui` back-channel or retained host overlays.
+
+**Verification rerun by advisor:**
+
+- Focused RPC/security/runtime suite — passed, 10 files / 96 tests.
+- `pnpm exec tsc --noEmit && pnpm build` — passed.
+- `pnpm test:integration` — passed, 20 files / 36 tests.
+- `pnpm visual:ci` — exited 0; review pack produced in the worker worktree.
+- `pnpm test` — all 119 files / 1112 tests passed, but Vitest exited 1 from the known
+  unrelated background-task temp `output.log` ENOENT unhandled error.
+
+**Scope review:** no `plans/` or `docs/` diffs were present in the accepted source branch.
+The branch remained descended from `codex/rpc-host-shell-002-exec` and preserved
+`src/sumo-tui/rpc/runtime.ts`.

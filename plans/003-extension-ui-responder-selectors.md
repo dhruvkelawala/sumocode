@@ -103,3 +103,26 @@ primitives and need the host-render + value-round-trip pattern. The editor (Plan
 The `extension_ui` responder is the foundation 005 reuses for overlays. Keep its `id`-matching
 and cancellation semantics strict and well-tested — a dropped or mismatched response hangs the
 subprocess tool call.
+
+## Execution review
+
+**Status:** DONE — accepted in `codex/rpc-precutover-stack-clean-exec` (`c256f6e`,
+`573248c`), based on approved Plan 002 branch `codex/rpc-host-shell-002-exec`.
+
+**Advisor verdict:** APPROVE. The accepted implementation adds a strict
+`RpcExtensionUiResponder`, typed `RpcHostControls`, and host-owned Cathedral modal selectors
+for model/thinking/session/settings control. It intentionally uses SumoCode modal selectors
+wired to Pi RPC commands instead of embedding Pi selector components directly; this preserves
+the host/process split while satisfying the user-facing control requirement.
+
+**Verification rerun by advisor:**
+
+- `pnpm vitest run src/approval-modal.test.ts src/answer-tool.test.ts src/question-tool.test.ts src/sumo-tui/rpc/extension-ui-responder.test.ts src/sumo-tui/rpc/controls.test.ts src/sumo-tui/rpc/editor.test.ts src/sumo-tui/rpc/runtime.test.ts src/sumo-tui/rpc/host-actions.test.ts test/integration/rpc-host-shell.test.ts test/integration/spawn-pi-pty.test.ts` — passed, 10 files / 96 tests.
+- `pnpm exec tsc --noEmit && pnpm build` — passed.
+- `pnpm test:integration` — passed, 20 files / 36 tests.
+- `pnpm visual:ci` — exited 0; review pack at `docs/visual/out/parity/index.html` in the worker worktree.
+- `pnpm test` — all 119 files / 1112 tests passed, but Vitest exited 1 from the known unrelated background-task temp `output.log` ENOENT unhandled error.
+
+**Scope review:** `git diff --name-only codex/rpc-host-shell-002-exec..HEAD -- plans docs`
+was empty; source stack kept `src/sumo-tui/rpc/runtime.ts` and remained descended from the
+approved Plan 002 branch.

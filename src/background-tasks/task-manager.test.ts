@@ -340,13 +340,16 @@ describe("BackgroundTaskManager", () => {
 		});
 
 		// The cmux respawn command embeds the prompt-file PATH, never the prompt text.
+		// cmux spawns argv[0] directly (no shell), so the compound launch line is
+		// wrapped in bash -lc and its inner quotes are '\'' escaped.
 		const respawnArg = openSplit.mock.calls[0]?.[2] as string;
-		expect(respawnArg).toContain("cd '/repo with spaces' && ");
+		expect(respawnArg.startsWith("bash -lc '")).toBe(true);
+		expect(respawnArg).toContain(`cd '\\''/repo with spaces'\\'' && `);
 		expect(respawnArg).toContain("SUMOCODE_TASK_RESPONSE_FILE=");
 		expect(respawnArg).toContain("SUMOCODE_TASK_STARTED_FILE=");
 		expect(respawnArg).toContain("SUMOCODE_TASK_DIAG_FILE=");
-		expect(respawnArg).toContain(`exec sumocode task --model '${DEFAULT_SUMOCODE_AGENT_MODEL}' --thinking '${DEFAULT_SUMOCODE_AGENT_THINKING}' --prompt-file '`);
-		expect(respawnArg).toContain("/prompt.txt'");
+		expect(respawnArg).toContain(`exec sumocode task --model '\\''${DEFAULT_SUMOCODE_AGENT_MODEL}'\\'' --thinking '\\''${DEFAULT_SUMOCODE_AGENT_THINKING}'\\'' --prompt-file '\\''`);
+		expect(respawnArg).toContain("/prompt.txt");
 		expect(task.model).toBe(DEFAULT_SUMOCODE_AGENT_MODEL);
 		expect(task.thinking).toBe(DEFAULT_SUMOCODE_AGENT_THINKING);
 		expect(respawnArg).not.toContain("quotes");
@@ -402,8 +405,8 @@ describe("BackgroundTaskManager", () => {
 		});
 
 		const respawnArg = openSplit.mock.calls[0]?.[2] as string;
-		expect(respawnArg).toContain("--model 'anthropic/claude-sonnet-4-5'");
-		expect(respawnArg).toContain("--thinking 'medium'");
+		expect(respawnArg).toContain(`--model '\\''anthropic/claude-sonnet-4-5'\\''`);
+		expect(respawnArg).toContain(`--thinking '\\''medium'\\''`);
 		expect(task.model).toBe("anthropic/claude-sonnet-4-5");
 		expect(task.thinking).toBe("medium");
 	});
@@ -434,8 +437,8 @@ describe("BackgroundTaskManager", () => {
 		});
 
 		const respawnArg = openSplit.mock.calls[0]?.[2] as string;
-		expect(respawnArg).toContain("--model 'openai/gpt-4o-mini'");
-		expect(respawnArg).toContain("--thinking 'low'");
+		expect(respawnArg).toContain(`--model '\\''openai/gpt-4o-mini'\\''`);
+		expect(respawnArg).toContain(`--thinking '\\''low'\\''`);
 		expect(task.model).toBe("openai/gpt-4o-mini");
 		expect(task.thinking).toBe("low");
 	});
@@ -520,7 +523,7 @@ describe("BackgroundTaskManager", () => {
 		expect(create).toHaveBeenCalledWith({ repoRoot: "/repo", branch: "sumo/review", baseRef: "HEAD", path: "/repo.sumo-worktrees/sumo__review" });
 		expect(task.cwd).toBe("/repo.sumo-worktrees/sumo__review");
 		expect(task.worktree).toEqual({ path: "/repo.sumo-worktrees/sumo__review", branch: "sumo/review", baseRef: "HEAD", repoRoot: "/repo" });
-		expect(openSplit.mock.calls[0]?.[2]).toContain("cd '/repo.sumo-worktrees/sumo__review'");
+		expect(openSplit.mock.calls[0]?.[2]).toContain(`cd '\\''/repo.sumo-worktrees/sumo__review'\\''`);
 		expect(JSON.parse(readFileSync(task.metaFile!, "utf8")).worktree).toEqual(task.worktree);
 	});
 
@@ -888,6 +891,7 @@ describe("BackgroundTaskManager", () => {
 
 	it("keeps started agent task running when no exit marker appears after the old watchdog window", async () => {
 		vi.useFakeTimers();
+		let manager: BackgroundTaskManager | undefined;
 		try {
 			process.env.CMUX_SURFACE_ID = "surface:1";
 			const pi = buildPiStub();
@@ -898,7 +902,7 @@ describe("BackgroundTaskManager", () => {
 				surfaceRef: "surface:8",
 			});
 
-			const manager = new BackgroundTaskManager(pi as never);
+			manager = new BackgroundTaskManager(pi as never);
 			const task = manager.spawnTask({
 				command: "long-running prompt",
 				cwd: "/repo",
@@ -918,14 +922,15 @@ describe("BackgroundTaskManager", () => {
 
 			expect(task.status).toBe("running");
 			expect(readFileSync(task.logFile, "utf8")).not.toContain("startup timeout");
-			manager.shutdown();
 		} finally {
+			manager?.shutdown();
 			vi.useRealTimers();
 		}
 	});
 
 	it("reaps a started agent task whose process has died without an exit marker", async () => {
 		vi.useFakeTimers();
+		let manager: BackgroundTaskManager | undefined;
 		const processKill = vi.spyOn(process, "kill").mockImplementation(((pid: number, signal?: string | number) => {
 			if (pid === 43210 && signal === 0) throw new Error("ESRCH");
 			return true;
@@ -940,7 +945,7 @@ describe("BackgroundTaskManager", () => {
 				surfaceRef: "surface:8",
 			});
 
-			const manager = new BackgroundTaskManager(pi as never);
+			manager = new BackgroundTaskManager(pi as never);
 			const task = manager.spawnTask({
 				command: "crashy prompt",
 				cwd: "/repo",
@@ -955,8 +960,8 @@ describe("BackgroundTaskManager", () => {
 
 			expect(task.status).toBe("failed");
 			expect(readFileSync(task.logFile, "utf8")).toContain("is gone and no exit marker");
-			manager.shutdown();
 		} finally {
+			manager?.shutdown();
 			processKill.mockRestore();
 			vi.useRealTimers();
 		}
@@ -964,6 +969,7 @@ describe("BackgroundTaskManager", () => {
 
 	it("keeps a started agent task running while its process is alive", async () => {
 		vi.useFakeTimers();
+		let manager: BackgroundTaskManager | undefined;
 		try {
 			process.env.CMUX_SURFACE_ID = "surface:1";
 			const pi = buildPiStub();
@@ -974,7 +980,7 @@ describe("BackgroundTaskManager", () => {
 				surfaceRef: "surface:8",
 			});
 
-			const manager = new BackgroundTaskManager(pi as never);
+			manager = new BackgroundTaskManager(pi as never);
 			const task = manager.spawnTask({
 				command: "long-running prompt",
 				cwd: "/repo",
@@ -988,14 +994,15 @@ describe("BackgroundTaskManager", () => {
 			await vi.advanceTimersByTimeAsync(1000);
 
 			expect(task.status).toBe("running");
-			manager.shutdown();
 		} finally {
+			manager?.shutdown();
 			vi.useRealTimers();
 		}
 	});
 
 	it("fails agent task when task-mode never writes started marker", async () => {
 		vi.useFakeTimers();
+		let manager: BackgroundTaskManager | undefined;
 		try {
 			process.env.CMUX_SURFACE_ID = "surface:1";
 			const pi = buildPiStub();
@@ -1006,7 +1013,7 @@ describe("BackgroundTaskManager", () => {
 				surfaceRef: "surface:8",
 			});
 
-			const manager = new BackgroundTaskManager(pi as never);
+			manager = new BackgroundTaskManager(pi as never);
 			const task = manager.spawnTask({
 				command: "crashy prompt",
 				cwd: "/repo",
@@ -1022,6 +1029,7 @@ describe("BackgroundTaskManager", () => {
 			expect(task.status).toBe("failed");
 			expect(readFileSync(task.logFile, "utf8")).toContain("startup timeout");
 		} finally {
+			manager?.shutdown();
 			vi.useRealTimers();
 		}
 	});

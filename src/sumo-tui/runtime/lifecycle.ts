@@ -62,14 +62,9 @@ export interface LifecycleRuntimeOptions {
 const EXIT_SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP", "SIGQUIT"] as const;
 
 /**
- * Detect whether the retained SumoTUI runtime is active, regardless of how it
- * was launched (`SUMO_TUI=1` env or `--sumo-tui` CLI flag — see
- * `patches/@earendil-works__pi-coding-agent@*.patch`).
- *
- * Reads the same `globalThis` symbol that `SumoInteractiveRuntime` registers
- * itself under in `pi-compat/sumo-interactive-mode.ts`. Avoids a backwards
- * import from `runtime/` to `pi-compat/`. Falls back to the env flag for
- * tests and early-init paths that run before the runtime has registered.
+ * Detect whether the retained SumoTUI runtime is active for tests and older
+ * direct-runtime harnesses. The product launcher no longer uses this path for
+ * interactive sessions; RPC owns the foreground runtime.
  */
 const ACTIVE_SUMO_RUNTIME_KEY = Symbol.for("sumocode.activeSumoRuntime");
 

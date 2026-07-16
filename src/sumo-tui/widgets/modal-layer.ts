@@ -1,4 +1,6 @@
 import { truncateToWidth, visibleWidth, type Component } from "@earendil-works/pi-tui";
+import { renderDivineQuery } from "../../divine-query.js";
+import { fg as scriptoriumFg } from "../../cathedral/scriptorium-chrome.js";
 import { SumoNode } from "../layout/node.js";
 import type { YogaNode } from "../layout/yoga.js";
 import type { CellBuffer, Rect } from "../render/buffer.js";
@@ -40,20 +42,6 @@ function padVisible(text: string, width: number): string {
 	const clipped = visibleWidth(text) > width ? truncateToWidth(text, width, "") : text;
 	const pad = Math.max(0, width - visibleWidth(clipped));
 	return `${clipped}${" ".repeat(pad)}`;
-}
-
-function centerRows(rows: readonly string[], width: number, height: number): string[] {
-	const blank = `${bg(activeThemeColors().surfaceRecess)}${" ".repeat(width)}${RESET}`;
-	const out = Array.from({ length: height }, () => blank);
-	if (rows.length === 0) return [];
-	const top = Math.max(0, Math.floor((height - rows.length) / 2));
-	for (let index = 0; index < rows.length && top + index < out.length; index += 1) {
-		const row = rows[index] ?? "";
-		const left = Math.max(0, Math.floor((width - visibleWidth(row)) / 2));
-		const right = Math.max(0, width - left - visibleWidth(row));
-		out[top + index] = `${bg(activeThemeColors().surfaceRecess)}${" ".repeat(left)}${row}${" ".repeat(right)}${RESET}`;
-	}
-	return out;
 }
 
 export class ModalSurfaceComponent implements Component {
@@ -98,7 +86,13 @@ export class ModalBackdropNode extends SumoNode {
 	}
 }
 
-/** Full-screen modal manager component with backdrop, centered card, Esc close. */
+/**
+ * Modal manager component rendered as a bordered card. The card is the ONLY
+ * thing returned — positioning is the overlay renderer's job (the RPC host
+ * registers this with `anchor: "center"`), and the UI behind it stays
+ * visible. The previous full-frame `surfaceRecess` fill blacked out the
+ * whole terminal behind the card.
+ */
 export class ModalLayer extends ModalManager {
 	private readonly getTerminalSize: () => TerminalSizeProvider;
 
@@ -109,15 +103,54 @@ export class ModalLayer extends ModalManager {
 
 	public override render(width: number): string[] {
 		if (!this.getActiveKind()) return [];
-		const size = this.getTerminalSize();
-		const frameWidth = Math.max(1, width || size.columns);
-		const frameHeight = Math.max(1, size.rows);
-		const modalWidth = Math.min(80, Math.max(32, Math.floor(frameWidth * 0.6)));
+		const frameWidth = Math.max(1, width || this.getTerminalSize().columns);
+		const modalWidth = Math.min(80, frameWidth);
+
+		// Bible parity (docs/ui/bible scene-divine-query-overlay): the RPC
+		// child's question tool and slash flows arrive here as generic
+		// select/confirm/input requests — render them in the same Divine Query
+		// language the owned shell used, not a bare debug card.
+		const dialog = this.getActiveDialogSnapshot();
+		if (dialog?.kind === "select" && dialog.options) {
+			return renderDivineQuery(
+				{ title: dialog.title, options: dialog.options, focusedIndex: dialog.selectedIndex },
+				modalWidth,
+			);
+		}
+		if (dialog?.kind === "confirm") {
+			const title = dialog.message ? `${dialog.title}\n\n${dialog.message}` : dialog.title;
+			return renderDivineQuery(
+				{ title, options: ["Yes", "No"], focusedIndex: dialog.selectedIndex },
+				modalWidth,
+			);
+		}
+		if (dialog?.kind === "input") {
+			const colors = activeThemeColors();
+			const shown = dialog.value
+				? scriptoriumFg(`> ${dialog.value}█`, colors.foreground)
+				: scriptoriumFg(`> ${dialog.placeholder ?? ""}█`, colors.foregroundDim);
+			return renderDivineQuery(
+				{ title: dialog.title, options: [], focusedIndex: 0 },
+				modalWidth,
+				{
+					extras: [
+						`     ${shown}`,
+						"",
+						`     ${scriptoriumFg("⏎ submit · ⎋ retreat", colors.foregroundDim)}`,
+						"",
+					],
+				},
+			);
+		}
+
+		// Editor kind (rare) keeps the generic bordered card. Clamp: the
+		// overlay host probes visibility with render(1); the inner content
+		// width must stay ≥ 1 or the probe sees zero rows and hides the modal.
 		const surface = new ModalSurfaceComponent({
 			invalidate: () => undefined,
 			handleInput: (data: string) => this.handleInput(data),
-			render: () => super.render(modalWidth - 2),
+			render: () => super.render(Math.max(1, modalWidth - 2)),
 		});
-		return centerRows(surface.render(modalWidth), frameWidth, frameHeight);
+		return surface.render(modalWidth);
 	}
 }

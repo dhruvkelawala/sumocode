@@ -175,7 +175,7 @@ const FIXTURES = {
 					role: "user",
 					displayName: "USER",
 					timestamp: FIXTURE_TIMES.userOne,
-					blocks: [{ type: "markdown", text: "show me the auth flow" }],
+					blocks: [{ type: "markdown", text: "show me the new auth helper shape before implementing it." }],
 				},
 				{
 					id: "s1",
@@ -183,14 +183,60 @@ const FIXTURES = {
 					displayName: "SUMO",
 					timestamp: FIXTURE_TIMES.sumoOne,
 					blocks: [
-						{ type: "markdown", text: "Here's the authentication handler:" },
+						{ type: "markdown", text: "Here is the proposed TypeScript shape:" },
 						{
 							type: "code",
 							lang: "ts",
-							source: 'async function authenticate(token: string) {\n  const session = await Session.fromToken(token);\n  if (!session || session.expired) return null;\n\n  // emit auth event for telemetry\n  emit("auth.success", { userId: session.user.id });\n  return session.user;\n}',
+							source: 'export async function authenticate(token: string) {\n  const session = await Session.fromToken(token);\n  if (!session || session.expired) return null;\n\n  // emit auth event for telemetry\n  emit("auth.success", { userId: session.user.id });\n  return session.user;\n}',
 						},
-						{ type: "markdown", text: "The session lookup validates the token and checks expiry before emitting a telemetry event." },
+						{ type: "markdown", text: "If this looks right, I'll wire it into the session boundary." },
 					],
+				},
+			],
+		},
+	},
+	"track-b-transcript": {
+		transcript: {
+			messages: [
+				{
+					id: "u1",
+					role: "user",
+					displayName: "USER",
+					timestamp: FIXTURE_TIMES.userOne,
+					blocks: [{ type: "markdown", text: "review the recovered transcript surfaces" }],
+				},
+				{
+					id: "s1",
+					role: "sumo",
+					displayName: "SUMO",
+					timestamp: FIXTURE_TIMES.sumoOne,
+					blocks: [
+						{ type: "markdown", text: "# Transcript parity\n**Markdown** now renders as styled text, with list rhythm intact:\n- branch summaries\n- custom labels\n- compaction records" },
+					],
+				},
+				{
+					id: "branch-summary",
+					role: "system",
+					displayName: "SYSTEM",
+					timestamp: FIXTURE_TIMES.userTwo,
+					blocks: [{ type: "summary", kind: "branch", label: "[branch] Branch summary", content: "Sub-agent kept the renderer changes isolated.", expanded: false }],
+				},
+				{
+					id: "theme-result",
+					role: "system",
+					displayName: "SYSTEM",
+					timestamp: FIXTURE_TIMES.userTwo,
+					blocks: [
+						{ type: "markdown", text: "[sumocode-theme-result]" },
+						{ type: "markdown", text: "switched to obsidian" },
+					],
+				},
+				{
+					id: "compaction-summary",
+					role: "system",
+					displayName: "SYSTEM",
+					timestamp: FIXTURE_TIMES.sumoTwo,
+					blocks: [{ type: "summary", kind: "compaction", label: "[compaction] Compacted from 120,000 tokens", content: "Preserved the current Track B verification map.", expanded: false }],
 				},
 			],
 		},

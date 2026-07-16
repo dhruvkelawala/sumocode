@@ -196,7 +196,7 @@ Responsibilities:
 - capture final terminal state
 - emit structured metadata
 
-Important: the runtime command must go through the same SumoCode entry contract users rely on. Do not use raw `SUMO_TUI=1 pi -e ./src/extension.ts` unless `SUMO_TUI_MODULE` is explicitly set and validated.
+Important: the runtime command must go through the same SumoCode entry contract users rely on. Do not use raw `pi -e ./src/extension.ts` for runtime capture; launch through `./bin/sumocode.sh` so the foreground RPC host owns the terminal.
 
 Conceptual interface:
 
@@ -596,9 +596,9 @@ The runtime lane must launch through the SumoCode entrypoint:
 
 or an equivalent resolved command that proves:
 
-- `SUMO_TUI=1`
-- the retained TUI patch is available
-- `SUMO_TUI_MODULE` is set when needed
+- the foreground RPC host is the interactive runtime
+- Pi is spawned in RPC mode with the SumoCode extension loaded
+- direct-Pi bypasses are used only for explicit non-interactive checks
 - the active extension path is the current checkout
 - no installed duplicate extension hijacks the run
 

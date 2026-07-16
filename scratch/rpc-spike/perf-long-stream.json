@@ -1,0 +1,10 @@
+{
+  "averageDeltaMs": 1.2910928217821753,
+  "bytesPerSecond": 3680871.101258686,
+  "elapsedMs": 3485.001416,
+  "firstUpdateMs": 3323.25425,
+  "messageUpdateCount": 102,
+  "parseMs": 5.606667,
+  "responseSuccess": true,
+  "stdoutBytes": 12827841
+}

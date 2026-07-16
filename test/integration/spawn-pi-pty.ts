@@ -1,6 +1,7 @@
 import { chmodSync, existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
+import xterm from "@xterm/headless";
 import { spawn, type IPty } from "node-pty";
 import { ALTSCREEN_ENTER_SEQUENCE, MOUSE_SGR_DISABLE_SEQUENCE, MOUSE_SGR_ENABLE_SEQUENCE, TERMINAL_CLEANUP_SEQUENCE } from "../../src/sumo-tui/runtime/terminal-controller.js";
 
@@ -15,6 +16,7 @@ export interface TerminalStateProbe {
 }
 
 export interface SpawnPiPtyOptions {
+	readonly command?: string;
 	readonly cwd?: string;
 	readonly cols?: number;
 	readonly rows?: number;
@@ -82,20 +84,30 @@ function applyDefaultProjectTrustOverride(args: readonly string[]): string[] {
 }
 
 /**
- * SumoCode debug env vars that leak retained-mode wiring or diagnostics into
- * spawned tests when set in the developer's shell (e.g. `sumocode -d`). They
- * must NOT be inherited by integration child processes unless a test
- * explicitly opts in via `options.env`. See #187.
+ * SumoCode debug/runtime env vars that can leak diagnostics or retired runtime
+ * wiring into spawned tests when set in the developer's shell (e.g.
+ * `sumocode -d`). They must NOT be inherited by integration child processes
+ * unless a test explicitly opts in via `options.env`. See #187.
  */
+const RETIRED_MODULE_ENV_KEY = ["SUMO", "TUI", "MODULE"].join("_");
+const RETIRED_LEGACY_ENV_KEY = ["SUMO", "LEGACY"].join("_");
 const SUMO_DEBUG_ENV_KEYS = [
 	"SUMO_TUI",
 	"SUMO_TUI_DEBUG",
 	"SUMO_TUI_DIAG_FILE",
-	"SUMO_TUI_MODULE",
+	RETIRED_MODULE_ENV_KEY,
 	"SUMO_TUI_HIDE_PI_NOISE",
+	RETIRED_LEGACY_ENV_KEY,
+	"SUMO_RPC",
+	"SUMOCODE_RPC_CHILD",
 	"SUMOCODE_REDUCED_MOTION",
 	"SUMOCODE_DEBUG_BRANCH",
 	"SUMOCODE_DEBUG_COMMIT",
+	"SUMOCODE_TASK_MODE",
+	"SUMOCODE_TASK_RESPONSE_FILE",
+	"SUMOCODE_TASK_EXIT_FILE",
+	"SUMOCODE_TASK_STARTED_FILE",
+	"SUMOCODE_TASK_DIAG_FILE",
 ] as const;
 
 export function buildSpawnEnv(parent: NodeJS.ProcessEnv, overrides: NodeJS.ProcessEnv | undefined): NodeJS.ProcessEnv {
@@ -113,8 +125,9 @@ export function spawnPiPty(options: SpawnPiPtyOptions = {}): SpawnedPiPty {
 	ensureNodePtySpawnHelperExecutable();
 
 	const cwd = resolve(options.cwd ?? process.cwd());
+	const command = options.command ?? process.env.PI_BIN ?? "pi";
 	const args = applyDefaultProjectTrustOverride(options.args ?? ["--offline", "--no-extensions", "-e", "./src/extension.ts", "--no-session"]);
-	const child: IPty = spawn(process.env.PI_BIN ?? "pi", args, {
+	const child: IPty = spawn(command, args, {
 		name: "xterm-256color",
 		cols: options.cols ?? 100,
 		rows: options.rows ?? 30,
@@ -198,3 +211,82 @@ export function spawnPiPty(options: SpawnPiPtyOptions = {}): SpawnedPiPty {
 }
 
 export const PI_BOOT_SEQUENCE = ALTSCREEN_ENTER_SEQUENCE;
+
+export function spawnSumocodePty(options: SpawnPiPtyOptions = {}): SpawnedPiPty {
+	return spawnPiPty({
+		...options,
+		command: options.command ?? resolve(process.cwd(), "bin/sumocode.sh"),
+		args: options.args ?? ["--offline", "--no-extensions", "--no-session", "--approve"],
+		env: options.env,
+	});
+}
+
+/** Plain-text snapshot of the replayed terminal screen (one string per visible row; xterm already decoded all ANSI). */
+export interface ScreenSnapshot {
+	readonly rows: readonly string[];
+	readonly text: string;
+}
+
+export interface WaitForScreenOptions {
+	/** Terminal width the PTY was spawned with -- the replay must match it. */
+	readonly cols: number;
+	/** Terminal height the PTY was spawned with -- the replay must match it. */
+	readonly rows: number;
+	readonly timeoutMs?: number;
+	readonly pollIntervalMs?: number;
+}
+
+export class WaitForScreenTimeoutError extends Error {
+	public override readonly name = "WaitForScreenTimeoutError";
+
+	public constructor(timeoutMs: number, lastScreen: string) {
+		super(`waitForScreen: predicate did not hold for two consecutive polls within ${timeoutMs}ms. Last screen:\n${lastScreen}`);
+	}
+}
+
+/** Replays the PTY's raw byte stream through a headless xterm and returns the visible rows as plain text. */
+export async function replayScreenRows(output: string, cols: number, rows: number): Promise<string[]> {
+	const term = new xterm.Terminal({ cols, rows, allowProposedApi: true, scrollback: 0 });
+	await new Promise<void>((resolve) => term.write(output, () => resolve()));
+	const buffer = term.buffer.active;
+	const lines: string[] = [];
+	for (let row = 0; row < rows; row += 1) {
+		const line = buffer.getLine(row);
+		let text = "";
+		for (let col = 0; col < cols; col += 1) text += line?.getCell(col)?.getChars() ?? " ";
+		lines.push(text);
+	}
+	term.dispose();
+	return lines;
+}
+
+/**
+ * Polls the replayed xterm screen until `predicate` holds for two
+ * consecutive polls (guarding against matching a mid-repaint frame), or
+ * times out with a `WaitForScreenTimeoutError` carrying the last screen.
+ * The poll interval is a sampling cadence, not a "let it settle" sleep:
+ * the wait ends as soon as the condition is observably true and stable.
+ */
+export async function waitForScreen(
+	pty: SpawnedPiPty,
+	predicate: (screen: ScreenSnapshot) => boolean,
+	options: WaitForScreenOptions,
+): Promise<ScreenSnapshot> {
+	const timeoutMs = options.timeoutMs ?? 5_000;
+	const pollIntervalMs = options.pollIntervalMs ?? 25;
+	const deadline = Date.now() + timeoutMs;
+	let consecutive = 0;
+	let snapshot: ScreenSnapshot = { rows: [], text: "" };
+	for (;;) {
+		const rows = await replayScreenRows(pty.getOutput(), options.cols, options.rows);
+		snapshot = { rows, text: rows.join("\n") };
+		if (predicate(snapshot)) {
+			consecutive += 1;
+			if (consecutive >= 2) return snapshot;
+		} else {
+			consecutive = 0;
+		}
+		if (Date.now() >= deadline) throw new WaitForScreenTimeoutError(timeoutMs, snapshot.text);
+		await new Promise<void>((resolve) => setTimeout(resolve, pollIntervalMs));
+	}
+}

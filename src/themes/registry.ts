@@ -7,16 +7,11 @@ export type ThemeChangedListener = (theme: Theme) => void;
 export type SetThemeResult = { success: true; theme: Theme } | { success: false; error: string };
 
 /**
- * Pin the theme registry on `globalThis` because the retained
- * `sumo-interactive-mode.js` jiti loader uses `moduleCache: false`. Without
- * this, SumoInteractiveMode and the extension code each get a private copy of
- * `listeners`, `activeThemeName`, and the registry Map — `setActiveTheme()`
- * fires listeners in one copy while subscribers live on the other, so the
- * retained chrome never repaints on theme switch.
- *
- * Mirrors the `ACTIVE_SUMO_RUNTIME_KEY` pattern in
- * `sumo-interactive-mode.ts` and the diagnostic singleton in
- * `render-diagnostics.ts`.
+ * Pin the theme registry on `globalThis` so extension reloads and RPC child
+ * re-imports keep a shared theme registry. Without this, separate module
+ * copies can each get a private `listeners`, `activeThemeName`, and registry
+ * Map, so `setActiveTheme()` would fire listeners in one copy while
+ * subscribers live on another.
  */
 const REGISTRY_KEY = Symbol.for("sumocode.themeRegistry");
 

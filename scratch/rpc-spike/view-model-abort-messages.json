@@ -1,0 +1,24 @@
+{
+  "messages": [
+    {
+      "blocks": [
+        {
+          "text": "RPC_ABORT_STREAM count slowly from 1 to 200, writing one number per line.",
+          "type": "markdown"
+        }
+      ],
+      "id": "message-0",
+      "role": "user"
+    },
+    {
+      "blocks": [
+        {
+          "text": "token-1 token-2 token-3 token-4 token-5 token-6 token-7 token-8 token-9 token-10 ",
+          "type": "markdown"
+        }
+      ],
+      "id": "message-1",
+      "role": "sumo"
+    }
+  ]
+}

@@ -56,6 +56,8 @@ const BIBLE_COMMAND_BOX_WIDTH_AT_80 = 68;
  */
 const MAX_COMMAND_ROWS = 12;
 const MAX_DESCRIPTION_ROWS = 4;
+const RPC_APPROVAL_TIMEOUT_MS = 60_000;
+export const RPC_APPROVAL_TITLE_MARKER = "APPROVAL REQUIRED";
 
 const panelRow = wrapPanelRow;
 
@@ -68,6 +70,7 @@ export type ApprovalModalSnapshot = {
 };
 
 const DEFAULT_BUTTON_ORDER: readonly ApprovalChoice[] = ["yes", "no", "always"];
+const RPC_APPROVAL_OPTIONS = ["No", "Yes", "Always"] as const;
 
 function renderButton(choice: ApprovalChoice, isActive: boolean): string {
 	const key = choice === "yes" ? "Y" : choice === "no" ? "N" : "A";
@@ -252,6 +255,37 @@ class ApprovalModalComponent implements Component {
 	}
 }
 
+export function normalizeApprovalChoice(value: unknown): ApprovalChoice {
+	if (typeof value !== "string") return "no";
+	const normalized = value.trim().toLowerCase();
+	if (normalized === "yes") return "yes";
+	if (normalized === "always") return "always";
+	return "no";
+}
+
+function rpcApprovalTitle(snapshot: Omit<ApprovalModalSnapshot, "activeButton">): string {
+	const description = snapshot.descriptionLines.length > 0
+		? `\n\n${snapshot.descriptionLines.join("\n")}`
+		: "";
+	return `${RPC_APPROVAL_TITLE_MARKER}\n\n${snapshot.command}${description}`;
+}
+
+export async function showRpcApprovalPrompt(
+	ctx: ExtensionContext,
+	snapshot: Omit<ApprovalModalSnapshot, "activeButton">,
+): Promise<ApprovalChoice> {
+	try {
+		const choice = await ctx.ui.select(
+			rpcApprovalTitle(snapshot),
+			[...RPC_APPROVAL_OPTIONS],
+			{ timeout: RPC_APPROVAL_TIMEOUT_MS },
+		);
+		return normalizeApprovalChoice(choice);
+	} catch {
+		return "no";
+	}
+}
+
 /**
  * Open the approval modal as a centered overlay. Resolves to the user's
  * choice. Default focus is `[N]O` for safety.
@@ -260,9 +294,13 @@ export async function showApprovalModal(
 	ctx: ExtensionContext,
 	snapshot: Omit<ApprovalModalSnapshot, "activeButton">,
 ): Promise<ApprovalChoice> {
+	if (ctx.mode === "rpc") {
+		return await showRpcApprovalPrompt(ctx, snapshot);
+	}
+
 	const fullSnapshot: ApprovalModalSnapshot = { ...snapshot, activeButton: "no" };
 
-	return ctx.ui.custom<ApprovalChoice>(
+	const choice = await ctx.ui.custom<ApprovalChoice>(
 		(_tui, _theme, _kb, done: (result: ApprovalChoice) => void) =>
 			new ApprovalModalComponent(fullSnapshot, done),
 		{
@@ -275,6 +313,41 @@ export async function showApprovalModal(
 			},
 		},
 	);
+	return normalizeApprovalChoice(choice);
+}
+
+function blockApproval(reason: string): { block: true; reason: string } {
+	return { block: true, reason };
+}
+
+function blockDenied(): { block: true; reason: string } {
+	return blockApproval("user denied via cathedral approval modal");
+}
+
+function blockUnavailable(): { block: true; reason: string } {
+	return blockApproval("approval modal unavailable; blocked dangerous command");
+}
+
+function isAllowedApprovalChoice(choice: ApprovalChoice): boolean {
+	return choice === "yes" || choice === "always";
+}
+
+function rememberAlways(command: string, choice: ApprovalChoice): void {
+	if (choice === "always") {
+		sessionAllowSet.add(command);
+	}
+}
+
+async function requestApprovalChoice(
+	ctx: ExtensionContext,
+	command: string,
+	descriptionLines: readonly string[],
+): Promise<ApprovalChoice> {
+	try {
+		return normalizeApprovalChoice(await showApprovalModal(ctx, { command, descriptionLines: [...descriptionLines] }));
+	} catch {
+		return "no";
+	}
 }
 
 // ============================================================================
@@ -368,27 +441,17 @@ function describeCommand(command: string): { command: string; description: strin
  */
 export function installApprovalGate(pi: ExtensionAPI): void {
 	pi.on("tool_call", async (event, ctx) => {
-		if (!ctx.hasUI) return;
 		if (event.toolName !== "bash") return;
 
 		const command = typeof event.input.command === "string" ? event.input.command : "";
 		if (!isDangerousBashCommand(command)) return;
 		if (sessionAllowSet.has(command)) return;
+		if (!ctx.hasUI) return blockUnavailable();
 
 		const info = describeCommand(command);
-		let choice: ApprovalChoice = "no";
-		try {
-			choice = await showApprovalModal(ctx, { command: info.command, descriptionLines: info.description });
-		} catch {
-			choice = "no";
-		}
-
-		if (choice === "always") {
-			sessionAllowSet.add(command);
-		}
-		if (choice === "no") {
-			return { block: true, reason: "user denied via cathedral approval modal" };
-		}
+		const choice = await requestApprovalChoice(ctx, info.command, info.description);
+		rememberAlways(command, choice);
+		if (!isAllowedApprovalChoice(choice)) return blockDenied();
 		return undefined;
 	});
 }

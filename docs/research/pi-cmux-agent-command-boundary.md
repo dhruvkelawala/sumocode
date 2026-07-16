@@ -8,7 +8,7 @@ Issue: #280
 
 SumoCode keeps its small local cmux layer for v0.4 and treats `pi-cmux` as prior art until `pi-cmux` can launch an arbitrary Pi-compatible agent command without hardcoding `exec pi`.
 
-SumoCode must never load a command path that opens classic Pi when the user intended SumoCode. `bin/sumocode.sh` owns the retained renderer environment (`SUMO_TUI=1`, `SUMO_TUI_MODULE`, launcher guards, diagnostics, task mode), so cmux helpers must launch `sumocode`, not `pi`, when invoked from SumoCode.
+SumoCode must never load a command path that opens classic Pi when the user intended SumoCode. `bin/sumocode.sh` owns the foreground RPC host, launcher guards, diagnostics, and task mode, so cmux helpers must launch `sumocode`, not `pi`, when invoked from SumoCode.
 
 ## Desired upstream seam
 

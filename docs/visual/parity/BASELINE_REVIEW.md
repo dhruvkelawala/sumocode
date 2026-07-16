@@ -18,8 +18,8 @@ Use it to review component-by-component implementation slices. Promote crops onl
 | `footer-ready-component` | component | Footer/status row target vs current component capture | Review target accepted |
 | `sidebar-editorial-component` | component | Editorial REGISTRY sidebar target vs current component capture | Review target accepted |
 | `splash-runtime` | runtime | Real runtime splash capture | Review-only; target accepted |
-| `active-landscape-runtime` | runtime | Real 160×45 post-submit active-working capture | Review-only; active-working semantics accepted |
-| `active-portrait-runtime` | runtime | Real portrait post-submit active-working capture | Review-only; active-working semantics accepted |
+| `active-landscape-runtime` | runtime | Real 160×45 post-submit active-working capture against `scene-active-runtime` | Active-working target contract accepted |
+| `active-portrait-runtime` | runtime | Real portrait post-submit active-working capture against `scene-active-runtime-portrait` | Active-working target contract accepted |
 
 ## Review decisions captured during #79/#81
 
@@ -31,7 +31,8 @@ Use it to review component-by-component implementation slices. Promote crops onl
 - Splash left hint is `╰─ AWAITING PROMPT`.
 - `TAB · AGENTS` is deferred until agent switching is functional; V2 hints show `CTRL+/ · COMMANDS` only.
 - Full-screen scene targets reserve one blank breathing row above the top bar and one below the footer.
-- Active runtime scenarios submit the prompt with Enter and capture deterministic offline active-working state. Completed response scenes require fixture-backed follow-up work.
+- Active runtime scenarios wait for the splash editor, submit the prompt with manifest logical Enter, and capture deterministic active-working state through the visual-only faux provider extension.
+- Runtime active-working targets are live-submitted prompt scenes. The richer completed/tool `scene-active` targets remain fixture/review canon, and runtime lanes must not inject completed assistant/tool transcripts.
 
 ## Local verification
 
@@ -45,7 +46,7 @@ pnpm visual:ci
 Result:
 
 ```txt
-Visual Bible: 88 mockups rendered
+Visual Bible: 95 mockups rendered
 V2 visual CI: 6 scenarios rendered
 - input-typed-component: review
 - footer-ready-component: review

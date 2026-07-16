@@ -1,12 +1,14 @@
-import { Image, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { Image, Markdown, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { DEFAULT_SUMOCODE_CONFIG } from "../../config/sumocode-config.js";
-import { activeThemeChrome, activeThemeColors } from "../../themes/index.js";
+import { activeThemeChrome, activeThemeColors, getThemeVersion } from "../../themes/index.js";
 import { fgHex, RESET } from "../cathedral/ansi.js";
 import { SumoNode } from "../layout/node.js";
 import { MEASURE_MODE_EXACTLY, type MeasureMode, type Yoga, type YogaNode } from "../layout/yoga.js";
 import type { CellBuffer, Rect } from "../render/buffer.js";
 import { lineToAnsi, span, textLine, type Span } from "../render/primitives.js";
 import { renderCathedralCodeBlock } from "../transcript/code-renderer.js";
+import { expandKey } from "../transcript/expand-key.js";
+import { cathedralMarkdownTheme } from "../transcript/markdown-theme.js";
 import { renderScrollBlock } from "../transcript/scroll-renderer.js";
 import { renderToolBlockRows } from "../transcript/tool-renderer.js";
 import type { ChatBlock } from "../transcript/view-model.js";
@@ -30,6 +32,26 @@ export interface ChatMessageOptions {
 }
 
 const MIN_BOX_WIDTH = 8;
+const DIM = "\x1b[2m";
+
+/**
+ * Memoized `renderRows` cache entry. `renderRows` is called from
+ * `getEstimatedHeight`, `measure`, AND `render` — often several times per
+ * frame per message — and its body path runs the `Markdown` parser (plus
+ * `Image` construction), which is not cheap. We cache the last computed rows
+ * per `(width, contentVersion, themeVersion)` so unchanged messages skip
+ * recompute entirely. Rows are read-only string arrays; sharing the cached
+ * array reference across calls is safe as nothing mutates it in place.
+ */
+interface RenderRowsCacheEntry {
+	width: number;
+	contentVersion: number;
+	themeVersion: number;
+	rows: string[];
+}
+
+/** Keep only the current + previous width entries: resize churns width, not content. */
+const RENDER_ROWS_CACHE_LIMIT = 2;
 
 interface TextSegmenter {
 	segment(input: string): Iterable<{ segment: string }>;
@@ -219,20 +241,44 @@ function frameBottom(width: number): string {
 	]), { width });
 }
 
-function renderSkillRow(block: Extract<ChatBlock, { type: "skill" }>): string {
-	const hint = block.expanded ? "(expanded)" : "(⌘O to expand)";
-	return lineToAnsi(textLine([
+function renderSkillRows(block: Extract<ChatBlock, { type: "skill" }>, width: number): string[] {
+	const hint = block.expanded ? `(${expandKey()} to collapse)` : `(${expandKey()} to expand)`;
+	const header = lineToAnsi(textLine([
 		span("[skill]", { fg: activeThemeColors().accent }),
 		span(` ${block.name} `, { fg: activeThemeColors().foreground }),
 		span(hint, { fg: activeThemeColors().foregroundDim }),
 	]));
+	if (!block.expanded || !block.content) return [header];
+	const body = wrapPlainText(block.content, width).map((row) => lineToAnsi(textLine([
+		span(row, { fg: activeThemeColors().foregroundDim }),
+	]), { width }));
+	return [header, ...body];
+}
+
+function renderSummaryRows(block: Extract<ChatBlock, { type: "summary" }>, width: number): string[] {
+	const hint = block.expanded ? `(${expandKey()} to collapse)` : `(${expandKey()} to expand)`;
+	const header = lineToAnsi(textLine([
+		span(block.label, { fg: activeThemeColors().accent }),
+		span(" "),
+		span(hint, { fg: activeThemeColors().foregroundDim }),
+	]));
+	if (!block.expanded || !block.content) return [header];
+	const body = wrapPlainText(block.content, width).map((row) => lineToAnsi(textLine([
+		span(row, { fg: activeThemeColors().foregroundDim }),
+	]), { width }));
+	return [header, ...body];
 }
 
 function renderThinkingRows(block: Extract<ChatBlock, { type: "thinking" }>, width: number): string[] {
 	const prefix = block.hidden ? "◌ " : "✦ ";
-	return wrapPlainText(block.text, Math.max(1, width - visibleWidth(prefix))).map((row) => lineToAnsi(textLine([
+	const contentWidth = Math.max(1, width - visibleWidth(prefix));
+	const lines = new Markdown(block.text, 0, 0, cathedralMarkdownTheme(), {
+		italic: true,
+		color: (text) => `${DIM}${fgHex(activeThemeColors().states.thinking)}${text}${RESET}`,
+	}).render(contentWidth);
+	return (lines.length > 0 ? lines : [""]).map((row) => lineToAnsi(textLine([
 		span(prefix, { fg: activeThemeColors().states.thinking, dim: true }),
-		span(row, { fg: activeThemeColors().states.thinking, italic: true, dim: true }),
+		span(row),
 	]), { width }));
 }
 
@@ -258,14 +304,20 @@ function renderCodeRows(block: Extract<ChatBlock, { type: "code" }>, width: numb
 	return renderCathedralCodeBlock(block.lang, block.source, width);
 }
 
+function renderMarkdownRows(text: string, width: number): string[] {
+	const lines = new Markdown(text, 0, 0, cathedralMarkdownTheme()).render(width);
+	return lines.length > 0 ? lines : [""];
+}
+
 function renderBlockRows(blocks: readonly ChatBlock[], width: number): string[] {
 	const rows: string[] = [];
 	for (const block of blocks) {
 		if (rows.length > 0) rows.push("");
 		switch (block.type) {
-			case "markdown":
-				rows.push(...wrapPlainText(block.text, width));
+			case "markdown": {
+				rows.push(...renderMarkdownRows(block.text, width));
 				break;
+			}
 			case "thinking":
 				rows.push(...renderThinkingRows(block, width));
 				break;
@@ -279,7 +331,10 @@ function renderBlockRows(blocks: readonly ChatBlock[], width: number): string[] 
 				rows.push(...renderToolBlockRows(block.tool, width));
 				break;
 			case "skill":
-				rows.push(renderSkillRow(block));
+				rows.push(...renderSkillRows(block, width));
+				break;
+			case "summary":
+				rows.push(...renderSummaryRows(block, width));
 				break;
 			case "question":
 				rows.push(...renderQuestionRows(block));
@@ -292,11 +347,21 @@ function renderBlockRows(blocks: readonly ChatBlock[], width: number): string[] 
 	return rows.length === 0 ? [""] : rows;
 }
 
-/** One V2 framed chat message. Markdown block parsing lands in #89/#90. */
+/** One V2 framed chat message. */
 export class ChatMessage extends SumoNode {
-	public readonly timestamp: Date;
+	private timestampValue: Date;
 	private measuring = false;
 	private lastMeasure: ChatMessageMeasure = { width: 0, height: 1 };
+
+	/**
+	 * Bumped by every mutator that changes what `renderRows` produces
+	 * (`setRole`/`setText`/`appendText`/`setBlocks`/`setToolExpansion`/
+	 * `setTimestamp`). This is the content half of the `renderRows` memo key —
+	 * see `renderRowsCache`. A missed bump site means a stale frame, so if you
+	 * add a new mutator that changes rendered output, bump this in it too.
+	 */
+	private contentVersion = 0;
+	private renderRowsCache: RenderRowsCacheEntry[] = [];
 
 	public constructor(
 		yogaNode: YogaNode,
@@ -308,7 +373,7 @@ export class ChatMessage extends SumoNode {
 		private readonly options: ChatMessageOptions = {},
 	) {
 		super(yogaNode, parent);
-		this.timestamp = timestamp;
+		this.timestampValue = timestamp;
 		this.marginBottom = 1;
 		this.setMeasureFunc((width, widthMode, height, heightMode) => this.measure(width, widthMode, height, heightMode));
 	}
@@ -317,23 +382,51 @@ export class ChatMessage extends SumoNode {
 		return new ChatMessage(yoga.Node.create(), role, text, parent, timestamp, blocks, options);
 	}
 
+	public get timestamp(): Date {
+		return this.timestampValue;
+	}
+
+	public setTimestamp(next: Date): void {
+		const renderedMinuteChanged = formatTime(this.timestampValue) !== formatTime(next);
+		this.timestampValue = next;
+		if (renderedMinuteChanged) this.invalidateRenderCache();
+	}
+
+	/**
+	 * Chat pagers may reassign the role of an existing message in place (e.g.
+	 * `replaceLastWithViewModel` folding a streamed placeholder into its final
+	 * role). Route that through a setter rather than direct `.role =` so the
+	 * render memo invalidates — `frameTop` reads `role` for the label/color.
+	 */
+	public setRole(role: ChatMessageRole): void {
+		if (this.role === role) return;
+		this.role = role;
+		this.invalidateRenderCache();
+	}
+
 	public setText(text: string): void {
 		if (this.text === text && this.blocks === undefined) return;
 		this.text = text;
 		this.blocks = undefined;
-		this.markDirty();
+		this.invalidateRenderCache();
 	}
 
 	public setBlocks(blocks: readonly ChatBlock[], text: string): void {
 		this.blocks = blocks;
 		this.text = text;
-		this.markDirty();
+		this.invalidateRenderCache();
 	}
 
 	public setToolExpansion(expanded: boolean): boolean {
-		if (!this.blocks?.some((block) => block.type === "tool")) return false;
-		this.blocks = this.blocks.map((block) => block.type === "tool" ? { ...block, tool: { ...block.tool, expanded } } : block);
-		this.markDirty();
+		const expandable = (block: ChatBlock): boolean => block.type === "tool" || block.type === "skill" || block.type === "summary";
+		if (!this.blocks?.some(expandable)) return false;
+		this.blocks = this.blocks.map((block) => {
+			if (block.type === "tool") return { ...block, tool: { ...block.tool, expanded } };
+			if (block.type === "skill") return { ...block, expanded };
+			if (block.type === "summary") return { ...block, expanded };
+			return block;
+		});
+		this.invalidateRenderCache();
 		return true;
 	}
 
@@ -341,11 +434,17 @@ export class ChatMessage extends SumoNode {
 		if (chunk.length === 0) return;
 		this.blocks = undefined;
 		this.text += chunk;
-		this.markDirty();
+		this.invalidateRenderCache();
 	}
 
 	public toSnapshot(): ChatMessageSnapshot {
 		return { role: this.role, text: this.text, timestamp: this.timestamp, blocks: this.blocks };
+	}
+
+	/** Bumps the content version (invalidating the render memo) and marks Yoga layout dirty. */
+	private invalidateRenderCache(): void {
+		this.contentVersion += 1;
+		this.markDirty();
 	}
 
 	public getEstimatedHeight(width = this.getComputedWidth()): number {
@@ -365,6 +464,15 @@ export class ChatMessage extends SumoNode {
 	}
 
 	private markBodyRowSelectable(buffer: CellBuffer, row: number, left: number, width: number): void {
+		const nestedCodeRange = this.nestedCodeSelectionRange(buffer, row, left, width);
+		if (nestedCodeRange === null) return;
+		if (nestedCodeRange) {
+			for (let col = nestedCodeRange.startCol; col <= nestedCodeRange.endCol; col += 1) {
+				buffer.setSelectionMeta(row, col, { selectable: true });
+			}
+			return;
+		}
+
 		const startCol = left + 2;
 		const endCol = left + Math.max(1, width - 3);
 		let contentEnd: number | undefined;
@@ -385,8 +493,68 @@ export class ChatMessage extends SumoNode {
 		}
 	}
 
+	/**
+	 * Recognize rows emitted by `renderCathedralCodeBlock` inside the outer
+	 * message frame. Code-frame rows and the collapsed-lines affordance are UI
+	 * chrome, so they return `null`. Source rows return only the source columns,
+	 * excluding the nested vertical borders and four-cell line-number gutter.
+	 * Other body rows return `undefined` and use normal message selection.
+	 */
+	private nestedCodeSelectionRange(
+		buffer: CellBuffer,
+		row: number,
+		left: number,
+		width: number,
+	): { startCol: number; endCol: number } | null | undefined {
+		const codeStart = left + 2;
+		const codeEnd = left + width - 3;
+		const first = buffer.getCell(row, codeStart).char;
+		const last = buffer.getCell(row, codeEnd).char;
+		if ((first === "╭" && last === "╮") || (first === "╰" && last === "╯")) return null;
+		if (first !== "│" || last !== "│" || buffer.getCell(row, codeStart + 1).char !== " ") return undefined;
+
+		let gutter = "";
+		for (let col = codeStart + 2; col <= codeStart + 5; col += 1) {
+			gutter += buffer.getCell(row, col).char || " ";
+		}
+		const sourceStart = codeStart + 6;
+		if (!/^ {0,2}\d{1,3} $/.test(gutter)) {
+			let chromeText = "";
+			for (let col = sourceStart; col < codeEnd; col += 1) chromeText += buffer.getCell(row, col).char;
+			return chromeText.trimStart().startsWith("… ") && chromeText.includes(" lines collapsed · ") ? null : undefined;
+		}
+
+		let sourceEnd = sourceStart;
+		for (let col = sourceStart; col < codeEnd; col += 1) {
+			if (buffer.getCell(row, col).char.trim().length > 0) sourceEnd = col;
+		}
+		return { startCol: sourceStart, endCol: sourceEnd };
+	}
+
+	/**
+	 * Memoized entry point: called from `getEstimatedHeight`, `measure`, AND
+	 * `render` — several times per message per frame. Recomputing from scratch
+	 * every call re-runs the `Markdown` parse (and `Image` construction) on
+	 * the hot path, so we cache the last few width->rows results keyed by
+	 * `(width, contentVersion, themeVersion)`. Cache hit returns the same rows
+	 * array reference; this is purely a compute cache and must never change
+	 * rendered output.
+	 */
 	private renderRows(width: number): string[] {
 		const renderWidth = normalizeWidth(width);
+		const themeVersion = getThemeVersion();
+		const cached = this.renderRowsCache.find(
+			(entry) => entry.width === renderWidth && entry.contentVersion === this.contentVersion && entry.themeVersion === themeVersion,
+		);
+		if (cached) return cached.rows;
+
+		const rows = this.computeRenderRows(renderWidth);
+		const entry: RenderRowsCacheEntry = { width: renderWidth, contentVersion: this.contentVersion, themeVersion, rows };
+		this.renderRowsCache = [entry, ...this.renderRowsCache.filter((existing) => existing.width !== renderWidth)].slice(0, RENDER_ROWS_CACHE_LIMIT);
+		return rows;
+	}
+
+	private computeRenderRows(renderWidth: number): string[] {
 		if (renderWidth <= 0) return [""];
 		if (renderWidth < MIN_BOX_WIDTH) return [fitCellText(this.text, renderWidth)];
 

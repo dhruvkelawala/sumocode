@@ -4,7 +4,7 @@ import { spawnSync } from "node:child_process";
 import { resolve } from "node:path";
 import { captureComponentScenario } from "./component-capture.mjs";
 import { captureFixtureScenario } from "./fixture-capture.mjs";
-import { captureRuntimeScenario } from "./runtime-capture.mjs";
+import { captureRuntimeScenario, findRejection } from "./runtime-capture.mjs";
 import { replayAnsi } from "./ansi-replay.mjs";
 import { renderTerminalSnapshot } from "./terminal-dom-renderer.mjs";
 import { compareCropPair } from "./image-compare.mjs";
@@ -80,10 +80,18 @@ async function runScenario(scenario) {
 			? await captureFixtureScenario(scenario)
 			: await captureRuntimeScenario(scenario);
 	writeFile(resolve(rawOut, "runtime-output.ansi"), capture.bytes);
-	writeJson(resolve(rawOut, "capture-metadata.json"), capture.metadata ?? {});
+	const captureMetadata = {
+		...(capture.metadata ?? {}),
+		scenarioContract: scenarioContractForMetadata(scenario),
+	};
+	writeJson(resolve(rawOut, "capture-metadata.json"), captureMetadata);
 
 	const snapshot = await replayAnsi(capture.bytes, scenario.dimensions);
 	writeJson(resolve(rawOut, "terminal-snapshot.json"), snapshotForJson(snapshot));
+	const finalScreenRejection = findRejection(snapshot.plainText, scenario.rejectIfFinalScreenMatches ?? []);
+	if (finalScreenRejection) {
+		writeJson(resolve(rawOut, "final-screen-rejection.json"), finalScreenRejection);
+	}
 
 	const geometrySpec = scenario.geometrySpec ?? null;
 	const audit = auditGeometry(snapshot, geometrySpec);
@@ -118,6 +126,7 @@ async function runScenario(scenario) {
 	const runtimeFull = resolve(scenarioOut, "runtime-full.png");
 	const runtimeRender = await renderTerminalSnapshot(snapshot, runtimeFull, {
 		deviceScaleFactor: scenario.dimensions.deviceScaleFactor,
+		glyphBaselineShiftPx: scenario.lane === "runtime" ? 1 : 0,
 	});
 
 	const cropResults = [];
@@ -139,6 +148,8 @@ async function runScenario(scenario) {
 			threshold: crop.threshold,
 			outPaths,
 			dimensions: scenario.dimensions,
+			targetDimensions: crop.targetDimensions,
+			runtimeDimensions: crop.runtimeDimensions,
 		});
 		const styledCellDiff = cropStyledCellDiff(crop, runtimeGrid, rawOut);
 		const result = cropResult(crop, comparison);
@@ -159,10 +170,11 @@ async function runScenario(scenario) {
 		id: scenario.id,
 		lane: scenario.lane,
 		status: scenario.status,
-		result: scenarioResult(cropResults),
+		result: scenarioResult(cropResults, finalScreenRejection),
 		dimensions: scenario.dimensions,
 		bibleTarget: scenario.bibleTarget,
-		capture: capture.metadata,
+		capture: captureMetadata,
+		finalScreenRejection,
 		render: runtimeRender.metrics,
 		geometryAudit: { passed: audit.passed, summary: audit.summary, mismatchCount: audit.mismatches.length },
 		cellDiff: cellDiff ? { passed: cellDiff.passed, diffRows: cellDiff.rowDiffs?.length ?? 0 } : null,
@@ -172,6 +184,38 @@ async function runScenario(scenario) {
 		},
 		crops: cropResults,
 	};
+}
+
+function scenarioContractForMetadata(scenario) {
+	return {
+		id: scenario.id,
+		lane: scenario.lane,
+		dimensions: {
+			cols: scenario.dimensions.cols,
+			rows: scenario.dimensions.rows,
+		},
+		runtime: scenario.runtime ? {
+			command: scenario.runtime.command,
+			args: scenario.runtime.args ?? [],
+			env: sortedRecord(scenario.runtime.env ?? {}),
+			inputs: scenario.runtime.inputs ?? [],
+		} : null,
+		fixture: scenario.fixture ?? null,
+		crops: scenario.crops.map((crop) => ({
+			id: crop.id,
+			status: crop.status,
+			threshold: crop.threshold,
+			targetImage: crop.targetImage,
+			targetCropId: crop.targetCropId,
+			runtimeCropId: crop.runtimeCropId,
+			targetDimensions: crop.targetDimensions ?? null,
+			runtimeDimensions: crop.runtimeDimensions ?? null,
+		})),
+	};
+}
+
+function sortedRecord(record) {
+	return Object.fromEntries(Object.entries(record).sort(([left], [right]) => left.localeCompare(right)));
 }
 
 function cropStyledCellDiff(crop, runtimeGrid, rawOut) {
@@ -198,7 +242,8 @@ function cropResult(crop, comparison) {
 	const goldenPassed = comparison.golden?.passed ?? true;
 	// Required crops are regression gates. Once an approved runtime golden exists,
 	// CI should fail on drift from that golden, while Bible drift remains review
-	// evidence until the design target and implementation converge exactly.
+	// evidence until the design target and implementation converge exactly. Before
+	// golden promotion, required crops gate directly against the Bible target.
 	if (crop.status === "required") {
 		if (hasGolden) return goldenPassed ? (biblePassed ? "passed" : "review-diff") : "failed";
 		return biblePassed ? "passed" : "failed";
@@ -207,7 +252,8 @@ function cropResult(crop, comparison) {
 	return "passed";
 }
 
-function scenarioResult(crops) {
+function scenarioResult(crops, finalScreenRejection = null) {
+	if (finalScreenRejection) return "failed";
 	if (crops.some((crop) => crop.result === "failed")) return "failed";
 	if (crops.some((crop) => crop.result === "review-diff")) return "review";
 	return "passed";

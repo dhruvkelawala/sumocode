@@ -29,6 +29,23 @@ describe("/sumo:approval slash command", () => {
 		expect(notify).toHaveBeenCalledWith("Approval selected: yes", "info");
 	});
 
+	it("defers in RPC mode without opening custom UI or reporting a fake selection", async () => {
+		let handler: ((args: string[], ctx: unknown) => Promise<void>) | undefined;
+		const registerCommand = vi.fn((_name: string, options: { handler: typeof handler }) => {
+			handler = options.handler;
+		});
+		const custom = vi.fn(async () => "yes");
+		const notify = vi.fn();
+		registerApprovalCommand({ registerCommand } as never);
+
+		await handler?.([], { hasUI: true, mode: "rpc", ui: { custom, notify } });
+
+		expect(custom).not.toHaveBeenCalled();
+		expect(notify).toHaveBeenCalledTimes(1);
+		expect(notify).toHaveBeenCalledWith("approval modal unavailable in RPC mode", "warning");
+		expect(notify).not.toHaveBeenCalledWith("Approval selected: yes", "info");
+	});
+
 	it("prints a message in non-interactive mode", async () => {
 		let handler: ((args: string[], ctx: unknown) => Promise<void>) | undefined;
 		const registerCommand = vi.fn((_name: string, options: { handler: typeof handler }) => {

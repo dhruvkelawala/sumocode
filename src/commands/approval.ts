@@ -24,6 +24,10 @@ export function registerApprovalCommand(pi: ExtensionAPI): void {
 				process.stdout.write("sumo:approval requires interactive UI\n");
 				return;
 			}
+			if (ctx.mode === "rpc") {
+				ctx.ui.notify("approval modal unavailable in RPC mode", "warning");
+				return;
+			}
 
 			const choice = await showApprovalModal(ctx, {
 				command: buildTestCommand(process.cwd()),

@@ -78,7 +78,7 @@ viewing-context adjustment, not a palette change.
 
 See `CATHEDRAL_UX_SPEC_V2.md` for the spec. The bible contains standalone element mockups plus full-scene compositions that combine locked elements in the actual Cathedral shell.
 
-Current harness: **88 mockups** rendered by `pnpm render:bible`.
+Current harness: **95 mockups** rendered by `pnpm render:bible`.
 
 | Element | Status | Mockups |
 |---|---|---|
@@ -96,7 +96,7 @@ Current harness: **88 mockups** rendered by `pnpm render:bible`.
 | **12 — Scroll + scribe** | ✅ LOCKED | running + done (2) |
 | **13 — Chat messages** | ✅ LOCKED | default (7A refined rounded) + portrait + 2 alts (sharp, dual) (4) |
 | **Skill pill** | ✅ LOCKED | inline default + rejected alts (3) |
-| **Scene compositions** | ✅ ACTIVE | active landscape/portrait, tool ledger, bash live-view, code block, skill pill, scroll/scribe, approval overlay, Divine Query overlay, memory overlay, palette overlay (11) |
+| **Scene compositions** | ✅ ACTIVE | completed/tool active landscape/portrait, runtime active landscape/portrait, tool ledger, bash live-view, code block, skill pill, scroll/scribe, approval overlay, Divine Query overlay, memory overlay, palette overlay (13) |
 
 ## Locked decisions summary
 
@@ -132,9 +132,12 @@ Current harness: **88 mockups** rendered by `pnpm render:bible`.
 - `scripts/bible-server.mjs` groups non-element mockups into **Skill pill** and **Scene compositions** sections instead of `Element ??`.
 - Gallery image URLs include a render-time cache-buster (`?v=<png-mtime>`), so browsers recover from previously-missing thumbnails after re-render.
 - Missing thumbnails show an explicit `PNG MISSING — run pnpm render:bible` card state.
+- Runtime active-working targets are live-submitted prompt scenes: the submitted prompt plus the faux-provider `inspecting src/auth/session.ts` stream. They are separate from the richer completed/tool transcript targets, which remain fixture/review canon.
 - Current scene files:
   - `scene-active.html`
   - `scene-active-portrait.html`
+  - `scene-active-runtime.html`
+  - `scene-active-runtime-portrait.html`
   - `scene-active-tool-ledger.html`
   - `scene-active-bash-live-view.html`
   - `scene-active-code-block.html`
@@ -143,6 +146,7 @@ Current harness: **88 mockups** rendered by `pnpm render:bible`.
   - `scene-approval-overlay.html`
   - `scene-divine-query-overlay.html`
   - `scene-memory-scriptorium-overlay.html`
+  - `scene-session-selectors.html`
   - `scene-palette-overlay.html`
 
 ### Element 12 — Scroll + scribe delegated work

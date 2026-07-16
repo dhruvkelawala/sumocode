@@ -82,6 +82,9 @@ function bgFromStyle(style) {
 }
 
 function parentBgFromAttrs(attrs) {
+	if (/\bbg-recess\b/.test(attrs)) return "#120D0A";
+	if (/\bbg-surface\b/.test(attrs)) return "#241D17";
+	if (/\bbg-lifted\b/.test(attrs)) return "#3D3024";
 	return bgFromStyle(attrs) ?? DEFAULT_BG;
 }
 
@@ -198,19 +201,77 @@ function extractPreGridRows(html, parentBg = DEFAULT_BG) {
 	return [...html.matchAll(PRE_GRID_PATTERN)].flatMap((match) => parseGridContent(match[2], parentBgFromAttrs(match[1]) ?? parentBg));
 }
 
-function parseScenePaletteOverlayGrid(html, cols, rows) {
-	const grid = emptyStyledGrid(cols, rows);
-	const gridRowStarts = new Map([
+function sceneGridRowStarts(rows) {
+	const middleRows = rows - 11;
+	return new Map([
 		[1, 0],
 		[2, 1],
 		[3, 2],
-		[5, 37],
-		[6, 38],
-		[7, 41],
-		[8, 42],
-		[9, 43],
-		[10, 44],
+		[4, 3],
+		[5, 3 + middleRows],
+		[6, 4 + middleRows],
+		[7, 7 + middleRows],
+		[8, 8 + middleRows],
+		[9, 9 + middleRows],
+		[10, 10 + middleRows],
 	]);
+}
+
+function parseMiddleColumns(html, cols) {
+	const match = html.match(/grid-template-columns:\s*([^;]+);/);
+	const widths = match ? [...match[1].matchAll(/(\d+)ch/g)].map((entry) => Number(entry[1])) : [];
+	const chatCols = widths[0] ?? cols;
+	const gutterCols = widths[1] ?? 0;
+	const sidebarCols = widths[2] ?? 0;
+	return {
+		chatCols,
+		sidebarStart: sidebarCols > 0 ? chatCols + gutterCols : null,
+	};
+}
+
+function writeCellsClipped(target, startRow, startCol, sourceRows, maxRows) {
+	writeCells(target, startRow, startCol, sourceRows.slice(0, Math.max(0, maxRows)));
+}
+
+function parseSceneGrid(html, cols, rows) {
+	const grid = emptyStyledGrid(cols, rows);
+	const rowStarts = sceneGridRowStarts(rows);
+	const middleRows = rows - 11;
+	const { sidebarStart } = parseMiddleColumns(html, cols);
+
+	const chatMatch = html.match(/<div class="chat-col">([\s\S]*?)<\/div>\s*<div class="gutter-col">/);
+	if (chatMatch) {
+		let row = rowStarts.get(4) ?? 3;
+		const maxRow = row + middleRows;
+		for (const match of chatMatch[1].matchAll(PRE_GRID_PATTERN)) {
+			if (row >= maxRow) break;
+			const parsed = parseGridContent(match[2], parentBgFromAttrs(match[1] ?? ""));
+			writeCellsClipped(grid, row, 0, parsed, maxRow - row);
+			row += parsed.length;
+		}
+	}
+
+	const sidebarMatch = html.match(/<div class="sidebar-col">([\s\S]*?)<\/div>/);
+	if (sidebarMatch && sidebarStart !== null) {
+		const sidebarRows = extractPreGridRows(sidebarMatch[1], DEFAULT_BG);
+		writeCellsClipped(grid, rowStarts.get(4) ?? 3, sidebarStart, sidebarRows, middleRows);
+	}
+
+	for (const match of html.matchAll(PRE_GRID_PATTERN)) {
+		const attrs = match[1] ?? "";
+		const gridRow = attrs.match(/grid-row:\s*(\d+)/)?.[1];
+		if (!gridRow) continue;
+		const startRow = rowStarts.get(Number(gridRow));
+		if (startRow === undefined) continue;
+		writeCells(grid, startRow, 0, parseGridContent(match[2], parentBgFromAttrs(attrs)));
+	}
+
+	return { cols, rows, grid };
+}
+
+function parseScenePaletteOverlayGrid(html, cols, rows) {
+	const grid = emptyStyledGrid(cols, rows);
+	const gridRowStarts = sceneGridRowStarts(rows);
 
 	for (const match of html.matchAll(PRE_GRID_PATTERN)) {
 		const attrs = match[1] ?? "";
@@ -260,12 +321,16 @@ export function parseBibleStyledGrid(htmlPath) {
 	const cols = colsMatch ? parseInt(colsMatch[1], 10) : 160;
 	const rows = rowsMatch ? parseInt(rowsMatch[1], 10) : 45;
 
-	if (htmlPath.endsWith("scene-palette-overlay.html")) {
+	if (html.includes('class="modal-overlay"')) {
 		return parseScenePaletteOverlayGrid(html, cols, rows);
 	}
 
+	if (/\bclass="[^"]*\bterm\b[^"]*\bscene\b/.test(html) && html.includes('class="middle"')) {
+		return parseSceneGrid(html, cols, rows);
+	}
+
 	// Extract grid blocks in document order
-	const gridPattern = /<pre class="grid"[^>]*>([\s\S]*?)<\/pre>/g;
+	const gridPattern = /<pre class="[^"]*\bgrid\b[^"]*"[^>]*>([\s\S]*?)<\/pre>/g;
 	// Find the opening tag, then capture everything from there to the end of the
 	// enclosing .stage div. The scene container depth varies across bible pages.
 	const openIdx = html.indexOf('data-render-rect');
@@ -341,18 +406,60 @@ export function cropStyledGrid(source, crop) {
 // ── Diff ──────────────────────────────────────────────────────────
 
 /**
+ * A narrow, declared region of the grid where target/runtime cells are known
+ * to legitimately differ for a mechanical (non-content) reason — e.g. a
+ * random session id, a live timestamp, a blink-phase cursor cell, or a
+ * capture-environment-dependent segment. Regions are rectangular (row/col
+ * ranges, inclusive) and MUST supply `targetPattern`/`runtimePattern` regexes
+ * that the target/runtime cell TEXT for the affected row (within the region's
+ * column span) must match. This is the over-masking guard: a region only
+ * suppresses a diff when the surrounding text still looks like the expected
+ * shape, so an unrelated content change landing in the same rectangle still
+ * fails instead of being silently swallowed.
+ *
+ * @typedef {object} EquivalentRegion
+ * @property {[number, number]} rows inclusive [lo, hi] row range
+ * @property {[number, number]} cols inclusive [lo, hi] col range
+ * @property {RegExp} [targetPattern] must match the target row's text (full row) for the region to apply
+ * @property {RegExp} [runtimePattern] must match the runtime row's text (full row) for the region to apply
+ * @property {string} reason human-readable justification
+ */
+
+function cellInRegion(region, row, col) {
+	return row >= region.rows[0] && row <= region.rows[1] && col >= region.cols[0] && col <= region.cols[1];
+}
+
+function regionApplies(region, targetRowText, runtimeRowText) {
+	if (region.targetPattern && !region.targetPattern.test(targetRowText)) return false;
+	if (region.runtimePattern && !region.runtimePattern.test(runtimeRowText)) return false;
+	return true;
+}
+
+function findApplicableRegion(regions, row, col, targetRowText, runtimeRowText) {
+	for (const region of regions) {
+		if (!cellInRegion(region, row, col)) continue;
+		if (regionApplies(region, targetRowText, runtimeRowText)) return region;
+	}
+	return null;
+}
+
+/**
  * Diff two styled cell grids. Returns per-row diffs with cell-level detail.
  */
 export function diffStyledGrids(target, runtime, options = {}) {
 	const ignoreColors = options.ignoreColors ?? false;
+	const equivalentRegions = options.equivalentRegions ?? [];
 	const rows = Math.max(target.grid.length, runtime.grid.length);
 	const cols = Math.max(target.cols, runtime.cols);
 	const rowDiffs = [];
+	const suppressedByRegion = new Map();
 
 	for (let r = 0; r < rows; r++) {
 		const tRow = target.grid[r] ?? [];
 		const rRow = runtime.grid[r] ?? [];
 		const cellDiffs = [];
+		const targetRowText = tRow.map((c) => c.char).join("");
+		const runtimeRowText = rRow.map((c) => c.char).join("");
 
 		for (let c = 0; c < cols; c++) {
 			const t = tRow[c] ?? { char: " ", fg: DEFAULT_FG, bg: DEFAULT_BG };
@@ -363,6 +470,14 @@ export function diffStyledGrids(target, runtime, options = {}) {
 			const bgMatch = ignoreColors || colorsEquivalent(t.bg, rc.bg);
 
 			if (!charMatch || !fgMatch || !bgMatch) {
+				const region = equivalentRegions.length > 0
+					? findApplicableRegion(equivalentRegions, r, c, targetRowText, runtimeRowText)
+					: null;
+				if (region) {
+					const key = region.reason;
+					suppressedByRegion.set(key, (suppressedByRegion.get(key) ?? 0) + 1);
+					continue;
+				}
 				cellDiffs.push({
 					col: c,
 					char: charMatch ? null : { target: t.char, runtime: rc.char },
@@ -384,7 +499,13 @@ export function diffStyledGrids(target, runtime, options = {}) {
 	}
 
 	const passed = rowDiffs.length === 0;
-	return { passed, rowDiffs, totalRows: rows, totalCols: cols };
+	return {
+		passed,
+		rowDiffs,
+		totalRows: rows,
+		totalCols: cols,
+		suppressed: [...suppressedByRegion.entries()].map(([reason, count]) => ({ reason, count })),
+	};
 }
 
 /**
@@ -396,6 +517,14 @@ export function styledDiffToText(diff) {
 		? `Styled cell diff: MATCH (${diff.totalRows}×${diff.totalCols})`
 		: `Styled cell diff: ${diff.rowDiffs.length} row(s) differ out of ${diff.totalRows}`);
 	lines.push("");
+
+	if (diff.suppressed && diff.suppressed.length > 0) {
+		lines.push("Suppressed by declared equivalence (narrow, pattern-guarded):");
+		for (const s of diff.suppressed) {
+			lines.push(`  - ${s.reason}: ${s.count} cell(s)`);
+		}
+		lines.push("");
+	}
 
 	for (const rd of diff.rowDiffs.slice(0, 30)) {
 		lines.push(`row ${String(rd.row).padStart(3)}  (${rd.diffCount} cell diffs)`);

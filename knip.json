@@ -2,8 +2,6 @@
 	"$schema": "https://unpkg.com/knip@5/schema.json",
 	"entry": [
 		"src/extension.ts",
-		"src/sumo-tui/pi-compat/sumo-interactive-mode.ts",
-		"sumo-interactive-mode.js",
 		"src/**/*.test.ts",
 		"test/integration/**/*.test.ts",
 		"scripts/render-bible.mjs",

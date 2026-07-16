@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { getApiProvider, resetApiProviders, type Api, type Model, type SimpleStreamOptions } from "@earendil-works/pi-ai";
+import { getApiProvider, resetApiProviders, type Api, type Model, type SimpleStreamOptions } from "@earendil-works/pi-ai/compat";
 import { buildOpenAICodexResponsesFastOptions, buildOpenAIResponsesFastOptions, installFastMode, isConfiguredFastModel, shouldApplyFastMode } from "./fast-mode.js";
 
 function model(overrides: Partial<Model<Api>> = {}): Model<Api> {

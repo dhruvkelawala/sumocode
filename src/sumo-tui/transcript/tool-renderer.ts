@@ -1,6 +1,7 @@
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { activeThemeColors } from "../../themes/index.js";
 import { lineToAnsi, span, textLine, type Span } from "../render/primitives.js";
+import { expandKey } from "./expand-key.js";
 import type { ToolCallViewModel, ToolStatus } from "./view-model.js";
 
 const STATUS_GLYPH: Record<ToolStatus, string> = {
@@ -94,10 +95,11 @@ function styledToolHeaderParts(tool: ToolCallViewModel): Span[] {
 }
 
 function compactHint(tool: ToolCallViewModel): string {
-	if (tool.status === "error") return "⌘O error";
-	if (tool.name === "edit") return "⌘O diff";
-	if (tool.name === "bash") return "⌘O output";
-	return "⌘O expand";
+	const key = expandKey();
+	if (tool.status === "error") return `${key} error`;
+	if (tool.name === "edit") return `${key} diff`;
+	if (tool.name === "bash") return `${key} output`;
+	return `${key} expand`;
 }
 
 export function renderCompactToolPill(tool: ToolCallViewModel): string {
@@ -220,25 +222,34 @@ function renderEditSummary(text: string, width: number): string[] {
 
 function renderEditBody(tool: ToolCallViewModel, width: number): string[] {
 	const details = asRecord(tool.details);
-	const diffLines = arrayFromDetails(details, "diff").map(terminalSafeText);
+	const rawDiff = details?.diff;
+	const diffLines = (typeof rawDiff === "string"
+		? rawDiff.split("\n")
+		: arrayFromDetails(details, "diff")
+	).map(terminalSafeText);
 
-	// No explicit diff array → render summary from output/note
 	if (diffLines.length === 0) {
 		const note = toolNote(tool) ?? "diff collapsed";
 		return renderEditSummary(note, width);
 	}
 
-	// Render actual diff lines with gutter
-	const startLine = typeof details?.startLine === "number" ? details.startLine : 1;
-	const rows = diffLines.slice(0, TOOL_BODY_MAX_LINES).map((line, index) => {
-		const color = line.trimStart().startsWith("+") ? activeThemeColors().states.idle
-			: line.trimStart().startsWith("-") ? activeThemeColors().states.approval
-			: activeThemeColors().foreground;
-		return renderGutterLine(startLine + index, line, width, color);
+	const rows = diffLines.slice(0, TOOL_BODY_MAX_LINES).map((line) => {
+		const head = line.trimStart();
+		const color = head.startsWith("+") ? activeThemeColors().states.idle
+			: head.startsWith("-") ? activeThemeColors().states.approval
+			: activeThemeColors().foregroundDim;
+		return renderBodyLine([span(line, { fg: color })], width);
 	});
+	const adds = diffLines.filter((line) => line.trimStart().startsWith("+")).length;
+	const removes = diffLines.filter((line) => line.trimStart().startsWith("-")).length;
+	const summary = renderBodyLine([
+		span(`+${adds}`, { fg: activeThemeColors().states.idle }),
+		span(" "),
+		span(`-${removes}`, { fg: activeThemeColors().states.approval }),
+	], width);
 	const collapsed = collapsedMarker(details, Math.max(0, diffLines.length - rows.length));
 	if (collapsed) rows.push(renderBodyLine([span("      ", { fg: activeThemeColors().foregroundDim }), span(collapsed, { fg: activeThemeColors().foregroundDim })], width));
-	return rows;
+	return [summary, ...rows];
 }
 
 function renderBashLine(line: string): (Span | string)[] {

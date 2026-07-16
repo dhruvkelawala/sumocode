@@ -171,6 +171,120 @@ describe("question tool options", () => {
 	});
 });
 
+describe("question tool RPC primitives", () => {
+	function registerTool() {
+		let tool: { execute: (...args: unknown[]) => Promise<{ content: { text: string }[]; details: Record<string, unknown> }> } | undefined;
+		const pi = {
+			registerTool: vi.fn((definition) => { tool = definition; }),
+		};
+		installQuestionTool(pi as never);
+		return tool!;
+	}
+
+	it("returns a selected option without calling custom UI", async () => {
+		const tool = registerTool();
+		const custom = vi.fn();
+		const select = vi.fn(async () => "approve — safe to proceed");
+		const input = vi.fn();
+
+		const result = await tool.execute("call-1", {
+			question: "Approve?",
+			options: [{ label: "approve", description: "safe to proceed" }],
+		}, undefined, undefined, {
+			hasUI: true,
+			mode: "rpc",
+			ui: { select, input, custom },
+		});
+
+		expect(select).toHaveBeenCalledWith("Approve?", ["approve — safe to proceed", "Type something…"]);
+		expect(input).not.toHaveBeenCalled();
+		expect(custom).not.toHaveBeenCalled();
+		expect(result.details).toMatchObject({ cancelled: false, answer: "approve", wasCustom: false });
+	});
+
+	it("collects free-text after the sentinel is selected", async () => {
+		const tool = registerTool();
+		const custom = vi.fn();
+		const select = vi.fn(async () => "Type something…");
+		const input = vi.fn(async () => "  ship the narrow fix  ");
+
+		const result = await tool.execute("call-1", {
+			question: "Preferred framing?",
+			options: ["Keep it high-level"],
+		}, undefined, undefined, {
+			hasUI: true,
+			mode: "rpc",
+			ui: { select, input, custom },
+		});
+
+		expect(input).toHaveBeenCalledWith("Preferred framing?", "type your answer");
+		expect(custom).not.toHaveBeenCalled();
+		expect(result.details).toMatchObject({ cancelled: false, answer: "ship the narrow fix", wasCustom: true });
+	});
+
+	it("returns the existing cancelled response when primitive selection is cancelled", async () => {
+		const tool = registerTool();
+		const custom = vi.fn();
+		const result = await tool.execute("call-1", {
+			question: "Pick one",
+			options: ["A", "B"],
+		}, undefined, undefined, {
+			hasUI: true,
+			mode: "rpc",
+			ui: { select: vi.fn(async () => undefined), input: vi.fn(), custom },
+		});
+
+		expect(custom).not.toHaveBeenCalled();
+		expect(result.content[0]?.text).toBe("User cancelled.");
+		expect(result.details).toMatchObject({ cancelled: true });
+	});
+
+	it("asks multiple sequential questions through RPC primitives", async () => {
+		const tool = registerTool();
+		const custom = vi.fn();
+		const select = vi.fn(async () => "Yes");
+		const input = vi.fn(async () => "  next Tuesday  ");
+
+		const result = await tool.execute("call-1", {
+			questions: [
+				{ question: "Proceed?", options: ["Yes", "No"] },
+				{ question: "When should we ship?" },
+			],
+		}, undefined, undefined, {
+			hasUI: true,
+			mode: "rpc",
+			ui: { select, input, custom },
+		});
+
+		expect(select).toHaveBeenCalledTimes(1);
+		expect(input).toHaveBeenCalledTimes(1);
+		expect(custom).not.toHaveBeenCalled();
+		expect(result.details).toMatchObject({
+			cancelled: false,
+			entries: [
+				{ question: "Proceed?", answer: "Yes" },
+				{ question: "When should we ship?", answer: "next Tuesday" },
+			],
+		});
+	});
+
+	it("cancels free-text RPC questions on whitespace-only input", async () => {
+		const tool = registerTool();
+		const custom = vi.fn();
+
+		const result = await tool.execute("call-1", {
+			question: "What should I do?",
+		}, undefined, undefined, {
+			hasUI: true,
+			mode: "rpc",
+			ui: { input: vi.fn(async () => "   "), custom },
+		});
+
+		expect(custom).not.toHaveBeenCalled();
+		expect(result.details).toMatchObject({ cancelled: true });
+	});
+});
+
 describe("withCathedralForeground", () => {
 	it("re-applies Cathedral foreground after Pi default-fg reset (\\x1b[39m)", () => {
 		const line = withCathedralForeground("[32mgreen from Pi[39m trailing");

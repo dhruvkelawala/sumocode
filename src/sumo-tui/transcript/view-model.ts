@@ -1,3 +1,5 @@
+import { parseSkillBlock } from "@earendil-works/pi-coding-agent";
+import { expandKey } from "./expand-key.js";
 import { renderCompactToolPill } from "./tool-renderer.js";
 
 export type ChatMessageRole = "user" | "sumo" | "system";
@@ -47,7 +49,8 @@ export type ChatBlock =
 	| { readonly type: "code"; readonly lang: string; readonly source: string; readonly collapsed?: boolean }
 	| { readonly type: "image"; readonly data: string; readonly mime: string; readonly filename?: string }
 	| { readonly type: "tool"; readonly tool: ToolCallViewModel }
-	| { readonly type: "skill"; readonly name: string; readonly expanded: boolean }
+	| { readonly type: "skill"; readonly name: string; readonly expanded: boolean; readonly content?: string }
+	| { readonly type: "summary"; readonly kind: "branch" | "compaction"; readonly label: string; readonly content: string; readonly expanded: boolean }
 	| { readonly type: "question"; readonly question: QuestionViewModel }
 	| { readonly type: "delegation"; readonly delegation: DelegationViewModel };
 
@@ -164,6 +167,13 @@ function textFromContent(content: unknown): string {
 		.join("");
 }
 
+function authFailureHintFromMessage(record: Record<string, unknown>): string | undefined {
+	const errorMessage = asString(record.errorMessage) ?? asString(record.error);
+	const provider = asString(record.provider) ?? errorMessage?.match(/^No API key for provider: ([A-Za-z0-9_-]+)$/)?.[1];
+	if (!errorMessage || !provider || !errorMessage.includes(`No API key for provider: ${provider}`)) return undefined;
+	return `${provider} auth failed — run pi directly and /login to re-authenticate`;
+}
+
 function thinkingBlockFromRecord(record: Record<string, unknown>): ChatBlock[] {
 	const text = firstString(record.thinking, record.reasoning, record.text, record.content, record.delta);
 	const hidden = record.hidden === true || record.redacted === true || record.encrypted === true;
@@ -201,12 +211,56 @@ function skillBlockFromRecord(record: Record<string, unknown>): ChatBlock {
 	};
 }
 
+function summaryBlockFromRecord(record: Record<string, unknown>, kind: "branch" | "compaction"): ChatBlock {
+	const content = firstString(record.summary, record.text, asString(record.content)) ?? "";
+	const tokens = typeof record.tokensBefore === "number" ? record.tokensBefore.toLocaleString() : undefined;
+	const label = kind === "compaction"
+		? (tokens ? `[compaction] Compacted from ${tokens} tokens` : "[compaction] Compacted")
+		: "[branch] Branch summary";
+	return { type: "summary", kind, label, content, expanded: false };
+}
+
 function imageBlockFromRecord(record: Record<string, unknown>): ChatBlock[] {
 	const source = asRecord(record.source);
 	const data = firstString(record.data, record.base64, record.base64Data, source?.data, source?.base64, source?.base64Data);
 	const mime = firstString(record.mime, record.mimeType, record.mediaType, record.media_type, source?.mime, source?.mimeType, source?.mediaType, source?.media_type);
 	if (!data || !mime) return [];
 	return [{ type: "image", data, mime, filename: firstString(record.filename, record.name, source?.filename) }];
+}
+
+/**
+ * Display-only collapse of image file paths in USER message text. The
+ * Cathedral editor expands `[Image N]` tokens into (quoted, when spaced)
+ * real paths on submit; showing those temp paths verbatim in the user card
+ * is noise. Matches quoted paths (`"/…/Screenshot 2026….png"`) and bare
+ * absolute/home paths ending in an image extension, replacing each with
+ * `[Image: <basename>]`. Scoped to user-role display — assistant/tool text
+ * is never rewritten (paths inside code or command output must stay exact).
+ */
+export function collapseImagePathsForDisplay(text: string): string {
+	const pattern = /"((?:\/|~\/)[^"\n]+\.(?:png|jpe?g|gif|webp))"|(?<=^|\s)((?:\/|~\/)[^\s"'\n]+\.(?:png|jpe?g|gif|webp))(?=$|\s)/gim;
+	return text.replace(pattern, (_match, quoted: string | undefined, bare: string | undefined) => {
+		const path = quoted ?? bare ?? "";
+		const basename = path.split("/").pop() ?? path;
+		return `[Image: ${basename}]`;
+	});
+}
+
+/**
+ * Extract just the image blocks from a content array. Used for tool results
+ * (e.g. Read on a PNG), whose text is folded into the tool pill's `output`
+ * while any image parts would otherwise be dropped on the floor — they
+ * become sibling image blocks so the chat card renders them (inline pixels
+ * where supported, `[Image: …]` chip otherwise).
+ */
+function imageBlocksFromContent(content: unknown): ChatBlock[] {
+	if (!Array.isArray(content)) return [];
+	return content.flatMap((part) => {
+		const record = asRecord(part);
+		if (!record) return [];
+		if (record.type === "image" || record.type === "input_image") return imageBlockFromRecord(record);
+		return [];
+	});
 }
 
 function questionBlockFromRecord(record: Record<string, unknown>): ChatBlock {
@@ -605,7 +659,7 @@ function blocksFromContentPart(part: unknown): ChatBlock[] {
 		case "toolResult":
 		case "tool_result":
 			if (asString(record.name) === "task") return [taskBlockFromRecord(record, "success")];
-			return [toolBlockFromRecord(record, "success")];
+			return [toolBlockFromRecord(record, "success"), ...imageBlocksFromContent(record.content)];
 		case "skill":
 		case "skill_invocation":
 			return [skillBlockFromRecord(record)];
@@ -629,6 +683,8 @@ function blocksFromContent(content: unknown): ChatBlock[] {
 }
 
 function blocksFromMessage(record: Record<string, unknown>): ChatBlock[] {
+	if (record.role === "branchSummary") return [summaryBlockFromRecord(record, "branch")];
+	if (record.role === "compactionSummary") return [summaryBlockFromRecord(record, "compaction")];
 	if (record.role === "bashExecution") {
 		const status = record.cancelled === true ? "cancelled" : record.exitCode === 0 || record.exitCode === undefined ? "success" : "error";
 		return [toolBlockFromRecord({ ...record, type: "tool", name: "bash", status }, status)];
@@ -636,16 +692,39 @@ function blocksFromMessage(record: Record<string, unknown>): ChatBlock[] {
 	if (record.role === "toolResult") {
 		const toolName = firstString(asString(record.toolName), asString(record.name));
 		if (toolName === "task") return [taskBlockFromRecord(record, "success")];
-		return [toolBlockFromRecord(record, "success")];
+		return [toolBlockFromRecord(record, "success"), ...imageBlocksFromContent(record.content)];
 	}
 	if (record.role === "custom" && typeof record.customType === "string") {
 		if (record.customType === "skill") return [skillBlockFromRecord(asRecord(record.details) ?? record)];
 		if (record.customType === "question") return [questionBlockFromRecord(asRecord(record.details) ?? record)];
 		if (record.customType === "delegation") return [delegationBlockFromRecord(asRecord(record.details) ?? record)];
+		// Unrecognized custom type: preserve provenance (mirrors Pi's CustomMessageComponent default).
+		const labeled: ChatBlock[] = [{ type: "markdown", text: `[${record.customType}]` }];
+		labeled.push(...blocksFromContent(record.content));
+		return labeled;
+	}
+
+	if (record.role === "user") {
+		const text = textFromContent(record.content);
+		const skill = parseSkillBlock(text);
+		if (skill) {
+			const blocks: ChatBlock[] = [{ type: "skill", name: skill.name, expanded: false, content: skill.content }];
+			if (skill.userMessage) blocks.push(...markdownAndCodeBlocksFromText(skill.userMessage));
+			return blocks;
+		}
+		// Display-only: the editor collapses pasted screenshots to [Image N]
+		// but expands them back to (quoted) paths on submit for the agent.
+		// Mirror the collapse in the transcript so the user card shows a
+		// compact tag instead of a wall of temp path. The underlying message
+		// (what the agent and session file contain) is untouched.
+		const display = collapseImagePathsForDisplay(text);
+		if (display !== text) return markdownAndCodeBlocksFromText(display);
 	}
 
 	const blocks = blocksFromContent(record.content);
 	if (blocks.length > 0) return blocks;
+	const authFailureHint = authFailureHintFromMessage(record);
+	if (authFailureHint) return [{ type: "markdown", text: authFailureHint }];
 	const errorMessage = asString(record.errorMessage);
 	return errorMessage ? [{ type: "markdown", text: errorMessage }] : [];
 }
@@ -718,7 +797,9 @@ export function chatMessageViewModelToPlainText(message: ChatMessageViewModel): 
 				case "tool":
 					return renderCompactToolPill(block.tool);
 				case "skill":
-					return `[skill] ${block.name}${block.expanded ? " (expanded)" : " (⌘O to expand)"}`;
+					return `[skill] ${block.name}${block.expanded ? " (expanded)" : ` (${expandKey()} to expand)`}`;
+				case "summary":
+					return block.label;
 				case "question":
 					return [`[question] ${block.question.prompt}`, ...block.question.choices.map((choice) => `- ${choice}`)].join("\n");
 				case "delegation":

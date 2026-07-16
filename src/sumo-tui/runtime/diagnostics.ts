@@ -43,7 +43,9 @@ export function logDiagnostic(event: string, fields: DiagnosticFields = {}): voi
 		const now = performance.now();
 		const sanitized: Record<string, DiagnosticValue> = {};
 		for (const [key, value] of Object.entries(fields)) sanitized[key] = sanitizeDiagnosticValue(value);
-		appendFileSync(file, `${JSON.stringify({ ts: Date.now(), event, sinceDiagnosticsMs: Math.round((now - diagnosticsStart) * 100) / 100, deltaMs: Math.round((now - lastMark) * 100) / 100, ...sanitized })}\n`, "utf8");
+		// `mode` only applies when the append creates the file: the trace carries
+		// low-level input events, so it must be readable by its owner only.
+		appendFileSync(file, `${JSON.stringify({ ts: Date.now(), event, sinceDiagnosticsMs: Math.round((now - diagnosticsStart) * 100) / 100, deltaMs: Math.round((now - lastMark) * 100) / 100, ...sanitized })}\n`, { encoding: "utf8", mode: 0o600 });
 		lastMark = now;
 	} catch {
 		// Diagnostics must never perturb the interactive session.

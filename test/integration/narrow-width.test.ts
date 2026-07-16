@@ -1,10 +1,9 @@
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { pathToFileURL } from "node:url";
 import xterm from "@xterm/headless";
 import { afterEach, describe, expect, it } from "vitest";
-import { spawnPiPty, type SpawnedPiPty } from "./spawn-pi-pty.js";
+import { spawnSumocodePty, type SpawnedPiPty } from "./spawn-pi-pty.js";
 
 const ANSI_PATTERN = /\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\)|_[^\x07]*(?:\x07|\x1b\\))/g;
 
@@ -35,14 +34,11 @@ async function replayTerminalRows(output: string, cols: number, rows: number): P
 
 async function expectNarrowBoot(cols: number, rows: number): Promise<void> {
 	const agentDir = await mkdtemp(join(tmpdir(), "sumocode-pi-agent-"));
-	app = spawnPiPty({
+	app = spawnSumocodePty({
 		cols,
 		rows,
 		env: {
 			PI_CODING_AGENT_DIR: agentDir,
-			SUMO_TUI: "1",
-			SUMO_TUI_HIDE_PI_NOISE: "1",
-			SUMO_TUI_MODULE: pathToFileURL(join(process.cwd(), "sumo-interactive-mode.js")).href,
 		},
 	});
 

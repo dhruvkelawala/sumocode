@@ -34,6 +34,12 @@
 			"cols": 160,
 			"rows": 3
 		},
+		"input-component-frame-only": {
+			"x": 0,
+			"y": 0,
+			"cols": 160,
+			"rows": 3
+		},
 		"hint-row": {
 			"x": 0,
 			"y": 41,
@@ -225,23 +231,31 @@
 				"settleMs": 3000,
 				"env": {
 					"PI_OFFLINE": "1",
-					"SUMO_TUI": "1",
+					"SUMO_TUI": "0",
 					"TERM": "xterm-256color",
 					"COLORTERM": "truecolor",
 					"FORCE_COLOR": "3"
 				}
 			},
 			"rejectIfOutputMatches": [
+				"Warning: No models match pattern",
 				"ERR_MODULE_NOT_FOUND",
 				"Rendered line .* exceeds terminal width",
 				"Skipping installed SumoCode extension because this session is already inside an active SumoCode dev checkout",
 				"Error \\["
 			],
+			"rejectIfFinalScreenMatches": [
+				"SUMOCODE RPC",
+				"empty transcript",
+				"sumocode \\u00b7 rpc host"
+			],
 			"crops": [
 				{
 					"id": "full",
 					"targetCrop": "full",
-					"runtimeCrop": "full"
+					"runtimeCrop": "full",
+					"status": "required",
+					"threshold": 0.03
 				}
 			]
 		},
@@ -253,40 +267,79 @@
 				"cols": 160,
 				"rows": 45
 			},
-			"bibleTarget": "scene-active.png",
+			"bibleTarget": "scene-active-runtime.png",
 			"runtime": {
 				"command": "./bin/sumocode.sh",
 				"args": [
 					"--offline",
 					"--no-extensions",
-					"--no-session"
+					"--no-session",
+					"-e",
+					"./scripts/visual-v2/runtime-faux-provider.mjs",
+					"--model",
+					"sumocode-visual/active-working"
 				],
-				"settleMs": 1800,
+				"settleMs": 0,
+				"emptyOutputGraceMs": 0,
 				"env": {
 					"PI_OFFLINE": "1",
-					"SUMO_TUI": "1",
+					"SUMO_TUI": "0",
 					"TERM": "xterm-256color",
 					"COLORTERM": "truecolor",
 					"FORCE_COLOR": "3"
 				},
 				"inputs": [
 					{
-						"afterMs": 1800,
+						"type": "waitForFinalScreenMatches",
+						"include": [
+							"DIVINE INVOCATION"
+						],
+						"timeoutMs": 10000
+					},
+					{
+						"afterMs": 100,
 						"type": "text",
 						"value": "review src/auth/session.ts and tighten the return type"
 					},
 					{
-						"afterMs": 150,
+						"afterMs": 100,
 						"type": "key",
-						"value": "\r"
+						"value": "Enter"
+					},
+					{
+						"type": "waitForFinalScreenMatches",
+						"include": [
+							"SUMOCODE",
+							"inspecting src/auth/session\\.ts",
+							"review src/auth/session\\.ts and tighten the return type"
+						],
+						"exclude": [
+							"No API key found",
+							"rpc error: prompt failed",
+							"DIVINE INVOCATION",
+							"unknown · off",
+							"\\^\\[\\[13u"
+						],
+						"timeoutMs": 10000
 					}
 				]
 			},
 			"rejectIfOutputMatches": [
+				"Warning: No models match pattern",
 				"ERR_MODULE_NOT_FOUND",
 				"Rendered line .* exceeds terminal width",
 				"Skipping installed SumoCode extension because this session is already inside an active SumoCode dev checkout",
 				"Error \\["
+			],
+			"rejectIfFinalScreenMatches": [
+				"No API key found",
+				"rpc error: prompt failed",
+				"DIVINE INVOCATION",
+				"unknown · off",
+				"\\^\\[\\[13u",
+				"SUMOCODE RPC",
+				"empty transcript",
+				"sumocode \\u00b7 rpc host"
 			],
 			"crops": [
 				{
@@ -297,33 +350,41 @@
 				{
 					"id": "top-bar",
 					"targetCrop": "top-bar",
-					"runtimeCrop": "top-bar"
+					"runtimeCrop": "top-bar",
+					"status": "required",
+					"threshold": 0.08
 				},
 				{
 					"id": "sidebar",
 					"targetCrop": "sidebar",
-					"runtimeCrop": "sidebar"
+					"runtimeCrop": "sidebar",
+					"status": "required"
 				},
 				{
 					"id": "chat-area",
 					"targetCrop": "chat-area",
-					"runtimeCrop": "chat-area"
+					"runtimeCrop": "chat-area",
+					"status": "required"
 				},
 				{
 					"id": "input-frame",
-					"targetImage": "04-active-input-typed.png",
-					"targetCrop": "full",
-					"runtimeCrop": "input-frame"
+					"targetCrop": "input-frame",
+					"runtimeCrop": "input-frame",
+					"status": "required",
+					"threshold": 0.03
 				},
 				{
 					"id": "hint-row",
 					"targetCrop": "hint-row",
-					"runtimeCrop": "hint-row"
+					"runtimeCrop": "hint-row",
+					"status": "required"
 				},
 				{
 					"id": "footer",
 					"targetCrop": "footer",
-					"runtimeCrop": "footer"
+					"runtimeCrop": "footer",
+					"status": "required",
+					"threshold": 0.045
 				}
 			],
 			"geometrySpec": {
@@ -331,8 +392,18 @@
 					{
 						"startRow": 0,
 						"endRow": 0,
+						"category": "blank"
+					},
+					{
+						"startRow": 1,
+						"endRow": 1,
 						"category": "top-bar",
 						"firstCol": 1
+					},
+					{
+						"startRow": 2,
+						"endRow": 2,
+						"category": "blank"
 					}
 				],
 				"contentBounds": {
@@ -349,18 +420,23 @@
 				"cols": 60,
 				"rows": 100
 			},
-			"bibleTarget": "scene-active-portrait.png",
+			"bibleTarget": "scene-active-runtime-portrait.png",
 			"runtime": {
 				"command": "./bin/sumocode.sh",
 				"args": [
 					"--offline",
 					"--no-extensions",
-					"--no-session"
+					"--no-session",
+					"-e",
+					"./scripts/visual-v2/runtime-faux-provider.mjs",
+					"--model",
+					"sumocode-visual/active-working"
 				],
-				"settleMs": 1800,
+				"settleMs": 0,
+				"emptyOutputGraceMs": 0,
 				"env": {
 					"PI_OFFLINE": "1",
-					"SUMO_TUI": "1",
+					"SUMO_TUI": "0",
 					"TERM": "xterm-256color",
 					"COLORTERM": "truecolor",
 					"FORCE_COLOR": "3",
@@ -369,22 +445,56 @@
 				},
 				"inputs": [
 					{
-						"afterMs": 1800,
-						"type": "text",
-						"value": "summarize the plan"
+						"type": "waitForFinalScreenMatches",
+						"include": [
+							"DIVINE INVOCATION"
+						],
+						"timeoutMs": 10000
 					},
 					{
-						"afterMs": 150,
+						"afterMs": 100,
+						"type": "text",
+						"value": "review src/auth/session.ts and tighten the return type"
+					},
+					{
+						"afterMs": 100,
 						"type": "key",
-						"value": "\r"
+						"value": "Enter"
+					},
+					{
+						"type": "waitForFinalScreenMatches",
+						"include": [
+							"SUMOCODE",
+							"inspecting src/auth/session\\.ts",
+							"review src/auth/session\\.ts and tighten the return type"
+						],
+						"exclude": [
+							"No API key found",
+							"rpc error: prompt failed",
+							"DIVINE INVOCATION",
+							"unknown · off",
+							"\\^\\[\\[13u"
+						],
+						"timeoutMs": 10000
 					}
 				]
 			},
 			"rejectIfOutputMatches": [
+				"Warning: No models match pattern",
 				"ERR_MODULE_NOT_FOUND",
 				"Rendered line .* exceeds terminal width",
 				"Skipping installed SumoCode extension because this session is already inside an active SumoCode dev checkout",
 				"Error \\["
+			],
+			"rejectIfFinalScreenMatches": [
+				"No API key found",
+				"rpc error: prompt failed",
+				"DIVINE INVOCATION",
+				"unknown · off",
+				"\\^\\[\\[13u",
+				"SUMOCODE RPC",
+				"empty transcript",
+				"sumocode \\u00b7 rpc host"
 			],
 			"crops": [
 				{
@@ -395,28 +505,35 @@
 				{
 					"id": "top-bar",
 					"targetCrop": "portrait-top-bar",
-					"runtimeCrop": "portrait-top-bar"
+					"runtimeCrop": "portrait-top-bar",
+					"status": "required",
+					"threshold": 0.08
 				},
 				{
 					"id": "chat-area",
 					"targetCrop": "portrait-chat-area",
-					"runtimeCrop": "portrait-chat-area"
+					"runtimeCrop": "portrait-chat-area",
+					"status": "required"
 				},
 				{
 					"id": "input-frame",
-					"targetImage": "04-active-input-empty-portrait.png",
-					"targetCrop": "full",
-					"runtimeCrop": "portrait-input-frame"
+					"targetCrop": "portrait-input-frame",
+					"runtimeCrop": "portrait-input-frame",
+					"status": "required",
+					"threshold": 0.03
 				},
 				{
 					"id": "hint-row",
 					"targetCrop": "portrait-hint-row",
-					"runtimeCrop": "portrait-hint-row"
+					"runtimeCrop": "portrait-hint-row",
+					"status": "required"
 				},
 				{
 					"id": "footer",
 					"targetCrop": "portrait-footer",
-					"runtimeCrop": "portrait-footer"
+					"runtimeCrop": "portrait-footer",
+					"status": "required",
+					"threshold": 0.045
 				}
 			],
 			"geometrySpec": {
@@ -515,7 +632,11 @@
 				{
 					"id": "input-frame",
 					"targetImage": "04-active-input-empty.png",
-					"targetCrop": "full",
+					"targetCrop": "input-component-frame-only",
+					"targetDimensions": {
+						"cols": 160,
+						"rows": 4
+					},
 					"runtimeCrop": "input-frame"
 				},
 				{
@@ -584,8 +705,7 @@
 				},
 				{
 					"id": "input-frame",
-					"targetImage": "04-active-input-empty-portrait.png",
-					"targetCrop": "full",
+					"targetCrop": "portrait-input-frame",
 					"runtimeCrop": "portrait-input-frame"
 				},
 				{
@@ -729,12 +849,17 @@
 				{
 					"id": "chat-area",
 					"targetCrop": "chat-area",
-					"runtimeCrop": "chat-area"
+					"runtimeCrop": "chat-area",
+					"status": "required"
 				},
 				{
 					"id": "input-frame",
 					"targetImage": "04-active-input-empty.png",
-					"targetCrop": "full",
+					"targetCrop": "input-component-frame-only",
+					"targetDimensions": {
+						"cols": 160,
+						"rows": 4
+					},
 					"runtimeCrop": "input-frame"
 				},
 				{
@@ -822,7 +947,8 @@
 				{
 					"id": "chat-area",
 					"targetCrop": "chat-area",
-					"runtimeCrop": "chat-area"
+					"runtimeCrop": "chat-area",
+					"status": "required"
 				}
 			]
 		},
@@ -847,7 +973,8 @@
 				{
 					"id": "chat-area",
 					"targetCrop": "chat-area",
-					"runtimeCrop": "chat-area"
+					"runtimeCrop": "chat-area",
+					"status": "required"
 				}
 			]
 		},
@@ -862,6 +989,32 @@
 			"bibleTarget": "scene-active-code-block.png",
 			"fixture": {
 				"id": "code-block"
+			},
+			"crops": [
+				{
+					"id": "full",
+					"targetCrop": "full",
+					"runtimeCrop": "full"
+				},
+				{
+					"id": "chat-area",
+					"targetCrop": "chat-area",
+					"runtimeCrop": "chat-area",
+					"status": "required"
+				}
+			]
+		},
+		{
+			"id": "fixture-track-b-transcript-landscape",
+			"lane": "fixture",
+			"status": "review",
+			"dimensions": {
+				"cols": 160,
+				"rows": 45
+			},
+			"bibleTarget": "scene-active.png",
+			"fixture": {
+				"id": "track-b-transcript"
 			},
 			"crops": [
 				{

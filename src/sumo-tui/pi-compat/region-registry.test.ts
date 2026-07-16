@@ -5,7 +5,7 @@ import { DIRECTION_LTR, loadYoga } from "../layout/yoga.js";
 import { CellBuffer } from "../render/buffer.js";
 import { composite } from "../render/compositor.js";
 import { ChatPager } from "../widgets/chat-pager.js";
-import { RegionRegistry } from "./region-registry.js";
+import { ExtensionStatusPublication, RegionRegistry } from "./region-registry.js";
 
 class TestComponent implements Component {
 	public readonly dispose = vi.fn();
@@ -122,6 +122,36 @@ describe("RegionRegistry", () => {
 		expect(registry.getSlot("chat").children).toContain(chat);
 		expect(frame.toPlainRow(0)).toContain("╭ USER");
 		expect(frame.toPlainRow(1)).toContain("hello retained chat");
+		registry.dispose();
+	});
+
+	it("publishes mounted slot components as backend-neutral renderables", async () => {
+		const registry = await makeRegistry();
+		registry.mountWidget("above-a", ["first"], { placement: "aboveEditor" });
+		registry.mountWidget("above-b", ["second"], { placement: "aboveEditor" });
+		registry.mountWidget("side", ["sidebar widget"], { placement: "sidebar" });
+
+		expect(registry.createSlotPublication("aboveEditor").component.render(20)).toEqual(["first", "second"]);
+		expect(registry.createSlotPublication("sidebar").component.render(20)).toEqual(["sidebar widget"]);
+		registry.dispose();
+	});
+
+	it("tracks extension statuses without painting them as a visible status strip", async () => {
+		// Main (classic InteractiveMode) never renders `ctx.ui.setStatus()` text anywhere:
+		// SumoCode's custom footer (`installFooter` in src/footer.ts) replaces Pi's default
+		// footer and never queries extension statuses, and `SumoExtensionUIAdapter.onStatus`
+		// is never wired to a sink on main. `ExtensionStatusPublication` exists only so RPC
+		// mode's `getStatuses()` still gives a readback -- it must not render a raw "key:
+		// text" strip above the editor, since that has no equivalent on main.
+		const registry = await makeRegistry();
+		const statuses = new ExtensionStatusPublication();
+		registry.mountStatus(statuses.component);
+
+		statuses.setStatus("task-mode", "done");
+		statuses.setStatus("empty", undefined);
+
+		expect(registry.createSlotPublication("status").component.render(40)).toEqual([]);
+		expect(statuses.getStatuses().get("task-mode")).toBe("done");
 		registry.dispose();
 	});
 });

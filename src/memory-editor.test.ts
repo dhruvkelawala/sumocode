@@ -371,6 +371,23 @@ describe("registerMemoryCommand", () => {
 		expect(custom.mock.calls.length + notify.mock.calls.length).toBeGreaterThan(0);
 	});
 
+	it("/sumo:memory defers the editor overlay visibly in RPC mode", async () => {
+		let handler: ((args: string, ctx: unknown) => Promise<void>) | undefined;
+		const registerCommand = vi.fn((_name: string, opts: { handler: typeof handler }) => {
+			handler = opts.handler;
+		});
+		const client = fakeClient({ browse: vi.fn(async () => [fact()]) });
+		registerMemoryCommand({ registerCommand } as never, () => client);
+
+		const custom = vi.fn();
+		const notify = vi.fn();
+		await handler!("edit", { mode: "rpc", ui: { custom, notify } });
+
+		expect(client.browse).not.toHaveBeenCalled();
+		expect(custom).not.toHaveBeenCalled();
+		expect(notify).toHaveBeenCalledWith("memory editor overlay unavailable in RPC mode; use status/add/forget", "warning");
+	});
+
 	it("/sumo:memory status exposes Remnic extraction freshness", async () => {
 		let handler: ((args: string, ctx: unknown) => Promise<void>) | undefined;
 		const registerCommand = vi.fn((_name: string, opts: { handler: typeof handler }) => {
@@ -386,5 +403,24 @@ describe("registerMemoryCommand", () => {
 
 		expect(client.status).toHaveBeenCalledTimes(1);
 		expect(notify).toHaveBeenCalledWith("memory ok · 3 facts · last extraction 2026-04-26T14:41:40.725Z", "info");
+	});
+
+	it("/sumo:memory status still runs directly in RPC mode", async () => {
+		let handler: ((args: string, ctx: unknown) => Promise<void>) | undefined;
+		const registerCommand = vi.fn((_name: string, opts: { handler: typeof handler }) => {
+			handler = opts.handler;
+		});
+		const client = fakeClient({
+			status: vi.fn(async () => ({ ok: true, factCount: 1 })),
+		});
+		registerMemoryCommand({ registerCommand } as never, () => client);
+
+		const custom = vi.fn();
+		const notify = vi.fn();
+		await handler!("status", { mode: "rpc", ui: { custom, notify } });
+
+		expect(custom).not.toHaveBeenCalled();
+		expect(client.status).toHaveBeenCalledTimes(1);
+		expect(notify).toHaveBeenCalledWith("memory ok · 1 fact · no extraction recorded", "info");
 	});
 });

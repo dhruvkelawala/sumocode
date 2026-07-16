@@ -14,7 +14,10 @@ done
 SCRIPT_DIR="$(cd "$(dirname "${SOURCE}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-export SUMO_TUI="${SUMO_TUI:-1}"
+# The RPC host owns the interactive foreground. Direct Pi launches keep the
+# extension loaded for non-interactive modes and diagnostics, but never ask Pi
+# to load the old retained runtime.
+export SUMO_TUI=0
 # Node 22+ can persist V8 compile cache for CommonJS/ESM modules. SumoCode and
 # Pi execute TypeScript through jiti at runtime, so warm launches benefit from
 # Node's built-in bytecode cache without adding a project build step.
@@ -50,7 +53,7 @@ ARGUMENTS
 COMMANDS
   doctor
       Check local SumoCode/Pi installation health: Node version, Pi binary,
-      retained-TUI patch availability, module resolution, and diagnostics path
+      RPC host availability, Pi module resolution, and diagnostics path
       writability.
 
   diag [file]
@@ -105,8 +108,9 @@ OPTIONS
       shell metacharacters survive intact).
 
   --no-sumo-tui
-      Disable the retained SumoTUI runtime for this launch. Equivalent to
-      SUMO_TUI=0 sumocode ... and useful for comparing against legacy Pi UI.
+      Bypass the foreground RPC host for this launch and execute Pi directly
+      with the SumoCode extension loaded. Useful for diagnostics and
+      non-runtime comparisons.
 
   --dry-run
       Print the resolved launch configuration and exit without starting Pi.
@@ -140,7 +144,7 @@ EXAMPLES
   Keep appending to an existing diagnostics file:
       sumocode -d --no-clear-diag
 
-  Compare retained SumoTUI against legacy Pi UI:
+  Bypass the foreground RPC host for diagnostics:
       sumocode --no-sumo-tui .
 
   Check installation health:
@@ -172,12 +176,12 @@ DIAGNOSTICS EVENTS
 
 ENVIRONMENT
   SUMO_TUI
-      Defaults to 1. Set SUMO_TUI=0 to bypass the retained SumoTUI runtime and
-      fall back to legacy Pi UI behavior.
+      Set to 0 by this launcher. The RPC host owns SumoCode's interactive
+      foreground, and direct Pi launches are reserved for non-interactive Pi
+      behavior or diagnostics.
 
-  SUMO_TUI_MODULE
-      Optional override for the retained SumoInteractiveMode module URL. Normally
-      set automatically by this launcher when the patched Pi binary is detected.
+  SUMO_RPC
+      Set automatically by the launcher for the default RPC host path.
 
   SUMO_TUI_DIAG_FILE
       Path to the diagnostics JSONL file used by --debug. Defaults to
@@ -197,9 +201,10 @@ NOTES
   SumoCode wraps the project-local Pi binary when available:
       ./node_modules/.bin/pi
 
-  If that Pi binary is missing the Sumo retained-TUI patch, the launcher prints
-  a warning and falls back to legacy Pi splash behavior rather than failing the
-  session.
+  Interactive TTY launches use the SumoCode RPC host and do not require the
+  old Sumo retained-TUI patch. Non-interactive Pi modes such as --print or
+  --mode, launches where stdout is not a TTY, and --no-sumo-tui bypass the RPC
+  host and execute Pi directly with the SumoCode extension loaded.
 EOF
 }
 
@@ -228,6 +233,7 @@ CLEAR_DIAG=1
 DRY_RUN=0
 COMMAND="run"
 IS_TASK_LAUNCH=0
+FORCE_DIRECT_PI=0
 DIAG_FILE="${SUMO_TUI_DIAG_FILE:-}"
 PROMPT_FILE=""
 SUMOCODE_ARGS=()
@@ -269,7 +275,7 @@ while [[ $# -gt 0 ]]; do
 			shift
 			;;
 		--no-sumo-tui)
-			export SUMO_TUI=0
+			FORCE_DIRECT_PI=1
 			shift
 			;;
 		--dry-run)
@@ -343,6 +349,13 @@ fi
 if [[ "${DEBUG_MODE}" == "1" ]]; then
 	SUMO_TUI_DIAG_FILE="${DIAG_FILE:-/tmp/sumocode-manual.jsonl}"
 	if [[ "${CLEAR_DIAG}" == "1" && "${DRY_RUN}" != "1" ]]; then rm -f "${SUMO_TUI_DIAG_FILE}"; fi
+	if [[ "${DRY_RUN}" != "1" ]]; then
+		# Pre-create the trace owner-only (0600): it records low-level input
+		# events, and the runtime's append mode only applies at file creation.
+		# `>>` keeps existing content intact on the --no-clear-diag path; the
+		# chmod tightens a pre-existing file at the predictable /tmp location.
+		(umask 177 && : >>"${SUMO_TUI_DIAG_FILE}" && chmod 600 "${SUMO_TUI_DIAG_FILE}") 2>/dev/null || true
+	fi
 	export SUMO_TUI_DIAG_FILE
 	export SUMO_TUI_DEBUG="${SUMO_TUI_DEBUG:-1}"
 	STARTUP_PRELOAD="${ROOT_DIR}/scripts/startup-diagnostics-preload.cjs"
@@ -381,11 +394,143 @@ if [[ ! -x "${PI_BIN}" ]]; then
 	PI_BIN="$(command -v pi || true)"
 fi
 
-is_truthy_env_flag() {
-	case "${1:-}" in
-		1|true|TRUE|yes|YES|on|ON) return 0 ;;
-		*) return 1 ;;
-	esac
+args_request_noninteractive_pi() {
+	if [[ "${#SUMOCODE_ARGS[@]}" -eq 0 ]]; then return 1; fi
+	for arg in "${SUMOCODE_ARGS[@]}"; do
+		case "${arg}" in
+			--print|-p|--mode|--mode=*) return 0 ;;
+		esac
+	done
+	return 1
+}
+
+# Extracts the first plain (non-flag) positional from SUMOCODE_ARGS, matching
+# Pi's own CLI contract: `parsed.messages[0]` (the first bare positional in
+# argv order -- see @earendil-works/pi-coding-agent's cli/args.js and
+# cli/initial-message.js) becomes the kickoff/initial message in interactive
+# mode. `--mode rpc` never reads this positional at all (rpc-mode.js only
+# consumes stdin JSON commands), so on the RPC path this positional would
+# silently vanish unless the launcher forwards it through a side channel.
+#
+# Sets EXTRACTED_INITIAL_PROMPT to the found value (empty if none) and
+# rewrites SUMOCODE_ARGS in place with that single element removed, preserving
+# order of everything else. Only the FIRST plain positional is extracted --
+# this mirrors Pi's own single-`initialMessage` behavior and intentionally
+# does not attempt to replicate `initialMessages` (multi-message replay) for
+# any remaining positionals; those still forward to the RPC child's argv
+# unchanged (and are still silently ignored there, same as before this fix,
+# which is a pre-existing multi-positional limitation out of scope here).
+#
+# VALUE-CONSUMING FLAG TABLE -- mirrors
+# node_modules/@earendil-works/pi-coding-agent/dist/cli/args.js parseArgs()
+# (pi-coding-agent 0.79.1) EXACTLY, so that this wrapper skips a flag's value
+# together with the flag itself instead of mistaking the value for the first
+# plain positional. This is the same reason the wrapper's own arg loop above
+# never needs to worry about ITS OWN value-taking flags (--diag-file,
+# --prompt-file): those are consumed at the wrapper's parse stage before
+# anything reaches SUMOCODE_ARGS. Only Pi's flags need a table here, since
+# Pi's own unrecognized/unknown flags are forwarded opaquely by this wrapper.
+#
+# PI-BUMP NOTE: if @earendil-works/pi-coding-agent is upgraded, re-diff
+# cli/args.js's parseArgs() against this table (`git diff` the file, or just
+# re-read it) -- any newly added value-taking flag must be added below, or it
+# will silently reintroduce this same bug for that flag.
+#
+# Unconditional space-form value flags (always consume `args[++i]` when a
+# next token exists, per args.js -- note --mode consumes its next token even
+# if the value is invalid, since the `i+1 < args.length` check runs before
+# validity is checked):
+#   --mode, --provider, --model, --api-key, --system-prompt,
+#   --append-system-prompt, --name/-n, --session, --session-id, --fork,
+#   --session-dir, --models, --tools/-t, --exclude-tools/-xt, --thinking,
+#   --export, --extension/-e, --skill, --prompt-template, --theme
+#
+# Conditional space-form value flags (args.js only consumes the next token if
+# it doesn't look like a flag or @file -- mirrored with the same lookahead
+# here so we don't eat a following real positional):
+#   --print/-p, --list-models
+#
+# `--flag=value` forms (any flag, per args.js's generic `--` handler) are
+# already a single token and need no table entry -- skipped as-is below.
+extract_first_positional() {
+	EXTRACTED_INITIAL_PROMPT=""
+	local -a kept=()
+	local found=0
+	local i=0
+	local n="${#SUMOCODE_ARGS[@]}"
+	local arg next
+
+	# Pi flags that always consume the following token as a value (space
+	# form). See the flag table comment above for the args.js citation.
+	local -a value_flags=(
+		--mode --provider --model --api-key --system-prompt
+		--append-system-prompt --name -n --session --session-id --fork
+		--session-dir --models --tools -t --exclude-tools -xt --thinking
+		--export --extension -e --skill --prompt-template --theme
+	)
+	# Pi flags that conditionally consume the following token only if it does
+	# not look like another flag or an @file argument.
+	local -a conditional_value_flags=(--print -p --list-models)
+
+	while [[ "${i}" -lt "${n}" ]]; do
+		arg="${SUMOCODE_ARGS[i]}"
+
+		if [[ "${arg}" == --*=* ]]; then
+			# `--flag=value` is already one token; nothing to skip alongside it.
+			kept+=("${arg}")
+			i=$((i + 1))
+			continue
+		fi
+
+		local is_value_flag=0
+		local f
+		for f in "${value_flags[@]}"; do
+			if [[ "${arg}" == "${f}" ]]; then is_value_flag=1; break; fi
+		done
+		if [[ "${is_value_flag}" -eq 1 ]]; then
+			kept+=("${arg}")
+			if [[ $((i + 1)) -lt "${n}" ]]; then
+				kept+=("${SUMOCODE_ARGS[i+1]}")
+				i=$((i + 2))
+			else
+				i=$((i + 1))
+			fi
+			continue
+		fi
+
+		local is_conditional_flag=0
+		for f in "${conditional_value_flags[@]}"; do
+			if [[ "${arg}" == "${f}" ]]; then is_conditional_flag=1; break; fi
+		done
+		if [[ "${is_conditional_flag}" -eq 1 ]]; then
+			kept+=("${arg}")
+			if [[ $((i + 1)) -lt "${n}" ]]; then
+				next="${SUMOCODE_ARGS[i+1]}"
+				if [[ -n "${next}" && "${next}" != -* && "${next}" != @* ]]; then
+					kept+=("${next}")
+					i=$((i + 2))
+					continue
+				fi
+			fi
+			i=$((i + 1))
+			continue
+		fi
+
+		if [[ "${found}" -eq 0 && -n "${arg}" && "${arg}" != -* ]]; then
+			EXTRACTED_INITIAL_PROMPT="${arg}"
+			found=1
+			i=$((i + 1))
+			continue
+		fi
+
+		kept+=("${arg}")
+		i=$((i + 1))
+	done
+
+	SUMOCODE_ARGS=("${kept[@]:-}")
+	if [[ "${#SUMOCODE_ARGS[@]}" -eq 1 && -z "${SUMOCODE_ARGS[0]}" ]]; then
+		SUMOCODE_ARGS=()
+	fi
 }
 
 pi_main_file() {
@@ -430,23 +575,70 @@ pi_main_file() {
 	realpath "${main_file}"
 }
 
-path_to_file_url() {
-	local path="$1"
-	local resolved encoded
-	resolved="$(realpath "${path}")"
-	encoded="$(printf '%s' "${resolved}" | sed -e 's/%/%25/g' -e 's/ /%20/g' -e 's/#/%23/g' -e 's/?/%3F/g')"
-	printf 'file://%s\n' "${encoded}"
-}
-
-pi_has_sumo_tui_patch() {
-	local main_file
-	main_file="$(pi_main_file "$1" 2>/dev/null || true)"
-	[[ -n "${main_file}" ]] && grep -Fq "loadSumoInteractiveMode" "${main_file}"
-}
-
 run_diag_summary() {
 	local file="${1:-/tmp/sumocode-manual.jsonl}"
 	exec node "${ROOT_DIR}/scripts/diag-summary.mjs" "${file}"
+}
+
+print_auth_expiry_result() {
+	local provider="$1"
+	local expires="$2"
+	local now_ms="$3"
+	if [[ -z "${provider}" || ! "${expires}" =~ ^[0-9]+$ ]]; then return 0; fi
+	if [[ "${expires}" -ge "${now_ms}" ]]; then return 0; fi
+	local days_ago
+	days_ago=$(((now_ms - expires) / 86400000))
+	printf "✗ %s oauth token expired %s days ago — run pi and /login to re-authenticate\n" "${provider}" "${days_ago}"
+	return 1
+}
+
+check_auth_expiry_with_grep() {
+	local auth_file="$1"
+	local now_ms="$2"
+	local expired=0
+	local provider=""
+	local line
+	while IFS= read -r line; do
+		if [[ "${line}" =~ ^[[:space:]]*\"([^\"]+)\"[[:space:]]*:[[:space:]]*\{ ]]; then
+			provider="${BASH_REMATCH[1]}"
+		fi
+		if [[ -n "${provider}" && "${line}" =~ \"expires\"[[:space:]]*:[[:space:]]*([0-9]+) ]]; then
+			if ! print_auth_expiry_result "${provider}" "${BASH_REMATCH[1]}" "${now_ms}"; then expired=1; fi
+		fi
+	done < "${auth_file}"
+	return "${expired}"
+}
+
+check_auth_expiry() {
+	local auth_dir="${PI_CODING_AGENT_DIR:-${HOME}/.pi/agent}"
+	local auth_file="${auth_dir}/auth.json"
+	if [[ ! -r "${auth_file}" ]]; then
+		printf -- "- auth: no auth.json (nothing to check)\n"
+		return 0
+	fi
+
+	local now_ms
+	now_ms=$(($(date +%s) * 1000))
+	local expired=0
+	if command -v jq >/dev/null 2>&1; then
+		local entries provider expires
+		if entries="$(jq -r 'to_entries[] | select(.value | type == "object") | select(.value.expires? | type == "number") | [.key, (.value.expires | tostring)] | @tsv' "${auth_file}" 2>/dev/null)"; then
+			while IFS="$(printf '\t')" read -r provider expires; do
+				if [[ -z "${provider}" ]]; then continue; fi
+				if ! print_auth_expiry_result "${provider}" "${expires}" "${now_ms}"; then expired=1; fi
+			done <<< "${entries}"
+		else
+			check_auth_expiry_with_grep "${auth_file}" "${now_ms}" || expired=1
+		fi
+	else
+		check_auth_expiry_with_grep "${auth_file}" "${now_ms}" || expired=1
+	fi
+
+	if [[ "${expired}" -eq 0 ]]; then
+		printf "✓ auth: no expired oauth tokens\n"
+		return 0
+	fi
+	return 1
 }
 
 run_doctor() {
@@ -476,17 +668,11 @@ run_doctor() {
 		printf "✗ Pi main: could not resolve\n"
 		failures=$((failures + 1))
 	fi
-	if [[ -n "${PI_BIN}" ]] && pi_has_sumo_tui_patch "${PI_BIN}"; then
-		printf "✓ retained-TUI patch: detected\n"
+	local rpc_host_path="${ROOT_DIR}/sumo-rpc-host.js"
+	if [[ -f "${rpc_host_path}" ]]; then
+		printf "✓ RPC host: %s\n" "${rpc_host_path}"
 	else
-		printf "✗ retained-TUI patch: missing\n"
-		failures=$((failures + 1))
-	fi
-	local module_path="${ROOT_DIR}/sumo-interactive-mode.js"
-	if [[ -f "${module_path}" ]]; then
-		printf "✓ Sumo module: %s\n" "${module_path}"
-	else
-		printf "✗ Sumo module: missing at %s\n" "${module_path}"
+		printf "✗ RPC host: missing at %s\n" "${rpc_host_path}"
 		failures=$((failures + 1))
 	fi
 	local diag_path="${DIAG_FILE:-${SUMO_TUI_DIAG_FILE:-/tmp/sumocode-manual.jsonl}}"
@@ -496,6 +682,11 @@ run_doctor() {
 		printf "✓ diagnostics path writable: %s\n" "${diag_path}"
 	else
 		printf "✗ diagnostics directory not writable: %s\n" "${diag_dir}"
+		failures=$((failures + 1))
+	fi
+	if check_auth_expiry; then
+		:
+	else
 		failures=$((failures + 1))
 	fi
 	if [[ -t 1 ]]; then
@@ -530,35 +721,45 @@ EOF
 	exit 70
 fi
 
-if is_truthy_env_flag "${SUMO_TUI}"; then
-	if pi_has_sumo_tui_patch "${PI_BIN}"; then
-		if [[ -z "${SUMO_TUI_MODULE:-}" ]]; then
-			SUMO_TUI_MODULE="$(path_to_file_url "${ROOT_DIR}/sumo-interactive-mode.js")"
-			export SUMO_TUI_MODULE
-		fi
-	else
-		cat >&2 <<EOF
-[sumocode] Selected Pi binary is missing the Sumo retained-TUI patch: ${PI_BIN}
-[sumocode] Falling back to legacy Pi splash so the empty-state remains visible.
-[sumocode] Run 'pnpm install' in ${ROOT_DIR} to use the retained Sumo TUI.
-EOF
-		export SUMO_TUI=0
-		unset SUMO_TUI_MODULE
-	fi
+USE_RPC_HOST=1
+if [[ "${FORCE_DIRECT_PI}" -eq 1 ]]; then
+	USE_RPC_HOST=0
+elif [[ ! -t 1 ]]; then
+	USE_RPC_HOST=0
+elif args_request_noninteractive_pi; then
+	USE_RPC_HOST=0
+fi
+
+if [[ "${USE_RPC_HOST}" -eq 1 ]]; then
+	export SUMO_RPC=1
+	export SUMO_TUI=0
+else
+	unset SUMO_RPC
+	export SUMO_TUI=0
 fi
 
 if [[ "${DRY_RUN}" == "1" ]]; then
+	# Mirror the real RPC-path argv rewrite (see extract_first_positional and
+	# its call site below) so --dry-run output shows exactly what will be
+	# forwarded to the RPC host/child, including the SUMOCODE_INITIAL_PROMPT
+	# side channel, instead of the pre-extraction argv.
+	DRY_RUN_INITIAL_PROMPT=""
+	if [[ "${USE_RPC_HOST}" -eq 1 ]]; then
+		extract_first_positional
+		DRY_RUN_INITIAL_PROMPT="${EXTRACTED_INITIAL_PROMPT}"
+	fi
 	cat <<EOF
 sumocode dry run
 PI_BIN=${PI_BIN}
 ROOT_DIR=${ROOT_DIR}
 SUMO_TUI=${SUMO_TUI:-}
-SUMO_TUI_MODULE=${SUMO_TUI_MODULE:-}
+SUMO_RPC=${SUMO_RPC:-}
 SUMO_TUI_DIAG_FILE=${SUMO_TUI_DIAG_FILE:-}
 SUMO_TUI_DEBUG=${SUMO_TUI_DEBUG:-}
 COMMAND=${COMMAND}
 ARGS=${SUMOCODE_ARGS[*]:-}
-exec ${PI_BIN} -e ${ROOT_DIR}/src/extension.ts ${SUMOCODE_ARGS[*]:-}
+SUMOCODE_INITIAL_PROMPT=${DRY_RUN_INITIAL_PROMPT}
+exec $(if [[ "${USE_RPC_HOST}" -eq 1 ]]; then printf 'node %s' "${ROOT_DIR}/sumo-rpc-host.js"; else printf '%s -e %s/src/extension.ts' "${PI_BIN}" "${ROOT_DIR}"; fi) ${SUMOCODE_ARGS[*]:-}
 EOF
 	exit 0
 fi
@@ -567,9 +768,161 @@ fi
 # Other exit codes propagate normally.
 SUMOCODE_RELOAD_EXIT_CODE=100
 
+if [[ "${USE_RPC_HOST}" -eq 1 ]]; then
+	# `pi --mode rpc` (spawned by the RPC host as its child) never reads argv
+	# positionals as a kickoff message -- rpc-mode.js only consumes stdin JSON
+	# commands (see extract_first_positional's comment). Pull the first plain
+	# positional out of SUMOCODE_ARGS here and hand it to the host via
+	# SUMOCODE_INITIAL_PROMPT instead, so runRpcHost can submit it through the
+	# same onSubmit/submitRpcPrompt path a normal editor submit uses once the
+	# child is up and hydrated. Must run BEFORE the argv is forwarded so the
+	# child does not also see (and silently drop) the same positional.
+	#
+	# This extraction happens ONCE, outside the respawn loop below: on a
+	# `/sumo:reload` respawn we deliberately do not want to re-submit the
+	# original kickoff prompt into the resumed session (same reasoning as the
+	# existing IS_TASK_LAUNCH handling inside the loop), so SUMOCODE_ARGS no
+	# longer carries a prompt positional by the time the loop's first
+	# iteration runs, and SUMOCODE_INITIAL_PROMPT is only ever exported on
+	# that first iteration (see the loop body below).
+	extract_first_positional
+fi
+
+RPC_INITIAL_PROMPT="${EXTRACTED_INITIAL_PROMPT:-}"
+
+# The RPC host previously ran via `exec`, which replaced this shell's own pid
+# outright -- the child WAS this script's pid, so a real terminal's Ctrl-C/
+# SIGTERM (kernel/tty-driver-level, delivered to the whole foreground process
+# group) and a PID-targeted kill (e.g. node-pty's `.kill()`, which calls
+# `process.kill(pid)` on the pid node-pty itself spawned -- this script)
+# landed on the exact same process either way. Switching the RPC-host branch
+# to a plain foreground command (needed so the exit-100 respawn below can see
+# it -- `exec` never returns) reintroduces bash as a separate live parent
+# process: a PID-targeted kill now reaches only this shell, not its `node`
+# child, unless this shell explicitly forwards the signal. Run the RPC host
+# backgrounded + `wait`ed (only for this branch -- the direct-Pi branch below
+# is unchanged, still a plain foreground command, since it already worked
+# correctly via real terminals' process-group-wide delivery before this fix)
+# so RPC_CHILD_PID is known to the trap below while it's running.
+RPC_CHILD_PID=""
+forward_signal_to_rpc_child() {
+	local sig="$1"
+	if [[ -n "${RPC_CHILD_PID}" ]] && kill -0 "${RPC_CHILD_PID}" 2>/dev/null; then
+		kill "-${sig}" "${RPC_CHILD_PID}" 2>/dev/null || true
+	fi
+}
+trap 'forward_signal_to_rpc_child INT' INT
+trap 'forward_signal_to_rpc_child TERM' TERM
+
+# `wait` on a backgrounded job can return as soon as the trap handler above
+# runs (bash reports the interrupted `wait` itself, not necessarily the
+# child's actual termination), well before the forwarded signal has actually
+# reached and been handled by the RPC host's own graceful-shutdown path
+# (terminal cleanup escape sequence, altscreen exit, etc. -- see host.ts's
+# SIGINT/SIGTERM handlers). Exiting this script the instant that first `wait`
+# call returns would race the child's cleanup and can leave the terminal in a
+# dirty state.
+#
+# Deliberately does NOT re-invoke `wait "${pid}"` in a loop to confirm actual
+# exit: bash's `wait PID` only blocks correctly the FIRST time for a given
+# pid -- once that pid has been reaped from bash's job table (which can
+# happen on the very first call, independent of whether the process has
+# actually exited yet, on some bash versions/platforms), every subsequent
+# `wait` on the same pid returns immediately without blocking, which turns a
+# naive "loop wait until kill -0 fails" into a tight CPU-spinning busy loop.
+# Polling `kill -0` with a short sleep is slower to notice exit than a true
+# blocking wait, but is portable and never spins.
+#
+# Sets WAIT_FOR_CHILD_EXIT_STATUS instead of returning via `echo` + command
+# substitution: `$(...)` always forks a subshell, and the INT/TERM traps set
+# on this script (needed to forward signals to RPC_CHILD_PID -- see above)
+# are not reliably applied inside that forked subshell, which would leave
+# nothing able to react to a signal while this function's own `wait`/poll
+# loop is running. Calling this as a plain function (no substitution) keeps
+# everything in this script's own process, where the traps are already live.
+WAIT_FOR_CHILD_EXIT_STATUS=0
+wait_for_child_exit() {
+	local pid="$1"
+	local status=0
+	# `|| status=$?` guards this under `set -e`: a nonzero exit status (the
+	# normal case for a signal-terminated or nonzero-exiting child) would
+	# otherwise abort this function -- and the whole script -- via -e
+	# immediately, before the kill -0 polling loop below ever runs.
+	wait "${pid}" || status=$?
+	while kill -0 "${pid}" 2>/dev/null; do
+		sleep 0.05
+	done
+	WAIT_FOR_CHILD_EXIT_STATUS="${status}"
+}
+
+# WORKAROUND for a verified-unreliable bash 3.2 (macOS's system bash) `wait`
+# builtin: on a SIGTERM-graceful shutdown, host.ts resolves and intends to
+# exit with code 0 (see host.ts's handleSigterm -> exitProcess(0)), but
+# wait_for_child_exit above was observed reporting 143 (128+SIGTERM) instead
+# -- i.e. bash's own recovery of the backgrounded job's status does not
+# reliably reflect the child's own chosen exit code across this signal path
+# in this environment.
+#
+# The host writes its REAL final exit code to a file at
+# SUMOCODE_EXIT_CODE_FILE (see host.ts's writeExitCodeFile / exitProcess --
+# every host exit path, including this one, funnels through it) just before
+# calling process.exit/returning. read_child_exit_code_file reads that file
+# AFTER wait_for_child_exit has already confirmed the process is gone, so
+# there is no race with the write. Only trusted when present and it parses as
+# a plain non-negative integer; any other case (missing, empty, garbage) falls
+# back to bash's own WAIT_FOR_CHILD_EXIT_STATUS, so a write failure (e.g.
+# read-only tmp, disk full) degrades to the pre-existing (imperfect) behavior
+# instead of the launcher itself failing.
+read_child_exit_code_file() {
+	local path="$1"
+	local fallback="$2"
+	local contents
+	if [[ -n "${path}" && -f "${path}" ]]; then
+		contents="$(cat "${path}" 2>/dev/null || true)"
+		rm -f "${path}" 2>/dev/null || true
+		if [[ "${contents}" =~ ^[0-9]+$ ]]; then
+			printf '%s' "${contents}"
+			return 0
+		fi
+	fi
+	printf '%s' "${fallback}"
+}
+
 while :; do
 	code=0
-	if [[ "${#SUMOCODE_ARGS[@]}" -eq 0 ]]; then
+	if [[ "${USE_RPC_HOST}" -eq 1 ]]; then
+		# The RPC host previously ran via `exec`, which replaced this shell
+		# entirely -- so the respawn loop below was unreachable on the default
+		# (RPC) launch path, and `/sumo:reload`'s exit(100) inside the RPC
+		# child (surfaced to the host via client.onExit, then re-thrown as the
+		# host's own process.exit(100) -- see host.ts's createRpcExitHandler /
+		# runRpcHost) had nowhere to be caught. Running the host as a plain
+		# foreground command (not exec) inside this same loop lets that exit
+		# code fall through to the identical respawn handling the direct-Pi
+		# path already has below.
+		# `<&0`: without job control (`set -m`, off by default in scripts), bash
+		# redirects a backgrounded command's stdin from /dev/null unless given
+		# an explicit redirection -- silently starving the RPC host of the PTY
+		# input a real interactive session depends on (keystrokes, Ctrl+/,
+		# etc.). The explicit `<&0` overrides that default and reconnects the
+		# backgrounded child to this script's own inherited stdin (the real
+		# terminal/PTY), restoring identical input behavior to the pre-`&`
+		# plain-foreground invocation.
+		# See read_child_exit_code_file's comment above for why this file exists.
+		# A fresh mktemp path per iteration so a stale file from a prior loop
+		# iteration (or a previous run entirely) can never be misread as this
+		# iteration's exit code.
+		SUMOCODE_EXIT_CODE_FILE="$(mktemp "${TMPDIR:-/tmp}/sumocode-exit-code.XXXXXX")"
+		if [[ "${#SUMOCODE_ARGS[@]}" -eq 0 ]]; then
+			env SUMOCODE_ROOT_DIR="${ROOT_DIR}" SUMOCODE_PROJECT_CWD="${PWD}" SUMOCODE_INITIAL_PROMPT="${RPC_INITIAL_PROMPT}" PI_BIN="${PI_BIN}" SUMOCODE_EXIT_CODE_FILE="${SUMOCODE_EXIT_CODE_FILE}" node "${ROOT_DIR}/sumo-rpc-host.js" <&0 &
+		else
+			env SUMOCODE_ROOT_DIR="${ROOT_DIR}" SUMOCODE_PROJECT_CWD="${PWD}" SUMOCODE_INITIAL_PROMPT="${RPC_INITIAL_PROMPT}" PI_BIN="${PI_BIN}" SUMOCODE_EXIT_CODE_FILE="${SUMOCODE_EXIT_CODE_FILE}" node "${ROOT_DIR}/sumo-rpc-host.js" "${SUMOCODE_ARGS[@]}" <&0 &
+		fi
+		RPC_CHILD_PID=$!
+		wait_for_child_exit "${RPC_CHILD_PID}"
+		code="$(read_child_exit_code_file "${SUMOCODE_EXIT_CODE_FILE}" "${WAIT_FOR_CHILD_EXIT_STATUS}")"
+		RPC_CHILD_PID=""
+	elif [[ "${#SUMOCODE_ARGS[@]}" -eq 0 ]]; then
 		"${PI_BIN}" -e "${ROOT_DIR}/src/extension.ts" || code=$?
 	else
 		"${PI_BIN}" -e "${ROOT_DIR}/src/extension.ts" "${SUMOCODE_ARGS[@]}" || code=$?
@@ -577,6 +930,10 @@ while :; do
 	if [[ "${code}" -ne "${SUMOCODE_RELOAD_EXIT_CODE}" ]]; then
 		exit "${code}"
 	fi
+	# Only the first iteration's kickoff prompt (if any) is ever submitted;
+	# a reload respawn resumes the existing session via --continue below and
+	# must not re-submit it as a new message.
+	RPC_INITIAL_PROMPT=""
 	# After the kickoff turn has fired, do NOT re-pass the task prompt on
 	# `/sumo:reload`. The reload loop adds `--continue` to resume the existing
 	# session, and re-injecting the original prompt would send it again as a

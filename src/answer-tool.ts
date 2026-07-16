@@ -8,7 +8,7 @@
  * This replaces Pi's `answer.ts` extension with Cathedral-themed UI.
  */
 
-import { complete, type Model, type Api, type UserMessage } from "@earendil-works/pi-ai";
+import { complete, type Model, type Api, type UserMessage } from "@earendil-works/pi-ai/compat";
 import type { ExtensionAPI, ExtensionContext, ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { BorderedLoader } from "@earendil-works/pi-coding-agent";
 import { Editor, type EditorTheme, Key, matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
@@ -18,12 +18,12 @@ import { activeThemeColors } from "./themes/index.js";
 
 // ── Types ────────────────────────────────────────────────────
 
-interface ExtractedQuestion {
+export interface ExtractedQuestion {
 	question: string;
 	context?: string;
 }
 
-interface ExtractionResult {
+export interface ExtractionResult {
 	questions: ExtractedQuestion[];
 }
 
@@ -83,6 +83,60 @@ function parseExtractionResult(text: string): ExtractionResult | null {
 	} catch {
 		return null;
 	}
+}
+
+export async function extractQuestionsFromText(
+	text: string,
+	extractionModel: Model<Api>,
+	modelRegistry: ModelRegistry,
+	signal?: AbortSignal,
+	completeFn: typeof complete = complete,
+): Promise<ExtractionResult | null> {
+	const auth = await modelRegistry.getApiKeyAndHeaders(extractionModel);
+	if (!auth.ok) throw new Error(auth.error);
+	const userMessage: UserMessage = {
+		role: "user",
+		content: [{ type: "text", text }],
+		timestamp: Date.now(),
+	};
+	const response = await completeFn(
+		extractionModel,
+		{ systemPrompt: SYSTEM_PROMPT, messages: [userMessage] },
+		{ apiKey: auth.apiKey, headers: auth.headers, signal },
+	);
+	if (response.stopReason === "aborted") return null;
+	const responseText = response.content
+		.filter((c): c is { type: "text"; text: string } => c.type === "text")
+		.map((c) => c.text)
+		.join("\n");
+	return parseExtractionResult(responseText);
+}
+
+function buildQnAResult(questions: readonly ExtractedQuestion[], answers: readonly string[]): QnAResult {
+	const entries = questions.map((q, i) => ({
+		...q,
+		answer: answers[i]?.trim() || "(no answer)",
+	}));
+	const parts: string[] = [];
+	for (const entry of entries) {
+		parts.push(`Q: ${entry.question}`);
+		if (entry.context) parts.push(`> ${entry.context}`);
+		parts.push(`A: ${entry.answer}`);
+		parts.push("");
+	}
+	return { entries, formatted: parts.join("\n").trim() };
+}
+
+async function runRpcQuestionnaire(ctx: ExtensionContext, questions: readonly ExtractedQuestion[]): Promise<QnAResult | null> {
+	const answers: string[] = [];
+	for (const question of questions) {
+		const title = question.context ? `${question.question}\n${question.context}` : question.question;
+		const answer = await ctx.ui.input(title, "type your answer");
+		const trimmed = answer?.trim() ?? "";
+		if (!trimmed) return null;
+		answers.push(trimmed);
+	}
+	return buildQnAResult(questions, answers);
 }
 
 // ── Cathedral Q&A Component ─────────────────────────────────
@@ -149,18 +203,7 @@ class CathedralQnAComponent implements Component {
 
 	private submit(): void {
 		this.saveCurrentAnswer();
-		const entries = this.questions.map((q, i) => ({
-			...q,
-			answer: this.answers[i]?.trim() || "(no answer)",
-		}));
-		const parts: string[] = [];
-		for (const entry of entries) {
-			parts.push(`Q: ${entry.question}`);
-			if (entry.context) parts.push(`> ${entry.context}`);
-			parts.push(`A: ${entry.answer}`);
-			parts.push("");
-		}
-		this.onDone({ entries, formatted: parts.join("\n").trim() });
+		this.onDone(buildQnAResult(this.questions, this.answers));
 	}
 
 	invalidate(): void { this.cachedLines = undefined; }
@@ -295,12 +338,19 @@ class CathedralQnAComponent implements Component {
 
 // ── Extension wiring ─────────────────────────────────────────
 
-export function installAnswerTool(pi: ExtensionAPI): void {
+export interface AnswerToolDeps {
+	readonly extractQuestionsFromText?: typeof extractQuestionsFromText;
+}
+
+export function installAnswerTool(pi: ExtensionAPI, deps: AnswerToolDeps = {}): void {
+	const extractQuestions = deps.extractQuestionsFromText ?? extractQuestionsFromText;
+
 	const runQuestionnaire = async (ctx: ExtensionContext, questions: ExtractedQuestion[]): Promise<QnAResult | null> => {
 		if (!ctx.hasUI) {
 			ctx.ui.notify("questionnaire requires interactive mode", "error");
 			return null;
 		}
+		if (ctx.mode === "rpc") return runRpcQuestionnaire(ctx, questions);
 		return ctx.ui.custom<QnAResult | null>(
 			(tui, _theme, _kb, done) => new CathedralQnAComponent(questions, tui, done),
 			{ overlay: true, overlayOptions: DIVINE_QUERY_OVERLAY_OPTIONS },
@@ -335,34 +385,17 @@ export function installAnswerTool(pi: ExtensionAPI): void {
 
 		const extractionModel = await selectExtractionModel(ctx.model, ctx.modelRegistry);
 
-		const extractionResult = await ctx.ui.custom<ExtractionResult | null>((tui, theme, _kb, done) => {
-			const loader = new BorderedLoader(tui, theme, `Extracting questions using ${extractionModel.id}...`);
-			loader.onAbort = () => done(null);
+		const extractionResult = ctx.mode === "rpc"
+			? await extractQuestions(lastAssistantText, extractionModel, ctx.modelRegistry, ctx.signal).catch(() => null)
+			: await ctx.ui.custom<ExtractionResult | null>((tui, theme, _kb, done) => {
+				const loader = new BorderedLoader(tui, theme, `Extracting questions using ${extractionModel.id}...`);
+				loader.onAbort = () => done(null);
 
-			const doExtract = async () => {
-				const auth = await ctx.modelRegistry.getApiKeyAndHeaders(extractionModel);
-				if (!auth.ok) throw new Error(auth.error);
-				const userMessage: UserMessage = {
-					role: "user",
-					content: [{ type: "text", text: lastAssistantText! }],
-					timestamp: Date.now(),
-				};
-				const response = await complete(
-					extractionModel,
-					{ systemPrompt: SYSTEM_PROMPT, messages: [userMessage] },
-					{ apiKey: auth.apiKey, headers: auth.headers, signal: loader.signal },
-				);
-				if (response.stopReason === "aborted") return null;
-				const responseText = response.content
-					.filter((c): c is { type: "text"; text: string } => c.type === "text")
-					.map((c) => c.text)
-					.join("\n");
-				return parseExtractionResult(responseText);
-			};
-
-			doExtract().then(done).catch(() => done(null));
-			return loader;
-		});
+				extractQuestions(lastAssistantText!, extractionModel, ctx.modelRegistry, loader.signal)
+					.then(done)
+					.catch(() => done(null));
+				return loader;
+			});
 
 		if (!extractionResult) { ctx.ui.notify("Cancelled", "info"); return; }
 		if (extractionResult.questions.length === 0) { ctx.ui.notify("No questions found in the last message", "info"); return; }

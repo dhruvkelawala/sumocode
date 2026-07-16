@@ -152,6 +152,13 @@ function buildChatHTML(cols, toolStyle = "inline") {
 		];
 	}
 
+	if (toolStyle === "runtime") {
+		messages = [
+			{ role: "USER", body: "review src/auth/session.ts and tighten the return type" },
+			{ role: "SUMO", time: "11:42", body: "inspecting src/auth/session.ts" },
+		];
+	}
+
 	function wrap(text, w) {
 		const words = text.split(/\s+/);
 		const lines = [];
@@ -379,8 +386,8 @@ function buildHintRow(cols, sidebarVisible) {
 
 // ─── Footer (Element 5 idle / READY, width-adaptive) ───────────────────
 // Project+branch in footer ONLY when sidebar hidden (sidebar shows them otherwise).
-function buildFooterRow(cols, sidebarVisible) {
-	const leftCompact = cols < 80;
+function buildFooterRow(cols, sidebarVisible, options = {}) {
+	const leftCompact = cols < 80 || options.visualHarnessFooter === true;
 	const left = leftCompact
 		? `<span class="fg-idle">\u25cf</span> <span class="fg-fg">READY</span><span class="fg-dim"> \u00b7 </span><span class="fg-fg">gpt-5.5</span><span class="fg-dim"> \u00b7 </span><span class="fg-fg">medium</span>`
 		: `<span class="fg-idle">\u25cf</span> <span class="fg-fg">READY</span><span class="fg-dim"> \u00b7 </span><span class="fg-fg">claude-opus-4-7</span><span class="fg-dim"> \u00b7 </span><span class="fg-fg">xhigh</span>`;
@@ -437,34 +444,26 @@ function buildScene(variant) {
 
 	const sidebarRows = sidebarVisible ? buildSidebarRows(sidebarCols) : [];
 	const toolStyle = variant.toolStyle ?? "inline";
+	const isRuntimeTarget = toolStyle === "runtime";
 	const chatHTML = buildChatHTML(CHAT_COLS, toolStyle);
+	const chatLeadHTML = isRuntimeTarget && !sidebarVisible ? `<pre class="grid"> </pre>\n` : "";
 	const inputRows = buildInputFrameRows(cols);
 	const hintRow = buildHintRow(cols, sidebarVisible);
-	const footerRow = buildFooterRow(cols, sidebarVisible);
+	const footerRow = buildFooterRow(cols, sidebarVisible, { visualHarnessFooter: isRuntimeTarget });
 	const topBarRow = buildTopBarPlaceholder(cols);
 
 	const middleCols = sidebarVisible
 		? `${CHAT_COLS}ch ${GUTTER}ch ${sidebarCols}ch`
 		: `${CHAT_COLS}ch ${GUTTER}ch`;
-
-	return `<!doctype html>
-<html>
-<head>
-<meta charset="utf-8">
-<title>Bible · Scene · Active ${cols}×${TERM_ROWS}${toolStyle === "ledger" ? " · Tool Ledger" : toolStyle === "live" ? " · Bash Live View" : toolStyle === "code" ? " · Code Block" : toolStyle === "skill" ? " · Skill Pill" : toolStyle === "scroll" ? " · Scroll + Scribe" : ""}</title>
-<link rel="stylesheet" href="_assets/tokens.css">
-<style>
-  .stage-blurb { max-width: ${Math.max(60, CHAT_COLS)}ch; color: var(--foreground-dim); font-size: 11px; line-height: 1.6; padding: 0 8px; text-align: center; }
-  .scene { display: grid; grid-template-rows: var(--cell-h) var(--cell-h) var(--cell-h) auto var(--cell-h) calc(var(--cell-h) * 3) var(--cell-h) var(--cell-h) var(--cell-h) var(--cell-h); }
-  .scene .middle { display: grid; grid-template-columns: ${middleCols}; grid-row: 4; min-height: 0; overflow: hidden; }
-  .scene .middle .chat-col, .scene .middle .sidebar-col { overflow: hidden; min-height: 0; }
-  .scene .middle pre { margin: 0; }
-</style>
-</head>
-<body>
-<div class="stage">
-  <div class="stage-label">${toolStyle === "ledger" ? "scene · active state + ledger tool cards" : toolStyle === "live" ? "scene · active state + bash live-view card" : toolStyle === "code" ? "scene · active state + code block in SUMO chat" : toolStyle === "skill" ? "scene · active state + inline skill pill" : toolStyle === "scroll" ? "scene · active state + scroll/scribe delegation" : `scene · active state · ${cols}×${TERM_ROWS} ${sidebarVisible ? "landscape" : "portrait (sidebar hidden)"}`}</div>
-  <div class="stage-blurb">${toolStyle === "ledger"
+	const middleRows = TERM_ROWS - 11;
+	const middleTrack = isRuntimeTarget ? `calc(var(--cell-h) * ${middleRows})` : "auto";
+	const runtimeTargetCss = isRuntimeTarget
+		? `
+  body.runtime-target { background: var(--background); }
+  body.runtime-target .stage { min-height: 0; align-items: flex-start; justify-content: flex-start; padding: 0; gap: 0; }`
+		: "";
+	const stageLabel = toolStyle === "ledger" ? "scene · active state + ledger tool cards" : toolStyle === "live" ? "scene · active state + bash live-view card" : toolStyle === "code" ? "scene · active state + code block in SUMO chat" : toolStyle === "skill" ? "scene · active state + inline skill pill" : toolStyle === "scroll" ? "scene · active state + scroll/scribe delegation" : toolStyle === "runtime" ? `scene · runtime active-working · ${cols}×${TERM_ROWS} ${sidebarVisible ? "landscape" : "portrait (sidebar hidden)"}` : `scene · active state · ${cols}×${TERM_ROWS} ${sidebarVisible ? "landscape" : "portrait (sidebar hidden)"}`;
+	const stageBlurb = toolStyle === "ledger"
 		? "Option 3A preview for Element 9: tool calls render as nested ledger cards inside the SUMO message box. Tests vertical rhythm, containment, and density in the full active scene."
 		: toolStyle === "live"
 			? "Option 3B preview inspired by lucasmeijer/pi-bash-live-view: bash renders as a live PTY viewport card with elapsed timer; non-bash tools remain compact."
@@ -474,18 +473,45 @@ function buildScene(variant) {
 					? "Element 9a preview in context: Pi-minimal inline skill pill inside a SUMO chat message, with no decorative frame."
 					: toolStyle === "scroll"
 						? "Element 12 preview in context: delegated work appears as a [scroll] with a nested scribe ledger inside the SUMO chat frame."
-						: sidebarVisible
-			? "first scene composition: combines all 5 locked elements (top-bar placeholder, sidebar V2 editorial CONTEXT, chat boxed 7A, input frame, footer READY). validates the full visual gestalt before adding remaining elements."
-			: "portrait variant. sidebar hidden (per Element 1 rule: < 120 col). chat takes full term width. footer collapses right zone (drops project + branch + $cost; keeps tokens). hint row: keybinds only (left flavour dropped at narrow widths)."}</div>
-  <div data-render-rect class="term scene" style="--term-cols: ${cols}; --term-rows: ${TERM_ROWS};">
+						: toolStyle === "runtime"
+							? "Runtime active-working target: live-submitted prompt plus faux-provider streaming text only. Completed assistant/tool transcript scenes stay in fixture/review targets."
+							: sidebarVisible
+								? "first scene composition: combines all 5 locked elements (top-bar placeholder, sidebar V2 editorial CONTEXT, chat boxed 7A, input frame, footer READY). validates the full visual gestalt before adding remaining elements."
+								: "portrait variant. sidebar hidden (per Element 1 rule: < 120 col). chat takes full term width. footer collapses right zone (drops project + branch + $cost; keeps tokens). hint row: keybinds only (left flavour dropped at narrow widths).";
+	const stageIntroHTML = isRuntimeTarget
+		? ""
+		: `  <div class="stage-label">${stageLabel}</div>
+  <div class="stage-blurb">${stageBlurb}</div>
+`;
+	const sidebarColumnHTML = sidebarVisible
+		? `      <div class="sidebar-col"><pre class="grid">${sidebarRows.join("\n")}</pre></div>
+`
+		: isRuntimeTarget ? "" : "      \n";
+
+	return `<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Bible · Scene · Active ${cols}×${TERM_ROWS}${toolStyle === "ledger" ? " · Tool Ledger" : toolStyle === "live" ? " · Bash Live View" : toolStyle === "code" ? " · Code Block" : toolStyle === "skill" ? " · Skill Pill" : toolStyle === "scroll" ? " · Scroll + Scribe" : toolStyle === "runtime" ? " · Runtime Active Working" : ""}</title>
+<link rel="stylesheet" href="_assets/tokens.css">
+<style>
+  .stage-blurb { max-width: ${Math.max(60, CHAT_COLS)}ch; color: var(--foreground-dim); font-size: 11px; line-height: 1.6; padding: 0 8px; text-align: center; }
+  .scene { display: grid; grid-template-rows: var(--cell-h) var(--cell-h) var(--cell-h) ${middleTrack} var(--cell-h) calc(var(--cell-h) * 3) var(--cell-h) var(--cell-h) var(--cell-h) var(--cell-h); }
+  .scene .middle { display: grid; grid-template-columns: ${middleCols}; grid-row: 4; min-height: 0; overflow: hidden; }
+  .scene .middle .chat-col, .scene .middle .sidebar-col { overflow: hidden; min-height: 0; }
+  .scene .middle pre { margin: 0; }${runtimeTargetCss}
+</style>
+</head>
+<body${isRuntimeTarget ? ` class="runtime-target"` : ""}>
+<div class="stage">
+${stageIntroHTML}  <div data-render-rect class="term scene" style="--term-cols: ${cols}; --term-rows: ${TERM_ROWS};">
     <pre class="grid" style="grid-row: 1;"> </pre>
     <pre class="grid" style="grid-row: 2;">${topBarRow}</pre>
     <pre class="grid" style="grid-row: 3;"> </pre>
     <div class="middle">
-      <div class="chat-col">${chatHTML}</div>
+      <div class="chat-col">${chatLeadHTML}${chatHTML}</div>
       <div class="gutter-col"></div>
-      ${sidebarVisible ? `<div class="sidebar-col"><pre class="grid">${sidebarRows.join("\n")}</pre></div>` : ""}
-    </div>
+${sidebarColumnHTML}    </div>
     <pre class="grid" style="grid-row: 5;"> </pre>
     <pre class="grid" style="grid-row: 6;">${inputRows.join("\n")}</pre>
     <pre class="grid" style="grid-row: 7;">${hintRow}</pre>
@@ -502,6 +528,8 @@ function buildScene(variant) {
 for (const v of [
 	{ filename: "scene-active.html", spec: LANDSCAPE },
 	{ filename: "scene-active-portrait.html", spec: PORTRAIT },
+	{ filename: "scene-active-runtime.html", spec: { ...LANDSCAPE, toolStyle: "runtime" } },
+	{ filename: "scene-active-runtime-portrait.html", spec: { ...PORTRAIT, toolStyle: "runtime" } },
 	{ filename: "scene-active-tool-ledger.html", spec: { ...LANDSCAPE, toolStyle: "ledger" } },
 	{ filename: "scene-active-bash-live-view.html", spec: { ...LANDSCAPE, toolStyle: "live" } },
 	{ filename: "scene-active-code-block.html", spec: { ...LANDSCAPE, toolStyle: "code" } },

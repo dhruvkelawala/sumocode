@@ -1,7 +1,8 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import sumocode, {
 	findActiveSumoDevTree,
 	isInstalledPiAgentGitModule,
+	isRpcChildProfile,
 	isTaskMode,
 	shouldInstallNativeTaskTool,
 	shouldNoopDuplicateInstalledExtension,
@@ -9,6 +10,46 @@ import sumocode, {
 } from "./extension.js";
 
 type Handler = (...args: unknown[]) => unknown;
+
+/**
+ * Ambient SumoCode/Pi env vars that change `sumocode(pi)` install behavior.
+ * When this suite runs INSIDE a live SumoCode session (e.g. smoke-testing a
+ * branch from the branch's own build), the session leaks SUMOCODE_LAUNCHER /
+ * SUMOCODE_RPC_CHILD / SUMOCODE_ROOT_DIR etc. into the test process, making
+ * the extension noop or pick the wrong profile and failing install
+ * assertions. Snapshot and scrub them so every test starts from a neutral
+ * environment; tests that need a specific profile set vars explicitly.
+ */
+const AMBIENT_ENV_KEYS = [
+	"SUMOCODE_LAUNCHER",
+	"SUMOCODE_ROOT_DIR",
+	"SUMOCODE_RPC_CHILD",
+	"SUMOCODE_BG_CHILD",
+	"PI_CMUX_CHILD",
+	"SUMOCODE_TASK_MODE",
+	"SUMOCODE_NATIVE_TASK",
+	"SUMOCODE_TASK_RESPONSE_FILE",
+	"SUMOCODE_TASK_EXIT_FILE",
+	"SUMOCODE_TASK_STARTED_FILE",
+	"SUMOCODE_TASK_DIAG_FILE",
+] as const;
+
+let ambientEnvSnapshot: Map<string, string | undefined>;
+
+beforeEach(() => {
+	ambientEnvSnapshot = new Map();
+	for (const key of AMBIENT_ENV_KEYS) {
+		ambientEnvSnapshot.set(key, process.env[key]);
+		delete process.env[key];
+	}
+});
+
+afterEach(() => {
+	for (const [key, value] of ambientEnvSnapshot) {
+		if (value === undefined) delete process.env[key];
+		else process.env[key] = value;
+	}
+});
 
 function buildPiStub() {
 	const handlers = new Map<string, Handler[]>();
@@ -39,6 +80,7 @@ function buildCtxStub() {
 		model: undefined,
 		ui: {
 			notify: vi.fn(),
+			select: vi.fn(() => Promise.resolve(undefined)),
 			custom: vi.fn(() => Promise.resolve()),
 			setFooter: vi.fn(),
 			setHeader: vi.fn(),
@@ -110,6 +152,72 @@ describe("duplicate installed extension guard", () => {
 			else process.env.SUMOCODE_LAUNCHER = prev;
 		}
 	});
+
+	// Regression coverage for the launcher self-noop landmine: when
+	// `~/.pi/agent/git/.../sumocode` is a symlink straight back into the dev
+	// tree (a common local setup — see `bin/sumocode.sh`'s `SUMOCODE_ROOT_DIR`
+	// export), the module path passes the `.pi/agent/git` prefix test even
+	// though it IS the launcher's own dev tree. An unconditional noop there
+	// would skip `installApprovalGate` in the RPC child profile — the
+	// approval gate must still install.
+	describe("SUMOCODE_ROOT_DIR-aware launcher self-noop", () => {
+		const identityRealpath = (path: string): string => path;
+
+		it("noops when SUMOCODE_ROOT_DIR resolves elsewhere (dev-tree-wins existing behavior)", () => {
+			expect(
+				shouldNoopDuplicateInstalledExtension({
+					moduleUrl: "file:///Users/dev/.pi/agent/git/github.com/dhruvkelawala/sumocode/src/extension.ts",
+					homeDir: "/Users/dev",
+					env: { SUMOCODE_ROOT_DIR: "/Users/dev/some/other/sumocode-checkout" },
+					realpath: identityRealpath,
+				}),
+			).toBe(true);
+		});
+
+		it("does NOT noop when SUMOCODE_ROOT_DIR resolves to the same checkout (launcher loading its own dev tree via a symlinked agent-git path)", () => {
+			expect(
+				shouldNoopDuplicateInstalledExtension({
+					moduleUrl: "file:///Users/dev/.pi/agent/git/github.com/dhruvkelawala/sumocode/src/extension.ts",
+					homeDir: "/Users/dev",
+					env: { SUMOCODE_ROOT_DIR: "/Users/dev/.pi/agent/git/github.com/dhruvkelawala/sumocode" },
+					realpath: identityRealpath,
+				}),
+			).toBe(false);
+		});
+
+		it("does NOT noop when both paths canonicalize to the same real directory through a symlink", () => {
+			const realSymlinkMap: Record<string, string> = {
+				"/Users/dev/.pi/agent/git/github.com/dhruvkelawala/sumocode/src/extension.ts": "/Volumes/dev-disk/code/sumocode/src/extension.ts",
+				"/Users/dev/.pi/agent/git/github.com/dhruvkelawala/sumocode": "/Volumes/dev-disk/code/sumocode",
+			};
+			const realpath = (path: string): string => {
+				const hit = realSymlinkMap[path];
+				if (hit) return hit;
+				throw new Error(`ENOENT: no such file, lstat '${path}'`);
+			};
+			expect(
+				shouldNoopDuplicateInstalledExtension({
+					moduleUrl: "file:///Users/dev/.pi/agent/git/github.com/dhruvkelawala/sumocode/src/extension.ts",
+					homeDir: "/Users/dev",
+					env: { SUMOCODE_ROOT_DIR: "/Users/dev/.pi/agent/git/github.com/dhruvkelawala/sumocode" },
+					realpath,
+				}),
+			).toBe(false);
+		});
+
+		it("preserves existing SUMOCODE_LAUNCHER behavior when SUMOCODE_ROOT_DIR is absent", () => {
+			expect(
+				shouldNoopDuplicateInstalledExtension({
+					moduleUrl: "file:///Users/dev/.pi/agent/git/github.com/dhruvkelawala/sumocode/src/extension.ts",
+					homeDir: "/Users/dev",
+					cwd: "/some/other/project",
+					exists: () => false,
+					readFile: () => "",
+					env: { SUMOCODE_LAUNCHER: "/Users/dev/development/sumocode/bin/sumocode.sh" },
+				}),
+			).toBe(true);
+		});
+	});
 });
 
 describe("task mode", () => {
@@ -121,6 +229,64 @@ describe("task mode", () => {
 		expect(isTaskMode({ env: {} })).toBe(false);
 		expect(isTaskMode({ env: { SUMOCODE_TASK_MODE: "0" } })).toBe(false);
 		expect(isTaskMode({ env: { SUMOCODE_TASK_MODE: "true" } })).toBe(false);
+	});
+});
+
+describe("rpc child profile", () => {
+	it("detects SUMOCODE_RPC_CHILD=1 as the rpc child profile", () => {
+		expect(isRpcChildProfile({ env: { SUMOCODE_RPC_CHILD: "1" } })).toBe(true);
+		expect(isRpcChildProfile({ env: {} })).toBe(false);
+		expect(isRpcChildProfile({ env: { SUMOCODE_RPC_CHILD: "0" } })).toBe(false);
+	});
+
+	it("keeps tools and commands, installs fail-closed approval, and skips retained chrome", async () => {
+		const previousRpc = process.env.SUMOCODE_RPC_CHILD;
+		const previousTask = process.env.SUMOCODE_NATIVE_TASK;
+		process.env.SUMOCODE_RPC_CHILD = "1";
+		process.env.SUMOCODE_NATIVE_TASK = "1";
+		try {
+			const { pi, handlers } = buildPiStub();
+			sumocode(pi as never);
+
+			const commandNames = pi.registerCommand.mock.calls.map((call) => call[0]);
+			const toolNames = pi.registerTool.mock.calls.map((call) => (call[0] as { name: string }).name);
+			const eventNames = pi.on.mock.calls.map((call) => call[0]);
+			const shortcutNames = pi.registerShortcut.mock.calls.map((call) => call[0]);
+			expect(commandNames).toContain("sumo:review");
+			expect(commandNames).toContain("sumo:ship");
+			expect(toolNames).toContain("task");
+			expect(toolNames).toContain("question");
+			expect(eventNames).toContain("tool_call");
+			expect(shortcutNames).not.toContain("ctrl+/");
+
+			const ctx = { ...buildCtxStub(), mode: "rpc" };
+			const toolCallResults = await Promise.all((handlers.get("tool_call") ?? []).map((handler) =>
+				handler({
+					toolName: "bash",
+					input: { command: "rm -rf node_modules/" },
+				}, ctx as never),
+			));
+			expect(toolCallResults).toContainEqual({
+				block: true,
+				reason: "user denied via cathedral approval modal",
+			});
+			expect(ctx.ui.select).toHaveBeenCalled();
+
+			for (const handler of handlers.get("session_start") ?? []) {
+				await handler({ type: "session_start" }, ctx as never);
+			}
+
+			expect(ctx.ui.setFooter).not.toHaveBeenCalled();
+			expect(ctx.ui.setHeader).not.toHaveBeenCalled();
+			expect(ctx.ui.setEditorComponent).not.toHaveBeenCalled();
+			expect(ctx.ui.setWorkingIndicator).not.toHaveBeenCalled();
+			expect(ctx.ui.setWidget).not.toHaveBeenCalled();
+		} finally {
+			if (previousRpc === undefined) delete process.env.SUMOCODE_RPC_CHILD;
+			else process.env.SUMOCODE_RPC_CHILD = previousRpc;
+			if (previousTask === undefined) delete process.env.SUMOCODE_NATIVE_TASK;
+			else process.env.SUMOCODE_NATIVE_TASK = previousTask;
+		}
 	});
 });
 

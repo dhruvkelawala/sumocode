@@ -3,8 +3,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+	captureAndScrubTaskMarkerEnv,
 	extractFinalAssistantText,
 	installTaskModeAutoExit,
+	resetTaskMarkerEnvForTests,
 	shouldInstallTaskModeAutoExit,
 	writeTaskExitMarker,
 	writeTaskStartedMarker,
@@ -331,6 +333,60 @@ describe("installTaskModeAutoExit", () => {
 		writeTaskExitMarker(0, { SUMOCODE_TASK_EXIT_FILE: exitFile } as NodeJS.ProcessEnv);
 
 		expect(readFileSync(exitFile, "utf8").trim()).toBe("0");
+	});
+
+	it("scrubs marker-file env vars at install so subprocesses cannot clobber them", () => {
+		workDir = mkdtempSync(join(tmpdir(), "sumocode-task-mode-test-"));
+		const startedFile = join(workDir, "started.marker");
+		const responseFile = join(workDir, "response.md");
+		const { pi, handlers } = buildPiStub();
+
+		const env: NodeJS.ProcessEnv = {
+			SUMOCODE_TASK_MODE: "1",
+			SUMOCODE_TASK_STARTED_FILE: startedFile,
+			SUMOCODE_TASK_RESPONSE_FILE: responseFile,
+			SUMOCODE_TASK_EXIT_FILE: join(workDir, "exit.code"),
+			SUMOCODE_TASK_DIAG_FILE: join(workDir, "diag.jsonl"),
+		};
+		try {
+			installTaskModeAutoExit(pi as never, { env, graceMs: 10_000 });
+
+			// Marker keys must be gone from the env (what subprocesses inherit)…
+			expect(env.SUMOCODE_TASK_STARTED_FILE).toBeUndefined();
+			expect(env.SUMOCODE_TASK_RESPONSE_FILE).toBeUndefined();
+			expect(env.SUMOCODE_TASK_EXIT_FILE).toBeUndefined();
+			expect(env.SUMOCODE_TASK_DIAG_FILE).toBeUndefined();
+			// …task-mode itself stays active for this process…
+			expect(env.SUMOCODE_TASK_MODE).toBe("1");
+			// …and the lifecycle still writes markers via the captured snapshot.
+			expect(readFileSync(startedFile, "utf8").trim()).toBe(String(process.pid));
+
+			const ctx = buildCtxStub();
+			handlers.get("agent_end")?.[0]?.(
+				{ messages: [{ role: "assistant", content: [{ type: "text", text: "harvested" }] }] },
+				ctx,
+			);
+			expect(readFileSync(responseFile, "utf8").trim()).toBe("harvested");
+		} finally {
+			resetTaskMarkerEnvForTests();
+		}
+	});
+
+	it("captureAndScrubTaskMarkerEnv leaves unrelated keys alone", () => {
+		try {
+			const env: NodeJS.ProcessEnv = {
+				SUMOCODE_TASK_EXIT_FILE: "/tmp/x/exit.code",
+				SUMOCODE_TASK_MODE: "1",
+				PATH: "/usr/bin",
+			};
+			const snapshot = captureAndScrubTaskMarkerEnv(env);
+			expect(snapshot.SUMOCODE_TASK_EXIT_FILE).toBe("/tmp/x/exit.code");
+			expect(env.SUMOCODE_TASK_EXIT_FILE).toBeUndefined();
+			expect(env.PATH).toBe("/usr/bin");
+			expect(env.SUMOCODE_TASK_MODE).toBe("1");
+		} finally {
+			resetTaskMarkerEnvForTests();
+		}
 	});
 
 	it("does not write response.md when env var is unset", () => {

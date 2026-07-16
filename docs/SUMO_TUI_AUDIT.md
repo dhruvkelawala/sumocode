@@ -123,15 +123,15 @@ idle → starting → active → suspending → suspended → active → stoppin
 
 Rules: exactly one place enters/leaves altscreen, exactly one place toggles mouse, OSC 11 bg paint feature-flagged (`/sumo:bg paint|none`), OSC 12 cursor color off by default and only set by explicit `/sumo:cursor`, no-TTY paths no-op but testable through a headless backend.
 
-### P0-D — The Pi patch is the real version-drift seam *(effort: 1–2d to evaluate, 1w+ to remove)*
+### P0-D — Historical Pi patch version-drift seam *(retired by Plan 014)*
 
-`patches/@earendil-works__pi-coding-agent@0.74.0.patch` + the `loadSumoInteractiveMode` hook in `bin/sumocode.sh` and `sumo-interactive-mode.js` are how SumoTUI injects the retained renderer. **This is the seam Pi-version drift will break first.** Every Pi minor bump risks invalidating the patch.
+Earlier SumoTUI builds injected the retained renderer through a private Pi constructor patch and loader hook. Plan 014 retired that seam: the interactive runtime is now the RPC host, and Pi bumps verify the RPC contract plus direct-Pi bypass behavior instead of regenerating private patches.
 
 This was missing from v1. It is P0 because:
 
-- Owning the patch means SumoTUI's stability is bounded by patch maintenance forever.
-- Removing it means finding a clean injection via Pi's public API or accepting a fork.
-- Either way the decision belongs at the same layer as "two renderers" and "single terminal owner".
+- Owning a private patch would have bounded SumoTUI's stability by patch maintenance forever.
+- The RPC host is the chosen replacement seam.
+- The decision belongs at the same layer as "two renderers" and "single terminal owner".
 
 Action: spend 1–2d evaluating whether `setEditorComponent` / `setHeader` / `setFooter` / a future `setRootRenderer` covers the injection. If yes, plan the patch removal as a milestone. If no, document the patch maintenance contract (what to verify on each Pi bump, when to upstream).
 

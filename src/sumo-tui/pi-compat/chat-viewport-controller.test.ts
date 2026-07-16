@@ -73,7 +73,7 @@ describe("ChatViewportController", () => {
 	it("extracts streamed assistant text from Pi message shapes", () => {
 		expect(textFromAgentMessage({ role: "user", content: "hello" })).toBe("hello");
 		expect(textFromAgentMessage({ role: "assistant", content: [{ type: "thinking", thinking: "hidden" }, { type: "text", text: "visible" }] })).toBe("hidden\nvisible");
-		expect(textFromAgentMessage({ role: "toolResult", content: [{ type: "text", text: "tool output" }] }).replace(ANSI_PATTERN, "")).toBe("✓ [tool]  tool output  · ⌘O expand");
+		expect(textFromAgentMessage({ role: "toolResult", content: [{ type: "text", text: "tool output" }] }).replace(ANSI_PATTERN, "")).toBe("✓ [tool]  tool output  · ctrl+o expand");
 	});
 
 	it("clamps retained chat lines to the terminal width before handing them to Pi", async () => {
@@ -142,6 +142,60 @@ describe("ChatViewportController", () => {
 		expect(jumpResult).toEqual({ consume: true });
 		expect(chat.scrollBox.scrollOffset).toBe(bottom);
 		expect(runtime.writeCalls).toContainEqual({ top: 1, left: 0, width: 80, height: 8 });
+		root.dispose();
+	});
+
+	it("buffers SGR mouse sequences split before the ESC prefix completes", async () => {
+		const { root, chat, controller } = await makeController({ terminalRows: 12, terminalColumns: 80 });
+		for (let index = 0; index < 50; index += 1) chat.addMessage("user", `message ${index}`);
+		controller.render(80);
+		const bottom = chat.scrollBox.scrollOffset;
+
+		expect(controller.handleInput("\x1b")).toEqual({ consume: true });
+		expect(controller.handleInput("[<64;10;5M")).toEqual({ consume: true });
+
+		expect(chat.scrollBox.scrollOffset).toBe(bottom - 2);
+		root.dispose();
+	});
+
+	it("redispatches delayed bare Escape back to Pi input after the mouse ambiguity window", async () => {
+		vi.useFakeTimers();
+		const { root, host, controller } = await makeController({ terminalRows: 12, terminalColumns: 80 });
+		const redispatchedResults: Array<{ consume?: boolean; data?: string } | void> = [];
+		host.ui!.handleInput = (data: string): void => {
+			redispatchedResults.push(controller.handleInput(data));
+		};
+
+		try {
+			expect(controller.handleInput("\x1b")).toEqual({ consume: true });
+			expect(redispatchedResults).toEqual([]);
+
+			await vi.advanceTimersByTimeAsync(25);
+
+			expect(redispatchedResults).toEqual([{ data: "\x1b" }]);
+		} finally {
+			root.dispose();
+			vi.useRealTimers();
+		}
+	});
+
+	it("buffers SGR mouse sequences split after the CSI prefix", async () => {
+		const { root, chat, controller } = await makeController({ terminalRows: 12, terminalColumns: 80 });
+		for (let index = 0; index < 50; index += 1) chat.addMessage("user", `message ${index}`);
+		controller.render(80);
+		const bottom = chat.scrollBox.scrollOffset;
+
+		expect(controller.handleInput("\x1b[")).toEqual({ consume: true });
+		expect(controller.handleInput("<64;10;5M")).toEqual({ consume: true });
+
+		expect(chat.scrollBox.scrollOffset).toBe(bottom - 2);
+		root.dispose();
+	});
+
+	it("normalizes raw multiline paste before forwarding data back to Pi", async () => {
+		const { root, controller } = await makeController({ terminalRows: 12, terminalColumns: 80 });
+
+		expect(controller.handleInput("line one\rline two")).toEqual({ data: "line one\nline two" });
 		root.dispose();
 	});
 
@@ -218,6 +272,68 @@ describe("ChatViewportController", () => {
 			{ type: "tool", tool: { id: "tc1", name: "read", status: "success", input: { path: "src/auth/session.ts" }, output: "file contents", details: undefined, error: undefined, expanded: true } },
 		]);
 		expect(runtime.noteUserMessage).not.toHaveBeenCalled();
+		root.dispose();
+	});
+
+	it("folds a running non-task tool, then finalizes it to one block", async () => {
+		const { root, chat, controller } = await makeController();
+
+		controller.handleAgentEvent({ type: "message_start", message: { role: "assistant", content: [] } });
+		controller.handleAgentEvent({
+			type: "tool_execution_start",
+			toolName: "read",
+			toolCallId: "t1",
+			args: { path: "a.ts" },
+		});
+
+		let toolBlocks = (chat.getRenderedMessages()[0]?.toSnapshot().blocks ?? []).filter((block) => block.type === "tool");
+		expect(toolBlocks).toHaveLength(1);
+		expect(toolBlocks?.[0]).toMatchObject({
+			type: "tool",
+			tool: { id: "t1", name: "read", status: "running", input: { path: "a.ts" }, output: undefined },
+		});
+
+		controller.handleAgentEvent({
+			type: "tool_execution_end",
+			toolName: "read",
+			toolCallId: "t1",
+			args: { path: "a.ts" },
+			result: { content: [{ type: "text", text: "ok" }] },
+		});
+
+		toolBlocks = (chat.getRenderedMessages()[0]?.toSnapshot().blocks ?? []).filter((block) => block.type === "tool");
+		expect(toolBlocks).toHaveLength(1);
+		expect(toolBlocks?.[0]).toEqual({
+			type: "tool",
+			tool: { id: "t1", name: "read", status: "success", input: { path: "a.ts" }, output: "ok", details: undefined, error: undefined, expanded: true },
+		});
+		root.dispose();
+	});
+
+	it("appends a persistent compaction summary when compaction ends with a result", async () => {
+		const { root, chat, runtime, controller } = await makeController();
+
+		controller.handleAgentEvent({
+			type: "compaction_end",
+			result: {
+				summary: "Kept the current implementation plan and verification status.",
+				tokensBefore: 42000,
+			},
+		});
+
+		const message = chat.getRenderedMessages()[0]?.toSnapshot();
+		expect(message).toMatchObject({
+			role: "system",
+			text: "[compaction] Compacted from 42,000 tokens",
+			blocks: [{
+				type: "summary",
+				kind: "compaction",
+				label: "[compaction] Compacted from 42,000 tokens",
+				content: "Kept the current implementation plan and verification status.",
+				expanded: false,
+			}],
+		});
+		expect(runtime.requestRender).toHaveBeenCalledTimes(1);
 		root.dispose();
 	});
 

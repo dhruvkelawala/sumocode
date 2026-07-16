@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -9,8 +9,7 @@ import { installApprovalGate } from "./approval-modal.js";
 import { installQuestionTool } from "./question-tool.js";
 import { taskTool } from "./native-task-tool.js";
 
-import { loadSumoCodeConfig } from "./config/sumocode-config.js";
-import { getTheme, setActiveTheme } from "./themes/index.js";
+import { applyStartupTheme } from "./themes/index.js";
 import { installAltscreen } from "./cathedral/altscreen.js";
 import { installCathedralEditor } from "./cathedral/cathedral-editor.js";
 import { registerSumoReloadCommand } from "./commands/reload.js";
@@ -33,6 +32,7 @@ const LEGACY_TASK_TOOL_EXTENSION_PATH = join(".pi", "agent", "extensions", "task
 
 type ExistsFn = (path: string) => boolean;
 type ReadFileFn = (path: string, encoding: BufferEncoding) => string;
+type RealpathFn = (path: string) => string;
 
 export interface DuplicateInstalledExtensionOptions {
 	readonly moduleUrl?: string;
@@ -40,6 +40,23 @@ export interface DuplicateInstalledExtensionOptions {
 	readonly homeDir?: string;
 	readonly exists?: ExistsFn;
 	readonly readFile?: ReadFileFn;
+	readonly env?: NodeJS.ProcessEnv;
+	readonly realpath?: RealpathFn;
+}
+
+/**
+ * Resolves a path to its canonical form, following symlinks, so two
+ * differently-spelled paths to the same file (e.g. a `~/.pi/agent/git/...`
+ * path that is actually a symlink straight back into a dev checkout) compare
+ * equal. Falls back to plain `resolve()` when the path does not exist on disk
+ * (e.g. in unit tests against a fake filesystem) instead of throwing.
+ */
+function canonicalize(path: string, realpath: RealpathFn): string {
+	try {
+		return realpath(path);
+	} catch {
+		return resolve(path);
+	}
 }
 
 function moduleUrlToPath(moduleUrl: string): string {
@@ -85,12 +102,30 @@ export function findActiveSumoDevTree(cwd: string, options: Pick<DuplicateInstal
 export function shouldNoopDuplicateInstalledExtension(options: DuplicateInstalledExtensionOptions = {}): boolean {
 	const moduleUrl = options.moduleUrl ?? import.meta.url;
 	if (!isInstalledPiAgentGitModule(moduleUrl, options.homeDir ?? homedir())) return false;
-	// When the sumocode launcher (`bin/sumocode.sh`) is active it always loads
-	// the dev-tree extension via `-e`. The CWD-based dev-tree check only works
-	// when the user happens to be inside the sumocode checkout — bail out
-	// unconditionally when the launcher env var is present so the installed copy
-	// never double-registers tools regardless of the working directory.
-	if (process.env.SUMOCODE_LAUNCHER) return true;
+	const env = options.env ?? process.env;
+	const launcherRoot = env.SUMOCODE_ROOT_DIR;
+	if (launcherRoot) {
+		// The sumocode launcher (`bin/sumocode.sh`) always loads its own dev-tree
+		// extension via `-e ${ROOT_DIR}/src/extension.ts` and exports
+		// SUMOCODE_ROOT_DIR alongside SUMOCODE_LAUNCHER for exactly this check.
+		// `~/.pi/agent/git/.../sumocode` can itself be a symlink straight back
+		// into that same dev tree (a common local setup), in which case the
+		// module path both matches the `.pi/agent/git` prefix test above AND
+		// canonicalizes to the launcher's own root — that is the launcher
+		// loading itself, not a genuinely separate installed copy, so it must
+		// NOT noop (an unconditional noop here would skip the RPC child's
+		// `installApprovalGate`, silently disabling the approval gate). Compare
+		// realpath-canonicalized paths on both sides so symlinks can't fool
+		// either direction of this check.
+		const realpath = options.realpath ?? ((path: string) => realpathSync(path));
+		const modulePath = canonicalize(moduleUrlToPath(moduleUrl), realpath);
+		const moduleDir = dirname(modulePath); // strip /src/extension.ts to compare tree roots
+		const grandparent = dirname(moduleDir); // .../sumocode/src -> .../sumocode
+		const canonicalLauncherRoot = canonicalize(launcherRoot, realpath);
+		if (grandparent === canonicalLauncherRoot) return false;
+		return true;
+	}
+	if (env.SUMOCODE_LAUNCHER) return true;
 	return findActiveSumoDevTree(options.cwd ?? process.cwd(), options) !== undefined;
 }
 
@@ -148,6 +183,43 @@ export function isTaskMode(options: TaskModeOptions = {}): boolean {
 	return env.SUMOCODE_TASK_MODE === "1";
 }
 
+export function isRpcChildProfile(options: TaskModeOptions = {}): boolean {
+	const env = options.env ?? process.env;
+	return env.SUMOCODE_RPC_CHILD === "1";
+}
+
+function installRpcChildProfile(pi: ExtensionAPI): void {
+	installMemoryExtraction(pi);
+	installFastMode(pi);
+	installApprovalGate(pi);
+	if (shouldInstallNativeTaskTool({ force: process.env.SUMOCODE_NATIVE_TASK })) {
+		taskTool({
+			name: "task",
+			label: "Task",
+			description: [
+				"Run isolated pi subprocess tasks (single, chain, or parallel).",
+				"Optional model override (provider/modelId).",
+			].join(" "),
+			maxParallelTasks: 8,
+			maxConcurrency: 4,
+			collapsedItemCount: 10,
+			skillListLimit: 30,
+			systemPromptPatches: [
+				{
+					match: /\n\s*\n\s*in addition to the tools above, you may have access to other custom tools depending on the project\./i,
+					replace: "\n- task: never run this tool unless it's a skill run or I explictly ask you to",
+				},
+			],
+		})(pi);
+	}
+	installQuestionTool(pi);
+	installAnswerTool(pi);
+	const backgroundTaskManager = installBackgroundTasks(pi);
+	installTaskModeAutoExit(pi);
+	registerSumoReloadCommand(pi);
+	installSumoInteractions(pi, { backgroundTaskManager, includeUiSurfaces: false });
+}
+
 /**
  * SumoCode — cathedral-themed Pi extension entry point.
  *
@@ -178,8 +250,18 @@ export default function sumocode(pi: ExtensionAPI): void {
 	// Restore the persisted runtime theme before installing any UI surfaces so
 	// first paint uses the chosen palette. Registry default stays Cathedral for
 	// tests and non-runtime module imports; runtime fallback stays Obsidian.
-	const configuredThemeName = loadSumoCodeConfig().config.themeName;
-	setActiveTheme(configuredThemeName && getTheme(configuredThemeName) ? configuredThemeName : "obsidian");
+	// Shared with the RPC host boot path (sumo-tui/rpc/host.ts) via
+	// applyStartupTheme so both processes resolve the same theme the same way.
+	applyStartupTheme();
+
+	if (isRpcChildProfile()) {
+		installRpcChildProfile(pi);
+		logDiagnostic("extension_activate_end", {
+			profile: "rpc-child",
+			nativeTaskInstalled: shouldInstallNativeTaskTool({ force: process.env.SUMOCODE_NATIVE_TASK }),
+		});
+		return;
+	}
 
 	// Render diagnostics must install BEFORE any consumer so its `setFooter` /
 	// `setHeader` / `setEditorComponent` / `setWidget` wrappers are in place

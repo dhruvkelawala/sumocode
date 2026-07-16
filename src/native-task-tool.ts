@@ -821,7 +821,7 @@ const ModelOverrideSchema = Type.Optional(Type.String({ description: "Optional m
 const ThinkingOverrideSchema = Type.Optional(
 	Type.String({
 		enum: [...VALID_THINKING_OPTIONS],
-		description: "Thinking level override: off, minimal, low, medium, high, xhigh, or inherit",
+		description: "Thinking level override: off, minimal, low, medium, high, xhigh, max, or inherit",
 	}),
 );
 

@@ -16,9 +16,6 @@
     "type": "git",
     "url": "git+https://github.com/dhruvkelawala/sumocode.git"
   },
-  "exports": {
-    "./sumo-interactive-mode": "./sumo-interactive-mode.js"
-  },
   "bin": {
     "sumocode": "bin/sumocode.sh"
   },
@@ -28,28 +25,28 @@
     ]
   },
   "peerDependencies": {
-    "@earendil-works/pi-ai": "~0.79.0",
-    "@earendil-works/pi-coding-agent": "~0.79.0",
-    "@earendil-works/pi-tui": "~0.79.0",
+    "@earendil-works/pi-ai": "~0.80.0",
+    "@earendil-works/pi-coding-agent": "~0.80.0",
+    "@earendil-works/pi-tui": "~0.80.0",
     "typebox": "*"
   },
   "engines": {
     "node": ">=22.19.0"
   },
   "devDependencies": {
-    "@earendil-works/pi-ai": "0.79.1",
-    "@earendil-works/pi-coding-agent": "0.79.1",
-    "@earendil-works/pi-tui": "0.79.1",
+    "@earendil-works/pi-ai": "0.80.6",
+    "@earendil-works/pi-coding-agent": "0.80.6",
+    "@earendil-works/pi-tui": "0.80.6",
     "@types/node": "^25.6.0",
     "@xterm/headless": "^6.0.0",
+    "knip": "^5.66.0",
     "node-pty": "^1.1.0",
     "pixelmatch": "^7.1.1",
     "playwright": "^1.59.1",
     "pngjs": "^7.0.0",
     "typebox": "1.1.33",
     "typescript": "^6.0.3",
-    "vitest": "^4.1.5",
-    "knip": "^5.66.0"
+    "vitest": "^4.1.5"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
@@ -67,6 +64,7 @@
     "vitest": "vitest",
     "visual": "node scripts/visual.mjs",
     "visual:review": "node scripts/visual-v2/index.mjs review",
+    "visual:compare": "node scripts/visual-v2/compare-captures.mjs",
     "visual:ci": "node scripts/visual-v2/index.mjs ci",
     "visual:promote": "node scripts/visual-v2/promote-golden.mjs",
     "test:visual:real-runtime": "node scripts/visual-real-runtime.mjs"
@@ -78,9 +76,6 @@
   "pnpm": {
     "onlyBuiltDependencies": [
       "node-pty"
-    ],
-    "patchedDependencies": {
-      "@earendil-works/pi-coding-agent@0.79.1": "patches/@earendil-works__pi-coding-agent@0.79.1.patch"
-    }
+    ]
   }
 }

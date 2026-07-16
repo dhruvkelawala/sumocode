@@ -1,0 +1,45 @@
+[
+  {
+    "content": [
+      {
+        "text": "Describe this image in one short sentence.",
+        "type": "text"
+      },
+      {
+        "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/lUzpWQAAAABJRU5ErkJggg==",
+        "mimeType": "image/png",
+        "type": "image"
+      }
+    ],
+    "role": "user",
+    "timestamp": 1782827709578
+  },
+  {
+    "api": "sumocode-rpc-spike-api",
+    "content": [
+      {
+        "text": "The image is a one-pixel PNG fixture.",
+        "type": "text"
+      }
+    ],
+    "model": "deterministic",
+    "provider": "sumocode-rpc-spike",
+    "role": "assistant",
+    "stopReason": "stop",
+    "timestamp": 1782827709581,
+    "usage": {
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "cost": {
+        "cacheRead": 0,
+        "cacheWrite": 0,
+        "input": 0,
+        "output": 0,
+        "total": 0
+      },
+      "input": 0,
+      "output": 0,
+      "totalTokens": 0
+    }
+  }
+]

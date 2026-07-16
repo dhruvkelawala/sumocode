@@ -18,6 +18,8 @@
 - **Category**: bug
 - **Planned at**: commit `ae03bc0`, 2026-06-30
 - **Issue**: https://github.com/dhruvkelawala/sumocode/issues/301
+- **Execution**: DONE in `codex/rpc-precutover-stack-clean-exec` (`c256f6e`). Visual CI
+  review pack was produced; no golden promotion was run.
 
 ## Why this matters
 

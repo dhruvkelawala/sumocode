@@ -13,11 +13,22 @@ export function writePng(path, png) {
 	writeFileSync(path, PNG.sync.write(png));
 }
 
-export async function compareCropPair({ targetPath, runtimePath, goldenPath, targetCrop, runtimeCrop, threshold, outPaths, dimensions }) {
+export async function compareCropPair({
+	targetPath,
+	runtimePath,
+	goldenPath,
+	targetCrop,
+	runtimeCrop,
+	threshold,
+	outPaths,
+	dimensions,
+	targetDimensions,
+	runtimeDimensions,
+}) {
 	const targetPng = readPng(targetPath);
 	const runtimePng = readPng(runtimePath);
-	const targetRect = cropRect(targetPng, targetCrop, dimensions);
-	const runtimeRect = cropRect(runtimePng, runtimeCrop, dimensions);
+	const targetRect = cropRect(targetPng, targetCrop, targetDimensions ?? dimensions);
+	const runtimeRect = cropRect(runtimePng, runtimeCrop, runtimeDimensions ?? dimensions);
 	const target = cropPng(targetPng, targetRect);
 	const runtime = cropPng(runtimePng, runtimeRect);
 	writePng(outPaths.target, target);

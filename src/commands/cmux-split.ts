@@ -177,6 +177,30 @@ export type OpenSplitWithRefsResult =
 	| { ok: true; workspaceRef: string; surfaceRef: string }
 	| { ok: false; error: string };
 
+/** Replace the caller's current cmux surface process with `command`. */
+export async function openCommandInCurrentSurface(
+	pi: ExtensionAPI,
+	command: string,
+): Promise<OpenSplitResult> {
+	const callerResult = await getCallerInfo(pi);
+	if (!callerResult.ok) return callerResult;
+
+	const { workspace_ref: workspaceRef, surface_ref: surfaceRef } = callerResult.caller;
+	const respawnResult = await execCmux(pi, [
+		"respawn-pane",
+		"--workspace",
+		workspaceRef,
+		"--surface",
+		surfaceRef,
+		"--command",
+		command,
+	]);
+	if (!respawnResult.ok) {
+		return { ok: false, error: respawnResult.error ?? "Failed to run command in the current surface" };
+	}
+	return { ok: true };
+}
+
 /** Parse `cmux new-split` stdout, e.g. `OK surface:2 workspace:1`. */
 export function parseNewSplitOutput(stdout: string): { surfaceRef?: string; workspaceRef?: string } {
 	const surfaceMatch = stdout.match(/surface:\S+/);

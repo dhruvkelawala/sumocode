@@ -2,7 +2,12 @@ import { describe, expect, it, vi } from "vitest";
 import { parseWorktreeArgs, registerWorktreeCommand } from "./worktree.js";
 
 function makePi() {
-	let handler: ((args: string | undefined, ctx: { hasUI: boolean; cwd: string; ui: { notify: ReturnType<typeof vi.fn> } }) => Promise<void>) | undefined;
+	let handler: ((args: string | undefined, ctx: {
+		hasUI: boolean;
+		cwd: string;
+		ui: { notify: ReturnType<typeof vi.fn> };
+		sessionManager?: { getBranch(): Array<{ type: string }> };
+	}) => Promise<void>) | undefined;
 	const registerCommand = vi.fn((_name: string, options: { handler: typeof handler }) => {
 		handler = options.handler;
 	});
@@ -80,13 +85,64 @@ describe("/sumo:worktree", () => {
 			setupAction: "pnpm install",
 		});
 
-		await handler()?.("", { hasUI: true, cwd: "/repo", ui: { notify } });
+		await handler()?.("", {
+			hasUI: true,
+			cwd: "/repo",
+			ui: { notify },
+			sessionManager: { getBranch: () => [{ type: "message" }] },
+		});
 
 		expect(create).toHaveBeenCalledWith({ repoRoot: "/repo", task: expect.stringMatching(/^wt-[a-z0-9]+$/), baseRef: "HEAD" });
 		const openedCommand = (openSplit.mock.calls[0] as unknown[] | undefined)?.[2] as string;
 		expect(openedCommand).toContain("pnpm install && exec sumocode");
 		expect(openedCommand).not.toContain("sumocode task");
 		expect(notify).toHaveBeenCalledWith(expect.stringContaining("opened sumo/wt-generated (fresh session) in right split"), "info");
+	});
+
+	it("replaces the current pane for a fresh worktree launched from the splash", async () => {
+		const { pi, handler } = makePi();
+		const create = vi.fn(async () => ({ ok: true as const, path: "/repo.wt/sumo__fresh", branch: "sumo/fresh", baseRef: "HEAD" }));
+		const openCurrent = vi.fn(async () => ({ ok: true as const }));
+		const openSplit = vi.fn(async () => ({ ok: true as const }));
+		registerWorktreeCommand(pi as never, {
+			create,
+			openCurrent,
+			openSplit,
+			isInCmux: () => true,
+			setupAction: "pnpm install",
+		});
+
+		await handler()?.("new fresh", {
+			hasUI: true,
+			cwd: "/repo",
+			ui: { notify: vi.fn() },
+			sessionManager: { getBranch: () => [] },
+		});
+
+		expect(openCurrent).toHaveBeenCalledWith(pi, expect.stringContaining("cd '/repo.wt/sumo__fresh'"));
+		expect(openSplit).not.toHaveBeenCalled();
+	});
+
+	it("warns without falling back to a split when current-pane replacement fails", async () => {
+		const { pi, handler } = makePi();
+		const openSplit = vi.fn(async () => ({ ok: true as const }));
+		const notify = vi.fn();
+		registerWorktreeCommand(pi as never, {
+			create: vi.fn(async () => ({ ok: true as const, path: "/repo.wt/sumo__fresh", branch: "sumo/fresh", baseRef: "HEAD" })),
+			openCurrent: vi.fn(async () => ({ ok: false as const, error: "respawn failed" })),
+			openSplit,
+			isInCmux: () => true,
+		});
+
+		await handler()?.("new fresh", {
+			hasUI: true,
+			cwd: "/repo",
+			ui: { notify },
+			sessionManager: { getBranch: () => [] },
+		});
+
+		expect(openSplit).not.toHaveBeenCalled();
+		expect(notify).toHaveBeenCalledWith("/sumo:worktree: respawn failed", "warning");
 	});
 
 	it("opens a named fresh worktree from the requested base ref", async () => {
@@ -98,7 +154,12 @@ describe("/sumo:worktree", () => {
 			isInCmux: () => true,
 		});
 
-		await handler()?.("new fix-scroll --base origin/main", { hasUI: true, cwd: "/repo", ui: { notify: vi.fn() } });
+		await handler()?.("new fix-scroll --base origin/main", {
+			hasUI: true,
+			cwd: "/repo",
+			ui: { notify: vi.fn() },
+			sessionManager: { getBranch: () => [{ type: "message" }] },
+		});
 
 		expect(create).toHaveBeenCalledWith({ repoRoot: "/repo", task: "fix-scroll", baseRef: "origin/main" });
 	});

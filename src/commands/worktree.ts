@@ -1,6 +1,14 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { buildShellCommand, isInCmux, openCommandInNewSplit, shellEscape, type SplitDirection } from "./cmux-split.js";
+import {
+	buildShellCommand,
+	isInCmux,
+	openCommandInCurrentSurface,
+	openCommandInNewSplit,
+	shellEscape,
+	type SplitDirection,
+} from "./cmux-split.js";
 import { chooseDiffSplitDirection, type TerminalSize } from "./diff.js";
+import { sessionHasMessages } from "../session-cache.js";
 import {
 	createWorktree,
 	listWorktrees,
@@ -17,6 +25,7 @@ export interface WorktreeCommandOptions {
 	readonly create?: typeof createWorktree;
 	readonly list?: typeof listWorktrees;
 	readonly remove?: typeof removeWorktree;
+	readonly openCurrent?: typeof openCommandInCurrentSurface;
 	readonly openSplit?: typeof openCommandInNewSplit;
 	readonly isInCmux?: typeof isInCmux;
 	readonly terminalSize?: () => TerminalSize;
@@ -131,6 +140,7 @@ export function registerWorktreeCommand(pi: ExtensionAPI, options: WorktreeComma
 	const create = options.create ?? createWorktree;
 	const list = options.list ?? listWorktrees;
 	const remove = options.remove ?? removeWorktree;
+	const openCurrent = options.openCurrent ?? openCommandInCurrentSurface;
 	const openSplit = options.openSplit ?? openCommandInNewSplit;
 	const isInsideCmux = options.isInCmux ?? isInCmux;
 	const getTerminalSize = options.terminalSize ?? terminalSize;
@@ -200,9 +210,15 @@ export function registerWorktreeCommand(pi: ExtensionAPI, options: WorktreeComma
 					return;
 				}
 
-				const direction: SplitDirection = chooseDiffSplitDirection(getTerminalSize());
 				const paneCommand = parsed.mode === "fresh" ? commandForFreshWorktree(setupAction) : commandForWorktree(parsed.value, setupAction);
 				const command = buildShellCommand(created.path, paneCommand);
+				if (parsed.mode === "fresh" && !sessionHasMessages(ctx)) {
+					const opened = await openCurrent(pi, command);
+					if (!opened.ok) notify(pi, ctx, `/sumo:worktree: ${opened.error}`, "warning");
+					return;
+				}
+
+				const direction: SplitDirection = chooseDiffSplitDirection(getTerminalSize());
 				const opened = await openSplit(pi, direction, command);
 				if (!opened.ok) {
 					notify(pi, ctx, `/sumo:worktree: ${opened.error}`, "warning");

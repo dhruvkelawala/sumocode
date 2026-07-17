@@ -520,6 +520,22 @@ manifests, then retirement of the `bg_task` mega-tool and delegation routing amb
   panes as optional task views, the diff→apply/discard result loop, worktree pruning UI/status
   badges, and local⇄worktree handoff.
 
+## Theme expansion — Herdr Terminal (073)
+
+**Planned at:** `933f33d`, 2026-07-17.
+
+| Plan | Title | Priority | Effort | Depends on | Issue | Status |
+|------|-------|----------|--------|------------|-------|--------|
+| 073 | [Herdr Terminal theme](073-herdr-terminal-theme.md) | P2 | M | — (independent; coordinate with 072 only on naming/docs) | [#312](https://github.com/dhruvkelawala/sumocode/issues/312) | TODO |
+
+### Scope note
+
+- 073 adds the first-party `herdr` visual theme and makes OSC background/cursor painting follow the
+  active theme. It does **not** implement Plan 072's external terminal-host adapter; “Herdr Terminal”
+  here is a visual identity, while 072 targets the separate `herdr` terminal application API.
+- The first three registry entries remain pinned; Herdr appends fourth. Existing Cathedral Bible
+  targets and approved runtime goldens are not rewritten or promoted by this plan.
+
 ## Status values
 
 TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED (with one-line rationale)

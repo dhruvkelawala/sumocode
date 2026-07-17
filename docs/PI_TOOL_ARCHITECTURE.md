@@ -45,7 +45,7 @@ vanilla Pi.
 | Tool         | Source                         | Purpose                      |
 |--------------|--------------------------------|------------------------------|
 | `task`       | `src/native-task-tool.ts`       | Run isolated Pi subprocess tasks and stream structured scroll/scribe state |
-| `bg_task`    | `src/background-tasks/`        | Spawn non-blocking shell tasks; `visible=true` opens a cmux split pane   |
+| `bg_task`    | `src/background-tasks/`        | Spawn non-blocking shell tasks; `visible=true` opens a terminal-host split pane (cmux or herdr) |
 
 ### 4. SumoCode Extension Hooks
 

@@ -156,7 +156,7 @@ describe("/sumo:review", () => {
 	});
 
 	describe("registerReviewCommand", () => {
-		function setup(taskSpawner = { spawnTask: vi.fn(() => ({ id: "bg-42", cmux: { surfaceRef: "surface:2", workspaceRef: "workspace:1" } })) }) {
+		function setup(taskSpawner = { spawnTask: vi.fn(() => ({ id: "bg-42", pane: { host: "cmux" as const, paneId: "surface:2", workspaceId: "workspace:1" } })) }) {
 			let handler: ((args: string, ctx: { hasUI: boolean; cwd: string; ui: { notify: ReturnType<typeof vi.fn> } }) => Promise<void>) | undefined;
 			const sendUserMessage = vi.fn();
 			const registerCommand = vi.fn((_name: string, options: { handler: typeof handler }) => {
@@ -189,7 +189,7 @@ describe("/sumo:review", () => {
 				thinking: "xhigh",
 				notifyOnExit: true,
 			}));
-			expect(notify).toHaveBeenCalledWith(expect.stringContaining("review started: bg-42"), "info");
+			expect(notify).toHaveBeenCalledWith(expect.stringContaining("review started: bg-42 · cmux surface:2"), "info");
 			expect(notify).toHaveBeenCalledWith(expect.stringContaining("bg_task action=log id=bg-42"), "info");
 		});
 

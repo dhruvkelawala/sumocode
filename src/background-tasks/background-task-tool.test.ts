@@ -1,3 +1,6 @@
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { installBackgroundTasks } from "./background-task-tool.js";
 
@@ -20,8 +23,11 @@ describe("installBackgroundTasks", () => {
 	it("returns successful at_capacity result instead of throwing when agent cap is full", async () => {
 		const originalSurface = process.env.CMUX_SURFACE_ID;
 		const originalCapacity = process.env.SUMOCODE_BG_AGENT_CAPACITY;
+		const originalTmpdir = process.env.TMPDIR;
+		const isolatedTmpdir = await mkdtemp(join(tmpdir(), "sumocode-bg-task-test-"));
 		process.env.CMUX_SURFACE_ID = "surface:1";
 		process.env.SUMOCODE_BG_AGENT_CAPACITY = "1";
+		process.env.TMPDIR = isolatedTmpdir;
 		try {
 			const cmuxSplit = await import("../commands/cmux-split.js");
 			vi.spyOn(cmuxSplit, "openCommandInNewSplitWithRefs").mockResolvedValue({
@@ -62,13 +68,16 @@ describe("installBackgroundTasks", () => {
 				action: "spawn",
 				status: "at_capacity",
 				capacity: 1,
-				runningCount: 1,
 			});
+			expect((result?.details as { runningCount?: number } | undefined)?.runningCount).toBe(1);
 		} finally {
 			if (originalSurface === undefined) delete process.env.CMUX_SURFACE_ID;
 			else process.env.CMUX_SURFACE_ID = originalSurface;
 			if (originalCapacity === undefined) delete process.env.SUMOCODE_BG_AGENT_CAPACITY;
 			else process.env.SUMOCODE_BG_AGENT_CAPACITY = originalCapacity;
+			if (originalTmpdir === undefined) delete process.env.TMPDIR;
+			else process.env.TMPDIR = originalTmpdir;
+			await rm(isolatedTmpdir, { recursive: true, force: true });
 		}
 	});
 });

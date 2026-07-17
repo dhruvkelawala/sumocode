@@ -19,15 +19,15 @@ vi.mock("node:child_process", () => ({
 	spawn: spawnMock,
 }));
 
-function buildPiStub() {
+function buildPiStub(execImpl?: (cmd: string, args: string[], opts?: unknown) => Promise<{ code: number; stdout: string; stderr: string; killed: boolean }>) {
 	return {
 		sendUserMessage: vi.fn(),
-		exec: vi.fn(async (_cmd: string, _args: string[], _opts?: unknown) => ({
+		exec: vi.fn(execImpl ?? (async (_cmd: string, _args: string[], _opts?: unknown) => ({
 			code: 0,
 			stdout: "",
 			stderr: "",
 			killed: false,
-		})),
+		}))),
 	};
 }
 
@@ -99,6 +99,8 @@ describe("BackgroundTaskManager", () => {
 	let originalTmpdir: string | undefined;
 	let originalAgentModel: string | undefined;
 	let originalAgentThinking: string | undefined;
+	let originalHerdrEnv: string | undefined;
+	let originalHerdrPane: string | undefined;
 
 	beforeEach(() => {
 		spawnMock.mockReset();
@@ -110,12 +112,16 @@ describe("BackgroundTaskManager", () => {
 		process.env.TMPDIR = baseDir;
 		originalAgentModel = process.env.SUMOCODE_BG_AGENT_MODEL;
 		originalAgentThinking = process.env.SUMOCODE_BG_AGENT_THINKING;
+		originalHerdrEnv = process.env.HERDR_ENV;
+		originalHerdrPane = process.env.HERDR_PANE_ID;
 		delete process.env.CMUX_WORKSPACE_ID;
+		delete process.env.HERDR_ENV;
+		delete process.env.HERDR_PANE_ID;
 		delete process.env.SUMOCODE_BG_AGENT_MODEL;
 		delete process.env.SUMOCODE_BG_AGENT_THINKING;
 	});
 
-	function restoreEnv(name: "CMUX_SURFACE_ID" | "TMPDIR" | "SUMOCODE_BG_AGENT_MODEL" | "SUMOCODE_BG_AGENT_THINKING", value: string | undefined): void {
+	function restoreEnv(name: "CMUX_SURFACE_ID" | "TMPDIR" | "SUMOCODE_BG_AGENT_MODEL" | "SUMOCODE_BG_AGENT_THINKING" | "HERDR_ENV" | "HERDR_PANE_ID", value: string | undefined): void {
 		if (value === undefined) {
 			delete process.env[name];
 		} else {
@@ -130,6 +136,8 @@ describe("BackgroundTaskManager", () => {
 		restoreEnv("TMPDIR", originalTmpdir);
 		restoreEnv("SUMOCODE_BG_AGENT_MODEL", originalAgentModel);
 		restoreEnv("SUMOCODE_BG_AGENT_THINKING", originalAgentThinking);
+		restoreEnv("HERDR_ENV", originalHerdrEnv);
+		restoreEnv("HERDR_PANE_ID", originalHerdrPane);
 	});
 
 	it("spawns invisible tasks via shell-redirect to logFile (detached survives parent teardown)", async () => {
@@ -187,7 +195,7 @@ describe("BackgroundTaskManager", () => {
 		expect(task.metaFile).toBeDefined();
 		expect(existsSync(task.metaFile!)).toBe(true);
 		const initial = JSON.parse(readFileSync(task.metaFile!, "utf8"));
-		expect(initial.schemaVersion).toBe(2);
+		expect(initial.schemaVersion).toBe(3);
 		expect(initial.id).toBe(task.id);
 		expect(initial.pid).toBe(4242);
 		expect(initial.processStartTime).toBe("Mon Jun  1 10:00:00 2026");
@@ -280,7 +288,7 @@ describe("BackgroundTaskManager", () => {
 				cwd: "/tmp/project",
 				visible: true,
 			}),
-		).toThrow(/cmux surface/i);
+		).toThrow(/terminal host/i);
 	});
 
 	it("polls visible task exit marker files", async () => {
@@ -301,9 +309,12 @@ describe("BackgroundTaskManager", () => {
 		});
 
 		await vi.waitFor(() => {
-			expect(task.cmux).toEqual({ workspaceRef: "workspace:1", surfaceRef: "surface:2" });
+			expect(task.pane).toEqual({ host: "cmux", workspaceId: "workspace:1", paneId: "surface:2" });
 		});
 		expect(task.exitFile).toBeDefined();
+		const persisted = JSON.parse(readFileSync(task.metaFile!, "utf8")) as Record<string, unknown>;
+		expect(persisted.pane).toEqual({ host: "cmux", workspaceId: "workspace:1", paneId: "surface:2" });
+		expect(persisted).not.toHaveProperty("cmux");
 		const scriptFile = task.exitFile!.replace("exit.code", "run.sh");
 		expect(existsSync(scriptFile)).toBe(true);
 		expect(readFileSync(scriptFile, "utf8")).toContain("pnpm test");
@@ -312,6 +323,26 @@ describe("BackgroundTaskManager", () => {
 		await vi.waitFor(() => {
 			expect(task.status).toBe("completed");
 		});
+	});
+
+	it("stores herdr pane refs and closes them on stop", async () => {
+		delete process.env.CMUX_SURFACE_ID;
+		process.env.HERDR_ENV = "1";
+		process.env.HERDR_PANE_ID = "w1:p1";
+		const calls: Array<[string, string[]]> = [];
+		const pi = buildPiStub(async (cmd, args) => {
+			calls.push([cmd, args]);
+			if (cmd === "herdr" && args[0] === "agent") {
+				return { code: 0, stdout: JSON.stringify({ result: { agent: { pane_id: "w1:p2", workspace_id: "w1" } } }), stderr: "", killed: false };
+			}
+			return { code: 0, stdout: "", stderr: "", killed: false };
+		});
+		const manager = new BackgroundTaskManager(pi as never);
+		const task = manager.spawnTask({ command: "pnpm test", cwd: "/tmp/project", visible: true, notifyOnExit: false });
+		await vi.waitFor(() => expect(task.pane).toEqual({ host: "herdr", paneId: "w1:p2", workspaceId: "w1" }));
+		const result = await manager.stopTask(task);
+		expect(result.ok).toBe(true);
+		expect(calls).toContainEqual(["herdr", ["pane", "close", "w1:p2"]]);
 	});
 
 	it("writes prompt.txt and launches sumocode with --prompt-file so the cmux command stays short", async () => {
@@ -336,7 +367,7 @@ describe("BackgroundTaskManager", () => {
 		});
 
 		await vi.waitFor(() => {
-			expect(task.cmux).toEqual({ workspaceRef: "workspace:1", surfaceRef: "surface:2" });
+			expect(task.pane).toEqual({ host: "cmux", workspaceId: "workspace:1", paneId: "surface:2" });
 		});
 
 		// The cmux respawn command embeds the prompt-file PATH, never the prompt text.
@@ -401,7 +432,7 @@ describe("BackgroundTaskManager", () => {
 		});
 
 		await vi.waitFor(() => {
-			expect(task.cmux).toBeDefined();
+			expect(task.pane).toBeDefined();
 		});
 
 		const respawnArg = openSplit.mock.calls[0]?.[2] as string;
@@ -433,7 +464,7 @@ describe("BackgroundTaskManager", () => {
 		});
 
 		await vi.waitFor(() => {
-			expect(task.cmux).toBeDefined();
+			expect(task.pane).toBeDefined();
 		});
 
 		const respawnArg = openSplit.mock.calls[0]?.[2] as string;
@@ -463,7 +494,7 @@ describe("BackgroundTaskManager", () => {
 			title: "agent one",
 			notifyOnExit: false,
 		});
-		await vi.waitFor(() => expect(first.cmux).toBeDefined());
+		await vi.waitFor(() => expect(first.pane).toBeDefined());
 
 		let capacityError: unknown;
 		try {
@@ -518,7 +549,7 @@ describe("BackgroundTaskManager", () => {
 			title: "review",
 			notifyOnExit: false,
 		});
-		await vi.waitFor(() => expect(task.cmux).toBeDefined());
+		await vi.waitFor(() => expect(task.pane).toBeDefined());
 
 		expect(create).toHaveBeenCalledWith({ repoRoot: "/repo", branch: "sumo/review", baseRef: "HEAD", path: "/repo.sumo-worktrees/sumo__review" });
 		expect(task.cwd).toBe("/repo.sumo-worktrees/sumo__review");
@@ -583,7 +614,7 @@ describe("BackgroundTaskManager", () => {
 			notifyOnExit: false,
 		});
 
-		await vi.waitFor(() => expect(task.cmux).toBeDefined());
+		await vi.waitFor(() => expect(task.pane).toBeDefined());
 		expect(task.status).toBe("running");
 
 		// Simulate the child writing response.md on agent_end. The task must not
@@ -628,7 +659,7 @@ describe("BackgroundTaskManager", () => {
 				notifyOnExit: true,
 			});
 
-			await vi.waitFor(() => expect(task.cmux).toBeDefined());
+			await vi.waitFor(() => expect(task.pane).toBeDefined());
 			writeFileSync(task.responseFile!, "done\n");
 			writeFileSync(task.exitFile!, "0\n");
 
@@ -673,7 +704,7 @@ describe("BackgroundTaskManager", () => {
 			runner: "sumocode",
 			notifyOnExit: false,
 		});
-		await vi.waitFor(() => expect(task.cmux).toBeDefined());
+		await vi.waitFor(() => expect(task.pane).toBeDefined());
 
 		// Before response is written
 		let harvest = manager.getTaskHarvest(task);
@@ -844,7 +875,7 @@ describe("BackgroundTaskManager", () => {
 			runner: "sumocode",
 			notifyOnExit: false,
 		});
-		await vi.waitFor(() => expect(task.cmux).toBeDefined());
+		await vi.waitFor(() => expect(task.pane).toBeDefined());
 
 		const result = await manager.stopTask(task);
 		expect(result.ok).toBe(false);
@@ -871,7 +902,7 @@ describe("BackgroundTaskManager", () => {
 			runner: "sumocode",
 			notifyOnExit: false,
 		});
-		await vi.waitFor(() => expect(task.cmux).toBeDefined());
+		await vi.waitFor(() => expect(task.pane).toBeDefined());
 
 		// While running with no response.md: ready=false (poll again).
 		let harvest = manager.getTaskHarvest(task);
@@ -1434,6 +1465,7 @@ describe("BackgroundTaskManager", () => {
 
 		expect(task?.status).toBe("completed");
 		expect(task?.exitCode).toBe(0);
+		expect(task?.pane).toEqual({ host: "cmux", workspaceId: "workspace:1", paneId: "surface:2" });
 		expect(manager.getTaskHarvest(task!, 1000)).toMatchObject({ kind: "response", content: "final answer\n", ready: true });
 	});
 

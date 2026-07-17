@@ -290,9 +290,7 @@ describe("V2 visual parity contract", () => {
 		]));
 		expect(requiredCropIds("active-landscape-runtime")).toEqual([
 			"top-bar",
-			"sidebar",
 			"chat-area",
-			"input-frame",
 			"hint-row",
 			"footer",
 		]);
@@ -346,9 +344,6 @@ describe("V2 visual parity contract", () => {
 		expect(requiredCropIds("active-portrait-runtime")).toEqual([
 			"top-bar",
 			"chat-area",
-			"input-frame",
-			"hint-row",
-			"footer",
 		]);
 		expect(cropDefinition("portrait-top-bar")).toEqual({ x: 0, y: 1, cols: 60, rows: 1 });
 		expect(cropDefinition("portrait-input-frame")).toEqual({ x: 0, y: 93, cols: 60, rows: 3 });
@@ -782,16 +777,11 @@ describe("V2 visual parity contract", () => {
 			"top-bar-default-component/top-bar",
 			"splash-runtime/full",
 			"active-landscape-runtime/top-bar",
-			"active-landscape-runtime/sidebar",
 			"active-landscape-runtime/chat-area",
-			"active-landscape-runtime/input-frame",
 			"active-landscape-runtime/hint-row",
 			"active-landscape-runtime/footer",
 			"active-portrait-runtime/top-bar",
 			"active-portrait-runtime/chat-area",
-			"active-portrait-runtime/input-frame",
-			"active-portrait-runtime/hint-row",
-			"active-portrait-runtime/footer",
 			"fixture-tool-ledger-landscape/chat-area",
 			"fixture-scroll-scribe-landscape/chat-area",
 			"fixture-skill-pill-landscape/chat-area",

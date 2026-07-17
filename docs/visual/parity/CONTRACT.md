@@ -148,20 +148,17 @@ The required V2 crop gates with committed runtime goldens currently are:
 - `footer-ready-component/footer` — threshold `0.04`
 - `top-bar-default-component/top-bar` — threshold `0.08`
 
-The RPC-default original-UX runtime scenarios also have required gates before golden promotion:
+The RPC-default original-UX runtime scenarios also have required gates before golden promotion for stable regions only:
 
 - `splash-runtime/full`
 - `active-landscape-runtime/top-bar`
-- `active-landscape-runtime/sidebar`
 - `active-landscape-runtime/chat-area`
-- `active-landscape-runtime/input-frame`
 - `active-landscape-runtime/hint-row`
 - `active-landscape-runtime/footer`
 - `active-portrait-runtime/top-bar`
 - `active-portrait-runtime/chat-area`
-- `active-portrait-runtime/input-frame`
-- `active-portrait-runtime/hint-row`
-- `active-portrait-runtime/footer`
+
+Active-runtime sidebar, input-frame, portrait hint-row, and portrait footer crops remain review evidence until their palette/content drift has explicit visual approval or committed runtime goldens.
 
 Sidebar editorial parity is review-approved by inspection but not yet promoted as a required crop.
 

@@ -1,5 +1,30 @@
 import { describe, expect, it, vi } from "vitest";
 import { parseWorktreeArgs, registerWorktreeCommand } from "./worktree.js";
+import type { TerminalHost, TerminalHostKind } from "../terminal-host/index.js";
+
+type OpenSplitMock = ReturnType<typeof vi.fn>;
+type OpenCurrentMock = ReturnType<typeof vi.fn>;
+
+function makeTerminalHost(openSplit: OpenSplitMock = vi.fn(async () => ({ ok: true as const })), openCurrent?: OpenCurrentMock, kind: TerminalHostKind = "cmux"): TerminalHost {
+	return {
+		kind,
+		openCommandInSplit: async (pi: never, direction: "right" | "down", options: { shellCommand: string }) => {
+			const result = await (openSplit as unknown as (pi: never, direction: "right" | "down", command: string) => Promise<{ ok: true } | { ok: false; error: string }>)(pi, direction, options.shellCommand);
+			const paneHost = kind === "herdr" ? "herdr" as const : "cmux" as const;
+			return result.ok ? { ok: true as const, pane: { host: paneHost, paneId: "legacy" } } : result;
+		},
+		replaceCurrentPane: openCurrent ? async (pi: never, options: { shellCommand: string }) => (openCurrent as unknown as (pi: never, command: string) => Promise<{ ok: true } | { ok: false; error: string }>)(pi, options.shellCommand) : undefined,
+		closePane: vi.fn(async () => ({ ok: true as const })),
+		notify: vi.fn(async () => undefined),
+	};
+}
+
+const noneHost = {
+	kind: "none" as const,
+	openCommandInSplit: vi.fn(async () => ({ ok: false as const, error: "requires a terminal host (cmux or herdr)" })),
+	closePane: vi.fn(async () => ({ ok: false as const, error: "requires a terminal host (cmux or herdr)" })),
+	notify: vi.fn(async () => undefined),
+};
 
 function makePi() {
 	let handler: ((args: string | undefined, ctx: {
@@ -37,8 +62,7 @@ describe("/sumo:worktree", () => {
 		const notify = vi.fn();
 		registerWorktreeCommand(pi as never, {
 			create,
-			openSplit,
-			isInCmux: () => true,
+			terminalHost: makeTerminalHost(openSplit),
 			terminalSize: () => ({ columns: 80, rows: 120 }),
 			setupAction: "pnpm install",
 		});
@@ -63,7 +87,7 @@ describe("/sumo:worktree", () => {
 		const { pi, handler } = makePi();
 		const create = vi.fn(async () => ({ ok: true as const, path: "/repo.wt/sumo__task", branch: "sumo/task", baseRef: "origin/main" }));
 		const openSplit = vi.fn(async () => ({ ok: true as const }));
-		registerWorktreeCommand(pi as never, { create, openSplit, isInCmux: () => true, setupAction: "" });
+		registerWorktreeCommand(pi as never, { create, terminalHost: makeTerminalHost(openSplit), setupAction: "" });
 
 		await handler()?.("--base origin/main ship v0.4", { hasUI: true, cwd: "/repo", ui: { notify: vi.fn() } });
 
@@ -80,8 +104,7 @@ describe("/sumo:worktree", () => {
 		const notify = vi.fn();
 		registerWorktreeCommand(pi as never, {
 			create,
-			openSplit,
-			isInCmux: () => true,
+			terminalHost: makeTerminalHost(openSplit),
 			terminalSize: () => ({ columns: 160, rows: 50 }),
 			setupAction: "pnpm install",
 		});
@@ -107,9 +130,7 @@ describe("/sumo:worktree", () => {
 		const openSplit = vi.fn(async () => ({ ok: true as const }));
 		registerWorktreeCommand(pi as never, {
 			create,
-			openCurrent,
-			openSplit,
-			isInCmux: () => true,
+			terminalHost: makeTerminalHost(openSplit, openCurrent),
 			setupAction: "pnpm install",
 		});
 
@@ -125,15 +146,36 @@ describe("/sumo:worktree", () => {
 		expect(openSplit).not.toHaveBeenCalled();
 	});
 
+	it("falls back to opening a herdr split for a fresh worktree launched from the splash", async () => {
+		const { pi, handler } = makePi();
+		const create = vi.fn(async () => ({ ok: true as const, path: "/repo.wt/sumo__fresh", branch: "sumo/fresh", baseRef: "HEAD" }));
+		const openSplit = vi.fn(async () => ({ ok: true as const }));
+		registerWorktreeCommand(pi as never, {
+			create,
+			terminalHost: makeTerminalHost(openSplit, undefined, "herdr"),
+			setupAction: "pnpm install",
+		});
+
+		await handler()?.("new fresh", {
+			hasUI: true,
+			cwd: "/repo",
+			ui: { notify: vi.fn() },
+			sessionManager: { getBranch: () => [] },
+		});
+
+		expect(create).toHaveBeenCalledWith({ repoRoot: "/repo", task: "fresh", baseRef: "HEAD" });
+		expect(openSplit).toHaveBeenCalledWith(pi, "right", expect.stringMatching(/^bash -lc /));
+		expect((openSplit.mock.calls[0] as unknown[] | undefined)?.[2]).toContain("/repo.wt/sumo__fresh");
+	});
+
 	it("warns without falling back to a split when current-pane replacement fails", async () => {
 		const { pi, handler } = makePi();
 		const openSplit = vi.fn(async () => ({ ok: true as const }));
 		const notify = vi.fn();
+		const openCurrent = vi.fn(async () => ({ ok: false as const, error: "respawn failed" }));
 		registerWorktreeCommand(pi as never, {
 			create: vi.fn(async () => ({ ok: true as const, path: "/repo.wt/sumo__fresh", branch: "sumo/fresh", baseRef: "HEAD" })),
-			openCurrent: vi.fn(async () => ({ ok: false as const, error: "respawn failed" })),
-			openSplit,
-			isInCmux: () => true,
+			terminalHost: makeTerminalHost(openSplit, openCurrent),
 		});
 
 		await handler()?.("new fresh", {
@@ -152,8 +194,7 @@ describe("/sumo:worktree", () => {
 		const create = vi.fn(async () => ({ ok: true as const, path: "/repo.wt/sumo__fix-scroll", branch: "sumo/fix-scroll", baseRef: "origin/main" }));
 		registerWorktreeCommand(pi as never, {
 			create,
-			openSplit: vi.fn(async () => ({ ok: true as const })),
-			isInCmux: () => true,
+			terminalHost: makeTerminalHost(),
 		});
 
 		await handler()?.("new fix-scroll --base origin/main", {
@@ -170,18 +211,18 @@ describe("/sumo:worktree", () => {
 		const { pi, handler } = makePi();
 		const create = vi.fn();
 		const notify = vi.fn();
-		registerWorktreeCommand(pi as never, { create: create as never, isInCmux: () => false });
+		registerWorktreeCommand(pi as never, { create: create as never, terminalHost: noneHost });
 
 		await handler()?.("do work", { hasUI: true, cwd: "/repo", ui: { notify } });
 
 		expect(create).not.toHaveBeenCalled();
-		expect(notify).toHaveBeenCalledWith("/sumo:worktree requires a cmux surface", "warning");
+		expect(notify).toHaveBeenCalledWith("/sumo:worktree requires a terminal host (cmux or herdr)", "warning");
 	});
 
 	it("guards fresh and reopen sessions before touching worktrees", async () => {
 		const noUi = makePi();
 		const create = vi.fn();
-		registerWorktreeCommand(noUi.pi as never, { create: create as never, isInCmux: () => true });
+		registerWorktreeCommand(noUi.pi as never, { create: create as never, terminalHost: makeTerminalHost() });
 
 		await noUi.handler()?.("", { hasUI: false, cwd: "/repo", ui: { notify: vi.fn() } });
 
@@ -191,12 +232,12 @@ describe("/sumo:worktree", () => {
 		const outsideCmux = makePi();
 		const list = vi.fn();
 		const notify = vi.fn();
-		registerWorktreeCommand(outsideCmux.pi as never, { list: list as never, isInCmux: () => false });
+		registerWorktreeCommand(outsideCmux.pi as never, { list: list as never, terminalHost: noneHost });
 
 		await outsideCmux.handler()?.("open sumo/one", { hasUI: true, cwd: "/repo", ui: { notify } });
 
 		expect(list).not.toHaveBeenCalled();
-		expect(notify).toHaveBeenCalledWith("/sumo:worktree requires a cmux surface", "warning");
+		expect(notify).toHaveBeenCalledWith("/sumo:worktree requires a terminal host (cmux or herdr)", "warning");
 	});
 
 	it.each([
@@ -216,8 +257,7 @@ describe("/sumo:worktree", () => {
 					{ path: "/repo.wt/sumo__one", branch: "sumo/one", head: "abc", detached: false },
 				],
 			})),
-			openSplit,
-			isInCmux: () => true,
+			terminalHost: makeTerminalHost(openSplit),
 			setupAction: "pnpm install",
 		});
 
@@ -238,7 +278,7 @@ describe("/sumo:worktree", () => {
 				ok: true as const,
 				worktrees: [{ path: "/repo.wt/sumo__one", branch: "sumo/one", head: "abc", detached: false }],
 			})),
-			isInCmux: () => true,
+			terminalHost: makeTerminalHost(),
 		});
 
 		await handler()?.("open sumo/missing", { hasUI: true, cwd: "/repo", ui: { notify } });
@@ -251,7 +291,7 @@ describe("/sumo:worktree", () => {
 		const { pi, handler } = makePi();
 		const list = vi.fn();
 		const notify = vi.fn();
-		registerWorktreeCommand(pi as never, { list: list as never, isInCmux: () => true });
+		registerWorktreeCommand(pi as never, { list: list as never, terminalHost: makeTerminalHost() });
 
 		await handler()?.(args, { hasUI: true, cwd: "/repo", ui: { notify } });
 

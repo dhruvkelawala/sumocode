@@ -16,11 +16,8 @@ import {
 } from "node:fs";
 import { dirname, join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import {
-	isInCmux,
-	openCommandInNewSplitWithRefs,
-	type SplitDirection as CmuxSplitDirection,
-} from "../commands/cmux-split.js";
+import type { SplitDirection as CmuxSplitDirection } from "../terminal-host/index.js";
+import { detectTerminalHost, getTerminalHost, getTerminalHostForPane } from "../terminal-host/index.js";
 import { createWorktree, removeWorktreeSync, resolveCreateOptions } from "../git/worktree.js";
 import {
 	BACKGROUND_TASK_META_SCHEMA_VERSION,
@@ -350,7 +347,7 @@ function signalProcessOrGroup(pid: number, signal: NodeJS.Signals): void {
 function parseRecoveredTask(raw: unknown, metaFile: string): InternalTask | undefined {
 	if (!raw || typeof raw !== "object") return undefined;
 	const snapshot = raw as Partial<BackgroundTaskSnapshot>;
-	if (snapshot.schemaVersion !== BACKGROUND_TASK_META_SCHEMA_VERSION) return undefined;
+	if (snapshot.schemaVersion !== BACKGROUND_TASK_META_SCHEMA_VERSION && snapshot.schemaVersion !== 2) return undefined;
 	const status = snapshot.status;
 	if (status !== "running" && status !== "completed" && status !== "failed" && status !== "stopped") return undefined;
 	if (
@@ -365,6 +362,7 @@ function parseRecoveredTask(raw: unknown, metaFile: string): InternalTask | unde
 	) {
 		return undefined;
 	}
+	const pane = snapshot.pane ?? (snapshot.cmux ? { host: "cmux" as const, workspaceId: snapshot.cmux.workspaceRef, paneId: snapshot.cmux.surfaceRef } : undefined);
 	return {
 		id: snapshot.id,
 		pid: snapshot.pid,
@@ -387,7 +385,7 @@ function parseRecoveredTask(raw: unknown, metaFile: string): InternalTask | unde
 		runner: snapshot.runner,
 		model: snapshot.model,
 		thinking: snapshot.thinking,
-		cmux: snapshot.cmux,
+		pane,
 		worktree: snapshot.worktree,
 		notifyOnExit: snapshot.notifyOnExit === true,
 	};
@@ -533,10 +531,10 @@ export class BackgroundTaskManager {
 		return tasks
 			.map((task) => {
 				const label = task.title ?? task.command;
-				const cmux = task.cmux ? ` · cmux ${task.cmux.surfaceRef}` : "";
+				const pane = task.pane ? ` · ${task.pane.host} ${task.pane.paneId}` : "";
 				const worktree = task.worktree ? ` · ${task.worktree.branch}` : "";
 				const pid = task.pid != null ? ` · pid ${task.pid}` : "";
-				return `${task.id} · ${summarizeStatus(task)}${pid}${cmux}${worktree} · ${label}`;
+				return `${task.id} · ${summarizeStatus(task)}${pid}${pane}${worktree} · ${label}`;
 			})
 			.join("\n");
 	}
@@ -586,8 +584,8 @@ export class BackgroundTaskManager {
 				`runner='sumocode' requires visible=true — agent prompts cannot be executed as shell commands. Set visible=true or use runner='shell' for shell commands.`,
 			);
 		}
-		if (visible && !isInCmux()) {
-			throw new Error("visible background tasks require a cmux surface (CMUX_SURFACE_ID or CMUX_WORKSPACE_ID)");
+		if (visible && detectTerminalHost() === "none") {
+			throw new Error("visible background tasks require a terminal host (cmux or herdr)");
 		}
 		this.assertAgentCapacityAvailable(runner);
 
@@ -789,9 +787,10 @@ export class BackgroundTaskManager {
 			thinking: task.thinking,
 		});
 
-		const splitResult = await openCommandInNewSplitWithRefs(this.pi, direction, respawnCommand);
+		const host = getTerminalHost();
+		const splitResult = await host.openCommandInSplit(this.pi, direction, { cwd: task.cwd, shellCommand: respawnCommand });
 		if (!splitResult.ok) {
-			appendLogLine(task.logFile, `\n[cmux error] ${splitResult.error}\n`);
+			appendLogLine(task.logFile, `\n[terminal-host error] ${splitResult.error}\n`);
 			this.finalizeTask(task, 1, "self-exit");
 			return;
 		}
@@ -799,17 +798,7 @@ export class BackgroundTaskManager {
 			// Stop arrived while we were waiting for cmux. Close the surface we
 			// just created so it doesn't become orphaned, then finalize stopped.
 			try {
-				await this.pi.exec(
-					"cmux",
-					[
-						"close-surface",
-						"--workspace",
-						splitResult.workspaceRef,
-						"--surface",
-						splitResult.surfaceRef,
-					],
-					{ timeout: 5000 },
-				);
+				await host.closePane(this.pi, splitResult.pane);
 			} catch {
 				// best-effort
 			}
@@ -817,10 +806,7 @@ export class BackgroundTaskManager {
 			return;
 		}
 
-		task.cmux = {
-			workspaceRef: splitResult.workspaceRef,
-			surfaceRef: splitResult.surfaceRef,
-		};
+		task.pane = splitResult.pane;
 		task.updatedAt = Date.now();
 		writeTaskMeta(task);
 
@@ -981,7 +967,7 @@ export class BackgroundTaskManager {
 			// (across workspaces and reloads) WITHOUT waking the agent. Fires for every
 			// terminal self-exit, including fire-and-forget tasks and during startup
 			// recovery.
-			this.fireCmuxNotify(task);
+			this.fireHostNotify(task);
 
 			// Active wake: inject a follow-up turn so the orchestrator agent reacts to
 			// the result (e.g. to continue chained background work). Opt-in only —
@@ -989,8 +975,8 @@ export class BackgroundTaskManager {
 			// it would wake the agent for a task the user never started this session.
 			if (task.notifyOnExit && !this.recovering) {
 				const label = task.title ?? task.command;
-				const cmuxHint = task.cmux ? ` (cmux ${task.cmux.surfaceRef})` : "";
-				const message = buildBackgroundTaskWakeMessage(task.id, summarizeStatus(task), label, cmuxHint);
+				const paneHint = task.pane ? ` (${task.pane.host} ${task.pane.paneId})` : "";
+				const message = buildBackgroundTaskWakeMessage(task.id, summarizeStatus(task), label, paneHint);
 				try {
 					this.pi.sendUserMessage(message, { deliverAs: "followUp" });
 				} catch {
@@ -1001,26 +987,17 @@ export class BackgroundTaskManager {
 	}
 
 	/**
-	 * Surface task completion through cmux so the user sees it across workspaces
-	 * and across SumoCode session reloads. `pi.sendUserMessage` only reaches the
-	 * orchestrator while it's alive in this process; `cmux notify` survives.
-	 * Best-effort, fire-and-forget — never throws into the finalize path.
+	 * Surface task completion through the active terminal host so the user sees
+	 * it across workspaces and SumoCode session reloads. Best-effort,
+	 * fire-and-forget — never throws into the finalize path.
 	 */
-	private fireCmuxNotify(task: BackgroundTask): void {
-		if (!isInCmux()) return;
+	private fireHostNotify(task: BackgroundTask): void {
+		const host = task.pane ? getTerminalHostForPane(task.pane) : getTerminalHost();
+		if (host.kind === "none") return;
 		const status = summarizeStatus(task);
 		const title = `bg-task ${task.id} · ${status}`;
 		const body = task.title ?? task.command;
-		const args: string[] = ["notify", "--title", title, "--body", body];
-		if (task.cmux?.workspaceRef) {
-			args.push("--workspace", task.cmux.workspaceRef);
-		}
-		if (task.cmux?.surfaceRef) {
-			args.push("--surface", task.cmux.surfaceRef);
-		}
-		void this.pi
-			.exec("cmux", args, { timeout: 5000 })
-			.catch(() => undefined);
+		void host.notify(this.pi, title, body, task.pane).catch(() => undefined);
 	}
 
 	async stopTask(
@@ -1035,7 +1012,7 @@ export class BackgroundTaskManager {
 		// coroutine checks stopRequested at every yield point and closes its own
 		// surface if it created one.
 		task.stopRequested = true;
-		if (task.visible && task.spawnPromise && !task.finalized && !task.cmux) {
+		if (task.visible && task.spawnPromise && !task.finalized && !task.pane) {
 			try {
 				await task.spawnPromise;
 			} catch {
@@ -1096,31 +1073,24 @@ export class BackgroundTaskManager {
 			return { ok: true, message: `Stopped background task ${task.id} (pid ${task.pid}).` };
 		}
 
-		if (task.visible && task.cmux) {
-			const result = await this.pi
-				.exec(
-					"cmux",
-					["close-surface", "--workspace", task.cmux.workspaceRef, "--surface", task.cmux.surfaceRef],
-					{ timeout: 5000 },
-				)
-				.catch((error: unknown) => ({
-					code: -1,
-					stdout: "",
-					stderr: error instanceof Error ? error.message : String(error),
-					killed: false,
-				}));
-			if (result.code !== 0) {
+		if (task.visible && task.pane) {
+			const host = getTerminalHostForPane(task.pane);
+			const result = await host.closePane(this.pi, task.pane).catch((error: unknown) => ({
+				ok: false as const,
+				error: error instanceof Error ? error.message : String(error),
+			}));
+			if (!result.ok) {
 				task.stopRequested = false;
 				return {
 					ok: false,
-					message: `Failed to close cmux surface ${task.cmux.surfaceRef}: ${result.stderr || result.stdout || `cmux close-surface exited ${result.code}`}`,
+					message: `Failed to close ${task.pane.host} pane ${task.pane.paneId}: ${result.error}`,
 				};
 			}
 			this.finalizeTask(task, null, "stopped");
-			return { ok: true, message: `Stopped background task ${task.id} (closed cmux ${task.cmux.surfaceRef}).` };
+			return { ok: true, message: `Stopped background task ${task.id} (closed ${task.pane.host} ${task.pane.paneId}).` };
 		}
 
-		// No child process and no cmux ref — nothing to actually kill (rare).
+		// No child process and no pane ref — nothing to actually kill (rare).
 		this.finalizeTask(task, null, "stopped");
 		return { ok: true, message: `Stopped background task ${task.id} (no process attached).` };
 	}
@@ -1302,7 +1272,7 @@ export class BackgroundTaskManager {
 }
 
 export function isInCmuxEnvironment(): boolean {
-	return isInCmux();
+	return detectTerminalHost() === "cmux";
 }
 
 /** Test helper — remove stale lock/log dirs between tests. */

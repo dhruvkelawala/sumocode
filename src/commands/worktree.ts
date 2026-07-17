@@ -1,12 +1,6 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import {
-	buildShellCommand,
-	isInCmux,
-	openCommandInCurrentSurface,
-	openCommandInNewSplit,
-	shellEscape,
-	type SplitDirection,
-} from "./cmux-split.js";
+import { buildShellCommand, shellEscape } from "./cmux-split.js";
+import { getTerminalHost, type SplitDirection, type TerminalHost } from "../terminal-host/index.js";
 import { chooseDiffSplitDirection, type TerminalSize } from "./diff.js";
 import { sessionHasMessages } from "../session-cache.js";
 import {
@@ -25,9 +19,7 @@ export interface WorktreeCommandOptions {
 	readonly create?: typeof createWorktree;
 	readonly list?: typeof listWorktrees;
 	readonly remove?: typeof removeWorktree;
-	readonly openCurrent?: typeof openCommandInCurrentSurface;
-	readonly openSplit?: typeof openCommandInNewSplit;
-	readonly isInCmux?: typeof isInCmux;
+	readonly terminalHost?: TerminalHost;
 	readonly terminalSize?: () => TerminalSize;
 	readonly setupAction?: string;
 }
@@ -140,9 +132,7 @@ export function registerWorktreeCommand(pi: ExtensionAPI, options: WorktreeComma
 	const create = options.create ?? createWorktree;
 	const list = options.list ?? listWorktrees;
 	const remove = options.remove ?? removeWorktree;
-	const openCurrent = options.openCurrent ?? openCommandInCurrentSurface;
-	const openSplit = options.openSplit ?? openCommandInNewSplit;
-	const isInsideCmux = options.isInCmux ?? isInCmux;
+	const configuredTerminalHost = options.terminalHost;
 	const getTerminalSize = options.terminalSize ?? terminalSize;
 	const setupAction = options.setupAction ?? process.env.SUMOCODE_WORKTREE_SETUP ?? DEFAULT_SETUP_ACTION;
 
@@ -167,8 +157,9 @@ export function registerWorktreeCommand(pi: ExtensionAPI, options: WorktreeComma
 					notify(pi, ctx, "/sumo:worktree requires interactive UI", "warning");
 					return;
 				}
-				if (!isInsideCmux()) {
-					notify(pi, ctx, "/sumo:worktree requires a cmux surface", "warning");
+				const terminalHost = configuredTerminalHost ?? getTerminalHost();
+				if (terminalHost.kind === "none") {
+					notify(pi, ctx, "/sumo:worktree requires a terminal host (cmux or herdr)", "warning");
 					return;
 				}
 				if (parsed.mode === "reopen") {
@@ -194,7 +185,7 @@ export function registerWorktreeCommand(pi: ExtensionAPI, options: WorktreeComma
 					}
 					const direction: SplitDirection = chooseDiffSplitDirection(getTerminalSize());
 					const command = buildShellCommand(match.path, commandForFreshWorktree(setupAction));
-					const opened = await openSplit(pi, direction, command);
+					const opened = await terminalHost.openCommandInSplit(pi, direction, { cwd: match.path, shellCommand: command });
 					if (!opened.ok) {
 						notify(pi, ctx, `/sumo:worktree: ${opened.error}`, "warning");
 						return;
@@ -212,14 +203,14 @@ export function registerWorktreeCommand(pi: ExtensionAPI, options: WorktreeComma
 
 				const paneCommand = parsed.mode === "fresh" ? commandForFreshWorktree(setupAction) : commandForWorktree(parsed.value, setupAction);
 				const command = buildShellCommand(created.path, paneCommand);
-				if (parsed.mode === "fresh" && !sessionHasMessages(ctx)) {
-					const opened = await openCurrent(pi, command);
+				if (parsed.mode === "fresh" && !sessionHasMessages(ctx) && terminalHost.replaceCurrentPane) {
+					const opened = await terminalHost.replaceCurrentPane(pi, { cwd: created.path, shellCommand: command });
 					if (!opened.ok) notify(pi, ctx, `/sumo:worktree: ${opened.error}`, "warning");
 					return;
 				}
 
 				const direction: SplitDirection = chooseDiffSplitDirection(getTerminalSize());
-				const opened = await openSplit(pi, direction, command);
+				const opened = await terminalHost.openCommandInSplit(pi, direction, { cwd: created.path, shellCommand: command });
 				if (!opened.ok) {
 					notify(pi, ctx, `/sumo:worktree: ${opened.error}`, "warning");
 					return;

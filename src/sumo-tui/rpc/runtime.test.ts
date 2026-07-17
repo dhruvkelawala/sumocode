@@ -1059,8 +1059,8 @@ describe("RPC host retained runtime frame", () => {
 describe("RPC host terminal theme palette", () => {
 	afterEach(() => resetThemeRegistryForTests());
 
-	const HERDR_BG = "\x1b]11;#0B0B0F\x1b\\";
-	const HERDR_CURSOR = "\x1b]12;#00E5FF\x1b\\";
+	const HERDR_BG = "\x1b]11;#040704\x1b\\";
+	const HERDR_CURSOR = "\x1b]12;#39FF14\x1b\\";
 	const CATHEDRAL_BG = "\x1b]11;#1A1511\x1b\\";
 	const CATHEDRAL_CURSOR = "\x1b]12;#D97706\x1b\\";
 	const countOccurrences = (chunks: readonly string[], needle: string): number =>

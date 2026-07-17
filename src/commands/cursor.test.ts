@@ -58,7 +58,7 @@ describe("registerCursorCommand", () => {
 		registerCursorCommand({ registerCommand } as never, terminal);
 		await handler!("accent", { hasUI: true, ui: { notify } } as never);
 
-		expect(output.writes).toEqual(["\x1b]12;#00E5FF\x1b\\"]);
+		expect(output.writes).toEqual(["\x1b]12;#39FF14\x1b\\"]);
 		expect(terminal.getState().cursorColorOverridden).toBe(true);
 		expect(notify).toHaveBeenCalledWith("cursor color: theme accent", "info");
 	});
@@ -76,7 +76,7 @@ describe("registerCursorCommand", () => {
 		registerCursorCommand({ registerCommand } as never, terminal);
 		await handler!("orange", { hasUI: true, ui: { notify } } as never);
 
-		expect(output.writes).toEqual(["\x1b]12;#00E5FF\x1b\\"]);
+		expect(output.writes).toEqual(["\x1b]12;#39FF14\x1b\\"]);
 	});
 
 	it("/sumo:cursor reset restores the terminal default cursor color", async () => {

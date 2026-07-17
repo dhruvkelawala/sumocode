@@ -15,7 +15,7 @@ describe("/sumo:theme", () => {
 		expect(lines.map((line) => line.slice(2).split(" — ")[0])).toEqual(["cathedral", "amber-crt", "obsidian", "herdr"]);
 		expect(lines).toContain("* cathedral — 19th-century scriptorium: warm walnut, parchment foreground, burnt-orange accents.");
 		expect(lines.some((line) => line.startsWith("  obsidian"))).toBe(true);
-		expect(lines).toContain("  herdr — Operational terminal — cyan routing, mint readiness, sharp hacker chrome.");
+		expect(lines).toContain("  herdr — Electric-green operator terminal — phosphor focus, amber execution, sharp hacker chrome.");
 	});
 
 	it("registers a custom message renderer for theme results", () => {

@@ -16,39 +16,47 @@ export const HERDR_INDICATOR_FRAMES = [".", ":", "+", "*", "#", "%", "@", ">"] a
 export const HERDR_INDICATOR_INTERVAL_MS = 110;
 
 /**
- * Herdr Terminal — the operational agent-control SumoCode theme.
+ * Herdr Terminal — the electric-green operator-console SumoCode theme.
  *
- * Source of truth: docs/ui/stitch/herdr-terminal/DESIGN.md. Palette is
- * grounded in the active Herdr/Ghostty setup (`neon-blue-split-contrast`)
- * and Herdr's configured state colours, with `foregroundDim` adjusted above
- * ANSI grey for sustained-readability contrast.
+ * Source of truth: docs/ui/stitch/herdr-terminal/DESIGN.md. Palette is the
+ * approved v7 realignment, ported from the live Ghostty + Herdr canary
+ * (Mac Mini approval, MacBook parity). Host provenance values:
+ *   background #040704 · electric foreground/focus/cursor #39FF14 ·
+ *   active surface #0F3D17 · muted host green #1FA82F ·
+ *   amber #FFB000 · bright amber #FFD166 · error red #FF625F.
  *
- * Mood: near-black operational terminal. Neon is reserved for routing/focus
- * and state — cyan means active routing, mint means ready/healthy, gold means
- * execution, hot pink means interruption/danger. Body copy stays warm
- * off-white; metadata stays cool dim grey. No glow, no gradients, no green
- * body text — terminal restraint is part of the theme.
+ * SumoCode reproduces that visual language through the semantic theme
+ * contract. Two text colours are accessibility-safe derivatives of the host
+ * literals (which fail 4.5:1 on the lifted surface): `foregroundDim`/`idle`
+ * `#29B938` derives from host-muted `#1FA82F` (3.94:1 → 4.759:1), and
+ * `approval` `#FF706D` derives from host error `#FF625F` (4.21:1 → 4.582:1).
+ * Host literals remain valid for decorative/non-text use only.
+ *
+ * Mood: green-black operator terminal. Electric green is dominant across
+ * body, focus, frames and cursor; amber owns tools/warnings/learning; red
+ * owns approval/failure/interruption. No cyan/teal/blue/purple, no glow, no
+ * gradients — hierarchy comes from surface depth, weight, labels and chrome.
  */
 export const HERDR_THEME: Theme = {
 	name: "herdr",
 	displayName: "Herdr Terminal",
-	description: "Operational terminal — cyan routing, mint readiness, sharp hacker chrome.",
+	description: "Electric-green operator terminal — phosphor focus, amber execution, sharp hacker chrome.",
 	tokens: {
 		colors: {
-			background: "#0B0B0F",       // Ghostty background — terminal chassis
-			surface: "#0D0D14",          // Herdr unfocused pane fill
-			surfaceRecess: "#07090D",    // editor/input well
-			surfaceLifted: "#1A1A2E",    // Ghostty selection background — overlays/selected rows
-			foreground: "#F5EFE1",       // Ghostty foreground — warm readable body text
-			foregroundDim: "#8F96A8",    // cool operational metadata; adjusted above ANSI grey
-			divider: "#3A3A4A",          // Ghostty bright-black — decorative structure only
-			accent: "#00E5FF",           // Herdr active border / Ghostty cyan
+			background: "#040704",       // approved Ghostty chassis / OSC 11 value
+			surface: "#070C08",          // calm green-black content/sidebar plane
+			surfaceRecess: "#050905",    // input/editor well
+			surfaceLifted: "#0F3D17",    // approved active/selected surface
+			foreground: "#39FF14",       // approved electric-green body foreground
+			foregroundDim: "#29B938",    // text-safe derivative of host-muted #1FA82F
+			divider: "#176B22",          // decorative structure; never sole carrier of text/state
+			accent: "#39FF14",           // active frame, focus, cursor and routing
 			states: {
-				idle: "#4ECCA3",       // Herdr healthy / ready
-				thinking: "#00E5FF",   // active routing / focus
-				tool: "#FFD700",       // execution / warning gold
-				approval: "#FF3366",   // interruption / danger
-				learning: "#F1D77A",   // durable write / learned state
+				idle: "#29B938",       // ready/healthy, quieter than active focus
+				thinking: "#39FF14",   // active reasoning/routing
+				tool: "#FFB000",       // tool execution and warning
+				approval: "#FF706D",   // text-safe derivative of host error #FF625F
+				learning: "#FFD166",   // durable write / learned state / bright amber
 			},
 		},
 	},

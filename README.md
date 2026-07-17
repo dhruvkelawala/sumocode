@@ -44,7 +44,7 @@ Four themes ship: Cathedral (default), Amber CRT, Obsidian Temple, and Herdr Ter
 <br><strong>Obsidian Temple</strong>
 <br><sub>Deep obsidian background, electrum gold accent, neon cyan and magenta, Egyptian section glyphs.</sub>
 <br><br><strong>Herdr Terminal</strong>
-<br><sub>Near-black operational terminal, cyan routing accent, mint/gold/pink states, ASCII packet indicator.</sub>
+<br><sub>Electric-green operator terminal, phosphor-green focus, amber execution, red approval, ASCII packet indicator.</sub>
 </td>
 </tr>
 </table>

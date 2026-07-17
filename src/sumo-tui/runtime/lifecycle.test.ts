@@ -338,7 +338,7 @@ describe("LifecycleRuntime", () => {
 
 		// The RPC runtime applies the active theme palette before terminal
 		// ownership begins; simulate that seam with Herdr's palette.
-		terminalSession.applyPalette({ background: "#0B0B0F", accent: "#00E5FF" });
+		terminalSession.applyPalette({ background: "#040704", accent: "#39FF14" });
 		runtime.installLifecycle(pi);
 		runtime.installProcessHandlers();
 		for (const handler of handlers.get("session_start") ?? []) {
@@ -348,9 +348,9 @@ describe("LifecycleRuntime", () => {
 		// First OSC 11 must be Herdr's background, first OSC 12 Herdr's accent —
 		// no Cathedral flash before the theme palette lands.
 		expect(output.writes).toEqual([
-			`${ALTSCREEN_ENTER_SEQUENCE}\x1b]11;#0B0B0F\x1b\\`,
+			`${ALTSCREEN_ENTER_SEQUENCE}\x1b]11;#040704\x1b\\`,
 			MOUSE_SGR_ENABLE_SEQUENCE,
-			"\x1b]12;#00E5FF\x1b\\",
+			"\x1b]12;#39FF14\x1b\\",
 		]);
 
 		fakeProcess.emit("SIGTSTP");
@@ -358,9 +358,9 @@ describe("LifecycleRuntime", () => {
 
 		expect(output.writes.slice(3)).toEqual([
 			`${CURSOR_COLOR_RESET}${TERMINAL_BG_RESET}${TERMINAL_CLEANUP_SEQUENCE}`,
-			`${ALTSCREEN_ENTER_SEQUENCE}\x1b]11;#0B0B0F\x1b\\`,
+			`${ALTSCREEN_ENTER_SEQUENCE}\x1b]11;#040704\x1b\\`,
 			MOUSE_SGR_ENABLE_SEQUENCE,
-			"\x1b]12;#00E5FF\x1b\\",
+			"\x1b]12;#39FF14\x1b\\",
 		]);
 	});
 
@@ -379,12 +379,12 @@ describe("LifecycleRuntime", () => {
 
 		// Cathedral → Herdr live switch: new OSC 11 + OSC 12 (cursor override is
 		// active from startRetainedSession), without restarting the session.
-		terminalSession.applyPalette({ background: "#0B0B0F", accent: "#00E5FF" });
-		expect(output.writes).toEqual(["\x1b]11;#0B0B0F\x1b\\", "\x1b]12;#00E5FF\x1b\\"]);
+		terminalSession.applyPalette({ background: "#040704", accent: "#39FF14" });
+		expect(output.writes).toEqual(["\x1b]11;#040704\x1b\\", "\x1b]12;#39FF14\x1b\\"]);
 
 		// Re-applying the same palette must not spam duplicate OSC writes.
 		output.writes.length = 0;
-		terminalSession.applyPalette({ background: "#0B0B0F", accent: "#00E5FF" });
+		terminalSession.applyPalette({ background: "#040704", accent: "#39FF14" });
 		expect(output.writes).toEqual([]);
 
 		// Explicit cursor reset opt-out survives later palette changes: background

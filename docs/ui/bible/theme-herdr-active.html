@@ -8,19 +8,19 @@
   /* Herdr Terminal token overrides — source of truth: src/themes/herdr.ts
    * and docs/ui/stitch/herdr-terminal/DESIGN.md. Layout is untouched. */
   :root {
-    --background:      #0B0B0F;
-    --surface:         #0D0D14;
-    --surface-recess:  #07090D;
-    --surface-lifted:  #1A1A2E;
-    --divider:         #3A3A4A;
-    --foreground:      #F5EFE1;
-    --foreground-dim:  #8F96A8;
-    --accent:          #00E5FF;
-    --state-idle:      #4ECCA3;
-    --state-thinking:  #00E5FF;
-    --state-tool:      #FFD700;
-    --state-approval:  #FF3366;
-    --state-learning:  #F1D77A;
+    --background:      #040704;
+    --surface:         #070C08;
+    --surface-recess:  #050905;
+    --surface-lifted:  #0F3D17;
+    --divider:         #176B22;
+    --foreground:      #39FF14;
+    --foreground-dim:  #29B938;
+    --accent:          #39FF14;
+    --state-idle:      #29B938;
+    --state-thinking:  #39FF14;
+    --state-tool:      #FFB000;
+    --state-approval:  #FF706D;
+    --state-learning:  #FFD166;
   }
   .scene { display: grid; grid-template-rows: var(--cell-h) var(--cell-h) var(--cell-h) calc(var(--cell-h) * 34) var(--cell-h) calc(var(--cell-h) * 3) var(--cell-h) var(--cell-h) var(--cell-h) var(--cell-h); }
   .scene .middle { display: grid; grid-template-columns: 128ch 2ch 30ch; grid-row: 4; min-height: 0; overflow: hidden; }
@@ -43,6 +43,10 @@
 <pre class="grid"> </pre>
 <pre class="grid"><span class="fg-divider">┌ </span><span class="fg-accent">SUMO</span> <span class="fg-divider">─────────────────────────────────────────────────────────────────────────────────────────────────────────────────</span> <span class="fg-dim">11:42</span> <span class="fg-divider">┐</span>
 <span class="fg-divider">│</span><span class="box-fill" style="width: 126ch"> <span class="fg-fg">inspecting src/auth/session.ts</span>                                                                                               </span><span class="fg-divider">│</span>
+<span class="fg-divider">│</span><span class="box-fill" style="width: 126ch"> <span class="fg-idle">✓</span> <span class="fg-accent">[read]</span> <span class="fg-fg">src/auth/session.ts</span>                                                                                                 </span><span class="fg-divider">│</span>
+<span class="fg-divider">│</span><span class="box-fill" style="width: 126ch"> <span class="fg-tool">▶</span> <span class="fg-accent">[edit]</span> <span class="fg-fg">src/auth/session.ts · tightening return type</span>                                                                        </span><span class="fg-divider">│</span>
+<span class="fg-divider">│</span><span class="box-fill" style="width: 126ch"> <span class="fg-approve">●</span> <span class="fg-accent">approval</span> <span class="fg-fg">run bash `pnpm test src/auth`?</span>                                                                                    </span><span class="fg-divider">│</span>
+<span class="fg-divider">│</span><span class="box-fill" style="width: 126ch"> <span class="fg-learn">★</span> <span class="fg-accent">learned</span> <span class="fg-fg">session.authenticate now returns Result<User></span>                                                                      </span><span class="fg-divider">│</span>
 <span class="fg-divider">└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘</span></pre></div>
       <div class="gutter-col"></div>
       <div class="sidebar-col"><pre class="grid"><span class="box-fill" style="background: var(--surface); width: 30ch">                              </span>

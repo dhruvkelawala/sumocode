@@ -38,7 +38,7 @@ It does not replace Pi. It does not fork Pi. It loads as a regular Pi package an
    - **Cathedral** (default) — a 19th-century scriptorium aesthetic. Warm walnut background, burnt-orange accents, IBM Plex Mono. The everyday driver.
    - **Amber CRT** — Apple II / IBM 5151 phosphor terminal. Aligns with my Mission Control v3 design language for cross-agent visual consistency.
    - **Obsidian Temple** — sacred-tech mode. Deep obsidian background, bronze body text, gold + cyan + magenta neon glows on focal elements. For deep-focus sessions where I want the agent to feel like a ceremonial space.
-   - **Herdr Terminal** — operational agent-control mode, matching my Herdr/Ghostty setup. Near-black chassis, cyan routing accent, mint/gold/pink states, sharp ASCII chrome, packet-pulse indicator. (Added post-v0.3; v0.3 shipped the first three.)
+   - **Herdr Terminal** — electric-green operator console, matching my Herdr/Ghostty setup. Green-black chassis, phosphor-green `#39FF14` focus/body, amber execution, red approval, sharp ASCII chrome, packet-pulse indicator. (Added post-v0.3; v0.3 shipped the first three.)
 
    Switch instantly via `Ctrl+Shift+T` (cycles forward) or thoughtfully via `/sumo:theme` (preview overlay). Choice persists in synced config and follows me to any machine.
 

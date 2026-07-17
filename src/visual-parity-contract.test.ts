@@ -367,8 +367,14 @@ describe("V2 visual parity contract", () => {
 		expect(JSON.parse(readFileSync(fixturePath, "utf8"))).toEqual({ themeName: "herdr" });
 		// Wrong-theme evidence gates: Cathedral OSC sequences reject the capture,
 		// Herdr background/cursor OSC sequences are required.
-		expect(herdr.rejectIfRawOutputMatches).toEqual(["\\x1b\\]11;#1A1511", "\\x1b\\]12;#D97706"]);
-		expect(herdr.requireRawOutputMatches).toEqual(["\\x1b\\]11;#0B0B0F", "\\x1b\\]12;#00E5FF"]);
+		// Reject both a Cathedral flash AND stale cyan-era Herdr OSC values.
+		expect(herdr.rejectIfRawOutputMatches).toEqual([
+			"\\x1b\\]11;#1A1511",
+			"\\x1b\\]12;#D97706",
+			"\\x1b\\]11;#0B0B0F",
+			"\\x1b\\]12;#00E5FF",
+		]);
+		expect(herdr.requireRawOutputMatches).toEqual(["\\x1b\\]11;#040704", "\\x1b\\]12;#39FF14"]);
 		expect(herdr.rejectIfFinalScreenMatches).toEqual(expect.arrayContaining([
 			"No API key found",
 			"rpc error: prompt failed",

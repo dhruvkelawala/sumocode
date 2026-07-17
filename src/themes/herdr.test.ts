@@ -25,25 +25,25 @@ describe("HERDR_THEME", () => {
 	it("carries the exact plan-pinned metadata", () => {
 		expect(HERDR_THEME.name).toBe("herdr");
 		expect(HERDR_THEME.displayName).toBe("Herdr Terminal");
-		expect(HERDR_THEME.description).toBe("Operational terminal — cyan routing, mint readiness, sharp hacker chrome.");
+		expect(HERDR_THEME.description).toBe("Electric-green operator terminal — phosphor focus, amber execution, sharp hacker chrome.");
 	});
 
-	it("carries the exact plan-pinned palette values", () => {
+	it("carries the exact v7-pinned palette values", () => {
 		expect(colors).toEqual({
-			background: "#0B0B0F",
-			surface: "#0D0D14",
-			surfaceRecess: "#07090D",
-			surfaceLifted: "#1A1A2E",
-			foreground: "#F5EFE1",
-			foregroundDim: "#8F96A8",
-			divider: "#3A3A4A",
-			accent: "#00E5FF",
+			background: "#040704",
+			surface: "#070C08",
+			surfaceRecess: "#050905",
+			surfaceLifted: "#0F3D17",
+			foreground: "#39FF14",
+			foregroundDim: "#29B938",
+			divider: "#176B22",
+			accent: "#39FF14",
 			states: {
-				idle: "#4ECCA3",
-				thinking: "#00E5FF",
-				tool: "#FFD700",
-				approval: "#FF3366",
-				learning: "#F1D77A",
+				idle: "#29B938",
+				thinking: "#39FF14",
+				tool: "#FFB000",
+				approval: "#FF706D",
+				learning: "#FFD166",
 			},
 		});
 	});

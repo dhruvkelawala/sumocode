@@ -11,7 +11,8 @@
 //   - message/input frames use sharp 90° corners (┌ ┐ └ ┘)
 //   - sidebar section headers are untracked with ASCII sigils (> # @ $ %)
 //   - tab markers are ▸ (active) / · (inactive), rules are ─
-//   - palette is the near-black/cyan Herdr set; states are mint/cyan/gold/pink
+//   - palette is the approved v7 green-black set; electric-green focus/body,
+//     amber tool/learning, red approval (no cyan/teal/blue/purple)
 
 import { writeFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
@@ -24,21 +25,21 @@ const COLS = 160;
 const ROWS = 45;
 const SIDEBAR_COLS = 30;
 
-// ── Herdr palette (src/themes/herdr.ts is the source of truth) ─────────
+// ── Herdr palette v7 (src/themes/herdr.ts is the source of truth) ──────
 const HERDR = {
-	background: "#0B0B0F",
-	surface: "#0D0D14",
-	surfaceRecess: "#07090D",
-	surfaceLifted: "#1A1A2E",
-	foreground: "#F5EFE1",
-	foregroundDim: "#8F96A8",
-	divider: "#3A3A4A",
-	accent: "#00E5FF",
-	stateIdle: "#4ECCA3",
-	stateThinking: "#00E5FF",
-	stateTool: "#FFD700",
-	stateApproval: "#FF3366",
-	stateLearning: "#F1D77A",
+	background: "#040704",
+	surface: "#070C08",
+	surfaceRecess: "#050905",
+	surfaceLifted: "#0F3D17",
+	foreground: "#39FF14",
+	foregroundDim: "#29B938",
+	divider: "#176B22",
+	accent: "#39FF14",
+	stateIdle: "#29B938",
+	stateThinking: "#39FF14",
+	stateTool: "#FFB000",
+	stateApproval: "#FF706D",
+	stateLearning: "#FFD166",
 };
 
 const rep = (ch, n) => ch.repeat(n);
@@ -110,9 +111,24 @@ function buildSidebarRows() {
 function buildChatHTML(cols) {
 	const innerCols = cols - 4;
 	const blocks = [];
+	// The top USER/SUMO exchange mirrors the runtime scenario for a meaningful
+	// runtime-vs-target comparison; the SUMO `extras` below are independent
+	// design intent that exercise the full state palette (idle green, amber
+	// tool, red approval, bright-amber learning) so a reviewer sees every
+	// semantic colour in one target. Runtime capture stays minimal (review-only).
 	const messages = [
 		{ role: "USER", body: "review src/auth/session.ts and tighten the return type" },
-		{ role: "SUMO", time: "11:42", body: "inspecting src/auth/session.ts" },
+		{
+			role: "SUMO",
+			time: "11:42",
+			body: "inspecting src/auth/session.ts",
+			extras: [
+				{ cls: "fg-idle", glyph: "\u2713", label: "[read]", target: "src/auth/session.ts" },
+				{ cls: "fg-tool", glyph: "\u25b6", label: "[edit]", target: "src/auth/session.ts · tightening return type" },
+				{ cls: "fg-approve", glyph: "\u25cf", label: "approval", target: "run bash `pnpm test src/auth`?" },
+				{ cls: "fg-learn", glyph: "\u2605", label: "learned", target: "session.authenticate now returns Result<User>" },
+			],
+		},
 	];
 
 	for (let i = 0; i < messages.length; i++) {
@@ -141,6 +157,11 @@ function buildChatHTML(cols) {
 		for (const line of [msg.body]) {
 			rows.push(bodyRow(`<span class="fg-fg">${line}</span>`, line.length));
 		}
+		for (const extra of msg.extras ?? []) {
+			const html = `<span class="${extra.cls}">${extra.glyph}</span> <span class="fg-accent">${extra.label}</span> <span class="fg-fg">${extra.target}</span>`;
+			const len = 1 + 1 + extra.label.length + 1 + extra.target.length;
+			rows.push(bodyRow(html, len));
+		}
 		rows.push(`<span class="fg-divider">\u2514${rep("\u2500", cols - 2)}\u2518</span>`);
 
 		blocks.push(`<pre class="grid">${rows.join("\n")}</pre>`);
@@ -150,7 +171,7 @@ function buildChatHTML(cols) {
 	return blocks.join("\n");
 }
 
-// ─── Input frame (sharp Herdr corners, cyan cursor block) ──────────────
+// ─── Input frame (sharp Herdr corners, electric-green cursor block) ─────
 function buildInputFrameRows(cols) {
 	const innerCols = cols - 2;
 	const cell = (h) =>

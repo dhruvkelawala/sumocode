@@ -12,10 +12,11 @@ landed between the original scaffold and this release.
 
 ### Added
 - **Herdr Terminal theme** (`herdr`) — fourth first-party theme, matching the
-  Herdr/Ghostty operational-terminal setup: near-black `#0B0B0F` chassis, cyan
-  routing accent, mint/gold/pink states, sharp ASCII chrome (`┌ ┐ └ ┘`,
-  `> # @ $ %` sigils), and an eight-frame ASCII packet working indicator.
-  Registered fourth after Obsidian; Cathedral remains the default.
+  approved Herdr/Ghostty operator setup: green-black `#040704` chassis,
+  electric-green `#39FF14` phosphor focus/body, amber `#FFB000` execution, red
+  `#FF706D` approval, sharp ASCII chrome (`┌ ┐ └ ┘`, `> # @ $ %` sigils), and
+  an eight-frame ASCII packet working indicator. Registered fourth after
+  Obsidian; Cathedral remains the default.
 - **Herdr visual evidence** — deterministic Bible target
   (`theme-herdr-active.html` via `scripts/gen-bible-theme-herdr.mjs`), design
   contract (`docs/ui/stitch/herdr-terminal/DESIGN.md`), and an isolated

@@ -74,10 +74,10 @@ describe("theme registry", () => {
 		expect(result.success).toBe(true);
 		if (result.success) expect(result.theme).toBe(HERDR_THEME);
 		expect(getActiveTheme()).toBe(HERDR_THEME);
-		expect(activeThemeColors().background).toBe("#0B0B0F");
-		expect(activeThemeColors().accent).toBe("#00E5FF");
-		expect(activeThemeColors().states.idle).toBe("#4ECCA3");
-		expect(activeThemeColors().states.approval).toBe("#FF3366");
+		expect(activeThemeColors().background).toBe("#040704");
+		expect(activeThemeColors().accent).toBe("#39FF14");
+		expect(activeThemeColors().states.idle).toBe("#29B938");
+		expect(activeThemeColors().states.approval).toBe("#FF706D");
 	});
 
 	it("reports the next theme name and wraps from last to first", () => {

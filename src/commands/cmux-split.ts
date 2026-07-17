@@ -77,13 +77,16 @@ export function shellEscape(value: string): string {
 }
 
 /**
- * Build a `cd <cwd> && exec sh -lc <command>` string for `cmux respawn-pane`'s
- * `--command` argument. Two layers of escaping: cwd is escaped once for the
- * outer shell, command is escaped once more so the inner `sh -lc` sees it as
- * a single string argument.
+ * Build a command suitable for `cmux respawn-pane --command`.
+ *
+ * cmux tokenizes the command and spawns argv[0] directly, so the returned
+ * string must begin with a real executable rather than `cd`, `exec`, an env
+ * assignment, or another shell construct. A login bash restores the user's
+ * PATH before changing directory and running the requested command.
  */
 export function buildShellCommand(cwd: string, command: string): string {
-	return ["cd", shellEscape(cwd), "&&", "exec", "sh", "-lc", shellEscape(command)].join(" ");
+	const shellCommand = ["cd", shellEscape(cwd), "&&", command].join(" ");
+	return ["bash", "-lc", shellEscape(shellCommand)].join(" ");
 }
 
 function collectSurfaceRefs(panes: readonly CmuxPaneInfo[]): Set<string> {
@@ -176,6 +179,30 @@ export type OpenSplitResult = { ok: true } | { ok: false; error: string };
 export type OpenSplitWithRefsResult =
 	| { ok: true; workspaceRef: string; surfaceRef: string }
 	| { ok: false; error: string };
+
+/** Replace the caller's current cmux surface process with `command`. */
+export async function openCommandInCurrentSurface(
+	pi: ExtensionAPI,
+	command: string,
+): Promise<OpenSplitResult> {
+	const callerResult = await getCallerInfo(pi);
+	if (!callerResult.ok) return callerResult;
+
+	const { workspace_ref: workspaceRef, surface_ref: surfaceRef } = callerResult.caller;
+	const respawnResult = await execCmux(pi, [
+		"respawn-pane",
+		"--workspace",
+		workspaceRef,
+		"--surface",
+		surfaceRef,
+		"--command",
+		command,
+	]);
+	if (!respawnResult.ok) {
+		return { ok: false, error: respawnResult.error ?? "Failed to run command in the current surface" };
+	}
+	return { ok: true };
+}
 
 /** Parse `cmux new-split` stdout, e.g. `OK surface:2 workspace:1`. */
 export function parseNewSplitOutput(stdout: string): { surfaceRef?: string; workspaceRef?: string } {

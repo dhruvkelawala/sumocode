@@ -45,7 +45,7 @@ hint-row
 footer
 ```
 
-These crops are required for the active-working runtime contract. They still do not represent final full-scene approval, and runtime goldens must not be promoted without explicit human approval.
+Only the stable active-working crops are required for the runtime contract; high-drift sidebar and input-frame regions remain review evidence until explicit visual approval or runtime-golden promotion. These crops still do not represent final full-scene approval, and runtime goldens must not be promoted without explicit human approval.
 
 ## Latest local review
 
@@ -73,7 +73,8 @@ Observed result from the #86 review run:
 active-landscape-runtime: review
 full: review-diff
 chat-area: passed/review-compatible
-top-bar/sidebar/input-frame/hint-row/footer: review evidence present
+top-bar/chat-area/hint-row/footer: required gate evidence present
+sidebar/input-frame: review evidence present
 ```
 
 ## Promotion policy

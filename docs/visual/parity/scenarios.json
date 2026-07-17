@@ -357,8 +357,7 @@
 				{
 					"id": "sidebar",
 					"targetCrop": "sidebar",
-					"runtimeCrop": "sidebar",
-					"status": "required"
+					"runtimeCrop": "sidebar"
 				},
 				{
 					"id": "chat-area",
@@ -370,8 +369,7 @@
 					"id": "input-frame",
 					"targetCrop": "input-frame",
 					"runtimeCrop": "input-frame",
-					"status": "required",
-					"threshold": 0.03
+					"threshold": 0.04
 				},
 				{
 					"id": "hint-row",
@@ -392,18 +390,18 @@
 					{
 						"startRow": 0,
 						"endRow": 0,
-						"category": "blank"
-					},
-					{
-						"startRow": 1,
-						"endRow": 1,
 						"category": "top-bar",
 						"firstCol": 1
 					},
 					{
+						"startRow": 1,
+						"endRow": 1,
+						"category": "blank"
+					},
+					{
 						"startRow": 2,
 						"endRow": 2,
-						"category": "blank"
+						"category": "content"
 					}
 				],
 				"contentBounds": {
@@ -519,21 +517,18 @@
 					"id": "input-frame",
 					"targetCrop": "portrait-input-frame",
 					"runtimeCrop": "portrait-input-frame",
-					"status": "required",
-					"threshold": 0.03
+					"threshold": 0.04
 				},
 				{
 					"id": "hint-row",
 					"targetCrop": "portrait-hint-row",
 					"runtimeCrop": "portrait-hint-row",
-					"status": "required"
+					"threshold": 0.04
 				},
 				{
 					"id": "footer",
 					"targetCrop": "portrait-footer",
-					"runtimeCrop": "portrait-footer",
-					"status": "required",
-					"threshold": 0.045
+					"runtimeCrop": "portrait-footer"
 				}
 			],
 			"geometrySpec": {

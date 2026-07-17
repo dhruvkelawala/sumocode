@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resetThemeRegistryForTests } from "../themes/index.js";
+import { resetThemeRegistryForTests, setActiveTheme } from "../themes/index.js";
 import { formatActiveThemeMessage, formatThemeList, registerThemeCommand, THEME_RESULT_CUSTOM_TYPE } from "./theme.js";
 
 describe("/sumo:theme", () => {
@@ -10,10 +10,12 @@ describe("/sumo:theme", () => {
 		expect(formatActiveThemeMessage()).toContain("19th-century scriptorium");
 	});
 
-	it("lists registered themes and marks the active one", () => {
+	it("lists all four registered themes in registry order and marks the active one", () => {
 		const lines = formatThemeList();
+		expect(lines.map((line) => line.slice(2).split(" — ")[0])).toEqual(["cathedral", "amber-crt", "obsidian", "herdr"]);
 		expect(lines).toContain("* cathedral — 19th-century scriptorium: warm walnut, parchment foreground, burnt-orange accents.");
 		expect(lines.some((line) => line.startsWith("  obsidian"))).toBe(true);
+		expect(lines).toContain("  herdr — Operational terminal — cyan routing, mint readiness, sharp hacker chrome.");
 	});
 
 	it("registers a custom message renderer for theme results", () => {
@@ -73,6 +75,20 @@ describe("/sumo:theme", () => {
 		);
 	});
 
+	it("applies herdr directly through the registry, Pi theme API, and persistence", async () => {
+		const { handler, sendMessage, persistTheme } = registerHarness();
+		const setTheme = vi.fn(() => ({ success: true }));
+
+		await handler("herdr", uiContext({ setTheme }));
+
+		expect(setTheme).toHaveBeenCalledWith("herdr");
+		expect(persistTheme).toHaveBeenCalledWith("herdr");
+		expect(sendMessage).toHaveBeenCalledWith(
+			expect.objectContaining({ details: { tone: "info", lines: ["theme set: herdr"] } }),
+			{ triggerTurn: false },
+		);
+	});
+
 	it("applies SumoCode themes even when Pi theme API does not know them", async () => {
 		const { handler, sendMessage } = registerHarness();
 		const setTheme = vi.fn(() => ({ success: false, error: "Theme not found: obsidian" }));
@@ -111,8 +127,24 @@ describe("/sumo:theme", () => {
 			expect([...shortcuts.keys()].sort()).toEqual(["alt+t", "ctrl+shift+t"]);
 		});
 
+		it("cycles obsidian → herdr → cathedral through the shortcut", async () => {
+			const { shortcuts, persistTheme } = registerHarness();
+			const setTheme = vi.fn(() => ({ success: true }));
+			const notify = vi.fn();
+			setActiveTheme("obsidian");
+
+			await shortcuts.get("ctrl+shift+t")?.({ hasUI: true, ui: { notify, setTheme } });
+			expect(setTheme).toHaveBeenLastCalledWith("herdr");
+			expect(persistTheme).toHaveBeenLastCalledWith("herdr");
+			expect(notify).toHaveBeenLastCalledWith("theme: herdr", "info");
+
+			await shortcuts.get("ctrl+shift+t")?.({ hasUI: true, ui: { notify, setTheme } });
+			expect(setTheme).toHaveBeenLastCalledWith("cathedral");
+			expect(notify).toHaveBeenLastCalledWith("theme: cathedral", "info");
+		});
+
 		it("cycles theme through Pi UI, persists, and notifies on success", async () => {
-			// PRD-pinned cycle order: cathedral → amber-crt → obsidian → cathedral.
+			// PRD-pinned cycle order: cathedral → amber-crt → obsidian → herdr → cathedral.
 			const { shortcuts, persistTheme } = registerHarness();
 			const setTheme = vi.fn(() => ({ success: true }));
 			const notify = vi.fn();

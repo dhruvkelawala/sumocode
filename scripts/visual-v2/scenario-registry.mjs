@@ -56,6 +56,8 @@ function validateManifest(manifest, manifestPath) {
 		if (!scenario.dimensions || !Number.isInteger(scenario.dimensions.cols)) throw new Error(`Scenario ${scenario.id} needs integer dimensions.cols`);
 		validatePatternArray(scenario, "rejectIfOutputMatches");
 		validatePatternArray(scenario, "rejectIfFinalScreenMatches");
+		validatePatternArray(scenario, "rejectIfRawOutputMatches");
+		validatePatternArray(scenario, "requireRawOutputMatches");
 		validateRuntimeInputs(scenario);
 		if (!Array.isArray(scenario.crops) || scenario.crops.length === 0) throw new Error(`Scenario ${scenario.id} needs crop definitions`);
 		for (const crop of scenario.crops) {

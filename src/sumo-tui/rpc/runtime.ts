@@ -1,8 +1,9 @@
 import type { Component } from "@earendil-works/pi-tui";
 import { createRequire } from "node:module";
+import { activeThemeColors, onThemeChanged, type Theme } from "../../themes/index.js";
 import type { CellBuffer } from "../render/buffer.js";
 import { logDiagnostic } from "../runtime/diagnostics.js";
-import { defaultTerminalSessionOwner, type TerminalOutput, type TerminalSessionOwner } from "../runtime/terminal-controller.js";
+import { defaultTerminalSessionOwner, type TerminalOutput, type TerminalPalette, type TerminalSessionOwner } from "../runtime/terminal-controller.js";
 import type { TranscriptControllerChatSink } from "../transcript/controller.js";
 import type { TranscriptViewModel } from "../transcript/view-model.js";
 import { containsCtrlCToken, isAppleTerminalSession, isEscapeInput, normalizeAppleTerminalInput, SharedInputRouter } from "../input/shared-input-router.js";
@@ -87,6 +88,10 @@ export interface RpcHostRuntimeSnapshot {
 	readonly transcriptRevision?: number;
 }
 
+function terminalPaletteFromColors(colors: { background: string; accent: string }): TerminalPalette {
+	return { background: colors.background, accent: colors.accent };
+}
+
 const EMPTY_TRANSCRIPT: TranscriptViewModel = { messages: [] };
 const FALLBACK_STATE: RpcHostChromeState = {
 	isStreaming: false,
@@ -167,6 +172,7 @@ export class RpcHostRuntime {
 	private state: RpcHostChromeState;
 	private transcript: TranscriptViewModel;
 	private shell: RpcShellAdapter | undefined;
+	private themeUnsubscribe: (() => void) | undefined;
 	private started = false;
 	private stopped = false;
 	private exitCode: number | undefined;
@@ -266,6 +272,19 @@ export class RpcHostRuntime {
 	public async start(): Promise<void> {
 		if (this.started) return;
 		this.started = true;
+		// Terminal-level colours (OSC 11 background / OSC 12 cursor accent) must
+		// follow the active theme. Apply the palette BEFORE terminal ownership
+		// begins so the first frame already paints the selected theme — never
+		// Cathedral-then-repaint. The theme registry stays the source of truth;
+		// live switches arrive through the subscription below. `startRetainedSession`
+		// is guarded (`this.started` above) so repeated `start()` calls cannot
+		// stack duplicate listeners; every `stop()` path disposes it, including
+		// stop-during-async-start.
+		this.terminal.applyPalette?.(terminalPaletteFromColors(activeThemeColors()));
+		this.themeUnsubscribe ??= onThemeChanged((theme: Theme) => {
+			this.terminal.applyPalette?.(terminalPaletteFromColors(theme.tokens.colors));
+			this.scheduleRender();
+		});
 		this.terminal.startRetainedSession();
 		if (this.input?.isTTY === true) {
 			this.input.setRawMode?.(true);
@@ -375,6 +394,8 @@ export class RpcHostRuntime {
 		else this.output.removeListener?.("resize", this.handleResize);
 		this.shell?.dispose();
 		this.shell = undefined;
+		this.themeUnsubscribe?.();
+		this.themeUnsubscribe = undefined;
 		this.terminal.exitTerminal();
 		for (const resolve of this.waiters.splice(0)) resolve(code);
 	}

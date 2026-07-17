@@ -111,6 +111,14 @@ async function runOneAttempt(scenario, runtime, attempt) {
 		const captured = output;
 		const plain = stripAnsi(captured);
 		const rejection = findRejection(plain, scenario.rejectIfOutputMatches ?? []);
+		// Raw-byte checks run against the UNstripped capture so theme evidence
+		// carried in OSC sequences (background/cursor colours) can be asserted —
+		// e.g. reject Cathedral's `\x1b]11;#1A1511` in a Herdr scenario, or require
+		// the Herdr accent to have been emitted at all.
+		const rawRejection = findRejection(captured, scenario.rejectIfRawOutputMatches ?? []);
+		const missingRawPatterns = (scenario.requireRawOutputMatches ?? []).filter(
+			(pattern) => !new RegExp(pattern, "m").test(captured),
+		);
 
 		await terminateChild(child, () => exited);
 
@@ -129,6 +137,18 @@ async function runOneAttempt(scenario, runtime, attempt) {
 
 		if (rejection) {
 			const error = new Error(`Runtime capture ${scenario.id} matched rejection pattern ${JSON.stringify(rejection.pattern)}. Snippet: ${JSON.stringify(rejection.snippet)}`);
+			error.retryable = false;
+			error.diagnostics = diagnostics;
+			throw error;
+		}
+		if (rawRejection) {
+			const error = new Error(`Runtime capture ${scenario.id} matched raw-output rejection pattern ${JSON.stringify(rawRejection.pattern)} (wrong-theme or wrong-terminal evidence)`);
+			error.retryable = false;
+			error.diagnostics = diagnostics;
+			throw error;
+		}
+		if (missingRawPatterns.length > 0) {
+			const error = new Error(`Runtime capture ${scenario.id} is missing required raw-output pattern(s): ${missingRawPatterns.map((pattern) => JSON.stringify(pattern)).join(", ")}`);
 			error.retryable = false;
 			error.diagnostics = diagnostics;
 			throw error;
@@ -333,8 +353,12 @@ function deterministicEnv(extra = {}) {
 
 function isolatedRuntimeEnv(extra = {}) {
 	const hasScenarioPiDir = Object.prototype.hasOwnProperty.call(extra, "PI_CODING_AGENT_DIR");
+	// Scenario-provided dirs are committed repo fixtures (e.g.
+	// test/fixtures/pi-agent-herdr): resolve repo-relative paths to absolute so
+	// the child process and Pi agree on the location regardless of cwd, and
+	// NEVER clean them up — only harness-created temp dirs are removed.
 	const piCodingAgentDir = hasScenarioPiDir
-		? extra.PI_CODING_AGENT_DIR
+		? resolve(repoRoot, extra.PI_CODING_AGENT_DIR)
 		: mkdtempSync(resolve(tmpdir(), "sumocode-visual-pi-"));
 	const env = deterministicEnv({
 		...extra,

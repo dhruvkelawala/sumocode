@@ -42,6 +42,7 @@ const generators = [
 	"scripts/gen-bible-element-13-explorations.mjs",
 	"scripts/gen-bible-scene-active.mjs",
 	"scripts/gen-bible-scenes.mjs",
+	"scripts/gen-bible-theme-herdr.mjs",
 ];
 
 console.log("[render-bible] regenerating HTML mockups");

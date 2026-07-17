@@ -8,6 +8,32 @@ Per the PRD's versioning roadmap (`docs/prd.md` § Versioning), `v0.2.x` and
 `v0.3.x` are documented retroactively for the chrome and theme work that
 landed between the original scaffold and this release.
 
+## [Unreleased]
+
+### Added
+- **Herdr Terminal theme** (`herdr`) — fourth first-party theme, matching the
+  Herdr/Ghostty operational-terminal setup: near-black `#0B0B0F` chassis, cyan
+  routing accent, mint/gold/pink states, sharp ASCII chrome (`┌ ┐ └ ┘`,
+  `> # @ $ %` sigils), and an eight-frame ASCII packet working indicator.
+  Registered fourth after Obsidian; Cathedral remains the default.
+- **Herdr visual evidence** — deterministic Bible target
+  (`theme-herdr-active.html` via `scripts/gen-bible-theme-herdr.mjs`), design
+  contract (`docs/ui/stitch/herdr-terminal/DESIGN.md`), and an isolated
+  `herdr-theme-active-runtime` review scenario driven by the committed
+  `test/fixtures/pi-agent-herdr` fixture (never the developer's live Pi
+  config). Review notes in `docs/visual/parity/HERDR_THEME_REVIEW.md`; no
+  runtime goldens promoted.
+
+### Changed
+- **Theme-aware terminal background/cursor** — the host terminal's OSC 11
+  background and OSC 12 cursor accent now follow the active theme at startup,
+  on live theme switches, and across suspend/resume, instead of being
+  hardcoded to Cathedral. Explicit `/sumo:cursor reset` remains respected
+  across theme changes, and exit still restores terminal defaults.
+- `/sumo:cursor accent` is theme-neutral: it applies the ACTIVE theme's accent
+  (copy now says "theme accent"); the legacy `orange` / `cathedral` aliases
+  are deprecated but still resolve the current theme accent.
+
 ## [0.4.0] — 2026-06-10
 
 The worktree fan-out release. SumoCode can now run visible background review

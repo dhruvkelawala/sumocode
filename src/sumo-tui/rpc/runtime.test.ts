@@ -3,9 +3,9 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { StringDecoder } from "node:string_decoder";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { INPUT_FRAME_PLACEHOLDER } from "../../cathedral/input-frame.js";
-import { activeThemeColors } from "../../themes/index.js";
+import { activeThemeColors, resetThemeRegistryForTests, setActiveTheme } from "../../themes/index.js";
 import { SharedInputRouter } from "../input/shared-input-router.js";
 import { TerminalSessionOwner } from "../runtime/terminal-controller.js";
 import { RpcHostEditorController } from "./editor.js";
@@ -1053,5 +1053,132 @@ describe("RPC host retained runtime frame", () => {
 		});
 
 		expect(send).not.toHaveBeenCalled();
+	});
+});
+
+describe("RPC host terminal theme palette", () => {
+	afterEach(() => resetThemeRegistryForTests());
+
+	const HERDR_BG = "\x1b]11;#0B0B0F\x1b\\";
+	const HERDR_CURSOR = "\x1b]12;#00E5FF\x1b\\";
+	const CATHEDRAL_BG = "\x1b]11;#1A1511\x1b\\";
+	const CATHEDRAL_CURSOR = "\x1b]12;#D97706\x1b\\";
+	const countOccurrences = (chunks: readonly string[], needle: string): number =>
+		chunks.join("").split(needle).length - 1;
+
+	function buildRuntime() {
+		const output = new FakeOutput();
+		const terminal = new TerminalSessionOwner({ output });
+		const runtime = new RpcHostRuntime({
+			output,
+			input: { isTTY: false, on: () => undefined },
+			terminal,
+			initialState: state(),
+			initialTranscript: { messages: [] },
+		});
+		return { output, terminal, runtime };
+	}
+
+	it("Herdr startup's first OSC 11/12 use the Herdr palette with no Cathedral flash", async () => {
+		setActiveTheme("herdr");
+		const { output, runtime } = buildRuntime();
+
+		await runtime.start();
+
+		const joined = output.chunks.join("");
+		expect(joined).toContain(HERDR_BG);
+		expect(joined).toContain(HERDR_CURSOR);
+		expect(joined).not.toContain(CATHEDRAL_BG);
+		expect(joined).not.toContain(CATHEDRAL_CURSOR);
+		runtime.stop();
+	});
+
+	it("live Cathedral → Herdr switch emits the Herdr background and accent without restarting the session", async () => {
+		const { output, terminal, runtime } = buildRuntime();
+		await runtime.start();
+		expect(output.chunks.join("")).toContain(CATHEDRAL_BG);
+		output.chunks.length = 0;
+
+		setActiveTheme("herdr");
+
+		const joined = output.chunks.join("");
+		expect(joined).toContain(HERDR_BG);
+		expect(joined).toContain(HERDR_CURSOR);
+		expect(terminal.getState().altscreenActive).toBe(true);
+		expect(terminal.getState().restored).toBe(false);
+		runtime.stop();
+	});
+
+	it("repeated selection of the same theme does not spam duplicate OSC writes", async () => {
+		const { output, runtime } = buildRuntime();
+		await runtime.start();
+
+		setActiveTheme("herdr");
+		setActiveTheme("herdr");
+		setActiveTheme("herdr");
+
+		expect(countOccurrences(output.chunks, HERDR_BG)).toBe(1);
+		expect(countOccurrences(output.chunks, HERDR_CURSOR)).toBe(1);
+		runtime.stop();
+	});
+
+	it("an explicit cursor reset survives a theme switch: background updates, cursor stays default", async () => {
+		const { output, terminal, runtime } = buildRuntime();
+		await runtime.start();
+		terminal.resetCursorColor();
+		output.chunks.length = 0;
+
+		setActiveTheme("herdr");
+
+		const joined = output.chunks.join("");
+		expect(joined).toContain(HERDR_BG);
+		expect(joined).not.toContain(HERDR_CURSOR);
+		expect(terminal.getState().cursorColorOverridden).toBe(false);
+		runtime.stop();
+	});
+
+	it("shutdown resets OSC background/cursor and terminal mode exactly once", async () => {
+		setActiveTheme("herdr");
+		const { output, runtime } = buildRuntime();
+		await runtime.start();
+
+		runtime.stop();
+		runtime.stop();
+
+		expect(countOccurrences(output.chunks, "\x1b]112\x1b\\")).toBe(1);
+		expect(countOccurrences(output.chunks, "\x1b]111\x1b\\")).toBe(1);
+		expect(countOccurrences(output.chunks, "\x1b[?1049l")).toBe(1);
+	});
+
+	it("non-TTY outputs emit no palette sequences", async () => {
+		setActiveTheme("herdr");
+		const output = new FakeOutput();
+		(output as { isTTY: boolean }).isTTY = false;
+		const terminal = new TerminalSessionOwner({ output });
+		const runtime = new RpcHostRuntime({
+			output,
+			input: { isTTY: false, on: () => undefined },
+			terminal,
+			initialState: state(),
+			initialTranscript: { messages: [] },
+		});
+
+		await runtime.start();
+		setActiveTheme("cathedral");
+		runtime.stop();
+
+		expect(output.chunks.join("")).not.toContain("\x1b]11;");
+		expect(output.chunks.join("")).not.toContain("\x1b]12;");
+	});
+
+	it("stop removes the theme listener so later theme changes stop reaching the terminal", async () => {
+		const { output, runtime } = buildRuntime();
+		await runtime.start();
+		runtime.stop();
+		output.chunks.length = 0;
+
+		setActiveTheme("herdr");
+
+		expect(output.chunks).toEqual([]);
 	});
 });

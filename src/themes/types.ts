@@ -20,6 +20,28 @@ export interface ThemeTokens {
 	colors: ThemeColors;
 }
 
+export interface ThemeApplicationRoles {
+	toolLedger: {
+		surface: string;
+		border: string;
+		label: string;
+		target: string;
+		body: string;
+		bodyMuted: string;
+	};
+	code: {
+		surface: string;
+		border: string;
+		foreground: string;
+		gutter: string;
+		comment: string;
+		keyword: string;
+		string: string;
+		number: string;
+		function: string;
+	};
+}
+
 export interface ThemeWorkingIndicator {
 	frames: readonly string[];
 	intervalMs: number;
@@ -90,4 +112,5 @@ export interface Theme {
 	tokens: ThemeTokens;
 	workingIndicator: ThemeWorkingIndicator;
 	chrome: ThemeChrome;
+	applicationRoles?: ThemeApplicationRoles;
 }

@@ -2,7 +2,7 @@ import { AMBER_CRT_THEME } from "./amber-crt.js";
 import { CATHEDRAL_THEME } from "./cathedral.js";
 import { HERDR_THEME } from "./herdr.js";
 import { OBSIDIAN_THEME } from "./obsidian.js";
-import type { Theme, ThemeChrome, ThemeColors, ThemeTokens } from "./types.js";
+import type { Theme, ThemeApplicationRoles, ThemeChrome, ThemeColors, ThemeTokens } from "./types.js";
 
 export type ThemeChangedListener = (theme: Theme) => void;
 export type SetThemeResult = { success: true; theme: Theme } | { success: false; error: string };
@@ -86,6 +86,36 @@ export function activeThemeColors(): ThemeColors {
 
 export function activeThemeChrome(): ThemeChrome {
 	return getActiveTheme().chrome;
+}
+
+export function activeThemeApplicationRoles(): ThemeApplicationRoles {
+	const theme = getActiveTheme();
+	if (theme.applicationRoles) return theme.applicationRoles;
+	const colors = theme.tokens.colors;
+	return {
+		toolLedger: {
+			surface: colors.surfaceRecess,
+			border: colors.divider,
+			label: colors.accent,
+			target: colors.foreground,
+			body: colors.foreground,
+			bodyMuted: colors.foregroundDim,
+		},
+		code: {
+			surface: colors.surfaceRecess,
+			border: colors.divider,
+			foreground: colors.foreground,
+			gutter: colors.foregroundDim,
+			// Compatibility fallback: preserves the pre-Plan-075 Cathedral code
+			// renderer's comment color for existing first-party themes. New themes
+			// that need syntax ownership should provide a complete code role set.
+			comment: "#6F5D46",
+			keyword: colors.accent,
+			string: colors.states.idle,
+			number: colors.states.thinking,
+			function: colors.states.thinking,
+		},
+	};
 }
 
 export function getThemeVersion(): number {

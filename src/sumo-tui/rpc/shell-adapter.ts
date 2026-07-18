@@ -8,6 +8,7 @@ import {
 	renderInputHints,
 } from "../../cathedral/input-frame.js";
 import { splashInvocationHint } from "../../cathedral/input-hints.js";
+import { compactionStatusLabelForReason, renderCompactionStatusRow } from "../../compaction-status-row.js";
 import {
 	colorHex,
 	formatCwd,
@@ -394,6 +395,14 @@ export class RpcShellAdapter {
 	 * while busy.
 	 */
 	public renderWorkingIndicator(width: number): string[] {
+		if (this.state.isCompacting) {
+			return renderCompactionStatusRow({
+				width,
+				label: compactionStatusLabelForReason(this.state.compactionReason),
+				tick: this.workingIndicatorTick,
+			});
+		}
+
 		// V1 scope: the working indicator is a landscape affordance. Portrait's
 		// 60-column width reserves the pre-input breathing row instead (see
 		// shouldInstallWorkingIndicator's doc comment in working-indicator.ts) --
@@ -501,6 +510,7 @@ export function rpcSessionIsActive(state: RpcHostChromeState, transcript: Transc
 		|| state.pendingMessageCount > 0
 		|| state.taskPartialCount > 0
 		|| state.isStreaming
+		|| state.isCompacting
 		|| transcript.messages.length > 0;
 }
 

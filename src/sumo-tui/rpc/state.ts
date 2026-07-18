@@ -1,4 +1,5 @@
 import type { AgentSessionEvent, RpcSessionState } from "@earendil-works/pi-coding-agent";
+import type { CompactionReason } from "../../compaction-state.js";
 
 export interface RpcHostChromeState {
 	readonly sessionId?: string;
@@ -16,6 +17,7 @@ export interface RpcHostChromeState {
 	readonly thinkingLevel?: string;
 	readonly isStreaming: boolean;
 	readonly isCompacting: boolean;
+	readonly compactionReason?: CompactionReason;
 	readonly messageCount: number;
 	readonly pendingMessageCount: number;
 	readonly hasMessages: boolean;
@@ -52,6 +54,11 @@ function eventType(event: unknown): string | undefined {
 	return typeof (event as { type?: unknown }).type === "string" ? (event as { type: string }).type : undefined;
 }
 
+function compactionReasonFromEvent(event: unknown): CompactionReason | undefined {
+	const value = (event as { reason?: unknown }).reason;
+	return value === "manual" || value === "threshold" || value === "overflow" ? value : undefined;
+}
+
 export class RpcHostStateStore {
 	private state: RpcHostChromeState = {
 		isStreaming: false,
@@ -74,6 +81,7 @@ export class RpcHostStateStore {
 			thinkingLevel: rpcState.thinkingLevel,
 			isStreaming: rpcState.isStreaming,
 			isCompacting: rpcState.isCompacting,
+			compactionReason: rpcState.isCompacting ? this.state.compactionReason : undefined,
 			messageCount: rpcState.messageCount,
 			pendingMessageCount: rpcState.pendingMessageCount,
 			hasMessages: rpcState.messageCount > 0,
@@ -129,10 +137,10 @@ export class RpcHostStateStore {
 				break;
 			}
 			case "compaction_start":
-				this.state = { ...this.state, isCompacting: true, lastEventType: type };
+				this.state = { ...this.state, isCompacting: true, compactionReason: compactionReasonFromEvent(event), lastEventType: type };
 				break;
 			case "compaction_end":
-				this.state = { ...this.state, isCompacting: false, lastEventType: type };
+				this.state = { ...this.state, isCompacting: false, compactionReason: undefined, lastEventType: type };
 				break;
 			case "queue_update": {
 				const { steering, followUp } = event as { steering?: unknown; followUp?: unknown };

@@ -28,6 +28,10 @@ export interface RpcChildFixtureOptions {
 	 * that state.
 	 */
 	readonly streamChunkSentinels?: boolean;
+	readonly compactDelayMs?: number;
+	readonly compactReason?: "manual" | "threshold" | "overflow";
+	readonly compactSummary?: string;
+	readonly compactTokensBefore?: number;
 }
 
 export async function createRpcChildFixture(prefix: string, options: RpcChildFixtureOptions = {}): Promise<string> {
@@ -39,11 +43,16 @@ const readline = require("node:readline");
 let sessionName = ${JSON.stringify(options.sessionName ?? "Fixture Session")};
 let messages = ${JSON.stringify(options.messages ?? [])};
 let isStreaming = false;
+let isCompacting = false;
 let pendingPrompt = null;
 let holdNextPromptUntilAbort = ${options.holdPromptUntilAbort ? "true" : "false"};
 const streamChunks = ${JSON.stringify(options.streamChunks ?? null)};
 const chunkDelayMs = ${JSON.stringify(options.chunkDelayMs ?? 500)};
 const streamChunkSentinels = ${options.streamChunkSentinels ? "true" : "false"};
+const compactDelayMs = ${JSON.stringify(options.compactDelayMs ?? 250)};
+const compactReason = ${JSON.stringify(options.compactReason ?? "manual")};
+const compactSummary = ${JSON.stringify(options.compactSummary ?? "Fixture compaction summary.")};
+const compactTokensBefore = ${JSON.stringify(options.compactTokensBefore ?? 42000)};
 
 function write(payload) {
 	process.stdout.write(JSON.stringify(payload) + "\\n");
@@ -54,7 +63,7 @@ function state() {
 		model: { provider: "openai", id: "gpt-5", name: "GPT-5" },
 		thinkingLevel: "medium",
 		isStreaming,
-		isCompacting: false,
+		isCompacting,
 		steeringMode: "all",
 		followUpMode: "one-at-a-time",
 		sessionId: "fixture-session",
@@ -106,6 +115,7 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 		sessionName = "Fresh Session";
 		messages = [];
 		isStreaming = false;
+		isCompacting = false;
 		write({ type: "session_info_changed", name: sessionName });
 		write({ type: "agent_end", messages, willRetry: false });
 		write(response(command, { cancelled: false }));
@@ -142,6 +152,22 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 			return;
 		}
 		setTimeout(() => finishPrompt(command, "fixture response complete: " + command.message), 100);
+		return;
+	}
+	if (command.type === "compact") {
+		isCompacting = true;
+		write({ type: "compaction_start", reason: compactReason });
+		setTimeout(() => {
+			isCompacting = false;
+			write({
+				type: "compaction_end",
+				reason: compactReason,
+				aborted: false,
+				willRetry: false,
+				result: { summary: compactSummary, tokensBefore: compactTokensBefore }
+			});
+			write(response(command, {}));
+		}, compactDelayMs);
 		return;
 	}
 	if (command.type === "abort") {

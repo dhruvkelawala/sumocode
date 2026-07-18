@@ -9,6 +9,8 @@ export interface DeliveryPayload {
 export interface DeferredResultDelivery {
 	defer(id: string, build: () => DeliveryPayload): void;
 	consume(id: string): void;
+	/** Drop all tracking for an id whose subagent no longer exists (pruned). */
+	forget(id: string): void;
 	drain(): DeliveryPayload[];
 	clear(): void;
 	readonly size: number;
@@ -25,6 +27,10 @@ export function createDeferredResultDelivery(): DeferredResultDelivery {
 		},
 		consume(id): void {
 			consumed.add(id);
+			pending.delete(id);
+		},
+		forget(id): void {
+			consumed.delete(id);
 			pending.delete(id);
 		},
 		drain(): DeliveryPayload[] {

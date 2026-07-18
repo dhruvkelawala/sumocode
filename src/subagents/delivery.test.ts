@@ -48,4 +48,16 @@ describe("deferred result delivery", () => {
 		expect(delivery.drain()).toHaveLength(1);
 		expect(delivery.drain()).toEqual([]);
 	});
+
+	it("forget drops both pending and consumed tracking for pruned ids", () => {
+		const delivery = createDeferredResultDelivery();
+		delivery.defer("sa-1", () => ({ id: "sa-1", title: "t", status: "done", content: "c", details: {} }));
+		delivery.consume("sa-2");
+		delivery.forget("sa-1");
+		delivery.forget("sa-2");
+		expect(delivery.size).toBe(0);
+		// After forget, a fresh defer for the same id is accepted again.
+		delivery.defer("sa-2", () => ({ id: "sa-2", title: "t", status: "done", content: "c", details: {} }));
+		expect(delivery.size).toBe(1);
+	});
 });

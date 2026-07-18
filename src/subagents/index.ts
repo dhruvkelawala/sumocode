@@ -60,6 +60,15 @@ export function installSubagents(pi: ExtensionAPI): SubagentManager {
 			if (manager.consumedIds.has(snapshot.id)) delivery.consume(snapshot.id);
 			else delivery.defer(snapshot.id, () => settledPayload(snapshot));
 		}
+		// Prune the mirror sets in lockstep with the manager's MAX_TRACKED prune
+		// so a long-lived session's per-spawn tracking cannot grow unbounded.
+		const liveIds = new Set(manager.list().map((snapshot) => snapshot.id));
+		for (const id of observedSettledIds) {
+			if (!liveIds.has(id)) {
+				observedSettledIds.delete(id);
+				delivery.forget(id);
+			}
+		}
 		if (latestContext?.isIdle()) flush();
 	});
 

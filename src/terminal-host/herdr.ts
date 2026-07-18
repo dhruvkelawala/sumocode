@@ -55,7 +55,10 @@ async function runInWorktreeWorkspace(
 	if (panesResult.code !== 0) return { ok: false, error: panesResult.stderr || panesResult.stdout || `herdr pane list exited ${panesResult.code}` };
 	const panesParsed = parseEnvelope<HerdrPaneListResult>(panesResult.stdout);
 	if (!panesParsed.ok) return panesParsed;
-	const paneId = panesParsed.panes?.find((pane) => pane.workspace_id === workspaceId || panesParsed.panes?.length === 1)?.pane_id;
+	// The list is already scoped by --workspace, so the first pane IS the
+	// workspace's pane; matching on per-pane workspace_id would spuriously
+	// fail if herdr ever omits that field.
+	const paneId = panesParsed.panes?.[0]?.pane_id;
 	if (!paneId) return { ok: false, error: `herdr pane list returned no panes for workspace ${workspaceId}` };
 	const runResult = await pi.exec("herdr", ["pane", "run", paneId, shellCommand], { timeout: 5000 });
 	if (runResult.code !== 0) return { ok: false, error: runResult.stderr || runResult.stdout || `herdr pane run exited ${runResult.code}` };

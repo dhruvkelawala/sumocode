@@ -206,6 +206,7 @@ describe("/sumo:worktree", () => {
 			create,
 			terminalHost: makeTerminalHost(openSplit, undefined, "herdr", openWorktree),
 			setupAction: "pnpm install",
+			pathExists: () => false,
 		});
 
 		await handler()?.("new native", {
@@ -220,6 +221,35 @@ describe("/sumo:worktree", () => {
 		expect(openSplit).toHaveBeenCalledWith(pi, "right", expect.stringMatching(/^bash -lc /));
 		expect(notify).toHaveBeenCalledWith(expect.stringContaining("herdr workspace create failed (native failed); falling back to split"), "warning");
 		expect(notify).toHaveBeenCalledWith(expect.stringContaining("opened sumo/native (fresh session) in right split"), "info");
+	});
+
+	it("does not retry createWorktree when herdr already created the worktree on disk", async () => {
+		const { pi, handler } = makePi();
+		const create = vi.fn(async () => ({ ok: false as const, error: "branch_already_exists" as const, message: "branch exists" }));
+		const openSplit = vi.fn(async () => ({ ok: true as const }));
+		const openWorktree = vi.fn(async () => ({ ok: false as const, error: "herdr pane run exited 1" }));
+		const notify = vi.fn();
+		registerWorktreeCommand(pi as never, {
+			create,
+			terminalHost: makeTerminalHost(openSplit, undefined, "herdr", openWorktree),
+			setupAction: "pnpm install",
+			pathExists: () => true,
+		});
+
+		await handler()?.("new native", {
+			hasUI: true,
+			cwd: "/repo",
+			ui: { notify },
+			sessionManager: { getBranch: () => [] },
+		});
+
+		expect(openWorktree).toHaveBeenCalled();
+		expect(create).not.toHaveBeenCalled();
+		expect(openSplit).not.toHaveBeenCalled();
+		expect(notify).toHaveBeenCalledWith(
+			expect.stringContaining('herdr created workspace "sumo · native" but launching the session failed (herdr pane run exited 1). Open it with /sumo:worktree open sumo/native'),
+			"warning",
+		);
 	});
 
 	it("uses herdr native workspace open for reopen", async () => {

@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { buildShellCommand, shellEscape } from "./cmux-split.js";
 import { getTerminalHost, type SplitDirection, type TerminalHost } from "../terminal-host/index.js";
@@ -21,6 +22,7 @@ export interface WorktreeCommandOptions {
 	readonly list?: typeof listWorktrees;
 	readonly remove?: typeof removeWorktree;
 	readonly terminalHost?: TerminalHost;
+	readonly pathExists?: (path: string) => boolean;
 	readonly terminalSize?: () => TerminalSize;
 	readonly setupAction?: string;
 }
@@ -138,6 +140,7 @@ export function registerWorktreeCommand(pi: ExtensionAPI, options: WorktreeComma
 	const list = options.list ?? listWorktrees;
 	const remove = options.remove ?? removeWorktree;
 	const configuredTerminalHost = options.terminalHost;
+	const pathExists = options.pathExists ?? existsSync;
 	const getTerminalSize = options.terminalSize ?? terminalSize;
 	const setupAction = options.setupAction ?? process.env.SUMOCODE_WORKTREE_SETUP ?? DEFAULT_SETUP_ACTION;
 
@@ -219,6 +222,22 @@ export function registerWorktreeCommand(pi: ExtensionAPI, options: WorktreeComma
 					if (opened.ok) {
 						const freshLabel = parsed.mode === "fresh" ? " (fresh session)" : "";
 						notify(pi, ctx, `opened ${resolved.branch}${freshLabel} as herdr workspace "${label}" · setup: ${setupAction || "none"}`);
+						return;
+					}
+					// Partial-failure reconciliation: `herdr worktree create` may have
+					// already created the branch + worktree on disk before the pane
+					// list/run step failed. Falling through to createWorktree would then
+					// hit branch_already_exists/path_already_exists on the identical
+					// resolved branch/path — a second confusing error and no session.
+					// Detect the half-created state and hand the user a working next
+					// step instead of a doomed fallback.
+					if (pathExists(resolved.path)) {
+						notify(
+							pi,
+							ctx,
+							`/sumo:worktree: herdr created workspace "${label}" but launching the session failed (${opened.error}). Open it with /sumo:worktree open ${resolved.branch}`,
+							"warning",
+						);
 						return;
 					}
 					notify(pi, ctx, `/sumo:worktree: herdr workspace create failed (${opened.error}); falling back to split`, "warning");

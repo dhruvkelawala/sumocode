@@ -4,6 +4,7 @@ export const SUBAGENT_PROMPT_GUIDELINES = [
 	"Prompts must be self-contained: include objective, relevant paths, constraints, expected output, and any stop conditions.",
 	"After spawning, keep working; call subagent_wait only when the result is required to proceed.",
 	"At most 4 subagents can run concurrently. If spawn returns status=at_capacity, wait/cancel/list before retrying.",
+	"Children run headless WITHOUT the dangerous-command approval gate (same trust model as the native task tool): they cannot prompt the user, so their bash executes directly. Do not delegate work expected to run destructive commands against the user's checkout; use worktree-isolated children for write-heavy work.",
 ];
 
 export const SUBAGENT_PROMPT_SNIPPET = "Spawn, check, wait for, cancel, and list headless subagents with self-contained prompts.";

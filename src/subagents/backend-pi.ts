@@ -198,6 +198,14 @@ export const createPiChildSpawner = (spawnImpl: SpawnLike = nodeSpawn) => (optio
 		// Children inherit the PARENT's active built-in tool set (mirroring
 		// native-task-tool's getActiveTools threading) so a narrowed parent
 		// session cannot spawn children with broader tool access.
+		//
+		// TRUST MODEL (conscious, documented — parity with native-task): children
+		// run --no-extensions, so SumoCode's approval gate is NOT installed in
+		// them. A headless child has no UI to prompt anyway; a child-side gate
+		// would hang or fail-closed all bash including legitimate worktree git
+		// work. The model-facing guidelines warn against delegating destructive
+		// commands; a non-interactive child-side deny-list is a possible future
+		// opt-in, tracked in plan 065's maintenance notes.
 		builtInTools: [...(options.builtInTools ?? DEFAULT_BUILT_IN_TOOLS)],
 	});
 	if (!config.ok) {
@@ -248,7 +256,7 @@ export const createPiChildSpawner = (spawnImpl: SpawnLike = nodeSpawn) => (optio
 		proc.stderr.on("data", (data) => {
 			stderr += data.toString();
 		});
-		proc.on("close", (code) => {
+		proc.on("close", (code, closeSignal) => {
 			if (stdoutBuffer.trim()) processLine(stdoutBuffer);
 			if (abortState.isAborted()) {
 				emit({ kind: "run-settled", outcome: { kind: "interrupted", partialText: finalAssistantText || undefined } });
@@ -256,9 +264,10 @@ export const createPiChildSpawner = (spawnImpl: SpawnLike = nodeSpawn) => (optio
 			}
 			// Success gates on exit code + stop reason, matching native-task-tool's
 			// isTaskError semantics. Empty final text at exit 0 is a successful run
-			// with empty output, not a failure — a synthetic "pi exited with code 0"
-			// error here would poison downstream result delivery.
-			if ((code ?? 0) === 0 && stopReason !== "error" && stopReason !== "aborted") {
+			// with empty output, not a failure. Strictly `code === 0`: a null code
+			// means the child was killed by an EXTERNAL signal (operator kill,
+			// host cleanup) — that must never fold as completed.
+			if (code === 0 && stopReason !== "error" && stopReason !== "aborted") {
 				emit({ kind: "run-settled", outcome: { kind: "completed", finalText: finalAssistantText } });
 				return;
 			}
@@ -266,7 +275,7 @@ export const createPiChildSpawner = (spawnImpl: SpawnLike = nodeSpawn) => (optio
 				kind: "run-settled",
 				outcome: {
 					kind: "failed",
-					errorText: (errorMessage || stderr || `pi exited with code ${code ?? 0}`).slice(0, ERROR_MAX),
+					errorText: (errorMessage || stderr || (closeSignal ? `pi killed by ${closeSignal}` : `pi exited with code ${code ?? "unknown"}`)).slice(0, ERROR_MAX),
 					partialText: finalAssistantText || undefined,
 				},
 			});

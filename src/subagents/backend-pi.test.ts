@@ -160,6 +160,16 @@ describe("spawnPiChild", () => {
 		expect(() => child.interrupt()).not.toThrow();
 	});
 
+	it("treats an externally signalled child (null code) as failed, not completed", () => {
+		const proc = new FakeProcess();
+		const child = createPiChildSpawner(vi.fn(() => proc) as never)({ prompt: "x", cwd: "/tmp", inherited: {} });
+		const events = collect(child.events as (emit: (event: SubagentEvent) => void) => void);
+		// External SIGTERM (operator kill / host cleanup): Node reports
+		// code=null with the signal — must never fold as completed.
+		proc.emit("close", null, "SIGTERM");
+		expect(events.at(-1)).toEqual({ kind: "run-settled", outcome: { kind: "failed", errorText: "pi killed by SIGTERM", partialText: undefined } });
+	});
+
 	it("treats exit 0 with empty final text as completed, matching native-task semantics", () => {
 		const proc = new FakeProcess();
 		const child = createPiChildSpawner(vi.fn(() => proc) as never)({ prompt: "x", cwd: "/tmp", inherited: {} });

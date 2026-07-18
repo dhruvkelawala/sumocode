@@ -169,7 +169,7 @@ export const createPiChildSpawner = (spawnImpl: SpawnLike = nodeSpawn) => (optio
 		};
 	}
 
-	let interrupt = () => undefined;
+	let interrupt: () => void = () => undefined;
 	const events = (emit: (event: SubagentEvent) => void): void => {
 		emit({ kind: "run-started" });
 		const proc = spawnImpl("pi", [...config.subprocessArgs, options.prompt], {

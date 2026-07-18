@@ -117,4 +117,25 @@ describe("SubagentManager", () => {
 		expect(manager.get(id)?.usage.tokens).toBe(120);
 		expect(manager.get(id)?.usage.costUsd).toBe(0.05);
 	});
+
+	it("interrupts every batch-cancel target before awaiting any settle", async () => {
+		const interrupts: string[] = [];
+		const emitters = new Map<string, (event: import("./domain.js").SubagentEvent) => void>();
+		let nextTitle = "";
+		const manager = new SubagentManager((task) => ({
+			events: (emit) => { emitters.set(nextTitle, emit); },
+			interrupt: () => { interrupts.push(nextTitle = nextTitle); interrupts[interrupts.length - 1] = task.id; },
+		}));
+		nextTitle = "a";
+		const a = manager.spawn({ prompt: "p", title: "a", cwd: "/tmp" }) as { id: string };
+		nextTitle = "b";
+		const b = manager.spawn({ prompt: "p", title: "b", cwd: "/tmp" }) as { id: string };
+		const cancelPromise = manager.cancel([a.id, b.id]);
+		// Both interrupts must have fired synchronously, before either settles.
+		expect(interrupts).toEqual([a.id, b.id]);
+		emitters.get("a")?.({ kind: "run-settled", outcome: { kind: "interrupted" } });
+		emitters.get("b")?.({ kind: "run-settled", outcome: { kind: "interrupted" } });
+		const lines = await cancelPromise;
+		expect(lines).toEqual([`Cancelled ${a.id}`, `Cancelled ${b.id}`]);
+	});
 });

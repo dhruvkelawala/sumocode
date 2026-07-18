@@ -155,27 +155,35 @@ export class SubagentManager {
 	}
 
 	public async cancel(ids: readonly string[]): Promise<string[]> {
-		const lines: string[] = [];
+		// Fire every interrupt synchronously FIRST, then await settles in
+		// parallel. Awaiting each child before signalling the next would let a
+		// SIGTERM-ignoring child delay the rest of the batch by up to
+		// CANCEL_WAIT_MS each — cancel means "stop everything promptly".
+		const lines = new Map<string, string>();
+		const targets: string[] = [];
 		for (const id of ids) {
 			const snapshot = this.snapshots.get(id);
 			if (!snapshot) {
-				lines.push(`${id} is unknown`);
+				lines.set(id, `${id} is unknown`);
 				continue;
 			}
 			this.consumedIds.add(id);
 			if (isSettled(snapshot)) {
-				lines.push(`${id} was already ${snapshot.status === "done" ? "done" : "settled"}`);
+				lines.set(id, `${id} was already ${snapshot.status === "done" ? "done" : "settled"}`);
 				continue;
 			}
 			this.children.get(id)?.child.interrupt();
+			targets.push(id);
+		}
+		await Promise.allSettled(targets.map(async (id) => {
 			try {
 				await this.waitForSettle(id, CANCEL_WAIT_MS);
 			} catch {
 				this.fold(id, { kind: "run-settled", outcome: { kind: "interrupted", partialText: this.snapshots.get(id)?.finalText || this.snapshots.get(id)?.liveText } });
 			}
-			lines.push(`Cancelled ${id}`);
-		}
-		return lines;
+			lines.set(id, `Cancelled ${id}`);
+		}));
+		return ids.map((id) => lines.get(id) ?? `${id} is unknown`);
 	}
 
 	public disposeAll(): void {

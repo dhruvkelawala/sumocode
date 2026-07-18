@@ -76,8 +76,7 @@ describe("InteractionRegistry", () => {
 		expect(snapshot.commands.map(([id]) => id).sort()).toEqual([
 			"exit",
 			"slate",
-			"sumo:approval",
-		"sumo:bootstrap",
+			"sumo:bootstrap",
 			"sumo:cursor",
 			"sumo:diff",
 			"sumo:memory",
@@ -93,7 +92,7 @@ describe("InteractionRegistry", () => {
 			"sumo:worktree",
 		]);
 		expect(snapshot.shortcuts.map(([id]) => id).sort()).toEqual(["alt+t", "ctrl+/", "ctrl+1", "ctrl+2", "ctrl+shift+t"]);
-		expect(pi.registerCommand).toHaveBeenCalledTimes(17);
+		expect(pi.registerCommand).toHaveBeenCalledTimes(16);
 		expect(pi.registerShortcut).toHaveBeenCalledTimes(5);
 	});
 });

@@ -56,15 +56,15 @@ describe("ModalManager", () => {
 		await expect(first).resolves.toBe("alpha");
 	});
 
-	it("wraps multi-line approval titles so every line is visible", () => {
+	it("wraps multi-line select titles so every line is visible", () => {
 		const modals = new ModalManager();
-		void modals.select("APPROVAL REQUIRED\n\nrm -rf node_modules\n\nThis will permanently delete files.", ["No"]);
+		void modals.select("MULTILINE SELECT\n\nfirst detail\n\nsecond detail", ["Continue"]);
 
 		const plain = stripAnsi(modals.render(80).join("\n"));
 
-		expect(plain).toContain("APPROVAL REQUIRED");
-		expect(plain).toContain("rm -rf node_modules");
-		expect(plain).toContain("This will permanently delete files.");
+		expect(plain).toContain("MULTILINE SELECT");
+		expect(plain).toContain("first detail");
+		expect(plain).toContain("second detail");
 	});
 
 	it("strips ANSI and control sequences from painted dialog text", () => {

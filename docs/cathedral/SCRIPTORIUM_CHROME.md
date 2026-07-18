@@ -6,7 +6,6 @@ painting vocabulary used by every Cathedral overlay modal:
 | Modal | File | Bible source |
 |---|---|---|
 | Divine Query (Element 11) | `src/divine-query.ts` | `docs/ui/bible/11-divine-query-*.html` |
-| Approval Required (Element 6) | `src/approval-modal.ts` | (V2 spec §6) |
 | Memory Scriptorium (Element 7) | `src/memory-editor.ts` | `docs/ui/bible/07-memory-editor*.html`, `scene-memory-scriptorium-overlay.html` |
 
 Pi's overlay host already provides the surrounding chrome (centered box, focus
@@ -38,7 +37,7 @@ persistentBg(text, fgHex, bgHex)
 //   Re-applies fg+bg after every embedded `\x1b[0m` reset so a nested
 //   sub-style does not snap back to the underlying scene's background.
 //   Use this for `wrapPanelRow` and any inner sub-frame that has its own
-//   background (e.g. the approval modal's command box).
+//   background (e.g. Scriptorium panel cards).
 
 wrapPanelRow(line, width)
 //   Pads `line` to `width` and paints `foreground` over `surfaceLifted` for
@@ -128,9 +127,8 @@ render via `tui.requestRender()`, etc.).
 - Don't reach into Pi's terminal controller from inside a modal. Schedule
   render through `tui.requestRender()` so the overlay host stays in charge.
 - Don't add a second outer frame (`\u256d\u2500...\u256e`) inside the modal.
-  Pi's overlay box is the frame. Inner sub-frames (like the approval modal's
-  command box, or the Scriptorium's panel cards) are fine; the OUTER edge
-  belongs to Pi.
+  Pi's overlay box is the frame. Inner sub-frames (like the Scriptorium's
+  panel cards) are fine; the OUTER edge belongs to Pi.
 - Don't bake colours from `tokens.ts`. Always read from
   `activeThemeColors()` so theme switches re-render correctly.
 - Don't skip `wrapPanelRow` on any row. Even blank rows must be padded +
@@ -140,5 +138,5 @@ render via `tui.requestRender()`, etc.).
 
 If a new modal needs a primitive that two modals would share, add it to
 `scriptorium-chrome.ts` rather than duplicating it in the modal file. The
-goal is that `divine-query.ts`, `approval-modal.ts`, and `memory-editor.ts`
-contain only modal-specific composition — never bg-painting plumbing.
+goal is that `divine-query.ts` and `memory-editor.ts` contain only
+modal-specific composition — never bg-painting plumbing.

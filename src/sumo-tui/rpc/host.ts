@@ -219,10 +219,8 @@ export interface RpcHostExitDependencies {
  * its dependencies, mirroring `createRpcHostInterruptHandler` below: the RPC
  * child is the whole agent, so if it dies outside of a deliberate stop() the
  * host cannot keep functioning. Closing modals via their normal close() path
- * and draining overlays resolves any pending approval/select/input promise
- * without promoting queued overlay work during crash teardown; for the
- * approval overlay this already normalizes to "No"/deny, the correct
- * fail-safe.
+ * and draining overlays resolves any pending overlay/select/input promises
+ * without promoting queued overlay work during crash teardown.
  *
  * Exit code SUMOCODE_RELOAD_EXIT_CODE (100) is a deliberate `/sumo:reload`
  * (src/commands/reload.ts: the RPC child process.exit(100)s itself), not a
@@ -702,7 +700,6 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 	const uiResponder = createRpcExtensionUiResponder({
 		modals,
 		notifications,
-		approvalOverlay: overlays,
 		regionRegistry,
 		statusPublication,
 		editorText: editor,

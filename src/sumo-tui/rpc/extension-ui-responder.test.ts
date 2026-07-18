@@ -1,39 +1,13 @@
-import type { RpcExtensionUIRequest, RpcExtensionUIResponse } from "@earendil-works/pi-coding-agent";
-import type { Component } from "@earendil-works/pi-tui";
+import type { RpcExtensionUIRequest } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { normalizeApprovalChoice, RPC_APPROVAL_TITLE_MARKER } from "../../approval-modal.js";
 import { ExtensionStatusPublication } from "../pi-compat/region-registry.js";
 import { ModalManager } from "../widgets/modal.js";
 import { NotificationCenter } from "../widgets/notification.js";
 import { RpcHostEditorController } from "./editor.js";
 import { RpcExtensionUiResponder, RpcHostEditorBuffer } from "./extension-ui-responder.js";
-import { RpcHostOverlayManager } from "./host-overlays.js";
 
 function request<T extends RpcExtensionUIRequest>(request: T): T {
 	return request;
-}
-
-class TestOverlayHost {
-	public active: Component | undefined;
-	public kind: string | undefined;
-	private finish: ((value: unknown) => void) | undefined;
-
-	public show<T>(kind: string, create: (done: (value: T) => void) => Component): Promise<T> {
-		this.kind = kind;
-		return new Promise<T>((resolve) => {
-			this.finish = (value) => {
-				this.active = undefined;
-				this.kind = undefined;
-				this.finish = undefined;
-				resolve(value as T);
-			};
-			this.active = create((value) => this.finish?.(value));
-		});
-	}
-
-	public close(value?: unknown): void {
-		this.finish?.(value);
-	}
 }
 
 afterEach(() => {
@@ -332,172 +306,21 @@ describe("RpcExtensionUiResponder", () => {
 		expect(notifications.getToasts()).toMatchObject([{ message: "hello", level: "info" }]);
 	});
 
-	it("routes approval-marked selects through the Cathedral overlay host", async () => {
-		const overlay = new TestOverlayHost();
+	it("treats approval-shaped select titles as ordinary generic selects", async () => {
 		const modals = new ModalManager();
-		const responder = new RpcExtensionUiResponder({ approvalOverlay: overlay, modals });
+		const responder = new RpcExtensionUiResponder({ modals });
 		const response = responder.handle(request({
 			type: "extension_ui_request",
-			id: "approval-1",
+			id: "ordinary-approval-shaped-select",
 			method: "select",
-			title: `${RPC_APPROVAL_TITLE_MARKER}\n\nrm -rf node_modules\n\nThis will permanently delete files.`,
+			title: "APPROVAL REQUIRED\n\nrm -rf node_modules",
 			options: ["No", "Yes", "Always"],
 		}));
 
-		expect(overlay.kind).toBe("approval");
-		expect(overlay.active?.render(80).join("\n")).toContain("APPROVAL REQUIRED");
-		expect(overlay.active?.render(80).join("\n")).toContain("rm -rf node_modules");
-
-		overlay.active?.handleInput?.("y");
-
-		await expect(response).resolves.toEqual({ type: "extension_ui_response", id: "approval-1", value: "Yes" });
-		expect(modals.getActiveKind()).toBeUndefined();
-	});
-
-	it("strips approval command and description control sequences before overlay rendering", async () => {
-		const overlay = new TestOverlayHost();
-		const responder = new RpcExtensionUiResponder({ approvalOverlay: overlay });
-		const response = responder.handle(request({
-			type: "extension_ui_request",
-			id: "approval-sanitize",
-			method: "select",
-			title: `${RPC_APPROVAL_TITLE_MARKER}\n\nrm -rf \u001b]2;spoofed-title\u0007node_modules\u001b[2J\n\nThis will delete\u0000 files\u001b[?25l.`,
-			options: ["No", "Yes", "Always"],
-		}));
-
-		const rendered = overlay.active?.render(100).join("\n") ?? "";
-
-		expect(rendered).toContain("rm -rf node_modules");
-		expect(rendered).toContain("This will delete files.");
-		expect(rendered).not.toContain("\u001b]2;spoofed-title\u0007");
-		expect(rendered).not.toContain("\u001b[2J");
-		expect(rendered).not.toContain("\u001b[?25l");
-		expect(rendered).not.toContain("\u0000");
-
-		overlay.active?.handleInput?.("n");
-		await expect(response).resolves.toEqual({ type: "extension_ui_response", id: "approval-sanitize", value: "No" });
-	});
-
-	it("falls back to generic select when approval options do not match exactly", async () => {
-		const overlay = new TestOverlayHost();
-		const modals = new ModalManager();
-		const responder = new RpcExtensionUiResponder({ approvalOverlay: overlay, modals });
-		const response = responder.handle(request({
-			type: "extension_ui_request",
-			id: "approval-mismatch",
-			method: "select",
-			title: `${RPC_APPROVAL_TITLE_MARKER}\n\nrm -rf node_modules`,
-			options: ["Allow", "Deny"],
-		}));
-
-		expect(overlay.kind).toBeUndefined();
 		expect(modals.getActiveKind()).toBe("select");
+		modals.handleInput("down");
 		modals.handleInput("enter");
 
-		await expect(response).resolves.toEqual({ type: "extension_ui_response", id: "approval-mismatch", value: "Allow" });
-	});
-});
-
-// Plan 051: the approval gate is fail-closed -- only an explicit Yes/Always
-// may permit a dangerous command, so EVERY dismissal path must produce an
-// outbound extension_ui_response the Pi-side gate reads as deny. Each test
-// asserts the RESPONSE value's deny-equivalence through the gate's real
-// normalizeApprovalChoice mapping (src/approval-modal.ts) -- not merely that
-// an overlay closed -- so a mapping change reddens these tests.
-function expectDenyResponse(response: RpcExtensionUIResponse | void, id: string): void {
-	if (response === undefined) throw new Error(`expected a response for ${id}, handle() resolved void`);
-	expect(response.type).toBe("extension_ui_response");
-	expect(response.id).toBe(id);
-	if ("cancelled" in response) {
-		// Pi resolves a cancelled response as ctx.ui.select -> undefined; the
-		// gate maps that through normalizeApprovalChoice to "no" (deny).
-		expect(response.cancelled).toBe(true);
-		expect(normalizeApprovalChoice(undefined)).toBe("no");
-		return;
-	}
-	if (!("value" in response)) throw new Error(`approval response for ${id} carries neither value nor cancelled`);
-	expect(normalizeApprovalChoice(response.value)).toBe("no");
-}
-
-describe("approval dismissal paths resolve to deny (plan 051)", () => {
-	function approvalRequest(id: string, timeout?: number) {
-		return request({
-			type: "extension_ui_request" as const,
-			id,
-			method: "select" as const,
-			title: `${RPC_APPROVAL_TITLE_MARKER}\n\nrm -rf node_modules\n\nThis will permanently delete files.`,
-			options: ["No", "Yes", "Always"],
-			timeout,
-		});
-	}
-
-	it("times out an unanswered approval to a deny response", async () => {
-		vi.useFakeTimers();
-		const overlays = new RpcHostOverlayManager();
-		const responder = new RpcExtensionUiResponder({ approvalOverlay: overlays });
-		const response = responder.handle(approvalRequest("approval-timeout", 5_000));
-
-		expect(overlays.getActiveKind()).toBe("approval");
-		await vi.advanceTimersByTimeAsync(5_000);
-
-		expectDenyResponse(await response, "approval-timeout");
-		expect(overlays.getActiveKind()).toBeUndefined();
-	});
-
-	it("denies an active approval dismissed via overlay close(undefined)", async () => {
-		const overlays = new RpcHostOverlayManager();
-		const responder = new RpcExtensionUiResponder({ approvalOverlay: overlays });
-		const response = responder.handle(approvalRequest("approval-close-undefined"));
-
-		expect(overlays.getActiveKind()).toBe("approval");
-		overlays.close(undefined);
-
-		expectDenyResponse(await response, "approval-close-undefined");
-	});
-
-	it("queues a competing show() behind an active approval and still denies the approval on dismissal", async () => {
-		const overlays = new RpcHostOverlayManager();
-		const responder = new RpcExtensionUiResponder({ approvalOverlay: overlays });
-		const response = responder.handle(approvalRequest("approval-displaced"));
-		let approvalSettled = false;
-		void response.then(() => { approvalSettled = true; });
-
-		const queued = overlays.show<string | undefined>("session-picker", () => ({
-			invalidate: () => undefined,
-			render: () => ["queued overlay"],
-		}));
-
-		await Promise.resolve().then(() => Promise.resolve());
-		// Plan 046 contract: the competing show() queues; it must neither
-		// displace the approval nor settle its promise.
-		expect(overlays.getActiveKind()).toBe("approval");
-		expect(approvalSettled).toBe(false);
-
-		overlays.close(undefined);
-		expectDenyResponse(await response, "approval-displaced");
-
-		// The queued overlay only activates AFTER the approval denied, and its
-		// own affirmative resolution cannot rewrite the approval response.
-		expect(overlays.getActiveKind()).toBe("session-picker");
-		overlays.close("Yes");
-		await expect(queued).resolves.toBe("Yes");
-	});
-
-	it("denies via the catch path when the overlay host throws or rejects instead of presenting the prompt", async () => {
-		const throwing = {
-			show<T>(_kind: string, _create: (done: (value: T) => void) => Component): Promise<T> {
-				throw new Error("overlay render pipeline crashed");
-			},
-		};
-		const thrownResponder = new RpcExtensionUiResponder({ approvalOverlay: throwing });
-		expectDenyResponse(await thrownResponder.handle(approvalRequest("approval-thrown")), "approval-thrown");
-
-		const rejecting = {
-			show<T>(_kind: string, _create: (done: (value: T) => void) => Component): Promise<T> {
-				return Promise.reject(new Error("overlay host rejected asynchronously"));
-			},
-		};
-		const rejectedResponder = new RpcExtensionUiResponder({ approvalOverlay: rejecting });
-		expectDenyResponse(await rejectedResponder.handle(approvalRequest("approval-rejected")), "approval-rejected");
+		await expect(response).resolves.toEqual({ type: "extension_ui_response", id: "ordinary-approval-shaped-select", value: "Yes" });
 	});
 });

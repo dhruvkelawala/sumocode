@@ -5,7 +5,6 @@ import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { installInputHints } from "./cathedral/input-hints.js";
 import { installAnswerTool } from "./answer-tool.js";
-import { installApprovalGate } from "./approval-modal.js";
 import { installQuestionTool } from "./question-tool.js";
 import { taskTool } from "./native-task-tool.js";
 
@@ -113,10 +112,9 @@ export function shouldNoopDuplicateInstalledExtension(options: DuplicateInstalle
 		// module path both matches the `.pi/agent/git` prefix test above AND
 		// canonicalizes to the launcher's own root — that is the launcher
 		// loading itself, not a genuinely separate installed copy, so it must
-		// NOT noop (an unconditional noop here would skip the RPC child's
-		// `installApprovalGate`, silently disabling the approval gate). Compare
-		// realpath-canonicalized paths on both sides so symlinks can't fool
-		// either direction of this check.
+		// NOT noop (an unconditional noop here would skip the launcher's own RPC
+		// child profile). Compare realpath-canonicalized paths on both sides so
+		// symlinks can't fool either direction of this check.
 		const realpath = options.realpath ?? ((path: string) => realpathSync(path));
 		const modulePath = canonicalize(moduleUrlToPath(moduleUrl), realpath);
 		const moduleDir = dirname(modulePath); // strip /src/extension.ts to compare tree roots
@@ -191,7 +189,6 @@ export function isRpcChildProfile(options: TaskModeOptions = {}): boolean {
 function installRpcChildProfile(pi: ExtensionAPI): void {
 	installMemoryExtraction(pi);
 	installFastMode(pi);
-	installApprovalGate(pi);
 	if (shouldInstallNativeTaskTool({ force: process.env.SUMOCODE_NATIVE_TASK })) {
 		taskTool({
 			name: "task",
@@ -286,7 +283,6 @@ export default function sumocode(pi: ExtensionAPI): void {
 	installMemoryExtraction(pi);
 	installCathedralEditor(pi);
 	installInputHints(pi);
-	installApprovalGate(pi);
 	// The old global `~/.pi/agent/extensions/task-tool` extension registers the
 	// same `task` tool name and Pi treats duplicate tools as fatal. Until the
 	// user removes/disables that legacy extension, defer to it instead of

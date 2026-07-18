@@ -1,7 +1,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { BackgroundTaskManager } from "./background-tasks/task-manager.js";
 import { installCommandPalette } from "./command-palette.js";
-import { registerApprovalCommand } from "./commands/approval.js";
 import { registerCursorCommand } from "./commands/cursor.js";
 import { registerDiffCommand } from "./commands/diff.js";
 import { registerDivineQueryCommand } from "./commands/divine-query.js";
@@ -136,7 +135,6 @@ export function installSumoInteractions(pi: ExtensionAPI, options: InstallSumoIn
 		registry.install("command-palette", installCommandPalette);
 		registry.install("sidebar", installSidebar);
 	}
-	registry.install("commands.approval", registerApprovalCommand);
 	registry.install("commands.cursor", registerCursorCommand);
 	registry.install("commands.diff", registerDiffCommand);
 	registry.install("commands.divine-query", registerDivineQueryCommand);

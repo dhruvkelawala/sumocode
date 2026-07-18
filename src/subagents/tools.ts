@@ -99,6 +99,10 @@ export function registerSubagentTools(
 			});
 			if (isAtCapacity(spawned)) return formatAtCapacity(spawned);
 			if (spawned.status !== "running") {
+				// The failure is being returned INLINE — consume it so the change
+				// listener's already-deferred payload is not ALSO auto-delivered
+				// on the next agent_end (double report + pointless extra turn).
+				delivery?.consume(spawned.id);
 				return makeToolResult(`Subagent ${spawned.id} (${spawned.title}) failed to start: ${spawned.errorText ?? "unknown error"}`, { action: "spawn", subagent: spawned });
 			}
 			return makeToolResult(`Started ${spawned.id} (${spawned.title}). Its result will be delivered to you automatically when it settles, or use subagent_wait to block for it.`, { action: "spawn", subagent: spawned });

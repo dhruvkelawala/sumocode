@@ -38,6 +38,7 @@ export function installSubagents(pi: ExtensionAPI): SubagentManager {
 	const delivery = createDeferredResultDelivery();
 	const observedSettledIds = new Set<string>();
 	let latestContext: ExtensionContext | undefined;
+	let unsubscribe: (() => void) | undefined;
 
 	const flush = (): void => {
 		for (const payload of delivery.drain()) {
@@ -53,7 +54,7 @@ export function installSubagents(pi: ExtensionAPI): SubagentManager {
 		}
 	};
 
-	const unsubscribe = manager.addChangeListener(() => {
+	const onManagerChange = (): void => {
 		for (const snapshot of manager.list()) {
 			if (snapshot.status === "running" || observedSettledIds.has(snapshot.id)) continue;
 			observedSettledIds.add(snapshot.id);
@@ -70,10 +71,33 @@ export function installSubagents(pi: ExtensionAPI): SubagentManager {
 			}
 		}
 		if (latestContext?.isIdle()) flush();
-	});
+	};
+
+	/**
+	 * (Re)arm the delivery listener. session_shutdown fires for in-process
+	 * session switches (/new, /resume, /fork) too — the extension instance and
+	 * its tools SURVIVE those, so a one-shot unsubscribe would silently kill
+	 * auto-delivery for the rest of the process lifetime. On every
+	 * session_start we re-subscribe, and first mark every snapshot that
+	 * already exists as observed+consumed so settlements belonging to the
+	 * PREVIOUS session (e.g. children interrupted during the switch, folding
+	 * after shutdown) are never delivered into the new session as stale noise.
+	 */
+	const armDelivery = (): void => {
+		if (unsubscribe) return;
+		for (const snapshot of manager.list()) {
+			observedSettledIds.add(snapshot.id);
+			delivery.consume(snapshot.id);
+		}
+		unsubscribe = manager.addChangeListener(onManagerChange);
+	};
+	armDelivery();
 
 	registerSubagentTools(pi, manager, delivery);
-	pi.on("session_start", (_event, ctx) => { latestContext = ctx; });
+	pi.on("session_start", (_event, ctx) => {
+		latestContext = ctx;
+		armDelivery();
+	});
 	pi.on("agent_start", (_event, ctx) => { latestContext = ctx; });
 	pi.on("agent_end", (_event, ctx) => {
 		latestContext = ctx;
@@ -88,7 +112,8 @@ export function installSubagents(pi: ExtensionAPI): SubagentManager {
 	// worse than losing in-flight work. Kill on EVERY shutdown until a durable
 	// registry exists; when it does, adopt the same reason gating as bg_task.
 	pi.on("session_shutdown", () => {
-		unsubscribe();
+		unsubscribe?.();
+		unsubscribe = undefined;
 		delivery.clear();
 		manager.disposeAll();
 	});

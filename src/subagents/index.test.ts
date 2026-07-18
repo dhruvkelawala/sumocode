@@ -7,12 +7,15 @@ const backend = vi.hoisted(() => ({
 }));
 
 vi.mock("./backend-pi.js", () => ({
-	spawnPiChild: vi.fn(() => {
+	spawnPiChild: vi.fn((options: { model?: string }) => {
 		let emitEvent: ((event: SubagentEvent) => void) | undefined;
 		return {
 			events: (emit: (event: SubagentEvent) => void) => {
 				emitEvent = emit;
 				backend.emitters.push(emit);
+				// Mirror the real backend's synchronous settle-as-failed path
+				// (invalid model override) for tests that need it.
+				if (options.model === "sync-fail") emit({ kind: "run-settled", outcome: { kind: "failed", errorText: "invalid model" } });
 			},
 			interrupt: vi.fn(() => emitEvent?.({ kind: "run-settled", outcome: { kind: "interrupted" } })),
 			sessionFilePath: "/tmp/child-session.jsonl",
@@ -152,5 +155,45 @@ describe("subagent result delivery", () => {
 			}),
 			{ deliverAs: "followUp", triggerTurn: true },
 		);
+	});
+
+	it("keeps auto-delivery working across an in-process session switch", () => {
+		const harness = createHarness();
+		harness.fire("session_start");
+		// In-process switch: shutdown fires but the extension instance survives.
+		harness.fire("session_shutdown");
+		harness.fire("session_start");
+		harness.setIdle(false);
+		spawn(harness.manager, "post-switch");
+		backend.emitters.at(-1)?.({ kind: "message-end", role: "assistant", text: "after switch" });
+		backend.emitters.at(-1)?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "after switch" } });
+		harness.fire("agent_end");
+		expect(harness.sendMessage).toHaveBeenCalledTimes(1);
+		expect((harness.sendMessage.mock.calls[0] as unknown[])[0]).toMatchObject({ customType: "subagent-result" });
+	});
+
+	it("does not deliver stale pre-switch settlements into the new session", () => {
+		const harness = createHarness();
+		harness.setIdle(false);
+		spawn(harness.manager, "pre-switch");
+		// Child is still running when the session switches; disposeAll interrupts
+		// it and the fold lands AFTER shutdown (real SIGTERM timing).
+		harness.fire("session_shutdown");
+		backend.emitters.at(-1)?.({ kind: "run-settled", outcome: { kind: "interrupted" } });
+		harness.fire("session_start");
+		harness.fire("agent_end");
+		expect(harness.sendMessage).not.toHaveBeenCalled();
+	});
+
+	it("does not auto-deliver a synchronously failed spawn already reported inline", async () => {
+		const harness = createHarness();
+		harness.setIdle(false);
+		const spawnTool = harness.tool("subagent_spawn");
+		// Force a synchronous settle-as-failed through an invalid model override.
+		const result = await spawnTool.execute("tc", { prompt: "p", name: "doomed", model: "sync-fail" }, undefined, undefined, harness.ctx as never);
+		const text = ((result as { content: Array<{ text: string }> }).content[0]).text;
+		expect(text).toContain("failed to start");
+		harness.fire("agent_end");
+		expect(harness.sendMessage).not.toHaveBeenCalled();
 	});
 });

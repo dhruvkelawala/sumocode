@@ -69,6 +69,7 @@ type Scenario = {
 	};
 	fixture?: {
 		id: string;
+		theme?: string;
 	};
 	rejectIfOutputMatches?: string[];
 	rejectIfFinalScreenMatches?: string[];
@@ -402,6 +403,44 @@ describe("V2 visual parity contract", () => {
 		expect(runtimeCaptureSource).toContain("if (hasScenarioPiDir) return;");
 	});
 
+	it("keeps the Ultraviolet Core runtime scenario isolated, review-only, and theme-asserted", () => {
+		const ultraviolet = scenario("ultraviolet-core-active-runtime");
+
+		expect(ultraviolet.status).toBe("review");
+		expect(ultraviolet.dimensions).toEqual({ cols: 160, rows: 45 });
+		expect(ultraviolet.bibleTarget).toBe("theme-ultraviolet-core-active.png");
+		expect(ultraviolet.runtime?.args).toEqual(scenario("active-landscape-runtime").runtime?.args);
+		assertActiveRuntimeInputContract(ultraviolet);
+		expect(ultraviolet.runtime?.env?.PI_CODING_AGENT_DIR).toBe("test/fixtures/pi-agent-ultraviolet-core");
+		const fixturePath = join(process.cwd(), "test/fixtures/pi-agent-ultraviolet-core/sumocode.json");
+		expect(existsSync(fixturePath)).toBe(true);
+		expect(JSON.parse(readFileSync(fixturePath, "utf8"))).toEqual({ themeName: "ultraviolet-core" });
+		expect(JSON.parse(readFileSync(join(process.cwd(), "test/fixtures/pi-agent-ultraviolet-core/auth.json"), "utf8"))).toEqual({});
+		expect(ultraviolet.rejectIfRawOutputMatches).toEqual([
+			"\\x1b\\]11;#1A1511",
+			"\\x1b\\]12;#D97706",
+			"\\x1b\\]12;#BB7DFF",
+		]);
+		expect(ultraviolet.requireRawOutputMatches).toEqual(["\\x1b\\]11;#06050B", "\\x1b\\]12;#B974FF"]);
+		expect(ultraviolet.rejectIfFinalScreenMatches).toEqual(expect.arrayContaining([
+			"No API key found",
+			"rpc error: prompt failed",
+			"DIVINE INVOCATION",
+			"SUMOCODE RPC",
+			"empty transcript",
+		]));
+		expect(ultraviolet.crops.map((crop) => crop.id)).toEqual([
+			"full",
+			"top-bar",
+			"sidebar",
+			"chat-area",
+			"input-frame",
+			"hint-row",
+			"footer",
+		]);
+		expect(requiredCropIds("ultraviolet-core-active-runtime")).toEqual([]);
+	});
+
 	it("places active runtime Bible input rows at terminal coordinates", () => {
 		const parserUrl = pathToFileURL(join(process.cwd(), "scripts/visual-v2/styled-cell-grid.mjs")).href;
 		const htmlPath = join(process.cwd(), "docs/ui/bible/scene-active-runtime.html");
@@ -451,10 +490,16 @@ describe("V2 visual parity contract", () => {
 		expect(scenario("fixture-completed-portrait")).toMatchObject({ status: "review" });
 		expect(scenario("fixture-command-palette-overlay")).toMatchObject({ status: "review" });
 		expect(scenario("fixture-tool-ledger-landscape")).toMatchObject({ status: "review" });
+		expect(scenario("fixture-ultraviolet-core-tool-ledger")).toMatchObject({ status: "review" });
+		expect(scenario("fixture-ultraviolet-core-code-block")).toMatchObject({ status: "review" });
 		expect(scenario("fixture-completed-landscape").bibleTarget).toBe("scene-active.png");
 		expect(scenario("fixture-completed-portrait").bibleTarget).toBe("scene-active-portrait.png");
+		expect(scenario("fixture-ultraviolet-core-tool-ledger").bibleTarget).toBe("theme-ultraviolet-core-tool-ledger.png");
+		expect(scenario("fixture-ultraviolet-core-code-block").bibleTarget).toBe("theme-ultraviolet-core-code-block.png");
 		expect(scenario("fixture-completed-landscape").fixture?.id).toBe("completed-active");
 		expect(scenario("fixture-completed-portrait").fixture?.id).toBe("completed-active");
+		expect(scenario("fixture-ultraviolet-core-tool-ledger").fixture).toEqual({ id: "tool-ledger", theme: "ultraviolet-core" });
+		expect(scenario("fixture-ultraviolet-core-code-block").fixture).toEqual({ id: "code-block", theme: "ultraviolet-core" });
 		expect(scenario("fixture-completed-landscape").crops.map((crop) => crop.id)).toEqual([
 			"full",
 			"top-bar",
@@ -465,7 +510,44 @@ describe("V2 visual parity contract", () => {
 			"footer",
 		]);
 		expect(scenario("fixture-command-palette-overlay").crops.map((crop) => crop.id)).toEqual(["full", "overlay-center"]);
+		expect(scenario("fixture-ultraviolet-core-tool-ledger").crops.map((crop) => crop.id)).toEqual([
+			"full",
+			"top-bar",
+			"sidebar",
+			"chat-area",
+			"input-frame",
+			"hint-row",
+			"footer",
+		]);
+		expect(scenario("fixture-ultraviolet-core-code-block").crops.map((crop) => crop.id)).toEqual(["full", "chat-area"]);
+		expect(requiredCropIds("fixture-ultraviolet-core-tool-ledger")).toEqual([]);
+		expect(requiredCropIds("fixture-ultraviolet-core-code-block")).toEqual([]);
 		expect(cropDefinition("overlay-center")).toEqual({ x: 40, y: 14, cols: 80, rows: 17 });
+	});
+
+	it("applies fixture themes generically and resets to Cathedral in-process", async () => {
+		const { captureFixtureScenario } = await import(pathToFileURL(join(process.cwd(), "scripts/visual-v2/fixture-capture.mjs")).href) as {
+			captureFixtureScenario: (scenario: Scenario) => Promise<{ bytes: string; metadata: Record<string, unknown> }>;
+		};
+
+		const ultraviolet = await captureFixtureScenario(scenario("fixture-ultraviolet-core-tool-ledger"));
+		expect(ultraviolet.metadata).toMatchObject({ fixtureId: "tool-ledger", theme: "ultraviolet-core" });
+		expect(ultraviolet.bytes).toContain("\u001b[48;2;23;16;13m");
+
+		const cathedral = await captureFixtureScenario(scenario("fixture-tool-ledger-landscape"));
+		expect(cathedral.metadata).toMatchObject({ fixtureId: "tool-ledger", theme: "cathedral" });
+		expect(cathedral.bytes).toContain("\u001b[48;2;18;13;10m");
+		expect(cathedral.bytes).not.toContain("\u001b[48;2;23;16;13m");
+
+		await expect(captureFixtureScenario({
+			...scenario("fixture-tool-ledger-landscape"),
+			id: "fixture-unknown-theme",
+			fixture: { id: "tool-ledger", theme: "abyssal-tide" },
+		})).rejects.toThrow("Unsupported fixture theme abyssal-tide");
+
+		const afterThrow = await captureFixtureScenario(scenario("fixture-tool-ledger-landscape"));
+		expect(afterThrow.bytes).toContain("\u001b[48;2;18;13;10m");
+		expect(afterThrow.bytes).not.toContain("\u001b[48;2;23;16;13m");
 	});
 
 	it("keeps runtime scenarios real and exposes the main-vs-branch compare harness", () => {

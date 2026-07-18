@@ -248,15 +248,31 @@ export async function captureFixtureScenario(scenario) {
 	if (!fixtureId) throw new Error(`Fixture scenario ${scenario.id} is missing fixture.id`);
 	const fixture = FIXTURES[fixtureId];
 	if (!fixture) throw new Error(`Unsupported fixture id: ${fixtureId}`);
-	const lines = await renderFixtureScene(scenario, fixture);
-	const cols = scenario.dimensions.cols;
-	const rows = scenario.dimensions.rows;
-	return {
-		kind: "fixture",
-		bytes: linesToAnsi(lines, cols, rows),
-		plainText: lines.join("\n"),
-		metadata: { fixtureId, lineCount: lines.length },
-	};
+	const requestedTheme = scenario.fixture?.theme;
+	let themeRegistry;
+	if (requestedTheme) {
+		themeRegistry = await jiti.import(`${repoRoot}/src/themes/index.ts`);
+		try {
+			const result = themeRegistry.setActiveTheme(requestedTheme);
+			if (!result.success) throw new Error(result.error ?? `Unknown SumoCode theme: ${requestedTheme}`);
+		} catch (error) {
+			themeRegistry.resetThemeRegistryForTests?.();
+			throw new Error(`Unsupported fixture theme ${requestedTheme}: ${error instanceof Error ? error.message : String(error)}`);
+		}
+	}
+	try {
+		const lines = await renderFixtureScene(scenario, fixture);
+		const cols = scenario.dimensions.cols;
+		const rows = scenario.dimensions.rows;
+		return {
+			kind: "fixture",
+			bytes: linesToAnsi(lines, cols, rows),
+			plainText: lines.join("\n"),
+			metadata: { fixtureId, lineCount: lines.length, theme: requestedTheme ?? "cathedral" },
+		};
+	} finally {
+		if (themeRegistry) themeRegistry.resetThemeRegistryForTests?.();
+	}
 }
 
 async function renderFixtureScene(scenario, fixture) {

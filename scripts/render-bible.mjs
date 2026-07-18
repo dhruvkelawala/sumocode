@@ -41,6 +41,7 @@ const generators = [
 	"scripts/gen-bible-element-12.mjs",
 	"scripts/gen-bible-element-13-explorations.mjs",
 	"scripts/gen-bible-scene-active.mjs",
+	"scripts/gen-bible-theme-ultraviolet-core.mjs",
 	"scripts/gen-bible-scenes.mjs",
 	"scripts/gen-bible-theme-herdr.mjs",
 ];

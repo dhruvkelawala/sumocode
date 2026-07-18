@@ -112,13 +112,13 @@ function buildChatHTML(cols, toolStyle = "inline") {
 			{ role: "SUMO", time: "11:44", body: "Here is the proposed TypeScript shape:", code: {
 				language: "ts",
 				lines: [
-					`<span class="fg-keyword">export async function</span> <span class="fg-fn">authenticate</span>(<span class="fg-fg">token</span>: <span class="fg-fg">string</span>) {`,
-					`  <span class="fg-keyword">const</span> <span class="fg-fg">session</span> = <span class="fg-keyword">await</span> <span class="fg-fn">Session</span>.<span class="fg-fn">fromToken</span>(<span class="fg-fg">token</span>);`,
-					`  <span class="fg-keyword">if</span> (!<span class="fg-fg">session</span> || <span class="fg-fg">session</span>.<span class="fg-fg">expired</span>) <span class="fg-keyword">return</span> <span class="fg-keyword">null</span>;`,
+					`<span class="fg-code-keyword">export async function</span> <span class="fg-code-function">authenticate</span>(<span class="fg-code">token</span>: <span class="fg-code">string</span>) {`,
+					`  <span class="fg-code-keyword">const</span> <span class="fg-code">session</span> = <span class="fg-code-keyword">await</span> <span class="fg-code-function">Session</span>.<span class="fg-code-function">fromToken</span>(<span class="fg-code">token</span>);`,
+					`  <span class="fg-code-keyword">if</span> (!<span class="fg-code">session</span> || <span class="fg-code">session</span>.<span class="fg-code">expired</span>) <span class="fg-code-keyword">return</span> <span class="fg-code-keyword">null</span>;`,
 					``,
-					`  <span class="fg-comment">// emit auth event for telemetry</span>`,
-					`  <span class="fg-fn">emit</span>(<span class="fg-string">"auth.success"</span>, { <span class="fg-fg">userId</span>: <span class="fg-fg">session</span>.<span class="fg-fg">user</span>.<span class="fg-fg">id</span> });`,
-					`  <span class="fg-keyword">return</span> <span class="fg-fg">session</span>.<span class="fg-fg">user</span>;`,
+					`  <span class="fg-code-comment">// emit auth event for telemetry</span>`,
+					`  <span class="fg-code-function">emit</span>(<span class="fg-code-string">"auth.success"</span>, { <span class="fg-code">userId</span>: <span class="fg-code">session</span>.<span class="fg-code">user</span>.<span class="fg-code">id</span> });`,
+					`  <span class="fg-code-keyword">return</span> <span class="fg-code">session</span>.<span class="fg-code">user</span>;`,
 					`}`,
 				],
 			}, footer: "If this looks right, I’ll wire it into the session boundary." },
@@ -206,18 +206,18 @@ function buildChatHTML(cols, toolStyle = "inline") {
 			rows.push(blankRow());
 			const codeInner = Math.min(innerCols - 4, 96);
 			const lang = msg.code.language;
-			const langTag = `─ <span class="fg-dim">${lang}</span> ─`;
+			const langTag = `─ <span class="fg-code-gutter">${lang}</span> ─`;
 			const langLen = 2 + lang.length + 3;
-			rows.push(bodyRow(`<span class="fg-divider">╭─ </span><span class="fg-dim">${lang}</span><span class="fg-divider"> ${rep("─", Math.max(1, codeInner - langLen))}╮</span>`, codeInner));
+			rows.push(bodyRow(`<span class="fg-code-border">╭─ </span><span class="fg-code-gutter">${lang}</span><span class="fg-code-border"> ${rep("─", Math.max(1, codeInner - langLen))}╮</span>`, codeInner));
 			for (let i = 0; i < msg.code.lines.length; i++) {
 				const lineNum = String(i + 1).padStart(3);
 				const code = msg.code.lines[i];
-				const left = `<span class="fg-divider">│</span> <span class="fg-dim">${lineNum} </span>${code}`;
+				const left = `<span class="fg-code-border">│</span> <span class="fg-code-gutter">${lineNum} </span>${code}`;
 				const leftLen = visibleLen(left);
-				const rowHTML = left + rep(" ", Math.max(0, codeInner - leftLen - 1)) + `<span class="fg-divider">│</span>`;
+				const rowHTML = left + rep(" ", Math.max(0, codeInner - leftLen - 1)) + `<span class="fg-code-border">│</span>`;
 				rows.push(bodyRow(rowHTML, codeInner));
 			}
-			rows.push(bodyRow(`<span class="fg-divider">╰${rep("─", codeInner - 2)}╯</span>`, codeInner));
+			rows.push(bodyRow(`<span class="fg-code-border">╰${rep("─", codeInner - 2)}╯</span>`, codeInner));
 		}
 
 		if (msg.skill) {
@@ -296,24 +296,24 @@ function buildChatHTML(cols, toolStyle = "inline") {
 					const status = tool.note ? `${glyph} ${tool.note}` : glyph;
 					const statusHTML = `<span class="${dotClass}">${glyph}</span>${tool.note ? `<span class="fg-dim"> ${tool.note}</span>` : ""}`;
 					const title = `[${tool.name}]  ${tool.target}`;
-					const leftHTML = `<span class="fg-divider">╭─ </span><span class="fg-accent">[${tool.name}]</span><span class="fg-fg">  ${tool.target}</span> `;
+					const leftHTML = `<span class="fg-tool-border">╭─ </span><span class="fg-tool-label">[${tool.name}]</span><span class="fg-tool-target">  ${tool.target}</span> `;
 					const leftLen = 3 + title.length + 1;
 					const rightLen = visibleLen(statusHTML) + 2;
-					rows.push(bodyRow(leftHTML + `<span class="fg-divider">${rep("─", Math.max(1, innerCols - leftLen - rightLen))}</span> ` + statusHTML, innerCols));
+					rows.push(bodyRow(leftHTML + `<span class="fg-tool-border">${rep("─", Math.max(1, innerCols - leftLen - rightLen))}</span> ` + statusHTML, innerCols));
 
 					const outputLines = tool.name === "bash"
 						? [
-							`<span class="fg-fg">> pnpm test src/auth</span>`,
-							`<span class="fg-idle">✓</span> <span class="fg-fg">src/auth/session.test.ts (22 tests)</span>`,
-							`<span class="fg-dim">22 passed in 1.2s</span>`,
+							`<span class="fg-tool-body">> pnpm test src/auth</span>`,
+							`<span class="fg-idle">✓</span> <span class="fg-tool-body">src/auth/session.test.ts (22 tests)</span>`,
+							`<span class="fg-tool-muted">22 passed in 1.2s</span>`,
 						]
 						: tool.name === "edit"
-							? [`<span class="fg-idle">+14</span> <span class="fg-approve">-6</span> <span class="fg-dim">session flow updated</span>`]
-							: [`<span class="fg-dim">preview collapsed</span>`];
+							? [`<span class="fg-idle">+14</span> <span class="fg-approve">-6</span> <span class="fg-tool-muted">session flow updated</span>`]
+							: [`<span class="fg-tool-muted">preview collapsed</span>`];
 					for (const outputLine of outputLines) {
-						rows.push(bodyRow(`<span class="fg-divider">│</span> ${outputLine}`, visibleLen(outputLine) + 2));
+						rows.push(bodyRow(`<span class="fg-tool-border">│</span> ${outputLine}`, visibleLen(outputLine) + 2));
 					}
-					rows.push(bodyRow(`<span class="fg-divider">╰${rep("─", innerCols - 1)}</span>`, innerCols));
+					rows.push(bodyRow(`<span class="fg-tool-border">╰${rep("─", innerCols - 1)}</span>`, innerCols));
 					continue;
 				}
 

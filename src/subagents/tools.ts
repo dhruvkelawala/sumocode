@@ -48,7 +48,10 @@ const boundedWaitText = (snapshots: readonly SubagentSnapshot[]): string => {
 	let remaining = 48 * 1024;
 	const chunks: string[] = [];
 	for (const snapshot of snapshots) {
-		const body = latestText(snapshot) || snapshot.errorText || "(no output)";
+		// A failed child with partial text must still surface WHY it failed —
+		// partial output alone is easy to misread as a successful result.
+		const errorLine = snapshot.status === "error" && snapshot.errorText ? `error: ${snapshot.errorText}\n` : "";
+		const body = `${errorLine}${latestText(snapshot) || (errorLine ? "" : snapshot.errorText || "(no output)")}`;
 		const perAgent = body.slice(0, 16 * 1024);
 		const chunk = [`${snapshot.id} [${snapshot.status}] ${snapshot.title}`, perAgent].join("\n");
 		const bounded = chunk.slice(0, remaining);

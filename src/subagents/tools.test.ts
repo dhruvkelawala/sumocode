@@ -53,4 +53,16 @@ describe("subagent tools", () => {
 		await tool("subagent_spawn").execute("tc", { prompt: "do", name: "w" }, undefined, undefined, ctx as never);
 		await expect(tool("subagent_wait").execute("tc", { ids: ["sa-2"] }, undefined, undefined, ctx as never)).rejects.toThrow("Known ids: sa-1");
 	});
+
+	it("includes the failure reason in wait results even when partial text exists", async () => {
+		const { tool, emitters, ctx } = createHarness();
+		const spawnResult = await tool("subagent_spawn").execute("t1", { prompt: "p", name: "n" }, undefined, undefined, ctx as never);
+		const id = ((spawnResult as { details: { subagent: { id: string } } }).details.subagent).id;
+		emitters.get(id)?.({ kind: "message-end", role: "assistant", text: "partial progress" });
+		emitters.get(id)?.({ kind: "run-settled", outcome: { kind: "failed", errorText: "provider exploded", partialText: "partial progress" } });
+		const waited = await tool("subagent_wait").execute("t2", { ids: [id] }, undefined, undefined, ctx as never);
+		const text = textOf(waited);
+		expect(text).toContain("error: provider exploded");
+		expect(text).toContain("partial progress");
+	});
 });

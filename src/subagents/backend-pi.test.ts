@@ -7,6 +7,7 @@ class FakeProcess extends EventEmitter {
 	public readonly stdin = { end: vi.fn() };
 	public readonly stdout = new EventEmitter();
 	public readonly stderr = new EventEmitter();
+	public pid = 4242;
 	public killed = false;
 	public kill = vi.fn(() => {
 		this.killed = true;
@@ -56,9 +57,10 @@ describe("spawnPiChild", () => {
 		const controller = new AbortController();
 		const child = createPiChildSpawner(vi.fn(() => proc) as never)({ prompt: "x", cwd: "/tmp", inherited: {}, signal: controller.signal });
 		const events = collect(child.events as (emit: (event: SubagentEvent) => void) => void);
+		const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
 		controller.abort();
+		killSpy.mockRestore();
 		proc.emit("close", null);
-		expect(proc.kill).toHaveBeenCalledWith("SIGTERM");
 		expect(events.at(-1)).toEqual({ kind: "run-settled", outcome: { kind: "interrupted", partialText: undefined } });
 	});
 
@@ -71,8 +73,26 @@ describe("spawnPiChild", () => {
 		expect(events.at(-1)).toEqual({ kind: "run-settled", outcome: { kind: "failed", errorText: "boom", partialText: undefined } });
 	});
 
-	it("escalates to SIGKILL when the child ignores SIGTERM (no close event)", () => {
-		vi.useFakeTimers();
+	it("spawns the child detached and signals the whole process group on interrupt", () => {
+		const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+		try {
+			const proc = new FakeProcess();
+			const spawn = vi.fn(() => proc);
+			const controller = new AbortController();
+			const child = createPiChildSpawner(spawn as never)({ prompt: "x", cwd: "/tmp", inherited: {}, signal: controller.signal });
+			collect(child.events as (emit: (event: SubagentEvent) => void) => void);
+			expect(spawn).toHaveBeenCalledWith("pi", expect.any(Array), expect.objectContaining({ detached: true }));
+			controller.abort();
+			// Group signal: negative pid targets the whole tree, not just pi.
+			expect(killSpy).toHaveBeenCalledWith(-4242, "SIGTERM");
+			expect(proc.kill).not.toHaveBeenCalled();
+		} finally {
+			killSpy.mockRestore();
+		}
+	});
+
+	it("falls back to single-pid kill when the group signal fails", () => {
+		const killSpy = vi.spyOn(process, "kill").mockImplementation(() => { throw new Error("ESRCH"); });
 		try {
 			const proc = new FakeProcess();
 			const controller = new AbortController();
@@ -80,10 +100,29 @@ describe("spawnPiChild", () => {
 			collect(child.events as (emit: (event: SubagentEvent) => void) => void);
 			controller.abort();
 			expect(proc.kill).toHaveBeenCalledWith("SIGTERM");
-			// proc.killed is true (signal SENT) but the process never exited —
-			// the fallback must still fire because it tracks close, not killed.
-			vi.advanceTimersByTime(5001);
-			expect(proc.kill).toHaveBeenCalledWith("SIGKILL");
+		} finally {
+			killSpy.mockRestore();
+		}
+	});
+
+	it("escalates to SIGKILL when the child ignores SIGTERM (no close event)", () => {
+		vi.useFakeTimers();
+		try {
+			const proc = new FakeProcess();
+			const controller = new AbortController();
+			const child = createPiChildSpawner(vi.fn(() => proc) as never)({ prompt: "x", cwd: "/tmp", inherited: {}, signal: controller.signal });
+			collect(child.events as (emit: (event: SubagentEvent) => void) => void);
+			const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+			try {
+				controller.abort();
+				expect(killSpy).toHaveBeenCalledWith(-4242, "SIGTERM");
+				// The signal was SENT but the process never exited — the fallback
+				// must still fire because it tracks close, not killed.
+				vi.advanceTimersByTime(5001);
+				expect(killSpy).toHaveBeenCalledWith(-4242, "SIGKILL");
+			} finally {
+				killSpy.mockRestore();
+			}
 		} finally {
 			vi.useRealTimers();
 		}
@@ -96,11 +135,16 @@ describe("spawnPiChild", () => {
 			const controller = new AbortController();
 			const child = createPiChildSpawner(vi.fn(() => proc) as never)({ prompt: "x", cwd: "/tmp", inherited: {}, signal: controller.signal });
 			collect(child.events as (emit: (event: SubagentEvent) => void) => void);
-			controller.abort();
-			proc.emit("close", null);
-			vi.advanceTimersByTime(5001);
-			expect(proc.kill).toHaveBeenCalledTimes(1);
-			expect(proc.kill).toHaveBeenCalledWith("SIGTERM");
+			const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+			try {
+				controller.abort();
+				proc.emit("close", null);
+				vi.advanceTimersByTime(5001);
+				const kills = killSpy.mock.calls.filter(([pid]) => pid === -4242);
+				expect(kills).toEqual([[-4242, "SIGTERM"]]);
+			} finally {
+				killSpy.mockRestore();
+			}
 		} finally {
 			vi.useRealTimers();
 		}

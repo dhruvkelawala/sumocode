@@ -135,6 +135,30 @@ const mapPiEvent = (event: Record<string, unknown>): SubagentEvent[] => {
 	return [];
 };
 
+/**
+ * Signal the child's whole PROCESS GROUP on POSIX (negative pid), falling back
+ * to the single pid. Signalling only the `pi` pid leaves tool grandchildren
+ * (e.g. a long-running command under the child's bash tool) alive and mutating
+ * files after a cancel — the same reason background-tasks' task-manager uses
+ * `signalProcessOrGroup`. Requires the child to be spawned `detached` so it
+ * leads its own group.
+ */
+const signalGroup = (proc: ChildProcessWithoutNullStreams, signal: NodeJS.Signals): void => {
+	if (process.platform !== "win32" && proc.pid != null) {
+		try {
+			process.kill(-proc.pid, signal);
+			return;
+		} catch {
+			// group gone or not a leader — fall through to single-pid kill
+		}
+	}
+	try {
+		proc.kill(signal);
+	} catch {
+		// process already gone
+	}
+};
+
 const attachAbortSignal = (proc: ChildProcessWithoutNullStreams, signal: AbortSignal | undefined): { isAborted: () => boolean; interrupt: () => void } => {
 	let aborted = false;
 	// `proc.killed` only means a signal was successfully SENT, not that the
@@ -146,9 +170,9 @@ const attachAbortSignal = (proc: ChildProcessWithoutNullStreams, signal: AbortSi
 	});
 	const interrupt = () => {
 		aborted = true;
-		proc.kill("SIGTERM");
+		signalGroup(proc, "SIGTERM");
 		setTimeout(() => {
-			if (!exited) proc.kill("SIGKILL");
+			if (!exited) signalGroup(proc, "SIGKILL");
 		}, 5000).unref?.();
 	};
 	if (signal?.aborted) interrupt();
@@ -190,6 +214,9 @@ export const createPiChildSpawner = (spawnImpl: SpawnLike = nodeSpawn) => (optio
 			cwd: options.cwd,
 			shell: false,
 			stdio: ["pipe", "pipe", "pipe"],
+			// Own process group on POSIX so interrupt/SIGKILL can signal the
+			// whole tree (see signalGroup) instead of just the pi pid.
+			detached: process.platform !== "win32",
 		}) as ChildProcessWithoutNullStreams;
 		proc.stdin.end();
 		const abortState = attachAbortSignal(proc, options.signal);

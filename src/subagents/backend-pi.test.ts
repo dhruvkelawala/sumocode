@@ -71,6 +71,16 @@ describe("spawnPiChild", () => {
 		expect(events.at(-1)).toEqual({ kind: "run-settled", outcome: { kind: "failed", errorText: "boom", partialText: undefined } });
 	});
 
+	it("settles as failed without spawning when the model override is invalid", () => {
+		const spawn = vi.fn();
+		const child = createPiChildSpawner(spawn as never)({ prompt: "x", cwd: "/tmp", model: "gpt5-no-slash", inherited: {} });
+		const events = collect(child.events as (emit: (event: SubagentEvent) => void) => void);
+		expect(spawn).not.toHaveBeenCalled();
+		expect(events).toHaveLength(1);
+		expect(events[0]).toMatchObject({ kind: "run-settled", outcome: { kind: "failed" } });
+		expect(() => child.interrupt()).not.toThrow();
+	});
+
 	it("treats exit 0 with empty final text as completed, matching native-task semantics", () => {
 		const proc = new FakeProcess();
 		const child = createPiChildSpawner(vi.fn(() => proc) as never)({ prompt: "x", cwd: "/tmp", inherited: {} });

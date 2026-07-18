@@ -37,6 +37,18 @@ describe("resolveStartupThemeName", () => {
 		}
 	});
 
+	it("resolves to ultraviolet-core when the persisted theme is ultraviolet-core", () => {
+		const root = mkdtempSync(join(tmpdir(), "sumocode-startup-theme-ultraviolet-"));
+		const homeDir = join(root, "home");
+		writeGlobalConfig(homeDir, { themeName: "ultraviolet-core" });
+
+		try {
+			expect(resolveStartupThemeName({ cwd: root, homeDir, env: {} })).toBe("ultraviolet-core");
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
 	it("falls back to obsidian when the configured theme is unknown", () => {
 		const root = mkdtempSync(join(tmpdir(), "sumocode-startup-theme-unknown-"));
 		const homeDir = join(root, "home");
@@ -87,6 +99,20 @@ describe("applyStartupTheme", () => {
 			const themeName = applyStartupTheme({ cwd: root, homeDir, env: {} });
 			expect(themeName).toBe("herdr");
 			expect(getActiveTheme().name).toBe("herdr");
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("resolves the first active theme as Ultraviolet Core when ultraviolet-core is persisted", () => {
+		const root = mkdtempSync(join(tmpdir(), "sumocode-startup-theme-apply-ultraviolet-"));
+		const homeDir = join(root, "home");
+		writeGlobalConfig(homeDir, { themeName: "ultraviolet-core" });
+
+		try {
+			const themeName = applyStartupTheme({ cwd: root, homeDir, env: {} });
+			expect(themeName).toBe("ultraviolet-core");
+			expect(getActiveTheme().name).toBe("ultraviolet-core");
 		} finally {
 			rmSync(root, { recursive: true, force: true });
 		}

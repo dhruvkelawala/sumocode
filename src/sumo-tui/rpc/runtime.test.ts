@@ -1061,6 +1061,8 @@ describe("RPC host terminal theme palette", () => {
 
 	const HERDR_BG = "\x1b]11;#040704\x1b\\";
 	const HERDR_CURSOR = "\x1b]12;#39FF14\x1b\\";
+	const ULTRAVIOLET_BG = "\x1b]11;#06050B\x1b\\";
+	const ULTRAVIOLET_CURSOR = "\x1b]12;#B974FF\x1b\\";
 	const CATHEDRAL_BG = "\x1b]11;#1A1511\x1b\\";
 	const CATHEDRAL_CURSOR = "\x1b]12;#D97706\x1b\\";
 	const countOccurrences = (chunks: readonly string[], needle: string): number =>
@@ -1079,66 +1081,78 @@ describe("RPC host terminal theme palette", () => {
 		return { output, terminal, runtime };
 	}
 
-	it("Herdr startup's first OSC 11/12 use the Herdr palette with no Cathedral flash", async () => {
-		setActiveTheme("herdr");
+	it.each([
+		["herdr", HERDR_BG, HERDR_CURSOR],
+		["ultraviolet-core", ULTRAVIOLET_BG, ULTRAVIOLET_CURSOR],
+	] as const)("%s startup's first OSC 11/12 use the active palette with no Cathedral flash", async (themeName, expectedBg, expectedCursor) => {
+		setActiveTheme(themeName);
 		const { output, runtime } = buildRuntime();
 
 		await runtime.start();
 
 		const joined = output.chunks.join("");
-		expect(joined).toContain(HERDR_BG);
-		expect(joined).toContain(HERDR_CURSOR);
+		expect(joined).toContain(expectedBg);
+		expect(joined).toContain(expectedCursor);
 		expect(joined).not.toContain(CATHEDRAL_BG);
 		expect(joined).not.toContain(CATHEDRAL_CURSOR);
 		runtime.stop();
 	});
 
-	it("live Cathedral → Herdr switch emits the Herdr background and accent without restarting the session", async () => {
+	it.each([
+		["herdr", HERDR_BG, HERDR_CURSOR],
+		["ultraviolet-core", ULTRAVIOLET_BG, ULTRAVIOLET_CURSOR],
+	] as const)("live Cathedral → %s switch emits the active background and accent without restarting the session", async (themeName, expectedBg, expectedCursor) => {
 		const { output, terminal, runtime } = buildRuntime();
 		await runtime.start();
 		expect(output.chunks.join("")).toContain(CATHEDRAL_BG);
 		output.chunks.length = 0;
 
-		setActiveTheme("herdr");
+		setActiveTheme(themeName);
 
 		const joined = output.chunks.join("");
-		expect(joined).toContain(HERDR_BG);
-		expect(joined).toContain(HERDR_CURSOR);
+		expect(joined).toContain(expectedBg);
+		expect(joined).toContain(expectedCursor);
 		expect(terminal.getState().altscreenActive).toBe(true);
 		expect(terminal.getState().restored).toBe(false);
 		runtime.stop();
 	});
 
-	it("repeated selection of the same theme does not spam duplicate OSC writes", async () => {
+	it.each([
+		["herdr", HERDR_BG, HERDR_CURSOR],
+		["ultraviolet-core", ULTRAVIOLET_BG, ULTRAVIOLET_CURSOR],
+	] as const)("repeated selection of %s does not spam duplicate OSC writes", async (themeName, expectedBg, expectedCursor) => {
 		const { output, runtime } = buildRuntime();
 		await runtime.start();
 
-		setActiveTheme("herdr");
-		setActiveTheme("herdr");
-		setActiveTheme("herdr");
+		setActiveTheme(themeName);
+		setActiveTheme(themeName);
+		setActiveTheme(themeName);
 
-		expect(countOccurrences(output.chunks, HERDR_BG)).toBe(1);
-		expect(countOccurrences(output.chunks, HERDR_CURSOR)).toBe(1);
+		expect(countOccurrences(output.chunks, expectedBg)).toBe(1);
+		expect(countOccurrences(output.chunks, expectedCursor)).toBe(1);
 		runtime.stop();
 	});
 
-	it("an explicit cursor reset survives a theme switch: background updates, cursor stays default", async () => {
+	it.each([
+		["herdr", HERDR_BG, HERDR_CURSOR],
+		["ultraviolet-core", ULTRAVIOLET_BG, ULTRAVIOLET_CURSOR],
+	] as const)("an explicit cursor reset survives a %s switch: background updates, cursor stays default", async (themeName, expectedBg, expectedCursor) => {
 		const { output, terminal, runtime } = buildRuntime();
 		await runtime.start();
 		terminal.resetCursorColor();
 		output.chunks.length = 0;
 
-		setActiveTheme("herdr");
+		setActiveTheme(themeName);
 
 		const joined = output.chunks.join("");
-		expect(joined).toContain(HERDR_BG);
-		expect(joined).not.toContain(HERDR_CURSOR);
+		expect(joined).toContain(expectedBg);
+		expect(joined).not.toContain(expectedCursor);
 		expect(terminal.getState().cursorColorOverridden).toBe(false);
 		runtime.stop();
 	});
 
-	it("shutdown resets OSC background/cursor and terminal mode exactly once", async () => {
-		setActiveTheme("herdr");
+	it.each(["herdr", "ultraviolet-core"] as const)("shutdown after %s resets OSC background/cursor and terminal mode exactly once", async (themeName) => {
+		setActiveTheme(themeName);
 		const { output, runtime } = buildRuntime();
 		await runtime.start();
 
@@ -1151,7 +1165,7 @@ describe("RPC host terminal theme palette", () => {
 	});
 
 	it("non-TTY outputs emit no palette sequences", async () => {
-		setActiveTheme("herdr");
+		setActiveTheme("ultraviolet-core");
 		const output = new FakeOutput();
 		(output as { isTTY: boolean }).isTTY = false;
 		const terminal = new TerminalSessionOwner({ output });
@@ -1177,7 +1191,7 @@ describe("RPC host terminal theme palette", () => {
 		runtime.stop();
 		output.chunks.length = 0;
 
-		setActiveTheme("herdr");
+		setActiveTheme("ultraviolet-core");
 
 		expect(output.chunks).toEqual([]);
 	});

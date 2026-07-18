@@ -2,6 +2,7 @@ import { AMBER_CRT_THEME } from "./amber-crt.js";
 import { CATHEDRAL_THEME } from "./cathedral.js";
 import { HERDR_THEME } from "./herdr.js";
 import { OBSIDIAN_THEME } from "./obsidian.js";
+import { ULTRAVIOLET_CORE_THEME } from "./ultraviolet-core.js";
 import type { Theme, ThemeApplicationRoles, ThemeChrome, ThemeColors, ThemeTokens } from "./types.js";
 
 export type ThemeChangedListener = (theme: Theme) => void;
@@ -29,14 +30,15 @@ function ensureState(): ThemeRegistryState {
 	if (!state) {
 		// Registry insertion order is the user-visible cycle order for both
 		// `Ctrl+Shift+T` and `/sumo:theme list`. PRD § Themes pins cathedral
-		// first, amber-crt second, obsidian third, herdr fourth — do not
-		// reorder without an explicit PRD change.
+		// first, amber-crt second, obsidian third, herdr fourth, and ultraviolet-core
+		// fifth — do not reorder without an explicit PRD change.
 		state = {
 			registry: new Map<string, Theme>([
 				[CATHEDRAL_THEME.name, CATHEDRAL_THEME],
 				[AMBER_CRT_THEME.name, AMBER_CRT_THEME],
 				[OBSIDIAN_THEME.name, OBSIDIAN_THEME],
 				[HERDR_THEME.name, HERDR_THEME],
+				[ULTRAVIOLET_CORE_THEME.name, ULTRAVIOLET_CORE_THEME],
 			]),
 			listeners: new Set<ThemeChangedListener>(),
 			activeThemeName: CATHEDRAL_THEME.name,
@@ -56,6 +58,7 @@ function ensureState(): ThemeRegistryState {
 	if (!state.registry.has(AMBER_CRT_THEME.name)) state.registry.set(AMBER_CRT_THEME.name, AMBER_CRT_THEME);
 	if (!state.registry.has(OBSIDIAN_THEME.name)) state.registry.set(OBSIDIAN_THEME.name, OBSIDIAN_THEME);
 	if (!state.registry.has(HERDR_THEME.name)) state.registry.set(HERDR_THEME.name, HERDR_THEME);
+	if (!state.registry.has(ULTRAVIOLET_CORE_THEME.name)) state.registry.set(ULTRAVIOLET_CORE_THEME.name, ULTRAVIOLET_CORE_THEME);
 	return state;
 }
 

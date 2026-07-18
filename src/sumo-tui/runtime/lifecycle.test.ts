@@ -328,7 +328,10 @@ describe("LifecycleRuntime", () => {
 		expect(fakeProcess.listenerCount("SIGTSTP")).toBe(1);
 	});
 
-	it("Herdr startup paints the Herdr background/cursor and suspend/resume restores the retained palette, not Cathedral", () => {
+	it.each([
+		["Herdr", "#040704", "#39FF14"],
+		["Ultraviolet Core", "#06050B", "#B974FF"],
+	] as const)("%s startup paints the active background/cursor and suspend/resume restores the retained palette, not Cathedral", (_label, background, accent) => {
 		const fakeProcess = new FakeProcess();
 		const fakeInput = new FakeInput();
 		const output = outputStub();
@@ -337,20 +340,20 @@ describe("LifecycleRuntime", () => {
 		const { pi, handlers } = buildPiStub();
 
 		// The RPC runtime applies the active theme palette before terminal
-		// ownership begins; simulate that seam with Herdr's palette.
-		terminalSession.applyPalette({ background: "#040704", accent: "#39FF14" });
+		// ownership begins; simulate that seam with the active theme palette.
+		terminalSession.applyPalette({ background, accent });
 		runtime.installLifecycle(pi);
 		runtime.installProcessHandlers();
 		for (const handler of handlers.get("session_start") ?? []) {
 			handler({ type: "session_start" }, { hasUI: true });
 		}
 
-		// First OSC 11 must be Herdr's background, first OSC 12 Herdr's accent —
-		// no Cathedral flash before the theme palette lands.
+		// First OSC 11/12 must be the active theme palette — no Cathedral flash
+		// before the theme palette lands.
 		expect(output.writes).toEqual([
-			`${ALTSCREEN_ENTER_SEQUENCE}\x1b]11;#040704\x1b\\`,
+			`${ALTSCREEN_ENTER_SEQUENCE}\x1b]11;${background}\x1b\\`,
 			MOUSE_SGR_ENABLE_SEQUENCE,
-			"\x1b]12;#39FF14\x1b\\",
+			`\x1b]12;${accent}\x1b\\`,
 		]);
 
 		fakeProcess.emit("SIGTSTP");
@@ -358,9 +361,9 @@ describe("LifecycleRuntime", () => {
 
 		expect(output.writes.slice(3)).toEqual([
 			`${CURSOR_COLOR_RESET}${TERMINAL_BG_RESET}${TERMINAL_CLEANUP_SEQUENCE}`,
-			`${ALTSCREEN_ENTER_SEQUENCE}\x1b]11;#040704\x1b\\`,
+			`${ALTSCREEN_ENTER_SEQUENCE}\x1b]11;${background}\x1b\\`,
 			MOUSE_SGR_ENABLE_SEQUENCE,
-			"\x1b]12;#39FF14\x1b\\",
+			`\x1b]12;${accent}\x1b\\`,
 		]);
 	});
 
@@ -377,14 +380,14 @@ describe("LifecycleRuntime", () => {
 		}
 		output.writes.length = 0;
 
-		// Cathedral → Herdr live switch: new OSC 11 + OSC 12 (cursor override is
-		// active from startRetainedSession), without restarting the session.
-		terminalSession.applyPalette({ background: "#040704", accent: "#39FF14" });
-		expect(output.writes).toEqual(["\x1b]11;#040704\x1b\\", "\x1b]12;#39FF14\x1b\\"]);
+		// Cathedral → Ultraviolet live switch: new OSC 11 + OSC 12 (cursor override
+		// is active from startRetainedSession), without restarting the session.
+		terminalSession.applyPalette({ background: "#06050B", accent: "#B974FF" });
+		expect(output.writes).toEqual(["\x1b]11;#06050B\x1b\\", "\x1b]12;#B974FF\x1b\\"]);
 
 		// Re-applying the same palette must not spam duplicate OSC writes.
 		output.writes.length = 0;
-		terminalSession.applyPalette({ background: "#040704", accent: "#39FF14" });
+		terminalSession.applyPalette({ background: "#06050B", accent: "#B974FF" });
 		expect(output.writes).toEqual([]);
 
 		// Explicit cursor reset opt-out survives later palette changes: background

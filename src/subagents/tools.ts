@@ -149,7 +149,11 @@ export function registerSubagentTools(
 		parameters: Type.Object({ ids: Type.Array(Type.String(), { maxItems: 64, description: "Subagent ids to cancel." }) }),
 		async execute(_toolCallId, params) {
 			const lines = await manager.cancel(params.ids);
-			for (const id of params.ids) delivery?.consume(id);
+			// Only consume ids the manager actually knows. Consuming an unknown
+			// id permanently poisons it in the delivery buffer, so the eventual
+			// REAL child with that predictably-assigned id (e.g. a later sa-4)
+			// would settle unconsumed yet be silently dropped by defer().
+			for (const id of params.ids) if (manager.get(id)) delivery?.consume(id);
 			return makeToolResult(lines.join("\n"), { action: "cancel", ids: params.ids });
 		},
 	});

@@ -196,4 +196,18 @@ describe("subagent result delivery", () => {
 		harness.fire("agent_end");
 		expect(harness.sendMessage).not.toHaveBeenCalled();
 	});
+
+	it("cancelling an unknown id does not poison a later real child with that id", async () => {
+		const harness = createHarness();
+		harness.setIdle(false);
+		// Cancel sa-1 before it exists — manager reports unknown, and the
+		// delivery buffer must NOT record sa-1 as consumed.
+		await harness.tool("subagent_cancel").execute("tc", { ids: ["sa-1"] }, undefined, undefined, harness.ctx as never);
+		// Now the real sa-1 spawns, settles, and must still auto-deliver.
+		spawn(harness.manager, "real-sa-1");
+		backend.emitters.at(-1)?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
+		harness.fire("agent_end");
+		expect(harness.sendMessage).toHaveBeenCalledTimes(1);
+		expect((harness.sendMessage.mock.calls[0] as unknown[])[0]).toMatchObject({ customType: "subagent-result" });
+	});
 });

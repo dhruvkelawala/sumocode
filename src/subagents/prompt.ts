@@ -1,3 +1,31 @@
+import type { SubagentStatus } from "./domain.js";
+
+const RESULT_OUTPUT_MAX_CHARS = 24 * 1024;
+const RESULT_OUTPUT_MAX_LINES = 600;
+
+export interface SubagentResultMessageInput {
+	readonly id: string;
+	readonly title: string;
+	readonly status: Exclude<SubagentStatus, "running">;
+	readonly errorText?: string;
+	readonly output: string;
+	readonly sessionFilePath?: string;
+}
+
+function boundedResultOutput(output: string): string {
+	const lineBounded = output.split("\n").slice(0, RESULT_OUTPUT_MAX_LINES).join("\n");
+	return lineBounded.slice(0, RESULT_OUTPUT_MAX_CHARS);
+}
+
+export function buildSubagentResultMessage(input: SubagentResultMessageInput): string {
+	const lines = [`Subagent ${input.id} "${input.title}" ${input.status === "done" ? "finished" : "failed"}.`];
+	if (input.errorText) lines.push(`Error: ${input.errorText}`);
+	const output = boundedResultOutput(input.output);
+	if (output) lines.push(output);
+	if (input.sessionFilePath) lines.push(`Full transcript: ${input.sessionFilePath}`);
+	return lines.join("\n\n");
+}
+
 export const SUBAGENT_PROMPT_GUIDELINES = [
 	"Use subagent_spawn for independent research, review, or implementation slices that can proceed while you keep working.",
 	"Children are headless: they have their own context, cannot see this conversation, cannot ask the user, and cannot spawn subagents.",
@@ -10,7 +38,7 @@ export const SUBAGENT_PROMPT_GUIDELINES = [
 export const SUBAGENT_PROMPT_SNIPPET = "Spawn, check, wait for, cancel, and list headless subagents with self-contained prompts.";
 
 export const SUBAGENT_TOOL_DESCRIPTIONS = {
-	spawn: "Start one headless child subagent and return immediately with its id. Use subagent_wait or subagent_check to retrieve results in this release.",
+	spawn: "Start one headless child subagent and return immediately with its id. Its result is delivered automatically when it settles; use subagent_wait to block for it.",
 	check: "Peek at one subagent without consuming its eventual result.",
 	wait: "Block until one or more subagents settle, then return their bounded results and mark them consumed.",
 	cancel: "Interrupt running subagents and mark their results consumed.",

@@ -25,10 +25,10 @@ describe("subagent tools", () => {
 		expect(registered.map((tool) => tool.name)).toEqual(["subagent_spawn", "subagent_check", "subagent_wait", "subagent_cancel", "subagent_list"]);
 	});
 
-	it("spawn returns an id", async () => {
+	it("spawn returns an id and automatic-delivery guidance", async () => {
 		const { tool, ctx } = createHarness();
 		const result = await tool("subagent_spawn").execute("tc", { prompt: "do it", name: "worker" }, undefined, undefined, ctx as never);
-		expect(textOf(result)).toContain("Started sa-1");
+		expect(textOf(result)).toBe("Started sa-1 (worker). Its result will be delivered to you automatically when it settles, or use subagent_wait to block for it.");
 	});
 
 	it("at capacity returns cooperative status details", async () => {

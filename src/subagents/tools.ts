@@ -1,5 +1,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import type { DeferredResultDelivery } from "./delivery.js";
 import { latestText, type SubagentSnapshot } from "./domain.js";
 import { type AtCapacityDetails, SubagentManager } from "./manager.js";
 import { SUBAGENT_PROMPT_GUIDELINES, SUBAGENT_PROMPT_SNIPPET, SUBAGENT_TOOL_DESCRIPTIONS } from "./prompt.js";
@@ -62,7 +63,11 @@ const boundedWaitText = (snapshots: readonly SubagentSnapshot[]): string => {
 	return chunks.join("\n\n---\n\n");
 };
 
-export function registerSubagentTools(pi: ExtensionAPI, manager: SubagentManager): void {
+export function registerSubagentTools(
+	pi: ExtensionAPI,
+	manager: SubagentManager,
+	delivery?: Pick<DeferredResultDelivery, "consume">,
+): void {
 	pi.registerTool({
 		name: "subagent_spawn",
 		label: "Subagent Spawn",
@@ -94,9 +99,13 @@ export function registerSubagentTools(pi: ExtensionAPI, manager: SubagentManager
 			});
 			if (isAtCapacity(spawned)) return formatAtCapacity(spawned);
 			if (spawned.status !== "running") {
+				// The failure is being returned INLINE — consume it so the change
+				// listener's already-deferred payload is not ALSO auto-delivered
+				// on the next agent_end (double report + pointless extra turn).
+				delivery?.consume(spawned.id);
 				return makeToolResult(`Subagent ${spawned.id} (${spawned.title}) failed to start: ${spawned.errorText ?? "unknown error"}`, { action: "spawn", subagent: spawned });
 			}
-			return makeToolResult(`Started ${spawned.id} (${spawned.title}). Result will be available with subagent_wait ids=["${spawned.id}"].`, { action: "spawn", subagent: spawned });
+			return makeToolResult(`Started ${spawned.id} (${spawned.title}). Its result will be delivered to you automatically when it settles, or use subagent_wait to block for it.`, { action: "spawn", subagent: spawned });
 		},
 	});
 
@@ -126,6 +135,7 @@ export function registerSubagentTools(pi: ExtensionAPI, manager: SubagentManager
 			const snapshots = await manager.waitFor(params.ids, signal, (pending) => {
 				onUpdate?.({ content: [{ type: "text", text: `Waiting for ${pending.map((snapshot) => snapshot.id).join(", ")}…` }], details: { action: "wait", pending: pending.map((snapshot) => snapshot.id) } });
 			});
+			for (const snapshot of snapshots) delivery?.consume(snapshot.id);
 			return makeToolResult(boundedWaitText(snapshots), { action: "wait", subagents: snapshots });
 		},
 	});
@@ -139,6 +149,11 @@ export function registerSubagentTools(pi: ExtensionAPI, manager: SubagentManager
 		parameters: Type.Object({ ids: Type.Array(Type.String(), { maxItems: 64, description: "Subagent ids to cancel." }) }),
 		async execute(_toolCallId, params) {
 			const lines = await manager.cancel(params.ids);
+			// Only consume ids the manager actually knows. Consuming an unknown
+			// id permanently poisons it in the delivery buffer, so the eventual
+			// REAL child with that predictably-assigned id (e.g. a later sa-4)
+			// would settle unconsumed yet be silently dropped by defer().
+			for (const id of params.ids) if (manager.get(id)) delivery?.consume(id);
 			return makeToolResult(lines.join("\n"), { action: "cancel", ids: params.ids });
 		},
 	});

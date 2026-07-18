@@ -1,0 +1,110 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Bible · Theme · Ultraviolet Core · Tool Ledger</title>
+<link rel="stylesheet" href="_assets/tokens.css">
+<style>
+  :root {
+    --background: #06050B; --surface: #0D0917; --surface-recess: #0A0711; --surface-lifted: #1B102E;
+    --divider: #56347A; --foreground: #DCC7FF; --foreground-dim: #9B7BBE; --accent: #B974FF;
+    --state-idle: #DCC7FF; --state-thinking: #B974FF; --state-tool: #FFC857; --state-approval: #FF668F; --state-learning: #75E8FF;
+    --syntax-keyword: #B974FF; --syntax-string: #75E8FF; --syntax-number: #FFC857; --syntax-comment: #9B7BBE; --syntax-function: #75E8FF;
+    --tool-ledger-surface: #17100D; --tool-ledger-border: #6B4A1C; --tool-ledger-label: #FFC857; --tool-ledger-target: #FFE1A6; --tool-ledger-body: #FFE1A6; --tool-ledger-muted: #C7A96D;
+    --code-surface: #100A1D; --code-border: #56347A; --code-foreground: #DCC7FF; --code-gutter: #9B7BBE; --code-comment: #9B7BBE; --code-keyword: #B974FF; --code-string: #75E8FF; --code-number: #FFC857; --code-function: #75E8FF;
+  }
+  .fg-tool-border { color: var(--tool-ledger-border); } .fg-tool-label { color: var(--tool-ledger-label); } .fg-tool-target { color: var(--tool-ledger-target); } .fg-tool-body { color: var(--tool-ledger-body); } .fg-tool-muted { color: var(--tool-ledger-muted); }
+  .fg-code-border { color: var(--code-border); } .fg-code { color: var(--code-foreground); } .fg-code-gutter { color: var(--code-gutter); } .fg-code-comment { color: var(--code-comment); } .fg-code-keyword { color: var(--code-keyword); } .fg-code-string { color: var(--code-string); } .fg-code-number { color: var(--code-number); } .fg-code-function { color: var(--code-function); }
+  .scene { display: grid; grid-template-rows: var(--cell-h) var(--cell-h) var(--cell-h) calc(var(--cell-h) * 34) var(--cell-h) calc(var(--cell-h) * 3) var(--cell-h) var(--cell-h) var(--cell-h) var(--cell-h); }
+  .scene .middle { display: grid; grid-template-columns: 128ch 2ch 30ch; grid-row: 4; min-height: 0; overflow: hidden; }
+  .scene .middle .chat-col, .scene .middle .sidebar-col { overflow: hidden; min-height: 0; }
+  .scene .middle pre { margin: 0; }
+  body.runtime-target { background: var(--background); }
+  body.runtime-target .stage { min-height: 0; align-items: flex-start; justify-content: flex-start; padding: 0; gap: 0; }
+</style>
+</head>
+<body class="runtime-target">
+<div class="stage">
+  <div data-render-rect class="term scene" style="--term-cols: 160; --term-rows: 45;">
+    <pre class="grid"> </pre>
+    <pre class="grid"> <span class="fg-accent">SUMOCODE</span><span class="fg-dim">  ║ </span><span class="fg-accent">•</span><span class="fg-dim"> 019dd3d8 ║</span>                                                                                                                        <span class="fg-dim">ARCHIVE   </span><span class="fg-fg"></span><span class="fg-dim">  </span><span class="fg-fg"></span> </pre>
+    <pre class="grid"> </pre>
+    <div class="middle"><div class="chat-col"><pre class="grid"><span class="fg-divider">╭ </span><span class="fg-fg">USER</span> <span class="fg-divider">────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────</span><span class="fg-divider">╮</span>
+<span class="fg-divider">│</span><span class="box-fill" style="width: 126ch"> <span class="fg-fg">hello, refactor the auth flow to use the new session pattern.</span>                                                                </span><span class="fg-divider">│</span>
+<span class="fg-divider">╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯</span>
+                                                                                                                                
+<span class="fg-divider">╭ </span><span class="fg-accent">SUMO</span> <span class="fg-divider">─────────────────────────────────────────────────────────────────────────────────────────────────────────────────</span> <span class="fg-dim">11:42</span> <span class="fg-divider">╮</span>
+<span class="fg-divider">│</span><span class="box-fill" style="width: 126ch"> <span class="fg-fg">Reading the auth flow.</span>                                                                                                       </span><span class="fg-divider">│</span>
+<span class="fg-divider">│</span><span class="box-fill" style="width: 126ch">                                                                                                                              </span><span class="fg-divider">│</span>
+<span class="fg-divider">│</span><span class="box-fill" style="background: var(--tool-ledger-surface); width: 126ch"> <span class="fg-tool-border">╭─ </span><span class="fg-tool-label">[read]</span><span class="fg-tool-target">  src/auth/session.ts</span> <span class="fg-tool-border">────────────────────────────────────────────────────────────────────────────────────────────</span> <span class="fg-idle">✓</span>     </span><span class="fg-divider">│</span>
+<span class="fg-divider">│</span><span class="box-fill" style="background: var(--tool-ledger-surface); width: 126ch"> <span class="fg-tool-muted">preview collapsed</span>                                                                                                            </span><span class="fg-divider">│</span>
+<span class="fg-divider">│</span><span class="box-fill" style="background: var(--tool-ledger-surface); width: 126ch"> <span class="fg-tool-border">╰───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────</span>     </span><span class="fg-divider">│</span>
+<span class="fg-divider">│</span><span class="box-fill" style="width: 126ch">                                                                                                                              </span><span class="fg-divider">│</span>
+<span class="fg-divider">│</span><span class="box-fill" style="background: var(--tool-ledger-surface); width: 126ch"> <span class="fg-tool-border">╭─ </span><span class="fg-tool-label">[edit]</span><span class="fg-tool-target">  src/auth/session.ts</span> <span class="fg-tool-border">────────────────────────────────────────────────────────────────────────────────────────────</span> <span class="fg-idle">✓</span>     </span><span class="fg-divider">│</span>
+<span class="fg-divider">│</span><span class="box-fill" style="background: var(--tool-ledger-surface); width: 126ch"> <span class="fg-idle">+14</span> <span class="fg-approve">-6</span> <span class="fg-tool-muted">session flow updated</span>                                                                                                 </span><span class="fg-divider">│</span> 
+<span class="fg-divider">│</span><span class="box-fill" style="background: var(--tool-ledger-surface); width: 126ch"> <span class="fg-tool-border">╰───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────</span>     </span><span class="fg-divider">│</span>
+<span class="fg-divider">│</span><span class="box-fill" style="width: 126ch"> <span class="fg-fg">Done. Updated 14 lines, deleted 6 stale helpers.</span>                                                                             </span><span class="fg-divider">│</span>
+<span class="fg-divider">╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯</span>
+                                                                                                                                
+<span class="fg-divider">╭ </span><span class="fg-accent">SUMO</span> <span class="fg-divider">─────────────────────────────────────────────────────────────────────────────────────────────────────────────────</span> <span class="fg-dim">11:42</span> <span class="fg-divider">╮</span>
+<span class="fg-divider">│</span><span class="box-fill" style="width: 126ch"> <span class="fg-fg">Running tests now.</span>                                                                                                           </span><span class="fg-divider">│</span>
+<span class="fg-divider">│</span><span class="box-fill" style="width: 126ch">                                                                                                                              </span><span class="fg-divider">│</span>
+<span class="fg-divider">│</span><span class="box-fill" style="background: var(--tool-ledger-surface); width: 126ch"> <span class="fg-tool-border">╭─ </span><span class="fg-tool-label">[bash]</span><span class="fg-tool-target">  pnpm test src/auth</span> <span class="fg-tool-border">────────────────────────────────────────────────────────────────────────────────────</span> <span class="fg-idle">✓ 22 tests</span>     </span><span class="fg-divider">│</span>
+<span class="fg-divider">│</span><span class="box-fill" style="background: var(--tool-ledger-surface); width: 126ch"> <span class="fg-tool-body">&gt; pnpm test src/auth</span>                                                                                                         </span><span class="fg-divider">│</span>
+<span class="fg-divider">│</span><span class="box-fill" style="background: var(--tool-ledger-surface); width: 126ch"> <span class="fg-idle">✓</span> <span class="fg-tool-body">src/auth/session.test.ts (22 tests)</span>                                                                                       </span><span class="fg-divider">│</span> 
+<span class="fg-divider">│</span><span class="box-fill" style="background: var(--tool-ledger-surface); width: 126ch"> <span class="fg-tool-muted">22 passed in 1.2s</span>                                                                                                           </span><span class="fg-divider">│</span> 
+<span class="fg-divider">│</span><span class="box-fill" style="background: var(--tool-ledger-surface); width: 126ch"> <span class="fg-tool-border">╰───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────</span>     </span><span class="fg-divider">│</span>
+<span class="fg-divider">╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯</span>
+                                                                                                                                
+                                                                                                                                
+                                                                                                                                
+                                                                                                                                
+                                                                                                                                
+                                                                                                                                
+                                                                                                                                
+                                                                                                                                </pre></div><div class="gutter-col"></div><div class="sidebar-col"><pre class="grid"><span class="box-fill" style="background: var(--surface); width: 30ch">                              </span>
+<span class="box-fill" style="background: var(--surface); width: 30ch">  <span class="fg-accent"># REGISTRY</span>                  </span>
+<span class="box-fill" style="background: var(--surface); width: 30ch">                              </span>
+<span class="box-fill" style="background: var(--surface); width: 30ch">  <span class="fg-accent">&gt;</span> <span class="fg-fg">&gt; CONTEXT</span>                 </span>
+<span class="box-fill" style="background: var(--surface); width: 30ch">  <span class="fg-dim">. + MEMORY</span>                  </span>
+<span class="box-fill" style="background: var(--surface); width: 30ch">                              </span>
+<span class="box-fill" style="background: var(--surface); width: 30ch">  <span class="fg-divider">──────────────────────────</span>  </span>
+<span class="box-fill" style="background: var(--surface); width: 30ch">                              </span>
+<span class="box-fill" style="background: var(--surface); width: 30ch">  <span class="fg-fg">sumocode</span>                    </span>
+<span class="box-fill" style="background: var(--surface); width: 30ch">  <span class="fg-dim">on main</span>                     </span>
+<span class="box-fill" style="background: var(--surface); width: 30ch">                              </span>
+<span class="box-fill" style="background: var(--surface); width: 30ch">  <span class="fg-dim">&gt; CONTEXT</span>                   </span>
+<span class="box-fill" style="background: var(--surface); width: 30ch">  <span class="fg-idle">▉▉▉▉▉</span><span class="fg-divider">░░░░░░░░░░░░░░░░░</span>      </span>
+<span class="box-fill" style="background: var(--surface); width: 30ch">  <span class="fg-fg">42k</span> <span class="fg-dim">/ 200k</span>                  </span>
+<span class="box-fill" style="background: var(--surface); width: 30ch">                              </span>
+<span class="box-fill" style="background: var(--surface); width: 30ch">  <span class="fg-dim">~ SESSION</span>                   </span>
+<span class="box-fill" style="background: var(--surface); width: 30ch">  <span class="fg-fg">$0.42</span> <span class="fg-dim">· 3.4M cumul</span>          </span>
+<span class="box-fill" style="background: var(--surface); width: 30ch">                              </span>
+<span class="box-fill" style="background: var(--surface); width: 30ch">  <span class="fg-divider">──────────────────────────</span>  </span>
+<span class="box-fill" style="background: var(--surface); width: 30ch">                              </span>
+<span class="box-fill" style="background: var(--surface); width: 30ch">  <span class="fg-dim">* MCP</span>                       </span>
+<span class="box-fill" style="background: var(--surface); width: 30ch">                              </span>
+<span class="box-fill" style="background: var(--surface); width: 30ch">  <span class="fg-dim">●</span> <span class="fg-fg">github</span>              <span class="fg-dim">idle</span>  </span>
+<span class="box-fill" style="background: var(--surface); width: 30ch">  <span class="fg-idle">●</span> <span class="fg-fg">stitch</span>                <span class="fg-dim">ok</span>  </span>
+<span class="box-fill" style="background: var(--surface); width: 30ch">  <span class="fg-dim">●</span> <span class="fg-fg">context7</span>            <span class="fg-dim">idle</span>  </span>
+<span class="box-fill" style="background: var(--surface); width: 30ch">  <span class="fg-dim">●</span> <span class="fg-fg">chrome-dev</span>          <span class="fg-dim">idle</span>  </span>
+<span class="box-fill" style="background: var(--surface); width: 30ch">                              </span>
+<span class="box-fill" style="background: var(--surface); width: 30ch">                              </span>
+<span class="box-fill" style="background: var(--surface); width: 30ch">                              </span>
+<span class="box-fill" style="background: var(--surface); width: 30ch">                              </span>
+<span class="box-fill" style="background: var(--surface); width: 30ch">                              </span>
+<span class="box-fill" style="background: var(--surface); width: 30ch">                              </span>
+<span class="box-fill" style="background: var(--surface); width: 30ch">                              </span>
+<span class="box-fill" style="background: var(--surface); width: 30ch">                              </span></pre></div></div>
+    <pre class="grid"> </pre>
+    <pre class="grid"><span class="box-fill" style="background: var(--surface-recess); width: 160ch"><span class="fg-divider">┌──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐</span></span>
+<span class="box-fill" style="background: var(--surface-recess); width: 160ch"><span class="fg-divider">│</span> <span class="fg-accent">&gt;</span> <span class="cursor"> </span>                                                                                                                                                          <span class="fg-divider">│</span></span>
+<span class="box-fill" style="background: var(--surface-recess); width: 160ch"><span class="fg-divider">└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘</span></span></pre>
+    <pre class="grid">                                                                                                                                              <span class="fg-accent">CTRL+/</span><span class="fg-dim"> · COMMANDS</span> </pre>
+    <pre class="grid"> </pre>
+    <pre class="grid"> <span class="fg-idle">●</span> <span class="fg-fg">READY</span><span class="fg-dim"> · </span><span class="fg-fg">gpt-5.5</span><span class="fg-dim"> · </span><span class="fg-fg">medium</span>                                                                                                                    <span class="fg-fg">42k/200k</span><span class="fg-dim"> · </span><span class="fg-fg">$0.42</span> </pre>
+    <pre class="grid"> </pre>
+  </div>
+</div>
+</body>
+</html>

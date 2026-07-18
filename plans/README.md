@@ -501,6 +501,7 @@ manifests, then retirement of the `bg_task` mega-tool and delegation routing amb
 | 073 | [Herdr Terminal Theme](073-herdr-terminal-theme.md) | P1 | M | — | [#312](https://github.com/dhruvkelawala/sumocode/issues/312) | DONE — PR #315 (`b91f7ad` + `ae93792` approved-palette realignment) |
 | 072 | [Terminal-host abstraction: herdr + cmux](072-terminal-host-abstraction-herdr.md) | P2 | M | 071 (same file) | [#311](https://github.com/dhruvkelawala/sumocode/issues/311) | DONE — PR #313 (`52f33d6`, `fc56f14`): facade + worktree/diff/review/bg-task ports + pane-ref schema v3 |
 | 074 | [Herdr-native integration: approval attention queue + native worktree workspaces](074-herdr-native-integration.md) | P2 | S | 072 | [#316](https://github.com/dhruvkelawala/sumocode/issues/316) | DONE — PR #320 (`93e077a`); Claude autoreview 3 rounds → clean; live-verified: blocked flip + attention-queue jump during approval modal (operator screenshot 2026-07-18) |
+| 075 | [Ultraviolet Core Application Theme](075-ultraviolet-core-application-theme.md) | P1 | L | 073 | [#319](https://github.com/dhruvkelawala/sumocode/issues/319) | DONE — implementation branch `advisor/075-ultraviolet-core-application-theme`; review-only visual evidence, no golden promotion |
 
 ### Dependency notes
 
@@ -541,6 +542,18 @@ manifests, then retirement of the `bg_task` mega-tool and delegation routing amb
   here is a visual identity, while 072 targets the separate `herdr` terminal application API.
 - The first three registry entries remain pinned; Herdr appends fourth. Existing Cathedral Bible
   targets and approved runtime goldens are not rewritten or promoted by this plan.
+
+## Theme expansion — Ultraviolet Core (075)
+
+**Planned at:** `0477358`, 2026-07-18. 075's canonical row lives in the Orchestration v2 table above (DONE, issue #319).
+
+### Scope note
+
+- 075 adds the first-party `ultraviolet-core` visual theme as the fifth registry entry and introduces
+  theme-owned application roles for tool ledgers and code blocks. The seam is generic and complete:
+  existing themes use centralized legacy-compatible fallbacks; renderers do not branch on theme name.
+- The active runtime, tool-ledger, and code-block visual scenarios are review-only. No approved runtime
+  golden is promoted by this plan.
 
 ## Status values
 

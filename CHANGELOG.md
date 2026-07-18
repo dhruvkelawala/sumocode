@@ -17,6 +17,15 @@ landed between the original scaffold and this release.
   `#FF706D` approval, sharp ASCII chrome (`┌ ┐ └ ┘`, `> # @ $ %` sigils), and
   an eight-frame ASCII packet working indicator. Registered fourth after
   Obsidian; Cathedral remains the default.
+- **Ultraviolet Core theme** (`ultraviolet-core`) — fifth first-party theme:
+  violet-black `#06050B` chassis, violet `#B974FF` focus/cursor, pale lavender
+  `#DCC7FF` body/idle, ice `#75E8FF` syntax/learning, amber `#FFC857` tool
+  execution, and pink `#FF668F` approval/failure. Registered fifth after Herdr;
+  Cathedral remains the default.
+- **Theme application roles** — optional complete `ThemeApplicationRoles` for
+  tool ledgers and code blocks. Existing themes resolve through
+  legacy-compatible fallbacks, while Ultraviolet supplies amber-tinted tool
+  bodies and violet/ice/amber code syntax without renderer theme-name branches.
 - **Herdr visual evidence** — deterministic Bible target
   (`theme-herdr-active.html` via `scripts/gen-bible-theme-herdr.mjs`), design
   contract (`docs/ui/stitch/herdr-terminal/DESIGN.md`), and an isolated
@@ -24,6 +33,12 @@ landed between the original scaffold and this release.
   `test/fixtures/pi-agent-herdr` fixture (never the developer's live Pi
   config). Review notes in `docs/visual/parity/HERDR_THEME_REVIEW.md`; no
   runtime goldens promoted.
+- **Ultraviolet visual evidence** — deterministic Bible targets for active,
+  tool-ledger, and code-block states via
+  `scripts/gen-bible-theme-ultraviolet-core.mjs`, design contract under
+  `docs/ui/stitch/ultraviolet-core/DESIGN.md`, themed fixture scenarios, and an
+  isolated `ultraviolet-core-active-runtime` review scenario driven by
+  `test/fixtures/pi-agent-ultraviolet-core`. No runtime goldens promoted.
 
 ### Changed
 - **Theme-aware terminal background/cursor** — the host terminal's OSC 11

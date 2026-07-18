@@ -1,10 +1,25 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { resetThemeRegistryForTests, setActiveTheme } from "../../themes/index.js";
 import { renderCathedralCodeBlock } from "./code-renderer.js";
 
 const ANSI = /\u001b\[[0-9;]*m/g;
 const stripAnsi = (s: string): string => s.replace(ANSI, "");
 
+function rgbAnsi(hex: string, channel: 38 | 48): string {
+	const normalized = hex.replace("#", "");
+	const r = Number.parseInt(normalized.slice(0, 2), 16);
+	const g = Number.parseInt(normalized.slice(2, 4), 16);
+	const b = Number.parseInt(normalized.slice(4, 6), 16);
+	return `\u001b[${channel};2;${r};${g};${b}m`;
+}
+
+function codeStyledText(fg: string, text: string): string {
+	return `${rgbAnsi("#DCC7FF", 38)}${rgbAnsi("#100A1D", 48)}${rgbAnsi(fg, 38)}${text}`;
+}
+
 describe("Cathedral code block renderer", () => {
+	afterEach(() => resetThemeRegistryForTests());
+
 	it("renders a framed code block with language label and line gutter", () => {
 		const rows = renderCathedralCodeBlock("ts", "const x = 1;\nreturn x;", 60);
 		const plain = rows.map(stripAnsi);
@@ -81,5 +96,36 @@ describe("Cathedral code block renderer", () => {
 		const rows = renderCathedralCodeBlock("ts", "const x = 1;", 8);
 		expect(rows.length).toBeGreaterThan(0);
 		expect(stripAnsi(rows[0]!).length).toBeLessThanOrEqual(8);
+	});
+
+	it("renders Ultraviolet code blocks through semantic code roles", () => {
+		setActiveTheme("ultraviolet-core");
+
+		const rows = renderCathedralCodeBlock("ts", "// note\nconst total = compute(42, \"ok\");", 96);
+		const raw = rows.join("\n");
+
+		expect(raw).toContain(`${rgbAnsi("#56347A", 38)}${rgbAnsi("#100A1D", 48)}╭─`);
+		expect(raw).toContain(`${rgbAnsi("#9B7BBE", 38)}${rgbAnsi("#100A1D", 48)}ts`);
+		expect(rows[0]).toContain(rgbAnsi("#100A1D", 48));
+		expect(rows.at(-1)).toContain(rgbAnsi("#100A1D", 48));
+		expect(rows[1]).toContain(`${rgbAnsi("#56347A", 38)}${rgbAnsi("#100A1D", 48)}│`);
+		expect(raw).toContain(codeStyledText("#9B7BBE", "  1 "));
+		expect(raw).toContain(codeStyledText("#9B7BBE", "// note"));
+		expect(raw).toContain(codeStyledText("#B974FF", "const"));
+		expect(raw).toContain(codeStyledText("#DCC7FF", "total"));
+		expect(raw).toContain(codeStyledText("#75E8FF", "compute"));
+		expect(raw).toContain(codeStyledText("#FFC857", "42"));
+		expect(raw).toContain(codeStyledText("#75E8FF", "\"ok\""));
+	});
+
+	it("renders Ultraviolet collapsed rows with code gutter and surface roles", () => {
+		setActiveTheme("ultraviolet-core");
+		const source = Array.from({ length: 22 }, (_, i) => `line ${i + 1}`).join("\n");
+
+		const rows = renderCathedralCodeBlock("ts", source, 96);
+		const raw = rows.join("\n");
+
+		expect(stripAnsi(rows[21]!)).toContain("… 2 lines collapsed");
+		expect(raw).toContain(codeStyledText("#9B7BBE", "… 2 lines collapsed · ctrl+o expand"));
 	});
 });

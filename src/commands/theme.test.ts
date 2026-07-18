@@ -10,12 +10,13 @@ describe("/sumo:theme", () => {
 		expect(formatActiveThemeMessage()).toContain("19th-century scriptorium");
 	});
 
-	it("lists all four registered themes in registry order and marks the active one", () => {
+	it("lists all five registered themes in registry order and marks the active one", () => {
 		const lines = formatThemeList();
-		expect(lines.map((line) => line.slice(2).split(" — ")[0])).toEqual(["cathedral", "amber-crt", "obsidian", "herdr"]);
+		expect(lines.map((line) => line.slice(2).split(" — ")[0])).toEqual(["cathedral", "amber-crt", "obsidian", "herdr", "ultraviolet-core"]);
 		expect(lines).toContain("* cathedral — 19th-century scriptorium: warm walnut, parchment foreground, burnt-orange accents.");
 		expect(lines.some((line) => line.startsWith("  obsidian"))).toBe(true);
 		expect(lines).toContain("  herdr — Electric-green operator terminal — phosphor focus, amber execution, sharp hacker chrome.");
+		expect(lines).toContain("  ultraviolet-core — Ultraviolet command layer — violet focus, ice signal, deep spatial surfaces.");
 	});
 
 	it("registers a custom message renderer for theme results", () => {
@@ -89,6 +90,20 @@ describe("/sumo:theme", () => {
 		);
 	});
 
+	it("applies ultraviolet-core directly through the registry, Pi theme API, and persistence", async () => {
+		const { handler, sendMessage, persistTheme } = registerHarness();
+		const setTheme = vi.fn(() => ({ success: true }));
+
+		await handler("ultraviolet-core", uiContext({ setTheme }));
+
+		expect(setTheme).toHaveBeenCalledWith("ultraviolet-core");
+		expect(persistTheme).toHaveBeenCalledWith("ultraviolet-core");
+		expect(sendMessage).toHaveBeenCalledWith(
+			expect.objectContaining({ details: { tone: "info", lines: ["theme set: ultraviolet-core"] } }),
+			{ triggerTurn: false },
+		);
+	});
+
 	it("applies SumoCode themes even when Pi theme API does not know them", async () => {
 		const { handler, sendMessage } = registerHarness();
 		const setTheme = vi.fn(() => ({ success: false, error: "Theme not found: obsidian" }));
@@ -127,7 +142,7 @@ describe("/sumo:theme", () => {
 			expect([...shortcuts.keys()].sort()).toEqual(["alt+t", "ctrl+shift+t"]);
 		});
 
-		it("cycles obsidian → herdr → cathedral through the shortcut", async () => {
+		it("cycles obsidian → herdr → ultraviolet-core → cathedral through the shortcut", async () => {
 			const { shortcuts, persistTheme } = registerHarness();
 			const setTheme = vi.fn(() => ({ success: true }));
 			const notify = vi.fn();
@@ -139,12 +154,17 @@ describe("/sumo:theme", () => {
 			expect(notify).toHaveBeenLastCalledWith("theme: herdr", "info");
 
 			await shortcuts.get("ctrl+shift+t")?.({ hasUI: true, ui: { notify, setTheme } });
+			expect(setTheme).toHaveBeenLastCalledWith("ultraviolet-core");
+			expect(persistTheme).toHaveBeenLastCalledWith("ultraviolet-core");
+			expect(notify).toHaveBeenLastCalledWith("theme: ultraviolet-core", "info");
+
+			await shortcuts.get("ctrl+shift+t")?.({ hasUI: true, ui: { notify, setTheme } });
 			expect(setTheme).toHaveBeenLastCalledWith("cathedral");
 			expect(notify).toHaveBeenLastCalledWith("theme: cathedral", "info");
 		});
 
 		it("cycles theme through Pi UI, persists, and notifies on success", async () => {
-			// PRD-pinned cycle order: cathedral → amber-crt → obsidian → herdr → cathedral.
+			// PRD-pinned cycle order: cathedral → amber-crt → obsidian → herdr → ultraviolet-core → cathedral.
 			const { shortcuts, persistTheme } = registerHarness();
 			const setTheme = vi.fn(() => ({ success: true }));
 			const notify = vi.fn();

@@ -12,33 +12,109 @@ import { readFileSync } from "node:fs";
 
 // ── Token resolution ──────────────────────────────────────────────
 
-/** Bible CSS class → resolved runtime-equivalent hex. */
+const DEFAULT_FG = "#F5E6C8";
+const DEFAULT_BG = "#1A1511";
+
+const CSS_VAR_DEFAULTS = {
+	"--background": DEFAULT_BG,
+	"--surface": "#241D17",
+	"--surface-recess": "#120D0A",
+	"--surface-lifted": "#3D3024",
+	"--divider": "#5A4D3C",
+	"--foreground": DEFAULT_FG,
+	"--foreground-dim": "#8B7A63",
+	"--accent": "#D97706",
+	"--state-idle": "#7FB069",
+	"--state-thinking": "#E8B339",
+	"--state-tool": "#5B9BD5",
+	"--state-approval": "#C1443E",
+	"--state-learning": "#8E7AB5",
+	"--syntax-keyword": "#D97706",
+	"--syntax-string": "#7FB069",
+	"--syntax-number": "#E8B339",
+	"--syntax-comment": "#6F5D46",
+	"--syntax-function": "#E8B339",
+	"--tool-ledger-surface": "#120D0A",
+	"--tool-ledger-border": "#5A4D3C",
+	"--tool-ledger-label": "#D97706",
+	"--tool-ledger-target": DEFAULT_FG,
+	"--tool-ledger-body": DEFAULT_FG,
+	"--tool-ledger-muted": "#8B7A63",
+	"--code-surface": "#120D0A",
+	"--code-border": "#5A4D3C",
+	"--code-foreground": DEFAULT_FG,
+	"--code-gutter": "#8B7A63",
+	"--code-comment": "#6F5D46",
+	"--code-keyword": "#D97706",
+	"--code-string": "#7FB069",
+	"--code-number": "#E8B339",
+	"--code-function": "#E8B339",
+};
+
+let activeCssVars = { ...CSS_VAR_DEFAULTS };
+
+/** Bible CSS class → CSS variable token (or direct runtime-equivalent hex). */
 const FG_CLASS_MAP = {
-	"fg-accent":   "#D97706",
-	"fg-fg":       "#F5E6C8",
-	"fg-dim":      "#8B7A63",
-	"fg-divider":  "#5A4D3C",
-	"fg-comment":  "#6F5D46",
-	"fg-idle":     "#22C55E",  // Bible uses --state-idle (#7FB069); runtime token is #22C55E.
-	                            // TODO: reconcile once runtime palette is final.
-	"fg-think":    "#E8B339",
-	"fg-tool":     "#5B9BD5",
-	"fg-approve":  "#C1443E",
-	"fg-learn":    "#8E7AB5",
-	"fg-string":   "#7FB069",
-	"fg-number":   "#E8B339",
-	"fg-keyword":  "#D97706",
-	"fg-fn":       "#E8B339",
+	"fg-accent": "--accent",
+	"fg-fg": "--foreground",
+	"fg-dim": "--foreground-dim",
+	"fg-divider": "--divider",
+	"fg-comment": "--syntax-comment",
+	"fg-idle": "--state-idle",
+	"fg-think": "--state-thinking",
+	"fg-tool": "--state-tool",
+	"fg-approve": "--state-approval",
+	"fg-learn": "--state-learning",
+	"fg-string": "--syntax-string",
+	"fg-number": "--syntax-number",
+	"fg-keyword": "--syntax-keyword",
+	"fg-fn": "--syntax-function",
+	"fg-tool-border": "--tool-ledger-border",
+	"fg-tool-label": "--tool-ledger-label",
+	"fg-tool-target": "--tool-ledger-target",
+	"fg-tool-body": "--tool-ledger-body",
+	"fg-tool-muted": "--tool-ledger-muted",
+	"fg-code-border": "--code-border",
+	"fg-code": "--code-foreground",
+	"fg-code-gutter": "--code-gutter",
+	"fg-code-comment": "--code-comment",
+	"fg-code-keyword": "--code-keyword",
+	"fg-code-string": "--code-string",
+	"fg-code-number": "--code-number",
+	"fg-code-function": "--code-function",
 };
 
 const BG_CLASS_MAP = {
-	"bg-recess":   "#120D0A",
-	"bg-surface":  "#1E1914",  // --surface is #241D17 in tokens.css but sidebar uses #1E1914
-	"bg-lifted":   "#3D3024",
+	"bg-recess": "--surface-recess",
+	"bg-surface": "#1E1914",  // --surface is #241D17 in tokens.css but sidebar uses #1E1914
+	"bg-lifted": "--surface-lifted",
 };
 
-const DEFAULT_FG = "#F5E6C8";
-const DEFAULT_BG = "#1A1511";
+function extractCssVars(html) {
+	const vars = { ...CSS_VAR_DEFAULTS };
+	for (const match of html.matchAll(/(--[a-zA-Z0-9-]+)\s*:\s*(#[0-9a-fA-F]{6})/g)) {
+		vars[match[1]] = match[2];
+	}
+	return vars;
+}
+
+function resolveCssVar(name) {
+	const value = activeCssVars[name] ?? CSS_VAR_DEFAULTS[name];
+	// Cathedral's Bible `--state-idle` is intentionally not the runtime token;
+	// keep that legacy equivalence, but honor explicit per-theme overrides.
+	if (name === "--state-idle" && value?.toLowerCase() === CSS_VAR_DEFAULTS["--state-idle"].toLowerCase()) return "#22C55E";
+	return value ?? null;
+}
+
+function resolveToken(value) {
+	if (!value) return null;
+	if (value.startsWith("--")) return resolveCssVar(value);
+	return value;
+}
+
+function resolveClassColor(map, cls) {
+	return resolveToken(map[cls]);
+}
 
 /**
  * Known intentional color differences between Bible mockup and runtime.
@@ -74,27 +150,27 @@ const ENTITY_MAP = { amp: "&", lt: "<", gt: ">", quot: '"', "#39": "'", "#x27": 
 function decodeEntity(_, e) { return ENTITY_MAP[e] ?? _; }
 
 function bgFromStyle(style) {
-	if (style.includes("background: var(--surface-recess)")) return "#120D0A";
-	if (style.includes("background: var(--surface)")) return "#241D17";
-	if (style.includes("background: var(--surface-lifted)")) return "#3D3024";
-	if (style.includes("background: var(--accent)")) return "#D97706";
+	const varMatch = style.match(/background:\s*var\((--[a-zA-Z0-9-]+)\)/);
+	if (varMatch) return resolveCssVar(varMatch[1]);
+	const hexMatch = style.match(/background:\s*(#[0-9a-fA-F]{6})/);
+	if (hexMatch) return hexMatch[1];
 	return null;
 }
 
 function parentBgFromAttrs(attrs) {
-	if (/\bbg-recess\b/.test(attrs)) return "#120D0A";
-	if (/\bbg-surface\b/.test(attrs)) return "#241D17";
-	if (/\bbg-lifted\b/.test(attrs)) return "#3D3024";
-	return bgFromStyle(attrs) ?? DEFAULT_BG;
+	if (/\bbg-recess\b/.test(attrs)) return resolveCssVar("--surface-recess");
+	if (/\bbg-surface\b/.test(attrs)) return resolveCssVar("--surface");
+	if (/\bbg-lifted\b/.test(attrs)) return resolveCssVar("--surface-lifted");
+	return bgFromStyle(attrs) ?? resolveCssVar("--background") ?? DEFAULT_BG;
 }
 
 /**
  * Parse a single Bible HTML line (contents of a <pre class="grid">)
  * into an array of StyledCells.
  */
-function parseBibleLine(html, parentBg = DEFAULT_BG) {
+function parseBibleLine(html, parentBg = resolveCssVar("--background") ?? DEFAULT_BG) {
 	const cells = [];
-	let fg = DEFAULT_FG;
+	let fg = resolveCssVar("--foreground") ?? DEFAULT_FG;
 	let bg = parentBg;
 	let bold = false;
 	let dim = false;
@@ -115,13 +191,15 @@ function parseBibleLine(html, parentBg = DEFAULT_BG) {
 			let newBg = bg;
 			let newBold = bold;
 			for (const cls of classes) {
-				if (FG_CLASS_MAP[cls]) newFg = FG_CLASS_MAP[cls];
-				if (BG_CLASS_MAP[cls]) newBg = BG_CLASS_MAP[cls];
-				if (cls === "box-fill") newBg = bgFromStyle(style) ?? "#120D0A";
-				if (cls === "cursor") { newBg = "#D97706"; newFg = DEFAULT_BG; }
+				const fgColor = resolveClassColor(FG_CLASS_MAP, cls);
+				const bgColor = resolveClassColor(BG_CLASS_MAP, cls);
+				if (fgColor) newFg = fgColor;
+				if (bgColor) newBg = bgColor;
+				if (cls === "box-fill") newBg = bgFromStyle(style) ?? resolveCssVar("--surface-recess") ?? "#120D0A";
+				if (cls === "cursor") { newBg = resolveCssVar("--accent") ?? "#D97706"; newFg = resolveCssVar("--background") ?? DEFAULT_BG; }
 			}
-			if (style.includes("background: var(--accent)")) newBg = "#D97706";
-			if (style.includes("color: var(--background)")) newFg = DEFAULT_BG;
+			if (style.includes("background: var(--accent)")) newBg = resolveCssVar("--accent") ?? "#D97706";
+			if (style.includes("color: var(--background)")) newFg = resolveCssVar("--background") ?? DEFAULT_BG;
 			fgStack.push(newFg);
 			bgStack.push(newBg);
 			boldStack.push(newBold);
@@ -178,8 +256,10 @@ function parseGridContent(content, parentBg = DEFAULT_BG) {
 
 function emptyStyledGrid(cols, rows) {
 	const grid = [];
+	const fg = resolveCssVar("--foreground") ?? DEFAULT_FG;
+	const bg = resolveCssVar("--background") ?? DEFAULT_BG;
 	for (let row = 0; row < rows; row++) {
-		grid.push(Array.from({ length: cols }, () => ({ char: " ", fg: DEFAULT_FG, bg: DEFAULT_BG, bold: false, dim: false })));
+		grid.push(Array.from({ length: cols }, () => ({ char: " ", fg, bg, bold: false, dim: false })));
 	}
 	return grid;
 }
@@ -253,7 +333,7 @@ function parseSceneGrid(html, cols, rows) {
 
 	const sidebarMatch = html.match(/<div class="sidebar-col">([\s\S]*?)<\/div>/);
 	if (sidebarMatch && sidebarStart !== null) {
-		const sidebarRows = extractPreGridRows(sidebarMatch[1], DEFAULT_BG);
+		const sidebarRows = extractPreGridRows(sidebarMatch[1], resolveCssVar("--background") ?? DEFAULT_BG);
 		writeCellsClipped(grid, rowStarts.get(4) ?? 3, sidebarStart, sidebarRows, middleRows);
 	}
 
@@ -294,7 +374,7 @@ function parseScenePaletteOverlayGrid(html, cols, rows) {
 
 	const sidebarMatch = html.match(/<div class="sidebar-col">([\s\S]*?)<\/div>\s*<\/div>/);
 	if (sidebarMatch) {
-		const sidebarRows = extractPreGridRows(sidebarMatch[1], DEFAULT_BG);
+		const sidebarRows = extractPreGridRows(sidebarMatch[1], resolveCssVar("--background") ?? DEFAULT_BG);
 		writeCells(grid, 3, 130, sidebarRows);
 	}
 
@@ -315,6 +395,7 @@ function parseScenePaletteOverlayGrid(html, cols, rows) {
  */
 export function parseBibleStyledGrid(htmlPath) {
 	const html = readFileSync(htmlPath, "utf8");
+	activeCssVars = extractCssVars(html);
 
 	const colsMatch = html.match(/--term-cols:\s*(\d+)/);
 	const rowsMatch = html.match(/--term-rows:\s*(\d+)/);
@@ -359,7 +440,7 @@ export function parseBibleStyledGrid(htmlPath) {
 		const srcRow = rawRows[r] ?? [];
 		const row = [];
 		for (let c = 0; c < cols; c++) {
-			row.push(srcRow[c] ?? { char: " ", fg: DEFAULT_FG, bg: DEFAULT_BG, bold: false, dim: false });
+			row.push(srcRow[c] ?? { char: " ", fg: resolveCssVar("--foreground") ?? DEFAULT_FG, bg: resolveCssVar("--background") ?? DEFAULT_BG, bold: false, dim: false });
 		}
 		grid.push(row);
 	}
@@ -396,7 +477,7 @@ export function cropStyledGrid(source, crop) {
 		const srcRow = source.grid[crop.y + row] ?? [];
 		const outRow = [];
 		for (let col = 0; col < crop.cols; col++) {
-			outRow.push(srcRow[crop.x + col] ?? { char: " ", fg: DEFAULT_FG, bg: DEFAULT_BG, bold: false, dim: false });
+			outRow.push(srcRow[crop.x + col] ?? { char: " ", fg: resolveCssVar("--foreground") ?? DEFAULT_FG, bg: resolveCssVar("--background") ?? DEFAULT_BG, bold: false, dim: false });
 		}
 		grid.push(outRow);
 	}

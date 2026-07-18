@@ -45,8 +45,11 @@ describe("registerCursorCommand", () => {
 		expect(notify).toHaveBeenCalledWith(expect.stringContaining("accent"), "info");
 	});
 
-	it("/sumo:cursor accent uses the ACTIVE theme accent, not a Cathedral constant", async () => {
-		setActiveTheme("herdr");
+	it.each([
+		["herdr", "#39FF14"],
+		["ultraviolet-core", "#B974FF"],
+	] as const)("/sumo:cursor accent uses the %s accent, not a Cathedral constant", async (themeName, accent) => {
+		setActiveTheme(themeName);
 		const output = outputStub();
 		const terminal = new TerminalSessionOwner({ output });
 		let handler: ((args: string, ctx: never) => Promise<void>) | undefined;
@@ -58,7 +61,7 @@ describe("registerCursorCommand", () => {
 		registerCursorCommand({ registerCommand } as never, terminal);
 		await handler!("accent", { hasUI: true, ui: { notify } } as never);
 
-		expect(output.writes).toEqual(["\x1b]12;#39FF14\x1b\\"]);
+		expect(output.writes).toEqual([`\x1b]12;${accent}\x1b\\`]);
 		expect(terminal.getState().cursorColorOverridden).toBe(true);
 		expect(notify).toHaveBeenCalledWith("cursor color: theme accent", "info");
 	});

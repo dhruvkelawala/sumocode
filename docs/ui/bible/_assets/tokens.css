@@ -57,6 +57,23 @@
   --syntax-comment:    #6F5D46;
   --syntax-function:   #E8B339;
 
+  --tool-ledger-surface: #120D0A;
+  --tool-ledger-border:  #5A4D3C;
+  --tool-ledger-label:   #D97706;
+  --tool-ledger-target:  #F5E6C8;
+  --tool-ledger-body:    #F5E6C8;
+  --tool-ledger-muted:   #8B7A63;
+
+  --code-surface:      #120D0A;
+  --code-border:       #5A4D3C;
+  --code-foreground:   #F5E6C8;
+  --code-gutter:       #8B7A63;
+  --code-comment:      #6F5D46;
+  --code-keyword:      #D97706;
+  --code-string:       #7FB069;
+  --code-number:       #E8B339;
+  --code-function:     #E8B339;
+
   /* ── typography ─────────────────────────────────────────────── */
   --font-mono:
     'JetBrains Mono', 'JetBrainsMono Nerd Font Mono',
@@ -233,6 +250,21 @@ html, body {
 .fg-number   { color: var(--syntax-number); }
 .fg-keyword  { color: var(--syntax-keyword); }
 .fg-fn       { color: var(--syntax-function); }
+
+.fg-tool-border { color: var(--tool-ledger-border); }
+.fg-tool-label  { color: var(--tool-ledger-label); }
+.fg-tool-target { color: var(--tool-ledger-target); }
+.fg-tool-body   { color: var(--tool-ledger-body); }
+.fg-tool-muted  { color: var(--tool-ledger-muted); }
+
+.fg-code-border   { color: var(--code-border); }
+.fg-code          { color: var(--code-foreground); }
+.fg-code-gutter   { color: var(--code-gutter); }
+.fg-code-comment  { color: var(--code-comment); }
+.fg-code-keyword  { color: var(--code-keyword); }
+.fg-code-string   { color: var(--code-string); }
+.fg-code-number   { color: var(--code-number); }
+.fg-code-function { color: var(--code-function); }
 
 /* ── bg helpers (for cells that need theme bg fill) ───────────── */
 .bg-recess   { background: var(--surface-recess); }

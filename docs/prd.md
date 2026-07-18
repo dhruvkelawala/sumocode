@@ -34,11 +34,12 @@ It does not replace Pi. It does not fork Pi. It loads as a regular Pi package an
 
 3. **Remember me across sessions.** A local Remnic daemon (built on QMD, which I already use for OpenClaw) auto-extracts durable facts from each session — preferences, project context, decisions made — and injects the relevant ones back into future sessions. Memory storage is plain markdown, git-syncable via the same private repo as my settings and extensions.
 
-4. **Four themes for four moods.**
+4. **Five themes for five moods.**
    - **Cathedral** (default) — a 19th-century scriptorium aesthetic. Warm walnut background, burnt-orange accents, IBM Plex Mono. The everyday driver.
    - **Amber CRT** — Apple II / IBM 5151 phosphor terminal. Aligns with my Mission Control v3 design language for cross-agent visual consistency.
    - **Obsidian Temple** — sacred-tech mode. Deep obsidian background, bronze body text, gold + cyan + magenta neon glows on focal elements. For deep-focus sessions where I want the agent to feel like a ceremonial space.
    - **Herdr Terminal** — electric-green operator console, matching my Herdr/Ghostty setup. Green-black chassis, phosphor-green `#39FF14` focus/body, amber execution, red approval, sharp ASCII chrome, packet-pulse indicator. (Added post-v0.3; v0.3 shipped the first three.)
+   - **Ultraviolet Core** — violet-black command layer. Violet owns focus/routing, lavender owns body and idle, ice owns secondary syntax/learning, amber owns tool execution, and pink owns approval/failure. Tool ledgers and code blocks use theme-owned application roles instead of generic foregrounds.
 
    Switch instantly via `Ctrl+Shift+T` (cycles forward) or thoughtfully via `/sumo:theme` (preview overlay). Choice persists in synced config and follows me to any machine.
 
@@ -96,7 +97,7 @@ The end state: I open a terminal on either machine, run `pi`, and SumoCode greet
 
 18. As a developer, I want the default theme to be Cathedral on first launch, so SumoCode has a strong identity without forcing me to choose at install time.
 
-19. As a developer, I want `Ctrl+Shift+T` to instantly cycle to the next theme, so I can see all 3 in three keypresses without leaving my session.
+19. As a developer, I want `Ctrl+Shift+T` to instantly cycle to the next theme, so I can rotate through all five moods without leaving my session.
 
 20. As a developer, I want my chosen theme to persist across sessions and across machines (synced via `sumocode-config`), so I don't pick a theme every time I open the terminal.
 
@@ -104,7 +105,7 @@ The end state: I open a terminal on either machine, run `pi`, and SumoCode greet
 
 22. As a developer, I want `/sumo:theme` (no argument) to enter a preview cycle mode where Tab/Right cycles, Enter confirms, Esc reverts, so I can compare themes carefully when I'm choosing.
 
-23. As a developer, I want `/sumo:theme list` to print the registered themes (4 as of Herdr Terminal) with short descriptions so I'm reminded what they offer.
+23. As a developer, I want `/sumo:theme list` to print the registered themes (5 as of Ultraviolet Core) with short descriptions so I'm reminded what they offer.
 
 24. As a developer, when I switch themes, I want the entire UI (footer, sidebar, working indicator, splash, every state dot) to redraw with the new tokens — no restart required.
 
@@ -158,7 +159,7 @@ The extension is built from twelve modules. Five of them are "deep" — they enc
 
 **Deep modules (testable in isolation):**
 
-1. **theme** — owns theme registry, active theme state, cycling, persistence to synced `sumocode-config/sumocode.json`. Subscribers re-render on theme change. Holds the typed `Theme` interface that all 3 theme bundles implement.
+1. **theme** — owns theme registry, active theme state, cycling, persistence to synced `sumocode-config/sumocode.json`. Subscribers re-render on theme change. Holds the typed `Theme` interface that all first-party theme bundles implement.
 2. **layout** — owns sidebar position decision logic (auto vs override), terminal aspect-ratio detection on startup and resize, persistence of position override to **machine-local** `~/.sumocode/local-config.json`. NOT synced, because screen orientation is physical, not personal.
 3. **memory** — HTTP client for the local Remnic daemon. Methods: `query(prompt, n)` returns top-N relevant facts; `status()` returns daemon health; `add(fact, category)` writes a manual fact; `forget(factId)` soft-archives. Encapsulates Remnic protocol, retries, and error handling.
 4. **sync** — wraps git operations against `~/sumocode-config`. Methods: `push(message?)` does a pull-then-push to minimize conflict windows; `pull()` updates local state; `status()` returns structured info about pending changes, conflicts, and last sync time. Encapsulates `child_process` shell-out and git output parsing.
@@ -176,16 +177,16 @@ The extension is built from twelve modules. Five of them are "deep" — they enc
 
 ### Theme system
 
-All four registered themes share an identical `Theme` interface shape. Only token values differ. The interface includes:
+All five registered themes share the same core `Theme` interface. Core palette/chrome tokens are mandatory; dense application surfaces can opt into a complete `applicationRoles` object so renderers never branch on theme names. The interface includes:
 
-- Surface tokens (background, surface, panel, recess, lifted, divider)
-- Text tokens (foreground, foregroundDim, foregroundMuted)
-- Accent tokens (accent, accentSecondary, border)
-- 5 preattentive state slots (idle, thinking, tool, approval, learning) each with hex + glyph + glow boolean
-- Decoration tokens (memoryPrefix, sectionBorder, activeTabFrame)
-- Effects flags (scanlines, radialGradient, glowOnFocal, chromaticAberration)
+- Surface tokens (background, surface, recess, lifted, divider)
+- Text tokens (foreground, foregroundDim)
+- Accent token (accent)
+- 5 preattentive state slots (idle, thinking, tool, approval, learning)
+- Chrome tokens (frame glyphs, section glyphs, bullets, rules, tab markers)
+- Optional complete application roles for tool ledgers and code blocks
 
-**Cathedral is default and first** in the registry order. Amber CRT is second. Obsidian Temple is third. Herdr Terminal is fourth (cycle wraps obsidian → herdr → cathedral).
+**Cathedral is default and first** in the registry order. Amber CRT is second. Obsidian Temple is third. Herdr Terminal is fourth. Ultraviolet Core is fifth (cycle wraps ultraviolet-core → cathedral).
 
 **First-launch behavior:** No theme picker. Cathedral is loaded immediately. Discovery happens via README, `/sumo:theme list`, or accidentally typing `/sumo:`.
 

@@ -52,7 +52,7 @@
     "typecheck": "tsc --noEmit",
     "build": "tsc --noEmit",
     "test": "vitest run",
-    "test:integration": "vitest run test/integration/",
+    "test:integration": "vitest run test/integration/ --fileParallelism=false",
     "perf:resume": "vitest run src/sumo-tui/runtime/resume-flow.perf.test.ts",
     "perf:resume:report": "node scripts/measure-resume-perf.mjs",
     "perf:startup": "node scripts/perf-startup.mjs",

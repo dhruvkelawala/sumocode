@@ -1,17 +1,18 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { AMBER_CRT_THEME, CATHEDRAL_THEME, activeThemeColors, cycleActiveTheme, getActiveTheme, getTheme, getThemeVersion, HERDR_THEME, listThemes, nextThemeName, OBSIDIAN_THEME, onThemeChanged, resetThemeRegistryForTests, setActiveTheme } from "./index.js";
+import { AMBER_CRT_THEME, CATHEDRAL_THEME, HERDR_THEME, OBSIDIAN_THEME, ULTRAVIOLET_CORE_THEME, activeThemeColors, activeThemeApplicationRoles, cycleActiveTheme, getActiveTheme, getTheme, getThemeVersion, listThemes, nextThemeName, onThemeChanged, resetThemeRegistryForTests, setActiveTheme } from "./index.js";
 
 describe("theme registry", () => {
 	afterEach(() => resetThemeRegistryForTests());
 
-	it("registers Cathedral, Amber CRT, Obsidian, and Herdr in PRD-pinned registry order", () => {
-		// PRD § Themes: cathedral first, amber-crt second, obsidian third, herdr fourth.
-		expect(listThemes().map((theme) => theme.name)).toEqual(["cathedral", "amber-crt", "obsidian", "herdr"]);
+	it("registers Cathedral, Amber CRT, Obsidian, Herdr, and Ultraviolet in PRD-pinned registry order", () => {
+		// PRD § Themes: cathedral first, amber-crt second, obsidian third, herdr fourth, ultraviolet-core fifth.
+		expect(listThemes().map((theme) => theme.name)).toEqual(["cathedral", "amber-crt", "obsidian", "herdr", "ultraviolet-core"]);
 		expect(getTheme("cathedral")).toBe(CATHEDRAL_THEME);
 		expect(getTheme(" Cathedral ")).toBe(CATHEDRAL_THEME);
 		expect(getTheme("obsidian")).toBe(OBSIDIAN_THEME);
 		expect(getTheme("amber-crt")).toBe(AMBER_CRT_THEME);
 		expect(getTheme("herdr")).toBe(HERDR_THEME);
+		expect(getTheme("ultraviolet-core")).toBe(ULTRAVIOLET_CORE_THEME);
 		expect(getActiveTheme()).toBe(CATHEDRAL_THEME);
 		expect(activeThemeColors().accent).toBe("#D97706");
 	});
@@ -80,11 +81,25 @@ describe("theme registry", () => {
 		expect(activeThemeColors().states.approval).toBe("#FF706D");
 	});
 
+	it("swaps active colors and application roles when switching to Ultraviolet Core", () => {
+		const result = setActiveTheme("ultraviolet-core");
+
+		expect(result.success).toBe(true);
+		if (result.success) expect(result.theme).toBe(ULTRAVIOLET_CORE_THEME);
+		expect(getActiveTheme()).toBe(ULTRAVIOLET_CORE_THEME);
+		expect(activeThemeColors().background).toBe("#06050B");
+		expect(activeThemeColors().accent).toBe("#B974FF");
+		expect(activeThemeColors().states.tool).toBe("#FFC857");
+		expect(activeThemeApplicationRoles().toolLedger.surface).toBe("#17100D");
+		expect(activeThemeApplicationRoles().code.function).toBe("#75E8FF");
+	});
+
 	it("reports the next theme name and wraps from last to first", () => {
 		expect(nextThemeName("cathedral")).toBe("amber-crt");
 		expect(nextThemeName("amber-crt")).toBe("obsidian");
 		expect(nextThemeName("obsidian")).toBe("herdr");
-		expect(nextThemeName("herdr")).toBe("cathedral");
+		expect(nextThemeName("herdr")).toBe("ultraviolet-core");
+		expect(nextThemeName("ultraviolet-core")).toBe("cathedral");
 		expect(nextThemeName("unknown")).toBe("cathedral");
 	});
 

@@ -2,7 +2,7 @@
 
 # SumoCode
 
-A Pi extension that ships its own retained terminal renderer (SumoTUI), four theme bundles, and a persistent memory surface. Daily-driven by the maintainer for two months.
+A Pi extension that ships its own retained terminal renderer (SumoTUI), five theme bundles, and a persistent memory surface. Daily-driven by the maintainer for two months.
 
 [![MIT License](https://img.shields.io/badge/license-MIT-2D211A?style=flat-square)](./LICENSE)
 [![Version](https://img.shields.io/badge/v0.4.0-B85A22?style=flat-square)](./CHANGELOG.md)
@@ -23,7 +23,7 @@ SumoCode is a [Pi](https://github.com/earendil-works/pi) extension. Pi provides 
 
 The renderer is **SumoTUI** — a Node-native retained renderer in [`src/sumo-tui/`](./src/sumo-tui/) — built around a Yoga flex layout tree, a cell compositor with frame diff, a modal layer, and a headless test backend. SumoTUI replaces Pi's line-concatenation `Container` for surfaces that require flex layout, in-app scroll, modal overlays, mouse routing, and signal-clean cleanup.
 
-Four themes ship: Cathedral (default), Amber CRT, Obsidian Temple, and Herdr Terminal. Cycle with `Ctrl+Shift+T` (cathedral → amber-crt → obsidian → herdr); choice persists across machines.
+Five themes ship: Cathedral (default), Amber CRT, Obsidian Temple, Herdr Terminal, and Ultraviolet Core. Cycle with `Ctrl+Shift+T` (cathedral → amber-crt → obsidian → herdr → ultraviolet-core); choice persists across machines.
 
 ## Theme tour
 
@@ -45,6 +45,8 @@ Four themes ship: Cathedral (default), Amber CRT, Obsidian Temple, and Herdr Ter
 <br><sub>Deep obsidian background, electrum gold accent, neon cyan and magenta, Egyptian section glyphs.</sub>
 <br><br><strong>Herdr Terminal</strong>
 <br><sub>Electric-green operator terminal, phosphor-green focus, amber execution, red approval, ASCII packet indicator.</sub>
+<br><br><strong>Ultraviolet Core</strong>
+<br><sub>Deep violet-black command layer, violet focus, lavender body, ice syntax, amber-tinted tool ledgers.</sub>
 </td>
 </tr>
 </table>
@@ -60,7 +62,7 @@ Four themes ship: Cathedral (default), Amber CRT, Obsidian Temple, and Herdr Ter
 | **`/fast`** | Session-local OpenAI/Codex fast-mode toggle. Wraps Pi's native `openai-responses` and `openai-codex-responses` streamers and passes `serviceTier: "priority"` through provider options instead of patching raw payloads. |
 | **Cathedral approval modal** | Pattern-gated approval for dangerous bash commands. Default patterns cover `rm -rf`, `sudo`, `git push --force`, mutating `gh` calls. Configurable via `ApprovalGateConfig`. Modal height capped at 12 visible command rows. |
 | **Sidebar** | Three sections at width ≥ 120: context (token meter, session cost), MCP (server roster), memory (persisted bullets). Hidden in portrait orientation per [`SUMO_TUI_PORTRAIT_SIDEBAR_POLICY.md`](./docs/SUMO_TUI_PORTRAIT_SIDEBAR_POLICY.md). |
-| **Theme system** | Four first-party themes plus a chrome contract: each theme defines its own glyph set (`frame`, `sectionGlyphs`, `bullet`, `ruleChar`, `tabActive` / `tabInactive`) and an 8-frame working indicator. |
+| **Theme system** | Five first-party themes plus a chrome/application-role contract: each theme defines glyph chrome (`frame`, `sectionGlyphs`, `bullet`, `ruleChar`, `tabActive` / `tabInactive`), an 8-frame working indicator where applicable, and optional tool-ledger/code roles for dense application surfaces. |
 | **Diagnostics flight recorder** | `SUMO_TUI_DIAG_FILE=/path/file.jsonl` enables a 19-event-type structured trace covering runtime lifecycle, terminal state, upstream Pi events, owned-shell transitions, and module-load provenance. |
 
 ## In action
@@ -150,8 +152,8 @@ Sidebar docks at terminal width ≥ 120. Below 120, the sidebar disappears and p
 │   │  yoga flex layout · cell compositor · frame diff │  │
 │   │  modal layer · mouse routing · OSC 52 selection   │  │
 │   └─ headless TestBackend · typed render primitives ──┘  │
-│   ┌─ src/themes/ Cathedral·AmberCRT·Obsidian·Herdr ───┐  │
-│   │  palette + chrome glyphs + working indicator      │  │
+│   ┌─ src/themes/ Cathedral·Amber·Obsidian·Herdr·UV ───┐  │
+│   │  palette + chrome glyphs + application roles      │  │
 │   └─ Ctrl+Shift+T to cycle, persisted via Pi ─────────┘  │
 │   ┌─ src/cathedral/, src/memory-editor.ts, etc. ──────┐  │
 │   │  Cathedral surfaces · Memory Scriptorium ·        │  │

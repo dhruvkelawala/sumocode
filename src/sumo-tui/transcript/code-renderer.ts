@@ -10,7 +10,7 @@
  *   docs/ui/bible/10-code-bash.html
  */
 import { visibleWidth } from "@earendil-works/pi-tui";
-import { activeThemeColors } from "../../themes/index.js";
+import { activeThemeApplicationRoles, type ThemeApplicationRoles } from "../../themes/index.js";
 import { lineToAnsi, span, textLine, withPersistentStyle, type Span } from "../render/primitives.js";
 import { expandKey } from "./expand-key.js";
 
@@ -35,6 +35,8 @@ interface SyntaxSpan {
 	color: string;
 }
 
+type CodeRoles = ThemeApplicationRoles["code"];
+
 function isFunctionCall(rest: string): boolean {
 	return /^\s*\(/.test(rest);
 }
@@ -43,14 +45,14 @@ function isFunctionCall(rest: string): boolean {
  * Tokenize a source line into colored spans.
  * Handles: comments (#, //), strings ("…", '…'), numbers, keywords, function calls.
  */
-function highlightLine(line: string, lang: string): SyntaxSpan[] {
+function highlightLine(line: string, lang: string, roles: CodeRoles): SyntaxSpan[] {
 	const spans: SyntaxSpan[] = [];
-	const fg = activeThemeColors().foreground;
-	const kw = activeThemeColors().accent;
-	const str = activeThemeColors().states.idle;
-	const num = activeThemeColors().states.thinking;
-	const fn = activeThemeColors().states.thinking;
-	const comment = "#6F5D46";
+	const fg = roles.foreground;
+	const kw = roles.keyword;
+	const str = roles.string;
+	const num = roles.number;
+	const fn = roles.function;
+	const comment = roles.comment;
 
 	let i = 0;
 	let current = "";
@@ -146,31 +148,31 @@ function takeVisible(input: string, maxWidth: number): string {
 	return input.slice(0, index);
 }
 
-function codeFrameTop(lang: string, width: number): string {
+function codeFrameTop(lang: string, width: number, roles: CodeRoles): string {
 	const labelParts: (Span | string)[] = lang.length > 0
-		? [span("── ", { fg: activeThemeColors().divider }), span(lang, { fg: activeThemeColors().foregroundDim }), span(" ─", { fg: activeThemeColors().divider })]
-		: [span("──", { fg: activeThemeColors().divider })];
+		? [span("── ", { fg: roles.border }), span(lang, { fg: roles.gutter }), span(" ─", { fg: roles.border })]
+		: [span("──", { fg: roles.border })];
 	const labelWidth = lang.length > 0 ? 5 + lang.length : 2;
 	const ruleLen = Math.max(0, width - 3 - labelWidth);
 	return lineToAnsi(textLine([
-		span("╭─", { fg: activeThemeColors().divider }),
+		span("╭─", { fg: roles.border }),
 		...labelParts,
-		span("─".repeat(ruleLen), { fg: activeThemeColors().divider }),
-		span("╮", { fg: activeThemeColors().divider }),
-	]), { width });
+		span("─".repeat(ruleLen), { fg: roles.border }),
+		span("╮", { fg: roles.border }),
+	], { fg: roles.foreground, bg: roles.surface }), { width });
 }
 
-function codeFrameBottom(width: number): string {
+function codeFrameBottom(width: number, roles: CodeRoles): string {
 	return lineToAnsi(textLine([
-		span("╰", { fg: activeThemeColors().divider }),
-		span("─".repeat(Math.max(0, width - 2)), { fg: activeThemeColors().divider }),
-		span("╯", { fg: activeThemeColors().divider }),
-	]), { width });
+		span("╰", { fg: roles.border }),
+		span("─".repeat(Math.max(0, width - 2)), { fg: roles.border }),
+		span("╯", { fg: roles.border }),
+	], { fg: roles.foreground, bg: roles.surface }), { width });
 }
 
-function codeBodyRow(lineNumber: number, syntaxSpans: SyntaxSpan[], width: number): string {
+function codeBodyRow(lineNumber: number, syntaxSpans: SyntaxSpan[], width: number, roles: CodeRoles): string {
 	const gutter = `${String(lineNumber).padStart(3)} `;
-	const gutterSpan = span(gutter, { fg: activeThemeColors().foregroundDim });
+	const gutterSpan = span(gutter, { fg: roles.gutter });
 	const bodySpans: Span[] = syntaxSpans.map((s) => span(s.text, { fg: s.color }));
 	const innerWidth = Math.max(0, width - 4); // 2 for │+space, 1 for space+│
 	const contentWidth = GUTTER_WIDTH + syntaxSpans.reduce((w, s) => w + visibleWidth(s.text), 0);
@@ -178,31 +180,31 @@ function codeBodyRow(lineNumber: number, syntaxSpans: SyntaxSpan[], width: numbe
 
 	const inner = withPersistentStyle(
 		lineToAnsi(textLine([span(" "), gutterSpan, ...bodySpans, span(" ".repeat(pad + 1))]), { width: innerWidth + 2 }),
-		activeThemeColors().foreground,
-		activeThemeColors().surfaceRecess,
+		roles.foreground,
+		roles.surface,
 	);
 
 	return lineToAnsi(textLine([
-		span("│", { fg: activeThemeColors().divider }),
+		span("│", { fg: roles.border }),
 		span(inner),
-		span("│", { fg: activeThemeColors().divider }),
-	]), { width });
+		span("│", { fg: roles.border }),
+	], { fg: roles.foreground, bg: roles.surface }), { width });
 }
 
-function collapsedRow(remaining: number, width: number): string {
+function collapsedRow(remaining: number, width: number, roles: CodeRoles): string {
 	const text = `… ${remaining} lines collapsed · ${expandKey()} expand`;
 	const innerWidth = Math.max(0, width - 4);
 	const pad = Math.max(0, innerWidth - GUTTER_WIDTH - visibleWidth(text));
 	const inner = withPersistentStyle(
-		lineToAnsi(textLine([span(" "), span(" ".repeat(GUTTER_WIDTH), { fg: activeThemeColors().foregroundDim }), span(text, { fg: activeThemeColors().foregroundDim }), span(" ".repeat(pad + 1))]), { width: innerWidth + 2 }),
-		activeThemeColors().foreground,
-		activeThemeColors().surfaceRecess,
+		lineToAnsi(textLine([span(" "), span(" ".repeat(GUTTER_WIDTH), { fg: roles.gutter }), span(text, { fg: roles.gutter }), span(" ".repeat(pad + 1))]), { width: innerWidth + 2 }),
+		roles.foreground,
+		roles.surface,
 	);
 	return lineToAnsi(textLine([
-		span("│", { fg: activeThemeColors().divider }),
+		span("│", { fg: roles.border }),
 		span(inner),
-		span("│", { fg: activeThemeColors().divider }),
-	]), { width });
+		span("│", { fg: roles.border }),
+	], { fg: roles.foreground, bg: roles.surface }), { width });
 }
 
 // ── Public API ───────────────────────────────────────────────
@@ -215,15 +217,16 @@ export function renderCathedralCodeBlock(lang: string, source: string, width: nu
 	const visible = lines.slice(0, MAX_VISIBLE_LINES);
 	const collapsed = lines.length - visible.length;
 	const normalizedLang = lang.toLowerCase().replace(/^language-/, "");
+	const roles = activeThemeApplicationRoles().code;
 
-	const rows: string[] = [codeFrameTop(normalizedLang, safeWidth)];
+	const rows: string[] = [codeFrameTop(normalizedLang, safeWidth, roles)];
 	for (let i = 0; i < visible.length; i += 1) {
-		const highlighted = highlightLine(visible[i]!, normalizedLang);
-		rows.push(codeBodyRow(i + 1, highlighted, safeWidth));
+		const highlighted = highlightLine(visible[i]!, normalizedLang, roles);
+		rows.push(codeBodyRow(i + 1, highlighted, safeWidth, roles));
 	}
 	if (collapsed > 0) {
-		rows.push(collapsedRow(collapsed, safeWidth));
+		rows.push(collapsedRow(collapsed, safeWidth, roles));
 	}
-	rows.push(codeFrameBottom(safeWidth));
+	rows.push(codeFrameBottom(safeWidth, roles));
 	return rows;
 }

@@ -372,6 +372,7 @@ section { margin-bottom: 88px; }
 .theme-card.amber { border-left: 3px solid #b8851b; }
 .theme-card.obsidian { border-left: 3px solid var(--violet); }
 .theme-card.herdr { border-left: 3px solid #39FF14; }
+.theme-card.ultraviolet { border-left: 3px solid #B974FF; }
 .theme-card__chrome {
   height: 132px;
   position: relative;
@@ -391,6 +392,8 @@ section { margin-bottom: 88px; }
 .theme-card.obsidian .theme-card__chrome::before { content: '> _'; color: #FFD700; text-shadow: 0 0 8px #00E5FF; font-weight: 600; }
 .theme-card.herdr .theme-card__chrome { background: #040704; color: #39FF14; }
 .theme-card.herdr .theme-card__chrome::before { content: '> _'; color: #39FF14; font-weight: 600; }
+.theme-card.ultraviolet .theme-card__chrome { background: #06050B; color: #DCC7FF; }
+.theme-card.ultraviolet .theme-card__chrome::before { content: '> _'; color: #B974FF; font-weight: 600; }
 .theme-card__body { padding: 24px 24px 28px; }
 .theme-card__num {
   font-family: var(--font-mono);
@@ -936,7 +939,7 @@ section { margin-bottom: 88px; }
       <span><strong>v0.1.0</strong> scaffold shipped</span>
       <span><strong>v1.0</strong> ETA · 6 weeks evenings · 3 weeks focused</span>
       <span><strong>14/14</strong> grill questions resolved</span>
-      <span><strong>3</strong> themes · <strong>12</strong> modules</span>
+      <span><strong>5</strong> themes · <strong>12</strong> modules</span>
       <span>Repo · <a href="https://github.com/dhruvkelawala/sumocode" style="color:var(--accent)">dhruvkelawala/sumocode</a></span>
     </div>
   </header>
@@ -984,7 +987,7 @@ section { margin-bottom: 88px; }
       <article class="solution">
         <h3>Solution</h3>
         <p><strong>Persona layer.</strong> Zeus, in the Temple of SumoDeus. Lives in <span class="mono">APPEND_SYSTEM.md</span>, applies to every session, identical across machines.</p>
-        <p><strong>UI surface.</strong> Custom footer with state-dot. Right sidebar (or bottom on portrait monitors). Theme-aware working indicator. Four themes for four moods.</p>
+        <p><strong>UI surface.</strong> Custom footer with state-dot. Right sidebar (or bottom on portrait monitors). Theme-aware working indicator. Five themes for five moods.</p>
         <p><strong>Persistent memory.</strong> Local Remnic daemon auto-extracts durable facts. Plain markdown. Append-only. Synced via private repo.</p>
         <p><strong>One-command bootstrap.</strong> <span class="mono">git clone &amp;&amp; ./bootstrap.sh</span> on a fresh machine; SumoCode lands identical.</p>
       </article>
@@ -1033,10 +1036,10 @@ section { margin-bottom: 88px; }
     <div class="section__head">
       <div>
         <div class="section__num">Section 03</div>
-        <h2 class="section__title">Four themes · <em>four moods</em></h2>
+        <h2 class="section__title">Five themes · <em>five moods</em></h2>
       </div>
     </div>
-    <p class="section__lead">All four share an identical token shape — only values differ. Layout and components are theme-agnostic. Cycle instantly with <span class="mono fg-accent">Ctrl+Shift+T</span>; deliberate compare via <span class="mono fg-accent">/sumo:theme</span>.</p>
+    <p class="section__lead">All five share one core theme contract; dense tool/code surfaces can opt into complete application roles. Layout and components stay theme-agnostic. Cycle instantly with <span class="mono fg-accent">Ctrl+Shift+T</span>; deliberate compare via <span class="mono fg-accent">/sumo:theme</span>.</p>
 
     <div class="themes">
       <div class="theme-card cathedral">
@@ -1136,6 +1139,31 @@ section { margin-bottom: 88px; }
             <li><span>Effects</span><span>none · terminal restraint</span></li>
           </ul>
           <div class="theme-card__status staged">○ post-v0.3</div>
+        </div>
+      </div>
+
+      <div class="theme-card ultraviolet">
+        <div class="theme-card__chrome">work · 20260718</div>
+        <div class="theme-card__body">
+          <div class="theme-card__num">05 · Command</div>
+          <h3 class="theme-card__name">Ultraviolet <em>Core</em></h3>
+          <div class="theme-card__tag">Violet command layer</div>
+          <p class="theme-card__mood">Deep violet-black chassis. Violet focus/routing, pale lavender body, ice syntax, amber-tinted tool ledgers, pink approval. Application roles keep dense output semantic without theme-name branches.</p>
+          <div class="swatches">
+            <div class="sw" style="background:#06050B" data-label="bg"></div>
+            <div class="sw" style="background:#1B102E" data-label="lift"></div>
+            <div class="sw" style="background:#DCC7FF" data-label="text"></div>
+            <div class="sw" style="background:#B974FF" data-label="focus"></div>
+            <div class="sw" style="background:#FFC857" data-label="tool"></div>
+          </div>
+          <ul class="theme-card__list">
+            <li><span>Background</span><span>#06050B</span></li>
+            <li><span>Foreground</span><span>#DCC7FF</span></li>
+            <li><span>Hero accent</span><span>#B974FF</span></li>
+            <li><span>Tool body</span><span>#FFE1A6</span></li>
+            <li><span>Effects</span><span>none · role contrast</span></li>
+          </ul>
+          <div class="theme-card__status staged">○ post-v0.4</div>
         </div>
       </div>
     </div>
@@ -1393,7 +1421,7 @@ section { margin-bottom: 88px; }
         <tr><td>Q7</td><td>Scaffold order?</td><td>Minimal scaffold now, spec drives code after</td><td>20-min dev loop avoids later friction</td></tr>
         <tr><td>Q8</td><td>Persona / voice?</td><td>Two voices, separated by domain</td><td>Zeus = agent · SumoCode = product UI · Siri/Settings pattern</td></tr>
         <tr><td>Q9</td><td>Memory backend?</td><td>Remnic standalone</td><td>Auto-extract · lifecycle · plain markdown · git-syncable</td></tr>
-        <tr><td>Q10</td><td>Preattentive palette?</td><td>3 themes, cathedral default</td><td>Layout-agnostic theme tokens · ~12 swaps per theme</td></tr>
+        <tr><td>Q10</td><td>Preattentive palette?</td><td>5 themes, cathedral default</td><td>Layout-agnostic theme tokens · complete tool/code application roles when needed</td></tr>
         <tr><td>Q11</td><td>Memory sync conflicts?</td><td>Append-only design + sync wrapper</td><td>Conflicts designed away by file structure</td></tr>
         <tr><td>Q12</td><td>Release cadence?</td><td>Vertical slice per release</td><td>Each release is dogfoodable end-to-end</td></tr>
         <tr><td>Q13</td><td>ACPX integration?</td><td>Punt to v2+</td><td>Pi's TTY detection covers structural case · revisit after dogfood</td></tr>
@@ -1477,7 +1505,7 @@ section { margin-bottom: 88px; }
       </div>
       <div class="scope__item">
         <strong>User-defined custom themes</strong>
-        <span>Only the 3 hardcoded themes ship. No external authoring schema.</span>
+        <span>Only the five first-party themes ship. No external authoring schema.</span>
       </div>
       <div class="scope__item">
         <strong>ACPX-aware persona variants</strong>

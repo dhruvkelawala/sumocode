@@ -2,7 +2,7 @@ import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { PI_BOOT_SEQUENCE, spawnSumocodePty, type SpawnedPiPty } from "./spawn-pi-pty.js";
+import { PI_BOOT_SEQUENCE, spawnSumocodePty, waitForScreen, type SpawnedPiPty } from "./spawn-pi-pty.js";
 
 // Regression test for the Kitty keyboard-protocol double-insertion bug: the
 // terminal controller pushes Kitty flags 1+2+4 (report event types included,
@@ -60,14 +60,15 @@ describe("sumocode RPC host Kitty key-release filtering", () => {
 		await app.waitForOutput(/CTRL\+\/[\s\S]*COMMANDS/, 15_000);
 
 		typeWordAsPlainPressWithKittyRelease(app, "hello");
-		await app.waitForOutput("hello", 5_000);
+		const screen = await waitForScreen(app, ({ text }) => text.includes("hello"), { cols: 100, rows: 30, timeoutMs: 5_000 });
 		await delay(300);
 
-		const output = app.getOutput();
 		// The doubled form ("hheelllloo") must never appear; only the exact
-		// single-typed word should be present in the rendered draft.
-		expect(output).not.toContain("hheelllloo");
-		expect(output).toContain("hello");
+		// single-typed word should be present in the rendered draft. Assert the
+		// replayed screen rather than raw ANSI bytes because the retained renderer
+		// can repaint the draft as "he" + cursor update + "llo".
+		expect(screen.text).not.toContain("hheelllloo");
+		expect(screen.text).toContain("hello");
 	}, 30_000);
 
 	it("still delivers a key press and does not leak raw escape garbage from a release/repeat sequence", async () => {
@@ -89,12 +90,11 @@ describe("sumocode RPC host Kitty key-release filtering", () => {
 		app.sendInput(`\x1b[104;1:2u`);
 		app.sendInput(`\x1b[104;1:2u`);
 		app.sendInput(kittyRelease("h"));
-		await app.waitForOutput("h", 5_000);
+		const screen = await waitForScreen(app, ({ text }) => text.includes("h"), { cols: 100, rows: 30, timeoutMs: 5_000 });
 		await delay(300);
 
-		const output = app.getOutput();
-		expect(output).toContain("h");
-		expect(output).not.toContain("[104");
-		expect(output).not.toContain(":2u");
+		expect(screen.text).toContain("h");
+		expect(screen.text).not.toContain("[104");
+		expect(screen.text).not.toContain(":2u");
 	}, 30_000);
 });

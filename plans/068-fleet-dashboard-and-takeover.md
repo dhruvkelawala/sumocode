@@ -208,6 +208,15 @@ Stop and report back if:
 
 ## Maintenance notes
 
+- **Herdr overlap note (2026-07-18)**: the operator's primary host is now
+  herdr, whose agent panel/attention queue already provides fleet visibility
+  for PANE-based agents (see `docs/research/HERDR_CAPABILITIES_2026.md`).
+  This dashboard's scope is unchanged — plan-065 subagents are HEADLESS
+  (no pane), invisible to herdr — but do not expand it toward pane-agent
+  monitoring; herdr owns that. Follow-up worth recording: mirror the
+  aggregate headless count into herdr's sidebar via `herdr pane
+  report-metadata --pane $HERDR_PANE_ID --custom-status "3 subagents
+  running"` (guarded on host=herdr).
 - When a steerable backend lands (in-process pi sessions or a future
   claude/codex harness), the takeover input line is the ONLY place to enable
   send — `manager.send(id, text)` should steer-if-running / new-run-if-idle.

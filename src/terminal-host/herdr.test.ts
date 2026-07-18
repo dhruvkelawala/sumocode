@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { herdrTerminalHost } from "./herdr.js";
 
 function pi(stdout: string, code = 0) {
@@ -6,6 +6,34 @@ function pi(stdout: string, code = 0) {
 }
 
 describe("herdrTerminalHost", () => {
+	afterEach(() => {
+		delete process.env.HERDR_PANE_ID;
+	});
+	it("anchors the split to the caller's tab when HERDR_PANE_ID resolves", async () => {
+		process.env.HERDR_PANE_ID = "w7:p3";
+		const exec = vi.fn(async (_bin: string, args: string[]) => {
+			if (args[0] === "pane" && args[1] === "get") {
+				return { stdout: JSON.stringify({ result: { pane: { tab_id: "w7:t2" } } }), stderr: "", code: 0, killed: false };
+			}
+			return { stdout: JSON.stringify({ result: { agent: { pane_id: "w7:p9", workspace_id: "w7" } } }), stderr: "", code: 0, killed: false };
+		});
+		const result = await herdrTerminalHost.openCommandInSplit({ exec } as never, "right", { cwd: "/tmp", shellCommand: "echo ok" });
+		expect(result).toEqual({ ok: true, pane: { host: "herdr", paneId: "w7:p9", workspaceId: "w7" } });
+		expect(exec).toHaveBeenCalledWith("herdr", ["pane", "get", "w7:p3"], { timeout: 5000 });
+		expect(exec).toHaveBeenCalledWith("herdr", ["agent", "start", "sumocode-task", "--cwd", "/tmp", "--tab", "w7:t2", "--split", "right", "--no-focus", "--", "bash", "-lc", "echo ok"], { timeout: 5000 });
+	});
+	it("falls back to default placement when the anchor cannot be resolved", async () => {
+		process.env.HERDR_PANE_ID = "w7:p3";
+		const exec = vi.fn(async (_bin: string, args: string[]) => {
+			if (args[0] === "pane" && args[1] === "get") {
+				return { stdout: "", stderr: "no such pane", code: 1, killed: false };
+			}
+			return { stdout: JSON.stringify({ result: { agent: { pane_id: "w1:p2", workspace_id: "w1" } } }), stderr: "", code: 0, killed: false };
+		});
+		const result = await herdrTerminalHost.openCommandInSplit({ exec } as never, "down", { cwd: "/tmp", shellCommand: "echo ok" });
+		expect(result).toEqual({ ok: true, pane: { host: "herdr", paneId: "w1:p2", workspaceId: "w1" } });
+		expect(exec).toHaveBeenCalledWith("herdr", ["agent", "start", "sumocode-task", "--cwd", "/tmp", "--split", "down", "--no-focus", "--", "bash", "-lc", "echo ok"], { timeout: 5000 });
+	});
 	it("opens with agent start and returns pane ref", async () => {
 		const fake = pi(JSON.stringify({ result: { agent: { pane_id: "w1:p2", workspace_id: "w1" } } }));
 		const result = await herdrTerminalHost.openCommandInSplit(fake as never, "right", { cwd: "/tmp", shellCommand: "echo ok" });

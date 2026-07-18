@@ -74,12 +74,18 @@ mode instead of poll loops.
 
 ## Scope
 
-**In scope**:
+**In scope** (amended 2026-07-18 after executor STOP report — the original list
+omitted files the Steps themselves require against the landed 065 code):
 - `src/subagents/delivery.ts` (create) + `src/subagents/delivery.test.ts`
 - `src/subagents/prompt.ts` (extend: result-message builder)
 - `src/subagents/index.ts` (wire delivery into `installSubagents`)
+- `src/subagents/index.test.ts` (create — Step 3 verification)
+- `src/subagents/tools.ts` + `src/subagents/tools.test.ts` (Step 5 spawn-result
+  text lives in tools.ts:99 in the landed 065, not prompt.ts; and Step 3's
+  `delivery.consume()` calls for wait/cancel wire through the tool layer)
 - `src/sumo-tui/transcript/view-model.ts` (map the custom message to a block)
 - `src/sumo-tui/transcript/view-model.test.ts` (extend)
+- `plans/README.md` (status row only)
 
 **Out of scope**:
 - `src/background-tasks/**` — its `notifyOnExit` prose path is replaced in

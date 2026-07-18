@@ -492,7 +492,7 @@ manifests, then retirement of the `bg_task` mega-tool and delegation routing amb
 | Plan | Title | Priority | Effort | Depends on | Issue | Status |
 |------|-------|----------|--------|------------|-------|--------|
 | 065 | [Subagents core: domain, manager, pi backend, five verb tools](065-subagents-core.md) | P1 | L | — | [#303](https://github.com/dhruvkelawala/sumocode/issues/303) | DONE — PR #322; Claude autoreview 6 rounds + Codex bot 3 rounds (8 accepted findings fixed, 2 consciously documented); 1,662 tests |
-| 066 | [Typed deferred result delivery](066-typed-deferred-result-delivery.md) | P1 | M | 065 | [#304](https://github.com/dhruvkelawala/sumocode/issues/304) | IN PROGRESS (`advisor/066-typed-deferred-result-delivery`) |
+| 066 | [Typed deferred result delivery](066-typed-deferred-result-delivery.md) | P1 | M | 065 | [#304](https://github.com/dhruvkelawala/sumocode/issues/304) | DONE — PR #329; gpt-5.6-sol executor (1 correct STOP on a plan-scope defect), Claude autoreview + Codex bot 3 rounds (5 accepted findings fixed); 1,709 tests |
 | 067 | [Background terminals verb regrammar](067-background-terminals-regrammar.md) | P2 | M | 066 | [#305](https://github.com/dhruvkelawala/sumocode/issues/305) | TODO |
 | 068 | [/subagents dashboard, takeover view, /ps](068-fleet-dashboard-and-takeover.md) | P2 | L | 065, 066, 067 | [#306](https://github.com/dhruvkelawala/sumocode/issues/306) | TODO |
 | 069 | [Worktree isolation + completion manifest](069-worktree-isolation-and-manifest.md) | P2 | M | 065, 066 | [#307](https://github.com/dhruvkelawala/sumocode/issues/307) | TODO |

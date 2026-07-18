@@ -1,5 +1,5 @@
 import { spawn as nodeSpawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import type { SubagentEvent } from "./domain.js";
@@ -69,8 +69,17 @@ function adapterPathSourcesFromSettings(settingsPath: string): string[] {
 export function resolveClaudeOauthAdapterEntry(env: NodeJS.ProcessEnv = process.env): string | undefined {
 	const override = env.SUMOCODE_CLAUDE_OAUTH_ADAPTER;
 	if (override) {
-		if (override.endsWith(".ts") || override.endsWith(".js")) return existsSync(override) ? override : undefined;
-		return adapterEntryFromPackageDir(override);
+		// Probe the filesystem instead of sniffing extensions: a FILE is the
+		// entry itself (any .ts/.js/.mjs/.cjs variant); a DIRECTORY is a
+		// package dir whose manifest names the entry. Missing → no flag.
+		try {
+			const stat = statSync(override);
+			if (stat.isFile()) return override;
+			if (stat.isDirectory()) return adapterEntryFromPackageDir(override);
+		} catch {
+			// fall through
+		}
+		return undefined;
 	}
 	const agentDir = env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent");
 	const candidateDirs = [

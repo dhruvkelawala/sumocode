@@ -60,6 +60,10 @@ describe("resolveClaudeOauthAdapterEntry", () => {
 		const entry = join(dir, "index.ts");
 		writeFileSync(entry, "// adapter");
 		expect(resolveClaudeOauthAdapterEntry({ SUMOCODE_CLAUDE_OAUTH_ADAPTER: entry })).toBe(entry);
+		// Any file works — the resolver probes the filesystem, not extensions.
+		const mjs = join(dir, "index.mjs");
+		writeFileSync(mjs, "// adapter");
+		expect(resolveClaudeOauthAdapterEntry({ SUMOCODE_CLAUDE_OAUTH_ADAPTER: mjs })).toBe(mjs);
 		expect(resolveClaudeOauthAdapterEntry({ SUMOCODE_CLAUDE_OAUTH_ADAPTER: join(dir, "missing.ts") })).toBeUndefined();
 		rmSync(dir, { recursive: true, force: true });
 	});

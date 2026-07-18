@@ -7,6 +7,7 @@ import {
 	createWorktree,
 	listWorktrees,
 	removeWorktree,
+	resolveCreateOptions,
 	type CreateWorktreeResult,
 	type ListWorktreesResult,
 	type RemoveWorktreeResult,
@@ -83,6 +84,10 @@ function commandForFreshWorktree(setupAction: string): string {
 	const setup = setupAction.trim();
 	const setupPrefix = setup ? `${setup} && ` : "";
 	return `${setupPrefix}exec sumocode`;
+}
+
+function worktreeWorkspaceLabel(branch: string): string {
+	return branch.replace(/^sumo\//, "sumo · ");
 }
 
 function listSumoWorktrees(worktrees: readonly WorktreeInfo[]): readonly WorktreeInfo[] {
@@ -183,8 +188,18 @@ export function registerWorktreeCommand(pi: ExtensionAPI, options: WorktreeComma
 						);
 						return;
 					}
+					const paneCommand = commandForFreshWorktree(setupAction);
+					const label = worktreeWorkspaceLabel(match.branch ?? match.path);
+					if (terminalHost.openExistingWorktreeWorkspace) {
+						const opened = await terminalHost.openExistingWorktreeWorkspace(pi, { path: match.path, label, shellCommand: paneCommand });
+						if (opened.ok) {
+							notify(pi, ctx, `opened ${match.branch ?? match.path} as herdr workspace "${label}" · setup: ${setupAction || "none"}`);
+							return;
+						}
+						notify(pi, ctx, `/sumo:worktree: herdr workspace open failed (${opened.error}); falling back to split`, "warning");
+					}
 					const direction: SplitDirection = chooseDiffSplitDirection(getTerminalSize());
-					const command = buildShellCommand(match.path, commandForFreshWorktree(setupAction));
+					const command = buildShellCommand(match.path, paneCommand);
 					const opened = await terminalHost.openCommandInSplit(pi, direction, { cwd: match.path, shellCommand: command });
 					if (!opened.ok) {
 						notify(pi, ctx, `/sumo:worktree: ${opened.error}`, "warning");
@@ -195,13 +210,25 @@ export function registerWorktreeCommand(pi: ExtensionAPI, options: WorktreeComma
 				}
 
 				const task = parsed.mode === "fresh" ? (parsed.value || `wt-${Date.now().toString(36)}`) : parsed.value;
-				const created: CreateWorktreeResult = await create({ repoRoot: ctx.cwd, task, baseRef: parsed.baseRef ?? "HEAD" });
+				const resolved = resolveCreateOptions({ repoRoot: ctx.cwd, task, baseRef: parsed.baseRef ?? "HEAD" });
+				const paneCommand = parsed.mode === "fresh" ? commandForFreshWorktree(setupAction) : commandForWorktree(parsed.value, setupAction);
+				const label = worktreeWorkspaceLabel(resolved.branch);
+				let created: CreateWorktreeResult | undefined;
+				if (terminalHost.openWorktreeWorkspace) {
+					const opened = await terminalHost.openWorktreeWorkspace(pi, { ...resolved, label, shellCommand: paneCommand });
+					if (opened.ok) {
+						const freshLabel = parsed.mode === "fresh" ? " (fresh session)" : "";
+						notify(pi, ctx, `opened ${resolved.branch}${freshLabel} as herdr workspace "${label}" · setup: ${setupAction || "none"}`);
+						return;
+					}
+					notify(pi, ctx, `/sumo:worktree: herdr workspace create failed (${opened.error}); falling back to split`, "warning");
+				}
+				created = await create({ repoRoot: ctx.cwd, task, baseRef: parsed.baseRef ?? "HEAD" });
 				if (!created.ok) {
 					notify(pi, ctx, `/sumo:worktree: ${created.message}`, "warning");
 					return;
 				}
 
-				const paneCommand = parsed.mode === "fresh" ? commandForFreshWorktree(setupAction) : commandForWorktree(parsed.value, setupAction);
 				const command = buildShellCommand(created.path, paneCommand);
 				if (parsed.mode === "fresh" && !sessionHasMessages(ctx) && terminalHost.replaceCurrentPane) {
 					const opened = await terminalHost.replaceCurrentPane(pi, { cwd: created.path, shellCommand: command });

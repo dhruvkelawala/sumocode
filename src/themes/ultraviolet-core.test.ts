@@ -47,12 +47,12 @@ describe("ULTRAVIOLET_CORE_THEME", () => {
 	it("pins tool-ledger and code application roles", () => {
 		expect(applicationRoles).toEqual({
 			toolLedger: {
-				surface: "#17100D",
-				border: "#6B4A1C",
-				label: "#FFC857",
-				target: "#FFE1A6",
-				body: "#FFE1A6",
-				bodyMuted: "#C7A96D",
+				surface: "#100A1D",
+				border: "#56347A",
+				label: "#B974FF",
+				target: "#DCC7FF",
+				body: "#DCC7FF",
+				bodyMuted: "#9B7BBE",
 			},
 			code: {
 				surface: "#100A1D",

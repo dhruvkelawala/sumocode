@@ -478,9 +478,9 @@ describe("V2 visual parity contract", () => {
 			const code = cells(${JSON.stringify(codePath)});
 			const has = (list, fg, bg, char) => list.some((cell) => cell.fg === fg && cell.bg === bg && (char === undefined || cell.char === char));
 			console.log(JSON.stringify({
-				toolBorder: has(tool, "#6B4A1C", "#17100D", "╭"),
-				toolBody: has(tool, "#FFE1A6", "#17100D", "p"),
-				toolMuted: has(tool, "#C7A96D", "#17100D", "p"),
+				toolBorder: has(tool, "#56347A", "#100A1D", "╭"),
+				toolBody: has(tool, "#DCC7FF", "#100A1D", "p"),
+				toolMuted: has(tool, "#9B7BBE", "#100A1D", "p"),
 				codeBorder: has(code, "#56347A", "#100A1D", "╭"),
 				codeKeyword: has(code, "#B974FF", "#100A1D", "e"),
 				codeString: has(code, "#75E8FF", "#100A1D", '"'),
@@ -568,12 +568,12 @@ describe("V2 visual parity contract", () => {
 
 		const ultraviolet = await captureFixtureScenario(scenario("fixture-ultraviolet-core-tool-ledger"));
 		expect(ultraviolet.metadata).toMatchObject({ fixtureId: "tool-ledger", theme: "ultraviolet-core" });
-		expect(ultraviolet.bytes).toContain("\u001b[48;2;23;16;13m");
+		expect(ultraviolet.bytes).toContain("\u001b[48;2;16;10;29m");
 
 		const cathedral = await captureFixtureScenario(scenario("fixture-tool-ledger-landscape"));
 		expect(cathedral.metadata).toMatchObject({ fixtureId: "tool-ledger", theme: "cathedral" });
 		expect(cathedral.bytes).toContain("\u001b[48;2;18;13;10m");
-		expect(cathedral.bytes).not.toContain("\u001b[48;2;23;16;13m");
+		expect(cathedral.bytes).not.toContain("\u001b[48;2;16;10;29m");
 
 		await expect(captureFixtureScenario({
 			...scenario("fixture-tool-ledger-landscape"),
@@ -583,7 +583,7 @@ describe("V2 visual parity contract", () => {
 
 		const afterThrow = await captureFixtureScenario(scenario("fixture-tool-ledger-landscape"));
 		expect(afterThrow.bytes).toContain("\u001b[48;2;18;13;10m");
-		expect(afterThrow.bytes).not.toContain("\u001b[48;2;23;16;13m");
+		expect(afterThrow.bytes).not.toContain("\u001b[48;2;16;10;29m");
 	}, 15_000);
 
 	it("keeps runtime scenarios real and exposes the main-vs-branch compare harness", () => {

@@ -24,6 +24,7 @@ import { installWorkingIndicator } from "./working-indicator.js";
 import { installCompactionIndicator } from "./compaction-indicator.js";
 import { installFastMode } from "./fast-mode.js";
 import { installBackgroundTasks } from "./background-tasks/index.js";
+import { installSubagents } from "./subagents/index.js";
 import { installTaskModeAutoExit } from "./task-mode.js";
 import { logDiagnostic } from "./sumo-tui/runtime/diagnostics.js";
 
@@ -215,9 +216,11 @@ function installRpcChildProfile(pi: ExtensionAPI): void {
 	installQuestionTool(pi);
 	installAnswerTool(pi);
 	const backgroundTaskManager = installBackgroundTasks(pi);
+	const subagentManager = installSubagents(pi);
 	installTaskModeAutoExit(pi);
 	registerSumoReloadCommand(pi);
 	installSumoInteractions(pi, { backgroundTaskManager, includeUiSurfaces: false });
+	void subagentManager;
 }
 
 /**
@@ -315,6 +318,7 @@ export default function sumocode(pi: ExtensionAPI): void {
 	installQuestionTool(pi);
 	installAnswerTool(pi);
 	const backgroundTaskManager = installBackgroundTasks(pi);
+	const subagentManager = installSubagents(pi);
 	installTaskModeAutoExit(pi);
 
 	installWorkingIndicator(pi);
@@ -325,5 +329,6 @@ export default function sumocode(pi: ExtensionAPI): void {
 		taskMode: isTaskMode(),
 		nativeTaskInstalled: shouldInstallNativeTaskTool({ force: process.env.SUMOCODE_NATIVE_TASK }),
 		hasBackgroundTasks: backgroundTaskManager !== undefined,
+		hasSubagents: subagentManager !== undefined,
 	});
 }

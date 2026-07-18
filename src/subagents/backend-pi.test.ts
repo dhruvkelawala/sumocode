@@ -1,6 +1,9 @@
 import { EventEmitter } from "node:events";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { createPiChildSpawner } from "./backend-pi.js";
+import { createPiChildSpawner, resolveClaudeOauthAdapterEntry } from "./backend-pi.js";
 import type { SubagentEvent } from "./domain.js";
 
 class FakeProcess extends EventEmitter {
@@ -20,6 +23,51 @@ const collect = (events: ((emit: (event: SubagentEvent) => void) => void)): Suba
 	events((event) => collected.push(event));
 	return collected;
 };
+
+describe("resolveClaudeOauthAdapterEntry", () => {
+	it("returns undefined when the package is not installed anywhere", () => {
+		expect(resolveClaudeOauthAdapterEntry({ PI_CODING_AGENT_DIR: "/nonexistent-agent-dir" })).toBeUndefined();
+	});
+
+	it("resolves a local-checkout path source from GLOBAL settings packages", () => {
+		const agentDir = mkdtempSync(join(tmpdir(), "sumo-oauth-agent-"));
+		// The path source must mention the package name to be considered.
+		const checkout = join(tmpdir(), `pi-claude-oauth-adapter-${Date.now()}`);
+		mkdirSync(join(checkout, "extensions"), { recursive: true });
+		writeFileSync(join(checkout, "package.json"), JSON.stringify({ pi: { extensions: ["./extensions/index.ts"] } }));
+		writeFileSync(join(checkout, "extensions", "index.ts"), "// adapter");
+		writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ packages: [checkout] }));
+		expect(resolveClaudeOauthAdapterEntry({ PI_CODING_AGENT_DIR: agentDir }))
+			.toBe(join(checkout, "extensions", "index.ts"));
+		rmSync(agentDir, { recursive: true, force: true });
+		rmSync(checkout, { recursive: true, force: true });
+	});
+
+	it("resolves relative settings path sources against the settings dir, not process cwd", () => {
+		const agentDir = mkdtempSync(join(tmpdir(), "sumo-oauth-agent-"));
+		const pkgDir = join(agentDir, "checkouts", "pi-claude-oauth-adapter");
+		mkdirSync(join(pkgDir, "extensions"), { recursive: true });
+		writeFileSync(join(pkgDir, "package.json"), JSON.stringify({ pi: { extensions: ["./extensions/index.ts"] } }));
+		writeFileSync(join(pkgDir, "extensions", "index.ts"), "// adapter");
+		writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ packages: ["./checkouts/pi-claude-oauth-adapter"] }));
+		expect(resolveClaudeOauthAdapterEntry({ PI_CODING_AGENT_DIR: agentDir }))
+			.toBe(join(pkgDir, "extensions", "index.ts"));
+		rmSync(agentDir, { recursive: true, force: true });
+	});
+
+	it("honors the SUMOCODE_CLAUDE_OAUTH_ADAPTER env override pointing at an entry file", () => {
+		const dir = mkdtempSync(join(tmpdir(), "sumo-oauth-override-"));
+		const entry = join(dir, "index.ts");
+		writeFileSync(entry, "// adapter");
+		expect(resolveClaudeOauthAdapterEntry({ SUMOCODE_CLAUDE_OAUTH_ADAPTER: entry })).toBe(entry);
+		// Any file works — the resolver probes the filesystem, not extensions.
+		const mjs = join(dir, "index.mjs");
+		writeFileSync(mjs, "// adapter");
+		expect(resolveClaudeOauthAdapterEntry({ SUMOCODE_CLAUDE_OAUTH_ADAPTER: mjs })).toBe(mjs);
+		expect(resolveClaudeOauthAdapterEntry({ SUMOCODE_CLAUDE_OAUTH_ADAPTER: join(dir, "missing.ts") })).toBeUndefined();
+		rmSync(dir, { recursive: true, force: true });
+	});
+});
 
 describe("spawnPiChild", () => {
 	it("translates pi json-line events", () => {
@@ -71,6 +119,28 @@ describe("spawnPiChild", () => {
 		proc.stderr.emit("data", "boom");
 		proc.emit("close", 2);
 		expect(events.at(-1)).toEqual({ kind: "run-settled", outcome: { kind: "failed", errorText: "boom", partialText: undefined } });
+	});
+
+	it("injects the claude-oauth adapter via -e when the resolver finds it", () => {
+		const proc = new FakeProcess();
+		const spawn = vi.fn(() => proc);
+		const child = createPiChildSpawner(spawn as never, () => "/fake/adapter/extensions/index.ts")({ prompt: "x", cwd: "/tmp", inherited: {} });
+		collect(child.events as (emit: (event: SubagentEvent) => void) => void);
+		const args = (spawn.mock.calls[0] as unknown[])[1] as string[];
+		const eIndex = args.indexOf("-e");
+		expect(eIndex).toBeGreaterThan(-1);
+		expect(args[eIndex + 1]).toBe("/fake/adapter/extensions/index.ts");
+		// The prompt must remain the trailing positional after the adapter args.
+		expect(args[args.length - 1]).toBe("x");
+	});
+
+	it("omits the -e flag when no adapter is installed", () => {
+		const proc = new FakeProcess();
+		const spawn = vi.fn(() => proc);
+		const child = createPiChildSpawner(spawn as never, () => undefined)({ prompt: "x", cwd: "/tmp", inherited: {} });
+		collect(child.events as (emit: (event: SubagentEvent) => void) => void);
+		const args = (spawn.mock.calls[0] as unknown[])[1] as string[];
+		expect(args).not.toContain("-e");
 	});
 
 	it("spawns the child detached and signals the whole process group on interrupt", () => {

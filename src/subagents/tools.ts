@@ -1,5 +1,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import type { DeferredResultDelivery } from "./delivery.js";
 import { latestText, type SubagentSnapshot } from "./domain.js";
 import { type AtCapacityDetails, SubagentManager } from "./manager.js";
 import { SUBAGENT_PROMPT_GUIDELINES, SUBAGENT_PROMPT_SNIPPET, SUBAGENT_TOOL_DESCRIPTIONS } from "./prompt.js";
@@ -62,7 +63,11 @@ const boundedWaitText = (snapshots: readonly SubagentSnapshot[]): string => {
 	return chunks.join("\n\n---\n\n");
 };
 
-export function registerSubagentTools(pi: ExtensionAPI, manager: SubagentManager): void {
+export function registerSubagentTools(
+	pi: ExtensionAPI,
+	manager: SubagentManager,
+	delivery?: Pick<DeferredResultDelivery, "consume">,
+): void {
 	pi.registerTool({
 		name: "subagent_spawn",
 		label: "Subagent Spawn",
@@ -126,6 +131,7 @@ export function registerSubagentTools(pi: ExtensionAPI, manager: SubagentManager
 			const snapshots = await manager.waitFor(params.ids, signal, (pending) => {
 				onUpdate?.({ content: [{ type: "text", text: `Waiting for ${pending.map((snapshot) => snapshot.id).join(", ")}…` }], details: { action: "wait", pending: pending.map((snapshot) => snapshot.id) } });
 			});
+			for (const snapshot of snapshots) delivery?.consume(snapshot.id);
 			return makeToolResult(boundedWaitText(snapshots), { action: "wait", subagents: snapshots });
 		},
 	});
@@ -139,6 +145,7 @@ export function registerSubagentTools(pi: ExtensionAPI, manager: SubagentManager
 		parameters: Type.Object({ ids: Type.Array(Type.String(), { maxItems: 64, description: "Subagent ids to cancel." }) }),
 		async execute(_toolCallId, params) {
 			const lines = await manager.cancel(params.ids);
+			for (const id of params.ids) delivery?.consume(id);
 			return makeToolResult(lines.join("\n"), { action: "cancel", ids: params.ids });
 		},
 	});

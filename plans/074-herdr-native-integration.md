@@ -20,6 +20,7 @@
 - **Depends on**: plan 072 (DONE — `src/terminal-host/` facade landed, PR #313)
 - **Category**: direction
 - **Planned at**: commit `4e80e66`, 2026-07-18
+- **Issue**: https://github.com/dhruvkelawala/sumocode/issues/316
 
 ## Why this matters
 

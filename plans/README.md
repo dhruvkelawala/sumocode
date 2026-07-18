@@ -500,7 +500,7 @@ manifests, then retirement of the `bg_task` mega-tool and delegation routing amb
 | 071 | [On-demand interactive worktrees (fresh/reopen)](071-on-demand-interactive-worktrees.md) | P2 | S | — (independent) | [#309](https://github.com/dhruvkelawala/sumocode/issues/309) | DONE — PRs #310/#314 (`26de5cb`, `237355e`) |
 | 073 | [Herdr Terminal Theme](073-herdr-terminal-theme.md) | P1 | M | — | [#312](https://github.com/dhruvkelawala/sumocode/issues/312) | DONE — PR #315 (`b91f7ad` + `ae93792` approved-palette realignment) |
 | 072 | [Terminal-host abstraction: herdr + cmux](072-terminal-host-abstraction-herdr.md) | P2 | M | 071 (same file) | [#311](https://github.com/dhruvkelawala/sumocode/issues/311) | DONE — PR #313 (`52f33d6`, `fc56f14`): facade + worktree/diff/review/bg-task ports + pane-ref schema v3 |
-| 074 | [Herdr-native integration: approval attention queue + native worktree workspaces](074-herdr-native-integration.md) | P2 | S | 072 | — | TODO |
+| 074 | [Herdr-native integration: approval attention queue + native worktree workspaces](074-herdr-native-integration.md) | P2 | S | 072 | [#316](https://github.com/dhruvkelawala/sumocode/issues/316) | TODO |
 
 ### Dependency notes
 

@@ -1,5 +1,5 @@
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import { activeThemeColors } from "../../themes/index.js";
+import { activeThemeApplicationRoles, activeThemeColors, type ThemeApplicationRoles } from "../../themes/index.js";
 import { lineToAnsi, span, textLine, type Span } from "../render/primitives.js";
 import { expandKey } from "./expand-key.js";
 import type { ToolCallViewModel, ToolStatus } from "./view-model.js";
@@ -12,6 +12,7 @@ const STATUS_GLYPH: Record<ToolStatus, string> = {
 	cancelled: "✗",
 };
 
+type ToolLedgerRoles = ThemeApplicationRoles["toolLedger"];
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
 	return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : undefined;
@@ -84,13 +85,13 @@ export function toolNote(tool: ToolCallViewModel): string | undefined {
 	return undefined;
 }
 
-function styledToolHeaderParts(tool: ToolCallViewModel): Span[] {
+function styledToolHeaderParts(tool: ToolCallViewModel, roles: ToolLedgerRoles): Span[] {
 	return [
 		span(toolStatusGlyph(tool.status), { fg: toolStatusColor(tool.status) }),
 		span(" "),
-		span(`[${tool.name}]`, { fg: activeThemeColors().accent }),
+		span(`[${tool.name}]`, { fg: roles.label }),
 		span("  "),
-		span(toolTarget(tool), { fg: activeThemeColors().foreground }),
+		span(toolTarget(tool), { fg: roles.target }),
 	];
 }
 
@@ -103,12 +104,13 @@ function compactHint(tool: ToolCallViewModel): string {
 }
 
 export function renderCompactToolPill(tool: ToolCallViewModel): string {
+	const roles = activeThemeApplicationRoles().toolLedger;
 	const note = toolNote(tool);
 	return lineToAnsi(textLine([
-		...styledToolHeaderParts(tool),
-		...(note ? [span("  · ", { fg: activeThemeColors().foregroundDim }), span(note, { fg: activeThemeColors().foregroundDim })] : []),
-		span("  · ", { fg: activeThemeColors().foregroundDim }),
-		span(compactHint(tool), { fg: activeThemeColors().foregroundDim }),
+		...styledToolHeaderParts(tool, roles),
+		...(note ? [span("  · ", { fg: roles.bodyMuted }), span(note, { fg: roles.bodyMuted })] : []),
+		span("  · ", { fg: roles.bodyMuted }),
+		span(compactHint(tool), { fg: roles.bodyMuted }),
 	]));
 }
 
@@ -127,16 +129,16 @@ function headerNote(tool: ToolCallViewModel): string | undefined {
 /** Maximum body lines shown in an expanded tool ledger row before collapsing. */
 const TOOL_BODY_MAX_LINES = 25;
 
-function toolLedgerStyle(): { bg: string } {
-	return { bg: activeThemeColors().surfaceRecess };
+function toolLedgerStyle(roles: ToolLedgerRoles): { bg: string } {
+	return { bg: roles.surface };
 }
 
-function renderHeader(tool: ToolCallViewModel, width: number): string {
+function renderHeader(tool: ToolCallViewModel, width: number, roles: ToolLedgerRoles): string {
 	const note = headerNote(tool);
 	const right: Span[] = [
 		span(" "),
 		span(toolStatusGlyph(tool.status), { fg: toolStatusColor(tool.status) }),
-		...(note ? [span(" "), span(note, { fg: activeThemeColors().foregroundDim })] : []),
+		...(note ? [span(" "), span(note, { fg: roles.bodyMuted })] : []),
 		span(" "),
 	];
 	const input = asRecord(tool.input);
@@ -149,29 +151,35 @@ function renderHeader(tool: ToolCallViewModel, width: number): string {
 		? (maxPathWidth > 3 ? `…${rawFilePath.slice(-(maxPathWidth - 1))}` : undefined)
 		: rawFilePath;
 	const left: Span[] = [
-		span("╭─ ", { fg: activeThemeColors().divider }),
-		span(`[${tool.name}]`, { fg: activeThemeColors().accent }),
-		...(filePath ? [span("  "), span(filePath, { fg: activeThemeColors().foreground })] : []),
+		span("╭─ ", { fg: roles.border }),
+		span(`[${tool.name}]`, { fg: roles.label }),
+		...(filePath ? [span("  "), span(filePath, { fg: roles.target })] : []),
 		span(" "),
 	];
 	const used = [...left, ...right].reduce((sum, part) => sum + visibleWidth(part.text), 0);
 	const rule = Math.max(1, width - used);
-	return lineToAnsi(textLine([...left, span("─".repeat(rule), { fg: activeThemeColors().divider }), ...right]), { width, style: toolLedgerStyle() });
+	return lineToAnsi(textLine([...left, span("─".repeat(rule), { fg: roles.border }), ...right]), { width, style: toolLedgerStyle(roles) });
 }
 
-function renderBodyLine(parts: readonly (Span | string)[], width: number): string {
+function bodySpan(part: Span | string, roles: ToolLedgerRoles): Span {
+	if (typeof part === "string") return span(part, { fg: roles.body });
+	if (part.style?.fg) return part;
+	return span(part.text, { ...part.style, fg: roles.body });
+}
+
+function renderBodyLine(parts: readonly (Span | string)[], width: number, roles: ToolLedgerRoles): string {
 	return lineToAnsi(textLine([
-		span("│", { fg: activeThemeColors().divider }),
+		span("│", { fg: roles.border }),
 		span(" "),
-		...parts.map((part) => typeof part === "string" ? span(part, { fg: activeThemeColors().foreground }) : part),
-	]), { width, style: toolLedgerStyle() });
+		...parts.map((part) => bodySpan(part, roles)),
+	]), { width, style: toolLedgerStyle(roles) });
 }
 
-function renderBottom(width: number): string {
+function renderBottom(width: number, roles: ToolLedgerRoles): string {
 	return lineToAnsi(textLine([
-		span("╰", { fg: activeThemeColors().divider }),
-		span("─".repeat(Math.max(0, width - 1)), { fg: activeThemeColors().divider }),
-	]), { width, style: toolLedgerStyle() });
+		span("╰", { fg: roles.border }),
+		span("─".repeat(Math.max(0, width - 1)), { fg: roles.border }),
+	]), { width, style: toolLedgerStyle(roles) });
 }
 
 function outputLines(tool: ToolCallViewModel): string[] {
@@ -190,37 +198,37 @@ function collapsedMarker(details: Record<string, unknown> | undefined, fallback 
 	return count > 0 ? `… ${count} lines collapsed` : undefined;
 }
 
-function renderGutterLine(lineNumber: number | undefined, text: string, width: number, style: string = activeThemeColors().foreground): string {
+function renderGutterLine(lineNumber: number | undefined, text: string, width: number, roles: ToolLedgerRoles, style: string = roles.body): string {
 	const gutter = lineNumber === undefined ? "      " : `${String(lineNumber).padStart(4)}  `;
 	return renderBodyLine([
-		span(gutter, { fg: activeThemeColors().foregroundDim }),
+		span(gutter, { fg: roles.bodyMuted }),
 		span(text, { fg: style }),
-	], width);
+	], width, roles);
 }
 
-function renderReadLikeBody(tool: ToolCallViewModel, width: number): string[] {
+function renderReadLikeBody(tool: ToolCallViewModel, width: number, roles: ToolLedgerRoles): string[] {
 	const details = asRecord(tool.details);
 	const excerpt = (arrayFromDetails(details, "excerpt").length > 0 ? arrayFromDetails(details, "excerpt") : outputLines(tool).slice(0, TOOL_BODY_MAX_LINES)).map(terminalSafeText);
 	const startLine = typeof details?.startLine === "number" ? details.startLine : 1;
-	const rows = excerpt.slice(0, TOOL_BODY_MAX_LINES).map((line, index) => renderGutterLine(startLine + index, line, width));
+	const rows = excerpt.slice(0, TOOL_BODY_MAX_LINES).map((line, index) => renderGutterLine(startLine + index, line, width, roles));
 	const collapsed = collapsedMarker(details, typeof details?.totalLines === "number" ? Math.max(0, details.totalLines - excerpt.length) : 0);
-	if (collapsed) rows.push(renderBodyLine([span("      ", { fg: activeThemeColors().foregroundDim }), span(collapsed, { fg: activeThemeColors().foregroundDim })], width));
-	if (rows.length === 0) rows.push(renderBodyLine([span("preview collapsed", { fg: activeThemeColors().foregroundDim })], width));
+	if (collapsed) rows.push(renderBodyLine([span("      ", { fg: roles.bodyMuted }), span(collapsed, { fg: roles.bodyMuted })], width, roles));
+	if (rows.length === 0) rows.push(renderBodyLine([span("preview collapsed", { fg: roles.bodyMuted })], width, roles));
 	return rows;
 }
 
-function renderEditSummary(text: string, width: number): string[] {
+function renderEditSummary(text: string, width: number, roles: ToolLedgerRoles): string[] {
 	const additions = text.match(/\+(\d+)/)?.[0];
 	const removals = text.match(/-(\d+)/)?.[0];
 	const rest = text.replace(/\+\d+|-\d+/g, "").trim();
 	return [renderBodyLine([
 		...(additions ? [span(additions, { fg: activeThemeColors().states.idle }), span(" ")] : []),
 		...(removals ? [span(removals, { fg: activeThemeColors().states.approval }), span(" ")] : []),
-		span(rest || "diff collapsed", { fg: activeThemeColors().foregroundDim }),
-	], width)];
+		span(rest || "diff collapsed", { fg: roles.bodyMuted }),
+	], width, roles)];
 }
 
-function renderEditBody(tool: ToolCallViewModel, width: number): string[] {
+function renderEditBody(tool: ToolCallViewModel, width: number, roles: ToolLedgerRoles): string[] {
 	const details = asRecord(tool.details);
 	const rawDiff = details?.diff;
 	const diffLines = (typeof rawDiff === "string"
@@ -230,15 +238,15 @@ function renderEditBody(tool: ToolCallViewModel, width: number): string[] {
 
 	if (diffLines.length === 0) {
 		const note = toolNote(tool) ?? "diff collapsed";
-		return renderEditSummary(note, width);
+		return renderEditSummary(note, width, roles);
 	}
 
 	const rows = diffLines.slice(0, TOOL_BODY_MAX_LINES).map((line) => {
 		const head = line.trimStart();
 		const color = head.startsWith("+") ? activeThemeColors().states.idle
 			: head.startsWith("-") ? activeThemeColors().states.approval
-			: activeThemeColors().foregroundDim;
-		return renderBodyLine([span(line, { fg: color })], width);
+			: roles.bodyMuted;
+		return renderBodyLine([span(line, { fg: color })], width, roles);
 	});
 	const adds = diffLines.filter((line) => line.trimStart().startsWith("+")).length;
 	const removes = diffLines.filter((line) => line.trimStart().startsWith("-")).length;
@@ -246,13 +254,13 @@ function renderEditBody(tool: ToolCallViewModel, width: number): string[] {
 		span(`+${adds}`, { fg: activeThemeColors().states.idle }),
 		span(" "),
 		span(`-${removes}`, { fg: activeThemeColors().states.approval }),
-	], width);
+	], width, roles);
 	const collapsed = collapsedMarker(details, Math.max(0, diffLines.length - rows.length));
-	if (collapsed) rows.push(renderBodyLine([span("      ", { fg: activeThemeColors().foregroundDim }), span(collapsed, { fg: activeThemeColors().foregroundDim })], width));
+	if (collapsed) rows.push(renderBodyLine([span("      ", { fg: roles.bodyMuted }), span(collapsed, { fg: roles.bodyMuted })], width, roles));
 	return [summary, ...rows];
 }
 
-function renderBashLine(line: string): (Span | string)[] {
+function renderBashLine(line: string, roles: ToolLedgerRoles): (Span | string)[] {
 	const trimmed = line.trimStart();
 	const indent = line.slice(0, line.length - trimmed.length);
 	// Lines starting with ✓ or ✗: color only the glyph, rest stays foreground
@@ -264,39 +272,40 @@ function renderBashLine(line: string): (Span | string)[] {
 	}
 	// Summary / result lines (no leading > or glyph): dim
 	if (!trimmed.startsWith(">")) {
-		return [span(line, { fg: activeThemeColors().foregroundDim })];
+		return [span(line, { fg: roles.bodyMuted })];
 	}
 	return [line];
 }
 
-function renderBashBody(tool: ToolCallViewModel, width: number): string[] {
+function renderBashBody(tool: ToolCallViewModel, width: number, roles: ToolLedgerRoles): string[] {
 	const details = asRecord(tool.details);
 	const target = toolTarget(tool);
 	const lines = outputLines(tool).slice(0, TOOL_BODY_MAX_LINES).map(terminalSafeText);
-	const body = [renderBodyLine([`> ${target}`], width)];
+	const body = [renderBodyLine([`> ${target}`], width, roles)];
 	const collapsed = collapsedMarker(details, Math.max(0, outputLines(tool).length - lines.length));
-	if (collapsed) body.push(renderBodyLine([span(`  ${collapsed}`, { fg: activeThemeColors().foregroundDim })], width));
+	if (collapsed) body.push(renderBodyLine([span(`  ${collapsed}`, { fg: roles.bodyMuted })], width, roles));
 	for (const line of lines) {
-		body.push(renderBodyLine(renderBashLine(line), width));
+		body.push(renderBodyLine(renderBashLine(line, roles), width, roles));
 	}
-	if (lines.length === 0 && tool.status === "running") body.push(renderBodyLine([span("watching stdout…", { fg: activeThemeColors().foregroundDim })], width));
+	if (lines.length === 0 && tool.status === "running") body.push(renderBodyLine([span("watching stdout…", { fg: roles.bodyMuted })], width, roles));
 	return body;
 }
 
-function renderToolBody(tool: ToolCallViewModel, width: number): string[] {
-	if (tool.name === "edit") return renderEditBody(tool, width);
-	if (tool.name === "read" || tool.name === "write") return renderReadLikeBody(tool, width);
-	if (tool.name === "bash") return renderBashBody(tool, width);
-	return [renderBodyLine([span("preview collapsed", { fg: activeThemeColors().foregroundDim })], width)];
+function renderToolBody(tool: ToolCallViewModel, width: number, roles: ToolLedgerRoles): string[] {
+	if (tool.name === "edit") return renderEditBody(tool, width, roles);
+	if (tool.name === "read" || tool.name === "write") return renderReadLikeBody(tool, width, roles);
+	if (tool.name === "bash") return renderBashBody(tool, width, roles);
+	return [renderBodyLine([span("preview collapsed", { fg: roles.bodyMuted })], width, roles)];
 }
 
 export function renderToolLedgerRows(tool: ToolCallViewModel, width: number): string[] {
 	const safeWidth = Math.max(1, Math.floor(width));
 	if (safeWidth < 20) return [padAnsi(renderCompactToolPill(tool), safeWidth)];
+	const roles = activeThemeApplicationRoles().toolLedger;
 	return [
-		renderHeader(tool, safeWidth),
-		...renderToolBody(tool, safeWidth),
-		renderBottom(safeWidth),
+		renderHeader(tool, safeWidth, roles),
+		...renderToolBody(tool, safeWidth, roles),
+		renderBottom(safeWidth, roles),
 	];
 }
 

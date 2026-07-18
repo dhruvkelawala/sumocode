@@ -1,9 +1,24 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { stripAnsi } from "../cathedral/ansi.js";
 import { visibleWidth } from "@earendil-works/pi-tui";
+import { resetThemeRegistryForTests, setActiveTheme } from "../../themes/index.js";
 import { renderCompactToolPill, renderToolBlockRows, renderToolLedgerRows } from "./tool-renderer.js";
 
+function rgbAnsi(hex: string, channel: 38 | 48): string {
+	const normalized = hex.replace("#", "");
+	const r = Number.parseInt(normalized.slice(0, 2), 16);
+	const g = Number.parseInt(normalized.slice(2, 4), 16);
+	const b = Number.parseInt(normalized.slice(4, 6), 16);
+	return `\u001b[${channel};2;${r};${g};${b}m`;
+}
+
+function ledgerStyledText(fg: string, text: string): string {
+	return `${rgbAnsi(fg, 38)}${rgbAnsi("#17100D", 48)}${text}`;
+}
+
 describe("tool renderer", () => {
+	afterEach(() => resetThemeRegistryForTests());
+
 	it("renders compact Cathedral tool pills", () => {
 		const line = renderCompactToolPill({ name: "read", status: "success", input: { path: "src/auth/session.ts" } });
 
@@ -134,5 +149,69 @@ describe("tool renderer", () => {
 		expect(plain).toContain("> pnpm test");
 		expect(plain).toContain("▶");
 		expect(rows.join("\n")).toContain("38;2;91;155;213m");
+	});
+
+	it("renders compact Ultraviolet tool pills with semantic label, target, and muted roles", () => {
+		setActiveTheme("ultraviolet-core");
+
+		const line = renderCompactToolPill({
+			name: "read",
+			status: "success",
+			input: { path: "src/auth/session.ts" },
+			details: { lineCount: 184 },
+		});
+
+		expect(stripAnsi(line)).toBe("✓ [read]  src/auth/session.ts  · 184 lines  · ctrl+o expand");
+		expect(line).toContain(`${rgbAnsi("#FFC857", 38)}[read]`);
+		expect(line).toContain(`${rgbAnsi("#FFE1A6", 38)}src/auth/session.ts`);
+		expect(line).toContain(`${rgbAnsi("#C7A96D", 38)}  · `);
+		expect(line).not.toContain(rgbAnsi("#17100D", 48));
+	});
+
+	it("renders expanded Ultraviolet read ledgers with amber surface/body roles", () => {
+		setActiveTheme("ultraviolet-core");
+
+		const rows = renderToolLedgerRows({
+			name: "read",
+			status: "success",
+			input: { path: "src/auth/session.ts" },
+			details: { excerpt: ["export async function getUser() {}"], totalLines: 3 },
+		}, 90);
+		const raw = rows.join("\n");
+
+		expect(raw).toContain(rgbAnsi("#17100D", 48));
+		expect(raw).toContain(ledgerStyledText("#6B4A1C", "╭─ "));
+		expect(raw).toContain(ledgerStyledText("#FFC857", "[read]"));
+		expect(raw).toContain(ledgerStyledText("#FFE1A6", "src/auth/session.ts"));
+		expect(raw).toContain(ledgerStyledText("#C7A96D", "   1  "));
+		expect(raw).toContain(ledgerStyledText("#FFE1A6", "export async function getUser() {}"));
+		expect(raw).toContain(ledgerStyledText("#C7A96D", "… 2 lines collapsed"));
+		expect(rows.every((row) => visibleWidth(row) <= 90)).toBe(true);
+	});
+
+	it("renders expanded Ultraviolet edit and bash bodies with semantic roles while preserving state colours", () => {
+		setActiveTheme("ultraviolet-core");
+
+		const editRows = renderToolLedgerRows({
+			name: "edit",
+			status: "success",
+			input: { path: "src/auth/session.ts" },
+			details: { diff: ["- old session", "+ new session", "  unchanged"], collapsedLines: 2 },
+		}, 90).join("\n");
+		const bashRows = renderToolLedgerRows({
+			name: "bash",
+			status: "running",
+			input: { command: "pnpm test" },
+			output: "✓ one passed\nsummary line",
+		}, 80).join("\n");
+
+		expect(editRows).toContain(ledgerStyledText("#DCC7FF", "+1"));
+		expect(editRows).toContain(ledgerStyledText("#FF668F", "-1"));
+		expect(editRows).toContain(ledgerStyledText("#C7A96D", "  unchanged"));
+		expect(editRows).toContain(ledgerStyledText("#C7A96D", "… 2 lines collapsed"));
+		expect(bashRows).toContain(ledgerStyledText("#FFE1A6", "> pnpm test"));
+		expect(bashRows).toContain(ledgerStyledText("#DCC7FF", "✓"));
+		expect(bashRows).toContain(ledgerStyledText("#C7A96D", "summary line"));
+		expect(bashRows).toContain(ledgerStyledText("#FFC857", "▶"));
 	});
 });

@@ -6,12 +6,28 @@ import {
 	renderApprovalModal,
 	setApprovalConfig,
 	showApprovalModal,
+	showRpcApprovalPrompt,
 	updateApprovalSnapshot,
 	type ApprovalModalSnapshot,
 } from "./approval-modal.js";
 
 const ANSI = /\u001b\[[0-9;]*m/g;
 const stripAnsi = (s: string): string => s.replace(ANSI, "");
+const originalHerdrEnv = {
+	HERDR_ENV: process.env.HERDR_ENV,
+	HERDR_PANE_ID: process.env.HERDR_PANE_ID,
+	CMUX_WORKSPACE_ID: process.env.CMUX_WORKSPACE_ID,
+};
+
+afterEach(() => {
+	setApprovalConfig(DEFAULT_APPROVAL_CONFIG);
+	if (originalHerdrEnv.HERDR_ENV === undefined) delete process.env.HERDR_ENV;
+	else process.env.HERDR_ENV = originalHerdrEnv.HERDR_ENV;
+	if (originalHerdrEnv.HERDR_PANE_ID === undefined) delete process.env.HERDR_PANE_ID;
+	else process.env.HERDR_PANE_ID = originalHerdrEnv.HERDR_PANE_ID;
+	if (originalHerdrEnv.CMUX_WORKSPACE_ID === undefined) delete process.env.CMUX_WORKSPACE_ID;
+	else process.env.CMUX_WORKSPACE_ID = originalHerdrEnv.CMUX_WORKSPACE_ID;
+});
 
 function snapshot(overrides: Partial<ApprovalModalSnapshot> = {}): ApprovalModalSnapshot {
 	return {
@@ -225,8 +241,6 @@ describe("isDangerousBashCommand", () => {
 });
 
 describe("approval config", () => {
-	afterEach(() => setApprovalConfig(DEFAULT_APPROVAL_CONFIG));
-
 	it("extraPatterns adds custom gates", () => {
 		expect(isDangerousBashCommand("curl -X POST https://api.example.com")).toBe(false);
 		setApprovalConfig({ extraPatterns: [/\bcurl\s+-X\s+POST\b/i] });
@@ -296,6 +310,54 @@ describe("installApprovalGate — Pi event subscription", () => {
 			{ mode: "rpc", ui: { select: alwaysSelect } } as never,
 			{ command: "rm -rf node_modules/", descriptionLines: ["This will permanently delete files."] },
 		)).resolves.toBe("always");
+	});
+
+	it.each(["No", "Yes", "Always"])("pairs herdr blocked emissions for RPC %s", async (selection) => {
+		process.env.HERDR_ENV = "1";
+		process.env.HERDR_PANE_ID = "w1:p1";
+		delete process.env.CMUX_WORKSPACE_ID;
+		const emit = vi.fn();
+
+		await showRpcApprovalPrompt(
+			{ ui: { select: vi.fn(async () => selection) } } as never,
+			{ command: "rm -rf node_modules/", descriptionLines: ["This will permanently delete files."] },
+			{ events: { emit } } as never,
+		);
+
+		expect(emit).toHaveBeenCalledTimes(2);
+		expect(emit).toHaveBeenNthCalledWith(1, "herdr:blocked", { active: true, label: "approval" });
+		expect(emit).toHaveBeenNthCalledWith(2, "herdr:blocked", { active: false });
+	});
+
+	it("releases herdr blocked emission when the RPC prompt throws", async () => {
+		process.env.HERDR_ENV = "1";
+		process.env.HERDR_PANE_ID = "w1:p1";
+		delete process.env.CMUX_WORKSPACE_ID;
+		const emit = vi.fn();
+
+		await expect(showRpcApprovalPrompt(
+			{ ui: { select: vi.fn(async () => { throw new Error("closed"); }) } } as never,
+			{ command: "rm -rf node_modules/", descriptionLines: ["This will permanently delete files."] },
+			{ events: { emit } } as never,
+		)).resolves.toBe("no");
+
+		expect(emit).toHaveBeenNthCalledWith(1, "herdr:blocked", { active: true, label: "approval" });
+		expect(emit).toHaveBeenNthCalledWith(2, "herdr:blocked", { active: false });
+	});
+
+	it("does not emit herdr blocked events outside herdr", async () => {
+		delete process.env.HERDR_ENV;
+		delete process.env.HERDR_PANE_ID;
+		process.env.CMUX_WORKSPACE_ID = "workspace:1";
+		const emit = vi.fn();
+
+		await showRpcApprovalPrompt(
+			{ ui: { select: vi.fn(async () => "Yes") } } as never,
+			{ command: "rm -rf node_modules/", descriptionLines: ["This will permanently delete files."] },
+			{ events: { emit } } as never,
+		);
+
+		expect(emit).not.toHaveBeenCalled();
 	});
 
 	it("subscribes to tool_call", () => {

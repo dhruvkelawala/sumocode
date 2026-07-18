@@ -44,6 +44,7 @@ import {
 	visibleLength,
 	wrapPanelRow,
 } from "./cathedral/scriptorium-chrome.js";
+import { detectTerminalHost } from "./terminal-host/index.js";
 
 const PANEL_INDENT = "   ";
 const BIBLE_COMMAND_BOX_WIDTH_AT_80 = 68;
@@ -270,10 +271,21 @@ function rpcApprovalTitle(snapshot: Omit<ApprovalModalSnapshot, "activeButton">)
 	return `${RPC_APPROVAL_TITLE_MARKER}\n\n${snapshot.command}${description}`;
 }
 
+function herdrBlocked(pi: ExtensionAPI | undefined, active: boolean): void {
+	if (!pi || detectTerminalHost() !== "herdr") return;
+	try {
+		pi.events.emit("herdr:blocked", active ? { active, label: "approval" } : { active });
+	} catch {
+		// Herdr attention signalling must never affect approval safety.
+	}
+}
+
 export async function showRpcApprovalPrompt(
 	ctx: ExtensionContext,
 	snapshot: Omit<ApprovalModalSnapshot, "activeButton">,
+	pi?: ExtensionAPI,
 ): Promise<ApprovalChoice> {
+	herdrBlocked(pi, true);
 	try {
 		const choice = await ctx.ui.select(
 			rpcApprovalTitle(snapshot),
@@ -283,6 +295,8 @@ export async function showRpcApprovalPrompt(
 		return normalizeApprovalChoice(choice);
 	} catch {
 		return "no";
+	} finally {
+		herdrBlocked(pi, false);
 	}
 }
 
@@ -293,27 +307,33 @@ export async function showRpcApprovalPrompt(
 export async function showApprovalModal(
 	ctx: ExtensionContext,
 	snapshot: Omit<ApprovalModalSnapshot, "activeButton">,
+	pi?: ExtensionAPI,
 ): Promise<ApprovalChoice> {
 	if (ctx.mode === "rpc") {
-		return await showRpcApprovalPrompt(ctx, snapshot);
+		return await showRpcApprovalPrompt(ctx, snapshot, pi);
 	}
 
 	const fullSnapshot: ApprovalModalSnapshot = { ...snapshot, activeButton: "no" };
 
-	const choice = await ctx.ui.custom<ApprovalChoice>(
-		(_tui, _theme, _kb, done: (result: ApprovalChoice) => void) =>
-			new ApprovalModalComponent(fullSnapshot, done),
-		{
-			overlay: true,
-			overlayOptions: {
-				anchor: "center",
-				width: "60%",
-				minWidth: 50,
-				maxHeight: "80%",
+	herdrBlocked(pi, true);
+	try {
+		const choice = await ctx.ui.custom<ApprovalChoice>(
+			(_tui, _theme, _kb, done: (result: ApprovalChoice) => void) =>
+				new ApprovalModalComponent(fullSnapshot, done),
+			{
+				overlay: true,
+				overlayOptions: {
+					anchor: "center",
+					width: "60%",
+					minWidth: 50,
+					maxHeight: "80%",
+				},
 			},
-		},
-	);
-	return normalizeApprovalChoice(choice);
+		);
+		return normalizeApprovalChoice(choice);
+	} finally {
+		herdrBlocked(pi, false);
+	}
 }
 
 function blockApproval(reason: string): { block: true; reason: string } {
@@ -339,12 +359,13 @@ function rememberAlways(command: string, choice: ApprovalChoice): void {
 }
 
 async function requestApprovalChoice(
+	pi: ExtensionAPI,
 	ctx: ExtensionContext,
 	command: string,
 	descriptionLines: readonly string[],
 ): Promise<ApprovalChoice> {
 	try {
-		return normalizeApprovalChoice(await showApprovalModal(ctx, { command, descriptionLines: [...descriptionLines] }));
+		return normalizeApprovalChoice(await showApprovalModal(ctx, { command, descriptionLines: [...descriptionLines] }, pi));
 	} catch {
 		return "no";
 	}
@@ -449,7 +470,7 @@ export function installApprovalGate(pi: ExtensionAPI): void {
 		if (!ctx.hasUI) return blockUnavailable();
 
 		const info = describeCommand(command);
-		const choice = await requestApprovalChoice(ctx, info.command, info.description);
+		const choice = await requestApprovalChoice(pi, ctx, info.command, info.description);
 		rememberAlways(command, choice);
 		if (!isAllowedApprovalChoice(choice)) return blockDenied();
 		return undefined;

@@ -34,6 +34,21 @@ describe("herdrTerminalHost", () => {
 		expect(result).toEqual({ ok: true, pane: { host: "herdr", paneId: "w1:p2", workspaceId: "w1" } });
 		expect(exec).toHaveBeenCalledWith("herdr", ["agent", "start", "sumocode-task", "--cwd", "/tmp", "--split", "down", "--no-focus", "--", "bash", "-lc", "echo ok"], { timeout: 5000 });
 	});
+	it("resolves the workspace pane even when herdr omits per-pane workspace_id", async () => {
+		const exec = vi.fn(async (_bin: string, args: string[]) => {
+			if (args[0] === "worktree") {
+				return { stdout: JSON.stringify({ result: { workspace: { workspace_id: "wC" } } }), stderr: "", code: 0, killed: false };
+			}
+			if (args[0] === "pane" && args[1] === "list") {
+				return { stdout: JSON.stringify({ result: { panes: [{ pane_id: "wC:p1" }, { pane_id: "wC:p2" }] } }), stderr: "", code: 0, killed: false };
+			}
+			return { stdout: JSON.stringify({ result: { type: "ok" } }), stderr: "", code: 0, killed: false };
+		});
+		await expect(
+			herdrTerminalHost.openWorktreeWorkspace?.({ exec } as never, { branch: "sumo/x", baseRef: "HEAD", path: "/repo.wt/sumo__x", label: "sumo · x", shellCommand: "exec sumocode" }),
+		).resolves.toEqual({ ok: true, pane: { host: "herdr", paneId: "wC:p1", workspaceId: "wC" } });
+	});
+
 	it("opens with agent start and returns pane ref", async () => {
 		const fake = pi(JSON.stringify({ result: { agent: { pane_id: "w1:p2", workspace_id: "w1" } } }));
 		const result = await herdrTerminalHost.openCommandInSplit(fake as never, "right", { cwd: "/tmp", shellCommand: "echo ok" });
@@ -44,6 +59,57 @@ describe("herdrTerminalHost", () => {
 		const fake = pi("not-json");
 		const result = await herdrTerminalHost.openCommandInSplit(fake as never, "down", { cwd: "/tmp", shellCommand: "echo ok" });
 		expect(result.ok).toBe(false);
+	});
+	it("creates a native worktree workspace, finds its pane, and runs the command", async () => {
+		const exec = vi.fn(async (_bin: string, args: string[]) => {
+			if (args[0] === "worktree" && args[1] === "create") {
+				return { stdout: JSON.stringify({ result: { workspace: { workspace_id: "wA" }, root_pane: { pane_id: "wA:p1", workspace_id: "wA" } } }), stderr: "", code: 0, killed: false };
+			}
+			if (args[0] === "pane" && args[1] === "list") {
+				return { stdout: JSON.stringify({ result: { panes: [{ pane_id: "wA:p1", workspace_id: "wA" }] } }), stderr: "", code: 0, killed: false };
+			}
+			return { stdout: JSON.stringify({ result: { type: "ok" } }), stderr: "", code: 0, killed: false };
+		});
+
+		const result = await herdrTerminalHost.openWorktreeWorkspace?.({ exec } as never, {
+			branch: "sumo/task",
+			baseRef: "origin/main",
+			path: "/repo.wt/sumo__task",
+			label: "sumo · task",
+			shellCommand: "exec sumocode",
+		});
+
+		expect(result).toEqual({ ok: true, pane: { host: "herdr", paneId: "wA:p1", workspaceId: "wA" } });
+		expect(exec).toHaveBeenCalledWith("herdr", ["worktree", "create", "--branch", "sumo/task", "--base", "origin/main", "--path", "/repo.wt/sumo__task", "--label", "sumo · task", "--focus", "--json"], { timeout: 5000 });
+		expect(exec).toHaveBeenCalledWith("herdr", ["pane", "list", "--workspace", "wA"], { timeout: 5000 });
+		expect(exec).toHaveBeenCalledWith("herdr", ["pane", "run", "wA:p1", "exec sumocode"], { timeout: 5000 });
+	});
+	it("opens an existing native worktree workspace", async () => {
+		const exec = vi.fn(async (_bin: string, args: string[]) => {
+			if (args[0] === "worktree" && args[1] === "open") {
+				return { stdout: JSON.stringify({ result: { workspace: { workspace_id: "wB" } } }), stderr: "", code: 0, killed: false };
+			}
+			if (args[0] === "pane" && args[1] === "list") {
+				return { stdout: JSON.stringify({ result: { panes: [{ pane_id: "wB:p1", workspace_id: "wB" }] } }), stderr: "", code: 0, killed: false };
+			}
+			return { stdout: "", stderr: "", code: 0, killed: false };
+		});
+
+		const result = await herdrTerminalHost.openExistingWorktreeWorkspace?.({ exec } as never, { path: "/repo.wt/sumo__task", label: "sumo · task", shellCommand: "exec sumocode" });
+
+		expect(result).toEqual({ ok: true, pane: { host: "herdr", paneId: "wB:p1", workspaceId: "wB" } });
+		expect(exec).toHaveBeenCalledWith("herdr", ["worktree", "open", "--path", "/repo.wt/sumo__task", "--label", "sumo · task", "--focus", "--json"], { timeout: 5000 });
+	});
+	it("reports native worktree errors when workspace or panes are missing", async () => {
+		const noWorkspace = pi(JSON.stringify({ result: { type: "worktree_created" } }));
+		await expect(herdrTerminalHost.openWorktreeWorkspace?.(noWorkspace as never, { branch: "sumo/task", baseRef: "HEAD", path: "/repo.wt/sumo__task", label: "sumo · task", shellCommand: "exec sumocode" })).resolves.toEqual({ ok: false, error: "herdr worktree create did not return a workspace_id" });
+
+		const exec = vi.fn(async (_bin: string, args: string[]) => {
+			if (args[0] === "worktree") return { stdout: JSON.stringify({ result: { workspace: { workspace_id: "wA" } } }), stderr: "", code: 0, killed: false };
+			return { stdout: JSON.stringify({ result: { panes: [] } }), stderr: "", code: 0, killed: false };
+		});
+		const emptyPanes = await herdrTerminalHost.openWorktreeWorkspace?.({ exec } as never, { branch: "sumo/task", baseRef: "HEAD", path: "/repo.wt/sumo__task", label: "sumo · task", shellCommand: "exec sumocode" });
+		expect(emptyPanes).toEqual({ ok: false, error: "herdr pane list returned no panes for workspace wA" });
 	});
 	it("closes and notifies", async () => {
 		const fake = pi(JSON.stringify({ result: { type: "ok" } }));

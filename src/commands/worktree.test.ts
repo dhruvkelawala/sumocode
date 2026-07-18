@@ -4,8 +4,9 @@ import type { TerminalHost, TerminalHostKind } from "../terminal-host/index.js";
 
 type OpenSplitMock = ReturnType<typeof vi.fn>;
 type OpenCurrentMock = ReturnType<typeof vi.fn>;
+type OpenWorktreeMock = ReturnType<typeof vi.fn>;
 
-function makeTerminalHost(openSplit: OpenSplitMock = vi.fn(async () => ({ ok: true as const })), openCurrent?: OpenCurrentMock, kind: TerminalHostKind = "cmux"): TerminalHost {
+function makeTerminalHost(openSplit: OpenSplitMock = vi.fn(async () => ({ ok: true as const })), openCurrent?: OpenCurrentMock, kind: TerminalHostKind = "cmux", openWorktree?: OpenWorktreeMock, openExistingWorktree?: OpenWorktreeMock): TerminalHost {
 	return {
 		kind,
 		openCommandInSplit: async (pi: never, direction: "right" | "down", options: { shellCommand: string }) => {
@@ -13,6 +14,8 @@ function makeTerminalHost(openSplit: OpenSplitMock = vi.fn(async () => ({ ok: tr
 			const paneHost = kind === "herdr" ? "herdr" as const : "cmux" as const;
 			return result.ok ? { ok: true as const, pane: { host: paneHost, paneId: "legacy" } } : result;
 		},
+		openWorktreeWorkspace: openWorktree ? async (pi: never, options: unknown) => (openWorktree as unknown as (pi: never, options: unknown) => Promise<{ ok: true; pane: { host: "herdr"; paneId: string } } | { ok: false; error: string }>)(pi, options) : undefined,
+		openExistingWorktreeWorkspace: openExistingWorktree ? async (pi: never, options: unknown) => (openExistingWorktree as unknown as (pi: never, options: unknown) => Promise<{ ok: true; pane: { host: "herdr"; paneId: string } } | { ok: false; error: string }>)(pi, options) : undefined,
 		replaceCurrentPane: openCurrent ? async (pi: never, options: { shellCommand: string }) => (openCurrent as unknown as (pi: never, command: string) => Promise<{ ok: true } | { ok: false; error: string }>)(pi, options.shellCommand) : undefined,
 		closePane: vi.fn(async () => ({ ok: true as const })),
 		notify: vi.fn(async () => undefined),
@@ -166,6 +169,159 @@ describe("/sumo:worktree", () => {
 		expect(create).toHaveBeenCalledWith({ repoRoot: "/repo", task: "fresh", baseRef: "HEAD" });
 		expect(openSplit).toHaveBeenCalledWith(pi, "right", expect.stringMatching(/^bash -lc /));
 		expect((openSplit.mock.calls[0] as unknown[] | undefined)?.[2]).toContain("/repo.wt/sumo__fresh");
+	});
+
+	it("uses herdr native worktree workspace for fresh sessions without calling createWorktree", async () => {
+		const { pi, handler } = makePi();
+		const create = vi.fn();
+		const openSplit = vi.fn(async () => ({ ok: true as const }));
+		const openWorktree = vi.fn(async () => ({ ok: true as const, pane: { host: "herdr" as const, paneId: "wA:p1" } }));
+		const notify = vi.fn();
+		registerWorktreeCommand(pi as never, {
+			create: create as never,
+			terminalHost: makeTerminalHost(openSplit, undefined, "herdr", openWorktree),
+			setupAction: "pnpm install",
+		});
+
+		await handler()?.("new native", {
+			hasUI: true,
+			cwd: "/repo",
+			ui: { notify },
+			sessionManager: { getBranch: () => [] },
+		});
+
+		expect(create).not.toHaveBeenCalled();
+		expect(openSplit).not.toHaveBeenCalled();
+		expect(openWorktree).toHaveBeenCalledWith(pi, expect.objectContaining({ branch: "sumo/native", baseRef: "HEAD", path: "/repo.sumo-worktrees/sumo__native", label: "sumo · native", shellCommand: "pnpm install && exec sumocode" }));
+		expect(notify).toHaveBeenCalledWith(expect.stringContaining("opened sumo/native (fresh session) as herdr workspace \"sumo · native\""), "info");
+	});
+
+	it("falls back to generic split when herdr native worktree creation fails", async () => {
+		const { pi, handler } = makePi();
+		const create = vi.fn(async () => ({ ok: true as const, path: "/repo.sumo-worktrees/sumo__native", branch: "sumo/native", baseRef: "HEAD" }));
+		const openSplit = vi.fn(async () => ({ ok: true as const }));
+		const openWorktree = vi.fn(async () => ({ ok: false as const, error: "native failed" }));
+		const notify = vi.fn();
+		registerWorktreeCommand(pi as never, {
+			create,
+			terminalHost: makeTerminalHost(openSplit, undefined, "herdr", openWorktree),
+			setupAction: "pnpm install",
+			pathExists: () => false,
+		});
+
+		await handler()?.("new native", {
+			hasUI: true,
+			cwd: "/repo",
+			ui: { notify },
+			sessionManager: { getBranch: () => [] },
+		});
+
+		expect(openWorktree).toHaveBeenCalled();
+		expect(create).toHaveBeenCalledWith({ repoRoot: "/repo", task: "native", baseRef: "HEAD" });
+		expect(openSplit).toHaveBeenCalledWith(pi, "right", expect.stringMatching(/^bash -lc /));
+		expect(notify).toHaveBeenCalledWith(expect.stringContaining("herdr workspace create failed (native failed); falling back to split"), "warning");
+		expect(notify).toHaveBeenCalledWith(expect.stringContaining("opened sumo/native (fresh session) in right split"), "info");
+	});
+
+	it("does not retry createWorktree when herdr already created the worktree on disk", async () => {
+		const { pi, handler } = makePi();
+		const create = vi.fn(async () => ({ ok: false as const, error: "branch_already_exists" as const, message: "branch exists" }));
+		const openSplit = vi.fn(async () => ({ ok: true as const }));
+		const openWorktree = vi.fn(async () => ({ ok: false as const, error: "herdr pane run exited 1" }));
+		const notify = vi.fn();
+		registerWorktreeCommand(pi as never, {
+			create,
+			terminalHost: makeTerminalHost(openSplit, undefined, "herdr", openWorktree),
+			setupAction: "pnpm install",
+			pathExists: () => true,
+		});
+
+		await handler()?.("new native", {
+			hasUI: true,
+			cwd: "/repo",
+			ui: { notify },
+			sessionManager: { getBranch: () => [] },
+		});
+
+		expect(openWorktree).toHaveBeenCalled();
+		expect(create).not.toHaveBeenCalled();
+		expect(openSplit).not.toHaveBeenCalled();
+		expect(notify).toHaveBeenCalledWith(
+			expect.stringContaining('herdr created workspace "sumo · native" but launching the session failed (herdr pane run exited 1). Open it with /sumo:worktree open sumo/native'),
+			"warning",
+		);
+	});
+
+	it("warns that a delegated task was not delivered when reconciling a half-created workspace", async () => {
+		const { pi, handler } = makePi();
+		const create = vi.fn(async () => ({ ok: false as const, error: "branch_already_exists" as const, message: "branch exists" }));
+		const openSplit = vi.fn(async () => ({ ok: true as const }));
+		const openWorktree = vi.fn(async () => ({ ok: false as const, error: "herdr pane run exited 1" }));
+		const notify = vi.fn();
+		registerWorktreeCommand(pi as never, {
+			create,
+			terminalHost: makeTerminalHost(openSplit, undefined, "herdr", openWorktree),
+			setupAction: "pnpm install",
+			pathExists: () => true,
+		});
+
+		await handler()?.("Review the diff for regressions", {
+			hasUI: true,
+			cwd: "/repo",
+			ui: { notify },
+			sessionManager: { getBranch: () => [] },
+		});
+
+		expect(create).not.toHaveBeenCalled();
+		expect(notify).toHaveBeenCalledWith(
+			expect.stringContaining("re-issue your task there; the delegated prompt was not delivered"),
+			"warning",
+		);
+	});
+
+	it("falls back to a split when herdr native workspace reopen fails", async () => {
+		const { pi, handler } = makePi();
+		const openSplit = vi.fn(async () => ({ ok: true as const }));
+		const openExisting = vi.fn(async () => ({ ok: false as const, error: "native reopen failed" }));
+		const notify = vi.fn();
+		registerWorktreeCommand(pi as never, {
+			list: vi.fn(async () => ({
+				ok: true as const,
+				worktrees: [{ path: "/repo.wt/sumo__one", branch: "sumo/one", head: "abc", detached: false }],
+			})),
+			terminalHost: makeTerminalHost(openSplit, undefined, "herdr", undefined, openExisting),
+			setupAction: "pnpm install",
+		});
+
+		await handler()?.("open sumo/one", {
+			hasUI: true,
+			cwd: "/repo",
+			ui: { notify },
+			sessionManager: { getBranch: () => [] },
+		});
+
+		expect(openExisting).toHaveBeenCalled();
+		expect(openSplit).toHaveBeenCalledWith(pi, expect.stringMatching(/right|down/), expect.stringMatching(/^bash -lc /));
+		expect(notify).toHaveBeenCalledWith(expect.stringContaining("herdr workspace open failed (native reopen failed); falling back to split"), "warning");
+		expect(notify).toHaveBeenCalledWith(expect.stringContaining("reopened sumo/one in"), "info");
+	});
+
+	it("uses herdr native workspace open for reopen", async () => {
+		const { pi, handler } = makePi();
+		const openSplit = vi.fn(async () => ({ ok: true as const }));
+		const openExisting = vi.fn(async () => ({ ok: true as const, pane: { host: "herdr" as const, paneId: "wA:p1" } }));
+		const notify = vi.fn();
+		registerWorktreeCommand(pi as never, {
+			list: vi.fn(async () => ({ ok: true as const, worktrees: [{ path: "/repo.sumo-worktrees/sumo__one", branch: "sumo/one", head: "abc", detached: false }] })),
+			terminalHost: makeTerminalHost(openSplit, undefined, "herdr", undefined, openExisting),
+			setupAction: "pnpm install",
+		});
+
+		await handler()?.("open sumo/one", { hasUI: true, cwd: "/repo", ui: { notify } });
+
+		expect(openExisting).toHaveBeenCalledWith(pi, { path: "/repo.sumo-worktrees/sumo__one", label: "sumo · one", shellCommand: "pnpm install && exec sumocode" });
+		expect(openSplit).not.toHaveBeenCalled();
+		expect(notify).toHaveBeenCalledWith(expect.stringContaining("opened sumo/one as herdr workspace \"sumo · one\""), "info");
 	});
 
 	it("warns without falling back to a split when current-pane replacement fails", async () => {

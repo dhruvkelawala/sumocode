@@ -252,6 +252,33 @@ describe("/sumo:worktree", () => {
 		);
 	});
 
+	it("warns that a delegated task was not delivered when reconciling a half-created workspace", async () => {
+		const { pi, handler } = makePi();
+		const create = vi.fn(async () => ({ ok: false as const, error: "branch_already_exists" as const, message: "branch exists" }));
+		const openSplit = vi.fn(async () => ({ ok: true as const }));
+		const openWorktree = vi.fn(async () => ({ ok: false as const, error: "herdr pane run exited 1" }));
+		const notify = vi.fn();
+		registerWorktreeCommand(pi as never, {
+			create,
+			terminalHost: makeTerminalHost(openSplit, undefined, "herdr", openWorktree),
+			setupAction: "pnpm install",
+			pathExists: () => true,
+		});
+
+		await handler()?.("Review the diff for regressions", {
+			hasUI: true,
+			cwd: "/repo",
+			ui: { notify },
+			sessionManager: { getBranch: () => [] },
+		});
+
+		expect(create).not.toHaveBeenCalled();
+		expect(notify).toHaveBeenCalledWith(
+			expect.stringContaining("re-issue your task there; the delegated prompt was not delivered"),
+			"warning",
+		);
+	});
+
 	it("uses herdr native workspace open for reopen", async () => {
 		const { pi, handler } = makePi();
 		const openSplit = vi.fn(async () => ({ ok: true as const }));

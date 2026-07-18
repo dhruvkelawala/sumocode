@@ -232,10 +232,16 @@ export function registerWorktreeCommand(pi: ExtensionAPI, options: WorktreeComma
 					// Detect the half-created state and hand the user a working next
 					// step instead of a doomed fallback.
 					if (pathExists(resolved.path)) {
+						// Reopen always starts a plain fresh session, so a DELEGATED
+						// task's instructions cannot be re-delivered through it — tell
+						// the user explicitly instead of silently dropping their task.
+						const recovery = parsed.mode === "fresh"
+							? `Open it with /sumo:worktree open ${resolved.branch}`
+							: `Open it with /sumo:worktree open ${resolved.branch} (opens a fresh session — re-issue your task there; the delegated prompt was not delivered)`;
 						notify(
 							pi,
 							ctx,
-							`/sumo:worktree: herdr created workspace "${label}" but launching the session failed (${opened.error}). Open it with /sumo:worktree open ${resolved.branch}`,
+							`/sumo:worktree: herdr created workspace "${label}" but launching the session failed (${opened.error}). ${recovery}`,
 							"warning",
 						);
 						return;

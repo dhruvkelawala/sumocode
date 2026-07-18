@@ -26,21 +26,10 @@ const collect = (events: ((emit: (event: SubagentEvent) => void) => void)): Suba
 
 describe("resolveClaudeOauthAdapterEntry", () => {
 	it("returns undefined when the package is not installed anywhere", () => {
-		expect(resolveClaudeOauthAdapterEntry("/nonexistent-cwd", { PI_CODING_AGENT_DIR: "/nonexistent-agent-dir" })).toBeUndefined();
+		expect(resolveClaudeOauthAdapterEntry({ PI_CODING_AGENT_DIR: "/nonexistent-agent-dir" })).toBeUndefined();
 	});
 
-	it("resolves from a project-local install cache", () => {
-		const cwd = mkdtempSync(join(tmpdir(), "sumo-oauth-project-"));
-		const pkgDir = join(cwd, ".pi", "npm", "node_modules", "pi-claude-oauth-adapter");
-		mkdirSync(join(pkgDir, "extensions"), { recursive: true });
-		writeFileSync(join(pkgDir, "package.json"), JSON.stringify({ pi: { extensions: ["./extensions/index.ts"] } }));
-		writeFileSync(join(pkgDir, "extensions", "index.ts"), "// adapter");
-		expect(resolveClaudeOauthAdapterEntry(cwd, { PI_CODING_AGENT_DIR: "/nonexistent-agent-dir" }))
-			.toBe(join(pkgDir, "extensions", "index.ts"));
-		rmSync(cwd, { recursive: true, force: true });
-	});
-
-	it("resolves a local-checkout path source from settings packages", () => {
+	it("resolves a local-checkout path source from GLOBAL settings packages", () => {
 		const agentDir = mkdtempSync(join(tmpdir(), "sumo-oauth-agent-"));
 		// The path source must mention the package name to be considered.
 		const checkout = join(tmpdir(), `pi-claude-oauth-adapter-${Date.now()}`);
@@ -48,7 +37,7 @@ describe("resolveClaudeOauthAdapterEntry", () => {
 		writeFileSync(join(checkout, "package.json"), JSON.stringify({ pi: { extensions: ["./extensions/index.ts"] } }));
 		writeFileSync(join(checkout, "extensions", "index.ts"), "// adapter");
 		writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ packages: [checkout] }));
-		expect(resolveClaudeOauthAdapterEntry("/nonexistent-cwd", { PI_CODING_AGENT_DIR: agentDir }))
+		expect(resolveClaudeOauthAdapterEntry({ PI_CODING_AGENT_DIR: agentDir }))
 			.toBe(join(checkout, "extensions", "index.ts"));
 		rmSync(agentDir, { recursive: true, force: true });
 		rmSync(checkout, { recursive: true, force: true });
@@ -58,8 +47,8 @@ describe("resolveClaudeOauthAdapterEntry", () => {
 		const dir = mkdtempSync(join(tmpdir(), "sumo-oauth-override-"));
 		const entry = join(dir, "index.ts");
 		writeFileSync(entry, "// adapter");
-		expect(resolveClaudeOauthAdapterEntry("/nonexistent-cwd", { SUMOCODE_CLAUDE_OAUTH_ADAPTER: entry })).toBe(entry);
-		expect(resolveClaudeOauthAdapterEntry("/nonexistent-cwd", { SUMOCODE_CLAUDE_OAUTH_ADAPTER: join(dir, "missing.ts") })).toBeUndefined();
+		expect(resolveClaudeOauthAdapterEntry({ SUMOCODE_CLAUDE_OAUTH_ADAPTER: entry })).toBe(entry);
+		expect(resolveClaudeOauthAdapterEntry({ SUMOCODE_CLAUDE_OAUTH_ADAPTER: join(dir, "missing.ts") })).toBeUndefined();
 		rmSync(dir, { recursive: true, force: true });
 	});
 });

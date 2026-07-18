@@ -51,15 +51,17 @@ function adapterPathSourcesFromSettings(settingsPath: string): string[] {
  * an explicit `-e <entry>` when the package can be located.
  *
  * Pi documents multiple package sources (npm cache, project-local installs,
- * local checkout paths), so resolution probes a candidate chain rather than
- * only the global npm cache:
+ * local checkout paths). Resolution probes TRUSTED-SCOPE candidates only:
  *   1. SUMOCODE_CLAUDE_OAUTH_ADAPTER env — explicit entry file or package dir
- *   2. project-local install cache: <cwd>/.pi/npm/node_modules/<pkg>
- *   3. global agent-dir cache: <agentDir>/npm/node_modules/<pkg>
- *   4. local-checkout path sources named in project/global settings packages
- * Best-effort: nothing found → no flag (non-OAuth providers unaffected).
+ *   2. global agent-dir cache: <agentDir>/npm/node_modules/<pkg>
+ *   3. local-checkout path sources named in the GLOBAL settings packages
+ * Project-scoped candidates (<cwd>/.pi/...) are deliberately EXCLUDED: a
+ * hostile repository could name arbitrary repo-controlled code as the adapter
+ * and have children boot-load it via -e, softening the --no-extensions
+ * boundary. Repos that legitimately install the adapter project-locally use
+ * the env override. Best-effort: nothing found → no flag.
  */
-export function resolveClaudeOauthAdapterEntry(cwd: string = process.cwd(), env: NodeJS.ProcessEnv = process.env): string | undefined {
+export function resolveClaudeOauthAdapterEntry(env: NodeJS.ProcessEnv = process.env): string | undefined {
 	const override = env.SUMOCODE_CLAUDE_OAUTH_ADAPTER;
 	if (override) {
 		if (override.endsWith(".ts") || override.endsWith(".js")) return existsSync(override) ? override : undefined;
@@ -67,9 +69,7 @@ export function resolveClaudeOauthAdapterEntry(cwd: string = process.cwd(), env:
 	}
 	const agentDir = env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent");
 	const candidateDirs = [
-		join(cwd, ".pi", "npm", "node_modules", CLAUDE_OAUTH_ADAPTER_PACKAGE),
 		join(agentDir, "npm", "node_modules", CLAUDE_OAUTH_ADAPTER_PACKAGE),
-		...adapterPathSourcesFromSettings(join(cwd, ".pi", "settings.json")),
 		...adapterPathSourcesFromSettings(join(agentDir, "settings.json")),
 	];
 	for (const dir of candidateDirs) {
@@ -251,7 +251,7 @@ const attachAbortSignal = (proc: ChildProcessWithoutNullStreams, signal: AbortSi
 	return { isAborted: () => aborted, interrupt };
 };
 
-export const createPiChildSpawner = (spawnImpl: SpawnLike = nodeSpawn, resolveAdapterEntry: (cwd: string) => string | undefined = resolveClaudeOauthAdapterEntry) => (options: {
+export const createPiChildSpawner = (spawnImpl: SpawnLike = nodeSpawn, resolveAdapterEntry: () => string | undefined = resolveClaudeOauthAdapterEntry) => (options: {
 	prompt: string;
 	cwd: string;
 	model?: string;
@@ -289,7 +289,7 @@ export const createPiChildSpawner = (spawnImpl: SpawnLike = nodeSpawn, resolveAd
 	let interrupt: () => void = () => undefined;
 	const events = (emit: (event: SubagentEvent) => void): void => {
 		emit({ kind: "run-started" });
-		const adapterEntry = resolveAdapterEntry(options.cwd);
+		const adapterEntry = resolveAdapterEntry();
 		const adapterArgs = adapterEntry ? ["-e", adapterEntry] : [];
 		const proc = spawnImpl("pi", [...config.subprocessArgs, ...adapterArgs, options.prompt], {
 			cwd: options.cwd,

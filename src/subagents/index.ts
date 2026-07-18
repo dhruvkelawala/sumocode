@@ -1,4 +1,5 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { getBuiltInToolsFromActiveTools } from "../native-task-config.js";
 import { spawnPiChild } from "./backend-pi.js";
 import { SubagentManager } from "./manager.js";
 import { registerSubagentTools } from "./tools.js";
@@ -13,6 +14,7 @@ export function installSubagents(pi: ExtensionAPI): SubagentManager {
 		model: task.model,
 		thinking: task.thinking,
 		inherited: task.inherited ?? {},
+		builtInTools: getBuiltInToolsFromActiveTools([...(task.builtInTools ?? [])]),
 		signal: task.signal,
 	}));
 	registerSubagentTools(pi, manager);

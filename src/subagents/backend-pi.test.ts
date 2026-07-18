@@ -71,6 +71,41 @@ describe("spawnPiChild", () => {
 		expect(events.at(-1)).toEqual({ kind: "run-settled", outcome: { kind: "failed", errorText: "boom", partialText: undefined } });
 	});
 
+	it("escalates to SIGKILL when the child ignores SIGTERM (no close event)", () => {
+		vi.useFakeTimers();
+		try {
+			const proc = new FakeProcess();
+			const controller = new AbortController();
+			const child = createPiChildSpawner(vi.fn(() => proc) as never)({ prompt: "x", cwd: "/tmp", inherited: {}, signal: controller.signal });
+			collect(child.events as (emit: (event: SubagentEvent) => void) => void);
+			controller.abort();
+			expect(proc.kill).toHaveBeenCalledWith("SIGTERM");
+			// proc.killed is true (signal SENT) but the process never exited —
+			// the fallback must still fire because it tracks close, not killed.
+			vi.advanceTimersByTime(5001);
+			expect(proc.kill).toHaveBeenCalledWith("SIGKILL");
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("does not SIGKILL a child that exited after SIGTERM", () => {
+		vi.useFakeTimers();
+		try {
+			const proc = new FakeProcess();
+			const controller = new AbortController();
+			const child = createPiChildSpawner(vi.fn(() => proc) as never)({ prompt: "x", cwd: "/tmp", inherited: {}, signal: controller.signal });
+			collect(child.events as (emit: (event: SubagentEvent) => void) => void);
+			controller.abort();
+			proc.emit("close", null);
+			vi.advanceTimersByTime(5001);
+			expect(proc.kill).toHaveBeenCalledTimes(1);
+			expect(proc.kill).toHaveBeenCalledWith("SIGTERM");
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("settles as failed without spawning when the model override is invalid", () => {
 		const spawn = vi.fn();
 		const child = createPiChildSpawner(spawn as never)({ prompt: "x", cwd: "/tmp", model: "gpt5-no-slash", inherited: {} });

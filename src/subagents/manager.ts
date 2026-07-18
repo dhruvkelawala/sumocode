@@ -28,6 +28,7 @@ export interface SpawnSubagentTask {
 	readonly model?: string;
 	readonly thinking?: string;
 	readonly inherited?: { model?: { provider: string; id: string }; thinking?: string };
+	readonly builtInTools?: readonly string[];
 }
 
 type BackendFactory = (task: SpawnSubagentTask & { id: string; signal: AbortSignal }) => SpawnedChild;
@@ -88,7 +89,11 @@ export class SubagentManager {
 		this.consumeEvents(id, child.events);
 		this.notify();
 		this.prune();
-		return snapshot;
+		// A backend can settle synchronously (e.g. invalid model override emits
+		// run-settled without spawning); consumeEvents has already folded that
+		// into the map, so return the post-fold snapshot rather than the stale
+		// "running" one — callers must not report "Started" for a dead child.
+		return this.snapshots.get(id) ?? snapshot;
 	}
 
 	public get(id: string): SubagentSnapshot | undefined {

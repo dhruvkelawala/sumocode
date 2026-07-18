@@ -87,8 +87,12 @@ export function registerSubagentTools(pi: ExtensionAPI, manager: SubagentManager
 					// call overrides it, instead of silently defaulting to "low".
 					thinking: pi.getThinkingLevel(),
 				},
+				builtInTools: pi.getActiveTools(),
 			});
 			if (isAtCapacity(spawned)) return formatAtCapacity(spawned);
+			if (spawned.status !== "running") {
+				return makeToolResult(`Subagent ${spawned.id} (${spawned.title}) failed to start: ${spawned.errorText ?? "unknown error"}`, { action: "spawn", subagent: spawned });
+			}
 			return makeToolResult(`Started ${spawned.id} (${spawned.title}). Result will be available with subagent_wait ids=["${spawned.id}"].`, { action: "spawn", subagent: spawned });
 		},
 	});

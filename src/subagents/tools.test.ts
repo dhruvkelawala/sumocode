@@ -10,7 +10,7 @@ const createHarness = () => {
 		events: (emit) => emitters.set(task.id, emit),
 		interrupt: vi.fn(() => emitters.get(task.id)?.({ kind: "run-settled", outcome: { kind: "interrupted" } })),
 	}));
-	const pi = { registerTool: vi.fn((tool) => registered.push(tool)), on: vi.fn(), getThinkingLevel: vi.fn(() => "medium") };
+	const pi = { registerTool: vi.fn((tool) => registered.push(tool)), on: vi.fn(), getThinkingLevel: vi.fn(() => "medium"), getActiveTools: vi.fn(() => ["read", "bash"]) };
 	registerSubagentTools(pi as never, manager);
 	const tool = (name: string) => registered.find((entry) => entry.name === name)!;
 	const ctx = { cwd: "/tmp/project", model: { provider: "openai", id: "gpt-5", thinkingLevel: "low" } };

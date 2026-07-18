@@ -1,9 +1,10 @@
 import { spawn as nodeSpawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import type { SubagentEvent } from "./domain.js";
-import { resolveTaskConfig } from "../native-task-config.js";
+import { type BuiltInToolName, resolveTaskConfig } from "../native-task-config.js";
 import { isRecord, type TaskThinking, type ThinkingLevel } from "../native-task-params.js";
 
-const BUILT_IN_TOOLS = ["read", "bash", "edit", "write", "grep", "find", "ls"] as const;
+/** Fallback only — callers should thread the parent's active tool set through. */
+const DEFAULT_BUILT_IN_TOOLS: readonly BuiltInToolName[] = ["read", "bash", "edit", "write", "grep", "find", "ls"] as BuiltInToolName[];
 const PREVIEW_MAX = 160;
 const ERROR_MAX = 4096;
 
@@ -136,11 +137,18 @@ const mapPiEvent = (event: Record<string, unknown>): SubagentEvent[] => {
 
 const attachAbortSignal = (proc: ChildProcessWithoutNullStreams, signal: AbortSignal | undefined): { isAborted: () => boolean; interrupt: () => void } => {
 	let aborted = false;
+	// `proc.killed` only means a signal was successfully SENT, not that the
+	// process exited — gating SIGKILL on it means a child that ignores SIGTERM
+	// is never force-killed. Track real exit via the close event instead.
+	let exited = false;
+	proc.once("close", () => {
+		exited = true;
+	});
 	const interrupt = () => {
 		aborted = true;
 		proc.kill("SIGTERM");
 		setTimeout(() => {
-			if (!proc.killed) proc.kill("SIGKILL");
+			if (!exited) proc.kill("SIGKILL");
 		}, 5000).unref?.();
 	};
 	if (signal?.aborted) interrupt();
@@ -154,6 +162,7 @@ export const createPiChildSpawner = (spawnImpl: SpawnLike = nodeSpawn) => (optio
 	model?: string;
 	thinking?: string;
 	inherited: { model?: { provider: string; id: string }; thinking?: string };
+	builtInTools?: readonly BuiltInToolName[];
 	signal?: AbortSignal;
 }): SpawnedChild => {
 	const config = resolveTaskConfig({
@@ -162,7 +171,10 @@ export const createPiChildSpawner = (spawnImpl: SpawnLike = nodeSpawn) => (optio
 		defaultThinking: "inherit",
 		inheritedThinking: (options.inherited.thinking ?? "low") as ThinkingLevel,
 		ctxModel: options.inherited.model,
-		builtInTools: [...BUILT_IN_TOOLS],
+		// Children inherit the PARENT's active built-in tool set (mirroring
+		// native-task-tool's getActiveTools threading) so a narrowed parent
+		// session cannot spawn children with broader tool access.
+		builtInTools: [...(options.builtInTools ?? DEFAULT_BUILT_IN_TOOLS)],
 	});
 	if (!config.ok) {
 		return {

@@ -96,4 +96,14 @@ describe("SubagentManager", () => {
 		expect(manager.get(id)?.settledAt).toBe(settledAt);
 		expect(manager.get(id)?.finalText).not.toBe("late success");
 	});
+
+	it("returns the post-fold snapshot when the backend settles synchronously", () => {
+		const manager = new SubagentManager(() => ({
+			events: (emit) => emit({ kind: "run-settled", outcome: { kind: "failed", errorText: "bad model" } }),
+			interrupt: () => undefined,
+		}));
+		const spawned = manager.spawn({ prompt: "p", title: "t", cwd: "/tmp" });
+		expect((spawned as { status: string }).status).toBe("error");
+		expect((spawned as { errorText?: string }).errorText).toBe("bad model");
+	});
 });

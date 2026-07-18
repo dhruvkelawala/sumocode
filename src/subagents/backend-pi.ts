@@ -215,7 +215,11 @@ export const createPiChildSpawner = (spawnImpl: SpawnLike = nodeSpawn) => (optio
 				emit({ kind: "run-settled", outcome: { kind: "interrupted", partialText: finalAssistantText || undefined } });
 				return;
 			}
-			if ((code ?? 0) === 0 && stopReason !== "error" && finalAssistantText) {
+			// Success gates on exit code + stop reason, matching native-task-tool's
+			// isTaskError semantics. Empty final text at exit 0 is a successful run
+			// with empty output, not a failure — a synthetic "pi exited with code 0"
+			// error here would poison downstream result delivery.
+			if ((code ?? 0) === 0 && stopReason !== "error" && stopReason !== "aborted") {
 				emit({ kind: "run-settled", outcome: { kind: "completed", finalText: finalAssistantText } });
 				return;
 			}

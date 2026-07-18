@@ -70,4 +70,12 @@ describe("spawnPiChild", () => {
 		proc.emit("close", 2);
 		expect(events.at(-1)).toEqual({ kind: "run-settled", outcome: { kind: "failed", errorText: "boom", partialText: undefined } });
 	});
+
+	it("treats exit 0 with empty final text as completed, matching native-task semantics", () => {
+		const proc = new FakeProcess();
+		const child = createPiChildSpawner(vi.fn(() => proc) as never)({ prompt: "x", cwd: "/tmp", inherited: {} });
+		const events = collect(child.events as (emit: (event: SubagentEvent) => void) => void);
+		proc.emit("close", 0);
+		expect(events.at(-1)).toEqual({ kind: "run-settled", outcome: { kind: "completed", finalText: "" } });
+	});
 });

@@ -101,7 +101,7 @@ export function registerSubagentTools(
 			if (spawned.status !== "running") {
 				return makeToolResult(`Subagent ${spawned.id} (${spawned.title}) failed to start: ${spawned.errorText ?? "unknown error"}`, { action: "spawn", subagent: spawned });
 			}
-			return makeToolResult(`Started ${spawned.id} (${spawned.title}). Result will be available with subagent_wait ids=["${spawned.id}"].`, { action: "spawn", subagent: spawned });
+			return makeToolResult(`Started ${spawned.id} (${spawned.title}). Its result will be delivered to you automatically when it settles, or use subagent_wait to block for it.`, { action: "spawn", subagent: spawned });
 		},
 	});
 

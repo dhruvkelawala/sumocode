@@ -38,7 +38,7 @@ export const SUBAGENT_PROMPT_GUIDELINES = [
 export const SUBAGENT_PROMPT_SNIPPET = "Spawn, check, wait for, cancel, and list headless subagents with self-contained prompts.";
 
 export const SUBAGENT_TOOL_DESCRIPTIONS = {
-	spawn: "Start one headless child subagent and return immediately with its id. Use subagent_wait or subagent_check to retrieve results in this release.",
+	spawn: "Start one headless child subagent and return immediately with its id. Its result is delivered automatically when it settles; use subagent_wait to block for it.",
 	check: "Peek at one subagent without consuming its eventual result.",
 	wait: "Block until one or more subagents settle, then return their bounded results and mark them consumed.",
 	cancel: "Interrupt running subagents and mark their results consumed.",

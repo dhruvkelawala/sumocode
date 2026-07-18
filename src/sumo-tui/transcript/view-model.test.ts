@@ -393,6 +393,25 @@ describe("structured transcript view model", () => {
 		]);
 	});
 
+	it("maps a subagent result custom message to a collapsed summary block", () => {
+		const message = chatMessageViewModelFromPiMessage({
+			id: "result-1",
+			role: "custom",
+			customType: "subagent-result",
+			display: true,
+			content: 'Subagent sa-3 "review" finished.\n\nNo findings.',
+			details: { id: "sa-3", title: "review", status: "done" },
+		});
+
+		expect(message?.blocks).toEqual([{
+			type: "summary",
+			kind: "subagent",
+			label: "[subagent] sa-3 · review · finished",
+			content: 'Subagent sa-3 "review" finished.\n\nNo findings.',
+			expanded: false,
+		}]);
+	});
+
 	it("labels an unrecognized custom message with its customType", () => {
 		const message = chatMessageViewModelFromPiMessage({ id: "x1", role: "custom", customType: "sumocode-theme-result", display: true, content: "switched to obsidian" });
 

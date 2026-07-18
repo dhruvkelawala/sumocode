@@ -50,7 +50,7 @@ export type ChatBlock =
 	| { readonly type: "image"; readonly data: string; readonly mime: string; readonly filename?: string }
 	| { readonly type: "tool"; readonly tool: ToolCallViewModel }
 	| { readonly type: "skill"; readonly name: string; readonly expanded: boolean; readonly content?: string }
-	| { readonly type: "summary"; readonly kind: "branch" | "compaction"; readonly label: string; readonly content: string; readonly expanded: boolean }
+	| { readonly type: "summary"; readonly kind: "branch" | "compaction" | "subagent"; readonly label: string; readonly content: string; readonly expanded: boolean }
 	| { readonly type: "question"; readonly question: QuestionViewModel }
 	| { readonly type: "delegation"; readonly delegation: DelegationViewModel };
 
@@ -218,6 +218,21 @@ function summaryBlockFromRecord(record: Record<string, unknown>, kind: "branch" 
 		? (tokens ? `[compaction] Compacted from ${tokens} tokens` : "[compaction] Compacted")
 		: "[branch] Branch summary";
 	return { type: "summary", kind, label, content, expanded: false };
+}
+
+function subagentResultBlockFromRecord(record: Record<string, unknown>): ChatBlock {
+	const details = asRecord(record.details);
+	const id = firstString(details?.id, record.subagentId) ?? "subagent";
+	const title = firstString(details?.title, record.title) ?? "untitled";
+	const status = firstString(details?.status, record.status);
+	const outcome = status === "error" || status === "failed" ? "failed" : "finished";
+	return {
+		type: "summary",
+		kind: "subagent",
+		label: `[subagent] ${id} · ${title} · ${outcome}`,
+		content: textFromContent(record.content),
+		expanded: false,
+	};
 }
 
 function imageBlockFromRecord(record: Record<string, unknown>): ChatBlock[] {
@@ -698,6 +713,7 @@ function blocksFromMessage(record: Record<string, unknown>): ChatBlock[] {
 		if (record.customType === "skill") return [skillBlockFromRecord(asRecord(record.details) ?? record)];
 		if (record.customType === "question") return [questionBlockFromRecord(asRecord(record.details) ?? record)];
 		if (record.customType === "delegation") return [delegationBlockFromRecord(asRecord(record.details) ?? record)];
+		if (record.customType === "subagent-result") return [subagentResultBlockFromRecord(record)];
 		// Unrecognized custom type: preserve provenance (mirrors Pi's CustomMessageComponent default).
 		const labeled: ChatBlock[] = [{ type: "markdown", text: `[${record.customType}]` }];
 		labeled.push(...blocksFromContent(record.content));

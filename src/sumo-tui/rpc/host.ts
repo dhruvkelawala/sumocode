@@ -19,7 +19,7 @@ import { RpcHostActions } from "./host-actions.js";
 import { RpcHostOverlayManager } from "./host-overlays.js";
 import { InlineSelectorHost } from "./inline-selector.js";
 import { decideRpcInterrupt, type RpcInterruptInputKind } from "./interrupt.js";
-import { readGitBranch } from "./git.js";
+import { readGitBranch, watchGitBranch } from "./git.js";
 import { RpcHostRuntime } from "./runtime.js";
 import { responseData } from "./response.js";
 import { notifyOnError } from "./safe-send.js";
@@ -737,6 +737,7 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 	});
 	let statsTimer: NodeJS.Timeout | undefined;
 	let statsInFlight = false;
+	let stopWatchingGitBranch: (() => void) | undefined;
 	let stopPromise: Promise<void> | undefined;
 
 	client.onEvent((event) => {
@@ -786,6 +787,8 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 	const stop = async (code = 0): Promise<void> => {
 		stopPromise ??= (async () => {
 			if (statsTimer) clearInterval(statsTimer);
+			stopWatchingGitBranch?.();
+			stopWatchingGitBranch = undefined;
 			runtime?.stop(code);
 			if (!regionRegistryDisposed) {
 				regionRegistryDisposed = true;
@@ -825,6 +828,12 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		await client.start();
 		const branch = await readGitBranch(cwd);
 		await controls.refreshState(branch);
+		if (!visualFixture) {
+			stopWatchingGitBranch = await watchGitBranch(cwd, branch, (nextBranch) => {
+				const state = stateStore.setGitBranch(nextBranch);
+				runtime?.update({ state });
+			});
+		}
 		await editor.configureAutocomplete(controls);
 		const transcript = visualFixture
 			? visualFixture.transcript

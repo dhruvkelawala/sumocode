@@ -122,8 +122,10 @@ const mapPiEvent = (event: Record<string, unknown>): SubagentEvent[] => {
 		if (messageValue.role === "assistant") {
 			events.push({
 				kind: "usage",
+				// totalTokens is the child's cumulative context occupancy; the JSON
+				// event stream does not carry the model's context-window capacity,
+				// so leave contextWindow unset rather than mislabeling input tokens.
 				tokens: messageValue.usage?.totalTokens,
-				contextWindow: messageValue.usage?.input,
 				costUsd: messageValue.usage?.cost?.total,
 			});
 		}

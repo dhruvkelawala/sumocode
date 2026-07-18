@@ -80,7 +80,13 @@ export function registerSubagentTools(pi: ExtensionAPI, manager: SubagentManager
 				cwd: params.working_dir ?? ctx.cwd,
 				model: params.model,
 				thinking: params.thinking,
-				inherited: { model: ctx.model ? { provider: ctx.model.provider, id: ctx.model.id } : undefined },
+				inherited: {
+					model: ctx.model ? { provider: ctx.model.provider, id: ctx.model.id } : undefined,
+					// Mirror native-task-tool.ts (`pi.getThinkingLevel()` at spawn time):
+					// children inherit the parent session's thinking level unless the
+					// call overrides it, instead of silently defaulting to "low".
+					thinking: pi.getThinkingLevel(),
+				},
 			});
 			if (isAtCapacity(spawned)) return formatAtCapacity(spawned);
 			return makeToolResult(`Started ${spawned.id} (${spawned.title}). Result will be available with subagent_wait ids=["${spawned.id}"].`, { action: "spawn", subagent: spawned });

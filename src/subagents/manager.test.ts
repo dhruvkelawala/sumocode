@@ -106,4 +106,15 @@ describe("SubagentManager", () => {
 		expect((spawned as { status: string }).status).toBe("error");
 		expect((spawned as { errorText?: string }).errorText).toBe("bad model");
 	});
+
+	it("preserves usage values when a later usage event omits fields", () => {
+		let emitFn: ((event: import("./domain.js").SubagentEvent) => void) | undefined;
+		const manager = new SubagentManager(() => ({ events: (emit) => { emitFn = emit; }, interrupt: () => undefined }));
+		const spawned = manager.spawn({ prompt: "p", title: "t", cwd: "/tmp" });
+		const id = (spawned as { id: string }).id;
+		emitFn?.({ kind: "usage", tokens: 120, costUsd: 0.05 });
+		emitFn?.({ kind: "usage" });
+		expect(manager.get(id)?.usage.tokens).toBe(120);
+		expect(manager.get(id)?.usage.costUsd).toBe(0.05);
+	});
 });

@@ -216,7 +216,17 @@ export class SubagentManager {
 			finalText: event.role === "assistant" ? event.text : current.finalText,
 			usage: event.role === "assistant" ? { ...current.usage, turns: current.usage.turns + 1 } : current.usage,
 		};
-		else if (event.kind === "usage") next = { ...current, usage: { ...current.usage, tokens: event.tokens, contextWindow: event.contextWindow, costUsd: event.costUsd } };
+		else if (event.kind === "usage") next = {
+			...current,
+			// Preserve prior values when an event omits a field — an assistant
+			// message without usage accounting must not clobber real numbers.
+			usage: {
+				...current.usage,
+				tokens: event.tokens ?? current.usage.tokens,
+				contextWindow: event.contextWindow ?? current.usage.contextWindow,
+				costUsd: event.costUsd ?? current.usage.costUsd,
+			},
+		};
 		else if (event.kind === "run-settled") {
 			if (event.outcome.kind === "completed") next = { ...current, status: "done", settledAt: Date.now(), finalText: event.outcome.finalText || current.finalText, liveText: "" };
 			else if (event.outcome.kind === "failed") next = { ...current, status: "error", settledAt: Date.now(), errorText: event.outcome.errorText.slice(0, ERROR_TEXT_MAX), finalText: event.outcome.partialText ?? current.finalText, liveText: "" };

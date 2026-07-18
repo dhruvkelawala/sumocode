@@ -1,6 +1,6 @@
 import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
-import { createPiChildSpawner } from "./backend-pi.js";
+import { createPiChildSpawner, resolveClaudeOauthAdapterEntry } from "./backend-pi.js";
 import type { SubagentEvent } from "./domain.js";
 
 class FakeProcess extends EventEmitter {
@@ -20,6 +20,12 @@ const collect = (events: ((emit: (event: SubagentEvent) => void) => void)): Suba
 	events((event) => collected.push(event));
 	return collected;
 };
+
+describe("resolveClaudeOauthAdapterEntry", () => {
+	it("returns undefined when the package is not installed", () => {
+		expect(resolveClaudeOauthAdapterEntry({ PI_CODING_AGENT_DIR: "/nonexistent-agent-dir" })).toBeUndefined();
+	});
+});
 
 describe("spawnPiChild", () => {
 	it("translates pi json-line events", () => {
@@ -71,6 +77,28 @@ describe("spawnPiChild", () => {
 		proc.stderr.emit("data", "boom");
 		proc.emit("close", 2);
 		expect(events.at(-1)).toEqual({ kind: "run-settled", outcome: { kind: "failed", errorText: "boom", partialText: undefined } });
+	});
+
+	it("injects the claude-oauth adapter via -e when the resolver finds it", () => {
+		const proc = new FakeProcess();
+		const spawn = vi.fn(() => proc);
+		const child = createPiChildSpawner(spawn as never, () => "/fake/adapter/extensions/index.ts")({ prompt: "x", cwd: "/tmp", inherited: {} });
+		collect(child.events as (emit: (event: SubagentEvent) => void) => void);
+		const args = (spawn.mock.calls[0] as unknown[])[1] as string[];
+		const eIndex = args.indexOf("-e");
+		expect(eIndex).toBeGreaterThan(-1);
+		expect(args[eIndex + 1]).toBe("/fake/adapter/extensions/index.ts");
+		// The prompt must remain the trailing positional after the adapter args.
+		expect(args[args.length - 1]).toBe("x");
+	});
+
+	it("omits the -e flag when no adapter is installed", () => {
+		const proc = new FakeProcess();
+		const spawn = vi.fn(() => proc);
+		const child = createPiChildSpawner(spawn as never, () => undefined)({ prompt: "x", cwd: "/tmp", inherited: {} });
+		collect(child.events as (emit: (event: SubagentEvent) => void) => void);
+		const args = (spawn.mock.calls[0] as unknown[])[1] as string[];
+		expect(args).not.toContain("-e");
 	});
 
 	it("spawns the child detached and signals the whole process group on interrupt", () => {

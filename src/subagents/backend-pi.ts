@@ -1,4 +1,7 @@
 import { spawn as nodeSpawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import type { SubagentEvent } from "./domain.js";
 import { type BuiltInToolName, resolveTaskConfig } from "../native-task-config.js";
 import { isRecord, type TaskThinking, type ThinkingLevel } from "../native-task-params.js";
@@ -7,6 +10,30 @@ import { isRecord, type TaskThinking, type ThinkingLevel } from "../native-task-
 const DEFAULT_BUILT_IN_TOOLS: readonly BuiltInToolName[] = ["read", "bash", "edit", "write", "grep", "find", "ls"] as BuiltInToolName[];
 const PREVIEW_MAX = 160;
 const ERROR_MAX = 4096;
+
+/**
+ * Children spawn with --no-extensions, which also drops the user's
+ * pi-claude-oauth-adapter — the extension that shapes Anthropic OAuth
+ * (subscription) requests. Without it, anthropic-provider children fail with
+ * misleading 400s (observed live: "You're out of extra usage" while the same
+ * model+auth works with the adapter loaded). Re-inject JUST that extension via
+ * an explicit `-e <entry>` when the package is installed. Best-effort: absent
+ * package → no flag (API-key/OAuth-less providers are unaffected either way).
+ */
+export function resolveClaudeOauthAdapterEntry(env: NodeJS.ProcessEnv = process.env): string | undefined {
+	const agentDir = env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent");
+	const packageDir = join(agentDir, "npm", "node_modules", "pi-claude-oauth-adapter");
+	try {
+		const manifest = JSON.parse(readFileSync(join(packageDir, "package.json"), "utf8")) as { pi?: { extensions?: unknown } };
+		const entries = manifest.pi?.extensions;
+		const first = Array.isArray(entries) ? entries[0] : undefined;
+		if (typeof first !== "string") return undefined;
+		const entryPath = join(packageDir, first);
+		return existsSync(entryPath) ? entryPath : undefined;
+	} catch {
+		return undefined;
+	}
+}
 
 export interface SpawnedChild {
 	readonly events: AsyncIterable<SubagentEvent> | ((emit: (e: SubagentEvent) => void) => void);
@@ -180,7 +207,7 @@ const attachAbortSignal = (proc: ChildProcessWithoutNullStreams, signal: AbortSi
 	return { isAborted: () => aborted, interrupt };
 };
 
-export const createPiChildSpawner = (spawnImpl: SpawnLike = nodeSpawn) => (options: {
+export const createPiChildSpawner = (spawnImpl: SpawnLike = nodeSpawn, resolveAdapterEntry: () => string | undefined = resolveClaudeOauthAdapterEntry) => (options: {
 	prompt: string;
 	cwd: string;
 	model?: string;
@@ -218,7 +245,9 @@ export const createPiChildSpawner = (spawnImpl: SpawnLike = nodeSpawn) => (optio
 	let interrupt: () => void = () => undefined;
 	const events = (emit: (event: SubagentEvent) => void): void => {
 		emit({ kind: "run-started" });
-		const proc = spawnImpl("pi", [...config.subprocessArgs, options.prompt], {
+		const adapterEntry = resolveAdapterEntry();
+		const adapterArgs = adapterEntry ? ["-e", adapterEntry] : [];
+		const proc = spawnImpl("pi", [...config.subprocessArgs, ...adapterArgs, options.prompt], {
 			cwd: options.cwd,
 			shell: false,
 			stdio: ["pipe", "pipe", "pipe"],

@@ -9,7 +9,13 @@ export interface DeliveryPayload {
 export interface DeferredResultDelivery {
 	defer(id: string, build: () => DeliveryPayload): void;
 	consume(id: string): void;
-	/** Drop all tracking for an id whose subagent no longer exists (pruned). */
+	/**
+	 * Drop CONSUMED tracking for an id whose subagent no longer exists
+	 * (pruned). Deliberately leaves a still-pending payload queued: payloads
+	 * are eagerly built and self-contained, so an undelivered result survives
+	 * the manager's MAX_TRACKED prune and still flushes on the next idle /
+	 * agent_end instead of being silently lost.
+	 */
 	forget(id: string): void;
 	drain(): DeliveryPayload[];
 	clear(): void;
@@ -31,7 +37,6 @@ export function createDeferredResultDelivery(): DeferredResultDelivery {
 		},
 		forget(id): void {
 			consumed.delete(id);
-			pending.delete(id);
 		},
 		drain(): DeliveryPayload[] {
 			const payloads = [...pending.values()];

@@ -49,14 +49,17 @@ describe("deferred result delivery", () => {
 		expect(delivery.drain()).toEqual([]);
 	});
 
-	it("forget drops both pending and consumed tracking for pruned ids", () => {
+	it("forget drops consumed tracking but preserves undelivered pending payloads", () => {
 		const delivery = createDeferredResultDelivery();
 		delivery.defer("sa-1", () => ({ id: "sa-1", title: "t", status: "done", content: "c", details: {} }));
 		delivery.consume("sa-2");
 		delivery.forget("sa-1");
 		delivery.forget("sa-2");
-		expect(delivery.size).toBe(0);
-		// After forget, a fresh defer for the same id is accepted again.
+		// The pending sa-1 payload survives the prune and still flushes later —
+		// a busy parent must not silently lose results to MAX_TRACKED pruning.
+		expect(delivery.size).toBe(1);
+		expect(delivery.drain().map((payload) => payload.id)).toEqual(["sa-1"]);
+		// After forget, a fresh defer for the previously-consumed id is accepted.
 		delivery.defer("sa-2", () => ({ id: "sa-2", title: "t", status: "done", content: "c", details: {} }));
 		expect(delivery.size).toBe(1);
 	});

@@ -3,6 +3,8 @@ import type { HostResult, PaneRef, PiExecLike, SplitDirection, TerminalHost } fr
 interface HerdrEnvelope { result?: unknown }
 interface HerdrAgentResult { agent?: { pane_id?: string; workspace_id?: string } }
 interface HerdrPaneInfoResult { pane?: { tab_id?: string } }
+interface HerdrWorktreeResult { root_pane?: { pane_id?: string; workspace_id?: string }; workspace?: { workspace_id?: string } }
+interface HerdrPaneListResult { panes?: Array<{ pane_id?: string; workspace_id?: string }> }
 
 function parseEnvelope<T>(stdout: string): HostResult<T> {
 	try {
@@ -40,6 +42,26 @@ async function resolveCallerTabId(pi: PiExecLike, env: NodeJS.ProcessEnv): Promi
 	}
 }
 
+function workspaceIdFromWorktreeResult(parsed: HerdrWorktreeResult): string | undefined {
+	return parsed.workspace?.workspace_id ?? parsed.root_pane?.workspace_id;
+}
+
+async function runInWorktreeWorkspace(
+	pi: PiExecLike,
+	workspaceId: string,
+	shellCommand: string,
+): Promise<HostResult<{ pane: PaneRef }>> {
+	const panesResult = await pi.exec("herdr", ["pane", "list", "--workspace", workspaceId], { timeout: 5000 });
+	if (panesResult.code !== 0) return { ok: false, error: panesResult.stderr || panesResult.stdout || `herdr pane list exited ${panesResult.code}` };
+	const panesParsed = parseEnvelope<HerdrPaneListResult>(panesResult.stdout);
+	if (!panesParsed.ok) return panesParsed;
+	const paneId = panesParsed.panes?.find((pane) => pane.workspace_id === workspaceId || panesParsed.panes?.length === 1)?.pane_id;
+	if (!paneId) return { ok: false, error: `herdr pane list returned no panes for workspace ${workspaceId}` };
+	const runResult = await pi.exec("herdr", ["pane", "run", paneId, shellCommand], { timeout: 5000 });
+	if (runResult.code !== 0) return { ok: false, error: runResult.stderr || runResult.stdout || `herdr pane run exited ${runResult.code}` };
+	return { ok: true, pane: { host: "herdr", paneId, workspaceId } };
+}
+
 export const herdrTerminalHost: TerminalHost = {
 	kind: "herdr",
 	async openCommandInSplit(pi: PiExecLike, direction: SplitDirection, options: { cwd: string; shellCommand: string }) {
@@ -56,6 +78,32 @@ export const herdrTerminalHost: TerminalHost = {
 		const paneId = parsed.agent?.pane_id;
 		if (!paneId) return { ok: false, error: "herdr agent start did not return a pane_id" };
 		return { ok: true, pane: { host: "herdr", paneId, workspaceId: parsed.agent?.workspace_id } };
+	},
+	async openWorktreeWorkspace(pi: PiExecLike, options: { branch: string; baseRef: string; path: string; label: string; shellCommand: string }) {
+		const result = await pi.exec(
+			"herdr",
+			["worktree", "create", "--branch", options.branch, "--base", options.baseRef, "--path", options.path, "--label", options.label, "--focus", "--json"],
+			{ timeout: 5000 },
+		);
+		if (result.code !== 0) return { ok: false, error: result.stderr || result.stdout || `herdr worktree create exited ${result.code}` };
+		const parsed = parseEnvelope<HerdrWorktreeResult>(result.stdout);
+		if (!parsed.ok) return parsed;
+		const workspaceId = workspaceIdFromWorktreeResult(parsed);
+		if (!workspaceId) return { ok: false, error: "herdr worktree create did not return a workspace_id" };
+		return await runInWorktreeWorkspace(pi, workspaceId, options.shellCommand);
+	},
+	async openExistingWorktreeWorkspace(pi: PiExecLike, options: { path: string; label: string; shellCommand: string }) {
+		const result = await pi.exec(
+			"herdr",
+			["worktree", "open", "--path", options.path, "--label", options.label, "--focus", "--json"],
+			{ timeout: 5000 },
+		);
+		if (result.code !== 0) return { ok: false, error: result.stderr || result.stdout || `herdr worktree open exited ${result.code}` };
+		const parsed = parseEnvelope<HerdrWorktreeResult>(result.stdout);
+		if (!parsed.ok) return parsed;
+		const workspaceId = workspaceIdFromWorktreeResult(parsed);
+		if (!workspaceId) return { ok: false, error: "herdr worktree open did not return a workspace_id" };
+		return await runInWorktreeWorkspace(pi, workspaceId, options.shellCommand);
 	},
 	async closePane(pi: PiExecLike, pane: PaneRef) {
 		const result = await pi.exec("herdr", ["pane", "close", pane.paneId], { timeout: 5000 });

@@ -70,7 +70,7 @@ export function registerSubagentTools(pi: ExtensionAPI, manager: SubagentManager
 			prompt: Type.String({ description: "Self-contained child subagent prompt." }),
 			name: Type.String({ description: "Short human-readable title for this subagent." }),
 			model: Type.Optional(Type.String({ description: "Optional model override as provider/modelId." })),
-			thinking: Type.Optional(StringEnum(["off", "minimal", "low", "medium", "high", "xhigh"] as const, { description: "Optional thinking level override." })),
+			thinking: Type.Optional(StringEnum(["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const, { description: "Optional thinking level override." })),
 			working_dir: Type.Optional(Type.String({ description: "Working directory for the child. Defaults to the current project cwd." })),
 		}),
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {

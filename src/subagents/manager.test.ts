@@ -79,4 +79,21 @@ describe("SubagentManager", () => {
 		expect(manager.get("sa-1")).toBeUndefined();
 		expect(manager.get("sa-65")).toBeDefined();
 	});
+
+	it("keeps terminal state sticky when a late real settle arrives after cancel timeout", async () => {
+		let emitFn: ((event: import("./domain.js").SubagentEvent) => void) | undefined;
+		const manager = new SubagentManager(() => ({
+			events: (emit) => { emitFn = emit; },
+			interrupt: vi.fn(),
+		}));
+		const spawned = manager.spawn({ prompt: "p", title: "t", cwd: "/tmp" });
+		const id = (spawned as { id: string }).id;
+		emitFn?.({ kind: "run-settled", outcome: { kind: "interrupted" } });
+		expect(manager.get(id)?.status).toBe("error");
+		const settledAt = manager.get(id)?.settledAt;
+		emitFn?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "late success" } });
+		expect(manager.get(id)?.status).toBe("error");
+		expect(manager.get(id)?.settledAt).toBe(settledAt);
+		expect(manager.get(id)?.finalText).not.toBe("late success");
+	});
 });

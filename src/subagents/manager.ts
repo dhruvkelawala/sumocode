@@ -194,6 +194,11 @@ export class SubagentManager {
 	private fold(id: string, event: SubagentEvent): void {
 		const current = this.snapshots.get(id);
 		if (!current) return;
+		// Terminal state is sticky. After a cancel timeout we fold a synthetic
+		// interrupted settle while the OS process is still dying (SIGTERM sent,
+		// SIGKILL 5s later); its eventual real close would otherwise re-fold a
+		// run-settled and flip an explicitly cancelled subagent back to "done".
+		if (isSettled(current)) return;
 		let next = current;
 		if (event.kind === "assistant-delta") next = { ...current, liveText: `${current.liveText}${event.delta}` };
 		else if (event.kind === "tool-start") next = { ...current, liveTools: upsertTool(current.liveTools, { id: event.toolId, name: event.name, argsPreview: event.argsPreview, done: false, isError: false }) };

@@ -962,8 +962,8 @@ describe("RpcHostActions", () => {
 		expect(notifications).toContainEqual({ message: "exported: /tmp/custom-export.html", level: "info" });
 	});
 
-	it("renders theme check, approval preview, and memory editor as host overlays", async () => {
-		const { actions, overlays, notifications, memory } = setup();
+	it("renders theme check and memory editor as host overlays", async () => {
+		const { actions, overlays, memory } = setup();
 
 		const themeCheck = actions.handleSubmittedText("/sumo:theme-check");
 		await flush();
@@ -972,14 +972,6 @@ describe("RpcHostActions", () => {
 		overlays.handleInput("x");
 		await themeCheck;
 
-		const approval = actions.handleSubmittedText("/sumo:approval");
-		await flush();
-		expect(overlays.getActiveKind()).toBe("approvalPreview");
-		expect(renderOverlayText(overlays)).toContain("APPROVAL REQUIRED");
-		overlays.handleInput("n");
-		await approval;
-		expect(notifications).toContainEqual({ message: "command blocked", level: "warning" });
-
 		const memoryEditor = actions.handleSubmittedText("/sumo:memory");
 		await flush();
 		expect(overlays.getActiveKind()).toBe("memoryEditor");
@@ -987,18 +979,6 @@ describe("RpcHostActions", () => {
 		overlays.handleInput(Key.escape);
 		await memoryEditor;
 		expect(memory.calls).toContain("browse");
-	});
-
-	it("does not notify when approval preview is allowed", async () => {
-		const { actions, overlays, notifications } = setup();
-
-		const approval = actions.handleSubmittedText("/sumo:approval");
-		await flush();
-		expect(overlays.getActiveKind()).toBe("approvalPreview");
-		overlays.handleInput("y");
-		await approval;
-
-		expect(notifications).toEqual([]);
 	});
 
 	it("renders the RPC host's own hotkey reference as an overlay, closing on any key", async () => {
@@ -1147,6 +1127,10 @@ describe("RpcHostActions", () => {
 
 	it("does not advertise Phase-3 upstream-Pi-only commands the host still doesn't implement", async () => {
 		const { actions, controls, notifications } = setup();
+
+		const removedPreviewCommand = "sumo:approval";
+		expect(isRpcHostSlashCommandName(removedPreviewCommand)).toBe(false);
+		expect(RPC_HOST_SLASH_COMMANDS.map((command) => command.name)).not.toContain(removedPreviewCommand);
 
 		// /login, /import, /reload, and the .jsonl variant of /export are all
 		// Phase-3 items (plan 035): they need Pi primitives this RPC surface

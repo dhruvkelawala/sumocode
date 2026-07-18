@@ -15,13 +15,12 @@ These ship with Pi and are always available:
 
 | Tool    | What it does                                     | SumoCode customization       |
 |---------|--------------------------------------------------|------------------------------|
-| `bash`  | Execute shell commands                           | Approval gate for dangerous commands |
+| `bash`  | Execute shell commands                           | Tool pill renderer (E9)      |
 | `read`  | Read file contents                               | Tool pill renderer (E9)      |
 | `write` | Create/overwrite files                           | Tool pill renderer (E9)      |
 | `edit`  | Precise text replacement                         | Tool pill renderer (E9)      |
 | `mcp`   | Call MCP server tools                            | Tool pill renderer (E9)      |
-SumoCode **does not re-register** these. It intercepts them via `pi.on("tool_call")`
-for approval gating and renders them via the transcript view-model pipeline.
+SumoCode **does not re-register** or gate these. Built-in tool calls proceed through Pi and are rendered via the transcript view-model pipeline.
 
 ### 2. Pi Example Extensions (installed globally)
 
@@ -49,12 +48,7 @@ vanilla Pi.
 
 ### 4. SumoCode Extension Hooks
 
-These use `pi.on("tool_call")` to intercept built-in tool execution without
-re-registering the tool.
-
-| Hook                  | Source                     | What it does                        |
-|-----------------------|----------------------------|-------------------------------------|
-| Approval gate         | `src/approval-modal.ts`    | Blocks dangerous bash commands      |
+SumoCode may observe `pi.on("tool_call")` events for non-blocking UI state, but it must not re-register built-in tools. Current tool-call rendering flows through the transcript view-model pipeline.
 
 ## UI Rendering Layers
 
@@ -74,7 +68,6 @@ Pi agent event → ChatMessageViewModel → ChatBlock (tool/skill/delegation/cod
 |--------------------|---------------------------|-------------------------------------|
 | Command Palette    | `src/command-palette.ts`  | `Ctrl+/` keybinding                 |
 | Divine Query       | `src/divine-query.ts`     | `showDivineQuery()` from SumoCode code |
-| Approval Modal     | `src/approval-modal.ts`   | `tool_call` event for dangerous bash |
 | Memory Editor      | `src/memory-editor.ts`    | `Ctrl+M` keybinding                 |
 
 All modals use `ctx.ui.custom({ overlay: true })` for centered overlays.
@@ -104,7 +97,6 @@ This ensures the Divine Query renderer doesn't produce double labels like `A) A)
 | File                              | Role                                          |
 |-----------------------------------|-----------------------------------------------|
 | `src/extension.ts`               | Main entry — wires all hooks and tools        |
-| `src/approval-modal.ts`          | Approval gate + configurable patterns         |
 | `src/divine-query.ts`            | Divine Query modal renderer + state machine   |
 | `src/command-palette.ts`         | Command palette (calls `showDivineQuery`)     |
 | `src/sumo-tui/transcript/*.ts`   | Tool/code/scroll renderers                    |

@@ -8,12 +8,6 @@ import {
 	type PaletteMode,
 } from "../../command-palette.js";
 import {
-	renderApprovalModal,
-	updateApprovalSnapshot,
-	type ApprovalChoice,
-	type ApprovalModalSnapshot,
-} from "../../approval-modal.js";
-import {
 	createRemnicMemoryClient,
 	MemoryClientError,
 	type MemoryFact,
@@ -67,8 +61,7 @@ export interface RpcHostActionsOptions {
 	 * transcript/chrome still visible instead of a full-screen `ModalLayer`
 	 * backdrop. `openResumeSelector` and `openTreeBrowser` (session-reader-backed,
 	 * added in plan 035 phase 1) also use this surface. `modals` is kept for
-	 * confirm/input and the genuinely-blocking approval/confirm/input flows
-	 * elsewhere in the host -- only these selectors moved.
+	 * confirm/input flows elsewhere in the host -- only these selectors moved.
 	 */
 	readonly inlineSelectors: HostInlineSelectors;
 	readonly notifications: HostNotifications;
@@ -135,7 +128,6 @@ export const RPC_HOST_SLASH_COMMANDS: readonly RpcHostSlashCommand[] = Object.fr
 	{ name: "quit", description: "Quit SumoCode" },
 	{ name: "sumo:memory", description: "Open or update SumoCode memory" },
 	{ name: "sumo:theme-check", description: "Preview current theme tokens" },
-	{ name: "sumo:approval", description: "Preview approval overlay" },
 	{ name: "sumo:palette", description: "Open the command palette" },
 	{ name: "hotkeys", description: "Show the RPC host's keyboard shortcuts" },
 	{ name: "changelog", description: "Show SumoCode's changelog" },
@@ -504,30 +496,6 @@ class LinesOverlayComponent implements Component {
 	}
 }
 
-class HostApprovalPreviewComponent implements Component {
-	private snapshot: ApprovalModalSnapshot;
-
-	public constructor(command: string, private readonly done: (choice: ApprovalChoice) => void) {
-		this.snapshot = {
-			command,
-			descriptionLines: ["This is a host-side RPC approval preview."],
-			activeButton: "no",
-		};
-	}
-
-	public invalidate(): void {}
-
-	public handleInput(data: string): void {
-		const result = updateApprovalSnapshot(this.snapshot, data);
-		this.snapshot = result.snapshot;
-		if (result.done) this.done(result.done);
-	}
-
-	public render(width: number): string[] {
-		return renderApprovalModal(this.snapshot, width);
-	}
-}
-
 export class RpcHostActions {
 	private readonly controls: RpcHostControls;
 	private readonly stateStore: RpcHostStateStore;
@@ -638,9 +606,6 @@ export class RpcHostActions {
 				return true;
 			case "/sumo:theme-check":
 				await this.openThemeCheck();
-				return true;
-			case "/sumo:approval":
-				await this.openApprovalPreview();
 				return true;
 			case "/sumo:palette":
 				await this.openCommandPalette();
@@ -934,14 +899,6 @@ export class RpcHostActions {
 				done,
 			),
 		);
-	}
-
-	public async openApprovalPreview(command = "rm -rf node_modules/"): Promise<void> {
-		const choice = await this.overlays.show<ApprovalChoice>(
-			"approvalPreview",
-			(done) => new HostApprovalPreviewComponent(command, done),
-		);
-		if (choice === "no") notify(this.notifications, "command blocked", "warning");
 	}
 
 	public async openMemoryEditor(): Promise<void> {

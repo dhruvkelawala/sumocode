@@ -60,7 +60,6 @@ Five themes ship: Cathedral (default), Amber CRT, Obsidian Temple, Herdr Termina
 | **Owned-shell mode** | Full altscreen ownership: retained renderer, in-app scroll, modal layer, mouse routing, OSC 52 cell-precise selection. Pi reduced to LLM, tools, sessions through adapters in [`src/sumo-tui/pi-compat/`](./src/sumo-tui/pi-compat/). |
 | **`/sumo:reload`** | Hot-reload via launcher loop and exit code 100. Strips `--resume`, replaces with `--continue`. Resumes the in-flight session. |
 | **`/fast`** | Session-local OpenAI/Codex fast-mode toggle. Wraps Pi's native `openai-responses` and `openai-codex-responses` streamers and passes `serviceTier: "priority"` through provider options instead of patching raw payloads. |
-| **Cathedral approval modal** | Pattern-gated approval for dangerous bash commands. Default patterns cover `rm -rf`, `sudo`, `git push --force`, mutating `gh` calls. Configurable via `ApprovalGateConfig`. Modal height capped at 12 visible command rows. |
 | **Sidebar** | Three sections at width ≥ 120: context (token meter, session cost), MCP (server roster), memory (persisted bullets). Hidden in portrait orientation per [`SUMO_TUI_PORTRAIT_SIDEBAR_POLICY.md`](./docs/SUMO_TUI_PORTRAIT_SIDEBAR_POLICY.md). |
 | **Theme system** | Five first-party themes plus a chrome/application-role contract: each theme defines glyph chrome (`frame`, `sectionGlyphs`, `bullet`, `ruleChar`, `tabActive` / `tabInactive`), an 8-frame working indicator where applicable, and optional tool-ledger/code roles for dense application surfaces. |
 | **Diagnostics flight recorder** | `SUMO_TUI_DIAG_FILE=/path/file.jsonl` enables a 19-event-type structured trace covering runtime lifecycle, terminal state, upstream Pi events, owned-shell transitions, and module-load provenance. |
@@ -110,7 +109,7 @@ Six contracts came out of the SumoTUI consolidation epic. Each is small, owns on
 | **Headless TestBackend** | Test harness for retained-renderer behaviour without parsing real PTY bytes. | [`src/sumo-tui/testing/test-backend.ts`](./src/sumo-tui/testing/test-backend.ts) | [`SUMO_TUI_TEST_BACKEND.md`](./docs/SUMO_TUI_TEST_BACKEND.md) |
 | **Structured TranscriptViewModel** | Typed `ChatBlock` taxonomy (markdown, code, tool, skill, question, delegation) replacing flattened message strings. | [`src/sumo-tui/transcript/view-model.ts`](./src/sumo-tui/transcript/view-model.ts) | [`SUMO_TUI_TRANSCRIPT_MODEL.md`](./docs/SUMO_TUI_TRANSCRIPT_MODEL.md) |
 
-The **scriptorium modal chrome** ([`docs/cathedral/SCRIPTORIUM_CHROME.md`](./docs/cathedral/SCRIPTORIUM_CHROME.md)) is the shared lifted-bg overlay used by Divine Query, Approval, and Memory Scriptorium. It is the reason the three modals look like the same thing.
+The **scriptorium modal chrome** ([`docs/cathedral/SCRIPTORIUM_CHROME.md`](./docs/cathedral/SCRIPTORIUM_CHROME.md)) is the shared lifted-bg overlay used by Divine Query and Memory Scriptorium. It is the reason active Cathedral modals look like the same thing.
 
 ### Visual parity contract
 
@@ -157,7 +156,7 @@ Sidebar docks at terminal width ≥ 120. Below 120, the sidebar disappears and p
 │   └─ Ctrl+Shift+T to cycle, persisted via Pi ─────────┘  │
 │   ┌─ src/cathedral/, src/memory-editor.ts, etc. ──────┐  │
 │   │  Cathedral surfaces · Memory Scriptorium ·        │  │
-│   └─ approval modal · Divine Query · skill pills ─────┘  │
+│   └─ Divine Query · skill pills ──────────────────────┘  │
 └──────────────────────────────────────────────────────────┘
                           ▲
                           │ symlink into ~/.pi/agent/

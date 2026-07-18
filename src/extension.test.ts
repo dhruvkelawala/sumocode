@@ -158,8 +158,8 @@ describe("duplicate installed extension guard", () => {
 	// tree (a common local setup — see `bin/sumocode.sh`'s `SUMOCODE_ROOT_DIR`
 	// export), the module path passes the `.pi/agent/git` prefix test even
 	// though it IS the launcher's own dev tree. An unconditional noop there
-	// would skip `installApprovalGate` in the RPC child profile — the
-	// approval gate must still install.
+	// would skip the RPC child profile entirely, leaving the launcher without
+	// its SumoCode-owned tools and commands.
 	describe("SUMOCODE_ROOT_DIR-aware launcher self-noop", () => {
 		const identityRealpath = (path: string): string => path;
 
@@ -239,7 +239,7 @@ describe("rpc child profile", () => {
 		expect(isRpcChildProfile({ env: { SUMOCODE_RPC_CHILD: "0" } })).toBe(false);
 	});
 
-	it("keeps tools and commands, installs fail-closed approval, and skips retained chrome", async () => {
+	it("keeps tools and commands and skips retained chrome", async () => {
 		const previousRpc = process.env.SUMOCODE_RPC_CHILD;
 		const previousTask = process.env.SUMOCODE_NATIVE_TASK;
 		process.env.SUMOCODE_RPC_CHILD = "1";
@@ -250,13 +250,11 @@ describe("rpc child profile", () => {
 
 			const commandNames = pi.registerCommand.mock.calls.map((call) => call[0]);
 			const toolNames = pi.registerTool.mock.calls.map((call) => (call[0] as { name: string }).name);
-			const eventNames = pi.on.mock.calls.map((call) => call[0]);
 			const shortcutNames = pi.registerShortcut.mock.calls.map((call) => call[0]);
 			expect(commandNames).toContain("sumo:review");
 			expect(commandNames).toContain("sumo:ship");
 			expect(toolNames).toContain("task");
 			expect(toolNames).toContain("question");
-			expect(eventNames).toContain("tool_call");
 			expect(shortcutNames).not.toContain("ctrl+/");
 
 			const ctx = { ...buildCtxStub(), mode: "rpc" };
@@ -266,11 +264,9 @@ describe("rpc child profile", () => {
 					input: { command: "rm -rf node_modules/" },
 				}, ctx as never),
 			));
-			expect(toolCallResults).toContainEqual({
-				block: true,
-				reason: "user denied via cathedral approval modal",
-			});
-			expect(ctx.ui.select).toHaveBeenCalled();
+			expect(toolCallResults.some((result) => typeof result === "object" && result !== null && "block" in result && result.block === true)).toBe(false);
+			expect(ctx.ui.select).not.toHaveBeenCalled();
+			expect(ctx.ui.custom).not.toHaveBeenCalled();
 
 			for (const handler of handlers.get("session_start") ?? []) {
 				await handler({ type: "session_start" }, ctx as never);
@@ -352,6 +348,23 @@ describe("sumocode extension", () => {
 		expect(commandNames).toContain("sumo:review");
 		expect(commandNames).toContain("sumo:ship");
 		expect(commandNames).toContain("sumo:worktree");
+	});
+
+	it("does not block dangerous bash tool calls during full extension install", async () => {
+		const { pi, handlers } = buildPiStub();
+		sumocode(pi as never);
+
+		const ctx = buildCtxStub();
+		const toolCallResults = await Promise.all((handlers.get("tool_call") ?? []).map((handler) =>
+			handler({
+				toolName: "bash",
+				input: { command: "rm -rf node_modules/" },
+			}, ctx as never),
+		));
+
+		expect(toolCallResults.some((result) => typeof result === "object" && result !== null && "block" in result && result.block === true)).toBe(false);
+		expect(ctx.ui.select).not.toHaveBeenCalled();
+		expect(ctx.ui.custom).not.toHaveBeenCalled();
 	});
 
 	it("does not push a 'SumoCode loaded' notification on session_start", () => {

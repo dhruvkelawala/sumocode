@@ -104,7 +104,7 @@ The user-facing wrapper is `bin/sumocode.sh` and, when linked/installed, the `su
 
 Manual-test diagnostics are opt-in via `sumocode -d` / `bin/sumocode.sh -d`. Debug mode writes JSONL to `/tmp/sumocode-manual.jsonl` by default, or to `--diag-file <path>` / `SUMO_TUI_DIAG_FILE`. The launcher clears the diagnostics file at startup unless `--no-clear-diag` is set. Use `sumocode diag` or `node scripts/diag-summary.mjs /tmp/sumocode-manual.jsonl` to summarize a run. Diagnostics must stay no-op unless `SUMO_TUI_DIAG_FILE` is set.
 
-Do not casually change the launcher runtime selection, `SUMO_RPC`, `SUMO_TUI`, or `sumo-rpc-host.js`. Pi version bumps must re-verify the RPC contract (`rpc-types.d.ts`), re-check the hardcoded builtin slash list, rerun the approval/security regression test, and preserve the direct-Pi bypass for `--print`, explicit `--mode`, and non-TTY stdout.
+Do not casually change the launcher runtime selection, `SUMO_RPC`, `SUMO_TUI`, or `sumo-rpc-host.js`. Pi version bumps must re-verify the RPC contract (`rpc-types.d.ts`), re-check the hardcoded builtin slash list, rerun the tool-bypass/security regression test, and preserve the direct-Pi bypass for `--print`, explicit `--mode`, and non-TTY stdout.
 
 ### Pi ↔ SumoCode tool boundary
 

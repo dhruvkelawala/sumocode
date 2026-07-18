@@ -1,7 +1,7 @@
 import { spawn as nodeSpawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import type { SubagentEvent } from "./domain.js";
 import { type BuiltInToolName, resolveTaskConfig } from "../native-task-config.js";
 import { isRecord, type TaskThinking, type ThinkingLevel } from "../native-task-params.js";
@@ -36,7 +36,12 @@ function adapterPathSourcesFromSettings(settingsPath: string): string[] {
 			.filter((source): source is string => typeof source === "string" && source.includes(CLAUDE_OAUTH_ADAPTER_PACKAGE));
 		return sources
 			.filter((source) => !source.startsWith("npm:") && !source.startsWith("git:") && !source.startsWith("http"))
-			.map((source) => source.startsWith("~/") ? join(homedir(), source.slice(2)) : source);
+			.map((source) => {
+				if (source.startsWith("~/")) return join(homedir(), source.slice(2));
+				// Pi resolves relative package sources against the settings file's
+				// directory, not the process cwd — mirror that.
+				return isAbsolute(source) ? source : resolve(dirname(settingsPath), source);
+			});
 	} catch {
 		return [];
 	}

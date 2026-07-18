@@ -43,6 +43,18 @@ describe("resolveClaudeOauthAdapterEntry", () => {
 		rmSync(checkout, { recursive: true, force: true });
 	});
 
+	it("resolves relative settings path sources against the settings dir, not process cwd", () => {
+		const agentDir = mkdtempSync(join(tmpdir(), "sumo-oauth-agent-"));
+		const pkgDir = join(agentDir, "checkouts", "pi-claude-oauth-adapter");
+		mkdirSync(join(pkgDir, "extensions"), { recursive: true });
+		writeFileSync(join(pkgDir, "package.json"), JSON.stringify({ pi: { extensions: ["./extensions/index.ts"] } }));
+		writeFileSync(join(pkgDir, "extensions", "index.ts"), "// adapter");
+		writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ packages: ["./checkouts/pi-claude-oauth-adapter"] }));
+		expect(resolveClaudeOauthAdapterEntry({ PI_CODING_AGENT_DIR: agentDir }))
+			.toBe(join(pkgDir, "extensions", "index.ts"));
+		rmSync(agentDir, { recursive: true, force: true });
+	});
+
 	it("honors the SUMOCODE_CLAUDE_OAUTH_ADAPTER env override pointing at an entry file", () => {
 		const dir = mkdtempSync(join(tmpdir(), "sumo-oauth-override-"));
 		const entry = join(dir, "index.ts");

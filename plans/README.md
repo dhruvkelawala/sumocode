@@ -499,6 +499,7 @@ manifests, then retirement of the `bg_task` mega-tool and delegation routing amb
 | 070 | [Migration: retire bg_task + routing guidance](070-orchestration-migration.md) | P3 | M | 065–069 + operator gate | [#308](https://github.com/dhruvkelawala/sumocode/issues/308) | TODO |
 | 071 | [On-demand interactive worktrees (fresh/reopen)](071-on-demand-interactive-worktrees.md) | P2 | S | — (independent) | [#309](https://github.com/dhruvkelawala/sumocode/issues/309) | DONE |
 | 072 | [Terminal-host abstraction: herdr + cmux](072-terminal-host-abstraction-herdr.md) | P2 | M | 071 (same file) | [#311](https://github.com/dhruvkelawala/sumocode/issues/311) | TODO |
+| 073 | [Herdr Terminal Theme](073-herdr-terminal-theme.md) | P1 | M | — | [#312](https://github.com/dhruvkelawala/sumocode/issues/312) | IN PROGRESS — implementation at `6e4a3ce`; approved v7 palette realignment pending |
 
 ### Dependency notes
 

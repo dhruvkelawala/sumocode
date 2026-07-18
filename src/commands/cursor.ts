@@ -1,4 +1,5 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { activeThemeColors } from "../themes/index.js";
 import { defaultTerminalSessionOwner, type TerminalSessionOwner } from "../sumo-tui/runtime/terminal-controller.js";
 
 export type CursorCommandMode = "accent" | "reset" | "status";
@@ -6,6 +7,8 @@ export type CursorCommandMode = "accent" | "reset" | "status";
 function normalizeCursorCommand(args: string): CursorCommandMode | undefined {
 	const value = args.trim().toLowerCase();
 	if (value === "" || value === "status") return "status";
+	// `orange` / `cathedral` are deprecated aliases kept for muscle memory from
+	// the Cathedral-only era. They resolve the CURRENT theme accent, not orange.
 	if (["accent", "orange", "cathedral"].includes(value)) return "accent";
 	if (["reset", "default", "system"].includes(value)) return "reset";
 	return undefined;
@@ -26,8 +29,8 @@ export function registerCursorCommand(pi: ExtensionAPI, terminalSession: Termina
 		handler: async (args: string, ctx: ExtensionContext) => {
 			const mode = normalizeCursorCommand(args);
 			if (mode === "accent") {
-				terminalSession.setCursorColor();
-				report(ctx, "cursor color: cathedral accent", "info");
+				terminalSession.setCursorColor(activeThemeColors().accent);
+				report(ctx, "cursor color: theme accent", "info");
 				return;
 			}
 			if (mode === "reset") {
@@ -37,7 +40,7 @@ export function registerCursorCommand(pi: ExtensionAPI, terminalSession: Termina
 			}
 			if (mode === "status") {
 				const state = terminalSession.getState();
-				report(ctx, `cursor color: ${state.cursorColorOverridden ? "cathedral accent" : "terminal default"}`, "info");
+				report(ctx, `cursor color: ${state.cursorColorOverridden ? "theme accent" : "terminal default"}`, "info");
 				return;
 			}
 			report(ctx, "usage: /sumo:cursor accent|reset|status", "warning");

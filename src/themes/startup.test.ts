@@ -25,6 +25,18 @@ describe("resolveStartupThemeName", () => {
 		}
 	});
 
+	it("resolves to herdr when the persisted theme is herdr", () => {
+		const root = mkdtempSync(join(tmpdir(), "sumocode-startup-theme-herdr-"));
+		const homeDir = join(root, "home");
+		writeGlobalConfig(homeDir, { themeName: "herdr" });
+
+		try {
+			expect(resolveStartupThemeName({ cwd: root, homeDir, env: {} })).toBe("herdr");
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
 	it("falls back to obsidian when the configured theme is unknown", () => {
 		const root = mkdtempSync(join(tmpdir(), "sumocode-startup-theme-unknown-"));
 		const homeDir = join(root, "home");
@@ -61,6 +73,20 @@ describe("applyStartupTheme", () => {
 			const themeName = applyStartupTheme({ cwd: root, homeDir, env: {} });
 			expect(themeName).toBe("amber-crt");
 			expect(getActiveTheme().name).toBe("amber-crt");
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("resolves the first active theme as Herdr when herdr is persisted", () => {
+		const root = mkdtempSync(join(tmpdir(), "sumocode-startup-theme-apply-herdr-"));
+		const homeDir = join(root, "home");
+		writeGlobalConfig(homeDir, { themeName: "herdr" });
+
+		try {
+			const themeName = applyStartupTheme({ cwd: root, homeDir, env: {} });
+			expect(themeName).toBe("herdr");
+			expect(getActiveTheme().name).toBe("herdr");
 		} finally {
 			rmSync(root, { recursive: true, force: true });
 		}

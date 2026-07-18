@@ -34,10 +34,11 @@ It does not replace Pi. It does not fork Pi. It loads as a regular Pi package an
 
 3. **Remember me across sessions.** A local Remnic daemon (built on QMD, which I already use for OpenClaw) auto-extracts durable facts from each session — preferences, project context, decisions made — and injects the relevant ones back into future sessions. Memory storage is plain markdown, git-syncable via the same private repo as my settings and extensions.
 
-4. **Three themes for three moods.**
+4. **Four themes for four moods.**
    - **Cathedral** (default) — a 19th-century scriptorium aesthetic. Warm walnut background, burnt-orange accents, IBM Plex Mono. The everyday driver.
    - **Amber CRT** — Apple II / IBM 5151 phosphor terminal. Aligns with my Mission Control v3 design language for cross-agent visual consistency.
    - **Obsidian Temple** — sacred-tech mode. Deep obsidian background, bronze body text, gold + cyan + magenta neon glows on focal elements. For deep-focus sessions where I want the agent to feel like a ceremonial space.
+   - **Herdr Terminal** — electric-green operator console, matching my Herdr/Ghostty setup. Green-black chassis, phosphor-green `#39FF14` focus/body, amber execution, red approval, sharp ASCII chrome, packet-pulse indicator. (Added post-v0.3; v0.3 shipped the first three.)
 
    Switch instantly via `Ctrl+Shift+T` (cycles forward) or thoughtfully via `/sumo:theme` (preview overlay). Choice persists in synced config and follows me to any machine.
 
@@ -103,7 +104,7 @@ The end state: I open a terminal on either machine, run `pi`, and SumoCode greet
 
 22. As a developer, I want `/sumo:theme` (no argument) to enter a preview cycle mode where Tab/Right cycles, Enter confirms, Esc reverts, so I can compare themes carefully when I'm choosing.
 
-23. As a developer, I want `/sumo:theme list` to print the 3 themes with short descriptions so I'm reminded what they offer.
+23. As a developer, I want `/sumo:theme list` to print the registered themes (4 as of Herdr Terminal) with short descriptions so I'm reminded what they offer.
 
 24. As a developer, when I switch themes, I want the entire UI (footer, sidebar, working indicator, splash, every state dot) to redraw with the new tokens — no restart required.
 
@@ -175,7 +176,7 @@ The extension is built from twelve modules. Five of them are "deep" — they enc
 
 ### Theme system
 
-All three themes share an identical `Theme` interface shape. Only token values differ. The interface includes:
+All four registered themes share an identical `Theme` interface shape. Only token values differ. The interface includes:
 
 - Surface tokens (background, surface, panel, recess, lifted, divider)
 - Text tokens (foreground, foregroundDim, foregroundMuted)
@@ -184,7 +185,7 @@ All three themes share an identical `Theme` interface shape. Only token values d
 - Decoration tokens (memoryPrefix, sectionBorder, activeTabFrame)
 - Effects flags (scanlines, radialGradient, glowOnFocal, chromaticAberration)
 
-**Cathedral is default and first** in the registry order. Amber CRT is second. Obsidian Temple is third.
+**Cathedral is default and first** in the registry order. Amber CRT is second. Obsidian Temple is third. Herdr Terminal is fourth (cycle wraps obsidian → herdr → cathedral).
 
 **First-launch behavior:** No theme picker. Cathedral is loaded immediately. Discovery happens via README, `/sumo:theme list`, or accidentally typing `/sumo:`.
 

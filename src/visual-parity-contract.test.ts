@@ -72,6 +72,8 @@ type Scenario = {
 	};
 	rejectIfOutputMatches?: string[];
 	rejectIfFinalScreenMatches?: string[];
+	rejectIfRawOutputMatches?: string[];
+	requireRawOutputMatches?: string[];
 	crops: ScenarioCrop[];
 };
 
@@ -348,6 +350,56 @@ describe("V2 visual parity contract", () => {
 		expect(cropDefinition("portrait-top-bar")).toEqual({ x: 0, y: 1, cols: 60, rows: 1 });
 		expect(cropDefinition("portrait-input-frame")).toEqual({ x: 0, y: 93, cols: 60, rows: 3 });
 		expect(cropDefinition("portrait-footer")).toEqual({ x: 0, y: 98, cols: 60, rows: 1 });
+	});
+
+	it("keeps the Herdr theme runtime scenario isolated, review-only, and theme-asserted", () => {
+		const herdr = scenario("herdr-theme-active-runtime");
+
+		expect(herdr.status).toBe("review");
+		expect(herdr.dimensions).toEqual({ cols: 160, rows: 45 });
+		expect(herdr.bibleTarget).toBe("theme-herdr-active.png");
+		expect(herdr.runtime?.args).toEqual(scenario("active-landscape-runtime").runtime?.args);
+		assertActiveRuntimeInputContract(herdr);
+		// Deterministic repo-committed fixture — never Dhruv's live Pi config.
+		expect(herdr.runtime?.env?.PI_CODING_AGENT_DIR).toBe("test/fixtures/pi-agent-herdr");
+		const fixturePath = join(process.cwd(), "test/fixtures/pi-agent-herdr/sumocode.json");
+		expect(existsSync(fixturePath)).toBe(true);
+		expect(JSON.parse(readFileSync(fixturePath, "utf8"))).toEqual({ themeName: "herdr" });
+		// Wrong-theme evidence gates: Cathedral OSC sequences reject the capture,
+		// Herdr background/cursor OSC sequences are required.
+		// Reject both a Cathedral flash AND stale cyan-era Herdr OSC values.
+		expect(herdr.rejectIfRawOutputMatches).toEqual([
+			"\\x1b\\]11;#1A1511",
+			"\\x1b\\]12;#D97706",
+			"\\x1b\\]11;#0B0B0F",
+			"\\x1b\\]12;#00E5FF",
+		]);
+		expect(herdr.requireRawOutputMatches).toEqual(["\\x1b\\]11;#040704", "\\x1b\\]12;#39FF14"]);
+		expect(herdr.rejectIfFinalScreenMatches).toEqual(expect.arrayContaining([
+			"No API key found",
+			"rpc error: prompt failed",
+			"DIVINE INVOCATION",
+			"SUMOCODE RPC",
+			"empty transcript",
+		]));
+		expect(herdr.crops.map((crop) => crop.id)).toEqual([
+			"full",
+			"top-bar",
+			"sidebar",
+			"chat-area",
+			"input-frame",
+			"hint-row",
+			"footer",
+		]);
+		// Review-only for now: no required crops, no golden gating without an
+		// explicit human promotion decision.
+		expect(requiredCropIds("herdr-theme-active-runtime")).toEqual([]);
+		// The capture harness must treat scenario-provided fixture dirs as
+		// repo-relative committed fixtures: resolved against the repo root and
+		// never cleaned up like harness-created temp dirs.
+		const runtimeCaptureSource = readFileSync(join(process.cwd(), "scripts/visual-v2/runtime-capture.mjs"), "utf8");
+		expect(runtimeCaptureSource).toContain("resolve(repoRoot, extra.PI_CODING_AGENT_DIR)");
+		expect(runtimeCaptureSource).toContain("if (hasScenarioPiDir) return;");
 	});
 
 	it("places active runtime Bible input rows at terminal coordinates", () => {

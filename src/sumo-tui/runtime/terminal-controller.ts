@@ -25,15 +25,36 @@ export const ALTSCREEN_ENTER_SEQUENCE =
 	"\x1b[>7u" + // kitty keyboard push (flags 1+2+4, matches pi-tui terminal.js)
 	"\x1b[>4;2m" + // xterm modifyOtherKeys mode 2 (kitty-less fallback)
 	"\x1b[?25h\x1b[H";
+/**
+ * The terminal-level colours the session owner mirrors from the active theme:
+ * OSC 11 default background + OSC 12 cursor accent. Deliberately NOT the whole
+ * `ThemeBundle` — this low-level owner must stay theme-registry-agnostic; the
+ * runtime seam (`rpc/runtime.ts`) derives the palette from the active theme
+ * and pushes it down via `applyPalette()`.
+ */
+export interface TerminalPalette {
+	readonly background: string;
+	readonly accent: string;
+}
+
+/**
+ * Cathedral terminal palette — the default until a runtime applies the active
+ * theme. Kept as the fixture baseline for lifecycle tests and the classic
+ * (non-RPC) extension path.
+ */
+const CATHEDRAL_TERMINAL_PALETTE: TerminalPalette = { background: "#1A1511", accent: "#D97706" };
+
 export const CURSOR_COLOR_SET = "\x1b]12;#D97706\x1b\\";
 export const CURSOR_COLOR_RESET = "\x1b]112\x1b\\";
 // OSC 11 sets the terminal's default background color. Without this, cells
 // outside our retained renderer's reach (Pi noise output, terminal cursor
 // row, scrollback before altscreen, etc.) show as the terminal's own default
-// (often pure black `#000000`), which makes the cathedral palette look wrong.
-// Setting OSC 11 to cathedral `bg` (#1A1511) ensures every cell shares the
-// same base, and the sidebar's `surface` (#241D17) reads as elevated above it.
-// Reset on exit via OSC 111 so the user's normal terminal bg is restored.
+// (often pure black `#000000`), which makes the active theme palette look
+// wrong. Setting OSC 11 to the theme `bg` ensures every cell shares the same
+// base, and the sidebar's `surface` reads as elevated above it. Reset on exit
+// via OSC 111 so the user's normal terminal bg is restored.
+// `TERMINAL_BG_SET` remains as the Cathedral fixture used by existing tests;
+// production code goes through `terminalBackgroundSetSequence`.
 export const TERMINAL_BG_SET = "\x1b]11;#1A1511\x1b\\";
 export const TERMINAL_BG_RESET = "\x1b]111\x1b\\";
 /**
@@ -90,8 +111,19 @@ export interface TerminalSessionOwnerState {
 	readonly restored: boolean;
 }
 
+const HEX_COLOR_PATTERN = /^#[0-9a-fA-F]{6}$/;
+
+function assertHexColor(hex: string): string {
+	if (!HEX_COLOR_PATTERN.test(hex)) throw new Error(`Invalid terminal palette color: ${hex}`);
+	return hex;
+}
+
 function cursorColorSetSequence(hex: string): string {
-	return `\x1b]12;${hex}\x1b\\`;
+	return `\x1b]12;${assertHexColor(hex)}\x1b\\`;
+}
+
+function terminalBackgroundSetSequence(hex: string): string {
+	return `\x1b]11;${assertHexColor(hex)}\x1b\\`;
 }
 
 /**
@@ -112,6 +144,15 @@ export class TerminalSessionOwner {
 	private backgroundPainted = false;
 	private cursorColorOverridden = false;
 	private lastCursorColor: string | undefined;
+	private lastBackgroundColor: string | undefined;
+	/**
+	 * Retained terminal palette. Starts as Cathedral for the classic extension
+	 * path; the RPC runtime pushes the active theme's palette via
+	 * `applyPalette()` before terminal ownership begins, and again on live theme
+	 * switches. Suspend/resume and repeated `startRetainedSession()` calls
+	 * restore whatever palette is retained here, never a hardcoded theme.
+	 */
+	private palette: TerminalPalette = CATHEDRAL_TERMINAL_PALETTE;
 	/**
 	 * Last cursor position we emitted to the terminal. Used to skip redundant
 	 * cursor-reposition writes when the frame doesn't move the cursor. Reset
@@ -159,8 +200,9 @@ export class TerminalSessionOwner {
 		this.restored = false;
 		let output = ALTSCREEN_ENTER_SEQUENCE;
 		if (this.paintBackground) {
-			output += TERMINAL_BG_SET;
+			output += terminalBackgroundSetSequence(this.palette.background);
 			this.backgroundPainted = true;
+			this.lastBackgroundColor = this.palette.background;
 		}
 		// V2 contract: do not emit OSC 12 cursor color during normal startup.
 		this.write(output);
@@ -180,8 +222,26 @@ export class TerminalSessionOwner {
 		this.mouseSGREnabled = true;
 	}
 
+	/**
+	 * Sync the retained palette with the active theme. Always updates retained
+	 * state so suspend/resume and future `startRetainedSession()` calls use the
+	 * new colours. While altscreen is active, immediately re-emits OSC 11; OSC
+	 * 12 is re-emitted only when the cursor override is currently active, so an
+	 * explicit `/sumo:cursor reset` opt-out survives theme changes. Duplicate
+	 * writes for an unchanged palette are suppressed.
+	 */
+	public applyPalette(palette: TerminalPalette): void {
+		this.palette = palette;
+		if (!this.isTTY()) return;
+		if (this.altscreenActive && this.paintBackground && this.backgroundPainted && this.lastBackgroundColor !== palette.background) {
+			this.write(terminalBackgroundSetSequence(palette.background));
+			this.lastBackgroundColor = palette.background;
+		}
+		if (this.cursorColorOverridden) this.setCursorColor(palette.accent);
+	}
+
 	/** Explicit cursor-color override hook for `/sumo:cursor accent`. */
-	public setCursorColor(hex = "#D97706"): void {
+	public setCursorColor(hex = this.palette.accent): void {
 		if (!this.isTTY()) return;
 		this.restored = false;
 		if (this.cursorColorOverridden && this.lastCursorColor === hex) return;
@@ -284,6 +344,7 @@ export class TerminalSessionOwner {
 		this.backgroundPainted = false;
 		this.cursorColorOverridden = false;
 		this.lastCursorColor = undefined;
+		this.lastBackgroundColor = undefined;
 		this.lastEmittedCursor = null;
 		this.hardwareCursorVisible = true;
 		if (!this.isTTY()) return;

@@ -358,7 +358,7 @@ section { margin-bottom: 88px; }
 /* ─── THEMES ───────────────────────────────────────── */
 .themes {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(2, 1fr);
   gap: 20px;
 }
 @media (max-width: 920px) { .themes { grid-template-columns: 1fr; } }
@@ -371,6 +371,7 @@ section { margin-bottom: 88px; }
 .theme-card.cathedral { border-left: 3px solid var(--accent); }
 .theme-card.amber { border-left: 3px solid #b8851b; }
 .theme-card.obsidian { border-left: 3px solid var(--violet); }
+.theme-card.herdr { border-left: 3px solid #39FF14; }
 .theme-card__chrome {
   height: 132px;
   position: relative;
@@ -388,6 +389,8 @@ section { margin-bottom: 88px; }
 .theme-card.amber .theme-card__chrome::before { content: '> _'; color: #FFD700; font-weight: 600; }
 .theme-card.obsidian .theme-card__chrome { background: #050308; color: #D4B896; }
 .theme-card.obsidian .theme-card__chrome::before { content: '> _'; color: #FFD700; text-shadow: 0 0 8px #00E5FF; font-weight: 600; }
+.theme-card.herdr .theme-card__chrome { background: #040704; color: #39FF14; }
+.theme-card.herdr .theme-card__chrome::before { content: '> _'; color: #39FF14; font-weight: 600; }
 .theme-card__body { padding: 24px 24px 28px; }
 .theme-card__num {
   font-family: var(--font-mono);
@@ -981,7 +984,7 @@ section { margin-bottom: 88px; }
       <article class="solution">
         <h3>Solution</h3>
         <p><strong>Persona layer.</strong> Zeus, in the Temple of SumoDeus. Lives in <span class="mono">APPEND_SYSTEM.md</span>, applies to every session, identical across machines.</p>
-        <p><strong>UI surface.</strong> Custom footer with state-dot. Right sidebar (or bottom on portrait monitors). Theme-aware working indicator. Three themes for three moods.</p>
+        <p><strong>UI surface.</strong> Custom footer with state-dot. Right sidebar (or bottom on portrait monitors). Theme-aware working indicator. Four themes for four moods.</p>
         <p><strong>Persistent memory.</strong> Local Remnic daemon auto-extracts durable facts. Plain markdown. Append-only. Synced via private repo.</p>
         <p><strong>One-command bootstrap.</strong> <span class="mono">git clone &amp;&amp; ./bootstrap.sh</span> on a fresh machine; SumoCode lands identical.</p>
       </article>
@@ -1030,10 +1033,10 @@ section { margin-bottom: 88px; }
     <div class="section__head">
       <div>
         <div class="section__num">Section 03</div>
-        <h2 class="section__title">Three themes · <em>three moods</em></h2>
+        <h2 class="section__title">Four themes · <em>four moods</em></h2>
       </div>
     </div>
-    <p class="section__lead">All three share an identical token shape — only values differ. Layout and components are theme-agnostic. Cycle instantly with <span class="mono fg-accent">Ctrl+Shift+T</span>; deliberate compare via <span class="mono fg-accent">/sumo:theme</span>.</p>
+    <p class="section__lead">All four share an identical token shape — only values differ. Layout and components are theme-agnostic. Cycle instantly with <span class="mono fg-accent">Ctrl+Shift+T</span>; deliberate compare via <span class="mono fg-accent">/sumo:theme</span>.</p>
 
     <div class="themes">
       <div class="theme-card cathedral">
@@ -1108,6 +1111,31 @@ section { margin-bottom: 88px; }
             <li><span>Effects</span><span>glow · aberration</span></li>
           </ul>
           <div class="theme-card__status staged">○ v0.4</div>
+        </div>
+      </div>
+
+      <div class="theme-card herdr">
+        <div class="theme-card__chrome">work · 20260717</div>
+        <div class="theme-card__body">
+          <div class="theme-card__num">04 · Operational</div>
+          <h3 class="theme-card__name">Herdr <em>Terminal</em></h3>
+          <div class="theme-card__tag">Agent-control terminal</div>
+          <p class="theme-card__mood">Green-black chassis. Electric-green phosphor focus and body, amber execution, red approval. Sharp ASCII chrome and a packet-pulse indicator — matches the Herdr/Ghostty operator setup.</p>
+          <div class="swatches">
+            <div class="sw" style="background:#040704" data-label="bg"></div>
+            <div class="sw" style="background:#0F3D17" data-label="surf"></div>
+            <div class="sw" style="background:#39FF14" data-label="text"></div>
+            <div class="sw" style="background:#FFB000" data-label="tool"></div>
+            <div class="sw" style="background:#FF706D" data-label="appr"></div>
+          </div>
+          <ul class="theme-card__list">
+            <li><span>Background</span><span>#040704</span></li>
+            <li><span>Foreground</span><span>#39FF14</span></li>
+            <li><span>Hero accent</span><span>#39FF14</span></li>
+            <li><span>Memory glyph</span><span>&gt;</span></li>
+            <li><span>Effects</span><span>none · terminal restraint</span></li>
+          </ul>
+          <div class="theme-card__status staged">○ post-v0.3</div>
         </div>
       </div>
     </div>

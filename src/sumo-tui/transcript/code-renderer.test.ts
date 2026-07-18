@@ -104,9 +104,11 @@ describe("Cathedral code block renderer", () => {
 		const rows = renderCathedralCodeBlock("ts", "// note\nconst total = compute(42, \"ok\");", 96);
 		const raw = rows.join("\n");
 
-		expect(raw).toContain(`${rgbAnsi("#56347A", 38)}╭─`);
-		expect(raw).toContain(`${rgbAnsi("#9B7BBE", 38)}ts`);
-		expect(raw).toContain(rgbAnsi("#100A1D", 48));
+		expect(raw).toContain(`${rgbAnsi("#56347A", 38)}${rgbAnsi("#100A1D", 48)}╭─`);
+		expect(raw).toContain(`${rgbAnsi("#9B7BBE", 38)}${rgbAnsi("#100A1D", 48)}ts`);
+		expect(rows[0]).toContain(rgbAnsi("#100A1D", 48));
+		expect(rows.at(-1)).toContain(rgbAnsi("#100A1D", 48));
+		expect(rows[1]).toContain(`${rgbAnsi("#56347A", 38)}${rgbAnsi("#100A1D", 48)}│`);
 		expect(raw).toContain(codeStyledText("#9B7BBE", "  1 "));
 		expect(raw).toContain(codeStyledText("#9B7BBE", "// note"));
 		expect(raw).toContain(codeStyledText("#B974FF", "const"));

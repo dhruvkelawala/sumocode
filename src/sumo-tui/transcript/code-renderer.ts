@@ -159,7 +159,7 @@ function codeFrameTop(lang: string, width: number, roles: CodeRoles): string {
 		...labelParts,
 		span("─".repeat(ruleLen), { fg: roles.border }),
 		span("╮", { fg: roles.border }),
-	]), { width });
+	], { fg: roles.foreground, bg: roles.surface }), { width });
 }
 
 function codeFrameBottom(width: number, roles: CodeRoles): string {
@@ -167,7 +167,7 @@ function codeFrameBottom(width: number, roles: CodeRoles): string {
 		span("╰", { fg: roles.border }),
 		span("─".repeat(Math.max(0, width - 2)), { fg: roles.border }),
 		span("╯", { fg: roles.border }),
-	]), { width });
+	], { fg: roles.foreground, bg: roles.surface }), { width });
 }
 
 function codeBodyRow(lineNumber: number, syntaxSpans: SyntaxSpan[], width: number, roles: CodeRoles): string {
@@ -188,7 +188,7 @@ function codeBodyRow(lineNumber: number, syntaxSpans: SyntaxSpan[], width: numbe
 		span("│", { fg: roles.border }),
 		span(inner),
 		span("│", { fg: roles.border }),
-	]), { width });
+	], { fg: roles.foreground, bg: roles.surface }), { width });
 }
 
 function collapsedRow(remaining: number, width: number, roles: CodeRoles): string {
@@ -204,7 +204,7 @@ function collapsedRow(remaining: number, width: number, roles: CodeRoles): strin
 		span("│", { fg: roles.border }),
 		span(inner),
 		span("│", { fg: roles.border }),
-	]), { width });
+	], { fg: roles.foreground, bg: roles.surface }), { width });
 }
 
 // ── Public API ───────────────────────────────────────────────

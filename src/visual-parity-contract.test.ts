@@ -467,6 +467,42 @@ describe("V2 visual parity contract", () => {
 		expect(rows[2]?.text.endsWith("┘")).toBe(true);
 	});
 
+	it("resolves Ultraviolet semantic role classes in styled-cell Bible parsing", () => {
+		const parserUrl = pathToFileURL(join(process.cwd(), "scripts/visual-v2/styled-cell-grid.mjs")).href;
+		const toolPath = join(process.cwd(), "docs/ui/bible/theme-ultraviolet-core-tool-ledger.html");
+		const codePath = join(process.cwd(), "docs/ui/bible/theme-ultraviolet-core-code-block.html");
+		const script = `
+			import { parseBibleStyledGrid } from ${JSON.stringify(parserUrl)};
+			function cells(path) { return parseBibleStyledGrid(path).grid.flat(); }
+			const tool = cells(${JSON.stringify(toolPath)});
+			const code = cells(${JSON.stringify(codePath)});
+			const has = (list, fg, bg, char) => list.some((cell) => cell.fg === fg && cell.bg === bg && (char === undefined || cell.char === char));
+			console.log(JSON.stringify({
+				toolBorder: has(tool, "#6B4A1C", "#17100D", "╭"),
+				toolBody: has(tool, "#FFE1A6", "#17100D", "p"),
+				toolMuted: has(tool, "#C7A96D", "#17100D", "p"),
+				codeBorder: has(code, "#56347A", "#100A1D", "╭"),
+				codeKeyword: has(code, "#B974FF", "#100A1D", "e"),
+				codeString: has(code, "#75E8FF", "#100A1D", '"'),
+				codeNumber: has(code, "#FFC857", "#100A1D", "1"),
+			}));
+		`;
+		const parsed = JSON.parse(execFileSync(process.execPath, ["--input-type=module", "--eval", script], {
+			cwd: process.cwd(),
+			encoding: "utf8",
+		})) as Record<string, boolean>;
+
+		expect(parsed).toEqual({
+			toolBorder: true,
+			toolBody: true,
+			toolMuted: true,
+			codeBorder: true,
+			codeKeyword: true,
+			codeString: true,
+			codeNumber: true,
+		});
+	});
+
 	it("keeps modal overlay Bible scenes on overlay target rows", () => {
 		const parserUrl = pathToFileURL(join(process.cwd(), "scripts/visual-v2/styled-cell-grid.mjs")).href;
 		const htmlPath = join(process.cwd(), "docs/ui/bible/scene-divine-query-overlay.html");

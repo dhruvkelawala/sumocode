@@ -2,7 +2,7 @@ export { AMBER_CRT_INDICATOR_FRAMES, AMBER_CRT_INDICATOR_INTERVAL_MS, AMBER_CRT_
 export { CATHEDRAL_INDICATOR_FRAMES, CATHEDRAL_INDICATOR_INTERVAL_MS, CATHEDRAL_THEME } from "./cathedral.js";
 export { HERDR_THEME } from "./herdr.js";
 export { OBSIDIAN_INDICATOR_FRAMES, OBSIDIAN_INDICATOR_INTERVAL_MS, OBSIDIAN_THEME } from "./obsidian.js";
-export { ULTRAVIOLET_CORE_INDICATOR_FRAMES, ULTRAVIOLET_CORE_INDICATOR_INTERVAL_MS, ULTRAVIOLET_CORE_THEME } from "./ultraviolet-core.js";
+export { ULTRAVIOLET_CORE_THEME } from "./ultraviolet-core.js";
 export {
 	activeThemeApplicationRoles,
 	activeThemeChrome,

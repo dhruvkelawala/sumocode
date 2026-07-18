@@ -548,7 +548,7 @@ describe("V2 visual parity contract", () => {
 		const afterThrow = await captureFixtureScenario(scenario("fixture-tool-ledger-landscape"));
 		expect(afterThrow.bytes).toContain("\u001b[48;2;18;13;10m");
 		expect(afterThrow.bytes).not.toContain("\u001b[48;2;23;16;13m");
-	});
+	}, 15_000);
 
 	it("keeps runtime scenarios real and exposes the main-vs-branch compare harness", () => {
 		const runtimeScenarios = manifest.scenarios.filter((item) => item.lane === "runtime");

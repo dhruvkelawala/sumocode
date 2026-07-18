@@ -497,12 +497,20 @@ manifests, then retirement of the `bg_task` mega-tool and delegation routing amb
 | 068 | [/subagents dashboard, takeover view, /ps](068-fleet-dashboard-and-takeover.md) | P2 | L | 065, 066, 067 | [#306](https://github.com/dhruvkelawala/sumocode/issues/306) | TODO |
 | 069 | [Worktree isolation + completion manifest](069-worktree-isolation-and-manifest.md) | P2 | M | 065, 066 | [#307](https://github.com/dhruvkelawala/sumocode/issues/307) | TODO |
 | 070 | [Migration: retire bg_task + routing guidance](070-orchestration-migration.md) | P3 | M | 065–069 + operator gate | [#308](https://github.com/dhruvkelawala/sumocode/issues/308) | TODO |
-| 071 | [On-demand interactive worktrees (fresh/reopen)](071-on-demand-interactive-worktrees.md) | P2 | S | — (independent) | [#309](https://github.com/dhruvkelawala/sumocode/issues/309) | DONE |
-| 072 | [Terminal-host abstraction: herdr + cmux](072-terminal-host-abstraction-herdr.md) | P2 | M | 071 (same file) | [#311](https://github.com/dhruvkelawala/sumocode/issues/311) | TODO |
-| 073 | [Herdr Terminal Theme](073-herdr-terminal-theme.md) | P1 | M | — | [#312](https://github.com/dhruvkelawala/sumocode/issues/312) | IN PROGRESS — implementation at `6e4a3ce`; approved v7 palette realignment pending |
+| 071 | [On-demand interactive worktrees (fresh/reopen)](071-on-demand-interactive-worktrees.md) | P2 | S | — (independent) | [#309](https://github.com/dhruvkelawala/sumocode/issues/309) | DONE — PRs #310/#314 (`26de5cb`, `237355e`) |
+| 073 | [Herdr Terminal Theme](073-herdr-terminal-theme.md) | P1 | M | — | [#312](https://github.com/dhruvkelawala/sumocode/issues/312) | DONE — PR #315 (`b91f7ad` + `ae93792` approved-palette realignment) |
+| 072 | [Terminal-host abstraction: herdr + cmux](072-terminal-host-abstraction-herdr.md) | P2 | M | 071 (same file) | [#311](https://github.com/dhruvkelawala/sumocode/issues/311) | DONE — PR #313 (`52f33d6`, `fc56f14`): facade + worktree/diff/review/bg-task ports + pane-ref schema v3 |
+| 074 | [Herdr-native integration: approval attention queue + native worktree workspaces](074-herdr-native-integration.md) | P2 | S | 072 | — | TODO |
 
 ### Dependency notes
 
+- **Host pivot 2026-07-18**: the operator's primary terminal host is now herdr (herdr.dev), not
+  cmux — capability evidence in `docs/research/HERDR_CAPABILITIES_2026.md` (CLI/socket protocol,
+  SKILL.md + plugin system, native worktrees, `herdr:blocked` hook, all verified against v0.7.0).
+  071/072/073 landed against this reality; 074 captures the herdr-native follow-ups the research
+  surfaced (approval → attention queue, native worktree workspaces, custom-status mirror).
+  068's dashboard stays scoped to HEADLESS children — herdr's agent panel owns pane-agent fleet
+  visibility natively.
 - 066 needs 065's manager/consumed-set; 067 reuses 066's delivery buffer and flusher.
 - 068 needs 067 only for `/ps`; the `/subagents` half can start after 066 if sequencing demands.
 - 069 is parallel to 067/068 (different files) — coordinate only on `src/subagents/index.ts`.
@@ -523,11 +531,8 @@ manifests, then retirement of the `bg_task` mega-tool and delegation routing amb
 
 ## Theme expansion — Herdr Terminal (073)
 
-**Planned at:** `933f33d`, 2026-07-17.
-
-| Plan | Title | Priority | Effort | Depends on | Issue | Status |
-|------|-------|----------|--------|------------|-------|--------|
-| 073 | [Herdr Terminal theme](073-herdr-terminal-theme.md) | P2 | M | — (independent; coordinate with 072 only on naming/docs) | [#312](https://github.com/dhruvkelawala/sumocode/issues/312) | TODO |
+**Planned at:** `933f33d`, 2026-07-17. **Reconciled 2026-07-18:** duplicate status row removed —
+073's canonical row lives in the Orchestration v2 table above (DONE, PR #315).
 
 ### Scope note
 

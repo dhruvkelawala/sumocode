@@ -385,6 +385,39 @@ describe("RPC host retained runtime frame", () => {
 		expect(Array.from({ length: 24 }, (_, row) => compacting.toPlainRow(row)).join("\n")).toContain("INSCRIBING");
 	});
 
+	it("renders compacting status rows in full retained frames", async () => {
+		const manual = await renderRpcHostFrameForTest({
+			state: state({ messageCount: 1, hasMessages: true, isCompacting: true, compactionReason: "manual" }),
+			transcript: {
+				messages: [{
+					id: "message-1",
+					role: "user",
+					displayName: "YOU",
+					blocks: [{ type: "markdown", text: "state body" }],
+				}],
+			},
+		}, 90, 24);
+		const auto = await renderRpcHostFrameForTest({
+			state: state({ messageCount: 1, hasMessages: true, isCompacting: true, compactionReason: "overflow" }),
+			transcript: {
+				messages: [{
+					id: "message-1",
+					role: "user",
+					displayName: "YOU",
+					blocks: [{ type: "markdown", text: "state body" }],
+				}],
+			},
+		}, 60, 100);
+
+		const manualText = Array.from({ length: 24 }, (_, row) => manual.toPlainRow(row)).join("\n");
+		const autoText = Array.from({ length: 100 }, (_, row) => auto.toPlainRow(row)).join("\n");
+		expect(manualText).toContain("Compacting…");
+		expect(manualText).toContain("INSCRIBING");
+		expect(manualText).not.toContain("Working…");
+		expect(autoText).toContain("Auto-compacting…");
+		expect(autoText).toContain("INSCRIBING");
+	});
+
 	it("renders updated runtime transcripts through terminal frame patches", async () => {
 		const output = new FakeOutput();
 		const terminal = new TerminalSessionOwner({ output });

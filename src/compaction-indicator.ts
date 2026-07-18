@@ -33,40 +33,17 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { Component, TUI } from "@earendil-works/pi-tui";
-import { lineToAnsi, span, textLine, truncateLine, type Span } from "./sumo-tui/render/primitives.js";
-import { getActiveTheme, onThemeChanged } from "./themes/index.js";
+import { onThemeChanged } from "./themes/index.js";
 import { getCompactionReason, setCompactionReason } from "./compaction-state.js";
+import { compactionStatusLabelForReason, renderCompactionStatusRow, type CompactionStatusLabel } from "./compaction-status-row.js";
 import { isRetainedMode } from "./working-indicator.js";
 
 export const COMPACTION_INDICATOR_WIDGET_KEY = "sumocode-compaction-status";
 
 /** Tick interval in ms. */
 const TICK_MS = 100;
-/**
- * Ticks to reach the fill plateau (400 × 100 ms = 40 s → 90 %).
- * Slow enough to feel proportional to real compaction time.
- */
-const PLATEAU_TICKS = 400;
-/** Ratio at which the bar parks while waiting for the LLM to finish. */
-const PLATEAU_RATIO = 0.90;
 /** How long (ms) to hold the 100 % trace after completion before clearing. */
 const COMPLETE_HOLD_MS = 700;
-
-/**
- * Spark glyph frames — restricted to Unicode Geometric Shapes block
- * (U+25A0–U+25FF).  These chars share the same vertical metrics as the
- * box-drawing chars (━ / ─), so the spark sits *on* the line rather than
- * floating above it.  Math-operator glyphs (⊛ ⊚) are intentionally excluded.
- *
- * Sequence: hollow → half-filled → filled → back ("breathing diamond").
- */
-const SPARK_FRAMES = ["◇", "◈", "◉", "◈"] as const;
-
-/**
- * Ticks per spark-frame advance.  5 × 100 ms = 500 ms/frame → full loop ≈ 2 s.
- * Feels calm and proportional to the slow progress curve.
- */
-const GLYPH_TICK_DIVISOR = 5;
 
 /**
  * Neon-trace component.
@@ -81,7 +58,7 @@ export class CompactionStatusComponent implements Component {
 	private themeUnsubscribe: (() => void) | undefined;
 
 	public constructor(
-		private readonly label: string,
+		private readonly label: CompactionStatusLabel,
 		private readonly tui: Pick<TUI, "requestRender">,
 	) {
 		this.interval = setInterval(() => {
@@ -110,47 +87,12 @@ export class CompactionStatusComponent implements Component {
 	}
 
 	public render(width: number): string[] {
-		const theme = getActiveTheme();
-		const accent = theme.tokens.colors.accent;
-		const dim = theme.tokens.colors.foregroundDim;
-
-		// ── bar width ────────────────────────────────────────────────────────
-		const labelStr = ` ${this.label}`;
-		const available = Math.max(0, width - 1 - labelStr.length);
-		const barWidth = Math.max(4, Math.min(30, available));
-
-		// ── fill amount ──────────────────────────────────────────────────────
-		const fillRatio = this.completed
-			? 1.0
-			: Math.min(this.tick / PLATEAU_TICKS, 1) * PLATEAU_RATIO;
-		const filledCells = this.completed
-			? barWidth
-			: Math.max(0, Math.floor(fillRatio * barWidth));
-
-		// ── assemble bar row via typed primitives ───────────────────────────
-		const barParts: (Span | string)[] = [];
-
-		if (this.completed || filledCells >= barWidth) {
-			// All done — solid trace, no spark.
-			barParts.push(span("━".repeat(barWidth), { fg: accent }));
-		} else {
-			// Traced portion.
-			if (filledCells > 0) barParts.push(span("━".repeat(filledCells), { fg: accent }));
-			// Spark glyph at leading edge — breathes slowly through SPARK_FRAMES.
-			// Using geometric-shapes chars only so vertical alignment matches ━/─.
-			const sparkIdx = Math.floor(this.tick / GLYPH_TICK_DIVISOR) % SPARK_FRAMES.length;
-			const glyph = SPARK_FRAMES[sparkIdx] ?? "◈";
-			barParts.push(span(glyph, { fg: accent }));
-			// Untraced track.
-			const trackWidth = barWidth - filledCells - 1;
-			if (trackWidth > 0) barParts.push(span("─".repeat(trackWidth), { fg: dim }));
-		}
-
-		const row = textLine(
-			[" ", ...barParts, span(labelStr, { fg: dim })],
-			{ fg: dim },
-		);
-		return [lineToAnsi(truncateLine(row, width))];
+		return renderCompactionStatusRow({
+			width,
+			label: this.label,
+			tick: this.tick,
+			completed: this.completed,
+		});
 	}
 
 	public dispose(): void {
@@ -185,8 +127,7 @@ export function installCompactionIndicator(pi: ExtensionAPI): void {
 		// `compaction_start` fires before this event and sets the reason.
 		// Fall back to `customInstructions` heuristic for headless / test paths.
 		const reason = getCompactionReason();
-		const isManual = reason === "manual" || (reason === null && event.customInstructions !== undefined);
-		const label = isManual ? "Compacting…" : "Auto-compacting…";
+		const label = compactionStatusLabelForReason(reason, { fallbackManual: event.customInstructions !== undefined });
 		const factory = (tui: TUI): Component & { dispose?(): void } => {
 			currentComponent?.dispose();
 			currentComponent = new CompactionStatusComponent(label, tui);

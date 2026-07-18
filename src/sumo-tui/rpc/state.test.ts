@@ -74,13 +74,66 @@ describe("RpcHostStateStore", () => {
 		const store = new RpcHostStateStore();
 
 		expect(store.handleAgentEvent({ type: "agent_start" })).toMatchObject({ isStreaming: true });
-		expect(store.handleAgentEvent({ type: "compaction_start", reason: "manual" })).toMatchObject({ isCompacting: true });
+		expect(store.handleAgentEvent({ type: "compaction_start", reason: "manual" })).toMatchObject({ isCompacting: true, compactionReason: "manual" });
 		expect(store.handleAgentEvent({ type: "compaction_end", reason: "manual", aborted: false, willRetry: false, result: undefined })).toMatchObject({ isCompacting: false });
+		expect(store.getSnapshot().compactionReason).toBeUndefined();
 		expect(store.handleAgentEvent({ type: "agent_end", messages: [{ role: "user", content: "done" }], willRetry: false })).toMatchObject({
 			isStreaming: false,
 			messageCount: 1,
 			hasMessages: true,
 		});
+	});
+
+	it("carries manual and threshold compaction reasons from compaction_start events", () => {
+		const store = new RpcHostStateStore();
+
+		expect(store.handleAgentEvent({ type: "compaction_start", reason: "manual" })).toMatchObject({
+			isCompacting: true,
+			compactionReason: "manual",
+		});
+		expect(store.handleAgentEvent({ type: "compaction_start", reason: "threshold" })).toMatchObject({
+			isCompacting: true,
+			compactionReason: "threshold",
+		});
+	});
+
+	it("leaves compactionReason undefined for unknown compaction_start reasons", () => {
+		const store = new RpcHostStateStore();
+
+		const state = store.handleAgentEvent({ type: "compaction_start", reason: "unexpected" });
+
+		expect(state.isCompacting).toBe(true);
+		expect(state.compactionReason).toBeUndefined();
+	});
+
+	it("clears stale compactionReason on compaction_end", () => {
+		const store = new RpcHostStateStore();
+
+		store.handleAgentEvent({ type: "compaction_start", reason: "threshold" });
+		const state = store.handleAgentEvent({ type: "compaction_end", reason: "threshold", aborted: false, willRetry: false });
+
+		expect(state.isCompacting).toBe(false);
+		expect(state.compactionReason).toBeUndefined();
+	});
+
+	it("clears stale compactionReason when hydrating a non-compacting get_state snapshot", () => {
+		const store = new RpcHostStateStore();
+
+		store.handleAgentEvent({ type: "compaction_start", reason: "manual" });
+		const state = store.hydrateFromRpcState({
+			thinkingLevel: "medium",
+			isStreaming: false,
+			isCompacting: false,
+			steeringMode: "all",
+			followUpMode: "one-at-a-time",
+			sessionId: "session-1",
+			autoCompactionEnabled: true,
+			messageCount: 0,
+			pendingMessageCount: 0,
+		});
+
+		expect(state.isCompacting).toBe(false);
+		expect(state.compactionReason).toBeUndefined();
 	});
 
 	it("mirrors queue_update steer/follow-up snapshots into queuedMessages", () => {

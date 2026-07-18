@@ -460,6 +460,61 @@ describe("RpcShellAdapter above-editor working indicator (D3 parity)", () => {
 		}
 	});
 
+	it("renders manual compaction status above the editor instead of generic Working text", async () => {
+		const adapter = await RpcShellAdapter.create({
+			terminal: { writeFramePatches: () => undefined },
+			viewport: { columns: 100, rows: 30 },
+			initialState: state({ messageCount: 1, hasMessages: true, isCompacting: true, compactionReason: "manual" }),
+			initialTranscript: { messages: [{ id: "m1", role: "sumo", displayName: "SUMO", blocks: [{ type: "markdown", text: "hi" }] }] },
+		});
+		try {
+			adapter.render();
+			const frame = adapter.getLastFrame();
+			expect(frame).toBeDefined();
+			const text = Array.from({ length: 30 }, (_, row) => frame!.toPlainRow(row)).join("\n");
+			expect(text).toContain("Compacting…");
+			expect(text).toContain("INSCRIBING");
+			expect(text).not.toContain("Working…");
+		} finally {
+			adapter.dispose();
+		}
+	});
+
+	it("renders automatic compaction status for threshold compactions", async () => {
+		const adapter = await RpcShellAdapter.create({
+			terminal: { writeFramePatches: () => undefined },
+			viewport: { columns: 90, rows: 24 },
+			initialState: state({ messageCount: 1, hasMessages: true, isCompacting: true, compactionReason: "threshold" }),
+			initialTranscript: { messages: [{ id: "m1", role: "sumo", displayName: "SUMO", blocks: [{ type: "markdown", text: "hi" }] }] },
+		});
+		try {
+			adapter.render();
+			const frame = adapter.getLastFrame();
+			expect(frame).toBeDefined();
+			const text = Array.from({ length: 24 }, (_, row) => frame!.toPlainRow(row)).join("\n");
+			expect(text).toContain("Auto-compacting…");
+			expect(text).not.toContain("Working…");
+		} finally {
+			adapter.dispose();
+		}
+	});
+
+	it("renders compaction status in portrait even though generic Working is suppressed", async () => {
+		const adapter = await RpcShellAdapter.create({
+			terminal: { writeFramePatches: () => undefined },
+			viewport: { columns: 60, rows: 100 },
+			initialState: state({ messageCount: 1, hasMessages: true, isCompacting: true, compactionReason: "manual" }),
+			initialTranscript: { messages: [{ id: "m1", role: "sumo", displayName: "SUMO", blocks: [{ type: "markdown", text: "hi" }] }] },
+		});
+		try {
+			const row = adapter.renderWorkingIndicator(60).join("");
+			expect(row).toContain("Compacting…");
+			expect(row).not.toContain("Working…");
+		} finally {
+			adapter.dispose();
+		}
+	});
+
 	it("stays suppressed in portrait (60-col) even while busy -- V1 landscape-only affordance", async () => {
 		// Regression check for the width-gate: main's owned-shell extension only
 		// ever mounted the aboveEditor widget when

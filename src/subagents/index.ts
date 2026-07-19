@@ -1,5 +1,5 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { getBuiltInToolsFromActiveTools } from "../native-task-config.js";
+import { BUILT_IN_TOOLS, getBuiltInToolsFromActiveTools } from "../native-task-config.js";
 import { getTerminalHost } from "../terminal-host/index.js";
 import { spawnPaneChild } from "./backend-pane.js";
 import { spawnPiChild } from "./backend-pi.js";
@@ -76,7 +76,10 @@ export function installSubagents(
 			// which is the conservative direction — extension tools like bg_start
 			// are shell-execution escapes a --tools read parent must not grant).
 			const paneBuiltIn = getBuiltInToolsFromActiveTools([...(task.builtInTools ?? [])]);
-			const paneNarrowed = task.builtInTools !== undefined && paneBuiltIn.length < 7;
+			// Derived from the canonical list: a literal count would fail OPEN if
+			// the built-in set ever grows (full-set parents would look narrowed-
+			// by-one and vice versa).
+			const paneNarrowed = task.builtInTools !== undefined && paneBuiltIn.length < BUILT_IN_TOOLS.length;
 			return spawnPaneChild({
 				prompt: task.prompt,
 				name: task.title,

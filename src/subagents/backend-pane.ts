@@ -79,6 +79,8 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 	let pollTimer: ReturnType<typeof setInterval> | undefined;
 	let interrupted = false;
 	let settled = false;
+	let markReady = (): void => undefined;
+	const ready = new Promise<void>((resolve) => { markReady = resolve; });
 
 	const clearWatcher = (): void => {
 		if (!pollTimer) return;
@@ -186,13 +188,13 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 			} catch (error) {
 				settle({ kind: "run-settled", outcome: { kind: "failed", errorText: errorText(error) } });
 			}
-		})();
+		})().finally(markReady);
 	};
 
 	if (options.signal?.aborted) interrupted = true;
 	else options.signal?.addEventListener("abort", interrupt, { once: true });
 
-	return { events, interrupt };
+	return { events, interrupt, ready };
 };
 
 export const spawnPaneChild = createPaneChildSpawner();

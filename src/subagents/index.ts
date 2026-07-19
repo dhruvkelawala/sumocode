@@ -1,5 +1,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { getBuiltInToolsFromActiveTools } from "../native-task-config.js";
+import { getTerminalHost } from "../terminal-host/index.js";
+import { spawnPaneChild } from "./backend-pane.js";
 import { spawnPiChild } from "./backend-pi.js";
 import {
 	createDeferredResultDelivery,
@@ -21,12 +23,8 @@ export function flushDeferredResultDelivery(delivery: DeferredResultDelivery): v
 	deliveryFlushers.get(delivery)?.();
 }
 
-const settledPayload = (snapshot: SubagentSnapshot): DeliveryPayload => ({
-	id: snapshot.id,
-	customType: "subagent-result",
-	title: snapshot.title,
-	status: snapshot.status,
-	content: buildSubagentResultMessage({
+const settledPayload = (snapshot: SubagentSnapshot): DeliveryPayload => {
+	const result = buildSubagentResultMessage({
 		id: snapshot.id,
 		title: snapshot.title,
 		status: snapshot.status === "done" ? "done" : "error",
@@ -34,23 +32,62 @@ const settledPayload = (snapshot: SubagentSnapshot): DeliveryPayload => ({
 		output: snapshot.finalText,
 		sessionFilePath: snapshot.sessionFilePath,
 		manifest: snapshot.manifest,
-	}),
-	details: { id: snapshot.id, title: snapshot.title, status: snapshot.status, manifest: snapshot.manifest },
-});
+	});
+	const paneLine = snapshot.pane
+		? `Pane: ${snapshot.pane.paneId ?? snapshot.pane.tabId ?? snapshot.pane.workspaceId ?? "unknown"} · agent ${snapshot.pane.agentName}`
+		: undefined;
+	return {
+		id: snapshot.id,
+		customType: "subagent-result",
+		title: snapshot.title,
+		status: snapshot.status,
+		content: paneLine ? `${result}\n\n${paneLine}` : result,
+		details: {
+			id: snapshot.id,
+			title: snapshot.title,
+			status: snapshot.status,
+			manifest: snapshot.manifest,
+			...(snapshot.pane ? { pane: snapshot.pane } : {}),
+		},
+	};
+};
 
 export function installSubagents(
 	pi: ExtensionAPI,
 	sharedDelivery?: DeferredResultDelivery,
 ): SubagentManager {
-	const manager = new SubagentManager((task) => spawnPiChild({
-		prompt: task.prompt,
-		cwd: task.cwd,
-		model: task.model,
-		thinking: task.thinking,
-		inherited: task.inherited ?? {},
-		builtInTools: getBuiltInToolsFromActiveTools([...(task.builtInTools ?? [])]),
-		signal: task.signal,
-	}));
+	const host = getTerminalHost();
+	const manager = new SubagentManager((task) => {
+		if (task.visible) {
+			if (!task.placement) {
+				return {
+					events: (emit) => emit({ kind: "run-settled", outcome: { kind: "failed", errorText: "visible subagent placement was not resolved" } }),
+					interrupt: () => undefined,
+				};
+			}
+			return spawnPaneChild({
+				prompt: task.prompt,
+				name: task.title,
+				cwd: task.cwd,
+				id: task.id,
+				model: task.model,
+				thinking: task.thinking,
+				signal: task.signal,
+				host,
+				pi,
+				placement: task.placement,
+			});
+		}
+		return spawnPiChild({
+			prompt: task.prompt,
+			cwd: task.cwd,
+			model: task.model,
+			thinking: task.thinking,
+			inherited: task.inherited ?? {},
+			builtInTools: getBuiltInToolsFromActiveTools([...(task.builtInTools ?? [])]),
+			signal: task.signal,
+		});
+	}, { terminalHost: host, pi });
 	const ownsDelivery = sharedDelivery === undefined;
 	const delivery = sharedDelivery ?? createDeferredResultDelivery();
 	const observedSettledIds = new Set<string>();

@@ -2,8 +2,10 @@ import { execFile } from "node:child_process";
 import { isAbsolute, join, relative } from "node:path";
 import { promisify } from "node:util";
 import { createWorktree, resolveCreateOptions, type CreateWorktreeOptions, type CreateWorktreeResult } from "../git/worktree.js";
+import type { AgentPanePlacement, PiExecLike, TerminalHost } from "../terminal-host/types.js";
 import type { SpawnedChild } from "./backend-pi.js";
 import type { LiveToolState, RunOutcome, SubagentEvent, SubagentSnapshot, SubagentWorktreeRef } from "./domain.js";
+import { planPlacement } from "./layout.js";
 import { buildCompletionManifest, type CompletionManifestEvidence } from "./manifest.js";
 
 const execFileAsync = promisify(execFile);
@@ -43,7 +45,7 @@ export interface SpawnSubagentTask {
 	readonly builtInTools?: readonly string[];
 }
 
-type BackendFactory = (task: SpawnSubagentTask & { id: string; signal: AbortSignal }) => SpawnedChild;
+type BackendFactory = (task: SpawnSubagentTask & { id: string; signal: AbortSignal; placement?: AgentPanePlacement }) => SpawnedChild;
 type Listener = () => void;
 type WorktreeCreator = (options: CreateWorktreeOptions) => Promise<CreateWorktreeResult>;
 
@@ -56,6 +58,8 @@ export interface SubagentManagerDependencies {
 	readonly createWorktree?: WorktreeCreator;
 	readonly captureGitContext?: (cwd: string) => Promise<SpawnGitContext>;
 	readonly buildCompletionManifest?: typeof buildCompletionManifest;
+	readonly terminalHost?: TerminalHost;
+	readonly pi?: PiExecLike;
 }
 
 async function gitRead(cwd: string, args: readonly string[]): Promise<string | undefined> {
@@ -96,7 +100,7 @@ const makeInitialSnapshot = (
 	cwd,
 	baseRef,
 	worktree,
-	visible: task.visible,
+	...(task.visible ? { visible: true } : {}),
 	status: "running",
 	createdAt,
 	modelLabel: task.model,
@@ -124,6 +128,9 @@ export class SubagentManager {
 	private readonly createWorktreeImpl: WorktreeCreator;
 	private readonly captureGitContextImpl: (cwd: string) => Promise<SpawnGitContext>;
 	private readonly buildCompletionManifestImpl: typeof buildCompletionManifest;
+	private readonly terminalHost?: TerminalHost;
+	private readonly pi?: PiExecLike;
+	private subagentsTabId?: string;
 	private readonly settlingIds = new Set<string>();
 	private readonly settlingPromises = new Map<string, Promise<void>>();
 	private readonly settlingOutcomes = new Map<string, RunOutcome>();
@@ -134,6 +141,8 @@ export class SubagentManager {
 		this.createWorktreeImpl = dependencies.createWorktree ?? createWorktree;
 		this.captureGitContextImpl = dependencies.captureGitContext ?? captureGitContext;
 		this.buildCompletionManifestImpl = dependencies.buildCompletionManifest ?? buildCompletionManifest;
+		this.terminalHost = dependencies.terminalHost;
+		this.pi = dependencies.pi;
 	}
 
 	public async spawn(task: SpawnSubagentTask): Promise<SubagentSnapshot | AtCapacityDetails> {
@@ -212,10 +221,44 @@ export class SubagentManager {
 				};
 			}
 
+			let placement: AgentPanePlacement | undefined;
+			if (task.visible) {
+				const host = this.terminalHost;
+				if (!host || !this.pi || host.kind === "none") {
+					releasePending();
+					return this.recordSpawnFailure(task, id, createdAt, baseRef, "visible subagents require a running terminal host", childCwd, worktree);
+				}
+				const planned = planPlacement({
+					hostKind: host.kind,
+					isolated: worktree !== undefined,
+					visiblePanes: this.list().flatMap((snapshot) => snapshot.visible && snapshot.status === "running" && snapshot.pane ? [snapshot.pane] : []),
+					sessionTabId: this.subagentsTabId,
+				});
+				if (planned.kind === "workspace") {
+					const openWorkspace = host.openExistingWorktreeWorkspace;
+					let opened: Awaited<ReturnType<NonNullable<typeof openWorkspace>>>;
+					try {
+						opened = openWorkspace
+							? await openWorkspace(this.pi, { path: worktree?.path ?? childCwd, label: worktree?.branch.replace(/^sumo\//, "") ?? task.title })
+							: { ok: false, error: `${host.kind} cannot open an existing worktree workspace` };
+					} catch (error) {
+						opened = { ok: false, error: error instanceof Error ? error.message : String(error) };
+					}
+					const workspaceId = opened.ok ? opened.pane.workspaceId : undefined;
+					if (!opened.ok || !workspaceId) {
+						releasePending();
+						const reason = opened.ok ? "terminal host returned no workspace id" : opened.error;
+						return this.recordSpawnFailure(task, id, createdAt, baseRef, `unable to open worktree workspace: ${reason}. Worktree created at ${worktree?.path ?? childCwd} is preserved.`, childCwd, worktree);
+					}
+					placement = { kind: "workspace", workspaceId };
+				} else if (planned.kind === "tab") placement = planned;
+				else placement = { kind: "new-tab", label: planned.kind === "new-tab" ? planned.label : "subagents" };
+			}
+
 			const controller = new AbortController();
 			let child: SpawnedChild;
 			try {
-				child = this.backendFactory({ ...task, cwd: childCwd, id, signal: controller.signal });
+				child = this.backendFactory({ ...task, cwd: childCwd, id, signal: controller.signal, placement });
 			} catch (error) {
 				releasePending();
 				const message = error instanceof Error ? error.message : String(error);
@@ -227,6 +270,7 @@ export class SubagentManager {
 			this.children.set(id, { child, controller });
 			releasePending();
 			this.consumeEvents(id, child.events);
+			if (child.ready) await child.ready;
 			this.notify();
 			this.prune();
 			// A backend can settle synchronously (e.g. invalid model override emits
@@ -381,6 +425,12 @@ export class SubagentManager {
 		}
 		const current = this.snapshots.get(id);
 		if (!current) return;
+		if (event.kind === "pane-attached") {
+			this.snapshots.set(id, { ...current, pane: event.pane });
+			if (!current.worktree && event.pane.tabId) this.subagentsTabId = event.pane.tabId;
+			this.notify();
+			return;
+		}
 		if (event.kind === "run-started") this.startedIds.add(id);
 		// Terminal state is sticky. After a cancel timeout we fold a synthetic
 		// interrupted settle while the OS process is still dying (SIGTERM sent,

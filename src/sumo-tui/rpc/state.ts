@@ -25,13 +25,10 @@ export interface RpcHostChromeState {
 	readonly lastEventType?: string;
 	readonly taskPartialCount: number;
 	/**
-	 * Messages queued while the agent is streaming (steer + follow-up), as
-	 * reported by Pi's `queue_update` session event. Pi is the source of
-	 * truth: it emits the full arrays on every enqueue AND on every dequeue
-	 * (a queued message is removed when its user message starts), so the host
-	 * just mirrors the latest snapshot. Rendered as a banner above the editor
-	 * -- without this the RPC host silently swallows queued submits (the
-	 * owned-shell path painted Pi's pending-messages container instead).
+	 * Display composition of SumoCode host-owned queued drafts plus any
+	 * unexpected Pi-owned queue snapshots reported by `queue_update`. The host
+	 * queue is the only undoable source; Pi-owned entries are shown truthfully
+	 * but are not claimed by Alt+Up restore.
 	 */
 	readonly queuedMessages?: readonly string[];
 	readonly contextTokens?: number;
@@ -59,7 +56,13 @@ function compactionReasonFromEvent(event: unknown): CompactionReason | undefined
 	return value === "manual" || value === "threshold" || value === "overflow" ? value : undefined;
 }
 
+function stringEntries(value: unknown): string[] {
+	return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string") : [];
+}
+
 export class RpcHostStateStore {
+	private hostQueuedMessages: readonly string[] = [];
+	private piQueuedMessages: readonly string[] = [];
 	private state: RpcHostChromeState = {
 		isStreaming: false,
 		isCompacting: false,
@@ -72,7 +75,8 @@ export class RpcHostStateStore {
 	};
 
 	public hydrateFromRpcState(rpcState: RpcSessionState, gitBranch = this.state.gitBranch): RpcHostChromeState {
-		this.state = {
+		const pendingMessageCount = Math.max(rpcState.pendingMessageCount, this.piQueuedMessages.length) + this.hostQueuedMessages.length;
+		this.state = this.withComposedQueue({
 			...this.state,
 			sessionId: rpcState.sessionId,
 			sessionName: rpcState.sessionName,
@@ -83,12 +87,12 @@ export class RpcHostStateStore {
 			isCompacting: rpcState.isCompacting,
 			compactionReason: rpcState.isCompacting ? this.state.compactionReason : undefined,
 			messageCount: rpcState.messageCount,
-			pendingMessageCount: rpcState.pendingMessageCount,
+			pendingMessageCount,
 			hasMessages: rpcState.messageCount > 0,
 			gitBranch,
 			lastEventType: undefined,
 			taskPartialCount: 0,
-		};
+		});
 		return this.getSnapshot();
 	}
 
@@ -107,14 +111,14 @@ export class RpcHostStateStore {
 			? contextUsage.contextWindow
 			: this.state.contextWindow;
 		const messageCount = typeof record.totalMessages === "number" ? record.totalMessages : this.state.messageCount;
-		this.state = {
+		this.state = this.withComposedQueue({
 			...this.state,
 			messageCount,
 			hasMessages: messageCount > 0,
 			contextTokens,
 			contextWindow,
 			costUsd: typeof record.cost === "number" ? record.cost : this.state.costUsd,
-		};
+		});
 		return this.getSnapshot();
 	}
 
@@ -127,13 +131,13 @@ export class RpcHostStateStore {
 			case "agent_end": {
 				const messages = (event as { messages?: unknown }).messages;
 				const messageCount = Array.isArray(messages) ? messages.length : this.state.messageCount;
-				this.state = {
+				this.state = this.withComposedQueue({
 					...this.state,
 					isStreaming: false,
 					messageCount,
 					hasMessages: messageCount > 0,
 					lastEventType: type,
-				};
+				});
 				break;
 			}
 			case "compaction_start":
@@ -144,16 +148,12 @@ export class RpcHostStateStore {
 				break;
 			case "queue_update": {
 				const { steering, followUp } = event as { steering?: unknown; followUp?: unknown };
-				const queuedMessages = [
-					...(Array.isArray(steering) ? steering : []),
-					...(Array.isArray(followUp) ? followUp : []),
-				].filter((entry): entry is string => typeof entry === "string");
-				this.state = {
+				this.piQueuedMessages = [...stringEntries(steering), ...stringEntries(followUp)];
+				this.state = this.withComposedQueue({
 					...this.state,
-					queuedMessages,
-					pendingMessageCount: queuedMessages.length,
+					pendingMessageCount: this.hostQueuedMessages.length + this.piQueuedMessages.length,
 					lastEventType: type,
-				};
+				});
 				break;
 			}
 			case "session_info_changed":
@@ -170,6 +170,15 @@ export class RpcHostStateStore {
 			default:
 				if (type) this.state = { ...this.state, lastEventType: type };
 		}
+		return this.getSnapshot();
+	}
+
+	public setHostQueuedMessages(messages: readonly string[]): RpcHostChromeState {
+		this.hostQueuedMessages = [...messages];
+		this.state = this.withComposedQueue({
+			...this.state,
+			pendingMessageCount: this.hostQueuedMessages.length + this.piQueuedMessages.length,
+		});
 		return this.getSnapshot();
 	}
 
@@ -215,6 +224,16 @@ export class RpcHostStateStore {
 	}
 
 	public getSnapshot(): RpcHostChromeState {
-		return { ...this.state };
+		return {
+			...this.state,
+			queuedMessages: [...(this.state.queuedMessages ?? [])],
+		};
+	}
+
+	private withComposedQueue(state: RpcHostChromeState): RpcHostChromeState {
+		return {
+			...state,
+			queuedMessages: [...this.hostQueuedMessages, ...this.piQueuedMessages],
+		};
 	}
 }

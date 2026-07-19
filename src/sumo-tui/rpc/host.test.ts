@@ -111,6 +111,20 @@ describe("createRpcHostInterruptHandler wiring", () => {
 		expect(controls.abort).toHaveBeenCalledOnce();
 	});
 
+	it("restores host-owned queued drafts before aborting", () => {
+		const controls = { abort: vi.fn(async () => undefined) };
+		const restoreQueuedDrafts = vi.fn();
+		const handle = createRpcHostInterruptHandler(interruptDeps({
+			stateStore: { getSnapshot: () => ({ isStreaming: true }) as never },
+			controls,
+			restoreQueuedDrafts,
+		}));
+
+		expect(handle(CTRL_C)).toBe(true);
+		expect(restoreQueuedDrafts).toHaveBeenCalledOnce();
+		expect(restoreQueuedDrafts.mock.invocationCallOrder[0]).toBeLessThan(controls.abort.mock.invocationCallOrder[0]!);
+	});
+
 	it("treats the submit-in-flight window as streaming: double Ctrl-C aborts instead of quitting", async () => {
 		const controls = { abort: vi.fn(async () => undefined) };
 		const requestHostExit = vi.fn();

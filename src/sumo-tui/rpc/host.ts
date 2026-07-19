@@ -672,7 +672,7 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		handleRpcMessageFollowUp({ editor, scheduler, notifications });
 	};
 	const handleMessageDequeue = (): void => {
-		const restored = scheduler.restoreAll(editor.getText(), { discardInFlight: true });
+		const restored = scheduler.restoreAll(editor.getText());
 		if (restored.count > 0) {
 			editor.setText(restored.text);
 			return;

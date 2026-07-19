@@ -85,6 +85,37 @@ describe("RpcPromptScheduler", () => {
 		await flush();
 	});
 
+	it("keeps the active dispatch owned when queued drafts are restored manually", async () => {
+		const gate = deferred();
+		const sent: string[] = [];
+		const scheduler = createRpcPromptScheduler({
+			sendPrompt: async (message) => {
+				sent.push(message);
+				await gate.promise;
+			},
+		});
+
+		await expect(scheduler.submit("A")).resolves.toBe("sent");
+		await expect(scheduler.submit("B")).resolves.toBe("queued");
+
+		const restored = scheduler.restoreAll("");
+		expect(restored).toEqual({ count: 1, text: "B" });
+		expect(scheduler.getSnapshot()).toMatchObject({ busy: true, queuedMessages: [] });
+
+		await expect(scheduler.submit("B edited")).resolves.toBe("queued");
+		expect(sent).toEqual(["A"]);
+		expect(scheduler.getSnapshot()).toMatchObject({ busy: true, queuedMessages: ["B edited"] });
+
+		gate.resolve();
+		await flush();
+		expect(sent).toEqual(["A"]);
+
+		scheduler.handleAgentEvent({ type: "agent_settled" });
+		await flush();
+		expect(sent).toEqual(["A", "B edited"]);
+		expect(scheduler.getSnapshot().queuedMessages).toEqual([]);
+	});
+
 	it("drains queued entries when agent_settled arrives before dispatch ack resolves", async () => {
 		const gate = deferred();
 		const sent: string[] = [];

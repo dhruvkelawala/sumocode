@@ -246,7 +246,7 @@ export class SubagentManager {
 					let opened: Awaited<ReturnType<NonNullable<typeof openWorkspace>>>;
 					try {
 						opened = openWorkspace
-							? await openWorkspace(this.pi, { path: worktree?.path ?? childCwd, label: worktree?.branch.replace(/^sumo\//, "") ?? task.title, focus: false })
+							? await openWorkspace(this.pi, { path: worktree?.path ?? childCwd, label: worktree?.branch.replace(/^sumo\//, "") ?? task.title, sourceCwd: gitContext.repoRoot ?? task.cwd, focus: false })
 							: { ok: false, error: `${host.kind} cannot open an existing worktree workspace` };
 					} catch (error) {
 						opened = { ok: false, error: error instanceof Error ? error.message : String(error) };

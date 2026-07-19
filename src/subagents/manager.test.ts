@@ -399,7 +399,7 @@ describe("SubagentManager", () => {
 
 		await manager.spawn({ prompt: "p", title: "api work", cwd: "/repo/packages/api", visible: true, worktree: true });
 
-		expect(openExistingWorktreeWorkspace).toHaveBeenCalledWith(expect.anything(), { path: "/isolated/worktree", label: "api", focus: false });
+		expect(openExistingWorktreeWorkspace).toHaveBeenCalledWith(expect.anything(), { path: "/isolated/worktree", label: "api", sourceCwd: "/repo", focus: false });
 		expect(backendFactory).toHaveBeenCalledWith(expect.objectContaining({ cwd: "/isolated/worktree/packages/api", placement: { kind: "workspace", workspaceId: "w9" } }));
 	});
 

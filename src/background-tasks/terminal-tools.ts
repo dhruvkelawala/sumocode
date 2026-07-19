@@ -107,10 +107,12 @@ export function installTerminalTools(
 					continue;
 				}
 				if (task.status !== "running") {
+					typedTerminalIds.delete(id);
 					lines.push(`Background terminal ${id} was already ${task.status}.`);
 					continue;
 				}
 				const stopped = await manager.stopTask(task);
+				typedTerminalIds.delete(id);
 				lines.push(stopped.ok ? `Killed background terminal ${id}.` : `Failed to kill background terminal ${id}: ${stopped.message}`);
 			}
 			return makeToolResult(lines.join("\n"), { ids: [...params.ids] });

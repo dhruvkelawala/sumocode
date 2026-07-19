@@ -171,6 +171,19 @@ describe("installTerminalTools", () => {
 		expect(result.content[0]?.text).toContain("Unknown background terminal bg-missing.");
 	});
 
+	it("forgets typed-delivery ownership after bg_kill", async () => {
+		const harness = createHarness();
+		await execute(harness.tool("bg_start"), { command: "pnpm dev", title: "dev server" });
+		const started = harness.manager.listTasks()[0]!;
+
+		await execute(harness.tool("bg_kill"), { ids: [started.id] });
+		started.status = "completed";
+		started.exitCode = 0;
+		harness.onTaskFinalized({ ...started, schemaVersion: 3 });
+
+		expect(harness.delivery.defer).not.toHaveBeenCalled();
+	});
+
 	it("lists only shell terminals", async () => {
 		const shell = task({ id: "bg-shell" });
 		const agent = task({ id: "bg-agent", runner: "sumocode", visible: true });

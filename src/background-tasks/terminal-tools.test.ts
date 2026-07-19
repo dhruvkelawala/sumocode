@@ -53,9 +53,14 @@ function createHarness(initialTasks: BackgroundTask[] = []) {
 		size: 0,
 	} satisfies DeferredResultDelivery;
 	const registerTool = vi.fn((definition: RegisteredTool) => tools.set(definition.name, definition));
-	installTerminalTools({ registerTool } as never, manager as unknown as BackgroundTaskManager, delivery);
+	const onTaskFinalized = installTerminalTools(
+		{ registerTool } as never,
+		manager as unknown as BackgroundTaskManager,
+		delivery,
+	);
 	return {
 		delivery,
+		onTaskFinalized,
 		manager,
 		registerTool,
 		tool: (name: string) => tools.get(name)!,
@@ -98,6 +103,39 @@ describe("installTerminalTools", () => {
 		});
 		expect(result.content[0]?.text).toContain("Started background terminal bg-1");
 		expect(result.content[0]?.text).toContain("stdin: unavailable");
+	});
+
+	it("defers one typed completion only for tasks started by bg_start", async () => {
+		const harness = createHarness();
+		await execute(harness.tool("bg_start"), { command: "pnpm dev", title: "dev server" });
+		const started = harness.manager.listTasks()[0]!;
+		started.status = "completed";
+		started.exitCode = 0;
+
+		harness.onTaskFinalized({ ...started, schemaVersion: 3 });
+		harness.onTaskFinalized({ ...started, schemaVersion: 3 });
+		harness.onTaskFinalized({ ...task({ id: "bg-legacy", status: "completed" }), schemaVersion: 3 });
+
+		expect(harness.delivery.defer).toHaveBeenCalledOnce();
+		const build = harness.delivery.defer.mock.calls[0]?.[1];
+		expect(build?.()).toMatchObject({
+			id: "bg-1",
+			customType: "terminal-result",
+			status: "completed",
+			details: expect.objectContaining({ id: "bg-1", exitCode: 0 }),
+		});
+	});
+
+	it("does not poison delivery when a started id is absent from the manager", async () => {
+		const harness = createHarness();
+		await execute(harness.tool("bg_start"), { command: "pnpm dev", title: "dev server" });
+		const started = harness.manager.listTasks()[0]!;
+		harness.manager.findTask.mockReturnValueOnce(undefined);
+
+		harness.onTaskFinalized({ ...started, status: "completed", exitCode: 0, schemaVersion: 3 });
+
+		expect(harness.delivery.defer).not.toHaveBeenCalled();
+		expect(harness.delivery.consume).not.toHaveBeenCalled();
 	});
 
 	it("peeks at status and output without consuming delivery", async () => {

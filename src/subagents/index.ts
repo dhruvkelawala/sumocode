@@ -1,7 +1,11 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { getBuiltInToolsFromActiveTools } from "../native-task-config.js";
 import { spawnPiChild } from "./backend-pi.js";
-import { createDeferredResultDelivery, type DeliveryPayload } from "./delivery.js";
+import {
+	createDeferredResultDelivery,
+	type DeferredResultDelivery,
+	type DeliveryPayload,
+} from "./delivery.js";
 import type { SubagentSnapshot } from "./domain.js";
 import { SubagentManager } from "./manager.js";
 import { buildSubagentResultMessage } from "./prompt.js";
@@ -10,8 +14,16 @@ import { registerSubagentTools } from "./tools.js";
 export { SubagentManager } from "./manager.js";
 export type { AtCapacityDetails, SpawnSubagentTask } from "./manager.js";
 
+const deliveryFlushers = new WeakMap<DeferredResultDelivery, () => void>();
+
+/** Request the shared 066 flusher after an external producer defers a result. */
+export function flushDeferredResultDelivery(delivery: DeferredResultDelivery): void {
+	deliveryFlushers.get(delivery)?.();
+}
+
 const settledPayload = (snapshot: SubagentSnapshot): DeliveryPayload => ({
 	id: snapshot.id,
+	customType: "subagent-result",
 	title: snapshot.title,
 	status: snapshot.status,
 	content: buildSubagentResultMessage({
@@ -26,7 +38,10 @@ const settledPayload = (snapshot: SubagentSnapshot): DeliveryPayload => ({
 	details: { id: snapshot.id, title: snapshot.title, status: snapshot.status, manifest: snapshot.manifest },
 });
 
-export function installSubagents(pi: ExtensionAPI): SubagentManager {
+export function installSubagents(
+	pi: ExtensionAPI,
+	sharedDelivery?: DeferredResultDelivery,
+): SubagentManager {
 	const manager = new SubagentManager((task) => spawnPiChild({
 		prompt: task.prompt,
 		cwd: task.cwd,
@@ -36,7 +51,8 @@ export function installSubagents(pi: ExtensionAPI): SubagentManager {
 		builtInTools: getBuiltInToolsFromActiveTools([...(task.builtInTools ?? [])]),
 		signal: task.signal,
 	}));
-	const delivery = createDeferredResultDelivery();
+	const ownsDelivery = sharedDelivery === undefined;
+	const delivery = sharedDelivery ?? createDeferredResultDelivery();
 	const observedSettledIds = new Set<string>();
 	let latestContext: ExtensionContext | undefined;
 	let unsubscribe: (() => void) | undefined;
@@ -45,7 +61,7 @@ export function installSubagents(pi: ExtensionAPI): SubagentManager {
 		for (const payload of delivery.drain()) {
 			pi.sendMessage(
 				{
-					customType: "subagent-result",
+					customType: payload.customType ?? "subagent-result",
 					content: payload.content,
 					display: true,
 					details: payload.details,
@@ -54,6 +70,10 @@ export function installSubagents(pi: ExtensionAPI): SubagentManager {
 			);
 		}
 	};
+
+	deliveryFlushers.set(delivery, () => {
+		if (latestContext?.isIdle()) flush();
+	});
 
 	const onManagerChange = (): void => {
 		for (const snapshot of manager.list()) {
@@ -98,6 +118,7 @@ export function installSubagents(pi: ExtensionAPI): SubagentManager {
 	pi.on("session_start", (_event, ctx) => {
 		latestContext = ctx;
 		armDelivery();
+		if (ctx.isIdle()) flush();
 	});
 	pi.on("agent_start", (_event, ctx) => { latestContext = ctx; });
 	pi.on("agent_end", (_event, ctx) => {
@@ -113,9 +134,18 @@ export function installSubagents(pi: ExtensionAPI): SubagentManager {
 	// worse than losing in-flight work. Kill on EVERY shutdown until a durable
 	// registry exists; when it does, adopt the same reason gating as bg_task.
 	pi.on("session_shutdown", () => {
+		latestContext = undefined;
 		unsubscribe?.();
 		unsubscribe = undefined;
-		delivery.clear();
+		if (ownsDelivery) {
+			delivery.clear();
+		} else {
+			// A shared buffer may hold durable terminal completions. Drop stale
+			// subagent payloads at the session boundary without erasing terminals.
+			const terminalPayloads = delivery.drain().filter((payload) => payload.customType === "terminal-result");
+			delivery.clear();
+			for (const payload of terminalPayloads) delivery.defer(payload.id, () => payload);
+		}
 		manager.disposeAll();
 	});
 	return manager;

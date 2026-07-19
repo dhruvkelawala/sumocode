@@ -4,6 +4,7 @@ import { Type } from "typebox";
 import {
 	BackgroundTaskCapacityError,
 	BackgroundTaskManager,
+	type BackgroundTaskManagerOptions,
 	DEFAULT_SUMOCODE_AGENT_MODEL,
 	DEFAULT_SUMOCODE_AGENT_THINKING,
 } from "./task-manager.js";
@@ -55,8 +56,11 @@ function formatAtCapacity(error: BackgroundTaskCapacityError): ReturnType<typeof
 	);
 }
 
-export function installBackgroundTasks(pi: ExtensionAPI): BackgroundTaskManager {
-	const manager = new BackgroundTaskManager(pi);
+export function installBackgroundTasks(
+	pi: ExtensionAPI,
+	managerOptions: BackgroundTaskManagerOptions = {},
+): BackgroundTaskManager {
+	const manager = new BackgroundTaskManager(pi, managerOptions);
 
 	// `session_shutdown` fires not only on process exit but also during
 	// /reload, /new, /resume, /fork (Pi tears down and rebinds the extension

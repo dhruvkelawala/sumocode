@@ -1,6 +1,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import type { DeferredResultDelivery } from "../subagents/delivery.js";
+import { flushDeferredResultDelivery } from "../subagents/index.js";
 import type { BackgroundTaskManager } from "./task-manager.js";
 import {
 	BG_KILL_DESCRIPTION,
@@ -9,10 +10,13 @@ import {
 	BG_STATUS_DESCRIPTION,
 	buildStartResult,
 	buildStatusResult,
+	buildTerminalResultMessage,
 	describeTerminal,
 	TERMINAL_TOOL_GUIDELINES,
 } from "./terminal-prompt.js";
-import { toBackgroundTaskSnapshot } from "./task-types.js";
+import { type BackgroundTaskSnapshot, toBackgroundTaskSnapshot } from "./task-types.js";
+
+export type TerminalTaskFinalizedHandler = (task: BackgroundTaskSnapshot) => void;
 
 function makeToolResult(text: string, details?: unknown) {
 	return {
@@ -33,8 +37,10 @@ function knownTerminalIds(manager: BackgroundTaskManager): string {
 export function installTerminalTools(
 	pi: ExtensionAPI,
 	manager: BackgroundTaskManager,
-	_delivery: DeferredResultDelivery,
-): void {
+	delivery: DeferredResultDelivery,
+): TerminalTaskFinalizedHandler {
+	const typedTerminalIds = new Set<string>();
+
 	pi.registerTool({
 		name: "bg_start",
 		label: "Background Terminal Start",
@@ -55,6 +61,7 @@ export function installTerminalTools(
 				visible: false,
 				notifyOnExit: false,
 			});
+			typedTerminalIds.add(task.id);
 			const snapshot = toBackgroundTaskSnapshot(task);
 			return makeToolResult(buildStartResult(snapshot), { task: snapshot });
 		},
@@ -125,4 +132,23 @@ export function installTerminalTools(
 			);
 		},
 	});
+
+	return (snapshot): void => {
+		if (!typedTerminalIds.has(snapshot.id)) return;
+		const task = manager.findTask(snapshot.id);
+		// Never consume or otherwise poison delivery state for an id the manager
+		// no longer knows (for example after a clear or process recovery boundary).
+		if (!task || task.runner !== "shell") return;
+		typedTerminalIds.delete(snapshot.id);
+		const finalized = toBackgroundTaskSnapshot(task);
+		delivery.defer(finalized.id, () => ({
+			id: finalized.id,
+			customType: "terminal-result",
+			title: finalized.title ?? finalized.command,
+			status: finalized.status,
+			content: buildTerminalResultMessage(finalized, manager.getTaskOutput(task, 8 * 1024)),
+			details: finalized,
+		}));
+		flushDeferredResultDelivery(delivery);
+	};
 }

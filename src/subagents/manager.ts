@@ -1,10 +1,16 @@
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { createWorktree, resolveCreateOptions, type CreateWorktreeOptions, type CreateWorktreeResult } from "../git/worktree.js";
 import type { SpawnedChild } from "./backend-pi.js";
-import type { LiveToolState, SubagentEvent, SubagentSnapshot } from "./domain.js";
+import type { LiveToolState, SubagentEvent, SubagentSnapshot, SubagentWorktreeRef } from "./domain.js";
+
+const execFileAsync = promisify(execFile);
 
 const MAX_RUNNING = 4;
 const MAX_TRACKED = 64;
 const ERROR_TEXT_MAX = 4096;
 const CANCEL_WAIT_MS = 5_500;
+const GIT_READ_TIMEOUT_MS = 5_000;
 
 export interface SubagentCapacityTaskSummary {
 	readonly id: string;
@@ -25,6 +31,8 @@ export interface SpawnSubagentTask {
 	readonly prompt: string;
 	readonly title: string;
 	readonly cwd: string;
+	readonly worktree?: boolean;
+	readonly branch?: string;
 	readonly model?: string;
 	readonly thinking?: string;
 	readonly inherited?: { model?: { provider: string; id: string }; thinking?: string };
@@ -33,16 +41,58 @@ export interface SpawnSubagentTask {
 
 type BackendFactory = (task: SpawnSubagentTask & { id: string; signal: AbortSignal }) => SpawnedChild;
 type Listener = () => void;
+type WorktreeCreator = (options: CreateWorktreeOptions) => Promise<CreateWorktreeResult>;
+
+interface SpawnGitContext {
+	readonly repoRoot?: string;
+	readonly baseRef?: string;
+}
+
+export interface SubagentManagerDependencies {
+	readonly createWorktree?: WorktreeCreator;
+	readonly captureGitContext?: (cwd: string) => Promise<SpawnGitContext>;
+}
+
+async function gitRead(cwd: string, args: readonly string[]): Promise<string | undefined> {
+	try {
+		const { stdout } = await execFileAsync("git", ["-C", cwd, ...args], {
+			encoding: "utf8",
+			timeout: GIT_READ_TIMEOUT_MS,
+			maxBuffer: 10 * 1024 * 1024,
+		});
+		return stdout.trim() || undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+async function captureGitContext(cwd: string): Promise<SpawnGitContext> {
+	const [repoRoot, baseRef] = await Promise.all([
+		gitRead(cwd, ["rev-parse", "--show-toplevel"]),
+		gitRead(cwd, ["rev-parse", "HEAD"]),
+	]);
+	return { repoRoot, baseRef };
+}
 
 const isSettled = (snapshot: SubagentSnapshot): boolean => snapshot.status !== "running";
 
-const makeInitialSnapshot = (task: SpawnSubagentTask, id: string, sessionFilePath: string | undefined): SubagentSnapshot => ({
+const makeInitialSnapshot = (
+	task: SpawnSubagentTask,
+	id: string,
+	createdAt: number,
+	baseRef: string,
+	cwd = task.cwd,
+	worktree?: SubagentWorktreeRef,
+	sessionFilePath?: string,
+): SubagentSnapshot => ({
 	id,
 	title: task.title,
 	prompt: task.prompt,
-	cwd: task.cwd,
+	cwd,
+	baseRef,
+	worktree,
 	status: "running",
-	createdAt: Date.now(),
+	createdAt,
 	modelLabel: task.model,
 	sessionFilePath,
 	usage: { turns: 0 },
@@ -60,40 +110,112 @@ const upsertTool = (tools: readonly LiveToolState[], next: LiveToolState): reado
 
 export class SubagentManager {
 	private nextId = 1;
+	private readonly pendingSpawns = new Map<string, { title: string; createdAt: number }>();
 	private readonly snapshots = new Map<string, SubagentSnapshot>();
 	private readonly children = new Map<string, { child: SpawnedChild; controller: AbortController }>();
 	private readonly waitInterest = new Map<string, number>();
 	private readonly listeners = new Set<Listener>();
+	private readonly createWorktreeImpl: WorktreeCreator;
+	private readonly captureGitContextImpl: (cwd: string) => Promise<SpawnGitContext>;
 	public readonly consumedIds = new Set<string>();
 
-	public constructor(private readonly backendFactory: BackendFactory) {}
+	public constructor(private readonly backendFactory: BackendFactory, dependencies: SubagentManagerDependencies = {}) {
+		this.createWorktreeImpl = dependencies.createWorktree ?? createWorktree;
+		this.captureGitContextImpl = dependencies.captureGitContext ?? captureGitContext;
+	}
 
-	public spawn(task: SpawnSubagentTask): SubagentSnapshot | AtCapacityDetails {
+	public async spawn(task: SpawnSubagentTask): Promise<SubagentSnapshot | AtCapacityDetails> {
 		const running = this.list().filter((snapshot) => snapshot.status === "running");
-		if (running.length >= MAX_RUNNING) {
+		const pendingSummaries = [...this.pendingSpawns].map(([id, spawn]) => ({ id, title: spawn.title, status: "running" as const, ageMs: Date.now() - spawn.createdAt }));
+		const runningSummaries = [
+			...running.map((snapshot) => ({ id: snapshot.id, title: snapshot.title, status: snapshot.status, ageMs: Date.now() - snapshot.createdAt })),
+			...pendingSummaries,
+		];
+		if (runningSummaries.length >= MAX_RUNNING) {
 			return {
 				status: "at_capacity",
 				capacity: MAX_RUNNING,
-				runningCount: running.length,
-				running: running.map((snapshot) => ({ id: snapshot.id, title: snapshot.title, status: snapshot.status, ageMs: Date.now() - snapshot.createdAt })),
+				runningCount: runningSummaries.length,
+				running: runningSummaries,
 				retryHint: "wait for a running subagent to settle, then retry subagent_spawn",
 			};
 		}
 
 		const id = `sa-${this.nextId++}`;
-		const controller = new AbortController();
-		const child = this.backendFactory({ ...task, id, signal: controller.signal });
-		const snapshot = makeInitialSnapshot(task, id, child.sessionFilePath);
-		this.snapshots.set(id, snapshot);
-		this.children.set(id, { child, controller });
-		this.consumeEvents(id, child.events);
-		this.notify();
-		this.prune();
-		// A backend can settle synchronously (e.g. invalid model override emits
-		// run-settled without spawning); consumeEvents has already folded that
-		// into the map, so return the post-fold snapshot rather than the stale
-		// "running" one — callers must not report "Started" for a dead child.
-		return this.snapshots.get(id) ?? snapshot;
+		const createdAt = Date.now();
+		this.pendingSpawns.set(id, { title: task.title, createdAt });
+		let pending = true;
+		const releasePending = () => {
+			if (!pending) return;
+			pending = false;
+			this.pendingSpawns.delete(id);
+		};
+		try {
+			const gitContext = await this.captureGitContextImpl(task.cwd);
+			const baseRef = gitContext.baseRef ?? "HEAD";
+			if (task.branch && !task.worktree) {
+				releasePending();
+				return this.recordSpawnFailure(task, id, createdAt, baseRef, "branch requires worktree: true; refusing to ignore the isolation request");
+			}
+			let childCwd = task.cwd;
+			let worktree: SubagentWorktreeRef | undefined;
+
+			if (task.worktree) {
+				if (!gitContext.repoRoot || !gitContext.baseRef) {
+					releasePending();
+					return this.recordSpawnFailure(task, id, createdAt, baseRef, "unable to create worktree: the spawn cwd is not a readable git checkout");
+				}
+				const resolved = resolveCreateOptions({
+					repoRoot: gitContext.repoRoot,
+					branch: task.branch,
+					baseRef: gitContext.baseRef,
+					task: task.title,
+				});
+				const created = await this.createWorktreeImpl({
+					repoRoot: gitContext.repoRoot,
+					branch: resolved.branch,
+					baseRef: resolved.baseRef,
+					path: resolved.path,
+					task: task.title,
+				});
+				if (!created.ok) {
+					releasePending();
+					return this.recordSpawnFailure(task, id, createdAt, baseRef, `unable to create worktree: ${created.message}`);
+				}
+				childCwd = created.path;
+				worktree = {
+					path: created.path,
+					branch: created.branch,
+					baseRef: gitContext.baseRef,
+					repoRoot: gitContext.repoRoot,
+				};
+			}
+
+			const controller = new AbortController();
+			let child: SpawnedChild;
+			try {
+				child = this.backendFactory({ ...task, cwd: childCwd, id, signal: controller.signal });
+			} catch (error) {
+				releasePending();
+				const message = error instanceof Error ? error.message : String(error);
+				const preservationNote = worktree ? ` Worktree created at ${worktree.path} is preserved.` : "";
+				return this.recordSpawnFailure(task, id, createdAt, baseRef, `unable to spawn child: ${message}.${preservationNote}`, childCwd, worktree);
+			}
+			const snapshot = makeInitialSnapshot(task, id, createdAt, baseRef, childCwd, worktree, child.sessionFilePath);
+			this.snapshots.set(id, snapshot);
+			this.children.set(id, { child, controller });
+			releasePending();
+			this.consumeEvents(id, child.events);
+			this.notify();
+			this.prune();
+			// A backend can settle synchronously (e.g. invalid model override emits
+			// run-settled without spawning); consumeEvents has already folded that
+			// into the map, so return the post-fold snapshot rather than the stale
+			// "running" one — callers must not report "Started" for a dead child.
+			return this.snapshots.get(id) ?? snapshot;
+		} finally {
+			releasePending();
+		}
 	}
 
 	public get(id: string): SubagentSnapshot | undefined {
@@ -191,6 +313,27 @@ export class SubagentManager {
 			const snapshot = this.snapshots.get(id);
 			if (snapshot?.status === "running") entry.child.interrupt();
 		}
+	}
+
+	private recordSpawnFailure(
+		task: SpawnSubagentTask,
+		id: string,
+		createdAt: number,
+		baseRef: string,
+		errorText: string,
+		cwd = task.cwd,
+		worktree?: SubagentWorktreeRef,
+	): SubagentSnapshot {
+		const snapshot: SubagentSnapshot = {
+			...makeInitialSnapshot(task, id, createdAt, baseRef, cwd, worktree),
+			status: "error",
+			settledAt: Date.now(),
+			errorText: errorText.slice(0, ERROR_TEXT_MAX),
+		};
+		this.snapshots.set(id, snapshot);
+		this.notify();
+		this.prune();
+		return snapshot;
 	}
 
 	private consumeEvents(id: string, events: SpawnedChild["events"]): void {

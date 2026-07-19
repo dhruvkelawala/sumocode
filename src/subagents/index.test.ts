@@ -68,11 +68,11 @@ beforeEach(() => {
 });
 
 describe("subagent result delivery", () => {
-	it("defers while the parent is busy and flushes exactly once on agent_end", () => {
+	it("defers while the parent is busy and flushes exactly once on agent_end", async () => {
 		const harness = createHarness();
 		harness.setIdle(false);
 		harness.fire("agent_start");
-		spawn(harness.manager, "research");
+		await spawn(harness.manager, "research");
 
 		backend.emitters[0]?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "findings" } });
 		expect(harness.sendMessage).not.toHaveBeenCalled();
@@ -95,10 +95,10 @@ describe("subagent result delivery", () => {
 		expect(harness.sendMessage).toHaveBeenCalledOnce();
 	});
 
-	it("flushes immediately when a reliable context reports the parent idle", () => {
+	it("flushes immediately when a reliable context reports the parent idle", async () => {
 		const harness = createHarness();
 		harness.fire("session_start");
-		spawn(harness.manager);
+		await spawn(harness.manager);
 
 		backend.emitters[0]?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
 
@@ -109,7 +109,7 @@ describe("subagent result delivery", () => {
 		const harness = createHarness();
 		harness.setIdle(false);
 		harness.fire("agent_start");
-		spawn(harness.manager);
+		await spawn(harness.manager);
 		backend.emitters[0]?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "inline result" } });
 
 		await harness.tool("subagent_wait").execute("tc", { ids: ["sa-1"] }, undefined, undefined, harness.ctx as never);
@@ -124,7 +124,7 @@ describe("subagent result delivery", () => {
 		const harness = createHarness();
 		harness.setIdle(false);
 		harness.fire("agent_start");
-		spawn(harness.manager);
+		await spawn(harness.manager);
 
 		await harness.tool("subagent_cancel").execute("tc", { ids: ["sa-1"] });
 		harness.setIdle(true);
@@ -134,11 +134,11 @@ describe("subagent result delivery", () => {
 		expect(harness.sendMessage).not.toHaveBeenCalled();
 	});
 
-	it("delivers failed children with their reason and partial output", () => {
+	it("delivers failed children with their reason and partial output", async () => {
 		const harness = createHarness();
 		harness.setIdle(false);
 		harness.fire("agent_start");
-		spawn(harness.manager, "failing worker");
+		await spawn(harness.manager, "failing worker");
 		backend.emitters[0]?.({
 			kind: "run-settled",
 			outcome: { kind: "failed", errorText: "pi killed by SIGKILL", partialText: "partial progress" },
@@ -157,14 +157,14 @@ describe("subagent result delivery", () => {
 		);
 	});
 
-	it("keeps auto-delivery working across an in-process session switch", () => {
+	it("keeps auto-delivery working across an in-process session switch", async () => {
 		const harness = createHarness();
 		harness.fire("session_start");
 		// In-process switch: shutdown fires but the extension instance survives.
 		harness.fire("session_shutdown");
 		harness.fire("session_start");
 		harness.setIdle(false);
-		spawn(harness.manager, "post-switch");
+		await spawn(harness.manager, "post-switch");
 		backend.emitters.at(-1)?.({ kind: "message-end", role: "assistant", text: "after switch" });
 		backend.emitters.at(-1)?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "after switch" } });
 		harness.fire("agent_end");
@@ -172,10 +172,10 @@ describe("subagent result delivery", () => {
 		expect((harness.sendMessage.mock.calls[0] as unknown[])[0]).toMatchObject({ customType: "subagent-result" });
 	});
 
-	it("does not deliver stale pre-switch settlements into the new session", () => {
+	it("does not deliver stale pre-switch settlements into the new session", async () => {
 		const harness = createHarness();
 		harness.setIdle(false);
-		spawn(harness.manager, "pre-switch");
+		await spawn(harness.manager, "pre-switch");
 		// Child is still running when the session switches; disposeAll interrupts
 		// it and the fold lands AFTER shutdown (real SIGTERM timing).
 		harness.fire("session_shutdown");
@@ -204,7 +204,7 @@ describe("subagent result delivery", () => {
 		// delivery buffer must NOT record sa-1 as consumed.
 		await harness.tool("subagent_cancel").execute("tc", { ids: ["sa-1"] }, undefined, undefined, harness.ctx as never);
 		// Now the real sa-1 spawns, settles, and must still auto-deliver.
-		spawn(harness.manager, "real-sa-1");
+		await spawn(harness.manager, "real-sa-1");
 		backend.emitters.at(-1)?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
 		harness.fire("agent_end");
 		expect(harness.sendMessage).toHaveBeenCalledTimes(1);

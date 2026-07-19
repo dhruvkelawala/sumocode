@@ -9,7 +9,10 @@ const createHarness = () => {
 	const manager = new SubagentManager((task: SpawnSubagentTask & { id: string }) => ({
 		events: (emit) => emitters.set(task.id, emit),
 		interrupt: vi.fn(() => emitters.get(task.id)?.({ kind: "run-settled", outcome: { kind: "interrupted" } })),
-	}));
+	}), {
+		captureGitContext: async () => ({ repoRoot: "/tmp/project", baseRef: "base-ref" }),
+		createWorktree: async (options) => ({ ok: true, path: "/tmp/isolated", branch: options.branch ?? "sumo/task", baseRef: options.baseRef ?? "base-ref" }),
+	});
 	const pi = { registerTool: vi.fn((tool) => registered.push(tool)), on: vi.fn(), getThinkingLevel: vi.fn(() => "medium"), getActiveTools: vi.fn(() => ["read", "bash"]) };
 	registerSubagentTools(pi as never, manager);
 	const tool = (name: string) => registered.find((entry) => entry.name === name)!;
@@ -29,6 +32,17 @@ describe("subagent tools", () => {
 		const { tool, ctx } = createHarness();
 		const result = await tool("subagent_spawn").execute("tc", { prompt: "do it", name: "worker" }, undefined, undefined, ctx as never);
 		expect(textOf(result)).toBe("Started sa-1 (worker). Its result will be delivered to you automatically when it settles, or use subagent_wait to block for it.");
+	});
+
+	it("passes worktree isolation and branch overrides to the manager", async () => {
+		const { tool, ctx, manager } = createHarness();
+		const result = await tool("subagent_spawn").execute("tc", { prompt: "write", name: "worker", worktree: true, branch: "sumo/custom" }, undefined, undefined, ctx as never);
+
+		expect(textOf(result)).toContain("Started sa-1");
+		expect(manager.get("sa-1")).toMatchObject({
+			cwd: "/tmp/isolated",
+			worktree: { path: "/tmp/isolated", branch: "sumo/custom", baseRef: "base-ref", repoRoot: "/tmp/project" },
+		});
 	});
 
 	it("at capacity returns cooperative status details", async () => {

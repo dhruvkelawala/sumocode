@@ -80,12 +80,16 @@ export function registerSubagentTools(
 			model: Type.Optional(Type.String({ description: "Optional model override as provider/modelId." })),
 			thinking: Type.Optional(StringEnum(["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const, { description: "Optional thinking level override." })),
 			working_dir: Type.Optional(Type.String({ description: "Working directory for the child. Defaults to the current project cwd." })),
+			worktree: Type.Optional(Type.Boolean({ description: "Run the child in an isolated git worktree on a new sumo/<slug> branch from HEAD. Its edits never touch your checkout. The worktree is preserved after completion; it is never auto-removed." })),
+			branch: Type.Optional(Type.String({ description: "Optional branch override for an isolated worktree spawn." })),
 		}),
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-			const spawned = manager.spawn({
+			const spawned = await manager.spawn({
 				prompt: params.prompt,
 				title: params.name,
 				cwd: params.working_dir ?? ctx.cwd,
+				worktree: params.worktree,
+				branch: params.branch,
 				model: params.model,
 				thinking: params.thinking,
 				inherited: {

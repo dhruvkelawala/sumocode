@@ -30,11 +30,20 @@ export interface LiveToolState {
 	readonly isError: boolean;
 }
 
+export interface SubagentWorktreeRef {
+	readonly path: string;
+	readonly branch: string;
+	readonly baseRef: string;
+	readonly repoRoot: string;
+}
+
 export interface SubagentSnapshot {
 	readonly id: string;
 	readonly title: string;
 	readonly prompt: string;
 	readonly cwd: string;
+	readonly baseRef: string;
+	readonly worktree?: SubagentWorktreeRef;
 	readonly status: SubagentStatus;
 	readonly createdAt: number;
 	readonly settledAt?: number;

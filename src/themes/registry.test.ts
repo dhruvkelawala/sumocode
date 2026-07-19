@@ -90,7 +90,7 @@ describe("theme registry", () => {
 		expect(activeThemeColors().background).toBe("#06050B");
 		expect(activeThemeColors().accent).toBe("#B974FF");
 		expect(activeThemeColors().states.tool).toBe("#FFC857");
-		expect(activeThemeApplicationRoles().toolLedger.surface).toBe("#17100D");
+		expect(activeThemeApplicationRoles().toolLedger.surface).toBe("#100A1D");
 		expect(activeThemeApplicationRoles().code.function).toBe("#75E8FF");
 	});
 

@@ -13,7 +13,7 @@ function rgbAnsi(hex: string, channel: 38 | 48): string {
 }
 
 function ledgerStyledText(fg: string, text: string): string {
-	return `${rgbAnsi(fg, 38)}${rgbAnsi("#17100D", 48)}${text}`;
+	return `${rgbAnsi(fg, 38)}${rgbAnsi("#100A1D", 48)}${text}`;
 }
 
 describe("tool renderer", () => {
@@ -162,13 +162,13 @@ describe("tool renderer", () => {
 		});
 
 		expect(stripAnsi(line)).toBe("✓ [read]  src/auth/session.ts  · 184 lines  · ctrl+o expand");
-		expect(line).toContain(`${rgbAnsi("#FFC857", 38)}[read]`);
-		expect(line).toContain(`${rgbAnsi("#FFE1A6", 38)}src/auth/session.ts`);
-		expect(line).toContain(`${rgbAnsi("#C7A96D", 38)}  · `);
-		expect(line).not.toContain(rgbAnsi("#17100D", 48));
+		expect(line).toContain(`${rgbAnsi("#B974FF", 38)}[read]`);
+		expect(line).toContain(`${rgbAnsi("#DCC7FF", 38)}src/auth/session.ts`);
+		expect(line).toContain(`${rgbAnsi("#9B7BBE", 38)}  · `);
+		expect(line).not.toContain(rgbAnsi("#100A1D", 48));
 	});
 
-	it("renders expanded Ultraviolet read ledgers with amber surface/body roles", () => {
+	it("renders expanded Ultraviolet read ledgers with violet surface/body roles", () => {
 		setActiveTheme("ultraviolet-core");
 
 		const rows = renderToolLedgerRows({
@@ -179,13 +179,13 @@ describe("tool renderer", () => {
 		}, 90);
 		const raw = rows.join("\n");
 
-		expect(raw).toContain(rgbAnsi("#17100D", 48));
-		expect(raw).toContain(ledgerStyledText("#6B4A1C", "╭─ "));
-		expect(raw).toContain(ledgerStyledText("#FFC857", "[read]"));
-		expect(raw).toContain(ledgerStyledText("#FFE1A6", "src/auth/session.ts"));
-		expect(raw).toContain(ledgerStyledText("#C7A96D", "   1  "));
-		expect(raw).toContain(ledgerStyledText("#FFE1A6", "export async function getUser() {}"));
-		expect(raw).toContain(ledgerStyledText("#C7A96D", "… 2 lines collapsed"));
+		expect(raw).toContain(rgbAnsi("#100A1D", 48));
+		expect(raw).toContain(ledgerStyledText("#56347A", "╭─ "));
+		expect(raw).toContain(ledgerStyledText("#B974FF", "[read]"));
+		expect(raw).toContain(ledgerStyledText("#DCC7FF", "src/auth/session.ts"));
+		expect(raw).toContain(ledgerStyledText("#9B7BBE", "   1  "));
+		expect(raw).toContain(ledgerStyledText("#DCC7FF", "export async function getUser() {}"));
+		expect(raw).toContain(ledgerStyledText("#9B7BBE", "… 2 lines collapsed"));
 		expect(rows.every((row) => visibleWidth(row) <= 90)).toBe(true);
 	});
 
@@ -207,11 +207,11 @@ describe("tool renderer", () => {
 
 		expect(editRows).toContain(ledgerStyledText("#DCC7FF", "+1"));
 		expect(editRows).toContain(ledgerStyledText("#FF668F", "-1"));
-		expect(editRows).toContain(ledgerStyledText("#C7A96D", "  unchanged"));
-		expect(editRows).toContain(ledgerStyledText("#C7A96D", "… 2 lines collapsed"));
-		expect(bashRows).toContain(ledgerStyledText("#FFE1A6", "> pnpm test"));
+		expect(editRows).toContain(ledgerStyledText("#9B7BBE", "  unchanged"));
+		expect(editRows).toContain(ledgerStyledText("#9B7BBE", "… 2 lines collapsed"));
+		expect(bashRows).toContain(ledgerStyledText("#DCC7FF", "> pnpm test"));
 		expect(bashRows).toContain(ledgerStyledText("#DCC7FF", "✓"));
-		expect(bashRows).toContain(ledgerStyledText("#C7A96D", "summary line"));
+		expect(bashRows).toContain(ledgerStyledText("#9B7BBE", "summary line"));
 		expect(bashRows).toContain(ledgerStyledText("#FFC857", "▶"));
 	});
 });

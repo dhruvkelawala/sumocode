@@ -57,12 +57,16 @@ export const ULTRAVIOLET_CORE_THEME: Theme = {
 	},
 	applicationRoles: {
 		toolLedger: {
-			surface: "#17100D",
-			border: "#6B4A1C",
-			label: "#FFC857",
-			target: "#FFE1A6",
-			body: "#FFE1A6",
-			bodyMuted: "#C7A96D",
+			// In-family with the violet palette (mirrors the `code` roles below
+			// and how every other theme colors its tool ledger). The prior
+			// gold/brown values were authored out-of-palette and clashed with
+			// the theme's violet chat frames.
+			surface: "#100A1D",
+			border: "#56347A",
+			label: "#B974FF",
+			target: "#DCC7FF",
+			body: "#DCC7FF",
+			bodyMuted: "#9B7BBE",
 		},
 		code: {
 			surface: "#100A1D",

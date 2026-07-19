@@ -76,7 +76,25 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 	});
 	// Keep output visible in the pane while retaining a real diagnostic tail for
 	// non-zero exits. pipefail preserves the child command's failure status.
-	const shellCommand = `set -o pipefail; ( ${agentCommand} ) 2>&1 | tee -a ${shellEscape(paths.logFile)}`;
+	//
+	// The exit marker is guaranteed by the OUTER wrapper, not just the sumocode
+	// child: a cd failure, a hard crash (no marker written), or the user closing
+	// the pane (SIGHUP to the pane process group) would otherwise leave the
+	// subagent "running" forever while pinning a capacity slot. The traps are
+	// first-writer-wins ([ -f ] guard), so the child's own marker — written with
+	// its real exit code — always takes precedence; signal traps record
+	// conventional 128+N codes, and the EXIT trap records the pipeline status.
+	// A child process that is alive but stuck is deliberately NOT timed out
+	// here: it is legitimately running and subagent_cancel owns that decision.
+	const exitGuard = [
+		`__sumo_exit_file=${shellEscape(paths.exitFile)}`,
+		`__sumo_finish() { [ -f "$__sumo_exit_file" ] || printf '%s' "$1" > "$__sumo_exit_file"; }`,
+		`trap '__sumo_finish "$?"' EXIT`,
+		`trap '__sumo_finish 129' HUP`,
+		`trap '__sumo_finish 143' TERM`,
+		`trap '__sumo_finish 130' INT`,
+	].join("; ");
+	const shellCommand = `${exitGuard}; set -o pipefail; ( ${agentCommand} ) 2>&1 | tee -a ${shellEscape(paths.logFile)}`;
 
 	let emitEvent: ((event: SubagentEvent) => void) | undefined;
 	let pane: PaneRef | undefined;

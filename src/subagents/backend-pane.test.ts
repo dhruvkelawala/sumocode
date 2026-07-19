@@ -81,6 +81,11 @@ describe("pane subagent backend", () => {
 			expect(harness.host.startAgentPane).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
 				shellCommand: expect.stringContaining("2>&1 | tee -a '/tmp/subagents/sa-1-1234/output.log'"),
 			}));
+			// The outer wrapper must guarantee the exit marker on ANY process death
+			// (cd failure, crash, pane close) — first-writer-wins with the child.
+			expect(harness.host.startAgentPane).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+				shellCommand: expect.stringMatching(/trap '__sumo_finish "\$\?"' EXIT.*trap '__sumo_finish 129' HUP/s),
+			}));
 			harness.fs.files.set(harness.paths.responseFile, "final answer\n");
 			harness.fs.files.set(harness.paths.exitFile, "0\n");
 
@@ -190,6 +195,49 @@ describe("pane subagent backend", () => {
 			expect(settledEvents(harness.events)).toEqual([{ kind: "run-settled", outcome: { kind: "failed", errorText: "invalid visible child exit marker: unknown" } }]);
 		} finally {
 			vi.useRealTimers();
+		}
+	});
+
+	it("exit guard writes the marker when the wrapper dies before sumocode does (real bash)", async () => {
+		const { execFile } = await import("node:child_process");
+		const { promisify } = await import("node:util");
+		const { mkdtempSync, existsSync: realExists, readFileSync: realRead, rmSync } = await import("node:fs");
+		const { tmpdir } = await import("node:os");
+		const { join: joinPath } = await import("node:path");
+		const run = promisify(execFile);
+		const dir = mkdtempSync(joinPath(tmpdir(), "sumo-exit-guard-"));
+		try {
+			const host: TerminalHost = {
+				kind: "herdr",
+				startAgentPane: vi.fn(async () => startedPane),
+				closePane: vi.fn(async () => ({ ok: true as const })),
+				notify: vi.fn(async () => {}),
+			} as never;
+			const spawn = createPaneChildSpawner({ baseDir: dir });
+			const controller = new AbortController();
+			const child = spawn({
+				id: "sa-guard",
+				prompt: "irrelevant",
+				// cd into a directory that does not exist: the child never starts,
+				// so only the wrapper's trap can write the exit marker.
+				cwd: joinPath(dir, "missing-checkout"),
+				signal: controller.signal,
+				title: "guard",
+				placement: { kind: "tab", tabId: "w1:t1", direction: "right" },
+				pi: { exec: vi.fn() } as never,
+				host,
+			} as never);
+			if (typeof child.events !== "function") throw new Error("pane backend must use callback events");
+			child.events(() => {});
+			await flushPromises();
+			const started = (host.startAgentPane as ReturnType<typeof vi.fn>).mock.calls[0]?.[1] as { shellCommand: string };
+			await run("bash", ["-c", started.shellCommand]).catch(() => {});
+			const exitFile = [...(started.shellCommand.match(/__sumo_exit_file='([^']+)'/) ?? [])][1]!;
+			expect(realExists(exitFile)).toBe(true);
+			expect(realRead(exitFile, "utf8")).toBe("1");
+			child.interrupt();
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
 		}
 	});
 });

@@ -218,20 +218,32 @@ function buildTopBar() {
 
 function buildScene(kind, title) {
 	const middleRows = ROWS - 11;
-	const chatRows = buildChatRows(kind).map((row) => typeof row === "string" ? row : row).slice(0, middleRows);
+	const chatKind = kind === "runcat-active" ? "active" : kind;
+	const chatRows = buildChatRows(chatKind).map((row) => typeof row === "string" ? row : row).slice(0, middleRows);
 	while (chatRows.length < middleRows) chatRows.push("");
+	if (kind === "runcat-active") chatRows[middleRows - 1] = ` <span class="fg-accent runcat-glyph"></span> <span class="fg-dim">Working…</span>`;
 	const sidebarRows = buildSidebarRows();
 	while (sidebarRows.length < middleRows) sidebarRows.push(`<span class="box-fill" style="background: var(--surface); width: ${SIDEBAR_COLS}ch">${rep(" ", SIDEBAR_COLS)}</span>`);
 	const chatLines = chatRows.map((row) => padRight(row, CHAT_COLS));
 	const sidebarLines = sidebarRows.slice(0, middleRows);
 	const inputRows = buildInputFrameRows();
+	const runCatCss = kind === "runcat-active" ? `
+  @font-face {
+    font-family: 'RunCat';
+    font-style: normal;
+    font-weight: 400;
+    font-display: block;
+    src: url('../../../assets/fonts/runcat.ttf') format('truetype');
+    unicode-range: U+E900-E904;
+  }
+  .term { font-family: 'RunCat', 'JetBrains Mono', ui-monospace, Menlo, monospace; }` : "";
 	return `<!doctype html>
 <html>
 <head>
 <meta charset="utf-8">
 <title>${title}</title>
 <link rel="stylesheet" href="_assets/tokens.css">
-<style>
+<style>${runCatCss}
   :root {
     --background: ${UV.background}; --surface: ${UV.surface}; --surface-recess: ${UV.surfaceRecess}; --surface-lifted: ${UV.surfaceLifted};
     --divider: ${UV.divider}; --foreground: ${UV.foreground}; --foreground-dim: ${UV.foregroundDim}; --accent: ${UV.accent};
@@ -272,6 +284,7 @@ function buildScene(kind, title) {
 
 const outputs = [
 	["theme-ultraviolet-core-active.html", buildScene("active", "Bible · Theme · Ultraviolet Core · Active")],
+	["theme-ultraviolet-core-runcat-active.html", buildScene("runcat-active", "Bible · Theme · Ultraviolet Core · RunCat Active")],
 	["theme-ultraviolet-core-tool-ledger.html", buildScene("tool", "Bible · Theme · Ultraviolet Core · Tool Ledger")],
 	["theme-ultraviolet-core-code-block.html", buildScene("code", "Bible · Theme · Ultraviolet Core · Code Block")],
 ];

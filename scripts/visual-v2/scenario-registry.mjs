@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { approvedRuntimeDir, bibleRenderDir, scenarioManifestPath } from "./paths.mjs";
 import { readJson } from "./fs-utils.mjs";
+import { validateFinalCellAssertions } from "./final-cell-contract.mjs";
 
 const STATUSES = new Set(["review", "approved", "required"]);
 const LANES = new Set(["component", "runtime", "fixture"]);
@@ -58,6 +59,7 @@ function validateManifest(manifest, manifestPath) {
 		validatePatternArray(scenario, "rejectIfFinalScreenMatches");
 		validatePatternArray(scenario, "rejectIfRawOutputMatches");
 		validatePatternArray(scenario, "requireRawOutputMatches");
+		validateFinalCellAssertions(scenario);
 		validateRuntimeInputs(scenario);
 		if (!Array.isArray(scenario.crops) || scenario.crops.length === 0) throw new Error(`Scenario ${scenario.id} needs crop definitions`);
 		for (const crop of scenario.crops) {

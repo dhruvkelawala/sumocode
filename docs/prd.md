@@ -39,7 +39,7 @@ It does not replace Pi. It does not fork Pi. It loads as a regular Pi package an
    - **Amber CRT** — Apple II / IBM 5151 phosphor terminal. Aligns with my Mission Control v3 design language for cross-agent visual consistency.
    - **Obsidian Temple** — sacred-tech mode. Deep obsidian background, bronze body text, gold + cyan + magenta neon glows on focal elements. For deep-focus sessions where I want the agent to feel like a ceremonial space.
    - **Herdr Terminal** — electric-green operator console, matching my Herdr/Ghostty setup. Green-black chassis, phosphor-green `#39FF14` focus/body, amber execution, red approval, sharp ASCII chrome, packet-pulse indicator. (Added post-v0.3; v0.3 shipped the first three.)
-   - **Ultraviolet Core** — violet-black command layer. Violet owns focus/routing, lavender owns body and idle, ice owns secondary syntax/learning, amber owns tool execution, and pink owns approval/failure. Tool ledgers and code blocks use theme-owned application roles instead of generic foregrounds.
+   - **Ultraviolet Core** — violet-black command layer. Violet owns focus/routing, lavender owns body and idle, ice owns secondary syntax/learning, amber owns tool execution, and pink owns approval/failure. Tool ledgers and code blocks use theme-owned application roles instead of generic foregrounds. Optional RunCat frames are available only when the vendored 0BSD font is installed, Ghostty maps `U+E900–U+E904=icomoon`, and `SUMOCODE_RUNCAT_FONT=1` is set before restart; the orbital pulse remains the safe default.
 
    Switch instantly via `Ctrl+Shift+T` (cycles forward) or thoughtfully via `/sumo:theme` (preview overlay). Choice persists in synced config and follows me to any machine.
 
@@ -109,7 +109,9 @@ The end state: I open a terminal on either machine, run `pi`, and SumoCode greet
 
 24. As a developer, when I switch themes, I want the entire UI (footer, sidebar, working indicator, splash, every state dot) to redraw with the new tokens — no restart required.
 
-25. As a developer, I want each theme's preattentive state colors to be distinctly recognizable (greens differ from greens), so I can use them across themes without re-learning the meaning of each color.
+25. As a developer using Ultraviolet Core, I want an explicit `SUMOCODE_RUNCAT_FONT=1` capability to swap the orbital pulse for Fredy Sandoval's five-frame RunCat glyphs, and I want `/sumo:spinner`, `pnpm runcat:install`, `pnpm runcat:check`, and `SUMOCODE_RUNCAT_FONT=0` rollback to make setup and failure obvious.
+
+26. As a developer, I want each theme's preattentive state colors to be distinctly recognizable (greens differ from greens), so I can use them across themes without re-learning the meaning of each color.
 
 ### Voice and copy
 
@@ -169,7 +171,7 @@ The extension is built from twelve modules. Five of them are "deep" — they enc
 
 6. **voice** — pure data: typed copy constants. Single source of truth for UI microcopy. Enforces voice rules (terse, no apologies, no exclamation marks) at the type level.
 7. **sidebar** — custom overlay component. Pulls data from `memory`, `theme`, `layout`. Renders differently based on resolved sidebar position (right vs bottom vs top). TTY-guarded.
-8. **working-indicator** — theme-aware frame array per theme. Simple data + registration via `ctx.ui.setWorkingIndicator`.
+8. **working-indicator** — theme-aware frame array per theme, resolved through a generic capability-gated indicator contract so Ultraviolet can opt into RunCat without leaking PUA parsing or theme-name branches into classic, retained, or RPC render paths.
 9. **commands/{theme,memory,sync,sidebar,persona}** — thin slash command handlers. Each delegates to the appropriate core module. Lives in `src/commands/<name>.ts`.
 10. **keybindings** — registers `Ctrl+Shift+T` (theme cycle) and `Ctrl+Shift+S` (sidebar position cycle). Plus `Alt+T` and `Alt+S` as fallbacks for terminals that grab Ctrl+Shift.
 11. **splash** — already exists in `sumocode-config/pi-agent/extensions/zeus-splash.ts`. Just needs a TTY guard added.

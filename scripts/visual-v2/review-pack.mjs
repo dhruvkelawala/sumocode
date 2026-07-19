@@ -137,6 +137,7 @@ function scenarioHtml(scenario) {
   <div class="scenario-description">${escapeHtml(scenarioDescription(scenario))}</div>
   ${scenario.error ? `<pre>${escapeHtml(scenario.error)}</pre>` : ""}
   ${finalScreenRejectionHtml(scenario.finalScreenRejection)}
+  ${finalCellContractHtml(scenario.finalCellContract)}
   <div class="artifacts">
     ${artifact("Bible target", scenario.artifacts?.targetFull)}
     ${artifact(scenario.lane === "fixture" ? "Fixture capture" : "Runtime", scenario.artifacts?.runtimeFull)}
@@ -148,6 +149,16 @@ function scenarioHtml(scenario) {
 function finalScreenRejectionHtml(rejection) {
 	if (!rejection) return "";
 	return `<pre>Final-screen rejection matched ${escapeHtml(JSON.stringify(rejection.pattern))}\n${escapeHtml(rejection.snippet)}</pre>`;
+}
+
+function finalCellContractHtml(contract) {
+	if (!contract) return "";
+	const cls = contract.passed ? "ok" : "fail";
+	const artifact = contract.artifact ? `<a href="${encodeURI(toOutRelative(contract.artifact))}">final-cell-contract.txt</a>` : "no artifact";
+	const details = contract.mismatches?.length
+		? `\n${contract.mismatches.map((item) => `[${item.index}] row=${item.row} col=${item.col}: ${item.reason} expected=${JSON.stringify(item.expected)} actual=${JSON.stringify(item.actual)}`).join("\n")}`
+		: "";
+	return `<pre class="${cls}">Final-cell contract ${contract.passed ? "passed" : "failed"} · checked ${contract.count} · mismatches ${contract.mismatchCount} · ${artifact}${escapeHtml(details)}</pre>`;
 }
 
 function scenarioDescription(scenario) {

@@ -851,6 +851,176 @@
 					"targetCrop": "footer",
 					"runtimeCrop": "footer"
 				}
+			],
+			"finalCellAssertions": [
+				{
+					"row": 36,
+					"col": 1,
+					"charPattern": "[.:oO@]",
+					"width": 1,
+					"fg": "#B974FF"
+				},
+				{
+					"row": 36,
+					"col": 2,
+					"text": " "
+				},
+				{
+					"row": 36,
+					"col": 3,
+					"text": "Working…"
+				}
+			]
+		},
+		{
+			"id": "ultraviolet-core-runcat-active-runtime",
+			"lane": "runtime",
+			"status": "review",
+			"dimensions": {
+				"cols": 160,
+				"rows": 45
+			},
+			"bibleTarget": "theme-ultraviolet-core-runcat-active.png",
+			"runtime": {
+				"command": "./bin/sumocode.sh",
+				"args": [
+					"--offline",
+					"--no-extensions",
+					"--no-session",
+					"-e",
+					"./scripts/visual-v2/runtime-faux-provider.mjs",
+					"--model",
+					"sumocode-visual/active-working"
+				],
+				"settleMs": 0,
+				"emptyOutputGraceMs": 0,
+				"env": {
+					"PI_OFFLINE": "1",
+					"SUMO_TUI": "0",
+					"TERM": "xterm-256color",
+					"COLORTERM": "truecolor",
+					"FORCE_COLOR": "3",
+					"PI_CODING_AGENT_DIR": "test/fixtures/pi-agent-ultraviolet-core",
+					"SUMOCODE_RUNCAT_FONT": "1"
+				},
+				"inputs": [
+					{
+						"type": "waitForFinalScreenMatches",
+						"include": [
+							"DIVINE INVOCATION"
+						],
+						"timeoutMs": 10000
+					},
+					{
+						"afterMs": 100,
+						"type": "text",
+						"value": "review src/auth/session.ts and tighten the return type"
+					},
+					{
+						"afterMs": 100,
+						"type": "key",
+						"value": "Enter"
+					},
+					{
+						"type": "waitForFinalScreenMatches",
+						"include": [
+							"SUMOCODE",
+							"inspecting src/auth/session\\.ts",
+							"review src/auth/session\\.ts and tighten the return type"
+						],
+						"exclude": [
+							"No API key found",
+							"rpc error: prompt failed",
+							"DIVINE INVOCATION",
+							"unknown · off",
+							"\\^\\[\\[13u"
+						],
+						"timeoutMs": 10000
+					}
+				]
+			},
+			"rejectIfOutputMatches": [
+				"Warning: No models match pattern",
+				"ERR_MODULE_NOT_FOUND",
+				"Rendered line .* exceeds terminal width",
+				"Skipping installed SumoCode extension because this session is already inside an active SumoCode dev checkout",
+				"Error \\["
+			],
+			"rejectIfRawOutputMatches": [
+				"\\x1b\\]11;#1A1511",
+				"\\x1b\\]12;#D97706",
+				"\\x1b\\]12;#BB7DFF"
+			],
+			"requireRawOutputMatches": [
+				"\\x1b\\]11;#06050B",
+				"\\x1b\\]12;#B974FF",
+				"[\\uE900-\\uE904]"
+			],
+			"rejectIfFinalScreenMatches": [
+				"No API key found",
+				"rpc error: prompt failed",
+				"DIVINE INVOCATION",
+				"unknown · off",
+				"\\^\\[\\[13u",
+				"SUMOCODE RPC",
+				"empty transcript",
+				"sumocode \\u00b7 rpc host"
+			],
+			"crops": [
+				{
+					"id": "full",
+					"targetCrop": "full",
+					"runtimeCrop": "full"
+				},
+				{
+					"id": "top-bar",
+					"targetCrop": "top-bar",
+					"runtimeCrop": "top-bar"
+				},
+				{
+					"id": "sidebar",
+					"targetCrop": "sidebar",
+					"runtimeCrop": "sidebar"
+				},
+				{
+					"id": "chat-area",
+					"targetCrop": "chat-area",
+					"runtimeCrop": "chat-area"
+				},
+				{
+					"id": "input-frame",
+					"targetCrop": "input-frame",
+					"runtimeCrop": "input-frame"
+				},
+				{
+					"id": "hint-row",
+					"targetCrop": "hint-row",
+					"runtimeCrop": "hint-row"
+				},
+				{
+					"id": "footer",
+					"targetCrop": "footer",
+					"runtimeCrop": "footer"
+				}
+			],
+			"finalCellAssertions": [
+				{
+					"row": 36,
+					"col": 1,
+					"charPattern": "[\\uE900-\\uE904]",
+					"width": 1,
+					"fg": "#B974FF"
+				},
+				{
+					"row": 36,
+					"col": 2,
+					"text": " "
+				},
+				{
+					"row": 36,
+					"col": 3,
+					"text": "Working…"
+				}
 			]
 		},
 		{

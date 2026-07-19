@@ -14,6 +14,7 @@ import { resetDir, writeFile, writeJson } from "./fs-utils.mjs";
 import { writeReviewPack } from "./review-pack.mjs";
 import { auditGeometry, auditToText } from "./geometry-audit.mjs";
 import { parseBibleStyledGrid, runtimeStyledGrid, cropStyledGrid, diffStyledGrids, styledDiffToText } from "./styled-cell-grid.mjs";
+import { evaluateFinalCellAssertions, finalCellContractToText } from "./final-cell-contract.mjs";
 
 const args = parseArgs(process.argv.slice(2));
 const mode = args.mode ?? "review";
@@ -92,6 +93,10 @@ async function runScenario(scenario) {
 	if (finalScreenRejection) {
 		writeJson(resolve(rawOut, "final-screen-rejection.json"), finalScreenRejection);
 	}
+	const finalCellContract = evaluateFinalCellAssertions(snapshot, scenario.finalCellAssertions ?? []);
+	const finalCellArtifact = resolve(rawOut, "final-cell-contract.txt");
+	writeFile(finalCellArtifact, finalCellContractToText(finalCellContract));
+	writeJson(resolve(rawOut, "final-cell-contract.json"), finalCellContract);
 
 	const geometrySpec = scenario.geometrySpec ?? null;
 	const audit = auditGeometry(snapshot, geometrySpec);
@@ -170,11 +175,18 @@ async function runScenario(scenario) {
 		id: scenario.id,
 		lane: scenario.lane,
 		status: scenario.status,
-		result: scenarioResult(cropResults, finalScreenRejection),
+		result: scenarioResult(cropResults, finalScreenRejection, finalCellContract),
 		dimensions: scenario.dimensions,
 		bibleTarget: scenario.bibleTarget,
 		capture: captureMetadata,
 		finalScreenRejection,
+		finalCellContract: {
+			passed: finalCellContract.passed,
+			count: finalCellContract.count,
+			mismatchCount: finalCellContract.mismatches.length,
+			mismatches: finalCellContract.mismatches,
+			artifact: finalCellArtifact,
+		},
 		render: runtimeRender.metrics,
 		geometryAudit: { passed: audit.passed, summary: audit.summary, mismatchCount: audit.mismatches.length },
 		cellDiff: cellDiff ? { passed: cellDiff.passed, diffRows: cellDiff.rowDiffs?.length ?? 0 } : null,
@@ -201,7 +213,8 @@ function scenarioContractForMetadata(scenario) {
 			inputs: scenario.runtime.inputs ?? [],
 		} : null,
 		fixture: scenario.fixture ?? null,
-		crops: scenario.crops.map((crop) => ({
+		finalCellAssertions: scenario.finalCellAssertions ?? null,
+		crops: scenario.crops.map((crop) => ({},{
 			id: crop.id,
 			status: crop.status,
 			threshold: crop.threshold,
@@ -252,8 +265,9 @@ function cropResult(crop, comparison) {
 	return "passed";
 }
 
-function scenarioResult(crops, finalScreenRejection = null) {
+function scenarioResult(crops, finalScreenRejection = null, finalCellContract = null) {
 	if (finalScreenRejection) return "failed";
+	if (finalCellContract && !finalCellContract.passed) return "failed";
 	if (crops.some((crop) => crop.result === "failed")) return "failed";
 	if (crops.some((crop) => crop.result === "review-diff")) return "review";
 	return "passed";

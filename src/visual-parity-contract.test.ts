@@ -75,6 +75,7 @@ type Scenario = {
 	rejectIfFinalScreenMatches?: string[];
 	rejectIfRawOutputMatches?: string[];
 	requireRawOutputMatches?: string[];
+	finalCellAssertions?: Array<{ row: number; col: number; text?: string; charPattern?: string; width?: number; fg?: string }>;
 	crops: ScenarioCrop[];
 };
 
@@ -422,6 +423,11 @@ describe("V2 visual parity contract", () => {
 			"\\x1b\\]12;#BB7DFF",
 		]);
 		expect(ultraviolet.requireRawOutputMatches).toEqual(["\\x1b\\]11;#06050B", "\\x1b\\]12;#B974FF"]);
+		expect(ultraviolet.finalCellAssertions).toEqual([
+			{ row: 36, col: 1, charPattern: "[.:oO@]", width: 1, fg: "#B974FF" },
+			{ row: 36, col: 2, text: " " },
+			{ row: 36, col: 3, text: "Working…" },
+		]);
 		expect(ultraviolet.rejectIfFinalScreenMatches).toEqual(expect.arrayContaining([
 			"No API key found",
 			"rpc error: prompt failed",
@@ -439,6 +445,25 @@ describe("V2 visual parity contract", () => {
 			"footer",
 		]);
 		expect(requiredCropIds("ultraviolet-core-active-runtime")).toEqual([]);
+	});
+
+	it("keeps the Ultraviolet RunCat runtime scenario isolated to explicit capability env and glyph contract", () => {
+		const fallback = scenario("ultraviolet-core-active-runtime");
+		const runcat = scenario("ultraviolet-core-runcat-active-runtime");
+
+		expect(runcat.status).toBe("review");
+		expect(runcat.dimensions).toEqual(fallback.dimensions);
+		expect(runcat.runtime?.args).toEqual(fallback.runtime?.args);
+		expect(runcat.runtime?.env).toEqual({ ...fallback.runtime?.env, SUMOCODE_RUNCAT_FONT: "1" });
+		expect(runcat.bibleTarget).toBe("theme-ultraviolet-core-runcat-active.png");
+		expect(runcat.finalCellAssertions).toEqual([
+			{ row: 36, col: 1, charPattern: "[\\uE900-\\uE904]", width: 1, fg: "#B974FF" },
+			{ row: 36, col: 2, text: " " },
+			{ row: 36, col: 3, text: "Working…" },
+		]);
+		expect(runcat.requireRawOutputMatches).toEqual([...fallback.requireRawOutputMatches!, "[\\uE900-\\uE904]"]);
+		expect(runcat.crops.map((crop) => crop.id)).toEqual(fallback.crops.map((crop) => crop.id));
+		expect(requiredCropIds("ultraviolet-core-runcat-active-runtime")).toEqual([]);
 	});
 
 	it("places active runtime Bible input rows at terminal coordinates", () => {

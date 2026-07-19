@@ -3,8 +3,8 @@ import { createHash, randomUUID } from "node:crypto";
 import { dirname, join, resolve } from "node:path";
 
 export const RUNCAT_FONT_SHA256 = "3c5be14dc51cd0d21b34cbd40fe147ff61480ce03655eb43571008975b395d94";
-export const RUNCAT_FONT_BYTES = 3532;
-export const RUNCAT_FONT_FILENAME = "runcat.ttf";
+const RUNCAT_FONT_BYTES = 3532;
+const RUNCAT_FONT_FILENAME = "runcat.ttf";
 
 export function resolveVendoredFontPath(repoRoot = process.cwd()) {
 	return resolve(repoRoot, "assets", "fonts", RUNCAT_FONT_FILENAME);

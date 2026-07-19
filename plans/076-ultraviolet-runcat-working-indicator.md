@@ -55,6 +55,7 @@
 - **Depends on**: Plan 075 — Ultraviolet Core Application Theme (DONE; implementation commits include `dc6eedf` and `896715c`)
 - **Category**: polish
 - **Planned at**: `origin/main` commit `e56455e`, 2026-07-19
+- **Execution status**: IN PROGRESS — automated implementation approved on `feat/ultraviolet-runcat-indicator` at `e2edf02`; typecheck/build, 1,755 unit tests, 45 integration tests, 22 visual scenarios, package/font checks, and Claude autoreview pass; two-Mac human canary remains pending
 - **Issue**: [#331](https://github.com/dhruvkelawala/sumocode/issues/331)
 - **Upstream inspiration**: [FredySandoval/pi-runcat](https://github.com/FredySandoval/pi-runcat), pinned at `44a35444464755d8a2ade22ab8a7211cd1069c45`
 - **Source tweet**: https://x.com/devfredy/status/2059960736709808403

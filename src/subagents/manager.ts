@@ -2,7 +2,8 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { createWorktree, resolveCreateOptions, type CreateWorktreeOptions, type CreateWorktreeResult } from "../git/worktree.js";
 import type { SpawnedChild } from "./backend-pi.js";
-import type { LiveToolState, SubagentEvent, SubagentSnapshot, SubagentWorktreeRef } from "./domain.js";
+import type { LiveToolState, RunOutcome, SubagentEvent, SubagentSnapshot, SubagentWorktreeRef } from "./domain.js";
+import { buildCompletionManifest, type CompletionManifestEvidence } from "./manifest.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -11,6 +12,7 @@ const MAX_TRACKED = 64;
 const ERROR_TEXT_MAX = 4096;
 const CANCEL_WAIT_MS = 5_500;
 const GIT_READ_TIMEOUT_MS = 5_000;
+const MANIFEST_TIMEOUT_MS = 5_000;
 
 export interface SubagentCapacityTaskSummary {
 	readonly id: string;
@@ -51,6 +53,7 @@ interface SpawnGitContext {
 export interface SubagentManagerDependencies {
 	readonly createWorktree?: WorktreeCreator;
 	readonly captureGitContext?: (cwd: string) => Promise<SpawnGitContext>;
+	readonly buildCompletionManifest?: typeof buildCompletionManifest;
 }
 
 async function gitRead(cwd: string, args: readonly string[]): Promise<string | undefined> {
@@ -117,15 +120,24 @@ export class SubagentManager {
 	private readonly listeners = new Set<Listener>();
 	private readonly createWorktreeImpl: WorktreeCreator;
 	private readonly captureGitContextImpl: (cwd: string) => Promise<SpawnGitContext>;
+	private readonly buildCompletionManifestImpl: typeof buildCompletionManifest;
+	private readonly settlingIds = new Set<string>();
+	private readonly settlingPromises = new Map<string, Promise<void>>();
+	private readonly settlingOutcomes = new Map<string, RunOutcome>();
+	private readonly startedIds = new Set<string>();
 	public readonly consumedIds = new Set<string>();
 
 	public constructor(private readonly backendFactory: BackendFactory, dependencies: SubagentManagerDependencies = {}) {
 		this.createWorktreeImpl = dependencies.createWorktree ?? createWorktree;
 		this.captureGitContextImpl = dependencies.captureGitContext ?? captureGitContext;
+		this.buildCompletionManifestImpl = dependencies.buildCompletionManifest ?? buildCompletionManifest;
 	}
 
 	public async spawn(task: SpawnSubagentTask): Promise<SubagentSnapshot | AtCapacityDetails> {
-		const running = this.list().filter((snapshot) => snapshot.status === "running");
+		// A run-settled child is removed from `children` before its bounded
+		// manifest read begins, so evidence collection does not occupy a worker
+		// slot for up to five seconds.
+		const running = this.list().filter((snapshot) => snapshot.status === "running" && this.children.has(snapshot.id));
 		const pendingSummaries = [...this.pendingSpawns].map(([id, spawn]) => ({ id, title: spawn.title, status: "running" as const, ageMs: Date.now() - spawn.createdAt }));
 		const runningSummaries = [
 			...running.map((snapshot) => ({ id: snapshot.id, title: snapshot.title, status: snapshot.status, ageMs: Date.now() - snapshot.createdAt })),
@@ -209,9 +221,10 @@ export class SubagentManager {
 			this.notify();
 			this.prune();
 			// A backend can settle synchronously (e.g. invalid model override emits
-			// run-settled without spawning); consumeEvents has already folded that
-			// into the map, so return the post-fold snapshot rather than the stale
-			// "running" one — callers must not report "Started" for a dead child.
+			// run-settled without spawning). Await that in-flight manifest build so
+			// callers do not report "Started" for a dead child.
+			const synchronousSettle = this.settlingPromises.get(id);
+			if (synchronousSettle) await synchronousSettle;
 			return this.snapshots.get(id) ?? snapshot;
 		} finally {
 			releasePending();
@@ -289,6 +302,11 @@ export class SubagentManager {
 				lines.set(id, `${id} is unknown`);
 				continue;
 			}
+			const settlingOutcome = this.settlingOutcomes.get(id);
+			if (settlingOutcome) {
+				lines.set(id, `${id} was already ${settlingOutcome.kind === "completed" ? "done" : "settled"}`);
+				continue;
+			}
 			this.consumedIds.add(id);
 			if (isSettled(snapshot)) {
 				lines.set(id, `${id} was already ${snapshot.status === "done" ? "done" : "settled"}`);
@@ -301,7 +319,7 @@ export class SubagentManager {
 			try {
 				await this.waitForSettle(id, CANCEL_WAIT_MS);
 			} catch {
-				this.fold(id, { kind: "run-settled", outcome: { kind: "interrupted", partialText: this.snapshots.get(id)?.finalText || this.snapshots.get(id)?.liveText } });
+				await this.startSettle(id, { kind: "interrupted", partialText: this.snapshots.get(id)?.finalText || this.snapshots.get(id)?.liveText });
 			}
 			lines.set(id, `Cancelled ${id}`);
 		}));
@@ -348,8 +366,13 @@ export class SubagentManager {
 	}
 
 	private fold(id: string, event: SubagentEvent): void {
+		if (event.kind === "run-settled") {
+			void this.startSettle(id, event.outcome);
+			return;
+		}
 		const current = this.snapshots.get(id);
 		if (!current) return;
+		if (event.kind === "run-started") this.startedIds.add(id);
 		// Terminal state is sticky. After a cancel timeout we fold a synthetic
 		// interrupted settle while the OS process is still dying (SIGTERM sent,
 		// SIGKILL 5s later); its eventual real close would otherwise re-fold a
@@ -378,16 +401,78 @@ export class SubagentManager {
 				costUsd: event.costUsd ?? current.usage.costUsd,
 			},
 		};
-		else if (event.kind === "run-settled") {
-			if (event.outcome.kind === "completed") next = { ...current, status: "done", settledAt: Date.now(), finalText: event.outcome.finalText || current.finalText, liveText: "" };
-			else if (event.outcome.kind === "failed") next = { ...current, status: "error", settledAt: Date.now(), errorText: event.outcome.errorText.slice(0, ERROR_TEXT_MAX), finalText: event.outcome.partialText ?? current.finalText, liveText: "" };
-			else next = { ...current, status: "error", settledAt: Date.now(), errorText: "interrupted", finalText: event.outcome.partialText ?? current.finalText, liveText: "" };
-			this.children.delete(id);
-			if ((this.waitInterest.get(id) ?? 0) > 0) this.consumedIds.add(id);
-		}
 		this.snapshots.set(id, next);
 		this.notify();
 		this.prune();
+	}
+
+	private startSettle(id: string, outcome: RunOutcome): Promise<void> {
+		const existing = this.settlingPromises.get(id);
+		if (existing) return existing;
+		this.settlingOutcomes.set(id, outcome);
+		const promise = this.settle(id, outcome).finally(() => {
+			if (this.settlingPromises.get(id) === promise) {
+				this.settlingPromises.delete(id);
+				this.settlingOutcomes.delete(id);
+			}
+		});
+		this.settlingPromises.set(id, promise);
+		return promise;
+	}
+
+	private async settle(id: string, outcome: RunOutcome): Promise<void> {
+		const current = this.snapshots.get(id);
+		if (!current || isSettled(current) || this.settlingIds.has(id)) return;
+		this.settlingIds.add(id);
+		this.children.delete(id);
+		const settledAt = Date.now();
+		try {
+			// Configuration failures can settle synchronously before the backend
+			// emits run-started. No child ran, so avoid blocking spawn on checkout
+			// git reads and attach only the truthful process facts.
+			const manifest = outcome.kind === "failed" && !this.startedIds.has(id)
+				? { exit: outcome.kind, durationMs: Math.max(0, settledAt - current.createdAt) } as const
+				: await this.collectManifest(current, outcome);
+			const latest = this.snapshots.get(id);
+			if (!latest || isSettled(latest)) return;
+			let next: SubagentSnapshot;
+			if (outcome.kind === "completed") next = { ...latest, status: "done", settledAt, finalText: outcome.finalText || latest.finalText, liveText: "", manifest };
+			else if (outcome.kind === "failed") next = { ...latest, status: "error", settledAt, errorText: outcome.errorText.slice(0, ERROR_TEXT_MAX), finalText: outcome.partialText ?? latest.finalText, liveText: "", manifest };
+			else next = { ...latest, status: "error", settledAt, errorText: "interrupted", finalText: outcome.partialText ?? latest.finalText, liveText: "", manifest };
+			this.snapshots.set(id, next);
+			if ((this.waitInterest.get(id) ?? 0) > 0) this.consumedIds.add(id);
+			// Completion listeners (including deferred delivery) must observe the
+			// manifest on the same immutable terminal snapshot.
+			this.notify();
+			this.prune();
+		} finally {
+			this.settlingIds.delete(id);
+			this.startedIds.delete(id);
+		}
+	}
+
+	private async collectManifest(snapshot: SubagentSnapshot, outcome: RunOutcome): Promise<CompletionManifestEvidence> {
+		const fallback: CompletionManifestEvidence = {
+			exit: outcome.kind,
+			durationMs: Math.max(0, Date.now() - snapshot.createdAt),
+		};
+		let timeout: ReturnType<typeof setTimeout> | undefined;
+		try {
+			return await Promise.race([
+				this.buildCompletionManifestImpl({
+					cwd: snapshot.cwd,
+					baseRef: snapshot.baseRef,
+					outcome,
+					startedAt: snapshot.createdAt,
+					worktree: snapshot.worktree,
+				}).catch(() => fallback),
+				new Promise<CompletionManifestEvidence>((resolve) => {
+					timeout = setTimeout(() => resolve(fallback), MANIFEST_TIMEOUT_MS);
+				}),
+			]);
+		} finally {
+			if (timeout) clearTimeout(timeout);
+		}
 	}
 
 	private waitForSettle(id: string, timeoutMs: number): Promise<void> {

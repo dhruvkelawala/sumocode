@@ -6,6 +6,20 @@ const backend = vi.hoisted(() => ({
 	emitters: [] as Array<(event: SubagentEvent) => void>,
 }));
 
+vi.mock("./manifest.js", () => ({
+	buildCompletionManifest: vi.fn(async (options: { baseRef: string; outcome: { kind: "completed" | "failed" | "interrupted" }; worktree?: { path: string; branch: string } }) => ({
+		baseRef: options.baseRef,
+		headRef: "host-head",
+		branch: options.worktree?.branch,
+		worktreePath: options.worktree?.path,
+		changedPaths: options.worktree ? ["src/a.ts"] : [],
+		dirty: false,
+		commits: options.worktree ? 1 : 0,
+		exit: options.outcome.kind,
+		durationMs: 10,
+	})),
+}));
+
 vi.mock("./backend-pi.js", () => ({
 	spawnPiChild: vi.fn((options: { model?: string }) => {
 		let emitEvent: ((event: SubagentEvent) => void) | undefined;
@@ -16,6 +30,7 @@ vi.mock("./backend-pi.js", () => ({
 				// Mirror the real backend's synchronous settle-as-failed path
 				// (invalid model override) for tests that need it.
 				if (options.model === "sync-fail") emit({ kind: "run-settled", outcome: { kind: "failed", errorText: "invalid model" } });
+				else emit({ kind: "run-started" });
 			},
 			interrupt: vi.fn(() => emitEvent?.({ kind: "run-settled", outcome: { kind: "interrupted" } })),
 			sessionFilePath: "/tmp/child-session.jsonl",
@@ -75,6 +90,7 @@ describe("subagent result delivery", () => {
 		await spawn(harness.manager, "research");
 
 		backend.emitters[0]?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "findings" } });
+		await vi.waitFor(() => expect(harness.manager.get("sa-1")?.status).toBe("done"));
 		expect(harness.sendMessage).not.toHaveBeenCalled();
 
 		harness.setIdle(true);
@@ -85,10 +101,17 @@ describe("subagent result delivery", () => {
 				customType: "subagent-result",
 				content: expect.stringContaining('Subagent sa-1 "research" finished.'),
 				display: true,
-				details: { id: "sa-1", title: "research", status: "done" },
+				details: {
+					id: "sa-1",
+					title: "research",
+					status: "done",
+					manifest: expect.objectContaining({ changedPaths: [] }),
+				},
 			},
 			{ deliverAs: "followUp", triggerTurn: true },
 		);
+		const delivered = (harness.sendMessage.mock.calls[0] as unknown[])[0] as { content: string };
+		expect(delivered.content).toContain("```text\nshared checkout · base HEAD · +0 checkout commits · changed paths suppressed · checkout clean\n```");
 
 		harness.setIdle(true);
 		harness.fire("agent_end");
@@ -102,7 +125,7 @@ describe("subagent result delivery", () => {
 
 		backend.emitters[0]?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
 
-		expect(harness.sendMessage).toHaveBeenCalledOnce();
+		await vi.waitFor(() => expect(harness.sendMessage).toHaveBeenCalledOnce());
 	});
 
 	it("does not deliver a settled result consumed through subagent_wait", async () => {
@@ -143,6 +166,7 @@ describe("subagent result delivery", () => {
 			kind: "run-settled",
 			outcome: { kind: "failed", errorText: "pi killed by SIGKILL", partialText: "partial progress" },
 		});
+		await vi.waitFor(() => expect(harness.manager.get("sa-1")?.status).toBe("error"));
 
 		harness.setIdle(true);
 		harness.fire("agent_end");
@@ -151,7 +175,7 @@ describe("subagent result delivery", () => {
 			expect.objectContaining({
 				customType: "subagent-result",
 				content: expect.stringMatching(/failed[.]\n\nError: pi killed by SIGKILL\n\npartial progress/),
-				details: { id: "sa-1", title: "failing worker", status: "error" },
+				details: expect.objectContaining({ id: "sa-1", title: "failing worker", status: "error", manifest: expect.objectContaining({ exit: "failed" }) }),
 			}),
 			{ deliverAs: "followUp", triggerTurn: true },
 		);
@@ -167,6 +191,7 @@ describe("subagent result delivery", () => {
 		await spawn(harness.manager, "post-switch");
 		backend.emitters.at(-1)?.({ kind: "message-end", role: "assistant", text: "after switch" });
 		backend.emitters.at(-1)?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "after switch" } });
+		await vi.waitFor(() => expect(harness.manager.get("sa-1")?.status).toBe("done"));
 		harness.fire("agent_end");
 		expect(harness.sendMessage).toHaveBeenCalledTimes(1);
 		expect((harness.sendMessage.mock.calls[0] as unknown[])[0]).toMatchObject({ customType: "subagent-result" });
@@ -206,6 +231,7 @@ describe("subagent result delivery", () => {
 		// Now the real sa-1 spawns, settles, and must still auto-deliver.
 		await spawn(harness.manager, "real-sa-1");
 		backend.emitters.at(-1)?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
+		await vi.waitFor(() => expect(harness.manager.get("sa-1")?.status).toBe("done"));
 		harness.fire("agent_end");
 		expect(harness.sendMessage).toHaveBeenCalledTimes(1);
 		expect((harness.sendMessage.mock.calls[0] as unknown[])[0]).toMatchObject({ customType: "subagent-result" });

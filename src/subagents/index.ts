@@ -21,8 +21,9 @@ const settledPayload = (snapshot: SubagentSnapshot): DeliveryPayload => ({
 		errorText: snapshot.errorText,
 		output: snapshot.finalText,
 		sessionFilePath: snapshot.sessionFilePath,
+		manifest: snapshot.manifest,
 	}),
-	details: { id: snapshot.id, title: snapshot.title, status: snapshot.status },
+	details: { id: snapshot.id, title: snapshot.title, status: snapshot.status, manifest: snapshot.manifest },
 });
 
 export function installSubagents(pi: ExtensionAPI): SubagentManager {
@@ -47,7 +48,7 @@ export function installSubagents(pi: ExtensionAPI): SubagentManager {
 					customType: "subagent-result",
 					content: payload.content,
 					display: true,
-					details: { id: payload.id, title: payload.title, status: payload.status },
+					details: payload.details,
 				},
 				{ deliverAs: "followUp", triggerTurn: true },
 			);

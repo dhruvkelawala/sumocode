@@ -1,4 +1,5 @@
 import type { SubagentStatus } from "./domain.js";
+import type { CompletionManifestEvidence } from "./manifest.js";
 
 const RESULT_OUTPUT_MAX_CHARS = 24 * 1024;
 const RESULT_OUTPUT_MAX_LINES = 600;
@@ -10,11 +11,29 @@ export interface SubagentResultMessageInput {
 	readonly errorText?: string;
 	readonly output: string;
 	readonly sessionFilePath?: string;
+	readonly manifest?: CompletionManifestEvidence;
 }
 
 function boundedResultOutput(output: string): string {
 	const lineBounded = output.split("\n").slice(0, RESULT_OUTPUT_MAX_LINES).join("\n");
 	return lineBounded.slice(0, RESULT_OUTPUT_MAX_CHARS);
+}
+
+const shortRef = (ref: string): string => ref.slice(0, 7);
+
+export function formatCompletionManifestSummary(manifest: CompletionManifestEvidence): string {
+	if (!("baseRef" in manifest)) return `manifest unavailable · ${manifest.exit} · ${manifest.durationMs}ms`;
+	if (!manifest.branch) return `shared checkout · base ${shortRef(manifest.baseRef)} · +${manifest.commits} checkout commits · changed paths suppressed · checkout ${manifest.dirty ? "dirty" : "clean"}`;
+	const files = `${manifest.changedPaths.length} ${manifest.changedPaths.length === 1 ? "file" : "files"} changed`;
+	return `branch: ${manifest.branch} · base ${shortRef(manifest.baseRef)} · +${manifest.commits} commits · ${files} · ${manifest.dirty ? "dirty" : "clean"}`;
+}
+
+export function formatCompletionManifest(manifest: CompletionManifestEvidence): string {
+	const lines = [formatCompletionManifestSummary(manifest)];
+	if (!("baseRef" in manifest)) return lines[0];
+	if (manifest.changedPaths.length > 0) lines.push(`files: ${manifest.changedPaths.join(", ")}`);
+	if (manifest.worktreePath) lines.push(`worktree: ${manifest.worktreePath} (preserved)`);
+	return lines.join("\n");
 }
 
 export function buildSubagentResultMessage(input: SubagentResultMessageInput): string {
@@ -23,6 +42,7 @@ export function buildSubagentResultMessage(input: SubagentResultMessageInput): s
 	const output = boundedResultOutput(input.output);
 	if (output) lines.push(output);
 	if (input.sessionFilePath) lines.push(`Full transcript: ${input.sessionFilePath}`);
+	if (input.manifest) lines.push(`\`\`\`text\n${formatCompletionManifest(input.manifest)}\n\`\`\``);
 	return lines.join("\n\n");
 }
 

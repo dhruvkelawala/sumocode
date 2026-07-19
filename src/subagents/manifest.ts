@@ -17,6 +17,13 @@ export interface CompletionManifest {
 	readonly durationMs: number;
 }
 
+export interface PartialCompletionManifest {
+	readonly exit: CompletionManifest["exit"];
+	readonly durationMs: number;
+}
+
+export type CompletionManifestEvidence = CompletionManifest | PartialCompletionManifest;
+
 export interface CompletionManifestWorktree {
 	readonly path: string;
 	readonly branch: string;

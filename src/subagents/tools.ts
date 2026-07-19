@@ -3,7 +3,7 @@ import { Type } from "typebox";
 import type { DeferredResultDelivery } from "./delivery.js";
 import { latestText, type SubagentSnapshot } from "./domain.js";
 import { type AtCapacityDetails, SubagentManager } from "./manager.js";
-import { SUBAGENT_PROMPT_GUIDELINES, SUBAGENT_PROMPT_SNIPPET, SUBAGENT_TOOL_DESCRIPTIONS } from "./prompt.js";
+import { formatCompletionManifestSummary, SUBAGENT_PROMPT_GUIDELINES, SUBAGENT_PROMPT_SNIPPET, SUBAGENT_TOOL_DESCRIPTIONS } from "./prompt.js";
 
 const StringEnum = <T extends readonly string[]>(values: T, options?: { description?: string }) =>
 	Type.Unsafe<T[number]>({
@@ -40,10 +40,15 @@ const formatDuration = (ms: number): string => {
 	return minutes > 0 ? `${minutes}m${rest}s` : `${rest}s`;
 };
 
-const formatSnapshotLine = (snapshot: SubagentSnapshot): string => {
+const formatSnapshotLine = (snapshot: SubagentSnapshot, includeBranch = false): string => {
 	const model = snapshot.modelLabel ?? "inherit";
-	return `${snapshot.id} [${snapshot.status}] "${snapshot.title}" (${model}, ${formatDuration(Date.now() - snapshot.createdAt)}, ${snapshot.cwd})`;
+	const branch = includeBranch && snapshot.worktree ? ` · ${snapshot.worktree.branch}` : "";
+	return `${snapshot.id} [${snapshot.status}] "${snapshot.title}" (${model}, ${formatDuration(Date.now() - snapshot.createdAt)}, ${snapshot.cwd})${branch}`;
 };
+
+const manifestSummary = (snapshot: SubagentSnapshot): string | undefined => snapshot.manifest
+	? formatCompletionManifestSummary(snapshot.manifest)
+	: undefined;
 
 const boundedWaitText = (snapshots: readonly SubagentSnapshot[]): string => {
 	let remaining = 48 * 1024;
@@ -54,7 +59,7 @@ const boundedWaitText = (snapshots: readonly SubagentSnapshot[]): string => {
 		const errorLine = snapshot.status === "error" && snapshot.errorText ? `error: ${snapshot.errorText}\n` : "";
 		const body = `${errorLine}${latestText(snapshot) || (errorLine ? "" : snapshot.errorText || "(no output)")}`;
 		const perAgent = body.slice(0, 16 * 1024);
-		const chunk = [`${snapshot.id} [${snapshot.status}] ${snapshot.title}`, perAgent].join("\n");
+		const chunk = [`${snapshot.id} [${snapshot.status}] ${snapshot.title}`, manifestSummary(snapshot), perAgent].filter((line): line is string => line !== undefined).join("\n");
 		const bounded = chunk.slice(0, remaining);
 		chunks.push(bounded);
 		remaining -= bounded.length;
@@ -124,7 +129,7 @@ export function registerSubagentTools(
 			const snapshot = manager.get(params.id);
 			if (!snapshot) throw new Error(`Unknown subagent id: ${params.id}`);
 			const preview = trimLines(latestText(snapshot) || snapshot.errorText || "(no output yet)", 2048, 20);
-			return makeToolResult(`${formatSnapshotLine(snapshot)}\n${preview}`, { action: "check", subagent: snapshot });
+			return makeToolResult([formatSnapshotLine(snapshot), manifestSummary(snapshot), preview].filter((line): line is string => line !== undefined).join("\n"), { action: "check", subagent: snapshot });
 		},
 	});
 
@@ -171,7 +176,7 @@ export function registerSubagentTools(
 		parameters: Type.Object({}),
 		async execute() {
 			const snapshots = manager.list();
-			const text = snapshots.length > 0 ? snapshots.map(formatSnapshotLine).join("\n") : "No subagents tracked.";
+			const text = snapshots.length > 0 ? snapshots.map((snapshot) => formatSnapshotLine(snapshot, true)).join("\n") : "No subagents tracked.";
 			return makeToolResult(text, { action: "list", subagents: snapshots });
 		},
 	});

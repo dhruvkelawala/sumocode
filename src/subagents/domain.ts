@@ -1,3 +1,5 @@
+import type { CompletionManifestEvidence } from "./manifest.js";
+
 export type SubagentStatus = "running" | "done" | "error";
 
 export type SubagentEvent =
@@ -50,6 +52,7 @@ export interface SubagentSnapshot {
 	readonly errorText?: string;
 	readonly modelLabel?: string;
 	readonly sessionFilePath?: string;
+	readonly manifest?: CompletionManifestEvidence;
 	readonly usage: { tokens?: number; contextWindow?: number; costUsd?: number; turns: number };
 	readonly transcript: readonly TranscriptItem[];
 	readonly liveText: string;

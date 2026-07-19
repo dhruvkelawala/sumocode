@@ -3,12 +3,13 @@ import { outDir, repoRoot } from "./paths.mjs";
 import { writeFile, writeJson } from "./fs-utils.mjs";
 
 export function writeReviewPack(results, options = {}) {
-	const resultsPath = `${outDir}/results.json`;
-	const summaryPath = `${outDir}/summary.md`;
-	const indexPath = `${outDir}/index.html`;
+	const outputDir = options.outputDir ?? outDir;
+	const resultsPath = `${outputDir}/results.json`;
+	const summaryPath = `${outputDir}/summary.md`;
+	const indexPath = `${outputDir}/index.html`;
 	writeJson(resultsPath, results);
 	writeFile(summaryPath, summaryMarkdown(results));
-	writeFile(indexPath, indexHtml(results));
+	writeFile(indexPath, indexHtml(results, outputDir));
 	return { resultsPath, summaryPath, indexPath };
 }
 
@@ -35,7 +36,7 @@ function summaryMarkdown(results) {
 	return `${lines.join("\n")}\n`;
 }
 
-function indexHtml(results) {
+function indexHtml(results, outputDir) {
 	return `<!doctype html>
 <html>
 <head>
@@ -83,7 +84,7 @@ a { color:var(--accent); }
 <div class="meta">Commit ${escapeHtml(results.commit)} · generated ${escapeHtml(results.generatedAt)} · mode ${escapeHtml(results.mode)}</div>
 ${reviewGuideHtml()}
 ${summaryHtml(results)}
-${scenarioGroupsHtml(results)}
+${scenarioGroupsHtml(results, outputDir)}
 </body>
 </html>`;
 }
@@ -113,19 +114,19 @@ function summaryHtml(results) {
 </div>`;
 }
 
-function scenarioGroupsHtml(results) {
+function scenarioGroupsHtml(results, outputDir) {
 	const component = results.scenarios.filter((scenario) => scenario.lane === "component");
 	const fixture = results.scenarios.filter((scenario) => scenario.lane === "fixture");
 	const runtime = results.scenarios.filter((scenario) => scenario.lane === "runtime");
-	return `${scenarioSectionHtml("Component scenarios — review these first", "Small deterministic component captures. Use these cards to decide whether the harness is useful for component-by-component V2 work.", component)}\n${scenarioSectionHtml("Fixture scenes — deterministic completed states", "Full-scene captures from TranscriptViewModel fixtures. These cover completed assistant/tool states without live model or tool nondeterminism.", fixture)}\n${scenarioSectionHtml("Runtime scenarios — required RPC parity gates", "Real SumoCode runtime captures. Required crops fail CI when RPC-default UI drifts from the original Cathedral UX target.", runtime)}`;
+	return `${scenarioSectionHtml("Component scenarios — review these first", "Small deterministic component captures. Use these cards to decide whether the harness is useful for component-by-component V2 work.", component, outputDir)}\n${scenarioSectionHtml("Fixture scenes — deterministic completed states", "Full-scene captures from TranscriptViewModel fixtures. These cover completed assistant/tool states without live model or tool nondeterminism.", fixture, outputDir)}\n${scenarioSectionHtml("Runtime scenarios — required RPC parity gates", "Real SumoCode runtime captures. Required crops fail CI when RPC-default UI drifts from the original Cathedral UX target.", runtime, outputDir)}`;
 }
 
-function scenarioSectionHtml(title, note, scenarios) {
+function scenarioSectionHtml(title, note, scenarios, outputDir) {
 	if (scenarios.length === 0) return "";
-	return `<h2>${escapeHtml(title)}</h2>\n<div class="section-note">${escapeHtml(note)}</div>\n${scenarios.map(scenarioHtml).join("\n")}`;
+	return `<h2>${escapeHtml(title)}</h2>\n<div class="section-note">${escapeHtml(note)}</div>\n${scenarios.map((scenario) => scenarioHtml(scenario, outputDir)).join("\n")}`;
 }
 
-function scenarioHtml(scenario) {
+function scenarioHtml(scenario, outputDir) {
 	const statusClass = scenario.result === "failed" ? "fail" : scenario.result === "passed" ? "ok" : "review";
 	return `<section class="scenario">
   <div class="scenario-header">
@@ -137,12 +138,12 @@ function scenarioHtml(scenario) {
   <div class="scenario-description">${escapeHtml(scenarioDescription(scenario))}</div>
   ${scenario.error ? `<pre>${escapeHtml(scenario.error)}</pre>` : ""}
   ${finalScreenRejectionHtml(scenario.finalScreenRejection)}
-  ${finalCellContractHtml(scenario.finalCellContract)}
+  ${finalCellContractHtml(scenario.finalCellContract, outputDir)}
   <div class="artifacts">
-    ${artifact("Bible target", scenario.artifacts?.targetFull)}
-    ${artifact(scenario.lane === "fixture" ? "Fixture capture" : "Runtime", scenario.artifacts?.runtimeFull)}
+    ${artifact("Bible target", scenario.artifacts?.targetFull, outputDir)}
+    ${artifact(scenario.lane === "fixture" ? "Fixture capture" : "Runtime", scenario.artifacts?.runtimeFull, outputDir)}
   </div>
-  ${scenario.crops.map(cropHtml).join("\n")}
+  ${scenario.crops.map((crop) => cropHtml(crop, outputDir)).join("\n")}
 </section>`;
 }
 
@@ -151,10 +152,10 @@ function finalScreenRejectionHtml(rejection) {
 	return `<pre>Final-screen rejection matched ${escapeHtml(JSON.stringify(rejection.pattern))}\n${escapeHtml(rejection.snippet)}</pre>`;
 }
 
-function finalCellContractHtml(contract) {
+function finalCellContractHtml(contract, outputDir) {
 	if (!contract) return "";
 	const cls = contract.passed ? "ok" : "fail";
-	const artifact = contract.artifact ? `<a href="${encodeURI(toOutRelative(contract.artifact))}">final-cell-contract.txt</a>` : "no artifact";
+	const artifact = contract.artifact ? `<a href="${encodeURI(toOutRelative(contract.artifact, outputDir))}">final-cell-contract.txt</a>` : "no artifact";
 	const details = contract.mismatches?.length
 		? `\n${contract.mismatches.map((item) => `[${item.index}] row=${item.row} col=${item.col}: ${item.reason} expected=${JSON.stringify(item.expected)} actual=${JSON.stringify(item.actual)}`).join("\n")}`
 		: "";
@@ -177,7 +178,7 @@ function scenarioDescription(scenario) {
 	return descriptions[scenario.id] ?? "Visual parity scenario.";
 }
 
-function cropHtml(crop) {
+function cropHtml(crop, outputDir) {
 	const bible = crop.comparison?.bible;
 	const statusClass = crop.result === "failed" ? "fail" : crop.result === "passed" ? "ok" : "review";
 	const metric = bible ? `${formatPercent(bible.diffRatio)} diff · ${bible.diffPixels}/${bible.totalPixels} px · threshold ${formatPercent(bible.threshold)}${bible.dimensionMismatch ? " · dimension mismatch" : ""}` : "not compared";
@@ -189,31 +190,31 @@ function cropHtml(crop) {
     <div class="metric">${escapeHtml(metric)}</div>
   </div>
   <div class="artifacts">
-    ${artifact("Bible target crop", crop.artifacts?.target)}
-    ${artifact("Current capture crop", crop.artifacts?.runtime)}
-    ${artifact("Approved golden", crop.artifacts?.golden)}
+    ${artifact("Bible target crop", crop.artifacts?.target, outputDir)}
+    ${artifact("Current capture crop", crop.artifacts?.runtime, outputDir)}
+    ${artifact("Approved golden", crop.artifacts?.golden, outputDir)}
   </div>
-  ${debugDiffsHtml(crop)}
+  ${debugDiffsHtml(crop, outputDir)}
 </div>`;
 }
 
-function debugDiffsHtml(crop) {
+function debugDiffsHtml(crop, outputDir) {
 	const diffs = [
-		artifact("Debug pixel diff vs Bible", crop.artifacts?.bibleDiff),
-		artifact("Debug pixel diff vs golden", crop.artifacts?.goldenDiff),
+		artifact("Debug pixel diff vs Bible", crop.artifacts?.bibleDiff, outputDir),
+		artifact("Debug pixel diff vs golden", crop.artifacts?.goldenDiff, outputDir),
 	].filter(Boolean).join("\n");
 	if (!diffs) return "";
 	return `<details class="debug-diffs"><summary>Debug diffs — diagnostic, not primary human review</summary><div class="artifacts">${diffs}</div></details>`;
 }
 
-function artifact(title, path) {
+function artifact(title, path, outputDir) {
 	if (!path) return "";
-	const rel = toOutRelative(path);
+	const rel = toOutRelative(path, outputDir);
 	return `<div class="artifact"><div class="artifact-title">${escapeHtml(title)}</div><a class="artifact-frame" href="${encodeURI(rel)}"><img src="${encodeURI(rel)}" alt="${escapeHtml(title)}"></a><div class="artifact-caption">click to open full-size PNG</div></div>`;
 }
 
-function toOutRelative(path) {
-	return relative(outDir, path).split("/").map(encodeURIComponent).join("/");
+function toOutRelative(path, outputDir) {
+	return relative(outputDir, path).split("/").map(encodeURIComponent).join("/");
 }
 
 function summarize(results) {

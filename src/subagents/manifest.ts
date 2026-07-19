@@ -11,7 +11,8 @@ export interface CompletionManifest {
 	readonly branch?: string;
 	readonly worktreePath?: string;
 	readonly changedPaths: readonly string[];
-	readonly dirty: boolean;
+	/** undefined when git status could not be read — "unknown", never assume clean. */
+	readonly dirty?: boolean;
 	readonly commits: number;
 	readonly exit: "completed" | "failed" | "interrupted";
 	readonly durationMs: number;
@@ -76,13 +77,16 @@ const outcomeExit = (outcome: RunOutcome): CompletionManifest["exit"] => outcome
  * prove whether the checkout is dirty, but attributing those paths to one
  * child would blame it for concurrent parent or sibling edits. Head and commit
  * count remain host-observed checkout facts, not claims of child authorship.
+ * Untracked files are listed individually (--untracked-files=all) rather
+ * than collapsed to their parent directory, so a child's newly-created files
+ * appear as distinct changed paths.
  * Isolated worktrees can safely union uncommitted status paths with committed
  * paths changed since the captured base commit.
  */
 export async function buildCompletionManifest(options: BuildCompletionManifestOptions): Promise<CompletionManifest> {
 	const [headOutput, statusOutput, diffOutput, commitsOutput] = await Promise.all([
 		git(options.cwd, ["rev-parse", "HEAD"]),
-		git(options.cwd, ["status", "--porcelain=v1", "-z"]),
+		git(options.cwd, ["status", "--porcelain=v1", "-z", "--untracked-files=all"]),
 		options.worktree ? git(options.cwd, ["diff", "--name-only", "-z", `${options.baseRef}..HEAD`]) : undefined,
 		git(options.cwd, ["rev-list", "--count", `${options.baseRef}..HEAD`]),
 	]);
@@ -100,7 +104,9 @@ export async function buildCompletionManifest(options: BuildCompletionManifestOp
 		branch: options.worktree?.branch,
 		worktreePath: options.worktree?.path,
 		changedPaths,
-		dirty: statusOutput !== undefined && statusOutput.length > 0,
+		// A failed/timed-out status read is NOT evidence of cleanliness — leave
+		// dirty undefined ("unknown") rather than rendering "checkout clean".
+		dirty: statusOutput === undefined ? undefined : statusOutput.length > 0,
 		commits: Number.isFinite(commits) ? commits : 0,
 		exit: outcomeExit(options.outcome),
 		durationMs: Math.max(0, Date.now() - options.startedAt),

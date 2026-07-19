@@ -21,11 +21,15 @@ function boundedResultOutput(output: string): string {
 
 const shortRef = (ref: string): string => ref.slice(0, 7);
 
+function dirtyLabel(dirty: boolean | undefined): string {
+	return dirty === undefined ? "dirty unknown" : dirty ? "dirty" : "clean";
+}
+
 export function formatCompletionManifestSummary(manifest: CompletionManifestEvidence): string {
 	if (!("baseRef" in manifest)) return `manifest unavailable · ${manifest.exit} · ${manifest.durationMs}ms`;
-	if (!manifest.branch) return `shared checkout · base ${shortRef(manifest.baseRef)} · +${manifest.commits} checkout commits · changed paths suppressed · checkout ${manifest.dirty ? "dirty" : "clean"}`;
+	if (!manifest.branch) return `shared checkout · base ${shortRef(manifest.baseRef)} · +${manifest.commits} checkout commits · changed paths suppressed · checkout ${dirtyLabel(manifest.dirty)}`;
 	const files = `${manifest.changedPaths.length} ${manifest.changedPaths.length === 1 ? "file" : "files"} changed`;
-	return `branch: ${manifest.branch} · base ${shortRef(manifest.baseRef)} · +${manifest.commits} commits · ${files} · ${manifest.dirty ? "dirty" : "clean"}`;
+	return `branch: ${manifest.branch} · base ${shortRef(manifest.baseRef)} · +${manifest.commits} commits · ${files} · ${dirtyLabel(manifest.dirty)}`;
 }
 
 export function formatCompletionManifest(manifest: CompletionManifestEvidence): string {

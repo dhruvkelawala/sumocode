@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { buildCompletionManifest } from "./manifest.js";
+import { formatCompletionManifestSummary } from "./prompt.js";
 
 function git(cwd: string, args: readonly string[]): string {
 	return execFileSync("git", [...args], { cwd, encoding: "utf8" }).trim();
@@ -153,9 +154,41 @@ describe("buildCompletionManifest", () => {
 			branch: "sumo/missing",
 			worktreePath: missingRepo,
 			changedPaths: [],
-			dirty: false,
+			dirty: undefined,
 			commits: 0,
 			exit: "failed",
 		});
+	});
+
+	it("reports dirty as unknown (not clean) when git status cannot be read", async () => {
+		// A path that is not a git checkout — status/head/diff all fail.
+		const manifest = await buildCompletionManifest({
+			cwd: join(root, "not-a-git-checkout"),
+			baseRef: "HEAD",
+			outcome: { kind: "completed", finalText: "" },
+			startedAt: Date.now(),
+		});
+		expect(manifest.dirty).toBeUndefined();
+		const summary = formatCompletionManifestSummary(manifest);
+		expect(summary).toContain("dirty unknown");
+		expect(summary).not.toContain("clean");
+	});
+
+	it("reports repo-root-relative changed paths when built from a worktree subdirectory", async () => {
+		const sub = join(repo, "packages", "api");
+		mkdirSync(sub, { recursive: true });
+		writeFileSync(join(sub, "handler.ts"), "export const x = 1;\n");
+		// Build from the SUBDIRECTORY cwd (mirrors a worktree spawn from /repo/packages/api).
+		const manifest = await buildCompletionManifest({
+			cwd: sub,
+			baseRef,
+			outcome: { kind: "completed", finalText: "" },
+			startedAt: Date.now(),
+			worktree: { path: repo, branch: "sumo/api" },
+		});
+		// git porcelain/diff report repo-root-relative paths regardless of cwd.
+		expect(manifest.changedPaths).toContain("packages/api/handler.ts");
+		expect(manifest.changedPaths).not.toContain("handler.ts");
+		expect(manifest.dirty).toBe(true);
 	});
 });

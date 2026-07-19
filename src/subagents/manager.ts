@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { isAbsolute, join, relative } from "node:path";
 import { promisify } from "node:util";
 import { createWorktree, resolveCreateOptions, type CreateWorktreeOptions, type CreateWorktreeResult } from "../git/worktree.js";
 import type { SpawnedChild } from "./backend-pi.js";
@@ -194,7 +195,13 @@ export class SubagentManager {
 					releasePending();
 					return this.recordSpawnFailure(task, id, createdAt, baseRef, `unable to create worktree: ${created.message}`);
 				}
-				childCwd = created.path;
+				// Preserve the caller's subdirectory inside the worktree so a spawn
+				// from /repo/packages/api lands in <worktree>/packages/api, matching
+				// the non-isolated path's cwd semantics instead of jumping to root.
+				const subPath = relative(gitContext.repoRoot, task.cwd);
+				childCwd = subPath && !subPath.startsWith("..") && !isAbsolute(subPath)
+					? join(created.path, subPath)
+					: created.path;
 				worktree = {
 					path: created.path,
 					branch: created.branch,

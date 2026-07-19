@@ -230,6 +230,17 @@ describe("SubagentManager", () => {
 		});
 	});
 
+	it("preserves the caller's subdirectory inside the worktree", async () => {
+		const backendFactory = vi.fn(() => ({ events: () => undefined, interrupt: () => undefined }));
+		const createWorktree = vi.fn(async () => ({ ok: true as const, path: "/isolated/worktree", branch: "sumo/x", baseRef: "abc123" }));
+		const manager = new SubagentManager(backendFactory, {
+			captureGitContext: async () => ({ repoRoot: "/repo", baseRef: "abc123" }),
+			createWorktree,
+		});
+		await manager.spawn({ prompt: "p", title: "api work", cwd: "/repo/packages/api", worktree: true });
+		expect(backendFactory).toHaveBeenCalledWith(expect.objectContaining({ cwd: "/isolated/worktree/packages/api" }));
+	});
+
 	it("rejects a branch override without worktree isolation", async () => {
 		const backendFactory = vi.fn(() => ({ events: () => undefined, interrupt: () => undefined }));
 		const manager = new SubagentManager(backendFactory, {

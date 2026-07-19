@@ -502,10 +502,16 @@ manifests, then retirement of the `bg_task` mega-tool and delegation routing amb
 | 072 | [Terminal-host abstraction: herdr + cmux](072-terminal-host-abstraction-herdr.md) | P2 | M | 071 (same file) | [#311](https://github.com/dhruvkelawala/sumocode/issues/311) | DONE — PR #313 (`52f33d6`, `fc56f14`): facade + worktree/diff/review/bg-task ports + pane-ref schema v3 |
 | 074 | [Herdr-native integration: approval attention queue + native worktree workspaces](074-herdr-native-integration.md) | P2 | S | 072 | [#316](https://github.com/dhruvkelawala/sumocode/issues/316) | DONE — PR #320 (`93e077a`); Claude autoreview 3 rounds → clean; live-verified: blocked flip + attention-queue jump during approval modal (operator screenshot 2026-07-18) |
 | 075 | [Ultraviolet Core Application Theme](075-ultraviolet-core-application-theme.md) | P1 | L | 073 | [#319](https://github.com/dhruvkelawala/sumocode/issues/319) | DONE — implementation branch `advisor/075-ultraviolet-core-application-theme`; review-only visual evidence, no golden promotion |
-| 076 | [Ultraviolet RunCat working indicator](076-ultraviolet-runcat-working-indicator.md) | P2 | M | 075 | [#331](https://github.com/dhruvkelawala/sumocode/issues/331) | TODO |
+| 076 | [Ultraviolet RunCat working indicator](076-ultraviolet-runcat-working-indicator.md) | P2 | M | 075 | [#331](https://github.com/dhruvkelawala/sumocode/issues/331) | IN PROGRESS — isolated executor worktree |
+| 078 | [Host-owned RPC prompt queue and queued-message undo](078-restore-queued-message-undo.md) | P1 | M | PR #325 | — | IN PROGRESS — replaces blocked Pi `clear_queue` design with host ownership |
 
 ### Dependency notes
 
+- 078 moves ordinary busy-time editor prompts into a session-bound SumoCode scheduler and drains
+  one normal prompt per Pi `agent_settled`. Alt+Up can therefore restore messages synchronously
+  without an upstream queue-clear command. It may execute alongside 076 in an isolated worktree;
+  reconcile their adjacent `rpc/shell-adapter.ts` changes without altering RunCat indicator logic
+  or queued-card geometry.
 - 076 is a bounded Plan 075 polish follow-up: capability-gated RunCat frames, verified
   font/setup path, and classic/retained/RPC parity only. It must not reopen Ultraviolet's
   palette/application roles or install the upstream Pi extension as a second indicator owner.

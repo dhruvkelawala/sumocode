@@ -2,19 +2,36 @@ import { describe, expect, it, vi } from "vitest";
 import { registerSubagentTools } from "./tools.js";
 import { SubagentManager, type SpawnSubagentTask } from "./manager.js";
 import type { SubagentEvent } from "./domain.js";
+import type { TerminalHost, TerminalHostKind } from "../terminal-host/types.js";
 
-const createHarness = () => {
-	const registered: Array<{ name: string; execute: (...args: unknown[]) => Promise<unknown> }> = [];
+const createHarness = (hostKind: TerminalHostKind = "herdr") => {
+	const registered: Array<{ name: string; parameters?: unknown; execute: (...args: unknown[]) => Promise<unknown> }> = [];
 	const emitters = new Map<string, (event: SubagentEvent) => void>();
+	const sendPaneText = vi.fn(async () => hostKind === "cmux"
+		? { ok: false as const, error: "not supported on cmux" }
+		: { ok: true as const });
+	const host: TerminalHost = {
+		kind: hostKind,
+		startAgentPane: vi.fn(),
+		sendPaneText,
+		openCommandInSplit: vi.fn(),
+		openExistingWorktreeWorkspace: vi.fn(async () => ({ ok: true as const, pane: { host: "herdr" as const, paneId: "w9:p1", workspaceId: "w9" } })),
+		closePane: vi.fn(),
+		notify: vi.fn(),
+	};
+	const piExec = { exec: vi.fn() } as never;
 	const manager = new SubagentManager((task: SpawnSubagentTask & { id: string }) => ({
 		events: (emit) => {
 			emitters.set(task.id, emit);
 			emit({ kind: "run-started" });
+			if (task.visible) emit({ kind: "pane-attached", pane: { agentName: "worker-abc", workspaceId: "w1", tabId: "w1:t1", paneId: "w1:p2" } });
 		},
 		interrupt: vi.fn(() => emitters.get(task.id)?.({ kind: "run-settled", outcome: { kind: "interrupted" } })),
 	}), {
 		captureGitContext: async () => ({ repoRoot: "/tmp/project", baseRef: "base-ref" }),
 		createWorktree: async (options) => ({ ok: true, path: "/tmp/isolated", branch: options.branch ?? "sumo/task", baseRef: options.baseRef ?? "base-ref" }),
+		terminalHost: host,
+		pi: piExec,
 		buildCompletionManifest: async (options) => ({
 			baseRef: options.baseRef,
 			headRef: "head-ref",
@@ -28,24 +45,38 @@ const createHarness = () => {
 		}),
 	});
 	const pi = { registerTool: vi.fn((tool) => registered.push(tool)), on: vi.fn(), getThinkingLevel: vi.fn(() => "medium"), getActiveTools: vi.fn(() => ["read", "bash"]) };
-	registerSubagentTools(pi as never, manager);
+	registerSubagentTools(pi as never, manager, undefined, host);
 	const tool = (name: string) => registered.find((entry) => entry.name === name)!;
 	const ctx = { cwd: "/tmp/project", model: { provider: "openai", id: "gpt-5", thinkingLevel: "low" } };
-	return { registered, manager, emitters, tool, ctx };
+	return { registered, manager, emitters, tool, ctx, host, sendPaneText };
 };
 
 const textOf = (result: unknown): string => ((result as { content: Array<{ text: string }> }).content[0].text);
 
 describe("subagent tools", () => {
-	it("registers exactly five tools", () => {
-		const { registered } = createHarness();
-		expect(registered.map((tool) => tool.name)).toEqual(["subagent_spawn", "subagent_check", "subagent_wait", "subagent_cancel", "subagent_list"]);
+	it("registers the six subagent tools and exposes visible spawning", () => {
+		const { registered, tool } = createHarness();
+		expect(registered.map((entry) => entry.name)).toEqual(["subagent_spawn", "subagent_send", "subagent_check", "subagent_wait", "subagent_cancel", "subagent_list"]);
+		expect(JSON.stringify(tool("subagent_spawn").parameters)).toContain("visible");
 	});
 
 	it("spawn returns an id and automatic-delivery guidance", async () => {
 		const { tool, ctx } = createHarness();
 		const result = await tool("subagent_spawn").execute("tc", { prompt: "do it", name: "worker" }, undefined, undefined, ctx as never);
 		expect(textOf(result)).toBe("Started sa-1 (worker). Its result will be delivered to you automatically when it settles, or use subagent_wait to block for it.");
+	});
+
+	it("opens visible spawns and exposes their pane in list output", async () => {
+		const { tool, ctx, manager } = createHarness();
+		await tool("subagent_spawn").execute("tc", { prompt: "watch", name: "worker", visible: true }, undefined, undefined, ctx as never);
+		expect(manager.get("sa-1")).toMatchObject({ visible: true, pane: { agentName: "worker-abc", paneId: "w1:p2" } });
+		const listed = await tool("subagent_list").execute("tc", {}, undefined, undefined, ctx as never);
+		expect(textOf(listed)).toContain("pane w1:p2 · agent worker-abc");
+	});
+
+	it("rejects visible spawning without a terminal host", async () => {
+		const { tool, ctx } = createHarness("none");
+		await expect(tool("subagent_spawn").execute("tc", { prompt: "watch", name: "worker", visible: true }, undefined, undefined, ctx as never)).rejects.toThrow("require a running terminal host");
 	});
 
 	it("passes worktree isolation and branch overrides to the manager", async () => {
@@ -74,6 +105,33 @@ describe("subagent tools", () => {
 		const result = await tool("subagent_spawn").execute("tc", { prompt: "do", name: "over" }, undefined, undefined, ctx as never);
 		expect(textOf(result)).toContain("status=at_capacity");
 		expect(result).toMatchObject({ details: { status: "at_capacity", runningCount: 4 } });
+	});
+
+	it("sends text to a running visible child pane", async () => {
+		const { tool, ctx, sendPaneText } = createHarness();
+		await tool("subagent_spawn").execute("tc", { prompt: "watch", name: "worker", visible: true }, undefined, undefined, ctx as never);
+
+		const result = await tool("subagent_send").execute("tc", { id: "sa-1", text: "continue with tests" }, undefined, undefined, ctx as never);
+
+		expect(textOf(result)).toBe("Sent input to sa-1 (worker).");
+		expect(sendPaneText).toHaveBeenCalledWith(expect.anything(), { host: "herdr", paneId: "w1:p2", workspaceId: "w1" }, "continue with tests");
+	});
+
+	it("reports subagent_send error taxonomy", async () => {
+		const headless = createHarness();
+		await expect(headless.tool("subagent_send").execute("tc", { id: "sa-404", text: "hi" })).rejects.toThrow("Unknown subagent id");
+		await headless.tool("subagent_spawn").execute("tc", { prompt: "quiet", name: "headless" }, undefined, undefined, headless.ctx as never);
+		await expect(headless.tool("subagent_send").execute("tc", { id: "sa-1", text: "hi" })).rejects.toThrow("headless children cannot receive input");
+
+		const settled = createHarness();
+		await settled.tool("subagent_spawn").execute("tc", { prompt: "watch", name: "visible", visible: true }, undefined, undefined, settled.ctx as never);
+		settled.emitters.get("sa-1")?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
+		await vi.waitFor(() => expect(settled.manager.get("sa-1")?.status).toBe("done"));
+		await expect(settled.tool("subagent_send").execute("tc", { id: "sa-1", text: "hi" })).rejects.toThrow("already settled");
+
+		const cmux = createHarness("cmux");
+		await cmux.tool("subagent_spawn").execute("tc", { prompt: "watch", name: "visible", visible: true }, undefined, undefined, cmux.ctx as never);
+		await expect(cmux.tool("subagent_send").execute("tc", { id: "sa-1", text: "hi" })).rejects.toThrow("not supported on cmux");
 	});
 
 	it("check does not consume", async () => {

@@ -151,7 +151,7 @@ export function installSubagents(
 	};
 	armDelivery();
 
-	registerSubagentTools(pi, manager, delivery);
+	registerSubagentTools(pi, manager, delivery, host);
 	pi.on("session_start", (_event, ctx) => {
 		latestContext = ctx;
 		armDelivery();

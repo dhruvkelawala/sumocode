@@ -1,6 +1,8 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import type { DeferredResultDelivery } from "./delivery.js";
+import { getTerminalHost } from "../terminal-host/index.js";
+import type { PaneRef, TerminalHost } from "../terminal-host/types.js";
 import { latestText, type SubagentSnapshot } from "./domain.js";
 import { type AtCapacityDetails, SubagentManager } from "./manager.js";
 import { formatCompletionManifestSummary, SUBAGENT_PROMPT_GUIDELINES, SUBAGENT_PROMPT_SNIPPET, SUBAGENT_TOOL_DESCRIPTIONS } from "./prompt.js";
@@ -43,7 +45,8 @@ const formatDuration = (ms: number): string => {
 const formatSnapshotLine = (snapshot: SubagentSnapshot, includeBranch = false): string => {
 	const model = snapshot.modelLabel ?? "inherit";
 	const branch = includeBranch && snapshot.worktree ? ` · ${snapshot.worktree.branch}` : "";
-	return `${snapshot.id} [${snapshot.status}] "${snapshot.title}" (${model}, ${formatDuration(Date.now() - snapshot.createdAt)}, ${snapshot.cwd})${branch}`;
+	const pane = snapshot.pane ? ` · pane ${snapshot.pane.paneId ?? snapshot.pane.tabId ?? snapshot.pane.workspaceId ?? "unknown"} · agent ${snapshot.pane.agentName}` : "";
+	return `${snapshot.id} [${snapshot.status}] "${snapshot.title}" (${model}, ${formatDuration(Date.now() - snapshot.createdAt)}, ${snapshot.cwd})${branch}${pane}`;
 };
 
 const manifestSummary = (snapshot: SubagentSnapshot): string | undefined => snapshot.manifest
@@ -72,6 +75,7 @@ export function registerSubagentTools(
 	pi: ExtensionAPI,
 	manager: SubagentManager,
 	delivery?: Pick<DeferredResultDelivery, "consume">,
+	host: TerminalHost = getTerminalHost(),
 ): void {
 	pi.registerTool({
 		name: "subagent_spawn",
@@ -87,12 +91,17 @@ export function registerSubagentTools(
 			working_dir: Type.Optional(Type.String({ description: "Working directory for the child. Defaults to the current project cwd." })),
 			worktree: Type.Optional(Type.Boolean({ description: "Run the child in an isolated git worktree on a new sumo/<slug> branch from HEAD. Its edits never touch your checkout. The worktree is preserved after completion; it is never auto-removed." })),
 			branch: Type.Optional(Type.String({ description: "Optional branch override for an isolated worktree spawn." })),
+			visible: Type.Optional(Type.Boolean({ description: "Open the child as an interactive pane in the terminal host — watchable and steerable; requires a running terminal host." })),
 		}),
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+			if (params.visible === true && host.kind === "none") {
+				throw new Error("visible subagents require a running terminal host (herdr or cmux)");
+			}
 			const spawned = await manager.spawn({
 				prompt: params.prompt,
 				title: params.name,
 				cwd: params.working_dir ?? ctx.cwd,
+				visible: params.visible,
 				worktree: params.worktree,
 				branch: params.branch,
 				model: params.model,
@@ -115,6 +124,32 @@ export function registerSubagentTools(
 				return makeToolResult(`Subagent ${spawned.id} (${spawned.title}) failed to start: ${spawned.errorText ?? "unknown error"}`, { action: "spawn", subagent: spawned });
 			}
 			return makeToolResult(`Started ${spawned.id} (${spawned.title}). Its result will be delivered to you automatically when it settles, or use subagent_wait to block for it.`, { action: "spawn", subagent: spawned });
+		},
+	});
+
+	pi.registerTool({
+		name: "subagent_send",
+		label: "Subagent Send",
+		description: SUBAGENT_TOOL_DESCRIPTIONS.send,
+		promptSnippet: SUBAGENT_PROMPT_SNIPPET,
+		promptGuidelines: SUBAGENT_PROMPT_GUIDELINES,
+		parameters: Type.Object({
+			id: Type.String({ description: "Running visible subagent id, e.g. sa-1." }),
+			text: Type.String({ description: "Prompt text to send followed by Enter." }),
+		}),
+		async execute(_toolCallId, params) {
+			const snapshot = manager.get(params.id);
+			if (!snapshot) throw new Error(`Unknown subagent id: ${params.id}`);
+			if (snapshot.status !== "running") throw new Error(`Subagent ${params.id} is already settled (${snapshot.status}) and cannot receive input`);
+			if (!snapshot.visible) throw new Error("headless children cannot receive input — respawn with visible: true");
+			if (!snapshot.pane?.paneId) throw new Error(`Visible subagent ${params.id} does not have a ready pane`);
+			if (host.kind === "none") throw new Error("visible subagent terminal host is unavailable");
+			const sendPaneText = host.sendPaneText;
+			if (!sendPaneText) throw new Error(`sending pane input is not supported on ${host.kind}`);
+			const pane: PaneRef = { host: host.kind, paneId: snapshot.pane.paneId, workspaceId: snapshot.pane.workspaceId };
+			const result = await sendPaneText.call(host, pi, pane, params.text);
+			if (!result.ok) throw new Error(`Unable to send input to ${params.id}: ${result.error}`);
+			return makeToolResult(`Sent input to ${params.id} (${snapshot.title}).`, { action: "send", id: params.id, pane: snapshot.pane });
 		},
 	});
 

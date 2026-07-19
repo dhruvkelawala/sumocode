@@ -96,6 +96,7 @@ export function resolveClaudeOauthAdapterEntry(env: NodeJS.ProcessEnv = process.
 export interface SpawnedChild {
 	readonly events: AsyncIterable<SubagentEvent> | ((emit: (e: SubagentEvent) => void) => void);
 	readonly sessionFilePath?: string;
+	readonly ready?: Promise<void>;
 	interrupt(): void;
 }
 

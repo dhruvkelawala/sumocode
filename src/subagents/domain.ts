@@ -4,6 +4,7 @@ export type SubagentStatus = "running" | "done" | "error";
 
 export type SubagentEvent =
 	| { kind: "run-started" }
+	| { kind: "pane-attached"; pane: SubagentPaneRef }
 	| { kind: "assistant-delta"; delta: string }
 	| { kind: "tool-start"; toolId: string; name: string; argsPreview?: string }
 	| { kind: "tool-update"; toolId: string; outputPreview?: string }
@@ -39,6 +40,13 @@ export interface SubagentWorktreeRef {
 	readonly repoRoot: string;
 }
 
+export interface SubagentPaneRef {
+	readonly agentName: string;
+	readonly workspaceId?: string;
+	readonly tabId?: string;
+	readonly paneId?: string;
+}
+
 export interface SubagentSnapshot {
 	readonly id: string;
 	readonly title: string;
@@ -46,6 +54,8 @@ export interface SubagentSnapshot {
 	readonly cwd: string;
 	readonly baseRef: string;
 	readonly worktree?: SubagentWorktreeRef;
+	readonly visible?: boolean;
+	readonly pane?: SubagentPaneRef;
 	readonly status: SubagentStatus;
 	readonly createdAt: number;
 	readonly settledAt?: number;

@@ -55,6 +55,87 @@ describe("herdrTerminalHost", () => {
 		expect(result).toEqual({ ok: true, pane: { host: "herdr", paneId: "w1:p2", workspaceId: "w1" } });
 		expect(fake.exec).toHaveBeenCalledWith("herdr", ["agent", "start", expect.stringMatching(/^sumocode-/), "--cwd", "/tmp", "--split", "right", "--no-focus", "--", "bash", "-lc", "echo ok"], { timeout: 5000 });
 	});
+	it("starts an agent in an existing workspace without stealing focus", async () => {
+		const exec = vi.fn(async (_bin: string, args: string[]) => {
+			if (args[0] === "agent") return { stdout: JSON.stringify({ result: { agent: { pane_id: "w9:p2", workspace_id: "w9", tab_id: "w9:t1" } } }), stderr: "", code: 0, killed: false };
+			return { stdout: "", stderr: "", code: 0, killed: false };
+		});
+		const result = await herdrTerminalHost.startAgentPane({ exec } as never, {
+			name: "API Worker",
+			cwd: "/repo/packages/api",
+			shellCommand: "exec sumocode task",
+			placement: { kind: "workspace", workspaceId: "w9" },
+		});
+		expect(result).toMatchObject({ ok: true, agentName: expect.stringMatching(/^api-worker-/), workspaceId: "w9", tabId: "w9:t1", paneId: "w9:p2" });
+		expect(exec).toHaveBeenNthCalledWith(1, "herdr", ["agent", "start", expect.stringMatching(/^api-worker-/), "--workspace", "w9", "--cwd", "/repo/packages/api", "--no-focus", "--", "bash", "-lc", "exec sumocode task"], { timeout: 5000 });
+		expect(exec).toHaveBeenNthCalledWith(2, "herdr", ["pane", "rename", "w9:p2", "API Worker"], { timeout: 5000 });
+	});
+
+	it("starts an agent as a split in an existing tab", async () => {
+		const exec = vi.fn(async () => ({ stdout: JSON.stringify({ result: { agent: { pane_id: "w3:p4", workspace_id: "w3", tab_id: "w3:t2" } } }), stderr: "", code: 0, killed: false }));
+		await expect(herdrTerminalHost.startAgentPane({ exec } as never, {
+			name: "review",
+			cwd: "/repo",
+			shellCommand: "run child",
+			placement: { kind: "tab", tabId: "w3:t2", direction: "down" },
+		})).resolves.toMatchObject({ ok: true, tabId: "w3:t2", paneId: "w3:p4" });
+		expect(exec).toHaveBeenNthCalledWith(1, "herdr", ["agent", "start", expect.stringMatching(/^review-/), "--tab", "w3:t2", "--split", "down", "--cwd", "/repo", "--no-focus", "--", "bash", "-lc", "run child"], { timeout: 5000 });
+	});
+
+	it("creates a no-focus tab before starting an agent in it", async () => {
+		vi.stubEnv("HERDR_PANE_ID", "");
+		const exec = vi.fn(async (_bin: string, args: string[]) => {
+			if (args[0] === "tab") return { stdout: JSON.stringify({ result: { tab: { tab_id: "w5:t8" } } }), stderr: "", code: 0, killed: false };
+			return { stdout: JSON.stringify({ result: { agent: { pane_id: "w5:p9", workspace_id: "w5", tab_id: "w5:t8" } } }), stderr: "", code: 0, killed: false };
+		});
+		await expect(herdrTerminalHost.startAgentPane({ exec } as never, {
+			name: "research",
+			cwd: "/repo",
+			shellCommand: "run child",
+			placement: { kind: "new-tab", label: "subagents" },
+		})).resolves.toMatchObject({ ok: true, tabId: "w5:t8", paneId: "w5:p9" });
+		expect(exec).toHaveBeenNthCalledWith(1, "herdr", ["tab", "create", "--label", "subagents", "--no-focus", "--json"], { timeout: 5000 });
+		expect(exec).toHaveBeenNthCalledWith(2, "herdr", ["agent", "start", expect.stringMatching(/^research-/), "--tab", "w5:t8", "--cwd", "/repo", "--no-focus", "--", "bash", "-lc", "run child"], { timeout: 5000 });
+		vi.unstubAllEnvs();
+	});
+
+	it("anchors a new subagents tab to the caller workspace from HERDR_PANE_ID", async () => {
+		vi.stubEnv("HERDR_PANE_ID", "w7:pB");
+		try {
+			const exec = vi.fn(async (_bin: string, args: string[]) => {
+				if (args[0] === "tab") return { stdout: JSON.stringify({ result: { tab: { tab_id: "w7:t3" } } }), stderr: "", code: 0, killed: false };
+				return { stdout: JSON.stringify({ result: { agent: { pane_id: "w7:p9", workspace_id: "w7", tab_id: "w7:t3" } } }), stderr: "", code: 0, killed: false };
+			});
+			await herdrTerminalHost.startAgentPane!({ exec } as never, {
+				name: "research",
+				cwd: "/repo",
+				shellCommand: "run child",
+				placement: { kind: "new-tab", label: "subagents" },
+			});
+			expect(exec).toHaveBeenNthCalledWith(1, "herdr", ["tab", "create", "--workspace", "w7", "--label", "subagents", "--no-focus", "--json"], { timeout: 5000 });
+		} finally {
+			vi.unstubAllEnvs();
+		}
+	});
+
+	it("keeps a successful start when pane rename fails", async () => {
+		const exec = vi.fn(async (_bin: string, args: string[]) => args[0] === "agent"
+			? { stdout: JSON.stringify({ result: { agent: { pane_id: "w1:p7", workspace_id: "w1", tab_id: "w1:t1" } } }), stderr: "", code: 0, killed: false }
+			: { stdout: "", stderr: "rename denied", code: 1, killed: false });
+		await expect(herdrTerminalHost.startAgentPane({ exec } as never, {
+			name: "worker",
+			cwd: "/repo",
+			shellCommand: "run child",
+			placement: { kind: "workspace", workspaceId: "w1" },
+		})).resolves.toMatchObject({ ok: true, paneId: "w1:p7" });
+	});
+
+	it("sends pane text through pane run", async () => {
+		const fake = pi("");
+		await expect(herdrTerminalHost.sendPaneText(fake as never, { host: "herdr", paneId: "w1:p2" }, "continue with tests")).resolves.toEqual({ ok: true });
+		expect(fake.exec).toHaveBeenCalledWith("herdr", ["pane", "run", "w1:p2", "continue with tests"], { timeout: 5000 });
+	});
+
 	it("reports malformed json", async () => {
 		const fake = pi("not-json");
 		const result = await herdrTerminalHost.openCommandInSplit(fake as never, "down", { cwd: "/tmp", shellCommand: "echo ok" });
@@ -99,6 +180,12 @@ describe("herdrTerminalHost", () => {
 
 		expect(result).toEqual({ ok: true, pane: { host: "herdr", paneId: "wB:p1", workspaceId: "wB" } });
 		expect(exec).toHaveBeenCalledWith("herdr", ["worktree", "open", "--path", "/repo.wt/sumo__task", "--label", "sumo · task", "--focus", "--json"], { timeout: 5000 });
+	});
+
+	it("passes --no-focus to worktree open when focus is explicitly disabled (visible subagents)", async () => {
+		const exec = vi.fn(async () => ({ code: 0, stdout: JSON.stringify({ result: { workspace_id: "w9", pane_id: "w9:p1" } }), stderr: "" }));
+		await herdrTerminalHost.openExistingWorktreeWorkspace!({ exec } as never, { path: "/repo.wt/sumo__task", label: "sumo · task", focus: false });
+		expect(exec).toHaveBeenCalledWith("herdr", ["worktree", "open", "--path", "/repo.wt/sumo__task", "--label", "sumo · task", "--no-focus", "--json"], { timeout: 5000 });
 	});
 	it("reports native worktree errors when workspace or panes are missing", async () => {
 		const noWorkspace = pi(JSON.stringify({ result: { type: "worktree_created" } }));

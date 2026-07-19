@@ -52,17 +52,20 @@ export function buildSubagentResultMessage(input: SubagentResultMessageInput): s
 
 export const SUBAGENT_PROMPT_GUIDELINES = [
 	"Use subagent_spawn for independent research, review, or implementation slices that can proceed while you keep working.",
-	"Children are headless: they have their own context, cannot see this conversation, cannot ask the user, and cannot spawn subagents.",
-	"Prompts must be self-contained: include objective, relevant paths, constraints, expected output, and any stop conditions.",
+	"Use visible subagents for long or interactive work the human may want to watch or steer; use headless subagents for silent, bounded fan-out.",
+	"All children have their own context, cannot see this conversation, and cannot spawn subagents; prompts must be self-contained with objective, paths, constraints, expected output, and stop conditions.",
+	"Use subagent_send to steer a running visible child; it sends the text followed by Enter. Headless or settled children cannot receive input.",
+	"Visible isolated children appear as herdr workspaces; non-isolated visible children tile into a subagents tab. cmux provides only a degraded single-split fallback.",
 	"After spawning, keep working; call subagent_wait only when the result is required to proceed.",
 	"At most 4 subagents can run concurrently. If spawn returns status=at_capacity, wait/cancel/list before retrying.",
-	"Children run headless WITHOUT the dangerous-command approval gate (same trust model as the native task tool): they cannot prompt the user, so their bash executes directly. Do not delegate work expected to run destructive commands against the user's checkout; use worktree-isolated children for write-heavy work. Isolated worktrees are preserved after completion and never auto-removed.",
+	"Headless children run WITHOUT the dangerous-command approval gate (same trust model as the native task tool): they cannot prompt the user, so their bash executes directly. Do not delegate destructive commands against the user's checkout; use worktree isolation for write-heavy work. Isolated worktrees are preserved after completion and never auto-removed.",
 ];
 
-export const SUBAGENT_PROMPT_SNIPPET = "Spawn, check, wait for, cancel, and list headless subagents with self-contained prompts.";
+export const SUBAGENT_PROMPT_SNIPPET = "Spawn, steer, check, wait for, cancel, and list headless or visible subagents with self-contained prompts.";
 
 export const SUBAGENT_TOOL_DESCRIPTIONS = {
-	spawn: "Start one headless child subagent and return immediately with its id. Optionally isolate it in a preserved git worktree. Its result is delivered automatically when it settles; use subagent_wait to block for it.",
+	spawn: "Start one child subagent and return immediately with its id. Set visible=true for an interactive terminal-host pane, or omit it for silent headless execution. Optionally isolate it in a preserved git worktree. Its result is delivered automatically when it settles; use subagent_wait to block for it.",
+	send: "Send prompt text followed by Enter to a running visible subagent pane.",
 	check: "Peek at one subagent without consuming its eventual result.",
 	wait: "Block until one or more subagents settle, then return their bounded results and mark them consumed.",
 	cancel: "Interrupt running subagents and mark their results consumed.",

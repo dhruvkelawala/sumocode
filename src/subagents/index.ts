@@ -1,5 +1,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { getBuiltInToolsFromActiveTools } from "../native-task-config.js";
+import { BUILT_IN_TOOLS, getBuiltInToolsFromActiveTools } from "../native-task-config.js";
+import { getTerminalHost } from "../terminal-host/index.js";
+import { spawnPaneChild } from "./backend-pane.js";
 import { spawnPiChild } from "./backend-pi.js";
 import {
 	createDeferredResultDelivery,
@@ -21,12 +23,8 @@ export function flushDeferredResultDelivery(delivery: DeferredResultDelivery): v
 	deliveryFlushers.get(delivery)?.();
 }
 
-const settledPayload = (snapshot: SubagentSnapshot): DeliveryPayload => ({
-	id: snapshot.id,
-	customType: "subagent-result",
-	title: snapshot.title,
-	status: snapshot.status,
-	content: buildSubagentResultMessage({
+const settledPayload = (snapshot: SubagentSnapshot): DeliveryPayload => {
+	const result = buildSubagentResultMessage({
 		id: snapshot.id,
 		title: snapshot.title,
 		status: snapshot.status === "done" ? "done" : "error",
@@ -34,23 +32,84 @@ const settledPayload = (snapshot: SubagentSnapshot): DeliveryPayload => ({
 		output: snapshot.finalText,
 		sessionFilePath: snapshot.sessionFilePath,
 		manifest: snapshot.manifest,
-	}),
-	details: { id: snapshot.id, title: snapshot.title, status: snapshot.status, manifest: snapshot.manifest },
-});
+	});
+	const paneLine = snapshot.pane
+		? `Pane: ${snapshot.pane.paneId ?? snapshot.pane.tabId ?? snapshot.pane.workspaceId ?? "unknown"} · agent ${snapshot.pane.agentName}`
+		: undefined;
+	return {
+		id: snapshot.id,
+		customType: "subagent-result",
+		title: snapshot.title,
+		status: snapshot.status,
+		content: paneLine ? `${result}\n\n${paneLine}` : result,
+		details: {
+			id: snapshot.id,
+			title: snapshot.title,
+			status: snapshot.status,
+			manifest: snapshot.manifest,
+			...(snapshot.pane ? { pane: snapshot.pane } : {}),
+		},
+	};
+};
 
 export function installSubagents(
 	pi: ExtensionAPI,
 	sharedDelivery?: DeferredResultDelivery,
 ): SubagentManager {
-	const manager = new SubagentManager((task) => spawnPiChild({
-		prompt: task.prompt,
-		cwd: task.cwd,
-		model: task.model,
-		thinking: task.thinking,
-		inherited: task.inherited ?? {},
-		builtInTools: getBuiltInToolsFromActiveTools([...(task.builtInTools ?? [])]),
-		signal: task.signal,
-	}));
+	const host = getTerminalHost();
+	const manager = new SubagentManager((task) => {
+		if (task.visible) {
+			if (!task.placement) {
+				return {
+					events: (emit) => emit({ kind: "run-settled", outcome: { kind: "failed", errorText: "visible subagent placement was not resolved" } }),
+					interrupt: () => undefined,
+				};
+			}
+			// Mirror the headless child's inheritance: explicit overrides win, else
+			// the parent session's model/thinking flow through (PR #335 review —
+			// visible children must not silently reset to defaults).
+			const inheritedModel = task.inherited?.model ? `${task.inherited.model.provider}/${task.inherited.model.id}` : undefined;
+			// pi's --tools is an allowlist across built-in AND extension tools, so
+			// forwarding the parent's full built-in set would strip the child's
+			// extension tools for nothing. Only a NARROWED parent narrows the
+			// child (fail-closed: the restricted child also loses extension tools,
+			// which is the conservative direction — extension tools like bg_start
+			// are shell-execution escapes a --tools read parent must not grant).
+			const paneBuiltIn = getBuiltInToolsFromActiveTools([...(task.builtInTools ?? [])]);
+			// Derived from the canonical list: a literal count would fail OPEN if
+			// the built-in set ever grows (full-set parents would look narrowed-
+			// by-one and vice versa).
+			//
+			// Known conservative edge: a parent whose config disables some built-in
+			// (without any security intent) also counts as "narrowed", so its
+			// visible children get --tools and lose extension tools. That degrades
+			// toward LESS access, never more — acceptable until pi grows a
+			// built-ins-only restriction flag.
+			const paneNarrowed = task.builtInTools !== undefined && paneBuiltIn.length < BUILT_IN_TOOLS.length;
+			return spawnPaneChild({
+				prompt: task.prompt,
+				name: task.title,
+				cwd: task.cwd,
+				id: task.id,
+				model: task.model ?? inheritedModel,
+				thinking: task.thinking ?? task.inherited?.thinking,
+				tools: paneNarrowed ? paneBuiltIn : undefined,
+				signal: task.signal,
+				host,
+				pi,
+				placement: task.placement,
+			});
+		}
+		return spawnPiChild({
+			prompt: task.prompt,
+			cwd: task.cwd,
+			model: task.model,
+			thinking: task.thinking,
+			inherited: task.inherited ?? {},
+			builtInTools: getBuiltInToolsFromActiveTools([...(task.builtInTools ?? [])]),
+			signal: task.signal,
+		});
+	}, { terminalHost: host, pi });
 	const ownsDelivery = sharedDelivery === undefined;
 	const delivery = sharedDelivery ?? createDeferredResultDelivery();
 	const observedSettledIds = new Set<string>();
@@ -114,7 +173,7 @@ export function installSubagents(
 	};
 	armDelivery();
 
-	registerSubagentTools(pi, manager, delivery);
+	registerSubagentTools(pi, manager, delivery, host);
 	pi.on("session_start", (_event, ctx) => {
 		latestContext = ctx;
 		armDelivery();

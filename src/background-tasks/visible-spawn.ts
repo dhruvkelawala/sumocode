@@ -125,7 +125,16 @@ export function buildVisibleTaskScript(options: VisibleTaskCommandOptions): stri
  * running SumoCode anyway.
  */
 export function buildVisibleAgentCommand(
-	options: Pick<VisibleTaskCommandOptions, "cwd" | "runner" | "paths" | "model" | "thinking">,
+	options: Pick<VisibleTaskCommandOptions, "cwd" | "runner" | "paths" | "model" | "thinking"> & {
+		/**
+		 * Pi tool allowlist forwarded as --tools (or --no-tools when empty).
+		 * NOTE: pi's --tools restricts built-in AND extension tools alike, so
+		 * callers must only pass this when the parent session is itself
+		 * narrowed — a full-toolset child should receive undefined (no flag).
+		 * Undefined preserves the legacy bg_task behavior (no restriction).
+		 */
+		tools?: readonly string[];
+	},
 ): string {
 	const runner = options.runner ?? "shell";
 	if (runner !== "sumocode") {
@@ -141,6 +150,11 @@ export function buildVisibleAgentCommand(
 
 	const modelFlags: string[] = options.model ? ["--model", shellEscape(options.model)] : [];
 	const thinkingFlags: string[] = options.thinking ? ["--thinking", shellEscape(options.thinking)] : [];
+	const toolsFlags: string[] = options.tools === undefined
+		? []
+		: options.tools.length === 0
+			? ["--no-tools"]
+			: ["--tools", shellEscape(options.tools.join(","))];
 
 	return [
 		"cd",
@@ -152,6 +166,7 @@ export function buildVisibleAgentCommand(
 		"task",
 		...modelFlags,
 		...thinkingFlags,
+		...toolsFlags,
 		"--prompt-file",
 		shellEscape(options.paths.promptFile),
 	].join(" ");

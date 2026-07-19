@@ -2,8 +2,10 @@ import { execFile } from "node:child_process";
 import { isAbsolute, join, relative } from "node:path";
 import { promisify } from "node:util";
 import { createWorktree, resolveCreateOptions, type CreateWorktreeOptions, type CreateWorktreeResult } from "../git/worktree.js";
+import type { AgentPanePlacement, PiExecLike, TerminalHost } from "../terminal-host/types.js";
 import type { SpawnedChild } from "./backend-pi.js";
 import type { LiveToolState, RunOutcome, SubagentEvent, SubagentSnapshot, SubagentWorktreeRef } from "./domain.js";
+import { planPlacement } from "./layout.js";
 import { buildCompletionManifest, type CompletionManifestEvidence } from "./manifest.js";
 
 const execFileAsync = promisify(execFile);
@@ -34,6 +36,7 @@ export interface SpawnSubagentTask {
 	readonly prompt: string;
 	readonly title: string;
 	readonly cwd: string;
+	readonly visible?: boolean;
 	readonly worktree?: boolean;
 	readonly branch?: string;
 	readonly model?: string;
@@ -42,7 +45,7 @@ export interface SpawnSubagentTask {
 	readonly builtInTools?: readonly string[];
 }
 
-type BackendFactory = (task: SpawnSubagentTask & { id: string; signal: AbortSignal }) => SpawnedChild;
+type BackendFactory = (task: SpawnSubagentTask & { id: string; signal: AbortSignal; placement?: AgentPanePlacement }) => SpawnedChild;
 type Listener = () => void;
 type WorktreeCreator = (options: CreateWorktreeOptions) => Promise<CreateWorktreeResult>;
 
@@ -55,6 +58,8 @@ export interface SubagentManagerDependencies {
 	readonly createWorktree?: WorktreeCreator;
 	readonly captureGitContext?: (cwd: string) => Promise<SpawnGitContext>;
 	readonly buildCompletionManifest?: typeof buildCompletionManifest;
+	readonly terminalHost?: TerminalHost;
+	readonly pi?: PiExecLike;
 }
 
 async function gitRead(cwd: string, args: readonly string[]): Promise<string | undefined> {
@@ -95,6 +100,7 @@ const makeInitialSnapshot = (
 	cwd,
 	baseRef,
 	worktree,
+	...(task.visible ? { visible: true } : {}),
 	status: "running",
 	createdAt,
 	modelLabel: task.model,
@@ -122,6 +128,10 @@ export class SubagentManager {
 	private readonly createWorktreeImpl: WorktreeCreator;
 	private readonly captureGitContextImpl: (cwd: string) => Promise<SpawnGitContext>;
 	private readonly buildCompletionManifestImpl: typeof buildCompletionManifest;
+	private readonly terminalHost?: TerminalHost;
+	private readonly pi?: PiExecLike;
+	private subagentsTabId?: string;
+	private visibleSpawnTail: Promise<void> = Promise.resolve();
 	private readonly settlingIds = new Set<string>();
 	private readonly settlingPromises = new Map<string, Promise<void>>();
 	private readonly settlingOutcomes = new Map<string, RunOutcome>();
@@ -132,6 +142,8 @@ export class SubagentManager {
 		this.createWorktreeImpl = dependencies.createWorktree ?? createWorktree;
 		this.captureGitContextImpl = dependencies.captureGitContext ?? captureGitContext;
 		this.buildCompletionManifestImpl = dependencies.buildCompletionManifest ?? buildCompletionManifest;
+		this.terminalHost = dependencies.terminalHost;
+		this.pi = dependencies.pi;
 	}
 
 	public async spawn(task: SpawnSubagentTask): Promise<SubagentSnapshot | AtCapacityDetails> {
@@ -158,6 +170,7 @@ export class SubagentManager {
 		const createdAt = Date.now();
 		this.pendingSpawns.set(id, { title: task.title, createdAt });
 		let pending = true;
+		let releaseVisibleSpawn: (() => void) | undefined;
 		const releasePending = () => {
 			if (!pending) return;
 			pending = false;
@@ -210,10 +223,49 @@ export class SubagentManager {
 				};
 			}
 
+			let placement: AgentPanePlacement | undefined;
+			if (task.visible) {
+				releaseVisibleSpawn = await this.reserveVisibleSpawn();
+				const host = this.terminalHost;
+				if (!host || !this.pi || host.kind === "none") {
+					releasePending();
+					return this.recordSpawnFailure(task, id, createdAt, baseRef, "visible subagents require a running terminal host", childCwd, worktree);
+				}
+				const planned = planPlacement({
+					hostKind: host.kind,
+					isolated: worktree !== undefined,
+					// Count every tracked pane in the tab, not just running ones: settled
+					// panes stay open for inspection and still occupy tab real estate.
+					// Over-counting an already-closed pane merely opens a fresh tab
+					// earlier — the conservative failure mode.
+					visiblePanes: this.list().flatMap((snapshot) => snapshot.visible && !snapshot.worktree && snapshot.pane ? [snapshot.pane] : []),
+					sessionTabId: this.subagentsTabId,
+				});
+				if (planned.kind === "workspace") {
+					const openWorkspace = host.openExistingWorktreeWorkspace;
+					let opened: Awaited<ReturnType<NonNullable<typeof openWorkspace>>>;
+					try {
+						opened = openWorkspace
+							? await openWorkspace(this.pi, { path: worktree?.path ?? childCwd, label: worktree?.branch.replace(/^sumo\//, "") ?? task.title, focus: false })
+							: { ok: false, error: `${host.kind} cannot open an existing worktree workspace` };
+					} catch (error) {
+						opened = { ok: false, error: error instanceof Error ? error.message : String(error) };
+					}
+					const workspaceId = opened.ok ? opened.pane.workspaceId : undefined;
+					if (!opened.ok || !workspaceId) {
+						releasePending();
+						const reason = opened.ok ? "terminal host returned no workspace id" : opened.error;
+						return this.recordSpawnFailure(task, id, createdAt, baseRef, `unable to open worktree workspace: ${reason}. Worktree created at ${worktree?.path ?? childCwd} is preserved.`, childCwd, worktree);
+					}
+					placement = { kind: "workspace", workspaceId };
+				} else if (planned.kind === "tab") placement = planned;
+				else placement = { kind: "new-tab", label: planned.kind === "new-tab" ? planned.label : "subagents" };
+			}
+
 			const controller = new AbortController();
 			let child: SpawnedChild;
 			try {
-				child = this.backendFactory({ ...task, cwd: childCwd, id, signal: controller.signal });
+				child = this.backendFactory({ ...task, cwd: childCwd, id, signal: controller.signal, placement });
 			} catch (error) {
 				releasePending();
 				const message = error instanceof Error ? error.message : String(error);
@@ -225,6 +277,7 @@ export class SubagentManager {
 			this.children.set(id, { child, controller });
 			releasePending();
 			this.consumeEvents(id, child.events);
+			if (child.ready) await child.ready;
 			this.notify();
 			this.prune();
 			// A backend can settle synchronously (e.g. invalid model override emits
@@ -234,6 +287,7 @@ export class SubagentManager {
 			if (synchronousSettle) await synchronousSettle;
 			return this.snapshots.get(id) ?? snapshot;
 		} finally {
+			releaseVisibleSpawn?.();
 			releasePending();
 		}
 	}
@@ -340,6 +394,14 @@ export class SubagentManager {
 		}
 	}
 
+	private async reserveVisibleSpawn(): Promise<() => void> {
+		const previous = this.visibleSpawnTail;
+		let release = (): void => undefined;
+		this.visibleSpawnTail = new Promise<void>((resolve) => { release = resolve; });
+		await previous;
+		return release;
+	}
+
 	private recordSpawnFailure(
 		task: SpawnSubagentTask,
 		id: string,
@@ -374,11 +436,33 @@ export class SubagentManager {
 
 	private fold(id: string, event: SubagentEvent): void {
 		if (event.kind === "run-settled") {
+			// A visible non-isolated child that FAILS before any pane attached is
+			// evidence the cached subagents tab may be gone (e.g. the human closed
+			// it — `herdr agent start --tab <dead>` fails, and no pane event ever
+			// fired). Invalidate the cache so the next spawn re-plans a fresh tab
+			// instead of failing forever. Evidence-based, not error-text sniffing;
+			// the worst case for a transient failure is one extra tab (cosmetic).
+			const settling = this.snapshots.get(id);
+			if (
+				event.outcome.kind === "failed" &&
+				settling?.visible &&
+				!settling.worktree &&
+				!settling.pane &&
+				this.subagentsTabId !== undefined
+			) {
+				this.subagentsTabId = undefined;
+			}
 			void this.startSettle(id, event.outcome);
 			return;
 		}
 		const current = this.snapshots.get(id);
 		if (!current) return;
+		if (event.kind === "pane-attached") {
+			this.snapshots.set(id, { ...current, pane: event.pane });
+			if (!current.worktree && event.pane.tabId) this.subagentsTabId = event.pane.tabId;
+			this.notify();
+			return;
+		}
 		if (event.kind === "run-started") this.startedIds.add(id);
 		// Terminal state is sticky. After a cancel timeout we fold a synthetic
 		// interrupted settle while the OS process is still dying (SIGTERM sent,

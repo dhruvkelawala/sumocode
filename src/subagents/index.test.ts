@@ -5,6 +5,9 @@ import { flushDeferredResultDelivery, installSubagents } from "./index.js";
 
 const backend = vi.hoisted(() => ({
 	emitters: [] as Array<(event: SubagentEvent) => void>,
+	paneEmitters: [] as Array<(event: SubagentEvent) => void>,
+	piCalls: 0,
+	paneCalls: [] as Array<{ cwd: string; placement: unknown; model?: string; thinking?: string; tools?: readonly string[] }>,
 }));
 
 vi.mock("./manifest.js", () => ({
@@ -21,8 +24,36 @@ vi.mock("./manifest.js", () => ({
 	})),
 }));
 
+vi.mock("../terminal-host/index.js", () => ({
+	getTerminalHost: () => ({
+		kind: "herdr",
+		startAgentPane: vi.fn(),
+		sendPaneText: vi.fn(),
+		openCommandInSplit: vi.fn(),
+		openExistingWorktreeWorkspace: vi.fn(),
+		closePane: vi.fn(),
+		notify: vi.fn(),
+	}),
+}));
+
+vi.mock("./backend-pane.js", () => ({
+	spawnPaneChild: vi.fn((options: { cwd: string; placement: unknown; model?: string; thinking?: string; tools?: readonly string[] }) => {
+		backend.paneCalls.push(options);
+		return {
+			events: (emit: (event: SubagentEvent) => void) => {
+				backend.paneEmitters.push(emit);
+				emit({ kind: "run-started" });
+				emit({ kind: "pane-attached", pane: { agentName: "visible-worker-abc", workspaceId: "w1", tabId: "w1:t2", paneId: "w1:p3" } });
+			},
+			ready: Promise.resolve(),
+			interrupt: vi.fn(),
+		};
+	}),
+}));
+
 vi.mock("./backend-pi.js", () => ({
 	spawnPiChild: vi.fn((options: { model?: string }) => {
+		backend.piCalls += 1;
 		let emitEvent: ((event: SubagentEvent) => void) | undefined;
 		return {
 			events: (emit: (event: SubagentEvent) => void) => {
@@ -81,6 +112,9 @@ const spawn = (manager: ReturnType<typeof installSubagents>, title = "worker") =
 
 beforeEach(() => {
 	backend.emitters.length = 0;
+	backend.paneEmitters.length = 0;
+	backend.piCalls = 0;
+	backend.paneCalls.length = 0;
 });
 
 describe("subagent result delivery", () => {
@@ -153,6 +187,52 @@ describe("subagent result delivery", () => {
 		harness.setIdle(true);
 		harness.fire("agent_end");
 		expect(harness.sendMessage).toHaveBeenCalledOnce();
+	});
+
+	it("routes visible children through the pane backend and delivers one pane-referenced card", async () => {
+		const harness = createHarness();
+		harness.setIdle(false);
+		harness.fire("agent_start");
+		await harness.manager.spawn({ prompt: "watch me", title: "visible worker", cwd: "/tmp/project", visible: true });
+		expect(backend.paneCalls).toHaveLength(1);
+		expect(backend.piCalls).toBe(0);
+		expect(harness.manager.get("sa-1")?.pane).toEqual({ agentName: "visible-worker-abc", workspaceId: "w1", tabId: "w1:t2", paneId: "w1:p3" });
+		// Full-toolset parent: no --tools narrowing (pi --tools would strip the
+		// child's extension tools), and no model/thinking was set or inherited.
+		expect(backend.paneCalls[0]?.tools).toBeUndefined();
+
+		backend.paneEmitters[0]?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "visible result" } });
+		await vi.waitFor(() => expect(harness.manager.get("sa-1")?.status).toBe("done"));
+		harness.setIdle(true);
+		harness.fire("agent_end");
+		harness.fire("agent_end");
+
+		expect(harness.sendMessage).toHaveBeenCalledOnce();
+		expect(harness.sendMessage).toHaveBeenCalledWith(
+			expect.objectContaining({
+				customType: "subagent-result",
+				content: expect.stringContaining("Pane: w1:p3 · agent visible-worker-abc"),
+				details: expect.objectContaining({ pane: { agentName: "visible-worker-abc", workspaceId: "w1", tabId: "w1:t2", paneId: "w1:p3" } }),
+			}),
+			{ deliverAs: "followUp", triggerTurn: true },
+		);
+	});
+
+	it("visible children inherit parent model/thinking and narrow with a narrowed parent", async () => {
+		const harness = createHarness();
+		await harness.manager.spawn({
+			prompt: "restricted work",
+			title: "narrow child",
+			cwd: "/tmp/project",
+			visible: true,
+			inherited: { model: { provider: "openai-codex", id: "gpt-5.6-sol" }, thinking: "high" },
+			builtInTools: ["read", "grep"],
+		});
+		expect(backend.paneCalls).toHaveLength(1);
+		expect(backend.paneCalls[0]?.model).toBe("openai-codex/gpt-5.6-sol");
+		expect(backend.paneCalls[0]?.thinking).toBe("high");
+		// Narrowed parent (--tools read,grep) => narrowed child allowlist.
+		expect(backend.paneCalls[0]?.tools).toEqual(["read", "grep"]);
 	});
 
 	it("flushes immediately when a reliable context reports the parent idle", async () => {

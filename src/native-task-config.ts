@@ -1,7 +1,7 @@
 import type { ProviderModel, TaskThinking, TaskWorkItem, ThinkingLevel } from "./native-task-params.js";
 import { resolveModel } from "./native-task-params.js";
 
-const BUILT_IN_TOOLS = ["read", "bash", "edit", "write", "grep", "find", "ls"] as const;
+export const BUILT_IN_TOOLS = ["read", "bash", "edit", "write", "grep", "find", "ls"] as const;
 
 export type BuiltInToolName = (typeof BUILT_IN_TOOLS)[number];
 

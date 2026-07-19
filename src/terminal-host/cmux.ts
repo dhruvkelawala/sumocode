@@ -1,9 +1,28 @@
 import { openCommandInCurrentSurface, openCommandInNewSplitWithRefs } from "../commands/cmux-split.js";
 import type { PaneRef, PiExecLike, SplitDirection, TerminalHost } from "./types.js";
 
-export const cmuxTerminalHost: TerminalHost = {
+const shellEscape = (value: string): string => `'${value.replace(/'/g, `'\\''`)}'`;
+
+export const cmuxTerminalHost = {
 	kind: "cmux",
-	async openCommandInSplit(pi: PiExecLike, direction: SplitDirection, options: { shellCommand: string }) {
+	async startAgentPane(pi, options) {
+		const result = await this.openCommandInSplit(pi, "right", {
+			cwd: options.cwd,
+			shellCommand: `bash -lc ${shellEscape(options.shellCommand)}`,
+		});
+		if (!result.ok) return result;
+		return {
+			ok: true,
+			pane: result.pane,
+			agentName: options.name,
+			workspaceId: result.pane.workspaceId,
+			paneId: result.pane.paneId,
+		};
+	},
+	async sendPaneText(_pi: PiExecLike, _pane: PaneRef, _text: string) {
+		return { ok: false, error: "not supported on cmux" };
+	},
+	async openCommandInSplit(pi: PiExecLike, direction: SplitDirection, options: { cwd: string; shellCommand: string }) {
 		const result = await openCommandInNewSplitWithRefs(pi as never, direction, options.shellCommand);
 		if (!result.ok) return result;
 		return { ok: true, pane: { host: "cmux", paneId: result.surfaceRef, workspaceId: result.workspaceRef } };
@@ -22,4 +41,4 @@ export const cmuxTerminalHost: TerminalHost = {
 		if (pane?.paneId) args.push("--surface", pane.paneId);
 		await pi.exec("cmux", args, { timeout: 5000 }).catch(() => undefined);
 	},
-};
+} satisfies TerminalHost;

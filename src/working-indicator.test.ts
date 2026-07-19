@@ -230,17 +230,35 @@ describe("WorkingIndicatorComponent", () => {
 		vi.useRealTimers();
 	});
 
-	it("switches away from and back to RunCat while capability remains enabled", () => {
+	it("restarts the active timer with each theme's cadence when switching away from and back to RunCat", () => {
 		vi.useFakeTimers();
 		setActiveTheme("ultraviolet-core");
-		const component = new WorkingIndicatorComponent({ requestRender: vi.fn() }, { SUMOCODE_RUNCAT_FONT: "1" });
+		const tui = { requestRender: vi.fn() };
+		const component = new WorkingIndicatorComponent(tui, { SUMOCODE_RUNCAT_FONT: "1" });
 
 		component.start();
 		expect(stripAnsi(component.render(160)[0]!)).toContain(ULTRAVIOLET_RUNCAT_FRAMES[0]);
+		tui.requestRender.mockClear();
+		vi.advanceTimersByTime(ULTRAVIOLET_RUNCAT_INTERVAL_MS - 1);
+		expect(tui.requestRender).not.toHaveBeenCalled();
+		vi.advanceTimersByTime(1);
+		expect(tui.requestRender).toHaveBeenCalledTimes(1);
+
 		setActiveTheme("cathedral");
-		expect(stripAnsi(component.render(160)[0]!)).toContain(CATHEDRAL_INDICATOR_FRAMES[0]);
+		expect(stripAnsi(component.render(160)[0]!)).toContain(CATHEDRAL_INDICATOR_FRAMES[1]);
+		tui.requestRender.mockClear();
+		vi.advanceTimersByTime(CATHEDRAL_INDICATOR_INTERVAL_MS - 1);
+		expect(tui.requestRender).not.toHaveBeenCalled();
+		vi.advanceTimersByTime(1);
+		expect(tui.requestRender).toHaveBeenCalledTimes(1);
+
 		setActiveTheme("ultraviolet-core");
-		expect(stripAnsi(component.render(160)[0]!)).toContain(ULTRAVIOLET_RUNCAT_FRAMES[0]);
+		expect(stripAnsi(component.render(160)[0]!)).toContain(ULTRAVIOLET_RUNCAT_FRAMES[2]);
+		tui.requestRender.mockClear();
+		vi.advanceTimersByTime(ULTRAVIOLET_RUNCAT_INTERVAL_MS - 1);
+		expect(tui.requestRender).not.toHaveBeenCalled();
+		vi.advanceTimersByTime(1);
+		expect(tui.requestRender).toHaveBeenCalledTimes(1);
 
 		component.dispose();
 		vi.useRealTimers();

@@ -7,6 +7,10 @@ export function validateFinalCellAssertions(scenario) {
 		for (const field of ["row", "col"]) {
 			if (!Number.isInteger(assertion[field]) || assertion[field] < 0) throw new Error(`Scenario ${scenario.id} finalCellAssertions[${index}].${field} must be a non-negative integer`);
 		}
+		const rows = scenario.dimensions?.rows;
+		const cols = scenario.dimensions?.cols;
+		if (Number.isInteger(rows) && assertion.row >= rows) throw new Error(`Scenario ${scenario.id} finalCellAssertions[${index}].row must be less than dimensions.rows (${rows})`);
+		if (Number.isInteger(cols) && assertion.col >= cols) throw new Error(`Scenario ${scenario.id} finalCellAssertions[${index}].col must be less than dimensions.cols (${cols})`);
 		if (assertion.text !== undefined && typeof assertion.text !== "string") throw new Error(`Scenario ${scenario.id} finalCellAssertions[${index}].text must be a string`);
 		if (assertion.charPattern !== undefined) {
 			if (typeof assertion.charPattern !== "string" || assertion.charPattern.length === 0) throw new Error(`Scenario ${scenario.id} finalCellAssertions[${index}].charPattern must be a non-empty string`);

@@ -19,6 +19,12 @@ describe("validateFinalCellAssertions", () => {
 		expect(() => validateFinalCellAssertions({ id: "bad", finalCellAssertions: [{ row: 0, col: 0, charPattern: "[" }] })).toThrow(/invalid/);
 		expect(() => validateFinalCellAssertions({ id: "bad", finalCellAssertions: [{ row: 0, col: 0, fg: "violet" }] })).toThrow(/fg/);
 	});
+
+	it("rejects coordinates outside declared scenario dimensions", () => {
+		const dimensions = { rows: 2, cols: 3 };
+		expect(() => validateFinalCellAssertions({ id: "bad-row", dimensions, finalCellAssertions: [{ row: 2, col: 0, text: "x" }] })).toThrow(/row.*dimensions\.rows/);
+		expect(() => validateFinalCellAssertions({ id: "bad-col", dimensions, finalCellAssertions: [{ row: 0, col: 3, text: "x" }] })).toThrow(/col.*dimensions\.cols/);
+	});
 });
 
 describe("evaluateFinalCellAssertions", () => {

@@ -121,6 +121,21 @@ describe("handleRpcMessageFollowUp", () => {
 		expect(editor.setText).toHaveBeenCalledWith("");
 	});
 
+	it("adds history and clears the draft when the scheduler handled a host command", async () => {
+		const editor = followUpEditor("/model anthropic/claude-opus-4");
+		const scheduler = {
+			getSnapshot: vi.fn(() => ({ busy: true, queuedMessages: [], pausedAfterFailure: false })),
+			submit: vi.fn(async () => "handled" as const),
+		};
+
+		handleRpcMessageFollowUp({ editor, scheduler, notifications: { notify: vi.fn() } });
+		await flush();
+
+		expect(scheduler.submit).toHaveBeenCalledWith("/model anthropic/claude-opus-4", { forceQueue: true });
+		expect(editor.addToHistory).toHaveBeenCalledWith("/model anthropic/claude-opus-4");
+		expect(editor.setText).toHaveBeenCalledWith("");
+	});
+
 	it("retains the draft when the scheduler declines the forced follow-up", async () => {
 		const editor = followUpEditor("still here");
 		const scheduler = {

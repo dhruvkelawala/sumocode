@@ -212,7 +212,7 @@ export function handleRpcMessageFollowUp(deps: RpcMessageFollowUpDependencies): 
 		if (draft.trim().length === 0) return;
 		if (!deps.scheduler.getSnapshot().busy) return;
 		const result = await deps.scheduler.submit(draft, { forceQueue: true });
-		if (result !== "queued") return;
+		if (result !== "queued" && result !== "handled") return;
 		deps.editor.addToHistory(draft);
 		deps.editor.setText("");
 	}, deps.notifications);

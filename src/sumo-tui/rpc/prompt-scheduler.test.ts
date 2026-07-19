@@ -331,12 +331,12 @@ describe("RpcPromptScheduler", () => {
 		expect(scheduler.getSnapshot()).toMatchObject({ busy: false, queuedMessages: [] });
 	});
 
-	it("lets host commands take first refusal before queueing", async () => {
+	it("returns handled when a host command matches instead of queueing or sending", async () => {
 		const sendPrompt = vi.fn(async () => undefined);
 		const handleHostCommand = vi.fn(async (message: string) => message === "/model");
 		const scheduler = createRpcPromptScheduler({ sendPrompt, handleHostCommand });
 
-		await expect(scheduler.submit("/model", { forceQueue: true })).resolves.toBe("ignored");
+		await expect(scheduler.submit("/model", { forceQueue: true })).resolves.toBe("handled");
 		expect(sendPrompt).not.toHaveBeenCalled();
 		expect(scheduler.getSnapshot().queuedMessages).toEqual([]);
 	});
@@ -362,5 +362,26 @@ describe("RpcPromptScheduler", () => {
 
 		expect(sendPrompt).not.toHaveBeenCalled();
 		expect(scheduler.getSnapshot()).toMatchObject({ busy: false, queuedMessages: [] });
+	});
+
+	it("returns handled via forceQueue when a host command matches during a busy window", async () => {
+		const sendPrompt = vi.fn(async () => undefined);
+		const handleHostCommand = vi.fn(async (message: string) => message === "/theme");
+		const scheduler = createRpcPromptScheduler({ sendPrompt, handleHostCommand });
+
+		scheduler.handleAgentEvent({ type: "agent_start" });
+		await expect(scheduler.submit("/theme", { forceQueue: true })).resolves.toBe("handled");
+		expect(sendPrompt).not.toHaveBeenCalled();
+		expect(scheduler.getSnapshot().queuedMessages).toEqual([]);
+	});
+
+	it("returns handled for a host command submitted without forceQueue when idle", async () => {
+		const sendPrompt = vi.fn(async () => undefined);
+		const handleHostCommand = vi.fn(async (message: string) => message === "/compact");
+		const scheduler = createRpcPromptScheduler({ sendPrompt, handleHostCommand });
+
+		await expect(scheduler.submit("/compact")).resolves.toBe("handled");
+		expect(sendPrompt).not.toHaveBeenCalled();
+		expect(scheduler.getSnapshot().queuedMessages).toEqual([]);
 	});
 });

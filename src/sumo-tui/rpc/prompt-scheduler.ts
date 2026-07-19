@@ -10,7 +10,7 @@ export interface RpcPromptSchedulerRestoreOptions {
 }
 
 export interface RpcPromptScheduler {
-	submit(message: string, options?: { forceQueue?: boolean }): Promise<"sent" | "queued" | "ignored">;
+	submit(message: string, options?: { forceQueue?: boolean }): Promise<"sent" | "queued" | "ignored" | "handled">;
 	handleAgentEvent(event: unknown): void;
 	restoreAll(currentDraft: string, options?: RpcPromptSchedulerRestoreOptions): { count: number; text: string };
 	rebindSession(sessionId: string | undefined, currentDraft: string): { count: number; text: string };
@@ -57,9 +57,9 @@ class DefaultRpcPromptScheduler implements RpcPromptScheduler {
 		this.sessionId = options.sessionId;
 	}
 
-	public async submit(message: string, options: { forceQueue?: boolean } = {}): Promise<"sent" | "queued" | "ignored"> {
+	public async submit(message: string, options: { forceQueue?: boolean } = {}): Promise<"sent" | "queued" | "ignored" | "handled"> {
 		if (message.trim().length === 0) return "ignored";
-		if (await this.options.handleHostCommand?.(message)) return "ignored";
+		if (await this.options.handleHostCommand?.(message)) return "handled";
 		const forceQueue = options.forceQueue === true;
 		if (forceQueue && (!this.isBusy() || this.pausedAfterFailure)) return "ignored";
 		if (this.queue.length > 0) {

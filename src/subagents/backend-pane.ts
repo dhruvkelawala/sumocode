@@ -41,6 +41,7 @@ export interface PaneChildOptions {
 	host: TerminalHost;
 	pi: PiExecLike;
 	placement: AgentPanePlacement;
+	readonly tools?: readonly string[];
 }
 
 export interface PaneBackendDependencies {
@@ -73,6 +74,7 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 		paths,
 		model: options.model,
 		thinking: options.thinking,
+		tools: options.tools,
 	});
 	// Keep output visible in the pane while retaining a real diagnostic tail for
 	// non-zero exits. pipefail preserves the child command's failure status.

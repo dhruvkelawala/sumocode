@@ -7,7 +7,7 @@ const backend = vi.hoisted(() => ({
 	emitters: [] as Array<(event: SubagentEvent) => void>,
 	paneEmitters: [] as Array<(event: SubagentEvent) => void>,
 	piCalls: 0,
-	paneCalls: [] as Array<{ cwd: string; placement: unknown }>,
+	paneCalls: [] as Array<{ cwd: string; placement: unknown; model?: string; thinking?: string; tools?: readonly string[] }>,
 }));
 
 vi.mock("./manifest.js", () => ({
@@ -37,7 +37,7 @@ vi.mock("../terminal-host/index.js", () => ({
 }));
 
 vi.mock("./backend-pane.js", () => ({
-	spawnPaneChild: vi.fn((options: { cwd: string; placement: unknown }) => {
+	spawnPaneChild: vi.fn((options: { cwd: string; placement: unknown; model?: string; thinking?: string; tools?: readonly string[] }) => {
 		backend.paneCalls.push(options);
 		return {
 			events: (emit: (event: SubagentEvent) => void) => {
@@ -197,6 +197,9 @@ describe("subagent result delivery", () => {
 		expect(backend.paneCalls).toHaveLength(1);
 		expect(backend.piCalls).toBe(0);
 		expect(harness.manager.get("sa-1")?.pane).toEqual({ agentName: "visible-worker-abc", workspaceId: "w1", tabId: "w1:t2", paneId: "w1:p3" });
+		// Full-toolset parent: no --tools narrowing (pi --tools would strip the
+		// child's extension tools), and no model/thinking was set or inherited.
+		expect(backend.paneCalls[0]?.tools).toBeUndefined();
 
 		backend.paneEmitters[0]?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "visible result" } });
 		await vi.waitFor(() => expect(harness.manager.get("sa-1")?.status).toBe("done"));
@@ -213,6 +216,23 @@ describe("subagent result delivery", () => {
 			}),
 			{ deliverAs: "followUp", triggerTurn: true },
 		);
+	});
+
+	it("visible children inherit parent model/thinking and narrow with a narrowed parent", async () => {
+		const harness = createHarness();
+		await harness.manager.spawn({
+			prompt: "restricted work",
+			title: "narrow child",
+			cwd: "/tmp/project",
+			visible: true,
+			inherited: { model: { provider: "openai-codex", id: "gpt-5.6-sol" }, thinking: "high" },
+			builtInTools: ["read", "grep"],
+		});
+		expect(backend.paneCalls).toHaveLength(1);
+		expect(backend.paneCalls[0]?.model).toBe("openai-codex/gpt-5.6-sol");
+		expect(backend.paneCalls[0]?.thinking).toBe("high");
+		// Narrowed parent (--tools read,grep) => narrowed child allowlist.
+		expect(backend.paneCalls[0]?.tools).toEqual(["read", "grep"]);
 	});
 
 	it("flushes immediately when a reliable context reports the parent idle", async () => {

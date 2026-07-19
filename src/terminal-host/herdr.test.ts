@@ -83,6 +83,7 @@ describe("herdrTerminalHost", () => {
 	});
 
 	it("creates a no-focus tab before starting an agent in it", async () => {
+		vi.stubEnv("HERDR_PANE_ID", "");
 		const exec = vi.fn(async (_bin: string, args: string[]) => {
 			if (args[0] === "tab") return { stdout: JSON.stringify({ result: { tab: { tab_id: "w5:t8" } } }), stderr: "", code: 0, killed: false };
 			return { stdout: JSON.stringify({ result: { agent: { pane_id: "w5:p9", workspace_id: "w5", tab_id: "w5:t8" } } }), stderr: "", code: 0, killed: false };
@@ -95,6 +96,26 @@ describe("herdrTerminalHost", () => {
 		})).resolves.toMatchObject({ ok: true, tabId: "w5:t8", paneId: "w5:p9" });
 		expect(exec).toHaveBeenNthCalledWith(1, "herdr", ["tab", "create", "--label", "subagents", "--no-focus", "--json"], { timeout: 5000 });
 		expect(exec).toHaveBeenNthCalledWith(2, "herdr", ["agent", "start", expect.stringMatching(/^research-/), "--tab", "w5:t8", "--cwd", "/repo", "--no-focus", "--", "bash", "-lc", "run child"], { timeout: 5000 });
+		vi.unstubAllEnvs();
+	});
+
+	it("anchors a new subagents tab to the caller workspace from HERDR_PANE_ID", async () => {
+		vi.stubEnv("HERDR_PANE_ID", "w7:pB");
+		try {
+			const exec = vi.fn(async (_bin: string, args: string[]) => {
+				if (args[0] === "tab") return { stdout: JSON.stringify({ result: { tab: { tab_id: "w7:t3" } } }), stderr: "", code: 0, killed: false };
+				return { stdout: JSON.stringify({ result: { agent: { pane_id: "w7:p9", workspace_id: "w7", tab_id: "w7:t3" } } }), stderr: "", code: 0, killed: false };
+			});
+			await herdrTerminalHost.startAgentPane!({ exec } as never, {
+				name: "research",
+				cwd: "/repo",
+				shellCommand: "run child",
+				placement: { kind: "new-tab", label: "subagents" },
+			});
+			expect(exec).toHaveBeenNthCalledWith(1, "herdr", ["tab", "create", "--workspace", "w7", "--label", "subagents", "--no-focus", "--json"], { timeout: 5000 });
+		} finally {
+			vi.unstubAllEnvs();
+		}
 	});
 
 	it("keeps a successful start when pane rename fails", async () => {

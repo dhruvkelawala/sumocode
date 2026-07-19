@@ -184,4 +184,12 @@ describe("visible-spawn", () => {
 			exitCode: 1,
 		});
 	});
+
+	it("emits --tools only when a narrowed allowlist is provided", () => {
+		const paths = buildVisibleTaskPaths("bg-t", 1234, "/tmp/vt");
+		const base = { cwd: "/repo", runner: "sumocode" as const, paths };
+		expect(buildVisibleAgentCommand(base)).not.toContain("--tools");
+		expect(buildVisibleAgentCommand({ ...base, tools: ["read", "grep"] })).toContain("--tools 'read,grep'");
+		expect(buildVisibleAgentCommand({ ...base, tools: [] })).toContain("--no-tools");
+	});
 });

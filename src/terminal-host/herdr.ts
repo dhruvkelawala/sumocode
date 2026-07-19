@@ -41,6 +41,21 @@ const execFailure = (operation: string, result: { code: number; stderr: string; 
  * return undefined and fall back to herdr's default placement rather than
  * failing the spawn.
  */
+/**
+ * Structural workspace anchor: `HERDR_PANE_ID` is `<workspace>:<pane>` (e.g.
+ * "w7:pB"). Without an explicit `--workspace`, `herdr tab create` targets the
+ * FOCUSED workspace — which may be a different project entirely when the
+ * operator is browsing elsewhere (PR #335 review; the recon doc's "always pass
+ * explicit --workspace/--cwd" rule). Best-effort: unparsable/absent env omits
+ * the flag and falls back to herdr's default.
+ */
+function resolveCallerWorkspaceId(env: NodeJS.ProcessEnv): string | undefined {
+	const paneId = env.HERDR_PANE_ID;
+	if (!paneId) return undefined;
+	const workspace = paneId.split(":")[0];
+	return workspace && /^w\d+$/.test(workspace) ? workspace : undefined;
+}
+
 async function resolveCallerTabId(pi: PiExecLike, env: NodeJS.ProcessEnv): Promise<string | undefined> {
 	const paneId = env.HERDR_PANE_ID;
 	if (!paneId) return undefined;
@@ -106,9 +121,11 @@ async function startAgentPane(
 	} else if (options.placement.kind === "tab") {
 		placementArgs = ["--tab", options.placement.tabId, "--split", options.placement.direction];
 	} else {
+		const workspaceId = resolveCallerWorkspaceId(process.env);
+		const workspaceArgs = workspaceId ? ["--workspace", workspaceId] : [];
 		const tabResult = await pi.exec(
 			"herdr",
-			["tab", "create", "--label", options.placement.label, "--no-focus", "--json"],
+			["tab", "create", ...workspaceArgs, "--label", options.placement.label, "--no-focus", "--json"],
 			{ timeout: 5000 },
 		);
 		if (tabResult.code !== 0) return execFailure("herdr tab create", tabResult);

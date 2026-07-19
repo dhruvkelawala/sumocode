@@ -65,13 +65,26 @@ export function installSubagents(
 					interrupt: () => undefined,
 				};
 			}
+			// Mirror the headless child's inheritance: explicit overrides win, else
+			// the parent session's model/thinking flow through (PR #335 review —
+			// visible children must not silently reset to defaults).
+			const inheritedModel = task.inherited?.model ? `${task.inherited.model.provider}/${task.inherited.model.id}` : undefined;
+			// pi's --tools is an allowlist across built-in AND extension tools, so
+			// forwarding the parent's full built-in set would strip the child's
+			// extension tools for nothing. Only a NARROWED parent narrows the
+			// child (fail-closed: the restricted child also loses extension tools,
+			// which is the conservative direction — extension tools like bg_start
+			// are shell-execution escapes a --tools read parent must not grant).
+			const paneBuiltIn = getBuiltInToolsFromActiveTools([...(task.builtInTools ?? [])]);
+			const paneNarrowed = task.builtInTools !== undefined && paneBuiltIn.length < 7;
 			return spawnPaneChild({
 				prompt: task.prompt,
 				name: task.title,
 				cwd: task.cwd,
 				id: task.id,
-				model: task.model,
-				thinking: task.thinking,
+				model: task.model ?? inheritedModel,
+				thinking: task.thinking ?? task.inherited?.thinking,
+				tools: paneNarrowed ? paneBuiltIn : undefined,
 				signal: task.signal,
 				host,
 				pi,

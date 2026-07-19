@@ -125,7 +125,9 @@ async function startAgentPane(
 		const workspaceArgs = workspaceId ? ["--workspace", workspaceId] : [];
 		const tabResult = await pi.exec(
 			"herdr",
-			["tab", "create", ...workspaceArgs, "--label", options.placement.label, "--no-focus", "--json"],
+			// NOTE: tab create has no --json flag (herdr 0.7.4 rejects it with
+			// "unknown option") — it emits the JSON envelope by default.
+			["tab", "create", ...workspaceArgs, "--label", options.placement.label, "--no-focus"],
 			{ timeout: 5000 },
 		);
 		if (tabResult.code !== 0) return execFailure("herdr tab create", tabResult);
@@ -191,10 +193,10 @@ export const herdrTerminalHost = {
 		if (!paneId) return { ok: false, error: "herdr agent start did not return a pane_id" };
 		return { ok: true, pane: { host: "herdr", paneId, workspaceId: parsed.agent?.workspace_id } };
 	},
-	async openWorktreeWorkspace(pi: PiExecLike, options: { branch: string; baseRef: string; path: string; label: string; shellCommand: string; focus?: boolean }) {
+	async openWorktreeWorkspace(pi: PiExecLike, options: { branch: string; baseRef: string; path: string; label: string; shellCommand: string; sourceCwd: string; focus?: boolean }) {
 		const result = await pi.exec(
 			"herdr",
-			["worktree", "create", "--branch", options.branch, "--base", options.baseRef, "--path", options.path, "--label", options.label, options.focus === false ? "--no-focus" : "--focus", "--json"],
+			["worktree", "create", "--cwd", options.sourceCwd, "--branch", options.branch, "--base", options.baseRef, "--path", options.path, "--label", options.label, options.focus === false ? "--no-focus" : "--focus", "--json"],
 			{ timeout: 5000 },
 		);
 		if (result.code !== 0) return execFailure("herdr worktree create", result);
@@ -204,10 +206,10 @@ export const herdrTerminalHost = {
 		if (!workspaceId) return { ok: false, error: "herdr worktree create did not return a workspace_id" };
 		return await runInWorktreeWorkspace(pi, workspaceId, options.shellCommand);
 	},
-	async openExistingWorktreeWorkspace(pi: PiExecLike, options: { path: string; label: string; shellCommand?: string; focus?: boolean }) {
+	async openExistingWorktreeWorkspace(pi: PiExecLike, options: { path: string; label: string; shellCommand?: string; sourceCwd: string; focus?: boolean }) {
 		const result = await pi.exec(
 			"herdr",
-			["worktree", "open", "--path", options.path, "--label", options.label, options.focus === false ? "--no-focus" : "--focus", "--json"],
+			["worktree", "open", "--cwd", options.sourceCwd, "--path", options.path, "--label", options.label, options.focus === false ? "--no-focus" : "--focus", "--json"],
 			{ timeout: 5000 },
 		);
 		if (result.code !== 0) return execFailure("herdr worktree open", result);

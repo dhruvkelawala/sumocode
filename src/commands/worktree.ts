@@ -194,7 +194,7 @@ export function registerWorktreeCommand(pi: ExtensionAPI, options: WorktreeComma
 					const paneCommand = commandForFreshWorktree(setupAction);
 					const label = worktreeWorkspaceLabel(match.branch ?? match.path);
 					if (terminalHost.openExistingWorktreeWorkspace) {
-						const opened = await terminalHost.openExistingWorktreeWorkspace(pi, { path: match.path, label, shellCommand: paneCommand });
+						const opened = await terminalHost.openExistingWorktreeWorkspace(pi, { path: match.path, label, shellCommand: paneCommand, sourceCwd: ctx.cwd });
 						if (opened.ok) {
 							notify(pi, ctx, `opened ${match.branch ?? match.path} as herdr workspace "${label}" · setup: ${setupAction || "none"}`);
 							return;
@@ -218,7 +218,7 @@ export function registerWorktreeCommand(pi: ExtensionAPI, options: WorktreeComma
 				const label = worktreeWorkspaceLabel(resolved.branch);
 				let created: CreateWorktreeResult | undefined;
 				if (terminalHost.openWorktreeWorkspace) {
-					const opened = await terminalHost.openWorktreeWorkspace(pi, { ...resolved, label, shellCommand: paneCommand });
+					const opened = await terminalHost.openWorktreeWorkspace(pi, { ...resolved, label, shellCommand: paneCommand, sourceCwd: ctx.cwd });
 					if (opened.ok) {
 						const freshLabel = parsed.mode === "fresh" ? " (fresh session)" : "";
 						notify(pi, ctx, `opened ${resolved.branch}${freshLabel} as herdr workspace "${label}" · setup: ${setupAction || "none"}`);

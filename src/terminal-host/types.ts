@@ -39,6 +39,13 @@ export interface WorktreeWorkspaceOptions {
 	label: string;
 	shellCommand: string;
 	/**
+	 * Repo checkout that owns the worktree. herdr resolves worktree commands
+	 * against the FOCUSED workspace when no --cwd/--workspace is given — which
+	 * may be a different project entirely (observed live: worktree_not_found
+	 * because the human was focused on another repo). Always required.
+	 */
+	sourceCwd: string;
+	/**
 	 * Whether the new workspace should take focus. Defaults to true (human
 	 * `/worktree` flows land in the workspace); programmatic spawns (visible
 	 * subagents) pass false so panes never steal the user's focus.
@@ -50,6 +57,8 @@ export interface ExistingWorktreeWorkspaceOptions {
 	path: string;
 	label: string;
 	shellCommand?: string;
+	/** See {@link WorktreeWorkspaceOptions.sourceCwd}. Always required. */
+	sourceCwd: string;
 	/** See {@link WorktreeWorkspaceOptions.focus}. Defaults to true. */
 	focus?: boolean;
 }

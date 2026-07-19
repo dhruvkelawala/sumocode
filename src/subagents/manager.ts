@@ -234,7 +234,11 @@ export class SubagentManager {
 				const planned = planPlacement({
 					hostKind: host.kind,
 					isolated: worktree !== undefined,
-					visiblePanes: this.list().flatMap((snapshot) => snapshot.visible && !snapshot.worktree && snapshot.status === "running" && snapshot.pane ? [snapshot.pane] : []),
+					// Count every tracked pane in the tab, not just running ones: settled
+					// panes stay open for inspection and still occupy tab real estate.
+					// Over-counting an already-closed pane merely opens a fresh tab
+					// earlier — the conservative failure mode.
+					visiblePanes: this.list().flatMap((snapshot) => snapshot.visible && !snapshot.worktree && snapshot.pane ? [snapshot.pane] : []),
 					sessionTabId: this.subagentsTabId,
 				});
 				if (planned.kind === "workspace") {

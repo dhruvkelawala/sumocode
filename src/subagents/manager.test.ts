@@ -269,6 +269,37 @@ describe("SubagentManager", () => {
 		expect(manager.get("sa-1")?.pane?.tabId).toBe("w1:t5");
 	});
 
+	it("counts settled visible panes toward tab capacity (open panes occupy real estate)", async () => {
+		const backendTasks: Array<SpawnSubagentTask & { placement?: unknown }> = [];
+		const host: TerminalHost = {
+			kind: "herdr",
+			openCommandInSplit: vi.fn(),
+			closePane: vi.fn(),
+			notify: vi.fn(),
+		};
+		const manager = new SubagentManager((task) => {
+			backendTasks.push(task);
+			return {
+				events: (emit) => {
+					emit({ kind: "run-started" });
+					emit({ kind: "pane-attached", pane: { agentName: `${task.id}-worker`, workspaceId: "w1", tabId: "w1:t5", paneId: `w1:p${task.id}` } });
+					// Settle immediately: the pane stays OPEN for inspection but the
+					// child no longer counts as running.
+					emit({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
+				},
+				interrupt: () => undefined,
+			};
+		}, { captureGitContext: async () => ({ repoRoot: "/repo", baseRef: "abc123" }), terminalHost: host, pi: { exec: vi.fn() } as never });
+
+		for (let index = 0; index < 5; index += 1) {
+			await manager.spawn({ prompt: `p${index}`, title: `task ${index}`, cwd: "/repo", visible: true });
+		}
+
+		// Panes 1-4 fill the first tab even though they settled; the fifth must
+		// overflow to a fresh tab instead of over-tiling the full one.
+		expect(backendTasks[4]?.placement).toEqual({ kind: "new-tab", label: "subagents 2" });
+	});
+
 	it("serializes concurrent visible placement until the first tab id is durable", async () => {
 		let releaseFirstReady = (): void => undefined;
 		const firstReady = new Promise<void>((resolve) => { releaseFirstReady = resolve; });

@@ -42,9 +42,26 @@ export interface ThemeApplicationRoles {
 	};
 }
 
+export interface ThemeWorkingIndicatorEnhancedVariant {
+	readonly name: string;
+	readonly frames: readonly string[];
+	readonly intervalMs: number;
+	readonly capabilityEnv: string;
+}
+
 export interface ThemeWorkingIndicator {
-	frames: readonly string[];
-	intervalMs: number;
+	readonly frames: readonly string[];
+	readonly intervalMs: number;
+	readonly enhanced?: ThemeWorkingIndicatorEnhancedVariant;
+}
+
+export interface ResolvedThemeWorkingIndicator {
+	/** "default" is reserved for the base variant; enhanced variants use their declared name. */
+	readonly name: string;
+	readonly frames: readonly string[];
+	readonly intervalMs: number;
+	readonly capabilityEnv?: string;
+	readonly capabilityState: "enabled" | "disabled" | "unrecognized";
 }
 
 /**

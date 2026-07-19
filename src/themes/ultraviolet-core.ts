@@ -8,6 +8,10 @@ export const ULTRAVIOLET_CORE_INDICATOR_FRAMES = [".", ":", "o", "O", "@", "O", 
 
 export const ULTRAVIOLET_CORE_INDICATOR_INTERVAL_MS = 120;
 
+export const ULTRAVIOLET_RUNCAT_FRAMES = ["\uE900", "\uE901", "\uE902", "\uE903", "\uE904"] as const;
+export const ULTRAVIOLET_RUNCAT_INTERVAL_MS = 167;
+export const ULTRAVIOLET_RUNCAT_CAPABILITY_ENV = "SUMOCODE_RUNCAT_FONT";
+
 /**
  * Ultraviolet Core — SumoCode's high-impact violet command layer.
  *
@@ -44,6 +48,12 @@ export const ULTRAVIOLET_CORE_THEME: Theme = {
 	workingIndicator: {
 		frames: ULTRAVIOLET_CORE_INDICATOR_FRAMES,
 		intervalMs: ULTRAVIOLET_CORE_INDICATOR_INTERVAL_MS,
+		enhanced: {
+			name: "runcat",
+			frames: ULTRAVIOLET_RUNCAT_FRAMES,
+			intervalMs: ULTRAVIOLET_RUNCAT_INTERVAL_MS,
+			capabilityEnv: ULTRAVIOLET_RUNCAT_CAPABILITY_ENV,
+		},
 	},
 	chrome: {
 		...DEFAULT_CHROME,

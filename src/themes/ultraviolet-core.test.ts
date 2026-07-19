@@ -1,5 +1,13 @@
+import { visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "vitest";
-import { ULTRAVIOLET_CORE_INDICATOR_FRAMES, ULTRAVIOLET_CORE_INDICATOR_INTERVAL_MS, ULTRAVIOLET_CORE_THEME } from "./ultraviolet-core.js";
+import {
+	ULTRAVIOLET_CORE_INDICATOR_FRAMES,
+	ULTRAVIOLET_CORE_INDICATOR_INTERVAL_MS,
+	ULTRAVIOLET_CORE_THEME,
+	ULTRAVIOLET_RUNCAT_CAPABILITY_ENV,
+	ULTRAVIOLET_RUNCAT_FRAMES,
+	ULTRAVIOLET_RUNCAT_INTERVAL_MS,
+} from "./ultraviolet-core.js";
 
 function relativeLuminance(hex: string): number {
 	const value = hex.replace("#", "");
@@ -124,5 +132,26 @@ describe("ULTRAVIOLET_CORE_THEME", () => {
 		expect(ULTRAVIOLET_CORE_INDICATOR_INTERVAL_MS).toBe(120);
 		expect(ULTRAVIOLET_CORE_THEME.workingIndicator.frames).toBe(ULTRAVIOLET_CORE_INDICATOR_FRAMES);
 		expect(ULTRAVIOLET_CORE_THEME.workingIndicator.intervalMs).toBe(ULTRAVIOLET_CORE_INDICATOR_INTERVAL_MS);
+	});
+
+	it("declares the RunCat enhanced indicator without changing the orbital fallback", () => {
+		expect(ULTRAVIOLET_CORE_INDICATOR_FRAMES).toEqual([".", ":", "o", "O", "@", "O", "o", ":"]);
+		expect(ULTRAVIOLET_CORE_INDICATOR_INTERVAL_MS).toBe(120);
+		expect(ULTRAVIOLET_RUNCAT_FRAMES).toEqual(["\uE900", "\uE901", "\uE902", "\uE903", "\uE904"]);
+		expect(ULTRAVIOLET_RUNCAT_INTERVAL_MS).toBe(167);
+		expect(ULTRAVIOLET_RUNCAT_CAPABILITY_ENV).toBe("SUMOCODE_RUNCAT_FONT");
+
+		for (const frame of ULTRAVIOLET_RUNCAT_FRAMES) {
+			expect([...frame], frame).toHaveLength(1);
+			expect(visibleWidth(frame), frame).toBe(1);
+			expect(frame.trim()).toBe(frame);
+		}
+
+		expect(ULTRAVIOLET_CORE_THEME.workingIndicator.enhanced).toEqual({
+			name: "runcat",
+			frames: ULTRAVIOLET_RUNCAT_FRAMES,
+			intervalMs: ULTRAVIOLET_RUNCAT_INTERVAL_MS,
+			capabilityEnv: ULTRAVIOLET_RUNCAT_CAPABILITY_ENV,
+		});
 	});
 });

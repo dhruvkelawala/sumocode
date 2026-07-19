@@ -65,6 +65,17 @@ async function runInWorktreeWorkspace(
 	return { ok: true, pane: { host: "herdr", paneId, workspaceId } };
 }
 
+/**
+ * Per-spawn unique herdr agent name. `herdr agent start <name>` rejects a name
+ * that is already used by a live agent (`agent_name_taken`), so a hardcoded
+ * name breaks concurrent visible spawns — e.g. two parallel bg_task worktree
+ * agents, the exact fan-out this exists to support. Timestamp + random keeps it
+ * readable in the herdr sidebar while unique across live agents and sessions.
+ */
+export function uniqueHerdrAgentName(): string {
+	return `sumocode-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+}
+
 export const herdrTerminalHost: TerminalHost = {
 	kind: "herdr",
 	async openCommandInSplit(pi: PiExecLike, direction: SplitDirection, options: { cwd: string; shellCommand: string }) {
@@ -72,7 +83,7 @@ export const herdrTerminalHost: TerminalHost = {
 		const tabArgs = tabId ? ["--tab", tabId] : [];
 		const result = await pi.exec(
 			"herdr",
-			["agent", "start", "sumocode-task", "--cwd", options.cwd, ...tabArgs, "--split", direction, "--no-focus", "--", "bash", "-lc", options.shellCommand],
+			["agent", "start", uniqueHerdrAgentName(), "--cwd", options.cwd, ...tabArgs, "--split", direction, "--no-focus", "--", "bash", "-lc", options.shellCommand],
 			{ timeout: 5000 },
 		);
 		if (result.code !== 0) return { ok: false, error: result.stderr || result.stdout || `herdr agent start exited ${result.code}` };

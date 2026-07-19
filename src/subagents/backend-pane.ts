@@ -107,6 +107,9 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 	const poll = (): void => {
 		if (settled || interrupted || !fs.existsSync(paths.exitFile)) return;
 		const marker = readText(paths.exitFile);
+		// The producer opens with truncate-before-write. An observed empty file is
+		// a transient not-ready state, not evidence of a failed child.
+		if (!marker.trim()) return;
 		const exitCode = readExitCodeFromFile(marker);
 		if (exitCode === null) {
 			settle({ kind: "run-settled", outcome: { kind: "failed", errorText: `invalid visible child exit marker: ${marker.trim() || "<empty>"}` } });

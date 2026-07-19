@@ -234,7 +234,7 @@ export class SubagentManager {
 				const planned = planPlacement({
 					hostKind: host.kind,
 					isolated: worktree !== undefined,
-					visiblePanes: this.list().flatMap((snapshot) => snapshot.visible && snapshot.status === "running" && snapshot.pane ? [snapshot.pane] : []),
+					visiblePanes: this.list().flatMap((snapshot) => snapshot.visible && !snapshot.worktree && snapshot.status === "running" && snapshot.pane ? [snapshot.pane] : []),
 					sessionTabId: this.subagentsTabId,
 				});
 				if (planned.kind === "workspace") {

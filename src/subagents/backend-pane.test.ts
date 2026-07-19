@@ -140,6 +140,25 @@ describe("pane subagent backend", () => {
 		}
 	});
 
+	it("retries an empty exit marker until the producer writes the code", async () => {
+		vi.useFakeTimers();
+		try {
+			const harness = createHarness();
+			await flushPromises();
+			harness.fs.files.set(harness.paths.responseFile, "done");
+			harness.fs.files.set(harness.paths.exitFile, "");
+			await vi.advanceTimersByTimeAsync(750);
+			expect(settledEvents(harness.events)).toEqual([]);
+			expect(vi.getTimerCount()).toBe(1);
+
+			harness.fs.files.set(harness.paths.exitFile, "0");
+			await vi.advanceTimersByTimeAsync(750);
+			expect(settledEvents(harness.events)).toEqual([{ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } }]);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("reports malformed exit evidence as a failure", async () => {
 		vi.useFakeTimers();
 		try {

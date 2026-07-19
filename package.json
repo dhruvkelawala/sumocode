@@ -59,6 +59,8 @@
     "dead-code": "knip --no-exit-code",
     "dead-code:strict": "knip",
     "dead-code:fix": "knip --fix",
+    "runcat:check": "node scripts/runcat-font.mjs check",
+    "runcat:install": "node scripts/runcat-font.mjs install",
     "render:bible": "node scripts/render-bible.mjs",
     "export:bible-static": "node scripts/export-bible-static.mjs",
     "vitest": "vitest",

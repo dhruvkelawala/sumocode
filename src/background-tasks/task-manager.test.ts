@@ -172,6 +172,34 @@ describe("BackgroundTaskManager", () => {
 		expect(pi.sendUserMessage).toHaveBeenCalled();
 	});
 
+	it("calls the finalized hook exactly once for a live self-exit", async () => {
+		spawnMock.mockReturnValue(mockChild(0));
+		const onTaskFinalized = vi.fn();
+		const manager = new BackgroundTaskManager(buildPiStub() as never, { onTaskFinalized });
+
+		const task = manager.spawnTask({ command: "echo typed", cwd: "/tmp", notifyOnExit: false });
+		await vi.waitFor(() => expect(onTaskFinalized).toHaveBeenCalledOnce());
+
+		expect(onTaskFinalized).toHaveBeenCalledWith(expect.objectContaining({
+			id: task.id,
+			status: "completed",
+			exitCode: 0,
+		}));
+	});
+
+	it("does not call the finalized hook for an explicitly stopped task", async () => {
+		const child = mockLongLivedChild();
+		spawnMock.mockReturnValue(child);
+		const onTaskFinalized = vi.fn();
+		const manager = new BackgroundTaskManager(buildPiStub() as never, { onTaskFinalized });
+		const task = manager.spawnTask({ command: "sleep 100", cwd: "/tmp", notifyOnExit: false });
+
+		await manager.stopTask(task);
+
+		expect(task.status).toBe("stopped");
+		expect(onTaskFinalized).not.toHaveBeenCalled();
+	});
+
 	it("propagates SUMOCODE_BG_CHILD=1 to invisible task children", () => {
 		spawnMock.mockReturnValue(mockChild(0));
 		const manager = new BackgroundTaskManager(buildPiStub() as never);
@@ -1189,13 +1217,15 @@ describe("BackgroundTaskManager", () => {
 		}, null, 2)}\n`);
 
 		const pi = buildPiStub();
-		const manager = new BackgroundTaskManager(pi as never);
+		const onTaskFinalized = vi.fn();
+		const manager = new BackgroundTaskManager(pi as never, { onTaskFinalized });
 		const task = manager.findTask("bg-recovered-1");
 
 		expect(task?.status).toBe("completed");
 		expect(task?.exitCode).toBe(0);
 		expect(manager.getTaskHarvest(task!, 1000).content).toContain("done");
 		expect(pi.sendUserMessage).not.toHaveBeenCalled();
+		expect(onTaskFinalized).not.toHaveBeenCalled();
 	});
 
 	it("keeps new invisible shell tasks running when process identity cannot be captured", () => {

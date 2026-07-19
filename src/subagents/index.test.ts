@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferredResultDelivery, type DeferredResultDelivery } from "./delivery.js";
 import type { SubagentEvent } from "./domain.js";
-import { installSubagents } from "./index.js";
+import { flushDeferredResultDelivery, installSubagents } from "./index.js";
 
 const backend = vi.hoisted(() => ({
 	emitters: [] as Array<(event: SubagentEvent) => void>,
@@ -41,7 +42,7 @@ vi.mock("./backend-pi.js", () => ({
 type Handler = (event: unknown, ctx: unknown) => void;
 type Tool = { name: string; execute: (...args: unknown[]) => Promise<unknown> };
 
-const createHarness = () => {
+const createHarness = (delivery?: DeferredResultDelivery) => {
 	let idle = true;
 	const handlers = new Map<string, Handler[]>();
 	const tools = new Map<string, Tool>();
@@ -53,7 +54,7 @@ const createHarness = () => {
 		getActiveTools: vi.fn(() => ["read", "bash"]),
 		getThinkingLevel: vi.fn(() => "medium"),
 	};
-	const manager = installSubagents(pi as never);
+	const manager = installSubagents(pi as never, delivery);
 	const ctx = {
 		cwd: "/tmp/project",
 		model: { provider: "openai", id: "gpt-5" },
@@ -83,6 +84,42 @@ beforeEach(() => {
 });
 
 describe("subagent result delivery", () => {
+	it("flushes a shared typed terminal payload exactly once across a session switch", () => {
+		const delivery = createDeferredResultDelivery();
+		const harness = createHarness(delivery);
+		harness.fire("session_start");
+		harness.setIdle(false);
+		harness.fire("agent_start");
+		const details = { id: "bg-7", title: "server", status: "completed", exitCode: 0 };
+		delivery.defer("bg-7", () => ({
+			id: "bg-7",
+			customType: "terminal-result",
+			title: "server",
+			status: "completed",
+			content: "Background terminal bg-7 exited (0).",
+			details,
+		}));
+		flushDeferredResultDelivery(delivery);
+		expect(harness.sendMessage).not.toHaveBeenCalled();
+
+		harness.fire("session_shutdown");
+		harness.setIdle(true);
+		harness.fire("session_start");
+
+		expect(harness.sendMessage).toHaveBeenCalledOnce();
+		expect(harness.sendMessage).toHaveBeenCalledWith(
+			{
+				customType: "terminal-result",
+				content: "Background terminal bg-7 exited (0).",
+				display: true,
+				details,
+			},
+			{ deliverAs: "followUp", triggerTurn: true },
+		);
+		harness.fire("agent_end");
+		expect(harness.sendMessage).toHaveBeenCalledOnce();
+	});
+
 	it("defers while the parent is busy and flushes exactly once on agent_end", async () => {
 		const harness = createHarness();
 		harness.setIdle(false);

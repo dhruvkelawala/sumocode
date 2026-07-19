@@ -89,6 +89,7 @@ export interface BackgroundTaskManagerOptions {
 	readonly logMaxBytes?: number;
 	readonly finishedTaskMaxAgeMs?: number;
 	readonly maxRecoveredFinishedTasks?: number;
+	readonly onTaskFinalized?: (task: BackgroundTaskSnapshot) => void;
 }
 
 export interface AgentCapacityTaskSummary {
@@ -388,6 +389,7 @@ function parseRecoveredTask(raw: unknown, metaFile: string): InternalTask | unde
 		pane,
 		worktree: snapshot.worktree,
 		notifyOnExit: snapshot.notifyOnExit === true,
+		resultDelivery: snapshot.resultDelivery === "typed" ? ("typed" as const) : undefined,
 	};
 }
 
@@ -398,6 +400,7 @@ export class BackgroundTaskManager {
 	private readonly logMaxBytes: number;
 	private readonly finishedTaskMaxAgeMs: number;
 	private readonly maxRecoveredFinishedTasks: number;
+	private readonly onTaskFinalized?: (task: BackgroundTaskSnapshot) => void;
 	/**
 	 * True only while `recoverTasks` is reconciling persisted state on
 	 * startup/reload. Used by `finalizeTask` to suppress the message-queue
@@ -412,6 +415,7 @@ export class BackgroundTaskManager {
 		this.logMaxBytes = normalizePositiveInteger(options.logMaxBytes, DEFAULT_BACKGROUND_TASK_LOG_MAX_BYTES);
 		this.finishedTaskMaxAgeMs = normalizePositiveInteger(options.finishedTaskMaxAgeMs, DEFAULT_FINISHED_TASK_MAX_AGE_MS);
 		this.maxRecoveredFinishedTasks = normalizePositiveInteger(options.maxRecoveredFinishedTasks, DEFAULT_MAX_RECOVERED_FINISHED_TASKS);
+		this.onTaskFinalized = options.onTaskFinalized;
 		this.recoverTasks();
 	}
 
@@ -636,6 +640,7 @@ export class BackgroundTaskManager {
 			worktree,
 			worktreePending,
 			notifyOnExit: options.notifyOnExit === true,
+			resultDelivery: options.resultDelivery,
 		};
 
 		this.tasks.set(id, task);
@@ -968,6 +973,16 @@ export class BackgroundTaskManager {
 			// terminal self-exit, including fire-and-forget tasks and during startup
 			// recovery.
 			this.fireHostNotify(task);
+
+			// Typed completion consumers share this finalized snapshot only for live
+			// self-exits. Recovery and explicit stops must never synthesize a result.
+			if (!this.recovering && task.status !== "stopped") {
+				try {
+					this.onTaskFinalized?.(toBackgroundTaskSnapshot(task));
+				} catch {
+					// Completion delivery is best-effort and must not break finalization.
+				}
+			}
 
 			// Active wake: inject a follow-up turn so the orchestrator agent reacts to
 			// the result (e.g. to continue chained background work). Opt-in only —

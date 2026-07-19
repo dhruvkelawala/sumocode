@@ -502,8 +502,13 @@ manifests, then retirement of the `bg_task` mega-tool and delegation routing amb
 | 072 | [Terminal-host abstraction: herdr + cmux](072-terminal-host-abstraction-herdr.md) | P2 | M | 071 (same file) | [#311](https://github.com/dhruvkelawala/sumocode/issues/311) | DONE — PR #313 (`52f33d6`, `fc56f14`): facade + worktree/diff/review/bg-task ports + pane-ref schema v3 |
 | 074 | [Herdr-native integration: approval attention queue + native worktree workspaces](074-herdr-native-integration.md) | P2 | S | 072 | [#316](https://github.com/dhruvkelawala/sumocode/issues/316) | DONE — PR #320 (`93e077a`); Claude autoreview 3 rounds → clean; live-verified: blocked flip + attention-queue jump during approval modal (operator screenshot 2026-07-18) |
 | 075 | [Ultraviolet Core Application Theme](075-ultraviolet-core-application-theme.md) | P1 | L | 073 | [#319](https://github.com/dhruvkelawala/sumocode/issues/319) | DONE — implementation branch `advisor/075-ultraviolet-core-application-theme`; review-only visual evidence, no golden promotion |
+| 076 | [Ultraviolet RunCat working indicator](076-ultraviolet-runcat-working-indicator.md) | P2 | M | 075 | [#331](https://github.com/dhruvkelawala/sumocode/issues/331) | TODO |
 
 ### Dependency notes
+
+- 076 is a bounded Plan 075 polish follow-up: capability-gated RunCat frames, verified
+  font/setup path, and classic/retained/RPC parity only. It must not reopen Ultraviolet's
+  palette/application roles or install the upstream Pi extension as a second indicator owner.
 
 - **Host pivot 2026-07-18**: the operator's primary terminal host is now herdr (herdr.dev), not
   cmux — capability evidence in `docs/research/HERDR_CAPABILITIES_2026.md` (CLI/socket protocol,

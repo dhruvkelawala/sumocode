@@ -214,7 +214,7 @@ function scenarioContractForMetadata(scenario) {
 		} : null,
 		fixture: scenario.fixture ?? null,
 		finalCellAssertions: scenario.finalCellAssertions ?? null,
-		crops: scenario.crops.map((crop) => ({},{
+		crops: scenario.crops.map((crop) => ({
 			id: crop.id,
 			status: crop.status,
 			threshold: crop.threshold,

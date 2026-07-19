@@ -78,6 +78,9 @@ describe("pane subagent backend", () => {
 			expect(harness.events).toContainEqual({ kind: "run-started" });
 			expect(harness.events).toContainEqual({ kind: "pane-attached", pane: { agentName: "worker-abc", workspaceId: "w1", tabId: "w1:t1", paneId: "w1:p2" } });
 			expect(harness.fs.files.get(harness.paths.promptFile)).toBe("do the work");
+			expect(harness.host.startAgentPane).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+				shellCommand: expect.stringContaining("2>&1 | tee -a '/tmp/subagents/sa-1-1234/output.log'"),
+			}));
 			harness.fs.files.set(harness.paths.responseFile, "final answer\n");
 			harness.fs.files.set(harness.paths.exitFile, "0\n");
 

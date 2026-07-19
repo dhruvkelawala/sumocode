@@ -9,6 +9,7 @@ import {
 	buildVisibleAgentCommand,
 	buildVisibleTaskPaths,
 	readExitCodeFromFile,
+	shellEscape,
 } from "../background-tasks/visible-spawn.js";
 import type {
 	AgentPanePlacement,
@@ -66,13 +67,16 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 	fs.mkdirSync(dirname(paths.promptFile), { recursive: true });
 	fs.writeFileSync(paths.promptFile, options.prompt, { mode: 0o600 });
 	fs.writeFileSync(paths.logFile, "");
-	const shellCommand = buildVisibleAgentCommand({
+	const agentCommand = buildVisibleAgentCommand({
 		cwd: options.cwd,
 		runner: "sumocode",
 		paths,
 		model: options.model,
 		thinking: options.thinking,
 	});
+	// Keep output visible in the pane while retaining a real diagnostic tail for
+	// non-zero exits. pipefail preserves the child command's failure status.
+	const shellCommand = `set -o pipefail; ( ${agentCommand} ) 2>&1 | tee -a ${shellEscape(paths.logFile)}`;
 
 	let emitEvent: ((event: SubagentEvent) => void) | undefined;
 	let pane: PaneRef | undefined;

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { herdrTerminalHost } from "./herdr.js";
+import { herdrTerminalHost, uniqueHerdrAgentName } from "./herdr.js";
 
 function pi(stdout: string, code = 0) {
 	return { exec: vi.fn(async () => ({ stdout, stderr: "", code, killed: false })) };
@@ -20,7 +20,7 @@ describe("herdrTerminalHost", () => {
 		const result = await herdrTerminalHost.openCommandInSplit({ exec } as never, "right", { cwd: "/tmp", shellCommand: "echo ok" });
 		expect(result).toEqual({ ok: true, pane: { host: "herdr", paneId: "w7:p9", workspaceId: "w7" } });
 		expect(exec).toHaveBeenCalledWith("herdr", ["pane", "get", "w7:p3"], { timeout: 5000 });
-		expect(exec).toHaveBeenCalledWith("herdr", ["agent", "start", "sumocode-task", "--cwd", "/tmp", "--tab", "w7:t2", "--split", "right", "--no-focus", "--", "bash", "-lc", "echo ok"], { timeout: 5000 });
+		expect(exec).toHaveBeenCalledWith("herdr", ["agent", "start", expect.stringMatching(/^sumocode-/), "--cwd", "/tmp", "--tab", "w7:t2", "--split", "right", "--no-focus", "--", "bash", "-lc", "echo ok"], { timeout: 5000 });
 	});
 	it("falls back to default placement when the anchor cannot be resolved", async () => {
 		process.env.HERDR_PANE_ID = "w7:p3";
@@ -32,7 +32,7 @@ describe("herdrTerminalHost", () => {
 		});
 		const result = await herdrTerminalHost.openCommandInSplit({ exec } as never, "down", { cwd: "/tmp", shellCommand: "echo ok" });
 		expect(result).toEqual({ ok: true, pane: { host: "herdr", paneId: "w1:p2", workspaceId: "w1" } });
-		expect(exec).toHaveBeenCalledWith("herdr", ["agent", "start", "sumocode-task", "--cwd", "/tmp", "--split", "down", "--no-focus", "--", "bash", "-lc", "echo ok"], { timeout: 5000 });
+		expect(exec).toHaveBeenCalledWith("herdr", ["agent", "start", expect.stringMatching(/^sumocode-/), "--cwd", "/tmp", "--split", "down", "--no-focus", "--", "bash", "-lc", "echo ok"], { timeout: 5000 });
 	});
 	it("resolves the workspace pane even when herdr omits per-pane workspace_id", async () => {
 		const exec = vi.fn(async (_bin: string, args: string[]) => {
@@ -53,7 +53,7 @@ describe("herdrTerminalHost", () => {
 		const fake = pi(JSON.stringify({ result: { agent: { pane_id: "w1:p2", workspace_id: "w1" } } }));
 		const result = await herdrTerminalHost.openCommandInSplit(fake as never, "right", { cwd: "/tmp", shellCommand: "echo ok" });
 		expect(result).toEqual({ ok: true, pane: { host: "herdr", paneId: "w1:p2", workspaceId: "w1" } });
-		expect(fake.exec).toHaveBeenCalledWith("herdr", ["agent", "start", "sumocode-task", "--cwd", "/tmp", "--split", "right", "--no-focus", "--", "bash", "-lc", "echo ok"], { timeout: 5000 });
+		expect(fake.exec).toHaveBeenCalledWith("herdr", ["agent", "start", expect.stringMatching(/^sumocode-/), "--cwd", "/tmp", "--split", "right", "--no-focus", "--", "bash", "-lc", "echo ok"], { timeout: 5000 });
 	});
 	it("reports malformed json", async () => {
 		const fake = pi("not-json");
@@ -121,5 +121,13 @@ describe("herdrTerminalHost", () => {
 	it("notify is best-effort when exec rejects", async () => {
 		const fake = { exec: vi.fn(async () => { throw new Error("no daemon"); }) };
 		await expect(herdrTerminalHost.notify(fake as never, "title", "body")).resolves.toBeUndefined();
+	});
+
+	it("generates a unique agent name per spawn (no agent_name_taken collision)", () => {
+		const a = uniqueHerdrAgentName();
+		const b = uniqueHerdrAgentName();
+		expect(a).toMatch(/^sumocode-/);
+		expect(b).toMatch(/^sumocode-/);
+		expect(a).not.toBe(b);
 	});
 });

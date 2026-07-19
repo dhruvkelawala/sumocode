@@ -389,6 +389,7 @@ function parseRecoveredTask(raw: unknown, metaFile: string): InternalTask | unde
 		pane,
 		worktree: snapshot.worktree,
 		notifyOnExit: snapshot.notifyOnExit === true,
+		resultDelivery: snapshot.resultDelivery === "typed" ? ("typed" as const) : undefined,
 	};
 }
 
@@ -639,6 +640,7 @@ export class BackgroundTaskManager {
 			worktree,
 			worktreePending,
 			notifyOnExit: options.notifyOnExit === true,
+			resultDelivery: options.resultDelivery,
 		};
 
 		this.tasks.set(id, task);

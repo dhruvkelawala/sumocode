@@ -39,8 +39,6 @@ export function installTerminalTools(
 	manager: BackgroundTaskManager,
 	delivery: DeferredResultDelivery,
 ): TerminalTaskFinalizedHandler {
-	const typedTerminalIds = new Set<string>();
-
 	pi.registerTool({
 		name: "bg_start",
 		label: "Background Terminal Start",
@@ -60,8 +58,8 @@ export function installTerminalTools(
 				runner: "shell",
 				visible: false,
 				notifyOnExit: false,
+				resultDelivery: "typed",
 			});
-			typedTerminalIds.add(task.id);
 			const snapshot = toBackgroundTaskSnapshot(task);
 			return makeToolResult(buildStartResult(snapshot), { task: snapshot });
 		},
@@ -107,12 +105,16 @@ export function installTerminalTools(
 					continue;
 				}
 				if (task.status !== "running") {
-					typedTerminalIds.delete(id);
 					lines.push(`Background terminal ${id} was already ${task.status}.`);
 					continue;
 				}
+				// Delivery ownership is NOT touched here: it lives in persisted task
+				// metadata (resultDelivery). A failed stop leaves the task running with
+				// ownership intact, so a later natural exit still delivers its typed
+				// result; a successful stop finalizes as "stopped", which the manager
+				// never reports to onTaskFinalized (bg_kill's tool result is the
+				// completion signal for kills).
 				const stopped = await manager.stopTask(task);
-				typedTerminalIds.delete(id);
 				lines.push(stopped.ok ? `Killed background terminal ${id}.` : `Failed to kill background terminal ${id}: ${stopped.message}`);
 			}
 			return makeToolResult(lines.join("\n"), { ids: [...params.ids] });
@@ -136,12 +138,17 @@ export function installTerminalTools(
 	});
 
 	return (snapshot): void => {
-		if (!typedTerminalIds.has(snapshot.id)) return;
+		// Durable ownership check: bg_start marks its tasks in persisted metadata,
+		// so typed delivery survives reload/rebind recovery and failed kills.
+		if (snapshot.resultDelivery !== "typed") return;
 		const task = manager.findTask(snapshot.id);
 		// Never consume or otherwise poison delivery state for an id the manager
 		// no longer knows (for example after a clear or process recovery boundary).
 		if (!task || task.runner !== "shell") return;
-		typedTerminalIds.delete(snapshot.id);
+		// Belt-and-braces: the manager never emits finalization for stopped tasks;
+		// duplicate finalizations are absorbed by the delivery buffer (defer is
+		// first-wins and consumed ids never re-defer).
+		if (snapshot.status === "stopped") return;
 		const finalized = toBackgroundTaskSnapshot(task);
 		delivery.defer(finalized.id, () => ({
 			id: finalized.id,

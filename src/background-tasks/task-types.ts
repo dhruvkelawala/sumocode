@@ -54,6 +54,13 @@ export interface BackgroundTask {
 	pane?: PaneRef;
 	worktree?: BackgroundTaskWorktreeRef;
 	notifyOnExit: boolean;
+	/**
+	 * "typed" marks tasks whose completion is delivered as a typed
+	 * terminal-result message (bg_start). Persisted in meta.json so ownership
+	 * survives reload/rebind recovery and failed kills — a process-local set
+	 * would drop both (PR #334 review).
+	 */
+	resultDelivery?: "typed";
 }
 
 export interface SpawnBackgroundTaskOptions {
@@ -69,6 +76,7 @@ export interface SpawnBackgroundTaskOptions {
 	branch?: string;
 	baseRef?: string;
 	notifyOnExit?: boolean;
+	resultDelivery?: "typed";
 }
 
 export const BACKGROUND_TASK_META_SCHEMA_VERSION = 3;
@@ -101,6 +109,7 @@ export interface BackgroundTaskSnapshot {
 	cmux?: BackgroundTaskCmuxRefs;
 	worktree?: BackgroundTaskWorktreeRef;
 	notifyOnExit?: boolean;
+	resultDelivery?: "typed";
 }
 
 export function toBackgroundTaskSnapshot(task: BackgroundTask): BackgroundTaskSnapshot {
@@ -130,6 +139,7 @@ export function toBackgroundTaskSnapshot(task: BackgroundTask): BackgroundTaskSn
 		pane: task.pane,
 		worktree: task.worktree,
 		notifyOnExit: task.notifyOnExit,
+		resultDelivery: task.resultDelivery,
 	};
 }
 

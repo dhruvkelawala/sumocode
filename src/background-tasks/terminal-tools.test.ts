@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { DeferredResultDelivery } from "../subagents/delivery.js";
+import { createDeferredResultDelivery, type DeferredResultDelivery } from "../subagents/delivery.js";
 import type { BackgroundTaskManager } from "./task-manager.js";
 import { installTerminalTools } from "./terminal-tools.js";
 import type { BackgroundTask } from "./task-types.js";
@@ -32,16 +32,17 @@ function createHarness(initialTasks: BackgroundTask[] = []) {
 	const tools = new Map<string, RegisteredTool>();
 	const spawned = task();
 	const manager = {
-		spawnTask: vi.fn(() => {
+		spawnTask: vi.fn((options: { resultDelivery?: "typed" }) => {
+			spawned.resultDelivery = options.resultDelivery;
 			tasks.set(spawned.id, spawned);
 			return spawned;
 		}),
 		findTask: vi.fn((id: string) => tasks.get(id)),
 		listTasks: vi.fn(() => [...tasks.values()]),
 		getTaskOutput: vi.fn(() => "line one\nline two\n"),
-		stopTask: vi.fn(async (entry: BackgroundTask) => {
+		stopTask: vi.fn(async (entry: BackgroundTask): Promise<{ ok: boolean; message: string }> => {
 			entry.status = "stopped";
-			return { ok: true as const, message: `Stopped ${entry.id}` };
+			return { ok: true, message: `Stopped ${entry.id}` };
 		}),
 	};
 	const delivery = {
@@ -100,6 +101,7 @@ describe("installTerminalTools", () => {
 			runner: "shell",
 			visible: false,
 			notifyOnExit: false,
+			resultDelivery: "typed",
 		});
 		expect(result.content[0]?.text).toContain("Started background terminal bg-1");
 		expect(result.content[0]?.text).toContain("stdin: unavailable");
@@ -112,13 +114,19 @@ describe("installTerminalTools", () => {
 		started.status = "completed";
 		started.exitCode = 0;
 
+		// Duplicate finalizations and legacy (non-typed) tasks: exactly-once is
+		// enforced by the durable resultDelivery marker plus the delivery buffer's
+		// first-wins defer — prove it against the REAL buffer, not the mock.
+		const real = createDeferredResultDelivery();
+		harness.delivery.defer.mockImplementation((id, build) => real.defer(id, build));
+
 		harness.onTaskFinalized({ ...started, schemaVersion: 3 });
 		harness.onTaskFinalized({ ...started, schemaVersion: 3 });
 		harness.onTaskFinalized({ ...task({ id: "bg-legacy", status: "completed" }), schemaVersion: 3 });
 
-		expect(harness.delivery.defer).toHaveBeenCalledOnce();
-		const build = harness.delivery.defer.mock.calls[0]?.[1];
-		expect(build?.()).toMatchObject({
+		const payloads = real.drain();
+		expect(payloads).toHaveLength(1);
+		expect(payloads[0]).toMatchObject({
 			id: "bg-1",
 			customType: "terminal-result",
 			status: "completed",
@@ -171,15 +179,40 @@ describe("installTerminalTools", () => {
 		expect(result.content[0]?.text).toContain("Unknown background terminal bg-missing.");
 	});
 
-	it("forgets typed-delivery ownership after bg_kill", async () => {
+	it("retains typed delivery when bg_kill fails to stop the task", async () => {
 		const harness = createHarness();
+		harness.manager.stopTask.mockResolvedValueOnce({ ok: false, message: "pid unverified" });
 		await execute(harness.tool("bg_start"), { command: "pnpm dev", title: "dev server" });
 		const started = harness.manager.listTasks()[0]!;
 
-		await execute(harness.tool("bg_kill"), { ids: [started.id] });
+		const result = await execute(harness.tool("bg_kill"), { ids: [started.id] });
+		expect(result.content[0]?.text).toContain("Failed to kill");
+
+		// The task later exits naturally — ownership must have survived the failed kill.
 		started.status = "completed";
 		started.exitCode = 0;
 		harness.onTaskFinalized({ ...started, schemaVersion: 3 });
+
+		expect(harness.delivery.defer).toHaveBeenCalledOnce();
+	});
+
+	it("delivers typed completion for tasks recovered by a fresh install", () => {
+		// Simulates reload/rebind: this install never ran bg_start for the task —
+		// ownership comes solely from the persisted resultDelivery marker.
+		const recovered = task({ id: "bg-recovered", status: "completed", exitCode: 0, resultDelivery: "typed" });
+		const harness = createHarness([recovered]);
+
+		harness.onTaskFinalized({ ...recovered, schemaVersion: 3 });
+
+		expect(harness.delivery.defer).toHaveBeenCalledOnce();
+		expect(harness.delivery.defer.mock.calls[0]?.[0]).toBe("bg-recovered");
+	});
+
+	it("never synthesizes a typed result for stopped snapshots", () => {
+		const stopped = task({ id: "bg-stopped", status: "stopped", resultDelivery: "typed" });
+		const harness = createHarness([stopped]);
+
+		harness.onTaskFinalized({ ...stopped, schemaVersion: 3 });
 
 		expect(harness.delivery.defer).not.toHaveBeenCalled();
 	});

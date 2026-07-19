@@ -124,18 +124,18 @@ describe("RpcPromptScheduler", () => {
 		expect(sent).toEqual(["B", "B"]);
 	});
 
-	it("restores old generation entries on rebind and ignores stale session settle events", async () => {
+	it("restores old generation entries on rebind so a later settle has nothing stale to deliver", async () => {
 		const sent: string[] = [];
 		const scheduler = createRpcPromptScheduler({ sessionId: "old", sendPrompt: async (message) => { sent.push(message); } });
 
-		scheduler.handleAgentEvent({ type: "agent_start", sessionId: "old" });
+		scheduler.handleAgentEvent({ type: "agent_start" });
 		await scheduler.submit("old queued");
 		const restored = scheduler.rebindSession("new", "new draft");
 
 		expect(restored).toEqual({ count: 1, text: "old queued\n\nnew draft" });
 		expect(scheduler.getSnapshot()).toMatchObject({ sessionId: "new", queuedMessages: [] });
 
-		scheduler.handleAgentEvent({ type: "agent_settled", sessionId: "old" });
+		scheduler.handleAgentEvent({ type: "agent_settled" });
 		await flush();
 		expect(sent).toEqual([]);
 	});
@@ -151,7 +151,7 @@ describe("RpcPromptScheduler", () => {
 
 		await scheduler.submit("old dispatch");
 		scheduler.rebindSession("new", "");
-		scheduler.handleAgentEvent({ type: "agent_start", sessionId: "new" });
+		scheduler.handleAgentEvent({ type: "agent_start" });
 		gate.reject(new Error("stale failure"));
 		await flush();
 

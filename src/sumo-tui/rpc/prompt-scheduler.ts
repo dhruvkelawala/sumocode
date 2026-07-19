@@ -23,16 +23,11 @@ export interface RpcPromptSchedulerOptions {
 	readonly onDispatchFailure?: (error: unknown) => void;
 }
 
-type AgentEventLike = { type?: unknown; sessionId?: unknown };
+type AgentEventLike = { type?: unknown };
 
 function eventType(event: unknown): string | undefined {
 	const type = (event as AgentEventLike).type;
 	return typeof type === "string" ? type : undefined;
-}
-
-function eventSessionId(event: unknown): string | undefined {
-	const sessionId = (event as AgentEventLike).sessionId;
-	return typeof sessionId === "string" ? sessionId : undefined;
 }
 
 function combineDrafts(restored: readonly string[], currentDraft: string): string {
@@ -71,8 +66,6 @@ class DefaultRpcPromptScheduler implements RpcPromptScheduler {
 	}
 
 	public handleAgentEvent(event: unknown): void {
-		const sessionId = eventSessionId(event);
-		if (sessionId !== undefined && this.sessionId !== undefined && sessionId !== this.sessionId) return;
 		switch (eventType(event)) {
 			case "agent_start":
 				this.busy = true;

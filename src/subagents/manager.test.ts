@@ -300,6 +300,46 @@ describe("SubagentManager", () => {
 		expect(backendTasks[4]?.placement).toEqual({ kind: "new-tab", label: "subagents 2" });
 	});
 
+	it("invalidates the cached subagents tab when a visible child fails before any pane attaches", async () => {
+		const backendTasks: Array<SpawnSubagentTask & { placement?: unknown }> = [];
+		let mode: "attach" | "fail-preattach" = "attach";
+		const host: TerminalHost = {
+			kind: "herdr",
+			openCommandInSplit: vi.fn(),
+			closePane: vi.fn(),
+			notify: vi.fn(),
+		};
+		const manager = new SubagentManager((task) => {
+			backendTasks.push(task);
+			const current = mode;
+			return {
+				events: (emit) => {
+					emit({ kind: "run-started" });
+					if (current === "attach") {
+						emit({ kind: "pane-attached", pane: { agentName: `${task.id}-worker`, workspaceId: "w1", tabId: "w1:t5", paneId: `w1:p${task.id}` } });
+					} else {
+						// Mirrors `herdr agent start --tab <dead>` failing: no pane ever attached.
+						emit({ kind: "run-settled", outcome: { kind: "failed", errorText: "herdr agent start exited 1" } });
+					}
+				},
+				interrupt: () => undefined,
+			};
+		}, { captureGitContext: async () => ({ repoRoot: "/repo", baseRef: "abc123" }), terminalHost: host, pi: { exec: vi.fn() } as never });
+
+		await manager.spawn({ prompt: "p1", title: "first", cwd: "/repo", visible: true });
+		expect(backendTasks[0]?.placement).toEqual({ kind: "new-tab", label: "subagents" });
+
+		// Human closes the tab; the next spawn targets the dead cached tab and fails pre-attach.
+		mode = "fail-preattach";
+		await manager.spawn({ prompt: "p2", title: "second", cwd: "/repo", visible: true });
+		expect(backendTasks[1]?.placement).toEqual({ kind: "tab", tabId: "w1:t5", direction: "down" });
+
+		// Recovery: the cache was invalidated, so the third spawn plans a fresh tab.
+		mode = "attach";
+		await manager.spawn({ prompt: "p3", title: "third", cwd: "/repo", visible: true });
+		expect(backendTasks[2]?.placement).toEqual({ kind: "new-tab", label: "subagents" });
+	});
+
 	it("serializes concurrent visible placement until the first tab id is durable", async () => {
 		let releaseFirstReady = (): void => undefined;
 		const firstReady = new Promise<void>((resolve) => { releaseFirstReady = resolve; });

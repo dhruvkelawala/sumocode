@@ -436,6 +436,22 @@ export class SubagentManager {
 
 	private fold(id: string, event: SubagentEvent): void {
 		if (event.kind === "run-settled") {
+			// A visible non-isolated child that FAILS before any pane attached is
+			// evidence the cached subagents tab may be gone (e.g. the human closed
+			// it — `herdr agent start --tab <dead>` fails, and no pane event ever
+			// fired). Invalidate the cache so the next spawn re-plans a fresh tab
+			// instead of failing forever. Evidence-based, not error-text sniffing;
+			// the worst case for a transient failure is one extra tab (cosmetic).
+			const settling = this.snapshots.get(id);
+			if (
+				event.outcome.kind === "failed" &&
+				settling?.visible &&
+				!settling.worktree &&
+				!settling.pane &&
+				this.subagentsTabId !== undefined
+			) {
+				this.subagentsTabId = undefined;
+			}
 			void this.startSettle(id, event.outcome);
 			return;
 		}

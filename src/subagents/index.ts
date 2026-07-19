@@ -79,6 +79,12 @@ export function installSubagents(
 			// Derived from the canonical list: a literal count would fail OPEN if
 			// the built-in set ever grows (full-set parents would look narrowed-
 			// by-one and vice versa).
+			//
+			// Known conservative edge: a parent whose config disables some built-in
+			// (without any security intent) also counts as "narrowed", so its
+			// visible children get --tools and lose extension tools. That degrades
+			// toward LESS access, never more — acceptable until pi grows a
+			// built-ins-only restriction flag.
 			const paneNarrowed = task.builtInTools !== undefined && paneBuiltIn.length < BUILT_IN_TOOLS.length;
 			return spawnPaneChild({
 				prompt: task.prompt,

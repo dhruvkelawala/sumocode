@@ -23,7 +23,7 @@ import { readGitBranch, watchGitBranch } from "./git.js";
 import { createRpcPromptScheduler, type RpcPromptScheduler } from "./prompt-scheduler.js";
 import { RpcHostRuntime } from "./runtime.js";
 import { responseData } from "./response.js";
-import { notifyOnError } from "./safe-send.js";
+import { notifyOnError, type ErrorNotifier } from "./safe-send.js";
 import { RpcHostStateStore, type RpcHostChromeState } from "./state.js";
 import { RpcTranscriptPump } from "./transcript-pump.js";
 import { rpcVisualFixtureFromEnv } from "./visual-fixtures.js";
@@ -198,6 +198,24 @@ export async function submitInitialPromptFromEnv(env: NodeJS.ProcessEnv, submit:
 	const message = env.SUMOCODE_INITIAL_PROMPT;
 	if (!message) return;
 	await submit(message);
+}
+
+export interface RpcMessageFollowUpDependencies {
+	readonly editor: Pick<RpcHostEditorController, "getText" | "addToHistory" | "setText">;
+	readonly scheduler: Pick<RpcPromptScheduler, "getSnapshot" | "submit">;
+	readonly notifications: ErrorNotifier;
+}
+
+export function handleRpcMessageFollowUp(deps: RpcMessageFollowUpDependencies): void {
+	void notifyOnError(async () => {
+		const draft = deps.editor.getText();
+		if (draft.trim().length === 0) return;
+		if (!deps.scheduler.getSnapshot().busy) return;
+		const result = await deps.scheduler.submit(draft, { forceQueue: true });
+		if (result !== "queued") return;
+		deps.editor.addToHistory(draft);
+		deps.editor.setText("");
+	}, deps.notifications);
 }
 
 export interface RpcHostExitDependencies {
@@ -651,17 +669,10 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		requestRender,
 	});
 	const handleMessageFollowUp = (): void => {
-		void notifyOnError(async () => {
-			const draft = editor.getText();
-			if (draft.trim().length === 0) return;
-			if (!scheduler.getSnapshot().busy) return;
-			await scheduler.submit(draft, { forceQueue: true });
-			editor.addToHistory(draft);
-			editor.setText("");
-		}, notifications);
+		handleRpcMessageFollowUp({ editor, scheduler, notifications });
 	};
 	const handleMessageDequeue = (): void => {
-		const restored = scheduler.restoreAll(editor.getText());
+		const restored = scheduler.restoreAll(editor.getText(), { discardInFlight: true });
 		if (restored.count > 0) {
 			editor.setText(restored.text);
 			return;
@@ -836,7 +847,7 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		requestHostExit: (code) => requestHostExit(code),
 		submitInFlight: () => scheduler.getSnapshot().busy,
 		restoreQueuedDrafts: () => {
-			const restored = scheduler.restoreAll(editor.getText());
+			const restored = scheduler.restoreAll(editor.getText(), { discardInFlight: true });
 			if (restored.count > 0) editor.setText(restored.text);
 		},
 	});

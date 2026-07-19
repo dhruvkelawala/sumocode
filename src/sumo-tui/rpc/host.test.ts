@@ -16,6 +16,7 @@ import {
 	createRpcExitHandler,
 	createRpcHostInterruptHandler,
 	createThinkingCycleHandler,
+	handleRpcMessageFollowUp,
 	createToolsExpandToggleHandler,
 	createUnhandledRejectionHandler,
 	submitInitialPromptFromEnv,
@@ -85,6 +86,46 @@ function interruptDeps(overrides: Partial<RpcHostInterruptDependencies> = {}): R
 
 const CTRL_C = "";
 const ESCAPE = "";
+
+describe("handleRpcMessageFollowUp", () => {
+	function followUpEditor(text: string) {
+		return {
+			getText: vi.fn(() => text),
+			addToHistory: vi.fn(),
+			setText: vi.fn(),
+		};
+	}
+
+	it("adds history and clears the draft when the scheduler queues the follow-up", async () => {
+		const editor = followUpEditor("queued draft");
+		const scheduler = {
+			getSnapshot: vi.fn(() => ({ busy: true, queuedMessages: [], pausedAfterFailure: false })),
+			submit: vi.fn(async () => "queued" as const),
+		};
+
+		handleRpcMessageFollowUp({ editor, scheduler, notifications: { notify: vi.fn() } });
+		await flush();
+
+		expect(scheduler.submit).toHaveBeenCalledWith("queued draft", { forceQueue: true });
+		expect(editor.addToHistory).toHaveBeenCalledWith("queued draft");
+		expect(editor.setText).toHaveBeenCalledWith("");
+	});
+
+	it("retains the draft when the scheduler declines the forced follow-up", async () => {
+		const editor = followUpEditor("still here");
+		const scheduler = {
+			getSnapshot: vi.fn(() => ({ busy: true, queuedMessages: [], pausedAfterFailure: false })),
+			submit: vi.fn(async () => "ignored" as const),
+		};
+
+		handleRpcMessageFollowUp({ editor, scheduler, notifications: { notify: vi.fn() } });
+		await flush();
+
+		expect(scheduler.submit).toHaveBeenCalledWith("still here", { forceQueue: true });
+		expect(editor.addToHistory).not.toHaveBeenCalled();
+		expect(editor.setText).not.toHaveBeenCalled();
+	});
+});
 
 describe("createRpcHostInterruptHandler wiring", () => {
 	it("passes Escape through to the editor when the autocomplete dropdown is open, even while streaming", () => {

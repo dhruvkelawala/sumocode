@@ -5,10 +5,14 @@ export interface RpcPromptSchedulerSnapshot {
 	readonly pausedAfterFailure: boolean;
 }
 
+export interface RpcPromptSchedulerRestoreOptions {
+	readonly discardInFlight?: boolean;
+}
+
 export interface RpcPromptScheduler {
 	submit(message: string, options?: { forceQueue?: boolean }): Promise<"sent" | "queued" | "ignored">;
 	handleAgentEvent(event: unknown): void;
-	restoreAll(currentDraft: string): { count: number; text: string };
+	restoreAll(currentDraft: string, options?: RpcPromptSchedulerRestoreOptions): { count: number; text: string };
 	rebindSession(sessionId: string | undefined, currentDraft: string): { count: number; text: string };
 	getSnapshot(): RpcPromptSchedulerSnapshot;
 }
@@ -47,6 +51,7 @@ class DefaultRpcPromptScheduler implements RpcPromptScheduler {
 	private pausedAfterFailure = false;
 	private sessionId: string | undefined;
 	private generation = 0;
+	private agentStartCount = 0;
 
 	public constructor(private readonly options: RpcPromptSchedulerOptions) {
 		this.sessionId = options.sessionId;
@@ -55,8 +60,17 @@ class DefaultRpcPromptScheduler implements RpcPromptScheduler {
 	public async submit(message: string, options: { forceQueue?: boolean } = {}): Promise<"sent" | "queued" | "ignored"> {
 		if (message.trim().length === 0) return "ignored";
 		if (await this.options.handleHostCommand?.(message)) return "ignored";
+		const forceQueue = options.forceQueue === true;
+		if (forceQueue && (!this.isBusy() || this.pausedAfterFailure)) return "ignored";
+		if (this.queue.length > 0) {
+			this.pausedAfterFailure = false;
+			this.queue.push(message);
+			this.publishQueue();
+			this.drainOne(this.generation);
+			return "queued";
+		}
 		this.pausedAfterFailure = false;
-		if (options.forceQueue || this.isBusy()) {
+		if (forceQueue || this.isBusy()) {
 			this.queue.push(message);
 			this.publishQueue();
 			return "queued";
@@ -69,6 +83,7 @@ class DefaultRpcPromptScheduler implements RpcPromptScheduler {
 		switch (eventType(event)) {
 			case "agent_start":
 				this.busy = true;
+				this.agentStartCount += 1;
 				break;
 			case "agent_settled":
 				this.busy = false;
@@ -79,10 +94,15 @@ class DefaultRpcPromptScheduler implements RpcPromptScheduler {
 		}
 	}
 
-	public restoreAll(currentDraft: string): { count: number; text: string } {
+	public restoreAll(currentDraft: string, options: RpcPromptSchedulerRestoreOptions = {}): { count: number; text: string } {
 		const restored = this.queue;
 		this.queue = [];
 		this.pausedAfterFailure = false;
+		if (options.discardInFlight) {
+			this.generation += 1;
+			this.busy = false;
+			this.dispatching = false;
+		}
 		this.publishQueue();
 		return { count: restored.length, text: combineDrafts(restored, currentDraft) };
 	}
@@ -122,6 +142,7 @@ class DefaultRpcPromptScheduler implements RpcPromptScheduler {
 		if (generation !== this.generation) return;
 		this.dispatching = true;
 		this.busy = true;
+		const dispatchAgentStartCount = this.agentStartCount;
 		this.options.onDispatchStart?.(message);
 		try {
 			await this.options.sendPrompt(message);
@@ -132,11 +153,14 @@ class DefaultRpcPromptScheduler implements RpcPromptScheduler {
 					this.pausedAfterFailure = true;
 					this.publishQueue();
 				}
-				this.busy = false;
+				this.busy = this.agentStartCount !== dispatchAgentStartCount || this.options.getBusy?.() === true;
 				this.options.onDispatchFailure?.(error);
 			}
 		} finally {
-			if (generation === this.generation) this.dispatching = false;
+			if (generation === this.generation) {
+				this.dispatching = false;
+				if (!this.busy && !this.pausedAfterFailure) this.drainOne(generation);
+			}
 		}
 	}
 

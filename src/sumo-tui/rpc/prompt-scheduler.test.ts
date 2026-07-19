@@ -85,12 +85,35 @@ describe("RpcPromptScheduler", () => {
 		await flush();
 	});
 
+	it("drains queued entries when agent_settled arrives before dispatch ack resolves", async () => {
+		const gate = deferred();
+		const sent: string[] = [];
+		const scheduler = createRpcPromptScheduler({
+			sendPrompt: async (message) => {
+				sent.push(message);
+				await gate.promise;
+			},
+		});
+
+		await expect(scheduler.submit("A")).resolves.toBe("sent");
+		await expect(scheduler.submit("B")).resolves.toBe("queued");
+		scheduler.handleAgentEvent({ type: "agent_settled" });
+		await flush();
+		expect(sent).toEqual(["A"]);
+		expect(scheduler.getSnapshot().queuedMessages).toEqual(["B"]);
+
+		gate.resolve();
+		await flush();
+		expect(sent).toEqual(["A", "B"]);
+		expect(scheduler.getSnapshot().queuedMessages).toEqual([]);
+	});
+
 	it("leaves drafts unchanged when restore is empty", () => {
 		const scheduler = createRpcPromptScheduler({ sendPrompt: async () => undefined });
 		expect(scheduler.restoreAll("draft")).toEqual({ count: 0, text: "draft" });
 	});
 
-	it("requeues failed dispatches at the head and pauses automatic drain until an explicit trigger", async () => {
+	it("requeues failed dispatches at the head and ignores idle forced follow-ups while paused", async () => {
 		const error = new Error("preflight failed");
 		const failures: unknown[] = [];
 		let fail = true;
@@ -118,10 +141,18 @@ describe("RpcPromptScheduler", () => {
 		await flush();
 		expect(sent).toEqual(["B"]);
 
-		await expect(scheduler.submit("D", { forceQueue: true })).resolves.toBe("queued");
-		scheduler.handleAgentEvent({ type: "agent_settled" });
+		await expect(scheduler.submit("D", { forceQueue: true })).resolves.toBe("ignored");
+		expect(scheduler.getSnapshot()).toMatchObject({ queuedMessages: ["B", "C"], pausedAfterFailure: true });
+
+		await expect(scheduler.submit("D")).resolves.toBe("queued");
 		await flush();
 		expect(sent).toEqual(["B", "B"]);
+		expect(scheduler.getSnapshot().queuedMessages).toEqual(["C", "D"]);
+
+		scheduler.handleAgentEvent({ type: "agent_settled" });
+		await flush();
+		expect(sent).toEqual(["B", "B", "C"]);
+		expect(scheduler.getSnapshot().queuedMessages).toEqual(["D"]);
 	});
 
 	it("restores old generation entries on rebind so a later settle has nothing stale to deliver", async () => {
@@ -159,6 +190,68 @@ describe("RpcPromptScheduler", () => {
 		expect(scheduler.getSnapshot()).toMatchObject({ busy: true, queuedMessages: [] });
 	});
 
+	it("ignores forced follow-ups while paused even when external state is busy", async () => {
+		let externalBusy = false;
+		const sent: string[] = [];
+		const scheduler = createRpcPromptScheduler({
+			getBusy: () => externalBusy,
+			sendPrompt: async (message) => {
+				sent.push(message);
+				throw new Error("preflight failed");
+			},
+		});
+
+		scheduler.handleAgentEvent({ type: "agent_start" });
+		await scheduler.submit("B");
+		scheduler.handleAgentEvent({ type: "agent_settled" });
+		await flush();
+		expect(scheduler.getSnapshot()).toMatchObject({ queuedMessages: ["B"], pausedAfterFailure: true });
+
+		externalBusy = true;
+		await expect(scheduler.submit("D", { forceQueue: true })).resolves.toBe("ignored");
+		expect(sent).toEqual(["B"]);
+		expect(scheduler.getSnapshot()).toMatchObject({ busy: true, queuedMessages: ["B"], pausedAfterFailure: true });
+	});
+
+	it("keeps busy true when agent_start arrives before dispatch failure", async () => {
+		const gate = deferred();
+		const scheduler = createRpcPromptScheduler({ sendPrompt: async () => gate.promise });
+
+		await expect(scheduler.submit("A")).resolves.toBe("sent");
+		scheduler.handleAgentEvent({ type: "agent_start" });
+		gate.reject(new Error("late failure"));
+		await flush();
+
+		expect(scheduler.getSnapshot()).toMatchObject({ busy: true, queuedMessages: ["A"], pausedAfterFailure: true });
+		scheduler.handleAgentEvent({ type: "agent_settled" });
+		await flush();
+		expect(scheduler.getSnapshot()).toMatchObject({ busy: false, queuedMessages: ["A"], pausedAfterFailure: true });
+	});
+
+	it("can discard stale in-flight dispatch failures when restoring queued drafts during abort", async () => {
+		const gate = deferred();
+		const failures: unknown[] = [];
+		const scheduler = createRpcPromptScheduler({
+			sendPrompt: async () => gate.promise,
+			onDispatchFailure: (error) => failures.push(error),
+		});
+
+		scheduler.handleAgentEvent({ type: "agent_start" });
+		await scheduler.submit("B");
+		await scheduler.submit("C");
+		scheduler.handleAgentEvent({ type: "agent_settled" });
+		await flush();
+
+		const restored = scheduler.restoreAll("draft", { discardInFlight: true });
+		expect(restored).toEqual({ count: 1, text: "C\n\ndraft" });
+		expect(scheduler.getSnapshot()).toMatchObject({ busy: false, queuedMessages: [] });
+
+		gate.reject(new Error("abort failure"));
+		await flush();
+		expect(failures).toEqual([]);
+		expect(scheduler.getSnapshot()).toMatchObject({ busy: false, queuedMessages: [] });
+	});
+
 	it("lets host commands take first refusal before queueing", async () => {
 		const sendPrompt = vi.fn(async () => undefined);
 		const handleHostCommand = vi.fn(async (message: string) => message === "/model");
@@ -167,5 +260,28 @@ describe("RpcPromptScheduler", () => {
 		await expect(scheduler.submit("/model", { forceQueue: true })).resolves.toBe("ignored");
 		expect(sendPrompt).not.toHaveBeenCalled();
 		expect(scheduler.getSnapshot().queuedMessages).toEqual([]);
+	});
+
+	it("ignores a forced follow-up that becomes idle while async host command classification is pending", async () => {
+		let resolveHostCommand!: (handled: boolean) => void;
+		const hostCommand = new Promise<boolean>((resolve) => {
+			resolveHostCommand = resolve;
+		});
+		const sendPrompt = vi.fn(async () => undefined);
+		const handleHostCommand = vi.fn(() => hostCommand);
+		const scheduler = createRpcPromptScheduler({ sendPrompt, handleHostCommand });
+
+		scheduler.handleAgentEvent({ type: "agent_start" });
+		const result = scheduler.submit("race follow-up", { forceQueue: true });
+		await flush();
+		expect(handleHostCommand).toHaveBeenCalledWith("race follow-up");
+
+		scheduler.handleAgentEvent({ type: "agent_settled" });
+		resolveHostCommand(false);
+		await expect(result).resolves.toBe("ignored");
+		await flush();
+
+		expect(sendPrompt).not.toHaveBeenCalled();
+		expect(scheduler.getSnapshot()).toMatchObject({ busy: false, queuedMessages: [] });
 	});
 });

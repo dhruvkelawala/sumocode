@@ -503,7 +503,7 @@ manifests, then retirement of the `bg_task` mega-tool and delegation routing amb
 | 074 | [Herdr-native integration: approval attention queue + native worktree workspaces](074-herdr-native-integration.md) | P2 | S | 072 | [#316](https://github.com/dhruvkelawala/sumocode/issues/316) | DONE — PR #320 (`93e077a`); Claude autoreview 3 rounds → clean; live-verified: blocked flip + attention-queue jump during approval modal (operator screenshot 2026-07-18) |
 | 075 | [Ultraviolet Core Application Theme](075-ultraviolet-core-application-theme.md) | P1 | L | 073 | [#319](https://github.com/dhruvkelawala/sumocode/issues/319) | DONE — implementation branch `advisor/075-ultraviolet-core-application-theme`; review-only visual evidence, no golden promotion |
 | 076 | [Ultraviolet RunCat working indicator](076-ultraviolet-runcat-working-indicator.md) | P2 | M | 075 | [#331](https://github.com/dhruvkelawala/sumocode/issues/331) | IN PROGRESS — automated implementation approved at `3747af4`; 1,759 unit tests, 45 integration tests, 101 Bible renders, and 22 visual scenarios pass; two-Mac human canary pending |
-| 078 | [Host-owned RPC prompt queue and queued-message undo](078-restore-queued-message-undo.md) | P1 | M | PR #325 | — | DONE — approved at `44ab8e5`; 1,738 unit tests, 48 integration tests, 100 Bible renders, 21 visual scenarios, and final Claude autoreview pass |
+| 078 | [Host-owned RPC prompt queue and queued-message undo](078-restore-queued-message-undo.md) | P1 | M | PR #325 | — | DONE — approved at `48949b5`; 1,741 unit tests, 48 integration tests, 100 Bible renders, 21 visual scenarios, and final Claude autoreview pass |
 
 ### Dependency notes
 

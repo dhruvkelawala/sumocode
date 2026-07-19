@@ -29,7 +29,7 @@
 - **Category**: correctness / RPC UX
 - **Depends on**: PR #325 / Plan 077 (merged before this plan was written)
 - **Planned at**: `origin/main` commit `ca3b199`, 2026-07-19
-- **Execution status**: DONE — approved on `fix/rpc-host-prompt-queue` at `44ab8e5` after two reviewer revision rounds; typecheck/build, 1,738 unit tests, 48 integration tests, 100 Bible renders, 21 visual scenarios, and final Claude autoreview pass
+- **Execution status**: DONE — approved on `fix/rpc-host-prompt-queue` at `48949b5` after two reviewer revision rounds; typecheck/build, 1,741 unit tests, 48 integration tests, 100 Bible renders, 21 visual scenarios, and final Claude autoreview pass
 - **Supersedes**: the blocked Pi `clear_queue` design recorded against [`earendil-works/pi#5606`](https://github.com/earendil-works/pi/issues/5606)
 
 ## Decision

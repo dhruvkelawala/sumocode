@@ -85,6 +85,12 @@ class DefaultRpcPromptScheduler implements RpcPromptScheduler {
 				this.busy = true;
 				this.agentStartCount += 1;
 				break;
+			case "compaction_end":
+				// The RPC host delivers events here after updating RpcHostStateStore, so
+				// getBusy() observes manual compaction as idle while agent_start-owned
+				// auto-compaction remains protected by this.busy until agent_settled.
+				this.drainOne(this.generation);
+				break;
 			case "agent_settled":
 				this.busy = false;
 				this.drainOne(this.generation);

@@ -67,6 +67,54 @@ describe("RpcPromptScheduler", () => {
 		expect(queues).toEqual([["B"], ["B", "C"], ["C"], []]);
 	});
 
+	it("drains exactly one manual-compaction queued prompt on compaction_end after external busy clears", async () => {
+		let externalBusy = true;
+		const sent: string[] = [];
+		const scheduler = createRpcPromptScheduler({
+			getBusy: () => externalBusy,
+			sendPrompt: async (message) => { sent.push(message); },
+		});
+
+		await expect(scheduler.submit("B")).resolves.toBe("queued");
+		await expect(scheduler.submit("C")).resolves.toBe("queued");
+		expect(sent).toEqual([]);
+		expect(scheduler.getSnapshot().queuedMessages).toEqual(["B", "C"]);
+
+		externalBusy = false;
+		scheduler.handleAgentEvent({ type: "compaction_end" });
+		await flush();
+
+		expect(sent).toEqual(["B"]);
+		expect(scheduler.getSnapshot().queuedMessages).toEqual(["C"]);
+		scheduler.handleAgentEvent({ type: "agent_settled" });
+		await flush();
+		expect(sent).toEqual(["B", "C"]);
+	});
+
+	it("does not drain active-run auto-compaction queues on compaction_end before agent_settled", async () => {
+		let externalBusy = false;
+		const sent: string[] = [];
+		const scheduler = createRpcPromptScheduler({
+			getBusy: () => externalBusy,
+			sendPrompt: async (message) => { sent.push(message); },
+		});
+
+		scheduler.handleAgentEvent({ type: "agent_start" });
+		externalBusy = true;
+		await expect(scheduler.submit("B")).resolves.toBe("queued");
+
+		externalBusy = false;
+		scheduler.handleAgentEvent({ type: "compaction_end" });
+		await flush();
+		expect(sent).toEqual([]);
+		expect(scheduler.getSnapshot().queuedMessages).toEqual(["B"]);
+
+		scheduler.handleAgentEvent({ type: "agent_settled" });
+		await flush();
+		expect(sent).toEqual(["B"]);
+		expect(scheduler.getSnapshot().queuedMessages).toEqual([]);
+	});
+
 	it("restores queued entries before the current draft and excludes an entry already in dispatch", async () => {
 		const gate = deferred();
 		const scheduler = createRpcPromptScheduler({ sendPrompt: async () => gate.promise });

@@ -32,6 +32,17 @@ async function readPromptCommands(path: string): Promise<Array<Record<string, un
 		.filter((command) => command.type === "prompt");
 }
 
+async function waitForPromptMessages(path: string, expected: readonly string[], timeoutMs = 5_000): Promise<void> {
+	const started = Date.now();
+	while (Date.now() - started < timeoutMs) {
+		const prompts = await readPromptCommands(path);
+		if (JSON.stringify(prompts.map((command) => command.message)) === JSON.stringify(expected)) return;
+		await new Promise((resolve) => setTimeout(resolve, 50));
+	}
+	const prompts = await readPromptCommands(path);
+	expect(prompts.map((command) => command.message)).toEqual(expected);
+}
+
 async function bootRpcHost(prefix: string, piBin: string, logPath: string): Promise<SpawnedPiPty> {
 	const agentDir = await mkdtemp(join(tmpdir(), prefix));
 	const spawned = spawnSumocodePty({
@@ -127,6 +138,42 @@ describe("RPC queued message undo", () => {
 		await app.waitForOutput("fixture response complete: prompt C", 5_000);
 		prompts = await readPromptCommands(logPath);
 		expect(prompts.map((command) => command.message)).toEqual(["prompt A", "prompt B", "prompt C"]);
+		expect(prompts.some((command) => "streamingBehavior" in command)).toBe(false);
+	}, 30_000);
+
+	it("drains exactly one prompt queued during manual compaction when compaction_end lands", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "sumocode-rpc-compact-drain-log-"));
+		const logPath = join(dir, "commands.jsonl");
+		const piBin = await createRpcChildFixture("sumocode-rpc-compact-drain-child-", {
+			compactDelayMs: 500,
+			promptDelayMs: 2_500,
+			settleDelayMs: 1_000,
+		});
+		app = await bootRpcHost("sumocode-rpc-compact-drain-agent-", piBin, logPath);
+
+		app.sendInput(`/compact${CSI_U_ENTER}`);
+		await waitForScreen(
+			app,
+			(screen) => screen.text.includes("Compacting"),
+			{ cols: COLS, rows: ROWS, timeoutMs: 5_000 },
+		);
+		app.sendInput(`prompt B${CSI_U_ENTER}`);
+		app.sendInput(`prompt C${CSI_U_ENTER}`);
+		await waitForScreen(
+			app,
+			(screen) => screen.text.includes("QUEUED (2)") && screen.text.includes("prompt B") && screen.text.includes("prompt C"),
+			{ cols: COLS, rows: ROWS, timeoutMs: 5_000 },
+		);
+
+		await waitForPromptMessages(logPath, ["prompt B"]);
+		await new Promise((resolve) => setTimeout(resolve, 300));
+		let prompts = await readPromptCommands(logPath);
+		expect(prompts.map((command) => command.message)).toEqual(["prompt B"]);
+
+		await app.waitForOutput("fixture response complete: prompt B", 6_000);
+		await app.waitForOutput("fixture response complete: prompt C", 6_000);
+		prompts = await readPromptCommands(logPath);
+		expect(prompts.map((command) => command.message)).toEqual(["prompt B", "prompt C"]);
 		expect(prompts.some((command) => "streamingBehavior" in command)).toBe(false);
 	}, 30_000);
 });

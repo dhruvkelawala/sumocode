@@ -140,7 +140,7 @@ describe("herdrTerminalHost", () => {
 		});
 
 		expect(result).toEqual({ ok: true, pane: { host: "herdr", paneId: "wA:p1", workspaceId: "wA" } });
-		expect(exec).toHaveBeenCalledWith("herdr", ["worktree", "create", "--branch", "sumo/task", "--base", "origin/main", "--path", "/repo.wt/sumo__task", "--label", "sumo · task", "--no-focus", "--json"], { timeout: 5000 });
+		expect(exec).toHaveBeenCalledWith("herdr", ["worktree", "create", "--branch", "sumo/task", "--base", "origin/main", "--path", "/repo.wt/sumo__task", "--label", "sumo · task", "--focus", "--json"], { timeout: 5000 });
 		expect(exec).toHaveBeenCalledWith("herdr", ["pane", "list", "--workspace", "wA"], { timeout: 5000 });
 		expect(exec).toHaveBeenCalledWith("herdr", ["pane", "run", "wA:p1", "exec sumocode"], { timeout: 5000 });
 	});
@@ -158,6 +158,12 @@ describe("herdrTerminalHost", () => {
 		const result = await herdrTerminalHost.openExistingWorktreeWorkspace?.({ exec } as never, { path: "/repo.wt/sumo__task", label: "sumo · task", shellCommand: "exec sumocode" });
 
 		expect(result).toEqual({ ok: true, pane: { host: "herdr", paneId: "wB:p1", workspaceId: "wB" } });
+		expect(exec).toHaveBeenCalledWith("herdr", ["worktree", "open", "--path", "/repo.wt/sumo__task", "--label", "sumo · task", "--focus", "--json"], { timeout: 5000 });
+	});
+
+	it("passes --no-focus to worktree open when focus is explicitly disabled (visible subagents)", async () => {
+		const exec = vi.fn(async () => ({ code: 0, stdout: JSON.stringify({ result: { workspace_id: "w9", pane_id: "w9:p1" } }), stderr: "" }));
+		await herdrTerminalHost.openExistingWorktreeWorkspace!({ exec } as never, { path: "/repo.wt/sumo__task", label: "sumo · task", focus: false });
 		expect(exec).toHaveBeenCalledWith("herdr", ["worktree", "open", "--path", "/repo.wt/sumo__task", "--label", "sumo · task", "--no-focus", "--json"], { timeout: 5000 });
 	});
 	it("reports native worktree errors when workspace or panes are missing", async () => {

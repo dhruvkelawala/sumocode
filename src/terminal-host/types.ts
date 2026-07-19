@@ -38,12 +38,20 @@ export interface WorktreeWorkspaceOptions {
 	path: string;
 	label: string;
 	shellCommand: string;
+	/**
+	 * Whether the new workspace should take focus. Defaults to true (human
+	 * `/worktree` flows land in the workspace); programmatic spawns (visible
+	 * subagents) pass false so panes never steal the user's focus.
+	 */
+	focus?: boolean;
 }
 
 export interface ExistingWorktreeWorkspaceOptions {
 	path: string;
 	label: string;
 	shellCommand?: string;
+	/** See {@link WorktreeWorkspaceOptions.focus}. Defaults to true. */
+	focus?: boolean;
 }
 
 export interface TerminalHost {

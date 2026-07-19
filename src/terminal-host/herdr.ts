@@ -174,10 +174,10 @@ export const herdrTerminalHost = {
 		if (!paneId) return { ok: false, error: "herdr agent start did not return a pane_id" };
 		return { ok: true, pane: { host: "herdr", paneId, workspaceId: parsed.agent?.workspace_id } };
 	},
-	async openWorktreeWorkspace(pi: PiExecLike, options: { branch: string; baseRef: string; path: string; label: string; shellCommand: string }) {
+	async openWorktreeWorkspace(pi: PiExecLike, options: { branch: string; baseRef: string; path: string; label: string; shellCommand: string; focus?: boolean }) {
 		const result = await pi.exec(
 			"herdr",
-			["worktree", "create", "--branch", options.branch, "--base", options.baseRef, "--path", options.path, "--label", options.label, "--no-focus", "--json"],
+			["worktree", "create", "--branch", options.branch, "--base", options.baseRef, "--path", options.path, "--label", options.label, options.focus === false ? "--no-focus" : "--focus", "--json"],
 			{ timeout: 5000 },
 		);
 		if (result.code !== 0) return execFailure("herdr worktree create", result);
@@ -187,10 +187,10 @@ export const herdrTerminalHost = {
 		if (!workspaceId) return { ok: false, error: "herdr worktree create did not return a workspace_id" };
 		return await runInWorktreeWorkspace(pi, workspaceId, options.shellCommand);
 	},
-	async openExistingWorktreeWorkspace(pi: PiExecLike, options: { path: string; label: string; shellCommand?: string }) {
+	async openExistingWorktreeWorkspace(pi: PiExecLike, options: { path: string; label: string; shellCommand?: string; focus?: boolean }) {
 		const result = await pi.exec(
 			"herdr",
-			["worktree", "open", "--path", options.path, "--label", options.label, "--no-focus", "--json"],
+			["worktree", "open", "--path", options.path, "--label", options.label, options.focus === false ? "--no-focus" : "--focus", "--json"],
 			{ timeout: 5000 },
 		);
 		if (result.code !== 0) return execFailure("herdr worktree open", result);

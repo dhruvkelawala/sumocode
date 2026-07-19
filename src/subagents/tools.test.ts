@@ -7,9 +7,26 @@ const createHarness = () => {
 	const registered: Array<{ name: string; execute: (...args: unknown[]) => Promise<unknown> }> = [];
 	const emitters = new Map<string, (event: SubagentEvent) => void>();
 	const manager = new SubagentManager((task: SpawnSubagentTask & { id: string }) => ({
-		events: (emit) => emitters.set(task.id, emit),
+		events: (emit) => {
+			emitters.set(task.id, emit);
+			emit({ kind: "run-started" });
+		},
 		interrupt: vi.fn(() => emitters.get(task.id)?.({ kind: "run-settled", outcome: { kind: "interrupted" } })),
-	}));
+	}), {
+		captureGitContext: async () => ({ repoRoot: "/tmp/project", baseRef: "base-ref" }),
+		createWorktree: async (options) => ({ ok: true, path: "/tmp/isolated", branch: options.branch ?? "sumo/task", baseRef: options.baseRef ?? "base-ref" }),
+		buildCompletionManifest: async (options) => ({
+			baseRef: options.baseRef,
+			headRef: "head-ref",
+			branch: options.worktree?.branch,
+			worktreePath: options.worktree?.path,
+			changedPaths: options.worktree ? ["src/feature.ts"] : [],
+			dirty: false,
+			commits: options.worktree ? 1 : 0,
+			exit: options.outcome.kind,
+			durationMs: 10,
+		}),
+	});
 	const pi = { registerTool: vi.fn((tool) => registered.push(tool)), on: vi.fn(), getThinkingLevel: vi.fn(() => "medium"), getActiveTools: vi.fn(() => ["read", "bash"]) };
 	registerSubagentTools(pi as never, manager);
 	const tool = (name: string) => registered.find((entry) => entry.name === name)!;
@@ -31,6 +48,26 @@ describe("subagent tools", () => {
 		expect(textOf(result)).toBe("Started sa-1 (worker). Its result will be delivered to you automatically when it settles, or use subagent_wait to block for it.");
 	});
 
+	it("passes worktree isolation and branch overrides to the manager", async () => {
+		const { tool, ctx, manager } = createHarness();
+		const result = await tool("subagent_spawn").execute("tc", { prompt: "write", name: "worker", worktree: true, branch: "sumo/custom" }, undefined, undefined, ctx as never);
+
+		expect(textOf(result)).toContain("Started sa-1");
+		expect(manager.get("sa-1")).toMatchObject({
+			cwd: "/tmp/isolated",
+			worktree: { path: "/tmp/isolated", branch: "sumo/custom", baseRef: "base-ref", repoRoot: "/tmp/project" },
+		});
+	});
+
+	it("lists the branch for isolated children", async () => {
+		const { tool, ctx } = createHarness();
+		await tool("subagent_spawn").execute("tc", { prompt: "write", name: "worker", worktree: true, branch: "sumo/custom" }, undefined, undefined, ctx as never);
+
+		const result = await tool("subagent_list").execute("tc", {}, undefined, undefined, ctx as never);
+
+		expect(textOf(result)).toContain("· sumo/custom");
+	});
+
 	it("at capacity returns cooperative status details", async () => {
 		const { tool, ctx } = createHarness();
 		for (let index = 0; index < 4; index += 1) await tool("subagent_spawn").execute("tc", { prompt: "do", name: `w${index}` }, undefined, undefined, ctx as never);
@@ -46,6 +83,17 @@ describe("subagent tools", () => {
 		const result = await tool("subagent_check").execute("tc", { id: "sa-1" }, undefined, undefined, ctx as never);
 		expect(textOf(result)).toContain("hello");
 		expect(manager.consumedIds.has("sa-1")).toBe(false);
+	});
+
+	it("check renders the host-derived manifest summary after settlement", async () => {
+		const { tool, ctx, emitters, manager } = createHarness();
+		await tool("subagent_spawn").execute("tc", { prompt: "write", name: "worker", worktree: true, branch: "sumo/custom" }, undefined, undefined, ctx as never);
+		emitters.get("sa-1")?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
+		await vi.waitFor(() => expect(manager.get("sa-1")?.status).toBe("done"));
+
+		const result = await tool("subagent_check").execute("tc", { id: "sa-1" }, undefined, undefined, ctx as never);
+
+		expect(textOf(result)).toContain("branch: sumo/custom · base base-re · +1 commits · 1 file changed · clean");
 	});
 
 	it("wait errors on unknown id and lists known ids", async () => {
@@ -64,5 +112,6 @@ describe("subagent tools", () => {
 		const text = textOf(waited);
 		expect(text).toContain("error: provider exploded");
 		expect(text).toContain("partial progress");
+		expect(text).toContain("shared checkout · base base-re · +0 checkout commits · changed paths suppressed · checkout clean");
 	});
 });

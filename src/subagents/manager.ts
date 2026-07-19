@@ -1,10 +1,19 @@
+import { execFile } from "node:child_process";
+import { isAbsolute, join, relative } from "node:path";
+import { promisify } from "node:util";
+import { createWorktree, resolveCreateOptions, type CreateWorktreeOptions, type CreateWorktreeResult } from "../git/worktree.js";
 import type { SpawnedChild } from "./backend-pi.js";
-import type { LiveToolState, SubagentEvent, SubagentSnapshot } from "./domain.js";
+import type { LiveToolState, RunOutcome, SubagentEvent, SubagentSnapshot, SubagentWorktreeRef } from "./domain.js";
+import { buildCompletionManifest, type CompletionManifestEvidence } from "./manifest.js";
+
+const execFileAsync = promisify(execFile);
 
 const MAX_RUNNING = 4;
 const MAX_TRACKED = 64;
 const ERROR_TEXT_MAX = 4096;
 const CANCEL_WAIT_MS = 5_500;
+const GIT_READ_TIMEOUT_MS = 5_000;
+const MANIFEST_TIMEOUT_MS = 5_000;
 
 export interface SubagentCapacityTaskSummary {
 	readonly id: string;
@@ -25,6 +34,8 @@ export interface SpawnSubagentTask {
 	readonly prompt: string;
 	readonly title: string;
 	readonly cwd: string;
+	readonly worktree?: boolean;
+	readonly branch?: string;
 	readonly model?: string;
 	readonly thinking?: string;
 	readonly inherited?: { model?: { provider: string; id: string }; thinking?: string };
@@ -33,16 +44,59 @@ export interface SpawnSubagentTask {
 
 type BackendFactory = (task: SpawnSubagentTask & { id: string; signal: AbortSignal }) => SpawnedChild;
 type Listener = () => void;
+type WorktreeCreator = (options: CreateWorktreeOptions) => Promise<CreateWorktreeResult>;
+
+interface SpawnGitContext {
+	readonly repoRoot?: string;
+	readonly baseRef?: string;
+}
+
+export interface SubagentManagerDependencies {
+	readonly createWorktree?: WorktreeCreator;
+	readonly captureGitContext?: (cwd: string) => Promise<SpawnGitContext>;
+	readonly buildCompletionManifest?: typeof buildCompletionManifest;
+}
+
+async function gitRead(cwd: string, args: readonly string[]): Promise<string | undefined> {
+	try {
+		const { stdout } = await execFileAsync("git", ["-C", cwd, ...args], {
+			encoding: "utf8",
+			timeout: GIT_READ_TIMEOUT_MS,
+			maxBuffer: 10 * 1024 * 1024,
+		});
+		return stdout.trim() || undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+async function captureGitContext(cwd: string): Promise<SpawnGitContext> {
+	const [repoRoot, baseRef] = await Promise.all([
+		gitRead(cwd, ["rev-parse", "--show-toplevel"]),
+		gitRead(cwd, ["rev-parse", "HEAD"]),
+	]);
+	return { repoRoot, baseRef };
+}
 
 const isSettled = (snapshot: SubagentSnapshot): boolean => snapshot.status !== "running";
 
-const makeInitialSnapshot = (task: SpawnSubagentTask, id: string, sessionFilePath: string | undefined): SubagentSnapshot => ({
+const makeInitialSnapshot = (
+	task: SpawnSubagentTask,
+	id: string,
+	createdAt: number,
+	baseRef: string,
+	cwd = task.cwd,
+	worktree?: SubagentWorktreeRef,
+	sessionFilePath?: string,
+): SubagentSnapshot => ({
 	id,
 	title: task.title,
 	prompt: task.prompt,
-	cwd: task.cwd,
+	cwd,
+	baseRef,
+	worktree,
 	status: "running",
-	createdAt: Date.now(),
+	createdAt,
 	modelLabel: task.model,
 	sessionFilePath,
 	usage: { turns: 0 },
@@ -60,40 +114,128 @@ const upsertTool = (tools: readonly LiveToolState[], next: LiveToolState): reado
 
 export class SubagentManager {
 	private nextId = 1;
+	private readonly pendingSpawns = new Map<string, { title: string; createdAt: number }>();
 	private readonly snapshots = new Map<string, SubagentSnapshot>();
 	private readonly children = new Map<string, { child: SpawnedChild; controller: AbortController }>();
 	private readonly waitInterest = new Map<string, number>();
 	private readonly listeners = new Set<Listener>();
+	private readonly createWorktreeImpl: WorktreeCreator;
+	private readonly captureGitContextImpl: (cwd: string) => Promise<SpawnGitContext>;
+	private readonly buildCompletionManifestImpl: typeof buildCompletionManifest;
+	private readonly settlingIds = new Set<string>();
+	private readonly settlingPromises = new Map<string, Promise<void>>();
+	private readonly settlingOutcomes = new Map<string, RunOutcome>();
+	private readonly startedIds = new Set<string>();
 	public readonly consumedIds = new Set<string>();
 
-	public constructor(private readonly backendFactory: BackendFactory) {}
+	public constructor(private readonly backendFactory: BackendFactory, dependencies: SubagentManagerDependencies = {}) {
+		this.createWorktreeImpl = dependencies.createWorktree ?? createWorktree;
+		this.captureGitContextImpl = dependencies.captureGitContext ?? captureGitContext;
+		this.buildCompletionManifestImpl = dependencies.buildCompletionManifest ?? buildCompletionManifest;
+	}
 
-	public spawn(task: SpawnSubagentTask): SubagentSnapshot | AtCapacityDetails {
-		const running = this.list().filter((snapshot) => snapshot.status === "running");
-		if (running.length >= MAX_RUNNING) {
+	public async spawn(task: SpawnSubagentTask): Promise<SubagentSnapshot | AtCapacityDetails> {
+		// A run-settled child is removed from `children` before its bounded
+		// manifest read begins, so evidence collection does not occupy a worker
+		// slot for up to five seconds.
+		const running = this.list().filter((snapshot) => snapshot.status === "running" && this.children.has(snapshot.id));
+		const pendingSummaries = [...this.pendingSpawns].map(([id, spawn]) => ({ id, title: spawn.title, status: "running" as const, ageMs: Date.now() - spawn.createdAt }));
+		const runningSummaries = [
+			...running.map((snapshot) => ({ id: snapshot.id, title: snapshot.title, status: snapshot.status, ageMs: Date.now() - snapshot.createdAt })),
+			...pendingSummaries,
+		];
+		if (runningSummaries.length >= MAX_RUNNING) {
 			return {
 				status: "at_capacity",
 				capacity: MAX_RUNNING,
-				runningCount: running.length,
-				running: running.map((snapshot) => ({ id: snapshot.id, title: snapshot.title, status: snapshot.status, ageMs: Date.now() - snapshot.createdAt })),
+				runningCount: runningSummaries.length,
+				running: runningSummaries,
 				retryHint: "wait for a running subagent to settle, then retry subagent_spawn",
 			};
 		}
 
 		const id = `sa-${this.nextId++}`;
-		const controller = new AbortController();
-		const child = this.backendFactory({ ...task, id, signal: controller.signal });
-		const snapshot = makeInitialSnapshot(task, id, child.sessionFilePath);
-		this.snapshots.set(id, snapshot);
-		this.children.set(id, { child, controller });
-		this.consumeEvents(id, child.events);
-		this.notify();
-		this.prune();
-		// A backend can settle synchronously (e.g. invalid model override emits
-		// run-settled without spawning); consumeEvents has already folded that
-		// into the map, so return the post-fold snapshot rather than the stale
-		// "running" one — callers must not report "Started" for a dead child.
-		return this.snapshots.get(id) ?? snapshot;
+		const createdAt = Date.now();
+		this.pendingSpawns.set(id, { title: task.title, createdAt });
+		let pending = true;
+		const releasePending = () => {
+			if (!pending) return;
+			pending = false;
+			this.pendingSpawns.delete(id);
+		};
+		try {
+			const gitContext = await this.captureGitContextImpl(task.cwd);
+			const baseRef = gitContext.baseRef ?? "HEAD";
+			if (task.branch && !task.worktree) {
+				releasePending();
+				return this.recordSpawnFailure(task, id, createdAt, baseRef, "branch requires worktree: true; refusing to ignore the isolation request");
+			}
+			let childCwd = task.cwd;
+			let worktree: SubagentWorktreeRef | undefined;
+
+			if (task.worktree) {
+				if (!gitContext.repoRoot || !gitContext.baseRef) {
+					releasePending();
+					return this.recordSpawnFailure(task, id, createdAt, baseRef, "unable to create worktree: the spawn cwd is not a readable git checkout");
+				}
+				const resolved = resolveCreateOptions({
+					repoRoot: gitContext.repoRoot,
+					branch: task.branch,
+					baseRef: gitContext.baseRef,
+					task: task.title,
+				});
+				const created = await this.createWorktreeImpl({
+					repoRoot: gitContext.repoRoot,
+					branch: resolved.branch,
+					baseRef: resolved.baseRef,
+					path: resolved.path,
+					task: task.title,
+				});
+				if (!created.ok) {
+					releasePending();
+					return this.recordSpawnFailure(task, id, createdAt, baseRef, `unable to create worktree: ${created.message}`);
+				}
+				// Preserve the caller's subdirectory inside the worktree so a spawn
+				// from /repo/packages/api lands in <worktree>/packages/api, matching
+				// the non-isolated path's cwd semantics instead of jumping to root.
+				const subPath = relative(gitContext.repoRoot, task.cwd);
+				childCwd = subPath && !subPath.startsWith("..") && !isAbsolute(subPath)
+					? join(created.path, subPath)
+					: created.path;
+				worktree = {
+					path: created.path,
+					branch: created.branch,
+					baseRef: gitContext.baseRef,
+					repoRoot: gitContext.repoRoot,
+				};
+			}
+
+			const controller = new AbortController();
+			let child: SpawnedChild;
+			try {
+				child = this.backendFactory({ ...task, cwd: childCwd, id, signal: controller.signal });
+			} catch (error) {
+				releasePending();
+				const message = error instanceof Error ? error.message : String(error);
+				const preservationNote = worktree ? ` Worktree created at ${worktree.path} is preserved.` : "";
+				return this.recordSpawnFailure(task, id, createdAt, baseRef, `unable to spawn child: ${message}.${preservationNote}`, childCwd, worktree);
+			}
+			const snapshot = makeInitialSnapshot(task, id, createdAt, baseRef, childCwd, worktree, child.sessionFilePath);
+			this.snapshots.set(id, snapshot);
+			this.children.set(id, { child, controller });
+			releasePending();
+			this.consumeEvents(id, child.events);
+			this.notify();
+			this.prune();
+			// A backend can settle synchronously (e.g. invalid model override emits
+			// run-settled without spawning). Await that in-flight manifest build so
+			// callers do not report "Started" for a dead child.
+			const synchronousSettle = this.settlingPromises.get(id);
+			if (synchronousSettle) await synchronousSettle;
+			return this.snapshots.get(id) ?? snapshot;
+		} finally {
+			releasePending();
+		}
 	}
 
 	public get(id: string): SubagentSnapshot | undefined {
@@ -167,6 +309,11 @@ export class SubagentManager {
 				lines.set(id, `${id} is unknown`);
 				continue;
 			}
+			const settlingOutcome = this.settlingOutcomes.get(id);
+			if (settlingOutcome) {
+				lines.set(id, `${id} was already ${settlingOutcome.kind === "completed" ? "done" : "settled"}`);
+				continue;
+			}
 			this.consumedIds.add(id);
 			if (isSettled(snapshot)) {
 				lines.set(id, `${id} was already ${snapshot.status === "done" ? "done" : "settled"}`);
@@ -179,7 +326,7 @@ export class SubagentManager {
 			try {
 				await this.waitForSettle(id, CANCEL_WAIT_MS);
 			} catch {
-				this.fold(id, { kind: "run-settled", outcome: { kind: "interrupted", partialText: this.snapshots.get(id)?.finalText || this.snapshots.get(id)?.liveText } });
+				await this.startSettle(id, { kind: "interrupted", partialText: this.snapshots.get(id)?.finalText || this.snapshots.get(id)?.liveText });
 			}
 			lines.set(id, `Cancelled ${id}`);
 		}));
@@ -191,6 +338,27 @@ export class SubagentManager {
 			const snapshot = this.snapshots.get(id);
 			if (snapshot?.status === "running") entry.child.interrupt();
 		}
+	}
+
+	private recordSpawnFailure(
+		task: SpawnSubagentTask,
+		id: string,
+		createdAt: number,
+		baseRef: string,
+		errorText: string,
+		cwd = task.cwd,
+		worktree?: SubagentWorktreeRef,
+	): SubagentSnapshot {
+		const snapshot: SubagentSnapshot = {
+			...makeInitialSnapshot(task, id, createdAt, baseRef, cwd, worktree),
+			status: "error",
+			settledAt: Date.now(),
+			errorText: errorText.slice(0, ERROR_TEXT_MAX),
+		};
+		this.snapshots.set(id, snapshot);
+		this.notify();
+		this.prune();
+		return snapshot;
 	}
 
 	private consumeEvents(id: string, events: SpawnedChild["events"]): void {
@@ -205,8 +373,13 @@ export class SubagentManager {
 	}
 
 	private fold(id: string, event: SubagentEvent): void {
+		if (event.kind === "run-settled") {
+			void this.startSettle(id, event.outcome);
+			return;
+		}
 		const current = this.snapshots.get(id);
 		if (!current) return;
+		if (event.kind === "run-started") this.startedIds.add(id);
 		// Terminal state is sticky. After a cancel timeout we fold a synthetic
 		// interrupted settle while the OS process is still dying (SIGTERM sent,
 		// SIGKILL 5s later); its eventual real close would otherwise re-fold a
@@ -235,16 +408,78 @@ export class SubagentManager {
 				costUsd: event.costUsd ?? current.usage.costUsd,
 			},
 		};
-		else if (event.kind === "run-settled") {
-			if (event.outcome.kind === "completed") next = { ...current, status: "done", settledAt: Date.now(), finalText: event.outcome.finalText || current.finalText, liveText: "" };
-			else if (event.outcome.kind === "failed") next = { ...current, status: "error", settledAt: Date.now(), errorText: event.outcome.errorText.slice(0, ERROR_TEXT_MAX), finalText: event.outcome.partialText ?? current.finalText, liveText: "" };
-			else next = { ...current, status: "error", settledAt: Date.now(), errorText: "interrupted", finalText: event.outcome.partialText ?? current.finalText, liveText: "" };
-			this.children.delete(id);
-			if ((this.waitInterest.get(id) ?? 0) > 0) this.consumedIds.add(id);
-		}
 		this.snapshots.set(id, next);
 		this.notify();
 		this.prune();
+	}
+
+	private startSettle(id: string, outcome: RunOutcome): Promise<void> {
+		const existing = this.settlingPromises.get(id);
+		if (existing) return existing;
+		this.settlingOutcomes.set(id, outcome);
+		const promise = this.settle(id, outcome).finally(() => {
+			if (this.settlingPromises.get(id) === promise) {
+				this.settlingPromises.delete(id);
+				this.settlingOutcomes.delete(id);
+			}
+		});
+		this.settlingPromises.set(id, promise);
+		return promise;
+	}
+
+	private async settle(id: string, outcome: RunOutcome): Promise<void> {
+		const current = this.snapshots.get(id);
+		if (!current || isSettled(current) || this.settlingIds.has(id)) return;
+		this.settlingIds.add(id);
+		this.children.delete(id);
+		const settledAt = Date.now();
+		try {
+			// Configuration failures can settle synchronously before the backend
+			// emits run-started. No child ran, so avoid blocking spawn on checkout
+			// git reads and attach only the truthful process facts.
+			const manifest = outcome.kind === "failed" && !this.startedIds.has(id)
+				? { exit: outcome.kind, durationMs: Math.max(0, settledAt - current.createdAt) } as const
+				: await this.collectManifest(current, outcome);
+			const latest = this.snapshots.get(id);
+			if (!latest || isSettled(latest)) return;
+			let next: SubagentSnapshot;
+			if (outcome.kind === "completed") next = { ...latest, status: "done", settledAt, finalText: outcome.finalText || latest.finalText, liveText: "", manifest };
+			else if (outcome.kind === "failed") next = { ...latest, status: "error", settledAt, errorText: outcome.errorText.slice(0, ERROR_TEXT_MAX), finalText: outcome.partialText ?? latest.finalText, liveText: "", manifest };
+			else next = { ...latest, status: "error", settledAt, errorText: "interrupted", finalText: outcome.partialText ?? latest.finalText, liveText: "", manifest };
+			this.snapshots.set(id, next);
+			if ((this.waitInterest.get(id) ?? 0) > 0) this.consumedIds.add(id);
+			// Completion listeners (including deferred delivery) must observe the
+			// manifest on the same immutable terminal snapshot.
+			this.notify();
+			this.prune();
+		} finally {
+			this.settlingIds.delete(id);
+			this.startedIds.delete(id);
+		}
+	}
+
+	private async collectManifest(snapshot: SubagentSnapshot, outcome: RunOutcome): Promise<CompletionManifestEvidence> {
+		const fallback: CompletionManifestEvidence = {
+			exit: outcome.kind,
+			durationMs: Math.max(0, Date.now() - snapshot.createdAt),
+		};
+		let timeout: ReturnType<typeof setTimeout> | undefined;
+		try {
+			return await Promise.race([
+				this.buildCompletionManifestImpl({
+					cwd: snapshot.cwd,
+					baseRef: snapshot.baseRef,
+					outcome,
+					startedAt: snapshot.createdAt,
+					worktree: snapshot.worktree,
+				}).catch(() => fallback),
+				new Promise<CompletionManifestEvidence>((resolve) => {
+					timeout = setTimeout(() => resolve(fallback), MANIFEST_TIMEOUT_MS);
+				}),
+			]);
+		} finally {
+			if (timeout) clearTimeout(timeout);
+		}
 	}
 
 	private waitForSettle(id: string, timeoutMs: number): Promise<void> {

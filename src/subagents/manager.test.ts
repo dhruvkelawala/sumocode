@@ -1,8 +1,21 @@
 import { describe, expect, it, vi } from "vitest";
 import { SubagentManager, type SpawnSubagentTask } from "./manager.js";
 import type { SubagentEvent } from "./domain.js";
+import type { CompletionManifest, CompletionManifestEvidence } from "./manifest.js";
 
 const makeTask = (title: string): SpawnSubagentTask => ({ title, prompt: `prompt ${title}`, cwd: "/tmp" });
+
+const fakeManifestBuilder = async (options: Parameters<NonNullable<import("./manager.js").SubagentManagerDependencies["buildCompletionManifest"]>>[0]) => ({
+	baseRef: options.baseRef,
+	headRef: options.baseRef,
+	branch: options.worktree?.branch,
+	worktreePath: options.worktree?.path,
+	changedPaths: [] as readonly string[],
+	dirty: false,
+	commits: 0,
+	exit: options.outcome.kind,
+	durationMs: 1,
+});
 
 const deferredBackend = () => {
 	const emitters = new Map<string, (event: SubagentEvent) => void>();
@@ -11,25 +24,68 @@ const deferredBackend = () => {
 		const interrupt = vi.fn(() => emitters.get(task.id)?.({ kind: "run-settled", outcome: { kind: "interrupted" } }));
 		interrupts.set(task.id, interrupt);
 		return {
-			events: (emit) => emitters.set(task.id, emit),
+			events: (emit) => {
+				emitters.set(task.id, emit);
+				emit({ kind: "run-started" });
+			},
 			interrupt,
 		};
-	});
+	}, { captureGitContext: async () => ({ repoRoot: "/repo", baseRef: "base-ref" }), buildCompletionManifest: fakeManifestBuilder });
 	return { manager, emitters, interrupts };
 };
 
 describe("SubagentManager", () => {
-	it("enforces capacity synchronously", () => {
+	it("enforces capacity", async () => {
 		const { manager } = deferredBackend();
-		for (let index = 0; index < 4; index += 1) expect(manager.spawn(makeTask(`${index}`))).toMatchObject({ id: `sa-${index + 1}` });
-		const over = manager.spawn(makeTask("over"));
+		for (let index = 0; index < 4; index += 1) await expect(manager.spawn(makeTask(`${index}`))).resolves.toMatchObject({ id: `sa-${index + 1}` });
+		const over = await manager.spawn(makeTask("over"));
 		expect(over).toMatchObject({ status: "at_capacity", capacity: 4, runningCount: 4 });
 		expect(manager.list()).toHaveLength(4);
 	});
 
-	it("folds events into immutable snapshots", () => {
+	it("includes setup-pending spawns in capacity summaries", async () => {
+		let releaseCapture: () => void = () => undefined;
+		const captureGate = new Promise<void>((resolve) => { releaseCapture = resolve; });
+		const manager = new SubagentManager(() => ({ events: () => undefined, interrupt: () => undefined }), {
+			captureGitContext: async () => {
+				await captureGate;
+				return { baseRef: "base-ref" };
+			},
+		});
+		const pending = Array.from({ length: 4 }, (_, index) => manager.spawn(makeTask(`pending-${index}`)));
+
+		const over = await manager.spawn(makeTask("over"));
+
+		expect(over).toMatchObject({ status: "at_capacity", runningCount: 4 });
+		expect("running" in over ? over.running.map((task) => task.id) : []).toEqual(["sa-1", "sa-2", "sa-3", "sa-4"]);
+		releaseCapture();
+		await Promise.all(pending);
+	});
+
+	it("frees capacity while a settled child manifest is still collecting", async () => {
+		const emitters = new Map<string, (event: SubagentEvent) => void>();
+		let resolveManifest: (manifest: CompletionManifest) => void = () => undefined;
+		const manifestPromise = new Promise<CompletionManifest>((resolve) => { resolveManifest = resolve; });
+		const manager = new SubagentManager((task) => ({
+			events: (emit) => emitters.set(task.id, emit),
+			interrupt: () => undefined,
+		}), {
+			captureGitContext: async () => ({ baseRef: "base-ref" }),
+			buildCompletionManifest: async () => manifestPromise,
+		});
+		for (let index = 0; index < 4; index += 1) await manager.spawn(makeTask(`${index}`));
+		emitters.get("sa-1")?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
+
+		const replacement = await manager.spawn(makeTask("replacement"));
+
+		expect(replacement).toMatchObject({ id: "sa-5", status: "running" });
+		resolveManifest({ baseRef: "base-ref", changedPaths: [], dirty: false, commits: 0, exit: "completed", durationMs: 1 });
+		await vi.waitFor(() => expect(manager.get("sa-1")?.status).toBe("done"));
+	});
+
+	it("folds events into immutable snapshots", async () => {
 		const { manager, emitters } = deferredBackend();
-		const spawned = manager.spawn(makeTask("fold"));
+		const spawned = await manager.spawn(makeTask("fold"));
 		expect(spawned).toMatchObject({ id: "sa-1" });
 		emitters.get("sa-1")?.({ kind: "assistant-delta", delta: "hi" });
 		expect(manager.get("sa-1")?.liveText).toBe("hi");
@@ -38,12 +94,12 @@ describe("SubagentManager", () => {
 		expect(manager.get("sa-1")?.finalText).toBe("hi done");
 		expect(manager.get("sa-1")?.usage.turns).toBe(1);
 		emitters.get("sa-1")?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "hi done" } });
-		expect(manager.get("sa-1")?.status).toBe("done");
+		await vi.waitFor(() => expect(manager.get("sa-1")?.status).toBe("done"));
 	});
 
 	it("waitFor resolves settled snapshots and marks them consumed", async () => {
 		const { manager, emitters } = deferredBackend();
-		manager.spawn(makeTask("wait"));
+		await manager.spawn(makeTask("wait"));
 		const pending: string[][] = [];
 		const wait = manager.waitFor(["sa-1"], undefined, (snapshots) => pending.push(snapshots.map((snapshot) => snapshot.id)));
 		emitters.get("sa-1")?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
@@ -52,32 +108,189 @@ describe("SubagentManager", () => {
 		expect(manager.consumedIds.has("sa-1")).toBe(true);
 	});
 
+	it("stores the manifest before completion listeners are notified", async () => {
+		let emitFn: ((event: SubagentEvent) => void) | undefined;
+		let resolveManifest: (manifest: CompletionManifest) => void = () => undefined;
+		const manifestPromise = new Promise<CompletionManifest>((resolve) => { resolveManifest = resolve; });
+		const manager = new SubagentManager(() => ({
+			events: (emit) => { emitFn = emit; },
+			interrupt: () => undefined,
+		}), {
+			captureGitContext: async () => ({ baseRef: "base-ref" }),
+			buildCompletionManifest: async () => manifestPromise,
+		});
+		await manager.spawn(makeTask("ordering"));
+		const observedManifests: Array<CompletionManifestEvidence | undefined> = [];
+		manager.addChangeListener(() => observedManifests.push(manager.get("sa-1")?.manifest));
+
+		emitFn?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
+		expect(observedManifests).toEqual([]);
+		resolveManifest({ baseRef: "base-ref", headRef: "head-ref", changedPaths: ["src/a.ts"], dirty: false, commits: 1, exit: "completed", durationMs: 10 });
+		await vi.waitFor(() => expect(manager.get("sa-1")?.status).toBe("done"));
+
+		expect(observedManifests).toEqual([expect.objectContaining({ changedPaths: ["src/a.ts"] })]);
+	});
+
+	it("settles with a partial manifest when collection exceeds five seconds", async () => {
+		vi.useFakeTimers();
+		try {
+			let emitFn: ((event: SubagentEvent) => void) | undefined;
+			const manager = new SubagentManager(() => ({
+				events: (emit) => { emitFn = emit; },
+				interrupt: () => undefined,
+			}), {
+				captureGitContext: async () => ({ baseRef: "base-ref" }),
+				buildCompletionManifest: async () => new Promise(() => undefined),
+			});
+			await manager.spawn(makeTask("timeout"));
+
+			emitFn?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
+			await vi.advanceTimersByTimeAsync(5_000);
+
+			expect(manager.get("sa-1")).toMatchObject({
+				status: "done",
+				manifest: { exit: "completed", durationMs: 0 },
+			});
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("waitFor rejects unknown ids with known id list", async () => {
 		const { manager } = deferredBackend();
-		manager.spawn(makeTask("known"));
+		await manager.spawn(makeTask("known"));
 		await expect(manager.waitFor(["sa-2"])).rejects.toThrow("Known ids: sa-1");
 	});
 
 	it("cancels running children and reports already-settled ids", async () => {
 		const { manager, emitters, interrupts } = deferredBackend();
-		manager.spawn(makeTask("run"));
-		manager.spawn(makeTask("done"));
+		await manager.spawn(makeTask("run"));
+		await manager.spawn(makeTask("done"));
 		emitters.get("sa-2")?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
+		await vi.waitFor(() => expect(manager.get("sa-2")?.status).toBe("done"));
 		await expect(manager.cancel(["sa-1", "sa-2"])).resolves.toEqual(["Cancelled sa-1", "sa-2 was already done"]);
 		expect(interrupts.get("sa-1")).toHaveBeenCalled();
 		expect(manager.consumedIds.has("sa-1")).toBe(true);
 	});
 
-	it("prunes oldest settled snapshots above max tracked", () => {
+	it("does not consume a completed result while its manifest is collecting", async () => {
+		let emitFn: ((event: SubagentEvent) => void) | undefined;
+		let resolveManifest: (manifest: CompletionManifest) => void = () => undefined;
+		const manifestPromise = new Promise<CompletionManifest>((resolve) => { resolveManifest = resolve; });
+		const manager = new SubagentManager(() => ({
+			events: (emit) => { emitFn = emit; },
+			interrupt: () => undefined,
+		}), {
+			captureGitContext: async () => ({ baseRef: "base-ref" }),
+			buildCompletionManifest: async () => manifestPromise,
+		});
+		await manager.spawn(makeTask("completed"));
+		emitFn?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
+
+		await expect(manager.cancel(["sa-1"])).resolves.toEqual(["sa-1 was already done"]);
+		expect(manager.consumedIds.has("sa-1")).toBe(false);
+		resolveManifest({ baseRef: "base-ref", changedPaths: [], dirty: false, commits: 0, exit: "completed", durationMs: 1 });
+		await vi.waitFor(() => expect(manager.get("sa-1")?.status).toBe("done"));
+	});
+
+	it("prunes oldest settled snapshots above max tracked", async () => {
 		const { manager, emitters } = deferredBackend();
 		for (let index = 0; index < 65; index += 1) {
-			const result = manager.spawn(makeTask(`${index}`));
+			const result = await manager.spawn(makeTask(`${index}`));
 			expect(result).toHaveProperty("id");
 			emitters.get(`sa-${index + 1}`)?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
+			await vi.waitFor(() => expect(manager.get(`sa-${index + 1}`)?.status).toBe("done"));
 		}
 		expect(manager.list()).toHaveLength(64);
 		expect(manager.get("sa-1")).toBeUndefined();
 		expect(manager.get("sa-65")).toBeDefined();
+	});
+
+	it("creates an isolated worktree before spawning and stores its ref", async () => {
+		const backendFactory = vi.fn(() => ({ events: () => undefined, interrupt: () => undefined }));
+		const createWorktree = vi.fn(async () => ({
+			ok: true as const,
+			path: "/isolated/worktree",
+			branch: "sumo/custom",
+			baseRef: "abc123",
+		}));
+		const manager = new SubagentManager(backendFactory, {
+			captureGitContext: async () => ({ repoRoot: "/repo", baseRef: "abc123" }),
+			createWorktree,
+		});
+
+		const spawned = await manager.spawn({ prompt: "p", title: "write feature", cwd: "/repo", worktree: true, branch: "sumo/custom" });
+
+		expect(createWorktree).toHaveBeenCalledWith(expect.objectContaining({ repoRoot: "/repo", branch: "sumo/custom", baseRef: "abc123" }));
+		expect(backendFactory).toHaveBeenCalledWith(expect.objectContaining({ cwd: "/isolated/worktree" }));
+		expect(spawned).toMatchObject({
+			cwd: "/isolated/worktree",
+			baseRef: "abc123",
+			worktree: { path: "/isolated/worktree", branch: "sumo/custom", baseRef: "abc123", repoRoot: "/repo" },
+		});
+	});
+
+	it("preserves the caller's subdirectory inside the worktree", async () => {
+		const backendFactory = vi.fn(() => ({ events: () => undefined, interrupt: () => undefined }));
+		const createWorktree = vi.fn(async () => ({ ok: true as const, path: "/isolated/worktree", branch: "sumo/x", baseRef: "abc123" }));
+		const manager = new SubagentManager(backendFactory, {
+			captureGitContext: async () => ({ repoRoot: "/repo", baseRef: "abc123" }),
+			createWorktree,
+		});
+		await manager.spawn({ prompt: "p", title: "api work", cwd: "/repo/packages/api", worktree: true });
+		expect(backendFactory).toHaveBeenCalledWith(expect.objectContaining({ cwd: "/isolated/worktree/packages/api" }));
+	});
+
+	it("rejects a branch override without worktree isolation", async () => {
+		const backendFactory = vi.fn(() => ({ events: () => undefined, interrupt: () => undefined }));
+		const manager = new SubagentManager(backendFactory, {
+			captureGitContext: async () => ({ repoRoot: "/repo", baseRef: "abc123" }),
+		});
+
+		const spawned = await manager.spawn({ prompt: "p", title: "unsafe", cwd: "/repo", branch: "sumo/must-isolate" });
+
+		expect(spawned).toMatchObject({ status: "error", errorText: expect.stringContaining("branch requires worktree: true") });
+		expect(backendFactory).not.toHaveBeenCalled();
+	});
+
+	it("fails a worktree spawn without falling back to the parent checkout", async () => {
+		const backendFactory = vi.fn(() => ({ events: () => undefined, interrupt: () => undefined }));
+		const manager = new SubagentManager(backendFactory, {
+			captureGitContext: async () => ({ repoRoot: "/repo", baseRef: "abc123" }),
+			createWorktree: async () => ({ ok: false, error: "branch_already_exists", message: "branch already exists: sumo/collision" }),
+		});
+
+		const spawned = await manager.spawn({ prompt: "p", title: "collision", cwd: "/repo", worktree: true, branch: "sumo/collision" });
+
+		expect(spawned).toMatchObject({ status: "error", errorText: expect.stringContaining("branch already exists") });
+		expect(backendFactory).not.toHaveBeenCalled();
+		expect(manager.list()).toHaveLength(1);
+	});
+
+	it("preserves and reports a created worktree when backend spawn throws", async () => {
+		const manager = new SubagentManager(() => { throw new Error("backend unavailable"); }, {
+			captureGitContext: async () => ({ repoRoot: "/repo", baseRef: "abc123" }),
+			createWorktree: async () => ({ ok: true, path: "/isolated/preserved", branch: "sumo/preserved", baseRef: "abc123" }),
+		});
+
+		const spawned = await manager.spawn({ prompt: "p", title: "preserved", cwd: "/repo", worktree: true });
+
+		expect(spawned).toMatchObject({
+			status: "error",
+			errorText: expect.stringContaining("Worktree created at /isolated/preserved is preserved"),
+			worktree: { path: "/isolated/preserved", branch: "sumo/preserved" },
+		});
+	});
+
+	it("captures the shared-checkout base ref at spawn", async () => {
+		const backendFactory = vi.fn(() => ({ events: () => undefined, interrupt: () => undefined }));
+		const manager = new SubagentManager(backendFactory, {
+			captureGitContext: async () => ({ repoRoot: "/repo", baseRef: "captured-head" }),
+		});
+
+		const spawned = await manager.spawn({ prompt: "p", title: "shared", cwd: "/repo" });
+
+		expect(spawned).toMatchObject({ cwd: "/repo", baseRef: "captured-head", worktree: undefined });
 	});
 
 	it("keeps terminal state sticky when a late real settle arrives after cancel timeout", async () => {
@@ -85,11 +298,11 @@ describe("SubagentManager", () => {
 		const manager = new SubagentManager(() => ({
 			events: (emit) => { emitFn = emit; },
 			interrupt: vi.fn(),
-		}));
-		const spawned = manager.spawn({ prompt: "p", title: "t", cwd: "/tmp" });
+		}), { captureGitContext: async () => ({ baseRef: "base-ref" }), buildCompletionManifest: fakeManifestBuilder });
+		const spawned = await manager.spawn({ prompt: "p", title: "t", cwd: "/tmp" });
 		const id = (spawned as { id: string }).id;
 		emitFn?.({ kind: "run-settled", outcome: { kind: "interrupted" } });
-		expect(manager.get(id)?.status).toBe("error");
+		await vi.waitFor(() => expect(manager.get(id)?.status).toBe("error"));
 		const settledAt = manager.get(id)?.settledAt;
 		emitFn?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "late success" } });
 		expect(manager.get(id)?.status).toBe("error");
@@ -97,20 +310,23 @@ describe("SubagentManager", () => {
 		expect(manager.get(id)?.finalText).not.toBe("late success");
 	});
 
-	it("returns the post-fold snapshot when the backend settles synchronously", () => {
+	it("returns synchronous pre-start failures without waiting for git evidence", async () => {
+		const manifestBuilder = vi.fn(fakeManifestBuilder);
 		const manager = new SubagentManager(() => ({
 			events: (emit) => emit({ kind: "run-settled", outcome: { kind: "failed", errorText: "bad model" } }),
 			interrupt: () => undefined,
-		}));
-		const spawned = manager.spawn({ prompt: "p", title: "t", cwd: "/tmp" });
+		}), { captureGitContext: async () => ({ baseRef: "base-ref" }), buildCompletionManifest: manifestBuilder });
+		const spawned = await manager.spawn({ prompt: "p", title: "t", cwd: "/tmp" });
 		expect((spawned as { status: string }).status).toBe("error");
 		expect((spawned as { errorText?: string }).errorText).toBe("bad model");
+		expect((spawned as { manifest?: unknown }).manifest).toMatchObject({ exit: "failed" });
+		expect(manifestBuilder).not.toHaveBeenCalled();
 	});
 
-	it("preserves usage values when a later usage event omits fields", () => {
+	it("preserves usage values when a later usage event omits fields", async () => {
 		let emitFn: ((event: import("./domain.js").SubagentEvent) => void) | undefined;
-		const manager = new SubagentManager(() => ({ events: (emit) => { emitFn = emit; }, interrupt: () => undefined }));
-		const spawned = manager.spawn({ prompt: "p", title: "t", cwd: "/tmp" });
+		const manager = new SubagentManager(() => ({ events: (emit) => { emitFn = emit; }, interrupt: () => undefined }), { captureGitContext: async () => ({ baseRef: "base-ref" }) });
+		const spawned = await manager.spawn({ prompt: "p", title: "t", cwd: "/tmp" });
 		const id = (spawned as { id: string }).id;
 		emitFn?.({ kind: "usage", tokens: 120, costUsd: 0.05 });
 		emitFn?.({ kind: "usage" });
@@ -125,11 +341,11 @@ describe("SubagentManager", () => {
 		const manager = new SubagentManager((task) => ({
 			events: (emit) => { emitters.set(nextTitle, emit); },
 			interrupt: () => { interrupts.push(nextTitle = nextTitle); interrupts[interrupts.length - 1] = task.id; },
-		}));
+		}), { captureGitContext: async () => ({ baseRef: "base-ref" }), buildCompletionManifest: fakeManifestBuilder });
 		nextTitle = "a";
-		const a = manager.spawn({ prompt: "p", title: "a", cwd: "/tmp" }) as { id: string };
+		const a = await manager.spawn({ prompt: "p", title: "a", cwd: "/tmp" }) as { id: string };
 		nextTitle = "b";
-		const b = manager.spawn({ prompt: "p", title: "b", cwd: "/tmp" }) as { id: string };
+		const b = await manager.spawn({ prompt: "p", title: "b", cwd: "/tmp" }) as { id: string };
 		const cancelPromise = manager.cancel([a.id, b.id]);
 		// Both interrupts must have fired synchronously, before either settles.
 		expect(interrupts).toEqual([a.id, b.id]);

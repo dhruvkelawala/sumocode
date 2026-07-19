@@ -1,10 +1,15 @@
 import { openCommandInCurrentSurface, openCommandInNewSplitWithRefs } from "../commands/cmux-split.js";
 import type { PaneRef, PiExecLike, SplitDirection, TerminalHost } from "./types.js";
 
+const shellEscape = (value: string): string => `'${value.replace(/'/g, `'\\''`)}'`;
+
 export const cmuxTerminalHost = {
 	kind: "cmux",
 	async startAgentPane(pi, options) {
-		const result = await this.openCommandInSplit(pi, "right", options);
+		const result = await this.openCommandInSplit(pi, "right", {
+			cwd: options.cwd,
+			shellCommand: `bash -lc ${shellEscape(options.shellCommand)}`,
+		});
 		if (!result.ok) return result;
 		return {
 			ok: true,

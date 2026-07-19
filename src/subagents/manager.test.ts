@@ -269,6 +269,46 @@ describe("SubagentManager", () => {
 		expect(manager.get("sa-1")?.pane?.tabId).toBe("w1:t5");
 	});
 
+	it("serializes concurrent visible placement until the first tab id is durable", async () => {
+		let releaseFirstReady = (): void => undefined;
+		const firstReady = new Promise<void>((resolve) => { releaseFirstReady = resolve; });
+		let firstEmit: ((event: SubagentEvent) => void) | undefined;
+		const backendTasks: Array<SpawnSubagentTask & { placement?: unknown }> = [];
+		const host: TerminalHost = {
+			kind: "herdr",
+			openCommandInSplit: vi.fn(),
+			closePane: vi.fn(),
+			notify: vi.fn(),
+		};
+		const manager = new SubagentManager((task) => {
+			backendTasks.push(task);
+			if (task.id === "sa-1") {
+				return { events: (emit) => { firstEmit = emit; emit({ kind: "run-started" }); }, ready: firstReady, interrupt: () => undefined };
+			}
+			return {
+				events: (emit) => {
+					emit({ kind: "run-started" });
+					emit({ kind: "pane-attached", pane: { agentName: "second", workspaceId: "w1", tabId: "w1:t5", paneId: "w1:p2" } });
+				},
+				ready: Promise.resolve(),
+				interrupt: () => undefined,
+			};
+		}, { captureGitContext: async () => ({ repoRoot: "/repo", baseRef: "abc123" }), terminalHost: host, pi: { exec: vi.fn() } as never });
+
+		const first = manager.spawn({ prompt: "p1", title: "first", cwd: "/repo", visible: true });
+		await vi.waitFor(() => expect(backendTasks).toHaveLength(1));
+		const second = manager.spawn({ prompt: "p2", title: "second", cwd: "/repo", visible: true });
+		await Promise.resolve();
+		expect(backendTasks).toHaveLength(1);
+
+		firstEmit?.({ kind: "pane-attached", pane: { agentName: "first", workspaceId: "w1", tabId: "w1:t5", paneId: "w1:p1" } });
+		releaseFirstReady();
+		await Promise.all([first, second]);
+
+		expect(backendTasks[0]?.placement).toEqual({ kind: "new-tab", label: "subagents" });
+		expect(backendTasks[1]?.placement).toEqual({ kind: "tab", tabId: "w1:t5", direction: "down" });
+	});
+
 	it("opens the worktree root as a workspace while preserving the caller subdirectory cwd", async () => {
 		const backendFactory = vi.fn(() => ({ events: () => undefined, interrupt: () => undefined }));
 		const openExistingWorktreeWorkspace = vi.fn(async () => ({ ok: true as const, pane: { host: "herdr" as const, paneId: "w9:p1", workspaceId: "w9" } }));

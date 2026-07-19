@@ -131,6 +131,7 @@ export class SubagentManager {
 	private readonly terminalHost?: TerminalHost;
 	private readonly pi?: PiExecLike;
 	private subagentsTabId?: string;
+	private visibleSpawnTail: Promise<void> = Promise.resolve();
 	private readonly settlingIds = new Set<string>();
 	private readonly settlingPromises = new Map<string, Promise<void>>();
 	private readonly settlingOutcomes = new Map<string, RunOutcome>();
@@ -169,6 +170,7 @@ export class SubagentManager {
 		const createdAt = Date.now();
 		this.pendingSpawns.set(id, { title: task.title, createdAt });
 		let pending = true;
+		let releaseVisibleSpawn: (() => void) | undefined;
 		const releasePending = () => {
 			if (!pending) return;
 			pending = false;
@@ -223,6 +225,7 @@ export class SubagentManager {
 
 			let placement: AgentPanePlacement | undefined;
 			if (task.visible) {
+				releaseVisibleSpawn = await this.reserveVisibleSpawn();
 				const host = this.terminalHost;
 				if (!host || !this.pi || host.kind === "none") {
 					releasePending();
@@ -280,6 +283,7 @@ export class SubagentManager {
 			if (synchronousSettle) await synchronousSettle;
 			return this.snapshots.get(id) ?? snapshot;
 		} finally {
+			releaseVisibleSpawn?.();
 			releasePending();
 		}
 	}
@@ -384,6 +388,14 @@ export class SubagentManager {
 			const snapshot = this.snapshots.get(id);
 			if (snapshot?.status === "running") entry.child.interrupt();
 		}
+	}
+
+	private async reserveVisibleSpawn(): Promise<() => void> {
+		const previous = this.visibleSpawnTail;
+		let release = (): void => undefined;
+		this.visibleSpawnTail = new Promise<void>((resolve) => { release = resolve; });
+		await previous;
+		return release;
 	}
 
 	private recordSpawnFailure(

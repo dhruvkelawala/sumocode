@@ -131,6 +131,24 @@ describe("pane subagent backend", () => {
 		}
 	});
 
+	it("keeps the pane evidence and reports a failed close on interrupt", async () => {
+		vi.useFakeTimers();
+		try {
+			const harness = createHarness();
+			await flushPromises();
+			(harness.closePane as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ ok: false, error: "pane still alive" });
+
+			harness.child.interrupt();
+			await flushPromises();
+
+			expect(harness.events).toContainEqual({ kind: "pane-attached", pane: { agentName: "worker-abc", workspaceId: "w1", tabId: "w1:t1", paneId: "w1:p2" } });
+			expect(settledEvents(harness.events)).toEqual([{ kind: "run-settled", outcome: { kind: "failed", errorText: "failed to close visible child pane: pane still alive" } }]);
+			expect(vi.getTimerCount()).toBe(0);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("settles when the host refuses the spawn", async () => {
 		vi.useFakeTimers();
 		try {

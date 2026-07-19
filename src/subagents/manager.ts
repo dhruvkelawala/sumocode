@@ -34,6 +34,7 @@ export interface SpawnSubagentTask {
 	readonly prompt: string;
 	readonly title: string;
 	readonly cwd: string;
+	readonly visible?: boolean;
 	readonly worktree?: boolean;
 	readonly branch?: string;
 	readonly model?: string;
@@ -95,6 +96,7 @@ const makeInitialSnapshot = (
 	cwd,
 	baseRef,
 	worktree,
+	visible: task.visible,
 	status: "running",
 	createdAt,
 	modelLabel: task.model,

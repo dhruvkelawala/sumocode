@@ -12,6 +12,26 @@ export interface PaneRef {
 export type HostResult<T> = ({ ok: true } & T) | { ok: false; error: string };
 export type PiExecLike = Pick<ExtensionAPI, "exec">;
 
+export type AgentPanePlacement =
+	| { kind: "workspace"; workspaceId: string }
+	| { kind: "tab"; tabId: string; direction: SplitDirection }
+	| { kind: "new-tab"; label: string };
+
+export interface StartAgentPaneOptions {
+	name: string;
+	cwd: string;
+	shellCommand: string;
+	placement: AgentPanePlacement;
+}
+
+export interface StartedAgentPane {
+	pane: PaneRef;
+	agentName: string;
+	workspaceId?: string;
+	tabId?: string;
+	paneId?: string;
+}
+
 export interface WorktreeWorkspaceOptions {
 	branch: string;
 	baseRef: string;
@@ -23,11 +43,13 @@ export interface WorktreeWorkspaceOptions {
 export interface ExistingWorktreeWorkspaceOptions {
 	path: string;
 	label: string;
-	shellCommand: string;
+	shellCommand?: string;
 }
 
 export interface TerminalHost {
 	readonly kind: TerminalHostKind;
+	startAgentPane?(pi: PiExecLike, options: StartAgentPaneOptions): Promise<HostResult<StartedAgentPane>>;
+	sendPaneText?(pi: PiExecLike, pane: PaneRef, text: string): Promise<HostResult<{}>>;
 	openCommandInSplit(pi: PiExecLike, direction: SplitDirection, options: { cwd: string; shellCommand: string }): Promise<HostResult<{ pane: PaneRef }>>;
 	openWorktreeWorkspace?(pi: PiExecLike, options: WorktreeWorkspaceOptions): Promise<HostResult<{ pane: PaneRef }>>;
 	openExistingWorktreeWorkspace?(pi: PiExecLike, options: ExistingWorktreeWorkspaceOptions): Promise<HostResult<{ pane: PaneRef }>>;

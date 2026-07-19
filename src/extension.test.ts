@@ -75,6 +75,7 @@ function buildCtxStub() {
 	return {
 		hasUI: true,
 		cwd: "/tmp",
+		isIdle: () => true,
 		sessionManager: { getBranch: () => [] },
 		getContextUsage: () => undefined,
 		model: undefined,
@@ -255,6 +256,7 @@ describe("rpc child profile", () => {
 			expect(commandNames).toContain("sumo:ship");
 			expect(toolNames).toContain("task");
 			expect(toolNames).toContain("question");
+			for (const name of ["bg_start", "bg_status", "bg_kill", "bg_list"]) expect(toolNames).toContain(name);
 			expect(shortcutNames).not.toContain("ctrl+/");
 
 			const ctx = { ...buildCtxStub(), mode: "rpc" };
@@ -345,7 +347,9 @@ describe("sumocode extension", () => {
 		sumocode(pi as never);
 
 		const commandNames = pi.registerCommand.mock.calls.map((call) => call[0]);
+		const toolNames = pi.registerTool.mock.calls.map((call) => (call[0] as { name: string }).name);
 		expect(commandNames).toContain("sumo:review");
+		for (const name of ["bg_start", "bg_status", "bg_kill", "bg_list"]) expect(toolNames).toContain(name);
 		expect(commandNames).toContain("sumo:ship");
 		expect(commandNames).toContain("sumo:worktree");
 	});

@@ -22,7 +22,12 @@ import { installTopChrome } from "./top-chrome.js";
 import { installWorkingIndicator } from "./working-indicator.js";
 import { installCompactionIndicator } from "./compaction-indicator.js";
 import { installFastMode } from "./fast-mode.js";
-import { installBackgroundTasks } from "./background-tasks/index.js";
+import {
+	installBackgroundTasks,
+	installTerminalTools,
+	type TerminalTaskFinalizedHandler,
+} from "./background-tasks/index.js";
+import { createDeferredResultDelivery } from "./subagents/delivery.js";
 import { installSubagents } from "./subagents/index.js";
 import { installTaskModeAutoExit } from "./task-mode.js";
 import { logDiagnostic } from "./sumo-tui/runtime/diagnostics.js";
@@ -187,6 +192,17 @@ export function isRpcChildProfile(options: TaskModeOptions = {}): boolean {
 	return env.SUMOCODE_RPC_CHILD === "1";
 }
 
+function installOrchestrationTools(pi: ExtensionAPI) {
+	const delivery = createDeferredResultDelivery();
+	let onTerminalTaskFinalized: TerminalTaskFinalizedHandler | undefined;
+	const backgroundTaskManager = installBackgroundTasks(pi, {
+		onTaskFinalized: (task) => onTerminalTaskFinalized?.(task),
+	});
+	const subagentManager = installSubagents(pi, delivery);
+	onTerminalTaskFinalized = installTerminalTools(pi, backgroundTaskManager, delivery);
+	return { backgroundTaskManager, subagentManager };
+}
+
 function installRpcChildProfile(pi: ExtensionAPI): void {
 	installMemoryExtraction(pi);
 	installFastMode(pi);
@@ -212,8 +228,7 @@ function installRpcChildProfile(pi: ExtensionAPI): void {
 	}
 	installQuestionTool(pi);
 	installAnswerTool(pi);
-	const backgroundTaskManager = installBackgroundTasks(pi);
-	const subagentManager = installSubagents(pi);
+	const { backgroundTaskManager, subagentManager } = installOrchestrationTools(pi);
 	installTaskModeAutoExit(pi);
 	registerSumoReloadCommand(pi);
 	installSumoInteractions(pi, { backgroundTaskManager, includeUiSurfaces: false });
@@ -313,8 +328,7 @@ export default function sumocode(pi: ExtensionAPI): void {
 	}
 	installQuestionTool(pi);
 	installAnswerTool(pi);
-	const backgroundTaskManager = installBackgroundTasks(pi);
-	const subagentManager = installSubagents(pi);
+	const { backgroundTaskManager, subagentManager } = installOrchestrationTools(pi);
 	installTaskModeAutoExit(pi);
 
 	installWorkingIndicator(pi);

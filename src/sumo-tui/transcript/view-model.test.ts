@@ -412,6 +412,31 @@ describe("structured transcript view model", () => {
 		}]);
 	});
 
+	it("maps a terminal result custom message to a collapsed summary block", () => {
+		const message = chatMessageViewModelFromPiMessage({
+			id: "result-2",
+			role: "custom",
+			customType: "terminal-result",
+			display: true,
+			content: 'Background terminal bg-7 "dev server" exited (0).\n\nready',
+			details: {
+				id: "bg-7",
+				title: "dev server",
+				command: "pnpm dev",
+				status: "completed",
+				exitCode: 0,
+			},
+		});
+
+		expect(message?.blocks).toEqual([{
+			type: "summary",
+			kind: "terminal",
+			label: "[terminal] bg-7 · dev server · exited (0)",
+			content: 'Background terminal bg-7 "dev server" exited (0).\n\nready',
+			expanded: false,
+		}]);
+	});
+
 	it("labels an unrecognized custom message with its customType", () => {
 		const message = chatMessageViewModelFromPiMessage({ id: "x1", role: "custom", customType: "sumocode-theme-result", display: true, content: "switched to obsidian" });
 

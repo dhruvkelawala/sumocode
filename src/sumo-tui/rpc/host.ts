@@ -218,6 +218,22 @@ export function handleRpcMessageFollowUp(deps: RpcMessageFollowUpDependencies): 
 	}, deps.notifications);
 }
 
+export interface RpcMessageDequeueDependencies {
+	readonly editor: Pick<RpcHostEditorController, "getText" | "setText">;
+	readonly scheduler: Pick<RpcPromptScheduler, "restoreAll">;
+	readonly stateStore: Pick<RpcHostStateStore, "getSnapshot">;
+	readonly notifications: Pick<NotificationCenter, "notify">;
+}
+
+export function handleRpcMessageDequeue(deps: RpcMessageDequeueDependencies): void {
+	const restored = deps.scheduler.restoreAll(deps.editor.getText());
+	if (restored.count > 0) {
+		deps.editor.setText(restored.text);
+		return;
+	}
+	if ((deps.stateStore.getSnapshot().queuedMessages?.length ?? 0) > 0) deps.notifications.notify("queued messages are owned by pi", "info");
+}
+
 export interface RpcHostExitDependencies {
 	readonly modals: Pick<ModalLayer, "close">;
 	readonly overlays: Pick<RpcHostOverlayManager, "drain">;
@@ -672,12 +688,7 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		handleRpcMessageFollowUp({ editor, scheduler, notifications });
 	};
 	const handleMessageDequeue = (): void => {
-		const restored = scheduler.restoreAll(editor.getText());
-		if (restored.count > 0) {
-			editor.setText(restored.text);
-			return;
-		}
-		if ((stateStore.getSnapshot().queuedMessages?.length ?? 0) > 0) notifications.notify("queued messages are owned by pi", "info");
+		handleRpcMessageDequeue({ editor, scheduler, stateStore, notifications });
 	};
 	const editor = new RpcHostEditorController({
 		controls,

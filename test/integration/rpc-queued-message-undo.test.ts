@@ -79,15 +79,20 @@ describe("RPC queued message undo", () => {
 			{ cols: COLS, rows: ROWS, timeoutMs: 5_000 },
 		);
 
-		await app.waitForOutput("fixture response complete: prompt A", 5_000);
+		app.sendInput(` edited${CSI_U_ENTER}`);
+		await waitForScreen(
+			app,
+			(screen) => screen.text.includes("QUEUED (1)") && screen.text.includes("prompt B edited"),
+			{ cols: COLS, rows: ROWS, timeoutMs: 5_000 },
+		);
 		await new Promise((resolve) => setTimeout(resolve, 300));
 		prompts = await readPromptCommands(logPath);
 		expect(prompts.map((command) => command.message)).toEqual(["prompt A"]);
 
-		app.sendInput(CSI_U_ENTER);
-		await app.waitForOutput("fixture response complete: prompt B", 5_000);
+		await app.waitForOutput("fixture response complete: prompt A", 5_000);
+		await app.waitForOutput("fixture response complete: prompt B edited", 5_000);
 		prompts = await readPromptCommands(logPath);
-		expect(prompts.map((command) => command.message)).toEqual(["prompt A", "prompt B"]);
+		expect(prompts.map((command) => command.message)).toEqual(["prompt A", "prompt B edited"]);
 		expect(prompts.some((command) => "streamingBehavior" in command)).toBe(false);
 	}, 30_000);
 

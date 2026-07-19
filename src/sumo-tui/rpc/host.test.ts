@@ -17,6 +17,7 @@ import {
 	createRpcHostInterruptHandler,
 	createThinkingCycleHandler,
 	handleRpcMessageFollowUp,
+	handleRpcMessageDequeue,
 	createToolsExpandToggleHandler,
 	createUnhandledRejectionHandler,
 	submitInitialPromptFromEnv,
@@ -24,9 +25,18 @@ import {
 	type RpcHostExitDependencies,
 	type RpcHostInterruptDependencies,
 } from "./host.js";
+import { createRpcPromptScheduler } from "./prompt-scheduler.js";
 
 function flush(): Promise<void> {
 	return Promise.resolve().then(() => Promise.resolve());
+}
+
+function deferred(): { promise: Promise<void>; resolve: () => void } {
+	let resolve!: () => void;
+	const promise = new Promise<void>((res) => {
+		resolve = res;
+	});
+	return { promise, resolve };
 }
 
 class FakeRpcCommandClient {
@@ -124,6 +134,46 @@ describe("handleRpcMessageFollowUp", () => {
 		expect(scheduler.submit).toHaveBeenCalledWith("still here", { forceQueue: true });
 		expect(editor.addToHistory).not.toHaveBeenCalled();
 		expect(editor.setText).not.toHaveBeenCalled();
+	});
+});
+
+describe("handleRpcMessageDequeue", () => {
+	it("restores only queued drafts while preserving an active dispatch", async () => {
+		const gate = deferred();
+		const sent: string[] = [];
+		const scheduler = createRpcPromptScheduler({
+			sendPrompt: async (message) => {
+				sent.push(message);
+				await gate.promise;
+			},
+		});
+		let draft = "";
+		const editor = {
+			getText: vi.fn(() => draft),
+			setText: vi.fn((text: string) => { draft = text; }),
+		};
+		const stateStore = new RpcHostStateStore();
+		const notifications = { notify: vi.fn() };
+
+		await expect(scheduler.submit("prompt A")).resolves.toBe("sent");
+		await expect(scheduler.submit("prompt B")).resolves.toBe("queued");
+
+		handleRpcMessageDequeue({ editor, scheduler, stateStore, notifications });
+
+		expect(editor.setText).toHaveBeenCalledWith("prompt B");
+		expect(scheduler.getSnapshot()).toMatchObject({ busy: true, queuedMessages: [] });
+
+		draft = "prompt B edited";
+		await expect(scheduler.submit(draft)).resolves.toBe("queued");
+		expect(sent).toEqual(["prompt A"]);
+
+		gate.resolve();
+		await flush();
+		expect(sent).toEqual(["prompt A"]);
+
+		scheduler.handleAgentEvent({ type: "agent_settled" });
+		await flush();
+		expect(sent).toEqual(["prompt A", "prompt B edited"]);
 	});
 });
 

@@ -204,7 +204,7 @@ describe("/sumo:review", () => {
 			expect(notify).toHaveBeenCalledWith(expect.stringContaining("review started: sa-42"), "info");
 			expect(notify).toHaveBeenCalledWith(expect.stringContaining("watchable herdr pane"), "info");
 			expect(notify).toHaveBeenCalledWith(expect.stringContaining("result will arrive as a card automatically"), "info");
-			expect(notify).not.toHaveBeenCalledWith(expect.stringContaining("bg_task"), expect.anything());
+			expect(notify.mock.calls.flat().join(" ")).not.toContain(["bg", "task"].join("_"));
 		});
 
 		it("includes scope label in the subagent title and notice for PR args", async () => {

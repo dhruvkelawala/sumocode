@@ -20,6 +20,7 @@ const createHarness = (hostKind: TerminalHostKind = "herdr") => {
 		notify: vi.fn(),
 	};
 	const piExec = { exec: vi.fn() } as never;
+	const createWorktree = vi.fn(async (options) => ({ ok: true as const, path: "/tmp/isolated", branch: options.branch ?? "sumo/task", baseRef: options.baseRef ?? "HEAD" }));
 	const manager = new SubagentManager((task: SpawnSubagentTask & { id: string }) => ({
 		events: (emit) => {
 			emitters.set(task.id, emit);
@@ -29,7 +30,8 @@ const createHarness = (hostKind: TerminalHostKind = "herdr") => {
 		interrupt: vi.fn(() => emitters.get(task.id)?.({ kind: "run-settled", outcome: { kind: "interrupted" } })),
 	}), {
 		captureGitContext: async () => ({ repoRoot: "/tmp/project", baseRef: "base-ref" }),
-		createWorktree: async (options) => ({ ok: true, path: "/tmp/isolated", branch: options.branch ?? "sumo/task", baseRef: options.baseRef ?? "base-ref" }),
+		createWorktree,
+		resolveWorktreeBaseRef: async () => "base-ref-sha",
 		terminalHost: host,
 		pi: piExec,
 		buildCompletionManifest: async (options) => ({
@@ -48,16 +50,18 @@ const createHarness = (hostKind: TerminalHostKind = "herdr") => {
 	registerSubagentTools(pi as never, manager, undefined, host);
 	const tool = (name: string) => registered.find((entry) => entry.name === name)!;
 	const ctx = { cwd: "/tmp/project", model: { provider: "openai", id: "gpt-5", thinkingLevel: "low" } };
-	return { registered, manager, emitters, tool, ctx, host, sendPaneText };
+	return { registered, manager, emitters, tool, ctx, host, sendPaneText, createWorktree };
 };
 
 const textOf = (result: unknown): string => ((result as { content: Array<{ text: string }> }).content[0].text);
 
 describe("subagent tools", () => {
-	it("registers the six subagent tools and exposes visible spawning", () => {
+	it("registers the six subagent tools and exposes visible spawning with baseRef", () => {
 		const { registered, tool } = createHarness();
 		expect(registered.map((entry) => entry.name)).toEqual(["subagent_spawn", "subagent_send", "subagent_check", "subagent_wait", "subagent_cancel", "subagent_list"]);
-		expect(JSON.stringify(tool("subagent_spawn").parameters)).toContain("visible");
+		const spawnSchema = JSON.stringify(tool("subagent_spawn").parameters);
+		expect(spawnSchema).toContain("visible");
+		expect(spawnSchema).toContain("baseRef");
 	});
 
 	it("spawn returns an id and automatic-delivery guidance", async () => {
@@ -79,14 +83,15 @@ describe("subagent tools", () => {
 		await expect(tool("subagent_spawn").execute("tc", { prompt: "watch", name: "worker", visible: true }, undefined, undefined, ctx as never)).rejects.toThrow("require a running terminal host");
 	});
 
-	it("passes worktree isolation and branch overrides to the manager", async () => {
-		const { tool, ctx, manager } = createHarness();
-		const result = await tool("subagent_spawn").execute("tc", { prompt: "write", name: "worker", worktree: true, branch: "sumo/custom" }, undefined, undefined, ctx as never);
+	it("passes worktree isolation, branch, and baseRef overrides to the manager", async () => {
+		const { tool, ctx, manager, createWorktree } = createHarness();
+		const result = await tool("subagent_spawn").execute("tc", { prompt: "write", name: "worker", worktree: true, branch: "sumo/custom", baseRef: "origin/main" }, undefined, undefined, ctx as never);
 
 		expect(textOf(result)).toContain("Started sa-1");
+		expect(createWorktree).toHaveBeenCalledWith(expect.objectContaining({ baseRef: "origin/main" }));
 		expect(manager.get("sa-1")).toMatchObject({
 			cwd: "/tmp/isolated",
-			worktree: { path: "/tmp/isolated", branch: "sumo/custom", baseRef: "base-ref", repoRoot: "/tmp/project" },
+			worktree: { path: "/tmp/isolated", branch: "sumo/custom", baseRef: "base-ref-sha", repoRoot: "/tmp/project" },
 		});
 	});
 

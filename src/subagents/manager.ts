@@ -39,6 +39,7 @@ export interface SpawnSubagentTask {
 	readonly visible?: boolean;
 	readonly worktree?: boolean;
 	readonly branch?: string;
+	readonly baseRef?: string;
 	readonly model?: string;
 	readonly thinking?: string;
 	readonly inherited?: { model?: { provider: string; id: string }; thinking?: string };
@@ -48,6 +49,7 @@ export interface SpawnSubagentTask {
 type BackendFactory = (task: SpawnSubagentTask & { id: string; signal: AbortSignal; placement?: AgentPanePlacement }) => SpawnedChild;
 type Listener = () => void;
 type WorktreeCreator = (options: CreateWorktreeOptions) => Promise<CreateWorktreeResult>;
+type WorktreeBaseRefResolver = (worktreePath: string) => Promise<string | undefined>;
 
 interface SpawnGitContext {
 	readonly repoRoot?: string;
@@ -56,6 +58,7 @@ interface SpawnGitContext {
 
 export interface SubagentManagerDependencies {
 	readonly createWorktree?: WorktreeCreator;
+	readonly resolveWorktreeBaseRef?: WorktreeBaseRefResolver;
 	readonly captureGitContext?: (cwd: string) => Promise<SpawnGitContext>;
 	readonly buildCompletionManifest?: typeof buildCompletionManifest;
 	readonly terminalHost?: TerminalHost;
@@ -126,6 +129,7 @@ export class SubagentManager {
 	private readonly waitInterest = new Map<string, number>();
 	private readonly listeners = new Set<Listener>();
 	private readonly createWorktreeImpl: WorktreeCreator;
+	private readonly resolveWorktreeBaseRefImpl: WorktreeBaseRefResolver;
 	private readonly captureGitContextImpl: (cwd: string) => Promise<SpawnGitContext>;
 	private readonly buildCompletionManifestImpl: typeof buildCompletionManifest;
 	private readonly terminalHost?: TerminalHost;
@@ -140,6 +144,7 @@ export class SubagentManager {
 
 	public constructor(private readonly backendFactory: BackendFactory, dependencies: SubagentManagerDependencies = {}) {
 		this.createWorktreeImpl = dependencies.createWorktree ?? createWorktree;
+		this.resolveWorktreeBaseRefImpl = dependencies.resolveWorktreeBaseRef ?? ((path) => gitRead(path, ["rev-parse", "HEAD"]));
 		this.captureGitContextImpl = dependencies.captureGitContext ?? captureGitContext;
 		this.buildCompletionManifestImpl = dependencies.buildCompletionManifest ?? buildCompletionManifest;
 		this.terminalHost = dependencies.terminalHost;
@@ -179,6 +184,7 @@ export class SubagentManager {
 		try {
 			const gitContext = await this.captureGitContextImpl(task.cwd);
 			const baseRef = gitContext.baseRef ?? "HEAD";
+			let manifestBaseRef = baseRef;
 			if (task.branch && !task.worktree) {
 				releasePending();
 				return this.recordSpawnFailure(task, id, createdAt, baseRef, "branch requires worktree: true; refusing to ignore the isolation request");
@@ -194,7 +200,7 @@ export class SubagentManager {
 				const resolved = resolveCreateOptions({
 					repoRoot: gitContext.repoRoot,
 					branch: task.branch,
-					baseRef: gitContext.baseRef,
+					baseRef: task.baseRef ?? "HEAD",
 					task: task.title,
 				});
 				const created = await this.createWorktreeImpl({
@@ -215,10 +221,25 @@ export class SubagentManager {
 				childCwd = subPath && !subPath.startsWith("..") && !isAbsolute(subPath)
 					? join(created.path, subPath)
 					: created.path;
+				// Persist a stable commit for evidence and completion diffing. A
+				// symbolic ref would move as the child commits or fetches and could
+				// corrupt the manifest range.
+				const resolvedBaseRef = await this.resolveWorktreeBaseRefImpl(created.path);
+				if (!resolvedBaseRef) {
+					worktree = {
+						path: created.path,
+						branch: created.branch,
+						baseRef: created.baseRef,
+						repoRoot: gitContext.repoRoot,
+					};
+					releasePending();
+					return this.recordSpawnFailure(task, id, createdAt, baseRef, `unable to resolve worktree base commit. Worktree created at ${created.path} is preserved.`, created.path, worktree);
+				}
+				manifestBaseRef = resolvedBaseRef;
 				worktree = {
 					path: created.path,
 					branch: created.branch,
-					baseRef: gitContext.baseRef,
+					baseRef: manifestBaseRef,
 					repoRoot: gitContext.repoRoot,
 				};
 			}
@@ -229,7 +250,7 @@ export class SubagentManager {
 				const host = this.terminalHost;
 				if (!host || !this.pi || host.kind === "none") {
 					releasePending();
-					return this.recordSpawnFailure(task, id, createdAt, baseRef, "visible subagents require a running terminal host", childCwd, worktree);
+					return this.recordSpawnFailure(task, id, createdAt, manifestBaseRef, "visible subagents require a running terminal host", childCwd, worktree);
 				}
 				const planned = planPlacement({
 					hostKind: host.kind,
@@ -255,7 +276,7 @@ export class SubagentManager {
 					if (!opened.ok || !workspaceId) {
 						releasePending();
 						const reason = opened.ok ? "terminal host returned no workspace id" : opened.error;
-						return this.recordSpawnFailure(task, id, createdAt, baseRef, `unable to open worktree workspace: ${reason}. Worktree created at ${worktree?.path ?? childCwd} is preserved.`, childCwd, worktree);
+						return this.recordSpawnFailure(task, id, createdAt, manifestBaseRef, `unable to open worktree workspace: ${reason}. Worktree created at ${worktree?.path ?? childCwd} is preserved.`, childCwd, worktree);
 					}
 					placement = { kind: "workspace", workspaceId };
 				} else if (planned.kind === "tab") placement = planned;
@@ -270,9 +291,9 @@ export class SubagentManager {
 				releasePending();
 				const message = error instanceof Error ? error.message : String(error);
 				const preservationNote = worktree ? ` Worktree created at ${worktree.path} is preserved.` : "";
-				return this.recordSpawnFailure(task, id, createdAt, baseRef, `unable to spawn child: ${message}.${preservationNote}`, childCwd, worktree);
+				return this.recordSpawnFailure(task, id, createdAt, manifestBaseRef, `unable to spawn child: ${message}.${preservationNote}`, childCwd, worktree);
 			}
-			const snapshot = makeInitialSnapshot(task, id, createdAt, baseRef, childCwd, worktree, child.sessionFilePath);
+			const snapshot = makeInitialSnapshot(task, id, createdAt, manifestBaseRef, childCwd, worktree, child.sessionFilePath);
 			this.snapshots.set(id, snapshot);
 			this.children.set(id, { child, controller });
 			releasePending();

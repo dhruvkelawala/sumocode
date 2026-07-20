@@ -231,8 +231,7 @@ function installRpcChildProfile(pi: ExtensionAPI): void {
 	const { backgroundTaskManager, subagentManager } = installOrchestrationTools(pi);
 	installTaskModeAutoExit(pi);
 	registerSumoReloadCommand(pi);
-	installSumoInteractions(pi, { backgroundTaskManager, includeUiSurfaces: false });
-	void subagentManager;
+	installSumoInteractions(pi, { backgroundTaskManager, subagentManager, includeUiSurfaces: false });
 }
 
 /**
@@ -334,7 +333,7 @@ export default function sumocode(pi: ExtensionAPI): void {
 	installWorkingIndicator(pi);
 	installCompactionIndicator(pi);
 	registerSumoReloadCommand(pi);
-	installSumoInteractions(pi, { backgroundTaskManager });
+	installSumoInteractions(pi, { backgroundTaskManager, subagentManager });
 	logDiagnostic("extension_activate_end", {
 		taskMode: isTaskMode(),
 		nativeTaskInstalled: shouldInstallNativeTaskTool({ force: process.env.SUMOCODE_NATIVE_TASK }),

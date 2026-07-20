@@ -1,5 +1,6 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { chooseDiffSplitDirection, type TerminalSize } from "./diff.js";
+import type { SubagentSnapshot } from "../subagents/domain.js";
+import type { AtCapacityDetails, SpawnSubagentTask } from "../subagents/manager.js";
 
 export const DEFAULT_REVIEW_MODEL = "openai-codex/gpt-5.3-codex";
 
@@ -11,41 +12,12 @@ export const MODEL_ALIASES: Record<string, string> = {
 	deepseek: "deepseek/deepseek-v4-pro",
 };
 
-export interface ReviewTaskSpawnOptions {
-	readonly command: string;
-	readonly cwd: string;
-	readonly title?: string;
-	readonly visible?: boolean;
-	readonly direction?: "right" | "down";
-	readonly runner?: "shell" | "sumocode";
-	readonly model?: string;
-	readonly thinking?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
-	readonly notifyOnExit?: boolean;
-}
-
-export interface ReviewTaskHandle {
-	readonly id: string;
-	readonly pane?: {
-		readonly host: "cmux" | "herdr";
-		readonly paneId: string;
-		readonly workspaceId?: string;
-	};
-}
-
-export interface ReviewTaskSpawner {
-	spawnTask(options: ReviewTaskSpawnOptions): ReviewTaskHandle;
+export interface ReviewSubagentSpawner {
+	spawn(task: SpawnSubagentTask): Promise<SubagentSnapshot | AtCapacityDetails>;
 }
 
 export interface RegisterReviewCommandOptions {
-	readonly taskSpawner?: ReviewTaskSpawner;
-	readonly terminalSize?: () => TerminalSize;
-}
-
-function getTerminalSize(): TerminalSize {
-	return {
-		columns: process.stdout.columns,
-		rows: process.stdout.rows,
-	};
+	readonly subagentSpawner?: ReviewSubagentSpawner;
 }
 
 export function resolveReviewModel(env: NodeJS.ProcessEnv = process.env): string {
@@ -147,7 +119,7 @@ export function buildReviewPrompt(args: string, model = DEFAULT_REVIEW_MODEL): s
 
 	return `Run SumoCode diff review for ${description}.
 
-You are the reviewer running in your own tracked SumoCode background task with model ${model}.
+You are the reviewer running in your own tracked SumoCode subagent with model ${model}.
 Review only: inspect the requested scope directly, report findings precisely, and stop after one complete review pass. Do not fix code in this child task unless the parent explicitly asks in a later turn.
 
 Project context:
@@ -221,13 +193,12 @@ function notify(ctx: ExtensionContext, message: string, type: "info" | "warning"
 }
 
 export function registerReviewCommand(pi: ExtensionAPI, options: RegisterReviewCommandOptions = {}): void {
-	const terminalSize = options.terminalSize ?? getTerminalSize;
 	pi.registerCommand("sumo:review", {
-		description: `Run a tracked bg_task diff review. Args: [${Object.keys(MODEL_ALIASES).join("|")}] [scope]. Scope: empty=branch diff, #51=PR, or git range/path`,
+		description: `Run a tracked subagent diff review. Args: [${Object.keys(MODEL_ALIASES).join("|")}] [scope]. Scope: empty=branch diff, #51=PR, or git range/path`,
 		handler: async (args, ctx) => {
-			const taskSpawner = options.taskSpawner;
-			if (!taskSpawner) {
-				notify(ctx, "/sumo:review cannot start: bg_task manager is not available", "warning");
+			const subagentSpawner = options.subagentSpawner;
+			if (!subagentSpawner) {
+				notify(ctx, "/sumo:review cannot start: subagent manager is not available", "warning");
 				return;
 			}
 
@@ -236,24 +207,27 @@ export function registerReviewCommand(pi: ExtensionAPI, options: RegisterReviewC
 			const prompt = buildReviewPrompt(scopeArgs, model);
 			const scope = parseReviewScope(scopeArgs);
 			const label = reviewScopeLabel(scope);
-			const direction = chooseDiffSplitDirection(terminalSize());
 			try {
-				const task = taskSpawner.spawnTask({
-					command: prompt,
+				const subagent = await subagentSpawner.spawn({
+					prompt,
 					cwd: ctx.cwd,
 					title: `review: ${label} · ${model}`,
 					visible: true,
-					direction: direction as "right" | "down",
-					runner: "sumocode",
 					model,
 					thinking: "xhigh",
-					notifyOnExit: true,
 				});
-				const paneHint = task.pane ? ` · ${task.pane.host} ${task.pane.paneId}` : "";
-				notify(ctx, `review started: ${task.id}${paneHint} · ${model} · ${label}. read: bg_task action=log id=${task.id}; stop: bg_task action=stop id=${task.id}`);
+				if (subagent.status === "at_capacity") {
+					notify(ctx, `/sumo:review is at capacity (${subagent.runningCount}/${subagent.capacity}): ${subagent.retryHint}`, "warning");
+					return;
+				}
+				if (subagent.status !== "running") {
+					notify(ctx, `/sumo:review failed to start subagent: ${subagent.errorText ?? "unknown error"}`, "warning");
+					return;
+				}
+				notify(ctx, `review started: ${subagent.id} · ${model} · ${label}. it is running in a watchable herdr pane; its result will arrive as a card automatically.`);
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);
-				notify(ctx, `/sumo:review failed to start bg_task: ${message}`, "warning");
+				notify(ctx, `/sumo:review failed to start subagent: ${message}`, "warning");
 			}
 		},
 	});

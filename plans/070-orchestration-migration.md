@@ -17,7 +17,7 @@
 - **Priority**: P3
 - **Effort**: M
 - **Risk**: HIGH
-- **Depends on**: plans/065-subagents-core.md, plans/066-typed-deferred-result-delivery.md, plans/067-background-terminals-regrammar.md, plans/068-fleet-dashboard-and-takeover.md, plans/069-worktree-isolation-and-manifest.md
+- **Depends on**: plans/065-subagents-core.md, plans/066-typed-deferred-result-delivery.md, plans/067-background-terminals-regrammar.md, plans/068-herdr-native-visible-subagents.md, plans/069-worktree-isolation-and-manifest.md
 - **Category**: migration
 - **Planned at**: commit `d4ce41d`, 2026-07-15
 - **Issue**: https://github.com/dhruvkelawala/sumocode/issues/308
@@ -26,6 +26,14 @@
 > used the new `subagent_*`/`bg_*` tools for real work and considers them at
 > parity. This plan removes working functionality; the confirmation is the
 > go/no-go, not test results alone.
+>
+> **✅ GATE CONFIRMED (2026-07-19)**: the operator dogfooded 7 visible
+> subagents across 2 live herdr rounds — tiled panes in a workspace-anchored
+> "subagents" tab AND isolated worktree workspaces — all settling clean with
+> host-verified completion manifests. Two real bugs were found and fixed
+> during dogfood (PR #336: worktree source-repo resolution, `tab create`
+> `--json`). Go granted, including an explicit instruction to merge to main.
+> Proceed.
 
 ## Why this matters
 
@@ -102,6 +110,10 @@ model-facing guidance.
 - `src/extension.ts` (update the `task` system-prompt patch; remove dead wiring)
 - `docs/PI_TOOL_ARCHITECTURE.md` (reflect the new tool inventory)
 - `AGENTS.md` (if it references `bg_task` usage — check with `rg -n "bg_task" AGENTS.md`)
+- **Parity gaps (Step 6)**: `src/subagents/domain.ts`, `src/subagents/manager.ts`,
+  `src/subagents/tools.ts` (add optional `baseRef` to the spawn surface),
+  `src/subagents/prompt.ts` (add the delegating-a-coding-task recipe
+  guideline), plus their colocated tests.
 
 **Out of scope**:
 - `bin/sumocode.sh` — leave the `task` subcommand in the wrapper (harmless,
@@ -186,7 +198,38 @@ recovery/legacy-comment hits.
 **Verify**: `rg -n "bg_task" src/ docs/PI_TOOL_ARCHITECTURE.md` → only
 historical/research-doc hits outside `src/`.
 
-### Step 5: Dead-code sweep and full check
+### Step 6: Close the parity gaps (baseRef + discoverable dispatch recipe)
+
+These two gaps were identified during the dogfood sign-off — the new grammar
+must fully replace `bg_task`'s executor-dispatch role, and the pattern must be
+discoverable to other agents (not just tribal knowledge in these plans).
+
+1. **`baseRef` param.** `subagent_spawn` gains optional `baseRef`
+   (`Type.Optional(Type.String(...))`, description e.g. "Base git ref for the
+   isolated worktree (only with `worktree: true`); defaults to HEAD. Use
+   `origin/main` to branch from the pushed tip rather than your local
+   checkout."). Thread it: `SpawnSubagentTask.baseRef` → the manager's
+   worktree-creation call (`src/git/worktree.ts` `createWorktree` already
+   accepts a base ref — pass `task.baseRef ?? "HEAD"` instead of the current
+   hardcoded HEAD). No effect when `worktree` is falsy. This restores parity
+   with the retired `bg_task ... baseRef=origin/main` executor recipe.
+2. **Discoverable dispatch recipe.** Add ONE guideline to
+   `SUBAGENT_PROMPT_GUIDELINES` (`src/subagents/prompt.ts`), e.g.:
+   "To delegate a self-contained coding task, spawn an isolated, watchable
+   child: `subagent_spawn { visible: true, worktree: true, model, baseRef:
+   'origin/main' }`. It branches `sumo/<slug>` from `baseRef`, tiles into a
+   herdr workspace you can watch/steer, and returns a completion manifest
+   (changed paths, commits, dirty) you should review before acting on its
+   result." Keep it to a couple of sentences — this is the pattern other
+   agents will copy.
+3. Tests: `manager.test.ts` — `baseRef` threads to `createWorktree`
+   (default HEAD when omitted); `prompt.test.ts` — the recipe guideline is
+   present and names `worktree`/`baseRef`.
+
+**Verify**: `pnpm typecheck && pnpm test` → pass; `subagent_spawn` schema
+exposes `baseRef`.
+
+### Step 7: Dead-code sweep and full check
 
 Run `pnpm dead-code`; remove now-unreferenced exports flagged in
 `src/background-tasks/` and `src/spike/cmux-background/` is OUT of scope
@@ -206,7 +249,9 @@ findings.
 
 ## Done criteria
 
-- [ ] Operator go/no-go recorded (see Gate) before any removal commit
+- [ ] Operator go/no-go recorded (see Gate) before any removal commit — DONE, see "✅ GATE CONFIRMED" above
+- [ ] `subagent_spawn` exposes optional `baseRef` threaded to worktree creation (Step 6)
+- [ ] The delegating-a-coding-task recipe guideline is present (Step 6)
 - [ ] `pnpm typecheck` exits 0; `pnpm test` exits 0
 - [ ] `rg -n "\"bg_task\"|sendUserMessage" src/background-tasks/` → no matches
 - [ ] Old `sumocode`-runner meta.json recovers read-only (test-proven)

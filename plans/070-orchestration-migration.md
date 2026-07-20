@@ -114,6 +114,11 @@ model-facing guidance.
   `src/subagents/tools.ts` (add optional `baseRef` to the spawn surface),
   `src/subagents/prompt.ts` (add the delegating-a-coding-task recipe
   guideline), plus their colocated tests.
+- **`/sumo:review` migration (Step 2.5)**: `src/commands/review.ts`,
+  `src/interaction-registry.ts`, `src/extension.ts` (thread `subagentManager`
+  into `installSumoInteractions` → the review command), `src/commands/review.test.ts`.
+  This is the live consumer of `runner=sumocode`; it must move to the
+  SubagentManager BEFORE the runner is removed in Step 3.
 
 **Out of scope**:
 - `bin/sumocode.sh` — leave the `task` subcommand in the wrapper (harmless,
@@ -150,6 +155,39 @@ steps (e.g. `src/commands/review.ts` `taskSpawner` usage —
 review command), STOP and report it.
 
 **Verify**: classification list complete (attach to the commit body).
+
+### Step 2.5 (do BEFORE Step 3): Migrate `/sumo:review` onto the SubagentManager
+
+`/sumo:review` is the one live in-repo consumer of `runner=sumocode`
+(`src/commands/review.ts` calls `BackgroundTaskManager.spawnTask({ runner:
+"sumocode", visible: true, notifyOnExit: true })` and points the user at
+`bg_task action=log/stop`). It must move to the new grammar before Step 3
+removes the runner, or Step 3 breaks the build.
+
+1. `src/commands/review.ts`: replace `RegisterReviewCommandOptions.taskSpawner`
+   (a `BackgroundTaskManager`) with a narrow `subagentSpawner` interface
+   exposing just `spawn(task): Promise<SubagentSnapshot | AtCapacityDetails>`
+   (structurally the `SubagentManager`). The handler `await`s
+   `subagentSpawner.spawn({ prompt, title: \`review: ${label} · ${model}\`,
+   cwd: ctx.cwd, visible: true, model, thinking: "xhigh" })`. Handle both
+   non-happy returns: `at_capacity` → notify the retry hint; `status !==
+   "running"` → notify the failure. On success, notify that the review runs
+   in a watchable herdr pane and its result arrives as a card automatically
+   — DROP the `bg_task action=log/stop` wording and the `direction`/split
+   plumbing (visible subagents own their layout via the tab policy).
+2. `src/interaction-registry.ts`: add `subagentManager?: SubagentManager` to
+   `InstallSumoInteractionsOptions` and pass it to `registerReviewCommand`
+   as `subagentSpawner` (replacing `taskSpawner: options.backgroundTaskManager`).
+3. `src/extension.ts`: both `installSumoInteractions(...)` call sites (~lines
+   234 and 337) already have `subagentManager` in scope — pass it through.
+   Remove the now-needless `void subagentManager;` at ~line 235.
+4. `src/commands/review.test.ts`: swap the fake to the subagent-manager shape;
+   assert `spawn` is called with `{ visible: true, model, thinking: "xhigh" }`,
+   that `at_capacity` and failure returns notify correctly, and that the
+   success notice no longer mentions `bg_task`.
+
+**Verify**: `pnpm typecheck && pnpm test` → pass; `rg -n "runner: \"sumocode\""
+src/commands/` → no matches; `/sumo:review` still registers.
 
 ### Step 2: Remove the `bg_task` tool surface
 
@@ -265,8 +303,10 @@ Stop and report back if:
 
 - The operator gate has not been explicitly confirmed.
 - Step 1 finds a live consumer of `bg_task`/`runner=sumocode` outside this
-  plan's scope (e.g. the review command's `taskSpawner`, user skills in
-  `~/.pi`, or docs/marketing flows that demo it).
+  plan's scope. NOTE: `/sumo:review` (the review command's `taskSpawner`) is
+  now handled IN-SCOPE by Step 2.5 — migrate it, do not stop on it. Stop only
+  for an ADDITIONAL unlisted consumer (e.g. user skills in `~/.pi`, or
+  docs/marketing flows that demo it).
 - Removing the response-watcher paths breaks recovery of RUNNING legacy agent
   tasks from a live session (someone mid-flight during the upgrade) — report
   the reconciliation gap instead of force-finalizing.

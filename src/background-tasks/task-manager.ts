@@ -11,7 +11,6 @@ import {
 	rmSync,
 	statSync,
 	truncateSync,
-	unlinkSync,
 	writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
@@ -984,26 +983,6 @@ export class BackgroundTaskManager {
 			}
 			if (task.pollTimer) clearInterval(task.pollTimer);
 			this.clearLogCap(task);
-		}
-	}
-}
-
-export function isInCmuxEnvironment(): boolean {
-	return detectTerminalHost() === "cmux";
-}
-
-/** Test helper — remove stale lock/log dirs between tests. */
-export function removePathIfExists(path: string): void {
-	if (!existsSync(path)) return;
-	try {
-		unlinkSync(path);
-	} catch {
-		try {
-			const fd = openSync(path, "r");
-			closeSync(fd);
-			unlinkSync(path);
-		} catch {
-			// ignore
 		}
 	}
 }

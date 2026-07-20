@@ -7,7 +7,7 @@
 
 import { dirname, join } from "node:path";
 
-export interface VisibleTaskPaths {
+interface VisibleTaskPaths {
 	logFile: string;
 	exitFile: string;
 	markerFile: string;
@@ -18,7 +18,7 @@ export interface VisibleTaskPaths {
 	diagFile: string;
 }
 
-export interface VisibleTaskCommandOptions {
+interface VisibleTaskCommandOptions {
 	cwd: string;
 	command: string;
 	paths: VisibleTaskPaths;

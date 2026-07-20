@@ -181,7 +181,8 @@ describe("/sumo:review", () => {
 				handler = options.handler;
 			});
 			const notify = vi.fn();
-			registerReviewCommand({ registerCommand, sendUserMessage } as never, { subagentSpawner: subagentSpawner as never });
+			const getActiveTools = vi.fn(() => ["read", "bash", "edit", "write", "grep", "find", "ls"]);
+			registerReviewCommand({ registerCommand, sendUserMessage, getActiveTools } as never, { subagentSpawner: subagentSpawner as never });
 			const ctx = { hasUI: true, cwd: "/tmp/sumo-fixture", ui: { notify } };
 			return { handler, registerCommand, sendUserMessage, notify, subagentSpawner, ctx };
 		}
@@ -200,11 +201,23 @@ describe("/sumo:review", () => {
 				visible: true,
 				model: "openai-codex/gpt-5.3-codex",
 				thinking: "xhigh",
+				// Parent tool allowlist forwarded so a narrowed session narrows the reviewer.
+				builtInTools: ["read", "bash", "edit", "write", "grep", "find", "ls"],
 			});
 			expect(notify).toHaveBeenCalledWith(expect.stringContaining("review started: sa-42"), "info");
 			expect(notify).toHaveBeenCalledWith(expect.stringContaining("watchable herdr pane"), "info");
 			expect(notify).toHaveBeenCalledWith(expect.stringContaining("result will arrive as a card automatically"), "info");
 			expect(notify.mock.calls.flat().join(" ")).not.toContain(["bg", "task"].join("_"));
+		});
+
+		it("forwards a narrowed parent tool allowlist to the reviewer", async () => {
+			const subagentSpawner = { spawn: vi.fn().mockResolvedValue(snapshot()) };
+			let handler: ((args: string, ctx: { hasUI: boolean; cwd: string; ui: { notify: ReturnType<typeof vi.fn> } }) => Promise<void>) | undefined;
+			const registerCommand = vi.fn((_name: string, options: { handler: typeof handler }) => { handler = options.handler; });
+			const getActiveTools = vi.fn(() => ["read", "grep"]);
+			registerReviewCommand({ registerCommand, sendUserMessage: vi.fn(), getActiveTools } as never, { subagentSpawner: subagentSpawner as never });
+			await handler?.("src/foo.ts", { hasUI: true, cwd: "/tmp/sumo-fixture", ui: { notify: vi.fn() } });
+			expect(subagentSpawner.spawn).toHaveBeenCalledWith(expect.objectContaining({ builtInTools: ["read", "grep"] }));
 		});
 
 		it("includes scope label in the subagent title and notice for PR args", async () => {

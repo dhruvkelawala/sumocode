@@ -215,6 +215,11 @@ export function registerReviewCommand(pi: ExtensionAPI, options: RegisterReviewC
 					visible: true,
 					model,
 					thinking: "xhigh",
+					// Mirror the subagent_spawn tool: a narrowed parent session (e.g.
+					// `--tools read`) must narrow the visible reviewer too, or it would
+					// launch unrestricted. model/thinking are always explicit here, so
+					// only the tool allowlist needs threading.
+					builtInTools: pi.getActiveTools(),
 				});
 				if (subagent.status === "at_capacity") {
 					notify(ctx, `/sumo:review is at capacity (${subagent.runningCount}/${subagent.capacity}): ${subagent.retryHint}`, "warning");

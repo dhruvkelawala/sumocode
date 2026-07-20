@@ -41,10 +41,11 @@ should be removed or disabled to avoid conflicts.
 These are registered by SumoCode via `pi.registerTool()` and don't exist in
 vanilla Pi.
 
-| Tool         | Source                         | Purpose                      |
-|--------------|--------------------------------|------------------------------|
-| `task`       | `src/native-task-tool.ts`       | Run isolated Pi subprocess tasks and stream structured scroll/scribe state |
-| `bg_task`    | `src/background-tasks/`        | Spawn non-blocking shell tasks; `visible=true` opens a terminal-host split pane (cmux or herdr) |
+| Tool family   | Source                         | Purpose                      |
+|---------------|--------------------------------|------------------------------|
+| `task`        | `src/native-task-tool.ts`       | Skill-run substrate; run isolated Pi subprocess skills and stream structured scroll/scribe state |
+| `subagent_*`  | `src/subagents/`                | Spawn, steer, inspect, wait for, cancel, and list delegated child agents |
+| `bg_*`        | `src/background-tasks/`         | Start, inspect, stop, and list non-interactive background shell terminals with typed completion cards |
 
 ### 4. SumoCode Extension Hooks
 

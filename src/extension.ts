@@ -155,7 +155,7 @@ export interface HelperSubprocessGuardOptions {
  * full Cathedral UI inside them wastes startup time and risks recursive
  * tool registration.
  *
- * The same env var is also set by SumoCode's own `bg_task` shell-task
+ * The same env var is also set by SumoCode's background-terminal shell
  * wrapper so a user command that invokes `pi`/`sumocode` does not
  * recursively install another SumoCode runtime layer.
  */
@@ -221,7 +221,7 @@ function installRpcChildProfile(pi: ExtensionAPI): void {
 			systemPromptPatches: [
 				{
 					match: /\n\s*\n\s*in addition to the tools above, you may have access to other custom tools depending on the project\./i,
-					replace: "\n- task: never run this tool unless it's a skill run or I explictly ask you to",
+					replace: "\n- task: only for skill runs. For delegation use subagent_spawn; for background commands use bg_start.",
 				},
 			],
 		})(pi);
@@ -250,8 +250,8 @@ export default function sumocode(pi: ExtensionAPI): void {
 		launcher: process.env.SUMOCODE_LAUNCHER ?? null,
 	});
 	if (shouldNoopHelperSubprocess()) {
-		// Helper subprocesses (pi-cmux session naming, SumoCode bg_task shell
-		// wrappers, etc.) signal themselves via PI_CMUX_CHILD / SUMOCODE_BG_CHILD.
+		// Helper subprocesses (pi-cmux session naming, SumoCode background-terminal
+		// shell wrappers, etc.) signal themselves via PI_CMUX_CHILD / SUMOCODE_BG_CHILD.
 		// Bail before installing anything so they stay lightweight and we don't
 		// recursively spawn another SumoCode UI layer.
 		return;
@@ -320,7 +320,7 @@ export default function sumocode(pi: ExtensionAPI): void {
 			systemPromptPatches: [
 				{
 					match: /\n\s*\n\s*in addition to the tools above, you may have access to other custom tools depending on the project\./i,
-					replace: "\n- task: never run this tool unless it's a skill run or I explictly ask you to",
+					replace: "\n- task: only for skill runs. For delegation use subagent_spawn; for background commands use bg_start.",
 				},
 			],
 		})(pi);

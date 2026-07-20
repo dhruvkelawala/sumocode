@@ -57,7 +57,6 @@ export function installTerminalTools(
 				title: params.title,
 				runner: "shell",
 				visible: false,
-				notifyOnExit: false,
 				resultDelivery: "typed",
 			});
 			const snapshot = toBackgroundTaskSnapshot(task);

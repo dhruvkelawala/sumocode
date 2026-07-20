@@ -15,6 +15,14 @@ describe("subagent prompt guidance", () => {
 		expect(SUBAGENT_PROMPT_SNIPPET).toContain("visible subagents");
 	});
 
+	it("documents the isolated coding-task recipe with worktree and baseRef", () => {
+		const guidance = SUBAGENT_PROMPT_GUIDELINES.join("\n");
+		expect(guidance).toContain("To delegate a self-contained coding task");
+		expect(guidance).toContain("worktree: true");
+		expect(guidance).toContain("baseRef: 'origin/main'");
+		expect(guidance).toContain("completion manifest");
+	});
+
 	it("documents pane steering and its visible-only boundary", () => {
 		const guidance = SUBAGENT_PROMPT_GUIDELINES.join("\n");
 		expect(guidance).toContain("Use subagent_send to steer a running visible child");

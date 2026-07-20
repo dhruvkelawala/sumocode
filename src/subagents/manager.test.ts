@@ -213,16 +213,17 @@ describe("SubagentManager", () => {
 			ok: true as const,
 			path: "/isolated/worktree",
 			branch: "sumo/custom",
-			baseRef: "abc123",
+			baseRef: "HEAD",
 		}));
 		const manager = new SubagentManager(backendFactory, {
 			captureGitContext: async () => ({ repoRoot: "/repo", baseRef: "abc123" }),
 			createWorktree,
+			resolveWorktreeBaseRef: async () => "abc123",
 		});
 
 		const spawned = await manager.spawn({ prompt: "p", title: "write feature", cwd: "/repo", worktree: true, branch: "sumo/custom" });
 
-		expect(createWorktree).toHaveBeenCalledWith(expect.objectContaining({ repoRoot: "/repo", branch: "sumo/custom", baseRef: "abc123" }));
+		expect(createWorktree).toHaveBeenCalledWith(expect.objectContaining({ repoRoot: "/repo", branch: "sumo/custom", baseRef: "HEAD" }));
 		expect(backendFactory).toHaveBeenCalledWith(expect.objectContaining({ cwd: "/isolated/worktree" }));
 		expect(spawned).toMatchObject({
 			cwd: "/isolated/worktree",
@@ -231,12 +232,89 @@ describe("SubagentManager", () => {
 		});
 	});
 
+	it("threads an explicit baseRef through worktree creation and manifest collection", async () => {
+		let emitFn: ((event: SubagentEvent) => void) | undefined;
+		const backendFactory = vi.fn(() => ({ events: (emit: (event: SubagentEvent) => void) => { emitFn = emit; emit({ kind: "run-started" }); }, interrupt: () => undefined }));
+		const createWorktree = vi.fn(async (options) => ({
+			ok: true as const,
+			path: "/isolated/worktree",
+			branch: options.branch ?? "sumo/feature",
+			baseRef: options.baseRef ?? "HEAD",
+		}));
+		const buildCompletionManifest = vi.fn(fakeManifestBuilder);
+		const manager = new SubagentManager(backendFactory, {
+			captureGitContext: async () => ({ repoRoot: "/repo", baseRef: "captured-head" }),
+			createWorktree,
+			resolveWorktreeBaseRef: async () => "resolved-origin-main",
+			buildCompletionManifest,
+		});
+
+		const spawned = await manager.spawn({ prompt: "p", title: "write feature", cwd: "/repo", worktree: true, baseRef: "origin/main" });
+		emitFn?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
+		await vi.waitFor(() => expect(manager.get("sa-1")?.status).toBe("done"));
+
+		expect(createWorktree).toHaveBeenCalledWith(expect.objectContaining({ repoRoot: "/repo", baseRef: "origin/main" }));
+		expect(buildCompletionManifest).toHaveBeenCalledWith(expect.objectContaining({ baseRef: "resolved-origin-main" }));
+		expect(spawned).toMatchObject({
+			baseRef: "resolved-origin-main",
+			worktree: { baseRef: "resolved-origin-main" },
+		});
+		expect(manager.get("sa-1")?.manifest).toMatchObject({ baseRef: "resolved-origin-main" });
+	});
+
+	it("fails closed and preserves the worktree when an explicit base cannot resolve to a commit", async () => {
+		const backendFactory = vi.fn(() => ({ events: () => undefined, interrupt: () => undefined }));
+		const manager = new SubagentManager(backendFactory, {
+			captureGitContext: async () => ({ repoRoot: "/repo", baseRef: "captured-head" }),
+			createWorktree: async () => ({ ok: true, path: "/isolated/preserved", branch: "sumo/preserved", baseRef: "origin/main" }),
+			resolveWorktreeBaseRef: async () => undefined,
+		});
+
+		const spawned = await manager.spawn({ prompt: "p", title: "write feature", cwd: "/repo", worktree: true, baseRef: "origin/main" });
+
+		expect(spawned).toMatchObject({
+			status: "error",
+			errorText: expect.stringContaining("unable to resolve worktree base commit"),
+			worktree: { path: "/isolated/preserved", baseRef: "origin/main" },
+		});
+		expect(backendFactory).not.toHaveBeenCalled();
+	});
+
+	it("uses the captured HEAD commit as the default worktree manifest base", async () => {
+		let emitFn: ((event: SubagentEvent) => void) | undefined;
+		const createWorktree = vi.fn(async (options) => ({
+			ok: true as const,
+			path: "/isolated/worktree",
+			branch: options.branch ?? "sumo/feature",
+			baseRef: options.baseRef ?? "HEAD",
+		}));
+		const buildCompletionManifest = vi.fn(fakeManifestBuilder);
+		const manager = new SubagentManager(() => ({
+			events: (emit) => { emitFn = emit; emit({ kind: "run-started" }); },
+			interrupt: () => undefined,
+		}), {
+			captureGitContext: async () => ({ repoRoot: "/repo", baseRef: "captured-head" }),
+			createWorktree,
+			resolveWorktreeBaseRef: async () => "captured-head",
+			buildCompletionManifest,
+		});
+
+		await manager.spawn({ prompt: "p", title: "write feature", cwd: "/repo", worktree: true });
+		emitFn?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
+		await vi.waitFor(() => expect(manager.get("sa-1")?.status).toBe("done"));
+
+		expect(createWorktree).toHaveBeenCalledWith(expect.objectContaining({ baseRef: "HEAD" }));
+		expect(buildCompletionManifest).toHaveBeenCalledWith(expect.objectContaining({ baseRef: "captured-head" }));
+		expect(manager.get("sa-1")?.manifest).toMatchObject({ baseRef: "captured-head" });
+	});
+
 	it("preserves the caller's subdirectory inside the worktree", async () => {
 		const backendFactory = vi.fn(() => ({ events: () => undefined, interrupt: () => undefined }));
 		const createWorktree = vi.fn(async () => ({ ok: true as const, path: "/isolated/worktree", branch: "sumo/x", baseRef: "abc123" }));
 		const manager = new SubagentManager(backendFactory, {
 			captureGitContext: async () => ({ repoRoot: "/repo", baseRef: "abc123" }),
 			createWorktree,
+			resolveWorktreeBaseRef: async () => "abc123",
 		});
 		await manager.spawn({ prompt: "p", title: "api work", cwd: "/repo/packages/api", worktree: true });
 		expect(backendFactory).toHaveBeenCalledWith(expect.objectContaining({ cwd: "/isolated/worktree/packages/api" }));
@@ -393,6 +471,7 @@ describe("SubagentManager", () => {
 		const manager = new SubagentManager(backendFactory, {
 			captureGitContext: async () => ({ repoRoot: "/repo", baseRef: "abc123" }),
 			createWorktree: async () => ({ ok: true, path: "/isolated/worktree", branch: "sumo/api", baseRef: "abc123" }),
+			resolveWorktreeBaseRef: async () => "abc123",
 			terminalHost: host,
 			pi: { exec: vi.fn() } as never,
 		});
@@ -415,6 +494,7 @@ describe("SubagentManager", () => {
 		const manager = new SubagentManager(backendFactory, {
 			captureGitContext: async () => ({ repoRoot: "/repo", baseRef: "abc123" }),
 			createWorktree: async () => ({ ok: true, path: "/isolated/preserved", branch: "sumo/preserved", baseRef: "abc123" }),
+			resolveWorktreeBaseRef: async () => "abc123",
 			terminalHost: host,
 			pi: { exec: vi.fn() } as never,
 		});
@@ -456,6 +536,7 @@ describe("SubagentManager", () => {
 		const manager = new SubagentManager(() => { throw new Error("backend unavailable"); }, {
 			captureGitContext: async () => ({ repoRoot: "/repo", baseRef: "abc123" }),
 			createWorktree: async () => ({ ok: true, path: "/isolated/preserved", branch: "sumo/preserved", baseRef: "abc123" }),
+			resolveWorktreeBaseRef: async () => "abc123",
 		});
 
 		const spawned = await manager.spawn({ prompt: "p", title: "preserved", cwd: "/repo", worktree: true });
@@ -467,15 +548,18 @@ describe("SubagentManager", () => {
 		});
 	});
 
-	it("captures the shared-checkout base ref at spawn", async () => {
+	it("captures the shared-checkout base ref and ignores a worktree baseRef without isolation", async () => {
 		const backendFactory = vi.fn(() => ({ events: () => undefined, interrupt: () => undefined }));
+		const createWorktree = vi.fn();
 		const manager = new SubagentManager(backendFactory, {
 			captureGitContext: async () => ({ repoRoot: "/repo", baseRef: "captured-head" }),
+			createWorktree,
 		});
 
-		const spawned = await manager.spawn({ prompt: "p", title: "shared", cwd: "/repo" });
+		const spawned = await manager.spawn({ prompt: "p", title: "shared", cwd: "/repo", baseRef: "origin/main" });
 
 		expect(spawned).toMatchObject({ cwd: "/repo", baseRef: "captured-head", worktree: undefined });
+		expect(createWorktree).not.toHaveBeenCalled();
 	});
 
 	it("keeps terminal state sticky when a late real settle arrives after cancel timeout", async () => {

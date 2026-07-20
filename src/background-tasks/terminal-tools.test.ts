@@ -22,7 +22,6 @@ function task(overrides: Partial<BackgroundTask> = {}): BackgroundTask {
 		logFile: "/tmp/bg-1/output.log",
 		visible: false,
 		runner: "shell",
-		notifyOnExit: false,
 		...overrides,
 	};
 }
@@ -100,7 +99,6 @@ describe("installTerminalTools", () => {
 			title: "dev server",
 			runner: "shell",
 			visible: false,
-			notifyOnExit: false,
 			resultDelivery: "typed",
 		});
 		expect(result.content[0]?.text).toContain("Started background terminal bg-1");

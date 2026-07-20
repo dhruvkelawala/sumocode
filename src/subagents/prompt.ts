@@ -58,6 +58,7 @@ export const SUBAGENT_PROMPT_GUIDELINES = [
 	"Visible isolated children appear as herdr workspaces; non-isolated visible children tile into a subagents tab. cmux provides only a degraded single-split fallback.",
 	"After spawning, keep working; call subagent_wait only when the result is required to proceed.",
 	"At most 4 subagents can run concurrently. If spawn returns status=at_capacity, wait/cancel/list before retrying.",
+	"To delegate a self-contained coding task, spawn an isolated, watchable child: `subagent_spawn { visible: true, worktree: true, model, baseRef: 'origin/main' }`. It branches `sumo/<slug>` from baseRef, opens a herdr workspace you can watch or steer, and returns a completion manifest to review before acting on the result.",
 	"Headless children run WITHOUT the dangerous-command approval gate (same trust model as the native task tool): they cannot prompt the user, so their bash executes directly. Do not delegate destructive commands against the user's checkout; use worktree isolation for write-heavy work. Isolated worktrees are preserved after completion and never auto-removed.",
 ];
 

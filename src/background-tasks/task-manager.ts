@@ -11,20 +11,17 @@ import {
 	rmSync,
 	statSync,
 	truncateSync,
-	unlinkSync,
 	writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { SplitDirection as CmuxSplitDirection } from "../terminal-host/index.js";
 import { detectTerminalHost, getTerminalHost, getTerminalHostForPane } from "../terminal-host/index.js";
-import { createWorktree, removeWorktreeSync, resolveCreateOptions } from "../git/worktree.js";
+import { removeWorktreeSync } from "../git/worktree.js";
 import {
 	BACKGROUND_TASK_META_SCHEMA_VERSION,
 	type BackgroundTask,
 	type BackgroundTaskSnapshot,
-	type BackgroundTaskThinking,
-	buildBackgroundTaskWakeMessage,
 	type SpawnBackgroundTaskOptions,
 	toBackgroundTaskSnapshot,
 } from "./task-types.js";
@@ -38,25 +35,9 @@ import {
 } from "./visible-spawn.js";
 
 const POLL_INTERVAL_MS = 500;
-const RESPONSE_POLL_INTERVAL_MS = 750;
 /** How often the running-task log size guard runs (writer-safe truncate). */
 const LOG_CAP_INTERVAL_MS = 5_000;
-const DEFAULT_AGENT_STARTUP_TIMEOUT_MS = 2 * 60 * 1000;
 const DEFAULT_VISIBLE_DIRECTION: CmuxSplitDirection = "right";
-export const DEFAULT_SUMOCODE_AGENT_MODEL = "openai-codex/gpt-5.5";
-export const DEFAULT_SUMOCODE_AGENT_THINKING: BackgroundTaskThinking = "low";
-const AGENT_MODEL_ENV = "SUMOCODE_BG_AGENT_MODEL";
-const AGENT_THINKING_ENV = "SUMOCODE_BG_AGENT_THINKING";
-const AGENT_CAPACITY_ENV = "SUMOCODE_BG_AGENT_CAPACITY";
-const DEFAULT_SUMOCODE_AGENT_CAPACITY = 4;
-const THINKING_LEVELS = new Set<BackgroundTaskThinking>([
-	"off",
-	"minimal",
-	"low",
-	"medium",
-	"high",
-	"xhigh",
-]);
 
 /** Max grace period before stopTask escalates SIGTERM to SIGKILL. */
 const STOP_SIGTERM_GRACE_MS = 5_000;
@@ -69,9 +50,7 @@ const DEFAULT_MAX_RECOVERED_FINISHED_TASKS = 100;
 interface InternalTask extends BackgroundTask {
 	child?: ChildProcess;
 	pollTimer?: ReturnType<typeof setInterval>;
-	responseTimer?: ReturnType<typeof setInterval>;
 	logCapTimer?: ReturnType<typeof setInterval>;
-	startupDeadline?: number;
 	/**
 	 * Promise that resolves once the visible-spawn coroutine finishes (success
 	 * OR caught failure). `stopTask` awaits this so it can never finalize a task
@@ -79,42 +58,15 @@ interface InternalTask extends BackgroundTask {
 	 * stopped-then-launched race leaves a runaway pane.
 	 */
 	spawnPromise?: Promise<void>;
-	worktreePending?: boolean;
 	stopRequested?: boolean;
 	finalized?: boolean;
 }
 
 export interface BackgroundTaskManagerOptions {
-	readonly agentCapacity?: number;
 	readonly logMaxBytes?: number;
 	readonly finishedTaskMaxAgeMs?: number;
 	readonly maxRecoveredFinishedTasks?: number;
 	readonly onTaskFinalized?: (task: BackgroundTaskSnapshot) => void;
-}
-
-export interface AgentCapacityTaskSummary {
-	readonly id: string;
-	readonly title?: string;
-	readonly status: BackgroundTask["status"];
-	readonly ageMs: number;
-}
-
-export interface AgentCapacityDetails {
-	readonly status: "at_capacity";
-	readonly capacity: number;
-	readonly runningCount: number;
-	readonly running: readonly AgentCapacityTaskSummary[];
-	readonly retryHint: string;
-}
-
-export class BackgroundTaskCapacityError extends Error {
-	public readonly details: AgentCapacityDetails;
-
-	public constructor(details: AgentCapacityDetails) {
-		super(`agent capacity reached (${details.runningCount}/${details.capacity})`);
-		this.name = "BackgroundTaskCapacityError";
-		this.details = details;
-	}
 }
 
 function getShellConfig(): { shell: string; args: string[] } {
@@ -129,31 +81,6 @@ function summarizeStatus(task: Pick<BackgroundTask, "status" | "exitCode">): str
 	if (task.status === "stopped") return "stopped";
 	if (task.exitCode === 0) return "completed";
 	return "failed";
-}
-
-function normalizeThinking(value: string | undefined): BackgroundTaskThinking | undefined {
-	if (!value) return undefined;
-	const normalized = value.trim() as BackgroundTaskThinking;
-	return THINKING_LEVELS.has(normalized) ? normalized : undefined;
-}
-
-function resolveAgentModel(runner: BackgroundTask["runner"], model: string | undefined): string | undefined {
-	if (runner !== "sumocode") return model?.trim() || undefined;
-	return model?.trim() || process.env[AGENT_MODEL_ENV]?.trim() || DEFAULT_SUMOCODE_AGENT_MODEL;
-}
-
-function resolveAgentThinking(
-	runner: BackgroundTask["runner"],
-	thinking: BackgroundTaskThinking | undefined,
-): BackgroundTaskThinking | undefined {
-	if (runner !== "sumocode") return thinking;
-	return thinking ?? normalizeThinking(process.env[AGENT_THINKING_ENV]) ?? DEFAULT_SUMOCODE_AGENT_THINKING;
-}
-
-function resolveAgentCapacity(value: number | undefined): number {
-	if (typeof value === "number" && Number.isFinite(value) && value >= 1) return Math.floor(value);
-	const fromEnv = Number.parseInt(process.env[AGENT_CAPACITY_ENV] ?? "", 10);
-	return Number.isFinite(fromEnv) && fromEnv >= 1 ? fromEnv : DEFAULT_SUMOCODE_AGENT_CAPACITY;
 }
 
 function normalizePositiveInteger(value: number | undefined, fallback: number): number {
@@ -287,18 +214,6 @@ function isProcessAlive(pid: number | undefined): boolean {
 	}
 }
 
-function readStartedMarkerPid(markerFile: string | undefined): number | undefined {
-	if (!markerFile || !existsSync(markerFile)) return undefined;
-	try {
-		const first = readFileSync(markerFile, "utf8").trim().split("\n")[0] ?? "";
-		if (!/^\d+$/.test(first)) return undefined;
-		const pid = Number.parseInt(first, 10);
-		return Number.isFinite(pid) && pid > 0 ? pid : undefined;
-	} catch {
-		return undefined;
-	}
-}
-
 function getProcessStartTime(pid: number | undefined): string | undefined {
 	if (pid == null) return undefined;
 	try {
@@ -388,7 +303,6 @@ function parseRecoveredTask(raw: unknown, metaFile: string): InternalTask | unde
 		thinking: snapshot.thinking,
 		pane,
 		worktree: snapshot.worktree,
-		notifyOnExit: snapshot.notifyOnExit === true,
 		resultDelivery: snapshot.resultDelivery === "typed" ? ("typed" as const) : undefined,
 	};
 }
@@ -396,22 +310,15 @@ function parseRecoveredTask(raw: unknown, metaFile: string): InternalTask | unde
 export class BackgroundTaskManager {
 	private tasks = new Map<string, InternalTask>();
 	private readonly pi: ExtensionAPI;
-	private readonly agentCapacity: number;
 	private readonly logMaxBytes: number;
 	private readonly finishedTaskMaxAgeMs: number;
 	private readonly maxRecoveredFinishedTasks: number;
 	private readonly onTaskFinalized?: (task: BackgroundTaskSnapshot) => void;
-	/**
-	 * True only while `recoverTasks` is reconciling persisted state on
-	 * startup/reload. Used by `finalizeTask` to suppress the message-queue
-	 * followUp injection (which would wake the agent with a turn the user never
-	 * requested) while still allowing the passive cmux desktop notify to fire.
-	 */
+	/** True while persisted state is being reconciled at startup/reload. */
 	private recovering = false;
 
 	constructor(pi: ExtensionAPI, options: BackgroundTaskManagerOptions = {}) {
 		this.pi = pi;
-		this.agentCapacity = resolveAgentCapacity(options.agentCapacity);
 		this.logMaxBytes = normalizePositiveInteger(options.logMaxBytes, DEFAULT_BACKGROUND_TASK_LOG_MAX_BYTES);
 		this.finishedTaskMaxAgeMs = normalizePositiveInteger(options.finishedTaskMaxAgeMs, DEFAULT_FINISHED_TASK_MAX_AGE_MS);
 		this.maxRecoveredFinishedTasks = normalizePositiveInteger(options.maxRecoveredFinishedTasks, DEFAULT_MAX_RECOVERED_FINISHED_TASKS);
@@ -502,15 +409,17 @@ export class BackgroundTaskManager {
 			}
 		}
 
-		this.armLogCap(task);
-
-		if (task.runner === "shell") {
-			task.pollTimer = setInterval(() => this.pollVisibleTask(task), POLL_INTERVAL_MS);
-			if (typeof task.pollTimer.unref === "function") task.pollTimer.unref();
-		} else if (task.exitFile) {
-			this.armAgentStartupDeadline(task);
-			this.armResponseWatcher(task);
+		// Legacy agent tasks cannot be safely reattached after the response watcher
+		// is retired. Keep their metadata readable, reconcile them once, and never
+		// re-arm a watcher that could revive the removed runner path.
+		if (task.runner === "sumocode") {
+			this.finalizeTask(task, null, "self-exit");
+			return;
 		}
+
+		this.armLogCap(task);
+		task.pollTimer = setInterval(() => this.pollVisibleTask(task), POLL_INTERVAL_MS);
+		if (typeof task.pollTimer.unref === "function") task.pollTimer.unref();
 	}
 
 	findTask(id?: string, pid?: number): InternalTask | undefined {
@@ -543,34 +452,6 @@ export class BackgroundTaskManager {
 			.join("\n");
 	}
 
-	getAgentCapacityDetails(): AgentCapacityDetails {
-		const now = Date.now();
-		const running = [...this.tasks.values()]
-			.filter((task) => task.runner === "sumocode" && task.status === "running")
-			.sort((a, b) => a.startedAt - b.startedAt)
-			.map((task) => ({
-				id: task.id,
-				title: task.title,
-				status: task.status,
-				ageMs: Math.max(0, now - task.startedAt),
-			}));
-		return {
-			status: "at_capacity",
-			capacity: this.agentCapacity,
-			runningCount: running.length,
-			running,
-			retryHint: "poll bg_task action=log on a running task until one completes, then retry this spawn; stop an unneeded task with bg_task action=stop",
-		};
-	}
-
-	private assertAgentCapacityAvailable(runner: BackgroundTask["runner"]): void {
-		if (runner !== "sumocode") return;
-		const details = this.getAgentCapacityDetails();
-		if (details.runningCount >= details.capacity) {
-			throw new BackgroundTaskCapacityError(details);
-		}
-	}
-
 	spawnTask(options: SpawnBackgroundTaskOptions): BackgroundTask {
 		const command = options.command.trim();
 		if (!command) {
@@ -579,41 +460,14 @@ export class BackgroundTaskManager {
 
 		const visible = options.visible === true;
 		const runner = options.runner ?? "shell";
-		// Reject visible=false with the sumocode runner. The non-visible code
-		// path just executes `command` as a shell string, which would treat a
-		// natural-language prompt as bash and produce 'command not found' (or
-		// worse). The sumocode runner requires a visible cmux pane by design.
-		if (!visible && runner === "sumocode") {
-			throw new Error(
-				`runner='sumocode' requires visible=true — agent prompts cannot be executed as shell commands. Set visible=true or use runner='shell' for shell commands.`,
-			);
-		}
 		if (visible && detectTerminalHost() === "none") {
 			throw new Error("visible background tasks require a terminal host (cmux or herdr)");
 		}
-		this.assertAgentCapacityAvailable(runner);
 
 		let id = generateTaskId();
 		while (this.tasks.has(id)) id = generateTaskId();
 		const now = Date.now();
-		let cwd = options.cwd.trim() || process.cwd();
-		let worktree: BackgroundTask["worktree"];
-		let worktreePending = false;
-		if (options.worktree === true) {
-			if (runner !== "sumocode" || !visible) {
-				throw new Error("worktree=true requires runner='sumocode' and visible=true");
-			}
-			const repoRoot = cwd;
-			const target = resolveCreateOptions({
-				repoRoot,
-				branch: options.branch,
-				baseRef: options.baseRef,
-				task: options.title ?? command,
-			});
-			worktree = { path: target.path, branch: target.branch, baseRef: target.baseRef, repoRoot };
-			cwd = target.path;
-			worktreePending = true;
-		}
+		const cwd = options.cwd.trim() || process.cwd();
 		const paths = buildVisibleTaskPaths(id, now);
 		mkdirSync(dirname(paths.logFile), { recursive: true });
 		writeFileSync(paths.logFile, "");
@@ -629,17 +483,8 @@ export class BackgroundTaskManager {
 			logFile: paths.logFile,
 			exitFile: paths.exitFile,
 			metaFile: paths.metaFile,
-			markerFile: runner === "shell" ? undefined : paths.markerFile,
-			promptFile: runner === "shell" ? undefined : paths.promptFile,
-			responseFile: runner === "shell" ? undefined : paths.responseFile,
-			diagFile: runner === "shell" ? undefined : paths.diagFile,
 			visible,
 			runner,
-			model: resolveAgentModel(runner, options.model),
-			thinking: resolveAgentThinking(runner, options.thinking),
-			worktree,
-			worktreePending,
-			notifyOnExit: options.notifyOnExit === true,
 			resultDelivery: options.resultDelivery,
 		};
 
@@ -740,56 +585,22 @@ export class BackgroundTaskManager {
 			this.finalizeTask(task, null, "stopped");
 			return;
 		}
-		if (task.worktreePending && task.worktree) {
-			const created = await createWorktree({
-				repoRoot: task.worktree.repoRoot,
-				branch: task.worktree.branch,
-				baseRef: task.worktree.baseRef,
-				path: task.worktree.path,
-			});
-			if (!created.ok) {
-				appendLogLine(task.logFile, `\n[bg-task] worktree create failed: ${created.message}\n`);
-				// No worktree exists on disk; drop the speculative ref so a later
-				// clearFinishedTasks({ pruneWorktrees: true }) does not try to remove
-				// a nonexistent worktree and get stuck.
-				task.worktree = undefined;
-				task.worktreePending = false;
-				this.finalizeTask(task, 1, "self-exit");
-				return;
-			}
-			task.worktreePending = false;
-			task.updatedAt = Date.now();
-			writeTaskMeta(task);
-		}
-		if (task.runner === "shell") {
-			writeFileSync(
-				paths.scriptFile,
-				buildVisibleTaskScript({
-					cwd: task.cwd,
-					command: task.command,
-					paths,
-					taskId: task.id,
-					runner: task.runner,
-				}),
-			);
-			chmodSync(paths.scriptFile, 0o700);
-		} else if (task.runner === "sumocode") {
-			// The cmux respawn-pane command embeds the prompt-file path, NOT the
-			// prompt itself — keeps the command short so it doesn't flash a wall
-			// of text in the pane before Pi takes over the screen. `sumocode task
-			// --prompt-file <path>` reads this file and forwards its contents as
-			// Pi's kickoff [messages...] positional.
-			writeFileSync(paths.promptFile, task.command);
-		}
+		writeFileSync(
+			paths.scriptFile,
+			buildVisibleTaskScript({
+				cwd: task.cwd,
+				command: task.command,
+				paths,
+				taskId: task.id,
+			}),
+		);
+		chmodSync(paths.scriptFile, 0o700);
 
 		const respawnCommand = buildVisibleTaskCommand({
 			cwd: task.cwd,
 			command: task.command,
 			paths,
 			taskId: task.id,
-			runner: task.runner,
-			model: task.model,
-			thinking: task.thinking,
 		});
 
 		const host = getTerminalHost();
@@ -815,76 +626,9 @@ export class BackgroundTaskManager {
 		task.updatedAt = Date.now();
 		writeTaskMeta(task);
 
-		if (task.runner === "shell") {
-			task.pollTimer = setInterval(() => {
-				this.pollVisibleTask(task);
-			}, POLL_INTERVAL_MS);
-		} else if (task.exitFile) {
-			// Agent runners: response.md is only the latest assistant response.
-			// Completion is keyed to the real process-exit marker written by
-			// src/task-mode.ts so multi-turn child sessions are not marked done on
-			// their first agent_end.
-			this.armAgentStartupDeadline(task);
-			this.armResponseWatcher(task);
-		}
-	}
-
-	private armAgentStartupDeadline(task: InternalTask): void {
-		if (!task.markerFile || existsSync(task.markerFile)) {
-			task.startupDeadline = undefined;
-			return;
-		}
-		task.startupDeadline = task.startedAt + DEFAULT_AGENT_STARTUP_TIMEOUT_MS;
-	}
-
-	/**
-	 * Poll for the child agent's real exit marker. Pi has no cross-process event
-	 * bus we could subscribe to, so a 750ms file-poll is the simplest reliable
-	 * way to detect hand-off completion. The interval is cancelled once the
-	 * exit marker appears, on explicit stop, or on manager shutdown. Absence of
-	 * the exit marker is deliberately non-terminal after the child writes its
-	 * task-mode started marker: visible child agents may run for longer than a
-	 * fixed response-era timeout, and some panes are intentionally left open for
-	 * user takeover. Before that started marker appears, a bounded startup
-	 * timeout catches launcher/Pi crashes that happened before task-mode could
-	 * install the exit marker.
-	 */
-	private armResponseWatcher(task: InternalTask): void {
-		if (!task.exitFile) return;
-		if (task.responseTimer) clearInterval(task.responseTimer);
-		task.responseTimer = setInterval(() => {
-			if (task.finalized) {
-				if (task.responseTimer) clearInterval(task.responseTimer);
-				task.responseTimer = undefined;
-				return;
-			}
-			if (task.exitFile && existsSync(task.exitFile)) {
-				const exitCode = readExitCodeFromFile(readFileSync(task.exitFile, "utf8"));
-				this.finalizeTask(task, exitCode, "self-exit");
-				return;
-			}
-			if (task.markerFile && existsSync(task.markerFile)) {
-				task.startupDeadline = undefined;
-				const pid = readStartedMarkerPid(task.markerFile);
-				if (pid !== undefined && !isProcessAlive(pid)) {
-					appendLogLine(
-						task.logFile,
-						`[bg-task] agent process ${pid} is gone and no exit marker was written; marking task failed (likely SIGKILL/crash)\n`,
-					);
-					this.finalizeTask(task, null, "self-exit");
-					return;
-				}
-			} else if (task.startupDeadline && Date.now() > task.startupDeadline) {
-				appendLogLine(
-					task.logFile,
-					`[bg-task] startup timeout: task-mode started marker not written within ${Math.round(DEFAULT_AGENT_STARTUP_TIMEOUT_MS / 1000)}s; marking task failed before handoff became live\n`,
-				);
-				this.finalizeTask(task, null, "self-exit");
-			}
-		}, RESPONSE_POLL_INTERVAL_MS);
-		if (typeof task.responseTimer.unref === "function") {
-			task.responseTimer.unref();
-		}
+		task.pollTimer = setInterval(() => {
+			this.pollVisibleTask(task);
+		}, POLL_INTERVAL_MS);
 	}
 
 	private pollVisibleTask(task: InternalTask): void {
@@ -938,10 +682,6 @@ export class BackgroundTaskManager {
 			clearInterval(task.pollTimer);
 			task.pollTimer = undefined;
 		}
-		if (task.responseTimer) {
-			clearInterval(task.responseTimer);
-			task.responseTimer = undefined;
-		}
 		this.clearLogCap(task);
 		// Cap the log exactly once, now that the task is finalized and no external
 		// writer (the visible-shell `tee -a` pipeline / detached shell redirect) is
@@ -981,21 +721,6 @@ export class BackgroundTaskManager {
 					this.onTaskFinalized?.(toBackgroundTaskSnapshot(task));
 				} catch {
 					// Completion delivery is best-effort and must not break finalization.
-				}
-			}
-
-			// Active wake: inject a follow-up turn so the orchestrator agent reacts to
-			// the result (e.g. to continue chained background work). Opt-in only —
-			// notifyOnExit defaults to false — and never during startup recovery, where
-			// it would wake the agent for a task the user never started this session.
-			if (task.notifyOnExit && !this.recovering) {
-				const label = task.title ?? task.command;
-				const paneHint = task.pane ? ` (${task.pane.host} ${task.pane.paneId})` : "";
-				const message = buildBackgroundTaskWakeMessage(task.id, summarizeStatus(task), label, paneHint);
-				try {
-					this.pi.sendUserMessage(message, { deliverAs: "followUp" });
-				} catch {
-					this.pi.sendUserMessage(message);
 				}
 			}
 		}
@@ -1211,7 +936,6 @@ export class BackgroundTaskManager {
 		for (const [id, task] of this.tasks) {
 			if (task.status === "running") continue;
 			if (task.pollTimer) clearInterval(task.pollTimer);
-			if (task.responseTimer) clearInterval(task.responseTimer);
 			this.clearLogCap(task);
 			if (options.pruneWorktrees && task.worktree) {
 				const pruned = removeWorktreeSync({ path: task.worktree.path, repoRoot: task.worktree.repoRoot });
@@ -1227,33 +951,11 @@ export class BackgroundTaskManager {
 		return removed;
 	}
 
-	/**
-	 * For the sumocode runner, the harvest output lives in `response.md`, but
-	 * that file is harvestable only after the child writes its real process-exit
-	 * marker. For shell runners output lives in `output.log`. This wrapper
-	 * returns the right one per runner.
-	 *
-	 * `ready: false` means the harvest is pending AND the task is still
-	 * running. If the task has transitioned to a terminal state (stopped by
-	 * user, crashed/nonzero exit, etc.) without ever writing response.md,
-	 * callers should NOT poll forever — we return `ready: true` with empty
-	 * content and the terminal state surfaces via task.status.
-	 */
 	getTaskHarvest(task: BackgroundTask, maxChars = 50_000): {
-		kind: "response" | "log";
+		kind: "log";
 		content: string;
-		ready: boolean;
+		ready: true;
 	} {
-		if (task.runner === "sumocode" && task.responseFile) {
-			const content = existsSync(task.responseFile) ? readFileSync(task.responseFile, "utf8") : "";
-			return {
-				kind: "response",
-				content: content.length <= maxChars ? content : content.slice(-maxChars),
-				// response.md may be written before a child truly exits. Treat it as
-				// harvestable only after the real exit marker has finalized the task.
-				ready: task.status !== "running",
-			};
-		}
 		return { kind: "log", content: readLogTail(task.logFile, maxChars), ready: true };
 	}
 
@@ -1280,28 +982,7 @@ export class BackgroundTaskManager {
 				}
 			}
 			if (task.pollTimer) clearInterval(task.pollTimer);
-			if (task.responseTimer) clearInterval(task.responseTimer);
 			this.clearLogCap(task);
-		}
-	}
-}
-
-export function isInCmuxEnvironment(): boolean {
-	return detectTerminalHost() === "cmux";
-}
-
-/** Test helper — remove stale lock/log dirs between tests. */
-export function removePathIfExists(path: string): void {
-	if (!existsSync(path)) return;
-	try {
-		unlinkSync(path);
-	} catch {
-		try {
-			const fd = openSync(path, "r");
-			closeSync(fd);
-			unlinkSync(path);
-		} catch {
-			// ignore
 		}
 	}
 }

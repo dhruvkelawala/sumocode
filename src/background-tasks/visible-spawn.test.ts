@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-	buildVisibleAgentCommand,
 	buildVisibleTaskCommand,
 	buildVisibleTaskPaths,
 	buildVisibleTaskScript,
@@ -16,15 +15,9 @@ describe("visible-spawn", () => {
 		expect(paths.scriptFile).toBe("/tmp/test-bg/bg-1-1700000000000/run.sh");
 		expect(paths.metaFile).toBe("/tmp/test-bg/bg-1-1700000000000/meta.json");
 		expect(paths.markerFile).toBe("/tmp/test-bg/bg-1-1700000000000/started.marker");
-		expect(paths.promptFile).toBe("/tmp/test-bg/bg-1-1700000000000/prompt.txt");
-		expect(paths.responseFile).toBe("/tmp/test-bg/bg-1-1700000000000/response.md");
-		expect(paths.diagFile).toBe("/tmp/test-bg/bg-1-1700000000000/diag.jsonl");
 	});
 
-	it("buildVisibleTaskScript shell-escapes cwd in the cwd-missing echo (no command substitution)", () => {
-		// A cwd containing $(...) or backticks must NOT be evaluated at run.sh
-		// execution time. Without escaping, bash would expand the substitution
-		// in the diagnostic echo and could execute arbitrary code.
+	it("shell-escapes cwd in the cwd-missing diagnostic", () => {
 		const paths = buildVisibleTaskPaths("bg-x", 1, "/tmp/test-bg");
 		const script = buildVisibleTaskScript({
 			cwd: "/repo/$(rm -rf /)/and-quotes",
@@ -33,67 +26,33 @@ describe("visible-spawn", () => {
 			taskId: "bg-x",
 		});
 
-		// The dangerous substring must only appear inside single-quoted segments.
-		// shellEscape wraps both the cwd and the diagnostic echo in '...', so
-		// bash treats $(rm -rf /) as a literal.
 		expect(script).toContain("cd '/repo/$(rm -rf /)/and-quotes'");
 		expect(script).toContain("echo '[sumocode-bg] task=bg-x cwd-missing: /repo/$(rm -rf /)/and-quotes'");
-		// No DOUBLE-quoted occurrence (which would let bash expand the substitution).
 		expect(script).not.toContain('"$(rm');
 		expect(script).not.toMatch(/cwd-missing:[^']*\$\(rm[^']*"/);
 	});
 
-	it("buildVisibleTaskScript exports SUMOCODE_BG_CHILD to guard nested pi/sumocode invocations", () => {
+	it("exports SUMOCODE_BG_CHILD to guard nested Pi invocations", () => {
 		const paths = buildVisibleTaskPaths("bg-6", 999, "/tmp/test-bg");
-		const script = buildVisibleTaskScript({
-			cwd: "/repo",
-			command: "pnpm test",
-			paths,
-			taskId: "bg-6",
-		});
-
+		const script = buildVisibleTaskScript({ cwd: "/repo", command: "pnpm test", paths, taskId: "bg-6" });
 		expect(script).toContain("export SUMOCODE_BG_CHILD=1");
 	});
 
-	it("buildVisibleTaskCommand runs only the wrapper script to keep cmux panes readable", () => {
+	it("runs only the wrapper script to keep panes readable", () => {
 		const paths = buildVisibleTaskPaths("bg-2", 123, "/tmp/test-bg");
-		const cmd = buildVisibleTaskCommand({
+		const command = buildVisibleTaskCommand({
 			cwd: "/Volumes/SumoDeus NVMe/code/sumocode",
 			command: "pnpm test",
 			paths,
 			taskId: "bg-2",
 		});
 
-		// cmux respawn-pane does not run --command through a shell: argv[0] must
-		// be a real binary (`bash`), not the `exec` builtin. `-l` restores the
-		// user's PATH (cmux panes spawn with a minimal env).
-		expect(cmd).toBe("bash -l '/tmp/test-bg/bg-2-123/run.sh'");
-		expect(cmd).not.toContain("pnpm test");
-		expect(cmd).not.toContain("pipefail");
+		expect(command).toBe("bash -l '/tmp/test-bg/bg-2-123/run.sh'");
+		expect(command).not.toContain("pnpm test");
+		expect(command).not.toContain("pipefail");
 	});
 
-	it("buildVisibleTaskCommand wraps agent launches in bash -c for cmux direct spawn", () => {
-		const paths = buildVisibleTaskPaths("bg-8", 321, "/tmp/test-bg");
-		const cmd = buildVisibleTaskCommand({
-			cwd: "/repo with spaces",
-			command: "ignored prompt text",
-			paths,
-			taskId: "bg-8",
-			runner: "sumocode",
-			model: "openai-codex/gpt-5.5",
-			thinking: "low",
-		});
-
-		// The compound launch line (cd && env-prefix exec …) only works inside a
-		// shell; cmux spawns argv[0] directly, so the whole thing must be a
-		// single-quoted bash -c payload.
-		expect(cmd.startsWith("bash -lc '")).toBe(true);
-		expect(cmd).toContain("cd '\\''/repo with spaces'\\''");
-		expect(cmd).toContain("exec sumocode task");
-		expect(cmd.endsWith("'")).toBe(true);
-	});
-
-	it("buildVisibleTaskScript uses bash pipefail for shell tasks", () => {
+	it("uses bash pipefail for visible shell tasks", () => {
 		const paths = buildVisibleTaskPaths("bg-2", 123, "/tmp/test-bg");
 		const script = buildVisibleTaskScript({
 			cwd: "/Volumes/SumoDeus NVMe/code/sumocode",
@@ -108,88 +67,13 @@ describe("visible-spawn", () => {
 		expect(script).toContain("[sumocode-bg] task=bg-2 exit:$code");
 	});
 
-	it("buildVisibleAgentCommand routes sumocode through --prompt-file with response harvest env vars", () => {
-		const paths = buildVisibleTaskPaths("bg-4", 456, "/tmp/test-bg");
-		const cmd = buildVisibleAgentCommand({
-			cwd: "/repo with spaces",
-			runner: "sumocode",
-			paths,
-		});
-
-		expect(cmd).toBe(
-			"cd '/repo with spaces' && " +
-				"SUMOCODE_TASK_RESPONSE_FILE='/tmp/test-bg/bg-4-456/response.md' " +
-				"SUMOCODE_TASK_EXIT_FILE='/tmp/test-bg/bg-4-456/exit.code' " +
-				"SUMOCODE_TASK_STARTED_FILE='/tmp/test-bg/bg-4-456/started.marker' " +
-				"SUMOCODE_TASK_DIAG_FILE='/tmp/test-bg/bg-4-456/diag.jsonl' " +
-				"exec sumocode task --prompt-file '/tmp/test-bg/bg-4-456/prompt.txt'",
-		);
-		expect(cmd).not.toContain("run.sh");
-		expect(cmd).not.toContain("tee -a");
-	});
-
-	it("buildVisibleAgentCommand forwards model and thinking flags to sumocode", () => {
-		const paths = buildVisibleTaskPaths("bg-7", 789, "/tmp/test-bg");
-		const cmd = buildVisibleAgentCommand({
-			cwd: "/repo",
-			runner: "sumocode",
-			paths,
-			model: "openai/gpt-4o-mini",
-			thinking: "low",
-		});
-
-		expect(cmd).toContain("--model 'openai/gpt-4o-mini'");
-		expect(cmd).toContain("--thinking 'low'");
-		// Flags must precede --prompt-file so the wrapper forwards them to pi as
-		// options before the positional message.
-		const modelIdx = cmd.indexOf("--model");
-		const promptIdx = cmd.indexOf("--prompt-file");
-		expect(modelIdx).toBeLessThan(promptIdx);
-	});
-
-	it("buildVisibleAgentCommand rejects unsupported runners (e.g. bare 'pi') with a clear error", () => {
-		const paths = buildVisibleTaskPaths("bg-x", 1, "/tmp/test-bg");
-		expect(() =>
-			buildVisibleAgentCommand({
-				cwd: "/repo",
-				// @ts-expect-error — 'pi' was removed as a supported runner; this guards regressions.
-				runner: "pi",
-				paths,
-			}),
-		).toThrow(/sumocode/);
-	});
-
-	it("buildVisibleTaskScript rejects agent runners", () => {
-		const paths = buildVisibleTaskPaths("bg-5", 789, "/tmp/test-bg");
-		expect(() =>
-			buildVisibleTaskScript({
-				cwd: "/repo",
-				command: "Review the diff",
-				paths,
-				taskId: "bg-5",
-				runner: "sumocode",
-			}),
-		).toThrow(/launch directly/i);
-	});
-
-	it("readExitCodeFromFile parses numeric exit codes", () => {
+	it("parses numeric exit codes", () => {
 		expect(readExitCodeFromFile("0\n")).toBe(0);
 		expect(readExitCodeFromFile("127")).toBe(127);
 		expect(readExitCodeFromFile("nope")).toBeNull();
 	});
 
-	it("parseExitMarkerLine extracts task id and exit code", () => {
-		expect(parseExitMarkerLine("[sumocode-bg] task=bg-3 exit:1")).toEqual({
-			taskId: "bg-3",
-			exitCode: 1,
-		});
-	});
-
-	it("emits --tools only when a narrowed allowlist is provided", () => {
-		const paths = buildVisibleTaskPaths("bg-t", 1234, "/tmp/vt");
-		const base = { cwd: "/repo", runner: "sumocode" as const, paths };
-		expect(buildVisibleAgentCommand(base)).not.toContain("--tools");
-		expect(buildVisibleAgentCommand({ ...base, tools: ["read", "grep"] })).toContain("--tools 'read,grep'");
-		expect(buildVisibleAgentCommand({ ...base, tools: [] })).toContain("--no-tools");
+	it("extracts task ids and exit codes from wrapper markers", () => {
+		expect(parseExitMarkerLine("[sumocode-bg] task=bg-3 exit:1")).toEqual({ taskId: "bg-3", exitCode: 1 });
 	});
 });

@@ -48,7 +48,7 @@ import {
 	INPUT_FRAME_PLACEHOLDER,
 } from "./input-frame.js";
 export { normalizeRawMultilinePasteInput } from "./multiline-paste.js";
-import { normalizeRawMultilinePasteInput } from "./multiline-paste.js";
+import { countLegacyModifierEnterPresses, CSI_U_SHIFT_ENTER, normalizeRawMultilinePasteInput } from "./multiline-paste.js";
 
 const RESET = "\u001b[0m";
 const ANSI_PATTERN = /\u001b\[[0-9;]*m/g;
@@ -321,10 +321,47 @@ export class CathedralEditor extends CustomEditor {
 			return;
 		}
 
+		// Legacy modifier-Enter (shift+enter / alt+enter / ctrl+j without the
+		// kitty keyboard protocol) → deterministic newline. See
+		// countLegacyModifierEnterPresses for the transport matrix and the
+		// \x1b\r ambiguity decision. One press per handleInput call — pi-tui
+		// parses chunks as single keys.
+		const presses = countLegacyModifierEnterPresses(data);
+		if (presses > 0) {
+			for (let press = 0; press < presses; press += 1) super.handleInput(CSI_U_SHIFT_ENTER);
+			return;
+		}
+
 		const normalized = normalizeRawMultilinePasteInput(data);
 		if (/[^\x00-\x1f\x7f]/.test(normalized)) this.lastPrintableInputAt = now;
 		super.handleInput(normalized);
 		this.imageDraftState.pruneMissingTokens(this.getText());
+		this.maybeTriggerMidLineSlashMenu(data);
+	}
+
+	/**
+	 * pi-tui auto-triggers the slash menu only when "/" starts the message; a
+	 * "/" typed after whitespace MID-sentence never opens it. Its trigger-
+	 * character API explicitly rejects "/", so nudge the private trigger
+	 * directly (same precedent as the handlePaste shadow above). This only
+	 * OPENS the menu — serving mid-line command suggestions is the
+	 * autocomplete provider's job (see rpc/editor.ts); providers without
+	 * mid-line support return null and the nudge is a harmless no-op.
+	 * A "/" inside a token (e.g. "src/foo") does not trigger: the character
+	 * before it must be whitespace.
+	 */
+	private maybeTriggerMidLineSlashMenu(data: string): void {
+		if (data !== "/") return;
+		const internals = this as unknown as { autocompleteState: unknown; tryTriggerAutocomplete(explicitTab?: boolean): void };
+		if (internals.autocompleteState) return;
+		const { line, col } = this.getCursor();
+		const textBeforeCursor = (this.getText().split("\n")[line] ?? "").slice(0, col);
+		if (!textBeforeCursor.endsWith("/")) return;
+		const beforeSlash = textBeforeCursor.slice(0, -1);
+		if (beforeSlash.length === 0) return; // line start — pi-tui's own trigger owns it
+		const boundary = beforeSlash[beforeSlash.length - 1];
+		if (boundary !== " " && boundary !== "\t") return;
+		internals.tryTriggerAutocomplete();
 	}
 
 	override render(width: number): string[] {

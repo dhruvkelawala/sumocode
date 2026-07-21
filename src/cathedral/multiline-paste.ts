@@ -1,3 +1,32 @@
+/**
+ * pi-tui inserts a newline for shift+enter, which it only decodes reliably
+ * from the CSI-u form. Legacy transports (herdr panes, plain terminals — no
+ * kitty keyboard protocol) deliver modifier-Enter as `\x1b\r` (shift+enter
+ * AND alt+enter — byte-identical), `\x1b\n` (Ghostty shift+enter), or `\n`
+ * (ctrl+j, which pi-tui misparses as plain enter → submit). Rewriting these
+ * to the CSI-u shift+enter sequence makes newline insertion deterministic and
+ * kitty-flag-independent.
+ *
+ * The `\x1b\r` ambiguity is resolved in favor of NEWLINE: the follow-up
+ * queue (app.message.followUp, Alt+Enter) stays reachable on kitty-native
+ * transports where alt+enter arrives distinctly as `\x1b[13;3u`, and plain
+ * Enter already queues while the agent is busy, so legacy transports lose
+ * nothing they need.
+ */
+export const CSI_U_SHIFT_ENTER = "\x1b[13;2u";
+
+/**
+ * Returns how many newline presses `data` encodes, or 0 when it is not a
+ * pure legacy modifier-Enter chunk. Callers must feed the editor ONE
+ * CSI-u sequence per press — pi-tui parses input chunks as single keys, so
+ * a concatenated multi-press string would be dropped.
+ */
+export function countLegacyModifierEnterPresses(data: string): number {
+	if (data === "\n") return 1; // ctrl+j
+	if (/^(?:\x1b[\r\n])+$/.test(data)) return data.length / 2;
+	return 0;
+}
+
 export function normalizeRawMultilinePasteInput(data: string): string {
 	// Bracketed paste is handled correctly by Pi's editor and should pass through.
 	if (!data.includes("\r") || data.includes("\x1b[200~")) return data;

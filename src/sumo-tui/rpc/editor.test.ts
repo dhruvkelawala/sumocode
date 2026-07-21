@@ -246,6 +246,99 @@ describe("RPC editor controller", () => {
 		expect(controller.getText()).toBe("");
 	});
 
+	it("inserts a newline (never submits, never queues) for every legacy modifier-Enter encoding", async () => {
+		const submitted: string[] = [];
+		const controller = await createRpcHostEditorController({
+			controls: controlsFor(),
+			tui: fakeTui(),
+			theme: fakeEditorTheme(),
+			keybindings: fakeKeybindings(),
+			cwd: process.cwd(),
+			onSubmit: (text) => {
+				submitted.push(text);
+			},
+		});
+
+		// herdr/legacy transports: shift+enter AND alt+enter arrive as \x1b\r.
+		controller.setText("hello");
+		controller.handleInput("\x1b\r");
+		expect(controller.getText()).toBe("hello\n");
+
+		// Ghostty legacy shift+enter.
+		controller.setText("hello");
+		controller.handleInput("\x1b\n");
+		expect(controller.getText()).toBe("hello\n");
+
+		// Ctrl+J (pi-tui would misparse a raw \n as plain enter → submit).
+		controller.setText("hello");
+		controller.handleInput("\n");
+		expect(controller.getText()).toBe("hello\n");
+
+		// Batched double-press chunk.
+		controller.setText("hello");
+		controller.handleInput("\x1b\r\x1b\r");
+		expect(controller.getText()).toBe("hello\n\n");
+
+		expect(submitted).toEqual([]);
+	});
+
+	it("opens the slash menu mid-sentence and accepts without submitting", async () => {
+		const submitted: string[] = [];
+		const controller = await createRpcHostEditorController({
+			controls: controlsFor(),
+			tui: fakeTui(),
+			theme: fakeEditorTheme(),
+			keybindings: fakeKeybindings(),
+			cwd: process.cwd(),
+			onSubmit: (text) => {
+				submitted.push(text);
+			},
+		});
+
+		for (const char of "check ") controller.handleInput(char);
+		controller.handleInput("/");
+		for (const char of "mod") controller.handleInput(char);
+		await waitForRenderedText(controller, "model");
+		controller.handleInput("\x1b[13u");
+
+		// Accepting a MID-sentence command completes the token in place —
+		// pi-tui's line-start auto-submit must NOT fire.
+		expect(submitted).toEqual([]);
+		expect(controller.getText()).toContain("check /model");
+	});
+
+	it("never offers commands for a slash inside a path token", async () => {
+		const provider = createRpcAutocompleteProvider(buildRpcAutocompleteCommands());
+		const signal = new AbortController().signal;
+		// "src/" mid-token: base file completion may serve paths (fs-dependent),
+		// but the command branch must not fire — no command names in the items.
+		for (const [line, col] of [["see src/", 8], ["see src/mo", 10]] as const) {
+			const suggestions = await provider.getSuggestions([line], 0, col, { signal });
+			const values = suggestions?.items.map((item) => item.value) ?? [];
+			expect(values).not.toContain("model");
+		}
+		// A second "/" in the token cedes to file completion even after whitespace.
+		const absolutePath = await provider.getSuggestions(["see /tmp/"], 0, 9, { signal });
+		const values = absolutePath?.items.map((item) => item.value) ?? [];
+		expect(values).not.toContain("model");
+	});
+
+	it("serves mid-line slash completions with a slash-less prefix", async () => {
+		const provider = createRpcAutocompleteProvider(buildRpcAutocompleteCommands());
+		const signal = new AbortController().signal;
+		const suggestions = await provider.getSuggestions(["check /mod"], 0, 10, { signal });
+		expect(suggestions).not.toBeNull();
+		// Slash-less prefix: applyCompletion replaces just the token (keeping
+		// the typed "/") and Enter-accept cannot fall through to submit.
+		expect(suggestions?.prefix).toBe("mod");
+		expect(suggestions?.items.map((item) => item.value)).toContain("model");
+		// Line-start behavior is unchanged: super returns the slash-FUL prefix,
+		// which is precisely what re-enables pi-tui's accept-then-submit flow
+		// for whole-message commands.
+		const lineStart = await provider.getSuggestions(["/mod"], 0, 4, { signal });
+		expect(lineStart?.prefix).toBe("/mod");
+	});
+
 	it("coalesces text followed by CSI-u Enter into insertion plus submit", () => {
 		const submitted: string[] = [];
 		const controller = new RpcHostEditorController({

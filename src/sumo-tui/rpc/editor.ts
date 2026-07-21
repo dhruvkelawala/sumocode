@@ -120,11 +120,63 @@ export async function loadRpcAutocompleteCommands(controls: RpcEditorAutocomplet
 	return buildRpcAutocompleteCommands(await controls.getCommands(), { controls });
 }
 
+/**
+ * CombinedAutocompleteProvider only serves slash-command completions when the
+ * LINE starts with "/". This subclass also serves a "/token" typed after
+ * whitespace mid-sentence (CathedralEditor nudges the menu open for that
+ * case). The returned prefix deliberately EXCLUDES the leading slash:
+ * applyCompletion then replaces just the token (keeping the typed "/") via
+ * its generic branch, and Enter-accept does NOT fall through to submit —
+ * pi-tui only auto-submits for "/"-prefixed completion prefixes, which is
+ * correct at line start (the message IS the command) and wrong mid-sentence.
+ */
+class MidLineSlashAutocompleteProvider extends CombinedAutocompleteProvider {
+	public constructor(
+		private readonly slashCommands: readonly SlashCommand[],
+		cwd: string,
+		fdPath: string | null,
+	) {
+		super([...slashCommands], cwd, fdPath);
+	}
+
+	public override async getSuggestions(
+		lines: string[],
+		cursorLine: number,
+		cursorCol: number,
+		options: { signal: AbortSignal; force?: boolean },
+	): ReturnType<CombinedAutocompleteProvider["getSuggestions"]> {
+		// The mid-line COMMAND branch runs BEFORE super: the base provider's
+		// absolute-path file completion also matches " /token" (fs-dependent),
+		// which would nondeterministically shadow the command menu. Precedence
+		// is safe because this branch cedes to file completion whenever the
+		// token stops looking like a command: a second "/" (real paths like
+		// /tmp/x never match the regex) or zero fuzzy command matches both
+		// fall through to super.
+		const textBeforeCursor = (lines[cursorLine] ?? "").slice(0, cursorCol);
+		// Whitespace-anchored "/token"; a "/" inside a token ("src/foo") has a
+		// non-space character before it and never matches. Line-start "/…" has
+		// no leading whitespace and stays super's contract (auto-submit and
+		// argument completion included).
+		const match = /[ \t]\/([^\s/]*)$/.exec(textBeforeCursor);
+		if (match) {
+			const prefix = match[1] ?? "";
+			const items = this.slashCommands.map((command) => ({
+				value: command.name,
+				label: command.name,
+				...(command.description ? { description: command.description } : {}),
+			}));
+			const filtered = prefix.length === 0 ? items : fuzzyFilter(items, prefix, (item) => item.value);
+			if (filtered.length > 0) return { items: filtered, prefix };
+		}
+		return super.getSuggestions(lines, cursorLine, cursorCol, options);
+	}
+}
+
 export function createRpcAutocompleteProvider(
 	commands: readonly SlashCommand[],
 	options: RpcAutocompleteProviderOptions = {},
 ): CombinedAutocompleteProvider {
-	return new CombinedAutocompleteProvider([...commands], options.cwd ?? process.cwd(), options.fdPath ?? null);
+	return new MidLineSlashAutocompleteProvider([...commands], options.cwd ?? process.cwd(), options.fdPath ?? null);
 }
 
 export async function createRpcAutocompleteProviderFromControls(

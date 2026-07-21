@@ -156,8 +156,9 @@ class MidLineSlashAutocompleteProvider extends CombinedAutocompleteProvider {
 		// Whitespace-anchored "/token"; a "/" inside a token ("src/foo") has a
 		// non-space character before it and never matches. Line-start "/…" has
 		// no leading whitespace and stays super's contract (auto-submit and
-		// argument completion included).
-		const match = /[ \t]\/([^\s/]*)$/.exec(textBeforeCursor);
+		// argument completion included). An EXPLICIT Tab (force) is a file-
+		// completion request — never intercept it with the command menu.
+		const match = options.force ? null : /[ \t]\/([^\s/]*)$/.exec(textBeforeCursor);
 		if (match) {
 			const prefix = match[1] ?? "";
 			const items = this.slashCommands.map((command) => ({

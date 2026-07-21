@@ -323,6 +323,16 @@ describe("RPC editor controller", () => {
 		expect(values).not.toContain("model");
 	});
 
+	it("cedes to file completion on explicit Tab even for a command-shaped token", async () => {
+		const provider = createRpcAutocompleteProvider(buildRpcAutocompleteCommands());
+		const signal = new AbortController().signal;
+		// force: true = the user pressed Tab asking for FILE completion of the
+		// absolute path "/mod" — the command menu must not intercept.
+		const forced = await provider.getSuggestions(["see /mod"], 0, 8, { signal, force: true });
+		const values = forced?.items.map((item) => item.value) ?? [];
+		expect(values).not.toContain("model");
+	});
+
 	it("serves mid-line slash completions with a slash-less prefix", async () => {
 		const provider = createRpcAutocompleteProvider(buildRpcAutocompleteCommands());
 		const signal = new AbortController().signal;

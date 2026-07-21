@@ -3,6 +3,7 @@ export { CATHEDRAL_INDICATOR_FRAMES, CATHEDRAL_INDICATOR_INTERVAL_MS, CATHEDRAL_
 export { HERDR_THEME } from "./herdr.js";
 export { OBSIDIAN_INDICATOR_FRAMES, OBSIDIAN_INDICATOR_INTERVAL_MS, OBSIDIAN_THEME } from "./obsidian.js";
 export { ULTRAVIOLET_CORE_THEME } from "./ultraviolet-core.js";
+export { resolveThemeWorkingIndicator } from "./indicator.js";
 export {
 	activeThemeApplicationRoles,
 	activeThemeChrome,

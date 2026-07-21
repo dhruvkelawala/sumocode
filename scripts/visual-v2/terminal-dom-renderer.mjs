@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { chromium } from "playwright";
-import { bibleFontPath, bibleTokensCss, outDir } from "./paths.mjs";
+import { bibleFontPath, bibleTokensCss, outDir, runcatFontPath } from "./paths.mjs";
 import { writeFile } from "./fs-utils.mjs";
 
 export async function renderTerminalSnapshot(snapshot, outputPng, options = {}) {
@@ -53,6 +53,7 @@ export async function renderTerminalSnapshot(snapshot, outputPng, options = {}) 
 export function terminalSnapshotHtml(snapshot, options = {}) {
 	const tokens = readFileSync(bibleTokensCss, "utf8");
 	const fontUrl = pathToFileURL(bibleFontPath).href;
+	const runcatFontUrl = pathToFileURL(runcatFontPath).href;
 	const glyphBaselineShiftPx = Number(options.glyphBaselineShiftPx ?? 0);
 	const rows = snapshot.cells.map((row) => `<div class="row" style="background:${rowBackground(row)}">${renderRow(row)}</div>`).join("\n");
 	return `<!doctype html>
@@ -68,6 +69,17 @@ ${tokens}
   font-weight: 400;
   font-display: block;
   src: url('${fontUrl}') format('woff2');
+}
+@font-face {
+  font-family: 'RunCat';
+  font-style: normal;
+  font-weight: 400;
+  font-display: block;
+  src: url('${runcatFontUrl}') format('truetype');
+  unicode-range: U+E900-E904;
+}
+.term {
+  font-family: 'RunCat', 'JetBrains Mono', ui-monospace, Menlo, monospace;
 }
 html, body { min-height: 100%; }
 .stage { min-height: auto; align-items: flex-start; justify-content: flex-start; padding: 0; }

@@ -34,11 +34,15 @@ landed between the original scaffold and this release.
   config). Review notes in `docs/visual/parity/HERDR_THEME_REVIEW.md`; no
   runtime goldens promoted.
 - **Ultraviolet visual evidence** — deterministic Bible targets for active,
-  tool-ledger, and code-block states via
+  tool-ledger, code-block, and RunCat-active states via
   `scripts/gen-bible-theme-ultraviolet-core.mjs`, design contract under
-  `docs/ui/stitch/ultraviolet-core/DESIGN.md`, themed fixture scenarios, and an
-  isolated `ultraviolet-core-active-runtime` review scenario driven by
-  `test/fixtures/pi-agent-ultraviolet-core`. No runtime goldens promoted.
+  `docs/ui/stitch/ultraviolet-core/DESIGN.md`, themed fixture scenarios, and
+  isolated `ultraviolet-core-active-runtime` / `ultraviolet-core-runcat-active-runtime`
+  review scenarios driven by committed fixtures. No runtime goldens promoted.
+- **Ultraviolet RunCat indicator** — optional Fredy Sandoval 0BSD RunCat glyphs
+  for `U+E900–U+E904`, gated by `SUMOCODE_RUNCAT_FONT=1`, with the safe
+  orbital fallback as default, `/sumo:spinner` inspection, vendored font
+  provenance, and `pnpm runcat:install` / `pnpm runcat:check` setup helpers.
 
 ### Changed
 - **Theme-aware terminal background/cursor** — the host terminal's OSC 11

@@ -24,6 +24,7 @@ import {
 	CATHEDRAL_INDICATOR_INTERVAL_MS as THEME_CATHEDRAL_INDICATOR_INTERVAL_MS,
 	getActiveTheme,
 	onThemeChanged,
+	resolveThemeWorkingIndicator,
 } from "./themes/index.js";
 
 export const CATHEDRAL_INDICATOR_FRAMES = THEME_CATHEDRAL_INDICATOR_FRAMES;
@@ -72,9 +73,10 @@ export function buildCathedralIndicatorFrames(hex: string = getActiveTheme().tok
 	return CATHEDRAL_INDICATOR_FRAMES.map((_, i) => renderIndicator(i, CATHEDRAL_INDICATOR_FRAMES, hex));
 }
 
-export function buildActiveThemeIndicatorFrames(): string[] {
+export function buildActiveThemeIndicatorFrames(env: NodeJS.ProcessEnv = process.env): string[] {
 	const theme = getActiveTheme();
-	return theme.workingIndicator.frames.map((_, i) => renderIndicator(i, theme.workingIndicator.frames, theme.tokens.colors.accent));
+	const indicator = resolveThemeWorkingIndicator(theme, env);
+	return indicator.frames.map((_, i) => renderIndicator(i, indicator.frames, theme.tokens.colors.accent));
 }
 
 /**
@@ -113,6 +115,7 @@ export function formatSpinnerInspection(
 	return lines.join("\n");
 }
 
+
 function dimAnsi(hex: string): string {
 	const normalized = hex.replace("#", "");
 	const red = Number.parseInt(normalized.slice(0, 2), 16);
@@ -132,7 +135,10 @@ export class WorkingIndicatorComponent implements Component {
 	private interval: ReturnType<typeof setInterval> | undefined;
 	private themeUnsubscribe: (() => void) | undefined;
 
-	public constructor(private readonly tui: Pick<TUI, "requestRender">) {
+	public constructor(
+		private readonly tui: Pick<TUI, "requestRender">,
+		private readonly env: NodeJS.ProcessEnv = process.env,
+	) {
 		this.themeUnsubscribe = onThemeChanged(() => {
 			// Cycle keeps timing/animation continuous; just nudge a re-render.
 			this.tui.requestRender();
@@ -145,7 +151,8 @@ export class WorkingIndicatorComponent implements Component {
 	public render(_width: number): string[] {
 		if (!this.busy) return [""];
 		const theme = getActiveTheme();
-		const frame = renderIndicator(this.tick, theme.workingIndicator.frames, theme.tokens.colors.accent);
+		const indicator = resolveThemeWorkingIndicator(theme, this.env);
+		const frame = renderIndicator(this.tick, indicator.frames, theme.tokens.colors.accent);
 		const label = `${dimAnsi(theme.tokens.colors.foregroundDim)}Working…${RESET}`;
 		return [` ${frame} ${label}`];
 	}
@@ -178,7 +185,7 @@ export class WorkingIndicatorComponent implements Component {
 
 	private startTimer(): void {
 		this.clearTimer();
-		const intervalMs = getActiveTheme().workingIndicator.intervalMs;
+		const intervalMs = resolveThemeWorkingIndicator(getActiveTheme(), this.env).intervalMs;
 		this.interval = setInterval(() => {
 			this.tick += 1;
 			this.tui.requestRender();
@@ -241,9 +248,10 @@ export function installWorkingIndicator(pi: ExtensionAPI): void {
 		// when the SumoCode theme changes mid-session.
 		const applyClassicIndicator = (): void => {
 			const theme = getActiveTheme();
+			const indicator = resolveThemeWorkingIndicator(theme);
 			ctx.ui.setWorkingIndicator({
 				frames: buildActiveThemeIndicatorFrames(),
-				intervalMs: theme.workingIndicator.intervalMs,
+				intervalMs: indicator.intervalMs,
 			});
 		};
 		applyClassicIndicator();

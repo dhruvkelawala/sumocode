@@ -1,9 +1,12 @@
+import { visibleWidth } from "@earendil-works/pi-tui";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resetThemeRegistryForTests, setActiveTheme } from "./themes/index.js";
+import { ULTRAVIOLET_CORE_INDICATOR_INTERVAL_MS, ULTRAVIOLET_RUNCAT_FRAMES, ULTRAVIOLET_RUNCAT_INTERVAL_MS } from "./themes/ultraviolet-core.js";
 import { CATHEDRAL_TOKENS } from "./tokens.js";
 import {
 	CATHEDRAL_INDICATOR_FRAMES,
 	CATHEDRAL_INDICATOR_INTERVAL_MS,
+	buildActiveThemeIndicatorFrames,
 	formatSpinnerInspection,
 	indicatorFrameAt,
 	isRetainedMode,
@@ -14,6 +17,10 @@ import {
 
 const ANSI_PATTERN = /\u001b\[[0-9;]*m/g;
 const stripAnsi = (s: string): string => s.replace(ANSI_PATTERN, "");
+
+afterEach(() => {
+	resetThemeRegistryForTests();
+});
 
 describe("indicatorFrameAt", () => {
 	it("returns the frame at the given tick when in range", () => {
@@ -98,6 +105,21 @@ describe("shouldInstallWorkingIndicator", () => {
 	});
 });
 
+describe("buildActiveThemeIndicatorFrames", () => {
+	it("resolves Ultraviolet RunCat only when the capability is enabled", () => {
+		setActiveTheme("ultraviolet-core");
+
+		expect(stripAnsi(buildActiveThemeIndicatorFrames({ SUMOCODE_RUNCAT_FONT: "1" })[0]!)).toBe(ULTRAVIOLET_RUNCAT_FRAMES[0]);
+		expect(stripAnsi(buildActiveThemeIndicatorFrames({ SUMOCODE_RUNCAT_FONT: "0" })[0]!)).toBe(".");
+	});
+
+	it("keeps Cathedral byte-compatible when the RunCat env is enabled", () => {
+		setActiveTheme("cathedral");
+
+		expect(buildActiveThemeIndicatorFrames({ SUMOCODE_RUNCAT_FONT: "1" })).toEqual(buildActiveThemeIndicatorFrames({}));
+	});
+});
+
 describe("WorkingIndicatorComponent", () => {
 	afterEach(() => resetThemeRegistryForTests());
 
@@ -162,6 +184,81 @@ describe("WorkingIndicatorComponent", () => {
 		tui.requestRender.mockClear();
 		setActiveTheme("obsidian");
 		expect(tui.requestRender).toHaveBeenCalled();
+
+		component.dispose();
+		vi.useRealTimers();
+	});
+
+	it("renders Ultraviolet RunCat frames with the enhanced cadence when enabled", () => {
+		vi.useFakeTimers();
+		setActiveTheme("ultraviolet-core");
+		const tui = { requestRender: vi.fn() };
+		const component = new WorkingIndicatorComponent(tui, { SUMOCODE_RUNCAT_FONT: "1" });
+
+		component.start();
+		let line = component.render(160)[0]!;
+		expect(line).toContain(ULTRAVIOLET_RUNCAT_FRAMES[0]);
+		expect(line).toContain("\u001b[38;2;185;116;255m");
+		expect(stripAnsi(line)).toBe(` ${ULTRAVIOLET_RUNCAT_FRAMES[0]} Working…`);
+		expect(visibleWidth(stripAnsi(line))).toBe(11);
+
+		tui.requestRender.mockClear();
+		vi.advanceTimersByTime(ULTRAVIOLET_RUNCAT_INTERVAL_MS - 1);
+		expect(tui.requestRender).not.toHaveBeenCalled();
+		vi.advanceTimersByTime(1);
+		expect(tui.requestRender).toHaveBeenCalledTimes(1);
+		line = component.render(160)[0]!;
+		expect(line).toContain(ULTRAVIOLET_RUNCAT_FRAMES[1]);
+
+		component.dispose();
+		vi.useRealTimers();
+	});
+
+	it("falls Ultraviolet back to the orbital cadence when the capability is disabled", () => {
+		vi.useFakeTimers();
+		setActiveTheme("ultraviolet-core");
+		const tui = { requestRender: vi.fn() };
+		const component = new WorkingIndicatorComponent(tui, { SUMOCODE_RUNCAT_FONT: "0" });
+
+		component.start();
+		expect(stripAnsi(component.render(160)[0]!)).toBe(" . Working…");
+		tui.requestRender.mockClear();
+		vi.advanceTimersByTime(ULTRAVIOLET_CORE_INDICATOR_INTERVAL_MS);
+		expect(tui.requestRender).toHaveBeenCalledTimes(1);
+
+		component.dispose();
+		vi.useRealTimers();
+	});
+
+	it("restarts the active timer with each theme's cadence when switching away from and back to RunCat", () => {
+		vi.useFakeTimers();
+		setActiveTheme("ultraviolet-core");
+		const tui = { requestRender: vi.fn() };
+		const component = new WorkingIndicatorComponent(tui, { SUMOCODE_RUNCAT_FONT: "1" });
+
+		component.start();
+		expect(stripAnsi(component.render(160)[0]!)).toContain(ULTRAVIOLET_RUNCAT_FRAMES[0]);
+		tui.requestRender.mockClear();
+		vi.advanceTimersByTime(ULTRAVIOLET_RUNCAT_INTERVAL_MS - 1);
+		expect(tui.requestRender).not.toHaveBeenCalled();
+		vi.advanceTimersByTime(1);
+		expect(tui.requestRender).toHaveBeenCalledTimes(1);
+
+		setActiveTheme("cathedral");
+		expect(stripAnsi(component.render(160)[0]!)).toContain(CATHEDRAL_INDICATOR_FRAMES[1]);
+		tui.requestRender.mockClear();
+		vi.advanceTimersByTime(CATHEDRAL_INDICATOR_INTERVAL_MS - 1);
+		expect(tui.requestRender).not.toHaveBeenCalled();
+		vi.advanceTimersByTime(1);
+		expect(tui.requestRender).toHaveBeenCalledTimes(1);
+
+		setActiveTheme("ultraviolet-core");
+		expect(stripAnsi(component.render(160)[0]!)).toContain(ULTRAVIOLET_RUNCAT_FRAMES[2]);
+		tui.requestRender.mockClear();
+		vi.advanceTimersByTime(ULTRAVIOLET_RUNCAT_INTERVAL_MS - 1);
+		expect(tui.requestRender).not.toHaveBeenCalled();
+		vi.advanceTimersByTime(1);
+		expect(tui.requestRender).toHaveBeenCalledTimes(1);
 
 		component.dispose();
 		vi.useRealTimers();

@@ -21,7 +21,7 @@ import { getCachedMcpRoster } from "../../mcp-config-reader.js";
 import { SIDEBAR_MIN_TERMINAL_WIDTH, sidebarOverlayTargetRows } from "../../sidebar-placement.js";
 import { PLACEHOLDER_MCP, createSidebarPublication, type SidebarSnapshot } from "../../sidebar.js";
 import { createTopChromePublication, type TopChromeSnapshot } from "../../top-chrome.js";
-import { activeThemeChrome, activeThemeColors, getActiveTheme, onThemeChanged, type SumoCodeState } from "../../themes/index.js";
+import { activeThemeChrome, activeThemeColors, getActiveTheme, onThemeChanged, resolveThemeWorkingIndicator, type SumoCodeState } from "../../themes/index.js";
 import { renderIndicator, shouldInstallWorkingIndicator } from "../../working-indicator.js";
 import { createSplashTree, defaultSplashSnapshot, type SplashTree } from "../cathedral/splash-tree.js";
 import { loadYoga, type Yoga } from "../layout/yoga.js";
@@ -420,7 +420,8 @@ export class RpcShellAdapter {
 		// visibly freeze during "thinking".
 		if (sumoState(this.state) === "idle" || !shouldInstallWorkingIndicator(width)) return [""];
 		const theme = getActiveTheme();
-		const frame = renderIndicator(this.workingIndicatorTick, theme.workingIndicator.frames, theme.tokens.colors.accent);
+		const indicator = resolveThemeWorkingIndicator(theme);
+		const frame = renderIndicator(this.workingIndicatorTick, indicator.frames, theme.tokens.colors.accent);
 		const label = colorHex("Working…", activeThemeColors().foregroundDim);
 		const line = ` ${frame} ${label}`;
 		return width > 0 ? [truncateToWidth(line, width)] : [line];
@@ -485,7 +486,7 @@ export class RpcShellAdapter {
 
 	private startWorkingIndicatorTimer(): void {
 		this.clearWorkingIndicatorTimer();
-		const intervalMs = getActiveTheme().workingIndicator.intervalMs;
+		const intervalMs = resolveThemeWorkingIndicator(getActiveTheme()).intervalMs;
 		this.workingIndicatorTimer = setInterval(() => {
 			this.workingIndicatorTick += 1;
 			(this.requestIndicatorRepaint ?? this.requestRender)?.();

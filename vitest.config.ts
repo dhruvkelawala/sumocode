@@ -4,6 +4,6 @@ const includeIntegration = process.argv.some((argument) => argument.includes("te
 
 export default defineConfig({
 	test: {
-		include: includeIntegration ? ["src/**/*.test.ts", "test/integration/**/*.test.ts"] : ["src/**/*.test.ts"],
+		include: includeIntegration ? ["src/**/*.test.ts", "scripts/**/*.test.mjs", "test/integration/**/*.test.ts"] : ["src/**/*.test.ts", "scripts/**/*.test.mjs"],
 	},
 });

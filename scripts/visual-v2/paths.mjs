@@ -10,3 +10,4 @@ export const approvedRuntimeDir = resolve(parityDir, "approved-runtime");
 export const outDir = resolve(repoRoot, "docs", "visual", "out", "parity");
 export const bibleTokensCss = resolve(bibleDir, "_assets", "tokens.css");
 export const bibleFontPath = resolve(bibleDir, "_assets", "fonts", "jetbrains-mono-nerd.woff2");
+export const runcatFontPath = resolve(repoRoot, "assets", "fonts", "runcat.ttf");

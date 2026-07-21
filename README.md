@@ -23,7 +23,7 @@ SumoCode is a [Pi](https://github.com/earendil-works/pi) extension. Pi provides 
 
 The renderer is **SumoTUI** — a Node-native retained renderer in [`src/sumo-tui/`](./src/sumo-tui/) — built around a Yoga flex layout tree, a cell compositor with frame diff, a modal layer, and a headless test backend. SumoTUI replaces Pi's line-concatenation `Container` for surfaces that require flex layout, in-app scroll, modal overlays, mouse routing, and signal-clean cleanup.
 
-Five themes ship: Cathedral (default), Amber CRT, Obsidian Temple, Herdr Terminal, and Ultraviolet Core. Cycle with `Ctrl+Shift+T` (cathedral → amber-crt → obsidian → herdr → ultraviolet-core); choice persists across machines.
+Five themes ship: Cathedral (default), Amber CRT, Obsidian Temple, Herdr Terminal, and Ultraviolet Core. Cycle with `Ctrl+Shift+T` (cathedral → amber-crt → obsidian → herdr → ultraviolet-core); choice persists across machines. Ultraviolet Core also has an optional RunCat working indicator, gated by an explicit font/env setup so the safe orbital fallback remains the default.
 
 ## Theme tour
 
@@ -46,7 +46,7 @@ Five themes ship: Cathedral (default), Amber CRT, Obsidian Temple, Herdr Termina
 <br><br><strong>Herdr Terminal</strong>
 <br><sub>Electric-green operator terminal, phosphor-green focus, amber execution, red approval, ASCII packet indicator.</sub>
 <br><br><strong>Ultraviolet Core</strong>
-<br><sub>Deep violet-black command layer, violet focus, lavender body, ice syntax, amber-tinted tool ledgers.</sub>
+<br><sub>Deep violet-black command layer, violet focus, lavender body, ice syntax, amber-tinted tool ledgers, optional RunCat working indicator.</sub>
 </td>
 </tr>
 </table>
@@ -61,8 +61,26 @@ Five themes ship: Cathedral (default), Amber CRT, Obsidian Temple, Herdr Termina
 | **`/sumo:reload`** | Hot-reload via launcher loop and exit code 100. Strips `--resume`, replaces with `--continue`. Resumes the in-flight session. |
 | **`/fast`** | Session-local OpenAI/Codex fast-mode toggle. Wraps Pi's native `openai-responses` and `openai-codex-responses` streamers and passes `serviceTier: "priority"` through provider options instead of patching raw payloads. |
 | **Sidebar** | Three sections at width ≥ 120: context (token meter, session cost), MCP (server roster), memory (persisted bullets). Hidden in portrait orientation per [`SUMO_TUI_PORTRAIT_SIDEBAR_POLICY.md`](./docs/SUMO_TUI_PORTRAIT_SIDEBAR_POLICY.md). |
-| **Theme system** | Five first-party themes plus a chrome/application-role contract: each theme defines glyph chrome (`frame`, `sectionGlyphs`, `bullet`, `ruleChar`, `tabActive` / `tabInactive`), an 8-frame working indicator where applicable, and optional tool-ledger/code roles for dense application surfaces. |
+| **Theme system** | Five first-party themes plus a chrome/application-role contract: each theme defines glyph chrome (`frame`, `sectionGlyphs`, `bullet`, `ruleChar`, `tabActive` / `tabInactive`), a working indicator, and optional tool-ledger/code roles for dense application surfaces. Ultraviolet can opt into RunCat with `SUMOCODE_RUNCAT_FONT=1`. |
 | **Diagnostics flight recorder** | `SUMO_TUI_DIAG_FILE=/path/file.jsonl` enables a 19-event-type structured trace covering runtime lifecycle, terminal state, upstream Pi events, owned-shell transitions, and module-load provenance. |
+
+## Optional Ultraviolet RunCat
+
+Ultraviolet Core defaults to its ASCII orbital pulse. To enable Fredy Sandoval's 0BSD RunCat glyphs for `U+E900–U+E904`, install and verify the vendored font, then map only those private-use codepoints in Ghostty/cmux:
+
+```bash
+pnpm runcat:install
+pnpm runcat:check
+```
+
+Add these two lines to your Ghostty config, restart Ghostty/Herdr/SumoCode, then run `/sumo:spinner`:
+
+```text
+font-codepoint-map = U+E900-U+E904=icomoon
+env = SUMOCODE_RUNCAT_FONT=1
+```
+
+Rollback is immediate: set `env = SUMOCODE_RUNCAT_FONT=0` and restart. `runcat:check` verifies the local font file/hash only; terminals do not report whether the live PUA map is correct. The font is Fredy Sandoval's 0BSD `pi-runcat` asset pinned at `44a35444464755d8a2ade22ab8a7211cd1069c45`.
 
 ## In action
 

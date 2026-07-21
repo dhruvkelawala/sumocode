@@ -1,6 +1,9 @@
+import { visibleWidth } from "@earendil-works/pi-tui";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CellBuffer } from "../render/buffer.js";
 import type { MouseEvent } from "../input/mouse.js";
+import { resetThemeRegistryForTests, setActiveTheme } from "../../themes/index.js";
+import { ULTRAVIOLET_CORE_INDICATOR_INTERVAL_MS, ULTRAVIOLET_RUNCAT_FRAMES, ULTRAVIOLET_RUNCAT_INTERVAL_MS } from "../../themes/ultraviolet-core.js";
 import { ChatPager } from "../widgets/chat-pager.js";
 import { InlineSelectorHost } from "./inline-selector.js";
 import { RpcShellAdapter } from "./shell-adapter.js";
@@ -434,6 +437,8 @@ describe("RpcShellAdapter mouse drag-select + OSC52 copy", () => {
 });
 
 describe("RpcShellAdapter above-editor working indicator (D3 parity)", () => {
+	afterEach(() => resetThemeRegistryForTests());
+
 	// D3: the RPC child process's Pi extension runs `installRpcChildProfile`
 	// (src/extension.ts), which deliberately never calls
 	// `installWorkingIndicator` -- RPC-child extensions own no chrome, the
@@ -535,6 +540,83 @@ describe("RpcShellAdapter above-editor working indicator (D3 parity)", () => {
 		}
 	});
 
+	it("renders Ultraviolet RunCat as a one-cell violet frame when capability is enabled", async () => {
+		const original = process.env.SUMOCODE_RUNCAT_FONT;
+		process.env.SUMOCODE_RUNCAT_FONT = "1";
+		setActiveTheme("ultraviolet-core");
+		const adapter = await RpcShellAdapter.create({
+			terminal: { writeFramePatches: () => undefined },
+			viewport: { columns: 160, rows: 45 },
+			initialState: state({ messageCount: 1, hasMessages: true, isStreaming: true }),
+			initialTranscript: { messages: [] },
+		});
+		try {
+			const line = adapter.renderWorkingIndicator(160).join("");
+			expect(line).toContain(ULTRAVIOLET_RUNCAT_FRAMES[0]);
+			expect(line).toContain("Working…");
+			adapter.render();
+			const frame = adapter.getLastFrame();
+			expect(frame).toBeDefined();
+			const working = findText(frame!, "Working…");
+			const catCol = working.col - 2;
+			expect(frame!.getCell(working.row, catCol).char).toBe(ULTRAVIOLET_RUNCAT_FRAMES[0]);
+			expect(visibleWidth(frame!.getCell(working.row, catCol).char)).toBe(1);
+			expect(frame!.getCell(working.row, catCol).fg?.toLowerCase()).toBe("#b974ff");
+		} finally {
+			adapter.dispose();
+			if (original === undefined) delete process.env.SUMOCODE_RUNCAT_FONT;
+			else process.env.SUMOCODE_RUNCAT_FONT = original;
+		}
+	});
+
+	it("keeps non-Ultraviolet RPC output on its own indicator with RunCat env enabled", async () => {
+		const original = process.env.SUMOCODE_RUNCAT_FONT;
+		process.env.SUMOCODE_RUNCAT_FONT = "1";
+		setActiveTheme("cathedral");
+		const adapter = await RpcShellAdapter.create({
+			terminal: { writeFramePatches: () => undefined },
+			viewport: { columns: 160, rows: 45 },
+			initialState: state({ messageCount: 1, hasMessages: true, isStreaming: true }),
+			initialTranscript: { messages: [] },
+		});
+		try {
+			const line = adapter.renderWorkingIndicator(160).join("");
+			expect(line).toContain("◌");
+			expect(line).not.toContain(ULTRAVIOLET_RUNCAT_FRAMES[0]);
+		} finally {
+			adapter.dispose();
+			if (original === undefined) delete process.env.SUMOCODE_RUNCAT_FONT;
+			else process.env.SUMOCODE_RUNCAT_FONT = original;
+		}
+	});
+
+	it("uses the enhanced cadence for the RunCat timer", async () => {
+		vi.useFakeTimers();
+		const original = process.env.SUMOCODE_RUNCAT_FONT;
+		process.env.SUMOCODE_RUNCAT_FONT = "1";
+		setActiveTheme("ultraviolet-core");
+		const requestRender = vi.fn();
+		const adapter = await RpcShellAdapter.create({
+			terminal: { writeFramePatches: () => undefined },
+			viewport: { columns: 160, rows: 45 },
+			initialState: state({ messageCount: 1, hasMessages: true, isStreaming: true }),
+			initialTranscript: { messages: [] },
+			requestRender,
+		});
+		try {
+			requestRender.mockClear();
+			vi.advanceTimersByTime(ULTRAVIOLET_RUNCAT_INTERVAL_MS - 1);
+			expect(requestRender).not.toHaveBeenCalled();
+			vi.advanceTimersByTime(1);
+			expect(requestRender).toHaveBeenCalledTimes(1);
+		} finally {
+			adapter.dispose();
+			vi.useRealTimers();
+			if (original === undefined) delete process.env.SUMOCODE_RUNCAT_FONT;
+			else process.env.SUMOCODE_RUNCAT_FONT = original;
+		}
+	});
+
 	it("renders nothing above the editor while idle", async () => {
 		const adapter = await RpcShellAdapter.create({
 			terminal: { writeFramePatches: () => undefined },
@@ -587,6 +669,8 @@ describe("RpcShellAdapter above-editor working indicator (D3 parity)", () => {
 
 		afterEach(() => {
 			vi.useRealTimers();
+			delete process.env.SUMOCODE_RUNCAT_FONT;
+			resetThemeRegistryForTests();
 		});
 
 		it("advances the frame on a wall-clock cadence even with zero render calls in between (the 'thinking' freeze case)", async () => {
@@ -620,6 +704,68 @@ describe("RpcShellAdapter above-editor working indicator (D3 parity)", () => {
 				// of streaming deltas) must all read the same frame.
 				const framesWithinOneTick = Array.from({ length: 50 }, () => adapter.renderWorkingIndicator(160).join(""));
 				expect(new Set(framesWithinOneTick).size).toBe(1);
+			} finally {
+				adapter.dispose();
+			}
+		});
+
+		it("uses RunCat frames and cadence for Ultraviolet when the capability is enabled", async () => {
+			setActiveTheme("ultraviolet-core");
+			process.env.SUMOCODE_RUNCAT_FONT = "1";
+			const requestIndicatorRepaint = vi.fn();
+			const adapter = await RpcShellAdapter.create({
+				terminal: { writeFramePatches: () => undefined },
+				viewport: { columns: 160, rows: 45 },
+				initialState: state({ messageCount: 1, hasMessages: true, isStreaming: true }),
+				initialTranscript: { messages: [] },
+				requestIndicatorRepaint,
+			});
+			try {
+				const first = adapter.renderWorkingIndicator(160).join("");
+				expect(first).toContain(ULTRAVIOLET_RUNCAT_FRAMES[0]);
+				vi.advanceTimersByTime(ULTRAVIOLET_RUNCAT_INTERVAL_MS - 1);
+				expect(requestIndicatorRepaint).not.toHaveBeenCalled();
+				vi.advanceTimersByTime(1);
+				expect(requestIndicatorRepaint).toHaveBeenCalledTimes(1);
+				expect(adapter.renderWorkingIndicator(160).join("")).toContain(ULTRAVIOLET_RUNCAT_FRAMES[1]);
+			} finally {
+				adapter.dispose();
+			}
+		});
+
+		it("keeps Ultraviolet on the orbital fallback when the capability is disabled", async () => {
+			setActiveTheme("ultraviolet-core");
+			process.env.SUMOCODE_RUNCAT_FONT = "0";
+			const requestIndicatorRepaint = vi.fn();
+			const adapter = await RpcShellAdapter.create({
+				terminal: { writeFramePatches: () => undefined },
+				viewport: { columns: 160, rows: 45 },
+				initialState: state({ messageCount: 1, hasMessages: true, isStreaming: true }),
+				initialTranscript: { messages: [] },
+				requestIndicatorRepaint,
+			});
+			try {
+				expect(adapter.renderWorkingIndicator(160).join("")).toContain(".");
+				vi.advanceTimersByTime(ULTRAVIOLET_CORE_INDICATOR_INTERVAL_MS);
+				expect(requestIndicatorRepaint).toHaveBeenCalledTimes(1);
+			} finally {
+				adapter.dispose();
+			}
+		});
+
+		it("does not leak the RunCat capability into Cathedral", async () => {
+			setActiveTheme("cathedral");
+			process.env.SUMOCODE_RUNCAT_FONT = "1";
+			const adapter = await RpcShellAdapter.create({
+				terminal: { writeFramePatches: () => undefined },
+				viewport: { columns: 160, rows: 45 },
+				initialState: state({ messageCount: 1, hasMessages: true, isStreaming: true }),
+				initialTranscript: { messages: [] },
+			});
+			try {
+				const row = adapter.renderWorkingIndicator(160).join("");
+				expect(row).toContain("◌");
+				expect(row).not.toContain(ULTRAVIOLET_RUNCAT_FRAMES[0]);
 			} finally {
 				adapter.dispose();
 			}

@@ -89,9 +89,9 @@ describe("/sumo:review", () => {
 			expect(prompt).toContain("git diff main...HEAD");
 		});
 
-		it("is direct reviewer guidance for a tracked background task", () => {
+		it("is direct reviewer guidance for a tracked subagent", () => {
 			const prompt = buildReviewPrompt("", "deepseek/deepseek-v4-pro");
-			expect(prompt).toContain("tracked SumoCode background task with model deepseek/deepseek-v4-pro");
+			expect(prompt).toContain("tracked SumoCode subagent with model deepseek/deepseek-v4-pro");
 			expect(prompt).toContain("Review only");
 			expect(prompt).not.toContain("Main-agent protocol");
 			expect(prompt).not.toContain("Use task type");
@@ -156,78 +156,121 @@ describe("/sumo:review", () => {
 	});
 
 	describe("registerReviewCommand", () => {
-		function setup(taskSpawner = { spawnTask: vi.fn(() => ({ id: "bg-42", pane: { host: "cmux" as const, paneId: "surface:2", workspaceId: "workspace:1" } })) }) {
+		const snapshot = (overrides: Record<string, unknown> = {}) => ({
+			id: "sa-42",
+			title: "review: branch diff",
+			prompt: "review",
+			cwd: "/tmp/sumo-fixture",
+			baseRef: "HEAD",
+			visible: true,
+			pane: { agentName: "review", paneId: "pane:2", workspaceId: "workspace:1" },
+			status: "running",
+			createdAt: 1,
+			usage: { turns: 0 },
+			transcript: [],
+			liveText: "",
+			liveTools: [],
+			finalText: "",
+			...overrides,
+		});
+
+		function setup(subagentSpawner = { spawn: vi.fn().mockResolvedValue(snapshot()) }) {
 			let handler: ((args: string, ctx: { hasUI: boolean; cwd: string; ui: { notify: ReturnType<typeof vi.fn> } }) => Promise<void>) | undefined;
 			const sendUserMessage = vi.fn();
 			const registerCommand = vi.fn((_name: string, options: { handler: typeof handler }) => {
 				handler = options.handler;
 			});
 			const notify = vi.fn();
-			registerReviewCommand({ registerCommand, sendUserMessage } as never, {
-				taskSpawner,
-				terminalSize: () => ({ columns: 80, rows: 120 }),
-			});
+			const getActiveTools = vi.fn(() => ["read", "bash", "edit", "write", "grep", "find", "ls"]);
+			registerReviewCommand({ registerCommand, sendUserMessage, getActiveTools } as never, { subagentSpawner: subagentSpawner as never });
 			const ctx = { hasUI: true, cwd: "/tmp/sumo-fixture", ui: { notify } };
-			return { handler, registerCommand, sendUserMessage, notify, taskSpawner, ctx };
+			return { handler, registerCommand, sendUserMessage, notify, subagentSpawner, ctx };
 		}
 
-		it("registers a command that spawns a tracked visible bg_task review", async () => {
-			const { handler, registerCommand, sendUserMessage, notify, taskSpawner, ctx } = setup();
+		it("registers a command that spawns a tracked visible subagent review", async () => {
+			const { handler, registerCommand, sendUserMessage, notify, subagentSpawner, ctx } = setup();
 
 			await handler?.("src/foo.ts", ctx);
 
-			expect(registerCommand).toHaveBeenCalledWith("sumo:review", expect.objectContaining({ description: expect.any(String) }));
+			expect(registerCommand).toHaveBeenCalledWith("sumo:review", expect.objectContaining({ description: expect.stringContaining("subagent") }));
 			expect(sendUserMessage).not.toHaveBeenCalled();
-			expect(taskSpawner.spawnTask).toHaveBeenCalledWith(expect.objectContaining({
-				command: expect.stringContaining("git diff src/foo.ts"),
+			expect(subagentSpawner.spawn).toHaveBeenCalledWith({
+				prompt: expect.stringContaining("git diff src/foo.ts"),
 				cwd: "/tmp/sumo-fixture",
 				title: "review: src/foo.ts · openai-codex/gpt-5.3-codex",
 				visible: true,
-				direction: "down",
-				runner: "sumocode",
 				model: "openai-codex/gpt-5.3-codex",
 				thinking: "xhigh",
-				notifyOnExit: true,
-			}));
-			expect(notify).toHaveBeenCalledWith(expect.stringContaining("review started: bg-42 · cmux surface:2"), "info");
-			expect(notify).toHaveBeenCalledWith(expect.stringContaining("bg_task action=log id=bg-42"), "info");
+				// Parent tool allowlist forwarded so a narrowed session narrows the reviewer.
+				builtInTools: ["read", "bash", "edit", "write", "grep", "find", "ls"],
+			});
+			expect(notify).toHaveBeenCalledWith(expect.stringContaining("review started: sa-42"), "info");
+			expect(notify).toHaveBeenCalledWith(expect.stringContaining("watchable herdr pane"), "info");
+			expect(notify).toHaveBeenCalledWith(expect.stringContaining("result will arrive as a card automatically"), "info");
+			expect(notify.mock.calls.flat().join(" ")).not.toContain(["bg", "task"].join("_"));
 		});
 
-		it("includes scope label in bg_task title and notify for PR args", async () => {
-			const { handler, notify, taskSpawner, ctx } = setup();
+		it("forwards a narrowed parent tool allowlist to the reviewer", async () => {
+			const subagentSpawner = { spawn: vi.fn().mockResolvedValue(snapshot()) };
+			let handler: ((args: string, ctx: { hasUI: boolean; cwd: string; ui: { notify: ReturnType<typeof vi.fn> } }) => Promise<void>) | undefined;
+			const registerCommand = vi.fn((_name: string, options: { handler: typeof handler }) => { handler = options.handler; });
+			const getActiveTools = vi.fn(() => ["read", "grep"]);
+			registerReviewCommand({ registerCommand, sendUserMessage: vi.fn(), getActiveTools } as never, { subagentSpawner: subagentSpawner as never });
+			await handler?.("src/foo.ts", { hasUI: true, cwd: "/tmp/sumo-fixture", ui: { notify: vi.fn() } });
+			expect(subagentSpawner.spawn).toHaveBeenCalledWith(expect.objectContaining({ builtInTools: ["read", "grep"] }));
+		});
+
+		it("includes scope label in the subagent title and notice for PR args", async () => {
+			const { handler, notify, subagentSpawner, ctx } = setup();
 
 			await handler?.("#42", ctx);
 
-			expect(taskSpawner.spawnTask).toHaveBeenCalledWith(expect.objectContaining({
-				command: expect.stringContaining("gh pr diff 42"),
+			expect(subagentSpawner.spawn).toHaveBeenCalledWith(expect.objectContaining({
+				prompt: expect.stringContaining("gh pr diff 42"),
 				title: "review: PR #42 · openai-codex/gpt-5.3-codex",
 			}));
 			expect(notify).toHaveBeenCalledWith(expect.stringContaining("PR #42"), "info");
 		});
 
 		it("uses alias model when provided as first arg", async () => {
-			const { handler, notify, taskSpawner, ctx } = setup();
+			const { handler, notify, subagentSpawner, ctx } = setup();
 
 			await handler?.("opus #42", ctx);
 
-			expect(taskSpawner.spawnTask).toHaveBeenCalledWith(expect.objectContaining({
-				command: expect.stringContaining("anthropic/claude-opus-4.6"),
+			expect(subagentSpawner.spawn).toHaveBeenCalledWith(expect.objectContaining({
+				prompt: expect.stringContaining("anthropic/claude-opus-4.6"),
 				model: "anthropic/claude-opus-4.6",
 				title: "review: PR #42 · anthropic/claude-opus-4.6",
 			}));
 			expect(notify).toHaveBeenCalledWith(expect.stringContaining("anthropic/claude-opus-4.6"), "info");
 		});
 
-		it("reports a clear warning if bg_task spawn fails", async () => {
-			const failingSpawner = { spawnTask: vi.fn(() => { throw new Error("cmux unavailable"); }) };
+		it("reports cooperative backpressure when the subagent manager is at capacity", async () => {
+			const atCapacitySpawner = { spawn: vi.fn().mockResolvedValue({
+				status: "at_capacity",
+				capacity: 4,
+				runningCount: 4,
+				running: [],
+				retryHint: "wait for a running subagent to settle, then retry subagent_spawn",
+			}) };
+			const { handler, notify, ctx } = setup(atCapacitySpawner);
+
+			await handler?.("", ctx);
+
+			expect(notify).toHaveBeenCalledWith(expect.stringContaining("at capacity (4/4)"), "warning");
+			expect(notify).toHaveBeenCalledWith(expect.stringContaining("retry subagent_spawn"), "warning");
+		});
+
+		it("reports a clear warning when the subagent fails to start", async () => {
+			const failingSpawner = { spawn: vi.fn().mockResolvedValue(snapshot({ status: "error", errorText: "herdr unavailable" })) };
 			const { handler, notify, ctx } = setup(failingSpawner);
 
 			await handler?.("", ctx);
 
-			expect(notify).toHaveBeenCalledWith("/sumo:review failed to start bg_task: cmux unavailable", "warning");
+			expect(notify).toHaveBeenCalledWith("/sumo:review failed to start subagent: herdr unavailable", "warning");
 		});
 
-		it("does not fall back to queuing a main-agent prompt when bg_task is unavailable", async () => {
+		it("does not fall back to queuing a main-agent prompt when the subagent manager is unavailable", async () => {
 			let handler: ((args: string, ctx: { hasUI: boolean; cwd: string; ui: { notify: ReturnType<typeof vi.fn> } }) => Promise<void>) | undefined;
 			const sendUserMessage = vi.fn();
 			const registerCommand = vi.fn((_name: string, options: { handler: typeof handler }) => {
@@ -239,7 +282,7 @@ describe("/sumo:review", () => {
 			await handler?.("", { hasUI: true, cwd: "/tmp/sumo-fixture", ui: { notify } });
 
 			expect(sendUserMessage).not.toHaveBeenCalled();
-			expect(notify).toHaveBeenCalledWith("/sumo:review cannot start: bg_task manager is not available", "warning");
+			expect(notify).toHaveBeenCalledWith("/sumo:review cannot start: subagent manager is not available", "warning");
 		});
 	});
 });

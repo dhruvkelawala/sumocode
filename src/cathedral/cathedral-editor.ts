@@ -270,6 +270,24 @@ export class CathedralEditor extends CustomEditor {
 	 * drag/paste forms of paths with spaces still collapse and the draft
 	 * state stores the real on-disk path.
 	 */
+	/**
+	 * Expand `[Image N]` draft tokens to their temp-file paths WITHOUT clearing
+	 * the draft state. Used by queue-time consumers (Alt+Enter follow-up
+	 * queueing) that must capture real paths before the editor is cleared, but
+	 * only commit the clear once the queue accepts the message — a busy→idle
+	 * race can decline the queue, and clearing early would leave dangling
+	 * tokens in the editor. The Enter-submit wrapper above stays atomic
+	 * (expand + clear).
+	 */
+	public expandDraftTokens(text: string): string {
+		return this.imageDraftState.expandTokensToPaths(text);
+	}
+
+	/** Commit-side of {@link expandDraftTokens}: clear the image draft state. */
+	public clearImageDrafts(): void {
+		this.imageDraftState.clear();
+	}
+
 	private collapseImagePath(text: string): boolean {
 		const candidate = normalizePastedImagePath(text);
 		if (!isLikelyClipboardImagePath(candidate)) return false;

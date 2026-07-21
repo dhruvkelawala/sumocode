@@ -857,6 +857,70 @@ describe("RPC editor controller app-level action wiring", () => {
 		expect(onToolsExpandToggle).toHaveBeenCalledTimes(1);
 	});
 
+	it("invokes onMessageFollowUp via Alt+Enter and a remapped binding", () => {
+		const onMessageFollowUp = vi.fn();
+		const controller = new RpcHostEditorController({
+			tui: fakeTui(),
+			theme: fakeEditorTheme(),
+			keybindings: createRpcKeybindingsManager({ env: {} }),
+			onMessageFollowUp,
+		});
+
+		controller.handleInput("\x1b[13;3u"); // alt+enter (CSI-u)
+		expect(onMessageFollowUp).toHaveBeenCalledTimes(1);
+
+		const agentDir = mkdtempSync(join(tmpdir(), "sumocode-rpc-followup-remap-test-"));
+		try {
+			writeFileSync(join(agentDir, "keybindings.json"), JSON.stringify({ "app.message.followUp": "ctrl+q" }), "utf8");
+			const remapped = vi.fn();
+			const remappedController = new RpcHostEditorController({
+				tui: fakeTui(),
+				theme: fakeEditorTheme(),
+				keybindings: createRpcKeybindingsManager({ env: { PI_CODING_AGENT_DIR: agentDir } }),
+				onMessageFollowUp: remapped,
+			});
+
+			remappedController.handleInput("\x1b[13;3u");
+			expect(remapped).not.toHaveBeenCalled();
+			remappedController.handleInput("\x11");
+			expect(remapped).toHaveBeenCalledTimes(1);
+		} finally {
+			rmSync(agentDir, { recursive: true, force: true });
+		}
+	});
+
+	it("invokes onMessageDequeue via Alt+Up and a remapped binding", () => {
+		const onMessageDequeue = vi.fn();
+		const controller = new RpcHostEditorController({
+			tui: fakeTui(),
+			theme: fakeEditorTheme(),
+			keybindings: createRpcKeybindingsManager({ env: {} }),
+			onMessageDequeue,
+		});
+
+		controller.handleInput("\x1b[1;3A"); // alt+up
+		expect(onMessageDequeue).toHaveBeenCalledTimes(1);
+
+		const agentDir = mkdtempSync(join(tmpdir(), "sumocode-rpc-dequeue-remap-test-"));
+		try {
+			writeFileSync(join(agentDir, "keybindings.json"), JSON.stringify({ "app.message.dequeue": "ctrl+q" }), "utf8");
+			const remapped = vi.fn();
+			const remappedController = new RpcHostEditorController({
+				tui: fakeTui(),
+				theme: fakeEditorTheme(),
+				keybindings: createRpcKeybindingsManager({ env: { PI_CODING_AGENT_DIR: agentDir } }),
+				onMessageDequeue: remapped,
+			});
+
+			remappedController.handleInput("\x1b[1;3A");
+			expect(remapped).not.toHaveBeenCalled();
+			remappedController.handleInput("\x11");
+			expect(remapped).toHaveBeenCalledTimes(1);
+		} finally {
+			rmSync(agentDir, { recursive: true, force: true });
+		}
+	});
+
 	it("regression guard: an unbound key still reaches the editor as normal text after wiring app.* actions", () => {
 		const onModelCycleForward = vi.fn();
 		const onModelCycleBackward = vi.fn();

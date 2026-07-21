@@ -166,6 +166,28 @@ describe("RpcHostStateStore", () => {
 		expect(state.queuedMessages).toEqual(["ok"]);
 	});
 
+	it("composes host-owned and Pi-owned queue snapshots without hydration erasing host messages", () => {
+		const store = new RpcHostStateStore();
+
+		expect(store.setHostQueuedMessages(["host b"]).queuedMessages).toEqual(["host b"]);
+		expect(store.hydrateFromRpcState({
+			thinkingLevel: "medium",
+			isStreaming: true,
+			isCompacting: false,
+			steeringMode: "all",
+			followUpMode: "one-at-a-time",
+			sessionId: "session-1",
+			autoCompactionEnabled: true,
+			messageCount: 1,
+			pendingMessageCount: 0,
+		}).queuedMessages).toEqual(["host b"]);
+		expect(store.getSnapshot().pendingMessageCount).toBe(1);
+
+		expect(store.handleAgentEvent({ type: "queue_update", steering: ["pi steer"], followUp: [] }).queuedMessages).toEqual(["host b", "pi steer"]);
+		expect(store.setHostQueuedMessages([]).queuedMessages).toEqual(["pi steer"]);
+		expect(store.handleAgentEvent({ type: "queue_update", steering: [], followUp: [] }).queuedMessages).toEqual([]);
+	});
+
 	it("tracks session/thinking updates and task partial counts", () => {
 		const store = new RpcHostStateStore();
 

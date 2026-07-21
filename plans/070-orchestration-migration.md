@@ -17,7 +17,7 @@
 - **Priority**: P3
 - **Effort**: M
 - **Risk**: HIGH
-- **Depends on**: plans/065-subagents-core.md, plans/066-typed-deferred-result-delivery.md, plans/067-background-terminals-regrammar.md, plans/068-fleet-dashboard-and-takeover.md, plans/069-worktree-isolation-and-manifest.md
+- **Depends on**: plans/065-subagents-core.md, plans/066-typed-deferred-result-delivery.md, plans/067-background-terminals-regrammar.md, plans/068-herdr-native-visible-subagents.md, plans/069-worktree-isolation-and-manifest.md
 - **Category**: migration
 - **Planned at**: commit `d4ce41d`, 2026-07-15
 - **Issue**: https://github.com/dhruvkelawala/sumocode/issues/308
@@ -26,6 +26,14 @@
 > used the new `subagent_*`/`bg_*` tools for real work and considers them at
 > parity. This plan removes working functionality; the confirmation is the
 > go/no-go, not test results alone.
+>
+> **✅ GATE CONFIRMED (2026-07-19)**: the operator dogfooded 7 visible
+> subagents across 2 live herdr rounds — tiled panes in a workspace-anchored
+> "subagents" tab AND isolated worktree workspaces — all settling clean with
+> host-verified completion manifests. Two real bugs were found and fixed
+> during dogfood (PR #336: worktree source-repo resolution, `tab create`
+> `--json`). Go granted, including an explicit instruction to merge to main.
+> Proceed.
 
 ## Why this matters
 
@@ -102,6 +110,15 @@ model-facing guidance.
 - `src/extension.ts` (update the `task` system-prompt patch; remove dead wiring)
 - `docs/PI_TOOL_ARCHITECTURE.md` (reflect the new tool inventory)
 - `AGENTS.md` (if it references `bg_task` usage — check with `rg -n "bg_task" AGENTS.md`)
+- **Parity gaps (Step 6)**: `src/subagents/domain.ts`, `src/subagents/manager.ts`,
+  `src/subagents/tools.ts` (add optional `baseRef` to the spawn surface),
+  `src/subagents/prompt.ts` (add the delegating-a-coding-task recipe
+  guideline), plus their colocated tests.
+- **`/sumo:review` migration (Step 2.5)**: `src/commands/review.ts`,
+  `src/interaction-registry.ts`, `src/extension.ts` (thread `subagentManager`
+  into `installSumoInteractions` → the review command), `src/commands/review.test.ts`.
+  This is the live consumer of `runner=sumocode`; it must move to the
+  SubagentManager BEFORE the runner is removed in Step 3.
 
 **Out of scope**:
 - `bin/sumocode.sh` — leave the `task` subcommand in the wrapper (harmless,
@@ -138,6 +155,39 @@ steps (e.g. `src/commands/review.ts` `taskSpawner` usage —
 review command), STOP and report it.
 
 **Verify**: classification list complete (attach to the commit body).
+
+### Step 2.5 (do BEFORE Step 3): Migrate `/sumo:review` onto the SubagentManager
+
+`/sumo:review` is the one live in-repo consumer of `runner=sumocode`
+(`src/commands/review.ts` calls `BackgroundTaskManager.spawnTask({ runner:
+"sumocode", visible: true, notifyOnExit: true })` and points the user at
+`bg_task action=log/stop`). It must move to the new grammar before Step 3
+removes the runner, or Step 3 breaks the build.
+
+1. `src/commands/review.ts`: replace `RegisterReviewCommandOptions.taskSpawner`
+   (a `BackgroundTaskManager`) with a narrow `subagentSpawner` interface
+   exposing just `spawn(task): Promise<SubagentSnapshot | AtCapacityDetails>`
+   (structurally the `SubagentManager`). The handler `await`s
+   `subagentSpawner.spawn({ prompt, title: \`review: ${label} · ${model}\`,
+   cwd: ctx.cwd, visible: true, model, thinking: "xhigh" })`. Handle both
+   non-happy returns: `at_capacity` → notify the retry hint; `status !==
+   "running"` → notify the failure. On success, notify that the review runs
+   in a watchable herdr pane and its result arrives as a card automatically
+   — DROP the `bg_task action=log/stop` wording and the `direction`/split
+   plumbing (visible subagents own their layout via the tab policy).
+2. `src/interaction-registry.ts`: add `subagentManager?: SubagentManager` to
+   `InstallSumoInteractionsOptions` and pass it to `registerReviewCommand`
+   as `subagentSpawner` (replacing `taskSpawner: options.backgroundTaskManager`).
+3. `src/extension.ts`: both `installSumoInteractions(...)` call sites (~lines
+   234 and 337) already have `subagentManager` in scope — pass it through.
+   Remove the now-needless `void subagentManager;` at ~line 235.
+4. `src/commands/review.test.ts`: swap the fake to the subagent-manager shape;
+   assert `spawn` is called with `{ visible: true, model, thinking: "xhigh" }`,
+   that `at_capacity` and failure returns notify correctly, and that the
+   success notice no longer mentions `bg_task`.
+
+**Verify**: `pnpm typecheck && pnpm test` → pass; `rg -n "runner: \"sumocode\""
+src/commands/` → no matches; `/sumo:review` still registers.
 
 ### Step 2: Remove the `bg_task` tool surface
 
@@ -186,7 +236,38 @@ recovery/legacy-comment hits.
 **Verify**: `rg -n "bg_task" src/ docs/PI_TOOL_ARCHITECTURE.md` → only
 historical/research-doc hits outside `src/`.
 
-### Step 5: Dead-code sweep and full check
+### Step 6: Close the parity gaps (baseRef + discoverable dispatch recipe)
+
+These two gaps were identified during the dogfood sign-off — the new grammar
+must fully replace `bg_task`'s executor-dispatch role, and the pattern must be
+discoverable to other agents (not just tribal knowledge in these plans).
+
+1. **`baseRef` param.** `subagent_spawn` gains optional `baseRef`
+   (`Type.Optional(Type.String(...))`, description e.g. "Base git ref for the
+   isolated worktree (only with `worktree: true`); defaults to HEAD. Use
+   `origin/main` to branch from the pushed tip rather than your local
+   checkout."). Thread it: `SpawnSubagentTask.baseRef` → the manager's
+   worktree-creation call (`src/git/worktree.ts` `createWorktree` already
+   accepts a base ref — pass `task.baseRef ?? "HEAD"` instead of the current
+   hardcoded HEAD). No effect when `worktree` is falsy. This restores parity
+   with the retired `bg_task ... baseRef=origin/main` executor recipe.
+2. **Discoverable dispatch recipe.** Add ONE guideline to
+   `SUBAGENT_PROMPT_GUIDELINES` (`src/subagents/prompt.ts`), e.g.:
+   "To delegate a self-contained coding task, spawn an isolated, watchable
+   child: `subagent_spawn { visible: true, worktree: true, model, baseRef:
+   'origin/main' }`. It branches `sumo/<slug>` from `baseRef`, tiles into a
+   herdr workspace you can watch/steer, and returns a completion manifest
+   (changed paths, commits, dirty) you should review before acting on its
+   result." Keep it to a couple of sentences — this is the pattern other
+   agents will copy.
+3. Tests: `manager.test.ts` — `baseRef` threads to `createWorktree`
+   (default HEAD when omitted); `prompt.test.ts` — the recipe guideline is
+   present and names `worktree`/`baseRef`.
+
+**Verify**: `pnpm typecheck && pnpm test` → pass; `subagent_spawn` schema
+exposes `baseRef`.
+
+### Step 7: Dead-code sweep and full check
 
 Run `pnpm dead-code`; remove now-unreferenced exports flagged in
 `src/background-tasks/` and `src/spike/cmux-background/` is OUT of scope
@@ -206,7 +287,9 @@ findings.
 
 ## Done criteria
 
-- [ ] Operator go/no-go recorded (see Gate) before any removal commit
+- [ ] Operator go/no-go recorded (see Gate) before any removal commit — DONE, see "✅ GATE CONFIRMED" above
+- [ ] `subagent_spawn` exposes optional `baseRef` threaded to worktree creation (Step 6)
+- [ ] The delegating-a-coding-task recipe guideline is present (Step 6)
 - [ ] `pnpm typecheck` exits 0; `pnpm test` exits 0
 - [ ] `rg -n "\"bg_task\"|sendUserMessage" src/background-tasks/` → no matches
 - [ ] Old `sumocode`-runner meta.json recovers read-only (test-proven)
@@ -220,8 +303,10 @@ Stop and report back if:
 
 - The operator gate has not been explicitly confirmed.
 - Step 1 finds a live consumer of `bg_task`/`runner=sumocode` outside this
-  plan's scope (e.g. the review command's `taskSpawner`, user skills in
-  `~/.pi`, or docs/marketing flows that demo it).
+  plan's scope. NOTE: `/sumo:review` (the review command's `taskSpawner`) is
+  now handled IN-SCOPE by Step 2.5 — migrate it, do not stop on it. Stop only
+  for an ADDITIONAL unlisted consumer (e.g. user skills in `~/.pi`, or
+  docs/marketing flows that demo it).
 - Removing the response-watcher paths breaks recovery of RUNNING legacy agent
   tasks from a live session (someone mid-flight during the upgrade) — report
   the reconciliation gap instead of force-finalizing.

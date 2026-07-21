@@ -29,13 +29,14 @@
 - **Category**: correctness / RPC UX
 - **Depends on**: PR #325 / Plan 077 (merged before this plan was written)
 - **Planned at**: `origin/main` commit `ca3b199`, 2026-07-19
+- **Execution status**: DONE — approved on `fix/rpc-host-prompt-queue` at `48949b5` after two reviewer revision rounds; typecheck/build, 1,741 unit tests, 48 integration tests, 100 Bible renders, 21 visual scenarios, and final Claude autoreview pass
 - **Supersedes**: the blocked Pi `clear_queue` design recorded against [`earendil-works/pi#5606`](https://github.com/earendil-works/pi/issues/5606)
 
 ## Decision
 
 SumoCode will own the queue for prompts submitted through its retained RPC editor.
 
-While Pi is active, SumoCode must **not send a `prompt`, `steer`, or `follow_up` RPC command** for ordinary editor text. It stores the text in a host-local, session-bound queue. Once Pi emits the authoritative `agent_settled` event, SumoCode sends exactly one queued entry as a normal idle `prompt`. Alt+Up atomically removes all still-host-owned entries and restores them before the current editor draft.
+While Pi is active, SumoCode must **not send a `prompt`, `steer`, or `follow_up` RPC command** for ordinary editor text. It stores the text in a host-local, session-bound queue. Once Pi reaches an authoritative idle transition, SumoCode sends exactly one queued entry as a normal idle `prompt`: `agent_settled` after an agent run, or `compaction_end` after standalone manual compaction when no agent-run busy state exists. Alt+Up atomically removes all still-host-owned entries and restores them before the current editor draft.
 
 This removes the upstream `clear_queue` dependency because there is no Pi queue to clear for SumoCode-owned user submissions.
 
@@ -45,13 +46,14 @@ This removes the upstream `clear_queue` dependency because there is no Pi queue 
 2. **Busy Enter** appends the text to SumoCode's follow-up queue and clears the editor. It does not call Pi.
 3. **Busy Alt+Enter** explicitly queues the current editor text through the same host queue. Idle Alt+Enter leaves the draft unchanged, matching Pi's follow-up-only intent.
 4. **Alt+Up** restores every still-host-owned queued message, in FIFO order, before the current draft, separated by blank lines.
-5. **`agent_settled`** dispatches at most one queued message. The next entry waits for the next `agent_settled`, preserving one-at-a-time conversation semantics.
-6. **`agent_end` is not an idle signal.** Pi may retry, compact, or run extension continuations after it. Never drain on `agent_end`.
-7. **Abort** restores queued host messages before sending `abort`, matching classic Pi's safe interrupt behavior.
-8. **Session replacement** (new, switch, clone, fork) restores old-session queued messages into the editor and invalidates the old scheduler generation before the new session can drain them.
-9. **Send failure** never loses text. A queued entry whose RPC preflight fails returns to the head of the queue and automatic draining pauses until a new explicit trigger or restore.
-10. **Host-owned slash commands** continue to execute immediately through `RpcHostActions`. Other child/extension commands entered while busy are queued and delegated only once Pi is idle; this is an intentional safety change from Pi's immediate streaming command execution.
-11. **True steering is out of scope.** Delaying a message until idle cannot preserve steer semantics. Current SumoCode RPC already treats streaming Enter as `followUp`, so this plan does not remove an existing host steering path.
+5. **`agent_settled`** dispatches at most one queued message after an agent run. The next entry waits for the next authoritative idle transition, preserving one-at-a-time conversation semantics.
+6. **Standalone manual compaction** has no agent run and therefore no `agent_settled`; its `compaction_end` may dispatch one queued message only when the scheduler has no `agent_start`-owned busy state and `RpcHostStateStore` already reports compaction idle. Auto-compaction remains blocked until `agent_settled`.
+7. **`agent_end` is not an idle signal.** Pi may retry, compact, or run extension continuations after it. Never drain on `agent_end`.
+8. **Abort** restores queued host messages before sending `abort`, matching classic Pi's safe interrupt behavior.
+9. **Session replacement** (new, switch, clone, fork) restores old-session queued messages into the editor and invalidates the old scheduler generation before the new session can drain them.
+10. **Send failure** never loses text. A queued entry whose RPC preflight fails returns to the head of the queue and automatic draining pauses until a new explicit trigger or restore.
+11. **Host-owned slash commands** continue to execute immediately through `RpcHostActions`. Other child/extension commands entered while busy are queued and delegated only once Pi is idle; this is an intentional safety change from Pi's immediate streaming command execution.
+12. **True steering is out of scope.** Delaying a message until idle cannot preserve steer semantics. Current SumoCode RPC already treats streaming Enter as `followUp`, so this plan does not remove an existing host steering path.
 
 ## Core invariants
 
@@ -208,7 +210,9 @@ Cover at least:
 - idle submit sends immediately without `streamingBehavior`;
 - busy submit enqueues without invoking `sendPrompt`;
 - multiple queued entries remain FIFO;
-- `agent_end`, `compaction_end`, and unrelated events do not drain;
+- `agent_end` and unrelated events do not drain;
+- standalone manual `compaction_end` dispatches one entry only after external compaction busy clears;
+- auto-compaction `compaction_end` does not drain before `agent_settled`;
 - one `agent_settled` dispatches one entry only;
 - dispatch marks busy before awaiting the send;
 - a second settle dispatches the next entry;
@@ -269,7 +273,7 @@ Delete the old state-snapshot branch that sends `streamingBehavior: "followUp"`.
 pnpm vitest run src/sumo-tui/rpc/runtime.test.ts src/sumo-tui/rpc/host.test.ts -t "prompt|queue|submit"
 ```
 
-### Step 5: Drain only on `agent_settled`
+### Step 5: Drain only on authoritative idle transitions
 
 In `client.onEvent`:
 
@@ -277,6 +281,8 @@ In `client.onEvent`:
 - pass all events to the scheduler;
 - on `agent_start`, clear the dispatch-window compatibility flag as today;
 - on `agent_settled`, scheduler atomically marks idle and optionally starts one dispatch;
+- on standalone manual `compaction_end`, optionally dispatch one entry only after the state store reports `isCompacting: false` and scheduler agent-run busy is false;
+- auto-compaction `compaction_end` must remain blocked by scheduler busy until `agent_settled`;
 - do not clear scheduler busy on `agent_end`;
 - do not await scheduler delivery inside the event emitter callback if that would block RPC event consumption; launch through the scheduler's own serialized async path and route errors through its callback.
 
@@ -402,8 +408,8 @@ Expected: no editor submission path sends Pi-owned queue commands. Any remaining
 ## Done criteria
 
 - [ ] SumoCode owns all ordinary RPC editor messages submitted while Pi is active.
-- [ ] Busy submissions do not send any RPC command until `agent_settled`.
-- [ ] One settle dispatches at most one normal prompt.
+- [ ] Busy submissions do not send any RPC command until an authoritative idle transition (`agent_settled`, or standalone manual `compaction_end`).
+- [ ] One authoritative idle transition dispatches at most one normal prompt.
 - [ ] No scheduler dispatch includes `streamingBehavior`.
 - [ ] Alt+Enter queues through the host-owned queue while busy.
 - [ ] Alt+Up restores all still-host-owned messages before the current draft and clears their banner rows.
@@ -436,7 +442,7 @@ Stop and report if:
 ## Risks and mitigations
 
 1. **Event race double-sends a message.** Scheduler synchronously transfers each entry through one ownership state and tests duplicate/stale settles.
-2. **`agent_end` appears idle too early.** Drain exclusively on `agent_settled`; tests delay settle after end.
+2. **`agent_end` appears idle too early.** Drain only on `agent_settled`, except standalone manual compaction after `compaction_end` has cleared external busy; tests cover both paths.
 3. **Session switch sends old text to a new session.** Tag queue by generation and restore on the shared successful rebind seam.
 4. **Prompt preflight failure loses text.** Reinsert at queue head before notifying; require an explicit next trigger.
 5. **Abort unexpectedly continues queued work.** Restore before abort and clear host queue.

@@ -428,10 +428,10 @@ export class RpcShellAdapter {
 	}
 
 	/**
-	 * Render messages queued behind the current turn (steer/follow-up) as
-	 * dim rows above the editor, mirroring main's pending-messages banner.
-	 * Pi's `queue_update` event keeps `state.queuedMessages` truthful, so a
-	 * row disappears exactly when its user message enters the transcript.
+	 * Render queued messages above the editor. `state.queuedMessages` is a
+	 * display-only composition of SumoCode's host-owned prompt queue plus any
+	 * unexpected Pi-owned queue_update entries; only the host-owned portion is
+	 * undoable, but the card geometry stays shared.
 	 */
 	public renderQueuedMessages(width: number): string[] {
 		const queued = this.state.queuedMessages;

@@ -75,6 +75,7 @@ function buildCtxStub() {
 	return {
 		hasUI: true,
 		cwd: "/tmp",
+		isIdle: () => true,
 		sessionManager: { getBranch: () => [] },
 		getContextUsage: () => undefined,
 		model: undefined,
@@ -255,6 +256,7 @@ describe("rpc child profile", () => {
 			expect(commandNames).toContain("sumo:ship");
 			expect(toolNames).toContain("task");
 			expect(toolNames).toContain("question");
+			for (const name of ["bg_start", "bg_status", "bg_kill", "bg_list"]) expect(toolNames).toContain(name);
 			expect(shortcutNames).not.toContain("ctrl+/");
 
 			const ctx = { ...buildCtxStub(), mode: "rpc" };
@@ -339,13 +341,41 @@ describe("sumocode extension", () => {
 		}
 	});
 
+	it("registers the single orchestration tool inventory without the legacy mega-tool", () => {
+		const previous = process.env.SUMOCODE_NATIVE_TASK;
+		process.env.SUMOCODE_NATIVE_TASK = "1";
+		try {
+			const { pi } = buildPiStub();
+
+			sumocode(pi as never);
+
+			const toolNames = pi.registerTool.mock.calls.map((call) => (call[0] as { name: string }).name);
+			expect(toolNames.filter((name) => name.startsWith("subagent_"))).toEqual([
+				"subagent_spawn",
+				"subagent_send",
+				"subagent_check",
+				"subagent_wait",
+				"subagent_cancel",
+				"subagent_list",
+			]);
+			expect(toolNames.filter((name) => name.startsWith("bg_"))).toEqual(["bg_start", "bg_status", "bg_kill", "bg_list"]);
+			expect(toolNames).toContain("task");
+			expect(toolNames).not.toContain(["bg", "task"].join("_"));
+		} finally {
+			if (previous === undefined) delete process.env.SUMOCODE_NATIVE_TASK;
+			else process.env.SUMOCODE_NATIVE_TASK = previous;
+		}
+	});
+
 	it("registers the v0.4 slash commands during full extension install", () => {
 		const { pi } = buildPiStub();
 
 		sumocode(pi as never);
 
 		const commandNames = pi.registerCommand.mock.calls.map((call) => call[0]);
+		const toolNames = pi.registerTool.mock.calls.map((call) => (call[0] as { name: string }).name);
 		expect(commandNames).toContain("sumo:review");
+		for (const name of ["bg_start", "bg_status", "bg_kill", "bg_list"]) expect(toolNames).toContain(name);
 		expect(commandNames).toContain("sumo:ship");
 		expect(commandNames).toContain("sumo:worktree");
 	});

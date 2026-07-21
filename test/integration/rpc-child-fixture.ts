@@ -29,6 +29,8 @@ export interface RpcChildFixtureOptions {
 	 */
 	readonly streamChunkSentinels?: boolean;
 	readonly compactDelayMs?: number;
+	readonly promptDelayMs?: number;
+	readonly settleDelayMs?: number;
 	readonly compactReason?: "manual" | "threshold" | "overflow";
 	readonly compactSummary?: string;
 	readonly compactTokensBefore?: number;
@@ -50,9 +52,12 @@ const streamChunks = ${JSON.stringify(options.streamChunks ?? null)};
 const chunkDelayMs = ${JSON.stringify(options.chunkDelayMs ?? 500)};
 const streamChunkSentinels = ${options.streamChunkSentinels ? "true" : "false"};
 const compactDelayMs = ${JSON.stringify(options.compactDelayMs ?? 250)};
+const promptDelayMs = ${JSON.stringify(options.promptDelayMs ?? 100)};
+const settleDelayMs = ${JSON.stringify(options.settleDelayMs ?? 0)};
 const compactReason = ${JSON.stringify(options.compactReason ?? "manual")};
 const compactSummary = ${JSON.stringify(options.compactSummary ?? "Fixture compaction summary.")};
 const compactTokensBefore = ${JSON.stringify(options.compactTokensBefore ?? 42000)};
+const commandLogPath = process.env.SUMOCODE_RPC_FIXTURE_LOG;
 
 function write(payload) {
 	process.stdout.write(JSON.stringify(payload) + "\\n");
@@ -78,6 +83,11 @@ function response(command, data) {
 	return { type: "response", id: command.id, command: command.type, success: true, data };
 }
 
+function logCommand(command) {
+	if (!commandLogPath) return;
+	require("node:fs").appendFileSync(commandLogPath, JSON.stringify(command) + "\\n");
+}
+
 function finishPrompt(command, assistantText) {
 	isStreaming = false;
 	messages = [
@@ -85,11 +95,12 @@ function finishPrompt(command, assistantText) {
 		{ id: "fixture-assistant-" + messages.length, role: "assistant", content: assistantText }
 	];
 	write({ type: "agent_end", messages, willRetry: false });
-	write(response(command, {}));
+	setTimeout(() => write({ type: "agent_settled" }), settleDelayMs);
 }
 
 readline.createInterface({ input: process.stdin }).on("line", (line) => {
 	const command = JSON.parse(line);
+	logCommand(command);
 	if (command.type === "get_state") {
 		write(response(command, state()));
 		return;
@@ -128,6 +139,7 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 		];
 		isStreaming = true;
 		write({ type: "agent_start" });
+		write(response(command, {}));
 		if (streamChunks) {
 			let text = "";
 			let index = 0;
@@ -151,7 +163,7 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 			pendingPrompt = command;
 			return;
 		}
-		setTimeout(() => finishPrompt(command, "fixture response complete: " + command.message), 100);
+		setTimeout(() => finishPrompt(command, "fixture response complete: " + command.message), promptDelayMs);
 		return;
 	}
 	if (command.type === "compact") {

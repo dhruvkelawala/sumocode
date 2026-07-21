@@ -22,7 +22,12 @@ import { installTopChrome } from "./top-chrome.js";
 import { installWorkingIndicator } from "./working-indicator.js";
 import { installCompactionIndicator } from "./compaction-indicator.js";
 import { installFastMode } from "./fast-mode.js";
-import { installBackgroundTasks } from "./background-tasks/index.js";
+import {
+	installBackgroundTasks,
+	installTerminalTools,
+	type TerminalTaskFinalizedHandler,
+} from "./background-tasks/index.js";
+import { createDeferredResultDelivery } from "./subagents/delivery.js";
 import { installSubagents } from "./subagents/index.js";
 import { installTaskModeAutoExit } from "./task-mode.js";
 import { logDiagnostic } from "./sumo-tui/runtime/diagnostics.js";
@@ -150,7 +155,7 @@ export interface HelperSubprocessGuardOptions {
  * full Cathedral UI inside them wastes startup time and risks recursive
  * tool registration.
  *
- * The same env var is also set by SumoCode's own `bg_task` shell-task
+ * The same env var is also set by SumoCode's background-terminal shell
  * wrapper so a user command that invokes `pi`/`sumocode` does not
  * recursively install another SumoCode runtime layer.
  */
@@ -187,6 +192,17 @@ export function isRpcChildProfile(options: TaskModeOptions = {}): boolean {
 	return env.SUMOCODE_RPC_CHILD === "1";
 }
 
+function installOrchestrationTools(pi: ExtensionAPI) {
+	const delivery = createDeferredResultDelivery();
+	let onTerminalTaskFinalized: TerminalTaskFinalizedHandler | undefined;
+	const backgroundTaskManager = installBackgroundTasks(pi, {
+		onTaskFinalized: (task) => onTerminalTaskFinalized?.(task),
+	});
+	const subagentManager = installSubagents(pi, delivery);
+	onTerminalTaskFinalized = installTerminalTools(pi, backgroundTaskManager, delivery);
+	return { backgroundTaskManager, subagentManager };
+}
+
 function installRpcChildProfile(pi: ExtensionAPI): void {
 	installMemoryExtraction(pi);
 	installFastMode(pi);
@@ -205,19 +221,17 @@ function installRpcChildProfile(pi: ExtensionAPI): void {
 			systemPromptPatches: [
 				{
 					match: /\n\s*\n\s*in addition to the tools above, you may have access to other custom tools depending on the project\./i,
-					replace: "\n- task: never run this tool unless it's a skill run or I explictly ask you to",
+					replace: "\n- task: only for skill runs. For delegation use subagent_spawn; for background commands use bg_start.",
 				},
 			],
 		})(pi);
 	}
 	installQuestionTool(pi);
 	installAnswerTool(pi);
-	const backgroundTaskManager = installBackgroundTasks(pi);
-	const subagentManager = installSubagents(pi);
+	const { backgroundTaskManager, subagentManager } = installOrchestrationTools(pi);
 	installTaskModeAutoExit(pi);
 	registerSumoReloadCommand(pi);
-	installSumoInteractions(pi, { backgroundTaskManager, includeUiSurfaces: false });
-	void subagentManager;
+	installSumoInteractions(pi, { backgroundTaskManager, subagentManager, includeUiSurfaces: false });
 }
 
 /**
@@ -236,8 +250,8 @@ export default function sumocode(pi: ExtensionAPI): void {
 		launcher: process.env.SUMOCODE_LAUNCHER ?? null,
 	});
 	if (shouldNoopHelperSubprocess()) {
-		// Helper subprocesses (pi-cmux session naming, SumoCode bg_task shell
-		// wrappers, etc.) signal themselves via PI_CMUX_CHILD / SUMOCODE_BG_CHILD.
+		// Helper subprocesses (pi-cmux session naming, SumoCode background-terminal
+		// shell wrappers, etc.) signal themselves via PI_CMUX_CHILD / SUMOCODE_BG_CHILD.
 		// Bail before installing anything so they stay lightweight and we don't
 		// recursively spawn another SumoCode UI layer.
 		return;
@@ -306,21 +320,20 @@ export default function sumocode(pi: ExtensionAPI): void {
 			systemPromptPatches: [
 				{
 					match: /\n\s*\n\s*in addition to the tools above, you may have access to other custom tools depending on the project\./i,
-					replace: "\n- task: never run this tool unless it's a skill run or I explictly ask you to",
+					replace: "\n- task: only for skill runs. For delegation use subagent_spawn; for background commands use bg_start.",
 				},
 			],
 		})(pi);
 	}
 	installQuestionTool(pi);
 	installAnswerTool(pi);
-	const backgroundTaskManager = installBackgroundTasks(pi);
-	const subagentManager = installSubagents(pi);
+	const { backgroundTaskManager, subagentManager } = installOrchestrationTools(pi);
 	installTaskModeAutoExit(pi);
 
 	installWorkingIndicator(pi);
 	installCompactionIndicator(pi);
 	registerSumoReloadCommand(pi);
-	installSumoInteractions(pi, { backgroundTaskManager });
+	installSumoInteractions(pi, { backgroundTaskManager, subagentManager });
 	logDiagnostic("extension_activate_end", {
 		taskMode: isTaskMode(),
 		nativeTaskInstalled: shouldInstallNativeTaskTool({ force: process.env.SUMOCODE_NATIVE_TASK }),

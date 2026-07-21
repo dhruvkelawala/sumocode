@@ -319,7 +319,7 @@ describe("/sumo:worktree", () => {
 
 		await handler()?.("open sumo/one", { hasUI: true, cwd: "/repo", ui: { notify } });
 
-		expect(openExisting).toHaveBeenCalledWith(pi, { path: "/repo.sumo-worktrees/sumo__one", label: "sumo · one", shellCommand: "pnpm install && exec sumocode" });
+		expect(openExisting).toHaveBeenCalledWith(pi, { path: "/repo.sumo-worktrees/sumo__one", label: "sumo · one", shellCommand: "pnpm install && exec sumocode", sourceCwd: "/repo" });
 		expect(openSplit).not.toHaveBeenCalled();
 		expect(notify).toHaveBeenCalledWith(expect.stringContaining("opened sumo/one as herdr workspace \"sumo · one\""), "info");
 	});

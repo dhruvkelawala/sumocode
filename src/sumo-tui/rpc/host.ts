@@ -20,9 +20,10 @@ import { RpcHostOverlayManager } from "./host-overlays.js";
 import { InlineSelectorHost } from "./inline-selector.js";
 import { decideRpcInterrupt, type RpcInterruptInputKind } from "./interrupt.js";
 import { readGitBranch, watchGitBranch } from "./git.js";
+import { createRpcPromptScheduler, type RpcPromptScheduler } from "./prompt-scheduler.js";
 import { RpcHostRuntime } from "./runtime.js";
 import { responseData } from "./response.js";
-import { notifyOnError } from "./safe-send.js";
+import { notifyOnError, type ErrorNotifier } from "./safe-send.js";
 import { RpcHostStateStore, type RpcHostChromeState } from "./state.js";
 import { RpcTranscriptPump } from "./transcript-pump.js";
 import { rpcVisualFixtureFromEnv } from "./visual-fixtures.js";
@@ -162,8 +163,9 @@ export function createLazyChatSink(getRuntime: () => { getChatSink(): Transcript
 
 export interface RpcPromptSubmitOptions {
 	readonly visualFixture?: unknown;
+	readonly scheduler?: Pick<RpcPromptScheduler, "submit">;
 	readonly actions?: Pick<RpcHostActions, "handleSubmittedText">;
-	readonly stateStore: Pick<RpcHostStateStore, "getSnapshot">;
+	readonly stateStore?: Pick<RpcHostStateStore, "getSnapshot">;
 	readonly client: Pick<SumoRpcClient, "send">;
 	readonly onBeforeSend?: (message: string) => void;
 }
@@ -171,13 +173,13 @@ export interface RpcPromptSubmitOptions {
 export async function submitRpcPrompt(message: string, options: RpcPromptSubmitOptions): Promise<void> {
 	if (options.visualFixture) return;
 	if (message.trim().length === 0) return;
+	if (options.scheduler) {
+		await options.scheduler.submit(message);
+		return;
+	}
 	if (await options.actions?.handleSubmittedText(message)) return;
-	const state = options.stateStore.getSnapshot();
 	options.onBeforeSend?.(message);
-	const response = state.isStreaming
-		? await options.client.send({ type: "prompt", message, streamingBehavior: "followUp" })
-		: await options.client.send({ type: "prompt", message });
-	responseData(response, "prompt");
+	responseData(await options.client.send({ type: "prompt", message }), "prompt");
 }
 
 /**
@@ -196,6 +198,47 @@ export async function submitInitialPromptFromEnv(env: NodeJS.ProcessEnv, submit:
 	const message = env.SUMOCODE_INITIAL_PROMPT;
 	if (!message) return;
 	await submit(message);
+}
+
+export interface RpcMessageFollowUpDependencies {
+	readonly editor: Pick<RpcHostEditorController, "getText" | "addToHistory" | "setText" | "expandDraftTokens" | "clearImageDrafts">;
+	readonly scheduler: Pick<RpcPromptScheduler, "getSnapshot" | "submit">;
+	readonly notifications: ErrorNotifier;
+}
+
+export function handleRpcMessageFollowUp(deps: RpcMessageFollowUpDependencies): void {
+	void notifyOnError(async () => {
+		const draft = deps.editor.getText();
+		if (draft.trim().length === 0) return;
+		if (!deps.scheduler.getSnapshot().busy) return;
+		// Queue the EXPANDED submission (pasted [Image N] tokens → temp paths),
+		// mirroring the Enter-submit wrapper — a raw draft would deliver the
+		// literal token once drained. Expansion is capture-only here; the draft
+		// state is cleared ONLY after the queue accepts, because a busy→idle
+		// race can return "ignored" and the untouched draft must stay editable.
+		const submission = deps.editor.expandDraftTokens(draft);
+		const result = await deps.scheduler.submit(submission, { forceQueue: true });
+		if (result !== "queued" && result !== "handled") return;
+		deps.editor.addToHistory(draft);
+		deps.editor.setText("");
+		deps.editor.clearImageDrafts();
+	}, deps.notifications);
+}
+
+export interface RpcMessageDequeueDependencies {
+	readonly editor: Pick<RpcHostEditorController, "getText" | "setText">;
+	readonly scheduler: Pick<RpcPromptScheduler, "restoreAll">;
+	readonly stateStore: Pick<RpcHostStateStore, "getSnapshot">;
+	readonly notifications: Pick<NotificationCenter, "notify">;
+}
+
+export function handleRpcMessageDequeue(deps: RpcMessageDequeueDependencies): void {
+	const restored = deps.scheduler.restoreAll(deps.editor.getText());
+	if (restored.count > 0) {
+		deps.editor.setText(restored.text);
+		return;
+	}
+	if ((deps.stateStore.getSnapshot().queuedMessages?.length ?? 0) > 0) deps.notifications.notify("queued messages are owned by pi", "info");
 }
 
 export interface RpcHostExitDependencies {
@@ -293,6 +336,7 @@ export interface RpcHostInterruptDependencies {
 	 * pre-streaming arm-quit tier instead of an abort.
 	 */
 	readonly submitInFlight?: () => boolean;
+	readonly restoreQueuedDrafts?: () => void;
 	readonly now?: () => number;
 }
 
@@ -349,6 +393,7 @@ export function createRpcHostInterruptHandler(deps: RpcHostInterruptDependencies
 				return true;
 			case "abort":
 				armedQuitUntil = undefined;
+				deps.restoreQueuedDrafts?.();
 				void notifyOnError(async () => {
 					await deps.controls.abort();
 				}, deps.notifications);
@@ -588,47 +633,43 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 	// `app.interrupt` to a different key, since by the time `onInterrupt`
 	// fires pi's own manager has already confirmed that binding was pressed.
 	let handleAppInterrupt: () => void = () => undefined;
-	// Set the instant a prompt is submitted, cleared once the RPC child's
-	// `agent_start` event lands (via stateStore.handleAgentEvent, see
-	// client.onEvent below) or the send itself fails. `stateStore`'s
-	// `isStreaming` bit only flips on `agent_start`, so without this flag a
-	// Ctrl-C sent in the submit -> agent_start window reads as pre-streaming
-	// and arms quit instead of aborting (defect: double Ctrl-C quits the app
-	// instead of aborting the in-flight send).
-	let submitInFlight = false;
-	// Named (not inlined into the editor's onSubmit option) so the
-	// SUMOCODE_INITIAL_PROMPT seam below can submit through the exact same
-	// path -- streaming-state painting, submitInFlight bookkeeping, and error
-	// recovery -- as a real editor submit, instead of duplicating this logic.
-	const submitFromEditor = async (message: string): Promise<void> => {
-		submitInFlight = true;
-		try {
-			await submitRpcPrompt(message, {
-				visualFixture,
-				actions,
-				stateStore,
-				client,
-				onBeforeSend: () => {
-					const state = stateStore.getSnapshot();
-					runtime?.update({
-						state: {
-							...state,
-							isStreaming: true,
-							pendingMessageCount: Math.max(1, state.pendingMessageCount),
-							hasMessages: true,
-							lastEventType: "agent_start",
-						},
-					});
-				},
-			});
-		} catch (error) {
-			submitInFlight = false;
-			// The synthetic isStreaming:true painted into runtime.update above
-			// would otherwise stay stuck until the next 5s stats poll. Reset it
-			// immediately so the UI and interrupt gating agree the send failed.
+	const paintDispatchStart = (): void => {
+		const state = stateStore.getSnapshot();
+		runtime?.update({
+			state: {
+				...state,
+				isStreaming: true,
+				pendingMessageCount: Math.max(1, state.pendingMessageCount),
+				hasMessages: true,
+				lastEventType: "agent_start",
+			},
+		});
+	};
+	const scheduler = createRpcPromptScheduler({
+		getBusy: () => {
+			const state = stateStore.getSnapshot();
+			return state.isStreaming || state.isCompacting;
+		},
+		handleHostCommand: (message) => actions?.handleSubmittedText(message) ?? false,
+		sendPrompt: async (message) => {
+			responseData(await client.send({ type: "prompt", message }), "prompt");
+		},
+		onQueueChange: (messages) => {
+			const state = stateStore.setHostQueuedMessages(messages);
+			runtime?.update({ state });
+		},
+		onDispatchStart: paintDispatchStart,
+		onDispatchFailure: (error) => {
 			runtime?.update({ state: stateStore.getSnapshot() });
-			throw error;
-		}
+			notifications.notify(`prompt failed: ${truncateForNotification(error instanceof Error ? error.message : String(error))}`, "error");
+		},
+	});
+	const submitFromEditor = async (message: string): Promise<void> => {
+		await submitRpcPrompt(message, {
+			visualFixture,
+			scheduler,
+			client,
+		});
 	};
 	const keybindings = createRpcKeybindingsManager({ env });
 	const handleModelCycleForward = createModelCycleForwardHandler({
@@ -650,6 +691,12 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		setToolExpansion: (expanded) => runtime?.setToolExpansion(expanded),
 		requestRender,
 	});
+	const handleMessageFollowUp = (): void => {
+		handleRpcMessageFollowUp({ editor, scheduler, notifications });
+	};
+	const handleMessageDequeue = (): void => {
+		handleRpcMessageDequeue({ editor, scheduler, stateStore, notifications });
+	};
 	const editor = new RpcHostEditorController({
 		controls,
 		cwd,
@@ -682,6 +729,8 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		onModelSelect: () => { void notifyOnError(async () => { await actions?.openModelSelector(); }, notifications); },
 		onThinkingCycle: handleThinkingCycle,
 		onToolsExpandToggle: handleToolsExpandToggle,
+		onMessageFollowUp: handleMessageFollowUp,
+		onMessageDequeue: handleMessageDequeue,
 		// app.theme.cycle (Shift+Ctrl+T / Alt+T): host-side — the child
 		// extension's pi.registerShortcut never receives keys in RPC mode.
 		// Same forward-reference pattern as onModelSelect above.
@@ -729,6 +778,12 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		onRenderRequest: requestRender,
 		onExitRequest: (code) => requestHostExit(code),
 		rehydrateTranscript,
+		afterSessionChange: async () => {
+			const state = await controls.refreshState();
+			const restored = scheduler.rebindSession(state.sessionId, editor.getText());
+			if (restored.count > 0) editor.setText(restored.text);
+			await rehydrateTranscript();
+		},
 		writeClipboardSequence: (sequence) => runtime?.writeClipboardSequence(sequence) ?? false,
 		changelogRoot: root,
 	});
@@ -739,10 +794,10 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 
 	client.onEvent((event) => {
 		if (visualFixture) return;
-		if ((event as { type?: unknown }).type === "agent_start") submitInFlight = false;
 		const transcript = transcriptPump.handleAgentEvent(event);
 		const state = stateStore.handleAgentEvent(event);
 		runtime?.update({ state, transcript, transcriptRevision: transcriptPump.getRevision() });
+		scheduler.handleAgentEvent(event);
 	});
 
 	// The RPC child is the whole agent -- without this, the host has no signal
@@ -808,7 +863,11 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		controls,
 		notifications,
 		requestHostExit: (code) => requestHostExit(code),
-		submitInFlight: () => submitInFlight,
+		submitInFlight: () => scheduler.getSnapshot().busy,
+		restoreQueuedDrafts: () => {
+			const restored = scheduler.restoreAll(editor.getText(), { discardInFlight: true });
+			if (restored.count > 0) editor.setText(restored.text);
+		},
 	});
 	// A canonical escape token replays the exact same classification
 	// (dismiss-modal / abort / arm-quit / quit / pass) `handlePreEditorInput`

@@ -97,6 +97,8 @@ export interface RpcHostActionsOptions {
 	 * operation is cancelled or throws.
 	 */
 	readonly rehydrateTranscript?: () => Promise<void>;
+	/** Shared successful new/switch/clone/fork seam. Defaults to refresh + transcript rehydrate. */
+	readonly afterSessionChange?: () => Promise<void>;
 	/**
 	 * Persists the chosen theme name to ~/.pi/agent/sumocode.json so the next
 	 * boot's applyStartupTheme resolves it. Injectable so tests never write
@@ -509,6 +511,7 @@ export class RpcHostActions {
 	private readonly onRenderRequest: () => void;
 	private readonly onExitRequest: (code: number) => void;
 	private readonly rehydrateTranscript: () => Promise<void>;
+	private readonly afterSessionChange: () => Promise<void>;
 	private readonly writeClipboardSequence: (sequence: string) => boolean;
 	private readonly changelogRoot: string;
 	private readonly persistTheme: (name: string) => { success: boolean; error?: string };
@@ -526,6 +529,10 @@ export class RpcHostActions {
 		this.onRenderRequest = options.onRenderRequest ?? (() => undefined);
 		this.onExitRequest = options.onExitRequest ?? (() => undefined);
 		this.rehydrateTranscript = options.rehydrateTranscript ?? (() => Promise.resolve());
+		this.afterSessionChange = options.afterSessionChange ?? (async () => {
+			await this.controls.refreshState();
+			await this.rehydrateTranscript();
+		});
 		this.writeClipboardSequence = options.writeClipboardSequence ?? (() => false);
 		this.changelogRoot = options.changelogRoot ?? process.cwd();
 		this.persistTheme = options.persistTheme ?? ((name) => saveSumoCodeConfigPatch({ themeName: name }));
@@ -754,7 +761,7 @@ export class RpcHostActions {
 		const result = await this.controls.fork(message.entryId);
 		if (!result.cancelled) {
 			if (result.text) this.editorText?.setText(result.text);
-			await this.rehydrateTranscript();
+			await this.afterSessionChange();
 		}
 		this.onStateChange();
 	}
@@ -794,8 +801,7 @@ export class RpcHostActions {
 		if (!session) return;
 		const result = await this.controls.switchSession(session.path);
 		if (!result.cancelled) {
-			await this.controls.refreshState();
-			await this.rehydrateTranscript();
+			await this.afterSessionChange();
 			this.onStateChange();
 		}
 	}
@@ -853,7 +859,7 @@ export class RpcHostActions {
 		const result = await this.controls.fork(row.node.entry.id);
 		if (!result.cancelled) {
 			if (result.text) this.editorText?.setText(result.text);
-			await this.rehydrateTranscript();
+			await this.afterSessionChange();
 		}
 		this.onStateChange();
 	}
@@ -1042,8 +1048,7 @@ export class RpcHostActions {
 	private async newSession(): Promise<void> {
 		const result = await this.controls.newSession();
 		if (!result.cancelled) {
-			await this.controls.refreshState();
-			await this.rehydrateTranscript();
+			await this.afterSessionChange();
 			this.onStateChange();
 			notify(this.notifications, "new session", "info");
 		}
@@ -1055,8 +1060,7 @@ export class RpcHostActions {
 		if (!trimmed) return;
 		const result = await this.controls.switchSession(trimmed);
 		if (!result.cancelled) {
-			await this.controls.refreshState();
-			await this.rehydrateTranscript();
+			await this.afterSessionChange();
 			this.onStateChange();
 			notify(this.notifications, "session switched", "info");
 		}
@@ -1065,8 +1069,7 @@ export class RpcHostActions {
 	private async cloneSession(): Promise<void> {
 		const result = await this.controls.clone();
 		if (!result.cancelled) {
-			await this.controls.refreshState();
-			await this.rehydrateTranscript();
+			await this.afterSessionChange();
 			this.onStateChange();
 			notify(this.notifications, "session cloned", "info");
 		}

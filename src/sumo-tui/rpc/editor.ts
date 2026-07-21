@@ -80,6 +80,10 @@ export interface RpcHostEditorControllerOptions extends RpcAutocompleteProviderO
 	readonly onToolsExpandToggle?: () => void;
 	/** `app.theme.cycle` (Shift+Ctrl+T / Alt+T by default). */
 	readonly onThemeCycle?: () => void;
+	/** `app.message.followUp` (Alt+Enter by default). */
+	readonly onMessageFollowUp?: () => void;
+	/** `app.message.dequeue` (Alt+Up by default). */
+	readonly onMessageDequeue?: () => void;
 }
 
 const identity = (text: string): string => text;
@@ -172,6 +176,8 @@ export class RpcHostEditorController implements EditorTextController, KeyTarget 
 		if (options.onModelSelect) this.editor.onAction("app.model.select", options.onModelSelect);
 		if (options.onThinkingCycle) this.editor.onAction("app.thinking.cycle", options.onThinkingCycle);
 		if (options.onToolsExpandToggle) this.editor.onAction("app.tools.expand", options.onToolsExpandToggle);
+		if (options.onMessageFollowUp) this.editor.onAction("app.message.followUp", options.onMessageFollowUp);
+		if (options.onMessageDequeue) this.editor.onAction("app.message.dequeue", options.onMessageDequeue);
 		// Cast: `app.theme.cycle` is a SumoCode-custom action, not part of pi's
 		// AppKeybinding union. CustomEditor's action map is string-keyed at
 		// runtime and `matches()` consults OUR merged keybindings table (which
@@ -255,6 +261,20 @@ export class RpcHostEditorController implements EditorTextController, KeyTarget 
 	public setText(text: string): void {
 		this.editor.setText(text);
 		this.tui.requestRender();
+	}
+
+	public addToHistory(text: string): void {
+		this.editor.addToHistory?.(text);
+	}
+
+	/** See CathedralEditor.expandDraftTokens — expand-only, no clear. */
+	public expandDraftTokens(text: string): string {
+		return this.editor.expandDraftTokens(text);
+	}
+
+	/** See CathedralEditor.clearImageDrafts — the commit-side clear. */
+	public clearImageDrafts(): void {
+		this.editor.clearImageDrafts();
 	}
 
 	public getText(): string {

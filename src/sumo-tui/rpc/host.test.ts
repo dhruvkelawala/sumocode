@@ -16,6 +16,8 @@ import {
 	createRpcExitHandler,
 	createRpcHostInterruptHandler,
 	createThinkingCycleHandler,
+	handleRpcMessageFollowUp,
+	handleRpcMessageDequeue,
 	createToolsExpandToggleHandler,
 	createUnhandledRejectionHandler,
 	submitInitialPromptFromEnv,
@@ -23,9 +25,18 @@ import {
 	type RpcHostExitDependencies,
 	type RpcHostInterruptDependencies,
 } from "./host.js";
+import { createRpcPromptScheduler } from "./prompt-scheduler.js";
 
 function flush(): Promise<void> {
 	return Promise.resolve().then(() => Promise.resolve());
+}
+
+function deferred(): { promise: Promise<void>; resolve: () => void } {
+	let resolve!: () => void;
+	const promise = new Promise<void>((res) => {
+		resolve = res;
+	});
+	return { promise, resolve };
 }
 
 class FakeRpcCommandClient {
@@ -86,6 +97,125 @@ function interruptDeps(overrides: Partial<RpcHostInterruptDependencies> = {}): R
 const CTRL_C = "";
 const ESCAPE = "";
 
+describe("handleRpcMessageFollowUp", () => {
+	function followUpEditor(text: string) {
+		return {
+			getText: vi.fn(() => text),
+			addToHistory: vi.fn(),
+			setText: vi.fn(),
+			// Identity expansion by default; image tests override.
+			expandDraftTokens: vi.fn((draft: string) => draft),
+			clearImageDrafts: vi.fn(),
+		};
+	}
+
+	it("adds history and clears the draft when the scheduler queues the follow-up", async () => {
+		const editor = followUpEditor("queued draft");
+		const scheduler = {
+			getSnapshot: vi.fn(() => ({ busy: true, queuedMessages: [], pausedAfterFailure: false })),
+			submit: vi.fn(async () => "queued" as const),
+		};
+
+		handleRpcMessageFollowUp({ editor, scheduler, notifications: { notify: vi.fn() } });
+		await flush();
+
+		expect(scheduler.submit).toHaveBeenCalledWith("queued draft", { forceQueue: true });
+		expect(editor.addToHistory).toHaveBeenCalledWith("queued draft");
+		expect(editor.setText).toHaveBeenCalledWith("");
+	});
+
+	it("adds history and clears the draft when the scheduler handled a host command", async () => {
+		const editor = followUpEditor("/model anthropic/claude-opus-4");
+		const scheduler = {
+			getSnapshot: vi.fn(() => ({ busy: true, queuedMessages: [], pausedAfterFailure: false })),
+			submit: vi.fn(async () => "handled" as const),
+		};
+
+		handleRpcMessageFollowUp({ editor, scheduler, notifications: { notify: vi.fn() } });
+		await flush();
+
+		expect(scheduler.submit).toHaveBeenCalledWith("/model anthropic/claude-opus-4", { forceQueue: true });
+		expect(editor.addToHistory).toHaveBeenCalledWith("/model anthropic/claude-opus-4");
+		expect(editor.setText).toHaveBeenCalledWith("");
+	});
+
+	it("retains the draft when the scheduler declines the forced follow-up", async () => {
+		const editor = followUpEditor("still here");
+		const scheduler = {
+			getSnapshot: vi.fn(() => ({ busy: true, queuedMessages: [], pausedAfterFailure: false })),
+			submit: vi.fn(async () => "ignored" as const),
+		};
+
+		handleRpcMessageFollowUp({ editor, scheduler, notifications: { notify: vi.fn() } });
+		await flush();
+
+		expect(scheduler.submit).toHaveBeenCalledWith("still here", { forceQueue: true });
+		expect(editor.addToHistory).not.toHaveBeenCalled();
+		expect(editor.setText).not.toHaveBeenCalled();
+		// The image draft state must survive a declined queue — the untouched
+		// draft (with its tokens) stays editable.
+		expect(editor.clearImageDrafts).not.toHaveBeenCalled();
+	});
+
+	it("queues the expanded submission for image drafts and clears drafts only on accept", async () => {
+		const editor = followUpEditor("look at [Image 1]");
+		editor.expandDraftTokens.mockImplementation((draft: string) => draft.replace("[Image 1]", "/tmp/img-1.png"));
+		const scheduler = {
+			getSnapshot: vi.fn(() => ({ busy: true, queuedMessages: [], pausedAfterFailure: false })),
+			submit: vi.fn(async () => "queued" as const),
+		};
+
+		handleRpcMessageFollowUp({ editor, scheduler, notifications: { notify: vi.fn() } });
+		await flush();
+
+		// The QUEUED text carries the real path; history keeps the human-readable token form.
+		expect(scheduler.submit).toHaveBeenCalledWith("look at /tmp/img-1.png", { forceQueue: true });
+		expect(editor.addToHistory).toHaveBeenCalledWith("look at [Image 1]");
+		expect(editor.setText).toHaveBeenCalledWith("");
+		expect(editor.clearImageDrafts).toHaveBeenCalledOnce();
+	});
+});
+
+describe("handleRpcMessageDequeue", () => {
+	it("restores only queued drafts while preserving an active dispatch", async () => {
+		const gate = deferred();
+		const sent: string[] = [];
+		const scheduler = createRpcPromptScheduler({
+			sendPrompt: async (message) => {
+				sent.push(message);
+				await gate.promise;
+			},
+		});
+		let draft = "";
+		const editor = {
+			getText: vi.fn(() => draft),
+			setText: vi.fn((text: string) => { draft = text; }),
+		};
+		const stateStore = new RpcHostStateStore();
+		const notifications = { notify: vi.fn() };
+
+		await expect(scheduler.submit("prompt A")).resolves.toBe("sent");
+		await expect(scheduler.submit("prompt B")).resolves.toBe("queued");
+
+		handleRpcMessageDequeue({ editor, scheduler, stateStore, notifications });
+
+		expect(editor.setText).toHaveBeenCalledWith("prompt B");
+		expect(scheduler.getSnapshot()).toMatchObject({ busy: true, queuedMessages: [] });
+
+		draft = "prompt B edited";
+		await expect(scheduler.submit(draft)).resolves.toBe("queued");
+		expect(sent).toEqual(["prompt A"]);
+
+		gate.resolve();
+		await flush();
+		expect(sent).toEqual(["prompt A"]);
+
+		scheduler.handleAgentEvent({ type: "agent_settled" });
+		await flush();
+		expect(sent).toEqual(["prompt A", "prompt B edited"]);
+	});
+});
+
 describe("createRpcHostInterruptHandler wiring", () => {
 	it("passes Escape through to the editor when the autocomplete dropdown is open, even while streaming", () => {
 		const requestHostExit = vi.fn();
@@ -109,6 +239,20 @@ describe("createRpcHostInterruptHandler wiring", () => {
 
 		expect(handle(ESCAPE)).toBe(true);
 		expect(controls.abort).toHaveBeenCalledOnce();
+	});
+
+	it("restores host-owned queued drafts before aborting", () => {
+		const controls = { abort: vi.fn(async () => undefined) };
+		const restoreQueuedDrafts = vi.fn();
+		const handle = createRpcHostInterruptHandler(interruptDeps({
+			stateStore: { getSnapshot: () => ({ isStreaming: true }) as never },
+			controls,
+			restoreQueuedDrafts,
+		}));
+
+		expect(handle(CTRL_C)).toBe(true);
+		expect(restoreQueuedDrafts).toHaveBeenCalledOnce();
+		expect(restoreQueuedDrafts.mock.invocationCallOrder[0]).toBeLessThan(controls.abort.mock.invocationCallOrder[0]!);
 	});
 
 	it("treats the submit-in-flight window as streaming: double Ctrl-C aborts instead of quitting", async () => {

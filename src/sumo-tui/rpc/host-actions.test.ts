@@ -460,6 +460,7 @@ describe("RpcHostActions", () => {
 		expect(controls.calls).toEqual([
 			"getForkMessages",
 			"fork:entry-1",
+			"refreshState",
 		]);
 		expect(editorText.getText()).toBe("fork from here");
 		expect(rehydrateCalls).toHaveLength(1);
@@ -545,7 +546,7 @@ describe("RpcHostActions", () => {
 		inlineSelectors.handleInput(SELECTOR_ENTER);
 		await forkPromise;
 
-		expect(controls.calls).toEqual(["getForkMessages", "fork:entry-b"]);
+		expect(controls.calls).toEqual(["getForkMessages", "fork:entry-b", "refreshState"]);
 		expect(editorText.getText()).toBe("fork from here");
 		expect(rehydrateCalls).toHaveLength(1);
 	});
@@ -570,7 +571,7 @@ describe("RpcHostActions", () => {
 
 		inlineSelectors.handleInput(SELECTOR_ENTER);
 		await forkPromise;
-		expect(controls.calls).toEqual(["getForkMessages", "fork:entry-real"]);
+		expect(controls.calls).toEqual(["getForkMessages", "fork:entry-real", "refreshState"]);
 		expect(rehydrateCalls).toHaveLength(1);
 	});
 
@@ -736,7 +737,7 @@ describe("RpcHostActions", () => {
 				inlineSelectors.handleInput(SELECTOR_ENTER);
 				await treePromise;
 
-				expect(controls.calls).toEqual(["fork:child-b"]);
+				expect(controls.calls).toEqual(["fork:child-b", "refreshState"]);
 				expect(editorText.getText()).toBe("fork from here");
 				expect(rehydrateCalls).toHaveLength(1);
 			} finally {
@@ -804,7 +805,7 @@ describe("RpcHostActions", () => {
 				inlineSelectors.handleInput(SELECTOR_ENTER);
 				await treePromise;
 
-				expect(controls.calls).toEqual(["fork:child-b"]);
+				expect(controls.calls).toEqual(["fork:child-b", "refreshState"]);
 			} finally {
 				rmSync(dir, { recursive: true, force: true });
 			}

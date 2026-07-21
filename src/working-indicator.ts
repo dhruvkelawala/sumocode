@@ -154,7 +154,7 @@ export class WorkingIndicatorComponent implements Component {
 		const indicator = resolveThemeWorkingIndicator(theme, this.env);
 		const frame = renderIndicator(this.tick, indicator.frames, theme.tokens.colors.accent);
 		const label = `${dimAnsi(theme.tokens.colors.foregroundDim)}Working…${RESET}`;
-		return [` ${frame} ${label}`];
+		return [` ${frame}${" ".repeat(indicator.labelGapCells)}${label}`];
 	}
 
 	public start(): void {

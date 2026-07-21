@@ -558,7 +558,8 @@ describe("RpcShellAdapter above-editor working indicator (D3 parity)", () => {
 			const frame = adapter.getLastFrame();
 			expect(frame).toBeDefined();
 			const working = findText(frame!, "Working…");
-			const catCol = working.col - 2;
+			// labelGapCells: 2 — the cat sits three cells left of the label.
+			const catCol = working.col - 3;
 			expect(frame!.getCell(working.row, catCol).char).toBe(ULTRAVIOLET_RUNCAT_FRAMES[0]);
 			expect(visibleWidth(frame!.getCell(working.row, catCol).char)).toBe(1);
 			expect(frame!.getCell(working.row, catCol).fg?.toLowerCase()).toBe("#b974ff");

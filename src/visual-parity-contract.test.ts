@@ -454,12 +454,17 @@ describe("V2 visual parity contract", () => {
 		expect(runcat.status).toBe("review");
 		expect(runcat.dimensions).toEqual(fallback.dimensions);
 		expect(runcat.runtime?.args).toEqual(fallback.runtime?.args);
+		// The fallback scenario pins SUMOCODE_RUNCAT_FONT=0 (ambient developer
+		// opt-in must not flip its orbital assertions); runcat overrides to 1.
 		expect(runcat.runtime?.env).toEqual({ ...fallback.runtime?.env, SUMOCODE_RUNCAT_FONT: "1" });
+		expect(fallback.runtime?.env?.SUMOCODE_RUNCAT_FONT).toBe("0");
 		expect(runcat.bibleTarget).toBe("theme-ultraviolet-core-runcat-active.png");
 		expect(runcat.finalCellAssertions).toEqual([
 			{ row: 36, col: 1, charPattern: "[\\uE900-\\uE904]", width: 1, fg: "#B974FF" },
+			// Two-cell gap: the icomoon glyph overdraws its cell (labelGapCells: 2).
 			{ row: 36, col: 2, text: " " },
-			{ row: 36, col: 3, text: "Working…" },
+			{ row: 36, col: 3, text: " " },
+			{ row: 36, col: 4, text: "Working…" },
 		]);
 		expect(runcat.requireRawOutputMatches).toEqual([...fallback.requireRawOutputMatches!, "[\\uE900-\\uE904]"]);
 		expect(runcat.crops.map((crop) => crop.id)).toEqual(fallback.crops.map((crop) => crop.id));

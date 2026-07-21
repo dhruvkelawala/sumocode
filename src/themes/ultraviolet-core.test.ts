@@ -152,6 +152,7 @@ describe("ULTRAVIOLET_CORE_THEME", () => {
 			frames: ULTRAVIOLET_RUNCAT_FRAMES,
 			intervalMs: ULTRAVIOLET_RUNCAT_INTERVAL_MS,
 			capabilityEnv: ULTRAVIOLET_RUNCAT_CAPABILITY_ENV,
+			labelGapCells: 2,
 		});
 	});
 });

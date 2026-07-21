@@ -26,6 +26,7 @@ describe("resolveThemeWorkingIndicator", () => {
 			frames: CATHEDRAL_THEME.workingIndicator.frames,
 			intervalMs: CATHEDRAL_THEME.workingIndicator.intervalMs,
 			capabilityState: "disabled",
+			labelGapCells: 1,
 		});
 		expect("capabilityEnv" in resolved).toBe(false);
 	});
@@ -38,6 +39,7 @@ describe("resolveThemeWorkingIndicator", () => {
 			expect(resolved.intervalMs, value).toBe(167);
 			expect(resolved.capabilityEnv, value).toBe("SUMOCODE_RUNCAT_FONT");
 			expect(resolved.capabilityState, value).toBe("enabled");
+			expect(resolved.labelGapCells, value).toBeGreaterThanOrEqual(1);
 		}
 	});
 

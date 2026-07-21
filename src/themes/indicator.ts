@@ -16,6 +16,7 @@ export function resolveThemeWorkingIndicator(
 			frames: base.frames,
 			intervalMs: base.intervalMs,
 			capabilityState: "disabled",
+			labelGapCells: 1,
 		};
 	}
 
@@ -28,6 +29,7 @@ export function resolveThemeWorkingIndicator(
 			intervalMs: enhanced.intervalMs,
 			capabilityEnv: enhanced.capabilityEnv,
 			capabilityState: "enabled",
+			labelGapCells: Math.max(1, enhanced.labelGapCells ?? 1),
 		};
 	}
 
@@ -37,5 +39,6 @@ export function resolveThemeWorkingIndicator(
 		intervalMs: base.intervalMs,
 		capabilityEnv: enhanced.capabilityEnv,
 		capabilityState: FALSE_LIKE.has(normalized) ? "disabled" : "unrecognized",
+		labelGapCells: 1,
 	};
 }

@@ -11,6 +11,7 @@ import {
 	span,
 	textLine,
 	truncateLine,
+	wrapLine,
 } from "./primitives.js";
 
 function chars(buffer: CellBuffer, width: number): string {
@@ -67,6 +68,62 @@ describe("typed render primitives", () => {
 		expect(cells.map((cell) => cell.char).join("")).toBe("abcde");
 		expect(cells[0]?.fg).toBe(CATHEDRAL_TOKENS.colors.accent);
 		expect(cells[4]?.fg).toBe(CATHEDRAL_TOKENS.colors.foreground);
+	});
+
+	it("wraps typed lines by visible width while preserving span styles", () => {
+		const source = textLine([
+			span("alpha ", { fg: CATHEDRAL_TOKENS.colors.accent }),
+			span("beta界界", { fg: CATHEDRAL_TOKENS.colors.foreground }),
+		]);
+		const wrapped = wrapLine(source, 6);
+
+		expect(wrapped.map((line) => line.spans.map((part) => part.text).join(""))).toEqual(["alpha", "beta界", "界"]);
+		expect(wrapped.every((line) => lineWidth(line) <= 6)).toBe(true);
+		expect(lineToCells(wrapped[0]!, { width: 6 })[0]?.fg).toBe(CATHEDRAL_TOKENS.colors.accent);
+		expect(lineToCells(wrapped[1]!, { width: 6 })[0]?.fg).toBe(CATHEDRAL_TOKENS.colors.foreground);
+	});
+
+	it("never returns rows wider than the requested width", () => {
+		const wrapped = wrapLine(textLine(["界界"]), 1);
+
+		expect(wrapped).toHaveLength(2);
+		expect(wrapped.map((line) => line.spans.map((part) => part.text).join(""))).toEqual(["�", "�"]);
+		expect(wrapped.every((line) => lineWidth(line) <= 1)).toBe(true);
+	});
+
+	it("replaces multi-codepoint graphemes that cannot fit", () => {
+		const wrapped = wrapLine(plainLine("❤️❤️"), 1);
+
+		expect(wrapped.map((line) => line.spans.map((part) => part.text).join(""))).toEqual(["�", "�"]);
+	});
+
+	it("removes the full whitespace run at a soft wrap boundary", () => {
+		const wrapped = wrapLine(textLine(["a  bbbb"]), 5);
+
+		expect(wrapped.map((line) => line.spans.map((part) => part.text).join(""))).toEqual(["a", "bbbb"]);
+	});
+
+	it("keeps leading indentation without emitting an empty first row", () => {
+		const wrapped = wrapLine(plainLine("    https://example.com/very/long/path/that/exceeds"), 20);
+		const text = wrapped.map((line) => line.spans.map((part) => part.text).join(""));
+
+		expect(text[0]).not.toBe("");
+		expect(text[0]).toMatch(/^ {4}https:/);
+	});
+
+	it("does not emit an all-whitespace row when indentation exceeds width", () => {
+		const wrapped = wrapLine(plainLine("      https://x"), 4);
+		const text = wrapped.map((line) => line.spans.map((part) => part.text).join(""));
+
+		expect(text[0]).toBe("http");
+		expect(text.every((row) => row.trim().length > 0)).toBe(true);
+	});
+
+	it("applies continuation width across embedded newlines", () => {
+		const wrapped = wrapLine(plainLine("123456\nabcdef"), 6, { continuationWidth: 4 });
+		const text = wrapped.map((line) => line.spans.map((part) => part.text).join(""));
+
+		expect(text).toEqual(["123456", "abcd", "ef"]);
 	});
 
 	it("renders shared rule and box helpers as typed lines", () => {

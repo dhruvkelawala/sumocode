@@ -1,6 +1,6 @@
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { activeThemeApplicationRoles, activeThemeColors, type ThemeApplicationRoles } from "../../themes/index.js";
-import { lineToAnsi, span, textLine, type Span } from "../render/primitives.js";
+import { lineToAnsi, lineWidth, span, textLine, truncateLine, wrapLine, type Span } from "../render/primitives.js";
 import { expandKey } from "./expand-key.js";
 import type { ToolCallViewModel, ToolStatus } from "./view-model.js";
 
@@ -126,8 +126,11 @@ function headerNote(tool: ToolCallViewModel): string | undefined {
 	return firstString(details?.summary, details?.note);
 }
 
-/** Maximum body lines shown in an expanded tool ledger row before collapsing. */
+/** Maximum source lines inspected and display rows shown in an expanded tool ledger. */
 const TOOL_BODY_MAX_LINES = 25;
+// Preserve the previous 25 output rows plus up to three wrapped command rows
+// and one consolidated collapse marker.
+const TOOL_BODY_MAX_ROWS = TOOL_BODY_MAX_LINES + 4;
 
 function toolLedgerStyle(roles: ToolLedgerRoles): { bg: string } {
 	return { bg: roles.surface };
@@ -173,6 +176,37 @@ function renderBodyLine(parts: readonly (Span | string)[], width: number, roles:
 		span(" "),
 		...parts.map((part) => bodySpan(part, roles)),
 	]), { width, style: toolLedgerStyle(roles) });
+}
+
+function renderBodyLines(
+	parts: readonly (Span | string)[],
+	width: number,
+	roles: ToolLedgerRoles,
+	maxRows: number,
+): { rows: string[]; truncated: boolean } {
+	if (maxRows <= 0) return { rows: [], truncated: true };
+	const continuationPrefix = "↳ ";
+	const firstRowWidth = Math.max(1, width - 2);
+	const continuationWidth = Math.max(1, firstRowWidth - visibleWidth(continuationPrefix));
+	const content = textLine(parts.map((part) => bodySpan(part, roles)));
+	if (maxRows === 1) {
+		return {
+			rows: [renderBodyLine(truncateLine(content, firstRowWidth).spans, width, roles)],
+			truncated: lineWidth(content) > firstRowWidth,
+		};
+	}
+	const cellBudget = firstRowWidth + continuationWidth * Math.max(0, maxRows - 1);
+	const sourceTruncated = lineWidth(content) > cellBudget;
+	const bounded = sourceTruncated ? truncateLine(content, cellBudget) : content;
+	const wrapped = wrapLine(bounded, firstRowWidth, { continuationWidth });
+	const renderable = wrapped.filter((line) => lineWidth(line) > 0);
+	return {
+		rows: renderable.slice(0, maxRows).map((line, index) => renderBodyLine([
+			...(index > 0 ? [span(continuationPrefix, { fg: roles.bodyMuted })] : []),
+			...line.spans,
+		], width, roles)),
+		truncated: sourceTruncated || renderable.length > maxRows,
+	};
 }
 
 function renderBottom(width: number, roles: ToolLedgerRoles): string {
@@ -280,14 +314,39 @@ function renderBashLine(line: string, roles: ToolLedgerRoles): (Span | string)[]
 function renderBashBody(tool: ToolCallViewModel, width: number, roles: ToolLedgerRoles): string[] {
 	const details = asRecord(tool.details);
 	const target = toolTarget(tool);
-	const lines = outputLines(tool).slice(0, TOOL_BODY_MAX_LINES).map(terminalSafeText);
-	const body = [renderBodyLine([`> ${target}`], width, roles)];
-	const collapsed = collapsedMarker(details, Math.max(0, outputLines(tool).length - lines.length));
-	if (collapsed) body.push(renderBodyLine([span(`  ${collapsed}`, { fg: roles.bodyMuted })], width, roles));
-	for (const line of lines) {
-		body.push(renderBodyLine(renderBashLine(line, roles), width, roles));
+	const allLines = outputLines(tool);
+	const lines = allLines.slice(0, TOOL_BODY_MAX_LINES).map(terminalSafeText);
+	const body: string[] = [];
+	const collapseReasons: string[] = [];
+	let displayRowsCollapsed = false;
+
+	const command = renderBodyLines([`> ${target}`], width, roles, 3);
+	body.push(...command.rows);
+	if (command.truncated) collapseReasons.push("command rows collapsed");
+	const collapsed = collapsedMarker(details, Math.max(0, allLines.length - lines.length));
+	if (collapsed) collapseReasons.push(collapsed.replace(/^…\s*/, ""));
+	for (let index = 0; index < lines.length; index += 1) {
+		const availableRows = Math.max(0, TOOL_BODY_MAX_ROWS - body.length - 1);
+		if (availableRows === 0) {
+			displayRowsCollapsed = true;
+			break;
+		}
+		const remainingLines = lines.length - index - 1;
+		const reservedRows = Math.min(remainingLines, Math.max(0, availableRows - 1));
+		const rowsForLine = Math.max(1, availableRows - reservedRows);
+		const rendered = renderBodyLines(renderBashLine(lines[index]!, roles), width, roles, rowsForLine);
+		body.push(...rendered.rows);
+		displayRowsCollapsed ||= rendered.truncated;
 	}
-	if (lines.length === 0 && tool.status === "running") body.push(renderBodyLine([span("watching stdout…", { fg: roles.bodyMuted })], width, roles));
+	if (lines.length === 0 && tool.status === "running" && body.length < TOOL_BODY_MAX_ROWS) {
+		body.push(renderBodyLine([span("watching stdout…", { fg: roles.bodyMuted })], width, roles));
+	}
+	if (displayRowsCollapsed) collapseReasons.push("display rows collapsed");
+	if (collapseReasons.length > 0) {
+		const detailedMarker = `… ${collapseReasons.join(" · ")}`;
+		const marker = visibleWidth(detailedMarker) <= Math.max(1, width - 2) ? detailedMarker : "… content collapsed";
+		body.push(renderBodyLine([span(marker, { fg: roles.bodyMuted })], width, roles));
+	}
 	return body;
 }
 

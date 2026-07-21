@@ -46,6 +46,13 @@ describe("Cathedral code block renderer", () => {
 		expect(top).not.toContain("  ");
 	});
 
+	it("keeps unlabeled code fences on the legacy one-row-per-source-line path", () => {
+		const rows = renderCathedralCodeBlock("", "x".repeat(100), 40).map(stripAnsi);
+
+		expect(rows).toHaveLength(3);
+		expect(rows[1]).not.toContain("↳");
+	});
+
 	it("highlights keywords in accent color for TypeScript", () => {
 		const rows = renderCathedralCodeBlock("ts", "async function foo() {}", 80);
 		const raw = rows[1]!;
@@ -75,6 +82,17 @@ describe("Cathedral code block renderer", () => {
 		expect(raw).toContain("\u001b[38;2;111;93;70m");
 	});
 
+	it("wraps plaintext code rows with a gutter only on the first display row", () => {
+		const rows = renderCathedralCodeBlock("txt", "This is a long plaintext line that should wrap cleanly.", 30).map(stripAnsi);
+
+		expect(rows).toHaveLength(5);
+		expect(rows[1]).toContain("  1 This is a long");
+		expect(rows[2]).toContain("  ↳ plaintext line that");
+		expect(rows[2]).not.toContain("  1 ");
+		expect(rows[3]).toContain("  ↳ should wrap cleanly.");
+		expect(rows.every((row) => row.length === 30)).toBe(true);
+	});
+
 	it("collapses blocks longer than 20 lines with a collapsed marker", () => {
 		const source = Array.from({ length: 30 }, (_, i) => `line ${i + 1}`).join("\n");
 		const rows = renderCathedralCodeBlock("ts", source, 80);
@@ -84,6 +102,23 @@ describe("Cathedral code block renderer", () => {
 		expect(rows).toHaveLength(23);
 		expect(plain[21]).toContain("… 10 lines collapsed");
 		expect(plain[21]).toContain("ctrl+o expand");
+	});
+
+	it("caps wrapped plaintext blocks by rendered rows", () => {
+		const source = Array.from({ length: 20 }, () => "word ".repeat(40).trim()).join("\n");
+		const rows = renderCathedralCodeBlock("txt", source, 60).map(stripAnsi);
+
+		expect(rows).toHaveLength(23);
+		expect(rows[21]).toContain("wrapped content collapsed");
+	});
+
+	it("reports both hidden source lines and a truncated wrapped tail", () => {
+		const source = ["word ".repeat(500).trim(), ...Array.from({ length: 24 }, (_, index) => `line ${index + 2}`)].join("\n");
+		const rows = renderCathedralCodeBlock("txt", source, 60).map(stripAnsi);
+		const marker = rows[21]!;
+
+		expect(marker).toContain("5 lines + tail collapsed");
+		expect(marker).toContain("ctrl+o expand");
 	});
 
 	it("renders surfaceRecess background on body rows", () => {

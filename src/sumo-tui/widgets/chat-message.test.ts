@@ -144,6 +144,34 @@ describe("ChatMessage", () => {
 		root.dispose();
 	});
 
+	it("semantic selection excludes blank gutters and collapse chrome from wrapped plaintext code", async () => {
+		const yoga = await loadYoga();
+		const root = new SumoNode(yoga.Node.create());
+		root.flexDirection = FLEX_DIRECTION_COLUMN;
+		root.width = 42;
+		root.height = 25;
+		ChatMessage.create(
+			yoga,
+			"sumo",
+			"",
+			root,
+			FIXED_TIME,
+			[{ type: "code", lang: "txt", source: "word ".repeat(180).trim() }],
+		);
+
+		root.yogaNode.calculateLayout(42, 25, DIRECTION_LTR);
+		const buffer = new CellBuffer(25, 42);
+		composite(root, buffer);
+
+		// First continuation row: nested border and continuation gutter are chrome;
+		// wrapped source starts at the same column as numbered source rows.
+		for (let col = 2; col <= 7; col += 1) expect(buffer.getSelectionMeta(3, col)).toBeUndefined();
+		expect(buffer.getSelectionMeta(3, 8)).toEqual({ selectable: true });
+		// Wrapped-content collapse affordance is entirely non-selectable.
+		for (let col = 0; col < 42; col += 1) expect(buffer.getSelectionMeta(22, col)).toBeUndefined();
+		root.dispose();
+	});
+
 	it("semantic chat selection cannot start from the frame and highlights only content", async () => {
 		const yoga = await loadYoga();
 		const root = new SumoNode(yoga.Node.create());
@@ -326,6 +354,27 @@ describe("ChatMessage", () => {
 		expect(plain).toContain("✦ hidden thought");
 		expect(plain).not.toContain("**hidden**");
 		expect(raw).toContain("\x1b[3m");
+		root.dispose();
+	});
+
+	it("wraps question prompts and choices inside the message body", async () => {
+		const yoga = await loadYoga();
+		const root = new SumoNode(yoga.Node.create());
+		const message = ChatMessage.create(yoga, "sumo", "", root, FIXED_TIME, [
+			{
+				type: "question",
+				question: {
+					prompt: "Choose the deployment environment for this release",
+					choices: ["Production with the full validation suite"],
+				},
+			},
+		]);
+
+		const plain = renderRows(message, 30).map(stripAnsi);
+
+		expect(plain.some((row) => row.includes("for this release"))).toBe(true);
+		expect(plain.some((row) => row.includes("validation suite"))).toBe(true);
+		expect(plain.every((row) => row.length === 30)).toBe(true);
 		root.dispose();
 	});
 

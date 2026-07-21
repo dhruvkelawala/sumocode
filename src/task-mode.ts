@@ -20,14 +20,14 @@
  *
  * Shutdown uses Pi's `ctx.shutdown()` instead of `cmux close-surface`: task
  * completion belongs to the child process lifecycle, while pane close is an
- * explicit orchestrator/user decision (`bg_task stop`).
+ * explicit orchestrator/user decision (for example subagent cancellation).
  */
 
 import { appendFileSync, writeFileSync } from "node:fs";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 /**
- * Marker-file env vars set by the bg_task visible-agent spawn pipeline. They
+ * Marker-file env vars set by the visible-subagent spawn pipeline. They
  * are a contract between the orchestrator and THIS process only: if they leak
  * to subprocesses (bash tool commands, integration-test PTY children, nested
  * pi runs), those descendants write their own lifecycle into OUR marker
@@ -115,10 +115,9 @@ export function extractFinalAssistantText(messages: unknown[]): string {
 /**
  * Persist the agent's final response so the orchestrating session can read it.
  *
- * Writes to `$SUMOCODE_TASK_RESPONSE_FILE` which the bg_task spawn pipeline
- * sets when it launches a visible agent pane. The orchestrator polls this
- * path; when it appears, the task transitions to status=completed and the
- * `bg_task log` action returns this file's contents.
+ * Writes to `$SUMOCODE_TASK_RESPONSE_FILE`, which the visible-subagent
+ * backend reads after the child process settles. Updated on every agent_end
+ * so a multi-turn pane always exposes its latest assistant response.
  */
 function persistResponse(messages: unknown[]): void {
 	const file = capturedMarkerEnv?.SUMOCODE_TASK_RESPONSE_FILE ?? process.env.SUMOCODE_TASK_RESPONSE_FILE;

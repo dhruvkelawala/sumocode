@@ -1,5 +1,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { BackgroundTaskManager } from "./background-tasks/task-manager.js";
+import type { SubagentManager } from "./subagents/manager.js";
 import { installCommandPalette } from "./command-palette.js";
 import { registerCursorCommand } from "./commands/cursor.js";
 import { registerDiffCommand } from "./commands/diff.js";
@@ -122,6 +123,7 @@ export class InteractionRegistry {
 export interface InstallSumoInteractionsOptions {
 	readonly reporter?: InteractionDiagnosticReporter;
 	readonly backgroundTaskManager?: BackgroundTaskManager;
+	readonly subagentManager?: SubagentManager;
 	readonly includeUiSurfaces?: boolean;
 }
 
@@ -141,7 +143,7 @@ export function installSumoInteractions(pi: ExtensionAPI, options: InstallSumoIn
 	registry.install("commands.exit", registerExitCommand);
 	registry.install("commands.slate", registerSlateCommand);
 	registry.install("commands.persona", registerPersonaCommand);
-	registry.install("commands.review", (targetPi) => registerReviewCommand(targetPi, { taskSpawner: options.backgroundTaskManager }));
+	registry.install("commands.review", (targetPi) => registerReviewCommand(targetPi, { subagentSpawner: options.subagentManager }));
 	registry.install("commands.ship", registerShipCommand);
 	registry.install("commands.spinner", registerSpinnerCommand);
 	registry.install("commands.sync", registerSumoSyncCommand);

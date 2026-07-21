@@ -1,19 +1,12 @@
 import type { PaneRef } from "../terminal-host/index.js";
 
 export type BackgroundTaskStatus = "running" | "completed" | "failed" | "stopped";
-
 export type SplitDirection = "right" | "down";
-/**
- * - `shell`: managed bash command, output captured to log file.
- * - `sumocode`: handed-off agent pane via the `sumocode task` wrapper.
- *
- * A bare `pi` runner was considered and rejected: it would need a duplicate
- * code path for prompt passing (no `--prompt-file` flag), would require
- * bypassing `shouldNoopDuplicateInstalledExtension`'s launcher dedup, and
- * provides no unique value over the `sumocode` runner since every
- * orchestrator that uses `bg_task` is already running SumoCode.
- */
-export type BackgroundTaskRunner = "shell" | "sumocode";
+
+/** New background terminal spawns are shell-only. */
+export type BackgroundTaskRunner = "shell";
+/** Legacy agent metadata remains readable during recovery. */
+export type PersistedBackgroundTaskRunner = BackgroundTaskRunner | "sumocode";
 
 export interface BackgroundTaskCmuxRefs {
 	workspaceRef: string;
@@ -48,12 +41,18 @@ export interface BackgroundTask {
 	diagFile?: string;
 	processStartTime?: string;
 	visible: boolean;
-	runner: BackgroundTaskRunner;
+	runner: PersistedBackgroundTaskRunner;
 	model?: string;
 	thinking?: BackgroundTaskThinking;
 	pane?: PaneRef;
 	worktree?: BackgroundTaskWorktreeRef;
-	notifyOnExit: boolean;
+	/**
+	 * "typed" marks tasks whose completion is delivered as a typed
+	 * terminal-result message (bg_start). Persisted in meta.json so ownership
+	 * survives reload/rebind recovery and failed kills — a process-local set
+	 * would drop both (PR #334 review).
+	 */
+	resultDelivery?: "typed";
 }
 
 export interface SpawnBackgroundTaskOptions {
@@ -63,12 +62,7 @@ export interface SpawnBackgroundTaskOptions {
 	visible?: boolean;
 	direction?: SplitDirection;
 	runner?: BackgroundTaskRunner;
-	model?: string;
-	thinking?: BackgroundTaskThinking;
-	worktree?: boolean;
-	branch?: string;
-	baseRef?: string;
-	notifyOnExit?: boolean;
+	resultDelivery?: "typed";
 }
 
 export const BACKGROUND_TASK_META_SCHEMA_VERSION = 3;
@@ -93,14 +87,14 @@ export interface BackgroundTaskSnapshot {
 	diagFile?: string;
 	processStartTime?: string;
 	visible: boolean;
-	runner: BackgroundTaskRunner;
+	runner: PersistedBackgroundTaskRunner;
 	model?: string;
 	thinking?: BackgroundTaskThinking;
 	pane?: PaneRef;
 	/** Legacy v2 field, accepted during recovery only. */
 	cmux?: BackgroundTaskCmuxRefs;
 	worktree?: BackgroundTaskWorktreeRef;
-	notifyOnExit?: boolean;
+	resultDelivery?: "typed";
 }
 
 export function toBackgroundTaskSnapshot(task: BackgroundTask): BackgroundTaskSnapshot {
@@ -129,24 +123,13 @@ export function toBackgroundTaskSnapshot(task: BackgroundTask): BackgroundTaskSn
 		thinking: task.thinking,
 		pane: task.pane,
 		worktree: task.worktree,
-		notifyOnExit: task.notifyOnExit,
+		resultDelivery: task.resultDelivery,
 	};
-}
-
-/**
- * Composes the follow-up wake message injected when a notifyOnExit task
- * finishes (task-manager.ts). Kept next to `isBackgroundTaskWakeMessage` so
- * the composer and the recognizer can never drift apart — the fork selector
- * uses the recognizer to keep these synthetic user-role messages out of the
- * "fork from message" list.
- */
-export function buildBackgroundTaskWakeMessage(taskId: string, status: string, label: string, paneHint = ""): string {
-	return `background task ${taskId} ${status}: ${label}${paneHint}`;
 }
 
 const WAKE_MESSAGE_PATTERN = /^background task bg-[\w-]+ \w[\w-]*: /;
 
-/** True for messages produced by `buildBackgroundTaskWakeMessage`. */
+/** True for legacy prose wake messages retained in old session transcripts. */
 export function isBackgroundTaskWakeMessage(text: string): boolean {
 	return WAKE_MESSAGE_PATTERN.test(text);
 }

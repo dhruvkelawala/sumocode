@@ -5,6 +5,8 @@ import type { PaneRef, TerminalHost } from "./types.js";
 
 const noneTerminalHost: TerminalHost = {
 	kind: "none",
+	async startAgentPane() { return { ok: false, error: "requires a terminal host (cmux or herdr)" }; },
+	async sendPaneText() { return { ok: false, error: "requires a terminal host (cmux or herdr)" }; },
 	async openCommandInSplit() { return { ok: false, error: "requires a terminal host (cmux or herdr)" }; },
 	async closePane() { return { ok: false, error: "requires a terminal host (cmux or herdr)" }; },
 	async notify() {},
@@ -22,4 +24,14 @@ export function getTerminalHostForPane(pane: PaneRef): TerminalHost {
 }
 
 export { detectTerminalHost } from "./detect.js";
-export type { PaneRef, TerminalHost, TerminalHostKind, HostResult, PiExecLike, SplitDirection } from "./types.js";
+export type {
+	AgentPanePlacement,
+	HostResult,
+	PaneRef,
+	PiExecLike,
+	SplitDirection,
+	StartAgentPaneOptions,
+	StartedAgentPane,
+	TerminalHost,
+	TerminalHostKind,
+} from "./types.js";

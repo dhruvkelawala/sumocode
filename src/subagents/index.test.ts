@@ -1,13 +1,59 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferredResultDelivery, type DeferredResultDelivery } from "./delivery.js";
 import type { SubagentEvent } from "./domain.js";
-import { installSubagents } from "./index.js";
+import { flushDeferredResultDelivery, installSubagents } from "./index.js";
 
 const backend = vi.hoisted(() => ({
 	emitters: [] as Array<(event: SubagentEvent) => void>,
+	paneEmitters: [] as Array<(event: SubagentEvent) => void>,
+	piCalls: 0,
+	paneCalls: [] as Array<{ cwd: string; placement: unknown; model?: string; thinking?: string; tools?: readonly string[] }>,
+}));
+
+vi.mock("./manifest.js", () => ({
+	buildCompletionManifest: vi.fn(async (options: { baseRef: string; outcome: { kind: "completed" | "failed" | "interrupted" }; worktree?: { path: string; branch: string } }) => ({
+		baseRef: options.baseRef,
+		headRef: "host-head",
+		branch: options.worktree?.branch,
+		worktreePath: options.worktree?.path,
+		changedPaths: options.worktree ? ["src/a.ts"] : [],
+		dirty: false,
+		commits: options.worktree ? 1 : 0,
+		exit: options.outcome.kind,
+		durationMs: 10,
+	})),
+}));
+
+vi.mock("../terminal-host/index.js", () => ({
+	getTerminalHost: () => ({
+		kind: "herdr",
+		startAgentPane: vi.fn(),
+		sendPaneText: vi.fn(),
+		openCommandInSplit: vi.fn(),
+		openExistingWorktreeWorkspace: vi.fn(),
+		closePane: vi.fn(),
+		notify: vi.fn(),
+	}),
+}));
+
+vi.mock("./backend-pane.js", () => ({
+	spawnPaneChild: vi.fn((options: { cwd: string; placement: unknown; model?: string; thinking?: string; tools?: readonly string[] }) => {
+		backend.paneCalls.push(options);
+		return {
+			events: (emit: (event: SubagentEvent) => void) => {
+				backend.paneEmitters.push(emit);
+				emit({ kind: "run-started" });
+				emit({ kind: "pane-attached", pane: { agentName: "visible-worker-abc", workspaceId: "w1", tabId: "w1:t2", paneId: "w1:p3" } });
+			},
+			ready: Promise.resolve(),
+			interrupt: vi.fn(),
+		};
+	}),
 }));
 
 vi.mock("./backend-pi.js", () => ({
 	spawnPiChild: vi.fn((options: { model?: string }) => {
+		backend.piCalls += 1;
 		let emitEvent: ((event: SubagentEvent) => void) | undefined;
 		return {
 			events: (emit: (event: SubagentEvent) => void) => {
@@ -16,6 +62,7 @@ vi.mock("./backend-pi.js", () => ({
 				// Mirror the real backend's synchronous settle-as-failed path
 				// (invalid model override) for tests that need it.
 				if (options.model === "sync-fail") emit({ kind: "run-settled", outcome: { kind: "failed", errorText: "invalid model" } });
+				else emit({ kind: "run-started" });
 			},
 			interrupt: vi.fn(() => emitEvent?.({ kind: "run-settled", outcome: { kind: "interrupted" } })),
 			sessionFilePath: "/tmp/child-session.jsonl",
@@ -26,7 +73,7 @@ vi.mock("./backend-pi.js", () => ({
 type Handler = (event: unknown, ctx: unknown) => void;
 type Tool = { name: string; execute: (...args: unknown[]) => Promise<unknown> };
 
-const createHarness = () => {
+const createHarness = (delivery?: DeferredResultDelivery) => {
 	let idle = true;
 	const handlers = new Map<string, Handler[]>();
 	const tools = new Map<string, Tool>();
@@ -38,7 +85,7 @@ const createHarness = () => {
 		getActiveTools: vi.fn(() => ["read", "bash"]),
 		getThinkingLevel: vi.fn(() => "medium"),
 	};
-	const manager = installSubagents(pi as never);
+	const manager = installSubagents(pi as never, delivery);
 	const ctx = {
 		cwd: "/tmp/project",
 		model: { provider: "openai", id: "gpt-5" },
@@ -65,16 +112,56 @@ const spawn = (manager: ReturnType<typeof installSubagents>, title = "worker") =
 
 beforeEach(() => {
 	backend.emitters.length = 0;
+	backend.paneEmitters.length = 0;
+	backend.piCalls = 0;
+	backend.paneCalls.length = 0;
 });
 
 describe("subagent result delivery", () => {
-	it("defers while the parent is busy and flushes exactly once on agent_end", () => {
+	it("flushes a shared typed terminal payload exactly once across a session switch", () => {
+		const delivery = createDeferredResultDelivery();
+		const harness = createHarness(delivery);
+		harness.fire("session_start");
+		harness.setIdle(false);
+		harness.fire("agent_start");
+		const details = { id: "bg-7", title: "server", status: "completed", exitCode: 0 };
+		delivery.defer("bg-7", () => ({
+			id: "bg-7",
+			customType: "terminal-result",
+			title: "server",
+			status: "completed",
+			content: "Background terminal bg-7 exited (0).",
+			details,
+		}));
+		flushDeferredResultDelivery(delivery);
+		expect(harness.sendMessage).not.toHaveBeenCalled();
+
+		harness.fire("session_shutdown");
+		harness.setIdle(true);
+		harness.fire("session_start");
+
+		expect(harness.sendMessage).toHaveBeenCalledOnce();
+		expect(harness.sendMessage).toHaveBeenCalledWith(
+			{
+				customType: "terminal-result",
+				content: "Background terminal bg-7 exited (0).",
+				display: true,
+				details,
+			},
+			{ deliverAs: "followUp", triggerTurn: true },
+		);
+		harness.fire("agent_end");
+		expect(harness.sendMessage).toHaveBeenCalledOnce();
+	});
+
+	it("defers while the parent is busy and flushes exactly once on agent_end", async () => {
 		const harness = createHarness();
 		harness.setIdle(false);
 		harness.fire("agent_start");
-		spawn(harness.manager, "research");
+		await spawn(harness.manager, "research");
 
 		backend.emitters[0]?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "findings" } });
+		await vi.waitFor(() => expect(harness.manager.get("sa-1")?.status).toBe("done"));
 		expect(harness.sendMessage).not.toHaveBeenCalled();
 
 		harness.setIdle(true);
@@ -85,31 +172,84 @@ describe("subagent result delivery", () => {
 				customType: "subagent-result",
 				content: expect.stringContaining('Subagent sa-1 "research" finished.'),
 				display: true,
-				details: { id: "sa-1", title: "research", status: "done" },
+				details: {
+					id: "sa-1",
+					title: "research",
+					status: "done",
+					manifest: expect.objectContaining({ changedPaths: [] }),
+				},
 			},
 			{ deliverAs: "followUp", triggerTurn: true },
 		);
+		const delivered = (harness.sendMessage.mock.calls[0] as unknown[])[0] as { content: string };
+		expect(delivered.content).toContain("```text\nshared checkout · base HEAD · +0 checkout commits · changed paths suppressed · checkout clean\n```");
 
 		harness.setIdle(true);
 		harness.fire("agent_end");
 		expect(harness.sendMessage).toHaveBeenCalledOnce();
 	});
 
-	it("flushes immediately when a reliable context reports the parent idle", () => {
+	it("routes visible children through the pane backend and delivers one pane-referenced card", async () => {
+		const harness = createHarness();
+		harness.setIdle(false);
+		harness.fire("agent_start");
+		await harness.manager.spawn({ prompt: "watch me", title: "visible worker", cwd: "/tmp/project", visible: true });
+		expect(backend.paneCalls).toHaveLength(1);
+		expect(backend.piCalls).toBe(0);
+		expect(harness.manager.get("sa-1")?.pane).toEqual({ agentName: "visible-worker-abc", workspaceId: "w1", tabId: "w1:t2", paneId: "w1:p3" });
+		// Full-toolset parent: no --tools narrowing (pi --tools would strip the
+		// child's extension tools), and no model/thinking was set or inherited.
+		expect(backend.paneCalls[0]?.tools).toBeUndefined();
+
+		backend.paneEmitters[0]?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "visible result" } });
+		await vi.waitFor(() => expect(harness.manager.get("sa-1")?.status).toBe("done"));
+		harness.setIdle(true);
+		harness.fire("agent_end");
+		harness.fire("agent_end");
+
+		expect(harness.sendMessage).toHaveBeenCalledOnce();
+		expect(harness.sendMessage).toHaveBeenCalledWith(
+			expect.objectContaining({
+				customType: "subagent-result",
+				content: expect.stringContaining("Pane: w1:p3 · agent visible-worker-abc"),
+				details: expect.objectContaining({ pane: { agentName: "visible-worker-abc", workspaceId: "w1", tabId: "w1:t2", paneId: "w1:p3" } }),
+			}),
+			{ deliverAs: "followUp", triggerTurn: true },
+		);
+	});
+
+	it("visible children inherit parent model/thinking and narrow with a narrowed parent", async () => {
+		const harness = createHarness();
+		await harness.manager.spawn({
+			prompt: "restricted work",
+			title: "narrow child",
+			cwd: "/tmp/project",
+			visible: true,
+			inherited: { model: { provider: "openai-codex", id: "gpt-5.6-sol" }, thinking: "high" },
+			builtInTools: ["read", "grep"],
+		});
+		expect(backend.paneCalls).toHaveLength(1);
+		expect(backend.paneCalls[0]?.model).toBe("openai-codex/gpt-5.6-sol");
+		expect(backend.paneCalls[0]?.thinking).toBe("high");
+		// Narrowed parent (--tools read,grep) => narrowed child allowlist.
+		expect(backend.paneCalls[0]?.tools).toEqual(["read", "grep"]);
+	});
+
+	it("flushes immediately when a reliable context reports the parent idle", async () => {
 		const harness = createHarness();
 		harness.fire("session_start");
-		spawn(harness.manager);
+		await spawn(harness.manager);
 
 		backend.emitters[0]?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
 
-		expect(harness.sendMessage).toHaveBeenCalledOnce();
+		await vi.waitFor(() => expect(harness.sendMessage).toHaveBeenCalledOnce());
 	});
 
 	it("does not deliver a settled result consumed through subagent_wait", async () => {
 		const harness = createHarness();
 		harness.setIdle(false);
 		harness.fire("agent_start");
-		spawn(harness.manager);
+		await spawn(harness.manager);
 		backend.emitters[0]?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "inline result" } });
 
 		await harness.tool("subagent_wait").execute("tc", { ids: ["sa-1"] }, undefined, undefined, harness.ctx as never);
@@ -124,7 +264,7 @@ describe("subagent result delivery", () => {
 		const harness = createHarness();
 		harness.setIdle(false);
 		harness.fire("agent_start");
-		spawn(harness.manager);
+		await spawn(harness.manager);
 
 		await harness.tool("subagent_cancel").execute("tc", { ids: ["sa-1"] });
 		harness.setIdle(true);
@@ -134,15 +274,16 @@ describe("subagent result delivery", () => {
 		expect(harness.sendMessage).not.toHaveBeenCalled();
 	});
 
-	it("delivers failed children with their reason and partial output", () => {
+	it("delivers failed children with their reason and partial output", async () => {
 		const harness = createHarness();
 		harness.setIdle(false);
 		harness.fire("agent_start");
-		spawn(harness.manager, "failing worker");
+		await spawn(harness.manager, "failing worker");
 		backend.emitters[0]?.({
 			kind: "run-settled",
 			outcome: { kind: "failed", errorText: "pi killed by SIGKILL", partialText: "partial progress" },
 		});
+		await vi.waitFor(() => expect(harness.manager.get("sa-1")?.status).toBe("error"));
 
 		harness.setIdle(true);
 		harness.fire("agent_end");
@@ -151,31 +292,32 @@ describe("subagent result delivery", () => {
 			expect.objectContaining({
 				customType: "subagent-result",
 				content: expect.stringMatching(/failed[.]\n\nError: pi killed by SIGKILL\n\npartial progress/),
-				details: { id: "sa-1", title: "failing worker", status: "error" },
+				details: expect.objectContaining({ id: "sa-1", title: "failing worker", status: "error", manifest: expect.objectContaining({ exit: "failed" }) }),
 			}),
 			{ deliverAs: "followUp", triggerTurn: true },
 		);
 	});
 
-	it("keeps auto-delivery working across an in-process session switch", () => {
+	it("keeps auto-delivery working across an in-process session switch", async () => {
 		const harness = createHarness();
 		harness.fire("session_start");
 		// In-process switch: shutdown fires but the extension instance survives.
 		harness.fire("session_shutdown");
 		harness.fire("session_start");
 		harness.setIdle(false);
-		spawn(harness.manager, "post-switch");
+		await spawn(harness.manager, "post-switch");
 		backend.emitters.at(-1)?.({ kind: "message-end", role: "assistant", text: "after switch" });
 		backend.emitters.at(-1)?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "after switch" } });
+		await vi.waitFor(() => expect(harness.manager.get("sa-1")?.status).toBe("done"));
 		harness.fire("agent_end");
 		expect(harness.sendMessage).toHaveBeenCalledTimes(1);
 		expect((harness.sendMessage.mock.calls[0] as unknown[])[0]).toMatchObject({ customType: "subagent-result" });
 	});
 
-	it("does not deliver stale pre-switch settlements into the new session", () => {
+	it("does not deliver stale pre-switch settlements into the new session", async () => {
 		const harness = createHarness();
 		harness.setIdle(false);
-		spawn(harness.manager, "pre-switch");
+		await spawn(harness.manager, "pre-switch");
 		// Child is still running when the session switches; disposeAll interrupts
 		// it and the fold lands AFTER shutdown (real SIGTERM timing).
 		harness.fire("session_shutdown");
@@ -204,8 +346,9 @@ describe("subagent result delivery", () => {
 		// delivery buffer must NOT record sa-1 as consumed.
 		await harness.tool("subagent_cancel").execute("tc", { ids: ["sa-1"] }, undefined, undefined, harness.ctx as never);
 		// Now the real sa-1 spawns, settles, and must still auto-deliver.
-		spawn(harness.manager, "real-sa-1");
+		await spawn(harness.manager, "real-sa-1");
 		backend.emitters.at(-1)?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
+		await vi.waitFor(() => expect(harness.manager.get("sa-1")?.status).toBe("done"));
 		harness.fire("agent_end");
 		expect(harness.sendMessage).toHaveBeenCalledTimes(1);
 		expect((harness.sendMessage.mock.calls[0] as unknown[])[0]).toMatchObject({ customType: "subagent-result" });

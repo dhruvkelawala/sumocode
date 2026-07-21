@@ -751,7 +751,8 @@
 					"TERM": "xterm-256color",
 					"COLORTERM": "truecolor",
 					"FORCE_COLOR": "3",
-					"PI_CODING_AGENT_DIR": "test/fixtures/pi-agent-ultraviolet-core"
+					"PI_CODING_AGENT_DIR": "test/fixtures/pi-agent-ultraviolet-core",
+					"SUMOCODE_RUNCAT_FONT": "0"
 				},
 				"inputs": [
 					{
@@ -1019,6 +1020,11 @@
 				{
 					"row": 36,
 					"col": 3,
+					"text": " "
+				},
+				{
+					"row": 36,
+					"col": 4,
 					"text": "Working…"
 				}
 			]

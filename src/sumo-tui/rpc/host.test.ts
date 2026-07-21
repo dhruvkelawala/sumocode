@@ -103,6 +103,9 @@ describe("handleRpcMessageFollowUp", () => {
 			getText: vi.fn(() => text),
 			addToHistory: vi.fn(),
 			setText: vi.fn(),
+			// Identity expansion by default; image tests override.
+			expandDraftTokens: vi.fn((draft: string) => draft),
+			clearImageDrafts: vi.fn(),
 		};
 	}
 
@@ -149,6 +152,27 @@ describe("handleRpcMessageFollowUp", () => {
 		expect(scheduler.submit).toHaveBeenCalledWith("still here", { forceQueue: true });
 		expect(editor.addToHistory).not.toHaveBeenCalled();
 		expect(editor.setText).not.toHaveBeenCalled();
+		// The image draft state must survive a declined queue — the untouched
+		// draft (with its tokens) stays editable.
+		expect(editor.clearImageDrafts).not.toHaveBeenCalled();
+	});
+
+	it("queues the expanded submission for image drafts and clears drafts only on accept", async () => {
+		const editor = followUpEditor("look at [Image 1]");
+		editor.expandDraftTokens.mockImplementation((draft: string) => draft.replace("[Image 1]", "/tmp/img-1.png"));
+		const scheduler = {
+			getSnapshot: vi.fn(() => ({ busy: true, queuedMessages: [], pausedAfterFailure: false })),
+			submit: vi.fn(async () => "queued" as const),
+		};
+
+		handleRpcMessageFollowUp({ editor, scheduler, notifications: { notify: vi.fn() } });
+		await flush();
+
+		// The QUEUED text carries the real path; history keeps the human-readable token form.
+		expect(scheduler.submit).toHaveBeenCalledWith("look at /tmp/img-1.png", { forceQueue: true });
+		expect(editor.addToHistory).toHaveBeenCalledWith("look at [Image 1]");
+		expect(editor.setText).toHaveBeenCalledWith("");
+		expect(editor.clearImageDrafts).toHaveBeenCalledOnce();
 	});
 });
 

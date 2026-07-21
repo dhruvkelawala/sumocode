@@ -201,7 +201,7 @@ export async function submitInitialPromptFromEnv(env: NodeJS.ProcessEnv, submit:
 }
 
 export interface RpcMessageFollowUpDependencies {
-	readonly editor: Pick<RpcHostEditorController, "getText" | "addToHistory" | "setText">;
+	readonly editor: Pick<RpcHostEditorController, "getText" | "addToHistory" | "setText" | "expandDraftTokens" | "clearImageDrafts">;
 	readonly scheduler: Pick<RpcPromptScheduler, "getSnapshot" | "submit">;
 	readonly notifications: ErrorNotifier;
 }
@@ -211,10 +211,17 @@ export function handleRpcMessageFollowUp(deps: RpcMessageFollowUpDependencies): 
 		const draft = deps.editor.getText();
 		if (draft.trim().length === 0) return;
 		if (!deps.scheduler.getSnapshot().busy) return;
-		const result = await deps.scheduler.submit(draft, { forceQueue: true });
+		// Queue the EXPANDED submission (pasted [Image N] tokens → temp paths),
+		// mirroring the Enter-submit wrapper — a raw draft would deliver the
+		// literal token once drained. Expansion is capture-only here; the draft
+		// state is cleared ONLY after the queue accepts, because a busy→idle
+		// race can return "ignored" and the untouched draft must stay editable.
+		const submission = deps.editor.expandDraftTokens(draft);
+		const result = await deps.scheduler.submit(submission, { forceQueue: true });
 		if (result !== "queued" && result !== "handled") return;
 		deps.editor.addToHistory(draft);
 		deps.editor.setText("");
+		deps.editor.clearImageDrafts();
 	}, deps.notifications);
 }
 

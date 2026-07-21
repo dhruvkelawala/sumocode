@@ -267,6 +267,16 @@ export class RpcHostEditorController implements EditorTextController, KeyTarget 
 		this.editor.addToHistory?.(text);
 	}
 
+	/** See CathedralEditor.expandDraftTokens — expand-only, no clear. */
+	public expandDraftTokens(text: string): string {
+		return this.editor.expandDraftTokens(text);
+	}
+
+	/** See CathedralEditor.clearImageDrafts — the commit-side clear. */
+	public clearImageDrafts(): void {
+		this.editor.clearImageDrafts();
+	}
+
 	public getText(): string {
 		return this.editor.getText();
 	}

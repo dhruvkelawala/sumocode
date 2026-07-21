@@ -53,6 +53,9 @@ export const ULTRAVIOLET_CORE_THEME: Theme = {
 			frames: ULTRAVIOLET_RUNCAT_FRAMES,
 			intervalMs: ULTRAVIOLET_RUNCAT_INTERVAL_MS,
 			capabilityEnv: ULTRAVIOLET_RUNCAT_CAPABILITY_ENV,
+			// The icomoon cat overdraws its cell; one space visually vanishes
+			// (observed live in Ghostty: cat glued to "Working…").
+			labelGapCells: 2,
 		},
 	},
 	chrome: {

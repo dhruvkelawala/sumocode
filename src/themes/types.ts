@@ -47,6 +47,14 @@ export interface ThemeWorkingIndicatorEnhancedVariant {
 	readonly frames: readonly string[];
 	readonly intervalMs: number;
 	readonly capabilityEnv: string;
+	/**
+	 * Cells of gap between the frame and the "Working…" label (default 1).
+	 * Glyph fonts may overdraw their declared cell — the RunCat icomoon cat
+	 * bleeds into the following cell, visually swallowing a single space —
+	 * so enhanced variants can widen the gap without smuggling whitespace
+	 * into the frame strings (frames stay one logical cell, no whitespace).
+	 */
+	readonly labelGapCells?: number;
 }
 
 export interface ThemeWorkingIndicator {
@@ -62,6 +70,8 @@ export interface ResolvedThemeWorkingIndicator {
 	readonly intervalMs: number;
 	readonly capabilityEnv?: string;
 	readonly capabilityState: "enabled" | "disabled" | "unrecognized";
+	/** See ThemeWorkingIndicatorEnhancedVariant.labelGapCells. Always ≥ 1. */
+	readonly labelGapCells: number;
 }
 
 /**

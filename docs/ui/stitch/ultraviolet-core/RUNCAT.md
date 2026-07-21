@@ -15,7 +15,7 @@ Ultraviolet Core can opt into Fredy Sandoval's RunCat working indicator as an en
 
 - Frames: `U+E900`, `U+E901`, `U+E902`, `U+E903`, `U+E904`
 - Cadence: 167 ms
-- Spacing: no leading/trailing whitespace in frame strings; SumoCode renders ` <frame> Working…`
+- Spacing: no leading/trailing whitespace in frame strings; SumoCode renders ` <frame>  Working…` with a TWO-cell gap (`labelGapCells: 2`) — the icomoon glyph overdraws its declared cell and a single space visually vanishes (observed live in Ghostty)
 - Color: Ultraviolet accent `#B974FF`
 - Label: existing dim lavender `Working…` (`#9B7BBE`)
 - Width: each frame is one logical terminal cell

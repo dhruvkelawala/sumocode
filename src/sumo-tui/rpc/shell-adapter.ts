@@ -423,7 +423,7 @@ export class RpcShellAdapter {
 		const indicator = resolveThemeWorkingIndicator(theme);
 		const frame = renderIndicator(this.workingIndicatorTick, indicator.frames, theme.tokens.colors.accent);
 		const label = colorHex("Working…", activeThemeColors().foregroundDim);
-		const line = ` ${frame} ${label}`;
+		const line = ` ${frame}${" ".repeat(indicator.labelGapCells)}${label}`;
 		return width > 0 ? [truncateToWidth(line, width)] : [line];
 	}
 

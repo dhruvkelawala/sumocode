@@ -199,8 +199,9 @@ describe("WorkingIndicatorComponent", () => {
 		let line = component.render(160)[0]!;
 		expect(line).toContain(ULTRAVIOLET_RUNCAT_FRAMES[0]);
 		expect(line).toContain("\u001b[38;2;185;116;255m");
-		expect(stripAnsi(line)).toBe(` ${ULTRAVIOLET_RUNCAT_FRAMES[0]} Working…`);
-		expect(visibleWidth(stripAnsi(line))).toBe(11);
+		// Two-cell gap: the icomoon glyph overdraws its cell (labelGapCells: 2).
+		expect(stripAnsi(line)).toBe(` ${ULTRAVIOLET_RUNCAT_FRAMES[0]}  Working…`);
+		expect(visibleWidth(stripAnsi(line))).toBe(12);
 
 		tui.requestRender.mockClear();
 		vi.advanceTimersByTime(ULTRAVIOLET_RUNCAT_INTERVAL_MS - 1);

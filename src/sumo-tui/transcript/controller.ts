@@ -1,5 +1,5 @@
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
-import { mergeActivitySnapshot, sameActivity, type ActivitySnapshot } from "../../activity/domain.js";
+import { mergeActivitySnapshot, safeValuePreview, sameActivity, type ActivitySnapshot } from "../../activity/domain.js";
 import { projectPiToolActivity } from "../../activity/pi-projector.js";
 import { measureMaybe, type ResumeProfiler, type ResumeProfileMetadata } from "../runtime/resume-profiler.js";
 import type { ChatPagerReplaceStats } from "../widgets/chat-pager.js";
@@ -749,11 +749,31 @@ export function planChatDiff(
  * unchanged even if the committed-message remap (see `diffAndApplyToChat`'s doc
  * comment) gave them a new object identity.
  */
+function stringifyContentKey(value: unknown): string {
+	const seen = new WeakSet<object>();
+	try {
+		return JSON.stringify(value, (_key, current: unknown) => {
+			if (typeof current === "bigint") return `${current.toString()}n`;
+			if (typeof current !== "object" || current === null) return current;
+			if (seen.has(current)) return "[Circular]";
+			seen.add(current);
+			return current;
+		}) ?? "";
+	} catch {
+		return safeValuePreview(value, {
+			maxChars: 100_000,
+			maxDepth: 20,
+			maxEntries: 10_000,
+			maxStringChars: 100_000,
+		});
+	}
+}
+
 function messageContentKey(message: ChatMessageViewModel | undefined): string {
 	if (!message) return "";
 	const cached = messageContentKeyCache.get(message);
 	if (cached !== undefined) return cached;
-	const key = JSON.stringify([message.id, message.role, message.timestamp?.getTime() ?? null, message.blocks]);
+	const key = stringifyContentKey([message.id, message.role, message.timestamp?.getTime() ?? null, message.blocks]);
 	messageContentKeyCache.set(message, key);
 	messageContentKeyCacheMisses += 1;
 	return key;

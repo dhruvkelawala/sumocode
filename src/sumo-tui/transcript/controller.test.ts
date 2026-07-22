@@ -392,6 +392,22 @@ describe("TranscriptController incremental chat sink (B9)", () => {
 		expect(chat.replaceLastWithViewModel).not.toHaveBeenCalled();
 	});
 
+	it("fingerprints cyclic and BigInt tool invocations without crashing incremental publishes", () => {
+		const chat = fakeChatSink();
+		const controller = new TranscriptController({ chat });
+		const invocation: Record<string, unknown> = { query: "sumo", count: 1n };
+		invocation.self = invocation;
+		const message = {
+			id: "cyclic-tool",
+			role: "assistant",
+			content: [{ type: "toolCall", id: "custom-1", name: "custom", arguments: invocation }],
+		};
+
+		expect(() => controller.handleAgentEvent({ type: "message_start", message })).not.toThrow();
+		expect(() => controller.handleAgentEvent({ type: "message_update", message })).not.toThrow();
+		expect(chat.replaceViewModels).toHaveBeenCalledTimes(1);
+	});
+
 	it("message_update draft deltas call replaceLastWithViewModel, never replaceViewModels", () => {
 		const chat = fakeChatSink();
 		const controller = new TranscriptController({ chat });

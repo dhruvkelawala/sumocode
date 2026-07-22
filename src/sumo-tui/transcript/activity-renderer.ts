@@ -237,7 +237,10 @@ function renderSourceBody(activity: ActivitySnapshot, width: number, roles: Acti
 		span(`${String(startLine + index).padStart(4)}  `, { fg: roles.bodyMuted }),
 		span(line, { fg: roles.body }),
 	], width, roles));
-	const hidden = Math.max(lines.length, activity.body.totalLines ?? 0) - visible.length;
+	const remainingFromStart = activity.body.totalLines === undefined
+		? 0
+		: Math.max(0, activity.body.totalLines - startLine + 1);
+	const hidden = Math.max(lines.length, remainingFromStart) - visible.length;
 	if (hidden > 0) rows.push(renderBodyLine([
 		span("      ", { fg: roles.bodyMuted }),
 		span(`… ${hidden} lines collapsed`, { fg: roles.bodyMuted }),

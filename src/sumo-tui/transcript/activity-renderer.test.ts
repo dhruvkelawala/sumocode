@@ -119,6 +119,18 @@ describe("Activity renderer", () => {
 		expect(rows.some((row) => row.includes("   9  omega"))).toBe(true);
 	});
 
+	it("counts collapsed source lines relative to an offset preview", () => {
+		const rows = renderActivityLedgerRows(activity({
+			status: "succeeded",
+			title: "read",
+			subject: "src/a.ts",
+			body: { kind: "source", text: "line 21\nline 22", startLine: 21, totalLines: 100 },
+		}), 70).map(stripAnsi);
+
+		expect(rows.some((row) => row.includes("… 78 lines collapsed"))).toBe(true);
+		expect(rows.some((row) => row.includes("… 98 lines collapsed"))).toBe(false);
+	});
+
 	it("shows no more than 25 source rows plus one consolidated truncation marker", () => {
 		const rows = renderActivityLedgerRows(activity({
 			status: "succeeded",

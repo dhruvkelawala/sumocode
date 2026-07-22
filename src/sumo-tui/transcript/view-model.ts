@@ -7,6 +7,7 @@ import {
 	activityFromSubagentResultRecord,
 } from "../../activity/subagent-adapter.js";
 import { renderCompactActivityPill } from "./activity-renderer.js";
+import { appendOrFoldTranscriptMessage } from "./activity-fold.js";
 import { expandKey } from "./expand-key.js";
 
 export type ChatMessageRole = "user" | "sumo" | "system";
@@ -593,11 +594,12 @@ export function createTranscriptViewModelMapper(): TranscriptViewModelMapper {
 		transcriptFromSessionContext(sessionContext: unknown): TranscriptViewModel {
 			const messages = asRecord(sessionContext)?.messages;
 			if (!Array.isArray(messages)) return { messages: [] };
-			return {
-				messages: messages
-					.map((message, index) => this.messageFromPiMessage(message, index))
-					.filter((message): message is ChatMessageViewModel => message !== undefined),
-			};
+			let projected: ChatMessageViewModel[] = [];
+			for (let index = 0; index < messages.length; index += 1) {
+				const message = this.messageFromPiMessage(messages[index], index);
+				if (message) projected = appendOrFoldTranscriptMessage(projected, message);
+			}
+			return { messages: projected };
 		},
 	};
 }

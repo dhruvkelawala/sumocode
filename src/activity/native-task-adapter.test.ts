@@ -144,6 +144,38 @@ describe("native task Activity adapter", () => {
 		expect(second.activeTools?.map((tool) => tool.id)).toEqual(first.activeTools?.map((tool) => tool.id));
 	});
 
+	it("correlates missing-id nested results to the earliest unresolved same-name call", () => {
+		const activity = activityFromNativeTaskRecord({
+			toolCallId: "task-missing-tool-ids",
+			name: "task",
+			details: {
+				mode: "single",
+				results: [{
+					prompt: "Inspect files",
+					exitCode: 0,
+					messages: [
+						{ role: "assistant", content: [
+							{ type: "toolCall", name: "read", arguments: { path: "src/a.ts" } },
+							{ type: "toolCall", name: "read", arguments: { path: "src/b.ts" } },
+						] },
+						{ role: "toolResult", toolName: "read", content: [{ type: "text", text: "alpha" }] },
+						{ role: "toolResult", toolName: "read", content: [{ type: "text", text: "beta" }] },
+					],
+					usage: usage(),
+				}],
+			},
+		}, { fallbackStatus: "succeeded" });
+
+		expect(activity.activeTools).toHaveLength(2);
+		expect(activity.activeTools?.map((tool) => tool.id)).toEqual([
+			"task-missing-tool-ids:result:0:tool:read:0",
+			"task-missing-tool-ids:result:0:tool:read:1",
+		]);
+		expect(activity.activeTools?.map((tool) => tool.status)).toEqual(["succeeded", "succeeded"]);
+		expect(activity.activeTools?.map((tool) => tool.invocation)).toEqual([{ path: "src/a.ts" }, { path: "src/b.ts" }]);
+		expect(activity.activeTools?.map((tool) => tool.outputTail)).toEqual(["alpha", "beta"]);
+	});
+
 	it("falls back to assistant messages and aggregates usage and elapsed time", () => {
 		const activity = activityFromNativeTaskRecord({
 			toolCallId: "task-messages",
@@ -160,6 +192,32 @@ describe("native task Activity adapter", () => {
 		expect(activity.result?.summary).toContain("Task 1: first result");
 		expect(activity.result?.summary).toContain("Task 2: second result");
 		expect(activity.metrics).toMatchObject({ tokensIn: 30, tokensOut: 5, costUsd: 0.03, turns: 3, elapsedMs: 320 });
+	});
+
+	it("bounds huge arrays and deeply nested unknown values before traversal", () => {
+		let deep: unknown = { leaf: "visible" };
+		for (let index = 0; index < 10_000; index += 1) deep = { next: deep };
+		const activity = activityFromNativeTaskRecord({
+			name: "task",
+			arguments: {
+				type: "parallel",
+				tasks: Array.from({ length: 100_000 }, (_, index) => ({ prompt: `Task ${index}` })),
+			},
+			details: {
+				mode: "parallel",
+				results: Array.from({ length: 100_000 }, (_, index) => ({
+					prompt: `Task ${index}`,
+					exitCode: index === 0 ? -1 : -2,
+					messages: index === 0 ? Array.from({ length: 100_000 }, () => ({ role: "user", content: [] })) : [],
+					toolEvents: index === 0 ? [{ name: "custom", args: deep, status: "running" }] : [],
+					usage: usage(),
+				})),
+			},
+		}, { toolCallId: "bounded-deep-task", fallbackStatus: "running" });
+
+		expect(activity.activeTools).toHaveLength(16);
+		expect(activity.activeTools?.[0]?.activeTools).toHaveLength(1);
+		expect(JSON.stringify(activity).length).toBeLessThan(200_000);
 	});
 
 	it("bounds producer text and omits absent optional fields", () => {

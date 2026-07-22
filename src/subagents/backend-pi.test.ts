@@ -100,6 +100,29 @@ describe("spawnPiChild", () => {
 		]);
 	});
 
+	it("redacts nested tool argument secrets before producing a bounded preview", () => {
+		const proc = new FakeProcess();
+		const child = createPiChildSpawner(vi.fn(() => proc) as never)({ prompt: "x", cwd: "/tmp", inherited: {} });
+		const events = collect(child.events as (emit: (event: SubagentEvent) => void) => void);
+		proc.stdout.emit("data", `${JSON.stringify({
+			type: "tool_execution_start",
+			toolCallId: "secret-tool",
+			toolName: "custom",
+			args: {
+				query: "visible",
+				nested: { token: "secret-token", credentials: { password: "secret-password" } },
+			},
+		})}\n`);
+
+		const event = events.find((candidate) => candidate.kind === "tool-start");
+		expect(event).toMatchObject({ kind: "tool-start", argsPreview: expect.stringContaining("visible") });
+		if (event?.kind !== "tool-start") throw new Error("missing tool-start event");
+		expect(event.argsPreview).toContain("[REDACTED]");
+		expect(event.argsPreview).not.toContain("secret-token");
+		expect(event.argsPreview).not.toContain("secret-password");
+		expect(event.argsPreview?.length).toBeLessThanOrEqual(160);
+	});
+
 	it("reports abort as interrupted", () => {
 		const proc = new FakeProcess();
 		const controller = new AbortController();

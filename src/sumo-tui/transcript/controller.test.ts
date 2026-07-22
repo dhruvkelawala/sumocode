@@ -257,6 +257,47 @@ describe("TranscriptController Activity folding", () => {
 		expect(block).toMatchObject({ type: "activity", activity: { id: "read-1", status: "succeeded", outputTail: "final", body: { text: "final" } } });
 	});
 
+	it("keeps a live spawn result canonical and running before folding its final result", () => {
+		const running = {
+			id: "subagent:sa-live",
+			sourceId: "spawn-live",
+			kind: "subagent",
+			title: "review live auth",
+			status: "running",
+			invocation: { prompt: "Review live auth" },
+		};
+		const spawnCall = { type: "toolCall", id: "spawn-live", name: "subagent_spawn", arguments: { prompt: "Review live auth", name: "review live auth" } };
+		const controller = new TranscriptController();
+		controller.handleAgentEvent({ type: "message_start", message: { id: "assistant-live", role: "assistant", content: [spawnCall] } });
+		controller.handleAgentEvent({ type: "message_end", message: { id: "assistant-live", role: "assistant", content: [spawnCall] } });
+
+		let transcript = controller.handleAgentEvent({
+			type: "tool_execution_end",
+			toolCallId: "spawn-live",
+			toolName: "subagent_spawn",
+			args: spawnCall.arguments,
+			result: { content: [{ type: "text", text: "Started sa-live" }], details: { activity: running } },
+			isError: false,
+		});
+		let activities = transcript.messages.flatMap((message) => message.blocks).filter((block) => block.type === "activity");
+		expect(activities).toHaveLength(1);
+		expect(activities[0]).toMatchObject({ activity: { id: "subagent:sa-live", sourceId: "spawn-live", kind: "subagent", status: "running" } });
+
+		transcript = controller.handleAgentEvent({
+			type: "message_start",
+			message: {
+				role: "custom",
+				customType: "subagent-result",
+				display: true,
+				content: "No live findings",
+				details: { activity: { ...running, status: "succeeded", result: { summary: "No live findings" } } },
+			},
+		});
+		activities = transcript.messages.flatMap((message) => message.blocks).filter((block) => block.type === "activity");
+		expect(activities).toHaveLength(1);
+		expect(activities[0]).toMatchObject({ activity: { id: "subagent:sa-live", status: "succeeded", result: { summary: "No live findings" } } });
+	});
+
 	it("adopts canonical subagent identity and folds passive completion without duplication", () => {
 		const running = {
 			id: "subagent:sa-1",

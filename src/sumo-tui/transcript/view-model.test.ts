@@ -183,12 +183,10 @@ describe("structured transcript view model", () => {
 			],
 		});
 
-		const running = transcript.messages[0]?.blocks[0];
-		const completed = transcript.messages[1]?.blocks[0];
-		expect(running?.type).toBe("activity");
+		expect(transcript.messages).toHaveLength(1);
+		const completed = transcript.messages[0]?.blocks[0];
 		expect(completed?.type).toBe("activity");
-		if (running?.type !== "activity" || completed?.type !== "activity") throw new Error("wrong block type");
-		expect(running.activity.title).toBe("Fix the scroll header");
+		if (completed?.type !== "activity") throw new Error("wrong block type");
 		expect(completed.activity).toMatchObject({
 			id: "tc-task",
 			title: "Fix the scroll header",
@@ -434,6 +432,52 @@ describe("structured transcript view model", () => {
 		expect(message?.blocks).toEqual([
 			{ type: "delegation", delegation: { id: "d1", title: "scribe", agent: "scribe", status: "running", summary: "scrolling the long transcript", model: undefined, thinking: undefined, nestedTools: [], tokensIn: undefined, tokensOut: undefined, elapsedMs: undefined } },
 		]);
+	});
+
+	it("folds replayed subagent spawn queued, canonical running, and final records into one Activity", () => {
+		const running = {
+			id: "subagent:sa-1",
+			sourceId: "spawn-call-1",
+			kind: "subagent",
+			title: "review auth",
+			status: "running",
+			invocation: { prompt: "Review auth" },
+		};
+		const transcript = transcriptFromSessionContext({
+			messages: [
+				{
+					id: "assistant-spawn",
+					role: "assistant",
+					content: [{ type: "toolCall", id: "spawn-call-1", name: "subagent_spawn", arguments: { prompt: "Review auth", name: "review auth" } }],
+				},
+				{
+					role: "toolResult",
+					toolCallId: "spawn-call-1",
+					toolName: "subagent_spawn",
+					content: [{ type: "text", text: "Started sa-1" }],
+					details: { activity: running },
+				},
+				{
+					role: "custom",
+					customType: "subagent-result",
+					display: true,
+					content: "No findings",
+					details: { activity: { ...running, status: "succeeded", result: { summary: "No findings" } } },
+				},
+			],
+		});
+
+		expect(transcript.messages).toHaveLength(1);
+		expect(transcript.messages[0]?.blocks).toEqual([expect.objectContaining({
+			type: "activity",
+			activity: expect.objectContaining({
+				id: "subagent:sa-1",
+				sourceId: "spawn-call-1",
+				kind: "subagent",
+				status: "succeeded",
+				result: { summary: "No findings" },
+			}),
+		})]);
 	});
 
 	it("maps a historical subagent result custom message to a standalone Activity", () => {

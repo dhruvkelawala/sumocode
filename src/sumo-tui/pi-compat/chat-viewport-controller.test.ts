@@ -599,16 +599,22 @@ describe("ChatViewportController", () => {
 		const spawnCall = { type: "toolCall", id: "spawn-call-1", name: "subagent_spawn", arguments: { prompt: "Review auth", name: "review auth" } };
 
 		controller.handleAgentEvent({ type: "message_start", message: { role: "assistant", content: [spawnCall] } });
+		controller.handleAgentEvent({ type: "message_end", message: { role: "assistant", content: [spawnCall] } });
 		controller.handleAgentEvent({
-			type: "message_start",
-			message: {
-				role: "toolResult",
-				toolCallId: "spawn-call-1",
-				toolName: "subagent_spawn",
+			type: "tool_execution_end",
+			toolCallId: "spawn-call-1",
+			toolName: "subagent_spawn",
+			args: spawnCall.arguments,
+			result: {
 				content: [{ type: "text", text: "Started sa-1" }],
 				details: { activity: running },
 			},
+			isError: false,
 		});
+
+		let activities = (chat.getRenderedMessages()[0]?.toSnapshot().blocks ?? []).filter((block) => block.type === "activity");
+		expect(activities).toHaveLength(1);
+		expect(activities[0]).toMatchObject({ activity: { id: "subagent:sa-1", sourceId: "spawn-call-1", kind: "subagent", status: "running" } });
 		controller.handleAgentEvent({
 			type: "message_start",
 			message: {
@@ -620,9 +626,51 @@ describe("ChatViewportController", () => {
 			},
 		});
 
-		const activities = (chat.getRenderedMessages()[0]?.toSnapshot().blocks ?? []).filter((block) => block.type === "activity");
+		activities = (chat.getRenderedMessages()[0]?.toSnapshot().blocks ?? []).filter((block) => block.type === "activity");
 		expect(activities).toHaveLength(1);
 		expect(activities[0]).toMatchObject({ activity: { id: "subagent:sa-1", status: "succeeded", result: { summary: "No findings" } } });
+		root.dispose();
+	});
+
+	it("hydrates a replayed subagent queued/running/final sequence as one canonical card", async () => {
+		const { root, chat, controller } = await makeController();
+		const running = {
+			id: "subagent:sa-replay",
+			sourceId: "spawn-replay",
+			kind: "subagent",
+			title: "review replay auth",
+			status: "running",
+			invocation: { prompt: "Review replay auth" },
+		};
+		controller.renderSessionContext({
+			messages: [
+				{
+					id: "assistant-replay",
+					role: "assistant",
+					content: [{ type: "toolCall", id: "spawn-replay", name: "subagent_spawn", arguments: { prompt: "Review replay auth", name: "review replay auth" } }],
+				},
+				{
+					role: "toolResult",
+					toolCallId: "spawn-replay",
+					toolName: "subagent_spawn",
+					content: [{ type: "text", text: "Started sa-replay" }],
+					details: { activity: running },
+				},
+				{
+					role: "custom",
+					customType: "subagent-result",
+					display: true,
+					content: "Replay complete",
+					details: { activity: { ...running, status: "succeeded", result: { summary: "Replay complete" } } },
+				},
+			],
+		});
+
+		const messages = chat.getRenderedMessages().map((message) => message.toSnapshot());
+		const activities = messages.flatMap((message) => message.blocks ?? []).filter((block) => block.type === "activity");
+		expect(messages).toHaveLength(1);
+		expect(activities).toHaveLength(1);
+		expect(activities[0]).toMatchObject({ activity: { id: "subagent:sa-replay", sourceId: "spawn-replay", status: "succeeded", result: { summary: "Replay complete" } } });
 		root.dispose();
 	});
 

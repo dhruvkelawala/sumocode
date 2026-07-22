@@ -313,8 +313,8 @@ const getTaskStatus = (result: SingleResult): TaskStatus => {
 };
 
 const getParallelStatus = (results: SingleResult[]): OverallStatus => {
-	const hasRunning = results.some((result) => isTaskRunning(result));
-	if (hasRunning) return "Running";
+	const hasInProgress = results.some((result) => isTaskRunning(result) || isTaskPending(result));
+	if (hasInProgress) return "Running";
 	return results.some(isTaskError) ? "Failed" : "Done";
 };
 
@@ -1147,13 +1147,14 @@ export const taskTool = (options: TaskToolOptions = DEFAULT_OPTIONS) => (pi: Ext
 					index + 1,
 					execution.config.thinkingLevel,
 					execution.config.modelLabel,
+					-2,
 				),
 			);
 
 			const emitParallelUpdate = () => {
 				if (!onUpdate) return;
 				const running = allResults.filter((result) => result.exitCode === -1).length;
-				const done = allResults.filter((result) => result.exitCode !== -1).length;
+				const done = allResults.filter((result) => result.exitCode !== -1 && result.exitCode !== -2).length;
 				onUpdate({
 					content: [{ type: "text", text: `Parallel: ${done}/${allResults.length} done, ${running} running...` }],
 					details: makeDetails([...allResults]),
@@ -1166,6 +1167,13 @@ export const taskTool = (options: TaskToolOptions = DEFAULT_OPTIONS) => (pi: Ext
 				prepared.executions,
 				merged.maxConcurrency,
 				async (execution, index) => {
+					allResults[index] = createPlaceholderResult(
+						execution.task.item,
+						index + 1,
+						execution.config.thinkingLevel,
+						execution.config.modelLabel,
+					);
+					emitParallelUpdate();
 					const result = await runSingleTask({
 						defaultCwd: ctx.cwd,
 						item: execution.task.item,

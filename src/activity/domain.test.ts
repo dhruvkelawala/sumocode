@@ -145,6 +145,25 @@ describe("Activity domain", () => {
 		expect(() => safeValuePreview(cyclic)).not.toThrow();
 	});
 
+	it("bounds global nodes, value characters, and oversized object keys incrementally", () => {
+		let deep: unknown = { value: "visible" };
+		for (let index = 0; index < 10_000; index += 1) deep = { next: deep };
+		const hugeKey = `${"x".repeat(100_000)}token`;
+		const preview = safeValuePreview({ [hugeKey]: "must-not-leak", deep }, {
+			maxChars: 200,
+			maxDepth: 10_000,
+			maxEntries: 20,
+			maxStringChars: 40,
+			maxNodes: 32,
+			maxTotalStringChars: 100,
+		});
+
+		expect(preview.length).toBeLessThanOrEqual(200);
+		expect(preview).not.toContain("must-not-leak");
+		expect(preview).toContain("[REDACTED]");
+		expect(preview).toContain("[Truncated]");
+	});
+
 	it("strips ANSI and controls while normalizing tabs and carriage returns", () => {
 		const sanitized = sanitizeActivityText("\u001b[31mred\u001b[0m\twide 界\rnext\u0000\u009dHIDDEN\u001b\\VISIBLE");
 		expect(sanitized).toBe("red    wide 界\nnextVISIBLE");

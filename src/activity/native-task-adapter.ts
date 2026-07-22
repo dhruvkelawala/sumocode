@@ -1,5 +1,14 @@
 import type { ActivitySnapshot, ActivityStatus } from "./domain.js";
-import { safeValuePreview, sanitizeActivityText } from "./domain.js";
+import {
+	boundedAdapterPreview,
+	boundedAdapterText,
+	boundedArray,
+	boundedArrayTail,
+	boundedRecord,
+	createAdapterTraversalBudget,
+	firstBoundedAdapterString,
+	type AdapterTraversalBudget,
+} from "./adapter-bounds.js";
 import { normalizePiActivityStatus, projectPiToolActivity } from "./pi-projector.js";
 
 const TEXT_MAX = 16 * 1024;
@@ -8,23 +17,21 @@ const CHILD_OUTPUT_MAX = 4 * 1024;
 const TOOL_PREVIEW_MAX = 1_024;
 const MAX_RESULTS = 16;
 const MAX_TOOLS_PER_RESULT = 16;
+const MAX_MESSAGES_PER_RESULT = 128;
+const MAX_CONTENT_PARTS = 64;
+const ADAPTER_MAX_NODES = 32_768;
+const ADAPTER_MAX_CHARS = 768 * 1024;
 
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-	return typeof value === "object" && value !== null ? value as Record<string, unknown> : undefined;
+function asRecord(value: unknown, budget: AdapterTraversalBudget): Record<string, unknown> | undefined {
+	return boundedRecord(value, budget);
 }
 
 function boundedText(value: string, maxChars = TEXT_MAX): string {
-	const sanitized = sanitizeActivityText(value);
-	return sanitized.length <= maxChars ? sanitized : `${sanitized.slice(0, Math.max(0, maxChars - 1))}…`;
+	return value.length <= maxChars ? value : `${value.slice(0, Math.max(0, maxChars - 1))}…`;
 }
 
-function firstString(...values: unknown[]): string | undefined {
-	for (const value of values) {
-		if (typeof value !== "string") continue;
-		const text = boundedText(value).trim();
-		if (text.length > 0) return text;
-	}
-	return undefined;
+function firstString(budget: AdapterTraversalBudget, ...values: unknown[]): string | undefined {
+	return firstBoundedAdapterString(budget, TEXT_MAX, ...values);
 }
 
 function numberFrom(value: unknown): number | undefined {
@@ -35,8 +42,14 @@ function booleanFrom(value: unknown): boolean | undefined {
 	return typeof value === "boolean" ? value : undefined;
 }
 
-function boundedUnknown(value: unknown): unknown {
-	const preview = safeValuePreview(value, { maxChars: 2_000, maxDepth: 4, maxEntries: 24, maxStringChars: 500 });
+function boundedUnknown(value: unknown, budget: AdapterTraversalBudget): unknown {
+	const preview = boundedAdapterPreview(value, budget, {
+		maxChars: 2_000,
+		maxDepth: 4,
+		maxEntries: 24,
+		maxStringChars: 500,
+		maxNodes: 64,
+	});
 	try {
 		return JSON.parse(preview) as unknown;
 	} catch {
@@ -44,22 +57,27 @@ function boundedUnknown(value: unknown): unknown {
 	}
 }
 
-function textFromContent(content: unknown): string | undefined {
-	if (typeof content === "string") return boundedText(content);
-	if (!Array.isArray(content)) return undefined;
-	const text = content.flatMap((part): string[] => {
-		const record = asRecord(part);
-		return record?.type === "text" && typeof record.text === "string" ? [record.text] : [];
-	}).join("");
+function textFromContent(content: unknown, budget: AdapterTraversalBudget): string | undefined {
+	if (typeof content === "string") return boundedAdapterText(content, TEXT_MAX, budget);
+	const parts = boundedArray(content, MAX_CONTENT_PARTS, budget);
+	if (parts.length === 0) return undefined;
+	let text = "";
+	for (const part of parts) {
+		const record = asRecord(part, budget);
+		if (record?.type !== "text") continue;
+		const chunk = boundedAdapterText(record.text, TEXT_MAX - text.length, budget);
+		if (chunk) text += chunk;
+		if (text.length >= TEXT_MAX) break;
+	}
 	return text.trim().length > 0 ? boundedText(text) : undefined;
 }
 
-function assistantTextFromMessages(messages: unknown): string | undefined {
-	if (!Array.isArray(messages)) return undefined;
-	for (let index = messages.length - 1; index >= 0; index -= 1) {
-		const message = asRecord(messages[index]);
+function assistantTextFromMessages(messages: unknown, budget: AdapterTraversalBudget): string | undefined {
+	const values = boundedArrayTail(messages, MAX_MESSAGES_PER_RESULT, budget);
+	for (let index = values.length - 1; index >= 0; index -= 1) {
+		const message = asRecord(values[index], budget);
 		if (message?.role !== "assistant") continue;
-		const text = textFromContent(message.content) ?? firstString(message.text);
+		const text = textFromContent(message.content, budget) ?? firstString(budget, message.text);
 		if (text) return text;
 	}
 	return undefined;
@@ -83,8 +101,8 @@ function taskTitle(prompt: string): string {
 	return boundedText(title || "task", 80);
 }
 
-function taskStatus(result: Record<string, unknown>, fallback: ActivityStatus): ActivityStatus {
-	const stopReason = firstString(result.stopReason)?.toLowerCase();
+function taskStatus(result: Record<string, unknown>, fallback: ActivityStatus, budget: AdapterTraversalBudget): ActivityStatus {
+	const stopReason = firstString(budget, result.stopReason)?.toLowerCase();
 	if (stopReason === "aborted" || stopReason === "cancelled" || stopReason === "canceled" || result.cancelled === true) return "cancelled";
 	const exitCode = numberFrom(result.exitCode);
 	if ((exitCode !== undefined && exitCode > 0) || stopReason === "error" || result.isError === true) return "failed";
@@ -103,26 +121,28 @@ function aggregateStatus(statuses: readonly ActivityStatus[], fallback: Activity
 	return fallback;
 }
 
-function resultOutput(result: Record<string, unknown>): string | undefined {
-	const output = firstString(
-		result.finalOutput,
-		assistantTextFromMessages(result.messages),
-		result.streamingText,
-	);
+function resultOutput(result: Record<string, unknown>, budget: AdapterTraversalBudget): string | undefined {
+	const output = firstString(budget, result.finalOutput)
+		?? assistantTextFromMessages(result.messages, budget)
+		?? firstString(budget, result.streamingText);
 	return output ? boundedText(output, CHILD_OUTPUT_MAX) : undefined;
 }
 
-function resultError(result: Record<string, unknown>): string | undefined {
-	const error = firstString(result.errorMessage, result.stderr, result.error);
+function resultError(result: Record<string, unknown>, budget: AdapterTraversalBudget): string | undefined {
+	const error = firstString(budget, result.errorMessage, result.stderr, result.error);
 	return error ? boundedText(error, CHILD_OUTPUT_MAX) : undefined;
 }
 
-function projectedInvocationItem(result: Record<string, unknown>, source?: Record<string, unknown>): Record<string, unknown> {
-	const prompt = firstString(result.prompt, source?.prompt, source?.task) ?? "task";
+function projectedInvocationItem(
+	result: Record<string, unknown>,
+	source: Record<string, unknown> | undefined,
+	budget: AdapterTraversalBudget,
+): Record<string, unknown> {
+	const prompt = firstString(budget, result.prompt, source?.prompt, source?.task) ?? "task";
 	const item: Record<string, unknown> = { prompt: boundedText(prompt, PROMPT_MAX) };
-	const skill = firstString(result.skill, source?.skill);
-	const model = firstString(result.model, source?.model);
-	const thinking = firstString(result.thinking, source?.thinking);
+	const skill = firstString(budget, result.skill, source?.skill);
+	const model = firstString(budget, result.model, source?.model);
+	const thinking = firstString(budget, result.thinking, source?.thinking);
 	const fork = booleanFrom(result.fork ?? source?.fork);
 	if (skill) item.skill = boundedText(skill, 256);
 	if (model) item.model = boundedText(model, 256);
@@ -135,17 +155,18 @@ function invocationFromRecord(
 	record: Record<string, unknown>,
 	mode: string,
 	results: readonly Record<string, unknown>[],
+	budget: AdapterTraversalBudget,
 ): Record<string, unknown> | undefined {
-	const args = asRecord(record.arguments ?? record.input);
-	const argumentTasks = Array.isArray(args?.tasks)
-		? args.tasks.map(asRecord).filter((task): task is Record<string, unknown> => task !== undefined).slice(0, MAX_RESULTS)
-		: [];
+	const args = asRecord(record.arguments ?? record.input, budget);
+	const argumentTasks = boundedArray(args?.tasks, MAX_RESULTS, budget)
+		.map((value) => asRecord(value, budget))
+		.filter((task): task is Record<string, unknown> => task !== undefined);
 	const count = Math.max(results.length, argumentTasks.length, args ? 1 : 0);
 	if (count === 0) return undefined;
 	const tasks = Array.from({ length: Math.min(count, MAX_RESULTS) }, (_, index) => {
 		const result = results[index] ?? {};
 		const source = argumentTasks[index] ?? (index === 0 ? args : undefined);
-		return projectedInvocationItem(result, source);
+		return projectedInvocationItem(result, source, budget);
 	});
 	return { type: mode, tasks };
 }
@@ -158,38 +179,56 @@ function nestedToolsFromMessages(
 	messages: unknown,
 	parentId: string,
 	resultIndex: number,
+	budget: AdapterTraversalBudget,
 ): ActivitySnapshot[] {
-	if (!Array.isArray(messages)) return [];
 	const tools = new Map<string, ActivitySnapshot>();
+	const unresolvedByName = new Map<string, string[]>();
 	let fallbackIndex = 0;
-	for (const messageValue of messages) {
-		const message = asRecord(messageValue);
+	const rememberUnresolved = (name: string, id: string): void => {
+		unresolvedByName.set(name, [...(unresolvedByName.get(name) ?? []), id]);
+	};
+	const resolveByName = (name: string, explicitId?: string): string => {
+		const unresolved = unresolvedByName.get(name) ?? [];
+		if (explicitId) {
+			const index = unresolved.indexOf(explicitId);
+			if (index !== -1) unresolved.splice(index, 1);
+			return explicitId;
+		}
+		const earliest = unresolved.shift();
+		return earliest ?? `${parentId}:result:${resultIndex}:tool:${name}:${fallbackIndex++}`;
+	};
+	for (const messageValue of boundedArray(messages, MAX_MESSAGES_PER_RESULT, budget)) {
+		const message = asRecord(messageValue, budget);
 		if (!message) continue;
-		if (message.role === "assistant" && Array.isArray(message.content)) {
-			for (const part of message.content) {
-				const call = asRecord(part);
+		if (message.role === "assistant") {
+			for (const part of boundedArray(message.content, MAX_CONTENT_PARTS, budget)) {
+				const call = asRecord(part, budget);
 				if (call?.type !== "toolCall") continue;
-				const name = firstString(call.name, call.toolName) ?? "tool";
-				const id = firstString(call.id, call.toolCallId) ?? `${parentId}:result:${resultIndex}:tool:${name}:${fallbackIndex++}`;
+				const name = firstString(budget, call.name, call.toolName) ?? "tool";
+				const id = firstString(budget, call.id, call.toolCallId) ?? `${parentId}:result:${resultIndex}:tool:${name}:${fallbackIndex++}`;
 				const activity = projectPiToolActivity({
 					toolCallId: id,
 					name,
 					status: "running",
-					arguments: boundedUnknown(call.arguments ?? call.input),
+					arguments: boundedUnknown(call.arguments ?? call.input, budget),
 				}, { messageId: parentId, blockIndex: resultIndex, requireToolCallId: true });
-				if (activity) tools.set(id, activity);
+				if (activity) {
+					tools.set(id, activity);
+					rememberUnresolved(name, id);
+				}
 			}
 		}
 		if (message.role === "toolResult") {
-			const name = firstString(message.toolName, message.name) ?? "tool";
-			const id = firstString(message.toolCallId, message.id) ?? `${parentId}:result:${resultIndex}:tool:${name}:${fallbackIndex++}`;
+			const name = firstString(budget, message.toolName, message.name) ?? "tool";
+			const id = resolveByName(name, firstString(budget, message.toolCallId, message.id));
 			const existing = tools.get(id);
+			const output = textFromContent(message.content, budget);
 			const activity = projectPiToolActivity({
 				toolCallId: id,
 				name,
 				status: message.isError === true ? "error" : "success",
 				arguments: existing?.invocation,
-				content: message.content,
+				content: output ? [{ type: "text", text: output }] : [],
 				isError: message.isError,
 			}, { messageId: parentId, blockIndex: resultIndex, requireToolCallId: true });
 			if (activity) tools.set(id, activity);
@@ -198,21 +237,26 @@ function nestedToolsFromMessages(
 	return [...tools.values()].slice(0, MAX_TOOLS_PER_RESULT);
 }
 
-function nestedToolsFromResult(result: Record<string, unknown>, parentId: string, resultIndex: number): ActivitySnapshot[] {
-	const events = Array.isArray(result.toolEvents)
-		? result.toolEvents.map(asRecord).filter((event): event is Record<string, unknown> => event !== undefined).slice(0, MAX_TOOLS_PER_RESULT)
-		: [];
-	if (events.length === 0) return nestedToolsFromMessages(result.messages, parentId, resultIndex);
+function nestedToolsFromResult(
+	result: Record<string, unknown>,
+	parentId: string,
+	resultIndex: number,
+	budget: AdapterTraversalBudget,
+): ActivitySnapshot[] {
+	const events = boundedArray(result.toolEvents, MAX_TOOLS_PER_RESULT, budget)
+		.map((value) => asRecord(value, budget))
+		.filter((event): event is Record<string, unknown> => event !== undefined);
+	if (events.length === 0) return nestedToolsFromMessages(result.messages, parentId, resultIndex, budget);
 	return events.flatMap((event, toolIndex): ActivitySnapshot[] => {
-		const name = firstString(event.name, event.toolName) ?? "tool";
-		const id = firstString(event.id, event.toolCallId) ?? `${parentId}:result:${resultIndex}:tool:${name}:${toolIndex}`;
-		const rawOutput = firstString(event.output, event.text);
+		const name = firstString(budget, event.name, event.toolName) ?? "tool";
+		const id = firstString(budget, event.id, event.toolCallId) ?? `${parentId}:result:${resultIndex}:tool:${name}:${toolIndex}`;
+		const rawOutput = firstString(budget, event.output, event.text);
 		const output = rawOutput ? boundedText(rawOutput, TOOL_PREVIEW_MAX) : undefined;
 		const activity = projectPiToolActivity({
 			toolCallId: id,
 			name,
 			status: nestedToolStatus(event.status),
-			arguments: boundedUnknown(event.args ?? event.input ?? event.arguments),
+			arguments: boundedUnknown(event.args ?? event.input ?? event.arguments, budget),
 			content: output ? [{ type: "text", text: output }] : [],
 			isError: nestedToolStatus(event.status) === "failed",
 		}, { messageId: parentId, blockIndex: resultIndex, requireToolCallId: true });
@@ -220,12 +264,12 @@ function nestedToolsFromResult(result: Record<string, unknown>, parentId: string
 	});
 }
 
-function metricsFromResult(result: Record<string, unknown>): ActivitySnapshot["metrics"] | undefined {
-	const usage = asRecord(result.usage);
+function metricsFromResult(result: Record<string, unknown>, budget: AdapterTraversalBudget): ActivitySnapshot["metrics"] | undefined {
+	const usage = asRecord(result.usage, budget);
 	const tokensIn = numberFrom(usage?.input);
 	const tokensOut = numberFrom(usage?.output);
 	const usageCost = usage?.cost;
-	const costUsd = numberFrom(usageCost) ?? numberFrom(asRecord(usageCost)?.total);
+	const costUsd = numberFrom(usageCost) ?? numberFrom(asRecord(usageCost, budget)?.total);
 	const turns = numberFrom(usage?.turns);
 	const explicitElapsed = numberFrom(result.elapsedMs ?? result.durationMs);
 	const startedAt = numberFrom(result.startedAt ?? result.createdAt);
@@ -267,19 +311,22 @@ function childActivity(
 	parentId: string,
 	index: number,
 	fallbackStatus: ActivityStatus,
+	budget: AdapterTraversalBudget,
 ): ActivitySnapshot {
-	const prompt = firstString(result.prompt) ?? "task";
-	const status = taskStatus(result, fallbackStatus);
-	const output = resultOutput(result);
-	const error = resultError(result);
-	const activeTools = nestedToolsFromResult(result, parentId, index);
-	const metrics = metricsFromResult(result);
+	const prompt = firstString(budget, result.prompt) ?? "task";
+	const status = taskStatus(result, fallbackStatus, budget);
+	const output = resultOutput(result, budget);
+	const error = resultError(result, budget);
+	const activeTools = nestedToolsFromResult(result, parentId, index, budget);
+	const metrics = metricsFromResult(result, budget);
+	const model = firstString(budget, result.model);
+	const thinking = firstString(budget, result.thinking);
 	return {
 		id: `${parentId}:result:${index}`,
 		kind: "task",
 		title: taskTitle(prompt),
 		status,
-		invocation: projectedInvocationItem(result),
+		invocation: projectedInvocationItem(result, undefined, budget),
 		subject: `task ${numberFrom(result.index) ?? index + 1}`,
 		...(status === "running" ? { currentStep: taskTitle(prompt) } : {}),
 		...(output ? { outputTail: output } : {}),
@@ -287,8 +334,8 @@ function childActivity(
 		...(status === "failed" || status === "cancelled" || status === "succeeded"
 			? { result: { ...(output ? { summary: output } : {}), ...(error ? { error } : {}) } }
 			: {}),
-		...(firstString(result.model) ? { model: firstString(result.model) } : {}),
-		...(firstString(result.thinking) ? { thinking: firstString(result.thinking) } : {}),
+		...(model ? { model } : {}),
+		...(thinking ? { thinking } : {}),
 		...(metrics ? { metrics } : {}),
 	};
 }
@@ -311,23 +358,25 @@ export function activityFromNativeTaskRecord(
 	recordValue: unknown,
 	context: { readonly toolCallId?: string; readonly fallbackStatus: ActivityStatus },
 ): ActivitySnapshot {
-	const record = asRecord(recordValue) ?? {};
-	const details = asRecord(record.details);
-	const args = asRecord(record.arguments ?? record.input);
-	const mode = firstString(details?.mode, args?.type) ?? "single";
-	const resultRecords = (Array.isArray(details?.results) ? details.results : [])
-		.map(asRecord)
-		.filter((result): result is Record<string, unknown> => result !== undefined)
-		.slice(0, MAX_RESULTS);
-	const id = context.toolCallId ?? firstString(record.toolCallId, record.id) ?? "native-task";
-	const invocation = invocationFromRecord(record, mode, resultRecords);
-	const argumentTasks = Array.isArray(args?.tasks) ? args.tasks.map(asRecord).filter(Boolean) as Record<string, unknown>[] : [];
-	const fallbackPrompt = firstString(argumentTasks[0]?.prompt, args?.prompt, args?.task, record.prompt, record.task) ?? "task";
-	const children = resultRecords.map((result, index) => childActivity(result, id, index, context.fallbackStatus));
+	const budget = createAdapterTraversalBudget({ maxNodes: ADAPTER_MAX_NODES, maxChars: ADAPTER_MAX_CHARS });
+	const record = asRecord(recordValue, budget) ?? {};
+	const details = asRecord(record.details, budget);
+	const args = asRecord(record.arguments ?? record.input, budget);
+	const mode = firstString(budget, details?.mode, args?.type) ?? "single";
+	const resultRecords = boundedArray(details?.results, MAX_RESULTS, budget)
+		.map((value) => asRecord(value, budget))
+		.filter((result): result is Record<string, unknown> => result !== undefined);
+	const id = context.toolCallId ?? firstString(budget, record.toolCallId, record.id) ?? "native-task";
+	const invocation = invocationFromRecord(record, mode, resultRecords, budget);
+	const argumentTasks = boundedArray(args?.tasks, MAX_RESULTS, budget)
+		.map((value) => asRecord(value, budget))
+		.filter((task): task is Record<string, unknown> => task !== undefined);
+	const fallbackPrompt = firstString(budget, argumentTasks[0]?.prompt, args?.prompt, args?.task, record.prompt, record.task) ?? "task";
+	const children = resultRecords.map((result, index) => childActivity(result, id, index, context.fallbackStatus, budget));
 	const statuses = children.map((child) => child.status);
 	const status = aggregateStatus(statuses, normalizePiActivityStatus(record.status, record.isError === true ? "failed" : context.fallbackStatus));
-	const firstPrompt = firstString(resultRecords[0]?.prompt, fallbackPrompt) ?? "task";
-	const outputFromRecord = textFromContent(record.content) ?? firstString(record.output);
+	const firstPrompt = firstString(budget, resultRecords[0]?.prompt, fallbackPrompt) ?? "task";
+	const outputFromRecord = textFromContent(record.content, budget) ?? firstString(budget, record.output);
 	const summaries = children.map((child, index) => labeledOutput(child, index, children.length)).filter((text): text is string => !!text);
 	const errors = children.map((child, index) => labeledError(child, index, children.length)).filter((text): text is string => !!text);
 	const completed = children.filter((child) => child.status === "succeeded" || child.status === "failed" || child.status === "cancelled").length;
@@ -353,8 +402,8 @@ export function activityFromNativeTaskRecord(
 	const metrics = childMetrics || parentElapsed !== undefined
 		? { ...childMetrics, ...(parentElapsed !== undefined ? { elapsedMs: parentElapsed } : {}) }
 		: undefined;
-	const model = single?.model ?? firstString(details?.modelOverride, argumentTasks[0]?.model, args?.model, record.model);
-	const thinking = single?.thinking ?? firstString(argumentTasks[0]?.thinking, args?.thinking, record.thinking);
+	const model = single?.model ?? firstString(budget, details?.modelOverride, argumentTasks[0]?.model, args?.model, record.model);
+	const thinking = single?.thinking ?? firstString(budget, argumentTasks[0]?.thinking, args?.thinking, record.thinking);
 	return {
 		id,
 		kind: "task",

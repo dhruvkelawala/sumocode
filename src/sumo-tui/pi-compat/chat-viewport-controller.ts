@@ -3,7 +3,7 @@ import type { MouseEvent } from "../input/mouse.js";
 import type { KeyEvent } from "../input/key-router.js";
 import { logDiagnostic } from "../runtime/diagnostics.js";
 import { measureMaybe, ResumeProfiler, type ResumeProfileMetadata } from "../runtime/resume-profiler.js";
-import { mergeActivityBlock, upsertActivityBlock } from "../transcript/activity-fold.js";
+import { isFoldableResultViewModel, upsertFoldableBlock } from "../transcript/activity-fold.js";
 import {
 	chatMessageViewModelFromPiMessage,
 	chatMessageViewModelToPlainText,
@@ -122,68 +122,6 @@ export function textFromAgentMessage(message: unknown): string {
 
 function addViewModel(chat: ChatPager, message: ChatMessageViewModel): void {
 	chat.addViewModel(message);
-}
-
-function isFoldableBlock(block: ChatBlock): boolean {
-	return block.type === "activity" || block.type === "delegation";
-}
-
-function isFoldableResultViewModel(message: ChatMessageViewModel): boolean {
-	return message.blocks.some(isFoldableBlock)
-		&& message.blocks.every((block) => isFoldableBlock(block) || block.type === "image");
-}
-
-function imageBlockKey(block: Extract<ChatBlock, { type: "image" }>): string {
-	return JSON.stringify([block.mime, block.data, block.filename ?? null]);
-}
-
-function mergeDelegationBlock(existing: Extract<ChatBlock, { type: "delegation" }>, incoming: Extract<ChatBlock, { type: "delegation" }>): ChatBlock {
-	const incomingTitle = incoming.delegation.title;
-	const keepExistingTitle = existing.delegation.title !== "task" && (incomingTitle === "task" || incomingTitle === "delegation");
-	return {
-		type: "delegation",
-		delegation: {
-			...existing.delegation,
-			...incoming.delegation,
-			title: keepExistingTitle ? existing.delegation.title : incoming.delegation.title,
-			agent: incoming.delegation.agent ?? existing.delegation.agent,
-			model: incoming.delegation.model ?? existing.delegation.model,
-			thinking: incoming.delegation.thinking ?? existing.delegation.thinking,
-			nestedTools: (incoming.delegation.nestedTools?.length ?? 0) > 0 ? incoming.delegation.nestedTools : existing.delegation.nestedTools,
-			tokensIn: incoming.delegation.tokensIn ?? existing.delegation.tokensIn,
-			tokensOut: incoming.delegation.tokensOut ?? existing.delegation.tokensOut,
-			elapsedMs: incoming.delegation.elapsedMs ?? existing.delegation.elapsedMs,
-		},
-	};
-}
-
-function mergeFoldableBlock(existing: ChatBlock, incoming: ChatBlock): ChatBlock {
-	if (existing.type === "activity" && incoming.type === "activity") return mergeActivityBlock(existing, incoming);
-	if (existing.type === "delegation" && incoming.type === "delegation") return mergeDelegationBlock(existing, incoming);
-	return incoming;
-}
-
-function upsertFoldableBlock(blocks: readonly ChatBlock[], incoming: ChatBlock): ChatBlock[] {
-	if (incoming.type === "activity") return upsertActivityBlock(blocks, incoming);
-
-	if (incoming.type === "delegation") {
-		const incomingId = incoming.delegation.id;
-		const byId = incomingId
-			? blocks.findIndex((block) => block.type === "delegation" && block.delegation.id === incomingId)
-			: -1;
-		const byRunning = !incomingId && byId === -1
-			? blocks.findIndex((block) => block.type === "delegation" && (block.delegation.status === "queued" || block.delegation.status === "running"))
-			: -1;
-		const index = byId !== -1 ? byId : byRunning;
-		if (index === -1) return [...blocks, incoming];
-		return blocks.map((block, blockIndex) => blockIndex === index ? mergeFoldableBlock(block, incoming) : block);
-	}
-
-	if (incoming.type === "image") {
-		const key = imageBlockKey(incoming);
-		if (blocks.some((block) => block.type === "image" && imageBlockKey(block) === key)) return [...blocks];
-	}
-	return [...blocks, incoming];
 }
 
 function renderableLineCount(component: PiRenderableComponent | undefined, width: number): number {

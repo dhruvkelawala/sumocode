@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { registerSubagentTools } from "./tools.js";
 import { SubagentManager, type SpawnSubagentTask } from "./manager.js";
-import type { SubagentEvent } from "./domain.js";
+import type { SubagentEvent, SubagentSnapshot } from "./domain.js";
 import type { TerminalHost, TerminalHostKind } from "../terminal-host/types.js";
 
 const createHarness = (hostKind: TerminalHostKind = "herdr") => {
@@ -170,6 +170,45 @@ describe("subagent tools", () => {
 		const { tool, ctx } = createHarness();
 		await tool("subagent_spawn").execute("tc", { prompt: "do", name: "w" }, undefined, undefined, ctx as never);
 		await expect(tool("subagent_wait").execute("tc", { ids: ["sa-2"] }, undefined, undefined, ctx as never)).rejects.toThrow("Known ids: sa-1");
+	});
+
+	it("emits all 64 wait and cancel Activity envelopes", async () => {
+		const snapshots: SubagentSnapshot[] = Array.from({ length: 64 }, (_, index) => ({
+			id: `sa-${index + 1}`,
+			title: `worker ${index + 1}`,
+			prompt: `work ${index + 1}`,
+			cwd: "/tmp/project",
+			baseRef: "base-ref",
+			status: "done",
+			createdAt: 1_000,
+			settledAt: 2_000,
+			usage: { turns: 1 },
+			transcript: [],
+			liveText: "",
+			liveTools: [],
+			finalText: "done",
+		}));
+		const registered: Array<{ name: string; execute: (...args: unknown[]) => Promise<unknown> }> = [];
+		const manager = {
+			waitFor: vi.fn(async () => snapshots),
+			cancel: vi.fn(async (ids: readonly string[]) => ids.map((id) => `Cancelled ${id}`)),
+			get: vi.fn((id: string) => snapshots.find((snapshot) => snapshot.id === id)),
+		};
+		const delivery = { consume: vi.fn() };
+		registerSubagentTools({
+			registerTool: (tool: { name: string; execute: (...args: unknown[]) => Promise<unknown> }) => registered.push(tool),
+			getThinkingLevel: () => "medium",
+			getActiveTools: () => ["read"],
+		} as never, manager as never, delivery, { kind: "none" } as never);
+		const tool = (name: string) => registered.find((entry) => entry.name === name)!;
+		const ids = snapshots.map((snapshot) => snapshot.id);
+
+		const waited = await tool("subagent_wait").execute("wait-64", { ids }, undefined, undefined);
+		const cancelled = await tool("subagent_cancel").execute("cancel-64", { ids });
+
+		expect((waited as { details: { activity: unknown[] } }).details.activity).toHaveLength(64);
+		expect((cancelled as { details: { activity: unknown[] } }).details.activity).toHaveLength(64);
+		expect(delivery.consume).toHaveBeenCalledTimes(128);
 	});
 
 	it("includes the failure reason in wait results even when partial text exists", async () => {

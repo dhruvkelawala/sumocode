@@ -1,18 +1,15 @@
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
-import { mergeActivitySnapshot, safeValuePreview, type ActivitySnapshot } from "../../activity/domain.js";
-import { projectPiToolActivity } from "../../activity/pi-projector.js";
+import { safeValuePreview } from "../../activity/domain.js";
 import { measureMaybe, type ResumeProfiler, type ResumeProfileMetadata } from "../runtime/resume-profiler.js";
 import type { ChatPagerReplaceStats } from "../widgets/chat-pager.js";
 import {
-	isActivityBlock,
-	matchingActivityBlockIndex,
-	mergeActivityBlock,
-	upsertActivityBlock,
+	appendOrFoldTranscriptMessage,
+	foldBlocksIntoMessages,
+	isFoldableBlock,
 } from "./activity-fold.js";
 import {
 	chatMessageViewModelFromPiMessage,
 	createTranscriptViewModelMapper,
-	type ChatBlock,
 	type ChatMessageViewModel,
 	type TranscriptViewModel,
 	type TranscriptViewModelMapper,
@@ -126,18 +123,6 @@ function liveToolExecutionFromEvent(event: unknown): LiveToolExecution | undefin
 	};
 }
 
-function liveToolActivity(tool: LiveToolExecution): ActivitySnapshot | undefined {
-	return projectPiToolActivity({
-		toolCallId: tool.toolCallId,
-		name: tool.toolName,
-		status: tool.status,
-		arguments: tool.args,
-		content: tool.content,
-		details: tool.details,
-		isError: tool.isError,
-	}, { messageId: "live", blockIndex: 0, requireToolCallId: true });
-}
-
 function liveToolPiMessage(tool: LiveToolExecution): unknown {
 	if (tool.status === "running") {
 		return {
@@ -177,153 +162,6 @@ function compactionSummaryMessageFromEvent(event: unknown): unknown | undefined 
 	};
 }
 
-function isDelegationBlock(block: ChatBlock): block is Extract<ChatBlock, { type: "delegation" }> {
-	return block.type === "delegation";
-}
-
-type FoldableBlock = Extract<ChatBlock, { type: "activity" | "delegation" }>;
-
-function isFoldableBlock(block: ChatBlock): block is FoldableBlock {
-	return isActivityBlock(block) || isDelegationBlock(block);
-}
-
-function isImageBlock(block: ChatBlock): block is Extract<ChatBlock, { type: "image" }> {
-	return block.type === "image";
-}
-
-function matchingFoldableIndex(blocks: readonly ChatBlock[], incoming: ChatBlock): number {
-	if (incoming.type === "activity") return matchingActivityBlockIndex(blocks, incoming);
-
-	if (incoming.type === "delegation") {
-		const incomingId = incoming.delegation.id;
-		if (incomingId) {
-			const byId = blocks.findIndex((block) => block.type === "delegation" && block.delegation.id === incomingId);
-			if (byId !== -1) return byId;
-			return -1;
-		}
-		return blocks.findIndex((block) => block.type === "delegation" && (block.delegation.status === "queued" || block.delegation.status === "running"));
-	}
-
-	return -1;
-}
-
-function mergeDelegationBlock(existing: Extract<ChatBlock, { type: "delegation" }>, incoming: Extract<ChatBlock, { type: "delegation" }>): ChatBlock {
-	const incomingTitle = incoming.delegation.title;
-	const keepExistingTitle = existing.delegation.title !== "task" && (incomingTitle === "task" || incomingTitle === "delegation");
-	return {
-		type: "delegation",
-		delegation: {
-			...existing.delegation,
-			...incoming.delegation,
-			title: keepExistingTitle ? existing.delegation.title : incoming.delegation.title,
-			agent: incoming.delegation.agent ?? existing.delegation.agent,
-			model: incoming.delegation.model ?? existing.delegation.model,
-			thinking: incoming.delegation.thinking ?? existing.delegation.thinking,
-			nestedTools: (incoming.delegation.nestedTools?.length ?? 0) > 0 ? incoming.delegation.nestedTools : existing.delegation.nestedTools,
-			tokensIn: incoming.delegation.tokensIn ?? existing.delegation.tokensIn,
-			tokensOut: incoming.delegation.tokensOut ?? existing.delegation.tokensOut,
-			elapsedMs: incoming.delegation.elapsedMs ?? existing.delegation.elapsedMs,
-		},
-	};
-}
-
-function mergeFoldableBlock(existing: ChatBlock, incoming: ChatBlock): ChatBlock {
-	if (existing.type === "activity" && incoming.type === "activity") return mergeActivityBlock(existing, incoming);
-	if (existing.type === "delegation" && incoming.type === "delegation") return mergeDelegationBlock(existing, incoming);
-	return incoming;
-}
-
-function upsertFoldableBlock(blocks: readonly ChatBlock[], incoming: ChatBlock): ChatBlock[] {
-	if (incoming.type === "activity") return upsertActivityBlock(blocks, incoming);
-	const index = matchingFoldableIndex(blocks, incoming);
-	if (index === -1) return [...blocks, incoming];
-	return blocks.map((block, blockIndex) => blockIndex === index ? mergeFoldableBlock(block, incoming) : block);
-}
-
-function findLastMessageIndex(messages: readonly ChatMessageViewModel[], predicate: (message: ChatMessageViewModel) => boolean): number {
-	for (let index = messages.length - 1; index >= 0; index -= 1) {
-		if (predicate(messages[index]!)) return index;
-	}
-	return -1;
-}
-
-function foldBlockIntoMessages(messages: readonly ChatMessageViewModel[], incoming: ChatBlock, options: { requireMatch: boolean }): { messages: ChatMessageViewModel[]; folded: boolean } {
-	const matchingMessageIndex = findLastMessageIndex(messages, (message) => message.role === "sumo" && matchingFoldableIndex(message.blocks, incoming) !== -1);
-	const fallbackIndex = options.requireMatch ? -1 : findLastMessageIndex(messages, (message) => message.role === "sumo");
-	const targetIndex = matchingMessageIndex !== -1 ? matchingMessageIndex : fallbackIndex;
-	if (targetIndex === -1) {
-		if (options.requireMatch) return { messages: [...messages], folded: false };
-		return {
-			messages: [...messages, { id: `live-foldable-${foldableBlockId(incoming)}`, role: "sumo", displayName: "SUMO", blocks: [incoming] }],
-			folded: true,
-		};
-	}
-	return {
-		messages: messages.map((message, index) => index === targetIndex ? { ...message, blocks: upsertFoldableBlock(message.blocks, incoming) } : message),
-		folded: true,
-	};
-}
-
-function foldableBlockId(block: ChatBlock): string {
-	if (block.type === "activity") return block.activity.id;
-	if (block.type === "delegation") return block.delegation.id ?? block.delegation.title;
-	return "block";
-}
-
-function foldBlocksIntoMessages(messages: readonly ChatMessageViewModel[], blocks: readonly ChatBlock[], options: { requireMatch: boolean }): { messages: ChatMessageViewModel[]; folded: boolean } {
-	let next = [...messages];
-	let foldedAny = false;
-	for (const block of blocks) {
-		const result = foldBlockIntoMessages(next, block, options);
-		if (!result.folded && options.requireMatch) return { messages: [...messages], folded: false };
-		next = result.messages;
-		foldedAny = result.folded || foldedAny;
-	}
-	return { messages: next, folded: foldedAny };
-}
-
-function imageBlockKey(block: Extract<ChatBlock, { type: "image" }>): string {
-	return JSON.stringify([block.mime, block.data, block.filename ?? null]);
-}
-
-function foldResultBlocksIntoMessages(
-	messages: readonly ChatMessageViewModel[],
-	blocks: readonly ChatBlock[],
-): { messages: ChatMessageViewModel[]; folded: boolean } {
-	const foldable = blocks.filter(isFoldableBlock);
-	if (foldable.length === 0 || !blocks.every((block) => isFoldableBlock(block) || isImageBlock(block))) {
-		return { messages: [...messages], folded: false };
-	}
-	const targetIndex = findLastMessageIndex(messages, (message) => (
-		message.role === "sumo" && foldable.some((block) => matchingFoldableIndex(message.blocks, block) !== -1)
-	));
-	if (targetIndex === -1) return { messages: [...messages], folded: false };
-	const folded = foldBlocksIntoMessages(messages, foldable, { requireMatch: true });
-	if (!folded.folded) return folded;
-	const images = blocks.filter(isImageBlock);
-	if (images.length === 0) return folded;
-	return {
-		messages: folded.messages.map((message, index) => {
-			if (index !== targetIndex) return message;
-			const existingImageKeys = new Set(message.blocks.filter(isImageBlock).map(imageBlockKey));
-			const uniqueImages = images.filter((image) => {
-				const key = imageBlockKey(image);
-				if (existingImageKeys.has(key)) return false;
-				existingImageKeys.add(key);
-				return true;
-			});
-			return uniqueImages.length > 0 ? { ...message, blocks: [...message.blocks, ...uniqueImages] } : message;
-		}),
-		folded: true,
-	};
-}
-
-function resultBlocksFromCommittedMessage(message: ChatMessageViewModel): ChatBlock[] | undefined {
-	if (message.role !== "system") return undefined;
-	const blocks = [...message.blocks];
-	return blocks.some(isFoldableBlock) && blocks.every((block) => isFoldableBlock(block) || isImageBlock(block)) ? blocks : undefined;
-}
-
 function fallbackReplaceStats(transcript: TranscriptViewModel): ChatPagerReplaceStats {
 	return {
 		sourceMessages: transcript.messages.length,
@@ -354,7 +192,6 @@ export class TranscriptController {
 	private draftMessage: unknown | undefined;
 	private readonly taskPartials = new Map<string, TaskPartialUpdate>();
 	private readonly liveTools = new Map<string, LiveToolExecution>();
-	private readonly liveActivities = new Map<string, ActivitySnapshot>();
 	private lastTranscript: TranscriptViewModel = { messages: [] };
 	/**
 	 * Index into `committedMessages` where the in-flight run's messages begin.
@@ -424,12 +261,10 @@ export class TranscriptController {
 		const taskPartial = taskPartialFromEvent(record);
 		if (taskPartial) this.taskPartials.set(taskPartial.toolCallId, taskPartial);
 		const liveTool = liveToolExecutionFromEvent(record);
-		if (liveTool?.toolName === "task") this.liveTools.set(liveTool.toolCallId, liveTool);
-		else if (liveTool) {
-			const activity = liveToolActivity(liveTool);
-			if (activity) {
-				const existing = this.liveActivities.get(activity.id);
-				this.liveActivities.set(activity.id, existing ? mergeActivitySnapshot(existing, activity) : activity);
+		if (liveTool) {
+			const existing = this.liveTools.get(liveTool.toolCallId);
+			if (!existing || existing.status === "running" || liveTool.status !== "running") {
+				this.liveTools.set(liveTool.toolCallId, liveTool);
 			}
 		}
 
@@ -486,7 +321,6 @@ export class TranscriptController {
 				this.currentRunStartIndex = undefined;
 				this.draftMessage = undefined;
 				this.liveTools.clear();
-				this.liveActivities.clear();
 				this.taskPartials.clear();
 				break;
 			}
@@ -511,16 +345,7 @@ export class TranscriptController {
 		let messages = [...this.ensureCommittedViewModels()];
 		if (this.draftMessage !== undefined) {
 			const message = this.mapper.messageFromPiMessage(this.draftMessage, messages.length);
-			if (message) {
-				const resultBlocks = resultBlocksFromCommittedMessage(message);
-				if (resultBlocks) {
-					const folded = foldResultBlocksIntoMessages(messages, resultBlocks);
-					if (folded.folded) messages = folded.messages;
-					else messages.push(message);
-				} else {
-					messages.push(message);
-				}
-			}
+			if (message) messages = appendOrFoldTranscriptMessage(messages, message);
 		}
 
 		for (const liveTool of this.liveTools.values()) {
@@ -529,11 +354,6 @@ export class TranscriptController {
 			const folded = foldBlocksIntoMessages(messages, blocks, { requireMatch: false });
 			messages = folded.messages;
 		}
-		for (const activity of this.liveActivities.values()) {
-			const folded = foldBlockIntoMessages(messages, { type: "activity", activity }, { requireMatch: false });
-			messages = folded.messages;
-		}
-
 		return { messages };
 	}
 
@@ -544,7 +364,7 @@ export class TranscriptController {
 	public getLiveStateSnapshot(): TranscriptControllerLiveStateSnapshot {
 		return {
 			draftMessage: this.draftMessage !== undefined,
-			liveTools: this.liveTools.size + this.liveActivities.size,
+			liveTools: this.liveTools.size,
 			taskPartials: this.taskPartials.size,
 			committedCacheMessages: this.committedViewModelCache?.length ?? 0,
 		};
@@ -568,7 +388,6 @@ export class TranscriptController {
 		this.draftMessage = undefined;
 		this.pendingChatOp = undefined;
 		this.liveTools.clear();
-		this.liveActivities.clear();
 		this.taskPartials.clear();
 		this.invalidateCommittedCache();
 	}
@@ -584,15 +403,7 @@ export class TranscriptController {
 		for (const sourceMessage of this.committedMessages) {
 			const message = this.mapper.messageFromPiMessage(sourceMessage, messages.length);
 			if (!message) continue;
-			const resultBlocks = resultBlocksFromCommittedMessage(message);
-			if (resultBlocks) {
-				const folded = foldResultBlocksIntoMessages(messages, resultBlocks);
-				if (folded.folded) {
-					messages = folded.messages;
-					continue;
-				}
-			}
-			messages.push(message);
+			messages = appendOrFoldTranscriptMessage(messages, message);
 		}
 		this.committedViewModelCache = messages;
 		return this.committedViewModelCache;

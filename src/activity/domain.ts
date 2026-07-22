@@ -43,6 +43,10 @@ export interface SafeValuePreviewOptions {
 	readonly maxDepth?: number;
 	readonly maxEntries?: number;
 	readonly maxStringChars?: number;
+	/** Global traversal cap across arrays and objects, independent of depth. */
+	readonly maxNodes?: number;
+	/** Global cap on raw string characters inspected across the value. */
+	readonly maxTotalStringChars?: number;
 }
 
 const TERMINAL_STATUS = new Set<ActivityStatus>(["succeeded", "failed", "cancelled", "lost"]);
@@ -170,10 +174,25 @@ export function safeValuePreview(value: unknown, options: SafeValuePreviewOption
 	const maxDepth = Math.max(0, Math.floor(options.maxDepth ?? 4));
 	const maxEntries = Math.max(1, Math.floor(options.maxEntries ?? 20));
 	const maxStringChars = Math.max(1, Math.floor(options.maxStringChars ?? 500));
+	let remainingNodes = Math.max(1, Math.floor(options.maxNodes ?? 256));
+	let remainingStringChars = Math.max(1, Math.floor(options.maxTotalStringChars ?? maxChars));
 	const seen = new WeakSet<object>();
+	const inspectString = (text: string): { text: string; truncated: boolean } => {
+		if (remainingStringChars <= 0) return { text: "[Truncated]", truncated: true };
+		const inspectedChars = Math.min(text.length, maxStringChars, remainingStringChars);
+		remainingStringChars -= inspectedChars;
+		const sanitized = sanitizeActivityText(text.slice(0, inspectedChars));
+		const truncated = text.length > inspectedChars;
+		return {
+			text: truncated ? boundedText(`${sanitized}…`, maxStringChars) : boundedText(sanitized, maxStringChars),
+			truncated,
+		};
+	};
 
 	const visit = (current: unknown, depth: number): unknown => {
-		if (typeof current === "string") return boundedText(sanitizeActivityText(current), maxStringChars);
+		if (remainingNodes <= 0) return "[Truncated]";
+		remainingNodes -= 1;
+		if (typeof current === "string") return inspectString(current).text;
 		if (current === null || typeof current === "boolean" || typeof current === "number") return current;
 		if (typeof current === "bigint") return `${current.toString()}n`;
 		if (current === undefined) return "[undefined]";
@@ -184,29 +203,42 @@ export function safeValuePreview(value: unknown, options: SafeValuePreviewOption
 		if (depth >= maxDepth) return "[Truncated]";
 		seen.add(current);
 		if (Array.isArray(current)) {
-			const result = current.slice(0, maxEntries).map((item) => visit(item, depth + 1));
-			if (current.length > maxEntries) result.push(`… ${current.length - maxEntries} more`);
+			const inspected = current.slice(0, maxEntries);
+			const result = inspected.map((item) => visit(item, depth + 1));
+			if (current.length > inspected.length) result.push(`… ${current.length - inspected.length} more`);
 			return result;
 		}
 		const result: Record<string, unknown> = {};
-		let keys: string[];
+		const keys: string[] = [];
+		let hasMore = false;
 		try {
-			keys = Object.keys(current);
+			for (const key in current) {
+				if (!Object.prototype.hasOwnProperty.call(current, key)) continue;
+				if (keys.length >= maxEntries) {
+					hasMore = true;
+					break;
+				}
+				keys.push(key);
+			}
 		} catch {
 			return "[Uninspectable]";
 		}
-		for (const key of keys.slice(0, maxEntries)) {
-			if (isSecretKey(key)) {
-				result[key] = "[REDACTED]";
+		for (const key of keys) {
+			const inspectedKey = inspectString(key);
+			const displayKey = inspectedKey.text || "[empty key]";
+			// If the complete key cannot be inspected, fail closed rather than let a
+			// secret suffix beyond the character budget evade key-based redaction.
+			if (inspectedKey.truncated || isSecretKey(displayKey)) {
+				result[displayKey] = "[REDACTED]";
 				continue;
 			}
 			try {
-				result[key] = visit((current as Record<string, unknown>)[key], depth + 1);
+				result[displayKey] = visit((current as Record<string, unknown>)[key], depth + 1);
 			} catch {
-				result[key] = "[Uninspectable]";
+				result[displayKey] = "[Uninspectable]";
 			}
 		}
-		if (keys.length > maxEntries) result["…"] = `${keys.length - maxEntries} more`;
+		if (hasMore) result["…"] = "more";
 		return result;
 	};
 

@@ -1,60 +1,71 @@
 import type { SubagentSnapshot } from "../subagents/domain.js";
 import {
-	safeValuePreview,
-	sanitizeActivityText,
 	type ActivityBody,
 	type ActivityKind,
 	type ActivitySnapshot,
 	type ActivityStatus,
 } from "./domain.js";
+import {
+	boundedAdapterPreview,
+	boundedAdapterText,
+	boundedArray,
+	boundedRecord,
+	createAdapterTraversalBudget,
+	firstBoundedAdapterString,
+	type AdapterTraversalBudget,
+} from "./adapter-bounds.js";
 import { normalizePiActivityStatus } from "./pi-projector.js";
 
 const TEXT_MAX = 16 * 1024;
 const PROMPT_MAX = 8 * 1024;
 const CHILD_PREVIEW_MAX = 1_024;
 const MAX_CHILD_TOOLS = 16;
+const MAX_OPERATION_ACTIVITIES = 64;
 const MAX_ENVELOPE_DEPTH = 3;
+const MAX_CONTENT_PARTS = 64;
+const ADAPTER_MAX_NODES = 16_384;
+const ADAPTER_MAX_CHARS = 1024 * 1024;
 const ACTIVITY_KINDS = new Set<ActivityKind>(["tool", "task", "subagent", "terminal"]);
 const ACTIVITY_STATUSES = new Set<ActivityStatus>(["queued", "running", "succeeded", "failed", "cancelled", "lost"]);
 
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-	return typeof value === "object" && value !== null ? value as Record<string, unknown> : undefined;
+function asRecord(value: unknown, budget: AdapterTraversalBudget): Record<string, unknown> | undefined {
+	return boundedRecord(value, budget);
 }
 
 function boundedText(value: string, maxChars = TEXT_MAX): string {
-	const sanitized = sanitizeActivityText(value);
-	return sanitized.length <= maxChars ? sanitized : `${sanitized.slice(0, Math.max(0, maxChars - 1))}…`;
+	return value.length <= maxChars ? value : `${value.slice(0, Math.max(0, maxChars - 1))}…`;
 }
 
-function firstString(...values: unknown[]): string | undefined {
-	for (const value of values) {
-		if (typeof value !== "string") continue;
-		const text = boundedText(value).trim();
-		if (text.length > 0) return text;
-	}
-	return undefined;
+function firstString(budget: AdapterTraversalBudget, ...values: unknown[]): string | undefined {
+	return firstBoundedAdapterString(budget, TEXT_MAX, ...values);
 }
 
 function numberFrom(value: unknown): number | undefined {
 	return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
-function textFromContent(content: unknown): string | undefined {
-	if (typeof content === "string") return boundedText(content);
-	if (!Array.isArray(content)) return undefined;
-	const text = content.flatMap((part): string[] => {
-		const record = asRecord(part);
-		return record?.type === "text" && typeof record.text === "string" ? [record.text] : [];
-	}).join("");
+function textFromContent(content: unknown, budget: AdapterTraversalBudget): string | undefined {
+	if (typeof content === "string") return boundedAdapterText(content, TEXT_MAX, budget);
+	const parts = boundedArray(content, MAX_CONTENT_PARTS, budget);
+	if (parts.length === 0) return undefined;
+	let text = "";
+	for (const part of parts) {
+		const record = asRecord(part, budget);
+		if (record?.type !== "text") continue;
+		if (text.length >= TEXT_MAX) break;
+		const chunk = boundedAdapterText(record.text, TEXT_MAX - text.length, budget);
+		if (chunk) text += chunk;
+	}
 	return text.trim().length > 0 ? boundedText(text) : undefined;
 }
 
-function boundedUnknown(value: unknown): unknown {
-	const preview = safeValuePreview(value, {
+function boundedUnknown(value: unknown, budget: AdapterTraversalBudget): unknown {
+	const preview = boundedAdapterPreview(value, budget, {
 		maxChars: 4_000,
 		maxDepth: 5,
 		maxEntries: 32,
 		maxStringChars: 1_000,
+		maxNodes: 64,
 	});
 	try {
 		return JSON.parse(preview) as unknown;
@@ -63,10 +74,11 @@ function boundedUnknown(value: unknown): unknown {
 	}
 }
 
-function bodyFromEnvelope(value: unknown): ActivityBody | undefined {
-	const body = asRecord(value);
+function bodyFromEnvelope(value: unknown, budget: AdapterTraversalBudget): ActivityBody | undefined {
+	const body = asRecord(value, budget);
 	if (!body || typeof body.kind !== "string" || typeof body.text !== "string") return undefined;
-	const text = boundedText(body.text);
+	const text = boundedAdapterText(body.text, TEXT_MAX, budget);
+	if (text === undefined) return undefined;
 	if (body.kind === "text" || body.kind === "diff") return { kind: body.kind, text };
 	if (body.kind === "source") {
 		const startLine = numberFrom(body.startLine);
@@ -79,30 +91,34 @@ function bodyFromEnvelope(value: unknown): ActivityBody | undefined {
 		};
 	}
 	if (body.kind === "terminal") {
-		const command = firstString(body.command);
+		const command = firstString(budget, body.command);
 		return { kind: "terminal", ...(command ? { command } : {}), text };
 	}
 	return undefined;
 }
 
-function boundedEnvelope(value: unknown, depth = 0): ActivitySnapshot | undefined {
-	const record = asRecord(value);
-	const id = firstString(record?.id);
-	const title = firstString(record?.title);
+function boundedEnvelope(
+	value: unknown,
+	budget: AdapterTraversalBudget,
+	depth = 0,
+): ActivitySnapshot | undefined {
+	const record = asRecord(value, budget);
+	const id = firstString(budget, record?.id);
+	const title = firstString(budget, record?.title);
 	const kind = record?.kind;
 	const status = record?.status;
 	if (!record || !id || !title || !ACTIVITY_KINDS.has(kind as ActivityKind) || !ACTIVITY_STATUSES.has(status as ActivityStatus)) return undefined;
-	const sourceId = firstString(record.sourceId);
-	const subject = firstString(record.subject);
-	const currentStep = firstString(record.currentStep);
-	const outputTail = typeof record.outputTail === "string" ? boundedText(record.outputTail, depth === 0 ? TEXT_MAX : CHILD_PREVIEW_MAX) : undefined;
-	const body = bodyFromEnvelope(record.body);
-	const resultRecord = asRecord(record.result);
-	const rawSummary = firstString(resultRecord?.summary);
-	const rawError = firstString(resultRecord?.error);
+	const sourceId = firstString(budget, record.sourceId);
+	const subject = firstString(budget, record.subject);
+	const currentStep = firstString(budget, record.currentStep);
+	const outputTail = boundedAdapterText(record.outputTail, depth === 0 ? TEXT_MAX : CHILD_PREVIEW_MAX, budget);
+	const body = bodyFromEnvelope(record.body, budget);
+	const resultRecord = asRecord(record.result, budget);
+	const rawSummary = firstString(budget, resultRecord?.summary);
+	const rawError = firstString(budget, resultRecord?.error);
 	const summary = rawSummary ? boundedText(rawSummary, depth === 0 ? TEXT_MAX : CHILD_PREVIEW_MAX) : undefined;
 	const error = rawError ? boundedText(rawError, depth === 0 ? TEXT_MAX : CHILD_PREVIEW_MAX) : undefined;
-	const metricsRecord = asRecord(record.metrics);
+	const metricsRecord = asRecord(record.metrics, budget);
 	const metrics = metricsRecord ? {
 		...(numberFrom(metricsRecord.tokens) === undefined ? {} : { tokens: numberFrom(metricsRecord.tokens) }),
 		...(numberFrom(metricsRecord.tokensIn) === undefined ? {} : { tokensIn: numberFrom(metricsRecord.tokensIn) }),
@@ -112,55 +128,60 @@ function boundedEnvelope(value: unknown, depth = 0): ActivitySnapshot | undefine
 		...(numberFrom(metricsRecord.turns) === undefined ? {} : { turns: numberFrom(metricsRecord.turns) }),
 		...(numberFrom(metricsRecord.elapsedMs) === undefined ? {} : { elapsedMs: numberFrom(metricsRecord.elapsedMs) }),
 	} : undefined;
-	const activeTools = depth < MAX_ENVELOPE_DEPTH && Array.isArray(record.activeTools)
-		? record.activeTools.slice(0, MAX_CHILD_TOOLS).map((child) => boundedEnvelope(child, depth + 1)).filter((child): child is ActivitySnapshot => child !== undefined)
+	const activeTools = depth < MAX_ENVELOPE_DEPTH
+		? boundedArray(record.activeTools, MAX_CHILD_TOOLS, budget)
+			.map((child) => boundedEnvelope(child, budget, depth + 1))
+			.filter((child): child is ActivitySnapshot => child !== undefined)
 		: undefined;
+	const ownerSessionId = firstString(budget, record.ownerSessionId);
+	const model = firstString(budget, record.model);
+	const thinking = firstString(budget, record.thinking);
 	return {
 		id,
 		...(sourceId ? { sourceId } : {}),
 		kind: kind as ActivityKind,
 		title,
 		status: status as ActivityStatus,
-		...(record.invocation === undefined ? {} : { invocation: boundedUnknown(record.invocation) }),
+		...(record.invocation === undefined ? {} : { invocation: boundedUnknown(record.invocation, budget) }),
 		...(subject ? { subject } : {}),
 		...(currentStep ? { currentStep } : {}),
 		...(outputTail ? { outputTail } : {}),
 		...(body ? { body } : {}),
 		...(activeTools && activeTools.length > 0 ? { activeTools } : {}),
 		...(summary || error ? { result: { ...(summary ? { summary } : {}), ...(error ? { error } : {}) } } : {}),
-		...(firstString(record.ownerSessionId) ? { ownerSessionId: firstString(record.ownerSessionId) } : {}),
+		...(ownerSessionId ? { ownerSessionId } : {}),
 		...(numberFrom(record.createdAt) === undefined ? {} : { createdAt: numberFrom(record.createdAt) }),
 		...(numberFrom(record.updatedAt) === undefined ? {} : { updatedAt: numberFrom(record.updatedAt) }),
 		...(numberFrom(record.settledAt) === undefined ? {} : { settledAt: numberFrom(record.settledAt) }),
-		...(firstString(record.model) ? { model: firstString(record.model) } : {}),
-		...(firstString(record.thinking) ? { thinking: firstString(record.thinking) } : {}),
+		...(model ? { model } : {}),
+		...(thinking ? { thinking } : {}),
 		...(metrics && Object.keys(metrics).length > 0 ? { metrics } : {}),
 	};
 }
 
-function paneId(pane: Record<string, unknown> | undefined): string | undefined {
-	return firstString(pane?.paneId, pane?.tabId, pane?.workspaceId);
+function paneId(pane: Record<string, unknown> | undefined, budget: AdapterTraversalBudget): string | undefined {
+	return firstString(budget, pane?.paneId, pane?.tabId, pane?.workspaceId);
 }
 
-function subagentStatus(record: Record<string, unknown>): ActivityStatus {
-	const status = firstString(record.status)?.toLowerCase();
-	const manifestExit = firstString(asRecord(record.manifest)?.exit)?.toLowerCase();
-	const error = firstString(record.errorText)?.toLowerCase();
+function subagentStatus(record: Record<string, unknown>, budget: AdapterTraversalBudget): ActivityStatus {
+	const status = firstString(budget, record.status)?.toLowerCase();
+	const manifestExit = firstString(budget, asRecord(record.manifest, budget)?.exit)?.toLowerCase();
+	const error = firstString(budget, record.errorText)?.toLowerCase();
 	if (manifestExit === "interrupted" || error === "interrupted" || status === "cancelled" || status === "canceled") return "cancelled";
 	if (status === "done" || status === "completed" || status === "success" || status === "succeeded") return "succeeded";
 	if (status === "error" || status === "failed" || manifestExit === "failed") return "failed";
 	return "running";
 }
 
-function toolActivity(toolValue: unknown): ActivitySnapshot | undefined {
-	const tool = asRecord(toolValue);
-	const id = firstString(tool?.id);
+function toolActivity(toolValue: unknown, budget: AdapterTraversalBudget): ActivitySnapshot | undefined {
+	const tool = asRecord(toolValue, budget);
+	const id = firstString(budget, tool?.id);
 	if (!tool || !id) return undefined;
-	const name = firstString(tool.name) ?? "tool";
+	const name = firstString(budget, tool.name) ?? "tool";
 	const done = tool.done === true;
 	const isError = tool.isError === true;
-	const rawOutput = firstString(tool.outputPreview);
-	const rawArgs = firstString(tool.argsPreview);
+	const rawOutput = firstString(budget, tool.outputPreview);
+	const rawArgs = firstString(budget, tool.argsPreview);
 	const output = rawOutput ? boundedText(rawOutput, CHILD_PREVIEW_MAX) : undefined;
 	const args = rawArgs ? boundedText(rawArgs, CHILD_PREVIEW_MAX) : undefined;
 	return {
@@ -174,48 +195,57 @@ function toolActivity(toolValue: unknown): ActivitySnapshot | undefined {
 	};
 }
 
-function invocationFromSubagent(record: Record<string, unknown>): Record<string, unknown> {
-	const pane = asRecord(record.pane);
-	const worktree = asRecord(record.worktree);
-	const prompt = firstString(record.prompt) ?? "subagent";
+function invocationFromSubagent(record: Record<string, unknown>, budget: AdapterTraversalBudget): Record<string, unknown> {
+	const pane = asRecord(record.pane, budget);
+	const worktree = asRecord(record.worktree, budget);
+	const prompt = firstString(budget, record.prompt) ?? "subagent";
+	const cwd = firstString(budget, record.cwd);
+	const baseRef = firstString(budget, record.baseRef);
+	const agentName = firstString(budget, pane?.agentName);
+	const workspaceId = firstString(budget, pane?.workspaceId);
+	const tabId = firstString(budget, pane?.tabId);
+	const paneRef = firstString(budget, pane?.paneId);
+	const worktreePath = firstString(budget, worktree?.path);
+	const worktreeBranch = firstString(budget, worktree?.branch);
+	const worktreeBaseRef = firstString(budget, worktree?.baseRef);
 	return {
 		prompt: boundedText(prompt, PROMPT_MAX),
-		...(firstString(record.cwd) ? { cwd: firstString(record.cwd) } : {}),
-		...(firstString(record.baseRef) ? { baseRef: firstString(record.baseRef) } : {}),
+		...(cwd ? { cwd } : {}),
+		...(baseRef ? { baseRef } : {}),
 		...(record.visible === true ? { visible: true } : {}),
 		...(pane ? {
 			pane: {
-				...(firstString(pane.agentName) ? { agentName: firstString(pane.agentName) } : {}),
-				...(firstString(pane.workspaceId) ? { workspaceId: firstString(pane.workspaceId) } : {}),
-				...(firstString(pane.tabId) ? { tabId: firstString(pane.tabId) } : {}),
-				...(firstString(pane.paneId) ? { paneId: firstString(pane.paneId) } : {}),
+				...(agentName ? { agentName } : {}),
+				...(workspaceId ? { workspaceId } : {}),
+				...(tabId ? { tabId } : {}),
+				...(paneRef ? { paneId: paneRef } : {}),
 			},
 		} : {}),
 		...(worktree ? {
 			worktree: {
-				...(firstString(worktree.path) ? { path: firstString(worktree.path) } : {}),
-				...(firstString(worktree.branch) ? { branch: firstString(worktree.branch) } : {}),
-				...(firstString(worktree.baseRef) ? { baseRef: firstString(worktree.baseRef) } : {}),
+				...(worktreePath ? { path: worktreePath } : {}),
+				...(worktreeBranch ? { branch: worktreeBranch } : {}),
+				...(worktreeBaseRef ? { baseRef: worktreeBaseRef } : {}),
 			},
 		} : {}),
 	};
 }
 
-function activityFromSubagentRecord(record: Record<string, unknown>): ActivitySnapshot {
-	const id = firstString(record.id) ?? "unknown";
-	const pane = asRecord(record.pane);
-	const worktree = asRecord(record.worktree);
-	const status = subagentStatus(record);
-	const liveText = firstString(record.liveText);
-	const finalText = firstString(record.finalText);
+function activityFromSubagentRecord(record: Record<string, unknown>, budget: AdapterTraversalBudget): ActivitySnapshot {
+	const id = firstString(budget, record.id) ?? "unknown";
+	const pane = asRecord(record.pane, budget);
+	const worktree = asRecord(record.worktree, budget);
+	const status = subagentStatus(record, budget);
+	const liveText = firstString(budget, record.liveText);
+	const finalText = firstString(budget, record.finalText);
 	const output = status === "running" ? liveText ?? finalText : undefined;
-	const error = status === "failed" || status === "cancelled" ? firstString(record.errorText) : undefined;
+	const error = status === "failed" || status === "cancelled" ? firstString(budget, record.errorText) : undefined;
 	const summary = status === "succeeded" || status === "failed" || status === "cancelled" ? finalText : undefined;
-	const liveTools = Array.isArray(record.liveTools)
-		? record.liveTools.slice(0, MAX_CHILD_TOOLS).map(toolActivity).filter((tool): tool is ActivitySnapshot => tool !== undefined)
-		: [];
-	const usage = asRecord(record.usage);
-	const manifest = asRecord(record.manifest);
+	const liveTools = boundedArray(record.liveTools, MAX_CHILD_TOOLS, budget)
+		.map((tool) => toolActivity(tool, budget))
+		.filter((tool): tool is ActivitySnapshot => tool !== undefined);
+	const usage = asRecord(record.usage, budget);
+	const manifest = asRecord(record.manifest, budget);
 	const createdAt = numberFrom(record.createdAt);
 	const settledAt = numberFrom(record.settledAt);
 	const explicitElapsed = numberFrom(manifest?.durationMs);
@@ -231,19 +261,22 @@ function activityFromSubagentRecord(record: Record<string, unknown>): ActivitySn
 		...(turns !== undefined && turns > 0 ? { turns } : {}),
 		...(elapsedMs !== undefined && elapsedMs > 0 ? { elapsedMs } : {}),
 	} : undefined;
-	const paneLabel = paneId(pane);
-	const branch = firstString(worktree?.branch);
+	const paneLabel = paneId(pane, budget);
+	const branch = firstString(budget, worktree?.branch);
 	const subject = [id, paneLabel ? `pane ${paneLabel}` : undefined, branch].filter((part): part is string => !!part).join(" · ");
 	const outputLastLine = output?.split("\n").filter((line) => line.trim().length > 0).at(-1);
 	const currentStep = status === "running"
 		? outputLastLine ? boundedText(outputLastLine.trim(), 256) : paneLabel ? `pane ${paneLabel} · running` : undefined
 		: undefined;
+	const title = firstString(budget, record.title) ?? "subagent";
+	const model = firstString(budget, record.modelLabel);
+	const thinking = firstString(budget, record.thinkingLabel);
 	return {
 		id: `subagent:${id}`,
 		kind: "subagent",
-		title: firstString(record.title) ?? "subagent",
+		title,
 		status,
-		invocation: invocationFromSubagent(record),
+		invocation: invocationFromSubagent(record, budget),
 		subject,
 		...(currentStep ? { currentStep } : {}),
 		...(output ? { outputTail: boundedText(output) } : {}),
@@ -251,57 +284,59 @@ function activityFromSubagentRecord(record: Record<string, unknown>): ActivitySn
 		...(summary || error ? { result: { ...(summary ? { summary: boundedText(summary) } : {}), ...(error ? { error: boundedText(error) } : {}) } } : {}),
 		...(createdAt === undefined ? {} : { createdAt }),
 		...(settledAt === undefined ? {} : { settledAt }),
-		...(firstString(record.modelLabel) ? { model: firstString(record.modelLabel) } : {}),
-		...(firstString(record.thinkingLabel) ? { thinking: firstString(record.thinkingLabel) } : {}),
+		...(model ? { model } : {}),
+		...(thinking ? { thinking } : {}),
 		...(metrics ? { metrics } : {}),
 	};
 }
 
 /** Project a manager snapshot into a bounded renderer-neutral Activity. */
 export function activityFromSubagentSnapshot(snapshot: SubagentSnapshot): ActivitySnapshot {
-	return activityFromSubagentRecord(snapshot as unknown as Record<string, unknown>);
+	const budget = createAdapterTraversalBudget({ maxNodes: ADAPTER_MAX_NODES, maxChars: ADAPTER_MAX_CHARS });
+	return activityFromSubagentRecord(snapshot as unknown as Record<string, unknown>, budget);
 }
 
-function activityEnvelopes(details: Record<string, unknown> | undefined): ActivitySnapshot[] {
+function activityEnvelopes(
+	details: Record<string, unknown> | undefined,
+	budget: AdapterTraversalBudget,
+): ActivitySnapshot[] {
 	const value = details?.activity;
-	const values = Array.isArray(value) ? value : value === undefined ? [] : [value];
-	return values.slice(0, MAX_CHILD_TOOLS).map((item) => boundedEnvelope(item)).filter((activity): activity is ActivitySnapshot => activity !== undefined);
+	const values = Array.isArray(value) ? boundedArray(value, MAX_OPERATION_ACTIVITIES, budget) : value === undefined ? [] : [value];
+	return values.map((item) => boundedEnvelope(item, budget)).filter((activity): activity is ActivitySnapshot => activity !== undefined);
 }
 
-function subagentRecords(details: Record<string, unknown> | undefined): Record<string, unknown>[] {
+function subagentRecords(details: Record<string, unknown> | undefined, budget: AdapterTraversalBudget): Record<string, unknown>[] {
 	const records: Record<string, unknown>[] = [];
-	const single = asRecord(details?.subagent);
+	const single = asRecord(details?.subagent, budget);
 	if (single) records.push(single);
-	if (Array.isArray(details?.subagents)) {
-		for (const value of details.subagents.slice(0, MAX_CHILD_TOOLS)) {
-			const record = asRecord(value);
-			if (record) records.push(record);
-		}
+	for (const value of boundedArray(details?.subagents, MAX_OPERATION_ACTIVITIES, budget)) {
+		const record = asRecord(value, budget);
+		if (record) records.push(record);
 	}
 	return records;
 }
 
-function spawnInvocation(record: Record<string, unknown>): unknown {
-	const args = asRecord(record.arguments ?? record.input) ?? {};
+function spawnInvocation(record: Record<string, unknown>, budget: AdapterTraversalBudget): unknown {
+	const args = asRecord(record.arguments ?? record.input, budget) ?? {};
 	const projected: Record<string, unknown> = {};
 	for (const key of ["prompt", "name", "model", "thinking", "working_dir", "worktree", "branch", "baseRef", "visible"] as const) {
 		const value = args[key];
-		if (typeof value === "string") projected[key] = boundedText(value, key === "prompt" ? PROMPT_MAX : 1_000);
+		if (typeof value === "string") projected[key] = boundedAdapterText(value, key === "prompt" ? PROMPT_MAX : 1_000, budget);
 		else if (typeof value === "boolean") projected[key] = value;
 	}
 	return projected;
 }
 
-function spawnToolActivity(record: Record<string, unknown>, toolCallId: string): ActivitySnapshot {
+function spawnToolActivity(record: Record<string, unknown>, toolCallId: string, budget: AdapterTraversalBudget): ActivitySnapshot {
 	const isError = record.isError === true;
 	const status = normalizePiActivityStatus(record.status, record.type === "toolResult" || record.role === "toolResult" ? (isError ? "failed" : "succeeded") : "queued");
-	const output = textFromContent(record.content);
+	const output = textFromContent(record.content, budget);
 	return {
 		id: toolCallId,
 		kind: "tool",
 		title: "subagent_spawn",
 		status,
-		invocation: spawnInvocation(record),
+		invocation: spawnInvocation(record, budget),
 		...(output ? { outputTail: output } : {}),
 		...(isError && output ? { result: { error: output } } : {}),
 	};
@@ -312,35 +347,41 @@ export function activitiesFromSubagentToolRecord(
 	recordValue: unknown,
 	context: { readonly toolCallId?: string },
 ): readonly ActivitySnapshot[] {
-	const record = asRecord(recordValue);
+	const budget = createAdapterTraversalBudget({ maxNodes: ADAPTER_MAX_NODES, maxChars: ADAPTER_MAX_CHARS });
+	const record = asRecord(recordValue, budget);
 	if (!record) return [];
-	const toolName = firstString(record.name, record.toolName);
+	const toolName = firstString(budget, record.name, record.toolName);
 	if (!toolName?.startsWith("subagent_")) return [];
 	if (toolName === "subagent_send" || toolName === "subagent_list") return [];
-	const details = asRecord(record.details);
-	const enveloped = activityEnvelopes(details);
+	const details = asRecord(record.details, budget);
+	const enveloped = activityEnvelopes(details, budget);
 	const snapshots = enveloped.length > 0
 		? enveloped
-		: subagentRecords(details).map(activityFromSubagentRecord);
+		: subagentRecords(details, budget).map((snapshot) => activityFromSubagentRecord(snapshot, budget));
 	if (snapshots.length > 0) {
 		return snapshots.map((activity) => toolName === "subagent_spawn" && context.toolCallId && !activity.sourceId
 			? { ...activity, sourceId: context.toolCallId }
 			: activity);
 	}
 	if (toolName !== "subagent_spawn" || !context.toolCallId) return [];
-	return [spawnToolActivity(record, context.toolCallId)];
+	return [spawnToolActivity(record, context.toolCallId, budget)];
 }
 
 /** Map passive completion messages, including historical payloads without an envelope. */
 export function activityFromSubagentResultRecord(recordValue: unknown): ActivitySnapshot {
-	const record = asRecord(recordValue) ?? {};
-	const details = asRecord(record.details);
-	const enveloped = activityEnvelopes(details)[0];
+	const budget = createAdapterTraversalBudget({ maxNodes: ADAPTER_MAX_NODES, maxChars: ADAPTER_MAX_CHARS });
+	const record = asRecord(recordValue, budget) ?? {};
+	const details = asRecord(record.details, budget);
+	const enveloped = activityEnvelopes(details, budget)[0];
 	if (enveloped) return enveloped;
-	const id = firstString(details?.id, record.subagentId) ?? "unknown";
-	const title = firstString(details?.title, record.title) ?? "subagent";
-	const status = subagentStatus({ ...record, ...details });
-	const content = textFromContent(record.content);
+	const id = firstString(budget, details?.id, record.subagentId) ?? "unknown";
+	const title = firstString(budget, details?.title, record.title) ?? "subagent";
+	const status = subagentStatus({
+		status: details?.status ?? record.status,
+		manifest: details?.manifest ?? record.manifest,
+		errorText: details?.errorText ?? record.errorText,
+	}, budget);
+	const content = textFromContent(record.content, budget);
 	return {
 		id: `subagent:${id}`,
 		kind: "subagent",

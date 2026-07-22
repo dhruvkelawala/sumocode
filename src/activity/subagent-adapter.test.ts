@@ -49,6 +49,22 @@ describe("subagent Activity adapter", () => {
 		});
 	});
 
+	it("preserves the producer's redacted bounded nested-tool argument preview", () => {
+		const activity = activityFromSubagentSnapshot(snapshot({
+			liveTools: [{
+				id: "custom-1",
+				name: "custom",
+				argsPreview: "{\"query\":\"visible\",\"nested\":{\"token\":\"[REDACTED]\"}}",
+				done: false,
+				isError: false,
+			}],
+		}));
+
+		expect(activity.activeTools?.[0]?.invocation).toContain("visible");
+		expect(activity.activeTools?.[0]?.invocation).toContain("[REDACTED]");
+		expect(activity.activeTools?.[0]?.invocation).not.toContain("secret-value");
+	});
+
 	it("maps done, failed, and interrupted outcomes without treating every error as cancellation", () => {
 		const done = activityFromSubagentSnapshot(snapshot({ status: "done", settledAt: 4_000, finalText: "No findings", manifest: { exit: "completed", durationMs: 3_000 } }));
 		const failed = activityFromSubagentSnapshot(snapshot({ status: "error", settledAt: 4_000, errorText: "provider failed", finalText: "partial", manifest: { exit: "failed", durationMs: 3_000 } }));
@@ -89,7 +105,7 @@ describe("subagent Activity adapter", () => {
 			details: { action: "spawn", activity: { ...canonical, sourceId: "spawn-call-1" } },
 		}, { toolCallId: "spawn-call-1" });
 
-		expect(activities).toEqual([expect.objectContaining({ id: "subagent:sa-7", sourceId: "spawn-call-1", kind: "subagent" })]);
+		expect(activities).toEqual([expect.objectContaining({ id: "subagent:sa-7", sourceId: "spawn-call-1", kind: "subagent", status: "running" })]);
 	});
 
 	it("projects the initial spawn invocation under the tool-call identity", () => {
@@ -116,6 +132,45 @@ describe("subagent Activity adapter", () => {
 		expect(activitiesFromSubagentToolRecord({ toolName: "subagent_check", details: { activity: running } }, { toolCallId: "check-1" })).toHaveLength(1);
 		expect(activitiesFromSubagentToolRecord({ toolName: "subagent_wait", details: { activity: [running, cancelled] } }, { toolCallId: "wait-1" })).toHaveLength(2);
 		expect(activitiesFromSubagentToolRecord({ toolName: "subagent_cancel", details: { activity: [cancelled] } }, { toolCallId: "cancel-1" })[0]).toMatchObject({ status: "cancelled" });
+	});
+
+	it("keeps all 64 wait/cancel operation envelopes separate from the child-tool bound", () => {
+		const activities = Array.from({ length: 64 }, (_, index) => ({
+			id: `subagent:sa-${index + 1}`,
+			kind: "subagent",
+			title: `worker ${index + 1}`,
+			status: "running",
+			invocation: { prompt: `work ${index + 1}` },
+		}));
+
+		for (const toolName of ["subagent_wait", "subagent_cancel"] as const) {
+			const projected = activitiesFromSubagentToolRecord({ toolName, details: { activity: activities } }, { toolCallId: `${toolName}-1` });
+			expect(projected).toHaveLength(64);
+			expect(projected.at(-1)?.id).toBe("subagent:sa-64");
+		}
+	});
+
+	it("bounds huge operation arrays and deeply nested invocation envelopes", () => {
+		let deep: unknown = { leaf: "visible" };
+		for (let index = 0; index < 10_000; index += 1) deep = { next: deep };
+		const activities = Array.from({ length: 100_000 }, (_, index) => ({
+			id: `subagent:sa-${index + 1}`,
+			kind: "subagent",
+			title: `worker ${index + 1}`,
+			status: "running",
+			invocation: index === 0 ? deep : { prompt: `work ${index + 1}` },
+			activeTools: index === 0 ? Array.from({ length: 100_000 }, (__, childIndex) => ({
+				id: `tool-${childIndex}`,
+				kind: "tool",
+				title: "custom",
+				status: "running",
+			})) : [],
+		}));
+
+		const projected = activitiesFromSubagentToolRecord({ toolName: "subagent_wait", details: { activity: activities } }, { toolCallId: "wait-huge" });
+		expect(projected).toHaveLength(64);
+		expect(projected[0]?.activeTools).toHaveLength(16);
+		expect(JSON.stringify(projected).length).toBeLessThan(500_000);
 	});
 
 	it("maps a historical passive result without guessing a spawn correlation", () => {

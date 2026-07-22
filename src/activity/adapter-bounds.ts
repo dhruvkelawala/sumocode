@@ -36,9 +36,19 @@ export function boundedArray(value: unknown, maxItems: number, budget: AdapterTr
 
 /** Take the bounded tail when recent records carry the authoritative value. */
 export function boundedArrayTail(value: unknown, maxItems: number, budget: AdapterTraversalBudget): readonly unknown[] {
+	return boundedArrayTailWithIndices(value, maxItems, budget).map((entry) => entry.value);
+}
+
+/** Tail selection that preserves each value's absolute source index. */
+export function boundedArrayTailWithIndices(
+	value: unknown,
+	maxItems: number,
+	budget: AdapterTraversalBudget,
+): readonly BoundedIndexedValue[] {
 	if (!Array.isArray(value) || !claimNode(budget)) return [];
 	const count = Math.max(0, Math.floor(maxItems));
-	return count === 0 ? [] : value.slice(-count);
+	const start = Math.max(0, value.length - count);
+	return count === 0 ? [] : value.slice(start).map((entry, index) => ({ value: entry, originalIndex: start + index }));
 }
 
 /**

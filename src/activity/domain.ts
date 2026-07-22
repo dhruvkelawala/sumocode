@@ -50,6 +50,7 @@ export interface SafeValuePreviewOptions {
 }
 
 const TERMINAL_STATUS = new Set<ActivityStatus>(["succeeded", "failed", "cancelled", "lost"]);
+const MAX_MERGED_ACTIVE_TOOLS = 16;
 const SECRET_KEY_WORDS = new Set([
 	"apikey",
 	"authorization",
@@ -313,14 +314,19 @@ function mergeChildren(
 ): readonly ActivitySnapshot[] | undefined {
 	if (incoming === undefined) return existing;
 	if (incoming.length === 0) return [];
-	if (!existing || existing.length === 0) return incoming;
-	const merged = [...existing];
-	for (const child of incoming) {
-		const index = merged.findIndex((candidate) => sameActivity(candidate, child));
-		if (index === -1) merged.push(child);
-		else merged[index] = mergeActivitySnapshot(merged[index]!, child);
+	if (!existing || existing.length === 0) return incoming.slice(0, MAX_MERGED_ACTIVE_TOOLS);
+	// Incoming order is the producer's current priority window (running first,
+	// then recent settled work). Merge known fields for those children, then use
+	// any spare bounded slots for older siblings omitted by a sparse update.
+	const merged = incoming.map((child) => {
+		const previous = existing.find((candidate) => sameActivity(candidate, child));
+		return previous ? mergeActivitySnapshot(previous, child) : child;
+	});
+	for (const child of existing) {
+		if (merged.length >= MAX_MERGED_ACTIVE_TOOLS) break;
+		if (!incoming.some((candidate) => sameActivity(candidate, child))) merged.push(child);
 	}
-	return merged;
+	return merged.slice(0, MAX_MERGED_ACTIVE_TOOLS);
 }
 
 /** Merge producer state without allowing sparse updates to erase known data. */

@@ -214,12 +214,29 @@ describe("native task Activity adapter", () => {
 
 		expect(activity.activeTools).toHaveLength(2);
 		expect(activity.activeTools?.map((tool) => tool.id)).toEqual([
-			"task-missing-tool-ids:result:0:tool:read:0",
-			"task-missing-tool-ids:result:0:tool:read:1",
+			"task-missing-tool-ids:result:0:tool:read:message:0:part:0",
+			"task-missing-tool-ids:result:0:tool:read:message:0:part:1",
 		]);
 		expect(activity.activeTools?.map((tool) => tool.status)).toEqual(["succeeded", "succeeded"]);
 		expect(activity.activeTools?.map((tool) => tool.invocation)).toEqual([{ path: "src/a.ts" }, { path: "src/b.ts" }]);
 		expect(activity.activeTools?.map((tool) => tool.outputTail)).toEqual(["alpha", "beta"]);
+	});
+
+	it("keeps missing-id fallback identities stable as the recent message window slides", () => {
+		const baseMessages = [
+			...Array.from({ length: 130 }, (_, index) => ({ role: "user", content: [{ type: "text", text: `context ${index}` }] })),
+			{ role: "assistant", content: [{ type: "toolCall", name: "read", arguments: { path: "src/stable.ts" } }] },
+		];
+		const makeRecord = (messages: unknown[]) => ({
+			toolCallId: "task-stable-message-ids",
+			name: "task",
+			details: { mode: "single", results: [{ prompt: "Inspect stable identity", exitCode: -1, messages, usage: usage() }] },
+		});
+		const first = activityFromNativeTaskRecord(makeRecord(baseMessages), { fallbackStatus: "running" });
+		const second = activityFromNativeTaskRecord(makeRecord([...baseMessages, { role: "user", content: "later context" }]), { fallbackStatus: "running" });
+
+		expect(first.activeTools?.[0]?.id).toBe("task-stable-message-ids:result:0:tool:read:message:130:part:0");
+		expect(second.activeTools?.[0]?.id).toBe(first.activeTools?.[0]?.id);
 	});
 
 	it("uses the recent message window for nested-tool fallback state", () => {

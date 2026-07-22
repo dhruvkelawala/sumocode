@@ -4,6 +4,7 @@ import {
 	boundedAdapterText,
 	boundedArray,
 	boundedArrayTail,
+	boundedArrayTailWithIndices,
 	boundedPriorityArray,
 	boundedRecord,
 	createAdapterTraversalBudget,
@@ -205,29 +206,28 @@ function nestedToolsFromMessages(
 ): ActivitySnapshot[] {
 	const tools = new Map<string, ActivitySnapshot>();
 	const unresolvedByName = new Map<string, string[]>();
-	let fallbackIndex = 0;
 	const rememberUnresolved = (name: string, id: string): void => {
 		unresolvedByName.set(name, [...(unresolvedByName.get(name) ?? []), id]);
 	};
-	const resolveByName = (name: string, explicitId?: string): string => {
+	const resolveByName = (name: string, fallbackId: string, explicitId?: string): string => {
 		const unresolved = unresolvedByName.get(name) ?? [];
 		if (explicitId) {
 			const index = unresolved.indexOf(explicitId);
 			if (index !== -1) unresolved.splice(index, 1);
 			return explicitId;
 		}
-		const earliest = unresolved.shift();
-		return earliest ?? `${parentId}:result:${resultIndex}:tool:${name}:${fallbackIndex++}`;
+		return unresolved.shift() ?? fallbackId;
 	};
-	for (const messageValue of boundedArrayTail(messages, MAX_MESSAGES_PER_RESULT, budget)) {
+	for (const { value: messageValue, originalIndex: messageIndex } of boundedArrayTailWithIndices(messages, MAX_MESSAGES_PER_RESULT, budget)) {
 		const message = asRecord(messageValue, budget);
 		if (!message) continue;
 		if (message.role === "assistant") {
-			for (const part of boundedArray(message.content, MAX_CONTENT_PARTS, budget)) {
+			for (const [partIndex, part] of boundedArray(message.content, MAX_CONTENT_PARTS, budget).entries()) {
 				const call = asRecord(part, budget);
 				if (call?.type !== "toolCall") continue;
 				const name = firstString(budget, call.name, call.toolName) ?? "tool";
-				const id = firstString(budget, call.id, call.toolCallId) ?? `${parentId}:result:${resultIndex}:tool:${name}:${fallbackIndex++}`;
+				const id = firstString(budget, call.id, call.toolCallId)
+					?? `${parentId}:result:${resultIndex}:tool:${name}:message:${messageIndex}:part:${partIndex}`;
 				const activity = projectPiToolActivity({
 					toolCallId: id,
 					name,
@@ -242,7 +242,11 @@ function nestedToolsFromMessages(
 		}
 		if (message.role === "toolResult") {
 			const name = firstString(budget, message.toolName, message.name) ?? "tool";
-			const id = resolveByName(name, firstString(budget, message.toolCallId, message.id));
+			const id = resolveByName(
+				name,
+				`${parentId}:result:${resultIndex}:tool:${name}:message:${messageIndex}:result`,
+				firstString(budget, message.toolCallId, message.id),
+			);
 			const existing = tools.get(id);
 			const output = textFromContent(message.content, budget);
 			const activity = projectPiToolActivity({

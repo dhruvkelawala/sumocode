@@ -81,7 +81,7 @@ describe("Activity domain", () => {
 		});
 	});
 
-	it("merges child activities by stable ID without dropping siblings", () => {
+	it("merges child activities by stable ID and retains older siblings within the bound", () => {
 		const merged = mergeActivitySnapshot(
 			activity("parent", {
 				kind: "task",
@@ -95,7 +95,24 @@ describe("Activity domain", () => {
 
 		expect(merged.activeTools).toHaveLength(3);
 		expect(merged.activeTools?.[0]).toMatchObject({ id: "read-1", status: "succeeded", outputTail: "done" });
-		expect(merged.activeTools?.map((child) => child.id)).toEqual(["read-1", "bash-1", "edit-1"]);
+		expect(merged.activeTools?.map((child) => child.id)).toEqual(["read-1", "edit-1", "bash-1"]);
+	});
+
+	it("keeps incoming child priority authoritative and bounds merged sliding windows", () => {
+		const existing = activity("parent", {
+			kind: "task",
+			activeTools: Array.from({ length: 16 }, (_, index) => activity(`old-${index}`)),
+		});
+		const incoming = activity("parent", {
+			kind: "task",
+			activeTools: [activity("running-tail", { status: "running" }), ...Array.from({ length: 15 }, (_, index) => activity(`new-${index}`))],
+		});
+
+		const merged = mergeActivitySnapshot(existing, incoming);
+
+		expect(merged.activeTools).toHaveLength(16);
+		expect(merged.activeTools?.[0]).toMatchObject({ id: "running-tail", status: "running" });
+		expect(merged.activeTools?.map((child) => child.id)).not.toContain("old-0");
 	});
 
 	it("treats an explicit empty activeTools list as a clear while undefined preserves children", () => {

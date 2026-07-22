@@ -248,12 +248,18 @@ describe("TerminalTaskManager", () => {
 		expect(results[0]?.task).toMatchObject({ status: "cancelled", deliveryState: "suppressed", observedAt: expect.any(Number), consumedAt: expect.any(Number) });
 	});
 
-	it("reverifies and forces a Windows-style soft taskkill failure", async () => {
+	it("reverifies descendant anchors and forces a Windows-style soft taskkill failure after leader exit", async () => {
+		let leaderGone = false;
+		tree.operations.identityMatches = vi.fn(() => leaderGone ? "unknown" : "same");
+		tree.operations.verificationMatches = vi.fn((): "same" => "same");
 		const target = manager();
 		const task = await start(target);
 		vi.mocked(tree.operations.signalTree).mockImplementation(async (identity, signal) => {
 			tree.calls.push(`signal:${identity.processGroupId}:${signal}`);
-			if (signal === "SIGTERM") return { ok: false, gone: false, forceRequired: true, error: "soft taskkill failed" };
+			if (signal === "SIGTERM") {
+				leaderGone = true;
+				return { ok: false, gone: false, forceRequired: true, error: "soft taskkill partially failed" };
+			}
 			tree.empty.set(identity.processGroupId, true);
 			return { ok: true, gone: true };
 		});
@@ -265,7 +271,27 @@ describe("TerminalTaskManager", () => {
 			`signal:${task.processGroupId}:SIGTERM`,
 			`signal:${task.processGroupId}:SIGKILL`,
 		]);
-		expect(tree.operations.identityMatches).toHaveBeenCalledTimes(3);
+		expect(tree.operations.verificationMatches).toHaveBeenCalledWith(
+			expect.objectContaining({ processGroupId: task.processGroupId }),
+			expect.objectContaining({ members: expect.any(Array) }),
+		);
+	});
+
+	it("keeps a partially signalled tree stopping when forced escalation fails", async () => {
+		const target = manager();
+		const task = await start(target);
+		vi.mocked(tree.operations.signalTree).mockImplementation(async (_identity, signal) => signal === "SIGTERM"
+			? { ok: true, gone: false }
+			: { ok: false, gone: false, error: "forced escalation failed" });
+
+		const result = await target.stop([task.id], "session-a");
+		target.detach();
+
+		expect(result[0]).toMatchObject({ outcome: "failed", task: { status: "stopping" } });
+		expect(new TerminalTaskStore({ rootDir }).get(task.id)).toMatchObject({
+			status: "stopping",
+			processTreeVerification: { members: expect.any(Array) },
+		});
 	});
 
 	it("reconciles a retained-wrapper natural exit before stop can misreport cancellation", async () => {

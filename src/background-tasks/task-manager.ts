@@ -621,7 +621,7 @@ export class TerminalTaskManager {
 			const verification = current.status === "stopping"
 				? current.processTreeVerification ?? capturedVerification
 				: capturedVerification;
-			if (process.platform !== "win32" && this.processTree.captureTreeVerification && !verification) {
+			if (this.processTree.captureTreeVerification && !verification) {
 				results.set(id, { id, outcome: "failed", task: current, message: `Terminal ${id} process-tree anchors could not be persisted; refusing to signal.` });
 				continue;
 			}
@@ -891,7 +891,7 @@ export class TerminalTaskManager {
 		}
 		if (!verification) {
 			verification = this.processTree.captureTreeVerification?.(identity);
-			if (process.platform !== "win32" && this.processTree.captureTreeVerification && !verification) {
+			if (this.processTree.captureTreeVerification && !verification) {
 				this.diagnostic(id, "persisted stopping task has no verifiable process-tree anchors; refusing recovery signal");
 				return;
 			}
@@ -1017,10 +1017,13 @@ export class TerminalTaskManager {
 		let empty = termSignal.ok && (termSignal.gone || await this.processTree.waitForTreeEmpty(identity, this.termGraceMs));
 		if (!empty) {
 			const kill = await this.safeVerifiedSignal(identity, "SIGKILL", verification);
-			if (!kill.ok) return this.handleStopSignalFailure(id, kill, restoreOnFailure);
+			// TERM (or a failed soft taskkill) may already have removed the leader.
+			// From this point onward the persisted anchors are the only safe retry
+			// authority, so retain `stopping` on failure for recovery to resume.
+			if (!kill.ok) return this.handleStopSignalFailure(id, kill, false);
 			empty = kill.gone || await this.processTree.waitForTreeEmpty(identity, this.killGraceMs);
 		}
-		if (!empty) return this.failedStop(id, "process tree remains alive after SIGKILL", restoreOnFailure);
+		if (!empty) return this.failedStop(id, "process tree remains alive after SIGKILL", false);
 		const cancelled = this.settleCancelled(id);
 		return {
 			id,

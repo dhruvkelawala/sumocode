@@ -42,7 +42,7 @@ export interface TerminalTaskSnapshot {
 	readonly pid?: number;
 	readonly processGroupId?: number;
 	readonly processStartTime?: string;
-	/** POSIX members captured and persisted before signalling the process group. */
+	/** Verified process members persisted before signalling the owned tree. */
 	readonly processTreeVerification?: ProcessTreeVerification;
 	readonly logFile: string;
 }

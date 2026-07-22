@@ -70,7 +70,55 @@ function posixGroupEmpty(processGroupId: number): boolean {
 	}
 }
 
-function listPosixGroupMembers(processGroupId: number): Array<{ pid: number; processStartTime: string }> | undefined {
+interface WindowsProcessRow extends ProcessTreeMemberAnchor {
+	readonly parentPid: number;
+}
+
+function listWindowsProcesses(): WindowsProcessRow[] | undefined {
+	try {
+		const script = [
+			"Get-CimInstance Win32_Process | Where-Object { $_.ProcessId -gt 0 -and $null -ne $_.CreationDate } | ForEach-Object {",
+			"[PSCustomObject]@{ pid = [int]$_.ProcessId; parentPid = [int]$_.ParentProcessId; processStartTime = $_.CreationDate.ToUniversalTime().ToString('o') }",
+			"} | ConvertTo-Json -Compress",
+		].join(" ");
+		const output = execFileSync("powershell.exe", ["-NoProfile", "-Command", script], { encoding: "utf8" }).trim();
+		if (!output) return [];
+		const parsed = JSON.parse(output) as unknown;
+		const values = Array.isArray(parsed) ? parsed : [parsed];
+		const rows: WindowsProcessRow[] = [];
+		for (const value of values) {
+			if (!value || typeof value !== "object") return undefined;
+			const row = value as Record<string, unknown>;
+			if (
+				typeof row.pid !== "number" || !Number.isSafeInteger(row.pid) || row.pid <= 0 ||
+				typeof row.parentPid !== "number" || !Number.isSafeInteger(row.parentPid) || row.parentPid < 0 ||
+				typeof row.processStartTime !== "string" || !row.processStartTime
+			) return undefined;
+			rows.push({ pid: row.pid, parentPid: row.parentPid, processStartTime: row.processStartTime });
+		}
+		return rows;
+	} catch {
+		return undefined;
+	}
+}
+
+function listWindowsTreeMembers(pid: number): ProcessTreeMemberAnchor[] | undefined {
+	const rows = listWindowsProcesses();
+	if (!rows) return undefined;
+	const treePids = new Set([pid]);
+	let changed = true;
+	while (changed) {
+		changed = false;
+		for (const row of rows) {
+			if (treePids.has(row.pid) || !treePids.has(row.parentPid)) continue;
+			treePids.add(row.pid);
+			changed = true;
+		}
+	}
+	return rows.filter((row) => treePids.has(row.pid)).map(({ pid: memberPid, processStartTime }) => ({ pid: memberPid, processStartTime }));
+}
+
+function listPosixGroupMembers(processGroupId: number): ProcessTreeMemberAnchor[] | undefined {
 	try {
 		const rows = execFileSync("ps", ["-axo", "pid=,pgid=,lstart="], { encoding: "utf8" }).split("\n");
 		const members: Array<{ pid: number; processStartTime: string }> = [];
@@ -89,8 +137,9 @@ function verificationStatus(
 	identity: ProcessTreeIdentity,
 	verification: ProcessTreeVerification,
 ): ProcessIdentityStatus {
-	if (process.platform === "win32") return "unknown";
-	const current = listPosixGroupMembers(identity.processGroupId);
+	const current = process.platform === "win32"
+		? listWindowsProcesses()?.map(({ pid, processStartTime }) => ({ pid, processStartTime }))
+		: listPosixGroupMembers(identity.processGroupId);
 	if (!current) return "unknown";
 	if (current.length === 0) return "different";
 	return verification.members.some((anchor) => current.some((member) =>
@@ -103,7 +152,7 @@ export function captureProcessStartTime(pid: number, platform: NodeJS.Platform =
 		if (platform === "win32") {
 			return execFileSync(
 				"powershell.exe",
-				["-NoProfile", "-Command", `(Get-CimInstance Win32_Process -Filter \"ProcessId=${pid}\").CreationDate`],
+				["-NoProfile", "-Command", `(Get-CimInstance Win32_Process -Filter \"ProcessId=${pid}\").CreationDate.ToUniversalTime().ToString('o')`],
 				{ encoding: "utf8" },
 			).trim() || undefined;
 		}
@@ -118,6 +167,10 @@ export type WindowsTaskkillExecutor = (
 	callback: (error?: Error | null) => void,
 ) => void;
 
+const executeWindowsTaskkill: WindowsTaskkillExecutor = (args, callback) => {
+	execFile("taskkill.exe", [...args], (error) => callback(error));
+};
+
 /**
  * `taskkill /T` is the Windows tree authority. Its successful completion is
  * accepted as tree-wide disposition; an error is never converted to success
@@ -126,9 +179,7 @@ export type WindowsTaskkillExecutor = (
 export function runWindowsTaskkill(
 	pid: number,
 	force: boolean,
-	execute: WindowsTaskkillExecutor = (args, callback) => {
-		execFile("taskkill.exe", [...args], (error) => callback(error));
-	},
+	execute: WindowsTaskkillExecutor = executeWindowsTaskkill,
 ): Promise<ProcessTreeSignalResult> {
 	return new Promise((resolve) => {
 		const args = ["/PID", String(pid), "/T", ...(force ? ["/F"] : [])];
@@ -142,11 +193,41 @@ export function runWindowsTaskkill(
 	});
 }
 
+export async function runWindowsVerifiedForceTaskkill(
+	verification: ProcessTreeVerification,
+	execute: WindowsTaskkillExecutor = executeWindowsTaskkill,
+	listMembers: () => readonly ProcessTreeMemberAnchor[] | undefined = () => listWindowsProcesses(),
+): Promise<ProcessTreeSignalResult> {
+	const before = listMembers();
+	if (!before) return { ok: false, gone: false, error: "Windows process tree could not be reverified" };
+	const liveAnchors = verification.members.filter((anchor) => before.some((member) =>
+		member.pid === anchor.pid && member.processStartTime === anchor.processStartTime,
+	));
+	if (liveAnchors.length === 0) return { ok: true, gone: true };
+	const failures: string[] = [];
+	for (const anchor of liveAnchors) {
+		const result = await runWindowsTaskkill(anchor.pid, true, execute);
+		if (!result.ok && result.error) failures.push(result.error);
+	}
+	const after = listMembers();
+	if (!after) return { ok: false, gone: false, error: "Windows process tree could not be verified after forced taskkill" };
+	const remains = verification.members.some((anchor) => after.some((member) =>
+		member.pid === anchor.pid && member.processStartTime === anchor.processStartTime,
+	));
+	if (!remains) return { ok: true, gone: true };
+	return { ok: false, gone: false, error: failures[0] ?? "verified Windows process-tree members remain alive" };
+}
+
 async function rawSystemSignal(
 	identity: ProcessTreeIdentity,
 	signal: "SIGTERM" | "SIGKILL",
+	verification?: ProcessTreeVerification,
 ): Promise<ProcessTreeSignalResult> {
-	if (process.platform === "win32") return runWindowsTaskkill(identity.pid, signal === "SIGKILL");
+	if (process.platform === "win32") {
+		return signal === "SIGKILL" && verification
+			? runWindowsVerifiedForceTaskkill(verification)
+			: runWindowsTaskkill(identity.pid, signal === "SIGKILL");
+	}
 	try {
 		process.kill(-identity.processGroupId, signal);
 		return { ok: true, gone: false };
@@ -175,8 +256,10 @@ export const systemProcessTree: ProcessTreeOperations = {
 		return actual === identity.processStartTime ? "same" : "different";
 	},
 	captureTreeVerification(identity): ProcessTreeVerification | undefined {
-		if (process.platform === "win32" || this.identityMatches(identity) !== "same") return undefined;
-		const members = listPosixGroupMembers(identity.processGroupId);
+		if (this.identityMatches(identity) !== "same") return undefined;
+		const members = process.platform === "win32"
+			? listWindowsTreeMembers(identity.pid)
+			: listPosixGroupMembers(identity.processGroupId);
 		if (!members || members.length === 0) return undefined;
 		// Bracket the snapshot with persisted-leader checks. If the original group
 		// exits/reuses its numeric PGID during `ps`, never anchor the replacement.
@@ -203,7 +286,7 @@ export const systemProcessTree: ProcessTreeOperations = {
 				error: identityStatus === "different" ? "process identity changed" : "process identity could not be verified",
 			};
 		}
-		return rawSystemSignal(identity, signal);
+		return rawSystemSignal(identity, signal, verification);
 	},
 	signalFreshTree: rawSystemSignal,
 	waitForTreeEmpty(identity, timeoutMs): Promise<boolean> {

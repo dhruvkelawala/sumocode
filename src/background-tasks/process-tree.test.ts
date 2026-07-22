@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
 	captureProcessStartTime,
 	runWindowsTaskkill,
+	runWindowsVerifiedForceTaskkill,
 	signalVerifiedProcessTree,
 	systemProcessTree,
 	terminateProcessTree,
@@ -78,6 +79,24 @@ describe("process tree operations", () => {
 		});
 		expect(await terminateProcessTree(harness, identity, { termGraceMs: 1, killGraceMs: 1 })).toBe(false);
 		expect(harness.signalTree).toHaveBeenCalledTimes(1);
+	});
+
+	it("forces a still-verified Windows descendant after the leader exits", async () => {
+		const verification = {
+			members: [
+				{ pid: 123, processStartTime: "leader-start" },
+				{ pid: 456, processStartTime: "child-start" },
+			],
+		};
+		const execute = vi.fn((_args, callback: (error?: Error | null) => void) => callback());
+		const snapshots = [
+			[{ pid: 456, processStartTime: "child-start" }],
+			[],
+		];
+
+		expect(await runWindowsVerifiedForceTaskkill(verification, execute, () => snapshots.shift())).toEqual({ ok: true, gone: true });
+		expect(execute).toHaveBeenCalledWith(["/PID", "456", "/T", "/F"], expect.any(Function));
+		expect(execute).not.toHaveBeenCalledWith(expect.arrayContaining(["123"]), expect.any(Function));
 	});
 
 	it("marks a failed soft taskkill for forced /T /F escalation", async () => {

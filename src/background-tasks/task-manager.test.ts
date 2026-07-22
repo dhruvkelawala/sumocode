@@ -248,6 +248,24 @@ describe("TerminalTaskManager", () => {
 		expect(results[0]?.task).toMatchObject({ status: "cancelled", deliveryState: "suppressed", observedAt: expect.any(Number), consumedAt: expect.any(Number) });
 	});
 
+	it("prefers a concurrent natural exit marker over cancellation after stop disposition", async () => {
+		const target = manager();
+		const task = await start(target);
+		tree.operations.waitForTreeEmpty = vi.fn(async (identity) => {
+			writeFileSync(exitFile(task), "0");
+			tree.empty.set(identity.processGroupId, true);
+			return true;
+		});
+
+		const result = await target.stop([task.id], "session-a");
+
+		expect(result[0]).toMatchObject({
+			outcome: "already-settled",
+			task: { status: "completed", exitCode: 0 },
+		});
+		expect(tree.calls).not.toContain(`signal:${task.processGroupId}:SIGKILL`);
+	});
+
 	it("reverifies descendant anchors and forces a Windows-style soft taskkill failure after leader exit", async () => {
 		let leaderGone = false;
 		tree.operations.identityMatches = vi.fn(() => leaderGone ? "unknown" : "same");
@@ -411,6 +429,36 @@ describe("TerminalTaskManager", () => {
 		const recovered = manager();
 		await vi.waitFor(() => expect(recovered.get(task.id, "session-a")?.status).toBe("completed"));
 		expect(recovered.get(task.id, "session-a")).toMatchObject({ completionId: expect.any(String), deliveryState: "pending" });
+	});
+
+	it("recovers Windows-style natural completion from exit evidence plus absent persisted anchors", async () => {
+		const first = manager();
+		const task = await start(first);
+		const verification = { members: [{ pid: task.pid!, processStartTime: task.processStartTime! }] };
+		const store = new TerminalTaskStore({ rootDir });
+		const current = store.get(task.id)!;
+		store.transition(task.id, current.revision, (entry) => ({
+			...entry,
+			updatedAt: 2_000,
+			processTreeVerification: verification,
+		}));
+		writeFileSync(exitFile(task), "7");
+		first.detach();
+		const recoveredOperations: ProcessTreeOperations = {
+			...tree.operations,
+			identityMatches: vi.fn((): "different" => "different"),
+			isTreeEmpty: vi.fn((_identity, anchors) => anchors === verification || anchors?.members[0]?.pid === task.pid),
+			signalTree: vi.fn(async () => ({ ok: false, gone: false })),
+		};
+		const recovered = manager({ processTree: recoveredOperations });
+
+		await vi.waitFor(() => expect(recovered.get(task.id, "session-a")?.status).toBe("failed"));
+		expect(recovered.get(task.id, "session-a")).toMatchObject({ exitCode: 7, completionId: expect.any(String) });
+		expect(recoveredOperations.isTreeEmpty).toHaveBeenCalledWith(
+			expect.objectContaining({ pid: task.pid }),
+			expect.objectContaining({ members: expect.any(Array) }),
+		);
+		expect(recoveredOperations.signalTree).not.toHaveBeenCalled();
 	});
 
 	it("recovers persisted stopping by resuming safe escalation for a live tree", async () => {
@@ -578,7 +626,11 @@ describe("TerminalTaskManager", () => {
 			await vi.waitFor(() => expect(second.get(task.id, "session-a")?.status).toBe("completed"));
 			await new Promise((resolve) => setTimeout(resolve, 25));
 			expect(unhandled).toEqual([]);
-			expect(new TerminalTaskStore({ rootDir }).loadAll()[0]).toMatchObject({ status: "completed", revision: 3 });
+			expect(new TerminalTaskStore({ rootDir }).loadAll()[0]).toMatchObject({
+				status: "completed",
+				revision: 4,
+				processTreeVerification: { members: expect.any(Array) },
+			});
 		} finally {
 			process.off("unhandledRejection", onUnhandled);
 		}

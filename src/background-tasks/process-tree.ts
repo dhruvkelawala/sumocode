@@ -29,7 +29,7 @@ export interface ProcessTreeSignalResult {
 export interface ProcessTreeOperations {
 	captureStartTime(pid: number): string | undefined;
 	identityMatches(identity: ProcessTreeIdentity): ProcessIdentityStatus;
-	isTreeEmpty(identity: ProcessTreeIdentity): boolean;
+	isTreeEmpty(identity: ProcessTreeIdentity, verification?: ProcessTreeVerification): boolean;
 	/** Capture live anchors while the persisted leader identity is still verified. */
 	captureTreeVerification?(identity: ProcessTreeIdentity): ProcessTreeVerification | undefined;
 	verificationMatches?(identity: ProcessTreeIdentity, verification: ProcessTreeVerification): ProcessIdentityStatus;
@@ -37,7 +37,7 @@ export interface ProcessTreeOperations {
 	signalTree(identity: ProcessTreeIdentity, signal: "SIGTERM" | "SIGKILL", verification?: ProcessTreeVerification): Promise<ProcessTreeSignalResult>;
 	/** Only for a process group returned by the current, not-yet-persisted spawn call. */
 	signalFreshTree?(identity: ProcessTreeIdentity, signal: "SIGTERM" | "SIGKILL"): Promise<ProcessTreeSignalResult>;
-	waitForTreeEmpty(identity: ProcessTreeIdentity, timeoutMs: number): Promise<boolean>;
+	waitForTreeEmpty(identity: ProcessTreeIdentity, timeoutMs: number, verification?: ProcessTreeVerification): Promise<boolean>;
 }
 
 function errorCode(error: unknown): string | undefined {
@@ -268,10 +268,13 @@ export const systemProcessTree: ProcessTreeOperations = {
 		return { members };
 	},
 	verificationMatches: verificationStatus,
-	isTreeEmpty(identity): boolean {
-		// Leader absence is not proof of descendant absence on Windows. Windows
-		// cancellation succeeds only from a successful taskkill /T operation.
-		return process.platform === "win32" ? false : posixGroupEmpty(identity.processGroupId);
+	isTreeEmpty(identity, verification): boolean {
+		// Leader absence alone is not proof on Windows. A complete member snapshot
+		// captured while the leader matched can prove the original tree empty when
+		// every PID/start-time anchor is now absent.
+		return process.platform === "win32"
+			? verification !== undefined && verificationStatus(identity, verification) === "different"
+			: posixGroupEmpty(identity.processGroupId);
 	},
 	async signalTree(identity, signal, verification): Promise<ProcessTreeSignalResult> {
 		// Defense in depth: all production callers verify, and the system operation
@@ -289,15 +292,15 @@ export const systemProcessTree: ProcessTreeOperations = {
 		return rawSystemSignal(identity, signal, verification);
 	},
 	signalFreshTree: rawSystemSignal,
-	waitForTreeEmpty(identity, timeoutMs): Promise<boolean> {
+	waitForTreeEmpty(identity, timeoutMs, verification): Promise<boolean> {
 		return new Promise((resolve) => {
-			if (this.isTreeEmpty(identity)) {
+			if (this.isTreeEmpty(identity, verification)) {
 				resolve(true);
 				return;
 			}
 			const deadline = Date.now() + Math.max(0, timeoutMs);
 			const poll = (): void => {
-				if (this.isTreeEmpty(identity)) {
+				if (this.isTreeEmpty(identity, verification)) {
 					resolve(true);
 					return;
 				}
@@ -344,10 +347,10 @@ export async function terminateProcessTree(
 	const verification = operations.captureTreeVerification?.(identity);
 	const term = await signalVerifiedProcessTree(operations, identity, "SIGTERM", verification);
 	if (!term.ok && !term.forceRequired) return false;
-	if (term.ok && (term.gone || await operations.waitForTreeEmpty(identity, options.termGraceMs))) return true;
+	if (term.ok && (term.gone || await operations.waitForTreeEmpty(identity, options.termGraceMs, verification))) return true;
 	const kill = await signalVerifiedProcessTree(operations, identity, "SIGKILL", verification);
 	if (!kill.ok) return false;
-	return kill.gone || await operations.waitForTreeEmpty(identity, options.killGraceMs);
+	return kill.gone || await operations.waitForTreeEmpty(identity, options.killGraceMs, verification);
 }
 
 /** Cleanup for the exact group returned by the current spawn before ownership is persisted. */

@@ -219,6 +219,15 @@ function identityOf(task: TerminalTaskSnapshot): ProcessTreeIdentity | undefined
 	return { pid: task.pid, processGroupId: task.processGroupId, processStartTime: task.processStartTime };
 }
 
+function sameTreeVerification(left: ProcessTreeVerification | undefined, right: ProcessTreeVerification | undefined): boolean {
+	if (left === undefined || right === undefined) return left === right;
+	if (left.members.length !== right.members.length) return false;
+	return left.members.every((anchor, index) => {
+		const candidate = right.members[index];
+		return candidate?.pid === anchor.pid && candidate.processStartTime === anchor.processStartTime;
+	});
+}
+
 function buildPosixScript(options: {
 	readonly command: string;
 	readonly cwd: string;
@@ -571,7 +580,7 @@ export class TerminalTaskManager {
 			}
 			const paths = taskPaths(this.store, current.id, current.createdAt);
 			const naturalExitCode = readExitCode(this.store, paths.exitFile);
-			if (this.processTree.isTreeEmpty(identity)) {
+			if (this.processTree.isTreeEmpty(identity, current.processTreeVerification)) {
 				if (naturalExitCode !== undefined) {
 					const settled = this.settleNatural(id, naturalExitCode);
 					const observed = this.observe(id, false);
@@ -612,10 +621,25 @@ export class TerminalTaskManager {
 			}
 			const capturedVerification = this.processTree.captureTreeVerification?.(identity);
 			if (naturalExitCode !== undefined) {
-				targets.push({ task: current, identity, verification: capturedVerification ?? retainedVerification, naturalExitCode });
+				const verification = capturedVerification ?? current.processTreeVerification;
+				if (this.processTree.captureTreeVerification && !verification) {
+					results.set(id, { id, outcome: "failed", task: current, message: `Terminal ${id} process-tree anchors could not be persisted; refusing natural-disposition signal.` });
+					continue;
+				}
+				const disposing = verification && !sameTreeVerification(current.processTreeVerification, verification)
+					? this.mutate(id, (task) => !isTerminalTaskSettled(task.status) && !sameTreeVerification(task.processTreeVerification, verification)
+						? { ...task, processTreeVerification: verification, updatedAt: this.timestamp(task) }
+						: undefined).snapshot
+					: current;
+				if (isTerminalTaskSettled(disposing.status)) {
+					const observed = this.observe(id, false);
+					results.set(id, { id, outcome: "already-settled", task: observed, message: `Terminal ${id} was already ${observed.status}.` });
+					continue;
+				}
+				targets.push({ task: disposing, identity, verification: disposing.processTreeVerification ?? verification, naturalExitCode });
 				continue;
 			}
-			// A new POSIX TERM boundary requires a fresh complete-group snapshot.
+			// A new TERM boundary requires a fresh complete-group snapshot.
 			// Runtime-only anchors may predate descendants and are not sufficient for
 			// crash recovery once TERM removes the leader.
 			const verification = current.status === "stopping"
@@ -650,7 +674,7 @@ export class TerminalTaskManager {
 		await Promise.all(targets.map(async ({ task, identity, verification, naturalExitCode }, index) => {
 			results.set(task.id, naturalExitCode === undefined
 				? await this.finishStop(task.id, identity, termSignals[index]!, true, verification)
-				: await this.finishNaturalStop(task.id, identity, naturalExitCode, termSignals[index]!));
+				: await this.finishNaturalStop(task.id, identity, naturalExitCode, termSignals[index]!, verification));
 		}));
 		return uniqueIds.map((id) => results.get(id)!);
 	}
@@ -829,18 +853,18 @@ export class TerminalTaskManager {
 	}
 
 	private async finishNaturalCompletion(id: string, identity: ProcessTreeIdentity, exitCode: number): Promise<void> {
-		if (this.store.get(id)?.status !== "running") return;
-		if (this.processTree.isTreeEmpty(identity)) {
-			// Crash recovery after the manager disposed the wrapper but before the
-			// metadata CAS: exit.code plus proven emptiness is complete evidence.
+		let current = this.store.get(id);
+		if (current?.status !== "running") return;
+		if (this.processTree.isTreeEmpty(identity, current.processTreeVerification)) {
+			// Crash recovery after tree disposal but before the final metadata CAS:
+			// exit.code plus persisted-anchor absence is complete evidence.
 			this.settleNatural(id, exitCode);
 			return;
 		}
 		// Both wrappers deliberately retain the verified leader after writing the
-		// command's exit code. Never derive an ownership anchor from an unverified
-		// reused PGID: capture only after the persisted leader matches, otherwise
-		// require an anchor retained from an earlier verified observation.
-		const retainedVerification = this.runtime.get(id)?.treeVerification;
+		// command's exit code. Capture and persist the complete member set before
+		// disposal so Windows recovery retains authority after the leader exits.
+		const retainedVerification = current.processTreeVerification ?? this.runtime.get(id)?.treeVerification;
 		let verification: ProcessTreeVerification | undefined;
 		let identityStatus = this.processTree.identityMatches(identity);
 		if (identityStatus === "same") {
@@ -850,20 +874,31 @@ export class TerminalTaskManager {
 			if (identityStatus === "same") verification = retainedVerification;
 		}
 		if (identityStatus === "different") {
-			this.settleLost(id, exitCode, false);
+			if (this.processTree.isTreeEmpty(identity, retainedVerification)) this.settleNatural(id, exitCode);
+			else this.settleLost(id, exitCode, false);
 			return;
 		}
-		if (identityStatus === "unknown") {
-			this.diagnostic(id, "natural completion identity is unverified; refusing tree signal");
+		if (identityStatus === "unknown" || (this.processTree.captureTreeVerification && !verification)) {
+			this.diagnostic(id, "natural completion process-tree identity or member anchors are unverified; refusing tree signal");
+			return;
+		}
+		if (verification && !sameTreeVerification(current.processTreeVerification, verification)) {
+			current = this.mutate(id, (task) => task.status === "running" && !sameTreeVerification(task.processTreeVerification, verification)
+				? { ...task, processTreeVerification: verification, updatedAt: this.timestamp(task) }
+				: undefined).snapshot;
+			verification = current.processTreeVerification;
+		}
+		if (this.processTree.isTreeEmpty(identity, verification)) {
+			this.settleNatural(id, exitCode);
 			return;
 		}
 		const killed = await this.safeVerifiedSignal(identity, "SIGKILL", verification);
-		const gone = killed.gone || (killed.ok && await this.processTree.waitForTreeEmpty(identity, this.killGraceMs));
+		const gone = killed.gone || (killed.ok && await this.processTree.waitForTreeEmpty(identity, this.killGraceMs, verification));
 		if (killed.ok && gone) {
 			if (this.store.get(id)?.status === "running") this.settleNatural(id, exitCode);
 			return;
 		}
-		if (killed.identityStatus === "different" && this.processTree.isTreeEmpty(identity)) {
+		if (killed.identityStatus === "different" && this.processTree.isTreeEmpty(identity, verification)) {
 			this.settleNatural(id, exitCode);
 			return;
 		}
@@ -871,11 +906,11 @@ export class TerminalTaskManager {
 	}
 
 	private async recoverStopping(id: string, identity: ProcessTreeIdentity): Promise<void> {
-		if (this.processTree.isTreeEmpty(identity)) {
-			this.settleCancelled(id);
+		const current = this.store.get(id);
+		if (this.processTree.isTreeEmpty(identity, current?.processTreeVerification)) {
+			this.settleDisposedStop(id);
 			return;
 		}
-		const current = this.store.get(id);
 		let verification = current?.processTreeVerification;
 		let identityStatus = this.processTree.identityMatches(identity);
 		if (identityStatus !== "same" && verification && this.processTree.verificationMatches) {
@@ -990,10 +1025,11 @@ export class TerminalTaskManager {
 		identity: ProcessTreeIdentity,
 		exitCode: number,
 		signal: ProcessTreeSignalResult,
+		verification?: ProcessTreeVerification,
 	): Promise<TerminalStopResult> {
-		const gone = signal.gone || (signal.ok && await this.processTree.waitForTreeEmpty(identity, this.killGraceMs));
+		const gone = signal.gone || (signal.ok && await this.processTree.waitForTreeEmpty(identity, this.killGraceMs, verification));
 		if (!signal.ok || !gone) {
-			if (!this.processTree.isTreeEmpty(identity)) return this.handleStopSignalFailure(id, signal, false, true);
+			if (!this.processTree.isTreeEmpty(identity, verification)) return this.handleStopSignalFailure(id, signal, false, true);
 		}
 		const settled = this.settleNatural(id, exitCode);
 		const observed = this.observe(id, false);
@@ -1006,24 +1042,21 @@ export class TerminalTaskManager {
 		};
 	}
 
-	private async finishStop(
-		id: string,
-		identity: ProcessTreeIdentity,
-		termSignal: ProcessTreeSignalResult,
-		restoreOnFailure: boolean,
-		verification?: ProcessTreeVerification,
-	): Promise<TerminalStopResult> {
-		if (!termSignal.ok && !termSignal.forceRequired) return this.handleStopSignalFailure(id, termSignal, restoreOnFailure);
-		let empty = termSignal.ok && (termSignal.gone || await this.processTree.waitForTreeEmpty(identity, this.termGraceMs));
-		if (!empty) {
-			const kill = await this.safeVerifiedSignal(identity, "SIGKILL", verification);
-			// TERM (or a failed soft taskkill) may already have removed the leader.
-			// From this point onward the persisted anchors are the only safe retry
-			// authority, so retain `stopping` on failure for recovery to resume.
-			if (!kill.ok) return this.handleStopSignalFailure(id, kill, false);
-			empty = kill.gone || await this.processTree.waitForTreeEmpty(identity, this.killGraceMs);
+	private settleDisposedStop(id: string): TerminalStopResult {
+		const current = this.store.get(id);
+		if (!current) return { id, outcome: "failed", message: `Failed to settle terminal ${id}: durable record unavailable.` };
+		const exitCode = readExitCode(this.store, taskPaths(this.store, current.id, current.createdAt).exitFile);
+		if (exitCode !== undefined) {
+			const settled = this.settleNatural(id, exitCode);
+			const observed = this.observe(id, false);
+			return {
+				id,
+				outcome: "already-settled",
+				task: observed,
+				output: this.getOutput(observed, WAIT_OUTPUT_BYTES),
+				message: `Terminal ${id} completed before stop disposition with exit ${settled.exitCode ?? "unknown"}.`,
+			};
 		}
-		if (!empty) return this.failedStop(id, "process tree remains alive after SIGKILL", false);
 		const cancelled = this.settleCancelled(id);
 		return {
 			id,
@@ -1034,6 +1067,29 @@ export class TerminalTaskManager {
 		};
 	}
 
+	private async finishStop(
+		id: string,
+		identity: ProcessTreeIdentity,
+		termSignal: ProcessTreeSignalResult,
+		restoreOnFailure: boolean,
+		verification?: ProcessTreeVerification,
+	): Promise<TerminalStopResult> {
+		if (!termSignal.ok && !termSignal.forceRequired) return this.handleStopSignalFailure(id, termSignal, restoreOnFailure);
+		let empty = termSignal.ok && (termSignal.gone || await this.processTree.waitForTreeEmpty(identity, this.termGraceMs, verification));
+		if (!empty) {
+			const kill = await this.safeVerifiedSignal(identity, "SIGKILL", verification);
+			// TERM (or a failed soft taskkill) may already have removed the leader.
+			// From this point onward the persisted anchors are the only safe retry
+			// authority, so retain `stopping` on failure for recovery to resume.
+			if (!kill.ok) return this.handleStopSignalFailure(id, kill, false);
+			empty = kill.gone || await this.processTree.waitForTreeEmpty(identity, this.killGraceMs, verification);
+		}
+		if (!empty) return this.failedStop(id, "process tree remains alive after SIGKILL", false);
+		// The command may have written exit.code after target collection but before
+		// TERM crossed the boundary. Durable natural evidence wins this race.
+		return this.settleDisposedStop(id);
+	}
+
 	private handleStopSignalFailure(
 		id: string,
 		signal: ProcessTreeSignalResult,
@@ -1042,9 +1098,8 @@ export class TerminalTaskManager {
 	): TerminalStopResult {
 		const current = this.store.get(id);
 		const identity = current ? identityOf(current) : undefined;
-		if (identity && this.processTree.isTreeEmpty(identity)) {
-			const cancelled = this.settleCancelled(id);
-			return { id, outcome: "cancelled", task: cancelled, message: `Cancelled terminal ${id}.` };
+		if (identity && this.processTree.isTreeEmpty(identity, current?.processTreeVerification)) {
+			return this.settleDisposedStop(id);
 		}
 		if (signal.identityStatus === "different") {
 			this.settleLost(id, null, false);

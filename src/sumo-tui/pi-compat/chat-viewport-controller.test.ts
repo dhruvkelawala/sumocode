@@ -702,7 +702,7 @@ describe("ChatViewportController", () => {
 		root.dispose();
 	});
 
-	it("keeps an uncorrelated passive subagent completion standalone", async () => {
+	it("keeps uncorrelated passive subagent updates in one standalone card", async () => {
 		const { root, chat, controller } = await makeController();
 		controller.handleAgentEvent({ type: "message_start", message: { id: "assistant-current", role: "assistant", content: "current answer" } });
 		controller.handleAgentEvent({ type: "message_end", message: { id: "assistant-current", role: "assistant", content: "current answer" } });
@@ -713,14 +713,31 @@ describe("ChatViewportController", () => {
 				role: "custom",
 				customType: "subagent-result",
 				display: true,
-				content: "Historical result",
+				content: "Historical running",
+				details: { id: "sa-historical", title: "historical worker", status: "running" },
+			},
+		});
+
+		let messages = chat.getRenderedMessages().map((message) => message.toSnapshot());
+		expect(messages).toHaveLength(2);
+		expect(messages[0]?.blocks).toEqual([{ type: "markdown", text: "current answer" }]);
+		expect(messages[1]?.blocks).toEqual([
+			expect.objectContaining({ type: "activity", activity: expect.objectContaining({ id: "subagent:sa-historical", status: "running" }) }),
+		]);
+
+		controller.handleAgentEvent({
+			type: "message_start",
+			message: {
+				role: "custom",
+				customType: "subagent-result",
+				display: true,
+				content: "Historical complete",
 				details: { id: "sa-historical", title: "historical worker", status: "done" },
 			},
 		});
 
-		const messages = chat.getRenderedMessages().map((message) => message.toSnapshot());
+		messages = chat.getRenderedMessages().map((message) => message.toSnapshot());
 		expect(messages).toHaveLength(2);
-		expect(messages[0]?.blocks).toEqual([{ type: "markdown", text: "current answer" }]);
 		expect(messages[1]?.blocks).toEqual([
 			expect.objectContaining({ type: "activity", activity: expect.objectContaining({ id: "subagent:sa-historical", status: "succeeded" }) }),
 		]);

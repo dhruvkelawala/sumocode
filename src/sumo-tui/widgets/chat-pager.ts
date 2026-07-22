@@ -4,6 +4,7 @@ import { FLEX_DIRECTION_COLUMN, type Yoga, type YogaNode } from "../layout/yoga.
 import type { KeyEvent } from "../input/key-router.js";
 import type { MouseEvent } from "../input/mouse.js";
 import {
+	isFoldableBlock,
 	matchingFoldableBlockIndex,
 	upsertFoldableBlock,
 	type FoldableBlock,
@@ -311,8 +312,12 @@ export class ChatPager extends SumoNode {
 	public foldBlockIntoMatchingMessage(incoming: FoldableBlock): number | undefined {
 		for (let activeIndex = this.activeMessages.length - 1; activeIndex >= 0; activeIndex -= 1) {
 			const target = this.activeMessages[activeIndex];
-			if (!target || (target.role !== "sumo" && target.role !== "assistant")) continue;
+			if (!target) continue;
 			const blocks = target.toSnapshot().blocks ?? [];
+			const isStandaloneActivityMessage = (target.role === "tool" || target.role === "system")
+				&& blocks.some(isFoldableBlock)
+				&& blocks.every((block) => isFoldableBlock(block) || block.type === "image");
+			if (target.role !== "sumo" && target.role !== "assistant" && !isStandaloneActivityMessage) continue;
 			if (matchingFoldableBlockIndex(blocks, incoming) === -1) continue;
 			const sourceIndex = this.activeMessageSourceIndices[activeIndex];
 			if (sourceIndex === undefined) return undefined;

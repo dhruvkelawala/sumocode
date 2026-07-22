@@ -17,6 +17,10 @@ export function isFoldableResultViewModel(message: ChatMessageViewModel): boolea
 		&& message.blocks.every((block) => isFoldableBlock(block) || block.type === "image");
 }
 
+export function canOwnFoldableUpdates(message: ChatMessageViewModel): boolean {
+	return message.role === "sumo" || (message.role === "system" && isFoldableResultViewModel(message));
+}
+
 export function matchingActivityBlockIndex(blocks: readonly ChatBlock[], incoming: ActivityBlock): number {
 	return blocks.findIndex((block) => block.type === "activity" && sameActivity(block.activity, incoming.activity));
 }
@@ -107,7 +111,7 @@ export function foldBlockIntoMessages(
 	options: { readonly requireMatch: boolean },
 ): { messages: ChatMessageViewModel[]; folded: boolean } {
 	const matchingMessageIndex = findLastMessageIndex(messages, (message) => (
-		message.role === "sumo" && matchingFoldableBlockIndex(message.blocks, incoming) !== -1
+		canOwnFoldableUpdates(message) && matchingFoldableBlockIndex(message.blocks, incoming) !== -1
 	));
 	const fallbackIndex = options.requireMatch ? -1 : findLastMessageIndex(messages, (message) => message.role === "sumo");
 	const targetIndex = matchingMessageIndex !== -1 ? matchingMessageIndex : fallbackIndex;
@@ -162,7 +166,7 @@ export function foldResultViewModelIntoMessages(
 	if (!isFoldableResultViewModel(message)) return { messages: [...messages], folded: false };
 	const foldable = message.blocks.filter(isFoldableBlock);
 	const targetIndices = foldable.map((block) => findLastMessageIndex(messages, (candidate) => (
-		candidate.role === "sumo" && matchingFoldableBlockIndex(candidate.blocks, block) !== -1
+		canOwnFoldableUpdates(candidate) && matchingFoldableBlockIndex(candidate.blocks, block) !== -1
 	))).filter((index) => index !== -1);
 	if (targetIndices.length === 0) return { messages: [...messages], folded: false };
 	const folded = foldBlocksIntoMessages(messages, foldable, { requireMatch: true });

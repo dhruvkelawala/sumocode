@@ -409,6 +409,31 @@ describe("TranscriptController Activity folding", () => {
 		if (block?.type !== "activity") throw new Error("wrong block type");
 		expect(block.activity.sourceId).toBeUndefined();
 	});
+
+	it("folds later updates into a standalone canonical Activity card", () => {
+		const controller = new TranscriptController();
+		const transcript = controller.replaceFromMessages([
+			{
+				role: "custom",
+				customType: "subagent-result",
+				display: true,
+				content: "Still running",
+				details: { id: "sa-standalone", title: "standalone", status: "running" },
+			},
+			{
+				role: "custom",
+				customType: "subagent-result",
+				display: true,
+				content: "Standalone complete",
+				details: { id: "sa-standalone", title: "standalone", status: "done" },
+			},
+		]);
+
+		expect(transcript.messages).toHaveLength(1);
+		expect(transcript.messages[0]?.blocks).toEqual([
+			expect.objectContaining({ type: "activity", activity: expect.objectContaining({ id: "subagent:sa-standalone", status: "succeeded" }) }),
+		]);
+	});
 });
 
 describe("TranscriptController live-state clearing", () => {

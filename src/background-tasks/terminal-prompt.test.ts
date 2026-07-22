@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { buildObservationResult, buildTerminalResultMessage, TERMINAL_TOOL_DESCRIPTIONS, TERMINAL_TOOL_GUIDELINES } from "./terminal-prompt.js";
+import { describe, expect, it, vi } from "vitest";
+import { buildObservationResult, buildTerminalResultMessage, describeTerminal, TERMINAL_TOOL_DESCRIPTIONS, TERMINAL_TOOL_GUIDELINES } from "./terminal-prompt.js";
 import { TERMINAL_TASK_SCHEMA_VERSION, type TerminalTaskSnapshot } from "./task-types.js";
 
 const task: TerminalTaskSnapshot = {
@@ -35,6 +35,24 @@ describe("terminal prompt guidance", () => {
 		const legacyPrefix = ["b", "g"].join("");
 		expect(guidance).not.toContain(`${legacyPrefix}_start`);
 		expect(guidance).not.toContain(`/${legacyPrefix}`);
+	});
+
+	it("uses wall-clock elapsed time for active terminals without mutating durable state", () => {
+		vi.useFakeTimers();
+		try {
+			vi.setSystemTime(62_000);
+			expect(describeTerminal({
+				...task,
+				status: "running",
+				updatedAt: 2_000,
+				settledAt: undefined,
+				exitCode: undefined,
+				deliveryState: "none",
+				completionId: undefined,
+			})).toContain("1m 1s");
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it("sanitizes control sequences and bounds completion output", () => {

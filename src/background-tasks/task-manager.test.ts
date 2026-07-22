@@ -190,6 +190,31 @@ describe("TerminalTaskManager", () => {
 		expect(secondWait.updatedAt).toBe(firstWait.updatedAt);
 	});
 
+	it("closes the wait inspection/subscription lost-wakeup window", async () => {
+		const target = manager();
+		const task = await start(target);
+		const originalSubscribe = target.addChangeListener.bind(target);
+		vi.spyOn(target, "addChangeListener").mockImplementation((listener) => {
+			const store = new TerminalTaskStore({ rootDir });
+			const current = store.loadAll().find((entry) => entry.id === task.id)!;
+			store.transition(task.id, current.revision, (entry) => ({
+				...entry,
+				status: "completed",
+				updatedAt: 2_000,
+				settledAt: 2_000,
+				exitCode: 0,
+				deliveryState: "pending",
+				completionId: "completion-race",
+			}));
+			return originalSubscribe(listener);
+		});
+
+		const before = Date.now();
+		const result = await target.wait([task.id], "session-a", 1_000);
+		expect(Date.now() - before).toBeLessThan(250);
+		expect(result).toMatchObject({ pendingIds: [], timedOut: false, settled: [{ task: { id: task.id } }] });
+	});
+
 	it("times out normally and aborts only the wait", async () => {
 		const target = manager();
 		const task = await start(target);

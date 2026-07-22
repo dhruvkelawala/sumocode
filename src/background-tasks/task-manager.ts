@@ -263,7 +263,11 @@ function buildWindowsScript(options: {
 		`(${options.command}) >> ${quoteWindows(options.logFile)} 2>&1`,
 		"set terminal_exit=%errorlevel%",
 		`> ${quoteWindows(options.exitFile)} echo %terminal_exit%`,
-		"exit /b %terminal_exit%",
+		// Keep the verified leader alive until the manager performs taskkill /T.
+		// This prevents a short-lived shell from orphaning background descendants.
+		":wait_for_tree_reconcile",
+		"ping 127.0.0.1 -n 2 >nul",
+		"goto wait_for_tree_reconcile",
 	].join("\r\n");
 }
 
@@ -463,17 +467,25 @@ export class TerminalTaskManager {
 		if (!complete() && timeoutMs > 0) {
 			await new Promise<void>((resolve, reject) => {
 				let finished = false;
+				let timer: ReturnType<typeof setTimeout> | undefined;
+				let unsubscribe = (): void => {};
 				const finish = (error?: Error): void => {
 					if (finished) return;
 					finished = true;
-					clearTimeout(timer);
+					if (timer) clearTimeout(timer);
 					unsubscribe();
 					signal?.removeEventListener("abort", onAbort);
 					error ? reject(error) : resolve();
 				};
 				const onAbort = (): void => finish(abortError());
-				const unsubscribe = this.addChangeListener(() => { if (complete()) finish(); });
-				const timer = setTimeout(() => finish(), timeoutMs);
+				unsubscribe = this.addChangeListener(() => { if (complete()) finish(); });
+				// Close the inspection/subscription lost-wakeup window: settlement may
+				// have committed after the first complete() and before listener install.
+				if (complete()) {
+					finish();
+					return;
+				}
+				timer = setTimeout(() => finish(), timeoutMs);
 				timer.unref?.();
 				if (signal?.aborted) onAbort();
 				else signal?.addEventListener("abort", onAbort, { once: true });
@@ -700,12 +712,34 @@ export class TerminalTaskManager {
 		}
 		const paths = taskPaths(this.store, current.id, current.createdAt);
 		const exitCode = readExitCode(paths.exitFile);
-		if (exitCode !== undefined && (process.platform === "win32" || this.processTree.isTreeEmpty(identity))) {
-			this.settleNatural(id, exitCode);
-			return;
+		if (exitCode !== undefined) {
+			if (process.platform === "win32") {
+				await this.finishWindowsNaturalCompletion(id, identity, exitCode);
+				return;
+			}
+			if (this.processTree.isTreeEmpty(identity)) {
+				this.settleNatural(id, exitCode);
+				return;
+			}
 		}
 		const identityStatus = this.processTree.identityMatches(identity);
 		if (identityStatus === "different") this.settleLost(id, exitCode ?? null, false);
+	}
+
+	private async finishWindowsNaturalCompletion(id: string, identity: ProcessTreeIdentity, exitCode: number): Promise<void> {
+		// The Windows wrapper deliberately remains alive after writing exit.code.
+		// A verified taskkill /T /F is therefore the trustworthy boundary that
+		// disposes any background descendants before natural settlement.
+		const killed = await this.safeVerifiedSignal(identity, "SIGKILL");
+		if (killed.ok && killed.gone) {
+			this.settleNatural(id, exitCode);
+			return;
+		}
+		if (killed.identityStatus === "different") {
+			this.settleLost(id, exitCode, false);
+			return;
+		}
+		this.diagnostic(id, `Windows completion tree disposition unproven; refusing settlement: ${killed.error ?? "taskkill /T did not prove success"}`);
 	}
 
 	private async recoverStopping(id: string, identity: ProcessTreeIdentity): Promise<void> {

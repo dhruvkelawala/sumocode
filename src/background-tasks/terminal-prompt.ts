@@ -22,8 +22,8 @@ function bounded(value: string, maxChars: number): string {
 	return `[output tail truncated]\n${clean.slice(-maxChars)}`;
 }
 
-function elapsed(task: TerminalTaskSnapshot): string {
-	const end = task.settledAt ?? task.updatedAt;
+function elapsed(task: TerminalTaskSnapshot, currentTime = Date.now()): string {
+	const end = task.settledAt ?? Math.max(task.updatedAt, currentTime);
 	const milliseconds = Math.max(0, end - task.createdAt);
 	if (milliseconds < 1_000) return `${milliseconds}ms`;
 	const seconds = Math.floor(milliseconds / 1_000);

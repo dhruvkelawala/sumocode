@@ -355,7 +355,9 @@ describe("TerminalTaskManager", () => {
 		const target = manager();
 		const task = await target.start({ ownerSessionId: "session-a", command: "sleep 1", cwd: "/repo", title: "wake mismatch", completionPolicy: "wake" });
 		tree.operations.identityMatches = vi.fn((): "different" => "different");
-		tree.operations.verificationMatches = vi.fn((): "different" => "different");
+		// A weak same-second member anchor must never override the definitive
+		// random-token leader fingerprint mismatch.
+		tree.operations.verificationMatches = vi.fn((): "same" => "same");
 
 		const result = await target.stop([task.id], "session-a");
 
@@ -447,6 +449,9 @@ describe("TerminalTaskManager", () => {
 		await vi.waitFor(() => expect(new TerminalTaskStore({ rootDir }).get(task.id)?.processTreeVerification).toEqual({
 			members: [{ pid: task.pid! + 1, processStartTime: `child-${task.pid! + 1}` }],
 		}));
+		const captures = vi.mocked(tree.operations.captureTreeVerification!).mock.calls.length;
+		await new Promise((resolve) => setTimeout(resolve, 50));
+		expect(tree.operations.captureTreeVerification).toHaveBeenCalledTimes(captures);
 	});
 
 	it("recovers a running task after manager restart and settles from durable evidence", async () => {

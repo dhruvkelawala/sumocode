@@ -290,7 +290,7 @@ export const systemProcessTree: ProcessTreeOperations = {
 		// Defense in depth: all production callers verify, and the system operation
 		// repeats the check immediately before the actual TERM/KILL boundary.
 		let identityStatus = this.identityMatches(identity);
-		if (identityStatus !== "same" && verification) identityStatus = verificationStatus(identity, verification);
+		if (identityStatus === "unknown" && verification) identityStatus = verificationStatus(identity, verification);
 		if (identityStatus !== "same") {
 			return {
 				ok: false,
@@ -333,7 +333,7 @@ export async function signalVerifiedProcessTree(
 	verification?: ProcessTreeVerification,
 ): Promise<ProcessTreeSignalResult> {
 	let identityStatus = operations.identityMatches(identity);
-	if (identityStatus !== "same" && verification && operations.verificationMatches) {
+	if (identityStatus === "unknown" && verification && operations.verificationMatches) {
 		identityStatus = operations.verificationMatches(identity, verification);
 	}
 	if (identityStatus !== "same") {

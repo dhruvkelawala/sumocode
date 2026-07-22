@@ -48,6 +48,7 @@ const DEFAULT_TERM_GRACE_MS = 5_000;
 const DEFAULT_KILL_GRACE_MS = 2_000;
 const DEFAULT_CLAIM_LEASE_MS = 30_000;
 const DEFAULT_STARTING_RECOVERY_GRACE_MS = 30_000;
+const TREE_VERIFICATION_REFRESH_MS = 5_000;
 const CHECK_OUTPUT_BYTES = 16 * 1024;
 const WAIT_OUTPUT_BYTES = 16 * 1024;
 const PRIVATE_FILE_MODE = 0o600;
@@ -61,6 +62,7 @@ interface RuntimeTask {
 	reconcilePromise?: Promise<void>;
 	treeVerification?: ProcessTreeVerification;
 	lastLogCapAt: number;
+	lastTreeVerificationAt: number;
 }
 
 interface MutationResult {
@@ -608,7 +610,7 @@ export class TerminalTaskManager {
 			const retainedVerification = current.processTreeVerification ?? this.runtime.get(id)?.treeVerification;
 			let identityStatus = this.processTree.identityMatches(identity);
 			let verifiedByRetainedAnchors = false;
-			if (identityStatus !== "same" && retainedVerification && this.processTree.verificationMatches) {
+			if (identityStatus === "unknown" && retainedVerification && this.processTree.verificationMatches) {
 				identityStatus = this.processTree.verificationMatches(identity, retainedVerification);
 				verifiedByRetainedAnchors = identityStatus === "same";
 			}
@@ -639,6 +641,7 @@ export class TerminalTaskManager {
 					results.set(id, { id, outcome: "already-settled", task: observed, message: `Terminal ${id} was already ${observed.status}.` });
 					continue;
 				}
+				this.clearPoll(id);
 				targets.push({ task: disposing, identity, verification: disposing.processTreeVerification ?? verification, naturalExitCode });
 				continue;
 			}
@@ -667,6 +670,9 @@ export class TerminalTaskManager {
 				results.set(id, { id, outcome: "already-settled", task: observed, message: `Terminal ${id} was already ${observed.status}.` });
 				continue;
 			}
+			// Explicit stop owns disposition until it returns. Prevent the periodic
+			// recovery loop from racing TERM/KILL and classifying an in-flight group.
+			this.clearPoll(id);
 			targets.push({ task: stopping, identity, verification });
 		}
 
@@ -785,7 +791,7 @@ export class TerminalTaskManager {
 	private ensureRuntime(task: TerminalTaskSnapshot): RuntimeTask {
 		let runtime = this.runtime.get(task.id);
 		if (!runtime) {
-			runtime = { lastLogCapAt: 0 };
+			runtime = { lastLogCapAt: 0, lastTreeVerificationAt: Number.NEGATIVE_INFINITY };
 			this.runtime.set(task.id, runtime);
 		}
 		return runtime;
@@ -841,25 +847,29 @@ export class TerminalTaskManager {
 			await this.recoverStopping(id, identity);
 			return;
 		}
-		if (this.processTree.identityMatches(identity) === "same") {
-			const verification = this.processTree.captureTreeVerification?.(identity);
-			if (verification) {
-				this.ensureRuntime(current).treeVerification = verification;
-				if (!sameTreeVerification(current.processTreeVerification, verification)) {
-					this.mutate(id, (task) => task.status === "running" && !sameTreeVerification(task.processTreeVerification, verification)
-						? { ...task, processTreeVerification: verification, updatedAt: this.timestamp(task) }
-						: undefined);
-				}
-			}
-		}
+		// Check the cheap durable exit marker before any process-table probe. Long-
+		// running terminals otherwise spawned several synchronous `ps` commands on
+		// every 250ms poll, blocking the interactive event loop per active task.
 		const paths = taskPaths(this.store, current.id, current.createdAt);
 		const exitCode = readExitCode(this.store, paths.exitFile);
 		if (exitCode !== undefined) {
 			await this.finishNaturalCompletion(id, identity, exitCode);
 			return;
 		}
+		if (this.now() - runtime.lastTreeVerificationAt < TREE_VERIFICATION_REFRESH_MS) return;
+		runtime.lastTreeVerificationAt = this.now();
+		const verification = this.processTree.captureTreeVerification?.(identity);
+		if (verification) {
+			runtime.treeVerification = verification;
+			if (!sameTreeVerification(current.processTreeVerification, verification)) {
+				this.mutate(id, (task) => task.status === "running" && !sameTreeVerification(task.processTreeVerification, verification)
+					? { ...task, processTreeVerification: verification, updatedAt: this.timestamp(task) }
+					: undefined);
+			}
+			return;
+		}
 		const identityStatus = this.processTree.identityMatches(identity);
-		if (identityStatus === "different" && this.store.get(id)?.status === "running") this.settleLost(id, exitCode ?? null, false);
+		if (identityStatus === "different" && this.store.get(id)?.status === "running") this.settleLost(id, null, false);
 	}
 
 	private async finishNaturalCompletion(id: string, identity: ProcessTreeIdentity, exitCode: number): Promise<void> {
@@ -879,7 +889,7 @@ export class TerminalTaskManager {
 		let identityStatus = this.processTree.identityMatches(identity);
 		if (identityStatus === "same") {
 			verification = this.processTree.captureTreeVerification?.(identity) ?? retainedVerification;
-		} else if (retainedVerification && this.processTree.verificationMatches) {
+		} else if (identityStatus === "unknown" && retainedVerification && this.processTree.verificationMatches) {
 			identityStatus = this.processTree.verificationMatches(identity, retainedVerification);
 			if (identityStatus === "same") verification = retainedVerification;
 		}
@@ -923,11 +933,14 @@ export class TerminalTaskManager {
 		}
 		let verification = current?.processTreeVerification;
 		let identityStatus = this.processTree.identityMatches(identity);
-		if (identityStatus !== "same" && verification && this.processTree.verificationMatches) {
+		if (identityStatus === "unknown" && verification && this.processTree.verificationMatches) {
 			identityStatus = this.processTree.verificationMatches(identity, verification);
 		}
 		if (identityStatus === "different") {
-			this.settleLost(id, null, false);
+			// Another stop/recovery contender may have emptied the group after the
+			// initial check. Disposition evidence wins over a stale mismatch result.
+			if (this.processTree.isTreeEmpty(identity, verification)) this.settleDisposedStop(id);
+			else this.settleLost(id, null, false);
 			return;
 		}
 		if (identityStatus === "unknown") {
@@ -1126,7 +1139,7 @@ export class TerminalTaskManager {
 		const result = restore
 			? this.mutate(id, (task) => task.status === "stopping" ? { ...task, status: "running", updatedAt: this.timestamp(task) } : undefined).snapshot
 			: this.store.get(id);
-		if (restore && result && !isTerminalTaskSettled(result.status)) this.arm(id);
+		if (result && !isTerminalTaskSettled(result.status)) this.arm(id);
 		if (!restore) this.diagnostic(id, `persisted stop remains pending: ${reason}`);
 		return { id, outcome: "failed", task: result, message: `Failed to stop terminal ${id}: ${reason}.` };
 	}

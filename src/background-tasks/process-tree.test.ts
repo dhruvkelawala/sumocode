@@ -45,6 +45,21 @@ describe("process tree operations", () => {
 		expect(harness.signalTree).not.toHaveBeenCalled();
 	});
 
+	it("never lets member anchors override a definitive leader fingerprint mismatch", async () => {
+		const verification = { members: [{ pid: 456, processStartTime: "child-start" }] };
+		const harness = operations({
+			identityMatches: vi.fn((): "different" => "different"),
+			verificationMatches: vi.fn((): "same" => "same"),
+		});
+
+		expect(await signalVerifiedProcessTree(harness, identity, "SIGKILL", verification)).toMatchObject({
+			ok: false,
+			identityStatus: "different",
+		});
+		expect(harness.verificationMatches).not.toHaveBeenCalled();
+		expect(harness.signalTree).not.toHaveBeenCalled();
+	});
+
 	it("permits escalation after leader exit only with a still-matching captured descendant anchor", async () => {
 		const verification = { members: [{ pid: 456, processStartTime: "child-start" }] };
 		const harness = operations({

@@ -489,7 +489,9 @@ export class ChatViewportController {
 		if (!viewModel || chatMessageViewModelToPlainText(viewModel).length === 0) return;
 		if (isFoldableResultViewModel(viewModel)) {
 			const unmatched = this.foldBlocksAcrossTranscript(viewModel.blocks);
-			if (unmatched.length > 0) this.publishUnmatchedBlocks(viewModel, unmatched);
+			const record = asRecord(message);
+			const isPassiveSubagentResult = record?.role === "custom" && record.customType === "subagent-result";
+			if (unmatched.length > 0) this.publishUnmatchedBlocks(viewModel, unmatched, !isPassiveSubagentResult);
 			return;
 		}
 		addViewModel(this.chat, viewModel);
@@ -598,8 +600,12 @@ export class ChatViewportController {
 		return unmatched;
 	}
 
-	private publishUnmatchedBlocks(source: ChatMessageViewModel, blocks: readonly ChatBlock[]): void {
-		if (this.liveAssistant) {
+	private publishUnmatchedBlocks(
+		source: ChatMessageViewModel,
+		blocks: readonly ChatBlock[],
+		attachToLiveAssistant = true,
+	): void {
+		if (this.liveAssistant && attachToLiveAssistant) {
 			for (const block of blocks) {
 				this.liveAssistantBlocks = upsertFoldableBlock(this.liveAssistantBlocks, block);
 			}

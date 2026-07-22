@@ -44,6 +44,17 @@ describe("process tree operations", () => {
 		expect(harness.signalTree).not.toHaveBeenCalled();
 	});
 
+	it("permits escalation after leader exit only with a still-matching captured descendant anchor", async () => {
+		const verification = { members: [{ pid: 456, processStartTime: "child-start" }] };
+		const harness = operations({
+			identityMatches: vi.fn((): "unknown" => "unknown"),
+			verificationMatches: vi.fn((): "same" => "same"),
+		});
+		expect(await signalVerifiedProcessTree(harness, identity, "SIGKILL", verification)).toMatchObject({ ok: true });
+		expect(harness.verificationMatches).toHaveBeenCalledWith(identity, verification);
+		expect(harness.signalTree).toHaveBeenCalledWith(identity, "SIGKILL", verification);
+	});
+
 	it("re-verifies identity immediately before TERM and KILL", async () => {
 		let waits = 0;
 		const harness = operations({

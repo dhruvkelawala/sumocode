@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { chmodSync, existsSync, lstatSync, mkdtempSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -7,6 +7,7 @@ import type { ChildProcess } from "node:child_process";
 import type { ProcessTreeIdentity, ProcessTreeOperations } from "./process-tree.js";
 import { TerminalTaskManager } from "./task-manager.js";
 import { TerminalTaskStore } from "./task-store.js";
+import { TERMINAL_TASK_SCHEMA_VERSION, type TerminalTaskSnapshot } from "./task-types.js";
 
 type MockChild = EventEmitter & { pid: number; unref: ReturnType<typeof vi.fn> };
 
@@ -246,6 +247,18 @@ describe("TerminalTaskManager", () => {
 		expect(results[0]?.task).toMatchObject({ status: "cancelled", deliveryState: "suppressed", observedAt: expect.any(Number), consumedAt: expect.any(Number) });
 	});
 
+	it("reconciles durable natural exit before an empty-tree stop can misreport cancellation", async () => {
+		const target = manager();
+		const task = await start(target);
+		writeFileSync(exitFile(task), "7");
+		tree.empty.set(task.processGroupId!, true);
+
+		const result = await target.stop([task.id], "session-a");
+
+		expect(result[0]).toMatchObject({ outcome: "already-settled", task: { status: "failed", exitCode: 7 } });
+		expect(tree.operations.signalTree).not.toHaveBeenCalled();
+	});
+
 	it("marks a mismatched stop target lost and refuses every signal", async () => {
 		const target = manager();
 		const task = await start(target);
@@ -279,6 +292,37 @@ describe("TerminalTaskManager", () => {
 		expect((await target.stop([own.id], "session-b"))[0]?.outcome).toBe("unknown");
 		const after = new TerminalTaskStore({ rootDir }).loadAll().find((task) => task.id === own.id)!;
 		expect(after).toEqual(before);
+	});
+
+	it("does not steal a concurrent starting lease and marks it lost only after expiry", async () => {
+		const store = new TerminalTaskStore({ rootDir });
+		const directory = join(store.rootDir, "term-starting-1000");
+		mkdirSync(directory, { mode: 0o700 });
+		chmodSync(directory, 0o700);
+		const logFile = join(directory, "output.log");
+		writeFileSync(logFile, "", { mode: 0o600 });
+		chmodSync(logFile, 0o600);
+		const starting: TerminalTaskSnapshot = {
+			schemaVersion: TERMINAL_TASK_SCHEMA_VERSION,
+			revision: 1,
+			id: "term-starting",
+			ownerSessionId: "session-a",
+			command: "sleep 1",
+			cwd: "/repo",
+			title: "starting",
+			status: "starting",
+			completionPolicy: "passive",
+			createdAt: 1_000,
+			updatedAt: 1_000,
+			deliveryState: "none",
+			logFile,
+		};
+		store.create(starting, join(directory, "meta.json"));
+
+		const recovered = manager({ startingRecoveryGraceMs: 20 });
+		expect(recovered.get(starting.id, "session-a")?.status).toBe("starting");
+		now += 21;
+		await vi.waitFor(() => expect(recovered.get(starting.id, "session-a")?.status).toBe("lost"));
 	});
 
 	it("recovers a running task after manager restart and settles from durable evidence", async () => {

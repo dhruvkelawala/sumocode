@@ -8,6 +8,10 @@ export interface ProcessTreeIdentity {
 
 export type ProcessIdentityStatus = "same" | "different" | "unknown";
 
+export interface ProcessTreeVerification {
+	readonly members: readonly { readonly pid: number; readonly processStartTime: string }[];
+}
+
 export interface ProcessTreeSignalResult {
 	readonly ok: boolean;
 	readonly gone: boolean;
@@ -19,8 +23,11 @@ export interface ProcessTreeOperations {
 	captureStartTime(pid: number): string | undefined;
 	identityMatches(identity: ProcessTreeIdentity): ProcessIdentityStatus;
 	isTreeEmpty(identity: ProcessTreeIdentity): boolean;
+	/** Capture live anchors while the persisted leader identity is still verified. */
+	captureTreeVerification?(identity: ProcessTreeIdentity): ProcessTreeVerification | undefined;
+	verificationMatches?(identity: ProcessTreeIdentity, verification: ProcessTreeVerification): ProcessIdentityStatus;
 	/** Signal a persisted tree. Production implementations verify identity again internally. */
-	signalTree(identity: ProcessTreeIdentity, signal: "SIGTERM" | "SIGKILL"): Promise<ProcessTreeSignalResult>;
+	signalTree(identity: ProcessTreeIdentity, signal: "SIGTERM" | "SIGKILL", verification?: ProcessTreeVerification): Promise<ProcessTreeSignalResult>;
 	/** Only for a process group returned by the current, not-yet-persisted spawn call. */
 	signalFreshTree?(identity: ProcessTreeIdentity, signal: "SIGTERM" | "SIGKILL"): Promise<ProcessTreeSignalResult>;
 	waitForTreeEmpty(identity: ProcessTreeIdentity, timeoutMs: number): Promise<boolean>;
@@ -54,6 +61,34 @@ function posixGroupEmpty(processGroupId: number): boolean {
 		// report cancellation while group emptiness is unproven.
 		return false;
 	}
+}
+
+function listPosixGroupMembers(processGroupId: number): Array<{ pid: number; processStartTime: string }> | undefined {
+	try {
+		const rows = execFileSync("ps", ["-axo", "pid=,pgid=,lstart="], { encoding: "utf8" }).split("\n");
+		const members: Array<{ pid: number; processStartTime: string }> = [];
+		for (const row of rows) {
+			const match = row.trim().match(/^(\d+)\s+(\d+)\s+(.+)$/);
+			if (!match || Number.parseInt(match[2]!, 10) !== processGroupId) continue;
+			members.push({ pid: Number.parseInt(match[1]!, 10), processStartTime: match[3]!.trim() });
+		}
+		return members;
+	} catch {
+		return undefined;
+	}
+}
+
+function verificationStatus(
+	identity: ProcessTreeIdentity,
+	verification: ProcessTreeVerification,
+): ProcessIdentityStatus {
+	if (process.platform === "win32") return "unknown";
+	const current = listPosixGroupMembers(identity.processGroupId);
+	if (!current) return "unknown";
+	if (current.length === 0) return "different";
+	return verification.members.some((anchor) => current.some((member) =>
+		member.pid === anchor.pid && member.processStartTime === anchor.processStartTime,
+	)) ? "same" : "different";
 }
 
 export function captureProcessStartTime(pid: number, platform: NodeJS.Platform = process.platform): string | undefined {
@@ -121,26 +156,33 @@ export const systemProcessTree: ProcessTreeOperations = {
 	captureStartTime: captureProcessStartTime,
 	identityMatches(identity): ProcessIdentityStatus {
 		const leader = positivePidStatus(identity.pid);
-		if (process.platform !== "win32" && !posixGroupEmpty(identity.processGroupId) && leader === "gone") {
-			// A POSIX PGID cannot be reused while descendants still occupy the group.
-			// The persisted group therefore remains the owned tree after leader exit.
-			return "same";
+		if (leader === "gone") {
+			// An occupied numeric PGID after downtime may belong to a later unrelated
+			// group. Only a verification captured while the leader was known can
+			// prove a surviving descendant belongs to this terminal.
+			return process.platform !== "win32" && !posixGroupEmpty(identity.processGroupId) ? "unknown" : "different";
 		}
-		if (leader === "gone") return "different";
 		if (leader === "unknown") return "unknown";
 		const actual = captureProcessStartTime(identity.pid);
 		if (!actual) return "unknown";
 		return actual === identity.processStartTime ? "same" : "different";
 	},
+	captureTreeVerification(identity): ProcessTreeVerification | undefined {
+		if (process.platform === "win32") return undefined;
+		const members = listPosixGroupMembers(identity.processGroupId);
+		return members && members.length > 0 ? { members } : undefined;
+	},
+	verificationMatches: verificationStatus,
 	isTreeEmpty(identity): boolean {
 		// Leader absence is not proof of descendant absence on Windows. Windows
 		// cancellation succeeds only from a successful taskkill /T operation.
 		return process.platform === "win32" ? false : posixGroupEmpty(identity.processGroupId);
 	},
-	async signalTree(identity, signal): Promise<ProcessTreeSignalResult> {
+	async signalTree(identity, signal, verification): Promise<ProcessTreeSignalResult> {
 		// Defense in depth: all production callers verify, and the system operation
 		// repeats the check immediately before the actual TERM/KILL boundary.
-		const identityStatus = this.identityMatches(identity);
+		let identityStatus = this.identityMatches(identity);
+		if (identityStatus !== "same" && verification) identityStatus = verificationStatus(identity, verification);
 		if (identityStatus !== "same") {
 			return {
 				ok: false,
@@ -180,8 +222,12 @@ export async function signalVerifiedProcessTree(
 	operations: ProcessTreeOperations,
 	identity: ProcessTreeIdentity,
 	signal: "SIGTERM" | "SIGKILL",
+	verification?: ProcessTreeVerification,
 ): Promise<ProcessTreeSignalResult> {
-	const identityStatus = operations.identityMatches(identity);
+	let identityStatus = operations.identityMatches(identity);
+	if (identityStatus !== "same" && verification && operations.verificationMatches) {
+		identityStatus = operations.verificationMatches(identity, verification);
+	}
 	if (identityStatus !== "same") {
 		return {
 			ok: false,
@@ -190,7 +236,9 @@ export async function signalVerifiedProcessTree(
 			error: identityStatus === "different" ? "process identity changed" : "process identity could not be verified",
 		};
 	}
-	return operations.signalTree(identity, signal);
+	return verification
+		? operations.signalTree(identity, signal, verification)
+		: operations.signalTree(identity, signal);
 }
 
 export async function terminateProcessTree(
@@ -198,10 +246,11 @@ export async function terminateProcessTree(
 	identity: ProcessTreeIdentity,
 	options: { readonly termGraceMs: number; readonly killGraceMs: number },
 ): Promise<boolean> {
-	const term = await signalVerifiedProcessTree(operations, identity, "SIGTERM");
+	const verification = operations.captureTreeVerification?.(identity);
+	const term = await signalVerifiedProcessTree(operations, identity, "SIGTERM", verification);
 	if (!term.ok) return false;
 	if (term.gone || await operations.waitForTreeEmpty(identity, options.termGraceMs)) return true;
-	const kill = await signalVerifiedProcessTree(operations, identity, "SIGKILL");
+	const kill = await signalVerifiedProcessTree(operations, identity, "SIGKILL", verification);
 	if (!kill.ok) return false;
 	return kill.gone || await operations.waitForTreeEmpty(identity, options.killGraceMs);
 }

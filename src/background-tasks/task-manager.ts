@@ -22,6 +22,7 @@ import {
 	type ProcessTreeIdentity,
 	type ProcessTreeOperations,
 	type ProcessTreeSignalResult,
+	type ProcessTreeVerification,
 } from "./process-tree.js";
 import {
 	StaleTerminalTaskRevisionError,
@@ -45,6 +46,7 @@ const DEFAULT_LOG_MAX_BYTES = 2 * 1024 * 1024;
 const DEFAULT_TERM_GRACE_MS = 5_000;
 const DEFAULT_KILL_GRACE_MS = 2_000;
 const DEFAULT_CLAIM_LEASE_MS = 30_000;
+const DEFAULT_STARTING_RECOVERY_GRACE_MS = 30_000;
 const CHECK_OUTPUT_BYTES = 16 * 1024;
 const WAIT_OUTPUT_BYTES = 16 * 1024;
 const PRIVATE_FILE_MODE = 0o600;
@@ -67,6 +69,7 @@ interface MutationResult {
 interface StopTarget {
 	readonly task: TerminalTaskSnapshot;
 	readonly identity: ProcessTreeIdentity;
+	readonly verification?: ProcessTreeVerification;
 }
 
 export interface TerminalTaskManagerOptions {
@@ -81,6 +84,7 @@ export interface TerminalTaskManagerOptions {
 	readonly termGraceMs?: number;
 	readonly killGraceMs?: number;
 	readonly claimLeaseMs?: number;
+	readonly startingRecoveryGraceMs?: number;
 	readonly onDiagnostic?: (diagnostic: TerminalTaskStoreDiagnostic | { kind: "manager"; message: string; id?: string }) => void;
 }
 
@@ -289,6 +293,7 @@ export class TerminalTaskManager {
 	private readonly termGraceMs: number;
 	private readonly killGraceMs: number;
 	private readonly claimLeaseMs: number;
+	private readonly startingRecoveryGraceMs: number;
 	private readonly onDiagnostic?: TerminalTaskManagerOptions["onDiagnostic"];
 	private readonly tasks = new Map<string, TerminalTaskSnapshot>();
 	private readonly runtime = new Map<string, RuntimeTask>();
@@ -307,6 +312,7 @@ export class TerminalTaskManager {
 		this.termGraceMs = normalizePositive(options.termGraceMs, DEFAULT_TERM_GRACE_MS);
 		this.killGraceMs = normalizePositive(options.killGraceMs, DEFAULT_KILL_GRACE_MS);
 		this.claimLeaseMs = normalizePositive(options.claimLeaseMs, DEFAULT_CLAIM_LEASE_MS);
+		this.startingRecoveryGraceMs = normalizePositive(options.startingRecoveryGraceMs, DEFAULT_STARTING_RECOVERY_GRACE_MS);
 		this.onDiagnostic = options.onDiagnostic;
 		for (const snapshot of this.store.loadAll()) {
 			this.adopt(snapshot, false);
@@ -532,7 +538,21 @@ export class TerminalTaskManager {
 				continue;
 			}
 			if (this.processTree.isTreeEmpty(identity)) {
-				results.set(id, this.cancelEmptyTree(id));
+				const paths = taskPaths(this.store, current.id, current.createdAt);
+				const exitCode = readExitCode(paths.exitFile);
+				if (exitCode !== undefined) {
+					const settled = this.settleNatural(id, exitCode);
+					const observed = this.observe(id, false);
+					results.set(id, {
+						id,
+						outcome: "already-settled",
+						task: observed,
+						output: this.getOutput(observed, WAIT_OUTPUT_BYTES),
+						message: `Terminal ${id} completed before its stop signal with exit ${settled.exitCode ?? "unknown"}.`,
+					});
+				} else {
+					results.set(id, this.cancelEmptyTree(id));
+				}
 				continue;
 			}
 			const identityStatus = this.processTree.identityMatches(identity);
@@ -552,14 +572,14 @@ export class TerminalTaskManager {
 				results.set(id, { id, outcome: "already-settled", task: stopping, message: `Terminal ${id} was already ${stopping.status}.` });
 				continue;
 			}
-			targets.push({ task: stopping, identity });
+			targets.push({ task: stopping, identity, verification: this.processTree.captureTreeVerification?.(identity) });
 		}
 
 		// Verification and TERM/taskkill initiation happen for every target before
 		// any grace wait, preserving concurrent batch-stop semantics.
-		const termSignals = await Promise.all(targets.map(({ identity }) => this.safeVerifiedSignal(identity, "SIGTERM")));
-		await Promise.all(targets.map(async ({ task, identity }, index) => {
-			results.set(task.id, await this.finishStop(task.id, identity, termSignals[index]!, true));
+		const termSignals = await Promise.all(targets.map(({ identity, verification }) => this.safeVerifiedSignal(identity, "SIGTERM", verification)));
+		await Promise.all(targets.map(async ({ task, identity, verification }, index) => {
+			results.set(task.id, await this.finishStop(task.id, identity, termSignals[index]!, true, verification));
 		}));
 		return uniqueIds.map((id) => results.get(id)!);
 	}
@@ -634,7 +654,10 @@ export class TerminalTaskManager {
 			return;
 		}
 		if (snapshot.status === "starting") {
-			this.settleLost(snapshot.id, null, true);
+			// Another process may be between durable create and spawn-identity CAS.
+			// Poll it through a bounded lease before classifying it abandoned.
+			this.arm(snapshot.id);
+			this.scheduleReconcile(snapshot.id);
 			return;
 		}
 		const paths = taskPaths(this.store, snapshot.id, snapshot.createdAt);
@@ -698,7 +721,7 @@ export class TerminalTaskManager {
 			runtime.lastLogCapAt = this.now();
 		}
 		if (current.status === "starting") {
-			this.settleLost(id, null, true);
+			if (this.now() - current.updatedAt >= this.startingRecoveryGraceMs) this.settleLost(id, null, true);
 			return;
 		}
 		const identity = identityOf(current);
@@ -718,21 +741,24 @@ export class TerminalTaskManager {
 				return;
 			}
 			if (this.processTree.isTreeEmpty(identity)) {
-				this.settleNatural(id, exitCode);
+				// A concurrent stop may have transitioned after this reconcile read.
+				// Let the stopping owner settle instead of overwriting its disposition.
+				if (this.store.get(id)?.status === "running") this.settleNatural(id, exitCode);
 				return;
 			}
 		}
 		const identityStatus = this.processTree.identityMatches(identity);
-		if (identityStatus === "different") this.settleLost(id, exitCode ?? null, false);
+		if (identityStatus === "different" && this.store.get(id)?.status === "running") this.settleLost(id, exitCode ?? null, false);
 	}
 
 	private async finishWindowsNaturalCompletion(id: string, identity: ProcessTreeIdentity, exitCode: number): Promise<void> {
+		if (this.store.get(id)?.status !== "running") return;
 		// The Windows wrapper deliberately remains alive after writing exit.code.
 		// A verified taskkill /T /F is therefore the trustworthy boundary that
 		// disposes any background descendants before natural settlement.
 		const killed = await this.safeVerifiedSignal(identity, "SIGKILL");
 		if (killed.ok && killed.gone) {
-			this.settleNatural(id, exitCode);
+			if (this.store.get(id)?.status === "running") this.settleNatural(id, exitCode);
 			return;
 		}
 		if (killed.identityStatus === "different") {
@@ -756,8 +782,9 @@ export class TerminalTaskManager {
 			this.diagnostic(id, "persisted stopping task identity is unknown; refusing recovery signal");
 			return;
 		}
-		const term = await this.safeVerifiedSignal(identity, "SIGTERM");
-		await this.finishStop(id, identity, term, false);
+		const verification = this.processTree.captureTreeVerification?.(identity);
+		const term = await this.safeVerifiedSignal(identity, "SIGTERM", verification);
+		await this.finishStop(id, identity, term, false, verification);
 	}
 
 	private settleNatural(id: string, exitCode: number): TerminalTaskSnapshot {
@@ -843,11 +870,12 @@ export class TerminalTaskManager {
 		identity: ProcessTreeIdentity,
 		termSignal: ProcessTreeSignalResult,
 		restoreOnFailure: boolean,
+		verification?: ProcessTreeVerification,
 	): Promise<TerminalStopResult> {
 		if (!termSignal.ok) return this.handleStopSignalFailure(id, termSignal, restoreOnFailure);
 		let empty = termSignal.gone || await this.processTree.waitForTreeEmpty(identity, this.termGraceMs);
 		if (!empty) {
-			const kill = await this.safeVerifiedSignal(identity, "SIGKILL");
+			const kill = await this.safeVerifiedSignal(identity, "SIGKILL", verification);
 			if (!kill.ok) return this.handleStopSignalFailure(id, kill, restoreOnFailure);
 			empty = kill.gone || await this.processTree.waitForTreeEmpty(identity, this.killGraceMs);
 		}
@@ -1003,9 +1031,10 @@ export class TerminalTaskManager {
 	private async safeVerifiedSignal(
 		identity: ProcessTreeIdentity,
 		signal: "SIGTERM" | "SIGKILL",
+		verification?: ProcessTreeVerification,
 	): Promise<ProcessTreeSignalResult> {
 		try {
-			return await signalVerifiedProcessTree(this.processTree, identity, signal);
+			return await signalVerifiedProcessTree(this.processTree, identity, signal, verification);
 		} catch (error) {
 			return { ok: false, gone: false, error: error instanceof Error ? error.message : String(error) };
 		}

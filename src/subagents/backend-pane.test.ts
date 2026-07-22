@@ -38,7 +38,10 @@ const flushPromises = async (): Promise<void> => {
 	await Promise.resolve();
 };
 
-const createHarness = (startResult: typeof startedPane | { ok: false; error: string } = startedPane) => {
+const createHarness = (
+	startResult: typeof startedPane | { ok: false; error: string } = startedPane,
+	placement: { kind: "tab"; tabId: string; direction: "right" } | { kind: "workspace"; workspaceId: string; paneId: string } = { kind: "tab", tabId: "w1:t1", direction: "right" },
+) => {
 	const fs = new FakeFs();
 	const closePane = vi.fn(async () => ({ ok: true as const }));
 	const host: TerminalHost = {
@@ -59,7 +62,7 @@ const createHarness = (startResult: typeof startedPane | { ok: false; error: str
 		thinking: "high",
 		host,
 		pi: { exec: vi.fn() } as never,
-		placement: { kind: "tab", tabId: "w1:t1", direction: "right" },
+		placement,
 	});
 	const events: SubagentEvent[] = [];
 	if (typeof child.events !== "function") throw new Error("pane backend must use callback events");
@@ -78,9 +81,14 @@ describe("pane subagent backend", () => {
 			expect(harness.events).toContainEqual({ kind: "run-started" });
 			expect(harness.events).toContainEqual({ kind: "pane-attached", pane: { agentName: "worker-abc", workspaceId: "w1", tabId: "w1:t1", paneId: "w1:p2" } });
 			expect(harness.fs.files.get(harness.paths.promptFile)).toBe("do the work");
-			expect(harness.host.startAgentPane).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
-				shellCommand: expect.stringContaining("2>&1 | tee -a '/tmp/subagents/sa-1-1234/output.log'"),
-			}));
+			const launched = (harness.host.startAgentPane as ReturnType<typeof vi.fn>).mock.calls[0]?.[1] as { shellCommand: string };
+			// Visible children must inherit the pane's real stdout TTY. Stderr is
+			// redirected directly to the diagnostics log; a combined-output pipe would
+			// make `sumocode` select its non-interactive direct-Pi path.
+			expect(launched.shellCommand).not.toContain("tee");
+			expect(launched.shellCommand).toContain("( cd '/repo'");
+			expect(launched.shellCommand).toContain("exec sumocode task");
+			expect(launched.shellCommand).toContain("2>> '/tmp/subagents/sa-1-1234/output.log'");
 			// The outer wrapper must guarantee the exit marker on ANY process death
 			// (cd failure, crash, pane close) — first-writer-wins with the child.
 			expect(harness.host.startAgentPane).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
@@ -98,7 +106,7 @@ describe("pane subagent backend", () => {
 		}
 	});
 
-	it("uses the log tail and partial response for non-zero exits", async () => {
+	it("uses the stderr log tail and partial response for non-zero exits", async () => {
 		vi.useFakeTimers();
 		try {
 			const harness = createHarness();
@@ -116,6 +124,14 @@ describe("pane subagent backend", () => {
 		} finally {
 			vi.useRealTimers();
 		}
+	});
+
+	it("forwards workspace placement and bootstrap pane to the terminal host", async () => {
+		const placement = { kind: "workspace" as const, workspaceId: "w9", paneId: "w9:p1" };
+		const harness = createHarness(startedPane, placement);
+		await flushPromises();
+
+		expect(harness.host.startAgentPane).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ placement }));
 	});
 
 	it("cancels its watcher and closes the pane on interrupt", async () => {

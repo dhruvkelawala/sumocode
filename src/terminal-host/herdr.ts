@@ -152,6 +152,19 @@ async function startAgentPane(
 	const workspaceId = parsed.agent?.workspace_id;
 	const tabId = parsed.agent?.tab_id;
 
+	// A native worktree workspace starts with a bootstrap shell in the same tab.
+	// Keep that shell so the workspace/worktree survives child completion, but
+	// move it to a background tab so the agent is the only visible pane.
+	if (options.placement.kind === "workspace" && options.placement.paneId) {
+		try {
+			// Verified against herdr 0.7.4: `pane move <id> --new-tab`
+			// accepts workspace, label, and focus controls. This is cosmetic: older
+			// hosts may leave the bootstrap shell split beside a healthy agent.
+			await pi.exec("herdr", ["pane", "move", options.placement.paneId, "--new-tab", "--workspace", options.placement.workspaceId, "--label", "shell", "--no-focus"], { timeout: 5000 });
+		} catch {
+			// Never sacrifice a running child because presentation cleanup failed.
+		}
+	}
 	// Pane labels are presentation-only. A rename failure must not turn a real,
 	// already-running child into a reported spawn failure.
 	await pi.exec("herdr", ["pane", "rename", paneId, options.name], { timeout: 5000 }).catch(() => undefined);

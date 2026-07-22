@@ -31,6 +31,7 @@ herdr agent start <name> [--cwd PATH] [--workspace ID] [--tab ID] [--split right
 ```
 herdr pane split [<pane_id>] --direction right|down [--ratio FLOAT] [--cwd] [--env] [--no-focus]
 herdr pane move <pane_id> --tab <tab_id> --split right|down [--target-pane ID] [--ratio FLOAT]
+herdr pane move <pane_id> --new-tab [--workspace ID] [--label TEXT] [--focus|--no-focus]
 herdr tab create [--workspace ID] [--cwd PATH] [--label TEXT] [--env] [--no-focus]
 herdr workspace create [--cwd PATH] [--label TEXT] [--env] [--no-focus]
 ```

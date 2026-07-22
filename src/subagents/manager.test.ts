@@ -479,7 +479,7 @@ describe("SubagentManager", () => {
 		await manager.spawn({ prompt: "p", title: "api work", cwd: "/repo/packages/api", visible: true, worktree: true });
 
 		expect(openExistingWorktreeWorkspace).toHaveBeenCalledWith(expect.anything(), { path: "/isolated/worktree", label: "api", sourceCwd: "/repo", focus: false });
-		expect(backendFactory).toHaveBeenCalledWith(expect.objectContaining({ cwd: "/isolated/worktree/packages/api", placement: { kind: "workspace", workspaceId: "w9" } }));
+		expect(backendFactory).toHaveBeenCalledWith(expect.objectContaining({ cwd: "/isolated/worktree/packages/api", placement: { kind: "workspace", workspaceId: "w9", paneId: "w9:p1" } }));
 	});
 
 	it("fails closed when a created worktree cannot be opened as a host workspace", async () => {

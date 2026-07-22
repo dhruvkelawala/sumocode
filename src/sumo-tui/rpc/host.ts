@@ -161,7 +161,12 @@ export function createLazyChatSink(getRuntime: () => { getChatSink(): Transcript
 			return sourceIndex === undefined ? sink?.addViewModel(message) : sink?.addViewModel(message, sourceIndex);
 		},
 		replaceViewModelAt: (index, message) => getRuntime()?.getChatSink()?.replaceViewModelAt(index, message),
-		replaceLastWithViewModel: (message) => getRuntime()?.getChatSink()?.replaceLastWithViewModel(message),
+		replaceLastWithViewModel: (message, sourceIndex) => {
+			const sink = getRuntime()?.getChatSink();
+			return sourceIndex === undefined
+				? sink?.replaceLastWithViewModel(message)
+				: sink?.replaceLastWithViewModel(message, sourceIndex);
+		},
 	};
 }
 

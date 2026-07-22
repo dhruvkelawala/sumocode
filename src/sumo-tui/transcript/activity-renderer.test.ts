@@ -131,6 +131,17 @@ describe("Activity renderer", () => {
 		expect(rows.some((row) => row.includes("… 98 lines collapsed"))).toBe(false);
 	});
 
+	it("bounds generic producer output before line allocation and sanitization", () => {
+		const rows = renderActivityLedgerRows(activity({
+			body: { kind: "text", text: "producer output\n".repeat(200_000) },
+		}), 64);
+		const rendered = rows.map(stripAnsi);
+
+		expect(rows.length).toBeLessThanOrEqual(31);
+		expect(rendered.filter((row) => row.includes("collapsed"))).toHaveLength(1);
+		expect(rows.every((row) => visibleWidth(row) === 64)).toBe(true);
+	});
+
 	it("shows no more than 25 source rows plus one consolidated truncation marker", () => {
 		const rows = renderActivityLedgerRows(activity({
 			status: "succeeded",

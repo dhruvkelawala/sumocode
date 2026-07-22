@@ -199,13 +199,13 @@ export class ChatPager extends SumoNode {
 		this.updateMessage(last, () => last.setText(text));
 	}
 
-	public replaceLastWithViewModel(message: ChatMessageViewModel): void {
-		const lastSourceIndex = this.activeMessageSourceIndices.at(-1);
-		if (lastSourceIndex === undefined) {
+	public replaceLastWithViewModel(message: ChatMessageViewModel, sourceIndex?: number): boolean {
+		const targetSourceIndex = sourceIndex ?? this.activeMessageSourceIndices.at(-1);
+		if (targetSourceIndex === undefined) {
 			this.addViewModel(message);
-			return;
+			return true;
 		}
-		this.replaceViewModelAt(lastSourceIndex, message);
+		return this.replaceViewModelAt(targetSourceIndex, message);
 	}
 
 	/** Update one rendered transcript node without resetting pager-wide state. */

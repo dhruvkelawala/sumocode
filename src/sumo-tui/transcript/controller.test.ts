@@ -373,11 +373,11 @@ describe("TranscriptController incremental chat sink (B9)", () => {
 		const previous = [...prefix, previousLast];
 		const next = [...prefix, nextLast];
 
-		expect(planChatDiff(previous, next)).toEqual([{ kind: "replace-last", message: nextLast }]);
+		expect(planChatDiff(previous, next)).toEqual([{ kind: "replace-last", index: 50, message: nextLast }]);
 		const missesAfterColdDiff = getMessageContentKeyCacheMissesForTests();
 		expect(missesAfterColdDiff).toBe(52);
 
-		expect(planChatDiff(previous, next)).toEqual([{ kind: "replace-last", message: nextLast }]);
+		expect(planChatDiff(previous, next)).toEqual([{ kind: "replace-last", index: 50, message: nextLast }]);
 		expect(getMessageContentKeyCacheMissesForTests()).toBe(missesAfterColdDiff);
 	});
 
@@ -425,6 +425,22 @@ describe("TranscriptController incremental chat sink (B9)", () => {
 		expect(chat.replaceLastWithViewModel).toHaveBeenCalledTimes(2);
 		const lastCallText = chat.replaceLastWithViewModel.mock.calls.at(-1)?.[0]?.blocks?.[0]?.text;
 		expect(lastCallText).toBe("hello");
+	});
+
+	it("falls back to a full replace when a source-indexed last node is not rendered", () => {
+		const chat = fakeChatSink();
+		const controller = new TranscriptController({ chat });
+		controller.handleAgentEvent({ type: "message_start", message: { id: "draft", role: "assistant", content: "" } });
+		chat.replaceViewModels.mockClear();
+		chat.replaceLastWithViewModel.mockReturnValueOnce(false);
+
+		controller.handleAgentEvent({ type: "message_update", message: { id: "draft", role: "assistant", content: "now visible" } });
+
+		expect(chat.replaceLastWithViewModel).toHaveBeenCalledWith(expect.objectContaining({ id: "draft" }), 0);
+		expect(chat.replaceViewModels).toHaveBeenCalledTimes(1);
+		expect(chat.replaceViewModels).toHaveBeenCalledWith([
+			expect.objectContaining({ id: "draft", blocks: [{ type: "markdown", text: "now visible" }] }),
+		]);
 	});
 
 	it("message_update uses the O(1) hinted boundary diff without prefix key misses", () => {

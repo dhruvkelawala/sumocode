@@ -22,6 +22,7 @@ const STATUS_GLYPH: Record<ActivityStatus, string> = {
 const BODY_MAX_SOURCE_LINES = 25;
 const BODY_MAX_ROWS = 29;
 const INVOCATION_MAX_ROWS = 4;
+const STREAM_INPUT_MAX_CHARS = 100_000;
 const FALLBACK_RUNNING = "waiting for output…";
 const FALLBACK_SETTLED = "no output captured";
 
@@ -217,6 +218,48 @@ function sourceContentLines(text: string): string[] {
 	return lines;
 }
 
+function boundedStreamLines(
+	values: readonly (string | undefined)[],
+	invocation: string | undefined,
+): { lines: string[]; truncated: boolean } {
+	const lines: string[] = [];
+	const seen = new Set<string>();
+	let remainingChars = STREAM_INPUT_MAX_CHARS;
+	let truncated = false;
+	for (const value of values) {
+		if (!value) continue;
+		if (remainingChars <= 0) {
+			truncated = true;
+			break;
+		}
+		const bounded = value.slice(0, remainingChars);
+		remainingChars -= bounded.length;
+		if (bounded.length < value.length) truncated = true;
+		const sanitized = sanitizeActivityText(bounded);
+		if (sanitized.length === 0 || sanitized === invocation || seen.has(sanitized)) continue;
+		seen.add(sanitized);
+		let cursor = 0;
+		let exceededLineBudget = false;
+		while (cursor <= sanitized.length) {
+			const newline = sanitized.indexOf("\n", cursor);
+			const end = newline === -1 ? sanitized.length : newline;
+			const line = sanitized.slice(cursor, end).trimEnd();
+			if (line.length > 0) {
+				if (lines.length >= BODY_MAX_SOURCE_LINES) {
+					truncated = true;
+					exceededLineBudget = true;
+					break;
+				}
+				lines.push(line);
+			}
+			if (newline === -1) break;
+			cursor = newline + 1;
+		}
+		if (exceededLineBudget) break;
+	}
+	return { lines, truncated };
+}
+
 function emptyText(activity: ActivitySnapshot): string {
 	return isSettledActivityStatus(activity.status) ? FALLBACK_SETTLED : FALLBACK_RUNNING;
 }
@@ -325,17 +368,8 @@ function renderStreamBody(activity: ActivitySnapshot, width: number, roles: Acti
 	const candidates = body
 		? [body.text, activity.outputTail]
 		: [activity.currentStep, activity.outputTail, activity.result?.error, activity.result?.summary];
-	const seen = new Set<string>();
-	const bodyText = candidates.flatMap((value): string[] => {
-		if (!value) return [];
-		const sanitized = sanitizeActivityText(value);
-		if (sanitized.length === 0 || sanitized === invocation || seen.has(sanitized)) return [];
-		seen.add(sanitized);
-		return [sanitized];
-	}).join("\n");
-	const allLines = contentLines(bodyText);
-	const lines = allLines.slice(0, BODY_MAX_SOURCE_LINES);
-	const sourceLineCount = allLines.length;
+	const boundedContent = boundedStreamLines(candidates, invocation);
+	const lines = boundedContent.lines;
 	let displayRowsCollapsed = false;
 	for (let index = 0; index < lines.length; index += 1) {
 		const available = Math.max(0, BODY_MAX_ROWS - rows.length - 1);
@@ -351,7 +385,7 @@ function renderStreamBody(activity: ActivitySnapshot, width: number, roles: Acti
 		rows.push(...rendered.rows);
 		displayRowsCollapsed ||= rendered.truncated;
 	}
-	if (sourceLineCount > BODY_MAX_SOURCE_LINES) reasons.push(`${sourceLineCount - BODY_MAX_SOURCE_LINES} lines collapsed`);
+	if (boundedContent.truncated) reasons.push("output collapsed");
 	if (displayRowsCollapsed) reasons.push("display rows collapsed");
 	if (rows.length === 0) rows.push(renderBodyLine([span(emptyText(activity), { fg: roles.bodyMuted })], width, roles));
 	const marker = collapseMarker(reasons, width);

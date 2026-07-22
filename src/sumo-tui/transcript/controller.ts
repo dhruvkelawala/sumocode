@@ -33,7 +33,7 @@ export interface TranscriptControllerChatSink {
 	/** Replace one rendered transcript node in place (scroll/read state preserved). */
 	replaceViewModelAt(index: number, message: ChatMessageViewModel): unknown;
 	/** Replace the pager's current last message in place (scroll/read state preserved). */
-	replaceLastWithViewModel(message: ChatMessageViewModel): unknown;
+	replaceLastWithViewModel(message: ChatMessageViewModel, sourceIndex?: number): unknown;
 }
 
 export interface TranscriptControllerOptions {
@@ -680,9 +680,17 @@ export class TranscriptController {
 			return;
 		}
 		for (const operation of operations) {
-			if (operation.kind === "replace-last") chat.replaceLastWithViewModel(operation.message);
-			else if (operation.kind === "replace") chat.replaceViewModelAt(operation.index, operation.message);
-			else chat.addViewModel(operation.message, operation.index);
+			const applied = operation.kind === "replace-last"
+				? chat.replaceLastWithViewModel(operation.message, operation.index)
+				: operation.kind === "replace"
+					? chat.replaceViewModelAt(operation.index, operation.message)
+					: chat.addViewModel(operation.message, operation.index);
+			if (applied === false) {
+				chat.replaceViewModels(next);
+				this.lastPublishedToChat = next;
+				this.options.scheduleRender?.();
+				return;
+			}
 		}
 		this.lastPublishedToChat = next;
 		if (operations.length > 0) this.options.scheduleRender?.();
@@ -691,7 +699,7 @@ export class TranscriptController {
 
 export type ChatDiffOperation =
 	| { readonly kind: "replace"; readonly index: number; readonly message: ChatMessageViewModel }
-	| { readonly kind: "replace-last"; readonly message: ChatMessageViewModel }
+	| { readonly kind: "replace-last"; readonly index: number; readonly message: ChatMessageViewModel }
 	| { readonly kind: "append"; readonly index: number; readonly message: ChatMessageViewModel };
 
 function planHintedIncrementalChatDiff(
@@ -705,7 +713,7 @@ function planHintedIncrementalChatDiff(
 	// plan in O(1). If it is unchanged, fall back to the full content diff: a
 	// tool result may have folded into a non-last assistant message.
 	if (messageContentKey(last) === messageContentKey(previous[previous.length - 1])) return undefined;
-	return [{ kind: "replace-last", message: last }];
+	return [{ kind: "replace-last", index: next.length - 1, message: last }];
 }
 
 /**
@@ -731,7 +739,7 @@ export function planChatDiff(
 	if (changedIndex !== undefined) {
 		const message = next[changedIndex]!;
 		operations.push(changedIndex === previous.length - 1
-			? { kind: "replace-last", message }
+			? { kind: "replace-last", index: changedIndex, message }
 			: { kind: "replace", index: changedIndex, message });
 	}
 	if (next.length === previous.length + 1) operations.push({ kind: "append", index: next.length - 1, message: next[next.length - 1]! });

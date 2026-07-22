@@ -541,6 +541,33 @@ manifests, then retirement of the `bg_task` mega-tool and delegation routing amb
   panes as optional task views, the diff→apply/discard result loop, worktree pruning UI/status
   badges, and local⇄worktree handoff.
 
+## Activity UX v2 — live background work without stale turns (079–082)
+
+**Planned at:** `acf6ae2`, 2026-07-22. **Integration branch:** `advisor/bg-activity-v2-integration` (must not merge into `main` without Dhruv's review).
+
+| Plan | Title | Priority | Effort | Depends on | Status |
+|------|-------|----------|--------|------------|--------|
+| 079 | [Unified Activity contract and universal retained renderer](079-unified-activity-contract-and-renderer.md) | P1 | L | — | TODO |
+| 080 | [Terminal API v2 and durable passive completion](080-terminal-api-v2-and-durable-completion.md) | P1 | L | 079 | TODO |
+| 082 | [Subagent and native-task Activity adapters](082-subagent-and-native-task-activity-adapters.md) | P1 | M | 079 | TODO |
+| 081 | [Live ActivityStore and in-place retained cards](081-live-activity-store-and-in-place-cards.md) | P1 | L | 079, 080, 082 | TODO |
+
+### Dependency and execution order
+
+1. Execute and approve 079 first; it owns the shared contract, merger, renderer, generic fallback, and expansion semantics.
+2. Branch 080 and 082 independently from the approved 079 integration commit and execute them in parallel isolated worktrees.
+3. Integrate approved 080 and 082 into the isolated integration branch, resolve only contract-level conflicts, then execute 081 as the final runtime/store slice.
+4. Run full unit, integration, typecheck/build, and visual CI gates after every integration wave. Visual review evidence is required; golden promotion remains human-only.
+
+### Locked decisions
+
+- Callable `bg_*` tools are replaced, not aliased; historical transcript/metadata reading may remain where harmless.
+- Terminal completion defaults passive. Only explicit `completion: "wake"` may trigger a turn, and settled check/wait/stop suppresses an unclaimed wake.
+- Activity is a shared presentation/read model, not a unified execution engine. Native task, subagent, and terminal managers retain their security and lifecycle boundaries.
+- Cards update in place by stable ID. Producer updates never own expansion state.
+- Generic/unknown tools render bounded useful content; `Preview collapsed` is removed rather than renamed.
+- No file deletion, legacy-process cleanup, Pi private patch, custom RPC protocol, fleet dashboard, or visual golden promotion is authorized by these plans.
+
 ## Theme expansion — Herdr Terminal (073)
 
 **Planned at:** `933f33d`, 2026-07-17. **Reconciled 2026-07-18:** duplicate status row removed —

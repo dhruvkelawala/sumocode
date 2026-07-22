@@ -144,7 +144,6 @@ describe("TerminalTaskManager", () => {
 		target.addChangeListener(changes);
 		const task = await start(target);
 		writeFileSync(exitFile(task), "0");
-		tree.empty.set(task.processGroupId!, true);
 		children[0]?.emit("close", 0);
 		children[0]?.emit("close", 0);
 
@@ -163,7 +162,6 @@ describe("TerminalTaskManager", () => {
 		const target = manager();
 		const task = await target.start({ ownerSessionId: "session-a", command: "echo done", cwd: "/repo", title: "done", completionPolicy: "wake" });
 		writeFileSync(exitFile(task), "0");
-		tree.empty.set(task.processGroupId!, true);
 		children[0]?.emit("close", 0);
 		await vi.waitFor(() => expect(target.get(task.id, "session-a")?.status).toBe("completed"));
 
@@ -178,7 +176,6 @@ describe("TerminalTaskManager", () => {
 		const target = manager();
 		const task = await start(target);
 		writeFileSync(exitFile(task), "0");
-		tree.empty.set(task.processGroupId!, true);
 		children[0]?.emit("close", 0);
 		await vi.waitFor(() => expect(target.get(task.id, "session-a")?.status).toBe("completed"));
 
@@ -259,6 +256,17 @@ describe("TerminalTaskManager", () => {
 		expect(tree.operations.signalTree).not.toHaveBeenCalled();
 	});
 
+	it("records an already-empty running tree without exit evidence as lost, not cancelled", async () => {
+		const target = manager();
+		const task = await start(target);
+		tree.empty.set(task.processGroupId!, true);
+
+		const result = await target.stop([task.id], "session-a");
+
+		expect(result[0]).toMatchObject({ outcome: "failed", task: { status: "lost", consumedAt: expect.any(Number) } });
+		expect(tree.operations.signalTree).not.toHaveBeenCalled();
+	});
+
 	it("marks a mismatched stop target lost and refuses every signal", async () => {
 		const target = manager();
 		const task = await start(target);
@@ -330,7 +338,6 @@ describe("TerminalTaskManager", () => {
 		const task = await start(firstManager);
 		firstManager.detach();
 		writeFileSync(exitFile(task), "0");
-		tree.empty.set(task.processGroupId!, true);
 
 		const recovered = manager();
 		await vi.waitFor(() => expect(recovered.get(task.id, "session-a")?.status).toBe("completed"));
@@ -385,7 +392,6 @@ describe("TerminalTaskManager", () => {
 		const target = manager();
 		const task = await start(target);
 		writeFileSync(exitFile(task), "0");
-		tree.empty.set(task.processGroupId!, true);
 		children[0]?.emit("close", 0);
 		await vi.waitFor(() => expect(target.get(task.id, "session-a")?.deliveryState).toBe("pending"));
 
@@ -402,7 +408,6 @@ describe("TerminalTaskManager", () => {
 		const first = manager();
 		const task = await start(first);
 		writeFileSync(exitFile(task), "0");
-		tree.empty.set(task.processGroupId!, true);
 		children[0]?.emit("close", 0);
 		await vi.waitFor(() => expect(first.get(task.id, "session-a")?.deliveryState).toBe("pending"));
 		const second = manager();
@@ -421,7 +426,6 @@ describe("TerminalTaskManager", () => {
 			const task = await start(first);
 			const second = manager();
 			writeFileSync(exitFile(task), "0");
-			tree.empty.set(task.processGroupId!, true);
 			children[0]?.emit("close", 0);
 			await vi.waitFor(() => expect(second.get(task.id, "session-a")?.status).toBe("completed"));
 			await new Promise((resolve) => setTimeout(resolve, 25));
@@ -459,7 +463,6 @@ describe("TerminalTaskManager", () => {
 		const first = manager();
 		const task = await start(first);
 		writeFileSync(exitFile(task), "0");
-		tree.empty.set(task.processGroupId!, true);
 		children[0]?.emit("close", 0);
 		await vi.waitFor(() => expect(first.get(task.id, "session-a")?.deliveryState).toBe("pending"));
 		first.claimPending("session-a", true);

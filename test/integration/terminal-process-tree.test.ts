@@ -46,4 +46,36 @@ describe.skipIf(process.platform === "win32")("terminal process-tree integration
 		expect(result[0]).toMatchObject({ outcome: "cancelled", task: { status: "cancelled" } });
 		expect(() => process.kill(descendantPid, 0)).toThrow();
 	});
+
+	it("retains the verified wrapper until natural completion disposes background descendants", async () => {
+		const rootDir = mkdtempSync(join(tmpdir(), "sumocode-terminal-natural-tree-"));
+		roots.push(rootDir);
+		const descendantPidFile = join(rootDir, "natural-descendant.pid");
+		const descendant = "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)";
+		const launcher = [
+			"const fs = require('node:fs')",
+			"const { spawn } = require('node:child_process')",
+			`const child = spawn(process.execPath, ['-e', ${JSON.stringify(descendant)}], { stdio: 'ignore' })`,
+			`fs.writeFileSync(${JSON.stringify(descendantPidFile)}, String(child.pid))`,
+			"child.unref()",
+		].join(";");
+		const manager = new TerminalTaskManager({
+			store: new TerminalTaskStore({ rootDir }),
+			killGraceMs: 2_000,
+			pollIntervalMs: 25,
+		});
+		managers.push(manager);
+		const task = await manager.start({
+			ownerSessionId: "integration-session",
+			command: `node -e ${shellEscape(launcher)}`,
+			cwd: process.cwd(),
+			title: "background descendant",
+		});
+		await vi.waitFor(() => expect(existsSync(descendantPidFile)).toBe(true), { timeout: 2_000 });
+		const descendantPid = Number.parseInt(readFileSync(descendantPidFile, "utf8"), 10);
+
+		await vi.waitFor(() => expect(manager.get(task.id, "integration-session")?.status).toBe("completed"), { timeout: 4_000 });
+
+		expect(() => process.kill(descendantPid, 0)).toThrow();
+	});
 });

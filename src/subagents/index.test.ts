@@ -264,7 +264,8 @@ describe("subagent result delivery", () => {
 	it("keeps auto-delivery working across an in-process session switch", async () => {
 		const harness = createHarness();
 		harness.fire("session_start");
-		// In-process switch: shutdown fires but the extension instance survives.
+		// Simulate repeated binding defensively; real Pi 0.80.6 recreates the
+		// factory on replacement and RPC mode may bind the new instance twice.
 		harness.fire("session_shutdown");
 		harness.fire("session_start");
 		harness.setIdle(false);

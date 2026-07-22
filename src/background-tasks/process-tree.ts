@@ -8,14 +8,21 @@ export interface ProcessTreeIdentity {
 
 export type ProcessIdentityStatus = "same" | "different" | "unknown";
 
+export interface ProcessTreeMemberAnchor {
+	readonly pid: number;
+	readonly processStartTime: string;
+}
+
 export interface ProcessTreeVerification {
-	readonly members: readonly { readonly pid: number; readonly processStartTime: string }[];
+	readonly members: readonly ProcessTreeMemberAnchor[];
 }
 
 export interface ProcessTreeSignalResult {
 	readonly ok: boolean;
 	readonly gone: boolean;
 	readonly identityStatus?: ProcessIdentityStatus;
+	/** A soft Windows taskkill failed, so the verified tree still needs /T /F. */
+	readonly forceRequired?: boolean;
 	readonly error?: string;
 }
 
@@ -130,7 +137,7 @@ export function runWindowsTaskkill(
 				resolve({ ok: true, gone: true });
 				return;
 			}
-			resolve({ ok: false, gone: false, error: error.message });
+			resolve({ ok: false, gone: false, forceRequired: !force, error: error.message });
 		});
 	});
 }
@@ -253,8 +260,8 @@ export async function terminateProcessTree(
 ): Promise<boolean> {
 	const verification = operations.captureTreeVerification?.(identity);
 	const term = await signalVerifiedProcessTree(operations, identity, "SIGTERM", verification);
-	if (!term.ok) return false;
-	if (term.gone || await operations.waitForTreeEmpty(identity, options.termGraceMs)) return true;
+	if (!term.ok && !term.forceRequired) return false;
+	if (term.ok && (term.gone || await operations.waitForTreeEmpty(identity, options.termGraceMs))) return true;
 	const kill = await signalVerifiedProcessTree(operations, identity, "SIGKILL", verification);
 	if (!kill.ok) return false;
 	return kill.gone || await operations.waitForTreeEmpty(identity, options.killGraceMs);
@@ -268,8 +275,8 @@ export async function terminateFreshProcessTree(
 ): Promise<boolean> {
 	const signal = operations.signalFreshTree ?? operations.signalTree.bind(operations);
 	const term = await signal(identity, "SIGTERM");
-	if (!term.ok) return false;
-	if (term.gone || await operations.waitForTreeEmpty(identity, options.termGraceMs)) return true;
+	if (!term.ok && !term.forceRequired) return false;
+	if (term.ok && (term.gone || await operations.waitForTreeEmpty(identity, options.termGraceMs))) return true;
 	const kill = await signal(identity, "SIGKILL");
 	if (!kill.ok) return false;
 	return kill.gone || await operations.waitForTreeEmpty(identity, options.killGraceMs);

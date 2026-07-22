@@ -92,6 +92,21 @@ function isOptionalString(value: unknown): value is string | undefined {
 	return value === undefined || typeof value === "string";
 }
 
+function isProcessTreeVerification(value: unknown): boolean {
+	if (value === undefined) return true;
+	if (!value || typeof value !== "object") return false;
+	const members = (value as { members?: unknown }).members;
+	if (!Array.isArray(members) || members.length === 0 || members.length > 4096) return false;
+	const pids = new Set<number>();
+	for (const member of members) {
+		if (!member || typeof member !== "object") return false;
+		const anchor = member as { pid?: unknown; processStartTime?: unknown };
+		if (!isPositiveInteger(anchor.pid) || !hasText(anchor.processStartTime) || pids.has(anchor.pid)) return false;
+		pids.add(anchor.pid);
+	}
+	return true;
+}
+
 function hasText(value: unknown): value is string {
 	return typeof value === "string" && value.trim().length > 0;
 }
@@ -147,9 +162,11 @@ export function parseTerminalTaskSnapshot(value: unknown): TerminalTaskSnapshot 
 		!isOptionalTimestamp(record.consumedAt) ||
 		!DELIVERY_STATES.has(record.deliveryState as TerminalDeliveryState) ||
 		!isOptionalString(record.completionId) ||
+		!isOptionalString(record.deliveryClaimToken) ||
 		!(record.pid === undefined || isPositiveInteger(record.pid)) ||
 		!(record.processGroupId === undefined || isPositiveInteger(record.processGroupId)) ||
 		!isOptionalString(record.processStartTime) ||
+		!isProcessTreeVerification(record.processTreeVerification) ||
 		typeof record.logFile !== "string" || !isAbsolute(record.logFile) || resolve(record.logFile) !== record.logFile
 	) {
 		return undefined;
@@ -161,7 +178,8 @@ export function parseTerminalTaskSnapshot(value: unknown): TerminalTaskSnapshot 
 	const completeIdentity = isPositiveInteger(record.pid) && isPositiveInteger(record.processGroupId) && hasText(record.processStartTime);
 	if (hasIdentity && !completeIdentity) return undefined;
 	if ((status === "running" || status === "stopping") && !completeIdentity) return undefined;
-	if (status === "starting" && hasIdentity) return undefined;
+	if (status === "starting" && (hasIdentity || record.processTreeVerification !== undefined)) return undefined;
+	if (record.processTreeVerification !== undefined && !completeIdentity) return undefined;
 
 	if (ACTIVE_STATUSES.has(status)) {
 		if (
@@ -185,6 +203,7 @@ export function parseTerminalTaskSnapshot(value: unknown): TerminalTaskSnapshot 
 	if (record.consumedAt !== undefined && record.observedAt === undefined) return undefined;
 	if (record.deliveryState === "suppressed" && record.observedAt === undefined) return undefined;
 	if ((record.deliveryState === "pending" || record.deliveryState === "claimed") && (record.observedAt !== undefined || record.consumedAt !== undefined)) return undefined;
+	if (record.deliveryState === "claimed" ? !hasText(record.deliveryClaimToken) : record.deliveryClaimToken !== undefined) return undefined;
 	if (!settled && record.deliveryState !== "none") return undefined;
 
 	return record as TerminalTaskSnapshot;
@@ -202,23 +221,39 @@ function assertPrivateDirectory(path: string): void {
 	if (!hasPrivateMode(stat.mode, true)) throw new Error(`Directory permissions must be 0700: ${path}`);
 }
 
-function assertPrivateFile(path: string): void {
-	const descriptor = openSync(path, constants.O_RDONLY | NO_FOLLOW);
+function sameFileIdentity(left: { dev: number; ino: number }, right: { dev: number; ino: number }): boolean {
+	return left.dev === right.dev && left.ino === right.ino;
+}
+
+function openPrivateExistingFile(path: string, flags: number): number {
+	const resolvedPath = resolve(path);
+	const before = lstatSync(resolvedPath);
+	if (before.isSymbolicLink() || !before.isFile()) throw new Error(`Expected regular non-reparse file: ${resolvedPath}`);
+	if (!hasPrivateMode(before.mode, false)) throw new Error(`File permissions must be 0600: ${resolvedPath}`);
+	if (realpathSync(resolvedPath) !== resolvedPath) throw new Error(`Terminal artifact path must be canonical: ${resolvedPath}`);
+	const descriptor = openSync(resolvedPath, flags | NO_FOLLOW);
 	try {
-		const stat = fstatSync(descriptor);
-		if (!stat.isFile()) throw new Error(`Expected regular file: ${path}`);
-		if (!hasPrivateMode(stat.mode, false)) throw new Error(`File permissions must be 0600: ${path}`);
-	} finally {
+		const opened = fstatSync(descriptor);
+		const after = lstatSync(resolvedPath);
+		if (!opened.isFile() || after.isSymbolicLink() || !after.isFile()) throw new Error(`Expected regular non-reparse file: ${resolvedPath}`);
+		if (!sameFileIdentity(before, opened) || !sameFileIdentity(opened, after)) throw new Error(`Terminal artifact changed during safe open: ${resolvedPath}`);
+		if (!hasPrivateMode(opened.mode, false) || !hasPrivateMode(after.mode, false)) throw new Error(`File permissions must be 0600: ${resolvedPath}`);
+		if (realpathSync(resolvedPath) !== resolvedPath) throw new Error(`Terminal artifact path must be canonical: ${resolvedPath}`);
+		return descriptor;
+	} catch (error) {
 		closeSync(descriptor);
+		throw error;
 	}
 }
 
+function assertPrivateFile(path: string): void {
+	const descriptor = openPrivateExistingFile(path, constants.O_RDONLY);
+	closeSync(descriptor);
+}
+
 function readFileNoFollow(path: string): string {
-	const descriptor = openSync(path, constants.O_RDONLY | NO_FOLLOW);
+	const descriptor = openPrivateExistingFile(path, constants.O_RDONLY);
 	try {
-		const stat = fstatSync(descriptor);
-		if (!stat.isFile()) throw new Error(`Expected regular file: ${path}`);
-		if (!hasPrivateMode(stat.mode, false)) throw new Error(`File permissions must be 0600: ${path}`);
 		return readFileSync(descriptor, "utf8");
 	} finally {
 		closeSync(descriptor);
@@ -312,6 +347,7 @@ export class TerminalTaskStore {
 		chmodSync(requestedRoot, PRIVATE_DIRECTORY_MODE);
 		assertPrivateDirectory(requestedRoot);
 		this.rootDir = realpathSync(requestedRoot);
+		assertPrivateDirectory(this.rootDir);
 		this.onDiagnostic = options.onDiagnostic;
 		this.lockTimeoutMs = Math.max(1, options.lockTimeoutMs ?? DEFAULT_LOCK_TIMEOUT_MS);
 		this.lockPollMs = Math.max(1, options.lockPollMs ?? DEFAULT_LOCK_POLL_MS);
@@ -331,10 +367,16 @@ export class TerminalTaskStore {
 		for (const entry of entries as unknown as Array<{ name: string; isDirectory(): boolean; isSymbolicLink(): boolean }>) {
 			const taskDirectory = join(this.rootDir, entry.name);
 			if (entry.isSymbolicLink()) {
-				this.diagnostic("corrupt", taskDirectory, "symlink task directories are not allowed");
+				this.diagnostic("corrupt", taskDirectory, "symlink/reparse task directories are not allowed");
 				continue;
 			}
 			if (!entry.isDirectory()) continue;
+			try {
+				this.assertTaskDirectory(taskDirectory);
+			} catch (error) {
+				this.diagnostic("corrupt", taskDirectory, error);
+				continue;
+			}
 			const metaPath = join(taskDirectory, "meta.json");
 			if (!pathExists(metaPath)) continue;
 			const snapshot = this.readCandidate(metaPath);
@@ -384,6 +426,30 @@ export class TerminalTaskStore {
 		return snapshot?.ownerSessionId === ownerSessionId ? snapshot : undefined;
 	}
 
+	/** Verify a direct child directory before creating or opening task artifacts. */
+	public assertTaskDirectory(path: string): string {
+		const resolvedPath = resolve(path);
+		const relativePath = relative(this.rootDir, resolvedPath);
+		if (!relativePath || relativePath.startsWith("..") || isAbsolute(relativePath) || dirname(relativePath) !== ".") {
+			throw new Error("Terminal task directory must be a direct child of the store root");
+		}
+		assertPrivateDirectory(this.rootDir);
+		if (realpathSync(this.rootDir) !== this.rootDir) throw new Error(`Terminal store root must be canonical: ${this.rootDir}`);
+		assertPrivateDirectory(resolvedPath);
+		if (realpathSync(resolvedPath) !== resolvedPath) throw new Error(`Terminal task directory must be canonical and non-reparse: ${resolvedPath}`);
+		return resolvedPath;
+	}
+
+	/** Safely open an existing regular artifact confined to a verified task directory. */
+	public openArtifact(path: string, flags: number): number {
+		const resolvedPath = resolve(path);
+		const taskDirectory = this.assertTaskDirectory(dirname(resolvedPath));
+		if (dirname(resolvedPath) !== taskDirectory || basename(resolvedPath) !== basename(path)) {
+			throw new Error("Terminal artifact must be a direct child of its task directory");
+		}
+		return openPrivateExistingFile(resolvedPath, flags);
+	}
+
 	public transition(
 		id: string,
 		expectedRevision: number,
@@ -418,8 +484,7 @@ export class TerminalTaskStore {
 			throw new Error("Terminal metadata must live in a task directory under the store root");
 		}
 		const taskDirectory = dirname(resolvedPath);
-		assertPrivateDirectory(taskDirectory);
-		if (realpathSync(taskDirectory) !== taskDirectory) throw new Error(`Terminal task directory must be canonical: ${taskDirectory}`);
+		this.assertTaskDirectory(taskDirectory);
 		return resolvedPath;
 	}
 

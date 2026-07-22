@@ -29,6 +29,12 @@
 - **Execution status**: DONE — `advisor/080-terminal-v2`, implementation commit `674a986`
 - **Unblocks**: Plan 081
 
+### Final review disposition (Pi 0.80.6)
+
+The assumption that one extension instance survives `/new`, `/resume`, and `/fork` is rejected. Pi's `AgentSessionRuntime` tears down the current session and calls `createRuntime(...)` for each replacement; `loadExtensionsCached(...)` caches only the factory function, while `loadExtension(...)` creates a new extension object/API and invokes that factory again. `test/integration/extension-instance-lifecycle.test.ts` drives all three operations through a real Pi RPC child and proves four distinct factory instances (startup plus one per replacement). Terminal lifecycle ownership therefore uses a process-global session registry, detaches each replaced manager without stopping children, and lets the final instance stop every process-owned session on quit.
+
+The remaining final-review findings were accepted and regression-tested: stopping records persist POSIX descendant anchors before TERM so a replacement manager can safely force KILL; delivery claims carry unique tokens through reclaim/send/ack and stable completion IDs suppress duplicate insertion where observable; failed soft Windows tree kills force `/T /F` after re-verification; store metadata/artifact access requires confined canonical regular files under private canonical directories; and deferred acknowledgement reconciliation is exception-contained.
+
 ## Decision
 
 Replace the callable `bg_start/bg_status/bg_kill/bg_list` surface with exactly five verbs:

@@ -31,6 +31,10 @@ function processTreeHarness(): ProcessTreeHarness {
 		captureStartTime: vi.fn((pid) => `start-${pid}`),
 		identityMatches: vi.fn((identity) => empty.get(identity.processGroupId) ? "different" : "same"),
 		isTreeEmpty: vi.fn((identity) => empty.get(identity.processGroupId) === true),
+		captureTreeVerification: vi.fn((identity) => ({
+			members: [{ pid: identity.pid + 1, processStartTime: `child-${identity.pid + 1}` }],
+		})),
+		verificationMatches: vi.fn((identity) => empty.get(identity.processGroupId) ? "different" : "same"),
 		signalTree: vi.fn(async (identity, signal) => {
 			calls.push(`signal:${identity.processGroupId}:${signal}`);
 			if (signal === "SIGKILL") empty.set(identity.processGroupId, true);
@@ -244,6 +248,26 @@ describe("TerminalTaskManager", () => {
 		expect(results[0]?.task).toMatchObject({ status: "cancelled", deliveryState: "suppressed", observedAt: expect.any(Number), consumedAt: expect.any(Number) });
 	});
 
+	it("reverifies and forces a Windows-style soft taskkill failure", async () => {
+		const target = manager();
+		const task = await start(target);
+		vi.mocked(tree.operations.signalTree).mockImplementation(async (identity, signal) => {
+			tree.calls.push(`signal:${identity.processGroupId}:${signal}`);
+			if (signal === "SIGTERM") return { ok: false, gone: false, forceRequired: true, error: "soft taskkill failed" };
+			tree.empty.set(identity.processGroupId, true);
+			return { ok: true, gone: true };
+		});
+
+		const result = await target.stop([task.id], "session-a");
+
+		expect(result[0]?.outcome).toBe("cancelled");
+		expect(tree.calls).toEqual([
+			`signal:${task.processGroupId}:SIGTERM`,
+			`signal:${task.processGroupId}:SIGKILL`,
+		]);
+		expect(tree.operations.identityMatches).toHaveBeenCalledTimes(3);
+	});
+
 	it("reconciles a retained-wrapper natural exit before stop can misreport cancellation", async () => {
 		const target = manager();
 		const task = await start(target);
@@ -252,8 +276,12 @@ describe("TerminalTaskManager", () => {
 		const result = await target.stop([task.id], "session-a");
 
 		expect(result[0]).toMatchObject({ outcome: "already-settled", task: { status: "failed", exitCode: 7 } });
-		expect(tree.operations.signalTree).toHaveBeenCalledWith(expect.objectContaining({ processGroupId: task.processGroupId }), "SIGKILL");
-		expect(tree.operations.signalTree).not.toHaveBeenCalledWith(expect.anything(), "SIGTERM");
+		expect(tree.operations.signalTree).toHaveBeenCalledWith(
+			expect.objectContaining({ processGroupId: task.processGroupId }),
+			"SIGKILL",
+			expect.objectContaining({ members: expect.any(Array) }),
+		);
+		expect(tree.calls.some((call) => call.endsWith(":SIGTERM"))).toBe(false);
 	});
 
 	it("reconciles durable natural exit before an empty-tree stop can misreport cancellation", async () => {
@@ -283,6 +311,7 @@ describe("TerminalTaskManager", () => {
 		const target = manager();
 		const task = await target.start({ ownerSessionId: "session-a", command: "sleep 1", cwd: "/repo", title: "wake mismatch", completionPolicy: "wake" });
 		tree.operations.identityMatches = vi.fn((): "different" => "different");
+		tree.operations.verificationMatches = vi.fn((): "different" => "different");
 
 		const result = await target.stop([task.id], "session-a");
 
@@ -295,6 +324,7 @@ describe("TerminalTaskManager", () => {
 		const target = manager();
 		await start(target);
 		tree.operations.identityMatches = vi.fn((): "unknown" => "unknown");
+		tree.operations.verificationMatches = vi.fn((): "unknown" => "unknown");
 
 		const result = await target.stopOwned("session-a");
 
@@ -367,8 +397,63 @@ describe("TerminalTaskManager", () => {
 
 		const recovered = manager();
 		await vi.waitFor(() => expect(recovered.get(task.id, "session-a")?.status).toBe("cancelled"));
-		expect(tree.operations.signalTree).toHaveBeenCalledWith(expect.objectContaining({ processGroupId: task.processGroupId }), "SIGTERM");
-		expect(tree.operations.signalTree).toHaveBeenCalledWith(expect.objectContaining({ processGroupId: task.processGroupId }), "SIGKILL");
+		expect(tree.operations.signalTree).toHaveBeenCalledWith(
+			expect.objectContaining({ processGroupId: task.processGroupId }),
+			"SIGTERM",
+			expect.objectContaining({ members: expect.any(Array) }),
+		);
+		expect(tree.operations.signalTree).toHaveBeenCalledWith(
+			expect.objectContaining({ processGroupId: task.processGroupId }),
+			"SIGKILL",
+			expect.objectContaining({ members: expect.any(Array) }),
+		);
+	});
+
+	it("persists descendant anchors before TERM and recovers KILL after a manager restart", async () => {
+		let firstTermSent = false;
+		const verification = { members: [{ pid: 4100, processStartTime: "child-4100" }] };
+		const firstOperations: ProcessTreeOperations = {
+			...tree.operations,
+			captureTreeVerification: vi.fn(() => verification),
+			signalTree: vi.fn(async (_identity, signal) => {
+				if (signal === "SIGTERM") firstTermSent = true;
+				return { ok: true, gone: false };
+			}),
+			waitForTreeEmpty: vi.fn(() => new Promise<boolean>(() => {})),
+		};
+		const first = manager({ processTree: firstOperations });
+		const task = await start(first);
+		void first.stop([task.id], "session-a");
+		await vi.waitFor(() => expect(firstTermSent).toBe(true));
+		const durableStopping = new TerminalTaskStore({ rootDir }).get(task.id)!;
+		expect(durableStopping).toMatchObject({ status: "stopping", processTreeVerification: verification });
+		first.detach();
+
+		let empty = false;
+		const recoveredOperations: ProcessTreeOperations = {
+			...tree.operations,
+			identityMatches: vi.fn((): "unknown" => "unknown"),
+			verificationMatches: vi.fn((): "same" => "same"),
+			captureTreeVerification: vi.fn(() => undefined),
+			isTreeEmpty: vi.fn(() => empty),
+			signalTree: vi.fn(async (_identity, signal) => {
+				if (signal === "SIGKILL") empty = true;
+				return { ok: true, gone: signal === "SIGKILL" };
+			}),
+			waitForTreeEmpty: vi.fn(async () => false),
+		};
+		const recovered = manager({ processTree: recoveredOperations });
+
+		await vi.waitFor(() => expect(recovered.get(task.id, "session-a")?.status).toBe("cancelled"));
+		expect(recoveredOperations.verificationMatches).toHaveBeenCalledWith(
+			expect.objectContaining({ processGroupId: task.processGroupId }),
+			verification,
+		);
+		expect(recoveredOperations.signalTree).toHaveBeenCalledWith(
+			expect.objectContaining({ processGroupId: task.processGroupId }),
+			"SIGKILL",
+			verification,
+		);
 	});
 
 	it("recovers persisted stopping as cancelled without signalling when the tree is empty", async () => {
@@ -412,9 +497,33 @@ describe("TerminalTaskManager", () => {
 		expect(claimed).toHaveLength(1);
 		expect(claimed[0]?.deliveryState).toBe("claimed");
 		expect(target.claimPending("session-a", true)).toEqual([]);
-		expect(target.acknowledge("session-a", new Set(["wrong"]))).toEqual([]);
-		expect(target.acknowledge("session-a", new Set([claimed[0]!.completionId!]))[0]?.deliveryState).toBe("delivered");
-		expect(target.acknowledge("session-a", new Set([claimed[0]!.completionId!]))).toEqual([]);
+		expect(claimed[0]?.deliveryClaimToken).toEqual(expect.any(String));
+		expect(target.acknowledge("session-a", [{ completionId: claimed[0]!.completionId!, claimToken: "wrong" }])).toEqual([]);
+		const receipt = [{ completionId: claimed[0]!.completionId!, claimToken: claimed[0]!.deliveryClaimToken! }];
+		expect(target.acknowledge("session-a", receipt)[0]?.deliveryState).toBe("delivered");
+		expect(target.acknowledge("session-a", receipt)).toEqual([]);
+	});
+
+	it("rejects a stalled claimant after a concurrent lease reclaim changes the token", async () => {
+		const first = manager();
+		const task = await start(first);
+		writeFileSync(exitFile(task), "0");
+		children[0]?.emit("close", 0);
+		await vi.waitFor(() => expect(first.get(task.id, "session-a")?.deliveryState).toBe("pending"));
+		const stale = first.claimPending("session-a", true)[0]!;
+		now += 31;
+		const second = manager();
+		const reclaimed = second.claimPending("session-a", true)[0]!;
+
+		expect(reclaimed.deliveryClaimToken).not.toBe(stale.deliveryClaimToken);
+		expect(first.acknowledge("session-a", [{
+			completionId: stale.completionId!,
+			claimToken: stale.deliveryClaimToken!,
+		}])).toEqual([]);
+		expect(second.acknowledge("session-a", [{
+			completionId: reclaimed.completionId!,
+			claimToken: reclaimed.deliveryClaimToken!,
+		}])[0]).toMatchObject({ deliveryState: "delivered" });
 	});
 
 	it("allows only one cross-manager notification claim and preserves the winner", async () => {
@@ -464,6 +573,7 @@ describe("TerminalTaskManager", () => {
 			const outside = join(rootDir, "outside.log");
 			writeFileSync(outside, "outside", { mode: 0o600 });
 			chmodSync(outside, 0o600);
+			expect(target.getOutput({ logFile: outside })).toBe("");
 			rmSync(task.logFile);
 			symlinkSync(outside, task.logFile);
 			expect(target.getOutput(task)).toBe("");
@@ -487,6 +597,9 @@ describe("TerminalTaskManager", () => {
 		const recovered = manager();
 		const retried = recovered.claimPending("session-a", true)[0]!;
 		expect(retried).toMatchObject({ id: task.id, deliveryState: "claimed" });
-		expect(recovered.acknowledge("session-a", new Set([retried.completionId!]))[0]).toMatchObject({ deliveryState: "delivered" });
+		expect(recovered.acknowledge("session-a", [{
+			completionId: retried.completionId!,
+			claimToken: retried.deliveryClaimToken!,
+		}])[0]).toMatchObject({ deliveryState: "delivered" });
 	});
 });

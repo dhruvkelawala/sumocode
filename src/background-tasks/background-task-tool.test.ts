@@ -11,35 +11,42 @@ afterEach(() => {
 	for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
+function lifecycleHarness() {
+	const handlers = new Map<string, (event: unknown, ctx: any) => Promise<void> | void>();
+	const pi = {
+		registerTool: vi.fn(),
+		registerCommand: vi.fn(),
+		on: vi.fn((event: string, handler: (event: unknown, ctx: any) => Promise<void> | void) => handlers.set(event, handler)),
+	};
+	return { pi, handlers };
+}
+
 describe("installBackgroundTasks", () => {
-	it("wires lifecycle without retaining the legacy slash alias or a mega-tool", async () => {
-		const handlers = new Map<string, (event: unknown, ctx: unknown) => Promise<void>>();
-		const pi = {
-			registerTool: vi.fn(),
-			registerCommand: vi.fn(),
-			on: vi.fn((event: string, handler: (event: unknown, ctx: unknown) => Promise<void>) => handlers.set(event, handler)),
-		};
+	it("detaches replaced managers and keeps process-session quit ownership across factory instances", async () => {
 		const rootDir = mkdtempSync(join(tmpdir(), "sumocode-terminal-install-"));
 		roots.push(rootDir);
-		const manager = installBackgroundTasks(pi as never, { store: new TerminalTaskStore({ rootDir }) });
-		const detach = vi.spyOn(manager, "detach");
-		const stopOwned = vi.spyOn(manager, "stopOwned").mockResolvedValue([]);
+		const firstRuntime = lifecycleHarness();
+		const first = installBackgroundTasks(firstRuntime.pi as never, { store: new TerminalTaskStore({ rootDir }) });
+		const firstDetach = vi.spyOn(first, "detach");
+		const firstStopOwned = vi.spyOn(first, "stopOwned").mockResolvedValue([]);
 
-		expect(pi.registerTool).not.toHaveBeenCalled();
-		expect(pi.registerCommand).not.toHaveBeenCalled();
-		expect(pi.on).toHaveBeenCalledWith("session_start", expect.any(Function));
-		expect(pi.on).toHaveBeenCalledWith("session_shutdown", expect.any(Function));
+		expect(firstRuntime.pi.registerTool).not.toHaveBeenCalled();
+		expect(firstRuntime.pi.registerCommand).not.toHaveBeenCalled();
+		await firstRuntime.handlers.get("session_start")?.({}, { sessionManager: { getSessionId: () => "session-a" } });
+		await firstRuntime.handlers.get("session_shutdown")?.({ reason: "new" }, { sessionManager: { getSessionId: () => "session-a" } });
+		expect(firstStopOwned).not.toHaveBeenCalled();
+		expect(firstDetach).toHaveBeenCalledOnce();
 
-		await handlers.get("session_start")?.({}, { sessionManager: { getSessionId: () => "session-a" } });
-		await handlers.get("session_shutdown")?.({ reason: "resume" }, { sessionManager: { getSessionId: () => "session-a" } });
-		expect(stopOwned).not.toHaveBeenCalled();
-		expect(detach).not.toHaveBeenCalled();
+		const replacementRuntime = lifecycleHarness();
+		const replacement = installBackgroundTasks(replacementRuntime.pi as never, { store: new TerminalTaskStore({ rootDir }) });
+		const replacementDetach = vi.spyOn(replacement, "detach");
+		const replacementStopOwned = vi.spyOn(replacement, "stopOwned").mockResolvedValue([]);
+		await replacementRuntime.handlers.get("session_start")?.({}, { sessionManager: { getSessionId: () => "session-b" } });
+		await replacementRuntime.handlers.get("session_shutdown")?.({ reason: "quit" }, { sessionManager: { getSessionId: () => "session-b" } });
 
-		await handlers.get("session_start")?.({}, { sessionManager: { getSessionId: () => "session-b" } });
-		await handlers.get("session_shutdown")?.({ reason: "quit" }, { sessionManager: { getSessionId: () => "session-b" } });
-		expect(stopOwned).toHaveBeenCalledTimes(2);
-		expect(stopOwned).toHaveBeenCalledWith("session-a");
-		expect(stopOwned).toHaveBeenCalledWith("session-b");
-		expect(detach).toHaveBeenCalledOnce();
+		expect(replacementStopOwned).toHaveBeenCalledTimes(2);
+		expect(replacementStopOwned).toHaveBeenCalledWith("session-a");
+		expect(replacementStopOwned).toHaveBeenCalledWith("session-b");
+		expect(replacementDetach).toHaveBeenCalledOnce();
 	});
 });

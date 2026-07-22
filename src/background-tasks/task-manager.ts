@@ -34,6 +34,7 @@ import {
 	TERMINAL_TASK_SCHEMA_VERSION,
 	isTerminalTaskSettled,
 	type StartTerminalTaskOptions,
+	type TerminalDeliveryReceipt,
 	type TerminalStopResult,
 	type TerminalTaskObservation,
 	type TerminalTaskSnapshot,
@@ -81,6 +82,7 @@ export interface TerminalTaskManagerOptions {
 	readonly now?: () => number;
 	readonly createId?: () => string;
 	readonly createCompletionId?: () => string;
+	readonly createClaimToken?: () => string;
 	readonly pollIntervalMs?: number;
 	readonly logMaxBytes?: number;
 	readonly termGraceMs?: number;
@@ -107,21 +109,12 @@ function taskPaths(store: TerminalTaskStore, id: string, createdAt: number) {
 	};
 }
 
-function isPrivateFileMode(mode: number): boolean {
-	return process.platform === "win32" || (mode & 0o777) === PRIVATE_FILE_MODE;
+function openPrivateFile(store: TerminalTaskStore, path: string, flags: number): number {
+	return store.openArtifact(path, flags);
 }
 
-function openPrivateFile(path: string, flags: number): number {
-	const descriptor = openSync(path, flags | NO_FOLLOW);
-	const stat = fstatSync(descriptor);
-	if (!stat.isFile() || !isPrivateFileMode(stat.mode)) {
-		closeSync(descriptor);
-		throw new Error(`Unsafe terminal artifact: ${path}`);
-	}
-	return descriptor;
-}
-
-function createPrivateFile(path: string, contents: string): void {
+function createPrivateFile(store: TerminalTaskStore, path: string, contents: string): void {
+	store.assertTaskDirectory(dirname(path));
 	const descriptor = openSync(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | NO_FOLLOW, PRIVATE_FILE_MODE);
 	try {
 		fchmodSync(descriptor, PRIVATE_FILE_MODE);
@@ -129,17 +122,20 @@ function createPrivateFile(path: string, contents: string): void {
 	} finally {
 		closeSync(descriptor);
 	}
+	const verified = store.openArtifact(path, constants.O_RDONLY);
+	closeSync(verified);
 }
 
-function createPrivateTaskDirectory(path: string): void {
+function createPrivateTaskDirectory(store: TerminalTaskStore, path: string): void {
 	mkdirSync(path, { mode: PRIVATE_DIRECTORY_MODE });
 	chmodSync(path, PRIVATE_DIRECTORY_MODE);
+	store.assertTaskDirectory(path);
 }
 
-function readExitCode(path: string): number | undefined {
+function readExitCode(store: TerminalTaskStore, path: string): number | undefined {
 	let descriptor: number | undefined;
 	try {
-		descriptor = openPrivateFile(path, constants.O_RDONLY);
+		descriptor = openPrivateFile(store, path, constants.O_RDONLY);
 		const text = readFileSync(descriptor, "utf8").trim();
 		if (!/^-?\d+$/.test(text)) return undefined;
 		const exitCode = Number.parseInt(text, 10);
@@ -151,10 +147,10 @@ function readExitCode(path: string): number | undefined {
 	}
 }
 
-function readLogTail(path: string, maxBytes: number): string {
+function readLogTail(store: TerminalTaskStore, path: string, maxBytes: number): string {
 	let descriptor: number | undefined;
 	try {
-		descriptor = openPrivateFile(path, constants.O_RDONLY);
+		descriptor = openPrivateFile(store, path, constants.O_RDONLY);
 		const size = fstatSync(descriptor).size;
 		if (size === 0) return "";
 		const bytes = Math.min(size, Math.max(0, maxBytes));
@@ -174,10 +170,10 @@ function readLogTail(path: string, maxBytes: number): string {
 	}
 }
 
-function capRunningLog(path: string, maxBytes: number): void {
+function capRunningLog(store: TerminalTaskStore, path: string, maxBytes: number): void {
 	let descriptor: number | undefined;
 	try {
-		descriptor = openPrivateFile(path, constants.O_WRONLY);
+		descriptor = openPrivateFile(store, path, constants.O_WRONLY);
 		if (fstatSync(descriptor).size > maxBytes) ftruncateSync(descriptor, 0);
 	} catch {
 		// Output bounding is best effort and cannot perturb process state.
@@ -186,15 +182,15 @@ function capRunningLog(path: string, maxBytes: number): void {
 	}
 }
 
-function capSettledLog(path: string, maxBytes: number): void {
+function capSettledLog(store: TerminalTaskStore, path: string, maxBytes: number): void {
 	try {
-		let descriptor = openPrivateFile(path, constants.O_RDONLY);
+		let descriptor = openPrivateFile(store, path, constants.O_RDONLY);
 		const size = fstatSync(descriptor).size;
 		closeSync(descriptor);
 		if (size <= maxBytes) return;
 		const marker = "[sumocode-terminal] log truncated to bounded tail\n";
-		const tail = readLogTail(path, Math.max(0, maxBytes - Buffer.byteLength(marker)));
-		descriptor = openPrivateFile(path, constants.O_WRONLY);
+		const tail = readLogTail(store, path, Math.max(0, maxBytes - Buffer.byteLength(marker)));
+		descriptor = openPrivateFile(store, path, constants.O_WRONLY);
 		try {
 			ftruncateSync(descriptor, 0);
 			writeFileSync(descriptor, `${marker}${tail}`.slice(-maxBytes), "utf8");
@@ -206,10 +202,10 @@ function capSettledLog(path: string, maxBytes: number): void {
 	}
 }
 
-function appendPrivateFile(path: string, contents: string): void {
+function appendPrivateFile(store: TerminalTaskStore, path: string, contents: string): void {
 	let descriptor: number | undefined;
 	try {
-		descriptor = openPrivateFile(path, constants.O_WRONLY | constants.O_APPEND);
+		descriptor = openPrivateFile(store, path, constants.O_WRONLY | constants.O_APPEND);
 		writeFileSync(descriptor, contents, "utf8");
 	} catch {
 		// The durable record remains the source of truth.
@@ -317,6 +313,7 @@ export class TerminalTaskManager {
 	private readonly now: () => number;
 	private readonly createId: () => string;
 	private readonly createCompletionId: () => string;
+	private readonly createClaimToken: () => string;
 	private readonly pollIntervalMs: number;
 	private readonly logMaxBytes: number;
 	private readonly termGraceMs: number;
@@ -336,6 +333,7 @@ export class TerminalTaskManager {
 		this.now = options.now ?? Date.now;
 		this.createId = options.createId ?? (() => `term-${this.now().toString(36)}-${randomUUID().slice(0, 8)}`);
 		this.createCompletionId = options.createCompletionId ?? (() => `completion-${randomUUID()}`);
+		this.createClaimToken = options.createClaimToken ?? (() => `claim-${randomUUID()}`);
 		this.pollIntervalMs = normalizePositive(options.pollIntervalMs, DEFAULT_POLL_INTERVAL_MS);
 		this.logMaxBytes = normalizePositive(options.logMaxBytes, DEFAULT_LOG_MAX_BYTES);
 		this.termGraceMs = normalizePositive(options.termGraceMs, DEFAULT_TERM_GRACE_MS);
@@ -368,7 +366,7 @@ export class TerminalTaskManager {
 			if (!isValidTerminalTaskId(candidate)) throw new Error(`Invalid generated terminal id: ${candidate}`);
 			const candidatePaths = taskPaths(this.store, candidate, createdAt);
 			try {
-				createPrivateTaskDirectory(candidatePaths.directory);
+				createPrivateTaskDirectory(this.store, candidatePaths.directory);
 				id = candidate;
 				paths = candidatePaths;
 				break;
@@ -378,10 +376,10 @@ export class TerminalTaskManager {
 		}
 		if (!id || !paths) throw new Error("Unable to allocate a unique terminal task directory");
 
-		createPrivateFile(paths.logFile, "");
-		createPrivateFile(paths.exitFile, "");
+		createPrivateFile(this.store, paths.logFile, "");
+		createPrivateFile(this.store, paths.exitFile, "");
 		const scriptFile = process.platform === "win32" ? paths.windowsScriptFile : paths.scriptFile;
-		createPrivateFile(scriptFile, process.platform === "win32"
+		createPrivateFile(this.store, scriptFile, process.platform === "win32"
 			? buildWindowsScript({ command, cwd, launchFile: paths.launchFile, logFile: paths.logFile, exitFile: paths.exitFile })
 			: buildPosixScript({ command, cwd, launchFile: paths.launchFile, logFile: paths.logFile, exitFile: paths.exitFile }));
 
@@ -454,7 +452,7 @@ export class TerminalTaskManager {
 
 		this.ensureRuntime(running.snapshot).treeVerification = this.processTree.captureTreeVerification?.(identity);
 		try {
-			createPrivateFile(paths.launchFile, "ready\n");
+			createPrivateFile(this.store, paths.launchFile, "ready\n");
 		} catch (error) {
 			const terminated = await terminateProcessTree(this.processTree, identity, { termGraceMs: this.termGraceMs, killGraceMs: this.killGraceMs });
 			if (!terminated) throw new Error(`Terminal launch release failed and process group ${pid} could not be proven terminated`);
@@ -568,7 +566,7 @@ export class TerminalTaskManager {
 				continue;
 			}
 			const paths = taskPaths(this.store, current.id, current.createdAt);
-			const naturalExitCode = readExitCode(paths.exitFile);
+			const naturalExitCode = readExitCode(this.store, paths.exitFile);
 			if (this.processTree.isTreeEmpty(identity)) {
 				if (naturalExitCode !== undefined) {
 					const settled = this.settleNatural(id, naturalExitCode);
@@ -593,7 +591,7 @@ export class TerminalTaskManager {
 				}
 				continue;
 			}
-			const retainedVerification = this.runtime.get(id)?.treeVerification;
+			const retainedVerification = current.processTreeVerification ?? this.runtime.get(id)?.treeVerification;
 			let identityStatus = this.processTree.identityMatches(identity);
 			if (identityStatus !== "same" && retainedVerification && this.processTree.verificationMatches) {
 				identityStatus = this.processTree.verificationMatches(identity, retainedVerification);
@@ -608,14 +606,31 @@ export class TerminalTaskManager {
 				results.set(id, { id, outcome: "failed", task: current, message: `Terminal ${id} process identity could not be verified; refusing to signal.` });
 				continue;
 			}
-			const verification = this.processTree.captureTreeVerification?.(identity) ?? retainedVerification;
+			const capturedVerification = this.processTree.captureTreeVerification?.(identity);
 			if (naturalExitCode !== undefined) {
-				targets.push({ task: current, identity, verification, naturalExitCode });
+				targets.push({ task: current, identity, verification: capturedVerification ?? retainedVerification, naturalExitCode });
 				continue;
 			}
-			const stopping = this.mutate(id, (task) => !isTerminalTaskSettled(task.status) && task.status !== "stopping"
-				? { ...task, status: "stopping", updatedAt: this.timestamp(task) }
-				: undefined).snapshot;
+			// A new POSIX TERM boundary requires a fresh complete-group snapshot.
+			// Runtime-only anchors may predate descendants and are not sufficient for
+			// crash recovery once TERM removes the leader.
+			const verification = current.status === "stopping"
+				? current.processTreeVerification ?? capturedVerification
+				: capturedVerification;
+			if (process.platform !== "win32" && this.processTree.captureTreeVerification && !verification) {
+				results.set(id, { id, outcome: "failed", task: current, message: `Terminal ${id} process-tree anchors could not be persisted; refusing to signal.` });
+				continue;
+			}
+			const stopping = this.mutate(id, (task) => {
+				if (isTerminalTaskSettled(task.status)) return undefined;
+				if (task.status === "stopping" && (task.processTreeVerification || !verification)) return undefined;
+				return {
+					...task,
+					status: "stopping",
+					updatedAt: this.timestamp(task),
+					processTreeVerification: task.processTreeVerification ?? verification,
+				};
+			}).snapshot;
 			if (isTerminalTaskSettled(stopping.status)) {
 				const observed = this.observe(id, false);
 				results.set(id, { id, outcome: "already-settled", task: observed, message: `Terminal ${id} was already ${observed.status}.` });
@@ -647,7 +662,12 @@ export class TerminalTaskManager {
 				const expiredClaim = current.deliveryState === "claimed" && this.now() - current.updatedAt >= this.claimLeaseMs;
 				if (current.deliveryState !== "pending" && !expiredClaim) return undefined;
 				if (current.completionPolicy === "wake" && (!includeWake || claimedWake >= maxWake)) return undefined;
-				return { ...current, deliveryState: "claimed", updatedAt: this.timestamp(current) };
+				return {
+					...current,
+					deliveryState: "claimed",
+					deliveryClaimToken: this.createClaimToken(),
+					updatedAt: this.timestamp(current),
+				};
 			});
 			if (!result.changed) continue;
 			claimed.push(result.snapshot);
@@ -656,13 +676,18 @@ export class TerminalTaskManager {
 		return claimed;
 	}
 
-	public acknowledge(ownerSessionId: string, completionIds: ReadonlySet<string>): TerminalTaskSnapshot[] {
+	public acknowledge(ownerSessionId: string, receipts: readonly TerminalDeliveryReceipt[]): TerminalTaskSnapshot[] {
+		const receiptKeys = new Set(receipts.map(({ completionId, claimToken }) => `${completionId}\u0000${claimToken}`));
 		const acknowledged: TerminalTaskSnapshot[] = [];
 		for (const candidate of this.store.listOwned(ownerSessionId)) {
-			if (!candidate.completionId || !completionIds.has(candidate.completionId)) continue;
+			if (!candidate.completionId || !candidate.deliveryClaimToken || !receiptKeys.has(`${candidate.completionId}\u0000${candidate.deliveryClaimToken}`)) continue;
 			const result = this.mutate(candidate.id, (current) => {
-				if (current.ownerSessionId !== ownerSessionId || current.deliveryState !== "claimed" || !current.completionId || !completionIds.has(current.completionId)) return undefined;
-				return { ...current, deliveryState: "delivered", updatedAt: this.timestamp(current) };
+				if (
+					current.ownerSessionId !== ownerSessionId || current.deliveryState !== "claimed" ||
+					!current.completionId || !current.deliveryClaimToken ||
+					!receiptKeys.has(`${current.completionId}\u0000${current.deliveryClaimToken}`)
+				) return undefined;
+				return { ...current, deliveryState: "delivered", deliveryClaimToken: undefined, updatedAt: this.timestamp(current) };
 			});
 			if (result.changed) acknowledged.push(result.snapshot);
 		}
@@ -682,7 +707,7 @@ export class TerminalTaskManager {
 	}
 
 	public getOutput(task: Pick<TerminalTaskSnapshot, "logFile">, maxBytes = CHECK_OUTPUT_BYTES): string {
-		return readLogTail(task.logFile, maxBytes);
+		return readLogTail(this.store, task.logFile, maxBytes);
 	}
 
 	public async stopOwned(ownerSessionId: string): Promise<TerminalStopResult[]> {
@@ -702,7 +727,7 @@ export class TerminalTaskManager {
 
 	private recover(snapshot: TerminalTaskSnapshot): void {
 		if (isTerminalTaskSettled(snapshot.status)) {
-			capSettledLog(snapshot.logFile, this.logMaxBytes);
+			capSettledLog(this.store, snapshot.logFile, this.logMaxBytes);
 			return;
 		}
 		if (snapshot.status === "starting") {
@@ -715,7 +740,7 @@ export class TerminalTaskManager {
 		const paths = taskPaths(this.store, snapshot.id, snapshot.createdAt);
 		if (snapshot.status === "running") {
 			try {
-				createPrivateFile(paths.launchFile, "recovered\n");
+				createPrivateFile(this.store, paths.launchFile, "recovered\n");
 			} catch (error) {
 				if (!(typeof error === "object" && error !== null && "code" in error && (error as { code?: unknown }).code === "EEXIST")) {
 					this.diagnostic(snapshot.id, `unable to release recovered launch gate: ${error instanceof Error ? error.message : String(error)}`);
@@ -769,7 +794,7 @@ export class TerminalTaskManager {
 		}
 		const runtime = this.ensureRuntime(current);
 		if (this.now() - runtime.lastLogCapAt >= 5_000) {
-			capRunningLog(current.logFile, this.logMaxBytes);
+			capRunningLog(this.store, current.logFile, this.logMaxBytes);
 			runtime.lastLogCapAt = this.now();
 		}
 		if (current.status === "starting") {
@@ -790,7 +815,7 @@ export class TerminalTaskManager {
 				?? this.ensureRuntime(current).treeVerification;
 		}
 		const paths = taskPaths(this.store, current.id, current.createdAt);
-		const exitCode = readExitCode(paths.exitFile);
+		const exitCode = readExitCode(this.store, paths.exitFile);
 		if (exitCode !== undefined) {
 			await this.finishNaturalCompletion(id, identity, exitCode);
 			return;
@@ -846,16 +871,33 @@ export class TerminalTaskManager {
 			this.settleCancelled(id);
 			return;
 		}
-		const identityStatus = this.processTree.identityMatches(identity);
+		const current = this.store.get(id);
+		let verification = current?.processTreeVerification;
+		let identityStatus = this.processTree.identityMatches(identity);
+		if (identityStatus !== "same" && verification && this.processTree.verificationMatches) {
+			identityStatus = this.processTree.verificationMatches(identity, verification);
+		}
 		if (identityStatus === "different") {
 			this.settleLost(id, null, false);
 			return;
 		}
 		if (identityStatus === "unknown") {
-			this.diagnostic(id, "persisted stopping task identity is unknown; refusing recovery signal");
+			this.diagnostic(id, "persisted stopping task identity and descendant anchors are unknown; refusing recovery signal");
 			return;
 		}
-		const verification = this.processTree.captureTreeVerification?.(identity);
+		if (!verification) {
+			verification = this.processTree.captureTreeVerification?.(identity);
+			if (process.platform !== "win32" && this.processTree.captureTreeVerification && !verification) {
+				this.diagnostic(id, "persisted stopping task has no verifiable process-tree anchors; refusing recovery signal");
+				return;
+			}
+			if (verification) {
+				const persisted = this.mutate(id, (task) => task.status === "stopping" && !task.processTreeVerification
+					? { ...task, processTreeVerification: verification, updatedAt: this.timestamp(task) }
+					: undefined).snapshot;
+				verification = persisted.processTreeVerification;
+			}
+		}
 		const term = await this.safeVerifiedSignal(identity, "SIGTERM", verification);
 		await this.finishStop(id, identity, term, false, verification);
 	}
@@ -891,7 +933,7 @@ export class TerminalTaskManager {
 		});
 		if (isTerminalTaskSettled(result.snapshot.status)) {
 			this.clearPoll(id);
-			capSettledLog(result.snapshot.logFile, this.logMaxBytes);
+			capSettledLog(this.store, result.snapshot.logFile, this.logMaxBytes);
 		}
 		return result.snapshot;
 	}
@@ -914,7 +956,7 @@ export class TerminalTaskManager {
 		});
 		if (result.snapshot.status === "cancelled") {
 			this.clearPoll(id);
-			capSettledLog(result.snapshot.logFile, this.logMaxBytes);
+			capSettledLog(this.store, result.snapshot.logFile, this.logMaxBytes);
 		}
 		return result.snapshot;
 	}
@@ -934,6 +976,7 @@ export class TerminalTaskManager {
 				observedAt: task.observedAt ?? now,
 				consumedAt: consume ? task.consumedAt ?? now : task.consumedAt,
 				deliveryState,
+				deliveryClaimToken: undefined,
 			};
 		}).snapshot;
 	}
@@ -966,8 +1009,8 @@ export class TerminalTaskManager {
 		restoreOnFailure: boolean,
 		verification?: ProcessTreeVerification,
 	): Promise<TerminalStopResult> {
-		if (!termSignal.ok) return this.handleStopSignalFailure(id, termSignal, restoreOnFailure);
-		let empty = termSignal.gone || await this.processTree.waitForTreeEmpty(identity, this.termGraceMs);
+		if (!termSignal.ok && !termSignal.forceRequired) return this.handleStopSignalFailure(id, termSignal, restoreOnFailure);
+		let empty = termSignal.ok && (termSignal.gone || await this.processTree.waitForTreeEmpty(identity, this.termGraceMs));
 		if (!empty) {
 			const kill = await this.safeVerifiedSignal(identity, "SIGKILL", verification);
 			if (!kill.ok) return this.handleStopSignalFailure(id, kill, restoreOnFailure);
@@ -1019,7 +1062,7 @@ export class TerminalTaskManager {
 	private failUnlaunched(id: string, error: unknown): void {
 		this.settleFailedLaunch(id);
 		const current = this.store.get(id);
-		if (current) appendPrivateFile(current.logFile, `\n[spawn error] ${error instanceof Error ? error.message : String(error)}\n`);
+		if (current) appendPrivateFile(this.store, current.logFile, `\n[spawn error] ${error instanceof Error ? error.message : String(error)}\n`);
 	}
 
 	private settleFailedLaunch(id: string): TerminalTaskSnapshot {

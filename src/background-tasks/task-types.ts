@@ -1,4 +1,5 @@
 import { sanitizeActivityText, type ActivitySnapshot, type ActivityStatus } from "../activity/domain.js";
+import type { ProcessTreeVerification } from "./process-tree.js";
 
 export const TERMINAL_TASK_SCHEMA_VERSION = 4;
 
@@ -13,6 +14,11 @@ export type TerminalTaskStatus =
 
 export type TerminalCompletionPolicy = "passive" | "wake";
 export type TerminalDeliveryState = "none" | "pending" | "claimed" | "delivered" | "suppressed";
+
+export interface TerminalDeliveryReceipt {
+	readonly completionId: string;
+	readonly claimToken: string;
+}
 
 export interface TerminalTaskSnapshot {
 	readonly schemaVersion: number;
@@ -32,9 +38,12 @@ export interface TerminalTaskSnapshot {
 	readonly consumedAt?: number;
 	readonly deliveryState: TerminalDeliveryState;
 	readonly completionId?: string;
+	readonly deliveryClaimToken?: string;
 	readonly pid?: number;
 	readonly processGroupId?: number;
 	readonly processStartTime?: string;
+	/** POSIX members captured and persisted before signalling the process group. */
+	readonly processTreeVerification?: ProcessTreeVerification;
 	readonly logFile: string;
 }
 

@@ -78,7 +78,7 @@ describe("terminal completion Pi fidelity", () => {
 		mkdirSync(sessionDir, { recursive: true });
 		const extension = join(root, "terminal-fidelity-extension.ts");
 		const sessionFile = join(sessionDir, "seed.jsonl");
-		writeFileSync(extension, `export default function (pi: any): void {\n\tpi.registerCommand("terminal-fidelity", {\n\t\thandler: async () => {\n\t\t\tpi.sendMessage({ customType: "terminal-result", content: "probe", display: true, details: { completionId: "completion-probe", ownerSessionId: "session-probe", activity: { id: "term-probe", kind: "terminal", title: "probe", status: "succeeded" } } }, { deliverAs: "followUp", triggerTurn: false });\n\t\t},\n\t});\n}\n`);
+		writeFileSync(extension, `export default function (pi: any): void {\n\tpi.registerCommand("terminal-fidelity", {\n\t\thandler: async () => {\n\t\t\tpi.sendMessage({ customType: "terminal-result", content: "probe", display: true, details: { completionId: "completion-probe", deliveryClaimToken: "claim-probe", ownerSessionId: "session-probe", activity: { id: "term-probe", kind: "terminal", title: "probe", status: "succeeded" } } }, { deliverAs: "followUp", triggerTurn: false });\n\t\t},\n\t});\n}\n`);
 		writeFileSync(sessionFile, [
 			JSON.stringify({ type: "session", version: 3, id: "019f8a78-b4f5-7b7b-b774-2d2e4bce9000", timestamp: "2026-07-22T15:40:00.000Z", cwd: process.cwd() }),
 			JSON.stringify({ type: "message", id: "a1b2c3d4", parentId: null, timestamp: "2026-07-22T15:40:01.000Z", message: { role: "assistant", content: [{ type: "text", text: "seed" }], api: "openai-codex-responses", provider: "openai-codex", model: "gpt-5.6-sol", usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }, stopReason: "stop", timestamp: 1_784_734_801_000 } }),
@@ -107,6 +107,7 @@ describe("terminal completion Pi fidelity", () => {
 			expect(probe).toMatchObject({
 				details: {
 					completionId: "completion-probe",
+					deliveryClaimToken: "claim-probe",
 					ownerSessionId: "session-probe",
 					activity: { id: "term-probe", kind: "terminal", status: "succeeded" },
 				},

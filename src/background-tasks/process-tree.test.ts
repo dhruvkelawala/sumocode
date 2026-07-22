@@ -80,12 +80,14 @@ describe("process tree operations", () => {
 		expect(harness.signalTree).toHaveBeenCalledTimes(1);
 	});
 
-	it("trusts only successful taskkill /T completion and never leader absence on error", async () => {
+	it("marks a failed soft taskkill for forced /T /F escalation", async () => {
 		const successExecutor = vi.fn((_args, callback: (error?: Error | null) => void) => callback());
 		expect(await runWindowsTaskkill(123, true, successExecutor)).toEqual({ ok: true, gone: true });
 		expect(successExecutor).toHaveBeenCalledWith(["/PID", "123", "/T", "/F"], expect.any(Function));
 
 		const descendantStillAlive = vi.fn((_args, callback: (error?: Error | null) => void) => callback(new Error("leader not found; descendant remains")));
-		expect(await runWindowsTaskkill(123, true, descendantStillAlive)).toMatchObject({ ok: false, gone: false });
+		expect(await runWindowsTaskkill(123, false, descendantStillAlive)).toMatchObject({ ok: false, gone: false, forceRequired: true });
+		expect(descendantStillAlive).toHaveBeenCalledWith(["/PID", "123", "/T"], expect.any(Function));
+		expect(await runWindowsTaskkill(123, true, descendantStillAlive)).toMatchObject({ ok: false, gone: false, forceRequired: false });
 	});
 });

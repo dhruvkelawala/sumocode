@@ -43,6 +43,7 @@ function createHarness(initial: TerminalTaskSnapshot[] = []) {
 	const branch: Array<Record<string, unknown>> = [];
 	let recordSentMessage = true;
 	let onSend: (() => void) | undefined;
+	let claimSequence = 0;
 	const manager = {
 		start: vi.fn(async (options: { ownerSessionId: string; completionPolicy: "passive" | "wake" }) => {
 			const started = task({ ownerSessionId: options.ownerSessionId, completionPolicy: options.completionPolicy });
@@ -53,7 +54,7 @@ function createHarness(initial: TerminalTaskSnapshot[] = []) {
 			const entry = tasks.get(id);
 			if (entry?.ownerSessionId !== owner) return undefined;
 			const observed = entry.status === "completed" && (entry.deliveryState === "pending" || entry.deliveryState === "claimed")
-				? { ...entry, deliveryState: "suppressed" as const, observedAt: 3_000 }
+				? { ...entry, deliveryState: "suppressed" as const, deliveryClaimToken: undefined, observedAt: 3_000 }
 				: entry;
 			tasks.set(id, observed);
 			return { task: observed, output: "current output" };
@@ -65,6 +66,7 @@ function createHarness(initial: TerminalTaskSnapshot[] = []) {
 				const observed = {
 					...entry,
 					deliveryState: entry.deliveryState === "pending" || entry.deliveryState === "claimed" ? "suppressed" as const : entry.deliveryState,
+					deliveryClaimToken: undefined,
 					observedAt: entry.observedAt ?? 3_000,
 					consumedAt: entry.consumedAt ?? 3_000,
 				};
@@ -92,18 +94,22 @@ function createHarness(initial: TerminalTaskSnapshot[] = []) {
 			for (const [id, entry] of tasks) {
 				if (entry.ownerSessionId !== owner || entry.deliveryState !== "pending") continue;
 				if (entry.completionPolicy === "wake" && !includeWake) continue;
-				const next = { ...entry, deliveryState: "claimed" as const };
+				const next = { ...entry, deliveryState: "claimed" as const, deliveryClaimToken: `claim-${++claimSequence}` };
 				tasks.set(id, next);
 				claimed.push(next);
 			}
 			return claimed;
 		}),
-		acknowledge: vi.fn((owner: string, completionIds: Set<string>) => {
+		acknowledge: vi.fn((owner: string, receipts: Array<{ completionId: string; claimToken: string }>) => {
+			const receiptKeys = new Set(receipts.map(({ completionId, claimToken }) => `${completionId}\u0000${claimToken}`));
 			const values: TerminalTaskSnapshot[] = [];
 			for (const [id, entry] of tasks) {
-				if (entry.ownerSessionId !== owner || !entry.completionId || !completionIds.has(entry.completionId)) continue;
-				if (entry.deliveryState === "delivered") continue;
-				const next = { ...entry, deliveryState: "delivered" as const };
+				if (
+					entry.ownerSessionId !== owner || entry.deliveryState !== "claimed" ||
+					!entry.completionId || !entry.deliveryClaimToken ||
+					!receiptKeys.has(`${entry.completionId}\u0000${entry.deliveryClaimToken}`)
+				) continue;
+				const next = { ...entry, deliveryState: "delivered" as const, deliveryClaimToken: undefined };
 				tasks.set(id, next);
 				values.push(next);
 			}
@@ -198,7 +204,7 @@ describe("installTerminalTools", () => {
 	});
 
 	it("keeps terminal_list side-effect free from delivery reconciliation and context touch", async () => {
-		const settled = task({ status: "completed", settledAt: 2_000, exitCode: 0, deliveryState: "claimed", completionId: "completion-a" });
+		const settled = task({ status: "completed", settledAt: 2_000, exitCode: 0, deliveryState: "claimed", completionId: "completion-a", deliveryClaimToken: "claim-existing" });
 		const harness = createHarness([settled]);
 		await harness.fire("session_start");
 		harness.manager.acknowledge.mockClear();
@@ -223,7 +229,7 @@ describe("installTerminalTools", () => {
 	});
 
 	it("retries a still-leased claim recovered at a session boundary", async () => {
-		const claimed = task({ status: "completed", settledAt: 2_000, exitCode: 0, deliveryState: "claimed", completionId: "completion-a" });
+		const claimed = task({ status: "completed", settledAt: 2_000, exitCode: 0, deliveryState: "claimed", completionId: "completion-a", deliveryClaimToken: "claim-existing" });
 		const harness = createHarness([claimed]);
 		const timeout = vi.spyOn(globalThis, "setTimeout");
 		try {
@@ -278,6 +284,7 @@ describe("installTerminalTools", () => {
 				display: true,
 				details: {
 					completionId: "completion-a",
+					deliveryClaimToken: "claim-1",
 					ownerSessionId: "session-a",
 					activity: expect.objectContaining({ id: "term-a", kind: "terminal", ownerSessionId: "session-a" }),
 				},
@@ -322,7 +329,7 @@ describe("installTerminalTools", () => {
 
 		// Model bounded lease expiry after the crashed sender. A replacement
 		// coordinator then reclaims, sends, and acknowledges the visible ID.
-		harness.tasks.set(settled.id, { ...harness.tasks.get(settled.id)!, deliveryState: "pending" });
+		harness.tasks.set(settled.id, { ...harness.tasks.get(settled.id)!, deliveryState: "pending", deliveryClaimToken: undefined });
 		harness.setRecordSentMessage(true);
 		harness.setOnSend(undefined);
 		const replacement = new TerminalDeliveryCoordinator(harness.pi as never, harness.manager as unknown as TerminalTaskManager);
@@ -334,6 +341,41 @@ describe("installTerminalTools", () => {
 		replacement.dispose();
 	});
 
+	it("uses the stable completion id as an insertion idempotency key after reclaim", async () => {
+		const settled = task({ status: "completed", settledAt: 2_000, exitCode: 0, deliveryState: "pending", completionId: "completion-existing" });
+		const harness = createHarness([settled]);
+		harness.branch.push({
+			type: "custom_message",
+			details: { completionId: "completion-existing", deliveryClaimToken: "claim-crashed" },
+		});
+
+		await harness.fire("session_start");
+
+		expect(harness.sendMessage).not.toHaveBeenCalled();
+		expect(harness.tasks.get(settled.id)).toMatchObject({ deliveryState: "delivered", deliveryClaimToken: undefined });
+		expect(harness.manager.acknowledge).toHaveBeenCalledWith("session-a", [{
+			completionId: "completion-existing",
+			claimToken: "claim-1",
+		}]);
+	});
+
+	it("catches a deferred acknowledgement reconciliation failure", async () => {
+		const settled = task({ status: "completed", settledAt: 2_000, exitCode: 0, deliveryState: "pending", completionId: "completion-error" });
+		const harness = createHarness([settled]);
+		const acknowledge = harness.manager.acknowledge.getMockImplementation()!;
+		let calls = 0;
+		harness.manager.acknowledge.mockImplementation((owner: string, receipts: Array<{ completionId: string; claimToken: string }>) => {
+			calls += 1;
+			if (calls === 3) throw new Error("store temporarily unavailable");
+			return acknowledge(owner, receipts);
+		});
+
+		await expect(harness.fire("session_start")).resolves.toBeUndefined();
+		expect(harness.sendMessage).toHaveBeenCalledOnce();
+		expect(harness.manager.getClaimRetryDelay).toHaveBeenCalled();
+		harness.coordinator.dispose();
+	});
+
 	it("acknowledges only after the matching completion id is observable and never sends twice", async () => {
 		const settled = task({ status: "completed", settledAt: 2_000, exitCode: 0, deliveryState: "pending", completionId: "completion-a" });
 		const harness = createHarness([settled]);
@@ -341,7 +383,10 @@ describe("installTerminalTools", () => {
 		await Promise.resolve();
 
 		expect(harness.tasks.get(settled.id)?.deliveryState).toBe("delivered");
-		expect(harness.manager.acknowledge).toHaveBeenCalledWith("session-a", new Set(["completion-a"]));
+		expect(harness.manager.acknowledge).toHaveBeenCalledWith("session-a", [{
+			completionId: "completion-a",
+			claimToken: "claim-1",
+		}]);
 		await harness.fire("agent_settled");
 		expect(harness.sendMessage).toHaveBeenCalledOnce();
 	});

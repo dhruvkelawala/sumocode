@@ -12,7 +12,7 @@ import {
 	TERMINAL_TOOL_DESCRIPTIONS,
 	TERMINAL_TOOL_GUIDELINES,
 } from "./terminal-prompt.js";
-import { terminalActivitySnapshot, type TerminalTaskSnapshot } from "./task-types.js";
+import { terminalActivitySnapshot, type TerminalDeliveryReceipt, type TerminalTaskSnapshot } from "./task-types.js";
 
 const DEFAULT_WAIT_TIMEOUT_MS = 30_000;
 const MAX_WAIT_TIMEOUT_MS = 300_000;
@@ -32,8 +32,14 @@ function sessionId(ctx: ExtensionContext): string {
 	return id;
 }
 
-function completionIdsFromContext(ctx: ExtensionContext): Set<string> {
+interface ObservableCompletions {
+	readonly ids: ReadonlySet<string>;
+	readonly receipts: readonly TerminalDeliveryReceipt[];
+}
+
+function completionsFromContext(ctx: ExtensionContext): ObservableCompletions {
 	const ids = new Set<string>();
+	const receipts: TerminalDeliveryReceipt[] = [];
 	for (const entry of ctx.sessionManager.getBranch()) {
 		if (!entry || typeof entry !== "object") continue;
 		const record = entry as unknown as Record<string, unknown>;
@@ -47,15 +53,19 @@ function completionIdsFromContext(ctx: ExtensionContext): Set<string> {
 		}
 		if (!details || typeof details !== "object") continue;
 		const completionId = (details as { completionId?: unknown }).completionId;
-		if (typeof completionId === "string") ids.add(completionId);
+		const claimToken = (details as { deliveryClaimToken?: unknown }).deliveryClaimToken;
+		if (typeof completionId !== "string") continue;
+		ids.add(completionId);
+		if (typeof claimToken === "string") receipts.push({ completionId, claimToken });
 	}
-	return ids;
+	return { ids, receipts };
 }
 
 function completionDetails(manager: TerminalTaskManager, task: TerminalTaskSnapshot) {
 	const output = sanitizeActivityText(manager.getOutput(task, COMPLETION_OUTPUT_BYTES)).slice(-COMPLETION_OUTPUT_BYTES);
 	return {
 		completionId: task.completionId,
+		deliveryClaimToken: task.deliveryClaimToken,
 		ownerSessionId: task.ownerSessionId,
 		activity: terminalActivitySnapshot(task, output),
 	};
@@ -108,7 +118,7 @@ export class TerminalDeliveryCoordinator {
 
 	public reconcile(ctx: ExtensionContext): void {
 		const ownerSessionId = sessionId(ctx);
-		this.manager.acknowledge(ownerSessionId, completionIdsFromContext(ctx));
+		this.manager.acknowledge(ownerSessionId, completionsFromContext(ctx).receipts);
 		const retryDelay = this.manager.getClaimRetryDelay(ownerSessionId);
 		if (retryDelay === undefined && this.retryTimer) {
 			clearTimeout(this.retryTimer);
@@ -150,10 +160,25 @@ export class TerminalDeliveryCoordinator {
 			const claimed = this.manager.claimPending(active.ownerSessionId, true, 1)
 				.sort((left, right) => Number(left.completionPolicy === "wake") - Number(right.completionPolicy === "wake"));
 			for (const task of claimed) {
-				// An explicit check/wait/stop can suppress a claim before this stack
-				// reaches send. Re-read the durable claim so that race has one winner.
+				// An explicit observer or an expired concurrent claimant can take
+				// ownership before this stack reaches send. The unique claim token,
+				// not completionId alone, decides which coordinator may publish.
 				const current = this.manager.get(task.id, active.ownerSessionId);
-				if (current?.deliveryState !== "claimed" || current.completionId !== task.completionId) continue;
+				if (
+					current?.deliveryState !== "claimed" || !current.deliveryClaimToken ||
+					current.completionId !== task.completionId || current.deliveryClaimToken !== task.deliveryClaimToken
+				) continue;
+				const observable = completionsFromContext(active.ctx);
+				if (current.completionId && observable.ids.has(current.completionId)) {
+					// Pi has no insertion idempotency key, but an already-observable stable
+					// completion ID proves insertion happened before a crash. Acknowledge
+					// under this exact reclaim token instead of appending a duplicate.
+					this.manager.acknowledge(active.ownerSessionId, [{
+						completionId: current.completionId,
+						claimToken: current.deliveryClaimToken,
+					}]);
+					continue;
+				}
 				const details = completionDetails(this.manager, current);
 				this.pi.sendMessage(
 					{
@@ -168,7 +193,7 @@ export class TerminalDeliveryCoordinator {
 			}
 			queueMicrotask(() => {
 				if (this.active?.ownerSessionId !== active.ownerSessionId) return;
-				this.reconcile(this.active.ctx);
+				this.safeReconcile(this.active.ctx);
 			});
 			const retryDelay = this.manager.getClaimRetryDelay(active.ownerSessionId);
 			if (retryDelay !== undefined) this.scheduleLeaseRetry(retryDelay);

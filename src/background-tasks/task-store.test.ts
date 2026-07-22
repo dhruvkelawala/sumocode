@@ -137,6 +137,8 @@ describe("TerminalTaskStore", () => {
 		expect(parseTerminalTaskSnapshot({ ...initial, status: "running", pid: 0, processGroupId: 4, processStartTime: "start" })).toBeUndefined();
 		expect(parseTerminalTaskSnapshot({ ...initial, status: "running", pid: 4, processGroupId: 4, processStartTime: "" })).toBeUndefined();
 		expect(parseTerminalTaskSnapshot({ ...initial, deliveryState: "pending" })).toBeUndefined();
+		expect(parseTerminalTaskSnapshot({ ...initial, deliveryClaimToken: "claim-without-claim" })).toBeUndefined();
+		expect(parseTerminalTaskSnapshot({ ...initial, processTreeVerification: { members: [] } })).toBeUndefined();
 		expect(parseTerminalTaskSnapshot({ ...initial, logFile: "../output.log" })).toBeUndefined();
 
 		const invalid = { ...initial, logFile: join(store.rootDir, "outside.log") };
@@ -144,7 +146,38 @@ describe("TerminalTaskStore", () => {
 		expect(store.loadAll()).toEqual([]);
 	});
 
-	it.skipIf(process.platform === "win32")("quarantines symlink artifacts and path escapes", () => {
+	it.skipIf(process.platform === "win32")("rejects symlink/reparse roots, task directories, metadata, and artifacts", () => {
+		const canonicalRoot = join(rootDir, "canonical-root");
+		mkdirSync(canonicalRoot, { mode: 0o700 });
+		chmodSync(canonicalRoot, 0o700);
+		const rootLink = join(rootDir, "root-link");
+		symlinkSync(canonicalRoot, rootLink, "dir");
+		expect(() => new TerminalTaskStore({ rootDir: rootLink })).toThrow(/symlink/);
+
+		const linkedStoreRoot = join(rootDir, "linked-store");
+		mkdirSync(linkedStoreRoot, { mode: 0o700 });
+		chmodSync(linkedStoreRoot, 0o700);
+		const linkedStore = new TerminalTaskStore({ rootDir: linkedStoreRoot });
+		const outsideDirectory = join(rootDir, "outside-task");
+		mkdirSync(outsideDirectory, { mode: 0o700 });
+		chmodSync(outsideDirectory, 0o700);
+		symlinkSync(outsideDirectory, join(linkedStore.rootDir, "term-linked-1000"), "dir");
+		const linkedDiagnostic = vi.fn();
+		expect(new TerminalTaskStore({ rootDir: linkedStore.rootDir, onDiagnostic: linkedDiagnostic }).loadAll()).toEqual([]);
+		expect(linkedDiagnostic).toHaveBeenCalledWith(expect.objectContaining({ kind: "corrupt", message: expect.stringMatching(/symlink|reparse/) }));
+
+		const metadataStoreRoot = join(rootDir, "metadata-store");
+		mkdirSync(metadataStoreRoot, { mode: 0o700 });
+		chmodSync(metadataStoreRoot, 0o700);
+		const metadataDiagnostic = vi.fn();
+		const metadataStore = new TerminalTaskStore({ rootDir: metadataStoreRoot, onDiagnostic: metadataDiagnostic });
+		const metadataTask = snapshot(metadataStore, "term-meta-link");
+		const outsideMeta = join(rootDir, "outside-meta.json");
+		privateWrite(outsideMeta, `${JSON.stringify(metadataTask)}\n`);
+		symlinkSync(outsideMeta, join(dirname(metadataTask.logFile), "meta.json"));
+		expect(metadataStore.loadAll()).toEqual([]);
+		expect(metadataDiagnostic).toHaveBeenCalledWith(expect.objectContaining({ kind: "corrupt" }));
+
 		const onDiagnostic = vi.fn();
 		const store = new TerminalTaskStore({ rootDir, onDiagnostic });
 		const initial = snapshot(store, "term-link");

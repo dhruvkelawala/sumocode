@@ -134,14 +134,11 @@ export function installSubagents(pi: ExtensionAPI): SubagentManager {
 	};
 
 	/**
-	 * (Re)arm the delivery listener. session_shutdown fires for in-process
-	 * session switches (/new, /resume, /fork) too — the extension instance and
-	 * its tools SURVIVE those, so a one-shot unsubscribe would silently kill
-	 * auto-delivery for the rest of the process lifetime. On every
-	 * session_start we re-subscribe, and first mark every snapshot that
-	 * already exists as observed+consumed so settlements belonging to the
-	 * PREVIOUS session (e.g. children interrupted during the switch, folding
-	 * after shutdown) are never delivered into the new session as stale noise.
+	 * Arm the delivery listener for this factory instance. Pi 0.80.6 recreates
+	 * extension factories for /new, /resume, and /fork; RPC mode may still bind
+	 * session_start more than once on the new instance, so this remains
+	 * idempotent. Mark pre-existing snapshots consumed so a repeated bind cannot
+	 * deliver stale settlement noise into the active session.
 	 */
 	const armDelivery = (): void => {
 		if (unsubscribe) return;
@@ -164,14 +161,14 @@ export function installSubagents(pi: ExtensionAPI): SubagentManager {
 		latestContext = ctx;
 		flush();
 	});
-	// CONSCIOUS DIVERGENCE from background-tasks' reason-gated shutdown
-	// (background-task-tool.ts:61-74): bg_task may leave children running on
-	// /reload,/new,/fork because it recovers them from on-disk meta.json.
+	// CONSCIOUS DIVERGENCE from durable terminal shutdown: terminal tasks
+	// detach their replaced manager and leave children running across
+	// /reload,/new,/resume,/fork because the next manager adopts on-disk state.
 	// Subagents have NO persistent registry (durable reattach is a recorded
 	// deferral in plan 065) — a child surviving a reload would be an orphaned,
 	// unsupervised pi process nobody can harvest, steer, or stop, which is
 	// worse than losing in-flight work. Kill on EVERY shutdown until a durable
-	// registry exists; when it does, adopt the same reason gating as bg_task.
+	// registry exists; when it does, adopt the terminal lifecycle model.
 	pi.on("session_shutdown", () => {
 		latestContext = undefined;
 		unsubscribe?.();

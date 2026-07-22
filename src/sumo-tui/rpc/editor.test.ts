@@ -1,8 +1,8 @@
 import type { KeybindingsManager } from "@earendil-works/pi-coding-agent";
 import type { EditorTheme, TUI } from "@earendil-works/pi-tui";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter as pathDelimiter, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RemnicMemoryClient } from "../../memory.js";
 import { resetThemeRegistryForTests } from "../../themes/index.js";
@@ -17,7 +17,11 @@ import {
 	createRpcAutocompleteProvider,
 	createRpcHostEditorController,
 	createRpcKeybindingsManager,
+	discoverFdPath,
+	fdExecutableExtensions,
+	findExecutableOnPath,
 	loadRpcKeybindingsOverrides,
+	managedFdName,
 	resolveRpcAgentDir,
 	type RpcEditorAutocompleteControls,
 } from "./editor.js";
@@ -95,10 +99,10 @@ function stripAnsi(value: string): string {
 
 async function waitForRenderedText(controller: RpcHostEditorController, text: string, width = 64): Promise<string> {
 	let rendered = "";
-	for (let attempt = 0; attempt < 20; attempt += 1) {
+	for (let attempt = 0; attempt < 50; attempt += 1) {
 		rendered = controller.render(width).map(stripAnsi).join("\n");
 		if (rendered.includes(text)) return rendered;
-		await new Promise((resolve) => setTimeout(resolve, 0));
+		await new Promise((resolve) => setTimeout(resolve, 10));
 	}
 	return rendered;
 }
@@ -308,7 +312,7 @@ describe("RPC editor controller", () => {
 	});
 
 	it("never offers commands for a slash inside a path token", async () => {
-		const provider = createRpcAutocompleteProvider(buildRpcAutocompleteCommands());
+		const provider = createRpcAutocompleteProvider(buildRpcAutocompleteCommands(), { fdPath: null });
 		const signal = new AbortController().signal;
 		// "src/" mid-token: base file completion may serve paths (fs-dependent),
 		// but the command branch must not fire — no command names in the items.
@@ -324,7 +328,7 @@ describe("RPC editor controller", () => {
 	});
 
 	it("cedes to file completion on explicit Tab even for a command-shaped token", async () => {
-		const provider = createRpcAutocompleteProvider(buildRpcAutocompleteCommands());
+		const provider = createRpcAutocompleteProvider(buildRpcAutocompleteCommands(), { fdPath: null });
 		const signal = new AbortController().signal;
 		// force: true = the user pressed Tab asking for FILE completion of the
 		// absolute path "/mod" — the command menu must not intercept.
@@ -334,7 +338,7 @@ describe("RPC editor controller", () => {
 	});
 
 	it("serves mid-line slash completions with a slash-less prefix", async () => {
-		const provider = createRpcAutocompleteProvider(buildRpcAutocompleteCommands());
+		const provider = createRpcAutocompleteProvider(buildRpcAutocompleteCommands(), { fdPath: null });
 		const signal = new AbortController().signal;
 		const suggestions = await provider.getSuggestions(["check /mod"], 0, 10, { signal });
 		expect(suggestions).not.toBeNull();
@@ -364,6 +368,41 @@ describe("RPC editor controller", () => {
 
 		expect(submitted).toEqual(["coalesced submit"]);
 		expect(controller.getText()).toBe("");
+	});
+
+	it.skipIf(process.platform === "win32")("opens file mention autocomplete when the RPC host types @ without an explicit fd path", async () => {
+		const root = mkdtempSync(join(tmpdir(), "sumocode-rpc-file-mention-test-"));
+		const cwd = join(root, "workspace");
+		const binDir = join(root, "bin");
+		try {
+			mkdirSync(cwd);
+			mkdirSync(binDir);
+			writeFileSync(join(cwd, "mention-target.txt"), "target\n", "utf8");
+			const fakeFdPath = join(binDir, "fd");
+			writeFileSync(fakeFdPath, "#!/bin/sh\nprintf 'mention-target.txt\\n'\n", "utf8");
+			chmodSync(fakeFdPath, 0o755);
+			const env = {
+				...process.env,
+				PATH: `${binDir}${pathDelimiter}${process.env.PATH ?? ""}`,
+				PI_CODING_AGENT_DIR: join(root, "empty-agent-dir"),
+			};
+			const controller = await createRpcHostEditorController({
+				controls: controlsFor(),
+				tui: fakeTui(),
+				theme: fakeEditorTheme(),
+				keybindings: fakeKeybindings(),
+				cwd,
+				env,
+			});
+
+			controller.handleInput("@");
+			const rendered = await waitForRenderedText(controller, "mention-target.txt");
+
+			expect(controller.isAutocompleteOpen()).toBe(true);
+			expect(rendered).toContain("mention-target.txt");
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
 	});
 
 	it("renders command autocomplete suggestions from host commands and RPC commands", async () => {
@@ -417,7 +456,7 @@ describe("RPC editor controller", () => {
 				{ provider: "anthropic", id: "claude-sonnet-5", label: "anthropic/claude-sonnet-5", active: false },
 			],
 		});
-		const provider = createRpcAutocompleteProvider(buildRpcAutocompleteCommands([], { controls }), { cwd: process.cwd() });
+		const provider = createRpcAutocompleteProvider(buildRpcAutocompleteCommands([], { controls }), { cwd: process.cwd(), fdPath: null });
 
 		const suggestions = await provider.getSuggestions(["/model "], 0, "/model ".length, {
 			signal: new AbortController().signal,
@@ -506,6 +545,77 @@ describe("RPC editor image paste collapse", () => {
 	});
 });
 
+describe("RPC fd discovery", () => {
+	it("returns null without PATH and skips a directory named fd", () => {
+		expect(findExecutableOnPath("fd", {})).toBeNull();
+		const root = mkdtempSync(join(tmpdir(), "sumocode-rpc-fd-discovery-test-"));
+		try {
+			mkdirSync(join(root, "fd"));
+			expect(findExecutableOnPath("fd", { PATH: root })).toBeNull();
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("models and searches Windows native executables without accepting cmd/bat shims", () => {
+		expect(managedFdName("win32")).toBe("fd.exe");
+		expect(fdExecutableExtensions("win32", { PATHEXT: ".EXE;.CMD;.BAT;.COM" })).toEqual([".EXE", ".COM"]);
+		expect(fdExecutableExtensions("win32", { PATHEXT: ".CMD;.BAT" })).toEqual([".EXE", ".COM"]);
+		expect(fdExecutableExtensions("linux", {})).toEqual([""]);
+
+		const root = mkdtempSync(join(tmpdir(), "sumocode-rpc-windows-fd-test-"));
+		try {
+			const quotedBinDir = join(root, "quoted;bin");
+			mkdirSync(quotedBinDir);
+			const executable = join(quotedBinDir, "fd.EXE");
+			writeFileSync(executable, "fixture", "utf8");
+			chmodSync(executable, 0o755);
+			expect(findExecutableOnPath("fd", { Path: `"${quotedBinDir}";C:\\missing`, PATHEXT: ".CMD;.BAT" }, "win32")).toBe(executable);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it.skipIf(process.platform === "win32")("prefers pi's managed fd and falls back to Debian's fdfind name", () => {
+		const root = mkdtempSync(join(tmpdir(), "sumocode-rpc-fd-fallback-test-"));
+		const agentDir = join(root, "agent");
+		const binDir = join(root, "path-bin");
+		try {
+			mkdirSync(join(agentDir, "bin"), { recursive: true });
+			mkdirSync(binDir);
+			const managedFd = join(agentDir, "bin", "fd");
+			const fallbackFd = join(binDir, "fdfind");
+			writeFileSync(managedFd, "#!/bin/sh\n", "utf8");
+			writeFileSync(fallbackFd, "#!/bin/sh\n", "utf8");
+			chmodSync(managedFd, 0o755);
+			chmodSync(fallbackFd, 0o755);
+			const env = { PI_CODING_AGENT_DIR: agentDir, PATH: binDir };
+
+			expect(discoverFdPath(env)).toBe(managedFd);
+			rmSync(managedFd);
+			expect(discoverFdPath(env)).toBe(fallbackFd);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("preserves explicit null as the opt-out from PATH discovery", async () => {
+		const root = mkdtempSync(join(tmpdir(), "sumocode-rpc-fd-opt-out-test-"));
+		try {
+			const fakeFdPath = join(root, "fd");
+			writeFileSync(fakeFdPath, "#!/bin/sh\nprintf 'mention-target.txt\\n'\n", "utf8");
+			chmodSync(fakeFdPath, 0o755);
+			const provider = createRpcAutocompleteProvider([], { cwd: root, fdPath: null, env: { PATH: root } });
+
+			const suggestions = await provider.getSuggestions(["@"], 0, 1, { signal: new AbortController().signal });
+
+			expect(suggestions).toBeNull();
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+});
+
 describe("RPC autocomplete command construction", () => {
 	it("keeps host commands ahead of conflicting RPC commands and includes non-conflicting RPC commands", async () => {
 		const commands = buildRpcAutocompleteCommands([
@@ -513,7 +623,7 @@ describe("RPC autocomplete command construction", () => {
 			rpcCommand("/ship", "Ship it", "prompt"),
 		]);
 		const compactCommands = commands.filter((command) => command.name === "compact");
-		const provider = createRpcAutocompleteProvider(commands, { cwd: process.cwd() });
+		const provider = createRpcAutocompleteProvider(commands, { cwd: process.cwd(), fdPath: null });
 		const suggestions = await provider.getSuggestions(["/sh"], 0, 3, {
 			signal: new AbortController().signal,
 		});

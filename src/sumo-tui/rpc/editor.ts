@@ -1,6 +1,6 @@
-import { existsSync, readFileSync } from "node:fs";
+import { accessSync, constants, existsSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { delimiter, join, resolve } from "node:path";
 import type { KeybindingsManager } from "@earendil-works/pi-coding-agent";
 import {
 	CombinedAutocompleteProvider,
@@ -33,7 +33,9 @@ export interface RpcEditorAutocompleteOptions {
 
 export interface RpcAutocompleteProviderOptions {
 	readonly cwd?: string;
+	/** Explicit fd executable, null to disable, or undefined to discover it from PATH. */
 	readonly fdPath?: string | null;
+	readonly env?: NodeJS.ProcessEnv;
 }
 
 export interface RpcHostEditorControllerOptions extends RpcAutocompleteProviderOptions {
@@ -177,7 +179,74 @@ export function createRpcAutocompleteProvider(
 	commands: readonly SlashCommand[],
 	options: RpcAutocompleteProviderOptions = {},
 ): CombinedAutocompleteProvider {
-	return new MidLineSlashAutocompleteProvider([...commands], options.cwd ?? process.cwd(), options.fdPath ?? null);
+	const fdPath = options.fdPath === undefined ? discoverFdPath(options.env ?? process.env) : options.fdPath;
+	return new MidLineSlashAutocompleteProvider([...commands], options.cwd ?? process.cwd(), fdPath);
+}
+
+export function discoverFdPath(env: NodeJS.ProcessEnv, platform: NodeJS.Platform = process.platform): string | null {
+	const managedPath = join(resolveRpcAgentDir({ env }), "bin", managedFdName(platform));
+	if (isExecutableFile(managedPath)) return managedPath;
+	return findExecutableOnPath("fd", env, platform) ?? findExecutableOnPath("fdfind", env, platform);
+}
+
+export function managedFdName(platform: NodeJS.Platform): string {
+	return platform === "win32" ? "fd.exe" : "fd";
+}
+
+export function fdExecutableExtensions(platform: NodeJS.Platform, env: NodeJS.ProcessEnv): string[] {
+	if (platform !== "win32") return [""];
+	// Node cannot directly spawn .cmd/.bat shims on current Windows releases;
+	// only return native executable formats accepted by spawn(file, args).
+	const configured = (env.PATHEXT ?? "").split(";")
+		.filter((extension) => /^(?:\.exe|\.com)$/i.test(extension))
+		.map((extension) => extension.toUpperCase());
+	return [...new Set([...configured, ".EXE", ".COM"])];
+}
+
+export function findExecutableOnPath(
+	name: string,
+	env: NodeJS.ProcessEnv,
+	platform: NodeJS.Platform = process.platform,
+): string | null {
+	const pathValue = env.PATH ?? env.Path ?? env.path;
+	if (!pathValue) return null;
+	const extensions = fdExecutableExtensions(platform, env);
+	const directories = platform === "win32" ? splitQuotedWindowsPath(pathValue) : pathValue.split(delimiter);
+	for (const directory of directories) {
+		if (!directory) continue;
+		for (const extension of extensions) {
+			const candidate = join(directory, `${name}${extension}`);
+			if (isExecutableFile(candidate)) return candidate;
+		}
+	}
+	return null;
+}
+
+function splitQuotedWindowsPath(pathValue: string): string[] {
+	const entries: string[] = [];
+	let entry = "";
+	let quoted = false;
+	for (const character of pathValue) {
+		if (character === '"') {
+			quoted = !quoted;
+		} else if (character === ";" && !quoted) {
+			entries.push(entry);
+			entry = "";
+		} else {
+			entry += character;
+		}
+	}
+	entries.push(entry);
+	return entries;
+}
+
+function isExecutableFile(path: string): boolean {
+	try {
+		accessSync(path, constants.X_OK);
+		return statSync(path).isFile();
+	} catch {
+		return false;
+	}
 }
 
 export async function createRpcAutocompleteProviderFromControls(
@@ -193,6 +262,7 @@ export class RpcHostEditorController implements EditorTextController, KeyTarget 
 	private readonly controls: RpcEditorAutocompleteControls | undefined;
 	private readonly cwd: string | undefined;
 	private readonly fdPath: string | null | undefined;
+	private readonly env: NodeJS.ProcessEnv | undefined;
 	private readonly onSubmit: (text: string) => void | Promise<void>;
 	private readonly errorNotifier: ErrorNotifier | undefined;
 	private isSplashProvider: () => boolean;
@@ -202,6 +272,7 @@ export class RpcHostEditorController implements EditorTextController, KeyTarget 
 		this.controls = options.controls;
 		this.cwd = options.cwd;
 		this.fdPath = options.fdPath;
+		this.env = options.env;
 		this.onSubmit = options.onSubmit ?? (() => undefined);
 		this.errorNotifier = options.errorNotifier;
 		this.isSplashProvider = options.isSplash ?? (() => false);
@@ -266,6 +337,7 @@ export class RpcHostEditorController implements EditorTextController, KeyTarget 
 		this.setAutocompleteProvider(await createRpcAutocompleteProviderFromControls(controls, {
 			cwd: this.cwd,
 			fdPath: this.fdPath,
+			env: this.env,
 		}));
 	}
 

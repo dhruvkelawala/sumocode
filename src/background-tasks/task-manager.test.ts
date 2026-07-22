@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -244,6 +244,18 @@ describe("TerminalTaskManager", () => {
 		expect(results[0]?.task).toMatchObject({ status: "cancelled", deliveryState: "suppressed", observedAt: expect.any(Number), consumedAt: expect.any(Number) });
 	});
 
+	it("reconciles a retained-wrapper natural exit before stop can misreport cancellation", async () => {
+		const target = manager();
+		const task = await start(target);
+		writeFileSync(exitFile(task), "7");
+
+		const result = await target.stop([task.id], "session-a");
+
+		expect(result[0]).toMatchObject({ outcome: "already-settled", task: { status: "failed", exitCode: 7 } });
+		expect(tree.operations.signalTree).toHaveBeenCalledWith(expect.objectContaining({ processGroupId: task.processGroupId }), "SIGKILL");
+		expect(tree.operations.signalTree).not.toHaveBeenCalledWith(expect.anything(), "SIGTERM");
+	});
+
 	it("reconciles durable natural exit before an empty-tree stop can misreport cancellation", async () => {
 		const target = manager();
 		const task = await start(target);
@@ -447,6 +459,7 @@ describe("TerminalTaskManager", () => {
 			for (const name of ["output.log", "exit.code", "run.sh", "launch.ready", "meta.json"]) {
 				expect(lstatSync(join(directory, name)).mode & 0o777, name).toBe(0o600);
 			}
+			expect(readFileSync(join(directory, "run.sh"), "utf8")).toContain("launch gate timed out");
 			const outside = join(rootDir, "outside.log");
 			writeFileSync(outside, "outside", { mode: 0o600 });
 			chmodSync(outside, 0o600);

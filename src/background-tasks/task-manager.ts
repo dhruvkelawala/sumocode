@@ -71,6 +71,7 @@ interface StopTarget {
 	readonly task: TerminalTaskSnapshot;
 	readonly identity: ProcessTreeIdentity;
 	readonly verification?: ProcessTreeVerification;
+	readonly naturalExitCode?: number;
 }
 
 export interface TerminalTaskManagerOptions {
@@ -233,7 +234,16 @@ function buildPosixScript(options: {
 		"#!/usr/bin/env bash",
 		"umask 077",
 		"set +e",
-		`while [ ! -f ${shellEscape(options.launchFile)} ]; do sleep 0.01; done`,
+		"launch_wait=0",
+		`while [ ! -f ${shellEscape(options.launchFile)} ]; do`,
+		"  if [ \"$launch_wait\" -ge 3000 ]; then",
+		`    printf '%s\\n' '[sumocode-terminal] launch gate timed out' >> ${shellEscape(options.logFile)}`,
+		`    printf '%s' 125 > ${shellEscape(options.exitFile)}`,
+		"    exit 125",
+		"  fi",
+		"  sleep 0.01",
+		"  launch_wait=$((launch_wait + 1))",
+		"done",
 		`if ! cd ${shellEscape(options.cwd)}; then`,
 		`  printf '%s\\n' ${shellEscape(`[sumocode-terminal] working directory unavailable: ${options.cwd}`)} >> ${shellEscape(options.logFile)}`,
 		"  code=1",
@@ -265,8 +275,16 @@ function buildWindowsScript(options: {
 }): string {
 	return [
 		"@echo off",
+		"setlocal EnableDelayedExpansion",
+		"set launch_wait=0",
 		":wait_for_launch",
 		`if not exist ${quoteWindows(options.launchFile)} (`,
+		"  set /a launch_wait+=1",
+		"  if !launch_wait! GEQ 30 (",
+		`    >> ${quoteWindows(options.logFile)} echo [sumocode-terminal] launch gate timed out`,
+		`    > ${quoteWindows(options.exitFile)} echo 125`,
+		"    exit /b 125",
+		"  )",
 		"  ping 127.0.0.1 -n 2 >nul",
 		"  goto wait_for_launch",
 		")",
@@ -550,11 +568,11 @@ export class TerminalTaskManager {
 				results.set(id, { id, outcome: "failed", task: current, message: `Terminal ${id} has no verified process-group identity.` });
 				continue;
 			}
+			const paths = taskPaths(this.store, current.id, current.createdAt);
+			const naturalExitCode = readExitCode(paths.exitFile);
 			if (this.processTree.isTreeEmpty(identity)) {
-				const paths = taskPaths(this.store, current.id, current.createdAt);
-				const exitCode = readExitCode(paths.exitFile);
-				if (exitCode !== undefined) {
-					const settled = this.settleNatural(id, exitCode);
+				if (naturalExitCode !== undefined) {
+					const settled = this.settleNatural(id, naturalExitCode);
 					const observed = this.observe(id, false);
 					results.set(id, {
 						id,
@@ -591,6 +609,10 @@ export class TerminalTaskManager {
 				continue;
 			}
 			const verification = this.processTree.captureTreeVerification?.(identity) ?? retainedVerification;
+			if (naturalExitCode !== undefined) {
+				targets.push({ task: current, identity, verification, naturalExitCode });
+				continue;
+			}
 			const stopping = this.mutate(id, (task) => !isTerminalTaskSettled(task.status) && task.status !== "stopping"
 				? { ...task, status: "stopping", updatedAt: this.timestamp(task) }
 				: undefined).snapshot;
@@ -603,9 +625,12 @@ export class TerminalTaskManager {
 
 		// Verification and TERM/taskkill initiation happen for every target before
 		// any grace wait, preserving concurrent batch-stop semantics.
-		const termSignals = await Promise.all(targets.map(({ identity, verification }) => this.safeVerifiedSignal(identity, "SIGTERM", verification)));
-		await Promise.all(targets.map(async ({ task, identity, verification }, index) => {
-			results.set(task.id, await this.finishStop(task.id, identity, termSignals[index]!, true, verification));
+		const termSignals = await Promise.all(targets.map(({ identity, verification, naturalExitCode }) =>
+			this.safeVerifiedSignal(identity, naturalExitCode === undefined ? "SIGTERM" : "SIGKILL", verification)));
+		await Promise.all(targets.map(async ({ task, identity, verification, naturalExitCode }, index) => {
+			results.set(task.id, naturalExitCode === undefined
+				? await this.finishStop(task.id, identity, termSignals[index]!, true, verification)
+				: await this.finishNaturalStop(task.id, identity, naturalExitCode, termSignals[index]!));
 		}));
 		return uniqueIds.map((id) => results.get(id)!);
 	}
@@ -775,19 +800,41 @@ export class TerminalTaskManager {
 
 	private async finishNaturalCompletion(id: string, identity: ProcessTreeIdentity, exitCode: number): Promise<void> {
 		if (this.store.get(id)?.status !== "running") return;
+		if (this.processTree.isTreeEmpty(identity)) {
+			// Crash recovery after the manager disposed the wrapper but before the
+			// metadata CAS: exit.code plus proven emptiness is complete evidence.
+			this.settleNatural(id, exitCode);
+			return;
+		}
 		// Both wrappers deliberately retain the verified leader after writing the
-		// command's exit code. Dispose the full tree (including any backgrounded
-		// descendants) before committing that already-captured natural result.
+		// command's exit code. Never derive an ownership anchor from an unverified
+		// reused PGID: capture only after the persisted leader matches, otherwise
+		// require an anchor retained from an earlier verified observation.
 		const retainedVerification = this.runtime.get(id)?.treeVerification;
-		const verification = this.processTree.captureTreeVerification?.(identity) ?? retainedVerification;
+		let verification: ProcessTreeVerification | undefined;
+		let identityStatus = this.processTree.identityMatches(identity);
+		if (identityStatus === "same") {
+			verification = this.processTree.captureTreeVerification?.(identity) ?? retainedVerification;
+		} else if (retainedVerification && this.processTree.verificationMatches) {
+			identityStatus = this.processTree.verificationMatches(identity, retainedVerification);
+			if (identityStatus === "same") verification = retainedVerification;
+		}
+		if (identityStatus === "different") {
+			this.settleLost(id, exitCode, false);
+			return;
+		}
+		if (identityStatus === "unknown") {
+			this.diagnostic(id, "natural completion identity is unverified; refusing tree signal");
+			return;
+		}
 		const killed = await this.safeVerifiedSignal(identity, "SIGKILL", verification);
 		const gone = killed.gone || (killed.ok && await this.processTree.waitForTreeEmpty(identity, this.killGraceMs));
 		if (killed.ok && gone) {
 			if (this.store.get(id)?.status === "running") this.settleNatural(id, exitCode);
 			return;
 		}
-		if (killed.identityStatus === "different") {
-			this.settleLost(id, exitCode, false);
+		if (killed.identityStatus === "different" && this.processTree.isTreeEmpty(identity)) {
+			this.settleNatural(id, exitCode);
 			return;
 		}
 		this.diagnostic(id, `natural completion tree disposition unproven; refusing settlement: ${killed.error ?? "tree did not become empty"}`);
@@ -888,6 +935,27 @@ export class TerminalTaskManager {
 				deliveryState,
 			};
 		}).snapshot;
+	}
+
+	private async finishNaturalStop(
+		id: string,
+		identity: ProcessTreeIdentity,
+		exitCode: number,
+		signal: ProcessTreeSignalResult,
+	): Promise<TerminalStopResult> {
+		const gone = signal.gone || (signal.ok && await this.processTree.waitForTreeEmpty(identity, this.killGraceMs));
+		if (!signal.ok || !gone) {
+			if (!this.processTree.isTreeEmpty(identity)) return this.handleStopSignalFailure(id, signal, false);
+		}
+		const settled = this.settleNatural(id, exitCode);
+		const observed = this.observe(id, false);
+		return {
+			id,
+			outcome: "already-settled",
+			task: observed,
+			output: this.getOutput(observed, WAIT_OUTPUT_BYTES),
+			message: `Terminal ${id} completed before its stop signal with exit ${settled.exitCode ?? "unknown"}.`,
+		};
 	}
 
 	private async finishStop(

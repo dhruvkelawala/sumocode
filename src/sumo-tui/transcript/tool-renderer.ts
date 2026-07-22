@@ -1,5 +1,6 @@
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { activeThemeApplicationRoles, activeThemeColors, type ThemeApplicationRoles } from "../../themes/index.js";
+import { stripAnsi } from "../cathedral/ansi.js";
 import { lineToAnsi, lineWidth, span, textLine, truncateLine, wrapLine, type Span } from "../render/primitives.js";
 import { expandKey } from "./expand-key.js";
 import type { ToolCallViewModel, ToolStatus } from "./view-model.js";
@@ -20,20 +21,22 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 
 function firstString(...values: unknown[]): string | undefined {
 	for (const value of values) {
-		if (typeof value === "string" && value.trim().length > 0) return value.trim();
+		if (typeof value !== "string") continue;
+		const sanitized = stripAnsi(value).trim();
+		if (sanitized.length > 0) return sanitized;
 	}
 	return undefined;
 }
 
 function compactWhitespace(value: string): string {
-	return value.replace(/\s+/g, " ").trim();
+	return stripAnsi(value).replace(/\s+/g, " ").trim();
 }
 
 function terminalSafeText(value: string): string {
 	// Raw tabs are measured differently by terminals/Pi's final line guard than
 	// by our cell renderer, which can make an apparently padded tool row overflow
 	// in retained TUI. Expand them before any width accounting.
-	return value.replaceAll("\t", "    ");
+	return stripAnsi(value).replaceAll("\t", "    ");
 }
 
 export function toolStatusGlyph(status: ToolStatus): string {
@@ -218,7 +221,7 @@ function renderBottom(width: number, roles: ToolLedgerRoles): string {
 
 function outputLines(tool: ToolCallViewModel): string[] {
 	const text = tool.status === "error" ? tool.error ?? tool.output ?? "" : tool.output ?? "";
-	return text.split("\n").map((line) => line.trimEnd()).filter((line) => line.length > 0);
+	return text.split("\n").map((line) => stripAnsi(line).trimEnd()).filter((line) => line.length > 0);
 }
 
 function arrayFromDetails(details: Record<string, unknown> | undefined, key: string): string[] {

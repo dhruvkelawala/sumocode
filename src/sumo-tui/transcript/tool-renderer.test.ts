@@ -258,6 +258,56 @@ describe("tool renderer", () => {
 		expect(rows.join("\n")).toContain("… content collapsed");
 	});
 
+	it("strips raw Bash SGR sequences before wrapping output", () => {
+		const rows = renderToolLedgerRows({
+			name: "bash",
+			status: "error",
+			input: { command: "pnpm test" },
+			error: `\u001b[2K\u001b(0\u001b#8\u001b*B\u001b+A\u001b7\u001b8\u001b=\u001b>\u001bM\u001bc\u001bPtmux;\u001b\u001b[31mHIDDEN-PAYLOAD\u001b\\VISIBLE-AFTER-DCS \u009b31m\u009dHIDDEN-C1\u009cVISIBLE-AFTER-C1 \u001b]8;;https://example.com\u0007\u001b[1;31m${"colored failure ".repeat(12)}FINAL-ERROR\u001b[0m\u001b]8;;\u0007`,
+		}, 48);
+		const raw = rows.join("\n");
+		const plain = rows.map(stripAnsi).join("\n");
+
+		expect(raw).not.toContain("\u001b[1;31m");
+		expect(raw).not.toContain("\u001b[2K");
+		expect(raw).not.toContain("\u001b]8;");
+		expect(raw).not.toContain("\u001b(0");
+		expect(raw).not.toContain("\u001b7");
+		expect(raw).not.toContain("\u001bM");
+		expect(plain).not.toContain("HIDDEN-PAYLOAD");
+		expect(plain).toContain("VISIBLE-AFTER-DCS");
+		expect(plain).not.toContain("HIDDEN-C1");
+		expect(plain).toContain("VISIBLE-AFTER-C1");
+		expect(plain).toContain("FINAL-ERROR");
+		expect(plain).not.toContain("[1;31m");
+	});
+
+	it("drops ANSI-only lines before applying the Bash line budget", () => {
+		const rows = renderToolLedgerRows({
+			name: "bash",
+			status: "success",
+			input: { command: "pnpm test" },
+			output: [...Array.from({ length: 25 }, () => "\u001b[2K"), "VISIBLE-RESULT"].join("\n"),
+		}, 60).map(stripAnsi);
+
+		expect(rows.join("\n")).toContain("VISIBLE-RESULT");
+		expect(rows.join("\n")).not.toContain("lines collapsed");
+	});
+
+	it("strips terminal controls from compact tool pills", () => {
+		const line = renderCompactToolPill({
+			name: "bash",
+			status: "error",
+			input: { command: "pnpm test" },
+			error: "\u001b[2K\u001b[31mfailed visibly\u001b[0m \u001b]8;;HIDDEN-UNTERMINATED",
+		});
+
+		expect(line).not.toContain("\u001b[2K");
+		expect(line).not.toContain("\u001b[31m");
+		expect(stripAnsi(line)).toContain("failed visibly");
+		expect(stripAnsi(line)).not.toContain("HIDDEN-UNTERMINATED");
+	});
+
 	it("uses tool color for running bash rows", () => {
 		const rows = renderToolLedgerRows({ name: "bash", status: "running", input: { command: "pnpm test" } }, 60);
 		const plain = rows.map(stripAnsi).join("\n");

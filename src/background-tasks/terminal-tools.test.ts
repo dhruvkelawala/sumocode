@@ -90,7 +90,7 @@ function createHarness(initial: TerminalTaskSnapshot[] = []) {
 			}
 			return values;
 		}),
-		getClaimLeaseMs: vi.fn(() => 10),
+		getClaimRetryDelay: vi.fn((owner: string) => [...tasks.values()].some((entry) => entry.ownerSessionId === owner && entry.deliveryState === "claimed") ? 10 : undefined),
 		addChangeListener: vi.fn((listener: (snapshot: TerminalTaskSnapshot) => void) => {
 			listeners.add(listener);
 			return () => listeners.delete(listener);
@@ -172,6 +172,30 @@ describe("installTerminalTools", () => {
 		expect(harness.manager.wait).toHaveBeenCalledWith([settled.id], "session-a", 5, undefined);
 		expect(harness.manager.stop).toHaveBeenCalledWith([settled.id], "session-a");
 		expect(harness.manager.list).toHaveBeenCalledWith("session-a");
+	});
+
+	it("does not arm lease retries when no completion was claimed", async () => {
+		const harness = createHarness();
+		const timeout = vi.spyOn(globalThis, "setTimeout");
+		try {
+			await harness.fire("session_start");
+			expect(timeout).not.toHaveBeenCalled();
+		} finally {
+			timeout.mockRestore();
+		}
+	});
+
+	it("retries a still-leased claim recovered at a session boundary", async () => {
+		const claimed = task({ status: "completed", settledAt: 2_000, exitCode: 0, deliveryState: "claimed", completionId: "completion-a" });
+		const harness = createHarness([claimed]);
+		const timeout = vi.spyOn(globalThis, "setTimeout");
+		try {
+			await harness.fire("session_start");
+			expect(harness.sendMessage).not.toHaveBeenCalled();
+			expect(timeout).toHaveBeenCalledWith(expect.any(Function), 20);
+		} finally {
+			timeout.mockRestore();
+		}
 	});
 
 	it("delivers passive completion visibly without triggering a turn", async () => {

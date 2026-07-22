@@ -31,6 +31,6 @@ describe("installBackgroundTasks", () => {
 
 		await handlers.get("session_shutdown")?.({ reason: "resume" }, { sessionManager: { getSessionId: () => "session-a" } });
 		expect(stopOwned).not.toHaveBeenCalled();
-		expect(detach).not.toHaveBeenCalled();
+		expect(detach).toHaveBeenCalledOnce();
 	});
 });

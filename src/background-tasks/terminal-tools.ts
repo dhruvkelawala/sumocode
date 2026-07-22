@@ -104,6 +104,11 @@ export class TerminalDeliveryCoordinator {
 	public reconcile(ctx: ExtensionContext): void {
 		const ownerSessionId = sessionId(ctx);
 		this.manager.acknowledge(ownerSessionId, completionIdsFromContext(ctx));
+		const retryDelay = this.manager.getClaimRetryDelay(ownerSessionId);
+		if (retryDelay === undefined && this.retryTimer) {
+			clearTimeout(this.retryTimer);
+			this.retryTimer = undefined;
+		}
 	}
 
 	private requestFlush(): void {
@@ -140,18 +145,19 @@ export class TerminalDeliveryCoordinator {
 				if (this.active?.ownerSessionId !== active.ownerSessionId) return;
 				this.reconcile(this.active.ctx);
 			});
-			this.scheduleLeaseRetry();
+			const retryDelay = this.manager.getClaimRetryDelay(active.ownerSessionId);
+			if (retryDelay !== undefined) this.scheduleLeaseRetry(retryDelay);
 		} finally {
 			this.flushing = false;
 		}
 	}
 
-	private scheduleLeaseRetry(): void {
+	private scheduleLeaseRetry(delayMs: number): void {
 		if (this.retryTimer) clearTimeout(this.retryTimer);
 		this.retryTimer = setTimeout(() => {
 			this.retryTimer = undefined;
 			this.requestFlush();
-		}, this.manager.getClaimLeaseMs() + 10);
+		}, Math.max(0, delayMs) + 10);
 		this.retryTimer.unref?.();
 	}
 }

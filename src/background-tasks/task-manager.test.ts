@@ -254,6 +254,7 @@ describe("TerminalTaskManager", () => {
 		children[0]?.emit("close", 0);
 		await vi.waitFor(() => expect(first.get(task.id, "session-a")?.deliveryState).toBe("pending"));
 		first.claimPending("session-a", true);
+		expect(first.getClaimRetryDelay("session-a")).toBe(30);
 		first.detach();
 		now += 31;
 

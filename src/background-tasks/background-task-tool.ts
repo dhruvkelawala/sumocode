@@ -11,10 +11,11 @@ export function installBackgroundTasks(
 		const reason = (event as { reason?: string } | null | undefined)?.reason;
 		if (reason === "quit" || reason === undefined) {
 			await manager.stopOwned(ctx.sessionManager.getSessionId());
-			manager.detach();
 		}
-		// Replacement clears only the delivery binding in terminal-tools.ts.
-		// Running children and their lifecycle observers remain intact.
+		// Replacement never signals children. It only retires this extension
+		// instance's observers; the newly bound manager recovers the same durable
+		// records without competing stale-revision pollers.
+		manager.detach();
 	});
 
 	return manager;

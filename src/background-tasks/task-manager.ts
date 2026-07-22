@@ -469,8 +469,11 @@ export class TerminalTaskManager {
 		return acknowledged;
 	}
 
-	public getClaimLeaseMs(): number {
-		return this.claimLeaseMs;
+	public getClaimRetryDelay(ownerSessionId: string): number | undefined {
+		const delays = this.list(ownerSessionId)
+			.filter((task) => task.deliveryState === "claimed")
+			.map((task) => Math.max(0, this.claimLeaseMs - (this.now() - task.updatedAt)));
+		return delays.length > 0 ? Math.min(...delays) : undefined;
 	}
 
 	public addChangeListener(listener: TerminalTaskChangeListener): () => void {
@@ -527,6 +530,7 @@ export class TerminalTaskManager {
 	}
 
 	private async reconcile(id: string): Promise<void> {
+		if (this.detached) return;
 		const current = this.tasks.get(id);
 		if (!current || isTerminalTaskSettled(current.status)) return;
 		const runtime = this.runtime.get(id);
@@ -651,6 +655,7 @@ export class TerminalTaskManager {
 	}
 
 	private async handleChildError(id: string, error: Error): Promise<void> {
+		if (this.detached) return;
 		const current = this.tasks.get(id);
 		if (!current || isTerminalTaskSettled(current.status)) return;
 		const identity = identityOf(current);

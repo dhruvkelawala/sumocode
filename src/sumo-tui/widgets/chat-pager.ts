@@ -1,8 +1,9 @@
+import { sameActivity, type ActivitySnapshot } from "../../activity/domain.js";
 import { SumoNode } from "../layout/node.js";
 import { FLEX_DIRECTION_COLUMN, type Yoga, type YogaNode } from "../layout/yoga.js";
 import type { KeyEvent } from "../input/key-router.js";
 import type { MouseEvent } from "../input/mouse.js";
-import { chatMessageViewModelToPlainText, type ChatMessageViewModel } from "../transcript/view-model.js";
+import { chatMessageViewModelToPlainText, type ChatBlock, type ChatMessageViewModel } from "../transcript/view-model.js";
 import { ChatMessage, type ChatMessageOptions, type ChatMessageRole } from "./chat-message.js";
 import { ScrolledUpBanner } from "./scrolled-up-banner.js";
 import { ScrollBox, type ScrollBoxStateChange } from "./scrollbox.js";
@@ -31,8 +32,8 @@ const DEFAULT_MAX_RENDERED_MESSAGES = 200;
 function noop(): void {}
 
 function chatRoleFromViewModel(message: ChatMessageViewModel): ChatMessageRole {
-	const onlyToolBlocks = message.blocks.length > 0 && message.blocks.every((block) => block.type === "tool");
-	if (message.role === "system" && onlyToolBlocks) return "tool";
+	const onlyActivityBlocks = message.blocks.length > 0 && message.blocks.every((block) => block.type === "activity");
+	if (message.role === "system" && onlyActivityBlocks) return "tool";
 	return message.role;
 }
 
@@ -62,9 +63,14 @@ export class ChatPager extends SumoNode {
 	private readonly maxRenderedMessages: number;
 	private readonly chatMessageOptions: ChatMessageOptions;
 	private readonly activeMessages: ChatMessage[] = [];
-	private toolExpansionOverride: boolean | undefined;
+	private readonly activeMessageSourceIndices: number[] = [];
+	private readonly activityExpansionOverrides = new Map<string, boolean>();
+	private readonly activityExpansionStates = new Map<string, boolean>();
+	private readonly activityStatuses = new Map<string, ActivitySnapshot["status"]>();
+	private defaultActivityExpansionOverride: boolean | undefined;
 	private placeholder: ChatMessage | undefined;
 	private virtualArchivedCount = 0;
+	private sourceMessageCount = 0;
 	private unreadCount = 0;
 	private lastReadIndex = -1;
 	private previousManualScroll = false;
@@ -103,37 +109,47 @@ export class ChatPager extends SumoNode {
 		return this.addChatMessage(ChatMessage.create(this.yoga, role, text, undefined, timestamp, undefined, this.chatMessageOptions));
 	}
 
-	public addViewModel(message: ChatMessageViewModel): ChatMessage {
-		return this.addPreparedMessage(prepareChatMessage(message));
+	public addViewModel(message: ChatMessageViewModel, sourceIndex?: number): ChatMessage {
+		return this.addPreparedMessage(prepareChatMessage(message), sourceIndex);
 	}
 
 	public replaceViewModels(messages: readonly ChatMessageViewModel[]): ChatPagerReplaceStats {
 		const previousHeight = this.scrollBox.scrollHeight;
+		this.migrateCorrelatedActivityState(this.activitiesFromRenderedMessages(), this.activitiesFromViewModels(messages));
+		const transcriptActivityIds = this.activityIdsFromViewModels(messages);
+		for (const id of this.activityExpansionOverrides.keys()) {
+			if (!transcriptActivityIds.has(id)) this.activityExpansionOverrides.delete(id);
+		}
 		const width = this.scrollBox.getComputedWidth();
-		const renderedWindow: PreparedChatMessage[] = [];
+		const renderedWindow: Array<{ message: PreparedChatMessage; sourceIndex: number }> = [];
 		let acceptedMessages = 0;
-		for (const message of messages) {
-			const prepared = prepareChatMessage(message);
+		for (let sourceIndex = 0; sourceIndex < messages.length; sourceIndex += 1) {
+			const prepared = prepareChatMessage(messages[sourceIndex]!);
 			if (prepared.text.length === 0) continue;
 			const windowSlot = acceptedMessages % this.maxRenderedMessages;
 			acceptedMessages += 1;
-			if (renderedWindow.length < this.maxRenderedMessages) renderedWindow.push(prepared);
-			else renderedWindow[windowSlot] = prepared;
+			const entry = { message: prepared, sourceIndex };
+			if (renderedWindow.length < this.maxRenderedMessages) renderedWindow.push(entry);
+			else renderedWindow[windowSlot] = entry;
 		}
 		const windowStart = acceptedMessages > renderedWindow.length ? acceptedMessages % this.maxRenderedMessages : 0;
 		const orderedWindow = windowStart === 0 ? renderedWindow : [...renderedWindow.slice(windowStart), ...renderedWindow.slice(0, windowStart)];
 		this.disposeMessageNodes();
 		this.activeMessages.length = 0;
+		this.activeMessageSourceIndices.length = 0;
 		this.archivedMessages = [];
 		this.virtualArchivedCount = Math.max(0, acceptedMessages - renderedWindow.length);
+		this.sourceMessageCount = messages.length;
 		this.placeholder = undefined;
 		this.unreadCount = 0;
 		this.previousManualScroll = false;
 		this.scrollBox.manualScroll = false;
 
-		for (const message of orderedWindow) {
-			this.activeMessages.push(this.createChatMessage(message));
+		for (const entry of orderedWindow) {
+			this.activeMessages.push(this.createChatMessage(entry.message));
+			this.activeMessageSourceIndices.push(entry.sourceIndex);
 		}
+		this.pruneInactiveActivityState();
 		if (this.virtualArchivedCount > 0) {
 			this.placeholder = this.createPlaceholder();
 		}
@@ -164,7 +180,11 @@ export class ChatPager extends SumoNode {
 		const beforeHeight = last.getEstimatedHeight(width);
 		last.appendText(chunk);
 		const afterHeight = last.getEstimatedHeight(width);
-		this.scrollBox.notifyContentChanged(Math.max(0, afterHeight - beforeHeight), Math.max(0, beforeHeight - afterHeight));
+		this.scrollBox.notifyChildrenResized([{
+			top: last.getComputedTop(),
+			previousHeight: beforeHeight,
+			nextHeight: afterHeight,
+		}]);
 		this.beginStreaming();
 		this.scheduleRender();
 	}
@@ -176,37 +196,81 @@ export class ChatPager extends SumoNode {
 			return;
 		}
 		if (last.text === text) return;
-		this.updateLast(last, () => last.setText(text));
+		this.updateMessage(last, () => last.setText(text));
 	}
 
-	public replaceLastWithViewModel(message: ChatMessageViewModel): void {
-		const last = this.getLastMessage();
-		if (!last) {
+	public replaceLastWithViewModel(message: ChatMessageViewModel, sourceIndex?: number): boolean {
+		const targetSourceIndex = sourceIndex ?? this.activeMessageSourceIndices.at(-1);
+		if (targetSourceIndex === undefined) {
 			this.addViewModel(message);
-			return;
+			return true;
 		}
-		last.setRole(chatRoleFromViewModel(message));
-		this.updateLast(last, () => {
-			last.setBlocks(message.blocks, chatMessageViewModelToPlainText(message));
-			if (message.timestamp) last.setTimestamp(message.timestamp);
-			if (this.toolExpansionOverride !== undefined) last.setToolExpansion(this.toolExpansionOverride);
-		});
+		return this.replaceViewModelAt(targetSourceIndex, message);
 	}
 
-	public setToolExpansion(expanded: boolean): void {
-		this.toolExpansionOverride = expanded;
-		const width = this.scrollBox.getComputedWidth();
-		let beforeHeight = 0;
-		let afterHeight = 0;
-		let changed = false;
-		for (const message of this.activeMessages) {
-			beforeHeight += message.getEstimatedHeight(width);
-			changed = message.setToolExpansion(expanded) || changed;
-			afterHeight += message.getEstimatedHeight(width);
+	/** Update one rendered transcript node without resetting pager-wide state. */
+	public replaceViewModelAt(index: number, message: ChatMessageViewModel): boolean {
+		const sourceIndex = Math.floor(index);
+		const activeIndex = this.activeMessageSourceIndices.indexOf(sourceIndex);
+		const target = this.activeMessages[activeIndex];
+		if (!target) return false;
+		const prepared = prepareChatMessage(message);
+		const previousBlocks = target.toSnapshot().blocks ?? [];
+		const previousActivities = this.activitiesFromBlocks(previousBlocks);
+		this.migrateCorrelatedActivityState(previousActivities, this.activitiesFromBlocks(message.blocks));
+		if (prepared.text.length === 0) {
+			this.removeRenderedMessageAt(activeIndex, target);
+			this.discardActivitiesRemovedByRewrite(previousActivities);
+			return true;
 		}
-		if (!changed) return;
-		this.scrollBox.notifyContentChanged(Math.max(0, afterHeight - beforeHeight), Math.max(0, beforeHeight - afterHeight));
-		this.scheduleRender();
+		this.updateMessage(target, () => {
+			target.setRole(prepared.role);
+			target.setBlocks(prepared.blocks, prepared.text);
+			if (prepared.timestamp) target.setTimestamp(prepared.timestamp);
+			this.registerActivities(prepared.blocks);
+			this.applyExpansionPresentation(target, prepared.blocks);
+		});
+		this.discardActivitiesRemovedByRewrite(previousActivities);
+		return true;
+	}
+
+	public getActivityExpansion(id: string): boolean {
+		return this.activityExpansionOverrides.get(id) ?? this.activityExpansionStates.get(id) ?? true;
+	}
+
+	public setActivityExpansion(id: string, expanded: boolean): void {
+		this.activityExpansionOverrides.set(id, expanded);
+		this.activityExpansionStates.set(id, expanded);
+		this.applyActivityExpansion(id, expanded);
+	}
+
+	public toggleActivityExpansion(id?: string): boolean {
+		if (id === undefined) return this.toggleToolExpansion();
+		const expanded = !this.getActivityExpansion(id);
+		this.setActivityExpansion(id, expanded);
+		return expanded;
+	}
+
+	/** Global Ctrl+O policy across Activities and compatibility collapsibles. */
+	public toggleToolExpansion(): boolean {
+		const hasCollapsedActivity = [...this.activityStatuses.keys()].some((id) => !this.getActivityExpansion(id));
+		const compatibilityBlocks = this.activeMessages.flatMap((message) => message.toSnapshot().blocks ?? [])
+			.filter((block): block is Extract<ChatBlock, { type: "skill" | "summary" }> => block.type === "skill" || block.type === "summary");
+		const hasCollapsedCompatibilityBlock = compatibilityBlocks.some((block) => !block.expanded);
+		const hasAnyExpandable = this.activityStatuses.size > 0 || compatibilityBlocks.length > 0;
+		const expanded = hasAnyExpandable
+			? hasCollapsedActivity || hasCollapsedCompatibilityBlock
+			: this.defaultActivityExpansionOverride === undefined || !this.defaultActivityExpansionOverride;
+		this.setToolExpansion(expanded);
+		return expanded;
+	}
+
+	/** Compatibility/global policy API used by Pi's app.tools.expand bridge. */
+	public setToolExpansion(expanded: boolean): void {
+		this.defaultActivityExpansionOverride = expanded;
+		this.activityExpansionOverrides.clear();
+		for (const id of this.activityStatuses.keys()) this.activityExpansionStates.set(id, expanded);
+		this.applyToolExpansion(expanded);
 	}
 
 	public endStreaming(): void {
@@ -217,8 +281,14 @@ export class ChatPager extends SumoNode {
 		const previousHeight = this.scrollBox.scrollHeight;
 		this.disposeMessageNodes();
 		this.activeMessages.length = 0;
+		this.activeMessageSourceIndices.length = 0;
 		this.archivedMessages = [];
 		this.virtualArchivedCount = 0;
+		this.sourceMessageCount = 0;
+		this.activityExpansionOverrides.clear();
+		this.activityExpansionStates.clear();
+		this.activityStatuses.clear();
+		this.defaultActivityExpansionOverride = undefined;
 		this.placeholder = undefined;
 		this.unreadCount = 0;
 		this.lastReadIndex = -1;
@@ -248,6 +318,10 @@ export class ChatPager extends SumoNode {
 		return this.lastReadIndex;
 	}
 
+	public getMessageCount(): number {
+		return this.sourceMessageCount;
+	}
+
 	public hasMessages(): boolean {
 		return this.getTotalMessageCount() > 0;
 	}
@@ -260,10 +334,12 @@ export class ChatPager extends SumoNode {
 		return this.scrollBox.handleMouseEvent(event);
 	}
 
-	private addChatMessage(message: ChatMessage): ChatMessage {
+	private addChatMessage(message: ChatMessage, sourceIndex = this.sourceMessageCount): ChatMessage {
 		const wasReadingHistory = this.isReadingHistory();
 		const addedLines = message.getEstimatedHeight(this.scrollBox.getComputedWidth());
 		this.activeMessages.push(message);
+		this.activeMessageSourceIndices.push(sourceIndex);
+		this.sourceMessageCount = Math.max(this.sourceMessageCount, sourceIndex + 1);
 		this.scrollBox.addChild(message);
 		const virtualized = this.virtualizeIfNeeded();
 		if (wasReadingHistory) this.unreadCount += 1;
@@ -272,11 +348,12 @@ export class ChatPager extends SumoNode {
 		return message;
 	}
 
-	private addPreparedMessage(message: PreparedChatMessage): ChatMessage {
-		return this.addChatMessage(this.createChatMessage(message));
+	private addPreparedMessage(message: PreparedChatMessage, sourceIndex?: number): ChatMessage {
+		return this.addChatMessage(this.createChatMessage(message), sourceIndex);
 	}
 
 	private createChatMessage(message: PreparedChatMessage): ChatMessage {
+		this.registerActivities(message.blocks);
 		const chatMessage = ChatMessage.create(
 			this.yoga,
 			message.role,
@@ -286,16 +363,155 @@ export class ChatPager extends SumoNode {
 			message.blocks,
 			this.chatMessageOptions,
 		);
-		if (this.toolExpansionOverride !== undefined) chatMessage.setToolExpansion(this.toolExpansionOverride);
+		this.applyExpansionPresentation(chatMessage, message.blocks);
 		return chatMessage;
 	}
 
-	private updateLast(message: ChatMessage, update: () => void): void {
+	private registerActivities(blocks: readonly ChatMessageViewModel["blocks"][number][]): void {
+		for (const block of blocks) {
+			if (block.type !== "activity") continue;
+			const activity = block.activity;
+			const hasState = this.activityExpansionStates.has(activity.id);
+			const hasExplicitOverride = this.activityExpansionOverrides.has(activity.id) || this.defaultActivityExpansionOverride !== undefined;
+			if (!hasState) {
+				const defaultExpanded = this.defaultActivityExpansionOverride ?? (
+					activity.status === "queued" || activity.status === "running" || activity.status === "failed"
+				);
+				this.activityExpansionStates.set(activity.id, defaultExpanded);
+			} else if (activity.status === "failed" && !hasExplicitOverride) {
+				this.activityExpansionStates.set(activity.id, true);
+			}
+			this.activityStatuses.set(activity.id, activity.status);
+		}
+	}
+
+	private activitiesFromBlocks(blocks: readonly ChatBlock[]): ActivitySnapshot[] {
+		return blocks.flatMap((block): ActivitySnapshot[] => block.type === "activity" ? [block.activity] : []);
+	}
+
+	private activitiesFromViewModels(messages: readonly ChatMessageViewModel[]): ActivitySnapshot[] {
+		return messages.flatMap((message) => this.activitiesFromBlocks(message.blocks));
+	}
+
+	private activitiesFromRenderedMessages(): ActivitySnapshot[] {
+		return this.activeMessages.flatMap((message) => this.activitiesFromBlocks(message.toSnapshot().blocks ?? []));
+	}
+
+	private activityIdsFromViewModels(messages: readonly ChatMessageViewModel[]): Set<string> {
+		return new Set(this.activitiesFromViewModels(messages).map((activity) => activity.id));
+	}
+
+	private migrateCorrelatedActivityState(existing: readonly ActivitySnapshot[], incoming: readonly ActivitySnapshot[]): void {
+		for (const next of incoming) {
+			const previous = existing.find((candidate) => candidate.id !== next.id && sameActivity(candidate, next));
+			if (!previous) continue;
+			const previousId = previous.id;
+			const nextId = next.id;
+			if (this.activityExpansionOverrides.has(previousId) && !this.activityExpansionOverrides.has(nextId)) {
+				this.activityExpansionOverrides.set(nextId, this.activityExpansionOverrides.get(previousId)!);
+			}
+			if (this.activityExpansionStates.has(previousId) && !this.activityExpansionStates.has(nextId)) {
+				this.activityExpansionStates.set(nextId, this.activityExpansionStates.get(previousId)!);
+			}
+			if (this.activityStatuses.has(previousId) && !this.activityStatuses.has(nextId)) {
+				this.activityStatuses.set(nextId, this.activityStatuses.get(previousId)!);
+			}
+			this.activityExpansionOverrides.delete(previousId);
+			this.activityExpansionStates.delete(previousId);
+			this.activityStatuses.delete(previousId);
+		}
+	}
+
+	private activeActivityIds(): Set<string> {
+		const ids = new Set<string>();
+		for (const message of this.activeMessages) {
+			for (const block of message.toSnapshot().blocks ?? []) {
+				if (block.type === "activity") ids.add(block.activity.id);
+			}
+		}
+		return ids;
+	}
+
+	private pruneInactiveActivityState(): void {
+		const activeIds = this.activeActivityIds();
+		for (const id of this.activityStatuses.keys()) {
+			if (activeIds.has(id) || this.activityExpansionOverrides.has(id)) continue;
+			this.activityStatuses.delete(id);
+			this.activityExpansionStates.delete(id);
+		}
+	}
+
+	private discardActivitiesRemovedByRewrite(previous: readonly ActivitySnapshot[]): void {
+		const activeIds = this.activeActivityIds();
+		for (const activity of previous) {
+			if (activeIds.has(activity.id)) continue;
+			this.activityExpansionOverrides.delete(activity.id);
+			this.activityExpansionStates.delete(activity.id);
+			this.activityStatuses.delete(activity.id);
+		}
+	}
+
+	private effectiveActivityExpansions(blocks: readonly ChatMessageViewModel["blocks"][number][]): ReadonlyMap<string, boolean> {
+		const states = new Map<string, boolean>();
+		for (const block of blocks) {
+			if (block.type !== "activity") continue;
+			states.set(block.activity.id, this.getActivityExpansion(block.activity.id));
+		}
+		return states;
+	}
+
+	private applyExpansionPresentation(message: ChatMessage, blocks: readonly ChatBlock[]): void {
+		if (this.defaultActivityExpansionOverride !== undefined) {
+			message.setToolExpansion(this.defaultActivityExpansionOverride);
+		}
+		// A per-Activity explicit choice wins over the global compatibility policy.
+		message.setActivityExpansions(this.effectiveActivityExpansions(blocks));
+	}
+
+	private removeRenderedMessageAt(index: number, message: ChatMessage): void {
 		const width = this.scrollBox.getComputedWidth();
-		const beforeHeight = message.getEstimatedHeight(width);
+		const top = message.getComputedTop();
+		const previousHeight = message.getEstimatedHeight(width);
+		this.activeMessages.splice(index, 1);
+		this.activeMessageSourceIndices.splice(index, 1);
+		if (message.parent === this.scrollBox) this.scrollBox.removeChild(message);
+		message.dispose();
+		this.scrollBox.notifyChildrenResized(
+			[{ top, previousHeight, nextHeight: 0 }],
+			{ scrollHeightAlreadyUpdated: true },
+		);
+		this.scheduleRender();
+	}
+
+	private applyActivityExpansion(id: string, expanded: boolean): void {
+		this.applyMessageMutations((message) => message.setActivityExpansion(id, expanded));
+	}
+
+	private applyToolExpansion(expanded: boolean): void {
+		this.applyMessageMutations((message) => message.setToolExpansion(expanded));
+	}
+
+	private applyMessageMutations(mutate: (message: ChatMessage) => boolean): void {
+		const width = this.scrollBox.getComputedWidth();
+		const changes: Array<{ top: number; previousHeight: number; nextHeight: number }> = [];
+		for (const message of this.activeMessages) {
+			const previousHeight = message.getEstimatedHeight(width);
+			const top = message.getComputedTop();
+			if (!mutate(message)) continue;
+			changes.push({ top, previousHeight, nextHeight: message.getEstimatedHeight(width) });
+		}
+		if (changes.length === 0) return;
+		this.scrollBox.notifyChildrenResized(changes);
+		this.scheduleRender();
+	}
+
+	private updateMessage(message: ChatMessage, update: () => void): void {
+		const width = this.scrollBox.getComputedWidth();
+		const previousHeight = message.getEstimatedHeight(width);
+		const top = message.getComputedTop();
 		update();
-		const afterHeight = message.getEstimatedHeight(width);
-		this.scrollBox.notifyContentChanged(Math.max(0, afterHeight - beforeHeight), Math.max(0, beforeHeight - afterHeight));
+		const nextHeight = message.getEstimatedHeight(width);
+		this.scrollBox.notifyChildrenResized([{ top, previousHeight, nextHeight }]);
 		this.scheduleRender();
 	}
 
@@ -326,6 +542,7 @@ export class ChatPager extends SumoNode {
 		const width = this.scrollBox.getComputedWidth();
 		while (this.activeMessages.length > this.maxRenderedMessages) {
 			const archived = this.activeMessages.shift();
+			this.activeMessageSourceIndices.shift();
 			if (!archived) break;
 			removedLines += archived.getEstimatedHeight(width);
 			if (archived.parent === this.scrollBox) this.scrollBox.removeChild(archived);
@@ -334,6 +551,7 @@ export class ChatPager extends SumoNode {
 			archivedAny = true;
 		}
 
+		this.pruneInactiveActivityState();
 		if (this.getArchivedMessageCount() === 0) return { addedLines, removedLines };
 		const placeholderText = this.placeholderText();
 		if (!this.placeholder) {

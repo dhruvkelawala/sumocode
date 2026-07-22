@@ -1,4 +1,6 @@
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
+import { mergeActivitySnapshot, safeValuePreview, sameActivity, type ActivitySnapshot } from "../../activity/domain.js";
+import { projectPiToolActivity } from "../../activity/pi-projector.js";
 import { measureMaybe, type ResumeProfiler, type ResumeProfileMetadata } from "../runtime/resume-profiler.js";
 import type { ChatPagerReplaceStats } from "../widgets/chat-pager.js";
 import {
@@ -27,9 +29,11 @@ export interface TranscriptControllerLiveStateSnapshot {
 export interface TranscriptControllerChatSink {
 	replaceViewModels(messages: readonly ChatMessageViewModel[]): ChatPagerReplaceStats;
 	/** Append one new message to the end of the pager without touching scroll/read state. */
-	addViewModel(message: ChatMessageViewModel): unknown;
+	addViewModel(message: ChatMessageViewModel, sourceIndex?: number): unknown;
+	/** Replace one rendered transcript node in place (scroll/read state preserved). */
+	replaceViewModelAt(index: number, message: ChatMessageViewModel): unknown;
 	/** Replace the pager's current last message in place (scroll/read state preserved). */
-	replaceLastWithViewModel(message: ChatMessageViewModel): unknown;
+	replaceLastWithViewModel(message: ChatMessageViewModel, sourceIndex?: number): unknown;
 }
 
 export interface TranscriptControllerOptions {
@@ -84,7 +88,8 @@ function taskPartialFromEvent(event: unknown): TaskPartialUpdate | undefined {
 	if (!record || record.type !== "tool_execution_update") return undefined;
 	if (record.toolName !== "task") return undefined;
 	if (record.partialResult === undefined) return undefined;
-	const toolCallId = typeof record.toolCallId === "string" ? record.toolCallId : "task";
+	const toolCallId = typeof record.toolCallId === "string" && record.toolCallId.length > 0 ? record.toolCallId : undefined;
+	if (!toolCallId) return undefined;
 	return {
 		toolCallId,
 		toolName: "task",
@@ -97,7 +102,10 @@ function liveToolExecutionFromEvent(event: unknown): LiveToolExecution | undefin
 	const record = asRecord(event);
 	if (!record || (record.type !== "tool_execution_start" && record.type !== "tool_execution_update" && record.type !== "tool_execution_end")) return undefined;
 	const toolName = typeof record.toolName === "string" && record.toolName.length > 0 ? record.toolName : "tool";
-	const toolCallId = typeof record.toolCallId === "string" && record.toolCallId.length > 0 ? record.toolCallId : toolName;
+	// Pi's AgentSessionEvent contract requires toolCallId:string on every tool execution event.
+	// Drop malformed unknown input rather than reintroducing name-only correlation collisions.
+	const toolCallId = typeof record.toolCallId === "string" && record.toolCallId.length > 0 ? record.toolCallId : undefined;
+	if (!toolCallId) return undefined;
 	const isEnd = record.type === "tool_execution_end";
 	const result = isEnd ? record.result : record.partialResult;
 	const resultRecord = asRecord(result);
@@ -110,6 +118,18 @@ function liveToolExecutionFromEvent(event: unknown): LiveToolExecution | undefin
 		isError: record.isError === true,
 		status: isEnd ? (record.isError === true ? "error" : "success") : "running",
 	};
+}
+
+function liveToolActivity(tool: LiveToolExecution): ActivitySnapshot | undefined {
+	return projectPiToolActivity({
+		toolCallId: tool.toolCallId,
+		name: tool.toolName,
+		status: tool.status,
+		arguments: tool.args,
+		content: tool.content,
+		details: tool.details,
+		isError: tool.isError,
+	}, { messageId: "live", blockIndex: 0, requireToolCallId: true });
 }
 
 function liveToolPiMessage(tool: LiveToolExecution): unknown {
@@ -151,30 +171,27 @@ function compactionSummaryMessageFromEvent(event: unknown): unknown | undefined 
 	};
 }
 
-function isToolBlock(block: ChatBlock): block is Extract<ChatBlock, { type: "tool" }> {
-	return block.type === "tool";
+function isActivityBlock(block: ChatBlock): block is Extract<ChatBlock, { type: "activity" }> {
+	return block.type === "activity";
 }
 
 function isDelegationBlock(block: ChatBlock): block is Extract<ChatBlock, { type: "delegation" }> {
 	return block.type === "delegation";
 }
 
-function isFoldableBlock(block: ChatBlock): boolean {
-	return isToolBlock(block) || isDelegationBlock(block);
+type FoldableBlock = Extract<ChatBlock, { type: "activity" | "delegation" }>;
+
+function isFoldableBlock(block: ChatBlock): block is FoldableBlock {
+	return isActivityBlock(block) || isDelegationBlock(block);
 }
 
-function isFoldableOnlyViewModel(message: ChatMessageViewModel): boolean {
-	return message.blocks.length > 0 && message.blocks.every(isFoldableBlock);
+function isImageBlock(block: ChatBlock): block is Extract<ChatBlock, { type: "image" }> {
+	return block.type === "image";
 }
 
 function matchingFoldableIndex(blocks: readonly ChatBlock[], incoming: ChatBlock): number {
-	if (incoming.type === "tool") {
-		const incomingId = incoming.tool.id;
-		if (incomingId) {
-			const byId = blocks.findIndex((block) => block.type === "tool" && block.tool.id === incomingId);
-			if (byId !== -1) return byId;
-		}
-		return blocks.findIndex((block) => block.type === "tool" && block.tool.id === undefined && incoming.tool.id === undefined && block.tool.name === incoming.tool.name && (block.tool.status === "pending" || block.tool.status === "running"));
+	if (incoming.type === "activity") {
+		return blocks.findIndex((block) => block.type === "activity" && sameActivity(block.activity, incoming.activity));
 	}
 
 	if (incoming.type === "delegation") {
@@ -188,21 +205,6 @@ function matchingFoldableIndex(blocks: readonly ChatBlock[], incoming: ChatBlock
 	}
 
 	return -1;
-}
-
-function mergeToolBlock(existing: Extract<ChatBlock, { type: "tool" }>, incoming: Extract<ChatBlock, { type: "tool" }>): ChatBlock {
-	return {
-		type: "tool",
-		tool: {
-			...existing.tool,
-			...incoming.tool,
-			input: incoming.tool.input ?? existing.tool.input,
-			output: incoming.tool.output ?? existing.tool.output,
-			details: incoming.tool.details ?? existing.tool.details,
-			error: incoming.tool.error ?? existing.tool.error,
-			expanded: incoming.tool.expanded ?? existing.tool.expanded,
-		},
-	};
 }
 
 function mergeDelegationBlock(existing: Extract<ChatBlock, { type: "delegation" }>, incoming: Extract<ChatBlock, { type: "delegation" }>): ChatBlock {
@@ -226,7 +228,9 @@ function mergeDelegationBlock(existing: Extract<ChatBlock, { type: "delegation" 
 }
 
 function mergeFoldableBlock(existing: ChatBlock, incoming: ChatBlock): ChatBlock {
-	if (existing.type === "tool" && incoming.type === "tool") return mergeToolBlock(existing, incoming);
+	if (existing.type === "activity" && incoming.type === "activity") {
+		return { type: "activity", activity: mergeActivitySnapshot(existing.activity, incoming.activity) };
+	}
 	if (existing.type === "delegation" && incoming.type === "delegation") return mergeDelegationBlock(existing, incoming);
 	return incoming;
 }
@@ -262,7 +266,7 @@ function foldBlockIntoMessages(messages: readonly ChatMessageViewModel[], incomi
 }
 
 function foldableBlockId(block: ChatBlock): string {
-	if (block.type === "tool") return block.tool.id ?? block.tool.name;
+	if (block.type === "activity") return block.activity.id;
 	if (block.type === "delegation") return block.delegation.id ?? block.delegation.title;
 	return "block";
 }
@@ -279,9 +283,46 @@ function foldBlocksIntoMessages(messages: readonly ChatMessageViewModel[], block
 	return { messages: next, folded: foldedAny };
 }
 
-function foldableBlocksFromCommittedMessage(message: ChatMessageViewModel): ChatBlock[] | undefined {
+function imageBlockKey(block: Extract<ChatBlock, { type: "image" }>): string {
+	return JSON.stringify([block.mime, block.data, block.filename ?? null]);
+}
+
+function foldResultBlocksIntoMessages(
+	messages: readonly ChatMessageViewModel[],
+	blocks: readonly ChatBlock[],
+): { messages: ChatMessageViewModel[]; folded: boolean } {
+	const foldable = blocks.filter(isFoldableBlock);
+	if (foldable.length === 0 || !blocks.every((block) => isFoldableBlock(block) || isImageBlock(block))) {
+		return { messages: [...messages], folded: false };
+	}
+	const targetIndex = findLastMessageIndex(messages, (message) => (
+		message.role === "sumo" && foldable.some((block) => matchingFoldableIndex(message.blocks, block) !== -1)
+	));
+	if (targetIndex === -1) return { messages: [...messages], folded: false };
+	const folded = foldBlocksIntoMessages(messages, foldable, { requireMatch: true });
+	if (!folded.folded) return folded;
+	const images = blocks.filter(isImageBlock);
+	if (images.length === 0) return folded;
+	return {
+		messages: folded.messages.map((message, index) => {
+			if (index !== targetIndex) return message;
+			const existingImageKeys = new Set(message.blocks.filter(isImageBlock).map(imageBlockKey));
+			const uniqueImages = images.filter((image) => {
+				const key = imageBlockKey(image);
+				if (existingImageKeys.has(key)) return false;
+				existingImageKeys.add(key);
+				return true;
+			});
+			return uniqueImages.length > 0 ? { ...message, blocks: [...message.blocks, ...uniqueImages] } : message;
+		}),
+		folded: true,
+	};
+}
+
+function resultBlocksFromCommittedMessage(message: ChatMessageViewModel): ChatBlock[] | undefined {
 	if (message.role !== "system") return undefined;
-	return isFoldableOnlyViewModel(message) ? [...message.blocks] : undefined;
+	const blocks = [...message.blocks];
+	return blocks.some(isFoldableBlock) && blocks.every((block) => isFoldableBlock(block) || isImageBlock(block)) ? blocks : undefined;
 }
 
 function fallbackReplaceStats(transcript: TranscriptViewModel): ChatPagerReplaceStats {
@@ -314,6 +355,7 @@ export class TranscriptController {
 	private draftMessage: unknown | undefined;
 	private readonly taskPartials = new Map<string, TaskPartialUpdate>();
 	private readonly liveTools = new Map<string, LiveToolExecution>();
+	private readonly liveActivities = new Map<string, ActivitySnapshot>();
 	private lastTranscript: TranscriptViewModel = { messages: [] };
 	/**
 	 * Index into `committedMessages` where the in-flight run's messages begin.
@@ -383,7 +425,14 @@ export class TranscriptController {
 		const taskPartial = taskPartialFromEvent(record);
 		if (taskPartial) this.taskPartials.set(taskPartial.toolCallId, taskPartial);
 		const liveTool = liveToolExecutionFromEvent(record);
-		if (liveTool) this.liveTools.set(liveTool.toolCallId, liveTool);
+		if (liveTool?.toolName === "task") this.liveTools.set(liveTool.toolCallId, liveTool);
+		else if (liveTool) {
+			const activity = liveToolActivity(liveTool);
+			if (activity) {
+				const existing = this.liveActivities.get(activity.id);
+				this.liveActivities.set(activity.id, existing ? mergeActivitySnapshot(existing, activity) : activity);
+			}
+		}
 
 		switch (record.type) {
 			case "agent_start":
@@ -438,6 +487,7 @@ export class TranscriptController {
 				this.currentRunStartIndex = undefined;
 				this.draftMessage = undefined;
 				this.liveTools.clear();
+				this.liveActivities.clear();
 				this.taskPartials.clear();
 				break;
 			}
@@ -463,9 +513,9 @@ export class TranscriptController {
 		if (this.draftMessage !== undefined) {
 			const message = this.mapper.messageFromPiMessage(this.draftMessage, messages.length);
 			if (message) {
-				const foldableBlocks = foldableBlocksFromCommittedMessage(message);
-				if (foldableBlocks) {
-					const folded = foldBlocksIntoMessages(messages, foldableBlocks, { requireMatch: true });
+				const resultBlocks = resultBlocksFromCommittedMessage(message);
+				if (resultBlocks) {
+					const folded = foldResultBlocksIntoMessages(messages, resultBlocks);
 					if (folded.folded) messages = folded.messages;
 					else messages.push(message);
 				} else {
@@ -480,6 +530,10 @@ export class TranscriptController {
 			const folded = foldBlocksIntoMessages(messages, blocks, { requireMatch: false });
 			messages = folded.messages;
 		}
+		for (const activity of this.liveActivities.values()) {
+			const folded = foldBlockIntoMessages(messages, { type: "activity", activity }, { requireMatch: false });
+			messages = folded.messages;
+		}
 
 		return { messages };
 	}
@@ -491,7 +545,7 @@ export class TranscriptController {
 	public getLiveStateSnapshot(): TranscriptControllerLiveStateSnapshot {
 		return {
 			draftMessage: this.draftMessage !== undefined,
-			liveTools: this.liveTools.size,
+			liveTools: this.liveTools.size + this.liveActivities.size,
 			taskPartials: this.taskPartials.size,
 			committedCacheMessages: this.committedViewModelCache?.length ?? 0,
 		};
@@ -515,6 +569,7 @@ export class TranscriptController {
 		this.draftMessage = undefined;
 		this.pendingChatOp = undefined;
 		this.liveTools.clear();
+		this.liveActivities.clear();
 		this.taskPartials.clear();
 		this.invalidateCommittedCache();
 	}
@@ -530,9 +585,9 @@ export class TranscriptController {
 		for (const sourceMessage of this.committedMessages) {
 			const message = this.mapper.messageFromPiMessage(sourceMessage, messages.length);
 			if (!message) continue;
-			const foldableBlocks = foldableBlocksFromCommittedMessage(message);
-			if (foldableBlocks) {
-				const folded = foldBlocksIntoMessages(messages, foldableBlocks, { requireMatch: true });
+			const resultBlocks = resultBlocksFromCommittedMessage(message);
+			if (resultBlocks) {
+				const folded = foldResultBlocksIntoMessages(messages, resultBlocks);
 				if (folded.folded) {
 					messages = folded.messages;
 					continue;
@@ -592,23 +647,14 @@ export class TranscriptController {
 	 * rendered id/role/blocks instead, which is cheap (no ANSI rendering) and
 	 * stable for a message whose content truly did not change:
 	 *
-	 *   - same length, only the LAST entry's content differs, everything
-	 *     before is content-identical -> `replaceLastWithViewModel(next[last])`
-	 *     (the common `message_update` streaming-delta case, and the common
-	 *     `message_end` case where the committed message renders the same as
-	 *     the draft it replaced).
-	 *   - next is exactly one longer, and every one of the previous messages
-	 *     is still content-identical at the same index -> optionally
-	 *     replace-last (if the old last message's content also changed) then
-	 *     `addViewModel(next[newLast])` (a fresh message started after the
-	 *     previous one finished).
-	 *   - anything else (an earlier message changed, or the array shrank, or
-	 *     more than one message changed under a length that isn't `+1`) means
-	 *     history was actually rewritten (e.g. agent_end's run-suffix splice
-	 *     changing an already-committed entry's rendered content, or
-	 *     live-tool folding touching a message that isn't the last one) ->
-	 *     fall back to a full `replaceViewModels`, the only operation that can
-	 *     express an arbitrary rewrite.
+	 *   - same length, exactly one entry differs -> update that retained node;
+	 *     the last entry keeps the O(1) `replaceLastWithViewModel` fast path,
+	 *     while a folded non-last Activity uses `replaceViewModelAt`.
+	 *   - next is exactly one longer, with at most one changed shared entry ->
+	 *     apply that targeted update (if any), then append the new message.
+	 *   - array shrinkage, growth by more than one, or multiple changed entries
+	 *     means history was actually rewritten -> fall back to a full
+	 *     `replaceViewModels`, the only operation that can express it safely.
 	 *
 	 * The very first publish (no prior `lastPublishedToChat`) always falls
 	 * back to a full replace too, since there is nothing to diff against yet.
@@ -634,8 +680,17 @@ export class TranscriptController {
 			return;
 		}
 		for (const operation of operations) {
-			if (operation.kind === "replace-last") chat.replaceLastWithViewModel(operation.message);
-			else chat.addViewModel(operation.message);
+			const applied = operation.kind === "replace-last"
+				? chat.replaceLastWithViewModel(operation.message, operation.index)
+				: operation.kind === "replace"
+					? chat.replaceViewModelAt(operation.index, operation.message)
+					: chat.addViewModel(operation.message, operation.index);
+			if (applied === false) {
+				chat.replaceViewModels(next);
+				this.lastPublishedToChat = next;
+				this.options.scheduleRender?.();
+				return;
+			}
 		}
 		this.lastPublishedToChat = next;
 		if (operations.length > 0) this.options.scheduleRender?.();
@@ -643,33 +698,22 @@ export class TranscriptController {
 }
 
 export type ChatDiffOperation =
-	| { readonly kind: "replace-last"; readonly message: ChatMessageViewModel }
-	| { readonly kind: "append"; readonly message: ChatMessageViewModel };
+	| { readonly kind: "replace"; readonly index: number; readonly message: ChatMessageViewModel }
+	| { readonly kind: "replace-last"; readonly index: number; readonly message: ChatMessageViewModel }
+	| { readonly kind: "append"; readonly index: number; readonly message: ChatMessageViewModel };
 
 function planHintedIncrementalChatDiff(
 	previous: readonly ChatMessageViewModel[],
 	next: readonly ChatMessageViewModel[],
 ): ChatDiffOperation[] | undefined {
-	const lengthDelta = next.length - previous.length;
-	if (lengthDelta === 0) {
-		if (next.length === 0) return [];
-		const last = next[next.length - 1]!;
-		if (messageContentKey(last) === messageContentKey(previous[previous.length - 1])) return [];
-		return [{ kind: "replace-last", message: last }];
-	}
-
-	if (lengthDelta === 1) {
-		const operations: ChatDiffOperation[] = [];
-		const previousLast = previous[previous.length - 1];
-		const stillPreviousLast = previousLast === undefined ? undefined : next[previous.length - 1];
-		if (previousLast !== undefined && messageContentKey(stillPreviousLast) !== messageContentKey(previousLast)) {
-			operations.push({ kind: "replace-last", message: stillPreviousLast! });
-		}
-		operations.push({ kind: "append", message: next[next.length - 1]! });
-		return operations;
-	}
-
-	return undefined;
+	if (next.length !== previous.length) return undefined;
+	if (next.length === 0) return [];
+	const last = next[next.length - 1]!;
+	// A changed last boundary is the common streaming-delta case and is safe to
+	// plan in O(1). If it is unchanged, fall back to the full content diff: a
+	// tool result may have folded into a non-last assistant message.
+	if (messageContentKey(last) === messageContentKey(previous[previous.length - 1])) return undefined;
+	return [{ kind: "replace-last", index: next.length - 1, message: last }];
 }
 
 /**
@@ -682,36 +726,24 @@ export function planChatDiff(
 	previous: readonly ChatMessageViewModel[],
 	next: readonly ChatMessageViewModel[],
 ): ChatDiffOperation[] | undefined {
-	if (next.length === previous.length) {
-		if (next.length === 0) return [];
-		if (!sameContentExceptLast(previous, next)) return undefined;
-		const last = next[next.length - 1]!;
-		if (messageContentKey(last) === messageContentKey(previous[previous.length - 1])) return [];
-		return [{ kind: "replace-last", message: last }];
+	if (next.length !== previous.length && next.length !== previous.length + 1) return undefined;
+	const sharedLength = previous.length;
+	let changedIndex: number | undefined;
+	for (let index = 0; index < sharedLength; index += 1) {
+		if (messageContentKey(previous[index]) === messageContentKey(next[index])) continue;
+		if (changedIndex !== undefined) return undefined;
+		changedIndex = index;
 	}
 
-	if (next.length === previous.length + 1) {
-		if (!sameContentExceptLast(previous, next.slice(0, previous.length))) return undefined;
-		const operations: ChatDiffOperation[] = [];
-		const previousLast = previous[previous.length - 1];
-		const stillPreviousLast = previousLast === undefined ? undefined : next[previous.length - 1];
-		if (previousLast !== undefined && messageContentKey(stillPreviousLast) !== messageContentKey(previousLast)) {
-			operations.push({ kind: "replace-last", message: stillPreviousLast! });
-		}
-		operations.push({ kind: "append", message: next[next.length - 1]! });
-		return operations;
+	const operations: ChatDiffOperation[] = [];
+	if (changedIndex !== undefined) {
+		const message = next[changedIndex]!;
+		operations.push(changedIndex === previous.length - 1
+			? { kind: "replace-last", index: changedIndex, message }
+			: { kind: "replace", index: changedIndex, message });
 	}
-
-	return undefined;
-}
-
-/** True when every index except the last renders identically between the two arrays (which must be the same length). */
-function sameContentExceptLast(previous: readonly ChatMessageViewModel[], next: readonly ChatMessageViewModel[]): boolean {
-	if (previous.length !== next.length) return false;
-	for (let index = 0; index < previous.length - 1; index += 1) {
-		if (messageContentKey(previous[index]) !== messageContentKey(next[index])) return false;
-	}
-	return true;
+	if (next.length === previous.length + 1) operations.push({ kind: "append", index: next.length - 1, message: next[next.length - 1]! });
+	return operations;
 }
 
 /**
@@ -725,11 +757,31 @@ function sameContentExceptLast(previous: readonly ChatMessageViewModel[], next: 
  * unchanged even if the committed-message remap (see `diffAndApplyToChat`'s doc
  * comment) gave them a new object identity.
  */
+function stringifyContentKey(value: unknown): string {
+	const seen = new WeakSet<object>();
+	try {
+		return JSON.stringify(value, (_key, current: unknown) => {
+			if (typeof current === "bigint") return `${current.toString()}n`;
+			if (typeof current !== "object" || current === null) return current;
+			if (seen.has(current)) return "[Circular]";
+			seen.add(current);
+			return current;
+		}) ?? "";
+	} catch {
+		return safeValuePreview(value, {
+			maxChars: 100_000,
+			maxDepth: 20,
+			maxEntries: 10_000,
+			maxStringChars: 100_000,
+		});
+	}
+}
+
 function messageContentKey(message: ChatMessageViewModel | undefined): string {
 	if (!message) return "";
 	const cached = messageContentKeyCache.get(message);
 	if (cached !== undefined) return cached;
-	const key = JSON.stringify([message.id, message.role, message.timestamp?.getTime() ?? null, message.blocks]);
+	const key = stringifyContentKey([message.id, message.role, message.timestamp?.getTime() ?? null, message.blocks]);
 	messageContentKeyCache.set(message, key);
 	messageContentKeyCacheMisses += 1;
 	return key;

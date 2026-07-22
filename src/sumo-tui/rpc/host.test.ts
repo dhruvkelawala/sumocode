@@ -649,17 +649,15 @@ describe("createThinkingCycleHandler (app.thinking.cycle -- one of the two exact
 });
 
 describe("createToolsExpandToggleHandler (app.tools.expand)", () => {
-	it("flips expansion state on each call, starting from collapsed", () => {
-		const setToolExpansion = vi.fn();
+	it("delegates every toggle to the presentation-owned pager state", () => {
+		const toggleActivityExpansion = vi.fn();
 		const requestRender = vi.fn();
-		const handle = createToolsExpandToggleHandler({ setToolExpansion, requestRender });
+		const handle = createToolsExpandToggleHandler({ toggleActivityExpansion, requestRender });
 
 		handle();
-		expect(setToolExpansion).toHaveBeenNthCalledWith(1, true);
 		handle();
-		expect(setToolExpansion).toHaveBeenNthCalledWith(2, false);
 		handle();
-		expect(setToolExpansion).toHaveBeenNthCalledWith(3, true);
+		expect(toggleActivityExpansion).toHaveBeenCalledTimes(3);
 		expect(requestRender).toHaveBeenCalledTimes(3);
 	});
 });
@@ -796,6 +794,7 @@ describe("createLazyChatSink (B9 host wiring)", () => {
 		expect(stats).toEqual({ sourceMessages: 1, acceptedMessages: 1, renderedMessages: 1, archivedMessages: 0 });
 		// Must not throw even with no live pager to forward to.
 		expect(() => sink.addViewModel(message)).not.toThrow();
+		expect(() => sink.replaceViewModelAt(0, message)).not.toThrow();
 		expect(() => sink.replaceLastWithViewModel(message)).not.toThrow();
 	});
 
@@ -811,16 +810,19 @@ describe("createLazyChatSink (B9 host wiring)", () => {
 		const pager = {
 			replaceViewModels: vi.fn(() => ({ sourceMessages: 1, acceptedMessages: 1, renderedMessages: 1, archivedMessages: 0 })),
 			addViewModel: vi.fn(),
+			replaceViewModelAt: vi.fn(),
 			replaceLastWithViewModel: vi.fn(),
 		};
 		const runtime = { getChatSink: () => pager };
 		const sink = createLazyChatSink(() => runtime);
 
 		sink.addViewModel(message);
+		sink.replaceViewModelAt(0, message);
 		sink.replaceLastWithViewModel(message);
 		sink.replaceViewModels([message]);
 
 		expect(pager.addViewModel).toHaveBeenCalledWith(message);
+		expect(pager.replaceViewModelAt).toHaveBeenCalledWith(0, message);
 		expect(pager.replaceLastWithViewModel).toHaveBeenCalledWith(message);
 		expect(pager.replaceViewModels).toHaveBeenCalledWith([message]);
 	});
@@ -839,6 +841,7 @@ describe("createLazyChatSink (B9 host wiring)", () => {
 			getChatSink: () => ({
 				addViewModel,
 				replaceViewModels: vi.fn(() => ({ sourceMessages: 0, acceptedMessages: 0, renderedMessages: 0, archivedMessages: 0 })),
+				replaceViewModelAt: vi.fn(),
 				replaceLastWithViewModel: vi.fn(),
 			}),
 		};

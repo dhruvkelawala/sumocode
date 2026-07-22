@@ -287,7 +287,35 @@ describe("structured transcript view model", () => {
 		expect(message?.role).toBe("sumo");
 		expect(message?.blocks).toEqual([
 			{ type: "markdown", text: "I will run the tests." },
-			{ type: "tool", tool: { id: "tc1", name: "bash", status: "pending", input: { command: "pnpm test" }, output: undefined, details: undefined, error: undefined, expanded: true } },
+			{
+				type: "activity",
+				activity: {
+					id: "tc1",
+					kind: "tool",
+					title: "bash",
+					status: "queued",
+					invocation: { command: "pnpm test" },
+					subject: "pnpm test",
+					body: { kind: "terminal", command: "pnpm test", text: "" },
+				},
+			},
+		]);
+	});
+
+	it("uses deterministic message-and-block fallback IDs for historical tools", () => {
+		const message = chatMessageViewModelFromPiMessage({
+			id: "historical-tools",
+			role: "assistant",
+			content: [
+				{ type: "toolCall", name: "read", arguments: { path: "a.ts" } },
+				{ type: "toolCall", name: "read", arguments: { path: "b.ts" } },
+			],
+		});
+		const activities = message?.blocks.filter((block) => block.type === "activity") ?? [];
+
+		expect(activities.map((block) => block.activity.id)).toEqual([
+			"pi-tool:historical-tools:0",
+			"pi-tool:historical-tools:1",
 		]);
 	});
 
@@ -303,7 +331,7 @@ describe("structured transcript view model", () => {
 		expect(message).toMatchObject({
 			id: "tc1",
 			role: "system",
-			blocks: [{ type: "tool", tool: { id: "tc1", name: "bash", status: "success", output: "passed" } }],
+			blocks: [{ type: "activity", activity: { id: "tc1", title: "bash", status: "succeeded", outputTail: "passed", body: { kind: "terminal", text: "passed" } } }],
 		});
 	});
 
@@ -345,7 +373,7 @@ describe("structured transcript view model", () => {
 			],
 			isError: false,
 		});
-		expect(message?.blocks.some((block) => block.type === "tool")).toBe(true);
+		expect(message?.blocks.some((block) => block.type === "activity")).toBe(true);
 		expect(message?.blocks).toContainEqual({ type: "image", data: "iVBORw0KGgo=", mime: "image/png", filename: "shot.png" });
 	});
 
@@ -470,7 +498,7 @@ describe("structured transcript view model", () => {
 
 		expect(transcript.messages).toHaveLength(2);
 		expect(transcript.messages[0]?.blocks).toEqual([{ type: "markdown", text: "visible" }]);
-		expect(transcript.messages[1]?.blocks[0]).toMatchObject({ type: "tool", tool: { name: "bash", status: "success", output: "ok" } });
+		expect(transcript.messages[1]?.blocks[0]).toMatchObject({ type: "activity", activity: { title: "bash", status: "succeeded", outputTail: "ok" } });
 	});
 
 	it("can flatten structured blocks for the legacy ChatPager bridge", () => {

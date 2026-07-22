@@ -262,6 +262,10 @@ export class RpcShellAdapter {
 		this.chat.setToolExpansion(expanded);
 	}
 
+	public toggleActivityExpansion(): boolean {
+		return this.chat.toggleActivityExpansion();
+	}
+
 	public render(): void {
 		this.renderer.render();
 	}

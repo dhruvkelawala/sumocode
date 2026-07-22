@@ -8,12 +8,20 @@ import { DIRECTION_LTR, FLEX_DIRECTION_COLUMN, loadYoga } from "../layout/yoga.j
 import { CellBuffer } from "../render/buffer.js";
 import { composite } from "../render/compositor.js";
 import { SelectionController } from "../input/selection.js";
+import type { ChatBlock } from "../transcript/view-model.js";
 import { ChatMessage } from "./chat-message.js";
 
 const FIXED_TIME = new Date("2026-04-30T11:42:00.000");
 
 function renderRows(message: ChatMessage, width: number): string[] {
 	return (message as unknown as { renderRows(width: number): string[] }).renderRows(width);
+}
+
+function activityBlock(id: string, path: string, status: "running" | "succeeded" = "succeeded"): ChatBlock {
+	return {
+		type: "activity",
+		activity: { id, kind: "tool", title: "read", status, invocation: { path }, subject: path, body: { kind: "source", text: "file contents" } },
+	};
 }
 
 function setTimestamp(message: ChatMessage, timestamp: Date): void {
@@ -423,18 +431,19 @@ describe("ChatMessage", () => {
 		root.dispose();
 	});
 
-	it("expands every collapsible block kind through the tool expansion bridge", async () => {
+	it("keeps Activity expansion presentation-owned while expanding compatibility blocks", async () => {
 		const yoga = await loadYoga();
 		const root = new SumoNode(yoga.Node.create());
 		const message = ChatMessage.create(yoga, "sumo", "", root, FIXED_TIME, [
-			{ type: "tool", tool: { name: "read", status: "success", input: { path: "src/auth/session.ts" }, expanded: false } },
+			activityBlock("read-1", "src/auth/session.ts"),
 			{ type: "skill", name: "frontend-design", expanded: false, content: "design notes" },
 			{ type: "summary", kind: "branch", label: "[branch]", content: "summary notes", expanded: false },
 		]);
 
 		expect(message.setToolExpansion(true)).toBe(true);
+		expect(message.getActivityExpansion("read-1")).toBe(true);
 		expect(message.toSnapshot().blocks).toMatchObject([
-			{ type: "tool", tool: { expanded: true } },
+			{ type: "activity", activity: { id: "read-1" } },
 			{ type: "skill", expanded: true },
 			{ type: "summary", expanded: true },
 		]);
@@ -451,7 +460,7 @@ describe("ChatMessage", () => {
 				{ type: "markdown" as const, text: "# Title\n**bold** text" },
 				{ type: "thinking" as const, text: "**hidden** thought", hidden: false },
 				{ type: "code" as const, lang: "ts", source: "const x = 1;" },
-				{ type: "tool" as const, tool: { name: "read", status: "success" as const, input: { path: "src/auth/session.ts" }, expanded: false } },
+				activityBlock("fixture-read", "src/auth/session.ts"),
 			];
 		}
 
@@ -573,20 +582,16 @@ describe("ChatMessage", () => {
 			expect(atWidth40Again).toEqual(atWidth40);
 		});
 
-		it("setToolExpansion invalidates only the affected message", async () => {
+		it("setActivityExpansion invalidates only the affected message", async () => {
 			const yoga = await loadYoga();
 			const root = new SumoNode(yoga.Node.create());
-			const affected = ChatMessage.create(yoga, "sumo", "", root, FIXED_TIME, [
-				{ type: "tool", tool: { name: "read", status: "success", input: { path: "a.ts" }, expanded: false } },
-			]);
-			const untouched = ChatMessage.create(yoga, "sumo", "", root, FIXED_TIME, [
-				{ type: "tool", tool: { name: "read", status: "success", input: { path: "b.ts" }, expanded: false } },
-			]);
+			const affected = ChatMessage.create(yoga, "sumo", "", root, FIXED_TIME, [activityBlock("read-a", "a.ts")]);
+			const untouched = ChatMessage.create(yoga, "sumo", "", root, FIXED_TIME, [activityBlock("read-b", "b.ts")]);
 
 			const affectedBefore = renderRows(affected, 40);
 			const untouchedBefore = renderRows(untouched, 40);
 
-			expect(affected.setToolExpansion(true)).toBe(true);
+			expect(affected.setActivityExpansion("read-a", false)).toBe(true);
 
 			const affectedAfter = renderRows(affected, 40);
 			const untouchedAfter = renderRows(untouched, 40);

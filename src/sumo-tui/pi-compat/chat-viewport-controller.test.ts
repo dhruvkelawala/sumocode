@@ -267,9 +267,21 @@ describe("ChatViewportController", () => {
 		const messages = chat.getRenderedMessages().map((message) => message.toSnapshot());
 		expect(messages).toHaveLength(1);
 		expect(messages[0]?.role).toBe("sumo");
-		expect(messages[0]?.blocks).toEqual([
+		expect(messages[0]?.blocks).toMatchObject([
 			{ type: "markdown", text: "Reading." },
-			{ type: "tool", tool: { id: "tc1", name: "read", status: "success", input: { path: "src/auth/session.ts" }, output: "file contents", details: undefined, error: undefined, expanded: true } },
+			{
+				type: "activity",
+				activity: {
+					id: "tc1",
+					kind: "tool",
+					title: "read",
+					status: "succeeded",
+					invocation: { path: "src/auth/session.ts" },
+					subject: "src/auth/session.ts",
+					outputTail: "file contents",
+					body: { kind: "source", text: "file contents", totalLines: 1 },
+				},
+			},
 		]);
 		expect(runtime.noteUserMessage).not.toHaveBeenCalled();
 		root.dispose();
@@ -286,11 +298,11 @@ describe("ChatViewportController", () => {
 			args: { path: "a.ts" },
 		});
 
-		let toolBlocks = (chat.getRenderedMessages()[0]?.toSnapshot().blocks ?? []).filter((block) => block.type === "tool");
-		expect(toolBlocks).toHaveLength(1);
-		expect(toolBlocks?.[0]).toMatchObject({
-			type: "tool",
-			tool: { id: "t1", name: "read", status: "running", input: { path: "a.ts" }, output: undefined },
+		let activityBlocks = (chat.getRenderedMessages()[0]?.toSnapshot().blocks ?? []).filter((block) => block.type === "activity");
+		expect(activityBlocks).toHaveLength(1);
+		expect(activityBlocks?.[0]).toMatchObject({
+			type: "activity",
+			activity: { id: "t1", title: "read", status: "running", invocation: { path: "a.ts" } },
 		});
 
 		controller.handleAgentEvent({
@@ -301,12 +313,93 @@ describe("ChatViewportController", () => {
 			result: { content: [{ type: "text", text: "ok" }] },
 		});
 
-		toolBlocks = (chat.getRenderedMessages()[0]?.toSnapshot().blocks ?? []).filter((block) => block.type === "tool");
-		expect(toolBlocks).toHaveLength(1);
-		expect(toolBlocks?.[0]).toEqual({
-			type: "tool",
-			tool: { id: "t1", name: "read", status: "success", input: { path: "a.ts" }, output: "ok", details: undefined, error: undefined, expanded: true },
+		activityBlocks = (chat.getRenderedMessages()[0]?.toSnapshot().blocks ?? []).filter((block) => block.type === "activity");
+		expect(activityBlocks).toHaveLength(1);
+		expect(activityBlocks?.[0]).toMatchObject({
+			type: "activity",
+			activity: {
+				id: "t1",
+				kind: "tool",
+				title: "read",
+				status: "succeeded",
+				invocation: { path: "a.ts" },
+				subject: "a.ts",
+				outputTail: "ok",
+				body: { kind: "source", text: "ok", totalLines: 1 },
+			},
 		});
+		root.dispose();
+	});
+
+	it("target-updates the active assistant when a non-last Activity settles", async () => {
+		const { root, chat, controller } = await makeController();
+		const call = { type: "toolCall", id: "t1", name: "read", arguments: { path: "a.ts" } };
+		controller.handleAgentEvent({ type: "message_start", message: { id: "assistant-1", role: "assistant", content: [call] } });
+		controller.handleAgentEvent({ type: "message_end", message: { id: "assistant-1", role: "assistant", content: [call] } });
+		controller.handleAgentEvent({ type: "compaction_end", result: { summary: "keep this summary", tokensBefore: 1000 } });
+
+		controller.handleAgentEvent({
+			type: "tool_execution_end",
+			toolName: "read",
+			toolCallId: "t1",
+			args: { path: "a.ts" },
+			result: { content: [{ type: "text", text: "alpha" }] },
+			isError: false,
+		});
+
+		const messages = chat.getRenderedMessages().map((message) => message.toSnapshot());
+		expect(messages).toHaveLength(2);
+		expect(messages[0]?.blocks?.[0]).toMatchObject({ type: "activity", activity: { id: "t1", status: "succeeded", outputTail: "alpha" } });
+		expect(messages[1]?.blocks?.[0]).toMatchObject({ type: "summary", content: "keep this summary" });
+		root.dispose();
+	});
+
+	it("keeps tool-call correlation across a mid-run user follow-up", async () => {
+		const { root, chat, controller } = await makeController();
+		const call = { type: "toolCall", id: "follow-up-read", name: "read", arguments: { path: "a.ts" } };
+		controller.handleAgentEvent({ type: "message_start", message: { id: "assistant-follow-up", role: "assistant", content: [call] } });
+		controller.handleAgentEvent({ type: "message_start", message: { id: "user-follow-up", role: "user", content: "also inspect tests" } });
+
+		controller.handleAgentEvent({
+			type: "tool_execution_end",
+			toolName: "read",
+			toolCallId: "follow-up-read",
+			args: { path: "a.ts" },
+			result: { content: [{ type: "text", text: "alpha" }] },
+			isError: false,
+		});
+
+		const messages = chat.getRenderedMessages().map((message) => message.toSnapshot());
+		expect(messages).toHaveLength(2);
+		expect(messages[0]?.blocks?.filter((block) => block.type === "activity")).toEqual([
+			expect.objectContaining({ type: "activity", activity: expect.objectContaining({ id: "follow-up-read", status: "succeeded", outputTail: "alpha" }) }),
+		]);
+		expect(messages[1]).toMatchObject({ role: "user", text: "also inspect tests" });
+		root.dispose();
+	});
+
+	it("folds an image-bearing result once beside its Activity", async () => {
+		const { root, chat, controller } = await makeController();
+		const call = { type: "toolCall", id: "image-read", name: "read", arguments: { path: "shot.png" } };
+		controller.handleAgentEvent({ type: "message_start", message: { id: "assistant-image", role: "assistant", content: [call] } });
+		const result = {
+			role: "toolResult",
+			toolCallId: "image-read",
+			toolName: "read",
+			content: [
+				{ type: "text", text: "Read image file [image/png]" },
+				{ type: "image", data: "iVBORw0KGgo=", mimeType: "image/png", filename: "shot.png" },
+			],
+		};
+
+		controller.handleAgentEvent({ type: "message_start", message: result });
+		controller.handleAgentEvent({ type: "message_start", message: result });
+
+		const blocks = chat.getRenderedMessages()[0]?.toSnapshot().blocks ?? [];
+		expect(blocks.filter((block) => block.type === "activity")).toHaveLength(1);
+		expect(blocks.filter((block) => block.type === "image")).toEqual([
+			{ type: "image", data: "iVBORw0KGgo=", mime: "image/png", filename: "shot.png" },
+		]);
 		root.dispose();
 	});
 
@@ -503,7 +596,7 @@ describe("ChatViewportController", () => {
 
 		const message = chat.getRenderedMessages()[0]?.toSnapshot();
 		expect(message?.role).toBe("sumo");
-		expect(message?.blocks?.[0]).toMatchObject({ type: "tool", tool: { id: "tc1", name: "bash", status: "pending" } });
+		expect(message?.blocks?.[0]).toMatchObject({ type: "activity", activity: { id: "tc1", title: "bash", status: "queued" } });
 		root.dispose();
 	});
 
@@ -553,7 +646,11 @@ describe("ChatViewportController", () => {
 			id: "s1",
 			role: "sumo",
 			displayName: "SUMO",
-			blocks: [{ type: "tool", tool: { name: "read", status: "success", input: { path: "src/auth/session.ts" } } }],
+			blocks: [
+				{ type: "activity", activity: { id: "read-1", kind: "tool", title: "read", status: "succeeded", invocation: { path: "src/auth/session.ts" }, subject: "src/auth/session.ts", body: { kind: "source", text: "ok" } } },
+				{ type: "skill", name: "tdd", expanded: false, content: "skill body" },
+				{ type: "summary", kind: "branch", label: "[branch]", content: "summary body", expanded: false },
+			],
 		});
 		const originalSetToolsExpanded = vi.fn();
 		const host = {
@@ -575,7 +672,12 @@ describe("ChatViewportController", () => {
 		host.setToolsExpanded(true);
 
 		expect(originalSetToolsExpanded).toHaveBeenCalledWith(true);
-		expect(chat.getRenderedMessages()[0]?.toSnapshot().blocks?.[0]).toMatchObject({ type: "tool", tool: { expanded: true } });
+		expect(chat.getActivityExpansion("read-1")).toBe(true);
+		expect(chat.getRenderedMessages()[0]?.toSnapshot().blocks).toMatchObject([
+			{ type: "activity", activity: { id: "read-1" } },
+			{ type: "skill", expanded: true },
+			{ type: "summary", expanded: true },
+		]);
 		cleanup?.();
 		root.dispose();
 	});

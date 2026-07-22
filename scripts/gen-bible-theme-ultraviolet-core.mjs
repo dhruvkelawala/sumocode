@@ -167,7 +167,7 @@ function buildChatRows(kind) {
 			"",
 			...frameMessage("SUMO", [
 				textRow("Reading the auth flow."),
-				...toolLedgerRows({ name: "read", target: "src/auth/session.ts", output: [{ html: `<span class="fg-tool-muted">preview collapsed</span>`, len: 17 }] }),
+				...toolLedgerRows({ name: "read", target: "src/auth/session.ts", output: [{ html: `<span class="fg-tool-muted">no output captured</span>`, len: 18 }] }),
 				...toolLedgerRows({ name: "edit", target: "src/auth/session.ts", output: [{ html: `<span class="fg-idle">+14</span> <span class="fg-approve">-6</span> <span class="fg-tool-muted">session flow updated</span>`, len: 28 }] }),
 				textRow("Done. Updated 14 lines, deleted 6 stale helpers."),
 			]),

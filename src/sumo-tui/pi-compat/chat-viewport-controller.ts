@@ -1,4 +1,5 @@
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { mergeActivitySnapshot, sameActivity } from "../../activity/domain.js";
 import type { MouseEvent } from "../input/mouse.js";
 import type { KeyEvent } from "../input/key-router.js";
 import { logDiagnostic } from "../runtime/diagnostics.js";
@@ -124,23 +125,16 @@ function addViewModel(chat: ChatPager, message: ChatMessageViewModel): void {
 }
 
 function isFoldableBlock(block: ChatBlock): boolean {
-	return block.type === "tool" || block.type === "delegation";
+	return block.type === "activity" || block.type === "delegation";
 }
 
-function isFoldableOnlyViewModel(message: ChatMessageViewModel): boolean {
-	return message.blocks.length > 0 && message.blocks.every(isFoldableBlock);
+function isFoldableResultViewModel(message: ChatMessageViewModel): boolean {
+	return message.blocks.some(isFoldableBlock)
+		&& message.blocks.every((block) => isFoldableBlock(block) || block.type === "image");
 }
 
-function mergeToolBlock(existing: Extract<ChatBlock, { type: "tool" }>, incoming: Extract<ChatBlock, { type: "tool" }>): ChatBlock {
-	return {
-		type: "tool",
-		tool: {
-			...existing.tool,
-			...incoming.tool,
-			input: incoming.tool.input ?? existing.tool.input,
-			details: incoming.tool.details ?? existing.tool.details,
-		},
-	};
+function imageBlockKey(block: Extract<ChatBlock, { type: "image" }>): string {
+	return JSON.stringify([block.mime, block.data, block.filename ?? null]);
 }
 
 function mergeDelegationBlock(existing: Extract<ChatBlock, { type: "delegation" }>, incoming: Extract<ChatBlock, { type: "delegation" }>): ChatBlock {
@@ -164,21 +158,16 @@ function mergeDelegationBlock(existing: Extract<ChatBlock, { type: "delegation" 
 }
 
 function mergeFoldableBlock(existing: ChatBlock, incoming: ChatBlock): ChatBlock {
-	if (existing.type === "tool" && incoming.type === "tool") return mergeToolBlock(existing, incoming);
+	if (existing.type === "activity" && incoming.type === "activity") {
+		return { type: "activity", activity: mergeActivitySnapshot(existing.activity, incoming.activity) };
+	}
 	if (existing.type === "delegation" && incoming.type === "delegation") return mergeDelegationBlock(existing, incoming);
 	return incoming;
 }
 
 function upsertFoldableBlock(blocks: readonly ChatBlock[], incoming: ChatBlock): ChatBlock[] {
-	if (incoming.type === "tool") {
-		const incomingId = incoming.tool.id;
-		const byId = incomingId
-			? blocks.findIndex((block) => block.type === "tool" && block.tool.id === incomingId)
-			: -1;
-		const byName = byId === -1
-			? blocks.findIndex((block) => block.type === "tool" && block.tool.id === undefined && block.tool.name === incoming.tool.name && (block.tool.status === "pending" || block.tool.status === "running"))
-			: -1;
-		const index = byId !== -1 ? byId : byName;
+	if (incoming.type === "activity") {
+		const index = blocks.findIndex((block) => block.type === "activity" && sameActivity(block.activity, incoming.activity));
 		if (index === -1) return [...blocks, incoming];
 		return blocks.map((block, blockIndex) => blockIndex === index ? mergeFoldableBlock(block, incoming) : block);
 	}
@@ -196,6 +185,10 @@ function upsertFoldableBlock(blocks: readonly ChatBlock[], incoming: ChatBlock):
 		return blocks.map((block, blockIndex) => blockIndex === index ? mergeFoldableBlock(block, incoming) : block);
 	}
 
+	if (incoming.type === "image") {
+		const key = imageBlockKey(incoming);
+		if (blocks.some((block) => block.type === "image" && imageBlockKey(block) === key)) return [...blocks];
+	}
 	return [...blocks, incoming];
 }
 
@@ -325,6 +318,7 @@ export class ChatViewportController {
 	private lastAssistantText = "";
 	private liveAssistant: ChatMessageViewModel | undefined;
 	private liveAssistantBlocks: ChatBlock[] = [];
+	private liveAssistantIndex: number | undefined;
 	private lastChatTop = 0;
 	private lastChatWidth = 1;
 	private lastChatHeight = 1;
@@ -426,6 +420,7 @@ export class ChatViewportController {
 		this.lastAssistantText = "";
 		this.liveAssistant = undefined;
 		this.liveAssistantBlocks = [];
+		this.liveAssistantIndex = undefined;
 		this.inputRouter.clearPendingMouseInput();
 		this.runtime.setEmptyChatQuoteState({ active: false, userMessageCount: 0 });
 	}
@@ -484,6 +479,7 @@ export class ChatViewportController {
 		this.lastAssistantText = "";
 		this.liveAssistant = undefined;
 		this.liveAssistantBlocks = [];
+		this.liveAssistantIndex = undefined;
 		this.inputRouter.clearPendingMouseInput();
 		// Resume uses bulk transcript replacement instead of `clear()` + per-message
 		// replay; `replaceViewModels()` resets the chat-side scroll/banner state.
@@ -507,6 +503,7 @@ export class ChatViewportController {
 	}
 
 	private handleToolExecutionEvent(record: Record<string, unknown>): void {
+		if (typeof record.toolCallId !== "string" || record.toolCallId.length === 0) return;
 		this.markRenderDirty();
 		const isEnd = record.type === "tool_execution_end";
 		const toolName = typeof record.toolName === "string" ? record.toolName : "tool";
@@ -537,7 +534,7 @@ export class ChatViewportController {
 					}],
 				},
 		);
-		if (!viewModel || !isFoldableOnlyViewModel(viewModel) || !this.liveAssistant) return;
+		if (!viewModel || !isFoldableResultViewModel(viewModel) || !this.liveAssistant) return;
 		this.foldBlocksIntoAssistant(viewModel.blocks);
 		this.runtime.requestRender();
 	}
@@ -546,8 +543,9 @@ export class ChatViewportController {
 		this.markRenderDirty();
 		const role = asRecord(message)?.role;
 		if (role === "user") {
-			this.liveAssistant = undefined;
-			this.liveAssistantBlocks = [];
+			// A steer/follow-up can arrive while a tool launched by the current
+			// assistant is still running. Keep that assistant's source-index target
+			// until the next assistant starts so the result folds into its Activity.
 			this.runtime.noteUserMessage();
 		}
 		if (role === "assistant") {
@@ -556,7 +554,7 @@ export class ChatViewportController {
 		}
 		const viewModel = this.viewModelMapper.messageFromPiMessage(message);
 		if (!viewModel || chatMessageViewModelToPlainText(viewModel).length === 0) return;
-		if (isFoldableOnlyViewModel(viewModel) && this.liveAssistant) {
+		if (isFoldableResultViewModel(viewModel) && this.liveAssistant) {
 			this.foldBlocksIntoAssistant(viewModel.blocks);
 			return;
 		}
@@ -580,7 +578,7 @@ export class ChatViewportController {
 		if (viewModel) {
 			this.liveAssistant = { ...viewModel, role: "sumo", displayName: "SUMO" };
 			this.liveAssistantBlocks = [...viewModel.blocks];
-			this.chat.replaceLastWithViewModel(this.liveAssistant);
+			this.publishLiveAssistant();
 		} else {
 			this.chat.replaceLast(text);
 			this.liveAssistantBlocks = markdownAndCodeBlocksFromText(text);
@@ -597,7 +595,7 @@ export class ChatViewportController {
 				if (viewModel) {
 					this.liveAssistant = { ...viewModel, role: "sumo", displayName: "SUMO" };
 					this.liveAssistantBlocks = [...viewModel.blocks];
-					this.chat.replaceLastWithViewModel(this.liveAssistant);
+					this.publishLiveAssistant();
 				} else {
 					this.chat.replaceLast(text);
 					this.liveAssistantBlocks = markdownAndCodeBlocksFromText(text);
@@ -615,6 +613,7 @@ export class ChatViewportController {
 			: { id: "live-assistant", role: "sumo", displayName: "SUMO", blocks: [{ type: "markdown", text: "" }] };
 		this.liveAssistantBlocks = viewModel ? [...viewModel.blocks] : [];
 		this.lastAssistantText = chatMessageViewModelToPlainText({ ...this.liveAssistant, blocks: this.liveAssistantBlocks });
+		this.liveAssistantIndex = this.chat.getMessageCount();
 		this.chat.addViewModel({ ...this.liveAssistant, blocks: this.liveAssistantBlocks.length > 0 ? this.liveAssistantBlocks : [{ type: "markdown", text: "" }] });
 	}
 
@@ -643,8 +642,8 @@ export class ChatViewportController {
 	}
 
 	private publishLiveAssistant(): void {
-		if (!this.liveAssistant) return;
-		this.chat.replaceLastWithViewModel({
+		if (!this.liveAssistant || this.liveAssistantIndex === undefined) return;
+		this.chat.replaceViewModelAt(this.liveAssistantIndex, {
 			...this.liveAssistant,
 			blocks: this.liveAssistantBlocks.length > 0 ? this.liveAssistantBlocks : [{ type: "markdown", text: "" }],
 		});

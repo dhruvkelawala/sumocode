@@ -33,8 +33,8 @@ const FIXTURES = {
 					timestamp: FIXTURE_TIMES.sumoOne,
 					blocks: [
 						{ type: "markdown", text: "Reading the auth flow." },
-						{ type: "tool", tool: { id: "read-session", name: "read", status: "success", input: { path: "src/auth/session.ts" } } },
-						{ type: "tool", tool: { id: "edit-session", name: "edit", status: "success", input: { path: "src/auth/session.ts" }, output: "+14 -6 session flow updated" } },
+						{ type: "activity", activity: { id: "read-session", kind: "tool", title: "read", status: "succeeded", invocation: { path: "src/auth/session.ts" }, subject: "src/auth/session.ts", body: { kind: "source", text: "" } } },
+						{ type: "activity", activity: { id: "edit-session", kind: "tool", title: "edit", status: "succeeded", invocation: { path: "src/auth/session.ts" }, subject: "src/auth/session.ts", outputTail: "+14 -6 session flow updated", body: { kind: "diff", text: "+14 -6 session flow updated" } } },
 						{ type: "markdown", text: "Done. Updated 14 lines, deleted 6 stale helpers." },
 					],
 				},
@@ -52,7 +52,7 @@ const FIXTURES = {
 					timestamp: FIXTURE_TIMES.sumoTwo,
 					blocks: [
 						{ type: "markdown", text: "Running tests now." },
-						{ type: "tool", tool: { id: "bash-test", name: "bash", status: "success", input: { command: "pnpm test src/auth" }, output: "✓ src/auth/session.test.ts (22 tests)\n22 passed in 1.2s", details: { summary: "22 tests, 1.2s" } } },
+						{ type: "activity", activity: { id: "bash-test", kind: "tool", title: "bash", status: "succeeded", invocation: { command: "pnpm test src/auth" }, subject: "pnpm test src/auth", outputTail: "✓ src/auth/session.test.ts (22 tests)\n22 passed in 1.2s", body: { kind: "terminal", command: "pnpm test src/auth", text: "✓ src/auth/session.test.ts (22 tests)\n22 passed in 1.2s" }, result: { summary: "22 tests, 1.2s" } } },
 						{ type: "markdown", text: "All 22 tests pass." },
 					],
 				},
@@ -76,8 +76,8 @@ const FIXTURES = {
 					timestamp: FIXTURE_TIMES.sumoOne,
 					blocks: [
 						{ type: "markdown", text: "Reading the auth flow." },
-						{ type: "tool", tool: { id: "read", name: "read", status: "success", input: { path: "src/auth/session.ts" }, expanded: true } },
-						{ type: "tool", tool: { id: "edit", name: "edit", status: "success", input: { path: "src/auth/session.ts" }, output: "+14 -6 session flow updated", expanded: true } },
+						{ type: "activity", activity: { id: "read", kind: "tool", title: "read", status: "succeeded", invocation: { path: "src/auth/session.ts" }, subject: "src/auth/session.ts", body: { kind: "source", text: "" } } },
+						{ type: "activity", activity: { id: "edit", kind: "tool", title: "edit", status: "succeeded", invocation: { path: "src/auth/session.ts" }, subject: "src/auth/session.ts", outputTail: "+14 -6 session flow updated", body: { kind: "diff", text: "+14 -6 session flow updated" } } },
 						{ type: "markdown", text: "Done. Updated 14 lines, deleted 6 stale helpers." },
 					],
 				},
@@ -95,7 +95,7 @@ const FIXTURES = {
 					timestamp: FIXTURE_TIMES.sumoTwo,
 					blocks: [
 						{ type: "markdown", text: "Running tests now." },
-						{ type: "tool", tool: { id: "bash", name: "bash", status: "success", input: { command: "pnpm test src/auth" }, output: "✓ src/auth/session.test.ts (22 tests)\n22 passed in 1.2s", details: { summary: "22 tests, 1.2s" }, expanded: true } },
+						{ type: "activity", activity: { id: "bash", kind: "tool", title: "bash", status: "succeeded", invocation: { command: "pnpm test src/auth" }, subject: "pnpm test src/auth", outputTail: "✓ src/auth/session.test.ts (22 tests)\n22 passed in 1.2s", body: { kind: "terminal", command: "pnpm test src/auth", text: "✓ src/auth/session.test.ts (22 tests)\n22 passed in 1.2s" }, result: { summary: "22 tests, 1.2s" } } },
 						{ type: "markdown", text: "All 22 tests pass." },
 					],
 				},
@@ -334,6 +334,9 @@ async function renderFixtureScene(scenario, fixture) {
 	const chat = chatPager.ChatPager.create(yoga, chatRoot, { stickyBottom: false });
 	for (const message of transcript.messages) {
 		chat.addViewModel(message);
+	}
+	if (scenario.fixture?.id === "tool-ledger") {
+		for (const id of ["read", "edit", "bash"]) chat.setActivityExpansion(id, true);
 	}
 	chatRoot.width = chatWidth;
 	chatRoot.height = chatHeight;

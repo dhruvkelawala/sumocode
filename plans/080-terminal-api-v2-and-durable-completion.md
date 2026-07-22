@@ -35,6 +35,8 @@ The assumption that one extension instance survives `/new`, `/resume`, and `/for
 
 The remaining final-review findings were accepted and regression-tested: stopping records persist POSIX descendant anchors before TERM so a replacement manager can safely force KILL; delivery claims carry unique tokens through reclaim/send/ack and stable completion IDs suppress duplicate insertion where observable; failed soft Windows tree kills force `/T /F` after re-verification; store metadata/artifact access requires confined canonical regular files under private canonical directories; and deferred acknowledgement reconciliation is exception-contained.
 
+A follow-up automatic-retention finding is rejected for this plan. Legacy recovery pruned settled artifact directories, but Plan 080 makes terminal snapshots durable and the executor contract explicitly forbids deleting files or cleaning artifacts without approval. No safe retention horizon or user-facing cleanup verb is specified, and pending/claimed or later-queryable completion data cannot be silently erased. Retention/GC therefore requires a separately approved policy rather than an implicit recovery-time delete. The separate malformed persisted-Activity finding was accepted: every nested optional field is now strictly deserialized before retained rendering, with malformed data falling back to the historical terminal summary.
+
 ## Decision
 
 Replace the callable `bg_start/bg_status/bg_kill/bg_list` surface with exactly five verbs:

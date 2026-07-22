@@ -42,6 +42,8 @@ export interface SafeValuePreviewOptions {
 	readonly maxStringChars?: number;
 }
 
+const ACTIVITY_KINDS = new Set<ActivityKind>(["tool", "task", "subagent", "terminal"]);
+const ACTIVITY_STATUSES = new Set<ActivityStatus>(["queued", "running", "succeeded", "failed", "cancelled", "lost"]);
 const TERMINAL_STATUS = new Set<ActivityStatus>(["succeeded", "failed", "cancelled", "lost"]);
 const SECRET_KEY_WORDS = new Set([
 	"apikey",
@@ -57,6 +59,124 @@ const SECRET_KEY_WORDS = new Set([
 
 export function isSettledActivityStatus(status: ActivityStatus): boolean {
 	return TERMINAL_STATUS.has(status);
+}
+
+function recordOf(value: unknown): Record<string, unknown> | undefined {
+	return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+}
+
+function optionalString(value: unknown): value is string | undefined {
+	return value === undefined || typeof value === "string";
+}
+
+function optionalFiniteNumber(value: unknown): value is number | undefined {
+	return value === undefined || (typeof value === "number" && Number.isFinite(value));
+}
+
+function parseActivityBody(value: unknown): ActivityBody | undefined {
+	if (value === undefined) return undefined;
+	const body = recordOf(value);
+	if (!body || typeof body.kind !== "string" || typeof body.text !== "string") return undefined;
+	switch (body.kind) {
+		case "text":
+		case "diff":
+			return { kind: body.kind, text: body.text };
+		case "source":
+			if (!optionalFiniteNumber(body.startLine) || !optionalFiniteNumber(body.totalLines)) return undefined;
+			return {
+				kind: "source",
+				text: body.text,
+				...(body.startLine === undefined ? {} : { startLine: body.startLine }),
+				...(body.totalLines === undefined ? {} : { totalLines: body.totalLines }),
+			};
+		case "terminal":
+			if (!optionalString(body.command)) return undefined;
+			return { kind: "terminal", text: body.text, ...(body.command === undefined ? {} : { command: body.command }) };
+		default:
+			return undefined;
+	}
+}
+
+/** Strictly deserialize an ActivitySnapshot from persisted or extension-owned data. */
+export function parseActivitySnapshot(value: unknown, depth = 0): ActivitySnapshot | undefined {
+	if (depth > 8) return undefined;
+	const record = recordOf(value);
+	if (!record || typeof record.id !== "string" || typeof record.title !== "string") return undefined;
+	if (typeof record.kind !== "string" || !ACTIVITY_KINDS.has(record.kind as ActivityKind)) return undefined;
+	if (typeof record.status !== "string" || !ACTIVITY_STATUSES.has(record.status as ActivityStatus)) return undefined;
+	for (const candidate of [record.sourceId, record.subject, record.currentStep, record.outputTail, record.ownerSessionId, record.model, record.thinking]) {
+		if (!optionalString(candidate)) return undefined;
+	}
+	for (const candidate of [record.createdAt, record.updatedAt, record.settledAt]) {
+		if (!optionalFiniteNumber(candidate)) return undefined;
+	}
+	const sourceId = typeof record.sourceId === "string" ? record.sourceId : undefined;
+	const subject = typeof record.subject === "string" ? record.subject : undefined;
+	const currentStep = typeof record.currentStep === "string" ? record.currentStep : undefined;
+	const outputTail = typeof record.outputTail === "string" ? record.outputTail : undefined;
+	const ownerSessionId = typeof record.ownerSessionId === "string" ? record.ownerSessionId : undefined;
+	const model = typeof record.model === "string" ? record.model : undefined;
+	const thinking = typeof record.thinking === "string" ? record.thinking : undefined;
+	const createdAt = typeof record.createdAt === "number" ? record.createdAt : undefined;
+	const updatedAt = typeof record.updatedAt === "number" ? record.updatedAt : undefined;
+	const settledAt = typeof record.settledAt === "number" ? record.settledAt : undefined;
+	const body = parseActivityBody(record.body);
+	if (record.body !== undefined && body === undefined) return undefined;
+	let activeTools: ActivitySnapshot[] | undefined;
+	if (record.activeTools !== undefined) {
+		if (!Array.isArray(record.activeTools) || record.activeTools.length > 256) return undefined;
+		activeTools = [];
+		for (const child of record.activeTools) {
+			const parsed = parseActivitySnapshot(child, depth + 1);
+			if (!parsed) return undefined;
+			activeTools.push(parsed);
+		}
+	}
+	let result: ActivitySnapshot["result"];
+	if (record.result !== undefined) {
+		const resultRecord = recordOf(record.result);
+		if (!resultRecord || !optionalString(resultRecord.summary) || !optionalString(resultRecord.error)) return undefined;
+		result = {
+			...(resultRecord.summary === undefined ? {} : { summary: resultRecord.summary }),
+			...(resultRecord.error === undefined ? {} : { error: resultRecord.error }),
+		};
+	}
+	let metrics: ActivitySnapshot["metrics"];
+	if (record.metrics !== undefined) {
+		const metricRecord = recordOf(record.metrics);
+		if (!metricRecord) return undefined;
+		for (const candidate of [metricRecord.tokensIn, metricRecord.tokensOut, metricRecord.costUsd, metricRecord.turns, metricRecord.elapsedMs]) {
+			if (!optionalFiniteNumber(candidate)) return undefined;
+		}
+		metrics = {
+			...(typeof metricRecord.tokensIn === "number" ? { tokensIn: metricRecord.tokensIn } : {}),
+			...(typeof metricRecord.tokensOut === "number" ? { tokensOut: metricRecord.tokensOut } : {}),
+			...(typeof metricRecord.costUsd === "number" ? { costUsd: metricRecord.costUsd } : {}),
+			...(typeof metricRecord.turns === "number" ? { turns: metricRecord.turns } : {}),
+			...(typeof metricRecord.elapsedMs === "number" ? { elapsedMs: metricRecord.elapsedMs } : {}),
+		};
+	}
+	return {
+		id: record.id,
+		kind: record.kind as ActivityKind,
+		title: record.title,
+		status: record.status as ActivityStatus,
+		...(sourceId === undefined ? {} : { sourceId }),
+		...(record.invocation === undefined ? {} : { invocation: record.invocation }),
+		...(subject === undefined ? {} : { subject }),
+		...(currentStep === undefined ? {} : { currentStep }),
+		...(outputTail === undefined ? {} : { outputTail }),
+		...(body === undefined ? {} : { body }),
+		...(activeTools === undefined ? {} : { activeTools }),
+		...(result === undefined ? {} : { result }),
+		...(ownerSessionId === undefined ? {} : { ownerSessionId }),
+		...(createdAt === undefined ? {} : { createdAt }),
+		...(updatedAt === undefined ? {} : { updatedAt }),
+		...(settledAt === undefined ? {} : { settledAt }),
+		...(model === undefined ? {} : { model }),
+		...(thinking === undefined ? {} : { thinking }),
+		...(metrics === undefined ? {} : { metrics }),
+	};
 }
 
 function skipControlString(text: string, start: number): number {

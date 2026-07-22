@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
 	mergeActivitySnapshot,
+	parseActivitySnapshot,
 	safeValuePreview,
 	sameActivity,
 	sanitizeActivityText,
@@ -89,6 +90,24 @@ describe("Activity domain", () => {
 
 		expect(mergeActivitySnapshot(existing, activity("parent", { kind: "task" })).activeTools).toHaveLength(1);
 		expect(mergeActivitySnapshot(existing, activity("parent", { kind: "task", activeTools: [] })).activeTools).toEqual([]);
+	});
+
+	it("strictly deserializes persisted snapshots and rejects malformed nested fields", () => {
+		const persisted = {
+			id: "term-1",
+			kind: "terminal",
+			title: "tests",
+			status: "succeeded",
+			body: { kind: "terminal", command: "pnpm test", text: "passed" },
+			activeTools: [{ id: "tool-1", kind: "tool", title: "read", status: "succeeded" }],
+			result: { summary: "done" },
+			metrics: { elapsedMs: 25 },
+		};
+		expect(parseActivitySnapshot(persisted)).toEqual(persisted);
+		expect(parseActivitySnapshot({ ...persisted, body: { kind: "terminal", text: {} } })).toBeUndefined();
+		expect(parseActivitySnapshot({ ...persisted, activeTools: [{ ...persisted.activeTools[0], outputTail: [] }] })).toBeUndefined();
+		expect(parseActivitySnapshot({ ...persisted, result: { summary: 42 } })).toBeUndefined();
+		expect(parseActivitySnapshot({ ...persisted, metrics: { elapsedMs: "fast" } })).toBeUndefined();
 	});
 
 	it("renders cyclic and huge values safely while redacting secret-shaped fields", () => {

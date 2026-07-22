@@ -341,6 +341,10 @@ export class TerminalTaskManager {
 		this.claimLeaseMs = normalizePositive(options.claimLeaseMs, DEFAULT_CLAIM_LEASE_MS);
 		this.startingRecoveryGraceMs = normalizePositive(options.startingRecoveryGraceMs, DEFAULT_STARTING_RECOVERY_GRACE_MS);
 		this.onDiagnostic = options.onDiagnostic;
+		// Plan 080 makes completed snapshots durable and explicitly forbids file
+		// deletion/cleanup without human approval. Do not revive the legacy
+		// recovery-time artifact pruning here: retention/GC needs its own approved
+		// policy that cannot erase pending, claimed, or still-queryable results.
 		for (const snapshot of this.store.loadAll()) {
 			this.adopt(snapshot, false);
 			this.recover(snapshot);

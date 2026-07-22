@@ -1,5 +1,5 @@
 import { parseSkillBlock } from "@earendil-works/pi-coding-agent";
-import type { ActivitySnapshot, ActivityStatus } from "../../activity/domain.js";
+import { parseActivitySnapshot, type ActivitySnapshot, type ActivityStatus } from "../../activity/domain.js";
 import { projectPiToolActivity } from "../../activity/pi-projector.js";
 import { renderCompactActivityPill } from "./activity-renderer.js";
 import { expandKey } from "./expand-key.js";
@@ -239,17 +239,8 @@ function subagentResultBlockFromRecord(record: Record<string, unknown>): ChatBlo
 
 function terminalResultBlockFromRecord(record: Record<string, unknown>): ChatBlock {
 	const details = asRecord(record.details);
-	const activity = asRecord(details?.activity);
-	const activityStatus = firstString(activity?.status);
-	if (
-		activity?.kind === "terminal" &&
-		typeof activity.id === "string" &&
-		typeof activity.title === "string" &&
-		activityStatus !== undefined &&
-		["queued", "running", "succeeded", "failed", "cancelled", "lost"].includes(activityStatus)
-	) {
-		return { type: "activity", activity: activity as unknown as ActivitySnapshot };
-	}
+	const activity = parseActivitySnapshot(details?.activity);
+	if (activity?.kind === "terminal") return { type: "activity", activity };
 	// Historical terminal-result messages predate Activity details. Keep their
 	// transcript rendering without treating legacy metadata as active state.
 	const id = firstString(details?.id, record.terminalId) ?? "terminal";

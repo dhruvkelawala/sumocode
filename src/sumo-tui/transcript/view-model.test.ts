@@ -486,6 +486,36 @@ describe("structured transcript view model", () => {
 		expect(message?.blocks).toEqual([{ type: "activity", activity }]);
 	});
 
+	it("falls back safely when persisted terminal Activity details are malformed", () => {
+		const message = chatMessageViewModelFromPiMessage({
+			id: "result-malformed",
+			role: "custom",
+			customType: "terminal-result",
+			display: true,
+			content: "Terminal term-bad completed.",
+			details: {
+				id: "term-bad",
+				title: "malformed",
+				exitCode: 0,
+				activity: {
+					id: "term-bad",
+					kind: "terminal",
+					title: "malformed",
+					status: "succeeded",
+					body: { kind: "terminal", text: {} },
+				},
+			},
+		});
+
+		expect(message?.blocks).toEqual([{
+			type: "summary",
+			kind: "terminal",
+			label: "[terminal] term-bad · malformed · exited (0)",
+			content: "Terminal term-bad completed.",
+			expanded: false,
+		}]);
+	});
+
 	it("labels an unrecognized custom message with its customType", () => {
 		const message = chatMessageViewModelFromPiMessage({ id: "x1", role: "custom", customType: "sumocode-theme-result", display: true, content: "switched to obsidian" });
 

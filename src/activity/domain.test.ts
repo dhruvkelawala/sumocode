@@ -16,6 +16,7 @@ describe("Activity domain", () => {
 		expect(sameActivity(activity("a"), activity("a"))).toBe(true);
 		expect(sameActivity(activity("tool-call-1"), activity("task-1", { kind: "task", sourceId: "tool-call-1" }))).toBe(true);
 		expect(sameActivity(activity("temporary", { sourceId: "call-1" }), activity("canonical", { kind: "task", sourceId: "call-1" }))).toBe(true);
+		expect(sameActivity(activity("spawn-call-1"), activity("subagent:sa-1", { kind: "subagent", sourceId: "spawn-call-1" }))).toBe(true);
 		expect(sameActivity(activity("a", { sourceId: "shared" }), activity("b", { sourceId: "shared" }))).toBe(false);
 		expect(sameActivity(activity("a"), activity("b"))).toBe(false);
 	});
@@ -39,6 +40,19 @@ describe("Activity domain", () => {
 			sourceId: "tool-call-1",
 			outputTail: "tool output",
 			currentStep: "running tests",
+		});
+	});
+
+	it("preserves canonical subagent identity when a spawn tool result reveals it", () => {
+		const tool = activity("spawn-call-1", { title: "subagent_spawn", invocation: { prompt: "Review auth" } });
+		const subagent = activity("subagent:sa-1", { kind: "subagent", title: "review auth", sourceId: "spawn-call-1", subject: "sa-1" });
+
+		expect(mergeActivitySnapshot(tool, subagent)).toMatchObject({
+			id: "subagent:sa-1",
+			kind: "subagent",
+			title: "review auth",
+			sourceId: "spawn-call-1",
+			invocation: { prompt: "Review auth" },
 		});
 	});
 

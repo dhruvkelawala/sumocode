@@ -27,8 +27,11 @@ export interface ActivitySnapshot {
 	readonly model?: string;
 	readonly thinking?: string;
 	readonly metrics?: {
+		/** Producer-reported aggregate tokens when input/output are not separately available. */
+		readonly tokens?: number;
 		readonly tokensIn?: number;
 		readonly tokensOut?: number;
+		readonly contextWindow?: number;
 		readonly costUsd?: number;
 		readonly turns?: number;
 		readonly elapsedMs?: number;
@@ -216,14 +219,14 @@ export function safeValuePreview(value: unknown, options: SafeValuePreviewOption
 	return boundedText(sanitizeActivityText(serialized ?? "[undefined]"), maxChars);
 }
 
-function isToolTaskTransition(existing: ActivitySnapshot, incoming: ActivitySnapshot): boolean {
-	return (existing.kind === "tool" && incoming.kind === "task")
-		|| (existing.kind === "task" && incoming.kind === "tool");
+function isToolCanonicalTransition(existing: ActivitySnapshot, incoming: ActivitySnapshot): boolean {
+	return (existing.kind === "tool" && incoming.kind !== "tool")
+		|| (existing.kind !== "tool" && incoming.kind === "tool");
 }
 
 export function sameActivity(existing: ActivitySnapshot, incoming: ActivitySnapshot): boolean {
 	if (existing.id === incoming.id) return true;
-	if (!isToolTaskTransition(existing, incoming)) return false;
+	if (!isToolCanonicalTransition(existing, incoming)) return false;
 	return existing.sourceId === incoming.id
 		|| incoming.sourceId === existing.id
 		|| (existing.sourceId !== undefined && existing.sourceId === incoming.sourceId);
@@ -233,7 +236,7 @@ function canonicalIdentity(
 	existing: ActivitySnapshot,
 	incoming: ActivitySnapshot,
 ): Pick<ActivitySnapshot, "id" | "kind" | "title" | "sourceId"> {
-	if (!isToolTaskTransition(existing, incoming) || !sameActivity(existing, incoming)) {
+	if (!isToolCanonicalTransition(existing, incoming) || !sameActivity(existing, incoming)) {
 		const sourceId = incoming.sourceId ?? existing.sourceId;
 		return {
 			id: incoming.id,
@@ -242,15 +245,15 @@ function canonicalIdentity(
 			...(sourceId ? { sourceId } : {}),
 		};
 	}
-	const task = existing.kind === "task" ? existing : incoming;
+	const canonical = existing.kind === "tool" ? incoming : existing;
 	const tool = existing.kind === "tool" ? existing : incoming;
-	const sourceId = task.sourceId && task.sourceId !== task.id
-		? task.sourceId
-		: tool.id !== task.id ? tool.id : tool.sourceId;
+	const sourceId = canonical.sourceId && canonical.sourceId !== canonical.id
+		? canonical.sourceId
+		: tool.id !== canonical.id ? tool.id : tool.sourceId;
 	return {
-		id: task.id,
-		kind: "task",
-		title: task.title,
+		id: canonical.id,
+		kind: canonical.kind,
+		title: canonical.title,
 		...(sourceId ? { sourceId } : {}),
 	};
 }

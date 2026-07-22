@@ -1,6 +1,11 @@
 import { parseSkillBlock } from "@earendil-works/pi-coding-agent";
 import type { ActivitySnapshot, ActivityStatus } from "../../activity/domain.js";
+import { activityFromNativeTaskRecord } from "../../activity/native-task-adapter.js";
 import { projectPiToolActivity } from "../../activity/pi-projector.js";
+import {
+	activitiesFromSubagentToolRecord,
+	activityFromSubagentResultRecord,
+} from "../../activity/subagent-adapter.js";
 import { renderCompactActivityPill } from "./activity-renderer.js";
 import { expandKey } from "./expand-key.js";
 
@@ -222,21 +227,6 @@ function summaryBlockFromRecord(record: Record<string, unknown>, kind: "branch" 
 	return { type: "summary", kind, label, content, expanded: false };
 }
 
-function subagentResultBlockFromRecord(record: Record<string, unknown>): ChatBlock {
-	const details = asRecord(record.details);
-	const id = firstString(details?.id, record.subagentId) ?? "subagent";
-	const title = firstString(details?.title, record.title) ?? "untitled";
-	const status = firstString(details?.status, record.status);
-	const outcome = status === "error" || status === "failed" ? "failed" : "finished";
-	return {
-		type: "summary",
-		kind: "subagent",
-		label: `[subagent] ${id} · ${title} · ${outcome}`,
-		content: textFromContent(record.content),
-		expanded: false,
-	};
-}
-
 function terminalResultBlockFromRecord(record: Record<string, unknown>): ChatBlock {
 	const details = asRecord(record.details);
 	const id = firstString(details?.id, record.terminalId) ?? "terminal";
@@ -400,253 +390,44 @@ function enrichTaskResultsFromCache(record: Record<string, unknown>, cache: Map<
 	};
 }
 
-function truncateTaskTitle(title: string): string {
-	return title.length > 80 ? `${title.slice(0, 77)}…` : title;
+function scopedToolCallId(
+	record: Record<string, unknown>,
+	scope: { readonly messageId: string; readonly blockIndex: number },
+): string {
+	return firstString(record.toolCallId, record.id) ?? `pi-tool:${scope.messageId}:${Math.max(0, Math.floor(scope.blockIndex))}`;
 }
 
-function taskPromptLines(rawPrompt: string): string[] {
-	return rawPrompt
-		.split("\n")
-		.map((line) => line.trim())
-		.filter((line) => line.length > 0 && !/^you(?: are|'re)\b/i.test(line));
-}
-
-function taskHeadingFromLine(line: string): string | undefined {
-	return line.match(/^#{2,6}\s+(.+?)\s*#*$/)?.[1]?.trim();
-}
-
-function taskTitleFromPrompt(rawPrompt: string): string {
-	const lines = taskPromptLines(rawPrompt);
-	const heading = lines
-		.map(taskHeadingFromLine)
-		.find((line): line is string => line !== undefined && line.length > 0);
-	if (heading) return truncateTaskTitle(heading);
-
-	const meaningful = lines.find((line) => line.length > 0);
-	return truncateTaskTitle(meaningful ?? (rawPrompt.trim() || "task"));
-}
-
-function taskPromptBody(rawPrompt: string): string | undefined {
-	const lines = taskPromptLines(rawPrompt);
-	const headingIndex = lines.findIndex((line) => taskHeadingFromLine(line) !== undefined);
-	const body = (headingIndex >= 0 ? lines.slice(headingIndex + 1) : lines.slice(1))
-		.filter((line) => taskHeadingFromLine(line) === undefined)
-		.slice(0, 6);
-	return body.length > 0 ? body.join("\n") : undefined;
-}
-
-function firstOutputLine(outputText: string | undefined): string | undefined {
-	return outputText?.split("\n").find((line) => line.trim().length > 0);
-}
-
-function taskResultStatus(result: Record<string, unknown>, fallbackStatus: ToolStatus): DelegationStatus {
-	const exitCode = typeof result.exitCode === "number" ? result.exitCode : undefined;
-	const stopReason = asString(result.stopReason);
-	if (exitCode === -2) return "queued";
-	if (exitCode === -1) return "running";
-	if (exitCode === undefined) return normalizeDelegationStatus(fallbackStatus);
-	if (exitCode > 0 || stopReason === "error" || stopReason === "aborted") return stopReason === "aborted" ? "cancelled" : "error";
-	return "success";
-}
-
-function textFromTaskMessages(messages: unknown): string | undefined {
-	if (!Array.isArray(messages)) return undefined;
-	for (let index = messages.length - 1; index >= 0; index -= 1) {
-		const message = asRecord(messages[index]);
-		if (message?.role !== "assistant" || !Array.isArray(message.content)) continue;
-		for (const part of message.content) {
-			const record = asRecord(part);
-			if (record?.type === "text") return asString(record.text);
-		}
-	}
-	return undefined;
-}
-
-function taskToolStatusFrom(value: unknown): ToolStatus {
-	if (value === "success" || value === "error" || value === "cancelled" || value === "running" || value === "pending") return value;
-	if (value === "Done") return "success";
-	if (value === "Failed") return "error";
-	if (value === "Running") return "running";
-	return "pending";
-}
-
-function parseTaskToolEvents(value: unknown): ToolCallViewModel[] {
-	if (!Array.isArray(value)) return [];
-	return value.flatMap((item): ToolCallViewModel[] => {
-		const event = asRecord(item);
-		if (!event) return [];
-		return [{
-			id: firstString(event.id, event.toolCallId),
-			name: firstString(event.name, event.toolName) ?? "tool",
-			status: taskToolStatusFrom(event.status),
-			input: event.args ?? event.input ?? event.arguments,
-			output: firstString(event.output, event.text),
-		}];
-	});
-}
-
-function parseTaskToolCallsFromMessages(messages: unknown): ToolCallViewModel[] {
-	if (!Array.isArray(messages)) return [];
-	const results = new Map<string, ToolCallViewModel>();
-	for (const messageValue of messages) {
-		const message = asRecord(messageValue);
-		if (!message) continue;
-		if (message.role === "assistant" && Array.isArray(message.content)) {
-			for (const part of message.content) {
-				const record = asRecord(part);
-				if (record?.type !== "toolCall") continue;
-				const id = firstString(record.id, record.toolCallId) ?? `${results.size}`;
-				results.set(id, {
-					id,
-					name: firstString(record.name, record.toolName) ?? "tool",
-					status: "running",
-					input: record.arguments ?? record.input,
-				});
-			}
-		}
-		if (message.role === "toolResult") {
-			const id = firstString(message.toolCallId, message.id) ?? `${results.size}`;
-			const existing = results.get(id);
-			results.set(id, {
-				...existing,
-				id,
-				name: firstString(message.toolName, message.name, existing?.name) ?? "tool",
-				status: message.isError === true ? "error" : "success",
-				output: textFromContent(message.content) || asString(message.output),
-			});
-		}
-	}
-	return [...results.values()];
-}
-
-function aggregateTaskStatus(statuses: readonly DelegationStatus[]): DelegationStatus {
-	if (statuses.includes("error")) return "error";
-	if (statuses.includes("cancelled")) return "cancelled";
-	if (statuses.includes("running")) return "running";
-	if (statuses.includes("queued")) return "running";
-	return "success";
-}
-
-function taskResultLabel(result: Record<string, unknown>, index: number, total: number): string {
-	if (total === 1) return "";
-	const rawIndex = typeof result.index === "number" ? result.index : index + 1;
-	return `Task ${rawIndex}: `;
-}
-
-function taskResultSummaryLine(result: Record<string, unknown>, index: number, total: number, status: DelegationStatus): string | undefined {
-	const finalOutput = firstString(result.finalOutput, result.streamingText, textFromTaskMessages(result.messages));
-	const errorText = firstString(result.errorMessage, result.stderr);
-	const text = status === "running" || status === "queued"
-		? firstOutputLine(finalOutput)
-		: firstString(finalOutput, errorText);
-	if (!text) return undefined;
-	return `${taskResultLabel(result, index, total)}${text}`;
-}
-
-function taskPromptForResults(results: readonly Record<string, unknown>[], record: Record<string, unknown>): string | undefined {
-	if (results.length === 0) return undefined;
-	if (results.length === 1) return taskPromptBody(firstString(results[0]?.prompt, record.prompt) ?? "task");
-	return results
-		.map((result, index) => {
-			const prompt = firstString(result.prompt, record.prompt) ?? "task";
-			return `${taskResultLabel(result, index, results.length)}${taskTitleFromPrompt(prompt)}`;
-		})
-		.join("\n");
-}
-
-function numberFrom(value: unknown): number | undefined {
-	return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
-function sumNumbers(values: readonly (number | undefined)[]): number | undefined {
-	const numbers = values.filter((value): value is number => value !== undefined);
-	return numbers.length > 0 ? numbers.reduce((sum, value) => sum + value, 0) : undefined;
-}
-
-function taskBlockFromDetails(record: Record<string, unknown>, fallbackStatus: ToolStatus): ChatBlock | undefined {
-	const details = asRecord(record.details);
-	const resultRecords = (Array.isArray(details?.results) ? details.results : [])
-		.map(asRecord)
-		.filter((result): result is Record<string, unknown> => result !== undefined);
-	if (resultRecords.length === 0) return undefined;
-
-	const firstResult = resultRecords[0]!;
-	const statuses = resultRecords.map((result) => taskResultStatus(result, fallbackStatus));
-	const status = aggregateTaskStatus(statuses);
-	const summary = resultRecords
-		.map((result, index) => taskResultSummaryLine(result, index, resultRecords.length, statuses[index]!))
-		.filter((line): line is string => line !== undefined && line.trim().length > 0)
-		.join("\n") || undefined;
-	const nestedTools = resultRecords.flatMap((result) => {
-		const toolEvents = parseTaskToolEvents(result.toolEvents);
-		return toolEvents.length > 0 ? toolEvents : parseTaskToolCallsFromMessages(result.messages);
-	});
-	const tokensIn = sumNumbers(resultRecords.map((result) => numberFrom(asRecord(result.usage)?.input)));
-	const tokensOut = sumNumbers(resultRecords.map((result) => numberFrom(asRecord(result.usage)?.output)));
-	const prompt = firstString(firstResult.prompt, record.prompt) ?? "task";
+function nativeTaskBlockFromRecord(
+	record: Record<string, unknown>,
+	fallbackStatus: ToolStatus,
+	scope: { readonly messageId: string; readonly blockIndex: number },
+): ChatBlock {
 	return {
-		type: "delegation",
-		delegation: {
-			id: firstString(record.id, record.toolCallId),
-			title: taskTitleFromPrompt(prompt),
-			agent: "scribe",
-			model: firstString(...resultRecords.map((result) => result.model), record.model),
-			thinking: firstString(...resultRecords.map((result) => result.thinking), record.thinking),
-			status,
-			prompt: taskPromptForResults(resultRecords, record),
-			summary,
-			nestedTools,
-			tokensIn,
-			tokensOut,
-			elapsedMs: undefined,
-		},
+		type: "activity",
+		activity: activityFromNativeTaskRecord(record, {
+			toolCallId: scopedToolCallId(record, scope),
+			fallbackStatus: ACTIVITY_STATUS_FROM_TOOL[fallbackStatus],
+		}),
 	};
 }
 
-function taskBlockFromRecord(record: Record<string, unknown>, fallbackStatus: ToolStatus): ChatBlock {
-	const fromDetails = taskBlockFromDetails(record, fallbackStatus);
-	if (fromDetails) return fromDetails;
-	// Pi task tool call → Cathedral scroll/scribe (Element 12).
-	// Extract title, agent metadata, and status from the task arguments/output.
-	const args = taskArgumentsFromRecord(record);
-	const firstTask = firstTaskFromArgs(args);
-	const model = firstString(
-		firstTask?.model,
-		args?.model,
-		record.model,
-	);
-	const thinking = firstString(firstTask?.thinking, args?.thinking, record.thinking);
-	const rawPrompt = firstString(firstTask?.prompt, firstTask?.task, args?.prompt, args?.task, record.prompt, record.task) ?? "task";
-	const title = taskTitleFromPrompt(rawPrompt);
-	// Status from toolResult output
-	const outputText = (() => {
-		const content = record.content;
-		if (typeof content === "string") return content;
-		if (Array.isArray(content)) {
-			const first = asRecord(content[0]);
-			return asString(first?.text);
-		}
-		return undefined;
-	})();
-	const isError = record.isError === true;
-	const status = isError ? "error" : fallbackStatus;
-	return {
-		type: "delegation",
-		delegation: {
-			id: firstString(record.id, record.toolCallId),
-			title,
-			agent: "scribe",
-			model,
-			thinking,
-			status: normalizeDelegationStatus(status),
-			prompt: taskPromptBody(rawPrompt),
-			summary: firstOutputLine(outputText),
-			nestedTools: [],
-			tokensIn: undefined,
-			tokensOut: undefined,
-			elapsedMs: undefined,
-		},
-	};
+function subagentBlocksFromRecord(
+	record: Record<string, unknown>,
+	fallbackStatus: ToolStatus,
+	scope: { readonly messageId: string; readonly blockIndex: number },
+): ChatBlock[] {
+	const toolName = firstString(record.name, record.toolName);
+	if (!toolName?.startsWith("subagent_") || toolName === "subagent_send" || toolName === "subagent_list") {
+		return [activityBlockFromRecord(record, fallbackStatus, scope)];
+	}
+	const toolCallId = scopedToolCallId(record, scope);
+	const updates = activitiesFromSubagentToolRecord(record, { toolCallId })
+		.map((activity): ChatBlock => ({ type: "activity", activity }));
+	if (toolName === "subagent_spawn") {
+		return updates.length > 0 ? updates : [activityBlockFromRecord(record, fallbackStatus, scope)];
+	}
+	const operation = activityBlockFromRecord(record, fallbackStatus, scope);
+	return updates.length > 0 ? [operation, ...updates] : [operation];
 }
 
 function delegationBlockFromRecord(record: Record<string, unknown>): ChatBlock {
@@ -685,13 +466,20 @@ function blocksFromContentPart(part: unknown, scope: { readonly messageId: strin
 			return imageBlockFromRecord(record);
 		case "toolCall":
 		case "tool_call":
-		case "tool":
-			if (asString(record.name) === "task") return [taskBlockFromRecord(record, "running")];
-			return [activityBlockFromRecord(record, record.status === "running" ? "running" : "pending", scope)];
+		case "tool": {
+			const fallback = record.status === "running" ? "running" : "pending";
+			const toolName = firstString(record.name, record.toolName);
+			if (toolName === "task") return [nativeTaskBlockFromRecord(record, "running", scope)];
+			if (toolName?.startsWith("subagent_")) return subagentBlocksFromRecord(record, fallback, scope);
+			return [activityBlockFromRecord(record, fallback, scope)];
+		}
 		case "toolResult":
-		case "tool_result":
-			if (asString(record.name) === "task") return [taskBlockFromRecord(record, "success")];
+		case "tool_result": {
+			const toolName = firstString(record.name, record.toolName);
+			if (toolName === "task") return [nativeTaskBlockFromRecord(record, "success", scope)];
+			if (toolName?.startsWith("subagent_")) return subagentBlocksFromRecord(record, "success", scope);
 			return [activityBlockFromRecord(record, "success", scope), ...imageBlocksFromContent(record.content)];
+		}
 		case "skill":
 		case "skill_invocation":
 			return [skillBlockFromRecord(record)];
@@ -722,15 +510,17 @@ function blocksFromMessage(record: Record<string, unknown>, messageScope: string
 		return [activityBlockFromRecord({ ...record, type: "tool", name: "bash", status }, status, { messageId: messageScope, blockIndex: 0 })];
 	}
 	if (record.role === "toolResult") {
-		const toolName = firstString(asString(record.toolName), asString(record.name));
-		if (toolName === "task") return [taskBlockFromRecord(record, "success")];
-		return [activityBlockFromRecord(record, "success", { messageId: messageScope, blockIndex: 0 }), ...imageBlocksFromContent(record.content)];
+		const scope = { messageId: messageScope, blockIndex: 0 };
+		const toolName = firstString(record.toolName, record.name);
+		if (toolName === "task") return [nativeTaskBlockFromRecord(record, "success", scope)];
+		if (toolName?.startsWith("subagent_")) return subagentBlocksFromRecord(record, "success", scope);
+		return [activityBlockFromRecord(record, "success", scope), ...imageBlocksFromContent(record.content)];
 	}
 	if (record.role === "custom" && typeof record.customType === "string") {
 		if (record.customType === "skill") return [skillBlockFromRecord(asRecord(record.details) ?? record)];
 		if (record.customType === "question") return [questionBlockFromRecord(asRecord(record.details) ?? record)];
 		if (record.customType === "delegation") return [delegationBlockFromRecord(asRecord(record.details) ?? record)];
-		if (record.customType === "subagent-result") return [subagentResultBlockFromRecord(record)];
+		if (record.customType === "subagent-result") return [{ type: "activity", activity: activityFromSubagentResultRecord(record) }];
 		if (record.customType === "terminal-result") return [terminalResultBlockFromRecord(record)];
 		// Unrecognized custom type: preserve provenance (mirrors Pi's CustomMessageComponent default).
 		const labeled: ChatBlock[] = [{ type: "markdown", text: `[${record.customType}]` }];

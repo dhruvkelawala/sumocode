@@ -1,4 +1,5 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { activityFromSubagentSnapshot } from "../activity/subagent-adapter.js";
 import { BUILT_IN_TOOLS, getBuiltInToolsFromActiveTools } from "../native-task-config.js";
 import { getTerminalHost } from "../terminal-host/index.js";
 import { spawnPaneChild } from "./backend-pane.js";
@@ -46,6 +47,7 @@ const settledPayload = (snapshot: SubagentSnapshot): DeliveryPayload => {
 			id: snapshot.id,
 			title: snapshot.title,
 			status: snapshot.status,
+			activity: activityFromSubagentSnapshot(snapshot),
 			manifest: snapshot.manifest,
 			...(snapshot.pane ? { pane: snapshot.pane } : {}),
 		},

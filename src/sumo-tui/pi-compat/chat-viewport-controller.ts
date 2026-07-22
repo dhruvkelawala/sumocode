@@ -1,9 +1,9 @@
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import { mergeActivitySnapshot, sameActivity } from "../../activity/domain.js";
 import type { MouseEvent } from "../input/mouse.js";
 import type { KeyEvent } from "../input/key-router.js";
 import { logDiagnostic } from "../runtime/diagnostics.js";
 import { measureMaybe, ResumeProfiler, type ResumeProfileMetadata } from "../runtime/resume-profiler.js";
+import { mergeActivityBlock, upsertActivityBlock } from "../transcript/activity-fold.js";
 import {
 	chatMessageViewModelFromPiMessage,
 	chatMessageViewModelToPlainText,
@@ -158,19 +158,13 @@ function mergeDelegationBlock(existing: Extract<ChatBlock, { type: "delegation" 
 }
 
 function mergeFoldableBlock(existing: ChatBlock, incoming: ChatBlock): ChatBlock {
-	if (existing.type === "activity" && incoming.type === "activity") {
-		return { type: "activity", activity: mergeActivitySnapshot(existing.activity, incoming.activity) };
-	}
+	if (existing.type === "activity" && incoming.type === "activity") return mergeActivityBlock(existing, incoming);
 	if (existing.type === "delegation" && incoming.type === "delegation") return mergeDelegationBlock(existing, incoming);
 	return incoming;
 }
 
 function upsertFoldableBlock(blocks: readonly ChatBlock[], incoming: ChatBlock): ChatBlock[] {
-	if (incoming.type === "activity") {
-		const index = blocks.findIndex((block) => block.type === "activity" && sameActivity(block.activity, incoming.activity));
-		if (index === -1) return [...blocks, incoming];
-		return blocks.map((block, blockIndex) => blockIndex === index ? mergeFoldableBlock(block, incoming) : block);
-	}
+	if (incoming.type === "activity") return upsertActivityBlock(blocks, incoming);
 
 	if (incoming.type === "delegation") {
 		const incomingId = incoming.delegation.id;

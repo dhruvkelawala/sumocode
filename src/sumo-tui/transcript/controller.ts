@@ -1,8 +1,14 @@
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
-import { mergeActivitySnapshot, safeValuePreview, sameActivity, type ActivitySnapshot } from "../../activity/domain.js";
+import { mergeActivitySnapshot, safeValuePreview, type ActivitySnapshot } from "../../activity/domain.js";
 import { projectPiToolActivity } from "../../activity/pi-projector.js";
 import { measureMaybe, type ResumeProfiler, type ResumeProfileMetadata } from "../runtime/resume-profiler.js";
 import type { ChatPagerReplaceStats } from "../widgets/chat-pager.js";
+import {
+	isActivityBlock,
+	matchingActivityBlockIndex,
+	mergeActivityBlock,
+	upsertActivityBlock,
+} from "./activity-fold.js";
 import {
 	chatMessageViewModelFromPiMessage,
 	createTranscriptViewModelMapper,
@@ -171,10 +177,6 @@ function compactionSummaryMessageFromEvent(event: unknown): unknown | undefined 
 	};
 }
 
-function isActivityBlock(block: ChatBlock): block is Extract<ChatBlock, { type: "activity" }> {
-	return block.type === "activity";
-}
-
 function isDelegationBlock(block: ChatBlock): block is Extract<ChatBlock, { type: "delegation" }> {
 	return block.type === "delegation";
 }
@@ -190,9 +192,7 @@ function isImageBlock(block: ChatBlock): block is Extract<ChatBlock, { type: "im
 }
 
 function matchingFoldableIndex(blocks: readonly ChatBlock[], incoming: ChatBlock): number {
-	if (incoming.type === "activity") {
-		return blocks.findIndex((block) => block.type === "activity" && sameActivity(block.activity, incoming.activity));
-	}
+	if (incoming.type === "activity") return matchingActivityBlockIndex(blocks, incoming);
 
 	if (incoming.type === "delegation") {
 		const incomingId = incoming.delegation.id;
@@ -228,14 +228,13 @@ function mergeDelegationBlock(existing: Extract<ChatBlock, { type: "delegation" 
 }
 
 function mergeFoldableBlock(existing: ChatBlock, incoming: ChatBlock): ChatBlock {
-	if (existing.type === "activity" && incoming.type === "activity") {
-		return { type: "activity", activity: mergeActivitySnapshot(existing.activity, incoming.activity) };
-	}
+	if (existing.type === "activity" && incoming.type === "activity") return mergeActivityBlock(existing, incoming);
 	if (existing.type === "delegation" && incoming.type === "delegation") return mergeDelegationBlock(existing, incoming);
 	return incoming;
 }
 
 function upsertFoldableBlock(blocks: readonly ChatBlock[], incoming: ChatBlock): ChatBlock[] {
+	if (incoming.type === "activity") return upsertActivityBlock(blocks, incoming);
 	const index = matchingFoldableIndex(blocks, incoming);
 	if (index === -1) return [...blocks, incoming];
 	return blocks.map((block, blockIndex) => blockIndex === index ? mergeFoldableBlock(block, incoming) : block);

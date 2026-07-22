@@ -104,6 +104,8 @@ type TaskToolDetails = {
 	mode: "single" | "parallel" | "chain";
 	modelOverride?: string;
 	results: SingleResult[];
+	startedAt?: number;
+	updatedAt?: number;
 };
 
 type TaskStatus = "Running" | "Done" | "Failed" | "Pending";
@@ -929,8 +931,15 @@ export const taskTool = (options: TaskToolOptions = DEFAULT_OPTIONS) => (pi: Ext
 			const builtInTools = getBuiltInToolsFromActiveTools(pi.getActiveTools());
 			const ctxModel = ctx.model ? { provider: ctx.model.provider, id: ctx.model.id } : undefined;
 
+			const taskStartedAt = Date.now();
 			const makeDetails = (results: SingleResult[]): TaskToolDetails => {
-				return { mode: normalized.value.mode, modelOverride: normalized.value.model, results };
+				return {
+					mode: normalized.value.mode,
+					modelOverride: normalized.value.model,
+					results,
+					startedAt: taskStartedAt,
+					updatedAt: Date.now(),
+				};
 			};
 
 			const requiresFork = normalized.value.items.some((item) => item.fork);

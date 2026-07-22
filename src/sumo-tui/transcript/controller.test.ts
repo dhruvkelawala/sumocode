@@ -256,6 +256,66 @@ describe("TranscriptController Activity folding", () => {
 		const block = regressed.messages.flatMap((message) => message.blocks).find((candidate) => candidate.type === "activity");
 		expect(block).toMatchObject({ type: "activity", activity: { id: "read-1", status: "succeeded", outputTail: "final", body: { text: "final" } } });
 	});
+
+	it("adopts canonical subagent identity and folds passive completion without duplication", () => {
+		const running = {
+			id: "subagent:sa-1",
+			sourceId: "spawn-call-1",
+			kind: "subagent",
+			title: "review auth",
+			status: "running",
+			subject: "sa-1",
+			invocation: { prompt: "Review auth" },
+		};
+		const settled = { ...running, status: "succeeded", result: { summary: "No findings" } };
+		const controller = new TranscriptController();
+		const transcript = controller.replaceFromMessages([
+			{
+				id: "assistant-spawn",
+				role: "assistant",
+				content: [{ type: "toolCall", id: "spawn-call-1", name: "subagent_spawn", arguments: { prompt: "Review auth", name: "review auth" } }],
+			},
+			{
+				role: "toolResult",
+				toolCallId: "spawn-call-1",
+				toolName: "subagent_spawn",
+				content: [{ type: "text", text: "Started sa-1" }],
+				details: { action: "spawn", activity: running },
+			},
+			{
+				role: "custom",
+				customType: "subagent-result",
+				display: true,
+				content: "Subagent sa-1 finished.",
+				details: { id: "sa-1", title: "review auth", status: "done", activity: settled },
+			},
+		]);
+
+		const activities = transcript.messages.flatMap((message) => message.blocks).filter((block) => block.type === "activity");
+		expect(transcript.messages).toHaveLength(1);
+		expect(activities).toHaveLength(1);
+		expect(activities[0]).toMatchObject({
+			type: "activity",
+			activity: { id: "subagent:sa-1", sourceId: "spawn-call-1", kind: "subagent", status: "succeeded", result: { summary: "No findings" } },
+		});
+	});
+
+	it("keeps historical uncorrelated passive subagent completion standalone", () => {
+		const controller = new TranscriptController();
+		const transcript = controller.replaceFromMessages([{
+			role: "custom",
+			customType: "subagent-result",
+			display: true,
+			content: "Historical result",
+			details: { id: "sa-9", title: "historical", status: "done" },
+		}]);
+
+		expect(transcript.messages).toHaveLength(1);
+		const block = transcript.messages[0]?.blocks[0];
+		expect(block).toMatchObject({ type: "activity", activity: { id: "subagent:sa-9", status: "succeeded" } });
+		if (block?.type !== "activity") throw new Error("wrong block type");
+		expect(block.activity.sourceId).toBeUndefined();
+	});
 });
 
 describe("TranscriptController live-state clearing", () => {

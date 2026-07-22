@@ -68,6 +68,12 @@ describe("subagent tools", () => {
 		const { tool, ctx } = createHarness();
 		const result = await tool("subagent_spawn").execute("tc", { prompt: "do it", name: "worker" }, undefined, undefined, ctx as never);
 		expect(textOf(result)).toBe("Started sa-1 (worker). Its result will be delivered to you automatically when it settles, or use subagent_wait to block for it.");
+		expect(result).toMatchObject({
+			details: {
+				action: "spawn",
+				activity: { id: "subagent:sa-1", sourceId: "tc", kind: "subagent", status: "running", model: "openai/gpt-5", thinking: "medium" },
+			},
+		});
 	});
 
 	it("opens visible spawns and exposes their pane in list output", async () => {
@@ -145,6 +151,7 @@ describe("subagent tools", () => {
 		emitters.get("sa-1")?.({ kind: "assistant-delta", delta: "hello" });
 		const result = await tool("subagent_check").execute("tc", { id: "sa-1" }, undefined, undefined, ctx as never);
 		expect(textOf(result)).toContain("hello");
+		expect(result).toMatchObject({ details: { activity: { id: "subagent:sa-1", status: "running", outputTail: "hello" } } });
 		expect(manager.consumedIds.has("sa-1")).toBe(false);
 	});
 
@@ -176,5 +183,21 @@ describe("subagent tools", () => {
 		expect(text).toContain("error: provider exploded");
 		expect(text).toContain("partial progress");
 		expect(text).toContain("shared checkout · base base-re · +0 checkout commits · changed paths suppressed · checkout clean");
+		expect(waited).toMatchObject({ details: { activity: [{ id: `subagent:${id}`, status: "failed", result: { error: "provider exploded" } }] } });
+	});
+
+	it("cancel returns settled snapshots and bounded Activity updates for known ids", async () => {
+		const { tool, ctx } = createHarness();
+		await tool("subagent_spawn").execute("spawn-1", { prompt: "do", name: "w" }, undefined, undefined, ctx as never);
+
+		const result = await tool("subagent_cancel").execute("cancel-1", { ids: ["sa-1", "sa-404"] }, undefined, undefined, ctx as never);
+
+		expect(textOf(result)).toContain("Cancelled sa-1");
+		expect(result).toMatchObject({
+			details: {
+				subagents: [{ id: "sa-1", status: "error", errorText: "interrupted" }],
+				activity: [{ id: "subagent:sa-1", status: "cancelled", result: { error: "interrupted" } }],
+			},
+		});
 	});
 });

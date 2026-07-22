@@ -350,20 +350,97 @@ function styledTerminalLine(line: string, roles: ActivityLedgerRoles): readonly 
 	return [line];
 }
 
+function formatMetricCount(value: number): string {
+	if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`;
+	if (value >= 10_000) return `${Math.round(value / 1_000)}k`;
+	if (value >= 1_000) return `${(value / 1_000).toFixed(1).replace(/\.0$/, "")}k`;
+	return String(value);
+}
+
+function formatMetricElapsed(value: number): string {
+	const seconds = Math.max(0, Math.round(value / 1_000));
+	if (seconds < 60) return `${seconds}s elapsed`;
+	return `${Math.floor(seconds / 60)}m ${seconds % 60}s elapsed`;
+}
+
+function metricText(activity: ActivitySnapshot): string | undefined {
+	const metrics = activity.metrics;
+	if (!metrics) return undefined;
+	const parts: string[] = [];
+	if (metrics.turns !== undefined) parts.push(`${metrics.turns} turn${metrics.turns === 1 ? "" : "s"}`);
+	if (metrics.tokens !== undefined) parts.push(`${formatMetricCount(metrics.tokens)} tokens`);
+	if (metrics.tokensIn !== undefined) parts.push(`↑${formatMetricCount(metrics.tokensIn)}`);
+	if (metrics.tokensOut !== undefined) parts.push(`↓${formatMetricCount(metrics.tokensOut)}`);
+	if (metrics.contextWindow !== undefined) parts.push(`ctx:${formatMetricCount(metrics.contextWindow)}`);
+	if (metrics.costUsd !== undefined) parts.push(`$${metrics.costUsd.toFixed(4)}`);
+	if (metrics.elapsedMs !== undefined) parts.push(formatMetricElapsed(metrics.elapsedMs));
+	return parts.length > 0 ? parts.join(" · ") : undefined;
+}
+
+function childActivityParts(child: ActivitySnapshot, depth: number, roles: ActivityLedgerRoles): readonly (Span | string)[] {
+	const target = activityTarget(child);
+	const note = activityNote(child);
+	return [
+		span(depth > 0 ? `${"  ".repeat(depth - 1)}↳ ` : "", { fg: roles.bodyMuted }),
+		span(activityStatusGlyph(child.status), { fg: activityStatusColor(child.status) }),
+		span(" "),
+		span(`[${activityTitle(child)}]`, { fg: roles.label }),
+		...(target === activityTitle(child) ? [] : [span("  "), span(target, { fg: roles.target })]),
+		...(note && note !== target ? [span(" · ", { fg: roles.bodyMuted }), span(note, { fg: roles.bodyMuted })] : []),
+	];
+}
+
+function flattenedChildActivities(activity: ActivitySnapshot): Array<{ activity: ActivitySnapshot; depth: number }> {
+	const flattened: Array<{ activity: ActivitySnapshot; depth: number }> = [];
+	const visit = (children: readonly ActivitySnapshot[] | undefined, depth: number): void => {
+		if (!children || depth > 2) return;
+		for (const child of children.slice(0, 32)) {
+			flattened.push({ activity: child, depth });
+			visit(child.activeTools, depth + 1);
+		}
+	};
+	visit(activity.activeTools, 0);
+	return flattened;
+}
+
 function renderStreamBody(activity: ActivitySnapshot, width: number, roles: ActivityLedgerRoles, includeInvocation: boolean): string[] {
 	const body = activity.body;
 	const rows: string[] = [];
 	const reasons: string[] = [];
+	const appendParts = (parts: readonly (Span | string)[], maxRows: number, reason: string): void => {
+		const available = Math.max(0, BODY_MAX_ROWS - rows.length - 1);
+		if (available === 0) {
+			reasons.push(reason);
+			return;
+		}
+		const rendered = renderBodyLines(parts, width, roles, Math.min(maxRows, available));
+		rows.push(...rendered.rows);
+		if (rendered.truncated) reasons.push(reason);
+	};
 	const invocation = includeInvocation
 		? body?.kind === "terminal" && body.command
 			? body.command
 			: activity.invocation === undefined ? undefined : safeValuePreview(activity.invocation, { maxChars: 2_000 })
 		: undefined;
-	if (invocation) {
-		const rendered = renderBodyLines([`> ${invocation}`], width, roles, INVOCATION_MAX_ROWS);
-		rows.push(...rendered.rows);
-		if (rendered.truncated) reasons.push("invocation rows collapsed");
+	if (invocation) appendParts([`> ${invocation}`], INVOCATION_MAX_ROWS, "invocation rows collapsed");
+
+	const producer = [activity.model, activity.thinking ? `thinking:${activity.thinking}` : undefined]
+		.filter((part): part is string => !!part)
+		.join(" · ");
+	if (producer) appendParts([span(producer, { fg: roles.bodyMuted })], 1, "producer metadata collapsed");
+
+	const children = flattenedChildActivities(activity);
+	for (let index = 0; index < children.length; index += 1) {
+		if (rows.length >= BODY_MAX_ROWS - 1) {
+			reasons.push(`${children.length - index} child activities collapsed`);
+			break;
+		}
+		const child = children[index]!;
+		appendParts(childActivityParts(child.activity, child.depth, roles), 1, "child activity rows collapsed");
 	}
+
+	const metrics = metricText(activity);
+	if (metrics) appendParts([span(metrics, { fg: roles.bodyMuted })], 1, "metrics collapsed");
 
 	const candidates = body
 		? [body.text, activity.outputTail]
@@ -387,7 +464,7 @@ function renderStreamBody(activity: ActivitySnapshot, width: number, roles: Acti
 	}
 	if (boundedContent.truncated) reasons.push("output collapsed");
 	if (displayRowsCollapsed) reasons.push("display rows collapsed");
-	if (lines.length === 0) rows.push(renderBodyLine([span(emptyText(activity), { fg: roles.bodyMuted })], width, roles));
+	if (lines.length === 0 && rows.length < BODY_MAX_ROWS) rows.push(renderBodyLine([span(emptyText(activity), { fg: roles.bodyMuted })], width, roles));
 	const marker = collapseMarker(reasons, width);
 	if (marker) {
 		if (rows.length >= BODY_MAX_ROWS) rows.pop();

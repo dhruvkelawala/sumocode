@@ -172,12 +172,13 @@ describe("subagent result delivery", () => {
 				customType: "subagent-result",
 				content: expect.stringContaining('Subagent sa-1 "research" finished.'),
 				display: true,
-				details: {
+				details: expect.objectContaining({
 					id: "sa-1",
 					title: "research",
 					status: "done",
+					activity: expect.objectContaining({ id: "subagent:sa-1", kind: "subagent", status: "succeeded", result: { summary: "findings" } }),
 					manifest: expect.objectContaining({ changedPaths: [] }),
-				},
+				}),
 			},
 			{ deliverAs: "followUp", triggerTurn: true },
 		);

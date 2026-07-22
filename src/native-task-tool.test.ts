@@ -29,5 +29,6 @@ describe("native task tool", () => {
 
 		expect(result?.isError).toBe(true);
 		expect(result?.content[0]?.text).toContain("Forked tasks require a persisted session file");
+		expect(result).toMatchObject({ details: { mode: "single", results: [], startedAt: expect.any(Number), updatedAt: expect.any(Number) } });
 	});
 });

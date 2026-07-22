@@ -120,22 +120,24 @@ const FIXTURES = {
 					blocks: [
 						{ type: "markdown", text: "Dispatching a scribe to handle the refactor." },
 						{
-							type: "delegation",
-							delegation: {
+							type: "activity",
+							activity: {
+								id: "fixture-scribe",
+								kind: "task",
 								title: "refactor auth flow into smaller modules",
-								agent: "scribe",
 								status: "running",
+								invocation: { prompt: "refactor the auth flow into smaller modules" },
+								subject: "scribe",
+								currentStep: "running auth tests",
 								model: "gpt-5.5",
 								thinking: "medium",
-								nestedTools: [
-									{ name: "read", status: "success", input: { path: "src/auth.ts" } },
-									{ name: "edit", status: "success", input: { path: "src/auth.ts" } },
-									{ name: "edit", status: "success", input: { path: "src/auth-helpers.ts" } },
-									{ name: "bash", status: "running", input: { command: "pnpm test src/auth" } },
+								activeTools: [
+									{ id: "fixture-read", kind: "tool", title: "read", status: "succeeded", invocation: { path: "src/auth.ts" }, subject: "src/auth.ts" },
+									{ id: "fixture-edit-auth", kind: "tool", title: "edit", status: "succeeded", invocation: { path: "src/auth.ts" }, subject: "src/auth.ts" },
+									{ id: "fixture-edit-helpers", kind: "tool", title: "edit", status: "succeeded", invocation: { path: "src/auth-helpers.ts" }, subject: "src/auth-helpers.ts" },
+									{ id: "fixture-test", kind: "tool", title: "bash", status: "running", invocation: { command: "pnpm test src/auth" }, subject: "pnpm test src/auth" },
 								],
-								tokensIn: 8000,
-								tokensOut: 3000,
-								elapsedMs: 22000,
+								metrics: { tokensIn: 8000, tokensOut: 3000, elapsedMs: 22000 },
 							},
 						},
 					],

@@ -40,7 +40,7 @@ function textFromContent(content: unknown): string | undefined {
 export function normalizePiActivityStatus(value: unknown, fallback: ActivityStatus = "queued"): ActivityStatus {
 	if (value === "pending" || value === "queued") return "queued";
 	if (value === "running") return "running";
-	if (value === "success" || value === "done" || value === "ok" || value === "completed") return "succeeded";
+	if (value === "success" || value === "succeeded" || value === "done" || value === "ok" || value === "completed") return "succeeded";
 	if (value === "error" || value === "failed" || value === "failure") return "failed";
 	if (value === "cancelled" || value === "canceled" || value === "aborted") return "cancelled";
 	if (value === "lost") return "lost";

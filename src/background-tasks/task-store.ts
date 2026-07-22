@@ -72,7 +72,8 @@ const KNOWN_ARTIFACT_NAMES = ["output.log", "exit.code", "launch.ready", "run.sh
 interface LockOwner {
 	readonly token: string;
 	readonly pid: number;
-	readonly processStartTime: string;
+	readonly processStartTime?: string;
+	readonly verifiable: boolean;
 }
 
 function isSafeInteger(value: unknown): value is number {
@@ -270,7 +271,9 @@ function atomicWriteJson(path: string, value: unknown): void {
 function parseLockOwner(path: string): LockOwner | undefined {
 	try {
 		const value = JSON.parse(readFileNoFollow(path)) as Partial<LockOwner>;
-		if (!hasText(value.token) || !isPositiveInteger(value.pid) || !hasText(value.processStartTime)) return undefined;
+		if (!hasText(value.token) || !isPositiveInteger(value.pid) || typeof value.verifiable !== "boolean") return undefined;
+		if (value.verifiable && !hasText(value.processStartTime)) return undefined;
+		if (!value.verifiable && value.processStartTime !== undefined) return undefined;
 		return value as LockOwner;
 	} catch {
 		return undefined;
@@ -284,6 +287,7 @@ function processProvesOwnerGone(owner: LockOwner): boolean {
 		if (errorCode(error) === "ESRCH") return true;
 		if (errorCode(error) !== "EPERM") return false;
 	}
+	if (!owner.verifiable || !owner.processStartTime) return false;
 	const actualStartTime = captureProcessStartTime(owner.pid);
 	return actualStartTime !== undefined && actualStartTime !== owner.processStartTime;
 }
@@ -294,7 +298,7 @@ export class TerminalTaskStore {
 	private readonly onDiagnostic?: (diagnostic: TerminalTaskStoreDiagnostic) => void;
 	private readonly lockTimeoutMs: number;
 	private readonly lockPollMs: number;
-	private readonly processStartTime: string;
+	private readonly processStartTime: string | undefined;
 
 	public constructor(options: TerminalTaskStoreOptions = {}) {
 		const requestedRoot = resolve(options.rootDir ?? join(process.env.TMPDIR ?? "/tmp", "sumocode-bg"));
@@ -311,7 +315,7 @@ export class TerminalTaskStore {
 		this.onDiagnostic = options.onDiagnostic;
 		this.lockTimeoutMs = Math.max(1, options.lockTimeoutMs ?? DEFAULT_LOCK_TIMEOUT_MS);
 		this.lockPollMs = Math.max(1, options.lockPollMs ?? DEFAULT_LOCK_POLL_MS);
-		this.processStartTime = captureProcessStartTime(process.pid) ?? "unverifiable-current-process";
+		this.processStartTime = captureProcessStartTime(process.pid);
 	}
 
 	public loadAll(): TerminalTaskSnapshot[] {
@@ -469,7 +473,9 @@ export class TerminalTaskStore {
 	private withTaskLock<T>(metaPath: string, operation: () => T): T {
 		const lockPath = join(dirname(metaPath), ".meta.lock");
 		const token = randomUUID();
-		const owner: LockOwner = { token, pid: process.pid, processStartTime: this.processStartTime };
+		const owner: LockOwner = this.processStartTime
+			? { token, pid: process.pid, processStartTime: this.processStartTime, verifiable: true }
+			: { token, pid: process.pid, verifiable: false };
 		const deadline = Date.now() + this.lockTimeoutMs;
 		while (true) {
 			const candidate = join(dirname(metaPath), `.meta.lock-candidate-${token}`);

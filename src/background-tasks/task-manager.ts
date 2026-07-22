@@ -263,7 +263,7 @@ function buildPosixScript(options: {
 }
 
 function quoteWindows(value: string): string {
-	return `"${value.replace(/"/g, '""')}"`;
+	return `"${value.replace(/%/g, "%%").replace(/"/g, '""')}"`;
 }
 
 function buildWindowsScript(options: {
@@ -275,19 +275,18 @@ function buildWindowsScript(options: {
 }): string {
 	return [
 		"@echo off",
-		"setlocal EnableDelayedExpansion",
 		"set launch_wait=0",
 		":wait_for_launch",
-		`if not exist ${quoteWindows(options.launchFile)} (`,
-		"  set /a launch_wait+=1",
-		"  if !launch_wait! GEQ 30 (",
-		`    >> ${quoteWindows(options.logFile)} echo [sumocode-terminal] launch gate timed out`,
-		`    > ${quoteWindows(options.exitFile)} echo 125`,
-		"    exit /b 125",
-		"  )",
-		"  ping 127.0.0.1 -n 2 >nul",
-		"  goto wait_for_launch",
-		")",
+		`if exist ${quoteWindows(options.launchFile)} goto launch_ready`,
+		"set /a launch_wait+=1",
+		"if %launch_wait% GEQ 30 goto launch_timeout",
+		"ping 127.0.0.1 -n 2 >nul",
+		"goto wait_for_launch",
+		":launch_timeout",
+		`>> ${quoteWindows(options.logFile)} echo [sumocode-terminal] launch gate timed out`,
+		`> ${quoteWindows(options.exitFile)} echo 125`,
+		"exit /b 125",
+		":launch_ready",
 		`cd /d ${quoteWindows(options.cwd)}`,
 		"if errorlevel 1 (",
 		`  >> ${quoteWindows(options.logFile)} echo [sumocode-terminal] working directory unavailable`,

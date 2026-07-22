@@ -168,9 +168,14 @@ export const systemProcessTree: ProcessTreeOperations = {
 		return actual === identity.processStartTime ? "same" : "different";
 	},
 	captureTreeVerification(identity): ProcessTreeVerification | undefined {
-		if (process.platform === "win32") return undefined;
+		if (process.platform === "win32" || this.identityMatches(identity) !== "same") return undefined;
 		const members = listPosixGroupMembers(identity.processGroupId);
-		return members && members.length > 0 ? { members } : undefined;
+		if (!members || members.length === 0) return undefined;
+		// Bracket the snapshot with persisted-leader checks. If the original group
+		// exits/reuses its numeric PGID during `ps`, never anchor the replacement.
+		if (this.identityMatches(identity) !== "same") return undefined;
+		if (!members.some((member) => member.pid === identity.pid && member.processStartTime === identity.processStartTime)) return undefined;
+		return { members };
 	},
 	verificationMatches: verificationStatus,
 	isTreeEmpty(identity): boolean {

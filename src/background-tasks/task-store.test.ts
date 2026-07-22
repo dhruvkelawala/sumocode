@@ -202,13 +202,13 @@ describe("TerminalTaskStore", () => {
 		const lockDir = join(dirname(metaPath), ".meta.lock");
 		mkdirSync(lockDir, { mode: 0o700 });
 		chmodSync(lockDir, 0o700);
-		privateWrite(join(lockDir, "owner.json"), `${JSON.stringify({ token: "dead", pid: 2_147_483_647, processStartTime: "old" })}\n`);
+		privateWrite(join(lockDir, "owner.json"), `${JSON.stringify({ token: "dead", pid: 2_147_483_647, processStartTime: "old", verifiable: true })}\n`);
 		expect(store.transition(initial.id, 1, (current) => ({ ...current, title: "recovered", updatedAt: 2_000 })).title).toBe("recovered");
 		expect(existsSync(lockDir)).toBe(false);
 
 		mkdirSync(lockDir, { mode: 0o700 });
 		chmodSync(lockDir, 0o700);
-		privateWrite(join(lockDir, "owner.json"), "{}\n");
+		privateWrite(join(lockDir, "owner.json"), `${JSON.stringify({ token: "live-unverified", pid: process.pid, verifiable: false })}\n`);
 		expect(() => store.transition(initial.id, 2, (current) => ({ ...current, title: "unsafe", updatedAt: 3_000 }))).toThrow(TerminalTaskLockBusyError);
 		expect(existsSync(lockDir)).toBe(true);
 	});

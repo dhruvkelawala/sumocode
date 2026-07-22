@@ -700,6 +700,7 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 	const editor = new RpcHostEditorController({
 		controls,
 		cwd,
+		env,
 		keybindings,
 		onRenderRequest: requestRender,
 		errorNotifier: notifications,

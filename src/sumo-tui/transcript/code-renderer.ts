@@ -11,11 +11,16 @@
  */
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { activeThemeApplicationRoles, type ThemeApplicationRoles } from "../../themes/index.js";
-import { lineToAnsi, span, textLine, withPersistentStyle, type Span } from "../render/primitives.js";
+import { lineToAnsi, lineWidth, span, textLine, truncateLine, withPersistentStyle, wrapLine, type Span } from "../render/primitives.js";
 import { expandKey } from "./expand-key.js";
 
-const MAX_VISIBLE_LINES = 20;
+const MAX_SOURCE_LINES = 20;
+const MAX_VISIBLE_ROWS = 20;
 const GUTTER_WIDTH = 4; // "  1 " — 4 chars (right-aligned 3 + space)
+// Explicit plaintext tags intentionally trade column alignment for visible
+// continuation rows. Untagged/code fences keep legacy one-row clipping for
+// tables, trees, and other structure-sensitive text.
+const WRAPPED_TEXT_LANGUAGES = new Set(["txt", "text", "plain", "plaintext"]);
 
 // ── Syntax highlighting ──────────────────────────────────────
 
@@ -170,12 +175,11 @@ function codeFrameBottom(width: number, roles: CodeRoles): string {
 	], { fg: roles.foreground, bg: roles.surface }), { width });
 }
 
-function codeBodyRow(lineNumber: number, syntaxSpans: SyntaxSpan[], width: number, roles: CodeRoles): string {
-	const gutter = `${String(lineNumber).padStart(3)} `;
+function codeBodyRow(lineNumber: number | "continuation", bodySpans: readonly Span[], width: number, roles: CodeRoles): string {
+	const gutter = lineNumber === "continuation" ? "  ↳ " : `${String(lineNumber).padStart(3)} `;
 	const gutterSpan = span(gutter, { fg: roles.gutter });
-	const bodySpans: Span[] = syntaxSpans.map((s) => span(s.text, { fg: s.color }));
 	const innerWidth = Math.max(0, width - 4); // 2 for │+space, 1 for space+│
-	const contentWidth = GUTTER_WIDTH + syntaxSpans.reduce((w, s) => w + visibleWidth(s.text), 0);
+	const contentWidth = GUTTER_WIDTH + bodySpans.reduce((sum, part) => sum + visibleWidth(part.text), 0);
 	const pad = Math.max(0, innerWidth - contentWidth);
 
 	const inner = withPersistentStyle(
@@ -191,9 +195,39 @@ function codeBodyRow(lineNumber: number, syntaxSpans: SyntaxSpan[], width: numbe
 	], { fg: roles.foreground, bg: roles.surface }), { width });
 }
 
-function collapsedRow(remaining: number, width: number, roles: CodeRoles): string {
-	const text = `… ${remaining} lines collapsed · ${expandKey()} expand`;
+function wrappedCodeBodyRows(
+	lineNumber: number,
+	bodySpans: readonly Span[],
+	width: number,
+	roles: CodeRoles,
+	maxRows: number,
+): { rows: string[]; truncated: boolean } {
+	if (maxRows <= 0) return { rows: [], truncated: true };
+	const sourceWidth = Math.max(1, width - 4 - GUTTER_WIDTH);
+	const source = textLine(bodySpans);
+	if (maxRows === 1) {
+		return {
+			rows: [codeBodyRow(lineNumber, truncateLine(source, sourceWidth).spans, width, roles)],
+			truncated: lineWidth(source) > sourceWidth,
+		};
+	}
+	const cellBudget = sourceWidth * maxRows;
+	const sourceTruncated = lineWidth(source) > cellBudget;
+	const bounded = sourceTruncated ? truncateLine(source, cellBudget) : source;
+	const wrapped = wrapLine(bounded, sourceWidth);
+	return {
+		rows: wrapped.slice(0, maxRows).map((line, index) =>
+			codeBodyRow(index === 0 ? lineNumber : "continuation", line.spans, width, roles)),
+		truncated: sourceTruncated || wrapped.length > maxRows,
+	};
+}
+
+function collapsedRow(label: string, width: number, roles: CodeRoles): string {
 	const innerWidth = Math.max(0, width - 4);
+	const suffix = ` · ${expandKey()} expand`;
+	const availableWidth = Math.max(0, innerWidth - GUTTER_WIDTH);
+	const fullText = `… ${label}${suffix}`;
+	const text = visibleWidth(fullText) <= availableWidth ? fullText : `… collapsed${suffix}`;
 	const pad = Math.max(0, innerWidth - GUTTER_WIDTH - visibleWidth(text));
 	const inner = withPersistentStyle(
 		lineToAnsi(textLine([span(" "), span(" ".repeat(GUTTER_WIDTH), { fg: roles.gutter }), span(text, { fg: roles.gutter }), span(" ".repeat(pad + 1))]), { width: innerWidth + 2 }),
@@ -214,19 +248,38 @@ export function renderCathedralCodeBlock(lang: string, source: string, width: nu
 	if (safeWidth < 10) return [takeVisible(source, safeWidth)];
 
 	const lines = source.split("\n");
-	const visible = lines.slice(0, MAX_VISIBLE_LINES);
-	const collapsed = lines.length - visible.length;
+	const visible = lines.slice(0, MAX_SOURCE_LINES);
 	const normalizedLang = lang.toLowerCase().replace(/^language-/, "");
 	const roles = activeThemeApplicationRoles().code;
+	const bodyRows: string[] = [];
+	let collapsedSourceLines = Math.max(0, lines.length - visible.length);
+	let wrappedContentCollapsed = false;
 
-	const rows: string[] = [codeFrameTop(normalizedLang, safeWidth, roles)];
 	for (let i = 0; i < visible.length; i += 1) {
+		if (bodyRows.length >= MAX_VISIBLE_ROWS) {
+			collapsedSourceLines += visible.length - i;
+			break;
+		}
 		const highlighted = highlightLine(visible[i]!, normalizedLang, roles);
-		rows.push(codeBodyRow(i + 1, highlighted, safeWidth, roles));
+		const bodySpans = highlighted.map((syntax) => span(syntax.text, { fg: syntax.color }));
+		if (WRAPPED_TEXT_LANGUAGES.has(normalizedLang)) {
+			const availableRows = MAX_VISIBLE_ROWS - bodyRows.length;
+			const remainingLines = visible.length - i - 1;
+			const reservedRows = Math.min(remainingLines, Math.max(0, availableRows - 1));
+			const rowsForLine = Math.max(1, availableRows - reservedRows);
+			const rendered = wrappedCodeBodyRows(i + 1, bodySpans, safeWidth, roles, rowsForLine);
+			bodyRows.push(...rendered.rows);
+			wrappedContentCollapsed ||= rendered.truncated;
+		} else {
+			bodyRows.push(codeBodyRow(i + 1, bodySpans, safeWidth, roles));
+		}
 	}
-	if (collapsed > 0) {
-		rows.push(collapsedRow(collapsed, safeWidth, roles));
-	}
+
+	const rows: string[] = [codeFrameTop(normalizedLang, safeWidth, roles), ...bodyRows];
+	const collapsedLabel = collapsedSourceLines > 0
+		? (wrappedContentCollapsed ? `${collapsedSourceLines} lines + tail collapsed` : `${collapsedSourceLines} lines collapsed`)
+		: (wrappedContentCollapsed ? "wrapped content collapsed" : undefined);
+	if (collapsedLabel) rows.push(collapsedRow(collapsedLabel, safeWidth, roles));
 	rows.push(codeFrameBottom(safeWidth, roles));
 	return rows;
 }

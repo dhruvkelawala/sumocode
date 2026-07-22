@@ -28,6 +28,11 @@ export interface RenderLineOptions {
 	readonly style?: Style;
 }
 
+export interface WrapLineOptions {
+	/** Width used from the second emitted row across the whole input, including embedded newlines. */
+	readonly continuationWidth?: number;
+}
+
 export interface RuleOptions {
 	readonly char?: string;
 	readonly indent?: string;
@@ -43,6 +48,19 @@ export interface BoxOptions {
 	readonly title?: readonly Span[] | string;
 }
 
+interface StyledGlyph {
+	readonly text: string;
+	readonly style?: Style;
+}
+
+interface TextSegmenter {
+	segment(input: string): Iterable<{ segment: string }>;
+}
+
+const SEGMENTER_CTOR = (Intl as unknown as {
+	Segmenter?: new (locale: string | undefined, options: { granularity: "grapheme" }) => TextSegmenter;
+}).Segmenter;
+const GRAPHEME_SEGMENTER = SEGMENTER_CTOR ? new SEGMENTER_CTOR(undefined, { granularity: "grapheme" }) : undefined;
 const RESET = "\u001b[0m";
 
 /**
@@ -148,6 +166,97 @@ export function truncateLine(line: Line, width: number): Line {
 		remaining = 0;
 	}
 	return { spans, style: line.style };
+}
+
+export function splitGraphemes(text: string): string[] {
+	if (!text) return [];
+	if (!GRAPHEME_SEGMENTER) return Array.from(text);
+	return [...GRAPHEME_SEGMENTER.segment(text)].map((part) => part.segment);
+}
+
+function glyphsToSpans(glyphs: readonly StyledGlyph[]): Span[] {
+	const spans: Span[] = [];
+	for (const glyph of glyphs) {
+		const previous = spans.at(-1);
+		if (previous && previous.style === glyph.style) {
+			spans[spans.length - 1] = { ...previous, text: `${previous.text}${glyph.text}` };
+		} else {
+			spans.push({ text: glyph.text, style: glyph.style });
+		}
+	}
+	return spans;
+}
+
+function isWhitespaceGlyph(glyph: StyledGlyph): boolean {
+	return /^\s$/u.test(glyph.text);
+}
+
+function lineFromGlyphs(glyphs: readonly StyledGlyph[], style: Style | undefined, width: number): Line {
+	const fitted = glyphs.map((glyph) => visibleWidth(glyph.text) > width ? { ...glyph, text: "�" } : glyph);
+	return truncateLine({ spans: glyphsToSpans(fitted), style }, width);
+}
+
+/** Word-wrap a typed line while retaining span styles and terminal-cell widths. */
+export function wrapLine(line: Line, width: number, options: WrapLineOptions = {}): Line[] {
+	const safeWidth = Math.max(0, Math.floor(width));
+	const continuationWidth = Math.max(0, Math.floor(options.continuationWidth ?? safeWidth));
+	if (safeWidth === 0 || continuationWidth === 0) return [{ spans: [], style: line.style }];
+
+	const paragraphs: StyledGlyph[][] = [[]];
+	for (const part of line.spans) {
+		const pieces = part.text.split("\n");
+		for (let index = 0; index < pieces.length; index += 1) {
+			for (const text of splitGraphemes(pieces[index]!)) paragraphs.at(-1)!.push({ text, style: part.style });
+			if (index < pieces.length - 1) paragraphs.push([]);
+		}
+	}
+
+	const wrapped: Line[] = [];
+	let emittedRows = 0;
+	for (const paragraph of paragraphs) {
+		let remaining = [...paragraph];
+		while (remaining.length > 0 && isWhitespaceGlyph(remaining.at(-1)!)) remaining.pop();
+		if (remaining.length === 0) {
+			wrapped.push({ spans: [], style: line.style });
+			emittedRows += 1;
+			continue;
+		}
+
+		while (remaining.length > 0) {
+			const rowWidth = emittedRows === 0 ? safeWidth : continuationWidth;
+			let visible = 0;
+			let fitEnd = 0;
+			let lastWhitespace = -1;
+			for (let index = 0; index < remaining.length; index += 1) {
+				const glyphWidth = visibleWidth(remaining[index]!.text);
+				if (fitEnd > 0 && visible + glyphWidth > rowWidth) break;
+				visible += glyphWidth;
+				fitEnd = index + 1;
+				if (index > 0 && isWhitespaceGlyph(remaining[index]!)) lastWhitespace = index;
+				if (visible >= rowWidth) break;
+			}
+
+			if (fitEnd >= remaining.length) {
+				wrapped.push(lineFromGlyphs(remaining, line.style, rowWidth));
+				emittedRows += 1;
+				break;
+			}
+
+			let breakAt = lastWhitespace > 0 ? lastWhitespace : Math.max(1, fitEnd);
+			while (breakAt > 0 && isWhitespaceGlyph(remaining[breakAt - 1]!)) breakAt -= 1;
+			if (breakAt === 0) breakAt = Math.max(1, fitEnd);
+			const candidate = remaining.slice(0, breakAt);
+			if (candidate.every(isWhitespaceGlyph)) {
+				while (remaining.length > 0 && isWhitespaceGlyph(remaining[0]!)) remaining.shift();
+				continue;
+			}
+			wrapped.push(lineFromGlyphs(candidate, line.style, rowWidth));
+			emittedRows += 1;
+			remaining = remaining.slice(breakAt);
+			while (remaining.length > 0 && isWhitespaceGlyph(remaining[0]!)) remaining.shift();
+		}
+	}
+	return wrapped.length > 0 ? wrapped : [{ spans: [], style: line.style }];
 }
 
 export function padLine(line: Line, width: number, style?: Style): Line {

@@ -6,6 +6,7 @@ logs/
 
 # local-only dev artifacts
 .local/
+.claude/worktrees/
 tmp/
 scratch/rpc-spike/
 

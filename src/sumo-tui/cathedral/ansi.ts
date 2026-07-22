@@ -2,7 +2,6 @@ import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { activeThemeColors } from "../../themes/index.js";
 import { lineToAnsi, span, textLine } from "../render/primitives.js";
 
-export const ANSI_PATTERN = /\u001b\[[0-9;]*m/g;
 export const RESET = "\u001b[0m";
 export const SIDEBAR_INDENT = "  ";
 
@@ -41,8 +40,80 @@ export function dim(text: string): string {
 	return `\u001b[2m${text}${RESET}`;
 }
 
+function skipControlString(text: string, start: number): number {
+	let index = start + 2;
+	while (index < text.length && text[index] !== "\n") {
+		if (text[index] === "\u0007" || text.charCodeAt(index) === 0x9c) return index + 1;
+		if (text[index] === "\u001b" && text[index + 1] === "\\") return index + 2;
+		index += 1;
+	}
+	return index;
+}
+
+function skipEscapeSequence(text: string, start: number): number {
+	const next = text[start + 1];
+	if (next === undefined || next === "\n") return start + 1;
+	if (next === "]" || next === "_" || next === "P" || next === "X" || next === "^") {
+		return skipControlString(text, start);
+	}
+	if (next === "[") {
+		let index = start + 2;
+		while (index < text.length && text[index] !== "\n") {
+			const code = text.charCodeAt(index);
+			if (code >= 0x40 && code <= 0x7e) return index + 1;
+			index += 1;
+		}
+		return index;
+	}
+	if (next === "(" || next === ")" || next === "%" || next === "*" || next === "+" || next === "#") {
+		return start + (text[start + 2] === undefined || text[start + 2] === "\n" ? 2 : 3);
+	}
+	return start + 2;
+}
+
+/** Remove terminal control sequences while preserving printable text and line structure. */
 export function stripAnsi(text: string): string {
-	return text.replace(ANSI_PATTERN, "");
+	let output = "";
+	let index = 0;
+	while (index < text.length) {
+		const char = text[index]!;
+		if (char === "\u001b") {
+			index = skipEscapeSequence(text, index);
+			continue;
+		}
+		const code = text.charCodeAt(index);
+		if (code === 0x9b) {
+			index += 1;
+			while (index < text.length && text[index] !== "\n") {
+				const finalCode = text.charCodeAt(index);
+				index += 1;
+				if (finalCode >= 0x40 && finalCode <= 0x7e) break;
+			}
+			continue;
+		}
+		if (code === 0x90 || code === 0x98 || code === 0x9d || code === 0x9e || code === 0x9f) {
+			index += 1;
+			while (index < text.length && text[index] !== "\n") {
+				if (text[index] === "\u0007" || text.charCodeAt(index) === 0x9c) {
+					index += 1;
+					break;
+				}
+				if (text[index] === "\u001b" && text[index + 1] === "\\") {
+					index += 2;
+					break;
+				}
+				index += 1;
+			}
+			continue;
+		}
+		if ((code < 0x20 || (code >= 0x7f && code <= 0x9f)) && char !== "\n" && char !== "\t") {
+			index += 1;
+			continue;
+		}
+		output += char;
+		index += 1;
+	}
+	return output;
 }
 
 export function visibleLength(text: string): number {

@@ -5,7 +5,7 @@ import { fgHex, RESET } from "../cathedral/ansi.js";
 import { SumoNode } from "../layout/node.js";
 import { MEASURE_MODE_EXACTLY, type MeasureMode, type Yoga, type YogaNode } from "../layout/yoga.js";
 import type { CellBuffer, Rect } from "../render/buffer.js";
-import { lineToAnsi, span, textLine, type Span } from "../render/primitives.js";
+import { lineToAnsi, plainLine, span, splitGraphemes, textLine, wrapLine, type Span } from "../render/primitives.js";
 import { renderCathedralCodeBlock } from "../transcript/code-renderer.js";
 import { expandKey } from "../transcript/expand-key.js";
 import { cathedralMarkdownTheme } from "../transcript/markdown-theme.js";
@@ -53,17 +53,6 @@ interface RenderRowsCacheEntry {
 /** Keep only the current + previous width entries: resize churns width, not content. */
 const RENDER_ROWS_CACHE_LIMIT = 2;
 
-interface TextSegmenter {
-	segment(input: string): Iterable<{ segment: string }>;
-}
-
-const SEGMENTER_CTOR = (Intl as unknown as {
-	Segmenter?: new (locale: string | undefined, options: { granularity: "grapheme" }) => TextSegmenter;
-}).Segmenter;
-
-const GRAPHEME_SEGMENTER = SEGMENTER_CTOR ? new SEGMENTER_CTOR(undefined, { granularity: "grapheme" }) : undefined;
-const TRAILING_WHITESPACE_PATTERN = /\s+$/u;
-
 function normalizeWidth(width: number): number {
 	if (!Number.isFinite(width)) return 0;
 	return Math.max(0, Math.floor(width));
@@ -106,62 +95,8 @@ function takeVisible(input: string, maxWidth: number): { head: string; tail: str
 	return { head: input.slice(0, index), tail: input.slice(index) };
 }
 
-function splitGraphemes(text: string): string[] {
-	if (!text) return [];
-	if (!GRAPHEME_SEGMENTER) return Array.from(text);
-	return [...GRAPHEME_SEGMENTER.segment(text)].map((part) => part.segment);
-}
-
-function isWhitespace(glyph: string): boolean {
-	return /^\s$/u.test(glyph);
-}
-
-function joinLine(glyphs: readonly string[]): string {
-	return glyphs.join("").replace(TRAILING_WHITESPACE_PATTERN, "");
-}
-
-function skipLeadingWhitespace(glyphs: readonly string[]): string[] {
-	let index = 0;
-	while (index < glyphs.length && isWhitespace(glyphs[index] ?? "")) index += 1;
-	return glyphs.slice(index);
-}
-
 function wrapParagraph(paragraph: string, width: number): string[] {
-	let remaining = splitGraphemes(paragraph.replace(TRAILING_WHITESPACE_PATTERN, ""));
-	if (remaining.length === 0) return [""];
-
-	const rows: string[] = [];
-	while (remaining.length > 0) {
-		let visible = 0;
-		let fitEnd = 0;
-		let lastWhitespace = -1;
-		for (let index = 0; index < remaining.length; index += 1) {
-			const glyph = remaining[index] ?? "";
-			const glyphWidth = visibleWidth(glyph);
-			if (fitEnd > 0 && visible + glyphWidth > width) break;
-			visible += glyphWidth;
-			fitEnd = index + 1;
-			if (index > 0 && isWhitespace(glyph)) lastWhitespace = index;
-			if (visible >= width) break;
-		}
-
-		if (fitEnd >= remaining.length) {
-			rows.push(joinLine(remaining));
-			break;
-		}
-
-		if (lastWhitespace > 0) {
-			rows.push(joinLine(remaining.slice(0, lastWhitespace)));
-			remaining = skipLeadingWhitespace(remaining.slice(lastWhitespace));
-			continue;
-		}
-
-		const hardEnd = Math.max(1, fitEnd);
-		rows.push(joinLine(remaining.slice(0, hardEnd)));
-		remaining = skipLeadingWhitespace(remaining.slice(hardEnd));
-	}
-
-	return rows;
+	return wrapLine(plainLine(paragraph), width).map((line) => line.spans.map((part) => part.text).join(""));
 }
 
 function wrapPlainText(input: string, width: number): string[] {
@@ -282,8 +217,11 @@ function renderThinkingRows(block: Extract<ChatBlock, { type: "thinking" }>, wid
 	]), { width }));
 }
 
-function renderQuestionRows(block: Extract<ChatBlock, { type: "question" }>): string[] {
-	return [`[question] ${block.question.prompt}`, ...block.question.choices.map((choice) => `- ${choice}`)];
+function renderQuestionRows(block: Extract<ChatBlock, { type: "question" }>, width: number): string[] {
+	return [
+		...wrapPlainText(`[question] ${block.question.prompt}`, width),
+		...block.question.choices.flatMap((choice) => wrapPlainText(`- ${choice}`, width)),
+	];
 }
 
 function renderImageRows(block: Extract<ChatBlock, { type: "image" }>, width: number): string[] {
@@ -337,7 +275,7 @@ function renderBlockRows(blocks: readonly ChatBlock[], width: number): string[] 
 				rows.push(...renderSummaryRows(block, width));
 				break;
 			case "question":
-				rows.push(...renderQuestionRows(block));
+				rows.push(...renderQuestionRows(block, width));
 				break;
 			case "delegation":
 				rows.push(...renderDelegationRows(block, width));
@@ -518,10 +456,11 @@ export class ChatMessage extends SumoNode {
 			gutter += buffer.getCell(row, col).char || " ";
 		}
 		const sourceStart = codeStart + 6;
-		if (!/^ {0,2}\d{1,3} $/.test(gutter)) {
+		if (!/^ {0,2}\d{1,3} $/.test(gutter) && gutter !== "  ↳ ") {
+			if (gutter !== " ".repeat(4)) return undefined;
 			let chromeText = "";
 			for (let col = sourceStart; col < codeEnd; col += 1) chromeText += buffer.getCell(row, col).char;
-			return chromeText.trimStart().startsWith("… ") && chromeText.includes(" lines collapsed · ") ? null : undefined;
+			return chromeText.trimStart().startsWith("… ") && chromeText.includes("collapsed") ? null : undefined;
 		}
 
 		let sourceEnd = sourceStart;

@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -225,6 +225,35 @@ describe("TerminalTaskStore", () => {
 		} finally {
 			process.umask(previousUmask);
 		}
+	});
+
+	it("never opens an ABA gap when a stale lock is replaced before takeover", () => {
+		let lockPath = "";
+		let replaced = false;
+		const store = new TerminalTaskStore({
+			rootDir,
+			lockTimeoutMs: 30,
+			lockPollMs: 1,
+			beforeAbandonedLockRename: () => {
+				if (replaced) return;
+				replaced = true;
+				rmSync(lockPath, { recursive: true, force: true });
+				mkdirSync(lockPath, { mode: 0o700 });
+				chmodSync(lockPath, 0o700);
+				privateWrite(join(lockPath, "owner.json"), `${JSON.stringify({ token: "replacement", pid: process.pid, verifiable: false })}\n`);
+			},
+		});
+		const initial = snapshot(store, "term-lock-aba");
+		const metaPath = join(dirname(initial.logFile), "meta.json");
+		store.create(initial, metaPath);
+		lockPath = join(dirname(metaPath), ".meta.lock");
+		mkdirSync(lockPath, { mode: 0o700 });
+		chmodSync(lockPath, 0o700);
+		privateWrite(join(lockPath, "owner.json"), `${JSON.stringify({ token: "dead", pid: 2_147_483_647, processStartTime: "old", verifiable: true })}\n`);
+
+		expect(() => store.transition(initial.id, 1, (current) => ({ ...current, title: "unsafe", updatedAt: 2_000 }))).toThrow(TerminalTaskLockBusyError);
+		expect(new TerminalTaskStore({ rootDir }).get(initial.id)).toMatchObject({ revision: 1, title: "tests" });
+		expect(readdirSync(dirname(metaPath)).some((name) => name.startsWith(".meta.lock.takeover-"))).toBe(true);
 	});
 
 	it("breaks only an abandoned lock whose dead owner is proven", () => {

@@ -41,6 +41,8 @@ export interface TerminalTaskStoreOptions {
 	readonly onDiagnostic?: (diagnostic: TerminalTaskStoreDiagnostic) => void;
 	readonly lockTimeoutMs?: number;
 	readonly lockPollMs?: number;
+	/** Test seam for deterministic stale-lock replacement races. */
+	readonly beforeAbandonedLockRename?: () => void;
 }
 
 export class StaleTerminalTaskRevisionError extends Error {
@@ -334,6 +336,7 @@ export class TerminalTaskStore {
 	private readonly lockTimeoutMs: number;
 	private readonly lockPollMs: number;
 	private readonly processStartTime: string | undefined;
+	private readonly beforeAbandonedLockRename?: () => void;
 
 	public constructor(options: TerminalTaskStoreOptions = {}) {
 		const requestedRoot = resolve(options.rootDir ?? join(process.env.TMPDIR ?? "/tmp", "sumocode-bg"));
@@ -352,6 +355,7 @@ export class TerminalTaskStore {
 		this.lockTimeoutMs = Math.max(1, options.lockTimeoutMs ?? DEFAULT_LOCK_TIMEOUT_MS);
 		this.lockPollMs = Math.max(1, options.lockPollMs ?? DEFAULT_LOCK_POLL_MS);
 		this.processStartTime = captureProcessStartTime(process.pid);
+		this.beforeAbandonedLockRename = options.beforeAbandonedLockRename;
 	}
 
 	public loadAll(): TerminalTaskSnapshot[] {
@@ -543,6 +547,11 @@ export class TerminalTaskStore {
 			: { token, pid: process.pid, verifiable: false };
 		const deadline = Date.now() + this.lockTimeoutMs;
 		while (true) {
+			if (this.hasBlockingTakeover(lockPath, token)) {
+				if (Date.now() >= deadline) throw new TerminalTaskLockBusyError(`Timed out waiting for terminal task lock: ${lockPath}`);
+				sleepSync(this.lockPollMs);
+				continue;
+			}
 			const candidate = join(dirname(metaPath), `.meta.lock-candidate-${token}`);
 			try {
 				mkdirSync(candidate, { mode: PRIVATE_DIRECTORY_MODE });
@@ -550,7 +559,11 @@ export class TerminalTaskStore {
 				writeExclusivePrivateFile(join(candidate, "owner.json"), `${JSON.stringify(owner)}\n`);
 				try {
 					renameSync(candidate, lockPath);
-					break;
+					// A stale-lock contender may have displaced this exact owner after
+					// rename. Its immutable takeover path still grants exclusive ownership;
+					// unrelated takeovers block operation until their owner releases.
+					if (this.ownsLock(lockPath, token) && !this.hasBlockingTakeover(lockPath, token)) break;
+					this.releaseLock(lockPath, owner);
 				} catch (error) {
 					rmSync(candidate, { recursive: true, force: true });
 					if (errorCode(error) !== "EEXIST" && errorCode(error) !== "ENOTEMPTY") throw error;
@@ -575,40 +588,76 @@ export class TerminalTaskStore {
 		}
 	}
 
+	private takeoverPaths(lockPath: string): string[] {
+		const prefix = `${basename(lockPath)}.takeover-`;
+		try {
+			return (readdirSync(dirname(lockPath), { encoding: "utf8" }) as string[])
+				.filter((name) => name.startsWith(prefix))
+				.map((name) => join(dirname(lockPath), name));
+		} catch {
+			return [];
+		}
+	}
+
+	private hasBlockingTakeover(lockPath: string, ownToken: string): boolean {
+		let blocked = false;
+		for (const path of this.takeoverPaths(lockPath)) {
+			const owner = parseLockOwner(join(path, "owner.json"));
+			if (owner?.token === ownToken) continue;
+			if (owner && processProvesOwnerGone(owner)) {
+				// Takeover paths are immutable and never reused for acquisition, so a
+				// proven-dead owner can be removed without an ABA replacement race.
+				rmSync(path, { recursive: true, force: true });
+				continue;
+			}
+			blocked = true;
+		}
+		return blocked;
+	}
+
+	private ownsLock(lockPath: string, token: string): boolean {
+		const canonicalOwner = parseLockOwner(join(lockPath, "owner.json"));
+		if (canonicalOwner?.token === token) return true;
+		return this.takeoverPaths(lockPath).some((path) => parseLockOwner(join(path, "owner.json"))?.token === token);
+	}
+
 	private breakAbandonedLock(lockPath: string): boolean {
 		const owner = parseLockOwner(join(lockPath, "owner.json"));
 		if (!owner || !processProvesOwnerGone(owner)) return false;
-		const stalePath = `${lockPath}.stale-${randomUUID()}`;
+		this.beforeAbandonedLockRename?.();
+		const takeoverPath = `${lockPath}.takeover-${randomUUID()}`;
 		try {
-			renameSync(lockPath, stalePath);
+			renameSync(lockPath, takeoverPath);
 		} catch (error) {
 			if (errorCode(error) === "ENOENT") return true;
 			return false;
 		}
-		const movedOwner = parseLockOwner(join(stalePath, "owner.json"));
+		const movedOwner = parseLockOwner(join(takeoverPath, "owner.json"));
 		if (!movedOwner || movedOwner.token !== owner.token) {
-			// A token mismatch is not proven stale. Restore if possible and refuse to
-			// remove it; this is intentionally conservative.
-			try {
-				renameSync(stalePath, lockPath);
-			} catch {
-				// Leave the renamed lock in place rather than deleting uncertain state.
-			}
+			// Never restore or delete a replacement owner. The immutable takeover
+			// path blocks third-party acquisition until that live owner releases it.
 			return false;
 		}
-		rmSync(stalePath, { recursive: true, force: true });
+		rmSync(takeoverPath, { recursive: true, force: true });
 		return true;
 	}
 
 	private releaseLock(lockPath: string, owner: LockOwner): void {
-		const currentOwner = parseLockOwner(join(lockPath, "owner.json"));
-		if (!currentOwner || currentOwner.token !== owner.token) return;
-		const releasePath = `${lockPath}.release-${owner.token}`;
-		try {
-			renameSync(lockPath, releasePath);
-			rmSync(releasePath, { recursive: true, force: true });
-		} catch (error) {
-			if (errorCode(error) !== "ENOENT") this.diagnostic("io", lockPath, error);
+		// A stale-lock contender can move this owner from the canonical path after
+		// acquisition. Search twice so a concurrent move between scans is still
+		// found and released from its immutable takeover path.
+		for (let pass = 0; pass < 2; pass += 1) {
+			for (const path of [lockPath, ...this.takeoverPaths(lockPath)]) {
+				const currentOwner = parseLockOwner(join(path, "owner.json"));
+				if (!currentOwner || currentOwner.token !== owner.token) continue;
+				const releasePath = `${path}.release-${owner.token}-${randomUUID()}`;
+				try {
+					renameSync(path, releasePath);
+					rmSync(releasePath, { recursive: true, force: true });
+				} catch (error) {
+					if (errorCode(error) !== "ENOENT") this.diagnostic("io", path, error);
+				}
+			}
 		}
 	}
 

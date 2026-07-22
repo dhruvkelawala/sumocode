@@ -1,9 +1,9 @@
-import type { ActivitySnapshot } from "../../activity/domain.js";
+import { sameActivity, type ActivitySnapshot } from "../../activity/domain.js";
 import { SumoNode } from "../layout/node.js";
 import { FLEX_DIRECTION_COLUMN, type Yoga, type YogaNode } from "../layout/yoga.js";
 import type { KeyEvent } from "../input/key-router.js";
 import type { MouseEvent } from "../input/mouse.js";
-import { chatMessageViewModelToPlainText, type ChatMessageViewModel } from "../transcript/view-model.js";
+import { chatMessageViewModelToPlainText, type ChatBlock, type ChatMessageViewModel } from "../transcript/view-model.js";
 import { ChatMessage, type ChatMessageOptions, type ChatMessageRole } from "./chat-message.js";
 import { ScrolledUpBanner } from "./scrolled-up-banner.js";
 import { ScrollBox, type ScrollBoxStateChange } from "./scrollbox.js";
@@ -113,6 +113,7 @@ export class ChatPager extends SumoNode {
 
 	public replaceViewModels(messages: readonly ChatMessageViewModel[]): ChatPagerReplaceStats {
 		const previousHeight = this.scrollBox.scrollHeight;
+		this.migrateCorrelatedActivityState(this.activitiesFromRenderedMessages(), this.activitiesFromViewModels(messages));
 		const transcriptActivityIds = this.activityIdsFromViewModels(messages);
 		for (const id of this.activityExpansionOverrides.keys()) {
 			if (!transcriptActivityIds.has(id)) this.activityExpansionOverrides.delete(id);
@@ -173,7 +174,11 @@ export class ChatPager extends SumoNode {
 		const beforeHeight = last.getEstimatedHeight(width);
 		last.appendText(chunk);
 		const afterHeight = last.getEstimatedHeight(width);
-		this.scrollBox.notifyContentChanged(Math.max(0, afterHeight - beforeHeight), Math.max(0, beforeHeight - afterHeight));
+		this.scrollBox.notifyChildrenResized([{
+			top: last.getComputedTop(),
+			previousHeight: beforeHeight,
+			nextHeight: afterHeight,
+		}]);
 		this.beginStreaming();
 		this.scheduleRender();
 	}
@@ -185,22 +190,33 @@ export class ChatPager extends SumoNode {
 			return;
 		}
 		if (last.text === text) return;
-		this.updateLast(last, () => last.setText(text));
+		this.updateMessage(last, () => last.setText(text));
 	}
 
 	public replaceLastWithViewModel(message: ChatMessageViewModel): void {
-		const last = this.getLastMessage();
-		if (!last) {
+		const lastIndex = this.getTotalMessageCount() - 1;
+		if (lastIndex < 0) {
 			this.addViewModel(message);
 			return;
 		}
-		last.setRole(chatRoleFromViewModel(message));
-		this.updateLast(last, () => {
-			last.setBlocks(message.blocks, chatMessageViewModelToPlainText(message));
-			if (message.timestamp) last.setTimestamp(message.timestamp);
+		this.replaceViewModelAt(lastIndex, message);
+	}
+
+	/** Update one rendered transcript node without resetting pager-wide state. */
+	public replaceViewModelAt(index: number, message: ChatMessageViewModel): boolean {
+		const activeIndex = Math.floor(index) - this.getArchivedMessageCount();
+		const target = this.activeMessages[activeIndex];
+		if (!target) return false;
+		const previousBlocks = target.toSnapshot().blocks ?? [];
+		this.migrateCorrelatedActivityState(this.activitiesFromBlocks(previousBlocks), this.activitiesFromBlocks(message.blocks));
+		this.updateMessage(target, () => {
+			target.setRole(chatRoleFromViewModel(message));
+			target.setBlocks(message.blocks, chatMessageViewModelToPlainText(message));
+			if (message.timestamp) target.setTimestamp(message.timestamp);
 			this.registerActivities(message.blocks);
-			last.setActivityExpansions(this.effectiveActivityExpansions(message.blocks));
+			this.applyExpansionPresentation(target, message.blocks);
 		});
+		return true;
 	}
 
 	public getActivityExpansion(id: string): boolean {
@@ -214,15 +230,22 @@ export class ChatPager extends SumoNode {
 	}
 
 	public toggleActivityExpansion(id?: string): boolean {
-		if (id !== undefined) {
-			const expanded = !this.getActivityExpansion(id);
-			this.setActivityExpansion(id, expanded);
-			return expanded;
-		}
-		const knownIds = [...this.activityStatuses.keys()];
-		const expanded = knownIds.length === 0
-			? this.defaultActivityExpansionOverride === undefined || !this.defaultActivityExpansionOverride
-			: knownIds.some((activityId) => !this.getActivityExpansion(activityId));
+		if (id === undefined) return this.toggleToolExpansion();
+		const expanded = !this.getActivityExpansion(id);
+		this.setActivityExpansion(id, expanded);
+		return expanded;
+	}
+
+	/** Global Ctrl+O policy across Activities and compatibility collapsibles. */
+	public toggleToolExpansion(): boolean {
+		const hasCollapsedActivity = [...this.activityStatuses.keys()].some((id) => !this.getActivityExpansion(id));
+		const compatibilityBlocks = this.activeMessages.flatMap((message) => message.toSnapshot().blocks ?? [])
+			.filter((block): block is Extract<ChatBlock, { type: "skill" | "summary" }> => block.type === "skill" || block.type === "summary");
+		const hasCollapsedCompatibilityBlock = compatibilityBlocks.some((block) => !block.expanded);
+		const hasAnyExpandable = this.activityStatuses.size > 0 || compatibilityBlocks.length > 0;
+		const expanded = hasAnyExpandable
+			? hasCollapsedActivity || hasCollapsedCompatibilityBlock
+			: this.defaultActivityExpansionOverride === undefined || !this.defaultActivityExpansionOverride;
 		this.setToolExpansion(expanded);
 		return expanded;
 	}
@@ -232,7 +255,7 @@ export class ChatPager extends SumoNode {
 		this.defaultActivityExpansionOverride = expanded;
 		this.activityExpansionOverrides.clear();
 		for (const id of this.activityStatuses.keys()) this.activityExpansionStates.set(id, expanded);
-		this.applyAllActivityExpansions();
+		this.applyToolExpansion(expanded);
 	}
 
 	public endStreaming(): void {
@@ -278,6 +301,10 @@ export class ChatPager extends SumoNode {
 		return this.lastReadIndex;
 	}
 
+	public getMessageCount(): number {
+		return this.getTotalMessageCount();
+	}
+
 	public hasMessages(): boolean {
 		return this.getTotalMessageCount() > 0;
 	}
@@ -317,7 +344,7 @@ export class ChatPager extends SumoNode {
 			message.blocks,
 			this.chatMessageOptions,
 		);
-		chatMessage.setActivityExpansions(this.effectiveActivityExpansions(message.blocks));
+		this.applyExpansionPresentation(chatMessage, message.blocks);
 		return chatMessage;
 	}
 
@@ -339,14 +366,41 @@ export class ChatPager extends SumoNode {
 		}
 	}
 
+	private activitiesFromBlocks(blocks: readonly ChatBlock[]): ActivitySnapshot[] {
+		return blocks.flatMap((block): ActivitySnapshot[] => block.type === "activity" ? [block.activity] : []);
+	}
+
+	private activitiesFromViewModels(messages: readonly ChatMessageViewModel[]): ActivitySnapshot[] {
+		return messages.flatMap((message) => this.activitiesFromBlocks(message.blocks));
+	}
+
+	private activitiesFromRenderedMessages(): ActivitySnapshot[] {
+		return this.activeMessages.flatMap((message) => this.activitiesFromBlocks(message.toSnapshot().blocks ?? []));
+	}
+
 	private activityIdsFromViewModels(messages: readonly ChatMessageViewModel[]): Set<string> {
-		const ids = new Set<string>();
-		for (const message of messages) {
-			for (const block of message.blocks) {
-				if (block.type === "activity") ids.add(block.activity.id);
+		return new Set(this.activitiesFromViewModels(messages).map((activity) => activity.id));
+	}
+
+	private migrateCorrelatedActivityState(existing: readonly ActivitySnapshot[], incoming: readonly ActivitySnapshot[]): void {
+		for (const next of incoming) {
+			const previous = existing.find((candidate) => candidate.id !== next.id && sameActivity(candidate, next));
+			if (!previous) continue;
+			const previousId = previous.id;
+			const nextId = next.id;
+			if (this.activityExpansionOverrides.has(previousId) && !this.activityExpansionOverrides.has(nextId)) {
+				this.activityExpansionOverrides.set(nextId, this.activityExpansionOverrides.get(previousId)!);
 			}
+			if (this.activityExpansionStates.has(previousId) && !this.activityExpansionStates.has(nextId)) {
+				this.activityExpansionStates.set(nextId, this.activityExpansionStates.get(previousId)!);
+			}
+			if (this.activityStatuses.has(previousId) && !this.activityStatuses.has(nextId)) {
+				this.activityStatuses.set(nextId, this.activityStatuses.get(previousId)!);
+			}
+			this.activityExpansionOverrides.delete(previousId);
+			this.activityExpansionStates.delete(previousId);
+			this.activityStatuses.delete(previousId);
 		}
-		return ids;
 	}
 
 	private activeActivityIds(): Set<string> {
@@ -377,43 +431,43 @@ export class ChatPager extends SumoNode {
 		return states;
 	}
 
+	private applyExpansionPresentation(message: ChatMessage, blocks: readonly ChatBlock[]): void {
+		if (this.defaultActivityExpansionOverride !== undefined) {
+			message.setToolExpansion(this.defaultActivityExpansionOverride);
+		}
+		// A per-Activity explicit choice wins over the global compatibility policy.
+		message.setActivityExpansions(this.effectiveActivityExpansions(blocks));
+	}
+
 	private applyActivityExpansion(id: string, expanded: boolean): void {
+		this.applyMessageMutations((message) => message.setActivityExpansion(id, expanded));
+	}
+
+	private applyToolExpansion(expanded: boolean): void {
+		this.applyMessageMutations((message) => message.setToolExpansion(expanded));
+	}
+
+	private applyMessageMutations(mutate: (message: ChatMessage) => boolean): void {
 		const width = this.scrollBox.getComputedWidth();
-		let beforeHeight = 0;
-		let afterHeight = 0;
-		let changed = false;
+		const changes: Array<{ top: number; previousHeight: number; nextHeight: number }> = [];
 		for (const message of this.activeMessages) {
-			beforeHeight += message.getEstimatedHeight(width);
-			changed = message.setActivityExpansion(id, expanded) || changed;
-			afterHeight += message.getEstimatedHeight(width);
+			const previousHeight = message.getEstimatedHeight(width);
+			const top = message.getComputedTop();
+			if (!mutate(message)) continue;
+			changes.push({ top, previousHeight, nextHeight: message.getEstimatedHeight(width) });
 		}
-		if (!changed) return;
-		this.scrollBox.notifyContentChanged(Math.max(0, afterHeight - beforeHeight), Math.max(0, beforeHeight - afterHeight));
+		if (changes.length === 0) return;
+		this.scrollBox.notifyChildrenResized(changes);
 		this.scheduleRender();
 	}
 
-	private applyAllActivityExpansions(): void {
+	private updateMessage(message: ChatMessage, update: () => void): void {
 		const width = this.scrollBox.getComputedWidth();
-		let beforeHeight = 0;
-		let afterHeight = 0;
-		let changed = false;
-		for (const message of this.activeMessages) {
-			beforeHeight += message.getEstimatedHeight(width);
-			const blocks = message.toSnapshot().blocks ?? [];
-			changed = message.setActivityExpansions(this.effectiveActivityExpansions(blocks)) || changed;
-			afterHeight += message.getEstimatedHeight(width);
-		}
-		if (!changed) return;
-		this.scrollBox.notifyContentChanged(Math.max(0, afterHeight - beforeHeight), Math.max(0, beforeHeight - afterHeight));
-		this.scheduleRender();
-	}
-
-	private updateLast(message: ChatMessage, update: () => void): void {
-		const width = this.scrollBox.getComputedWidth();
-		const beforeHeight = message.getEstimatedHeight(width);
+		const previousHeight = message.getEstimatedHeight(width);
+		const top = message.getComputedTop();
 		update();
-		const afterHeight = message.getEstimatedHeight(width);
-		this.scrollBox.notifyContentChanged(Math.max(0, afterHeight - beforeHeight), Math.max(0, beforeHeight - afterHeight));
+		const nextHeight = message.getEstimatedHeight(width);
+		this.scrollBox.notifyChildrenResized([{ top, previousHeight, nextHeight }]);
 		this.scheduleRender();
 	}
 

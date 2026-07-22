@@ -35,6 +35,10 @@ function compactWhitespace(value: string): string {
 	return sanitizeActivityText(value).replace(/\s+/g, " ").trim();
 }
 
+function activityTitle(activity: ActivitySnapshot): string {
+	return compactWhitespace(activity.title) || "activity";
+}
+
 function firstLine(value: string | undefined): string | undefined {
 	if (!value) return undefined;
 	const line = sanitizeActivityText(value).split("\n").find((candidate) => candidate.trim().length > 0);
@@ -65,7 +69,7 @@ export function activityTarget(activity: ActivitySnapshot): string {
 		if (typeof value === "string" && compactWhitespace(value).length > 0) return compactWhitespace(value);
 	}
 	if (activity.body?.kind === "terminal" && activity.body.command) return compactWhitespace(activity.body.command);
-	return firstLine(activity.result?.error ?? activity.result?.summary ?? activity.outputTail ?? activity.body?.text) ?? activity.title;
+	return firstLine(activity.result?.error ?? activity.result?.summary ?? activity.outputTail ?? activity.body?.text) ?? activityTitle(activity);
 }
 
 export function activityNote(activity: ActivitySnapshot): string | undefined {
@@ -85,7 +89,7 @@ function styledHeaderParts(activity: ActivitySnapshot, roles: ActivityLedgerRole
 	return [
 		span(activityStatusGlyph(activity.status), { fg: activityStatusColor(activity.status) }),
 		span(" "),
-		span(`[${activity.title}]`, { fg: roles.label }),
+		span(`[${activityTitle(activity)}]`, { fg: roles.label }),
 		span("  "),
 		span(activityTarget(activity), { fg: roles.target }),
 	];
@@ -123,7 +127,8 @@ function ledgerStyle(roles: ActivityLedgerRoles): { bg: string } {
 }
 
 function renderHeader(activity: ActivitySnapshot, width: number, roles: ActivityLedgerRoles): string {
-	const note = firstLine(activity.result?.summary ?? activity.currentStep);
+	const title = activityTitle(activity);
+	const note = firstLine(activity.result?.error ?? activity.result?.summary ?? activity.currentStep);
 	const right: Span[] = [
 		span(" "),
 		span(activityStatusGlyph(activity.status), { fg: activityStatusColor(activity.status) }),
@@ -132,7 +137,7 @@ function renderHeader(activity: ActivitySnapshot, width: number, roles: Activity
 	];
 	const rawSubject = activity.subject ?? (activity.body?.kind === "terminal" ? activity.body.command : undefined);
 	const rightWidth = right.reduce((sum, part) => sum + visibleWidth(part.text), 0);
-	const baseLeftWidth = 3 + activity.title.length + 2 + 1;
+	const baseLeftWidth = 3 + visibleWidth(title) + 2 + 1;
 	const maxSubjectWidth = Math.max(0, width - baseLeftWidth - rightWidth - 4 - 2);
 	const sanitizedSubject = rawSubject ? compactWhitespace(rawSubject) : undefined;
 	const subject = sanitizedSubject && visibleWidth(sanitizedSubject) > maxSubjectWidth
@@ -140,7 +145,7 @@ function renderHeader(activity: ActivitySnapshot, width: number, roles: Activity
 		: sanitizedSubject;
 	const left: Span[] = [
 		span("╭─ ", { fg: roles.border }),
-		span(`[${activity.title}]`, { fg: roles.label }),
+		span(`[${title}]`, { fg: roles.label }),
 		...(subject ? [span("  "), span(subject, { fg: roles.target })] : []),
 		span(" "),
 	];
@@ -206,6 +211,12 @@ function contentLines(text: string): string[] {
 	return sanitizeActivityText(text).split("\n").map((line) => line.trimEnd()).filter((line) => line.length > 0);
 }
 
+function sourceContentLines(text: string): string[] {
+	const lines = sanitizeActivityText(text).split("\n").map((line) => line.trimEnd());
+	while (lines.length > 0 && lines.at(-1) === "") lines.pop();
+	return lines;
+}
+
 function emptyText(activity: ActivitySnapshot): string {
 	return isSettledActivityStatus(activity.status) ? FALLBACK_SETTLED : FALLBACK_RUNNING;
 }
@@ -218,7 +229,7 @@ function collapseMarker(reasons: readonly string[], width: number): string | und
 
 function renderSourceBody(activity: ActivitySnapshot, width: number, roles: ActivityLedgerRoles): string[] {
 	if (activity.body?.kind !== "source") return [];
-	const lines = contentLines(activity.body.text);
+	const lines = sourceContentLines(activity.body.text);
 	if (lines.length === 0) return [renderBodyLine([span(emptyText(activity), { fg: roles.bodyMuted })], width, roles)];
 	const visible = lines.slice(0, BODY_MAX_SOURCE_LINES);
 	const startLine = activity.body.startLine ?? 1;
@@ -295,11 +306,10 @@ function styledTerminalLine(line: string, roles: ActivityLedgerRoles): readonly 
 
 function renderStreamBody(activity: ActivitySnapshot, width: number, roles: ActivityLedgerRoles, includeInvocation: boolean): string[] {
 	const body = activity.body;
-	if (!body) return [renderBodyLine([span(emptyText(activity), { fg: roles.bodyMuted })], width, roles)];
 	const rows: string[] = [];
 	const reasons: string[] = [];
 	const invocation = includeInvocation
-		? body.kind === "terminal" && body.command
+		? body?.kind === "terminal" && body.command
 			? body.command
 			: activity.invocation === undefined ? undefined : safeValuePreview(activity.invocation, { maxChars: 2_000 })
 		: undefined;
@@ -308,8 +318,18 @@ function renderStreamBody(activity: ActivitySnapshot, width: number, roles: Acti
 		rows.push(...rendered.rows);
 		if (rendered.truncated) reasons.push("invocation rows collapsed");
 	}
-	const outputText = activity.outputTail && activity.outputTail !== body.text ? activity.outputTail : undefined;
-	const bodyText = invocation === body.text && !outputText ? "" : [body.text, outputText].filter(Boolean).join("\n");
+
+	const candidates = body
+		? [body.text, activity.outputTail]
+		: [activity.currentStep, activity.outputTail, activity.result?.error, activity.result?.summary];
+	const seen = new Set<string>();
+	const bodyText = candidates.flatMap((value): string[] => {
+		if (!value) return [];
+		const sanitized = sanitizeActivityText(value);
+		if (sanitized.length === 0 || sanitized === invocation || seen.has(sanitized)) return [];
+		seen.add(sanitized);
+		return [sanitized];
+	}).join("\n");
 	const allLines = contentLines(bodyText);
 	const lines = allLines.slice(0, BODY_MAX_SOURCE_LINES);
 	const sourceLineCount = allLines.length;
@@ -323,14 +343,14 @@ function renderStreamBody(activity: ActivitySnapshot, width: number, roles: Acti
 		const remainingLines = lines.length - index - 1;
 		const reserved = Math.min(remainingLines, Math.max(0, available - 1));
 		const rowBudget = Math.max(1, available - reserved);
-		const parts = body.kind === "terminal" ? styledTerminalLine(lines[index]!, roles) : [span(lines[index]!, { fg: roles.bodyMuted })];
+		const parts = body?.kind === "terminal" ? styledTerminalLine(lines[index]!, roles) : [span(lines[index]!, { fg: roles.bodyMuted })];
 		const rendered = renderBodyLines(parts, width, roles, rowBudget);
 		rows.push(...rendered.rows);
 		displayRowsCollapsed ||= rendered.truncated;
 	}
 	if (sourceLineCount > BODY_MAX_SOURCE_LINES) reasons.push(`${sourceLineCount - BODY_MAX_SOURCE_LINES} lines collapsed`);
 	if (displayRowsCollapsed) reasons.push("display rows collapsed");
-	if (lines.length === 0) rows.push(renderBodyLine([span(emptyText(activity), { fg: roles.bodyMuted })], width, roles));
+	if (rows.length === 0) rows.push(renderBodyLine([span(emptyText(activity), { fg: roles.bodyMuted })], width, roles));
 	const marker = collapseMarker(reasons, width);
 	if (marker) {
 		if (rows.length >= BODY_MAX_ROWS) rows.pop();

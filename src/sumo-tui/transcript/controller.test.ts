@@ -207,6 +207,33 @@ describe("TranscriptController Activity folding", () => {
 		expect(activities.map((block) => block.activity.outputTail)).toEqual(["alpha", "beta"]);
 	});
 
+	it("folds an image-bearing tool result into one Activity and one deduplicated sibling image", () => {
+		const controller = new TranscriptController();
+		controller.replaceFromMessages([{
+			id: "assistant-tools",
+			role: "assistant",
+			content: [{ type: "toolCall", id: "read-image", name: "read", arguments: { path: "shot.png" } }],
+		}]);
+		const result = {
+			role: "toolResult",
+			toolCallId: "read-image",
+			toolName: "read",
+			content: [
+				{ type: "text", text: "Read image file [image/png]" },
+				{ type: "image", data: "iVBORw0KGgo=", mimeType: "image/png", filename: "shot.png" },
+			],
+		};
+
+		controller.handleAgentEvent({ type: "message_start", message: result });
+		const transcript = controller.handleAgentEvent({ type: "message_update", message: result });
+
+		expect(transcript.messages).toHaveLength(1);
+		expect(transcript.messages[0]?.blocks.filter((block) => block.type === "activity")).toHaveLength(1);
+		expect(transcript.messages[0]?.blocks.filter((block) => block.type === "image")).toEqual([
+			{ type: "image", data: "iVBORw0KGgo=", mime: "image/png", filename: "shot.png" },
+		]);
+	});
+
 	it("does not regress a live Activity after a terminal event", () => {
 		const controller = new TranscriptController();
 		controller.handleAgentEvent({ type: "message_start", message: { id: "assistant", role: "assistant", content: [] } });
@@ -304,6 +331,7 @@ describe("TranscriptController live-state clearing", () => {
 type FakeChatSink = TranscriptControllerChatSink & {
 	replaceViewModels: Mock;
 	addViewModel: Mock;
+	replaceViewModelAt: Mock;
 	replaceLastWithViewModel: Mock;
 };
 
@@ -316,6 +344,7 @@ function fakeChatSink(): FakeChatSink {
 			archivedMessages: 0,
 		})),
 		addViewModel: vi.fn((_message: ChatMessageViewModel) => undefined),
+		replaceViewModelAt: vi.fn((_index: number, _message: ChatMessageViewModel) => undefined),
 		replaceLastWithViewModel: vi.fn((_message: ChatMessageViewModel) => undefined),
 	};
 }
@@ -482,6 +511,35 @@ describe("TranscriptController incremental chat sink (B9)", () => {
 		expect(chat.addViewModel.mock.calls[0]?.[0]?.id).toBe("a1");
 	});
 
+	it("target-updates a non-last Activity result instead of replacing the pager", () => {
+		const chat = fakeChatSink();
+		const controller = new TranscriptController({ chat });
+		controller.replaceFromMessages([
+			{
+				id: "assistant-tools",
+				role: "assistant",
+				content: [{ type: "toolCall", id: "read-a", name: "read", arguments: { path: "a.ts" } }],
+			},
+			{ id: "later-user", role: "user", content: "keep this later message" },
+		]);
+		chat.replaceViewModels.mockClear();
+		chat.replaceViewModelAt.mockClear();
+		chat.replaceLastWithViewModel.mockClear();
+
+		controller.handleAgentEvent({
+			type: "message_start",
+			message: { role: "toolResult", toolCallId: "read-a", toolName: "read", content: [{ type: "text", text: "alpha" }] },
+		});
+
+		expect(chat.replaceViewModels).not.toHaveBeenCalled();
+		expect(chat.replaceLastWithViewModel).not.toHaveBeenCalled();
+		expect(chat.replaceViewModelAt).toHaveBeenCalledTimes(1);
+		expect(chat.replaceViewModelAt).toHaveBeenCalledWith(0, expect.objectContaining({
+			id: "assistant-tools",
+			blocks: [expect.objectContaining({ type: "activity", activity: expect.objectContaining({ id: "read-a", status: "succeeded", outputTail: "alpha" }) })],
+		}));
+	});
+
 	it("replaceFromMessages (hydration) always calls replaceViewModels", () => {
 		const chat = fakeChatSink();
 		const controller = new TranscriptController({ chat });
@@ -551,7 +609,7 @@ describe("TranscriptController incremental chat sink (B9)", () => {
 		});
 		expect(chat.replaceViewModels).toHaveBeenCalledTimes(1);
 	});
-	it("agent_end history rewrites still fall back to replaceViewModels after streamed updates", () => {
+	it("target-updates a single non-last rewrite after streamed updates", () => {
 		const chat = fakeChatSink();
 		const controller = new TranscriptController({ chat });
 
@@ -563,6 +621,7 @@ describe("TranscriptController incremental chat sink (B9)", () => {
 		controller.handleAgentEvent({ type: "message_end", message: { id: "a1", role: "assistant", content: "answer" } });
 		chat.replaceViewModels.mockClear();
 		chat.addViewModel.mockClear();
+		chat.replaceViewModelAt.mockClear();
 		chat.replaceLastWithViewModel.mockClear();
 
 		controller.handleAgentEvent({
@@ -573,9 +632,10 @@ describe("TranscriptController incremental chat sink (B9)", () => {
 			],
 		});
 
-		expect(chat.replaceViewModels).toHaveBeenCalledTimes(1);
+		expect(chat.replaceViewModels).not.toHaveBeenCalled();
 		expect(chat.addViewModel).not.toHaveBeenCalled();
 		expect(chat.replaceLastWithViewModel).not.toHaveBeenCalled();
+		expect(chat.replaceViewModelAt).toHaveBeenCalledWith(0, expect.objectContaining({ id: "u1" }));
 	});
 
 	it("does not schedule a render when an event produces no visible diff", () => {

@@ -25,6 +25,23 @@ describe("Activity renderer", () => {
 		expect(plain(renderActivityLedgerRows(activity({ status: "succeeded", body: { kind: "text", text: "" } }), 60))).toContain("no output captured");
 	});
 
+	it("renders every bounded bodyless Activity field before using the empty fallback", () => {
+		const rows = renderActivityLedgerRows(activity({
+			invocation: { query: "bodyless invocation" },
+			currentStep: "checking the index",
+			outputTail: "partial output",
+			result: { error: "visible error", summary: "useful summary" },
+		}), 64);
+		const rendered = plain(rows);
+
+		for (const value of ["bodyless invocation", "checking the index", "partial output", "visible error", "useful summary"]) {
+			expect(rendered).toContain(value);
+		}
+		expect(rendered).not.toContain("waiting for output…");
+		expect(rows.length).toBeLessThanOrEqual(31);
+		expect(rows.every((row) => visibleWidth(row) === 64)).toBe(true);
+	});
+
 	it("renders unknown tool output, error, and redacted invocation instead of a contentless fallback", () => {
 		const invocation: Record<string, unknown> = { query: "sumo", apiKey: "hidden", nested: { password: "hidden-too" } };
 		invocation.self = invocation;
@@ -44,6 +61,24 @@ describe("Activity renderer", () => {
 		expect(rendered).toContain("request failed");
 		expect(rendered).toContain("three matches");
 		expect(rendered).not.toContain("hidden-too");
+	});
+
+	it("sanitizes producer titles and every producer-controlled header field", () => {
+		const rows = renderActivityLedgerRows(activity({
+			title: "\u001b[31mread\u001b[0m\tunsafe\rtitle",
+			subject: "\u001b]8;;https://example.com\u0007src/a.ts\u001b]8;;\u0007",
+			currentStep: "\u001b[2Kworking\tstep",
+			result: { summary: "\u001b[35msettled\u001b[0m" },
+			body: { kind: "text", text: "ok" },
+		}), 72);
+		const rendered = plain(rows);
+
+		expect(rendered).toContain("[read unsafe title]");
+		expect(rendered).toContain("src/a.ts");
+		expect(rendered).toContain("settled");
+		expect(rows.join("\n")).not.toContain("\u001b[31m");
+		expect(rows.join("\n")).not.toContain("\u001b]8;");
+		expect(rows.every((row) => visibleWidth(row) === 72)).toBe(true);
 	});
 
 	it("sanitizes ANSI, tabs, carriage returns, and preserves wide characters before measuring", () => {
@@ -71,6 +106,19 @@ describe("Activity renderer", () => {
 		expect(rendered.filter((row) => row.includes("collapsed"))).toHaveLength(1);
 	});
 
+	it("preserves interior source blank lines and real read offsets", () => {
+		const rows = renderActivityLedgerRows(activity({
+			status: "succeeded",
+			title: "read",
+			subject: "src/a.ts",
+			body: { kind: "source", text: "alpha\n\nomega", startLine: 7, totalLines: 9 },
+		}), 70).map(stripAnsi);
+
+		expect(rows.some((row) => row.includes("   7  alpha"))).toBe(true);
+		expect(rows.some((row) => row.includes("   8  "))).toBe(true);
+		expect(rows.some((row) => row.includes("   9  omega"))).toBe(true);
+	});
+
 	it("shows no more than 25 source rows plus one consolidated truncation marker", () => {
 		const rows = renderActivityLedgerRows(activity({
 			status: "succeeded",
@@ -84,6 +132,22 @@ describe("Activity renderer", () => {
 		expect(rendered.some((row) => row.includes("line 26"))).toBe(false);
 		expect(rendered.filter((row) => row.includes("collapsed"))).toHaveLength(1);
 		expect(rows.length).toBeLessThanOrEqual(31);
+	});
+
+	it("renders compact settled write results from invocation content", () => {
+		const projected = projectPiToolActivity({
+			toolCallId: "write-1",
+			name: "write",
+			status: "success",
+			arguments: { path: "src/new.ts", content: "one\n\nthree" },
+			content: [{ type: "text", text: "Successfully wrote 10 bytes to src/new.ts" }],
+		}, { messageId: "m1", blockIndex: 0 });
+		if (!projected) throw new Error("projection failed");
+
+		const compact = stripAnsi(renderCompactActivityPill(projected));
+		expect(compact).toContain("src/new.ts");
+		expect(compact).toContain("3 lines");
+		expect(compact).not.toContain("one");
 	});
 
 	it("renders compact settled result previews when presentation state is collapsed", () => {

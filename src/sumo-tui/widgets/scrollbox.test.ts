@@ -110,6 +110,32 @@ describe("ScrollBox", () => {
 		root.dispose();
 	});
 
+	it.each([
+		["above", { top: 1, previousHeight: 1, nextHeight: 3 }, 7],
+		["inside", { top: 5, previousHeight: 1, nextHeight: 3 }, 5],
+		["below", { top: 7, previousHeight: 1, nextHeight: 3 }, 5],
+	] as const)("owns a child resize %s the manual viewport without top-removal semantics", async (_position, change, expectedOffset) => {
+		const { root, scrollBox } = await makeScrollFixture(10, 3);
+		scrollBox.scrollTo(5);
+
+		scrollBox.notifyChildrenResized([change]);
+
+		expect(scrollBox.manualScroll).toBe(true);
+		expect(scrollBox.scrollOffset).toBe(expectedOffset);
+		root.dispose();
+	});
+
+	it("moves a manual anchor upward when a wholly-above child collapses", async () => {
+		const { root, scrollBox } = await makeScrollFixture(10, 3);
+		scrollBox.scrollTo(6);
+
+		scrollBox.notifyChildrenResized([{ top: 1, previousHeight: 3, nextHeight: 1 }]);
+
+		expect(scrollBox.scrollOffset).toBe(4);
+		expect(scrollBox.manualScroll).toBe(true);
+		root.dispose();
+	});
+
 	it("scrolling up trips manualScroll and returning bottom clears it", async () => {
 		const { root, scrollBox } = await makeScrollFixture(6, 3);
 		scrollBox.scrollToBottom();

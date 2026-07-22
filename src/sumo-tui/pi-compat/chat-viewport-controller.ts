@@ -128,8 +128,13 @@ function isFoldableBlock(block: ChatBlock): boolean {
 	return block.type === "activity" || block.type === "delegation";
 }
 
-function isFoldableOnlyViewModel(message: ChatMessageViewModel): boolean {
-	return message.blocks.length > 0 && message.blocks.every(isFoldableBlock);
+function isFoldableResultViewModel(message: ChatMessageViewModel): boolean {
+	return message.blocks.some(isFoldableBlock)
+		&& message.blocks.every((block) => isFoldableBlock(block) || block.type === "image");
+}
+
+function imageBlockKey(block: Extract<ChatBlock, { type: "image" }>): string {
+	return JSON.stringify([block.mime, block.data, block.filename ?? null]);
 }
 
 function mergeDelegationBlock(existing: Extract<ChatBlock, { type: "delegation" }>, incoming: Extract<ChatBlock, { type: "delegation" }>): ChatBlock {
@@ -180,6 +185,10 @@ function upsertFoldableBlock(blocks: readonly ChatBlock[], incoming: ChatBlock):
 		return blocks.map((block, blockIndex) => blockIndex === index ? mergeFoldableBlock(block, incoming) : block);
 	}
 
+	if (incoming.type === "image") {
+		const key = imageBlockKey(incoming);
+		if (blocks.some((block) => block.type === "image" && imageBlockKey(block) === key)) return [...blocks];
+	}
 	return [...blocks, incoming];
 }
 
@@ -309,6 +318,7 @@ export class ChatViewportController {
 	private lastAssistantText = "";
 	private liveAssistant: ChatMessageViewModel | undefined;
 	private liveAssistantBlocks: ChatBlock[] = [];
+	private liveAssistantIndex: number | undefined;
 	private lastChatTop = 0;
 	private lastChatWidth = 1;
 	private lastChatHeight = 1;
@@ -410,6 +420,7 @@ export class ChatViewportController {
 		this.lastAssistantText = "";
 		this.liveAssistant = undefined;
 		this.liveAssistantBlocks = [];
+		this.liveAssistantIndex = undefined;
 		this.inputRouter.clearPendingMouseInput();
 		this.runtime.setEmptyChatQuoteState({ active: false, userMessageCount: 0 });
 	}
@@ -468,6 +479,7 @@ export class ChatViewportController {
 		this.lastAssistantText = "";
 		this.liveAssistant = undefined;
 		this.liveAssistantBlocks = [];
+		this.liveAssistantIndex = undefined;
 		this.inputRouter.clearPendingMouseInput();
 		// Resume uses bulk transcript replacement instead of `clear()` + per-message
 		// replay; `replaceViewModels()` resets the chat-side scroll/banner state.
@@ -522,7 +534,7 @@ export class ChatViewportController {
 					}],
 				},
 		);
-		if (!viewModel || !isFoldableOnlyViewModel(viewModel) || !this.liveAssistant) return;
+		if (!viewModel || !isFoldableResultViewModel(viewModel) || !this.liveAssistant) return;
 		this.foldBlocksIntoAssistant(viewModel.blocks);
 		this.runtime.requestRender();
 	}
@@ -533,6 +545,7 @@ export class ChatViewportController {
 		if (role === "user") {
 			this.liveAssistant = undefined;
 			this.liveAssistantBlocks = [];
+			this.liveAssistantIndex = undefined;
 			this.runtime.noteUserMessage();
 		}
 		if (role === "assistant") {
@@ -541,7 +554,7 @@ export class ChatViewportController {
 		}
 		const viewModel = this.viewModelMapper.messageFromPiMessage(message);
 		if (!viewModel || chatMessageViewModelToPlainText(viewModel).length === 0) return;
-		if (isFoldableOnlyViewModel(viewModel) && this.liveAssistant) {
+		if (isFoldableResultViewModel(viewModel) && this.liveAssistant) {
 			this.foldBlocksIntoAssistant(viewModel.blocks);
 			return;
 		}
@@ -565,7 +578,7 @@ export class ChatViewportController {
 		if (viewModel) {
 			this.liveAssistant = { ...viewModel, role: "sumo", displayName: "SUMO" };
 			this.liveAssistantBlocks = [...viewModel.blocks];
-			this.chat.replaceLastWithViewModel(this.liveAssistant);
+			this.publishLiveAssistant();
 		} else {
 			this.chat.replaceLast(text);
 			this.liveAssistantBlocks = markdownAndCodeBlocksFromText(text);
@@ -582,7 +595,7 @@ export class ChatViewportController {
 				if (viewModel) {
 					this.liveAssistant = { ...viewModel, role: "sumo", displayName: "SUMO" };
 					this.liveAssistantBlocks = [...viewModel.blocks];
-					this.chat.replaceLastWithViewModel(this.liveAssistant);
+					this.publishLiveAssistant();
 				} else {
 					this.chat.replaceLast(text);
 					this.liveAssistantBlocks = markdownAndCodeBlocksFromText(text);
@@ -600,6 +613,7 @@ export class ChatViewportController {
 			: { id: "live-assistant", role: "sumo", displayName: "SUMO", blocks: [{ type: "markdown", text: "" }] };
 		this.liveAssistantBlocks = viewModel ? [...viewModel.blocks] : [];
 		this.lastAssistantText = chatMessageViewModelToPlainText({ ...this.liveAssistant, blocks: this.liveAssistantBlocks });
+		this.liveAssistantIndex = this.chat.getMessageCount();
 		this.chat.addViewModel({ ...this.liveAssistant, blocks: this.liveAssistantBlocks.length > 0 ? this.liveAssistantBlocks : [{ type: "markdown", text: "" }] });
 	}
 
@@ -628,8 +642,8 @@ export class ChatViewportController {
 	}
 
 	private publishLiveAssistant(): void {
-		if (!this.liveAssistant) return;
-		this.chat.replaceLastWithViewModel({
+		if (!this.liveAssistant || this.liveAssistantIndex === undefined) return;
+		this.chat.replaceViewModelAt(this.liveAssistantIndex, {
 			...this.liveAssistant,
 			blocks: this.liveAssistantBlocks.length > 0 ? this.liveAssistantBlocks : [{ type: "markdown", text: "" }],
 		});

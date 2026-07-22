@@ -43,7 +43,17 @@ export interface SafeValuePreviewOptions {
 }
 
 const TERMINAL_STATUS = new Set<ActivityStatus>(["succeeded", "failed", "cancelled", "lost"]);
-const SECRET_KEYS = new Set(["token", "authorization", "password", "secret", "cookie", "apikey"]);
+const SECRET_KEY_WORDS = new Set([
+	"apikey",
+	"authorization",
+	"cookie",
+	"credential",
+	"credentials",
+	"password",
+	"passwd",
+	"secret",
+	"token",
+]);
 
 export function isSettledActivityStatus(status: ActivityStatus): boolean {
 	return TERMINAL_STATUS.has(status);
@@ -123,7 +133,15 @@ export function sanitizeActivityText(text: string): string {
 }
 
 function isSecretKey(key: string): boolean {
-	return SECRET_KEYS.has(key.replace(/[-_.\s]/g, "").toLowerCase());
+	const words = key
+		.replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+		.split(/[^A-Za-z0-9]+/)
+		.filter(Boolean)
+		.map((word) => word.toLowerCase());
+	const normalized = words.join("");
+	return words.some((word) => SECRET_KEY_WORDS.has(word))
+		|| SECRET_KEY_WORDS.has(normalized)
+		|| normalized === "privatekey";
 }
 
 function boundedText(text: string, maxChars: number): string {
@@ -186,10 +204,43 @@ export function safeValuePreview(value: unknown, options: SafeValuePreviewOption
 	return boundedText(sanitizeActivityText(serialized ?? "[undefined]"), maxChars);
 }
 
+function isToolTaskTransition(existing: ActivitySnapshot, incoming: ActivitySnapshot): boolean {
+	return (existing.kind === "tool" && incoming.kind === "task")
+		|| (existing.kind === "task" && incoming.kind === "tool");
+}
+
 export function sameActivity(existing: ActivitySnapshot, incoming: ActivitySnapshot): boolean {
 	if (existing.id === incoming.id) return true;
-	const canonicalTaskTransition = (existing.kind === "tool" && incoming.kind === "task") || (existing.kind === "task" && incoming.kind === "tool");
-	return canonicalTaskTransition && existing.sourceId !== undefined && incoming.sourceId !== undefined && existing.sourceId === incoming.sourceId;
+	if (!isToolTaskTransition(existing, incoming)) return false;
+	return existing.sourceId === incoming.id
+		|| incoming.sourceId === existing.id
+		|| (existing.sourceId !== undefined && existing.sourceId === incoming.sourceId);
+}
+
+function canonicalIdentity(
+	existing: ActivitySnapshot,
+	incoming: ActivitySnapshot,
+): Pick<ActivitySnapshot, "id" | "kind" | "title" | "sourceId"> {
+	if (!isToolTaskTransition(existing, incoming) || !sameActivity(existing, incoming)) {
+		const sourceId = incoming.sourceId ?? existing.sourceId;
+		return {
+			id: incoming.id,
+			kind: incoming.kind,
+			title: incoming.title,
+			...(sourceId ? { sourceId } : {}),
+		};
+	}
+	const task = existing.kind === "task" ? existing : incoming;
+	const tool = existing.kind === "tool" ? existing : incoming;
+	const sourceId = task.sourceId && task.sourceId !== task.id
+		? task.sourceId
+		: tool.id !== task.id ? tool.id : tool.sourceId;
+	return {
+		id: task.id,
+		kind: "task",
+		title: task.title,
+		...(sourceId ? { sourceId } : {}),
+	};
 }
 
 function mergeBody(existing: ActivityBody | undefined, incoming: ActivityBody | undefined): ActivityBody | undefined {
@@ -213,7 +264,8 @@ function mergeChildren(
 	existing: readonly ActivitySnapshot[] | undefined,
 	incoming: readonly ActivitySnapshot[] | undefined,
 ): readonly ActivitySnapshot[] | undefined {
-	if (!incoming || incoming.length === 0) return existing;
+	if (incoming === undefined) return existing;
+	if (incoming.length === 0) return [];
 	if (!existing || existing.length === 0) return incoming;
 	const merged = [...existing];
 	for (const child of incoming) {
@@ -229,28 +281,39 @@ export function mergeActivitySnapshot(existing: ActivitySnapshot, incoming: Acti
 	const status = isSettledActivityStatus(existing.status) && !isSettledActivityStatus(incoming.status)
 		? existing.status
 		: incoming.status;
+	const identity = canonicalIdentity(existing, incoming);
+	const invocation = incoming.invocation ?? existing.invocation;
+	const subject = incoming.subject ?? existing.subject;
+	const currentStep = incoming.currentStep ?? existing.currentStep;
+	const outputTail = incoming.outputTail ?? existing.outputTail;
+	const body = mergeBody(existing.body, incoming.body);
+	const activeTools = mergeChildren(existing.activeTools, incoming.activeTools);
+	const result = incoming.result || existing.result ? { ...existing.result, ...incoming.result } : undefined;
+	const ownerSessionId = incoming.ownerSessionId ?? existing.ownerSessionId;
+	const createdAt = incoming.createdAt ?? existing.createdAt;
+	const updatedAt = incoming.updatedAt ?? existing.updatedAt;
+	const settledAt = incoming.settledAt ?? existing.settledAt;
+	const model = incoming.model ?? existing.model;
+	const thinking = incoming.thinking ?? existing.thinking;
+	const metrics = incoming.metrics || existing.metrics ? { ...existing.metrics, ...incoming.metrics } : undefined;
 	return {
 		...existing,
 		...incoming,
+		...identity,
 		status,
-		sourceId: incoming.sourceId ?? existing.sourceId,
-		invocation: incoming.invocation ?? existing.invocation,
-		subject: incoming.subject ?? existing.subject,
-		currentStep: incoming.currentStep ?? existing.currentStep,
-		outputTail: incoming.outputTail ?? existing.outputTail,
-		body: mergeBody(existing.body, incoming.body),
-		activeTools: mergeChildren(existing.activeTools, incoming.activeTools),
-		result: incoming.result || existing.result
-			? { ...existing.result, ...incoming.result }
-			: undefined,
-		ownerSessionId: incoming.ownerSessionId ?? existing.ownerSessionId,
-		createdAt: incoming.createdAt ?? existing.createdAt,
-		updatedAt: incoming.updatedAt ?? existing.updatedAt,
-		settledAt: incoming.settledAt ?? existing.settledAt,
-		model: incoming.model ?? existing.model,
-		thinking: incoming.thinking ?? existing.thinking,
-		metrics: incoming.metrics || existing.metrics
-			? { ...existing.metrics, ...incoming.metrics }
-			: undefined,
+		...(invocation === undefined ? {} : { invocation }),
+		...(subject === undefined ? {} : { subject }),
+		...(currentStep === undefined ? {} : { currentStep }),
+		...(outputTail === undefined ? {} : { outputTail }),
+		...(body === undefined ? {} : { body }),
+		...(activeTools === undefined ? {} : { activeTools }),
+		...(result === undefined ? {} : { result }),
+		...(ownerSessionId === undefined ? {} : { ownerSessionId }),
+		...(createdAt === undefined ? {} : { createdAt }),
+		...(updatedAt === undefined ? {} : { updatedAt }),
+		...(settledAt === undefined ? {} : { settledAt }),
+		...(model === undefined ? {} : { model }),
+		...(thinking === undefined ? {} : { thinking }),
+		...(metrics === undefined ? {} : { metrics }),
 	};
 }

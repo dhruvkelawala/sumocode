@@ -31,6 +31,13 @@ export interface ScrollBoxOptions {
 	readonly onScrollStateChange?: (state: ScrollBoxStateChange) => void;
 }
 
+export interface ScrollBoxChildResize {
+	/** Child top before the resize, in scroll-content coordinates. */
+	readonly top: number;
+	readonly previousHeight: number;
+	readonly nextHeight: number;
+}
+
 function clampInteger(value: number, min: number, max: number): number {
 	if (!Number.isFinite(value)) return min;
 	return Math.max(min, Math.min(max, Math.round(value)));
@@ -149,6 +156,32 @@ export class ScrollBox extends SumoNode {
 		this.setScrollOffset(previousOffset - Math.max(0, removedLines), false);
 	}
 
+	/**
+	 * Apply in-place child height changes without pretending they removed rows
+	 * from the top of the transcript. Only a child wholly above the viewport
+	 * moves the manual offset; an intersecting or below-viewport child keeps the
+	 * viewport's top anchor unchanged.
+	 */
+	public notifyChildrenResized(changes: readonly ScrollBoxChildResize[]): void {
+		if (changes.length === 0) return;
+		const previousOffset = this.scrollOffset;
+		let heightDelta = 0;
+		let deltaAboveViewport = 0;
+		for (const change of changes) {
+			const previousHeight = Math.max(0, Math.round(change.previousHeight));
+			const nextHeight = Math.max(0, Math.round(change.nextHeight));
+			const delta = nextHeight - previousHeight;
+			heightDelta += delta;
+			if (Math.round(change.top) + previousHeight <= previousOffset) deltaAboveViewport += delta;
+		}
+		this.scrollHeight = Math.max(0, this.scrollHeight + heightDelta);
+		if (this.stickyBottom && !this.manualScroll) {
+			this.setScrollOffsetFromKnownHeight(this.getMaxScrollOffset(), false);
+			return;
+		}
+		this.setScrollOffsetFromKnownHeight(previousOffset + deltaAboveViewport, false);
+	}
+
 	public render(buffer: CellBuffer, rect: Rect): void {
 		this.lastRect = rect;
 		this.hardwareCursor = null;
@@ -220,6 +253,10 @@ export class ScrollBox extends SumoNode {
 
 	private setScrollOffset(offset: number, fromUser: boolean): void {
 		this.recomputeScrollHeight();
+		this.setScrollOffsetFromKnownHeight(offset, fromUser);
+	}
+
+	private setScrollOffsetFromKnownHeight(offset: number, fromUser: boolean): void {
 		const nextOffset = clampInteger(offset, 0, this.getMaxScrollOffset());
 		this.scrollOffset = nextOffset;
 		if (fromUser) this.manualScroll = !this.isAtBottom();

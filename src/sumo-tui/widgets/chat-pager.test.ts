@@ -258,6 +258,76 @@ describe("ChatPager", () => {
 		root.dispose();
 	});
 
+	it("global Ctrl+O expansion still updates skill and summary blocks while Activity state stays pager-owned", async () => {
+		const { root, chat } = await makeChat(90, 12);
+		chat.addViewModel({
+			id: "mixed",
+			role: "sumo",
+			displayName: "SUMO",
+			blocks: [
+				activityViewModel("read-a", "src/a.ts", "succeeded").blocks[0]!,
+				{ type: "skill", name: "tdd", expanded: false, content: "skill body" },
+				{ type: "summary", kind: "branch", label: "[branch]", content: "summary body", expanded: false },
+			],
+		});
+
+		expect(chat.toggleToolExpansion()).toBe(true);
+		expect(chat.getActivityExpansion("read-a")).toBe(true);
+		expect(chat.getRenderedMessages()[0]?.toSnapshot().blocks).toMatchObject([
+			{ type: "activity", activity: { id: "read-a" } },
+			{ type: "skill", expanded: true },
+			{ type: "summary", expanded: true },
+		]);
+
+		chat.replaceViewModelAt(0, {
+			id: "mixed",
+			role: "sumo",
+			displayName: "SUMO",
+			blocks: [
+				activityViewModel("read-a", "src/a.ts", "succeeded").blocks[0]!,
+				{ type: "skill", name: "tdd", expanded: false, content: "updated skill body" },
+				{ type: "summary", kind: "branch", label: "[branch]", content: "updated summary body", expanded: false },
+			],
+		});
+		expect(chat.getActivityExpansion("read-a")).toBe(true);
+		expect(chat.getRenderedMessages()[0]?.toSnapshot().blocks).toMatchObject([
+			{ type: "activity" },
+			{ type: "skill", expanded: true },
+			{ type: "summary", expanded: true },
+		]);
+		root.dispose();
+	});
+
+	it("migrates explicit expansion state from a provisional tool ID to its canonical task ID", async () => {
+		const { root, chat } = await makeChat(90, 10);
+		chat.addViewModel({
+			id: "activity-message",
+			role: "sumo",
+			displayName: "SUMO",
+			blocks: [{
+				type: "activity",
+				activity: { id: "tool-call-1", kind: "tool", title: "task", status: "running", body: { kind: "text", text: "working" } },
+			}],
+		});
+		chat.setActivityExpansion("tool-call-1", false);
+
+		chat.replaceLastWithViewModel({
+			id: "activity-message",
+			role: "sumo",
+			displayName: "SUMO",
+			blocks: [{
+				type: "activity",
+				activity: { id: "task-42", sourceId: "tool-call-1", kind: "task", title: "canonical task", status: "succeeded", body: { kind: "text", text: "done" } },
+			}],
+		});
+
+		expect(chat.getActivityExpansion("task-42")).toBe(false);
+		const internal = chat as unknown as { activityExpansionOverrides: Map<string, boolean>; activityExpansionStates: Map<string, boolean> };
+		expect(internal.activityExpansionOverrides.has("tool-call-1")).toBe(false);
+		expect(internal.activityExpansionStates.has("tool-call-1")).toBe(false);
+		root.dispose();
+	});
+
 	it("keeps same-name Activity IDs independent across replacement and hydration", async () => {
 		const { root, chat } = await makeChat(90, 10);
 		chat.replaceViewModels([
@@ -307,6 +377,49 @@ describe("ChatPager", () => {
 
 		expect(chat.getRenderedMessages()).toHaveLength(1);
 		expect(chat.getRenderedMessages()[0]?.getActivityExpansion("read-a")).toBe(true);
+		root.dispose();
+	});
+
+	it("target-updates a non-last Activity node while preserving scroll, unread, and expansion state", async () => {
+		const { root, chat, buffer } = await makeChat(48, 6);
+		for (let index = 0; index < 8; index += 1) chat.addMessage("sumo", `message ${index}`);
+		const activityIndex = chat.getMessageCount();
+		chat.addViewModel(activityViewModel("non-last", "src/a.ts", "running"));
+		const target = chat.getLastMessage();
+		chat.setActivityExpansion("non-last", false);
+		chat.addMessage("sumo", "later message");
+		buffer();
+		chat.scrollBox.scrollToBottom();
+		chat.handleKey({ key: "PageUp" });
+		chat.addMessage("sumo", "unread message");
+		const before = {
+			offset: chat.scrollBox.scrollOffset,
+			unread: chat.getUnreadCount(),
+			lastRead: chat.getLastReadIndex(),
+		};
+
+		expect(chat.replaceViewModelAt(activityIndex, activityViewModel("non-last", "src/a.ts", "succeeded"))).toBe(true);
+
+		expect(chat.getRenderedMessages()[activityIndex]).toBe(target);
+		expect(chat.scrollBox.scrollOffset).toBe(before.offset);
+		expect(chat.getUnreadCount()).toBe(before.unread);
+		expect(chat.getLastReadIndex()).toBe(before.lastRead);
+		expect(chat.getActivityExpansion("non-last")).toBe(false);
+		expect(target?.toSnapshot().blocks?.[0]).toMatchObject({ type: "activity", activity: { status: "succeeded" } });
+		root.dispose();
+	});
+
+	it("routes Activity height changes through targeted child-resize ownership", async () => {
+		const { root, chat, buffer } = await makeChat(90, 8);
+		chat.addViewModel(activityViewModel("resize-me", "src/a.ts", "running"));
+		buffer();
+		const notify = vi.spyOn(chat.scrollBox, "notifyChildrenResized");
+
+		chat.setActivityExpansion("resize-me", false);
+
+		expect(notify).toHaveBeenCalledTimes(1);
+		expect(notify.mock.calls[0]?.[0]).toEqual([expect.objectContaining({ previousHeight: expect.any(Number), nextHeight: expect.any(Number), top: expect.any(Number) })]);
+		expect(notify.mock.calls[0]?.[0]?.[0]?.nextHeight).toBeLessThan(notify.mock.calls[0]?.[0]?.[0]?.previousHeight ?? 0);
 		root.dispose();
 	});
 

@@ -30,6 +30,8 @@ export interface TranscriptControllerChatSink {
 	replaceViewModels(messages: readonly ChatMessageViewModel[]): ChatPagerReplaceStats;
 	/** Append one new message to the end of the pager without touching scroll/read state. */
 	addViewModel(message: ChatMessageViewModel): unknown;
+	/** Replace one rendered transcript node in place (scroll/read state preserved). */
+	replaceViewModelAt(index: number, message: ChatMessageViewModel): unknown;
 	/** Replace the pager's current last message in place (scroll/read state preserved). */
 	replaceLastWithViewModel(message: ChatMessageViewModel): unknown;
 }
@@ -177,12 +179,14 @@ function isDelegationBlock(block: ChatBlock): block is Extract<ChatBlock, { type
 	return block.type === "delegation";
 }
 
-function isFoldableBlock(block: ChatBlock): boolean {
+type FoldableBlock = Extract<ChatBlock, { type: "activity" | "delegation" }>;
+
+function isFoldableBlock(block: ChatBlock): block is FoldableBlock {
 	return isActivityBlock(block) || isDelegationBlock(block);
 }
 
-function isFoldableOnlyViewModel(message: ChatMessageViewModel): boolean {
-	return message.blocks.length > 0 && message.blocks.every(isFoldableBlock);
+function isImageBlock(block: ChatBlock): block is Extract<ChatBlock, { type: "image" }> {
+	return block.type === "image";
 }
 
 function matchingFoldableIndex(blocks: readonly ChatBlock[], incoming: ChatBlock): number {
@@ -279,9 +283,46 @@ function foldBlocksIntoMessages(messages: readonly ChatMessageViewModel[], block
 	return { messages: next, folded: foldedAny };
 }
 
-function foldableBlocksFromCommittedMessage(message: ChatMessageViewModel): ChatBlock[] | undefined {
+function imageBlockKey(block: Extract<ChatBlock, { type: "image" }>): string {
+	return JSON.stringify([block.mime, block.data, block.filename ?? null]);
+}
+
+function foldResultBlocksIntoMessages(
+	messages: readonly ChatMessageViewModel[],
+	blocks: readonly ChatBlock[],
+): { messages: ChatMessageViewModel[]; folded: boolean } {
+	const foldable = blocks.filter(isFoldableBlock);
+	if (foldable.length === 0 || !blocks.every((block) => isFoldableBlock(block) || isImageBlock(block))) {
+		return { messages: [...messages], folded: false };
+	}
+	const targetIndex = findLastMessageIndex(messages, (message) => (
+		message.role === "sumo" && foldable.some((block) => matchingFoldableIndex(message.blocks, block) !== -1)
+	));
+	if (targetIndex === -1) return { messages: [...messages], folded: false };
+	const folded = foldBlocksIntoMessages(messages, foldable, { requireMatch: true });
+	if (!folded.folded) return folded;
+	const images = blocks.filter(isImageBlock);
+	if (images.length === 0) return folded;
+	return {
+		messages: folded.messages.map((message, index) => {
+			if (index !== targetIndex) return message;
+			const existingImageKeys = new Set(message.blocks.filter(isImageBlock).map(imageBlockKey));
+			const uniqueImages = images.filter((image) => {
+				const key = imageBlockKey(image);
+				if (existingImageKeys.has(key)) return false;
+				existingImageKeys.add(key);
+				return true;
+			});
+			return uniqueImages.length > 0 ? { ...message, blocks: [...message.blocks, ...uniqueImages] } : message;
+		}),
+		folded: true,
+	};
+}
+
+function resultBlocksFromCommittedMessage(message: ChatMessageViewModel): ChatBlock[] | undefined {
 	if (message.role !== "system") return undefined;
-	return isFoldableOnlyViewModel(message) ? [...message.blocks] : undefined;
+	const blocks = [...message.blocks];
+	return blocks.some(isFoldableBlock) && blocks.every((block) => isFoldableBlock(block) || isImageBlock(block)) ? blocks : undefined;
 }
 
 function fallbackReplaceStats(transcript: TranscriptViewModel): ChatPagerReplaceStats {
@@ -472,9 +513,9 @@ export class TranscriptController {
 		if (this.draftMessage !== undefined) {
 			const message = this.mapper.messageFromPiMessage(this.draftMessage, messages.length);
 			if (message) {
-				const foldableBlocks = foldableBlocksFromCommittedMessage(message);
-				if (foldableBlocks) {
-					const folded = foldBlocksIntoMessages(messages, foldableBlocks, { requireMatch: true });
+				const resultBlocks = resultBlocksFromCommittedMessage(message);
+				if (resultBlocks) {
+					const folded = foldResultBlocksIntoMessages(messages, resultBlocks);
 					if (folded.folded) messages = folded.messages;
 					else messages.push(message);
 				} else {
@@ -544,9 +585,9 @@ export class TranscriptController {
 		for (const sourceMessage of this.committedMessages) {
 			const message = this.mapper.messageFromPiMessage(sourceMessage, messages.length);
 			if (!message) continue;
-			const foldableBlocks = foldableBlocksFromCommittedMessage(message);
-			if (foldableBlocks) {
-				const folded = foldBlocksIntoMessages(messages, foldableBlocks, { requireMatch: true });
+			const resultBlocks = resultBlocksFromCommittedMessage(message);
+			if (resultBlocks) {
+				const folded = foldResultBlocksIntoMessages(messages, resultBlocks);
 				if (folded.folded) {
 					messages = folded.messages;
 					continue;
@@ -606,23 +647,14 @@ export class TranscriptController {
 	 * rendered id/role/blocks instead, which is cheap (no ANSI rendering) and
 	 * stable for a message whose content truly did not change:
 	 *
-	 *   - same length, only the LAST entry's content differs, everything
-	 *     before is content-identical -> `replaceLastWithViewModel(next[last])`
-	 *     (the common `message_update` streaming-delta case, and the common
-	 *     `message_end` case where the committed message renders the same as
-	 *     the draft it replaced).
-	 *   - next is exactly one longer, and every one of the previous messages
-	 *     is still content-identical at the same index -> optionally
-	 *     replace-last (if the old last message's content also changed) then
-	 *     `addViewModel(next[newLast])` (a fresh message started after the
-	 *     previous one finished).
-	 *   - anything else (an earlier message changed, or the array shrank, or
-	 *     more than one message changed under a length that isn't `+1`) means
-	 *     history was actually rewritten (e.g. agent_end's run-suffix splice
-	 *     changing an already-committed entry's rendered content, or
-	 *     live-tool folding touching a message that isn't the last one) ->
-	 *     fall back to a full `replaceViewModels`, the only operation that can
-	 *     express an arbitrary rewrite.
+	 *   - same length, exactly one entry differs -> update that retained node;
+	 *     the last entry keeps the O(1) `replaceLastWithViewModel` fast path,
+	 *     while a folded non-last Activity uses `replaceViewModelAt`.
+	 *   - next is exactly one longer, with at most one changed shared entry ->
+	 *     apply that targeted update (if any), then append the new message.
+	 *   - array shrinkage, growth by more than one, or multiple changed entries
+	 *     means history was actually rewritten -> fall back to a full
+	 *     `replaceViewModels`, the only operation that can express it safely.
 	 *
 	 * The very first publish (no prior `lastPublishedToChat`) always falls
 	 * back to a full replace too, since there is nothing to diff against yet.
@@ -649,6 +681,7 @@ export class TranscriptController {
 		}
 		for (const operation of operations) {
 			if (operation.kind === "replace-last") chat.replaceLastWithViewModel(operation.message);
+			else if (operation.kind === "replace") chat.replaceViewModelAt(operation.index, operation.message);
 			else chat.addViewModel(operation.message);
 		}
 		this.lastPublishedToChat = next;
@@ -657,6 +690,7 @@ export class TranscriptController {
 }
 
 export type ChatDiffOperation =
+	| { readonly kind: "replace"; readonly index: number; readonly message: ChatMessageViewModel }
 	| { readonly kind: "replace-last"; readonly message: ChatMessageViewModel }
 	| { readonly kind: "append"; readonly message: ChatMessageViewModel };
 
@@ -664,26 +698,14 @@ function planHintedIncrementalChatDiff(
 	previous: readonly ChatMessageViewModel[],
 	next: readonly ChatMessageViewModel[],
 ): ChatDiffOperation[] | undefined {
-	const lengthDelta = next.length - previous.length;
-	if (lengthDelta === 0) {
-		if (next.length === 0) return [];
-		const last = next[next.length - 1]!;
-		if (messageContentKey(last) === messageContentKey(previous[previous.length - 1])) return [];
-		return [{ kind: "replace-last", message: last }];
-	}
-
-	if (lengthDelta === 1) {
-		const operations: ChatDiffOperation[] = [];
-		const previousLast = previous[previous.length - 1];
-		const stillPreviousLast = previousLast === undefined ? undefined : next[previous.length - 1];
-		if (previousLast !== undefined && messageContentKey(stillPreviousLast) !== messageContentKey(previousLast)) {
-			operations.push({ kind: "replace-last", message: stillPreviousLast! });
-		}
-		operations.push({ kind: "append", message: next[next.length - 1]! });
-		return operations;
-	}
-
-	return undefined;
+	if (next.length !== previous.length) return undefined;
+	if (next.length === 0) return [];
+	const last = next[next.length - 1]!;
+	// A changed last boundary is the common streaming-delta case and is safe to
+	// plan in O(1). If it is unchanged, fall back to the full content diff: a
+	// tool result may have folded into a non-last assistant message.
+	if (messageContentKey(last) === messageContentKey(previous[previous.length - 1])) return undefined;
+	return [{ kind: "replace-last", message: last }];
 }
 
 /**
@@ -696,36 +718,24 @@ export function planChatDiff(
 	previous: readonly ChatMessageViewModel[],
 	next: readonly ChatMessageViewModel[],
 ): ChatDiffOperation[] | undefined {
-	if (next.length === previous.length) {
-		if (next.length === 0) return [];
-		if (!sameContentExceptLast(previous, next)) return undefined;
-		const last = next[next.length - 1]!;
-		if (messageContentKey(last) === messageContentKey(previous[previous.length - 1])) return [];
-		return [{ kind: "replace-last", message: last }];
+	if (next.length !== previous.length && next.length !== previous.length + 1) return undefined;
+	const sharedLength = previous.length;
+	let changedIndex: number | undefined;
+	for (let index = 0; index < sharedLength; index += 1) {
+		if (messageContentKey(previous[index]) === messageContentKey(next[index])) continue;
+		if (changedIndex !== undefined) return undefined;
+		changedIndex = index;
 	}
 
-	if (next.length === previous.length + 1) {
-		if (!sameContentExceptLast(previous, next.slice(0, previous.length))) return undefined;
-		const operations: ChatDiffOperation[] = [];
-		const previousLast = previous[previous.length - 1];
-		const stillPreviousLast = previousLast === undefined ? undefined : next[previous.length - 1];
-		if (previousLast !== undefined && messageContentKey(stillPreviousLast) !== messageContentKey(previousLast)) {
-			operations.push({ kind: "replace-last", message: stillPreviousLast! });
-		}
-		operations.push({ kind: "append", message: next[next.length - 1]! });
-		return operations;
+	const operations: ChatDiffOperation[] = [];
+	if (changedIndex !== undefined) {
+		const message = next[changedIndex]!;
+		operations.push(changedIndex === previous.length - 1
+			? { kind: "replace-last", message }
+			: { kind: "replace", index: changedIndex, message });
 	}
-
-	return undefined;
-}
-
-/** True when every index except the last renders identically between the two arrays (which must be the same length). */
-function sameContentExceptLast(previous: readonly ChatMessageViewModel[], next: readonly ChatMessageViewModel[]): boolean {
-	if (previous.length !== next.length) return false;
-	for (let index = 0; index < previous.length - 1; index += 1) {
-		if (messageContentKey(previous[index]) !== messageContentKey(next[index])) return false;
-	}
-	return true;
+	if (next.length === previous.length + 1) operations.push({ kind: "append", message: next[next.length - 1]! });
+	return operations;
 }
 
 /**

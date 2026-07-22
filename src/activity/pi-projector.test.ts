@@ -16,13 +16,42 @@ describe("Pi Activity projector", () => {
 		expect(projectPiToolActivity({ id: "call-1", name: "custom", status: input }, scope)?.status).toBe(expected);
 	});
 
-	it("projects read/write, edit, and bash records into specialized bodies", () => {
+	it("projects real Pi read/write, edit, and bash records into useful specialized bodies", () => {
 		expect(projectPiToolActivity({ id: "read-1", name: "read", arguments: { path: "a.ts" }, details: { excerpt: ["one", "two"], startLine: 4, totalLines: 9 } }, scope)).toMatchObject({
 			id: "read-1",
 			subject: "a.ts",
 			body: { kind: "source", text: "one\ntwo", startLine: 4, totalLines: 9 },
 		});
-		expect(projectPiToolActivity({ id: "write-1", name: "write", output: "created", arguments: { path: "b.ts" } }, scope)?.body).toEqual({ kind: "source", text: "created" });
+		expect(projectPiToolActivity({
+			id: "real-read",
+			name: "read",
+			status: "success",
+			arguments: { path: "offset.ts", offset: 7, limit: 3 },
+			content: [{ type: "text", text: "alpha\n\nomega" }],
+		}, scope)).toMatchObject({
+			body: { kind: "source", text: "alpha\n\nomega", startLine: 7, totalLines: 9 },
+		});
+		expect(projectPiToolActivity({
+			id: "write-1",
+			name: "write",
+			status: "success",
+			arguments: { path: "b.ts", content: "const one = 1;\n\nconst two = 2;" },
+			content: [{ type: "text", text: "Successfully wrote 31 bytes to b.ts" }],
+		}, scope)).toMatchObject({
+			outputTail: "Successfully wrote 31 bytes to b.ts",
+			body: { kind: "source", text: "const one = 1;\n\nconst two = 2;", totalLines: 3 },
+		});
+		expect(projectPiToolActivity({
+			id: "write-error",
+			name: "write",
+			arguments: { path: "b.ts", content: "attempted content" },
+			content: [{ type: "text", text: "permission denied" }],
+			isError: true,
+		}, scope)).toMatchObject({
+			status: "failed",
+			body: { kind: "source", text: "attempted content" },
+			result: { error: "permission denied" },
+		});
 		expect(projectPiToolActivity({ id: "edit-1", name: "edit", details: { diff: "- old\n+ new" } }, scope)?.body).toEqual({ kind: "diff", text: "- old\n+ new" });
 		expect(projectPiToolActivity({ id: "bash-1", name: "bash", arguments: { command: "pnpm test" }, output: "passed" }, scope)?.body).toEqual({ kind: "terminal", command: "pnpm test", text: "passed" });
 	});
@@ -53,7 +82,9 @@ describe("Pi Activity projector", () => {
 		expect(() => projectPiToolActivity({ id: "custom-2", name: "custom", arguments: invocation }, scope)).not.toThrow();
 	});
 
-	it("requires a tool call ID for live correlation and scopes historical fallback IDs", () => {
+	it("requires an actual toolCallId for live correlation and scopes historical fallback IDs", () => {
+		expect(projectPiToolActivity({ id: "generic-record-id", name: "read" }, { ...scope, requireToolCallId: true })).toBeUndefined();
+		expect(projectPiToolActivity({ toolCallId: "live-call", id: "generic-record-id", name: "read" }, { ...scope, requireToolCallId: true })?.id).toBe("live-call");
 		expect(projectPiToolActivity({ name: "read" }, { ...scope, requireToolCallId: true })).toBeUndefined();
 		expect(projectPiToolActivity({ name: "read" }, scope)?.id).toBe("pi-tool:message-7:2");
 		expect(projectPiToolActivity({ name: "read" }, { messageId: "message-7", blockIndex: 3 })?.id).toBe("pi-tool:message-7:3");

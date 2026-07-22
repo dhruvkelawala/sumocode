@@ -52,16 +52,53 @@ function stringArray(value: unknown): string[] {
 	return value.filter((item): item is string => typeof item === "string").map(sanitizeActivityText);
 }
 
-function sourceBody(details: Record<string, unknown> | undefined, output: string | undefined, error: string | undefined): ActivityBody {
+function sourceLineCount(text: string): number {
+	const lines = text.split("\n");
+	while (lines.length > 0 && lines.at(-1) === "") lines.pop();
+	return lines.length;
+}
+
+function readTotalLines(output: string | undefined, startLine: number): number | undefined {
+	if (!output) return undefined;
+	const declaredTotal = output.match(/\bof\s+(\d+)(?:\s+lines)?\b/i)?.[1];
+	if (declaredTotal) return Number(declaredTotal);
+	const remaining = output.match(/\[(\d+)\s+more lines in file\b/i)?.[1];
+	if (remaining) {
+		const source = output.split(/\n\n\[\d+\s+more lines in file\b/i)[0] ?? "";
+		return startLine - 1 + sourceLineCount(source) + Number(remaining);
+	}
+	return startLine - 1 + sourceLineCount(output);
+}
+
+function sourceBody(
+	name: string,
+	invocation: unknown,
+	details: Record<string, unknown> | undefined,
+	output: string | undefined,
+	error: string | undefined,
+): ActivityBody {
+	const args = asRecord(invocation);
 	const excerpt = stringArray(details?.excerpt);
-	const text = excerpt.length > 0 ? excerpt.join("\n") : error ?? output ?? "";
+	const invocationContent = name === "write" && typeof args?.content === "string"
+		? sanitizeActivityText(args.content)
+		: undefined;
+	const text = invocationContent ?? (excerpt.length > 0 ? excerpt.join("\n") : error ?? output ?? "");
+	const startLine = typeof details?.startLine === "number"
+		? details.startLine
+		: name === "read" && typeof args?.offset === "number" ? args.offset : undefined;
+	const truncation = asRecord(details?.truncation);
+	const declaredTotal = typeof details?.totalLines === "number"
+		? details.totalLines
+		: typeof details?.lineCount === "number"
+			? details.lineCount
+			: typeof truncation?.totalLines === "number" ? truncation.totalLines : undefined;
+	const totalLines = declaredTotal
+		?? (name === "read" ? readTotalLines(output, startLine ?? 1) : sourceLineCount(text));
 	return {
 		kind: "source",
 		text,
-		...(typeof details?.startLine === "number" ? { startLine: details.startLine } : {}),
-		...(typeof details?.totalLines === "number"
-			? { totalLines: details.totalLines }
-			: typeof details?.lineCount === "number" ? { totalLines: details.lineCount } : {}),
+		...(startLine === undefined ? {} : { startLine }),
+		...(totalLines === undefined ? {} : { totalLines }),
 	};
 }
 
@@ -99,7 +136,7 @@ function bodyForTool(
 	error: string | undefined,
 	details: Record<string, unknown> | undefined,
 ): ActivityBody {
-	if (name === "read" || name === "write") return sourceBody(details, output, error);
+	if (name === "read" || name === "write") return sourceBody(name, invocation, details, output, error);
 	if (name === "edit") return diffBody(details, output, error);
 	if (name === "bash") return terminalBody(invocation, output, error);
 	return genericBody(invocation, output, error);
@@ -109,15 +146,16 @@ function bodyForTool(
 export function projectPiToolActivity(recordValue: unknown, scope: PiToolProjectionScope): ActivitySnapshot | undefined {
 	const record = asRecord(recordValue);
 	if (!record) return undefined;
-	const canonicalId = firstString(record.toolCallId, record.id);
-	if (scope.requireToolCallId && !canonicalId) return undefined;
-	const id = canonicalId ?? `pi-tool:${scope.messageId}:${Math.max(0, Math.floor(scope.blockIndex))}`;
+	const toolCallId = firstString(record.toolCallId);
+	if (scope.requireToolCallId && !toolCallId) return undefined;
+	const id = toolCallId ?? firstString(record.id) ?? `pi-tool:${scope.messageId}:${Math.max(0, Math.floor(scope.blockIndex))}`;
 	const name = firstString(record.name, record.toolName, record.command) ?? "tool";
 	const invocation = record.arguments ?? record.input ?? (record.command ? { command: record.command } : undefined);
 	const details = asRecord(record.details);
 	const output = textFromContent(record.content) ?? (typeof record.output === "string" ? sanitizeActivityText(record.output) : undefined);
-	const error = firstString(record.errorMessage, record.error);
-	const isError = record.isError === true || error !== undefined;
+	const declaredError = firstString(record.errorMessage, record.error);
+	const isError = record.isError === true || declaredError !== undefined;
+	const error = declaredError ?? (isError ? firstString(output) : undefined);
 	const fallback = isError ? "failed" : scope.fallbackStatus ?? "queued";
 	const status = normalizePiActivityStatus(record.status, fallback);
 	const args = asRecord(invocation);

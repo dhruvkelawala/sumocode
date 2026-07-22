@@ -331,7 +331,7 @@ describe("RpcTranscriptPump", () => {
 				invocation: { path: "src/auth/session.ts" },
 				subject: "src/auth/session.ts",
 				outputTail: "final file contents",
-				body: { kind: "source", text: "final file contents" },
+				body: { kind: "source", text: "final file contents", totalLines: 1 },
 			},
 		});
 	});

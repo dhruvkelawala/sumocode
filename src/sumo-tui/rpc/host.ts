@@ -157,6 +157,7 @@ export function createLazyChatSink(getRuntime: () => { getChatSink(): Transcript
 	return {
 		replaceViewModels: (messages) => getRuntime()?.getChatSink()?.replaceViewModels(messages) ?? fallbackChatSinkStats(messages),
 		addViewModel: (message) => getRuntime()?.getChatSink()?.addViewModel(message),
+		replaceViewModelAt: (index, message) => getRuntime()?.getChatSink()?.replaceViewModelAt(index, message),
 		replaceLastWithViewModel: (message) => getRuntime()?.getChatSink()?.replaceLastWithViewModel(message),
 	};
 }

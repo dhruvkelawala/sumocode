@@ -1,5 +1,5 @@
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
@@ -91,13 +91,19 @@ describe("terminal completion Pi fidelity", () => {
 		first.child.kill("SIGTERM");
 		await waitForExit(first.child);
 
+		const persistedAfterSend = readFileSync(sessionFile, "utf8");
+		expect(persistedAfterSend.match(/completion-probe/g)).toHaveLength(1);
+		expect(persistedAfterSend).toContain('"customType":"terminal-result"');
+
 		const second = launch(extension, sessionDir, sessionFile);
 		const hydrated = await second.request({ type: "get_messages" });
 		second.child.kill("SIGTERM");
 		await waitForExit(second.child);
 
-		const findProbe = (response: any) => response.data.messages.find((message: any) => message.role === "custom" && message.customType === "terminal-result");
-		for (const probe of [findProbe(live), findProbe(hydrated)]) {
+		const findProbes = (response: any) => response.data.messages.filter((message: any) => message.role === "custom" && message.customType === "terminal-result");
+		expect(findProbes(live)).toHaveLength(1);
+		expect(findProbes(hydrated)).toHaveLength(1);
+		for (const probe of [findProbes(live)[0], findProbes(hydrated)[0]]) {
 			expect(probe).toMatchObject({
 				details: {
 					completionId: "completion-probe",

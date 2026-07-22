@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdtempSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -173,6 +173,23 @@ describe("TerminalTaskManager", () => {
 		expect(waited.pendingIds).toEqual([]);
 	});
 
+	it("keeps repeated check and wait observations revision-idempotent", async () => {
+		const target = manager();
+		const task = await start(target);
+		writeFileSync(exitFile(task), "0");
+		tree.empty.set(task.processGroupId!, true);
+		children[0]?.emit("close", 0);
+		await vi.waitFor(() => expect(target.get(task.id, "session-a")?.status).toBe("completed"));
+
+		const firstCheck = target.check(task.id, "session-a")!.task;
+		const secondCheck = target.check(task.id, "session-a")!.task;
+		expect(secondCheck.revision).toBe(firstCheck.revision);
+		const firstWait = (await target.wait([task.id], "session-a", 10)).settled[0]!.task;
+		const secondWait = (await target.wait([task.id], "session-a", 10)).settled[0]!.task;
+		expect(secondWait.revision).toBe(firstWait.revision);
+		expect(secondWait.updatedAt).toBe(firstWait.updatedAt);
+	});
+
 	it("times out normally and aborts only the wait", async () => {
 		const target = manager();
 		const task = await start(target);
@@ -204,6 +221,28 @@ describe("TerminalTaskManager", () => {
 		expect(results[0]?.task).toMatchObject({ status: "cancelled", deliveryState: "suppressed", observedAt: expect.any(Number), consumedAt: expect.any(Number) });
 	});
 
+	it("marks a mismatched stop target lost and refuses every signal", async () => {
+		const target = manager();
+		const task = await start(target);
+		tree.operations.identityMatches = vi.fn((): "different" => "different");
+
+		const result = await target.stop([task.id], "session-a");
+
+		expect(result[0]).toMatchObject({ outcome: "failed", task: { status: "lost" } });
+		expect(tree.operations.signalTree).not.toHaveBeenCalled();
+	});
+
+	it("stopOwned uses the same identity refusal and never signals an unrelated group", async () => {
+		const target = manager();
+		await start(target);
+		tree.operations.identityMatches = vi.fn((): "unknown" => "unknown");
+
+		const result = await target.stopOwned("session-a");
+
+		expect(result[0]).toMatchObject({ outcome: "failed", task: { status: "running" } });
+		expect(tree.operations.signalTree).not.toHaveBeenCalled();
+	});
+
 	it("filters every boundary by owner and keeps list side-effect free", async () => {
 		const target = manager();
 		const own = await start(target, "session-a");
@@ -229,6 +268,50 @@ describe("TerminalTaskManager", () => {
 		expect(recovered.get(task.id, "session-a")).toMatchObject({ completionId: expect.any(String), deliveryState: "pending" });
 	});
 
+	it("recovers persisted stopping by resuming safe escalation for a live tree", async () => {
+		const first = manager();
+		const task = await start(first);
+		const store = new TerminalTaskStore({ rootDir });
+		const current = store.loadAll().find((entry) => entry.id === task.id)!;
+		store.transition(task.id, current.revision, (entry) => ({ ...entry, status: "stopping", updatedAt: 2_000 }));
+		first.detach();
+
+		const recovered = manager();
+		await vi.waitFor(() => expect(recovered.get(task.id, "session-a")?.status).toBe("cancelled"));
+		expect(tree.operations.signalTree).toHaveBeenCalledWith(expect.objectContaining({ processGroupId: task.processGroupId }), "SIGTERM");
+		expect(tree.operations.signalTree).toHaveBeenCalledWith(expect.objectContaining({ processGroupId: task.processGroupId }), "SIGKILL");
+	});
+
+	it("recovers persisted stopping as cancelled without signalling when the tree is empty", async () => {
+		const first = manager();
+		const task = await start(first);
+		const store = new TerminalTaskStore({ rootDir });
+		const current = store.loadAll().find((entry) => entry.id === task.id)!;
+		store.transition(task.id, current.revision, (entry) => ({ ...entry, status: "stopping", updatedAt: 2_000 }));
+		first.detach();
+		tree.empty.set(task.processGroupId!, true);
+		vi.mocked(tree.operations.signalTree).mockClear();
+
+		const recovered = manager();
+		await vi.waitFor(() => expect(recovered.get(task.id, "session-a")?.status).toBe("cancelled"));
+		expect(tree.operations.signalTree).not.toHaveBeenCalled();
+	});
+
+	it("recovers persisted stopping as lost on identity mismatch without signalling", async () => {
+		const first = manager();
+		const task = await start(first);
+		const store = new TerminalTaskStore({ rootDir });
+		const current = store.loadAll().find((entry) => entry.id === task.id)!;
+		store.transition(task.id, current.revision, (entry) => ({ ...entry, status: "stopping", updatedAt: 2_000 }));
+		first.detach();
+		tree.operations.identityMatches = vi.fn((): "different" => "different");
+		vi.mocked(tree.operations.signalTree).mockClear();
+
+		const recovered = manager();
+		await vi.waitFor(() => expect(recovered.get(task.id, "session-a")?.status).toBe("lost"));
+		expect(tree.operations.signalTree).not.toHaveBeenCalled();
+	});
+
 	it("leases pending delivery and acknowledges exactly the observable completion id", async () => {
 		const target = manager();
 		const task = await start(target);
@@ -246,7 +329,64 @@ describe("TerminalTaskManager", () => {
 		expect(target.acknowledge("session-a", new Set([claimed[0]!.completionId!]))).toEqual([]);
 	});
 
-	it("releases an expired claim after restart", async () => {
+	it("allows only one cross-manager notification claim and preserves the winner", async () => {
+		const first = manager();
+		const task = await start(first);
+		writeFileSync(exitFile(task), "0");
+		tree.empty.set(task.processGroupId!, true);
+		children[0]?.emit("close", 0);
+		await vi.waitFor(() => expect(first.get(task.id, "session-a")?.deliveryState).toBe("pending"));
+		const second = manager();
+
+		const claims = [first.claimPending("session-a", true), second.claimPending("session-a", true)];
+		expect(claims.map((entries) => entries.length).sort()).toEqual([0, 1]);
+		expect(new TerminalTaskStore({ rootDir }).loadAll()[0]?.deliveryState).toBe("claimed");
+	});
+
+	it("settles safely with competing recovery pollers and no unhandled rejection", async () => {
+		const unhandled: unknown[] = [];
+		const onUnhandled = (error: unknown): void => { unhandled.push(error); };
+		process.on("unhandledRejection", onUnhandled);
+		try {
+			const first = manager();
+			const task = await start(first);
+			const second = manager();
+			writeFileSync(exitFile(task), "0");
+			tree.empty.set(task.processGroupId!, true);
+			children[0]?.emit("close", 0);
+			await vi.waitFor(() => expect(second.get(task.id, "session-a")?.status).toBe("completed"));
+			await new Promise((resolve) => setTimeout(resolve, 25));
+			expect(unhandled).toEqual([]);
+			expect(new TerminalTaskStore({ rootDir }).loadAll()[0]).toMatchObject({ status: "completed", revision: 3 });
+		} finally {
+			process.off("unhandledRejection", onUnhandled);
+		}
+	});
+
+	it.skipIf(process.platform === "win32")("creates every task artifact private under a permissive umask and refuses symlink output", async () => {
+		const previousUmask = process.umask(0);
+		try {
+			const target = manager();
+			const task = await start(target);
+			const directory = dirname(task.logFile);
+			expect(lstatSync(rootDir).mode & 0o777).toBe(0o700);
+			expect(lstatSync(directory).mode & 0o777).toBe(0o700);
+			for (const name of ["output.log", "exit.code", "run.sh", "launch.ready", "meta.json"]) {
+				expect(lstatSync(join(directory, name)).mode & 0o777, name).toBe(0o600);
+			}
+			const outside = join(rootDir, "outside.log");
+			writeFileSync(outside, "outside", { mode: 0o600 });
+			chmodSync(outside, 0o600);
+			rmSync(task.logFile);
+			symlinkSync(outside, task.logFile);
+			expect(target.getOutput(task)).toBe("");
+			expect(readdirSync(directory)).toContain("output.log");
+		} finally {
+			process.umask(previousUmask);
+		}
+	});
+
+	it("retries a crashed claim lease and acknowledges only after retry visibility", async () => {
 		const first = manager();
 		const task = await start(first);
 		writeFileSync(exitFile(task), "0");
@@ -259,6 +399,8 @@ describe("TerminalTaskManager", () => {
 		now += 31;
 
 		const recovered = manager();
-		expect(recovered.claimPending("session-a", true)[0]).toMatchObject({ id: task.id, deliveryState: "claimed" });
+		const retried = recovered.claimPending("session-a", true)[0]!;
+		expect(retried).toMatchObject({ id: task.id, deliveryState: "claimed" });
+		expect(recovered.acknowledge("session-a", new Set([retried.completionId!]))[0]).toMatchObject({ deliveryState: "delivered" });
 	});
 });

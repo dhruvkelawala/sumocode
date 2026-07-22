@@ -1,25 +1,34 @@
 import { randomUUID } from "node:crypto";
 import { type ChildProcess, spawn as spawnChild } from "node:child_process";
 import {
+	chmodSync,
 	closeSync,
-	existsSync,
+	constants,
+	fchmodSync,
+	fstatSync,
+	ftruncateSync,
 	mkdirSync,
 	openSync,
 	readFileSync,
 	readSync,
-	statSync,
-	truncateSync,
 	writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
 import {
+	signalVerifiedProcessTree,
 	systemProcessTree,
+	terminateFreshProcessTree,
+	terminateProcessTree,
 	type ProcessTreeIdentity,
 	type ProcessTreeOperations,
 	type ProcessTreeSignalResult,
-	terminateProcessTree,
 } from "./process-tree.js";
-import { TerminalTaskStore, type TerminalTaskStoreDiagnostic } from "./task-store.js";
+import {
+	StaleTerminalTaskRevisionError,
+	TerminalTaskStore,
+	isValidTerminalTaskId,
+	type TerminalTaskStoreDiagnostic,
+} from "./task-store.js";
 import {
 	TERMINAL_TASK_SCHEMA_VERSION,
 	isTerminalTaskSettled,
@@ -38,11 +47,26 @@ const DEFAULT_KILL_GRACE_MS = 2_000;
 const DEFAULT_CLAIM_LEASE_MS = 30_000;
 const CHECK_OUTPUT_BYTES = 16 * 1024;
 const WAIT_OUTPUT_BYTES = 16 * 1024;
+const PRIVATE_FILE_MODE = 0o600;
+const PRIVATE_DIRECTORY_MODE = 0o700;
+const NO_FOLLOW = constants.O_NOFOLLOW ?? 0;
+const MAX_TRANSITION_RETRIES = 16;
 
 interface RuntimeTask {
 	child?: ChildProcess;
 	pollTimer?: ReturnType<typeof setInterval>;
+	reconcilePromise?: Promise<void>;
 	lastLogCapAt: number;
+}
+
+interface MutationResult {
+	readonly snapshot: TerminalTaskSnapshot;
+	readonly changed: boolean;
+}
+
+interface StopTarget {
+	readonly task: TerminalTaskSnapshot;
+	readonly identity: ProcessTreeIdentity;
 }
 
 export interface TerminalTaskManagerOptions {
@@ -71,31 +95,64 @@ function taskPaths(store: TerminalTaskStore, id: string, createdAt: number) {
 	const directory = dirname(visiblePaths.logFile);
 	return {
 		...visiblePaths,
+		directory,
 		launchFile: join(directory, "launch.ready"),
 		windowsScriptFile: join(directory, "run.cmd"),
 	};
 }
 
-function readExitCode(path: string): number | undefined {
-	if (!existsSync(path)) return undefined;
+function isPrivateFileMode(mode: number): boolean {
+	return process.platform === "win32" || (mode & 0o777) === PRIVATE_FILE_MODE;
+}
+
+function openPrivateFile(path: string, flags: number): number {
+	const descriptor = openSync(path, flags | NO_FOLLOW);
+	const stat = fstatSync(descriptor);
+	if (!stat.isFile() || !isPrivateFileMode(stat.mode)) {
+		closeSync(descriptor);
+		throw new Error(`Unsafe terminal artifact: ${path}`);
+	}
+	return descriptor;
+}
+
+function createPrivateFile(path: string, contents: string): void {
+	const descriptor = openSync(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | NO_FOLLOW, PRIVATE_FILE_MODE);
 	try {
-		const text = readFileSync(path, "utf8").trim();
+		fchmodSync(descriptor, PRIVATE_FILE_MODE);
+		writeFileSync(descriptor, contents, "utf8");
+	} finally {
+		closeSync(descriptor);
+	}
+}
+
+function createPrivateTaskDirectory(path: string): void {
+	mkdirSync(path, { mode: PRIVATE_DIRECTORY_MODE });
+	chmodSync(path, PRIVATE_DIRECTORY_MODE);
+}
+
+function readExitCode(path: string): number | undefined {
+	let descriptor: number | undefined;
+	try {
+		descriptor = openPrivateFile(path, constants.O_RDONLY);
+		const text = readFileSync(descriptor, "utf8").trim();
 		if (!/^-?\d+$/.test(text)) return undefined;
-		return Number.parseInt(text, 10);
+		const exitCode = Number.parseInt(text, 10);
+		return Number.isSafeInteger(exitCode) ? exitCode : undefined;
 	} catch {
 		return undefined;
+	} finally {
+		if (descriptor !== undefined) closeSync(descriptor);
 	}
 }
 
 function readLogTail(path: string, maxBytes: number): string {
-	if (!existsSync(path)) return "";
 	let descriptor: number | undefined;
 	try {
-		const size = statSync(path).size;
+		descriptor = openPrivateFile(path, constants.O_RDONLY);
+		const size = fstatSync(descriptor).size;
 		if (size === 0) return "";
 		const bytes = Math.min(size, Math.max(0, maxBytes));
 		const offset = size - bytes;
-		descriptor = openSync(path, "r");
 		const buffer = Buffer.allocUnsafe(bytes);
 		readSync(descriptor, buffer, 0, bytes, offset);
 		let text = buffer.toString("utf8");
@@ -112,21 +169,46 @@ function readLogTail(path: string, maxBytes: number): string {
 }
 
 function capRunningLog(path: string, maxBytes: number): void {
+	let descriptor: number | undefined;
 	try {
-		if (existsSync(path) && statSync(path).size > maxBytes) truncateSync(path, 0);
+		descriptor = openPrivateFile(path, constants.O_WRONLY);
+		if (fstatSync(descriptor).size > maxBytes) ftruncateSync(descriptor, 0);
 	} catch {
-		// Output bounding is best-effort and must not perturb process state.
+		// Output bounding is best effort and cannot perturb process state.
+	} finally {
+		if (descriptor !== undefined) closeSync(descriptor);
 	}
 }
 
 function capSettledLog(path: string, maxBytes: number): void {
 	try {
-		if (!existsSync(path) || statSync(path).size <= maxBytes) return;
+		let descriptor = openPrivateFile(path, constants.O_RDONLY);
+		const size = fstatSync(descriptor).size;
+		closeSync(descriptor);
+		if (size <= maxBytes) return;
 		const marker = "[sumocode-terminal] log truncated to bounded tail\n";
 		const tail = readLogTail(path, Math.max(0, maxBytes - Buffer.byteLength(marker)));
-		writeFileSync(path, `${marker}${tail}`.slice(-maxBytes));
+		descriptor = openPrivateFile(path, constants.O_WRONLY);
+		try {
+			ftruncateSync(descriptor, 0);
+			writeFileSync(descriptor, `${marker}${tail}`.slice(-maxBytes), "utf8");
+		} finally {
+			closeSync(descriptor);
+		}
 	} catch {
-		// Output bounding is best-effort and must not perturb durable status.
+		// Output bounding is best effort and cannot perturb durable status.
+	}
+}
+
+function appendPrivateFile(path: string, contents: string): void {
+	let descriptor: number | undefined;
+	try {
+		descriptor = openPrivateFile(path, constants.O_WRONLY | constants.O_APPEND);
+		writeFileSync(descriptor, contents, "utf8");
+	} catch {
+		// The durable record remains the source of truth.
+	} finally {
+		if (descriptor !== undefined) closeSync(descriptor);
 	}
 }
 
@@ -144,6 +226,7 @@ function buildPosixScript(options: {
 }): string {
 	return [
 		"#!/usr/bin/env bash",
+		"umask 077",
 		"set +e",
 		`while [ ! -f ${shellEscape(options.launchFile)} ]; do sleep 0.01; done`,
 		`cd ${shellEscape(options.cwd)} || { printf '%s\\n' ${shellEscape(`[sumocode-terminal] working directory unavailable: ${options.cwd}`)} >> ${shellEscape(options.logFile)}; printf '%s' 1 > ${shellEscape(options.exitFile)}; exit 1; }`,
@@ -222,8 +305,7 @@ export class TerminalTaskManager {
 		this.claimLeaseMs = normalizePositive(options.claimLeaseMs, DEFAULT_CLAIM_LEASE_MS);
 		this.onDiagnostic = options.onDiagnostic;
 		for (const snapshot of this.store.loadAll()) {
-			this.tasks.set(snapshot.id, snapshot);
-			this.runtime.set(snapshot.id, { lastLogCapAt: 0 });
+			this.adopt(snapshot, false);
 			this.recover(snapshot);
 		}
 	}
@@ -239,14 +321,28 @@ export class TerminalTaskManager {
 		if (!ownerSessionId) throw new Error("owner session id is required");
 		if (!cwd) throw new Error("working directory is required");
 
-		let id = this.createId();
-		while (this.tasks.has(id)) id = this.createId();
-		const createdAt = this.now();
-		const paths = taskPaths(this.store, id, createdAt);
-		mkdirSync(dirname(paths.logFile), { recursive: true });
-		writeFileSync(paths.logFile, "");
+		const createdAt = Math.max(1, Math.floor(this.now()));
+		let id: string | undefined;
+		let paths: ReturnType<typeof taskPaths> | undefined;
+		for (let attempt = 0; attempt < 100; attempt += 1) {
+			const candidate = this.createId();
+			if (!isValidTerminalTaskId(candidate)) throw new Error(`Invalid generated terminal id: ${candidate}`);
+			const candidatePaths = taskPaths(this.store, candidate, createdAt);
+			try {
+				createPrivateTaskDirectory(candidatePaths.directory);
+				id = candidate;
+				paths = candidatePaths;
+				break;
+			} catch (error) {
+				if (!(typeof error === "object" && error !== null && "code" in error && (error as { code?: unknown }).code === "EEXIST")) throw error;
+			}
+		}
+		if (!id || !paths) throw new Error("Unable to allocate a unique terminal task directory");
+
+		createPrivateFile(paths.logFile, "");
+		createPrivateFile(paths.exitFile, "");
 		const scriptFile = process.platform === "win32" ? paths.windowsScriptFile : paths.scriptFile;
-		writeFileSync(scriptFile, process.platform === "win32"
+		createPrivateFile(scriptFile, process.platform === "win32"
 			? buildWindowsScript({ command, cwd, launchFile: paths.launchFile, logFile: paths.logFile, exitFile: paths.exitFile })
 			: buildPosixScript({ command, cwd, launchFile: paths.launchFile, logFile: paths.logFile, exitFile: paths.exitFile }));
 
@@ -266,8 +362,7 @@ export class TerminalTaskManager {
 			logFile: paths.logFile,
 		};
 		this.store.create(initial, paths.metaFile);
-		this.tasks.set(id, initial);
-		this.runtime.set(id, { lastLogCapAt: createdAt });
+		this.adopt(initial, true);
 
 		let child: ChildProcess;
 		try {
@@ -277,80 +372,77 @@ export class TerminalTaskManager {
 				{ cwd, detached: true, stdio: "ignore", env: { ...process.env, SUMOCODE_BG_CHILD: "1" } },
 			);
 		} catch (error) {
-			this.failUnlaunched(initial, error);
+			this.failUnlaunched(id, error);
 			throw error;
 		}
-		this.runtime.get(id)!.child = child;
-		child.on("error", (error) => { void this.handleChildError(id, error); });
-		child.on("close", () => { void this.reconcile(id); });
+		this.ensureRuntime(initial).child = child;
+		child.on("error", (error) => this.runGuarded(id, "child error reconciliation", () => this.handleChildError(id, error)));
+		child.on("close", () => this.scheduleReconcile(id));
 		const pid = child.pid;
 		if (pid === undefined) {
-			this.failUnlaunched(this.tasks.get(id)!, new Error("spawn returned no process id"));
+			this.failUnlaunched(id, new Error("spawn returned no process id"));
 			throw new Error("Unable to start terminal: spawn returned no process id");
 		}
 		const processStartTime = this.processTree.captureStartTime(pid);
 		const identity: ProcessTreeIdentity = { pid, processGroupId: pid, processStartTime: processStartTime ?? "" };
 		if (!processStartTime) {
-			const terminated = await terminateProcessTree(this.processTree, identity, { termGraceMs: this.termGraceMs, killGraceMs: this.killGraceMs });
-			if (!terminated) throw new Error(`Unable to capture terminal process identity and unable to prove process group ${pid} terminated`);
-			this.failUnlaunched(this.tasks.get(id)!, new Error("unable to capture process start time"));
+			const terminated = await terminateFreshProcessTree(this.processTree, identity, { termGraceMs: this.termGraceMs, killGraceMs: this.killGraceMs });
+			if (!terminated) throw new Error(`Unable to capture terminal process identity and unable to prove fresh process group ${pid} terminated`);
+			this.failUnlaunched(id, new Error("unable to capture process start time"));
 			throw new Error("Unable to start terminal: process identity could not be captured");
 		}
 
-		let running: TerminalTaskSnapshot;
+		let running: MutationResult;
 		try {
-			running = this.transition(id, (current) => ({
+			running = this.mutate(id, (current) => current.status === "starting" ? {
 				...current,
 				status: "running",
-				updatedAt: this.now(),
+				updatedAt: this.timestamp(current),
 				pid,
 				processGroupId: pid,
 				processStartTime,
-			}));
+			} : undefined);
 		} catch (error) {
-			const terminated = await terminateProcessTree(this.processTree, identity, { termGraceMs: this.termGraceMs, killGraceMs: this.killGraceMs });
-			if (!terminated) throw new Error(`Spawn identity persistence failed and process group ${pid} could not be proven terminated`);
+			const terminated = await terminateFreshProcessTree(this.processTree, identity, { termGraceMs: this.termGraceMs, killGraceMs: this.killGraceMs });
+			if (!terminated) throw new Error(`Spawn identity persistence failed and fresh process group ${pid} could not be proven terminated`);
 			throw error;
+		}
+		if (!running.changed || running.snapshot.status !== "running") {
+			const terminated = await terminateFreshProcessTree(this.processTree, identity, { termGraceMs: this.termGraceMs, killGraceMs: this.killGraceMs });
+			if (!terminated) throw new Error(`Spawn identity persistence failed and fresh process group ${pid} could not be proven terminated`);
+			throw new Error("Spawn identity persistence failed");
 		}
 
 		try {
-			writeFileSync(paths.launchFile, "ready\n", { flag: "wx" });
+			createPrivateFile(paths.launchFile, "ready\n");
 		} catch (error) {
 			const terminated = await terminateProcessTree(this.processTree, identity, { termGraceMs: this.termGraceMs, killGraceMs: this.killGraceMs });
 			if (!terminated) throw new Error(`Terminal launch release failed and process group ${pid} could not be proven terminated`);
-			this.transition(id, (current) => ({
-				...current,
-				status: "failed",
-				updatedAt: this.now(),
-				settledAt: this.now(),
-				exitCode: null,
-				observedAt: this.now(),
-				consumedAt: this.now(),
-				deliveryState: "suppressed",
-				completionId: current.completionId ?? this.createCompletionId(),
-			}));
+			this.settleFailedLaunch(id);
 			throw error;
 		}
 		child.unref();
-		this.arm(running.id);
-		return running;
+		this.arm(id);
+		return running.snapshot;
 	}
 
+	/** Pure inventory read: no recovery, delivery reconciliation, observation, or listener notification. */
 	public list(ownerSessionId: string): TerminalTaskSnapshot[] {
-		return [...this.tasks.values()]
-			.filter((task) => task.ownerSessionId === ownerSessionId)
-			.sort((left, right) => right.createdAt - left.createdAt);
+		return this.store.listOwned(ownerSessionId);
 	}
 
 	public get(id: string, ownerSessionId: string): TerminalTaskSnapshot | undefined {
-		const task = this.tasks.get(id);
-		return task?.ownerSessionId === ownerSessionId ? task : undefined;
+		const task = this.store.getOwned(id, ownerSessionId);
+		if (!task) return undefined;
+		this.adopt(task, false);
+		if (!isTerminalTaskSettled(task.status)) this.arm(id);
+		return task;
 	}
 
 	public check(id: string, ownerSessionId: string): TerminalTaskObservation | undefined {
 		const current = this.get(id, ownerSessionId);
 		if (!current) return undefined;
-		const task = isTerminalTaskSettled(current.status) ? this.observe(current, false) : current;
+		const task = isTerminalTaskSettled(current.status) ? this.observe(current.id, false) : current;
 		return { task, output: this.getOutput(task, CHECK_OUTPUT_BYTES) };
 	}
 
@@ -362,17 +454,18 @@ export class TerminalTaskManager {
 	): Promise<TerminalWaitResult> {
 		const uniqueIds = [...new Set(ids)];
 		const known = uniqueIds.filter((id) => this.get(id, ownerSessionId) !== undefined);
-		const unknownIds = uniqueIds.filter((id) => !known.includes(id));
+		const knownSet = new Set(known);
+		const unknownIds = uniqueIds.filter((id) => !knownSet.has(id));
 		const complete = (): boolean => known.every((id) => {
 			const task = this.get(id, ownerSessionId);
 			return task !== undefined && isTerminalTaskSettled(task.status);
 		});
 		if (!complete() && timeoutMs > 0) {
 			await new Promise<void>((resolve, reject) => {
-				let settled = false;
+				let finished = false;
 				const finish = (error?: Error): void => {
-					if (settled) return;
-					settled = true;
+					if (finished) return;
+					finished = true;
 					clearTimeout(timer);
 					unsubscribe();
 					signal?.removeEventListener("abort", onAbort);
@@ -394,7 +487,7 @@ export class TerminalTaskManager {
 				pendingIds.push(id);
 				continue;
 			}
-			const task = this.observe(current, true);
+			const task = this.observe(id, true);
 			settled.push({ task, output: this.getOutput(task, WAIT_OUTPUT_BYTES) });
 		}
 		return { settled, pendingIds, unknownIds, timedOut: pendingIds.length > 0 };
@@ -403,7 +496,7 @@ export class TerminalTaskManager {
 	public async stop(ids: readonly string[], ownerSessionId: string): Promise<TerminalStopResult[]> {
 		const uniqueIds = [...new Set(ids)];
 		const results = new Map<string, TerminalStopResult>();
-		const targets: Array<{ task: TerminalTaskSnapshot; identity: ProcessTreeIdentity }> = [];
+		const targets: StopTarget[] = [];
 		for (const id of uniqueIds) {
 			const current = this.get(id, ownerSessionId);
 			if (!current) {
@@ -411,7 +504,7 @@ export class TerminalTaskManager {
 				continue;
 			}
 			if (isTerminalTaskSettled(current.status)) {
-				const observed = this.observe(current, false);
+				const observed = this.observe(id, false);
 				results.set(id, {
 					id,
 					outcome: "already-settled",
@@ -426,16 +519,35 @@ export class TerminalTaskManager {
 				results.set(id, { id, outcome: "failed", task: current, message: `Terminal ${id} has no verified process-group identity.` });
 				continue;
 			}
-			const stopping = current.status === "stopping" ? current : this.transition(id, (task) => ({ ...task, status: "stopping", updatedAt: this.now() }));
+			if (this.processTree.isTreeEmpty(identity)) {
+				results.set(id, this.cancelEmptyTree(id));
+				continue;
+			}
+			const identityStatus = this.processTree.identityMatches(identity);
+			if (identityStatus === "different") {
+				const lost = this.settleLost(id, null, false);
+				results.set(id, { id, outcome: "failed", task: lost, message: `Terminal ${id} process identity changed; recorded lost without signalling.` });
+				continue;
+			}
+			if (identityStatus === "unknown") {
+				results.set(id, { id, outcome: "failed", task: current, message: `Terminal ${id} process identity could not be verified; refusing to signal.` });
+				continue;
+			}
+			const stopping = this.mutate(id, (task) => !isTerminalTaskSettled(task.status) && task.status !== "stopping"
+				? { ...task, status: "stopping", updatedAt: this.timestamp(task) }
+				: undefined).snapshot;
+			if (isTerminalTaskSettled(stopping.status)) {
+				results.set(id, { id, outcome: "already-settled", task: stopping, message: `Terminal ${id} was already ${stopping.status}.` });
+				continue;
+			}
 			targets.push({ task: stopping, identity });
 		}
 
-		// Start every SIGTERM/taskkill operation before awaiting any target's
-		// grace period. This keeps batch stop from serially delaying later tasks.
-		const termSignals = await Promise.all(targets.map(({ identity }) => this.processTree.signalTree(identity, "SIGTERM")));
+		// Verification and TERM/taskkill initiation happen for every target before
+		// any grace wait, preserving concurrent batch-stop semantics.
+		const termSignals = await Promise.all(targets.map(({ identity }) => this.safeVerifiedSignal(identity, "SIGTERM")));
 		await Promise.all(targets.map(async ({ task, identity }, index) => {
-			const result = await this.finishStop(task, identity, termSignals[index]!);
-			results.set(task.id, result);
+			results.set(task.id, await this.finishStop(task.id, identity, termSignals[index]!, true));
 		}));
 		return uniqueIds.map((id) => results.get(id)!);
 	}
@@ -443,34 +555,38 @@ export class TerminalTaskManager {
 	public claimPending(ownerSessionId: string, includeWake: boolean, maxWake = 1): TerminalTaskSnapshot[] {
 		const claimed: TerminalTaskSnapshot[] = [];
 		let claimedWake = 0;
-		for (const candidate of this.list(ownerSessionId)) {
+		for (const candidate of this.store.listOwned(ownerSessionId)) {
 			if (!isTerminalTaskSettled(candidate.status)) continue;
-			let current = candidate;
-			if (current.deliveryState === "claimed" && this.now() - current.updatedAt >= this.claimLeaseMs) {
-				current = this.transition(current.id, (task) => ({ ...task, deliveryState: "pending", updatedAt: this.now() }));
-			}
-			if (current.deliveryState !== "pending") continue;
-			if (current.completionPolicy === "wake") {
-				if (!includeWake || claimedWake >= maxWake) continue;
-				claimedWake += 1;
-			}
-			claimed.push(this.transition(current.id, (task) => ({ ...task, deliveryState: "claimed", updatedAt: this.now() })));
+			if (candidate.completionPolicy === "wake" && (!includeWake || claimedWake >= maxWake)) continue;
+			const result = this.mutate(candidate.id, (current) => {
+				if (current.ownerSessionId !== ownerSessionId || !isTerminalTaskSettled(current.status)) return undefined;
+				const expiredClaim = current.deliveryState === "claimed" && this.now() - current.updatedAt >= this.claimLeaseMs;
+				if (current.deliveryState !== "pending" && !expiredClaim) return undefined;
+				if (current.completionPolicy === "wake" && (!includeWake || claimedWake >= maxWake)) return undefined;
+				return { ...current, deliveryState: "claimed", updatedAt: this.timestamp(current) };
+			});
+			if (!result.changed) continue;
+			claimed.push(result.snapshot);
+			if (result.snapshot.completionPolicy === "wake") claimedWake += 1;
 		}
 		return claimed;
 	}
 
 	public acknowledge(ownerSessionId: string, completionIds: ReadonlySet<string>): TerminalTaskSnapshot[] {
 		const acknowledged: TerminalTaskSnapshot[] = [];
-		for (const current of this.list(ownerSessionId)) {
-			if (!current.completionId || !completionIds.has(current.completionId)) continue;
-			if (current.deliveryState === "delivered" || current.deliveryState === "suppressed") continue;
-			acknowledged.push(this.transition(current.id, (task) => ({ ...task, deliveryState: "delivered", updatedAt: this.now() })));
+		for (const candidate of this.store.listOwned(ownerSessionId)) {
+			if (!candidate.completionId || !completionIds.has(candidate.completionId)) continue;
+			const result = this.mutate(candidate.id, (current) => {
+				if (current.ownerSessionId !== ownerSessionId || current.deliveryState !== "claimed" || !current.completionId || !completionIds.has(current.completionId)) return undefined;
+				return { ...current, deliveryState: "delivered", updatedAt: this.timestamp(current) };
+			});
+			if (result.changed) acknowledged.push(result.snapshot);
 		}
 		return acknowledged;
 	}
 
 	public getClaimRetryDelay(ownerSessionId: string): number | undefined {
-		const delays = this.list(ownerSessionId)
+		const delays = this.store.listOwned(ownerSessionId)
 			.filter((task) => task.deliveryState === "claimed")
 			.map((task) => Math.max(0, this.claimLeaseMs - (this.now() - task.updatedAt)));
 		return delays.length > 0 ? Math.min(...delays) : undefined;
@@ -486,7 +602,7 @@ export class TerminalTaskManager {
 	}
 
 	public async stopOwned(ownerSessionId: string): Promise<TerminalStopResult[]> {
-		const running = this.list(ownerSessionId).filter((task) => !isTerminalTaskSettled(task.status));
+		const running = this.store.listOwned(ownerSessionId).filter((task) => !isTerminalTaskSettled(task.status));
 		return this.stop(running.map((task) => task.id), ownerSessionId);
 	}
 
@@ -505,186 +621,338 @@ export class TerminalTaskManager {
 			capSettledLog(snapshot.logFile, this.logMaxBytes);
 			return;
 		}
-		const identity = identityOf(snapshot);
-		if (!identity) {
-			this.settle(snapshot.id, "lost", null, true);
+		if (snapshot.status === "starting") {
+			this.settleLost(snapshot.id, null, true);
 			return;
 		}
 		const paths = taskPaths(this.store, snapshot.id, snapshot.createdAt);
-		if (snapshot.status === "running" && !existsSync(paths.launchFile)) {
+		if (snapshot.status === "running") {
 			try {
-				writeFileSync(paths.launchFile, "recovered\n", { flag: "wx" });
+				createPrivateFile(paths.launchFile, "recovered\n");
 			} catch (error) {
-				this.onDiagnostic?.({ kind: "manager", id: snapshot.id, message: `unable to release recovered launch gate: ${error instanceof Error ? error.message : String(error)}` });
+				if (!(typeof error === "object" && error !== null && "code" in error && (error as { code?: unknown }).code === "EEXIST")) {
+					this.diagnostic(snapshot.id, `unable to release recovered launch gate: ${error instanceof Error ? error.message : String(error)}`);
+				}
 			}
 		}
 		this.arm(snapshot.id);
-		void this.reconcile(snapshot.id);
+		this.scheduleReconcile(snapshot.id);
+	}
+
+	private ensureRuntime(task: TerminalTaskSnapshot): RuntimeTask {
+		let runtime = this.runtime.get(task.id);
+		if (!runtime) {
+			runtime = { lastLogCapAt: 0 };
+			this.runtime.set(task.id, runtime);
+		}
+		return runtime;
 	}
 
 	private arm(id: string): void {
-		const runtime = this.runtime.get(id);
-		if (!runtime || runtime.pollTimer || this.detached) return;
-		runtime.pollTimer = setInterval(() => { void this.reconcile(id); }, this.pollIntervalMs);
+		if (this.detached) return;
+		const task = this.tasks.get(id) ?? this.store.get(id);
+		if (!task || isTerminalTaskSettled(task.status)) return;
+		const runtime = this.ensureRuntime(task);
+		if (runtime.pollTimer) return;
+		runtime.pollTimer = setInterval(() => this.scheduleReconcile(id), this.pollIntervalMs);
 		runtime.pollTimer.unref?.();
+	}
+
+	private scheduleReconcile(id: string): void {
+		if (this.detached) return;
+		const task = this.tasks.get(id) ?? this.store.get(id);
+		if (!task) return;
+		const runtime = this.ensureRuntime(task);
+		if (runtime.reconcilePromise) return;
+		runtime.reconcilePromise = this.reconcile(id)
+			.catch((error) => this.diagnostic(id, `reconciliation failed safely: ${error instanceof Error ? error.message : String(error)}`))
+			.finally(() => {
+				runtime.reconcilePromise = undefined;
+			});
 	}
 
 	private async reconcile(id: string): Promise<void> {
 		if (this.detached) return;
-		const current = this.tasks.get(id);
-		if (!current || isTerminalTaskSettled(current.status)) return;
-		const runtime = this.runtime.get(id);
-		if (runtime && this.now() - runtime.lastLogCapAt >= 5_000) {
+		const current = this.store.get(id);
+		if (!current) return;
+		this.adopt(current, true);
+		if (isTerminalTaskSettled(current.status)) {
+			this.clearPoll(id);
+			return;
+		}
+		const runtime = this.ensureRuntime(current);
+		if (this.now() - runtime.lastLogCapAt >= 5_000) {
 			capRunningLog(current.logFile, this.logMaxBytes);
 			runtime.lastLogCapAt = this.now();
 		}
-		const identity = identityOf(current);
-		if (!identity) {
-			this.settle(id, "lost", null, true);
+		if (current.status === "starting") {
+			this.settleLost(id, null, true);
 			return;
 		}
-		if (current.status === "stopping") return;
+		const identity = identityOf(current);
+		if (!identity) {
+			this.settleLost(id, null, true);
+			return;
+		}
+		if (current.status === "stopping") {
+			await this.recoverStopping(id, identity);
+			return;
+		}
 		const paths = taskPaths(this.store, current.id, current.createdAt);
 		const exitCode = readExitCode(paths.exitFile);
-		if (exitCode !== undefined && this.processTree.isTreeEmpty(identity)) {
-			this.settle(id, exitCode === 0 ? "completed" : "failed", exitCode, false);
+		if (exitCode !== undefined && (process.platform === "win32" || this.processTree.isTreeEmpty(identity))) {
+			this.settleNatural(id, exitCode);
 			return;
 		}
 		const identityStatus = this.processTree.identityMatches(identity);
-		if (identityStatus === "different" && this.processTree.isTreeEmpty(identity)) {
-			this.settle(id, "lost", exitCode ?? null, false);
+		if (identityStatus === "different") this.settleLost(id, exitCode ?? null, false);
+	}
+
+	private async recoverStopping(id: string, identity: ProcessTreeIdentity): Promise<void> {
+		if (this.processTree.isTreeEmpty(identity)) {
+			this.settleCancelled(id);
+			return;
 		}
+		const identityStatus = this.processTree.identityMatches(identity);
+		if (identityStatus === "different") {
+			this.settleLost(id, null, false);
+			return;
+		}
+		if (identityStatus === "unknown") {
+			this.diagnostic(id, "persisted stopping task identity is unknown; refusing recovery signal");
+			return;
+		}
+		const term = await this.safeVerifiedSignal(identity, "SIGTERM");
+		await this.finishStop(id, identity, term, false);
 	}
 
-	private settle(id: string, status: "completed" | "failed" | "lost", exitCode: number | null, suppress: boolean): TerminalTaskSnapshot {
-		const current = this.tasks.get(id);
-		if (!current || isTerminalTaskSettled(current.status)) return current!;
-		this.clearPoll(id);
-		capSettledLog(current.logFile, this.logMaxBytes);
-		const now = this.now();
-		return this.transition(id, (task) => ({
-			...task,
-			status,
-			updatedAt: now,
-			settledAt: now,
-			exitCode,
-			observedAt: suppress ? now : task.observedAt,
-			consumedAt: suppress ? now : task.consumedAt,
-			deliveryState: suppress ? "suppressed" : "pending",
-			completionId: task.completionId ?? this.createCompletionId(),
-		}));
+	private settleNatural(id: string, exitCode: number): TerminalTaskSnapshot {
+		return this.settle(id, exitCode === 0 ? "completed" : "failed", exitCode, false);
 	}
 
-	private observe(current: TerminalTaskSnapshot, consume: boolean): TerminalTaskSnapshot {
-		if (!isTerminalTaskSettled(current.status)) return current;
-		const now = this.now();
-		return this.transition(current.id, (task) => ({
-			...task,
-			updatedAt: now,
-			observedAt: task.observedAt ?? now,
-			consumedAt: consume ? task.consumedAt ?? now : task.consumedAt,
-			deliveryState: task.deliveryState === "pending" || task.deliveryState === "claimed" ? "suppressed" : task.deliveryState,
-		}));
+	private settleLost(id: string, exitCode: number | null, suppress: boolean): TerminalTaskSnapshot {
+		return this.settle(id, "lost", exitCode, suppress);
+	}
+
+	private settle(
+		id: string,
+		status: "completed" | "failed" | "lost",
+		exitCode: number | null,
+		suppress: boolean,
+	): TerminalTaskSnapshot {
+		const result = this.mutate(id, (task) => {
+			if (isTerminalTaskSettled(task.status)) return undefined;
+			const now = this.timestamp(task);
+			return {
+				...task,
+				status,
+				updatedAt: now,
+				settledAt: now,
+				exitCode,
+				observedAt: suppress ? now : undefined,
+				consumedAt: suppress ? now : undefined,
+				deliveryState: suppress ? "suppressed" : "pending",
+				completionId: task.completionId ?? this.createCompletionId(),
+			};
+		});
+		if (isTerminalTaskSettled(result.snapshot.status)) {
+			this.clearPoll(id);
+			capSettledLog(result.snapshot.logFile, this.logMaxBytes);
+		}
+		return result.snapshot;
+	}
+
+	private settleCancelled(id: string): TerminalTaskSnapshot {
+		const result = this.mutate(id, (task) => {
+			if (isTerminalTaskSettled(task.status)) return undefined;
+			const now = this.timestamp(task);
+			return {
+				...task,
+				status: "cancelled",
+				updatedAt: now,
+				settledAt: now,
+				exitCode: null,
+				observedAt: task.observedAt ?? now,
+				consumedAt: task.consumedAt ?? now,
+				deliveryState: "suppressed",
+				completionId: task.completionId ?? this.createCompletionId(),
+			};
+		});
+		if (result.snapshot.status === "cancelled") {
+			this.clearPoll(id);
+			capSettledLog(result.snapshot.logFile, this.logMaxBytes);
+		}
+		return result.snapshot;
+	}
+
+	private observe(id: string, consume: boolean): TerminalTaskSnapshot {
+		return this.mutate(id, (task) => {
+			if (!isTerminalTaskSettled(task.status)) return undefined;
+			const deliveryState = task.deliveryState === "pending" || task.deliveryState === "claimed" ? "suppressed" : task.deliveryState;
+			const needsObservation = task.observedAt === undefined;
+			const needsConsumption = consume && task.consumedAt === undefined;
+			const needsSuppression = deliveryState !== task.deliveryState;
+			if (!needsObservation && !needsConsumption && !needsSuppression) return undefined;
+			const now = this.timestamp(task);
+			return {
+				...task,
+				updatedAt: now,
+				observedAt: task.observedAt ?? now,
+				consumedAt: consume ? task.consumedAt ?? now : task.consumedAt,
+				deliveryState,
+			};
+		}).snapshot;
 	}
 
 	private async finishStop(
-		stopping: TerminalTaskSnapshot,
+		id: string,
 		identity: ProcessTreeIdentity,
 		termSignal: ProcessTreeSignalResult,
+		restoreOnFailure: boolean,
 	): Promise<TerminalStopResult> {
-		if (!termSignal.ok) return this.failedStop(stopping, termSignal.error ?? "SIGTERM failed");
+		if (!termSignal.ok) return this.handleStopSignalFailure(id, termSignal, restoreOnFailure);
 		let empty = termSignal.gone || await this.processTree.waitForTreeEmpty(identity, this.termGraceMs);
 		if (!empty) {
-			const kill = await this.processTree.signalTree(identity, "SIGKILL");
-			if (!kill.ok) return this.failedStop(stopping, kill.error ?? "SIGKILL failed");
+			const kill = await this.safeVerifiedSignal(identity, "SIGKILL");
+			if (!kill.ok) return this.handleStopSignalFailure(id, kill, restoreOnFailure);
 			empty = kill.gone || await this.processTree.waitForTreeEmpty(identity, this.killGraceMs);
 		}
-		if (!empty || !this.processTree.isTreeEmpty(identity)) {
-			return this.failedStop(stopping, "process group remains alive after SIGKILL");
-		}
-		this.clearPoll(stopping.id);
-		capSettledLog(stopping.logFile, this.logMaxBytes);
-		const now = this.now();
-		const cancelled = this.transition(stopping.id, (task) => ({
-			...task,
-			status: "cancelled",
-			updatedAt: now,
-			settledAt: now,
-			exitCode: null,
-			observedAt: task.observedAt ?? now,
-			consumedAt: task.consumedAt ?? now,
-			deliveryState: "suppressed",
-			completionId: task.completionId ?? this.createCompletionId(),
-		}));
+		if (!empty) return this.failedStop(id, "process tree remains alive after SIGKILL", restoreOnFailure);
+		const cancelled = this.settleCancelled(id);
 		return {
-			id: stopping.id,
+			id,
 			outcome: "cancelled",
 			task: cancelled,
 			output: this.getOutput(cancelled, WAIT_OUTPUT_BYTES),
-			message: `Cancelled terminal ${stopping.id}.`,
+			message: `Cancelled terminal ${id}.`,
 		};
 	}
 
-	private failedStop(stopping: TerminalTaskSnapshot, reason: string): TerminalStopResult {
-		const current = this.tasks.get(stopping.id);
-		const task = current?.status === "stopping"
-			? this.transition(stopping.id, (value) => ({ ...value, status: "running", updatedAt: this.now() }))
-			: current ?? stopping;
-		this.arm(stopping.id);
-		return { id: stopping.id, outcome: "failed", task, message: `Failed to stop terminal ${stopping.id}: ${reason}.` };
+	private handleStopSignalFailure(
+		id: string,
+		signal: ProcessTreeSignalResult,
+		restoreOnFailure: boolean,
+	): TerminalStopResult {
+		if (signal.identityStatus === "different") {
+			const lost = this.settleLost(id, null, false);
+			return { id, outcome: "failed", task: lost, message: `Terminal ${id} process identity changed; recorded lost without signalling.` };
+		}
+		const reason = signal.identityStatus === "unknown"
+			? "process identity could not be verified; refusing to signal"
+			: signal.error ?? "process-tree signal failed";
+		return this.failedStop(id, reason, restoreOnFailure);
 	}
 
-	private failUnlaunched(current: TerminalTaskSnapshot, error: unknown): void {
-		const now = this.now();
-		this.transition(current.id, (task) => ({
-			...task,
-			status: "failed",
-			updatedAt: now,
-			settledAt: now,
-			exitCode: null,
-			observedAt: now,
-			consumedAt: now,
-			deliveryState: "suppressed",
-			completionId: task.completionId ?? this.createCompletionId(),
-		}));
-		try {
-			writeFileSync(current.logFile, `\n[spawn error] ${error instanceof Error ? error.message : String(error)}\n`, { flag: "a" });
-		} catch {
-			// The durable failed record remains the source of truth.
-		}
+	private failedStop(id: string, reason: string, restore: boolean): TerminalStopResult {
+		const result = restore
+			? this.mutate(id, (task) => task.status === "stopping" ? { ...task, status: "running", updatedAt: this.timestamp(task) } : undefined).snapshot
+			: this.store.get(id);
+		if (restore && result && !isTerminalTaskSettled(result.status)) this.arm(id);
+		if (!restore) this.diagnostic(id, `persisted stop remains pending: ${reason}`);
+		return { id, outcome: "failed", task: result, message: `Failed to stop terminal ${id}: ${reason}.` };
+	}
+
+	private cancelEmptyTree(id: string): TerminalStopResult {
+		const cancelled = this.settleCancelled(id);
+		return {
+			id,
+			outcome: "cancelled",
+			task: cancelled,
+			output: this.getOutput(cancelled, WAIT_OUTPUT_BYTES),
+			message: `Cancelled terminal ${id}.`,
+		};
+	}
+
+	private failUnlaunched(id: string, error: unknown): void {
+		this.settleFailedLaunch(id);
+		const current = this.store.get(id);
+		if (current) appendPrivateFile(current.logFile, `\n[spawn error] ${error instanceof Error ? error.message : String(error)}\n`);
+	}
+
+	private settleFailedLaunch(id: string): TerminalTaskSnapshot {
+		const result = this.mutate(id, (task) => {
+			if (isTerminalTaskSettled(task.status)) return undefined;
+			const now = this.timestamp(task);
+			return {
+				...task,
+				status: "failed",
+				updatedAt: now,
+				settledAt: now,
+				exitCode: null,
+				observedAt: now,
+				consumedAt: now,
+				deliveryState: "suppressed",
+				completionId: task.completionId ?? this.createCompletionId(),
+			};
+		});
+		this.clearPoll(id);
+		return result.snapshot;
 	}
 
 	private async handleChildError(id: string, error: Error): Promise<void> {
 		if (this.detached) return;
-		const current = this.tasks.get(id);
+		const current = this.store.get(id);
 		if (!current || isTerminalTaskSettled(current.status)) return;
+		this.adopt(current, false);
 		const identity = identityOf(current);
 		if (identity) {
+			const identityStatus = this.processTree.identityMatches(identity);
+			if (identityStatus === "different") {
+				this.settleLost(id, null, false);
+				return;
+			}
+			if (identityStatus === "unknown") {
+				this.diagnostic(id, `child error left process tree unverifiable; refusing signal: ${error.message}`);
+				return;
+			}
 			const terminated = await terminateProcessTree(this.processTree, identity, { termGraceMs: this.termGraceMs, killGraceMs: this.killGraceMs });
 			if (!terminated) {
-				this.onDiagnostic?.({ kind: "manager", id, message: `child error left process tree unverified: ${error.message}` });
+				this.diagnostic(id, `child error left process tree unverified: ${error.message}`);
 				return;
 			}
 		}
-		this.failUnlaunched(current, error);
+		this.failUnlaunched(id, error);
 	}
 
-	private transition(
+	private mutate(
 		id: string,
-		update: (current: TerminalTaskSnapshot) => Omit<TerminalTaskSnapshot, "revision">,
-	): TerminalTaskSnapshot {
-		const current = this.tasks.get(id);
-		if (!current) throw new Error(`Unknown terminal task ${id}`);
-		const next = this.store.transition(id, current.revision, update);
-		this.tasks.set(id, next);
+		update: (current: TerminalTaskSnapshot) => Omit<TerminalTaskSnapshot, "revision"> | undefined,
+	): MutationResult {
+		let latest = this.store.get(id);
+		if (!latest) throw new Error(`Unknown terminal task ${id}`);
+		for (let attempt = 0; attempt < MAX_TRANSITION_RETRIES; attempt += 1) {
+			this.adopt(latest, false);
+			const next = update(latest);
+			if (!next) return { snapshot: latest, changed: false };
+			try {
+				const transitioned = this.store.transition(id, latest.revision, () => next);
+				this.adopt(transitioned, true);
+				return { snapshot: transitioned, changed: true };
+			} catch (error) {
+				if (!(error instanceof StaleTerminalTaskRevisionError)) throw error;
+				const reloaded = this.store.get(id);
+				if (!reloaded) throw new Error(`Terminal task ${id} disappeared during transition`);
+				latest = reloaded;
+			}
+		}
+		this.diagnostic(id, "abandoned transition after repeated stale revisions");
+		const current = this.store.get(id) ?? latest;
+		this.adopt(current, false);
+		return { snapshot: current, changed: false };
+	}
+
+	private adopt(snapshot: TerminalTaskSnapshot, notify: boolean): void {
+		const previous = this.tasks.get(snapshot.id);
+		this.tasks.set(snapshot.id, snapshot);
+		this.ensureRuntime(snapshot);
+		if (!notify || previous?.revision === snapshot.revision) return;
 		for (const listener of this.listeners) {
 			try {
-				listener(next);
+				listener(snapshot);
 			} catch {
 				// Observers cannot break durable lifecycle transitions.
 			}
 		}
-		return next;
 	}
 
 	private clearPoll(id: string): void {
@@ -692,6 +960,29 @@ export class TerminalTaskManager {
 		if (!runtime?.pollTimer) return;
 		clearInterval(runtime.pollTimer);
 		runtime.pollTimer = undefined;
+	}
+
+	private timestamp(task: TerminalTaskSnapshot): number {
+		return Math.max(task.updatedAt, Math.max(1, Math.floor(this.now())));
+	}
+
+	private async safeVerifiedSignal(
+		identity: ProcessTreeIdentity,
+		signal: "SIGTERM" | "SIGKILL",
+	): Promise<ProcessTreeSignalResult> {
+		try {
+			return await signalVerifiedProcessTree(this.processTree, identity, signal);
+		} catch (error) {
+			return { ok: false, gone: false, error: error instanceof Error ? error.message : String(error) };
+		}
+	}
+
+	private runGuarded(id: string, operation: string, run: () => Promise<void>): void {
+		run().catch((error) => this.diagnostic(id, `${operation} failed safely: ${error instanceof Error ? error.message : String(error)}`));
+	}
+
+	private diagnostic(id: string, message: string): void {
+		this.onDiagnostic?.({ kind: "manager", id, message });
 	}
 }
 

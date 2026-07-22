@@ -79,14 +79,19 @@ export class TerminalDeliveryCoordinator {
 
 	public bind(ctx: ExtensionContext): void {
 		this.active = { ownerSessionId: sessionId(ctx), ctx };
-		this.reconcile(ctx);
+		this.safeReconcile(ctx);
 		this.requestFlush();
 	}
 
 	public touch(ctx: ExtensionContext): void {
 		if (this.active?.ownerSessionId !== sessionId(ctx)) return;
 		this.active = { ownerSessionId: this.active.ownerSessionId, ctx };
-		this.reconcile(ctx);
+		this.safeReconcile(ctx);
+	}
+
+	public flushWhenIdle(ctx: ExtensionContext): void {
+		this.touch(ctx);
+		if (this.active?.ownerSessionId === sessionId(ctx) && ctx.isIdle()) this.requestFlush();
 	}
 
 	public unbind(): void {
@@ -111,12 +116,28 @@ export class TerminalDeliveryCoordinator {
 		}
 	}
 
+	private safeReconcile(ctx: ExtensionContext): void {
+		try {
+			this.reconcile(ctx);
+		} catch {
+			// Lock contention or a stale external writer must not escape a Pi event
+			// handler. Claimed delivery remains durable and lease-retryable.
+			this.scheduleLeaseRetry(50);
+		}
+	}
+
 	private requestFlush(): void {
 		if (this.flushQueued) return;
 		this.flushQueued = true;
 		queueMicrotask(() => {
 			this.flushQueued = false;
-			this.flush();
+			try {
+				this.flush();
+			} catch {
+				// A failed send/claim stays claimed or pending in durable state. Retry
+				// after a bounded delay instead of creating an unhandled rejection.
+				this.scheduleLeaseRetry(50);
+			}
 		});
 	}
 
@@ -129,17 +150,21 @@ export class TerminalDeliveryCoordinator {
 			const claimed = this.manager.claimPending(active.ownerSessionId, true, 1)
 				.sort((left, right) => Number(left.completionPolicy === "wake") - Number(right.completionPolicy === "wake"));
 			for (const task of claimed) {
-				const details = completionDetails(this.manager, task);
+				// An explicit check/wait/stop can suppress a claim before this stack
+				// reaches send. Re-read the durable claim so that race has one winner.
+				const current = this.manager.get(task.id, active.ownerSessionId);
+				if (current?.deliveryState !== "claimed" || current.completionId !== task.completionId) continue;
+				const details = completionDetails(this.manager, current);
 				this.pi.sendMessage(
 					{
 						customType: "terminal-result",
-						content: buildTerminalResultMessage(task, this.manager.getOutput(task, COMPLETION_OUTPUT_BYTES)),
+						content: buildTerminalResultMessage(current, this.manager.getOutput(current, COMPLETION_OUTPUT_BYTES)),
 						display: true,
 						details,
 					},
-					{ deliverAs: "followUp", triggerTurn: task.completionPolicy === "wake" },
+					{ deliverAs: "followUp", triggerTurn: current.completionPolicy === "wake" },
 				);
-				if (task.completionPolicy === "wake") break;
+				if (current.completionPolicy === "wake") break;
 			}
 			queueMicrotask(() => {
 				if (this.active?.ownerSessionId !== active.ownerSessionId) return;
@@ -255,7 +280,8 @@ export function installTerminalTools(
 		promptGuidelines: [...TERMINAL_TOOL_GUIDELINES],
 		parameters: Type.Object({}),
 		async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
-			coordinator.touch(ctx);
+			// Inventory is deliberately detached from delivery reconciliation: no
+			// acknowledge, observation, suppression, lease, or context touch.
 			const tasks = manager.list(sessionId(ctx));
 			return makeToolResult(
 				tasks.length > 0 ? tasks.map(describeTerminal).join("\n") : "No terminals tracked for this session.",
@@ -266,14 +292,20 @@ export function installTerminalTools(
 
 	pi.on("session_start", (_event, ctx) => coordinator.bind(ctx));
 	pi.on("agent_start", (_event, ctx) => coordinator.touch(ctx));
-	pi.on("agent_end", (_event, ctx) => {
-		coordinator.touch(ctx);
-		if (ctx.isIdle()) coordinator.bind(ctx);
-	});
-	pi.on("agent_settled", (_event, ctx) => coordinator.bind(ctx));
+	pi.on("agent_end", (_event, ctx) => coordinator.flushWhenIdle(ctx));
+	pi.on("agent_settled", (_event, ctx) => coordinator.flushWhenIdle(ctx));
 	pi.on("message_end", (event, ctx) => {
-		if (event.message.role === "custom") coordinator.reconcile(ctx);
+		if (event.message.role !== "custom") return;
+		try {
+			coordinator.reconcile(ctx);
+		} catch {
+			// The durable claim remains retryable; never reject Pi's event dispatch.
+		}
 	});
-	pi.on("session_shutdown", () => coordinator.unbind());
+	pi.on("session_shutdown", (event) => {
+		const reason = (event as { reason?: string } | null | undefined)?.reason;
+		if (reason === "quit") coordinator.dispose();
+		else coordinator.unbind();
+	});
 	return coordinator;
 }

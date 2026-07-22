@@ -9,12 +9,8 @@ export function installBackgroundTasks(
 
 	pi.on("session_shutdown", async (event, ctx) => {
 		const reason = (event as { reason?: string } | null | undefined)?.reason;
-		if (reason === "quit" || reason === undefined) {
-			await manager.stopOwned(ctx.sessionManager.getSessionId());
-		}
-		// Replacement never signals children. It only retires this extension
-		// instance's observers; the newly bound manager recovers the same durable
-		// records without competing stale-revision pollers.
+		if (reason !== "quit") return;
+		await manager.stopOwned(ctx.sessionManager.getSessionId());
 		manager.detach();
 	});
 

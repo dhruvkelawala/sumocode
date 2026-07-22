@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { TerminalTaskManager } from "./task-manager.js";
-import { installTerminalTools } from "./terminal-tools.js";
+import { installTerminalTools, TerminalDeliveryCoordinator } from "./terminal-tools.js";
 import { TERMINAL_TASK_SCHEMA_VERSION, type TerminalTaskSnapshot } from "./task-types.js";
 
 type RegisteredTool = {
@@ -41,6 +41,8 @@ function createHarness(initial: TerminalTaskSnapshot[] = []) {
 	let activeSessionId = "session-a";
 	let idle = true;
 	const branch: Array<Record<string, unknown>> = [];
+	let recordSentMessage = true;
+	let onSend: (() => void) | undefined;
 	const manager = {
 		start: vi.fn(async (options: { ownerSessionId: string; completionPolicy: "passive" | "wake" }) => {
 			const started = task({ ownerSessionId: options.ownerSessionId, completionPolicy: options.completionPolicy });
@@ -49,12 +51,25 @@ function createHarness(initial: TerminalTaskSnapshot[] = []) {
 		}),
 		check: vi.fn((id: string, owner: string) => {
 			const entry = tasks.get(id);
-			return entry?.ownerSessionId === owner ? { task: entry, output: "current output" } : undefined;
+			if (entry?.ownerSessionId !== owner) return undefined;
+			const observed = entry.status === "completed" && (entry.deliveryState === "pending" || entry.deliveryState === "claimed")
+				? { ...entry, deliveryState: "suppressed" as const, observedAt: 3_000 }
+				: entry;
+			tasks.set(id, observed);
+			return { task: observed, output: "current output" };
 		}),
 		wait: vi.fn(async (ids: string[], owner: string) => ({
 			settled: ids.flatMap((id) => {
 				const entry = tasks.get(id);
-				return entry?.ownerSessionId === owner && entry.status === "completed" ? [{ task: entry, output: "final output" }] : [];
+				if (entry?.ownerSessionId !== owner || entry.status !== "completed") return [];
+				const observed = {
+					...entry,
+					deliveryState: entry.deliveryState === "pending" || entry.deliveryState === "claimed" ? "suppressed" as const : entry.deliveryState,
+					observedAt: entry.observedAt ?? 3_000,
+					consumedAt: entry.consumedAt ?? 3_000,
+				};
+				tasks.set(id, observed);
+				return [{ task: observed, output: "final output" }];
 			}),
 			pendingIds: ids.filter((id) => tasks.get(id)?.status === "running"),
 			unknownIds: ids.filter((id) => !tasks.has(id)),
@@ -67,6 +82,10 @@ function createHarness(initial: TerminalTaskSnapshot[] = []) {
 				: { id, outcome: "unknown", message: `Unknown terminal ${id}.` };
 		})),
 		list: vi.fn((owner: string) => [...tasks.values()].filter((entry) => entry.ownerSessionId === owner)),
+		get: vi.fn((id: string, owner: string) => {
+			const entry = tasks.get(id);
+			return entry?.ownerSessionId === owner ? entry : undefined;
+		}),
 		getOutput: vi.fn(() => "bounded output"),
 		claimPending: vi.fn((owner: string, includeWake: boolean) => {
 			const claimed: TerminalTaskSnapshot[] = [];
@@ -97,14 +116,15 @@ function createHarness(initial: TerminalTaskSnapshot[] = []) {
 		}),
 	};
 	const sendMessage = vi.fn((message: { details?: unknown }) => {
-		branch.push({ type: "custom_message", details: message.details });
+		if (recordSentMessage) branch.push({ type: "custom_message", details: message.details });
+		onSend?.();
 	});
 	const pi = {
 		registerTool: vi.fn((definition: RegisteredTool) => tools.set(definition.name, definition)),
 		on: vi.fn((event: string, handler: Handler) => handlers.set(event, [...(handlers.get(event) ?? []), handler])),
 		sendMessage,
 	};
-	installTerminalTools(pi as never, manager as unknown as TerminalTaskManager);
+	const coordinator = installTerminalTools(pi as never, manager as unknown as TerminalTaskManager);
 	const ctx = () => ({
 		cwd: "/default",
 		isIdle: () => idle,
@@ -127,6 +147,9 @@ function createHarness(initial: TerminalTaskSnapshot[] = []) {
 		fire,
 		tasks,
 		branch,
+		coordinator,
+		setRecordSentMessage: (value: boolean) => { recordSentMessage = value; },
+		setOnSend: (value: (() => void) | undefined) => { onSend = value; },
 		setIdle: (value: boolean) => { idle = value; },
 		setSession: (value: string) => { activeSessionId = value; },
 		emit: (snapshot: TerminalTaskSnapshot) => { for (const listener of listeners) listener(snapshot); },
@@ -174,6 +197,20 @@ describe("installTerminalTools", () => {
 		expect(harness.manager.list).toHaveBeenCalledWith("session-a");
 	});
 
+	it("keeps terminal_list side-effect free from delivery reconciliation and context touch", async () => {
+		const settled = task({ status: "completed", settledAt: 2_000, exitCode: 0, deliveryState: "claimed", completionId: "completion-a" });
+		const harness = createHarness([settled]);
+		await harness.fire("session_start");
+		harness.manager.acknowledge.mockClear();
+		harness.manager.getClaimRetryDelay.mockClear();
+
+		await execute(harness.tool("terminal_list"), {}, harness.ctx());
+
+		expect(harness.manager.list).toHaveBeenCalledWith("session-a");
+		expect(harness.manager.acknowledge).not.toHaveBeenCalled();
+		expect(harness.manager.getClaimRetryDelay).not.toHaveBeenCalled();
+	});
+
 	it("does not arm lease retries when no completion was claimed", async () => {
 		const harness = createHarness();
 		const timeout = vi.spyOn(globalThis, "setTimeout");
@@ -196,6 +233,37 @@ describe("installTerminalTools", () => {
 		} finally {
 			timeout.mockRestore();
 		}
+	});
+
+	it("check wins a completion-vs-idle-flush race with one observable result", async () => {
+		const settled = task({ status: "completed", settledAt: 2_000, exitCode: 0, deliveryState: "pending", completionId: "completion-race" });
+		const harness = createHarness([settled]);
+		harness.setIdle(false);
+		await harness.fire("session_start");
+		harness.setIdle(true);
+		harness.emit(settled);
+		const result = await execute(harness.tool("terminal_check"), { id: settled.id }, harness.ctx());
+		await Promise.resolve();
+
+		expect(result.content[0]?.text).toContain("term-a");
+		expect(harness.sendMessage).not.toHaveBeenCalled();
+		expect(harness.tasks.get(settled.id)?.deliveryState).toBe("suppressed");
+	});
+
+	it("wait wins a completion race and leaves no notification claim", async () => {
+		const settled = task({ status: "completed", settledAt: 2_000, exitCode: 0, deliveryState: "pending", completionId: "completion-wait" });
+		const harness = createHarness([settled]);
+		harness.setIdle(false);
+		await harness.fire("session_start");
+		harness.emit(settled);
+
+		const result = await execute(harness.tool("terminal_wait"), { ids: [settled.id], timeout_ms: 10 }, harness.ctx());
+		harness.setIdle(true);
+		await harness.fire("agent_settled");
+
+		expect(result.content[0]?.text).toContain("term-a");
+		expect(harness.sendMessage).not.toHaveBeenCalled();
+		expect(harness.tasks.get(settled.id)?.deliveryState).toBe("suppressed");
 	});
 
 	it("delivers passive completion visibly without triggering a turn", async () => {
@@ -241,6 +309,29 @@ describe("installTerminalTools", () => {
 		harness.setSession("session-a");
 		await harness.fire("session_start");
 		expect(harness.sendMessage).toHaveBeenCalledOnce();
+	});
+
+	it("retries a claimed notification after coordinator crash and acknowledges only the observable retry", async () => {
+		const settled = task({ status: "completed", settledAt: 2_000, exitCode: 0, deliveryState: "pending", completionId: "completion-crash" });
+		const harness = createHarness([settled]);
+		harness.setRecordSentMessage(false);
+		harness.setOnSend(() => harness.coordinator.dispose());
+		await harness.fire("session_start");
+		expect(harness.tasks.get(settled.id)?.deliveryState).toBe("claimed");
+		expect(harness.branch).toEqual([]);
+
+		// Model bounded lease expiry after the crashed sender. A replacement
+		// coordinator then reclaims, sends, and acknowledges the visible ID.
+		harness.tasks.set(settled.id, { ...harness.tasks.get(settled.id)!, deliveryState: "pending" });
+		harness.setRecordSentMessage(true);
+		harness.setOnSend(undefined);
+		const replacement = new TerminalDeliveryCoordinator(harness.pi as never, harness.manager as unknown as TerminalTaskManager);
+		replacement.bind(harness.ctx() as never);
+		await Promise.resolve();
+		await Promise.resolve();
+		expect(harness.sendMessage).toHaveBeenCalledTimes(2);
+		expect(harness.tasks.get(settled.id)?.deliveryState).toBe("delivered");
+		replacement.dispose();
 	});
 
 	it("acknowledges only after the matching completion id is observable and never sends twice", async () => {

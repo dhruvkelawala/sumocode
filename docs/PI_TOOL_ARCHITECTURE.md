@@ -51,6 +51,8 @@ Terminal tools expose exactly `terminal_start`, `terminal_check`, `terminal_wait
 
 Terminal completion delivery is independent from subagent deferred delivery. Typed `terminal-result` details carry the durable `completionId`, `ownerSessionId`, and a bounded, sanitized `ActivitySnapshot`; delivery is acknowledged only after that completion ID is observable in Pi's session message stream.
 
+Schema-v4 terminal records use store-confined canonical paths, private `0700` directories, private `0600` artifacts, per-task cross-process locks, and revision-checked transitions. Stop and recovery verify the persisted PID/PGID start identity immediately before every signal; mismatches become `lost`, unverifiable identities are refused, and cancellation is recorded only after POSIX group emptiness or trustworthy Windows `taskkill /T` success.
+
 ### 4. SumoCode Extension Hooks
 
 SumoCode may observe `pi.on("tool_call")` events for non-blocking UI state, but it must not re-register built-in tools. Current tool-call rendering flows through the transcript view-model pipeline.

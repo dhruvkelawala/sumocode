@@ -26,8 +26,18 @@
 - **Category**: orchestration correctness / agent UX
 - **Depends on**: Plan 079
 - **Planned at**: `acf6ae2`, 2026-07-22
-- **Execution status**: TODO
+- **Execution status**: DONE — `advisor/080-terminal-v2`, implementation commit `674a986`
 - **Unblocks**: Plan 081
+
+### Final review disposition (Pi 0.80.6)
+
+The assumption that one extension instance survives `/new`, `/resume`, and `/fork` is rejected. Pi's `AgentSessionRuntime` tears down the current session and calls `createRuntime(...)` for each replacement; `loadExtensionsCached(...)` caches only the factory function, while `loadExtension(...)` creates a new extension object/API and invokes that factory again. `test/integration/extension-instance-lifecycle.test.ts` drives all three operations through a real Pi RPC child and proves four distinct factory instances (startup plus one per replacement). Terminal lifecycle ownership therefore uses a process-global session registry, detaches each replaced manager without stopping children, and lets the final instance stop every process-owned session on quit.
+
+The remaining final-review findings were accepted and regression-tested: stopping records persist POSIX descendant anchors before TERM so a replacement manager can safely force KILL; delivery claims carry unique tokens through reclaim/send/ack and stable completion IDs suppress duplicate insertion where observable; failed soft Windows tree kills force `/T /F` after re-verification; store metadata/artifact access requires confined canonical regular files under private canonical directories; and deferred acknowledgement reconciliation is exception-contained.
+
+A follow-up automatic-retention finding is rejected for this plan. Legacy recovery pruned settled artifact directories, but Plan 080 makes terminal snapshots durable and the executor contract explicitly forbids deleting files or cleaning artifacts without approval. No safe retention horizon or user-facing cleanup verb is specified, and pending/claimed or later-queryable completion data cannot be silently erased. Retention/GC therefore requires a separately approved policy rather than an implicit recovery-time delete. The separate malformed persisted-Activity finding was accepted: every nested optional field is now strictly deserialized before retained rendering, with malformed data falling back to the historical terminal summary.
+
+A later suggestion to follow descendants that deliberately leave the dedicated POSIX process group is also rejected as outside the approved process-tree contract. This plan explicitly requires signalling only `-pgid` and proving that group empty; following `setsid`/double-fork escapees would require a cgroup, launchd, or native process supervisor and would violate the no-new-native-dependency boundary. The supported managed tree is therefore the dedicated process group, now stated inline. Accidental same-second PID reuse remains in scope and is fixed by combining `lstart` with the immutable launch command carrying a per-spawn random argument, rather than trusting second-resolution wall time alone.
 
 ## Decision
 

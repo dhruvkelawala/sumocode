@@ -528,6 +528,57 @@ describe("structured transcript view model", () => {
 		}]);
 	});
 
+	it("maps a v2 terminal result Activity through the universal retained renderer", () => {
+		const activity = {
+			id: "term-7",
+			kind: "terminal" as const,
+			title: "dev server",
+			status: "succeeded" as const,
+			ownerSessionId: "session-a",
+			body: { kind: "terminal" as const, command: "pnpm dev", text: "ready" },
+		};
+		const message = chatMessageViewModelFromPiMessage({
+			id: "result-v2",
+			role: "custom",
+			customType: "terminal-result",
+			display: true,
+			content: "Terminal term-7 completed.",
+			details: { completionId: "completion-7", ownerSessionId: "session-a", activity },
+		});
+
+		expect(message?.blocks).toEqual([{ type: "activity", activity }]);
+	});
+
+	it("falls back safely when persisted terminal Activity details are malformed", () => {
+		const message = chatMessageViewModelFromPiMessage({
+			id: "result-malformed",
+			role: "custom",
+			customType: "terminal-result",
+			display: true,
+			content: "Terminal term-bad completed.",
+			details: {
+				id: "term-bad",
+				title: "malformed",
+				exitCode: 0,
+				activity: {
+					id: "term-bad",
+					kind: "terminal",
+					title: "malformed",
+					status: "succeeded",
+					body: { kind: "terminal", text: {} },
+				},
+			},
+		});
+
+		expect(message?.blocks).toEqual([{
+			type: "summary",
+			kind: "terminal",
+			label: "[terminal] term-bad · malformed · exited (0)",
+			content: "Terminal term-bad completed.",
+			expanded: false,
+		}]);
+	});
+
 	it("labels an unrecognized custom message with its customType", () => {
 		const message = chatMessageViewModelFromPiMessage({ id: "x1", role: "custom", customType: "sumocode-theme-result", display: true, content: "switched to obsidian" });
 

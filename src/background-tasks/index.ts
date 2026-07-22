@@ -1,3 +1,4 @@
 export { installBackgroundTasks } from "./background-task-tool.js";
-export { installTerminalTools } from "./terminal-tools.js";
-export type { TerminalTaskFinalizedHandler } from "./terminal-tools.js";
+export { TerminalTaskManager } from "./task-manager.js";
+export { installTerminalTools, TerminalDeliveryCoordinator } from "./terminal-tools.js";
+export type { TerminalTaskSnapshot } from "./task-types.js";

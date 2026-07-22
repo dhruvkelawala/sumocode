@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferredResultDelivery, type DeferredResultDelivery } from "./delivery.js";
 import type { SubagentEvent } from "./domain.js";
-import { flushDeferredResultDelivery, installSubagents } from "./index.js";
+import { installSubagents } from "./index.js";
 
 const backend = vi.hoisted(() => ({
 	emitters: [] as Array<(event: SubagentEvent) => void>,
@@ -73,7 +72,7 @@ vi.mock("./backend-pi.js", () => ({
 type Handler = (event: unknown, ctx: unknown) => void;
 type Tool = { name: string; execute: (...args: unknown[]) => Promise<unknown> };
 
-const createHarness = (delivery?: DeferredResultDelivery) => {
+const createHarness = () => {
 	let idle = true;
 	const handlers = new Map<string, Handler[]>();
 	const tools = new Map<string, Tool>();
@@ -85,7 +84,7 @@ const createHarness = (delivery?: DeferredResultDelivery) => {
 		getActiveTools: vi.fn(() => ["read", "bash"]),
 		getThinkingLevel: vi.fn(() => "medium"),
 	};
-	const manager = installSubagents(pi as never, delivery);
+	const manager = installSubagents(pi as never);
 	const ctx = {
 		cwd: "/tmp/project",
 		model: { provider: "openai", id: "gpt-5" },
@@ -118,42 +117,6 @@ beforeEach(() => {
 });
 
 describe("subagent result delivery", () => {
-	it("flushes a shared typed terminal payload exactly once across a session switch", () => {
-		const delivery = createDeferredResultDelivery();
-		const harness = createHarness(delivery);
-		harness.fire("session_start");
-		harness.setIdle(false);
-		harness.fire("agent_start");
-		const details = { id: "bg-7", title: "server", status: "completed", exitCode: 0 };
-		delivery.defer("bg-7", () => ({
-			id: "bg-7",
-			customType: "terminal-result",
-			title: "server",
-			status: "completed",
-			content: "Background terminal bg-7 exited (0).",
-			details,
-		}));
-		flushDeferredResultDelivery(delivery);
-		expect(harness.sendMessage).not.toHaveBeenCalled();
-
-		harness.fire("session_shutdown");
-		harness.setIdle(true);
-		harness.fire("session_start");
-
-		expect(harness.sendMessage).toHaveBeenCalledOnce();
-		expect(harness.sendMessage).toHaveBeenCalledWith(
-			{
-				customType: "terminal-result",
-				content: "Background terminal bg-7 exited (0).",
-				display: true,
-				details,
-			},
-			{ deliverAs: "followUp", triggerTurn: true },
-		);
-		harness.fire("agent_end");
-		expect(harness.sendMessage).toHaveBeenCalledOnce();
-	});
-
 	it("defers while the parent is busy and flushes exactly once on agent_end", async () => {
 		const harness = createHarness();
 		harness.setIdle(false);
@@ -302,7 +265,8 @@ describe("subagent result delivery", () => {
 	it("keeps auto-delivery working across an in-process session switch", async () => {
 		const harness = createHarness();
 		harness.fire("session_start");
-		// In-process switch: shutdown fires but the extension instance survives.
+		// Simulate repeated binding defensively; real Pi 0.80.6 recreates the
+		// factory on replacement and RPC mode may bind the new instance twice.
 		harness.fire("session_shutdown");
 		harness.fire("session_start");
 		harness.setIdle(false);

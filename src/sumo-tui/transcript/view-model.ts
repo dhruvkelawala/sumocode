@@ -1,5 +1,5 @@
 import { parseSkillBlock } from "@earendil-works/pi-coding-agent";
-import type { ActivitySnapshot, ActivityStatus } from "../../activity/domain.js";
+import { parseActivitySnapshot, type ActivitySnapshot, type ActivityStatus } from "../../activity/domain.js";
 import { activityFromNativeTaskRecord } from "../../activity/native-task-adapter.js";
 import { projectPiToolActivity } from "../../activity/pi-projector.js";
 import {
@@ -230,6 +230,10 @@ function summaryBlockFromRecord(record: Record<string, unknown>, kind: "branch" 
 
 function terminalResultBlockFromRecord(record: Record<string, unknown>): ChatBlock {
 	const details = asRecord(record.details);
+	const activity = parseActivitySnapshot(details?.activity);
+	if (activity?.kind === "terminal") return { type: "activity", activity };
+	// Historical terminal-result messages predate Activity details. Keep their
+	// transcript rendering without treating legacy metadata as active state.
 	const id = firstString(details?.id, record.terminalId) ?? "terminal";
 	const title = firstString(details?.title, details?.command, record.title) ?? "untitled";
 	const exitCode = typeof details?.exitCode === "number" ? details.exitCode : undefined;

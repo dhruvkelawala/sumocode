@@ -1,6 +1,5 @@
 export interface DeliveryPayload {
 	readonly id: string;
-	readonly customType?: string;
 	readonly title: string;
 	readonly status: string;
 	readonly content: string;

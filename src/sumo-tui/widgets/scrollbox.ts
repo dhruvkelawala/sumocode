@@ -162,7 +162,10 @@ export class ScrollBox extends SumoNode {
 	 * moves the manual offset; an intersecting or below-viewport child keeps the
 	 * viewport's top anchor unchanged.
 	 */
-	public notifyChildrenResized(changes: readonly ScrollBoxChildResize[]): void {
+	public notifyChildrenResized(
+		changes: readonly ScrollBoxChildResize[],
+		options: { readonly scrollHeightAlreadyUpdated?: boolean } = {},
+	): void {
 		if (changes.length === 0) return;
 		const previousOffset = this.scrollOffset;
 		let heightDelta = 0;
@@ -174,7 +177,9 @@ export class ScrollBox extends SumoNode {
 			heightDelta += delta;
 			if (Math.round(change.top) + previousHeight <= previousOffset) deltaAboveViewport += delta;
 		}
-		this.scrollHeight = Math.max(0, this.scrollHeight + heightDelta);
+		if (options.scrollHeightAlreadyUpdated !== true) {
+			this.scrollHeight = Math.max(0, this.scrollHeight + heightDelta);
+		}
 		if (this.stickyBottom && !this.manualScroll) {
 			this.setScrollOffsetFromKnownHeight(this.getMaxScrollOffset(), false);
 			return;

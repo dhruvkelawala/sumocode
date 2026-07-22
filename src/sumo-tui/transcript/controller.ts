@@ -29,7 +29,7 @@ export interface TranscriptControllerLiveStateSnapshot {
 export interface TranscriptControllerChatSink {
 	replaceViewModels(messages: readonly ChatMessageViewModel[]): ChatPagerReplaceStats;
 	/** Append one new message to the end of the pager without touching scroll/read state. */
-	addViewModel(message: ChatMessageViewModel): unknown;
+	addViewModel(message: ChatMessageViewModel, sourceIndex?: number): unknown;
 	/** Replace one rendered transcript node in place (scroll/read state preserved). */
 	replaceViewModelAt(index: number, message: ChatMessageViewModel): unknown;
 	/** Replace the pager's current last message in place (scroll/read state preserved). */
@@ -682,7 +682,7 @@ export class TranscriptController {
 		for (const operation of operations) {
 			if (operation.kind === "replace-last") chat.replaceLastWithViewModel(operation.message);
 			else if (operation.kind === "replace") chat.replaceViewModelAt(operation.index, operation.message);
-			else chat.addViewModel(operation.message);
+			else chat.addViewModel(operation.message, operation.index);
 		}
 		this.lastPublishedToChat = next;
 		if (operations.length > 0) this.options.scheduleRender?.();
@@ -692,7 +692,7 @@ export class TranscriptController {
 export type ChatDiffOperation =
 	| { readonly kind: "replace"; readonly index: number; readonly message: ChatMessageViewModel }
 	| { readonly kind: "replace-last"; readonly message: ChatMessageViewModel }
-	| { readonly kind: "append"; readonly message: ChatMessageViewModel };
+	| { readonly kind: "append"; readonly index: number; readonly message: ChatMessageViewModel };
 
 function planHintedIncrementalChatDiff(
 	previous: readonly ChatMessageViewModel[],
@@ -734,7 +734,7 @@ export function planChatDiff(
 			? { kind: "replace-last", message }
 			: { kind: "replace", index: changedIndex, message });
 	}
-	if (next.length === previous.length + 1) operations.push({ kind: "append", message: next[next.length - 1]! });
+	if (next.length === previous.length + 1) operations.push({ kind: "append", index: next.length - 1, message: next[next.length - 1]! });
 	return operations;
 }
 

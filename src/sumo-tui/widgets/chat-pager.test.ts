@@ -380,6 +380,59 @@ describe("ChatPager", () => {
 		root.dispose();
 	});
 
+	it("maps source transcript indices across hydration-filtered empty messages", async () => {
+		const { root, chat } = await makeChat(90, 10);
+		chat.replaceViewModels([
+			{ id: "first", role: "user", displayName: "YOU", blocks: [{ type: "markdown", text: "first" }] },
+			{ id: "empty", role: "sumo", displayName: "SUMO", blocks: [{ type: "markdown", text: "" }] },
+			activityViewModel("indexed-activity", "src/a.ts", "running"),
+			{ id: "later", role: "user", displayName: "YOU", blocks: [{ type: "markdown", text: "later" }] },
+		]);
+		const later = chat.getRenderedMessages()[2];
+
+		expect(chat.replaceViewModelAt(2, activityViewModel("indexed-activity", "src/a.ts", "succeeded"))).toBe(true);
+
+		expect(chat.getRenderedMessages()[1]?.toSnapshot().blocks?.[0]).toMatchObject({
+			type: "activity",
+			activity: { id: "indexed-activity", status: "succeeded" },
+		});
+		expect(chat.getRenderedMessages()[2]).toBe(later);
+		expect(later?.text).toBe("later");
+		expect(chat.replaceViewModelAt(3, {
+			id: "later",
+			role: "user",
+			displayName: "YOU",
+			blocks: [{ type: "markdown", text: "" }],
+		})).toBe(true);
+		expect(chat.getRenderedMessages()).toHaveLength(2);
+		root.dispose();
+	});
+
+	it("clears presentation state when a targeted rewrite removes an Activity", async () => {
+		const { root, chat } = await makeChat(90, 10);
+		chat.addViewModel(activityViewModel("removed-activity", "src/a.ts", "running"), 0);
+		chat.setActivityExpansion("removed-activity", false);
+
+		expect(chat.replaceViewModelAt(0, {
+			id: "rewritten",
+			role: "sumo",
+			displayName: "SUMO",
+			blocks: [{ type: "markdown", text: "replacement" }],
+		})).toBe(true);
+
+		const internal = chat as unknown as {
+			activityExpansionOverrides: Map<string, boolean>;
+			activityExpansionStates: Map<string, boolean>;
+			activityStatuses: Map<string, string>;
+		};
+		expect(internal.activityExpansionOverrides.has("removed-activity")).toBe(false);
+		expect(internal.activityExpansionStates.has("removed-activity")).toBe(false);
+		expect(internal.activityStatuses.has("removed-activity")).toBe(false);
+		chat.addViewModel(activityViewModel("new-settled", "src/b.ts", "succeeded"), 1);
+		expect(chat.getActivityExpansion("new-settled")).toBe(false);
+		root.dispose();
+	});
+
 	it("target-updates a non-last Activity node while preserving scroll, unread, and expansion state", async () => {
 		const { root, chat, buffer } = await makeChat(48, 6);
 		for (let index = 0; index < 8; index += 1) chat.addMessage("sumo", `message ${index}`);

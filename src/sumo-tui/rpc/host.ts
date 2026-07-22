@@ -156,7 +156,10 @@ function fallbackChatSinkStats(messages: readonly ChatMessageViewModel[]): ChatP
 export function createLazyChatSink(getRuntime: () => { getChatSink(): TranscriptControllerChatSink | undefined } | undefined): TranscriptControllerChatSink {
 	return {
 		replaceViewModels: (messages) => getRuntime()?.getChatSink()?.replaceViewModels(messages) ?? fallbackChatSinkStats(messages),
-		addViewModel: (message) => getRuntime()?.getChatSink()?.addViewModel(message),
+		addViewModel: (message, sourceIndex) => {
+			const sink = getRuntime()?.getChatSink();
+			return sourceIndex === undefined ? sink?.addViewModel(message) : sink?.addViewModel(message, sourceIndex);
+		},
 		replaceViewModelAt: (index, message) => getRuntime()?.getChatSink()?.replaceViewModelAt(index, message),
 		replaceLastWithViewModel: (message) => getRuntime()?.getChatSink()?.replaceLastWithViewModel(message),
 	};

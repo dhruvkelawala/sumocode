@@ -58,19 +58,19 @@ function sourceLineCount(text: string): number {
 	return lines.length;
 }
 
-const READ_CONTINUATION_NOTICE = /\n\n\[(?:Showing lines \d+-\d+ of \d+(?: \([^\n\]]+\))?|\d+ more lines in file)\. Use offset=\d+ to continue\.\]\s*$/i;
+const READ_SHOWING_NOTICE = /\n\n\[Showing lines \d+-\d+ of (\d+)(?: \([^\n\]]+\))?\. Use offset=\d+ to continue\.\]\s*$/i;
+const READ_REMAINING_NOTICE = /\n\n\[(\d+) more lines in file\. Use offset=\d+ to continue\.\]\s*$/i;
 
-function readSourceText(output: string | undefined): string | undefined {
-	return output?.replace(READ_CONTINUATION_NOTICE, "");
-}
-
-function readTotalLines(output: string | undefined, startLine: number): number | undefined {
-	if (!output) return undefined;
-	const declaredTotal = output.match(/\bof\s+(\d+)(?:\s+lines)?\b/i)?.[1];
-	if (declaredTotal) return Number(declaredTotal);
-	const remaining = output.match(/\[(\d+)\s+more lines in file\b/i)?.[1];
-	if (remaining) return startLine - 1 + sourceLineCount(readSourceText(output) ?? "") + Number(remaining);
-	return startLine - 1 + sourceLineCount(output);
+function projectReadOutput(output: string | undefined, startLine: number): { text?: string; totalLines?: number } {
+	if (!output) return {};
+	const showing = READ_SHOWING_NOTICE.exec(output);
+	if (showing) return { text: output.slice(0, showing.index), totalLines: Number(showing[1]) };
+	const remaining = READ_REMAINING_NOTICE.exec(output);
+	if (remaining) {
+		const text = output.slice(0, remaining.index);
+		return { text, totalLines: startLine - 1 + sourceLineCount(text) + Number(remaining[1]) };
+	}
+	return { text: output, totalLines: startLine - 1 + sourceLineCount(output) };
 }
 
 function sourceBody(
@@ -85,11 +85,12 @@ function sourceBody(
 	const invocationContent = name === "write" && typeof args?.content === "string"
 		? sanitizeActivityText(args.content)
 		: undefined;
-	const projectedOutput = name === "read" ? readSourceText(output) : output;
-	const text = invocationContent ?? (excerpt.length > 0 ? excerpt.join("\n") : error ?? projectedOutput ?? "");
 	const startLine = typeof details?.startLine === "number"
 		? details.startLine
 		: name === "read" && typeof args?.offset === "number" ? args.offset : undefined;
+	const readOutput = name === "read" ? projectReadOutput(output, startLine ?? 1) : undefined;
+	const projectedOutput = readOutput?.text ?? output;
+	const text = invocationContent ?? (excerpt.length > 0 ? excerpt.join("\n") : error ?? projectedOutput ?? "");
 	const truncation = asRecord(details?.truncation);
 	const declaredTotal = typeof details?.totalLines === "number"
 		? details.totalLines
@@ -97,7 +98,7 @@ function sourceBody(
 			? details.lineCount
 			: typeof truncation?.totalLines === "number" ? truncation.totalLines : undefined;
 	const totalLines = declaredTotal
-		?? (name === "read" ? readTotalLines(output, startLine ?? 1) : sourceLineCount(text));
+		?? (name === "read" ? readOutput?.totalLines : sourceLineCount(text));
 	return {
 		kind: "source",
 		text,

@@ -193,6 +193,35 @@ describe("Activity renderer", () => {
 		expect(compact).not.toContain("one");
 	});
 
+	it("renders child Activities, model context, and aggregate metrics", () => {
+		const rows = renderActivityLedgerRows(activity({
+			kind: "subagent",
+			title: "review auth",
+			model: "openai/gpt-5",
+			thinking: "high",
+			currentStep: "running tests",
+			activeTools: [
+				activity({ id: "read-1", title: "read", status: "succeeded", subject: "src/auth.ts" }),
+				activity({
+					id: "task-child",
+					kind: "task",
+					title: "verify auth",
+					activeTools: [activity({ id: "bash-1", title: "bash", subject: "pnpm test" })],
+				}),
+			],
+			metrics: { tokens: 1200, contextWindow: 128000, turns: 2, costUsd: 0.04, elapsedMs: 22000 },
+		}), 80);
+		const rendered = plain(rows);
+
+		expect(rendered).toContain("openai/gpt-5 · thinking:high");
+		expect(rendered).toContain("✓ [read]  src/auth.ts");
+		expect(rendered).toContain("▶ [verify auth]");
+		expect(rendered).toContain("↳ ▶ [bash]  pnpm test");
+		expect(rendered).toContain("2 turns · 1.2k tokens · ctx:128k · $0.0400 · 22s elapsed");
+		expect(rows.length).toBeLessThanOrEqual(31);
+		expect(rows.every((row) => visibleWidth(row) === 80)).toBe(true);
+	});
+
 	it("renders compact settled result previews when presentation state is collapsed", () => {
 		const settled = activity({
 			status: "succeeded",

@@ -43,8 +43,8 @@ vanilla Pi.
 
 | Tool family   | Source                         | Purpose                      |
 |---------------|--------------------------------|------------------------------|
-| `task`        | `src/native-task-tool.ts`       | Skill-run substrate; run isolated Pi subprocess skills and stream structured scroll/scribe state |
-| `subagent_*`  | `src/subagents/`                | Spawn, steer, inspect, wait for, cancel, and list delegated child agents |
+| `task`        | `src/native-task-tool.ts`       | Skill-run substrate; run isolated Pi subprocess skills and stream structured Activity state |
+| `subagent_*`  | `src/subagents/`                | Spawn, steer, inspect, wait for, cancel, and list delegated child agents; bounded snapshots project to Activities |
 | `bg_*`        | `src/background-tasks/`         | Start, inspect, stop, and list non-interactive background shell terminals with typed completion cards |
 
 ### 4. SumoCode Extension Hooks
@@ -55,11 +55,12 @@ SumoCode may observe `pi.on("tool_call")` events for non-blocking UI state, but 
 
 ### Transcript View-Model Pipeline
 
-All tool results flow through the structured transcript:
+All tool results flow through the structured transcript. Ordinary Pi tools use `src/activity/pi-projector.ts`; native `task` and `subagent_*` records use bounded structural adapters in `src/activity/`. Execution machinery remains separate. `subagent_send` and `subagent_list` stay ordinary tool Activities, while spawn/check/wait/cancel details may also update canonical subagent Activities.
+
 
 ```
-Pi agent event → ChatMessageViewModel → ChatBlock (tool/skill/delegation/code/question)
-    → tool-renderer.ts / code-renderer.ts / scroll-renderer.ts / chat-message.ts
+Pi agent event → producer adapter → ChatMessageViewModel → ChatBlock (activity/skill/code/question)
+    → activity-renderer.ts / code-renderer.ts / chat-message.ts
     → CellBuffer → ANSI → terminal
 ```
 
@@ -100,7 +101,8 @@ This ensures the Divine Query renderer doesn't produce double labels like `A) A)
 | `src/extension.ts`               | Main entry — wires all hooks and tools        |
 | `src/divine-query.ts`            | Divine Query modal renderer + state machine   |
 | `src/command-palette.ts`         | Command palette (calls `showDivineQuery`)     |
-| `src/sumo-tui/transcript/*.ts`   | Tool/code/scroll renderers                    |
+| `src/activity/*.ts`             | Shared Activity contract and producer adapters |
+| `src/sumo-tui/transcript/*.ts`  | Activity/code renderers and transcript folding |
 | `src/sumo-tui/widgets/chat-message.ts` | Chat frame + block routing              |
 | `src/question-tool.ts`            | Question tool override (Divine Query)         |
 | `src/answer-tool.ts`              | /answer command + Ctrl+. (Cathedral Q&A wizard) |

@@ -354,6 +354,32 @@ describe("ChatViewportController", () => {
 		root.dispose();
 	});
 
+	it("target-updates an earlier assistant Activity after a newer assistant starts", async () => {
+		const { root, chat, controller } = await makeController();
+		const oldCall = { type: "toolCall", id: "old-read", name: "read", arguments: { path: "old.ts" } };
+		controller.handleAgentEvent({ type: "message_start", message: { id: "assistant-old", role: "assistant", content: [oldCall] } });
+		controller.handleAgentEvent({ type: "message_end", message: { id: "assistant-old", role: "assistant", content: [oldCall] } });
+		controller.handleAgentEvent({ type: "message_start", message: { id: "assistant-new", role: "assistant", content: "newer answer" } });
+		controller.handleAgentEvent({ type: "message_end", message: { id: "assistant-new", role: "assistant", content: "newer answer" } });
+
+		controller.handleAgentEvent({
+			type: "tool_execution_end",
+			toolName: "read",
+			toolCallId: "old-read",
+			args: { path: "old.ts" },
+			result: { content: [{ type: "text", text: "old contents" }] },
+			isError: false,
+		});
+
+		const messages = chat.getRenderedMessages().map((message) => message.toSnapshot());
+		expect(messages).toHaveLength(2);
+		expect(messages[0]?.blocks).toEqual([
+			expect.objectContaining({ type: "activity", activity: expect.objectContaining({ id: "old-read", status: "succeeded", outputTail: "old contents" }) }),
+		]);
+		expect(messages[1]?.blocks).toEqual([{ type: "markdown", text: "newer answer" }]);
+		root.dispose();
+	});
+
 	it("keeps tool-call correlation across a mid-run user follow-up", async () => {
 		const { root, chat, controller } = await makeController();
 		const call = { type: "toolCall", id: "follow-up-read", name: "read", arguments: { path: "a.ts" } };
@@ -430,7 +456,7 @@ describe("ChatViewportController", () => {
 		root.dispose();
 	});
 
-	it("folds live task results into the active scroll block", async () => {
+	it("folds live task results into the active Activity block", async () => {
 		const { root, chat, controller } = await makeController();
 		const taskCall = {
 			type: "toolCall",
@@ -453,28 +479,23 @@ describe("ChatViewportController", () => {
 		expect(messages).toHaveLength(1);
 		expect(messages[0]?.role).toBe("sumo");
 		expect(messages[0]?.blocks).toEqual([
-			{
-				type: "delegation",
-				delegation: {
+			expect.objectContaining({
+				type: "activity",
+				activity: expect.objectContaining({
 					id: "tc-task",
+					kind: "task",
 					title: "Verify issue 194 scroll metadata rendering",
-					agent: "scribe",
 					model: "openai-codex/gpt-5.5",
 					thinking: "high",
-					status: "success",
-					prompt: "Return one line.",
-					summary: "Task tool ran.",
-					nestedTools: [],
-					tokensIn: undefined,
-					tokensOut: undefined,
-					elapsedMs: undefined,
-				},
-			},
+					status: "succeeded",
+					result: { summary: "Task tool ran." },
+				}),
+			}),
 		]);
 		root.dispose();
 	});
 
-	it("does not merge explicit unmatched delegation ids into another running scroll", async () => {
+	it("does not merge explicit unmatched task Activity ids", async () => {
 		const { root, chat, controller } = await makeController();
 		const firstCall = { type: "toolCall", id: "task-a", name: "task", arguments: { type: "single", tasks: [{ prompt: "## First task" }] } };
 		const secondCall = { type: "toolCall", id: "task-b", name: "task", arguments: { type: "single", tasks: [{ prompt: "## Second task" }] } };
@@ -494,8 +515,8 @@ describe("ChatViewportController", () => {
 
 		const blocks = chat.getRenderedMessages()[0]?.toSnapshot().blocks;
 		expect(blocks).toHaveLength(2);
-		expect(blocks?.[0]).toMatchObject({ type: "delegation", delegation: { id: "task-a", title: "First task" } });
-		expect(blocks?.[1]).toMatchObject({ type: "delegation", delegation: { id: "task-b", title: "Second task" } });
+		expect(blocks?.[0]).toMatchObject({ type: "activity", activity: { id: "task-a", title: "First task" } });
+		expect(blocks?.[1]).toMatchObject({ type: "activity", activity: { id: "task-b", title: "Second task" } });
 		root.dispose();
 	});
 
@@ -508,7 +529,7 @@ describe("ChatViewportController", () => {
 		controller.handleAgentEvent({ type: "tool_execution_start", toolCallId: "tc-task", toolName: "task", args: taskCall.arguments });
 
 		const block = chat.getRenderedMessages()[0]?.toSnapshot().blocks?.[0];
-		expect(block).toMatchObject({ type: "delegation", delegation: { title: "Running task", status: "running" } });
+		expect(block).toMatchObject({ type: "activity", activity: { title: "Running task", status: "running" } });
 		root.dispose();
 	});
 
@@ -547,13 +568,13 @@ describe("ChatViewportController", () => {
 
 		const message = chat.getRenderedMessages()[0]?.toSnapshot();
 		expect(message?.blocks?.[0]).toMatchObject({
-			type: "delegation",
-			delegation: {
+			type: "activity",
+			activity: {
 				title: "Audit auth",
 				model: "openai-codex/gpt-5.5",
 				thinking: "high",
 				status: "running",
-				nestedTools: [{ id: "read-1", name: "read", status: "running", input: { path: "src/auth.ts" } }],
+				activeTools: [{ id: "read-1", title: "read", status: "running", invocation: { path: "src/auth.ts" } }],
 			},
 		});
 		root.dispose();
@@ -576,15 +597,192 @@ describe("ChatViewportController", () => {
 
 		const message = chat.getRenderedMessages()[0]?.toSnapshot();
 		expect(message?.blocks?.[0]).toMatchObject({
-			type: "delegation",
-			delegation: {
+			type: "activity",
+			activity: {
 				title: "Verify issue 194 live scroll result folding",
 				thinking: "minimal",
 				status: "running",
-				prompt: "Respond with exactly this sentence:\nTask output visible inside scribe.",
-				summary: undefined,
+				invocation: {
+					tasks: [{ prompt: "You are Zeus.\n\n## Verify issue 194 live scroll result folding\n\nRespond with exactly this sentence:\nTask output visible inside scribe." }],
+				},
 			},
 		});
+		root.dispose();
+	});
+
+	it("uses the shared matcher to adopt and settle canonical subagent identity", async () => {
+		const { root, chat, controller } = await makeController();
+		const running = {
+			id: "subagent:sa-1",
+			sourceId: "spawn-call-1",
+			kind: "subagent",
+			title: "review auth",
+			status: "running",
+			subject: "sa-1",
+			invocation: { prompt: "Review auth" },
+		};
+		const settled = { ...running, status: "succeeded", result: { summary: "No findings" } };
+		const spawnCall = { type: "toolCall", id: "spawn-call-1", name: "subagent_spawn", arguments: { prompt: "Review auth", name: "review auth" } };
+
+		controller.handleAgentEvent({ type: "message_start", message: { role: "assistant", content: [spawnCall] } });
+		controller.handleAgentEvent({ type: "message_end", message: { role: "assistant", content: [spawnCall] } });
+		controller.handleAgentEvent({
+			type: "tool_execution_end",
+			toolCallId: "spawn-call-1",
+			toolName: "subagent_spawn",
+			args: spawnCall.arguments,
+			result: {
+				content: [{ type: "text", text: "Started sa-1" }],
+				details: { activity: running },
+			},
+			isError: false,
+		});
+
+		let activities = (chat.getRenderedMessages()[0]?.toSnapshot().blocks ?? []).filter((block) => block.type === "activity");
+		expect(activities).toHaveLength(1);
+		expect(activities[0]).toMatchObject({ activity: { id: "subagent:sa-1", sourceId: "spawn-call-1", kind: "subagent", status: "running" } });
+		controller.handleAgentEvent({
+			type: "message_start",
+			message: {
+				role: "custom",
+				customType: "subagent-result",
+				display: true,
+				content: "Subagent sa-1 finished.",
+				details: { id: "sa-1", title: "review auth", status: "done", activity: settled },
+			},
+		});
+
+		activities = (chat.getRenderedMessages()[0]?.toSnapshot().blocks ?? []).filter((block) => block.type === "activity");
+		expect(activities).toHaveLength(1);
+		expect(activities[0]).toMatchObject({ activity: { id: "subagent:sa-1", status: "succeeded", result: { summary: "No findings" } } });
+		root.dispose();
+	});
+
+	it("folds passive completion into its earlier assistant after a newer assistant starts", async () => {
+		const { root, chat, controller } = await makeController();
+		const running = {
+			id: "subagent:sa-earlier",
+			sourceId: "spawn-earlier",
+			kind: "subagent",
+			title: "review earlier auth",
+			status: "running",
+			invocation: { prompt: "Review earlier auth" },
+		};
+		const spawnCall = { type: "toolCall", id: "spawn-earlier", name: "subagent_spawn", arguments: { prompt: "Review earlier auth", name: "review earlier auth" } };
+		controller.handleAgentEvent({ type: "message_start", message: { id: "assistant-earlier", role: "assistant", content: [spawnCall] } });
+		controller.handleAgentEvent({ type: "message_end", message: { id: "assistant-earlier", role: "assistant", content: [spawnCall] } });
+		controller.handleAgentEvent({
+			type: "tool_execution_end",
+			toolCallId: "spawn-earlier",
+			toolName: "subagent_spawn",
+			args: spawnCall.arguments,
+			result: { content: [{ type: "text", text: "Started sa-earlier" }], details: { activity: running } },
+			isError: false,
+		});
+		controller.handleAgentEvent({ type: "message_start", message: { id: "assistant-newer", role: "assistant", content: "newer answer" } });
+		controller.handleAgentEvent({ type: "message_end", message: { id: "assistant-newer", role: "assistant", content: "newer answer" } });
+
+		controller.handleAgentEvent({
+			type: "message_start",
+			message: {
+				role: "custom",
+				customType: "subagent-result",
+				display: true,
+				content: "Earlier complete",
+				details: { activity: { ...running, status: "succeeded", result: { summary: "Earlier complete" } } },
+			},
+		});
+
+		const messages = chat.getRenderedMessages().map((message) => message.toSnapshot());
+		expect(messages).toHaveLength(2);
+		expect(messages[0]?.blocks).toEqual([
+			expect.objectContaining({ type: "activity", activity: expect.objectContaining({ id: "subagent:sa-earlier", status: "succeeded", result: { summary: "Earlier complete" } }) }),
+		]);
+		expect(messages[1]?.blocks).toEqual([{ type: "markdown", text: "newer answer" }]);
+		root.dispose();
+	});
+
+	it("keeps uncorrelated passive subagent updates in one standalone card", async () => {
+		const { root, chat, controller } = await makeController();
+		controller.handleAgentEvent({ type: "message_start", message: { id: "assistant-current", role: "assistant", content: "current answer" } });
+		controller.handleAgentEvent({ type: "message_end", message: { id: "assistant-current", role: "assistant", content: "current answer" } });
+
+		controller.handleAgentEvent({
+			type: "message_start",
+			message: {
+				role: "custom",
+				customType: "subagent-result",
+				display: true,
+				content: "Historical running",
+				details: { id: "sa-historical", title: "historical worker", status: "running" },
+			},
+		});
+
+		let messages = chat.getRenderedMessages().map((message) => message.toSnapshot());
+		expect(messages).toHaveLength(2);
+		expect(messages[0]?.blocks).toEqual([{ type: "markdown", text: "current answer" }]);
+		expect(messages[1]?.blocks).toEqual([
+			expect.objectContaining({ type: "activity", activity: expect.objectContaining({ id: "subagent:sa-historical", status: "running" }) }),
+		]);
+
+		controller.handleAgentEvent({
+			type: "message_start",
+			message: {
+				role: "custom",
+				customType: "subagent-result",
+				display: true,
+				content: "Historical complete",
+				details: { id: "sa-historical", title: "historical worker", status: "done" },
+			},
+		});
+
+		messages = chat.getRenderedMessages().map((message) => message.toSnapshot());
+		expect(messages).toHaveLength(2);
+		expect(messages[1]?.blocks).toEqual([
+			expect.objectContaining({ type: "activity", activity: expect.objectContaining({ id: "subagent:sa-historical", status: "succeeded" }) }),
+		]);
+		root.dispose();
+	});
+
+	it("hydrates a replayed subagent queued/running/final sequence as one canonical card", async () => {
+		const { root, chat, controller } = await makeController();
+		const running = {
+			id: "subagent:sa-replay",
+			sourceId: "spawn-replay",
+			kind: "subagent",
+			title: "review replay auth",
+			status: "running",
+			invocation: { prompt: "Review replay auth" },
+		};
+		controller.renderSessionContext({
+			messages: [
+				{
+					id: "assistant-replay",
+					role: "assistant",
+					content: [{ type: "toolCall", id: "spawn-replay", name: "subagent_spawn", arguments: { prompt: "Review replay auth", name: "review replay auth" } }],
+				},
+				{
+					role: "toolResult",
+					toolCallId: "spawn-replay",
+					toolName: "subagent_spawn",
+					content: [{ type: "text", text: "Started sa-replay" }],
+					details: { activity: running },
+				},
+				{
+					role: "custom",
+					customType: "subagent-result",
+					display: true,
+					content: "Replay complete",
+					details: { activity: { ...running, status: "succeeded", result: { summary: "Replay complete" } } },
+				},
+			],
+		});
+
+		const messages = chat.getRenderedMessages().map((message) => message.toSnapshot());
+		const activities = messages.flatMap((message) => message.blocks ?? []).filter((block) => block.type === "activity");
+		expect(messages).toHaveLength(1);
+		expect(activities).toHaveLength(1);
+		expect(activities[0]).toMatchObject({ activity: { id: "subagent:sa-replay", sourceId: "spawn-replay", status: "succeeded", result: { summary: "Replay complete" } } });
 		root.dispose();
 	});
 

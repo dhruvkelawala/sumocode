@@ -16,6 +16,7 @@ describe("Activity domain", () => {
 		expect(sameActivity(activity("a"), activity("a"))).toBe(true);
 		expect(sameActivity(activity("tool-call-1"), activity("task-1", { kind: "task", sourceId: "tool-call-1" }))).toBe(true);
 		expect(sameActivity(activity("temporary", { sourceId: "call-1" }), activity("canonical", { kind: "task", sourceId: "call-1" }))).toBe(true);
+		expect(sameActivity(activity("spawn-call-1"), activity("subagent:sa-1", { kind: "subagent", sourceId: "spawn-call-1" }))).toBe(true);
 		expect(sameActivity(activity("a", { sourceId: "shared" }), activity("b", { sourceId: "shared" }))).toBe(false);
 		expect(sameActivity(activity("a"), activity("b"))).toBe(false);
 	});
@@ -39,6 +40,19 @@ describe("Activity domain", () => {
 			sourceId: "tool-call-1",
 			outputTail: "tool output",
 			currentStep: "running tests",
+		});
+	});
+
+	it("preserves canonical subagent identity when a spawn tool result reveals it", () => {
+		const tool = activity("spawn-call-1", { title: "subagent_spawn", invocation: { prompt: "Review auth" } });
+		const subagent = activity("subagent:sa-1", { kind: "subagent", title: "review auth", sourceId: "spawn-call-1", subject: "sa-1" });
+
+		expect(mergeActivitySnapshot(tool, subagent)).toMatchObject({
+			id: "subagent:sa-1",
+			kind: "subagent",
+			title: "review auth",
+			sourceId: "spawn-call-1",
+			invocation: { prompt: "Review auth" },
 		});
 	});
 
@@ -67,7 +81,7 @@ describe("Activity domain", () => {
 		});
 	});
 
-	it("merges child activities by stable ID without dropping siblings", () => {
+	it("merges child activities by stable ID and retains older siblings within the bound", () => {
 		const merged = mergeActivitySnapshot(
 			activity("parent", {
 				kind: "task",
@@ -81,7 +95,24 @@ describe("Activity domain", () => {
 
 		expect(merged.activeTools).toHaveLength(3);
 		expect(merged.activeTools?.[0]).toMatchObject({ id: "read-1", status: "succeeded", outputTail: "done" });
-		expect(merged.activeTools?.map((child) => child.id)).toEqual(["read-1", "bash-1", "edit-1"]);
+		expect(merged.activeTools?.map((child) => child.id)).toEqual(["read-1", "edit-1", "bash-1"]);
+	});
+
+	it("keeps incoming child priority authoritative and bounds merged sliding windows", () => {
+		const existing = activity("parent", {
+			kind: "task",
+			activeTools: Array.from({ length: 16 }, (_, index) => activity(`old-${index}`)),
+		});
+		const incoming = activity("parent", {
+			kind: "task",
+			activeTools: [activity("running-tail", { status: "running" }), ...Array.from({ length: 15 }, (_, index) => activity(`new-${index}`))],
+		});
+
+		const merged = mergeActivitySnapshot(existing, incoming);
+
+		expect(merged.activeTools).toHaveLength(16);
+		expect(merged.activeTools?.[0]).toMatchObject({ id: "running-tail", status: "running" });
+		expect(merged.activeTools?.map((child) => child.id)).not.toContain("old-0");
 	});
 
 	it("treats an explicit empty activeTools list as a clear while undefined preserves children", () => {
@@ -129,6 +160,25 @@ describe("Activity domain", () => {
 			expect(preview).not.toContain(secret);
 		}
 		expect(() => safeValuePreview(cyclic)).not.toThrow();
+	});
+
+	it("bounds global nodes, value characters, and oversized object keys incrementally", () => {
+		let deep: unknown = { value: "visible" };
+		for (let index = 0; index < 10_000; index += 1) deep = { next: deep };
+		const hugeKey = `${"x".repeat(100_000)}token`;
+		const preview = safeValuePreview({ [hugeKey]: "must-not-leak", deep }, {
+			maxChars: 200,
+			maxDepth: 10_000,
+			maxEntries: 20,
+			maxStringChars: 40,
+			maxNodes: 32,
+			maxTotalStringChars: 100,
+		});
+
+		expect(preview.length).toBeLessThanOrEqual(200);
+		expect(preview).not.toContain("must-not-leak");
+		expect(preview).toContain("[REDACTED]");
+		expect(preview).toContain("[Truncated]");
 	});
 
 	it("strips ANSI and controls while normalizing tabs and carriage returns", () => {

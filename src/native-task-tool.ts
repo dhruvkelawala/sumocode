@@ -104,6 +104,8 @@ type TaskToolDetails = {
 	mode: "single" | "parallel" | "chain";
 	modelOverride?: string;
 	results: SingleResult[];
+	startedAt?: number;
+	updatedAt?: number;
 };
 
 type TaskStatus = "Running" | "Done" | "Failed" | "Pending";
@@ -311,8 +313,8 @@ const getTaskStatus = (result: SingleResult): TaskStatus => {
 };
 
 const getParallelStatus = (results: SingleResult[]): OverallStatus => {
-	const hasRunning = results.some((result) => isTaskRunning(result));
-	if (hasRunning) return "Running";
+	const hasInProgress = results.some((result) => isTaskRunning(result) || isTaskPending(result));
+	if (hasInProgress) return "Running";
 	return results.some(isTaskError) ? "Failed" : "Done";
 };
 
@@ -919,6 +921,7 @@ export const taskTool = (options: TaskToolOptions = DEFAULT_OPTIONS) => (pi: Ext
 				return {
 					content: [{ type: "text", text: `${normalized.error}\nAvailable skills: ${available.text}${suffix}` }],
 					details: { mode: "single", results: [] } as TaskToolDetails,
+					isError: true,
 				};
 			}
 
@@ -929,8 +932,15 @@ export const taskTool = (options: TaskToolOptions = DEFAULT_OPTIONS) => (pi: Ext
 			const builtInTools = getBuiltInToolsFromActiveTools(pi.getActiveTools());
 			const ctxModel = ctx.model ? { provider: ctx.model.provider, id: ctx.model.id } : undefined;
 
+			const taskStartedAt = Date.now();
 			const makeDetails = (results: SingleResult[]): TaskToolDetails => {
-				return { mode: normalized.value.mode, modelOverride: normalized.value.model, results };
+				return {
+					mode: normalized.value.mode,
+					modelOverride: normalized.value.model,
+					results,
+					startedAt: taskStartedAt,
+					updatedAt: Date.now(),
+				};
 			};
 
 			const requiresFork = normalized.value.items.some((item) => item.fork);
@@ -963,6 +973,7 @@ export const taskTool = (options: TaskToolOptions = DEFAULT_OPTIONS) => (pi: Ext
 					return {
 						content: [{ type: "text", text: prepared.error }],
 						details: makeDetails([]),
+						isError: true,
 					};
 				}
 
@@ -1040,6 +1051,7 @@ export const taskTool = (options: TaskToolOptions = DEFAULT_OPTIONS) => (pi: Ext
 						return {
 							content: [{ type: "text", text: config.error }],
 							details: makeDetails([...results]),
+							isError: true,
 						};
 					}
 
@@ -1048,6 +1060,7 @@ export const taskTool = (options: TaskToolOptions = DEFAULT_OPTIONS) => (pi: Ext
 						return {
 							content: [{ type: "text", text: preparedPrompt.error }],
 							details: makeDetails([...results]),
+							isError: true,
 						};
 					}
 
@@ -1129,6 +1142,7 @@ export const taskTool = (options: TaskToolOptions = DEFAULT_OPTIONS) => (pi: Ext
 				return {
 					content: [{ type: "text", text: prepared.error }],
 					details: makeDetails([]),
+					isError: true,
 				};
 			}
 
@@ -1138,13 +1152,14 @@ export const taskTool = (options: TaskToolOptions = DEFAULT_OPTIONS) => (pi: Ext
 					index + 1,
 					execution.config.thinkingLevel,
 					execution.config.modelLabel,
+					-2,
 				),
 			);
 
 			const emitParallelUpdate = () => {
 				if (!onUpdate) return;
 				const running = allResults.filter((result) => result.exitCode === -1).length;
-				const done = allResults.filter((result) => result.exitCode !== -1).length;
+				const done = allResults.filter((result) => result.exitCode !== -1 && result.exitCode !== -2).length;
 				onUpdate({
 					content: [{ type: "text", text: `Parallel: ${done}/${allResults.length} done, ${running} running...` }],
 					details: makeDetails([...allResults]),
@@ -1157,6 +1172,13 @@ export const taskTool = (options: TaskToolOptions = DEFAULT_OPTIONS) => (pi: Ext
 				prepared.executions,
 				merged.maxConcurrency,
 				async (execution, index) => {
+					allResults[index] = createPlaceholderResult(
+						execution.task.item,
+						index + 1,
+						execution.config.thinkingLevel,
+						execution.config.modelLabel,
+					);
+					emitParallelUpdate();
 					const result = await runSingleTask({
 						defaultCwd: ctx.cwd,
 						item: execution.task.item,

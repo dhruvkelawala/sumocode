@@ -3,6 +3,12 @@ import { SumoNode } from "../layout/node.js";
 import { FLEX_DIRECTION_COLUMN, type Yoga, type YogaNode } from "../layout/yoga.js";
 import type { KeyEvent } from "../input/key-router.js";
 import type { MouseEvent } from "../input/mouse.js";
+import {
+	isFoldableBlock,
+	matchingFoldableBlockIndex,
+	upsertFoldableBlock,
+	type FoldableBlock,
+} from "../transcript/activity-fold.js";
 import { chatMessageViewModelToPlainText, type ChatBlock, type ChatMessageViewModel } from "../transcript/view-model.js";
 import { ChatMessage, type ChatMessageOptions, type ChatMessageRole } from "./chat-message.js";
 import { ScrolledUpBanner } from "./scrolled-up-banner.js";
@@ -302,6 +308,33 @@ export class ChatPager extends SumoNode {
 		return this.activeMessages;
 	}
 
+	/** Fold an Activity/delegation into the newest matching SUMO message. */
+	public foldBlockIntoMatchingMessage(incoming: FoldableBlock): number | undefined {
+		for (let activeIndex = this.activeMessages.length - 1; activeIndex >= 0; activeIndex -= 1) {
+			const target = this.activeMessages[activeIndex];
+			if (!target) continue;
+			const blocks = target.toSnapshot().blocks ?? [];
+			const isStandaloneActivityMessage = (target.role === "tool" || target.role === "system")
+				&& blocks.some(isFoldableBlock)
+				&& blocks.every((block) => isFoldableBlock(block) || block.type === "image");
+			if (target.role !== "sumo" && target.role !== "assistant" && !isStandaloneActivityMessage) continue;
+			if (matchingFoldableBlockIndex(blocks, incoming) === -1) continue;
+			const sourceIndex = this.activeMessageSourceIndices[activeIndex];
+			if (sourceIndex === undefined) return undefined;
+			this.replaceBlocksAtSourceIndex(sourceIndex, upsertFoldableBlock(blocks, incoming));
+			return sourceIndex;
+		}
+		return undefined;
+	}
+
+	/** Attach a correlated sibling block (notably an image) to a known message. */
+	public upsertBlockAtSourceIndex(sourceIndex: number, incoming: ChatBlock): boolean {
+		const activeIndex = this.activeMessageSourceIndices.indexOf(Math.floor(sourceIndex));
+		const target = this.activeMessages[activeIndex];
+		if (!target) return false;
+		return this.replaceBlocksAtSourceIndex(sourceIndex, upsertFoldableBlock(target.toSnapshot().blocks ?? [], incoming));
+	}
+
 	public getLastMessage(): ChatMessage | undefined {
 		return this.activeMessages[this.activeMessages.length - 1];
 	}
@@ -332,6 +365,21 @@ export class ChatPager extends SumoNode {
 
 	public handleMouseEvent(event: MouseEvent): boolean {
 		return this.scrollBox.handleMouseEvent(event);
+	}
+
+	private replaceBlocksAtSourceIndex(sourceIndex: number, blocks: readonly ChatBlock[]): boolean {
+		const activeIndex = this.activeMessageSourceIndices.indexOf(Math.floor(sourceIndex));
+		const target = this.activeMessages[activeIndex];
+		if (!target) return false;
+		const snapshot = target.toSnapshot();
+		const role = target.role === "user" ? "user" : target.role === "sumo" || target.role === "assistant" ? "sumo" : "system";
+		return this.replaceViewModelAt(sourceIndex, {
+			id: `pager-message-${Math.floor(sourceIndex)}`,
+			role,
+			displayName: role === "user" ? "YOU" : role === "sumo" ? "SUMO" : "SYSTEM",
+			timestamp: snapshot.timestamp,
+			blocks,
+		});
 	}
 
 	private addChatMessage(message: ChatMessage, sourceIndex = this.sourceMessageCount): ChatMessage {

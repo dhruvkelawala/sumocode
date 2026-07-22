@@ -27,8 +27,11 @@ export interface ActivitySnapshot {
 	readonly model?: string;
 	readonly thinking?: string;
 	readonly metrics?: {
+		/** Producer-reported aggregate tokens when input/output are not separately available. */
+		readonly tokens?: number;
 		readonly tokensIn?: number;
 		readonly tokensOut?: number;
+		readonly contextWindow?: number;
 		readonly costUsd?: number;
 		readonly turns?: number;
 		readonly elapsedMs?: number;
@@ -40,9 +43,14 @@ export interface SafeValuePreviewOptions {
 	readonly maxDepth?: number;
 	readonly maxEntries?: number;
 	readonly maxStringChars?: number;
+	/** Global traversal cap across arrays and objects, independent of depth. */
+	readonly maxNodes?: number;
+	/** Global cap on raw string characters inspected across the value. */
+	readonly maxTotalStringChars?: number;
 }
 
 const TERMINAL_STATUS = new Set<ActivityStatus>(["succeeded", "failed", "cancelled", "lost"]);
+const MAX_MERGED_ACTIVE_TOOLS = 16;
 const SECRET_KEY_WORDS = new Set([
 	"apikey",
 	"authorization",
@@ -167,10 +175,25 @@ export function safeValuePreview(value: unknown, options: SafeValuePreviewOption
 	const maxDepth = Math.max(0, Math.floor(options.maxDepth ?? 4));
 	const maxEntries = Math.max(1, Math.floor(options.maxEntries ?? 20));
 	const maxStringChars = Math.max(1, Math.floor(options.maxStringChars ?? 500));
+	let remainingNodes = Math.max(1, Math.floor(options.maxNodes ?? 256));
+	let remainingStringChars = Math.max(1, Math.floor(options.maxTotalStringChars ?? maxChars));
 	const seen = new WeakSet<object>();
+	const inspectString = (text: string): { text: string; truncated: boolean } => {
+		if (remainingStringChars <= 0) return { text: "[Truncated]", truncated: true };
+		const inspectedChars = Math.min(text.length, maxStringChars, remainingStringChars);
+		remainingStringChars -= inspectedChars;
+		const sanitized = sanitizeActivityText(text.slice(0, inspectedChars));
+		const truncated = text.length > inspectedChars;
+		return {
+			text: truncated ? boundedText(`${sanitized}…`, maxStringChars) : boundedText(sanitized, maxStringChars),
+			truncated,
+		};
+	};
 
 	const visit = (current: unknown, depth: number): unknown => {
-		if (typeof current === "string") return boundedText(sanitizeActivityText(current), maxStringChars);
+		if (remainingNodes <= 0) return "[Truncated]";
+		remainingNodes -= 1;
+		if (typeof current === "string") return inspectString(current).text;
 		if (current === null || typeof current === "boolean" || typeof current === "number") return current;
 		if (typeof current === "bigint") return `${current.toString()}n`;
 		if (current === undefined) return "[undefined]";
@@ -181,29 +204,42 @@ export function safeValuePreview(value: unknown, options: SafeValuePreviewOption
 		if (depth >= maxDepth) return "[Truncated]";
 		seen.add(current);
 		if (Array.isArray(current)) {
-			const result = current.slice(0, maxEntries).map((item) => visit(item, depth + 1));
-			if (current.length > maxEntries) result.push(`… ${current.length - maxEntries} more`);
+			const inspected = current.slice(0, maxEntries);
+			const result = inspected.map((item) => visit(item, depth + 1));
+			if (current.length > inspected.length) result.push(`… ${current.length - inspected.length} more`);
 			return result;
 		}
 		const result: Record<string, unknown> = {};
-		let keys: string[];
+		const keys: string[] = [];
+		let hasMore = false;
 		try {
-			keys = Object.keys(current);
+			for (const key in current) {
+				if (!Object.prototype.hasOwnProperty.call(current, key)) continue;
+				if (keys.length >= maxEntries) {
+					hasMore = true;
+					break;
+				}
+				keys.push(key);
+			}
 		} catch {
 			return "[Uninspectable]";
 		}
-		for (const key of keys.slice(0, maxEntries)) {
-			if (isSecretKey(key)) {
-				result[key] = "[REDACTED]";
+		for (const key of keys) {
+			const inspectedKey = inspectString(key);
+			const displayKey = inspectedKey.text || "[empty key]";
+			// If the complete key cannot be inspected, fail closed rather than let a
+			// secret suffix beyond the character budget evade key-based redaction.
+			if (inspectedKey.truncated || isSecretKey(displayKey)) {
+				result[displayKey] = "[REDACTED]";
 				continue;
 			}
 			try {
-				result[key] = visit((current as Record<string, unknown>)[key], depth + 1);
+				result[displayKey] = visit((current as Record<string, unknown>)[key], depth + 1);
 			} catch {
-				result[key] = "[Uninspectable]";
+				result[displayKey] = "[Uninspectable]";
 			}
 		}
-		if (keys.length > maxEntries) result["…"] = `${keys.length - maxEntries} more`;
+		if (hasMore) result["…"] = "more";
 		return result;
 	};
 
@@ -216,14 +252,14 @@ export function safeValuePreview(value: unknown, options: SafeValuePreviewOption
 	return boundedText(sanitizeActivityText(serialized ?? "[undefined]"), maxChars);
 }
 
-function isToolTaskTransition(existing: ActivitySnapshot, incoming: ActivitySnapshot): boolean {
-	return (existing.kind === "tool" && incoming.kind === "task")
-		|| (existing.kind === "task" && incoming.kind === "tool");
+function isToolCanonicalTransition(existing: ActivitySnapshot, incoming: ActivitySnapshot): boolean {
+	return (existing.kind === "tool" && incoming.kind !== "tool")
+		|| (existing.kind !== "tool" && incoming.kind === "tool");
 }
 
 export function sameActivity(existing: ActivitySnapshot, incoming: ActivitySnapshot): boolean {
 	if (existing.id === incoming.id) return true;
-	if (!isToolTaskTransition(existing, incoming)) return false;
+	if (!isToolCanonicalTransition(existing, incoming)) return false;
 	return existing.sourceId === incoming.id
 		|| incoming.sourceId === existing.id
 		|| (existing.sourceId !== undefined && existing.sourceId === incoming.sourceId);
@@ -233,7 +269,7 @@ function canonicalIdentity(
 	existing: ActivitySnapshot,
 	incoming: ActivitySnapshot,
 ): Pick<ActivitySnapshot, "id" | "kind" | "title" | "sourceId"> {
-	if (!isToolTaskTransition(existing, incoming) || !sameActivity(existing, incoming)) {
+	if (!isToolCanonicalTransition(existing, incoming) || !sameActivity(existing, incoming)) {
 		const sourceId = incoming.sourceId ?? existing.sourceId;
 		return {
 			id: incoming.id,
@@ -242,15 +278,15 @@ function canonicalIdentity(
 			...(sourceId ? { sourceId } : {}),
 		};
 	}
-	const task = existing.kind === "task" ? existing : incoming;
+	const canonical = existing.kind === "tool" ? incoming : existing;
 	const tool = existing.kind === "tool" ? existing : incoming;
-	const sourceId = task.sourceId && task.sourceId !== task.id
-		? task.sourceId
-		: tool.id !== task.id ? tool.id : tool.sourceId;
+	const sourceId = canonical.sourceId && canonical.sourceId !== canonical.id
+		? canonical.sourceId
+		: tool.id !== canonical.id ? tool.id : tool.sourceId;
 	return {
-		id: task.id,
-		kind: "task",
-		title: task.title,
+		id: canonical.id,
+		kind: canonical.kind,
+		title: canonical.title,
 		...(sourceId ? { sourceId } : {}),
 	};
 }
@@ -278,14 +314,19 @@ function mergeChildren(
 ): readonly ActivitySnapshot[] | undefined {
 	if (incoming === undefined) return existing;
 	if (incoming.length === 0) return [];
-	if (!existing || existing.length === 0) return incoming;
-	const merged = [...existing];
-	for (const child of incoming) {
-		const index = merged.findIndex((candidate) => sameActivity(candidate, child));
-		if (index === -1) merged.push(child);
-		else merged[index] = mergeActivitySnapshot(merged[index]!, child);
+	if (!existing || existing.length === 0) return incoming.slice(0, MAX_MERGED_ACTIVE_TOOLS);
+	// Incoming order is the producer's current priority window (running first,
+	// then recent settled work). Merge known fields for those children, then use
+	// any spare bounded slots for older siblings omitted by a sparse update.
+	const merged = incoming.map((child) => {
+		const previous = existing.find((candidate) => sameActivity(candidate, child));
+		return previous ? mergeActivitySnapshot(previous, child) : child;
+	});
+	for (const child of existing) {
+		if (merged.length >= MAX_MERGED_ACTIVE_TOOLS) break;
+		if (!incoming.some((candidate) => sameActivity(candidate, child))) merged.push(child);
 	}
-	return merged;
+	return merged.slice(0, MAX_MERGED_ACTIVE_TOOLS);
 }
 
 /** Merge producer state without allowing sparse updates to erase known data. */

@@ -3,6 +3,7 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import type { SubagentEvent } from "./domain.js";
+import { safeValuePreview } from "../activity/domain.js";
 import { type BuiltInToolName, resolveTaskConfig } from "../native-task-config.js";
 import { isRecord, type TaskThinking, type ThinkingLevel } from "../native-task-params.js";
 
@@ -126,6 +127,17 @@ const sanitizePreview = (value: unknown, max = PREVIEW_MAX): string | undefined 
 	return flattened.length > max ? `${flattened.slice(0, max - 1)}…` : flattened;
 };
 
+const safeToolArgumentsPreview = (value: unknown): string | undefined => {
+	if (value === undefined) return undefined;
+	const preview = safeValuePreview(value, {
+		maxChars: PREVIEW_MAX,
+		maxDepth: 4,
+		maxEntries: 16,
+		maxStringChars: PREVIEW_MAX,
+	});
+	return preview.replace(/[\t\r\n]+/g, " ").trim();
+};
+
 const stringifyToolOutput = (value: unknown): string | undefined => {
 	if (value === undefined) return undefined;
 	if (typeof value === "string") return value;
@@ -184,7 +196,7 @@ const mapPiEvent = (event: Record<string, unknown>): SubagentEvent[] => {
 			kind: "tool-start",
 			toolId: typeof event.toolCallId === "string" ? event.toolCallId : `${event.toolName ?? "tool"}`,
 			name: typeof event.toolName === "string" ? event.toolName : "tool",
-			argsPreview: sanitizePreview(event.args),
+			argsPreview: safeToolArgumentsPreview(event.args),
 		}];
 	}
 	if (typeText === "tool_execution_update") {

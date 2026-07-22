@@ -256,6 +256,184 @@ describe("TranscriptController Activity folding", () => {
 		const block = regressed.messages.flatMap((message) => message.blocks).find((candidate) => candidate.type === "activity");
 		expect(block).toMatchObject({ type: "activity", activity: { id: "read-1", status: "succeeded", outputTail: "final", body: { text: "final" } } });
 	});
+
+	it("keeps a live spawn result canonical and running before folding its final result", () => {
+		const running = {
+			id: "subagent:sa-live",
+			sourceId: "spawn-live",
+			kind: "subagent",
+			title: "review live auth",
+			status: "running",
+			invocation: { prompt: "Review live auth" },
+		};
+		const spawnCall = { type: "toolCall", id: "spawn-live", name: "subagent_spawn", arguments: { prompt: "Review live auth", name: "review live auth" } };
+		const controller = new TranscriptController();
+		controller.handleAgentEvent({ type: "message_start", message: { id: "assistant-live", role: "assistant", content: [spawnCall] } });
+		controller.handleAgentEvent({ type: "message_end", message: { id: "assistant-live", role: "assistant", content: [spawnCall] } });
+
+		let transcript = controller.handleAgentEvent({
+			type: "tool_execution_end",
+			toolCallId: "spawn-live",
+			toolName: "subagent_spawn",
+			args: spawnCall.arguments,
+			result: { content: [{ type: "text", text: "Started sa-live" }], details: { activity: running } },
+			isError: false,
+		});
+		let activities = transcript.messages.flatMap((message) => message.blocks).filter((block) => block.type === "activity");
+		expect(activities).toHaveLength(1);
+		expect(activities[0]).toMatchObject({ activity: { id: "subagent:sa-live", sourceId: "spawn-live", kind: "subagent", status: "running" } });
+
+		transcript = controller.handleAgentEvent({
+			type: "message_start",
+			message: {
+				role: "custom",
+				customType: "subagent-result",
+				display: true,
+				content: "No live findings",
+				details: { activity: { ...running, status: "succeeded", result: { summary: "No live findings" } } },
+			},
+		});
+		activities = transcript.messages.flatMap((message) => message.blocks).filter((block) => block.type === "activity");
+		expect(activities).toHaveLength(1);
+		expect(activities[0]).toMatchObject({ activity: { id: "subagent:sa-live", status: "succeeded", result: { summary: "No live findings" } } });
+	});
+
+	it("adopts canonical subagent identity and folds passive completion without duplication", () => {
+		const running = {
+			id: "subagent:sa-1",
+			sourceId: "spawn-call-1",
+			kind: "subagent",
+			title: "review auth",
+			status: "running",
+			subject: "sa-1",
+			invocation: { prompt: "Review auth" },
+		};
+		const settled = { ...running, status: "succeeded", result: { summary: "No findings" } };
+		const controller = new TranscriptController();
+		const transcript = controller.replaceFromMessages([
+			{
+				id: "assistant-spawn",
+				role: "assistant",
+				content: [{ type: "toolCall", id: "spawn-call-1", name: "subagent_spawn", arguments: { prompt: "Review auth", name: "review auth" } }],
+			},
+			{
+				role: "toolResult",
+				toolCallId: "spawn-call-1",
+				toolName: "subagent_spawn",
+				content: [{ type: "text", text: "Started sa-1" }],
+				details: { action: "spawn", activity: running },
+			},
+			{
+				role: "custom",
+				customType: "subagent-result",
+				display: true,
+				content: "Subagent sa-1 finished.",
+				details: { id: "sa-1", title: "review auth", status: "done", activity: settled },
+			},
+		]);
+
+		const activities = transcript.messages.flatMap((message) => message.blocks).filter((block) => block.type === "activity");
+		expect(transcript.messages).toHaveLength(1);
+		expect(activities).toHaveLength(1);
+		expect(activities[0]).toMatchObject({
+			type: "activity",
+			activity: { id: "subagent:sa-1", sourceId: "spawn-call-1", kind: "subagent", status: "succeeded", result: { summary: "No findings" } },
+		});
+	});
+
+	it("folds matched batch Activities independently and leaves only unmatched updates standalone", () => {
+		const running = {
+			id: "subagent:sa-matched",
+			sourceId: "spawn-matched",
+			kind: "subagent",
+			title: "matched worker",
+			status: "running",
+			invocation: { prompt: "matched work" },
+		};
+		const controller = new TranscriptController();
+		const transcript = controller.replaceFromMessages([
+			{
+				id: "assistant-spawn",
+				role: "assistant",
+				content: [{ type: "toolCall", id: "spawn-matched", name: "subagent_spawn", arguments: { prompt: "matched work", name: "matched worker" } }],
+			},
+			{
+				role: "toolResult",
+				toolCallId: "spawn-matched",
+				toolName: "subagent_spawn",
+				content: [{ type: "text", text: "Started sa-matched" }],
+				details: { activity: running },
+			},
+			{
+				role: "toolResult",
+				toolCallId: "wait-batch",
+				toolName: "subagent_wait",
+				content: [{ type: "text", text: "batch complete" }],
+				details: {
+					activity: [
+						{ ...running, status: "succeeded", result: { summary: "matched complete" } },
+						{ id: "subagent:sa-unmatched", kind: "subagent", title: "unmatched worker", status: "succeeded", result: { summary: "unmatched complete" } },
+					],
+				},
+			},
+		]);
+
+		const activities = transcript.messages.flatMap((message) => message.blocks)
+			.filter((block) => block.type === "activity")
+			.map((block) => block.activity);
+		expect(activities.filter((activity) => activity.id === "subagent:sa-matched")).toEqual([
+			expect.objectContaining({ status: "succeeded", result: { summary: "matched complete" } }),
+		]);
+		expect(activities.filter((activity) => activity.id === "subagent:sa-unmatched")).toHaveLength(1);
+		expect(activities.filter((activity) => activity.id === "wait-batch")).toHaveLength(1);
+		expect(transcript.messages).toHaveLength(2);
+		expect(transcript.messages[1]?.blocks).toEqual([
+			expect.objectContaining({ type: "activity", activity: expect.objectContaining({ id: "wait-batch" }) }),
+			expect.objectContaining({ type: "activity", activity: expect.objectContaining({ id: "subagent:sa-unmatched" }) }),
+		]);
+	});
+
+	it("keeps historical uncorrelated passive subagent completion standalone", () => {
+		const controller = new TranscriptController();
+		const transcript = controller.replaceFromMessages([{
+			role: "custom",
+			customType: "subagent-result",
+			display: true,
+			content: "Historical result",
+			details: { id: "sa-9", title: "historical", status: "done" },
+		}]);
+
+		expect(transcript.messages).toHaveLength(1);
+		const block = transcript.messages[0]?.blocks[0];
+		expect(block).toMatchObject({ type: "activity", activity: { id: "subagent:sa-9", status: "succeeded" } });
+		if (block?.type !== "activity") throw new Error("wrong block type");
+		expect(block.activity.sourceId).toBeUndefined();
+	});
+
+	it("folds later updates into a standalone canonical Activity card", () => {
+		const controller = new TranscriptController();
+		const transcript = controller.replaceFromMessages([
+			{
+				role: "custom",
+				customType: "subagent-result",
+				display: true,
+				content: "Still running",
+				details: { id: "sa-standalone", title: "standalone", status: "running" },
+			},
+			{
+				role: "custom",
+				customType: "subagent-result",
+				display: true,
+				content: "Standalone complete",
+				details: { id: "sa-standalone", title: "standalone", status: "done" },
+			},
+		]);
+
+		expect(transcript.messages).toHaveLength(1);
+		expect(transcript.messages[0]?.blocks).toEqual([
+			expect.objectContaining({ type: "activity", activity: expect.objectContaining({ id: "subagent:sa-standalone", status: "succeeded" }) }),
+		]);
+	});
 });
 
 describe("TranscriptController live-state clearing", () => {

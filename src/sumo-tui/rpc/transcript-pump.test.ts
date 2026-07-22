@@ -202,7 +202,7 @@ describe("RpcTranscriptPump", () => {
 		}]);
 	});
 
-	it("folds live task execution partial details into the active delegation block", () => {
+	it("folds live task execution partial details into the active Activity block", () => {
 		const pump = new RpcTranscriptPump();
 		const taskCall = {
 			type: "toolCall",
@@ -236,13 +236,13 @@ describe("RpcTranscriptPump", () => {
 		});
 
 		expect(transcript.messages[0]?.blocks[0]).toMatchObject({
-			type: "delegation",
-			delegation: {
+			type: "activity",
+			activity: {
 				title: "Audit auth",
 				model: "openai-codex/gpt-5.5",
 				thinking: "high",
 				status: "running",
-				nestedTools: [{ id: "read-1", name: "read", status: "running", input: { path: "src/auth.ts" } }],
+				activeTools: [{ id: "read-1", title: "read", status: "running", invocation: { path: "src/auth.ts" } }],
 			},
 		});
 	});

@@ -17,6 +17,8 @@ import {
 	type TUI,
 } from "@earendil-works/pi-tui";
 import { createCathedralEditor, type CathedralEditor } from "../../cathedral/cathedral-editor.js";
+import { activeThemeColors } from "../../themes/index.js";
+import { lineToAnsi, span, textLine } from "../render/primitives.js";
 import { pasteClipboardImageToTempFile } from "./clipboard-paste.js";
 import type { KeyEvent, KeyTarget } from "../input/key-router.js";
 import type { EditorTextController } from "../pi-compat/extension-ui-adapter.js";
@@ -479,11 +481,12 @@ function createFallbackTui(onRenderRequest: (() => void) | undefined): TUI {
 }
 
 function createFallbackEditorTheme(): EditorTheme {
+	const accent = (text: string): string => lineToAnsi(textLine([span(text, { fg: activeThemeColors().accent })]));
 	return {
 		borderColor: identity,
 		selectList: {
-			selectedPrefix: identity,
-			selectedText: identity,
+			selectedPrefix: accent,
+			selectedText: accent,
 			description: identity,
 			scrollInfo: identity,
 			noMatch: identity,

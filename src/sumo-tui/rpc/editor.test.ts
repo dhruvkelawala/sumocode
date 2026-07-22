@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { delimiter as pathDelimiter, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RemnicMemoryClient } from "../../memory.js";
-import { resetThemeRegistryForTests } from "../../themes/index.js";
+import { activeThemeColors, resetThemeRegistryForTests } from "../../themes/index.js";
 import { SumoTuiTestBackend, type TestBackendFrame } from "../testing/test-backend.js";
 import { ModalManager } from "../widgets/modal.js";
 import type { NotificationLevel } from "../widgets/notification.js";
@@ -95,6 +95,14 @@ function plainFrame(frame: TestBackendFrame): string {
 
 function stripAnsi(value: string): string {
 	return value.replace(ANSI_PATTERN, "");
+}
+
+function foregroundSgr(hex: string): string {
+	const normalized = hex.replace("#", "");
+	const red = Number.parseInt(normalized.slice(0, 2), 16);
+	const green = Number.parseInt(normalized.slice(2, 4), 16);
+	const blue = Number.parseInt(normalized.slice(4, 6), 16);
+	return `\x1b[38;2;${red};${green};${blue}m`;
 }
 
 async function waitForRenderedText(controller: RpcHostEditorController, text: string, width = 64): Promise<string> {
@@ -389,7 +397,6 @@ describe("RPC editor controller", () => {
 			const controller = await createRpcHostEditorController({
 				controls: controlsFor(),
 				tui: fakeTui(),
-				theme: fakeEditorTheme(),
 				keybindings: fakeKeybindings(),
 				cwd,
 				env,
@@ -400,9 +407,28 @@ describe("RPC editor controller", () => {
 
 			expect(controller.isAutocompleteOpen()).toBe(true);
 			expect(rendered).toContain("mention-target.txt");
+			expect(controller.render(64).join("\n")).toContain(
+				`${foregroundSgr(activeThemeColors().accent)}→ mention-target.txt`,
+			);
 		} finally {
 			rmSync(root, { recursive: true, force: true });
 		}
+	});
+
+	it("renders the selected autocomplete item in the active theme accent", async () => {
+		const controller = await createRpcHostEditorController({
+			controls: controlsFor({ commands: [rpcCommand("deploy", "Deploy current workspace")] }),
+			tui: fakeTui(),
+			keybindings: fakeKeybindings(),
+			cwd: process.cwd(),
+			fdPath: null,
+		});
+
+		for (const character of "/dep") controller.handleInput(character);
+		await waitForRenderedText(controller, "deploy");
+		const rendered = controller.render(64).join("\n");
+
+		expect(rendered).toContain(`${foregroundSgr(activeThemeColors().accent)}→ deploy`);
 	});
 
 	it("renders command autocomplete suggestions from host commands and RPC commands", async () => {

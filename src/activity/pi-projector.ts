@@ -94,11 +94,12 @@ function sourceBody(
 	const truncation = asRecord(details?.truncation);
 	const declaredTotal = typeof details?.totalLines === "number"
 		? details.totalLines
-		: typeof details?.lineCount === "number"
-			? details.lineCount
-			: typeof truncation?.totalLines === "number" ? truncation.totalLines : undefined;
+		: typeof details?.lineCount === "number" ? details.lineCount : undefined;
+	const truncationTotal = typeof truncation?.totalLines === "number" ? truncation.totalLines : undefined;
 	const totalLines = declaredTotal
-		?? (name === "read" ? readOutput?.totalLines : sourceLineCount(text));
+		?? (name === "read"
+			? readOutput?.totalLines ?? truncationTotal
+			: truncationTotal ?? sourceLineCount(text));
 	return {
 		kind: "source",
 		text,

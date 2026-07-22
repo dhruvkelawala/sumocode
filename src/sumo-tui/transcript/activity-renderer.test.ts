@@ -20,9 +20,24 @@ function plain(rows: readonly string[]): string {
 }
 
 describe("Activity renderer", () => {
-	it("renders running and settled empty states with exact useful copy", () => {
-		expect(plain(renderActivityLedgerRows(activity({ body: { kind: "text", text: "" } }), 60))).toContain("waiting for output…");
-		expect(plain(renderActivityLedgerRows(activity({ status: "succeeded", body: { kind: "text", text: "" } }), 60))).toContain("no output captured");
+	it("renders the running empty state after a command row", () => {
+		const rendered = plain(renderActivityLedgerRows(activity({
+			body: { kind: "terminal", command: "pnpm test", text: "" },
+		}), 60));
+
+		expect(rendered).toContain("> pnpm test");
+		expect(rendered).toContain("waiting for output…");
+	});
+
+	it("renders the settled empty state after an invocation row", () => {
+		const rendered = plain(renderActivityLedgerRows(activity({
+			status: "succeeded",
+			invocation: { query: "sumo" },
+			body: { kind: "text", text: "" },
+		}), 60));
+
+		expect(rendered).toContain('> {"query":"sumo"}');
+		expect(rendered).toContain("no output captured");
 	});
 
 	it("renders every bounded bodyless Activity field before using the empty fallback", () => {
@@ -119,14 +134,19 @@ describe("Activity renderer", () => {
 		expect(rows.some((row) => row.includes("   9  omega"))).toBe(true);
 	});
 
-	it("counts collapsed source lines relative to an offset preview", () => {
-		const rows = renderActivityLedgerRows(activity({
-			status: "succeeded",
-			title: "read",
-			subject: "src/a.ts",
-			body: { kind: "source", text: "line 21\nline 22", startLine: 21, totalLines: 100 },
-		}), 70).map(stripAnsi);
+	it("counts collapsed source lines from the absolute total in an offset read notice", () => {
+		const projected = projectPiToolActivity({
+			id: "offset-read",
+			name: "read",
+			status: "success",
+			arguments: { path: "src/a.ts", offset: 21 },
+			content: [{ type: "text", text: "line 21\nline 22\n\n[Showing lines 21-22 of 100 (50KB limit). Use offset=23 to continue.]" }],
+			details: { truncation: { totalLines: 78 } },
+		}, { messageId: "m1", blockIndex: 0 });
+		if (!projected) throw new Error("projection failed");
 
+		expect(projected.body).toMatchObject({ startLine: 21, totalLines: 100 });
+		const rows = renderActivityLedgerRows(projected, 70).map(stripAnsi);
 		expect(rows.some((row) => row.includes("… 78 lines collapsed"))).toBe(true);
 		expect(rows.some((row) => row.includes("… 98 lines collapsed"))).toBe(false);
 	});

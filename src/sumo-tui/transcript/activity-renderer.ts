@@ -387,7 +387,7 @@ function renderStreamBody(activity: ActivitySnapshot, width: number, roles: Acti
 	}
 	if (boundedContent.truncated) reasons.push("output collapsed");
 	if (displayRowsCollapsed) reasons.push("display rows collapsed");
-	if (rows.length === 0) rows.push(renderBodyLine([span(emptyText(activity), { fg: roles.bodyMuted })], width, roles));
+	if (lines.length === 0) rows.push(renderBodyLine([span(emptyText(activity), { fg: roles.bodyMuted })], width, roles));
 	const marker = collapseMarker(reasons, width);
 	if (marker) {
 		if (rows.length >= BODY_MAX_ROWS) rows.pop();

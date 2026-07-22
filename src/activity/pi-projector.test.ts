@@ -58,6 +58,7 @@ describe("Pi Activity projector", () => {
 			status: "success",
 			arguments: { path: "truncated.ts", offset: 21 },
 			content: [{ type: "text", text: "twenty-one\ntwenty-two\n\n[Showing lines 21-22 of 100 (50KB limit). Use offset=23 to continue.]" }],
+			details: { truncation: { totalLines: 78 } },
 		}, scope)?.body).toEqual({ kind: "source", text: "twenty-one\ntwenty-two", startLine: 21, totalLines: 100 });
 		expect(projectPiToolActivity({
 			id: "write-1",

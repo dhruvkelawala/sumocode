@@ -120,7 +120,10 @@ function listWindowsTreeMembers(pid: number): ProcessTreeMemberAnchor[] | undefi
 
 function listPosixGroupMembers(processGroupId: number): ProcessTreeMemberAnchor[] | undefined {
 	try {
-		const rows = execFileSync("ps", ["-axo", "pid=,pgid=,lstart=,command="], { encoding: "utf8" }).split("\n");
+		// Descendant anchors must survive execve during TERM handling. Keep their
+		// immutable PID + kernel creation wall time only; the separately bracketed
+		// leader fingerprint carries the random launch command token.
+		const rows = execFileSync("ps", ["-axo", "pid=,pgid=,lstart="], { encoding: "utf8" }).split("\n");
 		const members: Array<{ pid: number; processStartTime: string }> = [];
 		for (const row of rows) {
 			const match = row.trim().match(/^(\d+)\s+(\d+)\s+(.+)$/);
@@ -271,7 +274,7 @@ export const systemProcessTree: ProcessTreeOperations = {
 		// Bracket the snapshot with persisted-leader checks. If the original group
 		// exits/reuses its numeric PGID during `ps`, never anchor the replacement.
 		if (this.identityMatches(identity) !== "same") return undefined;
-		if (!members.some((member) => member.pid === identity.pid && member.processStartTime === identity.processStartTime)) return undefined;
+		if (!members.some((member) => member.pid === identity.pid)) return undefined;
 		return { members };
 	},
 	verificationMatches: verificationStatus,

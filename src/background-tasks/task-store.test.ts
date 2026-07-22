@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -64,6 +64,20 @@ describe("TerminalTaskStore", () => {
 
 	afterEach(() => {
 		rmSync(rootDir, { recursive: true, force: true });
+	});
+
+	it("places the default durable store in the current user's Pi agent directory", () => {
+		const previous = process.env.PI_CODING_AGENT_DIR;
+		const agentDir = join(rootDir, "agent");
+		process.env.PI_CODING_AGENT_DIR = agentDir;
+		try {
+			const store = new TerminalTaskStore();
+			expect(store.rootDir).toBe(realpathSync(join(agentDir, "state", "sumocode-terminals")));
+			expect(lstatSync(store.rootDir).isDirectory()).toBe(true);
+		} finally {
+			if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+			else process.env.PI_CODING_AGENT_DIR = previous;
+		}
 	});
 
 	it("persists atomic revision-checked transitions", () => {

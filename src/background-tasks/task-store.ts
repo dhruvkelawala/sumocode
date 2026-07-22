@@ -17,6 +17,7 @@ import {
 	unlinkSync,
 	writeFileSync,
 } from "node:fs";
+import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { captureProcessStartTime } from "./process-tree.js";
 import {
@@ -217,10 +218,20 @@ function schemaVersionOf(value: unknown): number | undefined {
 	return typeof version === "number" ? version : undefined;
 }
 
+function assertOwnedByCurrentUser(path: string, uid: number): void {
+	const stat = lstatSync(path);
+	if (stat.uid !== uid) throw new Error(`Terminal store path is owned by a different user: ${path}`);
+}
+
 function assertPrivateDirectory(path: string): void {
 	const stat = lstatSync(path);
 	if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error(`Expected private directory: ${path}`);
 	if (!hasPrivateMode(stat.mode, true)) throw new Error(`Directory permissions must be 0700: ${path}`);
+}
+
+function defaultTerminalStoreRoot(): string {
+	const agentDir = process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent");
+	return join(agentDir, "state", "sumocode-terminals");
 }
 
 function sameFileIdentity(left: { dev: number; ino: number }, right: { dev: number; ino: number }): boolean {
@@ -339,14 +350,17 @@ export class TerminalTaskStore {
 	private readonly beforeAbandonedLockRename?: () => void;
 
 	public constructor(options: TerminalTaskStoreOptions = {}) {
-		const requestedRoot = resolve(options.rootDir ?? join(process.env.TMPDIR ?? "/tmp", "sumocode-bg"));
+		const requestedRoot = resolve(options.rootDir ?? defaultTerminalStoreRoot());
+		const uid = typeof process.getuid === "function" ? process.getuid() : undefined;
 		try {
 			const existing = lstatSync(requestedRoot);
 			if (existing.isSymbolicLink()) throw new Error(`Terminal store root must not be a symlink: ${requestedRoot}`);
+			if (uid !== undefined) assertOwnedByCurrentUser(requestedRoot, uid);
 		} catch (error) {
 			if (errorCode(error) !== "ENOENT") throw error;
 		}
 		mkdirSync(requestedRoot, { recursive: true, mode: PRIVATE_DIRECTORY_MODE });
+		if (uid !== undefined) assertOwnedByCurrentUser(requestedRoot, uid);
 		chmodSync(requestedRoot, PRIVATE_DIRECTORY_MODE);
 		assertPrivateDirectory(requestedRoot);
 		this.rootDir = realpathSync(requestedRoot);

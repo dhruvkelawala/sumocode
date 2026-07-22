@@ -1,26 +1,36 @@
-import { describe, expect, it, vi } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { installBackgroundTasks } from "./background-task-tool.js";
+import { TerminalTaskStore } from "./task-store.js";
+
+const roots: string[] = [];
+
+afterEach(() => {
+	for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+});
 
 describe("installBackgroundTasks", () => {
-	it("keeps manager lifecycle wiring and the /bg viewer alias without registering a mega-tool", async () => {
-		const registerTool = vi.fn();
-		let bgCommand: { description: string; handler: (args: string, ctx: { ui: { notify: ReturnType<typeof vi.fn> } }) => Promise<void> } | undefined;
-		const registerCommand = vi.fn((name: string, command: typeof bgCommand) => {
-			if (name === "bg") bgCommand = command;
-		});
-		const on = vi.fn();
-		const pi = { registerTool, registerCommand, on };
+	it("wires lifecycle without retaining the legacy slash alias or a mega-tool", async () => {
+		const handlers = new Map<string, (event: unknown, ctx: unknown) => Promise<void>>();
+		const pi = {
+			registerTool: vi.fn(),
+			registerCommand: vi.fn(),
+			on: vi.fn((event: string, handler: (event: unknown, ctx: unknown) => Promise<void>) => handlers.set(event, handler)),
+		};
+		const rootDir = mkdtempSync(join(tmpdir(), "sumocode-terminal-install-"));
+		roots.push(rootDir);
+		const manager = installBackgroundTasks(pi as never, { store: new TerminalTaskStore({ rootDir }) });
+		const detach = vi.spyOn(manager, "detach");
+		const stopOwned = vi.spyOn(manager, "stopOwned").mockResolvedValue([]);
 
-		installBackgroundTasks(pi as never);
+		expect(pi.registerTool).not.toHaveBeenCalled();
+		expect(pi.registerCommand).not.toHaveBeenCalled();
+		expect(pi.on).toHaveBeenCalledWith("session_shutdown", expect.any(Function));
 
-		expect(registerTool).not.toHaveBeenCalled();
-		expect(registerCommand).toHaveBeenCalledOnce();
-		expect(registerCommand).toHaveBeenCalledWith("bg", expect.objectContaining({ description: expect.stringContaining("/ps") }));
-		expect(registerCommand).not.toHaveBeenCalledWith("bg-run", expect.anything());
-		expect(on).toHaveBeenCalledWith("session_shutdown", expect.any(Function));
-
-		const notify = vi.fn();
-		await bgCommand?.handler("", { ui: { notify } });
-		expect(notify).toHaveBeenCalledWith(expect.stringContaining("Use /ps for the full process viewer."), "info");
+		await handlers.get("session_shutdown")?.({ reason: "resume" }, { sessionManager: { getSessionId: () => "session-a" } });
+		expect(stopOwned).not.toHaveBeenCalled();
+		expect(detach).not.toHaveBeenCalled();
 	});
 });

@@ -1,5 +1,4 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import type { BackgroundTaskManager } from "./background-tasks/task-manager.js";
 import type { SubagentManager } from "./subagents/manager.js";
 import { installCommandPalette } from "./command-palette.js";
 import { registerCursorCommand } from "./commands/cursor.js";
@@ -122,7 +121,6 @@ export class InteractionRegistry {
 
 export interface InstallSumoInteractionsOptions {
 	readonly reporter?: InteractionDiagnosticReporter;
-	readonly backgroundTaskManager?: BackgroundTaskManager;
 	readonly subagentManager?: SubagentManager;
 	readonly includeUiSurfaces?: boolean;
 }

@@ -239,6 +239,19 @@ function subagentResultBlockFromRecord(record: Record<string, unknown>): ChatBlo
 
 function terminalResultBlockFromRecord(record: Record<string, unknown>): ChatBlock {
 	const details = asRecord(record.details);
+	const activity = asRecord(details?.activity);
+	const activityStatus = firstString(activity?.status);
+	if (
+		activity?.kind === "terminal" &&
+		typeof activity.id === "string" &&
+		typeof activity.title === "string" &&
+		activityStatus !== undefined &&
+		["queued", "running", "succeeded", "failed", "cancelled", "lost"].includes(activityStatus)
+	) {
+		return { type: "activity", activity: activity as unknown as ActivitySnapshot };
+	}
+	// Historical terminal-result messages predate Activity details. Keep their
+	// transcript rendering without treating legacy metadata as active state.
 	const id = firstString(details?.id, record.terminalId) ?? "terminal";
 	const title = firstString(details?.title, details?.command, record.title) ?? "untitled";
 	const exitCode = typeof details?.exitCode === "number" ? details.exitCode : undefined;

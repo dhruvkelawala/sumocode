@@ -1,135 +1,126 @@
-import type { PaneRef } from "../terminal-host/index.js";
+import { sanitizeActivityText, type ActivitySnapshot, type ActivityStatus } from "../activity/domain.js";
 
-export type BackgroundTaskStatus = "running" | "completed" | "failed" | "stopped";
-export type SplitDirection = "right" | "down";
+export const TERMINAL_TASK_SCHEMA_VERSION = 4;
 
-/** New background terminal spawns are shell-only. */
-export type BackgroundTaskRunner = "shell";
-/** Legacy agent metadata remains readable during recovery. */
-export type PersistedBackgroundTaskRunner = BackgroundTaskRunner | "sumocode";
+export type TerminalTaskStatus =
+	| "starting"
+	| "running"
+	| "stopping"
+	| "completed"
+	| "failed"
+	| "cancelled"
+	| "lost";
 
-export interface BackgroundTaskCmuxRefs {
-	workspaceRef: string;
-	surfaceRef: string;
+export type TerminalCompletionPolicy = "passive" | "wake";
+export type TerminalDeliveryState = "none" | "pending" | "claimed" | "delivered" | "suppressed";
+
+export interface TerminalTaskSnapshot {
+	readonly schemaVersion: number;
+	readonly revision: number;
+	readonly id: string;
+	readonly ownerSessionId: string;
+	readonly command: string;
+	readonly cwd: string;
+	readonly title: string;
+	readonly status: TerminalTaskStatus;
+	readonly completionPolicy: TerminalCompletionPolicy;
+	readonly createdAt: number;
+	readonly updatedAt: number;
+	readonly settledAt?: number;
+	readonly exitCode?: number | null;
+	readonly observedAt?: number;
+	readonly consumedAt?: number;
+	readonly deliveryState: TerminalDeliveryState;
+	readonly completionId?: string;
+	readonly pid?: number;
+	readonly processGroupId?: number;
+	readonly processStartTime?: string;
+	readonly logFile: string;
 }
 
-export interface BackgroundTaskWorktreeRef {
-	path: string;
-	branch: string;
-	baseRef: string;
-	repoRoot: string;
+export interface StartTerminalTaskOptions {
+	readonly ownerSessionId: string;
+	readonly command: string;
+	readonly cwd: string;
+	readonly title: string;
+	readonly completionPolicy?: TerminalCompletionPolicy;
 }
 
-export type BackgroundTaskThinking = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
-
-export interface BackgroundTask {
-	id: string;
-	pid?: number;
-	command: string;
-	cwd: string;
-	title?: string;
-	status: BackgroundTaskStatus;
-	startedAt: number;
-	updatedAt: number;
-	exitCode?: number | null;
-	logFile: string;
-	exitFile?: string;
-	metaFile?: string;
-	markerFile?: string;
-	promptFile?: string;
-	responseFile?: string;
-	diagFile?: string;
-	processStartTime?: string;
-	visible: boolean;
-	runner: PersistedBackgroundTaskRunner;
-	model?: string;
-	thinking?: BackgroundTaskThinking;
-	pane?: PaneRef;
-	worktree?: BackgroundTaskWorktreeRef;
-	/**
-	 * "typed" marks tasks whose completion is delivered as a typed
-	 * terminal-result message (bg_start). Persisted in meta.json so ownership
-	 * survives reload/rebind recovery and failed kills — a process-local set
-	 * would drop both (PR #334 review).
-	 */
-	resultDelivery?: "typed";
+export interface TerminalTaskObservation {
+	readonly task: TerminalTaskSnapshot;
+	readonly output: string;
 }
 
-export interface SpawnBackgroundTaskOptions {
-	command: string;
-	cwd: string;
-	title?: string;
-	visible?: boolean;
-	direction?: SplitDirection;
-	runner?: BackgroundTaskRunner;
-	resultDelivery?: "typed";
+export interface TerminalWaitResult {
+	readonly settled: readonly TerminalTaskObservation[];
+	readonly pendingIds: readonly string[];
+	readonly unknownIds: readonly string[];
+	readonly timedOut: boolean;
 }
 
-export const BACKGROUND_TASK_META_SCHEMA_VERSION = 3;
-
-export interface BackgroundTaskSnapshot {
-	schemaVersion: number;
-	id: string;
-	pid?: number;
-	command: string;
-	cwd: string;
-	title?: string;
-	status: BackgroundTaskStatus;
-	startedAt: number;
-	updatedAt: number;
-	exitCode?: number | null;
-	logFile: string;
-	exitFile?: string;
-	metaFile?: string;
-	markerFile?: string;
-	promptFile?: string;
-	responseFile?: string;
-	diagFile?: string;
-	processStartTime?: string;
-	visible: boolean;
-	runner: PersistedBackgroundTaskRunner;
-	model?: string;
-	thinking?: BackgroundTaskThinking;
-	pane?: PaneRef;
-	/** Legacy v2 field, accepted during recovery only. */
-	cmux?: BackgroundTaskCmuxRefs;
-	worktree?: BackgroundTaskWorktreeRef;
-	resultDelivery?: "typed";
+export interface TerminalStopResult {
+	readonly id: string;
+	readonly outcome: "cancelled" | "already-settled" | "unknown" | "failed";
+	readonly task?: TerminalTaskSnapshot;
+	readonly output?: string;
+	readonly message: string;
 }
 
-export function toBackgroundTaskSnapshot(task: BackgroundTask): BackgroundTaskSnapshot {
-	return {
-		schemaVersion: BACKGROUND_TASK_META_SCHEMA_VERSION,
-		id: task.id,
-		pid: task.pid,
-		command: task.command,
-		cwd: task.cwd,
-		title: task.title,
-		status: task.status,
-		startedAt: task.startedAt,
-		updatedAt: task.updatedAt,
-		exitCode: task.exitCode,
-		logFile: task.logFile,
-		exitFile: task.exitFile,
-		metaFile: task.metaFile,
-		markerFile: task.markerFile,
-		promptFile: task.promptFile,
-		responseFile: task.responseFile,
-		diagFile: task.diagFile,
-		processStartTime: task.processStartTime,
-		visible: task.visible,
-		runner: task.runner,
-		model: task.model,
-		thinking: task.thinking,
-		pane: task.pane,
-		worktree: task.worktree,
-		resultDelivery: task.resultDelivery,
-	};
+const SETTLED_STATUSES = new Set<TerminalTaskStatus>(["completed", "failed", "cancelled", "lost"]);
+
+export function isTerminalTaskSettled(status: TerminalTaskStatus): boolean {
+	return SETTLED_STATUSES.has(status);
 }
 
-const WAKE_MESSAGE_PATTERN = /^background task bg-[\w-]+ \w[\w-]*: /;
+export function terminalActivityStatus(status: TerminalTaskStatus): ActivityStatus {
+	switch (status) {
+		case "starting":
+			return "queued";
+		case "running":
+		case "stopping":
+			return "running";
+		case "completed":
+			return "succeeded";
+		case "failed":
+			return "failed";
+		case "cancelled":
+			return "cancelled";
+		case "lost":
+			return "lost";
+	}
+}
 
-/** True for legacy prose wake messages retained in old session transcripts. */
+const LEGACY_WAKE_MESSAGE_PATTERN = /^background task bg-[\w-]+ \w[\w-]*: /;
+
+/** Historical transcript compatibility only; no callable bg tool is retained. */
 export function isBackgroundTaskWakeMessage(text: string): boolean {
-	return WAKE_MESSAGE_PATTERN.test(text);
+	return LEGACY_WAKE_MESSAGE_PATTERN.test(text);
+}
+
+export function terminalActivitySnapshot(task: TerminalTaskSnapshot, outputTail: string): ActivitySnapshot {
+	const title = sanitizeActivityText(task.title).slice(0, 512);
+	const command = sanitizeActivityText(task.command).slice(0, 4 * 1024);
+	const cwd = sanitizeActivityText(task.cwd).slice(0, 2 * 1024);
+	const output = sanitizeActivityText(outputTail).slice(-8 * 1024);
+	return {
+		id: task.id,
+		kind: "terminal",
+		title,
+		status: terminalActivityStatus(task.status),
+		invocation: { command, cwd },
+		subject: cwd,
+		currentStep: task.status === "stopping" ? "stopping" : undefined,
+		outputTail: output,
+		body: { kind: "terminal", command, text: output },
+		result: task.status === "failed" || task.status === "lost"
+			? { error: task.status === "lost" ? "terminal process was lost" : `terminal exited with code ${task.exitCode ?? "unknown"}` }
+			: task.status === "completed" || task.status === "cancelled"
+				? { summary: task.status === "cancelled" ? "terminal cancelled" : `terminal exited with code ${task.exitCode ?? 0}` }
+				: undefined,
+		ownerSessionId: task.ownerSessionId,
+		createdAt: task.createdAt,
+		updatedAt: task.updatedAt,
+		settledAt: task.settledAt,
+		metrics: task.settledAt === undefined ? undefined : { elapsedMs: Math.max(0, task.settledAt - task.createdAt) },
+	};
 }

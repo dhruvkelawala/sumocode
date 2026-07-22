@@ -465,6 +465,27 @@ describe("structured transcript view model", () => {
 		}]);
 	});
 
+	it("maps a v2 terminal result Activity through the universal retained renderer", () => {
+		const activity = {
+			id: "term-7",
+			kind: "terminal" as const,
+			title: "dev server",
+			status: "succeeded" as const,
+			ownerSessionId: "session-a",
+			body: { kind: "terminal" as const, command: "pnpm dev", text: "ready" },
+		};
+		const message = chatMessageViewModelFromPiMessage({
+			id: "result-v2",
+			role: "custom",
+			customType: "terminal-result",
+			display: true,
+			content: "Terminal term-7 completed.",
+			details: { completionId: "completion-7", ownerSessionId: "session-a", activity },
+		});
+
+		expect(message?.blocks).toEqual([{ type: "activity", activity }]);
+	});
+
 	it("labels an unrecognized custom message with its customType", () => {
 		const message = chatMessageViewModelFromPiMessage({ id: "x1", role: "custom", customType: "sumocode-theme-result", display: true, content: "switched to obsidian" });
 

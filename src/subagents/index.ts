@@ -3,11 +3,7 @@ import { BUILT_IN_TOOLS, getBuiltInToolsFromActiveTools } from "../native-task-c
 import { getTerminalHost } from "../terminal-host/index.js";
 import { spawnPaneChild } from "./backend-pane.js";
 import { spawnPiChild } from "./backend-pi.js";
-import {
-	createDeferredResultDelivery,
-	type DeferredResultDelivery,
-	type DeliveryPayload,
-} from "./delivery.js";
+import { createDeferredResultDelivery, type DeliveryPayload } from "./delivery.js";
 import type { SubagentSnapshot } from "./domain.js";
 import { SubagentManager } from "./manager.js";
 import { buildSubagentResultMessage } from "./prompt.js";
@@ -15,13 +11,6 @@ import { registerSubagentTools } from "./tools.js";
 
 export { SubagentManager } from "./manager.js";
 export type { AtCapacityDetails, SpawnSubagentTask } from "./manager.js";
-
-const deliveryFlushers = new WeakMap<DeferredResultDelivery, () => void>();
-
-/** Request the shared 066 flusher after an external producer defers a result. */
-export function flushDeferredResultDelivery(delivery: DeferredResultDelivery): void {
-	deliveryFlushers.get(delivery)?.();
-}
 
 const settledPayload = (snapshot: SubagentSnapshot): DeliveryPayload => {
 	const result = buildSubagentResultMessage({
@@ -38,7 +27,6 @@ const settledPayload = (snapshot: SubagentSnapshot): DeliveryPayload => {
 		: undefined;
 	return {
 		id: snapshot.id,
-		customType: "subagent-result",
 		title: snapshot.title,
 		status: snapshot.status,
 		content: paneLine ? `${result}\n\n${paneLine}` : result,
@@ -52,10 +40,7 @@ const settledPayload = (snapshot: SubagentSnapshot): DeliveryPayload => {
 	};
 };
 
-export function installSubagents(
-	pi: ExtensionAPI,
-	sharedDelivery?: DeferredResultDelivery,
-): SubagentManager {
+export function installSubagents(pi: ExtensionAPI): SubagentManager {
 	const host = getTerminalHost();
 	const manager = new SubagentManager((task) => {
 		if (task.visible) {
@@ -73,7 +58,7 @@ export function installSubagents(
 			// forwarding the parent's full built-in set would strip the child's
 			// extension tools for nothing. Only a NARROWED parent narrows the
 			// child (fail-closed: the restricted child also loses extension tools,
-			// which is the conservative direction — extension tools like bg_start
+			// which is the conservative direction — extension tools like terminal_start
 			// are shell-execution escapes a --tools read parent must not grant).
 			const paneBuiltIn = getBuiltInToolsFromActiveTools([...(task.builtInTools ?? [])]);
 			// Derived from the canonical list: a literal count would fail OPEN if
@@ -110,8 +95,7 @@ export function installSubagents(
 			signal: task.signal,
 		});
 	}, { terminalHost: host, pi });
-	const ownsDelivery = sharedDelivery === undefined;
-	const delivery = sharedDelivery ?? createDeferredResultDelivery();
+	const delivery = createDeferredResultDelivery();
 	const observedSettledIds = new Set<string>();
 	let latestContext: ExtensionContext | undefined;
 	let unsubscribe: (() => void) | undefined;
@@ -120,7 +104,7 @@ export function installSubagents(
 		for (const payload of delivery.drain()) {
 			pi.sendMessage(
 				{
-					customType: payload.customType ?? "subagent-result",
+					customType: "subagent-result",
 					content: payload.content,
 					display: true,
 					details: payload.details,
@@ -129,10 +113,6 @@ export function installSubagents(
 			);
 		}
 	};
-
-	deliveryFlushers.set(delivery, () => {
-		if (latestContext?.isIdle()) flush();
-	});
 
 	const onManagerChange = (): void => {
 		for (const snapshot of manager.list()) {
@@ -196,15 +176,7 @@ export function installSubagents(
 		latestContext = undefined;
 		unsubscribe?.();
 		unsubscribe = undefined;
-		if (ownsDelivery) {
-			delivery.clear();
-		} else {
-			// A shared buffer may hold durable terminal completions. Drop stale
-			// subagent payloads at the session boundary without erasing terminals.
-			const terminalPayloads = delivery.drain().filter((payload) => payload.customType === "terminal-result");
-			delivery.clear();
-			for (const payload of terminalPayloads) delivery.defer(payload.id, () => payload);
-		}
+		delivery.clear();
 		manager.disposeAll();
 	});
 	return manager;

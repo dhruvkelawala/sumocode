@@ -295,6 +295,10 @@ function activityFromSubagentRecord(record: Record<string, unknown>, budget: Ada
 	const model = firstString(budget, record.modelLabel);
 	const thinking = firstString(budget, record.thinkingLabel);
 	return {
+		// Plan 082's canonical manager identity is intentionally subagent:<sa-id>;
+		// sourceId carries spawn-call correlation. Cross-process durable identity
+		// belongs to the later ActivityStore slice and cannot be invented here for
+		// historical/passive results that contain no spawn correlation.
 		id: `subagent:${id}`,
 		kind: "subagent",
 		title,

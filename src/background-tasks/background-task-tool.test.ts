@@ -27,14 +27,19 @@ describe("installBackgroundTasks", () => {
 
 		expect(pi.registerTool).not.toHaveBeenCalled();
 		expect(pi.registerCommand).not.toHaveBeenCalled();
+		expect(pi.on).toHaveBeenCalledWith("session_start", expect.any(Function));
 		expect(pi.on).toHaveBeenCalledWith("session_shutdown", expect.any(Function));
 
+		await handlers.get("session_start")?.({}, { sessionManager: { getSessionId: () => "session-a" } });
 		await handlers.get("session_shutdown")?.({ reason: "resume" }, { sessionManager: { getSessionId: () => "session-a" } });
 		expect(stopOwned).not.toHaveBeenCalled();
 		expect(detach).not.toHaveBeenCalled();
 
-		await handlers.get("session_shutdown")?.({ reason: "quit" }, { sessionManager: { getSessionId: () => "session-a" } });
+		await handlers.get("session_start")?.({}, { sessionManager: { getSessionId: () => "session-b" } });
+		await handlers.get("session_shutdown")?.({ reason: "quit" }, { sessionManager: { getSessionId: () => "session-b" } });
+		expect(stopOwned).toHaveBeenCalledTimes(2);
 		expect(stopOwned).toHaveBeenCalledWith("session-a");
+		expect(stopOwned).toHaveBeenCalledWith("session-b");
 		expect(detach).toHaveBeenCalledOnce();
 	});
 });

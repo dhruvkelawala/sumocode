@@ -18,16 +18,23 @@
           "type": "thinking"
         },
         {
-          "tool": {
+          "activity": {
+            "body": {
+              "command": "printf 'rpc-tool-ok\\n'",
+              "kind": "terminal",
+              "text": "rpc-tool-ok\n"
+            },
             "id": "rpc-spike-bash-1",
-            "input": {
+            "invocation": {
               "command": "printf 'rpc-tool-ok\\n'"
             },
-            "name": "bash",
-            "output": "rpc-tool-ok\n",
-            "status": "success"
+            "kind": "tool",
+            "outputTail": "rpc-tool-ok\n",
+            "status": "succeeded",
+            "subject": "printf 'rpc-tool-ok\\n'",
+            "title": "bash"
           },
-          "type": "tool"
+          "type": "activity"
         }
       ],
       "id": "message-1",

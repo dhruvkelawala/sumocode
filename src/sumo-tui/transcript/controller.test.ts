@@ -184,6 +184,53 @@ describe("TranscriptController agent_end reconciliation", () => {
 	});
 });
 
+describe("TranscriptController Activity folding", () => {
+	it("keeps simultaneous same-name tools distinct and folds each result by stable ID", () => {
+		const controller = new TranscriptController();
+		const transcript = controller.replaceFromMessages([
+			{
+				id: "assistant-tools",
+				role: "assistant",
+				content: [
+					{ type: "toolCall", id: "read-a", name: "read", arguments: { path: "a.ts" } },
+					{ type: "toolCall", id: "read-b", name: "read", arguments: { path: "b.ts" } },
+				],
+			},
+			{ role: "toolResult", toolCallId: "read-a", toolName: "read", content: [{ type: "text", text: "alpha" }] },
+			{ role: "toolResult", toolCallId: "read-b", toolName: "read", content: [{ type: "text", text: "beta" }] },
+		]);
+
+		const activities = transcript.messages.flatMap((message) => message.blocks).filter((block) => block.type === "activity");
+		expect(transcript.messages).toHaveLength(1);
+		expect(activities).toHaveLength(2);
+		expect(activities.map((block) => block.activity.id)).toEqual(["read-a", "read-b"]);
+		expect(activities.map((block) => block.activity.outputTail)).toEqual(["alpha", "beta"]);
+	});
+
+	it("does not regress a live Activity after a terminal event", () => {
+		const controller = new TranscriptController();
+		controller.handleAgentEvent({ type: "message_start", message: { id: "assistant", role: "assistant", content: [] } });
+		controller.handleAgentEvent({
+			type: "tool_execution_end",
+			toolCallId: "read-1",
+			toolName: "read",
+			args: { path: "a.ts" },
+			result: { content: [{ type: "text", text: "final" }] },
+			isError: false,
+		});
+		const regressed = controller.handleAgentEvent({
+			type: "tool_execution_update",
+			toolCallId: "read-1",
+			toolName: "read",
+			args: { path: "a.ts" },
+			partialResult: { content: [] },
+		});
+
+		const block = regressed.messages.flatMap((message) => message.blocks).find((candidate) => candidate.type === "activity");
+		expect(block).toMatchObject({ type: "activity", activity: { id: "read-1", status: "succeeded", outputTail: "final", body: { text: "final" } } });
+	});
+});
+
 describe("TranscriptController live-state clearing", () => {
 	it("clears finished live tools on agent_end since authoritative messages now carry them", () => {
 		const controller = new TranscriptController();

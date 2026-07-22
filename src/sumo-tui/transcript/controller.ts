@@ -1,4 +1,6 @@
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
+import { mergeActivitySnapshot, sameActivity, type ActivitySnapshot } from "../../activity/domain.js";
+import { projectPiToolActivity } from "../../activity/pi-projector.js";
 import { measureMaybe, type ResumeProfiler, type ResumeProfileMetadata } from "../runtime/resume-profiler.js";
 import type { ChatPagerReplaceStats } from "../widgets/chat-pager.js";
 import {
@@ -84,7 +86,8 @@ function taskPartialFromEvent(event: unknown): TaskPartialUpdate | undefined {
 	if (!record || record.type !== "tool_execution_update") return undefined;
 	if (record.toolName !== "task") return undefined;
 	if (record.partialResult === undefined) return undefined;
-	const toolCallId = typeof record.toolCallId === "string" ? record.toolCallId : "task";
+	const toolCallId = typeof record.toolCallId === "string" && record.toolCallId.length > 0 ? record.toolCallId : undefined;
+	if (!toolCallId) return undefined;
 	return {
 		toolCallId,
 		toolName: "task",
@@ -97,7 +100,10 @@ function liveToolExecutionFromEvent(event: unknown): LiveToolExecution | undefin
 	const record = asRecord(event);
 	if (!record || (record.type !== "tool_execution_start" && record.type !== "tool_execution_update" && record.type !== "tool_execution_end")) return undefined;
 	const toolName = typeof record.toolName === "string" && record.toolName.length > 0 ? record.toolName : "tool";
-	const toolCallId = typeof record.toolCallId === "string" && record.toolCallId.length > 0 ? record.toolCallId : toolName;
+	// Pi's AgentSessionEvent contract requires toolCallId:string on every tool execution event.
+	// Drop malformed unknown input rather than reintroducing name-only correlation collisions.
+	const toolCallId = typeof record.toolCallId === "string" && record.toolCallId.length > 0 ? record.toolCallId : undefined;
+	if (!toolCallId) return undefined;
 	const isEnd = record.type === "tool_execution_end";
 	const result = isEnd ? record.result : record.partialResult;
 	const resultRecord = asRecord(result);
@@ -110,6 +116,18 @@ function liveToolExecutionFromEvent(event: unknown): LiveToolExecution | undefin
 		isError: record.isError === true,
 		status: isEnd ? (record.isError === true ? "error" : "success") : "running",
 	};
+}
+
+function liveToolActivity(tool: LiveToolExecution): ActivitySnapshot | undefined {
+	return projectPiToolActivity({
+		toolCallId: tool.toolCallId,
+		name: tool.toolName,
+		status: tool.status,
+		arguments: tool.args,
+		content: tool.content,
+		details: tool.details,
+		isError: tool.isError,
+	}, { messageId: "live", blockIndex: 0, requireToolCallId: true });
 }
 
 function liveToolPiMessage(tool: LiveToolExecution): unknown {
@@ -151,8 +169,8 @@ function compactionSummaryMessageFromEvent(event: unknown): unknown | undefined 
 	};
 }
 
-function isToolBlock(block: ChatBlock): block is Extract<ChatBlock, { type: "tool" }> {
-	return block.type === "tool";
+function isActivityBlock(block: ChatBlock): block is Extract<ChatBlock, { type: "activity" }> {
+	return block.type === "activity";
 }
 
 function isDelegationBlock(block: ChatBlock): block is Extract<ChatBlock, { type: "delegation" }> {
@@ -160,7 +178,7 @@ function isDelegationBlock(block: ChatBlock): block is Extract<ChatBlock, { type
 }
 
 function isFoldableBlock(block: ChatBlock): boolean {
-	return isToolBlock(block) || isDelegationBlock(block);
+	return isActivityBlock(block) || isDelegationBlock(block);
 }
 
 function isFoldableOnlyViewModel(message: ChatMessageViewModel): boolean {
@@ -168,13 +186,8 @@ function isFoldableOnlyViewModel(message: ChatMessageViewModel): boolean {
 }
 
 function matchingFoldableIndex(blocks: readonly ChatBlock[], incoming: ChatBlock): number {
-	if (incoming.type === "tool") {
-		const incomingId = incoming.tool.id;
-		if (incomingId) {
-			const byId = blocks.findIndex((block) => block.type === "tool" && block.tool.id === incomingId);
-			if (byId !== -1) return byId;
-		}
-		return blocks.findIndex((block) => block.type === "tool" && block.tool.id === undefined && incoming.tool.id === undefined && block.tool.name === incoming.tool.name && (block.tool.status === "pending" || block.tool.status === "running"));
+	if (incoming.type === "activity") {
+		return blocks.findIndex((block) => block.type === "activity" && sameActivity(block.activity, incoming.activity));
 	}
 
 	if (incoming.type === "delegation") {
@@ -188,21 +201,6 @@ function matchingFoldableIndex(blocks: readonly ChatBlock[], incoming: ChatBlock
 	}
 
 	return -1;
-}
-
-function mergeToolBlock(existing: Extract<ChatBlock, { type: "tool" }>, incoming: Extract<ChatBlock, { type: "tool" }>): ChatBlock {
-	return {
-		type: "tool",
-		tool: {
-			...existing.tool,
-			...incoming.tool,
-			input: incoming.tool.input ?? existing.tool.input,
-			output: incoming.tool.output ?? existing.tool.output,
-			details: incoming.tool.details ?? existing.tool.details,
-			error: incoming.tool.error ?? existing.tool.error,
-			expanded: incoming.tool.expanded ?? existing.tool.expanded,
-		},
-	};
 }
 
 function mergeDelegationBlock(existing: Extract<ChatBlock, { type: "delegation" }>, incoming: Extract<ChatBlock, { type: "delegation" }>): ChatBlock {
@@ -226,7 +224,9 @@ function mergeDelegationBlock(existing: Extract<ChatBlock, { type: "delegation" 
 }
 
 function mergeFoldableBlock(existing: ChatBlock, incoming: ChatBlock): ChatBlock {
-	if (existing.type === "tool" && incoming.type === "tool") return mergeToolBlock(existing, incoming);
+	if (existing.type === "activity" && incoming.type === "activity") {
+		return { type: "activity", activity: mergeActivitySnapshot(existing.activity, incoming.activity) };
+	}
 	if (existing.type === "delegation" && incoming.type === "delegation") return mergeDelegationBlock(existing, incoming);
 	return incoming;
 }
@@ -262,7 +262,7 @@ function foldBlockIntoMessages(messages: readonly ChatMessageViewModel[], incomi
 }
 
 function foldableBlockId(block: ChatBlock): string {
-	if (block.type === "tool") return block.tool.id ?? block.tool.name;
+	if (block.type === "activity") return block.activity.id;
 	if (block.type === "delegation") return block.delegation.id ?? block.delegation.title;
 	return "block";
 }
@@ -314,6 +314,7 @@ export class TranscriptController {
 	private draftMessage: unknown | undefined;
 	private readonly taskPartials = new Map<string, TaskPartialUpdate>();
 	private readonly liveTools = new Map<string, LiveToolExecution>();
+	private readonly liveActivities = new Map<string, ActivitySnapshot>();
 	private lastTranscript: TranscriptViewModel = { messages: [] };
 	/**
 	 * Index into `committedMessages` where the in-flight run's messages begin.
@@ -383,7 +384,14 @@ export class TranscriptController {
 		const taskPartial = taskPartialFromEvent(record);
 		if (taskPartial) this.taskPartials.set(taskPartial.toolCallId, taskPartial);
 		const liveTool = liveToolExecutionFromEvent(record);
-		if (liveTool) this.liveTools.set(liveTool.toolCallId, liveTool);
+		if (liveTool?.toolName === "task") this.liveTools.set(liveTool.toolCallId, liveTool);
+		else if (liveTool) {
+			const activity = liveToolActivity(liveTool);
+			if (activity) {
+				const existing = this.liveActivities.get(activity.id);
+				this.liveActivities.set(activity.id, existing ? mergeActivitySnapshot(existing, activity) : activity);
+			}
+		}
 
 		switch (record.type) {
 			case "agent_start":
@@ -438,6 +446,7 @@ export class TranscriptController {
 				this.currentRunStartIndex = undefined;
 				this.draftMessage = undefined;
 				this.liveTools.clear();
+				this.liveActivities.clear();
 				this.taskPartials.clear();
 				break;
 			}
@@ -480,6 +489,10 @@ export class TranscriptController {
 			const folded = foldBlocksIntoMessages(messages, blocks, { requireMatch: false });
 			messages = folded.messages;
 		}
+		for (const activity of this.liveActivities.values()) {
+			const folded = foldBlockIntoMessages(messages, { type: "activity", activity }, { requireMatch: false });
+			messages = folded.messages;
+		}
 
 		return { messages };
 	}
@@ -491,7 +504,7 @@ export class TranscriptController {
 	public getLiveStateSnapshot(): TranscriptControllerLiveStateSnapshot {
 		return {
 			draftMessage: this.draftMessage !== undefined,
-			liveTools: this.liveTools.size,
+			liveTools: this.liveTools.size + this.liveActivities.size,
 			taskPartials: this.taskPartials.size,
 			committedCacheMessages: this.committedViewModelCache?.length ?? 0,
 		};
@@ -515,6 +528,7 @@ export class TranscriptController {
 		this.draftMessage = undefined;
 		this.pendingChatOp = undefined;
 		this.liveTools.clear();
+		this.liveActivities.clear();
 		this.taskPartials.clear();
 		this.invalidateCommittedCache();
 	}

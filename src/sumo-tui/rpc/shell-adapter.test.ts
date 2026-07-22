@@ -300,6 +300,19 @@ describe("RpcShellAdapter chat update", () => {
 	// ChatPager, mirroring the writeClipboardSequence indirection this adapter
 	// already uses for terminal-owned state. Pins the adapter's passthrough
 	// actually reaches ChatPager.setToolExpansion (not just that it compiles).
+	it("toggleActivityExpansion delegates state ownership to the live ChatPager", async () => {
+		const adapter = await makeAdapter();
+		const toggleActivityExpansion = vi.spyOn(ChatPager.prototype, "toggleActivityExpansion");
+		try {
+			toggleActivityExpansion.mockClear();
+			adapter.toggleActivityExpansion();
+			expect(toggleActivityExpansion).toHaveBeenCalledOnce();
+		} finally {
+			toggleActivityExpansion.mockRestore();
+			adapter.dispose();
+		}
+	});
+
 	it("setToolExpansion forwards to the live ChatPager", async () => {
 		const adapter = await makeAdapter();
 		const setToolExpansion = vi.spyOn(ChatPager.prototype, "setToolExpansion");

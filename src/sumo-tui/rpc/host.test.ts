@@ -649,17 +649,15 @@ describe("createThinkingCycleHandler (app.thinking.cycle -- one of the two exact
 });
 
 describe("createToolsExpandToggleHandler (app.tools.expand)", () => {
-	it("flips expansion state on each call, starting from collapsed", () => {
-		const setToolExpansion = vi.fn();
+	it("delegates every toggle to the presentation-owned pager state", () => {
+		const toggleActivityExpansion = vi.fn();
 		const requestRender = vi.fn();
-		const handle = createToolsExpandToggleHandler({ setToolExpansion, requestRender });
+		const handle = createToolsExpandToggleHandler({ toggleActivityExpansion, requestRender });
 
 		handle();
-		expect(setToolExpansion).toHaveBeenNthCalledWith(1, true);
 		handle();
-		expect(setToolExpansion).toHaveBeenNthCalledWith(2, false);
 		handle();
-		expect(setToolExpansion).toHaveBeenNthCalledWith(3, true);
+		expect(toggleActivityExpansion).toHaveBeenCalledTimes(3);
 		expect(requestRender).toHaveBeenCalledTimes(3);
 	});
 });

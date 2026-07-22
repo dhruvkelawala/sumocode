@@ -1,3 +1,4 @@
+import type { ActivitySnapshot } from "../../activity/domain.js";
 import { SumoNode } from "../layout/node.js";
 import { FLEX_DIRECTION_COLUMN, type Yoga, type YogaNode } from "../layout/yoga.js";
 import type { KeyEvent } from "../input/key-router.js";
@@ -31,8 +32,8 @@ const DEFAULT_MAX_RENDERED_MESSAGES = 200;
 function noop(): void {}
 
 function chatRoleFromViewModel(message: ChatMessageViewModel): ChatMessageRole {
-	const onlyToolBlocks = message.blocks.length > 0 && message.blocks.every((block) => block.type === "tool");
-	if (message.role === "system" && onlyToolBlocks) return "tool";
+	const onlyActivityBlocks = message.blocks.length > 0 && message.blocks.every((block) => block.type === "activity");
+	if (message.role === "system" && onlyActivityBlocks) return "tool";
 	return message.role;
 }
 
@@ -62,7 +63,10 @@ export class ChatPager extends SumoNode {
 	private readonly maxRenderedMessages: number;
 	private readonly chatMessageOptions: ChatMessageOptions;
 	private readonly activeMessages: ChatMessage[] = [];
-	private toolExpansionOverride: boolean | undefined;
+	private readonly activityExpansionOverrides = new Map<string, boolean>();
+	private readonly activityExpansionStates = new Map<string, boolean>();
+	private readonly activityStatuses = new Map<string, ActivitySnapshot["status"]>();
+	private defaultActivityExpansionOverride: boolean | undefined;
 	private placeholder: ChatMessage | undefined;
 	private virtualArchivedCount = 0;
 	private unreadCount = 0;
@@ -109,6 +113,10 @@ export class ChatPager extends SumoNode {
 
 	public replaceViewModels(messages: readonly ChatMessageViewModel[]): ChatPagerReplaceStats {
 		const previousHeight = this.scrollBox.scrollHeight;
+		const transcriptActivityIds = this.activityIdsFromViewModels(messages);
+		for (const id of this.activityExpansionOverrides.keys()) {
+			if (!transcriptActivityIds.has(id)) this.activityExpansionOverrides.delete(id);
+		}
 		const width = this.scrollBox.getComputedWidth();
 		const renderedWindow: PreparedChatMessage[] = [];
 		let acceptedMessages = 0;
@@ -134,6 +142,7 @@ export class ChatPager extends SumoNode {
 		for (const message of orderedWindow) {
 			this.activeMessages.push(this.createChatMessage(message));
 		}
+		this.pruneInactiveActivityState();
 		if (this.virtualArchivedCount > 0) {
 			this.placeholder = this.createPlaceholder();
 		}
@@ -189,24 +198,41 @@ export class ChatPager extends SumoNode {
 		this.updateLast(last, () => {
 			last.setBlocks(message.blocks, chatMessageViewModelToPlainText(message));
 			if (message.timestamp) last.setTimestamp(message.timestamp);
-			if (this.toolExpansionOverride !== undefined) last.setToolExpansion(this.toolExpansionOverride);
+			this.registerActivities(message.blocks);
+			last.setActivityExpansions(this.effectiveActivityExpansions(message.blocks));
 		});
 	}
 
-	public setToolExpansion(expanded: boolean): void {
-		this.toolExpansionOverride = expanded;
-		const width = this.scrollBox.getComputedWidth();
-		let beforeHeight = 0;
-		let afterHeight = 0;
-		let changed = false;
-		for (const message of this.activeMessages) {
-			beforeHeight += message.getEstimatedHeight(width);
-			changed = message.setToolExpansion(expanded) || changed;
-			afterHeight += message.getEstimatedHeight(width);
+	public getActivityExpansion(id: string): boolean {
+		return this.activityExpansionOverrides.get(id) ?? this.activityExpansionStates.get(id) ?? true;
+	}
+
+	public setActivityExpansion(id: string, expanded: boolean): void {
+		this.activityExpansionOverrides.set(id, expanded);
+		this.activityExpansionStates.set(id, expanded);
+		this.applyActivityExpansion(id, expanded);
+	}
+
+	public toggleActivityExpansion(id?: string): boolean {
+		if (id !== undefined) {
+			const expanded = !this.getActivityExpansion(id);
+			this.setActivityExpansion(id, expanded);
+			return expanded;
 		}
-		if (!changed) return;
-		this.scrollBox.notifyContentChanged(Math.max(0, afterHeight - beforeHeight), Math.max(0, beforeHeight - afterHeight));
-		this.scheduleRender();
+		const knownIds = [...this.activityStatuses.keys()];
+		const expanded = knownIds.length === 0
+			? this.defaultActivityExpansionOverride === undefined || !this.defaultActivityExpansionOverride
+			: knownIds.some((activityId) => !this.getActivityExpansion(activityId));
+		this.setToolExpansion(expanded);
+		return expanded;
+	}
+
+	/** Compatibility/global policy API used by Pi's app.tools.expand bridge. */
+	public setToolExpansion(expanded: boolean): void {
+		this.defaultActivityExpansionOverride = expanded;
+		this.activityExpansionOverrides.clear();
+		for (const id of this.activityStatuses.keys()) this.activityExpansionStates.set(id, expanded);
+		this.applyAllActivityExpansions();
 	}
 
 	public endStreaming(): void {
@@ -219,6 +245,10 @@ export class ChatPager extends SumoNode {
 		this.activeMessages.length = 0;
 		this.archivedMessages = [];
 		this.virtualArchivedCount = 0;
+		this.activityExpansionOverrides.clear();
+		this.activityExpansionStates.clear();
+		this.activityStatuses.clear();
+		this.defaultActivityExpansionOverride = undefined;
 		this.placeholder = undefined;
 		this.unreadCount = 0;
 		this.lastReadIndex = -1;
@@ -277,6 +307,7 @@ export class ChatPager extends SumoNode {
 	}
 
 	private createChatMessage(message: PreparedChatMessage): ChatMessage {
+		this.registerActivities(message.blocks);
 		const chatMessage = ChatMessage.create(
 			this.yoga,
 			message.role,
@@ -286,8 +317,95 @@ export class ChatPager extends SumoNode {
 			message.blocks,
 			this.chatMessageOptions,
 		);
-		if (this.toolExpansionOverride !== undefined) chatMessage.setToolExpansion(this.toolExpansionOverride);
+		chatMessage.setActivityExpansions(this.effectiveActivityExpansions(message.blocks));
 		return chatMessage;
+	}
+
+	private registerActivities(blocks: readonly ChatMessageViewModel["blocks"][number][]): void {
+		for (const block of blocks) {
+			if (block.type !== "activity") continue;
+			const activity = block.activity;
+			const hasState = this.activityExpansionStates.has(activity.id);
+			const hasExplicitOverride = this.activityExpansionOverrides.has(activity.id) || this.defaultActivityExpansionOverride !== undefined;
+			if (!hasState) {
+				const defaultExpanded = this.defaultActivityExpansionOverride ?? (
+					activity.status === "queued" || activity.status === "running" || activity.status === "failed"
+				);
+				this.activityExpansionStates.set(activity.id, defaultExpanded);
+			} else if (activity.status === "failed" && !hasExplicitOverride) {
+				this.activityExpansionStates.set(activity.id, true);
+			}
+			this.activityStatuses.set(activity.id, activity.status);
+		}
+	}
+
+	private activityIdsFromViewModels(messages: readonly ChatMessageViewModel[]): Set<string> {
+		const ids = new Set<string>();
+		for (const message of messages) {
+			for (const block of message.blocks) {
+				if (block.type === "activity") ids.add(block.activity.id);
+			}
+		}
+		return ids;
+	}
+
+	private activeActivityIds(): Set<string> {
+		const ids = new Set<string>();
+		for (const message of this.activeMessages) {
+			for (const block of message.toSnapshot().blocks ?? []) {
+				if (block.type === "activity") ids.add(block.activity.id);
+			}
+		}
+		return ids;
+	}
+
+	private pruneInactiveActivityState(): void {
+		const activeIds = this.activeActivityIds();
+		for (const id of this.activityStatuses.keys()) {
+			if (activeIds.has(id) || this.activityExpansionOverrides.has(id)) continue;
+			this.activityStatuses.delete(id);
+			this.activityExpansionStates.delete(id);
+		}
+	}
+
+	private effectiveActivityExpansions(blocks: readonly ChatMessageViewModel["blocks"][number][]): ReadonlyMap<string, boolean> {
+		const states = new Map<string, boolean>();
+		for (const block of blocks) {
+			if (block.type !== "activity") continue;
+			states.set(block.activity.id, this.getActivityExpansion(block.activity.id));
+		}
+		return states;
+	}
+
+	private applyActivityExpansion(id: string, expanded: boolean): void {
+		const width = this.scrollBox.getComputedWidth();
+		let beforeHeight = 0;
+		let afterHeight = 0;
+		let changed = false;
+		for (const message of this.activeMessages) {
+			beforeHeight += message.getEstimatedHeight(width);
+			changed = message.setActivityExpansion(id, expanded) || changed;
+			afterHeight += message.getEstimatedHeight(width);
+		}
+		if (!changed) return;
+		this.scrollBox.notifyContentChanged(Math.max(0, afterHeight - beforeHeight), Math.max(0, beforeHeight - afterHeight));
+		this.scheduleRender();
+	}
+
+	private applyAllActivityExpansions(): void {
+		const width = this.scrollBox.getComputedWidth();
+		let beforeHeight = 0;
+		let afterHeight = 0;
+		let changed = false;
+		for (const message of this.activeMessages) {
+			beforeHeight += message.getEstimatedHeight(width);
+			const blocks = message.toSnapshot().blocks ?? [];
+			changed = message.setActivityExpansions(this.effectiveActivityExpansions(blocks)) || changed;
+			afterHeight += message.getEstimatedHeight(width);
+		}
+		if (!changed) return;
+		this.scrollBox.notifyContentChanged(Math.max(0, afterHeight - beforeHeight), Math.max(0, beforeHeight - afterHeight));
+		this.scheduleRender();
 	}
 
 	private updateLast(message: ChatMessage, update: () => void): void {
@@ -334,6 +452,7 @@ export class ChatPager extends SumoNode {
 			archivedAny = true;
 		}
 
+		this.pruneInactiveActivityState();
 		if (this.getArchivedMessageCount() === 0) return { addedLines, removedLines };
 		const placeholderText = this.placeholderText();
 		if (!this.placeholder) {

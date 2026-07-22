@@ -1,6 +1,8 @@
 import { parseSkillBlock } from "@earendil-works/pi-coding-agent";
+import type { ActivitySnapshot, ActivityStatus } from "../../activity/domain.js";
+import { projectPiToolActivity } from "../../activity/pi-projector.js";
+import { renderCompactActivityPill } from "./activity-renderer.js";
 import { expandKey } from "./expand-key.js";
-import { renderCompactToolPill } from "./tool-renderer.js";
 
 export type ChatMessageRole = "user" | "sumo" | "system";
 
@@ -48,7 +50,7 @@ export type ChatBlock =
 	| { readonly type: "thinking"; readonly text: string; readonly hidden?: boolean }
 	| { readonly type: "code"; readonly lang: string; readonly source: string; readonly collapsed?: boolean }
 	| { readonly type: "image"; readonly data: string; readonly mime: string; readonly filename?: string }
-	| { readonly type: "tool"; readonly tool: ToolCallViewModel }
+	| { readonly type: "activity"; readonly activity: ActivitySnapshot }
 	| { readonly type: "skill"; readonly name: string; readonly expanded: boolean; readonly content?: string }
 	| { readonly type: "summary"; readonly kind: "branch" | "compaction" | "subagent" | "terminal"; readonly label: string; readonly content: string; readonly expanded: boolean }
 	| { readonly type: "question"; readonly question: QuestionViewModel }
@@ -182,25 +184,25 @@ function thinkingBlockFromRecord(record: Record<string, unknown>): ChatBlock[] {
 	return [{ type: "thinking", text: text.trim(), ...(hidden ? { hidden: true } : {}) }];
 }
 
-function toolBlockFromRecord(record: Record<string, unknown>, fallbackStatus: ToolStatus): ChatBlock {
-	const name = firstString(record.name, record.toolName, record.command) ?? "tool";
-	const output = textFromContent(record.content) || asString(record.output);
-	const error = asString(record.errorMessage) ?? asString(record.error);
-	const isError = record.isError === true || error !== undefined;
-	const expanded = asBoolean(record.expanded) ?? asBoolean(asRecord(record.details)?.expanded) ?? true;
-	return {
-		type: "tool",
-		tool: {
-			id: firstString(record.id, record.toolCallId),
-			name,
-			status: normalizeStatus(record.status, isError ? "error" : fallbackStatus),
-			input: record.arguments ?? record.input ?? (record.command ? { command: record.command } : undefined),
-			output,
-			details: record.details,
-			error,
-			...(expanded === undefined ? {} : { expanded }),
-		},
-	};
+const ACTIVITY_STATUS_FROM_TOOL: Record<ToolStatus, ActivityStatus> = {
+	pending: "queued",
+	running: "running",
+	success: "succeeded",
+	error: "failed",
+	cancelled: "cancelled",
+};
+
+function activityBlockFromRecord(
+	record: Record<string, unknown>,
+	fallbackStatus: ToolStatus,
+	scope: { readonly messageId: string; readonly blockIndex: number },
+): ChatBlock {
+	const activity = projectPiToolActivity(record, {
+		...scope,
+		fallbackStatus: ACTIVITY_STATUS_FROM_TOOL[fallbackStatus],
+	});
+	if (!activity) throw new Error("Unable to project Pi tool activity");
+	return { type: "activity", activity };
 }
 
 function skillBlockFromRecord(record: Record<string, unknown>): ChatBlock {
@@ -667,7 +669,7 @@ function delegationBlockFromRecord(record: Record<string, unknown>): ChatBlock {
 	};
 }
 
-function blocksFromContentPart(part: unknown): ChatBlock[] {
+function blocksFromContentPart(part: unknown, scope: { readonly messageId: string; readonly blockIndex: number }): ChatBlock[] {
 	const record = asRecord(part);
 	if (!record) return [];
 	switch (record.type) {
@@ -685,11 +687,11 @@ function blocksFromContentPart(part: unknown): ChatBlock[] {
 		case "tool_call":
 		case "tool":
 			if (asString(record.name) === "task") return [taskBlockFromRecord(record, "running")];
-			return [toolBlockFromRecord(record, record.status === "running" ? "running" : "pending")];
+			return [activityBlockFromRecord(record, record.status === "running" ? "running" : "pending", scope)];
 		case "toolResult":
 		case "tool_result":
 			if (asString(record.name) === "task") return [taskBlockFromRecord(record, "success")];
-			return [toolBlockFromRecord(record, "success"), ...imageBlocksFromContent(record.content)];
+			return [activityBlockFromRecord(record, "success", scope), ...imageBlocksFromContent(record.content)];
 		case "skill":
 		case "skill_invocation":
 			return [skillBlockFromRecord(record)];
@@ -706,23 +708,23 @@ function blocksFromContentPart(part: unknown): ChatBlock[] {
 	}
 }
 
-function blocksFromContent(content: unknown): ChatBlock[] {
+function blocksFromContent(content: unknown, messageScope: string): ChatBlock[] {
 	if (typeof content === "string") return markdownAndCodeBlocksFromText(content);
 	if (!Array.isArray(content)) return [];
-	return content.flatMap((part) => blocksFromContentPart(part));
+	return content.flatMap((part, blockIndex) => blocksFromContentPart(part, { messageId: messageScope, blockIndex }));
 }
 
-function blocksFromMessage(record: Record<string, unknown>): ChatBlock[] {
+function blocksFromMessage(record: Record<string, unknown>, messageScope: string): ChatBlock[] {
 	if (record.role === "branchSummary") return [summaryBlockFromRecord(record, "branch")];
 	if (record.role === "compactionSummary") return [summaryBlockFromRecord(record, "compaction")];
 	if (record.role === "bashExecution") {
 		const status = record.cancelled === true ? "cancelled" : record.exitCode === 0 || record.exitCode === undefined ? "success" : "error";
-		return [toolBlockFromRecord({ ...record, type: "tool", name: "bash", status }, status)];
+		return [activityBlockFromRecord({ ...record, type: "tool", name: "bash", status }, status, { messageId: messageScope, blockIndex: 0 })];
 	}
 	if (record.role === "toolResult") {
 		const toolName = firstString(asString(record.toolName), asString(record.name));
 		if (toolName === "task") return [taskBlockFromRecord(record, "success")];
-		return [toolBlockFromRecord(record, "success"), ...imageBlocksFromContent(record.content)];
+		return [activityBlockFromRecord(record, "success", { messageId: messageScope, blockIndex: 0 }), ...imageBlocksFromContent(record.content)];
 	}
 	if (record.role === "custom" && typeof record.customType === "string") {
 		if (record.customType === "skill") return [skillBlockFromRecord(asRecord(record.details) ?? record)];
@@ -732,7 +734,7 @@ function blocksFromMessage(record: Record<string, unknown>): ChatBlock[] {
 		if (record.customType === "terminal-result") return [terminalResultBlockFromRecord(record)];
 		// Unrecognized custom type: preserve provenance (mirrors Pi's CustomMessageComponent default).
 		const labeled: ChatBlock[] = [{ type: "markdown", text: `[${record.customType}]` }];
-		labeled.push(...blocksFromContent(record.content));
+		labeled.push(...blocksFromContent(record.content, messageScope));
 		return labeled;
 	}
 
@@ -753,7 +755,7 @@ function blocksFromMessage(record: Record<string, unknown>): ChatBlock[] {
 		if (display !== text) return markdownAndCodeBlocksFromText(display);
 	}
 
-	const blocks = blocksFromContent(record.content);
+	const blocks = blocksFromContent(record.content, messageScope);
 	if (blocks.length > 0) return blocks;
 	const authFailureHint = authFailureHintFromMessage(record);
 	if (authFailureHint) return [{ type: "markdown", text: authFailureHint }];
@@ -767,9 +769,10 @@ export function chatMessageViewModelFromPiMessage(message: unknown, index = 0): 
 	if (record.role === "custom" && record.display === false) return undefined;
 
 	const role = roleFromMessage(record);
-	const blocks = blocksFromMessage(record);
+	const id = messageId(record, index);
+	const blocks = blocksFromMessage(record, id);
 	return {
-		id: messageId(record, index),
+		id,
 		role,
 		displayName: displayName(role),
 		timestamp: timestampFrom(record.timestamp),
@@ -826,8 +829,8 @@ export function chatMessageViewModelToPlainText(message: ChatMessageViewModel): 
 					return `\`\`\`${block.lang}\n${block.source}\n\`\`\``;
 				case "image":
 					return `[image] ${block.mime}`;
-				case "tool":
-					return renderCompactToolPill(block.tool);
+				case "activity":
+					return renderCompactActivityPill(block.activity);
 				case "skill":
 					return `[skill] ${block.name}${block.expanded ? " (expanded)" : ` (${expandKey()} to expand)`}`;
 				case "summary":

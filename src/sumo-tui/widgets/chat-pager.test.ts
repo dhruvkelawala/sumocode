@@ -41,13 +41,21 @@ async function makeChat(width = 32, height = 6): Promise<{ root: SumoNode; chat:
 	};
 }
 
-function toolViewModel(id: string, path: string, expanded = true, timestamp = new Date("2026-04-30T11:42:00.000Z")): ChatMessageViewModel {
+function activityViewModel(
+	id: string,
+	path: string,
+	status: "queued" | "running" | "succeeded" | "failed" = "succeeded",
+	timestamp = new Date("2026-04-30T11:42:00.000Z"),
+): ChatMessageViewModel {
 	return {
 		id,
 		role: "sumo",
 		displayName: "SUMO",
 		timestamp,
-		blocks: [{ type: "tool", tool: { name: "read", status: "success", input: { path }, expanded } }],
+		blocks: [{
+			type: "activity",
+			activity: { id, kind: "tool", title: "read", status, invocation: { path }, subject: path, body: { kind: "source", text: "file contents" } },
+		}],
 	};
 }
 
@@ -207,78 +215,124 @@ describe("ChatPager", () => {
 		root.dispose();
 	});
 
-	it("renders structured tool blocks expanded by default and can collapse them on demand", async () => {
+	it("defaults running Activities expanded and settled Activities collapsed", async () => {
 		const { root, chat, buffer } = await makeChat(90, 8);
-		chat.addViewModel({
-			id: "s1",
-			role: "sumo",
-			displayName: "SUMO",
-			blocks: [{ type: "tool", tool: { name: "read", status: "success", input: { path: "src/auth/session.ts" } } }],
-		});
+		chat.addViewModel(activityViewModel("running-1", "src/auth/session.ts", "running"));
 		let frame = buffer();
+		expect(chat.getActivityExpansion("running-1")).toBe(true);
 		expect(frame.toPlainRow(1)).toContain("╭─ [read]");
-		expect(frame.toPlainRow(2)).toContain("preview collapsed");
+		expect(frame.toPlainRow(2)).toContain("file contents");
 
-		chat.setToolExpansion(false);
+		chat.replaceViewModels([activityViewModel("settled-1", "src/settled.ts", "succeeded")]);
 		frame = buffer();
-		expect(frame.toPlainRow(1)).toContain("✓ [read]  src/auth/session.ts  · ctrl+o expand");
-		expect(frame.toPlainRow(2)).toMatch(/^╰─+╯/);
+		expect(chat.getActivityExpansion("settled-1")).toBe(false);
+		expect(frame.toPlainRow(1)).toContain("✓ [read]  src/settled.ts");
 		root.dispose();
 	});
 
-	it("keeps the global collapsed tool policy when replacing the last view model", async () => {
-		const { root, chat, buffer } = await makeChat(90, 8);
-		chat.addViewModel(toolViewModel("tool-1", "src/original.ts", true));
-		chat.setToolExpansion(false);
+	it("preserves explicit collapsed and expanded state across settled live updates", async () => {
+		const { root, chat } = await makeChat(90, 8);
+		chat.addViewModel(activityViewModel("activity-1", "src/original.ts", "running"));
+		chat.setActivityExpansion("activity-1", false);
+		chat.replaceLastWithViewModel(activityViewModel("activity-1", "src/replaced.ts", "succeeded"));
+		expect(chat.getActivityExpansion("activity-1")).toBe(false);
 
-		// This fails against the pre-change code: replaceLastWithViewModel copied
-		// the incoming expanded=true block and forgot the pager-wide override.
-		chat.replaceLastWithViewModel(toolViewModel("tool-1", "src/replaced.ts", true));
-		const frame = buffer();
-
-		expect(chat.getLastMessage()?.toSnapshot().blocks).toMatchObject([{ type: "tool", tool: { expanded: false } }]);
-		expect(frame.toPlainRow(1)).toContain("src/replaced.ts");
-		expect(frame.toPlainRow(1)).toContain("ctrl+o expand");
-		expect(frame.toPlainRow(2)).toMatch(/^╰─+╯/);
+		chat.setActivityExpansion("activity-1", true);
+		chat.replaceLastWithViewModel(activityViewModel("activity-1", "src/final.ts", "succeeded"));
+		expect(chat.getActivityExpansion("activity-1")).toBe(true);
+		expect(chat.getLastMessage()?.toSnapshot().blocks?.[0]).toMatchObject({ type: "activity", activity: { id: "activity-1", status: "succeeded" } });
 		root.dispose();
 	});
 
-	it("applies the collapsed tool policy to subsequently added view models", async () => {
-		const { root, chat, buffer } = await makeChat(90, 8);
-		chat.setToolExpansion(false);
+	it("auto-expands failures only without an explicit Activity override", async () => {
+		const { root, chat } = await makeChat(90, 8);
+		chat.addViewModel(activityViewModel("implicit", "src/a.ts", "succeeded"));
+		expect(chat.getActivityExpansion("implicit")).toBe(false);
+		chat.replaceLastWithViewModel(activityViewModel("implicit", "src/a.ts", "failed"));
+		expect(chat.getActivityExpansion("implicit")).toBe(true);
 
-		chat.addViewModel(toolViewModel("tool-after-toggle", "src/appended.ts", true));
-		const frame = buffer();
-
-		expect(chat.getLastMessage()?.toSnapshot().blocks).toMatchObject([{ type: "tool", tool: { expanded: false } }]);
-		expect(frame.toPlainRow(1)).toContain("src/appended.ts");
-		expect(frame.toPlainRow(1)).toContain("ctrl+o expand");
-		expect(frame.toPlainRow(2)).toMatch(/^╰─+╯/);
+		chat.replaceViewModels([activityViewModel("explicit", "src/b.ts", "running")]);
+		chat.setActivityExpansion("explicit", false);
+		chat.replaceLastWithViewModel(activityViewModel("explicit", "src/b.ts", "failed"));
+		expect(chat.getActivityExpansion("explicit")).toBe(false);
 		root.dispose();
 	});
 
-	it("applies the collapsed tool policy during replaceViewModels hydration", async () => {
-		const { root, chat, buffer } = await makeChat(90, 8);
-		chat.setToolExpansion(false);
+	it("keeps same-name Activity IDs independent across replacement and hydration", async () => {
+		const { root, chat } = await makeChat(90, 10);
+		chat.replaceViewModels([
+			activityViewModel("read-a", "src/a.ts", "succeeded"),
+			activityViewModel("read-b", "src/b.ts", "succeeded"),
+		]);
+		chat.setActivityExpansion("read-a", true);
+		expect(chat.getActivityExpansion("read-a")).toBe(true);
+		expect(chat.getActivityExpansion("read-b")).toBe(false);
 
 		chat.replaceViewModels([
-			toolViewModel("hydrated-1", "src/hydrated-one.ts", true),
-			toolViewModel("hydrated-2", "src/hydrated-two.ts", true),
+			activityViewModel("read-a", "src/a.ts", "succeeded"),
+			activityViewModel("read-b", "src/b.ts", "succeeded"),
 		]);
-		const frame = buffer();
-
-		expect(chat.getRenderedMessages().map((message) => message.toSnapshot().blocks)).toMatchObject([
-			[{ type: "tool", tool: { expanded: false } }],
-			[{ type: "tool", tool: { expanded: false } }],
-		]);
-		expect(frame.toPlainRow(1)).toContain("src/hydrated-one.ts");
-		expect(frame.toPlainRow(1)).toContain("ctrl+o expand");
-		expect(frame.toPlainRow(5)).toContain("src/hydrated-two.ts");
-		expect(frame.toPlainRow(5)).toContain("ctrl+o expand");
+		expect(chat.getActivityExpansion("read-a")).toBe(true);
+		expect(chat.getActivityExpansion("read-b")).toBe(false);
 		root.dispose();
 	});
 
-	it("replaceLastWithViewModel adopts the view-model timestamp in the existing rendered message", async () => {
+	it("prunes implicit Activity state as messages virtualize", async () => {
+		const yoga = await loadYoga();
+		const root = new SumoNode(yoga.Node.create());
+		const chat = ChatPager.create(yoga, root, { maxRenderedMessages: 2 });
+		for (let index = 0; index < 20; index += 1) {
+			chat.addViewModel(activityViewModel(`read-${index}`, `src/${index}.ts`, "succeeded"));
+		}
+		const state = chat as unknown as {
+			activityExpansionOverrides: Map<string, boolean>;
+			activityExpansionStates: Map<string, boolean>;
+			activityStatuses: Map<string, string>;
+		};
+
+		expect(state.activityExpansionOverrides.size).toBe(0);
+		expect(state.activityExpansionStates.size).toBeLessThanOrEqual(2);
+		expect(state.activityStatuses.size).toBeLessThanOrEqual(2);
+		root.dispose();
+	});
+
+	it("reapplies an Activity override when virtualization recreates its message", async () => {
+		const yoga = await loadYoga();
+		const root = new SumoNode(yoga.Node.create());
+		const chat = ChatPager.create(yoga, root, { maxRenderedMessages: 1 });
+		chat.addViewModel(activityViewModel("read-a", "src/a.ts", "succeeded"));
+		chat.setActivityExpansion("read-a", true);
+		chat.addViewModel({ id: "other", role: "sumo", displayName: "SUMO", blocks: [{ type: "markdown", text: "other" }] });
+		chat.addViewModel(activityViewModel("read-a", "src/a.ts", "succeeded"));
+
+		expect(chat.getRenderedMessages()).toHaveLength(1);
+		expect(chat.getRenderedMessages()[0]?.getActivityExpansion("read-a")).toBe(true);
+		root.dispose();
+	});
+
+	it("replacing the last Activity view model preserves scroll and unread state", async () => {
+		const { root, chat, buffer } = await makeChat(48, 5);
+		for (let index = 0; index < 10; index += 1) chat.addMessage("sumo", `message ${index}`);
+		buffer();
+		chat.scrollBox.scrollToBottom();
+		chat.handleKey({ key: "PageUp" });
+		chat.addViewModel(activityViewModel("live-read", "src/a.ts", "running"));
+		const before = {
+			offset: chat.scrollBox.scrollOffset,
+			unread: chat.getUnreadCount(),
+			lastRead: chat.getLastReadIndex(),
+		};
+
+		chat.replaceLastWithViewModel(activityViewModel("live-read", "src/a.ts", "succeeded"));
+
+		expect(chat.scrollBox.scrollOffset).toBe(before.offset);
+		expect(chat.getUnreadCount()).toBe(before.unread);
+		expect(chat.getLastReadIndex()).toBe(before.lastRead);
+		expect(chat.getActivityExpansion("live-read")).toBe(true);
+		root.dispose();
+	});
+
+	it("replacing the last view model adopts its timestamp in the existing rendered message", async () => {
 		const { root, chat, buffer } = await makeChat(44, 6);
 		const originalTimestamp = new Date("2026-04-30T11:42:00.000");
 		const replacementTimestamp = new Date("2026-04-30T12:07:00.000");
@@ -384,7 +438,7 @@ describe("ChatPager", () => {
 		const last = chat.getLastMessage();
 		expect(last?.role).toBe("system");
 
-		// A viewModel whose blocks are tool-only folds role "system" -> "tool"
+		// A viewModel whose blocks are Activity-only folds role "system" -> "tool"
 		// (see chatRoleFromViewModel). This exercises the `last.setRole(...)`
 		// call in replaceLastWithViewModel, which must invalidate the ChatMessage
 		// render memo — otherwise the frame keeps showing the stale "SYSTEM" label.
@@ -392,7 +446,7 @@ describe("ChatPager", () => {
 			id: "msg-1",
 			role: "system",
 			displayName: "system",
-			blocks: [{ type: "tool", tool: { name: "read", status: "success", input: { path: "a.ts" }, expanded: false } }],
+			blocks: [{ type: "activity", activity: { id: "read-1", kind: "tool", title: "read", status: "succeeded", invocation: { path: "a.ts" }, subject: "a.ts", body: { kind: "source", text: "ok" } } }],
 		});
 
 		expect(chat.getLastMessage()).toBe(last);

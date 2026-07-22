@@ -309,7 +309,7 @@ function buildChatHTML(cols, toolStyle = "inline") {
 						]
 						: tool.name === "edit"
 							? [`<span class="fg-idle">+14</span> <span class="fg-approve">-6</span> <span class="fg-tool-muted">session flow updated</span>`]
-							: [`<span class="fg-tool-muted">preview collapsed</span>`];
+							: [`<span class="fg-tool-muted">no output captured</span>`];
 					for (const outputLine of outputLines) {
 						rows.push(bodyRow(`<span class="fg-tool-border">│</span> ${outputLine}`, visibleLen(outputLine) + 2));
 					}

@@ -1,0 +1,137 @@
+import {
+	safeValuePreview,
+	sanitizeActivityText,
+	type ActivityBody,
+	type ActivitySnapshot,
+	type ActivityStatus,
+} from "./domain.js";
+
+export interface PiToolProjectionScope {
+	readonly messageId: string;
+	readonly blockIndex: number;
+	readonly fallbackStatus?: ActivityStatus;
+	/** Live event projectors set this so an uncorrelatable record is rejected. */
+	readonly requireToolCallId?: boolean;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+	return typeof value === "object" && value !== null ? value as Record<string, unknown> : undefined;
+}
+
+function firstString(...values: unknown[]): string | undefined {
+	for (const value of values) {
+		if (typeof value !== "string") continue;
+		const sanitized = sanitizeActivityText(value).trim();
+		if (sanitized.length > 0) return sanitized;
+	}
+	return undefined;
+}
+
+function textFromContent(content: unknown): string | undefined {
+	if (typeof content === "string") return sanitizeActivityText(content);
+	if (!Array.isArray(content)) return undefined;
+	const text = content.flatMap((part): string[] => {
+		const record = asRecord(part);
+		return record?.type === "text" && typeof record.text === "string" ? [sanitizeActivityText(record.text)] : [];
+	}).join("");
+	return text.length > 0 ? text : undefined;
+}
+
+export function normalizePiActivityStatus(value: unknown, fallback: ActivityStatus = "queued"): ActivityStatus {
+	if (value === "pending" || value === "queued") return "queued";
+	if (value === "running") return "running";
+	if (value === "success" || value === "done" || value === "ok" || value === "completed") return "succeeded";
+	if (value === "error" || value === "failed" || value === "failure") return "failed";
+	if (value === "cancelled" || value === "canceled" || value === "aborted") return "cancelled";
+	if (value === "lost") return "lost";
+	return fallback;
+}
+
+function stringArray(value: unknown): string[] {
+	if (!Array.isArray(value)) return [];
+	return value.filter((item): item is string => typeof item === "string").map(sanitizeActivityText);
+}
+
+function sourceBody(details: Record<string, unknown> | undefined, output: string | undefined, error: string | undefined): ActivityBody {
+	const excerpt = stringArray(details?.excerpt);
+	const text = excerpt.length > 0 ? excerpt.join("\n") : error ?? output ?? "";
+	return {
+		kind: "source",
+		text,
+		...(typeof details?.startLine === "number" ? { startLine: details.startLine } : {}),
+		...(typeof details?.totalLines === "number"
+			? { totalLines: details.totalLines }
+			: typeof details?.lineCount === "number" ? { totalLines: details.lineCount } : {}),
+	};
+}
+
+function diffBody(details: Record<string, unknown> | undefined, output: string | undefined, error: string | undefined): ActivityBody {
+	const rawDiff = details?.diff;
+	const base = typeof rawDiff === "string"
+		? sanitizeActivityText(rawDiff)
+		: stringArray(rawDiff).join("\n") || error || output || "";
+	const collapsed = typeof details?.collapsedLines === "number" && details.collapsedLines > 0
+		? `… ${details.collapsedLines} lines collapsed`
+		: undefined;
+	return { kind: "diff", text: [base, collapsed].filter(Boolean).join("\n") };
+}
+
+function terminalBody(invocation: unknown, output: string | undefined, error: string | undefined): ActivityBody {
+	const args = asRecord(invocation);
+	return {
+		kind: "terminal",
+		command: firstString(args?.command),
+		text: error ?? output ?? "",
+	};
+}
+
+function genericBody(invocation: unknown, output: string | undefined, error: string | undefined): ActivityBody {
+	return {
+		kind: "text",
+		text: error ?? output ?? (invocation === undefined ? "" : safeValuePreview(invocation)),
+	};
+}
+
+function bodyForTool(
+	name: string,
+	invocation: unknown,
+	output: string | undefined,
+	error: string | undefined,
+	details: Record<string, unknown> | undefined,
+): ActivityBody {
+	if (name === "read" || name === "write") return sourceBody(details, output, error);
+	if (name === "edit") return diffBody(details, output, error);
+	if (name === "bash") return terminalBody(invocation, output, error);
+	return genericBody(invocation, output, error);
+}
+
+/** Project one ordinary Pi tool call/result record into the renderer-neutral domain. */
+export function projectPiToolActivity(recordValue: unknown, scope: PiToolProjectionScope): ActivitySnapshot | undefined {
+	const record = asRecord(recordValue);
+	if (!record) return undefined;
+	const canonicalId = firstString(record.toolCallId, record.id);
+	if (scope.requireToolCallId && !canonicalId) return undefined;
+	const id = canonicalId ?? `pi-tool:${scope.messageId}:${Math.max(0, Math.floor(scope.blockIndex))}`;
+	const name = firstString(record.name, record.toolName, record.command) ?? "tool";
+	const invocation = record.arguments ?? record.input ?? (record.command ? { command: record.command } : undefined);
+	const details = asRecord(record.details);
+	const output = textFromContent(record.content) ?? (typeof record.output === "string" ? sanitizeActivityText(record.output) : undefined);
+	const error = firstString(record.errorMessage, record.error);
+	const isError = record.isError === true || error !== undefined;
+	const fallback = isError ? "failed" : scope.fallbackStatus ?? "queued";
+	const status = normalizePiActivityStatus(record.status, fallback);
+	const args = asRecord(invocation);
+	const subject = firstString(args?.path, args?.filePath, args?.target, args?.command, details?.path, details?.filePath, details?.target, details?.command);
+	const summary = firstString(details?.summary, details?.note, details?.description);
+	return {
+		id,
+		kind: "tool",
+		title: name,
+		status: isError ? "failed" : status,
+		...(invocation === undefined ? {} : { invocation }),
+		...(subject ? { subject } : {}),
+		...(output ? { outputTail: output } : {}),
+		body: bodyForTool(name, invocation, output, error, details),
+		...(summary || error ? { result: { ...(summary ? { summary } : {}), ...(error ? { error } : {}) } } : {}),
+	};
+}

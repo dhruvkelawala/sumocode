@@ -1,4 +1,5 @@
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { mergeActivitySnapshot, sameActivity } from "../../activity/domain.js";
 import type { MouseEvent } from "../input/mouse.js";
 import type { KeyEvent } from "../input/key-router.js";
 import { logDiagnostic } from "../runtime/diagnostics.js";
@@ -124,23 +125,11 @@ function addViewModel(chat: ChatPager, message: ChatMessageViewModel): void {
 }
 
 function isFoldableBlock(block: ChatBlock): boolean {
-	return block.type === "tool" || block.type === "delegation";
+	return block.type === "activity" || block.type === "delegation";
 }
 
 function isFoldableOnlyViewModel(message: ChatMessageViewModel): boolean {
 	return message.blocks.length > 0 && message.blocks.every(isFoldableBlock);
-}
-
-function mergeToolBlock(existing: Extract<ChatBlock, { type: "tool" }>, incoming: Extract<ChatBlock, { type: "tool" }>): ChatBlock {
-	return {
-		type: "tool",
-		tool: {
-			...existing.tool,
-			...incoming.tool,
-			input: incoming.tool.input ?? existing.tool.input,
-			details: incoming.tool.details ?? existing.tool.details,
-		},
-	};
 }
 
 function mergeDelegationBlock(existing: Extract<ChatBlock, { type: "delegation" }>, incoming: Extract<ChatBlock, { type: "delegation" }>): ChatBlock {
@@ -164,21 +153,16 @@ function mergeDelegationBlock(existing: Extract<ChatBlock, { type: "delegation" 
 }
 
 function mergeFoldableBlock(existing: ChatBlock, incoming: ChatBlock): ChatBlock {
-	if (existing.type === "tool" && incoming.type === "tool") return mergeToolBlock(existing, incoming);
+	if (existing.type === "activity" && incoming.type === "activity") {
+		return { type: "activity", activity: mergeActivitySnapshot(existing.activity, incoming.activity) };
+	}
 	if (existing.type === "delegation" && incoming.type === "delegation") return mergeDelegationBlock(existing, incoming);
 	return incoming;
 }
 
 function upsertFoldableBlock(blocks: readonly ChatBlock[], incoming: ChatBlock): ChatBlock[] {
-	if (incoming.type === "tool") {
-		const incomingId = incoming.tool.id;
-		const byId = incomingId
-			? blocks.findIndex((block) => block.type === "tool" && block.tool.id === incomingId)
-			: -1;
-		const byName = byId === -1
-			? blocks.findIndex((block) => block.type === "tool" && block.tool.id === undefined && block.tool.name === incoming.tool.name && (block.tool.status === "pending" || block.tool.status === "running"))
-			: -1;
-		const index = byId !== -1 ? byId : byName;
+	if (incoming.type === "activity") {
+		const index = blocks.findIndex((block) => block.type === "activity" && sameActivity(block.activity, incoming.activity));
 		if (index === -1) return [...blocks, incoming];
 		return blocks.map((block, blockIndex) => blockIndex === index ? mergeFoldableBlock(block, incoming) : block);
 	}
@@ -507,6 +491,7 @@ export class ChatViewportController {
 	}
 
 	private handleToolExecutionEvent(record: Record<string, unknown>): void {
+		if (typeof record.toolCallId !== "string" || record.toolCallId.length === 0) return;
 		this.markRenderDirty();
 		const isEnd = record.type === "tool_execution_end";
 		const toolName = typeof record.toolName === "string" ? record.toolName : "tool";

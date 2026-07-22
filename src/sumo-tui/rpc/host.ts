@@ -488,25 +488,14 @@ export function createThinkingCycleHandler(deps: RpcHostThinkingCycleDependencie
 }
 
 export interface RpcHostToolsExpandDependencies {
-	readonly setToolExpansion: (expanded: boolean) => void;
+	readonly toggleActivityExpansion: () => unknown;
 	readonly requestRender: () => void;
 }
 
-/**
- * Builds the `app.tools.expand` (Ctrl+O by default) action handler: flips a
- * host-held boolean and applies it via `setToolExpansion` -- threaded through
- * from `RpcHostRuntime.setToolExpansion` (-> `RpcShellAdapter.setToolExpansion`
- * -> the live `ChatPager`), the same indirection `getChatSink`/
- * `writeClipboardSequence` already use for other runtime-owned state, since
- * neither this handler nor `RpcHostActions` holds a direct reference to the
- * adapter. Starts collapsed (`false`) to match `ChatPager`'s own default
- * tool-expansion state.
- */
+/** Builds `app.tools.expand` without duplicating presentation state in the host. */
 export function createToolsExpandToggleHandler(deps: RpcHostToolsExpandDependencies): () => void {
-	let expanded = false;
 	return (): void => {
-		expanded = !expanded;
-		deps.setToolExpansion(expanded);
+		deps.toggleActivityExpansion();
 		deps.requestRender();
 	};
 }
@@ -688,7 +677,7 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		onStateChange: pushState,
 	});
 	const handleToolsExpandToggle = createToolsExpandToggleHandler({
-		setToolExpansion: (expanded) => runtime?.setToolExpansion(expanded),
+		toggleActivityExpansion: () => runtime?.toggleActivityExpansion(),
 		requestRender,
 	});
 	const handleMessageFollowUp = (): void => {

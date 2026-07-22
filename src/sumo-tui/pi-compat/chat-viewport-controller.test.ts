@@ -269,7 +269,19 @@ describe("ChatViewportController", () => {
 		expect(messages[0]?.role).toBe("sumo");
 		expect(messages[0]?.blocks).toEqual([
 			{ type: "markdown", text: "Reading." },
-			{ type: "tool", tool: { id: "tc1", name: "read", status: "success", input: { path: "src/auth/session.ts" }, output: "file contents", details: undefined, error: undefined, expanded: true } },
+			{
+				type: "activity",
+				activity: {
+					id: "tc1",
+					kind: "tool",
+					title: "read",
+					status: "succeeded",
+					invocation: { path: "src/auth/session.ts" },
+					subject: "src/auth/session.ts",
+					outputTail: "file contents",
+					body: { kind: "source", text: "file contents" },
+				},
+			},
 		]);
 		expect(runtime.noteUserMessage).not.toHaveBeenCalled();
 		root.dispose();
@@ -286,11 +298,11 @@ describe("ChatViewportController", () => {
 			args: { path: "a.ts" },
 		});
 
-		let toolBlocks = (chat.getRenderedMessages()[0]?.toSnapshot().blocks ?? []).filter((block) => block.type === "tool");
-		expect(toolBlocks).toHaveLength(1);
-		expect(toolBlocks?.[0]).toMatchObject({
-			type: "tool",
-			tool: { id: "t1", name: "read", status: "running", input: { path: "a.ts" }, output: undefined },
+		let activityBlocks = (chat.getRenderedMessages()[0]?.toSnapshot().blocks ?? []).filter((block) => block.type === "activity");
+		expect(activityBlocks).toHaveLength(1);
+		expect(activityBlocks?.[0]).toMatchObject({
+			type: "activity",
+			activity: { id: "t1", title: "read", status: "running", invocation: { path: "a.ts" } },
 		});
 
 		controller.handleAgentEvent({
@@ -301,11 +313,20 @@ describe("ChatViewportController", () => {
 			result: { content: [{ type: "text", text: "ok" }] },
 		});
 
-		toolBlocks = (chat.getRenderedMessages()[0]?.toSnapshot().blocks ?? []).filter((block) => block.type === "tool");
-		expect(toolBlocks).toHaveLength(1);
-		expect(toolBlocks?.[0]).toEqual({
-			type: "tool",
-			tool: { id: "t1", name: "read", status: "success", input: { path: "a.ts" }, output: "ok", details: undefined, error: undefined, expanded: true },
+		activityBlocks = (chat.getRenderedMessages()[0]?.toSnapshot().blocks ?? []).filter((block) => block.type === "activity");
+		expect(activityBlocks).toHaveLength(1);
+		expect(activityBlocks?.[0]).toEqual({
+			type: "activity",
+			activity: {
+				id: "t1",
+				kind: "tool",
+				title: "read",
+				status: "succeeded",
+				invocation: { path: "a.ts" },
+				subject: "a.ts",
+				outputTail: "ok",
+				body: { kind: "source", text: "ok" },
+			},
 		});
 		root.dispose();
 	});
@@ -503,7 +524,7 @@ describe("ChatViewportController", () => {
 
 		const message = chat.getRenderedMessages()[0]?.toSnapshot();
 		expect(message?.role).toBe("sumo");
-		expect(message?.blocks?.[0]).toMatchObject({ type: "tool", tool: { id: "tc1", name: "bash", status: "pending" } });
+		expect(message?.blocks?.[0]).toMatchObject({ type: "activity", activity: { id: "tc1", title: "bash", status: "queued" } });
 		root.dispose();
 	});
 
@@ -553,7 +574,7 @@ describe("ChatViewportController", () => {
 			id: "s1",
 			role: "sumo",
 			displayName: "SUMO",
-			blocks: [{ type: "tool", tool: { name: "read", status: "success", input: { path: "src/auth/session.ts" } } }],
+			blocks: [{ type: "activity", activity: { id: "read-1", kind: "tool", title: "read", status: "succeeded", invocation: { path: "src/auth/session.ts" }, subject: "src/auth/session.ts", body: { kind: "source", text: "ok" } } }],
 		});
 		const originalSetToolsExpanded = vi.fn();
 		const host = {
@@ -575,7 +596,8 @@ describe("ChatViewportController", () => {
 		host.setToolsExpanded(true);
 
 		expect(originalSetToolsExpanded).toHaveBeenCalledWith(true);
-		expect(chat.getRenderedMessages()[0]?.toSnapshot().blocks?.[0]).toMatchObject({ type: "tool", tool: { expanded: true } });
+		expect(chat.getActivityExpansion("read-1")).toBe(true);
+		expect(chat.getRenderedMessages()[0]?.toSnapshot().blocks?.[0]).toMatchObject({ type: "activity", activity: { id: "read-1" } });
 		cleanup?.();
 		root.dispose();
 	});

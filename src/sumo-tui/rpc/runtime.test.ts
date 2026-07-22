@@ -541,6 +541,34 @@ describe("RPC host retained runtime frame", () => {
 		}
 	});
 
+	it("toggleActivityExpansion is pager-owned and safe before start/after stop", async () => {
+		const toggleActivityExpansion = vi.spyOn(ChatPager.prototype, "toggleActivityExpansion");
+		const output = new FakeOutput();
+		const terminal = new TerminalSessionOwner({ output });
+		const runtime = new RpcHostRuntime({
+			output,
+			input: { isTTY: false, on: () => undefined },
+			terminal,
+			initialState: state(),
+			initialTranscript: { messages: [] },
+		});
+
+		try {
+			expect(runtime.toggleActivityExpansion()).toBeUndefined();
+			expect(toggleActivityExpansion).not.toHaveBeenCalled();
+			await runtime.start();
+			toggleActivityExpansion.mockClear();
+			runtime.toggleActivityExpansion();
+			expect(toggleActivityExpansion).toHaveBeenCalledOnce();
+			runtime.stop();
+			toggleActivityExpansion.mockClear();
+			expect(runtime.toggleActivityExpansion()).toBeUndefined();
+			expect(toggleActivityExpansion).not.toHaveBeenCalled();
+		} finally {
+			toggleActivityExpansion.mockRestore();
+		}
+	});
+
 	it("skips the pager's replaceViewModels end-to-end when update() carries a transcriptRevision (host.ts's B9 sink-wiring contract)", async () => {
 		const replaceViewModels = vi.spyOn(ChatPager.prototype, "replaceViewModels");
 		const output = new FakeOutput();

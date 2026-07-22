@@ -377,6 +377,10 @@ export class RpcHostRuntime {
 		this.shell?.setToolExpansion(expanded);
 	}
 
+	public toggleActivityExpansion(): boolean | undefined {
+		return this.shell?.toggleActivityExpansion();
+	}
+
 	public waitForExit(): Promise<number> {
 		if (this.exitCode !== undefined) return Promise.resolve(this.exitCode);
 		return new Promise((resolve) => this.waiters.push(resolve));

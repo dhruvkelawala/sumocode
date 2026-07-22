@@ -150,6 +150,29 @@ describe("subagent Activity adapter", () => {
 		}
 	});
 
+	it("retains identity and status for all 64 envelopes with oversized optional tails", () => {
+		const largeTail = "x".repeat(64 * 1024);
+		const activities = Array.from({ length: 64 }, (_, index) => ({
+			id: `subagent:sa-large-${index + 1}`,
+			kind: "subagent",
+			title: `large worker ${index + 1}`,
+			status: index % 2 === 0 ? "running" : "succeeded",
+			sourceId: `spawn-large-${index + 1}`,
+			invocation: { prompt: largeTail, nested: { tail: largeTail } },
+			outputTail: largeTail,
+			result: { summary: largeTail },
+		}));
+
+		for (const toolName of ["subagent_wait", "subagent_cancel"] as const) {
+			const projected = activitiesFromSubagentToolRecord({ toolName, details: { activity: activities } }, { toolCallId: `${toolName}-large` });
+			expect(projected).toHaveLength(64);
+			expect(projected.map(({ id, status, sourceId }) => ({ id, status, sourceId }))).toEqual(
+				activities.map(({ id, status, sourceId }) => ({ id, status, sourceId })),
+			);
+			expect(JSON.stringify(projected).length).toBeLessThan(700_000);
+		}
+	});
+
 	it("bounds huge operation arrays and deeply nested invocation envelopes", () => {
 		let deep: unknown = { leaf: "visible" };
 		for (let index = 0; index < 10_000; index += 1) deep = { next: deep };
@@ -171,6 +194,25 @@ describe("subagent Activity adapter", () => {
 		expect(projected).toHaveLength(64);
 		expect(projected[0]?.activeTools).toHaveLength(16);
 		expect(JSON.stringify(projected).length).toBeLessThan(500_000);
+	});
+
+	it("prioritizes running child tools then newest settled tools with stable fallback indices", () => {
+		const liveTools = Array.from({ length: 20 }, (_, index) => ({
+			name: "custom",
+			argsPreview: `tool ${index}`,
+			outputPreview: `output ${index}`,
+			done: index !== 18,
+			isError: false,
+		}));
+		const input = snapshot({ liveTools: liveTools as never });
+		const first = activityFromSubagentSnapshot(input);
+		const second = activityFromSubagentSnapshot(input);
+
+		expect(first.activeTools).toHaveLength(16);
+		expect(first.activeTools?.[0]).toMatchObject({ id: "subagent:sa-7:tool:custom:18", status: "running" });
+		expect(first.activeTools?.[1]?.id).toBe("subagent:sa-7:tool:custom:19");
+		expect(first.activeTools?.at(-1)?.id).toBe("subagent:sa-7:tool:custom:4");
+		expect(second.activeTools?.map((tool) => tool.id)).toEqual(first.activeTools?.map((tool) => tool.id));
 	});
 
 	it("maps a historical passive result without guessing a spawn correlation", () => {

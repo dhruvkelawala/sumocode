@@ -354,6 +354,32 @@ describe("ChatViewportController", () => {
 		root.dispose();
 	});
 
+	it("target-updates an earlier assistant Activity after a newer assistant starts", async () => {
+		const { root, chat, controller } = await makeController();
+		const oldCall = { type: "toolCall", id: "old-read", name: "read", arguments: { path: "old.ts" } };
+		controller.handleAgentEvent({ type: "message_start", message: { id: "assistant-old", role: "assistant", content: [oldCall] } });
+		controller.handleAgentEvent({ type: "message_end", message: { id: "assistant-old", role: "assistant", content: [oldCall] } });
+		controller.handleAgentEvent({ type: "message_start", message: { id: "assistant-new", role: "assistant", content: "newer answer" } });
+		controller.handleAgentEvent({ type: "message_end", message: { id: "assistant-new", role: "assistant", content: "newer answer" } });
+
+		controller.handleAgentEvent({
+			type: "tool_execution_end",
+			toolName: "read",
+			toolCallId: "old-read",
+			args: { path: "old.ts" },
+			result: { content: [{ type: "text", text: "old contents" }] },
+			isError: false,
+		});
+
+		const messages = chat.getRenderedMessages().map((message) => message.toSnapshot());
+		expect(messages).toHaveLength(2);
+		expect(messages[0]?.blocks).toEqual([
+			expect.objectContaining({ type: "activity", activity: expect.objectContaining({ id: "old-read", status: "succeeded", outputTail: "old contents" }) }),
+		]);
+		expect(messages[1]?.blocks).toEqual([{ type: "markdown", text: "newer answer" }]);
+		root.dispose();
+	});
+
 	it("keeps tool-call correlation across a mid-run user follow-up", async () => {
 		const { root, chat, controller } = await makeController();
 		const call = { type: "toolCall", id: "follow-up-read", name: "read", arguments: { path: "a.ts" } };
@@ -629,6 +655,50 @@ describe("ChatViewportController", () => {
 		activities = (chat.getRenderedMessages()[0]?.toSnapshot().blocks ?? []).filter((block) => block.type === "activity");
 		expect(activities).toHaveLength(1);
 		expect(activities[0]).toMatchObject({ activity: { id: "subagent:sa-1", status: "succeeded", result: { summary: "No findings" } } });
+		root.dispose();
+	});
+
+	it("folds passive completion into its earlier assistant after a newer assistant starts", async () => {
+		const { root, chat, controller } = await makeController();
+		const running = {
+			id: "subagent:sa-earlier",
+			sourceId: "spawn-earlier",
+			kind: "subagent",
+			title: "review earlier auth",
+			status: "running",
+			invocation: { prompt: "Review earlier auth" },
+		};
+		const spawnCall = { type: "toolCall", id: "spawn-earlier", name: "subagent_spawn", arguments: { prompt: "Review earlier auth", name: "review earlier auth" } };
+		controller.handleAgentEvent({ type: "message_start", message: { id: "assistant-earlier", role: "assistant", content: [spawnCall] } });
+		controller.handleAgentEvent({ type: "message_end", message: { id: "assistant-earlier", role: "assistant", content: [spawnCall] } });
+		controller.handleAgentEvent({
+			type: "tool_execution_end",
+			toolCallId: "spawn-earlier",
+			toolName: "subagent_spawn",
+			args: spawnCall.arguments,
+			result: { content: [{ type: "text", text: "Started sa-earlier" }], details: { activity: running } },
+			isError: false,
+		});
+		controller.handleAgentEvent({ type: "message_start", message: { id: "assistant-newer", role: "assistant", content: "newer answer" } });
+		controller.handleAgentEvent({ type: "message_end", message: { id: "assistant-newer", role: "assistant", content: "newer answer" } });
+
+		controller.handleAgentEvent({
+			type: "message_start",
+			message: {
+				role: "custom",
+				customType: "subagent-result",
+				display: true,
+				content: "Earlier complete",
+				details: { activity: { ...running, status: "succeeded", result: { summary: "Earlier complete" } } },
+			},
+		});
+
+		const messages = chat.getRenderedMessages().map((message) => message.toSnapshot());
+		expect(messages).toHaveLength(2);
+		expect(messages[0]?.blocks).toEqual([
+			expect.objectContaining({ type: "activity", activity: expect.objectContaining({ id: "subagent:sa-earlier", status: "succeeded", result: { summary: "Earlier complete" } }) }),
+		]);
+		expect(messages[1]?.blocks).toEqual([{ type: "markdown", text: "newer answer" }]);
 		root.dispose();
 	});
 

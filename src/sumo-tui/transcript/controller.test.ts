@@ -341,6 +341,58 @@ describe("TranscriptController Activity folding", () => {
 		});
 	});
 
+	it("folds matched batch Activities independently and leaves only unmatched updates standalone", () => {
+		const running = {
+			id: "subagent:sa-matched",
+			sourceId: "spawn-matched",
+			kind: "subagent",
+			title: "matched worker",
+			status: "running",
+			invocation: { prompt: "matched work" },
+		};
+		const controller = new TranscriptController();
+		const transcript = controller.replaceFromMessages([
+			{
+				id: "assistant-spawn",
+				role: "assistant",
+				content: [{ type: "toolCall", id: "spawn-matched", name: "subagent_spawn", arguments: { prompt: "matched work", name: "matched worker" } }],
+			},
+			{
+				role: "toolResult",
+				toolCallId: "spawn-matched",
+				toolName: "subagent_spawn",
+				content: [{ type: "text", text: "Started sa-matched" }],
+				details: { activity: running },
+			},
+			{
+				role: "toolResult",
+				toolCallId: "wait-batch",
+				toolName: "subagent_wait",
+				content: [{ type: "text", text: "batch complete" }],
+				details: {
+					activity: [
+						{ ...running, status: "succeeded", result: { summary: "matched complete" } },
+						{ id: "subagent:sa-unmatched", kind: "subagent", title: "unmatched worker", status: "succeeded", result: { summary: "unmatched complete" } },
+					],
+				},
+			},
+		]);
+
+		const activities = transcript.messages.flatMap((message) => message.blocks)
+			.filter((block) => block.type === "activity")
+			.map((block) => block.activity);
+		expect(activities.filter((activity) => activity.id === "subagent:sa-matched")).toEqual([
+			expect.objectContaining({ status: "succeeded", result: { summary: "matched complete" } }),
+		]);
+		expect(activities.filter((activity) => activity.id === "subagent:sa-unmatched")).toHaveLength(1);
+		expect(activities.filter((activity) => activity.id === "wait-batch")).toHaveLength(1);
+		expect(transcript.messages).toHaveLength(2);
+		expect(transcript.messages[1]?.blocks).toEqual([
+			expect.objectContaining({ type: "activity", activity: expect.objectContaining({ id: "wait-batch" }) }),
+			expect.objectContaining({ type: "activity", activity: expect.objectContaining({ id: "subagent:sa-unmatched" }) }),
+		]);
+	});
+
 	it("keeps historical uncorrelated passive subagent completion standalone", () => {
 		const controller = new TranscriptController();
 		const transcript = controller.replaceFromMessages([{

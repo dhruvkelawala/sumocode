@@ -225,18 +225,24 @@ describe("subagent tools", () => {
 		expect(waited).toMatchObject({ details: { activity: [{ id: `subagent:${id}`, status: "failed", result: { error: "provider exploded" } }] } });
 	});
 
-	it("cancel returns settled snapshots and bounded Activity updates for known ids", async () => {
-		const { tool, ctx } = createHarness();
+	it("cancel returns bounded metadata and Activity updates without raw snapshots", async () => {
+		const { tool, ctx, emitters } = createHarness();
 		await tool("subagent_spawn").execute("spawn-1", { prompt: "do", name: "w" }, undefined, undefined, ctx as never);
+		emitters.get("sa-1")?.({ kind: "message-end", role: "assistant", text: "RAW_TRANSCRIPT_MUST_NOT_ESCAPE" });
 
 		const result = await tool("subagent_cancel").execute("cancel-1", { ids: ["sa-1", "sa-404"] }, undefined, undefined, ctx as never);
 
 		expect(textOf(result)).toContain("Cancelled sa-1");
 		expect(result).toMatchObject({
 			details: {
-				subagents: [{ id: "sa-1", status: "error", errorText: "interrupted" }],
-				activity: [{ id: "subagent:sa-1", status: "cancelled", result: { error: "interrupted" } }],
+				subagents: [{ id: "sa-1", title: "w", status: "error", createdAt: expect.any(Number), settledAt: expect.any(Number) }],
+				activity: [{ id: "subagent:sa-1", status: "cancelled", result: { summary: "RAW_TRANSCRIPT_MUST_NOT_ESCAPE", error: "interrupted" } }],
 			},
 		});
+		const metadata = (result as { details: { subagents: Array<Record<string, unknown>> } }).details.subagents[0];
+		expect(metadata).not.toHaveProperty("transcript");
+		expect(metadata).not.toHaveProperty("liveText");
+		expect(metadata).not.toHaveProperty("finalText");
+		expect(JSON.stringify((result as { details: unknown }).details)).not.toContain('"transcript"');
 	});
 });

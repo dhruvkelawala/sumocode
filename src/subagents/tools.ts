@@ -41,6 +41,15 @@ const trimLines = (text: string, maxChars: number, maxLines: number): string => 
 	return lines.length > maxChars ? `${lines.slice(0, maxChars - 1)}…` : lines;
 };
 
+/** Cancellation details expose bounded identity/status, never raw transcripts. */
+const cancellationMetadata = (snapshot: SubagentSnapshot) => ({
+	id: snapshot.id,
+	title: trimLines(snapshot.title, 256, 1),
+	status: snapshot.status,
+	createdAt: snapshot.createdAt,
+	...(snapshot.settledAt === undefined ? {} : { settledAt: snapshot.settledAt }),
+});
+
 const formatDuration = (ms: number): string => {
 	const seconds = Math.max(0, Math.round(ms / 1000));
 	const minutes = Math.floor(seconds / 60);
@@ -233,7 +242,7 @@ export function registerSubagentTools(
 			return makeToolResult(lines.join("\n"), {
 				action: "cancel",
 				ids: params.ids,
-				subagents: snapshots,
+				subagents: snapshots.map(cancellationMetadata),
 				activity: snapshots.map((snapshot) => activityEnvelope(snapshot)),
 			});
 		},

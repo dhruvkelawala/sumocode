@@ -81,6 +81,33 @@ describe("native task tool", () => {
 		await execution;
 	});
 
+	it.each(["single", "chain", "parallel"] as const)("marks %s preparation failures as tool errors", async (mode) => {
+		let definition: { execute: (...args: unknown[]) => Promise<{ isError?: boolean; content: Array<{ type: string; text: string }>; details?: { mode?: string; results?: unknown[] } }> } | undefined;
+		const pi = {
+			registerTool: vi.fn((toolDefinition) => { definition = toolDefinition as typeof definition; }),
+			on: vi.fn(),
+			getThinkingLevel: vi.fn(() => "low"),
+			getActiveTools: vi.fn(() => ["read"]),
+		};
+		taskTool()(pi as never);
+
+		const result = await definition!.execute(
+			`prepare-${mode}`,
+			{ type: mode, tasks: [{ prompt: "Do work", skill: "__missing_plan_082_skill__", fork: false }] },
+			undefined,
+			undefined,
+			{
+				cwd: process.cwd(),
+				model: undefined,
+				sessionManager: { getSessionFile: () => undefined },
+			} as never,
+		);
+
+		expect(result.isError).toBe(true);
+		expect(result.content[0]?.text).toContain("Unknown skill: __missing_plan_082_skill__");
+		expect(result.details?.mode).toBe(mode);
+	});
+
 	it("marks single-task setup failures as tool errors", async () => {
 		let definition: { execute: (...args: unknown[]) => Promise<{ isError?: boolean; content: Array<{ type: string; text: string }> }> } | undefined;
 		const pi = {

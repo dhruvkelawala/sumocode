@@ -921,6 +921,7 @@ export const taskTool = (options: TaskToolOptions = DEFAULT_OPTIONS) => (pi: Ext
 				return {
 					content: [{ type: "text", text: `${normalized.error}\nAvailable skills: ${available.text}${suffix}` }],
 					details: { mode: "single", results: [] } as TaskToolDetails,
+					isError: true,
 				};
 			}
 
@@ -972,6 +973,7 @@ export const taskTool = (options: TaskToolOptions = DEFAULT_OPTIONS) => (pi: Ext
 					return {
 						content: [{ type: "text", text: prepared.error }],
 						details: makeDetails([]),
+						isError: true,
 					};
 				}
 
@@ -1049,6 +1051,7 @@ export const taskTool = (options: TaskToolOptions = DEFAULT_OPTIONS) => (pi: Ext
 						return {
 							content: [{ type: "text", text: config.error }],
 							details: makeDetails([...results]),
+							isError: true,
 						};
 					}
 
@@ -1057,6 +1060,7 @@ export const taskTool = (options: TaskToolOptions = DEFAULT_OPTIONS) => (pi: Ext
 						return {
 							content: [{ type: "text", text: preparedPrompt.error }],
 							details: makeDetails([...results]),
+							isError: true,
 						};
 					}
 
@@ -1138,6 +1142,7 @@ export const taskTool = (options: TaskToolOptions = DEFAULT_OPTIONS) => (pi: Ext
 				return {
 					content: [{ type: "text", text: prepared.error }],
 					details: makeDetails([]),
+					isError: true,
 				};
 			}
 

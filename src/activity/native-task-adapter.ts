@@ -4,6 +4,7 @@ import {
 	boundedAdapterText,
 	boundedArray,
 	boundedArrayTail,
+	boundedPriorityArray,
 	boundedRecord,
 	createAdapterTraversalBudget,
 	firstBoundedAdapterString,
@@ -113,6 +114,8 @@ function taskStatus(result: Record<string, unknown>, fallback: ActivityStatus, b
 }
 
 function aggregateStatus(statuses: readonly ActivityStatus[], fallback: ActivityStatus): ActivityStatus {
+	// Plan 082 deliberately defines one mode-independent precedence: any known
+	// failure is immediately visible even while sibling parallel work winds down.
 	if (statuses.includes("failed")) return "failed";
 	if (statuses.includes("cancelled")) return "cancelled";
 	if (statuses.includes("running")) return "running";
@@ -175,6 +178,25 @@ function nestedToolStatus(value: unknown): ActivityStatus {
 	return normalizePiActivityStatus(value, "queued");
 }
 
+function isRunningToolValue(value: unknown): boolean {
+	if (typeof value !== "object" || value === null) return false;
+	const status = (value as Record<string, unknown>).status;
+	return status === "pending" || status === "queued" || status === "running";
+}
+
+function boundedToolActivities(
+	activities: readonly ActivitySnapshot[],
+	budget: AdapterTraversalBudget,
+): ActivitySnapshot[] {
+	return boundedPriorityArray(
+		activities,
+		MAX_TOOLS_PER_RESULT,
+		budget,
+		(value) => typeof value === "object" && value !== null
+			&& (((value as ActivitySnapshot).status === "queued") || (value as ActivitySnapshot).status === "running"),
+	).map((entry) => entry.value as ActivitySnapshot);
+}
+
 function nestedToolsFromMessages(
 	messages: unknown,
 	parentId: string,
@@ -197,7 +219,7 @@ function nestedToolsFromMessages(
 		const earliest = unresolved.shift();
 		return earliest ?? `${parentId}:result:${resultIndex}:tool:${name}:${fallbackIndex++}`;
 	};
-	for (const messageValue of boundedArray(messages, MAX_MESSAGES_PER_RESULT, budget)) {
+	for (const messageValue of boundedArrayTail(messages, MAX_MESSAGES_PER_RESULT, budget)) {
 		const message = asRecord(messageValue, budget);
 		if (!message) continue;
 		if (message.role === "assistant") {
@@ -234,7 +256,7 @@ function nestedToolsFromMessages(
 			if (activity) tools.set(id, activity);
 		}
 	}
-	return [...tools.values()].slice(0, MAX_TOOLS_PER_RESULT);
+	return boundedToolActivities([...tools.values()], budget);
 }
 
 function nestedToolsFromResult(
@@ -243,13 +265,13 @@ function nestedToolsFromResult(
 	resultIndex: number,
 	budget: AdapterTraversalBudget,
 ): ActivitySnapshot[] {
-	const events = boundedArray(result.toolEvents, MAX_TOOLS_PER_RESULT, budget)
-		.map((value) => asRecord(value, budget))
-		.filter((event): event is Record<string, unknown> => event !== undefined);
+	const events = boundedPriorityArray(result.toolEvents, MAX_TOOLS_PER_RESULT, budget, isRunningToolValue)
+		.map(({ value, originalIndex }) => ({ event: asRecord(value, budget), originalIndex }))
+		.filter((entry): entry is { event: Record<string, unknown>; originalIndex: number } => entry.event !== undefined);
 	if (events.length === 0) return nestedToolsFromMessages(result.messages, parentId, resultIndex, budget);
-	return events.flatMap((event, toolIndex): ActivitySnapshot[] => {
+	return events.flatMap(({ event, originalIndex }): ActivitySnapshot[] => {
 		const name = firstString(budget, event.name, event.toolName) ?? "tool";
-		const id = firstString(budget, event.id, event.toolCallId) ?? `${parentId}:result:${resultIndex}:tool:${name}:${toolIndex}`;
+		const id = firstString(budget, event.id, event.toolCallId) ?? `${parentId}:result:${resultIndex}:tool:${name}:${originalIndex}`;
 		const rawOutput = firstString(budget, event.output, event.text);
 		const output = rawOutput ? boundedText(rawOutput, TOOL_PREVIEW_MAX) : undefined;
 		const activity = projectPiToolActivity({
@@ -374,7 +396,9 @@ export function activityFromNativeTaskRecord(
 	const fallbackPrompt = firstString(budget, argumentTasks[0]?.prompt, args?.prompt, args?.task, record.prompt, record.task) ?? "task";
 	const children = resultRecords.map((result, index) => childActivity(result, id, index, context.fallbackStatus, budget));
 	const statuses = children.map((child) => child.status);
-	const status = aggregateStatus(statuses, normalizePiActivityStatus(record.status, record.isError === true ? "failed" : context.fallbackStatus));
+	const status = record.isError === true
+		? "failed"
+		: aggregateStatus(statuses, normalizePiActivityStatus(record.status, context.fallbackStatus));
 	const firstPrompt = firstString(budget, resultRecords[0]?.prompt, fallbackPrompt) ?? "task";
 	const outputFromRecord = textFromContent(record.content, budget) ?? firstString(budget, record.output);
 	const summaries = children.map((child, index) => labeledOutput(child, index, children.length)).filter((text): text is string => !!text);

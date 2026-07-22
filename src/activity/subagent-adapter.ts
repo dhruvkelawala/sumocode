@@ -9,6 +9,7 @@ import {
 	boundedAdapterPreview,
 	boundedAdapterText,
 	boundedArray,
+	boundedPriorityArray,
 	boundedRecord,
 	createAdapterTraversalBudget,
 	firstBoundedAdapterString,
@@ -25,6 +26,14 @@ const MAX_ENVELOPE_DEPTH = 3;
 const MAX_CONTENT_PARTS = 64;
 const ADAPTER_MAX_NODES = 16_384;
 const ADAPTER_MAX_CHARS = 1024 * 1024;
+const OPERATION_CORE_MAX_NODES = 8;
+const OPERATION_CORE_MAX_CHARS = 4 * 1024;
+const OPERATION_OPTIONAL_MAX_NODES = 256;
+const OPERATION_OPTIONAL_MAX_CHARS = 8 * 1024;
+const OPERATION_SNAPSHOT_MAX_NODES = 512;
+const OPERATION_SNAPSHOT_MAX_CHARS = 32 * 1024;
+const ACTIVITY_ID_MAX = 512;
+const ACTIVITY_TITLE_MAX = 1_024;
 const ACTIVITY_KINDS = new Set<ActivityKind>(["tool", "task", "subagent", "terminal"]);
 const ACTIVITY_STATUSES = new Set<ActivityStatus>(["queued", "running", "succeeded", "failed", "cancelled", "lost"]);
 
@@ -101,14 +110,18 @@ function boundedEnvelope(
 	value: unknown,
 	budget: AdapterTraversalBudget,
 	depth = 0,
+	coreBudget: AdapterTraversalBudget = budget,
 ): ActivitySnapshot | undefined {
-	const record = asRecord(value, budget);
-	const id = firstString(budget, record?.id);
-	const title = firstString(budget, record?.title);
+	const record = asRecord(value, coreBudget);
+	const id = firstBoundedAdapterString(coreBudget, ACTIVITY_ID_MAX, record?.id);
+	const title = firstBoundedAdapterString(coreBudget, ACTIVITY_TITLE_MAX, record?.title);
 	const kind = record?.kind;
 	const status = record?.status;
 	if (!record || !id || !title || !ACTIVITY_KINDS.has(kind as ActivityKind) || !ACTIVITY_STATUSES.has(status as ActivityStatus)) return undefined;
-	const sourceId = firstString(budget, record.sourceId);
+	// Correlation identity shares the reserved core budget. Optional tails below
+	// may exhaust their per-item budget without dropping this Activity or making
+	// a later one in the same 64-item operation disappear.
+	const sourceId = firstBoundedAdapterString(coreBudget, ACTIVITY_ID_MAX, record.sourceId);
 	const subject = firstString(budget, record.subject);
 	const currentStep = firstString(budget, record.currentStep);
 	const outputTail = boundedAdapterText(record.outputTail, depth === 0 ? TEXT_MAX : CHILD_PREVIEW_MAX, budget);
@@ -173,11 +186,16 @@ function subagentStatus(record: Record<string, unknown>, budget: AdapterTraversa
 	return "running";
 }
 
-function toolActivity(toolValue: unknown, budget: AdapterTraversalBudget): ActivitySnapshot | undefined {
+function toolActivity(
+	toolValue: unknown,
+	budget: AdapterTraversalBudget,
+	parentId: string,
+	originalIndex: number,
+): ActivitySnapshot | undefined {
 	const tool = asRecord(toolValue, budget);
-	const id = firstString(budget, tool?.id);
-	if (!tool || !id) return undefined;
+	if (!tool) return undefined;
 	const name = firstString(budget, tool.name) ?? "tool";
+	const id = firstString(budget, tool.id) ?? `${parentId}:tool:${name}:${originalIndex}`;
 	const done = tool.done === true;
 	const isError = tool.isError === true;
 	const rawOutput = firstString(budget, tool.outputPreview);
@@ -241,8 +259,13 @@ function activityFromSubagentRecord(record: Record<string, unknown>, budget: Ada
 	const output = status === "running" ? liveText ?? finalText : undefined;
 	const error = status === "failed" || status === "cancelled" ? firstString(budget, record.errorText) : undefined;
 	const summary = status === "succeeded" || status === "failed" || status === "cancelled" ? finalText : undefined;
-	const liveTools = boundedArray(record.liveTools, MAX_CHILD_TOOLS, budget)
-		.map((tool) => toolActivity(tool, budget))
+	const liveTools = boundedPriorityArray(
+		record.liveTools,
+		MAX_CHILD_TOOLS,
+		budget,
+		(value) => typeof value === "object" && value !== null && (value as Record<string, unknown>).done !== true,
+	)
+		.map(({ value, originalIndex }) => toolActivity(value, budget, `subagent:${id}`, originalIndex))
 		.filter((tool): tool is ActivitySnapshot => tool !== undefined);
 	const usage = asRecord(record.usage, budget);
 	const manifest = asRecord(record.manifest, budget);
@@ -302,18 +325,24 @@ function activityEnvelopes(
 ): ActivitySnapshot[] {
 	const value = details?.activity;
 	const values = Array.isArray(value) ? boundedArray(value, MAX_OPERATION_ACTIVITIES, budget) : value === undefined ? [] : [value];
-	return values.map((item) => boundedEnvelope(item, budget)).filter((activity): activity is ActivitySnapshot => activity !== undefined);
+	return values.map((item) => {
+		const coreBudget = createAdapterTraversalBudget({ maxNodes: OPERATION_CORE_MAX_NODES, maxChars: OPERATION_CORE_MAX_CHARS });
+		const optionalBudget = createAdapterTraversalBudget({ maxNodes: OPERATION_OPTIONAL_MAX_NODES, maxChars: OPERATION_OPTIONAL_MAX_CHARS });
+		return boundedEnvelope(item, optionalBudget, 0, coreBudget);
+	}).filter((activity): activity is ActivitySnapshot => activity !== undefined);
 }
 
-function subagentRecords(details: Record<string, unknown> | undefined, budget: AdapterTraversalBudget): Record<string, unknown>[] {
-	const records: Record<string, unknown>[] = [];
-	const single = asRecord(details?.subagent, budget);
-	if (single) records.push(single);
-	for (const value of boundedArray(details?.subagents, MAX_OPERATION_ACTIVITIES, budget)) {
-		const record = asRecord(value, budget);
-		if (record) records.push(record);
-	}
-	return records;
+function subagentRecordValues(details: Record<string, unknown> | undefined, budget: AdapterTraversalBudget): unknown[] {
+	const records: unknown[] = [];
+	if (details?.subagent !== undefined) records.push(details.subagent);
+	records.push(...boundedArray(details?.subagents, MAX_OPERATION_ACTIVITIES, budget));
+	return records.slice(0, MAX_OPERATION_ACTIVITIES);
+}
+
+function activityFromOperationSubagent(value: unknown): ActivitySnapshot | undefined {
+	const budget = createAdapterTraversalBudget({ maxNodes: OPERATION_SNAPSHOT_MAX_NODES, maxChars: OPERATION_SNAPSHOT_MAX_CHARS });
+	const record = asRecord(value, budget);
+	return record ? activityFromSubagentRecord(record, budget) : undefined;
 }
 
 function spawnInvocation(record: Record<string, unknown>, budget: AdapterTraversalBudget): unknown {
@@ -357,7 +386,9 @@ export function activitiesFromSubagentToolRecord(
 	const enveloped = activityEnvelopes(details, budget);
 	const snapshots = enveloped.length > 0
 		? enveloped
-		: subagentRecords(details, budget).map((snapshot) => activityFromSubagentRecord(snapshot, budget));
+		: subagentRecordValues(details, budget)
+			.map(activityFromOperationSubagent)
+			.filter((activity): activity is ActivitySnapshot => activity !== undefined);
 	if (snapshots.length > 0) {
 		return snapshots.map((activity) => toolName === "subagent_spawn" && context.toolCallId && !activity.sourceId
 			? { ...activity, sourceId: context.toolCallId }

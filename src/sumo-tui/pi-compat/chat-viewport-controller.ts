@@ -3,7 +3,7 @@ import type { MouseEvent } from "../input/mouse.js";
 import type { KeyEvent } from "../input/key-router.js";
 import { logDiagnostic } from "../runtime/diagnostics.js";
 import { measureMaybe, ResumeProfiler, type ResumeProfileMetadata } from "../runtime/resume-profiler.js";
-import { isFoldableResultViewModel, upsertFoldableBlock } from "../transcript/activity-fold.js";
+import { isFoldableBlock, isFoldableResultViewModel, upsertFoldableBlock } from "../transcript/activity-fold.js";
 import {
 	chatMessageViewModelFromPiMessage,
 	chatMessageViewModelToPlainText,
@@ -466,8 +466,9 @@ export class ChatViewportController {
 					}],
 				},
 		);
-		if (!viewModel || !isFoldableResultViewModel(viewModel) || !this.liveAssistant) return;
-		this.foldBlocksIntoAssistant(viewModel.blocks);
+		if (!viewModel || !isFoldableResultViewModel(viewModel)) return;
+		const unmatched = this.foldBlocksAcrossTranscript(viewModel.blocks);
+		if (unmatched.length > 0) this.publishUnmatchedBlocks(viewModel, unmatched);
 		this.runtime.requestRender();
 	}
 
@@ -486,8 +487,9 @@ export class ChatViewportController {
 		}
 		const viewModel = this.viewModelMapper.messageFromPiMessage(message);
 		if (!viewModel || chatMessageViewModelToPlainText(viewModel).length === 0) return;
-		if (isFoldableResultViewModel(viewModel) && this.liveAssistant) {
-			this.foldBlocksIntoAssistant(viewModel.blocks);
+		if (isFoldableResultViewModel(viewModel)) {
+			const unmatched = this.foldBlocksAcrossTranscript(viewModel.blocks);
+			if (unmatched.length > 0) this.publishUnmatchedBlocks(viewModel, unmatched);
 			return;
 		}
 		addViewModel(this.chat, viewModel);
@@ -565,12 +567,47 @@ export class ChatViewportController {
 		this.publishLiveAssistant();
 	}
 
-	private foldBlocksIntoAssistant(blocks: readonly ChatBlock[]): void {
+	private foldBlocksAcrossTranscript(blocks: readonly ChatBlock[]): ChatBlock[] {
+		const unmatched: ChatBlock[] = [];
+		let siblingTargetIndex: number | undefined;
 		for (const block of blocks) {
-			this.liveAssistantBlocks = upsertFoldableBlock(this.liveAssistantBlocks, block);
+			if (isFoldableBlock(block)) {
+				const targetIndex = this.chat.foldBlockIntoMatchingMessage(block);
+				if (targetIndex === undefined) {
+					unmatched.push(block);
+					continue;
+				}
+				siblingTargetIndex = targetIndex;
+				if (targetIndex === this.liveAssistantIndex) {
+					this.liveAssistantBlocks = upsertFoldableBlock(this.liveAssistantBlocks, block);
+				}
+				continue;
+			}
+			if (block.type === "image" && siblingTargetIndex !== undefined) {
+				this.chat.upsertBlockAtSourceIndex(siblingTargetIndex, block);
+				if (siblingTargetIndex === this.liveAssistantIndex) {
+					this.liveAssistantBlocks = upsertFoldableBlock(this.liveAssistantBlocks, block);
+				}
+				continue;
+			}
+			unmatched.push(block);
 		}
-		this.lastAssistantText = this.liveAssistant ? chatMessageViewModelToPlainText({ ...this.liveAssistant, blocks: this.liveAssistantBlocks }) : this.lastAssistantText;
-		this.publishLiveAssistant();
+		if (this.liveAssistant) {
+			this.lastAssistantText = chatMessageViewModelToPlainText({ ...this.liveAssistant, blocks: this.liveAssistantBlocks });
+		}
+		return unmatched;
+	}
+
+	private publishUnmatchedBlocks(source: ChatMessageViewModel, blocks: readonly ChatBlock[]): void {
+		if (this.liveAssistant) {
+			for (const block of blocks) {
+				this.liveAssistantBlocks = upsertFoldableBlock(this.liveAssistantBlocks, block);
+			}
+			this.lastAssistantText = chatMessageViewModelToPlainText({ ...this.liveAssistant, blocks: this.liveAssistantBlocks });
+			this.publishLiveAssistant();
+			return;
+		}
+		addViewModel(this.chat, { ...source, blocks });
 	}
 
 	private publishLiveAssistant(): void {

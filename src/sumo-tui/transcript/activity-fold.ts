@@ -135,16 +135,20 @@ export function foldBlocksIntoMessages(
 	messages: readonly ChatMessageViewModel[],
 	blocks: readonly FoldableBlock[],
 	options: { readonly requireMatch: boolean },
-): { messages: ChatMessageViewModel[]; folded: boolean } {
+): { messages: ChatMessageViewModel[]; folded: boolean; unmatched: FoldableBlock[] } {
 	let next = [...messages];
 	let foldedAny = false;
+	const unmatched: FoldableBlock[] = [];
 	for (const block of blocks) {
 		const result = foldBlockIntoMessages(next, block, options);
-		if (!result.folded && options.requireMatch) return { messages: [...messages], folded: false };
+		if (!result.folded) {
+			unmatched.push(block);
+			continue;
+		}
 		next = result.messages;
-		foldedAny = result.folded || foldedAny;
+		foldedAny = true;
 	}
-	return { messages: next, folded: foldedAny };
+	return { messages: next, folded: foldedAny, unmatched };
 }
 
 function imageBlockKey(block: Extract<ChatBlock, { type: "image" }>): string {
@@ -157,30 +161,30 @@ export function foldResultViewModelIntoMessages(
 ): { messages: ChatMessageViewModel[]; folded: boolean } {
 	if (!isFoldableResultViewModel(message)) return { messages: [...messages], folded: false };
 	const foldable = message.blocks.filter(isFoldableBlock);
-	const targetIndex = findLastMessageIndex(messages, (candidate) => (
-		candidate.role === "sumo" && foldable.some((block) => matchingFoldableBlockIndex(candidate.blocks, block) !== -1)
-	));
-	if (targetIndex === -1) return { messages: [...messages], folded: false };
+	const targetIndices = foldable.map((block) => findLastMessageIndex(messages, (candidate) => (
+		candidate.role === "sumo" && matchingFoldableBlockIndex(candidate.blocks, block) !== -1
+	))).filter((index) => index !== -1);
+	if (targetIndices.length === 0) return { messages: [...messages], folded: false };
 	const folded = foldBlocksIntoMessages(messages, foldable, { requireMatch: true });
-	if (!folded.folded) return folded;
+	const targetIndex = Math.max(...targetIndices);
 	const images = message.blocks.filter((block): block is Extract<ChatBlock, { type: "image" }> => block.type === "image");
-	if (images.length === 0) return folded;
-	return {
-		messages: folded.messages.map((candidate, index) => {
-			if (index !== targetIndex) return candidate;
-			const existingImageKeys = new Set(candidate.blocks
-				.filter((block): block is Extract<ChatBlock, { type: "image" }> => block.type === "image")
-				.map(imageBlockKey));
-			const uniqueImages = images.filter((image) => {
-				const key = imageBlockKey(image);
-				if (existingImageKeys.has(key)) return false;
-				existingImageKeys.add(key);
-				return true;
-			});
-			return uniqueImages.length > 0 ? { ...candidate, blocks: [...candidate.blocks, ...uniqueImages] } : candidate;
-		}),
-		folded: true,
-	};
+	let next = images.length === 0 ? folded.messages : folded.messages.map((candidate, index) => {
+		if (index !== targetIndex) return candidate;
+		const existingImageKeys = new Set(candidate.blocks
+			.filter((block): block is Extract<ChatBlock, { type: "image" }> => block.type === "image")
+			.map(imageBlockKey));
+		const uniqueImages = images.filter((image) => {
+			const key = imageBlockKey(image);
+			if (existingImageKeys.has(key)) return false;
+			existingImageKeys.add(key);
+			return true;
+		});
+		return uniqueImages.length > 0 ? { ...candidate, blocks: [...candidate.blocks, ...uniqueImages] } : candidate;
+	});
+	if (folded.unmatched.length > 0) {
+		next = [...next, { ...message, blocks: folded.unmatched }];
+	}
+	return { messages: next, folded: true };
 }
 
 /** Fold one ordered replay message through the same identity rules used by live events. */

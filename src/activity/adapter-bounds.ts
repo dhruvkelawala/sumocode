@@ -5,6 +5,11 @@ export interface AdapterTraversalBudget {
 	remainingChars: number;
 }
 
+export interface BoundedIndexedValue {
+	readonly value: unknown;
+	readonly originalIndex: number;
+}
+
 export function createAdapterTraversalBudget(options: { readonly maxNodes: number; readonly maxChars: number }): AdapterTraversalBudget {
 	return {
 		remainingNodes: Math.max(1, Math.floor(options.maxNodes)),
@@ -34,6 +39,46 @@ export function boundedArrayTail(value: unknown, maxItems: number, budget: Adapt
 	if (!Array.isArray(value) || !claimNode(budget)) return [];
 	const count = Math.max(0, Math.floor(maxItems));
 	return count === 0 ? [] : value.slice(-count);
+}
+
+/**
+ * Bound an event list without hiding live tail entries behind old settled work.
+ * Preferred entries are returned first in source order (newest win if they
+ * alone exceed the cap), followed by the newest settled entries. The original
+ * index travels with every value so generated fallback IDs remain stable when
+ * the selected window changes.
+ */
+export function boundedPriorityArray(
+	value: unknown,
+	maxItems: number,
+	budget: AdapterTraversalBudget,
+	isPreferred: (value: unknown) => boolean,
+): readonly BoundedIndexedValue[] {
+	if (!Array.isArray(value) || !claimNode(budget)) return [];
+	const count = Math.max(0, Math.floor(maxItems));
+	if (count === 0) return [];
+	if (value.length <= count) return value.map((entry, originalIndex) => ({ value: entry, originalIndex }));
+
+	// Inspect a fixed head plus a larger recent tail. The head preserves an old
+	// long-running call; the tail finds current work and newest settled context.
+	// Candidate storage and inspection are both bounded independently of the raw
+	// producer array, which may be attacker-controlled or grow for a long run.
+	const scanCount = count * 16;
+	const headCount = Math.min(count, value.length);
+	const tailStart = Math.max(headCount, value.length - Math.max(0, scanCount - headCount));
+	const preferred: BoundedIndexedValue[] = [];
+	const settled: BoundedIndexedValue[] = [];
+	const inspect = (originalIndex: number): void => {
+		const entry = { value: value[originalIndex], originalIndex };
+		const candidates = isPreferred(entry.value) ? preferred : settled;
+		candidates.push(entry);
+		if (candidates.length > count) candidates.shift();
+	};
+	for (let originalIndex = 0; originalIndex < headCount; originalIndex += 1) inspect(originalIndex);
+	for (let originalIndex = tailStart; originalIndex < value.length; originalIndex += 1) inspect(originalIndex);
+	const remaining = count - preferred.length;
+	const selectedSettled = remaining > 0 ? settled.slice(-remaining).reverse() : [];
+	return [...preferred, ...selectedSettled];
 }
 
 /** Inspect only the remaining raw-character budget before sanitizing. */

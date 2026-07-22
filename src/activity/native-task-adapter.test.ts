@@ -62,6 +62,22 @@ describe("native task Activity adapter", () => {
 		expect(failed).toMatchObject({ status: "failed", result: { error: "tests failed" } });
 	});
 
+	it.each(["single", "chain", "parallel"] as const)("marks %s preparation failures with no results as failed", (mode) => {
+		const activity = activityFromNativeTaskRecord({
+			toolCallId: `task-${mode}-prepare-failure`,
+			name: "task",
+			isError: true,
+			content: [{ type: "text", text: "Unknown skill: missing-skill" }],
+			details: { mode, results: [] },
+		}, { fallbackStatus: "succeeded" });
+
+		expect(activity).toMatchObject({
+			id: `task-${mode}-prepare-failure`,
+			status: "failed",
+			result: { error: "Unknown skill: missing-skill" },
+		});
+	});
+
 	it("preserves cancelled native task status while retaining cancellation evidence", () => {
 		const activity = activityFromNativeTaskRecord({
 			toolCallId: "task-cancelled",
@@ -144,6 +160,36 @@ describe("native task Activity adapter", () => {
 		expect(second.activeTools?.map((tool) => tool.id)).toEqual(first.activeTools?.map((tool) => tool.id));
 	});
 
+	it("prioritizes running nested tools then newest settled tools with stable source indices", () => {
+		const record = {
+			toolCallId: "task-bounded-tools",
+			name: "task",
+			details: {
+				mode: "single",
+				results: [{
+					prompt: "Inspect many tools",
+					exitCode: -1,
+					messages: [],
+					usage: usage(),
+					toolEvents: Array.from({ length: 20 }, (_, index) => ({
+						name: "custom",
+						args: { index },
+						status: index === 18 ? "running" : "success",
+						output: `output ${index}`,
+					})),
+				}],
+			},
+		};
+		const first = activityFromNativeTaskRecord(record, { fallbackStatus: "running" });
+		const second = activityFromNativeTaskRecord(record, { fallbackStatus: "running" });
+
+		expect(first.activeTools).toHaveLength(16);
+		expect(first.activeTools?.[0]).toMatchObject({ id: "task-bounded-tools:result:0:tool:custom:18", status: "running" });
+		expect(first.activeTools?.[1]?.id).toBe("task-bounded-tools:result:0:tool:custom:19");
+		expect(first.activeTools?.at(-1)?.id).toBe("task-bounded-tools:result:0:tool:custom:4");
+		expect(second.activeTools?.map((tool) => tool.id)).toEqual(first.activeTools?.map((tool) => tool.id));
+	});
+
 	it("correlates missing-id nested results to the earliest unresolved same-name call", () => {
 		const activity = activityFromNativeTaskRecord({
 			toolCallId: "task-missing-tool-ids",
@@ -174,6 +220,23 @@ describe("native task Activity adapter", () => {
 		expect(activity.activeTools?.map((tool) => tool.status)).toEqual(["succeeded", "succeeded"]);
 		expect(activity.activeTools?.map((tool) => tool.invocation)).toEqual([{ path: "src/a.ts" }, { path: "src/b.ts" }]);
 		expect(activity.activeTools?.map((tool) => tool.outputTail)).toEqual(["alpha", "beta"]);
+	});
+
+	it("uses the recent message window for nested-tool fallback state", () => {
+		const messages = [
+			...Array.from({ length: 130 }, (_, index) => ({ role: "user", content: [{ type: "text", text: `context ${index}` }] })),
+			{ role: "assistant", content: [{ type: "toolCall", id: "recent-read", name: "read", arguments: { path: "src/recent.ts" } }] },
+			{ role: "toolResult", toolCallId: "recent-read", toolName: "read", content: [{ type: "text", text: "recent contents" }] },
+		];
+		const activity = activityFromNativeTaskRecord({
+			toolCallId: "task-recent-messages",
+			name: "task",
+			details: { mode: "single", results: [{ prompt: "Inspect recent work", exitCode: 0, messages, usage: usage() }] },
+		}, { fallbackStatus: "succeeded" });
+
+		expect(activity.activeTools).toEqual([
+			expect.objectContaining({ id: "recent-read", status: "succeeded", outputTail: "recent contents" }),
+		]);
 	});
 
 	it("falls back to assistant messages and aggregates usage and elapsed time", () => {

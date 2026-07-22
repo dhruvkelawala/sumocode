@@ -293,7 +293,7 @@ Ordered by ROI, smallest first.
    — ✅ shipped in `cea7153`.
 4. **For shell tasks, write `<dir>/meta.json`** with `taskId`, `command`,
    `cwd`, `startedAt`, `runner`, `cmux refs`. Lets future tools (a
-   `/bg-tail`, a sidebar widget, etc.) discover live tasks without a
+   `/terminal-tail`, a sidebar widget, etc.) discover live tasks without a
    running SumoCode session.
    — ✅ shipped in `cea7153`.
 5. **Propagate `SUMOCODE_BG_CHILD=1`** to invisible shell task children so

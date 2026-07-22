@@ -548,7 +548,7 @@ manifests, then retirement of the `bg_task` mega-tool and delegation routing amb
 | Plan | Title | Priority | Effort | Depends on | Status |
 |------|-------|----------|--------|------------|--------|
 | 079 | [Unified Activity contract and universal retained renderer](079-unified-activity-contract-and-renderer.md) | P1 | L | — | TODO |
-| 080 | [Terminal API v2 and durable passive completion](080-terminal-api-v2-and-durable-completion.md) | P1 | L | 079 | TODO |
+| 080 | [Terminal API v2 and durable passive completion](080-terminal-api-v2-and-durable-completion.md) | P1 | L | 079 | DONE — `advisor/080-terminal-v2`, implementation `674a986` |
 | 082 | [Subagent and native-task Activity adapters](082-subagent-and-native-task-activity-adapters.md) | P1 | M | 079 | TODO |
 | 081 | [Live ActivityStore and in-place retained cards](081-live-activity-store-and-in-place-cards.md) | P1 | L | 079, 080, 082 | TODO |
 

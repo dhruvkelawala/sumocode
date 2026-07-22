@@ -26,7 +26,7 @@
 - **Category**: orchestration correctness / agent UX
 - **Depends on**: Plan 079
 - **Planned at**: `acf6ae2`, 2026-07-22
-- **Execution status**: TODO
+- **Execution status**: DONE — `advisor/080-terminal-v2`, implementation commit `674a986`
 - **Unblocks**: Plan 081
 
 ## Decision

@@ -45,7 +45,11 @@ vanilla Pi.
 |---------------|--------------------------------|------------------------------|
 | `task`        | `src/native-task-tool.ts`       | Skill-run substrate; run isolated Pi subprocess skills and stream structured scroll/scribe state |
 | `subagent_*`  | `src/subagents/`                | Spawn, steer, inspect, wait for, cancel, and list delegated child agents |
-| `bg_*`        | `src/background-tasks/`         | Start, inspect, stop, and list non-interactive background shell terminals with typed completion cards |
+| `terminal_*`  | `src/background-tasks/`         | Start, check, wait for, stop, and list durable non-interactive shell terminals with passive-by-default typed completion |
+
+Terminal tools expose exactly `terminal_start`, `terminal_check`, `terminal_wait`, `terminal_stop`, and `terminal_list`. New terminal records are session-owned and durable. Completion is passive by default (`triggerTurn: false`); only an explicit `completion: "wake"` may trigger a turn, and check/wait/stop suppress any unclaimed wake before returning settled data. Historical `bg_*` transcript strings and v2/v3 metadata may still be read for diagnostics, but they are not callable aliases and are never injected into an active session.
+
+Terminal completion delivery is independent from subagent deferred delivery. Typed `terminal-result` details carry the durable `completionId`, `ownerSessionId`, and a bounded, sanitized `ActivitySnapshot`; delivery is acknowledged only after that completion ID is observable in Pi's session message stream.
 
 ### 4. SumoCode Extension Hooks
 

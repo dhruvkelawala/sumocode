@@ -415,10 +415,11 @@ export class TerminalTaskManager {
 		this.adopt(initial, true);
 
 		let child: ChildProcess;
+		const processOwnerToken = `sumocode-owner-${randomUUID()}`;
 		try {
 			child = this.spawn(
 				process.platform === "win32" ? "cmd.exe" : "/bin/bash",
-				process.platform === "win32" ? ["/d", "/s", "/c", scriptFile] : [scriptFile],
+				process.platform === "win32" ? ["/d", "/s", "/c", scriptFile] : [scriptFile, processOwnerToken],
 				{ cwd, detached: true, stdio: "ignore", env: { ...process.env, SUMOCODE_BG_CHILD: "1" } },
 			);
 		} catch (error) {

@@ -120,7 +120,7 @@ function listWindowsTreeMembers(pid: number): ProcessTreeMemberAnchor[] | undefi
 
 function listPosixGroupMembers(processGroupId: number): ProcessTreeMemberAnchor[] | undefined {
 	try {
-		const rows = execFileSync("ps", ["-axo", "pid=,pgid=,lstart="], { encoding: "utf8" }).split("\n");
+		const rows = execFileSync("ps", ["-axo", "pid=,pgid=,lstart=,command="], { encoding: "utf8" }).split("\n");
 		const members: Array<{ pid: number; processStartTime: string }> = [];
 		for (const row of rows) {
 			const match = row.trim().match(/^(\d+)\s+(\d+)\s+(.+)$/);
@@ -156,7 +156,10 @@ export function captureProcessStartTime(pid: number, platform: NodeJS.Platform =
 				{ encoding: "utf8" },
 			).trim() || undefined;
 		}
-		return execFileSync("ps", ["-p", String(pid), "-o", "lstart="], { encoding: "utf8" }).trim() || undefined;
+		// `lstart` alone has one-second resolution. Include the immutable launch
+		// command, which carries a per-spawn random argument, so same-second PID
+		// reuse cannot authenticate an unrelated process as this terminal leader.
+		return execFileSync("ps", ["-p", String(pid), "-o", "lstart=", "-o", "command="], { encoding: "utf8" }).trim() || undefined;
 	} catch {
 		return undefined;
 	}
@@ -228,6 +231,10 @@ async function rawSystemSignal(
 			? runWindowsVerifiedForceTaskkill(verification)
 			: runWindowsTaskkill(identity.pid, signal === "SIGKILL");
 	}
+	// Plan 080 deliberately defines POSIX ownership as the dedicated process
+	// group and requires signalling only -PGID. A command that explicitly calls
+	// setsid/daemonizes has left that managed boundary; following it would require
+	// a cgroup/native process supervisor outside this plan's dependency contract.
 	try {
 		process.kill(-identity.processGroupId, signal);
 		return { ok: true, gone: false };

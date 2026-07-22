@@ -37,6 +37,8 @@ The remaining final-review findings were accepted and regression-tested: stoppin
 
 A follow-up automatic-retention finding is rejected for this plan. Legacy recovery pruned settled artifact directories, but Plan 080 makes terminal snapshots durable and the executor contract explicitly forbids deleting files or cleaning artifacts without approval. No safe retention horizon or user-facing cleanup verb is specified, and pending/claimed or later-queryable completion data cannot be silently erased. Retention/GC therefore requires a separately approved policy rather than an implicit recovery-time delete. The separate malformed persisted-Activity finding was accepted: every nested optional field is now strictly deserialized before retained rendering, with malformed data falling back to the historical terminal summary.
 
+A later suggestion to follow descendants that deliberately leave the dedicated POSIX process group is also rejected as outside the approved process-tree contract. This plan explicitly requires signalling only `-pgid` and proving that group empty; following `setsid`/double-fork escapees would require a cgroup, launchd, or native process supervisor and would violate the no-new-native-dependency boundary. The supported managed tree is therefore the dedicated process group, now stated inline. Accidental same-second PID reuse remains in scope and is fixed by combining `lstart` with the immutable launch command carrying a per-spawn random argument, rather than trusting second-resolution wall time alone.
+
 ## Decision
 
 Replace the callable `bg_start/bg_status/bg_kill/bg_list` surface with exactly five verbs:

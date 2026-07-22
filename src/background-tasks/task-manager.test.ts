@@ -364,6 +364,26 @@ describe("TerminalTaskManager", () => {
 		expect(tree.operations.signalTree).not.toHaveBeenCalled();
 	});
 
+	it("uses and persists retained descendant anchors when the wrapper leader has exited", async () => {
+		const target = manager();
+		const task = await start(target);
+		const retained = vi.mocked(tree.operations.captureTreeVerification!).mock.results.at(-1)?.value;
+		tree.operations.identityMatches = vi.fn((): "unknown" => "unknown");
+		tree.operations.verificationMatches = vi.fn((): "same" => "same");
+		tree.operations.captureTreeVerification = vi.fn(() => undefined);
+
+		const result = await target.stop([task.id], "session-a");
+
+		expect(result[0]?.outcome).toBe("cancelled");
+		expect(retained).toEqual(expect.objectContaining({ members: expect.any(Array) }));
+		expect(tree.operations.signalTree).toHaveBeenCalledWith(
+			expect.objectContaining({ processGroupId: task.processGroupId }),
+			"SIGKILL",
+			retained,
+		);
+		expect(new TerminalTaskStore({ rootDir }).get(task.id)?.processTreeVerification).toEqual(retained);
+	});
+
 	it("stopOwned uses the same identity refusal and never signals an unrelated group", async () => {
 		const target = manager();
 		await start(target);
@@ -418,6 +438,15 @@ describe("TerminalTaskManager", () => {
 		expect(recovered.get(starting.id, "session-a")?.status).toBe("starting");
 		now += 21;
 		await vi.waitFor(() => expect(recovered.get(starting.id, "session-a")?.status).toBe("lost"));
+	});
+
+	it("persists changed running member anchors for replacement-manager recovery", async () => {
+		const target = manager();
+		const task = await start(target);
+
+		await vi.waitFor(() => expect(new TerminalTaskStore({ rootDir }).get(task.id)?.processTreeVerification).toEqual({
+			members: [{ pid: task.pid! + 1, processStartTime: `child-${task.pid! + 1}` }],
+		}));
 	});
 
 	it("recovers a running task after manager restart and settles from durable evidence", async () => {

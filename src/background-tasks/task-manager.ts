@@ -607,8 +607,10 @@ export class TerminalTaskManager {
 			}
 			const retainedVerification = current.processTreeVerification ?? this.runtime.get(id)?.treeVerification;
 			let identityStatus = this.processTree.identityMatches(identity);
+			let verifiedByRetainedAnchors = false;
 			if (identityStatus !== "same" && retainedVerification && this.processTree.verificationMatches) {
 				identityStatus = this.processTree.verificationMatches(identity, retainedVerification);
+				verifiedByRetainedAnchors = identityStatus === "same";
 			}
 			if (identityStatus === "different") {
 				this.settleLost(id, null, false);
@@ -622,7 +624,7 @@ export class TerminalTaskManager {
 			}
 			const capturedVerification = this.processTree.captureTreeVerification?.(identity);
 			if (naturalExitCode !== undefined) {
-				const verification = capturedVerification ?? current.processTreeVerification;
+				const verification = capturedVerification ?? (verifiedByRetainedAnchors ? retainedVerification : current.processTreeVerification);
 				if (this.processTree.captureTreeVerification && !verification) {
 					results.set(id, { id, outcome: "failed", task: current, message: `Terminal ${id} process-tree anchors could not be persisted; refusing natural-disposition signal.` });
 					continue;
@@ -644,8 +646,8 @@ export class TerminalTaskManager {
 			// Runtime-only anchors may predate descendants and are not sufficient for
 			// crash recovery once TERM removes the leader.
 			const verification = current.status === "stopping"
-				? current.processTreeVerification ?? capturedVerification
-				: capturedVerification;
+				? current.processTreeVerification ?? capturedVerification ?? retainedVerification
+				: capturedVerification ?? (verifiedByRetainedAnchors ? retainedVerification : undefined);
 			if (this.processTree.captureTreeVerification && !verification) {
 				results.set(id, { id, outcome: "failed", task: current, message: `Terminal ${id} process-tree anchors could not be persisted; refusing to signal.` });
 				continue;
@@ -840,8 +842,15 @@ export class TerminalTaskManager {
 			return;
 		}
 		if (this.processTree.identityMatches(identity) === "same") {
-			this.ensureRuntime(current).treeVerification = this.processTree.captureTreeVerification?.(identity)
-				?? this.ensureRuntime(current).treeVerification;
+			const verification = this.processTree.captureTreeVerification?.(identity);
+			if (verification) {
+				this.ensureRuntime(current).treeVerification = verification;
+				if (!sameTreeVerification(current.processTreeVerification, verification)) {
+					this.mutate(id, (task) => task.status === "running" && !sameTreeVerification(task.processTreeVerification, verification)
+						? { ...task, processTreeVerification: verification, updatedAt: this.timestamp(task) }
+						: undefined);
+				}
+			}
 		}
 		const paths = taskPaths(this.store, current.id, current.createdAt);
 		const exitCode = readExitCode(this.store, paths.exitFile);

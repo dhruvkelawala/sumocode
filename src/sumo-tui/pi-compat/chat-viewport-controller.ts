@@ -543,9 +543,9 @@ export class ChatViewportController {
 		this.markRenderDirty();
 		const role = asRecord(message)?.role;
 		if (role === "user") {
-			this.liveAssistant = undefined;
-			this.liveAssistantBlocks = [];
-			this.liveAssistantIndex = undefined;
+			// A steer/follow-up can arrive while a tool launched by the current
+			// assistant is still running. Keep that assistant's source-index target
+			// until the next assistant starts so the result folds into its Activity.
 			this.runtime.noteUserMessage();
 		}
 		if (role === "assistant") {

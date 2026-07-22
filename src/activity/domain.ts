@@ -69,6 +69,16 @@ function skipControlString(text: string, start: number): number {
 	return index;
 }
 
+function skipC1ControlString(text: string, start: number): number {
+	let index = start + 1;
+	while (index < text.length && text[index] !== "\n") {
+		if (text[index] === "\u0007" || text.charCodeAt(index) === 0x9c) return index + 1;
+		if (text[index] === "\u001b" && text[index + 1] === "\\") return index + 2;
+		index += 1;
+	}
+	return index;
+}
+
 function skipEscapeSequence(text: string, start: number): number {
 	const next = text[start + 1];
 	if (next === undefined || next === "\n") return start + 1;
@@ -109,7 +119,7 @@ export function sanitizeActivityText(text: string): string {
 			continue;
 		}
 		if (code === 0x90 || code === 0x98 || code === 0x9d || code === 0x9e || code === 0x9f) {
-			index = skipControlString(`\u001b${text.slice(index + 1)}`, 0) + index;
+			index = skipC1ControlString(text, index);
 			continue;
 		}
 		if (char === "\t") {

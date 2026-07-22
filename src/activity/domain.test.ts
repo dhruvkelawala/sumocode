@@ -137,5 +137,7 @@ describe("Activity domain", () => {
 		expect(sanitized).not.toContain("HIDDEN");
 		expect(sanitized).not.toContain("\u001b");
 		expect(sanitizeActivityText("one\r\ntwo\rthree")).toBe("one\ntwo\nthree");
+		expect(sanitizeActivityText("\u009d\u0007VISIBLE-BEL")).toBe("VISIBLE-BEL");
+		expect(sanitizeActivityText("\u009d\u001b\\VISIBLE-ST")).toBe("VISIBLE-ST");
 	});
 });

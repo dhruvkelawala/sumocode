@@ -354,6 +354,30 @@ describe("ChatViewportController", () => {
 		root.dispose();
 	});
 
+	it("keeps tool-call correlation across a mid-run user follow-up", async () => {
+		const { root, chat, controller } = await makeController();
+		const call = { type: "toolCall", id: "follow-up-read", name: "read", arguments: { path: "a.ts" } };
+		controller.handleAgentEvent({ type: "message_start", message: { id: "assistant-follow-up", role: "assistant", content: [call] } });
+		controller.handleAgentEvent({ type: "message_start", message: { id: "user-follow-up", role: "user", content: "also inspect tests" } });
+
+		controller.handleAgentEvent({
+			type: "tool_execution_end",
+			toolName: "read",
+			toolCallId: "follow-up-read",
+			args: { path: "a.ts" },
+			result: { content: [{ type: "text", text: "alpha" }] },
+			isError: false,
+		});
+
+		const messages = chat.getRenderedMessages().map((message) => message.toSnapshot());
+		expect(messages).toHaveLength(2);
+		expect(messages[0]?.blocks?.filter((block) => block.type === "activity")).toEqual([
+			expect.objectContaining({ type: "activity", activity: expect.objectContaining({ id: "follow-up-read", status: "succeeded", outputTail: "alpha" }) }),
+		]);
+		expect(messages[1]).toMatchObject({ role: "user", text: "also inspect tests" });
+		root.dispose();
+	});
+
 	it("folds an image-bearing result once beside its Activity", async () => {
 		const { root, chat, controller } = await makeController();
 		const call = { type: "toolCall", id: "image-read", name: "read", arguments: { path: "shot.png" } };

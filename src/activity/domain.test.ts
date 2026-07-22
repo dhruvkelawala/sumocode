@@ -136,5 +136,6 @@ describe("Activity domain", () => {
 		expect(sanitized).toBe("red    wide 界\nnextVISIBLE");
 		expect(sanitized).not.toContain("HIDDEN");
 		expect(sanitized).not.toContain("\u001b");
+		expect(sanitizeActivityText("one\r\ntwo\rthree")).toBe("one\ntwo\nthree");
 	});
 });

@@ -119,7 +119,7 @@ export function sanitizeActivityText(text: string): string {
 		}
 		if (char === "\r") {
 			output += "\n";
-			index += 1;
+			index += text[index + 1] === "\n" ? 2 : 1;
 			continue;
 		}
 		if ((code < 0x20 || (code >= 0x7f && code <= 0x9f)) && char !== "\n") {

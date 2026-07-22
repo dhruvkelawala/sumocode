@@ -32,6 +32,13 @@ describe("Pi Activity projector", () => {
 			body: { kind: "source", text: "alpha\n\nomega", startLine: 7, totalLines: 9 },
 		});
 		expect(projectPiToolActivity({
+			id: "crlf-read",
+			name: "read",
+			status: "success",
+			arguments: { path: "windows.txt" },
+			content: [{ type: "text", text: "one\r\ntwo" }],
+		}, scope)?.body).toEqual({ kind: "source", text: "one\ntwo", totalLines: 2 });
+		expect(projectPiToolActivity({
 			id: "ordinary-prose-read",
 			name: "read",
 			status: "success",

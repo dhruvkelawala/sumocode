@@ -15,6 +15,8 @@ This avoids relying on `--offline --no-session` live Pi output for completed mod
 - `fixture-completed-portrait` — 60×100 completed transcript under the no-sidebar portrait policy.
 - `fixture-tool-ledger-landscape` — tool-heavy landscape fixture for reviewing completed tool composition.
 - `fixture-command-palette-overlay` — completed transcript background with the V2 Scriptorium command palette centered as an overlay.
+- `fixture-activity-cards-landscape` — 160×45 durable Activity scene with a running subagent, running terminal, completed terminal, failure, and explicit collapsed/expanded cards.
+- `fixture-activity-cards-portrait` — the same durable Activity states at 60×100 under the no-sidebar portrait policy.
 
 All fixture scenarios remain `review` status. No fixture crop is promoted to `approved` or `required` in #90.
 
@@ -22,6 +24,8 @@ All fixture scenarios remain `review` status. No fixture crop is promoted to `ap
 
 ```bash
 pnpm visual:review -- --lane fixture
+pnpm visual:review -- --scenario fixture-activity-cards-landscape
+pnpm visual:review -- --scenario fixture-activity-cards-portrait
 ```
 
 After the review run, check text-level reports before PNGs:

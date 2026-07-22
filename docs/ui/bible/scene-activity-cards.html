@@ -1,0 +1,97 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Bible · Scene · Active 160×45</title>
+<link rel="stylesheet" href="_assets/tokens.css">
+<style>
+  .stage-blurb { max-width: 128ch; color: var(--foreground-dim); font-size: 11px; line-height: 1.6; padding: 0 8px; text-align: center; }
+  .scene { display: grid; grid-template-rows: var(--cell-h) var(--cell-h) var(--cell-h) auto var(--cell-h) calc(var(--cell-h) * 3) var(--cell-h) var(--cell-h) var(--cell-h) var(--cell-h); }
+  .scene .middle { display: grid; grid-template-columns: 128ch 2ch 30ch; grid-row: 4; min-height: 0; overflow: hidden; }
+  .scene .middle .chat-col, .scene .middle .sidebar-col { overflow: hidden; min-height: 0; }
+  .scene .middle pre { margin: 0; }
+</style>
+</head>
+<body>
+<div class="stage">
+  <div class="stage-label">scene · durable activity cards</div>
+  <div class="stage-blurb">Durable keyed Activity cards: running subagent, running terminal, completed terminal, failure, and explicit collapsed/expanded states.</div>
+  <div data-render-rect class="term scene" style="--term-cols: 160; --term-rows: 45;">
+    <pre class="grid" style="grid-row: 1;"> </pre>
+    <pre class="grid" style="grid-row: 2;"> <span class="fg-accent">SUMOCODE</span><span class="fg-dim">  ║ </span><span class="fg-accent">•</span><span class="fg-dim"> 019dd3d8 ║</span>                                                                                                                        <span class="fg-dim">ARCHIVE   </span><span class="fg-fg"></span><span class="fg-dim">  </span><span class="fg-fg"></span> </pre>
+    <pre class="grid" style="grid-row: 3;"> </pre>
+    <div class="middle">
+      <div class="chat-col"><pre class="grid"><span class="fg-divider">╭ </span><span class="fg-fg">USER</span> <span class="fg-divider">────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────</span><span class="fg-divider">╮</span>
+<span class="fg-divider">│</span><span class="box-fill" style="width: 126ch"> <span class="fg-fg">show live orchestration activity</span>                                                                                             </span><span class="fg-divider">│</span>
+<span class="fg-divider">╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯</span></pre>
+<pre class="grid"> </pre>
+<pre class="grid"><span class="fg-divider">╭ </span><span class="fg-accent">SUMO</span> <span class="fg-divider">─────────────────────────────────────────────────────────────────────────────────────────────────────────────────</span> <span class="fg-dim">11:42</span> <span class="fg-divider">╮</span>
+<span class="fg-divider">│</span><span class="box-fill" style="width: 126ch"> <span class="fg-fg">Retained activities update in place.</span>                                                                                         </span><span class="fg-divider">│</span>
+<span class="fg-divider">│</span><span class="box-fill" style="width: 126ch">                                                                                                                              </span><span class="fg-divider">│</span>
+<span class="fg-divider">│</span><span class="box-fill" style="width: 126ch"> <span class="fg-tool-border">╭─ </span><span class="fg-tool-label">[subagent]</span><span class="fg-tool-target">  auth · sa-4</span> <span class="fg-tool-border">─────────────────────────────────────────────────────────────────</span> <span class="fg-tool">▶</span><span class="fg-dim"> reviewing session boundaries</span> </span><span class="fg-divider">│</span>
+<span class="fg-divider">│</span><span class="box-fill" style="width: 126ch"> <span class="fg-tool-border">│</span> <span class="fg-tool-body">checking src/auth/session.ts</span>                                                                                               </span><span class="fg-divider">│</span>
+<span class="fg-divider">│</span><span class="box-fill" style="width: 126ch"> <span class="fg-tool-border">│</span> <span class="fg-tool-body">✓ [read] src/auth/session.ts</span>                                                                                               </span><span class="fg-divider">│</span>
+<span class="fg-divider">│</span><span class="box-fill" style="width: 126ch"> <span class="fg-tool-border">╰───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────</span> </span><span class="fg-divider">│</span>
+<span class="fg-divider">│</span><span class="box-fill" style="width: 126ch">                                                                                                                              </span><span class="fg-divider">│</span>
+<span class="fg-divider">│</span><span class="box-fill" style="width: 126ch"> <span class="fg-tool-border">╭─ </span><span class="fg-tool-label">[terminal]</span><span class="fg-tool-target">  auth tests</span> <span class="fg-tool-border">───────────────────────────────────────────────────────────────────────────────</span> <span class="fg-tool">▶</span><span class="fg-dim"> watching stdout</span> </span><span class="fg-divider">│</span>
+<span class="fg-divider">│</span><span class="box-fill" style="width: 126ch"> <span class="fg-tool-border">│</span> <span class="fg-tool-body">> vitest run src/auth</span>                                                                                                      </span><span class="fg-divider">│</span>
+<span class="fg-divider">│</span><span class="box-fill" style="width: 126ch"> <span class="fg-tool-border">│</span> <span class="fg-tool-body">✓ session.test.ts</span>                                                                                                          </span><span class="fg-divider">│</span>
+<span class="fg-divider">│</span><span class="box-fill" style="width: 126ch"> <span class="fg-tool-border">│</span> <span class="fg-tool-body">watching stdout…</span>                                                                                                           </span><span class="fg-divider">│</span>
+<span class="fg-divider">│</span><span class="box-fill" style="width: 126ch"> <span class="fg-tool-border">╰───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────</span> </span><span class="fg-divider">│</span>
+<span class="fg-divider">│</span><span class="box-fill" style="width: 126ch">                                                                                                                              </span><span class="fg-divider">│</span>
+<span class="fg-divider">│</span><span class="box-fill" style="width: 126ch"> <span class="fg-idle">✓</span> <span class="fg-accent">[terminal]</span><span class="fg-fg">  typecheck</span><span class="fg-dim">  · exit 0</span>                                                                                            </span><span class="fg-divider">│</span>
+<span class="fg-divider">│</span><span class="box-fill" style="width: 126ch">                                                                                                                              </span><span class="fg-divider">│</span>
+<span class="fg-divider">│</span><span class="box-fill" style="width: 126ch"> <span class="fg-approve">✗</span> <span class="fg-accent">[terminal]</span><span class="fg-fg">  integration</span><span class="fg-dim">  · failed</span>                                                                                          </span><span class="fg-divider">│</span>
+<span class="fg-divider">│</span><span class="box-fill" style="width: 126ch">                                                                                                                              </span><span class="fg-divider">│</span>
+<span class="fg-divider">│</span><span class="box-fill" style="width: 126ch"> <span class="fg-tool">▶</span> <span class="fg-accent">[subagent]</span><span class="fg-fg">  docs · sa-5</span><span class="fg-dim">  · collapsed</span>                                                                                       </span><span class="fg-divider">│</span>
+<span class="fg-divider">╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯</span></pre></div>
+      <div class="gutter-col"></div>
+      <div class="sidebar-col"><pre class="grid"><span class="box-fill" style="background: var(--surface); width: 30ch">                              </span>
+<span class="box-fill" style="background: var(--surface); width: 30ch">  <span class="fg-accent">REGISTRY</span>                    </span>
+<span class="box-fill" style="background: var(--surface); width: 30ch">                              </span>
+<span class="box-fill" style="background: var(--surface); width: 30ch">  <span class="fg-accent">◆</span> <span class="fg-fg">C O N T E X T</span>             </span>
+<span class="box-fill" style="background: var(--surface); width: 30ch">  <span class="fg-dim">▢ M E M O R Y</span>               </span>
+<span class="box-fill" style="background: var(--surface); width: 30ch">                              </span>
+<span class="box-fill" style="background: var(--surface); width: 30ch">  <span class="fg-divider">━━━━━━━━━━━━━━━━━━━━━━━━━━</span>  </span>
+<span class="box-fill" style="background: var(--surface); width: 30ch">                              </span>
+<span class="box-fill" style="background: var(--surface); width: 30ch">  <span class="fg-fg">sumocode</span>                    </span>
+<span class="box-fill" style="background: var(--surface); width: 30ch">  <span class="fg-dim">on main</span>                     </span>
+<span class="box-fill" style="background: var(--surface); width: 30ch">                              </span>
+<span class="box-fill" style="background: var(--surface); width: 30ch">  <span class="fg-dim">C O N T E X T</span>               </span>
+<span class="box-fill" style="background: var(--surface); width: 30ch">  <span class="fg-idle">▉▉▉▉▉</span><span class="fg-divider">░░░░░░░░░░░░░░░░░</span>      </span>
+<span class="box-fill" style="background: var(--surface); width: 30ch">  <span class="fg-fg">42k</span> <span class="fg-dim">/ 200k</span>                  </span>
+<span class="box-fill" style="background: var(--surface); width: 30ch">                              </span>
+<span class="box-fill" style="background: var(--surface); width: 30ch">  <span class="fg-dim">S E S S I O N</span>               </span>
+<span class="box-fill" style="background: var(--surface); width: 30ch">  <span class="fg-fg">$0.42</span> <span class="fg-dim">· 3.4M cumul</span>          </span>
+<span class="box-fill" style="background: var(--surface); width: 30ch">                              </span>
+<span class="box-fill" style="background: var(--surface); width: 30ch">  <span class="fg-divider">━━━━━━━━━━━━━━━━━━━━━━━━━━</span>  </span>
+<span class="box-fill" style="background: var(--surface); width: 30ch">                              </span>
+<span class="box-fill" style="background: var(--surface); width: 30ch">  <span class="fg-dim">M C P</span>                       </span>
+<span class="box-fill" style="background: var(--surface); width: 30ch">                              </span>
+<span class="box-fill" style="background: var(--surface); width: 30ch">  <span class="fg-dim">●</span> <span class="fg-fg">github</span>              <span class="fg-dim">idle</span>  </span>
+<span class="box-fill" style="background: var(--surface); width: 30ch">  <span class="fg-idle">●</span> <span class="fg-fg">stitch</span>                <span class="fg-dim">ok</span>  </span>
+<span class="box-fill" style="background: var(--surface); width: 30ch">  <span class="fg-dim">●</span> <span class="fg-fg">context7</span>            <span class="fg-dim">idle</span>  </span>
+<span class="box-fill" style="background: var(--surface); width: 30ch">  <span class="fg-dim">●</span> <span class="fg-fg">chrome-dev</span>          <span class="fg-dim">idle</span>  </span>
+<span class="box-fill" style="background: var(--surface); width: 30ch">                              </span>
+<span class="box-fill" style="background: var(--surface); width: 30ch">                              </span>
+<span class="box-fill" style="background: var(--surface); width: 30ch">                              </span>
+<span class="box-fill" style="background: var(--surface); width: 30ch">                              </span>
+<span class="box-fill" style="background: var(--surface); width: 30ch">                              </span>
+<span class="box-fill" style="background: var(--surface); width: 30ch">                              </span>
+<span class="box-fill" style="background: var(--surface); width: 30ch">                              </span>
+<span class="box-fill" style="background: var(--surface); width: 30ch">                              </span>
+<span class="box-fill" style="background: var(--surface); width: 30ch">                              </span>
+<span class="box-fill" style="background: var(--surface); width: 30ch">                              </span></pre></div>
+    </div>
+    <pre class="grid" style="grid-row: 5;"> </pre>
+    <pre class="grid" style="grid-row: 6;"><span class="box-fill" style="background: var(--surface-recess); width: 160ch"><span class="fg-divider">┌──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐</span></span>
+<span class="box-fill" style="background: var(--surface-recess); width: 160ch"><span class="fg-divider">│</span> <span class="fg-accent">&gt;</span> <span class="cursor"> </span>                                                                                                                                                          <span class="fg-divider">│</span></span>
+<span class="box-fill" style="background: var(--surface-recess); width: 160ch"><span class="fg-divider">└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘</span></span></pre>
+    <pre class="grid" style="grid-row: 7;">                                                                                                                                              <span class="fg-accent">CTRL+/</span><span class="fg-dim"> · COMMANDS</span> </pre>
+    <pre class="grid" style="grid-row: 8;"> </pre>
+    <pre class="grid" style="grid-row: 9;"> <span class="fg-idle">●</span> <span class="fg-fg">READY</span><span class="fg-dim"> · </span><span class="fg-fg">claude-opus-4-7</span><span class="fg-dim"> · </span><span class="fg-fg">xhigh</span>                                                                                                             <span class="fg-fg">42k/200k</span><span class="fg-dim"> · </span><span class="fg-fg">$0.42</span> </pre>
+    <pre class="grid" style="grid-row: 10;"> </pre>
+  </div>
+</div>
+</body>
+</html>

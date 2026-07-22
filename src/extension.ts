@@ -23,6 +23,7 @@ import { installWorkingIndicator } from "./working-indicator.js";
 import { installCompactionIndicator } from "./compaction-indicator.js";
 import { installFastMode } from "./fast-mode.js";
 import { installBackgroundTasks, installTerminalTools } from "./background-tasks/index.js";
+import { installActivityManagerBridge } from "./activity/manager-bridge.js";
 import { installSubagents } from "./subagents/index.js";
 import { installTaskModeAutoExit } from "./task-mode.js";
 import { logDiagnostic } from "./sumo-tui/runtime/diagnostics.js";
@@ -191,7 +192,8 @@ function installOrchestrationTools(pi: ExtensionAPI) {
 	const terminalTaskManager = installBackgroundTasks(pi);
 	installTerminalTools(pi, terminalTaskManager);
 	const subagentManager = installSubagents(pi);
-	return { terminalTaskManager, subagentManager };
+	const activityBridge = installActivityManagerBridge(pi, terminalTaskManager, subagentManager);
+	return { terminalTaskManager, subagentManager, activityBridge };
 }
 
 function installRpcChildProfile(pi: ExtensionAPI): void {

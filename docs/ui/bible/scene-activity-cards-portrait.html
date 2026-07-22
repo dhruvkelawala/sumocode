@@ -14,38 +14,36 @@
 </head>
 <body>
 <div class="stage">
-  <div class="stage-label">scene · active state · 60×100 portrait (sidebar hidden)</div>
-  <div class="stage-blurb">portrait variant. sidebar hidden (per Element 1 rule: < 120 col). chat takes full term width. footer collapses right zone (drops project + branch + $cost; keeps tokens). hint row: keybinds only (left flavour dropped at narrow widths).</div>
+  <div class="stage-label">scene · durable activity cards</div>
+  <div class="stage-blurb">Durable keyed Activity cards: running subagent, running terminal, completed terminal, failure, and explicit collapsed/expanded states.</div>
   <div data-render-rect class="term scene" style="--term-cols: 60; --term-rows: 100;">
     <pre class="grid" style="grid-row: 1;"> </pre>
     <pre class="grid" style="grid-row: 2;"> <span class="fg-accent">SUMOCODE</span><span class="fg-dim">  ║ </span><span class="fg-accent">•</span><span class="fg-dim"> 019dd3d8 ║</span>                              <span class="fg-fg"></span><span class="fg-dim">  </span><span class="fg-fg"></span> </pre>
     <pre class="grid" style="grid-row: 3;"> </pre>
     <div class="middle">
       <div class="chat-col"><pre class="grid"><span class="fg-divider">╭ </span><span class="fg-fg">USER</span> <span class="fg-divider">───────────────────────────────────────────────────</span><span class="fg-divider">╮</span>
-<span class="fg-divider">│</span><span class="box-fill" style="width: 57ch"> <span class="fg-fg">hello, refactor the auth flow to use the new session</span>    </span><span class="fg-divider">│</span>
-<span class="fg-divider">│</span><span class="box-fill" style="width: 57ch"> <span class="fg-fg">pattern.</span>                                                </span><span class="fg-divider">│</span>
+<span class="fg-divider">│</span><span class="box-fill" style="width: 57ch"> <span class="fg-fg">show live orchestration activity</span>                        </span><span class="fg-divider">│</span>
 <span class="fg-divider">╰─────────────────────────────────────────────────────────╯</span></pre>
 <pre class="grid"> </pre>
 <pre class="grid"><span class="fg-divider">╭ </span><span class="fg-accent">SUMO</span> <span class="fg-divider">────────────────────────────────────────────</span> <span class="fg-dim">11:42</span> <span class="fg-divider">╮</span>
-<span class="fg-divider">│</span><span class="box-fill" style="width: 57ch"> <span class="fg-fg">Reading the auth flow.</span>                                  </span><span class="fg-divider">│</span>
+<span class="fg-divider">│</span><span class="box-fill" style="width: 57ch"> <span class="fg-fg">Retained activities update in place.</span>                    </span><span class="fg-divider">│</span>
 <span class="fg-divider">│</span><span class="box-fill" style="width: 57ch">                                                         </span><span class="fg-divider">│</span>
-<span class="fg-divider">│</span><span class="box-fill" style="width: 57ch"> <span class="fg-idle">✓</span> <span class="fg-accent">[read]</span><span class="fg-fg">  src/auth/session.ts</span>                           </span><span class="fg-divider">│</span>
+<span class="fg-divider">│</span><span class="box-fill" style="width: 57ch"> <span class="fg-tool-border">╭─ </span><span class="fg-tool-label">[subagent]</span><span class="fg-tool-target">  auth · sa-4</span> <span class="fg-tool-border">─</span> <span class="fg-tool">▶</span><span class="fg-dim"> reviewing session boundaries</span> </span><span class="fg-divider">│</span>
+<span class="fg-divider">│</span><span class="box-fill" style="width: 57ch"> <span class="fg-tool-border">│</span> <span class="fg-tool-body">checking src/auth/session.ts</span>                          </span><span class="fg-divider">│</span>
+<span class="fg-divider">│</span><span class="box-fill" style="width: 57ch"> <span class="fg-tool-border">│</span> <span class="fg-tool-body">✓ [read] src/auth/session.ts</span>                          </span><span class="fg-divider">│</span>
+<span class="fg-divider">│</span><span class="box-fill" style="width: 57ch"> <span class="fg-tool-border">╰──────────────────────────────────────────────────────</span> </span><span class="fg-divider">│</span>
 <span class="fg-divider">│</span><span class="box-fill" style="width: 57ch">                                                         </span><span class="fg-divider">│</span>
-<span class="fg-divider">│</span><span class="box-fill" style="width: 57ch"> <span class="fg-idle">✓</span> <span class="fg-accent">[edit]</span><span class="fg-fg">  src/auth/session.ts</span>                           </span><span class="fg-divider">│</span>
+<span class="fg-divider">│</span><span class="box-fill" style="width: 57ch"> <span class="fg-tool-border">╭─ </span><span class="fg-tool-label">[terminal]</span><span class="fg-tool-target">  auth tests</span> <span class="fg-tool-border">──────────</span> <span class="fg-tool">▶</span><span class="fg-dim"> watching stdout</span> </span><span class="fg-divider">│</span>
+<span class="fg-divider">│</span><span class="box-fill" style="width: 57ch"> <span class="fg-tool-border">│</span> <span class="fg-tool-body">> vitest run src/auth</span>                                 </span><span class="fg-divider">│</span>
+<span class="fg-divider">│</span><span class="box-fill" style="width: 57ch"> <span class="fg-tool-border">│</span> <span class="fg-tool-body">✓ session.test.ts</span>                                     </span><span class="fg-divider">│</span>
+<span class="fg-divider">│</span><span class="box-fill" style="width: 57ch"> <span class="fg-tool-border">│</span> <span class="fg-tool-body">watching stdout…</span>                                      </span><span class="fg-divider">│</span>
+<span class="fg-divider">│</span><span class="box-fill" style="width: 57ch"> <span class="fg-tool-border">╰──────────────────────────────────────────────────────</span> </span><span class="fg-divider">│</span>
 <span class="fg-divider">│</span><span class="box-fill" style="width: 57ch">                                                         </span><span class="fg-divider">│</span>
-<span class="fg-divider">│</span><span class="box-fill" style="width: 57ch"> <span class="fg-fg">Done. Updated 14 lines, deleted 6 stale helpers.</span>        </span><span class="fg-divider">│</span>
-<span class="fg-divider">╰─────────────────────────────────────────────────────────╯</span></pre>
-<pre class="grid"> </pre>
-<pre class="grid"><span class="fg-divider">╭ </span><span class="fg-fg">USER</span> <span class="fg-divider">───────────────────────────────────────────────────</span><span class="fg-divider">╮</span>
-<span class="fg-divider">│</span><span class="box-fill" style="width: 57ch"> <span class="fg-fg">run tests</span>                                               </span><span class="fg-divider">│</span>
-<span class="fg-divider">╰─────────────────────────────────────────────────────────╯</span></pre>
-<pre class="grid"> </pre>
-<pre class="grid"><span class="fg-divider">╭ </span><span class="fg-accent">SUMO</span> <span class="fg-divider">────────────────────────────────────────────</span> <span class="fg-dim">11:43</span> <span class="fg-divider">╮</span>
-<span class="fg-divider">│</span><span class="box-fill" style="width: 57ch"> <span class="fg-fg">Running tests now.</span>                                      </span><span class="fg-divider">│</span>
+<span class="fg-divider">│</span><span class="box-fill" style="width: 57ch"> <span class="fg-idle">✓</span> <span class="fg-accent">[terminal]</span><span class="fg-fg">  typecheck</span><span class="fg-dim">  · exit 0</span>                       </span><span class="fg-divider">│</span>
 <span class="fg-divider">│</span><span class="box-fill" style="width: 57ch">                                                         </span><span class="fg-divider">│</span>
-<span class="fg-divider">│</span><span class="box-fill" style="width: 57ch"> <span class="fg-idle">✓</span> <span class="fg-accent">[bash]</span><span class="fg-fg">  pnpm test src/auth</span><span class="fg-dim">  · 22 tests, 1.2s</span>          </span><span class="fg-divider">│</span>
+<span class="fg-divider">│</span><span class="box-fill" style="width: 57ch"> <span class="fg-approve">✗</span> <span class="fg-accent">[terminal]</span><span class="fg-fg">  integration</span><span class="fg-dim">  · failed</span>                     </span><span class="fg-divider">│</span>
 <span class="fg-divider">│</span><span class="box-fill" style="width: 57ch">                                                         </span><span class="fg-divider">│</span>
-<span class="fg-divider">│</span><span class="box-fill" style="width: 57ch"> <span class="fg-fg">All 22 tests pass.</span>                                      </span><span class="fg-divider">│</span>
+<span class="fg-divider">│</span><span class="box-fill" style="width: 57ch"> <span class="fg-tool">▶</span> <span class="fg-accent">[subagent]</span><span class="fg-fg">  docs · sa-5</span><span class="fg-dim">  · collapsed</span>                  </span><span class="fg-divider">│</span>
 <span class="fg-divider">╰─────────────────────────────────────────────────────────╯</span></pre></div>
       <div class="gutter-col"></div>
 

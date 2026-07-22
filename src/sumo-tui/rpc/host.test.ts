@@ -10,6 +10,7 @@ import { RpcHostOverlayManager } from "./host-overlays.js";
 import { RpcHostControls, type RpcAvailableModel } from "./controls.js";
 import { RpcHostStateStore } from "./state.js";
 import {
+	activitySnapshotMatchesSession,
 	createLazyChatSink,
 	createModelCycleBackwardHandler,
 	createModelCycleForwardHandler,
@@ -96,6 +97,15 @@ function interruptDeps(overrides: Partial<RpcHostInterruptDependencies> = {}): R
 
 const CTRL_C = "";
 const ESCAPE = "";
+
+describe("ActivityStore session ownership", () => {
+	it("accepts only snapshots owned by the authoritative get_state session", () => {
+		const snapshot = { ownerSessionId: "session-a", revision: 1, activities: [], expansion: {} } as const;
+		expect(activitySnapshotMatchesSession(snapshot, "session-a")).toBe(true);
+		expect(activitySnapshotMatchesSession(snapshot, "session-b")).toBe(false);
+		expect(activitySnapshotMatchesSession(snapshot, undefined)).toBe(false);
+	});
+});
 
 describe("handleRpcMessageFollowUp", () => {
 	function followUpEditor(text: string) {

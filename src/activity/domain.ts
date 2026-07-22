@@ -153,12 +153,14 @@ export function parseActivitySnapshot(value: unknown, depth = 0): ActivitySnapsh
 	if (record.metrics !== undefined) {
 		const metricRecord = recordOf(record.metrics);
 		if (!metricRecord) return undefined;
-		for (const candidate of [metricRecord.tokensIn, metricRecord.tokensOut, metricRecord.costUsd, metricRecord.turns, metricRecord.elapsedMs]) {
+		for (const candidate of [metricRecord.tokens, metricRecord.tokensIn, metricRecord.tokensOut, metricRecord.contextWindow, metricRecord.costUsd, metricRecord.turns, metricRecord.elapsedMs]) {
 			if (!optionalFiniteNumber(candidate)) return undefined;
 		}
 		metrics = {
+			...(typeof metricRecord.tokens === "number" ? { tokens: metricRecord.tokens } : {}),
 			...(typeof metricRecord.tokensIn === "number" ? { tokensIn: metricRecord.tokensIn } : {}),
 			...(typeof metricRecord.tokensOut === "number" ? { tokensOut: metricRecord.tokensOut } : {}),
+			...(typeof metricRecord.contextWindow === "number" ? { contextWindow: metricRecord.contextWindow } : {}),
 			...(typeof metricRecord.costUsd === "number" ? { costUsd: metricRecord.costUsd } : {}),
 			...(typeof metricRecord.turns === "number" ? { turns: metricRecord.turns } : {}),
 			...(typeof metricRecord.elapsedMs === "number" ? { elapsedMs: metricRecord.elapsedMs } : {}),
@@ -378,7 +380,21 @@ function isToolCanonicalTransition(existing: ActivitySnapshot, incoming: Activit
 }
 
 export function sameActivity(existing: ActivitySnapshot, incoming: ActivitySnapshot): boolean {
-	if (existing.id === incoming.id) return true;
+	if (existing.id === incoming.id) {
+		if (existing.kind === "subagent" && incoming.kind === "subagent") {
+			if (existing.sourceId !== undefined || incoming.sourceId !== undefined) {
+				return existing.sourceId !== undefined && existing.sourceId === incoming.sourceId;
+			}
+			if (existing.createdAt !== undefined && incoming.createdAt !== undefined) {
+				return existing.createdAt === incoming.createdAt;
+			}
+		}
+		return true;
+	}
+	if (
+		existing.kind === "subagent" && incoming.kind === "subagent" &&
+		existing.sourceId !== undefined && existing.sourceId === incoming.sourceId
+	) return true;
 	if (!isToolCanonicalTransition(existing, incoming)) return false;
 	return existing.sourceId === incoming.id
 		|| incoming.sourceId === existing.id

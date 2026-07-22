@@ -498,6 +498,342 @@ describe("ChatPager", () => {
 		root.dispose();
 	});
 
+	it("reconciles feed updates in place while preserving node, scroll, unread, and expansion state", async () => {
+		const { root, chat, buffer } = await makeChat(60, 6);
+		for (let index = 0; index < 8; index += 1) chat.addMessage("sumo", `history ${index}`);
+		chat.reconcileFeedActivities([{
+			id: "term-live",
+			kind: "terminal",
+			title: "tests",
+			status: "running",
+			createdAt: 10,
+			outputTail: "starting",
+			body: { kind: "terminal", command: "pnpm test", text: "starting" },
+		}]);
+		const node = chat.getLastMessage();
+		chat.setActivityExpansion("term-live", false);
+		buffer();
+		chat.scrollBox.scrollToBottom();
+		chat.handleKey({ key: "PageUp" });
+		chat.addMessage("sumo", "unread");
+		const before = { offset: chat.scrollBox.scrollOffset, unread: chat.getUnreadCount(), read: chat.getLastReadIndex() };
+
+		chat.reconcileFeedActivities([{
+			id: "term-live",
+			kind: "terminal",
+			title: "tests",
+			status: "succeeded",
+			createdAt: 10,
+			settledAt: 20,
+			outputTail: "all passed",
+			body: { kind: "terminal", command: "pnpm test", text: "all passed" },
+		}]);
+
+		expect(chat.getRenderedMessages().find((message) => message.toSnapshot().blocks?.some((block) => block.type === "activity" && block.activity.id === "term-live"))).toBe(node);
+		expect(chat.getActivityExpansion("term-live")).toBe(false);
+		expect(chat.scrollBox.scrollOffset).toBe(before.offset);
+		expect(chat.getUnreadCount()).toBe(before.unread);
+		expect(chat.getLastReadIndex()).toBe(before.read);
+		expect(node?.toSnapshot().blocks?.[0]).toMatchObject({ type: "activity", activity: { status: "succeeded", outputTail: "all passed" } });
+		root.dispose();
+	});
+
+	it("lets a transcript completion claim the same feed card and survive feed expiry", async () => {
+		const { root, chat } = await makeChat(90, 10);
+		const running = { id: "term-claim", kind: "terminal" as const, title: "build", status: "running" as const, createdAt: 10 };
+		chat.reconcileFeedActivities([running]);
+		const node = chat.getRenderedMessages()[0];
+
+		chat.addViewModel({
+			id: "terminal-result",
+			role: "system",
+			displayName: "SYSTEM",
+			blocks: [{ type: "activity", activity: { ...running, status: "succeeded", settledAt: 20, result: { summary: "done" } } }],
+		}, 4);
+
+		expect(chat.getRenderedMessages()).toHaveLength(1);
+		expect(chat.getRenderedMessages()[0]).toBe(node);
+		expect(node?.toSnapshot().blocks?.[0]).toMatchObject({ type: "activity", activity: { id: "term-claim", status: "succeeded" } });
+		chat.reconcileFeedActivities([]);
+		expect(chat.getRenderedMessages()).toHaveLength(1);
+		expect(chat.getRenderedMessages()[0]).toBe(node);
+		root.dispose();
+	});
+
+	it("removes unread bookkeeping when an unread feed-only card expires", async () => {
+		const { root, chat, buffer } = await makeChat(48, 5);
+		for (let index = 0; index < 10; index += 1) chat.addMessage("sumo", `history ${index}`);
+		buffer();
+		chat.scrollBox.scrollToBottom();
+		chat.handleKey({ key: "PageUp" });
+		const lastRead = chat.getLastReadIndex();
+		chat.reconcileFeedActivities([{ id: "term-unread", kind: "terminal", title: "unread", status: "running" }]);
+		expect(chat.getUnreadCount()).toBe(1);
+
+		chat.reconcileFeedActivities([]);
+		expect(chat.getUnreadCount()).toBe(0);
+		expect(chat.getLastReadIndex()).toBe(lastRead);
+		root.dispose();
+	});
+
+	it("claims every matching feed card from a batched completion without duplicating Activities", async () => {
+		const { root, chat } = await makeChat(90, 12);
+		const first = { id: "subagent:sa-1", kind: "subagent" as const, title: "first", status: "running" as const };
+		const second = { id: "subagent:sa-2", kind: "subagent" as const, title: "second", status: "running" as const };
+		chat.reconcileFeedActivities([first, second]);
+
+		chat.addViewModel({
+			id: "wait-result",
+			role: "system",
+			displayName: "SYSTEM",
+			blocks: [
+				{ type: "activity", activity: { id: "wait-1", kind: "task", title: "wait", status: "succeeded" } },
+				{ type: "activity", activity: { ...first, status: "succeeded", result: { summary: "first done" } } },
+				{ type: "activity", activity: { ...second, status: "succeeded", result: { summary: "second done" } } },
+			],
+		}, 4);
+
+		const activityIds = () => chat.getRenderedMessages().flatMap((message) => message.toSnapshot().blocks ?? [])
+			.filter((block) => block.type === "activity")
+			.map((block) => block.activity.id);
+		expect(activityIds().filter((id) => id === first.id)).toHaveLength(1);
+		expect(activityIds().filter((id) => id === second.id)).toHaveLength(1);
+		expect(activityIds().filter((id) => id === "wait-1")).toHaveLength(1);
+
+		chat.reconcileFeedActivities([]);
+		expect(activityIds()).toEqual(expect.arrayContaining([first.id, second.id, "wait-1"]));
+		root.dispose();
+	});
+
+	it("keeps a claimed transcript subagent ID canonical across suffixed feed updates", async () => {
+		const { root, chat } = await makeChat(90, 10);
+		const feed = { id: "subagent:sa-1:durable", sourceId: "spawn-1", kind: "subagent" as const, title: "worker", status: "running" as const };
+		chat.reconcileFeedActivities([feed]);
+		chat.addViewModel({
+			id: "subagent-completion",
+			role: "system",
+			displayName: "SYSTEM",
+			blocks: [{ type: "activity", activity: { ...feed, id: "subagent:sa-1", outputTail: "transcript" } }],
+		}, 2);
+		chat.setActivityExpansion("subagent:sa-1", false);
+
+		chat.reconcileFeedActivities([{ ...feed, outputTail: "feed update" }]);
+		const block = chat.getRenderedMessages()[0]?.toSnapshot().blocks?.find((candidate) => candidate.type === "activity");
+		expect(block).toMatchObject({ type: "activity", activity: { id: "subagent:sa-1", outputTail: "feed update" } });
+		expect(chat.getActivityExpansion("subagent:sa-1")).toBe(false);
+		chat.reconcileFeedActivities([]);
+		expect(chat.getRenderedMessages()).toHaveLength(1);
+		root.dispose();
+	});
+
+	it("removes an expired feed-only card but exempts only live feed cards from transcript virtualization", async () => {
+		const yoga = await loadYoga();
+		const root = new SumoNode(yoga.Node.create());
+		const chat = ChatPager.create(yoga, root, { maxRenderedMessages: 2 });
+		chat.addMessage("sumo", "one");
+		chat.addMessage("sumo", "two");
+		chat.reconcileFeedActivities([{ id: "term-live", kind: "terminal", title: "live", status: "running", createdAt: 10 }]);
+		expect(chat.getRenderedMessages()).toHaveLength(3);
+		expect(chat.getRenderedMessages().map((message) => message.text)).toEqual(expect.arrayContaining(["one", "two"]));
+
+		chat.reconcileFeedActivities([{ id: "term-live", kind: "terminal", title: "live", status: "succeeded", createdAt: 10, settledAt: 20 }]);
+		expect(chat.getRenderedMessages()).toHaveLength(2);
+		expect(chat.getArchivedMessageCount()).toBe(1);
+		chat.reconcileFeedActivities([]);
+		expect(chat.getRenderedMessages().some((message) => message.toSnapshot().blocks?.some((block) => block.type === "activity" && block.activity.id === "term-live"))).toBe(false);
+		root.dispose();
+	});
+
+	it("claims a virtualized feed-only card without double-counting its transcript completion", async () => {
+		const yoga = await loadYoga();
+		const root = new SumoNode(yoga.Node.create());
+		const chat = ChatPager.create(yoga, root, { maxRenderedMessages: 1 });
+		const first = { id: "term-virtual-first", kind: "terminal" as const, title: "first", status: "succeeded" as const, settledAt: 10 };
+		const second = { id: "term-virtual-second", kind: "terminal" as const, title: "second", status: "succeeded" as const, settledAt: 20 };
+		chat.reconcileFeedActivities([first, second]);
+		expect(chat.getArchivedMessageCount()).toBe(1);
+
+		chat.addViewModel({
+			id: "first-completion",
+			role: "system",
+			displayName: "SYSTEM",
+			blocks: [{ type: "activity", activity: first }],
+		}, 0);
+		expect(chat.getArchivedMessageCount()).toBe(1);
+		expect(chat.getRenderedMessages()).toHaveLength(1);
+		expect(chat.getRenderedMessages()[0]?.text).toContain("first");
+		chat.reconcileFeedActivities([]);
+		expect(chat.getArchivedMessageCount()).toBe(0);
+		expect(chat.getRenderedMessages()).toHaveLength(1);
+		root.dispose();
+	});
+
+	it("uses a claimed transcript settlement for virtualization before the feed catches up", async () => {
+		const yoga = await loadYoga();
+		const root = new SumoNode(yoga.Node.create());
+		const chat = ChatPager.create(yoga, root, { maxRenderedMessages: 1 });
+		const live = { id: "term-archived-live", kind: "terminal" as const, title: "archived live", status: "running" as const };
+		chat.reconcileFeedActivities([live]);
+		chat.replaceViewModels([
+			{ id: "completion", role: "system", displayName: "SYSTEM", blocks: [{ type: "activity", activity: { ...live, status: "succeeded" } }] },
+			{ id: "latest", role: "sumo", displayName: "SUMO", blocks: [{ type: "markdown", text: "latest answer" }] },
+		]);
+		expect(chat.getArchivedMessageCount()).toBe(1);
+		expect(chat.getRenderedMessages()).toHaveLength(1);
+
+		chat.reconcileFeedActivities([{ ...live, status: "succeeded", settledAt: 20 }]);
+		expect(chat.getArchivedMessageCount()).toBe(1);
+		expect(chat.getRenderedMessages()).toHaveLength(1);
+		expect(chat.getRenderedMessages()[0]?.text).toContain("latest answer");
+		root.dispose();
+	});
+
+	it("does not append a settled feed card whose transcript completion is outside the rendered window", async () => {
+		const yoga = await loadYoga();
+		const root = new SumoNode(yoga.Node.create());
+		const chat = ChatPager.create(yoga, root, { maxRenderedMessages: 1 });
+		const settled = { id: "term-archived", kind: "terminal" as const, title: "archived build", status: "succeeded" as const, settledAt: 20 };
+		chat.reconcileFeedActivities([settled]);
+
+		chat.replaceViewModels([
+			{ id: "completion", role: "system", displayName: "SYSTEM", blocks: [{ type: "activity", activity: settled }] },
+			{ id: "latest", role: "sumo", displayName: "SUMO", blocks: [{ type: "markdown", text: "latest answer" }] },
+		]);
+
+		expect(chat.getArchivedMessageCount()).toBe(1);
+		expect(chat.getRenderedMessages()).toHaveLength(1);
+		expect(chat.getRenderedMessages()[0]?.text).toContain("latest answer");
+		expect(chat.getRenderedMessages()[0]?.text).not.toContain("archived build");
+		root.dispose();
+	});
+
+	it("keeps changed transcript-claimed feed cards virtualized until transcript hydration", async () => {
+		const yoga = await loadYoga();
+		const root = new SumoNode(yoga.Node.create());
+		const chat = ChatPager.create(yoga, root, { maxRenderedMessages: 1 });
+		const running = { id: "term-virtual-claim", kind: "terminal" as const, title: "build", status: "running" as const, outputTail: "starting" };
+		chat.reconcileFeedActivities([running]);
+		chat.addViewModel({
+			id: "term-completion",
+			role: "system",
+			displayName: "SYSTEM",
+			blocks: [{ type: "activity", activity: { ...running, status: "succeeded", result: { summary: "done" } } }],
+		}, 0);
+		const settled = { ...running, status: "succeeded" as const, settledAt: 20, outputTail: "done" };
+		chat.reconcileFeedActivities([settled]);
+		chat.addMessage("sumo", "later transcript message");
+		expect(chat.getArchivedMessageCount()).toBe(1);
+		expect(chat.getRenderedMessages().some((message) => message.text.includes("build"))).toBe(false);
+
+		chat.reconcileFeedActivities([{ ...settled, outputTail: "late settled update" }]);
+		expect(chat.getArchivedMessageCount()).toBe(1);
+		expect(chat.getRenderedMessages().some((message) => message.text.includes("late settled update"))).toBe(false);
+		chat.reconcileFeedActivities([]);
+		expect(chat.getArchivedMessageCount()).toBe(1);
+		root.dispose();
+	});
+
+	it("transfers feed ownership and expansion across a canonical Activity ID migration", async () => {
+		const onActivityExpansionChange = vi.fn();
+		const onActivityExpansionMigration = vi.fn();
+		const yoga = await loadYoga();
+		const root = new SumoNode(yoga.Node.create());
+		const chat = ChatPager.create(yoga, root, { onActivityExpansionChange, onActivityExpansionMigration });
+		chat.reconcileFeedActivities([{
+			id: "tool-call-1",
+			kind: "tool",
+			title: "terminal",
+			status: "running",
+			sourceId: "terminal-1",
+		}]);
+		const node = chat.getRenderedMessages()[0];
+		chat.setActivityExpansion("tool-call-1", false);
+		onActivityExpansionChange.mockClear();
+
+		chat.reconcileFeedActivities([{
+			id: "terminal-1",
+			kind: "terminal",
+			title: "terminal",
+			status: "succeeded",
+			sourceId: "tool-call-1",
+			settledAt: 20,
+		}]);
+		expect(chat.getRenderedMessages()).toEqual([node]);
+		expect(chat.getActivityExpansion("terminal-1")).toBe(false);
+		expect(onActivityExpansionChange).not.toHaveBeenCalled();
+		expect(onActivityExpansionMigration).toHaveBeenCalledWith("tool-call-1", "terminal-1", false);
+
+		chat.reconcileFeedActivities([]);
+		expect(chat.getRenderedMessages()).toHaveLength(0);
+		expect(chat.hasMessages()).toBe(false);
+		root.dispose();
+	});
+
+	it("removes virtual archive bookkeeping when a feed-only card expires", async () => {
+		const yoga = await loadYoga();
+		const root = new SumoNode(yoga.Node.create());
+		const chat = ChatPager.create(yoga, root, { maxRenderedMessages: 1 });
+		const first = { id: "term-first", kind: "terminal" as const, title: "first", status: "succeeded" as const, createdAt: 10, settledAt: 20 };
+		const second = { id: "term-second", kind: "terminal" as const, title: "second", status: "succeeded" as const, createdAt: 30, settledAt: 40 };
+
+		chat.reconcileFeedActivities([first, second]);
+		expect(chat.getArchivedMessageCount()).toBe(1);
+		expect(chat.getRenderedMessages()).toHaveLength(1);
+
+		chat.reconcileFeedActivities([{ ...first, outputTail: "updated while archived" }, second]);
+		expect(chat.getArchivedMessageCount()).toBe(1);
+		expect(chat.getRenderedMessages()[0]?.text).toContain("second");
+		expect(chat.getRenderedMessages()[0]?.text).not.toContain("updated while archived");
+
+		chat.reconcileFeedActivities([second]);
+		expect(chat.getArchivedMessageCount()).toBe(0);
+		expect(chat.getRenderedMessages()).toHaveLength(1);
+		expect(chat.hasMessages()).toBe(true);
+		root.dispose();
+	});
+
+	it("does not apply a stale canonical subagent override to a new source generation", async () => {
+		const onActivityExpansionChange = vi.fn();
+		const yoga = await loadYoga();
+		const root = new SumoNode(yoga.Node.create());
+		const chat = ChatPager.create(yoga, root, { onActivityExpansionChange });
+		chat.applyActivityExpansionSnapshot({ "subagent:sa-1": false });
+		chat.reconcileFeedActivities([{
+			id: "subagent:sa-1",
+			sourceId: "new-spawn-call",
+			kind: "subagent",
+			title: "new worker",
+			status: "running",
+		}]);
+		expect(chat.getActivityExpansion("subagent:sa-1")).toBe(true);
+		chat.setActivityExpansion("subagent:sa-1", false);
+		expect(onActivityExpansionChange).toHaveBeenCalledWith(expect.stringMatching(/^subagent:sa-1#[0-9a-f]{12}$/), false);
+		root.dispose();
+	});
+
+	it("persists individual/global expansion through callbacks without producer writes during hydration", async () => {
+		const onActivityExpansionChange = vi.fn();
+		const onAllActivityExpansionChange = vi.fn();
+		const yoga = await loadYoga();
+		const root = new SumoNode(yoga.Node.create());
+		const chat = ChatPager.create(yoga, root, { onActivityExpansionChange, onAllActivityExpansionChange });
+		chat.applyActivityExpansionSnapshot({ "term-a": false }, true);
+		chat.reconcileFeedActivities([
+			{ id: "term-a", kind: "terminal", title: "a", status: "running" },
+			{ id: "term-b", kind: "terminal", title: "b", status: "running" },
+		]);
+		expect(chat.getActivityExpansion("term-a")).toBe(false);
+		expect(chat.getActivityExpansion("term-b")).toBe(true);
+		expect(onActivityExpansionChange).not.toHaveBeenCalled();
+		expect(onAllActivityExpansionChange).not.toHaveBeenCalled();
+
+		chat.setActivityExpansion("term-a", true);
+		expect(onActivityExpansionChange).toHaveBeenCalledWith("term-a", true);
+		chat.setToolExpansion(false);
+		expect(onAllActivityExpansionChange).toHaveBeenCalledWith(false, expect.arrayContaining(["term-a", "term-b"]));
+		root.dispose();
+	});
+
 	it("replacing the last view model adopts its timestamp in the existing rendered message", async () => {
 		const { root, chat, buffer } = await makeChat(44, 6);
 		const originalTimestamp = new Date("2026-04-30T11:42:00.000");

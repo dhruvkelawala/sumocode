@@ -93,12 +93,18 @@ export interface RpcHostActionsOptions {
 	 * Called after a session operation (new/switch/clone/fork) succeeds, so the
 	 * host can refetch `get_messages` from the child and push a fresh transcript
 	 * into the runtime. Without this the old session's messages stay on screen
-	 * ("ghost transcript") after switching sessions. Not called when the
-	 * operation is cancelled or throws.
+	 * ("ghost transcript") after switching sessions. Cancellation also uses the
+	 * authoritative refresh because child events were suppressed while pending.
 	 */
 	readonly rehydrateTranscript?: () => Promise<void>;
+	/** Enter fail-closed rendering immediately before a session-changing RPC. */
+	readonly beforeSessionChange?: () => void;
+	/** Restore the previous presentation only when a cancelled-operation refresh fails before rebinding. */
+	readonly cancelSessionChange?: () => void;
 	/** Shared successful new/switch/clone/fork seam. Defaults to refresh + transcript rehydrate. */
 	readonly afterSessionChange?: () => Promise<void>;
+	/** Reconcile events suppressed while an explicitly cancelled operation was pending. */
+	readonly afterCancelledSessionChange?: () => Promise<void>;
 	/**
 	 * Persists the chosen theme name to ~/.pi/agent/sumocode.json so the next
 	 * boot's applyStartupTheme resolves it. Injectable so tests never write
@@ -511,7 +517,10 @@ export class RpcHostActions {
 	private readonly onRenderRequest: () => void;
 	private readonly onExitRequest: (code: number) => void;
 	private readonly rehydrateTranscript: () => Promise<void>;
+	private readonly beforeSessionChange: () => void;
+	private readonly cancelSessionChange: () => void;
 	private readonly afterSessionChange: () => Promise<void>;
+	private readonly afterCancelledSessionChange: () => Promise<void>;
 	private readonly writeClipboardSequence: (sequence: string) => boolean;
 	private readonly changelogRoot: string;
 	private readonly persistTheme: (name: string) => { success: boolean; error?: string };
@@ -529,10 +538,13 @@ export class RpcHostActions {
 		this.onRenderRequest = options.onRenderRequest ?? (() => undefined);
 		this.onExitRequest = options.onExitRequest ?? (() => undefined);
 		this.rehydrateTranscript = options.rehydrateTranscript ?? (() => Promise.resolve());
+		this.beforeSessionChange = options.beforeSessionChange ?? (() => undefined);
+		this.cancelSessionChange = options.cancelSessionChange ?? (() => undefined);
 		this.afterSessionChange = options.afterSessionChange ?? (async () => {
 			await this.controls.refreshState();
 			await this.rehydrateTranscript();
 		});
+		this.afterCancelledSessionChange = options.afterCancelledSessionChange ?? this.afterSessionChange;
 		this.writeClipboardSequence = options.writeClipboardSequence ?? (() => false);
 		this.changelogRoot = options.changelogRoot ?? process.cwd();
 		this.persistTheme = options.persistTheme ?? ((name) => saveSumoCodeConfigPatch({ themeName: name }));
@@ -758,12 +770,11 @@ export class RpcHostActions {
 		if (!selected) return;
 		const message = messages.find((candidate) => candidate.entryId === selected);
 		if (!message) return;
-		const result = await this.controls.fork(message.entryId);
-		if (!result.cancelled) {
-			if (result.text) this.editorText?.setText(result.text);
-			await this.afterSessionChange();
-		}
-		this.onStateChange();
+		const result = await this.applySessionChange(
+			() => this.controls.fork(message.entryId),
+			(current) => { if (current.text) this.editorText?.setText(current.text); },
+		);
+		if (!result.cancelled) this.onStateChange();
 	}
 
 	/**
@@ -799,11 +810,8 @@ export class RpcHostActions {
 		if (!selected) return;
 		const session = sessions.find((candidate) => candidate.path === selected);
 		if (!session) return;
-		const result = await this.controls.switchSession(session.path);
-		if (!result.cancelled) {
-			await this.afterSessionChange();
-			this.onStateChange();
-		}
+		const result = await this.applySessionChange(() => this.controls.switchSession(session.path));
+		if (!result.cancelled) this.onStateChange();
 	}
 
 	/**
@@ -856,12 +864,11 @@ export class RpcHostActions {
 		if (!selected) return;
 		const row = rows.find((candidate) => candidate.node.entry.id === selected);
 		if (!row) return;
-		const result = await this.controls.fork(row.node.entry.id);
-		if (!result.cancelled) {
-			if (result.text) this.editorText?.setText(result.text);
-			await this.afterSessionChange();
-		}
-		this.onStateChange();
+		const result = await this.applySessionChange(
+			() => this.controls.fork(row.node.entry.id),
+			(current) => { if (current.text) this.editorText?.setText(current.text); },
+		);
+		if (!result.cancelled) this.onStateChange();
 	}
 
 	public async openThemeCheck(): Promise<void> {
@@ -1045,10 +1052,45 @@ export class RpcHostActions {
 		notify(this.notifications, "compaction requested", "info");
 	}
 
+	private async applySessionChange<T extends { readonly cancelled: boolean }>(
+		operation: () => Promise<T>,
+		onSucceeded?: (result: T) => void,
+	): Promise<T> {
+		this.beforeSessionChange();
+		let result: T;
+		try {
+			result = await operation();
+		} catch (error) {
+			// The mutating RPC may have succeeded in the child before its response
+			// was lost. Never restore A on an ambiguous failure; re-query ownership.
+			// refreshSessionRuntime ends in a fail-closed blank view if that also fails.
+			try {
+				await this.afterSessionChange();
+			} catch {
+				// Preserve the original operation error for the command notifier.
+			}
+			throw error;
+		}
+		if (result.cancelled) {
+			// Events are held while ownership is ambiguous. Explicit cancellation
+			// reconciles that buffered unchanged-session stream without rebuilding the
+			// retained pager presentation.
+			try {
+				await this.afterCancelledSessionChange();
+			} catch (error) {
+				this.cancelSessionChange();
+				throw error;
+			}
+			return result;
+		}
+		onSucceeded?.(result);
+		await this.afterSessionChange();
+		return result;
+	}
+
 	private async newSession(): Promise<void> {
-		const result = await this.controls.newSession();
+		const result = await this.applySessionChange(() => this.controls.newSession());
 		if (!result.cancelled) {
-			await this.afterSessionChange();
 			this.onStateChange();
 			notify(this.notifications, "new session", "info");
 		}
@@ -1058,18 +1100,16 @@ export class RpcHostActions {
 		const path = await this.modals.input("Switch session", "path to session jsonl");
 		const trimmed = path?.trim() ?? "";
 		if (!trimmed) return;
-		const result = await this.controls.switchSession(trimmed);
+		const result = await this.applySessionChange(() => this.controls.switchSession(trimmed));
 		if (!result.cancelled) {
-			await this.afterSessionChange();
 			this.onStateChange();
 			notify(this.notifications, "session switched", "info");
 		}
 	}
 
 	private async cloneSession(): Promise<void> {
-		const result = await this.controls.clone();
+		const result = await this.applySessionChange(() => this.controls.clone());
 		if (!result.cancelled) {
-			await this.afterSessionChange();
 			this.onStateChange();
 			notify(this.notifications, "session cloned", "info");
 		}

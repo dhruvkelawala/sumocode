@@ -150,6 +150,7 @@ export function parseTerminalTaskSnapshot(value: unknown): TerminalTaskSnapshot 
 		record.schemaVersion !== TERMINAL_TASK_SCHEMA_VERSION ||
 		!isPositiveInteger(record.revision) ||
 		typeof record.id !== "string" || !isValidTerminalTaskId(record.id) ||
+		!(record.sourceId === undefined || (hasText(record.sourceId) && record.sourceId.length <= 512)) ||
 		!hasText(record.ownerSessionId) ||
 		!hasText(record.command) ||
 		!hasText(record.cwd) ||

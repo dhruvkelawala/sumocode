@@ -109,6 +109,14 @@ Both retained controller paths use the shared Activity block matcher/merger. Red
 
 Expansion does not live in `ActivitySnapshot`. `ChatPager` owns per-Activity overrides keyed by Activity ID and reapplies them during incremental replacement, hydration, and virtualization. Running Activities default expanded, first-seen settled Activities default collapsed, failures auto-expand only when no explicit override exists, and a running card keeps its current state when it settles.
 
+## Durable live Activity feed
+
+The RPC child and retained host do not append progress records to Pi's session and do not add a custom RPC command. The extension-side `ActivityManagerBridge` is the sole writer of the bounded, session-owned `feed.json`; the retained host's `FileActivityStore` is the sole writer of expansion-only `ui.json`. Both files live below `state/sumocode/activity/v1/<sha256(sessionId)>/` with private permissions and atomic replacement.
+
+The host binds the store only after authoritative `get_state`, rejects snapshots owned by any other session, and applies expansion before the first card paint. `ChatPager` tracks feed ownership separately from transcript ownership: feed updates replace keyed Activity blocks in place, transcript completion records claim the same node, and feed expiry cannot remove a transcript-owned historical completion. Only currently live feed cards are exempt from normal transcript virtualization.
+
+Output in the feed is control-stripped, credential-redacted, and bounded to the newest 16 KiB and 25 lines. Invocation payloads and terminal command strings are omitted from durable feed records; the whole JSON document must fit the reader's 4 MiB cap. Running terminal output is read as raw bytes and polled only while a managed terminal is live; settled output is cached and retention has a separate low-frequency unref'd prune tick. A low-frequency unref'd host poll covers watcher loss, and all watchers/timers are disposed before the RPC client stops.
+
 ## Legacy bridge
 
 `chatMessageViewModelToPlainText()` exists only as a bridge for string consumers. Retained V2 chat renderers consume `ChatMessageViewModel` and `ChatBlock` directly. `tool-renderer.ts` remains a forwarding compatibility wrapper for legacy `ToolCallViewModel` callers. `scroll-renderer.ts` likewise projects legacy `DelegationViewModel` values into `ActivitySnapshot` and forwards to the universal Activity renderer; it is not a second implementation. Ordinary, native-task, and subagent transcript records emit `activity` blocks.

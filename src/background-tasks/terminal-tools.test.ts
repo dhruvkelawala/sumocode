@@ -45,8 +45,8 @@ function createHarness(initial: TerminalTaskSnapshot[] = []) {
 	let onSend: (() => void) | undefined;
 	let claimSequence = 0;
 	const manager = {
-		start: vi.fn(async (options: { ownerSessionId: string; completionPolicy: "passive" | "wake" }) => {
-			const started = task({ ownerSessionId: options.ownerSessionId, completionPolicy: options.completionPolicy });
+		start: vi.fn(async (options: { ownerSessionId: string; sourceId?: string; completionPolicy: "passive" | "wake" }) => {
+			const started = task({ ownerSessionId: options.ownerSessionId, sourceId: options.sourceId, completionPolicy: options.completionPolicy });
 			tasks.set(started.id, started);
 			return started;
 		}),
@@ -180,6 +180,7 @@ describe("installTerminalTools", () => {
 
 		expect(harness.manager.start).toHaveBeenCalledWith({
 			ownerSessionId: "session-a",
+			sourceId: "call-1",
 			command: "pnpm dev",
 			cwd: "/workspace",
 			title: "dev",
@@ -187,6 +188,7 @@ describe("installTerminalTools", () => {
 		});
 		expect(result.content[0]?.text).toContain("Started terminal term-a");
 		expect(result.content[0]?.text).toContain("stdin: unavailable");
+		expect(result.details).toMatchObject({ activity: { id: "term-a", sourceId: "call-1" } });
 	});
 
 	it("uses current session ownership at every check, wait, stop, and list boundary", async () => {

@@ -114,6 +114,7 @@ export function registerSubagentTools(
 				throw new Error("visible subagents require a running terminal host (herdr or cmux)");
 			}
 			const spawned = await manager.spawn({
+				sourceId: toolCallId,
 				prompt: params.prompt,
 				title: params.name,
 				cwd: params.working_dir ?? ctx.cwd,

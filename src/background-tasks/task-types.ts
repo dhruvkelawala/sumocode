@@ -1,4 +1,5 @@
 import { sanitizeActivityText, type ActivitySnapshot, type ActivityStatus } from "../activity/domain.js";
+import { boundedOutputTail } from "../activity/output-tail.js";
 import type { ProcessTreeVerification } from "./process-tree.js";
 
 export const TERMINAL_TASK_SCHEMA_VERSION = 4;
@@ -24,6 +25,7 @@ export interface TerminalTaskSnapshot {
 	readonly schemaVersion: number;
 	readonly revision: number;
 	readonly id: string;
+	readonly sourceId?: string;
 	readonly ownerSessionId: string;
 	readonly command: string;
 	readonly cwd: string;
@@ -49,6 +51,7 @@ export interface TerminalTaskSnapshot {
 
 export interface StartTerminalTaskOptions {
 	readonly ownerSessionId: string;
+	readonly sourceId?: string;
 	readonly command: string;
 	readonly cwd: string;
 	readonly title: string;
@@ -110,9 +113,10 @@ export function terminalActivitySnapshot(task: TerminalTaskSnapshot, outputTail:
 	const title = sanitizeActivityText(task.title).slice(0, 512);
 	const command = sanitizeActivityText(task.command).slice(0, 4 * 1024);
 	const cwd = sanitizeActivityText(task.cwd).slice(0, 2 * 1024);
-	const output = sanitizeActivityText(outputTail).slice(-8 * 1024);
+	const output = boundedOutputTail(outputTail);
 	return {
 		id: task.id,
+		...(task.sourceId ? { sourceId: task.sourceId } : {}),
 		kind: "terminal",
 		title,
 		status: terminalActivityStatus(task.status),

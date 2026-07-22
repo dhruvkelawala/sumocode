@@ -1,5 +1,8 @@
 import { writeFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { defaultActivityStateRoot } from "../../activity/persistence.js";
+import { FileActivityStore, type ActivityStoreSnapshot } from "../../activity/store.js";
+import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import { getCapabilities, setCapabilities } from "@earendil-works/pi-tui";
 import { SUMOCODE_RELOAD_EXIT_CODE } from "../../commands/reload.js";
 import { containsCtrlCToken, isEscapeInput } from "../input/shared-input-router.js";
@@ -27,6 +30,7 @@ import { notifyOnError, type ErrorNotifier } from "./safe-send.js";
 import { RpcHostStateStore, type RpcHostChromeState } from "./state.js";
 import { RpcTranscriptPump } from "./transcript-pump.js";
 import { rpcVisualFixtureFromEnv } from "./visual-fixtures.js";
+import { logDiagnostic } from "../runtime/diagnostics.js";
 
 export interface RpcHostMainOptions {
 	readonly argv?: readonly string[];
@@ -126,6 +130,18 @@ export function writeExitCodeFile(env: NodeJS.ProcessEnv, code: number): void {
 	} catch {
 		// Best-effort; the launcher falls back to bash's own wait status.
 	}
+}
+
+function activityPresentation(snapshot: ActivityStoreSnapshot) {
+	return {
+		activities: snapshot.activities,
+		expansion: snapshot.expansion,
+		...(snapshot.defaultExpansion === undefined ? {} : { defaultExpansion: snapshot.defaultExpansion }),
+	};
+}
+
+export function activitySnapshotMatchesSession(snapshot: ActivityStoreSnapshot, sessionId: string | undefined): boolean {
+	return snapshot.ownerSessionId === sessionId;
 }
 
 function fallbackChatSinkStats(messages: readonly ChatMessageViewModel[]): ChatPagerReplaceStats {
@@ -566,6 +582,19 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		scheduleRender: () => runtime?.requestRender(),
 	});
 	const stateStore = new RpcHostStateStore();
+	const activityStore = new FileActivityStore({
+		rootDir: defaultActivityStateRoot(env),
+		onDiagnostic: (diagnostic) => logDiagnostic("activity_store_diagnostic", { ...diagnostic }),
+	});
+	let latestActivitySnapshot = activityStore.getSnapshot();
+	let deferActivityRuntimeUpdate = false;
+	let sessionTransitionInProgress = false;
+	const bufferedSessionEvents: AgentSessionEvent[] = [];
+	const unsubscribeActivityStore = activityStore.subscribe((snapshot) => {
+		if (!activitySnapshotMatchesSession(snapshot, stateStore.getSnapshot().sessionId)) return;
+		latestActivitySnapshot = snapshot;
+		if (!deferActivityRuntimeUpdate) runtime?.update({ activities: activityPresentation(snapshot) });
+	});
 	const requestRender = (): void => runtime?.requestRender();
 	const pushState = (state?: RpcHostChromeState): void => {
 		runtime?.update({ state: state ?? stateStore.getSnapshot() });
@@ -759,10 +788,83 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 	// old session's messages otherwise stay on screen as a "ghost transcript".
 	// Refetch get_messages and push the result through the same
 	// replaceFromMessages/runtime.update path used for initial hydration below.
+	const readTranscriptMessages = async () => responseData(
+		await client.send({ type: "get_messages" }),
+		"get_messages",
+	).messages;
+	const readTranscript = async () => transcriptPump.replaceFromMessages(await readTranscriptMessages());
 	const rehydrateTranscript = async (): Promise<void> => {
-		const messages = responseData(await client.send({ type: "get_messages" }), "get_messages").messages;
-		const transcript = transcriptPump.replaceFromMessages(messages);
+		const transcript = await readTranscript();
 		runtime?.update({ transcript, transcriptRevision: transcriptPump.getRevision() });
+	};
+	const processAgentEvent = (event: AgentSessionEvent): void => {
+		const transcript = transcriptPump.handleAgentEvent(event);
+		const state = stateStore.handleAgentEvent(event);
+		runtime?.update({ state, transcript, transcriptRevision: transcriptPump.getRevision() });
+		scheduler.handleAgentEvent(event);
+	};
+	const beginSessionChange = (): void => {
+		if (sessionTransitionInProgress) return;
+		bufferedSessionEvents.length = 0;
+		sessionTransitionInProgress = true;
+		deferActivityRuntimeUpdate = true;
+		runtime?.beginSessionReplacement();
+	};
+	const cancelSessionChange = (): void => {
+		if (!sessionTransitionInProgress) return;
+		sessionTransitionInProgress = false;
+		deferActivityRuntimeUpdate = false;
+		runtime?.update({
+			state: stateStore.getSnapshot(),
+			activities: activityPresentation(latestActivitySnapshot),
+		});
+		runtime?.endSessionReplacement();
+	};
+	const refreshSessionRuntime = async (): Promise<void> => {
+		beginSessionChange();
+		let ownershipRebound = false;
+		try {
+			// The child has already switched. Fail closed before any follow-up RPC so
+			// a timeout cannot leave A's private transcript/feed or queued prompts
+			// accepting B events. Restore A's queue to the editor and invalidate any
+			// in-flight scheduler generation before the first fallible request.
+			const detached = scheduler.rebindSession(undefined, editor.getText());
+			if (detached.count > 0) editor.setText(detached.text);
+			latestActivitySnapshot = activityStore.bindSession(undefined);
+			const emptyTranscript = transcriptPump.replaceFromMessages([]);
+			runtime?.update({
+				transcript: emptyTranscript,
+				transcriptRevision: transcriptPump.getRevision(),
+				activities: activityPresentation(latestActivitySnapshot),
+			});
+
+			const state = await controls.refreshState();
+			const rebound = scheduler.rebindSession(state.sessionId, editor.getText());
+			if (rebound.count > 0) editor.setText(rebound.text);
+			latestActivitySnapshot = activityStore.bindSession(state.sessionId);
+			// Apply B ownership while painting is suspended. If transcript hydration
+			// fails, the resumed frame is B plus a blank transcript, never A content.
+			runtime?.update({ state, activities: activityPresentation(latestActivitySnapshot) });
+			ownershipRebound = true;
+			const messages = await readTranscriptMessages();
+			const transcript = transcriptPump.replaceFromMessages(messages);
+			runtime?.update({
+				state,
+				transcript,
+				transcriptRevision: transcriptPump.getRevision(),
+				activities: activityPresentation(latestActivitySnapshot),
+			});
+		} finally {
+			bufferedSessionEvents.length = 0;
+			sessionTransitionInProgress = false;
+			deferActivityRuntimeUpdate = false;
+			runtime?.endSessionReplacement(ownershipRebound);
+		}
+	};
+	const replayCancelledSessionEvents = async (): Promise<void> => {
+		const events = bufferedSessionEvents.splice(0);
+		cancelSessionChange();
+		for (const event of events) processAgentEvent(event);
 	};
 	actions = new RpcHostActions({
 		controls,
@@ -776,12 +878,10 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		onRenderRequest: requestRender,
 		onExitRequest: (code) => requestHostExit(code),
 		rehydrateTranscript,
-		afterSessionChange: async () => {
-			const state = await controls.refreshState();
-			const restored = scheduler.rebindSession(state.sessionId, editor.getText());
-			if (restored.count > 0) editor.setText(restored.text);
-			await rehydrateTranscript();
-		},
+		beforeSessionChange: beginSessionChange,
+		cancelSessionChange,
+		afterSessionChange: refreshSessionRuntime,
+		afterCancelledSessionChange: replayCancelledSessionEvents,
 		writeClipboardSequence: (sequence) => runtime?.writeClipboardSequence(sequence) ?? false,
 		changelogRoot: root,
 	});
@@ -792,10 +892,11 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 
 	client.onEvent((event) => {
 		if (visualFixture) return;
-		const transcript = transcriptPump.handleAgentEvent(event);
-		const state = stateStore.handleAgentEvent(event);
-		runtime?.update({ state, transcript, transcriptRevision: transcriptPump.getRevision() });
-		scheduler.handleAgentEvent(event);
+		if (sessionTransitionInProgress) {
+			bufferedSessionEvents.push(event);
+			return;
+		}
+		processAgentEvent(event);
 	});
 
 	// The RPC child is the whole agent -- without this, the host has no signal
@@ -844,6 +945,8 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 				regionRegistryDisposed = true;
 				regionRegistry.dispose();
 			}
+			unsubscribeActivityStore();
+			activityStore.dispose();
 			await client.stop();
 		})();
 		await stopPromise;
@@ -881,7 +984,10 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 	try {
 		await client.start();
 		const branch = await readGitBranch(cwd);
-		await controls.refreshState(branch);
+		const refreshedState = await controls.refreshState(branch);
+		const restored = scheduler.rebindSession(refreshedState.sessionId, editor.getText());
+		if (restored.count > 0) editor.setText(restored.text);
+		latestActivitySnapshot = activityStore.bindSession(refreshedState.sessionId);
 		if (!visualFixture) {
 			stopWatchingGitBranch = await watchGitBranch(cwd, branch, (nextBranch) => {
 				const state = stateStore.setGitBranch(nextBranch);
@@ -891,7 +997,7 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		await editor.configureAutocomplete(controls);
 		const transcript = visualFixture
 			? visualFixture.transcript
-			: transcriptPump.replaceFromMessages(responseData(await client.send({ type: "get_messages" }), "get_messages").messages);
+			: await readTranscript();
 		const state = visualFixture ? visualFixture.state : stateStore.getSnapshot();
 		runtime = new RpcHostRuntime({
 			output: stdout,
@@ -899,6 +1005,10 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 			env,
 			initialState: state,
 			initialTranscript: transcript,
+			initialActivities: activityPresentation(latestActivitySnapshot),
+			onActivityExpansionChange: (id, expanded) => activityStore.setExpanded(id, expanded),
+			onActivityExpansionMigration: (previousId, nextId, expanded) => activityStore.migrateExpanded(previousId, nextId, expanded),
+			onAllActivityExpansionChange: (expanded, ids) => activityStore.setAllExpanded(expanded, ids),
 			inputPreview: visualFixture?.inputPreview,
 			// The wrapper, not the bare controller: while an inline selector
 			// (plan 036) is open it renders/handles-input in the editor's

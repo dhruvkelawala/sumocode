@@ -29,6 +29,7 @@ import type { CellBuffer } from "../render/buffer.js";
 import type { ShellOverlayEntry, ShellRenderable, ShellTerminalSessionOwner, ShellViewport } from "../shell/contracts.js";
 import { RetainedShellRenderer } from "../shell/retained-shell-renderer.js";
 import type { TranscriptControllerChatSink } from "../transcript/controller.js";
+import type { ActivityPresentationSnapshot } from "../transcript/activity-view-model.js";
 import type { TranscriptViewModel } from "../transcript/view-model.js";
 import { ChatPager } from "../widgets/chat-pager.js";
 import type { KeyEvent } from "../input/key-router.js";
@@ -42,6 +43,10 @@ export interface RpcShellAdapterOptions {
 	readonly viewport: ShellViewport;
 	readonly initialState: RpcHostChromeState;
 	readonly initialTranscript: TranscriptViewModel;
+	readonly initialActivities?: ActivityPresentationSnapshot;
+	readonly onActivityExpansionChange?: (id: string, expanded: boolean) => void;
+	readonly onActivityExpansionMigration?: (previousId: string, nextId: string, expanded: boolean) => void;
+	readonly onAllActivityExpansionChange?: (expanded: boolean, activityIds: readonly string[]) => void;
 	readonly inputPreview?: string;
 	readonly editor?: Component;
 	readonly modal?: Component & { getActiveKind?(): string | undefined };
@@ -71,6 +76,7 @@ export interface RpcShellAdapterOptions {
 export interface RpcShellAdapterSnapshot {
 	readonly state: RpcHostChromeState;
 	readonly transcript: TranscriptViewModel;
+	readonly activities: ActivityPresentationSnapshot;
 	/**
 	 * `TranscriptController.getRevision()` at the moment `transcript` was
 	 * produced. When a `TranscriptControllerChatSink` (see `getChatSink`) is
@@ -118,6 +124,7 @@ export class RpcShellAdapter {
 	private readonly selection: SelectionController;
 	private state: RpcHostChromeState;
 	private transcript: TranscriptViewModel;
+	private sessionContentHidden = false;
 	/**
 	 * Animation tick for the above-editor working indicator. `RetainedShellRenderer`
 	 * resolves `aboveEditorWidgets()` fresh on every render (see `LazyComponentProxy`
@@ -159,7 +166,15 @@ export class RpcShellAdapter {
 		this.workingIndicatorThemeUnsubscribe = onThemeChanged(() => {
 			if (this.wasWorkingIndicatorBusy) this.startWorkingIndicatorTimer();
 		});
-		this.chat = ChatPager.create(yoga);
+		this.chat = ChatPager.create(yoga, undefined, {
+			onActivityExpansionChange: options.onActivityExpansionChange,
+			onActivityExpansionMigration: options.onActivityExpansionMigration,
+			onAllActivityExpansionChange: options.onAllActivityExpansionChange,
+		});
+		this.chat.applyActivityExpansionSnapshot(options.initialActivities?.expansion ?? {}, options.initialActivities?.defaultExpansion);
+		// Seed feed identity before transcript virtualization so archived transcript
+		// completions claim their cards instead of reappearing as feed-only rows.
+		this.chat.reconcileFeedActivities(options.initialActivities?.activities ?? []);
 		this.chat.replaceViewModels(this.transcript.messages);
 		this.splash = createSplashTree(yoga, undefined, () => defaultSplashSnapshot(this.isActive()));
 		(this.editor as SplashAwareComponent | undefined)?.setSplashProvider?.(() => !this.isActive());
@@ -205,10 +220,17 @@ export class RpcShellAdapter {
 	}
 
 	public update(snapshot: Partial<RpcShellAdapterSnapshot>): void {
+		if (snapshot.activities) {
+			this.chat.applyActivityExpansionSnapshot(snapshot.activities.expansion, snapshot.activities.defaultExpansion);
+		}
 		if (snapshot.state) {
 			this.state = snapshot.state;
 			this.syncWorkingIndicatorTimer();
 		}
+		// Feed ownership must switch before a replacement transcript is applied.
+		// Otherwise a predictable Activity ID reused by the next session can claim
+		// and merge fields from the previous session's card.
+		if (snapshot.activities) this.chat.reconcileFeedActivities(snapshot.activities.activities);
 		if (snapshot.transcript) {
 			this.transcript = snapshot.transcript;
 			// A `transcriptRevision` means this transcript came from a
@@ -237,6 +259,15 @@ export class RpcShellAdapter {
 			// for both paths.
 			this.selection.clear();
 		}
+	}
+
+	/** Hide session content without destroying pager state until the RPC commits. */
+	public prepareSessionReplacement(): void {
+		this.sessionContentHidden = true;
+	}
+
+	public finishSessionReplacement(): void {
+		this.sessionContentHidden = false;
 	}
 
 	/**
@@ -329,7 +360,7 @@ export class RpcShellAdapter {
 	}
 
 	public isActive(): boolean {
-		return rpcSessionIsActive(this.state, this.transcript);
+		return !this.sessionContentHidden && rpcSessionIsActive(this.state, this.transcript, this.chat.hasMessages());
 	}
 
 	public getModal(): (Component & { getActiveKind?(): string | undefined }) | undefined {
@@ -509,8 +540,9 @@ export class RpcShellAdapter {
 	}
 }
 
-export function rpcSessionIsActive(state: RpcHostChromeState, transcript: TranscriptViewModel): boolean {
-	return state.hasMessages
+export function rpcSessionIsActive(state: RpcHostChromeState, transcript: TranscriptViewModel, hasRetainedCards = false): boolean {
+	return hasRetainedCards
+		|| state.hasMessages
 		|| state.messageCount > 0
 		|| state.pendingMessageCount > 0
 		|| state.taskPartialCount > 0

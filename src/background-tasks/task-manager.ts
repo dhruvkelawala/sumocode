@@ -48,6 +48,13 @@ const DEFAULT_TERM_GRACE_MS = 5_000;
 const DEFAULT_KILL_GRACE_MS = 2_000;
 const DEFAULT_CLAIM_LEASE_MS = 30_000;
 const DEFAULT_STARTING_RECOVERY_GRACE_MS = 30_000;
+export const DEFAULT_MAX_RUNNING_TERMINALS = 256;
+const MAX_REPLAYED_SETTLED_TERMINALS = 64;
+
+export interface TerminalOutputTail {
+	readonly bytes: Uint8Array;
+	readonly truncated: boolean;
+}
 const TREE_VERIFICATION_REFRESH_MS = 5_000;
 const CHECK_OUTPUT_BYTES = 16 * 1024;
 const WAIT_OUTPUT_BYTES = 16 * 1024;
@@ -91,10 +98,12 @@ export interface TerminalTaskManagerOptions {
 	readonly killGraceMs?: number;
 	readonly claimLeaseMs?: number;
 	readonly startingRecoveryGraceMs?: number;
+	readonly maxRunningTasks?: number;
 	readonly onDiagnostic?: (diagnostic: TerminalTaskStoreDiagnostic | { kind: "manager"; message: string; id?: string }) => void;
 }
 
 export type TerminalTaskChangeListener = (snapshot: TerminalTaskSnapshot) => void;
+export type TerminalTaskSnapshotListener = (snapshots: readonly TerminalTaskSnapshot[]) => void;
 
 function normalizePositive(value: number | undefined, fallback: number): number {
 	return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : fallback;
@@ -149,6 +158,32 @@ function readExitCode(store: TerminalTaskStore, path: string): number | undefine
 	}
 }
 
+function immutableTerminalSnapshot(snapshot: TerminalTaskSnapshot): TerminalTaskSnapshot {
+	const clone = structuredClone(snapshot);
+	const freeze = (value: unknown): void => {
+		if (!value || typeof value !== "object" || Object.isFrozen(value)) return;
+		for (const child of Object.values(value as Record<string, unknown>)) freeze(child);
+		Object.freeze(value);
+	};
+	freeze(clone);
+	return clone;
+}
+
+function readLogTailBytes(store: TerminalTaskStore, path: string, maxBytes: number): TerminalOutputTail {
+	let descriptor: number | undefined;
+	try {
+		descriptor = openPrivateFile(store, path, constants.O_RDONLY);
+		const size = fstatSync(descriptor).size;
+		if (size === 0) return { bytes: new Uint8Array(), truncated: false };
+		const bytes = Math.min(size, Math.max(0, maxBytes));
+		const buffer = Buffer.alloc(bytes);
+		const bytesRead = readSync(descriptor, buffer, 0, bytes, size - bytes);
+		return { bytes: buffer.subarray(0, bytesRead), truncated: size > bytes };
+	} finally {
+		if (descriptor !== undefined) closeSync(descriptor);
+	}
+}
+
 function readLogTail(store: TerminalTaskStore, path: string, maxBytes: number): string {
 	let descriptor: number | undefined;
 	try {
@@ -157,9 +192,9 @@ function readLogTail(store: TerminalTaskStore, path: string, maxBytes: number): 
 		if (size === 0) return "";
 		const bytes = Math.min(size, Math.max(0, maxBytes));
 		const offset = size - bytes;
-		const buffer = Buffer.allocUnsafe(bytes);
-		readSync(descriptor, buffer, 0, bytes, offset);
-		let text = buffer.toString("utf8");
+		const buffer = Buffer.alloc(bytes);
+		const bytesRead = readSync(descriptor, buffer, 0, bytes, offset);
+		let text = buffer.subarray(0, bytesRead).toString("utf8");
 		if (offset > 0) {
 			const newline = text.indexOf("\n");
 			if (newline >= 0) text = text.slice(newline + 1);
@@ -331,10 +366,12 @@ export class TerminalTaskManager {
 	private readonly killGraceMs: number;
 	private readonly claimLeaseMs: number;
 	private readonly startingRecoveryGraceMs: number;
+	private readonly maxRunningTasks: number;
 	private readonly onDiagnostic?: TerminalTaskManagerOptions["onDiagnostic"];
 	private readonly tasks = new Map<string, TerminalTaskSnapshot>();
 	private readonly runtime = new Map<string, RuntimeTask>();
 	private readonly listeners = new Set<TerminalTaskChangeListener>();
+	private readonly snapshotListeners = new Set<TerminalTaskSnapshotListener>();
 	private detached = false;
 
 	public constructor(options: TerminalTaskManagerOptions = {}) {
@@ -351,6 +388,7 @@ export class TerminalTaskManager {
 		this.killGraceMs = normalizePositive(options.killGraceMs, DEFAULT_KILL_GRACE_MS);
 		this.claimLeaseMs = normalizePositive(options.claimLeaseMs, DEFAULT_CLAIM_LEASE_MS);
 		this.startingRecoveryGraceMs = normalizePositive(options.startingRecoveryGraceMs, DEFAULT_STARTING_RECOVERY_GRACE_MS);
+		this.maxRunningTasks = normalizePositive(options.maxRunningTasks, DEFAULT_MAX_RUNNING_TERMINALS);
 		this.onDiagnostic = options.onDiagnostic;
 		// Plan 080 makes completed snapshots durable and explicitly forbids file
 		// deletion/cleanup without human approval. Do not revive the legacy
@@ -364,13 +402,19 @@ export class TerminalTaskManager {
 
 	public async start(options: StartTerminalTaskOptions): Promise<TerminalTaskSnapshot> {
 		if (this.detached) throw new Error("Terminal task manager is detached");
+		const runningCount = [...this.tasks.values()].filter((task) => !isTerminalTaskSettled(task.status)).length;
+		if (runningCount >= this.maxRunningTasks) {
+			throw new Error(`Terminal capacity reached (${this.maxRunningTasks} running)`);
+		}
 		const command = options.command.trim();
 		const title = options.title.trim();
 		const ownerSessionId = options.ownerSessionId.trim();
+		const sourceId = options.sourceId?.trim();
 		const cwd = options.cwd.trim();
 		if (!command) throw new Error("command is required");
 		if (!title) throw new Error("title is required");
 		if (!ownerSessionId) throw new Error("owner session id is required");
+		if (sourceId && sourceId.length > 512) throw new Error("source id is too long");
 		if (!cwd) throw new Error("working directory is required");
 
 		const createdAt = Math.max(1, Math.floor(this.now()));
@@ -402,6 +446,7 @@ export class TerminalTaskManager {
 			schemaVersion: TERMINAL_TASK_SCHEMA_VERSION,
 			revision: 1,
 			id,
+			...(sourceId ? { sourceId } : {}),
 			ownerSessionId,
 			command,
 			cwd,
@@ -743,8 +788,44 @@ export class TerminalTaskManager {
 		return () => this.listeners.delete(listener);
 	}
 
+	/** Replay one complete immutable manager projection, then publish transitions. */
+	public subscribeChanges(listener: TerminalTaskSnapshotListener): () => void {
+		this.snapshotListeners.add(listener);
+		listener(this.getSnapshots());
+		return () => this.snapshotListeners.delete(listener);
+	}
+
+	public getSnapshots(): readonly TerminalTaskSnapshot[] {
+		const snapshots = [...this.tasks.values()];
+		const replayed = snapshots.filter((snapshot) => !isTerminalTaskSettled(snapshot.status));
+		const settledByOwner = new Map<string, TerminalTaskSnapshot[]>();
+		for (const snapshot of snapshots) {
+			if (!isTerminalTaskSettled(snapshot.status)) continue;
+			const owned = settledByOwner.get(snapshot.ownerSessionId) ?? [];
+			owned.push(snapshot);
+			settledByOwner.set(snapshot.ownerSessionId, owned);
+		}
+		for (const owned of settledByOwner.values()) {
+			replayed.push(...owned
+				.sort((left, right) => (right.settledAt ?? right.updatedAt) - (left.settledAt ?? left.updatedAt))
+				.slice(0, MAX_REPLAYED_SETTLED_TERMINALS));
+		}
+		return replayed
+			.sort((left, right) => left.createdAt - right.createdAt)
+			.map(immutableTerminalSnapshot);
+	}
+
 	public getOutput(task: Pick<TerminalTaskSnapshot, "logFile">, maxBytes = CHECK_OUTPUT_BYTES): string {
 		return readLogTail(this.store, task.logFile, maxBytes);
+	}
+
+	/** Raw tail for UTF-8-safe durable Activity projection during concurrent appends. */
+	public getOutputTailBytes(task: Pick<TerminalTaskSnapshot, "logFile">, maxBytes = CHECK_OUTPUT_BYTES): TerminalOutputTail {
+		return readLogTailBytes(this.store, task.logFile, maxBytes);
+	}
+
+	public getOutputBytes(task: Pick<TerminalTaskSnapshot, "logFile">, maxBytes = CHECK_OUTPUT_BYTES): Uint8Array {
+		return this.getOutputTailBytes(task, maxBytes).bytes;
 	}
 
 	public async stopOwned(ownerSessionId: string): Promise<TerminalStopResult[]> {
@@ -760,6 +841,7 @@ export class TerminalTaskManager {
 			runtime.pollTimer = undefined;
 		}
 		this.listeners.clear();
+		this.snapshotListeners.clear();
 	}
 
 	private recover(snapshot: TerminalTaskSnapshot): void {
@@ -1232,6 +1314,15 @@ export class TerminalTaskManager {
 				listener(snapshot);
 			} catch {
 				// Observers cannot break durable lifecycle transitions.
+			}
+		}
+		if (this.snapshotListeners.size === 0) return;
+		const snapshots = this.getSnapshots();
+		for (const listener of this.snapshotListeners) {
+			try {
+				listener(snapshots);
+			} catch {
+				// Projection observers cannot break durable lifecycle transitions.
 			}
 		}
 	}

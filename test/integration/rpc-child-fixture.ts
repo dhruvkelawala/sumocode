@@ -3,8 +3,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 export interface RpcChildFixtureOptions {
+	readonly sessionId?: string;
 	readonly sessionName?: string;
 	readonly messages?: readonly unknown[];
+	readonly newSessionId?: string;
+	readonly newSessionName?: string;
+	readonly switchSessions?: Readonly<Record<string, { readonly sessionId: string; readonly sessionName: string; readonly messages?: readonly unknown[] }>>;
 	readonly holdPromptUntilAbort?: boolean;
 	/**
 	 * When set, a `prompt` command streams these chunks as successive
@@ -42,8 +46,12 @@ export async function createRpcChildFixture(prefix: string, options: RpcChildFix
 	const source = `#!/usr/bin/env node
 const readline = require("node:readline");
 
+let sessionId = ${JSON.stringify(options.sessionId ?? "fixture-session")};
 let sessionName = ${JSON.stringify(options.sessionName ?? "Fixture Session")};
 let messages = ${JSON.stringify(options.messages ?? [])};
+const newSessionId = ${JSON.stringify(options.newSessionId ?? "fixture-session-new")};
+const newSessionName = ${JSON.stringify(options.newSessionName ?? "Fresh Session")};
+const switchSessions = ${JSON.stringify(options.switchSessions ?? {})};
 let isStreaming = false;
 let isCompacting = false;
 let pendingPrompt = null;
@@ -71,7 +79,7 @@ function state() {
 		isCompacting,
 		steeringMode: "all",
 		followUpMode: "one-at-a-time",
-		sessionId: "fixture-session",
+		sessionId,
 		sessionName,
 		autoCompactionEnabled: true,
 		messageCount: messages.length,
@@ -123,8 +131,25 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 		return;
 	}
 	if (command.type === "new_session") {
-		sessionName = "Fresh Session";
+		sessionId = newSessionId;
+		sessionName = newSessionName;
 		messages = [];
+		isStreaming = false;
+		isCompacting = false;
+		write({ type: "session_info_changed", name: sessionName });
+		write({ type: "agent_end", messages, willRetry: false });
+		write(response(command, { cancelled: false }));
+		return;
+	}
+	if (command.type === "switch_session") {
+		const target = switchSessions[command.sessionPath];
+		if (!target) {
+			write(response(command, { cancelled: true }));
+			return;
+		}
+		sessionId = target.sessionId;
+		sessionName = target.sessionName;
+		messages = target.messages || [];
 		isStreaming = false;
 		isCompacting = false;
 		write({ type: "session_info_changed", name: sessionName });

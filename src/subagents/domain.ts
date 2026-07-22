@@ -49,6 +49,7 @@ export interface SubagentPaneRef {
 
 export interface SubagentSnapshot {
 	readonly id: string;
+	readonly sourceId?: string;
 	readonly title: string;
 	readonly prompt: string;
 	readonly cwd: string;

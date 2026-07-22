@@ -493,7 +493,7 @@ describe("RpcHostActions", () => {
 		expect(rehydrateCalls).toHaveLength(4);
 	});
 
-	it("does not rehydrate the transcript when a session operation is cancelled", async () => {
+	it("rehydrates the unchanged session after a session operation is cancelled", async () => {
 		const { actions, controls, modals, inlineSelectors, rehydrateCalls } = setup();
 		controls.newSessionCancelled = true;
 		controls.cloneCancelled = true;
@@ -517,7 +517,7 @@ describe("RpcHostActions", () => {
 		inlineSelectors.handleInput(SELECTOR_ENTER);
 		await forkPromise;
 
-		expect(rehydrateCalls).toHaveLength(0);
+		expect(rehydrateCalls).toHaveLength(4);
 	});
 
 	it("does not rehydrate the transcript when the fork selector is dismissed without a selection", async () => {

@@ -281,12 +281,13 @@ describe("TerminalTaskManager", () => {
 
 	it("marks a mismatched stop target lost and refuses every signal", async () => {
 		const target = manager();
-		const task = await start(target);
+		const task = await target.start({ ownerSessionId: "session-a", command: "sleep 1", cwd: "/repo", title: "wake mismatch", completionPolicy: "wake" });
 		tree.operations.identityMatches = vi.fn((): "different" => "different");
 
 		const result = await target.stop([task.id], "session-a");
 
-		expect(result[0]).toMatchObject({ outcome: "failed", task: { status: "lost" } });
+		expect(result[0]).toMatchObject({ outcome: "failed", task: { status: "lost", deliveryState: "suppressed", observedAt: expect.any(Number) } });
+		expect(target.claimPending("session-a", true)).toEqual([]);
 		expect(tree.operations.signalTree).not.toHaveBeenCalled();
 	});
 

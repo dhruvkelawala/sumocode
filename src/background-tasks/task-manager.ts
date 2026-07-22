@@ -599,7 +599,8 @@ export class TerminalTaskManager {
 				identityStatus = this.processTree.verificationMatches(identity, retainedVerification);
 			}
 			if (identityStatus === "different") {
-				const lost = this.settleLost(id, null, false);
+				this.settleLost(id, null, false);
+				const lost = this.observe(id, false);
 				results.set(id, { id, outcome: "failed", task: lost, message: `Terminal ${id} process identity changed; recorded lost without signalling.` });
 				continue;
 			}
@@ -616,7 +617,8 @@ export class TerminalTaskManager {
 				? { ...task, status: "stopping", updatedAt: this.timestamp(task) }
 				: undefined).snapshot;
 			if (isTerminalTaskSettled(stopping.status)) {
-				results.set(id, { id, outcome: "already-settled", task: stopping, message: `Terminal ${id} was already ${stopping.status}.` });
+				const observed = this.observe(id, false);
+				results.set(id, { id, outcome: "already-settled", task: observed, message: `Terminal ${id} was already ${observed.status}.` });
 				continue;
 			}
 			targets.push({ task: stopping, identity, verification });
@@ -944,7 +946,7 @@ export class TerminalTaskManager {
 	): Promise<TerminalStopResult> {
 		const gone = signal.gone || (signal.ok && await this.processTree.waitForTreeEmpty(identity, this.killGraceMs));
 		if (!signal.ok || !gone) {
-			if (!this.processTree.isTreeEmpty(identity)) return this.handleStopSignalFailure(id, signal, false);
+			if (!this.processTree.isTreeEmpty(identity)) return this.handleStopSignalFailure(id, signal, false, true);
 		}
 		const settled = this.settleNatural(id, exitCode);
 		const observed = this.observe(id, false);
@@ -986,6 +988,7 @@ export class TerminalTaskManager {
 		id: string,
 		signal: ProcessTreeSignalResult,
 		restoreOnFailure: boolean,
+		suppressOnSettlement = restoreOnFailure,
 	): TerminalStopResult {
 		const current = this.store.get(id);
 		const identity = current ? identityOf(current) : undefined;
@@ -994,7 +997,8 @@ export class TerminalTaskManager {
 			return { id, outcome: "cancelled", task: cancelled, message: `Cancelled terminal ${id}.` };
 		}
 		if (signal.identityStatus === "different") {
-			const lost = this.settleLost(id, null, false);
+			this.settleLost(id, null, false);
+			const lost = suppressOnSettlement ? this.observe(id, false) : this.store.get(id)!;
 			return { id, outcome: "failed", task: lost, message: `Terminal ${id} process identity changed; recorded lost without signalling.` };
 		}
 		const reason = signal.identityStatus === "unknown"

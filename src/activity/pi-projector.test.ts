@@ -32,6 +32,20 @@ describe("Pi Activity projector", () => {
 			body: { kind: "source", text: "alpha\n\nomega", startLine: 7, totalLines: 9 },
 		});
 		expect(projectPiToolActivity({
+			id: "limited-read",
+			name: "read",
+			status: "success",
+			arguments: { path: "limited.ts", offset: 1, limit: 2 },
+			content: [{ type: "text", text: "one\n\ntwo\n\n[37 more lines in file. Use offset=4 to continue.]" }],
+		}, scope)?.body).toEqual({ kind: "source", text: "one\n\ntwo", startLine: 1, totalLines: 40 });
+		expect(projectPiToolActivity({
+			id: "truncated-read",
+			name: "read",
+			status: "success",
+			arguments: { path: "truncated.ts", offset: 21 },
+			content: [{ type: "text", text: "twenty-one\ntwenty-two\n\n[Showing lines 21-22 of 100 (50KB limit). Use offset=23 to continue.]" }],
+		}, scope)?.body).toEqual({ kind: "source", text: "twenty-one\ntwenty-two", startLine: 21, totalLines: 100 });
+		expect(projectPiToolActivity({
 			id: "write-1",
 			name: "write",
 			status: "success",

@@ -94,6 +94,9 @@ describe("Activity domain", () => {
 	it("renders cyclic and huge values safely while redacting secret-shaped fields", () => {
 		const cyclic: Record<string, unknown> = {
 			apiKey: "top-secret",
+			"x-api-key": "header-api-nope",
+			stripeApiKey: "stripe-api-nope",
+			apiKeyValue: "value-api-nope",
 			Authorization: "Bearer nope",
 			password: "nope",
 			cookie: "nope",
@@ -113,7 +116,16 @@ describe("Activity domain", () => {
 		expect(preview).toContain("[Circular]");
 		expect(preview).toContain("visible");
 		expect(preview).not.toContain("top-secret");
-		for (const secret of ["access-nope", "refresh-nope", "client-nope", "session-nope", "private-nope"]) {
+		for (const secret of [
+			"access-nope",
+			"refresh-nope",
+			"client-nope",
+			"session-nope",
+			"private-nope",
+			"header-api-nope",
+			"stripe-api-nope",
+			"value-api-nope",
+		]) {
 			expect(preview).not.toContain(secret);
 		}
 		expect(() => safeValuePreview(cyclic)).not.toThrow();

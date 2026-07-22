@@ -139,9 +139,11 @@ function isSecretKey(key: string): boolean {
 		.filter(Boolean)
 		.map((word) => word.toLowerCase());
 	const normalized = words.join("");
+	const hasCompoundApiKey = words.some((word, index) => word === "api" && words[index + 1] === "key");
 	return words.some((word) => SECRET_KEY_WORDS.has(word))
 		|| SECRET_KEY_WORDS.has(normalized)
-		|| normalized === "privatekey";
+		|| normalized === "privatekey"
+		|| hasCompoundApiKey;
 }
 
 function boundedText(text: string, maxChars: number): string {

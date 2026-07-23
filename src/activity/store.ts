@@ -1,9 +1,11 @@
+import { createHash } from "node:crypto";
 import { watch, type FSWatcher } from "node:fs";
 import type { ActivitySnapshot } from "./domain.js";
 import { parseActivityFeedDocument, type ActivityFeedDiagnostic } from "./feed-publisher.js";
 import {
-	ACTIVITY_DOCUMENT_MAX_BYTES,
+	ACTIVITY_FEED_MAX_BYTES,
 	ACTIVITY_SCHEMA_VERSION,
+	ACTIVITY_UI_MAX_BYTES,
 	activityPaths,
 	atomicWritePrivateJson,
 	defaultActivityStateRoot,
@@ -13,7 +15,7 @@ import {
 
 const DEFAULT_DEBOUNCE_MS = 25;
 const DEFAULT_POLL_MS = 2_000;
-const MAX_EXPANSION_ENTRIES = 4_096;
+export const ACTIVITY_UI_MAX_EXPANSION_ENTRIES = 4_096;
 const MAX_EXPANSION_ID_BYTES = 512;
 
 export interface ActivityStoreSnapshot {
@@ -73,7 +75,7 @@ function parseUiDocument(value: unknown, ownerSessionId: string): ActivityUiDocu
 		!(record.defaultExpansion === undefined || typeof record.defaultExpansion === "boolean")
 	) return undefined;
 	const entries = Object.entries(expansionRecord);
-	if (entries.length > MAX_EXPANSION_ENTRIES || entries.some(([id, expanded]) => !validExpansionId(id) || typeof expanded !== "boolean")) return undefined;
+	if (entries.some(([id, expanded]) => !validExpansionId(id) || typeof expanded !== "boolean")) return undefined;
 	return {
 		schemaVersion: ACTIVITY_SCHEMA_VERSION,
 		ownerSessionId,
@@ -105,11 +107,19 @@ function semanticKey(snapshot: Omit<ActivityStoreSnapshot, "revision">): string 
 	]);
 }
 
-function boundedExpansion(entries: readonly [string, boolean][]): Record<string, boolean> {
-	return Object.fromEntries(entries
-		.filter(([id]) => validExpansionId(id))
-		.slice(-MAX_EXPANSION_ENTRIES)
-		.sort(([left], [right]) => left.localeCompare(right)));
+function boundedExpansion(entries: readonly [string, boolean][], protectedKeys: ReadonlySet<string>): Record<string, boolean> {
+	const valid = entries.filter(([id]) => validExpansionId(id));
+	const protectedEntries = valid.filter(([id]) => protectedKeys.has(id));
+	const optionalEntries = valid
+		.filter(([id]) => !protectedKeys.has(id))
+		.slice(-ACTIVITY_UI_MAX_EXPANSION_ENTRIES);
+	return Object.fromEntries([...optionalEntries, ...protectedEntries].sort(([left], [right]) => left.localeCompare(right)));
+}
+
+function activityExpansionPersistenceKey(activity: ActivitySnapshot): string {
+	if (activity.kind !== "subagent" || !activity.sourceId) return activity.id;
+	const generation = createHash("sha256").update(activity.sourceId, "utf8").digest("hex").slice(0, 12);
+	return `${activity.id}#${generation}`;
 }
 
 export class FileActivityStore implements ActivityStore {
@@ -189,14 +199,14 @@ export class FileActivityStore implements ActivityStore {
 		if (!this.paths || !this.snapshot.ownerSessionId || !validExpansionId(id)) return;
 		const entries = Object.entries(this.uiExpansion).filter(([candidate]) => candidate !== id);
 		entries.push([id, expanded]);
-		this.writeUi(boundedExpansion(entries), this.defaultExpansion);
+		this.writeUi(boundedExpansion(entries, this.protectedExpansionKeys()), this.defaultExpansion);
 	}
 
 	public migrateExpanded(previousId: string, nextId: string, expanded: boolean): void {
 		if (!this.paths || !this.snapshot.ownerSessionId || !validExpansionId(previousId) || !validExpansionId(nextId)) return;
 		const entries = Object.entries(this.uiExpansion).filter(([id]) => id !== previousId && id !== nextId);
 		entries.push([nextId, expanded]);
-		this.writeUi(boundedExpansion(entries), this.defaultExpansion);
+		this.writeUi(boundedExpansion(entries, this.protectedExpansionKeys()), this.defaultExpansion);
 	}
 
 	public setAllExpanded(expanded: boolean, activityIds?: readonly string[]): void {
@@ -206,7 +216,7 @@ export class FileActivityStore implements ActivityStore {
 		for (const id of ids) {
 			if (validExpansionId(id)) entries.push([id, expanded]);
 		}
-		this.writeUi(boundedExpansion(entries), expanded);
+		this.writeUi(boundedExpansion(entries, this.protectedExpansionKeys()), expanded);
 	}
 
 	public dispose(): void {
@@ -234,8 +244,8 @@ export class FileActivityStore implements ActivityStore {
 			...(defaultExpansion === undefined ? {} : { defaultExpansion }),
 		};
 		try {
-			if (Buffer.byteLength(`${JSON.stringify(document, null, 2)}\n`, "utf8") > ACTIVITY_DOCUMENT_MAX_BYTES) {
-				throw new Error(`Activity UI document exceeds ${ACTIVITY_DOCUMENT_MAX_BYTES} bytes`);
+			if (Buffer.byteLength(`${JSON.stringify(document, null, 2)}\n`, "utf8") > ACTIVITY_UI_MAX_BYTES) {
+				throw new Error(`Activity UI document exceeds ${ACTIVITY_UI_MAX_BYTES} bytes`);
 			}
 			atomicWritePrivateJson(this.paths.uiFile, document);
 			this.uiKnownGood = true;
@@ -245,6 +255,10 @@ export class FileActivityStore implements ActivityStore {
 		} catch (error) {
 			this.diagnostic("io", this.paths.uiFile, error);
 		}
+	}
+
+	private protectedExpansionKeys(): ReadonlySet<string> {
+		return new Set(this.feedActivities.map(activityExpansionPersistenceKey));
 	}
 
 	private startObservation(generation: number, ownerSessionId: string): void {
@@ -297,7 +311,7 @@ export class FileActivityStore implements ActivityStore {
 	private reload(generation: number, ownerSessionId: string): void {
 		if (!this.paths || generation !== this.generation) return;
 		try {
-			const value = readPrivateJson(this.paths.feedFile);
+			const value = readPrivateJson(this.paths.feedFile, ACTIVITY_FEED_MAX_BYTES);
 			if (value !== undefined) {
 				const record = recordOf(value);
 				if (record?.schemaVersion !== ACTIVITY_SCHEMA_VERSION) {
@@ -318,7 +332,7 @@ export class FileActivityStore implements ActivityStore {
 			this.diagnostic("io", this.paths.feedFile, error);
 		}
 		try {
-			const value = readPrivateJson(this.paths.uiFile);
+			const value = readPrivateJson(this.paths.uiFile, ACTIVITY_UI_MAX_BYTES);
 			if (value !== undefined) {
 				const record = recordOf(value);
 				if (record?.schemaVersion !== ACTIVITY_SCHEMA_VERSION) {

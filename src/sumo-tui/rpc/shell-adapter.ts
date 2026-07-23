@@ -171,11 +171,13 @@ export class RpcShellAdapter {
 			onActivityExpansionMigration: options.onActivityExpansionMigration,
 			onAllActivityExpansionChange: options.onAllActivityExpansionChange,
 		});
-		this.chat.applyActivityExpansionSnapshot(options.initialActivities?.expansion ?? {}, options.initialActivities?.defaultExpansion);
 		// Seed feed identity before transcript virtualization so archived transcript
 		// completions claim their cards instead of reappearing as feed-only rows.
 		this.chat.reconcileFeedActivities(options.initialActivities?.activities ?? []);
 		this.chat.replaceViewModels(this.transcript.messages);
+		// Expansion is host-owned and paints only after every initial feed/transcript
+		// owner is known; unknown persisted IDs are deliberately pruned by the pager.
+		this.chat.applyActivityExpansionSnapshot(options.initialActivities?.expansion ?? {}, options.initialActivities?.defaultExpansion);
 		this.splash = createSplashTree(yoga, undefined, () => defaultSplashSnapshot(this.isActive()));
 		(this.editor as SplashAwareComponent | undefined)?.setSplashProvider?.(() => !this.isActive());
 		const editorComponent = new RpcEditorShellComponent(this, options.inputPreview);
@@ -220,9 +222,6 @@ export class RpcShellAdapter {
 	}
 
 	public update(snapshot: Partial<RpcShellAdapterSnapshot>): void {
-		if (snapshot.activities) {
-			this.chat.applyActivityExpansionSnapshot(snapshot.activities.expansion, snapshot.activities.defaultExpansion);
-		}
 		if (snapshot.state) {
 			this.state = snapshot.state;
 			this.syncWorkingIndicatorTimer();
@@ -258,6 +257,9 @@ export class RpcShellAdapter {
 			// transcript application is the simplest rule that stays correct
 			// for both paths.
 			this.selection.clear();
+		}
+		if (snapshot.activities) {
+			this.chat.applyActivityExpansionSnapshot(snapshot.activities.expansion, snapshot.activities.defaultExpansion);
 		}
 	}
 

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { CustomEditor } from "@earendil-works/pi-coding-agent";
 import { CURSOR_MARKER, type Component } from "@earendil-works/pi-tui";
 import { describe, expect, it, vi } from "vitest";
@@ -350,7 +351,7 @@ describe("ChatPager", () => {
 	it("prunes implicit Activity state as messages virtualize", async () => {
 		const yoga = await loadYoga();
 		const root = new SumoNode(yoga.Node.create());
-		const chat = ChatPager.create(yoga, root, { maxRenderedMessages: 2 });
+		const chat = ChatPager.create(yoga, root, { maxRenderedMessages: 2, maxActivityBookkeepingEntries: 2 });
 		for (let index = 0; index < 20; index += 1) {
 			chat.addViewModel(activityViewModel(`read-${index}`, `src/${index}.ts`, "succeeded"));
 		}
@@ -358,11 +359,30 @@ describe("ChatPager", () => {
 			activityExpansionOverrides: Map<string, boolean>;
 			activityExpansionStates: Map<string, boolean>;
 			activityStatuses: Map<string, string>;
+			activityExpansionPersistenceKeys: Map<string, string>;
+			activityBookkeepingLru: Map<string, boolean>;
 		};
 
 		expect(state.activityExpansionOverrides.size).toBe(0);
 		expect(state.activityExpansionStates.size).toBeLessThanOrEqual(2);
 		expect(state.activityStatuses.size).toBeLessThanOrEqual(2);
+		expect(state.activityExpansionPersistenceKeys.size).toBeLessThanOrEqual(4);
+		expect(state.activityBookkeepingLru.size).toBeLessThanOrEqual(2);
+		root.dispose();
+	});
+
+	it("protects an incoming rendered Activity override while indexing a large virtualized prefix", async () => {
+		const yoga = await loadYoga();
+		const root = new SumoNode(yoga.Node.create());
+		const chat = ChatPager.create(yoga, root, { maxRenderedMessages: 1, maxActivityBookkeepingEntries: 2 });
+		chat.replaceViewModels([activityViewModel("target", "src/target.ts", "running")]);
+		chat.setActivityExpansion("target", false);
+		chat.replaceViewModels([
+			...Array.from({ length: 8 }, (_, index) => activityViewModel(`history-${index}`, `src/history-${index}.ts`, "succeeded")),
+			activityViewModel("target", "src/target.ts", "running"),
+		]);
+
+		expect(chat.getActivityExpansion("target")).toBe(false);
 		root.dispose();
 	});
 
@@ -817,11 +837,11 @@ describe("ChatPager", () => {
 		const yoga = await loadYoga();
 		const root = new SumoNode(yoga.Node.create());
 		const chat = ChatPager.create(yoga, root, { onActivityExpansionChange, onAllActivityExpansionChange });
-		chat.applyActivityExpansionSnapshot({ "term-a": false }, true);
 		chat.reconcileFeedActivities([
 			{ id: "term-a", kind: "terminal", title: "a", status: "running" },
 			{ id: "term-b", kind: "terminal", title: "b", status: "running" },
 		]);
+		chat.applyActivityExpansionSnapshot({ "term-a": false }, true);
 		expect(chat.getActivityExpansion("term-a")).toBe(false);
 		expect(chat.getActivityExpansion("term-b")).toBe(true);
 		expect(onActivityExpansionChange).not.toHaveBeenCalled();
@@ -831,6 +851,78 @@ describe("ChatPager", () => {
 		expect(onActivityExpansionChange).toHaveBeenCalledWith("term-a", true);
 		chat.setToolExpansion(false);
 		expect(onAllActivityExpansionChange).toHaveBeenCalledWith(false, expect.arrayContaining(["term-a", "term-b"]));
+		root.dispose();
+	});
+
+	it("keeps canonical expansion keys for subagents outside the rendered window", async () => {
+		const yoga = await loadYoga();
+		const root = new SumoNode(yoga.Node.create());
+		const chat = ChatPager.create(yoga, root, { maxRenderedMessages: 1 });
+		const activity = { id: "subagent:virtual", sourceId: "spawn-virtual", kind: "subagent" as const, title: "virtual", status: "running" as const };
+		chat.replaceViewModels([
+			{ id: "virtual-card", role: "system", displayName: "SYSTEM", blocks: [{ type: "activity", activity }] },
+			{ id: "latest", role: "sumo", displayName: "SUMO", blocks: [{ type: "markdown", text: "latest" }] },
+		]);
+		const generation = createHash("sha256").update(activity.sourceId, "utf8").digest("hex").slice(0, 12);
+		chat.applyActivityExpansionSnapshot({ [`${activity.id}#${generation}`]: false });
+		expect(chat.getActivityExpansion(activity.id)).toBe(false);
+		root.dispose();
+	});
+
+	it("retains expansion choices for all live owners beyond the stale-entry LRU bound", async () => {
+		const yoga = await loadYoga();
+		const root = new SumoNode(yoga.Node.create());
+		const chat = ChatPager.create(yoga, root, { maxActivityBookkeepingEntries: 4 });
+		const activities = Array.from({ length: 6 }, (_, index) => ({ id: `term-live-${index}`, kind: "terminal" as const, title: `live ${index}`, status: "running" as const }));
+		chat.reconcileFeedActivities(activities);
+		for (const activity of activities) chat.setActivityExpansion(activity.id, false);
+		expect(activities.every((activity) => chat.getActivityExpansion(activity.id) === false)).toBe(true);
+		chat.reconcileFeedActivities([]);
+		const bookkeeping = chat as unknown as Record<string, Map<string, unknown>>;
+		expect(bookkeeping.activityBookkeepingLru?.size).toBeLessThanOrEqual(4);
+		root.dispose();
+	});
+
+	it("re-enrolls transcript history for bounded eviction when live feed ownership ends", async () => {
+		const yoga = await loadYoga();
+		const root = new SumoNode(yoga.Node.create());
+		const chat = ChatPager.create(yoga, root, { maxRenderedMessages: 1, maxActivityBookkeepingEntries: 2 });
+		const activities = Array.from({ length: 6 }, (_, index) => ({ id: `term-release-${index}`, kind: "terminal" as const, title: `release ${index}`, status: "running" as const }));
+		chat.replaceViewModels(activities.map((entry, index) => ({ id: `message-${index}`, role: "system" as const, displayName: "SYSTEM", blocks: [{ type: "activity" as const, activity: entry }] })));
+		chat.reconcileFeedActivities(activities);
+		for (const activity of activities) chat.setActivityExpansion(activity.id, false);
+		chat.reconcileFeedActivities([]);
+
+		const bookkeeping = chat as unknown as Record<string, Map<string, unknown>>;
+		expect(bookkeeping.activityExpansionOverrides?.size).toBeLessThanOrEqual(3);
+		expect(bookkeeping.activityExpansionPersistenceKeys?.size).toBeLessThanOrEqual(3);
+		expect(bookkeeping.activityBookkeepingLru?.size).toBeLessThanOrEqual(2);
+		root.dispose();
+	});
+
+	it("prunes ownerless Activity expansion state and bounds LRU bookkeeping under churn", async () => {
+		const yoga = await loadYoga();
+		const root = new SumoNode(yoga.Node.create());
+		const chat = ChatPager.create(yoga, root, { maxActivityBookkeepingEntries: 4 });
+		for (let index = 0; index < 20; index += 1) {
+			const id = `term-churn-${index}`;
+			chat.reconcileFeedActivities([{ id, kind: "terminal", title: id, status: "running" }]);
+			chat.setActivityExpansion(id, false);
+			chat.reconcileFeedActivities([]);
+			expect(chat.getKnownActivityIds()).toEqual([]);
+		}
+
+		chat.reconcileFeedActivities([{ id: "term-churn-0", kind: "terminal", title: "reused", status: "running" }]);
+		expect(chat.getActivityExpansion("term-churn-0")).toBe(true);
+		const bookkeeping = chat as unknown as Record<string, Map<string, unknown>>;
+		for (const key of [
+			"activityExpansionOverrides",
+			"persistedActivityExpansionOverrides",
+			"activityExpansionPersistenceKeys",
+			"activityExpansionStates",
+			"activityStatuses",
+			"activityBookkeepingLru",
+		]) expect(bookkeeping[key]?.size).toBeLessThanOrEqual(4);
 		root.dispose();
 	});
 

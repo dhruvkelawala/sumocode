@@ -10,6 +10,8 @@
 import { writeFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { replayAnsi } from "./visual-v2/ansi-replay.mjs";
+import { captureFixtureScenario } from "./visual-v2/fixture-capture.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const out = resolve(repoRoot, "docs", "ui", "bible");
@@ -542,6 +544,76 @@ ${sidebarColumnHTML}    </div>
 `;
 }
 
+function escapeHtml(value) {
+	return String(value)
+		.replaceAll("&", "&amp;")
+		.replaceAll("<", "&lt;")
+		.replaceAll(">", "&gt;")
+		.replaceAll('"', "&quot;");
+}
+
+function snapshotStyle(cell) {
+	let fg = cell.fg;
+	let bg = cell.bg;
+	if (cell.inverse) [fg, bg] = [bg, fg];
+	const styles = [`color:${fg}`, `background:${bg}`];
+	if (cell.bold) styles.push("font-weight:700");
+	if (cell.italic) styles.push("font-style:italic");
+	if (cell.underline) styles.push("text-decoration:underline");
+	if (cell.dim) styles.push("opacity:0.72");
+	return styles.join(";");
+}
+
+function snapshotRowHtml(row, includeWidths) {
+	let html = "";
+	let run = [];
+	let style;
+	const flush = () => {
+		if (run.length === 0) return;
+		const width = run.length;
+		const widthStyle = includeWidths ? `;width:${width}ch;min-width:${width}ch` : "";
+		html += `<span class="v2-cell-run" style="${style}${widthStyle}">${escapeHtml(run.join(""))}</span>`;
+		run = [];
+	};
+	for (const cell of row) {
+		if (cell.width === 0 || cell.char === "") continue;
+		const nextStyle = snapshotStyle(cell);
+		if (style !== undefined && nextStyle !== style) flush();
+		style = nextStyle;
+		run.push(cell.char || " ");
+	}
+	flush();
+	return html;
+}
+
+function buildActivityFixtureBible(snapshot, title) {
+	const visibleRows = snapshot.cells.map((row) => `<div class="row" style="background:${row[0]?.bg ?? "#1A1511"}">${snapshotRowHtml(row, true)}</div>`).join("\n");
+	const styledGrid = snapshot.cells.map((row) => snapshotRowHtml(row, false)).join("\n");
+	return `<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>${title}</title>
+<link rel="stylesheet" href="_assets/tokens.css">
+<style>
+html, body { min-height: 100%; }
+.stage { min-height: auto; align-items: flex-start; justify-content: flex-start; padding: 0; }
+.v2-cell-run { display: inline-block; height: var(--cell-h); line-height: var(--cell-h); white-space: pre; vertical-align: top; text-align: left; letter-spacing: 0; flex-shrink: 0; }
+.fixture-styled-grid { display: none; }
+</style>
+</head>
+<body>
+<div class="stage">
+  <div data-render-rect class="term" style="--term-cols:${snapshot.cols};--term-rows:${snapshot.rows};">
+${visibleRows}
+  </div>
+  <pre class="grid fixture-styled-grid">${styledGrid}</pre>
+</div>
+</body>
+</html>
+`;
+}
+
 for (const v of [
 	{ filename: "scene-active.html", spec: LANDSCAPE },
 	{ filename: "scene-active-portrait.html", spec: PORTRAIT },
@@ -555,6 +627,29 @@ for (const v of [
 	{ filename: "scene-active-skill-pill.html", spec: { ...LANDSCAPE, toolStyle: "skill" } },
 	{ filename: "scene-active-scroll-scribe.html", spec: { ...LANDSCAPE, toolStyle: "scroll" } },
 ]) {
+	if (v.spec.toolStyle === "activity-cards") continue;
 	writeFileSync(resolve(out, v.filename), buildScene(v.spec));
 	console.log(`wrote ${v.filename}  (${v.spec.cols}\u00d7${v.spec.rows})`);
+}
+
+const activityExpansion = {
+	"fixture-running-subagent": true,
+	"fixture-running-terminal": true,
+	"fixture-completed-terminal": false,
+	"fixture-failed-terminal": false,
+	"fixture-collapsed-subagent": false,
+};
+for (const { filename, dimensions } of [
+	{ filename: "scene-activity-cards.html", dimensions: LANDSCAPE },
+	{ filename: "scene-activity-cards-portrait.html", dimensions: PORTRAIT },
+]) {
+	const capture = await captureFixtureScenario({
+		id: `bible-${filename}`,
+		lane: "fixture",
+		dimensions: { cols: dimensions.cols, rows: dimensions.rows },
+		fixture: { id: "activity-cards", theme: "cathedral", activityExpansion },
+	});
+	const snapshot = await replayAnsi(capture.bytes, dimensions);
+	writeFileSync(resolve(out, filename), buildActivityFixtureBible(snapshot, `Bible · Durable Activity Cards · ${dimensions.cols}×${dimensions.rows}`));
+	console.log(`wrote ${filename}  (${dimensions.cols}\u00d7${dimensions.rows}) from retained fixture cells`);
 }

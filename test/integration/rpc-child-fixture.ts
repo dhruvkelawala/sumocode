@@ -35,6 +35,8 @@ export interface RpcChildFixtureOptions {
 	readonly compactDelayMs?: number;
 	readonly promptDelayMs?: number;
 	readonly settleDelayMs?: number;
+	/** Emit a post-get_state message_update→agent_end→agent_settled suffix while get_messages returns its older snapshot. */
+	readonly sessionHydrationRace?: boolean;
 	readonly compactReason?: "manual" | "threshold" | "overflow";
 	readonly compactSummary?: string;
 	readonly compactTokensBefore?: number;
@@ -56,6 +58,8 @@ let isStreaming = false;
 let isCompacting = false;
 let pendingPrompt = null;
 let holdNextPromptUntilAbort = ${options.holdPromptUntilAbort ? "true" : "false"};
+let sessionHydrationRacePending = false;
+const sessionHydrationRace = ${options.sessionHydrationRace ? "true" : "false"};
 const streamChunks = ${JSON.stringify(options.streamChunks ?? null)};
 const chunkDelayMs = ${JSON.stringify(options.chunkDelayMs ?? 500)};
 const streamChunkSentinels = ${options.streamChunkSentinels ? "true" : "false"};
@@ -118,6 +122,19 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 		return;
 	}
 	if (command.type === "get_messages") {
+		if (sessionHydrationRacePending) {
+			sessionHydrationRacePending = false;
+			const hydrationSnapshot = [...messages];
+			setTimeout(() => write({ type: "message_update", message: { id: "session-race-draft", role: "assistant", content: "session race draft" } }), 5);
+			setTimeout(() => {
+				messages = [{ id: "session-race-complete", role: "assistant", content: "session race completed" }];
+				isStreaming = false;
+				write({ type: "agent_end", messages, willRetry: false });
+			}, 10);
+			setTimeout(() => write({ type: "agent_settled" }), 15);
+			setTimeout(() => write(response(command, { messages: hydrationSnapshot })), 40);
+			return;
+		}
 		write(response(command, { messages }));
 		return;
 	}
@@ -134,10 +151,11 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 		sessionId = newSessionId;
 		sessionName = newSessionName;
 		messages = [];
-		isStreaming = false;
+		isStreaming = sessionHydrationRace;
 		isCompacting = false;
 		write({ type: "session_info_changed", name: sessionName });
-		write({ type: "agent_end", messages, willRetry: false });
+		if (sessionHydrationRace) sessionHydrationRacePending = true;
+		else write({ type: "agent_end", messages, willRetry: false });
 		write(response(command, { cancelled: false }));
 		return;
 	}

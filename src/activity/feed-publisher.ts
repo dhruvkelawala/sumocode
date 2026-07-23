@@ -1,5 +1,6 @@
-import { readdirSync } from "node:fs";
-import { join } from "node:path";
+import { randomUUID } from "node:crypto";
+import { existsSync, linkSync, readdirSync, renameSync, rmSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 import {
 	isSettledActivityStatus,
 	mergeActivitySnapshot,
@@ -11,17 +12,18 @@ import {
 import { boundedOutputTail } from "./output-tail.js";
 import {
 	ACTIVITY_DOCUMENT_MAX_BYTES,
+	ACTIVITY_FEED_MAX_BYTES,
 	ACTIVITY_SCHEMA_VERSION,
 	activityPaths,
 	atomicWritePrivateJson,
 	defaultActivityStateRoot,
-	ensureActivityRoot,
 	readPrivateJson,
+	writePrivateJsonExclusive,
 } from "./persistence.js";
 
 export const ACTIVITY_SETTLED_RETENTION_COUNT = 64;
-export const ACTIVITY_FEED_MAX_RECORDS = 16_384;
 export const ACTIVITY_SETTLED_RETENTION_MS = 7 * 24 * 60 * 60 * 1_000;
+const ACTIVITY_WRITER_SCHEMA_VERSION = 1;
 const MAX_ACTIVE_TOOLS = 16;
 const MAX_TITLE_CHARS = 512;
 const MAX_ID_CHARS = 512;
@@ -41,10 +43,23 @@ export interface ActivityFeedDiagnostic {
 	readonly message: string;
 }
 
+export interface ActivityFeedWriterIdentity {
+	readonly token: string;
+	readonly pid: number;
+	readonly processStartTime: string;
+}
+
+export type ActivityFeedWriterState = "alive" | "dead" | "unknown";
+
 export interface ActivityFeedPublisherOptions {
 	readonly rootDir?: string;
 	readonly now?: () => number;
 	readonly onDiagnostic?: (diagnostic: ActivityFeedDiagnostic) => void;
+	/** Production bridges provide a verifiable PID/start/token identity. */
+	readonly writerIdentity?: ActivityFeedWriterIdentity;
+	readonly inspectWriter?: (writer: ActivityFeedWriterIdentity) => ActivityFeedWriterState;
+	/** @internal Explicit fixture writer; refuses to bypass any existing lease file. */
+	readonly allowUnleasedWritesForTests?: boolean;
 }
 
 function positiveInteger(value: unknown): value is number {
@@ -53,6 +68,157 @@ function positiveInteger(value: unknown): value is number {
 
 function recordOf(value: unknown): Record<string, unknown> | undefined {
 	return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+}
+
+function errorCode(error: unknown): string | undefined {
+	return typeof error === "object" && error !== null && "code" in error
+		? String((error as { code?: unknown }).code)
+		: undefined;
+}
+
+function parseWriterIdentity(value: unknown): ActivityFeedWriterIdentity | undefined {
+	const record = recordOf(value);
+	if (
+		!record || record.schemaVersion !== ACTIVITY_WRITER_SCHEMA_VERSION ||
+		typeof record.token !== "string" || !record.token ||
+		!positiveInteger(record.pid) || typeof record.processStartTime !== "string" || !record.processStartTime
+	) return undefined;
+	return { token: record.token, pid: record.pid, processStartTime: record.processStartTime };
+}
+
+function writerDocument(writer: ActivityFeedWriterIdentity): Record<string, unknown> {
+	return { schemaVersion: ACTIVITY_WRITER_SCHEMA_VERSION, ...writer };
+}
+
+function sameWriter(left: ActivityFeedWriterIdentity, right: ActivityFeedWriterIdentity): boolean {
+	return left.token === right.token && left.pid === right.pid && left.processStartTime === right.processStartTime;
+}
+
+function sameWriterProcess(left: ActivityFeedWriterIdentity, right: ActivityFeedWriterIdentity): boolean {
+	return left.pid === right.pid && left.processStartTime === right.processStartTime;
+}
+
+function writerTakeoverPaths(writerFile: string): string[] {
+	const prefix = `${basename(writerFile)}.takeover-`;
+	try {
+		return readdirSync(dirname(writerFile), { encoding: "utf8" })
+			.filter((name) => name.startsWith(prefix))
+			.map((name) => join(dirname(writerFile), name));
+	} catch {
+		return [];
+	}
+}
+
+function readWriter(path: string): ActivityFeedWriterIdentity | undefined {
+	const value = readPrivateJson(path, 16 * 1024);
+	return value === undefined ? undefined : parseWriterIdentity(value);
+}
+
+/** Restore a displaced complete lease without overwriting any newer winner. */
+function restoreTakeoverLease(path: string, writerFile: string): ActivityFeedWriterIdentity | undefined {
+	try {
+		linkSync(path, writerFile);
+	} catch (error) {
+		if (errorCode(error) !== "EEXIST") throw error;
+	}
+	const canonical = readWriter(writerFile);
+	if (canonical) rmSync(path, { force: true });
+	return canonical;
+}
+
+function recoverOwnTakeover(writerFile: string, writer: ActivityFeedWriterIdentity): void {
+	for (const path of writerTakeoverPaths(writerFile)) {
+		const displaced = readWriter(path);
+		if (!displaced || !sameWriter(displaced, writer)) continue;
+		restoreTakeoverLease(path, writerFile);
+		return;
+	}
+}
+
+interface WriterClaim {
+	readonly owned: boolean;
+	readonly writerDeathProven: boolean;
+}
+
+/**
+ * Claim the per-session durable writer name. The canonical writer file is an
+ * atomic compare-and-swap token: a contender may displace it only after the
+ * recorded PID/start identity is proven dead. Same-process factory handoff is
+ * separately serialized by Plan 080's process-global session ownership.
+ */
+function claimWriter(
+	writerFile: string,
+	candidate: ActivityFeedWriterIdentity,
+	inspectWriter: (writer: ActivityFeedWriterIdentity) => ActivityFeedWriterState,
+): WriterClaim {
+	let abandonedWriterDeathProven = false;
+	for (let attempt = 0; attempt < 16; attempt += 1) {
+		let blockedByTakeover = false;
+		for (const path of writerTakeoverPaths(writerFile)) {
+			const writer = readWriter(path);
+			if (!writer) {
+				blockedByTakeover = true;
+				continue;
+			}
+			if (sameWriterProcess(writer, candidate)) {
+				restoreTakeoverLease(path, writerFile);
+				continue;
+			}
+			if (inspectWriter(writer) !== "dead") {
+				blockedByTakeover = true;
+				continue;
+			}
+			// Takeover names are immutable and never reused, so removing one whose
+			// process is proven dead cannot unlink an ABA replacement.
+			abandonedWriterDeathProven = true;
+			rmSync(path, { force: true });
+		}
+		if (blockedByTakeover) return { owned: false, writerDeathProven: false };
+
+		let current: ActivityFeedWriterIdentity | undefined;
+		try {
+			current = readWriter(writerFile);
+		} catch {
+			return { owned: false, writerDeathProven: false };
+		}
+		if (!current) {
+			try {
+				writePrivateJsonExclusive(writerFile, writerDocument(candidate));
+				return { owned: true, writerDeathProven: abandonedWriterDeathProven };
+			} catch (error) {
+				if (errorCode(error) === "EEXIST") continue;
+				throw error;
+			}
+		}
+		if (sameWriter(current, candidate)) return { owned: true, writerDeathProven: false };
+		const sameProcessHandoff = sameWriterProcess(current, candidate);
+		const previousWriterDead = !sameProcessHandoff && inspectWriter(current) === "dead";
+		if (!sameProcessHandoff && !previousWriterDead) return { owned: false, writerDeathProven: false };
+
+		const takeover = `${writerFile}.takeover-${randomUUID()}`;
+		try {
+			renameSync(writerFile, takeover);
+		} catch (error) {
+			if (errorCode(error) === "ENOENT") continue;
+			throw error;
+		}
+		const moved = readWriter(takeover);
+		if (!moved || !sameWriter(moved, current)) {
+			// We displaced a newer generation after an ABA race. Restore its
+			// complete inode with an atomic no-replace link before retrying; if an
+			// even newer canonical winner exists, that writer stays authoritative.
+			restoreTakeoverLease(takeover, writerFile);
+			continue;
+		}
+		try {
+			writePrivateJsonExclusive(writerFile, writerDocument(candidate));
+			rmSync(takeover, { force: true });
+			return { owned: true, writerDeathProven: previousWriterDead || abandonedWriterDeathProven };
+		} catch (error) {
+			if (errorCode(error) !== "EEXIST") throw error;
+		}
+	}
+	return { owned: false, writerDeathProven: false };
 }
 
 export function redactActivitySecrets(text: string): string {
@@ -115,10 +281,10 @@ export function sanitizeActivityForFeed(
 		title: boundedSafeHead(activity.title, MAX_TITLE_CHARS) || "activity",
 		status: activity.status,
 		// Invocation/command payloads can embed credentials in otherwise ordinary
-		// strings. The durable read model does not need them; omit rather than
-		// attempt incomplete shell-language secret redaction.
-		...(activity.subject === undefined ? {} : { subject: boundedSafeHead(activity.subject, MAX_SUBJECT_CHARS) }),
-		...(activity.currentStep === undefined ? {} : { currentStep: boundedSafeHead(activity.currentStep, MAX_SUBJECT_CHARS) }),
+		// strings. Terminal subjects are working directories, so omit them too;
+		// other Activity kinds use product-owned labels rather than shell context.
+		...(activity.kind === "terminal" || activity.subject === undefined ? {} : { subject: boundedSafeHead(activity.subject, MAX_SUBJECT_CHARS) }),
+		...(activity.currentStep === undefined ? {} : { currentStep: boundedSafeHead(redactActivitySecrets(activity.currentStep), MAX_SUBJECT_CHARS) }),
 		...(outputTail === undefined ? {} : { outputTail }),
 		...(body === undefined ? {} : { body }),
 		...(activeTools && activeTools.length > 0 ? { activeTools } : {}),
@@ -140,7 +306,7 @@ export function parseActivityFeedDocument(value: unknown, expectedOwnerSessionId
 		typeof record.ownerSessionId !== "string" || !record.ownerSessionId ||
 		(expectedOwnerSessionId !== undefined && record.ownerSessionId !== expectedOwnerSessionId) ||
 		!positiveInteger(record.revision) || !positiveInteger(record.updatedAt) ||
-		!Array.isArray(record.activities) || record.activities.length > ACTIVITY_FEED_MAX_RECORDS
+		!Array.isArray(record.activities)
 	) return undefined;
 	const activities: ActivitySnapshot[] = [];
 	for (const candidate of record.activities) {
@@ -249,10 +415,11 @@ function fitFeedBudget(
 	}
 	const minimal = activities.map((activity) => budgetActivity(activity, 0, 0, true));
 	if (fits(minimal)) return minimal;
-	// Production producers are explicitly capacity-bounded (terminal manager +
-	// subagent manager), so this is an invalid direct-publisher input rather than
-	// a reason to discard any running record.
-	throw new Error(`Activity feed metadata exceeds ${ACTIVITY_DOCUMENT_MAX_BYTES} bytes`);
+	// The 4 MiB target is an optional-presentation budget, not an execution
+	// ceiling. Identity/status metadata for every running record survives even
+	// when that metadata alone is larger; the private reader still enforces the
+	// separate 64 MiB hard safety envelope.
+	return minimal;
 }
 
 export class ActivityFeedPublisher {
@@ -260,6 +427,12 @@ export class ActivityFeedPublisher {
 	private readonly now: () => number;
 	private readonly onDiagnostic?: (diagnostic: ActivityFeedDiagnostic) => void;
 	private readonly path: string;
+	private readonly writerFile: string;
+	private readonly writerIdentity: ActivityFeedWriterIdentity | undefined;
+	private readonly unleasedWriterForTests: boolean;
+	private writerOwned: boolean;
+	private writerDeathProven = false;
+	private readonly abandonedRunningIds = new Set<string>();
 	private revision = 0;
 	private activities: readonly ActivitySnapshot[] = [];
 	private publicationBlocked = false;
@@ -271,8 +444,52 @@ export class ActivityFeedPublisher {
 		this.rootDir = options.rootDir ?? defaultActivityStateRoot();
 		this.now = options.now ?? Date.now;
 		this.onDiagnostic = options.onDiagnostic;
-		this.path = activityPaths(ownerSessionId, this.rootDir).feedFile;
+		const paths = activityPaths(ownerSessionId, this.rootDir);
+		this.path = paths.feedFile;
+		this.writerFile = paths.writerFile;
+		this.writerIdentity = options.writerIdentity;
+		this.unleasedWriterForTests = !this.writerIdentity && options.allowUnleasedWritesForTests === true;
+		if (this.writerIdentity) {
+			const claim = claimWriter(this.writerFile, this.writerIdentity, options.inspectWriter ?? (() => "unknown"));
+			this.writerOwned = claim.owned;
+			this.writerDeathProven = claim.writerDeathProven;
+		} else {
+			// Unidentified publishers are read-only by default. Tests may opt into
+			// fixture writes only while no real writer lease exists.
+			this.writerOwned = this.unleasedWriterForTests && !existsSync(this.writerFile);
+		}
+		// Claim first, then hydrate. A successful death-proven takeover now owns
+		// the writer token, so no incumbent can publish between this load and our
+		// first write and have that final update overwritten from stale memory.
 		this.load();
+		if (this.writerOwned && this.writerDeathProven) {
+			for (const activity of this.activities) {
+				if (activity.status === "queued" || activity.status === "running") this.abandonedRunningIds.add(activity.id);
+			}
+		}
+	}
+
+	public get hasWriterOwnership(): boolean {
+		return this.writerOwned;
+	}
+
+	public get canPublish(): boolean {
+		return this.writerOwned && !this.publicationBlocked;
+	}
+
+	/** Missing running records may be reconciled only after the former writer is proven dead. */
+	public get canReconcileAbandonedActivities(): boolean {
+		return this.writerOwned && this.abandonedRunningIds.size > 0;
+	}
+
+	public getAbandonedRunningIds(): ReadonlySet<string> {
+		return new Set(this.abandonedRunningIds);
+	}
+
+	/** Consume former-writer death proof only after replacement publication succeeds. */
+	public completeAbandonedReconciliation(): void {
+		this.abandonedRunningIds.clear();
+		this.writerDeathProven = false;
 	}
 
 	public getSnapshot(): readonly ActivitySnapshot[] {
@@ -280,6 +497,13 @@ export class ActivityFeedPublisher {
 	}
 
 	public publish(activities: readonly ActivitySnapshot[]): boolean {
+		if (this.writerIdentity && !existsSync(this.writerFile)) recoverOwnTakeover(this.writerFile, this.writerIdentity);
+		const currentWriter = this.writerIdentity ? readWriter(this.writerFile) : undefined;
+		const fixtureLeaseWasClaimed = this.unleasedWriterForTests && existsSync(this.writerFile);
+		if (!this.writerOwned || fixtureLeaseWasClaimed || (this.writerIdentity && (!currentWriter || !sameWriter(currentWriter, this.writerIdentity)))) {
+			this.writerOwned = false;
+			throw new Error("Activity feed is owned by another live session writer");
+		}
 		if (this.publicationBlocked) {
 			throw new Error("Activity feed publication blocked by an unreadable persisted document");
 		}
@@ -288,9 +512,6 @@ export class ActivityFeedPublisher {
 			activities.map((activity) => sanitizeActivityForFeed(activity, this.ownerSessionId)),
 			now,
 		);
-		if (retained.length > ACTIVITY_FEED_MAX_RECORDS) {
-			throw new Error(`Activity feed exceeds ${ACTIVITY_FEED_MAX_RECORDS} records`);
-		}
 		const revision = this.revision + 1;
 		const updatedAt = Math.max(1, Math.floor(now));
 		const projected = fitFeedBudget(retained, this.ownerSessionId, revision, updatedAt);
@@ -302,6 +523,9 @@ export class ActivityFeedPublisher {
 			updatedAt,
 			activities: projected,
 		};
+		if (feedDocumentBytes(document) > ACTIVITY_FEED_MAX_BYTES) {
+			throw new Error(`Activity feed identity metadata exceeds ${ACTIVITY_FEED_MAX_BYTES} bytes`);
+		}
 		atomicWritePrivateJson(this.path, document);
 		this.revision = revision;
 		this.activities = projected;
@@ -310,7 +534,7 @@ export class ActivityFeedPublisher {
 
 	private load(): void {
 		try {
-			const value = readPrivateJson(this.path);
+			const value = readPrivateJson(this.path, ACTIVITY_FEED_MAX_BYTES);
 			if (value === undefined) return;
 			const record = recordOf(value);
 			if (record?.schemaVersion !== ACTIVITY_SCHEMA_VERSION) {
@@ -335,24 +559,4 @@ export class ActivityFeedPublisher {
 	private diagnostic(kind: ActivityFeedDiagnostic["kind"], message: string): void {
 		this.onDiagnostic?.({ kind, path: this.path, message });
 	}
-}
-
-/** Discover feed owners without relying on raw session IDs in path names. */
-export function discoverActivityFeedOwners(options: ActivityFeedPublisherOptions = {}): string[] {
-	const rootDir = options.rootDir ?? defaultActivityStateRoot();
-	const root = ensureActivityRoot(rootDir);
-	const owners = new Set<string>();
-	for (const entry of readdirSync(root, { withFileTypes: true })) {
-		if (!entry.isDirectory() || entry.isSymbolicLink()) continue;
-		const path = join(root, entry.name, "feed.json");
-		try {
-			const value = readPrivateJson(path);
-			if (value === undefined) continue;
-			const document = parseActivityFeedDocument(value);
-			if (document) owners.add(document.ownerSessionId);
-		} catch (error) {
-			options.onDiagnostic?.({ kind: "io", path, message: error instanceof Error ? error.message : String(error) });
-		}
-	}
-	return [...owners];
 }

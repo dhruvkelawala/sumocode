@@ -126,11 +126,11 @@ describe("TerminalTaskManager", () => {
 		expect(new TerminalTaskStore({ rootDir }).loadAll()[0]).toEqual(task);
 	});
 
-	it("enforces a running-terminal capacity that keeps the durable feed representable", async () => {
-		const target = manager({ maxRunningTasks: 1 });
-		await start(target);
-		await expect(start(target)).rejects.toThrow("Terminal capacity reached (1 running)");
-	});
+	it("does not cap terminal execution to the feed presentation budget", async () => {
+		const target = manager();
+		for (let index = 0; index < 257; index += 1) await start(target);
+		expect(target.getSnapshots().filter((task) => task.status === "running")).toHaveLength(257);
+	}, 20_000);
 
 	it("replays deeply immutable snapshot copies without exposing manager state", async () => {
 		const target = manager();

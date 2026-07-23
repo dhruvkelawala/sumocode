@@ -6,6 +6,7 @@ import {
 	fchmodSync,
 	fsyncSync,
 	fstatSync,
+	linkSync,
 	lstatSync,
 	mkdirSync,
 	openSync,
@@ -22,12 +23,16 @@ export const ACTIVITY_SCHEMA_VERSION = 1;
 export const PRIVATE_ACTIVITY_DIRECTORY_MODE = 0o700;
 export const PRIVATE_ACTIVITY_FILE_MODE = 0o600;
 export const ACTIVITY_DOCUMENT_MAX_BYTES = 4 * 1024 * 1024;
+/** Feed optional payload targets 4 MiB; identity/status metadata may grow to this private hard limit. */
+export const ACTIVITY_FEED_MAX_BYTES = 64 * 1024 * 1024;
+export const ACTIVITY_UI_MAX_BYTES = 64 * 1024 * 1024;
 const NO_FOLLOW = constants.O_NOFOLLOW ?? 0;
 
 export interface ActivityPaths {
 	readonly directory: string;
 	readonly feedFile: string;
 	readonly uiFile: string;
+	readonly writerFile: string;
 }
 
 function errorCode(error: unknown): string | undefined {
@@ -141,6 +146,7 @@ export function activityPaths(ownerSessionId: string, rootDir = defaultActivityS
 		directory,
 		feedFile: join(directory, "feed.json"),
 		uiFile: join(directory, "ui.json"),
+		writerFile: join(directory, "writer.json"),
 	};
 }
 
@@ -164,6 +170,46 @@ export function readPrivateJson(path: string, maxBytes = ACTIVITY_DOCUMENT_MAX_B
 		throw error;
 	} finally {
 		if (descriptor !== undefined) closeSync(descriptor);
+	}
+}
+
+/**
+ * Create a private JSON document only when no path already owns the name.
+ * The canonical pathname appears via an atomic no-replace hard link only after
+ * the temporary inode is complete and fsynced, so a creator crash can leave an
+ * unreferenced temp file but never a truncated canonical lease.
+ */
+export function writePrivateJsonExclusive(path: string, value: unknown): void {
+	const directory = dirname(path);
+	assertPrivateDirectory(directory);
+	const temporary = join(directory, `.${randomUUID()}.claim`);
+	let descriptor: number | undefined;
+	try {
+		descriptor = openSync(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | NO_FOLLOW, PRIVATE_ACTIVITY_FILE_MODE);
+		fchmodSync(descriptor, PRIVATE_ACTIVITY_FILE_MODE);
+		writeFileSync(descriptor, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+		fsyncSync(descriptor);
+		closeSync(descriptor);
+		descriptor = undefined;
+		linkSync(temporary, path);
+		try {
+			const directoryDescriptor = openSync(directory, constants.O_RDONLY | NO_FOLLOW);
+			try {
+				fsyncSync(directoryDescriptor);
+			} finally {
+				closeSync(directoryDescriptor);
+			}
+		} catch {
+			// Some filesystems do not support directory fsync. The linked inode is
+			// already complete and file-fsynced.
+		}
+	} finally {
+		if (descriptor !== undefined) closeSync(descriptor);
+		try {
+			unlinkSync(temporary);
+		} catch (error) {
+			if (errorCode(error) !== "ENOENT") throw error;
+		}
 	}
 }
 

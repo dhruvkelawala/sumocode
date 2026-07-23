@@ -3,9 +3,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ActivitySnapshot } from "./domain.js";
-import { ActivityFeedPublisher } from "./feed-publisher.js";
+import { ActivityFeedPublisher, type ActivityFeedPublisherOptions } from "./feed-publisher.js";
 import { activityPaths, atomicWritePrivateJson } from "./persistence.js";
-import { FileActivityStore } from "./store.js";
+import { ACTIVITY_UI_MAX_EXPANSION_ENTRIES, FileActivityStore } from "./store.js";
 
 const roots: string[] = [];
 
@@ -13,6 +13,10 @@ function root(): string {
 	const path = mkdtempSync(join(tmpdir(), "sumocode-activity-store-"));
 	roots.push(path);
 	return path;
+}
+
+function fixturePublisher(ownerSessionId: string, options: ActivityFeedPublisherOptions = {}): ActivityFeedPublisher {
+	return new ActivityFeedPublisher(ownerSessionId, { ...options, allowUnleasedWritesForTests: true });
 }
 
 function activity(id: string, status: ActivitySnapshot["status"] = "running"): ActivitySnapshot {
@@ -35,7 +39,7 @@ afterEach(() => {
 describe("FileActivityStore", () => {
 	it("immediately replays one complete immutable snapshot", () => {
 		const stateRoot = root();
-		new ActivityFeedPublisher("session-a", { rootDir: stateRoot, now: () => 2_000 }).publish([activity("term-1")]);
+		fixturePublisher("session-a", { rootDir: stateRoot, now: () => 2_000 }).publish([activity("term-1")]);
 		const store = new FileActivityStore({ rootDir: stateRoot });
 		store.bindSession("session-a");
 		const seen: unknown[] = [];
@@ -55,7 +59,7 @@ describe("FileActivityStore", () => {
 		const store = new FileActivityStore({ rootDir: stateRoot, debounceMs: 5, pollMs: 20 });
 		store.bindSession("session-a");
 		expect(store.getSnapshot().activities).toEqual([]);
-		const publisher = new ActivityFeedPublisher("session-a", { rootDir: stateRoot, now: () => 2_000 });
+		const publisher = fixturePublisher("session-a", { rootDir: stateRoot, now: () => 2_000 });
 		publisher.publish([activity("term-1")]);
 		await waitFor(() => store.getSnapshot().activities[0]?.id === "term-1");
 		const prior = store.getSnapshot();
@@ -68,7 +72,7 @@ describe("FileActivityStore", () => {
 	it("retains last known-good data for corrupt and unknown-schema replacements", async () => {
 		const stateRoot = root();
 		const diagnostics: string[] = [];
-		const publisher = new ActivityFeedPublisher("session-a", { rootDir: stateRoot, now: () => 2_000 });
+		const publisher = fixturePublisher("session-a", { rootDir: stateRoot, now: () => 2_000 });
 		publisher.publish([activity("term-1")]);
 		const store = new FileActivityStore({
 			rootDir: stateRoot,
@@ -91,8 +95,8 @@ describe("FileActivityStore", () => {
 	it("ignores stale watcher callbacks after an owner rebind", async () => {
 		vi.useFakeTimers();
 		const stateRoot = root();
-		new ActivityFeedPublisher("session-a", { rootDir: stateRoot, now: () => 2_000 }).publish([activity("a")]);
-		new ActivityFeedPublisher("session-b", { rootDir: stateRoot, now: () => 2_000 }).publish([activity("b")]);
+		fixturePublisher("session-a", { rootDir: stateRoot, now: () => 2_000 }).publish([activity("a")]);
+		fixturePublisher("session-b", { rootDir: stateRoot, now: () => 2_000 }).publish([activity("b")]);
 		const callbacks: Array<() => void> = [];
 		const closed: boolean[] = [];
 		const watchImpl = ((_path: string, callback: () => void) => {
@@ -117,7 +121,7 @@ describe("FileActivityStore", () => {
 
 	it("suppresses revisions and listeners for semantic no-op feed revisions", async () => {
 		const stateRoot = root();
-		const publisher = new ActivityFeedPublisher("session-a", { rootDir: stateRoot, now: () => 2_000 });
+		const publisher = fixturePublisher("session-a", { rootDir: stateRoot, now: () => 2_000 });
 		publisher.publish([activity("term-1")]);
 		const store = new FileActivityStore({ rootDir: stateRoot, debounceMs: 5, pollMs: 20 });
 		store.bindSession("session-a");
@@ -133,7 +137,7 @@ describe("FileActivityStore", () => {
 
 	it("persists individual and global expansion in host-owned ui.json", () => {
 		const stateRoot = root();
-		new ActivityFeedPublisher("session-a", { rootDir: stateRoot, now: () => 2_000 }).publish([activity("a"), activity("b")]);
+		fixturePublisher("session-a", { rootDir: stateRoot, now: () => 2_000 }).publish([activity("a"), activity("b")]);
 		const first = new FileActivityStore({ rootDir: stateRoot, now: () => 3_000 });
 		first.bindSession("session-a");
 		first.setExpanded("a", false);
@@ -159,6 +163,28 @@ describe("FileActivityStore", () => {
 		store.setExpanded("a", false);
 		expect(JSON.parse(readFileSync(uiPath, "utf8"))).toMatchObject({ schemaVersion: 999, retained: "future-ui" });
 		store.dispose();
+	});
+
+	it("preserves durable expansion choices for every currently feed-owned Activity beyond the stale-entry bound", () => {
+		const stateRoot = root();
+		const activities = Array.from({ length: ACTIVITY_UI_MAX_EXPANSION_ENTRIES + 4 }, (_, index) => activity(`live-${index}`));
+		const historicalIds = Array.from({ length: ACTIVITY_UI_MAX_EXPANSION_ENTRIES }, (_, index) => `history-${index}`);
+		const publisher = fixturePublisher("session-live", { rootDir: stateRoot, now: () => 2_000 });
+		publisher.publish(activities);
+		const first = new FileActivityStore({ rootDir: stateRoot, now: () => 2_100 });
+		first.bindSession("session-live");
+		first.setAllExpanded(false, [...activities.map((entry) => entry.id), ...historicalIds]);
+		expect(Object.keys(first.getSnapshot().expansion)).toHaveLength(activities.length + historicalIds.length);
+		first.dispose();
+
+		publisher.publish([]);
+		const reloaded = new FileActivityStore({ rootDir: stateRoot });
+		reloaded.bindSession("session-live");
+		expect(Object.keys(reloaded.getSnapshot().expansion)).toHaveLength(activities.length + historicalIds.length);
+		expect(Object.values(reloaded.getSnapshot().expansion).every((expanded) => expanded === false)).toBe(true);
+		reloaded.setExpanded("new-history", true);
+		expect(Object.keys(reloaded.getSnapshot().expansion)).toHaveLength(ACTIVITY_UI_MAX_EXPANSION_ENTRIES);
+		reloaded.dispose();
 	});
 
 	it("rejects oversized expansion IDs before serializing host UI state", () => {

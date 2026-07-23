@@ -1,5 +1,11 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import {
+	claimProcessActivitySession,
+	processOwnedTerminalSessionIds,
+	releaseProcessActivitySession,
+} from "../background-tasks/background-task-tool.js";
+import { captureProcessBirthTime } from "../background-tasks/process-tree.js";
 import type { TerminalOutputTail, TerminalTaskManager } from "../background-tasks/task-manager.js";
 import { isTerminalTaskSettled, terminalActivitySnapshot, type TerminalTaskSnapshot } from "../background-tasks/task-types.js";
 import type { SubagentSnapshot } from "../subagents/domain.js";
@@ -10,10 +16,11 @@ import {
 	ACTIVITY_SETTLED_RETENTION_COUNT,
 	ACTIVITY_SETTLED_RETENTION_MS,
 	ActivityFeedPublisher,
-	discoverActivityFeedOwners,
 	redactActivitySecrets,
 	type ActivityFeedDiagnostic,
 	type ActivityFeedPublisherOptions,
+	type ActivityFeedWriterIdentity,
+	type ActivityFeedWriterState,
 } from "./feed-publisher.js";
 import { boundedOutputTail } from "./output-tail.js";
 import { activityFromSubagentSnapshot } from "./subagent-adapter.js";
@@ -35,17 +42,69 @@ interface SubagentProjectionSource {
 	addChangeListener(listener: () => void): () => void;
 }
 
+export interface ActivitySessionOwnership {
+	ownedSessionIds(): readonly string[];
+	claim(ownerSessionId: string, token: string): boolean;
+	release(ownerSessionId: string, token: string): void;
+	/** Test/local ownership records the same session_start fact through this hook. */
+	noteOwnedSession?(ownerSessionId: string): void;
+}
+
 export interface ActivityManagerBridgeOptions extends ActivityFeedPublisherOptions {
 	readonly subagentDebounceMs?: number;
 	readonly terminalOutputPollMs?: number;
 	readonly retentionPollMs?: number;
 	readonly publisherFactory?: (ownerSessionId: string) => ActivityFeedPublisher;
-	readonly discoverOwners?: () => readonly string[];
+	readonly sessionOwnership?: ActivitySessionOwnership;
+	readonly writerIdentity?: ActivityFeedWriterIdentity;
+	readonly inspectWriter?: (writer: ActivityFeedWriterIdentity) => ActivityFeedWriterState;
 }
 
 function ownerSessionId(ctx: ExtensionContext): string | undefined {
 	return ctx.sessionManager.getSessionId() || undefined;
 }
+
+function errorCode(error: unknown): string | undefined {
+	return typeof error === "object" && error !== null && "code" in error
+		? String((error as { code?: unknown }).code)
+		: undefined;
+}
+
+function inspectProcessWriter(writer: ActivityFeedWriterIdentity): ActivityFeedWriterState {
+	try {
+		process.kill(writer.pid, 0);
+	} catch (error) {
+		if (errorCode(error) === "ESRCH") return "dead";
+		if (errorCode(error) !== "EPERM") return "unknown";
+	}
+	const actualStartTime = captureProcessBirthTime(writer.pid);
+	if (actualStartTime === writer.processStartTime) return "alive";
+	return actualStartTime === undefined ? "unknown" : "dead";
+}
+
+function localSessionOwnership(): ActivitySessionOwnership {
+	const owned = new Set<string>();
+	const claims = new Map<string, string>();
+	return {
+		ownedSessionIds: () => [...owned],
+		claim(owner, token) {
+			const current = claims.get(owner);
+			if (current !== undefined && current !== token) return false;
+			claims.set(owner, token);
+			return true;
+		},
+		release(owner, token) {
+			if (claims.get(owner) === token) claims.delete(owner);
+		},
+		noteOwnedSession: (owner) => owned.add(owner),
+	};
+}
+
+const PROCESS_SESSION_OWNERSHIP: ActivitySessionOwnership = {
+	ownedSessionIds: processOwnedTerminalSessionIds,
+	claim: claimProcessActivitySession,
+	release: releaseProcessActivitySession,
+};
 
 function durableSubagentActivity(snapshot: SubagentSnapshot, retained: readonly ActivitySnapshot[]): ActivitySnapshot {
 	const activity = activityFromSubagentSnapshot(snapshot);
@@ -88,8 +147,11 @@ export class ActivityManagerBridge {
 	private readonly retentionPollMs: number;
 	private readonly onDiagnostic: ((diagnostic: ActivityFeedDiagnostic) => void) | undefined;
 	private readonly publisherFactory: (ownerSessionId: string) => ActivityFeedPublisher;
+	private readonly sessionOwnership: ActivitySessionOwnership;
+	private readonly writerVerifiable: boolean;
+	private readonly bridgeToken = randomUUID();
+	private readonly claimedOwners = new Set<string>();
 	private readonly publishers = new Map<string, ActivityFeedPublisher>();
-	private readonly knownOwners = new Set<string>();
 	private terminalSnapshots: readonly TerminalTaskSnapshot[] = [];
 	private readonly terminalOutputCache = new Map<string, { revision: number; output: string }>();
 	private subagentOwnerSessionId: string | undefined;
@@ -112,14 +174,25 @@ export class ActivityManagerBridge {
 		this.terminalOutputPollMs = Math.max(10, Math.floor(options.terminalOutputPollMs ?? DEFAULT_TERMINAL_OUTPUT_POLL_MS));
 		this.retentionPollMs = Math.max(10, Math.floor(options.retentionPollMs ?? DEFAULT_RETENTION_POLL_MS));
 		this.onDiagnostic = options.onDiagnostic;
+		this.sessionOwnership = options.sessionOwnership ?? localSessionOwnership();
+		const processStartTime = captureProcessBirthTime(process.pid);
+		const writerIdentity = options.writerIdentity ?? (processStartTime ? {
+			token: this.bridgeToken,
+			pid: process.pid,
+			processStartTime,
+		} : undefined);
+		this.writerVerifiable = writerIdentity !== undefined || options.publisherFactory !== undefined;
 		const publisherOptions: ActivityFeedPublisherOptions = {
 			rootDir: options.rootDir,
 			now: this.now,
 			onDiagnostic: options.onDiagnostic,
+			writerIdentity,
+			inspectWriter: options.inspectWriter ?? inspectProcessWriter,
 		};
 		this.publisherFactory = options.publisherFactory ?? ((owner) => new ActivityFeedPublisher(owner, publisherOptions));
-		const discoverOwners = options.discoverOwners ?? (() => discoverActivityFeedOwners(publisherOptions));
-		for (const owner of discoverOwners()) this.knownOwners.add(owner);
+		if (!writerIdentity && !options.publisherFactory) {
+			this.diagnostic({ kind: "io", path: "activity-writer", message: "current process start identity is not verifiable; feed publication disabled" });
+		}
 		this.terminalUnsubscribe = terminalManager.subscribeChanges((snapshots) => {
 			if (this.disposed) return;
 			this.terminalSnapshots = snapshots;
@@ -127,7 +200,6 @@ export class ActivityManagerBridge {
 			for (const key of this.terminalOutputCache.keys()) {
 				if (!retainedKeys.has(key)) this.terminalOutputCache.delete(key);
 			}
-			for (const task of snapshots) this.knownOwners.add(task.ownerSessionId);
 			this.publishAll();
 			this.syncTerminalOutputPoll();
 		});
@@ -139,8 +211,18 @@ export class ActivityManagerBridge {
 	public bindSession(owner: string | undefined): void {
 		if (this.disposed) return;
 		this.subagentOwnerSessionId = owner;
-		if (owner) this.knownOwners.add(owner);
+		if (owner) this.sessionOwnership.noteOwnedSession?.(owner);
+		this.syncOwnedSessions();
 		this.publishAll();
+		logDiagnostic("activity_bridge_bound", { ownerSessionId: owner ?? null, claimedOwnerSessionIds: [...this.claimedOwners] });
+	}
+
+	/** Activity-producing tools must fail closed when another live process owns the feed. */
+	public canProduceActivity(owner: string | undefined): boolean {
+		if (!owner || this.disposed) return false;
+		this.syncOwnedSessions();
+		const publisher = this.publishers.get(owner);
+		return this.claimedOwners.has(owner) && publisher?.canPublish === true;
 	}
 
 	/** Publish final non-reattachable subagent truth before this factory dies. */
@@ -148,7 +230,6 @@ export class ActivityManagerBridge {
 		if (this.disposed) return;
 		if (owner) {
 			this.subagentOwnerSessionId = owner;
-			this.knownOwners.add(owner);
 			this.publishOwner(owner, true);
 		}
 		this.dispose();
@@ -168,6 +249,8 @@ export class ActivityManagerBridge {
 		if (this.retentionTimer) clearInterval(this.retentionTimer);
 		this.retentionTimer = undefined;
 		this.terminalOutputCache.clear();
+		for (const owner of this.claimedOwners) this.sessionOwnership.release(owner, this.bridgeToken);
+		this.claimedOwners.clear();
 	}
 
 	private publisher(owner: string): ActivityFeedPublisher {
@@ -179,13 +262,32 @@ export class ActivityManagerBridge {
 		return publisher;
 	}
 
+	private syncOwnedSessions(): void {
+		if (!this.writerVerifiable) return;
+		for (const owner of this.sessionOwnership.ownedSessionIds()) {
+			if (this.claimedOwners.has(owner)) continue;
+			if (!this.sessionOwnership.claim(owner, this.bridgeToken)) continue;
+			const publisher = this.publisher(owner);
+			if (publisher.hasWriterOwnership) this.claimedOwners.add(owner);
+			else {
+				// A live incumbent may die while this process remains open. Failed
+				// publishers hold no resources; discard them so the next poll can run
+				// a fresh PID/start-token claim and safely take over.
+				this.publishers.delete(owner);
+				this.sessionOwnership.release(owner, this.bridgeToken);
+			}
+		}
+	}
+
 	private publishAll(): void {
 		if (this.disposed) return;
-		for (const owner of this.knownOwners) this.publishOwner(owner, false);
+		this.syncOwnedSessions();
+		for (const owner of this.claimedOwners) this.publishOwner(owner, false);
 	}
 
 	private publishRunningTerminalOwners(): void {
 		if (this.disposed) return;
+		this.syncOwnedSessions();
 		const owners = new Set(this.terminalSnapshots
 			.filter((task) => !isTerminalTaskSettled(task.status))
 			.map((task) => task.ownerSessionId));
@@ -193,7 +295,14 @@ export class ActivityManagerBridge {
 	}
 
 	private publishOwner(owner: string, shuttingDownSubagents: boolean): void {
+		if (!this.claimedOwners.has(owner)) return;
 		const publisher = this.publisher(owner);
+		if (!publisher.hasWriterOwnership) {
+			this.claimedOwners.delete(owner);
+			this.publishers.delete(owner);
+			this.sessionOwnership.release(owner, this.bridgeToken);
+			return;
+		}
 		const retained = publisher.getSnapshot();
 		const current: ActivitySnapshot[] = [];
 		const ownerTasks = this.terminalSnapshots.filter((task) => task.ownerSessionId === owner);
@@ -243,20 +352,35 @@ export class ActivityManagerBridge {
 				current.push(activity);
 			}
 		}
+		const abandonedRunningIds = publisher.getAbandonedRunningIds();
 		const merged: ActivitySnapshot[] = [];
+		const currentById = new Map(current.map((activity) => [activity.id, activity]));
+		const retainedById = new Map(retained.map((activity) => [activity.id, activity]));
 		for (const activity of retained) {
-			const update = current.find((candidate) => candidate.id === activity.id);
+			const update = currentById.get(activity.id);
 			if (update) merged.push(mergeActivitySnapshot(activity, update));
-			else if (!isSettledActivityStatus(activity.status)) {
+			else if (
+				!isSettledActivityStatus(activity.status) &&
+				(abandonedRunningIds.has(activity.id) || (shuttingDownSubagents && activity.kind === "subagent"))
+			) {
+				// A missing producer is not evidence of loss. Only the same bridge's
+				// explicit subagent shutdown or a durable writer takeover after the
+				// former PID/start identity is proven dead may settle it as lost.
 				merged.push(lostActivity(activity, `${activity.kind} producer is no longer recoverable`, this.now()));
 			} else merged.push(activity);
 		}
 		for (const activity of current) {
-			if (!retained.some((candidate) => candidate.id === activity.id)) merged.push(activity);
+			if (!retainedById.has(activity.id)) merged.push(activity);
 		}
 		try {
 			publisher.publish(merged);
+			if (abandonedRunningIds.size > 0) publisher.completeAbandonedReconciliation();
 		} catch (error) {
+			if (!publisher.hasWriterOwnership) {
+				this.claimedOwners.delete(owner);
+				this.publishers.delete(owner);
+				this.sessionOwnership.release(owner, this.bridgeToken);
+			}
 			this.diagnostic({ kind: "io", path: owner, message: error instanceof Error ? error.message : String(error) });
 		}
 	}
@@ -300,8 +424,20 @@ export function installActivityManagerBridge(
 	options: ActivityManagerBridgeOptions = {},
 ): ActivityManagerBridge {
 	const diagnostic = options.onDiagnostic ?? ((entry: ActivityFeedDiagnostic) => logDiagnostic("activity_feed_diagnostic", { ...entry }));
-	const bridge = new ActivityManagerBridge(terminalManager, subagentManager, { ...options, onDiagnostic: diagnostic });
+	const bridge = new ActivityManagerBridge(terminalManager, subagentManager, {
+		...options,
+		onDiagnostic: diagnostic,
+		sessionOwnership: options.sessionOwnership ?? PROCESS_SESSION_OWNERSHIP,
+	});
 	pi.on("session_start", (_event, ctx) => bridge.bindSession(ownerSessionId(ctx)));
+	pi.on("tool_call", (event, ctx) => {
+		if (event.toolName !== "terminal_start" && event.toolName !== "subagent_spawn") return;
+		if (bridge.canProduceActivity(ownerSessionId(ctx))) return;
+		return {
+			block: true,
+			reason: "activity unavailable: another live Pi process owns this session's durable Activity feed",
+		};
+	});
 	pi.on("session_shutdown", (_event, ctx) => bridge.shutdownSession(ownerSessionId(ctx)));
 	return bridge;
 }

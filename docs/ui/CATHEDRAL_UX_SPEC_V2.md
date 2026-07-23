@@ -622,7 +622,7 @@ Width: 60% of terminal, min 50, max 80. Centered.
 - Per-card overrides and the global default persist in host-owned `ui.json`; producer/feed updates never write expansion.
 - Failed cards auto-expand only when the user has not chosen an explicit per-card or global policy.
 - Mouse click on tool header may toggle if mouse support is active; not required for v1.
-- Durable output is the newest 16 KiB and at most 25 lines, with ANSI/control stripping, credential redaction, and UTF-8-safe raw-byte boundaries.
+- Durable output is the newest 16 KiB and at most 25 lines, with ANSI/control stripping, UTF-8-safe raw-byte boundaries, and redaction of known credential patterns. Invocation, environment, and command payloads are never persisted. The private tail remains user-visible session data and may contain opaque secrets that heuristic redaction cannot identify; `0700` directories and `0600` files are part of the contract.
 
 **Live ownership**:
 - Terminal and subagent producers remain separate execution systems but project into one bounded `ActivitySnapshot` presentation contract.

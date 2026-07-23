@@ -149,6 +149,14 @@ const ENTITY_MAP = { amp: "&", lt: "<", gt: ">", quot: '"', "#39": "'", "#x27": 
 
 function decodeEntity(_, e) { return ENTITY_MAP[e] ?? _; }
 
+function colorFromStyle(style) {
+	const varMatch = style.match(/(?:^|;)\s*color:\s*var\((--[a-zA-Z0-9-]+)\)/);
+	if (varMatch) return resolveCssVar(varMatch[1]);
+	const hexMatch = style.match(/(?:^|;)\s*color:\s*(#[0-9a-fA-F]{6})/);
+	if (hexMatch) return hexMatch[1];
+	return null;
+}
+
 function bgFromStyle(style) {
 	const varMatch = style.match(/background:\s*var\((--[a-zA-Z0-9-]+)\)/);
 	if (varMatch) return resolveCssVar(varMatch[1]);
@@ -177,6 +185,7 @@ function parseBibleLine(html, parentBg = resolveCssVar("--background") ?? DEFAUL
 	const fgStack = [fg];
 	const bgStack = [bg];
 	const boldStack = [false];
+	const dimStack = [false];
 
 	// Walk character by character, tracking open/close spans
 	let pos = 0;
@@ -198,14 +207,20 @@ function parseBibleLine(html, parentBg = resolveCssVar("--background") ?? DEFAUL
 				if (cls === "box-fill") newBg = bgFromStyle(style) ?? resolveCssVar("--surface-recess") ?? "#120D0A";
 				if (cls === "cursor") { newBg = resolveCssVar("--accent") ?? "#D97706"; newFg = resolveCssVar("--background") ?? DEFAULT_BG; }
 			}
+			newFg = colorFromStyle(style) ?? newFg;
+			newBg = bgFromStyle(style) ?? newBg;
+			if (/font-weight:\s*(?:700|bold)/.test(style)) newBold = true;
+			const newDim = /opacity:\s*0?\.(?:[0-8]\d*)/.test(style) ? true : dim;
 			if (style.includes("background: var(--accent)")) newBg = resolveCssVar("--accent") ?? "#D97706";
 			if (style.includes("color: var(--background)")) newFg = resolveCssVar("--background") ?? DEFAULT_BG;
 			fgStack.push(newFg);
 			bgStack.push(newBg);
 			boldStack.push(newBold);
+			dimStack.push(newDim);
 			fg = newFg;
 			bg = newBg;
 			bold = newBold;
+			dim = newDim;
 			pos = openMatch.index + openMatch[0].length;
 			continue;
 		}
@@ -217,9 +232,11 @@ function parseBibleLine(html, parentBg = resolveCssVar("--background") ?? DEFAUL
 			fgStack.pop();
 			bgStack.pop();
 			boldStack.pop();
+			dimStack.pop();
 			fg = fgStack[fgStack.length - 1] ?? DEFAULT_FG;
 			bg = bgStack[bgStack.length - 1] ?? parentBg;
 			bold = boldStack[boldStack.length - 1] ?? false;
+			dim = dimStack[dimStack.length - 1] ?? false;
 			pos = closeMatch.index + closeMatch[0].length;
 			continue;
 		}

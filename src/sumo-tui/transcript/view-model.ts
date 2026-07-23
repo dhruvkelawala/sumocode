@@ -228,6 +228,12 @@ function summaryBlockFromRecord(record: Record<string, unknown>, kind: "branch" 
 	return { type: "summary", kind, label, content, expanded: false };
 }
 
+function terminalStartActivityBlock(record: Record<string, unknown>): ChatBlock | undefined {
+	if (firstString(record.name, record.toolName) !== "terminal_start") return undefined;
+	const activity = parseActivitySnapshot(asRecord(record.details)?.activity);
+	return activity?.kind === "terminal" ? { type: "activity", activity } : undefined;
+}
+
 function terminalResultBlockFromRecord(record: Record<string, unknown>): ChatBlock {
 	const details = asRecord(record.details);
 	const activity = parseActivitySnapshot(details?.activity);
@@ -480,6 +486,8 @@ function blocksFromContentPart(part: unknown, scope: { readonly messageId: strin
 		}
 		case "toolResult":
 		case "tool_result": {
+			const terminalStart = terminalStartActivityBlock(record);
+			if (terminalStart) return [terminalStart];
 			const toolName = firstString(record.name, record.toolName);
 			if (toolName === "task") return [nativeTaskBlockFromRecord(record, "success", scope)];
 			if (toolName?.startsWith("subagent_")) return subagentBlocksFromRecord(record, "success", scope);
@@ -516,6 +524,8 @@ function blocksFromMessage(record: Record<string, unknown>, messageScope: string
 	}
 	if (record.role === "toolResult") {
 		const scope = { messageId: messageScope, blockIndex: 0 };
+		const terminalStart = terminalStartActivityBlock(record);
+		if (terminalStart) return [terminalStart];
 		const toolName = firstString(record.toolName, record.name);
 		if (toolName === "task") return [nativeTaskBlockFromRecord(record, "success", scope)];
 		if (toolName?.startsWith("subagent_")) return subagentBlocksFromRecord(record, "success", scope);

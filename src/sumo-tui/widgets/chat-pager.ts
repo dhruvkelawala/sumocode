@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { isSettledActivityStatus, mergeActivitySnapshot, sameActivity, type ActivitySnapshot } from "../../activity/domain.js";
+import { ACTIVITY_UI_MAX_EXPANSION_ENTRIES } from "../../activity/store.js";
 import { SumoNode } from "../layout/node.js";
 import { FLEX_DIRECTION_COLUMN, type Yoga, type YogaNode } from "../layout/yoga.js";
 import type { KeyEvent } from "../input/key-router.js";
@@ -28,6 +29,7 @@ export interface ChatPagerOptions {
 	readonly maxRenderedMessages?: number;
 	readonly stickyBottom?: boolean;
 	readonly primaryAgentName?: string;
+	readonly maxActivityBookkeepingEntries?: number;
 	readonly onActivityExpansionChange?: (id: string, expanded: boolean) => void;
 	readonly onActivityExpansionMigration?: (previousId: string, nextId: string, expanded: boolean) => void;
 	readonly onAllActivityExpansionChange?: (expanded: boolean, activityIds: readonly string[]) => void;
@@ -63,6 +65,31 @@ interface PreparedChatMessage {
 	readonly blocks: readonly ChatMessageViewModel["blocks"][number][];
 }
 
+interface ActivityCorrelationIndex {
+	readonly byId: ReadonlyMap<string, readonly ActivitySnapshot[]>;
+	readonly bySourceId: ReadonlyMap<string, readonly ActivitySnapshot[]>;
+}
+
+function activityCorrelationIndex(activities: readonly ActivitySnapshot[]): ActivityCorrelationIndex {
+	const byId = new Map<string, ActivitySnapshot[]>();
+	const bySourceId = new Map<string, ActivitySnapshot[]>();
+	for (const activity of activities) {
+		byId.set(activity.id, [...byId.get(activity.id) ?? [], activity]);
+		if (activity.sourceId) bySourceId.set(activity.sourceId, [...bySourceId.get(activity.sourceId) ?? [], activity]);
+	}
+	return { byId, bySourceId };
+}
+
+function correlatedActivity(index: ActivityCorrelationIndex, activity: ActivitySnapshot): ActivitySnapshot | undefined {
+	const candidates = new Set<ActivitySnapshot>([
+		...(index.byId.get(activity.id) ?? []),
+		...(activity.sourceId ? index.bySourceId.get(activity.sourceId) ?? [] : []),
+		...(activity.sourceId ? index.byId.get(activity.sourceId) ?? [] : []),
+		...(index.bySourceId.get(activity.id) ?? []),
+	]);
+	return [...candidates].find((candidate) => sameActivity(candidate, activity));
+}
+
 function prepareChatMessage(message: ChatMessageViewModel): PreparedChatMessage {
 	return {
 		role: chatRoleFromViewModel(message),
@@ -81,6 +108,7 @@ export class ChatPager extends SumoNode {
 	private readonly renderControls: ChatPagerRenderControls;
 	private readonly maxRenderedMessages: number;
 	private readonly chatMessageOptions: ChatMessageOptions;
+	private readonly maxActivityBookkeepingEntries: number;
 	private readonly onActivityExpansionChange: ((id: string, expanded: boolean) => void) | undefined;
 	private readonly onActivityExpansionMigration: ((previousId: string, nextId: string, expanded: boolean) => void) | undefined;
 	private readonly onAllActivityExpansionChange: ((expanded: boolean, activityIds: readonly string[]) => void) | undefined;
@@ -94,12 +122,16 @@ export class ChatPager extends SumoNode {
 	private readonly virtualizedFeedOnlyActivityIds = new Set<string>();
 	private readonly virtualizedTranscriptFeedActivityIds = new Set<string>();
 	private readonly materializedArchivedTranscriptFeedActivityIds = new Set<string>();
+	/** Claim index proportional to the retained transcript, not optional expansion bookkeeping. */
+	private readonly virtualizedTranscriptClaimIds = new Set<string>();
 	private nextFeedSourceIndex = -1;
 	private readonly activityExpansionOverrides = new Map<string, boolean>();
 	private readonly persistedActivityExpansionOverrides = new Map<string, boolean>();
 	private readonly activityExpansionPersistenceKeys = new Map<string, string>();
 	private readonly activityExpansionStates = new Map<string, boolean>();
 	private readonly activityStatuses = new Map<string, ActivitySnapshot["status"]>();
+	private readonly activityBookkeepingLru = new Map<string, true>();
+	private readonly pendingRenderedActivityIds = new Set<string>();
 	private defaultActivityExpansionOverride: boolean | undefined;
 	private placeholder: ChatMessage | undefined;
 	private virtualArchivedCount = 0;
@@ -114,6 +146,7 @@ export class ChatPager extends SumoNode {
 		this.renderControls = options.renderControls ?? { scheduleRender: noop, setStreamingMode: noop };
 		this.maxRenderedMessages = Math.max(1, Math.round(options.maxRenderedMessages ?? DEFAULT_MAX_RENDERED_MESSAGES));
 		this.chatMessageOptions = { primaryAgentName: options.primaryAgentName };
+		this.maxActivityBookkeepingEntries = Math.max(1, Math.floor(options.maxActivityBookkeepingEntries ?? ACTIVITY_UI_MAX_EXPANSION_ENTRIES));
 		this.onActivityExpansionChange = options.onActivityExpansionChange;
 		this.onActivityExpansionMigration = options.onActivityExpansionMigration;
 		this.onAllActivityExpansionChange = options.onAllActivityExpansionChange;
@@ -160,9 +193,10 @@ export class ChatPager extends SumoNode {
 	public replaceViewModels(messages: readonly ChatMessageViewModel[]): ChatPagerReplaceStats {
 		const previousHeight = this.scrollBox.scrollHeight;
 		const feedActivities = [...this.feedActivities.values()];
+		const feedIndex = activityCorrelationIndex(feedActivities);
 		this.transcriptClaimedActivityStatuses.clear();
 		for (const activity of this.activitiesFromViewModels(messages)) {
-			const feedActivity = feedActivities.find((candidate) => sameActivity(candidate, activity));
+			const feedActivity = correlatedActivity(feedIndex, activity);
 			if (feedActivity) this.transcriptClaimedActivityStatuses.set(feedActivity.id, activity.status);
 		}
 		this.migrateCorrelatedActivityState(this.activitiesFromRenderedMessages(), this.activitiesFromViewModels(messages));
@@ -181,15 +215,18 @@ export class ChatPager extends SumoNode {
 		const windowStart = acceptedMessages > renderedWindow.length ? acceptedMessages % this.maxRenderedMessages : 0;
 		const orderedWindow = windowStart === 0 ? renderedWindow : [...renderedWindow.slice(windowStart), ...renderedWindow.slice(0, windowStart)];
 		const renderedSourceIndices = new Set(orderedWindow.map((entry) => entry.sourceIndex));
+		this.pendingRenderedActivityIds.clear();
+		for (const entry of orderedWindow) {
+			for (const activity of this.activitiesFromBlocks(entry.message.blocks)) this.pendingRenderedActivityIds.add(activity.id);
+		}
 		const archivedTranscriptFeedIds = new Set<string>();
 		for (let sourceIndex = 0; sourceIndex < messages.length; sourceIndex += 1) {
 			if (renderedSourceIndices.has(sourceIndex)) continue;
 			const message = messages[sourceIndex];
 			if (!message || prepareChatMessage(message).text.length === 0) continue;
 			for (const activity of this.activitiesFromBlocks(message.blocks)) {
-				for (const feedActivity of feedActivities) {
-					if (sameActivity(activity, feedActivity)) archivedTranscriptFeedIds.add(feedActivity.id);
-				}
+				const feedActivity = correlatedActivity(feedIndex, activity);
+				if (feedActivity) archivedTranscriptFeedIds.add(feedActivity.id);
 			}
 		}
 		this.disposeMessageNodes();
@@ -201,6 +238,11 @@ export class ChatPager extends SumoNode {
 		this.virtualizedFeedOnlyActivityIds.clear();
 		this.virtualizedTranscriptFeedActivityIds.clear();
 		this.materializedArchivedTranscriptFeedActivityIds.clear();
+		this.virtualizedTranscriptClaimIds.clear();
+		for (let sourceIndex = 0; sourceIndex < messages.length; sourceIndex += 1) {
+			if (renderedSourceIndices.has(sourceIndex)) continue;
+			for (const activity of this.activitiesFromBlocks(messages[sourceIndex]?.blocks ?? [])) this.noteVirtualizedTranscriptActivity(activity);
+		}
 		for (const id of archivedTranscriptFeedIds) {
 			this.virtualizedFeedActivityIds.add(id);
 			this.virtualizedTranscriptFeedActivityIds.add(id);
@@ -219,6 +261,7 @@ export class ChatPager extends SumoNode {
 			this.activeMessageSourceIndices.push(entry.sourceIndex);
 			this.transcriptOwnedMessages.add(message);
 		}
+		this.pendingRenderedActivityIds.clear();
 		this.pruneInactiveActivityState();
 		if (this.virtualArchivedCount > 0) {
 			this.placeholder = this.createPlaceholder();
@@ -317,21 +360,28 @@ export class ChatPager extends SumoNode {
 	}
 
 	public setActivityExpansion(id: string, expanded: boolean): void {
+		if (!this.currentActivityIds().has(id)) return;
+		this.touchActivityBookkeeping(id);
 		this.activityExpansionOverrides.set(id, expanded);
 		this.activityExpansionStates.set(id, expanded);
 		const persistenceKey = this.activityExpansionPersistenceKeys.get(id) ?? id;
-		this.persistedActivityExpansionOverrides.set(persistenceKey, expanded);
+		this.setPersistedActivityExpansion(persistenceKey, expanded);
 		this.applyActivityExpansion(id, expanded);
 		this.onActivityExpansionChange?.(persistenceKey, expanded);
 	}
 
 	/** Apply host-owned persisted UI state without writing it back to the producer. */
 	public applyActivityExpansionSnapshot(expansion: Readonly<Record<string, boolean>>, defaultExpansion?: boolean): void {
+		const currentIds = this.ownedActivityIds();
+		const currentKeys = new Set([...currentIds].map((id) => this.activityExpansionPersistenceKeys.get(id) ?? id));
 		this.persistedActivityExpansionOverrides.clear();
-		for (const [id, expanded] of Object.entries(expansion)) this.persistedActivityExpansionOverrides.set(id, expanded);
+		for (const [id, expanded] of Object.entries(expansion)) {
+			if (currentKeys.has(id)) this.setPersistedActivityExpansion(id, expanded);
+		}
 		this.activityExpansionOverrides.clear();
 		this.defaultActivityExpansionOverride = defaultExpansion;
-		for (const id of this.activityStatuses.keys()) {
+		for (const id of currentIds) {
+			this.touchActivityBookkeeping(id);
 			const persistenceKey = this.activityExpansionPersistenceKeys.get(id) ?? id;
 			const expanded = this.persistedActivityExpansionOverrides.get(persistenceKey) ?? defaultExpansion;
 			if (expanded !== undefined) {
@@ -349,7 +399,7 @@ export class ChatPager extends SumoNode {
 	}
 
 	public getKnownActivityIds(): readonly string[] {
-		return [...new Set([...this.activityStatuses.keys(), ...this.feedActivities.keys()])];
+		return [...this.currentActivityIds()];
 	}
 
 	public toggleActivityExpansion(id?: string): boolean {
@@ -381,8 +431,9 @@ export class ChatPager extends SumoNode {
 		for (const id of ids) {
 			this.activityExpansionOverrides.set(id, expanded);
 			this.activityExpansionStates.set(id, expanded);
+			this.touchActivityBookkeeping(id);
 			const persistenceKey = this.activityExpansionPersistenceKeys.get(id) ?? id;
-			this.persistedActivityExpansionOverrides.set(persistenceKey, expanded);
+			this.setPersistedActivityExpansion(persistenceKey, expanded);
 			persistenceKeys.push(persistenceKey);
 		}
 		this.applyToolExpansion(expanded);
@@ -406,6 +457,8 @@ export class ChatPager extends SumoNode {
 		this.activityExpansionPersistenceKeys.clear();
 		this.activityExpansionStates.clear();
 		this.activityStatuses.clear();
+		this.activityBookkeepingLru.clear();
+		this.pendingRenderedActivityIds.clear();
 		this.transcriptOwnedMessages.clear();
 		this.feedOwnedActivityIds.clear();
 		this.feedActivities.clear();
@@ -414,6 +467,7 @@ export class ChatPager extends SumoNode {
 		this.virtualizedFeedOnlyActivityIds.clear();
 		this.virtualizedTranscriptFeedActivityIds.clear();
 		this.materializedArchivedTranscriptFeedActivityIds.clear();
+		this.virtualizedTranscriptClaimIds.clear();
 		this.defaultActivityExpansionOverride = undefined;
 		this.placeholder = undefined;
 		this.unreadCount = 0;
@@ -427,10 +481,19 @@ export class ChatPager extends SumoNode {
 	/** Reconcile durable feed cards by Activity identity without rebuilding chat. */
 	public reconcileFeedActivities(activities: readonly ActivitySnapshot[]): void {
 		const previous = [...this.feedActivities.values()];
+		const previousIndex = activityCorrelationIndex(previous);
+		const incomingIndex = activityCorrelationIndex(activities);
+		const releasedFeedIds = new Set<string>();
+		const renderedActivityMessages = new Map<ActivitySnapshot, ChatMessage>();
+		for (const message of this.activeMessages) {
+			for (const activity of this.activitiesFromBlocks(message.toSnapshot().blocks ?? [])) renderedActivityMessages.set(activity, message);
+		}
+		const renderedIndex = activityCorrelationIndex([...renderedActivityMessages.keys()]);
 		let removedVirtualLines = 0;
 		for (const oldActivity of previous) {
-			if (!activities.some((candidate) => sameActivity(oldActivity, candidate))) {
+			if (!correlatedActivity(incomingIndex, oldActivity)) {
 				removedVirtualLines += this.removeFeedOwnership(oldActivity.id);
+				releasedFeedIds.add(oldActivity.id);
 			}
 		}
 		this.feedActivities.clear();
@@ -439,7 +502,7 @@ export class ChatPager extends SumoNode {
 			return time !== 0 ? time : left.id.localeCompare(right.id);
 		});
 		for (const activity of ordered) {
-			const previousActivity = previous.find((candidate) => sameActivity(candidate, activity));
+			const previousActivity = correlatedActivity(previousIndex, activity);
 			this.feedActivities.set(activity.id, activity);
 			const virtualized = previousActivity && this.virtualizedFeedActivityIds.has(previousActivity.id);
 			const materializedArchivedTranscript = previousActivity && this.materializedArchivedTranscriptFeedActivityIds.has(previousActivity.id);
@@ -468,13 +531,17 @@ export class ChatPager extends SumoNode {
 			}
 			removedVirtualLines += this.releaseVirtualizedFeedActivity(activity.id);
 			if (rematerializingArchivedTranscript) this.materializedArchivedTranscriptFeedActivityIds.add(activity.id);
-			const target = this.findRenderedActivityMessage(activity);
+			const renderedActivity = correlatedActivity(renderedIndex, activity);
+			const target = renderedActivity ? renderedActivityMessages.get(renderedActivity) : undefined;
 			if (target) {
 				this.addFeedOwnership(target, activity.id);
 				this.updateActivityInMessage(target, activity);
 				continue;
 			}
 			this.addPreparedMessage(prepareChatMessage(activityCardViewModel(activity)), this.nextFeedSourceIndex--, false, activity.id);
+		}
+		for (const id of releasedFeedIds) {
+			if (!this.feedActivities.has(id)) this.touchActivityBookkeeping(id);
 		}
 		const virtualized = this.virtualizeIfNeeded();
 		if (virtualized.addedLines > 0 || virtualized.removedLines > 0 || removedVirtualLines > 0) {
@@ -767,6 +834,8 @@ export class ChatPager extends SumoNode {
 		for (const block of blocks) {
 			if (block.type !== "activity") continue;
 			const activity = block.activity;
+			this.virtualizedTranscriptClaimIds.delete(activity.id);
+			this.touchActivityBookkeeping(activity.id);
 			const persistenceKey = activityExpansionPersistenceKey(activity);
 			const previousPersistenceKey = this.activityExpansionPersistenceKeys.get(activity.id);
 			if (previousPersistenceKey !== undefined && previousPersistenceKey !== persistenceKey) {
@@ -822,14 +891,16 @@ export class ChatPager extends SumoNode {
 			// Preserve a user-owned choice under the canonical identity. This moves
 			// only the already-chosen boolean; the producer never chooses expansion.
 			this.persistedActivityExpansionOverrides.delete(previousPersistenceKey);
-			this.persistedActivityExpansionOverrides.set(nextPersistenceKey, explicit);
+			this.setPersistedActivityExpansion(nextPersistenceKey, explicit);
 			this.onActivityExpansionMigration?.(previousPersistenceKey, nextPersistenceKey, explicit);
 		}
 	}
 
 	private migrateCorrelatedActivityState(existing: readonly ActivitySnapshot[], incoming: readonly ActivitySnapshot[]): void {
+		const existingIndex = activityCorrelationIndex(existing);
 		for (const next of incoming) {
-			const previous = existing.find((candidate) => candidate.id !== next.id && sameActivity(candidate, next));
+			const previous = correlatedActivity(existingIndex, next);
+			if (previous?.id === next.id) continue;
 			if (!previous) continue;
 			const previousId = previous.id;
 			const nextId = next.id;
@@ -845,6 +916,8 @@ export class ChatPager extends SumoNode {
 			this.activityExpansionOverrides.delete(previousId);
 			this.activityExpansionStates.delete(previousId);
 			this.activityStatuses.delete(previousId);
+			this.activityBookkeepingLru.delete(previousId);
+			this.touchActivityBookkeeping(nextId);
 		}
 	}
 
@@ -858,23 +931,112 @@ export class ChatPager extends SumoNode {
 		return ids;
 	}
 
-	private pruneInactiveActivityState(): void {
-		const activeIds = this.activeActivityIds();
-		for (const id of this.activityStatuses.keys()) {
-			if (activeIds.has(id) || this.activityExpansionOverrides.has(id)) continue;
-			this.activityStatuses.delete(id);
+	private ownedActivityIds(): Set<string> {
+		return new Set([
+			...this.activeActivityIds(),
+			...this.feedActivities.keys(),
+			...this.virtualizedTranscriptFeedActivityIds,
+			...this.virtualizedTranscriptClaimIds,
+		]);
+	}
+
+	private currentActivityIds(): Set<string> {
+		return new Set([
+			...this.activeActivityIds(),
+			...this.feedActivities.keys(),
+			...this.virtualizedTranscriptFeedActivityIds,
+			...this.virtualizedTranscriptClaimIds,
+		]);
+	}
+
+	private noteVirtualizedTranscriptActivity(activity: ActivitySnapshot): void {
+		const id = activity.id;
+		this.virtualizedTranscriptClaimIds.delete(id);
+		this.virtualizedTranscriptClaimIds.add(id);
+		const persistenceKey = activityExpansionPersistenceKey(activity);
+		const previousPersistenceKey = this.activityExpansionPersistenceKeys.get(id);
+		if (previousPersistenceKey !== undefined && previousPersistenceKey !== persistenceKey) {
+			this.activityExpansionOverrides.delete(id);
 			this.activityExpansionStates.delete(id);
+		}
+		this.activityExpansionPersistenceKeys.set(id, persistenceKey);
+		const hasExplicitState = this.activityExpansionOverrides.has(id) || this.persistedActivityExpansionOverrides.has(persistenceKey);
+		if (hasExplicitState) this.activityStatuses.set(id, activity.status);
+		else {
+			this.activityExpansionStates.delete(id);
+			this.activityStatuses.delete(id);
+		}
+		this.touchActivityBookkeeping(id);
+	}
+
+	private touchActivityBookkeeping(id: string): void {
+		this.activityBookkeepingLru.delete(id);
+		this.activityBookkeepingLru.set(id, true);
+		while (this.activityBookkeepingLru.size > this.maxActivityBookkeepingEntries) {
+			const oldest = [...this.activityBookkeepingLru.keys()].find((candidate) => candidate !== id);
+			if (!oldest) break;
+			if (this.isActivityExpansionProtected(oldest)) {
+				// LRU membership is optional bookkeeping. Keep live/feed-owned
+				// status/override/key state, but evict its marker so owner count does
+				// not become a hidden execution cap.
+				this.activityBookkeepingLru.delete(oldest);
+			} else {
+				// Transcript-only history remains claimable through the virtualized ID
+				// set, but its optional expansion state is LRU-bounded.
+				this.dropActivityBookkeeping(oldest);
+			}
 		}
 	}
 
-	private discardActivitiesRemovedByRewrite(previous: readonly ActivitySnapshot[]): void {
-		const activeIds = this.activeActivityIds();
-		for (const activity of previous) {
-			if (activeIds.has(activity.id)) continue;
-			this.activityExpansionOverrides.delete(activity.id);
-			this.activityExpansionStates.delete(activity.id);
-			this.activityStatuses.delete(activity.id);
+	private setPersistedActivityExpansion(key: string, expanded: boolean): void {
+		this.persistedActivityExpansionOverrides.delete(key);
+		this.persistedActivityExpansionOverrides.set(key, expanded);
+		while (this.persistedActivityExpansionOverrides.size > this.maxActivityBookkeepingEntries) {
+			const evictable = [...this.persistedActivityExpansionOverrides.keys()].find((candidate) => candidate !== key && !this.isPersistenceKeyProtected(candidate));
+			if (!evictable) break;
+			this.persistedActivityExpansionOverrides.delete(evictable);
 		}
+	}
+
+	private isPersistenceKeyProtected(key: string): boolean {
+		for (const [id, persistenceKey] of this.activityExpansionPersistenceKeys) {
+			if (persistenceKey === key && this.isActivityExpansionProtected(id)) return true;
+		}
+		return false;
+	}
+
+	private isActivityExpansionProtected(id: string): boolean {
+		if (this.pendingRenderedActivityIds.has(id) || this.feedActivities.has(id) || this.virtualizedTranscriptFeedActivityIds.has(id)) return true;
+		return this.activeMessages.some((message) => this.activitiesFromBlocks(message.toSnapshot().blocks ?? []).some((activity) => activity.id === id));
+	}
+
+	private dropActivityBookkeeping(id: string): void {
+		const persistenceKey = this.activityExpansionPersistenceKeys.get(id);
+		this.activityBookkeepingLru.delete(id);
+		this.activityExpansionOverrides.delete(id);
+		this.activityExpansionStates.delete(id);
+		this.activityStatuses.delete(id);
+		this.activityExpansionPersistenceKeys.delete(id);
+		if (persistenceKey && ![...this.activityExpansionPersistenceKeys.values()].includes(persistenceKey)) {
+			this.persistedActivityExpansionOverrides.delete(persistenceKey);
+		}
+	}
+
+	private pruneInactiveActivityState(): void {
+		const currentIds = this.currentActivityIds();
+		for (const id of [...this.activityBookkeepingLru.keys()]) {
+			if (!currentIds.has(id)) this.dropActivityBookkeeping(id);
+		}
+		for (const id of [...this.activityStatuses.keys()]) {
+			if (!currentIds.has(id)) this.dropActivityBookkeeping(id);
+		}
+		for (const id of [...this.activityExpansionPersistenceKeys.keys()]) {
+			if (!currentIds.has(id)) this.dropActivityBookkeeping(id);
+		}
+	}
+
+	private discardActivitiesRemovedByRewrite(_previous: readonly ActivitySnapshot[]): void {
+		this.pruneInactiveActivityState();
 	}
 
 	private effectiveActivityExpansions(blocks: readonly ChatMessageViewModel["blocks"][number][]): ReadonlyMap<string, boolean> {
@@ -984,6 +1146,11 @@ export class ChatPager extends SumoNode {
 			removedLines += archived.getEstimatedHeight(width);
 			if (archived.parent === this.scrollBox) this.scrollBox.removeChild(archived);
 			const transcriptOwned = this.transcriptOwnedMessages.has(archived);
+			if (transcriptOwned) {
+				for (const activity of this.activitiesFromBlocks(archived.toSnapshot().blocks ?? [])) {
+					this.noteVirtualizedTranscriptActivity(activity);
+				}
+			}
 			for (const id of this.feedOwnedActivityIds.get(archived) ?? []) {
 				this.virtualizedFeedActivityIds.add(id);
 				if (transcriptOwned) this.virtualizedTranscriptFeedActivityIds.add(id);

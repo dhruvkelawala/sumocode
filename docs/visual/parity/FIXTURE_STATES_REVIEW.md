@@ -20,6 +20,8 @@ This avoids relying on `--offline --no-session` live Pi output for completed mod
 
 All fixture scenarios remain `review` status. No fixture crop is promoted to `approved` or `required` in #90.
 
+Plan 081 accepted-review evidence now derives both Activity-card Bible targets from the same retained fixture cell scene used by capture. Landscape and portrait each report `Styled cell diff: MATCH`, pass geometry audit, and produce zero pixel-diff ratio for full/chat-area crops. This removes the former mockup/runtime structural-content drift rather than masking it or raising thresholds; no golden was promoted.
+
 ## Review command
 
 ```bash

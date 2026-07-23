@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+	captureProcessBirthTime,
 	captureProcessStartTime,
 	runWindowsTaskkill,
 	runWindowsVerifiedForceTaskkill,
@@ -23,6 +24,12 @@ function operations(overrides: Partial<ProcessTreeOperations> = {}): ProcessTree
 }
 
 describe("process tree operations", () => {
+	it.skipIf(process.platform === "win32")("captures a process-birth lease identity without argv", () => {
+		const identity = captureProcessBirthTime(process.pid);
+		expect(identity).toMatch(/\w/);
+		expect(identity).not.toContain(process.argv.join(" "));
+	});
+
 	it.skipIf(process.platform === "win32")("signals only the POSIX process group and never falls back on EPERM", async () => {
 		const processStartTime = captureProcessStartTime(process.pid)!;
 		const denied = Object.assign(new Error("operation not permitted"), { code: "EPERM" });

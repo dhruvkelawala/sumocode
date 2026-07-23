@@ -5,8 +5,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { TerminalOutputTail } from "../background-tasks/task-manager.js";
 import type { TerminalTaskSnapshot } from "../background-tasks/task-types.js";
 import type { SubagentSnapshot } from "../subagents/domain.js";
-import { ACTIVITY_SETTLED_RETENTION_COUNT, ACTIVITY_SETTLED_RETENTION_MS, ActivityFeedPublisher } from "./feed-publisher.js";
-import { ActivityManagerBridge } from "./manager-bridge.js";
+import { ACTIVITY_SETTLED_RETENTION_COUNT, ACTIVITY_SETTLED_RETENTION_MS, ActivityFeedPublisher, type ActivityFeedPublisherOptions } from "./feed-publisher.js";
+import { ActivityManagerBridge, installActivityManagerBridge } from "./manager-bridge.js";
 
 const roots: string[] = [];
 
@@ -14,6 +14,10 @@ function root(): string {
 	const path = mkdtempSync(join(tmpdir(), "sumocode-manager-bridge-"));
 	roots.push(path);
 	return path;
+}
+
+function fixturePublisher(ownerSessionId: string, options: ActivityFeedPublisherOptions = {}): ActivityFeedPublisher {
+	return new ActivityFeedPublisher(ownerSessionId, { ...options, allowUnleasedWritesForTests: true });
 }
 
 function terminal(id: string, ownerSessionId: string, status: "running" | "completed" = "running"): TerminalTaskSnapshot {
@@ -118,9 +122,9 @@ afterEach(() => {
 });
 
 describe("ActivityManagerBridge", () => {
-	it("loads retained records, reconciles unrecoverable running work to lost, and projects terminals", () => {
+	it("preserves unproven retained work and projects only an explicitly owned session", () => {
 		const stateRoot = root();
-		new ActivityFeedPublisher("session-a", { rootDir: stateRoot, now: () => 1_500 }).publish([
+		fixturePublisher("session-a", { rootDir: stateRoot, now: () => 1_500 }).publish([
 			{ id: "subagent:stale", kind: "subagent", title: "stale", status: "running", ownerSessionId: "session-a", createdAt: 500 },
 			{ id: "settled-old", kind: "subagent", title: "old", status: "succeeded", ownerSessionId: "session-a", createdAt: 400, settledAt: 600 },
 		]);
@@ -128,12 +132,94 @@ describe("ActivityManagerBridge", () => {
 		terminals.snapshots = [{ ...terminal("term-a", "session-a"), sourceId: "terminal-start-call" }];
 		terminals.outputs.set("/tmp/term-a.log", "hello");
 		const bridge = new ActivityManagerBridge(terminals, new FakeSubagentManager(), { rootDir: stateRoot, now: () => 2_000 });
-		const feed = new ActivityFeedPublisher("session-a", { rootDir: stateRoot }).getSnapshot();
+		bridge.bindSession("session-a");
+		const feed = fixturePublisher("session-a", { rootDir: stateRoot }).getSnapshot();
 		expect(feed).toEqual(expect.arrayContaining([
-			expect.objectContaining({ id: "subagent:stale", status: "lost" }),
+			expect.objectContaining({ id: "subagent:stale", status: "running" }),
 			expect.objectContaining({ id: "settled-old", status: "succeeded" }),
 			expect.objectContaining({ id: "term-a", sourceId: "terminal-start-call", status: "running", outputTail: "hello" }),
 		]));
+		bridge.dispose();
+	});
+
+	it("never marks another live process's subagent lost and reconciles only after writer death", () => {
+		const stateRoot = root();
+		const originalWriter = { token: "writer-a", pid: 101, processStartTime: "start-a" };
+		const original = fixturePublisher("session-a", {
+			rootDir: stateRoot,
+			writerIdentity: originalWriter,
+			inspectWriter: () => "alive",
+		});
+		original.publish([{ id: "subagent:remote", kind: "subagent", title: "remote", status: "running", createdAt: 1_000 }]);
+
+		let originalWriterAlive = true;
+		const contenderTerminals = new FakeTerminalManager();
+		const liveContender = new ActivityManagerBridge(contenderTerminals, new FakeSubagentManager(), {
+			rootDir: stateRoot,
+			writerIdentity: { token: "writer-b", pid: 202, processStartTime: "start-b" },
+			inspectWriter: () => originalWriterAlive ? "alive" : "dead",
+			now: () => 2_000,
+		});
+		liveContender.bindSession("session-a");
+		expect(fixturePublisher("session-a", { rootDir: stateRoot }).getSnapshot()).toMatchObject([
+			{ id: "subagent:remote", status: "running" },
+		]);
+
+		originalWriterAlive = false;
+		liveContender.bindSession("session-a");
+		expect(fixturePublisher("session-a", { rootDir: stateRoot }).getSnapshot()).toMatchObject([
+			{ id: "subagent:remote", status: "lost", settledAt: 2_000 },
+		]);
+
+		contenderTerminals.snapshots = [terminal("replacement-owned", "session-a")];
+		contenderTerminals.emit();
+		contenderTerminals.snapshots = [];
+		contenderTerminals.emit();
+		expect(fixturePublisher("session-a", { rootDir: stateRoot }).getSnapshot()).toEqual(expect.arrayContaining([
+			expect.objectContaining({ id: "replacement-owned", status: "running" }),
+		]));
+		liveContender.dispose();
+	});
+
+	it("blocks activity-producing tools until this process owns the session writer lease", () => {
+		const stateRoot = root();
+		const incumbent = new ActivityFeedPublisher("session-gated", {
+			rootDir: stateRoot,
+			writerIdentity: { token: "incumbent", pid: 111, processStartTime: "incumbent-start" },
+			inspectWriter: () => "alive",
+		});
+		incumbent.publish([]);
+		let incumbentAlive = true;
+		const owners = new Set<string>();
+		const claims = new Map<string, string>();
+		const handlers = new Map<string, Array<(event: never, ctx: never) => unknown>>();
+		const pi = {
+			on: (name: string, handler: (event: never, ctx: never) => unknown) => handlers.set(name, [...handlers.get(name) ?? [], handler]),
+		} as never;
+		const bridge = installActivityManagerBridge(pi, new FakeTerminalManager() as never, new FakeSubagentManager() as never, {
+			rootDir: stateRoot,
+			writerIdentity: { token: "contender", pid: 222, processStartTime: "contender-start" },
+			inspectWriter: () => incumbentAlive ? "alive" : "dead",
+			sessionOwnership: {
+				ownedSessionIds: () => [...owners],
+				noteOwnedSession: (owner) => { owners.add(owner); },
+				claim: (owner, token) => {
+					const current = claims.get(owner);
+					if (current && current !== token) return false;
+					claims.set(owner, token);
+					return true;
+				},
+				release: (owner, token) => { if (claims.get(owner) === token) claims.delete(owner); },
+			},
+		});
+		const ctx = { sessionManager: { getSessionId: () => "session-gated" } } as never;
+		for (const handler of handlers.get("session_start") ?? []) handler({} as never, ctx);
+		const toolGate = handlers.get("tool_call")?.[0];
+		expect(toolGate?.({ toolName: "terminal_start" } as never, ctx)).toMatchObject({ block: true });
+		expect(toolGate?.({ toolName: "subagent_spawn" } as never, ctx)).toMatchObject({ block: true });
+
+		incumbentAlive = false;
+		expect(toolGate?.({ toolName: "terminal_start" } as never, ctx)).toBeUndefined();
 		bridge.dispose();
 	});
 
@@ -143,7 +229,8 @@ describe("ActivityManagerBridge", () => {
 		terminals.snapshots = [terminal("term-utf8", "session-a")];
 		terminals.outputBytes.set("/tmp/term-utf8.log", Uint8Array.from([0xa7, 0x8a, 0x6f, 0x6b]));
 		const bridge = new ActivityManagerBridge(terminals, new FakeSubagentManager(), { rootDir: stateRoot, now: () => 2_000 });
-		const [stored] = new ActivityFeedPublisher("session-a", { rootDir: stateRoot }).getSnapshot();
+		bridge.bindSession("session-a");
+		const [stored] = fixturePublisher("session-a", { rootDir: stateRoot }).getSnapshot();
 		expect(stored?.outputTail).toBe("ok");
 		expect(stored?.outputTail).not.toContain("�");
 		bridge.dispose();
@@ -155,14 +242,15 @@ describe("ActivityManagerBridge", () => {
 		terminals.snapshots = [terminal("term-secret", "session-a")];
 		terminals.outputBytes.set("/tmp/term-secret.log", Buffer.from(`API_KEY=${"s".repeat(70 * 1024)}`, "utf8"));
 		const bridge = new ActivityManagerBridge(terminals, new FakeSubagentManager(), { rootDir: stateRoot, now: () => 2_000 });
-		const [stored] = new ActivityFeedPublisher("session-a", { rootDir: stateRoot }).getSnapshot();
+		bridge.bindSession("session-a");
+		const [stored] = fixturePublisher("session-a", { rootDir: stateRoot }).getSnapshot();
 		expect(stored?.outputTail).toBe("");
 		bridge.dispose();
 	});
 
 	it("disambiguates a process-local subagent ID reused after bridge reload", () => {
 		const stateRoot = root();
-		new ActivityFeedPublisher("session-a", { rootDir: stateRoot, now: () => 1_000 }).publish([{
+		fixturePublisher("session-a", { rootDir: stateRoot, now: () => 1_000 }).publish([{
 			id: "subagent:sa-1",
 			sourceId: "spawn-old",
 			kind: "subagent",
@@ -179,7 +267,7 @@ describe("ActivityManagerBridge", () => {
 		let now = 2_100;
 		const bridge = new ActivityManagerBridge(new FakeTerminalManager(), subagents, { rootDir: stateRoot, now: () => now });
 		bridge.bindSession("session-a");
-		let feed = new ActivityFeedPublisher("session-a", { rootDir: stateRoot }).getSnapshot();
+		let feed = fixturePublisher("session-a", { rootDir: stateRoot }).getSnapshot();
 		expect(feed).toEqual(expect.arrayContaining([
 			expect.objectContaining({ id: "subagent:sa-1", sourceId: "spawn-old", status: "succeeded", result: { summary: "old result" } }),
 			expect.objectContaining({ sourceId: "spawn-new", status: "running", createdAt: 2_000 }),
@@ -191,7 +279,7 @@ describe("ActivityManagerBridge", () => {
 		now = ACTIVITY_SETTLED_RETENTION_MS + 2_100;
 		bridge.bindSession("session-a");
 		bridge.bindSession("session-a");
-		feed = new ActivityFeedPublisher("session-a", { rootDir: stateRoot }).getSnapshot();
+		feed = fixturePublisher("session-a", { rootDir: stateRoot }).getSnapshot();
 		expect(feed.filter((activity) => activity.sourceId === "spawn-new")).toEqual([
 			expect.objectContaining({ id: current?.id, status: "running" }),
 		]);
@@ -212,9 +300,9 @@ describe("ActivityManagerBridge", () => {
 		subagents.snapshots = [{ ...subagent("sa-1"), liveText: "second" }];
 		subagents.emit();
 		await vi.advanceTimersByTimeAsync(49);
-		expect(new ActivityFeedPublisher("session-a", { rootDir: stateRoot }).getSnapshot()[0]?.outputTail).toBe("working");
+		expect(fixturePublisher("session-a", { rootDir: stateRoot }).getSnapshot()[0]?.outputTail).toBe("working");
 		await vi.advanceTimersByTimeAsync(1);
-		expect(new ActivityFeedPublisher("session-a", { rootDir: stateRoot }).getSnapshot()[0]).toMatchObject({
+		expect(fixturePublisher("session-a", { rootDir: stateRoot }).getSnapshot()[0]).toMatchObject({
 			id: "subagent:sa-1",
 			ownerSessionId: "session-a",
 			outputTail: "second",
@@ -233,11 +321,12 @@ describe("ActivityManagerBridge", () => {
 			now: () => 2_000,
 			terminalOutputPollMs: 100,
 		});
+		bridge.bindSession("session-a");
 		bridge.bindSession("session-b");
 		terminals.outputs.set("/tmp/term-a.log", "after");
 		await vi.advanceTimersByTimeAsync(100);
-		expect(new ActivityFeedPublisher("session-a", { rootDir: stateRoot }).getSnapshot()[0]).toMatchObject({ id: "term-a", outputTail: "after" });
-		expect(new ActivityFeedPublisher("session-b", { rootDir: stateRoot }).getSnapshot()).toEqual([]);
+		expect(fixturePublisher("session-a", { rootDir: stateRoot }).getSnapshot()[0]).toMatchObject({ id: "term-a", outputTail: "after" });
+		expect(fixturePublisher("session-b", { rootDir: stateRoot }).getSnapshot()).toEqual([]);
 		bridge.dispose();
 	});
 
@@ -251,6 +340,7 @@ describe("ActivityManagerBridge", () => {
 			now: () => 2_000,
 			onDiagnostic,
 		});
+		bridge.bindSession("session-a");
 		expect(onDiagnostic).toHaveBeenCalledWith(expect.objectContaining({ kind: "io", path: "/tmp/term-error.log", message: "tail failed" }));
 		bridge.dispose();
 	});
@@ -268,6 +358,7 @@ describe("ActivityManagerBridge", () => {
 			now: () => 3_000,
 			terminalOutputPollMs: 50,
 		});
+		bridge.bindSession("session-a");
 		expect([...terminals.outputReads.entries()].filter(([path]) => path.includes("settled"))).toHaveLength(ACTIVITY_SETTLED_RETENTION_COUNT);
 		await vi.advanceTimersByTimeAsync(150);
 		for (const [path, reads] of terminals.outputReads) {
@@ -281,7 +372,7 @@ describe("ActivityManagerBridge", () => {
 		vi.useFakeTimers();
 		const stateRoot = root();
 		let now = 1_000;
-		new ActivityFeedPublisher("session-a", { rootDir: stateRoot, now: () => now }).publish([{
+		fixturePublisher("session-a", { rootDir: stateRoot, now: () => now }).publish([{
 			id: "settled",
 			kind: "terminal",
 			title: "settled",
@@ -296,9 +387,10 @@ describe("ActivityManagerBridge", () => {
 			now: () => now,
 			retentionPollMs: 50,
 		});
+		bridge.bindSession("session-a");
 		now += ACTIVITY_SETTLED_RETENTION_MS + 1;
 		await vi.advanceTimersByTimeAsync(50);
-		expect(new ActivityFeedPublisher("session-a", { rootDir: stateRoot }).getSnapshot()).toEqual([]);
+		expect(fixturePublisher("session-a", { rootDir: stateRoot }).getSnapshot()).toEqual([]);
 		bridge.dispose();
 	});
 
@@ -314,7 +406,7 @@ describe("ActivityManagerBridge", () => {
 		subagents.emit();
 		expect(vi.getTimerCount()).toBeGreaterThan(0);
 		bridge.shutdownSession("session-a");
-		expect(new ActivityFeedPublisher("session-a", { rootDir: stateRoot }).getSnapshot()).toEqual(expect.arrayContaining([
+		expect(fixturePublisher("session-a", { rootDir: stateRoot }).getSnapshot()).toEqual(expect.arrayContaining([
 			expect.objectContaining({ id: "subagent:sa-1", status: "lost" }),
 		]));
 		expect(vi.getTimerCount()).toBe(0);

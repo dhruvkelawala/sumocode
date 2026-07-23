@@ -48,7 +48,6 @@ const DEFAULT_TERM_GRACE_MS = 5_000;
 const DEFAULT_KILL_GRACE_MS = 2_000;
 const DEFAULT_CLAIM_LEASE_MS = 30_000;
 const DEFAULT_STARTING_RECOVERY_GRACE_MS = 30_000;
-export const DEFAULT_MAX_RUNNING_TERMINALS = 256;
 const MAX_REPLAYED_SETTLED_TERMINALS = 64;
 
 export interface TerminalOutputTail {
@@ -98,7 +97,6 @@ export interface TerminalTaskManagerOptions {
 	readonly killGraceMs?: number;
 	readonly claimLeaseMs?: number;
 	readonly startingRecoveryGraceMs?: number;
-	readonly maxRunningTasks?: number;
 	readonly onDiagnostic?: (diagnostic: TerminalTaskStoreDiagnostic | { kind: "manager"; message: string; id?: string }) => void;
 }
 
@@ -366,7 +364,6 @@ export class TerminalTaskManager {
 	private readonly killGraceMs: number;
 	private readonly claimLeaseMs: number;
 	private readonly startingRecoveryGraceMs: number;
-	private readonly maxRunningTasks: number;
 	private readonly onDiagnostic?: TerminalTaskManagerOptions["onDiagnostic"];
 	private readonly tasks = new Map<string, TerminalTaskSnapshot>();
 	private readonly runtime = new Map<string, RuntimeTask>();
@@ -388,7 +385,6 @@ export class TerminalTaskManager {
 		this.killGraceMs = normalizePositive(options.killGraceMs, DEFAULT_KILL_GRACE_MS);
 		this.claimLeaseMs = normalizePositive(options.claimLeaseMs, DEFAULT_CLAIM_LEASE_MS);
 		this.startingRecoveryGraceMs = normalizePositive(options.startingRecoveryGraceMs, DEFAULT_STARTING_RECOVERY_GRACE_MS);
-		this.maxRunningTasks = normalizePositive(options.maxRunningTasks, DEFAULT_MAX_RUNNING_TERMINALS);
 		this.onDiagnostic = options.onDiagnostic;
 		// Plan 080 makes completed snapshots durable and explicitly forbids file
 		// deletion/cleanup without human approval. Do not revive the legacy
@@ -402,10 +398,6 @@ export class TerminalTaskManager {
 
 	public async start(options: StartTerminalTaskOptions): Promise<TerminalTaskSnapshot> {
 		if (this.detached) throw new Error("Terminal task manager is detached");
-		const runningCount = [...this.tasks.values()].filter((task) => !isTerminalTaskSettled(task.status)).length;
-		if (runningCount >= this.maxRunningTasks) {
-			throw new Error(`Terminal capacity reached (${this.maxRunningTasks} running)`);
-		}
 		const command = options.command.trim();
 		const title = options.title.trim();
 		const ownerSessionId = options.ownerSessionId.trim();

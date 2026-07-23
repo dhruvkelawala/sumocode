@@ -86,6 +86,44 @@ function countUserMessages(messages: readonly unknown[]): number {
 	return messages.filter(isUserMessage).length;
 }
 
+function stableMessageId(message: unknown): string | undefined {
+	const record = asRecord(message);
+	const id = record?.id;
+	if (typeof id === "string" && id.length > 0) return `id:${id}`;
+	const role = record?.role;
+	const timestamp = record?.timestamp;
+	if (typeof role === "string" && (typeof timestamp === "number" || typeof timestamp === "string")) {
+		const toolCallId = typeof record?.toolCallId === "string" ? `:${record.toolCallId}` : "";
+		return `pi:${role}:${timestamp}${toolCallId}`;
+	}
+	return undefined;
+}
+
+function messagesEqual(left: unknown, right: unknown): boolean {
+	if (left === right) return true;
+	try {
+		return JSON.stringify(left) === JSON.stringify(right);
+	} catch {
+		return false;
+	}
+}
+
+function findCommittedMessageIndex(messages: readonly unknown[], message: unknown): number {
+	const id = stableMessageId(message);
+	for (let index = messages.length - 1; index >= 0; index -= 1) {
+		if (id ? stableMessageId(messages[index]) === id : messagesEqual(messages[index], message)) return index;
+	}
+	return -1;
+}
+
+function messageProgressScore(message: unknown): number {
+	try {
+		return JSON.stringify(message)?.length ?? 0;
+	} catch {
+		return 0;
+	}
+}
+
 function taskPartialFromEvent(event: unknown): TaskPartialUpdate | undefined {
 	const record = asRecord(event);
 	if (!record || record.type !== "tool_execution_update") return undefined;
@@ -273,16 +311,36 @@ export class TranscriptController {
 				this.currentRunStartIndex = this.committedMessages.length;
 				break;
 			case "message_start":
-			case "message_update":
+			case "message_update": {
 				this.pendingChatOp = "incremental";
-				this.draftMessage = eventMessage(record);
-				if (asRecord(this.draftMessage)?.role === "user") this.options.noteUserMessage?.();
+				const message = eventMessage(record);
+				const hydratedIndex = stableMessageId(message) ? findCommittedMessageIndex(this.committedMessages, message) : -1;
+				if (hydratedIndex >= 0) {
+					// Session hydration may already contain a buffered update. Upsert by
+					// stable message ID instead of rendering the same message as a draft;
+					// never regress a more advanced hydrated partial on the bounded
+					// continuously-streaming fallback pass.
+					if (messageProgressScore(message) >= messageProgressScore(this.committedMessages[hydratedIndex])) {
+						this.committedMessages[hydratedIndex] = message;
+						this.invalidateCommittedCache();
+					}
+					this.draftMessage = undefined;
+				} else {
+					this.draftMessage = message;
+				}
+				if (asRecord(message)?.role === "user") this.options.noteUserMessage?.();
 				break;
+			}
 			case "message_end": {
 				this.pendingChatOp = "incremental";
 				const message = eventMessage(record);
 				if (message !== undefined) {
-					this.committedMessages.push(message);
+					const hydratedIndex = findCommittedMessageIndex(this.committedMessages, message);
+					if (hydratedIndex >= 0) {
+						this.committedMessages[hydratedIndex] = message;
+					} else {
+						this.committedMessages.push(message);
+					}
 					this.invalidateCommittedCache();
 				}
 				this.draftMessage = undefined;
@@ -314,8 +372,32 @@ export class TranscriptController {
 					// never emits its own `message_end` while streaming (pi-coding-agent
 					// dist/core/agent-session.js:988-1004). Pinned by the "mid-run
 					// follow-up" test in controller.test.ts.
-					const runStart = this.currentRunStartIndex ?? this.committedMessages.length;
-					this.committedMessages = [...this.committedMessages.slice(0, runStart), ...messages];
+					const hydratedRunStart = messages.length > 0
+						? findCommittedMessageIndex(this.committedMessages, messages[0])
+						: -1;
+					const runWasAlreadyHydrated = hydratedRunStart >= 0 && (
+						this.currentRunStartIndex === undefined || hydratedRunStart < this.currentRunStartIndex
+					);
+					if (runWasAlreadyHydrated && this.currentRunStartIndex !== undefined) {
+						// A replayed agent_start pointed after a run already in hydration.
+						// Reconcile from the hydrated boundary and force one safe full sink
+						// replacement instead of treating the earlier rewrite as incremental.
+						this.lastPublishedToChat = undefined;
+					}
+					const runStart = runWasAlreadyHydrated
+						? hydratedRunStart
+						: this.currentRunStartIndex ?? this.committedMessages.length;
+					let hydratedOverlap = 0;
+					if (runWasAlreadyHydrated) {
+						while (
+							hydratedOverlap < messages.length
+							&& findCommittedMessageIndex([this.committedMessages[runStart + hydratedOverlap]], messages[hydratedOverlap]) === 0
+						) hydratedOverlap += 1;
+					}
+					const hydratedSuffix = runWasAlreadyHydrated
+						? this.committedMessages.slice(runStart + hydratedOverlap)
+						: [];
+					this.committedMessages = [...this.committedMessages.slice(0, runStart), ...messages, ...hydratedSuffix];
 					this.invalidateCommittedCache();
 				}
 				this.currentRunStartIndex = undefined;
@@ -331,7 +413,9 @@ export class TranscriptController {
 				this.options.setCompactionReason?.(null);
 				const summary = compactionSummaryMessageFromEvent(record);
 				if (summary) {
-					this.committedMessages.push(summary);
+					const hydratedIndex = findCommittedMessageIndex(this.committedMessages, summary);
+					if (hydratedIndex >= 0) this.committedMessages[hydratedIndex] = summary;
+					else this.committedMessages.push(summary);
 					this.invalidateCommittedCache();
 				}
 				break;

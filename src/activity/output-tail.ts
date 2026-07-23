@@ -42,7 +42,10 @@ function trimStringToUtf8Tail(text: string, maxBytes: number): string {
 export function boundedOutputTail(value: string | Uint8Array, options: OutputTailOptions = {}): string {
 	const maxBytes = positiveInteger(options.maxBytes, ACTIVITY_OUTPUT_MAX_BYTES);
 	const maxLines = positiveInteger(options.maxLines, ACTIVITY_OUTPUT_MAX_LINES);
-	const decoded = typeof value === "string" ? value : decodeValidUtf8Tail(value, maxBytes + 4);
+	// Byte callers already pass a bounded terminal-read window (64 KiB in the
+	// manager bridge). Decode that complete window before retaining the tail so
+	// an OSC/DCS opener earlier in the window still suppresses its entire payload.
+	const decoded = typeof value === "string" ? value : decodeValidUtf8Tail(value, value.byteLength);
 	const sanitized = sanitizeActivityTextTail(decoded, { maxChars: maxBytes, maxLines });
 	const byteBounded = trimStringToUtf8Tail(sanitized, maxBytes);
 	const lines = byteBounded.split("\n");

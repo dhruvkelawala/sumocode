@@ -27,8 +27,11 @@ describe("boundedOutputTail", () => {
 		expect(tail).not.toContain("�");
 	});
 
-	it("does not expose a huge control-string payload when retaining only the tail", () => {
-		const tail = boundedOutputTail(`\u001b]8;;${"hidden-control-payload".repeat(100_000)}\u0007visible-tail`);
+	it.each([
+		["string", (value: string) => value],
+		["bytes", (value: string) => Buffer.from(value, "utf8")],
+	] as const)("does not expose a huge control-string payload from %s input", (_kind, encode) => {
+		const tail = boundedOutputTail(encode(`\u001b]8;;${"hidden-control-payload".repeat(100_000)}\u0007visible-tail`));
 		expect(tail).toBe("visible-tail");
 		expect(tail).not.toContain("hidden-control-payload");
 	});

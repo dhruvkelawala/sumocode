@@ -27,7 +27,7 @@
 - **Category**: retained transcript architecture / UX
 - **Depends on**: —
 - **Planned at**: `acf6ae2`, 2026-07-22
-- **Execution status**: TODO
+- **Execution status**: DONE — approved on `advisor/079-unified-activity-run` at `118d953`; focused/full/integration/typecheck/build/visual gates passed and final Codex autoreview clean
 - **Unblocks**: Plans 080, 081, 082
 
 ## Decision

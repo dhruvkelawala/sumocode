@@ -29,7 +29,7 @@
 - **Depends on**: Plan 079
 - **Can execute parallel with**: Plan 080
 - **Planned at**: `acf6ae2`, 2026-07-22
-- **Execution status**: TODO
+- **Execution status**: DONE — approved on `advisor/082-activity-adapters` at `9311891`; 1,977 unit and 48 integration tests passed, visual CI and final Codex autoreview clean
 - **Unblocks**: Plan 081
 
 ## Decision

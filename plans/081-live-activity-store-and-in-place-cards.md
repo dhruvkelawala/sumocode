@@ -26,7 +26,7 @@
 - **Category**: retained runtime / cross-process state
 - **Depends on**: Plans 079, 080, 082
 - **Planned at**: `acf6ae2`, 2026-07-22
-- **Execution status**: DONE — implementation `f681fc5`, accepted-review fixes on `advisor/081-live-activity-store`
+- **Execution status**: DONE — approved on `advisor/081-live-activity-store` at `f87e0c0`; final integration fixes through `31d7072`, 2,100 unit and 60 integration tests passed, 24 visual scenarios passed/reviewed, final Codex autoreview clean
 - **Role**: final integration slice
 
 ## Decision

@@ -96,6 +96,22 @@ describe("Activity renderer", () => {
 		expect(rows.every((row) => visibleWidth(row) === 72)).toBe(true);
 	});
 
+	it.each([60, 128])("budgets malicious titles before header construction at %d columns", (width) => {
+		const rows = renderActivityLedgerRows(activity({
+			title: `\u001b[31m${"界".repeat(100_000)}\u001b[0m`,
+			currentStep: "phase 4/5 · preserving progress note",
+			body: { kind: "text", text: "working" },
+		}), width);
+		const header = stripAnsi(rows[0]!);
+
+		expect(visibleWidth(rows[0]!)).toBe(width);
+		expect(header).toContain("…]");
+		expect(header).toContain("▶");
+		expect(header).toContain("phase 4/5");
+		expect(header.indexOf("▶")).toBeGreaterThan(header.indexOf("…]"));
+		expect(rows[0]).not.toContain("\u001b[31m");
+	});
+
 	it("sanitizes ANSI, tabs, carriage returns, and preserves wide characters before measuring", () => {
 		const rows = renderActivityLedgerRows(activity({
 			subject: "run\t界",

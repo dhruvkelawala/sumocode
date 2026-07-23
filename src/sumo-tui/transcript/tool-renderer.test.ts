@@ -211,7 +211,7 @@ describe("tool renderer", () => {
 			name: "bash",
 			status: "success",
 			input: { command: `printf ${"x".repeat(2_500)}` },
-			output: ["OUTPUT-STILL-VISIBLE", ...Array.from({ length: 29 }, (_, index) => `output ${index + 2}`)].join("\n"),
+			output: [...Array.from({ length: 29 }, (_, index) => `output ${index + 1}`), "OUTPUT-STILL-VISIBLE"].join("\n"),
 		}, 80).map(stripAnsi);
 
 		expect(rows.join("\n")).toContain("invocation rows collapsed");

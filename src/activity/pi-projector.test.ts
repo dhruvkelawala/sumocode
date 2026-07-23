@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { projectPiToolActivity } from "./pi-projector.js";
+import { ACTIVITY_OUTPUT_MAX_BYTES, ACTIVITY_OUTPUT_MAX_LINES } from "./output-tail.js";
 
 const scope = { messageId: "message-7", blockIndex: 2 } as const;
 
@@ -109,6 +110,63 @@ describe("Pi Activity projector", () => {
 
 		expect(activity?.body).toEqual({ kind: "text", text: "red\nnext" });
 		expect(() => projectPiToolActivity({ id: "custom-2", name: "custom", arguments: invocation }, scope)).not.toThrow();
+	});
+
+	it("bounds huge custom and MCP output plus invocation before returning a snapshot", () => {
+		const hugeInvocation = {
+			query: "q".repeat(1_000_000),
+			apiKey: "must-not-survive",
+			items: Array.from({ length: 10_000 }, (_, index) => ({ index, value: "v".repeat(100) })),
+		};
+		const content = Array.from({ length: 5_000 }, (_, index) => ({
+			type: "text",
+			text: `mcp-${index}:${"x".repeat(100)}\n`,
+		}));
+		const mcp = projectPiToolActivity({
+			id: "mcp-huge",
+			name: "mcp",
+			arguments: hugeInvocation,
+			content,
+		}, scope);
+		if (!mcp || mcp.body?.kind !== "text") throw new Error("MCP projection failed");
+
+		expect(Buffer.byteLength(mcp.outputTail ?? "", "utf8")).toBeLessThanOrEqual(ACTIVITY_OUTPUT_MAX_BYTES);
+		expect((mcp.outputTail ?? "").split("\n").length).toBeLessThanOrEqual(ACTIVITY_OUTPUT_MAX_LINES);
+		expect(mcp.outputTail).toContain("mcp-4999:");
+		expect(mcp.outputTail).not.toContain("mcp-0:");
+		expect(mcp.body.text).toBe(mcp.outputTail);
+		const storedInvocation = JSON.stringify(mcp.invocation);
+		expect(storedInvocation.length).toBeLessThanOrEqual(5_000);
+		expect(storedInvocation).toContain("[REDACTED]");
+		expect(storedInvocation).not.toContain("must-not-survive");
+
+		const custom = projectPiToolActivity({
+			id: "custom-huge",
+			name: "custom",
+			output: `${"old\n".repeat(100_000)}newest-custom-line`,
+		}, scope);
+		expect(custom?.outputTail).toContain("newest-custom-line");
+		expect(Buffer.byteLength(custom?.body?.text ?? "", "utf8")).toBeLessThanOrEqual(ACTIVITY_OUTPUT_MAX_BYTES);
+	});
+
+	it("keeps a bounded source head and newest output tail for a huge read", () => {
+		const output = Array.from({ length: 5_000 }, (_, index) => `line ${index + 1}:${"界".repeat(20)}`).join("\n");
+		const projected = projectPiToolActivity({
+			id: "read-huge",
+			name: "read",
+			status: "success",
+			arguments: { path: "huge.ts", offset: 101 },
+			content: [{ type: "text", text: output }],
+		}, scope);
+		if (!projected || projected.body?.kind !== "source") throw new Error("read projection failed");
+
+		expect(projected.body.text).toContain("line 1:");
+		expect(projected.body.text).not.toContain("line 5000:");
+		expect(projected.body.text.split("\n").length).toBeLessThanOrEqual(ACTIVITY_OUTPUT_MAX_LINES);
+		expect(projected.body.text.length).toBeLessThanOrEqual(ACTIVITY_OUTPUT_MAX_BYTES);
+		expect(projected.body).toMatchObject({ startLine: 101, totalLines: 5_100 });
+		expect(projected.outputTail).toContain("line 5000:");
+		expect(projected.outputTail).not.toContain("line 1:");
 	});
 
 	it("requires an actual toolCallId for live correlation and scopes historical fallback IDs", () => {

@@ -27,6 +27,12 @@ describe("boundedOutputTail", () => {
 		expect(tail).not.toContain("�");
 	});
 
+	it("does not expose a huge control-string payload when retaining only the tail", () => {
+		const tail = boundedOutputTail(`\u001b]8;;${"hidden-control-payload".repeat(100_000)}\u0007visible-tail`);
+		expect(tail).toBe("visible-tail");
+		expect(tail).not.toContain("hidden-control-payload");
+	});
+
 	it("strips ANSI and controls before enforcing the final bound", () => {
 		const tail = boundedOutputTail(`\u001b[31mred\u001b[0m\tvalue\rnext\u0000`);
 		expect(tail).toBe("red    value\nnext");

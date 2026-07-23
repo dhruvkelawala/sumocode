@@ -23,6 +23,7 @@ const BODY_MAX_SOURCE_LINES = 25;
 const BODY_MAX_ROWS = 29;
 const INVOCATION_MAX_ROWS = 4;
 const STREAM_INPUT_MAX_CHARS = 100_000;
+const HEADER_FIELD_MAX_INSPECT_CHARS = 8 * 1024;
 const FALLBACK_RUNNING = "waiting for output…";
 const FALLBACK_SETTLED = "no output captured";
 
@@ -33,7 +34,7 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 }
 
 function compactWhitespace(value: string): string {
-	return sanitizeActivityText(value).replace(/\s+/g, " ").trim();
+	return sanitizeActivityText(value.slice(0, HEADER_FIELD_MAX_INSPECT_CHARS)).replace(/\s+/g, " ").trim();
 }
 
 function activityTitle(activity: ActivitySnapshot): string {
@@ -42,8 +43,16 @@ function activityTitle(activity: ActivitySnapshot): string {
 
 function firstLine(value: string | undefined): string | undefined {
 	if (!value) return undefined;
-	const line = sanitizeActivityText(value).split("\n").find((candidate) => candidate.trim().length > 0);
+	const line = sanitizeActivityText(value.slice(0, HEADER_FIELD_MAX_INSPECT_CHARS)).split("\n").find((candidate) => candidate.trim().length > 0);
 	return line ? compactWhitespace(line) : undefined;
+}
+
+function truncateHeaderText(value: string, width: number): string {
+	const budget = Math.max(0, Math.floor(width));
+	if (budget === 0) return "";
+	if (visibleWidth(value) <= budget) return value;
+	if (budget === 1) return "…";
+	return `${truncateToWidth(value, budget - 1, "")}…`;
 }
 
 export function activityStatusGlyph(status: ActivityStatus): string {
@@ -128,8 +137,19 @@ function ledgerStyle(roles: ActivityLedgerRoles): { bg: string } {
 }
 
 function renderHeader(activity: ActivitySnapshot, width: number, roles: ActivityLedgerRoles): string {
-	const title = activityTitle(activity);
-	const note = firstLine(activity.result?.error ?? activity.result?.summary ?? activity.currentStep);
+	const rawTitle = activityTitle(activity);
+	const rawNote = firstLine(activity.result?.error ?? activity.result?.summary ?? activity.currentStep);
+	// Fixed cells: ╭─ + brackets + left/rule spacing + status glyph/right spaces.
+	// Budget the note first, then the title, before constructing any spans. This
+	// keeps the status and useful progress note visible even for maliciously long
+	// producer titles instead of relying on final whole-line truncation.
+	const fixedWidth = rawNote ? 11 : 10;
+	const sharedBudget = Math.max(1, width - fixedWidth);
+	const noteBudget = rawNote
+		? Math.min(visibleWidth(rawNote), Math.max(1, Math.min(40, Math.floor(sharedBudget * 0.35))))
+		: 0;
+	const note = rawNote && noteBudget > 0 ? truncateHeaderText(rawNote, noteBudget) : undefined;
+	const title = truncateHeaderText(rawTitle, Math.max(1, sharedBudget - (note ? visibleWidth(note) : 0)));
 	const right: Span[] = [
 		span(" "),
 		span(activityStatusGlyph(activity.status), { fg: activityStatusColor(activity.status) }),
@@ -139,11 +159,11 @@ function renderHeader(activity: ActivitySnapshot, width: number, roles: Activity
 	const rawSubject = activity.subject ?? (activity.body?.kind === "terminal" ? activity.body.command : undefined);
 	const rightWidth = right.reduce((sum, part) => sum + visibleWidth(part.text), 0);
 	const baseLeftWidth = 3 + visibleWidth(title) + 2 + 1;
-	const maxSubjectWidth = Math.max(0, width - baseLeftWidth - rightWidth - 4 - 2);
+	const maxSubjectWidth = Math.max(0, width - baseLeftWidth - rightWidth - 1 - 2);
 	const sanitizedSubject = rawSubject ? compactWhitespace(rawSubject) : undefined;
 	const subject = sanitizedSubject && visibleWidth(sanitizedSubject) > maxSubjectWidth
 		? (maxSubjectWidth > 3 ? `…${truncateToWidth(sanitizedSubject, maxSubjectWidth - 1, "", true)}` : undefined)
-		: sanitizedSubject;
+		: maxSubjectWidth > 0 ? sanitizedSubject : undefined;
 	const left: Span[] = [
 		span("╭─ ", { fg: roles.border }),
 		span(`[${title}]`, { fg: roles.label }),
@@ -448,20 +468,24 @@ function renderStreamBody(activity: ActivitySnapshot, width: number, roles: Acti
 	const boundedContent = boundedStreamLines(candidates, invocation);
 	const lines = boundedContent.lines;
 	let displayRowsCollapsed = false;
-	for (let index = 0; index < lines.length; index += 1) {
-		const available = Math.max(0, BODY_MAX_ROWS - rows.length - 1);
-		if (available === 0) {
+	let outputRowsRemaining = Math.max(0, BODY_MAX_ROWS - rows.length - 1);
+	const outputRows: string[][] = [];
+	// The producer contract is a newest-output tail. If invocation/metadata rows
+	// leave fewer display rows than that tail needs, select from the end and then
+	// restore chronological order so the newest useful progress is never the row
+	// sacrificed for the consolidated collapse marker.
+	for (let index = lines.length - 1; index >= 0; index -= 1) {
+		if (outputRowsRemaining === 0) {
 			displayRowsCollapsed = true;
 			break;
 		}
-		const remainingLines = lines.length - index - 1;
-		const reserved = Math.min(remainingLines, Math.max(0, available - 1));
-		const rowBudget = Math.max(1, available - reserved);
 		const parts = body?.kind === "terminal" ? styledTerminalLine(lines[index]!, roles) : [span(lines[index]!, { fg: roles.bodyMuted })];
-		const rendered = renderBodyLines(parts, width, roles, rowBudget);
-		rows.push(...rendered.rows);
+		const rendered = renderBodyLines(parts, width, roles, outputRowsRemaining);
+		outputRows.unshift(rendered.rows);
+		outputRowsRemaining -= rendered.rows.length;
 		displayRowsCollapsed ||= rendered.truncated;
 	}
+	rows.push(...outputRows.flat());
 	if (boundedContent.truncated) reasons.push("output collapsed");
 	if (displayRowsCollapsed) reasons.push("display rows collapsed");
 	if (lines.length === 0 && rows.length < BODY_MAX_ROWS) rows.push(renderBodyLine([span(emptyText(activity), { fg: roles.bodyMuted })], width, roles));

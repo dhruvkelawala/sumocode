@@ -272,6 +272,88 @@ export function sanitizeActivityText(text: string): string {
 	return output;
 }
 
+/**
+ * Remove controls while retaining only a bounded newest text window. Unlike
+ * sanitizing and then slicing, this scans arbitrarily large producer strings
+ * without allocating a second string proportional to the input. Scanning from
+ * the beginning still preserves control-string state, so a long OSC/DCS payload
+ * cannot become printable merely because the retained tail starts inside it.
+ */
+export function sanitizeActivityTextTail(
+	text: string,
+	options: { readonly maxChars: number; readonly maxLines: number },
+): string {
+	const maxChars = Math.max(1, Math.floor(options.maxChars));
+	const maxLines = Math.max(1, Math.floor(options.maxLines));
+	const completedLines: string[] = [];
+	let currentLine = "";
+	let chunk = "";
+	let index = 0;
+	const flushChunk = (): void => {
+		if (!chunk) return;
+		currentLine += chunk;
+		chunk = "";
+		if (currentLine.length > maxChars) currentLine = currentLine.slice(-maxChars);
+	};
+	const finishLine = (): void => {
+		flushChunk();
+		completedLines.push(currentLine);
+		if (completedLines.length > maxLines) completedLines.shift();
+		currentLine = "";
+	};
+	const append = (value: string): void => {
+		chunk += value;
+		if (chunk.length >= 4_096) flushChunk();
+	};
+
+	while (index < text.length) {
+		const char = text[index]!;
+		if (char === "\u001b") {
+			index = skipEscapeSequence(text, index);
+			continue;
+		}
+		const code = text.charCodeAt(index);
+		if (code === 0x9b) {
+			index += 1;
+			while (index < text.length && text[index] !== "\n") {
+				const finalCode = text.charCodeAt(index);
+				index += 1;
+				if (finalCode >= 0x40 && finalCode <= 0x7e) break;
+			}
+			continue;
+		}
+		if (code === 0x90 || code === 0x98 || code === 0x9d || code === 0x9e || code === 0x9f) {
+			index = skipC1ControlString(text, index);
+			continue;
+		}
+		if (char === "\t") {
+			append("    ");
+			index += 1;
+			continue;
+		}
+		if (char === "\r") {
+			finishLine();
+			index += text[index + 1] === "\n" ? 2 : 1;
+			continue;
+		}
+		if (char === "\n") {
+			finishLine();
+			index += 1;
+			continue;
+		}
+		if (code < 0x20 || (code >= 0x7f && code <= 0x9f)) {
+			index += 1;
+			continue;
+		}
+		append(char);
+		index += 1;
+	}
+	flushChunk();
+	const lines = [...completedLines, currentLine].slice(-maxLines);
+	const output = lines.join("\n");
+	return output.length <= maxChars ? output : output.slice(-maxChars);
+}
+
 function isSecretKey(key: string): boolean {
 	const words = key
 		.replace(/([a-z0-9])([A-Z])/g, "$1 $2")

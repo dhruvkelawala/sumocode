@@ -11,6 +11,7 @@ import {
 	mkdirSync,
 	openSync,
 	readFileSync,
+	readdirSync,
 	realpathSync,
 	renameSync,
 	unlinkSync,
@@ -44,6 +45,8 @@ interface PrivateFileLockOwner {
 export interface PrivateFileLockOptions {
 	readonly timeoutMs?: number;
 	readonly pollMs?: number;
+	/** @internal Test seam for an adversarial stale-read/rename race. */
+	readonly beforeAbandonedLockTakeover?: () => void;
 }
 
 export interface ActivityPaths {
@@ -283,6 +286,46 @@ function privateFileLockOwnerGone(owner: PrivateFileLockOwner): boolean {
 	return actualStartTime !== undefined && actualStartTime !== owner.processStartTime;
 }
 
+function privateFileTakeoverPaths(lockPath: string): string[] {
+	const prefix = `${basename(lockPath)}.takeover-`;
+	try {
+		return readdirSync(dirname(lockPath), { encoding: "utf8" })
+			.filter((name) => name.startsWith(prefix))
+			.map((name) => join(dirname(lockPath), name));
+	} catch {
+		return [];
+	}
+}
+
+/**
+ * A takeover pathname is an immutable ownership marker. While a stale-reader
+ * contender validates the inode it moved, every other contender observes this
+ * marker before creating the canonical name. This closes the file-lock ABA gap
+ * without requiring a platform-specific compare-and-unlink primitive.
+ */
+function hasBlockingPrivateFileTakeover(lockPath: string, ownToken: string): boolean {
+	let blocked = false;
+	for (const path of privateFileTakeoverPaths(lockPath)) {
+		const owner = readPrivateFileLockOwner(path);
+		if (owner?.token === ownToken) continue;
+		if (owner && privateFileLockOwnerGone(owner)) {
+			try {
+				unlinkSync(path);
+			} catch (error) {
+				if (errorCode(error) !== "ENOENT") blocked = true;
+			}
+			continue;
+		}
+		blocked = true;
+	}
+	return blocked;
+}
+
+function ownsPrivateFileLock(lockPath: string, token: string): boolean {
+	if (readPrivateFileLockOwner(lockPath)?.token === token) return true;
+	return privateFileTakeoverPaths(lockPath).some((path) => readPrivateFileLockOwner(path)?.token === token);
+}
+
 function restoreDisplacedPrivateFileLock(path: string, lockPath: string): void {
 	try {
 		linkSync(path, lockPath);
@@ -292,9 +335,10 @@ function restoreDisplacedPrivateFileLock(path: string, lockPath: string): void {
 	if (readPrivateFileLockOwner(lockPath)) unlinkSync(path);
 }
 
-function breakAbandonedPrivateFileLock(lockPath: string): boolean {
+function breakAbandonedPrivateFileLock(lockPath: string, beforeTakeover?: () => void): boolean {
 	const owner = readPrivateFileLockOwner(lockPath);
 	if (!owner || !privateFileLockOwnerGone(owner)) return false;
+	beforeTakeover?.();
 	const takeoverPath = `${lockPath}.takeover-${randomUUID()}`;
 	try {
 		renameSync(lockPath, takeoverPath);
@@ -303,29 +347,40 @@ function breakAbandonedPrivateFileLock(lockPath: string): boolean {
 	}
 	const displaced = readPrivateFileLockOwner(takeoverPath);
 	if (!displaced || displaced.token !== owner.token) {
-		restoreDisplacedPrivateFileLock(takeoverPath, lockPath);
+		// A newer live owner won the canonical name after our stale read. Keep its
+		// complete lease under the immutable takeover name: its operation remains
+		// exclusive, and every third-party acquisition blocks until it releases.
 		return false;
 	}
-	unlinkSync(takeoverPath);
+	try {
+		unlinkSync(takeoverPath);
+	} catch (error) {
+		if (errorCode(error) !== "ENOENT") throw error;
+	}
 	return true;
 }
 
 function releasePrivateFileLock(lockPath: string, token: string): void {
-	const owner = readPrivateFileLockOwner(lockPath);
-	if (owner?.token !== token) return;
-	const releasePath = `${lockPath}.release-${token}-${randomUUID()}`;
-	try {
-		renameSync(lockPath, releasePath);
-	} catch (error) {
-		if (errorCode(error) !== "ENOENT") throw error;
-		return;
+	// A stale-reader contender may move a live owner after acquisition. Search
+	// twice so a concurrent canonical→takeover rename between scans is found.
+	for (let pass = 0; pass < 2; pass += 1) {
+		for (const path of [lockPath, ...privateFileTakeoverPaths(lockPath)]) {
+			if (readPrivateFileLockOwner(path)?.token !== token) continue;
+			const releasePath = `${path}.release-${token}-${randomUUID()}`;
+			try {
+				renameSync(path, releasePath);
+			} catch (error) {
+				if (errorCode(error) !== "ENOENT") throw error;
+				continue;
+			}
+			const displaced = readPrivateFileLockOwner(releasePath);
+			if (displaced?.token === token) {
+				unlinkSync(releasePath);
+				continue;
+			}
+			restoreDisplacedPrivateFileLock(releasePath, lockPath);
+		}
 	}
-	const displaced = readPrivateFileLockOwner(releasePath);
-	if (displaced?.token === token) {
-		unlinkSync(releasePath);
-		return;
-	}
-	restoreDisplacedPrivateFileLock(releasePath, lockPath);
 }
 
 /**
@@ -350,13 +405,22 @@ export function withPrivateFileLock<T>(
 	const pollMs = Math.max(1, Math.floor(options.pollMs ?? DEFAULT_PRIVATE_FILE_LOCK_POLL_MS));
 	const deadline = Date.now() + timeoutMs;
 	while (true) {
+		if (hasBlockingPrivateFileTakeover(lockPath, token)) {
+			if (Date.now() >= deadline) throw new Error(`Timed out waiting for private file lock: ${lockPath}`);
+			sleepSync(pollMs);
+			continue;
+		}
 		try {
 			writePrivateJsonExclusive(lockPath, owner);
-			break;
+			// A stale-reader contender can move this exact lease after the link.
+			// Ownership under our immutable takeover name remains valid, while any
+			// unrelated takeover forces us to release and retry.
+			if (ownsPrivateFileLock(lockPath, token) && !hasBlockingPrivateFileTakeover(lockPath, token)) break;
+			releasePrivateFileLock(lockPath, token);
 		} catch (error) {
 			if (errorCode(error) !== "EEXIST") throw error;
 		}
-		if (breakAbandonedPrivateFileLock(lockPath)) continue;
+		if (breakAbandonedPrivateFileLock(lockPath, options.beforeAbandonedLockTakeover)) continue;
 		if (Date.now() >= deadline) throw new Error(`Timed out waiting for private file lock: ${lockPath}`);
 		sleepSync(pollMs);
 	}

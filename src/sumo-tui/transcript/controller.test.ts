@@ -573,6 +573,112 @@ describe("TranscriptController incremental chat sink (B9)", () => {
 		expect(getMessageContentKeyCacheMissesForTests()).toBe(missesAfterColdDiff);
 	});
 
+	it("plans an ordered targeted batch when several stable message slots change", () => {
+		const previous = ["spawn-a", "spawn-b", "wait"].map((id): ChatMessageViewModel => ({
+			id,
+			role: "sumo",
+			displayName: "SUMO",
+			blocks: [{ type: "markdown", text: `${id}:before` }],
+		}));
+		const next = previous.map((message): ChatMessageViewModel => ({
+			...message,
+			blocks: [{ type: "markdown", text: `${message.id}:after` }],
+		}));
+
+		expect(planChatDiff(previous, next)).toEqual([
+			{ kind: "replace", index: 0, message: next[0] },
+			{ kind: "replace", index: 1, message: next[1] },
+			{ kind: "replace-last", index: 2, message: next[2] },
+		]);
+		expect(planChatDiff(previous, [{ ...next[0]!, id: "rewritten" }, next[1]!, next[2]!])).toBeUndefined();
+	});
+
+	it("target-updates two canonical spawn cards and their subagent_wait operation in one progress event", () => {
+		const chat = fakeChatSink();
+		const controller = new TranscriptController({ chat });
+		const runningA = {
+			id: "subagent:sa-a",
+			sourceId: "spawn-a",
+			kind: "subagent",
+			title: "worker a",
+			status: "running",
+			currentStep: "starting a",
+		} as const;
+		const runningB = {
+			id: "subagent:sa-b",
+			sourceId: "spawn-b",
+			kind: "subagent",
+			title: "worker b",
+			status: "running",
+			currentStep: "starting b",
+		} as const;
+		controller.replaceFromMessages([
+			{
+				id: "spawn-message-a",
+				role: "assistant",
+				content: [{ type: "toolCall", id: "spawn-a", name: "subagent_spawn", arguments: { prompt: "work a" } }],
+			},
+			{
+				role: "toolResult",
+				toolCallId: "spawn-a",
+				toolName: "subagent_spawn",
+				content: [{ type: "text", text: "started a" }],
+				details: { activity: runningA },
+			},
+			{
+				id: "spawn-message-b",
+				role: "assistant",
+				content: [{ type: "toolCall", id: "spawn-b", name: "subagent_spawn", arguments: { prompt: "work b" } }],
+			},
+			{
+				role: "toolResult",
+				toolCallId: "spawn-b",
+				toolName: "subagent_spawn",
+				content: [{ type: "text", text: "started b" }],
+				details: { activity: runningB },
+			},
+			{
+				id: "wait-message",
+				role: "assistant",
+				content: [{ type: "toolCall", id: "wait-call", name: "subagent_wait", arguments: { ids: ["sa-a", "sa-b"] } }],
+			},
+		]);
+		chat.replaceViewModels.mockClear();
+		chat.replaceViewModelAt.mockClear();
+		chat.replaceLastWithViewModel.mockClear();
+
+		controller.handleAgentEvent({
+			type: "tool_execution_update",
+			toolCallId: "wait-call",
+			toolName: "subagent_wait",
+			args: { ids: ["sa-a", "sa-b"] },
+			partialResult: {
+				content: [{ type: "text", text: "two workers active" }],
+				details: {
+					activity: [
+						{ ...runningA, currentStep: "reading a.ts" },
+						{ ...runningB, currentStep: "testing b.ts" },
+					],
+				},
+			},
+		});
+
+		expect(chat.replaceViewModels).not.toHaveBeenCalled();
+		expect(chat.replaceViewModelAt.mock.calls.map(([index]) => index)).toEqual([0, 1]);
+		expect(chat.replaceViewModelAt.mock.calls[0]?.[1]).toMatchObject({
+			id: "spawn-message-a",
+			blocks: [expect.objectContaining({ type: "activity", activity: expect.objectContaining({ id: "subagent:sa-a", currentStep: "reading a.ts" }) })],
+		});
+		expect(chat.replaceViewModelAt.mock.calls[1]?.[1]).toMatchObject({
+			id: "spawn-message-b",
+			blocks: [expect.objectContaining({ type: "activity", activity: expect.objectContaining({ id: "subagent:sa-b", currentStep: "testing b.ts" }) })],
+		});
+		expect(chat.replaceLastWithViewModel).toHaveBeenCalledWith(expect.objectContaining({
+			id: "wait-message",
+			blocks: [expect.objectContaining({ type: "activity", activity: expect.objectContaining({ id: "wait-call", outputTail: "two workers active" }) })],
+		}), 2);
+	});
+
 	it("replaces the full pager on the very first publish (nothing to diff against yet)", () => {
 		const chat = fakeChatSink();
 		const controller = new TranscriptController({ chat });
@@ -598,6 +704,36 @@ describe("TranscriptController incremental chat sink (B9)", () => {
 		expect(() => controller.handleAgentEvent({ type: "message_start", message })).not.toThrow();
 		expect(() => controller.handleAgentEvent({ type: "message_update", message })).not.toThrow();
 		expect(chat.replaceViewModels).toHaveBeenCalledTimes(1);
+	});
+
+	it("fingerprints only the bounded projection of huge custom tool progress", () => {
+		const chat = fakeChatSink();
+		const controller = new TranscriptController({ chat });
+		const hugeInvocation = { query: "q".repeat(1_000_000), password: "hidden" };
+		controller.handleAgentEvent({
+			type: "tool_execution_start",
+			toolCallId: "huge-custom",
+			toolName: "mcp",
+			args: hugeInvocation,
+		});
+		chat.replaceViewModels.mockClear();
+
+		expect(() => controller.handleAgentEvent({
+			type: "tool_execution_update",
+			toolCallId: "huge-custom",
+			toolName: "mcp",
+			args: hugeInvocation,
+			partialResult: { content: [{ type: "text", text: `${"old\n".repeat(200_000)}newest-progress` }] },
+		})).not.toThrow();
+
+		expect(chat.replaceViewModels).not.toHaveBeenCalled();
+		expect(chat.replaceLastWithViewModel).toHaveBeenCalledTimes(1);
+		const projected = chat.replaceLastWithViewModel.mock.calls[0]?.[0] as ChatMessageViewModel;
+		expect(JSON.stringify(projected).length).toBeLessThan(50_000);
+		const block = projected.blocks[0];
+		expect(block).toMatchObject({ type: "activity", activity: { id: "huge-custom", outputTail: expect.stringContaining("newest-progress") } });
+		if (block?.type !== "activity") throw new Error("wrong projected block");
+		expect(JSON.stringify(block.activity.invocation)).not.toContain("hidden");
 	});
 
 	it("message_update draft deltas call replaceLastWithViewModel, never replaceViewModels", () => {

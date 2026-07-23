@@ -1,4 +1,4 @@
-import { sanitizeActivityText } from "./domain.js";
+import { sanitizeActivityTextTail } from "./domain.js";
 
 export const ACTIVITY_OUTPUT_MAX_BYTES = 16 * 1024;
 export const ACTIVITY_OUTPUT_MAX_LINES = 25;
@@ -43,7 +43,7 @@ export function boundedOutputTail(value: string | Uint8Array, options: OutputTai
 	const maxBytes = positiveInteger(options.maxBytes, ACTIVITY_OUTPUT_MAX_BYTES);
 	const maxLines = positiveInteger(options.maxLines, ACTIVITY_OUTPUT_MAX_LINES);
 	const decoded = typeof value === "string" ? value : decodeValidUtf8Tail(value, maxBytes + 4);
-	const sanitized = sanitizeActivityText(decoded);
+	const sanitized = sanitizeActivityTextTail(decoded, { maxChars: maxBytes, maxLines });
 	const byteBounded = trimStringToUtf8Tail(sanitized, maxBytes);
 	const lines = byteBounded.split("\n");
 	const rowBounded = lines.length > maxLines ? lines.slice(lines.length - maxLines).join("\n") : byteBounded;

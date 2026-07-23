@@ -541,14 +541,19 @@ export class TranscriptController {
 	 * rendered id/role/blocks instead, which is cheap (no ANSI rendering) and
 	 * stable for a message whose content truly did not change:
 	 *
-	 *   - same length, exactly one entry differs -> update that retained node;
+	 *   - same source slots and length -> replace every changed retained node;
 	 *     the last entry keeps the O(1) `replaceLastWithViewModel` fast path,
-	 *     while a folded non-last Activity uses `replaceViewModelAt`.
-	 *   - next is exactly one longer, with at most one changed shared entry ->
-	 *     apply that targeted update (if any), then append the new message.
-	 *   - array shrinkage, growth by more than one, or multiple changed entries
-	 *     means history was actually rewritten -> fall back to a full
+	 *     while folded Activities at any earlier indices use `replaceViewModelAt`.
+	 *   - next is exactly one longer -> apply every targeted shared-slot update,
+	 *     then append the new message.
+	 *   - array shrinkage, growth by more than one, or a changed source ID means
+	 *     history was actually rewritten -> fall back to a full
 	 *     `replaceViewModels`, the only operation that can express it safely.
+	 *
+	 * One subagent_wait progress event can update its own operation plus several
+	 * canonical spawn cards at different message indices. Treating multiple
+	 * changed slots as a rewrite would dispose the pager and lose scroll/unread
+	 * state; the ordered replacement batch preserves each retained node.
 	 *
 	 * The very first publish (no prior `lastPublishedToChat`) always falls
 	 * back to a full replace too, since there is nothing to diff against yet.
@@ -603,9 +608,10 @@ function planHintedIncrementalChatDiff(
 	if (next.length !== previous.length) return undefined;
 	if (next.length === 0) return [];
 	const last = next[next.length - 1]!;
-	// A changed last boundary is the common streaming-delta case and is safe to
-	// plan in O(1). If it is unchanged, fall back to the full content diff: a
-	// tool result may have folded into a non-last assistant message.
+	// A plain changed boundary is the common streaming-delta case and is safe to
+	// plan in O(1). Foldable blocks can also mutate canonical cards earlier in
+	// the transcript, so they must use the complete targeted batch planner.
+	if (last.blocks.some(isFoldableBlock)) return undefined;
 	if (messageContentKey(last) === messageContentKey(previous[previous.length - 1])) return undefined;
 	return [{ kind: "replace-last", index: next.length - 1, message: last }];
 }
@@ -622,20 +628,23 @@ export function planChatDiff(
 ): ChatDiffOperation[] | undefined {
 	if (next.length !== previous.length && next.length !== previous.length + 1) return undefined;
 	const sharedLength = previous.length;
-	let changedIndex: number | undefined;
+	const changedIndices: number[] = [];
 	for (let index = 0; index < sharedLength; index += 1) {
-		if (messageContentKey(previous[index]) === messageContentKey(next[index])) continue;
-		if (changedIndex !== undefined) return undefined;
-		changedIndex = index;
+		const before = previous[index];
+		const after = next[index];
+		// Source-index replacement owns the existing retained node. A different
+		// message ID means slots shifted or history was rewritten, so only a full
+		// pager replacement can safely reconcile ownership.
+		if (!before || !after || before.id !== after.id) return undefined;
+		if (messageContentKey(before) !== messageContentKey(after)) changedIndices.push(index);
 	}
 
-	const operations: ChatDiffOperation[] = [];
-	if (changedIndex !== undefined) {
+	const operations: ChatDiffOperation[] = changedIndices.map((changedIndex) => {
 		const message = next[changedIndex]!;
-		operations.push(changedIndex === previous.length - 1
-			? { kind: "replace-last", index: changedIndex, message }
-			: { kind: "replace", index: changedIndex, message });
-	}
+		return changedIndex === next.length - 1
+			? { kind: "replace-last" as const, index: changedIndex, message }
+			: { kind: "replace" as const, index: changedIndex, message };
+	});
 	if (next.length === previous.length + 1) operations.push({ kind: "append", index: next.length - 1, message: next[next.length - 1]! });
 	return operations;
 }

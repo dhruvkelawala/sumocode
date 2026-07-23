@@ -9,6 +9,7 @@ import { composite } from "../render/compositor.js";
 import { SelectionController } from "../input/selection.js";
 import { PiEditorLeaf } from "./pi-editor-leaf.js";
 import { ChatPager, type ChatPagerRenderControls } from "./chat-pager.js";
+import { TranscriptController } from "../transcript/controller.js";
 import type { ChatMessageViewModel } from "../transcript/view-model.js";
 
 class FakeEditor implements Component {
@@ -213,6 +214,53 @@ describe("ChatPager", () => {
 		expect(chat.scrollBox.manualScroll).toBe(true);
 		expect(chat.scrollBox.scrollOffset).toBe(beforeOffset);
 		expect(after).toBe(before);
+		root.dispose();
+	});
+
+	it("preserves nodes, scroll, unread, and expansion across multi-index spawn/wait progress", async () => {
+		const { root, chat, buffer } = await makeChat(100, 8);
+		const controller = new TranscriptController({ chat });
+		const runningA = { id: "subagent:sa-a", sourceId: "spawn-a", kind: "subagent", title: "worker a", status: "running", currentStep: "starting a" } as const;
+		const runningB = { id: "subagent:sa-b", sourceId: "spawn-b", kind: "subagent", title: "worker b", status: "running", currentStep: "starting b" } as const;
+		controller.replaceFromMessages([
+			{ id: "spawn-message-a", role: "assistant", content: [{ type: "toolCall", id: "spawn-a", name: "subagent_spawn", arguments: { prompt: "work a" } }] },
+			{ role: "toolResult", toolCallId: "spawn-a", toolName: "subagent_spawn", content: [{ type: "text", text: "started a" }], details: { activity: runningA } },
+			{ id: "spawn-message-b", role: "assistant", content: [{ type: "toolCall", id: "spawn-b", name: "subagent_spawn", arguments: { prompt: "work b" } }] },
+			{ role: "toolResult", toolCallId: "spawn-b", toolName: "subagent_spawn", content: [{ type: "text", text: "started b" }], details: { activity: runningB } },
+			{ id: "wait-message", role: "assistant", content: [{ type: "toolCall", id: "wait-call", name: "subagent_wait", arguments: { ids: ["sa-a", "sa-b"] } }] },
+		]);
+		chat.setActivityExpansion("subagent:sa-a", false);
+		buffer();
+		chat.scrollBox.scrollToBottom();
+		chat.scrollBox.scrollBy(-3);
+		controller.handleAgentEvent({ type: "message_start", message: { id: "later-draft", role: "assistant", content: "later streaming reply" } });
+		const retained = chat.getRenderedMessages().slice(0, 3);
+		const scrollOffset = chat.scrollBox.scrollOffset;
+		expect(chat.scrollBox.manualScroll).toBe(true);
+		expect(chat.getUnreadCount()).toBe(1);
+
+		controller.handleAgentEvent({
+			type: "tool_execution_update",
+			toolCallId: "wait-call",
+			toolName: "subagent_wait",
+			args: { ids: ["sa-a", "sa-b"] },
+			partialResult: {
+				content: [{ type: "text", text: "two workers active" }],
+				details: { activity: [{ ...runningA, currentStep: "reading a.ts" }, { ...runningB, currentStep: "testing b.ts" }] },
+			},
+		});
+
+		for (let index = 0; index < retained.length; index += 1) {
+			expect(chat.getRenderedMessages()[index]).toBe(retained[index]);
+		}
+		expect(chat.getActivityExpansion("subagent:sa-a")).toBe(false);
+		expect(chat.scrollBox.manualScroll).toBe(true);
+		expect(chat.scrollBox.scrollOffset).toBe(scrollOffset);
+		expect(chat.getUnreadCount()).toBe(1);
+		expect(chat.getRenderedMessages()[0]?.toSnapshot().blocks?.[0]).toMatchObject({
+			type: "activity",
+			activity: { id: "subagent:sa-a", currentStep: "reading a.ts" },
+		});
 		root.dispose();
 	});
 

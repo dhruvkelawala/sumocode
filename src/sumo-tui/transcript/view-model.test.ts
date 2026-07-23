@@ -550,6 +550,38 @@ describe("structured transcript view model", () => {
 		expect(message?.blocks).toEqual([{ type: "activity", activity }]);
 	});
 
+	it("folds explicit terminal_wait observation into the canonical start card", () => {
+		const running = {
+			id: "term-observed",
+			sourceId: "terminal-start-call",
+			kind: "terminal" as const,
+			title: "auth watcher",
+			status: "running" as const,
+			ownerSessionId: "session-a",
+			body: { kind: "terminal" as const, text: "working" },
+		};
+		const settled = {
+			...running,
+			status: "succeeded" as const,
+			body: { kind: "terminal" as const, text: "done" },
+			result: { summary: "exit 0" },
+		};
+		const transcript = transcriptFromSessionContext({ messages: [
+			{ id: "start-message", role: "assistant", content: [{ type: "toolCall", id: "terminal-start-call", name: "terminal_start", arguments: { command: "pnpm test", title: "auth watcher" } }] },
+			{ role: "toolResult", toolCallId: "terminal-start-call", toolName: "terminal_start", content: [{ type: "text", text: "started" }], details: { activity: running } },
+			{ id: "wait-message", role: "assistant", content: [{ type: "toolCall", id: "terminal-wait-call", name: "terminal_wait", arguments: { ids: ["term-observed"] } }] },
+			{ role: "toolResult", toolCallId: "terminal-wait-call", toolName: "terminal_wait", content: [{ type: "text", text: "settled" }], details: { activities: [settled] } },
+		] });
+
+		expect(transcript.messages).toHaveLength(2);
+		expect(transcript.messages[0]?.blocks).toEqual([
+			expect.objectContaining({ type: "activity", activity: expect.objectContaining({ id: "term-observed", status: "succeeded", body: expect.objectContaining({ text: "done" }) }) }),
+		]);
+		expect(transcript.messages[1]?.blocks).toEqual([
+			expect.objectContaining({ type: "activity", activity: expect.objectContaining({ id: "terminal-wait-call", title: "terminal_wait", status: "succeeded" }) }),
+		]);
+	});
+
 	it("maps a v2 terminal result Activity through the universal retained renderer", () => {
 		const activity = {
 			id: "term-7",

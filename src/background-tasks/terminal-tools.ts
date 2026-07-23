@@ -12,7 +12,7 @@ import {
 	TERMINAL_TOOL_DESCRIPTIONS,
 	TERMINAL_TOOL_GUIDELINES,
 } from "./terminal-prompt.js";
-import { terminalActivitySnapshot, type TerminalDeliveryReceipt, type TerminalTaskSnapshot } from "./task-types.js";
+import { terminalActivitySnapshot, type TerminalDeliveryReceipt, type TerminalStopResult, type TerminalTaskSnapshot } from "./task-types.js";
 
 const DEFAULT_WAIT_TIMEOUT_MS = 30_000;
 const MAX_WAIT_TIMEOUT_MS = 300_000;
@@ -24,6 +24,11 @@ const StringEnum = <T extends readonly string[]>(values: T, options?: { descript
 
 function makeToolResult(text: string, details?: unknown) {
 	return { content: [{ type: "text" as const, text }], details };
+}
+
+function terminalActivityFromStopResult(manager: TerminalTaskManager, result: TerminalStopResult) {
+	if (!result.task) return undefined;
+	return terminalActivitySnapshot(result.task, result.output ?? manager.getOutput(result.task, COMPLETION_OUTPUT_BYTES));
 }
 
 function sessionId(ctx: ExtensionContext): string {
@@ -294,7 +299,11 @@ export function installTerminalTools(
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 			coordinator.touch(ctx);
 			const results = await manager.stop(params.ids, sessionId(ctx));
-			return makeToolResult(buildStopResult(results), { results });
+			return makeToolResult(buildStopResult(results), {
+				results,
+				activities: results.map((result) => terminalActivityFromStopResult(manager, result))
+					.filter((activity): activity is NonNullable<typeof activity> => activity !== undefined),
+			});
 		},
 	});
 

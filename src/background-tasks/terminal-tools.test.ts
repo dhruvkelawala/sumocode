@@ -194,11 +194,14 @@ describe("installTerminalTools", () => {
 	it("uses current session ownership at every check, wait, stop, and list boundary", async () => {
 		const settled = task({ status: "completed", settledAt: 2_000, exitCode: 0, deliveryState: "suppressed", completionId: "completion-a" });
 		const harness = createHarness([settled]);
-		await execute(harness.tool("terminal_check"), { id: settled.id }, harness.ctx());
-		await execute(harness.tool("terminal_wait"), { ids: [settled.id], timeout_ms: 5 }, harness.ctx());
-		await execute(harness.tool("terminal_stop"), { ids: [settled.id] }, harness.ctx());
+		const checked = await execute(harness.tool("terminal_check"), { id: settled.id }, harness.ctx());
+		const waited = await execute(harness.tool("terminal_wait"), { ids: [settled.id], timeout_ms: 5 }, harness.ctx());
+		const stopped = await execute(harness.tool("terminal_stop"), { ids: [settled.id] }, harness.ctx());
 		await execute(harness.tool("terminal_list"), {}, harness.ctx());
 
+		expect(checked.details).toMatchObject({ activity: { id: settled.id, status: "succeeded" } });
+		expect(waited.details).toMatchObject({ activities: [{ id: settled.id, status: "succeeded" }] });
+		expect(stopped.details).toMatchObject({ activities: [{ id: settled.id, status: "cancelled" }] });
 		expect(harness.manager.check).toHaveBeenCalledWith(settled.id, "session-a");
 		expect(harness.manager.wait).toHaveBeenCalledWith([settled.id], "session-a", 5, undefined);
 		expect(harness.manager.stop).toHaveBeenCalledWith([settled.id], "session-a");

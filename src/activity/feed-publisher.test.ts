@@ -1,5 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, symlinkSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -170,14 +170,32 @@ describe("ActivityFeedPublisher", () => {
 		expect(statSync(outsideSession).mode & 0o777).toBe(0o755);
 	});
 
-	it("refuses to overwrite an unknown-schema persisted feed", () => {
+	it("diagnoses and repairs an unreadable presentation feed once it owns the writer name", () => {
+		const stateRoot = root();
+		const paths = activityPaths("session-a", stateRoot);
+		writeFileSync(paths.feedFile, "{not-json", { mode: 0o600 });
+		chmodSync(paths.feedFile, 0o600);
+		const diagnostics: string[] = [];
+		const publisher = fixturePublisher("session-a", {
+			rootDir: stateRoot,
+			onDiagnostic: (entry) => diagnostics.push(`${entry.kind}:${entry.message}`),
+		});
+		expect(publisher.canPublish).toBe(true);
+		expect(publisher.publish([activity("term-a")])).toBe(true);
+		expect(diagnostics.some((entry) => entry.startsWith("io:"))).toBe(true);
+		expect(parseActivityFeedDocument(JSON.parse(readFileSync(paths.feedFile, "utf8")), "session-a")?.activities).toMatchObject([
+			{ id: "term-a", status: "running" },
+		]);
+	});
+
+	it("rebuilds an unknown-schema read model under an uncontested owned lease", () => {
 		const stateRoot = root();
 		const paths = activityPaths("session-a", stateRoot);
 		atomicWritePrivateJson(paths.feedFile, { schemaVersion: 999, ownerSessionId: "session-a", retained: "future-data" });
 		const publisher = fixturePublisher("session-a", { rootDir: stateRoot });
-		expect(publisher.canPublish).toBe(false);
-		expect(() => publisher.publish([activity("term-a")])).toThrow("publication blocked");
-		expect(JSON.parse(readFileSync(paths.feedFile, "utf8"))).toMatchObject({ schemaVersion: 999, retained: "future-data" });
+		expect(publisher.canPublish).toBe(true);
+		expect(publisher.publish([activity("term-a")])).toBe(true);
+		expect(JSON.parse(readFileSync(paths.feedFile, "utf8"))).toMatchObject({ schemaVersion: 1, ownerSessionId: "session-a" });
 	});
 
 	it("suppresses semantic no-op writes without scanning unrelated session feeds", () => {

@@ -32,6 +32,8 @@ const TERMINAL_REDACTION_CONTEXT_BYTES = 64 * 1024;
 
 interface TerminalProjectionSource {
 	subscribeChanges(listener: (snapshots: readonly TerminalTaskSnapshot[]) => void): () => void;
+	/** Reload records created/advanced by another process after manager construction. */
+	refreshSnapshotsFromStore?(): readonly TerminalTaskSnapshot[];
 	getOutput(task: Pick<TerminalTaskSnapshot, "logFile">, maxBytes?: number): string;
 	getOutputTailBytes?(task: Pick<TerminalTaskSnapshot, "logFile">, maxBytes?: number): TerminalOutputTail;
 	getOutputBytes?(task: Pick<TerminalTaskSnapshot, "logFile">, maxBytes?: number): Uint8Array;
@@ -195,11 +197,7 @@ export class ActivityManagerBridge {
 		}
 		this.terminalUnsubscribe = terminalManager.subscribeChanges((snapshots) => {
 			if (this.disposed) return;
-			this.terminalSnapshots = snapshots;
-			const retainedKeys = new Set(snapshots.map((task) => this.terminalCacheKey(task)));
-			for (const key of this.terminalOutputCache.keys()) {
-				if (!retainedKeys.has(key)) this.terminalOutputCache.delete(key);
-			}
+			this.adoptTerminalSnapshots(snapshots);
 			this.publishAll();
 			this.syncTerminalOutputPoll();
 		});
@@ -217,12 +215,15 @@ export class ActivityManagerBridge {
 		logDiagnostic("activity_bridge_bound", { ownerSessionId: owner ?? null, claimedOwnerSessionIds: [...this.claimedOwners] });
 	}
 
-	/** Activity-producing tools must fail closed when another live process owns the feed. */
+	/** Block execution only when another live process owns the feed writer name. */
 	public canProduceActivity(owner: string | undefined): boolean {
 		if (!owner || this.disposed) return false;
 		this.syncOwnedSessions();
 		const publisher = this.publishers.get(owner);
-		return this.claimedOwners.has(owner) && publisher?.canPublish === true;
+		// feed.json is a repairable presentation read model. Once this process owns
+		// the lease, corruption or transient I/O may hide cards but must not disable
+		// terminal/subagent execution; subsequent manager changes retry publication.
+		return this.claimedOwners.has(owner) && publisher?.hasWriterOwnership === true;
 	}
 
 	/** Publish final non-reattachable subagent truth before this factory dies. */
@@ -268,8 +269,15 @@ export class ActivityManagerBridge {
 			if (this.claimedOwners.has(owner)) continue;
 			if (!this.sessionOwnership.claim(owner, this.bridgeToken)) continue;
 			const publisher = this.publisher(owner);
-			if (publisher.hasWriterOwnership) this.claimedOwners.add(owner);
-			else {
+			if (publisher.hasWriterOwnership) {
+				try {
+					const refreshed = this.terminalManager.refreshSnapshotsFromStore?.();
+					if (refreshed) this.adoptTerminalSnapshots(refreshed);
+				} catch (error) {
+					this.diagnostic({ kind: "io", path: owner, message: `terminal takeover refresh failed: ${error instanceof Error ? error.message : String(error)}` });
+				}
+				this.claimedOwners.add(owner);
+			} else {
 				// A live incumbent may die while this process remains open. Failed
 				// publishers hold no resources; discard them so the next poll can run
 				// a fresh PID/start-token claim and safely take over.
@@ -360,12 +368,13 @@ export class ActivityManagerBridge {
 			const update = currentById.get(activity.id);
 			if (update) merged.push(mergeActivitySnapshot(activity, update));
 			else if (
-				!isSettledActivityStatus(activity.status) &&
+				!isSettledActivityStatus(activity.status) && activity.kind !== "terminal" &&
 				(abandonedRunningIds.has(activity.id) || (shuttingDownSubagents && activity.kind === "subagent"))
 			) {
-				// A missing producer is not evidence of loss. Only the same bridge's
-				// explicit subagent shutdown or a durable writer takeover after the
-				// former PID/start identity is proven dead may settle it as lost.
+				// A missing producer is not evidence of loss. Subagents become
+				// unrecoverable after explicit shutdown or prior-writer death. Terminals
+				// are different: only refreshed TerminalTaskStore truth may mark them
+				// lost after process PID/start/tree verification.
 				merged.push(lostActivity(activity, `${activity.kind} producer is no longer recoverable`, this.now()));
 			} else merged.push(activity);
 		}
@@ -382,6 +391,14 @@ export class ActivityManagerBridge {
 				this.sessionOwnership.release(owner, this.bridgeToken);
 			}
 			this.diagnostic({ kind: "io", path: owner, message: error instanceof Error ? error.message : String(error) });
+		}
+	}
+
+	private adoptTerminalSnapshots(snapshots: readonly TerminalTaskSnapshot[]): void {
+		this.terminalSnapshots = snapshots;
+		const retainedKeys = new Set(snapshots.map((task) => this.terminalCacheKey(task)));
+		for (const key of this.terminalOutputCache.keys()) {
+			if (!retainedKeys.has(key)) this.terminalOutputCache.delete(key);
 		}
 	}
 

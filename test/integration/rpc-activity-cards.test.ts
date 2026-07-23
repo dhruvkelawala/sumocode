@@ -251,6 +251,23 @@ describe("RPC durable Activity cards", () => {
 		expect(screen.text.match(/\[session a terminal\]/g)).toHaveLength(1);
 	}, 45_000);
 
+	it("does not overwrite an event emitted immediately after initial get_messages", async () => {
+		const cols = 100;
+		const rows = 30;
+		const piBin = await createRpcChildFixture("sumocode-rpc-activity-initial-hydration-race-", {
+			sessionId: "session-initial",
+			sessionName: "Initial Hydration",
+			initialHydrationRace: true,
+		});
+		const agentDir = await mkdtemp(join(tmpdir(), "sumocode-rpc-activity-initial-hydration-agent-"));
+		app = spawnFixture(piBin, agentDir, cols, rows);
+		await app.waitForOutput(PI_BOOT_SEQUENCE, 15_000);
+		const screen = await waitForScreen(app, ({ text }) => (
+			text.includes("initial race completed") && text.includes("READY") && !text.includes("DIVINE INVOCATION")
+		), { cols, rows, timeoutMs: 10_000 });
+		expect(screen.text).not.toContain("initial race draft");
+	}, 30_000);
+
 	it("replays post-hydration message_update, agent_end, and agent_settled events after a session change", async () => {
 		const cols = 100;
 		const rows = 30;

@@ -1,6 +1,8 @@
-import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { execFile } from "node:child_process";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ActivitySnapshot } from "./domain.js";
 import { ActivityFeedPublisher, type ActivityFeedPublisherOptions } from "./feed-publisher.js";
@@ -29,6 +31,16 @@ async function waitFor(predicate: () => boolean, timeoutMs = 2_000): Promise<voi
 		if (Date.now() >= deadline) throw new Error("timed out waiting for ActivityStore update");
 		await new Promise<void>((resolve) => setTimeout(resolve, 10));
 	}
+}
+
+function runUiToggle(rootDir: string, owner: string, id: string, gate: string, ready: string): Promise<string> {
+	const fixture = fileURLToPath(new URL("../../test/fixtures/activity-ui-toggle.ts", import.meta.url));
+	return new Promise((resolve, reject) => {
+		execFile(join(process.cwd(), "node_modules", ".bin", "jiti"), [fixture, rootDir, owner, id, gate, ready], (error, stdout, stderr) => {
+			if (error) reject(new Error(`Activity UI toggle failed: ${stderr || error.message}`));
+			else resolve(stdout.trim());
+		});
+	});
 }
 
 afterEach(() => {
@@ -153,6 +165,24 @@ describe("FileActivityStore", () => {
 		if (process.platform !== "win32") expect(statSync(uiPath).mode & 0o777).toBe(0o600);
 		resumed.dispose();
 	});
+
+	it("merges independent toggles from two host processes without lost updates", async () => {
+		const stateRoot = root();
+		const gate = join(stateRoot, "toggle-gate");
+		const firstReady = join(stateRoot, "first-ready");
+		const secondReady = join(stateRoot, "second-ready");
+		const first = runUiToggle(stateRoot, "session-shared", "activity-a", gate, firstReady);
+		const second = runUiToggle(stateRoot, "session-shared", "activity-b", gate, secondReady);
+		await waitFor(() => existsSync(firstReady) && existsSync(secondReady), 10_000);
+		writeFileSync(gate, "go\n", { mode: 0o600 });
+		expect((await Promise.all([first, second])).sort()).toEqual(["activity-a", "activity-b"]);
+
+		const resumed = new FileActivityStore({ rootDir: stateRoot });
+		expect(resumed.bindSession("session-shared").expansion).toEqual({ "activity-a": true, "activity-b": true });
+		const persisted = JSON.parse(readFileSync(activityPaths("session-shared", stateRoot).uiFile, "utf8")) as Record<string, unknown>;
+		expect(persisted).toMatchObject({ revision: 2, expansion: { "activity-a": true, "activity-b": true } });
+		resumed.dispose();
+	}, 15_000);
 
 	it("does not overwrite an unknown-schema UI document", () => {
 		const stateRoot = root();

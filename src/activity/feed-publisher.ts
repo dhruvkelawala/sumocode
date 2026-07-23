@@ -435,7 +435,7 @@ export class ActivityFeedPublisher {
 	private readonly abandonedRunningIds = new Set<string>();
 	private revision = 0;
 	private activities: readonly ActivitySnapshot[] = [];
-	private publicationBlocked = false;
+	private publicationNeedsRepair = false;
 
 	public constructor(
 		public readonly ownerSessionId: string,
@@ -474,7 +474,7 @@ export class ActivityFeedPublisher {
 	}
 
 	public get canPublish(): boolean {
-		return this.writerOwned && !this.publicationBlocked;
+		return this.writerOwned;
 	}
 
 	/** Missing running records may be reconciled only after the former writer is proven dead. */
@@ -504,9 +504,6 @@ export class ActivityFeedPublisher {
 			this.writerOwned = false;
 			throw new Error("Activity feed is owned by another live session writer");
 		}
-		if (this.publicationBlocked) {
-			throw new Error("Activity feed publication blocked by an unreadable persisted document");
-		}
 		const now = this.now();
 		const retained = retainFeedActivities(
 			activities.map((activity) => sanitizeActivityForFeed(activity, this.ownerSessionId)),
@@ -515,7 +512,7 @@ export class ActivityFeedPublisher {
 		const revision = this.revision + 1;
 		const updatedAt = Math.max(1, Math.floor(now));
 		const projected = fitFeedBudget(retained, this.ownerSessionId, revision, updatedAt);
-		if (semanticActivities(projected) === semanticActivities(this.activities)) return false;
+		if (!this.publicationNeedsRepair && semanticActivities(projected) === semanticActivities(this.activities)) return false;
 		const document: ActivityFeedDocument = {
 			schemaVersion: ACTIVITY_SCHEMA_VERSION,
 			ownerSessionId: this.ownerSessionId,
@@ -529,6 +526,7 @@ export class ActivityFeedPublisher {
 		atomicWritePrivateJson(this.path, document);
 		this.revision = revision;
 		this.activities = projected;
+		this.publicationNeedsRepair = false;
 		return true;
 	}
 
@@ -538,20 +536,20 @@ export class ActivityFeedPublisher {
 			if (value === undefined) return;
 			const record = recordOf(value);
 			if (record?.schemaVersion !== ACTIVITY_SCHEMA_VERSION) {
-				this.publicationBlocked = true;
+				this.publicationNeedsRepair = true;
 				this.diagnostic("schema", `unknown activity feed schema ${String(record?.schemaVersion)}`);
 				return;
 			}
 			const document = parseActivityFeedDocument(value, this.ownerSessionId);
 			if (!document) {
-				this.publicationBlocked = true;
+				this.publicationNeedsRepair = true;
 				this.diagnostic("corrupt", "invalid activity feed document");
 				return;
 			}
 			this.revision = document.revision;
 			this.activities = document.activities;
 		} catch (error) {
-			this.publicationBlocked = true;
+			this.publicationNeedsRepair = true;
 			this.diagnostic("io", error instanceof Error ? error.message : String(error));
 		}
 	}

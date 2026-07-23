@@ -787,6 +787,22 @@ export class TerminalTaskManager {
 		return () => this.snapshotListeners.delete(listener);
 	}
 
+	/**
+	 * Adopt records created or advanced by another process after this manager was
+	 * constructed. Recovery re-verifies durable process identity before any
+	 * lifecycle transition; callers receive the refreshed immutable projection.
+	 */
+	public refreshSnapshotsFromStore(): readonly TerminalTaskSnapshot[] {
+		if (this.detached) return this.getSnapshots();
+		for (const snapshot of this.store.loadAll()) {
+			const previous = this.tasks.get(snapshot.id);
+			if (previous?.revision === snapshot.revision) continue;
+			this.adopt(snapshot, false);
+			this.recover(snapshot);
+		}
+		return this.getSnapshots();
+	}
+
 	public getSnapshots(): readonly TerminalTaskSnapshot[] {
 		const snapshots = [...this.tasks.values()];
 		const replayed = snapshots.filter((snapshot) => !isTerminalTaskSettled(snapshot.status));

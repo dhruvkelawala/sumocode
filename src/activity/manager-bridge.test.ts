@@ -1,11 +1,15 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { execFile } from "node:child_process";
+import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { TerminalOutputTail } from "../background-tasks/task-manager.js";
-import type { TerminalTaskSnapshot } from "../background-tasks/task-types.js";
+import { TerminalTaskManager, type TerminalOutputTail } from "../background-tasks/task-manager.js";
+import { TerminalTaskStore } from "../background-tasks/task-store.js";
+import { terminalActivitySnapshot, type TerminalTaskSnapshot } from "../background-tasks/task-types.js";
 import type { SubagentSnapshot } from "../subagents/domain.js";
 import { ACTIVITY_SETTLED_RETENTION_COUNT, ACTIVITY_SETTLED_RETENTION_MS, ActivityFeedPublisher, type ActivityFeedPublisherOptions } from "./feed-publisher.js";
+import { activityPaths } from "./persistence.js";
 import { ActivityManagerBridge, installActivityManagerBridge } from "./manager-bridge.js";
 
 const roots: string[] = [];
@@ -18,6 +22,28 @@ function root(): string {
 
 function fixturePublisher(ownerSessionId: string, options: ActivityFeedPublisherOptions = {}): ActivityFeedPublisher {
 	return new ActivityFeedPublisher(ownerSessionId, { ...options, allowUnleasedWritesForTests: true });
+}
+
+function runBridgeContender(
+	stateRoot: string,
+	terminalRoot: string,
+	owner: string,
+	ready: string,
+	deathGate: string,
+	takeoverGate: string,
+): Promise<{ id: string; status: string; processIdentityVerified: boolean }> {
+	const fixture = fileURLToPath(new URL("../../test/fixtures/activity-bridge-contender.ts", import.meta.url));
+	return new Promise((resolve, reject) => {
+		execFile(
+			join(process.cwd(), "node_modules", ".bin", "jiti"),
+			[fixture, stateRoot, terminalRoot, owner, ready, deathGate, takeoverGate],
+			{ timeout: 15_000 },
+			(error, stdout, stderr) => {
+				if (error) reject(new Error(`Activity bridge contender failed: ${stderr || error.message}`));
+				else resolve(JSON.parse(stdout.trim()) as { id: string; status: string; processIdentityVerified: boolean });
+			},
+		);
+	});
 }
 
 function terminal(id: string, ownerSessionId: string, status: "running" | "completed" = "running"): TerminalTaskSnapshot {
@@ -181,6 +207,56 @@ describe("ActivityManagerBridge", () => {
 		liveContender.dispose();
 	});
 
+	it.skipIf(process.platform === "win32")("refreshes a late durable terminal before a two-process writer takeover", async () => {
+		const stateRoot = root();
+		const terminalRoot = root();
+		const owner = "session-late-terminal";
+		const ready = join(stateRoot, "contender-ready");
+		const deathGate = join(stateRoot, "incumbent-dead");
+		const takeoverGate = join(stateRoot, "takeover-now");
+		const incumbent = new ActivityFeedPublisher(owner, {
+			rootDir: stateRoot,
+			writerIdentity: { token: "incumbent", pid: 444, processStartTime: "incumbent-start" },
+			inspectWriter: () => "alive",
+		});
+		incumbent.publish([]);
+
+		// Process B constructs its TerminalTaskManager while the durable store is
+		// still empty and is held off by process A's live writer lease.
+		const contender = runBridgeContender(stateRoot, terminalRoot, owner, ready, deathGate, takeoverGate);
+		await vi.waitFor(() => expect(existsSync(ready)).toBe(true), { timeout: 10_000 });
+
+		// Only after B has cached the empty projection does process A start and
+		// publish a terminal. B must reload TerminalTaskStore during takeover.
+		const terminalManager = new TerminalTaskManager({
+			store: new TerminalTaskStore({ rootDir: terminalRoot }),
+			createId: () => "term-started-after-contender",
+			pollIntervalMs: 60_000,
+		});
+		let task: TerminalTaskSnapshot | undefined;
+		try {
+			task = await terminalManager.start({
+				ownerSessionId: owner,
+				command: "sleep 30",
+				cwd: stateRoot,
+				title: "late terminal",
+			});
+			incumbent.publish([terminalActivitySnapshot(task, "late output")]);
+			writeFileSync(deathGate, "dead\n", { mode: 0o600 });
+			writeFileSync(takeoverGate, "go\n", { mode: 0o600 });
+
+			expect(await contender).toEqual({
+				id: "term-started-after-contender",
+				status: "running",
+				processIdentityVerified: true,
+			});
+			expect(new TerminalTaskStore({ rootDir: terminalRoot }).get(task.id)?.processTreeVerification?.members.length).toBeGreaterThan(0);
+		} finally {
+			if (task) await terminalManager.stop([task.id], owner);
+			terminalManager.detach();
+		}
+	}, 20_000);
+
 	it("blocks activity-producing tools until this process owns the session writer lease", () => {
 		const stateRoot = root();
 		const incumbent = new ActivityFeedPublisher("session-gated", {
@@ -220,6 +296,56 @@ describe("ActivityManagerBridge", () => {
 
 		incumbentAlive = false;
 		expect(toolGate?.({ toolName: "terminal_start" } as never, ctx)).toBeUndefined();
+		bridge.dispose();
+	});
+
+	it.skipIf(process.platform === "win32")("allows tools through feed corruption/outage and repairs the presentation feed", () => {
+		const stateRoot = root();
+		const paths = activityPaths("session-repair", stateRoot);
+		writeFileSync(paths.feedFile, "{not-json", { mode: 0o600 });
+		chmodSync(paths.feedFile, 0o600);
+		const diagnostics: string[] = [];
+		const terminals = new FakeTerminalManager();
+		const handlers = new Map<string, Array<(event: never, ctx: never) => unknown>>();
+		const pi = {
+			on: (name: string, handler: (event: never, ctx: never) => unknown) => handlers.set(name, [...handlers.get(name) ?? [], handler]),
+		} as never;
+		const claims = new Map<string, string>();
+		const bridge = installActivityManagerBridge(pi, terminals as never, new FakeSubagentManager() as never, {
+			rootDir: stateRoot,
+			writerIdentity: { token: "repair-owner", pid: 333, processStartTime: "repair-start" },
+			inspectWriter: () => "alive",
+			onDiagnostic: (entry) => diagnostics.push(`${entry.kind}:${entry.message}`),
+			sessionOwnership: {
+				ownedSessionIds: () => ["session-repair"],
+				claim: (owner, token) => {
+					const current = claims.get(owner);
+					if (current && current !== token) return false;
+					claims.set(owner, token);
+					return true;
+				},
+				release: (owner, token) => { if (claims.get(owner) === token) claims.delete(owner); },
+			},
+		});
+		const ctx = { sessionManager: { getSessionId: () => "session-repair" } } as never;
+		for (const handler of handlers.get("session_start") ?? []) handler({} as never, ctx);
+		const toolGate = handlers.get("tool_call")?.[0];
+		expect(toolGate?.({ toolName: "terminal_start" } as never, ctx)).toBeUndefined();
+		expect(toolGate?.({ toolName: "subagent_spawn" } as never, ctx)).toBeUndefined();
+		expect(diagnostics.some((entry) => entry.startsWith("io:"))).toBe(true);
+
+		chmodSync(paths.directory, 0o500);
+		terminals.snapshots = [terminal("term-during-outage", "session-repair")];
+		terminals.emit();
+		expect(toolGate?.({ toolName: "terminal_start" } as never, ctx)).toBeUndefined();
+		expect(toolGate?.({ toolName: "subagent_spawn" } as never, ctx)).toBeUndefined();
+		expect(diagnostics.some((entry) => entry.includes("permissions must be 0700"))).toBe(true);
+
+		chmodSync(paths.directory, 0o700);
+		terminals.emit();
+		expect(fixturePublisher("session-repair", { rootDir: stateRoot }).getSnapshot()).toEqual([
+			expect.objectContaining({ id: "term-during-outage", status: "running" }),
+		]);
 		bridge.dispose();
 	});
 

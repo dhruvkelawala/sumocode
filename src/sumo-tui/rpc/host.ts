@@ -10,7 +10,7 @@ import { loadYoga } from "../layout/yoga.js";
 import { applyStartupTheme } from "../../themes/index.js";
 import { ExtensionStatusPublication, RegionRegistry } from "../pi-compat/region-registry.js";
 import type { TranscriptControllerChatSink } from "../transcript/controller.js";
-import type { ChatMessageViewModel } from "../transcript/view-model.js";
+import type { ChatMessageViewModel, TranscriptViewModel } from "../transcript/view-model.js";
 import type { ChatPagerReplaceStats } from "../widgets/chat-pager.js";
 import { ModalLayer } from "../widgets/modal-layer.js";
 import { NotificationCenter } from "../widgets/notification.js";
@@ -1105,22 +1105,56 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 	process.once("SIGTERM", handleSigterm);
 
 	try {
+		// Initial boot has the same response/event ordering race as a session
+		// switch: an event parsed immediately after get_messages resolves can land
+		// before the awaiting continuation replaces the transcript. Buffer before
+		// child startup, refetch until one quiet pass, then replay only the final
+		// suffix after the authoritative replacement.
+		if (!visualFixture) sessionEvents.begin();
 		await client.start();
 		const branch = await readGitBranch(cwd);
-		const refreshedState = await controls.refreshState(branch);
-		const restored = scheduler.rebindSession(refreshedState.sessionId, editor.getText());
-		if (restored.count > 0) editor.setText(restored.text);
-		latestActivitySnapshot = activityStore.bindSession(refreshedState.sessionId);
-		if (!visualFixture) {
+		let transcript: TranscriptViewModel;
+		if (visualFixture) {
+			const refreshedState = await controls.refreshState(branch);
+			const restored = scheduler.rebindSession(refreshedState.sessionId, editor.getText());
+			if (restored.count > 0) editor.setText(restored.text);
+			latestActivitySnapshot = activityStore.bindSession(refreshedState.sessionId);
+			transcript = visualFixture.transcript;
+		} else {
+			let refreshedState: RpcHostChromeState | undefined;
+			let messages: readonly unknown[] | undefined;
+			let ownershipRebound = false;
+			for (let attempt = 0; attempt < 4; attempt += 1) {
+				sessionEvents.markHydrationBarrier();
+				refreshedState = await controls.refreshState(branch);
+				if (!ownershipRebound) {
+					const restored = scheduler.rebindSession(refreshedState.sessionId, editor.getText());
+					if (restored.count > 0) editor.setText(restored.text);
+					latestActivitySnapshot = activityStore.bindSession(refreshedState.sessionId);
+					ownershipRebound = true;
+				}
+				messages = await readTranscriptMessages();
+				if (!sessionEvents.hasEventsAfterHydrationBarrier) {
+					sessionEvents.markHydrationBarrier();
+					break;
+				}
+			}
+			if (!refreshedState || !messages) throw new Error("Initial session hydration did not produce a snapshot");
+			transcript = transcriptPump.replaceFromMessages(messages);
+			const replay = sessionEvents.finishHydration();
+			for (const event of replay.supersededSnapshotEvents) scheduler.handleAgentEvent(event);
+			for (const event of replay.suffixEvents) processAgentEvent(event);
 			stopWatchingGitBranch = await watchGitBranch(cwd, branch, (nextBranch) => {
 				const state = stateStore.setGitBranch(nextBranch);
 				runtime?.update({ state });
 			});
 		}
 		await editor.configureAutocomplete(controls);
-		const transcript = visualFixture
-			? visualFixture.transcript
-			: await readTranscript();
+		// An event can arrive after the final quiet-pass check but before runtime
+		// construction. processAgentEvent has already advanced the pump in that
+		// window, so seed the first pager from its latest view rather than the
+		// earlier local replacement result.
+		if (!visualFixture) transcript = transcriptPump.viewModel();
 		const state = visualFixture ? visualFixture.state : stateStore.getSnapshot();
 		runtime = new RpcHostRuntime({
 			output: stdout,

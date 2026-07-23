@@ -37,6 +37,8 @@ export interface RpcChildFixtureOptions {
 	readonly settleDelayMs?: number;
 	/** Emit a post-get_state message_update→agent_end→agent_settled suffix while get_messages returns its older snapshot. */
 	readonly sessionHydrationRace?: boolean;
+	/** Emit an event immediately after the first get_messages response during host boot. */
+	readonly initialHydrationRace?: boolean;
 	readonly compactReason?: "manual" | "threshold" | "overflow";
 	readonly compactSummary?: string;
 	readonly compactTokensBefore?: number;
@@ -60,6 +62,7 @@ let pendingPrompt = null;
 let holdNextPromptUntilAbort = ${options.holdPromptUntilAbort ? "true" : "false"};
 let sessionHydrationRacePending = false;
 const sessionHydrationRace = ${options.sessionHydrationRace ? "true" : "false"};
+let initialHydrationRacePending = ${options.initialHydrationRace ? "true" : "false"};
 const streamChunks = ${JSON.stringify(options.streamChunks ?? null)};
 const chunkDelayMs = ${JSON.stringify(options.chunkDelayMs ?? 500)};
 const streamChunkSentinels = ${options.streamChunkSentinels ? "true" : "false"};
@@ -122,6 +125,17 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 		return;
 	}
 	if (command.type === "get_messages") {
+		if (initialHydrationRacePending) {
+			initialHydrationRacePending = false;
+			const hydrationSnapshot = [...messages];
+			write(response(command, { messages: hydrationSnapshot }));
+			write({ type: "message_update", message: { id: "initial-race-draft", role: "assistant", content: "initial race draft" } });
+			messages = [{ id: "initial-race-complete", role: "assistant", content: "initial race completed" }];
+			isStreaming = false;
+			write({ type: "agent_end", messages, willRetry: false });
+			write({ type: "agent_settled" });
+			return;
+		}
 		if (sessionHydrationRacePending) {
 			sessionHydrationRacePending = false;
 			const hydrationSnapshot = [...messages];

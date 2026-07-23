@@ -10,6 +10,7 @@ import {
 	atomicWritePrivateJson,
 	defaultActivityStateRoot,
 	readPrivateJson,
+	withPrivateFileLock,
 	type ActivityPaths,
 } from "./persistence.js";
 
@@ -141,8 +142,6 @@ export class FileActivityStore implements ActivityStore {
 	private defaultExpansion: boolean | undefined;
 	private feedKnownGood = false;
 	private uiKnownGood = false;
-	private uiPublicationBlocked = false;
-	private uiRevision = 0;
 	private disposed = false;
 
 	public constructor(options: FileActivityStoreOptions = {}) {
@@ -165,8 +164,6 @@ export class FileActivityStore implements ActivityStore {
 		this.defaultExpansion = undefined;
 		this.feedKnownGood = false;
 		this.uiKnownGood = false;
-		this.uiPublicationBlocked = false;
-		this.uiRevision = 0;
 		if (ownerSessionId) {
 			this.paths = activityPaths(ownerSessionId, this.rootDir);
 			this.reload(generation, ownerSessionId);
@@ -197,26 +194,39 @@ export class FileActivityStore implements ActivityStore {
 
 	public setExpanded(id: string, expanded: boolean): void {
 		if (!this.paths || !this.snapshot.ownerSessionId || !validExpansionId(id)) return;
-		const entries = Object.entries(this.uiExpansion).filter(([candidate]) => candidate !== id);
-		entries.push([id, expanded]);
-		this.writeUi(boundedExpansion(entries, this.protectedExpansionKeys()), this.defaultExpansion);
+		this.writeUi((current) => {
+			const entries = Object.entries(current.expansion).filter(([candidate]) => candidate !== id);
+			entries.push([id, expanded]);
+			return {
+				expansion: boundedExpansion(entries, this.protectedExpansionKeys()),
+				defaultExpansion: current.defaultExpansion,
+			};
+		});
 	}
 
 	public migrateExpanded(previousId: string, nextId: string, expanded: boolean): void {
 		if (!this.paths || !this.snapshot.ownerSessionId || !validExpansionId(previousId) || !validExpansionId(nextId)) return;
-		const entries = Object.entries(this.uiExpansion).filter(([id]) => id !== previousId && id !== nextId);
-		entries.push([nextId, expanded]);
-		this.writeUi(boundedExpansion(entries, this.protectedExpansionKeys()), this.defaultExpansion);
+		this.writeUi((current) => {
+			const entries = Object.entries(current.expansion).filter(([id]) => id !== previousId && id !== nextId);
+			entries.push([nextId, expanded]);
+			return {
+				expansion: boundedExpansion(entries, this.protectedExpansionKeys()),
+				defaultExpansion: current.defaultExpansion,
+			};
+		});
 	}
 
 	public setAllExpanded(expanded: boolean, activityIds?: readonly string[]): void {
 		if (!this.paths || !this.snapshot.ownerSessionId) return;
 		const ids = activityIds ?? this.feedActivities.map((activity) => activity.id);
-		const entries = Object.entries(this.uiExpansion).filter(([id]) => !ids.includes(id));
-		for (const id of ids) {
-			if (validExpansionId(id)) entries.push([id, expanded]);
-		}
-		this.writeUi(boundedExpansion(entries, this.protectedExpansionKeys()), expanded);
+		const updatedIds = new Set(ids);
+		this.writeUi((current) => {
+			const entries = Object.entries(current.expansion).filter(([id]) => !updatedIds.has(id));
+			for (const id of ids) {
+				if (validExpansionId(id)) entries.push([id, expanded]);
+			}
+			return { expansion: boundedExpansion(entries, this.protectedExpansionKeys()), defaultExpansion: expanded };
+		});
 	}
 
 	public dispose(): void {
@@ -227,34 +237,60 @@ export class FileActivityStore implements ActivityStore {
 		this.listeners.clear();
 	}
 
-	private writeUi(expansion: Readonly<Record<string, boolean>>, defaultExpansion: boolean | undefined): void {
+	private writeUi(
+		update: (current: Pick<ActivityUiDocument, "expansion" | "defaultExpansion">) => Pick<ActivityUiDocument, "expansion" | "defaultExpansion">,
+	): void {
 		const ownerSessionId = this.snapshot.ownerSessionId;
-		if (!ownerSessionId || !this.paths) return;
-		if (this.uiPublicationBlocked) {
-			this.diagnostic("schema", this.paths.uiFile, "Activity UI publication blocked by an unreadable persisted document");
-			return;
-		}
-		this.uiRevision += 1;
-		const document: ActivityUiDocument = {
-			schemaVersion: ACTIVITY_SCHEMA_VERSION,
-			ownerSessionId,
-			revision: this.uiRevision,
-			updatedAt: Math.max(1, Math.floor(this.now())),
-			expansion,
-			...(defaultExpansion === undefined ? {} : { defaultExpansion }),
-		};
+		const paths = this.paths;
+		if (!ownerSessionId || !paths) return;
+		let committed: ActivityUiDocument | undefined;
 		try {
-			if (Buffer.byteLength(`${JSON.stringify(document, null, 2)}\n`, "utf8") > ACTIVITY_UI_MAX_BYTES) {
-				throw new Error(`Activity UI document exceeds ${ACTIVITY_UI_MAX_BYTES} bytes`);
-			}
-			atomicWritePrivateJson(this.paths.uiFile, document);
-			this.uiKnownGood = true;
-			this.uiExpansion = expansion;
-			this.defaultExpansion = defaultExpansion;
-			this.apply({ ownerSessionId, activities: this.feedActivities, expansion, ...(defaultExpansion === undefined ? {} : { defaultExpansion }) });
+			committed = withPrivateFileLock(`${paths.uiFile}.lock`, () => {
+				const persisted = readPrivateJson(paths.uiFile, ACTIVITY_UI_MAX_BYTES);
+				let current: ActivityUiDocument | undefined;
+				if (persisted !== undefined) {
+					const record = recordOf(persisted);
+					if (record?.schemaVersion !== ACTIVITY_SCHEMA_VERSION) {
+						this.diagnostic("schema", paths.uiFile, `unknown activity UI schema ${String(record?.schemaVersion)}`);
+						return undefined;
+					}
+					current = parseUiDocument(persisted, ownerSessionId);
+					if (!current) {
+						this.diagnostic("corrupt", paths.uiFile, "invalid activity UI document");
+						return undefined;
+					}
+				}
+				const next = update({ expansion: current?.expansion ?? {}, defaultExpansion: current?.defaultExpansion });
+				const unchanged = JSON.stringify(next.expansion) === JSON.stringify(current?.expansion ?? {}) &&
+					next.defaultExpansion === current?.defaultExpansion;
+				if (unchanged && current) return current;
+				const document: ActivityUiDocument = {
+					schemaVersion: ACTIVITY_SCHEMA_VERSION,
+					ownerSessionId,
+					revision: (current?.revision ?? 0) + 1,
+					updatedAt: Math.max(current?.updatedAt ?? 0, Math.max(1, Math.floor(this.now()))),
+					expansion: next.expansion,
+					...(next.defaultExpansion === undefined ? {} : { defaultExpansion: next.defaultExpansion }),
+				};
+				if (Buffer.byteLength(`${JSON.stringify(document, null, 2)}\n`, "utf8") > ACTIVITY_UI_MAX_BYTES) {
+					throw new Error(`Activity UI document exceeds ${ACTIVITY_UI_MAX_BYTES} bytes`);
+				}
+				atomicWritePrivateJson(paths.uiFile, document);
+				return document;
+			});
 		} catch (error) {
-			this.diagnostic("io", this.paths.uiFile, error);
+			this.diagnostic("io", paths.uiFile, error);
 		}
+		if (!committed) return;
+		this.uiKnownGood = true;
+		this.uiExpansion = committed.expansion;
+		this.defaultExpansion = committed.defaultExpansion;
+		this.apply({
+			ownerSessionId,
+			activities: this.feedActivities,
+			expansion: committed.expansion,
+			...(committed.defaultExpansion === undefined ? {} : { defaultExpansion: committed.defaultExpansion }),
+		});
 	}
 
 	private protectedExpansionKeys(): ReadonlySet<string> {
@@ -336,18 +372,14 @@ export class FileActivityStore implements ActivityStore {
 			if (value !== undefined) {
 				const record = recordOf(value);
 				if (record?.schemaVersion !== ACTIVITY_SCHEMA_VERSION) {
-					this.uiPublicationBlocked = true;
 					this.diagnostic("schema", this.paths.uiFile, `unknown activity UI schema ${String(record?.schemaVersion)}`);
 				} else {
 					const ui = parseUiDocument(value, ownerSessionId);
 					if (ui) {
 						this.uiKnownGood = true;
-						this.uiPublicationBlocked = false;
-						this.uiRevision = ui.revision;
 						this.uiExpansion = ui.expansion;
 						this.defaultExpansion = ui.defaultExpansion;
 					} else {
-						this.uiPublicationBlocked = true;
 						this.diagnostic("corrupt", this.paths.uiFile, "invalid activity UI document");
 					}
 				}
@@ -356,7 +388,6 @@ export class FileActivityStore implements ActivityStore {
 				this.defaultExpansion = undefined;
 			}
 		} catch (error) {
-			this.uiPublicationBlocked = true;
 			this.diagnostic("io", this.paths.uiFile, error);
 		}
 	}

@@ -18,6 +18,7 @@ import {
 } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
+import { captureProcessBirthTime } from "../background-tasks/process-tree.js";
 
 export const ACTIVITY_SCHEMA_VERSION = 1;
 export const PRIVATE_ACTIVITY_DIRECTORY_MODE = 0o700;
@@ -27,6 +28,23 @@ export const ACTIVITY_DOCUMENT_MAX_BYTES = 4 * 1024 * 1024;
 export const ACTIVITY_FEED_MAX_BYTES = 64 * 1024 * 1024;
 export const ACTIVITY_UI_MAX_BYTES = 64 * 1024 * 1024;
 const NO_FOLLOW = constants.O_NOFOLLOW ?? 0;
+const PRIVATE_FILE_LOCK_SCHEMA_VERSION = 1;
+const DEFAULT_PRIVATE_FILE_LOCK_TIMEOUT_MS = 1_000;
+const DEFAULT_PRIVATE_FILE_LOCK_POLL_MS = 5;
+let currentProcessBirthTime: string | undefined;
+let currentProcessBirthTimeCaptured = false;
+
+interface PrivateFileLockOwner {
+	readonly schemaVersion: typeof PRIVATE_FILE_LOCK_SCHEMA_VERSION;
+	readonly token: string;
+	readonly pid: number;
+	readonly processStartTime?: string;
+}
+
+export interface PrivateFileLockOptions {
+	readonly timeoutMs?: number;
+	readonly pollMs?: number;
+}
 
 export interface ActivityPaths {
 	readonly directory: string;
@@ -39,6 +57,38 @@ function errorCode(error: unknown): string | undefined {
 	return typeof error === "object" && error !== null && "code" in error
 		? String((error as { code?: unknown }).code)
 		: undefined;
+}
+
+function recordOf(value: unknown): Record<string, unknown> | undefined {
+	return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+}
+
+function parsePrivateFileLockOwner(value: unknown): PrivateFileLockOwner | undefined {
+	const record = recordOf(value);
+	if (
+		!record || record.schemaVersion !== PRIVATE_FILE_LOCK_SCHEMA_VERSION ||
+		typeof record.token !== "string" || !record.token ||
+		typeof record.pid !== "number" || !Number.isSafeInteger(record.pid) || record.pid <= 0 ||
+		!(record.processStartTime === undefined || typeof record.processStartTime === "string")
+	) return undefined;
+	return {
+		schemaVersion: PRIVATE_FILE_LOCK_SCHEMA_VERSION,
+		token: record.token,
+		pid: record.pid,
+		...(record.processStartTime ? { processStartTime: record.processStartTime } : {}),
+	};
+}
+
+function sleepSync(milliseconds: number): void {
+	Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
+}
+
+function ownProcessBirthTime(): string | undefined {
+	if (!currentProcessBirthTimeCaptured) {
+		currentProcessBirthTime = captureProcessBirthTime(process.pid);
+		currentProcessBirthTimeCaptured = true;
+	}
+	return currentProcessBirthTime;
 }
 
 function assertOwnedDirectory(path: string): void {
@@ -210,6 +260,110 @@ export function writePrivateJsonExclusive(path: string, value: unknown): void {
 		} catch (error) {
 			if (errorCode(error) !== "ENOENT") throw error;
 		}
+	}
+}
+
+function readPrivateFileLockOwner(path: string): PrivateFileLockOwner | undefined {
+	try {
+		return parsePrivateFileLockOwner(readPrivateJson(path, 16 * 1024));
+	} catch {
+		return undefined;
+	}
+}
+
+function privateFileLockOwnerGone(owner: PrivateFileLockOwner): boolean {
+	try {
+		process.kill(owner.pid, 0);
+	} catch (error) {
+		if (errorCode(error) === "ESRCH") return true;
+		if (errorCode(error) !== "EPERM") return false;
+	}
+	if (!owner.processStartTime) return false;
+	const actualStartTime = captureProcessBirthTime(owner.pid);
+	return actualStartTime !== undefined && actualStartTime !== owner.processStartTime;
+}
+
+function restoreDisplacedPrivateFileLock(path: string, lockPath: string): void {
+	try {
+		linkSync(path, lockPath);
+	} catch (error) {
+		if (errorCode(error) !== "EEXIST") throw error;
+	}
+	if (readPrivateFileLockOwner(lockPath)) unlinkSync(path);
+}
+
+function breakAbandonedPrivateFileLock(lockPath: string): boolean {
+	const owner = readPrivateFileLockOwner(lockPath);
+	if (!owner || !privateFileLockOwnerGone(owner)) return false;
+	const takeoverPath = `${lockPath}.takeover-${randomUUID()}`;
+	try {
+		renameSync(lockPath, takeoverPath);
+	} catch (error) {
+		return errorCode(error) === "ENOENT";
+	}
+	const displaced = readPrivateFileLockOwner(takeoverPath);
+	if (!displaced || displaced.token !== owner.token) {
+		restoreDisplacedPrivateFileLock(takeoverPath, lockPath);
+		return false;
+	}
+	unlinkSync(takeoverPath);
+	return true;
+}
+
+function releasePrivateFileLock(lockPath: string, token: string): void {
+	const owner = readPrivateFileLockOwner(lockPath);
+	if (owner?.token !== token) return;
+	const releasePath = `${lockPath}.release-${token}-${randomUUID()}`;
+	try {
+		renameSync(lockPath, releasePath);
+	} catch (error) {
+		if (errorCode(error) !== "ENOENT") throw error;
+		return;
+	}
+	const displaced = readPrivateFileLockOwner(releasePath);
+	if (displaced?.token === token) {
+		unlinkSync(releasePath);
+		return;
+	}
+	restoreDisplacedPrivateFileLock(releasePath, lockPath);
+}
+
+/**
+ * Serialize a short cross-process read/merge/write transaction with a complete,
+ * private no-replace lease. A stale lease is displaced only after PID + birth
+ * identity proves its owner dead; malformed or unverifiable leases fail closed.
+ */
+export function withPrivateFileLock<T>(
+	lockPath: string,
+	operation: () => T,
+	options: PrivateFileLockOptions = {},
+): T {
+	const token = randomUUID();
+	const processStartTime = ownProcessBirthTime();
+	const owner: PrivateFileLockOwner = {
+		schemaVersion: PRIVATE_FILE_LOCK_SCHEMA_VERSION,
+		token,
+		pid: process.pid,
+		...(processStartTime ? { processStartTime } : {}),
+	};
+	const timeoutMs = Math.max(1, Math.floor(options.timeoutMs ?? DEFAULT_PRIVATE_FILE_LOCK_TIMEOUT_MS));
+	const pollMs = Math.max(1, Math.floor(options.pollMs ?? DEFAULT_PRIVATE_FILE_LOCK_POLL_MS));
+	const deadline = Date.now() + timeoutMs;
+	while (true) {
+		try {
+			writePrivateJsonExclusive(lockPath, owner);
+			break;
+		} catch (error) {
+			if (errorCode(error) !== "EEXIST") throw error;
+		}
+		if (breakAbandonedPrivateFileLock(lockPath)) continue;
+		if (Date.now() >= deadline) throw new Error(`Timed out waiting for private file lock: ${lockPath}`);
+		sleepSync(pollMs);
+	}
+	try {
+		return operation();
+	} finally {
+		releasePrivateFileLock(lockPath, token);
 	}
 }
 

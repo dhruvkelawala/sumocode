@@ -133,22 +133,28 @@ function buildChatHTML(cols, toolStyle = "inline") {
 	}
 
 	if (toolStyle === "scroll") {
+		// Independent Bible target for the unified task Activity renderer. Keep
+		// this authored from the UX contract rather than importing fixture/runtime
+		// rendering output; the visual harness compares the two paths cell-wise.
 		messages = [
-			{ role: "USER", body: "delegate a focused pass to inspect the renderer crash and report back." },
-			{ role: "SUMO", time: "11:46", body: "I’m assigning this as a scroll so the scribe can inspect independently and return the summary.", scroll: {
-				title: "inspect renderer crash at 40 columns",
-				model: "gpt-5.5",
-				thinking: "medium",
-				status: "running",
-				calls: [
-					{ name: "read", target: "src/sumo-tui/render/compositor.ts", state: "ok" },
-					{ name: "read", target: "src/sumo-tui/render/buffer.ts", state: "ok" },
-					{ name: "bash", target: "pnpm test src/sumo-tui/render", state: "running" },
+			{ role: "USER", body: "refactor the auth flow into smaller modules" },
+			{ role: "SUMO", time: "11:42", body: "Dispatching a scribe to handle the refactor.", tools: [{
+				name: "refactor auth flow into smaller modules",
+				target: "scribe",
+				state: "running",
+				note: "running auth tests",
+				expanded: true,
+				outputLines: [
+					`<span class="fg-tool-body">&gt; {"prompt":"refactor the auth flow into smaller modules"}</span>`,
+					`<span class="fg-tool-muted">gpt-5.5 · thinking:medium</span>`,
+					`<span class="fg-idle">✓</span> <span class="fg-tool-label">[read]</span><span class="fg-tool-body">  src/auth.ts</span>`,
+					`<span class="fg-idle">✓</span> <span class="fg-tool-label">[edit]</span><span class="fg-tool-body">  src/auth.ts</span>`,
+					`<span class="fg-idle">✓</span> <span class="fg-tool-label">[edit]</span><span class="fg-tool-body">  src/auth-helpers.ts</span>`,
+					`<span class="fg-tool">▶</span> <span class="fg-tool-label">[bash]</span><span class="fg-tool-body">  pnpm test src/auth</span>`,
+					`<span class="fg-tool-muted">↑8k · ↓3k · 22s elapsed</span>`,
+					`<span class="fg-tool-muted">running auth tests</span>`,
 				],
-				tokensIn: "6k",
-				tokensOut: "1.1k",
-				elapsed: "18s",
-			} },
+			}] },
 		];
 	}
 
@@ -305,7 +311,7 @@ function buildChatHTML(cols, toolStyle = "inline") {
 					continue;
 				}
 
-				if (toolStyle === "ledger" || (toolStyle === "activity-cards" && tool.expanded !== false)) {
+				if (toolStyle === "ledger" || ((toolStyle === "activity-cards" || toolStyle === "scroll") && tool.expanded !== false)) {
 					const status = tool.note ? `${glyph} ${tool.note}` : glyph;
 					const statusHTML = `<span class="${dotClass}">${glyph}</span>${tool.note ? `<span class="fg-dim"> ${tool.note}</span>` : ""}`;
 					const title = `[${tool.name}]  ${tool.target}`;

@@ -35,11 +35,16 @@ function appendBounded(value) {
 }
 
 const child = platform === "win32"
-	? spawn("cmd.exe", ["/d", "/s", "/c", commandFile], { stdio: ["ignore", "pipe", "pipe"], windowsHide: true })
-	: spawn("/bin/bash", [commandFile], { stdio: ["ignore", "pipe", "pipe"] });
+	? spawn("cmd.exe", ["/d", "/s", "/c", `call "${commandFile.replace(/"/g, '""')}" 2>&1`], { stdio: ["ignore", "pipe", "ignore"], windowsHide: true })
+	// The former run.sh executed commands in a plain, inherited-environment Bash,
+	// not a login shell. Keep that contract: loading user dotfiles here would add
+	// startup output and make detached execution depend on interactive config.
+	: spawn("/bin/bash", [commandFile], { stdio: ["ignore", "pipe", "ignore"] });
 
+// command.sh performs `exec 2>&1` before user code, and the Windows invocation
+// redirects the called command file as one stream. One pipe preserves the shell's
+// stdout/stderr ordering before bounded compaction.
 child.stdout?.on("data", appendBounded);
-child.stderr?.on("data", appendBounded);
 child.on("error", (error) => appendBounded(Buffer.from(`[spawn error] ${error.message}\n`, "utf8")));
 child.on("close", (code) => {
 	closeSync(descriptor);

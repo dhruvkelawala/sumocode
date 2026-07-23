@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
 	captureProcessBirthTime,
 	captureProcessStartTime,
+	identityStatusAfterLeaderGone,
 	runWindowsTaskkill,
 	runWindowsVerifiedForceTaskkill,
 	signalVerifiedProcessTree,
@@ -44,6 +45,12 @@ describe("process tree operations", () => {
 		} finally {
 			kill.mockRestore();
 		}
+	});
+
+	it("requires descendant verification after a Windows leader exits", () => {
+		expect(identityStatusAfterLeaderGone("win32", true)).toBe("unknown");
+		expect(identityStatusAfterLeaderGone("linux", true)).toBe("different");
+		expect(identityStatusAfterLeaderGone("linux", false)).toBe("unknown");
 	});
 
 	it.each(["different", "unknown"] as const)("refuses to signal when persisted identity is %s", async (status) => {

@@ -418,7 +418,7 @@ export class TerminalTaskManager {
 
 		createPrivateFile(this.store, paths.logFile, "");
 		createPrivateFile(this.store, paths.exitFile, "");
-		createPrivateFile(this.store, paths.commandFile, process.platform === "win32" ? command : `set -o pipefail\n${command}\n`);
+		createPrivateFile(this.store, paths.commandFile, process.platform === "win32" ? command : `exec 2>&1\nset -o pipefail\n${command}\n`);
 		const scriptFile = process.platform === "win32" ? paths.windowsScriptFile : paths.scriptFile;
 		const runnerOptions = {
 			cwd,

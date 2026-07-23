@@ -70,11 +70,11 @@ describe("bounded terminal runner", () => {
 		const commandFile = join(directory, "command.sh");
 		const logFile = join(directory, "output.log");
 		const runner = fileURLToPath(new URL("./bounded-terminal-runner.mjs", import.meta.url));
-		writeFileSync(commandFile, "printf 'failed visibly\\n'\nexit 7\n", { mode: 0o600 });
+		writeFileSync(commandFile, "exec 2>&1\nprintf 'stdout one\\n'\nprintf 'stderr two\\n' >&2\nprintf 'stdout three\\n'\nexit 7\n", { mode: 0o600 });
 		writeFileSync(logFile, "", { mode: 0o600 });
 		const child = spawn(process.execPath, [runner, "posix", commandFile, logFile, "1024"], { stdio: "ignore" });
 
 		expect(await waitForExit(child)).toBe(7);
-		expect(readFileSync(logFile, "utf8")).toBe("failed visibly\n");
+		expect(readFileSync(logFile, "utf8")).toBe("stdout one\nstderr two\nstdout three\n");
 	});
 });

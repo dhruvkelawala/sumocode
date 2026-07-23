@@ -136,6 +136,11 @@ function listPosixGroupMembers(processGroupId: number): ProcessTreeMemberAnchor[
 	}
 }
 
+export function identityStatusAfterLeaderGone(platform: NodeJS.Platform, posixGroupIsEmpty: boolean): ProcessIdentityStatus {
+	if (platform === "win32") return "unknown";
+	return posixGroupIsEmpty ? "different" : "unknown";
+}
+
 function verificationStatus(
 	identity: ProcessTreeIdentity,
 	verification: ProcessTreeVerification,
@@ -273,10 +278,14 @@ export const systemProcessTree: ProcessTreeOperations = {
 	identityMatches(identity): ProcessIdentityStatus {
 		const leader = positivePidStatus(identity.pid);
 		if (leader === "gone") {
+			// Leader absence is not a definitive mismatch on Windows: taskkill /T may
+			// remove the wrapper while a descendant survives. Return unknown so only a
+			// persisted matching member anchor can authorize the forced /T /F cleanup.
+			// Without that verification every caller still fails closed.
 			// An occupied numeric PGID after downtime may belong to a later unrelated
 			// group. Only a verification captured while the leader was known can
 			// prove a surviving descendant belongs to this terminal.
-			return process.platform !== "win32" && !posixGroupEmpty(identity.processGroupId) ? "unknown" : "different";
+			return identityStatusAfterLeaderGone(process.platform, process.platform === "win32" || posixGroupEmpty(identity.processGroupId));
 		}
 		if (leader === "unknown") return "unknown";
 		const actual = captureProcessStartTime(identity.pid);

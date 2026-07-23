@@ -107,7 +107,7 @@ describe("Activity renderer", () => {
 		expect(visibleWidth(rows[0]!)).toBe(width);
 		expect(header).toContain("…]");
 		expect(header).toContain("▶");
-		expect(header).toContain("phase 4/5");
+		expect(header).toContain("phase 4/5 · preserving progress note");
 		expect(header.indexOf("▶")).toBeGreaterThan(header.indexOf("…]"));
 		expect(rows[0]).not.toContain("\u001b[31m");
 	});

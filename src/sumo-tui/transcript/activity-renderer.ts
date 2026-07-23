@@ -145,8 +145,9 @@ function renderHeader(activity: ActivitySnapshot, width: number, roles: Activity
 	// producer titles instead of relying on final whole-line truncation.
 	const fixedWidth = rawNote ? 11 : 10;
 	const sharedBudget = Math.max(1, width - fixedWidth);
+	const minimumTitleWidth = Math.min(8, Math.max(1, sharedBudget - 1));
 	const noteBudget = rawNote
-		? Math.min(visibleWidth(rawNote), Math.max(1, Math.min(40, Math.floor(sharedBudget * 0.35))))
+		? Math.min(visibleWidth(rawNote), Math.max(1, sharedBudget - minimumTitleWidth))
 		: 0;
 	const note = rawNote && noteBudget > 0 ? truncateHeaderText(rawNote, noteBudget) : undefined;
 	const title = truncateHeaderText(rawTitle, Math.max(1, sharedBudget - (note ? visibleWidth(note) : 0)));

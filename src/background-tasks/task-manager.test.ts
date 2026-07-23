@@ -126,6 +126,23 @@ describe("TerminalTaskManager", () => {
 		expect(new TerminalTaskStore({ rootDir }).loadAll()[0]).toEqual(task);
 	});
 
+	it("does not cap terminal execution to the feed presentation budget", async () => {
+		const target = manager();
+		for (let index = 0; index < 257; index += 1) await start(target);
+		expect(target.getSnapshots().filter((task) => task.status === "running")).toHaveLength(257);
+	}, 20_000);
+
+	it("replays deeply immutable snapshot copies without exposing manager state", async () => {
+		const target = manager();
+		await start(target);
+		let replay: readonly TerminalTaskSnapshot[] = [];
+		const unsubscribe = target.subscribeChanges((snapshots) => { replay = snapshots; });
+		expect(Object.isFrozen(replay[0])).toBe(true);
+		expect(() => { (replay[0] as { title: string }).title = "mutated"; }).toThrow();
+		expect(target.getSnapshots()[0]?.title).toBe("tests");
+		unsubscribe();
+	});
+
 	it("terminates the new process tree when spawn identity persistence fails", async () => {
 		const store = new TerminalTaskStore({ rootDir });
 		const transition = vi.spyOn(store, "transition").mockImplementation(() => {

@@ -150,6 +150,24 @@ function verificationStatus(
 	)) ? "same" : "different";
 }
 
+export function captureProcessBirthTime(pid: number, platform: NodeJS.Platform = process.platform): string | undefined {
+	try {
+		if (platform === "win32") {
+			return execFileSync(
+				"powershell.exe",
+				["-NoProfile", "-Command", `(Get-CimInstance Win32_Process -Filter "ProcessId=${pid}").CreationDate.ToUniversalTime().ToString('o')`],
+				{ encoding: "utf8" },
+			).trim() || undefined;
+		}
+		// Writer leases must never persist argv: it can contain prompts, paths,
+		// or secrets. PID + birth timestamp is sufficient for cross-process lease
+		// death proof; terminal signalling retains the stronger command anchor.
+		return execFileSync("ps", ["-p", String(pid), "-o", "lstart="], { encoding: "utf8" }).trim() || undefined;
+	} catch {
+		return undefined;
+	}
+}
+
 export function captureProcessStartTime(pid: number, platform: NodeJS.Platform = process.platform): string | undefined {
 	try {
 		if (platform === "win32") {

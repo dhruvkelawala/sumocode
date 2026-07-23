@@ -10,12 +10,14 @@ import { RpcHostOverlayManager } from "./host-overlays.js";
 import { RpcHostControls, type RpcAvailableModel } from "./controls.js";
 import { RpcHostStateStore } from "./state.js";
 import {
+	activitySnapshotMatchesSession,
 	createLazyChatSink,
 	createModelCycleBackwardHandler,
 	createModelCycleForwardHandler,
 	createRpcExitHandler,
 	createRpcHostInterruptHandler,
 	createThinkingCycleHandler,
+	RpcSessionEventBuffer,
 	handleRpcMessageFollowUp,
 	handleRpcMessageDequeue,
 	createToolsExpandToggleHandler,
@@ -96,6 +98,70 @@ function interruptDeps(overrides: Partial<RpcHostInterruptDependencies> = {}): R
 
 const CTRL_C = "";
 const ESCAPE = "";
+
+describe("ActivityStore session ownership", () => {
+	it("accepts only snapshots owned by the authoritative get_state session", () => {
+		const snapshot = { ownerSessionId: "session-a", revision: 1, activities: [], expansion: {} } as const;
+		expect(activitySnapshotMatchesSession(snapshot, "session-a")).toBe(true);
+		expect(activitySnapshotMatchesSession(snapshot, "session-b")).toBe(false);
+		expect(activitySnapshotMatchesSession(snapshot, undefined)).toBe(false);
+	});
+});
+
+describe("session hydration event barrier", () => {
+	it("keeps the full destination suffix when a later hydration retry fails", () => {
+		const buffer = new RpcSessionEventBuffer();
+		buffer.begin();
+		buffer.capture({ type: "agent_end", messages: [{ id: "old", role: "assistant", content: "old" }] } as never);
+		buffer.markHydrationBaseline();
+		const firstDestinationEvent = { type: "message_end", message: { id: "new", role: "assistant", content: "new" } } as never;
+		buffer.capture(firstDestinationEvent);
+		buffer.markHydrationBarrier();
+		const laterDestinationEvent = { type: "agent_settled" } as never;
+		buffer.capture(laterDestinationEvent);
+
+		expect(buffer.finish({ afterFailureBaseline: true })).toEqual([firstDestinationEvent, laterDestinationEvent]);
+	});
+
+	it("splits snapshot-covered events from the final suffix without dropping scheduler effects", () => {
+		const buffer = new RpcSessionEventBuffer();
+		buffer.begin();
+		buffer.capture({ type: "message_end", message: { id: "old", role: "assistant", content: "old" } } as never);
+		buffer.markHydrationBaseline();
+		const covered = { type: "agent_end", messages: [{ id: "covered", role: "assistant", content: "covered" }] } as never;
+		buffer.capture(covered);
+		buffer.markHydrationBarrier();
+		const suffix = { type: "agent_settled" } as never;
+		buffer.capture(suffix);
+
+		expect(buffer.finishHydration()).toEqual({ supersededSnapshotEvents: [covered], suffixEvents: [suffix] });
+	});
+
+	it("replays message_update, agent_end, and agent_settled events received during hydration in order", () => {
+		const buffer = new RpcSessionEventBuffer();
+		expect(buffer.begin()).toBe(true);
+		expect(buffer.capture({ type: "message_update", message: { id: "old-session", role: "assistant", content: "old" } } as never)).toBe(true);
+		buffer.markHydrationBarrier();
+		const events = [
+			{ type: "message_update", message: { id: "draft", role: "assistant", content: "new tail" } },
+			{ type: "agent_end", messages: [{ role: "assistant", content: "complete" }], willRetry: false },
+			{ type: "agent_settled" },
+		] as const;
+		for (const event of events) expect(buffer.capture(event as never)).toBe(true);
+
+		const state = new RpcHostStateStore();
+		state.hydrateFromRpcState(rpcState({ isStreaming: true, messageCount: 0 }));
+		const replayed: string[] = [];
+		for (const event of buffer.finish({ afterHydrationBarrier: true })) {
+			replayed.push(event.type);
+			state.handleAgentEvent(event);
+		}
+
+		expect(replayed).toEqual(["message_update", "agent_end", "agent_settled"]);
+		expect(state.getSnapshot()).toMatchObject({ isStreaming: false, messageCount: 1, lastEventType: "agent_settled" });
+		expect(buffer.isActive).toBe(false);
+	});
+});
 
 describe("handleRpcMessageFollowUp", () => {
 	function followUpEditor(text: string) {

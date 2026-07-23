@@ -5,6 +5,7 @@ import type { CellBuffer } from "../render/buffer.js";
 import { logDiagnostic } from "../runtime/diagnostics.js";
 import { defaultTerminalSessionOwner, type TerminalOutput, type TerminalPalette, type TerminalSessionOwner } from "../runtime/terminal-controller.js";
 import type { TranscriptControllerChatSink } from "../transcript/controller.js";
+import type { ActivityPresentationSnapshot } from "../transcript/activity-view-model.js";
 import type { TranscriptViewModel } from "../transcript/view-model.js";
 import { containsCtrlCToken, isAppleTerminalSession, isEscapeInput, normalizeAppleTerminalInput, SharedInputRouter } from "../input/shared-input-router.js";
 import { RpcShellAdapter } from "./shell-adapter.js";
@@ -51,6 +52,10 @@ export interface RpcHostRuntimeOptions {
 	readonly terminal?: TerminalSessionOwner;
 	readonly initialState?: RpcHostChromeState;
 	readonly initialTranscript?: TranscriptViewModel;
+	readonly initialActivities?: ActivityPresentationSnapshot;
+	readonly onActivityExpansionChange?: (id: string, expanded: boolean) => void;
+	readonly onActivityExpansionMigration?: (previousId: string, nextId: string, expanded: boolean) => void;
+	readonly onAllActivityExpansionChange?: (expanded: boolean, activityIds: readonly string[]) => void;
 	readonly inputPreview?: string;
 	readonly editor?: Component;
 	readonly modal?: Component & { getActiveKind?(): string | undefined };
@@ -83,6 +88,7 @@ export interface RpcHostRuntimeOptions {
 export interface RpcHostRuntimeSnapshot {
 	readonly state: RpcHostChromeState;
 	readonly transcript: TranscriptViewModel;
+	readonly activities?: ActivityPresentationSnapshot;
 	readonly inputPreview?: string;
 	/** Forwarded to `RpcShellAdapter.update` -- see `RpcShellAdapterSnapshot.transcriptRevision`. */
 	readonly transcriptRevision?: number;
@@ -169,8 +175,14 @@ export class RpcHostRuntime {
 	private readonly inputRouter: SharedInputRouter;
 	private readonly renderScheduler: (callback: () => void) => void;
 	private renderScheduled = false;
+	private sessionReplacementDepth = 0;
+	private sessionInputBlocked = false;
 	private state: RpcHostChromeState;
 	private transcript: TranscriptViewModel;
+	private activities: ActivityPresentationSnapshot;
+	private readonly onActivityExpansionChange: ((id: string, expanded: boolean) => void) | undefined;
+	private readonly onActivityExpansionMigration: ((previousId: string, nextId: string, expanded: boolean) => void) | undefined;
+	private readonly onAllActivityExpansionChange: ((expanded: boolean, activityIds: readonly string[]) => void) | undefined;
 	private shell: RpcShellAdapter | undefined;
 	private themeUnsubscribe: (() => void) | undefined;
 	private started = false;
@@ -190,6 +202,13 @@ export class RpcHostRuntime {
 		// across two Buffers), since toString('utf8') per-chunk cannot
 		// reassemble a split sequence.
 		const text = typeof data === "string" ? data : data.toString("utf8");
+		// A session-changing RPC has been sent but authoritative ownership is not
+		// rebound. Drop prompts rather than dispatch an A draft into B; retain a
+		// direct Ctrl-C escape hatch so a failed rebind can always terminate.
+		if (this.sessionReplacementDepth > 0 || this.sessionInputBlocked) {
+			if (containsCtrlCToken(text)) this.requestExit(130);
+			return;
+		}
 		// Match pi-tui's Apple Terminal path: Apple Terminal reports both Enter
 		// and Shift+Enter as bare \r, so Pi polls its native modifier helper at
 		// the moment that bare Enter arrives and rewrites only when Shift is down.
@@ -209,6 +228,10 @@ export class RpcHostRuntime {
 		this.isAppleTerminal = isAppleTerminalSession(options.env ?? process.env);
 		this.state = options.initialState ?? FALLBACK_STATE;
 		this.transcript = options.initialTranscript ?? EMPTY_TRANSCRIPT;
+		this.activities = options.initialActivities ?? { activities: [], expansion: {} };
+		this.onActivityExpansionChange = options.onActivityExpansionChange;
+		this.onActivityExpansionMigration = options.onActivityExpansionMigration;
+		this.onAllActivityExpansionChange = options.onAllActivityExpansionChange;
 		this.inputPreview = options.inputPreview;
 		this.editor = options.editor;
 		this.modal = options.modal;
@@ -304,6 +327,10 @@ export class RpcHostRuntime {
 			viewport: this.output,
 			initialState: this.state,
 			initialTranscript: this.transcript,
+			initialActivities: this.activities,
+			onActivityExpansionChange: this.onActivityExpansionChange,
+			onActivityExpansionMigration: this.onActivityExpansionMigration,
+			onAllActivityExpansionChange: this.onAllActivityExpansionChange,
 			inputPreview: this.inputPreview,
 			editor: this.editor,
 			modal: this.modal,
@@ -332,17 +359,40 @@ export class RpcHostRuntime {
 
 	public update(snapshot: Partial<RpcHostRuntimeSnapshot>): void {
 		if (snapshot.state) this.state = snapshot.state;
-		if (snapshot.transcript) {
-			this.transcript = snapshot.transcript;
-		}
-		this.shell?.update(snapshot.transcript
-			? { state: this.state, transcript: this.transcript, transcriptRevision: snapshot.transcriptRevision }
-			: { state: this.state });
+		if (snapshot.transcript) this.transcript = snapshot.transcript;
+		if (snapshot.activities) this.activities = snapshot.activities;
+		this.shell?.update({
+			state: this.state,
+			...(snapshot.transcript ? { transcript: this.transcript, transcriptRevision: snapshot.transcriptRevision } : {}),
+			...(snapshot.activities ? { activities: this.activities } : {}),
+		});
 		this.scheduleRender();
 	}
 
 	public requestRender(): void {
 		this.scheduleRender();
+	}
+
+	/** Suspend painting while state, transcript, and Activity ownership switch together. */
+	public beginSessionReplacement(): void {
+		this.sessionInputBlocked = true;
+		if (this.sessionReplacementDepth === 0) {
+			this.shell?.prepareSessionReplacement();
+			// Erase the previous session's physical terminal frame before rendering
+			// is suspended for the fallible session-changing RPC/hydration sequence.
+			this.render();
+		}
+		this.sessionReplacementDepth += 1;
+	}
+
+	/** Resume painting; input resumes only after authoritative ownership exists. */
+	public endSessionReplacement(enableInput = true): void {
+		this.sessionReplacementDepth = Math.max(0, this.sessionReplacementDepth - 1);
+		if (this.sessionReplacementDepth === 0) {
+			this.shell?.finishSessionReplacement();
+			if (enableInput) this.sessionInputBlocked = false;
+			this.scheduleRender();
+		}
 	}
 
 	/**
@@ -405,7 +455,7 @@ export class RpcHostRuntime {
 	}
 
 	private render(): void {
-		if (!this.started || this.stopped) return;
+		if (!this.started || this.stopped || this.sessionReplacementDepth > 0) return;
 		this.shell?.render();
 	}
 
@@ -434,7 +484,7 @@ export class RpcHostRuntime {
 	 * diagnostics are keyed to it happening synchronously inside `start()`.
 	 */
 	private scheduleRender(): void {
-		if (this.renderScheduled) return;
+		if (this.sessionReplacementDepth > 0 || this.renderScheduled) return;
 		this.renderScheduled = true;
 		this.renderScheduler(() => {
 			this.renderScheduled = false;
@@ -458,6 +508,7 @@ export async function renderRpcHostFrameForTest(
 		viewport: { columns, rows },
 		initialState: snapshot.state,
 		initialTranscript: snapshot.transcript,
+		initialActivities: snapshot.activities,
 		inputPreview: snapshot.inputPreview,
 		editor: options.editor,
 		notifications: options.notifications,

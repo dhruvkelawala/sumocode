@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { installBackgroundTasks } from "./background-task-tool.js";
+import { claimProcessActivitySession, installBackgroundTasks, releaseProcessActivitySession } from "./background-task-tool.js";
 import { TerminalTaskStore } from "./task-store.js";
 
 const roots: string[] = [];
@@ -22,6 +22,19 @@ function lifecycleHarness() {
 }
 
 describe("installBackgroundTasks", () => {
+	it("migrates the pre-Activity process-global lifecycle shape across reload", () => {
+		const key = Symbol.for("@dhruvkelawala/sumocode/terminal-process-lifecycle");
+		const global = globalThis as typeof globalThis & { [key: symbol]: unknown };
+		const previous = global[key];
+		try {
+			global[key] = { ownerSessionIds: new Set(["legacy-session"]) };
+			expect(claimProcessActivitySession("legacy-session", "writer-token")).toBe(true);
+			releaseProcessActivitySession("legacy-session", "writer-token");
+		} finally {
+			global[key] = previous;
+		}
+	});
+
 	it("detaches replaced managers and keeps process-session quit ownership across factory instances", async () => {
 		const rootDir = mkdtempSync(join(tmpdir(), "sumocode-terminal-install-"));
 		roots.push(rootDir);

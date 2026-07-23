@@ -230,10 +230,11 @@ export function installTerminalTools(
 			working_dir: Type.Optional(Type.String({ description: "Working directory. Defaults to the current project directory." })),
 			completion: Type.Optional(StringEnum(["passive", "wake"] as const, { description: "Completion disposition. Defaults to passive." })),
 		}),
-		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+		async execute(toolCallId, params, _signal, _onUpdate, ctx) {
 			coordinator.touch(ctx);
 			const task = await manager.start({
 				ownerSessionId: sessionId(ctx),
+				sourceId: toolCallId,
 				command: params.command,
 				cwd: params.working_dir ?? ctx.cwd,
 				title: params.title,

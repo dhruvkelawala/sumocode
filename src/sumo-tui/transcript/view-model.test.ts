@@ -528,6 +528,28 @@ describe("structured transcript view model", () => {
 		}]);
 	});
 
+	it("uses terminal_start details.activity as the canonical running transcript card", () => {
+		const activity = {
+			id: "term-live",
+			sourceId: "terminal-call-1",
+			kind: "terminal" as const,
+			title: "auth watcher",
+			status: "running" as const,
+			ownerSessionId: "session-a",
+			outputTail: "phase one",
+			body: { kind: "terminal" as const, text: "phase one" },
+		};
+		const message = chatMessageViewModelFromPiMessage({
+			role: "toolResult",
+			toolCallId: "terminal-call-1",
+			toolName: "terminal_start",
+			content: [{ type: "text", text: "Started terminal term-live." }],
+			details: { activity, task: { id: "term-live" } },
+		});
+
+		expect(message?.blocks).toEqual([{ type: "activity", activity }]);
+	});
+
 	it("maps a v2 terminal result Activity through the universal retained renderer", () => {
 		const activity = {
 			id: "term-7",

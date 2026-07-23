@@ -145,6 +145,32 @@ const FIXTURES = {
 			],
 		},
 	},
+	"activity-cards": {
+		transcript: {
+			messages: [
+				{
+					id: "activity-request",
+					role: "user",
+					displayName: "USER",
+					timestamp: FIXTURE_TIMES.userOne,
+					blocks: [{ type: "markdown", text: "show live orchestration activity" }],
+				},
+				{
+					id: "activity-feed",
+					role: "system",
+					displayName: "ACTIVITY",
+					timestamp: FIXTURE_TIMES.sumoOne,
+					blocks: [
+						{ type: "activity", activity: { id: "fixture-running-subagent", kind: "subagent", title: "review auth flow", status: "running", subject: "sa-4", currentStep: "inspecting session boundaries", outputTail: "checking src/auth/session.ts", model: "gpt-5.5", thinking: "medium", activeTools: [{ id: "fixture-subagent-read", kind: "tool", title: "read", status: "succeeded", subject: "src/auth/session.ts" }] } },
+						{ type: "activity", activity: { id: "fixture-running-terminal", kind: "terminal", title: "auth test watcher", status: "running", subject: "sumocode", outputTail: "> vitest run src/auth\n✓ session.test.ts\nwatching stdout…", body: { kind: "terminal", command: "pnpm test src/auth", text: "> vitest run src/auth\n✓ session.test.ts\nwatching stdout…" } } },
+						{ type: "activity", activity: { id: "fixture-completed-terminal", kind: "terminal", title: "typecheck", status: "succeeded", subject: "sumocode", outputTail: "typecheck passed", body: { kind: "terminal", command: "pnpm typecheck", text: "typecheck passed" }, result: { summary: "exit 0" } } },
+						{ type: "activity", activity: { id: "fixture-failed-terminal", kind: "terminal", title: "integration tests", status: "failed", subject: "sumocode", outputTail: "1 test failed", body: { kind: "terminal", command: "pnpm test:integration", text: "1 test failed" }, result: { error: "rpc session switch failed" } } },
+						{ type: "activity", activity: { id: "fixture-collapsed-subagent", kind: "subagent", title: "docs audit", status: "running", subject: "sa-5", currentStep: "reviewing transcript docs" } },
+					],
+				},
+			],
+		},
+	},
 	"skill-pill": {
 		transcript: {
 			messages: [
@@ -339,6 +365,9 @@ async function renderFixtureScene(scenario, fixture) {
 	}
 	if (scenario.fixture?.id === "tool-ledger") {
 		for (const id of ["read", "edit", "bash"]) chat.setActivityExpansion(id, true);
+	}
+	for (const [id, expanded] of Object.entries(scenario.fixture?.activityExpansion ?? {})) {
+		chat.setActivityExpansion(id, expanded);
 	}
 	chatRoot.width = chatWidth;
 	chatRoot.height = chatHeight;

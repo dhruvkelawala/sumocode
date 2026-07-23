@@ -551,6 +551,19 @@ describe("V2 visual parity contract", () => {
 		expect(rows.join("\n")).toContain("fetchUser");
 	});
 
+	it("keeps Activity-card Bible generation independent from fixture capture", () => {
+		const generator = readFileSync(join(process.cwd(), "scripts/gen-bible-scene-active.mjs"), "utf8");
+		expect(generator).not.toContain("captureFixtureScenario");
+		expect(generator).not.toContain("fixture-capture.mjs");
+		expect(generator).not.toContain("scene-activity-cards.html\", spec");
+		expect(generator).not.toContain("scene-activity-cards-portrait.html\", spec");
+		for (const target of ["scene-activity-cards.html", "scene-activity-cards-portrait.html"]) {
+			const html = readFileSync(join(process.cwd(), "docs/ui/bible", target), "utf8");
+			expect(html).toContain("data-render-rect");
+			expect(html).toContain('<pre class="grid authored-styled-grid">');
+		}
+	});
+
 	it("keeps fixture scenes deterministic and review-only", () => {
 		expect(scenario("fixture-completed-landscape")).toMatchObject({ status: "review" });
 		expect(scenario("fixture-completed-portrait")).toMatchObject({ status: "review" });

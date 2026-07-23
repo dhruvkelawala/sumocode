@@ -197,6 +197,137 @@ describe("RpcShellAdapter queued messages banner", () => {
 	});
 });
 
+describe("RpcShellAdapter durable Activity feed", () => {
+	it("bypasses splash for an activity-only resumed session", async () => {
+		const adapter = await RpcShellAdapter.create({
+			terminal: { writeFramePatches: () => undefined },
+			viewport: { columns: 100, rows: 30 },
+			initialState: state({ hasMessages: false, messageCount: 0 }),
+			initialTranscript: { messages: [] },
+			initialActivities: {
+				activities: [{ id: "term-only", kind: "terminal", title: "build", status: "running", outputTail: "working" }],
+				expansion: { "term-only": true },
+			},
+		});
+		try {
+			adapter.render();
+			const text = Array.from({ length: 30 }, (_, row) => adapter.getLastFrame()!.toPlainRow(row)).join("\n");
+			expect(text).toContain("[build]");
+			expect(text).toContain("working");
+			expect(text).not.toContain('"Meow meow meow... meow meow"');
+		} finally {
+			adapter.dispose();
+		}
+	});
+
+	it("applies expansion before reconciling the first feed card and persists user toggles", async () => {
+		const onActivityExpansionChange = vi.fn();
+		const onAllActivityExpansionChange = vi.fn();
+		const adapter = await RpcShellAdapter.create({
+			terminal: { writeFramePatches: () => undefined },
+			viewport: { columns: 100, rows: 30 },
+			initialState: state({ hasMessages: false, messageCount: 0 }),
+			initialTranscript: { messages: [] },
+			initialActivities: {
+				activities: [{ id: "term-collapsed", kind: "terminal", title: "build", status: "running", outputTail: "hidden output" }],
+				expansion: { "term-collapsed": false },
+			},
+			onActivityExpansionChange,
+			onAllActivityExpansionChange,
+		});
+		try {
+			adapter.render();
+			const text = Array.from({ length: 30 }, (_, row) => adapter.getLastFrame()!.toPlainRow(row)).join("\n");
+			expect(text).toContain("[build]");
+			expect(text).toContain("ctrl+o expand");
+			expect(onActivityExpansionChange).not.toHaveBeenCalled();
+			adapter.toggleActivityExpansion();
+			expect(onAllActivityExpansionChange).toHaveBeenCalledWith(true, ["term-collapsed"]);
+		} finally {
+			adapter.dispose();
+		}
+	});
+
+	it("drops prior-session feed fields before a reused Activity ID reaches the replacement transcript", async () => {
+		const adapter = await RpcShellAdapter.create({
+			terminal: { writeFramePatches: () => undefined },
+			viewport: { columns: 100, rows: 30 },
+			initialState: state({ sessionId: "session-a" }),
+			initialTranscript: { messages: [] },
+			initialActivities: {
+				activities: [{
+					id: "subagent:sa-1",
+					kind: "subagent",
+					title: "old task",
+					status: "running",
+					ownerSessionId: "session-a",
+					outputTail: "SESSION_A_SECRET",
+				}],
+				expansion: {},
+			},
+		});
+		try {
+			adapter.prepareSessionReplacement();
+			adapter.update({
+				state: state({ sessionId: "session-b" }),
+				transcript: {
+					messages: [{
+						id: "session-b-result",
+						role: "system",
+						displayName: "SYSTEM",
+						blocks: [{ type: "activity", activity: {
+							id: "subagent:sa-1",
+							kind: "subagent",
+							title: "new task",
+							status: "succeeded",
+							ownerSessionId: "session-b",
+							result: { summary: "session B done" },
+						} }],
+					}],
+				},
+				activities: { activities: [], expansion: {} },
+			});
+			adapter.finishSessionReplacement();
+			adapter.render();
+			const text = Array.from({ length: 30 }, (_, row) => adapter.getLastFrame()!.toPlainRow(row)).join("\n");
+			expect(text).toContain("[new task]");
+			expect(text).toContain("session B done");
+			expect(text).not.toContain("SESSION_A_SECRET");
+			expect(text).not.toContain("[old task]");
+		} finally {
+			adapter.dispose();
+		}
+	});
+
+	it("restores the exact pager presentation when a hidden session change is cancelled", async () => {
+		const adapter = await RpcShellAdapter.create({
+			terminal: { writeFramePatches: () => undefined },
+			viewport: { columns: 100, rows: 30 },
+			initialState: state({ sessionId: "session-a" }),
+			initialTranscript: { messages: [] },
+			initialActivities: {
+				activities: [{ id: "term-a", kind: "terminal", title: "build", status: "running", outputTail: "expanded output" }],
+				expansion: {},
+			},
+		});
+		try {
+			adapter.render();
+			const before = Array.from({ length: 30 }, (_, row) => adapter.getLastFrame()!.toPlainRow(row)).join("\n");
+			expect(before).toContain("expanded output");
+			adapter.prepareSessionReplacement();
+			adapter.render();
+			const hidden = Array.from({ length: 30 }, (_, row) => adapter.getLastFrame()!.toPlainRow(row)).join("\n");
+			expect(hidden).not.toContain("expanded output");
+			adapter.finishSessionReplacement();
+			adapter.render();
+			const restored = Array.from({ length: 30 }, (_, row) => adapter.getLastFrame()!.toPlainRow(row)).join("\n");
+			expect(restored).toContain("expanded output");
+		} finally {
+			adapter.dispose();
+		}
+	});
+});
+
 describe("RpcShellAdapter chat update", () => {
 	it("replaces the pager when no transcriptRevision is supplied (back-compat: no sink wired)", async () => {
 		const adapter = await makeAdapter();

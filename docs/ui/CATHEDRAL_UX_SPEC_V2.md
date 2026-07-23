@@ -617,11 +617,18 @@ Width: 60% of terminal, min 50, max 80. Centered.
 - Collapse marker (`… N lines collapsed`): `foregroundDim`
 
 **Expansion**:
-- Compact by default.
-- `⌘O` / Pi tool expand action expands nearest/latest tool where possible.
-- `Ctrl+E` expands/collapses all tools using Pi's existing tools expansion semantics.
+- Historical settled cards are compact by default; running durable Activity cards default expanded.
+- `Ctrl+O` / Pi tool expand action updates all currently known Activity IDs plus the retained host's default expansion policy.
+- Per-card overrides and the global default persist in host-owned `ui.json`; producer/feed updates never write expansion.
+- Failed cards auto-expand only when the user has not chosen an explicit per-card or global policy.
 - Mouse click on tool header may toggle if mouse support is active; not required for v1.
-- Long outputs always collapse safely with `N lines collapsed`; full text remains available to the model/result payload.
+- Durable output is the newest 16 KiB and at most 25 lines, with ANSI/control stripping, UTF-8-safe raw-byte boundaries, and redaction of known credential patterns. Invocation, environment, and command payloads are never persisted. The private tail remains user-visible session data and may contain opaque secrets that heuristic redaction cannot identify; `0700` directories and `0600` files are part of the contract.
+
+**Live ownership**:
+- Terminal and subagent producers remain separate execution systems but project into one bounded `ActivitySnapshot` presentation contract.
+- Stable Activity IDs update one retained card in place; a passive transcript completion claims that same card instead of appending a duplicate.
+- Session A cards are never visible while session B is active. Resuming A rehydrates its durable feed and expansion state before first paint.
+- Feed expiry removes feed-only history, but never a transcript-owned completion. Only currently live feed cards bypass the normal transcript virtualization cap.
 
 **Implementation plan**:
 1. **Phase D v1**: structured chat tool render model + compact pills + expanded ledger cards. No PTY execution change.

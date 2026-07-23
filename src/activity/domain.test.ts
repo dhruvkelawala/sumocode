@@ -19,6 +19,9 @@ describe("Activity domain", () => {
 		expect(sameActivity(activity("temporary", { sourceId: "call-1" }), activity("canonical", { kind: "task", sourceId: "call-1" }))).toBe(true);
 		expect(sameActivity(activity("spawn-call-1"), activity("subagent:sa-1", { kind: "subagent", sourceId: "spawn-call-1" }))).toBe(true);
 		expect(sameActivity(activity("a", { sourceId: "shared" }), activity("b", { sourceId: "shared" }))).toBe(false);
+		expect(sameActivity(activity("subagent:sa-1", { kind: "subagent", sourceId: "old" }), activity("subagent:sa-1", { kind: "subagent", sourceId: "new" }))).toBe(false);
+		expect(sameActivity(activity("subagent:sa-1", { kind: "subagent" }), activity("subagent:sa-1", { kind: "subagent", sourceId: "new" }))).toBe(false);
+		expect(sameActivity(activity("subagent:sa-1:durable", { kind: "subagent", sourceId: "spawn" }), activity("subagent:sa-1", { kind: "subagent", sourceId: "spawn" }))).toBe(true);
 		expect(sameActivity(activity("a"), activity("b"))).toBe(false);
 	});
 

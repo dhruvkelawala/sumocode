@@ -33,6 +33,7 @@ export interface AtCapacityDetails {
 }
 
 export interface SpawnSubagentTask {
+	readonly sourceId?: string;
 	readonly prompt: string;
 	readonly title: string;
 	readonly cwd: string;
@@ -98,6 +99,7 @@ const makeInitialSnapshot = (
 	sessionFilePath?: string,
 ): SubagentSnapshot => ({
 	id,
+	...(task.sourceId ? { sourceId: task.sourceId } : {}),
 	title: task.title,
 	prompt: task.prompt,
 	cwd,

@@ -152,6 +152,19 @@ function buildChatHTML(cols, toolStyle = "inline") {
 		];
 	}
 
+	if (toolStyle === "activity-cards") {
+		messages = [
+			{ role: "USER", body: "show live orchestration activity" },
+			{ role: "SUMO", time: "11:42", body: "Retained activities update in place.", tools: [
+				{ name: "subagent", target: "auth · sa-4", state: "running", note: "reviewing session boundaries", expanded: true, outputLines: ["checking src/auth/session.ts", "✓ [read] src/auth/session.ts"] },
+				{ name: "terminal", target: "auth tests", state: "running", note: "watching stdout", expanded: true, outputLines: ["> vitest run src/auth", "✓ session.test.ts", "watching stdout…"] },
+				{ name: "terminal", target: "typecheck", state: "ok", note: "exit 0", expanded: false },
+				{ name: "terminal", target: "integration", state: "failed", note: "failed", expanded: false },
+				{ name: "subagent", target: "docs · sa-5", state: "running", note: "collapsed", expanded: false },
+			] },
+		];
+	}
+
 	if (toolStyle === "runtime") {
 		messages = [
 			{ role: "USER", body: "review src/auth/session.ts and tighten the return type" },
@@ -292,7 +305,7 @@ function buildChatHTML(cols, toolStyle = "inline") {
 					continue;
 				}
 
-				if (toolStyle === "ledger") {
+				if (toolStyle === "ledger" || (toolStyle === "activity-cards" && tool.expanded !== false)) {
 					const status = tool.note ? `${glyph} ${tool.note}` : glyph;
 					const statusHTML = `<span class="${dotClass}">${glyph}</span>${tool.note ? `<span class="fg-dim"> ${tool.note}</span>` : ""}`;
 					const title = `[${tool.name}]  ${tool.target}`;
@@ -301,7 +314,9 @@ function buildChatHTML(cols, toolStyle = "inline") {
 					const rightLen = visibleLen(statusHTML) + 2;
 					rows.push(bodyRow(leftHTML + `<span class="fg-tool-border">${rep("─", Math.max(1, innerCols - leftLen - rightLen))}</span> ` + statusHTML, innerCols));
 
-					const outputLines = tool.name === "bash"
+					const outputLines = tool.outputLines
+						? tool.outputLines.map((line) => `<span class="fg-tool-body">${line}</span>`)
+						: tool.name === "bash"
 						? [
 							`<span class="fg-tool-body">> pnpm test src/auth</span>`,
 							`<span class="fg-idle">✓</span> <span class="fg-tool-body">src/auth/session.test.ts (22 tests)</span>`,
@@ -462,8 +477,10 @@ function buildScene(variant) {
   body.runtime-target { background: var(--background); }
   body.runtime-target .stage { min-height: 0; align-items: flex-start; justify-content: flex-start; padding: 0; gap: 0; }`
 		: "";
-	const stageLabel = toolStyle === "ledger" ? "scene · active state + ledger tool cards" : toolStyle === "live" ? "scene · active state + bash live-view card" : toolStyle === "code" ? "scene · active state + code block in SUMO chat" : toolStyle === "skill" ? "scene · active state + inline skill pill" : toolStyle === "scroll" ? "scene · active state + scroll/scribe delegation" : toolStyle === "runtime" ? `scene · runtime active-working · ${cols}×${TERM_ROWS} ${sidebarVisible ? "landscape" : "portrait (sidebar hidden)"}` : `scene · active state · ${cols}×${TERM_ROWS} ${sidebarVisible ? "landscape" : "portrait (sidebar hidden)"}`;
-	const stageBlurb = toolStyle === "ledger"
+	const stageLabel = toolStyle === "activity-cards" ? "scene · durable activity cards" : toolStyle === "ledger" ? "scene · active state + ledger tool cards" : toolStyle === "live" ? "scene · active state + bash live-view card" : toolStyle === "code" ? "scene · active state + code block in SUMO chat" : toolStyle === "skill" ? "scene · active state + inline skill pill" : toolStyle === "scroll" ? "scene · active state + scroll/scribe delegation" : toolStyle === "runtime" ? `scene · runtime active-working · ${cols}×${TERM_ROWS} ${sidebarVisible ? "landscape" : "portrait (sidebar hidden)"}` : `scene · active state · ${cols}×${TERM_ROWS} ${sidebarVisible ? "landscape" : "portrait (sidebar hidden)"}`;
+	const stageBlurb = toolStyle === "activity-cards"
+		? "Durable keyed Activity cards: running subagent, running terminal, completed terminal, failure, and explicit collapsed/expanded states."
+		: toolStyle === "ledger"
 		? "Option 3A preview for Element 9: tool calls render as nested ledger cards inside the SUMO message box. Tests vertical rhythm, containment, and density in the full active scene."
 		: toolStyle === "live"
 			? "Option 3B preview inspired by lucasmeijer/pi-bash-live-view: bash renders as a live PTY viewport card with elapsed timer; non-bash tools remain compact."
@@ -486,7 +503,7 @@ function buildScene(variant) {
 	const sidebarColumnHTML = sidebarVisible
 		? `      <div class="sidebar-col"><pre class="grid">${sidebarRows.join("\n")}</pre></div>
 `
-		: isRuntimeTarget ? "" : "      \n";
+		: isRuntimeTarget ? "" : "\n";
 
 	return `<!doctype html>
 <html>
@@ -539,3 +556,7 @@ for (const v of [
 	writeFileSync(resolve(out, v.filename), buildScene(v.spec));
 	console.log(`wrote ${v.filename}  (${v.spec.cols}\u00d7${v.spec.rows})`);
 }
+
+// scene-activity-cards*.html are intentionally fixed, independently authored
+// Bible targets. Runtime/fixture capture may compare against them, but Bible
+// generation must never derive those targets from the implementation renderer.

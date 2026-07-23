@@ -140,6 +140,20 @@ describe("TranscriptController agent_end reconciliation", () => {
 		expect(transcript.messages.map((m) => m.id)).toEqual(["fresh", "reply"]);
 	});
 
+	it("upserts a buffered hydration suffix already present in the message snapshot", () => {
+		const controller = new TranscriptController();
+		const user = { id: "hydrated-user", role: "user", content: "question" };
+		const assistant = { id: "hydrated-assistant", role: "assistant", content: "answer" };
+		controller.replaceFromMessages([user, assistant]);
+
+		controller.handleAgentEvent({ type: "agent_start" });
+		controller.handleAgentEvent({ type: "message_update", message: assistant });
+		controller.handleAgentEvent({ type: "message_end", message: assistant });
+		const transcript = controller.handleAgentEvent({ type: "agent_end", messages: [user, assistant] });
+
+		expect(transcript.messages.map((message) => message.id)).toEqual(["hydrated-user", "hydrated-assistant"]);
+	});
+
 	it("reconciles even without a preceding agent_start by appending after existing committed history", () => {
 		const controller = new TranscriptController();
 		controller.replaceFromMessages([{ id: "old", role: "user", content: "old session" }]);

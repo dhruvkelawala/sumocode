@@ -3,8 +3,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 export interface RpcChildFixtureOptions {
+	readonly sessionId?: string;
 	readonly sessionName?: string;
 	readonly messages?: readonly unknown[];
+	readonly newSessionId?: string;
+	readonly newSessionName?: string;
+	readonly switchSessions?: Readonly<Record<string, { readonly sessionId: string; readonly sessionName: string; readonly messages?: readonly unknown[] }>>;
 	readonly holdPromptUntilAbort?: boolean;
 	/**
 	 * When set, a `prompt` command streams these chunks as successive
@@ -31,6 +35,12 @@ export interface RpcChildFixtureOptions {
 	readonly compactDelayMs?: number;
 	readonly promptDelayMs?: number;
 	readonly settleDelayMs?: number;
+	/** Emit a post-get_state message_update→agent_end→agent_settled suffix while get_messages returns its older snapshot. */
+	readonly sessionHydrationRace?: boolean;
+	/** Emit an event immediately after the first get_messages response during host boot. */
+	readonly initialHydrationRace?: boolean;
+	/** Emit an old-session agent_start while a session-changing RPC is pending. */
+	readonly oldSessionAgentStartDuringChange?: boolean;
 	readonly compactReason?: "manual" | "threshold" | "overflow";
 	readonly compactSummary?: string;
 	readonly compactTokensBefore?: number;
@@ -42,12 +52,20 @@ export async function createRpcChildFixture(prefix: string, options: RpcChildFix
 	const source = `#!/usr/bin/env node
 const readline = require("node:readline");
 
+let sessionId = ${JSON.stringify(options.sessionId ?? "fixture-session")};
 let sessionName = ${JSON.stringify(options.sessionName ?? "Fixture Session")};
 let messages = ${JSON.stringify(options.messages ?? [])};
+const newSessionId = ${JSON.stringify(options.newSessionId ?? "fixture-session-new")};
+const newSessionName = ${JSON.stringify(options.newSessionName ?? "Fresh Session")};
+const switchSessions = ${JSON.stringify(options.switchSessions ?? {})};
 let isStreaming = false;
 let isCompacting = false;
 let pendingPrompt = null;
 let holdNextPromptUntilAbort = ${options.holdPromptUntilAbort ? "true" : "false"};
+let sessionHydrationRacePending = false;
+const sessionHydrationRace = ${options.sessionHydrationRace ? "true" : "false"};
+let initialHydrationRacePending = ${options.initialHydrationRace ? "true" : "false"};
+const oldSessionAgentStartDuringChange = ${options.oldSessionAgentStartDuringChange ? "true" : "false"};
 const streamChunks = ${JSON.stringify(options.streamChunks ?? null)};
 const chunkDelayMs = ${JSON.stringify(options.chunkDelayMs ?? 500)};
 const streamChunkSentinels = ${options.streamChunkSentinels ? "true" : "false"};
@@ -71,7 +89,7 @@ function state() {
 		isCompacting,
 		steeringMode: "all",
 		followUpMode: "one-at-a-time",
-		sessionId: "fixture-session",
+		sessionId,
 		sessionName,
 		autoCompactionEnabled: true,
 		messageCount: messages.length,
@@ -110,6 +128,30 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 		return;
 	}
 	if (command.type === "get_messages") {
+		if (initialHydrationRacePending) {
+			initialHydrationRacePending = false;
+			const hydrationSnapshot = [...messages];
+			write(response(command, { messages: hydrationSnapshot }));
+			write({ type: "message_update", message: { id: "initial-race-draft", role: "assistant", content: "initial race draft" } });
+			messages = [{ id: "initial-race-complete", role: "assistant", content: "initial race completed" }];
+			isStreaming = false;
+			write({ type: "agent_end", messages, willRetry: false });
+			write({ type: "agent_settled" });
+			return;
+		}
+		if (sessionHydrationRacePending) {
+			sessionHydrationRacePending = false;
+			const hydrationSnapshot = [...messages];
+			setTimeout(() => write({ type: "message_update", message: { id: "session-race-draft", role: "assistant", content: "session race draft" } }), 5);
+			setTimeout(() => {
+				messages = [{ id: "session-race-complete", role: "assistant", content: "session race completed" }];
+				isStreaming = false;
+				write({ type: "agent_end", messages, willRetry: false });
+			}, 10);
+			setTimeout(() => write({ type: "agent_settled" }), 15);
+			setTimeout(() => write(response(command, { messages: hydrationSnapshot })), 40);
+			return;
+		}
 		write(response(command, { messages }));
 		return;
 	}
@@ -123,8 +165,27 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 		return;
 	}
 	if (command.type === "new_session") {
-		sessionName = "Fresh Session";
+		if (oldSessionAgentStartDuringChange) write({ type: "agent_start" });
+		sessionId = newSessionId;
+		sessionName = newSessionName;
 		messages = [];
+		isStreaming = sessionHydrationRace;
+		isCompacting = false;
+		write({ type: "session_info_changed", name: sessionName });
+		if (sessionHydrationRace) sessionHydrationRacePending = true;
+		else write({ type: "agent_end", messages, willRetry: false });
+		write(response(command, { cancelled: false }));
+		return;
+	}
+	if (command.type === "switch_session") {
+		const target = switchSessions[command.sessionPath];
+		if (!target) {
+			write(response(command, { cancelled: true }));
+			return;
+		}
+		sessionId = target.sessionId;
+		sessionName = target.sessionName;
+		messages = target.messages || [];
 		isStreaming = false;
 		isCompacting = false;
 		write({ type: "session_info_changed", name: sessionName });

@@ -26,7 +26,7 @@
 - **Category**: retained runtime / cross-process state
 - **Depends on**: Plans 079, 080, 082
 - **Planned at**: `acf6ae2`, 2026-07-22
-- **Execution status**: TODO
+- **Execution status**: DONE — implementation `f681fc5`, accepted-review fixes on `advisor/081-live-activity-store`
 - **Role**: final integration slice
 
 ## Decision
@@ -41,8 +41,9 @@ For each session, store under the Pi agent state root (or a configurable SumoCod
 
 ```text
 sumocode/activity/v1/<sha256(sessionId)>/
-  feed.json   # extension-side bridge owns this file
-  ui.json     # retained host owns this file
+  feed.json     # one verifiably session-owned extension bridge writes this file
+  ui.json       # retained host owns this file
+  writer.json   # PID/start/token writer identity; same-session takeover requires death proof
 ```
 
 Never place raw session IDs in path names. Directories are `0700`; files are `0600`. Writes are temp-file + flush/close + same-directory atomic rename.
@@ -95,7 +96,7 @@ Required behavior:
 - Per-activity output tail: newest 16 KiB and at most 25 lines.
 - Feed retention: every running activity plus newest 64 settled activities, no older than seven days.
 - Tail reads preserve valid UTF-8 and never split multibyte code points.
-- Feed snapshots contain no unbounded transcripts, raw environment, secrets, ANSI, or control sequences.
+- Feed snapshots contain no unbounded transcripts, invocation/environment/working-directory/command payloads, ANSI, or control sequences. Bounded output is private user-visible session data: redact known credential patterns, but do not claim heuristics can remove arbitrary opaque secrets.
 - Expansion is never producer-owned.
 
 ## Implementation steps
@@ -121,7 +122,7 @@ No filesystem watcher may keep the process alive after disposal.
 
 Create `src/activity/manager-bridge.ts` and tests. Construct it after terminal and subagent managers exist in `src/extension.ts`.
 
-The bridge is the sole `feed.json` writer. It:
+The bridge is the sole `feed.json` writer for sessions this Pi process verifiably owns. It never discovers unrelated feed owners. Plan 080's process-global session ownership serializes same-process factory handoff; a private PID/start/token writer lease serializes cross-process same-session races, and takeover may reconcile missing work only after the prior writer is proven dead. It:
 
 - subscribes to manager changes
 - projects terminal and subagent snapshots through Plan 079/082 adapters

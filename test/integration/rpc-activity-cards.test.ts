@@ -268,6 +268,27 @@ describe("RPC durable Activity cards", () => {
 		expect(screen.text).not.toContain("initial race draft");
 	}, 30_000);
 
+	it("does not replay an old-session agent_start into the destination scheduler", async () => {
+		const cols = 100;
+		const rows = 30;
+		const piBin = await createRpcChildFixture("sumocode-rpc-activity-old-session-event-", {
+			sessionId: "session-a",
+			sessionName: "Session A",
+			newSessionId: "session-b",
+			newSessionName: "Session B",
+			messages: [{ id: "session-a-marker", role: "user", content: "session a marker" }],
+			oldSessionAgentStartDuringChange: true,
+		});
+		const agentDir = await mkdtemp(join(tmpdir(), "sumocode-rpc-activity-old-session-agent-"));
+		app = spawnFixture(piBin, agentDir, cols, rows);
+		await app.waitForOutput(PI_BOOT_SEQUENCE, 15_000);
+		await waitForScreen(app, ({ text }) => text.includes("session a marker"), { cols, rows, timeoutMs: 10_000 });
+		app.sendInput(`/new${CSI_U_ENTER}`);
+		await waitForScreen(app, ({ text }) => text.includes("DIVINE INVOCATION") && !text.includes("session a marker"), { cols, rows, timeoutMs: 10_000 });
+		app.sendInput(`destination prompt${CSI_U_ENTER}`);
+		await waitForScreen(app, ({ text }) => text.includes("fixture response complete: destination prompt"), { cols, rows, timeoutMs: 10_000 });
+	}, 30_000);
+
 	it("replays post-hydration message_update, agent_end, and agent_settled events after a session change", async () => {
 		const cols = 100;
 		const rows = 30;

@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -78,6 +78,29 @@ describe("FileActivityStore", () => {
 		publisher.publish([activity("term-1", "succeeded")]);
 		await waitFor(() => store.getSnapshot().activities[0]?.status === "succeeded");
 		expect(prior.activities[0]?.status).toBe("running");
+		store.dispose();
+	});
+
+	it("degrades bind failures to an empty snapshot and retries after the state root recovers", async () => {
+		const parent = root();
+		const stateRoot = join(parent, "blocked-state-root");
+		writeFileSync(stateRoot, "not a directory", { mode: 0o600 });
+		const diagnostics: string[] = [];
+		const store = new FileActivityStore({
+			rootDir: stateRoot,
+			debounceMs: 5,
+			pollMs: 20,
+			onDiagnostic: (entry) => diagnostics.push(`${entry.kind}:${entry.message}`),
+		});
+		expect(() => store.bindSession("session-a")).not.toThrow();
+		expect(store.getSnapshot()).toMatchObject({ ownerSessionId: "session-a", activities: [], expansion: {} });
+		expect(diagnostics.some((entry) => entry.startsWith("io:"))).toBe(true);
+
+		rmSync(stateRoot);
+		mkdirSync(stateRoot, { mode: 0o700 });
+		chmodSync(stateRoot, 0o700);
+		fixturePublisher("session-a", { rootDir: stateRoot, now: () => 2_000 }).publish([activity("recovered")]);
+		await waitFor(() => store.getSnapshot().activities[0]?.id === "recovered");
 		store.dispose();
 	});
 

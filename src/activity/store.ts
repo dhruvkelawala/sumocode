@@ -164,8 +164,7 @@ export class FileActivityStore implements ActivityStore {
 		this.defaultExpansion = undefined;
 		this.feedKnownGood = false;
 		this.uiKnownGood = false;
-		if (ownerSessionId) {
-			this.paths = activityPaths(ownerSessionId, this.rootDir);
+		if (ownerSessionId && this.ensurePaths(generation, ownerSessionId)) {
 			this.reload(generation, ownerSessionId);
 		}
 		this.apply({
@@ -297,6 +296,18 @@ export class FileActivityStore implements ActivityStore {
 		return new Set(this.feedActivities.map(activityExpansionPersistenceKey));
 	}
 
+	private ensurePaths(generation: number, ownerSessionId: string): boolean {
+		if (this.paths) return true;
+		if (this.disposed || generation !== this.generation) return false;
+		try {
+			this.paths = activityPaths(ownerSessionId, this.rootDir);
+			return true;
+		} catch (error) {
+			this.diagnostic("io", this.rootDir, error);
+			return false;
+		}
+	}
+
 	private startObservation(generation: number, ownerSessionId: string): void {
 		this.ensureWatcher(generation, ownerSessionId);
 		this.pollTimer = setInterval(() => {
@@ -335,6 +346,8 @@ export class FileActivityStore implements ActivityStore {
 
 	private reloadAndApply(generation: number, ownerSessionId: string): void {
 		if (this.disposed || generation !== this.generation || this.snapshot.ownerSessionId !== ownerSessionId) return;
+		if (!this.ensurePaths(generation, ownerSessionId)) return;
+		this.ensureWatcher(generation, ownerSessionId);
 		this.reload(generation, ownerSessionId);
 		this.apply({
 			ownerSessionId,

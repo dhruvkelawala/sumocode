@@ -39,6 +39,8 @@ export interface RpcChildFixtureOptions {
 	readonly sessionHydrationRace?: boolean;
 	/** Emit an event immediately after the first get_messages response during host boot. */
 	readonly initialHydrationRace?: boolean;
+	/** Emit an old-session agent_start while a session-changing RPC is pending. */
+	readonly oldSessionAgentStartDuringChange?: boolean;
 	readonly compactReason?: "manual" | "threshold" | "overflow";
 	readonly compactSummary?: string;
 	readonly compactTokensBefore?: number;
@@ -63,6 +65,7 @@ let holdNextPromptUntilAbort = ${options.holdPromptUntilAbort ? "true" : "false"
 let sessionHydrationRacePending = false;
 const sessionHydrationRace = ${options.sessionHydrationRace ? "true" : "false"};
 let initialHydrationRacePending = ${options.initialHydrationRace ? "true" : "false"};
+const oldSessionAgentStartDuringChange = ${options.oldSessionAgentStartDuringChange ? "true" : "false"};
 const streamChunks = ${JSON.stringify(options.streamChunks ?? null)};
 const chunkDelayMs = ${JSON.stringify(options.chunkDelayMs ?? 500)};
 const streamChunkSentinels = ${options.streamChunkSentinels ? "true" : "false"};
@@ -162,6 +165,7 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 		return;
 	}
 	if (command.type === "new_session") {
+		if (oldSessionAgentStartDuringChange) write({ type: "agent_start" });
 		sessionId = newSessionId;
 		sessionName = newSessionName;
 		messages = [];

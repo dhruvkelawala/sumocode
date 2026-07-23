@@ -888,14 +888,17 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		runtime?.update({ state, transcript, transcriptRevision: transcriptPump.getRevision() });
 		scheduler.handleAgentEvent(event);
 	};
+	let sessionHydrationRetrying = false;
 	const beginSessionChange = (): void => {
 		if (!sessionEvents.begin()) return;
+		sessionHydrationRetrying = false;
 		deferActivityRuntimeUpdate = true;
 		runtime?.beginSessionReplacement();
 	};
 	const cancelSessionChange = (): void => {
 		if (!sessionEvents.isActive) return;
 		const events = sessionEvents.finish();
+		sessionHydrationRetrying = false;
 		deferActivityRuntimeUpdate = false;
 		runtime?.update({
 			state: stateStore.getSnapshot(),
@@ -908,7 +911,7 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 	const refreshSessionRuntime = async (): Promise<void> => {
 		if (sessionHydrationRetryTimer) clearTimeout(sessionHydrationRetryTimer);
 		sessionHydrationRetryTimer = undefined;
-		const continuingFailedHydration = sessionEvents.isActive;
+		const continuingFailedHydration = sessionHydrationRetrying;
 		beginSessionChange();
 		// The mutating command has returned (or failed ambiguously). Everything
 		// before this boundary is superseded by the authoritative destination
@@ -970,6 +973,7 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 			// disclosure or committing an incomplete transcript.
 		} finally {
 			if (!hydrationSucceeded) {
+				sessionHydrationRetrying = true;
 				sessionHydrationRetryTimer = setTimeout(() => {
 					sessionHydrationRetryTimer = undefined;
 					void refreshSessionRuntime();
@@ -977,6 +981,7 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 				sessionHydrationRetryTimer.unref?.();
 				return;
 			}
+			sessionHydrationRetrying = false;
 			const replay = sessionEvents.finishHydration();
 			// State/messages snapshots supersede UI projection for earlier passes,
 			// but event-only scheduler effects still replay in order. The final

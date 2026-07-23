@@ -695,10 +695,13 @@ describe("TerminalTaskManager", () => {
 			const directory = dirname(task.logFile);
 			expect(lstatSync(rootDir).mode & 0o777).toBe(0o700);
 			expect(lstatSync(directory).mode & 0o777).toBe(0o700);
-			for (const name of ["output.log", "exit.code", "run.sh", "launch.ready", "meta.json"]) {
+			for (const name of ["output.log", "exit.code", "command.sh", "run.sh", "launch.ready", "meta.json"]) {
 				expect(lstatSync(join(directory, name)).mode & 0o777, name).toBe(0o600);
 			}
-			expect(readFileSync(join(directory, "run.sh"), "utf8")).toContain("launch gate timed out");
+			const runScript = readFileSync(join(directory, "run.sh"), "utf8");
+			expect(runScript).toContain("launch gate timed out");
+			expect(runScript).toContain("bounded-terminal-runner.mjs");
+			expect(readFileSync(join(directory, "command.sh"), "utf8")).toContain("set -o pipefail");
 			const outside = join(rootDir, "outside.log");
 			writeFileSync(outside, "outside", { mode: 0o600 });
 			chmodSync(outside, 0o600);

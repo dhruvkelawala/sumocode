@@ -14,6 +14,7 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
 	signalVerifiedProcessTree,
 	systemProcessTree,
@@ -49,6 +50,7 @@ const DEFAULT_KILL_GRACE_MS = 2_000;
 const DEFAULT_CLAIM_LEASE_MS = 30_000;
 const DEFAULT_STARTING_RECOVERY_GRACE_MS = 30_000;
 const MAX_REPLAYED_SETTLED_TERMINALS = 64;
+const BOUNDED_TERMINAL_RUNNER_FILE = fileURLToPath(new URL("./bounded-terminal-runner.mjs", import.meta.url));
 
 export interface TerminalOutputTail {
 	readonly bytes: Uint8Array;
@@ -67,7 +69,6 @@ interface RuntimeTask {
 	pollTimer?: ReturnType<typeof setInterval>;
 	reconcilePromise?: Promise<void>;
 	treeVerification?: ProcessTreeVerification;
-	lastLogCapAt: number;
 	lastTreeVerificationAt: number;
 }
 
@@ -114,6 +115,7 @@ function taskPaths(store: TerminalTaskStore, id: string, createdAt: number) {
 		...visiblePaths,
 		directory,
 		launchFile: join(directory, "launch.ready"),
+		commandFile: join(directory, process.platform === "win32" ? "command.cmd" : "command.sh"),
 		windowsScriptFile: join(directory, "run.cmd"),
 	};
 }
@@ -205,18 +207,6 @@ function readLogTail(store: TerminalTaskStore, path: string, maxBytes: number): 
 	}
 }
 
-function capRunningLog(store: TerminalTaskStore, path: string, maxBytes: number): void {
-	let descriptor: number | undefined;
-	try {
-		descriptor = openPrivateFile(store, path, constants.O_WRONLY);
-		if (fstatSync(descriptor).size > maxBytes) ftruncateSync(descriptor, 0);
-	} catch {
-		// Output bounding is best effort and cannot perturb process state.
-	} finally {
-		if (descriptor !== undefined) closeSync(descriptor);
-	}
-}
-
 function capSettledLog(store: TerminalTaskStore, path: string, maxBytes: number): void {
 	try {
 		let descriptor = openPrivateFile(store, path, constants.O_RDONLY);
@@ -264,11 +254,12 @@ function sameTreeVerification(left: ProcessTreeVerification | undefined, right: 
 }
 
 function buildPosixScript(options: {
-	readonly command: string;
 	readonly cwd: string;
 	readonly launchFile: string;
+	readonly commandFile: string;
 	readonly logFile: string;
 	readonly exitFile: string;
+	readonly logMaxBytes: number;
 }): string {
 	return [
 		"#!/usr/bin/env bash",
@@ -288,11 +279,8 @@ function buildPosixScript(options: {
 		`  printf '%s\\n' ${shellEscape(`[sumocode-terminal] working directory unavailable: ${options.cwd}`)} >> ${shellEscape(options.logFile)}`,
 		"  code=1",
 		"else",
-		"  set -o pipefail",
 		"  export SUMOCODE_BG_CHILD=1",
-		"  (",
-		`    ${options.command}`,
-		`) >> ${shellEscape(options.logFile)} 2>&1`,
+		`  ${shellEscape(process.execPath)} ${shellEscape(BOUNDED_TERMINAL_RUNNER_FILE)} posix ${shellEscape(options.commandFile)} ${shellEscape(options.logFile)} ${options.logMaxBytes}`,
 		"  code=$?",
 		"fi",
 		`printf '%s' "$code" > ${shellEscape(options.exitFile)}`,
@@ -307,11 +295,12 @@ function quoteWindows(value: string): string {
 }
 
 function buildWindowsScript(options: {
-	readonly command: string;
 	readonly cwd: string;
 	readonly launchFile: string;
+	readonly commandFile: string;
 	readonly logFile: string;
 	readonly exitFile: string;
+	readonly logMaxBytes: number;
 }): string {
 	return [
 		"@echo off",
@@ -333,7 +322,7 @@ function buildWindowsScript(options: {
 		`  > ${quoteWindows(options.exitFile)} echo 1`,
 		"  goto wait_for_tree_reconcile",
 		")",
-		`(${options.command}) >> ${quoteWindows(options.logFile)} 2>&1`,
+		`${quoteWindows(process.execPath)} ${quoteWindows(BOUNDED_TERMINAL_RUNNER_FILE)} win32 ${quoteWindows(options.commandFile)} ${quoteWindows(options.logFile)} ${options.logMaxBytes}`,
 		"set terminal_exit=%errorlevel%",
 		`> ${quoteWindows(options.exitFile)} echo %terminal_exit%`,
 		// Keep the verified leader alive until the manager performs taskkill /T.
@@ -429,10 +418,19 @@ export class TerminalTaskManager {
 
 		createPrivateFile(this.store, paths.logFile, "");
 		createPrivateFile(this.store, paths.exitFile, "");
+		createPrivateFile(this.store, paths.commandFile, process.platform === "win32" ? command : `set -o pipefail\n${command}\n`);
 		const scriptFile = process.platform === "win32" ? paths.windowsScriptFile : paths.scriptFile;
+		const runnerOptions = {
+			cwd,
+			launchFile: paths.launchFile,
+			commandFile: paths.commandFile,
+			logFile: paths.logFile,
+			exitFile: paths.exitFile,
+			logMaxBytes: this.logMaxBytes,
+		};
 		createPrivateFile(this.store, scriptFile, process.platform === "win32"
-			? buildWindowsScript({ command, cwd, launchFile: paths.launchFile, logFile: paths.logFile, exitFile: paths.exitFile })
-			: buildPosixScript({ command, cwd, launchFile: paths.launchFile, logFile: paths.logFile, exitFile: paths.exitFile }));
+			? buildWindowsScript(runnerOptions)
+			: buildPosixScript(runnerOptions));
 
 		const initial: TerminalTaskSnapshot = {
 			schemaVersion: TERMINAL_TASK_SCHEMA_VERSION,
@@ -694,12 +692,13 @@ export class TerminalTaskManager {
 			}
 			const stopping = this.mutate(id, (task) => {
 				if (isTerminalTaskSettled(task.status)) return undefined;
-				if (task.status === "stopping" && (task.processTreeVerification || !verification)) return undefined;
+				const nextVerification = verification ?? task.processTreeVerification;
+				if (task.status === "stopping" && sameTreeVerification(task.processTreeVerification, nextVerification)) return undefined;
 				return {
 					...task,
 					status: "stopping",
 					updatedAt: this.timestamp(task),
-					processTreeVerification: task.processTreeVerification ?? verification,
+					processTreeVerification: nextVerification,
 				};
 			}).snapshot;
 			if (isTerminalTaskSettled(stopping.status)) {
@@ -881,7 +880,7 @@ export class TerminalTaskManager {
 	private ensureRuntime(task: TerminalTaskSnapshot): RuntimeTask {
 		let runtime = this.runtime.get(task.id);
 		if (!runtime) {
-			runtime = { lastLogCapAt: 0, lastTreeVerificationAt: Number.NEGATIVE_INFINITY };
+			runtime = { lastTreeVerificationAt: Number.NEGATIVE_INFINITY };
 			this.runtime.set(task.id, runtime);
 		}
 		return runtime;
@@ -920,10 +919,6 @@ export class TerminalTaskManager {
 			return;
 		}
 		const runtime = this.ensureRuntime(current);
-		if (this.now() - runtime.lastLogCapAt >= 5_000) {
-			capRunningLog(this.store, current.logFile, this.logMaxBytes);
-			runtime.lastLogCapAt = this.now();
-		}
 		if (current.status === "starting") {
 			if (this.now() - current.updatedAt >= this.startingRecoveryGraceMs) this.settleLost(id, null, true);
 			return;

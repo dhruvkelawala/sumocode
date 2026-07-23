@@ -281,7 +281,9 @@ export class SubagentManager {
 						const reason = opened.ok ? "terminal host returned no workspace id" : opened.error;
 						return this.recordSpawnFailure(task, id, createdAt, manifestBaseRef, `unable to open worktree workspace: ${reason}. Worktree created at ${worktree?.path ?? childCwd} is preserved.`, childCwd, worktree);
 					}
-					placement = { kind: "workspace", workspaceId };
+					// `worktree open` creates an initial shell pane. Pass its id so the
+					// host can keep it for workspace persistence without showing a split.
+					placement = { kind: "workspace", workspaceId, paneId: opened.pane.paneId };
 				} else if (planned.kind === "tab") placement = planned;
 				else placement = { kind: "new-tab", label: planned.kind === "new-tab" ? planned.label : "subagents" };
 			}

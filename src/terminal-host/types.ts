@@ -13,7 +13,7 @@ export type HostResult<T> = ({ ok: true } & T) | { ok: false; error: string };
 export type PiExecLike = Pick<ExtensionAPI, "exec">;
 
 export type AgentPanePlacement =
-	| { kind: "workspace"; workspaceId: string }
+	| { kind: "workspace"; workspaceId: string; paneId?: string }
 	| { kind: "tab"; tabId: string; direction: SplitDirection }
 	| { kind: "new-tab"; label: string };
 

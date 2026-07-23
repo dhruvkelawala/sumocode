@@ -76,8 +76,12 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 		thinking: options.thinking,
 		tools: options.tools,
 	});
-	// Keep output visible in the pane while retaining a real diagnostic tail for
-	// non-zero exits. pipefail preserves the child command's failure status.
+	// Keep stdout attached directly to the pane PTY. Piping combined output
+	// through `tee` makes `sumocode` observe non-TTY stdout and select its direct,
+	// non-interactive Pi path, leaving the visible herdr pane blank. Redirect
+	// stderr directly to the log so startup/crash diagnostics are flushed before
+	// the wrapper can publish its exit marker. Task-mode response and exit files
+	// remain the authoritative completion evidence.
 	//
 	// The exit marker is guaranteed by the OUTER wrapper, not just the sumocode
 	// child: a cd failure, a hard crash (no marker written), or the user closing
@@ -85,7 +89,7 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 	// subagent "running" forever while pinning a capacity slot. The traps are
 	// first-writer-wins ([ -f ] guard), so the child's own marker — written with
 	// its real exit code — always takes precedence; signal traps record
-	// conventional 128+N codes, and the EXIT trap records the pipeline status.
+	// conventional 128+N codes, and the EXIT trap records the subshell status.
 	// A child process that is alive but stuck is deliberately NOT timed out
 	// here: it is legitimately running and subagent_cancel owns that decision.
 	const exitGuard = [
@@ -96,7 +100,9 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 		`trap '__sumo_finish 143' TERM`,
 		`trap '__sumo_finish 130' INT`,
 	].join("; ");
-	const shellCommand = `${exitGuard}; set -o pipefail; ( ${agentCommand} ) 2>&1 | tee -a ${shellEscape(paths.logFile)}`;
+	// The subshell preserves the pane stdout TTY while keeping the outer
+	// trap-owning shell alive when `agentCommand` execs into SumoCode.
+	const shellCommand = `${exitGuard}; ( ${agentCommand} ) 2>> ${shellEscape(paths.logFile)}`;
 
 	let emitEvent: ((event: SubagentEvent) => void) | undefined;
 	let pane: PaneRef | undefined;

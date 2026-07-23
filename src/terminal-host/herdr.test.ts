@@ -55,7 +55,40 @@ describe("herdrTerminalHost", () => {
 		expect(result).toEqual({ ok: true, pane: { host: "herdr", paneId: "w1:p2", workspaceId: "w1" } });
 		expect(fake.exec).toHaveBeenCalledWith("herdr", ["agent", "start", expect.stringMatching(/^sumocode-/), "--cwd", "/tmp", "--split", "right", "--no-focus", "--", "bash", "-lc", "echo ok"], { timeout: 5000 });
 	});
-	it("starts an agent in an existing workspace without stealing focus", async () => {
+	it("moves a worktree workspace's bootstrap shell out of the agent tab", async () => {
+		const exec = vi.fn(async (_bin: string, args: string[]) => args[0] === "agent"
+			? { stdout: JSON.stringify({ result: { agent: { pane_id: "w9:p2", workspace_id: "w9", tab_id: "w9:t1" } } }), stderr: "", code: 0, killed: false }
+			: { stdout: "", stderr: "", code: 0, killed: false });
+		const result = await herdrTerminalHost.startAgentPane({ exec } as never, {
+			name: "API Worker",
+			cwd: "/repo/packages/api",
+			shellCommand: "exec sumocode task",
+			placement: { kind: "workspace", workspaceId: "w9", paneId: "w9:p1" },
+		});
+		expect(result).toMatchObject({ ok: true, agentName: expect.stringMatching(/^api-worker-/), workspaceId: "w9", tabId: "w9:t1", paneId: "w9:p2" });
+		expect(exec).toHaveBeenNthCalledWith(1, "herdr", ["agent", "start", expect.stringMatching(/^api-worker-/), "--workspace", "w9", "--cwd", "/repo/packages/api", "--no-focus", "--", "bash", "-lc", "exec sumocode task"], { timeout: 5000 });
+		expect(exec).toHaveBeenNthCalledWith(2, "herdr", ["pane", "move", "w9:p1", "--new-tab", "--workspace", "w9", "--label", "shell", "--no-focus"], { timeout: 5000 });
+		expect(exec).toHaveBeenNthCalledWith(3, "herdr", ["pane", "rename", "w9:p2", "API Worker"], { timeout: 5000 });
+	});
+
+	it("keeps the started agent when the cosmetic bootstrap-shell move fails", async () => {
+		const exec = vi.fn(async (_bin: string, args: string[]) => {
+			if (args[0] === "agent") return { stdout: JSON.stringify({ result: { agent: { pane_id: "w9:p2", workspace_id: "w9", tab_id: "w9:t1" } } }), stderr: "", code: 0, killed: false };
+			if (args[0] === "pane" && args[1] === "move") return { stdout: "", stderr: "move denied", code: 1, killed: false };
+			return { stdout: "", stderr: "", code: 0, killed: false };
+		});
+		const result = await herdrTerminalHost.startAgentPane({ exec } as never, {
+			name: "API Worker",
+			cwd: "/repo",
+			shellCommand: "exec sumocode task",
+			placement: { kind: "workspace", workspaceId: "w9", paneId: "w9:p1" },
+		});
+		expect(result).toMatchObject({ ok: true, paneId: "w9:p2" });
+		expect(exec).not.toHaveBeenCalledWith("herdr", ["pane", "close", "w9:p2"], expect.anything());
+		expect(exec).toHaveBeenCalledWith("herdr", ["pane", "rename", "w9:p2", "API Worker"], { timeout: 5000 });
+	});
+
+	it("starts an agent in an existing workspace when no reusable pane is supplied", async () => {
 		const exec = vi.fn(async (_bin: string, args: string[]) => {
 			if (args[0] === "agent") return { stdout: JSON.stringify({ result: { agent: { pane_id: "w9:p2", workspace_id: "w9", tab_id: "w9:t1" } } }), stderr: "", code: 0, killed: false };
 			return { stdout: "", stderr: "", code: 0, killed: false };

@@ -43,9 +43,17 @@ vanilla Pi.
 
 | Tool family   | Source                         | Purpose                      |
 |---------------|--------------------------------|------------------------------|
-| `task`        | `src/native-task-tool.ts`       | Skill-run substrate; run isolated Pi subprocess skills and stream structured scroll/scribe state |
-| `subagent_*`  | `src/subagents/`                | Spawn, steer, inspect, wait for, cancel, and list delegated child agents |
-| `bg_*`        | `src/background-tasks/`         | Start, inspect, stop, and list non-interactive background shell terminals with typed completion cards |
+| `task`        | `src/native-task-tool.ts`       | Skill-run substrate; run isolated Pi subprocess skills and stream structured Activity state |
+| `subagent_*`  | `src/subagents/`                | Spawn, steer, inspect, wait for, cancel, and list delegated child agents; bounded snapshots project to Activities |
+| `terminal_*`  | `src/background-tasks/`         | Start, check, wait for, stop, and list durable non-interactive shell terminals with passive-by-default typed completion |
+
+Terminal tools expose exactly `terminal_start`, `terminal_check`, `terminal_wait`, `terminal_stop`, and `terminal_list`. New terminal records are session-owned and durable. Completion is passive by default (`triggerTurn: false`); only an explicit `completion: "wake"` may trigger a turn, and check/wait/stop suppress any unclaimed wake before returning settled data. Historical `bg_*` transcript strings and v2/v3 metadata may still be read for diagnostics, but they are not callable aliases and are never injected into an active session.
+
+Terminal completion delivery is independent from subagent deferred delivery. Typed `terminal-result` details carry the durable `completionId`, `ownerSessionId`, and a bounded, sanitized `ActivitySnapshot`; delivery is acknowledged only after that completion ID is observable in Pi's session message stream. Activity presentation never imposes a terminal execution ceiling: the feed independently compacts optional payload while retaining identity/status for every running manager record.
+
+Live retained cards use a filesystem read model rather than Pi RPC. One verifiably owned `ActivityManagerBridge` writes each session's `feed.json` from terminal/subagent manager projections, while the retained host alone writes expansion policy to `ui.json`. The bridge never discovers unrelated feed owners. A private `writer.json` PID/start/token lease plus process-global Plan 080 session ownership serializes same-session writers; takeover and missing-producer reconciliation require proof that the former writer died. Session IDs are SHA-256 path keys. Durable feed records omit invocation, environment, terminal working-directory, and terminal command payloads; output is bounded, control-stripped, and redacted for known credential patterns. Heuristic redaction cannot prove arbitrary output secret-free: `outputTail` is private (`0700` directories, `0600` files), user-visible session data and may retain opaque secrets. Terminal and subagent managers retain initiating tool-call `sourceId` metadata so durable identities can claim transcript cards without changing callable tool shapes. This does not add a Pi RPC command or make the feed authoritative for process/subagent lifecycle.
+
+Schema-v4 terminal records use store-confined canonical paths, private `0700` directories, private `0600` artifacts, per-task cross-process locks, and revision-checked transitions. Stop and recovery verify the persisted PID/PGID start identity immediately before every signal; mismatches become `lost`, unverifiable identities are refused, and cancellation is recorded only after POSIX group emptiness or trustworthy Windows `taskkill /T` success.
 
 ### 4. SumoCode Extension Hooks
 
@@ -55,11 +63,12 @@ SumoCode may observe `pi.on("tool_call")` events for non-blocking UI state, but 
 
 ### Transcript View-Model Pipeline
 
-All tool results flow through the structured transcript:
+All tool results flow through the structured transcript. Ordinary Pi tools use `src/activity/pi-projector.ts`; native `task` and `subagent_*` records use bounded structural adapters in `src/activity/`. Execution machinery remains separate. `subagent_send` and `subagent_list` stay ordinary tool Activities, while spawn/check/wait/cancel details may also update canonical subagent Activities.
+
 
 ```
-Pi agent event → ChatMessageViewModel → ChatBlock (tool/skill/delegation/code/question)
-    → tool-renderer.ts / code-renderer.ts / scroll-renderer.ts / chat-message.ts
+Pi agent event → producer adapter → ChatMessageViewModel → ChatBlock (activity/skill/code/question)
+    → activity-renderer.ts / code-renderer.ts / chat-message.ts
     → CellBuffer → ANSI → terminal
 ```
 
@@ -100,7 +109,8 @@ This ensures the Divine Query renderer doesn't produce double labels like `A) A)
 | `src/extension.ts`               | Main entry — wires all hooks and tools        |
 | `src/divine-query.ts`            | Divine Query modal renderer + state machine   |
 | `src/command-palette.ts`         | Command palette (calls `showDivineQuery`)     |
-| `src/sumo-tui/transcript/*.ts`   | Tool/code/scroll renderers                    |
+| `src/activity/*.ts`             | Shared Activity contract and producer adapters |
+| `src/sumo-tui/transcript/*.ts`  | Activity/code renderers and transcript folding |
 | `src/sumo-tui/widgets/chat-message.ts` | Chat frame + block routing              |
 | `src/question-tool.ts`            | Question tool override (Divine Query)         |
 | `src/answer-tool.ts`              | /answer command + Ctrl+. (Cathedral Q&A wizard) |

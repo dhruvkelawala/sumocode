@@ -30,8 +30,8 @@ const COMPLETED_ACTIVE_TRANSCRIPT: TranscriptViewModel = {
 			timestamp: FIXTURE_TIMES.sumoOne,
 			blocks: [
 				{ type: "markdown", text: "Reading the auth flow." },
-				{ type: "tool", tool: { id: "read-session", name: "read", status: "success", input: { path: "src/auth/session.ts" }, expanded: false } },
-				{ type: "tool", tool: { id: "edit-session", name: "edit", status: "success", input: { path: "src/auth/session.ts" }, output: "+14 -6 session flow updated", expanded: false } },
+				{ type: "activity", activity: { id: "read-session", kind: "tool", title: "read", status: "succeeded", invocation: { path: "src/auth/session.ts" }, subject: "src/auth/session.ts", body: { kind: "source", text: "" } } },
+				{ type: "activity", activity: { id: "edit-session", kind: "tool", title: "edit", status: "succeeded", invocation: { path: "src/auth/session.ts" }, subject: "src/auth/session.ts", outputTail: "+14 -6 session flow updated", body: { kind: "diff", text: "+14 -6 session flow updated" } } },
 				{ type: "markdown", text: "Done. Updated 14 lines, deleted 6 stale helpers." },
 			],
 		},
@@ -50,15 +50,17 @@ const COMPLETED_ACTIVE_TRANSCRIPT: TranscriptViewModel = {
 			blocks: [
 				{ type: "markdown", text: "Running tests now." },
 				{
-					type: "tool",
-					tool: {
+					type: "activity",
+					activity: {
 						id: "bash-test",
-						name: "bash",
-						status: "success",
-						input: { command: "pnpm test src/auth" },
-						output: "✓ src/auth/session.test.ts (22 tests)\n22 passed in 1.2s",
-						details: { summary: "22 tests, 1.2s" },
-						expanded: false,
+						kind: "tool",
+						title: "bash",
+						status: "succeeded",
+						invocation: { command: "pnpm test src/auth" },
+						subject: "pnpm test src/auth",
+						outputTail: "✓ src/auth/session.test.ts (22 tests)\n22 passed in 1.2s",
+						body: { kind: "terminal", command: "pnpm test src/auth", text: "✓ src/auth/session.test.ts (22 tests)\n22 passed in 1.2s" },
+						result: { summary: "22 tests, 1.2s" },
 					},
 				},
 				{ type: "markdown", text: "All 22 tests pass." },

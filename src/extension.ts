@@ -22,12 +22,8 @@ import { installTopChrome } from "./top-chrome.js";
 import { installWorkingIndicator } from "./working-indicator.js";
 import { installCompactionIndicator } from "./compaction-indicator.js";
 import { installFastMode } from "./fast-mode.js";
-import {
-	installBackgroundTasks,
-	installTerminalTools,
-	type TerminalTaskFinalizedHandler,
-} from "./background-tasks/index.js";
-import { createDeferredResultDelivery } from "./subagents/delivery.js";
+import { installBackgroundTasks, installTerminalTools } from "./background-tasks/index.js";
+import { installActivityManagerBridge } from "./activity/manager-bridge.js";
 import { installSubagents } from "./subagents/index.js";
 import { installTaskModeAutoExit } from "./task-mode.js";
 import { logDiagnostic } from "./sumo-tui/runtime/diagnostics.js";
@@ -193,14 +189,11 @@ export function isRpcChildProfile(options: TaskModeOptions = {}): boolean {
 }
 
 function installOrchestrationTools(pi: ExtensionAPI) {
-	const delivery = createDeferredResultDelivery();
-	let onTerminalTaskFinalized: TerminalTaskFinalizedHandler | undefined;
-	const backgroundTaskManager = installBackgroundTasks(pi, {
-		onTaskFinalized: (task) => onTerminalTaskFinalized?.(task),
-	});
-	const subagentManager = installSubagents(pi, delivery);
-	onTerminalTaskFinalized = installTerminalTools(pi, backgroundTaskManager, delivery);
-	return { backgroundTaskManager, subagentManager };
+	const terminalTaskManager = installBackgroundTasks(pi);
+	installTerminalTools(pi, terminalTaskManager);
+	const subagentManager = installSubagents(pi);
+	const activityBridge = installActivityManagerBridge(pi, terminalTaskManager, subagentManager);
+	return { terminalTaskManager, subagentManager, activityBridge };
 }
 
 function installRpcChildProfile(pi: ExtensionAPI): void {
@@ -221,17 +214,17 @@ function installRpcChildProfile(pi: ExtensionAPI): void {
 			systemPromptPatches: [
 				{
 					match: /\n\s*\n\s*in addition to the tools above, you may have access to other custom tools depending on the project\./i,
-					replace: "\n- task: only for skill runs. For delegation use subagent_spawn; for background commands use bg_start.",
+					replace: "\n- task: only for skill runs. For delegation use subagent_spawn; for background commands use terminal_start.",
 				},
 			],
 		})(pi);
 	}
 	installQuestionTool(pi);
 	installAnswerTool(pi);
-	const { backgroundTaskManager, subagentManager } = installOrchestrationTools(pi);
+	const { subagentManager } = installOrchestrationTools(pi);
 	installTaskModeAutoExit(pi);
 	registerSumoReloadCommand(pi);
-	installSumoInteractions(pi, { backgroundTaskManager, subagentManager, includeUiSurfaces: false });
+	installSumoInteractions(pi, { subagentManager, includeUiSurfaces: false });
 }
 
 /**
@@ -320,24 +313,24 @@ export default function sumocode(pi: ExtensionAPI): void {
 			systemPromptPatches: [
 				{
 					match: /\n\s*\n\s*in addition to the tools above, you may have access to other custom tools depending on the project\./i,
-					replace: "\n- task: only for skill runs. For delegation use subagent_spawn; for background commands use bg_start.",
+					replace: "\n- task: only for skill runs. For delegation use subagent_spawn; for background commands use terminal_start.",
 				},
 			],
 		})(pi);
 	}
 	installQuestionTool(pi);
 	installAnswerTool(pi);
-	const { backgroundTaskManager, subagentManager } = installOrchestrationTools(pi);
+	const { terminalTaskManager, subagentManager } = installOrchestrationTools(pi);
 	installTaskModeAutoExit(pi);
 
 	installWorkingIndicator(pi);
 	installCompactionIndicator(pi);
 	registerSumoReloadCommand(pi);
-	installSumoInteractions(pi, { backgroundTaskManager, subagentManager });
+	installSumoInteractions(pi, { subagentManager });
 	logDiagnostic("extension_activate_end", {
 		taskMode: isTaskMode(),
 		nativeTaskInstalled: shouldInstallNativeTaskTool({ force: process.env.SUMOCODE_NATIVE_TASK }),
-		hasBackgroundTasks: backgroundTaskManager !== undefined,
+		hasBackgroundTasks: terminalTaskManager !== undefined,
 		hasSubagents: subagentManager !== undefined,
 	});
 }

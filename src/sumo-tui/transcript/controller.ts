@@ -1,10 +1,15 @@
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
+import { safeValuePreview } from "../../activity/domain.js";
 import { measureMaybe, type ResumeProfiler, type ResumeProfileMetadata } from "../runtime/resume-profiler.js";
 import type { ChatPagerReplaceStats } from "../widgets/chat-pager.js";
 import {
+	appendOrFoldTranscriptMessage,
+	foldBlocksIntoMessages,
+	isFoldableBlock,
+} from "./activity-fold.js";
+import {
 	chatMessageViewModelFromPiMessage,
 	createTranscriptViewModelMapper,
-	type ChatBlock,
 	type ChatMessageViewModel,
 	type TranscriptViewModel,
 	type TranscriptViewModelMapper,
@@ -27,9 +32,11 @@ export interface TranscriptControllerLiveStateSnapshot {
 export interface TranscriptControllerChatSink {
 	replaceViewModels(messages: readonly ChatMessageViewModel[]): ChatPagerReplaceStats;
 	/** Append one new message to the end of the pager without touching scroll/read state. */
-	addViewModel(message: ChatMessageViewModel): unknown;
+	addViewModel(message: ChatMessageViewModel, sourceIndex?: number): unknown;
+	/** Replace one rendered transcript node in place (scroll/read state preserved). */
+	replaceViewModelAt(index: number, message: ChatMessageViewModel): unknown;
 	/** Replace the pager's current last message in place (scroll/read state preserved). */
-	replaceLastWithViewModel(message: ChatMessageViewModel): unknown;
+	replaceLastWithViewModel(message: ChatMessageViewModel, sourceIndex?: number): unknown;
 }
 
 export interface TranscriptControllerOptions {
@@ -79,12 +86,51 @@ function countUserMessages(messages: readonly unknown[]): number {
 	return messages.filter(isUserMessage).length;
 }
 
+function stableMessageId(message: unknown): string | undefined {
+	const record = asRecord(message);
+	const id = record?.id;
+	if (typeof id === "string" && id.length > 0) return `id:${id}`;
+	const role = record?.role;
+	const timestamp = record?.timestamp;
+	if (typeof role === "string" && (typeof timestamp === "number" || typeof timestamp === "string")) {
+		const toolCallId = typeof record?.toolCallId === "string" ? `:${record.toolCallId}` : "";
+		return `pi:${role}:${timestamp}${toolCallId}`;
+	}
+	return undefined;
+}
+
+function messagesEqual(left: unknown, right: unknown): boolean {
+	if (left === right) return true;
+	try {
+		return JSON.stringify(left) === JSON.stringify(right);
+	} catch {
+		return false;
+	}
+}
+
+function findCommittedMessageIndex(messages: readonly unknown[], message: unknown): number {
+	const id = stableMessageId(message);
+	for (let index = messages.length - 1; index >= 0; index -= 1) {
+		if (id ? stableMessageId(messages[index]) === id : messagesEqual(messages[index], message)) return index;
+	}
+	return -1;
+}
+
+function messageProgressScore(message: unknown): number {
+	try {
+		return JSON.stringify(message)?.length ?? 0;
+	} catch {
+		return 0;
+	}
+}
+
 function taskPartialFromEvent(event: unknown): TaskPartialUpdate | undefined {
 	const record = asRecord(event);
 	if (!record || record.type !== "tool_execution_update") return undefined;
 	if (record.toolName !== "task") return undefined;
 	if (record.partialResult === undefined) return undefined;
-	const toolCallId = typeof record.toolCallId === "string" ? record.toolCallId : "task";
+	const toolCallId = typeof record.toolCallId === "string" && record.toolCallId.length > 0 ? record.toolCallId : undefined;
+	if (!toolCallId) return undefined;
 	return {
 		toolCallId,
 		toolName: "task",
@@ -97,7 +143,10 @@ function liveToolExecutionFromEvent(event: unknown): LiveToolExecution | undefin
 	const record = asRecord(event);
 	if (!record || (record.type !== "tool_execution_start" && record.type !== "tool_execution_update" && record.type !== "tool_execution_end")) return undefined;
 	const toolName = typeof record.toolName === "string" && record.toolName.length > 0 ? record.toolName : "tool";
-	const toolCallId = typeof record.toolCallId === "string" && record.toolCallId.length > 0 ? record.toolCallId : toolName;
+	// Pi's AgentSessionEvent contract requires toolCallId:string on every tool execution event.
+	// Drop malformed unknown input rather than reintroducing name-only correlation collisions.
+	const toolCallId = typeof record.toolCallId === "string" && record.toolCallId.length > 0 ? record.toolCallId : undefined;
+	if (!toolCallId) return undefined;
 	const isEnd = record.type === "tool_execution_end";
 	const result = isEnd ? record.result : record.partialResult;
 	const resultRecord = asRecord(result);
@@ -149,139 +198,6 @@ function compactionSummaryMessageFromEvent(event: unknown): unknown | undefined 
 		summary: result.summary,
 		tokensBefore: result.tokensBefore,
 	};
-}
-
-function isToolBlock(block: ChatBlock): block is Extract<ChatBlock, { type: "tool" }> {
-	return block.type === "tool";
-}
-
-function isDelegationBlock(block: ChatBlock): block is Extract<ChatBlock, { type: "delegation" }> {
-	return block.type === "delegation";
-}
-
-function isFoldableBlock(block: ChatBlock): boolean {
-	return isToolBlock(block) || isDelegationBlock(block);
-}
-
-function isFoldableOnlyViewModel(message: ChatMessageViewModel): boolean {
-	return message.blocks.length > 0 && message.blocks.every(isFoldableBlock);
-}
-
-function matchingFoldableIndex(blocks: readonly ChatBlock[], incoming: ChatBlock): number {
-	if (incoming.type === "tool") {
-		const incomingId = incoming.tool.id;
-		if (incomingId) {
-			const byId = blocks.findIndex((block) => block.type === "tool" && block.tool.id === incomingId);
-			if (byId !== -1) return byId;
-		}
-		return blocks.findIndex((block) => block.type === "tool" && block.tool.id === undefined && incoming.tool.id === undefined && block.tool.name === incoming.tool.name && (block.tool.status === "pending" || block.tool.status === "running"));
-	}
-
-	if (incoming.type === "delegation") {
-		const incomingId = incoming.delegation.id;
-		if (incomingId) {
-			const byId = blocks.findIndex((block) => block.type === "delegation" && block.delegation.id === incomingId);
-			if (byId !== -1) return byId;
-			return -1;
-		}
-		return blocks.findIndex((block) => block.type === "delegation" && (block.delegation.status === "queued" || block.delegation.status === "running"));
-	}
-
-	return -1;
-}
-
-function mergeToolBlock(existing: Extract<ChatBlock, { type: "tool" }>, incoming: Extract<ChatBlock, { type: "tool" }>): ChatBlock {
-	return {
-		type: "tool",
-		tool: {
-			...existing.tool,
-			...incoming.tool,
-			input: incoming.tool.input ?? existing.tool.input,
-			output: incoming.tool.output ?? existing.tool.output,
-			details: incoming.tool.details ?? existing.tool.details,
-			error: incoming.tool.error ?? existing.tool.error,
-			expanded: incoming.tool.expanded ?? existing.tool.expanded,
-		},
-	};
-}
-
-function mergeDelegationBlock(existing: Extract<ChatBlock, { type: "delegation" }>, incoming: Extract<ChatBlock, { type: "delegation" }>): ChatBlock {
-	const incomingTitle = incoming.delegation.title;
-	const keepExistingTitle = existing.delegation.title !== "task" && (incomingTitle === "task" || incomingTitle === "delegation");
-	return {
-		type: "delegation",
-		delegation: {
-			...existing.delegation,
-			...incoming.delegation,
-			title: keepExistingTitle ? existing.delegation.title : incoming.delegation.title,
-			agent: incoming.delegation.agent ?? existing.delegation.agent,
-			model: incoming.delegation.model ?? existing.delegation.model,
-			thinking: incoming.delegation.thinking ?? existing.delegation.thinking,
-			nestedTools: (incoming.delegation.nestedTools?.length ?? 0) > 0 ? incoming.delegation.nestedTools : existing.delegation.nestedTools,
-			tokensIn: incoming.delegation.tokensIn ?? existing.delegation.tokensIn,
-			tokensOut: incoming.delegation.tokensOut ?? existing.delegation.tokensOut,
-			elapsedMs: incoming.delegation.elapsedMs ?? existing.delegation.elapsedMs,
-		},
-	};
-}
-
-function mergeFoldableBlock(existing: ChatBlock, incoming: ChatBlock): ChatBlock {
-	if (existing.type === "tool" && incoming.type === "tool") return mergeToolBlock(existing, incoming);
-	if (existing.type === "delegation" && incoming.type === "delegation") return mergeDelegationBlock(existing, incoming);
-	return incoming;
-}
-
-function upsertFoldableBlock(blocks: readonly ChatBlock[], incoming: ChatBlock): ChatBlock[] {
-	const index = matchingFoldableIndex(blocks, incoming);
-	if (index === -1) return [...blocks, incoming];
-	return blocks.map((block, blockIndex) => blockIndex === index ? mergeFoldableBlock(block, incoming) : block);
-}
-
-function findLastMessageIndex(messages: readonly ChatMessageViewModel[], predicate: (message: ChatMessageViewModel) => boolean): number {
-	for (let index = messages.length - 1; index >= 0; index -= 1) {
-		if (predicate(messages[index]!)) return index;
-	}
-	return -1;
-}
-
-function foldBlockIntoMessages(messages: readonly ChatMessageViewModel[], incoming: ChatBlock, options: { requireMatch: boolean }): { messages: ChatMessageViewModel[]; folded: boolean } {
-	const matchingMessageIndex = findLastMessageIndex(messages, (message) => message.role === "sumo" && matchingFoldableIndex(message.blocks, incoming) !== -1);
-	const fallbackIndex = options.requireMatch ? -1 : findLastMessageIndex(messages, (message) => message.role === "sumo");
-	const targetIndex = matchingMessageIndex !== -1 ? matchingMessageIndex : fallbackIndex;
-	if (targetIndex === -1) {
-		if (options.requireMatch) return { messages: [...messages], folded: false };
-		return {
-			messages: [...messages, { id: `live-foldable-${foldableBlockId(incoming)}`, role: "sumo", displayName: "SUMO", blocks: [incoming] }],
-			folded: true,
-		};
-	}
-	return {
-		messages: messages.map((message, index) => index === targetIndex ? { ...message, blocks: upsertFoldableBlock(message.blocks, incoming) } : message),
-		folded: true,
-	};
-}
-
-function foldableBlockId(block: ChatBlock): string {
-	if (block.type === "tool") return block.tool.id ?? block.tool.name;
-	if (block.type === "delegation") return block.delegation.id ?? block.delegation.title;
-	return "block";
-}
-
-function foldBlocksIntoMessages(messages: readonly ChatMessageViewModel[], blocks: readonly ChatBlock[], options: { requireMatch: boolean }): { messages: ChatMessageViewModel[]; folded: boolean } {
-	let next = [...messages];
-	let foldedAny = false;
-	for (const block of blocks) {
-		const result = foldBlockIntoMessages(next, block, options);
-		if (!result.folded && options.requireMatch) return { messages: [...messages], folded: false };
-		next = result.messages;
-		foldedAny = result.folded || foldedAny;
-	}
-	return { messages: next, folded: foldedAny };
-}
-
-function foldableBlocksFromCommittedMessage(message: ChatMessageViewModel): ChatBlock[] | undefined {
-	if (message.role !== "system") return undefined;
-	return isFoldableOnlyViewModel(message) ? [...message.blocks] : undefined;
 }
 
 function fallbackReplaceStats(transcript: TranscriptViewModel): ChatPagerReplaceStats {
@@ -383,23 +299,48 @@ export class TranscriptController {
 		const taskPartial = taskPartialFromEvent(record);
 		if (taskPartial) this.taskPartials.set(taskPartial.toolCallId, taskPartial);
 		const liveTool = liveToolExecutionFromEvent(record);
-		if (liveTool) this.liveTools.set(liveTool.toolCallId, liveTool);
+		if (liveTool) {
+			const existing = this.liveTools.get(liveTool.toolCallId);
+			if (!existing || existing.status === "running" || liveTool.status !== "running") {
+				this.liveTools.set(liveTool.toolCallId, liveTool);
+			}
+		}
 
 		switch (record.type) {
 			case "agent_start":
 				this.currentRunStartIndex = this.committedMessages.length;
 				break;
 			case "message_start":
-			case "message_update":
+			case "message_update": {
 				this.pendingChatOp = "incremental";
-				this.draftMessage = eventMessage(record);
-				if (asRecord(this.draftMessage)?.role === "user") this.options.noteUserMessage?.();
+				const message = eventMessage(record);
+				const hydratedIndex = stableMessageId(message) ? findCommittedMessageIndex(this.committedMessages, message) : -1;
+				if (hydratedIndex >= 0) {
+					// Session hydration may already contain a buffered update. Upsert by
+					// stable message ID instead of rendering the same message as a draft;
+					// never regress a more advanced hydrated partial on the bounded
+					// continuously-streaming fallback pass.
+					if (messageProgressScore(message) >= messageProgressScore(this.committedMessages[hydratedIndex])) {
+						this.committedMessages[hydratedIndex] = message;
+						this.invalidateCommittedCache();
+					}
+					this.draftMessage = undefined;
+				} else {
+					this.draftMessage = message;
+				}
+				if (asRecord(message)?.role === "user") this.options.noteUserMessage?.();
 				break;
+			}
 			case "message_end": {
 				this.pendingChatOp = "incremental";
 				const message = eventMessage(record);
 				if (message !== undefined) {
-					this.committedMessages.push(message);
+					const hydratedIndex = findCommittedMessageIndex(this.committedMessages, message);
+					if (hydratedIndex >= 0) {
+						this.committedMessages[hydratedIndex] = message;
+					} else {
+						this.committedMessages.push(message);
+					}
 					this.invalidateCommittedCache();
 				}
 				this.draftMessage = undefined;
@@ -431,8 +372,32 @@ export class TranscriptController {
 					// never emits its own `message_end` while streaming (pi-coding-agent
 					// dist/core/agent-session.js:988-1004). Pinned by the "mid-run
 					// follow-up" test in controller.test.ts.
-					const runStart = this.currentRunStartIndex ?? this.committedMessages.length;
-					this.committedMessages = [...this.committedMessages.slice(0, runStart), ...messages];
+					const hydratedRunStart = messages.length > 0
+						? findCommittedMessageIndex(this.committedMessages, messages[0])
+						: -1;
+					const runWasAlreadyHydrated = hydratedRunStart >= 0 && (
+						this.currentRunStartIndex === undefined || hydratedRunStart < this.currentRunStartIndex
+					);
+					if (runWasAlreadyHydrated && this.currentRunStartIndex !== undefined) {
+						// A replayed agent_start pointed after a run already in hydration.
+						// Reconcile from the hydrated boundary and force one safe full sink
+						// replacement instead of treating the earlier rewrite as incremental.
+						this.lastPublishedToChat = undefined;
+					}
+					const runStart = runWasAlreadyHydrated
+						? hydratedRunStart
+						: this.currentRunStartIndex ?? this.committedMessages.length;
+					let hydratedOverlap = 0;
+					if (runWasAlreadyHydrated) {
+						while (
+							hydratedOverlap < messages.length
+							&& findCommittedMessageIndex([this.committedMessages[runStart + hydratedOverlap]], messages[hydratedOverlap]) === 0
+						) hydratedOverlap += 1;
+					}
+					const hydratedSuffix = runWasAlreadyHydrated
+						? this.committedMessages.slice(runStart + hydratedOverlap)
+						: [];
+					this.committedMessages = [...this.committedMessages.slice(0, runStart), ...messages, ...hydratedSuffix];
 					this.invalidateCommittedCache();
 				}
 				this.currentRunStartIndex = undefined;
@@ -448,7 +413,9 @@ export class TranscriptController {
 				this.options.setCompactionReason?.(null);
 				const summary = compactionSummaryMessageFromEvent(record);
 				if (summary) {
-					this.committedMessages.push(summary);
+					const hydratedIndex = findCommittedMessageIndex(this.committedMessages, summary);
+					if (hydratedIndex >= 0) this.committedMessages[hydratedIndex] = summary;
+					else this.committedMessages.push(summary);
 					this.invalidateCommittedCache();
 				}
 				break;
@@ -462,16 +429,7 @@ export class TranscriptController {
 		let messages = [...this.ensureCommittedViewModels()];
 		if (this.draftMessage !== undefined) {
 			const message = this.mapper.messageFromPiMessage(this.draftMessage, messages.length);
-			if (message) {
-				const foldableBlocks = foldableBlocksFromCommittedMessage(message);
-				if (foldableBlocks) {
-					const folded = foldBlocksIntoMessages(messages, foldableBlocks, { requireMatch: true });
-					if (folded.folded) messages = folded.messages;
-					else messages.push(message);
-				} else {
-					messages.push(message);
-				}
-			}
+			if (message) messages = appendOrFoldTranscriptMessage(messages, message);
 		}
 
 		for (const liveTool of this.liveTools.values()) {
@@ -480,7 +438,6 @@ export class TranscriptController {
 			const folded = foldBlocksIntoMessages(messages, blocks, { requireMatch: false });
 			messages = folded.messages;
 		}
-
 		return { messages };
 	}
 
@@ -530,15 +487,7 @@ export class TranscriptController {
 		for (const sourceMessage of this.committedMessages) {
 			const message = this.mapper.messageFromPiMessage(sourceMessage, messages.length);
 			if (!message) continue;
-			const foldableBlocks = foldableBlocksFromCommittedMessage(message);
-			if (foldableBlocks) {
-				const folded = foldBlocksIntoMessages(messages, foldableBlocks, { requireMatch: true });
-				if (folded.folded) {
-					messages = folded.messages;
-					continue;
-				}
-			}
-			messages.push(message);
+			messages = appendOrFoldTranscriptMessage(messages, message);
 		}
 		this.committedViewModelCache = messages;
 		return this.committedViewModelCache;
@@ -592,23 +541,19 @@ export class TranscriptController {
 	 * rendered id/role/blocks instead, which is cheap (no ANSI rendering) and
 	 * stable for a message whose content truly did not change:
 	 *
-	 *   - same length, only the LAST entry's content differs, everything
-	 *     before is content-identical -> `replaceLastWithViewModel(next[last])`
-	 *     (the common `message_update` streaming-delta case, and the common
-	 *     `message_end` case where the committed message renders the same as
-	 *     the draft it replaced).
-	 *   - next is exactly one longer, and every one of the previous messages
-	 *     is still content-identical at the same index -> optionally
-	 *     replace-last (if the old last message's content also changed) then
-	 *     `addViewModel(next[newLast])` (a fresh message started after the
-	 *     previous one finished).
-	 *   - anything else (an earlier message changed, or the array shrank, or
-	 *     more than one message changed under a length that isn't `+1`) means
-	 *     history was actually rewritten (e.g. agent_end's run-suffix splice
-	 *     changing an already-committed entry's rendered content, or
-	 *     live-tool folding touching a message that isn't the last one) ->
-	 *     fall back to a full `replaceViewModels`, the only operation that can
-	 *     express an arbitrary rewrite.
+	 *   - same source slots and length -> replace every changed retained node;
+	 *     the last entry keeps the O(1) `replaceLastWithViewModel` fast path,
+	 *     while folded Activities at any earlier indices use `replaceViewModelAt`.
+	 *   - next is exactly one longer -> apply every targeted shared-slot update,
+	 *     then append the new message.
+	 *   - array shrinkage, growth by more than one, or a changed source ID means
+	 *     history was actually rewritten -> fall back to a full
+	 *     `replaceViewModels`, the only operation that can express it safely.
+	 *
+	 * One subagent_wait progress event can update its own operation plus several
+	 * canonical spawn cards at different message indices. Treating multiple
+	 * changed slots as a rewrite would dispose the pager and lose scroll/unread
+	 * state; the ordered replacement batch preserves each retained node.
 	 *
 	 * The very first publish (no prior `lastPublishedToChat`) always falls
 	 * back to a full replace too, since there is nothing to diff against yet.
@@ -634,8 +579,17 @@ export class TranscriptController {
 			return;
 		}
 		for (const operation of operations) {
-			if (operation.kind === "replace-last") chat.replaceLastWithViewModel(operation.message);
-			else chat.addViewModel(operation.message);
+			const applied = operation.kind === "replace-last"
+				? chat.replaceLastWithViewModel(operation.message, operation.index)
+				: operation.kind === "replace"
+					? chat.replaceViewModelAt(operation.index, operation.message)
+					: chat.addViewModel(operation.message, operation.index);
+			if (applied === false) {
+				chat.replaceViewModels(next);
+				this.lastPublishedToChat = next;
+				this.options.scheduleRender?.();
+				return;
+			}
 		}
 		this.lastPublishedToChat = next;
 		if (operations.length > 0) this.options.scheduleRender?.();
@@ -643,33 +597,23 @@ export class TranscriptController {
 }
 
 export type ChatDiffOperation =
-	| { readonly kind: "replace-last"; readonly message: ChatMessageViewModel }
-	| { readonly kind: "append"; readonly message: ChatMessageViewModel };
+	| { readonly kind: "replace"; readonly index: number; readonly message: ChatMessageViewModel }
+	| { readonly kind: "replace-last"; readonly index: number; readonly message: ChatMessageViewModel }
+	| { readonly kind: "append"; readonly index: number; readonly message: ChatMessageViewModel };
 
 function planHintedIncrementalChatDiff(
 	previous: readonly ChatMessageViewModel[],
 	next: readonly ChatMessageViewModel[],
 ): ChatDiffOperation[] | undefined {
-	const lengthDelta = next.length - previous.length;
-	if (lengthDelta === 0) {
-		if (next.length === 0) return [];
-		const last = next[next.length - 1]!;
-		if (messageContentKey(last) === messageContentKey(previous[previous.length - 1])) return [];
-		return [{ kind: "replace-last", message: last }];
-	}
-
-	if (lengthDelta === 1) {
-		const operations: ChatDiffOperation[] = [];
-		const previousLast = previous[previous.length - 1];
-		const stillPreviousLast = previousLast === undefined ? undefined : next[previous.length - 1];
-		if (previousLast !== undefined && messageContentKey(stillPreviousLast) !== messageContentKey(previousLast)) {
-			operations.push({ kind: "replace-last", message: stillPreviousLast! });
-		}
-		operations.push({ kind: "append", message: next[next.length - 1]! });
-		return operations;
-	}
-
-	return undefined;
+	if (next.length !== previous.length) return undefined;
+	if (next.length === 0) return [];
+	const last = next[next.length - 1]!;
+	// A plain changed boundary is the common streaming-delta case and is safe to
+	// plan in O(1). Foldable blocks can also mutate canonical cards earlier in
+	// the transcript, so they must use the complete targeted batch planner.
+	if (last.blocks.some(isFoldableBlock)) return undefined;
+	if (messageContentKey(last) === messageContentKey(previous[previous.length - 1])) return undefined;
+	return [{ kind: "replace-last", index: next.length - 1, message: last }];
 }
 
 /**
@@ -682,36 +626,27 @@ export function planChatDiff(
 	previous: readonly ChatMessageViewModel[],
 	next: readonly ChatMessageViewModel[],
 ): ChatDiffOperation[] | undefined {
-	if (next.length === previous.length) {
-		if (next.length === 0) return [];
-		if (!sameContentExceptLast(previous, next)) return undefined;
-		const last = next[next.length - 1]!;
-		if (messageContentKey(last) === messageContentKey(previous[previous.length - 1])) return [];
-		return [{ kind: "replace-last", message: last }];
+	if (next.length !== previous.length && next.length !== previous.length + 1) return undefined;
+	const sharedLength = previous.length;
+	const changedIndices: number[] = [];
+	for (let index = 0; index < sharedLength; index += 1) {
+		const before = previous[index];
+		const after = next[index];
+		// Source-index replacement owns the existing retained node. A different
+		// message ID means slots shifted or history was rewritten, so only a full
+		// pager replacement can safely reconcile ownership.
+		if (!before || !after || before.id !== after.id) return undefined;
+		if (messageContentKey(before) !== messageContentKey(after)) changedIndices.push(index);
 	}
 
-	if (next.length === previous.length + 1) {
-		if (!sameContentExceptLast(previous, next.slice(0, previous.length))) return undefined;
-		const operations: ChatDiffOperation[] = [];
-		const previousLast = previous[previous.length - 1];
-		const stillPreviousLast = previousLast === undefined ? undefined : next[previous.length - 1];
-		if (previousLast !== undefined && messageContentKey(stillPreviousLast) !== messageContentKey(previousLast)) {
-			operations.push({ kind: "replace-last", message: stillPreviousLast! });
-		}
-		operations.push({ kind: "append", message: next[next.length - 1]! });
-		return operations;
-	}
-
-	return undefined;
-}
-
-/** True when every index except the last renders identically between the two arrays (which must be the same length). */
-function sameContentExceptLast(previous: readonly ChatMessageViewModel[], next: readonly ChatMessageViewModel[]): boolean {
-	if (previous.length !== next.length) return false;
-	for (let index = 0; index < previous.length - 1; index += 1) {
-		if (messageContentKey(previous[index]) !== messageContentKey(next[index])) return false;
-	}
-	return true;
+	const operations: ChatDiffOperation[] = changedIndices.map((changedIndex) => {
+		const message = next[changedIndex]!;
+		return changedIndex === next.length - 1
+			? { kind: "replace-last" as const, index: changedIndex, message }
+			: { kind: "replace" as const, index: changedIndex, message };
+	});
+	if (next.length === previous.length + 1) operations.push({ kind: "append", index: next.length - 1, message: next[next.length - 1]! });
+	return operations;
 }
 
 /**
@@ -725,11 +660,31 @@ function sameContentExceptLast(previous: readonly ChatMessageViewModel[], next: 
  * unchanged even if the committed-message remap (see `diffAndApplyToChat`'s doc
  * comment) gave them a new object identity.
  */
+function stringifyContentKey(value: unknown): string {
+	const seen = new WeakSet<object>();
+	try {
+		return JSON.stringify(value, (_key, current: unknown) => {
+			if (typeof current === "bigint") return `${current.toString()}n`;
+			if (typeof current !== "object" || current === null) return current;
+			if (seen.has(current)) return "[Circular]";
+			seen.add(current);
+			return current;
+		}) ?? "";
+	} catch {
+		return safeValuePreview(value, {
+			maxChars: 100_000,
+			maxDepth: 20,
+			maxEntries: 10_000,
+			maxStringChars: 100_000,
+		});
+	}
+}
+
 function messageContentKey(message: ChatMessageViewModel | undefined): string {
 	if (!message) return "";
 	const cached = messageContentKeyCache.get(message);
 	if (cached !== undefined) return cached;
-	const key = JSON.stringify([message.id, message.role, message.timestamp?.getTime() ?? null, message.blocks]);
+	const key = stringifyContentKey([message.id, message.role, message.timestamp?.getTime() ?? null, message.blocks]);
 	messageContentKeyCache.set(message, key);
 	messageContentKeyCacheMisses += 1;
 	return key;

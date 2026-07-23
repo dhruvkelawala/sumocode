@@ -49,6 +49,7 @@ export interface SubagentPaneRef {
 
 export interface SubagentSnapshot {
 	readonly id: string;
+	readonly sourceId?: string;
 	readonly title: string;
 	readonly prompt: string;
 	readonly cwd: string;
@@ -61,6 +62,7 @@ export interface SubagentSnapshot {
 	readonly settledAt?: number;
 	readonly errorText?: string;
 	readonly modelLabel?: string;
+	readonly thinkingLabel?: string;
 	readonly sessionFilePath?: string;
 	readonly manifest?: CompletionManifestEvidence;
 	readonly usage: { tokens?: number; contextWindow?: number; costUsd?: number; turns: number };

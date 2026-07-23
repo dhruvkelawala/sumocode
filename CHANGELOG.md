@@ -45,6 +45,12 @@ landed between the original scaffold and this release.
   provenance, and `pnpm runcat:install` / `pnpm runcat:check` setup helpers.
 
 ### Changed
+- **Terminal API v2 migration** — callable background terminals are now
+  `terminal_start/check/wait/stop/list`, with durable passive-by-default
+  completion and hardened process-tree ownership. Private `sumocode-config`
+  prompts, skills, settings, or scripts that still mention `bg_start`,
+  `bg_status`, `bg_kill`, `bg_list`, or `/bg` must be migrated separately;
+  this public release intentionally does not edit the private config repo.
 - **Theme-aware terminal background/cursor** — the host terminal's OSC 11
   background and OSC 12 cursor accent now follow the active theme at startup,
   on live theme switches, and across suspend/resume, instead of being

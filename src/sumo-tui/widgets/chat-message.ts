@@ -9,8 +9,8 @@ import { lineToAnsi, plainLine, span, splitGraphemes, textLine, wrapLine, type S
 import { renderCathedralCodeBlock } from "../transcript/code-renderer.js";
 import { expandKey } from "../transcript/expand-key.js";
 import { cathedralMarkdownTheme } from "../transcript/markdown-theme.js";
+import { renderActivityBlockRows } from "../transcript/activity-renderer.js";
 import { renderScrollBlock } from "../transcript/scroll-renderer.js";
-import { renderToolBlockRows } from "../transcript/tool-renderer.js";
 import type { ChatBlock } from "../transcript/view-model.js";
 
 export type ChatMessageRole = "user" | "sumo" | "system" | "tool" | string;
@@ -247,7 +247,7 @@ function renderMarkdownRows(text: string, width: number): string[] {
 	return lines.length > 0 ? lines : [""];
 }
 
-function renderBlockRows(blocks: readonly ChatBlock[], width: number): string[] {
+function renderBlockRows(blocks: readonly ChatBlock[], width: number, activityExpansion: ReadonlyMap<string, boolean>): string[] {
 	const rows: string[] = [];
 	for (const block of blocks) {
 		if (rows.length > 0) rows.push("");
@@ -265,8 +265,8 @@ function renderBlockRows(blocks: readonly ChatBlock[], width: number): string[] 
 			case "image":
 				rows.push(...renderImageRows(block, width));
 				break;
-			case "tool":
-				rows.push(...renderToolBlockRows(block.tool, width));
+			case "activity":
+				rows.push(...renderActivityBlockRows(block.activity, width, { expanded: activityExpansion.get(block.activity.id) }));
 				break;
 			case "skill":
 				rows.push(...renderSkillRows(block, width));
@@ -288,6 +288,7 @@ function renderBlockRows(blocks: readonly ChatBlock[], width: number): string[] 
 /** One V2 framed chat message. */
 export class ChatMessage extends SumoNode {
 	private timestampValue: Date;
+	private readonly activityExpansion = new Map<string, boolean>();
 	private measuring = false;
 	private lastMeasure: ChatMessageMeasure = { width: 0, height: 1 };
 
@@ -355,17 +356,48 @@ export class ChatMessage extends SumoNode {
 		this.invalidateRenderCache();
 	}
 
-	public setToolExpansion(expanded: boolean): boolean {
-		const expandable = (block: ChatBlock): boolean => block.type === "tool" || block.type === "skill" || block.type === "summary";
-		if (!this.blocks?.some(expandable)) return false;
-		this.blocks = this.blocks.map((block) => {
-			if (block.type === "tool") return { ...block, tool: { ...block.tool, expanded } };
-			if (block.type === "skill") return { ...block, expanded };
-			if (block.type === "summary") return { ...block, expanded };
-			return block;
-		});
+	public getActivityExpansion(id: string): boolean | undefined {
+		return this.activityExpansion.get(id);
+	}
+
+	/** Presentation-only state: ActivitySnapshot remains producer-owned and immutable. */
+	public setActivityExpansion(id: string, expanded: boolean): boolean {
+		if (!this.blocks?.some((block) => block.type === "activity" && block.activity.id === id)) return false;
+		if (this.activityExpansion.get(id) === expanded) return false;
+		this.activityExpansion.set(id, expanded);
 		this.invalidateRenderCache();
 		return true;
+	}
+
+	public setActivityExpansions(states: ReadonlyMap<string, boolean>): boolean {
+		let changed = false;
+		for (const block of this.blocks ?? []) {
+			if (block.type !== "activity") continue;
+			const expanded = states.get(block.activity.id);
+			if (expanded === undefined || this.activityExpansion.get(block.activity.id) === expanded) continue;
+			this.activityExpansion.set(block.activity.id, expanded);
+			changed = true;
+		}
+		if (changed) this.invalidateRenderCache();
+		return changed;
+	}
+
+	/** Compatibility bridge for non-Activity collapsible blocks. */
+	public setToolExpansion(expanded: boolean): boolean {
+		let changed = false;
+		for (const block of this.blocks ?? []) {
+			if (block.type === "activity") changed = this.setActivityExpansion(block.activity.id, expanded) || changed;
+		}
+		const expandable = (block: ChatBlock): boolean => block.type === "skill" || block.type === "summary";
+		if (this.blocks?.some(expandable)) {
+			this.blocks = this.blocks.map((block) => {
+				if (block.type === "skill" || block.type === "summary") return { ...block, expanded };
+				return block;
+			});
+			this.invalidateRenderCache();
+			changed = true;
+		}
+		return changed;
 	}
 
 	public appendText(chunk: string): void {
@@ -498,7 +530,7 @@ export class ChatMessage extends SumoNode {
 		if (renderWidth < MIN_BOX_WIDTH) return [fitCellText(this.text, renderWidth)];
 
 		const bodyWidth = Math.max(1, renderWidth - 4);
-		const bodyRows = this.blocks ? renderBlockRows(this.blocks, bodyWidth) : wrapPlainText(this.text, bodyWidth);
+		const bodyRows = this.blocks ? renderBlockRows(this.blocks, bodyWidth, this.activityExpansion) : wrapPlainText(this.text, bodyWidth);
 		return [
 			frameTop(this.role, this.timestamp, renderWidth, this.options.primaryAgentName),
 			...bodyRows.map((row) => frameBody(row, renderWidth)),

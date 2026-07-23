@@ -1,13 +1,10 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { activityFromSubagentSnapshot } from "../activity/subagent-adapter.js";
 import { BUILT_IN_TOOLS, getBuiltInToolsFromActiveTools } from "../native-task-config.js";
 import { getTerminalHost } from "../terminal-host/index.js";
 import { spawnPaneChild } from "./backend-pane.js";
 import { spawnPiChild } from "./backend-pi.js";
-import {
-	createDeferredResultDelivery,
-	type DeferredResultDelivery,
-	type DeliveryPayload,
-} from "./delivery.js";
+import { createDeferredResultDelivery, type DeliveryPayload } from "./delivery.js";
 import type { SubagentSnapshot } from "./domain.js";
 import { SubagentManager } from "./manager.js";
 import { buildSubagentResultMessage } from "./prompt.js";
@@ -15,13 +12,6 @@ import { registerSubagentTools } from "./tools.js";
 
 export { SubagentManager } from "./manager.js";
 export type { AtCapacityDetails, SpawnSubagentTask } from "./manager.js";
-
-const deliveryFlushers = new WeakMap<DeferredResultDelivery, () => void>();
-
-/** Request the shared 066 flusher after an external producer defers a result. */
-export function flushDeferredResultDelivery(delivery: DeferredResultDelivery): void {
-	deliveryFlushers.get(delivery)?.();
-}
 
 const settledPayload = (snapshot: SubagentSnapshot): DeliveryPayload => {
 	const result = buildSubagentResultMessage({
@@ -38,7 +28,6 @@ const settledPayload = (snapshot: SubagentSnapshot): DeliveryPayload => {
 		: undefined;
 	return {
 		id: snapshot.id,
-		customType: "subagent-result",
 		title: snapshot.title,
 		status: snapshot.status,
 		content: paneLine ? `${result}\n\n${paneLine}` : result,
@@ -46,16 +35,14 @@ const settledPayload = (snapshot: SubagentSnapshot): DeliveryPayload => {
 			id: snapshot.id,
 			title: snapshot.title,
 			status: snapshot.status,
+			activity: activityFromSubagentSnapshot(snapshot),
 			manifest: snapshot.manifest,
 			...(snapshot.pane ? { pane: snapshot.pane } : {}),
 		},
 	};
 };
 
-export function installSubagents(
-	pi: ExtensionAPI,
-	sharedDelivery?: DeferredResultDelivery,
-): SubagentManager {
+export function installSubagents(pi: ExtensionAPI): SubagentManager {
 	const host = getTerminalHost();
 	const manager = new SubagentManager((task) => {
 		if (task.visible) {
@@ -73,7 +60,7 @@ export function installSubagents(
 			// forwarding the parent's full built-in set would strip the child's
 			// extension tools for nothing. Only a NARROWED parent narrows the
 			// child (fail-closed: the restricted child also loses extension tools,
-			// which is the conservative direction — extension tools like bg_start
+			// which is the conservative direction — extension tools like terminal_start
 			// are shell-execution escapes a --tools read parent must not grant).
 			const paneBuiltIn = getBuiltInToolsFromActiveTools([...(task.builtInTools ?? [])]);
 			// Derived from the canonical list: a literal count would fail OPEN if
@@ -110,8 +97,7 @@ export function installSubagents(
 			signal: task.signal,
 		});
 	}, { terminalHost: host, pi });
-	const ownsDelivery = sharedDelivery === undefined;
-	const delivery = sharedDelivery ?? createDeferredResultDelivery();
+	const delivery = createDeferredResultDelivery();
 	const observedSettledIds = new Set<string>();
 	let latestContext: ExtensionContext | undefined;
 	let unsubscribe: (() => void) | undefined;
@@ -120,7 +106,7 @@ export function installSubagents(
 		for (const payload of delivery.drain()) {
 			pi.sendMessage(
 				{
-					customType: payload.customType ?? "subagent-result",
+					customType: "subagent-result",
 					content: payload.content,
 					display: true,
 					details: payload.details,
@@ -129,10 +115,6 @@ export function installSubagents(
 			);
 		}
 	};
-
-	deliveryFlushers.set(delivery, () => {
-		if (latestContext?.isIdle()) flush();
-	});
 
 	const onManagerChange = (): void => {
 		for (const snapshot of manager.list()) {
@@ -154,14 +136,11 @@ export function installSubagents(
 	};
 
 	/**
-	 * (Re)arm the delivery listener. session_shutdown fires for in-process
-	 * session switches (/new, /resume, /fork) too — the extension instance and
-	 * its tools SURVIVE those, so a one-shot unsubscribe would silently kill
-	 * auto-delivery for the rest of the process lifetime. On every
-	 * session_start we re-subscribe, and first mark every snapshot that
-	 * already exists as observed+consumed so settlements belonging to the
-	 * PREVIOUS session (e.g. children interrupted during the switch, folding
-	 * after shutdown) are never delivered into the new session as stale noise.
+	 * Arm the delivery listener for this factory instance. Pi 0.80.6 recreates
+	 * extension factories for /new, /resume, and /fork; RPC mode may still bind
+	 * session_start more than once on the new instance, so this remains
+	 * idempotent. Mark pre-existing snapshots consumed so a repeated bind cannot
+	 * deliver stale settlement noise into the active session.
 	 */
 	const armDelivery = (): void => {
 		if (unsubscribe) return;
@@ -184,27 +163,19 @@ export function installSubagents(
 		latestContext = ctx;
 		flush();
 	});
-	// CONSCIOUS DIVERGENCE from background-tasks' reason-gated shutdown
-	// (background-task-tool.ts:61-74): bg_task may leave children running on
-	// /reload,/new,/fork because it recovers them from on-disk meta.json.
+	// CONSCIOUS DIVERGENCE from durable terminal shutdown: terminal tasks
+	// detach their replaced manager and leave children running across
+	// /reload,/new,/resume,/fork because the next manager adopts on-disk state.
 	// Subagents have NO persistent registry (durable reattach is a recorded
 	// deferral in plan 065) — a child surviving a reload would be an orphaned,
 	// unsupervised pi process nobody can harvest, steer, or stop, which is
 	// worse than losing in-flight work. Kill on EVERY shutdown until a durable
-	// registry exists; when it does, adopt the same reason gating as bg_task.
+	// registry exists; when it does, adopt the terminal lifecycle model.
 	pi.on("session_shutdown", () => {
 		latestContext = undefined;
 		unsubscribe?.();
 		unsubscribe = undefined;
-		if (ownsDelivery) {
-			delivery.clear();
-		} else {
-			// A shared buffer may hold durable terminal completions. Drop stale
-			// subagent payloads at the session boundary without erasing terminals.
-			const terminalPayloads = delivery.drain().filter((payload) => payload.customType === "terminal-result");
-			delivery.clear();
-			for (const payload of terminalPayloads) delivery.defer(payload.id, () => payload);
-		}
+		delivery.clear();
 		manager.disposeAll();
 	});
 	return manager;

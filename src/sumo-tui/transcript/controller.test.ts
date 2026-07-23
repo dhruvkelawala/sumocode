@@ -140,6 +140,20 @@ describe("TranscriptController agent_end reconciliation", () => {
 		expect(transcript.messages.map((m) => m.id)).toEqual(["fresh", "reply"]);
 	});
 
+	it("upserts a buffered hydration suffix already present in the message snapshot", () => {
+		const controller = new TranscriptController();
+		const user = { id: "hydrated-user", role: "user", content: "question" };
+		const assistant = { id: "hydrated-assistant", role: "assistant", content: "answer" };
+		controller.replaceFromMessages([user, assistant]);
+
+		controller.handleAgentEvent({ type: "agent_start" });
+		controller.handleAgentEvent({ type: "message_update", message: assistant });
+		controller.handleAgentEvent({ type: "message_end", message: assistant });
+		const transcript = controller.handleAgentEvent({ type: "agent_end", messages: [user, assistant] });
+
+		expect(transcript.messages.map((message) => message.id)).toEqual(["hydrated-user", "hydrated-assistant"]);
+	});
+
 	it("reconciles even without a preceding agent_start by appending after existing committed history", () => {
 		const controller = new TranscriptController();
 		controller.replaceFromMessages([{ id: "old", role: "user", content: "old session" }]);
@@ -181,6 +195,258 @@ describe("TranscriptController agent_end reconciliation", () => {
 		});
 
 		expect(transcript.messages.at(-1)?.blocks).toContainEqual({ type: "markdown", text: expectedHint });
+	});
+});
+
+describe("TranscriptController Activity folding", () => {
+	it("keeps simultaneous same-name tools distinct and folds each result by stable ID", () => {
+		const controller = new TranscriptController();
+		const transcript = controller.replaceFromMessages([
+			{
+				id: "assistant-tools",
+				role: "assistant",
+				content: [
+					{ type: "toolCall", id: "read-a", name: "read", arguments: { path: "a.ts" } },
+					{ type: "toolCall", id: "read-b", name: "read", arguments: { path: "b.ts" } },
+				],
+			},
+			{ role: "toolResult", toolCallId: "read-a", toolName: "read", content: [{ type: "text", text: "alpha" }] },
+			{ role: "toolResult", toolCallId: "read-b", toolName: "read", content: [{ type: "text", text: "beta" }] },
+		]);
+
+		const activities = transcript.messages.flatMap((message) => message.blocks).filter((block) => block.type === "activity");
+		expect(transcript.messages).toHaveLength(1);
+		expect(activities).toHaveLength(2);
+		expect(activities.map((block) => block.activity.id)).toEqual(["read-a", "read-b"]);
+		expect(activities.map((block) => block.activity.outputTail)).toEqual(["alpha", "beta"]);
+	});
+
+	it("folds an image-bearing tool result into one Activity and one deduplicated sibling image", () => {
+		const controller = new TranscriptController();
+		controller.replaceFromMessages([{
+			id: "assistant-tools",
+			role: "assistant",
+			content: [{ type: "toolCall", id: "read-image", name: "read", arguments: { path: "shot.png" } }],
+		}]);
+		const result = {
+			role: "toolResult",
+			toolCallId: "read-image",
+			toolName: "read",
+			content: [
+				{ type: "text", text: "Read image file [image/png]" },
+				{ type: "image", data: "iVBORw0KGgo=", mimeType: "image/png", filename: "shot.png" },
+			],
+		};
+
+		controller.handleAgentEvent({ type: "message_start", message: result });
+		const transcript = controller.handleAgentEvent({ type: "message_update", message: result });
+
+		expect(transcript.messages).toHaveLength(1);
+		expect(transcript.messages[0]?.blocks.filter((block) => block.type === "activity")).toHaveLength(1);
+		expect(transcript.messages[0]?.blocks.filter((block) => block.type === "image")).toEqual([
+			{ type: "image", data: "iVBORw0KGgo=", mime: "image/png", filename: "shot.png" },
+		]);
+	});
+
+	it("does not regress a live Activity after a terminal event", () => {
+		const controller = new TranscriptController();
+		controller.handleAgentEvent({ type: "message_start", message: { id: "assistant", role: "assistant", content: [] } });
+		controller.handleAgentEvent({
+			type: "tool_execution_end",
+			toolCallId: "read-1",
+			toolName: "read",
+			args: { path: "a.ts" },
+			result: { content: [{ type: "text", text: "final" }] },
+			isError: false,
+		});
+		const regressed = controller.handleAgentEvent({
+			type: "tool_execution_update",
+			toolCallId: "read-1",
+			toolName: "read",
+			args: { path: "a.ts" },
+			partialResult: { content: [] },
+		});
+
+		const block = regressed.messages.flatMap((message) => message.blocks).find((candidate) => candidate.type === "activity");
+		expect(block).toMatchObject({ type: "activity", activity: { id: "read-1", status: "succeeded", outputTail: "final", body: { text: "final" } } });
+	});
+
+	it("keeps a live spawn result canonical and running before folding its final result", () => {
+		const running = {
+			id: "subagent:sa-live",
+			sourceId: "spawn-live",
+			kind: "subagent",
+			title: "review live auth",
+			status: "running",
+			invocation: { prompt: "Review live auth" },
+		};
+		const spawnCall = { type: "toolCall", id: "spawn-live", name: "subagent_spawn", arguments: { prompt: "Review live auth", name: "review live auth" } };
+		const controller = new TranscriptController();
+		controller.handleAgentEvent({ type: "message_start", message: { id: "assistant-live", role: "assistant", content: [spawnCall] } });
+		controller.handleAgentEvent({ type: "message_end", message: { id: "assistant-live", role: "assistant", content: [spawnCall] } });
+
+		let transcript = controller.handleAgentEvent({
+			type: "tool_execution_end",
+			toolCallId: "spawn-live",
+			toolName: "subagent_spawn",
+			args: spawnCall.arguments,
+			result: { content: [{ type: "text", text: "Started sa-live" }], details: { activity: running } },
+			isError: false,
+		});
+		let activities = transcript.messages.flatMap((message) => message.blocks).filter((block) => block.type === "activity");
+		expect(activities).toHaveLength(1);
+		expect(activities[0]).toMatchObject({ activity: { id: "subagent:sa-live", sourceId: "spawn-live", kind: "subagent", status: "running" } });
+
+		transcript = controller.handleAgentEvent({
+			type: "message_start",
+			message: {
+				role: "custom",
+				customType: "subagent-result",
+				display: true,
+				content: "No live findings",
+				details: { activity: { ...running, status: "succeeded", result: { summary: "No live findings" } } },
+			},
+		});
+		activities = transcript.messages.flatMap((message) => message.blocks).filter((block) => block.type === "activity");
+		expect(activities).toHaveLength(1);
+		expect(activities[0]).toMatchObject({ activity: { id: "subagent:sa-live", status: "succeeded", result: { summary: "No live findings" } } });
+	});
+
+	it("adopts canonical subagent identity and folds passive completion without duplication", () => {
+		const running = {
+			id: "subagent:sa-1",
+			sourceId: "spawn-call-1",
+			kind: "subagent",
+			title: "review auth",
+			status: "running",
+			subject: "sa-1",
+			invocation: { prompt: "Review auth" },
+		};
+		const settled = { ...running, status: "succeeded", result: { summary: "No findings" } };
+		const controller = new TranscriptController();
+		const transcript = controller.replaceFromMessages([
+			{
+				id: "assistant-spawn",
+				role: "assistant",
+				content: [{ type: "toolCall", id: "spawn-call-1", name: "subagent_spawn", arguments: { prompt: "Review auth", name: "review auth" } }],
+			},
+			{
+				role: "toolResult",
+				toolCallId: "spawn-call-1",
+				toolName: "subagent_spawn",
+				content: [{ type: "text", text: "Started sa-1" }],
+				details: { action: "spawn", activity: running },
+			},
+			{
+				role: "custom",
+				customType: "subagent-result",
+				display: true,
+				content: "Subagent sa-1 finished.",
+				details: { id: "sa-1", title: "review auth", status: "done", activity: settled },
+			},
+		]);
+
+		const activities = transcript.messages.flatMap((message) => message.blocks).filter((block) => block.type === "activity");
+		expect(transcript.messages).toHaveLength(1);
+		expect(activities).toHaveLength(1);
+		expect(activities[0]).toMatchObject({
+			type: "activity",
+			activity: { id: "subagent:sa-1", sourceId: "spawn-call-1", kind: "subagent", status: "succeeded", result: { summary: "No findings" } },
+		});
+	});
+
+	it("folds matched batch Activities independently and leaves only unmatched updates standalone", () => {
+		const running = {
+			id: "subagent:sa-matched",
+			sourceId: "spawn-matched",
+			kind: "subagent",
+			title: "matched worker",
+			status: "running",
+			invocation: { prompt: "matched work" },
+		};
+		const controller = new TranscriptController();
+		const transcript = controller.replaceFromMessages([
+			{
+				id: "assistant-spawn",
+				role: "assistant",
+				content: [{ type: "toolCall", id: "spawn-matched", name: "subagent_spawn", arguments: { prompt: "matched work", name: "matched worker" } }],
+			},
+			{
+				role: "toolResult",
+				toolCallId: "spawn-matched",
+				toolName: "subagent_spawn",
+				content: [{ type: "text", text: "Started sa-matched" }],
+				details: { activity: running },
+			},
+			{
+				role: "toolResult",
+				toolCallId: "wait-batch",
+				toolName: "subagent_wait",
+				content: [{ type: "text", text: "batch complete" }],
+				details: {
+					activity: [
+						{ ...running, status: "succeeded", result: { summary: "matched complete" } },
+						{ id: "subagent:sa-unmatched", kind: "subagent", title: "unmatched worker", status: "succeeded", result: { summary: "unmatched complete" } },
+					],
+				},
+			},
+		]);
+
+		const activities = transcript.messages.flatMap((message) => message.blocks)
+			.filter((block) => block.type === "activity")
+			.map((block) => block.activity);
+		expect(activities.filter((activity) => activity.id === "subagent:sa-matched")).toEqual([
+			expect.objectContaining({ status: "succeeded", result: { summary: "matched complete" } }),
+		]);
+		expect(activities.filter((activity) => activity.id === "subagent:sa-unmatched")).toHaveLength(1);
+		expect(activities.filter((activity) => activity.id === "wait-batch")).toHaveLength(1);
+		expect(transcript.messages).toHaveLength(2);
+		expect(transcript.messages[1]?.blocks).toEqual([
+			expect.objectContaining({ type: "activity", activity: expect.objectContaining({ id: "wait-batch" }) }),
+			expect.objectContaining({ type: "activity", activity: expect.objectContaining({ id: "subagent:sa-unmatched" }) }),
+		]);
+	});
+
+	it("keeps historical uncorrelated passive subagent completion standalone", () => {
+		const controller = new TranscriptController();
+		const transcript = controller.replaceFromMessages([{
+			role: "custom",
+			customType: "subagent-result",
+			display: true,
+			content: "Historical result",
+			details: { id: "sa-9", title: "historical", status: "done" },
+		}]);
+
+		expect(transcript.messages).toHaveLength(1);
+		const block = transcript.messages[0]?.blocks[0];
+		expect(block).toMatchObject({ type: "activity", activity: { id: "subagent:sa-9", status: "succeeded" } });
+		if (block?.type !== "activity") throw new Error("wrong block type");
+		expect(block.activity.sourceId).toBeUndefined();
+	});
+
+	it("folds later updates into a standalone canonical Activity card", () => {
+		const controller = new TranscriptController();
+		const transcript = controller.replaceFromMessages([
+			{
+				role: "custom",
+				customType: "subagent-result",
+				display: true,
+				content: "Still running",
+				details: { id: "sa-standalone", title: "standalone", status: "running" },
+			},
+			{
+				role: "custom",
+				customType: "subagent-result",
+				display: true,
+				content: "Standalone complete",
+				details: { id: "sa-standalone", title: "standalone", status: "done" },
+			},
+		]);
+
+		expect(transcript.messages).toHaveLength(1);
+		expect(transcript.messages[0]?.blocks).toEqual([
+			expect.objectContaining({ type: "activity", activity: expect.objectContaining({ id: "subagent:sa-standalone", status: "succeeded" }) }),
+		]);
 	});
 });
 
@@ -257,6 +523,7 @@ describe("TranscriptController live-state clearing", () => {
 type FakeChatSink = TranscriptControllerChatSink & {
 	replaceViewModels: Mock;
 	addViewModel: Mock;
+	replaceViewModelAt: Mock;
 	replaceLastWithViewModel: Mock;
 };
 
@@ -269,6 +536,7 @@ function fakeChatSink(): FakeChatSink {
 			archivedMessages: 0,
 		})),
 		addViewModel: vi.fn((_message: ChatMessageViewModel) => undefined),
+		replaceViewModelAt: vi.fn((_index: number, _message: ChatMessageViewModel) => undefined),
 		replaceLastWithViewModel: vi.fn((_message: ChatMessageViewModel) => undefined),
 	};
 }
@@ -297,12 +565,118 @@ describe("TranscriptController incremental chat sink (B9)", () => {
 		const previous = [...prefix, previousLast];
 		const next = [...prefix, nextLast];
 
-		expect(planChatDiff(previous, next)).toEqual([{ kind: "replace-last", message: nextLast }]);
+		expect(planChatDiff(previous, next)).toEqual([{ kind: "replace-last", index: 50, message: nextLast }]);
 		const missesAfterColdDiff = getMessageContentKeyCacheMissesForTests();
 		expect(missesAfterColdDiff).toBe(52);
 
-		expect(planChatDiff(previous, next)).toEqual([{ kind: "replace-last", message: nextLast }]);
+		expect(planChatDiff(previous, next)).toEqual([{ kind: "replace-last", index: 50, message: nextLast }]);
 		expect(getMessageContentKeyCacheMissesForTests()).toBe(missesAfterColdDiff);
+	});
+
+	it("plans an ordered targeted batch when several stable message slots change", () => {
+		const previous = ["spawn-a", "spawn-b", "wait"].map((id): ChatMessageViewModel => ({
+			id,
+			role: "sumo",
+			displayName: "SUMO",
+			blocks: [{ type: "markdown", text: `${id}:before` }],
+		}));
+		const next = previous.map((message): ChatMessageViewModel => ({
+			...message,
+			blocks: [{ type: "markdown", text: `${message.id}:after` }],
+		}));
+
+		expect(planChatDiff(previous, next)).toEqual([
+			{ kind: "replace", index: 0, message: next[0] },
+			{ kind: "replace", index: 1, message: next[1] },
+			{ kind: "replace-last", index: 2, message: next[2] },
+		]);
+		expect(planChatDiff(previous, [{ ...next[0]!, id: "rewritten" }, next[1]!, next[2]!])).toBeUndefined();
+	});
+
+	it("target-updates two canonical spawn cards and their subagent_wait operation in one progress event", () => {
+		const chat = fakeChatSink();
+		const controller = new TranscriptController({ chat });
+		const runningA = {
+			id: "subagent:sa-a",
+			sourceId: "spawn-a",
+			kind: "subagent",
+			title: "worker a",
+			status: "running",
+			currentStep: "starting a",
+		} as const;
+		const runningB = {
+			id: "subagent:sa-b",
+			sourceId: "spawn-b",
+			kind: "subagent",
+			title: "worker b",
+			status: "running",
+			currentStep: "starting b",
+		} as const;
+		controller.replaceFromMessages([
+			{
+				id: "spawn-message-a",
+				role: "assistant",
+				content: [{ type: "toolCall", id: "spawn-a", name: "subagent_spawn", arguments: { prompt: "work a" } }],
+			},
+			{
+				role: "toolResult",
+				toolCallId: "spawn-a",
+				toolName: "subagent_spawn",
+				content: [{ type: "text", text: "started a" }],
+				details: { activity: runningA },
+			},
+			{
+				id: "spawn-message-b",
+				role: "assistant",
+				content: [{ type: "toolCall", id: "spawn-b", name: "subagent_spawn", arguments: { prompt: "work b" } }],
+			},
+			{
+				role: "toolResult",
+				toolCallId: "spawn-b",
+				toolName: "subagent_spawn",
+				content: [{ type: "text", text: "started b" }],
+				details: { activity: runningB },
+			},
+			{
+				id: "wait-message",
+				role: "assistant",
+				content: [{ type: "toolCall", id: "wait-call", name: "subagent_wait", arguments: { ids: ["sa-a", "sa-b"] } }],
+			},
+		]);
+		chat.replaceViewModels.mockClear();
+		chat.replaceViewModelAt.mockClear();
+		chat.replaceLastWithViewModel.mockClear();
+
+		controller.handleAgentEvent({
+			type: "tool_execution_update",
+			toolCallId: "wait-call",
+			toolName: "subagent_wait",
+			args: { ids: ["sa-a", "sa-b"] },
+			partialResult: {
+				content: [{ type: "text", text: "two workers active" }],
+				details: {
+					activity: [
+						{ ...runningA, currentStep: "reading a.ts" },
+						{ ...runningB, currentStep: "testing b.ts" },
+					],
+				},
+			},
+		});
+
+		expect(chat.replaceViewModels).not.toHaveBeenCalled();
+		expect(chat.replaceViewModelAt.mock.calls.map(([index]) => index)).toEqual([0, 1]);
+		expect(chat.replaceViewModelAt.mock.calls[0]?.[1]).toMatchObject({
+			id: "spawn-message-a",
+			blocks: [expect.objectContaining({ type: "activity", activity: expect.objectContaining({ id: "subagent:sa-a", currentStep: "reading a.ts" }) })],
+		});
+		expect(chat.replaceViewModelAt.mock.calls[1]?.[1]).toMatchObject({
+			id: "spawn-message-b",
+			blocks: [expect.objectContaining({ type: "activity", activity: expect.objectContaining({ id: "subagent:sa-b", currentStep: "testing b.ts" }) })],
+		});
+		expect(chat.replaceLastWithViewModel).toHaveBeenCalledWith(expect.objectContaining({
+			id: "wait-message",
+			blocks: [expect.objectContaining({ type: "activity", activity: expect.objectContaining({ id: "wait-call", outputTail: "two workers active" }) })],
+		}), 2);
 	});
 
 	it("replaces the full pager on the very first publish (nothing to diff against yet)", () => {
@@ -314,6 +688,52 @@ describe("TranscriptController incremental chat sink (B9)", () => {
 		expect(chat.replaceViewModels).toHaveBeenCalledTimes(1);
 		expect(chat.addViewModel).not.toHaveBeenCalled();
 		expect(chat.replaceLastWithViewModel).not.toHaveBeenCalled();
+	});
+
+	it("fingerprints cyclic and BigInt tool invocations without crashing incremental publishes", () => {
+		const chat = fakeChatSink();
+		const controller = new TranscriptController({ chat });
+		const invocation: Record<string, unknown> = { query: "sumo", count: 1n };
+		invocation.self = invocation;
+		const message = {
+			id: "cyclic-tool",
+			role: "assistant",
+			content: [{ type: "toolCall", id: "custom-1", name: "custom", arguments: invocation }],
+		};
+
+		expect(() => controller.handleAgentEvent({ type: "message_start", message })).not.toThrow();
+		expect(() => controller.handleAgentEvent({ type: "message_update", message })).not.toThrow();
+		expect(chat.replaceViewModels).toHaveBeenCalledTimes(1);
+	});
+
+	it("fingerprints only the bounded projection of huge custom tool progress", () => {
+		const chat = fakeChatSink();
+		const controller = new TranscriptController({ chat });
+		const hugeInvocation = { query: "q".repeat(1_000_000), password: "hidden" };
+		controller.handleAgentEvent({
+			type: "tool_execution_start",
+			toolCallId: "huge-custom",
+			toolName: "mcp",
+			args: hugeInvocation,
+		});
+		chat.replaceViewModels.mockClear();
+
+		expect(() => controller.handleAgentEvent({
+			type: "tool_execution_update",
+			toolCallId: "huge-custom",
+			toolName: "mcp",
+			args: hugeInvocation,
+			partialResult: { content: [{ type: "text", text: `${"old\n".repeat(200_000)}newest-progress` }] },
+		})).not.toThrow();
+
+		expect(chat.replaceViewModels).not.toHaveBeenCalled();
+		expect(chat.replaceLastWithViewModel).toHaveBeenCalledTimes(1);
+		const projected = chat.replaceLastWithViewModel.mock.calls[0]?.[0] as ChatMessageViewModel;
+		expect(JSON.stringify(projected).length).toBeLessThan(50_000);
+		const block = projected.blocks[0];
+		expect(block).toMatchObject({ type: "activity", activity: { id: "huge-custom", outputTail: expect.stringContaining("newest-progress") } });
+		if (block?.type !== "activity") throw new Error("wrong projected block");
+		expect(JSON.stringify(block.activity.invocation)).not.toContain("hidden");
 	});
 
 	it("message_update draft deltas call replaceLastWithViewModel, never replaceViewModels", () => {
@@ -333,6 +753,22 @@ describe("TranscriptController incremental chat sink (B9)", () => {
 		expect(chat.replaceLastWithViewModel).toHaveBeenCalledTimes(2);
 		const lastCallText = chat.replaceLastWithViewModel.mock.calls.at(-1)?.[0]?.blocks?.[0]?.text;
 		expect(lastCallText).toBe("hello");
+	});
+
+	it("falls back to a full replace when a source-indexed last node is not rendered", () => {
+		const chat = fakeChatSink();
+		const controller = new TranscriptController({ chat });
+		controller.handleAgentEvent({ type: "message_start", message: { id: "draft", role: "assistant", content: "" } });
+		chat.replaceViewModels.mockClear();
+		chat.replaceLastWithViewModel.mockReturnValueOnce(false);
+
+		controller.handleAgentEvent({ type: "message_update", message: { id: "draft", role: "assistant", content: "now visible" } });
+
+		expect(chat.replaceLastWithViewModel).toHaveBeenCalledWith(expect.objectContaining({ id: "draft" }), 0);
+		expect(chat.replaceViewModels).toHaveBeenCalledTimes(1);
+		expect(chat.replaceViewModels).toHaveBeenCalledWith([
+			expect.objectContaining({ id: "draft", blocks: [{ type: "markdown", text: "now visible" }] }),
+		]);
 	});
 
 	it("message_update uses the O(1) hinted boundary diff without prefix key misses", () => {
@@ -435,6 +871,35 @@ describe("TranscriptController incremental chat sink (B9)", () => {
 		expect(chat.addViewModel.mock.calls[0]?.[0]?.id).toBe("a1");
 	});
 
+	it("target-updates a non-last Activity result instead of replacing the pager", () => {
+		const chat = fakeChatSink();
+		const controller = new TranscriptController({ chat });
+		controller.replaceFromMessages([
+			{
+				id: "assistant-tools",
+				role: "assistant",
+				content: [{ type: "toolCall", id: "read-a", name: "read", arguments: { path: "a.ts" } }],
+			},
+			{ id: "later-user", role: "user", content: "keep this later message" },
+		]);
+		chat.replaceViewModels.mockClear();
+		chat.replaceViewModelAt.mockClear();
+		chat.replaceLastWithViewModel.mockClear();
+
+		controller.handleAgentEvent({
+			type: "message_start",
+			message: { role: "toolResult", toolCallId: "read-a", toolName: "read", content: [{ type: "text", text: "alpha" }] },
+		});
+
+		expect(chat.replaceViewModels).not.toHaveBeenCalled();
+		expect(chat.replaceLastWithViewModel).not.toHaveBeenCalled();
+		expect(chat.replaceViewModelAt).toHaveBeenCalledTimes(1);
+		expect(chat.replaceViewModelAt).toHaveBeenCalledWith(0, expect.objectContaining({
+			id: "assistant-tools",
+			blocks: [expect.objectContaining({ type: "activity", activity: expect.objectContaining({ id: "read-a", status: "succeeded", outputTail: "alpha" }) })],
+		}));
+	});
+
 	it("replaceFromMessages (hydration) always calls replaceViewModels", () => {
 		const chat = fakeChatSink();
 		const controller = new TranscriptController({ chat });
@@ -504,7 +969,7 @@ describe("TranscriptController incremental chat sink (B9)", () => {
 		});
 		expect(chat.replaceViewModels).toHaveBeenCalledTimes(1);
 	});
-	it("agent_end history rewrites still fall back to replaceViewModels after streamed updates", () => {
+	it("target-updates a single non-last rewrite after streamed updates", () => {
 		const chat = fakeChatSink();
 		const controller = new TranscriptController({ chat });
 
@@ -516,6 +981,7 @@ describe("TranscriptController incremental chat sink (B9)", () => {
 		controller.handleAgentEvent({ type: "message_end", message: { id: "a1", role: "assistant", content: "answer" } });
 		chat.replaceViewModels.mockClear();
 		chat.addViewModel.mockClear();
+		chat.replaceViewModelAt.mockClear();
 		chat.replaceLastWithViewModel.mockClear();
 
 		controller.handleAgentEvent({
@@ -526,9 +992,10 @@ describe("TranscriptController incremental chat sink (B9)", () => {
 			],
 		});
 
-		expect(chat.replaceViewModels).toHaveBeenCalledTimes(1);
+		expect(chat.replaceViewModels).not.toHaveBeenCalled();
 		expect(chat.addViewModel).not.toHaveBeenCalled();
 		expect(chat.replaceLastWithViewModel).not.toHaveBeenCalled();
+		expect(chat.replaceViewModelAt).toHaveBeenCalledWith(0, expect.objectContaining({ id: "u1" }));
 	});
 
 	it("does not schedule a render when an event produces no visible diff", () => {

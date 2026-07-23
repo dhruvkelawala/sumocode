@@ -17,7 +17,7 @@ function fixtureBlocksFor(index: number) {
 	return [
 		{ type: "markdown" as const, text: `# Message ${index}\n**bold** text with some *emphasis* and a [link](https://example.com/${index}).\n\nA second paragraph with more prose to push the markdown parser: lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.` },
 		{ type: "code" as const, lang: "ts", source: `function handler${index}(input: string): string {\n  return input.trim().toUpperCase();\n}` },
-		{ type: "tool" as const, tool: { name: "read", status: "success" as const, input: { path: `src/file-${index}.ts` }, expanded: false } },
+		{ type: "activity" as const, activity: { id: `read-${index}`, kind: "tool" as const, title: "read", status: "succeeded" as const, invocation: { path: `src/file-${index}.ts` }, subject: `src/file-${index}.ts`, body: { kind: "source" as const, text: "file contents" } } },
 	];
 }
 

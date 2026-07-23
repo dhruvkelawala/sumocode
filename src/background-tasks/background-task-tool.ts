@@ -1,32 +1,78 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { BackgroundTaskManager, type BackgroundTaskManagerOptions } from "./task-manager.js";
+import { TerminalTaskManager, type TerminalTaskManagerOptions } from "./task-manager.js";
+
+interface ProcessTerminalLifecycle {
+	ownerSessionIds: Set<string>;
+	activityWriterTokens: Map<string, string>;
+}
+
+const PROCESS_LIFECYCLE_KEY = Symbol.for("@dhruvkelawala/sumocode/terminal-process-lifecycle");
+
+function processLifecycle(): ProcessTerminalLifecycle {
+	const global = globalThis as typeof globalThis & {
+		[PROCESS_LIFECYCLE_KEY]?: Partial<ProcessTerminalLifecycle>;
+	};
+	const lifecycle = global[PROCESS_LIFECYCLE_KEY] ??= {};
+	// Symbol.for state intentionally survives module/factory reloads. Normalize
+	// the pre-Plan-081 shape, which had only ownerSessionIds, before using the
+	// writer-token map added by the Activity lease integration.
+	lifecycle.ownerSessionIds ??= new Set<string>();
+	lifecycle.activityWriterTokens ??= new Map<string, string>();
+	return lifecycle as ProcessTerminalLifecycle;
+}
+
+/** Session IDs this Pi process has actually owned through a session_start event. */
+export function processOwnedTerminalSessionIds(): readonly string[] {
+	return [...processLifecycle().ownerSessionIds];
+}
+
+/** Serialize one Activity feed bridge per owned session inside this Pi process. */
+export function claimProcessActivitySession(ownerSessionId: string, token: string): boolean {
+	const lifecycle = processLifecycle();
+	if (!lifecycle.ownerSessionIds.has(ownerSessionId)) return false;
+	const current = lifecycle.activityWriterTokens.get(ownerSessionId);
+	if (current !== undefined && current !== token) return false;
+	lifecycle.activityWriterTokens.set(ownerSessionId, token);
+	return true;
+}
+
+export function releaseProcessActivitySession(ownerSessionId: string, token: string): void {
+	const lifecycle = processLifecycle();
+	if (lifecycle.activityWriterTokens.get(ownerSessionId) === token) lifecycle.activityWriterTokens.delete(ownerSessionId);
+}
 
 export function installBackgroundTasks(
 	pi: ExtensionAPI,
-	managerOptions: BackgroundTaskManagerOptions = {},
-): BackgroundTaskManager {
-	const manager = new BackgroundTaskManager(pi, managerOptions);
+	managerOptions: TerminalTaskManagerOptions = {},
+): TerminalTaskManager {
+	const manager = new TerminalTaskManager(managerOptions);
+	const lifecycle = processLifecycle();
 
-	// `session_shutdown` fires not only on process exit but also during
-	// /reload, /new, /resume, /fork (Pi tears down and rebinds the extension
-	// runtime). If we killed every running task on those events, a user
-	// reloading SumoCode would lose every long-running background terminal they
-	// had in flight. Only kill on a real process-quit shutdown; on session
-	// replacement, leave the child processes running (they're already detached
-	// or terminal-host-owned) and let the new manager recover from persisted
-	// meta.json on startup.
-	pi.on("session_shutdown", (event) => {
-		const reason = (event as { reason?: string } | null | undefined)?.reason;
-		if (reason === "quit" || reason === undefined) {
-			manager.shutdown();
-		}
+	pi.on("session_start", (_event, ctx) => {
+		const ownerSessionId = ctx.sessionManager.getSessionId();
+		if (ownerSessionId) lifecycle.ownerSessionIds.add(ownerSessionId);
 	});
 
-	pi.registerCommand("bg", {
-		description: "List tracked background tasks (use /ps for the full process viewer)",
-		handler: async (_args, ctx) => {
-			ctx.ui.notify(`${manager.formatTaskListText()}\nUse /ps for the full process viewer.`, "info");
-		},
+	pi.on("session_shutdown", async (event, ctx) => {
+		const reason = (event as { reason?: string } | null | undefined)?.reason;
+		if (reason !== "quit") {
+			// Pi 0.80.6 recreates the extension factory/manager for /new, /resume,
+			// and /fork. Detach this invalidated instance's pollers without stopping
+			// durable children; the replacement manager adopts them from the store.
+			manager.detach();
+			return;
+		}
+		const currentSessionId = ctx.sessionManager.getSessionId();
+		if (currentSessionId) lifecycle.ownerSessionIds.add(currentSessionId);
+		try {
+			// The registry is process-global (not merely module-global) so even an
+			// extension reload that reevaluates this module retains quit ownership.
+			await Promise.all([...lifecycle.ownerSessionIds].map((ownerSessionId) => manager.stopOwned(ownerSessionId)));
+		} finally {
+			lifecycle.ownerSessionIds.clear();
+			lifecycle.activityWriterTokens.clear();
+			manager.detach();
+		}
 	});
 
 	return manager;

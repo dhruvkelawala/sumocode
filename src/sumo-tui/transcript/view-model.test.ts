@@ -84,7 +84,7 @@ describe("structured transcript view model", () => {
 		]);
 	});
 
-	it("maps pi task tool calls to Cathedral scroll/scribe delegation blocks", () => {
+	it("maps pi task tool calls to shared Activity blocks", () => {
 		const message = chatMessageViewModelFromPiMessage({
 			id: "a-task",
 			role: "assistant",
@@ -97,17 +97,19 @@ describe("structured transcript view model", () => {
 		});
 
 		const block = message?.blocks[0];
-		expect(block?.type).toBe("delegation");
-		if (block?.type !== "delegation") throw new Error("wrong block type");
-		expect(block.delegation.title).toBe("Implement Slice A: Yoga-flex outer chrome");
-		expect(block.delegation.model).toBe("openai-codex/gpt-5.5");
-		expect(block.delegation.thinking).toBe("high");
-		expect(block.delegation.agent).toBe("scribe");
-		expect(block.delegation.status).toBe("running");
+		expect(block?.type).toBe("activity");
+		if (block?.type !== "activity") throw new Error("wrong block type");
+		expect(block.activity).toMatchObject({
+			id: "tc-task",
+			kind: "task",
+			title: "Implement Slice A: Yoga-flex outer chrome",
+			model: "openai-codex/gpt-5.5",
+			thinking: "high",
+			status: "running",
+		});
 
 		const plainText = message ? chatMessageViewModelToPlainText(message) : "";
-		expect(plainText).toContain("[scroll]");
-		expect(plainText).toContain("Implement Slice A");
+		expect(plainText).toContain("[Implement Slice A: Yoga-flex outer chrome]");
 	});
 
 	it("extracts pi task titles from markdown headings after the role preamble", () => {
@@ -123,13 +125,15 @@ describe("structured transcript view model", () => {
 		});
 
 		const block = message?.blocks[0];
-		expect(block?.type).toBe("delegation");
-		if (block?.type !== "delegation") throw new Error("wrong block type");
-		expect(block.delegation.title).toBe("Implement Slice A: Yoga-flex outer chrome");
-		expect(block.delegation.model).toBe("openai-codex/gpt-5.5");
-		expect(block.delegation.thinking).toBe("high");
-		expect(block.delegation.prompt).toBe("Details follow...");
-		expect(block.delegation.summary).toBeUndefined();
+		expect(block?.type).toBe("activity");
+		if (block?.type !== "activity") throw new Error("wrong block type");
+		expect(block.activity).toMatchObject({
+			title: "Implement Slice A: Yoga-flex outer chrome",
+			model: "openai-codex/gpt-5.5",
+			thinking: "high",
+			invocation: { tasks: [{ prompt: "You are Zeus, a senior developer in the Temple of SumoDeus.\n\n## Implement Slice A: Yoga-flex outer chrome\n\nDetails follow..." }] },
+		});
+		expect(block.activity.result).toBeUndefined();
 	});
 
 	it("extracts pi task body from single task-shaped arguments while running", () => {
@@ -145,12 +149,14 @@ describe("structured transcript view model", () => {
 		});
 
 		const block = message?.blocks[0];
-		expect(block?.type).toBe("delegation");
-		if (block?.type !== "delegation") throw new Error("wrong block type");
-		expect(block.delegation.title).toBe("Verify issue 194 live scroll result folding");
-		expect(block.delegation.thinking).toBe("minimal");
-		expect(block.delegation.prompt).toBe("Respond with exactly this sentence:\nTask output visible inside scribe.");
-		expect(block.delegation.summary).toBeUndefined();
+		expect(block?.type).toBe("activity");
+		if (block?.type !== "activity") throw new Error("wrong block type");
+		expect(block.activity).toMatchObject({
+			title: "Verify issue 194 live scroll result folding",
+			thinking: "minimal",
+			invocation: { tasks: [{ prompt: "You are Zeus.\n\n## Verify issue 194 live scroll result folding\n\nRespond with exactly this sentence:\nTask output visible inside scribe." }] },
+		});
+		expect(block.activity.result).toBeUndefined();
 	});
 
 	it("carries pi task metadata from tool calls into later tool results", () => {
@@ -177,16 +183,18 @@ describe("structured transcript view model", () => {
 			],
 		});
 
-		const running = transcript.messages[0]?.blocks[0];
-		const completed = transcript.messages[1]?.blocks[0];
-		expect(running?.type).toBe("delegation");
-		expect(completed?.type).toBe("delegation");
-		if (running?.type !== "delegation" || completed?.type !== "delegation") throw new Error("wrong block type");
-		expect(running.delegation.title).toBe("Fix the scroll header");
-		expect(completed.delegation.title).toBe("Fix the scroll header");
-		expect(completed.delegation.model).toBe("openai-codex/gpt-5.5");
-		expect(completed.delegation.thinking).toBe("high");
-		expect(completed.delegation.status).toBe("success");
+		expect(transcript.messages).toHaveLength(1);
+		const completed = transcript.messages[0]?.blocks[0];
+		expect(completed?.type).toBe("activity");
+		if (completed?.type !== "activity") throw new Error("wrong block type");
+		expect(completed.activity).toMatchObject({
+			id: "tc-task",
+			title: "Fix the scroll header",
+			model: "openai-codex/gpt-5.5",
+			thinking: "high",
+			status: "succeeded",
+			result: { summary: "Task completed." },
+		});
 	});
 
 	it("aggregates native chain task details across all results", () => {
@@ -224,16 +232,19 @@ describe("structured transcript view model", () => {
 		});
 
 		const block = message?.blocks[0];
-		expect(block?.type).toBe("delegation");
-		if (block?.type !== "delegation") throw new Error("wrong block type");
-		expect(block.delegation.status).toBe("error");
-		expect(block.delegation.title).toBe("Inspect auth");
-		expect(block.delegation.prompt).toBe("Task 1: Inspect auth\nTask 2: Verify auth");
-		expect(block.delegation.summary).toContain("Task 1: Found auth.ts");
-		expect(block.delegation.summary).toContain("Task 2: Tests failed");
-		expect(block.delegation.nestedTools).toEqual([{ id: "bash-1", name: "bash", status: "error", input: { command: "pnpm test" }, output: "failed" }]);
-		expect(block.delegation.tokensIn).toBe(3000);
-		expect(block.delegation.tokensOut).toBe(300);
+		expect(block?.type).toBe("activity");
+		if (block?.type !== "activity") throw new Error("wrong block type");
+		expect(block.activity).toMatchObject({
+			status: "failed",
+			title: "Inspect auth",
+			subject: "chain · 2 tasks",
+			result: { summary: "Task 1: Found auth.ts", error: "Task 2: Tests failed" },
+			metrics: { tokensIn: 3000, tokensOut: 300 },
+		});
+		expect(block.activity.activeTools?.[1]).toMatchObject({
+			id: "tc-task:result:1",
+			activeTools: [{ id: "bash-1", title: "bash", status: "failed", invocation: { command: "pnpm test" }, outputTail: "failed" }],
+		});
 	});
 
 	it("maps pi task tool results to completed scroll blocks", () => {
@@ -248,11 +259,13 @@ describe("structured transcript view model", () => {
 		});
 
 		const block = message?.blocks[0];
-		expect(block?.type).toBe("delegation");
-		if (block?.type !== "delegation") throw new Error("wrong block type");
-		expect(block.delegation.status).toBe("success");
-		expect(block.delegation.title).toBe("Fix the bug");
-		expect(block.delegation.summary).toBe("Task completed. Committed a1b2c3d.");
+		expect(block?.type).toBe("activity");
+		if (block?.type !== "activity") throw new Error("wrong block type");
+		expect(block.activity).toMatchObject({
+			status: "succeeded",
+			title: "Fix the bug",
+			result: { summary: "Task completed. Committed a1b2c3d." },
+		});
 	});
 
 	it("maps assistant thinking blocks in message order", () => {
@@ -287,7 +300,35 @@ describe("structured transcript view model", () => {
 		expect(message?.role).toBe("sumo");
 		expect(message?.blocks).toEqual([
 			{ type: "markdown", text: "I will run the tests." },
-			{ type: "tool", tool: { id: "tc1", name: "bash", status: "pending", input: { command: "pnpm test" }, output: undefined, details: undefined, error: undefined, expanded: true } },
+			{
+				type: "activity",
+				activity: {
+					id: "tc1",
+					kind: "tool",
+					title: "bash",
+					status: "queued",
+					invocation: { command: "pnpm test" },
+					subject: "pnpm test",
+					body: { kind: "terminal", command: "pnpm test", text: "" },
+				},
+			},
+		]);
+	});
+
+	it("uses deterministic message-and-block fallback IDs for historical tools", () => {
+		const message = chatMessageViewModelFromPiMessage({
+			id: "historical-tools",
+			role: "assistant",
+			content: [
+				{ type: "toolCall", name: "read", arguments: { path: "a.ts" } },
+				{ type: "toolCall", name: "read", arguments: { path: "b.ts" } },
+			],
+		});
+		const activities = message?.blocks.filter((block) => block.type === "activity") ?? [];
+
+		expect(activities.map((block) => block.activity.id)).toEqual([
+			"pi-tool:historical-tools:0",
+			"pi-tool:historical-tools:1",
 		]);
 	});
 
@@ -303,7 +344,7 @@ describe("structured transcript view model", () => {
 		expect(message).toMatchObject({
 			id: "tc1",
 			role: "system",
-			blocks: [{ type: "tool", tool: { id: "tc1", name: "bash", status: "success", output: "passed" } }],
+			blocks: [{ type: "activity", activity: { id: "tc1", title: "bash", status: "succeeded", outputTail: "passed", body: { kind: "terminal", text: "passed" } } }],
 		});
 	});
 
@@ -345,7 +386,7 @@ describe("structured transcript view model", () => {
 			],
 			isError: false,
 		});
-		expect(message?.blocks.some((block) => block.type === "tool")).toBe(true);
+		expect(message?.blocks.some((block) => block.type === "activity")).toBe(true);
 		expect(message?.blocks).toContainEqual({ type: "image", data: "iVBORw0KGgo=", mime: "image/png", filename: "shot.png" });
 	});
 
@@ -393,7 +434,53 @@ describe("structured transcript view model", () => {
 		]);
 	});
 
-	it("maps a subagent result custom message to a collapsed summary block", () => {
+	it("folds replayed subagent spawn queued, canonical running, and final records into one Activity", () => {
+		const running = {
+			id: "subagent:sa-1",
+			sourceId: "spawn-call-1",
+			kind: "subagent",
+			title: "review auth",
+			status: "running",
+			invocation: { prompt: "Review auth" },
+		};
+		const transcript = transcriptFromSessionContext({
+			messages: [
+				{
+					id: "assistant-spawn",
+					role: "assistant",
+					content: [{ type: "toolCall", id: "spawn-call-1", name: "subagent_spawn", arguments: { prompt: "Review auth", name: "review auth" } }],
+				},
+				{
+					role: "toolResult",
+					toolCallId: "spawn-call-1",
+					toolName: "subagent_spawn",
+					content: [{ type: "text", text: "Started sa-1" }],
+					details: { activity: running },
+				},
+				{
+					role: "custom",
+					customType: "subagent-result",
+					display: true,
+					content: "No findings",
+					details: { activity: { ...running, status: "succeeded", result: { summary: "No findings" } } },
+				},
+			],
+		});
+
+		expect(transcript.messages).toHaveLength(1);
+		expect(transcript.messages[0]?.blocks).toEqual([expect.objectContaining({
+			type: "activity",
+			activity: expect.objectContaining({
+				id: "subagent:sa-1",
+				sourceId: "spawn-call-1",
+				kind: "subagent",
+				status: "succeeded",
+				result: { summary: "No findings" },
+			}),
+		})]);
+	});
+
+	it("maps a historical subagent result custom message to a standalone Activity", () => {
 		const message = chatMessageViewModelFromPiMessage({
 			id: "result-1",
 			role: "custom",
@@ -404,11 +491,15 @@ describe("structured transcript view model", () => {
 		});
 
 		expect(message?.blocks).toEqual([{
-			type: "summary",
-			kind: "subagent",
-			label: "[subagent] sa-3 · review · finished",
-			content: 'Subagent sa-3 "review" finished.\n\nNo findings.',
-			expanded: false,
+			type: "activity",
+			activity: {
+				id: "subagent:sa-3",
+				kind: "subagent",
+				title: "review",
+				status: "succeeded",
+				subject: "sa-3",
+				result: { summary: 'Subagent sa-3 "review" finished.\n\nNo findings.' },
+			},
 		}]);
 	});
 
@@ -433,6 +524,111 @@ describe("structured transcript view model", () => {
 			kind: "terminal",
 			label: "[terminal] bg-7 · dev server · exited (0)",
 			content: 'Background terminal bg-7 "dev server" exited (0).\n\nready',
+			expanded: false,
+		}]);
+	});
+
+	it("uses terminal_start details.activity as the canonical running transcript card", () => {
+		const activity = {
+			id: "term-live",
+			sourceId: "terminal-call-1",
+			kind: "terminal" as const,
+			title: "auth watcher",
+			status: "running" as const,
+			ownerSessionId: "session-a",
+			outputTail: "phase one",
+			body: { kind: "terminal" as const, text: "phase one" },
+		};
+		const message = chatMessageViewModelFromPiMessage({
+			role: "toolResult",
+			toolCallId: "terminal-call-1",
+			toolName: "terminal_start",
+			content: [{ type: "text", text: "Started terminal term-live." }],
+			details: { activity, task: { id: "term-live" } },
+		});
+
+		expect(message?.blocks).toEqual([{ type: "activity", activity }]);
+	});
+
+	it("folds explicit terminal_wait observation into the canonical start card", () => {
+		const running = {
+			id: "term-observed",
+			sourceId: "terminal-start-call",
+			kind: "terminal" as const,
+			title: "auth watcher",
+			status: "running" as const,
+			ownerSessionId: "session-a",
+			body: { kind: "terminal" as const, text: "working" },
+		};
+		const settled = {
+			...running,
+			status: "succeeded" as const,
+			body: { kind: "terminal" as const, text: "done" },
+			result: { summary: "exit 0" },
+		};
+		const transcript = transcriptFromSessionContext({ messages: [
+			{ id: "start-message", role: "assistant", content: [{ type: "toolCall", id: "terminal-start-call", name: "terminal_start", arguments: { command: "pnpm test", title: "auth watcher" } }] },
+			{ role: "toolResult", toolCallId: "terminal-start-call", toolName: "terminal_start", content: [{ type: "text", text: "started" }], details: { activity: running } },
+			{ id: "wait-message", role: "assistant", content: [{ type: "toolCall", id: "terminal-wait-call", name: "terminal_wait", arguments: { ids: ["term-observed"] } }] },
+			{ role: "toolResult", toolCallId: "terminal-wait-call", toolName: "terminal_wait", content: [{ type: "text", text: "settled" }], details: { activities: [settled] } },
+		] });
+
+		expect(transcript.messages).toHaveLength(2);
+		expect(transcript.messages[0]?.blocks).toEqual([
+			expect.objectContaining({ type: "activity", activity: expect.objectContaining({ id: "term-observed", status: "succeeded", body: expect.objectContaining({ text: "done" }) }) }),
+		]);
+		expect(transcript.messages[1]?.blocks).toEqual([
+			expect.objectContaining({ type: "activity", activity: expect.objectContaining({ id: "terminal-wait-call", title: "terminal_wait", status: "succeeded" }) }),
+		]);
+	});
+
+	it("maps a v2 terminal result Activity through the universal retained renderer", () => {
+		const activity = {
+			id: "term-7",
+			kind: "terminal" as const,
+			title: "dev server",
+			status: "succeeded" as const,
+			ownerSessionId: "session-a",
+			body: { kind: "terminal" as const, command: "pnpm dev", text: "ready" },
+		};
+		const message = chatMessageViewModelFromPiMessage({
+			id: "result-v2",
+			role: "custom",
+			customType: "terminal-result",
+			display: true,
+			content: "Terminal term-7 completed.",
+			details: { completionId: "completion-7", ownerSessionId: "session-a", activity },
+		});
+
+		expect(message?.blocks).toEqual([{ type: "activity", activity }]);
+	});
+
+	it("falls back safely when persisted terminal Activity details are malformed", () => {
+		const message = chatMessageViewModelFromPiMessage({
+			id: "result-malformed",
+			role: "custom",
+			customType: "terminal-result",
+			display: true,
+			content: "Terminal term-bad completed.",
+			details: {
+				id: "term-bad",
+				title: "malformed",
+				exitCode: 0,
+				activity: {
+					id: "term-bad",
+					kind: "terminal",
+					title: "malformed",
+					status: "succeeded",
+					body: { kind: "terminal", text: {} },
+				},
+			},
+		});
+
+		expect(message?.blocks).toEqual([{
+			type: "summary",
+			kind: "terminal",
+			label: "[terminal] term-bad · malformed · exited (0)",
+			content: "Terminal term-bad completed.",
 			expanded: false,
 		}]);
 	});
@@ -470,7 +666,7 @@ describe("structured transcript view model", () => {
 
 		expect(transcript.messages).toHaveLength(2);
 		expect(transcript.messages[0]?.blocks).toEqual([{ type: "markdown", text: "visible" }]);
-		expect(transcript.messages[1]?.blocks[0]).toMatchObject({ type: "tool", tool: { name: "bash", status: "success", output: "ok" } });
+		expect(transcript.messages[1]?.blocks[0]).toMatchObject({ type: "activity", activity: { title: "bash", status: "succeeded", outputTail: "ok" } });
 	});
 
 	it("can flatten structured blocks for the legacy ChatPager bridge", () => {

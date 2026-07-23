@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { stripAnsi } from "../cathedral/ansi.js";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { resetThemeRegistryForTests, setActiveTheme } from "../../themes/index.js";
-import { renderCompactToolPill, renderToolBlockRows, renderToolLedgerRows } from "./tool-renderer.js";
+import { activityFromToolViewModel, renderCompactToolPill, renderToolBlockRows, renderToolLedgerRows } from "./tool-renderer.js";
 
 function rgbAnsi(hex: string, channel: 38 | 48): string {
 	const normalized = hex.replace("#", "");
@@ -18,6 +18,14 @@ function ledgerStyledText(fg: string, text: string): string {
 
 describe("tool renderer", () => {
 	afterEach(() => resetThemeRegistryForTests());
+
+	it("assigns distinct compatibility IDs to same-name idless tools", () => {
+		const first = { name: "read", status: "running" as const, input: { path: "a.ts" } };
+		const second = { name: "read", status: "running" as const, input: { path: "b.ts" } };
+
+		expect(activityFromToolViewModel(first).id).toBe(activityFromToolViewModel(first).id);
+		expect(activityFromToolViewModel(first).id).not.toBe(activityFromToolViewModel(second).id);
+	});
 
 	it("renders compact Cathedral tool pills", () => {
 		const line = renderCompactToolPill({ name: "read", status: "success", input: { path: "src/auth/session.ts" } });
@@ -203,10 +211,10 @@ describe("tool renderer", () => {
 			name: "bash",
 			status: "success",
 			input: { command: `printf ${"x".repeat(2_500)}` },
-			output: ["OUTPUT-STILL-VISIBLE", ...Array.from({ length: 29 }, (_, index) => `output ${index + 2}`)].join("\n"),
+			output: [...Array.from({ length: 29 }, (_, index) => `output ${index + 1}`), "OUTPUT-STILL-VISIBLE"].join("\n"),
 		}, 80).map(stripAnsi);
 
-		expect(rows.join("\n")).toContain("command rows collapsed");
+		expect(rows.join("\n")).toContain("invocation rows collapsed");
 		expect(rows.join("\n")).toContain("OUTPUT-STILL-VISIBLE");
 		expect(rows.filter((row) => row.includes("collapsed"))).toHaveLength(1);
 	});

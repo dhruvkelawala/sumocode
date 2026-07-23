@@ -1213,6 +1213,111 @@
 			}
 		},
 		{
+			"id": "fixture-activity-cards-landscape",
+			"lane": "fixture",
+			"status": "review",
+			"dimensions": {
+				"cols": 160,
+				"rows": 45
+			},
+			"bibleTarget": "scene-activity-cards.png",
+			"fixture": {
+				"id": "activity-cards",
+				"activityExpansion": {
+					"fixture-running-subagent": true,
+					"fixture-running-terminal": true,
+					"fixture-completed-terminal": false,
+					"fixture-failed-terminal": false,
+					"fixture-collapsed-subagent": false
+				}
+			},
+			"crops": [
+				{
+					"id": "full",
+					"targetCrop": "full",
+					"runtimeCrop": "full"
+				},
+				{
+					"id": "chat-area",
+					"targetCrop": "chat-area",
+					"runtimeCrop": "chat-area"
+				}
+			],
+			"geometrySpec": {
+				"regions": [
+					{
+						"startRow": 1,
+						"endRow": 1,
+						"category": "top-bar",
+						"firstCol": 1
+					}
+				],
+				"contentBounds": {
+					"minFirst": 0,
+					"maxLast": 159
+				}
+			}
+		},
+		{
+			"id": "fixture-activity-cards-portrait",
+			"lane": "fixture",
+			"status": "review",
+			"dimensions": {
+				"cols": 60,
+				"rows": 100
+			},
+			"bibleTarget": "scene-activity-cards-portrait.png",
+			"fixture": {
+				"id": "activity-cards",
+				"activityExpansion": {
+					"fixture-running-subagent": true,
+					"fixture-running-terminal": true,
+					"fixture-completed-terminal": false,
+					"fixture-failed-terminal": false,
+					"fixture-collapsed-subagent": false
+				}
+			},
+			"crops": [
+				{
+					"id": "full",
+					"targetCrop": "full",
+					"runtimeCrop": "full"
+				},
+				{
+					"id": "chat-area",
+					"targetCrop": "portrait-chat-area",
+					"runtimeCrop": "portrait-chat-area"
+				}
+			],
+			"geometrySpec": {
+				"regions": [
+					{
+						"startRow": 1,
+						"endRow": 1,
+						"category": "top-bar",
+						"firstCol": 1,
+						"lastCol": 58
+					},
+					{
+						"startRow": 93,
+						"endRow": 93,
+						"category": "input-top"
+					},
+					{
+						"startRow": 98,
+						"endRow": 98,
+						"category": "footer",
+						"firstCol": 1,
+						"lastCol": 58
+					}
+				],
+				"contentBounds": {
+					"minFirst": 0,
+					"maxLast": 59
+				}
+			}
+		},
+		{
 			"id": "fixture-command-palette-overlay",
 			"lane": "fixture",
 			"status": "review",

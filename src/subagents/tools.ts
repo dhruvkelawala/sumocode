@@ -1,6 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import type { DeferredResultDelivery } from "./delivery.js";
+import { activityFromSubagentSnapshot } from "../activity/subagent-adapter.js";
 import { getTerminalHost } from "../terminal-host/index.js";
 import type { PaneRef, TerminalHost } from "../terminal-host/types.js";
 import { latestText, type SubagentSnapshot } from "./domain.js";
@@ -15,6 +16,11 @@ const StringEnum = <T extends readonly string[]>(values: T, options?: { descript
 	});
 
 const makeToolResult = (text: string, details?: unknown) => ({ content: [{ type: "text" as const, text }], details });
+
+const activityEnvelope = (snapshot: SubagentSnapshot, sourceId?: string) => {
+	const activity = activityFromSubagentSnapshot(snapshot);
+	return sourceId ? { ...activity, sourceId } : activity;
+};
 
 const isAtCapacity = (value: SubagentSnapshot | AtCapacityDetails): value is AtCapacityDetails => "status" in value && value.status === "at_capacity";
 
@@ -34,6 +40,15 @@ const trimLines = (text: string, maxChars: number, maxLines: number): string => 
 	const lines = text.split("\n").slice(0, maxLines).join("\n");
 	return lines.length > maxChars ? `${lines.slice(0, maxChars - 1)}…` : lines;
 };
+
+/** Cancellation details expose bounded identity/status, never raw transcripts. */
+const cancellationMetadata = (snapshot: SubagentSnapshot) => ({
+	id: snapshot.id,
+	title: trimLines(snapshot.title, 256, 1),
+	status: snapshot.status,
+	createdAt: snapshot.createdAt,
+	...(snapshot.settledAt === undefined ? {} : { settledAt: snapshot.settledAt }),
+});
 
 const formatDuration = (ms: number): string => {
 	const seconds = Math.max(0, Math.round(ms / 1000));
@@ -94,11 +109,12 @@ export function registerSubagentTools(
 			baseRef: Type.Optional(Type.String({ description: "Base git ref for the isolated worktree (only with worktree: true); defaults to HEAD. Use origin/main to branch from the pushed tip rather than your local checkout." })),
 			visible: Type.Optional(Type.Boolean({ description: "Open the child as an interactive pane in the terminal host — watchable and steerable; requires a running terminal host." })),
 		}),
-		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+		async execute(toolCallId, params, _signal, _onUpdate, ctx) {
 			if (params.visible === true && host.kind === "none") {
 				throw new Error("visible subagents require a running terminal host (herdr or cmux)");
 			}
 			const spawned = await manager.spawn({
+				sourceId: toolCallId,
 				prompt: params.prompt,
 				title: params.name,
 				cwd: params.working_dir ?? ctx.cwd,
@@ -123,9 +139,17 @@ export function registerSubagentTools(
 				// listener's already-deferred payload is not ALSO auto-delivered
 				// on the next agent_end (double report + pointless extra turn).
 				delivery?.consume(spawned.id);
-				return makeToolResult(`Subagent ${spawned.id} (${spawned.title}) failed to start: ${spawned.errorText ?? "unknown error"}`, { action: "spawn", subagent: spawned });
+				return makeToolResult(`Subagent ${spawned.id} (${spawned.title}) failed to start: ${spawned.errorText ?? "unknown error"}`, {
+					action: "spawn",
+					subagent: spawned,
+					activity: activityEnvelope(spawned, toolCallId),
+				});
 			}
-			return makeToolResult(`Started ${spawned.id} (${spawned.title}). Its result will be delivered to you automatically when it settles, or use subagent_wait to block for it.`, { action: "spawn", subagent: spawned });
+			return makeToolResult(`Started ${spawned.id} (${spawned.title}). Its result will be delivered to you automatically when it settles, or use subagent_wait to block for it.`, {
+				action: "spawn",
+				subagent: spawned,
+				activity: activityEnvelope(spawned, toolCallId),
+			});
 		},
 	});
 
@@ -166,7 +190,11 @@ export function registerSubagentTools(
 			const snapshot = manager.get(params.id);
 			if (!snapshot) throw new Error(`Unknown subagent id: ${params.id}`);
 			const preview = trimLines(latestText(snapshot) || snapshot.errorText || "(no output yet)", 2048, 20);
-			return makeToolResult([formatSnapshotLine(snapshot), manifestSummary(snapshot), preview].filter((line): line is string => line !== undefined).join("\n"), { action: "check", subagent: snapshot });
+			return makeToolResult([formatSnapshotLine(snapshot), manifestSummary(snapshot), preview].filter((line): line is string => line !== undefined).join("\n"), {
+				action: "check",
+				subagent: snapshot,
+				activity: activityEnvelope(snapshot),
+			});
 		},
 	});
 
@@ -179,10 +207,21 @@ export function registerSubagentTools(
 		parameters: Type.Object({ ids: Type.Array(Type.String(), { maxItems: 64, description: "Subagent ids to wait for." }) }),
 		async execute(_toolCallId, params, signal, onUpdate) {
 			const snapshots = await manager.waitFor(params.ids, signal, (pending) => {
-				onUpdate?.({ content: [{ type: "text", text: `Waiting for ${pending.map((snapshot) => snapshot.id).join(", ")}…` }], details: { action: "wait", pending: pending.map((snapshot) => snapshot.id) } });
+				onUpdate?.({
+					content: [{ type: "text", text: `Waiting for ${pending.map((snapshot) => snapshot.id).join(", ")}…` }],
+					details: {
+						action: "wait",
+						pending: pending.map((snapshot) => snapshot.id),
+						activity: pending.map((snapshot) => activityEnvelope(snapshot)),
+					},
+				});
 			});
 			for (const snapshot of snapshots) delivery?.consume(snapshot.id);
-			return makeToolResult(boundedWaitText(snapshots), { action: "wait", subagents: snapshots });
+			return makeToolResult(boundedWaitText(snapshots), {
+				action: "wait",
+				subagents: snapshots,
+				activity: snapshots.map((snapshot) => activityEnvelope(snapshot)),
+			});
 		},
 	});
 
@@ -199,8 +238,14 @@ export function registerSubagentTools(
 			// id permanently poisons it in the delivery buffer, so the eventual
 			// REAL child with that predictably-assigned id (e.g. a later sa-4)
 			// would settle unconsumed yet be silently dropped by defer().
-			for (const id of params.ids) if (manager.get(id)) delivery?.consume(id);
-			return makeToolResult(lines.join("\n"), { action: "cancel", ids: params.ids });
+			const snapshots = params.ids.map((id) => manager.get(id)).filter((snapshot): snapshot is SubagentSnapshot => snapshot !== undefined);
+			for (const snapshot of snapshots) delivery?.consume(snapshot.id);
+			return makeToolResult(lines.join("\n"), {
+				action: "cancel",
+				ids: params.ids,
+				subagents: snapshots.map(cancellationMetadata),
+				activity: snapshots.map((snapshot) => activityEnvelope(snapshot)),
+			});
 		},
 	});
 

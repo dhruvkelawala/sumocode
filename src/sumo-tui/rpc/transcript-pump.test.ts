@@ -30,9 +30,9 @@ function comparable(value: unknown): unknown {
 		if (child === undefined) continue;
 		result[key] = comparable(child);
 	}
-	if (result.type === "tool" && typeof result.tool === "object" && result.tool !== null) {
-		const tool = result.tool as Record<string, unknown>;
-		if (tool.status === "pending") tool.status = "running";
+	if (result.type === "activity" && typeof result.activity === "object" && result.activity !== null) {
+		const activity = result.activity as Record<string, unknown>;
+		if (activity.status === "queued") activity.status = "running";
 	}
 	return result;
 }
@@ -176,16 +176,16 @@ describe("RpcTranscriptPump", () => {
 			{ type: "markdown", text: "\nAfter code." },
 		]);
 		expect(transcript.messages[2]?.blocks).toEqual([{
-			type: "tool",
-			tool: {
+			type: "activity",
+			activity: {
 				id: "edit-1",
-				name: "edit",
-				status: "success",
-				input: { path: "src/auth.ts" },
-				output: "+1 -1",
-				details: { diff: "- old\n+ new" },
-				error: undefined,
-				expanded: true,
+				kind: "tool",
+				title: "edit",
+				status: "succeeded",
+				invocation: { path: "src/auth.ts" },
+				subject: "src/auth.ts",
+				outputTail: "+1 -1",
+				body: { kind: "diff", text: "- old\n+ new" },
 			},
 		}]);
 		expect(chatMessageViewModelToPlainText(transcript.messages[2]!)).toContain("ctrl+o diff");
@@ -202,7 +202,7 @@ describe("RpcTranscriptPump", () => {
 		}]);
 	});
 
-	it("folds live task execution partial details into the active delegation block", () => {
+	it("folds live task execution partial details into the active Activity block", () => {
 		const pump = new RpcTranscriptPump();
 		const taskCall = {
 			type: "toolCall",
@@ -236,13 +236,13 @@ describe("RpcTranscriptPump", () => {
 		});
 
 		expect(transcript.messages[0]?.blocks[0]).toMatchObject({
-			type: "delegation",
-			delegation: {
+			type: "activity",
+			activity: {
 				title: "Audit auth",
 				model: "openai-codex/gpt-5.5",
 				thinking: "high",
 				status: "running",
-				nestedTools: [{ id: "read-1", name: "read", status: "running", input: { path: "src/auth.ts" } }],
+				activeTools: [{ id: "read-1", title: "read", status: "running", invocation: { path: "src/auth.ts" } }],
 			},
 		});
 	});
@@ -277,12 +277,12 @@ describe("RpcTranscriptPump", () => {
 		});
 
 		let transcript = pump.viewModel();
-		let toolBlocks = transcript.messages.flatMap((message) => message.blocks).filter((block) => block.type === "tool");
+		let activityBlocks = transcript.messages.flatMap((message) => message.blocks).filter((block) => block.type === "activity");
 		expect(transcript.messages).toHaveLength(1);
-		expect(toolBlocks).toHaveLength(1);
-		expect(toolBlocks[0]).toMatchObject({
-			type: "tool",
-			tool: { id: "read-1", name: "read", status: "running", input: { path: "src/auth/session.ts" }, output: undefined },
+		expect(activityBlocks).toHaveLength(1);
+		expect(activityBlocks[0]).toMatchObject({
+			type: "activity",
+			activity: { id: "read-1", title: "read", status: "running", invocation: { path: "src/auth/session.ts" } },
 		});
 
 		pump.handleAgentEvent({
@@ -293,8 +293,8 @@ describe("RpcTranscriptPump", () => {
 			partialResult: { content: [{ type: "text", text: "partial file contents" }] },
 		});
 		expect(pump.viewModel().messages[0]?.blocks[1]).toMatchObject({
-			type: "tool",
-			tool: { id: "read-1", status: "running", output: "partial file contents" },
+			type: "activity",
+			activity: { id: "read-1", status: "running", outputTail: "partial file contents" },
 		});
 
 		pump.handleAgentEvent({
@@ -317,21 +317,21 @@ describe("RpcTranscriptPump", () => {
 		});
 
 		transcript = pump.viewModel();
-		toolBlocks = transcript.messages.flatMap((message) => message.blocks).filter((block) => block.type === "tool");
+		activityBlocks = transcript.messages.flatMap((message) => message.blocks).filter((block) => block.type === "activity");
 		expect(transcript.messages).toHaveLength(1);
 		expect(transcript.messages[0]?.role).toBe("sumo");
-		expect(toolBlocks).toHaveLength(1);
-		expect(toolBlocks[0]).toEqual({
-			type: "tool",
-			tool: {
+		expect(activityBlocks).toHaveLength(1);
+		expect(activityBlocks[0]).toEqual({
+			type: "activity",
+			activity: {
 				id: "read-1",
-				name: "read",
-				status: "success",
-				input: { path: "src/auth/session.ts" },
-				output: "final file contents",
-				details: undefined,
-				error: undefined,
-				expanded: true,
+				kind: "tool",
+				title: "read",
+				status: "succeeded",
+				invocation: { path: "src/auth/session.ts" },
+				subject: "src/auth/session.ts",
+				outputTail: "final file contents",
+				body: { kind: "source", text: "final file contents", totalLines: 1 },
 			},
 		});
 	});

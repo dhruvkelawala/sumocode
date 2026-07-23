@@ -76,7 +76,7 @@ function buildCtxStub() {
 		hasUI: true,
 		cwd: "/tmp",
 		isIdle: () => true,
-		sessionManager: { getBranch: () => [] },
+		sessionManager: { getBranch: () => [], getSessionId: () => "test-session" },
 		getContextUsage: () => undefined,
 		model: undefined,
 		ui: {
@@ -256,7 +256,7 @@ describe("rpc child profile", () => {
 			expect(commandNames).toContain("sumo:ship");
 			expect(toolNames).toContain("task");
 			expect(toolNames).toContain("question");
-			for (const name of ["bg_start", "bg_status", "bg_kill", "bg_list"]) expect(toolNames).toContain(name);
+			for (const name of ["terminal_start", "terminal_check", "terminal_wait", "terminal_stop", "terminal_list"]) expect(toolNames).toContain(name);
 			expect(shortcutNames).not.toContain("ctrl+/");
 
 			const ctx = { ...buildCtxStub(), mode: "rpc" };
@@ -358,7 +358,8 @@ describe("sumocode extension", () => {
 				"subagent_cancel",
 				"subagent_list",
 			]);
-			expect(toolNames.filter((name) => name.startsWith("bg_"))).toEqual(["bg_start", "bg_status", "bg_kill", "bg_list"]);
+			expect(toolNames.filter((name) => name.startsWith("terminal_"))).toEqual(["terminal_start", "terminal_check", "terminal_wait", "terminal_stop", "terminal_list"]);
+			expect(toolNames.filter((name) => name.startsWith("bg_"))).toEqual([]);
 			expect(toolNames).toContain("task");
 			expect(toolNames).not.toContain(["bg", "task"].join("_"));
 		} finally {
@@ -375,7 +376,7 @@ describe("sumocode extension", () => {
 		const commandNames = pi.registerCommand.mock.calls.map((call) => call[0]);
 		const toolNames = pi.registerTool.mock.calls.map((call) => (call[0] as { name: string }).name);
 		expect(commandNames).toContain("sumo:review");
-		for (const name of ["bg_start", "bg_status", "bg_kill", "bg_list"]) expect(toolNames).toContain(name);
+		for (const name of ["terminal_start", "terminal_check", "terminal_wait", "terminal_stop", "terminal_list"]) expect(toolNames).toContain(name);
 		expect(commandNames).toContain("sumo:ship");
 		expect(commandNames).toContain("sumo:worktree");
 	});

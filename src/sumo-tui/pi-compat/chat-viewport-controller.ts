@@ -3,6 +3,7 @@ import type { MouseEvent } from "../input/mouse.js";
 import type { KeyEvent } from "../input/key-router.js";
 import { logDiagnostic } from "../runtime/diagnostics.js";
 import { measureMaybe, ResumeProfiler, type ResumeProfileMetadata } from "../runtime/resume-profiler.js";
+import { isFoldableBlock, isFoldableResultViewModel, upsertFoldableBlock } from "../transcript/activity-fold.js";
 import {
 	chatMessageViewModelFromPiMessage,
 	chatMessageViewModelToPlainText,
@@ -121,82 +122,6 @@ export function textFromAgentMessage(message: unknown): string {
 
 function addViewModel(chat: ChatPager, message: ChatMessageViewModel): void {
 	chat.addViewModel(message);
-}
-
-function isFoldableBlock(block: ChatBlock): boolean {
-	return block.type === "tool" || block.type === "delegation";
-}
-
-function isFoldableOnlyViewModel(message: ChatMessageViewModel): boolean {
-	return message.blocks.length > 0 && message.blocks.every(isFoldableBlock);
-}
-
-function mergeToolBlock(existing: Extract<ChatBlock, { type: "tool" }>, incoming: Extract<ChatBlock, { type: "tool" }>): ChatBlock {
-	return {
-		type: "tool",
-		tool: {
-			...existing.tool,
-			...incoming.tool,
-			input: incoming.tool.input ?? existing.tool.input,
-			details: incoming.tool.details ?? existing.tool.details,
-		},
-	};
-}
-
-function mergeDelegationBlock(existing: Extract<ChatBlock, { type: "delegation" }>, incoming: Extract<ChatBlock, { type: "delegation" }>): ChatBlock {
-	const incomingTitle = incoming.delegation.title;
-	const keepExistingTitle = existing.delegation.title !== "task" && (incomingTitle === "task" || incomingTitle === "delegation");
-	return {
-		type: "delegation",
-		delegation: {
-			...existing.delegation,
-			...incoming.delegation,
-			title: keepExistingTitle ? existing.delegation.title : incoming.delegation.title,
-			agent: incoming.delegation.agent ?? existing.delegation.agent,
-			model: incoming.delegation.model ?? existing.delegation.model,
-			thinking: incoming.delegation.thinking ?? existing.delegation.thinking,
-			nestedTools: (incoming.delegation.nestedTools?.length ?? 0) > 0 ? incoming.delegation.nestedTools : existing.delegation.nestedTools,
-			tokensIn: incoming.delegation.tokensIn ?? existing.delegation.tokensIn,
-			tokensOut: incoming.delegation.tokensOut ?? existing.delegation.tokensOut,
-			elapsedMs: incoming.delegation.elapsedMs ?? existing.delegation.elapsedMs,
-		},
-	};
-}
-
-function mergeFoldableBlock(existing: ChatBlock, incoming: ChatBlock): ChatBlock {
-	if (existing.type === "tool" && incoming.type === "tool") return mergeToolBlock(existing, incoming);
-	if (existing.type === "delegation" && incoming.type === "delegation") return mergeDelegationBlock(existing, incoming);
-	return incoming;
-}
-
-function upsertFoldableBlock(blocks: readonly ChatBlock[], incoming: ChatBlock): ChatBlock[] {
-	if (incoming.type === "tool") {
-		const incomingId = incoming.tool.id;
-		const byId = incomingId
-			? blocks.findIndex((block) => block.type === "tool" && block.tool.id === incomingId)
-			: -1;
-		const byName = byId === -1
-			? blocks.findIndex((block) => block.type === "tool" && block.tool.id === undefined && block.tool.name === incoming.tool.name && (block.tool.status === "pending" || block.tool.status === "running"))
-			: -1;
-		const index = byId !== -1 ? byId : byName;
-		if (index === -1) return [...blocks, incoming];
-		return blocks.map((block, blockIndex) => blockIndex === index ? mergeFoldableBlock(block, incoming) : block);
-	}
-
-	if (incoming.type === "delegation") {
-		const incomingId = incoming.delegation.id;
-		const byId = incomingId
-			? blocks.findIndex((block) => block.type === "delegation" && block.delegation.id === incomingId)
-			: -1;
-		const byRunning = !incomingId && byId === -1
-			? blocks.findIndex((block) => block.type === "delegation" && (block.delegation.status === "queued" || block.delegation.status === "running"))
-			: -1;
-		const index = byId !== -1 ? byId : byRunning;
-		if (index === -1) return [...blocks, incoming];
-		return blocks.map((block, blockIndex) => blockIndex === index ? mergeFoldableBlock(block, incoming) : block);
-	}
-
-	return [...blocks, incoming];
 }
 
 function renderableLineCount(component: PiRenderableComponent | undefined, width: number): number {
@@ -325,6 +250,7 @@ export class ChatViewportController {
 	private lastAssistantText = "";
 	private liveAssistant: ChatMessageViewModel | undefined;
 	private liveAssistantBlocks: ChatBlock[] = [];
+	private liveAssistantIndex: number | undefined;
 	private lastChatTop = 0;
 	private lastChatWidth = 1;
 	private lastChatHeight = 1;
@@ -426,6 +352,7 @@ export class ChatViewportController {
 		this.lastAssistantText = "";
 		this.liveAssistant = undefined;
 		this.liveAssistantBlocks = [];
+		this.liveAssistantIndex = undefined;
 		this.inputRouter.clearPendingMouseInput();
 		this.runtime.setEmptyChatQuoteState({ active: false, userMessageCount: 0 });
 	}
@@ -484,6 +411,7 @@ export class ChatViewportController {
 		this.lastAssistantText = "";
 		this.liveAssistant = undefined;
 		this.liveAssistantBlocks = [];
+		this.liveAssistantIndex = undefined;
 		this.inputRouter.clearPendingMouseInput();
 		// Resume uses bulk transcript replacement instead of `clear()` + per-message
 		// replay; `replaceViewModels()` resets the chat-side scroll/banner state.
@@ -507,6 +435,7 @@ export class ChatViewportController {
 	}
 
 	private handleToolExecutionEvent(record: Record<string, unknown>): void {
+		if (typeof record.toolCallId !== "string" || record.toolCallId.length === 0) return;
 		this.markRenderDirty();
 		const isEnd = record.type === "tool_execution_end";
 		const toolName = typeof record.toolName === "string" ? record.toolName : "tool";
@@ -537,8 +466,9 @@ export class ChatViewportController {
 					}],
 				},
 		);
-		if (!viewModel || !isFoldableOnlyViewModel(viewModel) || !this.liveAssistant) return;
-		this.foldBlocksIntoAssistant(viewModel.blocks);
+		if (!viewModel || !isFoldableResultViewModel(viewModel)) return;
+		const unmatched = this.foldBlocksAcrossTranscript(viewModel.blocks);
+		if (unmatched.length > 0) this.publishUnmatchedBlocks(viewModel, unmatched);
 		this.runtime.requestRender();
 	}
 
@@ -546,8 +476,9 @@ export class ChatViewportController {
 		this.markRenderDirty();
 		const role = asRecord(message)?.role;
 		if (role === "user") {
-			this.liveAssistant = undefined;
-			this.liveAssistantBlocks = [];
+			// A steer/follow-up can arrive while a tool launched by the current
+			// assistant is still running. Keep that assistant's source-index target
+			// until the next assistant starts so the result folds into its Activity.
 			this.runtime.noteUserMessage();
 		}
 		if (role === "assistant") {
@@ -556,8 +487,11 @@ export class ChatViewportController {
 		}
 		const viewModel = this.viewModelMapper.messageFromPiMessage(message);
 		if (!viewModel || chatMessageViewModelToPlainText(viewModel).length === 0) return;
-		if (isFoldableOnlyViewModel(viewModel) && this.liveAssistant) {
-			this.foldBlocksIntoAssistant(viewModel.blocks);
+		if (isFoldableResultViewModel(viewModel)) {
+			const unmatched = this.foldBlocksAcrossTranscript(viewModel.blocks);
+			const record = asRecord(message);
+			const isPassiveSubagentResult = record?.role === "custom" && record.customType === "subagent-result";
+			if (unmatched.length > 0) this.publishUnmatchedBlocks(viewModel, unmatched, !isPassiveSubagentResult);
 			return;
 		}
 		addViewModel(this.chat, viewModel);
@@ -580,7 +514,7 @@ export class ChatViewportController {
 		if (viewModel) {
 			this.liveAssistant = { ...viewModel, role: "sumo", displayName: "SUMO" };
 			this.liveAssistantBlocks = [...viewModel.blocks];
-			this.chat.replaceLastWithViewModel(this.liveAssistant);
+			this.publishLiveAssistant();
 		} else {
 			this.chat.replaceLast(text);
 			this.liveAssistantBlocks = markdownAndCodeBlocksFromText(text);
@@ -597,7 +531,7 @@ export class ChatViewportController {
 				if (viewModel) {
 					this.liveAssistant = { ...viewModel, role: "sumo", displayName: "SUMO" };
 					this.liveAssistantBlocks = [...viewModel.blocks];
-					this.chat.replaceLastWithViewModel(this.liveAssistant);
+					this.publishLiveAssistant();
 				} else {
 					this.chat.replaceLast(text);
 					this.liveAssistantBlocks = markdownAndCodeBlocksFromText(text);
@@ -615,6 +549,7 @@ export class ChatViewportController {
 			: { id: "live-assistant", role: "sumo", displayName: "SUMO", blocks: [{ type: "markdown", text: "" }] };
 		this.liveAssistantBlocks = viewModel ? [...viewModel.blocks] : [];
 		this.lastAssistantText = chatMessageViewModelToPlainText({ ...this.liveAssistant, blocks: this.liveAssistantBlocks });
+		this.liveAssistantIndex = this.chat.getMessageCount();
 		this.chat.addViewModel({ ...this.liveAssistant, blocks: this.liveAssistantBlocks.length > 0 ? this.liveAssistantBlocks : [{ type: "markdown", text: "" }] });
 	}
 
@@ -634,17 +569,56 @@ export class ChatViewportController {
 		this.publishLiveAssistant();
 	}
 
-	private foldBlocksIntoAssistant(blocks: readonly ChatBlock[]): void {
+	private foldBlocksAcrossTranscript(blocks: readonly ChatBlock[]): ChatBlock[] {
+		const unmatched: ChatBlock[] = [];
+		let siblingTargetIndex: number | undefined;
 		for (const block of blocks) {
-			this.liveAssistantBlocks = upsertFoldableBlock(this.liveAssistantBlocks, block);
+			if (isFoldableBlock(block)) {
+				const targetIndex = this.chat.foldBlockIntoMatchingMessage(block);
+				if (targetIndex === undefined) {
+					unmatched.push(block);
+					continue;
+				}
+				siblingTargetIndex = targetIndex;
+				if (targetIndex === this.liveAssistantIndex) {
+					this.liveAssistantBlocks = upsertFoldableBlock(this.liveAssistantBlocks, block);
+				}
+				continue;
+			}
+			if (block.type === "image" && siblingTargetIndex !== undefined) {
+				this.chat.upsertBlockAtSourceIndex(siblingTargetIndex, block);
+				if (siblingTargetIndex === this.liveAssistantIndex) {
+					this.liveAssistantBlocks = upsertFoldableBlock(this.liveAssistantBlocks, block);
+				}
+				continue;
+			}
+			unmatched.push(block);
 		}
-		this.lastAssistantText = this.liveAssistant ? chatMessageViewModelToPlainText({ ...this.liveAssistant, blocks: this.liveAssistantBlocks }) : this.lastAssistantText;
-		this.publishLiveAssistant();
+		if (this.liveAssistant) {
+			this.lastAssistantText = chatMessageViewModelToPlainText({ ...this.liveAssistant, blocks: this.liveAssistantBlocks });
+		}
+		return unmatched;
+	}
+
+	private publishUnmatchedBlocks(
+		source: ChatMessageViewModel,
+		blocks: readonly ChatBlock[],
+		attachToLiveAssistant = true,
+	): void {
+		if (this.liveAssistant && attachToLiveAssistant) {
+			for (const block of blocks) {
+				this.liveAssistantBlocks = upsertFoldableBlock(this.liveAssistantBlocks, block);
+			}
+			this.lastAssistantText = chatMessageViewModelToPlainText({ ...this.liveAssistant, blocks: this.liveAssistantBlocks });
+			this.publishLiveAssistant();
+			return;
+		}
+		addViewModel(this.chat, { ...source, blocks });
 	}
 
 	private publishLiveAssistant(): void {
-		if (!this.liveAssistant) return;
-		this.chat.replaceLastWithViewModel({
+		if (!this.liveAssistant || this.liveAssistantIndex === undefined) return;
+		this.chat.replaceViewModelAt(this.liveAssistantIndex, {
 			...this.liveAssistant,
 			blocks: this.liveAssistantBlocks.length > 0 ? this.liveAssistantBlocks : [{ type: "markdown", text: "" }],
 		});

@@ -9,6 +9,7 @@ logs/
 .claude/worktrees/
 tmp/
 scratch/rpc-spike/
+test/fixtures/pi-agent-*/state/
 
 # visual harness output (rendered PNGs from `pnpm visual`)
 docs/visual/out/

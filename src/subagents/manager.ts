@@ -33,6 +33,7 @@ export interface AtCapacityDetails {
 }
 
 export interface SpawnSubagentTask {
+	readonly sourceId?: string;
 	readonly prompt: string;
 	readonly title: string;
 	readonly cwd: string;
@@ -98,6 +99,7 @@ const makeInitialSnapshot = (
 	sessionFilePath?: string,
 ): SubagentSnapshot => ({
 	id,
+	...(task.sourceId ? { sourceId: task.sourceId } : {}),
 	title: task.title,
 	prompt: task.prompt,
 	cwd,
@@ -106,7 +108,8 @@ const makeInitialSnapshot = (
 	...(task.visible ? { visible: true } : {}),
 	status: "running",
 	createdAt,
-	modelLabel: task.model,
+	modelLabel: task.model ?? (task.inherited?.model ? `${task.inherited.model.provider}/${task.inherited.model.id}` : undefined),
+	thinkingLabel: task.thinking ?? task.inherited?.thinking,
 	sessionFilePath,
 	usage: { turns: 0 },
 	transcript: [],

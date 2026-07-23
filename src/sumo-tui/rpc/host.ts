@@ -1,5 +1,8 @@
 import { writeFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { defaultActivityStateRoot } from "../../activity/persistence.js";
+import { FileActivityStore, type ActivityStoreSnapshot } from "../../activity/store.js";
+import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import { getCapabilities, setCapabilities } from "@earendil-works/pi-tui";
 import { SUMOCODE_RELOAD_EXIT_CODE } from "../../commands/reload.js";
 import { containsCtrlCToken, isEscapeInput } from "../input/shared-input-router.js";
@@ -7,7 +10,7 @@ import { loadYoga } from "../layout/yoga.js";
 import { applyStartupTheme } from "../../themes/index.js";
 import { ExtensionStatusPublication, RegionRegistry } from "../pi-compat/region-registry.js";
 import type { TranscriptControllerChatSink } from "../transcript/controller.js";
-import type { ChatMessageViewModel } from "../transcript/view-model.js";
+import type { ChatMessageViewModel, TranscriptViewModel } from "../transcript/view-model.js";
 import type { ChatPagerReplaceStats } from "../widgets/chat-pager.js";
 import { ModalLayer } from "../widgets/modal-layer.js";
 import { NotificationCenter } from "../widgets/notification.js";
@@ -27,6 +30,7 @@ import { notifyOnError, type ErrorNotifier } from "./safe-send.js";
 import { RpcHostStateStore, type RpcHostChromeState } from "./state.js";
 import { RpcTranscriptPump } from "./transcript-pump.js";
 import { rpcVisualFixtureFromEnv } from "./visual-fixtures.js";
+import { logDiagnostic } from "../runtime/diagnostics.js";
 
 export interface RpcHostMainOptions {
 	readonly argv?: readonly string[];
@@ -128,6 +132,98 @@ export function writeExitCodeFile(env: NodeJS.ProcessEnv, code: number): void {
 	}
 }
 
+function activityPresentation(snapshot: ActivityStoreSnapshot) {
+	return {
+		activities: snapshot.activities,
+		expansion: snapshot.expansion,
+		...(snapshot.defaultExpansion === undefined ? {} : { defaultExpansion: snapshot.defaultExpansion }),
+	};
+}
+
+export function activitySnapshotMatchesSession(snapshot: ActivityStoreSnapshot, sessionId: string | undefined): boolean {
+	return snapshot.ownerSessionId === sessionId;
+}
+
+/**
+ * Buffers every child event from the session-operation barrier until RPC state
+ * and messages have hydrated. Events before the post-mutation barrier are
+ * superseded by destination snapshots; replaying the ordered post-barrier
+ * suffix is safe because transcript events carry stable IDs and agent_end is a
+ * complete replacement, while dropping that suffix leaves settled state stale.
+ */
+export interface RpcHydrationEventReplay {
+	readonly supersededSnapshotEvents: readonly AgentSessionEvent[];
+	readonly suffixEvents: readonly AgentSessionEvent[];
+}
+
+export class RpcSessionEventBuffer {
+	private events: AgentSessionEvent[] = [];
+	private replayStart = 0;
+	private failureReplayStart = 0;
+	private active = false;
+
+	public get isActive(): boolean {
+		return this.active;
+	}
+
+	public begin(): boolean {
+		if (this.active) return false;
+		this.events = [];
+		this.replayStart = 0;
+		this.failureReplayStart = 0;
+		this.active = true;
+		return true;
+	}
+
+	public capture(event: AgentSessionEvent): boolean {
+		if (!this.active) return false;
+		this.events.push(event);
+		return true;
+	}
+
+	/** Old-session events before this point are excluded even if hydration later fails. */
+	public markHydrationBaseline(): void {
+		if (!this.active) return;
+		this.replayStart = this.events.length;
+		this.failureReplayStart = this.events.length;
+	}
+
+	/** Events before this point are covered by a complete destination hydration pass. */
+	public markHydrationBarrier(): void {
+		if (this.active) this.replayStart = this.events.length;
+	}
+
+	public get hasEventsAfterHydrationBarrier(): boolean {
+		return this.active && this.events.length > this.replayStart;
+	}
+
+	public finish(options: { readonly afterHydrationBarrier?: boolean; readonly afterFailureBaseline?: boolean } = {}): readonly AgentSessionEvent[] {
+		const events = options.afterHydrationBarrier
+			? this.events.slice(this.replayStart)
+			: options.afterFailureBaseline
+				? this.events.slice(this.failureReplayStart)
+				: this.events;
+		this.reset();
+		return events;
+	}
+
+	public finishHydration(): RpcHydrationEventReplay {
+		const replay = {
+			supersededSnapshotEvents: this.events.slice(this.failureReplayStart, this.replayStart),
+			suffixEvents: this.events.slice(this.replayStart),
+		};
+		this.reset();
+		return replay;
+	}
+
+	private reset(): void {
+		this.events = [];
+		this.replayStart = 0;
+		this.failureReplayStart = 0;
+		this.active = false;
+	}
+}
+
 function fallbackChatSinkStats(messages: readonly ChatMessageViewModel[]): ChatPagerReplaceStats {
 	return {
 		sourceMessages: messages.length,
@@ -156,8 +252,17 @@ function fallbackChatSinkStats(messages: readonly ChatMessageViewModel[]): ChatP
 export function createLazyChatSink(getRuntime: () => { getChatSink(): TranscriptControllerChatSink | undefined } | undefined): TranscriptControllerChatSink {
 	return {
 		replaceViewModels: (messages) => getRuntime()?.getChatSink()?.replaceViewModels(messages) ?? fallbackChatSinkStats(messages),
-		addViewModel: (message) => getRuntime()?.getChatSink()?.addViewModel(message),
-		replaceLastWithViewModel: (message) => getRuntime()?.getChatSink()?.replaceLastWithViewModel(message),
+		addViewModel: (message, sourceIndex) => {
+			const sink = getRuntime()?.getChatSink();
+			return sourceIndex === undefined ? sink?.addViewModel(message) : sink?.addViewModel(message, sourceIndex);
+		},
+		replaceViewModelAt: (index, message) => getRuntime()?.getChatSink()?.replaceViewModelAt(index, message),
+		replaceLastWithViewModel: (message, sourceIndex) => {
+			const sink = getRuntime()?.getChatSink();
+			return sourceIndex === undefined
+				? sink?.replaceLastWithViewModel(message)
+				: sink?.replaceLastWithViewModel(message, sourceIndex);
+		},
 	};
 }
 
@@ -488,25 +593,14 @@ export function createThinkingCycleHandler(deps: RpcHostThinkingCycleDependencie
 }
 
 export interface RpcHostToolsExpandDependencies {
-	readonly setToolExpansion: (expanded: boolean) => void;
+	readonly toggleActivityExpansion: () => unknown;
 	readonly requestRender: () => void;
 }
 
-/**
- * Builds the `app.tools.expand` (Ctrl+O by default) action handler: flips a
- * host-held boolean and applies it via `setToolExpansion` -- threaded through
- * from `RpcHostRuntime.setToolExpansion` (-> `RpcShellAdapter.setToolExpansion`
- * -> the live `ChatPager`), the same indirection `getChatSink`/
- * `writeClipboardSequence` already use for other runtime-owned state, since
- * neither this handler nor `RpcHostActions` holds a direct reference to the
- * adapter. Starts collapsed (`false`) to match `ChatPager`'s own default
- * tool-expansion state.
- */
+/** Builds `app.tools.expand` without duplicating presentation state in the host. */
 export function createToolsExpandToggleHandler(deps: RpcHostToolsExpandDependencies): () => void {
-	let expanded = false;
 	return (): void => {
-		expanded = !expanded;
-		deps.setToolExpansion(expanded);
+		deps.toggleActivityExpansion();
 		deps.requestRender();
 	};
 }
@@ -568,6 +662,24 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		scheduleRender: () => runtime?.requestRender(),
 	});
 	const stateStore = new RpcHostStateStore();
+	const activityStore = new FileActivityStore({
+		rootDir: defaultActivityStateRoot(env),
+		onDiagnostic: (diagnostic) => logDiagnostic("activity_store_diagnostic", { ...diagnostic }),
+	});
+	let latestActivitySnapshot = activityStore.getSnapshot();
+	let deferActivityRuntimeUpdate = false;
+	const sessionEvents = new RpcSessionEventBuffer();
+	const unsubscribeActivityStore = activityStore.subscribe((snapshot) => {
+		const rpcSessionId = stateStore.getSnapshot().sessionId;
+		if (!activitySnapshotMatchesSession(snapshot, rpcSessionId)) return;
+		latestActivitySnapshot = snapshot;
+		logDiagnostic("rpc_activity_owner_observed", {
+			rpcSessionId: rpcSessionId ?? null,
+			feedOwnerSessionId: snapshot.ownerSessionId ?? null,
+			activityCount: snapshot.activities.length,
+		});
+		if (!deferActivityRuntimeUpdate) runtime?.update({ activities: activityPresentation(snapshot) });
+	});
 	const requestRender = (): void => runtime?.requestRender();
 	const pushState = (state?: RpcHostChromeState): void => {
 		runtime?.update({ state: state ?? stateStore.getSnapshot() });
@@ -688,7 +800,7 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		onStateChange: pushState,
 	});
 	const handleToolsExpandToggle = createToolsExpandToggleHandler({
-		setToolExpansion: (expanded) => runtime?.setToolExpansion(expanded),
+		toggleActivityExpansion: () => runtime?.toggleActivityExpansion(),
 		requestRender,
 	});
 	const handleMessageFollowUp = (): void => {
@@ -762,10 +874,127 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 	// old session's messages otherwise stay on screen as a "ghost transcript".
 	// Refetch get_messages and push the result through the same
 	// replaceFromMessages/runtime.update path used for initial hydration below.
+	const readTranscriptMessages = async () => responseData(
+		await client.send({ type: "get_messages" }),
+		"get_messages",
+	).messages;
+	const readTranscript = async () => transcriptPump.replaceFromMessages(await readTranscriptMessages());
 	const rehydrateTranscript = async (): Promise<void> => {
-		const messages = responseData(await client.send({ type: "get_messages" }), "get_messages").messages;
-		const transcript = transcriptPump.replaceFromMessages(messages);
+		const transcript = await readTranscript();
 		runtime?.update({ transcript, transcriptRevision: transcriptPump.getRevision() });
+	};
+	const processAgentEvent = (event: AgentSessionEvent): void => {
+		const transcript = transcriptPump.handleAgentEvent(event);
+		const state = stateStore.handleAgentEvent(event);
+		runtime?.update({ state, transcript, transcriptRevision: transcriptPump.getRevision() });
+		scheduler.handleAgentEvent(event);
+	};
+	let sessionHydrationRetrying = false;
+	const beginSessionChange = (): void => {
+		if (!sessionEvents.begin()) return;
+		sessionHydrationRetrying = false;
+		deferActivityRuntimeUpdate = true;
+		runtime?.beginSessionReplacement();
+	};
+	const cancelSessionChange = (): void => {
+		if (!sessionEvents.isActive) return;
+		const events = sessionEvents.finish();
+		sessionHydrationRetrying = false;
+		deferActivityRuntimeUpdate = false;
+		runtime?.update({
+			state: stateStore.getSnapshot(),
+			activities: activityPresentation(latestActivitySnapshot),
+		});
+		runtime?.endSessionReplacement();
+		for (const event of events) processAgentEvent(event);
+	};
+	let sessionHydrationRetryTimer: ReturnType<typeof setTimeout> | undefined;
+	const refreshSessionRuntime = async (): Promise<void> => {
+		if (sessionHydrationRetryTimer) clearTimeout(sessionHydrationRetryTimer);
+		sessionHydrationRetryTimer = undefined;
+		const continuingFailedHydration = sessionHydrationRetrying;
+		beginSessionChange();
+		// The mutating command has returned (or failed ambiguously). Everything
+		// before this boundary is superseded by the authoritative destination
+		// get_state/get_messages snapshots; only their concurrent suffix replays.
+		if (!continuingFailedHydration) sessionEvents.markHydrationBaseline();
+		let ownershipRebound = false;
+		let hydrationSucceeded = false;
+		try {
+			if (!continuingFailedHydration) {
+				// The child has already switched. Fail closed before any follow-up RPC so
+				// a timeout cannot leave A's private transcript/feed or queued prompts
+				// accepting B events. Restore A's queue to the editor and invalidate any
+				// in-flight scheduler generation before the first fallible request.
+				const detached = scheduler.rebindSession(undefined, editor.getText());
+				if (detached.count > 0) editor.setText(detached.text);
+				latestActivitySnapshot = activityStore.bindSession(undefined);
+				const emptyTranscript = transcriptPump.replaceFromMessages([]);
+				runtime?.update({
+					transcript: emptyTranscript,
+					transcriptRevision: transcriptPump.getRevision(),
+					activities: activityPresentation(latestActivitySnapshot),
+				});
+			}
+
+			let state: RpcHostChromeState | undefined;
+			let messages: readonly unknown[] | undefined;
+			for (let attempt = 0; attempt < 4; attempt += 1) {
+				// If a complete hydration pass observes events, retry: a request sent
+				// after those events gives us an authoritative snapshot that includes
+				// them. A quiet pass establishes an exact response-order boundary.
+				sessionEvents.markHydrationBarrier();
+				state = await controls.refreshState();
+				if (!ownershipRebound) {
+					const rebound = scheduler.rebindSession(state.sessionId, editor.getText());
+					if (rebound.count > 0) editor.setText(rebound.text);
+					latestActivitySnapshot = activityStore.bindSession(state.sessionId);
+					runtime?.update({ state, activities: activityPresentation(latestActivitySnapshot) });
+					ownershipRebound = true;
+				}
+				messages = await readTranscriptMessages();
+				if (!sessionEvents.hasEventsAfterHydrationBarrier) {
+					sessionEvents.markHydrationBarrier();
+					break;
+				}
+			}
+			if (!state || !messages) throw new Error("Session hydration did not produce a snapshot");
+			const transcript = transcriptPump.replaceFromMessages(messages);
+			hydrationSucceeded = true;
+			runtime?.update({
+				state,
+				transcript,
+				transcriptRevision: transcriptPump.getRevision(),
+				activities: activityPresentation(latestActivitySnapshot),
+			});
+		} catch {
+			// Keep the event buffer and fail-closed replacement active until both
+			// authoritative destination state and message history are fetched.
+			// Retrying here preserves the suffix without risking cross-session
+			// disclosure or committing an incomplete transcript.
+		} finally {
+			if (!hydrationSucceeded) {
+				sessionHydrationRetrying = true;
+				sessionHydrationRetryTimer = setTimeout(() => {
+					sessionHydrationRetryTimer = undefined;
+					void refreshSessionRuntime();
+				}, 100);
+				sessionHydrationRetryTimer.unref?.();
+				return;
+			}
+			sessionHydrationRetrying = false;
+			const replay = sessionEvents.finishHydration();
+			// State/messages snapshots supersede UI projection for earlier passes,
+			// but event-only scheduler effects still replay in order. The final
+			// in-flight suffix goes through every consumer and identity reconciliation.
+			for (const event of replay.supersededSnapshotEvents) scheduler.handleAgentEvent(event);
+			for (const event of replay.suffixEvents) processAgentEvent(event);
+			deferActivityRuntimeUpdate = false;
+			runtime?.endSessionReplacement(ownershipRebound);
+		}
+	};
+	const replayCancelledSessionEvents = async (): Promise<void> => {
+		cancelSessionChange();
 	};
 	actions = new RpcHostActions({
 		controls,
@@ -779,12 +1008,10 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		onRenderRequest: requestRender,
 		onExitRequest: (code) => requestHostExit(code),
 		rehydrateTranscript,
-		afterSessionChange: async () => {
-			const state = await controls.refreshState();
-			const restored = scheduler.rebindSession(state.sessionId, editor.getText());
-			if (restored.count > 0) editor.setText(restored.text);
-			await rehydrateTranscript();
-		},
+		beforeSessionChange: beginSessionChange,
+		cancelSessionChange,
+		afterSessionChange: refreshSessionRuntime,
+		afterCancelledSessionChange: replayCancelledSessionEvents,
 		writeClipboardSequence: (sequence) => runtime?.writeClipboardSequence(sequence) ?? false,
 		changelogRoot: root,
 	});
@@ -795,10 +1022,8 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 
 	client.onEvent((event) => {
 		if (visualFixture) return;
-		const transcript = transcriptPump.handleAgentEvent(event);
-		const state = stateStore.handleAgentEvent(event);
-		runtime?.update({ state, transcript, transcriptRevision: transcriptPump.getRevision() });
-		scheduler.handleAgentEvent(event);
+		if (sessionEvents.capture(event)) return;
+		processAgentEvent(event);
 	});
 
 	// The RPC child is the whole agent -- without this, the host has no signal
@@ -840,6 +1065,8 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 	const stop = async (code = 0): Promise<void> => {
 		stopPromise ??= (async () => {
 			if (statsTimer) clearInterval(statsTimer);
+			if (sessionHydrationRetryTimer) clearTimeout(sessionHydrationRetryTimer);
+			sessionHydrationRetryTimer = undefined;
 			stopWatchingGitBranch?.();
 			stopWatchingGitBranch = undefined;
 			runtime?.stop(code);
@@ -847,6 +1074,8 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 				regionRegistryDisposed = true;
 				regionRegistry.dispose();
 			}
+			unsubscribeActivityStore();
+			activityStore.dispose();
 			await client.stop();
 		})();
 		await stopPromise;
@@ -882,19 +1111,56 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 	process.once("SIGTERM", handleSigterm);
 
 	try {
+		// Initial boot has the same response/event ordering race as a session
+		// switch: an event parsed immediately after get_messages resolves can land
+		// before the awaiting continuation replaces the transcript. Buffer before
+		// child startup, refetch until one quiet pass, then replay only the final
+		// suffix after the authoritative replacement.
+		if (!visualFixture) sessionEvents.begin();
 		await client.start();
 		const branch = await readGitBranch(cwd);
-		await controls.refreshState(branch);
-		if (!visualFixture) {
+		let transcript: TranscriptViewModel;
+		if (visualFixture) {
+			const refreshedState = await controls.refreshState(branch);
+			const restored = scheduler.rebindSession(refreshedState.sessionId, editor.getText());
+			if (restored.count > 0) editor.setText(restored.text);
+			latestActivitySnapshot = activityStore.bindSession(refreshedState.sessionId);
+			transcript = visualFixture.transcript;
+		} else {
+			let refreshedState: RpcHostChromeState | undefined;
+			let messages: readonly unknown[] | undefined;
+			let ownershipRebound = false;
+			for (let attempt = 0; attempt < 4; attempt += 1) {
+				sessionEvents.markHydrationBarrier();
+				refreshedState = await controls.refreshState(branch);
+				if (!ownershipRebound) {
+					const restored = scheduler.rebindSession(refreshedState.sessionId, editor.getText());
+					if (restored.count > 0) editor.setText(restored.text);
+					latestActivitySnapshot = activityStore.bindSession(refreshedState.sessionId);
+					ownershipRebound = true;
+				}
+				messages = await readTranscriptMessages();
+				if (!sessionEvents.hasEventsAfterHydrationBarrier) {
+					sessionEvents.markHydrationBarrier();
+					break;
+				}
+			}
+			if (!refreshedState || !messages) throw new Error("Initial session hydration did not produce a snapshot");
+			transcript = transcriptPump.replaceFromMessages(messages);
+			const replay = sessionEvents.finishHydration();
+			for (const event of replay.supersededSnapshotEvents) scheduler.handleAgentEvent(event);
+			for (const event of replay.suffixEvents) processAgentEvent(event);
 			stopWatchingGitBranch = await watchGitBranch(cwd, branch, (nextBranch) => {
 				const state = stateStore.setGitBranch(nextBranch);
 				runtime?.update({ state });
 			});
 		}
 		await editor.configureAutocomplete(controls);
-		const transcript = visualFixture
-			? visualFixture.transcript
-			: transcriptPump.replaceFromMessages(responseData(await client.send({ type: "get_messages" }), "get_messages").messages);
+		// An event can arrive after the final quiet-pass check but before runtime
+		// construction. processAgentEvent has already advanced the pump in that
+		// window, so seed the first pager from its latest view rather than the
+		// earlier local replacement result.
+		if (!visualFixture) transcript = transcriptPump.viewModel();
 		const state = visualFixture ? visualFixture.state : stateStore.getSnapshot();
 		runtime = new RpcHostRuntime({
 			output: stdout,
@@ -902,6 +1168,10 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 			env,
 			initialState: state,
 			initialTranscript: transcript,
+			initialActivities: activityPresentation(latestActivitySnapshot),
+			onActivityExpansionChange: (id, expanded) => activityStore.setExpanded(id, expanded),
+			onActivityExpansionMigration: (previousId, nextId, expanded) => activityStore.migrateExpanded(previousId, nextId, expanded),
+			onAllActivityExpansionChange: (expanded, ids) => activityStore.setAllExpanded(expanded, ids),
 			inputPreview: visualFixture?.inputPreview,
 			// The wrapper, not the bare controller: while an inline selector
 			// (plan 036) is open it renders/handles-input in the editor's

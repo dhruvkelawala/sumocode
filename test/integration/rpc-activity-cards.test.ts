@@ -167,7 +167,7 @@ describe("RPC durable Activity cards", () => {
 		});
 	}, 45_000);
 
-	it("observes feed creation without an RPC event, updates one keyed card, and persists Ctrl+O across restart", async () => {
+	it("observes and updates one keyed card without resurrecting settled feed-only history after restart", async () => {
 		const cols = 100;
 		const rows = 30;
 		const piBin = await createRpcChildFixture("sumocode-rpc-activity-child-", {
@@ -207,8 +207,9 @@ describe("RPC durable Activity cards", () => {
 
 		app = spawnFixture(piBin, agentDir, cols, rows);
 		await app.waitForOutput(PI_BOOT_SEQUENCE, 15_000);
-		screen = await waitForScreen(app, ({ text }) => text.includes("[live terminal]") && text.includes("ctrl+o output"), { cols, rows, timeoutMs: 10_000 });
-		expect(screen.text).not.toContain('"Meow meow meow... meow meow"');
+		screen = await waitForScreen(app, ({ text }) => text.includes("DIVINE INVOCATION") && !text.includes("[live terminal]"), { cols, rows, timeoutMs: 10_000 });
+		expect(screen.text).not.toContain("completed output");
+		expect(screen.text).not.toContain("ctrl+o output");
 	}, 45_000);
 
 	it("isolates session A from B feed updates and restores A cards on resume", async () => {

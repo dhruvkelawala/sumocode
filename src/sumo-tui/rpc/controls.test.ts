@@ -432,6 +432,19 @@ describe("RpcHostControls", () => {
 		]);
 	});
 
+	it("loads available thinking levels from Pi", async () => {
+		const client = new FakeClient({
+			type: "response",
+			command: "get_available_thinking_levels",
+			success: true,
+			data: { levels: ["off", "minimal", "low", "medium", "high", "xhigh", "max"] },
+		});
+		const controls = new RpcHostControls(client);
+
+		await expect(controls.getAvailableThinkingLevels()).resolves.toEqual(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
+		expect(client.commands).toEqual([{ type: "get_available_thinking_levels" }]);
+	});
+
 	it("optimistically patches setThinkingLevel before the RPC response", async () => {
 		const setThinkingLevelResponse = deferred<RpcResponse>();
 		const client = new DeferredFakeClient(setThinkingLevelResponse);
@@ -578,6 +591,23 @@ describe("RpcHostControls", () => {
 			{ type: "set_auto_retry", enabled: true },
 			{ type: "get_commands" },
 		]);
+	});
+
+	it("executes login as a long-running child extension command outside the scheduler", async () => {
+		const client = new FakeClient(
+			{ type: "response", command: "prompt", success: true },
+			{ type: "response", command: "prompt", success: true },
+		);
+		const controls = new RpcHostControls(client);
+
+		await expect(controls.executeExtensionCommand("/login anthropic")).resolves.toBeUndefined();
+		await expect(controls.cancelLogin()).resolves.toBeUndefined();
+
+		expect(client.commands).toEqual([
+			{ type: "prompt", message: "/login anthropic" },
+			{ type: "prompt", message: "/sumo:login-cancel" },
+		]);
+		expect(client.timeouts).toEqual([1_200_000, undefined]);
 	});
 
 	it("sends the abort control payload", async () => {

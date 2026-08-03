@@ -167,7 +167,7 @@ describe("RPC durable Activity cards", () => {
 		});
 	}, 45_000);
 
-	it("observes feed creation without an RPC event, updates one keyed card, and persists Ctrl+O across restart", async () => {
+	it("observes and updates one keyed card without resurrecting settled feed-only history after restart", async () => {
 		const cols = 100;
 		const rows = 30;
 		const piBin = await createRpcChildFixture("sumocode-rpc-activity-child-", {
@@ -207,9 +207,48 @@ describe("RPC durable Activity cards", () => {
 
 		app = spawnFixture(piBin, agentDir, cols, rows);
 		await app.waitForOutput(PI_BOOT_SEQUENCE, 15_000);
-		screen = await waitForScreen(app, ({ text }) => text.includes("[live terminal]") && text.includes("ctrl+o output"), { cols, rows, timeoutMs: 10_000 });
-		expect(screen.text).not.toContain('"Meow meow meow... meow meow"');
+		screen = await waitForScreen(app, ({ text }) => text.includes("DIVINE INVOCATION") && !text.includes("[live terminal]"), { cols, rows, timeoutMs: 10_000 });
+		expect(screen.text).not.toContain("completed output");
+		expect(screen.text).not.toContain("ctrl+o output");
 	}, 45_000);
+
+	it("does not resurrect settled subagent TOOL frames from a reloaded transcript", async () => {
+		const cols = 100;
+		const rows = 30;
+		const settledAt = Date.now();
+		const settled = [
+			{ id: "subagent:sa-1", sourceId: "spawn-1", kind: "subagent", title: "Quartz v5 scaffold design", status: "succeeded", subject: "sa-1", ownerSessionId: "session-a", createdAt: settledAt - 1_000, updatedAt: settledAt, settledAt, result: { summary: "complete" } },
+			{ id: "subagent:sa-2", sourceId: "spawn-2", kind: "subagent", title: "Review Ready Brain deploy", status: "succeeded", subject: "sa-2", ownerSessionId: "session-a", createdAt: settledAt - 1_000, updatedAt: settledAt, settledAt, result: { summary: "complete" } },
+		] as const;
+		const piBin = await createRpcChildFixture("sumocode-rpc-subagent-reload-child-", {
+			sessionId: "session-a",
+			sessionName: "Subagent Reload Session",
+			messages: [
+				{ id: "spawn-message-1", role: "assistant", content: [{ type: "thinking", thinking: "Planning first worker" }, { type: "toolCall", id: "spawn-1", name: "subagent_spawn", arguments: { prompt: "work one", name: settled[0].title } }] },
+				{ role: "toolResult", toolCallId: "spawn-1", toolName: "subagent_spawn", content: [{ type: "text", text: "Started sa-1" }], details: { activity: { ...settled[0], status: "running", settledAt: undefined } } },
+				{ id: "spawn-message-2", role: "assistant", content: [{ type: "thinking", thinking: "Planning second worker" }, { type: "toolCall", id: "spawn-2", name: "subagent_spawn", arguments: { prompt: "work two", name: settled[1].title } }] },
+				{ role: "toolResult", toolCallId: "spawn-2", toolName: "subagent_spawn", content: [{ type: "text", text: "Started sa-2" }], details: { activity: { ...settled[1], status: "running", settledAt: undefined } } },
+				{ id: "wait-message", role: "assistant", content: [{ type: "thinking", thinking: "Waiting for workers" }, { type: "toolCall", id: "wait-call", name: "subagent_wait", arguments: { ids: ["sa-1", "sa-2"] } }] },
+				{ role: "toolResult", toolCallId: "wait-call", toolName: "subagent_wait", content: [{ type: "text", text: "Workers settled" }], details: { activity: settled } },
+			],
+		});
+		const agentDir = await mkdtemp(join(tmpdir(), "sumocode-rpc-subagent-reload-agent-"));
+		app = spawnFixture(piBin, agentDir, cols, rows);
+		await app.waitForOutput(PI_BOOT_SEQUENCE, 15_000);
+		const screen = await waitForScreen(app, ({ text }) => (
+			text.includes("Subagent Reload Session")
+			&& text.includes("READY")
+			&& !text.includes("Quartz v5 scaffold design")
+			&& !text.includes("Review Ready Brain deploy")
+		), { cols, rows, timeoutMs: 10_000 });
+		expect(screen.text).not.toContain("Quartz v5 scaffold design");
+		expect(screen.text).not.toContain("Review Ready Brain deploy");
+
+		app.sendInput(`first message after reload${CSI_U_ENTER}`);
+		const afterFirstMessage = await waitForScreen(app, ({ text }) => text.includes("fixture response complete: first message after reload"), { cols, rows, timeoutMs: 10_000 });
+		expect(afterFirstMessage.text).not.toContain("Quartz v5 scaffold design");
+		expect(afterFirstMessage.text).not.toContain("Review Ready Brain deploy");
+	}, 30_000);
 
 	it("isolates session A from B feed updates and restores A cards on resume", async () => {
 		const cols = 100;

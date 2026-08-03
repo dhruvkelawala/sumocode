@@ -16,6 +16,7 @@ export interface SharedInputRouterCallbacks {
 	readonly requestRender?: () => void;
 	readonly requestExit?: (code: number) => void;
 	readonly handleFocusedModalInput?: (data: string) => boolean | void;
+	readonly isSensitiveInputFocused?: () => boolean;
 	readonly handleFocusedOverlayInput?: (data: string) => boolean | void;
 	readonly handlePreEditorInput?: (data: string) => boolean | void;
 	readonly handleMouseEvent?: (event: MouseEvent) => boolean | void;
@@ -243,7 +244,7 @@ export class SharedInputRouter {
 		// release) can only be confirmed by capturing what it really sends.
 		// Run `sumocode -d .`, reproduce the broken key, then `sumocode diag`
 		// or grep the diag file for "raw_key_input" to see the exact bytes.
-		logDiagnostic("raw_key_input", { hex: toHex(data), length: data.length });
+		logDiagnostic("raw_key_input", { hex: this.diagnosticHex(data), length: data.length });
 		let pendingMouseInput = this.pendingMouseInput;
 		if (pendingMouseInput === "\x1b" && !data.startsWith("[")) {
 			this.clearPendingBareEscapeTimer();
@@ -300,8 +301,8 @@ export class SharedInputRouter {
 				consumed,
 				pendingLength: this.pendingMouseInput.length,
 				leftoverLength: nextData.length,
-				sourceHex: toHex(source.slice(0, 64)),
-				leftoverHex: toHex(nextData.slice(0, 64)),
+				sourceHex: this.diagnosticHex(source.slice(0, 64)),
+				leftoverHex: this.diagnosticHex(nextData.slice(0, 64)),
 			});
 		}
 
@@ -311,6 +312,10 @@ export class SharedInputRouter {
 		}
 
 		return this.routeNonMouseInput(nextData, data, consumed);
+	}
+
+	private diagnosticHex(value: string): string {
+		return this.callbacks.isSensitiveInputFocused?.() === true ? "[redacted]" : toHex(value);
 	}
 
 	private clearPendingBareEscapeTimer(): void {
@@ -361,25 +366,25 @@ export class SharedInputRouter {
 		if (nextData.length === 0 && consumed) return { consume: true };
 
 		if (containsCtrlCToken(nextData) && this.callbacks.handlePreEditorInput?.(nextData) === true) {
-			logDiagnostic("route_verdict", { target: "ctrlCPreEditor", hex: toHex(nextData) });
+			logDiagnostic("route_verdict", { target: "ctrlCPreEditor", hex: this.diagnosticHex(nextData) });
 			this.callbacks.requestRender?.();
 			return { consume: true };
 		}
 
 		if (this.callbacks.handleFocusedModalInput?.(nextData) === true) {
-			logDiagnostic("route_verdict", { target: "focusedModal", hex: toHex(nextData) });
+			logDiagnostic("route_verdict", { target: "focusedModal", hex: this.diagnosticHex(nextData) });
 			this.callbacks.requestRender?.();
 			return { consume: true };
 		}
 
 		if (this.callbacks.handleFocusedOverlayInput?.(nextData) === true) {
-			logDiagnostic("route_verdict", { target: "focusedOverlay", hex: toHex(nextData) });
+			logDiagnostic("route_verdict", { target: "focusedOverlay", hex: this.diagnosticHex(nextData) });
 			this.callbacks.requestRender?.();
 			return { consume: true };
 		}
 
 		if (isCommandPaletteInput(nextData)) {
-			logDiagnostic("route_verdict", { target: "commandPalette", hex: toHex(nextData) });
+			logDiagnostic("route_verdict", { target: "commandPalette", hex: this.diagnosticHex(nextData) });
 			void this.callbacks.openCommandPalette?.();
 			this.callbacks.requestRender?.();
 			return { consume: true };
@@ -387,37 +392,37 @@ export class SharedInputRouter {
 
 		const keyEvent = chatScrollCommandFromInput(nextData);
 		if (keyEvent && this.callbacks.handleChatScrollKey?.(keyEvent) === true) {
-			logDiagnostic("route_verdict", { target: "chatScroll", hex: toHex(nextData), keyEvent: keyEvent.key });
+			logDiagnostic("route_verdict", { target: "chatScroll", hex: this.diagnosticHex(nextData), keyEvent: keyEvent.key });
 			this.callbacks.requestRender?.();
 			return { consume: true };
 		}
 
 		const selectionKey = selectionCopyKeyFromInput(nextData);
 		if (selectionKey && this.callbacks.handleSelectionKey?.(selectionKey) === true) {
-			logDiagnostic("route_verdict", { target: "selectionCopy", hex: toHex(nextData) });
+			logDiagnostic("route_verdict", { target: "selectionCopy", hex: this.diagnosticHex(nextData) });
 			this.callbacks.requestRender?.();
 			return { consume: true };
 		}
 
 		if (this.callbacks.handlePreEditorInput?.(nextData) === true) {
-			logDiagnostic("route_verdict", { target: "preEditor", hex: toHex(nextData) });
+			logDiagnostic("route_verdict", { target: "preEditor", hex: this.diagnosticHex(nextData) });
 			this.callbacks.requestRender?.();
 			return { consume: true };
 		}
 
 		if (this.callbacks.forwardToEditor?.(nextData) === true) {
-			logDiagnostic("route_verdict", { target: "editor", hex: toHex(nextData) });
+			logDiagnostic("route_verdict", { target: "editor", hex: this.diagnosticHex(nextData) });
 			this.callbacks.requestRender?.();
 			return { consume: true, forwarded: true };
 		}
 
 		if (this.callbacks.forwardToPi?.(nextData) === true) {
-			logDiagnostic("route_verdict", { target: "forwardToPi", hex: toHex(nextData) });
+			logDiagnostic("route_verdict", { target: "forwardToPi", hex: this.diagnosticHex(nextData) });
 			return { consume: true, forwarded: true };
 		}
 
 		if (this.callbacks.handleUnhandledInput?.(nextData) === true) {
-			logDiagnostic("route_verdict", { target: "unhandledFallback", hex: toHex(nextData) });
+			logDiagnostic("route_verdict", { target: "unhandledFallback", hex: this.diagnosticHex(nextData) });
 			this.callbacks.requestRender?.();
 			return { consume: true };
 		}
@@ -428,16 +433,16 @@ export class SharedInputRouter {
 				outLen: nextData.length,
 				consumed,
 				rewritten: nextData !== originalData,
-				inHex: toHex(originalData.slice(0, 32)),
-				outHex: toHex(nextData.slice(0, 32)),
+				inHex: this.diagnosticHex(originalData.slice(0, 32)),
+				outHex: this.diagnosticHex(nextData.slice(0, 32)),
 			});
 		}
 
 		if (nextData !== originalData) {
-			logDiagnostic("route_verdict", { target: "noOpForwarded", hex: toHex(nextData) });
+			logDiagnostic("route_verdict", { target: "noOpForwarded", hex: this.diagnosticHex(nextData) });
 			return { data: nextData };
 		}
-		logDiagnostic("route_verdict", { target: "dropped", hex: toHex(nextData) });
+		logDiagnostic("route_verdict", { target: "dropped", hex: this.diagnosticHex(nextData) });
 		return undefined;
 	}
 }

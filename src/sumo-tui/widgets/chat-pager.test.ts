@@ -199,6 +199,30 @@ describe("ChatPager", () => {
 		root.dispose();
 	});
 
+	it("does not resurrect settled subagent TOOL frames during cold transcript hydration", async () => {
+		const { root, chat, buffer } = await makeChat(100, 10);
+		const settled = [
+			{ id: "subagent:sa-1", sourceId: "spawn-1", kind: "subagent", title: "Quartz v5 scaffold design", status: "succeeded", subject: "sa-1", result: { summary: "complete" } },
+			{ id: "subagent:sa-2", sourceId: "spawn-2", kind: "subagent", title: "Review Ready Brain deploy", status: "succeeded", subject: "sa-2", result: { summary: "complete" } },
+		] as const;
+		chat.replaceViewModels(settled.map((activity, index) => ({
+			id: `settled-subagent-${index}`,
+			role: "sumo" as const,
+			displayName: "SUMO",
+			blocks: [
+				{ type: "thinking" as const, text: `Planning ${activity.title}` },
+				{ type: "activity" as const, activity },
+			],
+		})), { materializeSettledFeed: false });
+
+		const cells = buffer();
+		const frame = Array.from({ length: 10 }, (_, row) => cells.toPlainRow(row)).join("\n");
+		expect(frame).not.toContain("TOOL");
+		expect(chat.getRenderedMessages()).toHaveLength(2);
+		expect(chat.getRenderedMessages().flatMap((message) => message.toSnapshot().blocks ?? []).some((block) => block.type === "activity")).toBe(false);
+		root.dispose();
+	});
+
 	it("streaming while scrolled up preserves the visible position (EC-2.5)", async () => {
 		const { root, chat, buffer } = await makeChat(36, 5);
 		for (let index = 0; index < 12; index += 1) chat.addMessage("sumo", `message ${index}`);

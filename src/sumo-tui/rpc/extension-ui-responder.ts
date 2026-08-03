@@ -1,10 +1,11 @@
 import type { RpcExtensionUIRequest, RpcExtensionUIResponse } from "@earendil-works/pi-coding-agent";
 import type { EditorTextController } from "../pi-compat/extension-ui-adapter.js";
+import { decodeAuthInputTitle } from "../pi-compat/secret-input.js";
 import type { ExtensionStatusPublication, RegionRegistry, WidgetPlacement } from "../pi-compat/region-registry.js";
 import { ModalManager } from "../widgets/modal.js";
 import { NotificationCenter, type NotificationLevel } from "../widgets/notification.js";
 
-type DialogModals = Pick<ModalManager, "select" | "confirm" | "input" | "editor">;
+type DialogModals = Pick<ModalManager, "select" | "confirm" | "input" | "editor" | "close">;
 type ToastCenter = Pick<NotificationCenter, "notify">;
 type TerminalTitle = { setTitle?(title: string): void };
 type StatusSink = (key: string, text: string | undefined) => void;
@@ -61,6 +62,7 @@ export class RpcExtensionUiResponder {
 	private readonly onRenderRequest: () => void;
 	private readonly statuses = new Map<string, string | undefined>();
 	private readonly widgets = new Map<string, readonly string[] | undefined>();
+	private readonly authPromptControllers = new Set<AbortController>();
 	private title: string | undefined;
 
 	public constructor(options: RpcExtensionUiResponderOptions = {}) {
@@ -77,16 +79,30 @@ export class RpcExtensionUiResponder {
 	public async handle(request: RpcExtensionUIRequest): Promise<RpcExtensionUIResponse | void> {
 		switch (request.method) {
 			case "select": {
-				const value = await this.modals.select(request.title, request.options, { timeout: request.timeout });
-				return valueResponse(request.id, value);
+				const decoded = decodeAuthInputTitle(request.title);
+				const controller = decoded.auth ? new AbortController() : undefined;
+				if (controller) this.authPromptControllers.add(controller);
+				try {
+					const value = await this.modals.select(decoded.title, request.options, { timeout: request.timeout, signal: controller?.signal });
+					return valueResponse(request.id, value);
+				} finally {
+					if (controller) this.authPromptControllers.delete(controller);
+				}
 			}
 			case "confirm": {
 				const confirmed = await this.modals.confirm(request.title, request.message, { timeout: request.timeout });
 				return { type: "extension_ui_response", id: request.id, confirmed };
 			}
 			case "input": {
-				const value = await this.modals.input(request.title, request.placeholder, { timeout: request.timeout });
-				return valueResponse(request.id, value);
+				const decoded = decodeAuthInputTitle(request.title);
+				const controller = decoded.auth ? new AbortController() : undefined;
+				if (controller) this.authPromptControllers.add(controller);
+				try {
+					const value = await this.modals.input(decoded.title, request.placeholder, { timeout: request.timeout, signal: controller?.signal, secret: decoded.secret });
+					return valueResponse(request.id, value);
+				} finally {
+					if (controller) this.authPromptControllers.delete(controller);
+				}
 			}
 			case "editor": {
 				// Pi's editor() contract: open an editor prefilled with `request.prefill`, return
@@ -102,6 +118,13 @@ export class RpcExtensionUiResponder {
 				this.onRenderRequest();
 				return undefined;
 			case "setStatus":
+				// OAuth callback success can abort a child-side AuthPrompt without a
+				// matching RPC cancellation message. Abort only dialogs tagged by the
+				// login adapter; unrelated active/queued modals must remain untouched.
+				if (request.statusKey === "sumocode.login" && request.statusText === undefined) {
+					for (const controller of this.authPromptControllers) controller.abort();
+					this.authPromptControllers.clear();
+				}
 				this.statuses.set(request.statusKey, request.statusText);
 				this.statusPublication?.setStatus(request.statusKey, request.statusText);
 				this.onStatus?.(request.statusKey, request.statusText);

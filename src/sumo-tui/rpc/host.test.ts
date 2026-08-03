@@ -343,6 +343,22 @@ describe("createRpcHostInterruptHandler wiring", () => {
 		expect(requestHostExit).not.toHaveBeenCalled();
 	});
 
+	it("uses the custom in-flight abort path for promptless login flows", async () => {
+		const controls = { abort: vi.fn(async () => undefined) };
+		const abortInFlight = vi.fn(async () => undefined);
+		const handle = createRpcHostInterruptHandler(interruptDeps({
+			stateStore: { getSnapshot: () => ({ isStreaming: false }) as never },
+			controls,
+			submitInFlight: () => true,
+			abortInFlight,
+		}));
+
+		expect(handle(CTRL_C)).toBe(true);
+		await flush();
+		expect(abortInFlight).toHaveBeenCalledOnce();
+		expect(controls.abort).not.toHaveBeenCalled();
+	});
+
 	it("falls back to arm-quit/quit once submitInFlight clears (agent_start landed or send failed)", () => {
 		let inFlight = true;
 		const requestHostExit = vi.fn();

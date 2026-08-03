@@ -220,6 +220,90 @@ describe("RpcShellAdapter durable Activity feed", () => {
 		}
 	});
 
+	it("does not resurrect a settled feed-only Tool frame after reload", async () => {
+		const settled = {
+			id: "term-settled",
+			kind: "terminal" as const,
+			title: "autoreview final",
+			status: "failed" as const,
+			settledAt: 20,
+			outputTail: "terminal exited with code 1",
+		};
+		const adapter = await RpcShellAdapter.create({
+			terminal: { writeFramePatches: () => undefined },
+			viewport: { columns: 100, rows: 30 },
+			initialState: state({ hasMessages: true, messageCount: 1 }),
+			initialTranscript: {
+				messages: [{ id: "answer", role: "sumo", displayName: "SUMO", blocks: [{ type: "markdown", text: "review complete" }] }],
+			},
+			initialActivities: { activities: [settled], expansion: { "term-settled": true } },
+		});
+		try {
+			const screenText = () => {
+				adapter.render();
+				return Array.from({ length: 30 }, (_, row) => adapter.getLastFrame()!.toPlainRow(row)).join("\n");
+			};
+			let text = screenText();
+			expect(text).toContain("review complete");
+			expect(text).not.toContain("[autoreview final]");
+			expect(text).not.toContain("terminal exited with code 1");
+
+			adapter.update({ activities: { activities: [settled], expansion: { "term-settled": true } } });
+			text = screenText();
+			expect(text).not.toContain("[autoreview final]");
+			expect(text).not.toContain("terminal exited with code 1");
+		} finally {
+			adapter.dispose();
+		}
+	});
+
+	it("does not resurrect a settled terminal Tool frame from the resumed transcript", async () => {
+		const settled = {
+			id: "term-transcript",
+			kind: "terminal" as const,
+			title: "owned build",
+			status: "succeeded" as const,
+			settledAt: 20,
+			result: { summary: "terminal exited with code 0" },
+		};
+		const adapter = await RpcShellAdapter.create({
+			terminal: { writeFramePatches: () => undefined },
+			viewport: { columns: 100, rows: 30 },
+			initialState: state({ hasMessages: true, messageCount: 1 }),
+			initialTranscript: {
+				messages: [
+					{
+						id: "completion",
+						role: "system",
+						displayName: "SYSTEM",
+						blocks: [
+							{ type: "activity", activity: { id: "wait-call", kind: "tool", title: "terminal_wait", status: "succeeded" } },
+							{ type: "activity", activity: settled },
+						],
+					},
+					{
+						id: "read-result",
+						role: "system",
+						displayName: "SYSTEM",
+						blocks: [{ type: "activity", activity: { id: "read-call", kind: "tool", title: "read", status: "succeeded", outputTail: "kept history" } }],
+					},
+				],
+			},
+			initialActivities: { activities: [settled], expansion: {} },
+		});
+		try {
+			adapter.render();
+			const text = Array.from({ length: 30 }, (_, row) => adapter.getLastFrame()!.toPlainRow(row)).join("\n");
+			expect(text).not.toContain("[owned build]");
+			expect(text).not.toContain("terminal exited with code 0");
+			expect(text).not.toContain("terminal_wait");
+			expect(text).toContain("[read]");
+			expect(text).toContain("kept history");
+		} finally {
+			adapter.dispose();
+		}
+	});
+
 	it("applies expansion before reconciling the first feed card and persists user toggles", async () => {
 		const onActivityExpansionChange = vi.fn();
 		const onAllActivityExpansionChange = vi.fn();

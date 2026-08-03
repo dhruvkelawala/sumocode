@@ -173,8 +173,8 @@ export class RpcShellAdapter {
 		});
 		// Seed feed identity before transcript virtualization so archived transcript
 		// completions claim their cards instead of reappearing as feed-only rows.
-		this.chat.reconcileFeedActivities(options.initialActivities?.activities ?? []);
-		this.chat.replaceViewModels(this.transcript.messages);
+		this.chat.reconcileFeedActivities(options.initialActivities?.activities ?? [], { materializeSettled: false });
+		this.chat.replaceViewModels(this.transcript.messages, { materializeSettledFeed: false });
 		// Expansion is host-owned and paints only after every initial feed/transcript
 		// owner is known; unknown persisted IDs are deliberately pruned by the pager.
 		this.chat.applyActivityExpansionSnapshot(options.initialActivities?.expansion ?? {}, options.initialActivities?.defaultExpansion);

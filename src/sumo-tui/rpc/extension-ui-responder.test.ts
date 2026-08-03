@@ -1,6 +1,7 @@
 import type { RpcExtensionUIRequest } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ExtensionStatusPublication } from "../pi-compat/region-registry.js";
+import { authInputTitle, secretInputTitle } from "../pi-compat/secret-input.js";
 import { ModalManager } from "../widgets/modal.js";
 import { NotificationCenter } from "../widgets/notification.js";
 import { RpcHostEditorController } from "./editor.js";
@@ -100,6 +101,77 @@ describe("RpcExtensionUiResponder", () => {
 		modals.handleInput("enter");
 
 		await expect(inputResponse).resolves.toEqual({ type: "extension_ui_response", id: "input-1", value: "ok" });
+	});
+
+	it("masks SumoCode authentication secrets while returning the raw value to the RPC child", async () => {
+		const modals = new ModalManager();
+		const responder = new RpcExtensionUiResponder({ modals });
+		const inputResponse = responder.handle(request({
+			type: "extension_ui_request",
+			id: "secret-1",
+			method: "input",
+			title: secretInputTitle("API key"),
+			placeholder: "sk-...",
+		}));
+
+		modals.handleInput("sk-secret");
+		expect(modals.render(40).join("\n")).not.toContain("sk-secret");
+		expect(modals.render(40).join("\n")).not.toContain("sumocode-secret-input");
+		modals.handleInput("enter");
+
+		await expect(inputResponse).resolves.toEqual({ type: "extension_ui_response", id: "secret-1", value: "sk-secret" });
+	});
+
+	it("closes an OAuth prompt when the child reports that login settled", async () => {
+		const modals = new ModalManager();
+		const responder = new RpcExtensionUiResponder({ modals });
+		const inputResponse = responder.handle(request({
+			type: "extension_ui_request",
+			id: "oauth-code",
+			method: "input",
+			title: authInputTitle("Paste redirect URL"),
+		}));
+
+		await responder.handle(request({
+			type: "extension_ui_request",
+			id: "login-settled",
+			method: "setStatus",
+			statusKey: "sumocode.login",
+			statusText: undefined,
+		}));
+
+		expect(modals.getActiveKind()).toBeUndefined();
+		await expect(inputResponse).resolves.toEqual({ type: "extension_ui_response", id: "oauth-code", cancelled: true });
+	});
+
+	it("cancels only tagged auth prompts when another modal is active", async () => {
+		const modals = new ModalManager();
+		const responder = new RpcExtensionUiResponder({ modals });
+		const unrelated = responder.handle(request({
+			type: "extension_ui_request",
+			id: "unrelated",
+			method: "input",
+			title: "Rename session",
+		}));
+		const auth = responder.handle(request({
+			type: "extension_ui_request",
+			id: "queued-auth",
+			method: "input",
+			title: authInputTitle("Paste redirect URL"),
+		}));
+
+		await responder.handle(request({
+			type: "extension_ui_request",
+			id: "login-settled-queued",
+			method: "setStatus",
+			statusKey: "sumocode.login",
+			statusText: undefined,
+		}));
+
+		expect(modals.getActiveDialogSnapshot()?.title).toBe("Rename session");
+		await expect(auth).resolves.toEqual({ type: "extension_ui_response", id: "queued-auth", cancelled: true });
+		modals.handleInput("enter");
+		await expect(unrelated).resolves.toEqual({ type: "extension_ui_response", id: "unrelated", value: "" });
 	});
 
 	it("returns the editor multiline prefill verbatim on immediate Enter without touching the host draft", async () => {

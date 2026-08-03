@@ -90,6 +90,39 @@ function correlatedActivity(index: ActivityCorrelationIndex, activity: ActivityS
 	return [...candidates].find((candidate) => sameActivity(candidate, activity));
 }
 
+function shouldSuppressColdManagedActivity(activity: ActivitySnapshot, feedIndex: ActivityCorrelationIndex): boolean {
+	// Completed subagents cannot reattach after process restart, and their final
+	// transcript records are sufficient settled truth even when no feed writer
+	// survived to persist a correlated snapshot.
+	if (activity.kind === "subagent") return isSettledActivityStatus(activity.status);
+	if (activity.kind !== "terminal") return false;
+	const feedActivity = correlatedActivity(feedIndex, activity);
+	return feedActivity?.kind === "terminal" && isSettledActivityStatus(feedActivity.status);
+}
+
+function suppressColdSettledManagedResult(
+	message: ChatMessageViewModel,
+	feedIndex: ActivityCorrelationIndex,
+): ChatMessageViewModel {
+	const suppressedKinds = new Set<"terminal" | "subagent">();
+	for (const block of message.blocks) {
+		if (block.type !== "activity" || (block.activity.kind !== "terminal" && block.activity.kind !== "subagent")) continue;
+		if (shouldSuppressColdManagedActivity(block.activity, feedIndex)) suppressedKinds.add(block.activity.kind);
+	}
+	if (suppressedKinds.size === 0) return message;
+	return {
+		...message,
+		blocks: message.blocks.filter((block) => {
+			if (block.type !== "activity") return true;
+			if (shouldSuppressColdManagedActivity(block.activity, feedIndex)) return false;
+			// Observation/control results accompany the managed snapshot in the same
+			// Pi tool-result message; retaining the operation alone would still create
+			// an orphan TOOL frame after the managed block is removed.
+			return block.activity.kind !== "tool" || ![...suppressedKinds].some((kind) => block.activity.title.startsWith(`${kind}_`));
+		}),
+	};
+}
+
 function prepareChatMessage(message: ChatMessageViewModel): PreparedChatMessage {
 	return {
 		role: chatRoleFromViewModel(message),
@@ -190,10 +223,16 @@ export class ChatPager extends SumoNode {
 		return result;
 	}
 
-	public replaceViewModels(messages: readonly ChatMessageViewModel[]): ChatPagerReplaceStats {
+	public replaceViewModels(
+		sourceMessages: readonly ChatMessageViewModel[],
+		options: { readonly materializeSettledFeed?: boolean } = {},
+	): ChatPagerReplaceStats {
 		const previousHeight = this.scrollBox.scrollHeight;
 		const feedActivities = [...this.feedActivities.values()];
 		const feedIndex = activityCorrelationIndex(feedActivities);
+		const messages = options.materializeSettledFeed === false
+			? sourceMessages.map((message) => suppressColdSettledManagedResult(message, feedIndex))
+			: sourceMessages;
 		this.transcriptClaimedActivityStatuses.clear();
 		for (const activity of this.activitiesFromViewModels(messages)) {
 			const feedActivity = correlatedActivity(feedIndex, activity);
@@ -268,11 +307,11 @@ export class ChatPager extends SumoNode {
 		}
 		this.rebuildRenderedChildren();
 		this.scrollBox.notifyContentChanged(this.getRenderedEstimatedHeight(width), previousHeight);
-		this.reconcileFeedActivities(feedActivities);
+		this.reconcileFeedActivities(feedActivities, { materializeSettled: options.materializeSettledFeed });
 		this.lastReadIndex = this.getTotalMessageCount() - 1;
 		this.scheduleRender();
 		return {
-			sourceMessages: messages.length,
+			sourceMessages: sourceMessages.length,
 			acceptedMessages,
 			renderedMessages: this.activeMessages.length,
 			archivedMessages: this.getArchivedMessageCount(),
@@ -479,7 +518,10 @@ export class ChatPager extends SumoNode {
 	}
 
 	/** Reconcile durable feed cards by Activity identity without rebuilding chat. */
-	public reconcileFeedActivities(activities: readonly ActivitySnapshot[]): void {
+	public reconcileFeedActivities(
+		activities: readonly ActivitySnapshot[],
+		options: { readonly materializeSettled?: boolean } = {},
+	): void {
 		const previous = [...this.feedActivities.values()];
 		const previousIndex = activityCorrelationIndex(previous);
 		const incomingIndex = activityCorrelationIndex(activities);
@@ -536,6 +578,15 @@ export class ChatPager extends SumoNode {
 			if (target) {
 				this.addFeedOwnership(target, activity.id);
 				this.updateActivityInMessage(target, activity);
+				continue;
+			}
+			// A cold host reload has no process-local virtualization history. Keep
+			// settled feed entries available for transcript correlation, but do not
+			// rematerialize them as new TOOL cards merely because the process restarted.
+			if (options.materializeSettled === false && isSettledActivityStatus(this.effectiveFeedStatus(activity))) {
+				// Remember the cold suppression without incrementing archived-message
+				// counts; later feed snapshots keep it hidden until it becomes live again.
+				this.virtualizedFeedActivityIds.add(activity.id);
 				continue;
 			}
 			this.addPreparedMessage(prepareChatMessage(activityCardViewModel(activity)), this.nextFeedSourceIndex--, false, activity.id);

@@ -659,7 +659,7 @@ describe("RPC autocomplete command construction", () => {
 		expect(suggestions?.items.map((item) => item.value)).toContain("ship");
 	});
 
-	it("advertises commands sourced only from the host list or the child's get_commands, excluding /login", () => {
+	it("advertises commands sourced only from the host list or the child's get_commands, including the host-owned /login bridge", () => {
 		const childCommands = [
 			rpcCommand("deploy", "Deploy current workspace"),
 			rpcCommand("export", "Child executable export", "prompt"),
@@ -677,12 +677,10 @@ describe("RPC autocomplete command construction", () => {
 		}
 		expect(commands.some((command) => command.name === "export")).toBe(true);
 		expect(commands.some((command) => command.name === "quit")).toBe(true);
-		// /hotkeys is now host-implemented (plan 035 phase 1) and advertised;
-		// /login is a Phase-3, upstream-Pi-only command this host still doesn't
-		// implement, so it must NOT be advertised unless the child itself
-		// exposes it via get_commands (not the case here).
+		// /hotkeys and /login are host-advertised; /login executes the child
+		// compatibility command outside the agent prompt scheduler.
 		expect(commands.some((command) => command.name === "hotkeys")).toBe(true);
-		expect(commands.some((command) => command.name === "login")).toBe(false);
+		expect(commands.some((command) => command.name === "login")).toBe(true);
 	});
 });
 
@@ -714,6 +712,19 @@ describe("advertised host slash-command dispatch invariant", () => {
 		public async compact(): Promise<Record<string, unknown>> {
 			this.calls.push("compact");
 			return {};
+		}
+
+		public async getAvailableThinkingLevels(): Promise<Array<"off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max">> {
+			this.calls.push("getAvailableThinkingLevels");
+			return ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+		}
+
+		public async executeExtensionCommand(message: string): Promise<void> {
+			this.calls.push(`executeExtensionCommand:${message}`);
+		}
+
+		public async cancelLogin(): Promise<void> {
+			this.calls.push("cancelLogin");
 		}
 
 		public async newSession(): Promise<{ cancelled: boolean }> {

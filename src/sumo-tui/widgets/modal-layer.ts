@@ -1,4 +1,4 @@
-import { truncateToWidth, visibleWidth, type Component } from "@earendil-works/pi-tui";
+import { truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
 import { renderDivineQuery } from "../../divine-query.js";
 import { fg as scriptoriumFg } from "../../cathedral/scriptorium-chrome.js";
 import { SumoNode } from "../layout/node.js";
@@ -126,15 +126,17 @@ export class ModalLayer extends ModalManager {
 		}
 		if (dialog?.kind === "input") {
 			const colors = activeThemeColors();
+			const inputWidth = Math.max(1, modalWidth - 6); // 5-col Cathedral indent + 1-col right margin
 			const shown = dialog.value
 				? scriptoriumFg(`> ${dialog.value}█`, colors.foreground)
-				: scriptoriumFg(`> ${dialog.placeholder ?? ""}█`, colors.foregroundDim);
+				: `${scriptoriumFg("> █", colors.foreground)}${scriptoriumFg(dialog.placeholder ?? "", colors.foregroundDim)}`;
+			const inputRows = wrapTextWithAnsi(shown, inputWidth).map((row) => `     ${row}`);
 			return renderDivineQuery(
 				{ title: dialog.title, options: [], focusedIndex: 0 },
 				modalWidth,
 				{
 					extras: [
-						`     ${shown}`,
+						...inputRows,
 						"",
 						`     ${scriptoriumFg("⏎ submit · ⎋ retreat", colors.foregroundDim)}`,
 						"",

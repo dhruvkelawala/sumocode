@@ -1,3 +1,6 @@
+import { readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
 	containsCtrlCToken,
@@ -10,6 +13,29 @@ import {
 } from "./shared-input-router.js";
 
 const CTRL_SLASH = "";
+
+it("redacts sensitive modal keystrokes from diagnostics", () => {
+	const path = join(tmpdir(), `sumocode-sensitive-input-${process.pid}-${Date.now()}.jsonl`);
+	const previous = process.env.SUMO_TUI_DIAG_FILE;
+	try {
+		process.env.SUMO_TUI_DIAG_FILE = path;
+		const router = new SharedInputRouter({
+			isSensitiveInputFocused: () => true,
+			handleFocusedModalInput: () => true,
+		});
+
+		router.handleInput("sk-secret");
+
+		const diagnostics = readFileSync(path, "utf8");
+		expect(diagnostics).not.toContain("sk-secret");
+		expect(diagnostics).not.toContain("736b2d736563726574");
+		expect(diagnostics).toContain("[redacted]");
+	} finally {
+		if (previous === undefined) delete process.env.SUMO_TUI_DIAG_FILE;
+		else process.env.SUMO_TUI_DIAG_FILE = previous;
+		rmSync(path, { force: true });
+	}
+});
 
 describe("SharedInputRouter — command palette vs. modal/overlay focus", () => {
 	it("routes Ctrl+/ to a focused modal instead of opening the palette", () => {

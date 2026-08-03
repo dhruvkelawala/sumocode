@@ -1,4 +1,4 @@
-import { lstatSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -16,6 +16,12 @@ let dirs: string[] = [];
 function tempDir(): string {
 	const dir = mkdtempSync(join(tmpdir(), "sumocode-lovely-web-config-"));
 	dirs.push(dir);
+	return dir;
+}
+
+function privateConfigDir(): string {
+	const dir = tempDir();
+	mkdirSync(join(dir, ".git"));
 	return dir;
 }
 
@@ -63,7 +69,7 @@ describe("Lovely Web config helpers", () => {
 	it("updates one key, preserves unknown keys, and deletes blank values", async () => {
 		const cwd = tempDir();
 		const agentDir = tempDir();
-		const configDir = tempDir();
+		const configDir = privateConfigDir();
 		const env = { PI_CODING_AGENT_DIR: agentDir, SUMOCODE_CONFIG_DIR: configDir };
 		writeLovelyWebPatch("user", cwd, { unknownFutureKey: "keep", firecrawlApiKey: "old" }, env);
 
@@ -77,7 +83,7 @@ describe("Lovely Web config helpers", () => {
 	it("creates and preserves a private managed user-config symlink with mode 0600", async () => {
 		const cwd = tempDir();
 		const agentDir = tempDir();
-		const configDir = tempDir();
+		const configDir = privateConfigDir();
 		const env = { PI_CODING_AGENT_DIR: agentDir, SUMOCODE_CONFIG_DIR: configDir };
 		const target = writeLovelyWebPatch("user", cwd, { firecrawlApiKey: "secret" }, env);
 		const source = join(configDir, "xl0-pi-lovely-web.json");
@@ -94,7 +100,7 @@ describe("Lovely Web config helpers", () => {
 	it("loads an existing private source before its agent-dir symlink is created", () => {
 		const cwd = tempDir();
 		const agentDir = tempDir();
-		const configDir = tempDir();
+		const configDir = privateConfigDir();
 		const env = { PI_CODING_AGENT_DIR: agentDir, SUMOCODE_CONFIG_DIR: configDir };
 		writeFileSync(join(configDir, "xl0-pi-lovely-web.json"), JSON.stringify({ exaApiKey: "private-key" }), { mode: 0o600 });
 
@@ -102,6 +108,32 @@ describe("Lovely Web config helpers", () => {
 		updateLovelyWebConfigValue("user", cwd, "webSearchProvider", "exa", env);
 		expect(lstatSync(join(agentDir, "xl0-pi-lovely-web.json")).isSymbolicLink()).toBe(true);
 		expect(loadLovelyWebConfig(cwd, env).value.exaApiKey).toBe("private-key");
+	});
+
+	it("refuses to create a non-repository private config root", () => {
+		const cwd = tempDir();
+		const agentDir = tempDir();
+		const configDir = join(tempDir(), "not-bootstrapped");
+		const env = { PI_CODING_AGENT_DIR: agentDir, SUMOCODE_CONFIG_DIR: configDir };
+
+		expect(() => writeLovelyWebPatch("user", cwd, { exaApiKey: "secret" }, env)).toThrow(/bootstrap.*private config repository/i);
+		expect(existsSync(configDir)).toBe(false);
+	});
+
+	it("prefers an existing private source over a stale unmanaged target", async () => {
+		const cwd = tempDir();
+		const agentDir = tempDir();
+		const configDir = privateConfigDir();
+		const env = { PI_CODING_AGENT_DIR: agentDir, SUMOCODE_CONFIG_DIR: configDir };
+		const target = join(agentDir, "xl0-pi-lovely-web.json");
+		const source = join(configDir, "xl0-pi-lovely-web.json");
+		writeFileSync(target, JSON.stringify({ exaApiKey: "stale-key" }));
+		writeFileSync(source, JSON.stringify({ exaApiKey: "private-key", webSearchProvider: "exa" }), { mode: 0o600 });
+
+		expect(loadLovelyWebConfig(cwd, env).value.exaApiKey).toBe("private-key");
+		updateLovelyWebConfigValue("user", cwd, "webFetchProvider", "exa", env);
+		expect(lstatSync(target).isSymbolicLink()).toBe(true);
+		expect(JSON.parse(await readFile(source, "utf8"))).toMatchObject({ exaApiKey: "private-key", webSearchProvider: "exa", webFetchProvider: "exa" });
 	});
 
 	it("strips API-key fields from workspace config and writes it with mode 0600", async () => {

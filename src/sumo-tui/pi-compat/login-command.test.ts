@@ -151,6 +151,23 @@ describe("RPC /login compatibility command", () => {
 		expect(ctx.ui.notify).not.toHaveBeenCalledWith(expect.stringContaining("Login failed"), "error");
 	});
 
+	it("does not report a provider-specific abort error after cancellation", async () => {
+		const ctx = context();
+		const runtime = runtimeFor();
+		(runtime.login as ReturnType<typeof vi.fn>).mockImplementation(async (_providerId, _type, interaction) => {
+			return new Promise((_resolve, reject) => {
+				interaction.signal?.addEventListener("abort", () => reject(new DOMException("This operation was aborted", "AbortError")), { once: true });
+			});
+		});
+
+		const login = executeRpcLogin("anthropic", ctx, runtime);
+		await vi.waitFor(() => expect(runtime.login).toHaveBeenCalled());
+		expect(cancelActiveRpcLogin()).toBe(true);
+		await login;
+
+		expect(ctx.ui.notify).not.toHaveBeenCalledWith(expect.stringContaining("Login failed"), "error");
+	});
+
 	it("cancels an authentication prompt that omits its own signal", async () => {
 		const ctx = context();
 		(ctx.ui.input as ReturnType<typeof vi.fn>).mockImplementation(async (_title, _placeholder, options) => {

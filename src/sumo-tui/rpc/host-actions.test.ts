@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -471,6 +471,7 @@ describe("RpcHostActions", () => {
 		const cwd = mkdtempSync(join(tmpdir(), "sumocode-lovely-web-host-test-"));
 		const agentDir = mkdtempSync(join(tmpdir(), "sumocode-lovely-web-agent-test-"));
 		const configDir = mkdtempSync(join(tmpdir(), "sumocode-lovely-web-private-test-"));
+		mkdirSync(join(configDir, ".git"));
 		const originalCwd = process.cwd();
 		const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
 		const originalConfigDir = process.env.SUMOCODE_CONFIG_DIR;
@@ -513,6 +514,7 @@ describe("RpcHostActions", () => {
 		const cwd = mkdtempSync(join(tmpdir(), "sumocode-lovely-web-secret-test-"));
 		const agentDir = mkdtempSync(join(tmpdir(), "sumocode-lovely-web-secret-agent-test-"));
 		const configDir = mkdtempSync(join(tmpdir(), "sumocode-lovely-web-secret-private-test-"));
+		mkdirSync(join(configDir, ".git"));
 		const originalCwd = process.cwd();
 		const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
 		const originalConfigDir = process.env.SUMOCODE_CONFIG_DIR;
@@ -556,6 +558,7 @@ describe("RpcHostActions", () => {
 		const cwd = mkdtempSync(join(tmpdir(), "sumocode-lovely-web-raw-test-"));
 		const agentDir = mkdtempSync(join(tmpdir(), "sumocode-lovely-web-raw-agent-test-"));
 		const configDir = mkdtempSync(join(tmpdir(), "sumocode-lovely-web-raw-private-test-"));
+		mkdirSync(join(configDir, ".git"));
 		const originalCwd = process.cwd();
 		const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
 		const originalConfigDir = process.env.SUMOCODE_CONFIG_DIR;

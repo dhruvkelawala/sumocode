@@ -111,6 +111,12 @@ function privateUserConfigPath(env: NodeJS.ProcessEnv): string {
 	return join(privateConfigRepo(env), LOVELY_WEB_CONFIG_FILE);
 }
 
+function requirePrivateConfigRepo(env: NodeJS.ProcessEnv): void {
+	const root = privateConfigRepo(env);
+	if (pathExists(join(root, ".git"))) return;
+	throw new Error(`Bootstrap the private config repository before saving Lovely Web user settings: ${root}`);
+}
+
 function apiKeyFields(): ReadonlySet<string> {
 	return new Set(Object.values(LOVELY_WEB_API_KEY_FIELDS));
 }
@@ -144,6 +150,7 @@ function writeManagedUserPatch(targetPath: string, value: LovelyWebConfigPatch, 
 		return;
 	}
 
+	requirePrivateConfigRepo(env);
 	const sourcePath = privateUserConfigPath(env);
 	writeJsonObject(sourcePath, value, true);
 	if (pathExists(targetPath)) rmSync(targetPath, { recursive: true, force: true });
@@ -225,7 +232,8 @@ export function resolveLovelyWebConfigPath(scope: LovelyWebConfigScope, cwd: str
 export function loadLovelyWebConfig(cwd: string, env: NodeJS.ProcessEnv = process.env): LovelyWebConfigState {
 	const userPath = resolveLovelyWebConfigPath("user", cwd, env);
 	const workspacePath = resolveLovelyWebConfigPath("workspace", cwd, env);
-	const userReadPath = pathExists(userPath) ? userPath : privateUserConfigPath(env);
+	const privatePath = privateUserConfigPath(env);
+	const userReadPath = pathExists(privatePath) ? privatePath : userPath;
 	const userPatch = normalizeLovelyWebPatch(readJsonObject(userReadPath));
 	const workspacePatch = scopeSafePatch("workspace", readJsonObject(workspacePath));
 	return {
@@ -239,7 +247,8 @@ export function loadLovelyWebConfig(cwd: string, env: NodeJS.ProcessEnv = proces
 
 export function readLovelyWebPatch(scope: LovelyWebConfigScope, cwd: string, env: NodeJS.ProcessEnv = process.env): LovelyWebConfigPatch {
 	const targetPath = resolveLovelyWebConfigPath(scope, cwd, env);
-	const readPath = scope === "user" && !pathExists(targetPath) ? privateUserConfigPath(env) : targetPath;
+	const privatePath = privateUserConfigPath(env);
+	const readPath = scope === "user" && pathExists(privatePath) ? privatePath : targetPath;
 	return scopeSafePatch(scope, readJsonObject(readPath));
 }
 

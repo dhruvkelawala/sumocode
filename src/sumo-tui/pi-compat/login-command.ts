@@ -180,7 +180,7 @@ export async function executeRpcLogin(args: string, ctx: ExtensionCommandContext
 		ctx.ui.notify(`Logged in to ${method.provider.name}`, "info");
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
-		if (message !== "Login cancelled") ctx.ui.notify(`Login failed: ${message}`, "error");
+		if (!loginAbort.signal.aborted && message !== "Login cancelled") ctx.ui.notify(`Login failed: ${message}`, "error");
 	} finally {
 		loginAbort.abort();
 		if (activeLoginAbort === loginAbort) activeLoginAbort = undefined;

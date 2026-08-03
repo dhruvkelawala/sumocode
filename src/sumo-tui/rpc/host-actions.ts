@@ -131,6 +131,8 @@ const FALLBACK_THINKING_LEVELS: readonly RpcThinkingLevel[] = ["off", "minimal",
 export const RPC_HOST_SLASH_COMMANDS: readonly RpcHostSlashCommand[] = Object.freeze([
 	{ name: "settings", description: "Open RPC settings" },
 	{ name: "login", description: "Configure provider authentication" },
+	{ name: "mcp", description: "Manage MCP servers" },
+	{ name: "mcp-auth", description: "Authenticate with an MCP server" },
 	{ name: "model", description: "Select model or set provider/model" },
 	{ name: "thinking", description: "Select thinking level" },
 	{ name: "theme", description: "Select SumoCode theme" },
@@ -581,6 +583,12 @@ export class RpcHostActions {
 		const { command, args } = firstArg(text);
 		if (!command.startsWith("/")) return false;
 		switch (command) {
+			case "/mcp":
+				await this.handleMcpCommand(args);
+				return true;
+			case "/mcp-auth":
+				await this.authenticateMcpServer(args);
+				return true;
 			case "/login":
 				if (this.loginActive) {
 					notify(this.notifications, "login already in progress", "warning");
@@ -682,6 +690,37 @@ export class RpcHostActions {
 				}
 				return false;
 		}
+	}
+
+	private async handleMcpCommand(args: string): Promise<void> {
+		const subcommand = args.trim();
+		if (subcommand) {
+			await this.controls.executeExtensionCommand(`/mcp ${subcommand}`);
+			return;
+		}
+
+		// pi-mcp-adapter's bare /mcp opens ctx.ui.custom(), which Pi RPC does
+		// not bridge. Present the actionable subset through retained primitives
+		// and forward a concrete, non-custom command to the child extension.
+		const action = await this.modals.select("MCP controls", [
+			"authenticate server",
+			"reconnect all servers",
+			"list tools",
+			"log out server",
+		]);
+		if (action === "authenticate server") await this.authenticateMcpServer("");
+		else if (action === "reconnect all servers") await this.controls.executeExtensionCommand("/mcp reconnect");
+		else if (action === "list tools") await this.controls.executeExtensionCommand("/mcp tools");
+		else if (action === "log out server") {
+			const serverName = (await this.modals.input("MCP server to log out", "server name"))?.trim();
+			if (serverName) await this.controls.executeExtensionCommand(`/mcp logout ${serverName}`);
+		}
+	}
+
+	private async authenticateMcpServer(args: string): Promise<void> {
+		const serverName = args.trim() || (await this.modals.input("Authenticate MCP server", "server name"))?.trim();
+		if (!serverName) return;
+		await this.controls.executeExtensionCommand(`/mcp-auth ${serverName}`);
 	}
 
 	public isLoginActive(): boolean {

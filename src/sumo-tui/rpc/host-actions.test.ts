@@ -1225,6 +1225,40 @@ describe("RpcHostActions", () => {
 		await expect(actions.handleSubmittedText("/deploy prod")).resolves.toBe(false);
 	});
 
+	it("opens retained MCP controls instead of forwarding bare custom-UI commands", async () => {
+		const { actions, controls, modals } = setup();
+
+		expect(isRpcHostSlashCommandName("mcp")).toBe(true);
+		expect(isRpcHostSlashCommandName("mcp-auth")).toBe(true);
+
+		const mcp = actions.handleSubmittedText("/mcp");
+		await flush();
+		expect(modals.getActiveKind()).toBe("select");
+		expect(modals.render(80).join("\n")).toContain("MCP controls");
+		modals.handleInput("down");
+		modals.handleInput("enter");
+		await expect(mcp).resolves.toBe(true);
+		expect(controls.calls).toContain("executeExtensionCommand:/mcp reconnect");
+
+		const auth = actions.handleSubmittedText("/mcp-auth");
+		await flush();
+		expect(modals.getActiveKind()).toBe("input");
+		modals.handleInput("github");
+		modals.handleInput("enter");
+		await expect(auth).resolves.toBe(true);
+		expect(controls.calls).toContain("executeExtensionCommand:/mcp-auth github");
+	});
+
+	it("forwards argument-bearing MCP commands directly to the child extension", async () => {
+		const { actions, controls } = setup();
+
+		await expect(actions.handleSubmittedText("/mcp tools")).resolves.toBe(true);
+		await expect(actions.handleSubmittedText("/mcp-auth railway")).resolves.toBe(true);
+
+		expect(controls.calls).toContain("executeExtensionCommand:/mcp tools");
+		expect(controls.calls).toContain("executeExtensionCommand:/mcp-auth railway");
+	});
+
 	it("executes /login directly against the RPC child without entering the agent prompt scheduler", async () => {
 		const { actions, controls, notifications } = setup();
 

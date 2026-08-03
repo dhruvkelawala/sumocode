@@ -30,6 +30,18 @@ import type { ModalManager } from "../widgets/modal.js";
 import type { NotificationCenter, NotificationLevel } from "../widgets/notification.js";
 import type { RpcHostControls, RpcModelOption, RpcSessionStats, RpcThinkingLevel } from "./controls.js";
 import type { RpcHostOverlayManager } from "./host-overlays.js";
+import {
+	LOVELY_WEB_API_KEY_FIELDS,
+	LOVELY_WEB_FETCH_PROVIDERS,
+	LOVELY_WEB_SEARCH_PROVIDERS,
+	loadLovelyWebConfig,
+	lovelyWebConfigPathForDisplay,
+	readLovelyWebPatch,
+	updateLovelyWebConfigValue,
+	writeLovelyWebPatch,
+	type LovelyWebConfigKey,
+	type LovelyWebConfigScope,
+} from "./lovely-web-config.js";
 import type { InlineSelectorHost, InlineSelectorItem } from "./inline-selector.js";
 import { notifyOnError } from "./safe-send.js";
 import { buildSessionTree, listSessions, type SessionEntryLike, type SessionListInfo, type SessionTreeNode } from "./session-reader.js";
@@ -42,7 +54,7 @@ export interface RpcHostSlashCommand {
 	readonly description: string;
 }
 
-type HostModals = Pick<ModalManager, "select" | "confirm" | "input">;
+type HostModals = Pick<ModalManager, "select" | "confirm" | "input" | "editor">;
 type HostInlineSelectors = Pick<InlineSelectorHost, "select">;
 type HostNotifications = Pick<NotificationCenter, "notify">;
 type MemoryClientFactory = () => RemnicMemoryClient;
@@ -114,10 +126,11 @@ export interface RpcHostActionsOptions {
 	readonly persistTheme?: (name: string) => { success: boolean; error?: string };
 }
 
-const THINKING_LEVELS: readonly RpcThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh"];
+const FALLBACK_THINKING_LEVELS: readonly RpcThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 
 export const RPC_HOST_SLASH_COMMANDS: readonly RpcHostSlashCommand[] = Object.freeze([
 	{ name: "settings", description: "Open RPC settings" },
+	{ name: "login", description: "Configure provider authentication" },
 	{ name: "model", description: "Select model or set provider/model" },
 	{ name: "thinking", description: "Select thinking level" },
 	{ name: "theme", description: "Select SumoCode theme" },
@@ -138,6 +151,7 @@ export const RPC_HOST_SLASH_COMMANDS: readonly RpcHostSlashCommand[] = Object.fr
 	{ name: "sumo:theme-check", description: "Preview current theme tokens" },
 	{ name: "sumo:palette", description: "Open the command palette" },
 	{ name: "hotkeys", description: "Show the RPC host's keyboard shortcuts" },
+	{ name: "lovely-web", description: "Configure Lovely Web web tools" },
 	{ name: "changelog", description: "Show SumoCode's changelog" },
 ]);
 
@@ -149,6 +163,10 @@ export function isRpcHostSlashCommandName(name: string): boolean {
 
 function notify(notifications: HostNotifications, message: string, level: NotificationLevel = "info"): void {
 	notifications.notify(message, level);
+}
+
+function scopedValueDescription(scopeValue: unknown, effectiveValue: unknown): string {
+	return scopeValue === undefined ? `${String(effectiveValue)} (inherited)` : String(scopeValue);
 }
 
 function modelSelectorItem(model: RpcModelOption): InlineSelectorItem {
@@ -524,6 +542,7 @@ export class RpcHostActions {
 	private readonly writeClipboardSequence: (sequence: string) => boolean;
 	private readonly changelogRoot: string;
 	private readonly persistTheme: (name: string) => { success: boolean; error?: string };
+	private loginActive = false;
 
 	public constructor(options: RpcHostActionsOptions) {
 		this.controls = options.controls;
@@ -562,6 +581,23 @@ export class RpcHostActions {
 		const { command, args } = firstArg(text);
 		if (!command.startsWith("/")) return false;
 		switch (command) {
+			case "/login":
+				if (this.loginActive) {
+					notify(this.notifications, "login already in progress", "warning");
+					return true;
+				}
+				this.loginActive = true;
+				try {
+					await this.controls.executeExtensionCommand(args.trim() ? `/login ${args.trim()}` : "/login");
+				} catch (error) {
+					// A host-side timeout/rejection does not cancel Pi's child command.
+					// Abort it explicitly so the next /login is not blocked forever.
+					try { await this.controls.cancelLogin(); } catch { /* preserve the original failure */ }
+					throw error;
+				} finally {
+					this.loginActive = false;
+				}
+				return true;
 			case "/model":
 				if (args.trim()) await this.setModelFromText(args.trim());
 				else await this.openModelSelector();
@@ -614,6 +650,9 @@ export class RpcHostActions {
 			case "/hotkeys":
 				await this.openHotkeys();
 				return true;
+			case "/lovely-web":
+				await this.openLovelyWebConfig();
+				return true;
 			case "/changelog":
 				await this.openChangelog();
 				return true;
@@ -643,6 +682,15 @@ export class RpcHostActions {
 				}
 				return false;
 		}
+	}
+
+	public isLoginActive(): boolean {
+		return this.loginActive;
+	}
+
+	public async cancelLogin(): Promise<void> {
+		if (!this.loginActive) return;
+		await this.controls.cancelLogin();
 	}
 
 	public async openCommandPalette(): Promise<void> {
@@ -683,7 +731,8 @@ export class RpcHostActions {
 
 	public async openThinkingSelector(): Promise<void> {
 		const currentLevel = this.stateStore.getSnapshot().thinkingLevel;
-		const items: InlineSelectorItem[] = THINKING_LEVELS.map((level) => ({
+		const levels = await this.availableThinkingLevels();
+		const items: InlineSelectorItem[] = levels.map((level) => ({
 			value: level,
 			label: level,
 			isCurrent: level === currentLevel,
@@ -730,6 +779,158 @@ export class RpcHostActions {
 		else if (selected === "Disable auto compaction") await this.setAutoCompaction(false);
 		else if (selected === "Enable auto retry") await this.setAutoRetry(true);
 		else if (selected === "Disable auto retry") await this.setAutoRetry(false);
+	}
+
+	public async openLovelyWebConfig(): Promise<void> {
+		const cwd = process.cwd();
+		let state: ReturnType<typeof loadLovelyWebConfig>;
+		try {
+			state = loadLovelyWebConfig(cwd);
+		} catch (error) {
+			notify(this.notifications, `Lovely Web config error: ${error instanceof Error ? error.message : String(error)}`, "error");
+			return;
+		}
+		const summary = `search ${state.value.webSearchProvider} · fetch ${state.value.webFetchProvider} · image ${state.value.webImageEnabled ? "on" : "off"}`;
+		const selected = await this.inlineSelectors.select("Lovely Web config", [
+			{ value: "user", label: "User config", description: lovelyWebConfigPathForDisplay(state.userPath) },
+			{ value: "workspace", label: "Workspace config", description: lovelyWebConfigPathForDisplay(state.workspacePath) },
+			{ value: "raw:user", label: "Raw user JSON", description: summary },
+			{ value: "raw:workspace", label: "Raw workspace JSON", description: "project override" },
+		]);
+		if (selected === undefined) return;
+		if (selected === "raw:user") {
+			await this.openLovelyWebRawEditor("user", cwd);
+			return;
+		}
+		if (selected === "raw:workspace") {
+			await this.openLovelyWebRawEditor("workspace", cwd);
+			return;
+		}
+		if (selected === "user" || selected === "workspace") await this.openLovelyWebScopeEditor(selected, cwd);
+	}
+
+	private async openLovelyWebScopeEditor(scope: LovelyWebConfigScope, cwd: string): Promise<void> {
+		for (;;) {
+			const state = loadLovelyWebConfig(cwd);
+			const patch = scope === "user" ? state.userPatch : state.workspacePatch;
+			const path = scope === "user" ? state.userPath : state.workspacePath;
+			const selected = await this.inlineSelectors.select(`Lovely Web ${scope}`, [
+				{ value: "webSearchProvider", label: "web_search provider", description: scopedValueDescription(patch.webSearchProvider, state.value.webSearchProvider) },
+				{ value: "webFetchProvider", label: "web_fetch provider", description: scopedValueDescription(patch.webFetchProvider, state.value.webFetchProvider) },
+				{ value: "webImageEnabled", label: "web_image", description: state.value.webImageEnabled ? "enabled" : "disabled" },
+				{ value: "webImageResize", label: "resize images", description: state.value.webImageResize ? "enabled" : "disabled" },
+				{ value: "webImageMaxSize", label: "max image size", description: String(state.value.webImageMaxSize) },
+				{ value: "smartSearchEnabled", label: "smart search", description: state.value.smartSearchEnabled ? "enabled" : "disabled" },
+				{ value: "smartSearchModel", label: "smart search model", description: state.value.smartSearchModel || "current/default" },
+				{ value: "smartSearchMaxTokens", label: "smart search max tokens", description: String(state.value.smartSearchMaxTokens) },
+				{ value: "smartSearchSystemPrompt", label: "smart search system prompt", description: state.value.smartSearchSystemPrompt ? "custom" : "built-in" },
+				...this.lovelyWebApiKeyItems(state.value),
+				{ value: "raw", label: "raw JSON", description: lovelyWebConfigPathForDisplay(path) },
+				{ value: "done", label: "done", description: "close Lovely Web config" },
+			]);
+			if (selected === undefined || selected === "done") return;
+			if (selected === "webSearchProvider") await this.setLovelyWebProvider(scope, cwd, "webSearchProvider", LOVELY_WEB_SEARCH_PROVIDERS, state.value.webSearchProvider);
+			else if (selected === "webFetchProvider") await this.setLovelyWebProvider(scope, cwd, "webFetchProvider", LOVELY_WEB_FETCH_PROVIDERS, state.value.webFetchProvider);
+			else if (selected === "webImageEnabled") this.saveLovelyWebValue(scope, cwd, "webImageEnabled", !state.value.webImageEnabled);
+			else if (selected === "webImageResize") this.saveLovelyWebValue(scope, cwd, "webImageResize", !state.value.webImageResize);
+			else if (selected === "webImageMaxSize") await this.setLovelyWebNumber(scope, cwd, "webImageMaxSize", state.value.webImageMaxSize, "Lovely Web max image size");
+			else if (selected === "smartSearchEnabled") this.saveLovelyWebValue(scope, cwd, "smartSearchEnabled", !state.value.smartSearchEnabled);
+			else if (selected === "smartSearchModel") await this.setLovelyWebString(scope, cwd, "smartSearchModel", "Lovely Web smart search model", "provider/model; blank for current/default");
+			else if (selected === "smartSearchMaxTokens") await this.setLovelyWebNumber(scope, cwd, "smartSearchMaxTokens", state.value.smartSearchMaxTokens, "Lovely Web smart search max tokens");
+			else if (selected === "smartSearchSystemPrompt") await this.setLovelyWebText(scope, cwd, "smartSearchSystemPrompt", state.value.smartSearchSystemPrompt, "Lovely Web smart search system prompt");
+			else if (selected.startsWith("apiKey:")) await this.setLovelyWebApiKey(scope, cwd, selected.slice("apiKey:".length));
+			else if (selected === "raw") await this.openLovelyWebRawEditor(scope, cwd);
+		}
+	}
+
+	private lovelyWebApiKeyItems(value: { readonly firecrawlApiKey: string; readonly exaApiKey: string; readonly tavilyApiKey: string; readonly braveApiKey: string }): InlineSelectorItem[] {
+		return (Object.entries(LOVELY_WEB_API_KEY_FIELDS) as Array<[string, LovelyWebConfigKey]>).map(([provider, key]) => ({
+			value: `apiKey:${provider}`,
+			label: `${provider} API key`,
+			description: value[key as keyof typeof value] ? "set" : "unset",
+		}));
+	}
+
+	private async setLovelyWebProvider(
+		scope: LovelyWebConfigScope,
+		cwd: string,
+		key: "webSearchProvider" | "webFetchProvider",
+		providers: readonly string[],
+		current: string,
+	): Promise<void> {
+		const selected = await this.inlineSelectors.select(`Lovely Web ${key}`, providers.map((provider) => ({
+			value: provider,
+			label: provider,
+			isCurrent: provider === current,
+		})));
+		if (selected === undefined) return;
+		this.saveLovelyWebValue(scope, cwd, key, selected);
+	}
+
+	private async setLovelyWebNumber(scope: LovelyWebConfigScope, cwd: string, key: LovelyWebConfigKey, current: number, title: string): Promise<void> {
+		const value = await this.modals.input(title, "positive number; blank to clear", { initialValue: String(current) });
+		if (value === undefined) return;
+		if (value.trim() === "") {
+			this.saveLovelyWebValue(scope, cwd, key, undefined);
+			return;
+		}
+		const numberValue = Number(value);
+		if (!Number.isFinite(numberValue) || numberValue < 1) {
+			notify(this.notifications, `${title}: enter a positive number`, "warning");
+			return;
+		}
+		this.saveLovelyWebValue(scope, cwd, key, numberValue);
+	}
+
+	private async setLovelyWebString(scope: LovelyWebConfigScope, cwd: string, key: LovelyWebConfigKey, title: string, placeholder: string): Promise<void> {
+		const value = await this.modals.input(title, placeholder);
+		if (value === undefined) return;
+		this.saveLovelyWebValue(scope, cwd, key, value.trim());
+	}
+
+	private async setLovelyWebText(scope: LovelyWebConfigScope, cwd: string, key: LovelyWebConfigKey, current: string, title: string): Promise<void> {
+		const value = await this.modals.editor(title, current);
+		if (value === undefined) return;
+		this.saveLovelyWebValue(scope, cwd, key, value.trim());
+	}
+
+	private async setLovelyWebApiKey(scope: LovelyWebConfigScope, cwd: string, provider: string): Promise<void> {
+		const key = LOVELY_WEB_API_KEY_FIELDS[provider as keyof typeof LOVELY_WEB_API_KEY_FIELDS];
+		if (!key) {
+			notify(this.notifications, `unknown Lovely Web provider: ${provider}`, "warning");
+			return;
+		}
+		const value = await this.modals.input(`${provider} API key`, "paste key; blank to clear", { secret: true });
+		if (value === undefined) return;
+		this.saveLovelyWebValue(scope, cwd, key, value.trim());
+	}
+
+	private async openLovelyWebRawEditor(scope: LovelyWebConfigScope, cwd: string): Promise<void> {
+		const patch = readLovelyWebPatch(scope, cwd);
+		const edited = await this.modals.editor(`Lovely Web ${scope} JSON`, `${JSON.stringify(patch, null, 2)}\n`);
+		if (edited === undefined) return;
+		let parsed: unknown;
+		try {
+			parsed = JSON.parse(edited);
+		} catch (error) {
+			notify(this.notifications, `invalid Lovely Web JSON: ${error instanceof Error ? error.message : String(error)}`, "error");
+			return;
+		}
+		if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+			notify(this.notifications, "invalid Lovely Web JSON: expected an object", "error");
+			return;
+		}
+		const path = writeLovelyWebPatch(scope, cwd, parsed as Record<string, unknown>);
+		this.notifyLovelyWebSaved(path);
+	}
+
+	private saveLovelyWebValue(scope: LovelyWebConfigScope, cwd: string, key: LovelyWebConfigKey, value: unknown): void {
+		const path = updateLovelyWebConfigValue(scope, cwd, key, value);
+		this.notifyLovelyWebSaved(path);
+	}
+
+	private notifyLovelyWebSaved(path: string): void {
+		notify(this.notifications, `Lovely Web config saved: ${lovelyWebConfigPathForDisplay(path)}. Run /sumo:reload or restart SumoCode for tool enable/disable changes.`, "info");
 	}
 
 	/**
@@ -1010,13 +1211,19 @@ export class RpcHostActions {
 
 	private async setThinkingFromText(value: string): Promise<void> {
 		const level = value.trim().toLowerCase() as RpcThinkingLevel;
-		if (!THINKING_LEVELS.includes(level)) {
+		const levels = await this.availableThinkingLevels();
+		if (!levels.includes(level)) {
 			notify(this.notifications, `unknown thinking level: ${value}`, "warning");
 			return;
 		}
 		await this.controls.setThinkingLevel(level);
 		this.onStateChange();
 		notify(this.notifications, `thinking: ${level}`, "info");
+	}
+
+	private async availableThinkingLevels(): Promise<readonly RpcThinkingLevel[]> {
+		const levels = await this.controls.getAvailableThinkingLevels();
+		return levels.length === 0 ? FALLBACK_THINKING_LEVELS : levels;
 	}
 
 	private setThemeFromText(value: string): void {

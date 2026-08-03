@@ -13,6 +13,7 @@ export interface RpcHostControlsOptions {
 
 export type RpcAvailableModel = RpcResponseData<"get_available_models">["models"][number];
 export type RpcThinkingLevel = RpcSessionState["thinkingLevel"];
+export type RpcAvailableThinkingLevels = RpcResponseData<"get_available_thinking_levels">["levels"];
 export type RpcSlashCommand = RpcResponseData<"get_commands">["commands"][number];
 export type RpcForkMessage = RpcResponseData<"get_fork_messages">["messages"][number];
 export type RpcSessionStats = RpcResponseData<"get_session_stats">;
@@ -37,6 +38,9 @@ type ModelIdentity = Pick<RpcAvailableModel, "provider" | "id">;
 // so give them a longer, explicit budget too. Quick getters (get_state,
 // get_commands, etc.) are intentionally left on the client's default.
 const COMPACT_TIMEOUT_MS = 300_000;
+// Pi device-code providers can allow up to 15 minutes for authentication;
+// keep a 20-minute host budget so valid flows have cleanup headroom.
+const LOGIN_TIMEOUT_MS = 1_200_000;
 const SESSION_COMMAND_TIMEOUT_MS = 60_000;
 
 function modelLabel(model: ModelIdentity): string {
@@ -144,6 +148,11 @@ export class RpcHostControls {
 		return this.stateStore.applyThinkingLevel(data.level);
 	}
 
+	public async getAvailableThinkingLevels(): Promise<RpcAvailableThinkingLevels> {
+		const data = responseData(await this.client.send({ type: "get_available_thinking_levels" }), "get_available_thinking_levels");
+		return data.levels;
+	}
+
 	public async newSession(parentSession?: string): Promise<RpcResponseData<"new_session">> {
 		const command: RpcCommand = parentSession === undefined ? { type: "new_session" } : { type: "new_session", parentSession };
 		return responseData(await this.client.send(command, SESSION_COMMAND_TIMEOUT_MS), "new_session");
@@ -192,6 +201,16 @@ export class RpcHostControls {
 	public async compact(customInstructions?: string): Promise<RpcResponseData<"compact">> {
 		const command: RpcCommand = customInstructions === undefined ? { type: "compact" } : { type: "compact", customInstructions };
 		return responseData(await this.client.send(command, COMPACT_TIMEOUT_MS), "compact");
+	}
+
+	/** Execute a child extension command outside the agent prompt scheduler. */
+	public async executeExtensionCommand(message: string): Promise<void> {
+		responseData(await this.client.send({ type: "prompt", message }, LOGIN_TIMEOUT_MS), "prompt");
+		this.availableModelsCache = undefined;
+	}
+
+	public async cancelLogin(): Promise<void> {
+		responseData(await this.client.send({ type: "prompt", message: "/sumo:login-cancel" }), "prompt");
 	}
 
 	public async setAutoCompaction(enabled: boolean): Promise<void> {

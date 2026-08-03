@@ -50,6 +50,7 @@ class FakeControls {
 		{ provider: "anthropic", id: "claude-opus-4-8", label: "anthropic/claude-opus-4-8", active: true },
 	];
 	public enabledModels: RpcModelOption[] | undefined;
+	public thinkingLevels: RpcSessionState["thinkingLevel"][] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 
 	public forkMessages = [{ entryId: "entry-1", text: "forkable message text" }];
 	public commands: RpcSlashCommand[] = [];
@@ -79,9 +80,22 @@ class FakeControls {
 		return {};
 	}
 
+	public async getAvailableThinkingLevels(): Promise<RpcSessionState["thinkingLevel"][]> {
+		this.calls.push("getAvailableThinkingLevels");
+		return this.thinkingLevels;
+	}
+
 	public async compact(customInstructions?: string): Promise<Record<string, unknown>> {
 		this.calls.push(`compact:${customInstructions ?? ""}`);
 		return {};
+	}
+
+	public async executeExtensionCommand(message: string): Promise<void> {
+		this.calls.push(`executeExtensionCommand:${message}`);
+	}
+
+	public async cancelLogin(): Promise<void> {
+		this.calls.push("cancelLogin");
 	}
 
 	public newSessionCancelled = false;
@@ -405,6 +419,7 @@ describe("RpcHostActions", () => {
 
 		expect(controls.calls).toEqual([
 			"setModel:openai/gpt-5",
+			"getAvailableThinkingLevels",
 			"setThinking:high",
 			"compact:keep branch summary",
 			"setAutoCompaction:false",
@@ -436,8 +451,92 @@ describe("RpcHostActions", () => {
 		await thinking;
 
 		expect(inlineSelectors.getActiveKind()).toBeUndefined();
+		expect(controls.calls).toContain("getAvailableThinkingLevels");
 		expect(controls.calls).toContain("setThinking:minimal");
 		expect(notifications).toContainEqual({ message: "thinking: minimal", level: "info" });
+	});
+
+	it("validates explicit /thinking values against Pi's available thinking levels", async () => {
+		const { actions, controls, notifications } = setup();
+		controls.thinkingLevels = ["off", "minimal", "low", "medium", "high"];
+
+		await expect(actions.handleSubmittedText("/thinking xhigh")).resolves.toBe(true);
+
+		expect(controls.calls).toEqual(["getAvailableThinkingLevels"]);
+		expect(notifications).toContainEqual({ message: "unknown thinking level: xhigh", level: "warning" });
+	});
+
+	it("handles /lovely-web in the retained host instead of delegating to Pi's unsupported RPC custom UI", async () => {
+		const cwd = mkdtempSync(join(tmpdir(), "sumocode-lovely-web-host-test-"));
+		const agentDir = mkdtempSync(join(tmpdir(), "sumocode-lovely-web-agent-test-"));
+		const originalCwd = process.cwd();
+		const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
+		try {
+			process.chdir(cwd);
+			process.env.PI_CODING_AGENT_DIR = agentDir;
+			const { actions, inlineSelectors, notifications } = setup();
+
+			const lovelyWeb = actions.handleSubmittedText("/lovely-web");
+			await flush();
+			expect(inlineSelectors.getActiveKind()).toBe("select");
+			inlineSelectors.handleInput(SELECTOR_ENTER); // user config
+			await flush();
+			inlineSelectors.handleInput(SELECTOR_ENTER); // web_search provider
+			await flush();
+			inlineSelectors.handleInput(SELECTOR_DOWN);
+			inlineSelectors.handleInput(SELECTOR_DOWN); // disabled -> firecrawl -> exa
+			inlineSelectors.handleInput(SELECTOR_ENTER);
+			await flush();
+			inlineSelectors.handleInput(SELECTOR_ESCAPE); // close scope editor
+			await lovelyWeb;
+
+			const config = JSON.parse(await readFile(join(agentDir, "xl0-pi-lovely-web.json"), "utf8")) as Record<string, unknown>;
+			expect(config).toMatchObject({ webSearchProvider: "exa" });
+			expect(notifications).toContainEqual(expect.objectContaining({ message: expect.stringContaining("Lovely Web config saved"), level: "info" }));
+		} finally {
+			process.chdir(originalCwd);
+			if (originalAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+			else process.env.PI_CODING_AGENT_DIR = originalAgentDir;
+			rmSync(cwd, { recursive: true, force: true });
+			rmSync(agentDir, { recursive: true, force: true });
+		}
+	});
+
+	it("masks Lovely Web API keys while entering and saving them", async () => {
+		const cwd = mkdtempSync(join(tmpdir(), "sumocode-lovely-web-secret-test-"));
+		const agentDir = mkdtempSync(join(tmpdir(), "sumocode-lovely-web-secret-agent-test-"));
+		const originalCwd = process.cwd();
+		const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
+		try {
+			process.chdir(cwd);
+			process.env.PI_CODING_AGENT_DIR = agentDir;
+			const { actions, inlineSelectors, modals } = setup();
+
+			const lovelyWeb = actions.handleSubmittedText("/lovely-web");
+			await flush();
+			inlineSelectors.handleInput(SELECTOR_ENTER); // user config
+			await flush();
+			for (let index = 0; index < 9; index += 1) inlineSelectors.handleInput(SELECTOR_DOWN);
+			inlineSelectors.handleInput(SELECTOR_ENTER); // firecrawl API key
+			await flush();
+			expect(modals.isSecretInputActive()).toBe(true);
+
+			modals.handleInput("fc-secret-key");
+			expect(modals.render(80).join("\n")).not.toContain("fc-secret-key");
+			modals.handleInput(SELECTOR_ENTER);
+			await flush();
+			inlineSelectors.handleInput(SELECTOR_ESCAPE);
+			await lovelyWeb;
+
+			const config = JSON.parse(await readFile(join(agentDir, "xl0-pi-lovely-web.json"), "utf8")) as Record<string, unknown>;
+			expect(config.firecrawlApiKey).toBe("fc-secret-key");
+		} finally {
+			process.chdir(originalCwd);
+			if (originalAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+			else process.env.PI_CODING_AGENT_DIR = originalAgentDir;
+			rmSync(cwd, { recursive: true, force: true });
+			rmSync(agentDir, { recursive: true, force: true });
+		}
 	});
 
 	it("handles session controls through in-place selectors and editor text handoff", async () => {
@@ -1126,24 +1225,53 @@ describe("RpcHostActions", () => {
 		await expect(actions.handleSubmittedText("/deploy prod")).resolves.toBe(false);
 	});
 
-	it("does not advertise Phase-3 upstream-Pi-only commands the host still doesn't implement", async () => {
+	it("executes /login directly against the RPC child without entering the agent prompt scheduler", async () => {
 		const { actions, controls, notifications } = setup();
 
-		const removedPreviewCommand = "sumo:approval";
-		expect(isRpcHostSlashCommandName(removedPreviewCommand)).toBe(false);
-		expect(RPC_HOST_SLASH_COMMANDS.map((command) => command.name)).not.toContain(removedPreviewCommand);
+		expect(isRpcHostSlashCommandName("login")).toBe(true);
+		await expect(actions.handleSubmittedText("/login anthropic")).resolves.toBe(true);
+		expect(controls.calls).toContain("executeExtensionCommand:/login anthropic");
+		expect(notifications).not.toContainEqual({ message: "unknown command: /login", level: "warning" });
 
-		// /login, /import, /reload, and the .jsonl variant of /export are all
-		// Phase-3 items (plan 035): they need Pi primitives this RPC surface
-		// doesn't expose yet, so they must fall through to "unknown command"
-		// rather than being silently advertised in autocomplete with no
-		// handler behind them.
-		for (const name of ["login", "import", "reload"]) {
+		// /import and /reload remain unsupported Pi built-ins.
+		for (const name of ["import", "reload"]) {
 			expect(isRpcHostSlashCommandName(name)).toBe(false);
 			await expect(actions.handleSubmittedText(`/${name}`)).resolves.toBe(true);
 			expect(notifications).toContainEqual({ message: `unknown command: /${name}`, level: "warning" });
 		}
-		expect(controls.calls.filter((call) => call === "getCommands")).toHaveLength(3);
+		expect(controls.calls.filter((call) => call === "getCommands")).toHaveLength(2);
+	});
+
+	it("keeps the first login authoritative and rejects concurrent submissions", async () => {
+		const { actions, controls, notifications } = setup();
+		let release!: () => void;
+		controls.executeExtensionCommand = async (message: string) => {
+			controls.calls.push(`executeExtensionCommand:${message}`);
+			await new Promise<void>((resolve) => { release = resolve; });
+		};
+
+		const first = actions.handleSubmittedText("/login anthropic");
+		await flush();
+		expect(actions.isLoginActive()).toBe(true);
+		await expect(actions.handleSubmittedText("/login openai")).resolves.toBe(true);
+		expect(notifications).toContainEqual({ message: "login already in progress", level: "warning" });
+		expect(controls.calls.filter((call) => call.startsWith("executeExtensionCommand:"))).toEqual([
+			"executeExtensionCommand:/login anthropic",
+		]);
+
+		release();
+		await first;
+		expect(actions.isLoginActive()).toBe(false);
+	});
+
+	it("cancels the child login when host-side execution fails or times out", async () => {
+		const { actions, controls } = setup();
+		controls.executeExtensionCommand = async () => { throw new Error("RPC request timed out"); };
+
+		await expect(actions.handleSubmittedText("/login anthropic")).rejects.toThrow("RPC request timed out");
+
+		expect(controls.calls).toContain("cancelLogin");
+		expect(actions.isLoginActive()).toBe(false);
 	});
 
 	it("keeps RPC_HOST_SLASH_COMMANDS and handleSubmittedText's switch in exact 1:1 correspondence", async () => {

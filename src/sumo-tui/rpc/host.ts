@@ -432,6 +432,7 @@ export interface RpcHostInterruptDependencies {
 	readonly editor: Pick<RpcHostEditorController, "getText" | "setText" | "isAutocompleteOpen">;
 	readonly stateStore: Pick<RpcHostStateStore, "getSnapshot">;
 	readonly controls: Pick<RpcHostControls, "abort">;
+	readonly abortInFlight?: () => Promise<void>;
 	readonly notifications: Pick<NotificationCenter, "notify">;
 	readonly requestHostExit: (code: number) => void;
 	/**
@@ -500,7 +501,8 @@ export function createRpcHostInterruptHandler(deps: RpcHostInterruptDependencies
 				armedQuitUntil = undefined;
 				deps.restoreQueuedDrafts?.();
 				void notifyOnError(async () => {
-					await deps.controls.abort();
+					if (deps.abortInFlight) await deps.abortInFlight();
+					else await deps.controls.abort();
 				}, deps.notifications);
 				return true;
 			case "arm-quit":
@@ -1093,7 +1095,11 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		controls,
 		notifications,
 		requestHostExit: (code) => requestHostExit(code),
-		submitInFlight: () => scheduler.getSnapshot().busy,
+		submitInFlight: () => scheduler.getSnapshot().busy || actions?.isLoginActive() === true,
+		abortInFlight: async () => {
+			if (actions?.isLoginActive()) await actions.cancelLogin();
+			else await controls.abort();
+		},
 		restoreQueuedDrafts: () => {
 			const restored = scheduler.restoreAll(editor.getText(), { discardInFlight: true });
 			if (restored.count > 0) editor.setText(restored.text);

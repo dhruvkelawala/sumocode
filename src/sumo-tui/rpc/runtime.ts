@@ -58,7 +58,7 @@ export interface RpcHostRuntimeOptions {
 	readonly onAllActivityExpansionChange?: (expanded: boolean, activityIds: readonly string[]) => void;
 	readonly inputPreview?: string;
 	readonly editor?: Component;
-	readonly modal?: Component & { getActiveKind?(): string | undefined };
+	readonly modal?: Component & { getActiveKind?(): string | undefined; isSecretInputActive?(): boolean };
 	readonly overlay?: Component & { getActiveKind?(): string | undefined };
 	readonly notifications?: Component;
 	readonly extensionRegions?: {
@@ -165,7 +165,7 @@ export class RpcHostRuntime {
 	private readonly input: RpcHostInput | undefined;
 	private readonly terminal: TerminalSessionOwner;
 	private readonly editor: Component | undefined;
-	private readonly modal: (Component & { getActiveKind?(): string | undefined }) | undefined;
+	private readonly modal: (Component & { getActiveKind?(): string | undefined; isSecretInputActive?(): boolean }) | undefined;
 	private readonly overlay: (Component & { getActiveKind?(): string | undefined }) | undefined;
 	private readonly notifications: Component | undefined;
 	private readonly extensionRegions: RpcHostRuntimeOptions["extensionRegions"];
@@ -256,6 +256,7 @@ export class RpcHostRuntime {
 				this.modal.handleInput?.(data);
 				return true;
 			},
+			isSensitiveInputFocused: () => this.modal?.isSecretInputActive?.() === true,
 			handleFocusedOverlayInput: (data) => {
 				if (!this.overlay?.getActiveKind?.()) return false;
 				this.overlay.handleInput?.(data);

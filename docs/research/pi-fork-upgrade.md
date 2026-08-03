@@ -2,7 +2,7 @@
 
 > Active strategy: SumoCode uses the RPC host for interactive runtime ownership. The old private Pi constructor patch is retired; see `docs/SUMO_TUI_PI_PATCH_STRATEGY.md` for the historical note.
 
-SumoCode currently pins Pi `0.79.1`. Pi `0.79.x` requires Node `>=22.19.0`, so SumoCode's `engines.node` tracks that floor.
+SumoCode currently pins Pi `0.83.0`. Pi `0.83.x` requires Node `>=22.19.0`, so SumoCode's `engines.node` tracks that floor.
 
 ## Current activation model
 

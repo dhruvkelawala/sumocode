@@ -12,6 +12,8 @@ export interface ModalInputOptions extends ModalDialogOptions {
 	 * that need multiline text should use `editor()`.
 	 */
 	readonly initialValue?: string;
+	/** Mask the editable value while retaining the raw value for submission. */
+	readonly secret?: boolean;
 }
 
 export type ModalResult = boolean | string | undefined;
@@ -37,6 +39,7 @@ type ActiveModal =
 			readonly kind: "input";
 			readonly title: string;
 			readonly placeholder: string | undefined;
+			readonly secret: boolean;
 			value: string;
 			readonly resolve: (value: string | undefined) => void;
 			cleanup: () => void;
@@ -105,6 +108,9 @@ function sanitizeInputChunk(text: string): string {
 		.replace(/\n/g, "");
 }
 
+function maskSecret(text: string): string {
+	return "•".repeat([...text].length);
+}
 
 function wrapText(text: string, width: number): string[] {
 	if (width <= 0) return [""];
@@ -179,6 +185,7 @@ export class ModalManager implements Component {
 				kind: "input",
 				title: sanitizeModalText(title),
 				placeholder: placeholder === undefined ? undefined : sanitizeSingleLineModalText(placeholder),
+				secret: opts?.secret === true,
 				value: opts?.initialValue === undefined ? "" : sanitizeSingleLineModalText(opts.initialValue),
 				resolve,
 				cleanup: () => undefined,
@@ -209,6 +216,10 @@ export class ModalManager implements Component {
 		return this.active?.kind;
 	}
 
+	public isSecretInputActive(): boolean {
+		return this.active?.kind === "input" && this.active.secret;
+	}
+
 	/**
 	 * Read-only projection of the active dialog for themed renderers
 	 * (ModalLayer renders select/confirm/input in the Divine Query language;
@@ -233,7 +244,7 @@ export class ModalManager implements Component {
 			case "select":
 				return { kind: active.kind, title: active.title, options: active.options.map((option) => option.label), selectedIndex: active.selectedIndex };
 			case "input":
-				return { kind: active.kind, title: active.title, value: active.value, placeholder: active.placeholder, selectedIndex: 0 };
+				return { kind: active.kind, title: active.title, value: active.secret ? maskSecret(active.value) : active.value, placeholder: active.placeholder, selectedIndex: 0 };
 			default:
 				return { kind: active.kind, title: active.title, value: active.value, selectedIndex: 0 };
 		}
@@ -304,7 +315,7 @@ export class ModalManager implements Component {
 				lines.push(line(`${index === this.active.selectedIndex ? "▶" : " "} ${option.label}`));
 			}
 		} else if (this.active.kind === "input") {
-			const value = this.active.value || this.active.placeholder || "";
+			const value = this.active.value ? (this.active.secret ? maskSecret(this.active.value) : this.active.value) : (this.active.placeholder || "");
 			lines.push(line(`> ${value}`));
 		} else {
 			for (const valueLine of this.active.value.split("\n")) {

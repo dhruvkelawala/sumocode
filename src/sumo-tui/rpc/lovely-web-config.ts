@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
@@ -137,21 +137,25 @@ function scopeSafePatch(scope: LovelyWebConfigScope, patch: LovelyWebConfigPatch
 }
 
 function writeManagedUserPatch(targetPath: string, value: LovelyWebConfigPatch, env: NodeJS.ProcessEnv): void {
-	let targetIsSymlink = false;
+	requirePrivateConfigRepo(env);
+	const sourcePath = privateUserConfigPath(env);
+	let targetIsCanonicalSymlink = false;
 	try {
-		targetIsSymlink = lstatSync(targetPath).isSymbolicLink();
+		const targetStat = lstatSync(targetPath);
+		if (targetStat.isSymbolicLink()) {
+			const linkTarget = resolve(dirname(targetPath), readlinkSync(targetPath));
+			targetIsCanonicalSymlink = linkTarget === sourcePath;
+		}
 	} catch {
 		// Missing target: create the canonical private source and link it below.
 	}
-	if (targetIsSymlink) {
-		// Write through the existing managed link, including `{}` when clearing,
+	if (targetIsCanonicalSymlink) {
+		// Write through the verified managed link, including `{}` when clearing,
 		// so the private source and the link itself both survive.
 		writeJsonObject(targetPath, value, true);
 		return;
 	}
 
-	requirePrivateConfigRepo(env);
-	const sourcePath = privateUserConfigPath(env);
 	writeJsonObject(sourcePath, value, true);
 	if (pathExists(targetPath)) rmSync(targetPath, { recursive: true, force: true });
 	mkdirSync(dirname(targetPath), { recursive: true });

@@ -1,4 +1,4 @@
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readlinkSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -108,6 +108,25 @@ describe("Lovely Web config helpers", () => {
 		updateLovelyWebConfigValue("user", cwd, "webSearchProvider", "exa", env);
 		expect(lstatSync(join(agentDir, "xl0-pi-lovely-web.json")).isSymbolicLink()).toBe(true);
 		expect(loadLovelyWebConfig(cwd, env).value.exaApiKey).toBe("private-key");
+	});
+
+	it("replaces a noncanonical user-config symlink without writing through it", async () => {
+		const cwd = tempDir();
+		const agentDir = tempDir();
+		const configDir = privateConfigDir();
+		const externalDir = tempDir();
+		const env = { PI_CODING_AGENT_DIR: agentDir, SUMOCODE_CONFIG_DIR: configDir };
+		const target = join(agentDir, "xl0-pi-lovely-web.json");
+		const external = join(externalDir, "outside.json");
+		const canonical = join(configDir, "xl0-pi-lovely-web.json");
+		writeFileSync(external, JSON.stringify({ exaApiKey: "outside-key" }));
+		symlinkSync(external, target);
+
+		writeLovelyWebPatch("user", cwd, { exaApiKey: "private-key" }, env);
+
+		expect(JSON.parse(await readFile(external, "utf8"))).toEqual({ exaApiKey: "outside-key" });
+		expect(readlinkSync(target)).toBe(canonical);
+		expect(JSON.parse(await readFile(canonical, "utf8"))).toEqual({ exaApiKey: "private-key" });
 	});
 
 	it("refuses to create a non-repository private config root", () => {

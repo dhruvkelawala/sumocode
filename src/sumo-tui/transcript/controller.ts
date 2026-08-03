@@ -30,7 +30,10 @@ export interface TranscriptControllerLiveStateSnapshot {
 }
 
 export interface TranscriptControllerChatSink {
-	replaceViewModels(messages: readonly ChatMessageViewModel[]): ChatPagerReplaceStats;
+	replaceViewModels(
+		messages: readonly ChatMessageViewModel[],
+		options?: { readonly materializeSettledFeed?: boolean },
+	): ChatPagerReplaceStats;
 	/** Append one new message to the end of the pager without touching scroll/read state. */
 	addViewModel(message: ChatMessageViewModel, sourceIndex?: number): unknown;
 	/** Replace one rendered transcript node in place (scroll/read state preserved). */
@@ -516,7 +519,7 @@ export class TranscriptController {
 	}
 
 	private replaceChatFully(transcript: TranscriptViewModel): ChatPagerReplaceStats {
-		const stats = this.options.chat?.replaceViewModels(transcript.messages) ?? fallbackReplaceStats(transcript);
+		const stats = this.options.chat?.replaceViewModels(transcript.messages, { materializeSettledFeed: false }) ?? fallbackReplaceStats(transcript);
 		this.lastPublishedToChat = this.options.chat ? transcript.messages : undefined;
 		if (this.options.chat) this.options.scheduleRender?.();
 		return stats;

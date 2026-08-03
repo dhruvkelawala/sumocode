@@ -35,9 +35,11 @@ import {
 	LOVELY_WEB_FETCH_PROVIDERS,
 	LOVELY_WEB_SEARCH_PROVIDERS,
 	loadLovelyWebConfig,
+	lovelyWebApiKeyPatch,
 	lovelyWebConfigPathForDisplay,
 	readLovelyWebPatch,
 	updateLovelyWebConfigValue,
+	withoutLovelyWebApiKeys,
 	writeLovelyWebPatch,
 	type LovelyWebConfigKey,
 	type LovelyWebConfigScope,
@@ -131,8 +133,6 @@ const FALLBACK_THINKING_LEVELS: readonly RpcThinkingLevel[] = ["off", "minimal",
 export const RPC_HOST_SLASH_COMMANDS: readonly RpcHostSlashCommand[] = Object.freeze([
 	{ name: "settings", description: "Open RPC settings" },
 	{ name: "login", description: "Configure provider authentication" },
-	{ name: "mcp", description: "Manage MCP servers" },
-	{ name: "mcp-auth", description: "Authenticate with an MCP server" },
 	{ name: "model", description: "Select model or set provider/model" },
 	{ name: "thinking", description: "Select thinking level" },
 	{ name: "theme", description: "Select SumoCode theme" },
@@ -157,6 +157,7 @@ export const RPC_HOST_SLASH_COMMANDS: readonly RpcHostSlashCommand[] = Object.fr
 	{ name: "changelog", description: "Show SumoCode's changelog" },
 ]);
 
+export const RPC_HOST_ROUTED_CHILD_COMMANDS = Object.freeze(["mcp", "mcp-auth"] as const);
 const RPC_HOST_SLASH_COMMAND_NAMES = new Set(RPC_HOST_SLASH_COMMANDS.map((command) => command.name));
 
 export function isRpcHostSlashCommandName(name: string): boolean {
@@ -584,9 +585,11 @@ export class RpcHostActions {
 		if (!command.startsWith("/")) return false;
 		switch (command) {
 			case "/mcp":
+				if (!await this.requireChildCommand(command)) return true;
 				await this.handleMcpCommand(args);
 				return true;
 			case "/mcp-auth":
+				if (!await this.requireChildCommand(command)) return true;
 				await this.authenticateMcpServer(args);
 				return true;
 			case "/login":
@@ -863,7 +866,7 @@ export class RpcHostActions {
 				{ value: "smartSearchModel", label: "smart search model", description: state.value.smartSearchModel || "current/default" },
 				{ value: "smartSearchMaxTokens", label: "smart search max tokens", description: String(state.value.smartSearchMaxTokens) },
 				{ value: "smartSearchSystemPrompt", label: "smart search system prompt", description: state.value.smartSearchSystemPrompt ? "custom" : "built-in" },
-				...this.lovelyWebApiKeyItems(state.value),
+				...(scope === "user" ? this.lovelyWebApiKeyItems(state.value) : []),
 				{ value: "raw", label: "raw JSON", description: lovelyWebConfigPathForDisplay(path) },
 				{ value: "done", label: "done", description: "close Lovely Web config" },
 			]);
@@ -934,6 +937,10 @@ export class RpcHostActions {
 	}
 
 	private async setLovelyWebApiKey(scope: LovelyWebConfigScope, cwd: string, provider: string): Promise<void> {
+		if (scope !== "user") {
+			notify(this.notifications, "Lovely Web API keys are user-only", "warning");
+			return;
+		}
 		const key = LOVELY_WEB_API_KEY_FIELDS[provider as keyof typeof LOVELY_WEB_API_KEY_FIELDS];
 		if (!key) {
 			notify(this.notifications, `unknown Lovely Web provider: ${provider}`, "warning");
@@ -946,7 +953,8 @@ export class RpcHostActions {
 
 	private async openLovelyWebRawEditor(scope: LovelyWebConfigScope, cwd: string): Promise<void> {
 		const patch = readLovelyWebPatch(scope, cwd);
-		const edited = await this.modals.editor(`Lovely Web ${scope} JSON`, `${JSON.stringify(patch, null, 2)}\n`);
+		const safePatch = withoutLovelyWebApiKeys(patch);
+		const edited = await this.modals.editor(`Lovely Web ${scope} JSON`, `${JSON.stringify(safePatch, null, 2)}\n`);
 		if (edited === undefined) return;
 		let parsed: unknown;
 		try {
@@ -959,7 +967,9 @@ export class RpcHostActions {
 			notify(this.notifications, "invalid Lovely Web JSON: expected an object", "error");
 			return;
 		}
-		const path = writeLovelyWebPatch(scope, cwd, parsed as Record<string, unknown>);
+		const editedPatch = withoutLovelyWebApiKeys(parsed as Record<string, unknown>);
+		const preservedSecrets = scope === "user" ? lovelyWebApiKeyPatch(patch) : {};
+		const path = writeLovelyWebPatch(scope, cwd, { ...editedPatch, ...preservedSecrets });
 		this.notifyLovelyWebSaved(path);
 	}
 
@@ -1416,6 +1426,12 @@ export class RpcHostActions {
 		await this.controls.setAutoRetry(enabled);
 		this.onStateChange();
 		notify(this.notifications, `auto retry ${enabled ? "enabled" : "disabled"}`, "info");
+	}
+
+	private async requireChildCommand(command: string): Promise<boolean> {
+		if (await this.childCanExecuteCommand(command)) return true;
+		notify(this.notifications, `unknown command: ${command}`, "warning");
+		return false;
 	}
 
 	private async childCanExecuteCommand(command: string): Promise<boolean> {

@@ -12,8 +12,9 @@ import { MAX_CLIPBOARD_BYTES } from "../input/selection.js";
 import { ModalManager } from "../widgets/modal.js";
 import type { NotificationLevel } from "../widgets/notification.js";
 import type { RpcHostControls, RpcModelOption, RpcSlashCommand } from "./controls.js";
-import { isRpcHostSlashCommandName, RpcHostActions, RPC_HOST_COMMAND_PALETTE_INPUT, RPC_HOST_SLASH_COMMANDS } from "./host-actions.js";
+import { isRpcHostSlashCommandName, RpcHostActions, RPC_HOST_COMMAND_PALETTE_INPUT, RPC_HOST_ROUTED_CHILD_COMMANDS, RPC_HOST_SLASH_COMMANDS } from "./host-actions.js";
 import { RpcHostOverlayManager } from "./host-overlays.js";
+import { writeLovelyWebPatch } from "./lovely-web-config.js";
 import { InlineSelectorHost } from "./inline-selector.js";
 import { RpcHostStateStore, type RpcHostChromeState } from "./state.js";
 
@@ -469,11 +470,14 @@ describe("RpcHostActions", () => {
 	it("handles /lovely-web in the retained host instead of delegating to Pi's unsupported RPC custom UI", async () => {
 		const cwd = mkdtempSync(join(tmpdir(), "sumocode-lovely-web-host-test-"));
 		const agentDir = mkdtempSync(join(tmpdir(), "sumocode-lovely-web-agent-test-"));
+		const configDir = mkdtempSync(join(tmpdir(), "sumocode-lovely-web-private-test-"));
 		const originalCwd = process.cwd();
 		const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
+		const originalConfigDir = process.env.SUMOCODE_CONFIG_DIR;
 		try {
 			process.chdir(cwd);
 			process.env.PI_CODING_AGENT_DIR = agentDir;
+			process.env.SUMOCODE_CONFIG_DIR = configDir;
 			const { actions, inlineSelectors, notifications } = setup();
 
 			const lovelyWeb = actions.handleSubmittedText("/lovely-web");
@@ -497,19 +501,25 @@ describe("RpcHostActions", () => {
 			process.chdir(originalCwd);
 			if (originalAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 			else process.env.PI_CODING_AGENT_DIR = originalAgentDir;
+			if (originalConfigDir === undefined) delete process.env.SUMOCODE_CONFIG_DIR;
+			else process.env.SUMOCODE_CONFIG_DIR = originalConfigDir;
 			rmSync(cwd, { recursive: true, force: true });
 			rmSync(agentDir, { recursive: true, force: true });
+			rmSync(configDir, { recursive: true, force: true });
 		}
 	});
 
 	it("masks Lovely Web API keys while entering and saving them", async () => {
 		const cwd = mkdtempSync(join(tmpdir(), "sumocode-lovely-web-secret-test-"));
 		const agentDir = mkdtempSync(join(tmpdir(), "sumocode-lovely-web-secret-agent-test-"));
+		const configDir = mkdtempSync(join(tmpdir(), "sumocode-lovely-web-secret-private-test-"));
 		const originalCwd = process.cwd();
 		const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
+		const originalConfigDir = process.env.SUMOCODE_CONFIG_DIR;
 		try {
 			process.chdir(cwd);
 			process.env.PI_CODING_AGENT_DIR = agentDir;
+			process.env.SUMOCODE_CONFIG_DIR = configDir;
 			const { actions, inlineSelectors, modals } = setup();
 
 			const lovelyWeb = actions.handleSubmittedText("/lovely-web");
@@ -534,8 +544,67 @@ describe("RpcHostActions", () => {
 			process.chdir(originalCwd);
 			if (originalAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 			else process.env.PI_CODING_AGENT_DIR = originalAgentDir;
+			if (originalConfigDir === undefined) delete process.env.SUMOCODE_CONFIG_DIR;
+			else process.env.SUMOCODE_CONFIG_DIR = originalConfigDir;
 			rmSync(cwd, { recursive: true, force: true });
 			rmSync(agentDir, { recursive: true, force: true });
+			rmSync(configDir, { recursive: true, force: true });
+		}
+	});
+
+	it("keeps API keys out of raw JSON editors and workspace actions", async () => {
+		const cwd = mkdtempSync(join(tmpdir(), "sumocode-lovely-web-raw-test-"));
+		const agentDir = mkdtempSync(join(tmpdir(), "sumocode-lovely-web-raw-agent-test-"));
+		const configDir = mkdtempSync(join(tmpdir(), "sumocode-lovely-web-raw-private-test-"));
+		const originalCwd = process.cwd();
+		const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
+		const originalConfigDir = process.env.SUMOCODE_CONFIG_DIR;
+		try {
+			process.chdir(cwd);
+			process.env.PI_CODING_AGENT_DIR = agentDir;
+			process.env.SUMOCODE_CONFIG_DIR = configDir;
+			writeLovelyWebPatch("user", cwd, { firecrawlApiKey: "must-stay-secret", webSearchProvider: "exa" });
+			const { actions, inlineSelectors, modals } = setup();
+
+			const rawUser = actions.handleSubmittedText("/lovely-web");
+			await flush();
+			inlineSelectors.handleInput(SELECTOR_DOWN);
+			inlineSelectors.handleInput(SELECTOR_DOWN);
+			inlineSelectors.handleInput(SELECTOR_ENTER); // raw user JSON
+			await flush();
+			const rawText = modals.render(100).join("\n");
+			expect(rawText).toContain("webSearchProvider");
+			expect(rawText).not.toContain("must-stay-secret");
+			expect(rawText).not.toContain("firecrawlApiKey");
+			const initialRaw = `${JSON.stringify({ webSearchProvider: "exa" }, null, 2)}\n`;
+			for (let index = 0; index < initialRaw.length; index += 1) modals.handleInput("backspace");
+			modals.handleInput(JSON.stringify({ webSearchProvider: "tavily", exaApiKey: "must-not-save", webApiKeys: { brave: "also-must-not-save" } }));
+			modals.handleInput(SELECTOR_ENTER);
+			await rawUser;
+			const saved = JSON.parse(await readFile(join(agentDir, "xl0-pi-lovely-web.json"), "utf8")) as Record<string, unknown>;
+			expect(saved).toMatchObject({ webSearchProvider: "tavily", firecrawlApiKey: "must-stay-secret" });
+			expect(saved.exaApiKey).toBeUndefined();
+			expect(saved.braveApiKey).toBeUndefined();
+			expect(saved.webApiKeys).toBeUndefined();
+
+			const workspace = actions.handleSubmittedText("/lovely-web");
+			await flush();
+			inlineSelectors.handleInput(SELECTOR_DOWN);
+			inlineSelectors.handleInput(SELECTOR_ENTER); // workspace config
+			await flush();
+			const workspaceText = inlineSelectors.render(100).join("\n");
+			expect(workspaceText).not.toContain("API key");
+			inlineSelectors.handleInput(SELECTOR_ESCAPE);
+			await workspace;
+		} finally {
+			process.chdir(originalCwd);
+			if (originalAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+			else process.env.PI_CODING_AGENT_DIR = originalAgentDir;
+			if (originalConfigDir === undefined) delete process.env.SUMOCODE_CONFIG_DIR;
+			else process.env.SUMOCODE_CONFIG_DIR = originalConfigDir;
+			rmSync(cwd, { recursive: true, force: true });
+			rmSync(agentDir, { recursive: true, force: true });
+			rmSync(configDir, { recursive: true, force: true });
 		}
 	});
 
@@ -1227,9 +1296,10 @@ describe("RpcHostActions", () => {
 
 	it("opens retained MCP controls instead of forwarding bare custom-UI commands", async () => {
 		const { actions, controls, modals } = setup();
+		controls.commands = [rpcCommand("mcp"), rpcCommand("mcp-auth")];
 
-		expect(isRpcHostSlashCommandName("mcp")).toBe(true);
-		expect(isRpcHostSlashCommandName("mcp-auth")).toBe(true);
+		expect(isRpcHostSlashCommandName("mcp")).toBe(false);
+		expect(isRpcHostSlashCommandName("mcp-auth")).toBe(false);
 
 		const mcp = actions.handleSubmittedText("/mcp");
 		await flush();
@@ -1251,12 +1321,24 @@ describe("RpcHostActions", () => {
 
 	it("forwards argument-bearing MCP commands directly to the child extension", async () => {
 		const { actions, controls } = setup();
+		controls.commands = [rpcCommand("mcp"), rpcCommand("mcp-auth")];
 
 		await expect(actions.handleSubmittedText("/mcp tools")).resolves.toBe(true);
 		await expect(actions.handleSubmittedText("/mcp-auth railway")).resolves.toBe(true);
 
 		expect(controls.calls).toContain("executeExtensionCommand:/mcp tools");
 		expect(controls.calls).toContain("executeExtensionCommand:/mcp-auth railway");
+	});
+
+	it("rejects MCP commands when the child adapter is unavailable", async () => {
+		const { actions, controls, notifications } = setup();
+
+		await expect(actions.handleSubmittedText("/mcp tools")).resolves.toBe(true);
+		await expect(actions.handleSubmittedText("/mcp-auth railway")).resolves.toBe(true);
+
+		expect(controls.calls.some((call) => call.startsWith("executeExtensionCommand:"))).toBe(false);
+		expect(notifications).toContainEqual({ message: "unknown command: /mcp", level: "warning" });
+		expect(notifications).toContainEqual({ message: "unknown command: /mcp-auth", level: "warning" });
 	});
 
 	it("executes /login directly against the RPC child without entering the agent prompt scheduler", async () => {
@@ -1316,8 +1398,8 @@ describe("RpcHostActions", () => {
 		// blocking pickers/overlays that would hang without simulated input).
 		const hostActionsSource = await readFile(new URL("./host-actions.ts", import.meta.url), "utf8");
 		const switchCaseNames = [...hostActionsSource.matchAll(/case "\/([a-z0-9:_-]+)":/g)].map((match) => match[1]);
-		const advertisedNames = RPC_HOST_SLASH_COMMANDS.map((command) => command.name);
+		const routedNames = [...RPC_HOST_SLASH_COMMANDS.map((command) => command.name), ...RPC_HOST_ROUTED_CHILD_COMMANDS];
 
-		expect(new Set(switchCaseNames)).toEqual(new Set(advertisedNames));
+		expect(new Set(switchCaseNames)).toEqual(new Set(routedNames));
 	});
 });

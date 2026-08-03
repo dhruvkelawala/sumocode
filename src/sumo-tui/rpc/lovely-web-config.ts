@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
@@ -83,14 +83,72 @@ function readJsonObject(path: string): LovelyWebConfigPatch {
 	return { ...parsed };
 }
 
-function writeJsonObject(path: string, value: LovelyWebConfigPatch): void {
+function writeJsonObject(path: string, value: LovelyWebConfigPatch, preserveEmpty = false): void {
 	const keys = Object.keys(value);
-	if (keys.length === 0) {
+	if (keys.length === 0 && !preserveEmpty) {
 		rmSync(path, { force: true });
 		return;
 	}
 	mkdirSync(dirname(path), { recursive: true });
-	writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+	writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+	chmodSync(path, 0o600);
+}
+
+function pathExists(path: string): boolean {
+	try {
+		lstatSync(path);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+function privateConfigRepo(env: NodeJS.ProcessEnv): string {
+	return resolve(env.SUMOCODE_CONFIG_DIR ?? join(homedir(), ".config", "sumocode"));
+}
+
+function privateUserConfigPath(env: NodeJS.ProcessEnv): string {
+	return join(privateConfigRepo(env), LOVELY_WEB_CONFIG_FILE);
+}
+
+function apiKeyFields(): ReadonlySet<string> {
+	return new Set(Object.values(LOVELY_WEB_API_KEY_FIELDS));
+}
+
+export function withoutLovelyWebApiKeys(patch: LovelyWebConfigPatch): LovelyWebConfigPatch {
+	const keys = apiKeyFields();
+	return Object.fromEntries(Object.entries(normalizeLovelyWebPatch(patch)).filter(([key]) => !keys.has(key)));
+}
+
+export function lovelyWebApiKeyPatch(patch: LovelyWebConfigPatch): LovelyWebConfigPatch {
+	const keys = apiKeyFields();
+	return Object.fromEntries(Object.entries(normalizeLovelyWebPatch(patch)).filter(([key]) => keys.has(key)));
+}
+
+function scopeSafePatch(scope: LovelyWebConfigScope, patch: LovelyWebConfigPatch): LovelyWebConfigPatch {
+	const normalized = normalizeLovelyWebPatch(patch);
+	return scope === "workspace" ? withoutLovelyWebApiKeys(normalized) : normalized;
+}
+
+function writeManagedUserPatch(targetPath: string, value: LovelyWebConfigPatch, env: NodeJS.ProcessEnv): void {
+	let targetIsSymlink = false;
+	try {
+		targetIsSymlink = lstatSync(targetPath).isSymbolicLink();
+	} catch {
+		// Missing target: create the canonical private source and link it below.
+	}
+	if (targetIsSymlink) {
+		// Write through the existing managed link, including `{}` when clearing,
+		// so the private source and the link itself both survive.
+		writeJsonObject(targetPath, value, true);
+		return;
+	}
+
+	const sourcePath = privateUserConfigPath(env);
+	writeJsonObject(sourcePath, value, true);
+	if (pathExists(targetPath)) rmSync(targetPath, { recursive: true, force: true });
+	mkdirSync(dirname(targetPath), { recursive: true });
+	symlinkSync(sourcePath, targetPath);
 }
 
 function asString(value: unknown): string | undefined {
@@ -167,8 +225,9 @@ export function resolveLovelyWebConfigPath(scope: LovelyWebConfigScope, cwd: str
 export function loadLovelyWebConfig(cwd: string, env: NodeJS.ProcessEnv = process.env): LovelyWebConfigState {
 	const userPath = resolveLovelyWebConfigPath("user", cwd, env);
 	const workspacePath = resolveLovelyWebConfigPath("workspace", cwd, env);
-	const userPatch = normalizeLovelyWebPatch(readJsonObject(userPath));
-	const workspacePatch = normalizeLovelyWebPatch(readJsonObject(workspacePath));
+	const userReadPath = pathExists(userPath) ? userPath : privateUserConfigPath(env);
+	const userPatch = normalizeLovelyWebPatch(readJsonObject(userReadPath));
+	const workspacePatch = scopeSafePatch("workspace", readJsonObject(workspacePath));
 	return {
 		userPath,
 		workspacePath,
@@ -179,12 +238,16 @@ export function loadLovelyWebConfig(cwd: string, env: NodeJS.ProcessEnv = proces
 }
 
 export function readLovelyWebPatch(scope: LovelyWebConfigScope, cwd: string, env: NodeJS.ProcessEnv = process.env): LovelyWebConfigPatch {
-	return normalizeLovelyWebPatch(readJsonObject(resolveLovelyWebConfigPath(scope, cwd, env)));
+	const targetPath = resolveLovelyWebConfigPath(scope, cwd, env);
+	const readPath = scope === "user" && !pathExists(targetPath) ? privateUserConfigPath(env) : targetPath;
+	return scopeSafePatch(scope, readJsonObject(readPath));
 }
 
 export function writeLovelyWebPatch(scope: LovelyWebConfigScope, cwd: string, patch: LovelyWebConfigPatch, env: NodeJS.ProcessEnv = process.env): string {
 	const path = resolveLovelyWebConfigPath(scope, cwd, env);
-	writeJsonObject(path, normalizeLovelyWebPatch(patch));
+	const safePatch = scopeSafePatch(scope, patch);
+	if (scope === "user") writeManagedUserPatch(path, safePatch, env);
+	else writeJsonObject(path, safePatch);
 	return path;
 }
 

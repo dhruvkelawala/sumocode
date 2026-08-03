@@ -91,24 +91,31 @@ function cancelled(): Error {
 	return new Error("Login cancelled");
 }
 
-async function showPrompt(ctx: ExtensionCommandContext, prompt: AuthPrompt): Promise<string> {
-	if (prompt.type === "select") {
-		const labels = prompt.options.map((option) => option.description ? `${option.label} — ${option.description}` : option.label);
-		const title = authInputTitle(prompt.message);
-		const selected = prompt.signal
-			? await ctx.ui.select(title, labels, { signal: prompt.signal })
-			: await ctx.ui.select(title, labels);
-		const index = labels.indexOf(selected ?? "");
-		const option = prompt.options[index];
-		if (!option) throw cancelled();
-		return option.id;
+async function showPrompt(ctx: ExtensionCommandContext, prompt: AuthPrompt, loginSignal: AbortSignal): Promise<string> {
+	const promptAbort = new AbortController();
+	const signals = prompt.signal ? [loginSignal, prompt.signal] : [loginSignal];
+	const abortPrompt = () => promptAbort.abort();
+	for (const signal of signals) {
+		if (signal.aborted) promptAbort.abort();
+		else signal.addEventListener("abort", abortPrompt, { once: true });
 	}
-	const title = authInputTitle(prompt.message, prompt.type === "secret");
-	const value = prompt.signal
-		? await ctx.ui.input(title, prompt.placeholder, { signal: prompt.signal })
-		: await ctx.ui.input(title, prompt.placeholder);
-	if (value === undefined) throw cancelled();
-	return value;
+	try {
+		if (prompt.type === "select") {
+			const labels = prompt.options.map((option) => option.description ? `${option.label} — ${option.description}` : option.label);
+			const title = authInputTitle(prompt.message);
+			const selected = await ctx.ui.select(title, labels, { signal: promptAbort.signal });
+			const index = labels.indexOf(selected ?? "");
+			const option = prompt.options[index];
+			if (!option) throw cancelled();
+			return option.id;
+		}
+		const title = authInputTitle(prompt.message, prompt.type === "secret");
+		const value = await ctx.ui.input(title, prompt.placeholder, { signal: promptAbort.signal });
+		if (value === undefined) throw cancelled();
+		return value;
+	} finally {
+		for (const signal of signals) signal.removeEventListener("abort", abortPrompt);
+	}
 }
 
 function publishLoginDetails(ctx: ExtensionCommandContext, lines: readonly string[]): void {
@@ -162,7 +169,7 @@ export async function executeRpcLogin(args: string, ctx: ExtensionCommandContext
 		}
 		await runtime.login(method.provider.id, method.authType, {
 			signal: loginAbort.signal,
-			prompt: (prompt) => showPrompt(ctx, prompt),
+			prompt: (prompt) => showPrompt(ctx, prompt, loginAbort.signal),
 			notify: (event) => showEvent(ctx, event),
 		});
 		ctx.ui.notify(`Logged in to ${method.provider.name}`, "info");

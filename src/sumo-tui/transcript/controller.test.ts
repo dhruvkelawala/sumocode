@@ -542,6 +542,18 @@ function fakeChatSink(): FakeChatSink {
 }
 
 describe("TranscriptController incremental chat sink (B9)", () => {
+	it("suppresses settled feed materialization on every full session hydration", () => {
+		const chat = fakeChatSink();
+		const controller = new TranscriptController({ chat });
+
+		controller.replaceFromMessages([{ id: "resumed", role: "assistant", content: "history" }]);
+
+		expect(chat.replaceViewModels).toHaveBeenCalledWith(
+			[expect.objectContaining({ id: "resumed" })],
+			{ materializeSettledFeed: false },
+		);
+	});
+
 	it("memoizes fallback content keys per reused view-model object", () => {
 		resetMessageContentKeyCacheForTests();
 		const prefix = Array.from({ length: 50 }, (_, index): ChatMessageViewModel => ({

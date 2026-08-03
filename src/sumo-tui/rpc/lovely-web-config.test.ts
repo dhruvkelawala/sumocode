@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -47,10 +47,12 @@ describe("Lovely Web config helpers", () => {
 	it("loads user and workspace patches in Lovely Web scope order", () => {
 		const cwd = tempDir();
 		const agentDir = tempDir();
-		writeFileSync(resolveLovelyWebConfigPath("user", cwd, { PI_CODING_AGENT_DIR: agentDir }), JSON.stringify({ webSearchProvider: "brave", firecrawlApiKey: "user-key" }));
-		writeLovelyWebPatch("workspace", cwd, { webSearchProvider: "tavily" }, { PI_CODING_AGENT_DIR: agentDir });
+		const configDir = tempDir();
+		const env = { PI_CODING_AGENT_DIR: agentDir, SUMOCODE_CONFIG_DIR: configDir };
+		writeFileSync(resolveLovelyWebConfigPath("user", cwd, env), JSON.stringify({ webSearchProvider: "brave", firecrawlApiKey: "user-key" }));
+		writeLovelyWebPatch("workspace", cwd, { webSearchProvider: "tavily" }, env);
 
-		const state = loadLovelyWebConfig(cwd, { PI_CODING_AGENT_DIR: agentDir });
+		const state = loadLovelyWebConfig(cwd, env);
 
 		expect(state.value.webSearchProvider).toBe("tavily");
 		expect(state.value.firecrawlApiKey).toBe("user-key");
@@ -61,12 +63,54 @@ describe("Lovely Web config helpers", () => {
 	it("updates one key, preserves unknown keys, and deletes blank values", async () => {
 		const cwd = tempDir();
 		const agentDir = tempDir();
-		writeLovelyWebPatch("user", cwd, { unknownFutureKey: "keep", firecrawlApiKey: "old" }, { PI_CODING_AGENT_DIR: agentDir });
+		const configDir = tempDir();
+		const env = { PI_CODING_AGENT_DIR: agentDir, SUMOCODE_CONFIG_DIR: configDir };
+		writeLovelyWebPatch("user", cwd, { unknownFutureKey: "keep", firecrawlApiKey: "old" }, env);
 
-		const path = updateLovelyWebConfigValue("user", cwd, "webFetchProvider", "firecrawl", { PI_CODING_AGENT_DIR: agentDir });
-		updateLovelyWebConfigValue("user", cwd, "firecrawlApiKey", "", { PI_CODING_AGENT_DIR: agentDir });
+		const path = updateLovelyWebConfigValue("user", cwd, "webFetchProvider", "firecrawl", env);
+		updateLovelyWebConfigValue("user", cwd, "firecrawlApiKey", "", env);
 
 		const written = JSON.parse(await readFile(path, "utf8")) as Record<string, unknown>;
 		expect(written).toEqual({ unknownFutureKey: "keep", webFetchProvider: "firecrawl" });
+	});
+
+	it("creates and preserves a private managed user-config symlink with mode 0600", async () => {
+		const cwd = tempDir();
+		const agentDir = tempDir();
+		const configDir = tempDir();
+		const env = { PI_CODING_AGENT_DIR: agentDir, SUMOCODE_CONFIG_DIR: configDir };
+		const target = writeLovelyWebPatch("user", cwd, { firecrawlApiKey: "secret" }, env);
+		const source = join(configDir, "xl0-pi-lovely-web.json");
+
+		expect(lstatSync(target).isSymbolicLink()).toBe(true);
+		expect(JSON.parse(await readFile(source, "utf8"))).toEqual({ firecrawlApiKey: "secret" });
+		expect(statSync(source).mode & 0o777).toBe(0o600);
+
+		writeLovelyWebPatch("user", cwd, {}, env);
+		expect(lstatSync(target).isSymbolicLink()).toBe(true);
+		expect(JSON.parse(await readFile(source, "utf8"))).toEqual({});
+	});
+
+	it("loads an existing private source before its agent-dir symlink is created", () => {
+		const cwd = tempDir();
+		const agentDir = tempDir();
+		const configDir = tempDir();
+		const env = { PI_CODING_AGENT_DIR: agentDir, SUMOCODE_CONFIG_DIR: configDir };
+		writeFileSync(join(configDir, "xl0-pi-lovely-web.json"), JSON.stringify({ exaApiKey: "private-key" }), { mode: 0o600 });
+
+		expect(loadLovelyWebConfig(cwd, env).value.exaApiKey).toBe("private-key");
+		updateLovelyWebConfigValue("user", cwd, "webSearchProvider", "exa", env);
+		expect(lstatSync(join(agentDir, "xl0-pi-lovely-web.json")).isSymbolicLink()).toBe(true);
+		expect(loadLovelyWebConfig(cwd, env).value.exaApiKey).toBe("private-key");
+	});
+
+	it("strips API-key fields from workspace config and writes it with mode 0600", async () => {
+		const cwd = tempDir();
+		const agentDir = tempDir();
+		const env = { PI_CODING_AGENT_DIR: agentDir, SUMOCODE_CONFIG_DIR: tempDir() };
+		const path = writeLovelyWebPatch("workspace", cwd, { webSearchProvider: "exa", exaApiKey: "must-not-land" }, env);
+
+		expect(JSON.parse(await readFile(path, "utf8"))).toEqual({ webSearchProvider: "exa" });
+		expect(statSync(path).mode & 0o777).toBe(0o600);
 	});
 });

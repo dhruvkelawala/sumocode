@@ -116,6 +116,32 @@ describe("RPC /login compatibility command", () => {
 		expect(ctx.ui.notify).not.toHaveBeenCalledWith(expect.stringContaining("Login failed"), "error");
 	});
 
+	it("cancels an authentication prompt that omits its own signal", async () => {
+		const ctx = context();
+		(ctx.ui.input as ReturnType<typeof vi.fn>).mockImplementation(async (_title, _placeholder, options) => {
+			return new Promise<undefined>((resolve) => {
+				(options?.signal as AbortSignal | undefined)?.addEventListener("abort", () => resolve(undefined), { once: true });
+			});
+		});
+		const runtime = runtimeFor();
+		(runtime.login as ReturnType<typeof vi.fn>).mockImplementation(async (_providerId, _type, interaction) => {
+			await interaction.prompt({ type: "manual_code", message: "Paste authorization code" });
+			return {} as never;
+		});
+
+		const login = executeRpcLogin("anthropic", ctx, runtime);
+		await vi.waitFor(() => expect(ctx.ui.input).toHaveBeenCalled());
+		expect(cancelActiveRpcLogin()).toBe(true);
+		await login;
+
+		expect(ctx.ui.input).toHaveBeenCalledWith(
+			expect.any(String),
+			undefined,
+			expect.objectContaining({ signal: expect.any(AbortSignal) }),
+		);
+		expect(ctx.ui.notify).not.toHaveBeenCalledWith(expect.stringContaining("Login failed"), "error");
+	});
+
 	it("marks API-key prompts as secret on the SumoCode RPC wire", async () => {
 		const apiKeyProvider = provider({ oauth: false, apiKey: true });
 		const ctx = context({ inputs: ["sk-secret"] });

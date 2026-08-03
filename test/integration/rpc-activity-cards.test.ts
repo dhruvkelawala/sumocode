@@ -243,6 +243,11 @@ describe("RPC durable Activity cards", () => {
 		), { cols, rows, timeoutMs: 10_000 });
 		expect(screen.text).not.toContain("Quartz v5 scaffold design");
 		expect(screen.text).not.toContain("Review Ready Brain deploy");
+
+		app.sendInput(`first message after reload${CSI_U_ENTER}`);
+		const afterFirstMessage = await waitForScreen(app, ({ text }) => text.includes("fixture response complete: first message after reload"), { cols, rows, timeoutMs: 10_000 });
+		expect(afterFirstMessage.text).not.toContain("Quartz v5 scaffold design");
+		expect(afterFirstMessage.text).not.toContain("Review Ready Brain deploy");
 	}, 30_000);
 
 	it("isolates session A from B feed updates and restores A cards on resume", async () => {

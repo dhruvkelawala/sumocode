@@ -780,7 +780,7 @@ describe("TranscriptController incremental chat sink (B9)", () => {
 		expect(chat.replaceViewModels).toHaveBeenCalledTimes(1);
 		expect(chat.replaceViewModels).toHaveBeenCalledWith([
 			expect.objectContaining({ id: "draft", blocks: [{ type: "markdown", text: "now visible" }] }),
-		]);
+		], { materializeSettledFeed: false });
 	});
 
 	it("message_update uses the O(1) hinted boundary diff without prefix key misses", () => {

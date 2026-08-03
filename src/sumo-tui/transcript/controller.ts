@@ -576,7 +576,7 @@ export class TranscriptController {
 				: planChatDiff(previous, next)
 			: undefined;
 		if (!operations) {
-			chat.replaceViewModels(next);
+			chat.replaceViewModels(next, { materializeSettledFeed: false });
 			this.lastPublishedToChat = next;
 			this.options.scheduleRender?.();
 			return;
@@ -588,7 +588,7 @@ export class TranscriptController {
 					? chat.replaceViewModelAt(operation.index, operation.message)
 					: chat.addViewModel(operation.message, operation.index);
 			if (applied === false) {
-				chat.replaceViewModels(next);
+				chat.replaceViewModels(next, { materializeSettledFeed: false });
 				this.lastPublishedToChat = next;
 				this.options.scheduleRender?.();
 				return;

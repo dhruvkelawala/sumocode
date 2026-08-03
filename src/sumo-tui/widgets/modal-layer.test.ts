@@ -5,6 +5,7 @@ import { DIRECTION_LTR, loadYoga } from "../layout/yoga.js";
 import { CellBuffer } from "../render/buffer.js";
 import { composite } from "../render/compositor.js";
 import { RegionRegistry } from "../pi-compat/region-registry.js";
+import { stripAnsi } from "../cathedral/ansi.js";
 import { ModalLayer } from "./modal-layer.js";
 
 class CloseOnEnterComponent implements Component {
@@ -64,6 +65,29 @@ describe("ModalLayer", () => {
 		layer.handleInput("escape");
 		await expect(result).resolves.toBeUndefined();
 		expect(layer.getActiveKind()).toBeUndefined();
+	});
+
+	it("renders the empty input cursor before the non-editable placeholder", () => {
+		const layer = new ModalLayer({ getTerminalSize: () => ({ columns: 40, rows: 24 }) });
+		void layer.input("Answer", "type your answer");
+
+		const text = stripAnsi(layer.render(40).join("\n"));
+
+		expect(text).toContain("> █type your answer");
+		expect(text).not.toContain("type your answer█");
+	});
+
+	it("wraps long input values without dropping hidden characters", () => {
+		const layer = new ModalLayer({ getTerminalSize: () => ({ columns: 32, rows: 24 }) });
+		void layer.input("Answer", "type your answer");
+		const value = "x".repeat(80);
+		layer.handleInput(value);
+
+		const rows = layer.render(32).map(stripAnsi);
+		const inputRows = rows.filter((row) => row.includes("x"));
+
+		expect(inputRows.length).toBeGreaterThan(1);
+		expect(inputRows.join("").match(/x/g)).toHaveLength(value.length);
 	});
 
 	it("routes input to the visible modal while later modals are queued", async () => {

@@ -90,29 +90,30 @@ function correlatedActivity(index: ActivityCorrelationIndex, activity: ActivityS
 	return [...candidates].find((candidate) => sameActivity(candidate, activity));
 }
 
-function suppressColdSettledTerminalResult(
+function suppressColdSettledManagedResult(
 	message: ChatMessageViewModel,
 	feedIndex: ActivityCorrelationIndex,
 ): ChatMessageViewModel {
 	if (message.role !== "system") return message;
-	const hasSettledTerminal = message.blocks.some((block) => {
-		if (block.type !== "activity" || block.activity.kind !== "terminal") return false;
+	const suppressedKinds = new Set<"terminal" | "subagent">();
+	for (const block of message.blocks) {
+		if (block.type !== "activity" || (block.activity.kind !== "terminal" && block.activity.kind !== "subagent")) continue;
 		const feedActivity = correlatedActivity(feedIndex, block.activity);
-		return feedActivity?.kind === "terminal" && isSettledActivityStatus(feedActivity.status);
-	});
-	if (!hasSettledTerminal) return message;
+		if (feedActivity?.kind === block.activity.kind && isSettledActivityStatus(feedActivity.status)) suppressedKinds.add(block.activity.kind);
+	}
+	if (suppressedKinds.size === 0) return message;
 	return {
 		...message,
 		blocks: message.blocks.filter((block) => {
 			if (block.type !== "activity") return true;
-			if (block.activity.kind === "terminal") {
+			if (block.activity.kind === "terminal" || block.activity.kind === "subagent") {
 				const feedActivity = correlatedActivity(feedIndex, block.activity);
-				if (feedActivity?.kind === "terminal" && isSettledActivityStatus(feedActivity.status)) return false;
+				if (feedActivity?.kind === block.activity.kind && isSettledActivityStatus(feedActivity.status)) return false;
 			}
-			// terminal_check/wait results accompany the durable terminal snapshot in
+			// Observation/control results accompany the durable managed snapshot in
 			// the same Pi tool-result message; retaining the operation alone would
-			// still create an orphan TOOL frame after the terminal block is removed.
-			return block.activity.kind !== "tool" || !block.activity.title.startsWith("terminal_");
+			// still create an orphan TOOL frame after the managed block is removed.
+			return block.activity.kind !== "tool" || ![...suppressedKinds].some((kind) => block.activity.title.startsWith(`${kind}_`));
 		}),
 	};
 }
@@ -225,7 +226,7 @@ export class ChatPager extends SumoNode {
 		const feedActivities = [...this.feedActivities.values()];
 		const feedIndex = activityCorrelationIndex(feedActivities);
 		const messages = options.materializeSettledFeed === false
-			? sourceMessages.map((message) => suppressColdSettledTerminalResult(message, feedIndex))
+			? sourceMessages.map((message) => suppressColdSettledManagedResult(message, feedIndex))
 			: sourceMessages;
 		this.transcriptClaimedActivityStatuses.clear();
 		for (const activity of this.activitiesFromViewModels(messages)) {

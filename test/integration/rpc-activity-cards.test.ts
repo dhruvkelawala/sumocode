@@ -212,6 +212,41 @@ describe("RPC durable Activity cards", () => {
 		expect(screen.text).not.toContain("ctrl+o output");
 	}, 45_000);
 
+	it("does not resurrect settled subagent TOOL frames from a reloaded transcript", async () => {
+		const cols = 100;
+		const rows = 30;
+		const settledAt = Date.now();
+		const settled = [
+			{ id: "subagent:sa-1", sourceId: "spawn-1", kind: "subagent", title: "Quartz v5 scaffold design", status: "succeeded", subject: "sa-1", ownerSessionId: "session-a", createdAt: settledAt - 1_000, updatedAt: settledAt, settledAt, result: { summary: "complete" } },
+			{ id: "subagent:sa-2", sourceId: "spawn-2", kind: "subagent", title: "Review Ready Brain deploy", status: "succeeded", subject: "sa-2", ownerSessionId: "session-a", createdAt: settledAt - 1_000, updatedAt: settledAt, settledAt, result: { summary: "complete" } },
+		] as const;
+		const piBin = await createRpcChildFixture("sumocode-rpc-subagent-reload-child-", {
+			sessionId: "session-a",
+			sessionName: "Subagent Reload Session",
+			messages: settled.map((activity) => ({
+				role: "custom",
+				customType: "subagent-result",
+				display: true,
+				content: `${activity.title} complete`,
+				details: { id: activity.subject, title: activity.title, status: "done", activity },
+			})),
+		});
+		const agentDir = await mkdtemp(join(tmpdir(), "sumocode-rpc-subagent-reload-agent-"));
+		const publisher = externalFeedWriter("session-a", join(agentDir, "state"));
+		expect(publisher.publish(settled)).toBe(true);
+
+		app = spawnFixture(piBin, agentDir, cols, rows);
+		await app.waitForOutput(PI_BOOT_SEQUENCE, 15_000);
+		const screen = await waitForScreen(app, ({ text }) => (
+			text.includes("Subagent Reload Session")
+			&& text.includes("READY")
+			&& !text.includes("Quartz v5 scaffold design")
+			&& !text.includes("Review Ready Brain deploy")
+		), { cols, rows, timeoutMs: 10_000 });
+		expect(screen.text).not.toContain("Quartz v5 scaffold design");
+		expect(screen.text).not.toContain("Review Ready Brain deploy");
+	}, 30_000);
+
 	it("isolates session A from B feed updates and restores A cards on resume", async () => {
 		const cols = 100;
 		const rows = 30;

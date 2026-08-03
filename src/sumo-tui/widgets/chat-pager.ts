@@ -90,29 +90,34 @@ function correlatedActivity(index: ActivityCorrelationIndex, activity: ActivityS
 	return [...candidates].find((candidate) => sameActivity(candidate, activity));
 }
 
+function shouldSuppressColdManagedActivity(activity: ActivitySnapshot, feedIndex: ActivityCorrelationIndex): boolean {
+	// Completed subagents cannot reattach after process restart, and their final
+	// transcript records are sufficient settled truth even when no feed writer
+	// survived to persist a correlated snapshot.
+	if (activity.kind === "subagent") return isSettledActivityStatus(activity.status);
+	if (activity.kind !== "terminal") return false;
+	const feedActivity = correlatedActivity(feedIndex, activity);
+	return feedActivity?.kind === "terminal" && isSettledActivityStatus(feedActivity.status);
+}
+
 function suppressColdSettledManagedResult(
 	message: ChatMessageViewModel,
 	feedIndex: ActivityCorrelationIndex,
 ): ChatMessageViewModel {
-	if (message.role !== "system") return message;
 	const suppressedKinds = new Set<"terminal" | "subagent">();
 	for (const block of message.blocks) {
 		if (block.type !== "activity" || (block.activity.kind !== "terminal" && block.activity.kind !== "subagent")) continue;
-		const feedActivity = correlatedActivity(feedIndex, block.activity);
-		if (feedActivity?.kind === block.activity.kind && isSettledActivityStatus(feedActivity.status)) suppressedKinds.add(block.activity.kind);
+		if (shouldSuppressColdManagedActivity(block.activity, feedIndex)) suppressedKinds.add(block.activity.kind);
 	}
 	if (suppressedKinds.size === 0) return message;
 	return {
 		...message,
 		blocks: message.blocks.filter((block) => {
 			if (block.type !== "activity") return true;
-			if (block.activity.kind === "terminal" || block.activity.kind === "subagent") {
-				const feedActivity = correlatedActivity(feedIndex, block.activity);
-				if (feedActivity?.kind === block.activity.kind && isSettledActivityStatus(feedActivity.status)) return false;
-			}
-			// Observation/control results accompany the durable managed snapshot in
-			// the same Pi tool-result message; retaining the operation alone would
-			// still create an orphan TOOL frame after the managed block is removed.
+			if (shouldSuppressColdManagedActivity(block.activity, feedIndex)) return false;
+			// Observation/control results accompany the managed snapshot in the same
+			// Pi tool-result message; retaining the operation alone would still create
+			// an orphan TOOL frame after the managed block is removed.
 			return block.activity.kind !== "tool" || ![...suppressedKinds].some((kind) => block.activity.title.startsWith(`${kind}_`));
 		}),
 	};

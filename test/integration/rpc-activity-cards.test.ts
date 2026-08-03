@@ -223,18 +223,16 @@ describe("RPC durable Activity cards", () => {
 		const piBin = await createRpcChildFixture("sumocode-rpc-subagent-reload-child-", {
 			sessionId: "session-a",
 			sessionName: "Subagent Reload Session",
-			messages: settled.map((activity) => ({
-				role: "custom",
-				customType: "subagent-result",
-				display: true,
-				content: `${activity.title} complete`,
-				details: { id: activity.subject, title: activity.title, status: "done", activity },
-			})),
+			messages: [
+				{ id: "spawn-message-1", role: "assistant", content: [{ type: "thinking", thinking: "Planning first worker" }, { type: "toolCall", id: "spawn-1", name: "subagent_spawn", arguments: { prompt: "work one", name: settled[0].title } }] },
+				{ role: "toolResult", toolCallId: "spawn-1", toolName: "subagent_spawn", content: [{ type: "text", text: "Started sa-1" }], details: { activity: { ...settled[0], status: "running", settledAt: undefined } } },
+				{ id: "spawn-message-2", role: "assistant", content: [{ type: "thinking", thinking: "Planning second worker" }, { type: "toolCall", id: "spawn-2", name: "subagent_spawn", arguments: { prompt: "work two", name: settled[1].title } }] },
+				{ role: "toolResult", toolCallId: "spawn-2", toolName: "subagent_spawn", content: [{ type: "text", text: "Started sa-2" }], details: { activity: { ...settled[1], status: "running", settledAt: undefined } } },
+				{ id: "wait-message", role: "assistant", content: [{ type: "thinking", thinking: "Waiting for workers" }, { type: "toolCall", id: "wait-call", name: "subagent_wait", arguments: { ids: ["sa-1", "sa-2"] } }] },
+				{ role: "toolResult", toolCallId: "wait-call", toolName: "subagent_wait", content: [{ type: "text", text: "Workers settled" }], details: { activity: settled } },
+			],
 		});
 		const agentDir = await mkdtemp(join(tmpdir(), "sumocode-rpc-subagent-reload-agent-"));
-		const publisher = externalFeedWriter("session-a", join(agentDir, "state"));
-		expect(publisher.publish(settled)).toBe(true);
-
 		app = spawnFixture(piBin, agentDir, cols, rows);
 		await app.waitForOutput(PI_BOOT_SEQUENCE, 15_000);
 		const screen = await waitForScreen(app, ({ text }) => (

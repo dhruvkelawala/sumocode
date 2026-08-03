@@ -205,23 +205,21 @@ describe("ChatPager", () => {
 			{ id: "subagent:sa-1", sourceId: "spawn-1", kind: "subagent", title: "Quartz v5 scaffold design", status: "succeeded", subject: "sa-1", result: { summary: "complete" } },
 			{ id: "subagent:sa-2", sourceId: "spawn-2", kind: "subagent", title: "Review Ready Brain deploy", status: "succeeded", subject: "sa-2", result: { summary: "complete" } },
 		] as const;
-		chat.reconcileFeedActivities(settled, { materializeSettled: false });
 		chat.replaceViewModels(settled.map((activity, index) => ({
 			id: `settled-subagent-${index}`,
-			role: "system" as const,
-			displayName: "SYSTEM",
+			role: "sumo" as const,
+			displayName: "SUMO",
 			blocks: [
+				{ type: "thinking" as const, text: `Planning ${activity.title}` },
 				{ type: "activity" as const, activity },
-				{ type: "activity" as const, activity: { id: `wait-${index}`, kind: "tool" as const, title: "subagent_wait", status: "succeeded" as const } },
 			],
 		})), { materializeSettledFeed: false });
 
 		const cells = buffer();
 		const frame = Array.from({ length: 10 }, (_, row) => cells.toPlainRow(row)).join("\n");
 		expect(frame).not.toContain("TOOL");
-		expect(frame).not.toContain("Quartz v5 scaffold design");
-		expect(frame).not.toContain("Review Ready Brain deploy");
-		expect(chat.getRenderedMessages()).toHaveLength(0);
+		expect(chat.getRenderedMessages()).toHaveLength(2);
+		expect(chat.getRenderedMessages().flatMap((message) => message.toSnapshot().blocks ?? []).some((block) => block.type === "activity")).toBe(false);
 		root.dispose();
 	});
 

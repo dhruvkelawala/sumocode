@@ -257,7 +257,7 @@ describe("RpcShellAdapter durable Activity feed", () => {
 		}
 	});
 
-	it("keeps a settled Tool frame when the resumed transcript owns it", async () => {
+	it("does not resurrect a settled terminal Tool frame from the resumed transcript", async () => {
 		const settled = {
 			id: "term-transcript",
 			kind: "terminal" as const,
@@ -271,15 +271,34 @@ describe("RpcShellAdapter durable Activity feed", () => {
 			viewport: { columns: 100, rows: 30 },
 			initialState: state({ hasMessages: true, messageCount: 1 }),
 			initialTranscript: {
-				messages: [{ id: "completion", role: "system", displayName: "SYSTEM", blocks: [{ type: "activity", activity: settled }] }],
+				messages: [
+					{
+						id: "completion",
+						role: "system",
+						displayName: "SYSTEM",
+						blocks: [
+							{ type: "activity", activity: { id: "wait-call", kind: "tool", title: "terminal_wait", status: "succeeded" } },
+							{ type: "activity", activity: settled },
+						],
+					},
+					{
+						id: "read-result",
+						role: "system",
+						displayName: "SYSTEM",
+						blocks: [{ type: "activity", activity: { id: "read-call", kind: "tool", title: "read", status: "succeeded", outputTail: "kept history" } }],
+					},
+				],
 			},
 			initialActivities: { activities: [settled], expansion: {} },
 		});
 		try {
 			adapter.render();
 			const text = Array.from({ length: 30 }, (_, row) => adapter.getLastFrame()!.toPlainRow(row)).join("\n");
-			expect(text).toContain("[owned build]");
-			expect(text).toContain("terminal exited with code 0");
+			expect(text).not.toContain("[owned build]");
+			expect(text).not.toContain("terminal exited with code 0");
+			expect(text).not.toContain("terminal_wait");
+			expect(text).toContain("[read]");
+			expect(text).toContain("kept history");
 		} finally {
 			adapter.dispose();
 		}

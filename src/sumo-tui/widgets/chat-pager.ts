@@ -90,6 +90,33 @@ function correlatedActivity(index: ActivityCorrelationIndex, activity: ActivityS
 	return [...candidates].find((candidate) => sameActivity(candidate, activity));
 }
 
+function suppressColdSettledTerminalResult(
+	message: ChatMessageViewModel,
+	feedIndex: ActivityCorrelationIndex,
+): ChatMessageViewModel {
+	if (message.role !== "system") return message;
+	const hasSettledTerminal = message.blocks.some((block) => {
+		if (block.type !== "activity" || block.activity.kind !== "terminal") return false;
+		const feedActivity = correlatedActivity(feedIndex, block.activity);
+		return feedActivity?.kind === "terminal" && isSettledActivityStatus(feedActivity.status);
+	});
+	if (!hasSettledTerminal) return message;
+	return {
+		...message,
+		blocks: message.blocks.filter((block) => {
+			if (block.type !== "activity") return true;
+			if (block.activity.kind === "terminal") {
+				const feedActivity = correlatedActivity(feedIndex, block.activity);
+				if (feedActivity?.kind === "terminal" && isSettledActivityStatus(feedActivity.status)) return false;
+			}
+			// terminal_check/wait results accompany the durable terminal snapshot in
+			// the same Pi tool-result message; retaining the operation alone would
+			// still create an orphan TOOL frame after the terminal block is removed.
+			return block.activity.kind !== "tool" || !block.activity.title.startsWith("terminal_");
+		}),
+	};
+}
+
 function prepareChatMessage(message: ChatMessageViewModel): PreparedChatMessage {
 	return {
 		role: chatRoleFromViewModel(message),
@@ -191,12 +218,15 @@ export class ChatPager extends SumoNode {
 	}
 
 	public replaceViewModels(
-		messages: readonly ChatMessageViewModel[],
+		sourceMessages: readonly ChatMessageViewModel[],
 		options: { readonly materializeSettledFeed?: boolean } = {},
 	): ChatPagerReplaceStats {
 		const previousHeight = this.scrollBox.scrollHeight;
 		const feedActivities = [...this.feedActivities.values()];
 		const feedIndex = activityCorrelationIndex(feedActivities);
+		const messages = options.materializeSettledFeed === false
+			? sourceMessages.map((message) => suppressColdSettledTerminalResult(message, feedIndex))
+			: sourceMessages;
 		this.transcriptClaimedActivityStatuses.clear();
 		for (const activity of this.activitiesFromViewModels(messages)) {
 			const feedActivity = correlatedActivity(feedIndex, activity);
@@ -275,7 +305,7 @@ export class ChatPager extends SumoNode {
 		this.lastReadIndex = this.getTotalMessageCount() - 1;
 		this.scheduleRender();
 		return {
-			sourceMessages: messages.length,
+			sourceMessages: sourceMessages.length,
 			acceptedMessages,
 			renderedMessages: this.activeMessages.length,
 			archivedMessages: this.getArchivedMessageCount(),

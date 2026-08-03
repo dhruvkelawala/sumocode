@@ -54,24 +54,29 @@ function authLabel(type: AuthType, methods: readonly LoginMethod[]): string {
 	return AUTH_LABELS[type];
 }
 
-async function chooseAuthType(ctx: ExtensionCommandContext, methods: readonly LoginMethod[]): Promise<AuthType | undefined> {
+async function chooseAuthType(ctx: ExtensionCommandContext, methods: readonly LoginMethod[], signal: AbortSignal): Promise<AuthType | undefined> {
 	const available = (["oauth", "api_key"] as const).filter((type) => methods.some((method) => method.authType === type));
 	if (available.length === 1) return available[0];
 	const labels = available.map((type) => authLabel(type, methods));
-	const selected = await ctx.ui.select("Select authentication method:", labels);
+	const selected = await ctx.ui.select(authInputTitle("Select authentication method:"), labels, { signal });
 	return available[labels.indexOf(selected ?? "")];
 }
 
-async function chooseProvider(ctx: ExtensionCommandContext, methods: readonly LoginMethod[]): Promise<LoginMethod | undefined> {
+async function chooseProvider(ctx: ExtensionCommandContext, methods: readonly LoginMethod[], signal: AbortSignal): Promise<LoginMethod | undefined> {
 	if (methods.length === 0) return undefined;
 	if (methods.length === 1) return methods[0];
 	const labels = methods.map(({ provider }) => provider.name === provider.id ? provider.id : `${provider.name} (${provider.id})`);
-	const selected = await ctx.ui.select("Select provider:", labels);
+	const selected = await ctx.ui.select(authInputTitle("Select provider:"), labels, { signal });
 	const index = labels.indexOf(selected ?? "");
 	return index < 0 ? undefined : methods[index];
 }
 
-async function resolveLoginMethod(args: string, ctx: ExtensionCommandContext, methods: readonly LoginMethod[]): Promise<LoginMethod | undefined> {
+async function resolveLoginMethod(
+	args: string,
+	ctx: ExtensionCommandContext,
+	methods: readonly LoginMethod[],
+	signal: AbortSignal,
+): Promise<LoginMethod | undefined> {
 	const providerRef = args.trim().toLowerCase();
 	if (providerRef) {
 		const matches = methods.filter(({ provider }) => provider.id.toLowerCase() === providerRef || provider.name.toLowerCase() === providerRef);
@@ -79,12 +84,12 @@ async function resolveLoginMethod(args: string, ctx: ExtensionCommandContext, me
 			ctx.ui.notify(`Unknown login provider: ${args.trim()}`, "warning");
 			return undefined;
 		}
-		const authType = await chooseAuthType(ctx, matches);
+		const authType = await chooseAuthType(ctx, matches, signal);
 		return matches.find((method) => method.authType === authType);
 	}
-	const authType = await chooseAuthType(ctx, methods);
+	const authType = await chooseAuthType(ctx, methods, signal);
 	if (!authType) return undefined;
-	return chooseProvider(ctx, methods.filter((method) => method.authType === authType));
+	return chooseProvider(ctx, methods.filter((method) => method.authType === authType), signal);
 }
 
 function cancelled(): Error {
@@ -160,7 +165,7 @@ export async function executeRpcLogin(args: string, ctx: ExtensionCommandContext
 			ctx.ui.notify("No login providers available", "warning");
 			return;
 		}
-		const method = await resolveLoginMethod(args, ctx, methods);
+		const method = await resolveLoginMethod(args, ctx, methods, loginAbort.signal);
 		if (!method || loginAbort.signal.aborted) return;
 		const apiKeyMethod = method.provider.auth.apiKey;
 		if (method.authType === "api_key" && !apiKeyMethod?.login) {

@@ -98,6 +98,41 @@ describe("RPC /login compatibility command", () => {
 		expect(runtime.login).not.toHaveBeenCalled();
 	});
 
+	it.each([
+		{
+			name: "authentication-method",
+			args: "anthropic",
+			providers: [provider({ oauth: true, apiKey: true })],
+			title: "Select authentication method:",
+		},
+		{
+			name: "provider",
+			args: "",
+			providers: [provider(), { ...provider(), id: "openai", name: "OpenAI" }],
+			title: "Select provider:",
+		},
+	])("cancels the $name selector through the shared login signal", async ({ args, providers, title }) => {
+		const ctx = context();
+		(ctx.ui.select as ReturnType<typeof vi.fn>).mockImplementation(async (_title, _options, selectOptions) => {
+			return new Promise<undefined>((resolve) => {
+				(selectOptions?.signal as AbortSignal | undefined)?.addEventListener("abort", () => resolve(undefined), { once: true });
+			});
+		});
+		const runtime = runtimeFor();
+		(runtime.getProviders as ReturnType<typeof vi.fn>).mockReturnValue(providers as never);
+
+		const login = executeRpcLogin(args, ctx, runtime);
+		await vi.waitFor(() => expect(ctx.ui.select).toHaveBeenCalled());
+		const [encodedTitle, , options] = (ctx.ui.select as ReturnType<typeof vi.fn>).mock.calls[0] ?? [];
+		expect(decodeAuthInputTitle(encodedTitle as string)).toEqual({ title, auth: true, secret: false });
+		expect(options).toEqual(expect.objectContaining({ signal: expect.any(AbortSignal) }));
+		expect(cancelActiveRpcLogin()).toBe(true);
+		await login;
+
+		expect(runtime.login).not.toHaveBeenCalled();
+		expect(cancelActiveRpcLogin()).toBe(false);
+	});
+
 	it("cancels promptless login flows through the shared authentication signal", async () => {
 		const ctx = context();
 		const runtime = runtimeFor();

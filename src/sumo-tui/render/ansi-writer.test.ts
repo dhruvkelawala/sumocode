@@ -19,6 +19,17 @@ describe("ANSI writer", () => {
 		expect(cellRowToAnsi(buffer, 0)).toBe("\x1b[1;38;2;255;0;0mab\x1b[0mc");
 	});
 
+	it("opens and closes OSC 8 hyperlinks around linked cells", () => {
+		const buffer = new CellBuffer(1, 6);
+		buffer.setCell(0, 0, { char: "g", attrs: createAttrs() });
+		for (const [offset, char] of [..."docs"].entries()) {
+			buffer.setCell(0, offset + 1, { char, hyperlink: "https://example.com/docs", attrs: createAttrs({ underline: true }) });
+		}
+		buffer.setCell(0, 5, { char: ".", attrs: createAttrs() });
+
+		expect(cellRowToAnsi(buffer, 0)).toBe("g\x1b]8;;https://example.com/docs\x1b\\\x1b[4mdocs\x1b]8;;\x1b\\\x1b[0m.");
+	});
+
 	it("does not emit continuation cells for wide glyphs", () => {
 		const buffer = new CellBuffer(1, 4);
 		buffer.paintRow(0, "界x");

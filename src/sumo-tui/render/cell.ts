@@ -10,6 +10,8 @@ export interface Cell {
 	char: string;
 	fg?: string;
 	bg?: string;
+	/** OSC 8 hyperlink URI active for this terminal cell. */
+	hyperlink?: string;
 	attrs: CellAttrs;
 }
 
@@ -67,6 +69,7 @@ export function normalizeCell(cell: Cell): Cell {
 		char: cell.char.length === 0 ? " " : cell.char,
 		fg: cell.fg,
 		bg: cell.bg,
+		hyperlink: cell.hyperlink,
 		attrs: createAttrs(cell.attrs),
 	};
 }
@@ -76,6 +79,7 @@ export function acquireCell(overrides: Partial<Omit<Cell, "attrs">> & { attrs?: 
 	cell.char = overrides.char ?? " ";
 	cell.fg = overrides.fg;
 	cell.bg = overrides.bg;
+	cell.hyperlink = overrides.hyperlink;
 	cell.attrs = createAttrs(overrides.attrs);
 	return cell;
 }
@@ -84,6 +88,7 @@ export function releaseCell(cell: Cell): void {
 	cell.char = " ";
 	cell.fg = undefined;
 	cell.bg = undefined;
+	cell.hyperlink = undefined;
 	cell.attrs = createAttrs();
 	pool.push(cell);
 }

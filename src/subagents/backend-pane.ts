@@ -68,14 +68,14 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 	fs.mkdirSync(dirname(paths.promptFile), { recursive: true });
 	fs.writeFileSync(paths.promptFile, options.prompt, { mode: 0o600 });
 	fs.writeFileSync(paths.logFile, "");
-	const agentCommand = buildVisibleAgentCommand({
+	const commandOptions = {
 		cwd: options.cwd,
-		runner: "sumocode",
 		paths,
 		model: options.model,
 		thinking: options.thinking,
 		tools: options.tools,
-	});
+	};
+	const agentCommand = buildVisibleAgentCommand(commandOptions);
 	// Keep stdout attached directly to the pane PTY. Piping combined output
 	// through `tee` makes `sumocode` observe non-TTY stdout and select its direct,
 	// non-interactive Pi path, leaving the visible herdr pane blank. Redirect
@@ -100,9 +100,17 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 		`trap '__sumo_finish 143' TERM`,
 		`trap '__sumo_finish 130' INT`,
 	].join("; ");
-	// The subshell preserves the pane stdout TTY while keeping the outer
-	// trap-owning shell alive when `agentCommand` execs into SumoCode.
-	const shellCommand = `${exitGuard}; ( ${agentCommand} ) 2>> ${shellEscape(paths.logFile)}`;
+	// Keep the supervisor out of terminal input. Long `pane run` payloads can be
+	// clipped by the host or shell editor, and they expose task internals in the
+	// visible pane. Herdr only receives this short script path.
+	const script = [
+		"#!/usr/bin/env bash",
+		"set -u",
+		exitGuard,
+		`( ${agentCommand} ) 2>> ${shellEscape(paths.logFile)}`,
+	].join("\n");
+	fs.writeFileSync(paths.scriptFile, script, { mode: 0o700 });
+	const shellCommand = `exec ${shellEscape(paths.scriptFile)}`;
 
 	let emitEvent: ((event: SubagentEvent) => void) | undefined;
 	let pane: PaneRef | undefined;

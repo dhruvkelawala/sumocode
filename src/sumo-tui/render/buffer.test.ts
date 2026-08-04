@@ -24,6 +24,17 @@ describe("CellBuffer", () => {
 		expect(buffer.getCell(0, 2).fg).toBeUndefined();
 	});
 
+	it("preserves OSC 8 hyperlink metadata on linked cells", () => {
+		const buffer = new CellBuffer(1, 8);
+		buffer.paintRow(0, "a\x1b]8;;https://example.com\x07link\x1b]8;;\x07z");
+
+		expect(buffer.toPlainRow(0)).toBe("alinkz  ");
+		expect(buffer.getCell(0, 0).hyperlink).toBeUndefined();
+		expect(buffer.getCell(0, 1).hyperlink).toBe("https://example.com");
+		expect(buffer.getCell(0, 4).hyperlink).toBe("https://example.com");
+		expect(buffer.getCell(0, 5).hyperlink).toBeUndefined();
+	});
+
 	it("handles wide characters with Pi visibleWidth semantics (EC-12.x)", () => {
 		const buffer = new CellBuffer(1, 6);
 		buffer.paintRow(0, "a界b");

@@ -35,7 +35,7 @@ function dimensionsEqual(prev: CellBuffer, next: CellBuffer): boolean {
 }
 
 function cellsDiffer(left: Cell, right: Cell): boolean {
-	if (left.char !== right.char || left.fg !== right.fg || left.bg !== right.bg) return true;
+	if (left.char !== right.char || left.fg !== right.fg || left.bg !== right.bg || left.hyperlink !== right.hyperlink) return true;
 	return (
 		left.attrs.bold !== right.attrs.bold ||
 		left.attrs.italic !== right.attrs.italic ||

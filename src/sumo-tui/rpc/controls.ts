@@ -1,4 +1,5 @@
 import type { RpcCommand, RpcResponse, RpcSessionState } from "@earendil-works/pi-coding-agent";
+import { encodeRpcTreeNavigationPayload, type RpcTreeNavigationOutcome, type RpcTreeNavigationOutcomeBroker, type RpcTreeNavigationRequest } from "../pi-compat/tree-navigation-command.js";
 import { responseData, type RpcResponseData } from "./response.js";
 import { filterToEnabled, readEnabledModelPatterns } from "./enabled-models.js";
 import { RpcHostStateStore, type RpcHostChromeState } from "./state.js";
@@ -9,6 +10,7 @@ export interface RpcCommandClient {
 
 export interface RpcHostControlsOptions {
 	readonly onOptimisticChange?: (state: RpcHostChromeState) => void;
+	readonly treeNavigationOutcomeBroker?: RpcTreeNavigationOutcomeBroker;
 }
 
 export type RpcAvailableModel = RpcResponseData<"get_available_models">["models"][number];
@@ -16,6 +18,7 @@ export type RpcThinkingLevel = RpcSessionState["thinkingLevel"];
 export type RpcAvailableThinkingLevels = RpcResponseData<"get_available_thinking_levels">["levels"];
 export type RpcSlashCommand = RpcResponseData<"get_commands">["commands"][number];
 export type RpcForkMessage = RpcResponseData<"get_fork_messages">["messages"][number];
+export type RpcEntriesResponse = RpcResponseData<"get_entries">;
 export type RpcSessionStats = RpcResponseData<"get_session_stats">;
 
 export interface RpcModelOption {
@@ -41,6 +44,7 @@ const COMPACT_TIMEOUT_MS = 300_000;
 // Pi device-code providers can allow up to 15 minutes for authentication;
 // keep a 20-minute host budget so valid flows have cleanup headroom.
 const LOGIN_TIMEOUT_MS = 1_200_000;
+export const TREE_NAVIGATION_TIMEOUT_MS = 1_200_000;
 const SESSION_COMMAND_TIMEOUT_MS = 60_000;
 
 function modelLabel(model: ModelIdentity): string {
@@ -179,6 +183,11 @@ export class RpcHostControls {
 		return data.messages;
 	}
 
+	public async getEntries(since?: string): Promise<RpcEntriesResponse> {
+		const command: RpcCommand = since === undefined ? { type: "get_entries" } : { type: "get_entries", since };
+		return responseData(await this.client.send(command), "get_entries");
+	}
+
 	public async getLastAssistantText(): Promise<string | null> {
 		const data = responseData(await this.client.send({ type: "get_last_assistant_text" }), "get_last_assistant_text");
 		return data.text;
@@ -207,6 +216,20 @@ export class RpcHostControls {
 	public async executeExtensionCommand(message: string): Promise<void> {
 		responseData(await this.client.send({ type: "prompt", message }, LOGIN_TIMEOUT_MS), "prompt");
 		this.availableModelsCache = undefined;
+	}
+
+	public async navigateTree(request: RpcTreeNavigationRequest): Promise<RpcTreeNavigationOutcome> {
+		const broker = this.options.treeNavigationOutcomeBroker;
+		if (!broker) throw new Error("tree navigation outcome broker is unavailable");
+		const outcome = broker.register(request.requestId, TREE_NAVIGATION_TIMEOUT_MS);
+		try {
+			const prompt = this.client.send({ type: "prompt", message: `/sumo:rpc-tree-navigate ${encodeRpcTreeNavigationPayload(request)}` }, TREE_NAVIGATION_TIMEOUT_MS);
+			responseData(await prompt, "prompt");
+			return await outcome;
+		} catch (error) {
+			broker.cancel(request.requestId);
+			throw error;
+		}
 	}
 
 	public async cancelLogin(): Promise<void> {

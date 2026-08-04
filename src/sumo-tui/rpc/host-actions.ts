@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
 import type { Component } from "@earendil-works/pi-tui";
 import { Key, matchesKey } from "@earendil-works/pi-tui";
@@ -15,7 +16,6 @@ import {
 } from "../../memory.js";
 import { isBackgroundTaskWakeMessage } from "../../background-tasks/task-types.js";
 import { groupFactsByPanel } from "../../memory-categorization.js";
-import { collapseImagePathsForDisplay } from "../transcript/view-model.js";
 import {
 	MemoryEditorComponent,
 	formatMemoryStatus,
@@ -29,6 +29,7 @@ import type { EditorTextController } from "../pi-compat/extension-ui-adapter.js"
 import type { ModalManager } from "../widgets/modal.js";
 import type { NotificationCenter, NotificationLevel } from "../widgets/notification.js";
 import type { RpcHostControls, RpcModelOption, RpcSessionStats, RpcThinkingLevel } from "./controls.js";
+import type { RpcTreeNavigationOutcome, RpcTreeNavigationRequest } from "../pi-compat/tree-navigation-command.js";
 import type { RpcHostOverlayManager } from "./host-overlays.js";
 import {
 	LOVELY_WEB_API_KEY_FIELDS,
@@ -46,7 +47,10 @@ import {
 } from "./lovely-web-config.js";
 import type { InlineSelectorHost, InlineSelectorItem } from "./inline-selector.js";
 import { notifyOnError } from "./safe-send.js";
-import { buildSessionTree, listSessions, type SessionEntryLike, type SessionListInfo, type SessionTreeNode } from "./session-reader.js";
+import { logDiagnostic } from "../runtime/diagnostics.js";
+import { listSessions, type SessionListInfo } from "./session-reader.js";
+import { buildSessionTreeFromEntries, currentTreeSelection, entryTimestampsFromEntries, flattenSessionTree, formatRelativeTime, sessionExcerpt, treeNodeSummary, treeRowTimestamp } from "./session-tree.js";
+import { readAuthoritativeSessionSnapshot } from "./session-snapshot.js";
 import type { RpcHostChromeState, RpcHostStateStore } from "./state.js";
 
 export const RPC_HOST_COMMAND_PALETTE_INPUT = "\u001f";
@@ -119,6 +123,11 @@ export interface RpcHostActionsOptions {
 	readonly afterSessionChange?: () => Promise<void>;
 	/** Reconcile events suppressed while an explicitly cancelled operation was pending. */
 	readonly afterCancelledSessionChange?: () => Promise<void>;
+	/** Prepare and reconcile an in-place Pi tree mutation without rebinding session ownership. */
+	readonly beforeTreeNavigation?: (request: RpcTreeNavigationRequest) => Promise<void>;
+	readonly reconcileTreeNavigation?: (outcome?: RpcTreeNavigationOutcome) => Promise<void>;
+	readonly setTreeNavigationBusy?: (busy: boolean) => void;
+	readonly isTreeNavigationBusy?: () => boolean;
 	/**
 	 * Persists the chosen theme name to ~/.pi/agent/sumocode.json so the next
 	 * boot's applyStartupTheme resolves it. Injectable so tests never write
@@ -143,7 +152,7 @@ export const RPC_HOST_SLASH_COMMANDS: readonly RpcHostSlashCommand[] = Object.fr
 	{ name: "fork", description: "Fork from a previous user message" },
 	{ name: "sessions", description: "Open session controls" },
 	{ name: "resume", description: "Resume a previous session from this project" },
-	{ name: "tree", description: "Browse the session branch tree and fork from a node" },
+	{ name: "tree", description: "Browse and navigate the session branch tree" },
 	{ name: "session", description: "Show session info and stats" },
 	{ name: "name", description: "Rename the current session" },
 	{ name: "copy", description: "Copy the last assistant response to the clipboard" },
@@ -346,41 +355,6 @@ function renderHotkeysOverlay(theme: ThemeReader, width: number): string[] {
 }
 
 /**
- * Compact relative timestamp for selector rows: "now", "5m ago", "3h ago",
- * "yesterday", "4d ago", then the plain date. Exported for tests.
- */
-export function formatRelativeTime(date: Date, now: Date = new Date()): string {
-	if (Number.isNaN(date.getTime())) return "";
-	const deltaMs = now.getTime() - date.getTime();
-	if (deltaMs < 0) return date.toISOString().slice(0, 10);
-	const minutes = Math.floor(deltaMs / 60_000);
-	if (minutes < 1) return "now";
-	if (minutes < 60) return `${minutes}m ago`;
-	const hours = Math.floor(minutes / 60);
-	if (hours < 24) return `${hours}h ago`;
-	const days = Math.floor(hours / 24);
-	if (days === 1) return "yesterday";
-	if (days < 30) return `${days}d ago`;
-	return date.toISOString().slice(0, 10);
-}
-
-/**
- * Human excerpt of a message for selector rows: skill invocations render as
- * their slash command (raw `<skill …>` XML must never leak into a list),
- * image paths collapse, whitespace normalizes, and over-long text truncates
- * on an ellipsis instead of mid-word.
- */
-export function sessionExcerpt(text: string, maxLength: number): string {
-	const cleaned = collapseImagePathsForDisplay(text)
-		.replace(/<skill\s+name="([^"]+)"[^>]*>/gi, "/$1 ")
-		.replace(/<\/skill>/gi, " ")
-		.replace(/\s+/g, " ")
-		.trim();
-	if (cleaned.length <= maxLength) return cleaned;
-	return `${cleaned.slice(0, Math.max(1, maxLength - 1)).trimEnd()}…`;
-}
-
-/**
  * One selector row per session: the NAME (or first-message excerpt) is the
  * label; the identifier lives in the right-aligned description — short
  * session id, message count, relative age — so two sessions with the same
@@ -397,115 +371,6 @@ function resumeSessionRows(sessions: readonly SessionListInfo[], now: Date = new
 		label: session.name?.trim() || sessionExcerpt(session.firstMessage, 52) || "(empty session)",
 		description: `${session.id.slice(0, 8)} · ${counts[index]!.padStart(countWidth)} · ${ages[index]!.padStart(ageWidth)}`,
 	}));
-}
-
-interface TreeRow {
-	readonly node: SessionTreeNode;
-	readonly depth: number;
-	/** Box-drawing connector prefix (`│  `, `├─ `, `└─ `) for this row. */
-	readonly prefix: string;
-}
-
-/** Depth-first flatten of `buildSessionTree`'s roots, preserving the oldest-first child order the port already sorts by. */
-function treeEntryRoleAndText(entry: SessionEntryLike): { role: string; text: string } | undefined {
-	const message = entry.message as { role?: unknown; content?: unknown } | undefined;
-	if (!message || typeof message !== "object" || typeof message.role !== "string") return undefined;
-	const content = message.content;
-	const text = typeof content === "string"
-		? content
-		: Array.isArray(content)
-			? content
-				.filter((block): block is { type: string; text: string } => typeof block === "object" && block !== null && (block as { type?: unknown }).type === "text")
-				.map((block) => block.text)
-				.join(" ")
-			: "";
-	return text ? { role: message.role, text } : undefined;
-}
-
-/**
- * Default tree visibility, mirroring pi's tree-selector default mode: only
- * conversation-spine entries appear — user prompts (minus orchestrator
- * bg-task wake messages, same rule as /fork) and assistant replies that have
- * actual text (assistant messages that are pure tool-call envelopes are
- * hidden). Settings/bookkeeping entries (label, custom, model_change,
- * thinking_level_change, session_info), tool results, and bash executions
- * never render as nodes. Labeled bookmarks are always shown regardless.
- */
-function isTreeNodeVisible(node: SessionTreeNode): boolean {
-	if (node.label) return true;
-	if (node.entry.type !== "message") return false;
-	const extracted = treeEntryRoleAndText(node.entry);
-	if (!extracted) return false;
-	if (extracted.role === "user") return !isBackgroundTaskWakeMessage(extracted.text);
-	return extracted.role === "assistant";
-}
-
-/**
- * Flattens the tree into visible rows with STRUCTURAL depth: indentation
- * increases only at real fork points (a node with multiple children), not
- * per chain link — session entries chain parent→child linearly, so per-link
- * depth pushed labels off-screen within ~40 entries. A linear session is a
- * flat list; each branch adds one indent level.
- */
-function flattenSessionTree(roots: readonly SessionTreeNode[]): TreeRow[] {
-	const rows: TreeRow[] = [];
-	// `pendingGlyph` carries a `├─ `/`└─ ` branch connector until the first
-	// VISIBLE row of that branch consumes it — filtered nodes (tool results,
-	// bookkeeping entries) must not eat the connector or branches would look
-	// like linear runs. Linear runs render at their branch's indent with no
-	// glyph, so a session with no forks stays perfectly flat while every fork
-	// point fans out like a real tree.
-	// The connector renders at the PARENT's indent (`glyphIndent`); once the
-	// first visible row of a branch consumes it, the rest of that branch's
-	// rows sit at the branch's own `indent` (which carries the `│  `/`   `
-	// continuation).
-	const visit = (node: SessionTreeNode, depth: number, indent: string, glyphIndent: string, pendingGlyph: string): string => {
-		let glyph = pendingGlyph;
-		if (isTreeNodeVisible(node)) {
-			rows.push({ node, depth, prefix: glyph ? `${glyphIndent}${glyph}` : indent });
-			glyph = "";
-		}
-		if (node.children.length > 1) {
-			for (const [index, child] of node.children.entries()) {
-				const last = index === node.children.length - 1;
-				visit(child, depth + 1, `${indent}${last ? "   " : "│  "}`, indent, last ? "└─ " : "├─ ");
-			}
-		} else if (node.children.length === 1) {
-			glyph = visit(node.children[0]!, depth, indent, glyphIndent, glyph);
-		}
-		return glyph;
-	};
-	for (const root of roots) visit(root, 0, "", "", "");
-	return rows;
-}
-
-/** One-line summary for a tree row: label bookmark if present, then `role: text` (image paths collapsed, whitespace normalized). */
-/**
- * One-line summary for a tree row: role glyph (▷ you, ✦ sumo), bookmark
- * label if present, then the message excerpt (image paths collapsed,
- * whitespace normalized).
- */
-function treeNodeSummary(node: SessionTreeNode): string {
-	const bookmark = node.label ? `[${node.label}] ` : "";
-	const extracted = node.entry.type === "message" ? treeEntryRoleAndText(node.entry) : undefined;
-	const glyph = extracted?.role === "user" ? "▷ " : extracted?.role === "assistant" ? "✦ " : "· ";
-	const body = extracted ? sessionExcerpt(extracted.text, 68) : node.entry.type;
-	return `${glyph}${bookmark}${body}`;
-}
-
-function treeRowTimestamp(entry: SessionEntryLike, now: Date = new Date()): string {
-	return formatRelativeTime(new Date(entry.timestamp), now);
-}
-
-/** Best-effort entryId → timestamp map from the on-disk session, for enriching RPC fork rows (the RPC payload has no timestamps). */
-function entryTimestampsFromTree(roots: readonly SessionTreeNode[]): Map<string, string> {
-	const map = new Map<string, string>();
-	const visit = (node: SessionTreeNode): void => {
-		if (typeof node.entry.id === "string" && typeof node.entry.timestamp === "string") map.set(node.entry.id, node.entry.timestamp);
-		for (const child of node.children) visit(child);
-	};
-	for (const root of roots) visit(root);
-	return map;
 }
 
 class LinesOverlayComponent implements Component {
@@ -542,6 +407,10 @@ export class RpcHostActions {
 	private readonly cancelSessionChange: () => void;
 	private readonly afterSessionChange: () => Promise<void>;
 	private readonly afterCancelledSessionChange: () => Promise<void>;
+	private readonly beforeTreeNavigation: (request: RpcTreeNavigationRequest) => Promise<void>;
+	private readonly reconcileTreeNavigation: (outcome?: RpcTreeNavigationOutcome) => Promise<void>;
+	private readonly setTreeNavigationBusy: (busy: boolean) => void;
+	private readonly isTreeNavigationBusy: () => boolean;
 	private readonly writeClipboardSequence: (sequence: string) => boolean;
 	private readonly changelogRoot: string;
 	private readonly persistTheme: (name: string) => { success: boolean; error?: string };
@@ -567,6 +436,10 @@ export class RpcHostActions {
 			await this.rehydrateTranscript();
 		});
 		this.afterCancelledSessionChange = options.afterCancelledSessionChange ?? this.afterSessionChange;
+		this.beforeTreeNavigation = options.beforeTreeNavigation ?? (async () => undefined);
+		this.reconcileTreeNavigation = options.reconcileTreeNavigation ?? (async () => undefined);
+		this.setTreeNavigationBusy = options.setTreeNavigationBusy ?? (() => undefined);
+		this.isTreeNavigationBusy = options.isTreeNavigationBusy ?? (() => false);
 		this.writeClipboardSequence = options.writeClipboardSequence ?? (() => false);
 		this.changelogRoot = options.changelogRoot ?? process.cwd();
 		this.persistTheme = options.persistTheme ?? ((name) => saveSumoCodeConfigPatch({ themeName: name }));
@@ -582,6 +455,10 @@ export class RpcHostActions {
 
 	public async handleSubmittedText(text: string): Promise<boolean> {
 		const { command, args } = firstArg(text);
+		if (this.isTreeNavigationBusy() && this.isTreeNavigationBlockedCommand(command)) {
+			notify(this.notifications, "branch summary in progress", "warning");
+			return true;
+		}
 		if (!command.startsWith("/")) return false;
 		switch (command) {
 			case "/mcp":
@@ -730,6 +607,25 @@ export class RpcHostActions {
 		return this.loginActive;
 	}
 
+	private isTreeNavigationBlockedCommand(command: string): boolean {
+		return new Set([
+			"/tree",
+			"/fork",
+			"/new",
+			"/clone",
+			"/resume",
+			"/sessions",
+			"/settings",
+			"/compact",
+			"/name",
+			"/model",
+			"/thinking",
+			"/login",
+			"/mcp",
+			"/mcp-auth",
+		]).has(command);
+	}
+
 	public async cancelLogin(): Promise<void> {
 		if (!this.loginActive) return;
 		await this.controls.cancelLogin();
@@ -754,6 +650,10 @@ export class RpcHostActions {
 	}
 
 	public async openModelSelector(): Promise<void> {
+		if (this.isTreeNavigationBusy()) {
+			notify(this.notifications, "branch summary in progress", "warning");
+			return;
+		}
 		const models = await this.controls.getEnabledModels();
 		if (models.length === 0) {
 			notify(this.notifications, "no models available", "warning");
@@ -772,6 +672,10 @@ export class RpcHostActions {
 	}
 
 	public async openThinkingSelector(): Promise<void> {
+		if (this.isTreeNavigationBusy()) {
+			notify(this.notifications, "branch summary in progress", "warning");
+			return;
+		}
 		const currentLevel = this.stateStore.getSnapshot().thinkingLevel;
 		const levels = await this.availableThinkingLevels();
 		const items: InlineSelectorItem[] = levels.map((level) => ({
@@ -796,6 +700,10 @@ export class RpcHostActions {
 	}
 
 	public async openSessionControls(): Promise<void> {
+		if (this.isTreeNavigationBusy()) {
+			notify(this.notifications, "branch summary in progress", "warning");
+			return;
+		}
 		const selected = await this.inlineSelectors.select("Session controls", [
 			"New session",
 			"Switch session by path",
@@ -811,6 +719,10 @@ export class RpcHostActions {
 	}
 
 	public async openSettings(): Promise<void> {
+		if (this.isTreeNavigationBusy()) {
+			notify(this.notifications, "branch summary in progress", "warning");
+			return;
+		}
 		const selected = await this.inlineSelectors.select("RPC settings", [
 			"Enable auto compaction",
 			"Disable auto compaction",
@@ -992,17 +904,30 @@ export class RpcHostActions {
 	 * LATEST message is preselected — all matching pi's UX.
 	 */
 	public async openForkSelector(): Promise<void> {
+		if (this.isTreeNavigationBusy()) {
+			notify(this.notifications, "branch summary in progress", "warning");
+			return;
+		}
 		const messages = (await this.controls.getForkMessages())
 			.filter((message) => !isBackgroundTaskWakeMessage(message.text));
+		logDiagnostic("fork.selector_loaded", { entryCount: messages.length });
 		if (messages.length === 0) {
 			notify(this.notifications, "no forkable messages", "warning");
 			return;
 		}
 		// Timestamps aren't in the RPC fork payload; read them (best-effort)
 		// from the on-disk session so rows carry "when", not just "what".
-		const forkSessionFile = this.stateStore.getSnapshot().sessionFile;
-		const forkTree = forkSessionFile ? await buildSessionTree(forkSessionFile).catch(() => undefined) : undefined;
-		const timestamps = forkTree ? entryTimestampsFromTree(forkTree) : new Map<string, string>();
+		const forkState = this.stateStore.getSnapshot();
+		let timestamps = new Map<string, string>();
+		try {
+			if (forkState.sessionFile) {
+				const forkSnapshot = await readAuthoritativeSessionSnapshot(this.controls, { sessionFile: forkState.sessionFile, sessionId: forkState.sessionId });
+				timestamps = entryTimestampsFromEntries(forkSnapshot.entries);
+			}
+		} catch {
+			// Timestamp decoration is best effort. The selector remains useful when
+			// the local file or flat metadata request is unavailable.
+		}
 		const forkNow = new Date();
 		const indexWidth = String(messages.length).length;
 		const items: InlineSelectorItem[] = messages.map((message, index) => {
@@ -1064,61 +989,98 @@ export class RpcHostActions {
 		if (!result.cancelled) this.onStateChange();
 	}
 
-	/**
-	 * `/tree` -- browses the current session's branch structure (ported via
-	 * `session-reader.ts`'s `buildSessionTree`, a faithful copy of Pi's
-	 * `SessionManager.getTree()`). RPC has no "navigate to node" verb (that's
-	 * Phase 3, tracked separately -- switching the LEAF pointer without loading
-	 * a whole session isn't exposed here), so the only real action on a picked
-	 * node is forking from it via the existing `fork(entryId)` control. The
-	 * selector option for each row is explicitly labeled "Fork from ..." so
-	 * this doesn't read as a fake in-place jump.
-	 */
-	public async openTreeBrowser(): Promise<void> {
-		const sessionFile = this.stateStore.getSnapshot().sessionFile;
-		if (!sessionFile) {
-			notify(this.notifications, "no session file available to browse", "warning");
+	/** Browse and navigate the current session tree in place, matching Pi's summary loop. */
+	public async openTreeBrowser(initialSelectedId?: string): Promise<void> {
+		if (this.isTreeNavigationBusy()) {
+			notify(this.notifications, "branch summary in progress", "warning");
 			return;
 		}
-		const tree = await buildSessionTree(sessionFile);
-		if (!tree) {
+		if (typeof (this.controls as unknown as { getEntries?: unknown }).getEntries !== "function") {
 			notify(this.notifications, "session tree unavailable", "warning");
 			return;
 		}
-		if (tree.length === 0) {
-			notify(this.notifications, "session has no entries yet", "warning");
-			return;
-		}
-		const rows = flattenSessionTree(tree);
-		if (rows.length === 0) {
-			notify(this.notifications, "session has no forkable nodes yet", "warning");
-			return;
-		}
-		const treeNow = new Date();
-		// Deduplicate consecutive identical ages: a burst of rows from the same
-		// minutes reads as one dim timestamp instead of a column of repeats.
-		let previousAge = "";
-		const items: InlineSelectorItem[] = rows.map((row) => {
-			const age = treeRowTimestamp(row.node.entry, treeNow);
-			const description = age === previousAge ? "" : age;
-			previousAge = age;
-			return {
-				value: row.node.entry.id,
-				label: `${row.prefix}${treeNodeSummary(row.node)}`,
-				description,
+		let selectedId = initialSelectedId;
+		for (;;) {
+			const state = this.stateStore.getSnapshot();
+			const snapshot = await readAuthoritativeSessionSnapshot(this.controls, { sessionFile: state.sessionFile, sessionId: state.sessionId });
+			const tree = buildSessionTreeFromEntries(snapshot.entries);
+			if (tree.length === 0) {
+				notify(this.notifications, "session has no entries yet", "warning");
+				return;
+			}
+			const rows = flattenSessionTree(tree);
+			if (rows.length === 0) {
+				notify(this.notifications, "session has no navigable nodes yet", "warning");
+				return;
+			}
+			logDiagnostic("tree.selector_loaded", { entryCount: snapshot.entries.length, visibleEntryCount: rows.length });
+			const treeNow = new Date();
+			let previousAge = "";
+			const items: InlineSelectorItem[] = rows.map((row) => {
+				const age = treeRowTimestamp(row.node.entry, treeNow);
+				const description = age === previousAge ? "" : age;
+				previousAge = age;
+				return { value: row.node.entry.id, label: `${row.prefix}${treeNodeSummary(row.node)}`, description, isCurrent: row.node.entry.id === snapshot.leafId };
+			});
+			const currentSelection = currentTreeSelection(tree, snapshot.leafId);
+			const selected = await this.inlineSelectors.select("Session tree", items, {
+				initialValue: selectedId ?? currentSelection ?? rows[rows.length - 1]?.node.entry.id,
+			});
+			if (!selected) return;
+			selectedId = selected;
+			if (selected === snapshot.leafId) {
+				notify(this.notifications, "already at this point", "info");
+				return;
+			}
+
+			// Keep the summary choice as a nested state. Cancelling the custom
+			// editor returns to this selector; cancelling this selector returns to
+			// the tree with `selectedId` preserved.
+			let summaryChoice: string | undefined;
+			let customInstructions: string | undefined;
+			for (;;) {
+				summaryChoice = await this.inlineSelectors.select("Summarize branch?", ["No summary", "Summarize", "Summarize with custom prompt"]);
+				if (summaryChoice === undefined) break;
+				if (summaryChoice !== "Summarize with custom prompt") break;
+				customInstructions = await this.modals.editor("Custom summarization instructions", "");
+				if (customInstructions !== undefined) break;
+			}
+			if (summaryChoice === undefined) continue;
+			const request: RpcTreeNavigationRequest = {
+				requestId: randomUUID(),
+				targetId: selected,
+				summarize: summaryChoice !== "No summary",
+				...(customInstructions === undefined ? {} : { customInstructions }),
 			};
-		});
-		const selected = await this.inlineSelectors.select("Session tree (fork from a node)", items, {
-			initialValue: rows[rows.length - 1]?.node.entry.id,
-		});
-		if (!selected) return;
-		const row = rows.find((candidate) => candidate.node.entry.id === selected);
-		if (!row) return;
-		const result = await this.applySessionChange(
-			() => this.controls.fork(row.node.entry.id),
-			(current) => { if (current.text) this.editorText?.setText(current.text); },
-		);
-		if (!result.cancelled) this.onStateChange();
+			this.setTreeNavigationBusy(true);
+			try {
+				await this.beforeTreeNavigation(request);
+				let outcome: RpcTreeNavigationOutcome;
+				try {
+					outcome = await this.controls.navigateTree(request);
+				} catch (error) {
+					try {
+						await this.reconcileTreeNavigation();
+					} catch {
+						// Preserve the original transport error for the caller; the host
+						// lifecycle remains guarded if reconciliation could not finish.
+					}
+					throw error;
+				}
+				await this.reconcileTreeNavigation(outcome);
+				if (outcome.status === "committed") {
+					this.onStateChange();
+					notify(this.notifications, "tree navigated", "info");
+				} else if (outcome.status === "cancelled") {
+					notify(this.notifications, "tree navigation cancelled", "info");
+				} else {
+					notify(this.notifications, "tree navigation failed", "error");
+				}
+				return;
+			} finally {
+				this.setTreeNavigationBusy(false);
+			}
+		}
 	}
 
 	public async openThemeCheck(): Promise<void> {

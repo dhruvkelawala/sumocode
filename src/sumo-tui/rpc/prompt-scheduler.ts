@@ -1,5 +1,6 @@
 export interface RpcPromptSchedulerSnapshot {
 	readonly busy: boolean;
+	readonly dispatching?: boolean;
 	readonly queuedMessages: readonly string[];
 	readonly sessionId?: string;
 	readonly pausedAfterFailure: boolean;
@@ -126,6 +127,7 @@ class DefaultRpcPromptScheduler implements RpcPromptScheduler {
 	public getSnapshot(): RpcPromptSchedulerSnapshot {
 		return {
 			busy: this.isBusy(),
+			dispatching: this.dispatching,
 			queuedMessages: [...this.queue],
 			sessionId: this.sessionId,
 			pausedAfterFailure: this.pausedAfterFailure,

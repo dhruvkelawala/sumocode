@@ -3,7 +3,8 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { modelOptionsFrom, RpcHostControls, type RpcAvailableModel, type RpcCommandClient } from "./controls.js";
+import { modelOptionsFrom, RpcHostControls, TREE_NAVIGATION_TIMEOUT_MS, type RpcAvailableModel, type RpcCommandClient } from "./controls.js";
+import { decodeRpcTreeNavigationPayload, InMemoryRpcTreeNavigationOutcomeBroker } from "../pi-compat/tree-navigation-command.js";
 import { RpcHostStateStore, type RpcHostChromeState } from "./state.js";
 
 class FakeClient implements RpcCommandClient {
@@ -656,6 +657,32 @@ describe("RpcHostControls", () => {
 		await controls.fork("entry-1");
 
 		expect(client.timeouts).toEqual([60_000, 60_000, 60_000]);
+	});
+
+	it("gets flat entries with an omitted cursor or an exclusive cursor", async () => {
+		const client = new FakeClient(
+			{ type: "response", command: "get_entries", success: true, data: { entries: [], leafId: "leaf-1" } },
+			{ type: "response", command: "get_entries", success: true, data: { entries: [], leafId: "leaf-2" } },
+		);
+		const controls = new RpcHostControls(client);
+		await expect(controls.getEntries()).resolves.toEqual({ entries: [], leafId: "leaf-1" });
+		await expect(controls.getEntries("entry-1")).resolves.toEqual({ entries: [], leafId: "leaf-2" });
+		expect(client.commands).toEqual([{ type: "get_entries" }, { type: "get_entries", since: "entry-1" }]);
+	});
+
+	it("registers the navigation waiter before sending the hidden prompt and waits for its correlated outcome", async () => {
+		const client = new FakeClient({ type: "response", command: "prompt", success: true });
+		const broker = new InMemoryRpcTreeNavigationOutcomeBroker();
+		const controls = new RpcHostControls(client, new RpcHostStateStore(), { treeNavigationOutcomeBroker: broker });
+		const request = { requestId: "019f8a78-b4f5-7b7b-b774-2d2e4bce9001", targetId: "entry-1", summarize: true as const, customInstructions: "line 1\nline 2" };
+		const pending = controls.navigateTree(request);
+		broker.publish({ requestId: request.requestId, status: "committed", leafId: "summary-leaf" });
+		await expect(pending).resolves.toMatchObject({ status: "committed", leafId: "summary-leaf" });
+		expect(client.commands).toHaveLength(1);
+		const command = client.commands[0];
+		expect(command).toMatchObject({ type: "prompt", message: expect.stringMatching(/^\/sumo:rpc-tree-navigate /) });
+		expect(decodeRpcTreeNavigationPayload((command as { message: string }).message.slice("/sumo:rpc-tree-navigate ".length))).toEqual(request);
+		expect(client.timeouts).toEqual([TREE_NAVIGATION_TIMEOUT_MS]);
 	});
 
 	it("leaves quick getters and setters on the client's default timeout", async () => {

@@ -17,6 +17,7 @@ export interface RpcHostChromeState {
 	readonly thinkingLevel?: string;
 	readonly isStreaming: boolean;
 	readonly isCompacting: boolean;
+	readonly branchSummaryBusy?: boolean;
 	readonly compactionReason?: CompactionReason;
 	readonly messageCount: number;
 	readonly pendingMessageCount: number;
@@ -85,6 +86,7 @@ export class RpcHostStateStore {
 			thinkingLevel: rpcState.thinkingLevel,
 			isStreaming: rpcState.isStreaming,
 			isCompacting: rpcState.isCompacting,
+			branchSummaryBusy: this.state.branchSummaryBusy,
 			compactionReason: rpcState.isCompacting ? this.state.compactionReason : undefined,
 			messageCount: rpcState.messageCount,
 			pendingMessageCount,
@@ -220,6 +222,11 @@ export class RpcHostStateStore {
 
 	public applySessionName(name: string): RpcHostChromeState {
 		this.state = { ...this.state, sessionName: name };
+		return this.getSnapshot();
+	}
+
+	public setBranchSummaryBusy(busy: boolean): RpcHostChromeState {
+		this.state = { ...this.state, branchSummaryBusy: busy };
 		return this.getSnapshot();
 	}
 

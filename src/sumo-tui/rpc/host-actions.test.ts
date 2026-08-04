@@ -12,6 +12,8 @@ import { MAX_CLIPBOARD_BYTES } from "../input/selection.js";
 import { ModalManager } from "../widgets/modal.js";
 import type { NotificationLevel } from "../widgets/notification.js";
 import type { RpcHostControls, RpcModelOption, RpcSlashCommand } from "./controls.js";
+import type { RpcTreeNavigationOutcome, RpcTreeNavigationRequest } from "../pi-compat/tree-navigation-command.js";
+import type { SessionEntryLike } from "./session-reader.js";
 import { isRpcHostSlashCommandName, RpcHostActions, RPC_HOST_COMMAND_PALETTE_INPUT, RPC_HOST_ROUTED_CHILD_COMMANDS, RPC_HOST_SLASH_COMMANDS } from "./host-actions.js";
 import { RpcHostOverlayManager } from "./host-overlays.js";
 import { writeLovelyWebPatch } from "./lovely-web-config.js";
@@ -55,6 +57,11 @@ class FakeControls {
 
 	public forkMessages = [{ entryId: "entry-1", text: "forkable message text" }];
 	public commands: RpcSlashCommand[] = [];
+	public sessionFile: string | undefined;
+	public leafId: string | null = "not-visible";
+	public readonly treeRequests: RpcTreeNavigationRequest[] = [];
+	public treeOutcomeStatus: RpcTreeNavigationOutcome["status"] = "committed";
+	public treeOutcomeLeafId: string | null | undefined;
 
 	public async refreshState(): Promise<Record<string, unknown>> {
 		this.calls.push("refreshState");
@@ -127,6 +134,29 @@ class FakeControls {
 	public async getForkMessages(): Promise<typeof this.forkMessages> {
 		this.calls.push("getForkMessages");
 		return this.forkMessages;
+	}
+
+	public async getEntries(since?: string): Promise<{ entries: SessionEntryLike[]; leafId: string | null }> {
+		this.calls.push(`getEntries:${since ?? ""}`);
+		if (!this.sessionFile) return { entries: [], leafId: this.leafId };
+		let content: string;
+		try {
+			content = await readFile(this.sessionFile, "utf8");
+		} catch {
+			return { entries: [], leafId: this.leafId };
+		}
+		const lines = content.split("\n").filter(Boolean).map((line) => JSON.parse(line) as SessionEntryLike & { type: string });
+		const entries = lines.filter((line) => line.type !== "session");
+		const start = since === undefined ? 0 : entries.findIndex((line) => line.id === since) + 1;
+		const selected = start < 0 ? [] : entries.slice(start);
+		return { entries: selected, leafId: this.leafId };
+	}
+
+	public async navigateTree(request: RpcTreeNavigationRequest): Promise<RpcTreeNavigationOutcome> {
+		this.treeRequests.push(request);
+		this.calls.push(`navigateTree:${request.targetId}:${String(request.summarize)}:${request.customInstructions ?? ""}`);
+		if (this.treeOutcomeStatus === "committed") this.leafId = request.targetId;
+		return { requestId: request.requestId, status: this.treeOutcomeStatus, leafId: this.treeOutcomeLeafId ?? this.leafId };
 	}
 
 	public async getSessionStats(): Promise<Record<string, unknown>> {
@@ -258,8 +288,13 @@ function setup(options: {
 	readonly sessionFile?: string;
 	readonly changelogRoot?: string;
 	readonly onStateChange?: (state?: RpcHostChromeState) => void;
+	readonly beforeTreeNavigation?: (request: RpcTreeNavigationRequest) => Promise<void>;
+	readonly reconcileTreeNavigation?: (outcome?: RpcTreeNavigationOutcome) => Promise<void>;
+	readonly setTreeNavigationBusy?: (busy: boolean) => void;
+	readonly isTreeNavigationBusy?: () => boolean;
 } = {}) {
 	const controls = new FakeControls();
+	controls.sessionFile = options.sessionFile;
 	const stateStore = new RpcHostStateStore();
 	stateStore.hydrateFromRpcState({
 		model: { provider: "anthropic", id: "claude-opus-4-8", name: "Claude" } as RpcSessionState["model"],
@@ -307,6 +342,10 @@ function setup(options: {
 			options.onStateChange?.(state);
 		},
 		rehydrateTranscript,
+		beforeTreeNavigation: options.beforeTreeNavigation,
+		reconcileTreeNavigation: options.reconcileTreeNavigation,
+		setTreeNavigationBusy: options.setTreeNavigationBusy,
+		isTreeNavigationBusy: options.isTreeNavigationBusy,
 		writeClipboardSequence: options.writeClipboardSequence,
 		changelogRoot: options.changelogRoot,
 		// Never write the developer's real ~/.pi/agent/sumocode.json from tests.
@@ -894,7 +933,7 @@ describe("RpcHostActions", () => {
 			return path;
 		}
 
-		it("builds a navigable, indented tree, preselects the last node, and forks from the chosen node", async () => {
+		it("builds a navigable, indented tree and navigates from the chosen node", async () => {
 			const dir = mkdtempSync(join(tmpdir(), "sumocode-tree-test-"));
 			try {
 				const sessionFile = writeBranchedFixture(dir);
@@ -904,13 +943,16 @@ describe("RpcHostActions", () => {
 				await flushIO();
 				expect(inlineSelectors.getActiveKind()).toBe("select");
 
-				// Latest node (child-b) is preselected — Enter forks it directly.
+				// Latest node (child-b) is preselected — Enter opens Pi's summary choice.
+				inlineSelectors.handleInput(SELECTOR_ENTER);
+				await flushIO();
+				expect(inlineSelectors.getActiveKind()).toBe("select");
 				inlineSelectors.handleInput(SELECTOR_ENTER);
 				await treePromise;
 
-				expect(controls.calls).toEqual(["fork:child-b", "refreshState"]);
-				expect(editorText.getText()).toBe("fork from here");
-				expect(rehydrateCalls).toHaveLength(1);
+				expect(controls.calls).toEqual(["getEntries:", "navigateTree:child-b:false:"]);
+				expect(editorText.getText()).toBe("");
+				expect(rehydrateCalls).toHaveLength(0);
 			} finally {
 				rmSync(dir, { recursive: true, force: true });
 			}
@@ -956,7 +998,7 @@ describe("RpcHostActions", () => {
 			}
 		});
 
-		it("forks from the selected entry id when tree summaries collide", async () => {
+		it("navigates by selected entry id when tree summaries collide", async () => {
 			const dir = mkdtempSync(join(tmpdir(), "sumocode-tree-collision-test-"));
 			try {
 				const sessionFile = join(dir, "2026-07-02T22-05-00-000Z_colliding-tree.jsonl");
@@ -971,18 +1013,20 @@ describe("RpcHostActions", () => {
 				const treePromise = actions.handleSubmittedText("/tree");
 				await flushIO();
 				expect(inlineSelectors.getActiveKind()).toBe("select");
-				// Preselected on child-b (latest) — Enter must fork by entryId even
+				// Preselected on child-b (latest) — Enter must navigate by entryId even
 				// though child-a renders the identical summary text.
+				inlineSelectors.handleInput(SELECTOR_ENTER);
+				await flushIO();
 				inlineSelectors.handleInput(SELECTOR_ENTER);
 				await treePromise;
 
-				expect(controls.calls).toEqual(["fork:child-b", "refreshState"]);
+				expect(controls.calls).toEqual(["getEntries:", "navigateTree:child-b:false:"]);
 			} finally {
 				rmSync(dir, { recursive: true, force: true });
 			}
 		});
 
-		it("communicates the fork action through the title and indents branch children", async () => {
+		it("renders the navigation title and indents branch children", async () => {
 			const dir = mkdtempSync(join(tmpdir(), "sumocode-tree-label-test-"));
 			try {
 				const sessionFile = writeBranchedFixture(dir);
@@ -991,7 +1035,7 @@ describe("RpcHostActions", () => {
 				const treePromise = actions.handleSubmittedText("/tree");
 				await flushIO();
 				const rendered = inlineSelectors.render(100).join("\n").replace(/\[[0-9;]*m/g, "");
-				expect(rendered).toContain("FORK FROM A NODE");
+				expect(rendered).toContain("SESSION TREE");
 				// root has two children — each branch head gets a box-drawing
 				// connector: first branch ├─, last branch └─.
 				expect(rendered).toContain("├─ ✦ first branch reply");
@@ -1008,12 +1052,177 @@ describe("RpcHostActions", () => {
 			}
 		});
 
+		it.each([
+			["no summary", 0, false, undefined],
+			["default summary", 1, true, undefined],
+			["custom summary", 2, true, "retain the API decisions\nand list open risks"],
+		] as const)("forwards %s navigation choices without forking", async (_name, choiceIndex, summarize, customInstructions) => {
+			const dir = mkdtempSync(join(tmpdir(), "sumocode-tree-choice-test-"));
+			try {
+				const sessionFile = writeBranchedFixture(dir);
+				const { actions, controls, inlineSelectors, modals } = setup({ sessionFile });
+				const treePromise = actions.handleSubmittedText("/tree");
+				await flushIO();
+				inlineSelectors.handleInput(SELECTOR_ENTER);
+				await flushIO();
+				for (let index = 0; index < choiceIndex; index += 1) inlineSelectors.handleInput(SELECTOR_DOWN);
+				inlineSelectors.handleInput(SELECTOR_ENTER);
+				if (customInstructions !== undefined) {
+					await flush();
+					modals.handleInput(customInstructions);
+					modals.handleInput(Key.enter);
+				}
+				await treePromise;
+				const request = controls.treeRequests[0];
+				expect(request).toMatchObject({ targetId: "child-b", summarize, ...(customInstructions === undefined ? {} : { customInstructions }) });
+				expect(controls.calls.some((call) => call.startsWith("fork:"))).toBe(false);
+			} finally {
+				rmSync(dir, { recursive: true, force: true });
+			}
+		});
+
+		it("treats the authoritative current leaf as a no-op", async () => {
+			const dir = mkdtempSync(join(tmpdir(), "sumocode-tree-current-test-"));
+		try {
+				const sessionFile = writeBranchedFixture(dir);
+				const { actions, controls, inlineSelectors, notifications } = setup({ sessionFile });
+				controls.leafId = "child-b";
+				const treePromise = actions.handleSubmittedText("/tree");
+				await flushIO();
+				inlineSelectors.handleInput(SELECTOR_ENTER);
+				await treePromise;
+				expect(controls.treeRequests).toHaveLength(0);
+				expect(notifications).toContainEqual({ message: "already at this point", level: "info" });
+		} finally {
+				rmSync(dir, { recursive: true, force: true });
+		}
+		});
+
+		it("returns from the summary selector to the same tree selection", async () => {
+			const dir = mkdtempSync(join(tmpdir(), "sumocode-tree-cancel-test-"));
+		try {
+				const sessionFile = writeBranchedFixture(dir);
+				const { actions, controls, inlineSelectors } = setup({ sessionFile });
+				const treePromise = actions.handleSubmittedText("/tree");
+				await flushIO();
+				inlineSelectors.handleInput(SELECTOR_ENTER);
+				await flush();
+				inlineSelectors.handleInput(SELECTOR_ESCAPE);
+				await flushIO();
+				expect(inlineSelectors.getActiveKind()).toBe("select");
+				expect(inlineSelectors.render(120).join("\n")).toContain("second branch reply");
+				inlineSelectors.handleInput(SELECTOR_ESCAPE);
+				await treePromise;
+				expect(controls.treeRequests).toHaveLength(0);
+		} finally {
+				rmSync(dir, { recursive: true, force: true });
+			}
+		});
+
+		it("returns from the custom editor to the summary selector, not the tree", async () => {
+			const dir = mkdtempSync(join(tmpdir(), "sumocode-tree-custom-cancel-test-"));
+		try {
+				const sessionFile = writeBranchedFixture(dir);
+				const { actions, controls, inlineSelectors, modals } = setup({ sessionFile });
+				const treePromise = actions.handleSubmittedText("/tree");
+				await flushIO();
+				inlineSelectors.handleInput(SELECTOR_ENTER);
+				await flush();
+				inlineSelectors.handleInput(SELECTOR_DOWN);
+				inlineSelectors.handleInput(SELECTOR_DOWN);
+				inlineSelectors.handleInput(SELECTOR_ENTER);
+				await flush();
+				expect(modals.getActiveKind()).toBe("editor");
+				modals.handleInput(SELECTOR_ESCAPE);
+				await flush();
+				expect(modals.getActiveKind()).toBeUndefined();
+				expect(inlineSelectors.getActiveKind()).toBe("select");
+				inlineSelectors.handleInput(SELECTOR_ESCAPE);
+				await flushIO();
+				inlineSelectors.handleInput(SELECTOR_ESCAPE);
+				await treePromise;
+				expect(controls.treeRequests).toHaveLength(0);
+		} finally {
+				rmSync(dir, { recursive: true, force: true });
+			}
+		});
+
+		it("rehydrates once through the in-place lifecycle and preserves callback order", async () => {
+			const dir = mkdtempSync(join(tmpdir(), "sumocode-tree-lifecycle-test-"));
+		try {
+				const sessionFile = writeBranchedFixture(dir);
+				const order: string[] = [];
+				const { actions, controls, inlineSelectors, rehydrateCalls } = setup({
+					sessionFile,
+					beforeTreeNavigation: async () => { order.push("before"); },
+					reconcileTreeNavigation: async (outcome) => { order.push(`reconcile:${outcome?.status ?? "unknown"}`); },
+					setTreeNavigationBusy: (busy) => { order.push(`busy:${String(busy)}`); },
+				});
+				const treePromise = actions.handleSubmittedText("/tree");
+				await flushIO();
+				inlineSelectors.handleInput(SELECTOR_ENTER);
+				await flush();
+				inlineSelectors.handleInput(SELECTOR_ENTER);
+				await treePromise;
+				expect(order).toEqual(["busy:true", "before", "reconcile:committed", "busy:false"]);
+				expect(rehydrateCalls).toHaveLength(0);
+				expect(controls.calls.some((call) => call.startsWith("fork:"))).toBe(false);
+		} finally {
+				rmSync(dir, { recursive: true, force: true });
+			}
+		});
+
+		it("opens a 6,001-entry tree and fork selector without recursive traversal", async () => {
+			const dir = mkdtempSync(join(tmpdir(), "sumocode-tree-long-test-"));
+			try {
+				const sessionFile = join(dir, "2026-07-02T23-30-00-000Z_long.jsonl");
+				const entries = Array.from({ length: 6_001 }, (_, index) => ({
+					type: "message",
+					id: `long-${index}`,
+					parentId: index === 0 ? null : `long-${index - 1}`,
+					timestamp: `2026-07-02T23:30:${String(index % 60).padStart(2, "0")}.000Z`,
+					message: { role: "user", content: `long prompt ${index}` },
+				}));
+				writeFileSync(sessionFile, jsonl([{ type: "session", version: 3, id: "session-1", timestamp: "2026-07-02T23:30:00.000Z", cwd: "/repo" }, ...entries]));
+				const { actions, controls, inlineSelectors } = setup({ sessionFile });
+				controls.leafId = "long-6000";
+				const treePromise = actions.handleSubmittedText("/tree");
+				await new Promise<void>((resolve) => setTimeout(resolve, 100));
+				expect(inlineSelectors.render(120).join("\n")).toContain("long prompt 6000");
+				inlineSelectors.handleInput(SELECTOR_ESCAPE);
+				await treePromise;
+
+				controls.forkMessages = entries.map((entry) => ({ entryId: entry.id, text: entry.message.content }));
+				const forkPromise = actions.handleSubmittedText("/fork");
+				await new Promise<void>((resolve) => setTimeout(resolve, 100));
+				expect(inlineSelectors.render(120).join("\n")).toContain("long prompt 6000");
+				inlineSelectors.handleInput(SELECTOR_ENTER);
+				await forkPromise;
+				expect(controls.calls).toContain("fork:long-6000");
+			} finally {
+				rmSync(dir, { recursive: true, force: true });
+			}
+		});
+
+		it("blocks concurrent session mutations while keeping ordinary host commands available", async () => {
+			let busy = true;
+			const { actions, controls, notifications } = setup({ isTreeNavigationBusy: () => busy });
+			await expect(actions.handleSubmittedText("/fork")).resolves.toBe(true);
+			await expect(actions.handleSubmittedText("/tree")).resolves.toBe(true);
+			await expect(actions.handleSubmittedText("/new")).resolves.toBe(true);
+			expect(controls.calls).toEqual([]);
+			expect(notifications.filter((entry) => entry.message === "branch summary in progress")).toHaveLength(3);
+			busy = false;
+			await expect(actions.handleSubmittedText("/copy")).resolves.toBe(true);
+			expect(controls.calls).toContain("getLastAssistantText");
+		});
+
 		it("warns when there is no session file to browse", async () => {
 			const { actions, notifications } = setup();
 
 			await expect(actions.handleSubmittedText("/tree")).resolves.toBe(true);
 
-			expect(notifications).toContainEqual({ message: "no session file available to browse", level: "warning" });
+			expect(notifications).toContainEqual({ message: "session has no entries yet", level: "warning" });
 		});
 
 		it("warns instead of rejecting when the session file cannot be read", async () => {
@@ -1023,8 +1232,8 @@ describe("RpcHostActions", () => {
 
 				await expect(actions.handleSubmittedText("/tree")).resolves.toBe(true);
 
-				expect(notifications).toContainEqual({ message: "session tree unavailable", level: "warning" });
-				expect(controls.calls.some((call) => call.startsWith("fork:"))).toBe(false);
+				expect(notifications).toContainEqual({ message: "session has no entries yet", level: "warning" });
+				expect(controls.calls.some((call) => call.startsWith("navigateTree:"))).toBe(false);
 			} finally {
 				rmSync(dir, { recursive: true, force: true });
 			}

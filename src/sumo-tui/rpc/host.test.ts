@@ -18,6 +18,8 @@ import {
 	createRpcHostInterruptHandler,
 	createRpcTreeNavigationRetryScheduler,
 	createThinkingCycleHandler,
+	RpcTreeNavigationQuietTimeoutError,
+	waitForTreeNavigationQuiet,
 	RpcSessionEventBuffer,
 	handleRpcMessageFollowUp,
 	handleRpcMessageDequeue,
@@ -107,6 +109,61 @@ describe("ActivityStore session ownership", () => {
 		expect(activitySnapshotMatchesSession(snapshot, "session-a")).toBe(true);
 		expect(activitySnapshotMatchesSession(snapshot, "session-b")).toBe(false);
 		expect(activitySnapshotMatchesSession(snapshot, undefined)).toBe(false);
+	});
+});
+
+describe("tree navigation compaction settling", () => {
+	it("waits through compacting until get_state reports idle", async () => {
+		let now = 0;
+		let reads = 0;
+		const waits: number[] = [];
+		const states = [true, true, false];
+		await waitForTreeNavigationQuiet(
+			async () => ({ isCompacting: states[reads++] ?? false }),
+			{
+				pollMs: 5,
+				deadlineMs: 50,
+				maxAttempts: 10,
+				now: () => now,
+				wait: async (milliseconds) => {
+					waits.push(milliseconds);
+					now += milliseconds;
+				},
+			},
+		);
+
+		expect(reads).toBe(3);
+		expect(waits).toEqual([5, 5]);
+	});
+
+	it("expires persistent compacting with both a deadline and an attempt bound", async () => {
+		let now = 0;
+		let reads = 0;
+		const unhandled: unknown[] = [];
+		const onUnhandled = (reason: unknown): void => { unhandled.push(reason); };
+		process.on("unhandledRejection", onUnhandled);
+		try {
+			const error = await waitForTreeNavigationQuiet(
+				async () => {
+					reads += 1;
+					return { isCompacting: true };
+				},
+				{
+					pollMs: 5,
+					deadlineMs: 10,
+					maxAttempts: 100,
+					now: () => now,
+					wait: async (milliseconds) => { now += milliseconds; },
+				},
+			).then(() => undefined, (reason: unknown) => reason);
+			expect(error).toBeInstanceOf(RpcTreeNavigationQuietTimeoutError);
+			expect(error).toMatchObject({ attempts: 3, elapsedMs: 10 });
+			await flush();
+		} finally {
+			process.off("unhandledRejection", onUnhandled);
+		}
+		expect(reads).toBe(3);
+		expect(unhandled).toEqual([]);
 	});
 });
 

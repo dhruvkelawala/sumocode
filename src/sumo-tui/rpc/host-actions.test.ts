@@ -62,6 +62,7 @@ class FakeControls {
 	public readonly treeRequests: RpcTreeNavigationRequest[] = [];
 	public treeOutcomeStatus: RpcTreeNavigationOutcome["status"] = "committed";
 	public treeOutcomeLeafId: string | null | undefined;
+	public treeNavigationError: Error | undefined;
 
 	public async refreshState(): Promise<Record<string, unknown>> {
 		this.calls.push("refreshState");
@@ -155,6 +156,7 @@ class FakeControls {
 	public async navigateTree(request: RpcTreeNavigationRequest): Promise<RpcTreeNavigationOutcome> {
 		this.treeRequests.push(request);
 		this.calls.push(`navigateTree:${request.targetId}:${String(request.summarize)}:${request.customInstructions ?? ""}`);
+		if (this.treeNavigationError) throw this.treeNavigationError;
 		if (this.treeOutcomeStatus === "committed") this.leafId = request.targetId;
 		return { requestId: request.requestId, status: this.treeOutcomeStatus, leafId: this.treeOutcomeLeafId ?? this.leafId };
 	}
@@ -1168,6 +1170,49 @@ describe("RpcHostActions", () => {
 				expect(rehydrateCalls).toHaveLength(0);
 				expect(controls.calls.some((call) => call.startsWith("fork:"))).toBe(false);
 		} finally {
+				rmSync(dir, { recursive: true, force: true });
+			}
+		});
+
+		it("releases the busy guard after an ambiguous navigation recovery without an unhandled rejection", async () => {
+			const dir = mkdtempSync(join(tmpdir(), "sumocode-tree-recovery-release-test-"));
+			const transitions: boolean[] = [];
+			let capture = true;
+			let busy = false;
+			const unhandled: unknown[] = [];
+			const onUnhandled = (reason: unknown): void => { unhandled.push(reason); };
+			process.on("unhandledRejection", onUnhandled);
+			try {
+				const sessionFile = writeBranchedFixture(dir);
+				const { actions, controls, inlineSelectors } = setup({
+					sessionFile,
+					beforeTreeNavigation: async () => undefined,
+					reconcileTreeNavigation: async () => {
+						// Represents the host's fail-closed replacement completion: the
+						// capture is released before the action's finally clears busy.
+						capture = false;
+					},
+					setTreeNavigationBusy: (next) => {
+						if (!next && capture) return;
+						busy = next;
+						transitions.push(next);
+					},
+				});
+				controls.treeNavigationError = new Error("ambiguous tree command timeout");
+				const treePromise = actions.handleSubmittedText("/tree");
+				await flushIO();
+				inlineSelectors.handleInput(SELECTOR_ENTER);
+				await flush();
+				inlineSelectors.handleInput(SELECTOR_ENTER);
+				await expect(treePromise).rejects.toThrow("ambiguous tree command timeout");
+				await flush();
+
+				expect(transitions).toEqual([true, false]);
+				expect(capture).toBe(false);
+				expect(busy).toBe(false);
+				expect(unhandled).toEqual([]);
+			} finally {
+				process.off("unhandledRejection", onUnhandled);
 				rmSync(dir, { recursive: true, force: true });
 			}
 		});

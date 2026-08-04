@@ -42,6 +42,7 @@ export interface RpcHostMainOptions {
 	readonly stdout?: NodeJS.WriteStream;
 	readonly stdin?: NodeJS.ReadStream;
 	readonly stderr?: Pick<NodeJS.WriteStream, "write">;
+	readonly treeNavigationQuietTiming?: RpcTreeNavigationQuietTiming;
 }
 
 function writeLine(stream: Pick<NodeJS.WriteStream, "write">, line: string): void {
@@ -65,8 +66,60 @@ function valuesEqual(left: unknown, right: unknown): boolean {
 	}
 }
 
+export const TREE_NAVIGATION_QUIET_POLL_MS = 100;
+export const TREE_NAVIGATION_QUIET_DEADLINE_MS = 30_000;
+export const TREE_NAVIGATION_QUIET_MAX_ATTEMPTS = 300;
+
+export interface RpcTreeNavigationQuietTiming {
+	readonly pollMs?: number;
+	readonly deadlineMs?: number;
+	readonly maxAttempts?: number;
+	readonly now?: () => number;
+	readonly wait?: (milliseconds: number) => Promise<void>;
+}
+
+export class RpcTreeNavigationQuietTimeoutError extends Error {
+	public readonly attempts: number;
+	public readonly elapsedMs: number;
+
+	public constructor(attempts: number, elapsedMs: number) {
+		super(`tree navigation compaction did not settle after ${attempts} attempts and ${elapsedMs}ms`);
+		this.name = "RpcTreeNavigationQuietTimeoutError";
+		this.attempts = attempts;
+		this.elapsedMs = elapsedMs;
+	}
+}
+
 function waitMs(milliseconds: number): Promise<void> {
 	return new Promise((resolveWait) => setTimeout(resolveWait, milliseconds));
+}
+
+/**
+ * Waits for a tree mutation's possibly-still-running compaction to become
+ * observable as idle. The bound applies only to tree reconciliation; ordinary
+ * `/compact` requests retain their existing client timeout and semantics.
+ */
+export async function waitForTreeNavigationQuiet(
+	refreshState: () => Promise<Pick<RpcHostChromeState, "isCompacting">>,
+	timing: RpcTreeNavigationQuietTiming = {},
+): Promise<void> {
+	const pollMs = Math.max(0, timing.pollMs ?? TREE_NAVIGATION_QUIET_POLL_MS);
+	const deadlineMs = Math.max(0, timing.deadlineMs ?? TREE_NAVIGATION_QUIET_DEADLINE_MS);
+	const maxAttempts = Math.max(1, Math.floor(timing.maxAttempts ?? TREE_NAVIGATION_QUIET_MAX_ATTEMPTS));
+	const now = timing.now ?? Date.now;
+	const wait = timing.wait ?? waitMs;
+	const startedAt = now();
+	let attempts = 0;
+	for (;;) {
+		attempts += 1;
+		const state = await refreshState();
+		if (!state.isCompacting) return;
+		const elapsedMs = Math.max(0, now() - startedAt);
+		if (attempts >= maxAttempts || elapsedMs >= deadlineMs) {
+			throw new RpcTreeNavigationQuietTimeoutError(attempts, elapsedMs);
+		}
+		await wait(Math.min(pollMs, Math.max(0, deadlineMs - elapsedMs)));
+	}
 }
 
 export interface RpcSameSessionTreeNavigationHydrationDependencies {
@@ -1045,6 +1098,8 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		readonly outcome?: RpcTreeNavigationOutcome;
 		readonly entryCount: number;
 		readonly identityChanged: boolean;
+		/** Release the tree guard after fail-closed hydration instead of retrying quiet settle. */
+		readonly releaseAfterRecovery?: boolean;
 	} | undefined;
 	const refreshSessionRuntime = async (): Promise<void> => {
 		if (sessionHydrationRetryTimer) clearTimeout(sessionHydrationRetryTimer);
@@ -1133,7 +1188,7 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 				treeNavigationRecovery = undefined;
 				queueMicrotask(() => {
 					if (!treeNavigationCapture) return;
-					if (recovery.identityChanged) {
+					if (recovery.identityChanged || recovery.releaseAfterRecovery) {
 						finishTreeNavigation(recovery.outcome, false, recovery.entryCount);
 					} else {
 						void reconcileTreeNavigation(recovery.outcome).catch(() => undefined);
@@ -1212,17 +1267,6 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		}
 	};
 
-	const waitForTreeNavigationQuiet = async (): Promise<void> => {
-		// A timed-out prompt is ambiguous: Pi may still be compacting/summarizing.
-		// Keep the mutation guard while polling the public state until compaction
-		// settles or the RPC client reports child exit.
-		let state = await controls.refreshState();
-		while (state.isCompacting) {
-			await waitMs(100);
-			state = await controls.refreshState();
-		}
-	};
-
 	const scheduleTreeNavigationRetry = (outcome: RpcTreeNavigationOutcome | undefined): void => {
 		if (!treeNavigationCapture) return;
 		treeNavigationRetryScheduler.schedule(() => reconcileTreeNavigation(outcome));
@@ -1257,7 +1301,7 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		let hydrated = false;
 		try {
 			const hydration = await hydrateSameSessionTreeNavigation({
-				waitForQuiet: waitForTreeNavigationQuiet,
+				waitForQuiet: () => waitForTreeNavigationQuiet(() => controls.refreshState(), options.treeNavigationQuietTiming),
 				markHydrationBaseline: () => sessionEvents.markHydrationBaseline(),
 				markHydrationBarrier: () => sessionEvents.markHydrationBarrier(),
 				hasEventsAfterHydrationBarrier: () => sessionEvents.hasEventsAfterHydrationBarrier,
@@ -1325,8 +1369,12 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 			}
 			// An unknown or changed identity still uses the established fail-closed
 			// replacement seam. If it schedules a retry, the successful replacement
-			// pass consumes treeNavigationRecovery and clears the guard.
-			treeNavigationRecovery = { outcome, entryCount, identityChanged };
+			// pass consumes treeNavigationRecovery and clears the guard. A bounded
+			// compaction settle expiry must not re-enter the same wait forever: once
+			// fail-closed hydration succeeds, release the host guard without inventing
+			// a branch outcome or weakening the identity checks above.
+			const settleExpired = error instanceof RpcTreeNavigationQuietTimeoutError;
+			treeNavigationRecovery = { outcome, entryCount, identityChanged, releaseAfterRecovery: settleExpired };
 			try {
 				await refreshSessionRuntime();
 			} catch {

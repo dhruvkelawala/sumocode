@@ -219,14 +219,28 @@ export class RpcHostControls {
 	}
 
 	public async navigateTree(request: RpcTreeNavigationRequest): Promise<RpcTreeNavigationOutcome> {
+		// Encode/validate before touching the broker or child. This keeps malformed
+		// host requests from creating a waiter that can only expire later.
+		const encoded = encodeRpcTreeNavigationPayload(request);
 		const broker = this.options.treeNavigationOutcomeBroker;
 		if (!broker) throw new Error("tree navigation outcome broker is unavailable");
 		const outcome = broker.register(request.requestId, TREE_NAVIGATION_TIMEOUT_MS);
+		// Both promises receive rejection handlers in the same turn. A prompt
+		// rejection must not leave the outcome timeout rejection detached, and an
+		// outcome timeout must not leave a late prompt rejection unhandled. Starting
+		// send in a microtask also covers clients that throw synchronously despite
+		// implementing the Promise-returning interface.
+		const prompt = Promise.resolve()
+			.then(() => this.client.send({ type: "prompt", message: `/sumo:rpc-tree-navigate ${encoded}` }, TREE_NAVIGATION_TIMEOUT_MS))
+			.then((response) => responseData(response, "prompt"));
+		const observedPrompt = prompt.catch((error) => { throw error; });
+		const observedOutcome = outcome.catch((error) => { throw error; });
 		try {
-			const prompt = this.client.send({ type: "prompt", message: `/sumo:rpc-tree-navigate ${encodeRpcTreeNavigationPayload(request)}` }, TREE_NAVIGATION_TIMEOUT_MS);
-			responseData(await prompt, "prompt");
-			return await outcome;
+			const [, navigationOutcome] = await Promise.all([observedPrompt, observedOutcome]);
+			return navigationOutcome;
 		} catch (error) {
+			// A successful publish removes the waiter, while cancellation is a
+			// no-op after a timeout/rejection. Either way this is deterministic.
 			broker.cancel(request.requestId);
 			throw error;
 		}

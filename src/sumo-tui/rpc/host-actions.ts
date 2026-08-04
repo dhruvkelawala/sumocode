@@ -29,7 +29,7 @@ import type { EditorTextController } from "../pi-compat/extension-ui-adapter.js"
 import type { ModalManager } from "../widgets/modal.js";
 import type { NotificationCenter, NotificationLevel } from "../widgets/notification.js";
 import type { RpcHostControls, RpcModelOption, RpcSessionStats, RpcThinkingLevel } from "./controls.js";
-import type { RpcTreeNavigationOutcome, RpcTreeNavigationRequest } from "../pi-compat/tree-navigation-command.js";
+import { validateRpcTreeNavigationRequest, type RpcTreeNavigationOutcome, type RpcTreeNavigationRequest } from "../pi-compat/tree-navigation-command.js";
 import type { RpcHostOverlayManager } from "./host-overlays.js";
 import {
 	LOVELY_WEB_API_KEY_FIELDS,
@@ -1052,6 +1052,12 @@ export class RpcHostActions {
 				summarize: summaryChoice !== "No summary",
 				...(customInstructions === undefined ? {} : { customInstructions }),
 			};
+			try {
+				validateRpcTreeNavigationRequest(request);
+			} catch {
+				notify(this.notifications, "invalid tree navigation request", "warning");
+				return;
+			}
 			this.setTreeNavigationBusy(true);
 			try {
 				await this.beforeTreeNavigation(request);

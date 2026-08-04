@@ -24,6 +24,30 @@ interface RpcClient {
 const roots: string[] = [];
 const children: ChildProcessWithoutNullStreams[] = [];
 const requestId = "019f8a78-b4f5-7b7b-b774-2d2e4bce9001";
+const RPC_TEST_TIMEOUT_MS = 60_000;
+
+function isolatedChildEnv(agentDir: string, evidence: string, diagFile?: string): NodeJS.ProcessEnv {
+	const env: NodeJS.ProcessEnv = { ...process.env, PI_CODING_AGENT_DIR: agentDir, SUMOCODE_RPC_CHILD: "1", SUMOCODE_TREE_HOOK_EVIDENCE: evidence };
+	for (const key of Object.keys(env)) {
+		if (/^(?:AWS_|AZURE_|GOOGLE_|GEMINI_|OPENAI_|ANTHROPIC_|MISTRAL_|GROQ_|XAI_|DEEPSEEK_|OPENROUTER_|TOGETHER_|FIRECRAWL_|TAVILY_|BRAVE_)/i.test(key) || /(?:API_KEY|API_TOKEN|AUTH_TOKEN|ACCESS_TOKEN|CLIENT_SECRET|PASSWORD)$/i.test(key)) delete env[key];
+	}
+	for (const key of ["SUMO_TUI_DIAG_FILE", "SUMOCODE_TASK_DIAG_FILE", "SUMOCODE_TASK_RESPONSE_FILE", "SUMOCODE_TASK_EXIT_FILE", "SUMOCODE_TASK_STARTED_FILE"]) delete env[key];
+	if (diagFile !== undefined) env.SUMO_TUI_DIAG_FILE = diagFile;
+	return env;
+}
+
+function waitForExit(child: ChildProcessWithoutNullStreams): Promise<void> {
+	if (child.exitCode !== null) return Promise.resolve();
+	return new Promise((resolveExit) => child.once("exit", () => resolveExit()));
+}
+
+async function stopChild(child: ChildProcessWithoutNullStreams): Promise<void> {
+	if (child.exitCode !== null) return;
+	child.kill("SIGTERM");
+	await Promise.race([waitForExit(child), new Promise<void>((resolveDelay) => setTimeout(resolveDelay, 2_000))]);
+	if (child.exitCode === null) child.kill("SIGKILL");
+	await Promise.race([waitForExit(child), new Promise<void>((resolveDelay) => setTimeout(resolveDelay, 2_000))]);
+}
 
 async function createSession(root: string): Promise<{ file: string; id: string }> {
 	const id = "019f8a78-b4f5-7b7b-b774-2d2e4bce9002";
@@ -58,8 +82,8 @@ export default function install(pi) {
 	return { file, evidence };
 }
 
-function launch(extension: string, fauxProvider: string, hook: string, sessionFile: string, agentDir: string, evidence: string): RpcClient {
-	const child = spawn(process.env.PI_BIN ?? "pi", [
+function launch(extension: string, fauxProvider: string, hook: string, sessionFile: string, agentDir: string, evidence: string, diagFile?: string): RpcClient {
+	const child = spawn(join(process.cwd(), "node_modules", ".bin", "pi"), [
 		"--mode", "rpc", "--offline", "--approve", "--no-extensions",
 		"-e", extension,
 		"-e", fauxProvider,
@@ -68,10 +92,13 @@ function launch(extension: string, fauxProvider: string, hook: string, sessionFi
 		"--session", sessionFile,
 	], {
 		cwd: process.cwd(),
-		env: { ...process.env, PI_CODING_AGENT_DIR: agentDir, SUMOCODE_RPC_CHILD: "1", SUMOCODE_TREE_HOOK_EVIDENCE: evidence },
+		env: isolatedChildEnv(agentDir, evidence, diagFile),
 		stdio: ["pipe", "pipe", "pipe"],
 	});
 	children.push(child);
+	// Always drain stderr: Pi can emit diagnostics while stdout remains the RPC
+	// protocol. A full stderr pipe must never make a tree request look hung.
+	child.stderr.on("data", () => undefined);
 	const responses = new Map<string, { resolve(value: RpcValue): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout> }>();
 	const outcomes: RpcValue[] = [];
 	const events: RpcValue[] = [];
@@ -122,7 +149,7 @@ function launch(extension: string, fauxProvider: string, hook: string, sessionFi
 				const timer = setTimeout(() => {
 					responses.delete(id);
 					rejectResponse(new Error(`Timed out waiting for ${String(command.type)}`));
-				}, 15_000);
+				}, RPC_TEST_TIMEOUT_MS);
 				responses.set(id, { resolve: resolveResponse, reject: rejectResponse, timer });
 				child.stdin.write(`${JSON.stringify({ ...command, id })}\n`);
 			});
@@ -131,7 +158,7 @@ function launch(extension: string, fauxProvider: string, hook: string, sessionFi
 			const immediate = outcomes.shift();
 			if (immediate) return Promise.resolve(immediate);
 			return new Promise((resolveOutcome, rejectOutcome) => {
-				const timer = setTimeout(() => rejectOutcome(new Error("Timed out waiting for tree navigation outcome")), 15_000);
+				const timer = setTimeout(() => rejectOutcome(new Error("Timed out waiting for tree navigation outcome")), RPC_TEST_TIMEOUT_MS);
 				outcomeWaiters.push({ resolve: resolveOutcome, reject: rejectOutcome, timer });
 			});
 		},
@@ -140,11 +167,7 @@ function launch(extension: string, fauxProvider: string, hook: string, sessionFi
 
 afterEach(async () => {
 	const running = children.splice(0);
-	await Promise.all(running.map(async (child) => {
-		if (child.exitCode !== null) return;
-		child.kill("SIGTERM");
-		await new Promise<void>((resolveExit) => child.once("exit", () => resolveExit()));
-	}));
+	await Promise.all(running.map(stopChild));
 	for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true });
 });
 
@@ -179,10 +202,13 @@ describe("real Pi RPC tree navigation bridge", () => {
 		expect((afterEntries.data as { leafId: string | null }).leafId).not.toBe(beforeLeaf);
 		expect(afterMessages.data).toEqual({ messages: [] });
 		expect(JSON.stringify(after)).not.toContain("extension_error");
-		const evidenceLines = (await readFile(evidence, "utf8")).trim().split("\n").filter(Boolean).map((line) => JSON.parse(line) as { type: string });
+		const evidenceLines = (await readFile(evidence, "utf8")).trim().split("\n").filter(Boolean).map((line) => JSON.parse(line) as { type: string; targetId?: string; summarize?: boolean; customInstructions?: string | null; oldLeafId?: string; newLeafId?: string });
 		expect(evidenceLines.map((line) => line.type)).toEqual(["install", "session_before_tree", "session_tree"]);
+		expect(evidenceLines[1]).toMatchObject({ targetId: "tree-user", summarize: false, customInstructions: null });
+		expect(evidenceLines[2]?.oldLeafId).toEqual(expect.any(String));
+		expect(evidenceLines[2]?.newLeafId).toBeNull();
 		expect(client.events.some((event) => event.type === "extension_error")).toBe(false);
-	}, 30_000);
+	}, RPC_TEST_TIMEOUT_MS);
 
 	it("handles default and exact custom summaries, vetoes safely, and keeps one extension instance", async () => {
 		const root = await mkdtemp(join(tmpdir(), "sumocode-rpc-tree-summary-"));
@@ -191,7 +217,8 @@ describe("real Pi RPC tree navigation bridge", () => {
 		await mkdir(agentDir, { recursive: true });
 		const { file: sessionFile, id: sessionId } = await createSession(root);
 		const { file: hook, evidence } = await createHook(root);
-		const client = launch(resolve(process.cwd(), "src/extension.ts"), resolve(process.cwd(), "scripts/visual-v2/runtime-faux-provider.mjs"), hook, sessionFile, agentDir, evidence);
+		const diagnostics = join(root, "diagnostics.jsonl");
+		const client = launch(resolve(process.cwd(), "src/extension.ts"), resolve(process.cwd(), "scripts/visual-v2/runtime-faux-provider.mjs"), hook, sessionFile, agentDir, evidence, diagnostics);
 		const before = await client.request({ type: "get_state" });
 		expect(before.data).toMatchObject({ sessionId, sessionFile });
 
@@ -223,12 +250,19 @@ describe("real Pi RPC tree navigation bridge", () => {
 		const afterVetoMessages = await client.request({ type: "get_messages" });
 		expect((afterVeto.data as { leafId: string | null }).leafId).toBe((beforeVeto.data as { leafId: string | null }).leafId);
 		expect(afterVetoMessages.data).toEqual(beforeVetoMessages.data);
-		const evidenceLines = (await readFile(evidence, "utf8")).trim().split("\n").filter(Boolean).map((line) => JSON.parse(line) as { type: string; customInstructions?: string | null });
+		const evidenceLines = (await readFile(evidence, "utf8")).trim().split("\n").filter(Boolean).map((line) => JSON.parse(line) as { type: string; targetId?: string; summarize?: boolean; customInstructions?: string | null });
 		const treeHooks = evidenceLines.filter((line) => line.type === "session_before_tree");
-		expect(treeHooks.map((line) => line.customInstructions)).toContain("retain these exact decisions\nand list unresolved risks");
+		expect(treeHooks.map((line) => ({ targetId: line.targetId, summarize: line.summarize, customInstructions: line.customInstructions }))).toEqual([
+			{ targetId: "tree-user", summarize: true, customInstructions: null },
+			{ targetId: "tree-user", summarize: true, customInstructions: "retain these exact decisions\nand list unresolved risks" },
+			{ targetId: "veto-target", summarize: false, customInstructions: null },
+		]);
 		expect(evidenceLines.filter((line) => line.type === "install")).toHaveLength(1);
+		const diagnosticText = await readFile(diagnostics, "utf8");
+		expect(diagnosticText).not.toContain("retain these exact decisions");
+		expect(diagnosticText).not.toContain("selected prompt");
 		expect(client.events.some((event) => event.type === "extension_error")).toBe(false);
-	}, 30_000);
+	}, RPC_TEST_TIMEOUT_MS);
 
 	it("navigates a 6,001-entry linear session in place without nested transport data", async () => {
 		const root = await mkdtemp(join(tmpdir(), "sumocode-rpc-tree-long-"));
@@ -244,6 +278,7 @@ describe("real Pi RPC tree navigation bridge", () => {
 		const beforeState = await client.request({ type: "get_state" });
 		const beforeEntries = await client.request({ type: "get_entries" });
 		const beforeLeaf = (beforeEntries.data as { leafId: string | null }).leafId;
+		const beforeMessages = await client.request({ type: "get_messages" });
 		const payload = Buffer.from(JSON.stringify({ requestId, targetId: "long-5999", summarize: false }), "utf8").toString("base64url");
 		const prompt = client.request({ type: "prompt", message: `/sumo:rpc-tree-navigate ${payload}` });
 		const outcome = client.waitForOutcome();
@@ -257,14 +292,20 @@ describe("real Pi RPC tree navigation bridge", () => {
 		expect((afterEntries.data as { leafId: string | null }).leafId).not.toBe(beforeLeaf);
 		const afterMessages = await client.request({ type: "get_messages" });
 		expect(JSON.stringify(afterMessages.data)).toContain("long prompt 0");
+		expect(JSON.stringify(afterMessages.data)).not.toBe(JSON.stringify(beforeMessages.data));
+		const persistedLastId = ((afterEntries.data as { entries: Array<{ id: string }> }).entries.at(-1)?.id);
+		expect(persistedLastId).toEqual(expect.any(String));
+		const delta = await client.request({ type: "get_entries", since: persistedLastId });
+		expect(delta.data).toMatchObject({ entries: [], leafId: "long-5999" });
+		expect(JSON.stringify(delta.data).length).toBeLessThan(4_096);
 		expect(JSON.stringify(client.events)).not.toContain("extension_error");
 		// The child stays alive after the in-place navigation; a replacement
 		// session would have changed the state identity or ended this process.
 		expect(client.child.exitCode).toBeNull();
 		expect(beforeState.data).toMatchObject({ sessionId, sessionFile });
-	}, 30_000);
+	}, RPC_TEST_TIMEOUT_MS);
 
-	it("keeps ordinary fork as a replacement session", async () => {
+	it("keeps ordinary fork as a replacement session and emits no tree hooks", async () => {
 		const root = await mkdtemp(join(tmpdir(), "sumocode-rpc-tree-fork-"));
 		roots.push(root);
 		const agentDir = join(root, "agent");
@@ -278,6 +319,9 @@ describe("real Pi RPC tree navigation bridge", () => {
 		const after = await client.request({ type: "get_state" });
 		expect((after.data as { sessionId: string; sessionFile: string }).sessionId).not.toBe((before.data as { sessionId: string }).sessionId);
 		expect((after.data as { sessionFile: string }).sessionFile).not.toBe((before.data as { sessionFile: string }).sessionFile);
+		const forkEvidence = (await readFile(evidence, "utf8")).split("\n").filter(Boolean).map((line) => JSON.parse(line) as { type: string });
+		expect(forkEvidence.filter((line) => line.type === "session_before_tree" || line.type === "session_tree")).toEqual([]);
+		expect(forkEvidence.filter((line) => line.type === "install")).toHaveLength(2);
 		expect(client.events.some((event) => event.type === "extension_error")).toBe(false);
-	}, 30_000);
+	}, RPC_TEST_TIMEOUT_MS);
 });

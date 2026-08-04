@@ -98,6 +98,23 @@ describe("authoritative flat session snapshots", () => {
 		}
 	});
 
+	it("does not fall back for an unrelated missing entry", async () => {
+		const { dir, file } = diskFile([entry("one")]);
+		try {
+			const calls: (string | undefined)[] = [];
+			await expect(readAuthoritativeSessionSnapshot({
+				getEntries: async (since) => {
+					calls.push(since);
+					if (since) throw new Error("get_entries failed: Entry not found: another-cursor");
+					return { entries: [entry("full")], leafId: "full" };
+				},
+			}, { sessionFile: file, sessionId: "session-1" })).rejects.toThrow("another-cursor");
+			expect(calls).toEqual(["one"]);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
 	it("propagates unrelated delta failures without a full retry", async () => {
 		const { dir, file } = diskFile([entry("one")]);
 		try {

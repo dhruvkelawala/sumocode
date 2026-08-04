@@ -2,9 +2,9 @@ import type { RpcCommand, RpcResponse, RpcSessionState } from "@earendil-works/p
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { modelOptionsFrom, RpcHostControls, TREE_NAVIGATION_TIMEOUT_MS, type RpcAvailableModel, type RpcCommandClient } from "./controls.js";
-import { decodeRpcTreeNavigationPayload, InMemoryRpcTreeNavigationOutcomeBroker } from "../pi-compat/tree-navigation-command.js";
+import { decodeRpcTreeNavigationPayload, InMemoryRpcTreeNavigationOutcomeBroker, type RpcTreeNavigationOutcome, type RpcTreeNavigationOutcomeBroker, type RpcTreeNavigationRequest } from "../pi-compat/tree-navigation-command.js";
 import { RpcHostStateStore, type RpcHostChromeState } from "./state.js";
 
 class FakeClient implements RpcCommandClient {
@@ -45,9 +45,11 @@ class DeferredFakeClient implements RpcCommandClient {
 	public readonly commands: RpcCommand[] = [];
 	public readonly timeouts: Array<number | undefined> = [];
 	private readonly responses: Array<Deferred<RpcResponse>>;
+	public readonly deferredResponses: readonly Deferred<RpcResponse>[];
 
 	public constructor(...responses: Array<Deferred<RpcResponse>>) {
 		this.responses = [...responses];
+		this.deferredResponses = responses;
 	}
 
 	public send(command: RpcCommand, timeoutMs?: number): Promise<RpcResponse> {
@@ -668,6 +670,66 @@ describe("RpcHostControls", () => {
 		await expect(controls.getEntries()).resolves.toEqual({ entries: [], leafId: "leaf-1" });
 		await expect(controls.getEntries("entry-1")).resolves.toEqual({ entries: [], leafId: "leaf-2" });
 		expect(client.commands).toEqual([{ type: "get_entries" }, { type: "get_entries", since: "entry-1" }]);
+	});
+
+	it("rejects an oversized request before registering a waiter or sending a prompt", async () => {
+		const client = new FakeClient({ type: "response", command: "prompt", success: true });
+		const broker: RpcTreeNavigationOutcomeBroker = {
+			register: vi.fn(async () => ({ requestId: "unused", status: "error" as const, leafId: null })),
+			publish: vi.fn(),
+			cancel: vi.fn(),
+		};
+		const controls = new RpcHostControls(client, new RpcHostStateStore(), { treeNavigationOutcomeBroker: broker });
+		const request: RpcTreeNavigationRequest = { requestId: "019f8a78-b4f5-7b7b-b774-2d2e4bce9001", targetId: "entry-1", summarize: true, customInstructions: "x".repeat(16_385) };
+		await expect(controls.navigateTree(request)).rejects.toThrow(/customInstructions/);
+		expect(broker.register).not.toHaveBeenCalled();
+		expect(client.commands).toEqual([]);
+	});
+
+	it("observes a prompt rejection and cleans up the correlated waiter without an unhandled outcome rejection", async () => {
+		const client = new DeferredFakeClient(deferred<RpcResponse>());
+		const broker = new InMemoryRpcTreeNavigationOutcomeBroker();
+		const controls = new RpcHostControls(client, new RpcHostStateStore(), { treeNavigationOutcomeBroker: broker });
+		const request: RpcTreeNavigationRequest = { requestId: "019f8a78-b4f5-7b7b-b774-2d2e4bce9001", targetId: "entry-1", summarize: false };
+		const unhandled: unknown[] = [];
+		const onUnhandled = (reason: unknown): void => { unhandled.push(reason); };
+		process.on("unhandledRejection", onUnhandled);
+		try {
+			const pending = controls.navigateTree(request);
+			client.deferredResponses[0]!.reject(new Error("prompt failed"));
+			await expect(pending).rejects.toThrow("prompt failed");
+			await new Promise<void>((resolve) => setImmediate(resolve));
+		} finally {
+			process.off("unhandledRejection", onUnhandled);
+		}
+		expect(unhandled).toEqual([]);
+	});
+
+	it("propagates an outcome rejection while still cleaning the waiter", async () => {
+		const client = new FakeClient({ type: "response", command: "prompt", success: true });
+		const cancel = vi.fn();
+		const broker: RpcTreeNavigationOutcomeBroker = {
+			register: vi.fn(() => Promise.reject(new Error("outcome timed out"))),
+			publish: vi.fn(),
+			cancel,
+		};
+		const controls = new RpcHostControls(client, new RpcHostStateStore(), { treeNavigationOutcomeBroker: broker });
+		await expect(controls.navigateTree({ requestId: "019f8a78-b4f5-7b7b-b774-2d2e4bce9001", targetId: "entry-1", summarize: false })).rejects.toThrow("outcome timed out");
+		expect(cancel).toHaveBeenCalledWith("019f8a78-b4f5-7b7b-b774-2d2e4bce9001");
+	});
+
+	it("cancels the waiter when a command client throws synchronously", async () => {
+		const requestId = "019f8a78-b4f5-7b7b-b774-2d2e4bce9001";
+		const cancel = vi.fn();
+		const broker: RpcTreeNavigationOutcomeBroker = {
+			register: vi.fn(() => new Promise<RpcTreeNavigationOutcome>(() => undefined)),
+			publish: vi.fn(),
+			cancel,
+		};
+		const client: RpcCommandClient = { send: vi.fn(() => { throw new Error("send failed synchronously"); }) };
+		const controls = new RpcHostControls(client, new RpcHostStateStore(), { treeNavigationOutcomeBroker: broker });
+		await expect(controls.navigateTree({ requestId, targetId: "entry-1", summarize: false })).rejects.toThrow("send failed synchronously");
+		expect(cancel).toHaveBeenCalledWith(requestId);
 	});
 
 	it("registers the navigation waiter before sending the hidden prompt and waits for its correlated outcome", async () => {

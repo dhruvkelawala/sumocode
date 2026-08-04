@@ -6,6 +6,13 @@ export const MAX_TREE_NAVIGATION_ENCODED_BYTES = 24_576;
 export const MAX_TREE_NAVIGATION_JSON_BYTES = 18_432;
 export const MAX_TREE_NAVIGATION_TARGET_BYTES = 256;
 export const MAX_TREE_NAVIGATION_INSTRUCTIONS_BYTES = 16_384;
+// Requests and correlated outcomes have different budgets. The request cap
+// protects the prompt command; the outcome budget must carry a useful selected
+// draft without allowing an arbitrarily large session entry onto the status
+// side channel.
+export const MAX_TREE_NAVIGATION_EDITOR_TEXT_BYTES = 20_480;
+export const MAX_TREE_NAVIGATION_OUTCOME_JSON_BYTES = 24_576;
+export const MAX_TREE_NAVIGATION_OUTCOME_ENCODED_BYTES = 32_768;
 
 export interface RpcTreeNavigationRequest {
 	readonly requestId: string;
@@ -53,6 +60,26 @@ function exactKeys(value: Record<string, unknown>, allowed: readonly string[]): 
 	return keys.length === sortedAllowed.length && keys.every((key, index) => key === sortedAllowed[index]);
 }
 
+export function validateRpcTreeNavigationRequest(value: unknown): asserts value is RpcTreeNavigationRequest {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error("tree navigation request must be an object");
+	const record = value as unknown as Record<string, unknown>;
+	const allowed = record.summarize === true
+		? ["requestId", "targetId", "summarize", ...(Object.hasOwn(record, "customInstructions") ? ["customInstructions"] : [])]
+		: ["requestId", "targetId", "summarize"];
+	if (!exactKeys(record, allowed)) throw new Error("tree navigation request has unknown or invalid fields");
+	if (!isCanonicalUuid(record.requestId)) throw new Error("tree navigation requestId must be a canonical UUID");
+	if (typeof record.targetId !== "string") throw new Error("tree navigation targetId must be a string");
+	const targetId = record.targetId.trim();
+	if (utf8Bytes(targetId) < 1 || utf8Bytes(targetId) > MAX_TREE_NAVIGATION_TARGET_BYTES || [...targetId].some(isControlCharacter)) {
+		throw new Error("tree navigation targetId is invalid");
+	}
+	if (typeof record.summarize !== "boolean") throw new Error("tree navigation summarize must be boolean");
+	if (record.summarize === false && Object.hasOwn(record, "customInstructions")) throw new Error("customInstructions requires summarize");
+	if (record.summarize === true && Object.hasOwn(record, "customInstructions") && (typeof record.customInstructions !== "string" || utf8Bytes(record.customInstructions) > MAX_TREE_NAVIGATION_INSTRUCTIONS_BYTES)) {
+		throw new Error("tree navigation customInstructions is too large");
+	}
+}
+
 function parseRequestJson(decoded: Uint8Array): RpcTreeNavigationRequest {
 	if (decoded.byteLength > MAX_TREE_NAVIGATION_JSON_BYTES) throw new Error("tree navigation payload is too large");
 	let parsed: unknown;
@@ -62,31 +89,18 @@ function parseRequestJson(decoded: Uint8Array): RpcTreeNavigationRequest {
 		throw new Error("tree navigation payload is malformed JSON");
 	}
 	if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) throw new Error("tree navigation payload must be an object");
-	const record = parsed as Record<string, unknown>;
-	const allowed = record.summarize === true ? ["requestId", "targetId", "summarize", ...(Object.hasOwn(record, "customInstructions") ? ["customInstructions"] : [])] : ["requestId", "targetId", "summarize"];
-	if (!exactKeys(record, allowed)) throw new Error("tree navigation payload has unknown or invalid fields");
-	if (!isCanonicalUuid(record.requestId)) throw new Error("tree navigation requestId must be a canonical UUID");
-	if (typeof record.targetId !== "string") throw new Error("tree navigation targetId must be a string");
-	const targetId = record.targetId.trim();
-	if (utf8Bytes(targetId) < 1 || utf8Bytes(targetId) > MAX_TREE_NAVIGATION_TARGET_BYTES || [...targetId].some(isControlCharacter)) {
-		throw new Error("tree navigation targetId is invalid");
-	}
-	if (typeof record.summarize !== "boolean") throw new Error("tree navigation summarize must be boolean");
-	if (record.summarize === false && Object.hasOwn(record, "customInstructions")) throw new Error("customInstructions requires summarize");
-	if (record.summarize === true && Object.hasOwn(record, "customInstructions")) {
-		if (typeof record.customInstructions !== "string" || utf8Bytes(record.customInstructions) > MAX_TREE_NAVIGATION_INSTRUCTIONS_BYTES) {
-			throw new Error("tree navigation customInstructions is too large");
-		}
-	}
+	validateRpcTreeNavigationRequest(parsed);
+	const record = parsed as unknown as Record<string, unknown>;
 	return {
-		requestId: record.requestId,
-		targetId,
-		summarize: record.summarize,
+		requestId: record.requestId as string,
+		targetId: (record.targetId as string).trim(),
+		summarize: record.summarize as boolean,
 		...(typeof record.customInstructions === "string" ? { customInstructions: record.customInstructions } : {}),
 	};
 }
 
 export function encodeRpcTreeNavigationPayload(request: RpcTreeNavigationRequest): string {
+	validateRpcTreeNavigationRequest(request);
 	const json = JSON.stringify(request);
 	const encoded = Buffer.from(json, "utf8").toString("base64url");
 	if (utf8Bytes(encoded) > MAX_TREE_NAVIGATION_ENCODED_BYTES) throw new Error("tree navigation payload is too large");
@@ -98,13 +112,26 @@ export function decodeRpcTreeNavigationPayload(encoded: string): RpcTreeNavigati
 	return parseRequestJson(decodeBase64Url(encoded));
 }
 
+function boundedOutcome(outcome: RpcTreeNavigationOutcome): RpcTreeNavigationOutcome {
+	if (outcome.editorText !== undefined && utf8Bytes(outcome.editorText) > MAX_TREE_NAVIGATION_EDITOR_TEXT_BYTES) {
+		const withoutEditorText = { ...outcome } as { requestId: string; status: RpcTreeNavigationOutcome["status"]; leafId: string | null; editorText?: string };
+		delete withoutEditorText.editorText;
+		return withoutEditorText;
+	}
+	return outcome;
+}
+
 export function encodeRpcTreeNavigationOutcome(outcome: RpcTreeNavigationOutcome): string {
-	return Buffer.from(JSON.stringify(outcome), "utf8").toString("base64url");
+	const bounded = boundedOutcome(outcome);
+	const json = JSON.stringify(bounded);
+	if (utf8Bytes(json) > MAX_TREE_NAVIGATION_OUTCOME_JSON_BYTES) throw new Error("tree navigation outcome is too large");
+	return Buffer.from(json, "utf8").toString("base64url");
 }
 
 export function decodeRpcTreeNavigationOutcome(encoded: string): RpcTreeNavigationOutcome {
-	if (utf8Bytes(encoded) > MAX_TREE_NAVIGATION_ENCODED_BYTES) throw new Error("tree navigation outcome is too large");
+	if (utf8Bytes(encoded) > MAX_TREE_NAVIGATION_OUTCOME_ENCODED_BYTES) throw new Error("tree navigation outcome is too large");
 	const decoded = decodeBase64Url(encoded);
+	if (decoded.byteLength > MAX_TREE_NAVIGATION_OUTCOME_JSON_BYTES) throw new Error("tree navigation outcome is too large");
 	let parsed: unknown;
 	try {
 		parsed = JSON.parse(Buffer.from(decoded).toString("utf8"));
@@ -119,7 +146,7 @@ export function decodeRpcTreeNavigationOutcome(encoded: string): RpcTreeNavigati
 		throw new Error("tree navigation outcome is invalid");
 	}
 	if (record.leafId !== null && typeof record.leafId !== "string") throw new Error("tree navigation outcome leafId is invalid");
-	if (Object.hasOwn(record, "editorText") && typeof record.editorText !== "string") throw new Error("tree navigation outcome editorText is invalid");
+	if (Object.hasOwn(record, "editorText") && (typeof record.editorText !== "string" || utf8Bytes(record.editorText) > MAX_TREE_NAVIGATION_EDITOR_TEXT_BYTES)) throw new Error("tree navigation outcome editorText is invalid");
 	return {
 		requestId: record.requestId,
 		status: record.status,
@@ -135,9 +162,13 @@ function entryEditorText(entry: unknown): string | undefined {
 		if (typeof record.message !== "object" || record.message === null) return undefined;
 		const message = record.message as { role?: unknown; content?: unknown };
 		if (message.role !== "user") return undefined;
-		return contentText(message.content);
+		const text = contentText(message.content);
+		return utf8Bytes(text) <= MAX_TREE_NAVIGATION_EDITOR_TEXT_BYTES ? text : undefined;
 	}
-	if (record.type === "custom_message") return contentText(record.content);
+	if (record.type === "custom_message") {
+		const text = contentText(record.content);
+		return utf8Bytes(text) <= MAX_TREE_NAVIGATION_EDITOR_TEXT_BYTES ? text : undefined;
+	}
 	return undefined;
 }
 
@@ -150,6 +181,25 @@ function contentText(content: unknown): string {
 		.join("");
 }
 
+function recoverRequestId(encoded: string): string | undefined {
+	try {
+		if (utf8Bytes(encoded) > MAX_TREE_NAVIGATION_ENCODED_BYTES) return undefined;
+		const decoded = decodeBase64Url(encoded);
+		const parsed = JSON.parse(Buffer.from(decoded).toString("utf8")) as unknown;
+		if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return undefined;
+		const requestId = (parsed as Record<string, unknown>).requestId;
+		return isCanonicalUuid(requestId) ? requestId : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+function publishTreeNavigationError(ctx: ExtensionCommandContext, requestId: string): void {
+	const outcome: RpcTreeNavigationOutcome = { requestId, status: "error", leafId: ctx.sessionManager.getLeafId() };
+	ctx.ui.setStatus(RPC_TREE_NAVIGATION_RESULT_STATUS_KEY, encodeRpcTreeNavigationOutcome(outcome));
+	ctx.ui.notify("invalid tree navigation request", "warning");
+}
+
 export async function executeRpcTreeNavigation(encoded: string, ctx: ExtensionCommandContext): Promise<void> {
 	if (ctx.mode !== "rpc" || !ctx.hasUI) {
 		ctx.ui.notify("tree navigation requires SumoCode RPC mode", "warning");
@@ -159,7 +209,9 @@ export async function executeRpcTreeNavigation(encoded: string, ctx: ExtensionCo
 	try {
 		request = decodeRpcTreeNavigationPayload(encoded);
 	} catch {
-		ctx.ui.notify("invalid tree navigation request", "warning");
+		const requestId = recoverRequestId(encoded);
+		if (requestId) publishTreeNavigationError(ctx, requestId);
+		else ctx.ui.notify("invalid tree navigation request", "warning");
 		return;
 	}
 

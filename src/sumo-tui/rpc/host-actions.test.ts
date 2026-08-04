@@ -1204,6 +1204,33 @@ describe("RpcHostActions", () => {
 			}
 		});
 
+		it("keeps tree diagnostics structural and free of synthetic message or custom text", async () => {
+			const diagFile = join(tmpdir(), "sumocode-tree-diagnostics-privacy.jsonl");
+			const previousDiagFile = process.env.SUMO_TUI_DIAG_FILE;
+			process.env.SUMO_TUI_DIAG_FILE = diagFile;
+			try {
+				const dir = mkdtempSync(join(tmpdir(), "sumocode-tree-diagnostics-test-"));
+				try {
+					const sessionFile = writeBranchedFixture(dir);
+					const { actions, inlineSelectors } = setup({ sessionFile });
+					const treePromise = actions.handleSubmittedText("/tree");
+					await flushIO();
+					inlineSelectors.handleInput(SELECTOR_ESCAPE);
+					await treePromise;
+					const diagnostics = await readFile(diagFile, "utf8");
+					expect(diagnostics).toContain("tree.selector_loaded");
+					expect(diagnostics).not.toContain("root message");
+					expect(diagnostics).not.toContain("retain the API decisions");
+				} finally {
+					rmSync(dir, { recursive: true, force: true });
+				}
+			} finally {
+				if (previousDiagFile === undefined) delete process.env.SUMO_TUI_DIAG_FILE;
+				else process.env.SUMO_TUI_DIAG_FILE = previousDiagFile;
+				rmSync(diagFile, { force: true });
+			}
+		});
+
 		it("blocks concurrent session mutations while keeping ordinary host commands available", async () => {
 			let busy = true;
 			const { actions, controls, notifications } = setup({ isTreeNavigationBusy: () => busy });

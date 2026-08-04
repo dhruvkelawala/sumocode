@@ -16,12 +16,14 @@ import {
 	createModelCycleForwardHandler,
 	createRpcExitHandler,
 	createRpcHostInterruptHandler,
+	createRpcTreeNavigationRetryScheduler,
 	createThinkingCycleHandler,
 	RpcSessionEventBuffer,
 	handleRpcMessageFollowUp,
 	handleRpcMessageDequeue,
 	createToolsExpandToggleHandler,
 	createUnhandledRejectionHandler,
+	hydrateSameSessionTreeNavigation,
 	submitInitialPromptFromEnv,
 	writeExitCodeFile,
 	type RpcHostExitDependencies,
@@ -135,6 +137,62 @@ describe("session hydration event barrier", () => {
 		buffer.capture(suffix);
 
 		expect(buffer.finishHydration()).toEqual({ supersededSnapshotEvents: [covered], suffixEvents: [suffix] });
+	});
+
+	it("recovers same-session tree hydration after a transient read without entering replacement", async () => {
+		vi.useFakeTimers();
+		try {
+			const buffer = new RpcSessionEventBuffer();
+			expect(buffer.begin()).toBe(true);
+			const stateStore = new RpcHostStateStore();
+			const state = stateStore.hydrateFromRpcState(rpcState({ sessionFile: "/tmp/session.jsonl" }));
+			let messageReads = 0;
+			let snapshotReads = 0;
+			let attempts = 0;
+			let recovered = false;
+			let busy = true;
+			const hydrate = async (): Promise<void> => {
+				attempts += 1;
+				const result = await hydrateSameSessionTreeNavigation({
+					waitForQuiet: async () => undefined,
+					markHydrationBaseline: () => buffer.markHydrationBaseline(),
+					markHydrationBarrier: () => buffer.markHydrationBarrier(),
+					hasEventsAfterHydrationBarrier: () => buffer.hasEventsAfterHydrationBarrier,
+					refreshState: async () => state,
+					readMessages: async () => {
+						messageReads += 1;
+						if (messageReads === 1) throw new Error("transient get_messages failure");
+						return [{ id: "destination" }];
+					},
+					readSnapshot: async () => {
+						snapshotReads += 1;
+						return { entries: [], leafId: "destination" };
+					},
+					sessionId: "session-1",
+					sessionFile: "/tmp/session.jsonl",
+				});
+				expect(result.identityChanged).toBe(false);
+				expect(result.state.sessionId).toBe("session-1");
+				expect(result.snapshot?.leafId).toBe("destination");
+				recovered = true;
+				busy = false;
+			};
+
+			await expect(hydrate()).rejects.toThrow("transient get_messages failure");
+			expect(busy).toBe(true);
+			expect(attempts).toBe(1);
+			const retry = createRpcTreeNavigationRetryScheduler(100);
+			expect(retry.schedule(hydrate)).toBe(true);
+			await vi.advanceTimersByTimeAsync(100);
+			expect(recovered).toBe(true);
+			expect(busy).toBe(false);
+			expect(attempts).toBe(2);
+			expect(messageReads).toBe(2);
+			expect(snapshotReads).toBe(1);
+			retry.clear();
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it("replays message_update, agent_end, and agent_settled events received during hydration in order", () => {
@@ -305,6 +363,29 @@ describe("createRpcHostInterruptHandler wiring", () => {
 
 		expect(handle(ESCAPE)).toBe(true);
 		expect(controls.abort).toHaveBeenCalledOnce();
+	});
+
+	it("consumes busy Ctrl-C/Escape without clearing the restored draft, arming quit, or aborting", async () => {
+		let editorText = "restored queued draft";
+		const editor = { getText: () => editorText, setText: vi.fn((text: string) => { editorText = text; }), isAutocompleteOpen: () => false };
+		const controls = { abort: vi.fn(async () => undefined) };
+		const requestHostExit = vi.fn();
+		const handle = createRpcHostInterruptHandler(interruptDeps({
+			stateStore: { getSnapshot: () => ({ isStreaming: false }) as never },
+			editor,
+			controls,
+			requestHostExit,
+			isTreeNavigationBusy: () => true,
+			restoreQueuedDrafts: vi.fn(),
+		}));
+
+		expect(handle(CTRL_C)).toBe(true);
+		expect(handle(ESCAPE)).toBe(true);
+		await flush();
+		expect(editorText).toBe("restored queued draft");
+		expect(editor.setText).not.toHaveBeenCalled();
+		expect(controls.abort).not.toHaveBeenCalled();
+		expect(requestHostExit).not.toHaveBeenCalled();
 	});
 
 	it("restores host-owned queued drafts before aborting", () => {

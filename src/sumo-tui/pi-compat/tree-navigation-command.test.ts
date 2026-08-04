@@ -10,6 +10,7 @@ import {
 	registerRpcTreeNavigationCommand,
 	RPC_TREE_NAVIGATION_COMMAND,
 	RPC_TREE_NAVIGATION_RESULT_STATUS_KEY,
+	MAX_TREE_NAVIGATION_EDITOR_TEXT_BYTES,
 	type RpcTreeNavigationRequest,
 } from "./tree-navigation-command.js";
 
@@ -81,6 +82,11 @@ describe("RPC tree navigation compatibility command", () => {
 		expect(() => decodeRpcTreeNavigationPayload(value)).toThrow();
 	});
 
+	it("rejects an oversized custom request before it can be encoded or sent", () => {
+		const oversized = request({ summarize: true, customInstructions: "x".repeat(16_385) });
+		expect(() => encodeRpcTreeNavigationPayload(oversized)).toThrow(/customInstructions/);
+	});
+
 	it("enforces encoded, target, custom-instruction, and decoded JSON limits", () => {
 		expect(() => decodeRpcTreeNavigationPayload("A".repeat(24_577))).toThrow(/too large/);
 		expect(() => decodeRpcTreeNavigationPayload(encoded({ ...request(), targetId: "x".repeat(257) }))).toThrow();
@@ -123,6 +129,16 @@ describe("RPC tree navigation compatibility command", () => {
 		expect(decodeRpcTreeNavigationOutcome(statuses[0]?.[1] as string)).toMatchObject({ status, leafId: "target" });
 	});
 
+	it("publishes one error outcome for a decodable invalid request with a request id", async () => {
+		const ctx = context();
+		const invalid = encoded({ ...request(), targetId: "x".repeat(257) });
+		await executeRpcTreeNavigation(invalid, ctx);
+		const statuses = (ctx.ui.setStatus as ReturnType<typeof vi.fn>).mock.calls.filter(([key]) => key === RPC_TREE_NAVIGATION_RESULT_STATUS_KEY);
+		expect(statuses).toHaveLength(1);
+		expect(decodeRpcTreeNavigationOutcome(statuses[0]?.[1] as string)).toEqual({ requestId, status: "error", leafId: "target" });
+		expect(ctx.navigateTree).not.toHaveBeenCalled();
+	});
+
 	it("turns navigation errors into one generic error outcome and no payload leak", async () => {
 		const secret = "do not leak this custom instruction";
 		const ctx = context({ target: { type: "message", message: { role: "assistant", content: "answer" } }, navigate: async () => { throw new Error(secret); } });
@@ -140,6 +156,20 @@ describe("RPC tree navigation compatibility command", () => {
 		const ctx = context({ target });
 		await executeRpcTreeNavigation(encodeRpcTreeNavigationPayload(request()), ctx);
 		expect(decodeRpcTreeNavigationOutcome(statusValue(ctx))).toMatchObject({ editorText: text });
+	});
+
+	it("round-trips a 20KB selected draft and omits an extreme draft without losing the outcome", async () => {
+		const exactText = "x".repeat(20_000);
+		const exactContext = context({ target: { type: "message", message: { role: "user", content: exactText } } });
+		await executeRpcTreeNavigation(encodeRpcTreeNavigationPayload(request()), exactContext);
+		expect(decodeRpcTreeNavigationOutcome(statusValue(exactContext)).editorText).toBe(exactText);
+
+		const extremeText = "x".repeat(MAX_TREE_NAVIGATION_EDITOR_TEXT_BYTES + 1);
+		const extremeContext = context({ target: { type: "message", message: { role: "user", content: extremeText } } });
+		await executeRpcTreeNavigation(encodeRpcTreeNavigationPayload(request()), extremeContext);
+		const extremeOutcome = decodeRpcTreeNavigationOutcome(statusValue(extremeContext));
+		expect(extremeOutcome).toMatchObject({ requestId, status: "committed", leafId: "target" });
+		expect(extremeOutcome).not.toHaveProperty("editorText");
 	});
 
 	it("does not return editor text for assistant or bookkeeping targets", async () => {

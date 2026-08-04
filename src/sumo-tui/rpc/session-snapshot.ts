@@ -10,8 +10,13 @@ export interface SessionSnapshotOptions {
 	readonly sessionId?: string;
 }
 
-function isCursorNotFound(error: unknown): boolean {
-	return error instanceof Error && /Entry not found:\s*/.test(error.message);
+function isCursorNotFound(error: unknown, cursor: string): boolean {
+	if (!(error instanceof Error)) return false;
+	const notFound = `Entry not found: ${cursor}`;
+	// This mirrors Pi's rpc-mode get_entries error exactly, while accepting the
+	// responseData wrapper used by the host. A different missing-entry error is
+	// not evidence that the since cursor was rejected and must propagate.
+	return error.message === notFound || error.message === `get_entries failed: ${notFound}`;
 }
 
 function mergeEntries(diskEntries: readonly SessionEntryLike[], deltaEntries: readonly SessionEntryLike[]): readonly SessionEntryLike[] {
@@ -67,7 +72,7 @@ export async function readAuthoritativeSessionSnapshot(
 	try {
 		delta = await controls.getEntries(disk.lastEntryId);
 	} catch (error) {
-		if (!isCursorNotFound(error)) throw error;
+		if (!isCursorNotFound(error, disk.lastEntryId)) throw error;
 		return fullSnapshot(controls);
 	}
 	if (!validLeafId(delta.leafId)) throw new Error("get_entries returned an invalid leafId");

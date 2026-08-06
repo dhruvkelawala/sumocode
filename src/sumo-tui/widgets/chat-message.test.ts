@@ -1,4 +1,4 @@
-import { Markdown } from "@earendil-works/pi-tui";
+import { Markdown, resetCapabilitiesCache, setCapabilities } from "@earendil-works/pi-tui";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { activeThemeColors, resetThemeRegistryForTests, setActiveTheme } from "../../themes/index.js";
 import { CATHEDRAL_TOKENS } from "../../tokens.js";
@@ -338,19 +338,24 @@ describe("ChatMessage", () => {
 		root.flexDirection = FLEX_DIRECTION_COLUMN;
 		root.width = 50;
 		root.height = 5;
-		ChatMessage.create(yoga, "sumo", "", root, FIXED_TIME, [
-			{ type: "markdown", text: "See [documentation](https://example.com/docs)." },
-		]);
+		setCapabilities({ images: null, trueColor: true, hyperlinks: true });
+		try {
+			ChatMessage.create(yoga, "sumo", "", root, FIXED_TIME, [
+				{ type: "markdown", text: "See [documentation](https://example.com/docs)." },
+			]);
 
-		root.yogaNode.calculateLayout(50, 5, DIRECTION_LTR);
-		const buffer = new CellBuffer(5, 50);
-		composite(root, buffer);
-		const ansi = cellRowToAnsi(buffer, 1);
+			root.yogaNode.calculateLayout(50, 5, DIRECTION_LTR);
+			const buffer = new CellBuffer(5, 50);
+			composite(root, buffer);
+			const ansi = cellRowToAnsi(buffer, 1);
 
-		expect(ansi).toContain("\x1b]8;;https://example.com/docs\x1b\\");
-		expect(ansi).toContain("documentation");
-		expect(ansi).toContain("\x1b]8;;\x1b\\");
-		root.dispose();
+			expect(ansi).toContain("\x1b]8;;https://example.com/docs\x1b\\");
+			expect(ansi).toContain("documentation");
+			expect(ansi).toContain("\x1b]8;;\x1b\\");
+		} finally {
+			resetCapabilitiesCache();
+			root.dispose();
+		}
 	});
 
 	it("renders a bullet list with a styled bullet", async () => {

@@ -20,8 +20,11 @@ import {
 import { createRpcChildFixture } from "./rpc-child-fixture.js";
 
 const CSI_U_ENTER = "\x1b[13u";
-const DOWN = "\x1b[B";
 const CTRL_O = "\x0f";
+
+function delay(ms: number): Promise<void> {
+	return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 let app: SpawnedPiPty | undefined;
 
@@ -280,7 +283,12 @@ describe("RPC durable Activity cards", () => {
 
 		app.sendInput(`/sessions${CSI_U_ENTER}`);
 		await waitForScreen(app, ({ text }) => text.includes("SESSION CONTROLS"), { cols, rows, timeoutMs: 5_000 });
-		app.sendInput(DOWN);
+		await delay(100);
+		for (const char of "switch") {
+			app.sendInput(char);
+			await delay(10);
+		}
+		await waitForScreen(app, ({ text }) => text.includes("❈   Switch session by path"), { cols, rows, timeoutMs: 5_000 });
 		app.sendInput(CSI_U_ENTER);
 		await waitForScreen(app, ({ text }) => text.toLowerCase().includes("path to session jsonl"), { cols, rows, timeoutMs: 5_000 });
 		app.sendInput("resume-a");

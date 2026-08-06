@@ -82,18 +82,18 @@ describe("pane subagent backend", () => {
 			expect(harness.events).toContainEqual({ kind: "pane-attached", pane: { agentName: "worker-abc", workspaceId: "w1", tabId: "w1:t1", paneId: "w1:p2" } });
 			expect(harness.fs.files.get(harness.paths.promptFile)).toBe("do the work");
 			const launched = (harness.host.startAgentPane as ReturnType<typeof vi.fn>).mock.calls[0]?.[1] as { shellCommand: string };
+			expect(launched.shellCommand).toBe("exec '/tmp/subagents/sa-1-1234/run.sh'");
+			const script = harness.fs.files.get(harness.paths.scriptFile) ?? "";
 			// Visible children must inherit the pane's real stdout TTY. Stderr is
 			// redirected directly to the diagnostics log; a combined-output pipe would
 			// make `sumocode` select its non-interactive direct-Pi path.
-			expect(launched.shellCommand).not.toContain("tee");
-			expect(launched.shellCommand).toContain("( cd '/repo'");
-			expect(launched.shellCommand).toContain("exec sumocode task");
-			expect(launched.shellCommand).toContain("2>> '/tmp/subagents/sa-1-1234/output.log'");
-			// The outer wrapper must guarantee the exit marker on ANY process death
-			// (cd failure, crash, pane close) — first-writer-wins with the child.
-			expect(harness.host.startAgentPane).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
-				shellCommand: expect.stringMatching(/trap '__sumo_finish "\$\?"' EXIT.*trap '__sumo_finish 129' HUP/s),
-			}));
+			expect(script).not.toContain("tee");
+			expect(script).toContain("( cd '/repo'");
+			expect(script).toContain("exec sumocode 'task'");
+			expect(script).toContain("'--task-dir' '/tmp/subagents/sa-1-1234'");
+			expect(script).toContain("2>> '/tmp/subagents/sa-1-1234/output.log'");
+			// The private script guarantees the exit marker on any process death.
+			expect(script).toMatch(/trap '__sumo_finish "\$\?"' EXIT.*trap '__sumo_finish 129' HUP/s);
 			harness.fs.files.set(harness.paths.responseFile, "final answer\n");
 			harness.fs.files.set(harness.paths.exitFile, "0\n");
 
@@ -219,7 +219,7 @@ describe("pane subagent backend", () => {
 		const { promisify } = await import("node:util");
 		const { mkdtempSync, existsSync: realExists, readFileSync: realRead, rmSync } = await import("node:fs");
 		const { tmpdir } = await import("node:os");
-		const { join: joinPath } = await import("node:path");
+		const { dirname, join: joinPath } = await import("node:path");
 		const run = promisify(execFile);
 		const dir = mkdtempSync(joinPath(tmpdir(), "sumo-exit-guard-"));
 		try {
@@ -248,7 +248,8 @@ describe("pane subagent backend", () => {
 			await flushPromises();
 			const started = (host.startAgentPane as ReturnType<typeof vi.fn>).mock.calls[0]?.[1] as { shellCommand: string };
 			await run("bash", ["-c", started.shellCommand]).catch(() => {});
-			const exitFile = [...(started.shellCommand.match(/__sumo_exit_file='([^']+)'/) ?? [])][1]!;
+			const scriptFile = [...(started.shellCommand.match(/^exec '([^']+)'$/) ?? [])][1]!;
+			const exitFile = joinPath(dirname(scriptFile), "exit.code");
 			expect(realExists(exitFile)).toBe(true);
 			expect(realRead(exitFile, "utf8")).toBe("1");
 			child.interrupt();

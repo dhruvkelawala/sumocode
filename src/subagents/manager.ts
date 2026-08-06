@@ -464,7 +464,7 @@ export class SubagentManager {
 		if (event.kind === "run-settled") {
 			// A visible non-isolated child that FAILS before any pane attached is
 			// evidence the cached subagents tab may be gone (e.g. the human closed
-			// it — `herdr agent start --tab <dead>` fails, and no pane event ever
+			// it — splitting a closed cached tab fails, and no pane event ever
 			// fired). Invalidate the cache so the next spawn re-plans a fresh tab
 			// instead of failing forever. Evidence-based, not error-text sniffing;
 			// the worst case for a transient failure is one extra tab (cosmetic).

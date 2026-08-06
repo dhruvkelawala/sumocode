@@ -42,6 +42,19 @@ describe("frame diff", () => {
 		expect(patches[0]).toEqual({ row: 0, startCol: 3, ansi: "X", type: "row" });
 	});
 
+	it("repaints cells when only their hyperlink target changes", () => {
+		const previous = frame(["link"]);
+		const next = frame(["link"]);
+		for (let col = 0; col < 4; col += 1) {
+			const cell = next.getCell(0, col);
+			next.setCell(0, col, { ...cell, hyperlink: "https://example.com" });
+		}
+
+		const patches = diffFrames(previous, next);
+		expect(patches).toHaveLength(1);
+		expect(patches[0]?.ansi).toContain("\x1b]8;;https://example.com\x1b\\link\x1b]8;;\x1b\\");
+	});
+
 	it("falls back to full-row repaint when the change starts at column 0", () => {
 		const previous = frame(["abcdef"]);
 		const next = frame(["XBCdef"]);

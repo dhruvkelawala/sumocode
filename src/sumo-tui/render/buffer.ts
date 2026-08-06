@@ -38,7 +38,7 @@ function clampRect(rect: Rect, rows: number, cols: number): Rect {
 }
 
 function sameStyle(left: Cell, right: Cell): boolean {
-	return left.fg === right.fg && left.bg === right.bg && attrsEqual(left.attrs, right.attrs);
+	return left.fg === right.fg && left.bg === right.bg && left.hyperlink === right.hyperlink && attrsEqual(left.attrs, right.attrs);
 }
 
 export class CellBuffer {
@@ -48,6 +48,7 @@ export class CellBuffer {
 	private readonly extendedChars = new Map<number, string>();
 	private readonly fg = new Map<number, string>();
 	private readonly bg = new Map<number, string>();
+	private readonly hyperlinks = new Map<number, string>();
 	private readonly attrs = new Map<number, number>();
 	private readonly selectionMeta = new Map<number, SelectionCellMeta>();
 	private defaultBg: string | null = null;
@@ -88,6 +89,7 @@ export class CellBuffer {
 		const nextExtended = new Map<number, string>();
 		const nextFg = new Map<number, string>();
 		const nextBg = new Map<number, string>();
+		const nextHyperlinks = new Map<number, string>();
 		const nextAttrs = new Map<number, number>();
 		const nextSelectionMeta = new Map<number, SelectionCellMeta>();
 		const totalCells = nextRows * nextCols;
@@ -111,6 +113,8 @@ export class CellBuffer {
 				if (fg !== undefined) nextFg.set(newIndex, fg);
 				const bg = this.bg.get(oldIndex);
 				if (bg !== undefined) nextBg.set(newIndex, bg);
+				const hyperlink = this.hyperlinks.get(oldIndex);
+				if (hyperlink !== undefined) nextHyperlinks.set(newIndex, hyperlink);
 				const attrs = this.attrs.get(oldIndex);
 				if (attrs !== undefined) nextAttrs.set(newIndex, attrs);
 				const selectionMeta = this.selectionMeta.get(oldIndex);
@@ -124,11 +128,13 @@ export class CellBuffer {
 		this.extendedChars.clear();
 		this.fg.clear();
 		this.bg.clear();
+		this.hyperlinks.clear();
 		this.attrs.clear();
 		this.selectionMeta.clear();
 		for (const [key, value] of nextExtended) this.extendedChars.set(key, value);
 		for (const [key, value] of nextFg) this.fg.set(key, value);
 		for (const [key, value] of nextBg) this.bg.set(key, value);
+		for (const [key, value] of nextHyperlinks) this.hyperlinks.set(key, value);
 		for (const [key, value] of nextAttrs) this.attrs.set(key, value);
 		for (const [key, value] of nextSelectionMeta) this.selectionMeta.set(key, value);
 	}
@@ -153,6 +159,7 @@ export class CellBuffer {
 			char,
 			fg: this.fg.get(index),
 			bg: this.bg.get(index),
+			hyperlink: this.hyperlinks.get(index),
 			attrs: maskToAttrs(this.attrs.get(index) ?? 0),
 		};
 	}
@@ -235,7 +242,7 @@ export class CellBuffer {
 					continue;
 				}
 				if (col + glyphWidth > endCol) return;
-				this.setCell(row, col, { char: glyph, fg: style.fg, bg: style.bg, attrs: createAttrs(style.attrs) });
+				this.setCell(row, col, { char: glyph, fg: style.fg, bg: style.bg, hyperlink: style.hyperlink, attrs: createAttrs(style.attrs) });
 				col += glyphWidth;
 			}
 			index = nextEscape;
@@ -261,6 +268,7 @@ export class CellBuffer {
 		for (const [key, value] of this.extendedChars) next.extendedChars.set(key, value);
 		for (const [key, value] of this.fg) next.fg.set(key, value);
 		for (const [key, value] of this.bg) next.bg.set(key, value);
+		for (const [key, value] of this.hyperlinks) next.hyperlinks.set(key, value);
 		for (const [key, value] of this.attrs) next.attrs.set(key, value);
 		for (const [key, value] of this.selectionMeta) next.selectionMeta.set(key, value);
 		return next;
@@ -288,9 +296,19 @@ export class CellBuffer {
 			const bel = input.indexOf("\x07", offset + 2);
 			const st = input.indexOf("\x1b\\", offset + 2);
 			const terminator = bel === -1 ? st : st === -1 ? bel : Math.min(bel, st);
-			return terminator === -1 ? input.length : terminator + (terminator === st ? 2 : 1);
+			if (terminator === -1) return input.length;
+			if (next === "]") this.applyOsc(input.slice(offset + 2, terminator), style);
+			return terminator + (terminator === st ? 2 : 1);
 		}
 		return Math.min(input.length, offset + 2);
+	}
+
+	private applyOsc(payload: string, style: Omit<Cell, "char">): void {
+		if (!payload.startsWith("8;")) return;
+		const uriStart = payload.indexOf(";", 2);
+		if (uriStart === -1) return;
+		const uri = payload.slice(uriStart + 1);
+		style.hyperlink = uri.length > 0 && !/[\x00-\x1f\x7f]/.test(uri) ? uri : undefined;
 	}
 
 	private applySgr(params: string, style: Omit<Cell, "char">): void {
@@ -391,6 +409,7 @@ export class CellBuffer {
 		else this.fg.delete(index);
 		if (this.defaultBg) this.bg.set(index, this.defaultBg);
 		else this.bg.delete(index);
+		this.hyperlinks.delete(index);
 		this.attrs.delete(index);
 		this.selectionMeta.delete(index);
 	}
@@ -400,6 +419,8 @@ export class CellBuffer {
 		else this.fg.delete(index);
 		if (source.bg) this.bg.set(index, source.bg);
 		else if (!this.bg.has(index) && this.defaultBg) this.bg.set(index, this.defaultBg);
+		if (source.hyperlink) this.hyperlinks.set(index, source.hyperlink);
+		else this.hyperlinks.delete(index);
 		const mask = attrsToMask(source.attrs);
 		if (mask === 0) this.attrs.delete(index);
 		else this.attrs.set(index, mask);

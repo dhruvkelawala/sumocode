@@ -1,10 +1,11 @@
-import { Markdown } from "@earendil-works/pi-tui";
+import { Markdown, resetCapabilitiesCache, setCapabilities } from "@earendil-works/pi-tui";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { activeThemeColors, resetThemeRegistryForTests, setActiveTheme } from "../../themes/index.js";
 import { CATHEDRAL_TOKENS } from "../../tokens.js";
 import { fgHex, stripAnsi } from "../cathedral/ansi.js";
 import { SumoNode } from "../layout/node.js";
 import { DIRECTION_LTR, FLEX_DIRECTION_COLUMN, loadYoga } from "../layout/yoga.js";
+import { cellRowToAnsi } from "../render/ansi-writer.js";
 import { CellBuffer } from "../render/buffer.js";
 import { composite } from "../render/compositor.js";
 import { SelectionController } from "../input/selection.js";
@@ -329,6 +330,32 @@ describe("ChatMessage", () => {
 		expect(plain).not.toContain("**bold**");
 		expect(raw).toContain("\x1b[1m");
 		root.dispose();
+	});
+
+	it("preserves Markdown links as terminal OSC 8 hyperlinks", async () => {
+		const yoga = await loadYoga();
+		const root = new SumoNode(yoga.Node.create());
+		root.flexDirection = FLEX_DIRECTION_COLUMN;
+		root.width = 50;
+		root.height = 5;
+		setCapabilities({ images: null, trueColor: true, hyperlinks: true });
+		try {
+			ChatMessage.create(yoga, "sumo", "", root, FIXED_TIME, [
+				{ type: "markdown", text: "See [documentation](https://example.com/docs)." },
+			]);
+
+			root.yogaNode.calculateLayout(50, 5, DIRECTION_LTR);
+			const buffer = new CellBuffer(5, 50);
+			composite(root, buffer);
+			const ansi = cellRowToAnsi(buffer, 1);
+
+			expect(ansi).toContain("\x1b]8;;https://example.com/docs\x1b\\");
+			expect(ansi).toContain("documentation");
+			expect(ansi).toContain("\x1b]8;;\x1b\\");
+		} finally {
+			resetCapabilitiesCache();
+			root.dispose();
+		}
 	});
 
 	it("renders a bullet list with a styled bullet", async () => {

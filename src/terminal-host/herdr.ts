@@ -9,11 +9,11 @@ import type {
 } from "./types.js";
 
 interface HerdrEnvelope { result?: unknown }
-interface HerdrAgentResult { agent?: { pane_id?: string; workspace_id?: string; tab_id?: string } }
-interface HerdrPaneInfoResult { pane?: { tab_id?: string } }
-interface HerdrTabResult { tab?: { tab_id?: string }; tab_id?: string }
-interface HerdrWorktreeResult { root_pane?: { pane_id?: string; workspace_id?: string }; workspace?: { workspace_id?: string } }
-interface HerdrPaneListResult { panes?: Array<{ pane_id?: string; workspace_id?: string }> }
+interface HerdrPaneInfo { pane_id?: string; workspace_id?: string; tab_id?: string }
+interface HerdrPaneInfoResult { pane?: HerdrPaneInfo }
+interface HerdrTabResult { tab?: { tab_id?: string; workspace_id?: string }; tab_id?: string; root_pane?: HerdrPaneInfo }
+interface HerdrWorktreeResult { root_pane?: HerdrPaneInfo; workspace?: { workspace_id?: string } }
+interface HerdrPaneListResult { panes?: HerdrPaneInfo[] }
 
 function parseEnvelope<T>(stdout: string): HostResult<T> {
 	try {
@@ -30,18 +30,6 @@ const execFailure = (operation: string, result: { code: number; stderr: string; 
 });
 
 /**
- * Resolve the tab that owns the pane THIS SumoCode process runs in, so new
- * splits are anchored beside the orchestrator instead of wherever herdr's
- * default placement puts them.
- *
- * Without an explicit `--tab`, `herdr agent start` chooses its own placement
- * (observed live: a different workspace entirely — the operator had to hunt
- * for the spawned executor pane). `HERDR_PANE_ID` identifies our pane;
- * `herdr pane get` maps it to its `tab_id`. Best-effort: on any failure we
- * return undefined and fall back to herdr's default placement rather than
- * failing the spawn.
- */
-/**
  * Structural workspace anchor: `HERDR_PANE_ID` is `<workspace>:<pane>` (e.g.
  * "w7:pB"). Without an explicit `--workspace`, `herdr tab create` targets the
  * FOCUSED workspace — which may be a different project entirely when the
@@ -53,22 +41,7 @@ function resolveCallerWorkspaceId(env: NodeJS.ProcessEnv): string | undefined {
 	const paneId = env.HERDR_PANE_ID;
 	if (!paneId) return undefined;
 	const workspace = paneId.split(":")[0];
-	return workspace && /^w\d+$/.test(workspace) ? workspace : undefined;
-}
-
-async function resolveCallerTabId(pi: PiExecLike, env: NodeJS.ProcessEnv): Promise<string | undefined> {
-	const paneId = env.HERDR_PANE_ID;
-	if (!paneId) return undefined;
-	try {
-		const result = await pi.exec("herdr", ["pane", "get", paneId], { timeout: 5000 });
-		if (result.code !== 0) return undefined;
-		const parsed = parseEnvelope<HerdrPaneInfoResult>(result.stdout);
-		if (!parsed.ok) return undefined;
-		const tabId = parsed.pane?.tab_id;
-		return typeof tabId === "string" && tabId.length > 0 ? tabId : undefined;
-	} catch {
-		return undefined;
-	}
+	return workspace && /^w[0-9A-Za-z]+$/.test(workspace) ? workspace : undefined;
 }
 
 function workspaceIdFromWorktreeResult(parsed: HerdrWorktreeResult): string | undefined {
@@ -102,73 +75,89 @@ const slugAgentPrefix = (prefix: string): string => prefix
 	.replace(/^-+|-+$/g, "")
 	.slice(0, 40) || "sumocode";
 
-/**
- * Per-spawn unique herdr agent name. `herdr agent start <name>` rejects a name
- * that is already used by a live agent (`agent_name_taken`). Preserve the
- * caller's readable prefix while adding timestamp + random entropy.
- */
+/** Unique child label used in SumoCode snapshots and pane metadata. */
 export function uniqueHerdrAgentName(prefix = "sumocode"): string {
 	return `${slugAgentPrefix(prefix)}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
 }
 
-async function startAgentPane(
-	pi: PiExecLike,
-	options: StartAgentPaneOptions,
-): Promise<HostResult<StartedAgentPane>> {
-	let placementArgs: string[];
+async function listWorkspacePanes(pi: PiExecLike, workspaceId: string): Promise<HostResult<{ panes: HerdrPaneInfo[] }>> {
+	const result = await pi.exec("herdr", ["pane", "list", "--workspace", workspaceId], { timeout: 5000 });
+	if (result.code !== 0) return execFailure("herdr pane list", result);
+	const parsed = parseEnvelope<HerdrPaneListResult>(result.stdout);
+	if (!parsed.ok) return parsed;
+	return { ok: true, panes: parsed.panes ?? [] };
+}
+
+async function paneForTab(pi: PiExecLike, tabId: string): Promise<HostResult<{ pane: HerdrPaneInfo }>> {
+	const workspaceId = tabId.split(":")[0];
+	if (!workspaceId) return { ok: false, error: `invalid herdr tab id: ${tabId}` };
+	const listed = await listWorkspacePanes(pi, workspaceId);
+	if (!listed.ok) return listed;
+	const pane = listed.panes.find((candidate) => candidate.tab_id === tabId);
+	return pane?.pane_id ? { ok: true, pane } : { ok: false, error: `herdr returned no pane for tab ${tabId}` };
+}
+
+async function splitPane(pi: PiExecLike, anchorPaneId: string, direction: SplitDirection, cwd: string): Promise<HostResult<{ pane: HerdrPaneInfo }>> {
+	const result = await pi.exec("herdr", ["pane", "split", anchorPaneId, "--direction", direction, "--cwd", cwd, "--no-focus"], { timeout: 5000 });
+	if (result.code !== 0) return execFailure("herdr pane split", result);
+	const parsed = parseEnvelope<HerdrPaneInfoResult>(result.stdout);
+	if (!parsed.ok) return parsed;
+	return parsed.pane?.pane_id ? { ok: true, pane: parsed.pane } : { ok: false, error: "herdr pane split did not return a pane_id" };
+}
+
+async function createTabPane(pi: PiExecLike, cwd: string, label: string): Promise<HostResult<{ pane: HerdrPaneInfo }>> {
+	const workspaceId = resolveCallerWorkspaceId(process.env);
+	const workspaceArgs = workspaceId ? ["--workspace", workspaceId] : [];
+	const result = await pi.exec("herdr", ["tab", "create", ...workspaceArgs, "--cwd", cwd, "--label", label, "--no-focus"], { timeout: 5000 });
+	if (result.code !== 0) return execFailure("herdr tab create", result);
+	const parsed = parseEnvelope<HerdrTabResult>(result.stdout);
+	if (!parsed.ok) return parsed;
+	if (parsed.root_pane?.pane_id) return { ok: true, pane: parsed.root_pane };
+	const tabId = parsed.tab?.tab_id ?? parsed.tab_id;
+	if (!tabId) return { ok: false, error: "herdr tab create did not return a tab_id" };
+	return paneForTab(pi, tabId);
+}
+
+async function runPaneCommand(pi: PiExecLike, pane: HerdrPaneInfo, command: string): Promise<HostResult<{}>> {
+	if (!pane.pane_id) return { ok: false, error: "herdr pane has no pane_id" };
+	const result = await pi.exec("herdr", ["pane", "run", pane.pane_id, command], { timeout: 5000 });
+	return result.code === 0 ? { ok: true } : execFailure("herdr pane run", result);
+}
+
+async function startAgentPane(pi: PiExecLike, options: StartAgentPaneOptions): Promise<HostResult<StartedAgentPane>> {
+	let target: HostResult<{ pane: HerdrPaneInfo }>;
 	if (options.placement.kind === "workspace") {
-		placementArgs = ["--workspace", options.placement.workspaceId];
+		let anchorPaneId = options.placement.paneId;
+		if (!anchorPaneId) {
+			const listed = await listWorkspacePanes(pi, options.placement.workspaceId);
+			if (!listed.ok) return listed;
+			anchorPaneId = listed.panes[0]?.pane_id;
+		}
+		if (!anchorPaneId) return { ok: false, error: `herdr returned no pane for workspace ${options.placement.workspaceId}` };
+		target = await splitPane(pi, anchorPaneId, "right", options.cwd);
+		if (target.ok) {
+			// Keep a shell alive after the child exits so Herdr preserves the
+			// worktree workspace for inspection. Moving it is cosmetic; if the move
+			// fails, the shell stays beside the child and still keeps the workspace.
+			await pi.exec("herdr", ["pane", "move", anchorPaneId, "--new-tab", "--workspace", options.placement.workspaceId, "--label", "shell", "--no-focus"], { timeout: 5000 }).catch(() => undefined);
+		}
 	} else if (options.placement.kind === "tab") {
-		placementArgs = ["--tab", options.placement.tabId, "--split", options.placement.direction];
+		const anchor = await paneForTab(pi, options.placement.tabId);
+		target = anchor.ok && anchor.pane.pane_id
+			? await splitPane(pi, anchor.pane.pane_id, options.placement.direction, options.cwd)
+			: anchor;
 	} else {
-		const workspaceId = resolveCallerWorkspaceId(process.env);
-		const workspaceArgs = workspaceId ? ["--workspace", workspaceId] : [];
-		const tabResult = await pi.exec(
-			"herdr",
-			// NOTE: tab create has no --json flag (herdr 0.7.4 rejects it with
-			// "unknown option") — it emits the JSON envelope by default.
-			["tab", "create", ...workspaceArgs, "--label", options.placement.label, "--no-focus"],
-			{ timeout: 5000 },
-		);
-		if (tabResult.code !== 0) return execFailure("herdr tab create", tabResult);
-		const tabParsed = parseEnvelope<HerdrTabResult>(tabResult.stdout);
-		if (!tabParsed.ok) return tabParsed;
-		const tabId = tabParsed.tab?.tab_id ?? tabParsed.tab_id;
-		if (!tabId) return { ok: false, error: "herdr tab create did not return a tab_id" };
-		placementArgs = ["--tab", tabId];
+		target = await createTabPane(pi, options.cwd, options.placement.label);
 	}
+	if (!target.ok) return target;
+	const started = await runPaneCommand(pi, target.pane, options.shellCommand);
+	if (!started.ok) return started;
 
 	const agentName = uniqueHerdrAgentName(options.name);
-	const result = await pi.exec(
-		"herdr",
-		["agent", "start", agentName, ...placementArgs, "--cwd", options.cwd, "--no-focus", "--", "bash", "-lc", options.shellCommand],
-		{ timeout: 5000 },
-	);
-	if (result.code !== 0) return execFailure("herdr agent start", result);
-	const parsed = parseEnvelope<HerdrAgentResult>(result.stdout);
-	if (!parsed.ok) return parsed;
-	const paneId = parsed.agent?.pane_id;
-	if (!paneId) return { ok: false, error: "herdr agent start did not return a pane_id" };
-	const workspaceId = parsed.agent?.workspace_id;
-	const tabId = parsed.agent?.tab_id;
-
-	// A native worktree workspace starts with a bootstrap shell in the same tab.
-	// Keep that shell so the workspace/worktree survives child completion, but
-	// move it to a background tab so the agent is the only visible pane.
-	if (options.placement.kind === "workspace" && options.placement.paneId) {
-		try {
-			// Verified against herdr 0.7.4: `pane move <id> --new-tab`
-			// accepts workspace, label, and focus controls. This is cosmetic: older
-			// hosts may leave the bootstrap shell split beside a healthy agent.
-			await pi.exec("herdr", ["pane", "move", options.placement.paneId, "--new-tab", "--workspace", options.placement.workspaceId, "--label", "shell", "--no-focus"], { timeout: 5000 });
-		} catch {
-			// Never sacrifice a running child because presentation cleanup failed.
-		}
-	}
-	// Pane labels are presentation-only. A rename failure must not turn a real,
-	// already-running child into a reported spawn failure.
+	const paneId = target.pane.pane_id!;
+	const workspaceId = target.pane.workspace_id ?? (options.placement.kind === "workspace" ? options.placement.workspaceId : undefined);
+	const tabId = target.pane.tab_id ?? (options.placement.kind === "tab" ? options.placement.tabId : undefined);
 	await pi.exec("herdr", ["pane", "rename", paneId, options.name], { timeout: 5000 }).catch(() => undefined);
-
 	return {
 		ok: true,
 		pane: { host: "herdr", paneId, workspaceId },
@@ -192,19 +181,15 @@ export const herdrTerminalHost = {
 		}
 	},
 	async openCommandInSplit(pi: PiExecLike, direction: SplitDirection, options: { cwd: string; shellCommand: string }) {
-		const tabId = await resolveCallerTabId(pi, process.env);
-		const tabArgs = tabId ? ["--tab", tabId] : [];
-		const result = await pi.exec(
-			"herdr",
-			["agent", "start", uniqueHerdrAgentName(), "--cwd", options.cwd, ...tabArgs, "--split", direction, "--no-focus", "--", "bash", "-lc", options.shellCommand],
-			{ timeout: 5000 },
-		);
-		if (result.code !== 0) return execFailure("herdr agent start", result);
-		const parsed = parseEnvelope<HerdrAgentResult>(result.stdout);
-		if (!parsed.ok) return parsed;
-		const paneId = parsed.agent?.pane_id;
-		if (!paneId) return { ok: false, error: "herdr agent start did not return a pane_id" };
-		return { ok: true, pane: { host: "herdr", paneId, workspaceId: parsed.agent?.workspace_id } };
+		const callerPaneId = process.env.HERDR_PANE_ID;
+		const target = callerPaneId
+			? await splitPane(pi, callerPaneId, direction, options.cwd)
+			: await createTabPane(pi, options.cwd, "sumocode");
+		if (!target.ok) return target;
+		const started = await runPaneCommand(pi, target.pane, options.shellCommand);
+		if (!started.ok) return started;
+		const paneId = target.pane.pane_id!;
+		return { ok: true, pane: { host: "herdr", paneId, workspaceId: target.pane.workspace_id } };
 	},
 	async openWorktreeWorkspace(pi: PiExecLike, options: { branch: string; baseRef: string; path: string; label: string; shellCommand: string; sourceCwd: string; focus?: boolean }) {
 		const result = await pi.exec(

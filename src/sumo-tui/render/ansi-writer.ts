@@ -7,17 +7,18 @@ import { parseHexColor } from "./truecolor.js";
 interface StyleState {
 	fg?: string;
 	bg?: string;
+	hyperlink?: string;
 	attrs: CellAttrs;
 }
 
 const DEFAULT_STYLE: StyleState = { attrs: createAttrs() };
 
-function styleEqual(left: StyleState, right: StyleState): boolean {
+function visualStyleEqual(left: StyleState, right: StyleState): boolean {
 	return left.fg === right.fg && left.bg === right.bg && attrsEqual(left.attrs, right.attrs);
 }
 
 function styleFromCell(cell: Cell): StyleState {
-	return { fg: cell.fg, bg: cell.bg, attrs: createAttrs(cell.attrs) };
+	return { fg: cell.fg, bg: cell.bg, hyperlink: cell.hyperlink, attrs: createAttrs(cell.attrs) };
 }
 
 function sgrForStyle(style: StyleState): string {
@@ -35,7 +36,11 @@ function sgrForStyle(style: StyleState): string {
 }
 
 function isDefaultStyle(style: StyleState): boolean {
-	return styleEqual(style, DEFAULT_STYLE);
+	return visualStyleEqual(style, DEFAULT_STYLE);
+}
+
+function osc8(uri?: string): string {
+	return `\x1b]8;;${uri ?? ""}\x1b\\`;
 }
 
 /**
@@ -82,23 +87,27 @@ export function cellRowSliceToAnsi(buffer: CellBuffer, row: number, startCol: nu
 		const cell = buffer.getCell(row, col);
 		if (cell.char === "") continue;
 		const nextStyle = styleFromCell(cell);
-		if (!styleEqual(current, nextStyle)) {
+		if (current.hyperlink !== nextStyle.hyperlink) {
+			if (current.hyperlink) output += osc8();
+			if (nextStyle.hyperlink) output += osc8(nextStyle.hyperlink);
+		}
+		if (!visualStyleEqual(current, nextStyle)) {
 			if (styleNeedsReset(current, nextStyle)) {
 				output += "\x1b[0m";
-				current = DEFAULT_STYLE;
 				styled = false;
 			}
 			if (!isDefaultStyle(nextStyle)) {
 				output += sgrForStyle(nextStyle);
 				styled = true;
 			}
-			current = nextStyle;
 		}
+		current = nextStyle;
 		output += cell.char;
 		const width = visibleWidth(cell.char);
 		if (width > 1) col += width - 1;
 	}
 
+	if (current.hyperlink) output += osc8();
 	if (styled) output += "\x1b[0m";
 	return output;
 }

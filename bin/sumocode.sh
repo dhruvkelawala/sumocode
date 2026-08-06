@@ -61,6 +61,7 @@ COMMANDS
 
   task <prompt> [path]
   task --prompt-file <abs-path> [path]
+  task --task-dir <abs-path> [path]
       Open SumoCode and immediately start an agent turn on <prompt>.
       Skips the splash screen, forwards <prompt> to Pi as the kickoff user
       message, and stays interactive afterwards. Designed for the orchestrator
@@ -106,6 +107,10 @@ OPTIONS
       contents as the kickoff user message. The file must exist when the
       wrapper runs. Contents are read as a single argument (newlines and
       shell metacharacters survive intact).
+
+  --task-dir <path>
+      Internal orchestration contract for visible agents. Reads prompt.txt
+      from the directory and writes task lifecycle files alongside it.
 
   --no-sumo-tui
       Bypass the foreground RPC host for this launch and execute Pi directly
@@ -236,6 +241,7 @@ IS_TASK_LAUNCH=0
 FORCE_DIRECT_PI=0
 DIAG_FILE="${SUMO_TUI_DIAG_FILE:-}"
 PROMPT_FILE=""
+TASK_DIR=""
 SUMOCODE_ARGS=()
 while [[ $# -gt 0 ]]; do
 	case "$1" in
@@ -272,6 +278,16 @@ while [[ $# -gt 0 ]]; do
 		--prompt-file=*)
 			PROMPT_FILE="${1#--prompt-file=}"
 			[[ -n "${PROMPT_FILE}" ]] || usage_error "--prompt-file requires a path."
+			shift
+			;;
+		--task-dir)
+			[[ $# -ge 2 ]] || usage_error "--task-dir requires a path."
+			TASK_DIR="$2"
+			shift 2
+			;;
+		--task-dir=*)
+			TASK_DIR="${1#--task-dir=}"
+			[[ -n "${TASK_DIR}" ]] || usage_error "--task-dir requires a path."
 			shift
 			;;
 		--no-sumo-tui)
@@ -317,6 +333,18 @@ if [[ "${COMMAND}" == "diag" && "${#SUMOCODE_ARGS[@]}" -gt 1 ]]; then
 fi
 if [[ -n "${PROMPT_FILE}" && "${COMMAND}" != "task" ]]; then
 	usage_error "--prompt-file is only valid with the 'task' subcommand."
+fi
+if [[ -n "${TASK_DIR}" && "${COMMAND}" != "task" ]]; then
+	usage_error "--task-dir is only valid with the 'task' subcommand."
+fi
+if [[ -n "${TASK_DIR}" ]]; then
+	[[ -d "${TASK_DIR}" ]] || usage_error "--task-dir path does not exist: ${TASK_DIR}"
+	[[ -z "${PROMPT_FILE}" ]] || usage_error "--task-dir cannot be combined with --prompt-file."
+	PROMPT_FILE="${TASK_DIR}/prompt.txt"
+	export SUMOCODE_TASK_RESPONSE_FILE="${TASK_DIR}/response.md"
+	export SUMOCODE_TASK_EXIT_FILE="${TASK_DIR}/exit.code"
+	export SUMOCODE_TASK_STARTED_FILE="${TASK_DIR}/started.marker"
+	export SUMOCODE_TASK_DIAG_FILE="${TASK_DIR}/diag.jsonl"
 fi
 if [[ "${COMMAND}" == "task" ]]; then
 	if [[ -n "${PROMPT_FILE}" ]]; then

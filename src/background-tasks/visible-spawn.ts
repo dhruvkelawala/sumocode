@@ -27,7 +27,6 @@ interface VisibleTaskCommandOptions {
 
 interface VisibleAgentCommandOptions {
 	cwd: string;
-	runner?: "sumocode";
 	paths: VisibleTaskPaths;
 	model?: string;
 	thinking?: string;
@@ -83,33 +82,25 @@ export function buildVisibleTaskScript(options: VisibleTaskCommandOptions): stri
  * Shared launch command for the retained SubagentManager's visible backend.
  * BackgroundTaskManager no longer calls this path.
  */
-export function buildVisibleAgentCommand(options: VisibleAgentCommandOptions): string {
-	const envPrefix = [
-		`SUMOCODE_TASK_RESPONSE_FILE=${shellEscape(options.paths.responseFile)}`,
-		`SUMOCODE_TASK_EXIT_FILE=${shellEscape(options.paths.exitFile)}`,
-		`SUMOCODE_TASK_STARTED_FILE=${shellEscape(options.paths.markerFile)}`,
-		`SUMOCODE_TASK_DIAG_FILE=${shellEscape(options.paths.diagFile)}`,
-	];
-	const modelFlags = options.model ? ["--model", shellEscape(options.model)] : [];
-	const thinkingFlags = options.thinking ? ["--thinking", shellEscape(options.thinking)] : [];
+function buildVisibleAgentArgs(options: VisibleAgentCommandOptions): string[] {
+	const modelFlags = options.model ? ["--model", options.model] : [];
+	const thinkingFlags = options.thinking ? ["--thinking", options.thinking] : [];
 	const toolsFlags = options.tools === undefined
 		? []
 		: options.tools.length === 0
 			? ["--no-tools"]
-			: ["--tools", shellEscape(options.tools.join(","))];
+			: ["--tools", options.tools.join(",")];
+	return ["task", ...modelFlags, ...thinkingFlags, ...toolsFlags, "--task-dir", dirname(options.paths.promptFile)];
+}
+
+export function buildVisibleAgentCommand(options: VisibleAgentCommandOptions): string {
 	return [
 		"cd",
 		shellEscape(options.cwd),
 		"&&",
-		...envPrefix,
 		"exec",
 		"sumocode",
-		"task",
-		...modelFlags,
-		...thinkingFlags,
-		...toolsFlags,
-		"--prompt-file",
-		shellEscape(options.paths.promptFile),
+		...buildVisibleAgentArgs(options).map(shellEscape),
 	].join(" ");
 }
 

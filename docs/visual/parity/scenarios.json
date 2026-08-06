@@ -213,6 +213,66 @@
 			]
 		},
 		{
+			"id": "tree-selector-component",
+			"lane": "component",
+			"status": "review",
+			"component": {
+				"kind": "tree-selector"
+			},
+			"dimensions": {
+				"cols": 100,
+				"rows": 18
+			},
+			"bibleTarget": "scene-tree-selector.png",
+			"crops": [
+				{
+					"id": "full",
+					"targetCrop": "full",
+					"runtimeCrop": "full"
+				}
+			]
+		},
+		{
+			"id": "tree-summary-choice-component",
+			"lane": "component",
+			"status": "review",
+			"component": {
+				"kind": "tree-summary-choice"
+			},
+			"dimensions": {
+				"cols": 100,
+				"rows": 13
+			},
+			"bibleTarget": "scene-tree-summary-choice.png",
+			"crops": [
+				{
+					"id": "full",
+					"targetCrop": "full",
+					"runtimeCrop": "full"
+				}
+			]
+		},
+		{
+			"id": "tree-custom-summary-editor-component",
+			"lane": "component",
+			"status": "review",
+			"component": {
+				"kind": "tree-custom-summary-editor"
+			},
+			"dimensions": {
+				"cols": 100,
+				"rows": 6
+			},
+			"bibleTarget": "scene-tree-custom-summary-editor.png",
+			"crops": [
+				{
+					"id": "full",
+					"targetCrop": "full",
+					"runtimeCrop": "full"
+				}
+			]
+		},
+		{
 			"id": "splash-runtime",
 			"lane": "runtime",
 			"status": "review",

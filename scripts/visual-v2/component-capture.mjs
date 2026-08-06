@@ -26,6 +26,9 @@ async function renderComponentLines(kind, scenario) {
 	if (kind === "footer-ready") return renderFooterReady(scenario.dimensions.cols);
 	if (kind === "top-bar-default") return renderTopBarDefault(scenario.dimensions.cols);
 	if (kind === "sidebar-editorial") return renderSidebarEditorial(scenario.dimensions.cols);
+	if (kind === "tree-selector") return renderTreeSelector(scenario.dimensions.cols);
+	if (kind === "tree-summary-choice") return renderTreeSummaryChoice(scenario.dimensions.cols);
+	if (kind === "tree-custom-summary-editor") return renderTreeCustomSummaryEditor(scenario.dimensions.cols);
 	throw new Error(`Unsupported component scenario kind: ${kind}`);
 }
 
@@ -64,6 +67,34 @@ async function renderFooterReady(width) {
 		modelId: "gpt-5.5",
 		thinkingLevel: "medium",
 	}, width);
+}
+
+async function renderTreeSelector(width) {
+	const mod = await jiti.import(`${repoRoot}/src/sumo-tui/rpc/inline-selector.ts`);
+	const items = [
+		{ value: "u1", label: "▷ run the smoke tests on this branch", description: "5h ago" },
+		{ value: "a1", label: "✦ Running the suite now — 1541 tests green." },
+		{ value: "u2", label: "▷ fix the queued messages UI", description: "4h ago" },
+		{ value: "a2", label: "├─ ✦ Rendered as lifted banner rows above the editor." },
+		{ value: "a3", label: "└─ ✦ Rendered as a bordered QUEUED chat card instead.", description: "3h ago" },
+		{ value: "u3", label: "   ▷ [refactor] now fix image paste collapse" },
+		{ value: "a4", label: "   ├─ ✦ Shadowed handlePaste to collapse bracketed paste.", description: "2h ago" },
+		{ value: "a5", label: "   └─ ✦ Alternative: normalize in insertTextAtCursor only.", description: "1h ago", isCurrent: true },
+	];
+	return new mod.InlineSelectorComponent("Session tree", items, () => undefined, 8, "a5").render(width);
+}
+
+async function renderTreeSummaryChoice(width) {
+	const mod = await jiti.import(`${repoRoot}/src/sumo-tui/rpc/inline-selector.ts`);
+	return new mod.InlineSelectorComponent("Summarize branch?", ["No summary", "Summarize", "Summarize with custom prompt"], () => undefined, 8, "No summary").render(width);
+}
+
+async function renderTreeCustomSummaryEditor(width) {
+	const mod = await jiti.import(`${repoRoot}/src/sumo-tui/widgets/modal.ts`);
+	const modal = new mod.ModalManager();
+	void modal.editor("Custom summarization instructions", "Preserve the API decisions and\ncall out unresolved risks.");
+	await Promise.resolve();
+	return modal.render(width);
 }
 
 async function renderSidebarEditorial(width) {

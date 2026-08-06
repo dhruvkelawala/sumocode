@@ -570,7 +570,7 @@ function normalizeThinkingLevel(value: string | undefined): ThinkingLevel {
 }
 
 function sumoState(state: RpcHostChromeState): SumoCodeState {
-	if (state.isCompacting) return "learning";
+	if (state.branchSummaryBusy || state.isCompacting) return "learning";
 	if (state.lastEventType === "tool_call" || state.lastEventType === "tool_execution_update") return "tool";
 	if (state.isStreaming) return "thinking";
 	return "idle";

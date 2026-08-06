@@ -69,12 +69,18 @@ export interface ListSessionsOptions {
 	readonly reader?: SessionInfoReader;
 }
 
-export interface SessionTreeNode {
-	readonly entry: SessionEntryLike;
-	readonly children: SessionTreeNode[];
-	readonly label?: string;
-	readonly labelTimestamp?: string;
+export interface SessionDiskEntries {
+	readonly sessionId: string;
+	readonly entries: readonly SessionEntryLike[];
+	readonly lastEntryId: string | null;
 }
+
+export interface SessionEntrySnapshot {
+	readonly entries: readonly SessionEntryLike[];
+	readonly leafId: string | null;
+}
+
+export type { SessionTreeNode } from "./session-tree.js";
 
 function parseLine(line: string): SessionFileLine | undefined {
 	if (!line.trim()) return undefined;
@@ -251,20 +257,27 @@ export async function listSessions(sessionDir: string, { concurrency = 8, reader
  * Reads every entry (excluding the header) from a session file, in file
  * order.
  */
-async function readSessionEntries(filePath: string): Promise<SessionEntryLike[] | undefined> {
+export async function readSessionEntries(filePath: string): Promise<SessionDiskEntries | undefined> {
 	const entries: SessionEntryLike[] = [];
+	let sessionId: string | undefined;
 	try {
 		const rl = createInterface({ input: createReadStream(filePath, { encoding: "utf8" }), crlfDelay: Number.POSITIVE_INFINITY });
 		for await (const line of rl) {
 			const entry = parseLine(line);
 			if (!entry) continue;
-			if (isHeader(entry)) continue;
+			if (!sessionId) {
+				if (!isHeader(entry) || typeof entry.id !== "string") return undefined;
+				sessionId = entry.id;
+				continue;
+			}
+			if (isHeader(entry) || typeof entry.id !== "string") continue;
 			entries.push(entry);
 		}
 	} catch {
 		return undefined;
 	}
-	return entries;
+	if (!sessionId) return undefined;
+	return { sessionId, entries, lastEntryId: entries.at(-1)?.id ?? null };
 }
 
 /**
@@ -276,64 +289,9 @@ async function readSessionEntries(filePath: string): Promise<SessionEntryLike[] 
  * `_buildIndex`'s label bookkeeping); children are sorted oldest-first by
  * timestamp.
  */
-export async function buildSessionTree(sessionFile: string): Promise<SessionTreeNode[] | undefined> {
-	const entries = await readSessionEntries(sessionFile);
-	if (!entries) return undefined;
-
-	const labelsById = new Map<string, string>();
-	const labelTimestampsById = new Map<string, string>();
-	for (const entry of entries) {
-		if (entry.type !== "label") continue;
-		const targetId = (entry as SessionEntryLike & { targetId?: string }).targetId;
-		const label = (entry as SessionEntryLike & { label?: string }).label;
-		if (!targetId) continue;
-		if (label) {
-			labelsById.set(targetId, label);
-			labelTimestampsById.set(targetId, entry.timestamp);
-		} else {
-			labelsById.delete(targetId);
-			labelTimestampsById.delete(targetId);
-		}
-	}
-
-	interface MutableNode {
-		entry: SessionEntryLike;
-		children: MutableNode[];
-		label?: string;
-		labelTimestamp?: string;
-	}
-
-	const nodeMap = new Map<string, MutableNode>();
-	const roots: MutableNode[] = [];
-
-	for (const entry of entries) {
-		nodeMap.set(entry.id, {
-			entry,
-			children: [],
-			label: labelsById.get(entry.id),
-			labelTimestamp: labelTimestampsById.get(entry.id),
-		});
-	}
-
-	for (const entry of entries) {
-		const node = nodeMap.get(entry.id);
-		if (!node) continue;
-		if (entry.parentId === null || entry.parentId === entry.id) {
-			roots.push(node);
-			continue;
-		}
-		const parent = nodeMap.get(entry.parentId);
-		if (parent) parent.children.push(node);
-		else roots.push(node);
-	}
-
-	const stack: MutableNode[] = [...roots];
-	while (stack.length > 0) {
-		const node = stack.pop();
-		if (!node) continue;
-		node.children.sort((a, b) => new Date(a.entry.timestamp).getTime() - new Date(b.entry.timestamp).getTime());
-		stack.push(...node.children);
-	}
-
-	return roots;
+export async function buildSessionTree(sessionFile: string): Promise<import("./session-tree.js").SessionTreeNode[] | undefined> {
+	const disk = await readSessionEntries(sessionFile);
+	if (!disk) return undefined;
+	const { buildSessionTreeFromEntries } = await import("./session-tree.js");
+	return buildSessionTreeFromEntries(disk.entries);
 }

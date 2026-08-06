@@ -2,6 +2,7 @@ import type { RpcExtensionUIRequest } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ExtensionStatusPublication } from "../pi-compat/region-registry.js";
 import { authInputTitle, secretInputTitle } from "../pi-compat/secret-input.js";
+import { encodeRpcTreeNavigationOutcome, InMemoryRpcTreeNavigationOutcomeBroker, RPC_TREE_NAVIGATION_RESULT_STATUS_KEY } from "../pi-compat/tree-navigation-command.js";
 import { ModalManager } from "../widgets/modal.js";
 import { NotificationCenter } from "../widgets/notification.js";
 import { RpcHostEditorController } from "./editor.js";
@@ -266,6 +267,19 @@ describe("RpcExtensionUiResponder", () => {
 		} finally {
 			consoleError.mockRestore();
 		}
+	});
+
+	it("intercepts correlated tree outcomes before ordinary status publication", async () => {
+		const broker = new InMemoryRpcTreeNavigationOutcomeBroker();
+		const waiter = broker.register("019f8a78-b4f5-7b7b-b774-2d2e4bce9001", 1_000);
+		const setStatus = vi.fn();
+		const statusPublication = new ExtensionStatusPublication();
+		const responder = new RpcExtensionUiResponder({ treeNavigationOutcomeBroker: broker, setStatus, statusPublication });
+		const outcome = { requestId: "019f8a78-b4f5-7b7b-b774-2d2e4bce9001", status: "committed" as const, leafId: "leaf" };
+		await responder.handle(request({ type: "extension_ui_request", id: "tree-status", method: "setStatus", statusKey: RPC_TREE_NAVIGATION_RESULT_STATUS_KEY, statusText: encodeRpcTreeNavigationOutcome(outcome) }));
+		await expect(waiter).resolves.toEqual(outcome);
+		expect(setStatus).not.toHaveBeenCalled();
+		expect(statusPublication.getStatuses().has(RPC_TREE_NAVIGATION_RESULT_STATUS_KEY)).toBe(false);
 	});
 
 	it("routes nonblocking requests into host-owned surfaces without responding", async () => {

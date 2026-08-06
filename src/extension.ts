@@ -29,6 +29,7 @@ import { installTaskModeAutoExit } from "./task-mode.js";
 import { logDiagnostic } from "./sumo-tui/runtime/diagnostics.js";
 import { registerRpcLoginCommand } from "./sumo-tui/pi-compat/login-command.js";
 import { installHerdrRpcBridge } from "./herdr-rpc-bridge.js";
+import { registerRpcTreeNavigationCommand } from "./sumo-tui/pi-compat/tree-navigation-command.js";
 
 const SUMOCODE_PACKAGE_NAME = "@dhruvkelawala/sumocode";
 const LEGACY_TASK_TOOL_EXTENSION_PATH = join(".pi", "agent", "extensions", "task-tool", "index.ts");
@@ -204,6 +205,7 @@ function installRpcChildProfile(pi: ExtensionAPI): void {
 	// absent from RPC get_commands. Register the compatibility command in the
 	// child so the retained host can discover and dispatch it normally.
 	registerRpcLoginCommand(pi);
+	registerRpcTreeNavigationCommand(pi);
 	installMemoryExtraction(pi);
 	installFastMode(pi);
 	if (shouldInstallNativeTaskTool({ force: process.env.SUMOCODE_NATIVE_TASK })) {

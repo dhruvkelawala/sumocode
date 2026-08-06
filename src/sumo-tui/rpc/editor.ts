@@ -92,7 +92,7 @@ export interface RpcHostEditorControllerOptions extends RpcAutocompleteProviderO
 
 const identity = (text: string): string => text;
 const CSI_U_ENTER = "\x1b[13u";
-const HIDDEN_RPC_COMMANDS = new Set(["sumo:login-cancel"]);
+const HIDDEN_RPC_COMMANDS = new Set(["sumo:login-cancel", "sumo:rpc-tree-navigate"]);
 
 export function buildRpcAutocompleteCommands(
 	rpcCommands: readonly RpcSlashCommand[] = [],

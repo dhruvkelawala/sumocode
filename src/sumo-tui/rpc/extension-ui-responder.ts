@@ -1,5 +1,6 @@
 import type { RpcExtensionUIRequest, RpcExtensionUIResponse } from "@earendil-works/pi-coding-agent";
 import type { EditorTextController } from "../pi-compat/extension-ui-adapter.js";
+import { decodeRpcTreeNavigationOutcome, RPC_TREE_NAVIGATION_RESULT_STATUS_KEY, type RpcTreeNavigationOutcomeBroker } from "../pi-compat/tree-navigation-command.js";
 import { decodeAuthInputTitle } from "../pi-compat/secret-input.js";
 import type { ExtensionStatusPublication, RegionRegistry, WidgetPlacement } from "../pi-compat/region-registry.js";
 import { ModalManager } from "../widgets/modal.js";
@@ -17,6 +18,7 @@ export interface RpcExtensionUiResponderOptions {
 	readonly editorText?: EditorTextController;
 	readonly terminal?: TerminalTitle;
 	readonly setStatus?: StatusSink;
+	readonly treeNavigationOutcomeBroker?: RpcTreeNavigationOutcomeBroker;
 	readonly onRenderRequest?: () => void;
 }
 
@@ -59,6 +61,7 @@ export class RpcExtensionUiResponder {
 	private readonly editorText: EditorTextController;
 	private readonly terminal: TerminalTitle | undefined;
 	private readonly onStatus: StatusSink | undefined;
+	private readonly treeNavigationOutcomeBroker: RpcTreeNavigationOutcomeBroker | undefined;
 	private readonly onRenderRequest: () => void;
 	private readonly statuses = new Map<string, string | undefined>();
 	private readonly widgets = new Map<string, readonly string[] | undefined>();
@@ -73,6 +76,7 @@ export class RpcExtensionUiResponder {
 		this.editorText = options.editorText ?? new RpcHostEditorBuffer();
 		this.terminal = options.terminal;
 		this.onStatus = options.setStatus;
+		this.treeNavigationOutcomeBroker = options.treeNavigationOutcomeBroker;
 		this.onRenderRequest = options.onRenderRequest ?? (() => undefined);
 	}
 
@@ -118,6 +122,16 @@ export class RpcExtensionUiResponder {
 				this.onRenderRequest();
 				return undefined;
 			case "setStatus":
+				if (request.statusKey === RPC_TREE_NAVIGATION_RESULT_STATUS_KEY) {
+					if (request.statusText !== undefined && this.treeNavigationOutcomeBroker) {
+						try {
+							this.treeNavigationOutcomeBroker.publish(decodeRpcTreeNavigationOutcome(request.statusText));
+						} catch {
+							// Correlated machine payloads are never rendered or persisted.
+						}
+					}
+					return undefined;
+				}
 				// OAuth callback success can abort a child-side AuthPrompt without a
 				// matching RPC cancellation message. Abort only dialogs tagged by the
 				// login adapter; unrelated active/queued modals must remain untouched.

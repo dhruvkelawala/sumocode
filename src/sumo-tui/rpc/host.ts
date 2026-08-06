@@ -18,7 +18,11 @@ import { RpcChildExitError, SumoRpcClient, truncateForNotification } from "./cli
 import { RpcHostControls } from "./controls.js";
 import { createRpcKeybindingsManager, RpcHostEditorController } from "./editor.js";
 import { createRpcExtensionUiResponder } from "./extension-ui-responder.js";
+import { InMemoryRpcTreeNavigationOutcomeBroker, type RpcTreeNavigationRequest } from "../pi-compat/tree-navigation-command.js";
 import { RpcHostActions } from "./host-actions.js";
+import { readAuthoritativeSessionSnapshot } from "./session-snapshot.js";
+import type { SessionEntrySnapshot } from "./session-reader.js";
+import type { RpcTreeNavigationOutcome } from "../pi-compat/tree-navigation-command.js";
 import { RpcHostOverlayManager } from "./host-overlays.js";
 import { InlineSelectorHost } from "./inline-selector.js";
 import { decideRpcInterrupt, type RpcInterruptInputKind } from "./interrupt.js";
@@ -38,6 +42,7 @@ export interface RpcHostMainOptions {
 	readonly stdout?: NodeJS.WriteStream;
 	readonly stdin?: NodeJS.ReadStream;
 	readonly stderr?: Pick<NodeJS.WriteStream, "write">;
+	readonly treeNavigationQuietTiming?: RpcTreeNavigationQuietTiming;
 }
 
 function writeLine(stream: Pick<NodeJS.WriteStream, "write">, line: string): void {
@@ -50,6 +55,149 @@ function writeTerminalTitle(stream: Pick<NodeJS.WriteStream, "write">, title: st
 
 function formatUnknownError(error: unknown): string {
 	return error instanceof Error ? error.stack ?? error.message : String(error);
+}
+
+function valuesEqual(left: unknown, right: unknown): boolean {
+	if (left === right) return true;
+	try {
+		return JSON.stringify(left) === JSON.stringify(right);
+	} catch {
+		return false;
+	}
+}
+
+export const TREE_NAVIGATION_QUIET_POLL_MS = 100;
+export const TREE_NAVIGATION_QUIET_DEADLINE_MS = 30_000;
+export const TREE_NAVIGATION_QUIET_MAX_ATTEMPTS = 300;
+
+export interface RpcTreeNavigationQuietTiming {
+	readonly pollMs?: number;
+	readonly deadlineMs?: number;
+	readonly maxAttempts?: number;
+	readonly now?: () => number;
+	readonly wait?: (milliseconds: number) => Promise<void>;
+}
+
+export class RpcTreeNavigationQuietTimeoutError extends Error {
+	public readonly attempts: number;
+	public readonly elapsedMs: number;
+
+	public constructor(attempts: number, elapsedMs: number) {
+		super(`tree navigation compaction did not settle after ${attempts} attempts and ${elapsedMs}ms`);
+		this.name = "RpcTreeNavigationQuietTimeoutError";
+		this.attempts = attempts;
+		this.elapsedMs = elapsedMs;
+	}
+}
+
+function waitMs(milliseconds: number): Promise<void> {
+	return new Promise((resolveWait) => setTimeout(resolveWait, milliseconds));
+}
+
+/**
+ * Waits for a tree mutation's possibly-still-running compaction to become
+ * observable as idle. The bound applies only to tree reconciliation; ordinary
+ * `/compact` requests retain their existing client timeout and semantics.
+ */
+export async function waitForTreeNavigationQuiet(
+	refreshState: () => Promise<Pick<RpcHostChromeState, "isCompacting">>,
+	timing: RpcTreeNavigationQuietTiming = {},
+): Promise<void> {
+	const pollMs = Math.max(0, timing.pollMs ?? TREE_NAVIGATION_QUIET_POLL_MS);
+	const deadlineMs = Math.max(0, timing.deadlineMs ?? TREE_NAVIGATION_QUIET_DEADLINE_MS);
+	const maxAttempts = Math.max(1, Math.floor(timing.maxAttempts ?? TREE_NAVIGATION_QUIET_MAX_ATTEMPTS));
+	const now = timing.now ?? Date.now;
+	const wait = timing.wait ?? waitMs;
+	const startedAt = now();
+	let attempts = 0;
+	for (;;) {
+		attempts += 1;
+		const state = await refreshState();
+		if (!state.isCompacting) return;
+		const elapsedMs = Math.max(0, now() - startedAt);
+		if (attempts >= maxAttempts || elapsedMs >= deadlineMs) {
+			throw new RpcTreeNavigationQuietTimeoutError(attempts, elapsedMs);
+		}
+		await wait(Math.min(pollMs, Math.max(0, deadlineMs - elapsedMs)));
+	}
+}
+
+export interface RpcSameSessionTreeNavigationHydrationDependencies {
+	readonly waitForQuiet: () => Promise<void>;
+	readonly markHydrationBaseline: () => void;
+	readonly markHydrationBarrier: () => void;
+	readonly hasEventsAfterHydrationBarrier: () => boolean;
+	readonly refreshState: () => Promise<RpcHostChromeState>;
+	readonly readMessages: () => Promise<readonly unknown[]>;
+	readonly readSnapshot: () => Promise<SessionEntrySnapshot>;
+	readonly sessionId?: string;
+	readonly sessionFile?: string;
+}
+
+export interface RpcSameSessionTreeNavigationHydration {
+	readonly state: RpcHostChromeState;
+	readonly messages?: readonly unknown[];
+	readonly snapshot?: SessionEntrySnapshot;
+	readonly identityChanged: boolean;
+}
+
+/**
+ * Hydrates a tree mutation against the existing session owner. This is kept
+ * separate from replacement hydration so a transient message/snapshot read
+ * can be retried without rebinding the scheduler, activity feed, or runtime.
+ */
+export async function hydrateSameSessionTreeNavigation(
+	deps: RpcSameSessionTreeNavigationHydrationDependencies,
+): Promise<RpcSameSessionTreeNavigationHydration> {
+	await deps.waitForQuiet();
+	deps.markHydrationBaseline();
+	let state: RpcHostChromeState | undefined;
+	let messages: readonly unknown[] | undefined;
+	let snapshot: SessionEntrySnapshot | undefined;
+	for (let attempt = 0; attempt < 4; attempt += 1) {
+		deps.markHydrationBarrier();
+		state = await deps.refreshState();
+		const identityChanged = state.sessionId !== deps.sessionId || state.sessionFile !== deps.sessionFile;
+		if (identityChanged) return { state, identityChanged: true };
+		messages = await deps.readMessages();
+		snapshot = await deps.readSnapshot();
+		if (!deps.hasEventsAfterHydrationBarrier()) {
+			deps.markHydrationBarrier();
+			break;
+		}
+	}
+	if (!state || !messages || !snapshot) throw new Error("tree navigation hydration did not produce a snapshot");
+	return { state, messages, snapshot, identityChanged: false };
+}
+
+export interface RpcTreeNavigationRetryScheduler {
+	schedule(operation: () => Promise<void>): boolean;
+	clear(): void;
+}
+
+/** Owns the delayed same-session retry timer and prevents duplicate recovery passes. */
+export function createRpcTreeNavigationRetryScheduler(delayMs = 100): RpcTreeNavigationRetryScheduler {
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	return {
+		schedule(operation): boolean {
+			if (timer) return false;
+			timer = setTimeout(() => {
+				timer = undefined;
+				void operation().catch(() => undefined);
+			}, delayMs);
+			timer.unref?.();
+			return true;
+		},
+		clear(): void {
+			if (timer) clearTimeout(timer);
+			timer = undefined;
+		},
+	};
+}
+
+function treeSummaryMode(request: { readonly summarize: boolean; readonly customInstructions?: string }): "none" | "default" | "custom" {
+	if (!request.summarize) return "none";
+	return request.customInstructions === undefined ? "default" : "custom";
 }
 
 export interface UnhandledRejectionShutdownOptions {
@@ -313,10 +461,15 @@ export interface RpcMessageFollowUpDependencies {
 	readonly editor: Pick<RpcHostEditorController, "getText" | "addToHistory" | "setText" | "expandDraftTokens" | "clearImageDrafts">;
 	readonly scheduler: Pick<RpcPromptScheduler, "getSnapshot" | "submit">;
 	readonly notifications: ErrorNotifier;
+	readonly isBlocked?: () => boolean;
 }
 
 export function handleRpcMessageFollowUp(deps: RpcMessageFollowUpDependencies): void {
 	void notifyOnError(async () => {
+		if (deps.isBlocked?.() === true) {
+			deps.notifications.notify("branch summary in progress", "warning");
+			return;
+		}
 		const draft = deps.editor.getText();
 		if (draft.trim().length === 0) return;
 		if (!deps.scheduler.getSnapshot().busy) return;
@@ -446,6 +599,8 @@ export interface RpcHostInterruptDependencies {
 	 * pre-streaming arm-quit tier instead of an abort.
 	 */
 	readonly submitInFlight?: () => boolean;
+	/** Branch-summary mutation owns the session while its outcome is reconciled. */
+	readonly isTreeNavigationBusy?: () => boolean;
 	readonly restoreQueuedDrafts?: () => void;
 	readonly now?: () => number;
 }
@@ -471,6 +626,10 @@ export function createRpcHostInterruptHandler(deps: RpcHostInterruptDependencies
 	return (data: string): boolean => {
 		const kind = inputKind(data);
 		if (!kind) return false;
+		// Ctrl-C/Escape are consumed while an in-place tree mutation owns the
+		// session. In particular, do not run the normal abort/quit tiers after
+		// queued drafts have been restored for the mutation.
+		if (deps.isTreeNavigationBusy?.() === true) return true;
 		const nowMs = now();
 		const modalActive = deps.modals.getActiveKind() !== undefined;
 		const overlayActive = deps.overlays.getActiveKind() !== undefined;
@@ -675,6 +834,19 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 	let latestActivitySnapshot = activityStore.getSnapshot();
 	let deferActivityRuntimeUpdate = false;
 	const sessionEvents = new RpcSessionEventBuffer();
+	let treeNavigationBusy = false;
+	interface TreeNavigationCapture {
+		readonly request: RpcTreeNavigationRequest;
+		readonly sessionId?: string;
+		readonly sessionFile?: string;
+		readonly leafId: string | null;
+		readonly editorText: string;
+		readonly messages: readonly unknown[];
+		readonly pagerState: ReturnType<typeof transcriptPump.getLiveStateSnapshot>;
+		readonly pagerRevision: number;
+		readonly startedAt: number;
+	}
+	let treeNavigationCapture: TreeNavigationCapture | undefined;
 	const unsubscribeActivityStore = activityStore.subscribe((snapshot) => {
 		const rpcSessionId = stateStore.getSnapshot().sessionId;
 		if (!activitySnapshotMatchesSession(snapshot, rpcSessionId)) return;
@@ -690,7 +862,8 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 	const pushState = (state?: RpcHostChromeState): void => {
 		runtime?.update({ state: state ?? stateStore.getSnapshot() });
 	};
-	const controls = new RpcHostControls(client, stateStore, { onOptimisticChange: pushState });
+	const treeNavigationOutcomeBroker = new InMemoryRpcTreeNavigationOutcomeBroker();
+	const controls = new RpcHostControls(client, stateStore, { onOptimisticChange: pushState, treeNavigationOutcomeBroker });
 	let stopHost: (code: number) => Promise<void> = async (code: number): Promise<void> => {
 		runtime?.stop(code);
 		await client.stop();
@@ -766,7 +939,7 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 	const scheduler = createRpcPromptScheduler({
 		getBusy: () => {
 			const state = stateStore.getSnapshot();
-			return state.isStreaming || state.isCompacting;
+			return treeNavigationBusy || state.isStreaming || state.isCompacting;
 		},
 		handleHostCommand: (message) => actions?.handleSubmittedText(message) ?? false,
 		sendPrompt: async (message) => {
@@ -783,6 +956,10 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		},
 	});
 	const submitFromEditor = async (message: string): Promise<void> => {
+		if (treeNavigationBusy) {
+			notifications.notify("branch summary in progress", "warning");
+			return;
+		}
 		await submitRpcPrompt(message, {
 			visualFixture,
 			scheduler,
@@ -810,7 +987,7 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		requestRender,
 	});
 	const handleMessageFollowUp = (): void => {
-		handleRpcMessageFollowUp({ editor, scheduler, notifications });
+		handleRpcMessageFollowUp({ editor, scheduler, notifications, isBlocked: () => treeNavigationBusy });
 	};
 	const handleMessageDequeue = (): void => {
 		handleRpcMessageDequeue({ editor, scheduler, stateStore, notifications });
@@ -872,6 +1049,7 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		statusPublication,
 		editorText: editor,
 		terminal: hostTerminal,
+		treeNavigationOutcomeBroker,
 		onRenderRequest: requestRender,
 	});
 	client.setUiRequestHandler((request) => uiResponder.handle(request));
@@ -915,6 +1093,14 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		for (const event of events) processAgentEvent(event);
 	};
 	let sessionHydrationRetryTimer: ReturnType<typeof setTimeout> | undefined;
+	const treeNavigationRetryScheduler = createRpcTreeNavigationRetryScheduler();
+	let treeNavigationRecovery: {
+		readonly outcome?: RpcTreeNavigationOutcome;
+		readonly entryCount: number;
+		readonly identityChanged: boolean;
+		/** Release the tree guard after fail-closed hydration instead of retrying quiet settle. */
+		readonly releaseAfterRecovery?: boolean;
+	} | undefined;
 	const refreshSessionRuntime = async (): Promise<void> => {
 		if (sessionHydrationRetryTimer) clearTimeout(sessionHydrationRetryTimer);
 		sessionHydrationRetryTimer = undefined;
@@ -997,8 +1183,209 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 			for (const event of replay.suffixEvents) processAgentEvent(event);
 			deferActivityRuntimeUpdate = false;
 			runtime?.endSessionReplacement(ownershipRebound);
+			const recovery = treeNavigationRecovery;
+			if (recovery) {
+				treeNavigationRecovery = undefined;
+				queueMicrotask(() => {
+					if (!treeNavigationCapture) return;
+					if (recovery.identityChanged || recovery.releaseAfterRecovery) {
+						finishTreeNavigation(recovery.outcome, false, recovery.entryCount);
+					} else {
+						void reconcileTreeNavigation(recovery.outcome).catch(() => undefined);
+					}
+				});
+			}
 		}
 	};
+
+	const setTreeNavigationBusy = (busy: boolean): void => {
+		// A failed/ambiguous reconcile keeps the guard. The action's finally block
+		// may still ask to clear it, but only the lifecycle below can release it.
+		if (!busy && treeNavigationCapture) return;
+		treeNavigationBusy = busy;
+		const state = stateStore.setBranchSummaryBusy(busy);
+		runtime?.update({ state, ...(busy ? {} : { activities: activityPresentation(latestActivitySnapshot) }) });
+		if (!busy) deferActivityRuntimeUpdate = false;
+	};
+
+	const beforeTreeNavigation = async (request: RpcTreeNavigationRequest): Promise<void> => {
+		if (treeNavigationCapture) throw new Error("tree navigation is already active");
+		const state = stateStore.getSnapshot();
+		const editorBefore = editor.getText();
+		const schedulerBefore = scheduler.getSnapshot();
+		const wasStreaming = state.isStreaming || schedulerBefore.dispatching === true;
+		if (!sessionEvents.begin()) throw new Error("session event barrier is already active");
+		deferActivityRuntimeUpdate = true;
+		// This is deliberately synchronous before the abort request: queued host
+		// drafts belong to the current session and must not be lost or dispatched
+		// into a newly selected branch.
+		const restored = scheduler.restoreAll(editorBefore, { discardInFlight: true });
+		if (restored.count > 0) editor.setText(restored.text);
+		try {
+			let snapshot = await readAuthoritativeSessionSnapshot(controls, {
+				sessionFile: state.sessionFile,
+				sessionId: state.sessionId,
+			});
+			let messages = await readTranscriptMessages();
+			const pagerState = transcriptPump.getLiveStateSnapshot();
+			const pagerRevision = transcriptPump.getRevision();
+			logDiagnostic("tree.navigation_started", {
+				elapsedMs: 0,
+				entryCount: snapshot.entries.length,
+				summaryMode: treeSummaryMode(request),
+				pagerRevision,
+				pagerHadDraft: pagerState.draftMessage ?? false,
+				draftWasNonEmpty: editorBefore.length !== 0,
+			});
+			if (wasStreaming) {
+				await controls.abort();
+				// Abort may settle the active turn on a different leaf before Pi
+				// accepts the navigation command. Rebaseline cancellation against the
+				// post-abort authoritative leaf/messages, not the pre-abort snapshot.
+				snapshot = await readAuthoritativeSessionSnapshot(controls, {
+					sessionFile: state.sessionFile,
+					sessionId: state.sessionId,
+				});
+				messages = await readTranscriptMessages();
+			}
+			treeNavigationCapture = {
+				request,
+				sessionId: state.sessionId,
+				sessionFile: state.sessionFile,
+				leafId: snapshot.leafId,
+				editorText: editorBefore,
+				messages,
+				pagerState,
+				pagerRevision,
+				startedAt: Date.now(),
+			};
+		} catch (error) {
+			const events = sessionEvents.finish();
+			deferActivityRuntimeUpdate = false;
+			for (const event of events) processAgentEvent(event);
+			throw error;
+		}
+	};
+
+	const scheduleTreeNavigationRetry = (outcome: RpcTreeNavigationOutcome | undefined): void => {
+		if (!treeNavigationCapture) return;
+		treeNavigationRetryScheduler.schedule(() => reconcileTreeNavigation(outcome));
+	};
+
+	const finishTreeNavigation = (outcome: RpcTreeNavigationOutcome | undefined, success: boolean, entryCount: number): void => {
+		const capture = treeNavigationCapture;
+		const elapsedMs = capture ? Math.max(0, Date.now() - capture.startedAt) : 0;
+		logDiagnostic("tree.navigation_finished", {
+			elapsedMs,
+			entryCount,
+			summaryMode: capture ? treeSummaryMode(capture.request) : "none",
+			outcomeStatus: outcome?.status ?? "unknown",
+			success,
+			pagerRevision: capture?.pagerRevision ?? null,
+			pagerHadDraft: capture?.pagerState.draftMessage ?? false,
+		});
+		treeNavigationCapture = undefined;
+		treeNavigationRecovery = undefined;
+		treeNavigationRetryScheduler.clear();
+		setTreeNavigationBusy(false);
+	};
+
+	const reconcileTreeNavigation = async (outcome?: RpcTreeNavigationOutcome): Promise<void> => {
+		const capture = treeNavigationCapture;
+		if (!capture) return;
+		let state: RpcHostChromeState | undefined;
+		let messages: readonly unknown[] | undefined;
+		let authoritativeLeaf: string | null | undefined;
+		let entryCount = 0;
+		let identityChanged = false;
+		let hydrated = false;
+		try {
+			const hydration = await hydrateSameSessionTreeNavigation({
+				waitForQuiet: () => waitForTreeNavigationQuiet(() => controls.refreshState(), options.treeNavigationQuietTiming),
+				markHydrationBaseline: () => sessionEvents.markHydrationBaseline(),
+				markHydrationBarrier: () => sessionEvents.markHydrationBarrier(),
+				hasEventsAfterHydrationBarrier: () => sessionEvents.hasEventsAfterHydrationBarrier,
+				refreshState: () => controls.refreshState(),
+				readMessages: readTranscriptMessages,
+				readSnapshot: () => readAuthoritativeSessionSnapshot(controls, {
+					sessionFile: capture.sessionFile,
+					sessionId: capture.sessionId,
+				}),
+				sessionId: capture.sessionId,
+				sessionFile: capture.sessionFile,
+			});
+			state = hydration.state;
+			identityChanged = hydration.identityChanged;
+			if (!identityChanged) {
+				messages = hydration.messages;
+				authoritativeLeaf = hydration.snapshot?.leafId;
+				entryCount = hydration.snapshot?.entries.length ?? 0;
+			}
+			if (identityChanged) {
+				// A same-session operation unexpectedly changed ownership. Reuse the
+				// established fail-closed replacement hydration rather than exposing A
+				// with B's transcript or scheduler state. If that hydration is transiently
+				// unavailable, its retry completion releases the tree guard below.
+				treeNavigationRecovery = { outcome, entryCount, identityChanged: true };
+				await refreshSessionRuntime();
+				if (sessionHydrationRetrying) throw new Error("replacement hydration is still pending");
+				finishTreeNavigation(outcome, false, entryCount);
+				return;
+			}
+			if (!state || !messages || authoritativeLeaf === undefined) throw new Error("tree navigation hydration did not produce a snapshot");
+			const messagesChanged = !valuesEqual(capture.messages, messages);
+			const shouldReplaceTranscript = outcome?.status === "committed" || messagesChanged;
+			const transcript = shouldReplaceTranscript
+				? transcriptPump.replaceFromMessages(messages)
+				: transcriptPump.viewModel();
+			const leafMatches = outcome?.status !== "committed" || outcome.leafId === authoritativeLeaf;
+			const cancelledLeafPreserved = outcome?.status !== "cancelled" || authoritativeLeaf === capture.leafId;
+			const hydrationSuccess = leafMatches && cancelledLeafPreserved;
+			logDiagnostic("tree.rehydrate_finished", {
+				elapsedMs: Math.max(0, Date.now() - capture.startedAt),
+				entryCount,
+				summaryMode: treeSummaryMode(capture.request),
+				outcomeStatus: outcome?.status ?? "unknown",
+				success: hydrationSuccess,
+			});
+			runtime?.update({ state, transcript, transcriptRevision: transcriptPump.getRevision() });
+			const replay = sessionEvents.finishHydration();
+			for (const event of replay.supersededSnapshotEvents) scheduler.handleAgentEvent(event);
+			for (const event of replay.suffixEvents) processAgentEvent(event);
+			if (outcome?.status === "committed" && outcome.editorText !== undefined && editor.getText().length === 0) {
+				editor.setText(outcome.editorText);
+			}
+			finishTreeNavigation(outcome, outcome?.status === "committed" && hydrationSuccess, entryCount);
+			hydrated = true;
+			if (!hydrationSuccess) throw new Error("tree navigation outcome did not match authoritative session state");
+		} catch (error) {
+			if (hydrated) throw error;
+			// Once get_state has confirmed the captured identity, a transient
+			// get_messages/get_entries failure is retried in place. Do not rebind
+			// the scheduler or enter replacement mode for a same-session retry.
+			if (state !== undefined && !identityChanged) {
+				scheduleTreeNavigationRetry(outcome);
+				throw error;
+			}
+			// An unknown or changed identity still uses the established fail-closed
+			// replacement seam. If it schedules a retry, the successful replacement
+			// pass consumes treeNavigationRecovery and clears the guard. A bounded
+			// compaction settle expiry must not re-enter the same wait forever: once
+			// fail-closed hydration succeeds, release the host guard without inventing
+			// a branch outcome or weakening the identity checks above.
+			const settleExpired = error instanceof RpcTreeNavigationQuietTimeoutError;
+			treeNavigationRecovery = { outcome, entryCount, identityChanged, releaseAfterRecovery: settleExpired };
+			try {
+				await refreshSessionRuntime();
+			} catch {
+				throw error;
+			}
+			if (sessionHydrationRetrying) throw error;
+			finishTreeNavigation(outcome, false, entryCount);
+			throw error;
+		}
+	};
+
 	const replayCancelledSessionEvents = async (): Promise<void> => {
 		cancelSessionChange();
 	};
@@ -1018,6 +1405,10 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		cancelSessionChange,
 		afterSessionChange: refreshSessionRuntime,
 		afterCancelledSessionChange: replayCancelledSessionEvents,
+		beforeTreeNavigation,
+		reconcileTreeNavigation,
+		setTreeNavigationBusy,
+		isTreeNavigationBusy: () => treeNavigationBusy,
 		writeClipboardSequence: (sequence) => runtime?.writeClipboardSequence(sequence) ?? false,
 		changelogRoot: root,
 	});
@@ -1073,6 +1464,8 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 			if (statsTimer) clearInterval(statsTimer);
 			if (sessionHydrationRetryTimer) clearTimeout(sessionHydrationRetryTimer);
 			sessionHydrationRetryTimer = undefined;
+			treeNavigationRetryScheduler.clear();
+			treeNavigationRecovery = undefined;
 			stopWatchingGitBranch?.();
 			stopWatchingGitBranch = undefined;
 			runtime?.stop(code);
@@ -1100,6 +1493,7 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		notifications,
 		requestHostExit: (code) => requestHostExit(code),
 		submitInFlight: () => scheduler.getSnapshot().busy || actions?.isLoginActive() === true,
+		isTreeNavigationBusy: () => treeNavigationBusy,
 		abortInFlight: async () => {
 			if (actions?.isLoginActive()) await actions.cancelLogin();
 			else await controls.abort();

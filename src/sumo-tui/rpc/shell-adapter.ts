@@ -77,6 +77,8 @@ export interface RpcShellAdapterSnapshot {
 	readonly state: RpcHostChromeState;
 	readonly transcript: TranscriptViewModel;
 	readonly activities: ActivityPresentationSnapshot;
+	/** Cold hydration may suppress settled feed-only cards until transcript ownership is applied. */
+	readonly suppressSettledFeedOnly?: boolean;
 	/**
 	 * `TranscriptController.getRevision()` at the moment `transcript` was
 	 * produced. When a `TranscriptControllerChatSink` (see `getChatSink`) is
@@ -228,8 +230,15 @@ export class RpcShellAdapter {
 		}
 		// Feed ownership must switch before a replacement transcript is applied.
 		// Otherwise a predictable Activity ID reused by the next session can claim
-		// and merge fields from the previous session's card.
-		if (snapshot.activities) this.chat.reconcileFeedActivities(snapshot.activities.activities);
+		// and merge fields from the previous session's card. The initial post-splash
+		// hydration opts into constructor-time cold reload semantics so settled
+		// feed-only history is available for transcript correlation but does not pop
+		// into a new TOOL card.
+		if (snapshot.activities) {
+			this.chat.reconcileFeedActivities(snapshot.activities.activities, {
+				...(snapshot.suppressSettledFeedOnly ? { materializeSettled: false } : {}),
+			});
+		}
 		if (snapshot.transcript) {
 			this.transcript = snapshot.transcript;
 			// A `transcriptRevision` means this transcript came from a
@@ -244,7 +253,9 @@ export class RpcShellAdapter {
 			// pre-B9 behavior, kept for callers/tests that push transcripts
 			// without going through a revisioned controller).
 			if (snapshot.transcriptRevision === undefined) {
-				this.chat.replaceViewModels(snapshot.transcript.messages);
+				this.chat.replaceViewModels(snapshot.transcript.messages, {
+					...(snapshot.suppressSettledFeedOnly ? { materializeSettledFeed: false } : {}),
+				});
 			}
 			// Every transcript-carrying update repaints some of the chat
 			// viewport's rows -- whether via the sink's incremental
@@ -735,9 +746,11 @@ function renderActiveHint(state: RpcHostChromeState, width: number, sidebarVisib
 
 function renderSplashHint(state: RpcHostChromeState, width: number): string {
 	const frameWidth = Math.min(width, SPLASH_INPUT_FRAME_WIDTH);
-	const modelId = state.modelLabel ? state.modelLabel.split("/").pop()! : "no model";
+	const leftHint = state.modelLabel === undefined && state.hydrated !== true
+		? "╰─"
+		: splashInvocationHint(state.modelLabel ? state.modelLabel.split("/").pop()! : "no model", state.thinkingLevel);
 	const hint = renderInputHints(frameWidth, {
-		leftHint: splashInvocationHint(modelId, state.thinkingLevel),
+		leftHint,
 		leftHintStyle: "model-thinking",
 	});
 	return centerAnsi(hint, width);

@@ -671,20 +671,39 @@ describe("RPC host retained runtime frame", () => {
 			});
 
 			await runtime.start();
-			runtime.stop();
 
-			const events = readFileSync(diagFile, "utf8")
+			const startupEvents = readFileSync(diagFile, "utf8")
 				.trim()
 				.split("\n")
 				.map((line) => JSON.parse(line) as { event: string; surface?: string; cols?: number; rows?: number });
-			for (const event of ["boot_screen_frame", "stable_chrome_ready", "app_ready", "input_ready"]) {
-				expect(events).toContainEqual(expect.objectContaining({
+			for (const event of ["boot_screen_frame", "input_ready"]) {
+				expect(startupEvents).toContainEqual(expect.objectContaining({
 					event,
 					surface: "rpc_host",
 					cols: 90,
 					rows: 24,
 				}));
 			}
+			expect(startupEvents).not.toContainEqual(expect.objectContaining({ event: "app_ready" }));
+			expect(startupEvents).not.toContainEqual(expect.objectContaining({ event: "stable_chrome_ready" }));
+
+			runtime.markChromeStable();
+			runtime.markChromeStable();
+			const stableEvents = readFileSync(diagFile, "utf8")
+				.trim()
+				.split("\n")
+				.map((line) => JSON.parse(line) as { event: string; surface?: string; cols?: number; rows?: number });
+			for (const event of ["app_ready", "stable_chrome_ready"]) {
+				expect(stableEvents.filter((entry) => entry.event === event)).toHaveLength(1);
+				expect(stableEvents).toContainEqual(expect.objectContaining({
+					event,
+					surface: "rpc_host",
+					cols: 90,
+					rows: 24,
+				}));
+			}
+			runtime.stop();
+			runtime.markChromeStable();
 		} finally {
 			if (previousDiagFile === undefined) delete process.env.SUMO_TUI_DIAG_FILE;
 			else process.env.SUMO_TUI_DIAG_FILE = previousDiagFile;

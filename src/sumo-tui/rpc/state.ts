@@ -15,6 +15,8 @@ export interface RpcHostChromeState {
 	readonly sessionFile?: string;
 	readonly modelLabel?: string;
 	readonly thinkingLevel?: string;
+	/** True only after an authoritative get_state hydration, never for cache seeds. */
+	readonly hydrated?: boolean;
 	readonly isStreaming: boolean;
 	readonly isCompacting: boolean;
 	readonly branchSummaryBusy?: boolean;
@@ -75,6 +77,20 @@ export class RpcHostStateStore {
 		queuedMessages: [],
 	};
 
+	/**
+	 * Seeds only startup chrome from the host-side last-known cache. This is an
+	 * optimistic paint hint, not authoritative session hydration: it deliberately
+	 * leaves `hydrated` and every other session field untouched.
+	 */
+	public seedChrome(chrome: { readonly modelLabel?: string; readonly thinkingLevel?: string }): RpcHostChromeState {
+		this.state = {
+			...this.state,
+			...(chrome.modelLabel !== undefined ? { modelLabel: chrome.modelLabel } : {}),
+			...(chrome.thinkingLevel !== undefined ? { thinkingLevel: chrome.thinkingLevel } : {}),
+		};
+		return this.getSnapshot();
+	}
+
 	public hydrateFromRpcState(rpcState: RpcSessionState, gitBranch = this.state.gitBranch): RpcHostChromeState {
 		const pendingMessageCount = Math.max(rpcState.pendingMessageCount, this.piQueuedMessages.length) + this.hostQueuedMessages.length;
 		this.state = this.withComposedQueue({
@@ -84,6 +100,7 @@ export class RpcHostStateStore {
 			sessionFile: rpcState.sessionFile,
 			modelLabel: modelLabelFrom(rpcState),
 			thinkingLevel: rpcState.thinkingLevel,
+			hydrated: true,
 			isStreaming: rpcState.isStreaming,
 			isCompacting: rpcState.isCompacting,
 			branchSummaryBusy: this.state.branchSummaryBusy,

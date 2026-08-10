@@ -2,6 +2,8 @@ import { writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { defaultActivityStateRoot } from "../../activity/persistence.js";
 import { FileActivityStore, type ActivityStoreSnapshot } from "../../activity/store.js";
+import type { ChildProcessWithoutNullStreams } from "node:child_process";
+import { createRequire } from "node:module";
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import { getCapabilities, setCapabilities } from "@earendil-works/pi-tui";
 import { SUMOCODE_RELOAD_EXIT_CODE } from "../../commands/reload.js";
@@ -11,11 +13,12 @@ import { loadYoga } from "../layout/yoga.js";
 import { applyStartupTheme } from "../../themes/index.js";
 import { ExtensionStatusPublication, RegionRegistry } from "../pi-compat/region-registry.js";
 import type { TranscriptControllerChatSink } from "../transcript/controller.js";
-import type { ChatMessageViewModel, TranscriptViewModel } from "../transcript/view-model.js";
+import type { ChatMessageViewModel } from "../transcript/view-model.js";
 import type { ChatPagerReplaceStats } from "../widgets/chat-pager.js";
 import { ModalLayer } from "../widgets/modal-layer.js";
 import { NotificationCenter } from "../widgets/notification.js";
 import { RpcChildExitError, SumoRpcClient, truncateForNotification } from "./client.js";
+import { readCachedChrome, writeCachedChrome } from "./chrome-cache.js";
 import { RpcHostControls } from "./controls.js";
 import { createRpcKeybindingsManager, RpcHostEditorController } from "./editor.js";
 import { createRpcExtensionUiResponder } from "./extension-ui-responder.js";
@@ -39,6 +42,7 @@ import { logDiagnostic } from "../runtime/diagnostics.js";
 
 export interface RpcHostMainOptions {
 	readonly argv?: readonly string[];
+	readonly preSpawnedChild?: ChildProcessWithoutNullStreams;
 	readonly env?: NodeJS.ProcessEnv;
 	readonly stdout?: NodeJS.WriteStream;
 	readonly stdin?: NodeJS.ReadStream;
@@ -236,14 +240,17 @@ function piBinary(env: NodeJS.ProcessEnv): string {
 	return pi;
 }
 
-function childEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-	const next: NodeJS.ProcessEnv = {
-		...env,
-		SUMOCODE_RPC_CHILD: "1",
-		SUMO_TUI: "0",
-	};
-	return next;
-}
+type ChildSpawnPlan = {
+	readonly command: string;
+	readonly args: readonly string[];
+	readonly cwd: string;
+	readonly env: NodeJS.ProcessEnv;
+};
+
+const requireFromRuntime = createRequire(import.meta.url);
+const { buildChildSpawnPlan } = requireFromRuntime("./spawn-child.mjs") as {
+	buildChildSpawnPlan(env: NodeJS.ProcessEnv, argv: readonly string[]): ChildSpawnPlan | undefined;
+};
 
 /**
  * Writes this host process's final exit code to the out-of-band file
@@ -810,12 +817,13 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 	// the same shared resolution `extension.ts` uses.
 	applyStartupTheme({ cwd });
 	const visualFixture = rpcVisualFixtureFromEnv(env);
-	const extensionPath = resolve(root, "src/extension.ts");
+	const spawnPlan = buildChildSpawnPlan(env, argv);
 	const client = new SumoRpcClient({
-		command: piBinary(env),
-		args: ["--mode", "rpc", "-e", extensionPath, ...argv],
-		cwd,
-		env: childEnv(env),
+		command: spawnPlan?.command ?? piBinary(env),
+		args: spawnPlan?.args ?? [],
+		cwd: spawnPlan?.cwd ?? cwd,
+		env: spawnPlan?.env,
+		preSpawnedChild: options.preSpawnedChild,
 	});
 	let runtime: RpcHostRuntime | undefined;
 	// The B9 diffing chat sink: `TranscriptController` (owned by
@@ -957,7 +965,19 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 			notifications.notify(`prompt failed: ${truncateForNotification(error instanceof Error ? error.message : String(error))}`, "error");
 		},
 	});
+	let releaseInitialHydration!: () => void;
+	const initialHydration = new Promise<void>((resolve) => {
+		releaseInitialHydration = resolve;
+	});
+	/**
+	 * The retained editor can accept text as soon as the splash paints, but a
+	 * submit must wait for scheduler session ownership to rebind. Otherwise an
+	 * Enter pressed during the initial get_state/get_messages quiet-loop could
+	 * be consumed by the pre-hydration scheduler generation. Keeping this gate
+	 * at submit (not typing) preserves early editing without dropping a prompt.
+	 */
 	const submitFromEditor = async (message: string): Promise<void> => {
+		await initialHydration;
 		if (treeNavigationBusy) {
 			notifications.notify("branch summary in progress", "warning");
 			return;
@@ -1525,55 +1545,16 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		if (!visualFixture) sessionEvents.begin();
 		await client.start();
 		const branch = await readGitBranch(cwd);
-		let transcript: TranscriptViewModel;
-		if (visualFixture) {
-			const refreshedState = await controls.refreshState(branch);
-			const restored = scheduler.rebindSession(refreshedState.sessionId, editor.getText());
-			if (restored.count > 0) editor.setText(restored.text);
-			latestActivitySnapshot = activityStore.bindSession(refreshedState.sessionId);
-			transcript = visualFixture.transcript;
-		} else {
-			let refreshedState: RpcHostChromeState | undefined;
-			let messages: readonly unknown[] | undefined;
-			let ownershipRebound = false;
-			for (let attempt = 0; attempt < 4; attempt += 1) {
-				sessionEvents.markHydrationBarrier();
-				refreshedState = await controls.refreshState(branch);
-				if (!ownershipRebound) {
-					const restored = scheduler.rebindSession(refreshedState.sessionId, editor.getText());
-					if (restored.count > 0) editor.setText(restored.text);
-					latestActivitySnapshot = activityStore.bindSession(refreshedState.sessionId);
-					ownershipRebound = true;
-				}
-				messages = await readTranscriptMessages();
-				if (!sessionEvents.hasEventsAfterHydrationBarrier) {
-					sessionEvents.markHydrationBarrier();
-					break;
-				}
-			}
-			if (!refreshedState || !messages) throw new Error("Initial session hydration did not produce a snapshot");
-			transcript = transcriptPump.replaceFromMessages(messages);
-			const replay = sessionEvents.finishHydration();
-			for (const event of replay.supersededSnapshotEvents) scheduler.handleAgentEvent(event);
-			for (const event of replay.suffixEvents) processAgentEvent(event);
-			stopWatchingGitBranch = await watchGitBranch(cwd, branch, (nextBranch) => {
-				const state = stateStore.setGitBranch(nextBranch);
-				runtime?.update({ state });
-			});
-		}
-		await editor.configureAutocomplete(controls);
-		// An event can arrive after the final quiet-pass check but before runtime
-		// construction. processAgentEvent has already advanced the pump in that
-		// window, so seed the first pager from its latest view rather than the
-		// earlier local replacement result.
-		if (!visualFixture) transcript = transcriptPump.viewModel();
-		const state = visualFixture ? visualFixture.state : stateStore.getSnapshot();
-		runtime = new RpcHostRuntime({
+		const cachedChrome = visualFixture ? undefined : readCachedChrome(cwd);
+		if (cachedChrome) stateStore.seedChrome(cachedChrome);
+		const initialTranscript = visualFixture ? visualFixture.transcript : transcriptPump.viewModel();
+		const initialState = visualFixture ? visualFixture.state : stateStore.setGitBranch(branch);
+		const initialRuntime = new RpcHostRuntime({
 			output: stdout,
 			input: stdin,
 			env,
-			initialState: state,
-			initialTranscript: transcript,
+			initialState,
+			initialTranscript,
 			initialActivities: activityPresentation(latestActivitySnapshot),
 			onActivityExpansionChange: (id, expanded) => activityStore.setExpanded(id, expanded),
 			onActivityExpansionMigration: (previousId, nextId, expanded) => activityStore.migrateExpanded(previousId, nextId, expanded),
@@ -1595,7 +1576,64 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 			inputHandler: actions,
 			preEditorInputHandler: handlePreEditorInput,
 		});
-		await runtime.start();
+		runtime = initialRuntime;
+		await initialRuntime.start();
+		// The store may bind and publish an on-disk feed snapshot while the
+		// authoritative state/messages quiet-loop is still running. Hold that
+		// intermediate repaint so the single post-hydration update can apply cold
+		// feed suppression and transcript ownership atomically.
+		deferActivityRuntimeUpdate = true;
+
+		if (visualFixture) {
+			const refreshedState = await controls.refreshState(branch);
+			const restored = scheduler.rebindSession(refreshedState.sessionId, editor.getText());
+			if (restored.count > 0) editor.setText(restored.text);
+			latestActivitySnapshot = activityStore.bindSession(refreshedState.sessionId);
+			releaseInitialHydration();
+		} else {
+			let refreshedState: RpcHostChromeState | undefined;
+			let messages: readonly unknown[] | undefined;
+			let ownershipRebound = false;
+			for (let attempt = 0; attempt < 4; attempt += 1) {
+				sessionEvents.markHydrationBarrier();
+				refreshedState = await controls.refreshState(branch);
+				if (!ownershipRebound) {
+					const restored = scheduler.rebindSession(refreshedState.sessionId, editor.getText());
+					if (restored.count > 0) editor.setText(restored.text);
+					latestActivitySnapshot = activityStore.bindSession(refreshedState.sessionId);
+					ownershipRebound = true;
+				}
+				messages = await readTranscriptMessages();
+				if (!sessionEvents.hasEventsAfterHydrationBarrier) {
+					sessionEvents.markHydrationBarrier();
+					break;
+				}
+			}
+			if (!refreshedState || !messages) throw new Error("Initial session hydration did not produce a snapshot");
+			transcriptPump.replaceFromMessages(messages);
+			const replay = sessionEvents.finishHydration();
+			for (const event of replay.supersededSnapshotEvents) scheduler.handleAgentEvent(event);
+			for (const event of replay.suffixEvents) processAgentEvent(event);
+			releaseInitialHydration();
+			stopWatchingGitBranch = await watchGitBranch(cwd, branch, (nextBranch) => {
+				const state = stateStore.setGitBranch(nextBranch);
+				runtime?.update({ state });
+			});
+			const hydratedState = stateStore.getSnapshot();
+			initialRuntime.update({
+				state: hydratedState,
+				transcript: transcriptPump.viewModel(),
+				activities: activityPresentation(latestActivitySnapshot),
+				suppressSettledFeedOnly: true,
+			});
+			writeCachedChrome(cwd, {
+				modelLabel: hydratedState.modelLabel,
+				thinkingLevel: hydratedState.thinkingLevel,
+			});
+		}
+		deferActivityRuntimeUpdate = false;
+		await editor.configureAutocomplete(controls);
+		initialRuntime.markChromeStable();
 		if (!visualFixture) {
 			// Submit the launcher's kickoff prompt (if any) only after start() +
 			// initial hydration above, so the transcript/UI are already in a
@@ -1607,8 +1645,9 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 			await refreshStats();
 			statsTimer = setInterval(() => { void refreshStats(); }, 5_000);
 		}
-		return await runtime.waitForExit();
+		return await initialRuntime.waitForExit();
 	} catch (error) {
+		await stop();
 		writeLine(stderr, `[sumocode-rpc] ${error instanceof Error ? error.message : String(error)}`);
 		if (client.stderr.length > 0) writeLine(stderr, client.stderr.trim());
 		return 1;
@@ -1621,8 +1660,8 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 	}
 }
 
-export async function main(): Promise<void> {
-	const code = await runRpcHost();
+export async function main(options: RpcHostMainOptions = {}): Promise<void> {
+	const code = await runRpcHost(options);
 	// Covers every runRpcHost path that returns a code naturally instead of
 	// calling process.exit directly (the plain `runtime.waitForExit()` return
 	// and the top-level catch's `return 1`) -- the explicit process.exit call

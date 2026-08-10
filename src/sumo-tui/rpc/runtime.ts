@@ -92,6 +92,8 @@ export interface RpcHostRuntimeSnapshot {
 	readonly inputPreview?: string;
 	/** Forwarded to `RpcShellAdapter.update` -- see `RpcShellAdapterSnapshot.transcriptRevision`. */
 	readonly transcriptRevision?: number;
+	/** Initial hydration-only guard against materializing settled feed-only cards. */
+	readonly suppressSettledFeedOnly?: boolean;
 }
 
 function terminalPaletteFromColors(colors: { background: string; accent: string }): TerminalPalette {
@@ -187,6 +189,7 @@ export class RpcHostRuntime {
 	private themeUnsubscribe: (() => void) | undefined;
 	private started = false;
 	private stopped = false;
+	private chromeStableMarked = false;
 	private exitCode: number | undefined;
 	private readonly waiters: Array<(code: number) => void> = [];
 	private readonly isAppleTerminal: boolean;
@@ -353,7 +356,18 @@ export class RpcHostRuntime {
 		const cols = terminalColumns(this.output);
 		const rows = terminalRows(this.output);
 		this.render();
-		for (const event of ["boot_screen_frame", "stable_chrome_ready", "app_ready", "input_ready"]) {
+		for (const event of ["boot_screen_frame", "input_ready"]) {
+			logDiagnostic(event, { surface: "rpc_host", cols, rows });
+		}
+	}
+
+	/** Marks child-dependent chrome ready after startup hydration has reconciled. */
+	public markChromeStable(): void {
+		if (this.stopped || this.chromeStableMarked || !this.shell) return;
+		this.chromeStableMarked = true;
+		const cols = terminalColumns(this.output);
+		const rows = terminalRows(this.output);
+		for (const event of ["app_ready", "stable_chrome_ready"]) {
 			logDiagnostic(event, { surface: "rpc_host", cols, rows });
 		}
 	}
@@ -366,6 +380,7 @@ export class RpcHostRuntime {
 			state: this.state,
 			...(snapshot.transcript ? { transcript: this.transcript, transcriptRevision: snapshot.transcriptRevision } : {}),
 			...(snapshot.activities ? { activities: this.activities } : {}),
+			...(snapshot.suppressSettledFeedOnly ? { suppressSettledFeedOnly: true } : {}),
 		});
 		this.scheduleRender();
 	}

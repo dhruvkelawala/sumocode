@@ -22,6 +22,7 @@ describe("RpcHostStateStore", () => {
 			sessionId: "session-1",
 			sessionName: "Migration",
 			modelLabel: "openai/gpt-5.5",
+			hydrated: true,
 			thinkingLevel: "high",
 			isStreaming: false,
 			isCompacting: false,
@@ -30,6 +31,29 @@ describe("RpcHostStateStore", () => {
 			hasMessages: true,
 			gitBranch: "codex/rpc-host-shell-002-exec",
 		});
+	});
+
+	it("seeds startup chrome without marking the state hydrated", () => {
+		const store = new RpcHostStateStore();
+
+		expect(store.seedChrome({ modelLabel: "openai/gpt-5.5", thinkingLevel: "high" })).toMatchObject({
+			modelLabel: "openai/gpt-5.5",
+			thinkingLevel: "high",
+		});
+		expect(store.getSnapshot().hydrated).toBeUndefined();
+		expect(store.applyModelChange({ provider: "anthropic", id: "claude-opus-4-8" }).hydrated).toBeUndefined();
+
+		expect(store.hydrateFromRpcState({
+			thinkingLevel: "medium",
+			isStreaming: false,
+			isCompacting: false,
+			steeringMode: "all",
+			followUpMode: "one-at-a-time",
+			sessionId: "session-1",
+			autoCompactionEnabled: true,
+			messageCount: 0,
+			pendingMessageCount: 0,
+		}).hydrated).toBe(true);
 	});
 
 	it("surfaces sessionFile from a get_state payload", () => {

@@ -71,6 +71,21 @@ describe("sumocode RPC host shell integration", () => {
 		expect(activeState.cleanupSequenceSeen).toBe(false);
 	}, 30_000);
 
+	it("accepts editor input while startup hydration is pending", async () => {
+		const agentDir = await mkdtemp(join(tmpdir(), "sumocode-rpc-early-input-agent-"));
+		app = spawnSumocodePty({ env: { PI_CODING_AGENT_DIR: agentDir }, cols: 100, rows: 30 });
+
+		await app.waitForOutput(PI_BOOT_SEQUENCE, 15_000);
+		app.sendInput("hello");
+		await app.waitForOutput("hello", 2_000);
+
+		app.sendInput("\u0003");
+		await app.waitForOutput("press ctrl-c again to quit", 2_000);
+		app.sendInput("\u0003");
+		await app.waitForOutput(TERMINAL_CLEANUP_SEQUENCE, 5_000);
+		expect(app.getCurrentTerminalState().altscreenActive).toBe(false);
+	}, 30_000);
+
 	it("opens the host command palette from Ctrl+/", async () => {
 		const agentDir = await mkdtemp(join(tmpdir(), "sumocode-rpc-palette-agent-"));
 		app = spawnSumocodePty({ env: { PI_CODING_AGENT_DIR: agentDir }, cols: 100, rows: 30 });

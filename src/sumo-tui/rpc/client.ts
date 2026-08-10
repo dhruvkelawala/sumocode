@@ -56,6 +56,7 @@ export interface SumoRpcClientOptions {
 	readonly command: string;
 	readonly args: readonly string[];
 	readonly cwd?: string;
+	readonly preSpawnedChild?: ChildProcessWithoutNullStreams;
 	readonly env?: NodeJS.ProcessEnv;
 	readonly requestTimeoutMs?: number;
 	readonly onProtocolError?: RpcProtocolErrorHandler;
@@ -145,7 +146,7 @@ export class SumoRpcClient {
 		if (this.child) throw new Error("RPC child already started");
 		this.exited = false;
 		this.exitNotified = false;
-		const child = spawn(this.options.command, [...this.options.args], {
+		const child = this.options.preSpawnedChild ?? spawn(this.options.command, [...this.options.args], {
 			cwd: this.options.cwd,
 			env: { ...process.env, ...this.options.env },
 			stdio: ["pipe", "pipe", "pipe"],

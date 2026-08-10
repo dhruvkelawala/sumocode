@@ -1,5 +1,12 @@
+import { EventEmitter } from "node:events";
+import { spawn } from "node:child_process";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { describe, expect, it, vi } from "vitest";
+
+vi.mock("node:child_process", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("node:child_process")>();
+	return { ...actual, spawn: vi.fn(actual.spawn) };
+});
 import { RpcChildExitError, SumoRpcClient, type SumoRpcClientOptions } from "./client.js";
 
 function nodeRpcClient(script: string, options: Partial<Omit<SumoRpcClientOptions, "command" | "args">> = {}): SumoRpcClient {
@@ -23,7 +30,44 @@ async function waitFor(predicate: () => boolean): Promise<void> {
 	throw new Error("condition was not met");
 }
 
+class FakeStream extends EventEmitter {
+	public writable = true;
+	public readonly setEncoding = vi.fn();
+	public readonly end = vi.fn(() => { this.writable = false; });
+	public readonly write = vi.fn((_data: string, callback?: (error?: Error) => void) => {
+		callback?.();
+		return true;
+	});
+}
+
+class FakeRpcChild extends EventEmitter {
+	public readonly pid = 1234;
+	public readonly stdin = new FakeStream();
+	public readonly stdout = new FakeStream();
+	public readonly stderr = new FakeStream();
+	public readonly kill = vi.fn(() => {
+		queueMicrotask(() => this.emit("exit", null, "SIGTERM"));
+		return true;
+	});
+}
+
 describe("SumoRpcClient", () => {
+	it("uses a pre-spawned child without calling spawn again", async () => {
+		const child = new FakeRpcChild();
+		vi.mocked(spawn).mockClear();
+		const client = new SumoRpcClient({
+			command: "unused",
+			args: [],
+			preSpawnedChild: child as never,
+		});
+
+		await client.start();
+
+		expect(spawn).not.toHaveBeenCalled();
+		expect(client.pid).toBe(child.pid);
+		await client.stop();
+	});
+
 	it("correlates JSONL responses by request id while streaming events", async () => {
 		const script = `
 			const readline = require("node:readline");

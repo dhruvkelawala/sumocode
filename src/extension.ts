@@ -88,6 +88,17 @@ function packageNameAt(dir: string, exists: ExistsFn, readFile: ReadFileFn): str
 	}
 }
 
+function packageRootFromModulePath(modulePath: string, exists: ExistsFn, readFile: ReadFileFn): string | undefined {
+	let current = dirname(modulePath);
+	for (let level = 0; level < 5; level += 1) {
+		if (packageNameAt(current, exists, readFile) === SUMOCODE_PACKAGE_NAME) return current;
+		const parent = dirname(current);
+		if (parent === current) return undefined;
+		current = parent;
+	}
+	return undefined;
+}
+
 export function findActiveSumoDevTree(cwd: string, options: Pick<DuplicateInstalledExtensionOptions, "exists" | "readFile"> = {}): string | undefined {
 	const exists = options.exists ?? existsSync;
 	const readFile = options.readFile ?? ((path, encoding) => readFileSync(path, encoding));
@@ -121,10 +132,18 @@ export function shouldNoopDuplicateInstalledExtension(options: DuplicateInstalle
 		// child profile). Compare realpath-canonicalized paths on both sides so
 		// symlinks can't fool either direction of this check.
 		const realpath = options.realpath ?? ((path: string) => realpathSync(path));
+		const exists = options.exists ?? existsSync;
+		const readFile = options.readFile ?? ((path, encoding) => readFileSync(path, encoding));
 		const modulePath = canonicalize(moduleUrlToPath(moduleUrl), realpath);
-		const moduleDir = dirname(modulePath); // strip /src/extension.ts to compare tree roots
-		const grandparent = dirname(moduleDir); // .../sumocode/src -> .../sumocode
+		const packageRoot = packageRootFromModulePath(modulePath, exists, readFile);
 		const canonicalLauncherRoot = canonicalize(launcherRoot, realpath);
+		if (packageRoot !== undefined && canonicalize(packageRoot, realpath) === canonicalLauncherRoot) return false;
+
+		// Defensive fallback for an entry whose package metadata cannot be read.
+		// Preserve the old <root>/src/extension.ts derivation if the walk above
+		// finds nothing.
+		const moduleDir = dirname(modulePath);
+		const grandparent = dirname(moduleDir);
 		if (grandparent === canonicalLauncherRoot) return false;
 		return true;
 	}

@@ -20,6 +20,7 @@ function delay(ms: number): Promise<void> {
 describe("sumocode RPC host shell integration", () => {
 	beforeAll(() => {
 		execFileSync(process.execPath, ["scripts/build-host.mjs"], { cwd: process.cwd(), stdio: "pipe" });
+		execFileSync(process.execPath, ["scripts/build-extension.mjs"], { cwd: process.cwd(), stdio: "pipe" });
 	});
 
 	async function bootWithHostMode(mode: "1" | "0"): Promise<void> {
@@ -43,6 +44,30 @@ describe("sumocode RPC host shell integration", () => {
 
 	it("boots the retained host through the jiti fallback", async () => {
 		await bootWithHostMode("0");
+	}, 30_000);
+
+	async function bootWithExtensionMode(mode: "bundle" | "source"): Promise<void> {
+		const agentDir = await mkdtemp(join(tmpdir(), `sumocode-extension-${mode}-agent-`));
+		app = spawnSumocodePty({
+			args: ["--offline", "--no-session", "--approve"],
+			env: {
+				PI_CODING_AGENT_DIR: agentDir,
+				...(mode === "source" ? { SUMOCODE_EXTENSION_BUNDLE: "0" } : {}),
+			},
+			cols: 100,
+			rows: 30,
+		});
+
+		await app.waitForOutput(PI_BOOT_SEQUENCE, 15_000);
+		await app.waitForOutput("DIVINE INVOCATION", 15_000);
+		await app.waitForOutput(/CTRL\+\/[\s\S]*COMMANDS/, 15_000);
+	}
+
+	it.each([
+		["fresh extension bundle", "bundle"],
+		["extension source fallback", "source"],
+	] as const)("boots with the %s", async (_label, mode) => {
+		await bootWithExtensionMode(mode);
 	}, 30_000);
 
 	it.each(["SIGINT", "SIGTERM"] as const)("renders a retained Cathedral empty state and cleans up after %s", async (signal) => {

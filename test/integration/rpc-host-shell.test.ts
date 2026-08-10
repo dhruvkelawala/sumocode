@@ -1,7 +1,8 @@
+import { execFileSync } from "node:child_process";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { TERMINAL_CLEANUP_SEQUENCE } from "../../src/sumo-tui/runtime/terminal-controller.js";
 import { PI_BOOT_SEQUENCE, spawnSumocodePty, type SpawnedPiPty } from "./spawn-pi-pty.js";
 
@@ -17,6 +18,33 @@ function delay(ms: number): Promise<void> {
 }
 
 describe("sumocode RPC host shell integration", () => {
+	beforeAll(() => {
+		execFileSync(process.execPath, ["scripts/build-host.mjs"], { cwd: process.cwd(), stdio: "pipe" });
+	});
+
+	async function bootWithHostMode(mode: "1" | "0"): Promise<void> {
+		const agentDir = await mkdtemp(join(tmpdir(), `sumocode-rpc-${mode === "1" ? "bundle" : "jiti"}-agent-`));
+		app = spawnSumocodePty({
+			env: { PI_CODING_AGENT_DIR: agentDir, SUMOCODE_HOST_BUNDLE: mode },
+			cols: 100,
+			rows: 30,
+		});
+
+		await app.waitForOutput(PI_BOOT_SEQUENCE, 15_000);
+		expect(app.getCurrentTerminalState().altscreenActive).toBe(true);
+		app.sendSignal("SIGTERM");
+		await app.waitForOutput(TERMINAL_CLEANUP_SEQUENCE, 5_000);
+		expect(app.getCurrentTerminalState().altscreenActive).toBe(false);
+	}
+
+	it("boots the retained host from the fresh bundle", async () => {
+		await bootWithHostMode("1");
+	}, 30_000);
+
+	it("boots the retained host through the jiti fallback", async () => {
+		await bootWithHostMode("0");
+	}, 30_000);
+
 	it.each(["SIGINT", "SIGTERM"] as const)("renders a retained Cathedral empty state and cleans up after %s", async (signal) => {
 		const agentDir = await mkdtemp(join(tmpdir(), "sumocode-rpc-agent-"));
 		app = spawnSumocodePty({ env: { PI_CODING_AGENT_DIR: agentDir }, cols: 100, rows: 30 });

@@ -6,6 +6,8 @@ import { buildChildSpawnPlan } from "./src/sumo-tui/rpc/spawn-child.mjs";
 
 const root = resolve(process.env.SUMOCODE_ROOT_DIR ?? process.cwd());
 const bundlePath = resolve(root, "dist/host/sumo-rpc-host.bundle.mjs");
+const sourceFacePath = resolve(root, "src/assets/sumo-face.ans");
+const bundledFacePath = resolve(root, "dist/host/assets/sumo-face.ans");
 
 async function newestSourceMtime(directory) {
 	let newest = 0;
@@ -23,11 +25,13 @@ async function newestSourceMtime(directory) {
 
 async function bundleIsFresh() {
 	try {
-		const [bundle, newestSource] = await Promise.all([
+		const [bundle, newestSource, sourceFace, bundledFace] = await Promise.all([
 			stat(bundlePath),
 			newestSourceMtime(resolve(root, "src")),
+			stat(sourceFacePath),
+			stat(bundledFacePath),
 		]);
-		return bundle.mtimeMs >= newestSource;
+		return bundle.mtimeMs >= Math.max(newestSource, sourceFace.mtimeMs) && bundledFace.size === sourceFace.size;
 	} catch {
 		return false;
 	}

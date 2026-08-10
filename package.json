@@ -21,7 +21,7 @@
   },
   "pi": {
     "extensions": [
-      "dist/extension/sumocode-extension.bundle.mjs"
+      "src/extension-entry.ts"
     ]
   },
   "peerDependencies": {

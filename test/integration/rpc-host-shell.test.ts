@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { TERMINAL_CLEANUP_SEQUENCE } from "../../src/sumo-tui/runtime/terminal-controller.js";
-import { PI_BOOT_SEQUENCE, spawnSumocodePty, type SpawnedPiPty } from "./spawn-pi-pty.js";
+import { PI_BOOT_SEQUENCE, spawnPiPty, spawnSumocodePty, type SpawnedPiPty } from "./spawn-pi-pty.js";
 
 let app: SpawnedPiPty | undefined;
 
@@ -68,6 +68,20 @@ describe("sumocode RPC host shell integration", () => {
 		["extension source fallback", "source"],
 	] as const)("boots with the %s", async (_label, mode) => {
 		await bootWithExtensionMode(mode);
+	}, 30_000);
+
+	it("boots the package manifest through the stable extension entry", async () => {
+		const agentDir = await mkdtemp(join(tmpdir(), "sumocode-package-entry-agent-"));
+		app = spawnPiPty({
+			args: ["--offline", "--no-extensions", "--no-session", "--approve", "-e", "."],
+			env: { PI_CODING_AGENT_DIR: agentDir },
+			cols: 100,
+			rows: 30,
+		});
+
+		await app.waitForOutput(PI_BOOT_SEQUENCE, 15_000);
+		await app.waitForOutput("DIVINE INVOCATION", 15_000);
+		await app.waitForOutput(/CTRL\+[\s\S]*COMMANDS/, 15_000);
 	}, 30_000);
 
 	it.each(["SIGINT", "SIGTERM"] as const)("renders a retained Cathedral empty state and cleans up after %s", async (signal) => {

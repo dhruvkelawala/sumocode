@@ -18,6 +18,16 @@ export interface ModalLayerOptions extends ModalManagerOptions {
 }
 
 const RESET = "\u001b[0m";
+const OSC8_CLOSE = "\u001b]8;;\u001b\\";
+
+function linkedHttpUrl(text: string, color: string): string {
+	if (!/^https?:\/\/[^\s]+$/u.test(text)) return scriptoriumFg(text, color);
+	// OSC 8 is the terminal-native hyperlink protocol. Keeping it here, next to
+	// ModalSurfaceComponent's low-level terminal chrome, lets wrapped URL rows
+	// retain one complete clickable target without teaching generic text spans
+	// about terminal links.
+	return `\u001b]8;;${text}\u001b\\${scriptoriumFg(text, color)}${OSC8_CLOSE}`;
+}
 
 function rgb(hex: string): { r: number; g: number; b: number } {
 	const normalized = hex.replace("#", "");
@@ -130,14 +140,22 @@ export class ModalLayer extends ModalManager {
 			const shown = dialog.value
 				? scriptoriumFg(`> ${dialog.value}█`, colors.foreground)
 				: `${scriptoriumFg("> █", colors.foreground)}${scriptoriumFg(dialog.placeholder ?? "", colors.foregroundDim)}`;
+			const detailRows = (dialog.details ?? []).flatMap((detail) =>
+				detail.split("\n").flatMap((paragraph) =>
+					wrapTextWithAnsi(linkedHttpUrl(paragraph, colors.foregroundDim), inputWidth).map((row) => `     ${row}`),
+				),
+			);
 			const inputRows = wrapTextWithAnsi(shown, inputWidth).map((row) => `     ${row}`);
 			return renderDivineQuery(
 				{ title: dialog.title, options: [], focusedIndex: 0 },
 				modalWidth,
 				{
 					extras: [
+						...detailRows,
+						...(detailRows.length > 0 ? [""] : []),
 						...inputRows,
 						"",
+						...(dialog.copyAvailable ? [`     ${scriptoriumFg("ctrl+y copy link · ctrl+click open", colors.foregroundDim)}`] : []),
 						`     ${scriptoriumFg("⏎ submit · ⎋ retreat", colors.foregroundDim)}`,
 						"",
 					],

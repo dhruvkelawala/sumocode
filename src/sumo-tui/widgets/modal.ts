@@ -6,6 +6,10 @@ export interface ModalDialogOptions {
 }
 
 export interface ModalInputOptions extends ModalDialogOptions {
+	/** Supporting instructions rendered inside the modal above the editable value. */
+	readonly details?: readonly string[];
+	/** Value copied by Ctrl+Y while this input modal is active. */
+	readonly copyValue?: string;
 	/**
 	 * Seeds the single-line input modal's editable value (not just its placeholder). Pressing
 	 * Enter immediately returns this value verbatim after single-line sanitization; callers
@@ -39,6 +43,8 @@ type ActiveModal =
 			readonly kind: "input";
 			readonly title: string;
 			readonly placeholder: string | undefined;
+			readonly details: readonly string[];
+			readonly copyValue: string | undefined;
 			readonly secret: boolean;
 			value: string;
 			readonly resolve: (value: string | undefined) => void;
@@ -56,6 +62,7 @@ export interface ModalManagerOptions {
 	readonly setTimeout?: typeof setTimeout;
 	readonly clearTimeout?: typeof clearTimeout;
 	readonly onChange?: () => void;
+	readonly copyText?: (text: string) => boolean;
 }
 
 interface SelectOption {
@@ -140,6 +147,7 @@ export class ModalManager implements Component {
 	private readonly setTimer: typeof setTimeout;
 	private readonly clearTimer: typeof clearTimeout;
 	private readonly onChange: () => void;
+	private readonly copyText: (text: string) => boolean;
 	private active: ActiveModal | undefined;
 	private readonly queue: ActiveModal[] = [];
 
@@ -147,6 +155,7 @@ export class ModalManager implements Component {
 		this.setTimer = options.setTimeout ?? setTimeout;
 		this.clearTimer = options.clearTimeout ?? clearTimeout;
 		this.onChange = options.onChange ?? (() => undefined);
+		this.copyText = options.copyText ?? (() => false);
 	}
 
 	public confirm(title: string, message: string, opts?: ModalDialogOptions): Promise<boolean> {
@@ -185,6 +194,8 @@ export class ModalManager implements Component {
 				kind: "input",
 				title: sanitizeModalText(title),
 				placeholder: placeholder === undefined ? undefined : sanitizeSingleLineModalText(placeholder),
+				details: (opts?.details ?? []).map(sanitizeModalText),
+				copyValue: opts?.copyValue === undefined ? undefined : sanitizeSingleLineModalText(opts.copyValue),
 				secret: opts?.secret === true,
 				value: opts?.initialValue === undefined ? "" : sanitizeSingleLineModalText(opts.initialValue),
 				resolve,
@@ -234,6 +245,8 @@ export class ModalManager implements Component {
 			readonly selectedIndex: number;
 			readonly value?: string;
 			readonly placeholder?: string;
+			readonly details?: readonly string[];
+			readonly copyAvailable?: boolean;
 		}
 		| undefined {
 		const active = this.active;
@@ -244,7 +257,15 @@ export class ModalManager implements Component {
 			case "select":
 				return { kind: active.kind, title: active.title, options: active.options.map((option) => option.label), selectedIndex: active.selectedIndex };
 			case "input":
-				return { kind: active.kind, title: active.title, value: active.secret ? maskSecret(active.value) : active.value, placeholder: active.placeholder, selectedIndex: 0 };
+				return {
+					kind: active.kind,
+					title: active.title,
+					value: active.secret ? maskSecret(active.value) : active.value,
+					placeholder: active.placeholder,
+					details: active.details,
+					copyAvailable: active.copyValue !== undefined,
+					selectedIndex: 0,
+				};
 			default:
 				return { kind: active.kind, title: active.title, value: active.value, selectedIndex: 0 };
 		}
@@ -315,6 +336,7 @@ export class ModalManager implements Component {
 				lines.push(line(`${index === this.active.selectedIndex ? "▶" : " "} ${option.label}`));
 			}
 		} else if (this.active.kind === "input") {
+			for (const detail of this.active.details) lines.push(...wrapText(detail, modalWidth).map(line));
 			const value = this.active.value ? (this.active.secret ? maskSecret(this.active.value) : this.active.value) : (this.active.placeholder || "");
 			lines.push(line(`> ${value}`));
 		} else {
@@ -328,6 +350,11 @@ export class ModalManager implements Component {
 	}
 
 	private handleInputModal(data: string, modal: Extract<ActiveModal, { kind: "input" }>): void {
+		if (modal.copyValue !== undefined && keyEq(data, Key.ctrl("y"), "ctrl+y")) {
+			this.copyText(modal.copyValue);
+			this.onChange();
+			return;
+		}
 		if (keyEq(data, Key.enter, "return", "enter")) {
 			this.finish(modal.value);
 			return;

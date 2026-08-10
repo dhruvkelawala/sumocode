@@ -53,6 +53,10 @@ function notifyLevel(level: "info" | "warning" | "error" | undefined): Notificat
 	return level ?? "info";
 }
 
+function firstHttpUrl(lines: readonly string[]): string | undefined {
+	return lines.find((line) => /^https?:\/\/[^\s]+$/u.test(line));
+}
+
 export class RpcExtensionUiResponder {
 	private readonly modals: DialogModals;
 	private readonly notifications: ToastCenter;
@@ -66,6 +70,7 @@ export class RpcExtensionUiResponder {
 	private readonly statuses = new Map<string, string | undefined>();
 	private readonly widgets = new Map<string, readonly string[] | undefined>();
 	private readonly authPromptControllers = new Set<AbortController>();
+	private loginDetails: readonly string[] = [];
 	private title: string | undefined;
 
 	public constructor(options: RpcExtensionUiResponderOptions = {}) {
@@ -100,9 +105,16 @@ export class RpcExtensionUiResponder {
 			case "input": {
 				const decoded = decodeAuthInputTitle(request.title);
 				const controller = decoded.auth ? new AbortController() : undefined;
+				const loginUrl = decoded.auth ? firstHttpUrl(this.loginDetails) : undefined;
 				if (controller) this.authPromptControllers.add(controller);
 				try {
-					const value = await this.modals.input(decoded.title, request.placeholder, { timeout: request.timeout, signal: controller?.signal, secret: decoded.secret });
+					const value = await this.modals.input(decoded.title, request.placeholder, {
+						timeout: request.timeout,
+						signal: controller?.signal,
+						secret: decoded.secret,
+						...(decoded.auth && this.loginDetails.length > 0 ? { details: this.loginDetails } : {}),
+						...(loginUrl ? { copyValue: loginUrl } : {}),
+					});
 					return valueResponse(request.id, value);
 				} finally {
 					if (controller) this.authPromptControllers.delete(controller);
@@ -145,6 +157,7 @@ export class RpcExtensionUiResponder {
 				this.onRenderRequest();
 				return undefined;
 			case "setWidget":
+				if (request.widgetKey === "sumocode.login") this.loginDetails = request.widgetLines ?? [];
 				this.widgets.set(request.widgetKey, request.widgetLines);
 				this.regionRegistry?.mountWidget(request.widgetKey, request.widgetLines, { placement: request.widgetPlacement as WidgetPlacement | undefined });
 				this.onRenderRequest();

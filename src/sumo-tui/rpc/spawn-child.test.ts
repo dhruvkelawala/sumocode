@@ -1,5 +1,5 @@
 import { createRequire } from "node:module";
-import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -9,8 +9,9 @@ type ChildSpawnPlan = {
 };
 
 const require = createRequire(import.meta.url);
-const { buildChildSpawnPlan } = require("./spawn-child.mjs") as {
+const { buildChildSpawnPlan, extensionInputsHash } = require("./spawn-child.mjs") as {
 	buildChildSpawnPlan(env: NodeJS.ProcessEnv, argv: readonly string[]): ChildSpawnPlan | undefined;
+	extensionInputsHash(root: string): string;
 };
 
 let roots: string[] = [];
@@ -19,19 +20,21 @@ afterEach(() => {
 	for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
-function makeRoot(bundleMtime?: number, sourceMtime?: number): string {
+function makeRoot(bundleState: "fresh" | "stale" | "missing"): string {
 	const root = mkdtempSync(join(tmpdir(), "sumocode-spawn-child-"));
 	roots.push(root);
-	mkdirSync(join(root, "src"), { recursive: true });
+	mkdirSync(join(root, "src", "assets"), { recursive: true });
+	mkdirSync(join(root, "src", "background-tasks"), { recursive: true });
 	mkdirSync(join(root, "dist", "extension"), { recursive: true });
-	const source = join(root, "src", "extension.ts");
-	const bundle = join(root, "dist", "extension", "sumocode-extension.bundle.mjs");
-	writeFileSync(source, "export default () => {};\n");
-	if (bundleMtime !== undefined) {
-		writeFileSync(bundle, "export default () => {};\n");
-		const sourceTime = sourceMtime ?? bundleMtime - 100;
-		utimesSync(source, sourceTime, sourceTime);
-		utimesSync(bundle, bundleMtime, bundleMtime);
+	writeFileSync(join(root, "src", "extension.ts"), "export default () => {};\n");
+	writeFileSync(join(root, "src", "assets", "sumo-face.ans"), "face\n");
+	writeFileSync(join(root, "src", "background-tasks", "bounded-terminal-runner.mjs"), "runner\n");
+	if (bundleState !== "missing") {
+		writeFileSync(join(root, "dist", "extension", "sumocode-extension.bundle.mjs"), "export default () => {};\n");
+		writeFileSync(
+			join(root, "dist", "extension", ".inputs-hash"),
+			bundleState === "fresh" ? `${extensionInputsHash(root)}\n` : "stale\n",
+		);
 	}
 	return root;
 }
@@ -41,17 +44,17 @@ function plan(root: string, extra: NodeJS.ProcessEnv = {}) {
 }
 
 describe("buildChildSpawnPlan extension entry", () => {
-	it("uses a fresh extension bundle", () => {
-		const root = makeRoot(Date.now() / 1000 + 10);
+	it("uses a content-fresh extension bundle", () => {
+		const root = makeRoot("fresh");
 		expect(plan(root)?.args[3]).toBe(join(root, "dist", "extension", "sumocode-extension.bundle.mjs"));
 	});
 
 	it.each([
-		["missing bundle", undefined, {}],
-		["stale bundle", Date.now() / 1000 - 10, {}, Date.now() / 1000 + 10],
-		["explicit source override", Date.now() / 1000 + 10, { SUMOCODE_EXTENSION_BUNDLE: "0" }],
-	] as const)("uses source for %s", (_label, bundleMtime, extra, sourceMtime?: number) => {
-		const root = makeRoot(bundleMtime, sourceMtime);
+		["missing bundle", "missing", {}],
+		["stale bundle", "stale", {}],
+		["explicit source override", "fresh", { SUMOCODE_EXTENSION_BUNDLE: "0" }],
+	] as const)("uses source for %s", (_label, bundleState, extra) => {
+		const root = makeRoot(bundleState);
 		expect(plan(root, extra)?.args[3]).toBe(join(root, "src", "extension.ts"));
 	});
 });

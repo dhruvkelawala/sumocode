@@ -1,5 +1,6 @@
-import { existsSync, readdirSync, statSync } from "node:fs";
-import { resolve } from "node:path";
+import { createHash } from "node:crypto";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { join, relative, resolve } from "node:path";
 
 function hostRoot(env) {
 	return resolve(env.SUMOCODE_ROOT_DIR ?? process.cwd());
@@ -17,33 +18,52 @@ function childEnv(env) {
 	};
 }
 
-function newestExtensionSourceMtime(root) {
-	let newest = 0;
+const EXTENSION_ASSETS = [
+	"src/assets/sumo-face.ans",
+	"src/background-tasks/bounded-terminal-runner.mjs",
+];
+
+export function extensionInputsHash(root) {
+	const files = [];
 	function visit(directory) {
 		for (const entry of readdirSync(directory, { withFileTypes: true })) {
 			const path = resolve(directory, entry.name);
 			if (entry.isDirectory()) {
 				visit(path);
 			} else if (entry.name.endsWith(".ts") && !entry.name.endsWith(".test.ts")) {
-				newest = Math.max(newest, statSync(path).mtimeMs);
+				files.push(path);
 			}
 		}
 	}
-	try {
-		visit(resolve(root, "src"));
-	} catch {
-		return Number.POSITIVE_INFINITY;
+	visit(resolve(root, "src"));
+	files.push(...EXTENSION_ASSETS.map((asset) => resolve(root, asset)));
+	files.sort((left, right) => left.localeCompare(right));
+
+	const hash = createHash("sha256");
+	for (const path of files) {
+		hash.update(relative(root, path));
+		hash.update("\\0");
+		hash.update(readFileSync(path));
+		hash.update("\\0");
 	}
-	return newest;
+	return hash.digest("hex");
+}
+
+function hasFreshExtensionBundle(root, bundle) {
+	const sidecar = resolve(root, "dist/extension/.inputs-hash");
+	if (!existsSync(bundle) || !existsSync(sidecar)) return false;
+	try {
+		return readFileSync(sidecar, "utf8").trim() === extensionInputsHash(root);
+	} catch {
+		return false;
+	}
 }
 
 function extensionEntry(root, env) {
 	const source = resolve(root, "src/extension.ts");
 	if (env.SUMOCODE_EXTENSION_BUNDLE === "0") return source;
 	const bundle = resolve(root, "dist/extension/sumocode-extension.bundle.mjs");
-	try {
-		if (existsSync(bundle) && statSync(bundle).mtimeMs >= newestExtensionSourceMtime(root)) return bundle;
-	} catch {}
+	if (hasFreshExtensionBundle(root, bundle)) return bundle;
 	return source;
 }
 

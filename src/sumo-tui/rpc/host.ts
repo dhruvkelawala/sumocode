@@ -6,6 +6,7 @@ import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import { getCapabilities, setCapabilities } from "@earendil-works/pi-tui";
 import { SUMOCODE_RELOAD_EXIT_CODE } from "../../commands/reload.js";
 import { containsCtrlCToken, isEscapeInput } from "../input/shared-input-router.js";
+import { createOsc52Sequence } from "../input/selection.js";
 import { loadYoga } from "../layout/yoga.js";
 import { applyStartupTheme } from "../../themes/index.js";
 import { ExtensionStatusPublication, RegionRegistry } from "../pi-compat/region-registry.js";
@@ -907,6 +908,7 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 	const modals = new ModalLayer({
 		onChange: requestRender,
 		getTerminalSize: () => ({ columns: hostTerminal.columns, rows: hostTerminal.rows }),
+		copyText: (text) => runtime?.writeClipboardSequence(createOsc52Sequence(text)) ?? false,
 	});
 	const overlays = new RpcHostOverlayManager(requestRender);
 	const notifications = new NotificationCenter({ onChange: requestRender });

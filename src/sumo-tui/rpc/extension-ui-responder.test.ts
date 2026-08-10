@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ExtensionStatusPublication } from "../pi-compat/region-registry.js";
 import { authInputTitle, secretInputTitle } from "../pi-compat/secret-input.js";
 import { encodeRpcTreeNavigationOutcome, InMemoryRpcTreeNavigationOutcomeBroker, RPC_TREE_NAVIGATION_RESULT_STATUS_KEY } from "../pi-compat/tree-navigation-command.js";
+import { ModalLayer } from "../widgets/modal-layer.js";
 import { ModalManager } from "../widgets/modal.js";
 import { NotificationCenter } from "../widgets/notification.js";
 import { RpcHostEditorController } from "./editor.js";
@@ -102,6 +103,45 @@ describe("RpcExtensionUiResponder", () => {
 		modals.handleInput("enter");
 
 		await expect(inputResponse).resolves.toEqual({ type: "extension_ui_response", id: "input-1", value: "ok" });
+	});
+
+	it("renders published login instructions inside the active authentication modal", async () => {
+		const copied: string[] = [];
+		const modals = new ModalLayer({
+			getTerminalSize: () => ({ columns: 60, rows: 100 }),
+			copyText: (text) => { copied.push(text); return true; },
+		});
+		const responder = new RpcExtensionUiResponder({ modals });
+		const loginUrl = "https://claude.ai/oauth/authorize?code=true&client_id=sumocode";
+
+		await responder.handle(request({
+			type: "extension_ui_request",
+			id: "login-details",
+			method: "setWidget",
+			widgetKey: "sumocode.login",
+			widgetLines: ["Complete login in your browser:", loginUrl],
+			widgetPlacement: "aboveEditor",
+		}));
+		const inputResponse = responder.handle(request({
+			type: "extension_ui_request",
+			id: "oauth-code",
+			method: "input",
+			title: authInputTitle("Paste redirect URL"),
+		}));
+
+		const modalText = modals.render(60).join("\n");
+		expect(modalText).toContain("Complete login in your browser:");
+		expect(modalText).toContain("https://claude.ai/oauth/authorize");
+		expect(modalText).toContain(`\x1b]8;;${loginUrl}\x1b\\`);
+		expect(modalText).toContain("\x1b]8;;\x1b\\");
+		expect(modalText).toContain("ctrl+y copy link");
+
+		modals.handleInput("\x19"); // Raw Ctrl+Y byte from the terminal.
+		expect(copied).toEqual([loginUrl]);
+		expect(modals.getActiveKind()).toBe("input");
+
+		modals.handleInput("escape");
+		await expect(inputResponse).resolves.toEqual({ type: "extension_ui_response", id: "oauth-code", cancelled: true });
 	});
 
 	it("masks SumoCode authentication secrets while returning the raw value to the RPC child", async () => {

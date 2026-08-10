@@ -1,6 +1,6 @@
 {
-  "generatedAt": "2026-08-10T12:36:54.145Z",
-  "commit": "fe2afd8 fix(auth): keep login controls within modal cap",
+  "generatedAt": "2026-08-10T13:09:16.345Z",
+  "commit": "442b750 perf(startup): add phase and real-world measurements",
   "runs": 5,
   "measurements": [
     {
@@ -8,50 +8,59 @@
       "samples": [
         {
           "ok": true,
-          "durationMs": 8.901749968528748,
+          "durationMs": 8.715334057807922,
           "code": 0,
           "signal": null,
           "stderr": ""
         },
         {
           "ok": true,
-          "durationMs": 7.934666991233826,
+          "durationMs": 7.815000057220459,
           "code": 0,
           "signal": null,
           "stderr": ""
         },
         {
           "ok": true,
-          "durationMs": 7.9233750104904175,
+          "durationMs": 8.494875073432922,
           "code": 0,
           "signal": null,
           "stderr": ""
         },
         {
           "ok": true,
-          "durationMs": 8.060083031654358,
+          "durationMs": 8.077707886695862,
           "code": 0,
           "signal": null,
           "stderr": ""
         },
         {
           "ok": true,
-          "durationMs": 8.92312490940094,
+          "durationMs": 7.904584050178528,
           "code": 0,
           "signal": null,
           "stderr": ""
         }
       ],
-      "avgMiddleMs": 8.3,
-      "minMs": 7.9,
-      "maxMs": 8.9
+      "failedRuns": 0,
+      "avgMiddleMs": 8.2,
+      "minMs": 7.8,
+      "maxMs": 8.7
     },
     {
       "label": "host-import",
       "samples": [
         {
           "ok": true,
-          "durationMs": 1283
+          "durationMs": 1195
+        },
+        {
+          "ok": true,
+          "durationMs": 1143
+        },
+        {
+          "ok": true,
+          "durationMs": 1145
         },
         {
           "ok": true,
@@ -59,359 +68,340 @@
         },
         {
           "ok": true,
-          "durationMs": 1139
-        },
-        {
-          "ok": true,
-          "durationMs": 1141
-        },
-        {
-          "ok": true,
-          "durationMs": 1153
+          "durationMs": 1143
         }
       ],
-      "avgMiddleMs": 1146,
-      "minMs": 1139,
-      "maxMs": 1283
+      "failedRuns": 0,
+      "avgMiddleMs": 1144,
+      "minMs": 1143,
+      "maxMs": 1195
     },
     {
       "label": "child-first-response",
       "samples": [
         {
-          "ok": false,
-          "durationMs": 2148.3952499628067,
-          "code": 1,
-          "signal": null,
-          "output": "",
-          "stderr": "ursor/composer-2.5\"\nWarning: No models match pattern \"zai/glm-5.1\"\nError: Failed to load extension \"/Users/sumo-deus/.pi/agent/git/github.com/dhruvkelawala/sumocode/src/extension.ts\": Tool \"task\" conflicts with /Volumes/SumoDeus NVMe/code/sumocode.sumo-worktrees/advisor__060-startup-perf-baseline-v2/src/extension.ts\nError: Failed to load extension \"/Users/sumo-deus/.pi/agent/git/github.com/dhruvkelawala/sumocode/src/extension.ts\": Tool \"question\" conflicts with /Volumes/SumoDeus NVMe/code/sumocode.sumo-worktrees/advisor__060-startup-perf-baseline-v2/src/extension.ts\nError: Failed to load extension \"/Users/sumo-deus/.pi/agent/git/github.com/dhruvkelawala/sumocode/src/extension.ts\": Tool \"terminal_start\" conflicts with /Volumes/SumoDeus NVMe/code/sumocode.sumo-worktrees/advisor__060-startup-perf-baseline-v2/src/extension.ts\nError: Failed to load extension \"/Users/sumo-deus/.pi/agent/git/github.com/dhruvkelawala/sumocode/src/extension.ts\": Tool \"terminal_check\" conflicts with /Volumes/SumoDeus NVMe/code/sumocode.sumo-worktrees/advisor__060-startup-perf-baseline-v2/src/extension.ts\nError: Failed to load extension \"/Users/sumo-deus/.pi/agent/git/github.com/dhruvkelawala/sumocode/src/extension.ts\": Tool \"terminal_wait\" conflicts with /Volumes/SumoDeus NVMe/code/sumocode.sumo-worktrees/advisor__060-startup-perf-baseline-v2/src/extension.ts\nError: Failed to load extension \"/Users/sumo-deus/.pi/agent/git/github.com/dhruvkelawala/sumocode/src/extension.ts\": Tool \"terminal_stop\" conflicts with /Volumes/SumoDeus NVMe/code/sumocode.sumo-worktrees/advisor__060-startup-perf-baseline-v2/src/extension.ts\nError: Failed to load extension \"/Users/sumo-deus/.pi/agent/git/github.com/dhruvkelawala/sumocode/src/extension.ts\": Tool \"terminal_list\" conflicts with /Volumes/SumoDeus NVMe/code/sumocode.sumo-worktrees/advisor__060-startup-perf-baseline-v2/src/extension.ts\nError: Failed to load extension \"/Users/sumo-deus/.pi/agent/git/github.com/dhruvkelawala/sumocode/src/extension.ts\": Tool \"subagent_spawn\" conflicts with /Volumes/SumoDeus NVMe/code/sumocode.sumo-worktrees/advisor__060-startup-perf-baseline-v2/src/extension.ts\nError: Failed to load extension \"/Users/sumo-deus/.pi/agent/git/github.com/dhruvkelawala/sumocode/src/extension.ts\": Tool \"subagent_send\" conflicts with /Volumes/SumoDeus NVMe/code/sumocode.sumo-worktrees/advisor__060-startup-perf-baseline-v2/src/extension.ts\nError: Failed to load extension \"/Users/sumo-deus/.pi/agent/git/github.com/dhruvkelawala/sumocode/src/extension.ts\": Tool \"subagent_check\" conflicts with /Volumes/SumoDeus NVMe/code/sumocode.sumo-worktrees/advisor__060-startup-perf-baseline-v2/src/extension.ts\nError: Failed to load extension \"/Users/sumo-deus/.pi/agent/git/github.com/dhruvkelawala/sumocode/src/extension.ts\": Tool \"subagent_wait\" conflicts with /Volumes/SumoDeus NVMe/code/sumocode.sumo-worktrees/advisor__060-startup-perf-baseline-v2/src/extension.ts\nError: Failed to load extension \"/Users/sumo-deus/.pi/agent/git/github.com/dhruvkelawala/sumocode/src/extension.ts\": Tool \"subagent_cancel\" conflicts with /Volumes/SumoDeus NVMe/code/sumocode.sumo-worktrees/advisor__060-startup-perf-baseline-v2/src/extension.ts\nError: Failed to load extension \"/Users/sumo-deus/.pi/agent/git/github.com/dhruvkelawala/sumocode/src/extension.ts\": Tool \"subagent_list\" conflicts with /Volumes/SumoDeus NVMe/code/sumocode.sumo-worktrees/advisor__060-startup-perf-baseline-v2/src/extension.ts\nError: Failed to load extension \"/Users/sumo-deus/.pi/agent/git/github.com/dhruvkelawala/sumocode/src/extension.ts\": Tool \"slate_list\" conflicts with /Volumes/SumoDeus NVMe/code/sumocode.sumo-worktrees/advisor__060-startup-perf-baseline-v2/src/extension.ts\nError: Failed to load extension \"/Users/sumo-deus/.pi/agent/git/github.com/dhruvkelawala/sumocode/src/extension.ts\": Tool \"slate_done\" conflicts with /Volumes/SumoDeus NVMe/code/sumocode.sumo-worktrees/advisor__060-startup-perf-baseline-v2/src/extension.ts\nHint: Start without extensions using \"pi -ne\".\n"
+          "ok": true,
+          "durationMs": 2655.3794590234756
         },
         {
-          "ok": false,
-          "durationMs": 2073.863667011261,
-          "code": 1,
-          "signal": null,
-          "output": "",
-          "stderr": "ursor/composer-2.5\"\nWarning: No models match pattern \"zai/glm-5.1\"\nError: Failed to load extension \"/Users/sumo-deus/.pi/agent/git/github.com/dhruvkelawala/sumocode/src/extension.ts\": Tool \"task\" conflicts with /Volumes/SumoDeus NVMe/code/sumocode.sumo-worktrees/advisor__060-startup-perf-baseline-v2/src/extension.ts\nError: Failed to load extension \"/Users/sumo-deus/.pi/agent/git/github.com/dhruvkelawala/sumocode/src/extension.ts\": Tool \"question\" conflicts with /Volumes/SumoDeus NVMe/code/sumocode.sumo-worktrees/advisor__060-startup-perf-baseline-v2/src/extension.ts\nError: Failed to load extension \"/Users/sumo-deus/.pi/agent/git/github.com/dhruvkelawala/sumocode/src/extension.ts\": Tool \"terminal_start\" conflicts with /Volumes/SumoDeus NVMe/code/sumocode.sumo-worktrees/advisor__060-startup-perf-baseline-v2/src/extension.ts\nError: Failed to load extension \"/Users/sumo-deus/.pi/agent/git/github.com/dhruvkelawala/sumocode/src/extension.ts\": Tool \"terminal_check\" conflicts with /Volumes/SumoDeus NVMe/code/sumocode.sumo-worktrees/advisor__060-startup-perf-baseline-v2/src/extension.ts\nError: Failed to load extension \"/Users/sumo-deus/.pi/agent/git/github.com/dhruvkelawala/sumocode/src/extension.ts\": Tool \"terminal_wait\" conflicts with /Volumes/SumoDeus NVMe/code/sumocode.sumo-worktrees/advisor__060-startup-perf-baseline-v2/src/extension.ts\nError: Failed to load extension \"/Users/sumo-deus/.pi/agent/git/github.com/dhruvkelawala/sumocode/src/extension.ts\": Tool \"terminal_stop\" conflicts with /Volumes/SumoDeus NVMe/code/sumocode.sumo-worktrees/advisor__060-startup-perf-baseline-v2/src/extension.ts\nError: Failed to load extension \"/Users/sumo-deus/.pi/agent/git/github.com/dhruvkelawala/sumocode/src/extension.ts\": Tool \"terminal_list\" conflicts with /Volumes/SumoDeus NVMe/code/sumocode.sumo-worktrees/advisor__060-startup-perf-baseline-v2/src/extension.ts\nError: Failed to load extension \"/Users/sumo-deus/.pi/agent/git/github.com/dhruvkelawala/sumocode/src/extension.ts\": Tool \"subagent_spawn\" conflicts with /Volumes/SumoDeus NVMe/code/sumocode.sumo-worktrees/advisor__060-startup-perf-baseline-v2/src/extension.ts\nError: Failed to load extension \"/Users/sumo-deus/.pi/agent/git/github.com/dhruvkelawala/sumocode/src/extension.ts\": Tool \"subagent_send\" conflicts with /Volumes/SumoDeus NVMe/code/sumocode.sumo-worktrees/advisor__060-startup-perf-baseline-v2/src/extension.ts\nError: Failed to load extension \"/Users/sumo-deus/.pi/agent/git/github.com/dhruvkelawala/sumocode/src/extension.ts\": Tool \"subagent_check\" conflicts with /Volumes/SumoDeus NVMe/code/sumocode.sumo-worktrees/advisor__060-startup-perf-baseline-v2/src/extension.ts\nError: Failed to load extension \"/Users/sumo-deus/.pi/agent/git/github.com/dhruvkelawala/sumocode/src/extension.ts\": Tool \"subagent_wait\" conflicts with /Volumes/SumoDeus NVMe/code/sumocode.sumo-worktrees/advisor__060-startup-perf-baseline-v2/src/extension.ts\nError: Failed to load extension \"/Users/sumo-deus/.pi/agent/git/github.com/dhruvkelawala/sumocode/src/extension.ts\": Tool \"subagent_cancel\" conflicts with /Volumes/SumoDeus NVMe/code/sumocode.sumo-worktrees/advisor__060-startup-perf-baseline-v2/src/extension.ts\nError: Failed to load extension \"/Users/sumo-deus/.pi/agent/git/github.com/dhruvkelawala/sumocode/src/extension.ts\": Tool \"subagent_list\" conflicts with /Volumes/SumoDeus NVMe/code/sumocode.sumo-worktrees/advisor__060-startup-perf-baseline-v2/src/extension.ts\nError: Failed to load extension \"/Users/sumo-deus/.pi/agent/git/github.com/dhruvkelawala/sumocode/src/extension.ts\": Tool \"slate_list\" conflicts with /Volumes/SumoDeus NVMe/code/sumocode.sumo-worktrees/advisor__060-startup-perf-baseline-v2/src/extension.ts\nError: Failed to load extension \"/Users/sumo-deus/.pi/agent/git/github.com/dhruvkelawala/sumocode/src/extension.ts\": Tool \"slate_done\" conflicts with /Volumes/SumoDeus NVMe/code/sumocode.sumo-worktrees/advisor__060-startup-perf-baseline-v2/src/extension.ts\nHint: Start without extensions using \"pi -ne\".\n"
+          "ok": true,
+          "durationMs": 2467.5740410089493
         },
         {
-          "ok": false,
-          "durationMs": 2072.780417084694,
-          "code": 1,
-          "signal": null,
-          "output": "",
-          "stderr": "ursor/composer-2.5\"\nWarning: No models match pattern \"zai/glm-5.1\"\nError: Failed to load extension \"/Users/sumo-deus/.pi/agent/git/github.com/dhruvkelawala/sumocode/src/extension.ts\": Tool \"task\" conflicts with /Volumes/SumoDeus NVMe/code/sumocode.sumo-worktrees/advisor__060-startup-perf-baseline-v2/src/extension.ts\nError: Failed to load extension \"/Users/sumo-deus/.pi/agent/git/github.com/dhruvkelawala/sumocode/src/extension.ts\": Tool \"question\" conflicts with /Volumes/SumoDeus NVMe/code/sumocode.sumo-worktrees/advisor__060-startup-perf-baseline-v2/src/extension.ts\nError: Failed to load extension \"/Users/sumo-deus/.pi/agent/git/github.com/dhruvkelawala/sumocode/src/extension.ts\": Tool \"terminal_start\" conflicts with /Volumes/SumoDeus NVMe/code/sumocode.sumo-worktrees/advisor__060-startup-perf-baseline-v2/src/extension.ts\nError: Failed to load extension \"/Users/sumo-deus/.pi/agent/git/github.com/dhruvkelawala/sumocode/src/extension.ts\": Tool \"terminal_check\" conflicts with /Volumes/SumoDeus NVMe/code/sumocode.sumo-worktrees/advisor__060-startup-perf-baseline-v2/src/extension.ts\nError: Failed to load extension \"/Users/sumo-deus/.pi/agent/git/github.com/dhruvkelawala/sumocode/src/extension.ts\": Tool \"terminal_wait\" conflicts with /Volumes/SumoDeus NVMe/code/sumocode.sumo-worktrees/advisor__060-startup-perf-baseline-v2/src/extension.ts\nError: Failed to load extension \"/Users/sumo-deus/.pi/agent/git/github.com/dhruvkelawala/sumocode/src/extension.ts\": Tool \"terminal_stop\" conflicts with /Volumes/SumoDeus NVMe/code/sumocode.sumo-worktrees/advisor__060-startup-perf-baseline-v2/src/extension.ts\nError: Failed to load extension \"/Users/sumo-deus/.pi/agent/git/github.com/dhruvkelawala/sumocode/src/extension.ts\": Tool \"terminal_list\" conflicts with /Volumes/SumoDeus NVMe/code/sumocode.sumo-worktrees/advisor__060-startup-perf-baseline-v2/src/extension.ts\nError: Failed to load extension \"/Users/sumo-deus/.pi/agent/git/github.com/dhruvkelawala/sumocode/src/extension.ts\": Tool \"subagent_spawn\" conflicts with /Volumes/SumoDeus NVMe/code/sumocode.sumo-worktrees/advisor__060-startup-perf-baseline-v2/src/extension.ts\nError: Failed to load extension \"/Users/sumo-deus/.pi/agent/git/github.com/dhruvkelawala/sumocode/src/extension.ts\": Tool \"subagent_send\" conflicts with /Volumes/SumoDeus NVMe/code/sumocode.sumo-worktrees/advisor__060-startup-perf-baseline-v2/src/extension.ts\nError: Failed to load extension \"/Users/sumo-deus/.pi/agent/git/github.com/dhruvkelawala/sumocode/src/extension.ts\": Tool \"subagent_check\" conflicts with /Volumes/SumoDeus NVMe/code/sumocode.sumo-worktrees/advisor__060-startup-perf-baseline-v2/src/extension.ts\nError: Failed to load extension \"/Users/sumo-deus/.pi/agent/git/github.com/dhruvkelawala/sumocode/src/extension.ts\": Tool \"subagent_wait\" conflicts with /Volumes/SumoDeus NVMe/code/sumocode.sumo-worktrees/advisor__060-startup-perf-baseline-v2/src/extension.ts\nError: Failed to load extension \"/Users/sumo-deus/.pi/agent/git/github.com/dhruvkelawala/sumocode/src/extension.ts\": Tool \"subagent_cancel\" conflicts with /Volumes/SumoDeus NVMe/code/sumocode.sumo-worktrees/advisor__060-startup-perf-baseline-v2/src/extension.ts\nError: Failed to load extension \"/Users/sumo-deus/.pi/agent/git/github.com/dhruvkelawala/sumocode/src/extension.ts\": Tool \"subagent_list\" conflicts with /Volumes/SumoDeus NVMe/code/sumocode.sumo-worktrees/advisor__060-startup-perf-baseline-v2/src/extension.ts\nError: Failed to load extension \"/Users/sumo-deus/.pi/agent/git/github.com/dhruvkelawala/sumocode/src/extension.ts\": Tool \"slate_list\" conflicts with /Volumes/SumoDeus NVMe/code/sumocode.sumo-worktrees/advisor__060-startup-perf-baseline-v2/src/extension.ts\nError: Failed to load extension \"/Users/sumo-deus/.pi/agent/git/github.com/dhruvkelawala/sumocode/src/extension.ts\": Tool \"slate_done\" conflicts with /Volumes/SumoDeus NVMe/code/sumocode.sumo-worktrees/advisor__060-startup-perf-baseline-v2/src/extension.ts\nHint: Start without extensions using \"pi -ne\".\n"
+          "ok": true,
+          "durationMs": 2346.337249994278
         },
         {
-          "ok": false,
-          "durationMs": 2073.597958087921,
-          "code": 1,
-          "signal": null,
-          "output": "",
-          "stderr": "ursor/composer-2.5\"\nWarning: No models match pattern \"zai/glm-5.1\"\nError: Failed to load extension \"/Users/sumo-deus/.pi/agent/git/github.com/dhruvkelawala/sumocode/src/extension.ts\": Tool \"task\" conflicts with /Volumes/SumoDeus NVMe/code/sumocode.sumo-worktrees/advisor__060-startup-perf-baseline-v2/src/extension.ts\nError: Failed to load extension \"/Users/sumo-deus/.pi/agent/git/github.com/dhruvkelawala/sumocode/src/extension.ts\": Tool \"question\" conflicts with /Volumes/SumoDeus NVMe/code/sumocode.sumo-worktrees/advisor__060-startup-perf-baseline-v2/src/extension.ts\nError: Failed to load extension \"/Users/sumo-deus/.pi/agent/git/github.com/dhruvkelawala/sumocode/src/extension.ts\": Tool \"terminal_start\" conflicts with /Volumes/SumoDeus NVMe/code/sumocode.sumo-worktrees/advisor__060-startup-perf-baseline-v2/src/extension.ts\nError: Failed to load extension \"/Users/sumo-deus/.pi/agent/git/github.com/dhruvkelawala/sumocode/src/extension.ts\": Tool \"terminal_check\" conflicts with /Volumes/SumoDeus NVMe/code/sumocode.sumo-worktrees/advisor__060-startup-perf-baseline-v2/src/extension.ts\nError: Failed to load extension \"/Users/sumo-deus/.pi/agent/git/github.com/dhruvkelawala/sumocode/src/extension.ts\": Tool \"terminal_wait\" conflicts with /Volumes/SumoDeus NVMe/code/sumocode.sumo-worktrees/advisor__060-startup-perf-baseline-v2/src/extension.ts\nError: Failed to load extension \"/Users/sumo-deus/.pi/agent/git/github.com/dhruvkelawala/sumocode/src/extension.ts\": Tool \"terminal_stop\" conflicts with /Volumes/SumoDeus NVMe/code/sumocode.sumo-worktrees/advisor__060-startup-perf-baseline-v2/src/extension.ts\nError: Failed to load extension \"/Users/sumo-deus/.pi/agent/git/github.com/dhruvkelawala/sumocode/src/extension.ts\": Tool \"terminal_list\" conflicts with /Volumes/SumoDeus NVMe/code/sumocode.sumo-worktrees/advisor__060-startup-perf-baseline-v2/src/extension.ts\nError: Failed to load extension \"/Users/sumo-deus/.pi/agent/git/github.com/dhruvkelawala/sumocode/src/extension.ts\": Tool \"subagent_spawn\" conflicts with /Volumes/SumoDeus NVMe/code/sumocode.sumo-worktrees/advisor__060-startup-perf-baseline-v2/src/extension.ts\nError: Failed to load extension \"/Users/sumo-deus/.pi/agent/git/github.com/dhruvkelawala/sumocode/src/extension.ts\": Tool \"subagent_send\" conflicts with /Volumes/SumoDeus NVMe/code/sumocode.sumo-worktrees/advisor__060-startup-perf-baseline-v2/src/extension.ts\nError: Failed to load extension \"/Users/sumo-deus/.pi/agent/git/github.com/dhruvkelawala/sumocode/src/extension.ts\": Tool \"subagent_check\" conflicts with /Volumes/SumoDeus NVMe/code/sumocode.sumo-worktrees/advisor__060-startup-perf-baseline-v2/src/extension.ts\nError: Failed to load extension \"/Users/sumo-deus/.pi/agent/git/github.com/dhruvkelawala/sumocode/src/extension.ts\": Tool \"subagent_wait\" conflicts with /Volumes/SumoDeus NVMe/code/sumocode.sumo-worktrees/advisor__060-startup-perf-baseline-v2/src/extension.ts\nError: Failed to load extension \"/Users/sumo-deus/.pi/agent/git/github.com/dhruvkelawala/sumocode/src/extension.ts\": Tool \"subagent_cancel\" conflicts with /Volumes/SumoDeus NVMe/code/sumocode.sumo-worktrees/advisor__060-startup-perf-baseline-v2/src/extension.ts\nError: Failed to load extension \"/Users/sumo-deus/.pi/agent/git/github.com/dhruvkelawala/sumocode/src/extension.ts\": Tool \"subagent_list\" conflicts with /Volumes/SumoDeus NVMe/code/sumocode.sumo-worktrees/advisor__060-startup-perf-baseline-v2/src/extension.ts\nError: Failed to load extension \"/Users/sumo-deus/.pi/agent/git/github.com/dhruvkelawala/sumocode/src/extension.ts\": Tool \"slate_list\" conflicts with /Volumes/SumoDeus NVMe/code/sumocode.sumo-worktrees/advisor__060-startup-perf-baseline-v2/src/extension.ts\nError: Failed to load extension \"/Users/sumo-deus/.pi/agent/git/github.com/dhruvkelawala/sumocode/src/extension.ts\": Tool \"slate_done\" conflicts with /Volumes/SumoDeus NVMe/code/sumocode.sumo-worktrees/advisor__060-startup-perf-baseline-v2/src/extension.ts\nHint: Start without extensions using \"pi -ne\".\n"
+          "ok": true,
+          "durationMs": 2546.6729999780655
         },
         {
-          "ok": false,
-          "durationMs": 2060.0109169483185,
-          "code": 1,
-          "signal": null,
-          "output": "",
-          "stderr": "ursor/composer-2.5\"\nWarning: No models match pattern \"zai/glm-5.1\"\nError: Failed to load extension \"/Users/sumo-deus/.pi/agent/git/github.com/dhruvkelawala/sumocode/src/extension.ts\": Tool \"task\" conflicts with /Volumes/SumoDeus NVMe/code/sumocode.sumo-worktrees/advisor__060-startup-perf-baseline-v2/src/extension.ts\nError: Failed to load extension \"/Users/sumo-deus/.pi/agent/git/github.com/dhruvkelawala/sumocode/src/extension.ts\": Tool \"question\" conflicts with /Volumes/SumoDeus NVMe/code/sumocode.sumo-worktrees/advisor__060-startup-perf-baseline-v2/src/extension.ts\nError: Failed to load extension \"/Users/sumo-deus/.pi/agent/git/github.com/dhruvkelawala/sumocode/src/extension.ts\": Tool \"terminal_start\" conflicts with /Volumes/SumoDeus NVMe/code/sumocode.sumo-worktrees/advisor__060-startup-perf-baseline-v2/src/extension.ts\nError: Failed to load extension \"/Users/sumo-deus/.pi/agent/git/github.com/dhruvkelawala/sumocode/src/extension.ts\": Tool \"terminal_check\" conflicts with /Volumes/SumoDeus NVMe/code/sumocode.sumo-worktrees/advisor__060-startup-perf-baseline-v2/src/extension.ts\nError: Failed to load extension \"/Users/sumo-deus/.pi/agent/git/github.com/dhruvkelawala/sumocode/src/extension.ts\": Tool \"terminal_wait\" conflicts with /Volumes/SumoDeus NVMe/code/sumocode.sumo-worktrees/advisor__060-startup-perf-baseline-v2/src/extension.ts\nError: Failed to load extension \"/Users/sumo-deus/.pi/agent/git/github.com/dhruvkelawala/sumocode/src/extension.ts\": Tool \"terminal_stop\" conflicts with /Volumes/SumoDeus NVMe/code/sumocode.sumo-worktrees/advisor__060-startup-perf-baseline-v2/src/extension.ts\nError: Failed to load extension \"/Users/sumo-deus/.pi/agent/git/github.com/dhruvkelawala/sumocode/src/extension.ts\": Tool \"terminal_list\" conflicts with /Volumes/SumoDeus NVMe/code/sumocode.sumo-worktrees/advisor__060-startup-perf-baseline-v2/src/extension.ts\nError: Failed to load extension \"/Users/sumo-deus/.pi/agent/git/github.com/dhruvkelawala/sumocode/src/extension.ts\": Tool \"subagent_spawn\" conflicts with /Volumes/SumoDeus NVMe/code/sumocode.sumo-worktrees/advisor__060-startup-perf-baseline-v2/src/extension.ts\nError: Failed to load extension \"/Users/sumo-deus/.pi/agent/git/github.com/dhruvkelawala/sumocode/src/extension.ts\": Tool \"subagent_send\" conflicts with /Volumes/SumoDeus NVMe/code/sumocode.sumo-worktrees/advisor__060-startup-perf-baseline-v2/src/extension.ts\nError: Failed to load extension \"/Users/sumo-deus/.pi/agent/git/github.com/dhruvkelawala/sumocode/src/extension.ts\": Tool \"subagent_check\" conflicts with /Volumes/SumoDeus NVMe/code/sumocode.sumo-worktrees/advisor__060-startup-perf-baseline-v2/src/extension.ts\nError: Failed to load extension \"/Users/sumo-deus/.pi/agent/git/github.com/dhruvkelawala/sumocode/src/extension.ts\": Tool \"subagent_wait\" conflicts with /Volumes/SumoDeus NVMe/code/sumocode.sumo-worktrees/advisor__060-startup-perf-baseline-v2/src/extension.ts\nError: Failed to load extension \"/Users/sumo-deus/.pi/agent/git/github.com/dhruvkelawala/sumocode/src/extension.ts\": Tool \"subagent_cancel\" conflicts with /Volumes/SumoDeus NVMe/code/sumocode.sumo-worktrees/advisor__060-startup-perf-baseline-v2/src/extension.ts\nError: Failed to load extension \"/Users/sumo-deus/.pi/agent/git/github.com/dhruvkelawala/sumocode/src/extension.ts\": Tool \"subagent_list\" conflicts with /Volumes/SumoDeus NVMe/code/sumocode.sumo-worktrees/advisor__060-startup-perf-baseline-v2/src/extension.ts\nError: Failed to load extension \"/Users/sumo-deus/.pi/agent/git/github.com/dhruvkelawala/sumocode/src/extension.ts\": Tool \"slate_list\" conflicts with /Volumes/SumoDeus NVMe/code/sumocode.sumo-worktrees/advisor__060-startup-perf-baseline-v2/src/extension.ts\nError: Failed to load extension \"/Users/sumo-deus/.pi/agent/git/github.com/dhruvkelawala/sumocode/src/extension.ts\": Tool \"slate_done\" conflicts with /Volumes/SumoDeus NVMe/code/sumocode.sumo-worktrees/advisor__060-startup-perf-baseline-v2/src/extension.ts\nHint: Start without extensions using \"pi -ne\".\n"
+          "ok": true,
+          "durationMs": 2630.7087500095367
         }
       ],
-      "avgMiddleMs": 2073.4,
-      "minMs": 2060,
-      "maxMs": 2148.4
+      "failedRuns": 0,
+      "avgMiddleMs": 2548.3,
+      "minMs": 2346.3,
+      "maxMs": 2655.4
     },
     {
       "label": "child-first-response-noext",
       "samples": [
         {
           "ok": true,
-          "durationMs": 1573.4892081022263
+          "durationMs": 1645.54383289814
         },
         {
           "ok": true,
-          "durationMs": 1685.2945840358734
+          "durationMs": 1577.8834999799728
         },
         {
           "ok": true,
-          "durationMs": 1551.3348751068115
+          "durationMs": 1649.7047499418259
         },
         {
           "ok": true,
-          "durationMs": 1579.820582985878
+          "durationMs": 1426.2610830068588
         },
         {
           "ok": true,
-          "durationMs": 1641.4934159517288
+          "durationMs": 1674.2811669111252
         }
       ],
-      "avgMiddleMs": 1598.3,
-      "minMs": 1551.3,
-      "maxMs": 1685.3
+      "failedRuns": 0,
+      "avgMiddleMs": 1624.4,
+      "minMs": 1426.3,
+      "maxMs": 1674.3
     },
     {
       "label": "print-mode",
       "samples": [
         {
           "ok": false,
-          "durationMs": 3515.435166954994,
+          "durationMs": 3113.1179159879684,
           "code": 1,
           "signal": null,
-          "stderr": "Warning: No models match pattern \"cursor/composer-2.5\"\nWarning: No models match pattern \"zai/glm-5.1\"\n400 {\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"You're out of extra usage. Add more at claude.ai/settings/usage and keep going.\"},\"request_id\":\"req_011Cdu5V6XWEvWFmCUDWjQDP\"}\n"
+          "error": "process failed"
         },
         {
           "ok": false,
-          "durationMs": 2915.9818749427795,
+          "durationMs": 2997.7200000286102,
           "code": 1,
           "signal": null,
-          "stderr": "Warning: No models match pattern \"cursor/composer-2.5\"\nWarning: No models match pattern \"zai/glm-5.1\"\n400 {\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"You're out of extra usage. Add more at claude.ai/settings/usage and keep going.\"},\"request_id\":\"req_011Cdu5VKBm5q92LCJyp322J\"}\n"
+          "error": "process failed"
         },
         {
           "ok": false,
-          "durationMs": 2469.195958018303,
+          "durationMs": 2835.9497920274734,
           "code": 1,
           "signal": null,
-          "stderr": "Warning: No models match pattern \"cursor/composer-2.5\"\nWarning: No models match pattern \"zai/glm-5.1\"\n400 {\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"You're out of extra usage. Add more at claude.ai/settings/usage and keep going.\"},\"request_id\":\"req_011Cdu5VXszw8amDzNvKYK42\"}\n"
+          "error": "process failed"
         },
         {
           "ok": false,
-          "durationMs": 3348.091500043869,
+          "durationMs": 2728.918916940689,
           "code": 1,
           "signal": null,
-          "stderr": "Warning: No models match pattern \"cursor/composer-2.5\"\nWarning: No models match pattern \"zai/glm-5.1\"\n400 {\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"You're out of extra usage. Add more at claude.ai/settings/usage and keep going.\"},\"request_id\":\"req_011Cdu5VhyDgn5rTLrwc245r\"}\n"
+          "error": "process failed"
         },
         {
           "ok": false,
-          "durationMs": 2623.4854170084,
+          "durationMs": 4517.237083077431,
           "code": 1,
           "signal": null,
-          "stderr": "Warning: No models match pattern \"cursor/composer-2.5\"\nWarning: No models match pattern \"zai/glm-5.1\"\n400 {\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"You're out of extra usage. Add more at claude.ai/settings/usage and keep going.\"},\"request_id\":\"req_011Cdu5VxRdBEvPW1yHnzz8g\"}\n"
+          "error": "process failed"
         }
       ],
-      "avgMiddleMs": 2962.5,
-      "minMs": 2469.2,
-      "maxMs": 3515.4
+      "failedRuns": 5,
+      "avgMiddleMs": null,
+      "minMs": null,
+      "maxMs": null
     },
     {
       "label": "first-frame",
       "samples": [
         {
           "ok": true,
-          "durationMs": 2643.391250014305
+          "durationMs": 2822.5525000095367
         },
         {
           "ok": true,
-          "durationMs": 2877.52891600132
+          "durationMs": 2820.2151670455933
         },
         {
           "ok": true,
-          "durationMs": 2674.895833969116
+          "durationMs": 2792.7496670484543
         },
         {
           "ok": true,
-          "durationMs": 2766.725832939148
+          "durationMs": 2905.6922079324722
         },
         {
           "ok": true,
-          "durationMs": 2716.3455840349197
+          "durationMs": 2785.6574169397354
         }
       ],
-      "avgMiddleMs": 2719.3,
-      "minMs": 2643.4,
-      "maxMs": 2877.5
+      "failedRuns": 0,
+      "avgMiddleMs": 2811.8,
+      "minMs": 2785.7,
+      "maxMs": 2905.7
     },
     {
       "label": "boot-screen-frame",
       "samples": [
         {
           "ok": true,
-          "durationMs": 3308,
-          "bootScreenFrameMs": 3308,
-          "appReadyMs": 3308,
-          "stableChromeMs": 3308,
-          "inputReadyMs": 3308
+          "durationMs": 2749,
+          "bootScreenFrameMs": 2749,
+          "appReadyMs": 2749,
+          "stableChromeMs": 2749,
+          "inputReadyMs": 2749
         },
         {
           "ok": true,
-          "durationMs": 2806,
-          "bootScreenFrameMs": 2806,
-          "appReadyMs": 2806,
-          "stableChromeMs": 2806,
-          "inputReadyMs": 2806
+          "durationMs": 2735,
+          "bootScreenFrameMs": 2735,
+          "appReadyMs": 2735,
+          "stableChromeMs": 2735,
+          "inputReadyMs": 2735
         },
         {
           "ok": true,
-          "durationMs": 2739,
-          "bootScreenFrameMs": 2739,
+          "durationMs": 2707,
+          "bootScreenFrameMs": 2707,
+          "appReadyMs": 2707,
+          "stableChromeMs": 2707,
+          "inputReadyMs": 2707
+        },
+        {
+          "ok": true,
+          "durationMs": 2740,
+          "bootScreenFrameMs": 2740,
           "appReadyMs": 2740,
-          "stableChromeMs": 2739,
+          "stableChromeMs": 2740,
           "inputReadyMs": 2740
         },
         {
           "ok": true,
-          "durationMs": 2793,
-          "bootScreenFrameMs": 2793,
-          "appReadyMs": 2794,
-          "stableChromeMs": 2793,
-          "inputReadyMs": 2794
-        },
-        {
-          "ok": true,
-          "durationMs": 2849,
-          "bootScreenFrameMs": 2849,
-          "appReadyMs": 2850,
-          "stableChromeMs": 2849,
-          "inputReadyMs": 2850
+          "durationMs": 2532,
+          "bootScreenFrameMs": 2532,
+          "appReadyMs": 2532,
+          "stableChromeMs": 2532,
+          "inputReadyMs": 2532
         }
       ],
-      "avgMiddleMs": 2816,
-      "minMs": 2739,
-      "maxMs": 3308
+      "failedRuns": 0,
+      "avgMiddleMs": 2727.3,
+      "minMs": 2532,
+      "maxMs": 2749
     },
     {
       "label": "app-ready",
       "samples": [
         {
           "ok": true,
-          "durationMs": 3308,
-          "bootScreenFrameMs": 3308,
-          "appReadyMs": 3308,
-          "stableChromeMs": 3308,
-          "inputReadyMs": 3308
+          "durationMs": 2749,
+          "bootScreenFrameMs": 2749,
+          "appReadyMs": 2749,
+          "stableChromeMs": 2749,
+          "inputReadyMs": 2749
         },
         {
           "ok": true,
-          "durationMs": 2806,
-          "bootScreenFrameMs": 2806,
-          "appReadyMs": 2806,
-          "stableChromeMs": 2806,
-          "inputReadyMs": 2806
+          "durationMs": 2735,
+          "bootScreenFrameMs": 2735,
+          "appReadyMs": 2735,
+          "stableChromeMs": 2735,
+          "inputReadyMs": 2735
+        },
+        {
+          "ok": true,
+          "durationMs": 2707,
+          "bootScreenFrameMs": 2707,
+          "appReadyMs": 2707,
+          "stableChromeMs": 2707,
+          "inputReadyMs": 2707
         },
         {
           "ok": true,
           "durationMs": 2740,
-          "bootScreenFrameMs": 2739,
+          "bootScreenFrameMs": 2740,
           "appReadyMs": 2740,
-          "stableChromeMs": 2739,
+          "stableChromeMs": 2740,
           "inputReadyMs": 2740
         },
         {
           "ok": true,
-          "durationMs": 2794,
-          "bootScreenFrameMs": 2793,
-          "appReadyMs": 2794,
-          "stableChromeMs": 2793,
-          "inputReadyMs": 2794
-        },
-        {
-          "ok": true,
-          "durationMs": 2850,
-          "bootScreenFrameMs": 2849,
-          "appReadyMs": 2850,
-          "stableChromeMs": 2849,
-          "inputReadyMs": 2850
+          "durationMs": 2532,
+          "bootScreenFrameMs": 2532,
+          "appReadyMs": 2532,
+          "stableChromeMs": 2532,
+          "inputReadyMs": 2532
         }
       ],
-      "avgMiddleMs": 2816.7,
-      "minMs": 2740,
-      "maxMs": 3308
+      "failedRuns": 0,
+      "avgMiddleMs": 2727.3,
+      "minMs": 2532,
+      "maxMs": 2749
     },
     {
       "label": "stable-chrome",
       "samples": [
         {
           "ok": true,
-          "durationMs": 3308,
-          "bootScreenFrameMs": 3308,
-          "appReadyMs": 3308,
-          "stableChromeMs": 3308,
-          "inputReadyMs": 3308
+          "durationMs": 2749,
+          "bootScreenFrameMs": 2749,
+          "appReadyMs": 2749,
+          "stableChromeMs": 2749,
+          "inputReadyMs": 2749
         },
         {
           "ok": true,
-          "durationMs": 2806,
-          "bootScreenFrameMs": 2806,
-          "appReadyMs": 2806,
-          "stableChromeMs": 2806,
-          "inputReadyMs": 2806
+          "durationMs": 2735,
+          "bootScreenFrameMs": 2735,
+          "appReadyMs": 2735,
+          "stableChromeMs": 2735,
+          "inputReadyMs": 2735
         },
         {
           "ok": true,
-          "durationMs": 2739,
-          "bootScreenFrameMs": 2739,
+          "durationMs": 2707,
+          "bootScreenFrameMs": 2707,
+          "appReadyMs": 2707,
+          "stableChromeMs": 2707,
+          "inputReadyMs": 2707
+        },
+        {
+          "ok": true,
+          "durationMs": 2740,
+          "bootScreenFrameMs": 2740,
           "appReadyMs": 2740,
-          "stableChromeMs": 2739,
+          "stableChromeMs": 2740,
           "inputReadyMs": 2740
         },
         {
           "ok": true,
-          "durationMs": 2793,
-          "bootScreenFrameMs": 2793,
-          "appReadyMs": 2794,
-          "stableChromeMs": 2793,
-          "inputReadyMs": 2794
-        },
-        {
-          "ok": true,
-          "durationMs": 2849,
-          "bootScreenFrameMs": 2849,
-          "appReadyMs": 2850,
-          "stableChromeMs": 2849,
-          "inputReadyMs": 2850
+          "durationMs": 2532,
+          "bootScreenFrameMs": 2532,
+          "appReadyMs": 2532,
+          "stableChromeMs": 2532,
+          "inputReadyMs": 2532
         }
       ],
-      "avgMiddleMs": 2816,
-      "minMs": 2739,
-      "maxMs": 3308
+      "failedRuns": 0,
+      "avgMiddleMs": 2727.3,
+      "minMs": 2532,
+      "maxMs": 2749
     },
     {
       "label": "input-ready",
       "samples": [
         {
           "ok": true,
-          "durationMs": 3308,
-          "bootScreenFrameMs": 3308,
-          "appReadyMs": 3308,
-          "stableChromeMs": 3308,
-          "inputReadyMs": 3308
+          "durationMs": 2749,
+          "bootScreenFrameMs": 2749,
+          "appReadyMs": 2749,
+          "stableChromeMs": 2749,
+          "inputReadyMs": 2749
         },
         {
           "ok": true,
-          "durationMs": 2806,
-          "bootScreenFrameMs": 2806,
-          "appReadyMs": 2806,
-          "stableChromeMs": 2806,
-          "inputReadyMs": 2806
+          "durationMs": 2735,
+          "bootScreenFrameMs": 2735,
+          "appReadyMs": 2735,
+          "stableChromeMs": 2735,
+          "inputReadyMs": 2735
+        },
+        {
+          "ok": true,
+          "durationMs": 2707,
+          "bootScreenFrameMs": 2707,
+          "appReadyMs": 2707,
+          "stableChromeMs": 2707,
+          "inputReadyMs": 2707
         },
         {
           "ok": true,
           "durationMs": 2740,
-          "bootScreenFrameMs": 2739,
+          "bootScreenFrameMs": 2740,
           "appReadyMs": 2740,
-          "stableChromeMs": 2739,
+          "stableChromeMs": 2740,
           "inputReadyMs": 2740
         },
         {
           "ok": true,
-          "durationMs": 2794,
-          "bootScreenFrameMs": 2793,
-          "appReadyMs": 2794,
-          "stableChromeMs": 2793,
-          "inputReadyMs": 2794
-        },
-        {
-          "ok": true,
-          "durationMs": 2850,
-          "bootScreenFrameMs": 2849,
-          "appReadyMs": 2850,
-          "stableChromeMs": 2849,
-          "inputReadyMs": 2850
+          "durationMs": 2532,
+          "bootScreenFrameMs": 2532,
+          "appReadyMs": 2532,
+          "stableChromeMs": 2532,
+          "inputReadyMs": 2532
         }
       ],
-      "avgMiddleMs": 2816.7,
-      "minMs": 2740,
-      "maxMs": 3308
+      "failedRuns": 0,
+      "avgMiddleMs": 2727.3,
+      "minMs": 2532,
+      "maxMs": 2749
     }
   ]
 }

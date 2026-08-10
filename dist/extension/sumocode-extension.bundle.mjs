@@ -15615,6 +15615,16 @@ function installRpcChildProfile(pi) {
   registerSumoReloadCommand(pi);
   installSumoInteractions(pi, { subagentManager, includeUiSurfaces: false });
 }
+var PROCESS_INSTALL_LATCH = /* @__PURE__ */ Symbol.for("sumocode.extension.processInstallLatch");
+function isSumocodeAlreadyInstalledInProcess(scope = globalThis) {
+  return scope[PROCESS_INSTALL_LATCH] === true;
+}
+function markSumocodeInstalledInProcess(scope = globalThis) {
+  scope[PROCESS_INSTALL_LATCH] = true;
+}
+function resetSumocodeProcessInstallLatchForTests(scope = globalThis) {
+  delete scope[PROCESS_INSTALL_LATCH];
+}
 function sumocode(pi) {
   logDiagnostic("extension_activate_begin", {
     taskMode: isTaskMode(),
@@ -15628,6 +15638,12 @@ function sumocode(pi) {
     console.warn("[sumocode] Skipping installed SumoCode extension because this session is already inside an active SumoCode dev checkout.");
     return;
   }
+  if (isSumocodeAlreadyInstalledInProcess()) {
+    console.warn("[sumocode] Skipping duplicate SumoCode entry: this process already installed SumoCode via another entry path.");
+    logDiagnostic("extension_activate_skipped_duplicate_process_entry", {});
+    return;
+  }
+  markSumocodeInstalledInProcess();
   applyStartupTheme();
   if (isRpcChildProfile()) {
     installRpcChildProfile(pi);
@@ -15691,7 +15707,10 @@ export {
   hasLegacyTaskToolExtension,
   isInstalledPiAgentGitModule,
   isRpcChildProfile,
+  isSumocodeAlreadyInstalledInProcess,
   isTaskMode,
+  markSumocodeInstalledInProcess,
+  resetSumocodeProcessInstallLatchForTests,
   shouldInstallNativeTaskTool,
   shouldNoopDuplicateInstalledExtension,
   shouldNoopHelperSubprocess

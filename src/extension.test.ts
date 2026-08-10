@@ -3,7 +3,10 @@ import sumocode, {
 	findActiveSumoDevTree,
 	isInstalledPiAgentGitModule,
 	isRpcChildProfile,
+	isSumocodeAlreadyInstalledInProcess,
 	isTaskMode,
+	markSumocodeInstalledInProcess,
+	resetSumocodeProcessInstallLatchForTests,
 	shouldInstallNativeTaskTool,
 	shouldNoopDuplicateInstalledExtension,
 	shouldNoopHelperSubprocess,
@@ -42,6 +45,9 @@ beforeEach(() => {
 		ambientEnvSnapshot.set(key, process.env[key]);
 		delete process.env[key];
 	}
+	// Each test gets a fresh "process" as far as the install latch is concerned
+	// (the latch is deliberately process-global in production).
+	resetSumocodeProcessInstallLatchForTests();
 });
 
 afterEach(() => {
@@ -49,6 +55,8 @@ afterEach(() => {
 		if (value === undefined) delete process.env[key];
 		else process.env[key] = value;
 	}
+	// Never leak the process-global latch into other test files in this worker.
+	resetSumocodeProcessInstallLatchForTests();
 });
 
 function buildPiStub() {
@@ -489,5 +497,44 @@ describe("sumocode extension", () => {
 		}
 
 		expect(ctx.ui.notify).not.toHaveBeenCalled();
+	});
+});
+
+describe("process install latch", () => {
+	it("latch helpers round-trip on an injected scope", () => {
+		const scope: Record<PropertyKey, unknown> = {};
+		expect(isSumocodeAlreadyInstalledInProcess(scope)).toBe(false);
+		markSumocodeInstalledInProcess(scope);
+		expect(isSumocodeAlreadyInstalledInProcess(scope)).toBe(true);
+		resetSumocodeProcessInstallLatchForTests(scope);
+		expect(isSumocodeAlreadyInstalledInProcess(scope)).toBe(false);
+	});
+
+	it("second sumocode() invocation in one process registers nothing (npm-link + installed-package + launcher multi-entry crash regression)", () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		try {
+			const first = buildPiStub();
+			sumocode(first.pi as never);
+			expect(first.pi.registerCommand).toHaveBeenCalled();
+
+			const second = buildPiStub();
+			sumocode(second.pi as never);
+			expect(second.pi.registerCommand).not.toHaveBeenCalled();
+			expect(second.pi.registerTool).not.toHaveBeenCalled();
+			expect(second.pi.on).not.toHaveBeenCalled();
+			expect(warn).toHaveBeenCalledWith(expect.stringContaining("already installed SumoCode via another entry path"));
+		} finally {
+			warn.mockRestore();
+		}
+	});
+
+	it("a guard-noop'd entry does not arm the latch for the real entry that follows", () => {
+		const prev = process.env.PI_CMUX_CHILD;
+		process.env.PI_CMUX_CHILD = "1";
+		const helper = buildPiStub();
+		sumocode(helper.pi as never); // helper-subprocess guard noops, must not latch
+		if (prev === undefined) delete process.env.PI_CMUX_CHILD;
+		else process.env.PI_CMUX_CHILD = prev;
+		expect(isSumocodeAlreadyInstalledInProcess()).toBe(false);
 	});
 });

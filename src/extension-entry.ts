@@ -1,7 +1,6 @@
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
-import { createJiti } from "jiti";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const sourcePath = join(root, "src", "extension.ts");
@@ -36,7 +35,8 @@ function selectedEntry(): string {
 	return sourcePath;
 }
 
-const jiti = createJiti(import.meta.url, { moduleCache: false });
-const extension = await jiti.import(selectedEntry(), { default: true });
+// This dynamic import stays inside Pi's extension-loader jiti context, preserving
+// its aliases for peer-only Pi packages and its shared module singletons.
+const extensionModule = await import(pathToFileURL(selectedEntry()).href);
 
-export default extension;
+export default extensionModule.default;

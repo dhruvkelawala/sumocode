@@ -77,6 +77,32 @@ describe("ModalLayer", () => {
 		expect(text).not.toContain("type your answer█");
 	});
 
+	it("keeps login link and redirect controls inside a 24-row terminal overlay cap", () => {
+		const layer = new ModalLayer({ getTerminalSize: () => ({ columns: 60, rows: 24 }) });
+		const loginUrl = `https://claude.ai/oauth/authorize?${"oauth=value&".repeat(18)}`;
+		void layer.input(
+			"Complete login in your browser, or paste the authorization code / redirect URL here:",
+			undefined,
+			{
+				details: ["Complete login in your browser:", loginUrl],
+				copyValue: loginUrl,
+			},
+		);
+
+		// RpcOverlayHost caps centered modals at 65% of a 24-row terminal.
+		const renderedRows = layer.render(60);
+		expect(renderedRows.length).toBeLessThanOrEqual(15);
+		const visibleRows = renderedRows.slice(0, 15);
+		const visibleText = stripAnsi(visibleRows.join("\n"));
+		const visibleAnsi = visibleRows.join("\n");
+
+		expect(visibleText).toContain("open authentication page");
+		expect(visibleText).toContain("> █");
+		expect(visibleText).toContain("ctrl+y copy link");
+		expect(visibleText).toContain("⏎ submit");
+		expect(visibleAnsi).toContain(`\x1b]8;;${loginUrl}\x1b\\`);
+	});
+
 	it("wraps long input values without dropping hidden characters", () => {
 		const layer = new ModalLayer({ getTerminalSize: () => ({ columns: 32, rows: 24 }) });
 		void layer.input("Answer", "type your answer");

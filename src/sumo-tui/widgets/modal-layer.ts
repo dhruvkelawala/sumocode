@@ -23,10 +23,9 @@ const OSC8_CLOSE = "\u001b]8;;\u001b\\";
 function linkedHttpUrl(text: string, color: string): string {
 	if (!/^https?:\/\/[^\s]+$/u.test(text)) return scriptoriumFg(text, color);
 	// OSC 8 is the terminal-native hyperlink protocol. Keeping it here, next to
-	// ModalSurfaceComponent's low-level terminal chrome, lets wrapped URL rows
-	// retain one complete clickable target without teaching generic text spans
-	// about terminal links.
-	return `\u001b]8;;${text}\u001b\\${scriptoriumFg(text, color)}${OSC8_CLOSE}`;
+	// ModalSurfaceComponent's low-level terminal chrome, gives a short label one
+	// complete clickable target without teaching generic text spans about links.
+	return `\u001b]8;;${text}\u001b\\${scriptoriumFg("open authentication page", color)}${OSC8_CLOSE}`;
 }
 
 function rgb(hex: string): { r: number; g: number; b: number } {
@@ -150,14 +149,13 @@ export class ModalLayer extends ModalManager {
 				{ title: dialog.title, options: [], focusedIndex: 0 },
 				modalWidth,
 				{
+					compact: true,
 					extras: [
 						...detailRows,
 						...(detailRows.length > 0 ? [""] : []),
 						...inputRows,
-						"",
 						...(dialog.copyAvailable ? [`     ${scriptoriumFg("ctrl+y copy link · ctrl+click open", colors.foregroundDim)}`] : []),
 						`     ${scriptoriumFg("⏎ submit · ⎋ retreat", colors.foregroundDim)}`,
-						"",
 					],
 				},
 			);

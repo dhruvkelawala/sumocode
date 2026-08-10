@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { readdir, stat } from "node:fs/promises";
+import { readFile, readdir, stat } from "node:fs/promises";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { buildChildSpawnPlan } from "./src/sumo-tui/rpc/spawn-child.mjs";
@@ -25,13 +25,14 @@ async function newestSourceMtime(directory) {
 
 async function bundleIsFresh() {
 	try {
-		const [bundle, newestSource, sourceFace, bundledFace] = await Promise.all([
+		const [bundle, newestSource, sourceFace, sourceFaceBytes, bundledFaceBytes] = await Promise.all([
 			stat(bundlePath),
 			newestSourceMtime(resolve(root, "src")),
 			stat(sourceFacePath),
-			stat(bundledFacePath),
+			readFile(sourceFacePath),
+			readFile(bundledFacePath),
 		]);
-		return bundle.mtimeMs >= Math.max(newestSource, sourceFace.mtimeMs) && bundledFace.size === sourceFace.size;
+		return bundle.mtimeMs >= Math.max(newestSource, sourceFace.mtimeMs) && sourceFaceBytes.equals(bundledFaceBytes);
 	} catch {
 		return false;
 	}

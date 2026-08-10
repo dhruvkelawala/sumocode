@@ -109,6 +109,134 @@ async function measureProcess(label, command, args) {
 	return summariseMeasurement(label, samples);
 }
 
+async function measureChildFirstResponse(label, extraArgs = []) {
+	const samples = [];
+	for (let index = 0; index < RUNS; index += 1) {
+		const start = nowMs();
+		const child = spawn(
+			join(ROOT, "node_modules", ".bin", "pi"),
+			["--mode", "rpc", "-e", join(ROOT, "src", "extension.ts"), "--offline", "--no-session", ...extraArgs],
+			{
+				cwd: ROOT,
+				env: { ...process.env, SUMO_TUI: "0", SUMOCODE_RPC_CHILD: "1" },
+				stdio: ["pipe", "pipe", "pipe"],
+			},
+		);
+		let output = "";
+		let stderr = "";
+		let settled = false;
+		const sample = await new Promise((resolveSample) => {
+			const settle = (result) => {
+				if (settled) return;
+				settled = true;
+				clearTimeout(timer);
+				resolveSample(result);
+			};
+			const terminate = () => {
+				try {
+					child.kill("SIGTERM");
+				} catch {}
+				setTimeout(() => {
+					try {
+						child.kill("SIGKILL");
+					} catch {}
+				}, 250).unref?.();
+			};
+			const timer = setTimeout(() => {
+				terminate();
+				settle({ ok: false, durationMs: nowMs() - start, error: `${label} timed out`, stderr });
+			}, TIMEOUT_MS);
+			child.stdout?.on("data", (chunk) => {
+				output += chunk.toString("utf8");
+				if (output.includes('"probe-1"')) {
+					const durationMs = nowMs() - start;
+					terminate();
+					settle({ ok: true, durationMs });
+				}
+			});
+			child.stderr?.on("data", (chunk) => {
+				stderr += chunk.toString("utf8");
+				if (stderr.length > 4000) stderr = stderr.slice(-4000);
+			});
+			child.on("error", (error) => {
+				settle({ ok: false, durationMs: nowMs() - start, error: error.message, stderr });
+			});
+			child.on("exit", (code, signal) => {
+				settle({ ok: false, durationMs: nowMs() - start, code, signal, output: output.slice(-1200), stderr });
+			});
+			child.stdin?.write(`${JSON.stringify({ type: "get_state", id: "probe-1" })}\n`);
+		});
+		samples.push(sample);
+		await new Promise((resolveSleep) => setTimeout(resolveSleep, 100));
+	}
+	return summariseMeasurement(label, samples);
+}
+
+const HOST_IMPORT_SNIPPET = `
+const t = performance.now();
+const { createJiti } = await import(process.env.PERF_ROOT + "/node_modules/jiti/lib/jiti.mjs");
+const jiti = createJiti("file://" + process.env.PERF_ROOT + "/sumo-rpc-host.js", { moduleCache: true, tryNative: false });
+await jiti.import(process.env.PERF_ROOT + "/src/sumo-tui/rpc/host.ts");
+console.log(Math.round(performance.now() - t));
+`;
+
+async function measureHostImport() {
+	const samples = [];
+	for (let index = 0; index < RUNS; index += 1) {
+		const start = nowMs();
+		const child = spawn(process.execPath, ["--input-type=module", "-e", HOST_IMPORT_SNIPPET], {
+			cwd: ROOT,
+			env: { ...process.env, PERF_ROOT: ROOT },
+			stdio: ["ignore", "pipe", "pipe"],
+		});
+		let stdout = "";
+		let stderr = "";
+		let settled = false;
+		const sample = await new Promise((resolveSample) => {
+			const settle = (result) => {
+				if (settled) return;
+				settled = true;
+				clearTimeout(timer);
+				resolveSample(result);
+			};
+			const terminate = () => {
+				try {
+					child.kill("SIGTERM");
+				} catch {}
+				setTimeout(() => {
+					try {
+						child.kill("SIGKILL");
+					} catch {}
+				}, 250).unref?.();
+			};
+			const timer = setTimeout(() => {
+				terminate();
+				settle({ ok: false, durationMs: nowMs() - start, error: "host-import timed out", stderr });
+			}, TIMEOUT_MS);
+			child.stdout?.on("data", (chunk) => { stdout += chunk.toString("utf8"); });
+			child.stderr?.on("data", (chunk) => {
+				stderr += chunk.toString("utf8");
+				if (stderr.length > 4000) stderr = stderr.slice(-4000);
+			});
+			child.on("error", (error) => {
+				settle({ ok: false, durationMs: nowMs() - start, error: error.message, stderr });
+			});
+			child.on("exit", (code, signal) => {
+				const parsed = stdout.trim();
+				const durationMs = Number.parseInt(parsed, 10);
+				if (code === 0 && /^\d+$/.test(parsed) && Number.isFinite(durationMs)) {
+					settle({ ok: true, durationMs });
+					return;
+				}
+				settle({ ok: false, durationMs: nowMs() - start, code, signal, error: "host-import returned an invalid duration", stdout, stderr });
+			});
+		});
+		samples.push(sample);
+		await new Promise((resolveSleep) => setTimeout(resolveSleep, 100));
+	}
+	return summariseMeasurement("host-import", samples);
+}
+
 async function measureFirstFrame() {
 	const samples = [];
 	for (let index = 0; index < RUNS; index += 1) {
@@ -245,7 +373,7 @@ async function measureStartupTimeline() {
 
 function markdown(report) {
 	const rows = report.measurements.map((measurement) => `| ${measurement.label} | ${measurement.avgMiddleMs}ms | ${measurement.minMs}ms | ${measurement.maxMs}ms | ${measurement.samples.length} |`);
-	return `# SumoCode startup perf snapshot\n\nReport-only startup measurements for the current checkout. These numbers are intentionally not CI gates; use them to compare phase-by-phase deltas.\n\n- commit: \`${report.commit}\`\n- runs: ${report.runs}\n- generated: ${report.generatedAt}\n\n| Measurement | Avg middle runs | Min | Max | Runs |\n| --- | ---: | ---: | ---: | ---: |\n${rows.join("\n")}\n`;
+	return `# SumoCode startup perf snapshot\n\nReport-only startup measurements for the current checkout. These numbers are intentionally not CI gates; use them to compare phase-by-phase deltas. While startup is serial, first-frame is approximately host-import + child-first-response + hydration round trips; plan 061 changes that relationship. Child-first-response minus child-first-response-noext estimates the installed-extension-corpus cost.\n\n- commit: \`${report.commit}\`\n- runs: ${report.runs}\n- generated: ${report.generatedAt}\n\n| Measurement | Avg middle runs | Min | Max | Runs |\n| --- | ---: | ---: | ---: | ---: |\n${rows.join("\n")}\n`;
 }
 
 async function main() {
@@ -257,6 +385,9 @@ async function main() {
 	});
 	const measurements = [
 		await measureProcess("launcher-dry-run", join(ROOT, "bin", "sumocode.sh"), ["--dry-run"]),
+		await measureHostImport(),
+		await measureChildFirstResponse("child-first-response"),
+		await measureChildFirstResponse("child-first-response-noext", ["--no-extensions"]),
 		await measureProcess("print-mode", join(ROOT, "bin", "sumocode.sh"), ["--offline", "--no-extensions", "--no-session", "--print", "hello"]),
 		await measureFirstFrame(),
 		...(await measureStartupTimeline()),

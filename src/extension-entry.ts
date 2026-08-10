@@ -31,9 +31,9 @@ function extensionInputsHash(): string {
 	const hash = createHash("sha256");
 	for (const path of files) {
 		hash.update(relative(root, path));
-		hash.update("\\0");
+		hash.update("\0");
 		hash.update(readFileSync(path));
-		hash.update("\\0");
+		hash.update("\0");
 	}
 	return hash.digest("hex");
 }

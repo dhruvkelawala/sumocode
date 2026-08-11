@@ -29,6 +29,7 @@ import type { SessionEntrySnapshot } from "./session-reader.js";
 import type { RpcTreeNavigationOutcome } from "../pi-compat/tree-navigation-command.js";
 import { RpcHostOverlayManager } from "./host-overlays.js";
 import { InlineSelectorHost } from "./inline-selector.js";
+import { InitialHydrationActionGate } from "./initial-hydration-action-gate.js";
 import { decideRpcInterrupt, type RpcInterruptInputKind } from "./interrupt.js";
 import { readGitBranch, watchGitBranch } from "./git.js";
 import { createRpcPromptScheduler, type RpcPromptScheduler } from "./prompt-scheduler.js";
@@ -982,6 +983,7 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 	const initialHydration = new Promise<void>((resolve) => {
 		releaseInitialHydration = resolve;
 	});
+	const hydrationActionGate = new InitialHydrationActionGate(initialHydration);
 	/**
 	 * The retained editor can accept text as soon as the splash paints, but a
 	 * submit must wait for scheduler session ownership to rebind. Otherwise an
@@ -1048,8 +1050,8 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		// / app.tools.expand: registered via CustomEditor's generic
 		// `onAction` map (see editor.ts's onModelCycleForward etc. doc
 		// comments) rather than a dedicated callback prop.
-		onModelCycleForward: handleModelCycleForward,
-		onModelCycleBackward: handleModelCycleBackward,
+		onModelCycleForward: () => hydrationActionGate.run("model-cycle-forward", handleModelCycleForward),
+		onModelCycleBackward: () => hydrationActionGate.run("model-cycle-backward", handleModelCycleBackward),
 		// app.model.select (Ctrl+L by default): opens the same in-place model
 		// selector `/model` with no args and the command palette's "MODEL"
 		// entry both already use. `actions` is a forward reference (assigned
@@ -1057,11 +1059,13 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		// pattern `submitFromEditor` above already relies on for `actions`)
 		// since `RpcHostActions` itself needs `editorText: editor` to
 		// construct.
-		onModelSelect: () => { void notifyOnError(async () => { await actions?.openModelSelector(); }, notifications); },
-		onThinkingCycle: handleThinkingCycle,
+		onModelSelect: () => hydrationActionGate.run("model-select", () => {
+			void notifyOnError(async () => { await actions?.openModelSelector(); }, notifications);
+		}),
+		onThinkingCycle: () => hydrationActionGate.run("thinking-cycle", handleThinkingCycle),
 		onToolsExpandToggle: handleToolsExpandToggle,
-		onMessageFollowUp: handleMessageFollowUp,
-		onMessageDequeue: handleMessageDequeue,
+		onMessageFollowUp: () => hydrationActionGate.run("message-follow-up", handleMessageFollowUp),
+		onMessageDequeue: () => hydrationActionGate.run("message-dequeue", handleMessageDequeue),
 		// app.theme.cycle (Shift+Ctrl+T / Alt+T): host-side — the child
 		// extension's pi.registerShortcut never receives keys in RPC mode.
 		// Same forward-reference pattern as onModelSelect above.
@@ -1447,6 +1451,11 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		writeClipboardSequence: (sequence) => runtime?.writeClipboardSequence(sequence) ?? false,
 		changelogRoot: root,
 	});
+	const hydrationGatedInputHandler = {
+		openCommandPalette: (): void => hydrationActionGate.run("command-palette", () => {
+			void notifyOnError(() => actions!.openCommandPalette(), notifications);
+		}),
+	};
 	let statsTimer: NodeJS.Timeout | undefined;
 	let statsInFlight = false;
 	let stopWatchingGitBranch: (() => void) | undefined;
@@ -1597,7 +1606,7 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 				belowEditor: regionRegistry.createStackPublication(["belowEditor"], { filterBlankRows: true }).component,
 				sidebar: regionRegistry.createSlotPublication("sidebar").component,
 			},
-			inputHandler: actions,
+			inputHandler: hydrationGatedInputHandler,
 			preEditorInputHandler: handlePreEditorInput,
 		});
 		runtime = initialRuntime;

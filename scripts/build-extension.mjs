@@ -1,7 +1,7 @@
 import { copyFile, mkdir, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { build } from "esbuild";
-import { EXTENSION_ASSETS, extensionInputsHash } from "./lib/extension-bundle.mjs";
+import { EXTENSION_ASSETS, extensionInputsHash, extensionOutputsHash } from "./lib/extension-bundle.mjs";
 
 const root = resolve(import.meta.dirname, "..");
 const outDir = resolve(root, "dist/extension");
@@ -30,9 +30,16 @@ for (const asset of EXTENSION_ASSETS) {
 	await copyFile(resolve(root, asset.source), destination);
 }
 
-const inputsHash = await extensionInputsHash(root);
-await writeFile(resolve(outDir, ".inputs-hash"), `${inputsHash}\n`);
+const [inputsHash, outputsHash] = await Promise.all([
+	extensionInputsHash(root),
+	extensionOutputsHash(root),
+]);
+await Promise.all([
+	writeFile(resolve(outDir, ".inputs-hash"), `${inputsHash}\n`),
+	writeFile(resolve(outDir, ".outputs-hash"), `${outputsHash}\n`),
+]);
 
 console.log(`[sumocode] extension bundle: ${bundlePath}`);
 console.log(`[sumocode] extension inputs hash: ${inputsHash}`);
+console.log(`[sumocode] extension outputs hash: ${outputsHash}`);
 console.log("[sumocode] extension bundle build succeeded");

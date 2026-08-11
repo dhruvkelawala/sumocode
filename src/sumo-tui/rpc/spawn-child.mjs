@@ -23,6 +23,27 @@ const EXTENSION_ASSETS = [
 	"src/background-tasks/bounded-terminal-runner.mjs",
 ];
 
+const EXTENSION_OUTPUTS = [
+	"sumocode-extension.bundle.mjs",
+	"assets/sumo-face.ans",
+	"bounded-terminal-runner.mjs",
+];
+
+export function normalizeHashPath(path) {
+	return path.replaceAll("\\", "/");
+}
+
+function contentHash(base, files) {
+	const hash = createHash("sha256");
+	for (const path of files) {
+		hash.update(normalizeHashPath(relative(base, path)));
+		hash.update("\0");
+		hash.update(readFileSync(path));
+		hash.update("\0");
+	}
+	return hash.digest("hex");
+}
+
 export function extensionInputsHash(root) {
 	const files = [];
 	function visit(directory) {
@@ -37,23 +58,27 @@ export function extensionInputsHash(root) {
 	}
 	visit(resolve(root, "src"));
 	files.push(...EXTENSION_ASSETS.map((asset) => resolve(root, asset)));
-	files.sort((left, right) => left.localeCompare(right));
+	files.sort((left, right) => {
+		const leftPath = normalizeHashPath(relative(root, left));
+		const rightPath = normalizeHashPath(relative(root, right));
+		return leftPath < rightPath ? -1 : leftPath > rightPath ? 1 : 0;
+	});
 
-	const hash = createHash("sha256");
-	for (const path of files) {
-		hash.update(relative(root, path));
-		hash.update("\0");
-		hash.update(readFileSync(path));
-		hash.update("\0");
-	}
-	return hash.digest("hex");
+	return contentHash(root, files);
+}
+
+export function extensionOutputsHash(root) {
+	const outDir = resolve(root, "dist/extension");
+	return contentHash(outDir, EXTENSION_OUTPUTS.map((output) => resolve(outDir, output)));
 }
 
 function hasFreshExtensionBundle(root, bundle) {
-	const sidecar = resolve(root, "dist/extension/.inputs-hash");
-	if (!existsSync(bundle) || !existsSync(sidecar)) return false;
+	const inputsSidecar = resolve(root, "dist/extension/.inputs-hash");
+	const outputsSidecar = resolve(root, "dist/extension/.outputs-hash");
+	if (!existsSync(bundle) || !existsSync(inputsSidecar) || !existsSync(outputsSidecar)) return false;
 	try {
-		return readFileSync(sidecar, "utf8").trim() === extensionInputsHash(root);
+		return readFileSync(inputsSidecar, "utf8").trim() === extensionInputsHash(root)
+			&& readFileSync(outputsSidecar, "utf8").trim() === extensionOutputsHash(root);
 	} catch {
 		return false;
 	}

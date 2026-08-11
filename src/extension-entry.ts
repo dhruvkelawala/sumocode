@@ -7,10 +7,31 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const sourcePath = join(root, "src", "extension.ts");
 const bundlePath = join(root, "dist", "extension", "sumocode-extension.bundle.mjs");
 const inputsHashPath = join(root, "dist", "extension", ".inputs-hash");
+const outputsHashPath = join(root, "dist", "extension", ".outputs-hash");
 const extensionAssets = [
 	"src/assets/sumo-face.ans",
 	"src/background-tasks/bounded-terminal-runner.mjs",
 ];
+const extensionOutputs = [
+	"sumocode-extension.bundle.mjs",
+	"assets/sumo-face.ans",
+	"bounded-terminal-runner.mjs",
+];
+
+function normalizeHashPath(path: string): string {
+	return path.replaceAll("\\", "/");
+}
+
+function contentHash(base: string, files: readonly string[]): string {
+	const hash = createHash("sha256");
+	for (const path of files) {
+		hash.update(normalizeHashPath(relative(base, path)));
+		hash.update("\0");
+		hash.update(readFileSync(path));
+		hash.update("\0");
+	}
+	return hash.digest("hex");
+}
 
 function extensionInputsHash(): string {
 	const files: string[] = [];
@@ -26,22 +47,25 @@ function extensionInputsHash(): string {
 	}
 	visit(join(root, "src"));
 	files.push(...extensionAssets.map((asset) => resolve(root, asset)));
-	files.sort((left, right) => left.localeCompare(right));
+	files.sort((left, right) => {
+		const leftPath = normalizeHashPath(relative(root, left));
+		const rightPath = normalizeHashPath(relative(root, right));
+		return leftPath < rightPath ? -1 : leftPath > rightPath ? 1 : 0;
+	});
 
-	const hash = createHash("sha256");
-	for (const path of files) {
-		hash.update(relative(root, path));
-		hash.update("\0");
-		hash.update(readFileSync(path));
-		hash.update("\0");
-	}
-	return hash.digest("hex");
+	return contentHash(root, files);
+}
+
+function extensionOutputsHash(): string {
+	const outDir = dirname(bundlePath);
+	return contentHash(outDir, extensionOutputs.map((output) => resolve(outDir, output)));
 }
 
 function hasFreshBundle(): boolean {
-	if (!existsSync(bundlePath) || !existsSync(inputsHashPath)) return false;
+	if (!existsSync(bundlePath) || !existsSync(inputsHashPath) || !existsSync(outputsHashPath)) return false;
 	try {
-		return readFileSync(inputsHashPath, "utf8").trim() === extensionInputsHash();
+		return readFileSync(inputsHashPath, "utf8").trim() === extensionInputsHash()
+			&& readFileSync(outputsHashPath, "utf8").trim() === extensionOutputsHash();
 	} catch {
 		return false;
 	}

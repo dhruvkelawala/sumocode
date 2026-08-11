@@ -1,0 +1,3 @@
+# Generated extension artifacts are content-hashed at runtime. Pin LF so the
+# committed bytes and .outputs-hash remain identical on Windows checkouts.
+dist/extension/** text eol=lf

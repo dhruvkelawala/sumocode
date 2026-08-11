@@ -9,9 +9,11 @@ type ChildSpawnPlan = {
 };
 
 const require = createRequire(import.meta.url);
-const { buildChildSpawnPlan, extensionInputsHash } = require("./spawn-child.mjs") as {
+const { buildChildSpawnPlan, extensionInputsHash, extensionOutputsHash, normalizeHashPath } = require("./spawn-child.mjs") as {
 	buildChildSpawnPlan(env: NodeJS.ProcessEnv, argv: readonly string[]): ChildSpawnPlan | undefined;
 	extensionInputsHash(root: string): string;
+	extensionOutputsHash(root: string): string;
+	normalizeHashPath(path: string): string;
 };
 
 let roots: string[] = [];
@@ -25,16 +27,19 @@ function makeRoot(bundleState: "fresh" | "stale" | "missing"): string {
 	roots.push(root);
 	mkdirSync(join(root, "src", "assets"), { recursive: true });
 	mkdirSync(join(root, "src", "background-tasks"), { recursive: true });
-	mkdirSync(join(root, "dist", "extension"), { recursive: true });
+	mkdirSync(join(root, "dist", "extension", "assets"), { recursive: true });
 	writeFileSync(join(root, "src", "extension.ts"), "export default () => {};\n");
 	writeFileSync(join(root, "src", "assets", "sumo-face.ans"), "face\n");
 	writeFileSync(join(root, "src", "background-tasks", "bounded-terminal-runner.mjs"), "runner\n");
 	if (bundleState !== "missing") {
 		writeFileSync(join(root, "dist", "extension", "sumocode-extension.bundle.mjs"), "export default () => {};\n");
+		writeFileSync(join(root, "dist", "extension", "assets", "sumo-face.ans"), "face\n");
+		writeFileSync(join(root, "dist", "extension", "bounded-terminal-runner.mjs"), "runner\n");
 		writeFileSync(
 			join(root, "dist", "extension", ".inputs-hash"),
 			bundleState === "fresh" ? `${extensionInputsHash(root)}\n` : "stale\n",
 		);
+		writeFileSync(join(root, "dist", "extension", ".outputs-hash"), `${extensionOutputsHash(root)}\n`);
 	}
 	return root;
 }
@@ -56,5 +61,18 @@ describe("buildChildSpawnPlan extension entry", () => {
 	] as const)("uses source for %s", (_label, bundleState, extra) => {
 		const root = makeRoot(bundleState);
 		expect(plan(root, extra)?.args[3]).toBe(join(root, "src", "extension.ts"));
+	});
+
+	it.each([
+		["bundle", "sumocode-extension.bundle.mjs"],
+		["copied asset", join("assets", "sumo-face.ans")],
+	] as const)("uses source when the committed %s is corrupt", (_label, output) => {
+		const root = makeRoot("fresh");
+		writeFileSync(join(root, "dist", "extension", output), "corrupt\n");
+		expect(plan(root)?.args[3]).toBe(join(root, "src", "extension.ts"));
+	});
+
+	it("normalizes Windows separators in portable hash paths", () => {
+		expect(normalizeHashPath("src\\nested\\extension.ts")).toBe("src/nested/extension.ts");
 	});
 });

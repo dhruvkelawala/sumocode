@@ -12297,13 +12297,13 @@ function defaultActivityStateRoot(env = process.env) {
   const agentDir = env.PI_CODING_AGENT_DIR ?? join14(homedir12(), ".pi", "agent");
   return resolve5(agentDir, "state");
 }
-function hashedSessionId(ownerSessionId2) {
-  return createHash("sha256").update(ownerSessionId2, "utf8").digest("hex");
-}
-function ensureActivityRoot(rootDir = defaultActivityStateRoot()) {
+function ensurePrivateSumocodeDirectory(segments, rootDir = defaultActivityStateRoot()) {
+  if (segments.some((segment) => !segment || segment === "." || segment === ".." || basename5(segment) !== segment)) {
+    throw new Error("SumoCode state directory segments must be simple names");
+  }
   const base = ensureCanonicalBaseDirectory(rootDir);
   let root = base;
-  for (const segment of ["sumocode", "activity", "v1"]) {
+  for (const segment of ["sumocode", ...segments]) {
     try {
       mkdirSync7(join14(root, segment), { mode: PRIVATE_ACTIVITY_DIRECTORY_MODE });
     } catch (error) {
@@ -12316,6 +12316,12 @@ function ensureActivityRoot(rootDir = defaultActivityStateRoot()) {
     root = candidate;
   }
   return root;
+}
+function hashedSessionId(ownerSessionId2) {
+  return createHash("sha256").update(ownerSessionId2, "utf8").digest("hex");
+}
+function ensureActivityRoot(rootDir = defaultActivityStateRoot()) {
+  return ensurePrivateSumocodeDirectory(["activity", "v1"], rootDir);
 }
 function activityPaths(ownerSessionId2, rootDir = defaultActivityStateRoot()) {
   if (!ownerSessionId2.trim()) throw new Error("Activity state requires a non-empty owner session id");

@@ -19,6 +19,10 @@ describe("buildSpawnEnv", () => {
 				[retiredLegacyKey]: "1",
 				SUMO_RPC: "1",
 				SUMOCODE_RPC_CHILD: "1",
+				SUMOCODE_HOST_BUNDLE: "1",
+				SUMOCODE_ROOT_DIR: "/tmp/untrusted-root",
+				SUMOCODE_PROJECT_CWD: "/tmp/stale-project",
+				SUMOCODE_LAUNCHER: "/tmp/stale-launcher",
 				SUMOCODE_REDUCED_MOTION: "1",
 				SUMOCODE_DEBUG_BRANCH: "feature/x",
 				SUMOCODE_DEBUG_COMMIT: "abc123",
@@ -26,6 +30,7 @@ describe("buildSpawnEnv", () => {
 				SUMOCODE_TEST_PRE_MAIN_DELAY_MS: "5000",
 				SUMOCODE_TEST_PRE_ADOPTION_MAIN_DELAY_MS: "5000",
 				SUMOCODE_TEST_CHROME_CACHE_DELAY_MS: "500",
+				SUMOCODE_TEST_BUNDLE_SCAN_DELAY_MS: "500",
 			},
 			undefined,
 		);
@@ -38,6 +43,10 @@ describe("buildSpawnEnv", () => {
 		expect(env[retiredLegacyKey]).toBeUndefined();
 		expect(env.SUMO_RPC).toBeUndefined();
 		expect(env.SUMOCODE_RPC_CHILD).toBeUndefined();
+		expect(env.SUMOCODE_HOST_BUNDLE).toBeUndefined();
+		expect(env.SUMOCODE_ROOT_DIR).toBeUndefined();
+		expect(env.SUMOCODE_PROJECT_CWD).toBeUndefined();
+		expect(env.SUMOCODE_LAUNCHER).toBeUndefined();
 		expect(env.SUMOCODE_REDUCED_MOTION).toBeUndefined();
 		expect(env.SUMOCODE_DEBUG_BRANCH).toBeUndefined();
 		expect(env.SUMOCODE_DEBUG_COMMIT).toBeUndefined();
@@ -45,6 +54,7 @@ describe("buildSpawnEnv", () => {
 		expect(env.SUMOCODE_TEST_PRE_MAIN_DELAY_MS).toBeUndefined();
 		expect(env.SUMOCODE_TEST_PRE_ADOPTION_MAIN_DELAY_MS).toBeUndefined();
 		expect(env.SUMOCODE_TEST_CHROME_CACHE_DELAY_MS).toBeUndefined();
+		expect(env.SUMOCODE_TEST_BUNDLE_SCAN_DELAY_MS).toBeUndefined();
 		expect(env.PATH).toBe("/usr/bin");
 		expect(env.HOME).toBe("/Users/test");
 	});
@@ -57,11 +67,12 @@ describe("buildSpawnEnv", () => {
 
 	it("lets per-test overrides reintroduce scrubbed keys", () => {
 		const env = buildSpawnEnv(
-			{ SUMO_TUI: "1" },
-			{ SUMO_TUI: "1", SUMO_TUI_DEBUG: "0" },
+			{ SUMO_TUI: "1", SUMOCODE_HOST_BUNDLE: "1" },
+			{ SUMO_TUI: "1", SUMO_TUI_DEBUG: "0", SUMOCODE_HOST_BUNDLE: "1" },
 		);
 		expect(env.SUMO_TUI).toBe("1");
 		expect(env.SUMO_TUI_DEBUG).toBe("0");
+		expect(env.SUMOCODE_HOST_BUNDLE).toBe("1");
 	});
 
 	it("lets overrides win over scrub when intentionally setting the same key", () => {

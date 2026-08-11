@@ -1,10 +1,12 @@
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
+import { mkdir, mkdtemp, readFile, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { TERMINAL_CLEANUP_SEQUENCE } from "../../src/sumo-tui/runtime/terminal-controller.js";
 import { PI_BOOT_SEQUENCE, spawnPiPty, spawnSumocodePty, type SpawnedPiPty } from "./spawn-pi-pty.js";
 import { createRpcChildFixture } from "./rpc-child-fixture.js";
+import { hostOutputsHash } from "../../scripts/lib/host-bundle.mjs";
 
 const CSI_U_ENTER = "\x1b[13u";
 
@@ -39,7 +41,7 @@ async function waitForProcessExit(pid: number): Promise<void> {
 		}
 		await delay(10);
 	}
-	throw new Error(`process ${pid} remained alive after early host signal`);
+	throw new Error(`process ${pid} remained alive after host relinquished child ownership`);
 }
 
 async function waitForFileText(path: string, expected: string, attempts = 200): Promise<void> {
@@ -53,6 +55,242 @@ async function waitForFileText(path: string, expected: string, attempts = 200): 
 }
 
 describe("sumocode RPC host shell integration", () => {
+	beforeAll(() => {
+		execFileSync(process.execPath, ["scripts/build-host.mjs"], { cwd: process.cwd(), stdio: "pipe" });
+	});
+
+	async function bootWithHostMode(mode: "1" | "0"): Promise<void> {
+		const agentDir = await mkdtemp(join(tmpdir(), `sumocode-rpc-${mode === "1" ? "bundle" : "jiti"}-agent-`));
+		app = spawnSumocodePty({
+			env: { PI_CODING_AGENT_DIR: agentDir, SUMOCODE_HOST_BUNDLE: mode },
+			cols: 100,
+			rows: 30,
+		});
+
+		await app.waitForOutput(PI_BOOT_SEQUENCE, 15_000);
+		expect(app.getCurrentTerminalState().altscreenActive).toBe(true);
+		app.sendSignal("SIGTERM");
+		await app.waitForOutput(TERMINAL_CLEANUP_SEQUENCE, 5_000);
+		expect(app.getCurrentTerminalState().altscreenActive).toBe(false);
+	}
+
+	it("boots the retained host from the fresh bundle", async () => {
+		await bootWithHostMode("1");
+	}, 30_000);
+
+	it("pre-spawns Pi before a slow host-bundle freshness scan", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "sumocode-rpc-slow-bundle-scan-"));
+		const piBin = join(directory, "stalled-pi");
+		const pidFile = join(directory, "pid");
+		await writeFile(
+			piBin,
+			"#!/usr/bin/env node\nrequire('node:fs').writeFileSync(process.env.PID_FILE, String(process.pid));\nprocess.stdin.resume();\nsetInterval(() => {}, 1000);\n",
+			{ mode: 0o700 },
+		);
+		const startedAt = Date.now();
+		app = spawnPiPty({
+			command: process.execPath,
+			args: [join(process.cwd(), "sumo-rpc-host.js")],
+			env: {
+				PI_BIN: piBin,
+				PID_FILE: pidFile,
+				PI_CODING_AGENT_DIR: join(directory, "agent"),
+				NODE_ENV: "test",
+				SUMOCODE_TEST_BUNDLE_SCAN_DELAY_MS: "3000",
+			},
+			cols: 100,
+			rows: 30,
+		});
+
+		const pid = await waitForPid(pidFile);
+		expect(Date.now() - startedAt).toBeLessThan(2_000);
+		app.sendSignal("SIGTERM");
+		await waitForProcessExit(pid);
+	}, 30_000);
+
+	it("reaps the pre-spawned child when forced host main rejects before adoption", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "sumocode-rpc-rejected-host-main-"));
+		const piBin = join(directory, "stalled-pi");
+		const pidFile = join(directory, "pid");
+		await writeFile(
+			piBin,
+			"#!/usr/bin/env node\nrequire('node:fs').writeFileSync(process.env.PID_FILE, String(process.pid));\nprocess.stdin.resume();\nsetInterval(() => {}, 1000);\n",
+			{ mode: 0o700 },
+		);
+		const bundlePath = join(process.cwd(), "dist/host/sumo-rpc-host.bundle.mjs");
+		const original = await readFile(bundlePath);
+		await writeFile(bundlePath, 'import { existsSync } from "node:fs"; export async function main() { for (let i = 0; i < 100 && !existsSync(process.env.PID_FILE); i++) await new Promise((resolve) => setTimeout(resolve, 20)); throw new Error("forced main rejection"); }\n');
+		try {
+			app = spawnSumocodePty({
+				env: {
+					PI_BIN: piBin,
+					PID_FILE: pidFile,
+					PI_CODING_AGENT_DIR: join(directory, "agent"),
+					SUMOCODE_HOST_BUNDLE: "1",
+				},
+				cols: 100,
+				rows: 30,
+			});
+			await app.waitForOutput("forced main rejection", 5_000);
+			const pid = Number.parseInt(await readFile(pidFile, "utf8"), 10);
+			expect(Number.isFinite(pid)).toBe(true);
+			await waitForProcessExit(pid);
+		} finally {
+			await writeFile(bundlePath, original);
+		}
+	}, 30_000);
+
+	it("fails instead of source-falling back when the forced bundle cannot import", async () => {
+		const bundlePath = join(process.cwd(), "dist/host/sumo-rpc-host.bundle.mjs");
+		const original = await readFile(bundlePath);
+		await writeFile(bundlePath, "export { this is invalid syntax");
+		try {
+			const agentDir = await mkdtemp(join(tmpdir(), "sumocode-rpc-broken-forced-bundle-agent-"));
+			app = spawnSumocodePty({
+				env: { PI_CODING_AGENT_DIR: agentDir, SUMOCODE_HOST_BUNDLE: "1" },
+				cols: 100,
+				rows: 30,
+			});
+			await app.waitForOutput("forced host bundle failed to import", 5_000);
+			expect(app.getOutput()).not.toContain(PI_BOOT_SEQUENCE);
+		} finally {
+			await writeFile(bundlePath, original);
+		}
+	}, 30_000);
+
+	it("falls back to source when a fresh host bundle omits main", async () => {
+		const bundlePath = join(process.cwd(), "dist/host/sumo-rpc-host.bundle.mjs");
+		const manifestPath = join(process.cwd(), "dist/host/.inputs.json");
+		const original = await readFile(bundlePath);
+		const originalManifest = await readFile(manifestPath);
+		await writeFile(bundlePath, "export const incomplete = true;\n");
+		// Repoint the manifest's outputsHash at the incomplete bundle so it passes
+		// the freshness/output-integrity checks, isolating the "no main()" guard.
+		const manifest = JSON.parse(originalManifest.toString()) as { outputsHash: string };
+		manifest.outputsHash = await hostOutputsHash(process.cwd());
+		await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+		try {
+			const agentDir = await mkdtemp(join(tmpdir(), "sumocode-rpc-incomplete-bundle-agent-"));
+			app = spawnSumocodePty({ env: { PI_CODING_AGENT_DIR: agentDir }, cols: 100, rows: 30 });
+			await app.waitForOutput("host bundle does not export main", 5_000);
+			await app.waitForOutput(PI_BOOT_SEQUENCE, 15_000);
+		} finally {
+			await writeFile(bundlePath, original);
+			await writeFile(manifestPath, originalManifest);
+		}
+	}, 30_000);
+
+	it("boots the retained host through the jiti fallback", async () => {
+		await bootWithHostMode("0");
+	}, 30_000);
+
+	it("never loads executable host code from the project cwd", async () => {
+		const project = await mkdtemp(join(tmpdir(), "sumocode-untrusted-host-project-"));
+		const maliciousBundle = join(project, "dist", "host", "sumo-rpc-host.bundle.mjs");
+		const maliciousCacheModule = join(project, "src", "sumo-tui", "rpc", "chrome-cache.ts");
+		const maliciousMarker = join(project, "untrusted-cache-loaded");
+		await mkdir(join(project, "dist", "host"), { recursive: true });
+		await mkdir(join(project, "src", "sumo-tui", "rpc"), { recursive: true });
+		await writeFile(maliciousBundle, 'export async function main() { process.stdout.write("UNTRUSTED HOST BUNDLE\\n"); }\n');
+		await writeFile(maliciousCacheModule, `import { writeFileSync } from "node:fs";\nwriteFileSync(${JSON.stringify(maliciousMarker)}, "loaded");\nexport const readCachedChrome = () => undefined;\nexport const writeCachedChrome = () => undefined;\n`);
+		const agentDir = await mkdtemp(join(tmpdir(), "sumocode-untrusted-host-agent-"));
+		app = spawnPiPty({
+			command: process.execPath,
+			args: [join(process.cwd(), "sumo-rpc-host.js"), "--offline", "--no-extensions", "--no-session"],
+			cwd: project,
+			env: {
+				PI_BIN: join(process.cwd(), "node_modules", ".bin", "pi"),
+				PI_CODING_AGENT_DIR: agentDir,
+				SUMOCODE_HOST_BUNDLE: "1",
+			},
+			cols: 100,
+			rows: 30,
+		});
+
+		await app.waitForOutput(PI_BOOT_SEQUENCE, 15_000);
+		await delay(1_000);
+		expect(app.getOutput()).not.toContain("UNTRUSTED HOST BUNDLE");
+		await expect(readFile(maliciousMarker, "utf8")).rejects.toThrow();
+		app.sendSignal("SIGTERM");
+		await app.waitForOutput(TERMINAL_CLEANUP_SEQUENCE, 5_000);
+	}, 30_000);
+
+	it("falls back to source when the copied spawn helper is stale", async () => {
+		const helperPath = join(process.cwd(), "dist/host/spawn-child.mjs");
+		const original = await readFile(helperPath);
+		await writeFile(helperPath, Buffer.concat([original, Buffer.from("\n// stale copy\n")]));
+		try {
+			const agentDir = await mkdtemp(join(tmpdir(), "sumocode-rpc-stale-helper-agent-"));
+			app = spawnSumocodePty({ env: { PI_CODING_AGENT_DIR: agentDir }, cols: 100, rows: 30 });
+			await app.waitForOutput("host bundle stale — using source", 15_000);
+			await app.waitForOutput(PI_BOOT_SEQUENCE, 15_000);
+		} finally {
+			await writeFile(helperPath, original);
+		}
+	}, 30_000);
+
+	it("falls back to source when the published host bundle bytes do not match the manifest", async () => {
+		const tamperBundlePath = join(process.cwd(), "dist/host/sumo-rpc-host.bundle.mjs");
+		const original = await readFile(tamperBundlePath);
+		// Simulate a concurrent build's interleaved bundle: the input manifest is
+		// unchanged, but the recorded outputsHash no longer matches these bytes.
+		await writeFile(tamperBundlePath, Buffer.concat([original, Buffer.from("\n// interleaved build\n")]));
+		try {
+			const agentDir = await mkdtemp(join(tmpdir(), "sumocode-rpc-tampered-bundle-agent-"));
+			app = spawnSumocodePty({ env: { PI_CODING_AGENT_DIR: agentDir }, cols: 100, rows: 30 });
+			await app.waitForOutput("host bundle stale — using source", 15_000);
+			await app.waitForOutput(PI_BOOT_SEQUENCE, 15_000);
+		} finally {
+			await writeFile(tamperBundlePath, original);
+		}
+	}, 30_000);
+
+	it("falls back to source when a recorded host input has been deleted", async () => {
+		const manifestPath = join(process.cwd(), "dist", "host", ".inputs.json");
+		const original = await readFile(manifestPath);
+		const manifest = JSON.parse(original.toString()) as { inputs: string[] };
+		manifest.inputs = [...manifest.inputs, "src/deleted-production-input.ts"].sort();
+		await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+		try {
+			const agentDir = await mkdtemp(join(tmpdir(), "sumocode-rpc-deleted-host-input-agent-"));
+			app = spawnSumocodePty({ env: { PI_CODING_AGENT_DIR: agentDir }, cols: 100, rows: 30 });
+			await app.waitForOutput("host bundle stale — using source", 15_000);
+			await app.waitForOutput(PI_BOOT_SEQUENCE, 15_000);
+		} finally {
+			await writeFile(manifestPath, original);
+		}
+	}, 30_000);
+
+	it("falls back to source when tsconfig is newer than the host bundle", async () => {
+		const configPath = join(process.cwd(), "tsconfig.json");
+		const [original, timestamps] = await Promise.all([readFile(configPath), stat(configPath)]);
+		await writeFile(configPath, Buffer.concat([original, Buffer.from("\n")]));
+		try {
+			const agentDir = await mkdtemp(join(tmpdir(), "sumocode-rpc-stale-tsconfig-agent-"));
+			app = spawnSumocodePty({ env: { PI_CODING_AGENT_DIR: agentDir }, cols: 100, rows: 30 });
+			await app.waitForOutput("host bundle stale — using source", 15_000);
+			await app.waitForOutput(PI_BOOT_SEQUENCE, 15_000);
+		} finally {
+			await writeFile(configPath, original);
+			await utimes(configPath, timestamps.atime, timestamps.mtime);
+		}
+	}, 30_000);
+
+	it.each(["package.json", "pnpm-lock.yaml"] as const)("falls back to source when %s is newer than the host bundle", async (input) => {
+		const inputPath = join(process.cwd(), input);
+		const [original, timestamps] = await Promise.all([readFile(inputPath), stat(inputPath)]);
+		await writeFile(inputPath, Buffer.concat([original, Buffer.from("\n")]));
+		try {
+			const agentDir = await mkdtemp(join(tmpdir(), "sumocode-rpc-stale-package-input-agent-"));
+			app = spawnSumocodePty({ env: { PI_CODING_AGENT_DIR: agentDir }, cols: 100, rows: 30 });
+			await app.waitForOutput("host bundle stale — using source", 15_000);
+			await app.waitForOutput(PI_BOOT_SEQUENCE, 15_000);
+		} finally {
+			await writeFile(inputPath, original);
+			await utimes(inputPath, timestamps.atime, timestamps.mtime);
+		}
+	}, 30_000);
+
 	it("dispatches a queued prompt only after a deferred model cycle applies", async () => {
 		const logDir = await mkdtemp(join(tmpdir(), "sumocode-rpc-model-cycle-order-"));
 		const logPath = join(logDir, "commands.jsonl");

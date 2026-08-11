@@ -1,7 +1,53 @@
 import { spawn } from "node:child_process";
 import { writeFileSync } from "node:fs";
-import { createJiti } from "jiti";
+import { readFile, stat } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { hostInputManifestIsFresh, hostOutputsHash, HOST_INPUT_MANIFEST_OUTPUT } from "./scripts/lib/host-bundle.mjs";
 import { buildChildSpawnPlan } from "./src/sumo-tui/rpc/spawn-child.mjs";
+
+// Executable host code belongs to this installed package, never the project
+// cwd. The launcher passes SUMOCODE_ROOT_DIR explicitly; direct/manual entry
+// invocation safely defaults to the directory containing this entry file.
+const root = resolve(process.env.SUMOCODE_ROOT_DIR ?? dirname(fileURLToPath(import.meta.url)));
+const bundlePath = resolve(root, "dist/host/sumo-rpc-host.bundle.mjs");
+const inputManifestPath = resolve(root, "dist/host", HOST_INPUT_MANIFEST_OUTPUT);
+const sourceFacePath = resolve(root, "src/assets/sumo-face.ans");
+const bundledFacePath = resolve(root, "dist/host/assets/sumo-face.ans");
+const sourceSpawnHelperPath = resolve(root, "src/sumo-tui/rpc/spawn-child.mjs");
+const bundledSpawnHelperPath = resolve(root, "dist/host/spawn-child.mjs");
+
+async function bundleIsFresh() {
+	const testDelayMs = process.env.NODE_ENV === "test"
+		? Number.parseInt(process.env.SUMOCODE_TEST_BUNDLE_SCAN_DELAY_MS ?? "0", 10)
+		: 0;
+	if (Number.isFinite(testDelayMs) && testDelayMs > 0) {
+		await new Promise((resolveDelay) => setTimeout(resolveDelay, testDelayMs));
+	}
+	try {
+		const [manifestBytes, sourceFaceBytes, bundledFaceBytes, sourceSpawnHelperBytes, bundledSpawnHelperBytes] = await Promise.all([
+			readFile(inputManifestPath, "utf8"),
+			readFile(sourceFacePath),
+			readFile(bundledFacePath),
+			readFile(sourceSpawnHelperPath),
+			readFile(bundledSpawnHelperPath),
+		]);
+		const manifest = JSON.parse(manifestBytes);
+		// The manifest describes its own published outputs. Verify them so a bundle
+		// from a different concurrent build (interleaved renames) is rejected in
+		// favour of the source fallback.
+		return await hostInputManifestIsFresh(root, manifest)
+			&& typeof manifest.outputsHash === "string"
+			&& await hostOutputsHash(root) === manifest.outputsHash
+			&& sourceFaceBytes.equals(bundledFaceBytes)
+			&& sourceSpawnHelperBytes.equals(bundledSpawnHelperBytes);
+	} catch {
+		return false;
+	}
+}
+
+const useBundle = process.env.SUMOCODE_HOST_BUNDLE !== "0";
+const forceBundle = process.env.SUMOCODE_HOST_BUNDLE === "1";
 
 const PRE_ADOPTION_KILL_GRACE_MS = 250;
 let preSpawnedChild;
@@ -9,6 +55,15 @@ let relayingEarlySignal = false;
 let earlyCleanupPromise;
 const handleEarlySigint = () => relayEarlySignal("SIGINT");
 const handleEarlySigterm = () => relayEarlySignal("SIGTERM");
+
+async function importSourceHost() {
+	const { createJiti } = await import("jiti");
+	const jiti = createJiti(import.meta.url, {
+		moduleCache: true,
+		tryNative: false,
+	});
+	return jiti.import("./src/sumo-tui/rpc/host.ts");
+}
 
 function childHasExited() {
 	return !preSpawnedChild || preSpawnedChild.exitCode !== null || preSpawnedChild.signalCode !== null;
@@ -76,10 +131,11 @@ function relayEarlySignal(signal) {
 	});
 }
 
-// Install temporary signal owners before spawn so the child cannot publish its
-// PID while the host is still using Node's default signal disposition.
+// Keep this pre-spawn before importing either host implementation. Install the
+// temporary signal owners before spawn so the child cannot publish its PID
+// while the host is still using Node's default signal disposition.
 if (process.stdout.isTTY === true) {
-	const plan = buildChildSpawnPlan(process.env, process.argv.slice(2));
+	const plan = buildChildSpawnPlan({ ...process.env, SUMOCODE_ROOT_DIR: root }, process.argv.slice(2));
 	if (plan) {
 		process.on("SIGINT", handleEarlySigint);
 		process.on("SIGTERM", handleEarlySigterm);
@@ -90,8 +146,8 @@ if (process.stdout.isTTY === true) {
 				stdio: ["pipe", "pipe", "pipe"],
 			});
 			// Spawn failures arrive asynchronously. Own the error immediately so it
-			// cannot become an unhandled EventEmitter error while jiti imports the
-			// host; SumoRpcClient adopts and reports the saved error in start().
+			// cannot become an unhandled EventEmitter error while the host imports;
+			// SumoRpcClient adopts and reports the saved error in start().
 			preSpawnedChild.once("error", (error) => {
 				preSpawnedChild[Symbol.for("sumocode.rpc.preSpawnError")] = error;
 			});
@@ -108,17 +164,46 @@ const preAdoptionTestDelayMs = process.env.NODE_ENV === "test"
 	? Number.parseInt(process.env.SUMOCODE_TEST_PRE_ADOPTION_DELAY_MS ?? "0", 10)
 	: 0;
 if (Number.isFinite(preAdoptionTestDelayMs) && preAdoptionTestDelayMs > 0) {
-	await new Promise((resolve) => setTimeout(resolve, preAdoptionTestDelayMs));
+	await new Promise((resolveDelay) => setTimeout(resolveDelay, preAdoptionTestDelayMs));
 }
 
-const jiti = createJiti(import.meta.url, {
-	moduleCache: true,
-	tryNative: false,
-});
+// Pi is already running while optional artifact validation scans the package.
+const bundleExists = await stat(bundlePath).then(() => true, () => false);
+const bundleFresh = bundleExists && (forceBundle || (useBundle && await bundleIsFresh()));
+if (useBundle && bundleExists && !forceBundle && !bundleFresh) {
+	process.stderr.write("[sumocode] host bundle stale — using source; run pnpm build:host\n");
+}
 
 let mod;
 try {
-	mod = await jiti.import("./src/sumo-tui/rpc/host.ts");
+	if (forceBundle && !bundleExists) {
+		throw new Error(`[sumocode] forced host bundle is missing: ${bundlePath}`);
+	}
+	if (bundleFresh) {
+		try {
+			const bundledModule = await import(pathToFileURL(bundlePath).href);
+			if (typeof bundledModule.main !== "function") {
+				throw new Error("host bundle does not export main()");
+			}
+			// Revalidate after loading: a concurrent build or source edit could have
+			// changed inputs or replaced the bundle between the freshness check and
+			// this import. Re-run the FULL freshness check (inputs + outputs); if the
+			// on-disk state no longer matches, discard the bundle and use source
+			// rather than run a generation never covered by a passing freshness result.
+			if (!forceBundle && !(await bundleIsFresh())) {
+				throw new Error("host bundle changed during import");
+			}
+			mod = bundledModule;
+		} catch (error) {
+			if (forceBundle) {
+				throw new Error(`[sumocode] forced host bundle failed to import: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
+			}
+			process.stderr.write(`[sumocode] host bundle unusable — using source: ${error instanceof Error ? error.message : String(error)}\n`);
+			mod = await importSourceHost();
+		}
+	} else {
+		mod = await importSourceHost();
+	}
 } catch (error) {
 	await terminateUnadoptedChild();
 	releasePreAdoptionSignalHandlers();
@@ -146,6 +231,11 @@ try {
 	await mod.main({
 		preSpawnedChild,
 		onPreSpawnedChildAdopted: releasePreAdoptionSignalHandlers,
+		env: {
+			...process.env,
+			SUMOCODE_ROOT_DIR: root,
+			SUMOCODE_PROJECT_CWD: process.env.SUMOCODE_PROJECT_CWD ?? process.cwd(),
+		},
 		shouldAbortAdoption: () => relayingEarlySignal,
 	});
 } catch (error) {

@@ -51,6 +51,7 @@ class FakeRpcChild extends EventEmitter {
 		queueMicrotask(() => {
 			this.signalCode = "SIGTERM";
 			this.emit("exit", null, "SIGTERM");
+			this.emit("close", null, "SIGTERM");
 		});
 		return true;
 	});
@@ -71,6 +72,27 @@ describe("SumoRpcClient", () => {
 		expect(spawn).not.toHaveBeenCalled();
 		expect(client.pid).toBe(child.pid);
 		await client.stop();
+	});
+
+	it("does not resolve deliberate stop until child stdio closes", async () => {
+		const child = new FakeRpcChild();
+		child.kill.mockImplementation(() => {
+			queueMicrotask(() => {
+				child.signalCode = "SIGTERM";
+				child.emit("exit", null, "SIGTERM");
+			});
+			return true;
+		});
+		const client = new SumoRpcClient({ command: "unused", args: [], preSpawnedChild: child as never });
+		await client.start();
+
+		let stopped = false;
+		const stopping = client.stop().then(() => { stopped = true; });
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		expect(stopped).toBe(false);
+		child.emit("close", null, "SIGTERM");
+		await stopping;
+		expect(stopped).toBe(true);
 	});
 
 	it("transfers ownership after lifecycle listeners attach but before startup grace resolves", async () => {

@@ -17,6 +17,18 @@ function delay(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+async function waitForProcessExit(pid: number): Promise<void> {
+	for (let attempt = 0; attempt < 80; attempt += 1) {
+		try {
+			process.kill(pid, 0);
+		} catch {
+			return;
+		}
+		await delay(25);
+	}
+	throw new Error(`process ${pid} remained alive after host startup rejected`);
+}
+
 describe("sumocode RPC host shell integration", () => {
 	beforeAll(() => {
 		execFileSync(process.execPath, ["scripts/build-host.mjs"], { cwd: process.cwd(), stdio: "pipe" });
@@ -40,6 +52,38 @@ describe("sumocode RPC host shell integration", () => {
 
 	it("boots the retained host from the fresh bundle", async () => {
 		await bootWithHostMode("1");
+	}, 30_000);
+
+	it("reaps the pre-spawned child when forced host main rejects before adoption", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "sumocode-rpc-rejected-host-main-"));
+		const piBin = join(directory, "stalled-pi");
+		const pidFile = join(directory, "pid");
+		await writeFile(
+			piBin,
+			"#!/usr/bin/env node\nrequire('node:fs').writeFileSync(process.env.PID_FILE, String(process.pid));\nprocess.stdin.resume();\nsetInterval(() => {}, 1000);\n",
+			{ mode: 0o700 },
+		);
+		const bundlePath = join(process.cwd(), "dist/host/sumo-rpc-host.bundle.mjs");
+		const original = await readFile(bundlePath);
+		await writeFile(bundlePath, 'import { existsSync } from "node:fs"; export async function main() { for (let i = 0; i < 100 && !existsSync(process.env.PID_FILE); i++) await new Promise((resolve) => setTimeout(resolve, 20)); throw new Error("forced main rejection"); }\n');
+		try {
+			app = spawnSumocodePty({
+				env: {
+					PI_BIN: piBin,
+					PID_FILE: pidFile,
+					PI_CODING_AGENT_DIR: join(directory, "agent"),
+					SUMOCODE_HOST_BUNDLE: "1",
+				},
+				cols: 100,
+				rows: 30,
+			});
+			await app.waitForOutput("forced main rejection", 5_000);
+			const pid = Number.parseInt(await readFile(pidFile, "utf8"), 10);
+			expect(Number.isFinite(pid)).toBe(true);
+			await waitForProcessExit(pid);
+		} finally {
+			await writeFile(bundlePath, original);
+		}
 	}, 30_000);
 
 	it("fails instead of source-falling back when the forced bundle cannot import", async () => {

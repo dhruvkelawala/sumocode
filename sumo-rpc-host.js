@@ -93,6 +93,15 @@ async function importSourceHost() {
 	return jiti.import("./src/sumo-tui/rpc/host.ts");
 }
 
+function terminateUnadoptedChild() {
+	if (!preSpawnedChild || preSpawnedChild.exitCode !== null || preSpawnedChild.signalCode !== null) return;
+	try {
+		preSpawnedChild.kill("SIGTERM");
+	} catch {
+		// The process may have exited between the state check and kill.
+	}
+}
+
 let mod;
 try {
 	if (forceBundle && !bundleExists) {
@@ -111,7 +120,14 @@ try {
 		mod = await importSourceHost();
 	}
 } catch (error) {
-	preSpawnedChild?.kill("SIGTERM");
+	terminateUnadoptedChild();
 	throw error;
 }
-await mod.main({ preSpawnedChild });
+try {
+	await mod.main({ preSpawnedChild });
+} catch (error) {
+	// main() can reject before SumoRpcClient adopts the pre-spawned child
+	// (Yoga/config/runtime initialization). The entry still owns it then.
+	terminateUnadoptedChild();
+	throw error;
+}

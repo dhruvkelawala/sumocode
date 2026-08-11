@@ -73,6 +73,23 @@ describe("SumoRpcClient", () => {
 		await client.stop();
 	});
 
+	it("transfers ownership after lifecycle listeners attach but before startup grace resolves", async () => {
+		const child = new FakeRpcChild();
+		const client = new SumoRpcClient({ command: "unused", args: [], preSpawnedChild: child as never });
+		const onAdopted = vi.fn(() => ({
+			exitListeners: child.listenerCount("exit"),
+			errorListeners: child.listenerCount("error"),
+		}));
+
+		let resolved = false;
+		const started = client.start(onAdopted).then(() => { resolved = true; });
+		expect(onAdopted).toHaveBeenCalledOnce();
+		expect(onAdopted.mock.results[0]?.value).toEqual({ exitListeners: 1, errorListeners: 1 });
+		expect(resolved).toBe(false);
+		await started;
+		await client.stop();
+	});
+
 	it("reports a pre-spawn error captured before host adoption", async () => {
 		const child = new FakeRpcChild();
 		(child as unknown as Record<PropertyKey, unknown>)[Symbol.for("sumocode.rpc.preSpawnError")] = new Error("pi executable disappeared");

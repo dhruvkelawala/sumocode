@@ -113,6 +113,7 @@ const SUMO_DEBUG_ENV_KEYS = [
 	"SUMOCODE_TASK_STARTED_FILE",
 	"SUMOCODE_TASK_DIAG_FILE",
 	"SUMOCODE_TEST_PRE_ADOPTION_DELAY_MS",
+	"SUMOCODE_TEST_CHROME_CACHE_DELAY_MS",
 ] as const;
 
 export function buildSpawnEnv(parent: NodeJS.ProcessEnv, overrides: NodeJS.ProcessEnv | undefined): NodeJS.ProcessEnv {

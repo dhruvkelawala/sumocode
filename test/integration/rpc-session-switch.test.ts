@@ -16,7 +16,7 @@ afterEach(() => {
 });
 
 async function waitForChromeCacheWrite(path: string, after = -1): Promise<number> {
-	for (let attempt = 0; attempt < 100; attempt += 1) {
+	for (let attempt = 0; attempt < 200; attempt += 1) {
 		try {
 			const cache = JSON.parse(await readFile(path, "utf8")) as { byCwd?: Record<string, { savedAt?: number }> };
 			const savedAt = Object.values(cache.byCwd ?? {})[0]?.savedAt;
@@ -42,6 +42,34 @@ async function replayTerminalRows(output: string, cols: number, rows: number): P
 }
 
 describe("sumocode RPC session switching", () => {
+	it("drains the latest destination chrome when shutdown follows replacement", async () => {
+		const piBin = await createRpcChildFixture("sumocode-rpc-cache-drain-child-", {
+			sessionName: "Original Session",
+			messages: transcriptMessages(2, "old session"),
+		});
+		const agentDir = await mkdtemp(join(tmpdir(), "sumocode-rpc-cache-drain-agent-"));
+		app = spawnSumocodePty({
+			env: {
+				PI_CODING_AGENT_DIR: agentDir,
+				PI_BIN: piBin,
+				NODE_ENV: "test",
+				SUMOCODE_TEST_CHROME_CACHE_DELAY_MS: "1000",
+			},
+			cols: 100,
+			rows: 30,
+		});
+
+		await app.waitForOutput(PI_BOOT_SEQUENCE, 15_000);
+		await app.waitForOutput("Original Session", 15_000);
+		const cachePath = join(agentDir, "state", "sumocode", "chrome", "v1", "chrome-cache.json");
+		const initialCacheWrite = await waitForChromeCacheWrite(cachePath);
+
+		app.sendInput(`/new${CSI_U_ENTER}`);
+		await app.waitForOutput("new session", 5_000);
+		app.sendSignal("SIGTERM");
+		await waitForChromeCacheWrite(cachePath, initialCacheWrite);
+	}, 30_000);
+
 	it("/new stays in altscreen and updates chrome to the new session", async () => {
 		const cols = 100;
 		const rows = 30;

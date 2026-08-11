@@ -1033,6 +1033,13 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 	 * at submit (not typing) preserves early editing without dropping a prompt.
 	 */
 	const submitFromEditor = async (message: string): Promise<void> => {
+		// /quit is entirely host-owned and must remain available when the child
+		// never completes initial hydration. Other commands/prompts retain the
+		// ownership gate because they can read or replace child session state.
+		if (/^\/quit(?:\s|$)/.test(message.trim())) {
+			requestHostExit(0);
+			return;
+		}
 		await initialHydration;
 		if (treeNavigationBusy) {
 			notifications.notify("branch summary in progress", "warning");

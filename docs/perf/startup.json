@@ -1,6 +1,6 @@
 {
-  "generatedAt": "2026-08-10T13:09:16.345Z",
-  "commit": "442b750 perf(startup): add phase and real-world measurements",
+  "generatedAt": "2026-08-11T11:33:41.394Z",
+  "commit": "4d61167 fix(perf): redact failed probe diagnostics",
   "runs": 5,
   "measurements": [
     {
@@ -8,55 +8,59 @@
       "samples": [
         {
           "ok": true,
-          "durationMs": 8.715334057807922,
+          "durationMs": 9.213375091552734,
           "code": 0,
           "signal": null,
           "stderr": ""
         },
         {
           "ok": true,
-          "durationMs": 7.815000057220459,
+          "durationMs": 8.36158299446106,
           "code": 0,
           "signal": null,
           "stderr": ""
         },
         {
           "ok": true,
-          "durationMs": 8.494875073432922,
+          "durationMs": 8.29308295249939,
           "code": 0,
           "signal": null,
           "stderr": ""
         },
         {
           "ok": true,
-          "durationMs": 8.077707886695862,
+          "durationMs": 8.235249996185303,
           "code": 0,
           "signal": null,
           "stderr": ""
         },
         {
           "ok": true,
-          "durationMs": 7.904584050178528,
+          "durationMs": 8.374666929244995,
           "code": 0,
           "signal": null,
           "stderr": ""
         }
       ],
       "failedRuns": 0,
-      "avgMiddleMs": 8.2,
-      "minMs": 7.8,
-      "maxMs": 8.7
+      "avgMiddleMs": 8.3,
+      "minMs": 8.2,
+      "maxMs": 9.2
     },
     {
       "label": "host-import",
       "samples": [
         {
           "ok": true,
-          "durationMs": 1195
+          "durationMs": 1565
         },
         {
           "ok": true,
-          "durationMs": 1143
+          "durationMs": 1121
+        },
+        {
+          "ok": true,
+          "durationMs": 1130
         },
         {
           "ok": true,
@@ -64,344 +68,340 @@
         },
         {
           "ok": true,
-          "durationMs": 1144
-        },
-        {
-          "ok": true,
-          "durationMs": 1143
+          "durationMs": 1164
         }
       ],
       "failedRuns": 0,
-      "avgMiddleMs": 1144,
-      "minMs": 1143,
-      "maxMs": 1195
+      "avgMiddleMs": 1146.3,
+      "minMs": 1121,
+      "maxMs": 1565
     },
     {
       "label": "child-first-response",
       "samples": [
         {
           "ok": true,
-          "durationMs": 2655.3794590234756
+          "durationMs": 2887.0574169158936
         },
         {
           "ok": true,
-          "durationMs": 2467.5740410089493
+          "durationMs": 1853.7422909736633
         },
         {
           "ok": true,
-          "durationMs": 2346.337249994278
+          "durationMs": 1643.0742919445038
         },
         {
           "ok": true,
-          "durationMs": 2546.6729999780655
+          "durationMs": 1718.8258329629898
         },
         {
           "ok": true,
-          "durationMs": 2630.7087500095367
+          "durationMs": 1693.4969999790192
         }
       ],
       "failedRuns": 0,
-      "avgMiddleMs": 2548.3,
-      "minMs": 2346.3,
-      "maxMs": 2655.4
+      "avgMiddleMs": 1755.4,
+      "minMs": 1643.1,
+      "maxMs": 2887.1
     },
     {
       "label": "child-first-response-noext",
       "samples": [
         {
           "ok": true,
-          "durationMs": 1645.54383289814
+          "durationMs": 1489.8590840101242
         },
         {
           "ok": true,
-          "durationMs": 1577.8834999799728
+          "durationMs": 1493.2573750019073
         },
         {
           "ok": true,
-          "durationMs": 1649.7047499418259
+          "durationMs": 1480.4917079210281
         },
         {
           "ok": true,
-          "durationMs": 1426.2610830068588
+          "durationMs": 1420.1040419340134
         },
         {
           "ok": true,
-          "durationMs": 1674.2811669111252
+          "durationMs": 1423.5071250200272
         }
       ],
       "failedRuns": 0,
-      "avgMiddleMs": 1624.4,
-      "minMs": 1426.3,
-      "maxMs": 1674.3
+      "avgMiddleMs": 1464.6,
+      "minMs": 1420.1,
+      "maxMs": 1493.3
     },
     {
       "label": "print-mode",
       "samples": [
         {
-          "ok": false,
-          "durationMs": 3113.1179159879684,
-          "code": 1,
+          "ok": true,
+          "durationMs": 8352.11370897293,
+          "code": 0,
           "signal": null,
-          "error": "process failed"
+          "stderr": "Warning: No models match pattern \"cursor/composer-2.5\"\nWarning: No models match pattern \"zai/glm-5.1\"\n"
         },
         {
-          "ok": false,
-          "durationMs": 2997.7200000286102,
-          "code": 1,
+          "ok": true,
+          "durationMs": 7341.874042034149,
+          "code": 0,
           "signal": null,
-          "error": "process failed"
+          "stderr": "Warning: No models match pattern \"cursor/composer-2.5\"\nWarning: No models match pattern \"zai/glm-5.1\"\n"
         },
         {
-          "ok": false,
-          "durationMs": 2835.9497920274734,
-          "code": 1,
+          "ok": true,
+          "durationMs": 6017.221540927887,
+          "code": 0,
           "signal": null,
-          "error": "process failed"
+          "stderr": "Warning: No models match pattern \"cursor/composer-2.5\"\nWarning: No models match pattern \"zai/glm-5.1\"\n"
         },
         {
-          "ok": false,
-          "durationMs": 2728.918916940689,
-          "code": 1,
+          "ok": true,
+          "durationMs": 7242.975666046143,
+          "code": 0,
           "signal": null,
-          "error": "process failed"
+          "stderr": "Warning: No models match pattern \"cursor/composer-2.5\"\nWarning: No models match pattern \"zai/glm-5.1\"\n"
         },
         {
-          "ok": false,
-          "durationMs": 4517.237083077431,
-          "code": 1,
+          "ok": true,
+          "durationMs": 7570.958709001541,
+          "code": 0,
           "signal": null,
-          "error": "process failed"
+          "stderr": "Warning: No models match pattern \"cursor/composer-2.5\"\nWarning: No models match pattern \"zai/glm-5.1\"\n"
         }
       ],
-      "failedRuns": 5,
-      "avgMiddleMs": null,
-      "minMs": null,
-      "maxMs": null
+      "failedRuns": 0,
+      "avgMiddleMs": 7385.3,
+      "minMs": 6017.2,
+      "maxMs": 8352.1
     },
     {
       "label": "first-frame",
       "samples": [
         {
           "ok": true,
-          "durationMs": 2822.5525000095367
+          "durationMs": 2718.5297919511795
         },
         {
           "ok": true,
-          "durationMs": 2820.2151670455933
+          "durationMs": 2702.7613339424133
         },
         {
           "ok": true,
-          "durationMs": 2792.7496670484543
+          "durationMs": 2839.056375026703
         },
         {
           "ok": true,
-          "durationMs": 2905.6922079324722
+          "durationMs": 2524.4155420064926
         },
         {
           "ok": true,
-          "durationMs": 2785.6574169397354
+          "durationMs": 2635.1927909851074
         }
       ],
       "failedRuns": 0,
-      "avgMiddleMs": 2811.8,
-      "minMs": 2785.7,
-      "maxMs": 2905.7
+      "avgMiddleMs": 2685.5,
+      "minMs": 2524.4,
+      "maxMs": 2839.1
     },
     {
       "label": "boot-screen-frame",
       "samples": [
         {
           "ok": true,
-          "durationMs": 2749,
-          "bootScreenFrameMs": 2749,
-          "appReadyMs": 2749,
-          "stableChromeMs": 2749,
-          "inputReadyMs": 2749
+          "durationMs": 2849,
+          "bootScreenFrameMs": 2849,
+          "appReadyMs": 2849,
+          "stableChromeMs": 2849,
+          "inputReadyMs": 2849
         },
         {
           "ok": true,
-          "durationMs": 2735,
-          "bootScreenFrameMs": 2735,
-          "appReadyMs": 2735,
-          "stableChromeMs": 2735,
-          "inputReadyMs": 2735
+          "durationMs": 2827,
+          "bootScreenFrameMs": 2827,
+          "appReadyMs": 2827,
+          "stableChromeMs": 2827,
+          "inputReadyMs": 2827
         },
         {
           "ok": true,
-          "durationMs": 2707,
-          "bootScreenFrameMs": 2707,
-          "appReadyMs": 2707,
-          "stableChromeMs": 2707,
-          "inputReadyMs": 2707
+          "durationMs": 2946,
+          "bootScreenFrameMs": 2946,
+          "appReadyMs": 2946,
+          "stableChromeMs": 2946,
+          "inputReadyMs": 2946
         },
         {
           "ok": true,
-          "durationMs": 2740,
-          "bootScreenFrameMs": 2740,
-          "appReadyMs": 2740,
-          "stableChromeMs": 2740,
-          "inputReadyMs": 2740
+          "durationMs": 2682,
+          "bootScreenFrameMs": 2682,
+          "appReadyMs": 2682,
+          "stableChromeMs": 2682,
+          "inputReadyMs": 2682
         },
         {
           "ok": true,
-          "durationMs": 2532,
-          "bootScreenFrameMs": 2532,
-          "appReadyMs": 2532,
-          "stableChromeMs": 2532,
-          "inputReadyMs": 2532
+          "durationMs": 2890,
+          "bootScreenFrameMs": 2890,
+          "appReadyMs": 2890,
+          "stableChromeMs": 2890,
+          "inputReadyMs": 2890
         }
       ],
       "failedRuns": 0,
-      "avgMiddleMs": 2727.3,
-      "minMs": 2532,
-      "maxMs": 2749
+      "avgMiddleMs": 2855.3,
+      "minMs": 2682,
+      "maxMs": 2946
     },
     {
       "label": "app-ready",
       "samples": [
         {
           "ok": true,
-          "durationMs": 2749,
-          "bootScreenFrameMs": 2749,
-          "appReadyMs": 2749,
-          "stableChromeMs": 2749,
-          "inputReadyMs": 2749
+          "durationMs": 2849,
+          "bootScreenFrameMs": 2849,
+          "appReadyMs": 2849,
+          "stableChromeMs": 2849,
+          "inputReadyMs": 2849
         },
         {
           "ok": true,
-          "durationMs": 2735,
-          "bootScreenFrameMs": 2735,
-          "appReadyMs": 2735,
-          "stableChromeMs": 2735,
-          "inputReadyMs": 2735
+          "durationMs": 2827,
+          "bootScreenFrameMs": 2827,
+          "appReadyMs": 2827,
+          "stableChromeMs": 2827,
+          "inputReadyMs": 2827
         },
         {
           "ok": true,
-          "durationMs": 2707,
-          "bootScreenFrameMs": 2707,
-          "appReadyMs": 2707,
-          "stableChromeMs": 2707,
-          "inputReadyMs": 2707
+          "durationMs": 2946,
+          "bootScreenFrameMs": 2946,
+          "appReadyMs": 2946,
+          "stableChromeMs": 2946,
+          "inputReadyMs": 2946
         },
         {
           "ok": true,
-          "durationMs": 2740,
-          "bootScreenFrameMs": 2740,
-          "appReadyMs": 2740,
-          "stableChromeMs": 2740,
-          "inputReadyMs": 2740
+          "durationMs": 2682,
+          "bootScreenFrameMs": 2682,
+          "appReadyMs": 2682,
+          "stableChromeMs": 2682,
+          "inputReadyMs": 2682
         },
         {
           "ok": true,
-          "durationMs": 2532,
-          "bootScreenFrameMs": 2532,
-          "appReadyMs": 2532,
-          "stableChromeMs": 2532,
-          "inputReadyMs": 2532
+          "durationMs": 2890,
+          "bootScreenFrameMs": 2890,
+          "appReadyMs": 2890,
+          "stableChromeMs": 2890,
+          "inputReadyMs": 2890
         }
       ],
       "failedRuns": 0,
-      "avgMiddleMs": 2727.3,
-      "minMs": 2532,
-      "maxMs": 2749
+      "avgMiddleMs": 2855.3,
+      "minMs": 2682,
+      "maxMs": 2946
     },
     {
       "label": "stable-chrome",
       "samples": [
         {
           "ok": true,
-          "durationMs": 2749,
-          "bootScreenFrameMs": 2749,
-          "appReadyMs": 2749,
-          "stableChromeMs": 2749,
-          "inputReadyMs": 2749
+          "durationMs": 2849,
+          "bootScreenFrameMs": 2849,
+          "appReadyMs": 2849,
+          "stableChromeMs": 2849,
+          "inputReadyMs": 2849
         },
         {
           "ok": true,
-          "durationMs": 2735,
-          "bootScreenFrameMs": 2735,
-          "appReadyMs": 2735,
-          "stableChromeMs": 2735,
-          "inputReadyMs": 2735
+          "durationMs": 2827,
+          "bootScreenFrameMs": 2827,
+          "appReadyMs": 2827,
+          "stableChromeMs": 2827,
+          "inputReadyMs": 2827
         },
         {
           "ok": true,
-          "durationMs": 2707,
-          "bootScreenFrameMs": 2707,
-          "appReadyMs": 2707,
-          "stableChromeMs": 2707,
-          "inputReadyMs": 2707
+          "durationMs": 2946,
+          "bootScreenFrameMs": 2946,
+          "appReadyMs": 2946,
+          "stableChromeMs": 2946,
+          "inputReadyMs": 2946
         },
         {
           "ok": true,
-          "durationMs": 2740,
-          "bootScreenFrameMs": 2740,
-          "appReadyMs": 2740,
-          "stableChromeMs": 2740,
-          "inputReadyMs": 2740
+          "durationMs": 2682,
+          "bootScreenFrameMs": 2682,
+          "appReadyMs": 2682,
+          "stableChromeMs": 2682,
+          "inputReadyMs": 2682
         },
         {
           "ok": true,
-          "durationMs": 2532,
-          "bootScreenFrameMs": 2532,
-          "appReadyMs": 2532,
-          "stableChromeMs": 2532,
-          "inputReadyMs": 2532
+          "durationMs": 2890,
+          "bootScreenFrameMs": 2890,
+          "appReadyMs": 2890,
+          "stableChromeMs": 2890,
+          "inputReadyMs": 2890
         }
       ],
       "failedRuns": 0,
-      "avgMiddleMs": 2727.3,
-      "minMs": 2532,
-      "maxMs": 2749
+      "avgMiddleMs": 2855.3,
+      "minMs": 2682,
+      "maxMs": 2946
     },
     {
       "label": "input-ready",
       "samples": [
         {
           "ok": true,
-          "durationMs": 2749,
-          "bootScreenFrameMs": 2749,
-          "appReadyMs": 2749,
-          "stableChromeMs": 2749,
-          "inputReadyMs": 2749
+          "durationMs": 2849,
+          "bootScreenFrameMs": 2849,
+          "appReadyMs": 2849,
+          "stableChromeMs": 2849,
+          "inputReadyMs": 2849
         },
         {
           "ok": true,
-          "durationMs": 2735,
-          "bootScreenFrameMs": 2735,
-          "appReadyMs": 2735,
-          "stableChromeMs": 2735,
-          "inputReadyMs": 2735
+          "durationMs": 2827,
+          "bootScreenFrameMs": 2827,
+          "appReadyMs": 2827,
+          "stableChromeMs": 2827,
+          "inputReadyMs": 2827
         },
         {
           "ok": true,
-          "durationMs": 2707,
-          "bootScreenFrameMs": 2707,
-          "appReadyMs": 2707,
-          "stableChromeMs": 2707,
-          "inputReadyMs": 2707
+          "durationMs": 2946,
+          "bootScreenFrameMs": 2946,
+          "appReadyMs": 2946,
+          "stableChromeMs": 2946,
+          "inputReadyMs": 2946
         },
         {
           "ok": true,
-          "durationMs": 2740,
-          "bootScreenFrameMs": 2740,
-          "appReadyMs": 2740,
-          "stableChromeMs": 2740,
-          "inputReadyMs": 2740
+          "durationMs": 2682,
+          "bootScreenFrameMs": 2682,
+          "appReadyMs": 2682,
+          "stableChromeMs": 2682,
+          "inputReadyMs": 2682
         },
         {
           "ok": true,
-          "durationMs": 2532,
-          "bootScreenFrameMs": 2532,
-          "appReadyMs": 2532,
-          "stableChromeMs": 2532,
-          "inputReadyMs": 2532
+          "durationMs": 2890,
+          "bootScreenFrameMs": 2890,
+          "appReadyMs": 2890,
+          "stableChromeMs": 2890,
+          "inputReadyMs": 2890
         }
       ],
       "failedRuns": 0,
-      "avgMiddleMs": 2727.3,
-      "minMs": 2532,
-      "maxMs": 2749
+      "avgMiddleMs": 2855.3,
+      "minMs": 2682,
+      "maxMs": 2946
     }
   ]
 }

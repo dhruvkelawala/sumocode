@@ -2,18 +2,18 @@
 
 Report-only measurements from herdr using the operator's real SumoCode configuration and installed extension set. Results are machine-dependent and are not CI gates.
 
-- commit: `fe2afd8`
-- generated: 2026-08-10T12:35:23.396Z
-- scratch project: `/tmp/sumocode-perf-rw-24162`
+- commit: `4d61167`
+- generated: 2026-08-11T11:34:00.641Z
+- scratch project: `/tmp/sumocode-perf-rw-48382`
 
 | Run | Startup | First frame | Reload | Notes |
 | ---: | ---: | ---: | ---: | --- |
-| 1 | 3867ms | 3866ms | 3791ms |  |
-| 2 | 3541ms | 3541ms | 3751ms |  |
-| 3 | 3746ms | 3746ms | 3832ms |  |
+| 1 | 3132ms | 3132ms | 2935ms |  |
+| 2 | 3100ms | 3100ms | 3007ms |  |
+| 3 | 3027ms | 3027ms | 3086ms |  |
 
 | Metric | Median |
 | --- | ---: |
-| startup_ms | 3746ms |
-| first_frame_ms | 3746ms |
-| reload_ms | 3791ms |
+| startup_ms | 3100ms |
+| first_frame_ms | 3100ms |
+| reload_ms | 3007ms |

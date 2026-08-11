@@ -2,7 +2,7 @@ import { mkdtemp, mkdir, rm, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { HOST_INPUT_MANIFEST_VERSION, hostInputManifestIsFresh, hostInputsHash } from "./lib/host-bundle.mjs";
+import { HOST_INPUT_MANIFEST_VERSION, hostInputManifestIsFresh, hostInputManifestsMatch, hostInputsHash } from "./lib/host-bundle.mjs";
 
 const temporaryDirectories = [];
 
@@ -11,6 +11,13 @@ afterEach(async () => {
 });
 
 describe("host bundle input manifest", () => {
+	it("rejects a graph or content change across the writing build", () => {
+		const before = { version: HOST_INPUT_MANIFEST_VERSION, inputs: ["src/entry.ts"], hash: "before" };
+		expect(hostInputManifestsMatch(before, { ...before })).toBe(true);
+		expect(hostInputManifestsMatch(before, { ...before, hash: "after" })).toBe(false);
+		expect(hostInputManifestsMatch(before, { ...before, inputs: ["src/entry.ts", "src/new.ts"] })).toBe(false);
+	});
+
 	it("invalidates a bundle when a recorded production input is deleted", async () => {
 		const root = await mkdtemp(join(tmpdir(), "sumocode-host-input-manifest-"));
 		temporaryDirectories.push(root);

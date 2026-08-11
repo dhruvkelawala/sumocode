@@ -28,9 +28,12 @@ function makeRoot(bundleState: "fresh" | "stale" | "missing"): string {
 	mkdirSync(join(root, "src", "assets"), { recursive: true });
 	mkdirSync(join(root, "src", "background-tasks"), { recursive: true });
 	mkdirSync(join(root, "dist", "extension", "assets"), { recursive: true });
+	mkdirSync(join(root, "scripts", "lib"), { recursive: true });
 	writeFileSync(join(root, "src", "extension.ts"), "export default () => {};\n");
 	writeFileSync(join(root, "src", "assets", "sumo-face.ans"), "face\n");
 	writeFileSync(join(root, "src", "background-tasks", "bounded-terminal-runner.mjs"), "runner\n");
+	writeFileSync(join(root, "scripts", "build-extension.mjs"), "// recipe\n");
+	writeFileSync(join(root, "scripts", "lib", "extension-bundle.mjs"), "// recipe helper\n");
 	if (bundleState !== "missing") {
 		writeFileSync(join(root, "dist", "extension", "sumocode-extension.bundle.mjs"), "export default () => {};\n");
 		writeFileSync(join(root, "dist", "extension", "assets", "sumo-face.ans"), "face\n");
@@ -69,6 +72,15 @@ describe("buildChildSpawnPlan extension entry", () => {
 	] as const)("uses source when the committed %s is corrupt", (_label, output) => {
 		const root = makeRoot("fresh");
 		writeFileSync(join(root, "dist", "extension", output), "corrupt\n");
+		expect(plan(root)?.args[3]).toBe(join(root, "src", "extension.ts"));
+	});
+
+	it.each([
+		["build recipe", join("scripts", "build-extension.mjs")],
+		["build recipe helper", join("scripts", "lib", "extension-bundle.mjs")],
+	] as const)("uses source when the %s changes", (_label, input) => {
+		const root = makeRoot("fresh");
+		writeFileSync(join(root, input), "// changed recipe\n");
 		expect(plan(root)?.args[3]).toBe(join(root, "src", "extension.ts"));
 	});
 

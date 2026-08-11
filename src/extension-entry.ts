@@ -8,9 +8,11 @@ const sourcePath = join(root, "src", "extension.ts");
 const bundlePath = join(root, "dist", "extension", "sumocode-extension.bundle.mjs");
 const inputsHashPath = join(root, "dist", "extension", ".inputs-hash");
 const outputsHashPath = join(root, "dist", "extension", ".outputs-hash");
-const extensionAssets = [
+const extensionInputs = [
 	"src/assets/sumo-face.ans",
 	"src/background-tasks/bounded-terminal-runner.mjs",
+	"scripts/build-extension.mjs",
+	"scripts/lib/extension-bundle.mjs",
 ];
 const extensionOutputs = [
 	"sumocode-extension.bundle.mjs",
@@ -46,7 +48,7 @@ function extensionInputsHash(): string {
 		}
 	}
 	visit(join(root, "src"));
-	files.push(...extensionAssets.map((asset) => resolve(root, asset)));
+	files.push(...extensionInputs.map((input) => resolve(root, input)));
 	files.sort((left, right) => {
 		const leftPath = normalizeHashPath(relative(root, left));
 		const rightPath = normalizeHashPath(relative(root, right));

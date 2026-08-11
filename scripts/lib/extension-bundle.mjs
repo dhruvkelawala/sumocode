@@ -12,6 +12,11 @@ export const EXTENSION_RUNTIME_OUTPUTS = [
 	...EXTENSION_ASSETS.map(({ output }) => output),
 ];
 
+export const EXTENSION_RECIPE_INPUTS = [
+	"scripts/build-extension.mjs",
+	"scripts/lib/extension-bundle.mjs",
+];
+
 export function normalizeHashPath(path) {
 	return path.replaceAll("\\", "/");
 }
@@ -35,7 +40,8 @@ async function sourceTypeScriptFiles(root) {
 export async function extensionInputFiles(root) {
 	const sourceFiles = await sourceTypeScriptFiles(root);
 	const assetFiles = EXTENSION_ASSETS.map(({ source }) => resolve(root, source));
-	return [...sourceFiles, ...assetFiles].sort((left, right) => {
+	const recipeFiles = EXTENSION_RECIPE_INPUTS.map((input) => resolve(root, input));
+	return [...sourceFiles, ...assetFiles, ...recipeFiles].sort((left, right) => {
 		const leftPath = normalizeHashPath(relative(root, left));
 		const rightPath = normalizeHashPath(relative(root, right));
 		return leftPath < rightPath ? -1 : leftPath > rightPath ? 1 : 0;

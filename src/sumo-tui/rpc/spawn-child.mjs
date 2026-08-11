@@ -18,9 +18,11 @@ function childEnv(env) {
 	};
 }
 
-const EXTENSION_ASSETS = [
+const EXTENSION_INPUTS = [
 	"src/assets/sumo-face.ans",
 	"src/background-tasks/bounded-terminal-runner.mjs",
+	"scripts/build-extension.mjs",
+	"scripts/lib/extension-bundle.mjs",
 ];
 
 const EXTENSION_OUTPUTS = [
@@ -57,7 +59,7 @@ export function extensionInputsHash(root) {
 		}
 	}
 	visit(resolve(root, "src"));
-	files.push(...EXTENSION_ASSETS.map((asset) => resolve(root, asset)));
+	files.push(...EXTENSION_INPUTS.map((input) => resolve(root, input)));
 	files.sort((left, right) => {
 		const leftPath = normalizeHashPath(relative(root, left));
 		const rightPath = normalizeHashPath(relative(root, right));

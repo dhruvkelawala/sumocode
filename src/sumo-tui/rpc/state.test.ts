@@ -2,6 +2,27 @@ import { describe, expect, it } from "vitest";
 import { RpcHostStateStore } from "./state.js";
 
 describe("RpcHostStateStore", () => {
+	it("preserves a live git branch through hydration when no branch is supplied", () => {
+		const store = new RpcHostStateStore();
+		// The detached branch lookup writes the real branch to the store during
+		// hydration; a hydration commit that omits the branch must keep it.
+		store.setGitBranch("feature/live");
+		const hydrated = store.hydrateFromRpcState({
+			model: { provider: "openai", id: "gpt-5.5" } as never,
+			thinkingLevel: "high",
+			isStreaming: false,
+			isCompacting: false,
+			steeringMode: "all",
+			followUpMode: "one-at-a-time",
+			sessionId: "session-1",
+			autoCompactionEnabled: true,
+			messageCount: 0,
+			pendingMessageCount: 0,
+			costUsd: 0,
+		} as never);
+		expect(hydrated.gitBranch).toBe("feature/live");
+	});
+
 	it("hydrates minimal chrome state from get_state", () => {
 		const store = new RpcHostStateStore();
 		const state = store.hydrateFromRpcState({

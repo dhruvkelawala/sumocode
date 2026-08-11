@@ -50,6 +50,13 @@ export interface RpcHostMainOptions {
 	readonly preSpawnedChild?: ChildProcessWithoutNullStreams;
 	/** Entry ownership handoff: child lifecycle listeners are installed. */
 	readonly onPreSpawnedChildAdopted?: () => void;
+	/**
+	 * True once the entry has begun reaping the pre-spawned child after an early
+	 * signal. Checked immediately before adoption so a signal arriving while
+	 * main() awaits its pre-adoption setup (e.g. loadYoga) can never adopt the
+	 * child or enter altscreen behind the entry's own process.exit().
+	 */
+	readonly shouldAbortAdoption?: () => boolean;
 	readonly env?: NodeJS.ProcessEnv;
 	readonly stdout?: NodeJS.WriteStream;
 	readonly stdin?: NodeJS.ReadStream;
@@ -1640,6 +1647,18 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		if (!visualFixture) sessionEvents.begin();
 		let branch = visualFixture?.state.gitBranch;
 		const branchPromise = visualFixture ? undefined : readGitBranch(cwd);
+		// Integration-only seam widening the pre-adoption window inside main() so a
+		// PTY signal can land while setup awaits; inert outside NODE_ENV=test.
+		const preAdoptionMainDelayMs = env.NODE_ENV === "test"
+			? Number.parseInt(env.SUMOCODE_TEST_PRE_ADOPTION_MAIN_DELAY_MS ?? "0", 10)
+			: 0;
+		if (Number.isFinite(preAdoptionMainDelayMs) && preAdoptionMainDelayMs > 0) {
+			await new Promise((resolve) => setTimeout(resolve, preAdoptionMainDelayMs));
+		}
+		// The entry may have begun reaping the child after an early signal while the
+		// setup above was awaiting. Do not adopt it or enter the retained runtime;
+		// the entry owns the child reap and process exit.
+		if (options.shouldAbortAdoption?.()) return requestedHostExitCode ?? 0;
 		await client.start(adoptChildAndArmHostSignals);
 		// A signal can transfer ownership while client startup settles. Do not
 		// construct a runtime after teardown has already begun.

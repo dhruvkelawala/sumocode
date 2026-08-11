@@ -185,6 +185,17 @@ try {
 			if (typeof bundledModule.main !== "function") {
 				throw new Error("host bundle does not export main()");
 			}
+			// Revalidate after loading: a concurrent build could have replaced the
+			// bundle between the freshness check and this import. Re-read the manifest
+			// and re-verify the output hash; if the on-disk generation no longer
+			// matches, discard the bundle and use source rather than run a generation
+			// that was never covered by a passing freshness result.
+			if (!forceBundle) {
+				const revalidateManifest = JSON.parse(await readFile(inputManifestPath, "utf8"));
+				if (typeof revalidateManifest.outputsHash !== "string" || await hostOutputsHash(root) !== revalidateManifest.outputsHash) {
+					throw new Error("host bundle changed during import");
+				}
+			}
 			mod = bundledModule;
 		} catch (error) {
 			if (forceBundle) {
@@ -228,6 +239,7 @@ try {
 			SUMOCODE_ROOT_DIR: root,
 			SUMOCODE_PROJECT_CWD: process.env.SUMOCODE_PROJECT_CWD ?? process.cwd(),
 		},
+		shouldAbortAdoption: () => relayingEarlySignal,
 	});
 } catch (error) {
 	// main() can reject before SumoRpcClient adopts the pre-spawned child

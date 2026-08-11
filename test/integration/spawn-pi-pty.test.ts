@@ -28,6 +28,7 @@ describe("buildSpawnEnv", () => {
 				SUMOCODE_DEBUG_COMMIT: "abc123",
 				SUMOCODE_TEST_PRE_ADOPTION_DELAY_MS: "5000",
 				SUMOCODE_TEST_PRE_MAIN_DELAY_MS: "5000",
+				SUMOCODE_TEST_PRE_ADOPTION_MAIN_DELAY_MS: "5000",
 				SUMOCODE_TEST_CHROME_CACHE_DELAY_MS: "500",
 				SUMOCODE_TEST_BUNDLE_SCAN_DELAY_MS: "500",
 			},
@@ -51,6 +52,7 @@ describe("buildSpawnEnv", () => {
 		expect(env.SUMOCODE_DEBUG_COMMIT).toBeUndefined();
 		expect(env.SUMOCODE_TEST_PRE_ADOPTION_DELAY_MS).toBeUndefined();
 		expect(env.SUMOCODE_TEST_PRE_MAIN_DELAY_MS).toBeUndefined();
+		expect(env.SUMOCODE_TEST_PRE_ADOPTION_MAIN_DELAY_MS).toBeUndefined();
 		expect(env.SUMOCODE_TEST_CHROME_CACHE_DELAY_MS).toBeUndefined();
 		expect(env.SUMOCODE_TEST_BUNDLE_SCAN_DELAY_MS).toBeUndefined();
 		expect(env.PATH).toBe("/usr/bin");

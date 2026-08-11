@@ -29,11 +29,27 @@ const jiti = createJiti(import.meta.url, {
 	tryNative: false,
 });
 
+function terminateUnadoptedChild() {
+	if (!preSpawnedChild || preSpawnedChild.exitCode !== null || preSpawnedChild.signalCode !== null) return;
+	try {
+		preSpawnedChild.kill("SIGTERM");
+	} catch {
+		// The process may have exited between the state check and kill.
+	}
+}
+
 let mod;
 try {
 	mod = await jiti.import("./src/sumo-tui/rpc/host.ts");
 } catch (error) {
-	preSpawnedChild?.kill("SIGTERM");
+	terminateUnadoptedChild();
 	throw error;
 }
-await mod.main({ preSpawnedChild });
+try {
+	await mod.main({ preSpawnedChild });
+} catch (error) {
+	// main() can reject before SumoRpcClient adopts the pre-spawned child
+	// (Yoga/config/runtime initialization). The entry still owns it then.
+	terminateUnadoptedChild();
+	throw error;
+}

@@ -724,12 +724,10 @@ async function applyModelCycleStep(deps: RpcHostModelCycleDependencies, directio
  * ring. The footer reflects the model change, so this handler deliberately
  * stays toast-free on success.
  */
-export function createModelCycleForwardHandler(deps: RpcHostModelCycleDependencies): () => void {
-	return (): void => {
-		void notifyOnError(async () => {
-			await applyModelCycleStep(deps, 1);
-		}, deps.notifications);
-	};
+export function createModelCycleForwardHandler(deps: RpcHostModelCycleDependencies): () => Promise<void> {
+	return (): Promise<void> => notifyOnError(async () => {
+		await applyModelCycleStep(deps, 1);
+	}, deps.notifications);
 }
 
 /**
@@ -741,12 +739,10 @@ export function createModelCycleForwardHandler(deps: RpcHostModelCycleDependenci
  * matches nothing (stale/renamed current model), backward falls back from the
  * first entry to the last entry, mirroring Pi's scoped-cycle behavior.
  */
-export function createModelCycleBackwardHandler(deps: RpcHostModelCycleDependencies): () => void {
-	return (): void => {
-		void notifyOnError(async () => {
-			await applyModelCycleStep(deps, -1);
-		}, deps.notifications);
-	};
+export function createModelCycleBackwardHandler(deps: RpcHostModelCycleDependencies): () => Promise<void> {
+	return (): Promise<void> => notifyOnError(async () => {
+		await applyModelCycleStep(deps, -1);
+	}, deps.notifications);
 }
 
 export interface RpcHostThinkingCycleDependencies {
@@ -763,13 +759,11 @@ export interface RpcHostThinkingCycleDependencies {
  * then hands the returned state to the caller. The footer reflects the
  * thinking level, so success stays toast-free.
  */
-export function createThinkingCycleHandler(deps: RpcHostThinkingCycleDependencies): () => void {
-	return (): void => {
-		void notifyOnError(async () => {
-			const state = await deps.controls.cycleThinkingLevel();
-			deps.onStateChange?.(state);
-		}, deps.notifications);
-	};
+export function createThinkingCycleHandler(deps: RpcHostThinkingCycleDependencies): () => Promise<void> {
+	return (): Promise<void> => notifyOnError(async () => {
+		const state = await deps.controls.cycleThinkingLevel();
+		deps.onStateChange?.(state);
+	}, deps.notifications);
 }
 
 export interface RpcHostToolsExpandDependencies {
@@ -1044,7 +1038,10 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 			requestHostExit(0);
 			return;
 		}
-		await initialHydration;
+		// Wait for hydration AND for any deferred child-dependent intent (e.g. a
+		// model/thinking cycle) to fully apply, so a prompt never dispatches under
+		// state an earlier gated shortcut is still committing.
+		await hydrationActionGate.whenSettled();
 		if (treeNavigationBusy) {
 			notifications.notify("branch summary in progress", "warning");
 			return;
@@ -1111,9 +1108,7 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		// pattern `submitFromEditor` above already relies on for `actions`)
 		// since `RpcHostActions` itself needs `editorText: editor` to
 		// construct.
-		onModelSelect: () => hydrationActionGate.run(DEFERRED_SELECTOR_ACTION_KEY, () => {
-			void notifyOnError(async () => { await actions?.openModelSelector(); }, notifications);
-		}),
+		onModelSelect: () => hydrationActionGate.run(DEFERRED_SELECTOR_ACTION_KEY, () => notifyOnError(async () => { await actions?.openModelSelector(); }, notifications)),
 		onThinkingCycle: () => hydrationActionGate.run("thinking-cycle", handleThinkingCycle),
 		onToolsExpandToggle: handleToolsExpandToggle,
 		onMessageFollowUp: () => hydrationActionGate.run(DEFERRED_MESSAGE_QUEUE_ACTION_KEY, handleMessageFollowUp),
@@ -1507,9 +1502,7 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		changelogRoot: root,
 	});
 	const hydrationGatedInputHandler = {
-		openCommandPalette: (): void => hydrationActionGate.run(DEFERRED_SELECTOR_ACTION_KEY, () => {
-			void notifyOnError(() => actions!.openCommandPalette(), notifications);
-		}),
+		openCommandPalette: (): void => hydrationActionGate.run(DEFERRED_SELECTOR_ACTION_KEY, () => notifyOnError(() => actions!.openCommandPalette(), notifications)),
 	};
 	let statsTimer: NodeJS.Timeout | undefined;
 	let statsInFlight = false;

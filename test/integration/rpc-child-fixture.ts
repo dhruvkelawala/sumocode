@@ -79,6 +79,11 @@ const compactReason = ${JSON.stringify(options.compactReason ?? "manual")};
 const compactSummary = ${JSON.stringify(options.compactSummary ?? "Fixture compaction summary.")};
 const compactTokensBefore = ${JSON.stringify(options.compactTokensBefore ?? 42000)};
 const commandLogPath = process.env.SUMOCODE_RPC_FIXTURE_LOG;
+const availableModels = [
+	{ provider: "openai", id: "gpt-5", label: "openai/gpt-5" },
+	{ provider: "anthropic", id: "claude-opus-4", label: "anthropic/claude-opus-4" },
+];
+let currentModel = { provider: "openai", id: "gpt-5", name: "GPT-5" };
 
 function write(payload) {
 	process.stdout.write(JSON.stringify(payload) + "\\n");
@@ -86,7 +91,7 @@ function write(payload) {
 
 function state() {
 	return {
-		model: { provider: "openai", id: "gpt-5", name: "GPT-5" },
+		model: currentModel,
 		thinkingLevel: "medium",
 		isStreaming,
 		isCompacting,
@@ -160,6 +165,17 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 			return;
 		}
 		write(response(command, { messages }));
+		return;
+	}
+	if (command.type === "get_available_models") {
+		write(response(command, { models: availableModels }));
+		return;
+	}
+	if (command.type === "set_model") {
+		const match = availableModels.find((m) => m.provider === command.provider && m.id === command.modelId)
+			|| { provider: command.provider, id: command.modelId, label: command.provider + "/" + command.modelId };
+		currentModel = { provider: match.provider, id: match.id, name: match.label };
+		write(response(command, { model: match }));
 		return;
 	}
 	if (command.type === "get_session_stats") {

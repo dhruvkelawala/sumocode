@@ -1733,16 +1733,16 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 			// The snapshot plus final event suffix are authoritative now. Do not let
 			// a late advisory worker result overlay them while branch watching starts.
 			acceptCachedChrome = false;
-			stopWatchingGitBranch = await watchGitBranch(cwd, branch, (nextBranch) => {
-				const state = stateStore.setGitBranch(nextBranch);
-				runtime?.update({ state });
-			});
 			const hydratedState = stateStore.getSnapshot();
 			initialRuntime.update({
 				state: hydratedState,
 				transcript: transcriptPump.viewModel(),
 				activities: activityPresentation(latestActivitySnapshot),
 				suppressSettledFeedOnly: true,
+			});
+			stopWatchingGitBranch = await watchGitBranch(cwd, branch, (nextBranch) => {
+				const state = stateStore.setGitBranch(nextBranch);
+				runtime?.update({ state });
 			});
 		}
 		deferActivityRuntimeUpdate = false;

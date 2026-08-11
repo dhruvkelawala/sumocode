@@ -60,6 +60,14 @@ export async function createHostInputManifest(root, bundledInputs) {
 	};
 }
 
+export function hostInputManifestsMatch(before, after) {
+	return before.version === HOST_INPUT_MANIFEST_VERSION
+		&& after.version === HOST_INPUT_MANIFEST_VERSION
+		&& before.hash === after.hash
+		&& before.inputs.length === after.inputs.length
+		&& before.inputs.every((input, index) => input === after.inputs[index]);
+}
+
 export async function hostInputManifestIsFresh(root, manifest) {
 	if (
 		typeof manifest !== "object"

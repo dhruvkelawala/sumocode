@@ -874,16 +874,19 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 	const pushState = (state?: RpcHostChromeState): void => {
 		runtime?.update({ state: state ?? stateStore.getSnapshot() });
 	};
+	const cacheChromeState = (state: RpcHostChromeState): void => {
+		if (visualFixture) return;
+		writeCachedChrome(cwd, {
+			modelLabel: state.modelLabel,
+			thinkingLevel: state.thinkingLevel,
+		});
+	};
 	const pushStateAndCacheChrome = (state?: RpcHostChromeState): void => {
 		pushState(state);
 		// Controls invoke pushState optimistically before the child confirms a
 		// model/thinking change. Persist only callbacks carrying the successful
 		// authoritative response, never an optimistic or failed intermediate.
-		if (visualFixture || state === undefined) return;
-		writeCachedChrome(cwd, {
-			modelLabel: state.modelLabel,
-			thinkingLevel: state.thinkingLevel,
-		});
+		if (state !== undefined) cacheChromeState(state);
 	};
 	const treeNavigationOutcomeBroker = new InMemoryRpcTreeNavigationOutcomeBroker();
 	const controls = new RpcHostControls(client, stateStore, { onOptimisticChange: pushState, treeNavigationOutcomeBroker });
@@ -1198,6 +1201,10 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 				transcriptRevision: transcriptPump.getRevision(),
 				activities: activityPresentation(latestActivitySnapshot),
 			});
+			// Session replacement can change the authoritative model/thinking
+			// without going through a model action callback. Refresh the startup
+			// hint only after both destination state and transcript commit.
+			cacheChromeState(state);
 		} catch {
 			// Keep the event buffer and fail-closed replacement active until both
 			// authoritative destination state and message history are fetched.
@@ -1655,10 +1662,7 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 				activities: activityPresentation(latestActivitySnapshot),
 				suppressSettledFeedOnly: true,
 			});
-			writeCachedChrome(cwd, {
-				modelLabel: hydratedState.modelLabel,
-				thinkingLevel: hydratedState.thinkingLevel,
-			});
+			cacheChromeState(hydratedState);
 		}
 		deferActivityRuntimeUpdate = false;
 		await editor.configureAutocomplete(controls);

@@ -813,9 +813,13 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 	const root = hostRoot(env);
 	const cwd = hostCwd(env);
 	const stateRoot = defaultActivityStateRoot(env);
+	const chromeCacheTestDelayMs = env.NODE_ENV === "test"
+		? Number.parseInt(env.SUMOCODE_TEST_CHROME_CACHE_DELAY_MS ?? "0", 10)
+		: 0;
 	const chromeCache = new ChromeCacheWorkerClient({
 		stateRoot,
 		modulePath: resolve(root, "src/sumo-tui/rpc/chrome-cache.ts"),
+		operationDelayMs: Number.isFinite(chromeCacheTestDelayMs) ? Math.max(0, chromeCacheTestDelayMs) : 0,
 	});
 	// Resolve and apply the configured theme before the runtime/shell is
 	// constructed so the host's first frame already renders the user's theme
@@ -879,12 +883,13 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 	const pushState = (state?: RpcHostChromeState): void => {
 		runtime?.update({ state: state ?? stateStore.getSnapshot() });
 	};
+	let lastChromeCacheWrite: Promise<void> = Promise.resolve();
 	const cacheChromeState = (state: RpcHostChromeState): void => {
 		if (visualFixture) return;
-		void chromeCache.write(cwd, {
+		lastChromeCacheWrite = chromeCache.write(cwd, {
 			modelLabel: state.modelLabel,
 			thinkingLevel: state.thinkingLevel,
-		});
+		}).catch(() => undefined);
 	};
 	let pendingChromeCacheState: RpcHostChromeState | undefined;
 	let pendingChromeCacheWrite: ReturnType<typeof setImmediate> | undefined;
@@ -899,6 +904,19 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 			if (pending) cacheChromeState(pending);
 		});
 		pendingChromeCacheWrite.unref?.();
+	};
+	const flushChromeCacheState = async (): Promise<void> => {
+		if (visualFixture) return;
+		for (;;) {
+			if (pendingChromeCacheWrite) clearImmediate(pendingChromeCacheWrite);
+			pendingChromeCacheWrite = undefined;
+			const pending = pendingChromeCacheState;
+			pendingChromeCacheState = undefined;
+			if (pending) cacheChromeState(pending);
+			const write = lastChromeCacheWrite;
+			await write;
+			if (!pendingChromeCacheState && lastChromeCacheWrite === write) return;
+		}
 	};
 	const pushStateAndCacheChrome = (state?: RpcHostChromeState): void => {
 		pushState(state);
@@ -1545,9 +1563,7 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 			}
 			unsubscribeActivityStore();
 			activityStore.dispose();
-			if (pendingChromeCacheWrite) clearImmediate(pendingChromeCacheWrite);
-			pendingChromeCacheWrite = undefined;
-			pendingChromeCacheState = undefined;
+			await flushChromeCacheState();
 			await chromeCache.dispose();
 			await client.stop();
 		})();

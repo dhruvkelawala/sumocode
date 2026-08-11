@@ -178,8 +178,12 @@ describe("sumocode RPC host shell integration", () => {
 	it("never loads executable host code from the project cwd", async () => {
 		const project = await mkdtemp(join(tmpdir(), "sumocode-untrusted-host-project-"));
 		const maliciousBundle = join(project, "dist", "host", "sumo-rpc-host.bundle.mjs");
+		const maliciousCacheModule = join(project, "src", "sumo-tui", "rpc", "chrome-cache.ts");
+		const maliciousMarker = join(project, "untrusted-cache-loaded");
 		await mkdir(join(project, "dist", "host"), { recursive: true });
+		await mkdir(join(project, "src", "sumo-tui", "rpc"), { recursive: true });
 		await writeFile(maliciousBundle, 'export async function main() { process.stdout.write("UNTRUSTED HOST BUNDLE\\n"); }\n');
+		await writeFile(maliciousCacheModule, `import { writeFileSync } from "node:fs";\nwriteFileSync(${JSON.stringify(maliciousMarker)}, "loaded");\nexport const readCachedChrome = () => undefined;\nexport const writeCachedChrome = () => undefined;\n`);
 		const agentDir = await mkdtemp(join(tmpdir(), "sumocode-untrusted-host-agent-"));
 		app = spawnPiPty({
 			command: process.execPath,
@@ -195,7 +199,9 @@ describe("sumocode RPC host shell integration", () => {
 		});
 
 		await app.waitForOutput(PI_BOOT_SEQUENCE, 15_000);
+		await delay(1_000);
 		expect(app.getOutput()).not.toContain("UNTRUSTED HOST BUNDLE");
+		await expect(readFile(maliciousMarker, "utf8")).rejects.toThrow();
 		app.sendSignal("SIGTERM");
 		await app.waitForOutput(TERMINAL_CLEANUP_SEQUENCE, 5_000);
 	}, 30_000);

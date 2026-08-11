@@ -229,6 +229,11 @@ try {
 	await mod.main({
 		preSpawnedChild,
 		onPreSpawnedChildAdopted: releasePreAdoptionSignalHandlers,
+		env: {
+			...process.env,
+			SUMOCODE_ROOT_DIR: root,
+			SUMOCODE_PROJECT_CWD: process.env.SUMOCODE_PROJECT_CWD ?? process.cwd(),
+		},
 	});
 } catch (error) {
 	// main() can reject before SumoRpcClient adopts the pre-spawned child

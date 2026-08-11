@@ -23,6 +23,39 @@ describe("importExtensionEntry", () => {
 		expect(onBundleFailure).toHaveBeenCalledWith(bundleError);
 	});
 
+	it("falls back to source when revalidation fails after a successful bundle import", async () => {
+		const bundleImporter = vi.fn(async (path: string) => ({ entry: path }));
+		const sourceImporter = vi.fn(async (path: string) => ({ entry: path }));
+		const onBundleFailure = vi.fn();
+
+		await expect(importExtensionEntry({
+			bundlePath: "/bundle.mjs",
+			sourcePath: "/source.ts",
+			useBundle: true,
+			bundleImporter,
+			sourceImporter,
+			revalidate: () => false,
+			onBundleFailure,
+		})).resolves.toEqual({ entry: "/source.ts" });
+		expect(bundleImporter).toHaveBeenCalledOnce();
+		expect(sourceImporter).toHaveBeenCalledWith("/source.ts");
+		expect(onBundleFailure).toHaveBeenCalledOnce();
+	});
+
+	it("accepts the bundle when revalidation still passes after import", async () => {
+		const bundleImporter = vi.fn(async (path: string) => ({ entry: path }));
+		const sourceImporter = vi.fn(async (path: string) => ({ entry: path }));
+		await expect(importExtensionEntry({
+			bundlePath: "/bundle.mjs",
+			sourcePath: "/source.ts",
+			useBundle: true,
+			bundleImporter,
+			sourceImporter,
+			revalidate: () => true,
+		})).resolves.toEqual({ entry: "/bundle.mjs" });
+		expect(sourceImporter).not.toHaveBeenCalled();
+	});
+
 	it("loads source directly without invoking the bundle importer", async () => {
 		const bundleImporter = vi.fn(async (path: string) => ({ entry: path }));
 		const sourceImporter = vi.fn(async (path: string) => ({ entry: path }));

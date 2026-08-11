@@ -103,6 +103,9 @@ const extensionModule = await importExtensionEntry({
 	sourcePath,
 	useBundle: process.env.SUMOCODE_EXTENSION_BUNDLE !== "0" && hasFreshBundle(),
 	bundleImporter: (path) => import(pathToFileURL(path).href),
+	// A source edit or rebuild landing in the check/import window makes this
+	// false, so the shim discards the stale bundle and uses source instead.
+	revalidate: () => hasFreshBundle(),
 	sourceImporter: importSourceThroughPiJiti,
 	onBundleFailure: () => {
 		console.warn("[sumocode] extension bundle failed to import — using source");

@@ -5,6 +5,12 @@ export interface ExtensionEntryImportOptions<T> {
 	readonly bundleImporter: (path: string) => Promise<T>;
 	readonly sourceImporter: (path: string) => Promise<T>;
 	readonly onBundleFailure?: (error: unknown) => void;
+	/**
+	 * Re-checked AFTER the bundle import resolves. A source edit or rebuild that
+	 * lands in the check/import window makes this return false, so the shim
+	 * discards the now-stale bundle and takes the source fallback.
+	 */
+	readonly revalidate?: () => boolean;
 }
 
 /**
@@ -16,7 +22,11 @@ export interface ExtensionEntryImportOptions<T> {
 export async function importExtensionEntry<T>(options: ExtensionEntryImportOptions<T>): Promise<T> {
 	if (options.useBundle) {
 		try {
-			return await options.bundleImporter(options.bundlePath);
+			const bundleModule = await options.bundleImporter(options.bundlePath);
+			if (options.revalidate && !options.revalidate()) {
+				throw new Error("extension bundle changed during import");
+			}
+			return bundleModule;
 		} catch (error) {
 			options.onBundleFailure?.(error);
 		}

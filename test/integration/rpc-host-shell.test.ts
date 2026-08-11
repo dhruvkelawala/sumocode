@@ -100,7 +100,7 @@ describe("sumocode RPC host shell integration", () => {
 		const pidFile = join(directory, "pid");
 		await writeFile(
 			piBin,
-			"#!/usr/bin/env node\nrequire('node:fs').writeFileSync(process.env.PID_FILE, String(process.pid));\nprocess.on('SIGTERM', () => {});\nprocess.stdin.resume();\nsetInterval(() => {}, 1000);\n",
+			"#!/usr/bin/env node\nprocess.on('SIGTERM', () => {});\nrequire('node:fs').writeFileSync(process.env.PID_FILE, String(process.pid));\nprocess.kill(process.ppid, 'SIGTERM');\nprocess.stdin.resume();\nsetInterval(() => {}, 1000);\n",
 			{ mode: 0o700 },
 		);
 		app = spawnSumocodePty({
@@ -109,8 +109,10 @@ describe("sumocode RPC host shell integration", () => {
 			rows: 30,
 		});
 
+		// The fixture signals its parent immediately after publishing its PID,
+		// deterministically exercising the pre-adoption owner instead of racing
+		// the real host's fast client adoption.
 		const pid = await waitForPid(pidFile);
-		app.sendSignal("SIGTERM");
 		await waitForProcessExit(pid);
 	}, 30_000);
 

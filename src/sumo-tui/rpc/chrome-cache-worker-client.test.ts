@@ -2,8 +2,8 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
-import { ChromeCacheWorkerClient } from "./chrome-cache-worker-client.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { ChromeCacheWorkerClient, drainChromeCacheForShutdown } from "./chrome-cache-worker-client.js";
 
 const tempDirectories: string[] = [];
 
@@ -22,6 +22,26 @@ afterEach(() => {
 });
 
 describe("ChromeCacheWorkerClient", () => {
+	it("awaits a completed shutdown drain before disposal", async () => {
+		const order: string[] = [];
+		await expect(drainChromeCacheForShutdown(
+			async () => { order.push("drain"); },
+			async () => { order.push("dispose"); },
+			50,
+		)).resolves.toBe("drained");
+		expect(order).toEqual(["drain", "dispose"]);
+	});
+
+	it("bounds a stalled shutdown drain and triggers worker termination", async () => {
+		const dispose = vi.fn(async () => undefined);
+		await expect(drainChromeCacheForShutdown(
+			() => new Promise<void>(() => undefined),
+			dispose,
+			10,
+		)).resolves.toBe("timed-out");
+		expect(dispose).toHaveBeenCalledOnce();
+	});
+
 	it("round-trips cache operations in its worker", async () => {
 		const client = createClient();
 		try {

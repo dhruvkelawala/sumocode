@@ -44,9 +44,21 @@ function moduleUrlToPath(moduleUrl: string): string {
 	return moduleUrl.startsWith("file:") ? fileURLToPath(moduleUrl) : moduleUrl;
 }
 
-function packageRootFromModule(moduleUrl: string): string {
-	// src/commands/sync.ts -> package root
-	return resolve(dirname(moduleUrlToPath(moduleUrl)), "..", "..");
+function packageRootFromModule(moduleUrl: string, deps: SumoSyncDeps): string {
+	const exists = deps.exists ?? existsSync;
+	const modulePath = moduleUrlToPath(moduleUrl);
+	let current = dirname(modulePath);
+	while (true) {
+		if (
+			packageNameAt(current, deps) === "@dhruvkelawala/sumocode"
+			&& exists(join(current, "src", "extension.ts"))
+		) return current;
+		const parent = dirname(current);
+		if (parent === current) break;
+		current = parent;
+	}
+	// Preserve the source-tree fallback for incomplete/test installations.
+	return resolve(dirname(modulePath), "..", "..");
 }
 
 /** Resolve the private config repo that backs SumoCode's ~/.pi/agent symlinks. */
@@ -98,7 +110,7 @@ function resolveSumoCodeRepo(deps: SumoSyncDeps): string {
 	const cwd = deps.cwd ?? process.cwd();
 	const devTree = findActiveSumoDevTree(cwd, deps);
 	if (devTree) return devTree;
-	return packageRootFromModule(deps.moduleUrl ?? import.meta.url);
+	return packageRootFromModule(deps.moduleUrl ?? import.meta.url, deps);
 }
 
 function pathExists(path: string): boolean {

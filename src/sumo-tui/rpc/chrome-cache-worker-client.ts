@@ -49,6 +49,31 @@ interface ChromeCacheWorkerReply {
 	readonly fatal?: string;
 }
 
+export const CHROME_CACHE_SHUTDOWN_GRACE_MS = 2_500;
+
+export async function drainChromeCacheForShutdown(
+	drain: () => Promise<void>,
+	dispose: () => Promise<void>,
+	graceMs = CHROME_CACHE_SHUTDOWN_GRACE_MS,
+): Promise<"drained" | "timed-out"> {
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	const drained = await Promise.race([
+		drain().then(() => true, () => true),
+		new Promise<false>((resolve) => {
+			timer = setTimeout(() => resolve(false), Math.max(0, graceMs));
+		}),
+	]);
+	if (timer) clearTimeout(timer);
+	if (drained) {
+		await dispose();
+		return "drained";
+	}
+	// Worker is unrefed. Trigger termination but do not await a native syscall
+	// that already exceeded the advisory shutdown budget.
+	void dispose();
+	return "timed-out";
+}
+
 export interface ChromeCacheWorkerClientOptions {
 	readonly stateRoot: string;
 	readonly modulePath: string;

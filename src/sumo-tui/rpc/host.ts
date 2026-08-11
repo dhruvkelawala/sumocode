@@ -18,7 +18,7 @@ import type { ChatPagerReplaceStats } from "../widgets/chat-pager.js";
 import { ModalLayer } from "../widgets/modal-layer.js";
 import { NotificationCenter } from "../widgets/notification.js";
 import { RpcChildExitError, SumoRpcClient, truncateForNotification } from "./client.js";
-import { ChromeCacheWorkerClient } from "./chrome-cache-worker-client.js";
+import { ChromeCacheWorkerClient, drainChromeCacheForShutdown } from "./chrome-cache-worker-client.js";
 import { RpcHostControls } from "./controls.js";
 import { createRpcKeybindingsManager, RpcHostEditorController } from "./editor.js";
 import { createRpcExtensionUiResponder } from "./extension-ui-responder.js";
@@ -1563,8 +1563,10 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 			}
 			unsubscribeActivityStore();
 			activityStore.dispose();
-			await flushChromeCacheState();
-			await chromeCache.dispose();
+			await drainChromeCacheForShutdown(
+				flushChromeCacheState,
+				() => chromeCache.dispose(),
+			);
 			await client.stop();
 		})();
 		await stopPromise;

@@ -247,5 +247,10 @@ try {
 	await terminateUnadoptedChild();
 	throw error;
 } finally {
-	releasePreAdoptionSignalHandlers();
+	// When an early signal is relaying (e.g. main() aborted adoption while the
+	// SIGTERM-ignoring child is still in its reap grace), keep the guarded entry
+	// handlers installed: relayEarlySignal's own cleanup releases them after the
+	// reap and then exits, so a repeated signal stays suppressed instead of
+	// hitting Node's default disposition mid-cleanup.
+	if (!relayingEarlySignal) releasePreAdoptionSignalHandlers();
 }

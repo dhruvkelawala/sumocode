@@ -30,6 +30,7 @@ describe("startup perf report sanitization", () => {
 			ok: false,
 			durationMs: 12,
 			code: 1,
+			error: "spawn /Users/private/project/pi ENOENT",
 			stderr: "private stderr",
 			output: "private PTY output",
 		}]);

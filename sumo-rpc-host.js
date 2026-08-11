@@ -38,18 +38,48 @@ function terminateUnadoptedChild() {
 	}
 }
 
+let relayingEarlySignal = false;
+const handleEarlySigint = () => relayEarlySignal("SIGINT");
+const handleEarlySigterm = () => relayEarlySignal("SIGTERM");
+
+function releasePreAdoptionSignalHandlers() {
+	process.removeListener("SIGINT", handleEarlySigint);
+	process.removeListener("SIGTERM", handleEarlySigterm);
+}
+
+function relayEarlySignal(signal) {
+	if (relayingEarlySignal) return;
+	relayingEarlySignal = true;
+	terminateUnadoptedChild();
+	releasePreAdoptionSignalHandlers();
+	// Installing a signal listener suppresses Node's default termination.
+	// Restore it by re-sending the original signal after child cleanup.
+	process.kill(process.pid, signal);
+}
+
+if (preSpawnedChild) {
+	process.once("SIGINT", handleEarlySigint);
+	process.once("SIGTERM", handleEarlySigterm);
+}
+
 let mod;
 try {
 	mod = await jiti.import("./src/sumo-tui/rpc/host.ts");
 } catch (error) {
 	terminateUnadoptedChild();
+	releasePreAdoptionSignalHandlers();
 	throw error;
 }
 try {
-	await mod.main({ preSpawnedChild });
+	await mod.main({
+		preSpawnedChild,
+		onPreSpawnedChildAdopted: releasePreAdoptionSignalHandlers,
+	});
 } catch (error) {
 	// main() can reject before SumoRpcClient adopts the pre-spawned child
 	// (Yoga/config/runtime initialization). The entry still owns it then.
 	terminateUnadoptedChild();
 	throw error;
+} finally {
+	releasePreAdoptionSignalHandlers();
 }

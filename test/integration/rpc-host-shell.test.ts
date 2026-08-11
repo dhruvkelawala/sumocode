@@ -1,4 +1,4 @@
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -14,6 +14,29 @@ afterEach(() => {
 
 function delay(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitForPid(path: string): Promise<number> {
+	for (let attempt = 0; attempt < 200; attempt += 1) {
+		try {
+			const pid = Number.parseInt(await readFile(path, "utf8"), 10);
+			if (Number.isFinite(pid)) return pid;
+		} catch {}
+		await delay(10);
+	}
+	throw new Error(`timed out waiting for child pid file: ${path}`);
+}
+
+async function waitForProcessExit(pid: number): Promise<void> {
+	for (let attempt = 0; attempt < 200; attempt += 1) {
+		try {
+			process.kill(pid, 0);
+		} catch {
+			return;
+		}
+		await delay(10);
+	}
+	throw new Error(`process ${pid} remained alive after early host signal`);
 }
 
 describe("sumocode RPC host shell integration", () => {
@@ -69,6 +92,26 @@ describe("sumocode RPC host shell integration", () => {
 		expect(activeState.altscreenActive).toBe(true);
 		expect(activeState.mouseSGRActive).toBe(true);
 		expect(activeState.cleanupSequenceSeen).toBe(false);
+	}, 30_000);
+
+	it("reaps the pre-spawned child when signalled before host adoption", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "sumocode-rpc-early-signal-"));
+		const piBin = join(directory, "stalled-pi");
+		const pidFile = join(directory, "pid");
+		await writeFile(
+			piBin,
+			"#!/usr/bin/env node\nrequire('node:fs').writeFileSync(process.env.PID_FILE, String(process.pid));\nprocess.stdin.resume();\nsetInterval(() => {}, 1000);\n",
+			{ mode: 0o700 },
+		);
+		app = spawnSumocodePty({
+			env: { PI_BIN: piBin, PID_FILE: pidFile, PI_CODING_AGENT_DIR: join(directory, "agent") },
+			cols: 100,
+			rows: 30,
+		});
+
+		const pid = await waitForPid(pidFile);
+		app.sendSignal("SIGTERM");
+		await waitForProcessExit(pid);
 	}, 30_000);
 
 	it("exits promptly when startup hydration is stalled", async () => {

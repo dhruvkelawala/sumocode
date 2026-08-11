@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { importExtensionEntry } from "./extension-entry-loader.js";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const sourcePath = join(root, "src", "extension.ts");
@@ -75,12 +76,18 @@ function hasFreshBundle(): boolean {
 	}
 }
 
-function selectedEntry(): string {
-	return hasFreshBundle() ? bundlePath : sourcePath;
-}
-
 // This dynamic import stays inside Pi's extension-loader jiti context, preserving
-// its aliases for peer-only Pi packages and its shared module singletons.
-const extensionModule = await import(pathToFileURL(selectedEntry()).href);
+// its aliases for peer-only Pi packages and its shared module singletons. A
+// content-fresh bundle can still fail native resolution of external peers in a
+// particular installation, so import-time failure falls back to source too.
+const extensionModule = await importExtensionEntry({
+	bundlePath,
+	sourcePath,
+	useBundle: process.env.SUMOCODE_EXTENSION_BUNDLE !== "0" && hasFreshBundle(),
+	importer: (path) => import(pathToFileURL(path).href),
+	onBundleFailure: () => {
+		console.warn("[sumocode] extension bundle failed to import — using source");
+	},
+});
 
 export default extensionModule.default;

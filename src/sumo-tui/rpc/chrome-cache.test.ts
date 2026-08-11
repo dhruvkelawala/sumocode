@@ -31,6 +31,7 @@ describe("chrome cache", () => {
 
 		expect(readCachedChrome("/project/a", { stateRoot })).toEqual({ modelLabel: "openai/gpt-5.5", thinkingLevel: "high" });
 		expect(JSON.parse(readFileSync(path, "utf8"))).toMatchObject({ version: 1, byCwd: { "/project/a": { savedAt: 10 } } });
+		expect(existsSync(`${path}.lock`)).toBe(false);
 		if (process.platform !== "win32") {
 			expect(statSync(dirname(path)).mode & 0o777).toBe(0o700);
 			expect(statSync(path).mode & 0o777).toBe(0o600);

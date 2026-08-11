@@ -146,6 +146,7 @@ try {
 	await mod.main({
 		preSpawnedChild,
 		onPreSpawnedChildAdopted: releasePreAdoptionSignalHandlers,
+		shouldAbortAdoption: () => relayingEarlySignal,
 	});
 } catch (error) {
 	// main() can reject before SumoRpcClient adopts the pre-spawned child

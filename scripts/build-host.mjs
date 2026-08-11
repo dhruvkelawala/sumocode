@@ -4,6 +4,7 @@ import { build } from "esbuild";
 import {
 	createHostInputManifest,
 	hostInputManifestsMatch,
+	hostOutputsHash,
 	HOST_INPUT_MANIFEST_OUTPUT,
 } from "./lib/host-bundle.mjs";
 
@@ -66,9 +67,11 @@ await atomicCopy(resolve(root, "src/assets/sumo-face.ans"), resolve(outDir, "ass
 // the same runtime resolution it has from src/sumo-tui/rpc/host.ts.
 await atomicCopy(resolve(root, "src/sumo-tui/rpc/spawn-child.mjs"), resolve(outDir, "spawn-child.mjs"));
 
-// The manifest commit point: runtime re-hashes this recorded set, so modified,
-// renamed, and deleted source files all invalidate an otherwise newer artifact.
-await atomicWrite(manifestPath, `${JSON.stringify(inputManifest, null, 2)}\n`);
+// The manifest commit point: it records both the input graph hash and a hash of
+// this build's published outputs, so runtime rejects stale inputs AND a bundle
+// belonging to a different concurrent build. Written last, after every output.
+const outputsHash = await hostOutputsHash(root);
+await atomicWrite(manifestPath, `${JSON.stringify({ ...inputManifest, outputsHash }, null, 2)}\n`);
 
 const { size } = await stat(bundlePath);
 console.log(`[sumocode] host bundle: ${bundlePath} (${size} bytes)`);

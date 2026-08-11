@@ -292,6 +292,22 @@ describe("sumocode RPC host shell integration", () => {
 		}
 	}, 30_000);
 
+	it("falls back to source when the published host bundle bytes do not match the manifest", async () => {
+		const tamperBundlePath = join(process.cwd(), "dist/host/sumo-rpc-host.bundle.mjs");
+		const original = await readFile(tamperBundlePath);
+		// Simulate a concurrent build's interleaved bundle: the input manifest is
+		// unchanged, but the recorded outputsHash no longer matches these bytes.
+		await writeFile(tamperBundlePath, Buffer.concat([original, Buffer.from("\n// interleaved build\n")]));
+		try {
+			const agentDir = await mkdtemp(join(tmpdir(), "sumocode-rpc-tampered-bundle-agent-"));
+			app = spawnSumocodePty({ env: { PI_CODING_AGENT_DIR: agentDir }, cols: 100, rows: 30 });
+			await app.waitForOutput("host bundle stale — using source", 15_000);
+			await app.waitForOutput(PI_BOOT_SEQUENCE, 15_000);
+		} finally {
+			await writeFile(tamperBundlePath, original);
+		}
+	}, 30_000);
+
 	it("falls back to source when a recorded host input has been deleted", async () => {
 		const manifestPath = join(process.cwd(), "dist", "host", ".inputs.json");
 		const original = await readFile(manifestPath);

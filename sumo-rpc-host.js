@@ -3,7 +3,7 @@ import { writeFileSync } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { hostInputManifestIsFresh, HOST_INPUT_MANIFEST_OUTPUT } from "./scripts/lib/host-bundle.mjs";
+import { hostInputManifestIsFresh, hostOutputsHash, HOST_INPUT_MANIFEST_OUTPUT } from "./scripts/lib/host-bundle.mjs";
 import { buildChildSpawnPlan } from "./src/sumo-tui/rpc/spawn-child.mjs";
 
 // Executable host code belongs to this installed package, never the project
@@ -32,7 +32,13 @@ async function bundleIsFresh() {
 			readFile(sourceSpawnHelperPath),
 			readFile(bundledSpawnHelperPath),
 		]);
-		return await hostInputManifestIsFresh(root, JSON.parse(manifestBytes))
+		const manifest = JSON.parse(manifestBytes);
+		// The manifest describes its own published outputs. Verify them so a bundle
+		// from a different concurrent build (interleaved renames) is rejected in
+		// favour of the source fallback.
+		return await hostInputManifestIsFresh(root, manifest)
+			&& typeof manifest.outputsHash === "string"
+			&& await hostOutputsHash(root) === manifest.outputsHash
 			&& sourceFaceBytes.equals(bundledFaceBytes)
 			&& sourceSpawnHelperBytes.equals(bundledSpawnHelperBytes);
 	} catch {

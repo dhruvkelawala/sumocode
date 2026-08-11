@@ -2,8 +2,31 @@ import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { isAbsolute, relative, resolve } from "node:path";
 
-export const HOST_INPUT_MANIFEST_VERSION = 1;
+export const HOST_INPUT_MANIFEST_VERSION = 2;
 export const HOST_INPUT_MANIFEST_OUTPUT = ".inputs.json";
+
+// Every file build-host publishes. The manifest records a hash over this exact
+// set so it describes its OWN artifact: if two concurrent builders interleave
+// renames, the manifest one publishes will not match the other's on-disk bytes,
+// and the launch rejects the mismatched bundle instead of executing it.
+export const HOST_BUNDLE_OUTPUTS = [
+	"sumo-rpc-host.bundle.mjs",
+	"sumo-rpc-host.bundle.mjs.map",
+	"assets/sumo-face.ans",
+	"spawn-child.mjs",
+];
+
+export async function hostOutputsHash(root) {
+	const outDir = resolve(root, "dist/host");
+	const hash = createHash("sha256");
+	for (const output of HOST_BUNDLE_OUTPUTS) {
+		hash.update(output);
+		hash.update("\0");
+		hash.update(await readFile(resolve(outDir, output)));
+		hash.update("\0");
+	}
+	return hash.digest("hex");
+}
 
 export const HOST_EXTRA_INPUTS = [
 	"scripts/build-host.mjs",

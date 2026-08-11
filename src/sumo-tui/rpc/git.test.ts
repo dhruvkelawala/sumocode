@@ -123,7 +123,7 @@ describe("readGitBranch", () => {
 		expect(calls[0]).toEqual({
 			file: "git",
 			args: ["branch", "--show-current"],
-			options: expect.objectContaining({ cwd: "/repo/worktree", timeout: 2000, killSignal: "SIGKILL" }),
+			options: expect.objectContaining({ cwd: "/repo/worktree", killSignal: "SIGKILL", signal: expect.any(AbortSignal) }),
 		});
 	});
 
@@ -157,7 +157,7 @@ describe("readGitBranch", () => {
 		]);
 		for (const call of calls) {
 			expect(call.file).toBe("git");
-			expect(call.options).toEqual(expect.objectContaining({ cwd: "/repo/worktree", timeout: 2000, killSignal: "SIGKILL" }));
+			expect(call.options).toEqual(expect.objectContaining({ cwd: "/repo/worktree", killSignal: "SIGKILL", signal: expect.any(AbortSignal) }));
 		}
 	});
 });

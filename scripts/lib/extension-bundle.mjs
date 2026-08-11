@@ -27,17 +27,20 @@ export function normalizeHashPath(path) {
 
 async function sourceTypeScriptFiles(root) {
 	const files = [];
+	const sourceRoot = resolve(root, "src");
+	const spikeRoot = resolve(sourceRoot, "spike");
 	async function visit(directory) {
 		for (const entry of await readdir(directory, { withFileTypes: true })) {
 			const path = join(directory, entry.name);
 			if (entry.isDirectory()) {
+				if (path === spikeRoot) continue;
 				await visit(path);
 				continue;
 			}
 			if (entry.name.endsWith(".ts") && !entry.name.endsWith(".test.ts")) files.push(path);
 		}
 	}
-	await visit(resolve(root, "src"));
+	await visit(sourceRoot);
 	return files;
 }
 

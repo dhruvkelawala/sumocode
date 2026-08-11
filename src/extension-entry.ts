@@ -41,17 +41,20 @@ function contentHash(base: string, files: readonly string[]): string {
 
 function extensionInputsHash(): string {
 	const files: string[] = [];
+	const sourceRoot = join(root, "src");
+	const spikeRoot = join(sourceRoot, "spike");
 	function visit(directory: string): void {
 		for (const entry of readdirSync(directory, { withFileTypes: true })) {
 			const path = join(directory, entry.name);
 			if (entry.isDirectory()) {
+				if (path === spikeRoot) continue;
 				visit(path);
 			} else if (entry.name.endsWith(".ts") && !entry.name.endsWith(".test.ts")) {
 				files.push(path);
 			}
 		}
 	}
-	visit(join(root, "src"));
+	visit(sourceRoot);
 	files.push(...extensionInputs.map((input) => resolve(root, input)));
 	files.sort((left, right) => {
 		const leftPath = normalizeHashPath(relative(root, left));

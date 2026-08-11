@@ -1,9 +1,9 @@
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
+import { dirname, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { EXTENSION_ASSETS, EXTENSION_RECIPE_INPUTS, extensionInputsHash, extensionOutputsHash, normalizeHashPath } from "./lib/extension-bundle.mjs";
+import { EXTENSION_ASSETS, EXTENSION_RECIPE_INPUTS, extensionInputFiles, extensionInputsHash, extensionOutputsHash, normalizeHashPath } from "./lib/extension-bundle.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const outDir = resolve(root, "dist/extension");
@@ -26,6 +26,11 @@ describe("extension bundle freshness", () => {
 		if (actualInputs !== expectedInputs || actualOutputs !== expectedOutputs) {
 			throw new Error("bundle out of date or corrupt — run pnpm build:extension");
 		}
+	});
+
+	it("excludes throwaway spike sources from runtime freshness", async () => {
+		const inputs = (await extensionInputFiles(root)).map((path) => normalizeHashPath(relative(root, path)));
+		expect(inputs.some((path) => path.startsWith("src/spike/"))).toBe(false);
 	});
 
 	it("hashes the shipped manifest with an exact bundler version", async () => {

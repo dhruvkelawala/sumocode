@@ -1645,16 +1645,18 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		// child startup, refetch until one quiet pass, then replay only the final
 		// suffix after the authoritative replacement.
 		if (!visualFixture) sessionEvents.begin();
+		const branchPromise = visualFixture
+			? Promise.resolve(visualFixture.state.gitBranch)
+			: readGitBranch(cwd);
 		await client.start(adoptChildAndArmHostSignals);
-		const branch = await readGitBranch(cwd);
-		// A signal may have transferred ownership to stop() while optional branch
-		// chrome was resolving. Never enter raw mode/altscreen after teardown began.
+		// A signal can transfer ownership while client startup settles. Do not
+		// construct a runtime after teardown has already begun.
 		if (stopPromise) {
 			await stopPromise;
 			return requestedHostExitCode ?? 0;
 		}
 		const initialTranscript = visualFixture ? visualFixture.transcript : transcriptPump.viewModel();
-		const initialState = visualFixture ? visualFixture.state : stateStore.setGitBranch(branch);
+		const initialState = visualFixture ? visualFixture.state : stateStore.getSnapshot();
 		const initialRuntime = new RpcHostRuntime({
 			output: stdout,
 			input: stdin,
@@ -1684,6 +1686,14 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		});
 		runtime = initialRuntime;
 		await initialRuntime.start();
+		// Optional Git metadata must not gate the first retained frame. Apply it
+		// after startup and stop immediately if shutdown won the lookup race.
+		const branch = await branchPromise;
+		if (stopPromise) {
+			await stopPromise;
+			return requestedHostExitCode ?? 0;
+		}
+		if (!visualFixture) initialRuntime.update({ state: stateStore.setGitBranch(branch) });
 		// Cached chrome is only an advisory visual hint. Read it off-thread and
 		// never seed the authoritative store; the hydration repaint below wins
 		// regardless of worker completion order.

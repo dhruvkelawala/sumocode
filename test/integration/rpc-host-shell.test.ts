@@ -42,8 +42,8 @@ async function waitForProcessExit(pid: number): Promise<void> {
 	throw new Error(`process ${pid} remained alive after early host signal`);
 }
 
-async function waitForFileText(path: string, expected: string): Promise<void> {
-	for (let attempt = 0; attempt < 200; attempt += 1) {
+async function waitForFileText(path: string, expected: string, attempts = 200): Promise<void> {
+	for (let attempt = 0; attempt < attempts; attempt += 1) {
 		try {
 			if ((await readFile(path, "utf8")) === expected) return;
 		} catch {}
@@ -172,7 +172,7 @@ describe("sumocode RPC host shell integration", () => {
 		await waitForFileText(exitCodeFile, "0");
 	}, 30_000);
 
-	it("does not enter altscreen when shutdown starts during adopted branch lookup", async () => {
+	it("restores altscreen when shutdown starts during adopted branch lookup", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "sumocode-rpc-adopted-branch-signal-"));
 		const piBin = join(directory, "stalled-pi");
 		const gitBin = join(directory, "git");
@@ -186,7 +186,7 @@ describe("sumocode RPC host shell integration", () => {
 		);
 		await writeFile(
 			gitBin,
-			"#!/usr/bin/env node\nrequire('node:fs').writeFileSync(process.env.GIT_STARTED_FILE, 'started');\nsetTimeout(() => process.stdout.write('main\\n'), 150);\n",
+			"#!/usr/bin/env node\nrequire('node:fs').writeFileSync(process.env.GIT_STARTED_FILE, 'started');\nsetTimeout(() => process.stdout.write('main\\n'), 1500);\n",
 			{ mode: 0o700 },
 		);
 		app = spawnPiPty({
@@ -205,12 +205,14 @@ describe("sumocode RPC host shell integration", () => {
 		});
 
 		const pid = await waitForPid(pidFile);
-		await waitForFileText(gitStartedFile, "started");
+		await waitForFileText(gitStartedFile, "started", 1_000);
+		await app.waitForOutput("\x1b[?1049h", 5_000);
 		app.sendSignal("SIGTERM");
 		await waitForProcessExit(pid);
 		await waitForFileText(exitCodeFile, "0");
-		expect(app.getOutput()).not.toContain("\x1b[?1049h");
-		expect(app.getCurrentTerminalState().altscreenActive).toBe(false);
+		const terminal = app.getCurrentTerminalState();
+		expect(terminal.altscreenActive).toBe(false);
+		expect(terminal.cleanupSequenceSeen).toBe(true);
 	}, 30_000);
 
 	it("exits promptly when startup hydration is stalled", async () => {

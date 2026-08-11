@@ -1729,7 +1729,11 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 			let ownershipRebound = false;
 			for (let attempt = 0; attempt < 4; attempt += 1) {
 				sessionEvents.markHydrationBarrier();
-				refreshedState = await controls.refreshState(branch);
+				// Do NOT pass the local `branch` snapshot: the detached lookup may have
+				// resolved and written the real branch to the store during this await.
+				// refreshState() defaults hydration's gitBranch to the store's live
+				// value, so a stale captured undefined can never clobber it.
+				refreshedState = await controls.refreshState();
 				if (!ownershipRebound) {
 					const restored = scheduler.rebindSession(refreshedState.sessionId, editor.getText());
 					if (restored.count > 0) editor.setText(restored.text);

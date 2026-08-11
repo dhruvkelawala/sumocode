@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { importExtensionEntry } from "./extension-entry-loader.js";
@@ -59,11 +59,17 @@ function inputManifestIsFresh(manifest: ExtensionInputManifest): boolean {
 		if (path === ".." || path.startsWith("../") || isAbsolute(path) || path !== normalizeHashPath(input)) return false;
 		files.push(absolute);
 	}
-	// Recheck across two full scans so a source file changing mid-scan cannot
-	// yield a hash that still matches the old manifest; require both to match,
-	// otherwise fall back to source (the safe direction on any ambiguity).
+	// Guard the whole scan against a concurrent save/pull/checkout: capture a
+	// stat signature (mtime+size per file) before and after hashing. A change at
+	// any point during the scan alters the signature, rejecting the bundle in
+	// favour of the source fallback (the safe direction on any ambiguity).
+	const signature = (): string => files.map((file) => {
+		const info = statSync(file);
+		return `${file}:${info.mtimeMs}:${info.size}`;
+	}).join("|");
+	const before = signature();
 	if (contentHash(root, files) !== manifest.hash) return false;
-	return contentHash(root, files) === manifest.hash;
+	return signature() === before;
 }
 
 function extensionOutputsHash(): string {

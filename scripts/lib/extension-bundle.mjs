@@ -1,6 +1,15 @@
 import { createHash } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { isAbsolute, relative, resolve } from "node:path";
+
+async function inputStatSignature(root, inputs) {
+	const parts = [];
+	for (const input of inputs) {
+		const info = await stat(resolve(root, input));
+		parts.push(`${input}:${info.mtimeMs}:${info.size}`);
+	}
+	return parts.join("|");
+}
 
 export const EXTENSION_INPUT_MANIFEST_OUTPUT = ".inputs.json";
 export const EXTENSION_INPUT_MANIFEST_VERSION = 1;
@@ -110,13 +119,14 @@ export async function extensionInputManifestIsFresh(root, manifest) {
 	if (inputs.length === 0 || inputs.some((input) => typeof input !== "string") || new Set(inputs).size !== inputs.length) return false;
 	if ([...inputs].sort().some((input, index) => input !== inputs[index])) return false;
 	try {
-		// Recheck across two full scans so a source file changing mid-scan cannot
-		// yield a hash that still matches the old manifest; require both scans to
-		// match, otherwise fall back to source (the safe direction).
-		const first = await extensionInputsHashFromManifest(root, inputs);
-		if (first !== manifest.hash) return false;
-		const second = await extensionInputsHashFromManifest(root, inputs);
-		return second === manifest.hash;
+		// Guard the whole scan against a concurrent save/pull/checkout: capture a
+		// stat signature (mtime+size per input) before and after hashing. A change
+		// at any point during the scan alters the signature, rejecting the bundle
+		// in favour of the source fallback (the safe direction on any ambiguity).
+		const before = await inputStatSignature(root, inputs);
+		if (await extensionInputsHashFromManifest(root, inputs) !== manifest.hash) return false;
+		const after = await inputStatSignature(root, inputs);
+		return before === after;
 	} catch {
 		return false;
 	}

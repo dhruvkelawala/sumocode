@@ -1,8 +1,11 @@
 import { mkdtemp, mkdir, rm, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { HOST_INPUT_MANIFEST_VERSION, hostInputManifestIsFresh, hostInputManifestsMatch, hostInputsHash } from "./lib/host-bundle.mjs";
+import { HOST_EXTRA_INPUTS, HOST_INPUT_MANIFEST_VERSION, hostInputFiles, hostInputManifestIsFresh, hostInputManifestsMatch, hostInputsHash } from "./lib/host-bundle.mjs";
+
+const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 const temporaryDirectories = [];
 
@@ -11,6 +14,13 @@ afterEach(async () => {
 });
 
 describe("host bundle input manifest", () => {
+	it("tracks the dynamically loaded chrome-cache worker module", () => {
+		// host.ts hands this path to the jiti worker as a string, so esbuild never
+		// records it; it must be tracked explicitly to force the source fallback.
+		expect(HOST_EXTRA_INPUTS).toContain("src/sumo-tui/rpc/chrome-cache.ts");
+		expect(hostInputFiles(repoRoot, ["src/sumo-tui/rpc/host.ts"])).toContain("src/sumo-tui/rpc/chrome-cache.ts");
+	});
+
 	it("rejects a graph or content change across the writing build", () => {
 		const before = { version: HOST_INPUT_MANIFEST_VERSION, inputs: ["src/entry.ts"], hash: "before" };
 		expect(hostInputManifestsMatch(before, { ...before })).toBe(true);

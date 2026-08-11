@@ -13,6 +13,11 @@ export const HOST_EXTRA_INPUTS = [
 	"pnpm-lock.yaml",
 	"src/assets/sumo-face.ans",
 	"src/sumo-tui/rpc/spawn-child.mjs",
+	// Loaded by the chrome-cache worker via a string path (host.ts), so esbuild
+	// never records it in the graph. Track it explicitly so changing or deleting
+	// it invalidates the bundle and forces the matching source fallback instead
+	// of running an old bundled worker client against a mismatched protocol.
+	"src/sumo-tui/rpc/chrome-cache.ts",
 ];
 
 export function normalizeHostInputPath(path) {

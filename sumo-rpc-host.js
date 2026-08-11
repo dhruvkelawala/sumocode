@@ -6,6 +6,7 @@ import { buildChildSpawnPlan } from "./src/sumo-tui/rpc/spawn-child.mjs";
 
 const root = resolve(process.env.SUMOCODE_ROOT_DIR ?? process.cwd());
 const bundlePath = resolve(root, "dist/host/sumo-rpc-host.bundle.mjs");
+const buildRecipePath = resolve(root, "scripts/build-host.mjs");
 const sourceFacePath = resolve(root, "src/assets/sumo-face.ans");
 const bundledFacePath = resolve(root, "dist/host/assets/sumo-face.ans");
 
@@ -25,14 +26,17 @@ async function newestSourceMtime(directory) {
 
 async function bundleIsFresh() {
 	try {
-		const [bundle, newestSource, sourceFace, sourceFaceBytes, bundledFaceBytes] = await Promise.all([
+		const [bundle, newestSource, buildRecipe, sourceFace, sourceFaceBytes, bundledFaceBytes] = await Promise.all([
 			stat(bundlePath),
 			newestSourceMtime(resolve(root, "src")),
+			// Build options, externals, copied outputs, or the target can change
+			// without touching src/. Treat the recipe itself as a bundle input.
+			stat(buildRecipePath),
 			stat(sourceFacePath),
 			readFile(sourceFacePath),
 			readFile(bundledFacePath),
 		]);
-		return bundle.mtimeMs >= Math.max(newestSource, sourceFace.mtimeMs) && sourceFaceBytes.equals(bundledFaceBytes);
+		return bundle.mtimeMs >= Math.max(newestSource, buildRecipe.mtimeMs, sourceFace.mtimeMs) && sourceFaceBytes.equals(bundledFaceBytes);
 	} catch {
 		return false;
 	}

@@ -22,41 +22,53 @@ const buildOptions = {
 	packages: "external",
 	sourcemap: true,
 	metafile: true,
+	write: false,
 };
 
-async function writeManifest(manifest) {
-	const temporaryManifestPath = `${manifestPath}.${process.pid}.tmp`;
-	await writeFile(temporaryManifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
-	await rename(temporaryManifestPath, manifestPath);
+async function atomicWrite(path, contents) {
+	const temporaryPath = `${path}.${process.pid}.tmp`;
+	await writeFile(temporaryPath, contents);
+	await rename(temporaryPath, path);
+}
+
+async function atomicCopy(source, destination) {
+	const temporaryPath = `${destination}.${process.pid}.tmp`;
+	await copyFile(source, temporaryPath);
+	await rename(temporaryPath, destination);
 }
 
 await mkdir(outDir, { recursive: true });
+await mkdir(resolve(outDir, "assets"), { recursive: true });
 
-// Discover the exact graph, snapshot it, then build once more and verify the
-// graph and bytes did not change while esbuild was reading them. Mark the old
-// artifact invalid before the writing build so an interrupted/racy build can
-// only fall back to source, never bless mixed-checkout output.
-const probe = await build({ ...buildOptions, write: false });
+// Build entirely in memory, verify the dependency graph did not change while
+// esbuild was reading it, and only then publish. The manifest is invalidated
+// first and re-published last, so it is the single commit point: a concurrent
+// launch either sees the old valid manifest+artifact or, during publish, an
+// invalid manifest that forces the safe source fallback — never a torn or
+// rejected artifact behind a fresh manifest.
+const probe = await build(buildOptions);
 const beforeBuild = await createHostInputManifest(root, Object.keys(probe.metafile.inputs));
-await writeManifest({ version: 0, inputs: [], hash: "build-in-progress" });
+await atomicWrite(manifestPath, `${JSON.stringify({ version: 0, inputs: [], hash: "build-in-progress" }, null, 2)}\n`);
+
 const result = await build(buildOptions);
 const inputManifest = await createHostInputManifest(root, Object.keys(result.metafile.inputs));
 if (!hostInputManifestsMatch(beforeBuild, inputManifest)) {
 	throw new Error("Host bundle inputs changed during build; retry from a stable checkout");
 }
 
-const assetDir = resolve(outDir, "assets");
-await mkdir(assetDir, { recursive: true });
-await copyFile(resolve(root, "src/assets/sumo-face.ans"), resolve(assetDir, "sumo-face.ans"));
-
+// Atomically publish the validated bundle and sourcemap from memory.
+for (const file of result.outputFiles) {
+	await atomicWrite(file.path, file.contents);
+}
+await atomicCopy(resolve(root, "src/assets/sumo-face.ans"), resolve(outDir, "assets/sumo-face.ans"));
 // host.ts resolves this plain-JS pre-spawn helper relative to its own
 // import.meta.url. Keep the helper beside the bundle so createRequire() has
 // the same runtime resolution it has from src/sumo-tui/rpc/host.ts.
-await copyFile(resolve(root, "src/sumo-tui/rpc/spawn-child.mjs"), resolve(outDir, "spawn-child.mjs"));
+await atomicCopy(resolve(root, "src/sumo-tui/rpc/spawn-child.mjs"), resolve(outDir, "spawn-child.mjs"));
 
-// Runtime re-hashes this recorded set, so modified, renamed, and deleted source
-// files all invalidate an otherwise newer surviving artifact.
-await writeManifest(inputManifest);
+// The manifest commit point: runtime re-hashes this recorded set, so modified,
+// renamed, and deleted source files all invalidate an otherwise newer artifact.
+await atomicWrite(manifestPath, `${JSON.stringify(inputManifest, null, 2)}\n`);
 
 const { size } = await stat(bundlePath);
 console.log(`[sumocode] host bundle: ${bundlePath} (${size} bytes)`);

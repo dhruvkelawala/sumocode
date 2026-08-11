@@ -1702,13 +1702,13 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		// Cached chrome is only an advisory visual hint. Seed it into the store (not
 		// just the runtime) so a concurrent pre-hydration store-backed update — e.g.
 		// the async branch lookup's setGitBranch snapshot — preserves the hint
-		// instead of blanking the model/thinking rail. Authoritative hydration below
-		// clears acceptCachedChrome and overwrites these fields regardless of the
-		// worker's completion order.
-		let acceptCachedChrome = !visualFixture;
+		// instead of blanking the model/thinking rail. The read resolves async, so
+		// the window stays open until the first authoritative write: the callback
+		// rejects the seed once the store is `hydrated` (set atomically with the
+		// real model/thinking level), which cannot overwrite authoritative state.
 		if (!visualFixture) {
 			void chromeCache.read(cwd).then((cachedChrome) => {
-				if (!acceptCachedChrome || !cachedChrome) return;
+				if (!cachedChrome || stateStore.getSnapshot().hydrated) return;
 				initialRuntime.update({ state: stateStore.seedChrome(cachedChrome) });
 			}).catch(() => undefined);
 		}
@@ -1724,11 +1724,6 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 			if (restored.count > 0) editor.setText(restored.text);
 			latestActivitySnapshot = activityStore.bindSession(refreshedState.sessionId);
 		} else {
-			// Authoritative hydration is about to write real model/thinking state.
-			// Stop accepting advisory cache seeds BEFORE the first write so a late
-			// worker read can never overwrite the hydrated chrome (single-threaded:
-			// the read callback checks this flag and seeds without an await between).
-			acceptCachedChrome = false;
 			let refreshedState: RpcHostChromeState | undefined;
 			let messages: readonly unknown[] | undefined;
 			let ownershipRebound = false;

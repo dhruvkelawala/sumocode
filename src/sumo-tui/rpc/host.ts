@@ -1645,9 +1645,8 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		// child startup, refetch until one quiet pass, then replay only the final
 		// suffix after the authoritative replacement.
 		if (!visualFixture) sessionEvents.begin();
-		const branchPromise = visualFixture
-			? Promise.resolve(visualFixture.state.gitBranch)
-			: readGitBranch(cwd);
+		let branch = visualFixture?.state.gitBranch;
+		const branchPromise = visualFixture ? undefined : readGitBranch(cwd);
 		await client.start(adoptChildAndArmHostSignals);
 		// A signal can transfer ownership while client startup settles. Do not
 		// construct a runtime after teardown has already begun.
@@ -1686,14 +1685,27 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		});
 		runtime = initialRuntime;
 		await initialRuntime.start();
-		// Optional Git metadata must not gate the first retained frame. Apply it
-		// after startup and stop immediately if shutdown won the lookup race.
-		const branch = await branchPromise;
-		if (stopPromise) {
-			await stopPromise;
-			return requestedHostExitCode ?? 0;
+		// Optional Git metadata must not gate first paint or authoritative session
+		// hydration. A watcher created after shutdown immediately disposes itself.
+		if (branchPromise) {
+			void (async () => {
+				const initialBranch = await branchPromise;
+				if (stopPromise) return;
+				branch = initialBranch;
+				initialRuntime.update({ state: stateStore.setGitBranch(initialBranch) });
+				const stopWatching = await watchGitBranch(cwd, initialBranch, (nextBranch) => {
+					if (stopPromise) return;
+					branch = nextBranch;
+					const state = stateStore.setGitBranch(nextBranch);
+					runtime?.update({ state });
+				});
+				if (stopPromise) {
+					stopWatching();
+					return;
+				}
+				stopWatchingGitBranch = stopWatching;
+			})().catch(() => undefined);
 		}
-		if (!visualFixture) initialRuntime.update({ state: stateStore.setGitBranch(branch) });
 		// Cached chrome is only an advisory visual hint. Read it off-thread and
 		// never seed the authoritative store; the hydration repaint below wins
 		// regardless of worker completion order.
@@ -1747,7 +1759,7 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 			for (const event of replay.supersededSnapshotEvents) scheduler.handleAgentEvent(event);
 			for (const event of replay.suffixEvents) processAgentEvent(event);
 			// The snapshot plus final event suffix are authoritative now. Do not let
-			// a late advisory worker result overlay them while branch watching starts.
+			// a late advisory worker result overlay them.
 			acceptCachedChrome = false;
 			const hydratedState = stateStore.getSnapshot();
 			initialRuntime.update({
@@ -1755,10 +1767,6 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 				transcript: transcriptPump.viewModel(),
 				activities: activityPresentation(latestActivitySnapshot),
 				suppressSettledFeedOnly: true,
-			});
-			stopWatchingGitBranch = await watchGitBranch(cwd, branch, (nextBranch) => {
-				const state = stateStore.setGitBranch(nextBranch);
-				runtime?.update({ state });
 			});
 		}
 		deferActivityRuntimeUpdate = false;

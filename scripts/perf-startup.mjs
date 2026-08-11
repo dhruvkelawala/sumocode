@@ -62,11 +62,10 @@ function eventElapsedMs(events, eventName, startWallMs) {
 	return typeof event?.ts === "number" ? Math.max(0, event.ts - startWallMs) : undefined;
 }
 
-function summariseMeasurement(label, samples) {
+export function summariseMeasurement(label, samples) {
 	const safeSamples = samples.map((sample) => {
-		if (sample.ok !== false) return sample;
-		// Failed probes may capture output from the operator's configured
-		// providers or extensions. Keep only structured timings/status in the
+		// Every probe can emit operator-specific provider/extension diagnostics,
+		// including on success. Keep only structured timings/status in the
 		// tracked public report; raw stderr/stdout/PTY/diagnostic tails remain
 		// process-local and must never be serialized.
 		const {
@@ -76,6 +75,7 @@ function summariseMeasurement(label, samples) {
 			diagEvents: _diagEvents,
 			...publicSample
 		} = sample;
+		if (sample.ok !== false) return publicSample;
 		return { ...publicSample, error: sample.error ?? "process failed" };
 	});
 	const successfulSamples = safeSamples.filter((sample) => sample.ok !== false);
@@ -422,7 +422,9 @@ async function main() {
 	console.log(markdown(report));
 }
 
-main().catch((error) => {
-	console.error(error);
-	process.exit(1);
-});
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+	main().catch((error) => {
+		console.error(error);
+		process.exit(1);
+	});
+}

@@ -6328,8 +6328,17 @@ var MANAGED_CONFIG_ITEMS = [
 function moduleUrlToPath(moduleUrl) {
   return moduleUrl.startsWith("file:") ? fileURLToPath(moduleUrl) : moduleUrl;
 }
-function packageRootFromModule(moduleUrl) {
-  return resolve2(dirname2(moduleUrlToPath(moduleUrl)), "..", "..");
+function packageRootFromModule(moduleUrl, deps) {
+  const exists = deps.exists ?? existsSync3;
+  const modulePath = moduleUrlToPath(moduleUrl);
+  let current = dirname2(modulePath);
+  while (true) {
+    if (packageNameAt(current, deps) === "@dhruvkelawala/sumocode" && exists(join5(current, "src", "extension.ts"))) return current;
+    const parent = dirname2(current);
+    if (parent === current) break;
+    current = parent;
+  }
+  return resolve2(dirname2(modulePath), "..", "..");
 }
 function resolveConfigRepo(deps) {
   const env = deps.env ?? process.env;
@@ -6372,7 +6381,7 @@ function resolveSumoCodeRepo(deps) {
   const cwd = deps.cwd ?? process.cwd();
   const devTree = findActiveSumoDevTree(cwd, deps);
   if (devTree) return devTree;
-  return packageRootFromModule(deps.moduleUrl ?? import.meta.url);
+  return packageRootFromModule(deps.moduleUrl ?? import.meta.url, deps);
 }
 function pathExists(path2) {
   try {

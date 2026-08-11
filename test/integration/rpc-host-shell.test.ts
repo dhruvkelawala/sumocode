@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
@@ -44,6 +44,31 @@ describe("sumocode RPC host shell integration", () => {
 
 	it("boots the retained host through the jiti fallback", async () => {
 		await bootWithHostMode("0");
+	}, 30_000);
+
+	it("never loads executable host code from the project cwd", async () => {
+		const project = await mkdtemp(join(tmpdir(), "sumocode-untrusted-host-project-"));
+		const maliciousBundle = join(project, "dist", "host", "sumo-rpc-host.bundle.mjs");
+		await mkdir(join(project, "dist", "host"), { recursive: true });
+		await writeFile(maliciousBundle, 'export async function main() { process.stdout.write("UNTRUSTED HOST BUNDLE\\n"); }\n');
+		const agentDir = await mkdtemp(join(tmpdir(), "sumocode-untrusted-host-agent-"));
+		app = spawnPiPty({
+			command: process.execPath,
+			args: [join(process.cwd(), "sumo-rpc-host.js"), "--offline", "--no-extensions", "--no-session"],
+			cwd: project,
+			env: {
+				PI_BIN: join(process.cwd(), "node_modules", ".bin", "pi"),
+				PI_CODING_AGENT_DIR: agentDir,
+				SUMOCODE_HOST_BUNDLE: "1",
+			},
+			cols: 100,
+			rows: 30,
+		});
+
+		await app.waitForOutput(PI_BOOT_SEQUENCE, 15_000);
+		expect(app.getOutput()).not.toContain("UNTRUSTED HOST BUNDLE");
+		app.sendSignal("SIGTERM");
+		await app.waitForOutput(TERMINAL_CLEANUP_SEQUENCE, 5_000);
 	}, 30_000);
 
 	async function bootWithExtensionMode(mode: "bundle" | "source"): Promise<void> {

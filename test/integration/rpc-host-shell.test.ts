@@ -29,7 +29,7 @@ async function waitForPid(path: string): Promise<number> {
 }
 
 async function waitForProcessExit(pid: number): Promise<void> {
-	for (let attempt = 0; attempt < 200; attempt += 1) {
+	for (let attempt = 0; attempt < 500; attempt += 1) {
 		try {
 			process.kill(pid, 0);
 		} catch {
@@ -276,6 +276,38 @@ describe("sumocode RPC host shell integration", () => {
 			rows: 30,
 		});
 
+		const pid = await waitForPid(pidFile);
+		app.sendSignal("SIGTERM");
+		await delay(50);
+		app.sendSignal("SIGTERM");
+		await waitForProcessExit(pid);
+		await waitForFileText(exitCodeFile, "0");
+	}, 30_000);
+
+	it("reaps an adopted SIGTERM-ignoring child across repeated signals", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "sumocode-rpc-adopted-repeat-signal-"));
+		const piBin = join(directory, "stalled-pi");
+		const pidFile = join(directory, "pid");
+		const exitCodeFile = join(directory, "exit-code");
+		await writeFile(
+			piBin,
+			"#!/usr/bin/env node\nprocess.on('SIGTERM', () => {});\nrequire('node:fs').writeFileSync(process.env.PID_FILE, String(process.pid));\nprocess.stdin.resume();\nsetInterval(() => {}, 1000);\n",
+			{ mode: 0o700 },
+		);
+		app = spawnPiPty({
+			command: process.execPath,
+			args: [join(process.cwd(), "sumo-rpc-host.js")],
+			env: {
+				PI_BIN: piBin,
+				PID_FILE: pidFile,
+				PI_CODING_AGENT_DIR: join(directory, "agent"),
+				SUMOCODE_EXIT_CODE_FILE: exitCodeFile,
+			},
+			cols: 100,
+			rows: 30,
+		});
+
+		await app.waitForOutput(PI_BOOT_SEQUENCE, 15_000);
 		const pid = await waitForPid(pidFile);
 		app.sendSignal("SIGTERM");
 		await delay(50);

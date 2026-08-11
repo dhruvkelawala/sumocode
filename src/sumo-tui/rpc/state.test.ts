@@ -33,6 +33,19 @@ describe("RpcHostStateStore", () => {
 		});
 	});
 
+	it("preserves seeded startup chrome across a store-backed git branch update", () => {
+		const store = new RpcHostStateStore();
+		store.seedChrome({ modelLabel: "openai/gpt-5.5", thinkingLevel: "high" });
+
+		// A pre-hydration branch lookup produces its snapshot from the store; the
+		// advisory chrome hint must survive instead of blanking the model rail.
+		expect(store.setGitBranch("feature/x")).toMatchObject({
+			gitBranch: "feature/x",
+			modelLabel: "openai/gpt-5.5",
+			thinkingLevel: "high",
+		});
+	});
+
 	it("seeds startup chrome without marking the state hydrated", () => {
 		const store = new RpcHostStateStore();
 

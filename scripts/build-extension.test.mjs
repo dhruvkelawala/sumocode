@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { EXTENSION_ASSETS, extensionInputsHash, extensionOutputsHash, normalizeHashPath } from "./lib/extension-bundle.mjs";
+import { EXTENSION_ASSETS, EXTENSION_RECIPE_INPUTS, extensionInputsHash, extensionOutputsHash, normalizeHashPath } from "./lib/extension-bundle.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const outDir = resolve(root, "dist/extension");
@@ -26,6 +26,13 @@ describe("extension bundle freshness", () => {
 		if (actualInputs !== expectedInputs || actualOutputs !== expectedOutputs) {
 			throw new Error("bundle out of date or corrupt — run pnpm build:extension");
 		}
+	});
+
+	it("hashes the shipped manifest with an exact bundler version", async () => {
+		const manifest = JSON.parse(await readFile(resolve(root, "package.json"), "utf8"));
+		expect(EXTENSION_RECIPE_INPUTS).toContain("package.json");
+		expect(EXTENSION_RECIPE_INPUTS).not.toContain("pnpm-lock.yaml");
+		expect(manifest.devDependencies?.esbuild).toMatch(/^\d+\.\d+\.\d+$/);
 	});
 
 	it("normalizes Windows separators in portable hash paths", () => {

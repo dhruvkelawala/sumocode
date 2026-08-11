@@ -17,7 +17,8 @@ export const EXTENSION_RECIPE_INPUTS = [
 	"scripts/build-extension.mjs",
 	"scripts/lib/extension-bundle.mjs",
 	"tsconfig.json",
-	"pnpm-lock.yaml",
+	// package.json ships in npm/pnpm tarballs and pins the exact esbuild version.
+	"package.json",
 ];
 
 export function normalizeHashPath(path) {

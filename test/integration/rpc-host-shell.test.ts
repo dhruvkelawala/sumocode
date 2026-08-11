@@ -179,9 +179,9 @@ describe("sumocode RPC host shell integration", () => {
 			cp(join(process.cwd(), "scripts", "lib", "extension-bundle.mjs"), join(packageRoot, "scripts", "lib", "extension-bundle.mjs")),
 			cp(join(process.cwd(), "package.json"), join(packageRoot, "package.json")),
 			cp(join(process.cwd(), "tsconfig.json"), join(packageRoot, "tsconfig.json")),
-			cp(join(process.cwd(), "pnpm-lock.yaml"), join(packageRoot, "pnpm-lock.yaml")),
 		]);
 		await expect(access(join(packageRoot, "node_modules"))).rejects.toThrow();
+		await expect(access(join(packageRoot, "pnpm-lock.yaml"))).rejects.toThrow();
 		const agentDir = await mkdtemp(join(tmpdir(), "sumocode-peer-only-agent-"));
 		app = spawnPiPty({
 			args: ["--offline", "--no-extensions", "--no-session", "--approve", "-e", packageRoot],

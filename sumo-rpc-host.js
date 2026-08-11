@@ -34,6 +34,12 @@ async function newestSourceMtime(directory) {
 }
 
 async function bundleIsFresh() {
+	const testDelayMs = process.env.NODE_ENV === "test"
+		? Number.parseInt(process.env.SUMOCODE_TEST_BUNDLE_SCAN_DELAY_MS ?? "0", 10)
+		: 0;
+	if (Number.isFinite(testDelayMs) && testDelayMs > 0) {
+		await new Promise((resolveDelay) => setTimeout(resolveDelay, testDelayMs));
+	}
 	try {
 		const [bundle, newestSource, buildRecipe, tsconfig, packageJson, lockfile, sourceFace, sourceFaceBytes, bundledFaceBytes, sourceSpawnHelperBytes, bundledSpawnHelperBytes] = await Promise.all([
 			stat(bundlePath),
@@ -67,11 +73,6 @@ async function bundleIsFresh() {
 
 const useBundle = process.env.SUMOCODE_HOST_BUNDLE !== "0";
 const forceBundle = process.env.SUMOCODE_HOST_BUNDLE === "1";
-const bundleExists = await stat(bundlePath).then(() => true, () => false);
-const bundleFresh = bundleExists && (forceBundle || (useBundle && await bundleIsFresh()));
-if (useBundle && bundleExists && !forceBundle && !bundleFresh) {
-	process.stderr.write("[sumocode] host bundle stale — using source; run pnpm build:host\n");
-}
 
 const PRE_ADOPTION_KILL_GRACE_MS = 250;
 let preSpawnedChild;
@@ -188,6 +189,13 @@ const preAdoptionTestDelayMs = process.env.NODE_ENV === "test"
 	: 0;
 if (Number.isFinite(preAdoptionTestDelayMs) && preAdoptionTestDelayMs > 0) {
 	await new Promise((resolveDelay) => setTimeout(resolveDelay, preAdoptionTestDelayMs));
+}
+
+// Pi is already running while optional artifact validation scans the package.
+const bundleExists = await stat(bundlePath).then(() => true, () => false);
+const bundleFresh = bundleExists && (forceBundle || (useBundle && await bundleIsFresh()));
+if (useBundle && bundleExists && !forceBundle && !bundleFresh) {
+	process.stderr.write("[sumocode] host bundle stale — using source; run pnpm build:host\n");
 }
 
 let mod;

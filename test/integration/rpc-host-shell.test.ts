@@ -76,6 +76,36 @@ describe("sumocode RPC host shell integration", () => {
 		await bootWithHostMode("1");
 	}, 30_000);
 
+	it("pre-spawns Pi before a slow host-bundle freshness scan", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "sumocode-rpc-slow-bundle-scan-"));
+		const piBin = join(directory, "stalled-pi");
+		const pidFile = join(directory, "pid");
+		await writeFile(
+			piBin,
+			"#!/usr/bin/env node\nrequire('node:fs').writeFileSync(process.env.PID_FILE, String(process.pid));\nprocess.stdin.resume();\nsetInterval(() => {}, 1000);\n",
+			{ mode: 0o700 },
+		);
+		const startedAt = Date.now();
+		app = spawnPiPty({
+			command: process.execPath,
+			args: [join(process.cwd(), "sumo-rpc-host.js")],
+			env: {
+				PI_BIN: piBin,
+				PID_FILE: pidFile,
+				PI_CODING_AGENT_DIR: join(directory, "agent"),
+				NODE_ENV: "test",
+				SUMOCODE_TEST_BUNDLE_SCAN_DELAY_MS: "3000",
+			},
+			cols: 100,
+			rows: 30,
+		});
+
+		const pid = await waitForPid(pidFile);
+		expect(Date.now() - startedAt).toBeLessThan(2_000);
+		app.sendSignal("SIGTERM");
+		await waitForProcessExit(pid);
+	}, 30_000);
+
 	it("reaps the pre-spawned child when forced host main rejects before adoption", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "sumocode-rpc-rejected-host-main-"));
 		const piBin = join(directory, "stalled-pi");

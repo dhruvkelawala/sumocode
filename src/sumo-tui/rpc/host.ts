@@ -1724,6 +1724,11 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 			if (restored.count > 0) editor.setText(restored.text);
 			latestActivitySnapshot = activityStore.bindSession(refreshedState.sessionId);
 		} else {
+			// Authoritative hydration is about to write real model/thinking state.
+			// Stop accepting advisory cache seeds BEFORE the first write so a late
+			// worker read can never overwrite the hydrated chrome (single-threaded:
+			// the read callback checks this flag and seeds without an await between).
+			acceptCachedChrome = false;
 			let refreshedState: RpcHostChromeState | undefined;
 			let messages: readonly unknown[] | undefined;
 			let ownershipRebound = false;
@@ -1747,9 +1752,6 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 			const replay = sessionEvents.finishHydration();
 			for (const event of replay.supersededSnapshotEvents) scheduler.handleAgentEvent(event);
 			for (const event of replay.suffixEvents) processAgentEvent(event);
-			// The snapshot plus final event suffix are authoritative now. Do not let
-			// a late advisory worker result overlay them.
-			acceptCachedChrome = false;
 			const hydratedState = stateStore.getSnapshot();
 			initialRuntime.update({
 				state: hydratedState,

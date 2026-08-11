@@ -59,6 +59,10 @@ function inputManifestIsFresh(manifest: ExtensionInputManifest): boolean {
 		if (path === ".." || path.startsWith("../") || isAbsolute(path) || path !== normalizeHashPath(input)) return false;
 		files.push(absolute);
 	}
+	// Recheck across two full scans so a source file changing mid-scan cannot
+	// yield a hash that still matches the old manifest; require both to match,
+	// otherwise fall back to source (the safe direction on any ambiguity).
+	if (contentHash(root, files) !== manifest.hash) return false;
 	return contentHash(root, files) === manifest.hash;
 }
 

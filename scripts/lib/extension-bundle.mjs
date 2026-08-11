@@ -110,7 +110,13 @@ export async function extensionInputManifestIsFresh(root, manifest) {
 	if (inputs.length === 0 || inputs.some((input) => typeof input !== "string") || new Set(inputs).size !== inputs.length) return false;
 	if ([...inputs].sort().some((input, index) => input !== inputs[index])) return false;
 	try {
-		return await extensionInputsHashFromManifest(root, inputs) === manifest.hash;
+		// Recheck across two full scans so a source file changing mid-scan cannot
+		// yield a hash that still matches the old manifest; require both scans to
+		// match, otherwise fall back to source (the safe direction).
+		const first = await extensionInputsHashFromManifest(root, inputs);
+		if (first !== manifest.hash) return false;
+		const second = await extensionInputsHashFromManifest(root, inputs);
+		return second === manifest.hash;
 	} catch {
 		return false;
 	}

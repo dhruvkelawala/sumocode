@@ -42,11 +42,16 @@ class FakeStream extends EventEmitter {
 
 class FakeRpcChild extends EventEmitter {
 	public readonly pid = 1234;
+	public exitCode: number | null = null;
+	public signalCode: NodeJS.Signals | null = null;
 	public readonly stdin = new FakeStream();
 	public readonly stdout = new FakeStream();
 	public readonly stderr = new FakeStream();
 	public readonly kill = vi.fn(() => {
-		queueMicrotask(() => this.emit("exit", null, "SIGTERM"));
+		queueMicrotask(() => {
+			this.signalCode = "SIGTERM";
+			this.emit("exit", null, "SIGTERM");
+		});
 		return true;
 	});
 }
@@ -66,6 +71,35 @@ describe("SumoRpcClient", () => {
 		expect(spawn).not.toHaveBeenCalled();
 		expect(client.pid).toBe(child.pid);
 		await client.stop();
+	});
+
+	it("reports a pre-spawn error captured before host adoption", async () => {
+		const child = new FakeRpcChild();
+		(child as unknown as Record<PropertyKey, unknown>)[Symbol.for("sumocode.rpc.preSpawnError")] = new Error("pi executable disappeared");
+		const client = new SumoRpcClient({
+			command: "unused",
+			args: [],
+			preSpawnedChild: child as never,
+		});
+
+		await expect(client.start()).rejects.toThrow("pi executable disappeared");
+		expect(client.pid).toBeUndefined();
+	});
+
+	it("reports a pre-spawned child that exited before host adoption", async () => {
+		const child = new FakeRpcChild();
+		child.exitCode = 2;
+		const client = new SumoRpcClient({
+			command: "unused",
+			args: [],
+			preSpawnedChild: child as never,
+		});
+
+		await expect(client.start()).rejects.toMatchObject({
+			message: expect.stringContaining("before host adoption code=2"),
+			code: 2,
+		});
+		expect(client.pid).toBeUndefined();
 	});
 
 	it("correlates JSONL responses by request id while streaming events", async () => {

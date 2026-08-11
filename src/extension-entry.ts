@@ -80,8 +80,9 @@ function hasFreshBundle(): boolean {
 // This module is itself evaluated by Pi's extension-loader jiti context, so
 // its dynamic importer preserves Pi's .js→.ts resolution, peer aliases, and
 // shared module singletons even when `path` is sourcePath. Do not invoke this
-// wrapper directly with native Node; the real `-e .` + bundle-disabled path is
-// locked by rpc-host-shell.test.ts. A content-fresh bundle can still fail
+// wrapper directly with native Node; rpc-host-shell.test.ts locks both forced
+// source and an isolated peer-only package copy with no local node_modules.
+// A content-fresh bundle can still fail
 // external-peer resolution in a particular installation, so import-time
 // failure falls back through that same Jiti-aware importer.
 const extensionModule = await importExtensionEntry({

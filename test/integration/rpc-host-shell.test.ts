@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { access, cp, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
@@ -166,6 +166,33 @@ describe("sumocode RPC host shell integration", () => {
 		["extension source fallback", "source"],
 	] as const)("boots with the %s", async (_label, mode) => {
 		await bootWithExtensionMode(mode);
+	}, 30_000);
+
+	it("loads the bundle from a peer-only package copy with no local node_modules", async () => {
+		const packageRoot = await mkdtemp(join(tmpdir(), "sumocode-peer-only-package-"));
+		await mkdir(join(packageRoot, "dist"), { recursive: true });
+		await mkdir(join(packageRoot, "scripts", "lib"), { recursive: true });
+		await Promise.all([
+			cp(join(process.cwd(), "src"), join(packageRoot, "src"), { recursive: true }),
+			cp(join(process.cwd(), "dist", "extension"), join(packageRoot, "dist", "extension"), { recursive: true }),
+			cp(join(process.cwd(), "scripts", "build-extension.mjs"), join(packageRoot, "scripts", "build-extension.mjs")),
+			cp(join(process.cwd(), "scripts", "lib", "extension-bundle.mjs"), join(packageRoot, "scripts", "lib", "extension-bundle.mjs")),
+			cp(join(process.cwd(), "package.json"), join(packageRoot, "package.json")),
+			cp(join(process.cwd(), "tsconfig.json"), join(packageRoot, "tsconfig.json")),
+			cp(join(process.cwd(), "pnpm-lock.yaml"), join(packageRoot, "pnpm-lock.yaml")),
+		]);
+		await expect(access(join(packageRoot, "node_modules"))).rejects.toThrow();
+		const agentDir = await mkdtemp(join(tmpdir(), "sumocode-peer-only-agent-"));
+		app = spawnPiPty({
+			args: ["--offline", "--no-extensions", "--no-session", "--approve", "-e", packageRoot],
+			env: { PI_CODING_AGENT_DIR: agentDir },
+			cols: 100,
+			rows: 30,
+		});
+
+		await app.waitForOutput(PI_BOOT_SEQUENCE, 15_000);
+		await app.waitForOutput("DIVINE INVOCATION", 15_000);
+		expect(app.getOutput()).not.toContain("extension bundle failed to import");
 	}, 30_000);
 
 	it.each(["bundle", "source"] as const)("boots the package manifest through the stable extension entry (%s)", async (mode) => {

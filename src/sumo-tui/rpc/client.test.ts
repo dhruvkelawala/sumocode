@@ -518,6 +518,18 @@ describe("SumoRpcClient", () => {
 		}
 	});
 
+	it("surfaces an immediate post-spawn failure through onExit with its stderr", async () => {
+		const client = nodeRpcClient("throw new Error('fast startup failure');");
+		const errors: Error[] = [];
+		client.onExit((error) => errors.push(error));
+		await client.start().catch(() => undefined);
+		await waitFor(() => errors.length > 0);
+
+		expect(errors).toHaveLength(1);
+		expect(errors[0]?.message).toContain("RPC child exited");
+		expect(client.stderr).toContain("fast startup failure");
+	});
+
 	it("fires onExit exactly once when the child crashes while idle", async () => {
 		const client = nodeRpcClient("setTimeout(() => process.exit(1), 100);");
 		const errors: Error[] = [];

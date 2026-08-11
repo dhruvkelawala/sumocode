@@ -203,13 +203,13 @@ export class SumoRpcClient {
 		// The callback runs synchronously so entry and host handlers never overlap.
 		onAdopted?.();
 
-		// Early-crash gate. `pid` is populated synchronously whenever the OS
-		// actually created the process (both the fresh spawn above and a
-		// pre-spawned child from the entry file), so the common path resolves
-		// immediately — this used to be a fixed 50ms sleep, which sat directly
-		// on the first-frame critical path. A spawn failure leaves `pid`
-		// undefined and fires 'error'/'exit' within a tick; the timer is only a
-		// safety cap for exotic states so this can never hang.
+		// Spawn-establishment gate. `pid` is populated synchronously whenever the
+		// OS created the process, so the common path must not reinstate the old
+		// fixed 50ms first-frame delay. A spawn failure leaves `pid` undefined and
+		// settles through error/exit below. Every listener is already attached:
+		// failures after successful spawn are delivered immediately through
+		// onExit (the host subscribes before start()), rather than hidden behind a
+		// speculative grace sleep.
 		await new Promise<void>((resolve) => {
 			if (child.pid !== undefined || this.exited) {
 				resolve();

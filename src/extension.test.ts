@@ -501,28 +501,39 @@ describe("sumocode extension", () => {
 });
 
 describe("process install latch", () => {
-	it("latch helpers round-trip on an injected scope", () => {
-		const scope: Record<PropertyKey, unknown> = {};
-		expect(isSumocodeAlreadyInstalledInProcess(scope)).toBe(false);
-		markSumocodeInstalledInProcess(scope);
-		expect(isSumocodeAlreadyInstalledInProcess(scope)).toBe(true);
+	it("latch helpers scope identity to one Pi runtime", () => {
+		const scope = {};
+		const firstRuntime = {};
+		const replacementRuntime = {};
+		expect(isSumocodeAlreadyInstalledInProcess(firstRuntime, scope)).toBe(false);
+		markSumocodeInstalledInProcess(firstRuntime, scope);
+		expect(isSumocodeAlreadyInstalledInProcess(firstRuntime, scope)).toBe(true);
+		expect(isSumocodeAlreadyInstalledInProcess(replacementRuntime, scope)).toBe(false);
 		resetSumocodeProcessInstallLatchForTests(scope);
-		expect(isSumocodeAlreadyInstalledInProcess(scope)).toBe(false);
+		expect(isSumocodeAlreadyInstalledInProcess(firstRuntime, scope)).toBe(false);
 	});
 
-	it("second sumocode() invocation in one process registers nothing (npm-link + installed-package + launcher multi-entry crash regression)", () => {
+	it("deduplicates multiple entry paths for one runtime but permits factory recreation", () => {
 		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 		try {
 			const first = buildPiStub();
 			sumocode(first.pi as never);
-			expect(first.pi.registerCommand).toHaveBeenCalled();
+			const commandCalls = first.pi.registerCommand.mock.calls.length;
+			const toolCalls = first.pi.registerTool.mock.calls.length;
+			const eventCalls = first.pi.on.mock.calls.length;
 
-			const second = buildPiStub();
-			sumocode(second.pi as never);
-			expect(second.pi.registerCommand).not.toHaveBeenCalled();
-			expect(second.pi.registerTool).not.toHaveBeenCalled();
-			expect(second.pi.on).not.toHaveBeenCalled();
+			// Installed package + launcher entry receive the same ExtensionAPI.
+			sumocode(first.pi as never);
+			expect(first.pi.registerCommand).toHaveBeenCalledTimes(commandCalls);
+			expect(first.pi.registerTool).toHaveBeenCalledTimes(toolCalls);
+			expect(first.pi.on).toHaveBeenCalledTimes(eventCalls);
 			expect(warn).toHaveBeenCalledWith(expect.stringContaining("already installed SumoCode via another entry path"));
+
+			// /new, /resume, and /fork recreate factories with a new API identity.
+			const replacement = buildPiStub();
+			sumocode(replacement.pi as never);
+			expect(replacement.pi.registerCommand).toHaveBeenCalled();
+			expect(replacement.pi.on).toHaveBeenCalled();
 		} finally {
 			warn.mockRestore();
 		}
@@ -535,6 +546,6 @@ describe("process install latch", () => {
 		sumocode(helper.pi as never); // helper-subprocess guard noops, must not latch
 		if (prev === undefined) delete process.env.PI_CMUX_CHILD;
 		else process.env.PI_CMUX_CHILD = prev;
-		expect(isSumocodeAlreadyInstalledInProcess()).toBe(false);
+		expect(isSumocodeAlreadyInstalledInProcess(helper.pi)).toBe(false);
 	});
 });

@@ -15622,11 +15622,14 @@ function installRpcChildProfile(pi) {
   installSumoInteractions(pi, { subagentManager, includeUiSurfaces: false });
 }
 var PROCESS_INSTALL_LATCH = /* @__PURE__ */ Symbol.for("sumocode.extension.processInstallLatch");
-function isSumocodeAlreadyInstalledInProcess(scope = globalThis) {
-  return scope[PROCESS_INSTALL_LATCH] === true;
+function processInstallLatch(scope) {
+  return scope[PROCESS_INSTALL_LATCH] ??= /* @__PURE__ */ new WeakSet();
 }
-function markSumocodeInstalledInProcess(scope = globalThis) {
-  scope[PROCESS_INSTALL_LATCH] = true;
+function isSumocodeAlreadyInstalledInProcess(runtime, scope = globalThis) {
+  return processInstallLatch(scope).has(runtime);
+}
+function markSumocodeInstalledInProcess(runtime, scope = globalThis) {
+  processInstallLatch(scope).add(runtime);
 }
 function resetSumocodeProcessInstallLatchForTests(scope = globalThis) {
   delete scope[PROCESS_INSTALL_LATCH];
@@ -15644,12 +15647,12 @@ function sumocode(pi) {
     console.warn("[sumocode] Skipping installed SumoCode extension because this session is already inside an active SumoCode dev checkout.");
     return;
   }
-  if (isSumocodeAlreadyInstalledInProcess()) {
-    console.warn("[sumocode] Skipping duplicate SumoCode entry: this process already installed SumoCode via another entry path.");
+  if (isSumocodeAlreadyInstalledInProcess(pi)) {
+    console.warn("[sumocode] Skipping duplicate SumoCode entry: this Pi runtime already installed SumoCode via another entry path.");
     logDiagnostic("extension_activate_skipped_duplicate_process_entry", {});
     return;
   }
-  markSumocodeInstalledInProcess();
+  markSumocodeInstalledInProcess(pi);
   applyStartupTheme();
   if (isRpcChildProfile()) {
     installRpcChildProfile(pi);

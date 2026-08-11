@@ -1,96 +1,56 @@
 import { createRequire } from "node:module";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 type ChildSpawnPlan = {
 	readonly args: readonly string[];
+	readonly cwd: string;
+	readonly env: NodeJS.ProcessEnv;
 };
 
 const require = createRequire(import.meta.url);
-const { buildChildSpawnPlan, extensionInputsHash, extensionOutputsHash, normalizeHashPath } = require("./spawn-child.mjs") as {
+const { buildChildSpawnPlan } = require("./spawn-child.mjs") as {
 	buildChildSpawnPlan(env: NodeJS.ProcessEnv, argv: readonly string[]): ChildSpawnPlan | undefined;
-	extensionInputsHash(root: string): string;
-	extensionOutputsHash(root: string): string;
-	normalizeHashPath(path: string): string;
 };
 
-let roots: string[] = [];
+const roots: string[] = [];
 
 afterEach(() => {
 	for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
-function makeRoot(bundleState: "fresh" | "stale" | "missing"): string {
+function makeRoot(): string {
 	const root = mkdtempSync(join(tmpdir(), "sumocode-spawn-child-"));
 	roots.push(root);
-	mkdirSync(join(root, "src", "assets"), { recursive: true });
-	mkdirSync(join(root, "src", "background-tasks"), { recursive: true });
-	mkdirSync(join(root, "dist", "extension", "assets"), { recursive: true });
-	mkdirSync(join(root, "scripts", "lib"), { recursive: true });
-	writeFileSync(join(root, "src", "extension.ts"), "export default () => {};\n");
-	writeFileSync(join(root, "src", "assets", "sumo-face.ans"), "face\n");
-	writeFileSync(join(root, "src", "background-tasks", "bounded-terminal-runner.mjs"), "runner\n");
-	writeFileSync(join(root, "scripts", "build-extension.mjs"), "// recipe\n");
-	writeFileSync(join(root, "scripts", "lib", "extension-bundle.mjs"), "// recipe helper\n");
-	writeFileSync(join(root, "tsconfig.json"), "{}\n");
-	writeFileSync(join(root, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n");
-	if (bundleState !== "missing") {
-		writeFileSync(join(root, "dist", "extension", "sumocode-extension.bundle.mjs"), "export default () => {};\n");
-		writeFileSync(join(root, "dist", "extension", "sumocode-extension.bundle.mjs.map"), "{}\n");
-		writeFileSync(join(root, "dist", "extension", "assets", "sumo-face.ans"), "face\n");
-		writeFileSync(join(root, "dist", "extension", "bounded-terminal-runner.mjs"), "runner\n");
-		writeFileSync(
-			join(root, "dist", "extension", ".inputs-hash"),
-			bundleState === "fresh" ? `${extensionInputsHash(root)}\n` : "stale\n",
-		);
-		writeFileSync(join(root, "dist", "extension", ".outputs-hash"), `${extensionOutputsHash(root)}\n`);
-	}
 	return root;
 }
 
 function plan(root: string, extra: NodeJS.ProcessEnv = {}) {
-	return buildChildSpawnPlan({ PI_BIN: "/usr/local/bin/pi", SUMOCODE_ROOT_DIR: root, ...extra }, ["--offline"]);
+	return buildChildSpawnPlan({
+		PI_BIN: "/usr/local/bin/pi",
+		SUMOCODE_ROOT_DIR: root,
+		SUMOCODE_PROJECT_CWD: join(root, "project"),
+		...extra,
+	}, ["--offline"]);
 }
 
 describe("buildChildSpawnPlan extension entry", () => {
-	it("uses a content-fresh extension bundle", () => {
-		const root = makeRoot("fresh");
-		expect(plan(root)?.args[3]).toBe(join(root, "dist", "extension", "sumocode-extension.bundle.mjs"));
+	it("routes the RPC child through the stable import-fallback shim", () => {
+		const root = makeRoot();
+		const result = plan(root);
+		expect(result?.args[3]).toBe(join(root, "src", "extension-entry.ts"));
+		expect(result?.cwd).toBe(join(root, "project"));
+		expect(result?.env).toMatchObject({ SUMOCODE_RPC_CHILD: "1", SUMO_TUI: "0" });
 	});
 
-	it.each([
-		["missing bundle", "missing", {}],
-		["stale bundle", "stale", {}],
-		["explicit source override", "fresh", { SUMOCODE_EXTENSION_BUNDLE: "0" }],
-	] as const)("uses source for %s", (_label, bundleState, extra) => {
-		const root = makeRoot(bundleState);
-		expect(plan(root, extra)?.args[3]).toBe(join(root, "src", "extension.ts"));
+	it("uses source directly for the explicit bundle override", () => {
+		const root = makeRoot();
+		expect(plan(root, { SUMOCODE_EXTENSION_BUNDLE: "0" })?.args[3]).toBe(join(root, "src", "extension.ts"));
 	});
 
-	it.each([
-		["bundle", "sumocode-extension.bundle.mjs"],
-		["source map", "sumocode-extension.bundle.mjs.map"],
-		["copied asset", join("assets", "sumo-face.ans")],
-	] as const)("uses source when the committed %s is corrupt", (_label, output) => {
-		const root = makeRoot("fresh");
-		writeFileSync(join(root, "dist", "extension", output), "corrupt\n");
-		expect(plan(root)?.args[3]).toBe(join(root, "src", "extension.ts"));
-	});
-
-	it.each([
-		["build recipe", join("scripts", "build-extension.mjs")],
-		["build recipe helper", join("scripts", "lib", "extension-bundle.mjs")],
-		["TypeScript build configuration", "tsconfig.json"],
-		["resolved dependency lockfile", "pnpm-lock.yaml"],
-	] as const)("uses source when the %s changes", (_label, input) => {
-		const root = makeRoot("fresh");
-		writeFileSync(join(root, input), "// changed recipe\n");
-		expect(plan(root)?.args[3]).toBe(join(root, "src", "extension.ts"));
-	});
-
-	it("normalizes Windows separators in portable hash paths", () => {
-		expect(normalizeHashPath("src\\nested\\extension.ts")).toBe("src/nested/extension.ts");
+	it("returns no plan when PI_BIN is absent", () => {
+		expect(buildChildSpawnPlan({}, [])).toBeUndefined();
 	});
 });

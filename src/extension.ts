@@ -257,15 +257,19 @@ function installRpcChildProfile(pi: ExtensionAPI): void {
 
 const PROCESS_INSTALL_LATCH = Symbol.for("sumocode.extension.processInstallLatch");
 
-type LatchScope = { [PROCESS_INSTALL_LATCH]?: boolean };
+type LatchScope = { [PROCESS_INSTALL_LATCH]?: WeakSet<object> };
 
-/** See the duplicate-process-entry comment in `sumocode()` for why this exists. */
-export function isSumocodeAlreadyInstalledInProcess(scope: LatchScope = globalThis as LatchScope): boolean {
-	return scope[PROCESS_INSTALL_LATCH] === true;
+function processInstallLatch(scope: LatchScope): WeakSet<object> {
+	return scope[PROCESS_INSTALL_LATCH] ??= new WeakSet<object>();
 }
 
-export function markSumocodeInstalledInProcess(scope: LatchScope = globalThis as LatchScope): void {
-	scope[PROCESS_INSTALL_LATCH] = true;
+/** See the duplicate-process-entry comment in `sumocode()` for why this exists. */
+export function isSumocodeAlreadyInstalledInProcess(runtime: object, scope: LatchScope = globalThis as LatchScope): boolean {
+	return processInstallLatch(scope).has(runtime);
+}
+
+export function markSumocodeInstalledInProcess(runtime: object, scope: LatchScope = globalThis as LatchScope): void {
+	processInstallLatch(scope).add(runtime);
 }
 
 /** Test-only: clear the process latch so installation paths can be re-exercised. */
@@ -299,25 +303,19 @@ export default function sumocode(pi: ExtensionAPI): void {
 		console.warn("[sumocode] Skipping installed SumoCode extension because this session is already inside an active SumoCode dev checkout.");
 		return;
 	}
-	if (isSumocodeAlreadyInstalledInProcess()) {
-		// The same SumoCode tree can reach one Pi process through several entry
-		// paths at once — e.g. the launcher's `-e <root>/dist/extension/
-		// sumocode-extension.bundle.mjs` child arg PLUS an installed package
-		// entry (`~/.pi/agent/git/…` symlink) PLUS an `npm link` global
-		// (`/opt/homebrew/lib/node_modules/…` symlink), all canonicalizing to
-		// the same checkout. Pre-bundle (plan 083) every path resolved to the
-		// literal same entry file and Pi deduped the load; with distinct entry
-		// files (bundle vs `src/extension-entry.ts`) dedupe no longer applies
-		// and the path-classifying guard above correctly refuses to noop what
-		// looks like the launcher's own tree. The durable invariant is
-		// process-level: SumoCode installs at most once per Pi process,
-		// whichever path won the race. Keyed via `Symbol.for` on `globalThis`
-		// so bundle-instance and source-instance copies share one latch.
-		console.warn("[sumocode] Skipping duplicate SumoCode entry: this process already installed SumoCode via another entry path.");
+	if (isSumocodeAlreadyInstalledInProcess(pi)) {
+		// The same SumoCode tree can reach one Pi runtime through several entry
+		// paths at once — launcher shim, installed package, and npm-link global.
+		// Distinct bundle/source modules share this Symbol.for-backed WeakSet, so
+		// the first entry wins for one ExtensionAPI object. Pi intentionally
+		// creates a NEW ExtensionAPI when /new, /resume, or /fork recreates
+		// extension factories; that identity must install again rather than being
+		// blocked by a permanent process boolean.
+		console.warn("[sumocode] Skipping duplicate SumoCode entry: this Pi runtime already installed SumoCode via another entry path.");
 		logDiagnostic("extension_activate_skipped_duplicate_process_entry", {});
 		return;
 	}
-	markSumocodeInstalledInProcess();
+	markSumocodeInstalledInProcess(pi);
 
 	// Restore the persisted runtime theme before installing any UI surfaces so
 	// first paint uses the chosen palette. Registry default stays Cathedral for

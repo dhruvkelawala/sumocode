@@ -41,6 +41,8 @@ import { RpcTranscriptPump } from "./transcript-pump.js";
 import { rpcVisualFixtureFromEnv } from "./visual-fixtures.js";
 import { logDiagnostic } from "../runtime/diagnostics.js";
 
+const DEFERRED_SELECTOR_ACTION_KEY = "selector-open";
+
 export interface RpcHostMainOptions {
 	readonly argv?: readonly string[];
 	readonly preSpawnedChild?: ChildProcessWithoutNullStreams;
@@ -1107,7 +1109,7 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		// pattern `submitFromEditor` above already relies on for `actions`)
 		// since `RpcHostActions` itself needs `editorText: editor` to
 		// construct.
-		onModelSelect: () => hydrationActionGate.run("model-select", () => {
+		onModelSelect: () => hydrationActionGate.run(DEFERRED_SELECTOR_ACTION_KEY, () => {
 			void notifyOnError(async () => { await actions?.openModelSelector(); }, notifications);
 		}),
 		onThinkingCycle: () => hydrationActionGate.run("thinking-cycle", handleThinkingCycle),
@@ -1503,7 +1505,7 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		changelogRoot: root,
 	});
 	const hydrationGatedInputHandler = {
-		openCommandPalette: (): void => hydrationActionGate.run("command-palette", () => {
+		openCommandPalette: (): void => hydrationActionGate.run(DEFERRED_SELECTOR_ACTION_KEY, () => {
 			void notifyOnError(() => actions!.openCommandPalette(), notifications);
 		}),
 	};

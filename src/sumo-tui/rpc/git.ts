@@ -23,7 +23,7 @@ type PromiseWithResolversConstructor = PromiseConstructor & {
 
 function execFileText(execFileFn: ExecFile, file: string, args: readonly string[], cwd: string): Promise<string | undefined> {
 	const { promise, resolve } = (Promise as PromiseWithResolversConstructor).withResolvers<string | undefined>();
-	execFileFn(file, [...args], { cwd, timeout: 2_000, killSignal: "SIGKILL" }, (error, stdout) => {
+	const child = execFileFn(file, [...args], { cwd, timeout: 2_000, killSignal: "SIGKILL" }, (error, stdout) => {
 		if (error) {
 			resolve(undefined);
 			return;
@@ -31,6 +31,10 @@ function execFileText(execFileFn: ExecFile, file: string, args: readonly string[
 		const text = String(stdout).trim();
 		resolve(text.length > 0 ? text : undefined);
 	});
+	// Branch chrome is optional. Unref so an in-flight git read (up to a 2s
+	// timeout each) can never keep Node or the launcher alive after a graceful
+	// exit has already torn down the runtime and cleaned up the terminal.
+	child?.unref?.();
 	return promise;
 }
 

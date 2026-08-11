@@ -2,6 +2,27 @@ import { describe, expect, it } from "vitest";
 import { RpcHostStateStore } from "./state.js";
 
 describe("RpcHostStateStore", () => {
+	it("preserves a live git branch through hydration when no branch is supplied", () => {
+		const store = new RpcHostStateStore();
+		// The detached branch lookup writes the real branch to the store during
+		// hydration; a hydration commit that omits the branch must keep it.
+		store.setGitBranch("feature/live");
+		const hydrated = store.hydrateFromRpcState({
+			model: { provider: "openai", id: "gpt-5.5" } as never,
+			thinkingLevel: "high",
+			isStreaming: false,
+			isCompacting: false,
+			steeringMode: "all",
+			followUpMode: "one-at-a-time",
+			sessionId: "session-1",
+			autoCompactionEnabled: true,
+			messageCount: 0,
+			pendingMessageCount: 0,
+			costUsd: 0,
+		} as never);
+		expect(hydrated.gitBranch).toBe("feature/live");
+	});
+
 	it("hydrates minimal chrome state from get_state", () => {
 		const store = new RpcHostStateStore();
 		const state = store.hydrateFromRpcState({
@@ -22,6 +43,7 @@ describe("RpcHostStateStore", () => {
 			sessionId: "session-1",
 			sessionName: "Migration",
 			modelLabel: "openai/gpt-5.5",
+			hydrated: true,
 			thinkingLevel: "high",
 			isStreaming: false,
 			isCompacting: false,
@@ -30,6 +52,42 @@ describe("RpcHostStateStore", () => {
 			hasMessages: true,
 			gitBranch: "codex/rpc-host-shell-002-exec",
 		});
+	});
+
+	it("preserves seeded startup chrome across a store-backed git branch update", () => {
+		const store = new RpcHostStateStore();
+		store.seedChrome({ modelLabel: "openai/gpt-5.5", thinkingLevel: "high" });
+
+		// A pre-hydration branch lookup produces its snapshot from the store; the
+		// advisory chrome hint must survive instead of blanking the model rail.
+		expect(store.setGitBranch("feature/x")).toMatchObject({
+			gitBranch: "feature/x",
+			modelLabel: "openai/gpt-5.5",
+			thinkingLevel: "high",
+		});
+	});
+
+	it("seeds startup chrome without marking the state hydrated", () => {
+		const store = new RpcHostStateStore();
+
+		expect(store.seedChrome({ modelLabel: "openai/gpt-5.5", thinkingLevel: "high" })).toMatchObject({
+			modelLabel: "openai/gpt-5.5",
+			thinkingLevel: "high",
+		});
+		expect(store.getSnapshot().hydrated).toBeUndefined();
+		expect(store.applyModelChange({ provider: "anthropic", id: "claude-opus-4-8" }).hydrated).toBeUndefined();
+
+		expect(store.hydrateFromRpcState({
+			thinkingLevel: "medium",
+			isStreaming: false,
+			isCompacting: false,
+			steeringMode: "all",
+			followUpMode: "one-at-a-time",
+			sessionId: "session-1",
+			autoCompactionEnabled: true,
+			messageCount: 0,
+			pendingMessageCount: 0,
+		}).hydrated).toBe(true);
 	});
 
 	it("surfaces sessionFile from a get_state payload", () => {

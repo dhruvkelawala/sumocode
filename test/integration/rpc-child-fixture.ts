@@ -39,6 +39,8 @@ export interface RpcChildFixtureOptions {
 	readonly sessionHydrationRace?: boolean;
 	/** Emit an event immediately after the first get_messages response during host boot. */
 	readonly initialHydrationRace?: boolean;
+	/** Hold that first hydration response so a PTY test can queue input first. */
+	readonly initialHydrationDelayMs?: number;
 	/** Emit an old-session agent_start while a session-changing RPC is pending. */
 	readonly oldSessionAgentStartDuringChange?: boolean;
 	readonly compactReason?: "manual" | "threshold" | "overflow";
@@ -65,6 +67,7 @@ let holdNextPromptUntilAbort = ${options.holdPromptUntilAbort ? "true" : "false"
 let sessionHydrationRacePending = false;
 const sessionHydrationRace = ${options.sessionHydrationRace ? "true" : "false"};
 let initialHydrationRacePending = ${options.initialHydrationRace ? "true" : "false"};
+const initialHydrationDelayMs = ${JSON.stringify(options.initialHydrationDelayMs ?? 0)};
 const oldSessionAgentStartDuringChange = ${options.oldSessionAgentStartDuringChange ? "true" : "false"};
 const streamChunks = ${JSON.stringify(options.streamChunks ?? null)};
 const chunkDelayMs = ${JSON.stringify(options.chunkDelayMs ?? 500)};
@@ -76,6 +79,11 @@ const compactReason = ${JSON.stringify(options.compactReason ?? "manual")};
 const compactSummary = ${JSON.stringify(options.compactSummary ?? "Fixture compaction summary.")};
 const compactTokensBefore = ${JSON.stringify(options.compactTokensBefore ?? 42000)};
 const commandLogPath = process.env.SUMOCODE_RPC_FIXTURE_LOG;
+const availableModels = [
+	{ provider: "openai", id: "gpt-5", label: "openai/gpt-5" },
+	{ provider: "anthropic", id: "claude-opus-4", label: "anthropic/claude-opus-4" },
+];
+let currentModel = { provider: "openai", id: "gpt-5", name: "GPT-5" };
 
 function write(payload) {
 	process.stdout.write(JSON.stringify(payload) + "\\n");
@@ -83,7 +91,7 @@ function write(payload) {
 
 function state() {
 	return {
-		model: { provider: "openai", id: "gpt-5", name: "GPT-5" },
+		model: currentModel,
 		thinkingLevel: "medium",
 		isStreaming,
 		isCompacting,
@@ -131,12 +139,16 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 		if (initialHydrationRacePending) {
 			initialHydrationRacePending = false;
 			const hydrationSnapshot = [...messages];
-			write(response(command, { messages: hydrationSnapshot }));
-			write({ type: "message_update", message: { id: "initial-race-draft", role: "assistant", content: "initial race draft" } });
-			messages = [{ id: "initial-race-complete", role: "assistant", content: "initial race completed" }];
-			isStreaming = false;
-			write({ type: "agent_end", messages, willRetry: false });
-			write({ type: "agent_settled" });
+			const finishInitialHydration = () => {
+				write(response(command, { messages: hydrationSnapshot }));
+				write({ type: "message_update", message: { id: "initial-race-draft", role: "assistant", content: "initial race draft" } });
+				messages = [{ id: "initial-race-complete", role: "assistant", content: "initial race completed" }];
+				isStreaming = false;
+				write({ type: "agent_end", messages, willRetry: false });
+				write({ type: "agent_settled" });
+			};
+			if (initialHydrationDelayMs > 0) setTimeout(finishInitialHydration, initialHydrationDelayMs);
+			else finishInitialHydration();
 			return;
 		}
 		if (sessionHydrationRacePending) {
@@ -153,6 +165,17 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 			return;
 		}
 		write(response(command, { messages }));
+		return;
+	}
+	if (command.type === "get_available_models") {
+		write(response(command, { models: availableModels }));
+		return;
+	}
+	if (command.type === "set_model") {
+		const match = availableModels.find((m) => m.provider === command.provider && m.id === command.modelId)
+			|| { provider: command.provider, id: command.modelId, label: command.provider + "/" + command.modelId };
+		currentModel = { provider: match.provider, id: match.id, name: match.label };
+		write(response(command, { model: match }));
 		return;
 	}
 	if (command.type === "get_session_stats") {

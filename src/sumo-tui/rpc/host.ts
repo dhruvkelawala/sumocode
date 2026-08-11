@@ -2,6 +2,8 @@ import { writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { defaultActivityStateRoot } from "../../activity/persistence.js";
 import { FileActivityStore, type ActivityStoreSnapshot } from "../../activity/store.js";
+import type { ChildProcessWithoutNullStreams } from "node:child_process";
+import { createRequire } from "node:module";
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import { getCapabilities, setCapabilities } from "@earendil-works/pi-tui";
 import { SUMOCODE_RELOAD_EXIT_CODE } from "../../commands/reload.js";
@@ -11,11 +13,12 @@ import { loadYoga } from "../layout/yoga.js";
 import { applyStartupTheme } from "../../themes/index.js";
 import { ExtensionStatusPublication, RegionRegistry } from "../pi-compat/region-registry.js";
 import type { TranscriptControllerChatSink } from "../transcript/controller.js";
-import type { ChatMessageViewModel, TranscriptViewModel } from "../transcript/view-model.js";
+import type { ChatMessageViewModel } from "../transcript/view-model.js";
 import type { ChatPagerReplaceStats } from "../widgets/chat-pager.js";
 import { ModalLayer } from "../widgets/modal-layer.js";
 import { NotificationCenter } from "../widgets/notification.js";
 import { RpcChildExitError, SumoRpcClient, truncateForNotification } from "./client.js";
+import { ChromeCacheWorkerClient, drainChromeCacheForShutdown } from "./chrome-cache-worker-client.js";
 import { RpcHostControls } from "./controls.js";
 import { createRpcKeybindingsManager, RpcHostEditorController } from "./editor.js";
 import { createRpcExtensionUiResponder } from "./extension-ui-responder.js";
@@ -26,6 +29,7 @@ import type { SessionEntrySnapshot } from "./session-reader.js";
 import type { RpcTreeNavigationOutcome } from "../pi-compat/tree-navigation-command.js";
 import { RpcHostOverlayManager } from "./host-overlays.js";
 import { InlineSelectorHost } from "./inline-selector.js";
+import { InitialHydrationActionGate } from "./initial-hydration-action-gate.js";
 import { decideRpcInterrupt, type RpcInterruptInputKind } from "./interrupt.js";
 import { readGitBranch, watchGitBranch } from "./git.js";
 import { createRpcPromptScheduler, type RpcPromptScheduler } from "./prompt-scheduler.js";
@@ -37,8 +41,22 @@ import { RpcTranscriptPump } from "./transcript-pump.js";
 import { rpcVisualFixtureFromEnv } from "./visual-fixtures.js";
 import { logDiagnostic } from "../runtime/diagnostics.js";
 
+const DEFERRED_SELECTOR_ACTION_KEY = "selector-open";
+const DEFERRED_MODEL_CYCLE_ACTION_KEY = "model-cycle";
+const DEFERRED_MESSAGE_QUEUE_ACTION_KEY = "message-queue";
+
 export interface RpcHostMainOptions {
 	readonly argv?: readonly string[];
+	readonly preSpawnedChild?: ChildProcessWithoutNullStreams;
+	/** Entry ownership handoff: child lifecycle listeners are installed. */
+	readonly onPreSpawnedChildAdopted?: () => void;
+	/**
+	 * True once the entry has begun reaping the pre-spawned child after an early
+	 * signal. Checked immediately before adoption so a signal arriving while
+	 * main() awaits its pre-adoption setup (e.g. loadYoga) can never adopt the
+	 * child or enter altscreen behind the entry's own process.exit().
+	 */
+	readonly shouldAbortAdoption?: () => boolean;
 	readonly env?: NodeJS.ProcessEnv;
 	readonly stdout?: NodeJS.WriteStream;
 	readonly stdin?: NodeJS.ReadStream;
@@ -236,14 +254,17 @@ function piBinary(env: NodeJS.ProcessEnv): string {
 	return pi;
 }
 
-function childEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-	const next: NodeJS.ProcessEnv = {
-		...env,
-		SUMOCODE_RPC_CHILD: "1",
-		SUMO_TUI: "0",
-	};
-	return next;
-}
+type ChildSpawnPlan = {
+	readonly command: string;
+	readonly args: readonly string[];
+	readonly cwd: string;
+	readonly env: NodeJS.ProcessEnv;
+};
+
+const requireFromRuntime = createRequire(import.meta.url);
+const { buildChildSpawnPlan } = requireFromRuntime("./spawn-child.mjs") as {
+	buildChildSpawnPlan(env: NodeJS.ProcessEnv, argv: readonly string[], defaultPiBin?: string): ChildSpawnPlan | undefined;
+};
 
 /**
  * Writes this host process's final exit code to the out-of-band file
@@ -465,8 +486,8 @@ export interface RpcMessageFollowUpDependencies {
 	readonly isBlocked?: () => boolean;
 }
 
-export function handleRpcMessageFollowUp(deps: RpcMessageFollowUpDependencies): void {
-	void notifyOnError(async () => {
+export function handleRpcMessageFollowUp(deps: RpcMessageFollowUpDependencies): Promise<void> {
+	return notifyOnError(async () => {
 		if (deps.isBlocked?.() === true) {
 			deps.notifications.notify("branch summary in progress", "warning");
 			return;
@@ -710,12 +731,10 @@ async function applyModelCycleStep(deps: RpcHostModelCycleDependencies, directio
  * ring. The footer reflects the model change, so this handler deliberately
  * stays toast-free on success.
  */
-export function createModelCycleForwardHandler(deps: RpcHostModelCycleDependencies): () => void {
-	return (): void => {
-		void notifyOnError(async () => {
-			await applyModelCycleStep(deps, 1);
-		}, deps.notifications);
-	};
+export function createModelCycleForwardHandler(deps: RpcHostModelCycleDependencies): () => Promise<void> {
+	return (): Promise<void> => notifyOnError(async () => {
+		await applyModelCycleStep(deps, 1);
+	}, deps.notifications);
 }
 
 /**
@@ -727,12 +746,10 @@ export function createModelCycleForwardHandler(deps: RpcHostModelCycleDependenci
  * matches nothing (stale/renamed current model), backward falls back from the
  * first entry to the last entry, mirroring Pi's scoped-cycle behavior.
  */
-export function createModelCycleBackwardHandler(deps: RpcHostModelCycleDependencies): () => void {
-	return (): void => {
-		void notifyOnError(async () => {
-			await applyModelCycleStep(deps, -1);
-		}, deps.notifications);
-	};
+export function createModelCycleBackwardHandler(deps: RpcHostModelCycleDependencies): () => Promise<void> {
+	return (): Promise<void> => notifyOnError(async () => {
+		await applyModelCycleStep(deps, -1);
+	}, deps.notifications);
 }
 
 export interface RpcHostThinkingCycleDependencies {
@@ -749,13 +766,11 @@ export interface RpcHostThinkingCycleDependencies {
  * then hands the returned state to the caller. The footer reflects the
  * thinking level, so success stays toast-free.
  */
-export function createThinkingCycleHandler(deps: RpcHostThinkingCycleDependencies): () => void {
-	return (): void => {
-		void notifyOnError(async () => {
-			const state = await deps.controls.cycleThinkingLevel();
-			deps.onStateChange?.(state);
-		}, deps.notifications);
-	};
+export function createThinkingCycleHandler(deps: RpcHostThinkingCycleDependencies): () => Promise<void> {
+	return (): Promise<void> => notifyOnError(async () => {
+		const state = await deps.controls.cycleThinkingLevel();
+		deps.onStateChange?.(state);
+	}, deps.notifications);
 }
 
 export interface RpcHostToolsExpandDependencies {
@@ -802,6 +817,15 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 	}
 	const root = hostRoot(env);
 	const cwd = hostCwd(env);
+	const stateRoot = defaultActivityStateRoot(env);
+	const chromeCacheTestDelayMs = env.NODE_ENV === "test"
+		? Number.parseInt(env.SUMOCODE_TEST_CHROME_CACHE_DELAY_MS ?? "0", 10)
+		: 0;
+	const chromeCache = new ChromeCacheWorkerClient({
+		stateRoot,
+		modulePath: resolve(root, "src/sumo-tui/rpc/chrome-cache.ts"),
+		operationDelayMs: Number.isFinite(chromeCacheTestDelayMs) ? Math.max(0, chromeCacheTestDelayMs) : 0,
+	});
 	// Resolve and apply the configured theme before the runtime/shell is
 	// constructed so the host's first frame already renders the user's theme
 	// instead of the registry default (Cathedral). The RPC child process never
@@ -810,12 +834,14 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 	// the same shared resolution `extension.ts` uses.
 	applyStartupTheme({ cwd });
 	const visualFixture = rpcVisualFixtureFromEnv(env);
-	const extensionPath = resolve(root, "src/extension.ts");
+	const spawnPlan = buildChildSpawnPlan(env, argv, piBinary(env));
+	if (!spawnPlan) throw new Error("Could not construct the Pi RPC child spawn plan");
 	const client = new SumoRpcClient({
-		command: piBinary(env),
-		args: ["--mode", "rpc", "-e", extensionPath, ...argv],
-		cwd,
-		env: childEnv(env),
+		command: spawnPlan.command,
+		args: spawnPlan.args,
+		cwd: spawnPlan.cwd,
+		env: spawnPlan.env,
+		preSpawnedChild: options.preSpawnedChild,
 	});
 	let runtime: RpcHostRuntime | undefined;
 	// The B9 diffing chat sink: `TranscriptController` (owned by
@@ -829,7 +855,7 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 	});
 	const stateStore = new RpcHostStateStore();
 	const activityStore = new FileActivityStore({
-		rootDir: defaultActivityStateRoot(env),
+		rootDir: stateRoot,
 		onDiagnostic: (diagnostic) => logDiagnostic("activity_store_diagnostic", { ...diagnostic }),
 	});
 	let latestActivitySnapshot = activityStore.getSnapshot();
@@ -862,6 +888,48 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 	const requestRender = (): void => runtime?.requestRender();
 	const pushState = (state?: RpcHostChromeState): void => {
 		runtime?.update({ state: state ?? stateStore.getSnapshot() });
+	};
+	let lastChromeCacheWrite: Promise<void> = Promise.resolve();
+	const cacheChromeState = (state: RpcHostChromeState): void => {
+		if (visualFixture) return;
+		lastChromeCacheWrite = chromeCache.write(cwd, {
+			modelLabel: state.modelLabel,
+			thinkingLevel: state.thinkingLevel,
+		}).catch(() => undefined);
+	};
+	let pendingChromeCacheState: RpcHostChromeState | undefined;
+	let pendingChromeCacheWrite: ReturnType<typeof setImmediate> | undefined;
+	const scheduleChromeCacheState = (state = stateStore.getSnapshot()): void => {
+		if (visualFixture) return;
+		pendingChromeCacheState = state;
+		if (pendingChromeCacheWrite) return;
+		pendingChromeCacheWrite = setImmediate(() => {
+			pendingChromeCacheWrite = undefined;
+			const pending = pendingChromeCacheState;
+			pendingChromeCacheState = undefined;
+			if (pending) cacheChromeState(pending);
+		});
+		pendingChromeCacheWrite.unref?.();
+	};
+	const flushChromeCacheState = async (): Promise<void> => {
+		if (visualFixture) return;
+		for (;;) {
+			if (pendingChromeCacheWrite) clearImmediate(pendingChromeCacheWrite);
+			pendingChromeCacheWrite = undefined;
+			const pending = pendingChromeCacheState;
+			pendingChromeCacheState = undefined;
+			if (pending) cacheChromeState(pending);
+			const write = lastChromeCacheWrite;
+			await write;
+			if (!pendingChromeCacheState && lastChromeCacheWrite === write) return;
+		}
+	};
+	const pushStateAndCacheChrome = (state?: RpcHostChromeState): void => {
+		pushState(state);
+		// Controls invoke pushState optimistically before the child confirms a
+		// model/thinking change. Persist only callbacks carrying the successful
+		// authoritative response, never an optimistic or failed intermediate.
+		if (state !== undefined) scheduleChromeCacheState(state);
 	};
 	const treeNavigationOutcomeBroker = new InMemoryRpcTreeNavigationOutcomeBroker();
 	const controls = new RpcHostControls(client, stateStore, { onOptimisticChange: pushState, treeNavigationOutcomeBroker });
@@ -957,7 +1025,30 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 			notifications.notify(`prompt failed: ${truncateForNotification(error instanceof Error ? error.message : String(error))}`, "error");
 		},
 	});
+	let releaseInitialHydration!: () => void;
+	const initialHydration = new Promise<void>((resolve) => {
+		releaseInitialHydration = resolve;
+	});
+	const hydrationActionGate = new InitialHydrationActionGate(initialHydration);
+	/**
+	 * The retained editor can accept text as soon as the splash paints, but a
+	 * submit must wait for scheduler session ownership to rebind. Otherwise an
+	 * Enter pressed during the initial get_state/get_messages quiet-loop could
+	 * be consumed by the pre-hydration scheduler generation. Keeping this gate
+	 * at submit (not typing) preserves early editing without dropping a prompt.
+	 */
 	const submitFromEditor = async (message: string): Promise<void> => {
+		// /quit is entirely host-owned and must remain available when the child
+		// never completes initial hydration. Other commands/prompts retain the
+		// ownership gate because they can read or replace child session state.
+		if (/^\/quit(?:\s|$)/.test(message.trim())) {
+			requestHostExit(0);
+			return;
+		}
+		// Wait for hydration AND for any deferred child-dependent intent (e.g. a
+		// model/thinking cycle) to fully apply, so a prompt never dispatches under
+		// state an earlier gated shortcut is still committing.
+		await hydrationActionGate.whenSettled();
 		if (treeNavigationBusy) {
 			notifications.notify("branch summary in progress", "warning");
 			return;
@@ -972,25 +1063,24 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 	const handleModelCycleForward = createModelCycleForwardHandler({
 		controls,
 		notifications,
-		onStateChange: pushState,
+		onStateChange: pushStateAndCacheChrome,
 	});
 	const handleModelCycleBackward = createModelCycleBackwardHandler({
 		controls,
 		notifications,
-		onStateChange: pushState,
+		onStateChange: pushStateAndCacheChrome,
 	});
 	const handleThinkingCycle = createThinkingCycleHandler({
 		controls,
 		notifications,
-		onStateChange: pushState,
+		onStateChange: pushStateAndCacheChrome,
 	});
 	const handleToolsExpandToggle = createToolsExpandToggleHandler({
 		toggleActivityExpansion: () => runtime?.toggleActivityExpansion(),
 		requestRender,
 	});
-	const handleMessageFollowUp = (): void => {
+	const handleMessageFollowUp = (): Promise<void> =>
 		handleRpcMessageFollowUp({ editor, scheduler, notifications, isBlocked: () => treeNavigationBusy });
-	};
 	const handleMessageDequeue = (): void => {
 		handleRpcMessageDequeue({ editor, scheduler, stateStore, notifications });
 	};
@@ -1015,8 +1105,8 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		// / app.tools.expand: registered via CustomEditor's generic
 		// `onAction` map (see editor.ts's onModelCycleForward etc. doc
 		// comments) rather than a dedicated callback prop.
-		onModelCycleForward: handleModelCycleForward,
-		onModelCycleBackward: handleModelCycleBackward,
+		onModelCycleForward: () => hydrationActionGate.run(DEFERRED_MODEL_CYCLE_ACTION_KEY, handleModelCycleForward),
+		onModelCycleBackward: () => hydrationActionGate.run(DEFERRED_MODEL_CYCLE_ACTION_KEY, handleModelCycleBackward),
 		// app.model.select (Ctrl+L by default): opens the same in-place model
 		// selector `/model` with no args and the command palette's "MODEL"
 		// entry both already use. `actions` is a forward reference (assigned
@@ -1024,11 +1114,11 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		// pattern `submitFromEditor` above already relies on for `actions`)
 		// since `RpcHostActions` itself needs `editorText: editor` to
 		// construct.
-		onModelSelect: () => { void notifyOnError(async () => { await actions?.openModelSelector(); }, notifications); },
-		onThinkingCycle: handleThinkingCycle,
+		onModelSelect: () => hydrationActionGate.run(DEFERRED_SELECTOR_ACTION_KEY, () => notifyOnError(async () => { await actions?.openModelSelector(); }, notifications)),
+		onThinkingCycle: () => hydrationActionGate.run("thinking-cycle", handleThinkingCycle),
 		onToolsExpandToggle: handleToolsExpandToggle,
-		onMessageFollowUp: handleMessageFollowUp,
-		onMessageDequeue: handleMessageDequeue,
+		onMessageFollowUp: () => hydrationActionGate.run(DEFERRED_MESSAGE_QUEUE_ACTION_KEY, handleMessageFollowUp),
+		onMessageDequeue: () => hydrationActionGate.run(DEFERRED_MESSAGE_QUEUE_ACTION_KEY, handleMessageDequeue),
 		// app.theme.cycle (Shift+Ctrl+T / Alt+T): host-side — the child
 		// extension's pi.registerShortcut never receives keys in RPC mode.
 		// Same forward-reference pattern as onModelSelect above.
@@ -1183,6 +1273,9 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 			// in-flight suffix goes through every consumer and identity reconciliation.
 			for (const event of replay.supersededSnapshotEvents) scheduler.handleAgentEvent(event);
 			for (const event of replay.suffixEvents) processAgentEvent(event);
+			// Session replacement can change model/thinking in either the snapshot
+			// or its in-flight suffix. Persist the final projected destination state.
+			scheduleChromeCacheState(stateStore.getSnapshot());
 			deferActivityRuntimeUpdate = false;
 			runtime?.endSessionReplacement(ownershipRebound);
 			const recovery = treeNavigationRecovery;
@@ -1399,7 +1492,7 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		inlineSelectors,
 		notifications,
 		editorText: editor,
-		onStateChange: pushState,
+		onStateChange: pushStateAndCacheChrome,
 		onRenderRequest: requestRender,
 		onExitRequest: (code) => requestHostExit(code),
 		rehydrateTranscript,
@@ -1414,10 +1507,14 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		writeClipboardSequence: (sequence) => runtime?.writeClipboardSequence(sequence) ?? false,
 		changelogRoot: root,
 	});
+	const hydrationGatedInputHandler = {
+		openCommandPalette: (): void => hydrationActionGate.run(DEFERRED_SELECTOR_ACTION_KEY, () => notifyOnError(() => actions!.openCommandPalette(), notifications)),
+	};
 	let statsTimer: NodeJS.Timeout | undefined;
 	let statsInFlight = false;
 	let stopWatchingGitBranch: (() => void) | undefined;
 	let stopPromise: Promise<void> | undefined;
+	let requestedHostExitCode: number | undefined;
 
 	client.onEvent((event) => {
 		if (visualFixture) return;
@@ -1477,13 +1574,26 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 			}
 			unsubscribeActivityStore();
 			activityStore.dispose();
-			await client.stop();
+			// Signal Pi immediately, then let child response/rejection callbacks
+			// quiesce before the final cache snapshot is flushed. Persistent guarded
+			// host signal listeners cover both bounded shutdown phases.
+			await client.stop().catch(() => undefined);
+			await new Promise<void>((resolveTurn) => setImmediate(resolveTurn));
+			await drainChromeCacheForShutdown(
+				flushChromeCacheState,
+				() => chromeCache.dispose(),
+			);
 		})();
 		await stopPromise;
 	};
 	stopHost = stop;
 	requestHostExit = (code: number): void => {
+		requestedHostExitCode = code;
 		runtime?.stop(code);
+		// Do not wait for initial hydration to finish before tearing down the RPC
+		// child. Stopping it rejects any pending startup request, which transfers
+		// control to the catch/finally path immediately; stop() is idempotent.
+		void stopHost(code);
 	};
 	const handlePreEditorInput = createRpcHostInterruptHandler({
 		modals,
@@ -1511,10 +1621,22 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 	// `handleAppInterrupt` declaration above for why this is the correct reuse
 	// point instead of a second, editor-local interrupt implementation.
 	handleAppInterrupt = (): void => { handlePreEditorInput("\x1b"); };
-	const handleSigint = (): void => { void stop(130).then(() => exitProcess(130)); };
-	const handleSigterm = (): void => { void stop(0).then(() => exitProcess(0)); };
-	process.once("SIGINT", handleSigint);
-	process.once("SIGTERM", handleSigterm);
+	let handlingHostSignal = false;
+	const handleHostSignal = (code: number): void => {
+		if (handlingHostSignal) return;
+		handlingHostSignal = true;
+		requestedHostExitCode = code;
+		void stop(code).then(() => exitProcess(code));
+	};
+	const handleSigint = (): void => handleHostSignal(130);
+	const handleSigterm = (): void => handleHostSignal(0);
+	const adoptChildAndArmHostSignals = (): void => {
+		// Arm the new owner before removing the entry owner. Persistent guarded
+		// listeners suppress repeated signals until child/cache cleanup completes.
+		process.on("SIGINT", handleSigint);
+		process.on("SIGTERM", handleSigterm);
+		options.onPreSpawnedChildAdopted?.();
+	};
 
 	try {
 		// Initial boot has the same response/event ordering race as a session
@@ -1523,57 +1645,35 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		// child startup, refetch until one quiet pass, then replay only the final
 		// suffix after the authoritative replacement.
 		if (!visualFixture) sessionEvents.begin();
-		await client.start();
-		const branch = await readGitBranch(cwd);
-		let transcript: TranscriptViewModel;
-		if (visualFixture) {
-			const refreshedState = await controls.refreshState(branch);
-			const restored = scheduler.rebindSession(refreshedState.sessionId, editor.getText());
-			if (restored.count > 0) editor.setText(restored.text);
-			latestActivitySnapshot = activityStore.bindSession(refreshedState.sessionId);
-			transcript = visualFixture.transcript;
-		} else {
-			let refreshedState: RpcHostChromeState | undefined;
-			let messages: readonly unknown[] | undefined;
-			let ownershipRebound = false;
-			for (let attempt = 0; attempt < 4; attempt += 1) {
-				sessionEvents.markHydrationBarrier();
-				refreshedState = await controls.refreshState(branch);
-				if (!ownershipRebound) {
-					const restored = scheduler.rebindSession(refreshedState.sessionId, editor.getText());
-					if (restored.count > 0) editor.setText(restored.text);
-					latestActivitySnapshot = activityStore.bindSession(refreshedState.sessionId);
-					ownershipRebound = true;
-				}
-				messages = await readTranscriptMessages();
-				if (!sessionEvents.hasEventsAfterHydrationBarrier) {
-					sessionEvents.markHydrationBarrier();
-					break;
-				}
-			}
-			if (!refreshedState || !messages) throw new Error("Initial session hydration did not produce a snapshot");
-			transcript = transcriptPump.replaceFromMessages(messages);
-			const replay = sessionEvents.finishHydration();
-			for (const event of replay.supersededSnapshotEvents) scheduler.handleAgentEvent(event);
-			for (const event of replay.suffixEvents) processAgentEvent(event);
-			stopWatchingGitBranch = await watchGitBranch(cwd, branch, (nextBranch) => {
-				const state = stateStore.setGitBranch(nextBranch);
-				runtime?.update({ state });
-			});
+		let branch = visualFixture?.state.gitBranch;
+		const branchPromise = visualFixture ? undefined : readGitBranch(cwd);
+		// Integration-only seam widening the pre-adoption window inside main() so a
+		// PTY signal can land while setup awaits; inert outside NODE_ENV=test.
+		const preAdoptionMainDelayMs = env.NODE_ENV === "test"
+			? Number.parseInt(env.SUMOCODE_TEST_PRE_ADOPTION_MAIN_DELAY_MS ?? "0", 10)
+			: 0;
+		if (Number.isFinite(preAdoptionMainDelayMs) && preAdoptionMainDelayMs > 0) {
+			await new Promise((resolve) => setTimeout(resolve, preAdoptionMainDelayMs));
 		}
-		await editor.configureAutocomplete(controls);
-		// An event can arrive after the final quiet-pass check but before runtime
-		// construction. processAgentEvent has already advanced the pump in that
-		// window, so seed the first pager from its latest view rather than the
-		// earlier local replacement result.
-		if (!visualFixture) transcript = transcriptPump.viewModel();
-		const state = visualFixture ? visualFixture.state : stateStore.getSnapshot();
-		runtime = new RpcHostRuntime({
+		// The entry may have begun reaping the child after an early signal while the
+		// setup above was awaiting. Do not adopt it or enter the retained runtime;
+		// the entry owns the child reap and process exit.
+		if (options.shouldAbortAdoption?.()) return requestedHostExitCode ?? 0;
+		await client.start(adoptChildAndArmHostSignals);
+		// A signal can transfer ownership while client startup settles. Do not
+		// construct a runtime after teardown has already begun.
+		if (stopPromise) {
+			await stopPromise;
+			return requestedHostExitCode ?? 0;
+		}
+		const initialTranscript = visualFixture ? visualFixture.transcript : transcriptPump.viewModel();
+		const initialState = visualFixture ? visualFixture.state : stateStore.getSnapshot();
+		const initialRuntime = new RpcHostRuntime({
 			output: stdout,
 			input: stdin,
 			env,
-			initialState: state,
-			initialTranscript: transcript,
+			initialState,
+			initialTranscript,
 			initialActivities: activityPresentation(latestActivitySnapshot),
 			onActivityExpansionChange: (id, expanded) => activityStore.setExpanded(id, expanded),
 			onActivityExpansionMigration: (previousId, nextId, expanded) => activityStore.migrateExpanded(previousId, nextId, expanded),
@@ -1592,10 +1692,101 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 				belowEditor: regionRegistry.createStackPublication(["belowEditor"], { filterBlankRows: true }).component,
 				sidebar: regionRegistry.createSlotPublication("sidebar").component,
 			},
-			inputHandler: actions,
+			inputHandler: hydrationGatedInputHandler,
 			preEditorInputHandler: handlePreEditorInput,
 		});
-		await runtime.start();
+		runtime = initialRuntime;
+		await initialRuntime.start();
+		// Optional Git metadata must not gate first paint or authoritative session
+		// hydration. A watcher created after shutdown immediately disposes itself.
+		if (branchPromise) {
+			void (async () => {
+				const initialBranch = await branchPromise;
+				if (stopPromise) return;
+				branch = initialBranch;
+				initialRuntime.update({ state: stateStore.setGitBranch(initialBranch) });
+				const stopWatching = await watchGitBranch(cwd, initialBranch, (nextBranch) => {
+					if (stopPromise) return;
+					branch = nextBranch;
+					const state = stateStore.setGitBranch(nextBranch);
+					runtime?.update({ state });
+				});
+				if (stopPromise) {
+					stopWatching();
+					return;
+				}
+				stopWatchingGitBranch = stopWatching;
+			})().catch(() => undefined);
+		}
+		// Cached chrome is only an advisory visual hint. Seed it into the store (not
+		// just the runtime) so a concurrent pre-hydration store-backed update — e.g.
+		// the async branch lookup's setGitBranch snapshot — preserves the hint
+		// instead of blanking the model/thinking rail. The read resolves async, so
+		// the window stays open until the first authoritative write: the callback
+		// rejects the seed once the store is `hydrated` (set atomically with the
+		// real model/thinking level), which cannot overwrite authoritative state.
+		if (!visualFixture) {
+			void chromeCache.read(cwd).then((cachedChrome) => {
+				if (!cachedChrome || stateStore.getSnapshot().hydrated) return;
+				initialRuntime.update({ state: stateStore.seedChrome(cachedChrome) });
+			}).catch(() => undefined);
+		}
+		// The store may bind and publish an on-disk feed snapshot while the
+		// authoritative state/messages quiet-loop is still running. Hold that
+		// intermediate repaint so the single post-hydration update can apply cold
+		// feed suppression and transcript ownership atomically.
+		deferActivityRuntimeUpdate = true;
+
+		if (visualFixture) {
+			const refreshedState = await controls.refreshState(branch);
+			const restored = scheduler.rebindSession(refreshedState.sessionId, editor.getText());
+			if (restored.count > 0) editor.setText(restored.text);
+			latestActivitySnapshot = activityStore.bindSession(refreshedState.sessionId);
+		} else {
+			let refreshedState: RpcHostChromeState | undefined;
+			let messages: readonly unknown[] | undefined;
+			let ownershipRebound = false;
+			for (let attempt = 0; attempt < 4; attempt += 1) {
+				sessionEvents.markHydrationBarrier();
+				// Do NOT pass the local `branch` snapshot: the detached lookup may have
+				// resolved and written the real branch to the store during this await.
+				// refreshState() defaults hydration's gitBranch to the store's live
+				// value, so a stale captured undefined can never clobber it.
+				refreshedState = await controls.refreshState();
+				if (!ownershipRebound) {
+					const restored = scheduler.rebindSession(refreshedState.sessionId, editor.getText());
+					if (restored.count > 0) editor.setText(restored.text);
+					latestActivitySnapshot = activityStore.bindSession(refreshedState.sessionId);
+					ownershipRebound = true;
+				}
+				messages = await readTranscriptMessages();
+				if (!sessionEvents.hasEventsAfterHydrationBarrier) {
+					sessionEvents.markHydrationBarrier();
+					break;
+				}
+			}
+			if (!refreshedState || !messages) throw new Error("Initial session hydration did not produce a snapshot");
+			transcriptPump.replaceFromMessages(messages);
+			const replay = sessionEvents.finishHydration();
+			for (const event of replay.supersededSnapshotEvents) scheduler.handleAgentEvent(event);
+			for (const event of replay.suffixEvents) processAgentEvent(event);
+			const hydratedState = stateStore.getSnapshot();
+			initialRuntime.update({
+				state: hydratedState,
+				transcript: transcriptPump.viewModel(),
+				activities: activityPresentation(latestActivitySnapshot),
+				suppressSettledFeedOnly: true,
+			});
+		}
+		deferActivityRuntimeUpdate = false;
+		await editor.configureAutocomplete(controls);
+		initialRuntime.markChromeStable();
+		// Deferred child-dependent input may now observe only the fully painted,
+		// steady-state hydration result and configured editor/chrome.
+		releaseInitialHydration();
+		// The cache is advisory. Coalesce snapshots before posting them to the
+		// worker; lock waits and durability fsyncs never run on the TUI thread.
+		scheduleChromeCacheState();
 		if (!visualFixture) {
 			// Submit the launcher's kickoff prompt (if any) only after start() +
 			// initial hydration above, so the transcript/UI are already in a
@@ -1607,8 +1798,10 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 			await refreshStats();
 			statsTimer = setInterval(() => { void refreshStats(); }, 5_000);
 		}
-		return await runtime.waitForExit();
+		return await initialRuntime.waitForExit();
 	} catch (error) {
+		await stop(requestedHostExitCode ?? 0);
+		if (requestedHostExitCode !== undefined) return requestedHostExitCode;
 		writeLine(stderr, `[sumocode-rpc] ${error instanceof Error ? error.message : String(error)}`);
 		if (client.stderr.length > 0) writeLine(stderr, client.stderr.trim());
 		return 1;
@@ -1621,8 +1814,8 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 	}
 }
 
-export async function main(): Promise<void> {
-	const code = await runRpcHost();
+export async function main(options: RpcHostMainOptions = {}): Promise<void> {
+	const code = await runRpcHost(options);
 	// Covers every runRpcHost path that returns a code naturally instead of
 	// calling process.exit directly (the plain `runtime.waitForExit()` return
 	// and the top-level catch's `return 1`) -- the explicit process.exit call

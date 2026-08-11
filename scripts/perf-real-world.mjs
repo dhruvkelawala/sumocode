@@ -90,19 +90,23 @@ async function readEvents(diag) {
 	}
 }
 
-async function waitForInputReady(diag, occurrence) {
+async function waitForEvent(diag, eventName, occurrence) {
 	const deadline = Date.now() + TIMEOUT_MS;
 	while (Date.now() < deadline) {
 		const events = await readEvents(diag);
-		const inputReady = events.filter((event) => event.event === "input_ready");
-		if (inputReady.length >= occurrence) return { events, event: inputReady[occurrence - 1] };
+		const matching = events.filter((event) => event.event === eventName);
+		if (matching.length >= occurrence) return { events, event: matching[occurrence - 1] };
 		await new Promise((resolveSleep) => setTimeout(resolveSleep, POLL_MS));
 	}
 	const events = await readEvents(diag);
-	const error = new Error(`timed out waiting for input_ready occurrence ${occurrence}`);
+	const error = new Error(`timed out waiting for ${eventName} occurrence ${occurrence}`);
 	error.code = "diag-timeout";
 	error.events = events;
 	throw error;
+}
+
+async function waitForInputReady(diag, occurrence) {
+	return waitForEvent(diag, "input_ready", occurrence);
 }
 
 function median(values) {
@@ -121,7 +125,7 @@ export function publicProbeError(error) {
 }
 
 function markdown(report) {
-	const rows = report.runs.map((run) => `| ${run.run} | ${formatMetric(run.startup_ms)} | ${formatMetric(run.first_frame_ms)} | ${formatMetric(run.reload_ms)} | ${run.error ?? ""} |`);
+	const rows = report.runs.map((run) => `| ${run.run} | ${formatMetric(run.startup_ms)} | ${formatMetric(run.first_frame_ms)} | ${formatMetric(run.app_ready_ms)} | ${formatMetric(run.reload_ms)} | ${formatMetric(run.reload_app_ready_ms)} | ${run.error ?? ""} |`);
 	return `# SumoCode real-world startup perf snapshot
 
 Report-only measurements from herdr using the operator's real SumoCode configuration and installed extension set. Results are machine-dependent and are not CI gates.
@@ -130,15 +134,17 @@ Report-only measurements from herdr using the operator's real SumoCode configura
 - generated: ${report.generatedAt}
 - scratch project: \`${report.scratchProject}\`
 
-| Run | Startup | First frame | Reload | Notes |
-| ---: | ---: | ---: | ---: | --- |
+| Run | Startup | First frame | App ready | Reload | Reload app ready | Notes |
+| ---: | ---: | ---: | ---: | ---: | ---: | --- |
 ${rows.join("\n")}
 
 | Metric | Median |
 | --- | ---: |
 | startup_ms | ${formatMetric(report.medians.startup_ms)} |
 | first_frame_ms | ${formatMetric(report.medians.first_frame_ms)} |
+| app_ready_ms | ${formatMetric(report.medians.app_ready_ms)} |
 | reload_ms | ${formatMetric(report.medians.reload_ms)} |
+| reload_app_ready_ms | ${formatMetric(report.medians.reload_app_ready_ms)} |
 `;
 }
 
@@ -178,7 +184,9 @@ async function run() {
 			let pane;
 			let startupMs;
 			let firstFrameMs;
+			let appReadyMs;
 			let reloadMs;
+			let reloadAppReadyMs;
 			let errorMessage;
 			try {
 				const t0 = Date.now();
@@ -188,8 +196,11 @@ async function run() {
 				const startup = await waitForInputReady(diag, 1);
 				const bootFrame = startup.events.find((event) => event.event === "boot_screen_frame");
 				if (typeof bootFrame?.ts !== "number") throw new Error("startup diagnostics did not include boot_screen_frame");
-				startupMs = startup.event.ts - t0;
 				firstFrameMs = bootFrame.ts - t0;
+				const startupAppReady = await waitForEvent(diag, "app_ready", 1);
+				if (typeof startupAppReady.event.ts !== "number") throw new Error("startup diagnostics did not include app_ready");
+				startupMs = startup.event.ts - t0;
+				appReadyMs = startupAppReady.event.ts - t0;
 
 				herdr(["pane", "send-text", pane, "/sumo:reload"]);
 				await new Promise((resolveSleep) => setTimeout(resolveSleep, POLL_MS));
@@ -199,7 +210,10 @@ async function run() {
 				const t1 = Date.now();
 				herdr(["pane", "send-keys", pane, "Enter"]);
 				const reload = await waitForInputReady(diag, 2);
+				const reloadAppReady = await waitForEvent(diag, "app_ready", 2);
+				if (typeof reloadAppReady.event.ts !== "number") throw new Error("reload diagnostics did not include app_ready");
 				reloadMs = reload.event.ts - t1;
+				reloadAppReadyMs = reloadAppReady.event.ts - t1;
 				herdr(["pane", "read", pane, "--lines", "5"]);
 				consecutiveReloadFailures = 0;
 			} catch (error) {
@@ -229,7 +243,7 @@ async function run() {
 					closePane(pane);
 				}
 			}
-			results.push({ run: index, startup_ms: startupMs, first_frame_ms: firstFrameMs, reload_ms: reloadMs, error: errorMessage });
+			results.push({ run: index, startup_ms: startupMs, first_frame_ms: firstFrameMs, app_ready_ms: appReadyMs, reload_ms: reloadMs, reload_app_ready_ms: reloadAppReadyMs, error: errorMessage });
 		}
 
 		const successful = (key) => results.map((runResult) => runResult[key]).filter((value) => typeof value === "number");
@@ -241,7 +255,9 @@ async function run() {
 			medians: {
 				startup_ms: median(successful("startup_ms")),
 				first_frame_ms: median(successful("first_frame_ms")),
+				app_ready_ms: median(successful("app_ready_ms")),
 				reload_ms: median(successful("reload_ms")),
+				reload_app_ready_ms: median(successful("reload_app_ready_ms")),
 			},
 		};
 		const output = markdown(report);

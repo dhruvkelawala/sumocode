@@ -95,11 +95,11 @@ describe("RpcShellAdapter splash hint", () => {
 		}
 	});
 
-	it("renders no-model fallback when chrome state has no model label", async () => {
+	it("renders no-model fallback after chrome state is hydrated", async () => {
 		const adapter = await RpcShellAdapter.create({
 			terminal: { writeFramePatches: () => undefined },
 			viewport: { columns: 160, rows: 45 },
-			initialState: state({ hasMessages: false, modelLabel: undefined, thinkingLevel: undefined }),
+			initialState: state({ hasMessages: false, modelLabel: undefined, thinkingLevel: undefined, hydrated: true }),
 			initialTranscript: { messages: [] },
 		});
 		try {
@@ -113,6 +113,42 @@ describe("RpcShellAdapter splash hint", () => {
 		} finally {
 			adapter.dispose();
 		}
+	});
+
+	it("renders a bare rail before hydration when no cached model exists", async () => {
+		const adapter = await RpcShellAdapter.create({
+			terminal: { writeFramePatches: () => undefined },
+			viewport: { columns: 160, rows: 45 },
+			initialState: state({ hasMessages: false, modelLabel: undefined, thinkingLevel: undefined }),
+			initialTranscript: { messages: [] },
+		});
+		try {
+			adapter.render();
+			const text = Array.from({ length: 45 }, (_value, row) => adapter.getLastFrame()!.toPlainRow(row)).join("\n");
+			expect(text).toContain("╰─");
+			expect(text).not.toContain("no model");
+		} finally {
+			adapter.dispose();
+		}
+	});
+
+	it("keeps cached splash chrome identical before and after hydration", async () => {
+		const renderHint = async (hydrated: boolean): Promise<string> => {
+			const adapter = await RpcShellAdapter.create({
+				terminal: { writeFramePatches: () => undefined },
+				viewport: { columns: 160, rows: 45 },
+				initialState: state({ hasMessages: false, modelLabel: "openai/gpt-5.5", thinkingLevel: "high", hydrated }),
+				initialTranscript: { messages: [] },
+			});
+			try {
+				adapter.render();
+				return Array.from({ length: 45 }, (_value, row) => adapter.getLastFrame()!.toPlainRow(row)).join("\n");
+			} finally {
+				adapter.dispose();
+			}
+		};
+
+		expect(await renderHint(false)).toBe(await renderHint(true));
 	});
 });
 
@@ -252,6 +288,37 @@ describe("RpcShellAdapter durable Activity feed", () => {
 			text = screenText();
 			expect(text).not.toContain("[autoreview final]");
 			expect(text).not.toContain("terminal exited with code 1");
+		} finally {
+			adapter.dispose();
+		}
+	});
+
+	it("does not resurrect settled feed-only history when hydration updates splash chrome", async () => {
+		const settled = {
+			id: "term-hydration-settled",
+			kind: "terminal" as const,
+			title: "hydrated build",
+			status: "succeeded" as const,
+			settledAt: 20,
+			result: { summary: "terminal exited with code 0" },
+		};
+		const adapter = await RpcShellAdapter.create({
+			terminal: { writeFramePatches: () => undefined },
+			viewport: { columns: 100, rows: 30 },
+			initialState: state({ hasMessages: false, messageCount: 0 }),
+			initialTranscript: { messages: [] },
+		});
+		try {
+			adapter.update({
+				state: state({ hasMessages: false, messageCount: 0 }),
+				transcript: { messages: [] },
+				activities: { activities: [settled], expansion: {} },
+				suppressSettledFeedOnly: true,
+			});
+			adapter.render();
+			const text = Array.from({ length: 30 }, (_, row) => adapter.getLastFrame()!.toPlainRow(row)).join("\n");
+			expect(text).not.toContain("[hydrated build]");
+			expect(text).not.toContain("terminal exited with code 0");
 		} finally {
 			adapter.dispose();
 		}

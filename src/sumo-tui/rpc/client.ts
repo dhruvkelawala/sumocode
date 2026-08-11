@@ -56,6 +56,7 @@ export interface SumoRpcClientOptions {
 	readonly command: string;
 	readonly args: readonly string[];
 	readonly cwd?: string;
+	readonly preSpawnedChild?: ChildProcessWithoutNullStreams;
 	readonly env?: NodeJS.ProcessEnv;
 	readonly requestTimeoutMs?: number;
 	readonly onProtocolError?: RpcProtocolErrorHandler;
@@ -64,6 +65,8 @@ export interface SumoRpcClientOptions {
 const MAX_CONSECUTIVE_PROTOCOL_ERRORS = 3;
 const MAX_STDERR_BUFFER_LENGTH = 64 * 1024;
 const CHILD_STOP_GRACE_MS = 2_000;
+const CHILD_CLOSE_GRACE_MS = 1_000;
+const PRESPAWN_ERROR = Symbol.for("sumocode.rpc.preSpawnError");
 /**
  * Notification-facing messages (toasts, modal text) must stay terse -- the
  * full stderr buffer (up to MAX_STDERR_BUFFER_LENGTH = 64 KiB) is fine for the
@@ -74,6 +77,21 @@ export const NOTIFICATION_STDERR_LIMIT = 500;
 
 function toError(value: unknown): Error {
 	return value instanceof Error ? value : new Error(String(value));
+}
+
+function waitForChildClose(child: ChildProcessWithoutNullStreams): Promise<void> {
+	return new Promise((resolve) => {
+		let settled = false;
+		const finish = () => {
+			if (settled) return;
+			settled = true;
+			clearTimeout(timer);
+			child.removeListener("close", finish);
+			resolve();
+		};
+		const timer = setTimeout(finish, CHILD_STOP_GRACE_MS + CHILD_CLOSE_GRACE_MS);
+		child.once("close", finish);
+	});
 }
 
 /** Truncates a message's tail to a bounded length for user-facing surfaces (notifications, toasts). */
@@ -141,11 +159,11 @@ export class SumoRpcClient {
 		this.uiRequestHandler = handler;
 	}
 
-	public async start(): Promise<void> {
+	public async start(onAdopted?: () => void): Promise<void> {
 		if (this.child) throw new Error("RPC child already started");
 		this.exited = false;
 		this.exitNotified = false;
-		const child = spawn(this.options.command, [...this.options.args], {
+		const child = this.options.preSpawnedChild ?? spawn(this.options.command, [...this.options.args], {
 			cwd: this.options.cwd,
 			env: { ...process.env, ...this.options.env },
 			stdio: ["pipe", "pipe", "pipe"],
@@ -177,6 +195,30 @@ export class SumoRpcClient {
 			this.handleExit(new RpcChildExitError(`RPC child exited code=${code ?? "null"} signal=${signal ?? "null"}. stderr=${this.stderrBuffer}`, { code, signal }));
 		});
 
+		// A pre-spawned child can fail or exit while the host module is still
+		// importing, before the lifecycle listeners above exist. The entry file
+		// saves asynchronous spawn errors on the child; Node retains completed
+		// exitCode/signalCode. Adopt either state instead of treating dead stdin
+		// as a live RPC transport and losing the original failure.
+		const preSpawnError = (child as unknown as { [PRESPAWN_ERROR]?: unknown })[PRESPAWN_ERROR];
+		let adoptionError: Error | undefined;
+		if (preSpawnError !== undefined) {
+			adoptionError = toError(preSpawnError);
+		} else if (child.exitCode !== null || child.signalCode !== null) {
+			adoptionError = new RpcChildExitError(
+				`RPC child exited before host adoption code=${child.exitCode ?? "null"} signal=${child.signalCode ?? "null"}. stderr=${this.stderrBuffer}`,
+				{ code: child.exitCode, signal: child.signalCode },
+			);
+		}
+		if (adoptionError) {
+			this.handleExit(adoptionError);
+			throw adoptionError;
+		}
+
+		// Transfer signal ownership only after this client owns child lifecycle,
+		// but before the startup crash grace. The callback runs synchronously so
+		// entry and host signal handlers never overlap across an event-loop turn.
+		onAdopted?.();
 		await new Promise((resolve) => setTimeout(resolve, 50));
 		if (this.exited) throw new Error(`RPC child exited during startup. stderr=${this.stderrBuffer}`);
 	}
@@ -190,13 +232,21 @@ export class SumoRpcClient {
 		// a spurious "child crashed" notification (and duplicate teardown) for
 		// what is actually an intentional shutdown (SIGINT/SIGTERM/normal quit).
 		this.exitNotified = true;
+		const childClosed = waitForChildClose(child);
+		const childExited = once(child, "exit");
 		child.stdin.end();
 		child.kill("SIGTERM");
 		await Promise.race([
-			once(child, "exit"),
-			new Promise((resolve) => setTimeout(resolve, 2_000)),
+			childExited,
+			new Promise((resolve) => setTimeout(resolve, CHILD_STOP_GRACE_MS)),
 		]);
-		if (!this.exited) child.kill("SIGKILL");
+		if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+		await childClosed;
+		// `close` follows all stdio closure. Removing listeners after the bounded
+		// fallback also prevents any pipe-holding descendant from dispatching a
+		// late RPC response after stop() resolves.
+		child.stdout.removeAllListeners("data");
+		child.stderr.removeAllListeners("data");
 		this.exited = true;
 		this.child = undefined;
 		this.rejectPending(new Error("RPC child stopped"));
@@ -325,11 +375,16 @@ export class SumoRpcClient {
 
 	private handleExit(error: Error): void {
 		this.exited = true;
+		if (this.exitNotified) {
+			// Deliberate stop owns teardown. Keep the child reference and pending
+			// callbacks alive until its stdio `close` boundary so buffered success
+			// responses can still resolve before stop() rejects true leftovers.
+			return;
+		}
 		const child = this.child;
 		if (child) this.terminateChild(child);
 		this.child = undefined;
 		this.rejectPending(error);
-		if (this.exitNotified) return;
 		this.exitNotified = true;
 		for (const listener of this.exitListeners) listener(error);
 	}

@@ -1,6 +1,6 @@
 {
-  "generatedAt": "2026-08-11T11:57:10.125Z",
-  "commit": "8d3b84d fix(perf): redact successful probe diagnostics",
+  "generatedAt": "2026-08-11T11:59:05.462Z",
+  "commit": "b851e8e Merge remote-tracking branch 'origin/advisor/060-startup-perf-baseline-v2' into advisor/061-early-first-frame-v2",
   "runs": 5,
   "measurements": [
     {
@@ -8,50 +8,46 @@
       "samples": [
         {
           "ok": true,
-          "durationMs": 8.774582982063293,
+          "durationMs": 9.773000001907349,
           "code": 0,
           "signal": null
         },
         {
           "ok": true,
-          "durationMs": 7.957666993141174,
+          "durationMs": 9.273000001907349,
           "code": 0,
           "signal": null
         },
         {
           "ok": true,
-          "durationMs": 8.512791991233826,
+          "durationMs": 8.545791029930115,
           "code": 0,
           "signal": null
         },
         {
           "ok": true,
-          "durationMs": 9.043209075927734,
+          "durationMs": 7.977249979972839,
           "code": 0,
           "signal": null
         },
         {
           "ok": true,
-          "durationMs": 11.250166058540344,
+          "durationMs": 7.89016592502594,
           "code": 0,
           "signal": null
         }
       ],
       "failedRuns": 0,
-      "avgMiddleMs": 8.8,
-      "minMs": 8,
-      "maxMs": 11.3
+      "avgMiddleMs": 8.6,
+      "minMs": 7.9,
+      "maxMs": 9.8
     },
     {
       "label": "host-import",
       "samples": [
         {
           "ok": true,
-          "durationMs": 1869
-        },
-        {
-          "ok": true,
-          "durationMs": 1123
+          "durationMs": 1778
         },
         {
           "ok": true,
@@ -59,339 +55,343 @@
         },
         {
           "ok": true,
-          "durationMs": 1099
+          "durationMs": 1149
         },
         {
           "ok": true,
-          "durationMs": 1120
+          "durationMs": 1116
+        },
+        {
+          "ok": true,
+          "durationMs": 1138
         }
       ],
       "failedRuns": 0,
-      "avgMiddleMs": 1119.7,
-      "minMs": 1099,
-      "maxMs": 1869
+      "avgMiddleMs": 1134.3,
+      "minMs": 1116,
+      "maxMs": 1778
     },
     {
       "label": "child-first-response",
       "samples": [
         {
           "ok": true,
-          "durationMs": 2048.3990000486374
+          "durationMs": 2120.90600001812
         },
         {
           "ok": true,
-          "durationMs": 1763.135125041008
+          "durationMs": 1801.5672500133514
         },
         {
           "ok": true,
-          "durationMs": 1798.1838330030441
+          "durationMs": 1896.8134590387344
         },
         {
           "ok": true,
-          "durationMs": 1765.842374920845
+          "durationMs": 1901.578500032425
         },
         {
           "ok": true,
-          "durationMs": 1740.4816249608994
+          "durationMs": 1849.826208949089
         }
       ],
       "failedRuns": 0,
-      "avgMiddleMs": 1775.7,
-      "minMs": 1740.5,
-      "maxMs": 2048.4
+      "avgMiddleMs": 1882.7,
+      "minMs": 1801.6,
+      "maxMs": 2120.9
     },
     {
       "label": "child-first-response-noext",
       "samples": [
         {
           "ok": true,
-          "durationMs": 1431.4221249818802
+          "durationMs": 1630.285166978836
         },
         {
           "ok": true,
-          "durationMs": 1480.5961250066757
+          "durationMs": 1508.0976250171661
         },
         {
           "ok": true,
-          "durationMs": 1493.7074159383774
+          "durationMs": 1640.2442920207977
         },
         {
           "ok": true,
-          "durationMs": 1488.3977500200272
+          "durationMs": 1531.4861249923706
         },
         {
           "ok": true,
-          "durationMs": 1499.7869579792023
+          "durationMs": 1565.8832079172134
         }
       ],
       "failedRuns": 0,
-      "avgMiddleMs": 1487.6,
-      "minMs": 1431.4,
-      "maxMs": 1499.8
+      "avgMiddleMs": 1575.9,
+      "minMs": 1508.1,
+      "maxMs": 1640.2
     },
     {
       "label": "print-mode",
       "samples": [
         {
           "ok": true,
-          "durationMs": 7543.274124979973,
+          "durationMs": 7556.367541909218,
           "code": 0,
           "signal": null
         },
         {
           "ok": true,
-          "durationMs": 8225.555834054947,
+          "durationMs": 9778.861791014671,
           "code": 0,
           "signal": null
         },
         {
           "ok": true,
-          "durationMs": 9643.450749993324,
+          "durationMs": 8013.141457915306,
           "code": 0,
           "signal": null
         },
         {
           "ok": true,
-          "durationMs": 9434.944499969482,
+          "durationMs": 6798.59450006485,
           "code": 0,
           "signal": null
         },
         {
           "ok": true,
-          "durationMs": 7450.226583003998,
+          "durationMs": 7663.4796669483185,
           "code": 0,
           "signal": null
         }
       ],
       "failedRuns": 0,
-      "avgMiddleMs": 8401.3,
-      "minMs": 7450.2,
-      "maxMs": 9643.5
+      "avgMiddleMs": 7744.3,
+      "minMs": 6798.6,
+      "maxMs": 9778.9
     },
     {
       "label": "first-frame",
       "samples": [
         {
           "ok": true,
-          "durationMs": 2693.811334013939
+          "durationMs": 1376.7870839834213
         },
         {
           "ok": true,
-          "durationMs": 2706.93520796299
+          "durationMs": 1282.0830000638962
         },
         {
           "ok": true,
-          "durationMs": 2435.1043330430984
+          "durationMs": 1292.1120419502258
         },
         {
           "ok": true,
-          "durationMs": 2620.307624936104
+          "durationMs": 1287.1589169502258
         },
         {
           "ok": true,
-          "durationMs": 2640.431583046913
+          "durationMs": 1279.7308330535889
         }
       ],
       "failedRuns": 0,
-      "avgMiddleMs": 2651.5,
-      "minMs": 2435.1,
-      "maxMs": 2706.9
+      "avgMiddleMs": 1287.1,
+      "minMs": 1279.7,
+      "maxMs": 1376.8
     },
     {
       "label": "boot-screen-frame",
       "samples": [
         {
           "ok": true,
-          "durationMs": 2683,
-          "bootScreenFrameMs": 2683,
-          "appReadyMs": 2683,
-          "stableChromeMs": 2683,
-          "inputReadyMs": 2683
+          "durationMs": 1364,
+          "bootScreenFrameMs": 1364,
+          "appReadyMs": 1766,
+          "stableChromeMs": 1766,
+          "inputReadyMs": 1364
         },
         {
           "ok": true,
-          "durationMs": 2612,
-          "bootScreenFrameMs": 2612,
-          "appReadyMs": 2613,
-          "stableChromeMs": 2613,
-          "inputReadyMs": 2613
+          "durationMs": 1382,
+          "bootScreenFrameMs": 1382,
+          "appReadyMs": 1660,
+          "stableChromeMs": 1660,
+          "inputReadyMs": 1382
         },
         {
           "ok": true,
-          "durationMs": 2638,
-          "bootScreenFrameMs": 2638,
-          "appReadyMs": 2639,
-          "stableChromeMs": 2639,
-          "inputReadyMs": 2639
+          "durationMs": 1292,
+          "bootScreenFrameMs": 1292,
+          "appReadyMs": 1477,
+          "stableChromeMs": 1477,
+          "inputReadyMs": 1292
         },
         {
           "ok": true,
-          "durationMs": 2630,
-          "bootScreenFrameMs": 2630,
-          "appReadyMs": 2630,
-          "stableChromeMs": 2630,
-          "inputReadyMs": 2630
+          "durationMs": 1292,
+          "bootScreenFrameMs": 1292,
+          "appReadyMs": 1743,
+          "stableChromeMs": 1743,
+          "inputReadyMs": 1292
         },
         {
           "ok": true,
-          "durationMs": 2846,
-          "bootScreenFrameMs": 2846,
-          "appReadyMs": 2846,
-          "stableChromeMs": 2846,
-          "inputReadyMs": 2846
+          "durationMs": 1319,
+          "bootScreenFrameMs": 1319,
+          "appReadyMs": 1744,
+          "stableChromeMs": 1744,
+          "inputReadyMs": 1319
         }
       ],
       "failedRuns": 0,
-      "avgMiddleMs": 2650.3,
-      "minMs": 2612,
-      "maxMs": 2846
+      "avgMiddleMs": 1325,
+      "minMs": 1292,
+      "maxMs": 1382
     },
     {
       "label": "app-ready",
       "samples": [
         {
           "ok": true,
-          "durationMs": 2683,
-          "bootScreenFrameMs": 2683,
-          "appReadyMs": 2683,
-          "stableChromeMs": 2683,
-          "inputReadyMs": 2683
+          "durationMs": 1766,
+          "bootScreenFrameMs": 1364,
+          "appReadyMs": 1766,
+          "stableChromeMs": 1766,
+          "inputReadyMs": 1364
         },
         {
           "ok": true,
-          "durationMs": 2613,
-          "bootScreenFrameMs": 2612,
-          "appReadyMs": 2613,
-          "stableChromeMs": 2613,
-          "inputReadyMs": 2613
+          "durationMs": 1660,
+          "bootScreenFrameMs": 1382,
+          "appReadyMs": 1660,
+          "stableChromeMs": 1660,
+          "inputReadyMs": 1382
         },
         {
           "ok": true,
-          "durationMs": 2639,
-          "bootScreenFrameMs": 2638,
-          "appReadyMs": 2639,
-          "stableChromeMs": 2639,
-          "inputReadyMs": 2639
+          "durationMs": 1477,
+          "bootScreenFrameMs": 1292,
+          "appReadyMs": 1477,
+          "stableChromeMs": 1477,
+          "inputReadyMs": 1292
         },
         {
           "ok": true,
-          "durationMs": 2630,
-          "bootScreenFrameMs": 2630,
-          "appReadyMs": 2630,
-          "stableChromeMs": 2630,
-          "inputReadyMs": 2630
+          "durationMs": 1743,
+          "bootScreenFrameMs": 1292,
+          "appReadyMs": 1743,
+          "stableChromeMs": 1743,
+          "inputReadyMs": 1292
         },
         {
           "ok": true,
-          "durationMs": 2846,
-          "bootScreenFrameMs": 2846,
-          "appReadyMs": 2846,
-          "stableChromeMs": 2846,
-          "inputReadyMs": 2846
+          "durationMs": 1744,
+          "bootScreenFrameMs": 1319,
+          "appReadyMs": 1744,
+          "stableChromeMs": 1744,
+          "inputReadyMs": 1319
         }
       ],
       "failedRuns": 0,
-      "avgMiddleMs": 2650.7,
-      "minMs": 2613,
-      "maxMs": 2846
+      "avgMiddleMs": 1715.7,
+      "minMs": 1477,
+      "maxMs": 1766
     },
     {
       "label": "stable-chrome",
       "samples": [
         {
           "ok": true,
-          "durationMs": 2683,
-          "bootScreenFrameMs": 2683,
-          "appReadyMs": 2683,
-          "stableChromeMs": 2683,
-          "inputReadyMs": 2683
+          "durationMs": 1766,
+          "bootScreenFrameMs": 1364,
+          "appReadyMs": 1766,
+          "stableChromeMs": 1766,
+          "inputReadyMs": 1364
         },
         {
           "ok": true,
-          "durationMs": 2613,
-          "bootScreenFrameMs": 2612,
-          "appReadyMs": 2613,
-          "stableChromeMs": 2613,
-          "inputReadyMs": 2613
+          "durationMs": 1660,
+          "bootScreenFrameMs": 1382,
+          "appReadyMs": 1660,
+          "stableChromeMs": 1660,
+          "inputReadyMs": 1382
         },
         {
           "ok": true,
-          "durationMs": 2639,
-          "bootScreenFrameMs": 2638,
-          "appReadyMs": 2639,
-          "stableChromeMs": 2639,
-          "inputReadyMs": 2639
+          "durationMs": 1477,
+          "bootScreenFrameMs": 1292,
+          "appReadyMs": 1477,
+          "stableChromeMs": 1477,
+          "inputReadyMs": 1292
         },
         {
           "ok": true,
-          "durationMs": 2630,
-          "bootScreenFrameMs": 2630,
-          "appReadyMs": 2630,
-          "stableChromeMs": 2630,
-          "inputReadyMs": 2630
+          "durationMs": 1743,
+          "bootScreenFrameMs": 1292,
+          "appReadyMs": 1743,
+          "stableChromeMs": 1743,
+          "inputReadyMs": 1292
         },
         {
           "ok": true,
-          "durationMs": 2846,
-          "bootScreenFrameMs": 2846,
-          "appReadyMs": 2846,
-          "stableChromeMs": 2846,
-          "inputReadyMs": 2846
+          "durationMs": 1744,
+          "bootScreenFrameMs": 1319,
+          "appReadyMs": 1744,
+          "stableChromeMs": 1744,
+          "inputReadyMs": 1319
         }
       ],
       "failedRuns": 0,
-      "avgMiddleMs": 2650.7,
-      "minMs": 2613,
-      "maxMs": 2846
+      "avgMiddleMs": 1715.7,
+      "minMs": 1477,
+      "maxMs": 1766
     },
     {
       "label": "input-ready",
       "samples": [
         {
           "ok": true,
-          "durationMs": 2683,
-          "bootScreenFrameMs": 2683,
-          "appReadyMs": 2683,
-          "stableChromeMs": 2683,
-          "inputReadyMs": 2683
+          "durationMs": 1364,
+          "bootScreenFrameMs": 1364,
+          "appReadyMs": 1766,
+          "stableChromeMs": 1766,
+          "inputReadyMs": 1364
         },
         {
           "ok": true,
-          "durationMs": 2613,
-          "bootScreenFrameMs": 2612,
-          "appReadyMs": 2613,
-          "stableChromeMs": 2613,
-          "inputReadyMs": 2613
+          "durationMs": 1382,
+          "bootScreenFrameMs": 1382,
+          "appReadyMs": 1660,
+          "stableChromeMs": 1660,
+          "inputReadyMs": 1382
         },
         {
           "ok": true,
-          "durationMs": 2639,
-          "bootScreenFrameMs": 2638,
-          "appReadyMs": 2639,
-          "stableChromeMs": 2639,
-          "inputReadyMs": 2639
+          "durationMs": 1292,
+          "bootScreenFrameMs": 1292,
+          "appReadyMs": 1477,
+          "stableChromeMs": 1477,
+          "inputReadyMs": 1292
         },
         {
           "ok": true,
-          "durationMs": 2630,
-          "bootScreenFrameMs": 2630,
-          "appReadyMs": 2630,
-          "stableChromeMs": 2630,
-          "inputReadyMs": 2630
+          "durationMs": 1292,
+          "bootScreenFrameMs": 1292,
+          "appReadyMs": 1743,
+          "stableChromeMs": 1743,
+          "inputReadyMs": 1292
         },
         {
           "ok": true,
-          "durationMs": 2846,
-          "bootScreenFrameMs": 2846,
-          "appReadyMs": 2846,
-          "stableChromeMs": 2846,
-          "inputReadyMs": 2846
+          "durationMs": 1319,
+          "bootScreenFrameMs": 1319,
+          "appReadyMs": 1744,
+          "stableChromeMs": 1744,
+          "inputReadyMs": 1319
         }
       ],
       "failedRuns": 0,
-      "avgMiddleMs": 2650.7,
-      "minMs": 2613,
-      "maxMs": 2846
+      "avgMiddleMs": 1325,
+      "minMs": 1292,
+      "maxMs": 1382
     }
   ]
 }

@@ -1,5 +1,12 @@
+import { EventEmitter } from "node:events";
+import { spawn } from "node:child_process";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { describe, expect, it, vi } from "vitest";
+
+vi.mock("node:child_process", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("node:child_process")>();
+	return { ...actual, spawn: vi.fn(actual.spawn) };
+});
 import { RpcChildExitError, SumoRpcClient, type SumoRpcClientOptions } from "./client.js";
 
 function nodeRpcClient(script: string, options: Partial<Omit<SumoRpcClientOptions, "command" | "args">> = {}): SumoRpcClient {
@@ -23,7 +30,144 @@ async function waitFor(predicate: () => boolean): Promise<void> {
 	throw new Error("condition was not met");
 }
 
+class FakeStream extends EventEmitter {
+	public writable = true;
+	public readonly setEncoding = vi.fn();
+	public readonly end = vi.fn(() => { this.writable = false; });
+	public readonly write = vi.fn((_data: string, callback?: (error?: Error) => void) => {
+		callback?.();
+		return true;
+	});
+}
+
+class FakeRpcChild extends EventEmitter {
+	public readonly pid = 1234;
+	public exitCode: number | null = null;
+	public signalCode: NodeJS.Signals | null = null;
+	public readonly stdin = new FakeStream();
+	public readonly stdout = new FakeStream();
+	public readonly stderr = new FakeStream();
+	public readonly kill = vi.fn(() => {
+		queueMicrotask(() => {
+			this.signalCode = "SIGTERM";
+			this.emit("exit", null, "SIGTERM");
+			this.emit("close", null, "SIGTERM");
+		});
+		return true;
+	});
+}
+
 describe("SumoRpcClient", () => {
+	it("uses a pre-spawned child without calling spawn again", async () => {
+		const child = new FakeRpcChild();
+		vi.mocked(spawn).mockClear();
+		const client = new SumoRpcClient({
+			command: "unused",
+			args: [],
+			preSpawnedChild: child as never,
+		});
+
+		await client.start();
+
+		expect(spawn).not.toHaveBeenCalled();
+		expect(client.pid).toBe(child.pid);
+		await client.stop();
+	});
+
+	it("does not resolve deliberate stop until child stdio closes", async () => {
+		const child = new FakeRpcChild();
+		child.kill.mockImplementation(() => {
+			queueMicrotask(() => {
+				child.signalCode = "SIGTERM";
+				child.emit("exit", null, "SIGTERM");
+			});
+			return true;
+		});
+		const client = new SumoRpcClient({ command: "unused", args: [], preSpawnedChild: child as never });
+		await client.start();
+
+		let stopped = false;
+		const stopping = client.stop().then(() => { stopped = true; });
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		expect(stopped).toBe(false);
+		child.emit("close", null, "SIGTERM");
+		await stopping;
+		expect(stopped).toBe(true);
+	});
+
+	it("delivers a buffered success response between deliberate exit and stdio close", async () => {
+		const child = new FakeRpcChild();
+		const client = new SumoRpcClient({ command: "unused", args: [], preSpawnedChild: child as never });
+		await client.start();
+		const response = client.send({ type: "get_state" });
+		const request = JSON.parse(String(child.stdin.write.mock.calls.at(-1)?.[0])) as { id: string };
+		child.kill.mockImplementation(() => {
+			queueMicrotask(() => {
+				child.signalCode = "SIGTERM";
+				child.emit("exit", null, "SIGTERM");
+				child.stdout.emit("data", `${JSON.stringify({
+					type: "response",
+					id: request.id,
+					command: "get_state",
+					success: true,
+					data: { sessionId: "final-session" },
+				})}\n`);
+				child.emit("close", null, "SIGTERM");
+			});
+			return true;
+		});
+
+		const stopping = client.stop();
+		await expect(response).resolves.toMatchObject({ success: true, data: { sessionId: "final-session" } });
+		await stopping;
+	});
+
+	it("transfers ownership after lifecycle listeners attach but before startup grace resolves", async () => {
+		const child = new FakeRpcChild();
+		const client = new SumoRpcClient({ command: "unused", args: [], preSpawnedChild: child as never });
+		const onAdopted = vi.fn(() => ({
+			exitListeners: child.listenerCount("exit"),
+			errorListeners: child.listenerCount("error"),
+		}));
+
+		let resolved = false;
+		const started = client.start(onAdopted).then(() => { resolved = true; });
+		expect(onAdopted).toHaveBeenCalledOnce();
+		expect(onAdopted.mock.results[0]?.value).toEqual({ exitListeners: 1, errorListeners: 1 });
+		expect(resolved).toBe(false);
+		await started;
+		await client.stop();
+	});
+
+	it("reports a pre-spawn error captured before host adoption", async () => {
+		const child = new FakeRpcChild();
+		(child as unknown as Record<PropertyKey, unknown>)[Symbol.for("sumocode.rpc.preSpawnError")] = new Error("pi executable disappeared");
+		const client = new SumoRpcClient({
+			command: "unused",
+			args: [],
+			preSpawnedChild: child as never,
+		});
+
+		await expect(client.start()).rejects.toThrow("pi executable disappeared");
+		expect(client.pid).toBeUndefined();
+	});
+
+	it("reports a pre-spawned child that exited before host adoption", async () => {
+		const child = new FakeRpcChild();
+		child.exitCode = 2;
+		const client = new SumoRpcClient({
+			command: "unused",
+			args: [],
+			preSpawnedChild: child as never,
+		});
+
+		await expect(client.start()).rejects.toMatchObject({
+			message: expect.stringContaining("before host adoption code=2"),
+			code: 2,
+		});
+		expect(client.pid).toBeUndefined();
+	});
+
 	it("correlates JSONL responses by request id while streaming events", async () => {
 		const script = `
 			const readline = require("node:readline");

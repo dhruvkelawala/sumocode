@@ -123,8 +123,23 @@ describe("readGitBranch", () => {
 		expect(calls[0]).toEqual({
 			file: "git",
 			args: ["branch", "--show-current"],
-			options: expect.objectContaining({ cwd: "/repo/worktree", timeout: 2000, killSignal: "SIGKILL" }),
+			options: expect.objectContaining({ cwd: "/repo/worktree", killSignal: "SIGKILL", signal: expect.any(AbortSignal) }),
 		});
+	});
+
+	it("unrefs the git child and its stdio pipes so a stalled read never blocks exit", async () => {
+		const unref = vi.fn();
+		const stdoutUnref = vi.fn();
+		const stderrUnref = vi.fn();
+		const execFileFn = ((_file: string, _args: readonly string[], _options: ExecFileOptions, callback: ExecFileCallback): ChildProcess => {
+			callback(null, "main\n", "");
+			return { unref, stdout: { unref: stdoutUnref }, stderr: { unref: stderrUnref } } as unknown as ChildProcess;
+		}) as unknown as ExecFileFn;
+
+		await expect(readGitBranch("/repo/worktree", execFileFn)).resolves.toBe("main");
+		expect(unref).toHaveBeenCalledTimes(1);
+		expect(stdoutUnref).toHaveBeenCalledTimes(1);
+		expect(stderrUnref).toHaveBeenCalledTimes(1);
 	});
 
 	it("resolves undefined instead of throwing when git exec callbacks report errors", async () => {
@@ -142,7 +157,7 @@ describe("readGitBranch", () => {
 		]);
 		for (const call of calls) {
 			expect(call.file).toBe("git");
-			expect(call.options).toEqual(expect.objectContaining({ cwd: "/repo/worktree", timeout: 2000, killSignal: "SIGKILL" }));
+			expect(call.options).toEqual(expect.objectContaining({ cwd: "/repo/worktree", killSignal: "SIGKILL", signal: expect.any(AbortSignal) }));
 		}
 	});
 });

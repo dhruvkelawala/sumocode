@@ -1,4 +1,4 @@
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import xterm from "@xterm/headless";
@@ -14,6 +14,18 @@ afterEach(() => {
 	app?.cleanup();
 	app = undefined;
 });
+
+async function waitForChromeCacheWrite(path: string, after = -1): Promise<number> {
+	for (let attempt = 0; attempt < 100; attempt += 1) {
+		try {
+			const cache = JSON.parse(await readFile(path, "utf8")) as { byCwd?: Record<string, { savedAt?: number }> };
+			const savedAt = Object.values(cache.byCwd ?? {})[0]?.savedAt;
+			if (typeof savedAt === "number" && savedAt > after) return savedAt;
+		} catch {}
+		await new Promise((resolve) => setTimeout(resolve, 20));
+	}
+	throw new Error(`timed out waiting for chrome cache write after ${after}`);
+}
 
 async function replayTerminalRows(output: string, cols: number, rows: number): Promise<string[]> {
 	const term = new xterm.Terminal({ cols, rows, allowProposedApi: true, scrollback: 0 });
@@ -49,9 +61,12 @@ describe("sumocode RPC session switching", () => {
 
 		await app.waitForOutput(PI_BOOT_SEQUENCE, 15_000);
 		await app.waitForOutput("Original Session", 15_000);
+		const cachePath = join(agentDir, "state", "sumocode", "chrome", "v1", "chrome-cache.json");
+		const initialCacheWrite = await waitForChromeCacheWrite(cachePath);
 
 		app.sendInput(`/new${CSI_U_ENTER}`);
 		await app.waitForOutput("new session", 5_000);
+		await waitForChromeCacheWrite(cachePath, initialCacheWrite);
 
 		const finalScreen = (await replayTerminalRows(app.getOutput(), cols, rows)).join("\n");
 

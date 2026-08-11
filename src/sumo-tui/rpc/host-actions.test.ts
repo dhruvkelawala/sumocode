@@ -81,12 +81,12 @@ class FakeControls {
 
 	public async setModel(provider: string, modelId: string): Promise<Record<string, unknown>> {
 		this.calls.push(`setModel:${provider}/${modelId}`);
-		return {};
+		return { modelLabel: `${provider}/${modelId}` };
 	}
 
 	public async setThinkingLevel(level: RpcSessionState["thinkingLevel"]): Promise<Record<string, unknown>> {
 		this.calls.push(`setThinking:${level}`);
-		return {};
+		return { thinkingLevel: level };
 	}
 
 	public async getAvailableThinkingLevels(): Promise<RpcSessionState["thinkingLevel"][]> {
@@ -466,7 +466,11 @@ describe("RpcHostActions", () => {
 			"compact:keep branch summary",
 			"setAutoCompaction:false",
 		]);
-		expect(stateChanges).toEqual([undefined, undefined, undefined]);
+		expect(stateChanges).toEqual([
+			{ modelLabel: "openai/gpt-5" },
+			{ thinkingLevel: "high" },
+			undefined,
+		]);
 		expect(notifications).toContainEqual({ message: "auto compaction disabled", level: "info" });
 	});
 

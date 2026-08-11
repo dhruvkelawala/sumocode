@@ -667,8 +667,8 @@ export class RpcHostActions {
 			notify(this.notifications, `unknown model: ${selected}`, "warning");
 			return;
 		}
-		await this.controls.setModel(parsed.provider, parsed.id);
-		this.onStateChange();
+		const state = await this.controls.setModel(parsed.provider, parsed.id);
+		this.onStateChange(state);
 	}
 
 	public async openThinkingSelector(): Promise<void> {
@@ -1221,8 +1221,8 @@ export class RpcHostActions {
 			notify(this.notifications, "usage: /model <provider/model>", "warning");
 			return;
 		}
-		await this.controls.setModel(parsed.provider, parsed.id);
-		this.onStateChange();
+		const state = await this.controls.setModel(parsed.provider, parsed.id);
+		this.onStateChange(state);
 		notify(this.notifications, `model: ${parsed.provider}/${parsed.id}`, "info");
 	}
 
@@ -1233,8 +1233,8 @@ export class RpcHostActions {
 			notify(this.notifications, `unknown thinking level: ${value}`, "warning");
 			return;
 		}
-		await this.controls.setThinkingLevel(level);
-		this.onStateChange();
+		const state = await this.controls.setThinkingLevel(level);
+		this.onStateChange(state);
 		notify(this.notifications, `thinking: ${level}`, "info");
 	}
 

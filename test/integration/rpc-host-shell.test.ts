@@ -1,4 +1,4 @@
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -69,6 +69,22 @@ describe("sumocode RPC host shell integration", () => {
 		expect(activeState.altscreenActive).toBe(true);
 		expect(activeState.mouseSGRActive).toBe(true);
 		expect(activeState.cleanupSequenceSeen).toBe(false);
+	}, 30_000);
+
+	it("exits promptly when startup hydration is stalled", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "sumocode-rpc-stalled-hydration-"));
+		const piBin = join(directory, "stalled-pi");
+		await writeFile(piBin, "#!/usr/bin/env node\nprocess.stdin.resume();\nsetInterval(() => {}, 1000);\n", { mode: 0o700 });
+		app = spawnSumocodePty({
+			env: { PI_BIN: piBin, PI_CODING_AGENT_DIR: join(directory, "agent") },
+			cols: 100,
+			rows: 30,
+		});
+
+		await app.waitForOutput(PI_BOOT_SEQUENCE, 15_000);
+		app.sendInput("\u0004");
+		await app.waitForOutput(TERMINAL_CLEANUP_SEQUENCE, 2_000);
+		expect(app.getCurrentTerminalState().altscreenActive).toBe(false);
 	}, 30_000);
 
 	it("accepts editor input while startup hydration is pending", async () => {

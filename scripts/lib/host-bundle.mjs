@@ -85,7 +85,15 @@ export async function hostInputManifestIsFresh(root, manifest) {
 	if (inputs.length === 0 || inputs.some((input) => typeof input !== "string") || new Set(inputs).size !== inputs.length) return false;
 	if ([...inputs].sort().some((input, index) => input !== inputs[index])) return false;
 	try {
-		return await hostInputsHash(root, inputs) === manifest.hash;
+		// Recheck the inputs across two full scans: a source file changing mid-scan
+		// (concurrent save/pull/checkout) can otherwise produce a hash that still
+		// matches the old manifest. Requiring two identical scans that both match
+		// the manifest rejects a bundle that is stale relative to the live checkout,
+		// falling back to source — the safe direction on any ambiguity.
+		const first = await hostInputsHash(root, inputs);
+		if (first !== manifest.hash) return false;
+		const second = await hostInputsHash(root, inputs);
+		return second === manifest.hash;
 	} catch {
 		return false;
 	}

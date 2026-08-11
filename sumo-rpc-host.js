@@ -197,11 +197,16 @@ try {
 	}
 	if (bundleFresh) {
 		try {
-			mod = await import(pathToFileURL(bundlePath).href);
+			const bundledModule = await import(pathToFileURL(bundlePath).href);
+			if (typeof bundledModule.main !== "function") {
+				throw new Error("host bundle does not export main()");
+			}
+			mod = bundledModule;
 		} catch (error) {
 			if (forceBundle) {
 				throw new Error(`[sumocode] forced host bundle failed to import: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
 			}
+			process.stderr.write(`[sumocode] host bundle unusable — using source: ${error instanceof Error ? error.message : String(error)}\n`);
 			mod = await importSourceHost();
 		}
 	} else {

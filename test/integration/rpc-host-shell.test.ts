@@ -126,6 +126,20 @@ describe("sumocode RPC host shell integration", () => {
 		}
 	}, 30_000);
 
+	it("falls back to source when a fresh host bundle omits main", async () => {
+		const bundlePath = join(process.cwd(), "dist/host/sumo-rpc-host.bundle.mjs");
+		const original = await readFile(bundlePath);
+		await writeFile(bundlePath, "export const incomplete = true;\n");
+		try {
+			const agentDir = await mkdtemp(join(tmpdir(), "sumocode-rpc-incomplete-bundle-agent-"));
+			app = spawnSumocodePty({ env: { PI_CODING_AGENT_DIR: agentDir }, cols: 100, rows: 30 });
+			await app.waitForOutput("host bundle does not export main", 5_000);
+			await app.waitForOutput(PI_BOOT_SEQUENCE, 15_000);
+		} finally {
+			await writeFile(bundlePath, original);
+		}
+	}, 30_000);
+
 	it("boots the retained host through the jiti fallback", async () => {
 		await bootWithHostMode("0");
 	}, 30_000);

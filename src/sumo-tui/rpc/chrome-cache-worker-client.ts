@@ -57,19 +57,24 @@ export async function drainChromeCacheForShutdown(
 	graceMs = CHROME_CACHE_SHUTDOWN_GRACE_MS,
 ): Promise<"drained" | "timed-out"> {
 	let timer: ReturnType<typeof setTimeout> | undefined;
-	const drained = await Promise.race([
-		drain().then(() => true, () => true),
+	const completeDrainAndDispose = (async () => {
+		try {
+			await drain();
+		} finally {
+			await dispose();
+		}
+	})().then(() => true, () => true);
+	const completed = await Promise.race([
+		completeDrainAndDispose,
 		new Promise<false>((resolve) => {
 			timer = setTimeout(() => resolve(false), Math.max(0, graceMs));
 		}),
 	]);
 	if (timer) clearTimeout(timer);
-	if (drained) {
-		await dispose();
-		return "drained";
-	}
+	if (completed) return "drained";
 	// Worker is unrefed. Trigger termination but do not await a native syscall
-	// that already exceeded the advisory shutdown budget.
+	// that already exceeded the advisory shutdown budget. If disposal itself
+	// was the stalled phase, the idempotent second call returns immediately.
 	void dispose();
 	return "timed-out";
 }
@@ -95,17 +100,25 @@ export class ChromeCacheWorkerClient {
 	public constructor(private readonly options: ChromeCacheWorkerClientOptions) {}
 
 	public async read(cwd: string): Promise<CachedChrome | undefined> {
-		const value = await this.request({ operation: "read", cwd });
-		if (typeof value !== "object" || value === null) return undefined;
-		const record = value as Record<string, unknown>;
-		return {
-			...(typeof record.modelLabel === "string" ? { modelLabel: record.modelLabel } : {}),
-			...(typeof record.thinkingLevel === "string" ? { thinkingLevel: record.thinkingLevel } : {}),
-		};
+		try {
+			const value = await this.request({ operation: "read", cwd });
+			if (typeof value !== "object" || value === null) return undefined;
+			const record = value as Record<string, unknown>;
+			return {
+				...(typeof record.modelLabel === "string" ? { modelLabel: record.modelLabel } : {}),
+				...(typeof record.thinkingLevel === "string" ? { thinkingLevel: record.thinkingLevel } : {}),
+			};
+		} catch {
+			return undefined;
+		}
 	}
 
 	public async write(cwd: string, chrome: CachedChrome): Promise<void> {
-		await this.request({ operation: "write", cwd, chrome });
+		try {
+			await this.request({ operation: "write", cwd, chrome });
+		} catch {
+			// Cache persistence is advisory; worker startup/resource failure is inert.
+		}
 	}
 
 	public async dispose(): Promise<void> {

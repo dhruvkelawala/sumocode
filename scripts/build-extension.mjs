@@ -71,11 +71,12 @@ for (const asset of EXTENSION_ASSETS) {
 	await atomicCopy(resolve(root, asset.source), resolve(outDir, asset.output));
 }
 
+// The manifest commit point, written last: it binds the input graph hash and a
+// hash of this build's published outputs into ONE unit, so a partial update
+// cannot leave a matching manifest beside a stale bundle. Runtime rejects both
+// stale inputs and a mismatched artifact.
 const outputsHash = await extensionOutputsHash(root);
-await atomicWrite(resolve(outDir, ".outputs-hash"), `${outputsHash}\n`);
-// The manifest commit point: runtime re-hashes this recorded set, so modified,
-// renamed, and deleted inputs all invalidate an otherwise newer artifact.
-await atomicWrite(manifestPath, `${JSON.stringify(inputManifest, null, 2)}\n`);
+await atomicWrite(manifestPath, `${JSON.stringify({ ...inputManifest, outputsHash }, null, 2)}\n`);
 
 console.log(`[sumocode] extension bundle: ${bundlePath}`);
 console.log(`[sumocode] extension inputs: ${inputManifest.inputs.length} files (${inputManifest.hash.slice(0, 12)})`);

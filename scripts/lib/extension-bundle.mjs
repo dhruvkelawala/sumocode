@@ -12,7 +12,7 @@ async function inputStatSignature(root, inputs) {
 }
 
 export const EXTENSION_INPUT_MANIFEST_OUTPUT = ".inputs.json";
-export const EXTENSION_INPUT_MANIFEST_VERSION = 1;
+export const EXTENSION_INPUT_MANIFEST_VERSION = 2;
 
 export const EXTENSION_ASSETS = [
 	{ source: "src/assets/sumo-face.ans", output: "assets/sumo-face.ans" },

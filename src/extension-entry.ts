@@ -4,12 +4,11 @@ import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { importExtensionEntry } from "./extension-entry-loader.js";
 
-const INPUT_MANIFEST_VERSION = 1;
+const INPUT_MANIFEST_VERSION = 2;
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const sourcePath = join(root, "src", "extension.ts");
 const bundlePath = join(root, "dist", "extension", "sumocode-extension.bundle.mjs");
 const inputManifestPath = join(root, "dist", "extension", ".inputs.json");
-const outputsHashPath = join(root, "dist", "extension", ".outputs-hash");
 const extensionOutputs = [
 	"sumocode-extension.bundle.mjs",
 	"sumocode-extension.bundle.mjs.map",
@@ -21,6 +20,7 @@ interface ExtensionInputManifest {
 	version: number;
 	inputs: string[];
 	hash: string;
+	outputsHash: string;
 }
 
 function normalizeHashPath(path: string): string {
@@ -78,11 +78,15 @@ function extensionOutputsHash(): string {
 }
 
 function hasFreshBundle(): boolean {
-	if (!existsSync(bundlePath) || !existsSync(inputManifestPath) || !existsSync(outputsHashPath)) return false;
+	if (!existsSync(bundlePath) || !existsSync(inputManifestPath)) return false;
 	try {
 		const manifest = JSON.parse(readFileSync(inputManifestPath, "utf8")) as ExtensionInputManifest;
+		// The output digest lives INSIDE the input manifest, so a partial update
+		// (merge/cherry-pick) cannot leave a matching manifest beside a stale
+		// bundle: both the source graph and the published bytes are one unit.
 		return inputManifestIsFresh(manifest)
-			&& readFileSync(outputsHashPath, "utf8").trim() === extensionOutputsHash();
+			&& typeof manifest.outputsHash === "string"
+			&& manifest.outputsHash === extensionOutputsHash();
 	} catch {
 		return false;
 	}

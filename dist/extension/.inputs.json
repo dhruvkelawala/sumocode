@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "inputs": [
     "package.json",
     "scripts/build-extension.mjs",
@@ -120,5 +120,6 @@
     "src/working-indicator.ts",
     "tsconfig.json"
   ],
-  "hash": "2cbdda5ce1ab2f6c6bd1f3bb01d3cf74e75564bb0fd3d30fb8e98f5155dfd914"
+  "hash": "9f8955f259b6df114e2ffa9216e2644ad90b10fd9aeb4a35a2181ba05ca5e482",
+  "outputsHash": "812411ff5af35f0eda7391fd7c3454a68fad0c9522a785e02622e5dce07e64de"
 }

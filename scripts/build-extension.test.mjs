@@ -33,12 +33,12 @@ describe("extension bundle freshness", () => {
 		for (const asset of EXTENSION_ASSETS) expect(existsSync(resolve(outDir, asset.output))).toBe(true);
 
 		const manifest = await readManifest();
-		const [inputsFresh, actualOutputs, expectedOutputs] = await Promise.all([
+		const [inputsFresh, expectedOutputs] = await Promise.all([
 			extensionInputManifestIsFresh(root, manifest),
-			readFile(resolve(outDir, ".outputs-hash"), "utf8").then((text) => text.trim()),
 			extensionOutputsHash(root),
 		]);
-		if (!inputsFresh || actualOutputs !== expectedOutputs) {
+		// The output digest is bound into the manifest, not a separate sidecar.
+		if (!inputsFresh || manifest.outputsHash !== expectedOutputs) {
 			throw new Error("bundle out of date or corrupt — run pnpm build:extension");
 		}
 	});

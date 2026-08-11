@@ -127,6 +127,17 @@ describe("readGitBranch", () => {
 		});
 	});
 
+	it("unrefs the git child so a stalled optional read never blocks process exit", async () => {
+		const unref = vi.fn();
+		const execFileFn = ((_file: string, _args: readonly string[], _options: ExecFileOptions, callback: ExecFileCallback): ChildProcess => {
+			callback(null, "main\n", "");
+			return { unref } as unknown as ChildProcess;
+		}) as unknown as ExecFileFn;
+
+		await expect(readGitBranch("/repo/worktree", execFileFn)).resolves.toBe("main");
+		expect(unref).toHaveBeenCalledTimes(1);
+	});
+
 	it("resolves undefined instead of throwing when git exec callbacks report errors", async () => {
 		const calls: ExecFileCall[] = [];
 		const execFileFn = fakeExecFile((call, callback) => {

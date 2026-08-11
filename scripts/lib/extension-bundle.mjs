@@ -1,6 +1,9 @@
 import { createHash } from "node:crypto";
-import { readdir, readFile } from "node:fs/promises";
-import { join, relative, resolve } from "node:path";
+import { readFile } from "node:fs/promises";
+import { isAbsolute, relative, resolve } from "node:path";
+
+export const EXTENSION_INPUT_MANIFEST_OUTPUT = ".inputs.json";
+export const EXTENSION_INPUT_MANIFEST_VERSION = 1;
 
 export const EXTENSION_ASSETS = [
 	{ source: "src/assets/sumo-face.ans", output: "assets/sumo-face.ans" },
@@ -25,34 +28,30 @@ export function normalizeHashPath(path) {
 	return path.replaceAll("\\", "/");
 }
 
-async function sourceTypeScriptFiles(root) {
-	const files = [];
-	const sourceRoot = resolve(root, "src");
-	const spikeRoot = resolve(sourceRoot, "spike");
-	async function visit(directory) {
-		for (const entry of await readdir(directory, { withFileTypes: true })) {
-			const path = join(directory, entry.name);
-			if (entry.isDirectory()) {
-				if (path === spikeRoot) continue;
-				await visit(path);
-				continue;
-			}
-			if (entry.name.endsWith(".ts") && !entry.name.endsWith(".test.ts")) files.push(path);
-		}
+function rootRelative(root, input) {
+	const absolute = resolve(root, input);
+	const path = normalizeHashPath(relative(root, absolute));
+	if (path === ".." || path.startsWith("../") || isAbsolute(path)) {
+		throw new Error(`Extension bundle input escapes package root: ${input}`);
 	}
-	await visit(sourceRoot);
-	return files;
+	return path;
 }
 
-export async function extensionInputFiles(root) {
-	const sourceFiles = await sourceTypeScriptFiles(root);
-	const assetFiles = EXTENSION_ASSETS.map(({ source }) => resolve(root, source));
-	const recipeFiles = EXTENSION_RECIPE_INPUTS.map((input) => resolve(root, input));
-	return [...sourceFiles, ...assetFiles, ...recipeFiles].sort((left, right) => {
-		const leftPath = normalizeHashPath(relative(root, left));
-		const rightPath = normalizeHashPath(relative(root, right));
-		return leftPath < rightPath ? -1 : leftPath > rightPath ? 1 : 0;
-	});
+/**
+ * Derive the freshness input set from esbuild's actual dependency graph rather
+ * than a broad src/ walk, so host-only production files that never reach the
+ * extension artifact do not force regeneration or reject a valid bundle. The
+ * recipe and copied assets are added because they change the output without
+ * appearing in the entry's import graph.
+ */
+export function extensionInputFilesFromGraph(root, bundledInputs) {
+	const inputs = new Set([...EXTENSION_RECIPE_INPUTS, ...EXTENSION_ASSETS.map(({ source }) => source)]);
+	for (const input of bundledInputs) {
+		const normalized = normalizeHashPath(input);
+		if (normalized.startsWith("node_modules/") || normalized.includes("/node_modules/")) continue;
+		inputs.add(rootRelative(root, input));
+	}
+	return [...inputs].sort();
 }
 
 async function contentHash(base, files) {
@@ -66,8 +65,55 @@ async function contentHash(base, files) {
 	return hash.digest("hex");
 }
 
-export async function extensionInputsHash(root) {
-	return contentHash(root, await extensionInputFiles(root));
+export async function extensionInputsHashFromManifest(root, inputs) {
+	const hash = createHash("sha256");
+	for (const input of inputs) {
+		if (typeof input !== "string" || input.length === 0 || isAbsolute(input)) {
+			throw new Error("Invalid extension bundle input path");
+		}
+		const path = rootRelative(root, input);
+		if (path !== normalizeHashPath(input)) throw new Error(`Non-canonical extension bundle input: ${input}`);
+		hash.update(path);
+		hash.update("\0");
+		hash.update(await readFile(resolve(root, input)));
+		hash.update("\0");
+	}
+	return hash.digest("hex");
+}
+
+export async function createExtensionInputManifest(root, bundledInputs) {
+	const inputs = extensionInputFilesFromGraph(root, bundledInputs);
+	return {
+		version: EXTENSION_INPUT_MANIFEST_VERSION,
+		inputs,
+		hash: await extensionInputsHashFromManifest(root, inputs),
+	};
+}
+
+export function extensionInputManifestsMatch(before, after) {
+	return before.version === EXTENSION_INPUT_MANIFEST_VERSION
+		&& after.version === EXTENSION_INPUT_MANIFEST_VERSION
+		&& before.hash === after.hash
+		&& before.inputs.length === after.inputs.length
+		&& before.inputs.every((input, index) => input === after.inputs[index]);
+}
+
+export async function extensionInputManifestIsFresh(root, manifest) {
+	if (
+		typeof manifest !== "object"
+		|| manifest === null
+		|| manifest.version !== EXTENSION_INPUT_MANIFEST_VERSION
+		|| !Array.isArray(manifest.inputs)
+		|| typeof manifest.hash !== "string"
+	) return false;
+	const inputs = manifest.inputs;
+	if (inputs.length === 0 || inputs.some((input) => typeof input !== "string") || new Set(inputs).size !== inputs.length) return false;
+	if ([...inputs].sort().some((input, index) => input !== inputs[index])) return false;
+	try {
+		return await extensionInputsHashFromManifest(root, inputs) === manifest.hash;
+	} catch {
+		return false;
+	}
 }
 
 export async function extensionOutputsHash(root) {

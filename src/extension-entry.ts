@@ -1,28 +1,27 @@
 import { createHash } from "node:crypto";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { dirname, join, relative, resolve } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { importExtensionEntry } from "./extension-entry-loader.js";
 
+const INPUT_MANIFEST_VERSION = 1;
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const sourcePath = join(root, "src", "extension.ts");
 const bundlePath = join(root, "dist", "extension", "sumocode-extension.bundle.mjs");
-const inputsHashPath = join(root, "dist", "extension", ".inputs-hash");
+const inputManifestPath = join(root, "dist", "extension", ".inputs.json");
 const outputsHashPath = join(root, "dist", "extension", ".outputs-hash");
-const extensionInputs = [
-	"src/assets/sumo-face.ans",
-	"src/background-tasks/bounded-terminal-runner.mjs",
-	"scripts/build-extension.mjs",
-	"scripts/lib/extension-bundle.mjs",
-	"tsconfig.json",
-	"package.json",
-];
 const extensionOutputs = [
 	"sumocode-extension.bundle.mjs",
 	"sumocode-extension.bundle.mjs.map",
 	"assets/sumo-face.ans",
 	"bounded-terminal-runner.mjs",
 ];
+
+interface ExtensionInputManifest {
+	version: number;
+	inputs: string[];
+	hash: string;
+}
 
 function normalizeHashPath(path: string): string {
 	return path.replaceAll("\\", "/");
@@ -39,30 +38,28 @@ function contentHash(base: string, files: readonly string[]): string {
 	return hash.digest("hex");
 }
 
-function extensionInputsHash(): string {
+// Re-hash exactly the recorded input set (esbuild's dependency graph plus the
+// recipe and copied assets). Modified, renamed, and deleted inputs all change
+// the recomputed hash, so a stale or mixed-checkout bundle is rejected.
+function inputManifestIsFresh(manifest: ExtensionInputManifest): boolean {
+	if (
+		manifest.version !== INPUT_MANIFEST_VERSION
+		|| !Array.isArray(manifest.inputs)
+		|| manifest.inputs.length === 0
+		|| typeof manifest.hash !== "string"
+	) return false;
+	const inputs = manifest.inputs;
+	if (inputs.some((input) => typeof input !== "string") || new Set(inputs).size !== inputs.length) return false;
+	if ([...inputs].sort().some((input, index) => input !== inputs[index])) return false;
 	const files: string[] = [];
-	const sourceRoot = join(root, "src");
-	const spikeRoot = join(sourceRoot, "spike");
-	function visit(directory: string): void {
-		for (const entry of readdirSync(directory, { withFileTypes: true })) {
-			const path = join(directory, entry.name);
-			if (entry.isDirectory()) {
-				if (path === spikeRoot) continue;
-				visit(path);
-			} else if (entry.name.endsWith(".ts") && !entry.name.endsWith(".test.ts")) {
-				files.push(path);
-			}
-		}
+	for (const input of inputs) {
+		if (input.length === 0 || isAbsolute(input)) return false;
+		const absolute = resolve(root, input);
+		const path = normalizeHashPath(relative(root, absolute));
+		if (path === ".." || path.startsWith("../") || isAbsolute(path) || path !== normalizeHashPath(input)) return false;
+		files.push(absolute);
 	}
-	visit(sourceRoot);
-	files.push(...extensionInputs.map((input) => resolve(root, input)));
-	files.sort((left, right) => {
-		const leftPath = normalizeHashPath(relative(root, left));
-		const rightPath = normalizeHashPath(relative(root, right));
-		return leftPath < rightPath ? -1 : leftPath > rightPath ? 1 : 0;
-	});
-
-	return contentHash(root, files);
+	return contentHash(root, files) === manifest.hash;
 }
 
 function extensionOutputsHash(): string {
@@ -71,9 +68,10 @@ function extensionOutputsHash(): string {
 }
 
 function hasFreshBundle(): boolean {
-	if (!existsSync(bundlePath) || !existsSync(inputsHashPath) || !existsSync(outputsHashPath)) return false;
+	if (!existsSync(bundlePath) || !existsSync(inputManifestPath) || !existsSync(outputsHashPath)) return false;
 	try {
-		return readFileSync(inputsHashPath, "utf8").trim() === extensionInputsHash()
+		const manifest = JSON.parse(readFileSync(inputManifestPath, "utf8")) as ExtensionInputManifest;
+		return inputManifestIsFresh(manifest)
 			&& readFileSync(outputsHashPath, "utf8").trim() === extensionOutputsHash();
 	} catch {
 		return false;

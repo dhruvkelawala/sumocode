@@ -19,6 +19,9 @@ describe("buildSpawnEnv", () => {
 				[retiredLegacyKey]: "1",
 				SUMO_RPC: "1",
 				SUMOCODE_RPC_CHILD: "1",
+				SUMOCODE_ROOT_DIR: "/tmp/untrusted-root",
+				SUMOCODE_PROJECT_CWD: "/tmp/stale-project",
+				SUMOCODE_LAUNCHER: "/tmp/stale-launcher",
 				SUMOCODE_REDUCED_MOTION: "1",
 				SUMOCODE_DEBUG_BRANCH: "feature/x",
 				SUMOCODE_DEBUG_COMMIT: "abc123",
@@ -34,6 +37,9 @@ describe("buildSpawnEnv", () => {
 		expect(env[retiredLegacyKey]).toBeUndefined();
 		expect(env.SUMO_RPC).toBeUndefined();
 		expect(env.SUMOCODE_RPC_CHILD).toBeUndefined();
+		expect(env.SUMOCODE_ROOT_DIR).toBeUndefined();
+		expect(env.SUMOCODE_PROJECT_CWD).toBeUndefined();
+		expect(env.SUMOCODE_LAUNCHER).toBeUndefined();
 		expect(env.SUMOCODE_REDUCED_MOTION).toBeUndefined();
 		expect(env.SUMOCODE_DEBUG_BRANCH).toBeUndefined();
 		expect(env.SUMOCODE_DEBUG_COMMIT).toBeUndefined();

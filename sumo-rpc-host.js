@@ -1,10 +1,13 @@
 import { spawn } from "node:child_process";
 import { readFile, readdir, stat } from "node:fs/promises";
-import { resolve } from "node:path";
-import { pathToFileURL } from "node:url";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { buildChildSpawnPlan } from "./src/sumo-tui/rpc/spawn-child.mjs";
 
-const root = resolve(process.env.SUMOCODE_ROOT_DIR ?? process.cwd());
+// Executable host code belongs to this installed package, never the project
+// cwd. The launcher passes SUMOCODE_ROOT_DIR explicitly; direct/manual entry
+// invocation safely defaults to the directory containing this entry file.
+const root = resolve(process.env.SUMOCODE_ROOT_DIR ?? dirname(fileURLToPath(import.meta.url)));
 const bundlePath = resolve(root, "dist/host/sumo-rpc-host.bundle.mjs");
 const buildRecipePath = resolve(root, "scripts/build-host.mjs");
 const sourceFacePath = resolve(root, "src/assets/sumo-face.ans");
@@ -61,7 +64,7 @@ if (useBundle && bundleExists && !forceBundle && !bundleFresh) {
 // URL is dist/host/, so build-host.mjs copies spawn-child.mjs beside it.
 const preSpawnedChild = (() => {
 	if (process.stdout.isTTY !== true) return undefined;
-	const plan = buildChildSpawnPlan(process.env, process.argv.slice(2));
+	const plan = buildChildSpawnPlan({ ...process.env, SUMOCODE_ROOT_DIR: root }, process.argv.slice(2));
 	if (!plan) return undefined;
 	try {
 		const child = spawn(plan.command, [...plan.args], {

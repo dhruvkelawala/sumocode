@@ -25,6 +25,23 @@ describe("InitialHydrationActionGate", () => {
 		expect(other).toHaveBeenCalledOnce();
 	});
 
+	it("keeps only the latest inverse intent under a shared key", async () => {
+		let release!: () => void;
+		const hydration = new Promise<void>((resolve) => { release = resolve; });
+		const gate = new InitialHydrationActionGate(hydration);
+		const followUp = vi.fn();
+		const dequeue = vi.fn();
+
+		gate.run("message-queue", followUp);
+		gate.run("message-queue", dequeue);
+		release();
+		await hydration;
+		await Promise.resolve();
+
+		expect(followUp).not.toHaveBeenCalled();
+		expect(dequeue).toHaveBeenCalledOnce();
+	});
+
 	it("runs new actions immediately after hydration", async () => {
 		const gate = new InitialHydrationActionGate(Promise.resolve());
 		await Promise.resolve();

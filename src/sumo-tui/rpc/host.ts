@@ -43,6 +43,7 @@ import { logDiagnostic } from "../runtime/diagnostics.js";
 
 const DEFERRED_SELECTOR_ACTION_KEY = "selector-open";
 const DEFERRED_MODEL_CYCLE_ACTION_KEY = "model-cycle";
+const DEFERRED_MESSAGE_QUEUE_ACTION_KEY = "message-queue";
 
 export interface RpcHostMainOptions {
 	readonly argv?: readonly string[];
@@ -1115,8 +1116,8 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		}),
 		onThinkingCycle: () => hydrationActionGate.run("thinking-cycle", handleThinkingCycle),
 		onToolsExpandToggle: handleToolsExpandToggle,
-		onMessageFollowUp: () => hydrationActionGate.run("message-follow-up", handleMessageFollowUp),
-		onMessageDequeue: () => hydrationActionGate.run("message-dequeue", handleMessageDequeue),
+		onMessageFollowUp: () => hydrationActionGate.run(DEFERRED_MESSAGE_QUEUE_ACTION_KEY, handleMessageFollowUp),
+		onMessageDequeue: () => hydrationActionGate.run(DEFERRED_MESSAGE_QUEUE_ACTION_KEY, handleMessageDequeue),
 		// app.theme.cycle (Shift+Ctrl+T / Alt+T): host-side — the child
 		// extension's pi.registerShortcut never receives keys in RPC mode.
 		// Same forward-reference pattern as onModelSelect above.

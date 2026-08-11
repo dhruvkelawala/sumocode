@@ -266,6 +266,40 @@ describe("sumocode RPC host shell integration", () => {
 		}
 	}, 30_000);
 
+	it("dispatches a queued prompt only after a deferred model cycle applies", async () => {
+		const logDir = await mkdtemp(join(tmpdir(), "sumocode-rpc-model-cycle-order-"));
+		const logPath = join(logDir, "commands.jsonl");
+		const piBin = await createRpcChildFixture("sumocode-rpc-model-cycle-child-", {
+			initialHydrationRace: true,
+			initialHydrationDelayMs: 2_500,
+		});
+		const agentDir = await mkdtemp(join(tmpdir(), "sumocode-rpc-model-cycle-agent-"));
+		app = spawnSumocodePty({
+			env: { PI_BIN: piBin, PI_CODING_AGENT_DIR: agentDir, SUMOCODE_RPC_FIXTURE_LOG: logPath },
+			cols: 100,
+			rows: 30,
+		});
+
+		// The splash editor accepts input before hydration completes; wait for it so
+		// the child stdin is reading, then act inside the 2.5s hydration window.
+		await app.waitForOutput(/CTRL\+\/[\s\S]*COMMANDS/, 15_000);
+		// Cycle the model (Ctrl+P, kitty encoding) then submit a prompt. The submit
+		// must wait for the deferred cycle's set_model to apply.
+		app.sendInput("\x1b[112;5u");
+		await delay(50);
+		app.sendInput(`hello world${CSI_U_ENTER}`);
+		await app.waitForOutput("fixture response complete: hello world", 15_000);
+
+		const log = (await readFile(logPath, "utf8")).trim().split("\n")
+			.map((line) => JSON.parse(line) as { type: string; provider?: string; modelId?: string; message?: string });
+		const setModelIndex = log.findIndex((command) => command.type === "set_model");
+		const promptIndex = log.findIndex((command) => command.type === "prompt" && command.message === "hello world");
+		expect(setModelIndex).toBeGreaterThanOrEqual(0);
+		expect(promptIndex).toBeGreaterThanOrEqual(0);
+		expect(setModelIndex).toBeLessThan(promptIndex);
+		expect(log[setModelIndex]).toMatchObject({ provider: "anthropic", modelId: "claude-opus-4" });
+	}, 30_000);
+
 	it.each(["SIGINT", "SIGTERM"] as const)("renders a retained Cathedral empty state and cleans up after %s", async (signal) => {
 		const agentDir = await mkdtemp(join(tmpdir(), "sumocode-rpc-agent-"));
 		app = spawnSumocodePty({ env: { PI_CODING_AGENT_DIR: agentDir }, cols: 100, rows: 30 });

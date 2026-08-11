@@ -871,6 +871,17 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 	const pushState = (state?: RpcHostChromeState): void => {
 		runtime?.update({ state: state ?? stateStore.getSnapshot() });
 	};
+	const pushStateAndCacheChrome = (state?: RpcHostChromeState): void => {
+		pushState(state);
+		// Controls invoke pushState optimistically before the child confirms a
+		// model/thinking change. Persist only callbacks carrying the successful
+		// authoritative response, never an optimistic or failed intermediate.
+		if (visualFixture || state === undefined) return;
+		writeCachedChrome(cwd, {
+			modelLabel: state.modelLabel,
+			thinkingLevel: state.thinkingLevel,
+		});
+	};
 	const treeNavigationOutcomeBroker = new InMemoryRpcTreeNavigationOutcomeBroker();
 	const controls = new RpcHostControls(client, stateStore, { onOptimisticChange: pushState, treeNavigationOutcomeBroker });
 	let stopHost: (code: number) => Promise<void> = async (code: number): Promise<void> => {
@@ -992,17 +1003,17 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 	const handleModelCycleForward = createModelCycleForwardHandler({
 		controls,
 		notifications,
-		onStateChange: pushState,
+		onStateChange: pushStateAndCacheChrome,
 	});
 	const handleModelCycleBackward = createModelCycleBackwardHandler({
 		controls,
 		notifications,
-		onStateChange: pushState,
+		onStateChange: pushStateAndCacheChrome,
 	});
 	const handleThinkingCycle = createThinkingCycleHandler({
 		controls,
 		notifications,
-		onStateChange: pushState,
+		onStateChange: pushStateAndCacheChrome,
 	});
 	const handleToolsExpandToggle = createToolsExpandToggleHandler({
 		toggleActivityExpansion: () => runtime?.toggleActivityExpansion(),
@@ -1419,7 +1430,7 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		inlineSelectors,
 		notifications,
 		editorText: editor,
-		onStateChange: pushState,
+		onStateChange: pushStateAndCacheChrome,
 		onRenderRequest: requestRender,
 		onExitRequest: (code) => requestHostExit(code),
 		rehydrateTranscript,
@@ -1438,6 +1449,7 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 	let statsInFlight = false;
 	let stopWatchingGitBranch: (() => void) | undefined;
 	let stopPromise: Promise<void> | undefined;
+	let requestedHostExitCode: number | undefined;
 
 	client.onEvent((event) => {
 		if (visualFixture) return;
@@ -1503,7 +1515,12 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 	};
 	stopHost = stop;
 	requestHostExit = (code: number): void => {
+		requestedHostExitCode = code;
 		runtime?.stop(code);
+		// Do not wait for initial hydration to finish before tearing down the RPC
+		// child. Stopping it rejects any pending startup request, which transfers
+		// control to the catch/finally path immediately; stop() is idempotent.
+		void stopHost(code);
 	};
 	const handlePreEditorInput = createRpcHostInterruptHandler({
 		modals,
@@ -1649,7 +1666,8 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		}
 		return await initialRuntime.waitForExit();
 	} catch (error) {
-		await stop();
+		await stop(requestedHostExitCode ?? 0);
+		if (requestedHostExitCode !== undefined) return requestedHostExitCode;
 		writeLine(stderr, `[sumocode-rpc] ${error instanceof Error ? error.message : String(error)}`);
 		if (client.stderr.length > 0) writeLine(stderr, client.stderr.trim());
 		return 1;

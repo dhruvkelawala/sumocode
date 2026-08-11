@@ -42,6 +42,24 @@ describe("sumocode RPC host shell integration", () => {
 		await bootWithHostMode("1");
 	}, 30_000);
 
+	it("fails instead of source-falling back when the forced bundle cannot import", async () => {
+		const bundlePath = join(process.cwd(), "dist/host/sumo-rpc-host.bundle.mjs");
+		const original = await readFile(bundlePath);
+		await writeFile(bundlePath, "export { this is invalid syntax");
+		try {
+			const agentDir = await mkdtemp(join(tmpdir(), "sumocode-rpc-broken-forced-bundle-agent-"));
+			app = spawnSumocodePty({
+				env: { PI_CODING_AGENT_DIR: agentDir, SUMOCODE_HOST_BUNDLE: "1" },
+				cols: 100,
+				rows: 30,
+			});
+			await app.waitForOutput("forced host bundle failed to import", 5_000);
+			expect(app.getOutput()).not.toContain(PI_BOOT_SEQUENCE);
+		} finally {
+			await writeFile(bundlePath, original);
+		}
+	}, 30_000);
+
 	it("boots the retained host through the jiti fallback", async () => {
 		await bootWithHostMode("0");
 	}, 30_000);
@@ -175,6 +193,22 @@ describe("sumocode RPC host shell integration", () => {
 		expect(activeState.altscreenActive).toBe(true);
 		expect(activeState.mouseSGRActive).toBe(true);
 		expect(activeState.cleanupSequenceSeen).toBe(false);
+	}, 30_000);
+
+	it("exits promptly when startup hydration is stalled", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "sumocode-rpc-stalled-hydration-"));
+		const piBin = join(directory, "stalled-pi");
+		await writeFile(piBin, "#!/usr/bin/env node\nprocess.stdin.resume();\nsetInterval(() => {}, 1000);\n", { mode: 0o700 });
+		app = spawnSumocodePty({
+			env: { PI_BIN: piBin, PI_CODING_AGENT_DIR: join(directory, "agent") },
+			cols: 100,
+			rows: 30,
+		});
+
+		await app.waitForOutput(PI_BOOT_SEQUENCE, 15_000);
+		app.sendInput("\u0004");
+		await app.waitForOutput(TERMINAL_CLEANUP_SEQUENCE, 2_000);
+		expect(app.getCurrentTerminalState().altscreenActive).toBe(false);
 	}, 30_000);
 
 	it("accepts editor input while startup hydration is pending", async () => {

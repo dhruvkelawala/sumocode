@@ -95,10 +95,16 @@ async function importSourceHost() {
 
 let mod;
 try {
+	if (forceBundle && !bundleExists) {
+		throw new Error(`[sumocode] forced host bundle is missing: ${bundlePath}`);
+	}
 	if (bundleFresh) {
 		try {
 			mod = await import(pathToFileURL(bundlePath).href);
-		} catch {
+		} catch (error) {
+			if (forceBundle) {
+				throw new Error(`[sumocode] forced host bundle failed to import: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
+			}
 			mod = await importSourceHost();
 		}
 	} else {

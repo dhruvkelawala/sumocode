@@ -29,11 +29,12 @@ function extensionEntry(root, env) {
  * and the jiti-loaded host. Keeping this in plain JavaScript lets the entry
  * point pre-spawn Pi before importing the TypeScript host runtime.
  */
-export function buildChildSpawnPlan(env, argv) {
-	if (!env.PI_BIN) return undefined;
+export function buildChildSpawnPlan(env, argv, defaultPiBin) {
+	const command = env.PI_BIN || defaultPiBin;
+	if (!command) return undefined;
 	const root = hostRoot(env);
 	return {
-		command: env.PI_BIN,
+		command,
 		args: ["--mode", "rpc", "-e", extensionEntry(root, env), ...argv],
 		cwd: hostCwd(env),
 		env: childEnv(env),

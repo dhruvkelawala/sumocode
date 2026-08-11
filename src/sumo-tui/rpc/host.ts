@@ -252,7 +252,7 @@ type ChildSpawnPlan = {
 
 const requireFromRuntime = createRequire(import.meta.url);
 const { buildChildSpawnPlan } = requireFromRuntime("./spawn-child.mjs") as {
-	buildChildSpawnPlan(env: NodeJS.ProcessEnv, argv: readonly string[]): ChildSpawnPlan | undefined;
+	buildChildSpawnPlan(env: NodeJS.ProcessEnv, argv: readonly string[], defaultPiBin?: string): ChildSpawnPlan | undefined;
 };
 
 /**
@@ -829,12 +829,13 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 	// the same shared resolution `extension.ts` uses.
 	applyStartupTheme({ cwd });
 	const visualFixture = rpcVisualFixtureFromEnv(env);
-	const spawnPlan = buildChildSpawnPlan(env, argv);
+	const spawnPlan = buildChildSpawnPlan(env, argv, piBinary(env));
+	if (!spawnPlan) throw new Error("Could not construct the Pi RPC child spawn plan");
 	const client = new SumoRpcClient({
-		command: spawnPlan?.command ?? piBinary(env),
-		args: spawnPlan?.args ?? [],
-		cwd: spawnPlan?.cwd ?? cwd,
-		env: spawnPlan?.env,
+		command: spawnPlan.command,
+		args: spawnPlan.args,
+		cwd: spawnPlan.cwd,
+		env: spawnPlan.env,
 		preSpawnedChild: options.preSpawnedChild,
 	});
 	let runtime: RpcHostRuntime | undefined;

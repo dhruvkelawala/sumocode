@@ -199,11 +199,10 @@ async function run() {
 				appReadyMs = startupAppReady.event.ts - t0;
 
 				herdr(["pane", "send-text", pane, "/sumo:reload"]);
-				// The retained editor first uses Enter to accept the async slash-command
-				// completion, then the next Enter submits the command.
 				await new Promise((resolveSleep) => setTimeout(resolveSleep, POLL_MS));
-				herdr(["pane", "send-keys", pane, "Enter"]);
-				await new Promise((resolveSleep) => setTimeout(resolveSleep, POLL_MS));
+				// A line-start slash completion auto-submits when Enter accepts it.
+				// Start timing before that Enter so reload_ms includes the command
+				// dispatch instead of omitting the first POLL_MS of real work.
 				const t1 = Date.now();
 				herdr(["pane", "send-keys", pane, "Enter"]);
 				const reload = await waitForInputReady(diag, 2);
@@ -219,9 +218,12 @@ async function run() {
 					try {
 						const lines = error?.code === "diag-timeout" ? "30" : "5";
 						const paneRead = herdr(["pane", "read", pane, "--lines", lines]);
-						errorMessage += `; pane tail: ${paneRead.trim().replace(/\s+/g, " ")}`;
+						// Pane output can contain operator-specific provider/auth or extension
+						// diagnostics. Keep it local to the console; never persist it in the
+						// committed public performance report.
+						console.error(`[perf-real-world] ${name} pane tail:\n${paneRead.trim()}`);
 					} catch {
-						errorMessage += "; pane read failed";
+						console.error(`[perf-real-world] ${name} pane read failed`);
 					}
 				}
 				if (startupMs === undefined) throw error;

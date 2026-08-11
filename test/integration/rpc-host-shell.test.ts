@@ -146,9 +146,10 @@ describe("sumocode RPC host shell integration", () => {
 		app.sendInput("hello");
 		await app.waitForOutput("hello", 2_000);
 
-		app.sendInput("\u0003");
-		await app.waitForOutput("press ctrl-c again to quit", 2_000);
-		app.sendInput("\u0003");
+		// This test owns only the early-input contract. Ctrl-C has separate
+		// draft-clearing semantics (first press clears non-empty input), so using
+		// it for cleanup made the test race hydration and assert the wrong owner.
+		app.sendSignal("SIGTERM");
 		await app.waitForOutput(TERMINAL_CLEANUP_SEQUENCE, 5_000);
 		expect(app.getCurrentTerminalState().altscreenActive).toBe(false);
 	}, 30_000);

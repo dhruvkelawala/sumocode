@@ -65,6 +65,7 @@ export interface SumoRpcClientOptions {
 const MAX_CONSECUTIVE_PROTOCOL_ERRORS = 3;
 const MAX_STDERR_BUFFER_LENGTH = 64 * 1024;
 const CHILD_STOP_GRACE_MS = 2_000;
+const PRESPAWN_ERROR = Symbol.for("sumocode.rpc.preSpawnError");
 /**
  * Notification-facing messages (toasts, modal text) must stay terse -- the
  * full stderr buffer (up to MAX_STDERR_BUFFER_LENGTH = 64 KiB) is fine for the
@@ -177,6 +178,26 @@ export class SumoRpcClient {
 		child.once("exit", (code, signal) => {
 			this.handleExit(new RpcChildExitError(`RPC child exited code=${code ?? "null"} signal=${signal ?? "null"}. stderr=${this.stderrBuffer}`, { code, signal }));
 		});
+
+		// A pre-spawned child can fail or exit while the host module is still
+		// importing, before the lifecycle listeners above exist. The entry file
+		// saves asynchronous spawn errors on the child; Node retains completed
+		// exitCode/signalCode. Adopt either state instead of treating dead stdin
+		// as a live RPC transport and losing the original failure.
+		const preSpawnError = (child as unknown as { [PRESPAWN_ERROR]?: unknown })[PRESPAWN_ERROR];
+		let adoptionError: Error | undefined;
+		if (preSpawnError !== undefined) {
+			adoptionError = toError(preSpawnError);
+		} else if (child.exitCode !== null || child.signalCode !== null) {
+			adoptionError = new RpcChildExitError(
+				`RPC child exited before host adoption code=${child.exitCode ?? "null"} signal=${child.signalCode ?? "null"}. stderr=${this.stderrBuffer}`,
+				{ code: child.exitCode, signal: child.signalCode },
+			);
+		}
+		if (adoptionError) {
+			this.handleExit(adoptionError);
+			throw adoptionError;
+		}
 
 		// Early-crash gate. `pid` is populated synchronously whenever the OS
 		// actually created the process (both the fresh spawn above and a

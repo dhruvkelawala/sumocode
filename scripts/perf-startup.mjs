@@ -86,7 +86,9 @@ export function summariseMeasurement(label, samples) {
 			...publicSample
 		} = sample;
 		if (sample.ok !== false) return publicSample;
-		return { ...publicSample, error: sample.error ?? "process failed" };
+		// Node spawn errors include absolute executable paths. Never preserve a
+		// caller-provided error string in a tracked report.
+		return { ...publicSample, error: "process failed" };
 	});
 	const successfulSamples = safeSamples.filter((sample) => sample.ok !== false);
 	const durations = successfulSamples.map((sample) => sample.durationMs);

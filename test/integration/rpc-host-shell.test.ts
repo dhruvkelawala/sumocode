@@ -168,11 +168,14 @@ describe("sumocode RPC host shell integration", () => {
 		await bootWithExtensionMode(mode);
 	}, 30_000);
 
-	it("boots the package manifest through the stable extension entry", async () => {
-		const agentDir = await mkdtemp(join(tmpdir(), "sumocode-package-entry-agent-"));
+	it.each(["bundle", "source"] as const)("boots the package manifest through the stable extension entry (%s)", async (mode) => {
+		const agentDir = await mkdtemp(join(tmpdir(), `sumocode-package-entry-${mode}-agent-`));
 		app = spawnPiPty({
 			args: ["--offline", "--no-extensions", "--no-session", "--approve", "-e", "."],
-			env: { PI_CODING_AGENT_DIR: agentDir },
+			env: {
+				PI_CODING_AGENT_DIR: agentDir,
+				...(mode === "source" ? { SUMOCODE_EXTENSION_BUNDLE: "0" } : {}),
+			},
 			cols: 100,
 			rows: 30,
 		});

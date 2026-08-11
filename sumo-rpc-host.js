@@ -185,16 +185,13 @@ try {
 			if (typeof bundledModule.main !== "function") {
 				throw new Error("host bundle does not export main()");
 			}
-			// Revalidate after loading: a concurrent build could have replaced the
-			// bundle between the freshness check and this import. Re-read the manifest
-			// and re-verify the output hash; if the on-disk generation no longer
-			// matches, discard the bundle and use source rather than run a generation
-			// that was never covered by a passing freshness result.
-			if (!forceBundle) {
-				const revalidateManifest = JSON.parse(await readFile(inputManifestPath, "utf8"));
-				if (typeof revalidateManifest.outputsHash !== "string" || await hostOutputsHash(root) !== revalidateManifest.outputsHash) {
-					throw new Error("host bundle changed during import");
-				}
+			// Revalidate after loading: a concurrent build or source edit could have
+			// changed inputs or replaced the bundle between the freshness check and
+			// this import. Re-run the FULL freshness check (inputs + outputs); if the
+			// on-disk state no longer matches, discard the bundle and use source
+			// rather than run a generation never covered by a passing freshness result.
+			if (!forceBundle && !(await bundleIsFresh())) {
+				throw new Error("host bundle changed during import");
 			}
 			mod = bundledModule;
 		} catch (error) {
@@ -247,5 +244,10 @@ try {
 	await terminateUnadoptedChild();
 	throw error;
 } finally {
-	releasePreAdoptionSignalHandlers();
+	// When an early signal is relaying (e.g. main() aborted adoption while the
+	// SIGTERM-ignoring child is still in its reap grace), keep the guarded entry
+	// handlers installed: relayEarlySignal's own cleanup releases them after the
+	// reap and then exits, so a repeated signal stays suppressed instead of
+	// hitting Node's default disposition mid-cleanup.
+	if (!relayingEarlySignal) releasePreAdoptionSignalHandlers();
 }

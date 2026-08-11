@@ -42,6 +42,7 @@ import { rpcVisualFixtureFromEnv } from "./visual-fixtures.js";
 import { logDiagnostic } from "../runtime/diagnostics.js";
 
 const DEFERRED_SELECTOR_ACTION_KEY = "selector-open";
+const DEFERRED_MODEL_CYCLE_ACTION_KEY = "model-cycle";
 
 export interface RpcHostMainOptions {
 	readonly argv?: readonly string[];
@@ -1100,8 +1101,8 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		// / app.tools.expand: registered via CustomEditor's generic
 		// `onAction` map (see editor.ts's onModelCycleForward etc. doc
 		// comments) rather than a dedicated callback prop.
-		onModelCycleForward: () => hydrationActionGate.run("model-cycle-forward", handleModelCycleForward),
-		onModelCycleBackward: () => hydrationActionGate.run("model-cycle-backward", handleModelCycleBackward),
+		onModelCycleForward: () => hydrationActionGate.run(DEFERRED_MODEL_CYCLE_ACTION_KEY, handleModelCycleForward),
+		onModelCycleBackward: () => hydrationActionGate.run(DEFERRED_MODEL_CYCLE_ACTION_KEY, handleModelCycleBackward),
 		// app.model.select (Ctrl+L by default): opens the same in-place model
 		// selector `/model` with no args and the command palette's "MODEL"
 		// entry both already use. `actions` is a forward reference (assigned
@@ -1624,6 +1625,7 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 	const handleHostSignal = (code: number): void => {
 		if (handlingHostSignal) return;
 		handlingHostSignal = true;
+		requestedHostExitCode = code;
 		void stop(code).then(() => exitProcess(code));
 	};
 	const handleSigint = (): void => handleHostSignal(130);
@@ -1645,6 +1647,12 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		if (!visualFixture) sessionEvents.begin();
 		await client.start(adoptChildAndArmHostSignals);
 		const branch = await readGitBranch(cwd);
+		// A signal may have transferred ownership to stop() while optional branch
+		// chrome was resolving. Never enter raw mode/altscreen after teardown began.
+		if (stopPromise) {
+			await stopPromise;
+			return requestedHostExitCode ?? 0;
+		}
 		const initialTranscript = visualFixture ? visualFixture.transcript : transcriptPump.viewModel();
 		const initialState = visualFixture ? visualFixture.state : stateStore.setGitBranch(branch);
 		const initialRuntime = new RpcHostRuntime({

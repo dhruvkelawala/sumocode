@@ -41,6 +41,24 @@ describe("sumocode RPC host shell integration", () => {
 		await bootWithHostMode("1");
 	}, 30_000);
 
+	it("fails instead of source-falling back when the forced bundle cannot import", async () => {
+		const bundlePath = join(process.cwd(), "dist/host/sumo-rpc-host.bundle.mjs");
+		const original = await readFile(bundlePath);
+		await writeFile(bundlePath, "export { this is invalid syntax");
+		try {
+			const agentDir = await mkdtemp(join(tmpdir(), "sumocode-rpc-broken-forced-bundle-agent-"));
+			app = spawnSumocodePty({
+				env: { PI_CODING_AGENT_DIR: agentDir, SUMOCODE_HOST_BUNDLE: "1" },
+				cols: 100,
+				rows: 30,
+			});
+			await app.waitForOutput("forced host bundle failed to import", 5_000);
+			expect(app.getOutput()).not.toContain(PI_BOOT_SEQUENCE);
+		} finally {
+			await writeFile(bundlePath, original);
+		}
+	}, 30_000);
+
 	it("boots the retained host through the jiti fallback", async () => {
 		await bootWithHostMode("0");
 	}, 30_000);

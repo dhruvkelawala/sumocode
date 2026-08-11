@@ -881,17 +881,26 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 			thinkingLevel: state.thinkingLevel,
 		});
 	};
-	const scheduleChromeCacheState = (): void => {
+	let pendingChromeCacheState: RpcHostChromeState | undefined;
+	let pendingChromeCacheWrite: ReturnType<typeof setImmediate> | undefined;
+	const scheduleChromeCacheState = (state = stateStore.getSnapshot()): void => {
 		if (visualFixture) return;
-		const handle = setImmediate(() => cacheChromeState(stateStore.getSnapshot()));
-		handle.unref?.();
+		pendingChromeCacheState = state;
+		if (pendingChromeCacheWrite) return;
+		pendingChromeCacheWrite = setImmediate(() => {
+			pendingChromeCacheWrite = undefined;
+			const pending = pendingChromeCacheState;
+			pendingChromeCacheState = undefined;
+			if (pending) cacheChromeState(pending);
+		});
+		pendingChromeCacheWrite.unref?.();
 	};
 	const pushStateAndCacheChrome = (state?: RpcHostChromeState): void => {
 		pushState(state);
 		// Controls invoke pushState optimistically before the child confirms a
 		// model/thinking change. Persist only callbacks carrying the successful
 		// authoritative response, never an optimistic or failed intermediate.
-		if (state !== undefined) cacheChromeState(state);
+		if (state !== undefined) scheduleChromeCacheState(state);
 	};
 	const treeNavigationOutcomeBroker = new InMemoryRpcTreeNavigationOutcomeBroker();
 	const controls = new RpcHostControls(client, stateStore, { onOptimisticChange: pushState, treeNavigationOutcomeBroker });
@@ -1230,7 +1239,7 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 			for (const event of replay.suffixEvents) processAgentEvent(event);
 			// Session replacement can change model/thinking in either the snapshot
 			// or its in-flight suffix. Persist the final projected destination state.
-			cacheChromeState(stateStore.getSnapshot());
+			scheduleChromeCacheState(stateStore.getSnapshot());
 			deferActivityRuntimeUpdate = false;
 			runtime?.endSessionReplacement(ownershipRebound);
 			const recovery = treeNavigationRecovery;
@@ -1572,8 +1581,13 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 	handleAppInterrupt = (): void => { handlePreEditorInput("\x1b"); };
 	const handleSigint = (): void => { void stop(130).then(() => exitProcess(130)); };
 	const handleSigterm = (): void => { void stop(0).then(() => exitProcess(0)); };
-	process.once("SIGINT", handleSigint);
-	process.once("SIGTERM", handleSigterm);
+	const adoptChildAndArmHostSignals = (): void => {
+		// The entry owns early signals until RpcClient has installed child
+		// lifecycle listeners. Remove those handlers and arm ours synchronously.
+		options.onPreSpawnedChildAdopted?.();
+		process.once("SIGINT", handleSigint);
+		process.once("SIGTERM", handleSigterm);
+	};
 
 	try {
 		// Initial boot has the same response/event ordering race as a session
@@ -1582,8 +1596,7 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		// child startup, refetch until one quiet pass, then replay only the final
 		// suffix after the authoritative replacement.
 		if (!visualFixture) sessionEvents.begin();
-		await client.start();
-		options.onPreSpawnedChildAdopted?.();
+		await client.start(adoptChildAndArmHostSignals);
 		const branch = await readGitBranch(cwd);
 		const initialTranscript = visualFixture ? visualFixture.transcript : transcriptPump.viewModel();
 		const initialState = visualFixture ? visualFixture.state : stateStore.setGitBranch(branch);

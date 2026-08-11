@@ -143,7 +143,7 @@ export class SumoRpcClient {
 		this.uiRequestHandler = handler;
 	}
 
-	public async start(): Promise<void> {
+	public async start(onAdopted?: () => void): Promise<void> {
 		if (this.child) throw new Error("RPC child already started");
 		this.exited = false;
 		this.exitNotified = false;
@@ -199,6 +199,10 @@ export class SumoRpcClient {
 			throw adoptionError;
 		}
 
+		// Transfer signal ownership only after this client owns child lifecycle,
+		// but before the startup crash grace. The callback runs synchronously so
+		// entry and host signal handlers never overlap across an event-loop turn.
+		onAdopted?.();
 		await new Promise((resolve) => setTimeout(resolve, 50));
 		if (this.exited) throw new Error(`RPC child exited during startup. stderr=${this.stderrBuffer}`);
 	}

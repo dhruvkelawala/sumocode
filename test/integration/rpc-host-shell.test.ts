@@ -387,6 +387,42 @@ describe("sumocode RPC host shell integration", () => {
 		await waitForFileText(exitCodeFile, "0");
 	}, 30_000);
 
+	it("never adopts or enters altscreen when a signal lands in the import-tail window", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "sumocode-rpc-import-tail-signal-"));
+		const piBin = join(directory, "stalled-pi");
+		const pidFile = join(directory, "pid");
+		const exitCodeFile = join(directory, "exit-code");
+		// The child ignores SIGTERM, so early cleanup must escalate to SIGKILL while
+		// the import-tail window is held open — the exact overlap with adoption.
+		await writeFile(
+			piBin,
+			"#!/usr/bin/env node\nprocess.on('SIGTERM', () => {});\nrequire('node:fs').writeFileSync(process.env.PID_FILE, String(process.pid));\nprocess.stdin.resume();\nsetInterval(() => {}, 1000);\n",
+			{ mode: 0o700 },
+		);
+		app = spawnPiPty({
+			command: process.execPath,
+			args: [join(process.cwd(), "sumo-rpc-host.js")],
+			env: {
+				PI_BIN: piBin,
+				PID_FILE: pidFile,
+				PI_CODING_AGENT_DIR: join(directory, "agent"),
+				SUMOCODE_EXIT_CODE_FILE: exitCodeFile,
+				SUMOCODE_TEST_PRE_MAIN_DELAY_MS: "5000",
+				NODE_ENV: "test",
+			},
+			cols: 100,
+			rows: 30,
+		});
+
+		const pid = await waitForPid(pidFile);
+		app.sendSignal("SIGTERM");
+		await waitForProcessExit(pid);
+		await waitForFileText(exitCodeFile, "0");
+		// Adoption never happened, so the retained runtime/altscreen never started.
+		expect(app.getOutput()).not.toContain("\x1b[?1049h");
+		expect(app.getCurrentTerminalState().altscreenActive).toBe(false);
+	}, 30_000);
+
 	it("reaps an adopted SIGTERM-ignoring child across repeated signals", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "sumocode-rpc-adopted-repeat-signal-"));
 		const piBin = join(directory, "stalled-pi");

@@ -1571,16 +1571,15 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 			}
 			unsubscribeActivityStore();
 			activityStore.dispose();
-			// Signal/reap Pi immediately, while advisory cache shutdown runs in
-			// parallel. Neither operation may extend the other's bounded grace.
-			const childStop = client.stop();
-			await Promise.all([
-				childStop,
-				drainChromeCacheForShutdown(
-					flushChromeCacheState,
-					() => chromeCache.dispose(),
-				),
-			]);
+			// Signal Pi immediately, then let child response/rejection callbacks
+			// quiesce before the final cache snapshot is flushed. Persistent guarded
+			// host signal listeners cover both bounded shutdown phases.
+			await client.stop().catch(() => undefined);
+			await new Promise<void>((resolveTurn) => setImmediate(resolveTurn));
+			await drainChromeCacheForShutdown(
+				flushChromeCacheState,
+				() => chromeCache.dispose(),
+			);
 		})();
 		await stopPromise;
 	};

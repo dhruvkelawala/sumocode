@@ -1,6 +1,6 @@
 {
-  "generatedAt": "2026-08-11T11:43:16.219Z",
-  "commit": "79e8467 Merge remote-tracking branch 'origin/advisor/060-startup-perf-baseline-v2' into advisor/061-early-first-frame-v2",
+  "generatedAt": "2026-08-11T11:59:05.462Z",
+  "commit": "b851e8e Merge remote-tracking branch 'origin/advisor/060-startup-perf-baseline-v2' into advisor/061-early-first-frame-v2",
   "runs": 5,
   "measurements": [
     {
@@ -8,400 +8,390 @@
       "samples": [
         {
           "ok": true,
-          "durationMs": 8.619667053222656,
+          "durationMs": 9.773000001907349,
           "code": 0,
-          "signal": null,
-          "stderr": ""
+          "signal": null
         },
         {
           "ok": true,
-          "durationMs": 8.164291024208069,
+          "durationMs": 9.273000001907349,
           "code": 0,
-          "signal": null,
-          "stderr": ""
+          "signal": null
         },
         {
           "ok": true,
-          "durationMs": 7.906708002090454,
+          "durationMs": 8.545791029930115,
           "code": 0,
-          "signal": null,
-          "stderr": ""
+          "signal": null
         },
         {
           "ok": true,
-          "durationMs": 7.741124987602234,
+          "durationMs": 7.977249979972839,
           "code": 0,
-          "signal": null,
-          "stderr": ""
+          "signal": null
         },
         {
           "ok": true,
-          "durationMs": 7.748458981513977,
+          "durationMs": 7.89016592502594,
           "code": 0,
-          "signal": null,
-          "stderr": ""
+          "signal": null
         }
       ],
       "failedRuns": 0,
-      "avgMiddleMs": 7.9,
-      "minMs": 7.7,
-      "maxMs": 8.6
+      "avgMiddleMs": 8.6,
+      "minMs": 7.9,
+      "maxMs": 9.8
     },
     {
       "label": "host-import",
       "samples": [
         {
           "ok": true,
-          "durationMs": 1771
+          "durationMs": 1778
         },
         {
           "ok": true,
-          "durationMs": 1122
+          "durationMs": 1116
         },
         {
           "ok": true,
-          "durationMs": 1110
+          "durationMs": 1149
         },
         {
           "ok": true,
-          "durationMs": 1121
+          "durationMs": 1116
         },
         {
           "ok": true,
-          "durationMs": 1165
+          "durationMs": 1138
         }
       ],
       "failedRuns": 0,
-      "avgMiddleMs": 1136,
-      "minMs": 1110,
-      "maxMs": 1771
+      "avgMiddleMs": 1134.3,
+      "minMs": 1116,
+      "maxMs": 1778
     },
     {
       "label": "child-first-response",
       "samples": [
         {
           "ok": true,
-          "durationMs": 2013.6240420341492
+          "durationMs": 2120.90600001812
         },
         {
           "ok": true,
-          "durationMs": 1771.8856250047684
+          "durationMs": 1801.5672500133514
         },
         {
           "ok": true,
-          "durationMs": 1777.081375002861
+          "durationMs": 1896.8134590387344
         },
         {
           "ok": true,
-          "durationMs": 1772.1031659841537
+          "durationMs": 1901.578500032425
         },
         {
           "ok": true,
-          "durationMs": 1841.611999988556
+          "durationMs": 1849.826208949089
         }
       ],
       "failedRuns": 0,
-      "avgMiddleMs": 1796.9,
-      "minMs": 1771.9,
-      "maxMs": 2013.6
+      "avgMiddleMs": 1882.7,
+      "minMs": 1801.6,
+      "maxMs": 2120.9
     },
     {
       "label": "child-first-response-noext",
       "samples": [
         {
           "ok": true,
-          "durationMs": 1514.6002089977264
+          "durationMs": 1630.285166978836
         },
         {
           "ok": true,
-          "durationMs": 1516.2384169101715
+          "durationMs": 1508.0976250171661
         },
         {
           "ok": true,
-          "durationMs": 1430.9617079496384
+          "durationMs": 1640.2442920207977
         },
         {
           "ok": true,
-          "durationMs": 1490.945417046547
+          "durationMs": 1531.4861249923706
         },
         {
           "ok": true,
-          "durationMs": 1486.8872919082642
+          "durationMs": 1565.8832079172134
         }
       ],
       "failedRuns": 0,
-      "avgMiddleMs": 1497.5,
-      "minMs": 1431,
-      "maxMs": 1516.2
+      "avgMiddleMs": 1575.9,
+      "minMs": 1508.1,
+      "maxMs": 1640.2
     },
     {
       "label": "print-mode",
       "samples": [
         {
           "ok": true,
-          "durationMs": 7554.504124999046,
+          "durationMs": 7556.367541909218,
           "code": 0,
-          "signal": null,
-          "stderr": "Warning: No models match pattern \"cursor/composer-2.5\"\nWarning: No models match pattern \"zai/glm-5.1\"\n"
+          "signal": null
         },
         {
           "ok": true,
-          "durationMs": 7893.9072920084,
+          "durationMs": 9778.861791014671,
           "code": 0,
-          "signal": null,
-          "stderr": "Warning: No models match pattern \"cursor/composer-2.5\"\nWarning: No models match pattern \"zai/glm-5.1\"\n"
+          "signal": null
         },
         {
           "ok": true,
-          "durationMs": 7062.36087501049,
+          "durationMs": 8013.141457915306,
           "code": 0,
-          "signal": null,
-          "stderr": "Warning: No models match pattern \"cursor/composer-2.5\"\nWarning: No models match pattern \"zai/glm-5.1\"\n"
+          "signal": null
         },
         {
           "ok": true,
-          "durationMs": 7239.649958014488,
+          "durationMs": 6798.59450006485,
           "code": 0,
-          "signal": null,
-          "stderr": "Warning: No models match pattern \"cursor/composer-2.5\"\nWarning: No models match pattern \"zai/glm-5.1\"\n"
+          "signal": null
         },
         {
           "ok": true,
-          "durationMs": 6644.586750030518,
+          "durationMs": 7663.4796669483185,
           "code": 0,
-          "signal": null,
-          "stderr": "Warning: No models match pattern \"cursor/composer-2.5\"\nWarning: No models match pattern \"zai/glm-5.1\"\n"
+          "signal": null
         }
       ],
       "failedRuns": 0,
-      "avgMiddleMs": 7285.5,
-      "minMs": 6644.6,
-      "maxMs": 7893.9
+      "avgMiddleMs": 7744.3,
+      "minMs": 6798.6,
+      "maxMs": 9778.9
     },
     {
       "label": "first-frame",
       "samples": [
         {
           "ok": true,
-          "durationMs": 1335.885290980339
+          "durationMs": 1376.7870839834213
         },
         {
           "ok": true,
-          "durationMs": 1285.6544580459595
+          "durationMs": 1282.0830000638962
         },
         {
           "ok": true,
-          "durationMs": 1282.1289999485016
+          "durationMs": 1292.1120419502258
         },
         {
           "ok": true,
-          "durationMs": 1327.706834077835
+          "durationMs": 1287.1589169502258
         },
         {
           "ok": true,
-          "durationMs": 1286.62195789814
+          "durationMs": 1279.7308330535889
         }
       ],
       "failedRuns": 0,
-      "avgMiddleMs": 1300,
-      "minMs": 1282.1,
-      "maxMs": 1335.9
+      "avgMiddleMs": 1287.1,
+      "minMs": 1279.7,
+      "maxMs": 1376.8
     },
     {
       "label": "boot-screen-frame",
       "samples": [
         {
           "ok": true,
-          "durationMs": 1303,
-          "bootScreenFrameMs": 1303,
-          "appReadyMs": 1487,
-          "stableChromeMs": 1487,
-          "inputReadyMs": 1303
+          "durationMs": 1364,
+          "bootScreenFrameMs": 1364,
+          "appReadyMs": 1766,
+          "stableChromeMs": 1766,
+          "inputReadyMs": 1364
         },
         {
           "ok": true,
-          "durationMs": 1288,
-          "bootScreenFrameMs": 1288,
-          "appReadyMs": 1412,
-          "stableChromeMs": 1412,
-          "inputReadyMs": 1288
+          "durationMs": 1382,
+          "bootScreenFrameMs": 1382,
+          "appReadyMs": 1660,
+          "stableChromeMs": 1660,
+          "inputReadyMs": 1382
         },
         {
           "ok": true,
-          "durationMs": 1290,
-          "bootScreenFrameMs": 1290,
-          "appReadyMs": 1455,
-          "stableChromeMs": 1455,
-          "inputReadyMs": 1290
+          "durationMs": 1292,
+          "bootScreenFrameMs": 1292,
+          "appReadyMs": 1477,
+          "stableChromeMs": 1477,
+          "inputReadyMs": 1292
         },
         {
           "ok": true,
-          "durationMs": 1287,
-          "bootScreenFrameMs": 1287,
-          "appReadyMs": 1519,
-          "stableChromeMs": 1519,
-          "inputReadyMs": 1287
+          "durationMs": 1292,
+          "bootScreenFrameMs": 1292,
+          "appReadyMs": 1743,
+          "stableChromeMs": 1743,
+          "inputReadyMs": 1292
         },
         {
           "ok": true,
-          "durationMs": 1296,
-          "bootScreenFrameMs": 1296,
-          "appReadyMs": 1629,
-          "stableChromeMs": 1629,
-          "inputReadyMs": 1296
+          "durationMs": 1319,
+          "bootScreenFrameMs": 1319,
+          "appReadyMs": 1744,
+          "stableChromeMs": 1744,
+          "inputReadyMs": 1319
         }
       ],
       "failedRuns": 0,
-      "avgMiddleMs": 1291.3,
-      "minMs": 1287,
-      "maxMs": 1303
+      "avgMiddleMs": 1325,
+      "minMs": 1292,
+      "maxMs": 1382
     },
     {
       "label": "app-ready",
       "samples": [
         {
           "ok": true,
-          "durationMs": 1487,
-          "bootScreenFrameMs": 1303,
-          "appReadyMs": 1487,
-          "stableChromeMs": 1487,
-          "inputReadyMs": 1303
+          "durationMs": 1766,
+          "bootScreenFrameMs": 1364,
+          "appReadyMs": 1766,
+          "stableChromeMs": 1766,
+          "inputReadyMs": 1364
         },
         {
           "ok": true,
-          "durationMs": 1412,
-          "bootScreenFrameMs": 1288,
-          "appReadyMs": 1412,
-          "stableChromeMs": 1412,
-          "inputReadyMs": 1288
+          "durationMs": 1660,
+          "bootScreenFrameMs": 1382,
+          "appReadyMs": 1660,
+          "stableChromeMs": 1660,
+          "inputReadyMs": 1382
         },
         {
           "ok": true,
-          "durationMs": 1455,
-          "bootScreenFrameMs": 1290,
-          "appReadyMs": 1455,
-          "stableChromeMs": 1455,
-          "inputReadyMs": 1290
+          "durationMs": 1477,
+          "bootScreenFrameMs": 1292,
+          "appReadyMs": 1477,
+          "stableChromeMs": 1477,
+          "inputReadyMs": 1292
         },
         {
           "ok": true,
-          "durationMs": 1519,
-          "bootScreenFrameMs": 1287,
-          "appReadyMs": 1519,
-          "stableChromeMs": 1519,
-          "inputReadyMs": 1287
+          "durationMs": 1743,
+          "bootScreenFrameMs": 1292,
+          "appReadyMs": 1743,
+          "stableChromeMs": 1743,
+          "inputReadyMs": 1292
         },
         {
           "ok": true,
-          "durationMs": 1629,
-          "bootScreenFrameMs": 1296,
-          "appReadyMs": 1629,
-          "stableChromeMs": 1629,
-          "inputReadyMs": 1296
+          "durationMs": 1744,
+          "bootScreenFrameMs": 1319,
+          "appReadyMs": 1744,
+          "stableChromeMs": 1744,
+          "inputReadyMs": 1319
         }
       ],
       "failedRuns": 0,
-      "avgMiddleMs": 1487,
-      "minMs": 1412,
-      "maxMs": 1629
+      "avgMiddleMs": 1715.7,
+      "minMs": 1477,
+      "maxMs": 1766
     },
     {
       "label": "stable-chrome",
       "samples": [
         {
           "ok": true,
-          "durationMs": 1487,
-          "bootScreenFrameMs": 1303,
-          "appReadyMs": 1487,
-          "stableChromeMs": 1487,
-          "inputReadyMs": 1303
+          "durationMs": 1766,
+          "bootScreenFrameMs": 1364,
+          "appReadyMs": 1766,
+          "stableChromeMs": 1766,
+          "inputReadyMs": 1364
         },
         {
           "ok": true,
-          "durationMs": 1412,
-          "bootScreenFrameMs": 1288,
-          "appReadyMs": 1412,
-          "stableChromeMs": 1412,
-          "inputReadyMs": 1288
+          "durationMs": 1660,
+          "bootScreenFrameMs": 1382,
+          "appReadyMs": 1660,
+          "stableChromeMs": 1660,
+          "inputReadyMs": 1382
         },
         {
           "ok": true,
-          "durationMs": 1455,
-          "bootScreenFrameMs": 1290,
-          "appReadyMs": 1455,
-          "stableChromeMs": 1455,
-          "inputReadyMs": 1290
+          "durationMs": 1477,
+          "bootScreenFrameMs": 1292,
+          "appReadyMs": 1477,
+          "stableChromeMs": 1477,
+          "inputReadyMs": 1292
         },
         {
           "ok": true,
-          "durationMs": 1519,
-          "bootScreenFrameMs": 1287,
-          "appReadyMs": 1519,
-          "stableChromeMs": 1519,
-          "inputReadyMs": 1287
+          "durationMs": 1743,
+          "bootScreenFrameMs": 1292,
+          "appReadyMs": 1743,
+          "stableChromeMs": 1743,
+          "inputReadyMs": 1292
         },
         {
           "ok": true,
-          "durationMs": 1629,
-          "bootScreenFrameMs": 1296,
-          "appReadyMs": 1629,
-          "stableChromeMs": 1629,
-          "inputReadyMs": 1296
+          "durationMs": 1744,
+          "bootScreenFrameMs": 1319,
+          "appReadyMs": 1744,
+          "stableChromeMs": 1744,
+          "inputReadyMs": 1319
         }
       ],
       "failedRuns": 0,
-      "avgMiddleMs": 1487,
-      "minMs": 1412,
-      "maxMs": 1629
+      "avgMiddleMs": 1715.7,
+      "minMs": 1477,
+      "maxMs": 1766
     },
     {
       "label": "input-ready",
       "samples": [
         {
           "ok": true,
-          "durationMs": 1303,
-          "bootScreenFrameMs": 1303,
-          "appReadyMs": 1487,
-          "stableChromeMs": 1487,
-          "inputReadyMs": 1303
+          "durationMs": 1364,
+          "bootScreenFrameMs": 1364,
+          "appReadyMs": 1766,
+          "stableChromeMs": 1766,
+          "inputReadyMs": 1364
         },
         {
           "ok": true,
-          "durationMs": 1288,
-          "bootScreenFrameMs": 1288,
-          "appReadyMs": 1412,
-          "stableChromeMs": 1412,
-          "inputReadyMs": 1288
+          "durationMs": 1382,
+          "bootScreenFrameMs": 1382,
+          "appReadyMs": 1660,
+          "stableChromeMs": 1660,
+          "inputReadyMs": 1382
         },
         {
           "ok": true,
-          "durationMs": 1290,
-          "bootScreenFrameMs": 1290,
-          "appReadyMs": 1455,
-          "stableChromeMs": 1455,
-          "inputReadyMs": 1290
+          "durationMs": 1292,
+          "bootScreenFrameMs": 1292,
+          "appReadyMs": 1477,
+          "stableChromeMs": 1477,
+          "inputReadyMs": 1292
         },
         {
           "ok": true,
-          "durationMs": 1287,
-          "bootScreenFrameMs": 1287,
-          "appReadyMs": 1519,
-          "stableChromeMs": 1519,
-          "inputReadyMs": 1287
+          "durationMs": 1292,
+          "bootScreenFrameMs": 1292,
+          "appReadyMs": 1743,
+          "stableChromeMs": 1743,
+          "inputReadyMs": 1292
         },
         {
           "ok": true,
-          "durationMs": 1296,
-          "bootScreenFrameMs": 1296,
-          "appReadyMs": 1629,
-          "stableChromeMs": 1629,
-          "inputReadyMs": 1296
+          "durationMs": 1319,
+          "bootScreenFrameMs": 1319,
+          "appReadyMs": 1744,
+          "stableChromeMs": 1744,
+          "inputReadyMs": 1319
         }
       ],
       "failedRuns": 0,
-      "avgMiddleMs": 1291.3,
-      "minMs": 1287,
-      "maxMs": 1303
+      "avgMiddleMs": 1325,
+      "minMs": 1292,
+      "maxMs": 1382
     }
   ]
 }

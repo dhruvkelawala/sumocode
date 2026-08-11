@@ -1,5 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { summariseMeasurement } from "./perf-startup.mjs";
+import { classifyRpcProbeLine, summariseMeasurement } from "./perf-startup.mjs";
+
+describe("startup RPC readiness classification", () => {
+	it("accepts only a successful matching get_state response", () => {
+		expect(classifyRpcProbeLine('{"type":"response","id":"probe-1","command":"get_state","success":true}')).toBe("success");
+		expect(classifyRpcProbeLine('{"type":"response","id":"probe-1","command":"get_state","success":false}')).toBe("failure");
+		expect(classifyRpcProbeLine('{"type":"event","id":"probe-1","success":true}')).toBeUndefined();
+		expect(classifyRpcProbeLine('{"type":"response","id":"other","command":"get_state","success":true}')).toBeUndefined();
+		expect(classifyRpcProbeLine("not json")).toBeUndefined();
+	});
+});
 
 describe("startup perf report sanitization", () => {
 	it("removes captured process and terminal diagnostics from successful samples", () => {

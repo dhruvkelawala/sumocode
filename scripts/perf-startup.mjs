@@ -62,6 +62,16 @@ function eventElapsedMs(events, eventName, startWallMs) {
 	return typeof event?.ts === "number" ? Math.max(0, event.ts - startWallMs) : undefined;
 }
 
+export function classifyRpcProbeLine(line) {
+	try {
+		const response = JSON.parse(line);
+		if (response?.type !== "response" || response.id !== "probe-1" || response.command !== "get_state") return undefined;
+		return response.success === true ? "success" : "failure";
+	} catch {
+		return undefined;
+	}
+}
+
 export function summariseMeasurement(label, samples) {
 	const safeSamples = samples.map((sample) => {
 		// Every probe can emit operator-specific provider/extension diagnostics,
@@ -146,6 +156,7 @@ async function measureChildFirstResponse(label, extraArgs = []) {
 			},
 		);
 		let output = "";
+		let responseBuffer = "";
 		let stderr = "";
 		let settled = false;
 		const sample = await new Promise((resolveSample) => {
@@ -170,11 +181,23 @@ async function measureChildFirstResponse(label, extraArgs = []) {
 				settle({ ok: false, durationMs: nowMs() - start, error: `${label} timed out`, stderr });
 			}, TIMEOUT_MS);
 			child.stdout?.on("data", (chunk) => {
-				output += chunk.toString("utf8");
-				if (output.includes('"probe-1"')) {
-					const durationMs = nowMs() - start;
-					terminate();
-					settle({ ok: true, durationMs });
+				const text = chunk.toString("utf8");
+				output += text;
+				responseBuffer += text;
+				let newline = responseBuffer.indexOf("\n");
+				while (newline >= 0) {
+					const line = responseBuffer.slice(0, newline);
+					responseBuffer = responseBuffer.slice(newline + 1);
+					const classification = classifyRpcProbeLine(line);
+					if (classification !== undefined) {
+						const durationMs = nowMs() - start;
+						terminate();
+						settle(classification === "success"
+							? { ok: true, durationMs }
+							: { ok: false, durationMs, error: `${label} get_state failed` });
+						return;
+					}
+					newline = responseBuffer.indexOf("\n");
 				}
 			});
 			child.stderr?.on("data", (chunk) => {

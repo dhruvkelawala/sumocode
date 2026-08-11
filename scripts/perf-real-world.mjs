@@ -116,6 +116,10 @@ function formatMetric(value) {
 	return value === undefined ? "failed" : `${value}ms`;
 }
 
+export function publicProbeError(error) {
+	return error?.code === "diag-timeout" ? "diagnostic event timeout" : "probe command failed";
+}
+
 function markdown(report) {
 	const rows = report.runs.map((run) => `| ${run.run} | ${formatMetric(run.startup_ms)} | ${formatMetric(run.first_frame_ms)} | ${formatMetric(run.reload_ms)} | ${run.error ?? ""} |`);
 	return `# SumoCode real-world startup perf snapshot
@@ -199,7 +203,10 @@ async function run() {
 				herdr(["pane", "read", pane, "--lines", "5"]);
 				consecutiveReloadFailures = 0;
 			} catch (error) {
-				errorMessage = error instanceof Error ? error.message : String(error);
+				// execFileSync error messages may embed Herdr stderr. Keep the raw
+				// diagnostic local and serialize only a fixed public-safe category.
+				console.error(`[perf-real-world] ${name}: ${error instanceof Error ? error.message : String(error)}`);
+				errorMessage = publicProbeError(error);
 				if (pane) {
 					try {
 						const lines = error?.code === "diag-timeout" ? "30" : "5";
@@ -246,7 +253,9 @@ async function run() {
 	}
 }
 
-run().catch((error) => {
-	console.error(error instanceof Error ? error.message : error);
-	process.exit(1);
-});
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+	run().catch((error) => {
+		console.error(error instanceof Error ? error.message : error);
+		process.exit(1);
+	});
+}

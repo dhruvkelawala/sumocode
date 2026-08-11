@@ -26,9 +26,9 @@ JSON
 		printf "pi %s boot: %s\n" "${VERSION}" "$(cat boot.txt)"
 
 		PI_BIN="${WORK_DIR}/node_modules/.bin/pi" node_modules/.bin/sumocode --dry-run --mode rpc --offline --no-extensions --no-session >"mode-rpc.txt"
-		rg "exec .*node_modules/.bin/pi -e .*src/extension.ts --mode rpc" "mode-rpc.txt" >/dev/null
+		rg "exec .*node_modules/.bin/pi -e .*src/extension-entry.ts --mode rpc" "mode-rpc.txt" >/dev/null
 		PI_BIN="${WORK_DIR}/node_modules/.bin/pi" node_modules/.bin/sumocode --dry-run --offline --no-extensions --no-session --print hello >"print.txt"
-		rg "exec .*node_modules/.bin/pi -e .*src/extension.ts .*--print hello" "print.txt" >/dev/null
+		rg "exec .*node_modules/.bin/pi -e .*src/extension-entry.ts .*--print hello" "print.txt" >/dev/null
 		if rg "sumo-rpc-host.js" "mode-rpc.txt" "print.txt" >/dev/null; then
 			echo "sumocode smoke: direct Pi bypass unexpectedly used the foreground RPC host" >&2
 			exit 1

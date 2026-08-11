@@ -24,12 +24,20 @@ const buildOptions = {
 	packages: "external",
 	sourcemap: true,
 	metafile: true,
+	write: false,
 };
 
-async function writeManifest(manifest) {
-	const temporaryManifestPath = `${manifestPath}.${process.pid}.tmp`;
-	await writeFile(temporaryManifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
-	await rename(temporaryManifestPath, manifestPath);
+async function atomicWrite(path, contents) {
+	const temporaryPath = `${path}.${process.pid}.tmp`;
+	await writeFile(temporaryPath, contents);
+	await rename(temporaryPath, path);
+}
+
+async function atomicCopy(source, destination) {
+	await mkdir(dirname(destination), { recursive: true });
+	const temporaryPath = `${destination}.${process.pid}.tmp`;
+	await copyFile(source, temporaryPath);
+	await rename(temporaryPath, destination);
 }
 
 // Pi installs git packages without running a consumer-side build hook. Keep the
@@ -38,30 +46,36 @@ async function writeManifest(manifest) {
 // recorded input graph and copied assets against the committed sidecars.
 await mkdir(outDir, { recursive: true });
 
-// Discover the exact dependency graph, snapshot it, then build once more and
-// verify inputs did not change while esbuild was reading them. Marking the old
-// manifest invalid before the writing build means an interrupted or racy build
-// can only fall back to source, never bless mixed-checkout output.
-const probe = await build({ ...buildOptions, write: false });
+// Build entirely in memory, verify the dependency graph did not change while
+// esbuild was reading it, and only then publish. The manifest is invalidated
+// first and re-published last, so it is the single commit point: a concurrent
+// launch either sees the old valid manifest+artifact or, during publish, an
+// invalid manifest that forces the safe source fallback — never a torn or
+// rejected artifact behind a fresh manifest.
+const probe = await build(buildOptions);
 const beforeBuild = await createExtensionInputManifest(root, Object.keys(probe.metafile.inputs));
-await writeManifest({ version: 0, inputs: [], hash: "build-in-progress" });
+await atomicWrite(manifestPath, `${JSON.stringify({ version: 0, inputs: [], hash: "build-in-progress" }, null, 2)}\n`);
+
 const result = await build(buildOptions);
 const inputManifest = await createExtensionInputManifest(root, Object.keys(result.metafile.inputs));
 if (!extensionInputManifestsMatch(beforeBuild, inputManifest)) {
 	throw new Error("Extension bundle inputs changed during build; retry from a stable checkout");
 }
 
+// Atomically publish the validated bundle and sourcemap from memory, then the
+// copied assets, before recomputing the output hash over the published bytes.
+for (const file of result.outputFiles) {
+	await atomicWrite(file.path, file.contents);
+}
 for (const asset of EXTENSION_ASSETS) {
-	const destination = resolve(outDir, asset.output);
-	await mkdir(dirname(destination), { recursive: true });
-	await copyFile(resolve(root, asset.source), destination);
+	await atomicCopy(resolve(root, asset.source), resolve(outDir, asset.output));
 }
 
 const outputsHash = await extensionOutputsHash(root);
-await Promise.all([
-	writeManifest(inputManifest),
-	writeFile(resolve(outDir, ".outputs-hash"), `${outputsHash}\n`),
-]);
+await atomicWrite(resolve(outDir, ".outputs-hash"), `${outputsHash}\n`);
+// The manifest commit point: runtime re-hashes this recorded set, so modified,
+// renamed, and deleted inputs all invalidate an otherwise newer artifact.
+await atomicWrite(manifestPath, `${JSON.stringify(inputManifest, null, 2)}\n`);
 
 console.log(`[sumocode] extension bundle: ${bundlePath}`);
 console.log(`[sumocode] extension inputs: ${inputManifest.inputs.length} files (${inputManifest.hash.slice(0, 12)})`);

@@ -292,6 +292,22 @@ describe("sumocode RPC host shell integration", () => {
 		}
 	}, 30_000);
 
+	it("falls back to source when a recorded host input has been deleted", async () => {
+		const manifestPath = join(process.cwd(), "dist", "host", ".inputs.json");
+		const original = await readFile(manifestPath);
+		const manifest = JSON.parse(original.toString()) as { inputs: string[] };
+		manifest.inputs = [...manifest.inputs, "src/deleted-production-input.ts"].sort();
+		await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+		try {
+			const agentDir = await mkdtemp(join(tmpdir(), "sumocode-rpc-deleted-host-input-agent-"));
+			app = spawnSumocodePty({ env: { PI_CODING_AGENT_DIR: agentDir }, cols: 100, rows: 30 });
+			await app.waitForOutput("host bundle stale — using source", 15_000);
+			await app.waitForOutput(PI_BOOT_SEQUENCE, 15_000);
+		} finally {
+			await writeFile(manifestPath, original);
+		}
+	}, 30_000);
+
 	it("falls back to source when tsconfig is newer than the host bundle", async () => {
 		const configPath = join(process.cwd(), "tsconfig.json");
 		const [original, timestamps] = await Promise.all([readFile(configPath), stat(configPath)]);

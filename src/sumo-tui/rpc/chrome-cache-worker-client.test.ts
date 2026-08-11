@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -66,6 +66,24 @@ describe("ChromeCacheWorkerClient", () => {
 		});
 		await expect(client.read("/project/a")).resolves.toBeUndefined();
 		await client.dispose();
+	});
+
+	it("does not let an exiting failed generation drain replacement writes", async () => {
+		const stateRoot = mkdtempSync(join(tmpdir(), "sumocode-chrome-worker-generation-"));
+		tempDirectories.push(stateRoot);
+		const modulePath = join(stateRoot, "late-cache.ts");
+		const proofPath = join(stateRoot, "replacement-write.json");
+		const client = new ChromeCacheWorkerClient({ stateRoot, modulePath });
+
+		await expect(client.read("/project/a")).resolves.toBeUndefined();
+		writeFileSync(modulePath, `import { readFileSync, writeFileSync } from "node:fs";\nexport function readCachedChrome(_cwd, options) { try { return JSON.parse(readFileSync(options.stateRoot + "/replacement-write.json", "utf8")); } catch { return undefined; } }\nexport function writeCachedChrome(_cwd, chrome, options) { writeFileSync(options.stateRoot + "/replacement-write.json", JSON.stringify(chrome)); }\n`);
+		await client.write("/project/a", { modelLabel: "replacement/model", thinkingLevel: "high" });
+		await client.dispose();
+
+		expect(JSON.parse(readFileSync(proofPath, "utf8"))).toEqual({
+			modelLabel: "replacement/model",
+			thinkingLevel: "high",
+		});
 	});
 
 	it("round-trips cache operations in its worker", async () => {

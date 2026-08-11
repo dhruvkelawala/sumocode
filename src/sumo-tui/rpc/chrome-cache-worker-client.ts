@@ -155,7 +155,8 @@ export class ChromeCacheWorkerClient {
 		worker.unref();
 		worker.on("message", (reply: ChromeCacheWorkerReply) => {
 			if (reply.fatal !== undefined) {
-				if (this.worker === worker) this.worker = undefined;
+				if (this.worker !== worker) return;
+				this.worker = undefined;
 				this.settlePending();
 				void worker.terminate();
 				return;
@@ -166,9 +167,14 @@ export class ChromeCacheWorkerClient {
 			this.pending.delete(reply.id);
 			resolve(reply.error === undefined ? reply.value : undefined);
 		});
-		worker.on("error", () => this.settlePending());
+		worker.on("error", () => {
+			if (this.worker !== worker) return;
+			this.worker = undefined;
+			this.settlePending();
+		});
 		worker.on("exit", () => {
-			if (this.worker === worker) this.worker = undefined;
+			if (this.worker !== worker) return;
+			this.worker = undefined;
 			this.settlePending();
 		});
 		this.worker = worker;

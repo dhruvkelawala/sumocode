@@ -6,6 +6,7 @@ import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { TERMINAL_CLEANUP_SEQUENCE } from "../../src/sumo-tui/runtime/terminal-controller.js";
 import { PI_BOOT_SEQUENCE, spawnPiPty, spawnSumocodePty, type SpawnedPiPty } from "./spawn-pi-pty.js";
 import { createRpcChildFixture } from "./rpc-child-fixture.js";
+import { hostOutputsHash } from "../../scripts/lib/host-bundle.mjs";
 
 const CSI_U_ENTER = "\x1b[13u";
 
@@ -160,8 +161,15 @@ describe("sumocode RPC host shell integration", () => {
 
 	it("falls back to source when a fresh host bundle omits main", async () => {
 		const bundlePath = join(process.cwd(), "dist/host/sumo-rpc-host.bundle.mjs");
+		const manifestPath = join(process.cwd(), "dist/host/.inputs.json");
 		const original = await readFile(bundlePath);
+		const originalManifest = await readFile(manifestPath);
 		await writeFile(bundlePath, "export const incomplete = true;\n");
+		// Repoint the manifest's outputsHash at the incomplete bundle so it passes
+		// the freshness/output-integrity checks, isolating the "no main()" guard.
+		const manifest = JSON.parse(originalManifest.toString()) as { outputsHash: string };
+		manifest.outputsHash = await hostOutputsHash(process.cwd());
+		await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
 		try {
 			const agentDir = await mkdtemp(join(tmpdir(), "sumocode-rpc-incomplete-bundle-agent-"));
 			app = spawnSumocodePty({ env: { PI_CODING_AGENT_DIR: agentDir }, cols: 100, rows: 30 });
@@ -169,6 +177,7 @@ describe("sumocode RPC host shell integration", () => {
 			await app.waitForOutput(PI_BOOT_SEQUENCE, 15_000);
 		} finally {
 			await writeFile(bundlePath, original);
+			await writeFile(manifestPath, originalManifest);
 		}
 	}, 30_000);
 

@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { TERMINAL_CLEANUP_SEQUENCE } from "../../src/sumo-tui/runtime/terminal-controller.js";
-import { PI_BOOT_SEQUENCE, spawnSumocodePty, type SpawnedPiPty } from "./spawn-pi-pty.js";
+import { PI_BOOT_SEQUENCE, spawnPiPty, spawnSumocodePty, type SpawnedPiPty } from "./spawn-pi-pty.js";
 
 let app: SpawnedPiPty | undefined;
 
@@ -37,6 +37,16 @@ async function waitForProcessExit(pid: number): Promise<void> {
 		await delay(10);
 	}
 	throw new Error(`process ${pid} remained alive after early host signal`);
+}
+
+async function waitForFileText(path: string, expected: string): Promise<void> {
+	for (let attempt = 0; attempt < 200; attempt += 1) {
+		try {
+			if ((await readFile(path, "utf8")) === expected) return;
+		} catch {}
+		await delay(10);
+	}
+	throw new Error(`timed out waiting for ${path} to contain ${expected}; output=${app?.getOutput()}`);
 }
 
 describe("sumocode RPC host shell integration", () => {
@@ -98,22 +108,31 @@ describe("sumocode RPC host shell integration", () => {
 		const directory = await mkdtemp(join(tmpdir(), "sumocode-rpc-early-signal-"));
 		const piBin = join(directory, "stalled-pi");
 		const pidFile = join(directory, "pid");
+		const exitCodeFile = join(directory, "exit-code");
 		await writeFile(
 			piBin,
-			"#!/usr/bin/env node\nprocess.on('SIGTERM', () => {});\nrequire('node:fs').writeFileSync(process.env.PID_FILE, String(process.pid));\nprocess.kill(process.ppid, 'SIGTERM');\nprocess.stdin.resume();\nsetInterval(() => {}, 1000);\n",
+			"#!/usr/bin/env node\nprocess.on('SIGTERM', () => {});\nrequire('node:fs').writeFileSync(process.env.PID_FILE, String(process.pid));\nprocess.stdin.resume();\nsetInterval(() => {}, 1000);\n",
 			{ mode: 0o700 },
 		);
-		app = spawnSumocodePty({
-			env: { PI_BIN: piBin, PID_FILE: pidFile, PI_CODING_AGENT_DIR: join(directory, "agent") },
+		app = spawnPiPty({
+			command: process.execPath,
+			args: [join(process.cwd(), "sumo-rpc-host.js")],
+			env: {
+				PI_BIN: piBin,
+				PID_FILE: pidFile,
+				PI_CODING_AGENT_DIR: join(directory, "agent"),
+				SUMOCODE_EXIT_CODE_FILE: exitCodeFile,
+				SUMOCODE_TEST_PRE_ADOPTION_DELAY_MS: "5000",
+				NODE_ENV: "test",
+			},
 			cols: 100,
 			rows: 30,
 		});
 
-		// The fixture signals its parent immediately after publishing its PID,
-		// deterministically exercising the pre-adoption owner instead of racing
-		// the real host's fast client adoption.
 		const pid = await waitForPid(pidFile);
+		app.sendSignal("SIGTERM");
 		await waitForProcessExit(pid);
+		await waitForFileText(exitCodeFile, "0");
 	}, 30_000);
 
 	it("exits promptly when startup hydration is stalled", async () => {

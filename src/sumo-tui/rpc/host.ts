@@ -1582,11 +1582,12 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 	const handleSigint = (): void => { void stop(130).then(() => exitProcess(130)); };
 	const handleSigterm = (): void => { void stop(0).then(() => exitProcess(0)); };
 	const adoptChildAndArmHostSignals = (): void => {
-		// The entry owns early signals until RpcClient has installed child
-		// lifecycle listeners. Remove those handlers and arm ours synchronously.
-		options.onPreSpawnedChildAdopted?.();
+		// Arm the new owner before removing the entry owner. Because this transfer
+		// is one synchronous callback, no signal can dispatch to both handlers and
+		// Node never restores its default disposition between them.
 		process.once("SIGINT", handleSigint);
 		process.once("SIGTERM", handleSigterm);
+		options.onPreSpawnedChildAdopted?.();
 	};
 
 	try {

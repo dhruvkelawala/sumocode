@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { writeFileSync } from "node:fs";
 import { createJiti } from "jiti";
 import { buildChildSpawnPlan } from "./src/sumo-tui/rpc/spawn-child.mjs";
 
@@ -55,9 +56,19 @@ function relayEarlySignal(signal) {
 	relayingEarlySignal = true;
 	releasePreAdoptionSignalHandlers();
 	void terminateUnadoptedChild().finally(() => {
-		// Installing a signal listener suppresses Node's default termination.
-		// Restore it only after bounded SIGKILL escalation has reaped the child.
-		process.kill(process.pid, signal);
+		// Match the steady-state host contract: SIGTERM is a graceful exit, while
+		// SIGINT is 130. Record the side channel before exiting so bash never
+		// substitutes a timing-dependent 143 for an early SIGTERM.
+		const code = signal === "SIGTERM" ? 0 : 130;
+		const exitCodePath = process.env.SUMOCODE_EXIT_CODE_FILE;
+		if (exitCodePath) {
+			try {
+				writeFileSync(exitCodePath, String(code));
+			} catch {
+				// The launcher falls back to the process status when this is unwritable.
+			}
+		}
+		process.exit(code);
 	});
 }
 
@@ -85,6 +96,15 @@ if (process.stdout.isTTY === true) {
 			releasePreAdoptionSignalHandlers();
 		}
 	}
+}
+
+// Integration-only seam that pins the otherwise sub-millisecond ownership
+// phase long enough to deliver a real PTY signal; inert outside NODE_ENV=test.
+const preAdoptionTestDelayMs = process.env.NODE_ENV === "test"
+	? Number.parseInt(process.env.SUMOCODE_TEST_PRE_ADOPTION_DELAY_MS ?? "0", 10)
+	: 0;
+if (Number.isFinite(preAdoptionTestDelayMs) && preAdoptionTestDelayMs > 0) {
+	await new Promise((resolve) => setTimeout(resolve, preAdoptionTestDelayMs));
 }
 
 const jiti = createJiti(import.meta.url, {

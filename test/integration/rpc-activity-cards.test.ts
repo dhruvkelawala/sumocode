@@ -26,6 +26,21 @@ function delay(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+async function waitForCommandTypes(path: string, expected: readonly string[]): Promise<string[]> {
+	for (let attempt = 0; attempt < 100; attempt += 1) {
+		try {
+			const types = (await readFile(path, "utf8"))
+				.trim()
+				.split("\n")
+				.filter(Boolean)
+				.map((line) => (JSON.parse(line) as { type: string }).type);
+			if (expected.every((type) => types.includes(type))) return types;
+		} catch {}
+		await delay(50);
+	}
+	throw new Error(`timed out waiting for fixture commands: ${expected.join(", ")}`);
+}
+
 let app: SpawnedPiPty | undefined;
 
 afterEach(() => {
@@ -313,6 +328,41 @@ describe("RPC durable Activity cards", () => {
 			text.includes("initial race completed") && text.includes("READY") && !text.includes("DIVINE INVOCATION")
 		), { cols, rows, timeoutMs: 10_000 });
 		expect(screen.text).not.toContain("initial race draft");
+	}, 30_000);
+
+	it("releases queued session actions only after initial chrome reaches steady state", async () => {
+		const cols = 100;
+		const rows = 30;
+		const directory = await mkdtemp(join(tmpdir(), "sumocode-rpc-initial-action-gate-"));
+		const logPath = join(directory, "commands.jsonl");
+		const piBin = await createRpcChildFixture("sumocode-rpc-initial-action-gate-child-", {
+			sessionId: "session-initial",
+			sessionName: "Initial Hydration",
+			newSessionId: "session-after-gate",
+			newSessionName: "After Gate",
+			initialHydrationRace: true,
+			initialHydrationDelayMs: 500,
+		});
+		app = spawnSumocodePty({
+			env: {
+				PI_CODING_AGENT_DIR: join(directory, "agent"),
+				SUMOCODE_STATE_DIR: join(directory, "state"),
+				SUMOCODE_RPC_FIXTURE_LOG: logPath,
+				PI_BIN: piBin,
+			},
+			cols,
+			rows,
+		});
+
+		await app.waitForOutput(PI_BOOT_SEQUENCE, 15_000);
+		app.sendInput(`/new${CSI_U_ENTER}`);
+		const commandTypes = await waitForCommandTypes(logPath, ["get_commands", "new_session"]);
+		expect(commandTypes.indexOf("new_session")).toBeGreaterThan(commandTypes.indexOf("get_commands"));
+		await waitForScreen(app, ({ text }) => text.includes("DIVINE INVOCATION") && !text.includes("initial race"), {
+			cols,
+			rows,
+			timeoutMs: 10_000,
+		});
 	}, 30_000);
 
 	it("does not replay an old-session agent_start into the destination scheduler", async () => {

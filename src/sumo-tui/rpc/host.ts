@@ -1651,7 +1651,6 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 			const restored = scheduler.rebindSession(refreshedState.sessionId, editor.getText());
 			if (restored.count > 0) editor.setText(restored.text);
 			latestActivitySnapshot = activityStore.bindSession(refreshedState.sessionId);
-			releaseInitialHydration();
 		} else {
 			let refreshedState: RpcHostChromeState | undefined;
 			let messages: readonly unknown[] | undefined;
@@ -1676,7 +1675,6 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 			const replay = sessionEvents.finishHydration();
 			for (const event of replay.supersededSnapshotEvents) scheduler.handleAgentEvent(event);
 			for (const event of replay.suffixEvents) processAgentEvent(event);
-			releaseInitialHydration();
 			stopWatchingGitBranch = await watchGitBranch(cwd, branch, (nextBranch) => {
 				const state = stateStore.setGitBranch(nextBranch);
 				runtime?.update({ state });
@@ -1692,6 +1690,9 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		deferActivityRuntimeUpdate = false;
 		await editor.configureAutocomplete(controls);
 		initialRuntime.markChromeStable();
+		// Deferred child-dependent input may now observe only the fully painted,
+		// steady-state hydration result and configured editor/chrome.
+		releaseInitialHydration();
 		// The cache is advisory. Keep its synchronous durability fsyncs off the
 		// startup critical path and snapshot the latest state when the task runs.
 		scheduleChromeCacheState();

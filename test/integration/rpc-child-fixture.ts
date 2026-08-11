@@ -39,6 +39,8 @@ export interface RpcChildFixtureOptions {
 	readonly sessionHydrationRace?: boolean;
 	/** Emit an event immediately after the first get_messages response during host boot. */
 	readonly initialHydrationRace?: boolean;
+	/** Hold that first hydration response so a PTY test can queue input first. */
+	readonly initialHydrationDelayMs?: number;
 	/** Emit an old-session agent_start while a session-changing RPC is pending. */
 	readonly oldSessionAgentStartDuringChange?: boolean;
 	readonly compactReason?: "manual" | "threshold" | "overflow";
@@ -65,6 +67,7 @@ let holdNextPromptUntilAbort = ${options.holdPromptUntilAbort ? "true" : "false"
 let sessionHydrationRacePending = false;
 const sessionHydrationRace = ${options.sessionHydrationRace ? "true" : "false"};
 let initialHydrationRacePending = ${options.initialHydrationRace ? "true" : "false"};
+const initialHydrationDelayMs = ${JSON.stringify(options.initialHydrationDelayMs ?? 0)};
 const oldSessionAgentStartDuringChange = ${options.oldSessionAgentStartDuringChange ? "true" : "false"};
 const streamChunks = ${JSON.stringify(options.streamChunks ?? null)};
 const chunkDelayMs = ${JSON.stringify(options.chunkDelayMs ?? 500)};
@@ -131,12 +134,16 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 		if (initialHydrationRacePending) {
 			initialHydrationRacePending = false;
 			const hydrationSnapshot = [...messages];
-			write(response(command, { messages: hydrationSnapshot }));
-			write({ type: "message_update", message: { id: "initial-race-draft", role: "assistant", content: "initial race draft" } });
-			messages = [{ id: "initial-race-complete", role: "assistant", content: "initial race completed" }];
-			isStreaming = false;
-			write({ type: "agent_end", messages, willRetry: false });
-			write({ type: "agent_settled" });
+			const finishInitialHydration = () => {
+				write(response(command, { messages: hydrationSnapshot }));
+				write({ type: "message_update", message: { id: "initial-race-draft", role: "assistant", content: "initial race draft" } });
+				messages = [{ id: "initial-race-complete", role: "assistant", content: "initial race completed" }];
+				isStreaming = false;
+				write({ type: "agent_end", messages, willRetry: false });
+				write({ type: "agent_settled" });
+			};
+			if (initialHydrationDelayMs > 0) setTimeout(finishInitialHydration, initialHydrationDelayMs);
+			else finishInitialHydration();
 			return;
 		}
 		if (sessionHydrationRacePending) {

@@ -395,11 +395,16 @@ export class SumoRpcClient {
 
 	private handleExit(error: Error): void {
 		this.exited = true;
+		if (this.exitNotified) {
+			// Deliberate stop owns teardown. Keep the child reference and pending
+			// callbacks alive until its stdio `close` boundary so buffered success
+			// responses can still resolve before stop() rejects true leftovers.
+			return;
+		}
 		const child = this.child;
 		if (child) this.terminateChild(child);
 		this.child = undefined;
 		this.rejectPending(error);
-		if (this.exitNotified) return;
 		this.exitNotified = true;
 		for (const listener of this.exitListeners) listener(error);
 	}

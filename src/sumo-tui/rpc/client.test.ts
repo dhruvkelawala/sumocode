@@ -112,6 +112,33 @@ describe("SumoRpcClient", () => {
 		expect(stopped).toBe(true);
 	});
 
+	it("delivers a buffered success response between deliberate exit and stdio close", async () => {
+		const child = new FakeRpcChild();
+		const client = new SumoRpcClient({ command: "unused", args: [], preSpawnedChild: child as never });
+		await client.start();
+		const response = client.send({ type: "get_state" });
+		const request = JSON.parse(String(child.stdin.write.mock.calls.at(-1)?.[0])) as { id: string };
+		child.kill.mockImplementation(() => {
+			queueMicrotask(() => {
+				child.signalCode = "SIGTERM";
+				child.emit("exit", null, "SIGTERM");
+				child.stdout.emit("data", `${JSON.stringify({
+					type: "response",
+					id: request.id,
+					command: "get_state",
+					success: true,
+					data: { sessionId: "final-session" },
+				})}\n`);
+				child.emit("close", null, "SIGTERM");
+			});
+			return true;
+		});
+
+		const stopping = client.stop();
+		await expect(response).resolves.toMatchObject({ success: true, data: { sessionId: "final-session" } });
+		await stopping;
+	});
+
 	it("transfers ownership after lifecycle listeners attach but before startup grace resolves", async () => {
 		const child = new FakeRpcChild();
 		const client = new SumoRpcClient({ command: "unused", args: [], preSpawnedChild: child as never });

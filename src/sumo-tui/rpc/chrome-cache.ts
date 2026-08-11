@@ -1,9 +1,14 @@
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
+import {
+	atomicWritePrivateJson,
+	defaultActivityStateRoot,
+	ensurePrivateSumocodeDirectory,
+	readPrivateJson,
+} from "../../activity/persistence.js";
 
 const CACHE_VERSION = 1 as const;
 const MAX_CACHED_CWDS = 20;
+const MAX_CACHE_BYTES = 64 * 1024;
 
 export interface CachedChrome {
 	readonly modelLabel?: string;
@@ -20,14 +25,16 @@ interface ChromeCacheFile {
 }
 
 export interface ChromeCacheOptions {
-	/** Test seam; production uses ~/.sumocode/chrome-cache.json. */
-	readonly path?: string;
+	/** Test seam; production resolves SUMOCODE_STATE_DIR / PI_CODING_AGENT_DIR. */
+	readonly stateRoot?: string;
+	readonly env?: NodeJS.ProcessEnv;
 	/** Test seam for deterministic eviction ordering. */
 	readonly now?: () => number;
 }
 
 function cachePath(options: ChromeCacheOptions): string {
-	return options.path ?? join(homedir(), ".sumocode", "chrome-cache.json");
+	const stateRoot = options.stateRoot ?? defaultActivityStateRoot(options.env);
+	return join(ensurePrivateSumocodeDirectory(["chrome", "v1"], stateRoot), "chrome-cache.json");
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -36,7 +43,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function readCacheFile(options: ChromeCacheOptions): ChromeCacheFile | undefined {
 	try {
-		const parsed: unknown = JSON.parse(readFileSync(cachePath(options), "utf8"));
+		const parsed = readPrivateJson(cachePath(options), MAX_CACHE_BYTES);
 		if (!isRecord(parsed) || parsed.version !== CACHE_VERSION || !isRecord(parsed.byCwd)) return undefined;
 		const byCwd: Record<string, CachedChromeEntry> = {};
 		for (const [cwd, value] of Object.entries(parsed.byCwd)) {
@@ -86,9 +93,7 @@ export function writeCachedChrome(cwd: string, chrome: CachedChrome, options: Ch
 			version: CACHE_VERSION,
 			byCwd: Object.fromEntries(retained),
 		};
-		const path = cachePath(options);
-		mkdirSync(join(path, ".."), { recursive: true });
-		writeFileSync(path, JSON.stringify(cache), "utf8");
+		atomicWritePrivateJson(cachePath(options), cache);
 	} catch {
 		// Cache persistence is deliberately advisory; startup must remain resilient.
 	}

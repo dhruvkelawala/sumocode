@@ -881,6 +881,11 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 			thinkingLevel: state.thinkingLevel,
 		});
 	};
+	const scheduleChromeCacheState = (): void => {
+		if (visualFixture) return;
+		const handle = setImmediate(() => cacheChromeState(stateStore.getSnapshot()));
+		handle.unref?.();
+	};
 	const pushStateAndCacheChrome = (state?: RpcHostChromeState): void => {
 		pushState(state);
 		// Controls invoke pushState optimistically before the child confirms a
@@ -1201,10 +1206,6 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 				transcriptRevision: transcriptPump.getRevision(),
 				activities: activityPresentation(latestActivitySnapshot),
 			});
-			// Session replacement can change the authoritative model/thinking
-			// without going through a model action callback. Refresh the startup
-			// hint only after both destination state and transcript commit.
-			cacheChromeState(state);
 		} catch {
 			// Keep the event buffer and fail-closed replacement active until both
 			// authoritative destination state and message history are fetched.
@@ -1227,6 +1228,9 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 			// in-flight suffix goes through every consumer and identity reconciliation.
 			for (const event of replay.supersededSnapshotEvents) scheduler.handleAgentEvent(event);
 			for (const event of replay.suffixEvents) processAgentEvent(event);
+			// Session replacement can change model/thinking in either the snapshot
+			// or its in-flight suffix. Persist the final projected destination state.
+			cacheChromeState(stateStore.getSnapshot());
 			deferActivityRuntimeUpdate = false;
 			runtime?.endSessionReplacement(ownershipRebound);
 			const recovery = treeNavigationRecovery;
@@ -1666,11 +1670,13 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 				activities: activityPresentation(latestActivitySnapshot),
 				suppressSettledFeedOnly: true,
 			});
-			cacheChromeState(hydratedState);
 		}
 		deferActivityRuntimeUpdate = false;
 		await editor.configureAutocomplete(controls);
 		initialRuntime.markChromeStable();
+		// The cache is advisory. Keep its synchronous durability fsyncs off the
+		// startup critical path and snapshot the latest state when the task runs.
+		scheduleChromeCacheState();
 		if (!visualFixture) {
 			// Submit the launcher's kickoff prompt (if any) only after start() +
 			// initial hydration above, so the transcript/UI are already in a

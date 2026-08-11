@@ -133,8 +133,11 @@ function releasePreAdoptionSignalHandlers() {
 function relayEarlySignal(signal) {
 	if (relayingEarlySignal) return;
 	relayingEarlySignal = true;
-	releasePreAdoptionSignalHandlers();
+	// Keep both guarded listeners installed until child reaping finishes. Any
+	// repeated signal re-enters this function, sees relayingEarlySignal, and is
+	// suppressed instead of restoring Node's default disposition mid-cleanup.
 	void terminateUnadoptedChild().finally(() => {
+		releasePreAdoptionSignalHandlers();
 		// Match the steady-state host contract: SIGTERM is a graceful exit, while
 		// SIGINT is 130. Record the side channel before exiting so bash never
 		// substitutes a timing-dependent 143 for an early SIGTERM.
@@ -157,8 +160,8 @@ function relayEarlySignal(signal) {
 if (process.stdout.isTTY === true) {
 	const plan = buildChildSpawnPlan({ ...process.env, SUMOCODE_ROOT_DIR: root }, process.argv.slice(2));
 	if (plan) {
-		process.once("SIGINT", handleEarlySigint);
-		process.once("SIGTERM", handleEarlySigterm);
+		process.on("SIGINT", handleEarlySigint);
+		process.on("SIGTERM", handleEarlySigterm);
 		try {
 			preSpawnedChild = spawn(plan.command, [...plan.args], {
 				cwd: plan.cwd,

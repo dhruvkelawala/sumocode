@@ -251,7 +251,7 @@ describe("sumocode RPC host shell integration", () => {
 		expect(activeState.cleanupSequenceSeen).toBe(false);
 	}, 30_000);
 
-	it("reaps the pre-spawned child when signalled before host adoption", async () => {
+	it("reaps the pre-spawned child across repeated signals before host adoption", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "sumocode-rpc-early-signal-"));
 		const piBin = join(directory, "stalled-pi");
 		const pidFile = join(directory, "pid");
@@ -277,6 +277,8 @@ describe("sumocode RPC host shell integration", () => {
 		});
 
 		const pid = await waitForPid(pidFile);
+		app.sendSignal("SIGTERM");
+		await delay(50);
 		app.sendSignal("SIGTERM");
 		await waitForProcessExit(pid);
 		await waitForFileText(exitCodeFile, "0");

@@ -18,7 +18,7 @@ import type { ChatPagerReplaceStats } from "../widgets/chat-pager.js";
 import { ModalLayer } from "../widgets/modal-layer.js";
 import { NotificationCenter } from "../widgets/notification.js";
 import { RpcChildExitError, SumoRpcClient, truncateForNotification } from "./client.js";
-import { readCachedChrome, writeCachedChrome } from "./chrome-cache.js";
+import { ChromeCacheWorkerClient } from "./chrome-cache-worker-client.js";
 import { RpcHostControls } from "./controls.js";
 import { createRpcKeybindingsManager, RpcHostEditorController } from "./editor.js";
 import { createRpcExtensionUiResponder } from "./extension-ui-responder.js";
@@ -812,6 +812,11 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 	}
 	const root = hostRoot(env);
 	const cwd = hostCwd(env);
+	const stateRoot = defaultActivityStateRoot(env);
+	const chromeCache = new ChromeCacheWorkerClient({
+		stateRoot,
+		modulePath: resolve(root, "src/sumo-tui/rpc/chrome-cache.ts"),
+	});
 	// Resolve and apply the configured theme before the runtime/shell is
 	// constructed so the host's first frame already renders the user's theme
 	// instead of the registry default (Cathedral). The RPC child process never
@@ -840,7 +845,7 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 	});
 	const stateStore = new RpcHostStateStore();
 	const activityStore = new FileActivityStore({
-		rootDir: defaultActivityStateRoot(env),
+		rootDir: stateRoot,
 		onDiagnostic: (diagnostic) => logDiagnostic("activity_store_diagnostic", { ...diagnostic }),
 	});
 	let latestActivitySnapshot = activityStore.getSnapshot();
@@ -876,10 +881,10 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 	};
 	const cacheChromeState = (state: RpcHostChromeState): void => {
 		if (visualFixture) return;
-		writeCachedChrome(cwd, {
+		void chromeCache.write(cwd, {
 			modelLabel: state.modelLabel,
 			thinkingLevel: state.thinkingLevel,
-		}, { env });
+		});
 	};
 	let pendingChromeCacheState: RpcHostChromeState | undefined;
 	let pendingChromeCacheWrite: ReturnType<typeof setImmediate> | undefined;
@@ -1540,6 +1545,10 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 			}
 			unsubscribeActivityStore();
 			activityStore.dispose();
+			if (pendingChromeCacheWrite) clearImmediate(pendingChromeCacheWrite);
+			pendingChromeCacheWrite = undefined;
+			pendingChromeCacheState = undefined;
+			await chromeCache.dispose();
 			await client.stop();
 		})();
 		await stopPromise;
@@ -1630,12 +1639,22 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		});
 		runtime = initialRuntime;
 		await initialRuntime.start();
-		// Cached chrome is only an advisory hydration hint. Read it after start()
-		// has painted the first frame so slow/network-backed state cannot delay
-		// visible startup, then replace it with authoritative hydration below.
+		// Cached chrome is only an advisory visual hint. Read it off-thread and
+		// never seed the authoritative store; the hydration repaint below wins
+		// regardless of worker completion order.
+		let acceptCachedChrome = !visualFixture;
 		if (!visualFixture) {
-			const cachedChrome = readCachedChrome(cwd, { env });
-			if (cachedChrome) initialRuntime.update({ state: stateStore.seedChrome(cachedChrome) });
+			void chromeCache.read(cwd).then((cachedChrome) => {
+				if (!acceptCachedChrome || !cachedChrome) return;
+				const current = stateStore.getSnapshot();
+				initialRuntime.update({
+					state: {
+						...current,
+						...(cachedChrome.modelLabel !== undefined ? { modelLabel: cachedChrome.modelLabel } : {}),
+						...(cachedChrome.thinkingLevel !== undefined ? { thinkingLevel: cachedChrome.thinkingLevel } : {}),
+					},
+				});
+			});
 		}
 		// The store may bind and publish an on-disk feed snapshot while the
 		// authoritative state/messages quiet-loop is still running. Hold that
@@ -1676,6 +1695,7 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 				const state = stateStore.setGitBranch(nextBranch);
 				runtime?.update({ state });
 			});
+			acceptCachedChrome = false;
 			const hydratedState = stateStore.getSnapshot();
 			initialRuntime.update({
 				state: hydratedState,
@@ -1690,8 +1710,8 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		// Deferred child-dependent input may now observe only the fully painted,
 		// steady-state hydration result and configured editor/chrome.
 		releaseInitialHydration();
-		// The cache is advisory. Keep its synchronous durability fsyncs off the
-		// startup critical path and snapshot the latest state when the task runs.
+		// The cache is advisory. Coalesce snapshots before posting them to the
+		// worker; lock waits and durability fsyncs never run on the TUI thread.
 		scheduleChromeCacheState();
 		if (!visualFixture) {
 			// Submit the launcher's kickoff prompt (if any) only after start() +

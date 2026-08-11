@@ -43,6 +43,8 @@ import { logDiagnostic } from "../runtime/diagnostics.js";
 export interface RpcHostMainOptions {
 	readonly argv?: readonly string[];
 	readonly preSpawnedChild?: ChildProcessWithoutNullStreams;
+	/** Entry ownership handoff: child lifecycle listeners are installed. */
+	readonly onPreSpawnedChildAdopted?: () => void;
 	readonly env?: NodeJS.ProcessEnv;
 	readonly stdout?: NodeJS.WriteStream;
 	readonly stdin?: NodeJS.ReadStream;
@@ -1561,6 +1563,7 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		// suffix after the authoritative replacement.
 		if (!visualFixture) sessionEvents.begin();
 		await client.start();
+		options.onPreSpawnedChildAdopted?.();
 		const branch = await readGitBranch(cwd);
 		const cachedChrome = visualFixture ? undefined : readCachedChrome(cwd);
 		if (cachedChrome) stateStore.seedChrome(cachedChrome);

@@ -1589,8 +1589,6 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		// the parallel git lookup.
 		const childStart = client.start().then(() => options.onPreSpawnedChildAdopted?.());
 		const [, branch] = await Promise.all([childStart, readGitBranch(cwd)]);
-		const cachedChrome = visualFixture ? undefined : readCachedChrome(cwd);
-		if (cachedChrome) stateStore.seedChrome(cachedChrome);
 		const initialTranscript = visualFixture ? visualFixture.transcript : transcriptPump.viewModel();
 		const initialState = visualFixture ? visualFixture.state : stateStore.setGitBranch(branch);
 		const initialRuntime = new RpcHostRuntime({
@@ -1622,6 +1620,13 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		});
 		runtime = initialRuntime;
 		await initialRuntime.start();
+		// Cached chrome is only an advisory hydration hint. Read it after start()
+		// has painted the first frame so slow/network-backed state cannot delay
+		// visible startup, then replace it with authoritative hydration below.
+		if (!visualFixture) {
+			const cachedChrome = readCachedChrome(cwd);
+			if (cachedChrome) initialRuntime.update({ state: stateStore.seedChrome(cachedChrome) });
+		}
 		// The store may bind and publish an on-disk feed snapshot while the
 		// authoritative state/messages quiet-loop is still running. Hold that
 		// intermediate repaint so the single post-hydration update can apply cold

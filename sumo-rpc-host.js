@@ -10,6 +10,7 @@ import { buildChildSpawnPlan } from "./src/sumo-tui/rpc/spawn-child.mjs";
 const root = resolve(process.env.SUMOCODE_ROOT_DIR ?? dirname(fileURLToPath(import.meta.url)));
 const bundlePath = resolve(root, "dist/host/sumo-rpc-host.bundle.mjs");
 const buildRecipePath = resolve(root, "scripts/build-host.mjs");
+const tsconfigPath = resolve(root, "tsconfig.json");
 const sourceFacePath = resolve(root, "src/assets/sumo-face.ans");
 const bundledFacePath = resolve(root, "dist/host/assets/sumo-face.ans");
 const sourceSpawnHelperPath = resolve(root, "src/sumo-tui/rpc/spawn-child.mjs");
@@ -31,19 +32,20 @@ async function newestSourceMtime(directory) {
 
 async function bundleIsFresh() {
 	try {
-		const [bundle, newestSource, buildRecipe, sourceFace, sourceFaceBytes, bundledFaceBytes, sourceSpawnHelperBytes, bundledSpawnHelperBytes] = await Promise.all([
+		const [bundle, newestSource, buildRecipe, tsconfig, sourceFace, sourceFaceBytes, bundledFaceBytes, sourceSpawnHelperBytes, bundledSpawnHelperBytes] = await Promise.all([
 			stat(bundlePath),
 			newestSourceMtime(resolve(root, "src")),
-			// Build options, externals, copied outputs, or the target can change
-			// without touching src/. Treat the recipe itself as a bundle input.
+			// Build options, compiler semantics, copied outputs, or the target can
+			// change without touching src/. Treat both configs as bundle inputs.
 			stat(buildRecipePath),
+			stat(tsconfigPath),
 			stat(sourceFacePath),
 			readFile(sourceFacePath),
 			readFile(bundledFacePath),
 			readFile(sourceSpawnHelperPath),
 			readFile(bundledSpawnHelperPath),
 		]);
-		return bundle.mtimeMs >= Math.max(newestSource, buildRecipe.mtimeMs, sourceFace.mtimeMs)
+		return bundle.mtimeMs >= Math.max(newestSource, buildRecipe.mtimeMs, tsconfig.mtimeMs, sourceFace.mtimeMs)
 			&& sourceFaceBytes.equals(bundledFaceBytes)
 			&& sourceSpawnHelperBytes.equals(bundledSpawnHelperBytes);
 	} catch {

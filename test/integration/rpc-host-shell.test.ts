@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { access, cp, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { access, cp, mkdir, mkdtemp, readFile, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
@@ -229,6 +229,21 @@ describe("sumocode RPC host shell integration", () => {
 		}
 	}, 30_000);
 
+	it("falls back to source when tsconfig is newer than the host bundle", async () => {
+		const configPath = join(process.cwd(), "tsconfig.json");
+		const [original, timestamps] = await Promise.all([readFile(configPath), stat(configPath)]);
+		await writeFile(configPath, Buffer.concat([original, Buffer.from("\n")]));
+		try {
+			const agentDir = await mkdtemp(join(tmpdir(), "sumocode-rpc-stale-tsconfig-agent-"));
+			app = spawnSumocodePty({ env: { PI_CODING_AGENT_DIR: agentDir }, cols: 100, rows: 30 });
+			await app.waitForOutput("host bundle stale — using source", 15_000);
+			await app.waitForOutput(PI_BOOT_SEQUENCE, 15_000);
+		} finally {
+			await writeFile(configPath, original);
+			await utimes(configPath, timestamps.atime, timestamps.mtime);
+		}
+	}, 30_000);
+
 	it.each(["SIGINT", "SIGTERM"] as const)("renders a retained Cathedral empty state and cleans up after %s", async (signal) => {
 		const agentDir = await mkdtemp(join(tmpdir(), "sumocode-rpc-agent-"));
 		app = spawnSumocodePty({ env: { PI_CODING_AGENT_DIR: agentDir }, cols: 100, rows: 30 });
@@ -289,7 +304,7 @@ describe("sumocode RPC host shell integration", () => {
 		const pidFile = join(directory, "pid");
 		await writeFile(
 			piBin,
-			"#!/usr/bin/env node\nrequire('node:fs').writeFileSync(process.env.PID_FILE, String(process.pid));\nprocess.on('SIGTERM', () => {});\nprocess.stdin.resume();\nsetInterval(() => {}, 1000);\n",
+			"#!/usr/bin/env node\nprocess.on('SIGTERM', () => {});\nrequire('node:fs').writeFileSync(process.env.PID_FILE, String(process.pid));\nprocess.kill(process.ppid, 'SIGTERM');\nprocess.stdin.resume();\nsetInterval(() => {}, 1000);\n",
 			{ mode: 0o700 },
 		);
 		app = spawnSumocodePty({
@@ -298,8 +313,10 @@ describe("sumocode RPC host shell integration", () => {
 			rows: 30,
 		});
 
+		// The fixture signals its parent immediately after publishing its PID,
+		// deterministically exercising the pre-adoption owner instead of racing
+		// the real host's fast client adoption.
 		const pid = await waitForPid(pidFile);
-		app.sendSignal("SIGTERM");
 		await waitForProcessExit(pid);
 	}, 30_000);
 

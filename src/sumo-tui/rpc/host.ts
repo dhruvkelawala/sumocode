@@ -1700,21 +1700,17 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 				stopWatchingGitBranch = stopWatching;
 			})().catch(() => undefined);
 		}
-		// Cached chrome is only an advisory visual hint. Read it off-thread and
-		// never seed the authoritative store; the hydration repaint below wins
-		// regardless of worker completion order.
+		// Cached chrome is only an advisory visual hint. Seed it into the store (not
+		// just the runtime) so a concurrent pre-hydration store-backed update — e.g.
+		// the async branch lookup's setGitBranch snapshot — preserves the hint
+		// instead of blanking the model/thinking rail. Authoritative hydration below
+		// clears acceptCachedChrome and overwrites these fields regardless of the
+		// worker's completion order.
 		let acceptCachedChrome = !visualFixture;
 		if (!visualFixture) {
 			void chromeCache.read(cwd).then((cachedChrome) => {
 				if (!acceptCachedChrome || !cachedChrome) return;
-				const current = stateStore.getSnapshot();
-				initialRuntime.update({
-					state: {
-						...current,
-						...(cachedChrome.modelLabel !== undefined ? { modelLabel: cachedChrome.modelLabel } : {}),
-						...(cachedChrome.thinkingLevel !== undefined ? { thinkingLevel: cachedChrome.thinkingLevel } : {}),
-					},
-				});
+				initialRuntime.update({ state: stateStore.seedChrome(cachedChrome) });
 			}).catch(() => undefined);
 		}
 		// The store may bind and publish an on-disk feed snapshot while the

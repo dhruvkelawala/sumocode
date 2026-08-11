@@ -5,6 +5,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import { TERMINAL_CLEANUP_SEQUENCE } from "../../src/sumo-tui/runtime/terminal-controller.js";
 import { PI_BOOT_SEQUENCE, spawnPiPty, spawnSumocodePty, type SpawnedPiPty } from "./spawn-pi-pty.js";
 
+const CSI_U_ENTER = "\x1b[13u";
+
 let app: SpawnedPiPty | undefined;
 
 afterEach(() => {
@@ -185,6 +187,22 @@ describe("sumocode RPC host shell integration", () => {
 		expect(app.getOutput()).not.toContain("host controls");
 		app.sendInput("\u0004");
 		await app.waitForOutput(TERMINAL_CLEANUP_SEQUENCE, 2_000);
+		expect(app.getCurrentTerminalState().altscreenActive).toBe(false);
+	}, 30_000);
+
+	it("handles /quit while startup hydration is stalled", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "sumocode-rpc-stalled-quit-"));
+		const piBin = join(directory, "stalled-pi");
+		await writeFile(piBin, "#!/usr/bin/env node\nprocess.stdin.resume();\nsetInterval(() => {}, 1000);\n", { mode: 0o700 });
+		app = spawnSumocodePty({
+			env: { PI_BIN: piBin, PI_CODING_AGENT_DIR: join(directory, "agent") },
+			cols: 100,
+			rows: 30,
+		});
+
+		await app.waitForOutput(PI_BOOT_SEQUENCE, 15_000);
+		app.sendInput(`/quit${CSI_U_ENTER}`);
+		await app.waitForOutput(TERMINAL_CLEANUP_SEQUENCE, 3_000);
 		expect(app.getCurrentTerminalState().altscreenActive).toBe(false);
 	}, 30_000);
 

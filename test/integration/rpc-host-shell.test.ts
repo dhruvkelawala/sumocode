@@ -242,6 +242,9 @@ describe("sumocode RPC host shell integration", () => {
 		});
 
 		await app.waitForOutput(PI_BOOT_SEQUENCE, 15_000);
+		app.sendInput("\u001f");
+		await delay(100);
+		expect(app.getOutput()).not.toContain("host controls");
 		app.sendInput("\u0004");
 		await app.waitForOutput(TERMINAL_CLEANUP_SEQUENCE, 2_000);
 		expect(app.getCurrentTerminalState().altscreenActive).toBe(false);

@@ -143,7 +143,7 @@ export class SumoRpcClient {
 		this.uiRequestHandler = handler;
 	}
 
-	public async start(): Promise<void> {
+	public async start(onAdopted?: () => void): Promise<void> {
 		if (this.child) throw new Error("RPC child already started");
 		this.exited = false;
 		this.exitNotified = false;
@@ -199,17 +199,17 @@ export class SumoRpcClient {
 			throw adoptionError;
 		}
 
+		// Transfer signal ownership only after this client owns child lifecycle.
+		// The callback runs synchronously so entry and host handlers never overlap.
+		onAdopted?.();
+
 		// Early-crash gate. `pid` is populated synchronously whenever the OS
 		// actually created the process (both the fresh spawn above and a
 		// pre-spawned child from the entry file), so the common path resolves
 		// immediately — this used to be a fixed 50ms sleep, which sat directly
-		// on the first-frame critical path once plan 061 made the splash wait
-		// only on start(). A spawn failure (ENOENT bad PI_BIN, …) leaves `pid`
-		// undefined and fires 'error'/'exit' within a tick, which flips
-		// `exited` via handleExit; the 50ms timer is only a cap for exotic
-		// states so this can never hang. Crashes that happen after a
-		// successful spawn are reported by the runtime exit handler exactly as
-		// they were when they landed outside the old 50ms window.
+		// on the first-frame critical path. A spawn failure leaves `pid`
+		// undefined and fires 'error'/'exit' within a tick; the timer is only a
+		// safety cap for exotic states so this can never hang.
 		await new Promise<void>((resolve) => {
 			if (child.pid !== undefined || this.exited) {
 				resolve();

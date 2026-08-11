@@ -8,5 +8,6 @@ src/background-tasks/bounded-terminal-runner.mjs text eol=lf
 scripts/build-extension.mjs text eol=lf
 scripts/lib/extension-bundle.mjs text eol=lf
 tsconfig.json text eol=lf
+package.json text eol=lf
 pnpm-lock.yaml text eol=lf
 dist/extension/** text eol=lf

@@ -217,7 +217,7 @@ describe("sumocode RPC host shell integration", () => {
 		const pidFile = join(directory, "pid");
 		await writeFile(
 			piBin,
-			"#!/usr/bin/env node\nrequire('node:fs').writeFileSync(process.env.PID_FILE, String(process.pid));\nprocess.stdin.resume();\nsetInterval(() => {}, 1000);\n",
+			"#!/usr/bin/env node\nrequire('node:fs').writeFileSync(process.env.PID_FILE, String(process.pid));\nprocess.on('SIGTERM', () => {});\nprocess.stdin.resume();\nsetInterval(() => {}, 1000);\n",
 			{ mode: 0o700 },
 		);
 		app = spawnSumocodePty({

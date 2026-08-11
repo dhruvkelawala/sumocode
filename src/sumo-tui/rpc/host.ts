@@ -1672,7 +1672,7 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 						...(cachedChrome.thinkingLevel !== undefined ? { thinkingLevel: cachedChrome.thinkingLevel } : {}),
 					},
 				});
-			});
+			}).catch(() => undefined);
 		}
 		// The store may bind and publish an on-disk feed snapshot while the
 		// authoritative state/messages quiet-loop is still running. Hold that

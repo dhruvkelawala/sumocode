@@ -42,6 +42,32 @@ describe("ChromeCacheWorkerClient", () => {
 		expect(dispose).toHaveBeenCalledOnce();
 	});
 
+	it("bounds worker disposal even after the drain itself completed", async () => {
+		let disposalStarted = false;
+		const dispose = vi.fn(() => {
+			if (disposalStarted) return Promise.resolve();
+			disposalStarted = true;
+			return new Promise<void>(() => undefined);
+		});
+		await expect(drainChromeCacheForShutdown(
+			async () => undefined,
+			dispose,
+			10,
+		)).resolves.toBe("timed-out");
+		expect(dispose).toHaveBeenCalledTimes(2);
+	});
+
+	it("swallows worker bootstrap failures for advisory reads", async () => {
+		const stateRoot = mkdtempSync(join(tmpdir(), "sumocode-chrome-worker-invalid-"));
+		tempDirectories.push(stateRoot);
+		const client = new ChromeCacheWorkerClient({
+			stateRoot,
+			modulePath: join(stateRoot, "missing-chrome-cache.ts"),
+		});
+		await expect(client.read("/project/a")).resolves.toBeUndefined();
+		await client.dispose();
+	});
+
 	it("round-trips cache operations in its worker", async () => {
 		const client = createClient();
 		try {

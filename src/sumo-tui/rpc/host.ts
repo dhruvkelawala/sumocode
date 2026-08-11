@@ -479,8 +479,8 @@ export interface RpcMessageFollowUpDependencies {
 	readonly isBlocked?: () => boolean;
 }
 
-export function handleRpcMessageFollowUp(deps: RpcMessageFollowUpDependencies): void {
-	void notifyOnError(async () => {
+export function handleRpcMessageFollowUp(deps: RpcMessageFollowUpDependencies): Promise<void> {
+	return notifyOnError(async () => {
 		if (deps.isBlocked?.() === true) {
 			deps.notifications.notify("branch summary in progress", "warning");
 			return;
@@ -1072,9 +1072,8 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		toggleActivityExpansion: () => runtime?.toggleActivityExpansion(),
 		requestRender,
 	});
-	const handleMessageFollowUp = (): void => {
+	const handleMessageFollowUp = (): Promise<void> =>
 		handleRpcMessageFollowUp({ editor, scheduler, notifications, isBlocked: () => treeNavigationBusy });
-	};
 	const handleMessageDequeue = (): void => {
 		handleRpcMessageDequeue({ editor, scheduler, stateStore, notifications });
 	};

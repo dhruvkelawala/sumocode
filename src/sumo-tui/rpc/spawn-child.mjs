@@ -24,6 +24,7 @@ const EXTENSION_INPUTS = [
 	"scripts/build-extension.mjs",
 	"scripts/lib/extension-bundle.mjs",
 	"tsconfig.json",
+	"pnpm-lock.yaml",
 ];
 
 const EXTENSION_OUTPUTS = [

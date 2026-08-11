@@ -15,6 +15,7 @@ const extensionInputs = [
 	"scripts/build-extension.mjs",
 	"scripts/lib/extension-bundle.mjs",
 	"tsconfig.json",
+	"pnpm-lock.yaml",
 ];
 const extensionOutputs = [
 	"sumocode-extension.bundle.mjs",

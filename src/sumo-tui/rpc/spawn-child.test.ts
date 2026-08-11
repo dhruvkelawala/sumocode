@@ -35,6 +35,7 @@ function makeRoot(bundleState: "fresh" | "stale" | "missing"): string {
 	writeFileSync(join(root, "scripts", "build-extension.mjs"), "// recipe\n");
 	writeFileSync(join(root, "scripts", "lib", "extension-bundle.mjs"), "// recipe helper\n");
 	writeFileSync(join(root, "tsconfig.json"), "{}\n");
+	writeFileSync(join(root, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n");
 	if (bundleState !== "missing") {
 		writeFileSync(join(root, "dist", "extension", "sumocode-extension.bundle.mjs"), "export default () => {};\n");
 		writeFileSync(join(root, "dist", "extension", "sumocode-extension.bundle.mjs.map"), "{}\n");
@@ -82,6 +83,7 @@ describe("buildChildSpawnPlan extension entry", () => {
 		["build recipe", join("scripts", "build-extension.mjs")],
 		["build recipe helper", join("scripts", "lib", "extension-bundle.mjs")],
 		["TypeScript build configuration", "tsconfig.json"],
+		["resolved dependency lockfile", "pnpm-lock.yaml"],
 	] as const)("uses source when the %s changes", (_label, input) => {
 		const root = makeRoot("fresh");
 		writeFileSync(join(root, input), "// changed recipe\n");

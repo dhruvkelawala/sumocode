@@ -43,6 +43,8 @@ import { logDiagnostic } from "../runtime/diagnostics.js";
 export interface RpcHostMainOptions {
 	readonly argv?: readonly string[];
 	readonly preSpawnedChild?: ChildProcessWithoutNullStreams;
+	/** Entry ownership handoff: child lifecycle listeners are installed. */
+	readonly onPreSpawnedChildAdopted?: () => void;
 	readonly env?: NodeJS.ProcessEnv;
 	readonly stdout?: NodeJS.WriteStream;
 	readonly stdin?: NodeJS.ReadStream;
@@ -1562,8 +1564,11 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		if (!visualFixture) sessionEvents.begin();
 		// readGitBranch spawns a git subprocess and is independent of the RPC
 		// child — overlap it with start() instead of paying it serially on the
-		// first-frame path.
-		const [, branch] = await Promise.all([client.start(), readGitBranch(cwd)]);
+		// first-frame path. Release the entry's temporary signal ownership as
+		// soon as start() installs child lifecycle listeners, without waiting for
+		// the parallel git lookup.
+		const childStart = client.start().then(() => options.onPreSpawnedChildAdopted?.());
+		const [, branch] = await Promise.all([childStart, readGitBranch(cwd)]);
 		const cachedChrome = visualFixture ? undefined : readCachedChrome(cwd);
 		if (cachedChrome) stateStore.seedChrome(cachedChrome);
 		const initialTranscript = visualFixture ? visualFixture.transcript : transcriptPump.viewModel();

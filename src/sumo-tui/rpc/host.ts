@@ -879,7 +879,7 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		writeCachedChrome(cwd, {
 			modelLabel: state.modelLabel,
 			thinkingLevel: state.thinkingLevel,
-		});
+		}, { env });
 	};
 	let pendingChromeCacheState: RpcHostChromeState | undefined;
 	let pendingChromeCacheWrite: ReturnType<typeof setImmediate> | undefined;
@@ -1637,7 +1637,7 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		// has painted the first frame so slow/network-backed state cannot delay
 		// visible startup, then replace it with authoritative hydration below.
 		if (!visualFixture) {
-			const cachedChrome = readCachedChrome(cwd);
+			const cachedChrome = readCachedChrome(cwd, { env });
 			if (cachedChrome) initialRuntime.update({ state: stateStore.seedChrome(cachedChrome) });
 		}
 		// The store may bind and publish an on-disk feed snapshot while the

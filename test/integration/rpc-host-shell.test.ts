@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
@@ -82,6 +82,20 @@ describe("sumocode RPC host shell integration", () => {
 		await app.waitForOutput(PI_BOOT_SEQUENCE, 15_000);
 		await app.waitForOutput("DIVINE INVOCATION", 15_000);
 		await app.waitForOutput(/CTRL\+[\s\S]*COMMANDS/, 15_000);
+	}, 30_000);
+
+	it("falls back to source when the copied spawn helper is stale", async () => {
+		const helperPath = join(process.cwd(), "dist/host/spawn-child.mjs");
+		const original = await readFile(helperPath);
+		await writeFile(helperPath, Buffer.concat([original, Buffer.from("\n// stale copy\n")]));
+		try {
+			const agentDir = await mkdtemp(join(tmpdir(), "sumocode-rpc-stale-helper-agent-"));
+			app = spawnSumocodePty({ env: { PI_CODING_AGENT_DIR: agentDir }, cols: 100, rows: 30 });
+			await app.waitForOutput("host bundle stale — using source", 15_000);
+			await app.waitForOutput(PI_BOOT_SEQUENCE, 15_000);
+		} finally {
+			await writeFile(helperPath, original);
+		}
 	}, 30_000);
 
 	it.each(["SIGINT", "SIGTERM"] as const)("renders a retained Cathedral empty state and cleans up after %s", async (signal) => {

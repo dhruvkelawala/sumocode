@@ -9,6 +9,8 @@ const bundlePath = resolve(root, "dist/host/sumo-rpc-host.bundle.mjs");
 const buildRecipePath = resolve(root, "scripts/build-host.mjs");
 const sourceFacePath = resolve(root, "src/assets/sumo-face.ans");
 const bundledFacePath = resolve(root, "dist/host/assets/sumo-face.ans");
+const sourceSpawnHelperPath = resolve(root, "src/sumo-tui/rpc/spawn-child.mjs");
+const bundledSpawnHelperPath = resolve(root, "dist/host/spawn-child.mjs");
 
 async function newestSourceMtime(directory) {
 	let newest = 0;
@@ -26,7 +28,7 @@ async function newestSourceMtime(directory) {
 
 async function bundleIsFresh() {
 	try {
-		const [bundle, newestSource, buildRecipe, sourceFace, sourceFaceBytes, bundledFaceBytes] = await Promise.all([
+		const [bundle, newestSource, buildRecipe, sourceFace, sourceFaceBytes, bundledFaceBytes, sourceSpawnHelperBytes, bundledSpawnHelperBytes] = await Promise.all([
 			stat(bundlePath),
 			newestSourceMtime(resolve(root, "src")),
 			// Build options, externals, copied outputs, or the target can change
@@ -35,8 +37,12 @@ async function bundleIsFresh() {
 			stat(sourceFacePath),
 			readFile(sourceFacePath),
 			readFile(bundledFacePath),
+			readFile(sourceSpawnHelperPath),
+			readFile(bundledSpawnHelperPath),
 		]);
-		return bundle.mtimeMs >= Math.max(newestSource, buildRecipe.mtimeMs, sourceFace.mtimeMs) && sourceFaceBytes.equals(bundledFaceBytes);
+		return bundle.mtimeMs >= Math.max(newestSource, buildRecipe.mtimeMs, sourceFace.mtimeMs)
+			&& sourceFaceBytes.equals(bundledFaceBytes)
+			&& sourceSpawnHelperBytes.equals(bundledSpawnHelperBytes);
 	} catch {
 		return false;
 	}

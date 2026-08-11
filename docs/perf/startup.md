@@ -2,19 +2,19 @@
 
 Report-only startup measurements for the current checkout. These numbers are intentionally not CI gates; use them to compare phase-by-phase deltas. While startup is serial, first-frame is approximately host-import + child-first-response-noext + hydration round trips because the first-frame probe passes `--no-extensions`; plan 061 changes that relationship. Child-first-response minus child-first-response-noext estimates the installed-extension-corpus cost.
 
-- commit: `567157b Merge remote-tracking branch 'origin/advisor/061-early-first-frame-v2' into advisor/062-prebundled-rpc-host-entry-v2`
+- commit: `e318379 test(host): prove rejected startup reaps the child`
 - runs: 5
-- generated: 2026-08-11T11:47:10.094Z
+- generated: 2026-08-11T12:02:36.777Z
 
 | Measurement | Avg middle runs | Min | Max | Runs | Failed |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| launcher-dry-run | 8.8ms | 8.3ms | 9.9ms | 5 | 0 |
-| host-import | 1124.7ms | 1116ms | 1585ms | 5 | 0 |
-| child-first-response | 1744.9ms | 1710.2ms | 1923.5ms | 5 | 0 |
-| child-first-response-noext | 1351.3ms | 1246.1ms | 1458.9ms | 5 | 0 |
-| print-mode | 7634.8ms | 6916.1ms | 9582.4ms | 5 | 0 |
-| first-frame | 468.8ms | 457.8ms | 483.8ms | 5 | 0 |
-| boot-screen-frame | 467.3ms | 462ms | 475ms | 5 | 0 |
-| app-ready | 1531.3ms | 1489ms | 1556ms | 5 | 0 |
-| stable-chrome | 1531.3ms | 1489ms | 1556ms | 5 | 0 |
-| input-ready | 467.3ms | 462ms | 475ms | 5 | 0 |
+| launcher-dry-run | 8.2ms | 7.8ms | 9.2ms | 5 | 0 |
+| host-import | 1133.3ms | 1110ms | 1569ms | 5 | 0 |
+| child-first-response | 1942.6ms | 1907.1ms | 2001.2ms | 5 | 0 |
+| child-first-response-noext | 1627.4ms | 1596.8ms | 1660.5ms | 5 | 0 |
+| print-mode | 9270.4ms | 7196.1ms | 10482.5ms | 5 | 0 |
+| first-frame | 462ms | 453.1ms | 479.2ms | 5 | 0 |
+| boot-screen-frame | 464ms | 459ms | 516ms | 5 | 0 |
+| app-ready | 1653.3ms | 1571ms | 1739ms | 5 | 0 |
+| stable-chrome | 1653.3ms | 1571ms | 1739ms | 5 | 0 |
+| input-ready | 464ms | 459ms | 516ms | 5 | 0 |

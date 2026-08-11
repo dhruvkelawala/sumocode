@@ -215,6 +215,42 @@ describe("sumocode RPC host shell integration", () => {
 		expect(terminal.cleanupSequenceSeen).toBe(true);
 	}, 30_000);
 
+	it("hydrates before optional branch metadata resolves", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "sumocode-rpc-async-branch-hydration-"));
+		const piBin = await createRpcChildFixture("sumocode-rpc-async-branch-child-", {
+			initialHydrationRace: true,
+			initialHydrationDelayMs: 50,
+		});
+		const gitBin = join(directory, "git");
+		const gitStartedFile = join(directory, "git-started");
+		const gitFinishedFile = join(directory, "git-finished");
+		await writeFile(
+			gitBin,
+			"#!/usr/bin/env node\nconst fs = require('node:fs');\nif (process.argv.includes('--show-current')) {\n  fs.writeFileSync(process.env.GIT_STARTED_FILE, 'started');\n  setTimeout(() => { fs.writeFileSync(process.env.GIT_FINISHED_FILE, 'finished'); process.stdout.write('main\\n'); }, 1800);\n} else {\n  process.stdout.write('.git/HEAD\\n');\n}\n",
+			{ mode: 0o700 },
+		);
+		app = spawnPiPty({
+			command: process.execPath,
+			args: [join(process.cwd(), "sumo-rpc-host.js")],
+			env: {
+				PI_BIN: piBin,
+				GIT_STARTED_FILE: gitStartedFile,
+				GIT_FINISHED_FILE: gitFinishedFile,
+				PI_CODING_AGENT_DIR: join(directory, "agent"),
+				PATH: `${directory}:${process.env.PATH ?? ""}`,
+			},
+			cols: 100,
+			rows: 30,
+		});
+
+		await waitForFileText(gitStartedFile, "started", 1_000);
+		await app.waitForOutput("initial race completed", 5_000);
+		await expect(readFile(gitFinishedFile, "utf8")).rejects.toThrow();
+		await waitForFileText(gitFinishedFile, "finished", 1_000);
+		app.sendSignal("SIGTERM");
+		await app.waitForOutput(TERMINAL_CLEANUP_SEQUENCE, 5_000);
+	}, 30_000);
+
 	it("exits promptly when startup hydration is stalled", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "sumocode-rpc-stalled-hydration-"));
 		const piBin = join(directory, "stalled-pi");

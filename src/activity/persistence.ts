@@ -167,16 +167,19 @@ export function activityRoot(rootDir = defaultActivityStateRoot()): string {
 	return join(resolve(rootDir), "sumocode", "activity", "v1");
 }
 
-export function hashedSessionId(ownerSessionId: string): string {
-	return createHash("sha256").update(ownerSessionId, "utf8").digest("hex");
-}
-
-export function ensureActivityRoot(rootDir = defaultActivityStateRoot()): string {
+/**
+ * Creates a private, owned directory below the configured SumoCode state root.
+ * Segments are names, never paths, so callers cannot escape the managed root.
+ */
+export function ensurePrivateSumocodeDirectory(segments: readonly string[], rootDir = defaultActivityStateRoot()): string {
+	if (segments.some((segment) => !segment || segment === "." || segment === ".." || basename(segment) !== segment)) {
+		throw new Error("SumoCode state directory segments must be simple names");
+	}
 	const base = ensureCanonicalBaseDirectory(rootDir);
 	// The caller-owned state root may use a broader mode; only SumoCode's
 	// managed descendants are chmod'd after no-symlink/ownership validation.
 	let root = base;
-	for (const segment of ["sumocode", "activity", "v1"]) {
+	for (const segment of ["sumocode", ...segments]) {
 		try {
 			mkdirSync(join(root, segment), { mode: PRIVATE_ACTIVITY_DIRECTORY_MODE });
 		} catch (error) {
@@ -189,6 +192,14 @@ export function ensureActivityRoot(rootDir = defaultActivityStateRoot()): string
 		root = candidate;
 	}
 	return root;
+}
+
+export function hashedSessionId(ownerSessionId: string): string {
+	return createHash("sha256").update(ownerSessionId, "utf8").digest("hex");
+}
+
+export function ensureActivityRoot(rootDir = defaultActivityStateRoot()): string {
+	return ensurePrivateSumocodeDirectory(["activity", "v1"], rootDir);
 }
 
 export function activityPaths(ownerSessionId: string, rootDir = defaultActivityStateRoot()): ActivityPaths {

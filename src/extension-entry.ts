@@ -13,9 +13,11 @@ const extensionInputs = [
 	"src/background-tasks/bounded-terminal-runner.mjs",
 	"scripts/build-extension.mjs",
 	"scripts/lib/extension-bundle.mjs",
+	"tsconfig.json",
 ];
 const extensionOutputs = [
 	"sumocode-extension.bundle.mjs",
+	"sumocode-extension.bundle.mjs.map",
 	"assets/sumo-face.ans",
 	"bounded-terminal-runner.mjs",
 ];

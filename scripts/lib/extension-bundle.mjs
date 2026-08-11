@@ -9,12 +9,14 @@ export const EXTENSION_ASSETS = [
 
 export const EXTENSION_RUNTIME_OUTPUTS = [
 	"sumocode-extension.bundle.mjs",
+	"sumocode-extension.bundle.mjs.map",
 	...EXTENSION_ASSETS.map(({ output }) => output),
 ];
 
 export const EXTENSION_RECIPE_INPUTS = [
 	"scripts/build-extension.mjs",
 	"scripts/lib/extension-bundle.mjs",
+	"tsconfig.json",
 ];
 
 export function normalizeHashPath(path) {

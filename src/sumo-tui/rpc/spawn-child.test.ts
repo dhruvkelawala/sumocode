@@ -34,8 +34,10 @@ function makeRoot(bundleState: "fresh" | "stale" | "missing"): string {
 	writeFileSync(join(root, "src", "background-tasks", "bounded-terminal-runner.mjs"), "runner\n");
 	writeFileSync(join(root, "scripts", "build-extension.mjs"), "// recipe\n");
 	writeFileSync(join(root, "scripts", "lib", "extension-bundle.mjs"), "// recipe helper\n");
+	writeFileSync(join(root, "tsconfig.json"), "{}\n");
 	if (bundleState !== "missing") {
 		writeFileSync(join(root, "dist", "extension", "sumocode-extension.bundle.mjs"), "export default () => {};\n");
+		writeFileSync(join(root, "dist", "extension", "sumocode-extension.bundle.mjs.map"), "{}\n");
 		writeFileSync(join(root, "dist", "extension", "assets", "sumo-face.ans"), "face\n");
 		writeFileSync(join(root, "dist", "extension", "bounded-terminal-runner.mjs"), "runner\n");
 		writeFileSync(
@@ -68,6 +70,7 @@ describe("buildChildSpawnPlan extension entry", () => {
 
 	it.each([
 		["bundle", "sumocode-extension.bundle.mjs"],
+		["source map", "sumocode-extension.bundle.mjs.map"],
 		["copied asset", join("assets", "sumo-face.ans")],
 	] as const)("uses source when the committed %s is corrupt", (_label, output) => {
 		const root = makeRoot("fresh");
@@ -78,6 +81,7 @@ describe("buildChildSpawnPlan extension entry", () => {
 	it.each([
 		["build recipe", join("scripts", "build-extension.mjs")],
 		["build recipe helper", join("scripts", "lib", "extension-bundle.mjs")],
+		["TypeScript build configuration", "tsconfig.json"],
 	] as const)("uses source when the %s changes", (_label, input) => {
 		const root = makeRoot("fresh");
 		writeFileSync(join(root, input), "// changed recipe\n");

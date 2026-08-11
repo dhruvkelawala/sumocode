@@ -1,8 +1,9 @@
 import { spawn } from "node:child_process";
 import { writeFileSync } from "node:fs";
-import { readFile, readdir, stat } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { hostInputManifestIsFresh, HOST_INPUT_MANIFEST_OUTPUT } from "./scripts/lib/host-bundle.mjs";
 import { buildChildSpawnPlan } from "./src/sumo-tui/rpc/spawn-child.mjs";
 
 // Executable host code belongs to this installed package, never the project
@@ -10,28 +11,11 @@ import { buildChildSpawnPlan } from "./src/sumo-tui/rpc/spawn-child.mjs";
 // invocation safely defaults to the directory containing this entry file.
 const root = resolve(process.env.SUMOCODE_ROOT_DIR ?? dirname(fileURLToPath(import.meta.url)));
 const bundlePath = resolve(root, "dist/host/sumo-rpc-host.bundle.mjs");
-const buildRecipePath = resolve(root, "scripts/build-host.mjs");
-const tsconfigPath = resolve(root, "tsconfig.json");
-const packageJsonPath = resolve(root, "package.json");
-const lockfilePath = resolve(root, "pnpm-lock.yaml");
+const inputManifestPath = resolve(root, "dist/host", HOST_INPUT_MANIFEST_OUTPUT);
 const sourceFacePath = resolve(root, "src/assets/sumo-face.ans");
 const bundledFacePath = resolve(root, "dist/host/assets/sumo-face.ans");
 const sourceSpawnHelperPath = resolve(root, "src/sumo-tui/rpc/spawn-child.mjs");
 const bundledSpawnHelperPath = resolve(root, "dist/host/spawn-child.mjs");
-
-async function newestSourceMtime(directory) {
-	let newest = 0;
-	const entries = await readdir(directory, { withFileTypes: true });
-	for (const entry of entries) {
-		const path = resolve(directory, entry.name);
-		if (entry.isDirectory()) {
-			newest = Math.max(newest, await newestSourceMtime(path));
-		} else if ((entry.name.endsWith(".ts") && !entry.name.endsWith(".test.ts")) || entry.name.endsWith(".mjs")) {
-			newest = Math.max(newest, (await stat(path)).mtimeMs);
-		}
-	}
-	return newest;
-}
 
 async function bundleIsFresh() {
 	const testDelayMs = process.env.NODE_ENV === "test"
@@ -41,29 +25,14 @@ async function bundleIsFresh() {
 		await new Promise((resolveDelay) => setTimeout(resolveDelay, testDelayMs));
 	}
 	try {
-		const [bundle, newestSource, buildRecipe, tsconfig, packageJson, lockfile, sourceFace, sourceFaceBytes, bundledFaceBytes, sourceSpawnHelperBytes, bundledSpawnHelperBytes] = await Promise.all([
-			stat(bundlePath),
-			newestSourceMtime(resolve(root, "src")),
-			// Build options, compiler semantics, package metadata, and the resolved
-			// bundler can change without touching src/. Treat each as an input.
-			stat(buildRecipePath),
-			stat(tsconfigPath),
-			stat(packageJsonPath),
-			stat(lockfilePath),
-			stat(sourceFacePath),
+		const [manifestBytes, sourceFaceBytes, bundledFaceBytes, sourceSpawnHelperBytes, bundledSpawnHelperBytes] = await Promise.all([
+			readFile(inputManifestPath, "utf8"),
 			readFile(sourceFacePath),
 			readFile(bundledFacePath),
 			readFile(sourceSpawnHelperPath),
 			readFile(bundledSpawnHelperPath),
 		]);
-		return bundle.mtimeMs >= Math.max(
-			newestSource,
-			buildRecipe.mtimeMs,
-			tsconfig.mtimeMs,
-			packageJson.mtimeMs,
-			lockfile.mtimeMs,
-			sourceFace.mtimeMs,
-		)
+		return await hostInputManifestIsFresh(root, JSON.parse(manifestBytes))
 			&& sourceFaceBytes.equals(bundledFaceBytes)
 			&& sourceSpawnHelperBytes.equals(bundledSpawnHelperBytes);
 	} catch {

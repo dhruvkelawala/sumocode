@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { TERMINAL_CLEANUP_SEQUENCE } from "../../src/sumo-tui/runtime/terminal-controller.js";
 import { PI_BOOT_SEQUENCE, spawnPiPty, spawnSumocodePty, type SpawnedPiPty } from "./spawn-pi-pty.js";
+import { createRpcChildFixture } from "./rpc-child-fixture.js";
 
 const CSI_U_ENTER = "\x1b[13u";
 
@@ -473,6 +474,24 @@ describe("sumocode RPC host shell integration", () => {
 		app.sendInput(`/quit${CSI_U_ENTER}`);
 		await app.waitForOutput(TERMINAL_CLEANUP_SEQUENCE, 3_000);
 		expect(app.getCurrentTerminalState().altscreenActive).toBe(false);
+	}, 30_000);
+
+	it("replays only the latest mutually exclusive selector after hydration", async () => {
+		const piBin = await createRpcChildFixture("sumocode-rpc-deferred-selector-", {
+			initialHydrationRace: true,
+			initialHydrationDelayMs: 750,
+		});
+		const agentDir = await mkdtemp(join(tmpdir(), "sumocode-rpc-deferred-selector-agent-"));
+		app = spawnSumocodePty({ env: { PI_BIN: piBin, PI_CODING_AGENT_DIR: agentDir }, cols: 100, rows: 30 });
+
+		await app.waitForOutput(PI_BOOT_SEQUENCE, 15_000);
+		app.sendInput("\u001f");
+		app.sendInput("\u000c");
+		await app.waitForOutput("initial race completed", 5_000);
+		await delay(250);
+		expect(app.getOutput()).not.toContain("host controls");
+		app.sendSignal("SIGTERM");
+		await app.waitForOutput(TERMINAL_CLEANUP_SEQUENCE, 5_000);
 	}, 30_000);
 
 	it("accepts editor input while startup hydration is pending", async () => {

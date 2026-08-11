@@ -77,19 +77,18 @@ function hasFreshBundle(): boolean {
 	}
 }
 
-// This module is itself evaluated by Pi's extension-loader jiti context, so
-// its dynamic importer preserves Pi's .js→.ts resolution, peer aliases, and
-// shared module singletons even when `path` is sourcePath. Do not invoke this
-// wrapper directly with native Node; rpc-host-shell.test.ts locks both forced
-// source and an isolated peer-only package copy with no local node_modules.
-// A content-fresh bundle can still fail
-// external-peer resolution in a particular installation, so import-time
-// failure falls back through that same Jiti-aware importer.
+// Pi's outer Jiti compiles this lexical source import, preserving its .js→.ts
+// resolution, peer aliases, and shared module singletons. A nested Jiti would
+// lose those loader aliases. The peer-only forced-source integration case locks
+// this contract with neither local node_modules nor pnpm-lock.yaml available.
+const importSourceThroughPiJiti = () => import("./extension.js");
+
 const extensionModule = await importExtensionEntry({
 	bundlePath,
 	sourcePath,
 	useBundle: process.env.SUMOCODE_EXTENSION_BUNDLE !== "0" && hasFreshBundle(),
-	importer: (path) => import(pathToFileURL(path).href),
+	bundleImporter: (path) => import(pathToFileURL(path).href),
+	sourceImporter: importSourceThroughPiJiti,
 	onBundleFailure: () => {
 		console.warn("[sumocode] extension bundle failed to import — using source");
 	},

@@ -2,7 +2,8 @@ export interface ExtensionEntryImportOptions<T> {
 	readonly bundlePath: string;
 	readonly sourcePath: string;
 	readonly useBundle: boolean;
-	readonly importer: (path: string) => Promise<T>;
+	readonly bundleImporter: (path: string) => Promise<T>;
+	readonly sourceImporter: (path: string) => Promise<T>;
 	readonly onBundleFailure?: (error: unknown) => void;
 }
 
@@ -15,10 +16,10 @@ export interface ExtensionEntryImportOptions<T> {
 export async function importExtensionEntry<T>(options: ExtensionEntryImportOptions<T>): Promise<T> {
 	if (options.useBundle) {
 		try {
-			return await options.importer(options.bundlePath);
+			return await options.bundleImporter(options.bundlePath);
 		} catch (error) {
 			options.onBundleFailure?.(error);
 		}
 	}
-	return options.importer(options.sourcePath);
+	return options.sourceImporter(options.sourcePath);
 }

@@ -168,8 +168,8 @@ describe("sumocode RPC host shell integration", () => {
 		await bootWithExtensionMode(mode);
 	}, 30_000);
 
-	it("loads the bundle from a peer-only package copy with no local node_modules", async () => {
-		const packageRoot = await mkdtemp(join(tmpdir(), "sumocode-peer-only-package-"));
+	it.each(["bundle", "source"] as const)("loads %s from a peer-only package copy with no local node_modules", async (mode) => {
+		const packageRoot = await mkdtemp(join(tmpdir(), `sumocode-peer-only-${mode}-package-`));
 		await mkdir(join(packageRoot, "dist"), { recursive: true });
 		await mkdir(join(packageRoot, "scripts", "lib"), { recursive: true });
 		await Promise.all([
@@ -182,10 +182,13 @@ describe("sumocode RPC host shell integration", () => {
 		]);
 		await expect(access(join(packageRoot, "node_modules"))).rejects.toThrow();
 		await expect(access(join(packageRoot, "pnpm-lock.yaml"))).rejects.toThrow();
-		const agentDir = await mkdtemp(join(tmpdir(), "sumocode-peer-only-agent-"));
+		const agentDir = await mkdtemp(join(tmpdir(), `sumocode-peer-only-${mode}-agent-`));
 		app = spawnPiPty({
 			args: ["--offline", "--no-extensions", "--no-session", "--approve", "-e", packageRoot],
-			env: { PI_CODING_AGENT_DIR: agentDir },
+			env: {
+				PI_CODING_AGENT_DIR: agentDir,
+				...(mode === "source" ? { SUMOCODE_EXTENSION_BUNDLE: "0" } : {}),
+			},
 			cols: 100,
 			rows: 30,
 		});

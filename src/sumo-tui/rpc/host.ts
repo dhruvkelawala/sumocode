@@ -1563,11 +1563,16 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 			}
 			unsubscribeActivityStore();
 			activityStore.dispose();
-			await drainChromeCacheForShutdown(
-				flushChromeCacheState,
-				() => chromeCache.dispose(),
-			);
-			await client.stop();
+			// Signal/reap Pi immediately, while advisory cache shutdown runs in
+			// parallel. Neither operation may extend the other's bounded grace.
+			const childStop = client.stop();
+			await Promise.all([
+				childStop,
+				drainChromeCacheForShutdown(
+					flushChromeCacheState,
+					() => chromeCache.dispose(),
+				),
+			]);
 		})();
 		await stopPromise;
 	};
@@ -1606,14 +1611,19 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 	// `handleAppInterrupt` declaration above for why this is the correct reuse
 	// point instead of a second, editor-local interrupt implementation.
 	handleAppInterrupt = (): void => { handlePreEditorInput("\x1b"); };
-	const handleSigint = (): void => { void stop(130).then(() => exitProcess(130)); };
-	const handleSigterm = (): void => { void stop(0).then(() => exitProcess(0)); };
+	let handlingHostSignal = false;
+	const handleHostSignal = (code: number): void => {
+		if (handlingHostSignal) return;
+		handlingHostSignal = true;
+		void stop(code).then(() => exitProcess(code));
+	};
+	const handleSigint = (): void => handleHostSignal(130);
+	const handleSigterm = (): void => handleHostSignal(0);
 	const adoptChildAndArmHostSignals = (): void => {
-		// Arm the new owner before removing the entry owner. Because this transfer
-		// is one synchronous callback, no signal can dispatch to both handlers and
-		// Node never restores its default disposition between them.
-		process.once("SIGINT", handleSigint);
-		process.once("SIGTERM", handleSigterm);
+		// Arm the new owner before removing the entry owner. Persistent guarded
+		// listeners suppress repeated signals until child/cache cleanup completes.
+		process.on("SIGINT", handleSigint);
+		process.on("SIGTERM", handleSigterm);
 		options.onPreSpawnedChildAdopted?.();
 	};
 

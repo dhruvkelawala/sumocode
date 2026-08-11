@@ -6,6 +6,7 @@ import { buildChildSpawnPlan } from "./src/sumo-tui/rpc/spawn-child.mjs";
 const PRE_ADOPTION_KILL_GRACE_MS = 250;
 let preSpawnedChild;
 let relayingEarlySignal = false;
+let earlyCleanupPromise;
 const handleEarlySigint = () => relayEarlySignal("SIGINT");
 const handleEarlySigterm = () => relayEarlySignal("SIGTERM");
 
@@ -57,7 +58,7 @@ function relayEarlySignal(signal) {
 	// Keep both guarded listeners installed until child reaping finishes. Any
 	// repeated signal re-enters this function, sees relayingEarlySignal, and is
 	// suppressed instead of restoring Node's default disposition mid-cleanup.
-	void terminateUnadoptedChild().finally(() => {
+	earlyCleanupPromise = terminateUnadoptedChild().finally(() => {
 		releasePreAdoptionSignalHandlers();
 		// Match the steady-state host contract: SIGTERM is a graceful exit, while
 		// SIGINT is 130. Record the side channel before exiting so bash never
@@ -123,6 +124,24 @@ try {
 	releasePreAdoptionSignalHandlers();
 	throw error;
 }
+
+// Integration-only seam that widens the otherwise sub-millisecond import-tail
+// window so a PTY signal can land between import and adoption; inert in prod.
+const preMainTestDelayMs = process.env.NODE_ENV === "test"
+	? Number.parseInt(process.env.SUMOCODE_TEST_PRE_MAIN_DELAY_MS ?? "0", 10)
+	: 0;
+if (Number.isFinite(preMainTestDelayMs) && preMainTestDelayMs > 0) {
+	await new Promise((resolve) => setTimeout(resolve, preMainTestDelayMs));
+}
+
+// An early SIGINT/SIGTERM may have begun tearing down the pre-spawned child
+// during import. Never adopt it or enter the retained runtime/altscreen once
+// cleanup has started; the early handler owns the child reap and process exit.
+if (relayingEarlySignal) {
+	await earlyCleanupPromise;
+	process.exit(0);
+}
+
 try {
 	await mod.main({
 		preSpawnedChild,

@@ -23,7 +23,15 @@ type PromiseWithResolversConstructor = PromiseConstructor & {
 
 function execFileText(execFileFn: ExecFile, file: string, args: readonly string[], cwd: string): Promise<string | undefined> {
 	const { promise, resolve } = (Promise as PromiseWithResolversConstructor).withResolvers<string | undefined>();
-	const child = execFileFn(file, [...args], { cwd, timeout: 2_000, killSignal: "SIGKILL" }, (error, stdout) => {
+	// execFile's own `timeout` option installs a REFERENCED timer that keeps Node
+	// (and the launcher) alive until it fires, even with the child and its pipes
+	// unref'd. Drive the timeout ourselves with an unref'd timer + AbortSignal so
+	// optional branch chrome never delays a graceful exit; abort kills the child.
+	const controller = new AbortController();
+	const timer = setTimeout(() => controller.abort(), 2_000);
+	timer.unref?.();
+	const child = execFileFn(file, [...args], { cwd, signal: controller.signal, killSignal: "SIGKILL" }, (error, stdout) => {
+		clearTimeout(timer);
 		if (error) {
 			resolve(undefined);
 			return;
@@ -31,11 +39,8 @@ function execFileText(execFileFn: ExecFile, file: string, args: readonly string[
 		const text = String(stdout).trim();
 		resolve(text.length > 0 ? text : undefined);
 	});
-	// Branch chrome is optional. Unref the child AND its stdout/stderr pipe
-	// handles so an in-flight git read (up to a 2s timeout each) can never keep
-	// Node or the launcher alive after a graceful exit has already torn down the
-	// runtime and cleaned up the terminal — the child handle alone leaves the
-	// referenced pipes holding the event loop.
+	// Also unref the child and its stdout/stderr pipe handles so nothing holds
+	// the event loop once the runtime has been torn down and the terminal cleaned.
 	const unrefStream = (stream: unknown): void => {
 		(stream as { unref?: () => void } | null | undefined)?.unref?.();
 	};

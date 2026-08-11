@@ -64,9 +64,19 @@ function eventElapsedMs(events, eventName, startWallMs) {
 
 function summariseMeasurement(label, samples) {
 	const safeSamples = samples.map((sample) => {
-		if (sample.ok !== false || typeof sample.stderr !== "string") return sample;
-		const { stderr: _stderr, ...withoutStderr } = sample;
-		return { ...withoutStderr, error: sample.error ?? "process failed" };
+		if (sample.ok !== false) return sample;
+		// Failed probes may capture output from the operator's configured
+		// providers or extensions. Keep only structured timings/status in the
+		// tracked public report; raw stderr/stdout/PTY/diagnostic tails remain
+		// process-local and must never be serialized.
+		const {
+			stderr: _stderr,
+			stdout: _stdout,
+			output: _output,
+			diagEvents: _diagEvents,
+			...publicSample
+		} = sample;
+		return { ...publicSample, error: sample.error ?? "process failed" };
 	});
 	const successfulSamples = safeSamples.filter((sample) => sample.ok !== false);
 	const durations = successfulSamples.map((sample) => sample.durationMs);
@@ -386,7 +396,7 @@ async function measureStartupTimeline() {
 
 function markdown(report) {
 	const rows = report.measurements.map((measurement) => `| ${measurement.label} | ${measurement.avgMiddleMs === null ? "—" : `${measurement.avgMiddleMs}ms`} | ${measurement.minMs === null ? "—" : `${measurement.minMs}ms`} | ${measurement.maxMs === null ? "—" : `${measurement.maxMs}ms`} | ${measurement.samples.length} | ${measurement.failedRuns} |`);
-	return `# SumoCode startup perf snapshot\n\nReport-only startup measurements for the current checkout. These numbers are intentionally not CI gates; use them to compare phase-by-phase deltas. While startup is serial, first-frame is approximately host-import + child-first-response + hydration round trips; plan 061 changes that relationship. Child-first-response minus child-first-response-noext estimates the installed-extension-corpus cost.\n\n- commit: \`${report.commit}\`\n- runs: ${report.runs}\n- generated: ${report.generatedAt}\n\n| Measurement | Avg middle runs | Min | Max | Runs | Failed |\n| --- | ---: | ---: | ---: | ---: | ---: |\n${rows.join("\n")}\n`;
+	return `# SumoCode startup perf snapshot\n\nReport-only startup measurements for the current checkout. These numbers are intentionally not CI gates; use them to compare phase-by-phase deltas. While startup is serial, first-frame is approximately host-import + child-first-response-noext + hydration round trips because the first-frame probe passes \`--no-extensions\`; plan 061 changes that relationship. Child-first-response minus child-first-response-noext estimates the installed-extension-corpus cost.\n\n- commit: \`${report.commit}\`\n- runs: ${report.runs}\n- generated: ${report.generatedAt}\n\n| Measurement | Avg middle runs | Min | Max | Runs | Failed |\n| --- | ---: | ---: | ---: | ---: | ---: |\n${rows.join("\n")}\n`;
 }
 
 async function main() {

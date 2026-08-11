@@ -31,10 +31,17 @@ function execFileText(execFileFn: ExecFile, file: string, args: readonly string[
 		const text = String(stdout).trim();
 		resolve(text.length > 0 ? text : undefined);
 	});
-	// Branch chrome is optional. Unref so an in-flight git read (up to a 2s
-	// timeout each) can never keep Node or the launcher alive after a graceful
-	// exit has already torn down the runtime and cleaned up the terminal.
+	// Branch chrome is optional. Unref the child AND its stdout/stderr pipe
+	// handles so an in-flight git read (up to a 2s timeout each) can never keep
+	// Node or the launcher alive after a graceful exit has already torn down the
+	// runtime and cleaned up the terminal — the child handle alone leaves the
+	// referenced pipes holding the event loop.
+	const unrefStream = (stream: unknown): void => {
+		(stream as { unref?: () => void } | null | undefined)?.unref?.();
+	};
 	child?.unref?.();
+	unrefStream(child?.stdout);
+	unrefStream(child?.stderr);
 	return promise;
 }
 

@@ -2,34 +2,11 @@ import { spawn } from "node:child_process";
 import { createJiti } from "jiti";
 import { buildChildSpawnPlan } from "./src/sumo-tui/rpc/spawn-child.mjs";
 
-const preSpawnedChild = (() => {
-	if (process.stdout.isTTY !== true) return undefined;
-	const plan = buildChildSpawnPlan(process.env, process.argv.slice(2));
-	if (!plan) return undefined;
-	try {
-		const child = spawn(plan.command, [...plan.args], {
-			cwd: plan.cwd,
-			env: plan.env,
-			stdio: ["pipe", "pipe", "pipe"],
-		});
-		// spawn failures arrive asynchronously. Own the error immediately so it
-		// cannot become an unhandled EventEmitter error while jiti imports the
-		// host; SumoRpcClient adopts and reports the saved error in start().
-		child.once("error", (error) => {
-			child[Symbol.for("sumocode.rpc.preSpawnError")] = error;
-		});
-		return child;
-	} catch {
-		return undefined;
-	}
-})();
-
-const jiti = createJiti(import.meta.url, {
-	moduleCache: true,
-	tryNative: false,
-});
-
 const PRE_ADOPTION_KILL_GRACE_MS = 250;
+let preSpawnedChild;
+let relayingEarlySignal = false;
+const handleEarlySigint = () => relayEarlySignal("SIGINT");
+const handleEarlySigterm = () => relayEarlySignal("SIGTERM");
 
 function childHasExited() {
 	return !preSpawnedChild || preSpawnedChild.exitCode !== null || preSpawnedChild.signalCode !== null;
@@ -68,10 +45,6 @@ async function terminateUnadoptedChild() {
 	await waitForPreSpawnedChildExit(PRE_ADOPTION_KILL_GRACE_MS);
 }
 
-let relayingEarlySignal = false;
-const handleEarlySigint = () => relayEarlySignal("SIGINT");
-const handleEarlySigterm = () => relayEarlySignal("SIGTERM");
-
 function releasePreAdoptionSignalHandlers() {
 	process.removeListener("SIGINT", handleEarlySigint);
 	process.removeListener("SIGTERM", handleEarlySigterm);
@@ -88,10 +61,36 @@ function relayEarlySignal(signal) {
 	});
 }
 
-if (preSpawnedChild) {
-	process.once("SIGINT", handleEarlySigint);
-	process.once("SIGTERM", handleEarlySigterm);
+// Install temporary signal owners before spawn so the child cannot publish its
+// PID while the host is still using Node's default signal disposition.
+if (process.stdout.isTTY === true) {
+	const plan = buildChildSpawnPlan(process.env, process.argv.slice(2));
+	if (plan) {
+		process.once("SIGINT", handleEarlySigint);
+		process.once("SIGTERM", handleEarlySigterm);
+		try {
+			preSpawnedChild = spawn(plan.command, [...plan.args], {
+				cwd: plan.cwd,
+				env: plan.env,
+				stdio: ["pipe", "pipe", "pipe"],
+			});
+			// Spawn failures arrive asynchronously. Own the error immediately so it
+			// cannot become an unhandled EventEmitter error while jiti imports the
+			// host; SumoRpcClient adopts and reports the saved error in start().
+			preSpawnedChild.once("error", (error) => {
+				preSpawnedChild[Symbol.for("sumocode.rpc.preSpawnError")] = error;
+			});
+		} catch {
+			preSpawnedChild = undefined;
+			releasePreAdoptionSignalHandlers();
+		}
+	}
 }
+
+const jiti = createJiti(import.meta.url, {
+	moduleCache: true,
+	tryNative: false,
+});
 
 let mod;
 try {

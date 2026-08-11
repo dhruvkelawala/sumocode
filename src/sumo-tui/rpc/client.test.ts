@@ -52,6 +52,23 @@ class FakeRpcChild extends EventEmitter {
 }
 
 describe("SumoRpcClient", () => {
+	it("start() resolves without a fixed sleep when the child process exists", async () => {
+		vi.useFakeTimers();
+		try {
+			const child = new FakeRpcChild();
+			const client = new SumoRpcClient({
+				command: "unused",
+				args: [],
+				preSpawnedChild: child as never,
+			});
+			// Under fake timers the old fixed 50ms sleep would hang forever here;
+			// the pid fast-path must resolve without any timer advancing.
+			await client.start();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("uses a pre-spawned child without calling spawn again", async () => {
 		const child = new FakeRpcChild();
 		vi.mocked(spawn).mockClear();

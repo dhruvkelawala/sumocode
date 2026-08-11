@@ -178,7 +178,31 @@ export class SumoRpcClient {
 			this.handleExit(new RpcChildExitError(`RPC child exited code=${code ?? "null"} signal=${signal ?? "null"}. stderr=${this.stderrBuffer}`, { code, signal }));
 		});
 
-		await new Promise((resolve) => setTimeout(resolve, 50));
+		// Early-crash gate. `pid` is populated synchronously whenever the OS
+		// actually created the process (both the fresh spawn above and a
+		// pre-spawned child from the entry file), so the common path resolves
+		// immediately — this used to be a fixed 50ms sleep, which sat directly
+		// on the first-frame critical path once plan 061 made the splash wait
+		// only on start(). A spawn failure (ENOENT bad PI_BIN, …) leaves `pid`
+		// undefined and fires 'error'/'exit' within a tick, which flips
+		// `exited` via handleExit; the 50ms timer is only a cap for exotic
+		// states so this can never hang. Crashes that happen after a
+		// successful spawn are reported by the runtime exit handler exactly as
+		// they were when they landed outside the old 50ms window.
+		await new Promise<void>((resolve) => {
+			if (child.pid !== undefined || this.exited) {
+				resolve();
+				return;
+			}
+			const timer = setTimeout(resolve, 50);
+			const settle = () => {
+				clearTimeout(timer);
+				resolve();
+			};
+			child.once("spawn", settle);
+			child.once("error", settle);
+			child.once("exit", settle);
+		});
 		if (this.exited) throw new Error(`RPC child exited during startup. stderr=${this.stderrBuffer}`);
 	}
 

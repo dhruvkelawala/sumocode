@@ -1543,8 +1543,10 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		// child startup, refetch until one quiet pass, then replay only the final
 		// suffix after the authoritative replacement.
 		if (!visualFixture) sessionEvents.begin();
-		await client.start();
-		const branch = await readGitBranch(cwd);
+		// readGitBranch spawns a git subprocess and is independent of the RPC
+		// child — overlap it with start() instead of paying it serially on the
+		// first-frame path.
+		const [, branch] = await Promise.all([client.start(), readGitBranch(cwd)]);
 		const cachedChrome = visualFixture ? undefined : readCachedChrome(cwd);
 		if (cachedChrome) stateStore.seedChrome(cachedChrome);
 		const initialTranscript = visualFixture ? visualFixture.transcript : transcriptPump.viewModel();

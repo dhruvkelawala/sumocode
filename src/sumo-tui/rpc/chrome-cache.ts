@@ -4,6 +4,7 @@ import {
 	defaultActivityStateRoot,
 	ensurePrivateSumocodeDirectory,
 	readPrivateJson,
+	withPrivateFileLock,
 } from "../../activity/persistence.js";
 
 const CACHE_VERSION = 1 as const;
@@ -77,23 +78,26 @@ export function readCachedChrome(cwd: string, options: ChromeCacheOptions = {}):
  */
 export function writeCachedChrome(cwd: string, chrome: CachedChrome, options: ChromeCacheOptions = {}): void {
 	try {
-		const existing = readCacheFile(options);
-		const byCwd = { ...(existing?.byCwd ?? {}) };
-		const entry: CachedChromeEntry = {
-			savedAt: (options.now ?? Date.now)(),
-			...(typeof chrome.modelLabel === "string" ? { modelLabel: chrome.modelLabel } : {}),
-			...(typeof chrome.thinkingLevel === "string" ? { thinkingLevel: chrome.thinkingLevel } : {}),
-		};
-		byCwd[cwd] = entry;
+		const path = cachePath(options);
+		withPrivateFileLock(`${path}.lock`, () => {
+			const existing = readCacheFile(options);
+			const byCwd = { ...(existing?.byCwd ?? {}) };
+			const entry: CachedChromeEntry = {
+				savedAt: (options.now ?? Date.now)(),
+				...(typeof chrome.modelLabel === "string" ? { modelLabel: chrome.modelLabel } : {}),
+				...(typeof chrome.thinkingLevel === "string" ? { thinkingLevel: chrome.thinkingLevel } : {}),
+			};
+			byCwd[cwd] = entry;
 
-		const retained = Object.entries(byCwd)
-			.sort(([, left], [, right]) => left.savedAt - right.savedAt)
-			.slice(-MAX_CACHED_CWDS);
-		const cache: ChromeCacheFile = {
-			version: CACHE_VERSION,
-			byCwd: Object.fromEntries(retained),
-		};
-		atomicWritePrivateJson(cachePath(options), cache);
+			const retained = Object.entries(byCwd)
+				.sort(([, left], [, right]) => left.savedAt - right.savedAt)
+				.slice(-MAX_CACHED_CWDS);
+			const cache: ChromeCacheFile = {
+				version: CACHE_VERSION,
+				byCwd: Object.fromEntries(retained),
+			};
+			atomicWritePrivateJson(path, cache);
+		});
 	} catch {
 		// Cache persistence is deliberately advisory; startup must remain resilient.
 	}

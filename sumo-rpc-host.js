@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { writeFileSync } from "node:fs";
 import { readFile, readdir, stat } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -11,6 +12,8 @@ const root = resolve(process.env.SUMOCODE_ROOT_DIR ?? dirname(fileURLToPath(impo
 const bundlePath = resolve(root, "dist/host/sumo-rpc-host.bundle.mjs");
 const buildRecipePath = resolve(root, "scripts/build-host.mjs");
 const tsconfigPath = resolve(root, "tsconfig.json");
+const packageJsonPath = resolve(root, "package.json");
+const lockfilePath = resolve(root, "pnpm-lock.yaml");
 const sourceFacePath = resolve(root, "src/assets/sumo-face.ans");
 const bundledFacePath = resolve(root, "dist/host/assets/sumo-face.ans");
 const sourceSpawnHelperPath = resolve(root, "src/sumo-tui/rpc/spawn-child.mjs");
@@ -32,20 +35,29 @@ async function newestSourceMtime(directory) {
 
 async function bundleIsFresh() {
 	try {
-		const [bundle, newestSource, buildRecipe, tsconfig, sourceFace, sourceFaceBytes, bundledFaceBytes, sourceSpawnHelperBytes, bundledSpawnHelperBytes] = await Promise.all([
+		const [bundle, newestSource, buildRecipe, tsconfig, packageJson, lockfile, sourceFace, sourceFaceBytes, bundledFaceBytes, sourceSpawnHelperBytes, bundledSpawnHelperBytes] = await Promise.all([
 			stat(bundlePath),
 			newestSourceMtime(resolve(root, "src")),
-			// Build options, compiler semantics, copied outputs, or the target can
-			// change without touching src/. Treat both configs as bundle inputs.
+			// Build options, compiler semantics, package metadata, and the resolved
+			// bundler can change without touching src/. Treat each as an input.
 			stat(buildRecipePath),
 			stat(tsconfigPath),
+			stat(packageJsonPath),
+			stat(lockfilePath),
 			stat(sourceFacePath),
 			readFile(sourceFacePath),
 			readFile(bundledFacePath),
 			readFile(sourceSpawnHelperPath),
 			readFile(bundledSpawnHelperPath),
 		]);
-		return bundle.mtimeMs >= Math.max(newestSource, buildRecipe.mtimeMs, tsconfig.mtimeMs, sourceFace.mtimeMs)
+		return bundle.mtimeMs >= Math.max(
+			newestSource,
+			buildRecipe.mtimeMs,
+			tsconfig.mtimeMs,
+			packageJson.mtimeMs,
+			lockfile.mtimeMs,
+			sourceFace.mtimeMs,
+		)
 			&& sourceFaceBytes.equals(bundledFaceBytes)
 			&& sourceSpawnHelperBytes.equals(bundledSpawnHelperBytes);
 	} catch {
@@ -123,9 +135,19 @@ function relayEarlySignal(signal) {
 	relayingEarlySignal = true;
 	releasePreAdoptionSignalHandlers();
 	void terminateUnadoptedChild().finally(() => {
-		// Installing a signal listener suppresses Node's default termination.
-		// Restore it only after bounded SIGKILL escalation has reaped the child.
-		process.kill(process.pid, signal);
+		// Match the steady-state host contract: SIGTERM is a graceful exit, while
+		// SIGINT is 130. Record the side channel before exiting so bash never
+		// substitutes a timing-dependent 143 for an early SIGTERM.
+		const code = signal === "SIGTERM" ? 0 : 130;
+		const exitCodePath = process.env.SUMOCODE_EXIT_CODE_FILE;
+		if (exitCodePath) {
+			try {
+				writeFileSync(exitCodePath, String(code));
+			} catch {
+				// The launcher falls back to the process status when this is unwritable.
+			}
+		}
+		process.exit(code);
 	});
 }
 
@@ -154,6 +176,15 @@ if (process.stdout.isTTY === true) {
 			releasePreAdoptionSignalHandlers();
 		}
 	}
+}
+
+// Integration-only seam that pins the otherwise sub-millisecond ownership
+// phase long enough to deliver a real PTY signal; inert outside NODE_ENV=test.
+const preAdoptionTestDelayMs = process.env.NODE_ENV === "test"
+	? Number.parseInt(process.env.SUMOCODE_TEST_PRE_ADOPTION_DELAY_MS ?? "0", 10)
+	: 0;
+if (Number.isFinite(preAdoptionTestDelayMs) && preAdoptionTestDelayMs > 0) {
+	await new Promise((resolveDelay) => setTimeout(resolveDelay, preAdoptionTestDelayMs));
 }
 
 let mod;

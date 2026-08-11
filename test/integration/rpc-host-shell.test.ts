@@ -40,6 +40,16 @@ async function waitForProcessExit(pid: number): Promise<void> {
 	throw new Error(`process ${pid} remained alive after host relinquished child ownership`);
 }
 
+async function waitForFileText(path: string, expected: string): Promise<void> {
+	for (let attempt = 0; attempt < 200; attempt += 1) {
+		try {
+			if ((await readFile(path, "utf8")) === expected) return;
+		} catch {}
+		await delay(10);
+	}
+	throw new Error(`timed out waiting for ${path} to contain ${expected}; output=${app?.getOutput()}`);
+}
+
 describe("sumocode RPC host shell integration", () => {
 	beforeAll(() => {
 		execFileSync(process.execPath, ["scripts/build-host.mjs"], { cwd: process.cwd(), stdio: "pipe" });
@@ -172,6 +182,21 @@ describe("sumocode RPC host shell integration", () => {
 		}
 	}, 30_000);
 
+	it.each(["package.json", "pnpm-lock.yaml"] as const)("falls back to source when %s is newer than the host bundle", async (input) => {
+		const inputPath = join(process.cwd(), input);
+		const [original, timestamps] = await Promise.all([readFile(inputPath), stat(inputPath)]);
+		await writeFile(inputPath, Buffer.concat([original, Buffer.from("\n")]));
+		try {
+			const agentDir = await mkdtemp(join(tmpdir(), "sumocode-rpc-stale-package-input-agent-"));
+			app = spawnSumocodePty({ env: { PI_CODING_AGENT_DIR: agentDir }, cols: 100, rows: 30 });
+			await app.waitForOutput("host bundle stale — using source", 15_000);
+			await app.waitForOutput(PI_BOOT_SEQUENCE, 15_000);
+		} finally {
+			await writeFile(inputPath, original);
+			await utimes(inputPath, timestamps.atime, timestamps.mtime);
+		}
+	}, 30_000);
+
 	it.each(["SIGINT", "SIGTERM"] as const)("renders a retained Cathedral empty state and cleans up after %s", async (signal) => {
 		const agentDir = await mkdtemp(join(tmpdir(), "sumocode-rpc-agent-"));
 		app = spawnSumocodePty({ env: { PI_CODING_AGENT_DIR: agentDir }, cols: 100, rows: 30 });
@@ -230,22 +255,31 @@ describe("sumocode RPC host shell integration", () => {
 		const directory = await mkdtemp(join(tmpdir(), "sumocode-rpc-early-signal-"));
 		const piBin = join(directory, "stalled-pi");
 		const pidFile = join(directory, "pid");
+		const exitCodeFile = join(directory, "exit-code");
 		await writeFile(
 			piBin,
-			"#!/usr/bin/env node\nprocess.on('SIGTERM', () => {});\nrequire('node:fs').writeFileSync(process.env.PID_FILE, String(process.pid));\nprocess.kill(process.ppid, 'SIGTERM');\nprocess.stdin.resume();\nsetInterval(() => {}, 1000);\n",
+			"#!/usr/bin/env node\nprocess.on('SIGTERM', () => {});\nrequire('node:fs').writeFileSync(process.env.PID_FILE, String(process.pid));\nprocess.stdin.resume();\nsetInterval(() => {}, 1000);\n",
 			{ mode: 0o700 },
 		);
-		app = spawnSumocodePty({
-			env: { PI_BIN: piBin, PID_FILE: pidFile, PI_CODING_AGENT_DIR: join(directory, "agent") },
+		app = spawnPiPty({
+			command: process.execPath,
+			args: [join(process.cwd(), "sumo-rpc-host.js")],
+			env: {
+				PI_BIN: piBin,
+				PID_FILE: pidFile,
+				PI_CODING_AGENT_DIR: join(directory, "agent"),
+				SUMOCODE_EXIT_CODE_FILE: exitCodeFile,
+				SUMOCODE_TEST_PRE_ADOPTION_DELAY_MS: "5000",
+				NODE_ENV: "test",
+			},
 			cols: 100,
 			rows: 30,
 		});
 
-		// The fixture signals its parent immediately after publishing its PID,
-		// deterministically exercising the pre-adoption owner instead of racing
-		// the real host's fast client adoption.
 		const pid = await waitForPid(pidFile);
+		app.sendSignal("SIGTERM");
 		await waitForProcessExit(pid);
+		await waitForFileText(exitCodeFile, "0");
 	}, 30_000);
 
 	it("exits promptly when startup hydration is stalled", async () => {

@@ -65,6 +65,7 @@ export interface SumoRpcClientOptions {
 const MAX_CONSECUTIVE_PROTOCOL_ERRORS = 3;
 const MAX_STDERR_BUFFER_LENGTH = 64 * 1024;
 const CHILD_STOP_GRACE_MS = 2_000;
+const CHILD_CLOSE_GRACE_MS = 1_000;
 const PRESPAWN_ERROR = Symbol.for("sumocode.rpc.preSpawnError");
 /**
  * Notification-facing messages (toasts, modal text) must stay terse -- the
@@ -76,6 +77,21 @@ export const NOTIFICATION_STDERR_LIMIT = 500;
 
 function toError(value: unknown): Error {
 	return value instanceof Error ? value : new Error(String(value));
+}
+
+function waitForChildClose(child: ChildProcessWithoutNullStreams): Promise<void> {
+	return new Promise((resolve) => {
+		let settled = false;
+		const finish = () => {
+			if (settled) return;
+			settled = true;
+			clearTimeout(timer);
+			child.removeListener("close", finish);
+			resolve();
+		};
+		const timer = setTimeout(finish, CHILD_STOP_GRACE_MS + CHILD_CLOSE_GRACE_MS);
+		child.once("close", finish);
+	});
 }
 
 /** Truncates a message's tail to a bounded length for user-facing surfaces (notifications, toasts). */
@@ -236,13 +252,21 @@ export class SumoRpcClient {
 		// a spurious "child crashed" notification (and duplicate teardown) for
 		// what is actually an intentional shutdown (SIGINT/SIGTERM/normal quit).
 		this.exitNotified = true;
+		const childClosed = waitForChildClose(child);
+		const childExited = once(child, "exit");
 		child.stdin.end();
 		child.kill("SIGTERM");
 		await Promise.race([
-			once(child, "exit"),
-			new Promise((resolve) => setTimeout(resolve, 2_000)),
+			childExited,
+			new Promise((resolve) => setTimeout(resolve, CHILD_STOP_GRACE_MS)),
 		]);
-		if (!this.exited) child.kill("SIGKILL");
+		if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+		await childClosed;
+		// `close` follows all stdio closure. Removing listeners after the bounded
+		// fallback also prevents any pipe-holding descendant from dispatching a
+		// late RPC response after stop() resolves.
+		child.stdout.removeAllListeners("data");
+		child.stderr.removeAllListeners("data");
 		this.exited = true;
 		this.child = undefined;
 		this.rejectPending(new Error("RPC child stopped"));

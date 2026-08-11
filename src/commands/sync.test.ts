@@ -65,6 +65,27 @@ describe("/sumo:sync", () => {
 		stdout.mockRestore();
 	});
 
+	it("resolves the package root from a flattened extension bundle", async () => {
+		const calls: Array<{ file: string; cwd?: string }> = [];
+		const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		await executeSumoSync(ctx() as never, {
+			env: { SUMOCODE_CONFIG_DIR: "/config" },
+			homeDir: "/Users/test",
+			cwd: "/outside/project",
+			moduleUrl: "file:///repo/sumocode/dist/extension/sumocode-extension.bundle.mjs",
+			exists: (path) => path === "/config/.git" || sumocodeRepoExists(path),
+			readFile: () => JSON.stringify({ name: "@dhruvkelawala/sumocode" }),
+			linkConfig: () => ({ label: "config symlinks", ok: true, output: "linked" }),
+			exec: async (file, _args, options) => {
+				calls.push({ file, cwd: options.cwd });
+				return { stdout: "done", stderr: "" };
+			},
+		});
+
+		expect(calls.at(-1)).toEqual({ file: "git", cwd: "/repo/sumocode" });
+		stdout.mockRestore();
+	});
+
 	it("defaults config repo to ~/.config/sumocode", async () => {
 		const calls: Array<{ file: string; args: readonly string[]; cwd?: string }> = [];
 		const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);

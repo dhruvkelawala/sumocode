@@ -215,11 +215,31 @@ export class SumoRpcClient {
 			throw adoptionError;
 		}
 
-		// Transfer signal ownership only after this client owns child lifecycle,
-		// but before the startup crash grace. The callback runs synchronously so
-		// entry and host signal handlers never overlap across an event-loop turn.
+		// Transfer signal ownership only after this client owns child lifecycle.
+		// The callback runs synchronously so entry and host handlers never overlap.
 		onAdopted?.();
-		await new Promise((resolve) => setTimeout(resolve, 50));
+
+		// Spawn-establishment gate. `pid` is populated synchronously whenever the
+		// OS created the process, so the common path must not reinstate the old
+		// fixed 50ms first-frame delay. A spawn failure leaves `pid` undefined and
+		// settles through error/exit below. Every listener is already attached:
+		// failures after successful spawn are delivered immediately through
+		// onExit (the host subscribes before start()), rather than hidden behind a
+		// speculative grace sleep.
+		await new Promise<void>((resolve) => {
+			if (child.pid !== undefined || this.exited) {
+				resolve();
+				return;
+			}
+			const timer = setTimeout(resolve, 50);
+			const settle = () => {
+				clearTimeout(timer);
+				resolve();
+			};
+			child.once("spawn", settle);
+			child.once("error", settle);
+			child.once("exit", settle);
+		});
 		if (this.exited) throw new Error(`RPC child exited during startup. stderr=${this.stderrBuffer}`);
 	}
 

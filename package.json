@@ -21,7 +21,7 @@
   },
   "pi": {
     "extensions": [
-      "src/extension.ts"
+      "src/extension-entry.ts"
     ]
   },
   "peerDependencies": {
@@ -39,7 +39,7 @@
     "@earendil-works/pi-tui": "0.83.0",
     "@types/node": "^25.6.0",
     "@xterm/headless": "^6.0.0",
-    "esbuild": "^0.28.2",
+    "esbuild": "0.28.2",
     "knip": "^5.66.0",
     "node-pty": "^1.1.0",
     "pixelmatch": "^7.1.1",
@@ -53,6 +53,8 @@
     "typecheck": "tsc --noEmit",
     "build": "tsc --noEmit",
     "build:host": "node scripts/build-host.mjs",
+    "build:extension": "node scripts/build-extension.mjs",
+    "build:bundles": "pnpm build:host && pnpm build:extension",
     "test": "vitest run",
     "test:integration": "vitest run test/integration/ --fileParallelism=false",
     "perf:resume": "vitest run src/sumo-tui/runtime/resume-flow.perf.test.ts",

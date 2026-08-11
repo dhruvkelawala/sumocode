@@ -104,6 +104,7 @@ describe("sumocode launcher mode decision", () => {
 		expect(output).toContain("SUMO_TUI=0");
 		expect(output).toContain("SUMO_RPC=");
 		expect(output).toContain("exec /bin/echo -e ");
+		expect(output).toContain("/src/extension-entry.ts");
 		expect(output).not.toContain("sumo-rpc-host.js");
 		expect(output).not.toContain("missing the Sumo retained-TUI patch");
 	});
@@ -113,6 +114,7 @@ describe("sumocode launcher mode decision", () => {
 		expect(output).toContain("SUMO_TUI=0");
 		expect(output).toContain("SUMO_RPC=");
 		expect(output).toContain("--print hello");
+		expect(output).toContain("/src/extension-entry.ts");
 		expect(output).not.toContain("sumo-rpc-host.js");
 	});
 
@@ -121,6 +123,7 @@ describe("sumocode launcher mode decision", () => {
 		expect(output).toContain("SUMO_TUI=0");
 		expect(output).toContain("SUMO_RPC=");
 		expect(output).toContain("--mode rpc");
+		expect(output).toContain("/src/extension-entry.ts");
 		expect(output).not.toContain("sumo-rpc-host.js");
 	});
 
@@ -129,6 +132,7 @@ describe("sumocode launcher mode decision", () => {
 		expect(output).toContain("SUMO_TUI=0");
 		expect(output).toContain("SUMO_RPC=");
 		expect(output).toContain("exec /bin/echo -e ");
+		expect(output).toContain("/src/extension-entry.ts");
 		expect(output).not.toContain("sumo-rpc-host.js");
 	});
 });

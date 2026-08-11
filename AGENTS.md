@@ -207,7 +207,7 @@ Required crops gate against committed approved runtime goldens. Bible diffs rema
 
 ## Conventions
 
-- Pi executes TypeScript directly via jiti; there is no source emit step. The host may also use an optional local bundle (`pnpm build:host`) for startup, with source fallback when that ignored artifact is missing or stale. Do not add `tsc -b`, a required consumer-side build hook, or committed host outputs.
+- Pi executes TypeScript directly via jiti; there is no source emit step. The host and extension also have optional committed bundles (`pnpm build:host` / `pnpm build:extension`) for installed-package startup, with source fallback when a bundle is missing or stale. Do not add `tsc -b` or an uncommitted consumer-side build hook.
 - TypeScript is strict with `noUnusedLocals` and `noUnusedParameters`.
 - Use tabs for indentation in TypeScript files, matching the existing codebase.
 - Tests colocate with source: `foo.ts` next to `foo.test.ts`. Integration tests live under `test/integration/`.

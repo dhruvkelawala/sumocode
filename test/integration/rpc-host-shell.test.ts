@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdir, mkdtemp, readFile, stat, utimes, writeFile } from "node:fs/promises";
+import { access, cp, mkdir, mkdtemp, readFile, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
@@ -57,6 +57,7 @@ async function waitForFileText(path: string, expected: string, attempts = 200): 
 describe("sumocode RPC host shell integration", () => {
 	beforeAll(() => {
 		execFileSync(process.execPath, ["scripts/build-host.mjs"], { cwd: process.cwd(), stdio: "pipe" });
+		execFileSync(process.execPath, ["scripts/build-extension.mjs"], { cwd: process.cwd(), stdio: "pipe" });
 	});
 
 	async function bootWithHostMode(mode: "1" | "0"): Promise<void> {
@@ -213,6 +214,77 @@ describe("sumocode RPC host shell integration", () => {
 		await expect(readFile(maliciousMarker, "utf8")).rejects.toThrow();
 		app.sendSignal("SIGTERM");
 		await app.waitForOutput(TERMINAL_CLEANUP_SEQUENCE, 5_000);
+	}, 30_000);
+
+	async function bootWithExtensionMode(mode: "bundle" | "source"): Promise<void> {
+		const agentDir = await mkdtemp(join(tmpdir(), `sumocode-extension-${mode}-agent-`));
+		app = spawnSumocodePty({
+			args: ["--offline", "--no-session", "--approve"],
+			env: {
+				PI_CODING_AGENT_DIR: agentDir,
+				...(mode === "source" ? { SUMOCODE_EXTENSION_BUNDLE: "0" } : {}),
+			},
+			cols: 100,
+			rows: 30,
+		});
+
+		await app.waitForOutput(PI_BOOT_SEQUENCE, 15_000);
+		await app.waitForOutput("DIVINE INVOCATION", 15_000);
+		await app.waitForOutput(/CTRL\+\/[\s\S]*COMMANDS/, 15_000);
+	}
+
+	it.each([
+		["fresh extension bundle", "bundle"],
+		["extension source fallback", "source"],
+	] as const)("boots with the %s", async (_label, mode) => {
+		await bootWithExtensionMode(mode);
+	}, 30_000);
+
+	it.each(["bundle", "source"] as const)("loads %s from a peer-only package copy with no local node_modules", async (mode) => {
+		const packageRoot = await mkdtemp(join(tmpdir(), `sumocode-peer-only-${mode}-package-`));
+		await mkdir(join(packageRoot, "dist"), { recursive: true });
+		await mkdir(join(packageRoot, "scripts", "lib"), { recursive: true });
+		await Promise.all([
+			cp(join(process.cwd(), "src"), join(packageRoot, "src"), { recursive: true }),
+			cp(join(process.cwd(), "dist", "extension"), join(packageRoot, "dist", "extension"), { recursive: true }),
+			cp(join(process.cwd(), "scripts", "build-extension.mjs"), join(packageRoot, "scripts", "build-extension.mjs")),
+			cp(join(process.cwd(), "scripts", "lib", "extension-bundle.mjs"), join(packageRoot, "scripts", "lib", "extension-bundle.mjs")),
+			cp(join(process.cwd(), "package.json"), join(packageRoot, "package.json")),
+			cp(join(process.cwd(), "tsconfig.json"), join(packageRoot, "tsconfig.json")),
+		]);
+		await expect(access(join(packageRoot, "node_modules"))).rejects.toThrow();
+		await expect(access(join(packageRoot, "pnpm-lock.yaml"))).rejects.toThrow();
+		const agentDir = await mkdtemp(join(tmpdir(), `sumocode-peer-only-${mode}-agent-`));
+		app = spawnPiPty({
+			args: ["--offline", "--no-extensions", "--no-session", "--approve", "-e", packageRoot],
+			env: {
+				PI_CODING_AGENT_DIR: agentDir,
+				...(mode === "source" ? { SUMOCODE_EXTENSION_BUNDLE: "0" } : {}),
+			},
+			cols: 100,
+			rows: 30,
+		});
+
+		await app.waitForOutput(PI_BOOT_SEQUENCE, 15_000);
+		await app.waitForOutput("DIVINE INVOCATION", 15_000);
+		expect(app.getOutput()).not.toContain("extension bundle failed to import");
+	}, 30_000);
+
+	it.each(["bundle", "source"] as const)("boots the package manifest through the stable extension entry (%s)", async (mode) => {
+		const agentDir = await mkdtemp(join(tmpdir(), `sumocode-package-entry-${mode}-agent-`));
+		app = spawnPiPty({
+			args: ["--offline", "--no-extensions", "--no-session", "--approve", "-e", "."],
+			env: {
+				PI_CODING_AGENT_DIR: agentDir,
+				...(mode === "source" ? { SUMOCODE_EXTENSION_BUNDLE: "0" } : {}),
+			},
+			cols: 100,
+			rows: 30,
+		});
+
+		await app.waitForOutput(PI_BOOT_SEQUENCE, 15_000);
+		await app.waitForOutput("DIVINE INVOCATION", 15_000);
+		await app.waitForOutput(/CTRL\+[\s\S]*COMMANDS/, 15_000);
 	}, 30_000);
 
 	it("falls back to source when the copied spawn helper is stale", async () => {

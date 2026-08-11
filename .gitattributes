@@ -1,0 +1,13 @@
+# Extension freshness hashes working-tree bytes. Pin every hashed text input
+# and generated runtime output to LF so Windows autocrlf checkouts compute the
+# same sidecars as the build machine.
+src/*.ts text eol=lf
+src/**/*.ts text eol=lf
+src/assets/sumo-face.ans text eol=lf
+src/background-tasks/bounded-terminal-runner.mjs text eol=lf
+scripts/build-extension.mjs text eol=lf
+scripts/lib/extension-bundle.mjs text eol=lf
+tsconfig.json text eol=lf
+package.json text eol=lf
+pnpm-lock.yaml text eol=lf
+dist/extension/** text eol=lf

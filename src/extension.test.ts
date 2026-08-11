@@ -3,7 +3,10 @@ import sumocode, {
 	findActiveSumoDevTree,
 	isInstalledPiAgentGitModule,
 	isRpcChildProfile,
+	isSumocodeAlreadyInstalledInProcess,
 	isTaskMode,
+	markSumocodeInstalledInProcess,
+	resetSumocodeProcessInstallLatchForTests,
 	shouldInstallNativeTaskTool,
 	shouldNoopDuplicateInstalledExtension,
 	shouldNoopHelperSubprocess,
@@ -42,6 +45,9 @@ beforeEach(() => {
 		ambientEnvSnapshot.set(key, process.env[key]);
 		delete process.env[key];
 	}
+	// Each test gets a fresh "process" as far as the install latch is concerned
+	// (the latch is deliberately process-global in production).
+	resetSumocodeProcessInstallLatchForTests();
 });
 
 afterEach(() => {
@@ -49,6 +55,8 @@ afterEach(() => {
 		if (value === undefined) delete process.env[key];
 		else process.env[key] = value;
 	}
+	// Never leak the process-global latch into other test files in this worker.
+	resetSumocodeProcessInstallLatchForTests();
 });
 
 function buildPiStub() {
@@ -102,6 +110,18 @@ describe("duplicate installed extension guard", () => {
 	const readFile = (path: string): string => {
 		if (path === "/repo/sumocode/package.json") return JSON.stringify({ name: "@dhruvkelawala/sumocode" });
 		throw new Error(`unexpected read ${path}`);
+	};
+	const installedRoot = "/Users/dev/.pi/agent/git/github.com/dhruvkelawala/sumocode";
+	const bundleEntry = "dist/extension/sumocode-extension.bundle.mjs";
+	const packageFs = (...roots: string[]) => {
+		const packageFiles = new Set(roots.map((root) => `${root}/package.json`));
+		return {
+			exists: (path: string) => packageFiles.has(path),
+			readFile: (path: string, _encoding: BufferEncoding) => {
+				if (packageFiles.has(path)) return JSON.stringify({ name: "@dhruvkelawala/sumocode" });
+				throw new Error(`unexpected read ${path}`);
+			},
+		};
 	};
 
 	it("detects Pi-installed copies under ~/.pi/agent/git", () => {
@@ -175,15 +195,82 @@ describe("duplicate installed extension guard", () => {
 			).toBe(true);
 		});
 
-		it("does NOT noop when SUMOCODE_ROOT_DIR resolves to the same checkout (launcher loading its own dev tree via a symlinked agent-git path)", () => {
+		it("does NOT noop for a src entry when the installed path is the launcher root", () => {
+			const fakeFs = packageFs(installedRoot);
 			expect(
 				shouldNoopDuplicateInstalledExtension({
-					moduleUrl: "file:///Users/dev/.pi/agent/git/github.com/dhruvkelawala/sumocode/src/extension.ts",
+					moduleUrl: `file://${installedRoot}/src/extension.ts`,
 					homeDir: "/Users/dev",
-					env: { SUMOCODE_ROOT_DIR: "/Users/dev/.pi/agent/git/github.com/dhruvkelawala/sumocode" },
+					env: { SUMOCODE_ROOT_DIR: installedRoot },
+					exists: fakeFs.exists,
+					readFile: fakeFs.readFile,
 					realpath: identityRealpath,
 				}),
 			).toBe(false);
+		});
+
+		it("noops a src entry from a genuinely separate installed copy", () => {
+			const fakeFs = packageFs(installedRoot, "/Users/dev/development/sumocode");
+			expect(
+				shouldNoopDuplicateInstalledExtension({
+					moduleUrl: `file://${installedRoot}/src/extension.ts`,
+					homeDir: "/Users/dev",
+					env: { SUMOCODE_ROOT_DIR: "/Users/dev/development/sumocode" },
+					exists: fakeFs.exists,
+					readFile: fakeFs.readFile,
+					realpath: identityRealpath,
+				}),
+			).toBe(true);
+		});
+
+		it("does NOT noop for a bundled entry when the installed path resolves to the launcher root", () => {
+			const launcherRoot = "/Volumes/dev-disk/code/sumocode";
+			const fakeFs = packageFs(launcherRoot);
+			const realpathMap: Record<string, string> = {
+				[`${installedRoot}/${bundleEntry}`]: `${launcherRoot}/${bundleEntry}`,
+				[installedRoot]: launcherRoot,
+			};
+			const realpath = (path: string): string => realpathMap[path] ?? path;
+			expect(
+				shouldNoopDuplicateInstalledExtension({
+					moduleUrl: `file://${installedRoot}/${bundleEntry}`,
+					homeDir: "/Users/dev",
+					env: { SUMOCODE_ROOT_DIR: installedRoot },
+					exists: fakeFs.exists,
+					readFile: fakeFs.readFile,
+					realpath,
+				}),
+			).toBe(false);
+		});
+
+		it("noops a bundled entry from a genuinely separate installed copy", () => {
+			const fakeFs = packageFs(installedRoot, "/Users/dev/development/sumocode");
+			expect(
+				shouldNoopDuplicateInstalledExtension({
+					moduleUrl: `file://${installedRoot}/${bundleEntry}`,
+					homeDir: "/Users/dev",
+					env: { SUMOCODE_ROOT_DIR: "/Users/dev/development/sumocode" },
+					exists: fakeFs.exists,
+					readFile: fakeFs.readFile,
+					realpath: identityRealpath,
+				}),
+			).toBe(true);
+		});
+
+		it("does NOT noop when a bundled entry has no SUMOCODE_ROOT_DIR and SUMOCODE_LAUNCHER is set", () => {
+			expect(
+				shouldNoopDuplicateInstalledExtension({
+					moduleUrl: `file://${installedRoot}/${bundleEntry}`,
+					homeDir: "/Users/dev",
+					env: { SUMOCODE_LAUNCHER: "/Users/dev/development/sumocode/bin/sumocode.sh" },
+				}),
+			).toBe(true);
+		});
+
+		it("does not treat a bundled entry outside ~/.pi/agent/git as installed", () => {
+			const moduleUrl = "file:///repo/sumocode/dist/extension/sumocode-extension.bundle.mjs";
+			expect(isInstalledPiAgentGitModule(moduleUrl, "/Users/dev")).toBe(false);
+			expect(shouldNoopDuplicateInstalledExtension({ moduleUrl, homeDir: "/Users/dev" })).toBe(false);
 		});
 
 		it("does NOT noop when both paths canonicalize to the same real directory through a symlink", () => {
@@ -410,5 +497,55 @@ describe("sumocode extension", () => {
 		}
 
 		expect(ctx.ui.notify).not.toHaveBeenCalled();
+	});
+});
+
+describe("process install latch", () => {
+	it("latch helpers scope identity to one Pi runtime", () => {
+		const scope = {};
+		const firstRuntime = {};
+		const replacementRuntime = {};
+		expect(isSumocodeAlreadyInstalledInProcess(firstRuntime, scope)).toBe(false);
+		markSumocodeInstalledInProcess(firstRuntime, scope);
+		expect(isSumocodeAlreadyInstalledInProcess(firstRuntime, scope)).toBe(true);
+		expect(isSumocodeAlreadyInstalledInProcess(replacementRuntime, scope)).toBe(false);
+		resetSumocodeProcessInstallLatchForTests(scope);
+		expect(isSumocodeAlreadyInstalledInProcess(firstRuntime, scope)).toBe(false);
+	});
+
+	it("deduplicates multiple entry paths for one runtime but permits factory recreation", () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		try {
+			const first = buildPiStub();
+			sumocode(first.pi as never);
+			const commandCalls = first.pi.registerCommand.mock.calls.length;
+			const toolCalls = first.pi.registerTool.mock.calls.length;
+			const eventCalls = first.pi.on.mock.calls.length;
+
+			// Installed package + launcher entry receive the same ExtensionAPI.
+			sumocode(first.pi as never);
+			expect(first.pi.registerCommand).toHaveBeenCalledTimes(commandCalls);
+			expect(first.pi.registerTool).toHaveBeenCalledTimes(toolCalls);
+			expect(first.pi.on).toHaveBeenCalledTimes(eventCalls);
+			expect(warn).toHaveBeenCalledWith(expect.stringContaining("already installed SumoCode via another entry path"));
+
+			// /new, /resume, and /fork recreate factories with a new API identity.
+			const replacement = buildPiStub();
+			sumocode(replacement.pi as never);
+			expect(replacement.pi.registerCommand).toHaveBeenCalled();
+			expect(replacement.pi.on).toHaveBeenCalled();
+		} finally {
+			warn.mockRestore();
+		}
+	});
+
+	it("a guard-noop'd entry does not arm the latch for the real entry that follows", () => {
+		const prev = process.env.PI_CMUX_CHILD;
+		process.env.PI_CMUX_CHILD = "1";
+		const helper = buildPiStub();
+		sumocode(helper.pi as never); // helper-subprocess guard noops, must not latch
+		if (prev === undefined) delete process.env.PI_CMUX_CHILD;
+		else process.env.PI_CMUX_CHILD = prev;
+		expect(isSumocodeAlreadyInstalledInProcess(helper.pi)).toBe(false);
 	});
 });

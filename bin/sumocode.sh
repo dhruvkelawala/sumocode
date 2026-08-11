@@ -787,7 +787,7 @@ SUMO_TUI_DEBUG=${SUMO_TUI_DEBUG:-}
 COMMAND=${COMMAND}
 ARGS=${SUMOCODE_ARGS[*]:-}
 SUMOCODE_INITIAL_PROMPT=${DRY_RUN_INITIAL_PROMPT}
-exec $(if [[ "${USE_RPC_HOST}" -eq 1 ]]; then printf 'node %s' "${ROOT_DIR}/sumo-rpc-host.js"; else printf '%s -e %s/src/extension.ts' "${PI_BIN}" "${ROOT_DIR}"; fi) ${SUMOCODE_ARGS[*]:-}
+exec $(if [[ "${USE_RPC_HOST}" -eq 1 ]]; then printf 'node %s' "${ROOT_DIR}/sumo-rpc-host.js"; else printf '%s -e %s/src/extension-entry.ts' "${PI_BIN}" "${ROOT_DIR}"; fi) ${SUMOCODE_ARGS[*]:-}
 EOF
 	exit 0
 fi
@@ -951,9 +951,9 @@ while :; do
 		code="$(read_child_exit_code_file "${SUMOCODE_EXIT_CODE_FILE}" "${WAIT_FOR_CHILD_EXIT_STATUS}")"
 		RPC_CHILD_PID=""
 	elif [[ "${#SUMOCODE_ARGS[@]}" -eq 0 ]]; then
-		"${PI_BIN}" -e "${ROOT_DIR}/src/extension.ts" || code=$?
+		"${PI_BIN}" -e "${ROOT_DIR}/src/extension-entry.ts" || code=$?
 	else
-		"${PI_BIN}" -e "${ROOT_DIR}/src/extension.ts" "${SUMOCODE_ARGS[@]}" || code=$?
+		"${PI_BIN}" -e "${ROOT_DIR}/src/extension-entry.ts" "${SUMOCODE_ARGS[@]}" || code=$?
 	fi
 	if [[ "${code}" -ne "${SUMOCODE_RELOAD_EXIT_CODE}" ]]; then
 		exit "${code}"

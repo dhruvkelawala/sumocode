@@ -58,6 +58,23 @@ class FakeRpcChild extends EventEmitter {
 }
 
 describe("SumoRpcClient", () => {
+	it("start() resolves without a fixed sleep when the child process exists", async () => {
+		vi.useFakeTimers();
+		try {
+			const child = new FakeRpcChild();
+			const client = new SumoRpcClient({
+				command: "unused",
+				args: [],
+				preSpawnedChild: child as never,
+			});
+			// Under fake timers the old fixed 50ms sleep would hang forever here;
+			// the pid fast-path must resolve without any timer advancing.
+			await client.start();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("uses a pre-spawned child without calling spawn again", async () => {
 		const child = new FakeRpcChild();
 		vi.mocked(spawn).mockClear();
@@ -548,6 +565,18 @@ describe("SumoRpcClient", () => {
 		} finally {
 			await client.stop();
 		}
+	});
+
+	it("surfaces an immediate post-spawn failure through onExit with its stderr", async () => {
+		const client = nodeRpcClient("throw new Error('fast startup failure');");
+		const errors: Error[] = [];
+		client.onExit((error) => errors.push(error));
+		await client.start().catch(() => undefined);
+		await waitFor(() => errors.length > 0);
+
+		expect(errors).toHaveLength(1);
+		expect(errors[0]?.message).toContain("RPC child exited");
+		expect(client.stderr).toContain("fast startup failure");
 	});
 
 	it("fires onExit exactly once when the child crashes while idle", async () => {

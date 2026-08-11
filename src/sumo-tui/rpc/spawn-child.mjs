@@ -16,6 +16,14 @@ function childEnv(env) {
 	};
 }
 
+function extensionEntry(root, env) {
+	if (env.SUMOCODE_EXTENSION_BUNDLE === "0") return resolve(root, "src/extension.ts");
+	// Route through the stable shim even when the committed bundle is fresh.
+	// The shim validates content, imports the bundle, and can retry source when
+	// native resolution of an external peer fails inside the actual Pi child.
+	return resolve(root, "src/extension-entry.ts");
+}
+
 /**
  * Builds the exact child-process invocation shared by the native entry point
  * and the jiti-loaded host. Keeping this in plain JavaScript lets the entry
@@ -24,9 +32,10 @@ function childEnv(env) {
 export function buildChildSpawnPlan(env, argv, defaultPiBin) {
 	const command = env.PI_BIN || defaultPiBin;
 	if (!command) return undefined;
+	const root = hostRoot(env);
 	return {
 		command,
-		args: ["--mode", "rpc", "-e", resolve(hostRoot(env), "src/extension.ts"), ...argv],
+		args: ["--mode", "rpc", "-e", extensionEntry(root, env), ...argv],
 		cwd: hostCwd(env),
 		env: childEnv(env),
 	};

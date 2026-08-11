@@ -1,5 +1,8 @@
 node_modules/
 dist/*
+# The extension bundle is committed so Pi git-package consumers need no build hook.
+!dist/extension/
+!dist/extension/**
 .DS_Store
 *.log
 logs/

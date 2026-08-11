@@ -2,20 +2,20 @@
 
 Report-only measurements from herdr using the operator's real SumoCode configuration and installed extension set. Results are machine-dependent and are not CI gates.
 
-- commit: `567157b`
-- generated: 2026-08-11T11:47:21.949Z
-- scratch project: `/tmp/sumocode-perf-rw-57285`
+- commit: `0668d77`
+- generated: 2026-08-11T11:52:29.864Z
+- scratch project: `/tmp/sumocode-perf-rw-60619`
 
 | Run | Startup | First frame | App ready | Reload | Reload app ready | Notes |
 | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| 1 | 458ms | 458ms | 1868ms | 544ms | 1832ms |  |
-| 2 | 467ms | 467ms | 1761ms | 532ms | 1891ms |  |
-| 3 | 471ms | 471ms | 1836ms | 545ms | 1845ms |  |
+| 1 | 429ms | 429ms | 1483ms | 494ms | 1324ms |  |
+| 2 | 433ms | 433ms | 1290ms | 492ms | 1372ms |  |
+| 3 | 428ms | 427ms | 1330ms | 491ms | 1372ms |  |
 
 | Metric | Median |
 | --- | ---: |
-| startup_ms | 467ms |
-| first_frame_ms | 467ms |
-| app_ready_ms | 1836ms |
-| reload_ms | 544ms |
-| reload_app_ready_ms | 1845ms |
+| startup_ms | 429ms |
+| first_frame_ms | 429ms |
+| app_ready_ms | 1330ms |
+| reload_ms | 492ms |
+| reload_app_ready_ms | 1372ms |

@@ -133,6 +133,9 @@ function relayEarlySignal(signal) {
 	// suppressed instead of restoring Node's default disposition mid-cleanup.
 	earlyCleanupPromise = terminateUnadoptedChild().finally(() => {
 		releasePreAdoptionSignalHandlers();
+		// A reload predecessor left raw/altscreen modes active. If this successor
+		// is signalled before adoption, no runtime exists to restore them.
+		restoreFailedReloadTerminal();
 		// Match the steady-state host contract: SIGTERM is a graceful exit, while
 		// SIGINT is 130. Record the side channel before exiting so bash never
 		// substitutes a timing-dependent 143 for an early SIGTERM.

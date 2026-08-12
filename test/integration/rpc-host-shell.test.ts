@@ -538,6 +538,7 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 				PID_FILE: pidFile,
 				PI_CODING_AGENT_DIR: join(directory, "agent"),
 				SUMOCODE_EXIT_CODE_FILE: exitCodeFile,
+				SUMOCODE_RELOAD: "1",
 				SUMOCODE_TEST_PRE_ADOPTION_DELAY_MS: "5000",
 				NODE_ENV: "test",
 			},
@@ -551,6 +552,7 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 		app.sendSignal("SIGTERM");
 		await waitForProcessExit(pid);
 		await waitForFileText(exitCodeFile, "0");
+		expect(app.getOutput()).toContain(TERMINAL_CLEANUP_SEQUENCE);
 	}, 30_000);
 
 	it("never adopts or enters altscreen when a signal lands in the import-tail window", async () => {

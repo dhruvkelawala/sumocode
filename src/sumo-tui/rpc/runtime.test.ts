@@ -738,6 +738,31 @@ describe("RPC host retained runtime frame", () => {
 		expect(terminal.getState()).toMatchObject({ restored: true });
 	});
 
+	it("accepts interrupts and drafts before a reload's first paint", async () => {
+		const output = new FakeOutput();
+		const input = new FakeInput();
+		const editor = new FakeEditor();
+		const runtime = new RpcHostRuntime({
+			output,
+			input,
+			editor,
+			initialState: state(),
+			initialTranscript: { messages: [] },
+		});
+
+		runtime.startInput();
+		input.emit("draft");
+		expect(editor.inputs).toEqual(["draft"]);
+		expect(input.rawModes).toEqual([true]);
+		expect(output.chunks).toEqual([]);
+
+		input.emit("\u0003");
+		await expect(runtime.waitForExit()).resolves.toBe(130);
+		const outputAfterStop = [...output.chunks];
+		await runtime.start();
+		expect(output.chunks).toEqual(outputAfterStop);
+	});
+
 	it("keeps raw mode enabled while handing the terminal to a reload successor", async () => {
 		const output = new FakeOutput();
 		const input = new FakeInput();

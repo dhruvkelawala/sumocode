@@ -188,6 +188,7 @@ export class RpcHostRuntime {
 	private shell: RpcShellAdapter | undefined;
 	private themeUnsubscribe: (() => void) | undefined;
 	private started = false;
+	private inputStarted = false;
 	private stopped = false;
 	private chromeStableMarked = false;
 	private exitCode: number | undefined;
@@ -301,8 +302,18 @@ export class RpcHostRuntime {
 		this.terminal.adoptRetainedSession();
 	}
 
+	/** Accept interrupts and drafts before a reload's first post-hydration paint. */
+	public startInput(): void {
+		if (this.inputStarted || this.stopped || this.input?.isTTY !== true) return;
+		this.inputStarted = true;
+		this.input.setRawMode?.(true);
+		this.input.setEncoding?.("utf8");
+		this.input.resume?.();
+		this.input.on("data", this.handleInput);
+	}
+
 	public async start(): Promise<void> {
-		if (this.started) return;
+		if (this.started || this.stopped) return;
 		this.started = true;
 		// Terminal-level colours (OSC 11 background / OSC 12 cursor accent) must
 		// follow the active theme. Apply the palette BEFORE terminal ownership
@@ -318,18 +329,10 @@ export class RpcHostRuntime {
 			this.scheduleRender();
 		});
 		this.terminal.startRetainedSession();
-		if (this.input?.isTTY === true) {
-			this.input.setRawMode?.(true);
-			// Mirrors pi-tui's ProcessTerminal, which calls
-			// process.stdin.setEncoding('utf8') so Node's StringDecoder
-			// reassembles multibyte codepoints split across "data" events. Without
-			// this, handleInput's toString('utf8') fallback below decodes each
-			// Buffer independently and a split CJK/emoji codepoint becomes
-			// U+FFFD garbage instead of the intended character.
-			this.input.setEncoding?.("utf8");
-			this.input.resume?.();
-			this.input.on("data", this.handleInput);
-		}
+		// Mirrors pi-tui's ProcessTerminal: UTF-8 decoding lets Node reassemble
+		// multibyte codepoints split across data events. Reloads may start this
+		// input path earlier so Ctrl-C and drafts work during off-screen hydration.
+		this.startInput();
 		this.output.on?.("resize", this.handleResize);
 		const shell = await RpcShellAdapter.create({
 			terminal: this.terminal,
@@ -465,8 +468,11 @@ export class RpcHostRuntime {
 		// while a reload successor hydrates so typed keys cannot echo over the
 		// retained frame or collect in the terminal's canonical input buffer.
 		if (!options.preserveTerminal) this.input?.setRawMode?.(false);
-		if (this.input?.off) this.input.off("data", this.handleInput);
-		else this.input?.removeListener?.("data", this.handleInput);
+		if (this.inputStarted) {
+			if (this.input?.off) this.input.off("data", this.handleInput);
+			else this.input?.removeListener?.("data", this.handleInput);
+			this.inputStarted = false;
+		}
 		this.input?.pause?.();
 		if (this.output.off) this.output.off("resize", this.handleResize);
 		else this.output.removeListener?.("resize", this.handleResize);

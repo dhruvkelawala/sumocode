@@ -1697,8 +1697,10 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 			preEditorInputHandler: handlePreEditorInput,
 		});
 		runtime = initialRuntime;
-		if (isReloadResume) initialRuntime.adoptRetainedTerminal();
-		else await initialRuntime.start();
+		if (isReloadResume) {
+			initialRuntime.adoptRetainedTerminal();
+			initialRuntime.startInput();
+		} else await initialRuntime.start();
 		// Optional Git metadata must not gate first paint or authoritative session
 		// hydration. A watcher created after shutdown immediately disposes itself.
 		if (branchPromise) {

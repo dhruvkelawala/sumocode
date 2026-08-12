@@ -252,6 +252,11 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 		expect(screen).toContain("reload answer");
 		// Reload is a retained-frame handoff, not a terminal teardown/re-entry.
 		expect((output.match(/\x1b\[\?1049h/g) ?? []).length).toBe(1);
+		// Raw Ctrl-C must stay live while the successor hydrates off-screen.
+		app.sendInput("\u0003");
+		await delay(50);
+		app.sendInput("\u0003");
+		await app.waitForOutput(TERMINAL_CLEANUP_SEQUENCE, 5_000);
 	}, 30_000);
 
 	it("never loads executable host code from the project cwd", async () => {

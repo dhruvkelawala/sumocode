@@ -86,6 +86,8 @@ export interface RpcHostEditorControllerOptions extends RpcAutocompleteProviderO
 	readonly onThemeCycle?: () => void;
 	/** `app.message.followUp` (Alt+Enter by default). */
 	readonly onMessageFollowUp?: () => void;
+	/** `app.message.forceSend` (Super+Enter by default). */
+	readonly onMessageForceSend?: () => void;
 	/** `app.message.dequeue` (Alt+Up by default). */
 	readonly onMessageDequeue?: () => void;
 }
@@ -304,6 +306,7 @@ export class RpcHostEditorController implements EditorTextController, KeyTarget 
 		if (options.onThinkingCycle) this.editor.onAction("app.thinking.cycle", options.onThinkingCycle);
 		if (options.onToolsExpandToggle) this.editor.onAction("app.tools.expand", options.onToolsExpandToggle);
 		if (options.onMessageFollowUp) this.editor.onAction("app.message.followUp", options.onMessageFollowUp);
+		if (options.onMessageForceSend) (this.editor.onAction as (action: string, handler: () => void) => void)("app.message.forceSend", options.onMessageForceSend);
 		if (options.onMessageDequeue) this.editor.onAction("app.message.dequeue", options.onMessageDequeue);
 		// Cast: `app.theme.cycle` is a SumoCode-custom action, not part of pi's
 		// AppKeybinding union. CustomEditor's action map is string-keyed at
@@ -553,6 +556,7 @@ const APP_KEYBINDING_DEFINITIONS: KeybindingDefinitions = {
 	"app.session.toggleNamedFilter": { defaultKeys: "ctrl+n", description: "Toggle named session filter" },
 	"app.editor.external": { defaultKeys: "ctrl+g", description: "Open external editor" },
 	"app.message.followUp": { defaultKeys: "alt+enter", description: "Queue follow-up message" },
+	"app.message.forceSend": { defaultKeys: "super+enter", description: "Send next queued message as steering" },
 	"app.message.dequeue": { defaultKeys: "alt+up", description: "Restore queued messages" },
 	"app.clipboard.pasteImage": { defaultKeys: process.platform === "win32" ? "alt+v" : "ctrl+v", description: "Paste image from clipboard" },
 	"app.session.new": { defaultKeys: [], description: "Start a new session" },

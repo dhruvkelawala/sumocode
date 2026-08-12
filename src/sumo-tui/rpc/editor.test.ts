@@ -1139,6 +1139,55 @@ describe("RPC editor controller app-level action wiring", () => {
 		}
 	});
 
+	it("invokes onMessageForceSend via Super+Enter and a remapped binding", () => {
+		const onMessageForceSend = vi.fn();
+		const controller = new RpcHostEditorController({
+			tui: fakeTui(),
+			theme: fakeEditorTheme(),
+			keybindings: createRpcKeybindingsManager({ env: {} }),
+			onMessageForceSend,
+		});
+
+		controller.handleInput("\x1b[13;9u"); // super+enter (CSI-u)
+		expect(onMessageForceSend).toHaveBeenCalledTimes(1);
+		expect(controller.getText()).toBe("");
+
+		const agentDir = mkdtempSync(join(tmpdir(), "sumocode-rpc-force-send-remap-test-"));
+		try {
+			writeFileSync(join(agentDir, "keybindings.json"), JSON.stringify({ "app.message.forceSend": "ctrl+q" }), "utf8");
+			const remapped = vi.fn();
+			const remappedController = new RpcHostEditorController({
+				tui: fakeTui(),
+				theme: fakeEditorTheme(),
+				keybindings: createRpcKeybindingsManager({ env: { PI_CODING_AGENT_DIR: agentDir } }),
+				onMessageForceSend: remapped,
+			});
+
+			remappedController.handleInput("\x1b[13;9u");
+			expect(remapped).not.toHaveBeenCalled();
+			remappedController.handleInput("\x11");
+			expect(remapped).toHaveBeenCalledTimes(1);
+		} finally {
+			rmSync(agentDir, { recursive: true, force: true });
+		}
+	});
+
+	it("keeps Shift+Enter as multiline input and never invokes force-send", () => {
+		const onMessageForceSend = vi.fn();
+		const controller = new RpcHostEditorController({
+			tui: fakeTui(),
+			theme: fakeEditorTheme(),
+			keybindings: createRpcKeybindingsManager({ env: {} }),
+			onMessageForceSend,
+		});
+
+		controller.setText("hello");
+		controller.handleInput("\x1b[13;2u"); // shift+enter (CSI-u)
+
+		expect(controller.getText()).toBe("hello\n");
+		expect(onMessageForceSend).not.toHaveBeenCalled();
+	});
+
 	it("invokes onMessageDequeue via Alt+Up and a remapped binding", () => {
 		const onMessageDequeue = vi.fn();
 		const controller = new RpcHostEditorController({

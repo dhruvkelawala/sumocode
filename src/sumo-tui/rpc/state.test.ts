@@ -241,7 +241,7 @@ describe("RpcHostStateStore", () => {
 		}).queuedMessages).toEqual(["host b"]);
 		expect(store.getSnapshot().pendingMessageCount).toBe(1);
 
-		expect(store.handleAgentEvent({ type: "queue_update", steering: ["pi steer"], followUp: [] }).queuedMessages).toEqual(["host b", "pi steer"]);
+		expect(store.handleAgentEvent({ type: "queue_update", steering: ["pi steer"], followUp: [] }).queuedMessages).toEqual(["pi steer", "host b"]);
 		expect(store.setHostQueuedMessages([]).queuedMessages).toEqual(["pi steer"]);
 		expect(store.handleAgentEvent({ type: "queue_update", steering: [], followUp: [] }).queuedMessages).toEqual([]);
 	});

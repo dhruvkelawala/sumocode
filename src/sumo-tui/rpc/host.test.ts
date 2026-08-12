@@ -11,6 +11,7 @@ import { RpcHostControls, type RpcAvailableModel } from "./controls.js";
 import { RpcHostStateStore } from "./state.js";
 import {
 	activitySnapshotMatchesSession,
+	canRpcForceSteer,
 	createLazyChatSink,
 	createModelCycleBackwardHandler,
 	createModelCycleForwardHandler,
@@ -22,7 +23,9 @@ import {
 	waitForTreeNavigationQuiet,
 	RpcSessionEventBuffer,
 	handleRpcMessageFollowUp,
+	handleRpcMessageForceSend,
 	handleRpcMessageDequeue,
+	sendRpcPrompt,
 	createToolsExpandToggleHandler,
 	createUnhandledRejectionHandler,
 	hydrateSameSessionTreeNavigation,
@@ -102,6 +105,15 @@ function interruptDeps(overrides: Partial<RpcHostInterruptDependencies> = {}): R
 
 const CTRL_C = "";
 const ESCAPE = "";
+
+describe("RPC force-steer gate", () => {
+	it("requires streaming without compaction or tree navigation", () => {
+		expect(canRpcForceSteer({ isStreaming: true, isCompacting: false }, false)).toBe(true);
+		expect(canRpcForceSteer({ isStreaming: false, isCompacting: false }, false)).toBe(false);
+		expect(canRpcForceSteer({ isStreaming: true, isCompacting: true }, false)).toBe(false);
+		expect(canRpcForceSteer({ isStreaming: true, isCompacting: false }, true)).toBe(false);
+	});
+});
 
 describe("ActivityStore session ownership", () => {
 	it("accepts only snapshots owned by the authoritative get_state session", () => {
@@ -194,6 +206,32 @@ describe("session hydration event barrier", () => {
 		buffer.capture(suffix);
 
 		expect(buffer.finishHydration()).toEqual({ supersededSnapshotEvents: [covered], suffixEvents: [suffix] });
+	});
+
+	it("does not let a pre-handoff stale settle release a queued destination item", async () => {
+		const buffer = new RpcSessionEventBuffer();
+		const sent: string[] = [];
+		const scheduler = createRpcPromptScheduler({ sendPrompt: async (message) => { sent.push(message); } });
+
+		// client.onEvent delivers one ordered child stream. The session-operation
+		// baseline is the ownership boundary: events emitted before the mutation
+		// response are old-session state and never reach the destination scheduler.
+		buffer.begin();
+		buffer.capture({ type: "agent_settled" } as never);
+		buffer.markHydrationBaseline();
+		scheduler.rebindSession("session-b", "");
+		scheduler.handleAgentEvent({ type: "agent_start" });
+		await expect(scheduler.submit("destination item")).resolves.toBe("queued");
+
+		const replay = buffer.finishHydration();
+		for (const event of [...replay.supersededSnapshotEvents, ...replay.suffixEvents]) scheduler.handleAgentEvent(event);
+		await flush();
+		expect(sent).toEqual([]);
+		expect(scheduler.getSnapshot().queuedMessages).toEqual(["destination item"]);
+
+		scheduler.handleAgentEvent({ type: "agent_settled" });
+		await flush();
+		expect(sent).toEqual(["destination item"]);
 	});
 
 	it("recovers same-session tree hydration after a transient read without entering replacement", async () => {
@@ -354,6 +392,79 @@ describe("handleRpcMessageFollowUp", () => {
 		expect(editor.addToHistory).toHaveBeenCalledWith("look at [Image 1]");
 		expect(editor.setText).toHaveBeenCalledWith("");
 		expect(editor.clearImageDrafts).toHaveBeenCalledOnce();
+	});
+});
+
+describe("handleRpcMessageForceSend", () => {
+	it("notifies once when the queued message is accepted as steering", async () => {
+		const notifications = { notify: vi.fn() };
+		const scheduler = { forceSendNext: vi.fn(async () => "accepted" as const) };
+
+		await expect(handleRpcMessageForceSend({ scheduler, notifications })).resolves.toBe("accepted");
+		expect(scheduler.forceSendNext).toHaveBeenCalledOnce();
+		expect(notifications.notify).toHaveBeenCalledOnce();
+		expect(notifications.notify).toHaveBeenCalledWith("queued message sent as steering", "info");
+	});
+
+	it("warns when Pi accepted the message but the remaining FIFO must stay held", async () => {
+		const notifications = { notify: vi.fn() };
+		const scheduler = { forceSendNext: vi.fn(async () => "held" as const) };
+
+		await expect(handleRpcMessageForceSend({ scheduler, notifications })).resolves.toBe("held");
+		expect(notifications.notify).toHaveBeenCalledWith("message sent; remaining queue held", "warning");
+	});
+
+	it("stays silent when no queued message can be force-sent", async () => {
+		const notifications = { notify: vi.fn() };
+		const scheduler = { forceSendNext: vi.fn(async () => "ignored" as const) };
+
+		await expect(handleRpcMessageForceSend({ scheduler, notifications })).resolves.toBe("ignored");
+		expect(notifications.notify).not.toHaveBeenCalled();
+	});
+
+	it("warns when steering acceptance is unknown and never touches editor draft state", async () => {
+		const notifications = { notify: vi.fn() };
+		const scheduler = { forceSendNext: vi.fn(async () => "unknown" as const) };
+
+		await expect(handleRpcMessageForceSend({ scheduler, notifications })).resolves.toBe("unknown");
+		expect(notifications.notify).toHaveBeenCalledWith("steering acceptance unknown; message not requeued", "warning");
+	});
+
+	it("routes explicit preflight rejection through the existing rpc warning path", async () => {
+		const notifications = { notify: vi.fn() };
+		const scheduler = { forceSendNext: vi.fn(async () => { throw new Error("preflight rejected"); }) };
+
+		await expect(handleRpcMessageForceSend({ scheduler, notifications })).resolves.toBe("ignored");
+		expect(notifications.notify).toHaveBeenCalledWith("rpc error: preflight rejected", "warning");
+	});
+});
+
+describe("sendRpcPrompt payloads", () => {
+	it("sends the ordinary prompt payload without a streaming behavior", async () => {
+		const client = { send: vi.fn(async () => ({ type: "response", command: "prompt", success: true, data: {} } as const)) };
+
+		await sendRpcPrompt("ordinary", { client });
+
+		expect(client.send).toHaveBeenCalledWith({ type: "prompt", message: "ordinary" });
+	});
+
+	it("adds steer only for an explicit steering delivery", async () => {
+		const client = { send: vi.fn(async () => ({ type: "response", command: "prompt", success: true, data: {} } as const)) };
+
+		await sendRpcPrompt("steer me", { client, delivery: { streamingBehavior: "steer" } });
+
+		expect(client.send).toHaveBeenCalledWith({ type: "prompt", message: "steer me", streamingBehavior: "steer" });
+	});
+
+	it("classifies a correlated Pi rejection as explicit preflight failure", async () => {
+		const client = {
+			send: vi.fn(async () => ({ type: "response", command: "prompt", success: false, error: "agent is compacting" } as const)),
+		};
+
+		await expect(sendRpcPrompt("rejected", { client, delivery: { streamingBehavior: "steer" } })).rejects.toMatchObject({
+			name: "RpcPromptPreflightRejection",
+			message: "prompt failed: agent is compacting",
+		});
 	});
 });
 

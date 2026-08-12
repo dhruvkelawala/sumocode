@@ -217,6 +217,13 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 		return;
 	}
 	if (command.type === "prompt") {
+		// Model a Pi input extension returning handled: the steer is acknowledged
+		// without queue_update, message_start, or a second agent lifecycle. The
+		// delayed ordinary prompt still owns the current run's settlement.
+		if (command.streamingBehavior === "steer" && isStreaming) {
+			write(response(command, {}));
+			return;
+		}
 		messages = [
 			...messages,
 			{ id: "fixture-user-" + messages.length, role: "user", content: command.message }

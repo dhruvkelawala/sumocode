@@ -1447,6 +1447,7 @@ describe("RpcHostActions", () => {
 		const rendered = renderOverlayText(overlays);
 		expect(rendered).toContain("SUMOCODE RPC HOST HOTKEYS");
 		expect(rendered).toContain("Ctrl+/");
+		expect(rendered).toContain("Cmd+Enter");
 		expect(rendered).toContain("PageUp / PageDown");
 		overlays.handleInput("x");
 		await hotkeys;

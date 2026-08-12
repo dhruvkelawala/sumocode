@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createRpcPromptScheduler } from "./prompt-scheduler.js";
+import { createRpcPromptScheduler, RpcPromptPreflightRejection } from "./prompt-scheduler.js";
 
 function deferred(): { promise: Promise<void>; resolve: () => void; reject: (error: unknown) => void } {
 	let resolve!: () => void;
@@ -383,5 +383,370 @@ describe("RpcPromptScheduler", () => {
 		await expect(scheduler.submit("/compact")).resolves.toBe("handled");
 		expect(sendPrompt).not.toHaveBeenCalled();
 		expect(scheduler.getSnapshot().queuedMessages).toEqual([]);
+	});
+
+	it("force-sends the FIFO head with steer and holds later entries until the steered lifecycle settles", async () => {
+		const ack = deferred();
+		const calls: Array<{ message: string; delivery?: unknown }> = [];
+		const scheduler = createRpcPromptScheduler({
+			canForceSteer: () => true,
+			sendPrompt: async (message, delivery) => {
+				calls.push({ message, delivery });
+				if (delivery?.streamingBehavior === "steer") await ack.promise;
+			},
+		});
+
+		scheduler.handleAgentEvent({ type: "agent_start" });
+		await expect(scheduler.submit("B")).resolves.toBe("queued");
+		await expect(scheduler.submit("C")).resolves.toBe("queued");
+
+		const force = scheduler.forceSendNext();
+		await flush();
+		expect(calls).toEqual([{ message: "B", delivery: { streamingBehavior: "steer" } }]);
+		expect(scheduler.getSnapshot().queuedMessages).toEqual(["C"]);
+
+		// Pi's queue_update is the ownership transition for a real steer.
+		scheduler.handleAgentEvent({ type: "queue_update", steering: ["expanded B"], followUp: [] });
+		scheduler.handleAgentEvent({ type: "agent_settled" });
+		ack.resolve();
+		await expect(force).resolves.toBe("accepted");
+		expect(calls).toHaveLength(1);
+		expect(scheduler.getSnapshot().queuedMessages).toEqual(["C"]);
+
+		// Pi may transform B before emitting its authoritative user lifecycle.
+		scheduler.handleAgentEvent({ type: "turn_end" });
+		scheduler.handleAgentEvent({ type: "message_start", message: { role: "user", content: [{ type: "text", text: "expanded B" }] } });
+		scheduler.handleAgentEvent({ type: "agent_settled" });
+		await flush();
+		expect(calls).toEqual([
+			{ message: "B", delivery: { streamingBehavior: "steer" } },
+			{ message: "C" },
+		]);
+	});
+
+	it("restores an explicitly rejected steered head and pauses the FIFO", async () => {
+		const stateSync = vi.fn();
+		const scheduler = createRpcPromptScheduler({
+			canForceSteer: () => true,
+			sendPrompt: async () => { throw new RpcPromptPreflightRejection("steering rejected"); },
+			onDispatchStateSync: stateSync,
+		});
+
+		scheduler.handleAgentEvent({ type: "agent_start" });
+		await scheduler.submit("B");
+		await scheduler.submit("C");
+		await expect(scheduler.forceSendNext()).rejects.toThrow("steering rejected");
+
+		expect(scheduler.getSnapshot()).toMatchObject({
+			queuedMessages: ["B", "C"],
+			pausedAfterFailure: true,
+		});
+		expect(stateSync).toHaveBeenCalledOnce();
+		await expect(scheduler.forceSendNext()).resolves.toBe("ignored");
+	});
+
+	it("keeps an ambiguous steered head removed, pauses draining, and reports unknown acceptance", async () => {
+		const unknown: Array<{ message: string; error: unknown }> = [];
+		const stateSync = vi.fn();
+		const scheduler = createRpcPromptScheduler({
+			canForceSteer: () => true,
+			sendPrompt: async () => { throw new Error("prompt timeout"); },
+			onDispatchStateSync: stateSync,
+			onSteerAcceptanceUnknown: (message, error) => unknown.push({ message, error }),
+		});
+
+		scheduler.handleAgentEvent({ type: "agent_start" });
+		await scheduler.submit("B");
+		await scheduler.submit("C");
+		await expect(scheduler.forceSendNext()).resolves.toBe("unknown");
+
+		expect(scheduler.getSnapshot()).toMatchObject({
+			queuedMessages: ["C"],
+			pausedAfterFailure: true,
+		});
+		expect(unknown).toHaveLength(1);
+		expect(unknown[0]).toMatchObject({ message: "B", error: expect.any(Error) });
+		expect(stateSync).toHaveBeenCalledOnce();
+
+		// A later ordinary submit clears the pause, but not the unknown ownership
+		// barrier. The next host FIFO entry must remain held.
+		await expect(scheduler.submit("D")).resolves.toBe("queued");
+		scheduler.handleAgentEvent({ type: "agent_settled" });
+		await flush();
+		expect(scheduler.getSnapshot()).toMatchObject({
+			queuedMessages: ["C", "D"],
+			pausedAfterFailure: false,
+		});
+	});
+
+	it("does not drain the next entry when the current turn settles before steering acknowledgement", async () => {
+		const ack = deferred();
+		const sent: Array<{ message: string; delivery?: unknown }> = [];
+		const scheduler = createRpcPromptScheduler({
+			canForceSteer: () => true,
+			sendPrompt: async (message, delivery) => {
+				sent.push({ message, delivery });
+				if (delivery?.streamingBehavior === "steer") await ack.promise;
+			},
+		});
+
+		scheduler.handleAgentEvent({ type: "agent_start" });
+		await scheduler.submit("B");
+		await scheduler.submit("C");
+		const force = scheduler.forceSendNext();
+		await flush();
+		// The current run settling before the RPC acknowledgement must not
+		// release C: the acknowledgement still decides whether B entered Pi.
+		scheduler.handleAgentEvent({ type: "queue_update", steering: ["expanded B"], followUp: [] });
+		scheduler.handleAgentEvent({ type: "agent_settled" });
+		ack.resolve();
+		await expect(force).resolves.toBe("accepted");
+		await flush();
+
+		expect(sent).toHaveLength(1);
+		expect(scheduler.getSnapshot().queuedMessages).toEqual(["C"]);
+
+		// Lifecycle ordering, rather than text identity, releases the next entry.
+		scheduler.handleAgentEvent({ type: "turn_end" });
+		scheduler.handleAgentEvent({ type: "message_start", message: { role: "user", content: [{ type: "text", text: "expanded B" }] } });
+		scheduler.handleAgentEvent({ type: "agent_settled" });
+		await flush();
+		expect(sent).toEqual([
+			{ message: "B", delivery: { streamingBehavior: "steer" } },
+			{ message: "C" },
+		]);
+	});
+
+	it("holds the remaining FIFO when acceptance has no authoritative Pi disposition", async () => {
+		const ack = deferred();
+		let steerable = true;
+		const sent: Array<{ message: string; delivery?: unknown }> = [];
+		const scheduler = createRpcPromptScheduler({
+			canForceSteer: () => steerable,
+			sendPrompt: async (message, delivery) => {
+				sent.push({ message, delivery });
+				if (delivery?.streamingBehavior === "steer") await ack.promise;
+			},
+		});
+
+		scheduler.handleAgentEvent({ type: "agent_start" });
+		await scheduler.submit("B");
+		await scheduler.submit("C");
+		const force = scheduler.forceSendNext();
+		await flush();
+
+		// No queue_update or B lifecycle can mean either handled input or the
+		// active-to-idle normal-start race. A's settlement must not release C.
+		scheduler.handleAgentEvent({ type: "agent_settled" });
+		ack.resolve();
+		await expect(force).resolves.toBe("held");
+		await flush();
+		expect(sent).toEqual([{ message: "B", delivery: { streamingBehavior: "steer" } }]);
+		expect(scheduler.getSnapshot().queuedMessages).toEqual(["C"]);
+
+		// New ordinary input remains held. Command+Enter may still advance C:
+		// Pi will atomically start it if idle or queue it if a run has started.
+		await expect(scheduler.submit("D")).resolves.toBe("queued");
+		steerable = false;
+		await expect(scheduler.forceSendNext()).resolves.toBe("held");
+		expect(sent).toEqual([
+			{ message: "B", delivery: { streamingBehavior: "steer" } },
+			{ message: "C", delivery: { streamingBehavior: "steer" } },
+		]);
+		expect(scheduler.getSnapshot().queuedMessages).toEqual(["D"]);
+	});
+
+	it("ignores user lifecycle events from the active turn before the steer boundary", async () => {
+		const ack = deferred();
+		const sent: Array<{ message: string; delivery?: unknown }> = [];
+		const scheduler = createRpcPromptScheduler({
+			canForceSteer: () => true,
+			sendPrompt: async (message, delivery) => {
+				sent.push({ message, delivery });
+				if (delivery?.streamingBehavior === "steer") await ack.promise;
+			},
+		});
+
+		scheduler.handleAgentEvent({ type: "agent_start" });
+		await scheduler.submit("B");
+		await scheduler.submit("C");
+		const force = scheduler.forceSendNext();
+		await flush();
+
+		// A's delayed user message_start is before any post-dispatch turn_end, so
+		// it must not become B's lifecycle boundary.
+		scheduler.handleAgentEvent({ type: "message_start", message: { role: "user", content: "A" } });
+		scheduler.handleAgentEvent({ type: "queue_update", steering: ["B"], followUp: [] });
+		scheduler.handleAgentEvent({ type: "agent_settled" });
+		ack.resolve();
+		await expect(force).resolves.toBe("accepted");
+		await flush();
+		expect(sent).toEqual([{ message: "B", delivery: { streamingBehavior: "steer" } }]);
+		expect(scheduler.getSnapshot().queuedMessages).toEqual(["C"]);
+
+		scheduler.handleAgentEvent({ type: "turn_end" });
+		scheduler.handleAgentEvent({ type: "message_start", message: { role: "user", content: "B" } });
+		scheduler.handleAgentEvent({ type: "agent_settled" });
+		await flush();
+		expect(sent).toEqual([
+			{ message: "B", delivery: { streamingBehavior: "steer" } },
+			{ message: "C" },
+		]);
+	});
+
+	it("keeps the prior hold when a later manual force-send is rejected", async () => {
+		let calls = 0;
+		const scheduler = createRpcPromptScheduler({
+			canForceSteer: () => calls === 0,
+			sendPrompt: async (_message, delivery) => {
+				if (delivery?.streamingBehavior !== "steer") return;
+				calls += 1;
+				if (calls === 2) throw new RpcPromptPreflightRejection("rejected");
+			},
+		});
+
+		scheduler.handleAgentEvent({ type: "agent_start" });
+		await scheduler.submit("B");
+		await scheduler.submit("C");
+		await scheduler.submit("D");
+		await expect(scheduler.forceSendNext()).resolves.toBe("held");
+		await expect(scheduler.forceSendNext()).rejects.toThrow("rejected");
+		expect(scheduler.getSnapshot()).toMatchObject({
+			queuedMessages: ["C", "D"],
+			pausedAfterFailure: true,
+		});
+
+		// Adding input clears the rejection pause, but the older uncertain
+		// disposition still prevents automatic drain.
+		await expect(scheduler.submit("E")).resolves.toBe("queued");
+		scheduler.handleAgentEvent({ type: "agent_settled" });
+		await flush();
+		expect(scheduler.getSnapshot().queuedMessages).toEqual(["C", "D", "E"]);
+	});
+
+	it("records a normal-start force-send lifecycle even when agent_start arrives before acknowledgement", async () => {
+		const ack = deferred();
+		const sent: Array<{ message: string; delivery?: unknown }> = [];
+		const scheduler = createRpcPromptScheduler({
+			canForceSteer: () => true,
+			sendPrompt: async (message, delivery) => {
+				sent.push({ message, delivery });
+				if (delivery?.streamingBehavior === "steer") await ack.promise;
+			},
+		});
+
+		scheduler.handleAgentEvent({ type: "agent_start" });
+		await scheduler.submit("B");
+		await scheduler.submit("C");
+		const force = scheduler.forceSendNext();
+		await flush();
+
+		// Pi became idle and started B normally before the prompt response reached
+		// the host. The new agent_start still belongs to B, not A.
+		scheduler.handleAgentEvent({ type: "agent_start" });
+		scheduler.handleAgentEvent({ type: "message_start", message: { role: "user", content: "B" } });
+		ack.resolve();
+		await expect(force).resolves.toBe("held");
+		scheduler.handleAgentEvent({ type: "agent_settled" });
+		await flush();
+		expect(sent).toEqual([
+			{ message: "B", delivery: { streamingBehavior: "steer" } },
+			{ message: "C" },
+		]);
+	});
+
+	it("resumes the FIFO after an unqueued force-send starts and settles a normal lifecycle", async () => {
+		const sent: Array<{ message: string; delivery?: unknown }> = [];
+		const scheduler = createRpcPromptScheduler({
+			canForceSteer: () => true,
+			sendPrompt: async (message, delivery) => { sent.push({ message, delivery }); },
+		});
+
+		scheduler.handleAgentEvent({ type: "agent_start" });
+		await scheduler.submit("B");
+		await scheduler.submit("C");
+		await expect(scheduler.forceSendNext()).resolves.toBe("held");
+		scheduler.handleAgentEvent({ type: "agent_settled" });
+		expect(sent).toHaveLength(1);
+
+		// Pi became idle and started B normally. Its lifecycle is authoritative,
+		// so C can drain only after that lifecycle settles.
+		scheduler.handleAgentEvent({ type: "agent_start" });
+		scheduler.handleAgentEvent({ type: "message_start", message: { role: "user", content: "B" } });
+		scheduler.handleAgentEvent({ type: "agent_settled" });
+		await flush();
+		expect(sent).toEqual([
+			{ message: "B", delivery: { streamingBehavior: "steer" } },
+			{ message: "C" },
+		]);
+	});
+
+	it("ignores force-send when empty, idle, paused, non-steerable, or already dispatching", async () => {
+		const ack = deferred();
+		let steerable = false;
+		const sendPrompt = vi.fn(async (_message: string, delivery?: { streamingBehavior?: "steer" }) => {
+			if (delivery?.streamingBehavior === "steer") await ack.promise;
+		});
+		const scheduler = createRpcPromptScheduler({ canForceSteer: () => steerable, sendPrompt });
+
+		await expect(scheduler.forceSendNext()).resolves.toBe("ignored");
+		await scheduler.submit("B");
+		await expect(scheduler.forceSendNext()).resolves.toBe("ignored");
+		scheduler.handleAgentEvent({ type: "agent_start" });
+		await expect(scheduler.submit("C")).resolves.toBe("queued");
+		await expect(scheduler.forceSendNext()).resolves.toBe("ignored");
+		steerable = true;
+		const first = scheduler.forceSendNext();
+		await expect(scheduler.forceSendNext()).resolves.toBe("ignored");
+		scheduler.handleAgentEvent({ type: "queue_update", steering: ["C"], followUp: [] });
+		ack.resolve();
+		await expect(first).resolves.toBe("accepted");
+		expect(sendPrompt).toHaveBeenCalledTimes(2);
+	});
+
+	it("treats successful force-send acknowledgement after generation invalidation as unknown", async () => {
+		const outcome = deferred();
+		const unknown: string[] = [];
+		const scheduler = createRpcPromptScheduler({
+			canForceSteer: () => true,
+			sendPrompt: async () => outcome.promise,
+			onSteerAcceptanceUnknown: (message) => unknown.push(message),
+		});
+
+		scheduler.handleAgentEvent({ type: "agent_start" });
+		await scheduler.submit("B");
+		await scheduler.submit("C");
+		const force = scheduler.forceSendNext();
+		await flush();
+		const restored = scheduler.restoreAll("draft", { discardInFlight: true });
+		expect(restored).toEqual({ count: 1, text: "C\n\ndraft" });
+
+		outcome.resolve();
+		await expect(force).resolves.toBe("unknown");
+		expect(scheduler.getSnapshot().queuedMessages).toEqual([]);
+		expect(unknown).toEqual(["B"]);
+	});
+
+	it("does not claim a force-send entry was restored when generation invalidation races its outcome", async () => {
+		const outcome = deferred();
+		const unknown: string[] = [];
+		const scheduler = createRpcPromptScheduler({
+			canForceSteer: () => true,
+			sendPrompt: async () => outcome.promise,
+			onSteerAcceptanceUnknown: (message) => unknown.push(message),
+		});
+
+		scheduler.handleAgentEvent({ type: "agent_start" });
+		await scheduler.submit("B");
+		await scheduler.submit("C");
+		const force = scheduler.forceSendNext();
+		await flush();
+		const restored = scheduler.restoreAll("draft", { discardInFlight: true });
+		expect(restored).toEqual({ count: 1, text: "C\n\ndraft" });
+
+		outcome.reject(new Error("stale timeout"));
+		await expect(force).resolves.toBe("unknown");
+		expect(scheduler.getSnapshot().queuedMessages).toEqual([]);
+		expect(unknown).toEqual(["B"]);
 	});
 });

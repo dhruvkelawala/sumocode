@@ -152,6 +152,25 @@ describe("RpcShellAdapter splash hint", () => {
 	});
 });
 
+describe("RpcShellAdapter active footer", () => {
+	it("shows fast after /fast publishes the fast-mode extension status", async () => {
+		const adapter = await RpcShellAdapter.create({
+			terminal: { writeFramePatches: () => undefined },
+			viewport: { columns: 100, rows: 30 },
+			initialState: state({ modelLabel: "openai/gpt-5.5", thinkingLevel: "high" }),
+			initialTranscript: { messages: [] },
+			extensionStatuses: () => new Map([["sumocode.fast-mode", "fast"]]),
+		});
+		try {
+			adapter.render();
+			const text = Array.from({ length: 30 }, (_value, row) => adapter.getLastFrame()!.toPlainRow(row)).join("\n");
+			expect(text).toContain("gpt-5.5 · high · fast");
+		} finally {
+			adapter.dispose();
+		}
+	});
+});
+
 describe("RpcShellAdapter queued messages banner", () => {
 	it("renders queued steer/follow-up messages above the editor while streaming", async () => {
 		const adapter = await RpcShellAdapter.create({

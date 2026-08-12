@@ -66,6 +66,7 @@ export interface RpcHostRuntimeOptions {
 		readonly belowEditor?: Component;
 		readonly sidebar?: Component;
 	};
+	readonly extensionStatuses?: () => ReadonlyMap<string, string | undefined>;
 	readonly inputHandler?: RpcHostInputHandler;
 	readonly preEditorInputHandler?: (data: string) => boolean | void;
 	readonly env?: NodeJS.ProcessEnv;
@@ -171,6 +172,7 @@ export class RpcHostRuntime {
 	private readonly overlay: (Component & { getActiveKind?(): string | undefined }) | undefined;
 	private readonly notifications: Component | undefined;
 	private readonly extensionRegions: RpcHostRuntimeOptions["extensionRegions"];
+	private readonly extensionStatuses: RpcHostRuntimeOptions["extensionStatuses"];
 	private readonly inputHandler: RpcHostInputHandler | undefined;
 	private readonly preEditorInputHandler: ((data: string) => boolean | void) | undefined;
 	private readonly inputPreview: string | undefined;
@@ -241,6 +243,7 @@ export class RpcHostRuntime {
 		this.overlay = options.overlay;
 		this.notifications = options.notifications;
 		this.extensionRegions = options.extensionRegions;
+		this.extensionStatuses = options.extensionStatuses;
 		this.inputHandler = options.inputHandler;
 		this.preEditorInputHandler = options.preEditorInputHandler;
 		this.nativeModifierProbe = options.nativeModifierProbe;
@@ -341,6 +344,7 @@ export class RpcHostRuntime {
 			overlay: this.overlay,
 			notifications: this.notifications,
 			extensionRegions: this.extensionRegions,
+			extensionStatuses: this.extensionStatuses,
 			requestRender: () => this.scheduleRender(),
 			requestIndicatorRepaint: () => {
 				const liveShell = this.shell;

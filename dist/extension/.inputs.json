@@ -54,6 +54,7 @@
     "src/config/sumocode-config.ts",
     "src/divine-query.ts",
     "src/extension.ts",
+    "src/fast-mode-status.ts",
     "src/fast-mode.ts",
     "src/footer.ts",
     "src/git/worktree.ts",
@@ -120,6 +121,6 @@
     "src/working-indicator.ts",
     "tsconfig.json"
   ],
-  "hash": "9f8955f259b6df114e2ffa9216e2644ad90b10fd9aeb4a35a2181ba05ca5e482",
-  "outputsHash": "812411ff5af35f0eda7391fd7c3454a68fad0c9522a785e02622e5dce07e64de"
+  "hash": "b5f477944231e047500d813c004e2341903226795f70e4cd0f14c02686c3070c",
+  "outputsHash": "2c9399548760b30f25d4513db77f979c454a8690e4855a98ba89ff4fdbb6cabb"
 }

@@ -1692,6 +1692,7 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 				belowEditor: regionRegistry.createStackPublication(["belowEditor"], { filterBlankRows: true }).component,
 				sidebar: regionRegistry.createSlotPublication("sidebar").component,
 			},
+			extensionStatuses: () => statusPublication.getStatuses(),
 			inputHandler: hydrationGatedInputHandler,
 			preEditorInputHandler: handlePreEditorInput,
 		});

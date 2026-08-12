@@ -28,7 +28,7 @@ import { tryCreateOsc52Sequence } from "../input/selection.js";
 import type { EditorTextController } from "../pi-compat/extension-ui-adapter.js";
 import type { ModalManager } from "../widgets/modal.js";
 import type { NotificationCenter, NotificationLevel } from "../widgets/notification.js";
-import type { RpcHostControls, RpcModelOption, RpcSessionStats, RpcThinkingLevel } from "./controls.js";
+import type { RpcHostControls, RpcModelOption, RpcSessionStats, RpcSlashCommand, RpcThinkingLevel } from "./controls.js";
 import { validateRpcTreeNavigationRequest, type RpcTreeNavigationOutcome, type RpcTreeNavigationRequest } from "../pi-compat/tree-navigation-command.js";
 import type { RpcHostOverlayManager } from "./host-overlays.js";
 import {
@@ -564,7 +564,12 @@ export class RpcHostActions {
 					// anything with a second slash is a prompt, not an unknown command
 					// to swallow.
 					if (!/^\/[\w:.-]+$/.test(command)) return false;
-					if (await this.childCanExecuteCommand(command)) return false;
+					const childCommand = await this.findChildCommand(command);
+					if (childCommand?.source === "extension") {
+						await this.controls.executeExtensionCommand(text);
+						return true;
+					}
+					if (childCommand) return false;
 					notify(this.notifications, `unknown command: ${command}`, "warning");
 					return true;
 				}
@@ -1403,9 +1408,13 @@ export class RpcHostActions {
 	}
 
 	private async childCanExecuteCommand(command: string): Promise<boolean> {
+		return await this.findChildCommand(command) !== undefined;
+	}
+
+	private async findChildCommand(command: string): Promise<RpcSlashCommand | undefined> {
 		const name = normalizeCommandName(command);
-		if (!name) return false;
+		if (!name) return undefined;
 		const commands = await this.controls.getCommands();
-		return commands.some((childCommand) => normalizeCommandName(childCommand.name) === name);
+		return commands.find((childCommand) => normalizeCommandName(childCommand.name) === name);
 	}
 }

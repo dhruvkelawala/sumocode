@@ -122,15 +122,11 @@ class RegionSlotComponent implements Component {
  * so on main `setStatus()` is a complete no-op: nothing stores it, nothing
  * renders it, anywhere.
  *
- * This class exists so RPC mode's `getStatuses()` still gives extensions
- * (and tests) a place to read back the latest value they set, matching the
- * quiet key-value-store shape Pi's own `FooterDataProvider` uses internally.
- * But `render()` must NOT paint anything: RPC mode has no footer slot wired
- * to read `getStatuses()` the way Pi's `FooterComponent` does, so mounting
- * this as a visible component (as `host.ts` does, into the `status` slot
- * above the editor) would show a raw, unstyled "key: text" strip that has
- * no equivalent on main. Keep it a no-op renderable until/unless SumoCode
- * grows a footer slot that actually consumes `getStatuses()`.
+ * This class keeps RPC extension statuses in the same quiet key-value shape
+ * as Pi's `FooterDataProvider`. `render()` must stay empty: mounting raw
+ * `key: text` rows above the editor has no equivalent on main. SumoCode-owned
+ * surfaces may read named statuses through `getStatuses()` and render them in
+ * their own layout; the RPC footer does this for fast mode.
  */
 export class ExtensionStatusPublication implements RegionStatusPublication {
 	private readonly statuses = new Map<string, string>();

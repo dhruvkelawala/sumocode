@@ -29,6 +29,14 @@ describe("fast mode", () => {
 		expect(isConfiguredFastModel(config, model({ provider: "anthropic", id: "gpt-5.5" }))).toBe(false);
 	});
 
+	it("enables fast mode for the current gpt-5.6-sol model", () => {
+		const state = installFastMode({ on: vi.fn(), registerCommand: vi.fn() } as never);
+		expect(shouldApplyFastMode(
+			{ ...state, enabled: true },
+			model({ provider: "openai-codex", id: "gpt-5.6-sol" }),
+		)).toBe(true);
+	});
+
 	it("only applies to enabled OpenAI response APIs", () => {
 		const config = { enabled: true, models: ["openai-codex/gpt-5.5"] };
 		expect(shouldApplyFastMode(config, model())).toBe(true);
@@ -131,6 +139,26 @@ describe("fast mode", () => {
 		expect(pi.registerProvider).not.toHaveBeenCalled();
 		expect(getApiProvider("openai-responses")?.streamSimple).toBeDefined();
 		expect(getApiProvider("openai-codex-responses")?.streamSimple).toBeDefined();
+	});
+
+	it("publishes fast status when /fast enables an applicable model", async () => {
+		let fastHandler: ((args: string, ctx: unknown) => Promise<void>) | undefined;
+		const pi = {
+			on: vi.fn(),
+			registerCommand: vi.fn((name: string, command: { handler: (args: string, ctx: unknown) => Promise<void> }) => {
+				if (name === "fast") fastHandler = command.handler;
+			}),
+		};
+		installFastMode(pi as never);
+		const setStatus = vi.fn();
+
+		await fastHandler?.("", {
+			hasUI: true,
+			model: model(),
+			ui: { notify: vi.fn(), setStatus },
+		});
+
+		expect(setStatus).toHaveBeenCalledWith("sumocode.fast-mode", "fast");
 	});
 
 	it("resets enabled state on each session_start", async () => {

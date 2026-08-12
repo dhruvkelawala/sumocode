@@ -655,6 +655,37 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 		expect(app.getCurrentTerminalState().altscreenActive).toBe(false);
 	}, 30_000);
 
+	it("restores a retained reload when signalled after child adoption but before runtime creation", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "sumocode-rpc-post-adoption-reload-signal-"));
+		const piBin = join(directory, "stalled-pi");
+		const pidFile = join(directory, "pid");
+		await writeFile(
+			piBin,
+			"#!/usr/bin/env node\nrequire('node:fs').writeFileSync(process.env.PID_FILE, String(process.pid));\nprocess.stdin.resume();\nsetInterval(() => {}, 1000);\n",
+			{ mode: 0o700 },
+		);
+		app = spawnPiPty({
+			command: process.execPath,
+			args: [join(process.cwd(), "sumo-rpc-host.js")],
+			env: {
+				PI_BIN: piBin,
+				PID_FILE: pidFile,
+				PI_CODING_AGENT_DIR: join(directory, "agent"),
+				SUMOCODE_RELOAD: "1",
+				SUMOCODE_TEST_POST_ADOPTION_DELAY_MS: "5000",
+				NODE_ENV: "test",
+			},
+			cols: 100,
+			rows: 30,
+		});
+
+		await waitForPid(pidFile);
+		await delay(100);
+		app.sendSignal("SIGTERM");
+		await app.waitForOutput(TERMINAL_CLEANUP_SEQUENCE, 5_000);
+		expect(app.getCurrentTerminalState().altscreenActive).toBe(false);
+	}, 30_000);
+
 	it("reaps an adopted SIGTERM-ignoring child across repeated signals", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "sumocode-rpc-adopted-repeat-signal-"));
 		const piBin = join(directory, "stalled-pi");

@@ -4070,8 +4070,8 @@ var TerminalSessionOwner = class {
     this.mouseSGREnabled = true;
     this.backgroundPainted = this.paintBackground;
     this.cursorColorOverridden = true;
-    this.lastBackgroundColor = this.palette.background;
-    this.lastCursorColor = this.palette.accent;
+    this.lastBackgroundColor = void 0;
+    this.lastCursorColor = void 0;
     this.lastEmittedCursor = null;
   }
   enterAltscreen() {

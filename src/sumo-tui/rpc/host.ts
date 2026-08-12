@@ -40,6 +40,7 @@ import { RpcHostStateStore, type RpcHostChromeState } from "./state.js";
 import { RpcTranscriptPump } from "./transcript-pump.js";
 import { rpcVisualFixtureFromEnv } from "./visual-fixtures.js";
 import { logDiagnostic } from "../runtime/diagnostics.js";
+import { defaultTerminalSessionOwner } from "../runtime/terminal-controller.js";
 
 const DEFERRED_SELECTOR_ACTION_KEY = "selector-open";
 const DEFERRED_MODEL_CYCLE_ACTION_KEY = "model-cycle";
@@ -1568,7 +1569,14 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 			treeNavigationRecovery = undefined;
 			stopWatchingGitBranch?.();
 			stopWatchingGitBranch = undefined;
-			runtime?.stop(code, { preserveTerminal: code === SUMOCODE_RELOAD_EXIT_CODE });
+			if (runtime) runtime.stop(code, { preserveTerminal: code === SUMOCODE_RELOAD_EXIT_CODE });
+			else if (isReloadResume) {
+				// Child ownership can transfer before the runtime exists. If it dies in
+				// that narrow window, the entry fallback no longer owns cleanup.
+				stdin.setRawMode?.(false);
+				defaultTerminalSessionOwner.adoptRetainedSession();
+				defaultTerminalSessionOwner.exitTerminal();
+			}
 			if (!regionRegistryDisposed) {
 				regionRegistryDisposed = true;
 				regionRegistry.dispose();
@@ -1661,6 +1669,12 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		// the entry owns the child reap and process exit.
 		if (options.shouldAbortAdoption?.()) return requestedHostExitCode ?? 0;
 		await client.start(adoptChildAndArmHostSignals);
+		const postAdoptionDelayMs = env.NODE_ENV === "test"
+			? Number.parseInt(env.SUMOCODE_TEST_POST_ADOPTION_DELAY_MS ?? "0", 10)
+			: 0;
+		if (Number.isFinite(postAdoptionDelayMs) && postAdoptionDelayMs > 0) {
+			await new Promise((resolveDelay) => setTimeout(resolveDelay, postAdoptionDelayMs));
+		}
 		// A signal can transfer ownership while client startup settles. Do not
 		// construct a runtime after teardown has already begun.
 		if (stopPromise) {

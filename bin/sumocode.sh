@@ -796,6 +796,10 @@ fi
 # Other exit codes propagate normally.
 SUMOCODE_RELOAD_EXIT_CODE=100
 IS_RELOAD_RESPAWN=0
+ORIGINAL_TTY_STATE=""
+if [[ -t 0 ]]; then
+	ORIGINAL_TTY_STATE="$(stty -g <&0 2>/dev/null || true)"
+fi
 
 if [[ "${USE_RPC_HOST}" -eq 1 ]]; then
 	# `pi --mode rpc` (spawned by the RPC host as its child) never reads argv
@@ -884,18 +888,25 @@ wait_for_child_exit() {
 	WAIT_FOR_CHILD_EXIT_STATUS="${status}"
 }
 
-restore_failed_reload_terminal() {
+restore_reload_terminal() {
 	local ready_file="$1"
 	local state=""
+	if [[ "${IS_RELOAD_RESPAWN}" -ne 1 || ! -t 1 ]]; then
+		return 0
+	fi
+	# Node's raw-mode baseline belongs to the replacement process, which starts
+	# while the predecessor is already raw. Restore the exact pre-launch termios
+	# state rather than `stty sane`, which would erase user customizations.
+	if [[ -n "${ORIGINAL_TTY_STATE}" ]]; then
+		stty "${ORIGINAL_TTY_STATE}" <&0 2>/dev/null || true
+	fi
 	if [[ -n "${ready_file}" && -f "${ready_file}" ]]; then
 		state="$(cat "${ready_file}" 2>/dev/null || true)"
 	fi
-	if [[ "${IS_RELOAD_RESPAWN}" -ne 1 || -z "${ready_file}" || "${state}" == "ready" || ! -t 1 ]]; then
+	if [[ -z "${ready_file}" || "${state}" == "ready" ]]; then
 		return 0
 	fi
-	# Last-resort owner: this shell survives even when the replacement Node
-	# entry cannot parse or resolve its eager imports.
-	stty sane 2>/dev/null || true
+	# Last-resort mode cleanup when the replacement entry never took ownership.
 	printf '\033]112\033\\\033]111\033\\\033[<u\033[>4;0m\033[?2004l\033[?1003l\033[?1002l\033[?1006l\033[?1000l\033[?1049l\033[?25h\033[0m'
 }
 
@@ -978,7 +989,7 @@ while :; do
 		env SUMOCODE_RELOAD_READY_FILE="${SUMOCODE_RELOAD_READY_FILE}" "${PI_BIN}" -e "${ROOT_DIR}/src/extension-entry.ts" "${SUMOCODE_ARGS[@]}" || code=$?
 	fi
 	if [[ "${code}" -ne "${SUMOCODE_RELOAD_EXIT_CODE}" ]]; then
-		restore_failed_reload_terminal "${SUMOCODE_RELOAD_READY_FILE:-}"
+		restore_reload_terminal "${SUMOCODE_RELOAD_READY_FILE:-}"
 		rm -f "${SUMOCODE_RELOAD_READY_FILE:-}" 2>/dev/null || true
 		exit "${code}"
 	fi

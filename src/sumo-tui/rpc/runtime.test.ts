@@ -738,6 +738,26 @@ describe("RPC host retained runtime frame", () => {
 		expect(terminal.getState()).toMatchObject({ restored: true });
 	});
 
+	it("keeps raw mode enabled while handing the terminal to a reload successor", async () => {
+		const output = new FakeOutput();
+		const input = new FakeInput();
+		const terminal = new TerminalSessionOwner({ output });
+		const runtime = new RpcHostRuntime({
+			output,
+			input,
+			terminal,
+			initialState: state(),
+			initialTranscript: { messages: [] },
+		});
+
+		await runtime.start();
+		runtime.stop(100, { preserveTerminal: true });
+
+		expect(input.rawModes).toEqual([true]);
+		expect(input.pauseCount).toBe(1);
+		expect(terminal.getState()).toMatchObject({ restored: false, altscreenActive: true });
+	});
+
 	it("sets stdin to utf8 encoding on start so Node reassembles multibyte input split across chunks", async () => {
 		const output = new FakeOutput();
 		const input = new FakeInput();

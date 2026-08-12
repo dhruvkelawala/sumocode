@@ -122,17 +122,21 @@ describe("sumocode RPC host shell integration", () => {
 		const original = await readFile(bundlePath);
 		await writeFile(bundlePath, 'import { existsSync } from "node:fs"; export async function main() { for (let i = 0; i < 100 && !existsSync(process.env.PID_FILE); i++) await new Promise((resolve) => setTimeout(resolve, 20)); throw new Error("forced main rejection"); }\n');
 		try {
-			app = spawnSumocodePty({
+			app = spawnPiPty({
+				command: process.execPath,
+				args: [join(process.cwd(), "sumo-rpc-host.js")],
 				env: {
 					PI_BIN: piBin,
 					PID_FILE: pidFile,
 					PI_CODING_AGENT_DIR: join(directory, "agent"),
 					SUMOCODE_HOST_BUNDLE: "1",
+					SUMOCODE_RELOAD: "1",
 				},
 				cols: 100,
 				rows: 30,
 			});
 			await app.waitForOutput("forced main rejection", 5_000);
+			expect(app.getOutput()).toContain(TERMINAL_CLEANUP_SEQUENCE);
 			const pid = Number.parseInt(await readFile(pidFile, "utf8"), 10);
 			expect(Number.isFinite(pid)).toBe(true);
 			await waitForProcessExit(pid);
@@ -147,13 +151,16 @@ describe("sumocode RPC host shell integration", () => {
 		await writeFile(bundlePath, "export { this is invalid syntax");
 		try {
 			const agentDir = await mkdtemp(join(tmpdir(), "sumocode-rpc-broken-forced-bundle-agent-"));
-			app = spawnSumocodePty({
-				env: { PI_CODING_AGENT_DIR: agentDir, SUMOCODE_HOST_BUNDLE: "1" },
+			app = spawnPiPty({
+				command: process.execPath,
+				args: [join(process.cwd(), "sumo-rpc-host.js")],
+				env: { PI_CODING_AGENT_DIR: agentDir, SUMOCODE_HOST_BUNDLE: "1", SUMOCODE_RELOAD: "1" },
 				cols: 100,
 				rows: 30,
 			});
 			await app.waitForOutput("forced host bundle failed to import", 5_000);
 			expect(app.getOutput()).not.toContain(PI_BOOT_SEQUENCE);
+			expect(app.getOutput()).toContain(TERMINAL_CLEANUP_SEQUENCE);
 		} finally {
 			await writeFile(bundlePath, original);
 		}

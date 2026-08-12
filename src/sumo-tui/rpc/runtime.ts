@@ -461,7 +461,10 @@ export class RpcHostRuntime {
 		if (this.stopped) return;
 		this.stopped = true;
 		this.exitCode = code;
-		this.input?.setRawMode?.(false);
+		// Raw mode is terminal state, not process-local state. Keep it enabled
+		// while a reload successor hydrates so typed keys cannot echo over the
+		// retained frame or collect in the terminal's canonical input buffer.
+		if (!options.preserveTerminal) this.input?.setRawMode?.(false);
 		if (this.input?.off) this.input.off("data", this.handleInput);
 		else this.input?.removeListener?.("data", this.handleInput);
 		this.input?.pause?.();

@@ -50,6 +50,18 @@ const useBundle = process.env.SUMOCODE_HOST_BUNDLE !== "0";
 const forceBundle = process.env.SUMOCODE_HOST_BUNDLE === "1";
 
 const PRE_ADOPTION_KILL_GRACE_MS = 250;
+// Keep this dependency-free: it must run when host source/bundle imports are
+// broken. Its mode-reset suffix mirrors TERMINAL_CLEANUP_SEQUENCE in
+// terminal-controller.ts; rpc-host-shell.test.ts compares them to catch drift.
+const RELOAD_FALLBACK_TERMINAL_CLEANUP =
+	"\x1b]112\x1b\\" + // cursor colour reset
+	"\x1b]111\x1b\\" + // terminal background reset
+	"\x1b[<u" + // kitty keyboard pop
+	"\x1b[>4;0m" + // xterm modifyOtherKeys off
+	"\x1b[?2004l" + // bracketed paste off
+	"\x1b[?1003l\x1b[?1002l\x1b[?1006l\x1b[?1000l" + // mouse off
+	"\x1b[?1049l" + // altscreen off
+	"\x1b[?25h\x1b[0m"; // cursor visible + SGR reset
 let preSpawnedChild;
 let relayingEarlySignal = false;
 let earlyCleanupPromise;
@@ -105,6 +117,12 @@ async function terminateUnadoptedChild() {
 function releasePreAdoptionSignalHandlers() {
 	process.removeListener("SIGINT", handleEarlySigint);
 	process.removeListener("SIGTERM", handleEarlySigterm);
+}
+
+function restoreFailedReloadTerminal() {
+	if (process.env.SUMOCODE_RELOAD !== "1" || process.stdout.isTTY !== true) return;
+	try { process.stdin.setRawMode?.(false); } catch {}
+	try { process.stdout.write(RELOAD_FALLBACK_TERMINAL_CLEANUP); } catch {}
 }
 
 function relayEarlySignal(signal) {
@@ -207,6 +225,7 @@ try {
 } catch (error) {
 	await terminateUnadoptedChild();
 	releasePreAdoptionSignalHandlers();
+	restoreFailedReloadTerminal();
 	throw error;
 }
 
@@ -227,10 +246,14 @@ if (relayingEarlySignal) {
 	process.exit(0);
 }
 
+let childAdopted = false;
 try {
 	await mod.main({
 		preSpawnedChild,
-		onPreSpawnedChildAdopted: releasePreAdoptionSignalHandlers,
+		onPreSpawnedChildAdopted: () => {
+			childAdopted = true;
+			releasePreAdoptionSignalHandlers();
+		},
 		env: {
 			...process.env,
 			SUMOCODE_ROOT_DIR: root,
@@ -240,8 +263,10 @@ try {
 	});
 } catch (error) {
 	// main() can reject before SumoRpcClient adopts the pre-spawned child
-	// (Yoga/config/runtime initialization). The entry still owns it then.
+	// (Yoga/config/runtime initialization). The entry still owns it then, and a
+	// reload predecessor may have deliberately left terminal modes active.
 	await terminateUnadoptedChild();
+	if (!childAdopted) restoreFailedReloadTerminal();
 	throw error;
 } finally {
 	// When an early signal is relaying (e.g. main() aborted adoption while the

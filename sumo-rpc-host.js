@@ -132,6 +132,10 @@ function restoreFailedReloadTerminal() {
 	if (process.env.SUMOCODE_RELOAD !== "1" || process.stdout.isTTY !== true) return;
 	try { process.stdin.setRawMode?.(false); } catch {}
 	try { process.stdout.write(RELOAD_FALLBACK_TERMINAL_CLEANUP); } catch {}
+	const readyFile = process.env.SUMOCODE_RELOAD_READY_FILE;
+	if (readyFile) {
+		try { writeFileSync(readyFile, "ready", { mode: 0o600 }); } catch {}
+	}
 }
 
 function relayEarlySignal(signal) {

@@ -1576,6 +1576,10 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 				stdin.setRawMode?.(false);
 				defaultTerminalSessionOwner.adoptRetainedSession();
 				defaultTerminalSessionOwner.exitTerminal();
+				const readyFile = env.SUMOCODE_RELOAD_READY_FILE;
+				if (readyFile) {
+					try { writeFileSync(readyFile, "ready", { mode: 0o600 }); } catch {}
+				}
 			}
 			if (!regionRegistryDisposed) {
 				regionRegistryDisposed = true;
@@ -1714,6 +1718,10 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		if (isReloadResume) {
 			initialRuntime.adoptRetainedTerminal();
 			initialRuntime.startInput();
+			const readyFile = env.SUMOCODE_RELOAD_READY_FILE;
+			if (readyFile) {
+				try { writeFileSync(readyFile, "ready", { mode: 0o600 }); } catch {}
+			}
 		} else await initialRuntime.start();
 		// Optional Git metadata must not gate first paint or authoritative session
 		// hydration. A watcher created after shutdown immediately disposes itself.
@@ -1800,13 +1808,7 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		// A reload predecessor deliberately leaves its retained frame and terminal
 		// modes in place. Hydrate off-screen, then atomically replace that frame;
 		// never flash the cold-start splash for a session we already know exists.
-		if (isReloadResume) {
-			await initialRuntime.start();
-			const readyFile = env.SUMOCODE_RELOAD_READY_FILE;
-			if (readyFile) {
-				try { writeFileSync(readyFile, "ready", { mode: 0o600 }); } catch {}
-			}
-		}
+		if (isReloadResume) await initialRuntime.start();
 		await editor.configureAutocomplete(controls);
 		initialRuntime.markChromeStable();
 		// Deferred child-dependent input may now observe only the fully painted,

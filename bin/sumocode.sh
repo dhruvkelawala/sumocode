@@ -886,7 +886,11 @@ wait_for_child_exit() {
 
 restore_failed_reload_terminal() {
 	local ready_file="$1"
-	if [[ "${IS_RELOAD_RESPAWN}" -ne 1 || -z "${ready_file}" || -f "${ready_file}" || ! -t 1 ]]; then
+	local state=""
+	if [[ -n "${ready_file}" && -f "${ready_file}" ]]; then
+		state="$(cat "${ready_file}" 2>/dev/null || true)"
+	fi
+	if [[ "${IS_RELOAD_RESPAWN}" -ne 1 || -z "${ready_file}" || "${state}" == "ready" || ! -t 1 ]]; then
 		return 0
 	fi
 	# Last-resort owner: this shell survives even when the replacement Node
@@ -933,9 +937,8 @@ while :; do
 	SUMOCODE_RELOAD_READY_FILE=""
 	if [[ "${IS_RELOAD_RESPAWN}" -eq 1 ]]; then
 		SUMOCODE_RELOAD_READY_FILE="$(mktemp "${TMPDIR:-/tmp}/sumocode-reload-ready.XXXXXX" 2>/dev/null || true)"
-		if [[ -n "${SUMOCODE_RELOAD_READY_FILE}" ]]; then
-			rm -f "${SUMOCODE_RELOAD_READY_FILE}"
-		fi
+		# Keep mktemp's private inode reserved. Empty means startup is pending;
+		# the terminal owner overwrites it with "ready" after taking responsibility.
 	fi
 	if [[ "${USE_RPC_HOST}" -eq 1 ]]; then
 		# The RPC host previously ran via `exec`, which replaced this shell

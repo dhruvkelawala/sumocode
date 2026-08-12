@@ -59,17 +59,8 @@ export function parseWorktreeArgs(args: string): ParsedWorktreeArgs {
 	return { mode: "delegate", value: withoutBase, ...parsedBase };
 }
 
-function notify(pi: Pick<ExtensionAPI, "sendMessage">, ctx: ExtensionContext, message: string, type: "info" | "warning" = "info"): void {
+function notify(_pi: Pick<ExtensionAPI, "sendMessage">, ctx: ExtensionContext, message: string, type: "info" | "warning" = "info"): void {
 	if (ctx.hasUI) {
-		pi.sendMessage(
-			{
-				customType: "sumo:worktree",
-				content: message,
-				display: true,
-				details: { type, message },
-			},
-			{ triggerTurn: false },
-		);
 		ctx.ui.notify(message, type);
 		return;
 	}

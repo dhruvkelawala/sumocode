@@ -79,10 +79,7 @@ describe("/sumo:worktree", () => {
 		expect(openedCommand).toContain("/repo.wt/sumo__task");
 		expect(openedCommand).toContain("pnpm install && SUMOCODE_TASK_KEEP_OPEN=1 exec sumocode task");
 		expect(openedCommand).toContain("ship v0.4");
-		expect(sendMessage).toHaveBeenCalledWith(
-			expect.objectContaining({ customType: "sumo:worktree", content: expect.stringContaining("opened sumo/task in down split"), display: true }),
-			{ triggerTurn: false },
-		);
+		expect(sendMessage).not.toHaveBeenCalled();
 		expect(notify).toHaveBeenCalledWith(expect.stringContaining("opened sumo/task in down split"), "info");
 	});
 

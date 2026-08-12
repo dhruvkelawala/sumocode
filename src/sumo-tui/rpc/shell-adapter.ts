@@ -9,6 +9,7 @@ import {
 } from "../../cathedral/input-frame.js";
 import { splashInvocationHint } from "../../cathedral/input-hints.js";
 import { compactionStatusLabelForReason, renderCompactionStatusRow } from "../../compaction-status-row.js";
+import { hasActiveFastModeStatus } from "../../fast-mode-status.js";
 import {
 	colorHex,
 	formatCwd,
@@ -57,6 +58,7 @@ export interface RpcShellAdapterOptions {
 		readonly belowEditor?: Component;
 		readonly sidebar?: Component;
 	};
+	readonly extensionStatuses?: () => ReadonlyMap<string, string | undefined>;
 	/**
 	 * Triggers a repaint outside of `update()`'s own call chain -- needed so
 	 * the working-indicator timer (see `workingIndicatorTimer`) can animate on
@@ -122,6 +124,7 @@ export class RpcShellAdapter {
 	private readonly extensionAboveEditor: Component | undefined;
 	private readonly extensionBelowEditor: Component | undefined;
 	private readonly extensionSidebar: Component | undefined;
+	private readonly extensionStatuses: (() => ReadonlyMap<string, string | undefined>) | undefined;
 	private readonly viewport: ShellViewport;
 	private readonly selection: SelectionController;
 	private state: RpcHostChromeState;
@@ -158,6 +161,7 @@ export class RpcShellAdapter {
 		this.extensionAboveEditor = options.extensionRegions?.aboveEditor;
 		this.extensionBelowEditor = options.extensionRegions?.belowEditor;
 		this.extensionSidebar = options.extensionRegions?.sidebar;
+		this.extensionStatuses = options.extensionStatuses;
 		this.viewport = options.viewport;
 		this.requestRender = options.requestRender;
 		this.requestIndicatorRepaint = options.requestIndicatorRepaint;
@@ -366,6 +370,10 @@ export class RpcShellAdapter {
 
 	public getState(): RpcHostChromeState {
 		return this.state;
+	}
+
+	public getExtensionStatuses(): ReadonlyMap<string, string | undefined> | undefined {
+		return this.extensionStatuses?.();
 	}
 
 	public getTranscript(): TranscriptViewModel {
@@ -624,7 +632,7 @@ function sidebarSnapshot(state: RpcHostChromeState): SidebarSnapshot {
 	};
 }
 
-function footerSnapshot(state: RpcHostChromeState, isSplash: boolean): FooterSnapshot {
+function footerSnapshot(state: RpcHostChromeState, isSplash: boolean, showFastMode = false): FooterSnapshot {
 	if (isVisualHarness() && !isSplash) {
 		// Tokens/cost/branch are frozen here because they're genuinely
 		// non-deterministic across real sessions (see VISUAL_SIDEBAR_* above).
@@ -649,6 +657,7 @@ function footerSnapshot(state: RpcHostChromeState, isSplash: boolean): FooterSna
 			state: sumoState(state),
 			modelId: footerModelId(state.modelLabel) ?? VISUAL_MODEL_LABEL,
 			thinkingLevel: normalizeThinkingLevel(state.thinkingLevel),
+			showFastMode,
 			isSplash,
 		};
 	}
@@ -664,6 +673,7 @@ function footerSnapshot(state: RpcHostChromeState, isSplash: boolean): FooterSna
 		state: sumoState(state),
 		modelId: footerModelId(state.modelLabel) ?? "no-model",
 		thinkingLevel: normalizeThinkingLevel(state.thinkingLevel),
+		showFastMode,
 		isSplash,
 	};
 }
@@ -817,7 +827,11 @@ class RpcFooterComponent implements ShellRenderable {
 			const version = renderSplashVersionLine(width);
 			return version ? [version] : [""];
 		}
-		return renderFooterBlock(footerSnapshot(this.adapter.getState(), false), width);
+		return renderFooterBlock(footerSnapshot(
+			this.adapter.getState(),
+			false,
+			hasActiveFastModeStatus(this.adapter.getExtensionStatuses()),
+		), width);
 	}
 }
 

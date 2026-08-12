@@ -360,14 +360,14 @@ function setup(options: {
 	return { actions, controls, modals, overlays, inlineSelectors, notifications, memory, editorText, rehydrateCalls, stateChanges, persistedThemes };
 }
 
-function rpcCommand(name: string): RpcSlashCommand {
+function rpcCommand(name: string, source: RpcSlashCommand["source"] = "prompt"): RpcSlashCommand {
 	return {
 		name,
 		description: `Run ${name}`,
-		source: "prompt",
+		source,
 		sourceInfo: {
 			path: `/tmp/${name}`,
-			source: "prompt",
+			source,
 			scope: "project",
 			origin: "top-level",
 		},
@@ -1578,9 +1578,17 @@ describe("RpcHostActions", () => {
 		expect(controls.calls).toContain("getCommands");
 		expect(notifications).toContainEqual({ message: "unknown command: /sumo:does-not-exist", level: "warning" });
 
-		controls.commands = [rpcCommand("deploy"), rpcCommand("reload")];
+		controls.commands = [
+			rpcCommand("fast", "extension"),
+			rpcCommand("deploy", "prompt"),
+			rpcCommand("reload", "extension"),
+		];
+		await expect(actions.handleSubmittedText("/fast")).resolves.toBe(true);
+		expect(controls.calls).toContain("executeExtensionCommand:/fast");
+
 		await expect(actions.handleSubmittedText("/deploy prod")).resolves.toBe(false);
-		await expect(actions.handleSubmittedText("/reload")).resolves.toBe(false);
+		await expect(actions.handleSubmittedText("/reload")).resolves.toBe(true);
+		expect(controls.calls).toContain("executeExtensionCommand:/reload");
 		expect(notifications).not.toContainEqual({ message: "unknown command: /reload", level: "warning" });
 	});
 

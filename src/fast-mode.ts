@@ -15,6 +15,7 @@ import {
 	type OpenAIResponsesOptions,
 	type SimpleStreamOptions,
 } from "@earendil-works/pi-ai/compat";
+import { FAST_MODE_STATUS_KEY, FAST_MODE_STATUS_TEXT } from "./fast-mode-status.js";
 
 const SERVICE_TIER = "priority";
 const SUPPORTED_PROVIDERS = new Set(["openai", "openai-codex"]);
@@ -22,8 +23,10 @@ const SUPPORTED_APIS = new Set(["openai-responses", "openai-codex-responses"]);
 const DEFAULT_FAST_MODELS = [
 	"openai/gpt-5.4",
 	"openai/gpt-5.5",
+	"openai/gpt-5.6-sol",
 	"openai-codex/gpt-5.4",
 	"openai-codex/gpt-5.5",
+	"openai-codex/gpt-5.6-sol",
 ];
 const OPENAI_RESPONSES_FAST_SOURCE = "sumocode:fast-mode:openai-responses";
 const OPENAI_CODEX_RESPONSES_FAST_SOURCE = "sumocode:fast-mode:openai-codex-responses";
@@ -170,8 +173,17 @@ function describeFastMode(state: FastModeState, model: FastModeModel | undefined
 	return `Fast mode ${stateText}. Current model: ${modelKey}.`;
 }
 
-function notify(ctx: Pick<ExtensionCommandContext, "hasUI" | "ui">, message: string, level: "info" | "warning" | "error"): void {
+type FastModeUiContext = Pick<ExtensionCommandContext, "hasUI" | "ui">;
+
+function notify(ctx: FastModeUiContext, message: string, level: "info" | "warning" | "error"): void {
 	if (ctx.hasUI) ctx.ui.notify(message, level);
+}
+
+function publishFastModeStatus(ctx: FastModeUiContext | undefined, state: FastModeState, model: FastModeModel | undefined): void {
+	if (!ctx?.hasUI) return;
+	const setStatus = (ctx.ui as { setStatus?: (key: string, text: string | undefined) => void }).setStatus;
+	if (typeof setStatus !== "function") return;
+	setStatus.call(ctx.ui, FAST_MODE_STATUS_KEY, shouldApplyFastMode(state, model) ? FAST_MODE_STATUS_TEXT : undefined);
 }
 
 export function installFastMode(
@@ -183,6 +195,7 @@ export function installFastMode(
 		models: DEFAULT_FAST_MODELS,
 	};
 	let currentModel: FastModeModel | undefined;
+	let activeUiContext: FastModeUiContext | undefined;
 	const nativeOpenAIResponses = getApiProvider("openai-responses");
 	const nativeOpenAICodexResponses = getApiProvider("openai-codex-responses");
 	const streamSimple = createFastModeStream(
@@ -209,10 +222,13 @@ export function installFastMode(
 	pi.on("session_start", async (_event, ctx: ExtensionContext) => {
 		state.enabled = false;
 		currentModel = ctx.model as FastModeModel | undefined;
+		activeUiContext = ctx;
+		publishFastModeStatus(activeUiContext, state, currentModel);
 		options.onChange?.();
 	});
 	pi.on("model_select", async (event) => {
 		currentModel = event.model as FastModeModel;
+		publishFastModeStatus(activeUiContext, state, currentModel);
 	});
 
 	pi.registerCommand("fast", {
@@ -230,6 +246,7 @@ export function installFastMode(
 				notify(ctx, "Usage: /fast [on|off|toggle|status]", "error");
 				return;
 			}
+			publishFastModeStatus(ctx, state, currentModel);
 			options.onChange?.();
 			notify(ctx, describeFastMode(state, currentModel), state.enabled ? "warning" : "info");
 		},

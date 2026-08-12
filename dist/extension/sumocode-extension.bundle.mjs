@@ -22,14 +22,22 @@ import {
   streamSimpleOpenAICodexResponses,
   streamSimpleOpenAIResponses
 } from "@earendil-works/pi-ai/compat";
+
+// src/fast-mode-status.ts
+var FAST_MODE_STATUS_KEY = "sumocode.fast-mode";
+var FAST_MODE_STATUS_TEXT = "fast";
+
+// src/fast-mode.ts
 var SERVICE_TIER = "priority";
 var SUPPORTED_PROVIDERS = /* @__PURE__ */ new Set(["openai", "openai-codex"]);
 var SUPPORTED_APIS = /* @__PURE__ */ new Set(["openai-responses", "openai-codex-responses"]);
 var DEFAULT_FAST_MODELS = [
   "openai/gpt-5.4",
   "openai/gpt-5.5",
+  "openai/gpt-5.6-sol",
   "openai-codex/gpt-5.4",
-  "openai-codex/gpt-5.5"
+  "openai-codex/gpt-5.5",
+  "openai-codex/gpt-5.6-sol"
 ];
 var OPENAI_RESPONSES_FAST_SOURCE = "sumocode:fast-mode:openai-responses";
 var OPENAI_CODEX_RESPONSES_FAST_SOURCE = "sumocode:fast-mode:openai-codex-responses";
@@ -130,12 +138,19 @@ function describeFastMode(state, model) {
 function notify(ctx, message, level) {
   if (ctx.hasUI) ctx.ui.notify(message, level);
 }
+function publishFastModeStatus(ctx, state, model) {
+  if (!ctx?.hasUI) return;
+  const setStatus = ctx.ui.setStatus;
+  if (typeof setStatus !== "function") return;
+  setStatus.call(ctx.ui, FAST_MODE_STATUS_KEY, shouldApplyFastMode(state, model) ? FAST_MODE_STATUS_TEXT : void 0);
+}
 function installFastMode(pi, options = {}) {
   const state = {
     enabled: options.initialEnabled ?? false,
     models: DEFAULT_FAST_MODELS
   };
   let currentModel;
+  let activeUiContext;
   const nativeOpenAIResponses = getApiProvider("openai-responses");
   const nativeOpenAICodexResponses = getApiProvider("openai-codex-responses");
   const streamSimple = createFastModeStream(
@@ -160,10 +175,13 @@ function installFastMode(pi, options = {}) {
   pi.on("session_start", async (_event, ctx) => {
     state.enabled = false;
     currentModel = ctx.model;
+    activeUiContext = ctx;
+    publishFastModeStatus(activeUiContext, state, currentModel);
     options.onChange?.();
   });
   pi.on("model_select", async (event) => {
     currentModel = event.model;
+    publishFastModeStatus(activeUiContext, state, currentModel);
   });
   pi.registerCommand("fast", {
     description: "Toggle OpenAI/Codex fast mode",
@@ -180,6 +198,7 @@ function installFastMode(pi, options = {}) {
         notify(ctx, "Usage: /fast [on|off|toggle|status]", "error");
         return;
       }
+      publishFastModeStatus(ctx, state, currentModel);
       options.onChange?.();
       notify(ctx, describeFastMode(state, currentModel), state.enabled ? "warning" : "info");
     }
@@ -7049,17 +7068,8 @@ function parseWorktreeArgs(args) {
   }
   return { mode: "delegate", value: withoutBase, ...parsedBase };
 }
-function notify5(pi, ctx, message, type = "info") {
+function notify5(_pi, ctx, message, type = "info") {
   if (ctx.hasUI) {
-    pi.sendMessage(
-      {
-        customType: "sumo:worktree",
-        content: message,
-        display: true,
-        details: { type, message }
-      },
-      { triggerTurn: false }
-    );
     ctx.ui.notify(message, type);
     return;
   }

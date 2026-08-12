@@ -884,6 +884,16 @@ wait_for_child_exit() {
 	WAIT_FOR_CHILD_EXIT_STATUS="${status}"
 }
 
+restore_failed_reload_terminal() {
+	if [[ "${IS_RELOAD_RESPAWN}" -ne 1 || ! -t 1 ]]; then
+		return 0
+	fi
+	# Last-resort owner: this shell survives even when the replacement Node
+	# entry cannot parse or resolve its eager imports.
+	stty sane 2>/dev/null || true
+	printf '\033]112\033\\\033]111\033\\\033[<u\033[>4;0m\033[?2004l\033[?1003l\033[?1002l\033[?1006l\033[?1000l\033[?1049l\033[?25h\033[0m'
+}
+
 # WORKAROUND for a verified-unreliable bash 3.2 (macOS's system bash) `wait`
 # builtin: on a SIGTERM-graceful shutdown, host.ts resolves and intends to
 # exit with code 0 (see host.ts's handleSigterm -> exitProcess(0)), but
@@ -957,6 +967,7 @@ while :; do
 		"${PI_BIN}" -e "${ROOT_DIR}/src/extension-entry.ts" "${SUMOCODE_ARGS[@]}" || code=$?
 	fi
 	if [[ "${code}" -ne "${SUMOCODE_RELOAD_EXIT_CODE}" ]]; then
+		restore_failed_reload_terminal
 		exit "${code}"
 	fi
 	# The replacement host adopts the retained terminal frame and hydrates before

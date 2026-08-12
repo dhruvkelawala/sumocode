@@ -22,4 +22,4 @@ if [[ "${count}" -eq 1 ]]; then
 fi
 
 printf 'RUN-2 args:%s\n' "$*"
-exit 0
+exit "${SUMOCODE_RELOAD_TEST_SECOND_EXIT_CODE:-0}"

@@ -896,7 +896,7 @@ export class RpcHostActions {
 	}
 
 	private notifyLovelyWebSaved(path: string): void {
-		notify(this.notifications, `Lovely Web config saved: ${lovelyWebConfigPathForDisplay(path)}. Run /sumo:reload or restart SumoCode for tool enable/disable changes.`, "info");
+		notify(this.notifications, `Lovely Web config saved: ${lovelyWebConfigPathForDisplay(path)}. Run /reload or restart SumoCode for tool enable/disable changes.`, "info");
 	}
 
 	/**

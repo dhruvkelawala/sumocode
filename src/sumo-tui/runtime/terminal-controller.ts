@@ -195,6 +195,21 @@ export class TerminalSessionOwner {
 		this.setCursorColor();
 	}
 
+	/** Adopt terminal modes deliberately left active by a reload predecessor. */
+	public adoptRetainedSession(): void {
+		if (!this.isTTY()) return;
+		this.restored = false;
+		this.altscreenActive = true;
+		this.mouseSGREnabled = true;
+		this.backgroundPainted = this.paintBackground;
+		this.cursorColorOverridden = true;
+		// The predecessor's palette is process-local and may differ after config
+		// reload. Unknown caches force start() to repaint the active palette.
+		this.lastBackgroundColor = undefined;
+		this.lastCursorColor = undefined;
+		this.lastEmittedCursor = null;
+	}
+
 	public enterAltscreen(): void {
 		if (!this.isTTY() || this.altscreenActive) return;
 		this.restored = false;

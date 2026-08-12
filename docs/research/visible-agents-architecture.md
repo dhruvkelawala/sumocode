@@ -342,7 +342,7 @@ raced the shell. Passing the prompt as a CLI positional is deterministic
 and zero-latency.
 
 The reload loop in `bin/sumocode.sh` also required a fix: when the user
-triggers `/sumo:reload`, the wrapper strips the task prompt from the
+triggers `/reload`, the wrapper strips the task prompt from the
 relaunch arguments so the original delegated prompt is not replayed into
 the resumed session (which continues via `--continue`).
 

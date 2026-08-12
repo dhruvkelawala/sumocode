@@ -110,7 +110,7 @@ runs after cell patches:
    scroll-out, re-emit on scroll-in), overlay suppression, capability-off
    fallback unchanged (Tier-1 chip tests keep passing).
 6. Manual verification matrix: Ghostty/cmux, Kitty, iTerm2 (fallback),
-   Terminal.app (fallback), narrow portrait pane, `/sumo:reload` mid-image,
+   Terminal.app (fallback), narrow portrait pane, `/reload` mid-image,
    session switch, scroll during stream with an image on screen.
 
 ## Verification
@@ -119,7 +119,7 @@ runs after cell patches:
 - `npm run typecheck` green.
 - Manual: `sumocode` in cmux → ask the agent to Read a PNG → pixels render
   in the tool card; scroll it off and back; open the command palette over
-  it; `/new`; `/sumo:reload`. No ghost images, no blank holes, no garbled
+  it; `/new`; `/reload`. No ghost images, no blank holes, no garbled
   frames.
 - Visual parity suite (`npm run visual:ci`) unaffected (captures run with
   capabilities off).

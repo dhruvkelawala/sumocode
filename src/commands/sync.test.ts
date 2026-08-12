@@ -58,7 +58,7 @@ describe("/sumo:sync", () => {
 		]);
 		expect(linkConfig).toHaveBeenCalledWith("/config", "/Users/test/.pi/agent");
 		expect(context.ui.notify).toHaveBeenLastCalledWith(
-			"SumoCode sync complete — run /sumo:reload if source changed",
+			"SumoCode sync complete — run /reload if source changed",
 			"info",
 		);
 		expect(stdout).not.toHaveBeenCalled();

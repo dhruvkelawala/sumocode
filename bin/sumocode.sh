@@ -26,7 +26,7 @@ if [[ -z "${NODE_COMPILE_CACHE:-}" ]]; then
 	mkdir -p "${NODE_COMPILE_CACHE}" 2>/dev/null || true
 	export NODE_COMPILE_CACHE
 fi
-# Set so the SumoCode `/sumo:reload` slash command knows it's running under
+# Set so the SumoCode `/reload` slash command knows it's running under
 # the loop-respawn launcher and can exit with the reload signal.
 export SUMOCODE_LAUNCHER="${SOURCE}"
 
@@ -792,9 +792,14 @@ EOF
 	exit 0
 fi
 
-# `/sumo:reload` exits the inner pi with this code so we re-launch in place.
+# `/reload` exits the inner pi with this code so we re-launch in place.
 # Other exit codes propagate normally.
 SUMOCODE_RELOAD_EXIT_CODE=100
+IS_RELOAD_RESPAWN=0
+ORIGINAL_TTY_STATE=""
+if [[ -t 0 ]]; then
+	ORIGINAL_TTY_STATE="$(stty -g <&0 2>/dev/null || true)"
+fi
 
 if [[ "${USE_RPC_HOST}" -eq 1 ]]; then
 	# `pi --mode rpc` (spawned by the RPC host as its child) never reads argv
@@ -807,7 +812,7 @@ if [[ "${USE_RPC_HOST}" -eq 1 ]]; then
 	# child does not also see (and silently drop) the same positional.
 	#
 	# This extraction happens ONCE, outside the respawn loop below: on a
-	# `/sumo:reload` respawn we deliberately do not want to re-submit the
+	# `/reload` respawn we deliberately do not want to re-submit the
 	# original kickoff prompt into the resumed session (same reasoning as the
 	# existing IS_TASK_LAUNCH handling inside the loop), so SUMOCODE_ARGS no
 	# longer carries a prompt positional by the time the loop's first
@@ -832,11 +837,27 @@ RPC_INITIAL_PROMPT="${EXTRACTED_INITIAL_PROMPT:-}"
 # is unchanged, still a plain foreground command, since it already worked
 # correctly via real terminals' process-group-wide delivery before this fix)
 # so RPC_CHILD_PID is known to the trap below while it's running.
+restore_original_tty_state() {
+	if [[ -n "${ORIGINAL_TTY_STATE}" ]]; then
+		stty "${ORIGINAL_TTY_STATE}" <&0 2>/dev/null || true
+	fi
+}
+
+reset_terminal_modes() {
+	printf '\033]112\033\\\033]111\033\\\033[<u\033[>4;0m\033[?2004l\033[?1003l\033[?1002l\033[?1006l\033[?1000l\033[?1049l\033[?25h\033[0m'
+}
+
 RPC_CHILD_PID=""
 forward_signal_to_rpc_child() {
 	local sig="$1"
 	if [[ -n "${RPC_CHILD_PID}" ]] && kill -0 "${RPC_CHILD_PID}" 2>/dev/null; then
 		kill "-${sig}" "${RPC_CHILD_PID}" 2>/dev/null || true
+	elif [[ "${USE_RPC_HOST}" -eq 1 ]]; then
+		# No child means the signal landed in the launcher-owned reload handoff.
+		# Exit here rather than swallowing it or leaking it into a later reload.
+		restore_original_tty_state
+		reset_terminal_modes
+		if [[ "${sig}" == "INT" ]]; then exit 130; else exit 0; fi
 	fi
 }
 trap 'forward_signal_to_rpc_child INT' INT
@@ -883,6 +904,26 @@ wait_for_child_exit() {
 	WAIT_FOR_CHILD_EXIT_STATUS="${status}"
 }
 
+restore_reload_terminal() {
+	local ready_file="$1"
+	local state=""
+	if [[ "${IS_RELOAD_RESPAWN}" -ne 1 || ! -t 1 ]]; then
+		return 0
+	fi
+	# Node's raw-mode baseline belongs to the replacement process, which starts
+	# while the predecessor is already raw. Restore the exact pre-launch termios
+	# state rather than `stty sane`, which would erase user customizations.
+	restore_original_tty_state
+	if [[ -n "${ready_file}" && -f "${ready_file}" ]]; then
+		state="$(cat "${ready_file}" 2>/dev/null || true)"
+	fi
+	if [[ -z "${ready_file}" || "${state}" == "ready" ]]; then
+		return 0
+	fi
+	# Last-resort mode cleanup when the replacement entry never took ownership.
+	reset_terminal_modes
+}
+
 # WORKAROUND for a verified-unreliable bash 3.2 (macOS's system bash) `wait`
 # builtin: on a SIGTERM-graceful shutdown, host.ts resolves and intends to
 # exit with code 0 (see host.ts's handleSigterm -> exitProcess(0)), but
@@ -918,10 +959,16 @@ read_child_exit_code_file() {
 
 while :; do
 	code=0
+	SUMOCODE_RELOAD_READY_FILE=""
+	if [[ "${IS_RELOAD_RESPAWN}" -eq 1 ]]; then
+		SUMOCODE_RELOAD_READY_FILE="$(mktemp "${TMPDIR:-/tmp}/sumocode-reload-ready.XXXXXX" 2>/dev/null || true)"
+		# Keep mktemp's private inode reserved. Empty means startup is pending;
+		# the terminal owner overwrites it with "ready" after taking responsibility.
+	fi
 	if [[ "${USE_RPC_HOST}" -eq 1 ]]; then
 		# The RPC host previously ran via `exec`, which replaced this shell
 		# entirely -- so the respawn loop below was unreachable on the default
-		# (RPC) launch path, and `/sumo:reload`'s exit(100) inside the RPC
+		# (RPC) launch path, and `/reload`'s exit(100) inside the RPC
 		# child (surfaced to the host via client.onExit, then re-thrown as the
 		# host's own process.exit(100) -- see host.ts's createRpcExitHandler /
 		# runRpcHost) had nowhere to be caught. Running the host as a plain
@@ -942,28 +989,34 @@ while :; do
 		# iteration's exit code.
 		SUMOCODE_EXIT_CODE_FILE="$(mktemp "${TMPDIR:-/tmp}/sumocode-exit-code.XXXXXX")"
 		if [[ "${#SUMOCODE_ARGS[@]}" -eq 0 ]]; then
-			env SUMOCODE_ROOT_DIR="${ROOT_DIR}" SUMOCODE_PROJECT_CWD="${PWD}" SUMOCODE_INITIAL_PROMPT="${RPC_INITIAL_PROMPT}" PI_BIN="${PI_BIN}" SUMOCODE_EXIT_CODE_FILE="${SUMOCODE_EXIT_CODE_FILE}" node "${ROOT_DIR}/sumo-rpc-host.js" <&0 &
+			env SUMOCODE_ROOT_DIR="${ROOT_DIR}" SUMOCODE_PROJECT_CWD="${PWD}" SUMOCODE_INITIAL_PROMPT="${RPC_INITIAL_PROMPT}" SUMOCODE_RELOAD="${IS_RELOAD_RESPAWN}" SUMOCODE_RELOAD_READY_FILE="${SUMOCODE_RELOAD_READY_FILE}" PI_BIN="${PI_BIN}" SUMOCODE_EXIT_CODE_FILE="${SUMOCODE_EXIT_CODE_FILE}" node "${ROOT_DIR}/sumo-rpc-host.js" <&0 &
 		else
-			env SUMOCODE_ROOT_DIR="${ROOT_DIR}" SUMOCODE_PROJECT_CWD="${PWD}" SUMOCODE_INITIAL_PROMPT="${RPC_INITIAL_PROMPT}" PI_BIN="${PI_BIN}" SUMOCODE_EXIT_CODE_FILE="${SUMOCODE_EXIT_CODE_FILE}" node "${ROOT_DIR}/sumo-rpc-host.js" "${SUMOCODE_ARGS[@]}" <&0 &
+			env SUMOCODE_ROOT_DIR="${ROOT_DIR}" SUMOCODE_PROJECT_CWD="${PWD}" SUMOCODE_INITIAL_PROMPT="${RPC_INITIAL_PROMPT}" SUMOCODE_RELOAD="${IS_RELOAD_RESPAWN}" SUMOCODE_RELOAD_READY_FILE="${SUMOCODE_RELOAD_READY_FILE}" PI_BIN="${PI_BIN}" SUMOCODE_EXIT_CODE_FILE="${SUMOCODE_EXIT_CODE_FILE}" node "${ROOT_DIR}/sumo-rpc-host.js" "${SUMOCODE_ARGS[@]}" <&0 &
 		fi
 		RPC_CHILD_PID=$!
 		wait_for_child_exit "${RPC_CHILD_PID}"
 		code="$(read_child_exit_code_file "${SUMOCODE_EXIT_CODE_FILE}" "${WAIT_FOR_CHILD_EXIT_STATUS}")"
 		RPC_CHILD_PID=""
 	elif [[ "${#SUMOCODE_ARGS[@]}" -eq 0 ]]; then
-		"${PI_BIN}" -e "${ROOT_DIR}/src/extension-entry.ts" || code=$?
+		env SUMOCODE_RELOAD_READY_FILE="${SUMOCODE_RELOAD_READY_FILE}" "${PI_BIN}" -e "${ROOT_DIR}/src/extension-entry.ts" || code=$?
 	else
-		"${PI_BIN}" -e "${ROOT_DIR}/src/extension-entry.ts" "${SUMOCODE_ARGS[@]}" || code=$?
+		env SUMOCODE_RELOAD_READY_FILE="${SUMOCODE_RELOAD_READY_FILE}" "${PI_BIN}" -e "${ROOT_DIR}/src/extension-entry.ts" "${SUMOCODE_ARGS[@]}" || code=$?
 	fi
 	if [[ "${code}" -ne "${SUMOCODE_RELOAD_EXIT_CODE}" ]]; then
+		restore_reload_terminal "${SUMOCODE_RELOAD_READY_FILE:-}"
+		rm -f "${SUMOCODE_RELOAD_READY_FILE:-}" 2>/dev/null || true
 		exit "${code}"
 	fi
+	rm -f "${SUMOCODE_RELOAD_READY_FILE:-}" 2>/dev/null || true
+	# The replacement host adopts the retained terminal frame and hydrates before
+	# its first paint, avoiding a cold-start splash during an in-place reload.
+	IS_RELOAD_RESPAWN=1
 	# Only the first iteration's kickoff prompt (if any) is ever submitted;
 	# a reload respawn resumes the existing session via --continue below and
 	# must not re-submit it as a new message.
 	RPC_INITIAL_PROMPT=""
 	# After the kickoff turn has fired, do NOT re-pass the task prompt on
-	# `/sumo:reload`. The reload loop adds `--continue` to resume the existing
+	# `/reload`. The reload loop adds `--continue` to resume the existing
 	# session, and re-injecting the original prompt would send it again as a
 	# new user message in the resumed session.
 	#

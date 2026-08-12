@@ -1578,12 +1578,18 @@ describe("RpcHostActions", () => {
 		expect(controls.calls).toContain("getCommands");
 		expect(notifications).toContainEqual({ message: "unknown command: /sumo:does-not-exist", level: "warning" });
 
-		controls.commands = [rpcCommand("fast", "extension")];
+		controls.commands = [
+			rpcCommand("fast", "extension"),
+			rpcCommand("deploy", "prompt"),
+			rpcCommand("reload", "extension"),
+		];
 		await expect(actions.handleSubmittedText("/fast")).resolves.toBe(true);
 		expect(controls.calls).toContain("executeExtensionCommand:/fast");
 
-		controls.commands = [rpcCommand("deploy", "prompt")];
 		await expect(actions.handleSubmittedText("/deploy prod")).resolves.toBe(false);
+		await expect(actions.handleSubmittedText("/reload")).resolves.toBe(true);
+		expect(controls.calls).toContain("executeExtensionCommand:/reload");
+		expect(notifications).not.toContainEqual({ message: "unknown command: /reload", level: "warning" });
 	});
 
 	it("opens retained MCP controls instead of forwarding bare custom-UI commands", async () => {
@@ -1641,13 +1647,11 @@ describe("RpcHostActions", () => {
 		expect(controls.calls).toContain("executeExtensionCommand:/login anthropic");
 		expect(notifications).not.toContainEqual({ message: "unknown command: /login", level: "warning" });
 
-		// /import and /reload remain unsupported Pi built-ins.
-		for (const name of ["import", "reload"]) {
-			expect(isRpcHostSlashCommandName(name)).toBe(false);
-			await expect(actions.handleSubmittedText(`/${name}`)).resolves.toBe(true);
-			expect(notifications).toContainEqual({ message: `unknown command: /${name}`, level: "warning" });
-		}
-		expect(controls.calls.filter((call) => call === "getCommands")).toHaveLength(2);
+		// /import remains an unsupported Pi built-in.
+		expect(isRpcHostSlashCommandName("import")).toBe(false);
+		await expect(actions.handleSubmittedText("/import")).resolves.toBe(true);
+		expect(notifications).toContainEqual({ message: "unknown command: /import", level: "warning" });
+		expect(controls.calls.filter((call) => call === "getCommands")).toHaveLength(1);
 	});
 
 	it("keeps the first login authoritative and rejects concurrent submissions", async () => {

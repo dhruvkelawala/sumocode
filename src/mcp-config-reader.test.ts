@@ -219,7 +219,7 @@ describe("getCachedMcpRoster", () => {
 		expect(first.map((s) => s.name)).toEqual(["github"]);
 
 		// Mutate the file. The cached read should NOT pick this up \u2014 cache flushes only on
-		// process restart (e.g. /sumo:reload).
+		// process restart (e.g. /reload).
 		writeJson(join(piAgentDir, "mcp.json"), { mcpServers: { github: {}, stitch: {} } });
 		const second = getCachedMcpRoster({ cwd, piAgentDir });
 		expect(second).toBe(first);

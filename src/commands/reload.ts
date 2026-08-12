@@ -1,13 +1,11 @@
 /**
- * `/sumo:reload` — hard-reload SumoCode source code.
+ * `/reload` — hard-reload SumoCode source code.
  *
- * Pi's built-in `/reload` reloads keybindings, themes, prompts, skills, and
- * extension metadata, but it does NOT re-import a `pi -e ./src/extension.ts`
- * extension's TypeScript source. Once jiti has cached our modules, `/reload`
- * keeps using the cached graph, so iterating on SumoCode itself still
- * required a Ctrl+C + relaunch.
+ * SumoCode overrides Pi's built-in `/reload`, which refreshes resources but
+ * does not replace the process that imported SumoCode. A process restart is
+ * required to load a fresh module graph.
  *
- * `/sumo:reload` exits the inner pi process with `SUMOCODE_RELOAD_EXIT_CODE`
+ * `/reload` exits the inner pi process with `SUMOCODE_RELOAD_EXIT_CODE`
  * (100). The `bin/sumocode.sh` wrapper runs pi inside a `while :;` loop and
  * re-launches on that exit code with `--continue` appended, so the session
  * resumes against fresh source code without leaving the terminal.
@@ -16,6 +14,7 @@
  * command falls back to a notify + clean exit.
  */
 
+import { writeFileSync } from "node:fs";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 
 export const SUMOCODE_RELOAD_EXIT_CODE = 100;
@@ -42,7 +41,7 @@ export async function executeSumoReload(
 
 	if (!env.SUMOCODE_LAUNCHER) {
 		ctx.ui.notify(
-			"sumo:reload needs the bin/sumocode.sh launcher; please rerun via `sumocode` or quit + relaunch",
+			"reload needs the bin/sumocode.sh launcher; please rerun via `sumocode` or quit + relaunch",
 			"warning",
 		);
 		return;
@@ -56,8 +55,14 @@ export async function executeSumoReload(
 }
 
 export function registerSumoReloadCommand(pi: ExtensionAPI, deps: ReloadCommandDeps = {}): void {
-	pi.registerCommand("sumo:reload", {
-		description: "hard reload SumoCode source (re-execs pi via the launcher with --continue)",
+	pi.on("session_start", () => {
+		const env = deps.env ?? process.env;
+		const readyFile = env.SUMOCODE_RELOAD_READY_FILE;
+		if (!readyFile || env.SUMOCODE_RPC_CHILD === "1") return;
+		try { writeFileSync(readyFile, "ready", { mode: 0o600 }); } catch {}
+	});
+	pi.registerCommand("reload", {
+		description: "Reload SumoCode source and resume this session",
 		handler: async (_args: string, ctx: ExtensionCommandContext) => {
 			await executeSumoReload(ctx, deps);
 		},

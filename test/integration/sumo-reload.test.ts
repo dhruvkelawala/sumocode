@@ -7,11 +7,11 @@ import { spawn, type IPty } from "node-pty";
 import { buildSpawnEnv } from "./spawn-pi-pty.js";
 
 /**
- * Verifies the `/sumo:reload` respawn loop end-to-end via node-pty:
+ * Verifies the `/reload` respawn loop end-to-end via node-pty:
  * `bin/sumocode.sh` runs pi inside a `while :;` loop and re-launches with
  * `--continue` whenever pi exits with code `100` (the agreed reload signal).
  *
- * We don't drive the actual `/sumo:reload` slash command in this PTY because
+ * We don't drive the actual `/reload` slash command in this PTY because
  * Pi's autocomplete dispatch on `Enter` is fragile to drive over a raw PTY.
  * The slash-command handler itself is unit-covered in
  * `src/commands/reload.test.ts`. This test owns the bash loop side: a mock
@@ -26,7 +26,7 @@ interface PtySession {
 	cleanup(): void;
 }
 
-function spawnLauncherWithMockPi(stateFile: string, extraArgs: string[] = []): PtySession {
+function spawnLauncherWithMockPi(stateFile: string, extraArgs: string[] = [], env: NodeJS.ProcessEnv = {}): PtySession {
 	const launcher = resolve(process.cwd(), "bin/sumocode.sh");
 	const mockPi = resolve(process.cwd(), "test/integration/fixtures/mock-pi-reload.sh");
 	const child: IPty = spawn(launcher, ["--no-sumo-tui", ...extraArgs], {
@@ -38,6 +38,7 @@ function spawnLauncherWithMockPi(stateFile: string, extraArgs: string[] = []): P
 			PI_BIN: mockPi,
 			SUMO_TUI: "0",
 			SUMOCODE_RELOAD_TEST_STATE: stateFile,
+			...env,
 		}),
 	});
 	let output = "";
@@ -111,6 +112,22 @@ describe("bin/sumocode.sh reload loop", () => {
 		expect(runTwo).not.toMatch(/--resume/);
 		expect(runTwo).toMatch(/--continue/);
 		expect(event.exitCode).toBe(0);
+
+		await rm(tempDir, { recursive: true, force: true });
+	}, 15_000);
+
+	it("restores terminal modes when the reload replacement entry fails", async () => {
+		const tempDir = await mkdtemp(join(tmpdir(), "sumocode-reload-failure-"));
+		stateFile = join(tempDir, "mock-pi.count");
+		session = spawnLauncherWithMockPi(stateFile, [], { SUMOCODE_RELOAD_TEST_SECOND_EXIT_CODE: "1" });
+
+		const event = await session.exit;
+		const output = session.getOutput();
+
+		expect(output).toContain("RUN-2");
+		expect(output).toContain("\x1b[<u\x1b[>4;0m\x1b[?2004l");
+		expect(output).toContain("\x1b[?1049l\x1b[?25h\x1b[0m");
+		expect(event.exitCode).toBe(1);
 
 		await rm(tempDir, { recursive: true, force: true });
 	}, 15_000);

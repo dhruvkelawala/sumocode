@@ -244,7 +244,7 @@ export async function executeSumoSync(ctx: ExtensionCommandContext, deps: SumoSy
 		return steps;
 	}
 
-	ctx.ui.notify("SumoCode sync complete — run /sumo:reload if source changed", "info");
+	ctx.ui.notify("SumoCode sync complete — run /reload if source changed", "info");
 	return steps;
 }
 

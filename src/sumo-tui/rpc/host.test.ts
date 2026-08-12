@@ -939,12 +939,12 @@ describe("RPC host client-exit shutdown", () => {
 		expect(requestRender).toHaveBeenCalled();
 	});
 
-	// /sumo:reload (src/commands/reload.ts) process.exit(100)s the RPC child
+	// /reload (src/commands/reload.ts) process.exit(100)s the RPC child
 	// deliberately. bin/sumocode.sh's respawn loop only relaunches when the
 	// HOST process itself exits 100, so the host must propagate that exact
 	// code -- and must not show the "exited unexpectedly" crash notification
 	// for what is a routine, user-requested reload.
-	it("exits the host with code 100 (no crash notification) when the child exits via /sumo:reload", async () => {
+	it("exits the host with code 100 (no crash notification) when the child exits via /reload", async () => {
 		vi.useFakeTimers();
 		try {
 			const notifications = { notify: vi.fn() };

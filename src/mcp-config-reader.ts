@@ -152,7 +152,7 @@ function cacheKey(opts: LoadMcpServersOptions): string {
  * Cached variant of `loadConfiguredMcpServers`. Reads once per
  * (cwd, piAgentDir) pair and memoizes. Sidebar snapshots are built on
  * every paint, so re-reading four JSON files per tick would be wasteful.
- * `/sumo:reload` respawns the process, so the cache flushes on its own
+ * `/reload` respawns the process, so the cache flushes on its own
  * when Dhruv hot-reloads. Session switches inside the same process get a
  * fresh read because the cache key changes with `ctx.cwd`.
  *

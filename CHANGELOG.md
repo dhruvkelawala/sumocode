@@ -101,7 +101,7 @@ reloads, and gate the ship leg through explicit human confirmations.
 
 The "feature-complete personal shell" release. Three themes ship, the agent's
 memory becomes a real surface you can edit, the bash output finally lives in
-the chat, and `/sumo:reload` makes hot iteration safe. Daily-driven for the
+the chat, and `/reload` makes hot iteration safe. Daily-driven for the
 last several weeks; the announce release is built on top of this commit.
 
 ### Added
@@ -124,7 +124,7 @@ last several weeks; the announce release is built on top of this commit.
 - **Owned-shell bash mirror** (#207, PR #233) — Pi's `BashExecutionComponent`
   output is now mirrored into the SumoCode chat as a structured `BASH` block,
   with structural detection and a session-replay skip.
-- **`/sumo:reload`** (#239) — hard-reload the SumoCode shell via launcher loop
+- **`/reload`** (#239) — hard-reload the SumoCode shell via launcher loop
   and exit code 100. Strips `--resume`/`-r` on relaunch and replaces with
   `--continue`. Preserves cmux/terminal context.
 - **Eager splash paint + transition fade** (#225, PR #230) — splash repaints
@@ -203,7 +203,7 @@ Future startup wins live upstream in Pi.
 - `scripts/smoke-pi-versions.sh` — Pi-version compatibility smoke runner.
 - 19 integration tests under `test/integration/` covering altscreen cleanup,
   mouse routing, cursor visibility, narrow widths, splash centering, slash
-  dispatch, retained lifecycle across session switches, and `/sumo:reload`.
+  dispatch, retained lifecycle across session switches, and `/reload`.
 
 ## [0.2.0] — 2026-04 (retroactive)
 

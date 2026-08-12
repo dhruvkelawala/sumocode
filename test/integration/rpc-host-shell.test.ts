@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { TERMINAL_CLEANUP_SEQUENCE } from "../../src/sumo-tui/runtime/terminal-controller.js";
-import { PI_BOOT_SEQUENCE, spawnPiPty, spawnSumocodePty, type SpawnedPiPty } from "./spawn-pi-pty.js";
+import { PI_BOOT_SEQUENCE, replayScreenRows, spawnPiPty, spawnSumocodePty, type SpawnedPiPty } from "./spawn-pi-pty.js";
 import { createRpcChildFixture } from "./rpc-child-fixture.js";
 import { hostOutputsHash } from "../../scripts/lib/host-bundle.mjs";
 
@@ -122,17 +122,21 @@ describe("sumocode RPC host shell integration", () => {
 		const original = await readFile(bundlePath);
 		await writeFile(bundlePath, 'import { existsSync } from "node:fs"; export async function main() { for (let i = 0; i < 100 && !existsSync(process.env.PID_FILE); i++) await new Promise((resolve) => setTimeout(resolve, 20)); throw new Error("forced main rejection"); }\n');
 		try {
-			app = spawnSumocodePty({
+			app = spawnPiPty({
+				command: process.execPath,
+				args: [join(process.cwd(), "sumo-rpc-host.js")],
 				env: {
 					PI_BIN: piBin,
 					PID_FILE: pidFile,
 					PI_CODING_AGENT_DIR: join(directory, "agent"),
 					SUMOCODE_HOST_BUNDLE: "1",
+					SUMOCODE_RELOAD: "1",
 				},
 				cols: 100,
 				rows: 30,
 			});
 			await app.waitForOutput("forced main rejection", 5_000);
+			expect(app.getOutput()).toContain(TERMINAL_CLEANUP_SEQUENCE);
 			const pid = Number.parseInt(await readFile(pidFile, "utf8"), 10);
 			expect(Number.isFinite(pid)).toBe(true);
 			await waitForProcessExit(pid);
@@ -147,13 +151,16 @@ describe("sumocode RPC host shell integration", () => {
 		await writeFile(bundlePath, "export { this is invalid syntax");
 		try {
 			const agentDir = await mkdtemp(join(tmpdir(), "sumocode-rpc-broken-forced-bundle-agent-"));
-			app = spawnSumocodePty({
-				env: { PI_CODING_AGENT_DIR: agentDir, SUMOCODE_HOST_BUNDLE: "1" },
+			app = spawnPiPty({
+				command: process.execPath,
+				args: [join(process.cwd(), "sumo-rpc-host.js")],
+				env: { PI_CODING_AGENT_DIR: agentDir, SUMOCODE_HOST_BUNDLE: "1", SUMOCODE_RELOAD: "1" },
 				cols: 100,
 				rows: 30,
 			});
 			await app.waitForOutput("forced host bundle failed to import", 5_000);
 			expect(app.getOutput()).not.toContain(PI_BOOT_SEQUENCE);
+			expect(app.getOutput()).toContain(TERMINAL_CLEANUP_SEQUENCE);
 		} finally {
 			await writeFile(bundlePath, original);
 		}
@@ -183,6 +190,73 @@ describe("sumocode RPC host shell integration", () => {
 
 	it("boots the retained host through the jiti fallback", async () => {
 		await bootWithHostMode("0");
+	}, 30_000);
+
+	it("does not paint the splash while a populated session reload hydrates", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "sumocode-rpc-reload-screen-"));
+		const piBin = join(directory, "reload-pi.cjs");
+		const runFile = join(directory, "run-count");
+		const secondHydrationFile = join(directory, "second-hydration");
+		await writeFile(piBin, `#!/usr/bin/env node
+const fs = require("node:fs");
+const readline = require("node:readline");
+const runFile = process.env.RUN_FILE;
+let run = 0;
+try { run = Number.parseInt(fs.readFileSync(runFile, "utf8"), 10) || 0; } catch {}
+run += 1;
+fs.writeFileSync(runFile, String(run));
+const messages = [
+  { id: "reload-user", role: "user", content: "reload question" },
+  { id: "reload-assistant", role: "assistant", content: "reload answer" }
+];
+function write(payload) { process.stdout.write(JSON.stringify(payload) + "\\n"); }
+function respond(command, data) { write({ type: "response", id: command.id, command: command.type, success: true, data }); }
+readline.createInterface({ input: process.stdin }).on("line", (line) => {
+  const command = JSON.parse(line);
+  if (command.type === "get_state") {
+    respond(command, { model: { provider: "openai", id: "gpt-5", name: "GPT-5" }, thinkingLevel: "medium", isStreaming: false, isCompacting: false, sessionId: "reload-session", sessionName: "Reload Session", messageCount: messages.length, pendingMessageCount: 0 });
+    return;
+  }
+  if (command.type === "get_messages") {
+    if (run === 2) {
+      fs.writeFileSync(process.env.SECOND_HYDRATION_FILE, "waiting");
+      setTimeout(() => respond(command, { messages }), 2000);
+    } else respond(command, { messages });
+    return;
+  }
+  if (command.type === "get_commands") { respond(command, { commands: [] }); return; }
+  if (command.type === "get_session_stats") {
+    respond(command, { totalMessages: messages.length, tokens: { total: 1200 }, contextUsage: { tokens: 1200, contextWindow: 200000 }, cost: 0 });
+    if (run === 1) setTimeout(() => process.exit(100), 100);
+    return;
+  }
+  respond(command, {});
+});
+`, { mode: 0o700 });
+
+		app = spawnSumocodePty({
+			env: {
+				PI_BIN: piBin,
+				PI_CODING_AGENT_DIR: join(directory, "agent"),
+				RUN_FILE: runFile,
+				SECOND_HYDRATION_FILE: secondHydrationFile,
+			},
+			cols: 100,
+			rows: 30,
+		});
+
+		await waitForFileText(secondHydrationFile, "waiting", 1_500);
+		const output = app.getOutput();
+		const screen = (await replayScreenRows(output, 100, 30)).join("\n");
+		expect(screen).not.toMatch(/█████ █   █ █   █ █████/);
+		expect(screen).toContain("reload answer");
+		// Reload is a retained-frame handoff, not a terminal teardown/re-entry.
+		expect((output.match(/\x1b\[\?1049h/g) ?? []).length).toBe(1);
+		// Raw Ctrl-C must stay live while the successor hydrates off-screen.
+		app.sendInput("\u0003");
+		await delay(50);
+		app.sendInput("\u0003");
+		await app.waitForOutput(TERMINAL_CLEANUP_SEQUENCE, 5_000);
 	}, 30_000);
 
 	it("never loads executable host code from the project cwd", async () => {
@@ -285,6 +359,30 @@ describe("sumocode RPC host shell integration", () => {
 		await app.waitForOutput(PI_BOOT_SEQUENCE, 15_000);
 		await app.waitForOutput("DIVINE INVOCATION", 15_000);
 		await app.waitForOutput(/CTRL\+[\s\S]*COMMANDS/, 15_000);
+	}, 30_000);
+
+	it("does not print stale-bundle diagnostics over a retained reload frame", async () => {
+		const helperPath = join(process.cwd(), "dist/host/spawn-child.mjs");
+		const original = await readFile(helperPath);
+		await writeFile(helperPath, Buffer.concat([original, Buffer.from("\n// stale reload copy\n")]));
+		try {
+			const agentDir = await mkdtemp(join(tmpdir(), "sumocode-rpc-stale-reload-agent-"));
+			app = spawnPiPty({
+				command: process.execPath,
+				args: [join(process.cwd(), "sumo-rpc-host.js"), "--offline", "--no-extensions", "--no-session"],
+				env: {
+					PI_BIN: join(process.cwd(), "node_modules", ".bin", "pi"),
+					PI_CODING_AGENT_DIR: agentDir,
+					SUMOCODE_RELOAD: "1",
+				},
+				cols: 100,
+				rows: 30,
+			});
+			await app.waitForOutput("DIVINE INVOCATION", 15_000);
+			expect(app.getOutput()).not.toContain("host bundle stale — using source");
+		} finally {
+			await writeFile(helperPath, original);
+		}
 	}, 30_000);
 
 	it("falls back to source when the copied spawn helper is stale", async () => {
@@ -469,6 +567,7 @@ describe("sumocode RPC host shell integration", () => {
 				PID_FILE: pidFile,
 				PI_CODING_AGENT_DIR: join(directory, "agent"),
 				SUMOCODE_EXIT_CODE_FILE: exitCodeFile,
+				SUMOCODE_RELOAD: "1",
 				SUMOCODE_TEST_PRE_ADOPTION_DELAY_MS: "5000",
 				NODE_ENV: "test",
 			},
@@ -482,6 +581,7 @@ describe("sumocode RPC host shell integration", () => {
 		app.sendSignal("SIGTERM");
 		await waitForProcessExit(pid);
 		await waitForFileText(exitCodeFile, "0");
+		expect(app.getOutput()).toContain(TERMINAL_CLEANUP_SEQUENCE);
 	}, 30_000);
 
 	it("never adopts or enters altscreen when a signal lands in the import-tail window", async () => {
@@ -552,6 +652,37 @@ describe("sumocode RPC host shell integration", () => {
 		await waitForProcessExit(pid);
 		await waitForFileText(exitCodeFile, "0");
 		expect(app.getOutput()).not.toContain("\x1b[?1049h");
+		expect(app.getCurrentTerminalState().altscreenActive).toBe(false);
+	}, 30_000);
+
+	it("restores a retained reload when signalled after child adoption but before runtime creation", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "sumocode-rpc-post-adoption-reload-signal-"));
+		const piBin = join(directory, "stalled-pi");
+		const pidFile = join(directory, "pid");
+		await writeFile(
+			piBin,
+			"#!/usr/bin/env node\nrequire('node:fs').writeFileSync(process.env.PID_FILE, String(process.pid));\nprocess.stdin.resume();\nsetInterval(() => {}, 1000);\n",
+			{ mode: 0o700 },
+		);
+		app = spawnPiPty({
+			command: process.execPath,
+			args: [join(process.cwd(), "sumo-rpc-host.js")],
+			env: {
+				PI_BIN: piBin,
+				PID_FILE: pidFile,
+				PI_CODING_AGENT_DIR: join(directory, "agent"),
+				SUMOCODE_RELOAD: "1",
+				SUMOCODE_TEST_POST_ADOPTION_DELAY_MS: "5000",
+				NODE_ENV: "test",
+			},
+			cols: 100,
+			rows: 30,
+		});
+
+		await waitForPid(pidFile);
+		await delay(100);
+		app.sendSignal("SIGTERM");
+		await app.waitForOutput(TERMINAL_CLEANUP_SEQUENCE, 5_000);
 		expect(app.getCurrentTerminalState().altscreenActive).toBe(false);
 	}, 30_000);
 

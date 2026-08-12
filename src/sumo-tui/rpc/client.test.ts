@@ -606,9 +606,9 @@ describe("SumoRpcClient", () => {
 		expect((error as RpcChildExitError).signal).toBeNull();
 	});
 
-	it("surfaces exit code 100 (the /sumo:reload signal) structurally, distinguishable from a crash", async () => {
+	it("surfaces exit code 100 (the /reload signal) structurally, distinguishable from a crash", async () => {
 		// SUMOCODE_RELOAD_EXIT_CODE (src/commands/reload.ts): the RPC child
-		// process.exit(100)s on a deliberate /sumo:reload. The host's onExit
+		// process.exit(100)s on a deliberate /reload. The host's onExit
 		// handler must be able to tell this apart from an actual crash without
 		// parsing error.message -- see createRpcExitHandler in host.ts.
 		const client = nodeRpcClient("setTimeout(() => process.exit(100), 100);");

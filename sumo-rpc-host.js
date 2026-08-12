@@ -48,6 +48,15 @@ async function bundleIsFresh() {
 
 const useBundle = process.env.SUMOCODE_HOST_BUNDLE !== "0";
 const forceBundle = process.env.SUMOCODE_HOST_BUNDLE === "1";
+const isReload = process.env.SUMOCODE_RELOAD === "1";
+
+function writeBootstrapDiagnostic(message) {
+	// A reload successor has no renderer yet, so direct TTY output would scar
+	// the predecessor's retained frame until hydration finishes. Cold startup
+	// keeps these diagnostics; reload failures still surface through the thrown
+	// error after the fallback restores the terminal.
+	if (!isReload) process.stderr.write(message);
+}
 
 const PRE_ADOPTION_KILL_GRACE_MS = 250;
 // Keep this dependency-free: it must run when host source/bundle imports are
@@ -192,7 +201,7 @@ if (Number.isFinite(preAdoptionTestDelayMs) && preAdoptionTestDelayMs > 0) {
 const bundleExists = await stat(bundlePath).then(() => true, () => false);
 const bundleFresh = bundleExists && (forceBundle || (useBundle && await bundleIsFresh()));
 if (useBundle && bundleExists && !forceBundle && !bundleFresh) {
-	process.stderr.write("[sumocode] host bundle stale — using source; run pnpm build:host\n");
+	writeBootstrapDiagnostic("[sumocode] host bundle stale — using source; run pnpm build:host\n");
 }
 
 let mod;
@@ -219,7 +228,7 @@ try {
 			if (forceBundle) {
 				throw new Error(`[sumocode] forced host bundle failed to import: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
 			}
-			process.stderr.write(`[sumocode] host bundle unusable — using source: ${error instanceof Error ? error.message : String(error)}\n`);
+			writeBootstrapDiagnostic(`[sumocode] host bundle unusable — using source: ${error instanceof Error ? error.message : String(error)}\n`);
 			mod = await importSourceHost();
 		}
 	} else {

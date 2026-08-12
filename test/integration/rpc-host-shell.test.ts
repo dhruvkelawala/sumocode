@@ -356,6 +356,30 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 		await app.waitForOutput(/CTRL\+[\s\S]*COMMANDS/, 15_000);
 	}, 30_000);
 
+	it("does not print stale-bundle diagnostics over a retained reload frame", async () => {
+		const helperPath = join(process.cwd(), "dist/host/spawn-child.mjs");
+		const original = await readFile(helperPath);
+		await writeFile(helperPath, Buffer.concat([original, Buffer.from("\n// stale reload copy\n")]));
+		try {
+			const agentDir = await mkdtemp(join(tmpdir(), "sumocode-rpc-stale-reload-agent-"));
+			app = spawnPiPty({
+				command: process.execPath,
+				args: [join(process.cwd(), "sumo-rpc-host.js"), "--offline", "--no-extensions", "--no-session"],
+				env: {
+					PI_BIN: join(process.cwd(), "node_modules", ".bin", "pi"),
+					PI_CODING_AGENT_DIR: agentDir,
+					SUMOCODE_RELOAD: "1",
+				},
+				cols: 100,
+				rows: 30,
+			});
+			await app.waitForOutput("DIVINE INVOCATION", 15_000);
+			expect(app.getOutput()).not.toContain("host bundle stale — using source");
+		} finally {
+			await writeFile(helperPath, original);
+		}
+	}, 30_000);
+
 	it("falls back to source when the copied spawn helper is stale", async () => {
 		const helperPath = join(process.cwd(), "dist/host/spawn-child.mjs");
 		const original = await readFile(helperPath);

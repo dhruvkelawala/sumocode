@@ -37,7 +37,7 @@ Audited: worktree at `b52ed45` (stack tip `7d213e9` + D1 fix). 94 agents; 74 raw
 | med | shell-chrome | No FrameScheduler in RPC host: synchronous full re-render per agent event plus double render per keystroke, with full ChatPager node rebuild per streaming delta | `src/sumo-tui/rpc/runtime.ts` |
 | med | shell-chrome | Mouse drag-to-select and selection-copy are dead in the RPC host despite the shell contract supporting them | `src/sumo-tui/rpc/shell-adapter.ts` |
 | med | shell-chrome | Queued steer/follow-up messages render nowhere: pendingMessageWidgets never wired | `src/sumo-tui/rpc/shell-adapter.ts` |
-| med | config-launcher-docs | /sumo:reload kills the session on the default RPC path — the launcher's exit-100 respawn loop is unreachable after exec into the RPC host | `/Volumes/SumoDeus NVMe/code/sumocode/.claude/worktrees/agent-af0dde5f69ef6f162/bin/sumocode.sh` |
+| med | config-launcher-docs | /reload kills the session on the default RPC path — the launcher's exit-100 respawn loop is unreachable after exec into the RPC host | `/Volumes/SumoDeus NVMe/code/sumocode/.claude/worktrees/agent-af0dde5f69ef6f162/bin/sumocode.sh` |
 | med | config-launcher-docs | Installed-copy launcher self-defeats: SUMOCODE_LAUNCHER short-circuit noops the very extension the launcher loads via -e | `/Volumes/SumoDeus NVMe/code/sumocode/.claude/worktrees/agent-af0dde5f69ef6f162/src/extension.ts` |
 
 ## Confirmed legacy inventory (20) — feeds plan 034

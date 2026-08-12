@@ -296,6 +296,11 @@ export class RpcHostRuntime {
 		});
 	}
 
+	/** Adopt terminal modes left active by the previous process in a reload handoff. */
+	public adoptRetainedTerminal(): void {
+		this.terminal.adoptRetainedSession();
+	}
+
 	public async start(): Promise<void> {
 		if (this.started) return;
 		this.started = true;
@@ -452,7 +457,7 @@ export class RpcHostRuntime {
 		return new Promise((resolve) => this.waiters.push(resolve));
 	}
 
-	public stop(code = 0): void {
+	public stop(code = 0, options: { readonly preserveTerminal?: boolean } = {}): void {
 		if (this.stopped) return;
 		this.stopped = true;
 		this.exitCode = code;
@@ -466,7 +471,7 @@ export class RpcHostRuntime {
 		this.shell = undefined;
 		this.themeUnsubscribe?.();
 		this.themeUnsubscribe = undefined;
-		this.terminal.exitTerminal();
+		if (!options.preserveTerminal) this.terminal.exitTerminal();
 		for (const resolve of this.waiters.splice(0)) resolve(code);
 	}
 

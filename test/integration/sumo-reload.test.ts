@@ -7,11 +7,11 @@ import { spawn, type IPty } from "node-pty";
 import { buildSpawnEnv } from "./spawn-pi-pty.js";
 
 /**
- * Verifies the `/sumo:reload` respawn loop end-to-end via node-pty:
+ * Verifies the `/reload` respawn loop end-to-end via node-pty:
  * `bin/sumocode.sh` runs pi inside a `while :;` loop and re-launches with
  * `--continue` whenever pi exits with code `100` (the agreed reload signal).
  *
- * We don't drive the actual `/sumo:reload` slash command in this PTY because
+ * We don't drive the actual `/reload` slash command in this PTY because
  * Pi's autocomplete dispatch on `Enter` is fragile to drive over a raw PTY.
  * The slash-command handler itself is unit-covered in
  * `src/commands/reload.test.ts`. This test owns the bash loop side: a mock

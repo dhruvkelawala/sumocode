@@ -74,19 +74,19 @@ What `-e` DOES do:
 
 When I exit Pi, the ephemeral install vanishes. My stable install continues running whatever version is published on GitHub.
 
-### Hot reload: `/sumo:reload`
+### Hot reload: `/reload`
 
-Pi's built-in `/reload` reloads keybindings, themes, prompts, skills, and extension metadata, but it does **not** re-import a `pi -e` extension's TypeScript graph (jiti caches the modules). To pick up source edits without a Ctrl+C + relaunch, use:
+SumoCode overrides Pi's built-in `/reload` because resource reload alone does **not** re-import a `pi -e` extension's TypeScript graph (jiti caches the modules). To pick up source edits without a Ctrl+C + relaunch, use:
 
 ```txt
-/sumo:reload
+/reload
 ```
 
 Mechanism: `bin/sumocode.sh` runs pi inside a `while :;` loop. The slash-command handler exits pi with code `100`; the loop catches that, re-launches pi with `--continue` appended (so the in-progress session resumes), and the next jiti import reads the fresh source. Any other exit code propagates normally.
 
-This only works when launched through `bin/sumocode.sh` (which exports `SUMOCODE_LAUNCHER`). Run from plain `pi -e .` and `/sumo:reload` falls back to a warning notification — you have to quit + relaunch by hand.
+This only works when launched through `bin/sumocode.sh` (which exports `SUMOCODE_LAUNCHER`). Run from plain `pi -e .` and `/reload` falls back to a warning notification — you have to quit + relaunch by hand.
 
-Good mental model: `/sumo:reload` is the dev-loop fast path; restart by hand is the safe fallback when the loop isn't available.
+Good mental model: `/reload` is the dev-loop fast path; restart by hand is the safe fallback when the loop isn't available.
 
 ### 3. Verify it works
 
@@ -213,10 +213,10 @@ Common failures:
 jiti caches every module it transpiles, so source edits don't show up inside the running session. Two ways to refresh:
 
 ```txt
-/sumo:reload
+/reload
 ```
 
-Fastest path — only works when launched via `bin/sumocode.sh` / `sumocode`. Re-execs pi inside the launcher loop and resumes the session. See "Hot reload: `/sumo:reload`" above.
+Fastest path — only works when launched via `bin/sumocode.sh` / `sumocode`. Re-execs pi inside the launcher loop and resumes the session. See "Hot reload: `/reload`" above.
 
 ```bash
 # Ctrl+D or /exit to quit Pi

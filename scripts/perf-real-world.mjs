@@ -202,7 +202,7 @@ async function run() {
 				startupMs = startup.event.ts - t0;
 				appReadyMs = startupAppReady.event.ts - t0;
 
-				herdr(["pane", "send-text", pane, "/sumo:reload"]);
+				herdr(["pane", "send-text", pane, "/reload"]);
 				await new Promise((resolveSleep) => setTimeout(resolveSleep, POLL_MS));
 				// A line-start slash completion auto-submits when Enter accepts it.
 				// Start timing before that Enter so reload_ms includes the command

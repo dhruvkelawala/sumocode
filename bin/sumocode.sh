@@ -26,7 +26,7 @@ if [[ -z "${NODE_COMPILE_CACHE:-}" ]]; then
 	mkdir -p "${NODE_COMPILE_CACHE}" 2>/dev/null || true
 	export NODE_COMPILE_CACHE
 fi
-# Set so the SumoCode `/sumo:reload` slash command knows it's running under
+# Set so the SumoCode `/reload` slash command knows it's running under
 # the loop-respawn launcher and can exit with the reload signal.
 export SUMOCODE_LAUNCHER="${SOURCE}"
 
@@ -792,9 +792,10 @@ EOF
 	exit 0
 fi
 
-# `/sumo:reload` exits the inner pi with this code so we re-launch in place.
+# `/reload` exits the inner pi with this code so we re-launch in place.
 # Other exit codes propagate normally.
 SUMOCODE_RELOAD_EXIT_CODE=100
+IS_RELOAD_RESPAWN=0
 
 if [[ "${USE_RPC_HOST}" -eq 1 ]]; then
 	# `pi --mode rpc` (spawned by the RPC host as its child) never reads argv
@@ -807,7 +808,7 @@ if [[ "${USE_RPC_HOST}" -eq 1 ]]; then
 	# child does not also see (and silently drop) the same positional.
 	#
 	# This extraction happens ONCE, outside the respawn loop below: on a
-	# `/sumo:reload` respawn we deliberately do not want to re-submit the
+	# `/reload` respawn we deliberately do not want to re-submit the
 	# original kickoff prompt into the resumed session (same reasoning as the
 	# existing IS_TASK_LAUNCH handling inside the loop), so SUMOCODE_ARGS no
 	# longer carries a prompt positional by the time the loop's first
@@ -921,7 +922,7 @@ while :; do
 	if [[ "${USE_RPC_HOST}" -eq 1 ]]; then
 		# The RPC host previously ran via `exec`, which replaced this shell
 		# entirely -- so the respawn loop below was unreachable on the default
-		# (RPC) launch path, and `/sumo:reload`'s exit(100) inside the RPC
+		# (RPC) launch path, and `/reload`'s exit(100) inside the RPC
 		# child (surfaced to the host via client.onExit, then re-thrown as the
 		# host's own process.exit(100) -- see host.ts's createRpcExitHandler /
 		# runRpcHost) had nowhere to be caught. Running the host as a plain
@@ -942,9 +943,9 @@ while :; do
 		# iteration's exit code.
 		SUMOCODE_EXIT_CODE_FILE="$(mktemp "${TMPDIR:-/tmp}/sumocode-exit-code.XXXXXX")"
 		if [[ "${#SUMOCODE_ARGS[@]}" -eq 0 ]]; then
-			env SUMOCODE_ROOT_DIR="${ROOT_DIR}" SUMOCODE_PROJECT_CWD="${PWD}" SUMOCODE_INITIAL_PROMPT="${RPC_INITIAL_PROMPT}" PI_BIN="${PI_BIN}" SUMOCODE_EXIT_CODE_FILE="${SUMOCODE_EXIT_CODE_FILE}" node "${ROOT_DIR}/sumo-rpc-host.js" <&0 &
+			env SUMOCODE_ROOT_DIR="${ROOT_DIR}" SUMOCODE_PROJECT_CWD="${PWD}" SUMOCODE_INITIAL_PROMPT="${RPC_INITIAL_PROMPT}" SUMOCODE_RELOAD="${IS_RELOAD_RESPAWN}" PI_BIN="${PI_BIN}" SUMOCODE_EXIT_CODE_FILE="${SUMOCODE_EXIT_CODE_FILE}" node "${ROOT_DIR}/sumo-rpc-host.js" <&0 &
 		else
-			env SUMOCODE_ROOT_DIR="${ROOT_DIR}" SUMOCODE_PROJECT_CWD="${PWD}" SUMOCODE_INITIAL_PROMPT="${RPC_INITIAL_PROMPT}" PI_BIN="${PI_BIN}" SUMOCODE_EXIT_CODE_FILE="${SUMOCODE_EXIT_CODE_FILE}" node "${ROOT_DIR}/sumo-rpc-host.js" "${SUMOCODE_ARGS[@]}" <&0 &
+			env SUMOCODE_ROOT_DIR="${ROOT_DIR}" SUMOCODE_PROJECT_CWD="${PWD}" SUMOCODE_INITIAL_PROMPT="${RPC_INITIAL_PROMPT}" SUMOCODE_RELOAD="${IS_RELOAD_RESPAWN}" PI_BIN="${PI_BIN}" SUMOCODE_EXIT_CODE_FILE="${SUMOCODE_EXIT_CODE_FILE}" node "${ROOT_DIR}/sumo-rpc-host.js" "${SUMOCODE_ARGS[@]}" <&0 &
 		fi
 		RPC_CHILD_PID=$!
 		wait_for_child_exit "${RPC_CHILD_PID}"
@@ -958,12 +959,15 @@ while :; do
 	if [[ "${code}" -ne "${SUMOCODE_RELOAD_EXIT_CODE}" ]]; then
 		exit "${code}"
 	fi
+	# The replacement host adopts the retained terminal frame and hydrates before
+	# its first paint, avoiding a cold-start splash during an in-place reload.
+	IS_RELOAD_RESPAWN=1
 	# Only the first iteration's kickoff prompt (if any) is ever submitted;
 	# a reload respawn resumes the existing session via --continue below and
 	# must not re-submit it as a new message.
 	RPC_INITIAL_PROMPT=""
 	# After the kickoff turn has fired, do NOT re-pass the task prompt on
-	# `/sumo:reload`. The reload loop adds `--continue` to resume the existing
+	# `/reload`. The reload loop adds `--continue` to resume the existing
 	# session, and re-injecting the original prompt would send it again as a
 	# new user message in the resumed session.
 	#

@@ -195,6 +195,19 @@ export class TerminalSessionOwner {
 		this.setCursorColor();
 	}
 
+	/** Adopt terminal modes deliberately left active by a reload predecessor. */
+	public adoptRetainedSession(): void {
+		if (!this.isTTY()) return;
+		this.restored = false;
+		this.altscreenActive = true;
+		this.mouseSGREnabled = true;
+		this.backgroundPainted = this.paintBackground;
+		this.cursorColorOverridden = true;
+		this.lastBackgroundColor = this.palette.background;
+		this.lastCursorColor = this.palette.accent;
+		this.lastEmittedCursor = null;
+	}
+
 	public enterAltscreen(): void {
 		if (!this.isTTY() || this.altscreenActive) return;
 		this.restored = false;

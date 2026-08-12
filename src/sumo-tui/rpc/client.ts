@@ -23,7 +23,7 @@ export type RpcProtocolErrorHandler = (line: string, error: Error) => void;
  * The RPC child's process exit code/signal, structurally exposed alongside
  * the formatted `onExit` error instead of requiring callers to regex-parse
  * `error.message` (previously the only way to tell "child exited 100 for a
- * deliberate `/sumo:reload`" apart from "child crashed" -- see
+ * deliberate `/reload`" apart from "child crashed" -- see
  * RpcChildExitError and createRpcExitHandler in host.ts).
  */
 export interface RpcChildExitInfo {

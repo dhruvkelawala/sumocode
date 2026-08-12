@@ -4062,6 +4062,18 @@ var TerminalSessionOwner = class {
     this.enableMouseSGR();
     this.setCursorColor();
   }
+  /** Adopt terminal modes deliberately left active by a reload predecessor. */
+  adoptRetainedSession() {
+    if (!this.isTTY()) return;
+    this.restored = false;
+    this.altscreenActive = true;
+    this.mouseSGREnabled = true;
+    this.backgroundPainted = this.paintBackground;
+    this.cursorColorOverridden = true;
+    this.lastBackgroundColor = this.palette.background;
+    this.lastCursorColor = this.palette.accent;
+    this.lastEmittedCursor = null;
+  }
   enterAltscreen() {
     if (!this.isTTY() || this.altscreenActive) return;
     this.restored = false;
@@ -4739,7 +4751,7 @@ async function executeSumoReload(ctx, deps = {}) {
   const delay2 = deps.delay ?? defaultDelay;
   if (!env.SUMOCODE_LAUNCHER) {
     ctx.ui.notify(
-      "sumo:reload needs the bin/sumocode.sh launcher; please rerun via `sumocode` or quit + relaunch",
+      "reload needs the bin/sumocode.sh launcher; please rerun via `sumocode` or quit + relaunch",
       "warning"
     );
     return;
@@ -4749,8 +4761,8 @@ async function executeSumoReload(ctx, deps = {}) {
   exit(SUMOCODE_RELOAD_EXIT_CODE);
 }
 function registerSumoReloadCommand(pi, deps = {}) {
-  pi.registerCommand("sumo:reload", {
-    description: "hard reload SumoCode source (re-execs pi via the launcher with --continue)",
+  pi.registerCommand("reload", {
+    description: "Reload SumoCode source and resume this session",
     handler: async (_args, ctx) => {
       await executeSumoReload(ctx, deps);
     }
@@ -6493,7 +6505,7 @@ async function executeSumoSync(ctx, deps = {}) {
     notifyFailure("sync", ctx, steps[steps.length - 1]);
     return steps;
   }
-  ctx.ui.notify("SumoCode sync complete \u2014 run /sumo:reload if source changed", "info");
+  ctx.ui.notify("SumoCode sync complete \u2014 run /reload if source changed", "info");
   return steps;
 }
 async function executeSumoBootstrap(ctx, deps = {}) {

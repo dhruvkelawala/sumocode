@@ -94,7 +94,7 @@ FILE: bin/sumocode.sh:552
 ----------------------------------------
 **<sub><sub>![P2 Badge](https://img.shields.io/badge/P2-yellow?style=flat)</sub></sub>  Unset task-mode flag after first delegated reload cycle**
 
-This reload branch removes the original prompt args but leaves `SUMOCODE_TASK_MODE=1` exported for all subsequent relaunches, so a session that was already taken over (auto-exit canceled by typing) can re-enter task mode after `/sumo:reload` and unexpectedly arm auto-close again on the next `agent_end`. In practice this can close an actively used pane during later turns in the same resumed session; clear the task-mode env (or persist a keep-open override) once the initial kickoff handoff has been consumed.
+This reload branch removes the original prompt args but leaves `SUMOCODE_TASK_MODE=1` exported for all subsequent relaunches, so a session that was already taken over (auto-exit canceled by typing) can re-enter task mode after `/reload` and unexpectedly arm auto-close again on the next `agent_end`. In practice this can close an actively used pane during later turns in the same resumed session; clear the task-mode env (or persist a keep-open override) once the initial kickoff handoff has been consumed.
 
 Useful? React with 👍 / 👎.
 

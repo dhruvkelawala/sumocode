@@ -45,6 +45,28 @@ describe("TerminalSessionOwner", () => {
 		});
 	});
 
+	it("adopts a reload predecessor's retained modes without writing lifecycle bytes", () => {
+		const output = outputStub();
+		const terminal = new TerminalSessionOwner({ output });
+
+		terminal.adoptRetainedSession();
+		terminal.startRetainedSession();
+
+		expect(output.writes).toEqual([]);
+		expect(terminal.getState()).toMatchObject({
+			altscreenActive: true,
+			mouseSGREnabled: true,
+			backgroundPainted: true,
+			cursorColorOverridden: true,
+			restored: false,
+		});
+
+		terminal.exitTerminal();
+		expect(output.writes).toEqual([
+			`${CURSOR_COLOR_RESET}${TERMINAL_BG_RESET}${TERMINAL_CLEANUP_SEQUENCE}`,
+		]);
+	});
+
 	it("suppresses duplicate retained lifecycle requests until cleanup", () => {
 		const output = outputStub();
 		const terminal = new TerminalSessionOwner({ output });

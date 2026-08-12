@@ -549,7 +549,7 @@ export interface RpcHostExitDependencies {
  * and draining overlays resolves any pending overlay/select/input promises
  * without promoting queued overlay work during crash teardown.
  *
- * Exit code SUMOCODE_RELOAD_EXIT_CODE (100) is a deliberate `/sumo:reload`
+ * Exit code SUMOCODE_RELOAD_EXIT_CODE (100) is a deliberate `/reload`
  * (src/commands/reload.ts: the RPC child process.exit(100)s itself), not a
  * crash -- see `RpcChildExitError` in client.ts for how that code reaches
  * here structurally instead of via message-parsing. bin/sumocode.sh's respawn
@@ -789,6 +789,7 @@ export function createToolsExpandToggleHandler(deps: RpcHostToolsExpandDependenc
 export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<number> {
 	const argv = [...(options.argv ?? process.argv.slice(2))];
 	const env = options.env ?? process.env;
+	const isReloadResume = env.SUMOCODE_RELOAD === "1";
 	// Pin pi-tui's terminal image capability OFF for the host: the retained
 	// CellBuffer renderer diffs styled cells and cannot pass Kitty/iTerm2
 	// graphics escape sequences through (verified: the APC payload is
@@ -1567,7 +1568,7 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 			treeNavigationRecovery = undefined;
 			stopWatchingGitBranch?.();
 			stopWatchingGitBranch = undefined;
-			runtime?.stop(code);
+			runtime?.stop(code, { preserveTerminal: code === SUMOCODE_RELOAD_EXIT_CODE });
 			if (!regionRegistryDisposed) {
 				regionRegistryDisposed = true;
 				regionRegistry.dispose();
@@ -1696,7 +1697,8 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 			preEditorInputHandler: handlePreEditorInput,
 		});
 		runtime = initialRuntime;
-		await initialRuntime.start();
+		if (isReloadResume) initialRuntime.adoptRetainedTerminal();
+		else await initialRuntime.start();
 		// Optional Git metadata must not gate first paint or authoritative session
 		// hydration. A watcher created after shutdown immediately disposes itself.
 		if (branchPromise) {
@@ -1779,6 +1781,10 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 			});
 		}
 		deferActivityRuntimeUpdate = false;
+		// A reload predecessor deliberately leaves its retained frame and terminal
+		// modes in place. Hydrate off-screen, then atomically replace that frame;
+		// never flash the cold-start splash for a session we already know exists.
+		if (isReloadResume) await initialRuntime.start();
 		await editor.configureAutocomplete(controls);
 		initialRuntime.markChromeStable();
 		// Deferred child-dependent input may now observe only the fully painted,

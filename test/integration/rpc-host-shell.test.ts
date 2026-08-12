@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { TERMINAL_CLEANUP_SEQUENCE } from "../../src/sumo-tui/runtime/terminal-controller.js";
-import { PI_BOOT_SEQUENCE, spawnPiPty, spawnSumocodePty, type SpawnedPiPty } from "./spawn-pi-pty.js";
+import { PI_BOOT_SEQUENCE, replayScreenRows, spawnPiPty, spawnSumocodePty, type SpawnedPiPty } from "./spawn-pi-pty.js";
 import { createRpcChildFixture } from "./rpc-child-fixture.js";
 import { hostOutputsHash } from "../../scripts/lib/host-bundle.mjs";
 
@@ -183,6 +183,68 @@ describe("sumocode RPC host shell integration", () => {
 
 	it("boots the retained host through the jiti fallback", async () => {
 		await bootWithHostMode("0");
+	}, 30_000);
+
+	it("does not paint the splash while a populated session reload hydrates", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "sumocode-rpc-reload-screen-"));
+		const piBin = join(directory, "reload-pi.cjs");
+		const runFile = join(directory, "run-count");
+		const secondHydrationFile = join(directory, "second-hydration");
+		await writeFile(piBin, `#!/usr/bin/env node
+const fs = require("node:fs");
+const readline = require("node:readline");
+const runFile = process.env.RUN_FILE;
+let run = 0;
+try { run = Number.parseInt(fs.readFileSync(runFile, "utf8"), 10) || 0; } catch {}
+run += 1;
+fs.writeFileSync(runFile, String(run));
+const messages = [
+  { id: "reload-user", role: "user", content: "reload question" },
+  { id: "reload-assistant", role: "assistant", content: "reload answer" }
+];
+function write(payload) { process.stdout.write(JSON.stringify(payload) + "\\n"); }
+function respond(command, data) { write({ type: "response", id: command.id, command: command.type, success: true, data }); }
+readline.createInterface({ input: process.stdin }).on("line", (line) => {
+  const command = JSON.parse(line);
+  if (command.type === "get_state") {
+    respond(command, { model: { provider: "openai", id: "gpt-5", name: "GPT-5" }, thinkingLevel: "medium", isStreaming: false, isCompacting: false, sessionId: "reload-session", sessionName: "Reload Session", messageCount: messages.length, pendingMessageCount: 0 });
+    return;
+  }
+  if (command.type === "get_messages") {
+    if (run === 2) {
+      fs.writeFileSync(process.env.SECOND_HYDRATION_FILE, "waiting");
+      setTimeout(() => respond(command, { messages }), 2000);
+    } else respond(command, { messages });
+    return;
+  }
+  if (command.type === "get_commands") { respond(command, { commands: [] }); return; }
+  if (command.type === "get_session_stats") {
+    respond(command, { totalMessages: messages.length, tokens: { total: 1200 }, contextUsage: { tokens: 1200, contextWindow: 200000 }, cost: 0 });
+    if (run === 1) setTimeout(() => process.exit(100), 100);
+    return;
+  }
+  respond(command, {});
+});
+`, { mode: 0o700 });
+
+		app = spawnSumocodePty({
+			env: {
+				PI_BIN: piBin,
+				PI_CODING_AGENT_DIR: join(directory, "agent"),
+				RUN_FILE: runFile,
+				SECOND_HYDRATION_FILE: secondHydrationFile,
+			},
+			cols: 100,
+			rows: 30,
+		});
+
+		await waitForFileText(secondHydrationFile, "waiting", 1_500);
+		const output = app.getOutput();
+		const screen = (await replayScreenRows(output, 100, 30)).join("\n");
+		expect(screen).not.toMatch(/█████ █   █ █   █ █████/);
+		expect(screen).toContain("reload answer");
+		// Reload is a retained-frame handoff, not a terminal teardown/re-entry.
+		expect((output.match(/\x1b\[\?1049h/g) ?? []).length).toBe(1);
 	}, 30_000);
 
 	it("never loads executable host code from the project cwd", async () => {

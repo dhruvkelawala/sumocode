@@ -22,4 +22,8 @@ if [[ "${count}" -eq 1 ]]; then
 fi
 
 printf 'RUN-2 args:%s\n' "$*"
-exit "${SUMOCODE_RELOAD_TEST_SECOND_EXIT_CODE:-0}"
+second_exit_code="${SUMOCODE_RELOAD_TEST_SECOND_EXIT_CODE:-0}"
+if [[ "${second_exit_code}" -eq 0 && -n "${SUMOCODE_RELOAD_READY_FILE:-}" ]]; then
+	printf 'ready' > "${SUMOCODE_RELOAD_READY_FILE}"
+fi
+exit "${second_exit_code}"

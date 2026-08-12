@@ -14,6 +14,7 @@
  * command falls back to a notify + clean exit.
  */
 
+import { writeFileSync } from "node:fs";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 
 export const SUMOCODE_RELOAD_EXIT_CODE = 100;
@@ -54,6 +55,12 @@ export async function executeSumoReload(
 }
 
 export function registerSumoReloadCommand(pi: ExtensionAPI, deps: ReloadCommandDeps = {}): void {
+	pi.on("session_start", () => {
+		const env = deps.env ?? process.env;
+		const readyFile = env.SUMOCODE_RELOAD_READY_FILE;
+		if (!readyFile || env.SUMOCODE_RPC_CHILD === "1") return;
+		try { writeFileSync(readyFile, "ready", { mode: 0o600 }); } catch {}
+	});
 	pi.registerCommand("reload", {
 		description: "Reload SumoCode source and resume this session",
 		handler: async (_args: string, ctx: ExtensionCommandContext) => {

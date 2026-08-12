@@ -885,7 +885,8 @@ wait_for_child_exit() {
 }
 
 restore_failed_reload_terminal() {
-	if [[ "${IS_RELOAD_RESPAWN}" -ne 1 || ! -t 1 ]]; then
+	local ready_file="$1"
+	if [[ "${IS_RELOAD_RESPAWN}" -ne 1 || -f "${ready_file}" || ! -t 1 ]]; then
 		return 0
 	fi
 	# Last-resort owner: this shell survives even when the replacement Node
@@ -929,6 +930,8 @@ read_child_exit_code_file() {
 
 while :; do
 	code=0
+	SUMOCODE_RELOAD_READY_FILE="$(mktemp "${TMPDIR:-/tmp}/sumocode-reload-ready.XXXXXX")"
+	rm -f "${SUMOCODE_RELOAD_READY_FILE}"
 	if [[ "${USE_RPC_HOST}" -eq 1 ]]; then
 		# The RPC host previously ran via `exec`, which replaced this shell
 		# entirely -- so the respawn loop below was unreachable on the default
@@ -953,23 +956,25 @@ while :; do
 		# iteration's exit code.
 		SUMOCODE_EXIT_CODE_FILE="$(mktemp "${TMPDIR:-/tmp}/sumocode-exit-code.XXXXXX")"
 		if [[ "${#SUMOCODE_ARGS[@]}" -eq 0 ]]; then
-			env SUMOCODE_ROOT_DIR="${ROOT_DIR}" SUMOCODE_PROJECT_CWD="${PWD}" SUMOCODE_INITIAL_PROMPT="${RPC_INITIAL_PROMPT}" SUMOCODE_RELOAD="${IS_RELOAD_RESPAWN}" PI_BIN="${PI_BIN}" SUMOCODE_EXIT_CODE_FILE="${SUMOCODE_EXIT_CODE_FILE}" node "${ROOT_DIR}/sumo-rpc-host.js" <&0 &
+			env SUMOCODE_ROOT_DIR="${ROOT_DIR}" SUMOCODE_PROJECT_CWD="${PWD}" SUMOCODE_INITIAL_PROMPT="${RPC_INITIAL_PROMPT}" SUMOCODE_RELOAD="${IS_RELOAD_RESPAWN}" SUMOCODE_RELOAD_READY_FILE="${SUMOCODE_RELOAD_READY_FILE}" PI_BIN="${PI_BIN}" SUMOCODE_EXIT_CODE_FILE="${SUMOCODE_EXIT_CODE_FILE}" node "${ROOT_DIR}/sumo-rpc-host.js" <&0 &
 		else
-			env SUMOCODE_ROOT_DIR="${ROOT_DIR}" SUMOCODE_PROJECT_CWD="${PWD}" SUMOCODE_INITIAL_PROMPT="${RPC_INITIAL_PROMPT}" SUMOCODE_RELOAD="${IS_RELOAD_RESPAWN}" PI_BIN="${PI_BIN}" SUMOCODE_EXIT_CODE_FILE="${SUMOCODE_EXIT_CODE_FILE}" node "${ROOT_DIR}/sumo-rpc-host.js" "${SUMOCODE_ARGS[@]}" <&0 &
+			env SUMOCODE_ROOT_DIR="${ROOT_DIR}" SUMOCODE_PROJECT_CWD="${PWD}" SUMOCODE_INITIAL_PROMPT="${RPC_INITIAL_PROMPT}" SUMOCODE_RELOAD="${IS_RELOAD_RESPAWN}" SUMOCODE_RELOAD_READY_FILE="${SUMOCODE_RELOAD_READY_FILE}" PI_BIN="${PI_BIN}" SUMOCODE_EXIT_CODE_FILE="${SUMOCODE_EXIT_CODE_FILE}" node "${ROOT_DIR}/sumo-rpc-host.js" "${SUMOCODE_ARGS[@]}" <&0 &
 		fi
 		RPC_CHILD_PID=$!
 		wait_for_child_exit "${RPC_CHILD_PID}"
 		code="$(read_child_exit_code_file "${SUMOCODE_EXIT_CODE_FILE}" "${WAIT_FOR_CHILD_EXIT_STATUS}")"
 		RPC_CHILD_PID=""
 	elif [[ "${#SUMOCODE_ARGS[@]}" -eq 0 ]]; then
-		"${PI_BIN}" -e "${ROOT_DIR}/src/extension-entry.ts" || code=$?
+		env SUMOCODE_RELOAD_READY_FILE="${SUMOCODE_RELOAD_READY_FILE}" "${PI_BIN}" -e "${ROOT_DIR}/src/extension-entry.ts" || code=$?
 	else
-		"${PI_BIN}" -e "${ROOT_DIR}/src/extension-entry.ts" "${SUMOCODE_ARGS[@]}" || code=$?
+		env SUMOCODE_RELOAD_READY_FILE="${SUMOCODE_RELOAD_READY_FILE}" "${PI_BIN}" -e "${ROOT_DIR}/src/extension-entry.ts" "${SUMOCODE_ARGS[@]}" || code=$?
 	fi
 	if [[ "${code}" -ne "${SUMOCODE_RELOAD_EXIT_CODE}" ]]; then
-		restore_failed_reload_terminal
+		restore_failed_reload_terminal "${SUMOCODE_RELOAD_READY_FILE:-}"
+		rm -f "${SUMOCODE_RELOAD_READY_FILE:-}" 2>/dev/null || true
 		exit "${code}"
 	fi
+	rm -f "${SUMOCODE_RELOAD_READY_FILE:-}" 2>/dev/null || true
 	# The replacement host adopts the retained terminal frame and hydrates before
 	# its first paint, avoiding a cold-start splash during an in-place reload.
 	IS_RELOAD_RESPAWN=1

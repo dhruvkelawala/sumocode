@@ -4740,6 +4740,7 @@ function installCathedralEditor(pi) {
 }
 
 // src/commands/reload.ts
+import { writeFileSync as writeFileSync2 } from "node:fs";
 var SUMOCODE_RELOAD_EXIT_CODE = 100;
 var FLUSH_DELAY_MS = 60;
 function defaultDelay(ms) {
@@ -4761,6 +4762,15 @@ async function executeSumoReload(ctx, deps = {}) {
   exit(SUMOCODE_RELOAD_EXIT_CODE);
 }
 function registerSumoReloadCommand(pi, deps = {}) {
+  pi.on("session_start", () => {
+    const env = deps.env ?? process.env;
+    const readyFile = env.SUMOCODE_RELOAD_READY_FILE;
+    if (!readyFile || env.SUMOCODE_RPC_CHILD === "1") return;
+    try {
+      writeFileSync2(readyFile, "ready", { mode: 384 });
+    } catch {
+    }
+  });
   pi.registerCommand("reload", {
     description: "Reload SumoCode source and resume this session",
     handler: async (_args, ctx) => {
@@ -6565,7 +6575,7 @@ function registerSumoSyncCommand(pi, deps = {}) {
 }
 
 // src/commands/tabs.ts
-import { existsSync as existsSync4, readFileSync as readFileSync4, writeFileSync as writeFileSync2 } from "node:fs";
+import { existsSync as existsSync4, readFileSync as readFileSync4, writeFileSync as writeFileSync3 } from "node:fs";
 import { homedir as homedir7 } from "node:os";
 import { join as join6 } from "node:path";
 var TABS_LOCAL_CONFIG_KEY = "topChromeHidden";
@@ -6591,7 +6601,7 @@ function setTopChromeHidden(hidden, configPath = DEFAULT_TABS_CONFIG_PATH) {
     parsed = {};
   }
   parsed[TABS_LOCAL_CONFIG_KEY] = hidden;
-  writeFileSync2(configPath, `${JSON.stringify(parsed, null, 2)}
+  writeFileSync3(configPath, `${JSON.stringify(parsed, null, 2)}
 `);
 }
 function registerTabsCommand(pi, options = {}) {
@@ -9287,7 +9297,7 @@ import {
   openSync as openSync2,
   readFileSync as readFileSync9,
   readSync,
-  writeFileSync as writeFileSync4
+  writeFileSync as writeFileSync5
 } from "node:fs";
 import { dirname as dirname7, join as join13 } from "node:path";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
@@ -9570,7 +9580,7 @@ import {
   renameSync as renameSync3,
   rmSync as rmSync2,
   unlinkSync,
-  writeFileSync as writeFileSync3
+  writeFileSync as writeFileSync4
 } from "node:fs";
 import { homedir as homedir11 } from "node:os";
 import { basename as basename4, dirname as dirname5, isAbsolute, join as join11, relative, resolve as resolve4 } from "node:path";
@@ -10303,7 +10313,7 @@ function writeExclusivePrivateFile(path2, contents) {
   const descriptor = openSync(path2, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | NO_FOLLOW, PRIVATE_FILE_MODE);
   try {
     fchmodSync(descriptor, PRIVATE_FILE_MODE);
-    writeFileSync3(descriptor, contents, "utf8");
+    writeFileSync4(descriptor, contents, "utf8");
     fsyncSync(descriptor);
   } finally {
     closeSync(descriptor);
@@ -10315,7 +10325,7 @@ function atomicWriteJson(path2, value) {
   try {
     descriptor = openSync(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | NO_FOLLOW, PRIVATE_FILE_MODE);
     fchmodSync(descriptor, PRIVATE_FILE_MODE);
-    writeFileSync3(descriptor, `${JSON.stringify(value, null, 2)}
+    writeFileSync4(descriptor, `${JSON.stringify(value, null, 2)}
 `, "utf8");
     fsyncSync(descriptor);
     closeSync(descriptor);
@@ -10743,7 +10753,7 @@ function createPrivateFile(store, path2, contents) {
   const descriptor = openSync2(path2, constants2.O_WRONLY | constants2.O_CREAT | constants2.O_EXCL | NO_FOLLOW2, PRIVATE_FILE_MODE2);
   try {
     fchmodSync2(descriptor, PRIVATE_FILE_MODE2);
-    writeFileSync4(descriptor, contents, "utf8");
+    writeFileSync5(descriptor, contents, "utf8");
   } finally {
     closeSync2(descriptor);
   }
@@ -10826,7 +10836,7 @@ function capSettledLog(store, path2, maxBytes) {
     descriptor = openPrivateFile(store, path2, constants2.O_WRONLY);
     try {
       ftruncateSync(descriptor, 0);
-      writeFileSync4(descriptor, `${marker}${tail}`.slice(-maxBytes), "utf8");
+      writeFileSync5(descriptor, `${marker}${tail}`.slice(-maxBytes), "utf8");
     } finally {
       closeSync2(descriptor);
     }
@@ -10837,7 +10847,7 @@ function appendPrivateFile(store, path2, contents) {
   let descriptor;
   try {
     descriptor = openPrivateFile(store, path2, constants2.O_WRONLY | constants2.O_APPEND);
-    writeFileSync4(descriptor, contents, "utf8");
+    writeFileSync5(descriptor, contents, "utf8");
   } catch {
   } finally {
     if (descriptor !== void 0) closeSync2(descriptor);
@@ -12242,7 +12252,7 @@ import {
   realpathSync as realpathSync3,
   renameSync as renameSync4,
   unlinkSync as unlinkSync2,
-  writeFileSync as writeFileSync5
+  writeFileSync as writeFileSync6
 } from "node:fs";
 import { homedir as homedir12 } from "node:os";
 import { basename as basename5, dirname as dirname8, join as join14, resolve as resolve5 } from "node:path";
@@ -12385,7 +12395,7 @@ function writePrivateJsonExclusive(path2, value) {
   try {
     descriptor = openSync3(temporary, constants3.O_WRONLY | constants3.O_CREAT | constants3.O_EXCL | NO_FOLLOW3, PRIVATE_ACTIVITY_FILE_MODE);
     fchmodSync3(descriptor, PRIVATE_ACTIVITY_FILE_MODE);
-    writeFileSync5(descriptor, `${JSON.stringify(value, null, 2)}
+    writeFileSync6(descriptor, `${JSON.stringify(value, null, 2)}
 `, "utf8");
     fsyncSync2(descriptor);
     closeSync3(descriptor);
@@ -12417,7 +12427,7 @@ function atomicWritePrivateJson(path2, value) {
   try {
     descriptor = openSync3(temporary, constants3.O_WRONLY | constants3.O_CREAT | constants3.O_EXCL | NO_FOLLOW3, PRIVATE_ACTIVITY_FILE_MODE);
     fchmodSync3(descriptor, PRIVATE_ACTIVITY_FILE_MODE);
-    writeFileSync5(descriptor, `${JSON.stringify(value, null, 2)}
+    writeFileSync6(descriptor, `${JSON.stringify(value, null, 2)}
 `, "utf8");
     fsyncSync2(descriptor);
     closeSync3(descriptor);
@@ -13386,7 +13396,7 @@ import {
   existsSync as existsSync9,
   mkdirSync as mkdirSync8,
   readFileSync as readFileSync11,
-  writeFileSync as writeFileSync6
+  writeFileSync as writeFileSync7
 } from "node:fs";
 import { dirname as dirname10, join as join16 } from "node:path";
 var RESPONSE_POLL_INTERVAL_MS = 750;
@@ -13395,7 +13405,7 @@ var nodeFs = {
   existsSync: existsSync9,
   mkdirSync: mkdirSync8,
   readFileSync: readFileSync11,
-  writeFileSync: writeFileSync6
+  writeFileSync: writeFileSync7
 };
 var errorText = (error) => error instanceof Error ? error.message : String(error);
 var createPaneChildSpawner = (dependencies = {}) => (options) => {
@@ -14851,7 +14861,7 @@ function installSubagents(pi) {
 }
 
 // src/task-mode.ts
-import { appendFileSync as appendFileSync3, writeFileSync as writeFileSync7 } from "node:fs";
+import { appendFileSync as appendFileSync3, writeFileSync as writeFileSync8 } from "node:fs";
 var TASK_MARKER_ENV_KEYS = [
   "SUMOCODE_TASK_RESPONSE_FILE",
   "SUMOCODE_TASK_EXIT_FILE",
@@ -14910,7 +14920,7 @@ function persistResponse(messages) {
     return;
   }
   try {
-    writeFileSync7(file, `${text}
+    writeFileSync8(file, `${text}
 `);
     diagLog("response_written", { file, bytes: text.length });
   } catch (error) {
@@ -14923,7 +14933,7 @@ function writeTaskExitMarker(code, env = process.env) {
   const file = env.SUMOCODE_TASK_EXIT_FILE;
   if (!file) return;
   try {
-    writeFileSync7(file, `${code}
+    writeFileSync8(file, `${code}
 `);
     diagLog("exit_marker_written", { file, code });
   } catch (error) {
@@ -14936,7 +14946,7 @@ function writeTaskStartedMarker(env = process.env) {
   const file = env.SUMOCODE_TASK_STARTED_FILE;
   if (!file) return;
   try {
-    writeFileSync7(file, `${process.pid}
+    writeFileSync8(file, `${process.pid}
 `);
     diagLog("started_marker_written", { file });
   } catch (error) {

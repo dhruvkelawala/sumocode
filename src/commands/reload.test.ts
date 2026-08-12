@@ -39,7 +39,7 @@ describe("executeSumoReload", () => {
 describe("registerSumoReloadCommand", () => {
 	it("registers the /reload slash command", () => {
 		const registerCommand = vi.fn();
-		registerSumoReloadCommand({ registerCommand } as never);
+		registerSumoReloadCommand({ registerCommand, on: vi.fn() } as never);
 		expect(registerCommand).toHaveBeenCalledWith(
 			"reload",
 			expect.objectContaining({

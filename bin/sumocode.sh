@@ -837,11 +837,27 @@ RPC_INITIAL_PROMPT="${EXTRACTED_INITIAL_PROMPT:-}"
 # is unchanged, still a plain foreground command, since it already worked
 # correctly via real terminals' process-group-wide delivery before this fix)
 # so RPC_CHILD_PID is known to the trap below while it's running.
+restore_original_tty_state() {
+	if [[ -n "${ORIGINAL_TTY_STATE}" ]]; then
+		stty "${ORIGINAL_TTY_STATE}" <&0 2>/dev/null || true
+	fi
+}
+
+reset_terminal_modes() {
+	printf '\033]112\033\\\033]111\033\\\033[<u\033[>4;0m\033[?2004l\033[?1003l\033[?1002l\033[?1006l\033[?1000l\033[?1049l\033[?25h\033[0m'
+}
+
 RPC_CHILD_PID=""
 forward_signal_to_rpc_child() {
 	local sig="$1"
 	if [[ -n "${RPC_CHILD_PID}" ]] && kill -0 "${RPC_CHILD_PID}" 2>/dev/null; then
 		kill "-${sig}" "${RPC_CHILD_PID}" 2>/dev/null || true
+	elif [[ "${USE_RPC_HOST}" -eq 1 ]]; then
+		# No child means the signal landed in the launcher-owned reload handoff.
+		# Exit here rather than swallowing it or leaking it into a later reload.
+		restore_original_tty_state
+		reset_terminal_modes
+		if [[ "${sig}" == "INT" ]]; then exit 130; else exit 0; fi
 	fi
 }
 trap 'forward_signal_to_rpc_child INT' INT
@@ -897,9 +913,7 @@ restore_reload_terminal() {
 	# Node's raw-mode baseline belongs to the replacement process, which starts
 	# while the predecessor is already raw. Restore the exact pre-launch termios
 	# state rather than `stty sane`, which would erase user customizations.
-	if [[ -n "${ORIGINAL_TTY_STATE}" ]]; then
-		stty "${ORIGINAL_TTY_STATE}" <&0 2>/dev/null || true
-	fi
+	restore_original_tty_state
 	if [[ -n "${ready_file}" && -f "${ready_file}" ]]; then
 		state="$(cat "${ready_file}" 2>/dev/null || true)"
 	fi
@@ -907,7 +921,7 @@ restore_reload_terminal() {
 		return 0
 	fi
 	# Last-resort mode cleanup when the replacement entry never took ownership.
-	printf '\033]112\033\\\033]111\033\\\033[<u\033[>4;0m\033[?2004l\033[?1003l\033[?1002l\033[?1006l\033[?1000l\033[?1049l\033[?25h\033[0m'
+	reset_terminal_modes
 }
 
 # WORKAROUND for a verified-unreliable bash 3.2 (macOS's system bash) `wait`

@@ -203,8 +203,10 @@ export class TerminalSessionOwner {
 		this.mouseSGREnabled = true;
 		this.backgroundPainted = this.paintBackground;
 		this.cursorColorOverridden = true;
-		this.lastBackgroundColor = this.palette.background;
-		this.lastCursorColor = this.palette.accent;
+		// The predecessor's palette is process-local and may differ after config
+		// reload. Unknown caches force start() to repaint the active palette.
+		this.lastBackgroundColor = undefined;
+		this.lastCursorColor = undefined;
 		this.lastEmittedCursor = null;
 	}
 

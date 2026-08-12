@@ -52,7 +52,9 @@ describe("TerminalSessionOwner", () => {
 		terminal.adoptRetainedSession();
 		terminal.startRetainedSession();
 
-		expect(output.writes).toEqual([]);
+		// Lifecycle modes are adopted, but the process cannot know the old
+		// palette. Repaint the current cursor colour before the first frame.
+		expect(output.writes).toEqual([CURSOR_COLOR_SET]);
 		expect(terminal.getState()).toMatchObject({
 			altscreenActive: true,
 			mouseSGREnabled: true,
@@ -63,6 +65,7 @@ describe("TerminalSessionOwner", () => {
 
 		terminal.exitTerminal();
 		expect(output.writes).toEqual([
+			CURSOR_COLOR_SET,
 			`${CURSOR_COLOR_RESET}${TERMINAL_BG_RESET}${TERMINAL_CLEANUP_SEQUENCE}`,
 		]);
 	});

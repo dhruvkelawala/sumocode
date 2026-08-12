@@ -1800,7 +1800,13 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		// A reload predecessor deliberately leaves its retained frame and terminal
 		// modes in place. Hydrate off-screen, then atomically replace that frame;
 		// never flash the cold-start splash for a session we already know exists.
-		if (isReloadResume) await initialRuntime.start();
+		if (isReloadResume) {
+			await initialRuntime.start();
+			const readyFile = env.SUMOCODE_RELOAD_READY_FILE;
+			if (readyFile) {
+				try { writeFileSync(readyFile, "ready", { mode: 0o600 }); } catch {}
+			}
+		}
 		await editor.configureAutocomplete(controls);
 		initialRuntime.markChromeStable();
 		// Deferred child-dependent input may now observe only the fully painted,

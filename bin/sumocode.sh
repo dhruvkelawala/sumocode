@@ -886,7 +886,7 @@ wait_for_child_exit() {
 
 restore_failed_reload_terminal() {
 	local ready_file="$1"
-	if [[ "${IS_RELOAD_RESPAWN}" -ne 1 || -f "${ready_file}" || ! -t 1 ]]; then
+	if [[ "${IS_RELOAD_RESPAWN}" -ne 1 || -z "${ready_file}" || -f "${ready_file}" || ! -t 1 ]]; then
 		return 0
 	fi
 	# Last-resort owner: this shell survives even when the replacement Node
@@ -930,8 +930,13 @@ read_child_exit_code_file() {
 
 while :; do
 	code=0
-	SUMOCODE_RELOAD_READY_FILE="$(mktemp "${TMPDIR:-/tmp}/sumocode-reload-ready.XXXXXX")"
-	rm -f "${SUMOCODE_RELOAD_READY_FILE}"
+	SUMOCODE_RELOAD_READY_FILE=""
+	if [[ "${IS_RELOAD_RESPAWN}" -eq 1 ]]; then
+		SUMOCODE_RELOAD_READY_FILE="$(mktemp "${TMPDIR:-/tmp}/sumocode-reload-ready.XXXXXX" 2>/dev/null || true)"
+		if [[ -n "${SUMOCODE_RELOAD_READY_FILE}" ]]; then
+			rm -f "${SUMOCODE_RELOAD_READY_FILE}"
+		fi
+	fi
 	if [[ "${USE_RPC_HOST}" -eq 1 ]]; then
 		# The RPC host previously ran via `exec`, which replaced this shell
 		# entirely -- so the respawn loop below was unreachable on the default

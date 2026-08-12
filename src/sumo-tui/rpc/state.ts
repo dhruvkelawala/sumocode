@@ -257,7 +257,7 @@ export class RpcHostStateStore {
 	private withComposedQueue(state: RpcHostChromeState): RpcHostChromeState {
 		return {
 			...state,
-			queuedMessages: [...this.hostQueuedMessages, ...this.piQueuedMessages],
+			queuedMessages: [...this.piQueuedMessages, ...this.hostQueuedMessages],
 		};
 	}
 }

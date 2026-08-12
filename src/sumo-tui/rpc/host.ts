@@ -32,7 +32,13 @@ import { InlineSelectorHost } from "./inline-selector.js";
 import { InitialHydrationActionGate } from "./initial-hydration-action-gate.js";
 import { decideRpcInterrupt, type RpcInterruptInputKind } from "./interrupt.js";
 import { readGitBranch, watchGitBranch } from "./git.js";
-import { createRpcPromptScheduler, type RpcPromptScheduler } from "./prompt-scheduler.js";
+import {
+	createRpcPromptScheduler,
+	RpcPromptPreflightRejection,
+	type RpcPromptDelivery,
+	type RpcPromptForceSendResult,
+	type RpcPromptScheduler,
+} from "./prompt-scheduler.js";
 import { RpcHostRuntime } from "./runtime.js";
 import { responseData } from "./response.js";
 import { notifyOnError, type ErrorNotifier } from "./safe-send.js";
@@ -45,6 +51,7 @@ import { defaultTerminalSessionOwner } from "../runtime/terminal-controller.js";
 const DEFERRED_SELECTOR_ACTION_KEY = "selector-open";
 const DEFERRED_MODEL_CYCLE_ACTION_KEY = "model-cycle";
 const DEFERRED_MESSAGE_QUEUE_ACTION_KEY = "message-queue";
+const DEFERRED_MESSAGE_FORCE_SEND_ACTION_KEY = "message-force-send";
 
 export interface RpcHostMainOptions {
 	readonly argv?: readonly string[];
@@ -84,6 +91,13 @@ function valuesEqual(left: unknown, right: unknown): boolean {
 	} catch {
 		return false;
 	}
+}
+
+export function canRpcForceSteer(
+	state: Pick<RpcHostChromeState, "isStreaming" | "isCompacting">,
+	treeNavigationBusy: boolean,
+): boolean {
+	return state.isStreaming && !state.isCompacting && !treeNavigationBusy;
 }
 
 export const TREE_NAVIGATION_QUIET_POLL_MS = 100;
@@ -441,6 +455,26 @@ export function createLazyChatSink(getRuntime: () => { getChatSink(): Transcript
 	};
 }
 
+export interface RpcPromptSendOptions {
+	readonly client: Pick<SumoRpcClient, "send">;
+	readonly delivery?: RpcPromptDelivery;
+}
+
+export async function sendRpcPrompt(message: string, options: RpcPromptSendOptions): Promise<void> {
+	const command = options.delivery?.streamingBehavior === "steer"
+		? { type: "prompt" as const, message, streamingBehavior: "steer" as const }
+		: { type: "prompt" as const, message };
+	const response = await options.client.send(command);
+	if (response.success === false && response.command === "prompt") {
+		try {
+			responseData(response, "prompt");
+		} catch (error) {
+			throw new RpcPromptPreflightRejection(error instanceof Error ? error.message : String(error));
+		}
+	}
+	responseData(response, "prompt");
+}
+
 export interface RpcPromptSubmitOptions {
 	readonly visualFixture?: unknown;
 	readonly scheduler?: Pick<RpcPromptScheduler, "submit">;
@@ -508,6 +542,24 @@ export function handleRpcMessageFollowUp(deps: RpcMessageFollowUpDependencies): 
 		deps.editor.setText("");
 		deps.editor.clearImageDrafts();
 	}, deps.notifications);
+}
+
+export interface RpcMessageForceSendDependencies {
+	readonly scheduler: Pick<RpcPromptScheduler, "forceSendNext">;
+	readonly notifications: ErrorNotifier;
+}
+
+export async function handleRpcMessageForceSend(
+	deps: RpcMessageForceSendDependencies,
+): Promise<RpcPromptForceSendResult> {
+	let result: RpcPromptForceSendResult = "ignored";
+	await notifyOnError(async () => {
+		result = await deps.scheduler.forceSendNext();
+		if (result === "accepted") deps.notifications.notify("queued message sent as steering", "info");
+		else if (result === "held") deps.notifications.notify("message sent; remaining queue held", "warning");
+		else if (result === "unknown") deps.notifications.notify("steering acceptance unknown; message not requeued", "warning");
+	}, deps.notifications);
+	return result;
 }
 
 export interface RpcMessageDequeueDependencies {
@@ -1013,10 +1065,9 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 			const state = stateStore.getSnapshot();
 			return treeNavigationBusy || state.isStreaming || state.isCompacting;
 		},
+		canForceSteer: () => canRpcForceSteer(stateStore.getSnapshot(), treeNavigationBusy),
 		handleHostCommand: (message) => actions?.handleSubmittedText(message) ?? false,
-		sendPrompt: async (message) => {
-			responseData(await client.send({ type: "prompt", message }), "prompt");
-		},
+		sendPrompt: (message, delivery) => sendRpcPrompt(message, { client, delivery }),
 		onQueueChange: (messages) => {
 			const state = stateStore.setHostQueuedMessages(messages);
 			runtime?.update({ state });
@@ -1025,6 +1076,9 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		onDispatchFailure: (error) => {
 			runtime?.update({ state: stateStore.getSnapshot() });
 			notifications.notify(`prompt failed: ${truncateForNotification(error instanceof Error ? error.message : String(error))}`, "error");
+		},
+		onDispatchStateSync: () => {
+			runtime?.update({ state: stateStore.getSnapshot() });
 		},
 	});
 	let releaseInitialHydration!: () => void;
@@ -1083,6 +1137,8 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 	});
 	const handleMessageFollowUp = (): Promise<void> =>
 		handleRpcMessageFollowUp({ editor, scheduler, notifications, isBlocked: () => treeNavigationBusy });
+	const handleMessageForceSend = (): Promise<void> =>
+		handleRpcMessageForceSend({ scheduler, notifications }).then(() => undefined);
 	const handleMessageDequeue = (): void => {
 		handleRpcMessageDequeue({ editor, scheduler, stateStore, notifications });
 	};
@@ -1120,6 +1176,7 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		onThinkingCycle: () => hydrationActionGate.run("thinking-cycle", handleThinkingCycle),
 		onToolsExpandToggle: handleToolsExpandToggle,
 		onMessageFollowUp: () => hydrationActionGate.run(DEFERRED_MESSAGE_QUEUE_ACTION_KEY, handleMessageFollowUp),
+		onMessageForceSend: () => hydrationActionGate.run(DEFERRED_MESSAGE_FORCE_SEND_ACTION_KEY, handleMessageForceSend),
 		onMessageDequeue: () => hydrationActionGate.run(DEFERRED_MESSAGE_QUEUE_ACTION_KEY, handleMessageDequeue),
 		// app.theme.cycle (Shift+Ctrl+T / Alt+T): host-side — the child
 		// extension's pi.registerShortcut never receives keys in RPC mode.

@@ -348,6 +348,7 @@ function renderHotkeysOverlay(theme: ThemeReader, width: number): string[] {
 	lines.push(row("Up / Down", "Move the selection in an open selector"));
 	lines.push(row("Enter", "Confirm the highlighted selector option"));
 	lines.push(row("Esc", "Cancel the open selector, return to the editor"));
+	lines.push(row("Cmd+Enter", "Send next queued message as steering"));
 	lines.push(row("Cmd/Ctrl+C", "Copy the current terminal selection (OSC52)"));
 	lines.push("");
 	lines.push(dim("Press any key to close."));

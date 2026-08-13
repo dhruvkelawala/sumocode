@@ -561,6 +561,31 @@ describe("ChatMessage", () => {
 		root.dispose();
 	});
 
+	it("uses tool expansion to expand collapsed formatted code blocks", async () => {
+		const yoga = await loadYoga();
+		const root = new SumoNode(yoga.Node.create());
+		const source = Array.from({ length: 30 }, (_, index) => `line ${index + 1}`).join("\n");
+		const message = ChatMessage.create(yoga, "sumo", "", root, FIXED_TIME, [
+			{ type: "code", lang: "text", source },
+		]);
+
+		const before = stripAnsi(renderRows(message, 80).join("\n"));
+		expect(before).toContain("… 10 lines collapsed · ctrl+o expand");
+		expect(before).not.toContain("line 30");
+
+		expect(message.setToolExpansion(true)).toBe(true);
+		const expanded = stripAnsi(renderRows(message, 80).join("\n"));
+		expect(expanded).toContain("line 30");
+		expect(expanded).not.toContain("collapsed · ctrl+o expand");
+		expect(message.toSnapshot().blocks).toMatchObject([{ type: "code", collapsed: false }]);
+
+		expect(message.setToolExpansion(false)).toBe(true);
+		const collapsed = stripAnsi(renderRows(message, 80).join("\n"));
+		expect(collapsed).toContain("… 10 lines collapsed · ctrl+o expand");
+		expect(collapsed).not.toContain("line 30");
+		root.dispose();
+	});
+
 	describe("renderRows memoization", () => {
 		afterEach(() => {
 			resetThemeRegistryForTests();

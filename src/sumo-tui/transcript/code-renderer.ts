@@ -243,26 +243,61 @@ function collapsedRow(label: string, width: number, roles: CodeRoles): string {
 
 // ── Public API ───────────────────────────────────────────────
 
-export function renderCathedralCodeBlock(lang: string, source: string, width: number): string[] {
+export interface CodeBlockRenderOptions {
+	/** Disable the preview row/source caps after the user invokes the expand affordance. */
+	readonly expanded?: boolean;
+}
+
+function normalizedCodeLanguage(lang: string): string {
+	return lang.toLowerCase().replace(/^language-/, "");
+}
+
+function wrappedTextBodyRowCount(line: string, width: number): number {
+	const sourceWidth = Math.max(1, width - 4 - GUTTER_WIDTH);
+	return wrapLine(textLine([span(line)]), sourceWidth).length;
+}
+
+export function isCathedralCodeBlockCollapsible(lang: string, source: string, width: number): boolean {
+	const safeWidth = Math.max(1, Math.floor(width));
+	if (safeWidth < 10) return false;
+	const lines = source.split("\n");
+	if (lines.length > MAX_SOURCE_LINES) return true;
+	if (!WRAPPED_TEXT_LANGUAGES.has(normalizedCodeLanguage(lang))) return false;
+	const displayRows = lines.reduce((sum, line) => sum + wrappedTextBodyRowCount(line, safeWidth), 0);
+	return displayRows > MAX_VISIBLE_ROWS;
+}
+
+function expandedWrappedCodeBodyRows(lineNumber: number, bodySpans: readonly Span[], width: number, roles: CodeRoles): string[] {
+	const sourceWidth = Math.max(1, width - 4 - GUTTER_WIDTH);
+	const wrapped = wrapLine(textLine(bodySpans), sourceWidth);
+	return wrapped.map((line, index) => codeBodyRow(index === 0 ? lineNumber : "continuation", line.spans, width, roles));
+}
+
+export function renderCathedralCodeBlock(lang: string, source: string, width: number, options: CodeBlockRenderOptions = {}): string[] {
 	const safeWidth = Math.max(1, Math.floor(width));
 	if (safeWidth < 10) return [takeVisible(source, safeWidth)];
 
+	const expanded = options.expanded === true;
 	const lines = source.split("\n");
-	const visible = lines.slice(0, MAX_SOURCE_LINES);
-	const normalizedLang = lang.toLowerCase().replace(/^language-/, "");
+	const visible = expanded ? lines : lines.slice(0, MAX_SOURCE_LINES);
+	const normalizedLang = normalizedCodeLanguage(lang);
 	const roles = activeThemeApplicationRoles().code;
 	const bodyRows: string[] = [];
-	let collapsedSourceLines = Math.max(0, lines.length - visible.length);
+	let collapsedSourceLines = expanded ? 0 : Math.max(0, lines.length - visible.length);
 	let wrappedContentCollapsed = false;
 
 	for (let i = 0; i < visible.length; i += 1) {
-		if (bodyRows.length >= MAX_VISIBLE_ROWS) {
+		if (!expanded && bodyRows.length >= MAX_VISIBLE_ROWS) {
 			collapsedSourceLines += visible.length - i;
 			break;
 		}
 		const highlighted = highlightLine(visible[i]!, normalizedLang, roles);
 		const bodySpans = highlighted.map((syntax) => span(syntax.text, { fg: syntax.color }));
 		if (WRAPPED_TEXT_LANGUAGES.has(normalizedLang)) {
+			if (expanded) {
+				bodyRows.push(...expandedWrappedCodeBodyRows(i + 1, bodySpans, safeWidth, roles));
+				continue;
+			}
 			const availableRows = MAX_VISIBLE_ROWS - bodyRows.length;
 			const remainingLines = visible.length - i - 1;
 			const reservedRows = Math.min(remainingLines, Math.max(0, availableRows - 1));

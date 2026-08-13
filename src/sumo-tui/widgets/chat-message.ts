@@ -254,14 +254,15 @@ function renderCodeRows(
 	mode: MermaidRenderingMode,
 	isStreaming: boolean,
 ): string[] {
+	const codeOptions = { expanded: block.collapsed === false };
 	if (!isMermaidLanguage(block.lang) || mode === "off" || (isStreaming && mode !== "streaming")) {
-		return renderCathedralCodeBlock(block.lang, block.source, width);
+		return renderCathedralCodeBlock(block.lang, block.source, width, codeOptions);
 	}
 	const rendered = renderCathedralMermaid(block.source, width);
-	if (!rendered) return renderCathedralCodeBlock(block.lang, block.source, width);
+	if (!rendered) return renderCathedralCodeBlock(block.lang, block.source, width, codeOptions);
 	if (!isStreaming && rendered.warnings.length > 0) {
 		return [
-			...renderCathedralCodeBlock(block.lang, block.source, width),
+			...renderCathedralCodeBlock(block.lang, block.source, width, codeOptions),
 			...mermaidWarningRow(rendered.warnings[0]!, rendered.warnings.length, width),
 		];
 	}
@@ -436,10 +437,11 @@ export class ChatMessage extends SumoNode {
 		for (const block of this.blocks ?? []) {
 			if (block.type === "activity") changed = this.setActivityExpansion(block.activity.id, expanded) || changed;
 		}
-		const expandable = (block: ChatBlock): boolean => block.type === "skill" || block.type === "summary";
+		const expandable = (block: ChatBlock): boolean => block.type === "skill" || block.type === "summary" || block.type === "code";
 		if (this.blocks?.some(expandable)) {
 			this.blocks = this.blocks.map((block) => {
 				if (block.type === "skill" || block.type === "summary") return { ...block, expanded };
+				if (block.type === "code") return { ...block, collapsed: !expanded };
 				return block;
 			});
 			this.invalidateRenderCache();

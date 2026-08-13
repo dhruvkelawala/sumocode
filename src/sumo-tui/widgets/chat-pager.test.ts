@@ -371,6 +371,55 @@ describe("ChatPager", () => {
 		root.dispose();
 	});
 
+	it("global Ctrl+O expands formatted code blocks even when Activities are already expanded", async () => {
+		const { root, chat, buffer } = await makeChat(90, 12);
+		const source = Array.from({ length: 30 }, (_, index) => `line ${index + 1}`).join("\n");
+		chat.addViewModel({
+			id: "mixed-code",
+			role: "sumo",
+			displayName: "SUMO",
+			blocks: [
+				activityViewModel("read-a", "src/a.ts", "succeeded").blocks[0]!,
+				{ type: "code", lang: "text", source },
+			],
+		});
+		chat.setActivityExpansion("read-a", true);
+		buffer();
+
+		expect(chat.toggleToolExpansion()).toBe(true);
+		expect(chat.getActivityExpansion("read-a")).toBe(true);
+		expect(chat.getRenderedMessages()[0]?.toSnapshot().blocks).toMatchObject([
+			{ type: "activity", activity: { id: "read-a" } },
+			{ type: "code", collapsed: false },
+		]);
+
+		expect(chat.toggleToolExpansion()).toBe(false);
+		expect(chat.getRenderedMessages()[0]?.toSnapshot().blocks).toMatchObject([
+			{ type: "activity", activity: { id: "read-a" } },
+			{ type: "code", collapsed: true },
+		]);
+		root.dispose();
+	});
+
+	it("small formatted code blocks do not block the first global Ctrl+O collapse", async () => {
+		const { root, chat, buffer } = await makeChat(90, 12);
+		chat.addViewModel({
+			id: "mixed-small-code",
+			role: "sumo",
+			displayName: "SUMO",
+			blocks: [
+				activityViewModel("read-a", "src/a.ts", "succeeded").blocks[0]!,
+				{ type: "code", lang: "ts", source: "const x = 1;" },
+			],
+		});
+		chat.setActivityExpansion("read-a", true);
+		buffer();
+
+		expect(chat.toggleToolExpansion()).toBe(false);
+		expect(chat.getActivityExpansion("read-a")).toBe(false);
+		root.dispose();
+	});
+
 	it("migrates explicit expansion state from a provisional tool ID to its canonical task ID", async () => {
 		const { root, chat } = await makeChat(90, 10);
 		chat.addViewModel({

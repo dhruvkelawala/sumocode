@@ -14,6 +14,7 @@ import {
 	type FoldableBlock,
 } from "../transcript/activity-fold.js";
 import { activityCardViewModel } from "../transcript/activity-view-model.js";
+import { isCathedralCodeBlockCollapsible } from "../transcript/code-renderer.js";
 import { chatMessageViewModelToPlainText, type ChatBlock, type ChatMessageViewModel } from "../transcript/view-model.js";
 import type { MermaidRenderingMode } from "../transcript/mermaid.js";
 import { ChatMessage, type ChatMessageOptions, type ChatMessageRole } from "./chat-message.js";
@@ -457,10 +458,13 @@ export class ChatPager extends SumoNode {
 	/** Global Ctrl+O policy across Activities and compatibility collapsibles. */
 	public toggleToolExpansion(): boolean {
 		const hasCollapsedActivity = [...this.activityStatuses.keys()].some((id) => !this.getActivityExpansion(id));
+		const codeWidth = Math.max(1, this.scrollBox.getComputedWidth() - 4);
 		const compatibilityBlocks = this.activeMessages.flatMap((message) => message.toSnapshot().blocks ?? [])
-			.filter((block): block is Extract<ChatBlock, { type: "skill" | "summary" }> => block.type === "skill" || block.type === "summary");
-		const hasCollapsedCompatibilityBlock = compatibilityBlocks.some((block) => !block.expanded);
-		const hasAnyExpandable = this.activityStatuses.size > 0 || compatibilityBlocks.length > 0;
+			.filter((block): block is Extract<ChatBlock, { type: "skill" | "summary" | "code" }> => block.type === "skill" || block.type === "summary" || block.type === "code");
+		const isExpandable = (block: Extract<ChatBlock, { type: "skill" | "summary" | "code" }>): boolean =>
+			block.type !== "code" || isCathedralCodeBlockCollapsible(block.lang, block.source, codeWidth);
+		const hasCollapsedCompatibilityBlock = compatibilityBlocks.some((block) => isExpandable(block) && (block.type === "code" ? block.collapsed !== false : !block.expanded));
+		const hasAnyExpandable = this.activityStatuses.size > 0 || compatibilityBlocks.some(isExpandable);
 		const expanded = hasAnyExpandable
 			? hasCollapsedActivity || hasCollapsedCompatibilityBlock
 			: this.defaultActivityExpansionOverride === undefined || !this.defaultActivityExpansionOverride;

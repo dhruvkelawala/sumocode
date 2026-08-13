@@ -744,7 +744,7 @@ export class RpcHostActions {
 			"Disable auto retry",
 			...(["off", "final", "streaming"] as const).map((mode) => ({
 				value: `mermaid:${mode}`,
-				label: `Mermaid diagrams: ${mode}`,
+				label: `mermaid diagrams: ${mode}`,
 				description: mode === currentMermaidMode ? "current" : undefined,
 			})),
 		]);

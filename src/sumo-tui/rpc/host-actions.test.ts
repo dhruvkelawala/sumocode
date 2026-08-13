@@ -492,7 +492,7 @@ describe("RpcHostActions", () => {
 		const settings = actions.handleSubmittedText("/settings");
 		await flush();
 		const rendered = inlineSelectors.render(80).join("\n").replace(/\u001b\[[0-9;]*m/g, "");
-		expect(rendered).toContain("Mermaid diagrams: final");
+		expect(rendered).toContain("mermaid diagrams: final");
 		expect(rendered).toContain("current");
 		for (let index = 0; index < 6; index += 1) inlineSelectors.handleInput(SELECTOR_DOWN);
 		inlineSelectors.handleInput(SELECTOR_ENTER);

@@ -2,6 +2,9 @@ import { render, type Cls, type MermaidArt } from "grok-mermaid";
 import { activeThemeColors, type ThemeColors } from "../../themes/index.js";
 import { lineToAnsi, span, textLine } from "../render/primitives.js";
 
+const MAX_SOURCE_LINES = 20;
+const MAX_VISIBLE_ROWS = 20;
+
 export interface MermaidRenderResult {
 	readonly rows: readonly string[];
 	readonly warnings: readonly string[];
@@ -10,7 +13,7 @@ export interface MermaidRenderResult {
 /** Render Mermaid source as width-safe Cathedral Unicode art. */
 export function renderCathedralMermaid(source: string, availableWidth: number): MermaidRenderResult | undefined {
 	const width = Math.max(0, Math.floor(availableWidth));
-	if (width === 0) return undefined;
+	if (width === 0 || source.split("\n").length > MAX_SOURCE_LINES) return undefined;
 	let art: MermaidArt | null;
 	try {
 		art = render(source);
@@ -19,7 +22,7 @@ export function renderCathedralMermaid(source: string, availableWidth: number): 
 		// A renderer bug must degrade to the existing code-block presentation.
 		return undefined;
 	}
-	if (!art || art.width > width) return undefined;
+	if (!art || art.width > width || art.styled.length > MAX_VISIBLE_ROWS) return undefined;
 	return { rows: renderRows(art, activeThemeColors()), warnings: art.warnings };
 }
 

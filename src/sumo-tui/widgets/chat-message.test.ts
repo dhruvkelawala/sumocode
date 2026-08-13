@@ -183,6 +183,22 @@ describe("ChatMessage", () => {
 		narrow.dispose();
 	});
 
+	it("uses the code fallback for Mermaid source over the row limit", async () => {
+		const yoga = await loadYoga();
+		const source = ["flowchart TD", ...Array.from({ length: 21 }, (_, index) => `N${index} --> N${index + 1}`)].join("\n");
+		const message = ChatMessage.create(
+			yoga,
+			"sumo",
+			"",
+			undefined,
+			FIXED_TIME,
+			[{ type: "code", lang: "mermaid", source }],
+		);
+
+		expect(renderRows(message, 90).map(stripAnsi).join("\n")).toContain("mermaid");
+		message.dispose();
+	});
+
 	it("defers final-mode Mermaid art until streaming settles", async () => {
 		const yoga = await loadYoga();
 		const message = ChatMessage.create(

@@ -1127,6 +1127,8 @@ describe("createLazyChatSink (B9 host wiring)", () => {
 		expect(() => sink.addViewModel(message)).not.toThrow();
 		expect(() => sink.replaceViewModelAt(0, message)).not.toThrow();
 		expect(() => sink.replaceLastWithViewModel(message)).not.toThrow();
+		expect(() => sink.beginStreaming()).not.toThrow();
+		expect(() => sink.endStreaming()).not.toThrow();
 	});
 
 	it("is a safe no-op when the runtime exists but its shell hasn't resolved yet (getChatSink returns undefined)", () => {
@@ -1143,6 +1145,8 @@ describe("createLazyChatSink (B9 host wiring)", () => {
 			addViewModel: vi.fn(),
 			replaceViewModelAt: vi.fn(),
 			replaceLastWithViewModel: vi.fn(),
+			beginStreaming: vi.fn(),
+			endStreaming: vi.fn(),
 		};
 		const runtime = { getChatSink: () => pager };
 		const sink = createLazyChatSink(() => runtime);
@@ -1151,11 +1155,15 @@ describe("createLazyChatSink (B9 host wiring)", () => {
 		sink.replaceViewModelAt(0, message);
 		sink.replaceLastWithViewModel(message);
 		sink.replaceViewModels([message]);
+		sink.beginStreaming();
+		sink.endStreaming();
 
 		expect(pager.addViewModel).toHaveBeenCalledWith(message);
 		expect(pager.replaceViewModelAt).toHaveBeenCalledWith(0, message);
 		expect(pager.replaceLastWithViewModel).toHaveBeenCalledWith(message);
 		expect(pager.replaceViewModels).toHaveBeenCalledWith([message]);
+		expect(pager.beginStreaming).toHaveBeenCalledTimes(1);
+		expect(pager.endStreaming).toHaveBeenCalledTimes(1);
 	});
 
 	it("re-resolves the runtime/pager on every call (picks up the shell once it appears mid-session)", () => {
@@ -1174,6 +1182,8 @@ describe("createLazyChatSink (B9 host wiring)", () => {
 				replaceViewModels: vi.fn(() => ({ sourceMessages: 0, acceptedMessages: 0, renderedMessages: 0, archivedMessages: 0 })),
 				replaceViewModelAt: vi.fn(),
 				replaceLastWithViewModel: vi.fn(),
+				beginStreaming: vi.fn(),
+				endStreaming: vi.fn(),
 			}),
 		};
 		sink.addViewModel(message);

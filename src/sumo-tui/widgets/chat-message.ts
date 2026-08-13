@@ -391,10 +391,11 @@ export class ChatMessage extends SumoNode {
 		this.invalidateRenderCache();
 	}
 
-	public setMermaidRenderingMode(mode: MermaidRenderingMode): void {
-		if (this.mermaidRenderingMode === mode) return;
+	public setMermaidRenderingMode(mode: MermaidRenderingMode): boolean {
+		if (this.mermaidRenderingMode === mode) return false;
 		this.mermaidRenderingMode = mode;
 		this.invalidateRenderCache();
+		return true;
 	}
 
 	public setBlocks(blocks: readonly ChatBlock[], text: string): void {

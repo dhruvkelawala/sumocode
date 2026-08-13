@@ -494,9 +494,8 @@ export class ChatPager extends SumoNode {
 	public setMermaidRenderingMode(mode: MermaidRenderingMode): void {
 		if (this.chatMessageOptions.mermaidRenderingMode === mode) return;
 		this.chatMessageOptions = { ...this.chatMessageOptions, mermaidRenderingMode: mode };
-		for (const message of [...this.archivedMessages, ...this.activeMessages]) {
-			message.setMermaidRenderingMode(mode);
-		}
+		for (const message of this.archivedMessages) message.setMermaidRenderingMode(mode);
+		this.applyMessageMutations((message) => message.setMermaidRenderingMode(mode));
 		this.placeholder?.setMermaidRenderingMode(mode);
 		this.scheduleRender();
 	}

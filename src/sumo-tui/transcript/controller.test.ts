@@ -525,6 +525,8 @@ type FakeChatSink = TranscriptControllerChatSink & {
 	addViewModel: Mock;
 	replaceViewModelAt: Mock;
 	replaceLastWithViewModel: Mock;
+	beginStreaming: Mock;
+	endStreaming: Mock;
 };
 
 function fakeChatSink(): FakeChatSink {
@@ -538,6 +540,8 @@ function fakeChatSink(): FakeChatSink {
 		addViewModel: vi.fn((_message: ChatMessageViewModel) => undefined),
 		replaceViewModelAt: vi.fn((_index: number, _message: ChatMessageViewModel) => undefined),
 		replaceLastWithViewModel: vi.fn((_message: ChatMessageViewModel) => undefined),
+		beginStreaming: vi.fn(),
+		endStreaming: vi.fn(),
 	};
 }
 
@@ -765,6 +769,21 @@ describe("TranscriptController incremental chat sink (B9)", () => {
 		expect(chat.replaceLastWithViewModel).toHaveBeenCalledTimes(2);
 		const lastCallText = chat.replaceLastWithViewModel.mock.calls.at(-1)?.[0]?.blocks?.[0]?.text;
 		expect(lastCallText).toBe("hello");
+	});
+
+	it("threads assistant streaming lifecycle into the retained RPC chat sink", () => {
+		const chat = fakeChatSink();
+		const controller = new TranscriptController({ chat });
+
+		controller.handleAgentEvent({ type: "message_start", message: { id: "draft", role: "assistant", content: "```mermaid\nflowchart LR" } });
+		controller.handleAgentEvent({ type: "message_update", message: { id: "draft", role: "assistant", content: "```mermaid\nflowchart LR\nA --> B\n```" } });
+
+		expect(chat.beginStreaming).toHaveBeenCalledTimes(2);
+		expect(chat.endStreaming).not.toHaveBeenCalled();
+
+		controller.handleAgentEvent({ type: "message_end", message: { id: "draft", role: "assistant", content: "```mermaid\nflowchart LR\nA --> B\n```" } });
+
+		expect(chat.endStreaming).toHaveBeenCalledTimes(1);
 	});
 
 	it("falls back to a full replace when a source-indexed last node is not rendered", () => {

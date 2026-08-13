@@ -452,6 +452,8 @@ export function createLazyChatSink(getRuntime: () => { getChatSink(): Transcript
 				? sink?.replaceLastWithViewModel(message)
 				: sink?.replaceLastWithViewModel(message, sourceIndex);
 		},
+		beginStreaming: () => getRuntime()?.getChatSink()?.beginStreaming(),
+		endStreaming: () => getRuntime()?.getChatSink()?.endStreaming(),
 	};
 }
 

@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import { promisify } from "node:util";
-import { buildShellCommand } from "../commands/cmux-split.js";
+import { buildShellCommand, shellEscape } from "../commands/cmux-split.js";
 import { chooseDiffSplitDirection } from "../commands/diff.js";
 import { createWorktree, resolveCreateOptions, type CreateWorktreeResult } from "../git/worktree.js";
 import { getTerminalHost, type PiExecLike, type TerminalHost } from "../terminal-host/index.js";
@@ -23,7 +23,8 @@ export interface OpenWorktreeCliOptions {
 
 function commandForSumocode(env: NodeJS.ProcessEnv): string {
 	const setup = (env.SUMOCODE_WORKTREE_SETUP ?? DEFAULT_SETUP_ACTION).trim();
-	const openSumocode = "exec sumocode";
+	const launcher = (env.SUMOCODE_LAUNCHER ?? "sumocode").trim() || "sumocode";
+	const openSumocode = `exec ${shellEscape(launcher)}`;
 	return setup ? `${setup} && ${openSumocode}` : openSumocode;
 }
 

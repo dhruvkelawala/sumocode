@@ -80,8 +80,7 @@ COMMANDS
 
   -w, --worktree [name]
       Create and open a new sumo/<name> worktree in the current terminal
-      host, run the configured worktree setup, and leave a plain login shell
-      open there. Unlike /sumo:worktree, this does not start SumoCode.
+      host, run the configured worktree setup, and start SumoCode there.
       If name is omitted, a unique wt-<timestamp> name is generated.
 
 OPTIONS
@@ -141,7 +140,7 @@ EXAMPLES
       sumocode .
       sumocode /path/to/project
 
-  Open a named worktree with a plain shell:
+  Open a named worktree and start SumoCode there:
       sumocode -w new-worktree
 
   Start with diagnostics enabled:

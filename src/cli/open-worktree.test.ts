@@ -29,7 +29,7 @@ describe("openWorktree", () => {
 		const stream = output();
 		const code = await openWorktree("new-worktree", {
 			cwd: "/repo",
-			env: { SHELL: "/bin/zsh" },
+			env: { SHELL: "/bin/zsh", SUMOCODE_LAUNCHER: "/repo/bin/sumocode.sh" },
 			terminalHost: baseHost({ kind: "herdr", openWorktreeWorkspace: opened }),
 			create,
 			pi: { exec: vi.fn() } as never,
@@ -44,7 +44,7 @@ describe("openWorktree", () => {
 			baseRef: "HEAD",
 			path: "/repo.sumo-worktrees/sumo__new-worktree",
 			label: "sumo · new-worktree",
-			shellCommand: "pnpm install && exec sumocode",
+			shellCommand: "pnpm install && exec '/repo/bin/sumocode.sh'",
 			sourceCwd: "/repo",
 		});
 	});
@@ -55,7 +55,7 @@ describe("openWorktree", () => {
 		const stream = output();
 		const code = await openWorktree("feature", {
 			cwd: "/repo",
-			env: { SHELL: "/bin/bash", SUMOCODE_WORKTREE_SETUP: "" },
+			env: { SHELL: "/bin/bash", SUMOCODE_LAUNCHER: "/repo/bin/sumocode.sh", SUMOCODE_WORKTREE_SETUP: "" },
 			terminalHost: baseHost({ openCommandInSplit }),
 			create,
 			pi: { exec: vi.fn() } as never,
@@ -67,7 +67,7 @@ describe("openWorktree", () => {
 		expect(create).toHaveBeenCalledWith({ repoRoot: "/repo", task: "feature", baseRef: "HEAD" });
 		expect(openCommandInSplit).toHaveBeenCalledWith(expect.anything(), expect.stringMatching(/right|down/), {
 			cwd: "/repo.sumo-worktrees/sumo__feature",
-			shellCommand: expect.stringMatching(/cd '\\''\/repo\.sumo-worktrees\/sumo__feature'\\'' && exec sumocode/),
+			shellCommand: expect.stringMatching(/cd '\\''\/repo\.sumo-worktrees\/sumo__feature'\\'' && exec '\\''\/repo\/bin\/sumocode\.sh'\\''/),
 		});
 	});
 

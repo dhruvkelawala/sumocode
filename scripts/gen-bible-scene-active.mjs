@@ -125,6 +125,17 @@ function buildChatHTML(cols, toolStyle = "inline") {
 		];
 	}
 
+	if (toolStyle === "mermaid") {
+		messages = [
+			{ role: "USER", body: "show the parser and renderer flow as a diagram." },
+			{ role: "SUMO", time: "11:44", body: "Here is the terminal-native Mermaid view:", diagram: [
+				`<span class="fg-code-border">┌───────┐</span>    <span class="fg-code-border">┌────────┐</span>`,
+				`<span class="fg-code-border">│</span><span class="fg-fg"> Parse </span><span class="fg-code-border">├</span><span class="fg-accent">───▶</span><span class="fg-code-border">│</span><span class="fg-fg"> Render </span><span class="fg-code-border">│</span>`,
+				`<span class="fg-code-border">└───────┘</span>    <span class="fg-code-border">└────────┘</span>`,
+			], footer: "The source stays unchanged in session history." },
+		];
+	}
+
 	if (toolStyle === "skill") {
 		messages = [
 			{ role: "USER", body: "use the frontend-design skill and sketch the command palette polish plan." },
@@ -237,6 +248,11 @@ function buildChatHTML(cols, toolStyle = "inline") {
 				rows.push(bodyRow(rowHTML, codeInner));
 			}
 			rows.push(bodyRow(`<span class="fg-code-border">╰${rep("─", codeInner - 2)}╯</span>`, codeInner));
+		}
+
+		if (msg.diagram) {
+			rows.push(blankRow());
+			for (const line of msg.diagram) rows.push(bodyRow(line, visibleLen(line)));
 		}
 
 		if (msg.skill) {
@@ -483,7 +499,7 @@ function buildScene(variant) {
   body.runtime-target { background: var(--background); }
   body.runtime-target .stage { min-height: 0; align-items: flex-start; justify-content: flex-start; padding: 0; gap: 0; }`
 		: "";
-	const stageLabel = toolStyle === "activity-cards" ? "scene · durable activity cards" : toolStyle === "ledger" ? "scene · active state + ledger tool cards" : toolStyle === "live" ? "scene · active state + bash live-view card" : toolStyle === "code" ? "scene · active state + code block in SUMO chat" : toolStyle === "skill" ? "scene · active state + inline skill pill" : toolStyle === "scroll" ? "scene · active state + scroll/scribe delegation" : toolStyle === "runtime" ? `scene · runtime active-working · ${cols}×${TERM_ROWS} ${sidebarVisible ? "landscape" : "portrait (sidebar hidden)"}` : `scene · active state · ${cols}×${TERM_ROWS} ${sidebarVisible ? "landscape" : "portrait (sidebar hidden)"}`;
+	const stageLabel = toolStyle === "activity-cards" ? "scene · durable activity cards" : toolStyle === "ledger" ? "scene · active state + ledger tool cards" : toolStyle === "live" ? "scene · active state + bash live-view card" : toolStyle === "code" ? "scene · active state + code block in SUMO chat" : toolStyle === "mermaid" ? "scene · Mermaid Unicode diagram in SUMO chat" : toolStyle === "skill" ? "scene · active state + inline skill pill" : toolStyle === "scroll" ? "scene · active state + scroll/scribe delegation" : toolStyle === "runtime" ? `scene · runtime active-working · ${cols}×${TERM_ROWS} ${sidebarVisible ? "landscape" : "portrait (sidebar hidden)"}` : `scene · active state · ${cols}×${TERM_ROWS} ${sidebarVisible ? "landscape" : "portrait (sidebar hidden)"}`;
 	const stageBlurb = toolStyle === "activity-cards"
 		? "Durable keyed Activity cards: running subagent, running terminal, completed terminal, failure, and explicit collapsed/expanded states."
 		: toolStyle === "ledger"
@@ -492,6 +508,8 @@ function buildScene(variant) {
 			? "Option 3B preview inspired by lucasmeijer/pi-bash-live-view: bash renders as a live PTY viewport card with elapsed timer; non-bash tools remain compact."
 			: toolStyle === "code"
 				? "Element 10 preview in context: a framed, line-numbered TypeScript code block embedded inside a SUMO chat message."
+				: toolStyle === "mermaid"
+					? "A Mermaid flowchart rendered as themed Unicode cells inside the retained transcript."
 				: toolStyle === "skill"
 					? "Element 9a preview in context: Pi-minimal inline skill pill inside a SUMO chat message, with no decorative frame."
 					: toolStyle === "scroll"
@@ -556,6 +574,7 @@ for (const v of [
 	{ filename: "scene-active-tool-ledger.html", spec: { ...LANDSCAPE, toolStyle: "ledger" } },
 	{ filename: "scene-active-bash-live-view.html", spec: { ...LANDSCAPE, toolStyle: "live" } },
 	{ filename: "scene-active-code-block.html", spec: { ...LANDSCAPE, toolStyle: "code" } },
+	{ filename: "scene-active-mermaid.html", spec: { ...LANDSCAPE, toolStyle: "mermaid" } },
 	{ filename: "scene-active-skill-pill.html", spec: { ...LANDSCAPE, toolStyle: "skill" } },
 	{ filename: "scene-active-scroll-scribe.html", spec: { ...LANDSCAPE, toolStyle: "scroll" } },
 ]) {

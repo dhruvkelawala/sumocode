@@ -48,6 +48,7 @@ import {
 import type { InlineSelectorHost, InlineSelectorItem } from "./inline-selector.js";
 import { notifyOnError } from "./safe-send.js";
 import { logDiagnostic } from "../runtime/diagnostics.js";
+import type { MermaidRenderingMode } from "../transcript/mermaid.js";
 import { listSessions, type SessionListInfo } from "./session-reader.js";
 import { buildSessionTreeFromEntries, currentTreeSelection, entryTimestampsFromEntries, flattenSessionTree, formatRelativeTime, sessionExcerpt, treeNodeSummary, treeRowTimestamp } from "./session-tree.js";
 import { readAuthoritativeSessionSnapshot } from "./session-snapshot.js";
@@ -87,6 +88,8 @@ export interface RpcHostActionsOptions {
 	readonly createMemoryClient?: MemoryClientFactory;
 	readonly onStateChange?: (state?: RpcHostChromeState) => void;
 	readonly onRenderRequest?: () => void;
+	readonly getMermaidRenderingMode?: () => MermaidRenderingMode;
+	readonly setMermaidRenderingMode?: (mode: MermaidRenderingMode) => void;
 	readonly onExitRequest?: (code: number) => void;
 	/**
 	 * Writes a raw OSC52 clipboard sequence to the real terminal, for `/copy`.
@@ -402,6 +405,8 @@ export class RpcHostActions {
 	private readonly createMemoryClient: MemoryClientFactory;
 	private readonly onStateChange: (state?: RpcHostChromeState) => void;
 	private readonly onRenderRequest: () => void;
+	private readonly getMermaidRenderingMode: () => MermaidRenderingMode;
+	private readonly setMermaidRenderingMode: (mode: MermaidRenderingMode) => void;
 	private readonly onExitRequest: (code: number) => void;
 	private readonly rehydrateTranscript: () => Promise<void>;
 	private readonly beforeSessionChange: () => void;
@@ -428,6 +433,8 @@ export class RpcHostActions {
 		this.createMemoryClient = options.createMemoryClient ?? createRemnicMemoryClient;
 		this.onStateChange = options.onStateChange ?? (() => undefined);
 		this.onRenderRequest = options.onRenderRequest ?? (() => undefined);
+		this.getMermaidRenderingMode = options.getMermaidRenderingMode ?? (() => "streaming");
+		this.setMermaidRenderingMode = options.setMermaidRenderingMode ?? (() => undefined);
 		this.onExitRequest = options.onExitRequest ?? (() => undefined);
 		this.rehydrateTranscript = options.rehydrateTranscript ?? (() => Promise.resolve());
 		this.beforeSessionChange = options.beforeSessionChange ?? (() => undefined);
@@ -729,16 +736,27 @@ export class RpcHostActions {
 			notify(this.notifications, "branch summary in progress", "warning");
 			return;
 		}
+		const currentMermaidMode = this.getMermaidRenderingMode();
 		const selected = await this.inlineSelectors.select("RPC settings", [
 			"Enable auto compaction",
 			"Disable auto compaction",
 			"Enable auto retry",
 			"Disable auto retry",
+			...(["off", "final", "streaming"] as const).map((mode) => ({
+				value: `mermaid:${mode}`,
+				label: `mermaid diagrams: ${mode}`,
+				description: mode === currentMermaidMode ? "current" : undefined,
+			})),
 		]);
 		if (selected === "Enable auto compaction") await this.setAutoCompaction(true);
 		else if (selected === "Disable auto compaction") await this.setAutoCompaction(false);
 		else if (selected === "Enable auto retry") await this.setAutoRetry(true);
 		else if (selected === "Disable auto retry") await this.setAutoRetry(false);
+		else if (selected?.startsWith("mermaid:")) {
+			const mode = selected.slice("mermaid:".length) as MermaidRenderingMode;
+			this.setMermaidRenderingMode(mode);
+			this.onRenderRequest();
+		}
 	}
 
 	public async openLovelyWebConfig(): Promise<void> {

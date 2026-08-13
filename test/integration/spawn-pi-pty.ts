@@ -161,8 +161,10 @@ export function spawnPiPty(options: SpawnPiPtyOptions = {}): SpawnedPiPty {
 
 	child.onData((data) => {
 		output += data;
-		if (output.length > 200_000) output = output.slice(-100_000);
 		settleWaiters();
+		// Retained frames are ANSI-heavy. Keep enough history for a waiter that
+		// starts after the boot marker but before the next stable frame settles.
+		if (output.length > 1_000_000) output = output.slice(-500_000);
 	});
 
 	child.onExit(({ exitCode, signal }) => {

@@ -568,6 +568,26 @@ describe("ChatPager", () => {
 		root.dispose();
 	});
 
+	it("reconciles child heights when a Mermaid mode change reflows the transcript", async () => {
+		const { root, chat, buffer } = await makeChat(90, 8);
+		chat.addViewModel({
+			id: "diagram",
+			role: "sumo",
+			displayName: "SUMO",
+			blocks: [{ type: "code", lang: "mermaid", source: "flowchart LR\nA[Start] --> B[Finish]" }],
+		});
+		buffer();
+		const notify = vi.spyOn(chat.scrollBox, "notifyChildrenResized");
+
+		chat.setMermaidRenderingMode("off");
+
+		expect(notify).toHaveBeenCalledTimes(1);
+		expect(notify.mock.calls[0]?.[0]).toEqual([
+			expect.objectContaining({ previousHeight: expect.any(Number), nextHeight: expect.any(Number), top: expect.any(Number) }),
+		]);
+		root.dispose();
+	});
+
 	it("replacing the last Activity view model preserves scroll and unread state", async () => {
 		const { root, chat, buffer } = await makeChat(48, 5);
 		for (let index = 0; index < 10; index += 1) chat.addMessage("sumo", `message ${index}`);

@@ -40,6 +40,10 @@ export interface TranscriptControllerChatSink {
 	replaceViewModelAt(index: number, message: ChatMessageViewModel): unknown;
 	/** Replace the pager's current last message in place (scroll/read state preserved). */
 	replaceLastWithViewModel(message: ChatMessageViewModel, sourceIndex?: number): unknown;
+	/** Mark the current last message as an in-flight assistant draft. */
+	beginStreaming(): void;
+	/** Settle the current assistant draft after its terminal lifecycle event. */
+	endStreaming(): void;
 }
 
 export interface TranscriptControllerOptions {
@@ -425,13 +429,22 @@ export class TranscriptController {
 			}
 		}
 
-		return this.publish(this.viewModel());
+		const transcript = this.publish(this.viewModel());
+		const messageRole = asRecord(eventMessage(record))?.role;
+		if ((record.type === "message_start" || record.type === "message_update") && messageRole === "assistant") {
+			this.options.chat?.beginStreaming();
+		} else if ((record.type === "message_end" && messageRole === "assistant") || record.type === "agent_end") {
+			this.options.chat?.endStreaming();
+		}
+		return transcript;
 	}
 
 	public viewModel(): TranscriptViewModel {
 		let messages = [...this.ensureCommittedViewModels()];
 		if (this.draftMessage !== undefined) {
-			const message = this.mapper.messageFromPiMessage(this.draftMessage, messages.length);
+			const message = this.mapper.messageFromPiMessage(this.draftMessage, messages.length, {
+				includeOpenMermaidFence: true,
+			});
 			if (message) messages = appendOrFoldTranscriptMessage(messages, message);
 		}
 

@@ -32,6 +32,7 @@ import { RetainedShellRenderer } from "../shell/retained-shell-renderer.js";
 import type { TranscriptControllerChatSink } from "../transcript/controller.js";
 import type { ActivityPresentationSnapshot } from "../transcript/activity-view-model.js";
 import type { TranscriptViewModel } from "../transcript/view-model.js";
+import type { MermaidRenderingMode } from "../transcript/mermaid.js";
 import { ChatPager } from "../widgets/chat-pager.js";
 import type { KeyEvent } from "../input/key-router.js";
 import type { MouseEvent } from "../input/mouse.js";
@@ -45,6 +46,7 @@ export interface RpcShellAdapterOptions {
 	readonly initialState: RpcHostChromeState;
 	readonly initialTranscript: TranscriptViewModel;
 	readonly initialActivities?: ActivityPresentationSnapshot;
+	readonly mermaidRenderingMode?: MermaidRenderingMode;
 	readonly onActivityExpansionChange?: (id: string, expanded: boolean) => void;
 	readonly onActivityExpansionMigration?: (previousId: string, nextId: string, expanded: boolean) => void;
 	readonly onAllActivityExpansionChange?: (expanded: boolean, activityIds: readonly string[]) => void;
@@ -173,6 +175,7 @@ export class RpcShellAdapter {
 			if (this.wasWorkingIndicatorBusy) this.startWorkingIndicatorTimer();
 		});
 		this.chat = ChatPager.create(yoga, undefined, {
+			mermaidRenderingMode: options.mermaidRenderingMode,
 			onActivityExpansionChange: options.onActivityExpansionChange,
 			onActivityExpansionMigration: options.onActivityExpansionMigration,
 			onAllActivityExpansionChange: options.onAllActivityExpansionChange,
@@ -308,6 +311,10 @@ export class RpcShellAdapter {
 	 */
 	public setToolExpansion(expanded: boolean): void {
 		this.chat.setToolExpansion(expanded);
+	}
+
+	public setMermaidRenderingMode(mode: MermaidRenderingMode): void {
+		this.chat.setMermaidRenderingMode(mode);
 	}
 
 	public toggleActivityExpansion(): boolean {

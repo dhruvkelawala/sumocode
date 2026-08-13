@@ -559,9 +559,17 @@ export class ChatViewportController {
 			this.lastAssistantText += delta;
 			return;
 		}
+		const lastIndex = this.liveAssistantBlocks.length - 1;
 		const lastBlock = this.liveAssistantBlocks.at(-1);
 		if (lastBlock?.type === "markdown") {
-			this.liveAssistantBlocks = this.liveAssistantBlocks.map((block, index) => index === this.liveAssistantBlocks.length - 1 && block.type === "markdown" ? { type: "markdown", text: block.text + delta } : block);
+			const parsed = markdownAndCodeBlocksFromText(lastBlock.text + delta, { includeOpenMermaidFence: true });
+			this.liveAssistantBlocks = [...this.liveAssistantBlocks.slice(0, lastIndex), ...parsed];
+		} else if (lastBlock?.type === "code" && lastBlock.open) {
+			const parsed = markdownAndCodeBlocksFromText(
+				`\`\`\`${lastBlock.lang}\n${lastBlock.source}${delta}`,
+				{ includeOpenMermaidFence: true },
+			);
+			this.liveAssistantBlocks = [...this.liveAssistantBlocks.slice(0, lastIndex), ...parsed];
 		} else {
 			this.liveAssistantBlocks = [...this.liveAssistantBlocks, { type: "markdown", text: delta }];
 		}

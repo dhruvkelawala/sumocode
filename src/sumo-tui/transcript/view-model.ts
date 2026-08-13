@@ -9,6 +9,7 @@ import {
 import { renderCompactActivityPill } from "./activity-renderer.js";
 import { appendOrFoldTranscriptMessage } from "./activity-fold.js";
 import { expandKey } from "./expand-key.js";
+import { isMermaidLanguage } from "./mermaid.js";
 
 export type ChatMessageRole = "user" | "sumo" | "system";
 
@@ -54,7 +55,7 @@ export interface DelegationViewModel {
 export type ChatBlock =
 	| { readonly type: "markdown"; readonly text: string }
 	| { readonly type: "thinking"; readonly text: string; readonly hidden?: boolean }
-	| { readonly type: "code"; readonly lang: string; readonly source: string; readonly collapsed?: boolean }
+	| { readonly type: "code"; readonly lang: string; readonly source: string; readonly collapsed?: boolean; readonly open?: boolean }
 	| { readonly type: "image"; readonly data: string; readonly mime: string; readonly filename?: string }
 	| { readonly type: "activity"; readonly activity: ActivitySnapshot }
 	| { readonly type: "skill"; readonly name: string; readonly expanded: boolean; readonly content?: string }
@@ -75,6 +76,11 @@ export interface TranscriptViewModel {
 }
 
 const FENCED_CODE_PATTERN = /```([^\n`]*)\n?([\s\S]*?)```/g;
+const OPEN_CODE_PATTERN = /```([^\n`]*)\n?([\s\S]*)$/;
+
+export interface MarkdownBlockParseOptions {
+	readonly includeOpenMermaidFence?: boolean;
+}
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
 	return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : undefined;
@@ -140,7 +146,7 @@ function normalizeDelegationStatus(value: unknown): DelegationStatus {
 	return "running";
 }
 
-export function markdownAndCodeBlocksFromText(text: string): ChatBlock[] {
+export function markdownAndCodeBlocksFromText(text: string, options: MarkdownBlockParseOptions = {}): ChatBlock[] {
 	if (text.length === 0) return [];
 
 	const blocks: ChatBlock[] = [];
@@ -158,6 +164,16 @@ export function markdownAndCodeBlocksFromText(text: string): ChatBlock[] {
 	}
 
 	const after = text.slice(cursor);
+	if (options.includeOpenMermaidFence) {
+		const open = OPEN_CODE_PATTERN.exec(after);
+		const lang = (open?.[1] ?? "").trim();
+		if (open?.index !== undefined && isMermaidLanguage(lang)) {
+			const before = after.slice(0, open.index);
+			if (before.length > 0) blocks.push({ type: "markdown", text: before });
+			blocks.push({ type: "code", lang, source: open[2] ?? "", open: true });
+			return blocks;
+		}
+	}
 	if (after.length > 0) blocks.push({ type: "markdown", text: after });
 	return blocks.length > 0 ? blocks : [{ type: "markdown", text }];
 }
@@ -484,12 +500,16 @@ function delegationBlockFromRecord(record: Record<string, unknown>): ChatBlock {
 	};
 }
 
-function blocksFromContentPart(part: unknown, scope: { readonly messageId: string; readonly blockIndex: number }): ChatBlock[] {
+function blocksFromContentPart(
+	part: unknown,
+	scope: { readonly messageId: string; readonly blockIndex: number },
+	options: MarkdownBlockParseOptions,
+): ChatBlock[] {
 	const record = asRecord(part);
 	if (!record) return [];
 	switch (record.type) {
 		case "text":
-			return markdownAndCodeBlocksFromText(asString(record.text) ?? "");
+			return markdownAndCodeBlocksFromText(asString(record.text) ?? "", options);
 		case "thinking":
 		case "reasoning":
 		case "thinking_delta":
@@ -534,13 +554,13 @@ function blocksFromContentPart(part: unknown, scope: { readonly messageId: strin
 	}
 }
 
-function blocksFromContent(content: unknown, messageScope: string): ChatBlock[] {
-	if (typeof content === "string") return markdownAndCodeBlocksFromText(content);
+function blocksFromContent(content: unknown, messageScope: string, options: MarkdownBlockParseOptions): ChatBlock[] {
+	if (typeof content === "string") return markdownAndCodeBlocksFromText(content, options);
 	if (!Array.isArray(content)) return [];
-	return content.flatMap((part, blockIndex) => blocksFromContentPart(part, { messageId: messageScope, blockIndex }));
+	return content.flatMap((part, blockIndex) => blocksFromContentPart(part, { messageId: messageScope, blockIndex }, options));
 }
 
-function blocksFromMessage(record: Record<string, unknown>, messageScope: string): ChatBlock[] {
+function blocksFromMessage(record: Record<string, unknown>, messageScope: string, options: MarkdownBlockParseOptions): ChatBlock[] {
 	if (record.role === "branchSummary") return [summaryBlockFromRecord(record, "branch")];
 	if (record.role === "compactionSummary") return [summaryBlockFromRecord(record, "compaction")];
 	if (record.role === "bashExecution") {
@@ -564,7 +584,7 @@ function blocksFromMessage(record: Record<string, unknown>, messageScope: string
 		if (record.customType === "terminal-result") return [terminalResultBlockFromRecord(record)];
 		// Unrecognized custom type: preserve provenance (mirrors Pi's CustomMessageComponent default).
 		const labeled: ChatBlock[] = [{ type: "markdown", text: `[${record.customType}]` }];
-		labeled.push(...blocksFromContent(record.content, messageScope));
+		labeled.push(...blocksFromContent(record.content, messageScope, options));
 		return labeled;
 	}
 
@@ -585,7 +605,7 @@ function blocksFromMessage(record: Record<string, unknown>, messageScope: string
 		if (display !== text) return markdownAndCodeBlocksFromText(display);
 	}
 
-	const blocks = blocksFromContent(record.content, messageScope);
+	const blocks = blocksFromContent(record.content, messageScope, options);
 	if (blocks.length > 0) return blocks;
 	const authFailureHint = authFailureHintFromMessage(record);
 	if (authFailureHint) return [{ type: "markdown", text: authFailureHint }];
@@ -593,14 +613,18 @@ function blocksFromMessage(record: Record<string, unknown>, messageScope: string
 	return errorMessage ? [{ type: "markdown", text: errorMessage }] : [];
 }
 
-export function chatMessageViewModelFromPiMessage(message: unknown, index = 0): ChatMessageViewModel | undefined {
+export function chatMessageViewModelFromPiMessage(
+	message: unknown,
+	index = 0,
+	options: MarkdownBlockParseOptions = {},
+): ChatMessageViewModel | undefined {
 	const record = asRecord(message);
 	if (!record) return undefined;
 	if (record.role === "custom" && record.display === false) return undefined;
 
 	const role = roleFromMessage(record);
 	const id = messageId(record, index);
-	const blocks = blocksFromMessage(record, id);
+	const blocks = blocksFromMessage(record, id, options);
 	return {
 		id,
 		role,
@@ -612,7 +636,7 @@ export function chatMessageViewModelFromPiMessage(message: unknown, index = 0): 
 
 export interface TranscriptViewModelMapper {
 	reset(): void;
-	messageFromPiMessage(message: unknown, index?: number): ChatMessageViewModel | undefined;
+	messageFromPiMessage(message: unknown, index?: number, options?: MarkdownBlockParseOptions): ChatMessageViewModel | undefined;
 	transcriptFromSessionContext(sessionContext: unknown): TranscriptViewModel;
 }
 
@@ -622,11 +646,11 @@ export function createTranscriptViewModelMapper(): TranscriptViewModelMapper {
 		reset(): void {
 			taskMetadata.clear();
 		},
-		messageFromPiMessage(message: unknown, index = 0): ChatMessageViewModel | undefined {
+		messageFromPiMessage(message: unknown, index = 0, options: MarkdownBlockParseOptions = {}): ChatMessageViewModel | undefined {
 			const record = asRecord(message);
 			if (!record) return undefined;
 			const enriched = enrichTaskResultsFromCache(record, taskMetadata);
-			const viewModel = chatMessageViewModelFromPiMessage(enriched, index);
+			const viewModel = chatMessageViewModelFromPiMessage(enriched, index, options);
 			collectTaskMetadataFromRecord(enriched, taskMetadata);
 			return viewModel;
 		},
@@ -657,7 +681,9 @@ export function chatMessageViewModelToPlainText(message: ChatMessageViewModel): 
 				case "thinking":
 					return block.hidden ? "Thinking..." : block.text;
 				case "code":
-					return `\`\`\`${block.lang}\n${block.source}\n\`\`\``;
+					return block.open
+						? `\`\`\`${block.lang}\n${block.source}`
+						: `\`\`\`${block.lang}\n${block.source}\n\`\`\``;
 				case "image":
 					return `[image] ${block.mime}`;
 				case "activity":

@@ -15,6 +15,7 @@ import {
 } from "../transcript/activity-fold.js";
 import { activityCardViewModel } from "../transcript/activity-view-model.js";
 import { chatMessageViewModelToPlainText, type ChatBlock, type ChatMessageViewModel } from "../transcript/view-model.js";
+import type { MermaidRenderingMode } from "../transcript/mermaid.js";
 import { ChatMessage, type ChatMessageOptions, type ChatMessageRole } from "./chat-message.js";
 import { ScrolledUpBanner } from "./scrolled-up-banner.js";
 import { ScrollBox, type ScrollBoxStateChange } from "./scrollbox.js";
@@ -29,6 +30,7 @@ export interface ChatPagerOptions {
 	readonly maxRenderedMessages?: number;
 	readonly stickyBottom?: boolean;
 	readonly primaryAgentName?: string;
+	readonly mermaidRenderingMode?: MermaidRenderingMode;
 	readonly maxActivityBookkeepingEntries?: number;
 	readonly onActivityExpansionChange?: (id: string, expanded: boolean) => void;
 	readonly onActivityExpansionMigration?: (previousId: string, nextId: string, expanded: boolean) => void;
@@ -140,7 +142,7 @@ export class ChatPager extends SumoNode {
 	private readonly yoga: Yoga;
 	private readonly renderControls: ChatPagerRenderControls;
 	private readonly maxRenderedMessages: number;
-	private readonly chatMessageOptions: ChatMessageOptions;
+	private chatMessageOptions: ChatMessageOptions;
 	private readonly maxActivityBookkeepingEntries: number;
 	private readonly onActivityExpansionChange: ((id: string, expanded: boolean) => void) | undefined;
 	private readonly onActivityExpansionMigration: ((previousId: string, nextId: string, expanded: boolean) => void) | undefined;
@@ -178,7 +180,10 @@ export class ChatPager extends SumoNode {
 		this.yoga = yoga;
 		this.renderControls = options.renderControls ?? { scheduleRender: noop, setStreamingMode: noop };
 		this.maxRenderedMessages = Math.max(1, Math.round(options.maxRenderedMessages ?? DEFAULT_MAX_RENDERED_MESSAGES));
-		this.chatMessageOptions = { primaryAgentName: options.primaryAgentName };
+		this.chatMessageOptions = {
+			primaryAgentName: options.primaryAgentName,
+			mermaidRenderingMode: options.mermaidRenderingMode ?? "streaming",
+		};
 		this.maxActivityBookkeepingEntries = Math.max(1, Math.floor(options.maxActivityBookkeepingEntries ?? ACTIVITY_UI_MAX_EXPANSION_ENTRIES));
 		this.onActivityExpansionChange = options.onActivityExpansionChange;
 		this.onActivityExpansionMigration = options.onActivityExpansionMigration;
@@ -319,6 +324,7 @@ export class ChatPager extends SumoNode {
 	}
 
 	public beginStreaming(): void {
+		this.getLastMessage()?.setStreaming(true);
 		this.renderControls.setStreamingMode(true);
 	}
 
@@ -480,7 +486,18 @@ export class ChatPager extends SumoNode {
 	}
 
 	public endStreaming(): void {
+		this.getLastMessage()?.setStreaming(false);
 		this.renderControls.setStreamingMode(false);
+		this.scheduleRender();
+	}
+
+	public setMermaidRenderingMode(mode: MermaidRenderingMode): void {
+		if (this.chatMessageOptions.mermaidRenderingMode === mode) return;
+		this.chatMessageOptions = { ...this.chatMessageOptions, mermaidRenderingMode: mode };
+		for (const message of this.archivedMessages) message.setMermaidRenderingMode(mode);
+		this.applyMessageMutations((message) => message.setMermaidRenderingMode(mode));
+		this.placeholder?.setMermaidRenderingMode(mode);
+		this.scheduleRender();
 	}
 
 	public clearMessages(): void {

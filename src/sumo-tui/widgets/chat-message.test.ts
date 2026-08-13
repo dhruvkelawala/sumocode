@@ -153,6 +153,90 @@ describe("ChatMessage", () => {
 		root.dispose();
 	});
 
+	it("renders supported Mermaid code blocks as Cathedral Unicode diagrams", async () => {
+		const yoga = await loadYoga();
+		const message = ChatMessage.create(
+			yoga,
+			"sumo",
+			"",
+			undefined,
+			FIXED_TIME,
+			[{ type: "code", lang: "Mermaid theme=dark", source: "flowchart LR\n A[Parse] --> B[Render]" }],
+		);
+
+		const plain = renderRows(message, 48).map(stripAnsi).join("\n");
+		expect(plain).toContain("┌───────┐    ┌────────┐");
+		expect(plain).toContain("│ Parse ├───▶│ Render │");
+		expect(plain).not.toContain("mermaid theme=dark");
+		message.dispose();
+	});
+
+	it("uses the Cathedral code fallback when Mermaid rendering is off or too wide", async () => {
+		const yoga = await loadYoga();
+		const source = "flowchart LR\n A[Parse] --> B[Render]";
+		const off = ChatMessage.create(yoga, "sumo", "", undefined, FIXED_TIME, [{ type: "code", lang: "mermaid", source }], { mermaidRenderingMode: "off" });
+		const narrow = ChatMessage.create(yoga, "sumo", "", undefined, FIXED_TIME, [{ type: "code", lang: "mermaid", source }]);
+
+		expect(renderRows(off, 48).map(stripAnsi).join("\n")).toContain("mermaid");
+		expect(renderRows(narrow, 20).map(stripAnsi).join("\n")).toContain("mermaid");
+		off.dispose();
+		narrow.dispose();
+	});
+
+	it("uses the code fallback for Mermaid source over the row limit", async () => {
+		const yoga = await loadYoga();
+		const source = ["flowchart TD", ...Array.from({ length: 21 }, (_, index) => `N${index} --> N${index + 1}`)].join("\n");
+		const message = ChatMessage.create(
+			yoga,
+			"sumo",
+			"",
+			undefined,
+			FIXED_TIME,
+			[{ type: "code", lang: "mermaid", source }],
+		);
+
+		expect(renderRows(message, 90).map(stripAnsi).join("\n")).toContain("mermaid");
+		message.dispose();
+	});
+
+	it("defers final-mode Mermaid art until streaming settles", async () => {
+		const yoga = await loadYoga();
+		const message = ChatMessage.create(
+			yoga,
+			"sumo",
+			"",
+			undefined,
+			FIXED_TIME,
+			[{ type: "code", lang: "mermaid", source: "flowchart LR\n A --> B" }],
+			{ mermaidRenderingMode: "final" },
+		);
+		message.setStreaming(true);
+		expect(renderRows(message, 48).map(stripAnsi).join("\n")).toContain("mermaid");
+
+		message.setStreaming(false);
+		const settled = renderRows(message, 48).map(stripAnsi).join("\n");
+		expect(settled).toContain("┌───┐");
+		expect(settled).not.toContain("mermaid");
+		message.dispose();
+	});
+
+	it("preserves settled Mermaid source and reports parser warnings", async () => {
+		const yoga = await loadYoga();
+		const message = ChatMessage.create(
+			yoga,
+			"sumo",
+			"",
+			undefined,
+			FIXED_TIME,
+			[{ type: "code", lang: "mermaid", source: "flowchart LR\n A[Start --> B" }],
+		);
+
+		const plain = renderRows(message, 72).map(stripAnsi).join("\n");
+		expect(plain).toContain("mermaid");
+		expect(plain).toContain("mermaid diagram not rendered:");
+		message.dispose();
+	});
+
 	it("semantic selection excludes blank gutters and collapse chrome from wrapped plaintext code", async () => {
 		const yoga = await loadYoga();
 		const root = new SumoNode(yoga.Node.create());

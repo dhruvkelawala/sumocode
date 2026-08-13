@@ -223,6 +223,30 @@ const FIXTURES = {
 			],
 		},
 	},
+	"mermaid-diagram": {
+		transcript: {
+			messages: [
+				{
+					id: "u1",
+					role: "user",
+					displayName: "USER",
+					timestamp: FIXTURE_TIMES.userOne,
+					blocks: [{ type: "markdown", text: "show the parser and renderer flow as a diagram." }],
+				},
+				{
+					id: "s1",
+					role: "sumo",
+					displayName: "SUMO",
+					timestamp: FIXTURE_TIMES.sumoOne,
+					blocks: [
+						{ type: "markdown", text: "Here is the terminal-native Mermaid view:" },
+						{ type: "code", lang: "mermaid", source: "flowchart LR\n A[Parse] --> B[Render]" },
+						{ type: "markdown", text: "The source stays unchanged in session history." },
+					],
+				},
+			],
+		},
+	},
 	"track-b-transcript": {
 		transcript: {
 			messages: [

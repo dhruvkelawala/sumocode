@@ -290,6 +290,9 @@ function setup(options: {
 	readonly sessionFile?: string;
 	readonly changelogRoot?: string;
 	readonly onStateChange?: (state?: RpcHostChromeState) => void;
+	readonly mermaidMode?: "off" | "final" | "streaming";
+	readonly onMermaidModeChange?: (mode: "off" | "final" | "streaming") => void;
+	readonly onRenderRequest?: () => void;
 	readonly beforeTreeNavigation?: (request: RpcTreeNavigationRequest) => Promise<void>;
 	readonly reconcileTreeNavigation?: (outcome?: RpcTreeNavigationOutcome) => Promise<void>;
 	readonly setTreeNavigationBusy?: (busy: boolean) => void;
@@ -343,6 +346,9 @@ function setup(options: {
 			stateChanges.push(state);
 			options.onStateChange?.(state);
 		},
+		onRenderRequest: options.onRenderRequest,
+		getMermaidRenderingMode: () => options.mermaidMode ?? "streaming",
+		setMermaidRenderingMode: (mode) => options.onMermaidModeChange?.(mode),
 		rehydrateTranscript,
 		beforeTreeNavigation: options.beforeTreeNavigation,
 		reconcileTreeNavigation: options.reconcileTreeNavigation,
@@ -472,6 +478,28 @@ describe("RpcHostActions", () => {
 			undefined,
 		]);
 		expect(notifications).toContainEqual({ message: "auto compaction disabled", level: "info" });
+	});
+
+	it("persists Mermaid mode through RPC settings and requests an immediate repaint", async () => {
+		const changes: string[] = [];
+		let renders = 0;
+		const { actions, inlineSelectors } = setup({
+			mermaidMode: "final",
+			onMermaidModeChange: (mode) => changes.push(mode),
+			onRenderRequest: () => { renders += 1; },
+		});
+
+		const settings = actions.handleSubmittedText("/settings");
+		await flush();
+		const rendered = inlineSelectors.render(80).join("\n").replace(/\u001b\[[0-9;]*m/g, "");
+		expect(rendered).toContain("mermaid diagrams: final");
+		expect(rendered).toContain("current");
+		for (let index = 0; index < 6; index += 1) inlineSelectors.handleInput(SELECTOR_DOWN);
+		inlineSelectors.handleInput(SELECTOR_ENTER);
+		await settings;
+
+		expect(changes).toEqual(["streaming"]);
+		expect(renders).toBe(1);
 	});
 
 	it("does not swallow filesystem paths as unknown commands (image-only submits)", async () => {

@@ -231,6 +231,35 @@ describe("ChatViewportController", () => {
 		root.dispose();
 	});
 
+	it("promotes only an open streaming Mermaid fence into a live code block", async () => {
+		const { root, chat, controller } = await makeController();
+		controller.handleAgentEvent({ type: "message_start", message: { role: "assistant", content: "" } });
+		controller.handleAgentEvent({
+			type: "message_update",
+			message: { role: "assistant", content: "```mer" },
+			assistantMessageEvent: { type: "text_delta", delta: "```mer" },
+		});
+		controller.handleAgentEvent({
+			type: "message_update",
+			message: { role: "assistant", content: "```mermaid\nflowchart LR\n A --> B" },
+			assistantMessageEvent: { type: "text_delta", delta: "maid\nflowchart LR\n A --> B" },
+		});
+
+		expect(chat.getRenderedMessages()[0]?.toSnapshot().blocks).toEqual([
+			{ type: "code", lang: "mermaid", source: "flowchart LR\n A --> B", open: true },
+		]);
+
+		controller.handleAgentEvent({
+			type: "message_update",
+			message: { role: "assistant", content: "```mermaid\nflowchart LR\n A --> B\n```" },
+			assistantMessageEvent: { type: "text_delta", delta: "\n```" },
+		});
+		expect(chat.getRenderedMessages()[0]?.toSnapshot().blocks).toEqual([
+			{ type: "code", lang: "mermaid", source: "flowchart LR\n A --> B" },
+		]);
+		root.dispose();
+	});
+
 	it("streams thinking deltas into the active SUMO message", async () => {
 		const { root, chat, controller } = await makeController();
 

@@ -23,7 +23,7 @@ function baseHost(overrides: Partial<TerminalHost>): TerminalHost {
 }
 
 describe("openWorktree", () => {
-	it("uses a native worktree workspace and opens a plain shell instead of SumoCode", async () => {
+	it("uses a native worktree workspace and starts SumoCode after setup", async () => {
 		const opened = vi.fn(async () => ({ ok: true as const, pane: { host: "herdr" as const, paneId: "p1" } }));
 		const create = vi.fn();
 		const stream = output();
@@ -44,12 +44,12 @@ describe("openWorktree", () => {
 			baseRef: "HEAD",
 			path: "/repo.sumo-worktrees/sumo__new-worktree",
 			label: "sumo · new-worktree",
-			shellCommand: "pnpm install && exec '/bin/zsh' -l",
+			shellCommand: "pnpm install && exec sumocode",
 			sourceCwd: "/repo",
 		});
 	});
 
-	it("creates a worktree and opens a shell split on hosts without native workspaces", async () => {
+	it("creates a worktree and starts SumoCode in a split on hosts without native workspaces", async () => {
 		const openCommandInSplit = vi.fn(async () => ({ ok: true as const, pane: { host: "cmux" as const, paneId: "p1" } }));
 		const create = vi.fn(async () => ({ ok: true as const, path: "/repo.sumo-worktrees/sumo__feature", branch: "sumo/feature", baseRef: "HEAD" }));
 		const stream = output();
@@ -67,7 +67,7 @@ describe("openWorktree", () => {
 		expect(create).toHaveBeenCalledWith({ repoRoot: "/repo", task: "feature", baseRef: "HEAD" });
 		expect(openCommandInSplit).toHaveBeenCalledWith(expect.anything(), expect.stringMatching(/right|down/), {
 			cwd: "/repo.sumo-worktrees/sumo__feature",
-			shellCommand: expect.stringMatching(/^(?!.*sumocode).*exec '\\''\/bin\/bash'\\'' -l/),
+			shellCommand: expect.stringMatching(/cd '\\''\/repo\.sumo-worktrees\/sumo__feature'\\'' && exec sumocode/),
 		});
 	});
 

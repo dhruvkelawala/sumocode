@@ -9,6 +9,7 @@ import {
 import { renderCompactActivityPill } from "./activity-renderer.js";
 import { appendOrFoldTranscriptMessage } from "./activity-fold.js";
 import { expandKey } from "./expand-key.js";
+import { isMermaidLanguage } from "./mermaid.js";
 
 export type ChatMessageRole = "user" | "sumo" | "system";
 
@@ -54,7 +55,7 @@ export interface DelegationViewModel {
 export type ChatBlock =
 	| { readonly type: "markdown"; readonly text: string }
 	| { readonly type: "thinking"; readonly text: string; readonly hidden?: boolean }
-	| { readonly type: "code"; readonly lang: string; readonly source: string; readonly collapsed?: boolean }
+	| { readonly type: "code"; readonly lang: string; readonly source: string; readonly collapsed?: boolean; readonly open?: boolean }
 	| { readonly type: "image"; readonly data: string; readonly mime: string; readonly filename?: string }
 	| { readonly type: "activity"; readonly activity: ActivitySnapshot }
 	| { readonly type: "skill"; readonly name: string; readonly expanded: boolean; readonly content?: string }
@@ -75,6 +76,11 @@ export interface TranscriptViewModel {
 }
 
 const FENCED_CODE_PATTERN = /```([^\n`]*)\n?([\s\S]*?)```/g;
+const OPEN_CODE_PATTERN = /```([^\n`]*)\n?([\s\S]*)$/;
+
+export interface MarkdownBlockParseOptions {
+	readonly includeOpenMermaidFence?: boolean;
+}
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
 	return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : undefined;
@@ -140,7 +146,7 @@ function normalizeDelegationStatus(value: unknown): DelegationStatus {
 	return "running";
 }
 
-export function markdownAndCodeBlocksFromText(text: string): ChatBlock[] {
+export function markdownAndCodeBlocksFromText(text: string, options: MarkdownBlockParseOptions = {}): ChatBlock[] {
 	if (text.length === 0) return [];
 
 	const blocks: ChatBlock[] = [];
@@ -158,6 +164,16 @@ export function markdownAndCodeBlocksFromText(text: string): ChatBlock[] {
 	}
 
 	const after = text.slice(cursor);
+	if (options.includeOpenMermaidFence) {
+		const open = OPEN_CODE_PATTERN.exec(after);
+		const lang = (open?.[1] ?? "").trim();
+		if (open?.index !== undefined && isMermaidLanguage(lang)) {
+			const before = after.slice(0, open.index);
+			if (before.length > 0) blocks.push({ type: "markdown", text: before });
+			blocks.push({ type: "code", lang, source: open[2] ?? "", open: true });
+			return blocks;
+		}
+	}
 	if (after.length > 0) blocks.push({ type: "markdown", text: after });
 	return blocks.length > 0 ? blocks : [{ type: "markdown", text }];
 }
@@ -657,7 +673,9 @@ export function chatMessageViewModelToPlainText(message: ChatMessageViewModel): 
 				case "thinking":
 					return block.hidden ? "Thinking..." : block.text;
 				case "code":
-					return `\`\`\`${block.lang}\n${block.source}\n\`\`\``;
+					return block.open
+						? `\`\`\`${block.lang}\n${block.source}`
+						: `\`\`\`${block.lang}\n${block.source}\n\`\`\``;
 				case "image":
 					return `[image] ${block.mime}`;
 				case "activity":

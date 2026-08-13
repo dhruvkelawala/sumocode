@@ -4,7 +4,7 @@ import { defaultActivityStateRoot } from "../../activity/persistence.js";
 import { FileActivityStore, type ActivityStoreSnapshot } from "../../activity/store.js";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { createRequire } from "node:module";
-import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
+import { SettingsManager, type AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import { getCapabilities, setCapabilities } from "@earendil-works/pi-tui";
 import { SUMOCODE_RELOAD_EXIT_CODE } from "../../commands/reload.js";
 import { containsCtrlCToken, isEscapeInput } from "../input/shared-input-router.js";
@@ -871,6 +871,7 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 	}
 	const root = hostRoot(env);
 	const cwd = hostCwd(env);
+	const settingsManager = SettingsManager.create(cwd);
 	const stateRoot = defaultActivityStateRoot(env);
 	const chromeCacheTestDelayMs = env.NODE_ENV === "test"
 		? Number.parseInt(env.SUMOCODE_TEST_CHROME_CACHE_DELAY_MS ?? "0", 10)
@@ -1553,6 +1554,11 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 		editorText: editor,
 		onStateChange: pushStateAndCacheChrome,
 		onRenderRequest: requestRender,
+		getMermaidRenderingMode: () => settingsManager.getMermaidRenderingMode(),
+		setMermaidRenderingMode: (mode) => {
+			settingsManager.setMermaidRenderingMode(mode);
+			runtime?.setMermaidRenderingMode(mode);
+		},
 		onExitRequest: (code) => requestHostExit(code),
 		rehydrateTranscript,
 		beforeSessionChange: beginSessionChange,
@@ -1751,6 +1757,7 @@ export async function runRpcHost(options: RpcHostMainOptions = {}): Promise<numb
 			initialState,
 			initialTranscript,
 			initialActivities: activityPresentation(latestActivitySnapshot),
+			mermaidRenderingMode: settingsManager.getMermaidRenderingMode(),
 			onActivityExpansionChange: (id, expanded) => activityStore.setExpanded(id, expanded),
 			onActivityExpansionMigration: (previousId, nextId, expanded) => activityStore.migrateExpanded(previousId, nextId, expanded),
 			onAllActivityExpansionChange: (expanded, ids) => activityStore.setAllExpanded(expanded, ids),

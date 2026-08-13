@@ -7,6 +7,7 @@ import { defaultTerminalSessionOwner, type TerminalOutput, type TerminalPalette,
 import type { TranscriptControllerChatSink } from "../transcript/controller.js";
 import type { ActivityPresentationSnapshot } from "../transcript/activity-view-model.js";
 import type { TranscriptViewModel } from "../transcript/view-model.js";
+import type { MermaidRenderingMode } from "../transcript/mermaid.js";
 import { containsCtrlCToken, isAppleTerminalSession, isEscapeInput, normalizeAppleTerminalInput, SharedInputRouter } from "../input/shared-input-router.js";
 import { RpcShellAdapter } from "./shell-adapter.js";
 import type { RpcHostChromeState } from "./state.js";
@@ -53,6 +54,7 @@ export interface RpcHostRuntimeOptions {
 	readonly initialState?: RpcHostChromeState;
 	readonly initialTranscript?: TranscriptViewModel;
 	readonly initialActivities?: ActivityPresentationSnapshot;
+	readonly mermaidRenderingMode?: MermaidRenderingMode;
 	readonly onActivityExpansionChange?: (id: string, expanded: boolean) => void;
 	readonly onActivityExpansionMigration?: (previousId: string, nextId: string, expanded: boolean) => void;
 	readonly onAllActivityExpansionChange?: (expanded: boolean, activityIds: readonly string[]) => void;
@@ -184,6 +186,7 @@ export class RpcHostRuntime {
 	private state: RpcHostChromeState;
 	private transcript: TranscriptViewModel;
 	private activities: ActivityPresentationSnapshot;
+	private mermaidRenderingMode: MermaidRenderingMode;
 	private readonly onActivityExpansionChange: ((id: string, expanded: boolean) => void) | undefined;
 	private readonly onActivityExpansionMigration: ((previousId: string, nextId: string, expanded: boolean) => void) | undefined;
 	private readonly onAllActivityExpansionChange: ((expanded: boolean, activityIds: readonly string[]) => void) | undefined;
@@ -235,6 +238,7 @@ export class RpcHostRuntime {
 		this.state = options.initialState ?? FALLBACK_STATE;
 		this.transcript = options.initialTranscript ?? EMPTY_TRANSCRIPT;
 		this.activities = options.initialActivities ?? { activities: [], expansion: {} };
+		this.mermaidRenderingMode = options.mermaidRenderingMode ?? "streaming";
 		this.onActivityExpansionChange = options.onActivityExpansionChange;
 		this.onActivityExpansionMigration = options.onActivityExpansionMigration;
 		this.onAllActivityExpansionChange = options.onAllActivityExpansionChange;
@@ -343,6 +347,7 @@ export class RpcHostRuntime {
 			initialState: this.state,
 			initialTranscript: this.transcript,
 			initialActivities: this.activities,
+			mermaidRenderingMode: this.mermaidRenderingMode,
 			onActivityExpansionChange: this.onActivityExpansionChange,
 			onActivityExpansionMigration: this.onActivityExpansionMigration,
 			onAllActivityExpansionChange: this.onAllActivityExpansionChange,
@@ -453,6 +458,11 @@ export class RpcHostRuntime {
 	 */
 	public setToolExpansion(expanded: boolean): void {
 		this.shell?.setToolExpansion(expanded);
+	}
+
+	public setMermaidRenderingMode(mode: MermaidRenderingMode): void {
+		this.mermaidRenderingMode = mode;
+		this.shell?.setMermaidRenderingMode(mode);
 	}
 
 	public toggleActivityExpansion(): boolean | undefined {

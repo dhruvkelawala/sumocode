@@ -84,6 +84,26 @@ describe("structured transcript view model", () => {
 		]);
 	});
 
+	it("recognizes only trailing open Mermaid fences during streaming", () => {
+		expect(markdownAndCodeBlocksFromText("before\n```mermaid\nflowchart LR\n A --> B", { includeOpenMermaidFence: true })).toEqual([
+			{ type: "markdown", text: "before\n" },
+			{ type: "code", lang: "mermaid", source: "flowchart LR\n A --> B", open: true },
+		]);
+		expect(markdownAndCodeBlocksFromText("```ts\nconst x = 1", { includeOpenMermaidFence: true })).toEqual([
+			{ type: "markdown", text: "```ts\nconst x = 1" },
+		]);
+	});
+
+	it("serializes an open Mermaid block without inventing a closing fence", () => {
+		const message = {
+			id: "streaming-mermaid",
+			role: "sumo" as const,
+			displayName: "SUMO",
+			blocks: [{ type: "code" as const, lang: "mermaid", source: "flowchart LR", open: true }],
+		};
+		expect(chatMessageViewModelToPlainText(message)).toBe("```mermaid\nflowchart LR");
+	});
+
 	it("maps pi task tool calls to shared Activity blocks", () => {
 		const message = chatMessageViewModelFromPiMessage({
 			id: "a-task",

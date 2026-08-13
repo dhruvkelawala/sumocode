@@ -9,6 +9,8 @@ import { lineToAnsi, plainLine, span, splitGraphemes, textLine, wrapLine, type S
 import { renderCathedralCodeBlock } from "../transcript/code-renderer.js";
 import { expandKey } from "../transcript/expand-key.js";
 import { cathedralMarkdownTheme } from "../transcript/markdown-theme.js";
+import { renderCathedralMermaid } from "../transcript/mermaid-renderer.js";
+import { isMermaidLanguage, type MermaidRenderingMode } from "../transcript/mermaid.js";
 import { renderActivityBlockRows } from "../transcript/activity-renderer.js";
 import { renderScrollBlock } from "../transcript/scroll-renderer.js";
 import type { ChatBlock } from "../transcript/view-model.js";
@@ -29,6 +31,7 @@ export interface ChatMessageSnapshot {
 
 export interface ChatMessageOptions {
 	readonly primaryAgentName?: string;
+	readonly mermaidRenderingMode?: MermaidRenderingMode;
 }
 
 const MIN_BOX_WIDTH = 8;
@@ -238,8 +241,31 @@ function renderDelegationRows(block: Extract<ChatBlock, { type: "delegation" }>,
 	return renderScrollBlock(block.delegation, width);
 }
 
-function renderCodeRows(block: Extract<ChatBlock, { type: "code" }>, width: number): string[] {
-	return renderCathedralCodeBlock(block.lang, block.source, width);
+function mermaidWarningRow(warning: string, warningCount: number, width: number): string[] {
+	const suffix = warningCount > 1 ? ` (+${warningCount - 1} more)` : "";
+	const message = `Mermaid diagram not rendered: ${warning}${suffix}`;
+	return wrapLine(textLine([span(message, { fg: activeThemeColors().states.approval })]), width)
+		.map((line) => lineToAnsi(line));
+}
+
+function renderCodeRows(
+	block: Extract<ChatBlock, { type: "code" }>,
+	width: number,
+	mode: MermaidRenderingMode,
+	isStreaming: boolean,
+): string[] {
+	if (!isMermaidLanguage(block.lang) || mode === "off" || (isStreaming && mode !== "streaming")) {
+		return renderCathedralCodeBlock(block.lang, block.source, width);
+	}
+	const rendered = renderCathedralMermaid(block.source, width);
+	if (!rendered) return renderCathedralCodeBlock(block.lang, block.source, width);
+	if (!isStreaming && rendered.warnings.length > 0) {
+		return [
+			...renderCathedralCodeBlock(block.lang, block.source, width),
+			...mermaidWarningRow(rendered.warnings[0]!, rendered.warnings.length, width),
+		];
+	}
+	return [...rendered.rows];
 }
 
 function renderMarkdownRows(text: string, width: number): string[] {
@@ -247,7 +273,13 @@ function renderMarkdownRows(text: string, width: number): string[] {
 	return lines.length > 0 ? lines : [""];
 }
 
-function renderBlockRows(blocks: readonly ChatBlock[], width: number, activityExpansion: ReadonlyMap<string, boolean>): string[] {
+function renderBlockRows(
+	blocks: readonly ChatBlock[],
+	width: number,
+	activityExpansion: ReadonlyMap<string, boolean>,
+	mermaidRenderingMode: MermaidRenderingMode,
+	isStreaming: boolean,
+): string[] {
 	const rows: string[] = [];
 	for (const block of blocks) {
 		if (rows.length > 0) rows.push("");
@@ -260,7 +292,7 @@ function renderBlockRows(blocks: readonly ChatBlock[], width: number, activityEx
 				rows.push(...renderThinkingRows(block, width));
 				break;
 			case "code":
-				rows.push(...renderCodeRows(block, width));
+				rows.push(...renderCodeRows(block, width, mermaidRenderingMode, isStreaming));
 				break;
 			case "image":
 				rows.push(...renderImageRows(block, width));
@@ -301,6 +333,8 @@ export class ChatMessage extends SumoNode {
 	 */
 	private contentVersion = 0;
 	private renderRowsCache: RenderRowsCacheEntry[] = [];
+	private mermaidRenderingMode: MermaidRenderingMode;
+	private isStreaming = false;
 
 	public constructor(
 		yogaNode: YogaNode,
@@ -313,6 +347,7 @@ export class ChatMessage extends SumoNode {
 	) {
 		super(yogaNode, parent);
 		this.timestampValue = timestamp;
+		this.mermaidRenderingMode = options.mermaidRenderingMode ?? "streaming";
 		this.marginBottom = 1;
 		this.setMeasureFunc((width, widthMode, height, heightMode) => this.measure(width, widthMode, height, heightMode));
 	}
@@ -347,6 +382,18 @@ export class ChatMessage extends SumoNode {
 		if (this.text === text && this.blocks === undefined) return;
 		this.text = text;
 		this.blocks = undefined;
+		this.invalidateRenderCache();
+	}
+
+	public setStreaming(isStreaming: boolean): void {
+		if (this.isStreaming === isStreaming) return;
+		this.isStreaming = isStreaming;
+		this.invalidateRenderCache();
+	}
+
+	public setMermaidRenderingMode(mode: MermaidRenderingMode): void {
+		if (this.mermaidRenderingMode === mode) return;
+		this.mermaidRenderingMode = mode;
 		this.invalidateRenderCache();
 	}
 
@@ -530,7 +577,9 @@ export class ChatMessage extends SumoNode {
 		if (renderWidth < MIN_BOX_WIDTH) return [fitCellText(this.text, renderWidth)];
 
 		const bodyWidth = Math.max(1, renderWidth - 4);
-		const bodyRows = this.blocks ? renderBlockRows(this.blocks, bodyWidth, this.activityExpansion) : wrapPlainText(this.text, bodyWidth);
+		const bodyRows = this.blocks
+			? renderBlockRows(this.blocks, bodyWidth, this.activityExpansion, this.mermaidRenderingMode, this.isStreaming)
+			: wrapPlainText(this.text, bodyWidth);
 		return [
 			frameTop(this.role, this.timestamp, renderWidth, this.options.primaryAgentName),
 			...bodyRows.map((row) => frameBody(row, renderWidth)),

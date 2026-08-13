@@ -135,4 +135,18 @@ describe("sumocode launcher mode decision", () => {
 		expect(output).toContain("/src/extension-entry.ts");
 		expect(output).not.toContain("sumo-rpc-host.js");
 	});
+
+	it("routes -w with an optional name to the standalone worktree opener", () => {
+		const output = dryRun(["-w", "new-worktree"]);
+		expect(output).toContain("sumocode worktree dry run");
+		expect(output).toContain("NAME=new-worktree");
+		expect(output).toContain("scripts/open-worktree.mjs new-worktree");
+		expect(output).not.toContain("sumo-rpc-host.js");
+	});
+
+	it("allows -w without a name", () => {
+		const output = dryRun(["-w"]);
+		expect(output).toContain("NAME=\n");
+		expect(output).toContain("scripts/open-worktree.mjs");
+	});
 });

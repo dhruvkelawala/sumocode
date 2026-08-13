@@ -776,6 +776,10 @@ describe("TranscriptController incremental chat sink (B9)", () => {
 		const controller = new TranscriptController({ chat });
 
 		controller.handleAgentEvent({ type: "message_start", message: { id: "draft", role: "assistant", content: "```mermaid\nflowchart LR" } });
+		expect(chat.replaceViewModels.mock.calls[0]?.[0]?.[0]?.blocks).toEqual([
+			{ type: "code", lang: "mermaid", source: "flowchart LR", open: true },
+		]);
+
 		controller.handleAgentEvent({ type: "message_update", message: { id: "draft", role: "assistant", content: "```mermaid\nflowchart LR\nA --> B\n```" } });
 
 		expect(chat.beginStreaming).toHaveBeenCalledTimes(2);

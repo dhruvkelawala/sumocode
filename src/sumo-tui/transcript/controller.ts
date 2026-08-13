@@ -442,7 +442,9 @@ export class TranscriptController {
 	public viewModel(): TranscriptViewModel {
 		let messages = [...this.ensureCommittedViewModels()];
 		if (this.draftMessage !== undefined) {
-			const message = this.mapper.messageFromPiMessage(this.draftMessage, messages.length);
+			const message = this.mapper.messageFromPiMessage(this.draftMessage, messages.length, {
+				includeOpenMermaidFence: true,
+			});
 			if (message) messages = appendOrFoldTranscriptMessage(messages, message);
 		}
 

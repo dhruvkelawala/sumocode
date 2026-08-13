@@ -517,7 +517,7 @@ export class ChatMessage extends SumoNode {
 	 * Recognize rows emitted by `renderCathedralCodeBlock` inside the outer
 	 * message frame. Code-frame rows and the collapsed-lines affordance are UI
 	 * chrome, so they return `null`. Source rows return only the source columns,
-	 * excluding the nested vertical borders and four-cell line-number gutter.
+	 * excluding the nested vertical borders and line-number gutter.
 	 * Other body rows return `undefined` and use normal message selection.
 	 */
 	private nestedCodeSelectionRange(
@@ -533,17 +533,18 @@ export class ChatMessage extends SumoNode {
 		if ((first === "╭" && last === "╮") || (first === "╰" && last === "╯")) return null;
 		if (first !== "│" || last !== "│" || buffer.getCell(row, codeStart + 1).char !== " ") return undefined;
 
-		let gutter = "";
-		for (let col = codeStart + 2; col <= codeStart + 5; col += 1) {
-			gutter += buffer.getCell(row, col).char || " ";
+		const gutterStart = codeStart + 2;
+		let probe = "";
+		for (let col = gutterStart; col < Math.min(codeEnd, gutterStart + 12); col += 1) {
+			probe += buffer.getCell(row, col).char || " ";
 		}
-		const sourceStart = codeStart + 6;
-		if (!/^ {0,2}\d{1,3} $/.test(gutter) && gutter !== "  ↳ ") {
-			if (gutter !== " ".repeat(4)) return undefined;
+		const sourceGutter = /^( *\d+ | *↳ )/.exec(probe);
+		if (!sourceGutter) {
 			let chromeText = "";
-			for (let col = sourceStart; col < codeEnd; col += 1) chromeText += buffer.getCell(row, col).char;
+			for (let col = gutterStart; col < codeEnd; col += 1) chromeText += buffer.getCell(row, col).char;
 			return chromeText.trimStart().startsWith("… ") && chromeText.includes("collapsed") ? null : undefined;
 		}
+		const sourceStart = gutterStart + visibleWidth(sourceGutter[1]!);
 
 		let sourceEnd = sourceStart;
 		for (let col = sourceStart; col < codeEnd; col += 1) {

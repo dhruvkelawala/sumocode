@@ -115,6 +115,16 @@ describe("Cathedral code block renderer", () => {
 		expect(plain.join("\n")).not.toContain("collapsed");
 	});
 
+	it("keeps expanded line-number gutters aligned after line 999", () => {
+		const source = Array.from({ length: 1000 }, (_, i) => `line ${i + 1}`).join("\n");
+		const rows = renderCathedralCodeBlock("ts", source, 80, { expanded: true });
+		const plain = rows.map(stripAnsi);
+
+		expect(plain[1]).toContain("   1 line 1");
+		expect(plain[1000]).toContain("1000 line 1000");
+		expect(plain.every((row) => row.length === 80)).toBe(true);
+	});
+
 	it("renders all word-wrapped plaintext rows when code blocks are expanded", () => {
 		const source = `${"a".repeat(40)} ${"b".repeat(40)} ${"c".repeat(40)}`;
 		const rows = renderCathedralCodeBlock("text", source, 80, { expanded: true });

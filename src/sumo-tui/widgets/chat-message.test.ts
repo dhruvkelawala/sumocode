@@ -153,6 +153,38 @@ describe("ChatMessage", () => {
 		root.dispose();
 	});
 
+	it("semantic code selection excludes wider line-number gutters", async () => {
+		const yoga = await loadYoga();
+		const root = new SumoNode(yoga.Node.create());
+		root.flexDirection = FLEX_DIRECTION_COLUMN;
+		root.width = 48;
+		root.height = 1004;
+		const source = Array.from({ length: 1000 }, (_, index) => index === 999 ? "target thousand" : `line ${index + 1}`).join("\n");
+		ChatMessage.create(
+			yoga,
+			"sumo",
+			"",
+			root,
+			FIXED_TIME,
+			[{ type: "code", lang: "sh", source, collapsed: false }],
+		);
+
+		root.yogaNode.calculateLayout(48, 1004, DIRECTION_LTR);
+		const buffer = new CellBuffer(1004, 48);
+		composite(root, buffer);
+
+		const line1000Row = 1001;
+		for (let col = 4; col <= 8; col += 1) expect(buffer.getSelectionMeta(line1000Row, col)).toBeUndefined();
+		expect(buffer.getSelectionMeta(line1000Row, 9)).toEqual({ selectable: true });
+
+		const selection = new SelectionController();
+		selection.handleMouseEvent({ type: "down", button: 0, row: line1000Row, col: 9, modifiers: { shift: false, alt: false, ctrl: false } }, buffer);
+		selection.handleMouseEvent({ type: "drag", button: 0, row: line1000Row, col: 23, modifiers: { shift: false, alt: false, ctrl: false } }, buffer);
+
+		expect(selection.extractSelectedText(buffer)).toBe("target thousand");
+		root.dispose();
+	});
+
 	it("renders supported Mermaid code blocks as Cathedral Unicode diagrams", async () => {
 		const yoga = await loadYoga();
 		const message = ChatMessage.create(

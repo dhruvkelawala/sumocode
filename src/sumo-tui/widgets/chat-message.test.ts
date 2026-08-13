@@ -217,7 +217,7 @@ describe("ChatMessage", () => {
 
 		const plain = renderRows(message, 72).map(stripAnsi).join("\n");
 		expect(plain).toContain("mermaid");
-		expect(plain).toContain("Mermaid diagram not rendered:");
+		expect(plain).toContain("mermaid diagram not rendered:");
 		message.dispose();
 	});
 

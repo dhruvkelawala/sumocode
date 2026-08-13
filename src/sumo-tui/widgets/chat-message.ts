@@ -243,7 +243,7 @@ function renderDelegationRows(block: Extract<ChatBlock, { type: "delegation" }>,
 
 function mermaidWarningRow(warning: string, warningCount: number, width: number): string[] {
 	const suffix = warningCount > 1 ? ` (+${warningCount - 1} more)` : "";
-	const message = `Mermaid diagram not rendered: ${warning}${suffix}`;
+	const message = `mermaid diagram not rendered: ${warning}${suffix}`;
 	return wrapLine(textLine([span(message, { fg: activeThemeColors().states.approval })]), width)
 		.map((line) => lineToAnsi(line));
 }

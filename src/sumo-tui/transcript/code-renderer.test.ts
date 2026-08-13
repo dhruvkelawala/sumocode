@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { resetThemeRegistryForTests, setActiveTheme } from "../../themes/index.js";
-import { renderCathedralCodeBlock } from "./code-renderer.js";
+import { isCathedralCodeBlockCollapsible, renderCathedralCodeBlock } from "./code-renderer.js";
 
 const ANSI = /\u001b\[[0-9;]*m/g;
 const stripAnsi = (s: string): string => s.replace(ANSI, "");
@@ -102,6 +102,44 @@ describe("Cathedral code block renderer", () => {
 		expect(rows).toHaveLength(23);
 		expect(plain[21]).toContain("… 10 lines collapsed");
 		expect(plain[21]).toContain("ctrl+o expand");
+	});
+
+	it("renders every source line when code blocks are expanded", () => {
+		const source = Array.from({ length: 30 }, (_, i) => `line ${i + 1}`).join("\n");
+		const rows = renderCathedralCodeBlock("ts", source, 80, { expanded: true });
+		const plain = rows.map(stripAnsi);
+
+		// 1 top + 30 body + 1 bottom = 32
+		expect(rows).toHaveLength(32);
+		expect(plain.join("\n")).toContain("line 30");
+		expect(plain.join("\n")).not.toContain("collapsed");
+	});
+
+	it("keeps expanded line-number gutters aligned after line 999", () => {
+		const source = Array.from({ length: 1000 }, (_, i) => `line ${i + 1}`).join("\n");
+		const rows = renderCathedralCodeBlock("ts", source, 80, { expanded: true });
+		const plain = rows.map(stripAnsi);
+
+		expect(plain[1]).toContain("   1 line 1");
+		expect(plain[1000]).toContain("1000 line 1000");
+		expect(plain.every((row) => row.length === 80)).toBe(true);
+	});
+
+	it("renders all word-wrapped plaintext rows when code blocks are expanded", () => {
+		const source = `${"a".repeat(40)} ${"b".repeat(40)} ${"c".repeat(40)}`;
+		const rows = renderCathedralCodeBlock("text", source, 80, { expanded: true });
+		const plain = rows.map(stripAnsi).join("\n");
+
+		expect(plain).toContain("a".repeat(40));
+		expect(plain).toContain("b".repeat(40));
+		expect(plain).toContain("c".repeat(40));
+		expect(plain).not.toContain("collapsed");
+	});
+
+	it("reports only code blocks that can show a collapsed marker as collapsible", () => {
+		expect(isCathedralCodeBlockCollapsible("ts", "const x = 1;", 80)).toBe(false);
+		expect(isCathedralCodeBlockCollapsible("ts", Array.from({ length: 21 }, (_, i) => `line ${i}`).join("\n"), 80)).toBe(true);
+		expect(isCathedralCodeBlockCollapsible("text", Array.from({ length: 120 }, () => "word").join(" "), 30)).toBe(true);
 	});
 
 	it("caps wrapped plaintext blocks by rendered rows", () => {

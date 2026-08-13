@@ -21,11 +21,11 @@ export interface OpenWorktreeCliOptions {
 	readonly pi?: PiExecLike;
 }
 
-function commandForPlainShell(env: NodeJS.ProcessEnv): string {
+function commandForSumocode(env: NodeJS.ProcessEnv): string {
 	const setup = (env.SUMOCODE_WORKTREE_SETUP ?? DEFAULT_SETUP_ACTION).trim();
-	const shell = env.SHELL || "/bin/bash";
-	const openShell = `exec ${shellEscape(shell)} -l`;
-	return setup ? `${setup} && ${openShell}` : openShell;
+	const launcher = (env.SUMOCODE_LAUNCHER ?? "sumocode").trim() || "sumocode";
+	const openSumocode = `exec ${shellEscape(launcher)}`;
+	return setup ? `${setup} && ${openSumocode}` : openSumocode;
 }
 
 function worktreeWorkspaceLabel(branch: string): string {
@@ -56,7 +56,7 @@ function createExecAdapter(env: NodeJS.ProcessEnv): PiExecLike {
 	};
 }
 
-/** Create and open a worktree shell without starting SumoCode. */
+/** Create and open a worktree session running SumoCode. */
 export async function openWorktree(name: string | undefined, options: OpenWorktreeCliOptions = {}): Promise<number> {
 	const cwd = options.cwd ?? process.cwd();
 	const env = options.env ?? process.env;
@@ -74,7 +74,7 @@ export async function openWorktree(name: string | undefined, options: OpenWorktr
 
 	const task = name?.trim() || `wt-${(options.now ?? Date.now)().toString(36)}`;
 	const resolved = resolveCreateOptions({ repoRoot: cwd, task, baseRef: "HEAD" });
-	const shellCommand = commandForPlainShell(env);
+	const shellCommand = commandForSumocode(env);
 	const label = worktreeWorkspaceLabel(resolved.branch);
 	let created: CreateWorktreeResult | undefined;
 

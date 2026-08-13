@@ -39,6 +39,7 @@ USAGE
   sumocode doctor [options]
   sumocode diag [file]
   sumocode task <prompt> [path]
+  sumocode -w [name]
 
 ARGUMENTS
   path
@@ -76,6 +77,12 @@ COMMANDS
 
       Sets SUMOCODE_TASK_MODE=1 in the launched process so the extension
       knows to skip splash and other onboarding UI.
+
+  -w, --worktree [name]
+      Create and open a new sumo/<name> worktree in the current terminal
+      host, run the configured worktree setup, and leave a plain login shell
+      open there. Unlike /sumo:worktree, this does not start SumoCode.
+      If name is omitted, a unique wt-<timestamp> name is generated.
 
 OPTIONS
   -d, --debug
@@ -133,6 +140,9 @@ EXAMPLES
   Start in an explicit project directory:
       sumocode .
       sumocode /path/to/project
+
+  Open a named worktree with a plain shell:
+      sumocode -w new-worktree
 
   Start with diagnostics enabled:
       sumocode -d
@@ -250,6 +260,11 @@ while [[ $# -gt 0 ]]; do
 			COMMAND="$1"
 			shift
 			;;
+		-w|--worktree)
+			if [[ "${COMMAND}" != "run" ]]; then usage_error "Only one command may be specified."; fi
+			COMMAND="worktree"
+			shift
+			;;
 		-d|--debug)
 			DEBUG_MODE=1
 			shift
@@ -330,6 +345,14 @@ if [[ "${COMMAND}" == "doctor" && "${#SUMOCODE_ARGS[@]}" -gt 0 ]]; then
 fi
 if [[ "${COMMAND}" == "diag" && "${#SUMOCODE_ARGS[@]}" -gt 1 ]]; then
 	usage_error "diag accepts at most one diagnostics file path."
+fi
+if [[ "${COMMAND}" == "worktree" ]]; then
+	if [[ "${#SUMOCODE_ARGS[@]}" -gt 1 ]]; then
+		usage_error "-w accepts at most one optional worktree name."
+	fi
+	if [[ "${#SUMOCODE_ARGS[@]}" -eq 1 && "${SUMOCODE_ARGS[0]}" == -* ]]; then
+		usage_error "Unknown worktree option: ${SUMOCODE_ARGS[0]}"
+	fi
 fi
 if [[ -n "${PROMPT_FILE}" && "${COMMAND}" != "task" ]]; then
 	usage_error "--prompt-file is only valid with the 'task' subcommand."
@@ -735,6 +758,16 @@ run_doctor() {
 
 if [[ "${COMMAND}" == "diag" ]]; then
 	run_diag_summary "${SUMOCODE_ARGS[0]:-/tmp/sumocode-manual.jsonl}"
+fi
+
+if [[ "${COMMAND}" == "worktree" ]]; then
+	if [[ "${DRY_RUN}" == "1" ]]; then
+		printf "sumocode worktree dry run\nROOT_DIR=%s\nNAME=%s\nexec node %s/scripts/open-worktree.mjs %s\n" \
+			"${ROOT_DIR}" "${SUMOCODE_ARGS[0]:-}" "${ROOT_DIR}" "${SUMOCODE_ARGS[0]:-}"
+		exit 0
+	fi
+	export SUMOCODE_ROOT_DIR="${ROOT_DIR}"
+	exec node "${ROOT_DIR}/scripts/open-worktree.mjs" "${SUMOCODE_ARGS[0]:-}"
 fi
 
 if [[ "${COMMAND}" == "doctor" ]]; then

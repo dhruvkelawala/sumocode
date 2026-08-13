@@ -11,7 +11,14 @@ export interface MermaidRenderResult {
 export function renderCathedralMermaid(source: string, availableWidth: number): MermaidRenderResult | undefined {
 	const width = Math.max(0, Math.floor(availableWidth));
 	if (width === 0) return undefined;
-	const art = render(source);
+	let art: MermaidArt | null;
+	try {
+		art = render(source);
+	} catch {
+		// Mermaid source is model-authored and may be incomplete while streaming.
+		// A renderer bug must degrade to the existing code-block presentation.
+		return undefined;
+	}
 	if (!art || art.width > width) return undefined;
 	return { rows: renderRows(art, activeThemeColors()), warnings: art.warnings };
 }

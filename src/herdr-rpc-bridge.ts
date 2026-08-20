@@ -3,6 +3,8 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 const SOURCE = "herdr:pi";
 const AGENT = "pi";
+const DISPLAY_SOURCE = "sumocode:display";
+const DISPLAY_AGENT = "sumocode";
 
 type AgentState = "working" | "blocked" | "idle";
 type SendRequestAttempt = (request: unknown, timeoutMs: number) => Promise<boolean>;
@@ -112,6 +114,22 @@ export function installHerdrRpcBridge(pi: ExtensionAPI, options: HerdrRpcBridgeO
 		});
 	};
 
+	// Herdr grants full lifecycle authority only to the hardcoded
+	// ("herdr:pi", "pi") pair, so the semantic agent must stay "pi". The
+	// display name is presentation-only and can be renamed without touching
+	// that authority.
+	const reportDisplayName = () => send({
+		id: requestId("display"),
+		method: "pane.report_metadata",
+		params: {
+			pane_id: paneId,
+			source: DISPLAY_SOURCE,
+			agent: AGENT,
+			display_agent: DISPLAY_AGENT,
+			seq: nextSeq(),
+		},
+	});
+
 	const queuedStates: QueuedState[] = [];
 	let sendInFlight = false;
 
@@ -171,6 +189,7 @@ export function installHerdrRpcBridge(pi: ExtensionAPI, options: HerdrRpcBridgeO
 		currentContext = ctx as SessionContext;
 		active = ctx.isIdle?.() === false;
 		await reportSession(currentContext, event.reason);
+		await reportDisplayName();
 		publishState(true);
 	});
 	pi.on("agent_start", (_event, ctx) => {

@@ -58,12 +58,13 @@ describe("installHerdrRpcBridge", () => {
 		expect(harness.pi.events.on).not.toHaveBeenCalled();
 	});
 
-	it("reports the session path and initial idle state", async () => {
+	it("reports the session path, display name, and initial idle state", async () => {
 		const harness = createHarness(enabledEnv);
 		await harness.handlers.get("session_start")?.({ reason: "startup" }, context);
 
 		expect(harness.requests.map((request) => request.method)).toEqual([
 			"pane.report_agent_session",
+			"pane.report_metadata",
 			"pane.report_agent",
 		]);
 		expect(harness.requests[0].params).toMatchObject({
@@ -73,7 +74,30 @@ describe("installHerdrRpcBridge", () => {
 			agent_session_path: "/tmp/session.jsonl",
 			session_start_source: "startup",
 		});
-		expect(harness.requests[1].params).toMatchObject({ state: "idle", agent_session_path: "/tmp/session.jsonl" });
+		expect(harness.requests[1].params).toMatchObject({
+			pane_id: "w1:p2",
+			source: "sumocode:display",
+			agent: "pi",
+			display_agent: "sumocode",
+		});
+		expect(harness.requests[2].params).toMatchObject({ state: "idle", agent_session_path: "/tmp/session.jsonl" });
+	});
+
+	it("renames the displayed agent without changing Pi authority", async () => {
+		const harness = createHarness(enabledEnv);
+		await harness.handlers.get("session_start")?.({ reason: "startup" }, contextWithoutSession);
+		await flush();
+
+		const metadata = harness.requests.find((request) => request.method === "pane.report_metadata");
+		expect(metadata).toBeDefined();
+		expect(metadata.params).toMatchObject({
+			pane_id: "w1:p2",
+			source: "sumocode:display",
+			agent: "pi",
+			display_agent: "sumocode",
+		});
+		const state = harness.requests.find((request) => request.method === "pane.report_agent");
+		expect(state.params).toMatchObject({ source: "herdr:pi", agent: "pi" });
 	});
 
 	it("publishes working, blocked, and settled lifecycle states", async () => {
@@ -109,9 +133,13 @@ describe("installHerdrRpcBridge", () => {
 		await harness.handlers.get("session_start")?.({ reason: "startup" }, contextWithoutSession);
 		await flush();
 
-		expect(harness.attempts.map(({ timeoutMs }) => timeoutMs)).toEqual([500, 1500]);
+		// The display metadata report is the first send: its 500ms attempt
+		// fails, and the same request is retried at 1500ms. The following
+		// state report then succeeds on its first attempt.
+		expect(harness.attempts.map(({ timeoutMs }) => timeoutMs)).toEqual([500, 1500, 500]);
 		expect(harness.requests[0]).toBe(harness.requests[1]);
-		expect(harness.requests[1]).toMatchObject({ method: "pane.report_agent", params: { state: "idle" } });
+		expect(harness.requests[1]).toMatchObject({ method: "pane.report_metadata", params: { display_agent: "sumocode" } });
+		expect(harness.requests[2]).toMatchObject({ method: "pane.report_agent", params: { state: "idle" } });
 	});
 
 	it("sends every state transition in order while a report is in flight", async () => {

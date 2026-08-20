@@ -15264,6 +15264,8 @@ function registerRpcLoginCommand(pi, deps = {}) {
 import net from "node:net";
 var SOURCE = "herdr:pi";
 var AGENT = "pi";
+var DISPLAY_SOURCE = "sumocode:display";
+var DISPLAY_AGENT = "sumocode";
 function socketEndpoint(path2) {
   return process.platform === "win32" ? `\\\\.\\pipe\\${path2}` : path2;
 }
@@ -15337,6 +15339,17 @@ function installHerdrRpcBridge(pi, options = {}) {
       }
     });
   };
+  const reportDisplayName = () => send({
+    id: requestId("display"),
+    method: "pane.report_metadata",
+    params: {
+      pane_id: paneId2,
+      source: DISPLAY_SOURCE,
+      agent: AGENT,
+      display_agent: DISPLAY_AGENT,
+      seq: nextSeq()
+    }
+  });
   const queuedStates = [];
   let sendInFlight = false;
   const sendState = (state) => send({
@@ -15391,6 +15404,7 @@ function installHerdrRpcBridge(pi, options = {}) {
     currentContext = ctx;
     active = ctx.isIdle?.() === false;
     await reportSession(currentContext, event.reason);
+    await reportDisplayName();
     publishState(true);
   });
   pi.on("agent_start", (_event, ctx) => {

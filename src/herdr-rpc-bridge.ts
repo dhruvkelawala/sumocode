@@ -5,11 +5,17 @@ const SOURCE = "herdr:pi";
 const AGENT = "pi";
 
 type AgentState = "working" | "blocked" | "idle";
-type SendRequest = (request: unknown) => Promise<void>;
+type SendRequestAttempt = (request: unknown, timeoutMs: number) => Promise<boolean>;
+
+interface QueuedState {
+	readonly state: AgentState;
+	readonly message?: string;
+	readonly seq: number;
+}
 
 interface HerdrRpcBridgeOptions {
 	readonly env?: NodeJS.ProcessEnv;
-	readonly sendRequest?: SendRequest;
+	readonly sendRequestAttempt?: SendRequestAttempt;
 }
 
 interface SessionContext {
@@ -24,24 +30,30 @@ function socketEndpoint(path: string): string {
 	return process.platform === "win32" ? `\\\\.\\pipe\\${path}` : path;
 }
 
-function sendSocketRequest(path: string, request: unknown): Promise<void> {
+function sendSocketRequestAttempt(path: string, request: unknown, timeoutMs: number): Promise<boolean> {
 	return new Promise((resolve) => {
 		let settled = false;
+		let timeout: ReturnType<typeof setTimeout> | undefined;
 		const socket = net.createConnection(socketEndpoint(path));
-		const finish = () => {
+		const finish = (delivered: boolean) => {
 			if (settled) return;
 			settled = true;
-			clearTimeout(timeout);
+			if (timeout) clearTimeout(timeout);
 			socket.destroy();
-			resolve();
+			resolve(delivered);
 		};
-		const timeout = setTimeout(finish, 500);
-		timeout.unref?.();
-		socket.on("error", finish);
+		socket.on("error", () => finish(false));
 		socket.on("connect", () => socket.write(`${JSON.stringify(request)}\n`));
-		socket.on("data", finish);
-		socket.on("end", finish);
+		socket.on("data", () => finish(true));
+		socket.on("end", () => finish(false));
+		timeout = setTimeout(() => finish(false), timeoutMs);
+		timeout.unref?.();
 	});
+}
+
+async function sendRequest(attempt: SendRequestAttempt, request: unknown): Promise<void> {
+	if (await attempt(request, 500)) return;
+	await attempt(request, 1500);
 }
 
 function sessionRef(ctx: SessionContext): { agent_session_path?: string; agent_session_id?: string } {
@@ -71,7 +83,8 @@ export function installHerdrRpcBridge(pi: ExtensionAPI, options: HerdrRpcBridgeO
 	const path = env.HERDR_SOCKET_PATH;
 	if (env.SUMOCODE_RPC_CHILD !== "1" || env.HERDR_ENV !== "1" || !paneId || !path) return;
 
-	const send = options.sendRequest ?? ((request) => sendSocketRequest(path, request));
+	const attempt = options.sendRequestAttempt ?? ((request, timeoutMs) => sendSocketRequestAttempt(path, request, timeoutMs));
+	const send = (request: unknown) => sendRequest(attempt, request);
 	let seq = Date.now() * 1000;
 	let active = false;
 	let blockedCount = 0;
@@ -99,25 +112,46 @@ export function installHerdrRpcBridge(pi: ExtensionAPI, options: HerdrRpcBridgeO
 		});
 	};
 
-	const publishState = async (force = false) => {
+	const queuedStates: QueuedState[] = [];
+	let sendInFlight = false;
+
+	const sendState = (state: QueuedState) => send({
+		id: requestId("state"),
+		method: "pane.report_agent",
+		params: {
+			pane_id: paneId,
+			source: SOURCE,
+			agent: AGENT,
+			state: state.state,
+			message: state.message,
+			seq: state.seq,
+			...(currentContext ? sessionRef(currentContext) : {}),
+		},
+	});
+
+	const drainStateQueue = async (): Promise<void> => {
+		if (sendInFlight) return;
+		sendInFlight = true;
+		try {
+			while (true) {
+				const state = queuedStates.shift();
+				if (!state) break;
+				await sendState(state);
+			}
+		} finally {
+			sendInFlight = false;
+			if (queuedStates.length > 0) void drainStateQueue();
+		}
+	};
+
+	const publishState = (force = false) => {
 		const state: AgentState = blockedCount > 0 ? "blocked" : active ? "working" : "idle";
 		const message = blockedCount > 0 ? blockedMessage : undefined;
 		if (!force && state === lastState && message === lastMessage) return;
 		lastState = state;
 		lastMessage = message;
-		await send({
-			id: requestId("state"),
-			method: "pane.report_agent",
-			params: {
-				pane_id: paneId,
-				source: SOURCE,
-				agent: AGENT,
-				state,
-				message,
-				seq: nextSeq(),
-				...(currentContext ? sessionRef(currentContext) : {}),
-			},
-		});
+		queuedStates.push({ state, message, seq: nextSeq() });
+		void drainStateQueue();
 	};
 
 	const eventBus = pi.events as { on?: (name: string, handler: (data: unknown) => void) => void } | undefined;
@@ -137,7 +171,7 @@ export function installHerdrRpcBridge(pi: ExtensionAPI, options: HerdrRpcBridgeO
 		currentContext = ctx as SessionContext;
 		active = ctx.isIdle?.() === false;
 		await reportSession(currentContext, event.reason);
-		await publishState(true);
+		publishState(true);
 	});
 	pi.on("agent_start", (_event, ctx) => {
 		currentContext = ctx as SessionContext;

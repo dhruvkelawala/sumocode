@@ -1,21 +1,31 @@
 import { describe, expect, it, vi } from "vitest";
 import { installHerdrRpcBridge } from "./herdr-rpc-bridge.js";
 
-function createHarness(env: NodeJS.ProcessEnv = {}) {
+function createHarness(
+	env: NodeJS.ProcessEnv = {},
+	sendRequestAttempt: (request: any, timeoutMs: number) => Promise<boolean> = async () => true,
+) {
 	const handlers = new Map<string, (event: any, ctx: any) => unknown>();
 	const eventHandlers = new Map<string, (data: any) => unknown>();
-	const requests: any[] = [];
+	const attempts: Array<{ request: any; timeoutMs: number }> = [];
 	const pi = {
 		on: vi.fn((name: string, handler: (event: any, ctx: any) => unknown) => handlers.set(name, handler)),
 		events: { on: vi.fn((name: string, handler: (data: any) => unknown) => eventHandlers.set(name, handler)) },
 	};
 	installHerdrRpcBridge(pi as never, {
 		env,
-		sendRequest: async (request) => {
-			requests.push(request);
+		sendRequestAttempt: async (request, timeoutMs) => {
+			attempts.push({ request, timeoutMs });
+			return sendRequestAttempt(request, timeoutMs);
 		},
 	});
-	return { handlers, eventHandlers, requests, pi };
+	return {
+		handlers,
+		eventHandlers,
+		attempts,
+		get requests() { return attempts.map(({ request }) => request); },
+		pi,
+	};
 }
 
 const enabledEnv = {
@@ -31,6 +41,10 @@ const context = {
 		getSessionFile: () => "/tmp/session.jsonl",
 		getSessionId: () => "session-id",
 	},
+};
+
+const contextWithoutSession = {
+	isIdle: () => true,
 };
 
 async function flush(): Promise<void> {
@@ -65,7 +79,8 @@ describe("installHerdrRpcBridge", () => {
 	it("publishes working, blocked, and settled lifecycle states", async () => {
 		const harness = createHarness(enabledEnv);
 		await harness.handlers.get("session_start")?.({ reason: "startup" }, context);
-		harness.requests.length = 0;
+		await flush();
+		harness.attempts.length = 0;
 
 		harness.handlers.get("agent_start")?.({}, { ...context, isIdle: () => false });
 		await flush();
@@ -82,6 +97,48 @@ describe("installHerdrRpcBridge", () => {
 			"working",
 			"idle",
 		]);
+	});
+
+	it("retries a dropped report with a longer timeout", async () => {
+		let callCount = 0;
+		const harness = createHarness(enabledEnv, async () => {
+			callCount += 1;
+			return callCount > 1;
+		});
+
+		await harness.handlers.get("session_start")?.({ reason: "startup" }, contextWithoutSession);
+		await flush();
+
+		expect(harness.attempts.map(({ timeoutMs }) => timeoutMs)).toEqual([500, 1500]);
+		expect(harness.requests[0]).toBe(harness.requests[1]);
+		expect(harness.requests[1]).toMatchObject({ method: "pane.report_agent", params: { state: "idle" } });
+	});
+
+	it("sends every state transition in order while a report is in flight", async () => {
+		let releaseFirstReport: ((delivered: boolean) => void) | undefined;
+		let holdReports = false;
+		const harness = createHarness(enabledEnv, async () => {
+			if (!holdReports) return true;
+			holdReports = false;
+			return new Promise<boolean>((resolve) => {
+				releaseFirstReport = resolve;
+			});
+		});
+		await harness.handlers.get("session_start")?.({ reason: "startup" }, contextWithoutSession);
+		await flush();
+		harness.attempts.length = 0;
+		holdReports = true;
+
+		harness.handlers.get("agent_start")?.({}, { ...contextWithoutSession, isIdle: () => false });
+		harness.eventHandlers.get("herdr:blocked")?.({ active: true, label: "approval" });
+		harness.eventHandlers.get("herdr:blocked")?.({ active: false });
+		await flush();
+
+		expect(harness.requests.map((request) => request.params.state)).toEqual(["working"]);
+		releaseFirstReport?.(true);
+		await flush();
+		await flush();
+		expect(harness.requests.map((request) => request.params.state)).toEqual(["working", "blocked", "working"]);
 	});
 
 	it("releases authority only when the Pi process quits", async () => {

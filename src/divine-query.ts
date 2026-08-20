@@ -66,6 +66,11 @@ export interface DivineQuerySnapshot {
 
 export interface DivineQueryRenderOptions {
 	/**
+	 * Removes select-only navigation chrome so input dialogs keep their controls
+	 * inside short terminal overlay caps.
+	 */
+	readonly compact?: boolean;
+	/**
 	 * Extra inner rows to render between the footer and the bottom border —
 	 * used by `question-tool.ts` for the edit-mode `Your answer:` editor when
 	 * the user picks the free-text option.
@@ -87,7 +92,7 @@ function optionLabel(index: number): string {
  * width (i.e. excluding the side borders). Returned rows are not yet padded
  * to width — `wrapPanelRow` handles padding + bg paint at the framing layer.
  */
-function buildInnerRows(snapshot: DivineQuerySnapshot, contentWidth: number, extras: readonly string[]): string[] {
+function buildInnerRows(snapshot: DivineQuerySnapshot, contentWidth: number, extras: readonly string[], compact: boolean): string[] {
 	const inner: string[] = [];
 	const indent = "     ";
 	const colors = activeThemeColors();
@@ -113,8 +118,7 @@ function buildInnerRows(snapshot: DivineQuerySnapshot, contentWidth: number, ext
 		inner.push(fg(questionLine, colors.foreground));
 	}
 
-	// Blank
-	inner.push("");
+	if (!compact) inner.push("");
 
 	// Options
 	for (let i = 0; i < snapshot.options.length; i += 1) {
@@ -134,14 +138,11 @@ function buildInnerRows(snapshot: DivineQuerySnapshot, contentWidth: number, ext
 		}
 	}
 
-	// Blank
-	inner.push("");
-
-	// Split rule
-	inner.push(splitRule(contentWidth));
-
-	// Footer
-	inner.push(center(fg("↑↓ wander    ⏎ answer    ⎋ retreat", colors.foregroundDim), contentWidth));
+	if (!compact) {
+		inner.push("");
+		inner.push(splitRule(contentWidth));
+		inner.push(center(fg("↑↓ wander    ⏎ answer    ⎋ retreat", colors.foregroundDim), contentWidth));
+	}
 
 	// Extras (e.g. edit-mode editor rows from question-tool)
 	for (const extra of extras) inner.push(extra);
@@ -158,7 +159,7 @@ export function renderDivineQuery(
 	options: DivineQueryRenderOptions = {},
 ): string[] {
 	if (width < 1) return [];
-	const inner = buildInnerRows(snapshot, width, options.extras ?? []);
+	const inner = buildInnerRows(snapshot, width, options.extras ?? [], options.compact === true);
 	return inner.map((innerLine) => wrapPanelRow(innerLine, width));
 }
 

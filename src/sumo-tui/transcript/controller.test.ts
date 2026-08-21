@@ -8,7 +8,7 @@ import {
 	resetMessageContentKeyCacheForTests,
 	type TranscriptControllerChatSink,
 } from "./controller.js";
-import type { ChatMessageViewModel } from "./view-model.js";
+import { chatMessageViewModelToPlainText, type ChatMessageViewModel } from "./view-model.js";
 
 function readJsonl(path: string): unknown[] {
 	return readFileSync(resolve(process.cwd(), path), "utf8")
@@ -1046,5 +1046,63 @@ describe("TranscriptController incremental chat sink (B9)", () => {
 		controller.handleAgentEvent({ type: "compaction_start", reason: "manual" });
 
 		expect(scheduleRender).not.toHaveBeenCalled();
+	});
+});
+
+describe("TranscriptController streaming deltas (Pi RPC wire shape)", () => {
+	// Pi's RPC/JSON protocol (toJsonEvent) strips the cumulative assistant
+	// snapshot from message_update events: message_start seeds the message, the
+	// assistantMessageEvent deltas build it, and message_end is authoritative.
+	// The controller must fold those deltas into the draft; a regression here
+	// leaves the assistant bubble blank mid-stream (the visual-v2 active-runtime
+	// scenarios froze on "MEDITATING" with no streamed text).
+	function assistantText(controller: TranscriptController): string {
+		const last = controller.viewModel().messages.at(-1);
+		return last ? chatMessageViewModelToPlainText(last) : "";
+	}
+
+	it("renders streamed text from assistantMessageEvent deltas with no message on the update", () => {
+		const controller = new TranscriptController();
+		controller.handleAgentEvent({ type: "agent_start" });
+		controller.handleAgentEvent({ type: "message_start", message: { role: "assistant", content: [] } });
+		controller.handleAgentEvent({ type: "message_update", assistantMessageEvent: { type: "text_start", contentIndex: 0 } });
+		controller.handleAgentEvent({ type: "message_update", assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "inspecting " } });
+		controller.handleAgentEvent({ type: "message_update", assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "src/auth/session.ts" } });
+
+		expect(assistantText(controller)).toContain("inspecting src/auth/session.ts");
+	});
+
+	it("pushes the growing draft into the chat sink incrementally and marks it streaming", () => {
+		const chat = fakeChatSink();
+		const controller = new TranscriptController({ chat });
+		controller.handleAgentEvent({ type: "agent_start" });
+		controller.handleAgentEvent({ type: "message_start", message: { role: "assistant", content: [] } });
+		chat.replaceLastWithViewModel.mockClear();
+		chat.beginStreaming.mockClear();
+
+		controller.handleAgentEvent({ type: "message_update", assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "hello" } });
+
+		expect(chat.beginStreaming).toHaveBeenCalled();
+		const pushed = chat.replaceLastWithViewModel.mock.calls.at(-1)?.[0] as ChatMessageViewModel;
+		expect(chatMessageViewModelToPlainText(pushed)).toContain("hello");
+	});
+
+	it("accumulates thinking deltas into a thinking block", () => {
+		const controller = new TranscriptController();
+		controller.handleAgentEvent({ type: "agent_start" });
+		controller.handleAgentEvent({ type: "message_start", message: { role: "assistant", content: [] } });
+		controller.handleAgentEvent({ type: "message_update", assistantMessageEvent: { type: "thinking_start", contentIndex: 0 } });
+		controller.handleAgentEvent({ type: "message_update", assistantMessageEvent: { type: "thinking_delta", contentIndex: 0, delta: "weighing options" } });
+
+		expect(assistantText(controller)).toContain("weighing options");
+	});
+
+	it("still honors a full message on message_update when the wire carries one (back-compat)", () => {
+		const controller = new TranscriptController();
+		controller.handleAgentEvent({ type: "agent_start" });
+		controller.handleAgentEvent({ type: "message_start", message: { role: "assistant", content: [] } });
+		controller.handleAgentEvent({ type: "message_update", message: { role: "assistant", content: "legacy snapshot" } });
+
+		expect(assistantText(controller)).toContain("legacy snapshot");
 	});
 });

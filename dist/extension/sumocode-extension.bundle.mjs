@@ -15266,6 +15266,7 @@ var SOURCE = "herdr:pi";
 var AGENT = "pi";
 var DISPLAY_SOURCE = "sumocode:display";
 var DISPLAY_AGENT = "sumocode";
+var STATE_RETRY_DELAY_MS = 2e3;
 function socketEndpoint(path2) {
   return process.platform === "win32" ? `\\\\.\\pipe\\${path2}` : path2;
 }
@@ -15291,8 +15292,8 @@ function sendSocketRequestAttempt(path2, request, timeoutMs) {
   });
 }
 async function sendRequest(attempt, request) {
-  if (await attempt(request, 500)) return;
-  await attempt(request, 1500);
+  if (await attempt(request, 500)) return true;
+  return attempt(request, 1500);
 }
 function sessionRef(ctx) {
   try {
@@ -15352,6 +15353,8 @@ function installHerdrRpcBridge(pi, options = {}) {
   });
   const queuedStates = [];
   let sendInFlight = false;
+  let stateRetryTimer;
+  let stopped = false;
   const sendState = (state) => send({
     id: requestId("state"),
     method: "pane.report_agent",
@@ -15365,18 +15368,32 @@ function installHerdrRpcBridge(pi, options = {}) {
       ...currentContext ? sessionRef(currentContext) : {}
     }
   });
+  const scheduleStateRetry = () => {
+    if (stopped || stateRetryTimer !== void 0 || queuedStates.length === 0) return;
+    stateRetryTimer = setTimeout(() => {
+      stateRetryTimer = void 0;
+      void drainStateQueue();
+    }, STATE_RETRY_DELAY_MS);
+    stateRetryTimer.unref?.();
+  };
   const drainStateQueue = async () => {
-    if (sendInFlight) return;
+    if (stopped || sendInFlight || stateRetryTimer !== void 0) return;
     sendInFlight = true;
     try {
-      while (true) {
-        const state = queuedStates.shift();
-        if (!state) break;
-        await sendState(state);
+      while (!stopped) {
+        const state = queuedStates[0];
+        if (!state) return;
+        let delivered = false;
+        try {
+          delivered = await sendState(state);
+        } catch {
+        }
+        if (!delivered) return;
+        queuedStates.shift();
       }
     } finally {
       sendInFlight = false;
-      if (queuedStates.length > 0) void drainStateQueue();
+      if (!stopped && queuedStates.length > 0) scheduleStateRetry();
     }
   };
   const publishState = (force = false) => {
@@ -15420,6 +15437,12 @@ function installHerdrRpcBridge(pi, options = {}) {
     void publishState();
   });
   pi.on("session_shutdown", (event) => {
+    stopped = true;
+    if (stateRetryTimer !== void 0) {
+      clearTimeout(stateRetryTimer);
+      stateRetryTimer = void 0;
+    }
+    queuedStates.length = 0;
     if (event.reason !== "quit") return;
     void send({
       id: requestId("release"),

@@ -5,6 +5,7 @@ const SOURCE = "herdr:pi";
 const AGENT = "pi";
 const DISPLAY_SOURCE = "sumocode:display";
 const DISPLAY_AGENT = "sumocode";
+const STATE_RETRY_DELAY_MS = 2_000;
 
 type AgentState = "working" | "blocked" | "idle";
 type SendRequestAttempt = (request: unknown, timeoutMs: number) => Promise<boolean>;
@@ -53,9 +54,9 @@ function sendSocketRequestAttempt(path: string, request: unknown, timeoutMs: num
 	});
 }
 
-async function sendRequest(attempt: SendRequestAttempt, request: unknown): Promise<void> {
-	if (await attempt(request, 500)) return;
-	await attempt(request, 1500);
+async function sendRequest(attempt: SendRequestAttempt, request: unknown): Promise<boolean> {
+	if (await attempt(request, 500)) return true;
+	return attempt(request, 1500);
 }
 
 function sessionRef(ctx: SessionContext): { agent_session_path?: string; agent_session_id?: string } {
@@ -130,8 +131,12 @@ export function installHerdrRpcBridge(pi: ExtensionAPI, options: HerdrRpcBridgeO
 		},
 	});
 
+	// Keep the head until delivery. Dropping a settled report leaves Herdr
+	// stuck on working because Pi will not emit the same transition again.
 	const queuedStates: QueuedState[] = [];
 	let sendInFlight = false;
+	let stateRetryTimer: ReturnType<typeof setTimeout> | undefined;
+	let stopped = false;
 
 	const sendState = (state: QueuedState) => send({
 		id: requestId("state"),
@@ -147,18 +152,34 @@ export function installHerdrRpcBridge(pi: ExtensionAPI, options: HerdrRpcBridgeO
 		},
 	});
 
+	const scheduleStateRetry = (): void => {
+		if (stopped || stateRetryTimer !== undefined || queuedStates.length === 0) return;
+		stateRetryTimer = setTimeout(() => {
+			stateRetryTimer = undefined;
+			void drainStateQueue();
+		}, STATE_RETRY_DELAY_MS);
+		stateRetryTimer.unref?.();
+	};
+
 	const drainStateQueue = async (): Promise<void> => {
-		if (sendInFlight) return;
+		if (stopped || sendInFlight || stateRetryTimer !== undefined) return;
 		sendInFlight = true;
 		try {
-			while (true) {
-				const state = queuedStates.shift();
-				if (!state) break;
-				await sendState(state);
+			while (!stopped) {
+				const state = queuedStates[0];
+				if (!state) return;
+				let delivered = false;
+				try {
+					delivered = await sendState(state);
+				} catch {
+					// Treat transport errors like dropped reports.
+				}
+				if (!delivered) return;
+				queuedStates.shift();
 			}
 		} finally {
 			sendInFlight = false;
-			if (queuedStates.length > 0) void drainStateQueue();
+			if (!stopped && queuedStates.length > 0) scheduleStateRetry();
 		}
 	};
 
@@ -205,6 +226,14 @@ export function installHerdrRpcBridge(pi: ExtensionAPI, options: HerdrRpcBridgeO
 		void publishState();
 	});
 	pi.on("session_shutdown", (event) => {
+		// Pi replaces the extension runtime after every shutdown. Stop this
+		// instance's retry loop; the next session owns a fresh bridge.
+		stopped = true;
+		if (stateRetryTimer !== undefined) {
+			clearTimeout(stateRetryTimer);
+			stateRetryTimer = undefined;
+		}
+		queuedStates.length = 0;
 		if (event.reason !== "quit") return;
 		void send({
 			id: requestId("release"),

@@ -142,6 +142,66 @@ describe("installHerdrRpcBridge", () => {
 		expect(harness.requests[2]).toMatchObject({ method: "pane.report_agent", params: { state: "idle" } });
 	});
 
+	it("keeps retrying a settled state until Herdr receives it", async () => {
+		vi.useFakeTimers();
+		try {
+			let failSettledIdle = false;
+			let idleAttempts = 0;
+			const harness = createHarness(enabledEnv, async (request) => {
+				if (failSettledIdle && request.method === "pane.report_agent" && request.params.state === "idle") {
+					idleAttempts += 1;
+					return idleAttempts >= 3;
+				}
+				return true;
+			});
+			await harness.handlers.get("session_start")?.({ reason: "startup" }, contextWithoutSession);
+			await vi.runAllTimersAsync();
+
+			harness.handlers.get("agent_start")?.({}, { ...contextWithoutSession, isIdle: () => false });
+			await vi.runAllTimersAsync();
+			failSettledIdle = true;
+			harness.handlers.get("agent_settled")?.({}, contextWithoutSession);
+			await vi.runAllTimersAsync();
+
+			expect(idleAttempts).toBe(3);
+			expect(harness.requests.filter(
+				(request) => request.method === "pane.report_agent" && request.params.state === "idle",
+			)).toHaveLength(4);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("stops retrying queued states when the session shuts down", async () => {
+		vi.useFakeTimers();
+		try {
+			let failSettledIdle = false;
+			let idleAttempts = 0;
+			const harness = createHarness(enabledEnv, async (request) => {
+				if (failSettledIdle && request.method === "pane.report_agent" && request.params.state === "idle") {
+					idleAttempts += 1;
+					return false;
+				}
+				return true;
+			});
+			await harness.handlers.get("session_start")?.({ reason: "startup" }, contextWithoutSession);
+			await vi.runAllTimersAsync();
+			harness.handlers.get("agent_start")?.({}, { ...contextWithoutSession, isIdle: () => false });
+			await vi.runAllTimersAsync();
+
+			failSettledIdle = true;
+			harness.handlers.get("agent_settled")?.({}, contextWithoutSession);
+			await vi.advanceTimersByTimeAsync(0);
+			expect(idleAttempts).toBe(2);
+
+			harness.handlers.get("session_shutdown")?.({ reason: "reload" }, contextWithoutSession);
+			await vi.runAllTimersAsync();
+			expect(idleAttempts).toBe(2);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("sends every state transition in order while a report is in flight", async () => {
 		let releaseFirstReport: ((delivered: boolean) => void) | undefined;
 		let holdReports = false;

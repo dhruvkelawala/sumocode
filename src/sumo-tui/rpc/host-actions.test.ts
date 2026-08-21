@@ -30,6 +30,7 @@ type Notification = { message: string; level: NotificationLevel };
 const SELECTOR_DOWN = "\x1b[B";
 const SELECTOR_ENTER = "\r";
 const SELECTOR_ESCAPE = "\x1b";
+const SELECTOR_TAB = "\t";
 
 class FakeInlineEditor {
 	public text = "";
@@ -404,12 +405,13 @@ describe("RpcHostActions", () => {
 		expect(inlineSelectors.getActiveKind()).toBeUndefined();
 		expect(controls.calls).toEqual([
 			"getEnabledModels",
+			"getAvailableModels",
 			"setModel:openai/gpt-5",
 		]);
 		expect(notifications).toEqual([]);
 	});
 
-	it("populates the bare /model selector from getEnabledModels instead of the full available-model list", async () => {
+	it("starts the bare /model selector on the enabled-model tab when all models include disabled entries", async () => {
 		const { actions, controls, inlineSelectors } = setup();
 		controls.models = [
 			{ provider: "disabled", id: "outside-scope", label: "disabled/outside-scope", active: false },
@@ -430,7 +432,42 @@ describe("RpcHostActions", () => {
 
 		expect(controls.calls).toEqual([
 			"getEnabledModels",
+			"getAvailableModels",
 			"setModel:anthropic/claude-opus-4-8",
+		]);
+	});
+
+	it("lets Tab switch the bare /model selector from enabled models to all models", async () => {
+		const { actions, controls, inlineSelectors } = setup();
+		controls.models = [
+			{ provider: "disabled", id: "outside-scope", label: "disabled/outside-scope", active: false },
+			{ provider: "anthropic", id: "claude-opus-4-8", label: "anthropic/claude-opus-4-8", active: true },
+			{ provider: "google", id: "gemini-3", label: "google/gemini-3", active: false },
+		];
+		controls.enabledModels = [
+			{ provider: "anthropic", id: "claude-opus-4-8", label: "anthropic/claude-opus-4-8", active: true },
+			{ provider: "google", id: "gemini-3", label: "google/gemini-3", active: false },
+		];
+
+		const model = actions.handleSubmittedText("/model");
+		await flush();
+		expect(inlineSelectors.getActiveKind()).toBe("select");
+		let rendered = inlineSelectors.render(100).join("\n").replace(/\u001b\[[0-9;]*m/g, "");
+		expect(rendered).toContain("ENABLED");
+		expect(rendered).toContain("ALL");
+		expect(rendered).not.toContain("disabled/outside-scope");
+
+		inlineSelectors.handleInput(SELECTOR_TAB);
+		rendered = inlineSelectors.render(100).join("\n").replace(/\u001b\[[0-9;]*m/g, "");
+		expect(rendered).toContain("disabled/outside-scope");
+
+		inlineSelectors.handleInput(SELECTOR_ENTER);
+		await model;
+
+		expect(controls.calls).toEqual([
+			"getEnabledModels",
+			"getAvailableModels",
+			"setModel:disabled/outside-scope",
 		]);
 	});
 
@@ -447,6 +484,7 @@ describe("RpcHostActions", () => {
 
 		expect(controls.calls).toEqual([
 			"getEnabledModels",
+			"getAvailableModels",
 			"setModel:openai/gpt-5",
 		]);
 	});

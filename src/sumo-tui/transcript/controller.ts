@@ -75,6 +75,55 @@ function eventMessage(event: unknown): unknown | undefined {
 	return asRecord(event)?.message;
 }
 
+/**
+ * Fold one streamed `assistantMessageEvent` delta into the running assistant
+ * draft. Pi's RPC/JSON wire protocol (`toJsonEvent`) strips the cumulative
+ * `message`/`partial` snapshot from `message_update` events: `message_start`
+ * seeds the assistant message, the deltas build it up, and `message_end`
+ * carries the authoritative final message. Without this the RPC transcript sees
+ * `message_update` with no `.message`, so it would blank the draft and the
+ * assistant bubble would stay empty until the turn ends. Tool-call deltas are
+ * ignored here because live tool executions render from the dedicated
+ * `tool_execution_*` events, and `start`/`done`/`error` settle through
+ * `message_end`.
+ */
+function applyAssistantStreamDelta(draft: unknown | undefined, event: Record<string, unknown> | undefined): unknown | undefined {
+	if (!event || typeof event.type !== "string") return draft;
+	const base = asRecord(draft) ?? { role: "assistant", content: [] };
+	const content: Record<string, unknown>[] = Array.isArray(base.content)
+		? [...(base.content as Record<string, unknown>[])]
+		: [];
+	const rawIndex = event.contentIndex;
+	const index = typeof rawIndex === "number" && rawIndex >= 0 ? Math.floor(rawIndex) : content.length;
+	while (content.length <= index) content.push({ type: "text", text: "" });
+	const delta = typeof event.delta === "string" ? event.delta : "";
+	const finalText = typeof event.content === "string" ? event.content : undefined;
+	const current = asRecord(content[index]);
+	switch (event.type) {
+		case "text_start":
+			content[index] = { type: "text", text: "" };
+			break;
+		case "text_delta":
+			content[index] = { type: "text", text: (current?.type === "text" && typeof current.text === "string" ? current.text : "") + delta };
+			break;
+		case "text_end":
+			content[index] = { type: "text", text: finalText ?? (current?.type === "text" && typeof current.text === "string" ? current.text : "") };
+			break;
+		case "thinking_start":
+			content[index] = { type: "thinking", thinking: "" };
+			break;
+		case "thinking_delta":
+			content[index] = { type: "thinking", thinking: (current?.type === "thinking" && typeof current.thinking === "string" ? current.thinking : "") + delta };
+			break;
+		case "thinking_end":
+			content[index] = { type: "thinking", thinking: finalText ?? (current?.type === "thinking" && typeof current.thinking === "string" ? current.thinking : "") };
+			break;
+		default:
+			return draft;
+	}
+	return { ...base, content };
+}
+
 function eventMessages(event: unknown): unknown[] | undefined {
 	const messages = asRecord(event)?.messages;
 	return Array.isArray(messages) ? messages : undefined;
@@ -321,6 +370,13 @@ export class TranscriptController {
 			case "message_update": {
 				this.pendingChatOp = "incremental";
 				const message = eventMessage(record);
+				if (message === undefined && record.type === "message_update") {
+					// RPC streaming delta (no cumulative snapshot on the wire): fold it
+					// into the running draft instead of blanking it. See
+					// applyAssistantStreamDelta.
+					this.draftMessage = applyAssistantStreamDelta(this.draftMessage, asRecord(record.assistantMessageEvent));
+					break;
+				}
 				const hydratedIndex = stableMessageId(message) ? findCommittedMessageIndex(this.committedMessages, message) : -1;
 				if (hydratedIndex >= 0) {
 					// Session hydration may already contain a buffered update. Upsert by
@@ -430,8 +486,14 @@ export class TranscriptController {
 		}
 
 		const transcript = this.publish(this.viewModel());
-		const messageRole = asRecord(eventMessage(record))?.role;
-		if ((record.type === "message_start" || record.type === "message_update") && messageRole === "assistant") {
+		const eventMsg = eventMessage(record);
+		const messageRole = asRecord(eventMsg)?.role;
+		// Over RPC the streaming `message_update` carries only the delta (no
+		// `.message`), so key the streaming indicator off the delta payload too.
+		const isAssistantStreamDelta = record.type === "message_update"
+			&& eventMsg === undefined
+			&& asRecord(record.assistantMessageEvent) !== undefined;
+		if ((record.type === "message_start" || record.type === "message_update") && (messageRole === "assistant" || isAssistantStreamDelta)) {
 			this.options.chat?.beginStreaming();
 		} else if ((record.type === "message_end" && messageRole === "assistant") || record.type === "agent_end") {
 			this.options.chat?.endStreaming();

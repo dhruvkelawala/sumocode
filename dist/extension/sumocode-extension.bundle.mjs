@@ -1982,7 +1982,7 @@ function wrapIndentedText(text, width, indent) {
 function optionLabel(index) {
   return `${String.fromCharCode(65 + index)}) `;
 }
-function buildInnerRows(snapshot, contentWidth, extras) {
+function buildInnerRows(snapshot, contentWidth, extras, compact) {
   const inner = [];
   const indent = "     ";
   const colors = activeThemeColors();
@@ -1994,7 +1994,7 @@ function buildInnerRows(snapshot, contentWidth, extras) {
   for (const questionLine of wrapIndentedText(snapshot.title, Math.max(1, contentWidth - 7), indent)) {
     inner.push(fg2(questionLine, colors.foreground));
   }
-  inner.push("");
+  if (!compact) inner.push("");
   for (let i = 0; i < snapshot.options.length; i += 1) {
     const focused = i === snapshot.focusedIndex;
     const mark = focusMarker(focused);
@@ -2009,16 +2009,18 @@ function buildInnerRows(snapshot, contentWidth, extras) {
       inner.push(`${prefix}${text}`);
     }
   }
-  inner.push("");
-  inner.push(splitRule(contentWidth));
-  inner.push(center(fg2("\u2191\u2193 wander    \u23CE answer    \u238B retreat", colors.foregroundDim), contentWidth));
+  if (!compact) {
+    inner.push("");
+    inner.push(splitRule(contentWidth));
+    inner.push(center(fg2("\u2191\u2193 wander    \u23CE answer    \u238B retreat", colors.foregroundDim), contentWidth));
+  }
   for (const extra of extras) inner.push(extra);
   inner.push("");
   return inner;
 }
 function renderDivineQuery(snapshot, width, options = {}) {
   if (width < 1) return [];
-  const inner = buildInnerRows(snapshot, width, options.extras ?? []);
+  const inner = buildInnerRows(snapshot, width, options.extras ?? [], options.compact === true);
   return inner.map((innerLine) => wrapPanelRow(innerLine, width));
 }
 function updateDivineQuery(snapshot, data) {

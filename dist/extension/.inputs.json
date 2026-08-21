@@ -121,6 +121,6 @@
     "src/working-indicator.ts",
     "tsconfig.json"
   ],
-  "hash": "757d84113de56cfa44eccc36653d121721fb4c1b17d66670d15c33dfa7cd6f3a",
-  "outputsHash": "a1310ee7687bd29b6bf1bf6a3ab91a3c9cb79f286c803b74cfc71dd533bfa8fe"
+  "hash": "698a93eee1e07fd8b50bad574f2dd53b1c758ad7440c67db6ef3e8b7bef20c64",
+  "outputsHash": "951de6f2ab8f1a3a44432d7357cf15f033986c2256e2fe977f1f65133b729b02"
 }

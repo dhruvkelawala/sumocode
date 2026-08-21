@@ -7,16 +7,19 @@ function pi(stdout: string, code = 0) {
 
 describe("herdrTerminalHost", () => {
 	afterEach(() => {
+		vi.unstubAllEnvs();
+		delete process.env.HERDR_ENV;
 		delete process.env.HERDR_PANE_ID;
 	});
 	it("splits from the caller pane and runs the command with Herdr 0.8 pane primitives", async () => {
+		process.env.HERDR_ENV = "1";
 		process.env.HERDR_PANE_ID = "w7:p3";
 		const exec = vi.fn(async (_bin: string, args: string[]) => args[1] === "split"
 			? { stdout: JSON.stringify({ result: { pane: { pane_id: "w7:p9", workspace_id: "w7", tab_id: "w7:t2" } } }), stderr: "", code: 0, killed: false }
 			: { stdout: JSON.stringify({ result: { type: "ok" } }), stderr: "", code: 0, killed: false });
 		const result = await herdrTerminalHost.openCommandInSplit({ exec } as never, "right", { cwd: "/tmp", shellCommand: "echo ok" });
 		expect(result).toEqual({ ok: true, pane: { host: "herdr", paneId: "w7:p9", workspaceId: "w7" } });
-		expect(exec).toHaveBeenNthCalledWith(1, "herdr", ["pane", "split", "w7:p3", "--direction", "right", "--cwd", "/tmp", "--no-focus"], { timeout: 5000 });
+		expect(exec).toHaveBeenNthCalledWith(1, "herdr", ["pane", "split", "--current", "--direction", "right", "--cwd", "/tmp", "--no-focus"], { timeout: 5000 });
 		expect(exec).toHaveBeenNthCalledWith(2, "herdr", ["pane", "run", "w7:p9", "echo ok"], { timeout: 5000 });
 	});
 	it("creates a command tab when no caller pane is available", async () => {
@@ -45,6 +48,7 @@ describe("herdrTerminalHost", () => {
 	});
 
 	it("reports malformed split JSON", async () => {
+		process.env.HERDR_ENV = "1";
 		process.env.HERDR_PANE_ID = "w1:p1";
 		const fake = pi("not-json");
 		const result = await herdrTerminalHost.openCommandInSplit(fake as never, "right", { cwd: "/tmp", shellCommand: "echo ok" });
@@ -127,19 +131,23 @@ describe("herdrTerminalHost", () => {
 		vi.unstubAllEnvs();
 	});
 
-	it("anchors a new subagents tab to an opaque caller workspace id", async () => {
+	it("anchors a new subagents tab to Herdr's calling pane workspace", async () => {
+		vi.stubEnv("HERDR_ENV", "1");
 		vi.stubEnv("HERDR_PANE_ID", "w1K:pB");
-		try {
-			const exec = vi.fn(async (_bin: string, args: string[]) => args[0] === "tab"
-				? { stdout: JSON.stringify({ result: { root_pane: { pane_id: "w1K:p9", workspace_id: "w1K", tab_id: "w1K:t3" } } }), stderr: "", code: 0, killed: false }
-				: { stdout: JSON.stringify({ result: { type: "ok" } }), stderr: "", code: 0, killed: false });
-			await herdrTerminalHost.startAgentPane!({ exec } as never, {
-				name: "research", cwd: "/repo", shellCommand: "run child", placement: { kind: "new-tab", label: "subagents" },
-			});
-			expect(exec).toHaveBeenNthCalledWith(1, "herdr", ["tab", "create", "--workspace", "w1K", "--cwd", "/repo", "--label", "subagents", "--no-focus"], { timeout: 5000 });
-		} finally {
-			vi.unstubAllEnvs();
-		}
+		const exec = vi.fn(async (_bin: string, args: string[]) => {
+			if (args[0] === "pane" && args[1] === "current") {
+				return { stdout: JSON.stringify({ result: { pane: { pane_id: "w1K:pB", workspace_id: "w1K", tab_id: "w1K:t1" } } }), stderr: "", code: 0, killed: false };
+			}
+			if (args[0] === "tab") {
+				return { stdout: JSON.stringify({ result: { root_pane: { pane_id: "w1K:p9", workspace_id: "w1K", tab_id: "w1K:t3" } } }), stderr: "", code: 0, killed: false };
+			}
+			return { stdout: JSON.stringify({ result: { type: "ok" } }), stderr: "", code: 0, killed: false };
+		});
+		await herdrTerminalHost.startAgentPane!({ exec } as never, {
+			name: "research", cwd: "/repo", shellCommand: "run child", placement: { kind: "new-tab", label: "subagents" },
+		});
+		expect(exec).toHaveBeenNthCalledWith(1, "herdr", ["pane", "current", "--current"], { timeout: 5000 });
+		expect(exec).toHaveBeenNthCalledWith(2, "herdr", ["tab", "create", "--workspace", "w1K", "--cwd", "/repo", "--label", "subagents", "--no-focus"], { timeout: 5000 });
 	});
 
 	it("keeps a running child when pane rename fails", async () => {
@@ -153,10 +161,34 @@ describe("herdrTerminalHost", () => {
 		})).resolves.toMatchObject({ ok: true, paneId: "w1:p7" });
 	});
 
-	it("sends pane text through pane run", async () => {
+	it("sends pane text through Herdr's agent prompt primitive", async () => {
 		const fake = pi("");
 		await expect(herdrTerminalHost.sendPaneText(fake as never, { host: "herdr", paneId: "w1:p2" }, "continue with tests")).resolves.toEqual({ ok: true });
-		expect(fake.exec).toHaveBeenCalledWith("herdr", ["pane", "run", "w1:p2", "continue with tests"], { timeout: 5000 });
+		expect(fake.exec).toHaveBeenCalledWith("herdr", ["agent", "prompt", "w1:p2", "continue with tests"], { timeout: 10000 });
+	});
+
+	it("does not fall back to raw pane input when Herdr reports a blocked agent", async () => {
+		const exec = vi.fn(async () => ({
+			stdout: "",
+			stderr: JSON.stringify({ error: { code: "agent_blocked", message: "agent is waiting for approval" } }),
+			code: 1,
+			killed: false,
+		}));
+		await expect(herdrTerminalHost.sendPaneText({ exec } as never, { host: "herdr", paneId: "w1:p2" }, "continue with tests")).resolves.toEqual({ ok: false, error: "agent is waiting for approval" });
+		expect(exec).toHaveBeenCalledTimes(1);
+		expect(exec).toHaveBeenCalledWith("herdr", ["agent", "prompt", "w1:p2", "continue with tests"], { timeout: 10000 });
+	});
+
+	it("does not fall back to raw pane input when Herdr does not recognize an agent", async () => {
+		const exec = vi.fn(async () => ({
+			stdout: "",
+			stderr: JSON.stringify({ error: { code: "agent_not_found", message: "agent target w1:p2 not found" } }),
+			code: 1,
+			killed: false,
+		}));
+		await expect(herdrTerminalHost.sendPaneText({ exec } as never, { host: "herdr", paneId: "w1:p2" }, "continue with tests")).resolves.toEqual({ ok: false, error: "agent target w1:p2 not found" });
+		expect(exec).toHaveBeenCalledTimes(1);
+		expect(exec).toHaveBeenCalledWith("herdr", ["agent", "prompt", "w1:p2", "continue with tests"], { timeout: 10000 });
 	});
 
 	it("reports malformed json", async () => {

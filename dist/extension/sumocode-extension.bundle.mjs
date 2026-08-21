@@ -5299,6 +5299,7 @@ function parseHerdrError(result) {
   }
   return void 0;
 }
+var HERDR_AGENT_PROMPT_TIMEOUT_MS = 1e4;
 var hasHerdrCaller = (env = process.env) => env.HERDR_ENV === "1" && Boolean(env.HERDR_PANE_ID);
 function workspaceIdFromPaneEnv(env) {
   const paneId2 = env.HERDR_PANE_ID;
@@ -5424,7 +5425,7 @@ var herdrTerminalHost = {
   startAgentPane,
   async sendPaneText(pi, pane, text) {
     try {
-      const prompted = await pi.exec("herdr", ["agent", "prompt", pane.paneId, text], { timeout: 5e3 });
+      const prompted = await pi.exec("herdr", ["agent", "prompt", pane.paneId, text], { timeout: HERDR_AGENT_PROMPT_TIMEOUT_MS });
       if (prompted.code === 0) return { ok: true };
       const error = parseHerdrError(prompted);
       if (error?.code === "agent_blocked") return { ok: false, error: error.message || "agent is blocked" };

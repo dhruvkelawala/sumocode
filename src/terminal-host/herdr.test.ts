@@ -164,7 +164,7 @@ describe("herdrTerminalHost", () => {
 	it("sends pane text through Herdr's agent prompt primitive", async () => {
 		const fake = pi("");
 		await expect(herdrTerminalHost.sendPaneText(fake as never, { host: "herdr", paneId: "w1:p2" }, "continue with tests")).resolves.toEqual({ ok: true });
-		expect(fake.exec).toHaveBeenCalledWith("herdr", ["agent", "prompt", "w1:p2", "continue with tests"], { timeout: 5000 });
+		expect(fake.exec).toHaveBeenCalledWith("herdr", ["agent", "prompt", "w1:p2", "continue with tests"], { timeout: 10000 });
 	});
 
 	it("does not fall back to raw pane input when Herdr reports a blocked agent", async () => {
@@ -176,7 +176,7 @@ describe("herdrTerminalHost", () => {
 		}));
 		await expect(herdrTerminalHost.sendPaneText({ exec } as never, { host: "herdr", paneId: "w1:p2" }, "continue with tests")).resolves.toEqual({ ok: false, error: "agent is waiting for approval" });
 		expect(exec).toHaveBeenCalledTimes(1);
-		expect(exec).toHaveBeenCalledWith("herdr", ["agent", "prompt", "w1:p2", "continue with tests"], { timeout: 5000 });
+		expect(exec).toHaveBeenCalledWith("herdr", ["agent", "prompt", "w1:p2", "continue with tests"], { timeout: 10000 });
 	});
 
 	it("does not fall back to raw pane input when Herdr does not recognize an agent", async () => {
@@ -188,7 +188,7 @@ describe("herdrTerminalHost", () => {
 		}));
 		await expect(herdrTerminalHost.sendPaneText({ exec } as never, { host: "herdr", paneId: "w1:p2" }, "continue with tests")).resolves.toEqual({ ok: false, error: "agent target w1:p2 not found" });
 		expect(exec).toHaveBeenCalledTimes(1);
-		expect(exec).toHaveBeenCalledWith("herdr", ["agent", "prompt", "w1:p2", "continue with tests"], { timeout: 5000 });
+		expect(exec).toHaveBeenCalledWith("herdr", ["agent", "prompt", "w1:p2", "continue with tests"], { timeout: 10000 });
 	});
 
 	it("reports malformed json", async () => {

@@ -206,16 +206,37 @@ describe("ChatMessage", () => {
 	it("uses the Cathedral code fallback when Mermaid rendering is off or too wide", async () => {
 		const yoga = await loadYoga();
 		const source = "flowchart LR\n A[Parse] --> B[Render]";
+		// A single unbreakable label wider than the viewport cannot fit in any
+		// layout direction, so even the top-down retry gives up.
+		const wideSource = "flowchart LR\n A[AnExtremelyLongUnbreakableNodeLabelThatCannotFit] --> B[Render]";
 		const off = ChatMessage.create(yoga, "sumo", "", undefined, FIXED_TIME, [{ type: "code", lang: "mermaid", source }], { mermaidRenderingMode: "off" });
-		const narrow = ChatMessage.create(yoga, "sumo", "", undefined, FIXED_TIME, [{ type: "code", lang: "mermaid", source }]);
+		const narrow = ChatMessage.create(yoga, "sumo", "", undefined, FIXED_TIME, [{ type: "code", lang: "mermaid", source: wideSource }]);
 
-		expect(renderRows(off, 48).map(stripAnsi).join("\n")).toContain("mermaid");
-		expect(renderRows(narrow, 20).map(stripAnsi).join("\n")).toContain("mermaid");
+		const offPlain = renderRows(off, 48).map(stripAnsi).join("\n");
+		expect(offPlain).toContain("mermaid");
+		expect(offPlain).not.toContain("mermaid diagram not rendered:");
+		const narrowPlain = renderRows(narrow, 20).map(stripAnsi).join("\n");
+		expect(narrowPlain).toContain("mermaid");
+		expect(narrowPlain.replace(/[│╭╮╰╯─]/g, "").replace(/\s+/g, " ")).toContain("mermaid diagram not rendered:");
+		expect(narrowPlain).toContain("columns");
 		off.dispose();
 		narrow.dispose();
 	});
 
-	it("uses the code fallback for Mermaid source over the row limit", async () => {
+	it("re-lays out a too-wide LR flowchart top-down instead of falling back", async () => {
+		const yoga = await loadYoga();
+		const source = "flowchart LR\n A[Parse] --> B[Render]";
+		const message = ChatMessage.create(yoga, "sumo", "", undefined, FIXED_TIME, [{ type: "code", lang: "mermaid", source }]);
+
+		// 20 columns is too narrow for the LR layout but fits the TD retry.
+		const plain = renderRows(message, 20).map(stripAnsi).join("\n");
+		expect(plain).toContain("\u250c");
+		expect(plain).toContain("Parse");
+		expect(plain).not.toContain("mermaid");
+		message.dispose();
+	});
+
+	it("renders tall Mermaid diagrams that the old row limit rejected", async () => {
 		const yoga = await loadYoga();
 		const source = ["flowchart TD", ...Array.from({ length: 21 }, (_, index) => `N${index} --> N${index + 1}`)].join("\n");
 		const message = ChatMessage.create(
@@ -227,7 +248,9 @@ describe("ChatMessage", () => {
 			[{ type: "code", lang: "mermaid", source }],
 		);
 
-		expect(renderRows(message, 90).map(stripAnsi).join("\n")).toContain("mermaid");
+		const plain = renderRows(message, 90).map(stripAnsi).join("\n");
+		expect(plain).toContain("\u250c");
+		expect(plain).not.toContain("mermaid");
 		message.dispose();
 	});
 

@@ -1,15 +1,17 @@
+import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { RpcModelOption } from "./controls.js";
 
-const THINKING_LEVELS: Record<"off" | "minimal" | "low" | "medium" | "high" | "xhigh", true> = {
+const THINKING_LEVELS: Record<ModelThinkingLevel, true> = {
 	off: true,
 	minimal: true,
 	low: true,
 	medium: true,
 	high: true,
 	xhigh: true,
+	max: true,
 };
 
 function resolvePiAgentDir(env: NodeJS.ProcessEnv = process.env): string {

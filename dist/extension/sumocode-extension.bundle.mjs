@@ -4801,6 +4801,7 @@ function registerSumoReloadCommand(pi, deps = {}) {
 }
 
 // src/command-palette.ts
+import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import { Key as Key3, matchesKey as matchesKey4, truncateToWidth as truncateToWidth5, visibleWidth as visibleWidth6 } from "@earendil-works/pi-tui";
 var COMMAND_PALETTE_HINT_ROW = "\u2191\u2193 wander    \u23CE attend    \u238B retreat";
 var COMMAND_PALETTE_THINKING_LEVELS = [
@@ -4809,7 +4810,8 @@ var COMMAND_PALETTE_THINKING_LEVELS = [
   "low",
   "medium",
   "high",
-  "xhigh"
+  "xhigh",
+  "max"
 ];
 var COMMAND_PALETTE_SHORTCUT = "ctrl+/";
 var COMMAND_PALETTE_OVERLAY_OPTIONS = {
@@ -4978,6 +4980,11 @@ function buildPaletteSnapshot(ctx) {
     ]
   };
 }
+function thinkingLevelsForContext(ctx) {
+  const model = ctx.model;
+  if (!model) return COMMAND_PALETTE_THINKING_LEVELS;
+  return getSupportedThinkingLevels(model);
+}
 async function handlePaletteSelection(mode, ctx, pi) {
   if (mode === void 0) return;
   if (mode === "SESSION") {
@@ -4992,8 +4999,9 @@ async function handlePaletteSelection(mode, ctx, pi) {
     return;
   }
   if (mode === "THINKING") {
-    const selected = await showDivineQuery(ctx, "Set thinking level", [...COMMAND_PALETTE_THINKING_LEVELS]);
-    if (selected && COMMAND_PALETTE_THINKING_LEVELS.includes(selected)) {
+    const levels = thinkingLevelsForContext(ctx);
+    const selected = await showDivineQuery(ctx, "Set thinking level", [...levels]);
+    if (selected && levels.includes(selected)) {
       pi.setThinkingLevel(selected);
     }
     return;

@@ -14,14 +14,13 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { Component, TUI } from "@earendil-works/pi-tui";
 import { visibleWidth } from "@earendil-works/pi-tui";
-import { formatCwd } from "../footer.js";
+import { formatCwd, type ThinkingLevel } from "../footer.js";
 import { getGitBranch, sessionHasMessages as cachedSessionHasMessages } from "../session-cache.js";
 import { renderInputHints } from "./input-frame.js";
 
 const SPLASH_INPUT_FRAME_WIDTH = 60;
 const ACTIVE_HINT_HORIZONTAL_PADDING = 1;
 const ANSI_PATTERN = /\u001b\[[0-9;]*m/g;
-type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
 function centerAnsi(line: string, width: number): string {
 	const visible = visibleWidth(line.replace(ANSI_PATTERN, ""));

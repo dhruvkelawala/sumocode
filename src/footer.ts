@@ -1,14 +1,16 @@
 import { execFileSync } from "node:child_process";
 import { homedir } from "node:os";
 import { basename } from "node:path";
+import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext, ReadonlyFooterDataProvider } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 
 /**
- * Pi's `ThinkingLevel` union, inlined to avoid pulling in `pi-agent-core`
- * as a direct dep. Mirrors the upstream definition exactly.
+ * Pi's thinking-level union, aliased from the canonical `@earendil-works/pi-ai`
+ * definition (`off | minimal | low | medium | high | xhigh | max`) so new
+ * upstream levels flow in automatically. Do not redeclare this union by hand.
  */
-export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+export type ThinkingLevel = ModelThinkingLevel;
 import { shouldApplyFastMode, type FastModeState } from "./fast-mode.js";
 import { getSessionUsage as getCachedSessionUsage, sessionHasMessages as cachedSessionHasMessages, linkGitBranchProvider } from "./session-cache.js";
 import { activeThemeColors, type SumoCodeState } from "./themes/index.js";

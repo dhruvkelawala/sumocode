@@ -76,8 +76,6 @@ interface DiagDetail {
 	readonly taskMode?: string;
 	readonly keepOpen?: string;
 	readonly graceMs?: number;
-	readonly cmuxSurfaceId?: string;
-	readonly cmuxWorkspaceId?: string;
 	readonly source?: string;
 	readonly armed?: boolean;
 	readonly userTookOver?: boolean;
@@ -87,8 +85,7 @@ interface DiagDetail {
 
 /**
  * Env-gated diagnostic logging. Set `SUMOCODE_TASK_DIAG_FILE=/tmp/xxx.jsonl`
- * to capture every lifecycle event the auto-exit goes through. Used by
- * `scripts/diag-task-auto-exit.mjs` to figure out where the close stalls.
+ * to capture every lifecycle event the auto-exit goes through.
  * No-op when the env var is unset (production default).
  */
 function diagLog(event: string, detail?: DiagDetail): void {

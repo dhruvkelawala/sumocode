@@ -410,7 +410,7 @@ async function renderFixtureScene(scenario, fixture) {
 		cumulativeTokens: 3400000,
 		costUsd: 0.42,
 		mcpServers: sidebar.PLACEHOLDER_MCP,
-		memory: ["prefers Scriptorium language", "uses cmux", "keeps UI review evidence"],
+		memory: ["prefers Scriptorium language", "uses herdr", "keeps UI review evidence"],
 		memoryTotal: 48,
 		activeSubTab: "CONTEXT",
 	}, sidebarWidth) : [];
@@ -472,7 +472,7 @@ async function applyMemoryScriptoriumOverlay(lines, cols, rows) {
 		{ id: "wf-2", text: "visual approval before done", tags: ["sumocode:workflow"] },
 		{ id: "proj-1", text: "sumocode/cathedral parity", tags: ["sumocode:projects"] },
 		{ id: "proj-2", text: "openclaw ACPX integration", tags: ["sumocode:projects"] },
-		{ id: "sys-1", text: "cmux runtime, libghostty", tags: ["sumocode:system"] },
+		{ id: "sys-1", text: "host runtime, libghostty", tags: ["sumocode:system"] },
 		{ id: "sys-2", text: "mac mini portrait", tags: ["sumocode:system"] },
 		{ id: "sys-3", text: "macbook landscape", tags: ["sumocode:system"] },
 		{ id: "gen-1", text: "ask open-ended questions", tags: ["sumocode:general"] },

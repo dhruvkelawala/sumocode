@@ -73,6 +73,7 @@
     "src/session-cache.ts",
     "src/sidebar-placement.ts",
     "src/sidebar.ts",
+    "src/skill-inline.ts",
     "src/slate.ts",
     "src/splash.ts",
     "src/subagents/backend-pane.ts",
@@ -121,6 +122,6 @@
     "src/working-indicator.ts",
     "tsconfig.json"
   ],
-  "hash": "5f4cc5eee091b4fd4867143b68d24483fa026f60a967bd0b50c4ff96a4de29a9",
-  "outputsHash": "75ebb7e95ad3df3c2b1d8815275c64e44bba3f48b66c630a97360482dd0f9df5"
+  "hash": "57476793435de02be164e73ee8db7651e14a714ebfbb0301ccace64a28d4b307",
+  "outputsHash": "4694682c8e5d77b524c1d5f0e412b76f84e93506b9386e02235a975686cc338f"
 }

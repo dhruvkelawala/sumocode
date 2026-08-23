@@ -1,5 +1,5 @@
 // src/extension.ts
-import { existsSync as existsSync11, readFileSync as readFileSync13, realpathSync as realpathSync4 } from "node:fs";
+import { existsSync as existsSync11, readFileSync as readFileSync14, realpathSync as realpathSync4 } from "node:fs";
 import { homedir as homedir14 } from "node:os";
 import { dirname as dirname12, join as join19, resolve as resolve7, sep } from "node:path";
 import { fileURLToPath as fileURLToPath4 } from "node:url";
@@ -3834,6 +3834,66 @@ ${summaries.join("\n\n")}`
   });
 };
 
+// src/skill-inline.ts
+import * as fs2 from "node:fs";
+import {
+  getAgentDir as getAgentDir2,
+  loadSkills as loadSkills2,
+  SettingsManager as SettingsManager2,
+  stripFrontmatter
+} from "@earendil-works/pi-coding-agent";
+var SKILL_TOKEN = /(^|(?<=\s))\/skill:([A-Za-z0-9][A-Za-z0-9_-]*)/g;
+var readSkillBodyFromDisk = (skill) => stripFrontmatter(fs2.readFileSync(skill.filePath, "utf-8")).trim();
+var expandInlineSkillTokens = (text, skills, readSkillBody = readSkillBodyFromDisk) => {
+  const byName = /* @__PURE__ */ new Map();
+  for (const skill of skills) byName.set(skill.name, skill);
+  const expanded = [];
+  const result = text.replace(SKILL_TOKEN, (match, prefix, name, offset) => {
+    if (offset === 0) return match;
+    const skill = byName.get(name);
+    if (!skill) return match;
+    let body = "";
+    try {
+      body = readSkillBody(skill).trim();
+    } catch {
+      return match;
+    }
+    expanded.push(name);
+    return `${prefix}<skill name="${skill.name}" location="${skill.filePath}">
+References are relative to ${skill.baseDir}.
+
+${body}
+</skill>`;
+  });
+  return { text: result, expanded };
+};
+var discoverSkills = (cwd) => {
+  const resolvedCwd = cwd ?? process.cwd();
+  const settingsManager = SettingsManager2.create(resolvedCwd);
+  return loadSkills2({
+    cwd: resolvedCwd,
+    agentDir: getAgentDir2(),
+    skillPaths: settingsManager.getSkillPaths(),
+    includeDefaults: true
+  }).skills;
+};
+function installSkillInlineExpansion(pi, options = {}) {
+  let cache2;
+  const loadSkillsOnce = () => {
+    if (!cache2 || cache2.cwd !== options.cwd) cache2 = { cwd: options.cwd, skills: discoverSkills(options.cwd) };
+    return cache2.skills;
+  };
+  pi.on("session_start", () => {
+    cache2 = void 0;
+  });
+  pi.on("input", (event) => {
+    if (!event.text.includes("/skill:")) return { action: "continue" };
+    const { text, expanded } = expandInlineSkillTokens(event.text, loadSkillsOnce());
+    if (expanded.length === 0) return { action: "continue" };
+    return { action: "transform", text };
+  });
+}
+
 // src/sumo-tui/runtime/lifecycle.ts
 import { appendFileSync as appendFileSync2, mkdirSync as mkdirSync2 } from "node:fs";
 import { homedir as homedir4 } from "node:os";
@@ -6355,7 +6415,7 @@ function registerSpinnerCommand(pi) {
 
 // src/commands/sync.ts
 import { execFile as execFileCallback } from "node:child_process";
-import { existsSync as existsSync3, lstatSync, mkdirSync as mkdirSync3, readFileSync as readFileSync3, realpathSync, renameSync as renameSync2, rmSync, symlinkSync } from "node:fs";
+import { existsSync as existsSync3, lstatSync, mkdirSync as mkdirSync3, readFileSync as readFileSync4, realpathSync, renameSync as renameSync2, rmSync, symlinkSync } from "node:fs";
 import { homedir as homedir6 } from "node:os";
 import { dirname as dirname2, join as join5, resolve as resolve2 } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -6407,7 +6467,7 @@ function isGitRepo(dir, deps) {
 }
 function packageNameAt(dir, deps) {
   const exists = deps.exists ?? existsSync3;
-  const readFile = deps.readFile ?? ((path2, encoding) => readFileSync3(path2, encoding));
+  const readFile = deps.readFile ?? ((path2, encoding) => readFileSync4(path2, encoding));
   const packagePath = join5(dir, "package.json");
   if (!exists(packagePath)) return void 0;
   try {
@@ -6604,7 +6664,7 @@ function registerSumoSyncCommand(pi, deps = {}) {
 }
 
 // src/commands/tabs.ts
-import { existsSync as existsSync4, readFileSync as readFileSync4, writeFileSync as writeFileSync3 } from "node:fs";
+import { existsSync as existsSync4, readFileSync as readFileSync5, writeFileSync as writeFileSync3 } from "node:fs";
 import { homedir as homedir7 } from "node:os";
 import { join as join6 } from "node:path";
 var TABS_LOCAL_CONFIG_KEY = "topChromeHidden";
@@ -6612,7 +6672,7 @@ var DEFAULT_TABS_CONFIG_PATH = join6(homedir7(), ".sumocode", "local-config.json
 function isTopChromeHidden(configPath = DEFAULT_TABS_CONFIG_PATH) {
   try {
     if (!existsSync4(configPath)) return false;
-    const raw = readFileSync4(configPath, "utf8");
+    const raw = readFileSync5(configPath, "utf8");
     const parsed = JSON.parse(raw);
     return parsed[TABS_LOCAL_CONFIG_KEY] === true;
   } catch {
@@ -6623,7 +6683,7 @@ function setTopChromeHidden(hidden, configPath = DEFAULT_TABS_CONFIG_PATH) {
   let parsed = {};
   try {
     if (existsSync4(configPath)) {
-      parsed = JSON.parse(readFileSync4(configPath, "utf8"));
+      parsed = JSON.parse(readFileSync5(configPath, "utf8"));
       if (typeof parsed !== "object" || parsed === null) parsed = {};
     }
   } catch {
@@ -7265,7 +7325,7 @@ function registerWorktreeCommand(pi, options = {}) {
 import { matchesKey as matchesKey5, wrapTextWithAnsi as wrapTextWithAnsi3 } from "@earendil-works/pi-tui";
 
 // src/memory.ts
-import { readFileSync as readFileSync5 } from "node:fs";
+import { readFileSync as readFileSync6 } from "node:fs";
 import { homedir as homedir8 } from "node:os";
 import { join as join8 } from "node:path";
 var MemoryClientError = class extends Error {
@@ -7283,7 +7343,7 @@ var DEFAULT_REMNIC_TIMEOUT_MS = 3e3;
 var DEFAULT_REMNIC_TOKEN_PATH = join8(homedir8(), ".sumocode", "remnic-auth-token");
 function defaultTokenProvider() {
   try {
-    return readFileSync5(DEFAULT_REMNIC_TOKEN_PATH, "utf8").trim() || void 0;
+    return readFileSync6(DEFAULT_REMNIC_TOKEN_PATH, "utf8").trim() || void 0;
   } catch {
     return void 0;
   }
@@ -7855,7 +7915,7 @@ import { homedir as homedir10 } from "node:os";
 import { basename as basename3, join as join10 } from "node:path";
 
 // src/mcp-config-reader.ts
-import { existsSync as existsSync7, readFileSync as readFileSync6 } from "node:fs";
+import { existsSync as existsSync7, readFileSync as readFileSync7 } from "node:fs";
 import { homedir as homedir9 } from "node:os";
 import { join as join9 } from "node:path";
 function resolveMcpConfigCandidates(opts) {
@@ -7870,7 +7930,7 @@ function resolveMcpConfigCandidates(opts) {
 function readMcpConfig(path2) {
   try {
     if (!existsSync7(path2)) return void 0;
-    const raw = readFileSync6(path2, "utf8");
+    const raw = readFileSync7(path2, "utf8");
     const parsed = JSON.parse(raw);
     if (!parsed || typeof parsed !== "object") return void 0;
     return parsed;
@@ -8818,7 +8878,7 @@ function installMemoryExtraction(pi, createClient = createRemnicMemoryClient) {
 }
 
 // src/splash.ts
-import { readFileSync as readFileSync7 } from "node:fs";
+import { readFileSync as readFileSync8 } from "node:fs";
 import { dirname as dirname4, resolve as resolve3 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 import { truncateToWidth as truncateToWidth10 } from "@earendil-works/pi-tui";
@@ -8869,7 +8929,7 @@ var ASSET_DIR = resolve3(dirname4(fileURLToPath2(import.meta.url)), "assets");
 var FACE_PATH = resolve3(ASSET_DIR, "sumo-face.ans");
 function loadFace() {
   try {
-    const raw = readFileSync7(FACE_PATH, "utf8").replace(CURSOR_VISIBILITY_PATTERN, "");
+    const raw = readFileSync8(FACE_PATH, "utf8").replace(CURSOR_VISIBILITY_PATTERN, "");
     return raw.replace(/\r?\n$/, "").split(/\r?\n/).filter((line) => line.length > 0);
   } catch {
     return [];
@@ -9315,7 +9375,7 @@ import {
   ftruncateSync,
   mkdirSync as mkdirSync6,
   openSync as openSync2,
-  readFileSync as readFileSync9,
+  readFileSync as readFileSync10,
   readSync,
   writeFileSync as writeFileSync5
 } from "node:fs";
@@ -9594,7 +9654,7 @@ import {
   lstatSync as lstatSync2,
   mkdirSync as mkdirSync5,
   openSync,
-  readFileSync as readFileSync8,
+  readFileSync as readFileSync9,
   readdirSync,
   realpathSync as realpathSync2,
   renameSync as renameSync3,
@@ -10324,7 +10384,7 @@ function assertPrivateFile(path2) {
 function readFileNoFollow(path2) {
   const descriptor = openPrivateExistingFile(path2, constants.O_RDONLY);
   try {
-    return readFileSync8(descriptor, "utf8");
+    return readFileSync9(descriptor, "utf8");
   } finally {
     closeSync(descriptor);
   }
@@ -10789,7 +10849,7 @@ function readExitCode(store, path2) {
   let descriptor;
   try {
     descriptor = openPrivateFile(store, path2, constants2.O_RDONLY);
-    const text = readFileSync9(descriptor, "utf8").trim();
+    const text = readFileSync10(descriptor, "utf8").trim();
     if (!/^-?\d+$/.test(text)) return void 0;
     const exitCode = Number.parseInt(text, 10);
     return Number.isSafeInteger(exitCode) ? exitCode : void 0;
@@ -12267,7 +12327,7 @@ import {
   lstatSync as lstatSync3,
   mkdirSync as mkdirSync7,
   openSync as openSync3,
-  readFileSync as readFileSync10,
+  readFileSync as readFileSync11,
   readdirSync as readdirSync2,
   realpathSync as realpathSync3,
   renameSync as renameSync4,
@@ -12399,7 +12459,7 @@ function readPrivateJson(path2, maxBytes = ACTIVITY_DOCUMENT_MAX_BYTES) {
       throw new Error(`Activity state file changed during read: ${path2}`);
     }
     if (opened.size > maxBytes) throw new Error(`Activity state file exceeds ${maxBytes} bytes: ${path2}`);
-    return JSON.parse(readFileSync10(descriptor, "utf8"));
+    return JSON.parse(readFileSync11(descriptor, "utf8"));
   } catch (error) {
     if (errorCode3(error) === "ENOENT") return void 0;
     throw error;
@@ -13415,7 +13475,7 @@ function installActivityManagerBridge(pi, terminalManager, subagentManager, opti
 import {
   existsSync as existsSync9,
   mkdirSync as mkdirSync8,
-  readFileSync as readFileSync11,
+  readFileSync as readFileSync12,
   writeFileSync as writeFileSync7
 } from "node:fs";
 import { dirname as dirname10, join as join16 } from "node:path";
@@ -13424,18 +13484,18 @@ var ERROR_TEXT_MAX = 4096;
 var nodeFs = {
   existsSync: existsSync9,
   mkdirSync: mkdirSync8,
-  readFileSync: readFileSync11,
+  readFileSync: readFileSync12,
   writeFileSync: writeFileSync7
 };
 var errorText = (error) => error instanceof Error ? error.message : String(error);
 var createPaneChildSpawner = (dependencies = {}) => (options) => {
-  const fs2 = dependencies.fs ?? nodeFs;
+  const fs3 = dependencies.fs ?? nodeFs;
   const now = dependencies.now ?? Date.now;
   const baseDir = dependencies.baseDir ?? join16(process.env.TMPDIR ?? "/tmp", "sumocode-subagents");
   const paths = buildVisibleTaskPaths(options.id, now(), baseDir);
-  fs2.mkdirSync(dirname10(paths.promptFile), { recursive: true });
-  fs2.writeFileSync(paths.promptFile, options.prompt, { mode: 384 });
-  fs2.writeFileSync(paths.logFile, "");
+  fs3.mkdirSync(dirname10(paths.promptFile), { recursive: true });
+  fs3.writeFileSync(paths.promptFile, options.prompt, { mode: 384 });
+  fs3.writeFileSync(paths.logFile, "");
   const commandOptions = {
     cwd: options.cwd,
     paths,
@@ -13458,7 +13518,7 @@ var createPaneChildSpawner = (dependencies = {}) => (options) => {
     exitGuard,
     `( ${agentCommand} ) 2>> ${shellEscape3(paths.logFile)}`
   ].join("\n");
-  fs2.writeFileSync(paths.scriptFile, script, { mode: 448 });
+  fs3.writeFileSync(paths.scriptFile, script, { mode: 448 });
   const shellCommand = `exec ${shellEscape3(paths.scriptFile)}`;
   let emitEvent;
   let pane;
@@ -13483,13 +13543,13 @@ var createPaneChildSpawner = (dependencies = {}) => (options) => {
   };
   const readText = (path2) => {
     try {
-      return fs2.existsSync(path2) ? fs2.readFileSync(path2, "utf8") : "";
+      return fs3.existsSync(path2) ? fs3.readFileSync(path2, "utf8") : "";
     } catch (error) {
       return `[unable to read ${path2}: ${errorText(error)}]`;
     }
   };
   const poll = () => {
-    if (settled || interrupted || !fs2.existsSync(paths.exitFile)) return;
+    if (settled || interrupted || !fs3.existsSync(paths.exitFile)) return;
     const marker = readText(paths.exitFile);
     if (!marker.trim()) return;
     const exitCode = readExitCodeFromFile(marker);
@@ -13580,7 +13640,7 @@ var spawnPaneChild = createPaneChildSpawner();
 
 // src/subagents/backend-pi.ts
 import { spawn as nodeSpawn } from "node:child_process";
-import { existsSync as existsSync10, readFileSync as readFileSync12, statSync } from "node:fs";
+import { existsSync as existsSync10, readFileSync as readFileSync13, statSync } from "node:fs";
 import { homedir as homedir13 } from "node:os";
 import { dirname as dirname11, isAbsolute as isAbsolute2, join as join17, resolve as resolve6 } from "node:path";
 var DEFAULT_BUILT_IN_TOOLS = ["read", "bash", "edit", "write", "grep", "find", "ls"];
@@ -13589,7 +13649,7 @@ var ERROR_MAX = 4096;
 var CLAUDE_OAUTH_ADAPTER_PACKAGE = "pi-claude-oauth-adapter";
 function adapterEntryFromPackageDir(packageDir) {
   try {
-    const manifest = JSON.parse(readFileSync12(join17(packageDir, "package.json"), "utf8"));
+    const manifest = JSON.parse(readFileSync13(join17(packageDir, "package.json"), "utf8"));
     const entries = manifest.pi?.extensions;
     const first = Array.isArray(entries) ? entries[0] : void 0;
     if (typeof first !== "string") return void 0;
@@ -13601,7 +13661,7 @@ function adapterEntryFromPackageDir(packageDir) {
 }
 function adapterPathSourcesFromSettings(settingsPath) {
   try {
-    const settings = JSON.parse(readFileSync12(settingsPath, "utf8"));
+    const settings = JSON.parse(readFileSync13(settingsPath, "utf8"));
     if (!Array.isArray(settings.packages)) return [];
     const sources = settings.packages.map((entry) => typeof entry === "string" ? entry : entry?.source).filter((source) => typeof source === "string" && source.includes(CLAUDE_OAUTH_ADAPTER_PACKAGE));
     return sources.filter((source) => !source.startsWith("npm:") && !source.startsWith("git:") && !source.startsWith("http")).map((source) => {
@@ -15579,7 +15639,7 @@ function packageRootFromModulePath(modulePath, exists, readFile) {
 }
 function findActiveSumoDevTree2(cwd, options = {}) {
   const exists = options.exists ?? existsSync11;
-  const readFile = options.readFile ?? ((path2, encoding) => readFileSync13(path2, encoding));
+  const readFile = options.readFile ?? ((path2, encoding) => readFileSync14(path2, encoding));
   let current = resolve7(cwd);
   while (true) {
     const isSumocodePackage = packageNameAt2(current, exists, readFile) === SUMOCODE_PACKAGE_NAME;
@@ -15599,7 +15659,7 @@ function shouldNoopDuplicateInstalledExtension(options = {}) {
   if (launcherRoot) {
     const realpath = options.realpath ?? ((path2) => realpathSync4(path2));
     const exists = options.exists ?? existsSync11;
-    const readFile = options.readFile ?? ((path2, encoding) => readFileSync13(path2, encoding));
+    const readFile = options.readFile ?? ((path2, encoding) => readFileSync14(path2, encoding));
     const modulePath = canonicalize(moduleUrlToPath2(moduleUrl), realpath);
     const packageRoot = packageRootFromModulePath(modulePath, exists, readFile);
     const canonicalLauncherRoot = canonicalize(launcherRoot, realpath);
@@ -15641,6 +15701,7 @@ function installOrchestrationTools(pi) {
 }
 function installRpcChildProfile(pi) {
   installHerdrRpcBridge(pi);
+  installSkillInlineExpansion(pi);
   registerRpcLoginCommand(pi);
   registerRpcTreeNavigationCommand(pi);
   installMemoryExtraction(pi);
@@ -15726,6 +15787,7 @@ function sumocode(pi) {
   installMemoryExtraction(pi);
   installCathedralEditor(pi);
   installInputHints(pi);
+  installSkillInlineExpansion(pi);
   if (shouldInstallNativeTaskTool({ force: process.env.SUMOCODE_NATIVE_TASK })) {
     taskTool({
       name: "task",

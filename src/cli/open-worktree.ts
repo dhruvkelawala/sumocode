@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import { promisify } from "node:util";
-import { buildShellCommand, shellEscape } from "../commands/cmux-split.js";
+import { buildShellCommand, shellEscape } from "../terminal-host/shell-command.js";
 import { chooseDiffSplitDirection } from "../commands/diff.js";
 import { createWorktree, resolveCreateOptions, type CreateWorktreeResult } from "../git/worktree.js";
 import { getTerminalHost, type PiExecLike, type TerminalHost } from "../terminal-host/index.js";
@@ -80,7 +80,7 @@ export async function openWorktree(name: string | undefined, options: OpenWorktr
 	const pi = options.pi ?? createExecAdapter(env);
 
 	if (terminalHost.kind === "none") {
-		stderr.write("[sumocode] -w requires a terminal host (cmux or herdr).\n");
+		stderr.write("[sumocode] -w requires a running herdr terminal host.\n");
 		return 1;
 	}
 

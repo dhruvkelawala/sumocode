@@ -17,7 +17,6 @@ const stripAnsi = (s: string): string => s.replace(ANSI, "");
 const originalHerdrEnv = {
 	HERDR_ENV: process.env.HERDR_ENV,
 	HERDR_PANE_ID: process.env.HERDR_PANE_ID,
-	CMUX_WORKSPACE_ID: process.env.CMUX_WORKSPACE_ID,
 };
 
 afterEach(() => {
@@ -26,8 +25,6 @@ afterEach(() => {
 	else process.env.HERDR_ENV = originalHerdrEnv.HERDR_ENV;
 	if (originalHerdrEnv.HERDR_PANE_ID === undefined) delete process.env.HERDR_PANE_ID;
 	else process.env.HERDR_PANE_ID = originalHerdrEnv.HERDR_PANE_ID;
-	if (originalHerdrEnv.CMUX_WORKSPACE_ID === undefined) delete process.env.CMUX_WORKSPACE_ID;
-	else process.env.CMUX_WORKSPACE_ID = originalHerdrEnv.CMUX_WORKSPACE_ID;
 });
 
 function snapshot(overrides: Partial<ApprovalModalSnapshot> = {}): ApprovalModalSnapshot {
@@ -326,7 +323,6 @@ describe("installApprovalGate — Pi event subscription", () => {
 	it.each(["No", "Yes", "Always"])("pairs herdr blocked emissions for RPC %s", async (selection) => {
 		process.env.HERDR_ENV = "1";
 		process.env.HERDR_PANE_ID = "w1:p1";
-		delete process.env.CMUX_WORKSPACE_ID;
 		const emit = vi.fn();
 
 		await showRpcApprovalPrompt(
@@ -345,7 +341,6 @@ describe("installApprovalGate — Pi event subscription", () => {
 	it("releases herdr blocked emission when the RPC prompt throws", async () => {
 		process.env.HERDR_ENV = "1";
 		process.env.HERDR_PANE_ID = "w1:p1";
-		delete process.env.CMUX_WORKSPACE_ID;
 		const emit = vi.fn();
 
 		await expect(showRpcApprovalPrompt(
@@ -363,7 +358,6 @@ describe("installApprovalGate — Pi event subscription", () => {
 	it("does not emit herdr blocked events outside herdr", async () => {
 		delete process.env.HERDR_ENV;
 		delete process.env.HERDR_PANE_ID;
-		process.env.CMUX_WORKSPACE_ID = "workspace:1";
 		const emit = vi.fn();
 
 		await showRpcApprovalPrompt(

@@ -171,20 +171,14 @@ export interface HelperSubprocessGuardOptions {
 }
 
 /**
- * Bail out of SumoCode installation when we are running inside a Pi helper
- * subprocess. Mirrors `pi-cmux`'s `PI_CMUX_CHILD` pattern — helper spawns
- * (session naming, turn summaries, etc.) launch Pi with `--no-extensions`
- * conceptually but can still inherit our extension via `-e`. Loading the
- * full Cathedral UI inside them wastes startup time and risks recursive
- * tool registration.
- *
- * The same env var is also set by SumoCode's background-terminal shell
- * wrapper so a user command that invokes `pi`/`sumocode` does not
- * recursively install another SumoCode runtime layer.
+ * Bail out of SumoCode installation when a background-terminal shell wrapper
+ * launches a helper process that could otherwise inherit the extension via
+ * `-e`. Loading the full Cathedral UI inside it wastes startup time and risks
+ * recursive tool registration.
  */
 export function shouldNoopHelperSubprocess(options: HelperSubprocessGuardOptions = {}): boolean {
 	const env = options.env ?? process.env;
-	return env.PI_CMUX_CHILD === "1" || env.SUMOCODE_BG_CHILD === "1";
+	return env.SUMOCODE_BG_CHILD === "1";
 }
 
 export interface TaskModeOptions {
@@ -309,10 +303,9 @@ export default function sumocode(pi: ExtensionAPI): void {
 		launcher: process.env.SUMOCODE_LAUNCHER ?? null,
 	});
 	if (shouldNoopHelperSubprocess()) {
-		// Helper subprocesses (pi-cmux session naming, SumoCode background-terminal
-		// shell wrappers, etc.) signal themselves via PI_CMUX_CHILD / SUMOCODE_BG_CHILD.
-		// Bail before installing anything so they stay lightweight and we don't
-		// recursively spawn another SumoCode UI layer.
+		// Background-terminal shell wrappers signal helper subprocesses via
+		// SUMOCODE_BG_CHILD. Bail before installing anything so they stay
+		// lightweight and do not recursively spawn another SumoCode UI layer.
 		return;
 	}
 	if (shouldNoopDuplicateInstalledExtension()) {

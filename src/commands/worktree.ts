@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { buildShellCommand, shellEscape } from "./cmux-split.js";
 import { getTerminalHost, type SplitDirection, type TerminalHost } from "../terminal-host/index.js";
+import { buildShellCommand, shellEscape } from "../terminal-host/shell-command.js";
 import { chooseDiffSplitDirection, type TerminalSize } from "./diff.js";
 import { sessionHasMessages } from "../session-cache.js";
 import {
@@ -158,7 +158,7 @@ export function registerWorktreeCommand(pi: ExtensionAPI, options: WorktreeComma
 				}
 				const terminalHost = configuredTerminalHost ?? getTerminalHost();
 				if (terminalHost.kind === "none") {
-					notify(pi, ctx, "/sumo:worktree requires a terminal host (cmux or herdr)", "warning");
+					notify(pi, ctx, "/sumo:worktree requires a running herdr terminal host", "warning");
 					return;
 				}
 				if (parsed.mode === "reopen") {

@@ -35,11 +35,11 @@ function makePaneOpenerMock(
 function makeTerminalHost(
 	openSplit: SplitMock = makeSplitMock(),
 	openCurrent?: ReplaceMock,
-	kind: TerminalHostKind = "cmux",
+	kind: TerminalHostKind = "herdr",
 	openWorktree?: PaneOpenerMock,
 	openExistingWorktree?: PaneOpenerMock,
 ): TerminalHost {
-	const paneHost = kind === "herdr" ? ("herdr" as const) : ("cmux" as const);
+	const paneHost = "herdr" as const;
 	return {
 		kind,
 		async openCommandInSplit(pi, direction, options) {
@@ -81,8 +81,8 @@ function makePi() {
 
 const noneHost = {
 	kind: "none" as const,
-	openCommandInSplit: async () => ({ ok: false as const, error: "requires a terminal host (cmux or herdr)" }),
-	closePane: async () => ({ ok: false as const, error: "requires a terminal host (cmux or herdr)" }),
+	openCommandInSplit: async () => ({ ok: false as const, error: "requires a running herdr terminal host" }),
+	closePane: async () => ({ ok: false as const, error: "requires a running herdr terminal host" }),
 	notify: async () => undefined,
 };
 
@@ -403,7 +403,7 @@ describe("/sumo:worktree", () => {
 		expect(create).toHaveBeenCalledWith({ repoRoot: "/repo", task: "fix-scroll", baseRef: "origin/main" });
 	});
 
-	it("guards non-cmux and missing task before creating worktrees", async () => {
+	it("guards missing terminal host before creating worktrees", async () => {
 		const { pi, handler } = makePi();
 		const create = vi.fn();
 		const notify = vi.fn();
@@ -412,7 +412,7 @@ describe("/sumo:worktree", () => {
 		await handler()?.("do work", { hasUI: true, cwd: "/repo", ui: { notify } });
 
 		expect(create).not.toHaveBeenCalled();
-		expect(notify).toHaveBeenCalledWith("/sumo:worktree requires a terminal host (cmux or herdr)", "warning");
+		expect(notify).toHaveBeenCalledWith("/sumo:worktree requires a running herdr terminal host", "warning");
 	});
 
 	it("guards fresh and reopen sessions before touching worktrees", async () => {
@@ -425,15 +425,15 @@ describe("/sumo:worktree", () => {
 		expect(create).not.toHaveBeenCalled();
 		expect(noUi.sendMessage).not.toHaveBeenCalled();
 
-		const outsideCmux = makePi();
+		const outsideHost = makePi();
 		const list = vi.fn();
 		const notify = vi.fn();
-		registerWorktreeCommand(asNever(outsideCmux.pi), { list: asNever(list), terminalHost: noneHost });
+		registerWorktreeCommand(asNever(outsideHost.pi), { list: asNever(list), terminalHost: noneHost });
 
-		await outsideCmux.handler()?.("open sumo/one", { hasUI: true, cwd: "/repo", ui: { notify } });
+		await outsideHost.handler()?.("open sumo/one", { hasUI: true, cwd: "/repo", ui: { notify } });
 
 		expect(list).not.toHaveBeenCalled();
-		expect(notify).toHaveBeenCalledWith("/sumo:worktree requires a terminal host (cmux or herdr)", "warning");
+		expect(notify).toHaveBeenCalledWith("/sumo:worktree requires a running herdr terminal host", "warning");
 	});
 
 	it.each([

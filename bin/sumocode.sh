@@ -66,12 +66,12 @@ COMMANDS
       Open SumoCode and immediately start an agent turn on <prompt>.
       Skips the splash screen, forwards <prompt> to Pi as the kickoff user
       message, and stays interactive afterwards. Designed for the orchestrator
-      bg_task hand-off flow: the spawned cmux pane goes straight into the
+      bg_task hand-off flow: the spawned terminal pane goes straight into the
       agent loop with no manual typing.
 
       Use --prompt-file <path> instead of an inline prompt when the prompt is
       long or contains shell metacharacters — the wrapper reads the file and
-      forwards its contents as the kickoff message. This keeps the cmux
+      forwards its contents as the kickoff message. This keeps the terminal
       respawn-pane command short so it doesn't flash a wall of text in the
       pane before Pi takes over the screen.
 

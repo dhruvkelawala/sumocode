@@ -33,7 +33,6 @@ const AMBIENT_ENV_KEYS = [
 	"SUMOCODE_ROOT_DIR",
 	"SUMOCODE_RPC_CHILD",
 	"SUMOCODE_BG_CHILD",
-	"PI_CMUX_CHILD",
 	"SUMOCODE_TASK_MODE",
 	"SUMOCODE_NATIVE_TASK",
 	"SUMOCODE_TASK_RESPONSE_FILE",
@@ -389,33 +388,13 @@ describe("rpc child profile", () => {
 });
 
 describe("helper subprocess guard", () => {
-	it("bails when PI_CMUX_CHILD=1 (pi-cmux helper subprocess)", () => {
-		expect(shouldNoopHelperSubprocess({ env: { PI_CMUX_CHILD: "1" } })).toBe(true);
-	});
-
 	it("bails when SUMOCODE_BG_CHILD=1 (nested under a SumoCode shell task)", () => {
 		expect(shouldNoopHelperSubprocess({ env: { SUMOCODE_BG_CHILD: "1" } })).toBe(true);
 	});
 
-	it("does not bail when neither env var is set", () => {
+	it("does not bail when the env var is absent or disabled", () => {
 		expect(shouldNoopHelperSubprocess({ env: {} })).toBe(false);
-		expect(shouldNoopHelperSubprocess({ env: { PI_CMUX_CHILD: "0" } })).toBe(false);
-	});
-
-	it("skips installation entirely when PI_CMUX_CHILD is set", () => {
-		const prev = process.env.PI_CMUX_CHILD;
-		process.env.PI_CMUX_CHILD = "1";
-		try {
-			const { pi } = buildPiStub();
-			// SAFETY: the pi double supplies the register*/on surfaces the extension installs on.
-			sumocode(pi as never);
-			expect(pi.registerTool).not.toHaveBeenCalled();
-			expect(pi.registerCommand).not.toHaveBeenCalled();
-			expect(pi.on).not.toHaveBeenCalled();
-		} finally {
-			if (prev === undefined) delete process.env.PI_CMUX_CHILD;
-			else process.env.PI_CMUX_CHILD = prev;
-		}
+		expect(shouldNoopHelperSubprocess({ env: { SUMOCODE_BG_CHILD: "0" } })).toBe(false);
 	});
 });
 
@@ -573,13 +552,13 @@ describe("process install latch", () => {
 	});
 
 	it("a guard-noop'd entry does not arm the latch for the real entry that follows", () => {
-		const prev = process.env.PI_CMUX_CHILD;
-		process.env.PI_CMUX_CHILD = "1";
+		const prev = process.env.SUMOCODE_BG_CHILD;
+		process.env.SUMOCODE_BG_CHILD = "1";
 		const helper = buildPiStub();
 		// SAFETY: the pi double supplies the register*/on surfaces the extension installs on.
 		sumocode(helper.pi as never); // helper-subprocess guard noops, must not latch
-		if (prev === undefined) delete process.env.PI_CMUX_CHILD;
-		else process.env.PI_CMUX_CHILD = prev;
+		if (prev === undefined) delete process.env.SUMOCODE_BG_CHILD;
+		else process.env.SUMOCODE_BG_CHILD = prev;
 		expect(isSumocodeAlreadyInstalledInProcess(helper.pi)).toBe(false);
 	});
 });

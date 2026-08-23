@@ -25,7 +25,7 @@ describe("sumo-tui Ctrl+C input semantics", () => {
 		app.sendInput("draft-before-clear");
 		await app.waitForOutput("draft-before-clear", 5_000);
 
-		// cmux/Ghostty sends Ctrl+C through Kitty keyboard protocol while Pi enables
+		// Ghostty sends Ctrl+C through Kitty keyboard protocol while Pi enables
 		// disambiguate mode; raw ETX may be treated by the PTY as SIGINT in tests.
 		app.sendInput("\x1b[99;5u");
 		await delay(300);

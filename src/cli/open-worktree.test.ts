@@ -14,8 +14,8 @@ function output() {
 
 function baseHost(overrides: Partial<TerminalHost>): TerminalHost {
 	return {
-		kind: "cmux",
-		openCommandInSplit: vi.fn(async () => ({ ok: true as const, pane: { host: "cmux" as const, paneId: "p1" } })),
+		kind: "herdr",
+		openCommandInSplit: vi.fn(async () => ({ ok: true as const, pane: { host: "herdr" as const, paneId: "p1" } })),
 		closePane: vi.fn(async () => ({ ok: true as const })),
 		notify: vi.fn(async () => undefined),
 		...overrides,
@@ -52,7 +52,7 @@ describe("openWorktree", () => {
 	});
 
 	it("creates a worktree and starts SumoCode in a split on hosts without native workspaces", async () => {
-		const openCommandInSplit = vi.fn(async () => ({ ok: true as const, pane: { host: "cmux" as const, paneId: "p1" } }));
+		const openCommandInSplit = vi.fn(async () => ({ ok: true as const, pane: { host: "herdr" as const, paneId: "p1" } }));
 		const create = vi.fn(async () => ({ ok: true as const, path: "/repo.sumo-worktrees/sumo__feature", branch: "sumo/feature", baseRef: "HEAD" }));
 		const stream = output();
 		// SAFETY: the stdout/stderr/pi options accept minimal test doubles that
@@ -89,6 +89,6 @@ describe("openWorktree", () => {
 
 		expect(code).toBe(1);
 		expect(create).not.toHaveBeenCalled();
-		expect(stream.read().stderr).toContain("requires a terminal host");
+		expect(stream.read().stderr).toContain("requires a running herdr terminal host");
 	});
 });

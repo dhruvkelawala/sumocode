@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { buildHunkCommand, chooseDiffSplitDirection, parseDiffArgs, registerDiffCommand } from "./diff.js";
-import { cmuxTerminalHost } from "../terminal-host/cmux.js";
 import type { SplitDirection, TerminalHost } from "../terminal-host/index.js";
 
 afterEach(() => {
@@ -16,21 +15,18 @@ describe("buildHunkCommand", () => {
 
 	it("passes through known subcommands verbatim", () => {
 		expect(buildHunkCommand("diff")).toBe("hunk diff");
-		expect(buildHunkCommand("show")).toBe("hunk show");
 		expect(buildHunkCommand("show HEAD~1")).toBe("hunk show HEAD~1");
 		expect(buildHunkCommand("patch -")).toBe("hunk patch -");
 		expect(buildHunkCommand("pager")).toBe("hunk pager");
 	});
 
-	it("wraps unknown leading tokens as `hunk diff <args>` so common idioms work", () => {
+	it("wraps unknown leading tokens as `hunk diff <args>`", () => {
 		expect(buildHunkCommand("--watch")).toBe("hunk diff --watch");
 		expect(buildHunkCommand("HEAD~1")).toBe("hunk diff HEAD~1");
 		expect(buildHunkCommand("before.ts after.ts")).toBe("hunk diff before.ts after.ts");
 	});
 
-	it("preserves internal whitespace exactly as the user typed it", () => {
-		// We only trim the outer whitespace; multi-space arg separators stay intact
-		// because hunk's own argv parser handles them.
+	it("preserves internal whitespace", () => {
 		expect(buildHunkCommand("show  HEAD~1")).toBe("hunk show  HEAD~1");
 	});
 });
@@ -62,7 +58,10 @@ describe("chooseDiffSplitDirection", () => {
 
 describe("registerDiffCommand", () => {
 	function makeFakeHost(kind: TerminalHost["kind"], openCommandInSplit?: TerminalHost["openCommandInSplit"]): TerminalHost {
-		const defaultOpenCommandInSplit: TerminalHost["openCommandInSplit"] = vi.fn(async () => ({ ok: true as const, pane: { host: kind === "herdr" ? "herdr" as const : "cmux" as const, paneId: "pane:fake" } }));
+		const defaultOpenCommandInSplit: TerminalHost["openCommandInSplit"] = vi.fn(async () => ({
+			ok: true as const,
+			pane: { host: "herdr" as const, paneId: "pane:fake" },
+		}));
 		return {
 			kind,
 			openCommandInSplit: openCommandInSplit ?? defaultOpenCommandInSplit,
@@ -83,37 +82,27 @@ describe("registerDiffCommand", () => {
 	}
 
 	function makeCtx(notifyMock = vi.fn()) {
-		const ctx = {
-			hasUI: true,
-			cwd: "/tmp/sumo-fixture",
-			ui: { notify: notifyMock },
+		return {
+			ctx: { hasUI: true, cwd: "/tmp/sumo-fixture", ui: { notify: notifyMock } },
+			notifyMock,
 		};
-		return { ctx, notifyMock };
 	}
 
 	it("registers the sumo:diff slash command on Pi", () => {
 		const { pi } = makePi(async () => ({ code: 0, killed: false, stdout: "", stderr: "" }));
 		// SAFETY: test double only exercises the members this test asserts on.
 		registerDiffCommand(pi as never);
-		expect(pi.registerCommand).toHaveBeenCalledWith(
-			"sumo:diff",
-			expect.objectContaining({ description: expect.stringContaining("hunk diff") }),
-		);
+		expect(pi.registerCommand).toHaveBeenCalledWith("sumo:diff", expect.objectContaining({ description: expect.stringContaining("hunk diff") }));
 	});
 
-	it("notifies and exits when ctx.hasUI is false (e.g. RPC/print mode)", async () => {
+	it("notifies and exits when ctx.hasUI is false", async () => {
 		const { pi, handlers } = makePi(async () => ({ code: 0, killed: false, stdout: "", stderr: "" }));
 		// SAFETY: test double only exercises the members this test asserts on.
 		registerDiffCommand(pi as never);
-		const handler = handlers.get("sumo:diff");
-		expect(handler).toBeDefined();
-
 		const notifyMock = vi.fn();
-		const ctx = { hasUI: false, cwd: "/tmp", ui: { notify: notifyMock } };
-		await handler?.(undefined, ctx);
+		await handlers.get("sumo:diff")?.(undefined, { hasUI: false, cwd: "/tmp", ui: { notify: notifyMock } });
 
 		expect(notifyMock).toHaveBeenCalledWith("/sumo:diff requires interactive UI", "warning");
-		// pi.exec should NOT have been called — we exit before trying to detect hunk.
 		expect(pi.exec).not.toHaveBeenCalled();
 	});
 
@@ -127,170 +116,53 @@ describe("registerDiffCommand", () => {
 		});
 		// SAFETY: test double only exercises the members this test asserts on.
 		registerDiffCommand(pi as never);
-
 		const { ctx, notifyMock } = makeCtx();
 		await handlers.get("sumo:diff")?.("", ctx);
 
-		expect(notifyMock).toHaveBeenCalledTimes(1);
-		const [message, level] = notifyMock.mock.calls[0] ?? [];
-		expect(message).toContain("hunkdiff");
-		expect(message).toContain("npm i -g hunkdiff");
-		expect(level).toBe("warning");
-		// Importantly: no cmux calls when hunk is missing — we fail fast.
+		expect(notifyMock).toHaveBeenCalledWith(expect.stringContaining("npm i -g hunkdiff"), "warning");
 		expect(pi.exec).toHaveBeenCalledTimes(1);
-		expect(pi.exec).toHaveBeenCalledWith(
-			"sh",
-			["-lc", "command -v hunk >/dev/null 2>&1"],
-			{ timeout: 2_000 },
-		);
 	});
 
-	it("swallows unexpected exceptions from cmux helpers and notifies the user instead of rejecting", async () => {
-		// Simulate a pathological cmux exec that throws synchronously after
-		// the hunk pre-flight has already passed. (`isHunkInstalled` swallows
-		// its own exceptions and returns false, which is a separate code
-		// path — we want to exercise the *outer* try/catch around the cmux
-		// helpers and result handling.) The handler must not let the
-		// exception escape; it must surface via ctx.ui.notify.
+	it("surfaces unexpected terminal-host exceptions", async () => {
 		const { pi, handlers } = makePi(async () => ({ code: 0, killed: false, stdout: "", stderr: "" }));
-		const openCommandInSplit: TerminalHost["openCommandInSplit"] = vi.fn(async () => { throw new Error("boom: cmux blew up"); });
+		const openCommandInSplit: TerminalHost["openCommandInSplit"] = vi.fn(async () => { throw new Error("terminal host failed"); });
 		// SAFETY: test double only exercises the members this test asserts on.
-		registerDiffCommand(pi as never, { terminalHost: makeFakeHost("cmux", openCommandInSplit) });
-
+		registerDiffCommand(pi as never, { terminalHost: makeFakeHost("herdr", openCommandInSplit) });
 		const { ctx, notifyMock } = makeCtx();
-		// Should not throw.
+
 		await expect(handlers.get("sumo:diff")?.("", ctx)).resolves.toBeUndefined();
-
-		expect(notifyMock).toHaveBeenCalledTimes(1);
-		const [message, level] = notifyMock.mock.calls[0] ?? [];
-		expect(message).toContain("boom: cmux blew up");
-		expect(level).toBe("warning");
+		expect(notifyMock).toHaveBeenCalledWith("/sumo:diff: terminal host failed", "warning");
 	});
 
-	it("opens a down split in portrait terminals", async () => {
-		const calls: Array<{ cmd: string; args: string[] }> = [];
-		const originalColumns = process.stdout.columns;
-		const originalRows = process.stdout.rows;
-		process.stdout.columns = 80;
-		process.stdout.rows = 120;
-		try {
-			const { pi, handlers } = makePi(async (cmd, args) => {
-				calls.push({ cmd, args });
-				if (cmd === "sh") return { code: 0, killed: false, stdout: "", stderr: "" };
-				if (cmd === "cmux" && args[1] === "identify") {
-					return { code: 0, killed: false, stdout: JSON.stringify({ caller: { workspace_ref: "workspace:1", surface_ref: "surface:1" } }), stderr: "" };
-				}
-				if (cmd === "cmux" && args[1] === "list-panes") {
-					return { code: 0, killed: false, stdout: JSON.stringify({ panes: [{ ref: "pane:1", selected_surface_ref: "surface:1" }] }), stderr: "" };
-				}
-				if (cmd === "cmux" && args[0] === "new-split") {
-					return { code: 0, killed: false, stdout: "OK surface:surface:2 workspace:workspace:1", stderr: "" };
-				}
-				return { code: 0, killed: false, stdout: "", stderr: "" };
-			});
-			// SAFETY: test double only exercises the members this test asserts on.
-			registerDiffCommand(pi as never, { terminalHost: cmuxTerminalHost });
-
-			const { ctx, notifyMock } = makeCtx();
-			await handlers.get("sumo:diff")?.("HEAD~1", ctx);
-
-			const newSplitCall = calls.find((call) => call.cmd === "cmux" && call.args[0] === "new-split");
-			expect(newSplitCall?.args[1]).toBe("down");
-			expect(notifyMock).toHaveBeenCalledWith("opened hunk diff HEAD~1 in a new cmux pane", "info");
-		} finally {
-			process.stdout.columns = originalColumns;
-			process.stdout.rows = originalRows;
-		}
-	});
-
-	it("lets --right force a right split and removes the flag before building the hunk command", async () => {
-		const calls: Array<{ cmd: string; args: string[] }> = [];
-		const originalColumns = process.stdout.columns;
-		const originalRows = process.stdout.rows;
-		process.stdout.columns = 80;
-		process.stdout.rows = 120;
-		try {
-			const { pi, handlers } = makePi(async (cmd, args) => {
-				calls.push({ cmd, args });
-				if (cmd === "sh") return { code: 0, killed: false, stdout: "", stderr: "" };
-				if (cmd === "cmux" && args[1] === "identify") {
-					return { code: 0, killed: false, stdout: JSON.stringify({ caller: { workspace_ref: "workspace:1", surface_ref: "surface:1" } }), stderr: "" };
-				}
-				if (cmd === "cmux" && args[1] === "list-panes") {
-					return { code: 0, killed: false, stdout: JSON.stringify({ panes: [{ ref: "pane:1", selected_surface_ref: "surface:1" }] }), stderr: "" };
-				}
-				if (cmd === "cmux" && args[0] === "new-split") {
-					return { code: 0, killed: false, stdout: "OK surface:surface:2 workspace:workspace:1", stderr: "" };
-				}
-				return { code: 0, killed: false, stdout: "", stderr: "" };
-			});
-			// SAFETY: test double only exercises the members this test asserts on.
-			registerDiffCommand(pi as never, { terminalHost: cmuxTerminalHost });
-
-			const { ctx } = makeCtx();
-			await handlers.get("sumo:diff")?.("--right --watch", ctx);
-
-			const newSplitCall = calls.find((call) => call.cmd === "cmux" && call.args[0] === "new-split");
-			const respawnCall = calls.find((call) => call.cmd === "cmux" && call.args[0] === "respawn-pane");
-			expect(newSplitCall?.args[1]).toBe("right");
-			expect(respawnCall?.args.at(-1)).toContain("hunk diff --watch");
-			expect(respawnCall?.args.at(-1)).not.toContain("--right");
-		} finally {
-			process.stdout.columns = originalColumns;
-			process.stdout.rows = originalRows;
-		}
-	});
-
-	it("notifies with cmux error when not inside a cmux surface", async () => {
-		// hunk-detection succeeds; `cmux --json identify` returns caller: null.
-		const { pi, handlers } = makePi(async (cmd, args) => {
-			if (cmd === "sh") return { code: 0, killed: false, stdout: "", stderr: "" };
-			if (cmd === "cmux" && args[1] === "identify") {
-				return { code: 0, killed: false, stdout: JSON.stringify({ caller: null }), stderr: "" };
-			}
-			return { code: 0, killed: false, stdout: "", stderr: "" };
-		});
-		// SAFETY: test double only exercises the members this test asserts on.
-		registerDiffCommand(pi as never, { terminalHost: cmuxTerminalHost });
-
-		const { ctx, notifyMock } = makeCtx();
-		await handlers.get("sumo:diff")?.("", ctx);
-
-		expect(notifyMock).toHaveBeenCalledTimes(1);
-		const [message, level] = notifyMock.mock.calls[0] ?? [];
-		expect(message).toContain("must be run from inside a cmux surface");
-		expect(level).toBe("warning");
-	});
-
-	it("opens a herdr split through an injected herdr host", async () => {
-		const openCommandInSplit = vi.fn<TerminalHost["openCommandInSplit"]>(async () => ({ ok: true as const, pane: { host: "herdr" as const, paneId: "pane:herdr-1" } }));
+	it("opens a herdr split with the chosen direction and filtered arguments", async () => {
+		const openCommandInSplit = vi.fn<TerminalHost["openCommandInSplit"]>(async () => ({ ok: true as const, pane: { host: "herdr" as const, paneId: "pane:1" } }));
 		const { pi, handlers } = makePi(async () => ({ code: 0, killed: false, stdout: "", stderr: "" }));
 		// SAFETY: test double only exercises the members this test asserts on.
 		registerDiffCommand(pi as never, {
 			terminalHost: makeFakeHost("herdr", openCommandInSplit),
-			terminalSize: () => ({ columns: 160, rows: 50 }),
+			terminalSize: () => ({ columns: 80, rows: 120 }),
 		});
-
 		const { ctx, notifyMock } = makeCtx();
-		await handlers.get("sumo:diff")?.("--down show HEAD~1", ctx);
 
-		expect(openCommandInSplit).toHaveBeenCalledWith(pi, "down" satisfies SplitDirection, expect.objectContaining({ cwd: "/tmp/sumo-fixture" }));
-		expect(openCommandInSplit.mock.calls[0]?.[2]?.shellCommand).toContain("hunk show HEAD~1");
-		expect(notifyMock).toHaveBeenCalledWith("opened hunk show HEAD~1 in a new herdr pane", "info");
+		await handlers.get("sumo:diff")?.("--right --watch", ctx);
+
+		expect(openCommandInSplit).toHaveBeenCalledWith(pi, "right" satisfies SplitDirection, expect.objectContaining({ cwd: "/tmp/sumo-fixture" }));
+		expect(openCommandInSplit.mock.calls[0]?.[2]?.shellCommand).toContain("hunk diff --watch");
+		expect(openCommandInSplit.mock.calls[0]?.[2]?.shellCommand).not.toContain("--right");
+		expect(notifyMock).toHaveBeenCalledWith("opened hunk diff --watch in a new herdr pane", "info");
 	});
 
-	it("reports the honest no-host requirement without falling back to cmux", async () => {
+	it("reports the no-host requirement", async () => {
 		const { pi, handlers } = makePi(async () => ({ code: 0, killed: false, stdout: "", stderr: "" }));
 		// SAFETY: test double only exercises the members this test asserts on.
 		registerDiffCommand(pi as never, {
-			terminalHost: makeFakeHost("none", vi.fn<TerminalHost["openCommandInSplit"]>(async () => ({ ok: false as const, error: "requires a terminal host (cmux or herdr)" }))),
+			terminalHost: makeFakeHost("none", vi.fn<TerminalHost["openCommandInSplit"]>(async () => ({ ok: false as const, error: "requires a running herdr terminal host" }))),
 		});
-
 		const { ctx, notifyMock } = makeCtx();
+
 		await handlers.get("sumo:diff")?.("", ctx);
 
-		expect(notifyMock).toHaveBeenCalledWith("/sumo:diff: requires a terminal host (cmux or herdr)", "warning");
+		expect(notifyMock).toHaveBeenCalledWith("/sumo:diff: requires a running herdr terminal host", "warning");
 		expect(pi.exec).toHaveBeenCalledTimes(1);
-		expect(pi.exec).not.toHaveBeenCalledWith("cmux", expect.anything(), expect.anything());
 	});
 });

@@ -1,6 +1,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
-export type TerminalHostKind = "cmux" | "herdr" | "none";
+export type TerminalHostKind = "herdr" | "none";
 export type SplitDirection = "right" | "down";
 
 export interface PaneRef {

@@ -96,8 +96,8 @@ describe("routeFactToPanel — keyword rules", () => {
 		expect(routeFactToPanel(fact({ text: "senior frontend at SomeCorp" }))).toBe("IDENTITY");
 	});
 
-	it("cmux/portrait/landscape/terminal → SYSTEM", () => {
-		expect(routeFactToPanel(fact({ text: "runs SumoCode inside cmux" }))).toBe("SYSTEM");
+	it("portrait/landscape/terminal → SYSTEM", () => {
+		expect(routeFactToPanel(fact({ text: "runs SumoCode in a terminal" }))).toBe("SYSTEM");
 		expect(routeFactToPanel(fact({ text: "mac mini in portrait orientation" }))).toBe("SYSTEM");
 		expect(routeFactToPanel(fact({ text: "macbook is landscape" }))).toBe("SYSTEM");
 	});

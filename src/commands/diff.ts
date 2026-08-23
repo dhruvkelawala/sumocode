@@ -1,5 +1,5 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { buildShellCommand } from "./cmux-split.js";
+import { buildShellCommand } from "../terminal-host/shell-command.js";
 import { getTerminalHost, type SplitDirection, type TerminalHost } from "../terminal-host/index.js";
 
 /**
@@ -12,7 +12,7 @@ import { getTerminalHost, type SplitDirection, type TerminalHost } from "../term
  *   /sumo:diff show HEAD~1      → `hunk show HEAD~1`    (specific commit)
  *   /sumo:diff before.ts after.ts
  *
- * Requires `cmux` (we're inside a cmux surface) and `hunkdiff` (npm:
+ * Requires a running herdr terminal host and `hunkdiff` (npm:
  * `npm i -g hunkdiff` or `brew install modem-dev/tap/hunk`). When either is
  * missing, the command notifies and exits without side effects.
  *
@@ -98,7 +98,7 @@ export function registerDiffCommand(pi: ExtensionAPI, options: DiffCommandOption
 			// All failure paths must go through `ctx.ui.notify` per the
 			// SumoCode slash-command contract — no exception should ever
 			// escape the handler. Wrap the body so unexpected throws from
-			// `pi.exec` / cmux helpers / future refactors still surface as a
+			// `pi.exec` / terminal-host helpers / future refactors still surface as a
 			// user-visible warning rather than a silent rejection.
 			try {
 				if (!ctx.hasUI) {

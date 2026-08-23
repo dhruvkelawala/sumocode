@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { alignAutocompleteRow, normalizeRawMultilinePasteInput } from "./cathedral-editor.js";
+import { CURSOR_MARKER } from "@earendil-works/pi-tui";
+import { alignAutocompleteRow, formatInlineSkillTokensForEditor, normalizeRawMultilinePasteInput } from "./cathedral-editor.js";
 
 const ANSI_PATTERN = /\u001b\[[0-9;]*m/g;
 const stripAnsi = (value: string): string => value.replace(ANSI_PATTERN, "");
@@ -39,6 +40,36 @@ describe("normalizeRawMultilinePasteInput", () => {
 		// modifier-Enter encodings, so paste-with-embedded-ESC stays in the
 		// rewrite path.
 		expect(normalizeRawMultilinePasteInput("\x1b[31mError\x1b[0m\rline two")).toBe("\x1b[31mError\x1b[0m\nline two");
+	});
+});
+
+describe("formatInlineSkillTokensForEditor", () => {
+	it("styles the complete mid-sentence skill token with the accent without changing visible text", () => {
+		const input = "check /skill:herdr here";
+		const formatted = formatInlineSkillTokensForEditor(input, { accent: "#112233" });
+
+		expect(stripAnsi(formatted)).toBe(input);
+		expect(formatted).toContain("\u001b[38;2;17;34;51m/skill:herdr");
+	});
+
+	it("preserves Pi's cursor marker and inverse cursor styling inside a skill token", () => {
+		const input = `check /skill:her${CURSOR_MARKER}\u001b[7md\u001b[0mr`;
+		const formatted = formatInlineSkillTokensForEditor(input, { accent: "#112233" });
+
+		expect(formatted.split(CURSOR_MARKER)).toHaveLength(2);
+		expect(stripAnsi(formatted).replace(CURSOR_MARKER, "")).toBe("check /skill:herdr");
+		expect(formatted).toContain("\u001b[7m");
+	});
+
+	it("keeps token offsets correct after astral Unicode", () => {
+		const input = "🙂 /skill:herdr";
+		const formatted = formatInlineSkillTokensForEditor(input, { accent: "#112233" });
+		expect(formatted).toContain("\u001b[38;2;17;34;51m/skill:herdr");
+	});
+
+	it("does not style path-like fragments", () => {
+		const input = "docs/skill:herdr/readme";
+		expect(formatInlineSkillTokensForEditor(input, { accent: "#112233" })).toBe(input);
 	});
 });
 

@@ -3837,60 +3837,86 @@ ${summaries.join("\n\n")}`
 // src/skill-inline.ts
 import * as fs2 from "node:fs";
 import {
+  DefaultResourceLoader,
   getAgentDir as getAgentDir2,
-  loadSkills as loadSkills2,
   SettingsManager as SettingsManager2,
   stripFrontmatter
 } from "@earendil-works/pi-coding-agent";
 var SKILL_TOKEN = /(^|(?<=\s))\/skill:([A-Za-z0-9][A-Za-z0-9_-]*)/g;
 var readSkillBodyFromDisk = (skill) => stripFrontmatter(fs2.readFileSync(skill.filePath, "utf-8")).trim();
 var expandInlineSkillTokens = (text, skills, readSkillBody = readSkillBodyFromDisk) => {
+  if (text.startsWith("/skill:")) return { text, expanded: [] };
   const byName = /* @__PURE__ */ new Map();
   for (const skill of skills) byName.set(skill.name, skill);
-  const expanded = [];
-  const result = text.replace(SKILL_TOKEN, (match, prefix, name, offset) => {
-    if (offset === 0) return match;
-    const skill = byName.get(name);
-    if (!skill) return match;
+  for (const match of text.matchAll(SKILL_TOKEN)) {
+    const offset = match.index;
+    if (offset === 0) continue;
+    const name = match[2];
+    const skill = name ? byName.get(name) : void 0;
+    if (!skill) continue;
     let body = "";
     try {
       body = readSkillBody(skill).trim();
     } catch {
-      return match;
+      continue;
     }
-    expanded.push(name);
-    return `${prefix}<skill name="${skill.name}" location="${skill.filePath}">
+    const rawBefore = text.slice(0, offset);
+    const rawAfter = text.slice(offset + match[0].length);
+    const boundaryWhitespace = (rawBefore.match(/\s*$/)?.[0] ?? "") + (rawAfter.match(/^\s*/)?.[0] ?? "");
+    const before = rawBefore.trimEnd();
+    const after = rawAfter.trimStart();
+    const separator = before.length > 0 && after.length > 0 ? boundaryWhitespace.includes("\n") ? "\n" : " " : "";
+    const userMessage = `${before}${separator}${after}`.trim();
+    const skillBlock = `<skill name="${skill.name}" location="${skill.filePath}">
 References are relative to ${skill.baseDir}.
 
 ${body}
 </skill>`;
-  });
-  return { text: result, expanded };
+    return { text: userMessage ? `${skillBlock}
+
+${userMessage}` : skillBlock, expanded: [name] };
+  }
+  return { text, expanded: [] };
 };
-var discoverSkills = (cwd) => {
+async function discoverSkills(cwd) {
   const resolvedCwd = cwd ?? process.cwd();
   const settingsManager = SettingsManager2.create(resolvedCwd);
-  return loadSkills2({
+  const loader = new DefaultResourceLoader({
     cwd: resolvedCwd,
     agentDir: getAgentDir2(),
-    skillPaths: settingsManager.getSkillPaths(),
-    includeDefaults: true
-  }).skills;
-};
+    settingsManager,
+    // Resource discovery needs package/.agents paths, not another recursive
+    // activation of SumoCode or unrelated extensions.
+    noExtensions: true,
+    noPromptTemplates: true,
+    noThemes: true,
+    noContextFiles: true
+  });
+  await loader.reload();
+  return loader.getSkills().skills;
+}
 function installSkillInlineExpansion(pi, options = {}) {
   let cache2;
   const loadSkillsOnce = () => {
-    if (!cache2 || cache2.cwd !== options.cwd) cache2 = { cwd: options.cwd, skills: discoverSkills(options.cwd) };
-    return cache2.skills;
+    cache2 ??= (options.discoverSkills ?? discoverSkills)(options.cwd);
+    return cache2;
   };
   pi.on("session_start", () => {
     cache2 = void 0;
   });
-  pi.on("input", (event) => {
+  pi.on("input", async (event) => {
     if (!event.text.includes("/skill:")) return { action: "continue" };
-    const { text, expanded } = expandInlineSkillTokens(event.text, loadSkillsOnce());
-    if (expanded.length === 0) return { action: "continue" };
-    return { action: "transform", text };
+    try {
+      const { text, expanded } = expandInlineSkillTokens(
+        event.text,
+        await loadSkillsOnce(),
+        options.readSkillBody ?? readSkillBodyFromDisk
+      );
+      if (expanded.length === 0) return { action: "continue" };
+      return { action: "transform", text };
+    } catch {
+      return { action: "continue" };
+    }
   });
 }
 
@@ -4550,6 +4576,68 @@ function bg(hex) {
 function color2(text, hex) {
   return `${fg4(hex)}${text}${RESET6}`;
 }
+var INLINE_SKILL_TOKEN = /(?:^|(?<=\s))\/skill:([A-Za-z0-9][A-Za-z0-9_-]*)/g;
+function splitEditorRowUnits(row3) {
+  const units = [];
+  for (let index = 0; index < row3.length; ) {
+    if (row3.startsWith(CURSOR_MARKER, index)) {
+      units.push({ raw: CURSOR_MARKER, visible: "" });
+      index += CURSOR_MARKER.length;
+      continue;
+    }
+    if (row3[index] === "\x1B") {
+      if (row3[index + 1] === "[") {
+        let end2 = index + 2;
+        while (end2 < row3.length && !/[\x40-\x7e]/.test(row3[end2])) end2 += 1;
+        end2 = Math.min(row3.length, end2 + 1);
+        units.push({ raw: row3.slice(index, end2), visible: "" });
+        index = end2;
+        continue;
+      }
+      const st = row3.indexOf("\x1B\\", index + 2);
+      const end = st === -1 ? Math.min(row3.length, index + 2) : st + 2;
+      units.push({ raw: row3.slice(index, end), visible: "" });
+      index = end;
+      continue;
+    }
+    const glyph = String.fromCodePoint(row3.codePointAt(index));
+    units.push({ raw: glyph, visible: glyph });
+    index += glyph.length;
+  }
+  return units;
+}
+function formatInlineSkillTokensForEditor(row3, colors = { accent: activeThemeColors().accent }) {
+  if (!row3.includes("/skill:")) return row3;
+  const units = splitEditorRowUnits(row3);
+  const visible = units.map((unit) => unit.visible).join("");
+  const colorAt = /* @__PURE__ */ new Map();
+  for (const match of visible.matchAll(INLINE_SKILL_TOKEN)) {
+    const start = match.index;
+    const end = start + match[0].length;
+    for (let index = start; index < end; index += 1) colorAt.set(index, colors.accent);
+  }
+  if (colorAt.size === 0) return row3;
+  let output = "";
+  let visibleIndex = 0;
+  let activeColor;
+  for (const unit of units) {
+    if (unit.visible.length === 0) {
+      output += unit.raw;
+      if (unit.raw === RESET6) activeColor = void 0;
+      continue;
+    }
+    const desired = colorAt.get(visibleIndex);
+    if (desired !== activeColor) {
+      if (desired) output += fg4(desired);
+      else if (activeColor) output += RESET6;
+      activeColor = desired;
+    }
+    output += unit.raw;
+    visibleIndex += unit.visible.length;
+  }
+  if (activeColor) output += RESET6;
+  return output;
+}
 function dividerFg() {
   return fg4(activeThemeColors().divider);
 }
@@ -4781,8 +4869,9 @@ var CathedralEditor = class extends CustomEditor {
         const ghost = `${prompt}${color2(placeholder, activeThemeColors().foregroundDim)}`;
         return fullRow(wrapRow(ghost, frameWidth, paintFrameBackground));
       }
-      if (!splash) return wrapActiveRow(row3, frameWidth, paintFrameBackground, isFirstContent);
-      return fullRow(wrapRow(row3, frameWidth, paintFrameBackground));
+      const decorated = formatInlineSkillTokensForEditor(row3);
+      if (!splash) return wrapActiveRow(decorated, frameWidth, paintFrameBackground, isFirstContent);
+      return fullRow(wrapRow(decorated, frameWidth, paintFrameBackground));
     };
     const result = [fullRow(renderTopBorder(frameWidth, label, paintFrameBackground))];
     const lastContentIdx = bottomIdx === -1 ? innerRows.length : bottomIdx;

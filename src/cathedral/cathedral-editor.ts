@@ -92,6 +92,87 @@ function color(text: string, hex: string): string {
 	return `${fg(hex)}${text}${RESET}`;
 }
 
+type EditorSkillColors = { readonly accent: string };
+type EditorRowUnit = { readonly raw: string; readonly visible: string };
+const INLINE_SKILL_TOKEN = /(?:^|(?<=\s))\/skill:([A-Za-z0-9][A-Za-z0-9_-]*)/g;
+
+function splitEditorRowUnits(row: string): EditorRowUnit[] {
+	const units: EditorRowUnit[] = [];
+	for (let index = 0; index < row.length;) {
+		if (row.startsWith(CURSOR_MARKER, index)) {
+			units.push({ raw: CURSOR_MARKER, visible: "" });
+			index += CURSOR_MARKER.length;
+			continue;
+		}
+		if (row[index] === "\u001b") {
+			if (row[index + 1] === "[") {
+				let end = index + 2;
+				while (end < row.length && !/[\x40-\x7e]/.test(row[end]!)) end += 1;
+				end = Math.min(row.length, end + 1);
+				units.push({ raw: row.slice(index, end), visible: "" });
+				index = end;
+				continue;
+			}
+			// Preserve non-CSI terminal controls (OSC/APC) atomically through ST.
+			const st = row.indexOf("\u001b\\", index + 2);
+			const end = st === -1 ? Math.min(row.length, index + 2) : st + 2;
+			units.push({ raw: row.slice(index, end), visible: "" });
+			index = end;
+			continue;
+		}
+		const glyph = String.fromCodePoint(row.codePointAt(index)!);
+		units.push({ raw: glyph, visible: glyph });
+		index += glyph.length;
+	}
+	return units;
+}
+
+/**
+ * Decorate the complete `/skill:name` token in Pi's rendered editor row with
+ * the Cathedral accent. Visible characters and columns remain unchanged, so
+ * cursor/layout math stays owned by Pi.
+ *
+ * CathedralEditor is a legacy ANSI wrapper around Pi's byte-rendered editor;
+ * typed Cathedral primitives are not appropriate at this compatibility seam.
+ */
+export function formatInlineSkillTokensForEditor(
+	row: string,
+	colors: EditorSkillColors = { accent: activeThemeColors().accent },
+): string {
+	if (!row.includes("/skill:")) return row;
+	const units = splitEditorRowUnits(row);
+	const visible = units.map((unit) => unit.visible).join("");
+	const colorAt = new Map<number, string>();
+	for (const match of visible.matchAll(INLINE_SKILL_TOKEN)) {
+		const start = match.index;
+		const end = start + match[0].length;
+		for (let index = start; index < end; index += 1) colorAt.set(index, colors.accent);
+	}
+	if (colorAt.size === 0) return row;
+
+	let output = "";
+	let visibleIndex = 0;
+	let activeColor: string | undefined;
+	for (const unit of units) {
+		if (unit.visible.length === 0) {
+			output += unit.raw;
+			if (unit.raw === RESET) activeColor = undefined;
+			continue;
+		}
+		const desired = colorAt.get(visibleIndex);
+		if (desired !== activeColor) {
+			if (desired) output += fg(desired);
+			else if (activeColor) output += RESET;
+			activeColor = desired;
+		}
+		output += unit.raw;
+		// Regex match indices are UTF-16 offsets; keep astral graphemes aligned.
+		visibleIndex += unit.visible.length;
+	}
+	if (activeColor) output += RESET;
+	return output;
+}
+
 function dividerFg(): string {
 	return fg(activeThemeColors().divider);
 }
@@ -412,8 +493,9 @@ export class CathedralEditor extends CustomEditor {
 				const ghost = `${prompt}${color(placeholder, activeThemeColors().foregroundDim)}`;
 				return fullRow(wrapRow(ghost, frameWidth, paintFrameBackground));
 			}
-			if (!splash) return wrapActiveRow(row, frameWidth, paintFrameBackground, isFirstContent);
-			return fullRow(wrapRow(row, frameWidth, paintFrameBackground));
+			const decorated = formatInlineSkillTokensForEditor(row);
+			if (!splash) return wrapActiveRow(decorated, frameWidth, paintFrameBackground, isFirstContent);
+			return fullRow(wrapRow(decorated, frameWidth, paintFrameBackground));
 		};
 
 		const result: string[] = [fullRow(renderTopBorder(frameWidth, label, paintFrameBackground))];

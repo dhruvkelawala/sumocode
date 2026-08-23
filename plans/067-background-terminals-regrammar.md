@@ -92,7 +92,7 @@ KEPT — only the tool surface and the completion-notification path change.
 - Deleting or renaming the `bg_task` tool — it stays registered and working
   until plan 070 (both surfaces coexist; the new tools' descriptions say they
   are preferred for shell commands).
-- The `sumocode` agent runner, worktrees, cmux visible panes — untouched.
+- The `sumocode` agent runner, worktrees, terminal-host visible panes — untouched.
 - `src/task-mode.ts`, `src/git/worktree.ts`.
 - The `/ps` viewer UI (plan 068).
 
@@ -165,7 +165,7 @@ wire the callback for shell tasks to
 plan 066 built (extend `installSubagents`'s flush loop or export the flusher
 from `src/subagents/index.ts` — choose the smaller diff and document it).
 
-The passive `fireCmuxNotify` toast stays untouched.
+The passive terminal-host notification toast stays untouched.
 
 **Verify**: `pnpm vitest run src/background-tasks/task-manager.test.ts` →
 existing tests still pass; new test proves the callback fires on self-exit

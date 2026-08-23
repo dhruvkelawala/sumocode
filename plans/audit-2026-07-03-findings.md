@@ -56,7 +56,7 @@ Audited: worktree at `b52ed45` (stack tip `7d213e9` + D1 fix). 94 agents; 74 raw
 | pi-compat/owned-shell-renderer.ts runtime-dead but is plan 019's extraction source — defer deletion | `src/sumo-tui/pi-compat/owned-shell-renderer.ts` |
 | pi-compat/bash-execution-mirror.ts dead — only importer is the dead chat-viewport-controller | `src/sumo-tui/pi-compat/bash-execution-mirror.ts` |
 | scratch/rpc-spike: 19 of 26 git-tracked files are unreferenced spike leftovers; the other 7 are live test fixtures inside a gitignored directory | `.gitignore` |
-| src/spike/cmux-background is a completed spike whose functionality was re-implemented in background-tasks; its tests still run in CI | `src/spike/cmux-background/cmux-adapter.ts` |
+| A completed terminal-host spike was re-implemented in background-tasks; its tests still run in CI | Legacy terminal-host adapter test suite |
 | RPC visual-fixture injection path (SUMOCODE_VISUAL_RPC_FIXTURE) is dead at runtime — nothing sets the env var and the parity contract forbids it | `src/sumo-tui/rpc/visual-fixtures.ts` |
 | knip.json misses the RPC host entry point and JSON-driven scripts, producing false 'dead' leads that would poison the deletion plan | `knip.json` |
 | scripts/diag-task-auto-exit.mjs is a knip-orphan manual diagnostic referenced only from a comment | `scripts/diag-task-auto-exit.mjs` |

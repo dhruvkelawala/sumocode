@@ -70,7 +70,6 @@ delivery identical to headless children.
   <uniqueHerdrAgentName()> --cwd … --split … --no-focus -- bash -lc …`),
   `createWorktreeWorkspace` (`worktree create --json`, returns workspaceId),
   `openExistingWorktreeWorkspace` (`worktree open --path … --json`) (074).
-  `cmux.ts` implements the cmux equivalents (no workspace concept).
 - `src/background-tasks/visible-spawn.ts` — reusable primitives:
   `buildVisibleTaskPaths` (log/response.md/exit-marker paths),
   `buildVisibleAgentCommand` (sumocode task-mode kickoff invocation),
@@ -99,7 +98,7 @@ delivery identical to headless children.
   `subagent_send` tool)
 - `src/subagents/index.ts` + test (factory routing, send wiring)
 - `src/subagents/prompt.ts` + test (guidance for visible mode + send)
-- `src/terminal-host/types.ts`, `herdr.ts`, `cmux.ts`, `index.ts` + tests
+- `src/terminal-host/types.ts`, `herdr.ts`, `index.ts` + tests
   (new `startAgentPane` + `sendPaneText` capabilities)
 
 **Out of scope**:
@@ -110,7 +109,6 @@ delivery identical to headless children.
 - Any change to `bg_task` behavior (plan 070 owns migration).
 - Headless backend changes; `report-agent` lifecycle reporting (Pi hooks are
   already the authority — do NOT add a competing status source).
-- cmux feature work: cmux gets the degraded single-split fallback only.
 
 ## Git workflow
 
@@ -142,14 +140,9 @@ delivery identical to headless children.
    Enter — NOT `agent send`, which is literal-no-Enter).
    Reuse `uniqueHerdrAgentName()`-style uniqueness but accept the caller's
    name prefix: `<slug>-<entropy>`.
-4. `cmux.ts`: `startAgentPane` degrades to the existing `openCommandInSplit`
-   path (single split, ignore placement kind), `sendPaneText` returns
-   `{ ok: false, error: "not supported on cmux" }`. Behavior of existing
-   cmux methods unchanged.
 
-**Verify**: `pnpm vitest run src/terminal-host/herdr.test.ts
-src/terminal-host/cmux.test.ts` → pass (herdr arg-shape tests for all three
-placement kinds; rename best-effort; cmux fallback).
+**Verify**: `pnpm vitest run src/terminal-host/herdr.test.ts` → pass (Herdr
+arg-shape tests for all three placement kinds and rename best-effort).
 
 ### Step 2: Layout policy (`src/subagents/layout.ts`, pure)
 
@@ -229,7 +222,7 @@ path byte-identical behavior).
 2. New tool `subagent_send` `{ id, text }`: for a RUNNING visible child,
    `host.sendPaneText` the text (prompt + Enter). Errors: unknown id,
    settled child, headless child ("headless children cannot receive input —
-   respawn with visible: true"), cmux host. This is the orchestrator-steering
+   respawn with visible: true"), unsupported terminal host. This is the orchestrator-steering
    verb; humans just type in the pane.
 3. `prompt.ts`: extend the system-prompt guidance: when to use visible
    (work the human may want to watch/steer, long interactive tasks) vs
@@ -270,7 +263,6 @@ visible subagents").
       error taxonomy tested
 - [ ] Headless behavior unchanged (no existing test modified except for new
       optional fields)
-- [ ] cmux degrades to single-split; no cmux behavior change otherwise
 - [ ] No raw shell interpolation of names/labels/ids (execFile-style argv)
 - [ ] `plans/README.md` row updated
 

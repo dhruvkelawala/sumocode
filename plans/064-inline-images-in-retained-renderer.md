@@ -92,7 +92,7 @@ runs after cell patches:
    Kitty images across terminals). Simplest correct rule: any active overlay
    → delete all placements for that frame; re-emit when overlays clear.
 6. **iTerm2**: only if cheap — iTerm2 protocol lacks IDs/deletion, so v1 may
-   be Kitty-only (Ghostty, Kitty, WezTerm cover the user base; cmux is
+   be Kitty-only (Ghostty, Kitty, WezTerm cover the user base; Herdr is
    Ghostty-based).
 
 ## Steps
@@ -109,7 +109,7 @@ runs after cell patches:
 5. Tests: placement math (full visibility rule), lifecycle (delete on
    scroll-out, re-emit on scroll-in), overlay suppression, capability-off
    fallback unchanged (Tier-1 chip tests keep passing).
-6. Manual verification matrix: Ghostty/cmux, Kitty, iTerm2 (fallback),
+6. Manual verification matrix: Ghostty, Kitty, iTerm2 (fallback),
    Terminal.app (fallback), narrow portrait pane, `/reload` mid-image,
    session switch, scroll during stream with an image on screen.
 
@@ -117,7 +117,7 @@ runs after cell patches:
 
 - `npx vitest run src/sumo-tui/` green.
 - `npm run typecheck` green.
-- Manual: `sumocode` in cmux → ask the agent to Read a PNG → pixels render
+- Manual: `sumocode` in Herdr → ask the agent to Read a PNG → pixels render
   in the tool card; scroll it off and back; open the command palette over
   it; `/new`; `/reload`. No ghost images, no blank holes, no garbled
   frames.
@@ -129,7 +129,7 @@ runs after cell patches:
 - If `writeFramePatches`'s contract can't accommodate an ordered post-patch
   write (e.g. patches are batched/reordered downstream), STOP and report —
   the terminal writer needs a design change first.
-- If Ghostty/cmux does not honor `deleteKittyImage` by ID (ghost images
+- If Ghostty does not honor `deleteKittyImage` by ID (ghost images
   persist), STOP and document; the lifecycle design needs rework.
 - If chat-pager virtualization makes stable per-block imageIds impossible
   without a larger refactor, STOP and propose the refactor separately.

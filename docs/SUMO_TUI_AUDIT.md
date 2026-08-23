@@ -466,4 +466,4 @@ Keep going with SumoTUI. Pause the parts of #80 that would be rewritten. Spend t
 
 After that the Cathedral elements that survive the rewrite become straightforward surface work.
 
-> **North star.** SumoCode feels like OpenCode-level terminal ownership, with Pi's agent engine and editor intelligence underneath, and a Cathedral product identity stable enough to daily-drive in cmux on both portrait and landscape machines.
+> **North star.** SumoCode feels like OpenCode-level terminal ownership, with Pi's agent engine and editor intelligence underneath, and a Cathedral product identity stable enough to daily-drive in Herdr on both portrait and landscape machines.

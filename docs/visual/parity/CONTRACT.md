@@ -45,7 +45,7 @@ Output: `docs/visual/out/parity/<scenario>/raw/geometry-audit.txt`
 
 Playwright screenshot + pixelmatch diff remains for visual review packs and human approval. It is not the primary verification gate. Use text-level reports first.
 
-`tmux`, cmux/Ghostty screenshots, and live terminal captures are debugging aids only. They must not define CI pass/fail for V2 pixel parity.
+`tmux`, Ghostty screenshots, and live terminal captures are debugging aids only. They must not define CI pass/fail for V2 pixel parity.
 
 Runtime scenarios invoke SumoCode through the user-facing entry contract:
 

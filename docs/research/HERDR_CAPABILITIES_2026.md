@@ -27,7 +27,7 @@ auto-installed integrations for Pi, Claude, and Codex, an env contract
 (`HERDR_ENV` / `HERDR_SOCKET_PATH` / `HERDR_PANE_ID`), agent session tracking with
 resume-on-restore, a centralized worktree store with dedicated worktree
 create/open/remove UI actions, and system-delivered notifications with an attention
-queue. This confirms substantial overlap with a custom cmux-style orchestration layer
+queue. This confirms substantial overlap with a custom multiplexer-style orchestration layer
 for state reporting, notifications, and worktree sessions. The CLI orchestration surface
 (`herdr agent …`, `herdr wait`, skills) could not be verified from reachable primary
 sources in this run.
@@ -143,7 +143,7 @@ sources in this run.
     toasts), `delay_seconds = 2` (suppresses notifications when you're already looking),
     `[ui.toast.herdr] position`, `[ui.toast.clipboard] enabled/position`, `[ui.sound] enabled`.
     Combined with `open_notification_target` (jump to the pane that notified), herdr
-    covers cmux-style "desktop notification + click-through to pane" natively.
+    covers desktop notification and click-through-to-pane behavior natively.
 
 14. **Session restore re-attaches agents** — **[documented in config]**
     `[session] resume_agents_on_restore = true` — herdr persists the pane↔agent-session
@@ -179,7 +179,7 @@ sources in this run.
       retry-hold, and label support, already installed for Pi/Claude/Codex. SumoCode
       should emit `herdr:blocked` for approvals instead of building its own channel. **[documented]**
     - **Desktop notifications + focus-to-pane** — system toast delivery, delay logic,
-      notification-target jump key. Replaces custom cmux notification plumbing. **[documented]**
+      notification-target jump key. Replaces custom terminal notification plumbing. **[documented]**
     - **Attention queue / fleet visibility** — priority-sorted agent panel, per-pane
       state labels, prev/next-agent navigation across workspaces. **[documented in config]**
     - **Worktree sessions** — centralized worktree store + create/open/remove workspace

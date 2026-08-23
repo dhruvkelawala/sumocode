@@ -53,7 +53,7 @@ to PNG/GIF. Each `.tape` file under `docs/visual/` defines one scenario:
 - writes a PNG into `docs/visual/out/`
 
 Because `vhs` is headless, output is identical regardless of whether the
-developer terminal is cmux, Ghostty, iTerm, or kitty. cmux uses `libghostty`
+developer environment is Herdr over Ghostty, standalone Ghostty, iTerm, or Kitty. Ghostty uses `libghostty`
 under the hood so glyph fallback and 24-bit color match what `vhs` produces.
 
 ## Run

@@ -3,7 +3,7 @@
 Hero screenshots for the v0.3 announce. All five are sourced from the V2
 Cathedral Bible mockups (`docs/ui/bible/`), which are pixel-accurate HTML
 renders of the runtime via Playwright + Chromium at retina (2× device
-scale). They are not live `cmux` captures; if you want runtime captures for
+scale). They are not live terminal captures; if you want runtime captures for
 a future release, see "Capturing live shots" below.
 
 | File | Theme | Surface | Source mockup |
@@ -57,13 +57,13 @@ next `pnpm render:bible`. Hand-written scenes (e.g. `scene-active-amber-crt.html
 ## Capturing live shots
 
 Bible mockups are deliberately frozen and ideal for marketing — they show the
-intended runtime layout without live-capture timing artifacts. Live cmux
+intended runtime layout without live-capture timing artifacts. Live terminal
 captures are higher fidelity (real font hinting, real cursor blink, real
 focus state) but harder to reproduce deterministically.
 
 For a future release that wants live captures:
 
-1. Open `cmux` at landscape `160 × 40` (or portrait `60 × 100`).
+1. Open the terminal host at landscape `160 × 40` (or portrait `60 × 100`).
 2. Launch SumoCode: `bin/sumocode.sh`.
 3. Capture with QuickTime / Cleanshot / OBS at 60 fps, then crop to the
    terminal canvas, export PNG.
@@ -94,7 +94,7 @@ ask for nothing." These five do the heavy lifting:
 These mockups have been genericized for public release: no real names, no
 employer, no machine-specific paths. The IDENTITY example panel shows
 `senior FE · indie operator · London / BST` as a representative profile. The MEMORY example facts (`prefers TypeScript strict`, `pnpm not
-npm`, `cmux runtime, libghostty`, etc.) are illustrative system prefs, not
+npm`, `host runtime, libghostty`, etc.) are illustrative system prefs, not
 private user data.
 
 If you need to swap the example content for a future release, edit

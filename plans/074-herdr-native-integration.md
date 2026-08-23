@@ -43,8 +43,7 @@ use yet:
    `--path` flags let SumoCode keep its `sumo/<slug>` + sibling-dir
    conventions.
 
-Both are small, additive, and guarded on `host.kind === "herdr"`; cmux
-behavior is untouched.
+Both are small, additive, and guarded on `host.kind === "herdr"`.
 
 ## Current state
 
@@ -58,7 +57,7 @@ behavior is untouched.
   }
   ```
 
-  `PaneRef = { host: "cmux" | "herdr"; paneId: string; workspaceId?: string }`.
+  `PaneRef` carries the host, pane id, and optional workspace id.
 - `src/terminal-host/herdr.ts` — herdr impl over the JSON CLI envelope
   (`{"id","result":{...}}`); read it for the exec/parse helpers to reuse.
 - `src/commands/worktree.ts` — landed 071 grammar
@@ -108,7 +107,6 @@ behavior is untouched.
 - `src/commands/worktree.ts` + `worktree.test.ts` (herdr-native path)
 
 **Out of scope**:
-- cmux implementation — zero changes; its fixtures must pass unmodified.
 - `src/git/worktree.ts` — conventions stay the single source of truth.
 - The `pane report-metadata --custom-status` mirror for headless subagent
   counts — recorded in plan 068's maintenance notes; belongs there.
@@ -183,8 +181,8 @@ present, same fallback. Success notify becomes
 
 **Verify**: `pnpm vitest run src/commands/worktree.test.ts` → new cases:
 herdr host with native capability uses it (no `createWorktree` call for
-fresh); native failure falls back to generic split; cmux host behavior
-byte-identical (existing tests unmodified).
+fresh); native failure falls back to a generic split; fallback behavior remains
+unchanged.
 
 ### Step 4: Live smoke + full check
 
@@ -213,7 +211,7 @@ commit/PR body. Clean up: `/sumo:worktree prune sumo/smoke-074`.
 - [ ] Fresh/reopen under herdr produce labeled workspaces with `sumo/<slug>`
       branches at `<repo>.sumo-worktrees/` paths (live smoke evidence)
 - [ ] Native failure falls back to the generic split (test-proven)
-- [ ] cmux fixtures pass unmodified; approval decision logic untouched
+- [ ] Generic-host fallback fixtures pass; approval decision logic untouched
 - [ ] No files outside the in-scope list are modified (`git status`)
 - [ ] `plans/README.md` status row updated
 

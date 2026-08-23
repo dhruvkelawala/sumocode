@@ -7,7 +7,7 @@
 > in `plans/README.md` — unless a reviewer dispatched you and told you they
 > maintain the index.
 >
-> **Drift check (run first)**: `git diff --stat d4ce41d..HEAD -- src/commands/worktree.ts src/commands/worktree.test.ts src/git/worktree.ts src/commands/cmux-split.ts`
+> **Drift check (run first)**: `git diff --stat d4ce41d..HEAD -- src/commands/worktree.ts src/commands/worktree.test.ts src/git/worktree.ts`
 > If any in-scope file changed since this plan was written, compare the
 > "Current state" excerpts against the live code before proceeding; on a
 > mismatch, treat it as a STOP condition.
@@ -69,7 +69,7 @@ delegated form and `prune` fully backward compatible.
   - `handlePrune` (lines 60–92) lists/removes worktrees whose branch starts
     with `sumo/`.
   - All collaborators are injectable via `WorktreeCommandOptions` (lines
-    9–17) — tests fake `create`/`list`/`remove`/`openSplit`/`isInCmux`/
+    9–17) — tests fake `create`/`list`/`remove`/`openSplit`/host-detection/
     `terminalSize`. Follow that seam for new behavior.
 - `src/git/worktree.ts`:
   - `resolveCreateOptions` (line 135): `branch = options.branch ?? "sumo/" + slugifyBranch(options.task ?? "task")`.
@@ -77,7 +77,7 @@ delegated form and `prune` fully backward compatible.
   - `listWorktrees(repoRoot)` returns `{ path, head?, branch?, detached }`.
   - Git guarantees a branch cannot be checked out in two worktrees — reopening
     must NOT re-create, only re-open a pane at the existing path.
-- `src/commands/cmux-split.ts` — `buildShellCommand(cwd, command)` (line 85)
+- The terminal-host split helper provides `buildShellCommand(cwd, command)`.
   wraps a `cd <cwd> && <command>` in a login shell for `respawn-pane`.
 - `src/commands/worktree.test.ts` — existing harness (fake collaborators,
   asserts `sendMessage` customType `sumo:worktree` and notify strings). Extend
@@ -165,7 +165,7 @@ In the handler, `fresh` mode:
 
   (No `SUMOCODE_TASK_KEEP_OPEN`, no `task` subcommand — the pane boots the
   normal splash/interactive shell in the worktree cwd.)
-- Same cmux/UI guards, split-direction choice, and success notify as today;
+- Same terminal-host/UI guards, split-direction choice, and success notify as today;
   notify text: `` opened <branch> (fresh session) in <direction> split · setup: … ``.
 
 **Verify**: new test — bare invocation calls `create` with a generated slug,
@@ -211,7 +211,7 @@ Extend `src/commands/worktree.test.ts` (existing fake-collaborator harness):
   `create`; command excludes `sumocode task`.
 - reopen: by branch, by path, unknown target, `--base` rejected.
 - delegate: unchanged behavior (existing tests) + `--base` forwarded.
-- guards: non-cmux and non-UI warnings still fire for fresh/reopen.
+- guards: missing-host and non-UI warnings still fire for fresh/reopen.
 
 ## Done criteria
 
@@ -233,7 +233,7 @@ Stop and report back if:
   do not weaken guards.
 - The current-state excerpts of `worktree.ts` don't match (file drifted).
 - Honoring `--base` for delegate mode requires touching `src/git/worktree.ts`.
-- Reopen requires cmux surface tracking that doesn't exist (it shouldn't —
+- Reopen requires terminal-pane tracking that doesn't exist (it shouldn't —
   it's a plain `new-split`).
 
 ## Maintenance notes

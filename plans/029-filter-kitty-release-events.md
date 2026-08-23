@@ -8,7 +8,7 @@
 ## Status
 
 - **Priority:** P0 (user-blocking: every keypress registers multiple times in
-  Kitty-protocol terminals — Ghostty/cmux, the primary dev terminals)
+  Kitty-protocol terminals — especially Ghostty, the primary dev terminal)
 - **Effort:** S
 - **Risk:** LOW
 - **Depends on:** 023 (the shared router this fixes)
@@ -17,7 +17,7 @@
 
 ## Why this matters
 
-In Ghostty/cmux, typing in the RPC host inserts each character two (or more)
+In Ghostty, typing in the RPC host inserts each character two (or more)
 times. Root cause, verified:
 
 1. SumoCode's terminal controller pushes Kitty keyboard flags 1+2+4 —

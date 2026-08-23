@@ -27,7 +27,7 @@ pnpm runcat:install
 pnpm runcat:check
 ```
 
-Ghostty/cmux mapping:
+Ghostty mapping:
 
 ```text
 font-codepoint-map = U+E900-U+E904=icomoon

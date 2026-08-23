@@ -55,7 +55,7 @@ The following ranges are explicitly **2026-08-10 audit, advisor-measured** value
 | Scratch config, SumoCode only | ~1,350–1,515 ms |
 | Full set minus SumoCode | ~2,500–2,690 ms |
 
-The audit also reported the following isolated marginal costs, all explicitly advisor-measured on 2026-08-10: `pi-cursor-sdk` ~+0.6 s, `pi-subagents` ~+0.4 s, `@plannotator/pi-extension` ~+0.45 s, and approximately +0–0.15 s each for `mitsupi`, `stitch-kit`, `pi-cmux`, `pi-figma`, `pi-goal`, and the OAuth adapter. Those three largest packages were subsequently removed from the operator configuration.
+The audit also reported the following isolated marginal costs, all explicitly advisor-measured on 2026-08-10: `pi-cursor-sdk` ~+0.6 s, `pi-subagents` ~+0.4 s, `@plannotator/pi-extension` ~+0.45 s, and approximately +0–0.15 s each for `mitsupi`, `stitch-kit`, `pi-figma`, `pi-goal`, and the OAuth adapter. Those three largest packages were subsequently removed from the operator configuration.
 
 ### Current reproduction
 
@@ -109,7 +109,7 @@ The jiti and `node:fs` buckets together were **1,310.081 ms**, or **50.95%** of 
 
 ### Comparison with the prior audit
 
-The prior **2026-08-10 audit, advisor-measured** CPU profile sampled approximately **3,459 ms** and attributed **1,181 ms** to jiti, **1,138 ms** to `node:fs` (including **588 ms** in `statSync` and **325 ms** in `readFileSync`), **591 ms** to `node:internal`, and approximately **43 ms** to `@earendil-works/pi-coding-agent` itself. It also observed module URLs from `@plannotator/pi-extension`, `pi-cmux`, and `pi-claude-oauth-adapter`.
+The prior **2026-08-10 audit, advisor-measured** CPU profile sampled approximately **3,459 ms** and attributed **1,181 ms** to jiti, **1,138 ms** to `node:fs` (including **588 ms** in `statSync` and **325 ms** in `readFileSync`), **591 ms** to `node:internal`, and approximately **43 ms** to `@earendil-works/pi-coding-agent` itself. It also observed module URLs from `@plannotator/pi-extension` and `pi-claude-oauth-adapter`.
 
 The current profile confirms the same attribution shape after the package trim: jiti, filesystem work, and Node internals dominate; Pi core remains small. The current profile's lower absolute package-related totals are expected from the current 18-package configuration and do not invalidate the finding.
 

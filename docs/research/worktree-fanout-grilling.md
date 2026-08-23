@@ -38,7 +38,7 @@ plan now has two layers: harden `bg_task`, then build worktree fan-out on it.
 ### D2 — Fan-out integration: `worktree: true` param on `bg_task` spawn
 
 `bg_task` itself creates the worktree before spawning the child in it, and
-**tracks the worktree ref in the task record** (next to the cmux ref), so
+**tracks the worktree ref in the task record** (next to the pane ref), so
 stop/cleanup can find it.
 
 - One tool call per subagent: `bg_task spawn runner=sumocode worktree=true …`.
@@ -73,7 +73,7 @@ multi-turn subagent that keeps working.
 
 The pane/worktree is a **resource the orchestrator owns**. Nothing auto-closes.
 The subagent is **single-shot**: it finishes its task, writes its harvest, and
-the process exits — but the **cmux pane stays open** as a preserved viewport
+the process exits — but the **terminal pane stays open** as a preserved viewport
 showing the final transcript. The orchestrator then wakes, inspects harvest +
 diff, and **explicitly decides keep or close** (and separately the worktree's
 fate per D3).
@@ -89,7 +89,7 @@ fate per D3).
 
 The agent **success** path (`armResponseWatcher`, task-manager.ts ~L431) sets
 `status="completed"` and writes meta — then **returns silently**. It never calls
-`finalizeTask`, so it never reaches `sendUserMessage` / `fireCmuxNotify`. The
+`finalizeTask`, so it never reaches `sendUserMessage` / the terminal-host notifier. The
 **failure** path (watchdog timeout) DOES notify. So a subagent that *succeeds*
 tells the orchestrator nothing; one that *times out* pings it — exactly backwards.
 
@@ -131,8 +131,8 @@ The grilling was driven by an audit of `src/background-tasks/`. Findings, by tie
    A fresh `bg-1` collides with an on-disk `bg-1` from before the reload.
 3. **"completed" = response.md exists, not "agent done"** (see D4). First
    `agent_end` marks a still-working multi-turn subagent as finished.
-4. **Agent child has no pid.** The sumocode child is `exec`'d inside the cmux
-   pane; the manager never learns its pid. `stop` = `cmux close-surface` and hope
+4. **Agent child has no pid.** The sumocode child is `exec`'d inside the terminal
+   pane; the manager never learns its pid. `stop` asks the terminal host to close the pane and hopes
    SIGHUP lands. No process-level kill, no liveness check.
 
 **Tier 2 — stability/correctness**
@@ -234,7 +234,7 @@ width threshold (the sidebar policy's `W >= 120` rule) would wrongly pick RIGHT.
 The real signal is **orientation** — in portrait, horizontal is the scarce axis
 regardless of absolute column count. Confirmed against two screenshots of the
 same portrait session: one with SumoCode's registry sidebar open, one with it
-closed (cmux list open instead). The user wants DOWN in **both** — proving
+closed (host pane list open instead). The user wants DOWN in **both** — proving
 sidebar-visibility is the wrong trigger (it would flip to RIGHT when the sidebar
 is closed). Orientation alone captures the intent in both scenarios.
 
@@ -243,7 +243,7 @@ avoids aspect ratio for *sidebar visibility* (uses hard `W >= 120`). That is a
 different decision — sidebar column-budget vs. split axis. Using aspect for the
 split direction does not contradict the width-first sidebar rule.
 
-**Scope:** keep hunk in its own cmux pane (option A from the framing question);
+**Scope:** keep hunk in its own terminal pane (option A from the framing question);
 do NOT build a native in-transcript diff surface in V1 — that fights the doc's
 overlay-seam caution and belongs in V2 with its own issue + Bible target +
 visual golden.

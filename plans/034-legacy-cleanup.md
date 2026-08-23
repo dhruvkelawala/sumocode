@@ -59,8 +59,8 @@ importer since the audit is a STOP)
     tests; the 7 live fixture files (event/message JSONL used by tests) MOVE
     to `test/fixtures/rpc-spike/` (update importers), then remove the
     `.gitignore` scratch entry contradiction.
-11. `src/spike/cmux-background/` — completed spike, functionality
-    re-implemented in `src/background-tasks/`; delete with its tests (spike
+11. Completed terminal-host background-task spike — functionality was
+    re-implemented in `src/background-tasks/`; delete the spike with its tests (spike
     policy: promote-or-delete).
 12. README + docs: remove the four stale private-Pi-patch descriptions in
     `README.md`; fix the stale `chat-viewport-controller` comments in

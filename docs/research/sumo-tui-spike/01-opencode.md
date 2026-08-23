@@ -104,6 +104,6 @@ The renderer background is updated from the active theme, and syntax styles are 
 
 5. Should SumoCode copy OpenCode’s prompt extmark model for files, agents, and pasted text, or simplify to plain text first and add rich parts later? (`packages/opencode/src/cli/cmd/tui/component/prompt/index.tsx:521-597`, `packages/opencode/src/cli/cmd/tui/component/prompt/autocomplete.tsx:157-225`)
 
-6. Should mouse selection copy on mouse-up, right-click, or explicit keypress in cmux? OpenCode supports both copy-on-mouse-up and an experimental right-click plus Ctrl-C/Esc selection workflow. (`packages/opencode/src/cli/cmd/tui/app.tsx:256-289`, `packages/opencode/src/cli/cmd/tui/app.tsx:837-850`, `packages/opencode/src/cli/cmd/tui/util/selection.ts:13-23`)
+6. Should mouse selection copy on mouse-up, right-click, or explicit keypress in the terminal host? OpenCode supports both copy-on-mouse-up and an experimental right-click plus Ctrl-C/Esc selection workflow. (`packages/opencode/src/cli/cmd/tui/app.tsx:256-289`, `packages/opencode/src/cli/cmd/tui/app.tsx:837-850`, `packages/opencode/src/cli/cmd/tui/util/selection.ts:13-23`)
 
 7. How should SumoCode expose scroll speed and acceleration to users? OpenCode’s config supports `scroll_speed`, `scroll_acceleration.enabled`, and `mouse`, then maps that to custom fixed-speed or MacOS-style acceleration. (`packages/opencode/src/cli/cmd/tui/config/tui-schema.ts:14-27`, `packages/opencode/src/cli/cmd/tui/util/scroll.ts:1-23`)

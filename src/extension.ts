@@ -7,6 +7,7 @@ import { installInputHints } from "./cathedral/input-hints.js";
 import { installAnswerTool } from "./answer-tool.js";
 import { installQuestionTool } from "./question-tool.js";
 import { taskTool } from "./native-task-tool.js";
+import { installSkillInlineExpansion } from "./skill-inline.js";
 
 import { applyStartupTheme } from "./themes/index.js";
 import { installAltscreen } from "./cathedral/altscreen.js";
@@ -220,6 +221,7 @@ function installOrchestrationTools(pi: ExtensionAPI) {
 
 function installRpcChildProfile(pi: ExtensionAPI): void {
 	installHerdrRpcBridge(pi);
+	installSkillInlineExpansion(pi);
 	// Pi's built-in /login exists only in InteractiveMode and is intentionally
 	// absent from RPC get_commands. Register the compatibility command in the
 	// child so the retained host can discover and dispatch it normally.
@@ -356,6 +358,7 @@ export default function sumocode(pi: ExtensionAPI): void {
 	installMemoryExtraction(pi);
 	installCathedralEditor(pi);
 	installInputHints(pi);
+	installSkillInlineExpansion(pi);
 	// The old global `~/.pi/agent/extensions/task-tool` extension registers the
 	// same `task` tool name and Pi treats duplicate tools as fatal. Until the
 	// user removes/disables that legacy extension, defer to it instead of

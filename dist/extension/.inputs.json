@@ -32,7 +32,6 @@
     "src/cathedral/multiline-paste.ts",
     "src/cathedral/scriptorium-chrome.ts",
     "src/command-palette.ts",
-    "src/commands/cmux-split.ts",
     "src/commands/cursor.ts",
     "src/commands/diff.ts",
     "src/commands/divine-query.ts",
@@ -40,8 +39,6 @@
     "src/commands/persona.ts",
     "src/commands/reload.ts",
     "src/commands/review.ts",
-    "src/commands/roles-palette.ts",
-    "src/commands/roles.ts",
     "src/commands/ship.ts",
     "src/commands/slate.ts",
     "src/commands/spinner.ts",
@@ -78,7 +75,6 @@
     "src/skill-inline.ts",
     "src/slate.ts",
     "src/splash.ts",
-    "src/subagent-status-row.ts",
     "src/subagents/backend-pane.ts",
     "src/subagents/backend-pi.ts",
     "src/subagents/delivery.ts",
@@ -88,7 +84,6 @@
     "src/subagents/manager.ts",
     "src/subagents/manifest.ts",
     "src/subagents/prompt.ts",
-    "src/subagents/roles.ts",
     "src/subagents/tools.ts",
     "src/sumo-tui/cathedral/ansi.ts",
     "src/sumo-tui/cathedral/metrics-hud.ts",
@@ -106,10 +101,10 @@
     "src/sumo-tui/runtime/terminal-errors.ts",
     "src/sumo-tui/runtime/worker-runtime.ts",
     "src/task-mode.ts",
-    "src/terminal-host/cmux.ts",
     "src/terminal-host/detect.ts",
     "src/terminal-host/herdr.ts",
     "src/terminal-host/index.ts",
+    "src/terminal-host/shell-command.ts",
     "src/theme-check.ts",
     "src/themes/amber-crt.ts",
     "src/themes/cathedral.ts",
@@ -126,6 +121,6 @@
     "src/working-indicator.ts",
     "tsconfig.json"
   ],
-  "hash": "a923f5f57812f68d7bc1e88be50aa93fa9ff57467aafde176db8b7fbf3690f54",
-  "outputsHash": "dda723ee71bdb662f79ba3acd7d57230bfb134f94b8701f5d0b5321ead18a883"
+  "hash": "be493bb3325c443bf045eb24978f56513c6c10c726d57ae210cc33a5beaf8310",
+  "outputsHash": "b8d39d3d170440101e1ff13150c73d6f440f94af130d750edd9c64fb18df57bc"
 }

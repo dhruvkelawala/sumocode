@@ -8,7 +8,9 @@ describe("detectTerminalHost", () => {
 	});
 
 	it("requires both herdr environment markers", () => {
+		// SAFETY: partial env objects are valid ProcessEnv for detection purposes.
 		expect(detectTerminalHost({ HERDR_ENV: "1" } as NodeJS.ProcessEnv)).toBe("none");
+		// SAFETY: partial env objects are valid ProcessEnv for detection purposes.
 		expect(detectTerminalHost({ HERDR_PANE_ID: "w1:p1" } as NodeJS.ProcessEnv)).toBe("none");
 	});
 

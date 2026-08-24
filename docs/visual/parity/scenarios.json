@@ -139,6 +139,31 @@
 			]
 		},
 		{
+			"id": "input-inline-skill-component",
+			"lane": "component",
+			"status": "review",
+			"component": {
+				"kind": "input-frame-inline-skill"
+			},
+			"dimensions": {
+				"cols": 160,
+				"rows": 4
+			},
+			"bibleTarget": "04-active-input-typed.png",
+			"crops": [
+				{
+					"id": "full",
+					"targetCrop": "full",
+					"runtimeCrop": "full"
+				},
+				{
+					"id": "input-frame",
+					"targetCrop": "input-component-frame",
+					"runtimeCrop": "input-component-frame"
+				}
+			]
+		},
+		{
 			"id": "footer-ready-component",
 			"lane": "component",
 			"status": "review",

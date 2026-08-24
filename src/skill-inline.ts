@@ -34,6 +34,37 @@ export type ReadSkillBody = (skill: Skill) => string;
 
 const readSkillBodyFromDisk: ReadSkillBody = (skill) => stripFrontmatter(fs.readFileSync(skill.filePath, "utf-8")).trim();
 
+function removeInlineSkillToken(text: string, offset: number, length: number): string {
+	const tokenEnd = offset + length;
+	const lineStart = text.lastIndexOf("\n", offset - 1) + 1;
+	const nextNewline = text.indexOf("\n", tokenEnd);
+	const lineEnd = nextNewline === -1 ? text.length : nextNewline;
+	const beforeOnLine = text.slice(lineStart, offset);
+	const afterOnLine = text.slice(tokenEnd, lineEnd);
+	if (/^[ \t]*$/.test(beforeOnLine) && /^[ \t]*$/.test(afterOnLine)) {
+		// Remove the whole standalone invocation line, not the indentation of the
+		// following line (which can be semantically significant code).
+		const before = text.slice(0, lineStart);
+		const after = nextNewline === -1 ? "" : text.slice(nextNewline + 1);
+		return `${before}${after}`.trim();
+	}
+
+	const rawBefore = text.slice(0, offset);
+	const rawAfter = text.slice(tokenEnd);
+	const beforeCurrentLine = rawBefore.slice(rawBefore.lastIndexOf("\n") + 1);
+	const preservesLineIndent = /^[ \t]*$/.test(beforeCurrentLine);
+	const before = preservesLineIndent ? rawBefore : rawBefore.replace(/[ \t]+$/, "");
+	// Remove horizontal separator whitespace only. A leading newline and its
+	// following indentation belong to the remaining prompt and must survive.
+	const after = rawAfter.replace(/^[ \t]+/, "");
+	const separator = before.length > 0 && after.length > 0
+		? preservesLineIndent || before.endsWith("\n") || after.startsWith("\n") || ATTACHED_SKILL_SUFFIX.test(after)
+			? ""
+			: " "
+		: "";
+	return `${before}${separator}${after}`.trim();
+}
+
 export const expandInlineSkillTokens = (
 	text: string,
 	skills: readonly Skill[],
@@ -56,19 +87,7 @@ export const expandInlineSkillTokens = (
 		} catch {
 			continue;
 		}
-		const rawBefore = text.slice(0, offset);
-		const rawAfter = text.slice(offset + match[0].length);
-		const boundaryWhitespace = (rawBefore.match(/\s*$/)?.[0] ?? "") + (rawAfter.match(/^\s*/)?.[0] ?? "");
-		const before = rawBefore.trimEnd();
-		const after = rawAfter.trimStart();
-		const separator = before.length > 0 && after.length > 0
-			? boundaryWhitespace.includes("\n")
-				? "\n"
-				: ATTACHED_SKILL_SUFFIX.test(after)
-					? ""
-					: " "
-			: "";
-		const userMessage = `${before}${separator}${after}`.trim();
+		const userMessage = removeInlineSkillToken(text, offset, match[0].length);
 		const skillBlock = `<skill name="${skill.name}" location="${skill.filePath}">\nReferences are relative to ${skill.baseDir}.\n\n${body}\n</skill>`;
 		return { text: userMessage ? `${skillBlock}\n\n${userMessage}` : skillBlock, expanded: [name] };
 	}
@@ -108,8 +127,14 @@ export async function discoverSkills(cwd?: string): Promise<Skill[]> {
 export function installSkillInlineExpansion(pi: ExtensionAPI, options: SkillInlineExpansionOptions = {}): void {
 	let cache: Promise<Skill[]> | undefined;
 	const loadSkillsOnce = (): Promise<Skill[]> => {
-		cache ??= (options.discoverSkills ?? discoverSkills)(options.cwd);
-		return cache;
+		if (cache) return cache;
+		const pending = (options.discoverSkills ?? discoverSkills)(options.cwd);
+		const cached = pending.catch((error: unknown) => {
+			if (cache === cached) cache = undefined;
+			throw error;
+		});
+		cache = cached;
+		return cached;
 	};
 	// Skills can change across /reload; drop the cache on session lifecycle.
 	pi.on("session_start", () => {

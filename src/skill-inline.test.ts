@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { parseSkillBlock, type ExtensionAPI, type Skill } from "@earendil-works/pi-coding-agent";
 import { type ReadSkillBody, expandInlineSkillTokens, installSkillInlineExpansion } from "./skill-inline.js";
 
@@ -37,6 +37,11 @@ describe("expandInlineSkillTokens", () => {
 	it("preserves a newline when removing a skill token on its own line", () => {
 		const result = expandInlineSkillTokens("before\n/skill:tdd\nafter", [makeSkill()], readBody);
 		expect(parseSkillBlock(result.text)?.userMessage).toBe("before\nafter");
+	});
+
+	it("preserves indentation after removing a standalone skill line", () => {
+		const result = expandInlineSkillTokens("Please review:\n/skill:tdd\n    if (x) {", [makeSkill()], readBody);
+		expect(parseSkillBlock(result.text)?.userMessage).toBe("Please review:\n    if (x) {");
 	});
 
 	it("keeps trailing punctuation attached when removing an inline skill", () => {
@@ -89,6 +94,21 @@ describe("installSkillInlineExpansion", () => {
 		installSkillInlineExpansion(pi);
 		expect(handlers.has("input")).toBe(true);
 		expect(handlers.has("session_start")).toBe(true);
+	});
+
+	it("retries discovery after a transient rejection", async () => {
+		type InputHandler = (event: { text: string }) => Promise<unknown>;
+		const handlers = new Map<string, unknown>();
+		const pi = { on: (event: string, handler: unknown) => handlers.set(event, handler) } as unknown as ExtensionAPI;
+		const discoverSkills = vi.fn()
+			.mockRejectedValueOnce(new Error("temporary filesystem failure"))
+			.mockResolvedValueOnce([makeSkill()]);
+		installSkillInlineExpansion(pi, { discoverSkills, readSkillBody: readBody });
+		const input = handlers.get("input") as InputHandler;
+
+		expect(await input({ text: "use /skill:tdd now" })).toEqual({ action: "continue" });
+		expect(await input({ text: "use /skill:tdd now" })).toMatchObject({ action: "transform" });
+		expect(discoverSkills).toHaveBeenCalledTimes(2);
 	});
 
 	it("uses resource-loader discovery so contributed skills can transform", async () => {

@@ -3845,6 +3845,27 @@ import {
 var SKILL_TOKEN = /(^|(?<=\s))\/skill:([A-Za-z0-9][A-Za-z0-9_-]*)/g;
 var ATTACHED_SKILL_SUFFIX = /^(?:[,.;:!?%‰°)\]}]|['’](?:s|t|re|ve|ll|d|m)\b)/iu;
 var readSkillBodyFromDisk = (skill) => stripFrontmatter(fs2.readFileSync(skill.filePath, "utf-8")).trim();
+function removeInlineSkillToken(text, offset, length) {
+  const tokenEnd = offset + length;
+  const lineStart = text.lastIndexOf("\n", offset - 1) + 1;
+  const nextNewline = text.indexOf("\n", tokenEnd);
+  const lineEnd = nextNewline === -1 ? text.length : nextNewline;
+  const beforeOnLine = text.slice(lineStart, offset);
+  const afterOnLine = text.slice(tokenEnd, lineEnd);
+  if (/^[ \t]*$/.test(beforeOnLine) && /^[ \t]*$/.test(afterOnLine)) {
+    const before2 = text.slice(0, lineStart);
+    const after2 = nextNewline === -1 ? "" : text.slice(nextNewline + 1);
+    return `${before2}${after2}`.trim();
+  }
+  const rawBefore = text.slice(0, offset);
+  const rawAfter = text.slice(tokenEnd);
+  const beforeCurrentLine = rawBefore.slice(rawBefore.lastIndexOf("\n") + 1);
+  const preservesLineIndent = /^[ \t]*$/.test(beforeCurrentLine);
+  const before = preservesLineIndent ? rawBefore : rawBefore.replace(/[ \t]+$/, "");
+  const after = rawAfter.replace(/^[ \t]+/, "");
+  const separator = before.length > 0 && after.length > 0 ? preservesLineIndent || before.endsWith("\n") || after.startsWith("\n") || ATTACHED_SKILL_SUFFIX.test(after) ? "" : " " : "";
+  return `${before}${separator}${after}`.trim();
+}
 var expandInlineSkillTokens = (text, skills, readSkillBody = readSkillBodyFromDisk) => {
   if (text.startsWith("/skill:")) return { text, expanded: [] };
   const byName = /* @__PURE__ */ new Map();
@@ -3861,13 +3882,7 @@ var expandInlineSkillTokens = (text, skills, readSkillBody = readSkillBodyFromDi
     } catch {
       continue;
     }
-    const rawBefore = text.slice(0, offset);
-    const rawAfter = text.slice(offset + match[0].length);
-    const boundaryWhitespace = (rawBefore.match(/\s*$/)?.[0] ?? "") + (rawAfter.match(/^\s*/)?.[0] ?? "");
-    const before = rawBefore.trimEnd();
-    const after = rawAfter.trimStart();
-    const separator = before.length > 0 && after.length > 0 ? boundaryWhitespace.includes("\n") ? "\n" : ATTACHED_SKILL_SUFFIX.test(after) ? "" : " " : "";
-    const userMessage = `${before}${separator}${after}`.trim();
+    const userMessage = removeInlineSkillToken(text, offset, match[0].length);
     const skillBlock = `<skill name="${skill.name}" location="${skill.filePath}">
 References are relative to ${skill.baseDir}.
 
@@ -3899,8 +3914,14 @@ async function discoverSkills(cwd) {
 function installSkillInlineExpansion(pi, options = {}) {
   let cache2;
   const loadSkillsOnce = () => {
-    cache2 ??= (options.discoverSkills ?? discoverSkills)(options.cwd);
-    return cache2;
+    if (cache2) return cache2;
+    const pending = (options.discoverSkills ?? discoverSkills)(options.cwd);
+    const cached = pending.catch((error) => {
+      if (cache2 === cached) cache2 = void 0;
+      throw error;
+    });
+    cache2 = cached;
+    return cached;
   };
   pi.on("session_start", () => {
     cache2 = void 0;

@@ -80,15 +80,31 @@ describe("formatInlineSkillTokensForEditor", () => {
 	});
 
 	it("styles a skill token across Pi-wrapped editor rows", () => {
-		const formatted = formatInlineSkillRowsForEditor(["check /skill:her", "dr      "], { accent: "#112233" });
-		expect(formatted.map(stripAnsi)).toEqual(["check /skill:her", "dr      "]);
+		const rows = ["check /skill:her", "dr      "];
+		const source = { text: "check /skill:herdr", rows: [{ start: 0, end: 16 }, { start: 16, end: 18 }] };
+		const formatted = formatInlineSkillRowsForEditor(rows, { accent: "#112233" }, source);
+		expect(formatted.map(stripAnsi)).toEqual(rows);
 		expect(formatted[0]).toContain("\u001b[38;2;17;34;51m/skill:her");
 		expect(formatted[1]).toContain("\u001b[38;2;17;34;51mdr");
 	});
 
 	it("does not join skill fragments across an exact-width hard-newline boundary", () => {
 		const rows = ["check /skill:", "herdr"];
-		expect(formatInlineSkillRowsForEditor(rows, { accent: "#112233" }, new Set([0]))).toEqual(rows);
+		const source = { text: "check /skill:\nherdr", rows: [{ start: 0, end: 13 }, { start: 14, end: 19 }] };
+		expect(formatInlineSkillRowsForEditor(rows, { accent: "#112233" }, source)).toEqual(rows);
+	});
+
+	it("uses hidden logical text when a skill token crosses the viewport edge", () => {
+		const partial = formatInlineSkillRowsForEditor(["dr"], { accent: "#112233" }, {
+			text: "check /skill:herdr",
+			rows: [{ start: 16, end: 18 }],
+		});
+		const pathFragment = formatInlineSkillRowsForEditor(["/skill:tdd"], { accent: "#112233" }, {
+			text: "prefix/skill:tdd",
+			rows: [{ start: 6, end: 16 }],
+		});
+		expect(partial[0]).toContain("\u001b[38;2;17;34;51mdr");
+		expect(pathFragment).toEqual(["/skill:tdd"]);
 	});
 
 	it("does not style path-like fragments", () => {

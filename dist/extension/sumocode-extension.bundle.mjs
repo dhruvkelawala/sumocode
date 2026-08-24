@@ -4631,28 +4631,35 @@ function splitEditorRowUnits(row3) {
   }
   return units;
 }
-function formatInlineSkillRowsForEditor(rows, colors = { accent: activeThemeColors().accent }, hardBreakAfterRows = /* @__PURE__ */ new Set()) {
+function formatInlineSkillRowsForEditor(rows, colors = { accent: activeThemeColors().accent }, source) {
   const parsed = rows.map((row3) => {
     const units = splitEditorRowUnits(row3);
     return { row: row3, units, visible: units.map((unit) => unit.visible).join("") };
   });
-  const rowOffsets = [];
-  let visible = "";
-  for (let index = 0; index < parsed.length; index += 1) {
-    rowOffsets.push(visible.length);
-    visible += parsed[index].visible;
-    if (hardBreakAfterRows.has(index)) visible += "\n";
-  }
-  if (!visible.includes("/skill:")) return [...rows];
-  const accented = /* @__PURE__ */ new Set();
-  for (const match of visible.matchAll(INLINE_SKILL_TOKEN)) {
-    const start = match.index;
-    const end = start + match[0].length;
-    for (let index = start; index < end; index += 1) accented.add(index);
-  }
-  if (accented.size === 0) return [...rows];
+  let fallbackOffset = 0;
+  const sourceRows = source?.rows ?? parsed.map((row3) => {
+    const range = { start: fallbackOffset, end: fallbackOffset + row3.visible.length };
+    fallbackOffset = range.end;
+    return range;
+  });
+  const sourceText = source?.text ?? parsed.map((row3) => row3.visible).join("");
+  if (!sourceText.includes("/skill:")) return [...rows];
+  const tokenRanges = [...sourceText.matchAll(INLINE_SKILL_TOKEN)].map((match) => ({
+    start: match.index,
+    end: match.index + match[0].length
+  }));
+  if (tokenRanges.length === 0) return [...rows];
+  const accentedByRow = sourceRows.map((row3) => {
+    const accented = /* @__PURE__ */ new Set();
+    for (const token of tokenRanges) {
+      const start = Math.max(row3.start, token.start);
+      const end = Math.min(row3.end, token.end);
+      for (let index = start; index < end; index += 1) accented.add(index - row3.start);
+    }
+    return accented;
+  });
   return parsed.map(({ units }, rowIndex) => {
-    const rowOffset = rowOffsets[rowIndex] ?? 0;
+    const accented = accentedByRow[rowIndex] ?? /* @__PURE__ */ new Set();
     let output = "";
     let visibleIndex = 0;
     let accentActive = false;
@@ -4662,7 +4669,7 @@ function formatInlineSkillRowsForEditor(rows, colors = { accent: activeThemeColo
         if (unit.raw === RESET6) accentActive = false;
         continue;
       }
-      const desired = accented.has(rowOffset + visibleIndex);
+      const desired = accented.has(visibleIndex);
       if (desired !== accentActive) {
         output += desired ? fg4(colors.accent) : RESET_FG;
         accentActive = desired;
@@ -4878,18 +4885,18 @@ var CathedralEditor = class extends CustomEditor {
     if (boundary !== " " && boundary !== "	") return;
     internals.tryTriggerAutocomplete();
   }
-  hardBreakAfterVisibleRows(layoutWidth, visibleRowCount) {
+  visibleRowSourceRanges(layoutWidth, visibleRowCount) {
     const internals = this;
-    const allBreaks = [];
+    const allRanges = [];
+    let lineOffset = 0;
     for (const line of this.getLines()) {
       const chunks = wordWrapLine(line, layoutWidth, [...internals.segment(line, "grapheme")]);
-      for (let index = 0; index < chunks.length; index += 1) allBreaks.push(index === chunks.length - 1);
+      for (const chunk of chunks) {
+        allRanges.push({ start: lineOffset + chunk.startIndex, end: lineOffset + chunk.endIndex });
+      }
+      lineOffset += line.length + 1;
     }
-    const result = /* @__PURE__ */ new Set();
-    for (let index = 0; index < visibleRowCount; index += 1) {
-      if (allBreaks[internals.scrollOffset + index]) result.add(index);
-    }
-    return result;
+    return allRanges.slice(internals.scrollOffset, internals.scrollOffset + visibleRowCount);
   }
   render(width) {
     if (width < 8) return super.render(width);
@@ -4912,8 +4919,8 @@ var CathedralEditor = class extends CustomEditor {
     const showPlaceholder = splash && text.length === 0;
     const lastContentIdx = bottomIdx === -1 ? innerRows.length : bottomIdx;
     const contentRows = innerRows.slice(1, lastContentIdx);
-    const hardBreakAfterRows = this.hardBreakAfterVisibleRows(Math.max(1, piContentWidth - 1), contentRows.length);
-    const decoratedContentRows = showPlaceholder ? contentRows : formatInlineSkillRowsForEditor(contentRows, void 0, hardBreakAfterRows);
+    const visibleSourceRanges = this.visibleRowSourceRanges(Math.max(1, piContentWidth - 1), contentRows.length);
+    const decoratedContentRows = showPlaceholder ? contentRows : formatInlineSkillRowsForEditor(contentRows, void 0, { text, rows: visibleSourceRanges });
     const renderContent = (row3, isFirstContent) => {
       if (showPlaceholder && isFirstContent) {
         const prompt = ` ${color2(">", activeThemeColors().accent)} ${CURSOR_MARKER}`;

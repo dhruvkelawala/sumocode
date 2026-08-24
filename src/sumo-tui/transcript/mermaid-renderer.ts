@@ -13,6 +13,21 @@ export type MermaidRenderOutcome =
 	| { readonly kind: "rendered"; readonly rows: readonly string[]; readonly warnings: readonly string[] }
 	| { readonly kind: "fallback"; readonly reason: string };
 
+interface SequenceMessage {
+	readonly source: string;
+	readonly from: string;
+	readonly to: string;
+}
+
+interface SimpleSequence {
+	readonly declarations: ReadonlyMap<string, string>;
+	readonly participantOrder: readonly string[];
+	readonly messages: readonly SequenceMessage[];
+}
+
+const SEQUENCE_OPERATORS = ["-->>", "->>", "--x", "-x", "--)", "-)", "-->", "->"] as const;
+const SEQUENCE_ID = /^[\p{L}\p{N}_.$-]+$/u;
+
 /** Render Mermaid source as width-safe Cathedral Unicode art. */
 export function renderCathedralMermaid(source: string, availableWidth: number): MermaidRenderOutcome {
 	const width = Math.max(0, Math.floor(availableWidth));
@@ -27,10 +42,12 @@ export function renderCathedralMermaid(source: string, availableWidth: number): 
 	}
 	if (!art) return { kind: "fallback", reason: fallbackReasonForNullArt(source) };
 	if (art.width > width) {
-		// A horizontal flowchart lays out as wide as it needs; the same graph
-		// drawn top-down is narrow-and-tall, which the transcript can scroll.
+		// Prefer narrow-and-tall alternatives because the transcript already
+		// scrolls vertically but deliberately has no hidden horizontal viewport.
 		const rotated = renderTopDownRetry(source, width);
 		if (rotated) return rotated;
+		const sequenceBands = renderSequenceBandsRetry(source, width);
+		if (sequenceBands) return sequenceBands;
 		return { kind: "fallback", reason: `diagram needs ${art.width} columns but only ${width} fit` };
 	}
 	if (art.styled.length > MAX_VISIBLE_ROWS) {
@@ -57,6 +74,127 @@ function renderTopDownRetry(source: string, width: number): MermaidRenderOutcome
 	}
 	if (!art || art.width > width || art.styled.length > MAX_VISIBLE_ROWS) return undefined;
 	return { kind: "rendered", rows: renderRows(art, activeThemeColors()), warnings: art.warnings };
+}
+
+function renderSequenceBandsRetry(source: string, width: number): MermaidRenderOutcome | undefined {
+	if (diagramKind(source) !== "sequence") return undefined;
+	const sequence = parseSimpleSequence(source);
+	if (!sequence || sequence.messages.length === 0) return undefined;
+
+	const bands: MermaidArt[] = [];
+	let finalizedRowCount = 0;
+	let currentMessages: SequenceMessage[] = [];
+	let currentArt: MermaidArt | undefined;
+	for (const message of sequence.messages) {
+		const candidateMessages = [...currentMessages, message];
+		const candidateArt = renderSequenceBand(sequence, candidateMessages);
+		if (candidateArt && candidateArt.width <= width) {
+			const separatorRows = bands.length === 0 ? 0 : 1;
+			if (finalizedRowCount + separatorRows + candidateArt.styled.length > MAX_VISIBLE_ROWS) return undefined;
+			currentMessages = candidateMessages;
+			currentArt = candidateArt;
+			continue;
+		}
+		if (!currentArt) return undefined;
+		finalizedRowCount += (bands.length === 0 ? 0 : 1) + currentArt.styled.length;
+		bands.push(currentArt);
+		currentMessages = [message];
+		currentArt = renderSequenceBand(sequence, currentMessages) ?? undefined;
+		if (!currentArt || currentArt.width > width || finalizedRowCount + 1 + currentArt.styled.length > MAX_VISIBLE_ROWS) return undefined;
+	}
+	if (currentArt) bands.push(currentArt);
+	const colors = activeThemeColors();
+	return {
+		kind: "rendered",
+		rows: bands.flatMap((band, index) => [
+			...(index === 0 ? [] : [""]),
+			...renderRows(band, colors),
+		]),
+		warnings: [...new Set(bands.flatMap((band) => band.warnings))],
+	};
+}
+
+/**
+ * Parse the conservative sequence subset that can be split without changing
+ * meaning. Structured blocks, notes, activation, and autonumber keep the
+ * normal source fallback rather than risk a misleading diagram.
+ */
+function parseSimpleSequence(source: string): SimpleSequence | undefined {
+	const declarations = new Map<string, string>();
+	const participantOrder: string[] = [];
+	const explicitParticipants = new Set<string>();
+	const messages: SequenceMessage[] = [];
+	let sawHeader = false;
+
+	const rememberParticipant = (id: string, declaration = `participant ${id}`): void => {
+		if (!declarations.has(id)) participantOrder.push(id);
+		declarations.set(id, declaration);
+	};
+
+	for (const rawLine of source.split("\n")) {
+		const statement = rawLine.trim();
+		if (statement === "" || statement.startsWith("%%")) continue;
+		if (!sawHeader) {
+			if (!/^sequenceDiagram$/i.test(statement)) return undefined;
+			sawHeader = true;
+			continue;
+		}
+		// grok-mermaid splits unquoted semicolons into separate statements.
+		// This conservative parser works line-by-line, so decline banding rather
+		// than risk losing participant aliases or grouping multiple messages as one.
+		if (statement.includes(";")) return undefined;
+
+		const declaration = /^(?:participant|actor)\s+(\S+)(?:\s+as\s+.+)?$/i.exec(statement);
+		if (declaration) {
+			const id = declaration[1]!;
+			if (!SEQUENCE_ID.test(id)) return undefined;
+			rememberParticipant(id, statement);
+			explicitParticipants.add(id);
+			continue;
+		}
+
+		const participants = sequenceMessageParticipants(statement);
+		if (!participants) return undefined;
+		const [from, to] = participants;
+		rememberParticipant(from, declarations.get(from));
+		rememberParticipant(to, declarations.get(to));
+		messages.push({ source: statement, from, to });
+	}
+
+	const activeParticipants = new Set(messages.flatMap((message) => [message.from, message.to]));
+	if ([...explicitParticipants].some((id) => !activeParticipants.has(id))) return undefined;
+	return sawHeader ? { declarations, participantOrder, messages } : undefined;
+}
+
+function sequenceMessageParticipants(statement: string): readonly [string, string] | undefined {
+	for (let position = 1; position < statement.length; position++) {
+		for (const operator of SEQUENCE_OPERATORS) {
+			if (!statement.startsWith(operator, position)) continue;
+			const from = statement.slice(0, position).trim();
+			const rest = statement.slice(position + operator.length).trimStart();
+			// Compact activation/deactivation can span interaction bands, so it
+			// cannot be split without carrying state between independent diagrams.
+			if (/^[+-]/.test(rest)) return undefined;
+			const colon = rest.indexOf(":");
+			const to = (colon === -1 ? rest : rest.slice(0, colon)).trim();
+			// Positions are visited left-to-right and operators longest-first, so
+			// `A-->>B` cannot be re-read as participant `A-` using `->>`.
+			if (SEQUENCE_ID.test(from) && SEQUENCE_ID.test(to)) return [from, to];
+		}
+	}
+	return undefined;
+}
+
+function renderSequenceBand(sequence: SimpleSequence, messages: readonly SequenceMessage[]): MermaidArt | null {
+	const participants = new Set(messages.flatMap((message) => [message.from, message.to]));
+	const declarations = sequence.participantOrder
+		.filter((id) => participants.has(id))
+		.map((id) => sequence.declarations.get(id) ?? `participant ${id}`);
+	try {
+		return render(["sequenceDiagram", ...declarations, ...messages.map((message) => message.source)].join("\n"));
+	} catch {
+		return null;
+	}
 }
 
 function fallbackReasonForNullArt(source: string): string {

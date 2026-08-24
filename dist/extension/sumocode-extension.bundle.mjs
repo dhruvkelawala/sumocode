@@ -3837,60 +3837,87 @@ ${summaries.join("\n\n")}`
 // src/skill-inline.ts
 import * as fs2 from "node:fs";
 import {
+  DefaultResourceLoader,
   getAgentDir as getAgentDir2,
-  loadSkills as loadSkills2,
   SettingsManager as SettingsManager2,
   stripFrontmatter
 } from "@earendil-works/pi-coding-agent";
 var SKILL_TOKEN = /(^|(?<=\s))\/skill:([A-Za-z0-9][A-Za-z0-9_-]*)/g;
+var ATTACHED_SKILL_SUFFIX = /^(?:[,.;:!?%‰°)\]}]|['’](?:s|t|re|ve|ll|d|m)\b)/iu;
 var readSkillBodyFromDisk = (skill) => stripFrontmatter(fs2.readFileSync(skill.filePath, "utf-8")).trim();
 var expandInlineSkillTokens = (text, skills, readSkillBody = readSkillBodyFromDisk) => {
+  if (text.startsWith("/skill:")) return { text, expanded: [] };
   const byName = /* @__PURE__ */ new Map();
   for (const skill of skills) byName.set(skill.name, skill);
-  const expanded = [];
-  const result = text.replace(SKILL_TOKEN, (match, prefix, name, offset) => {
-    if (offset === 0) return match;
-    const skill = byName.get(name);
-    if (!skill) return match;
+  for (const match of text.matchAll(SKILL_TOKEN)) {
+    const offset = match.index;
+    if (offset === 0) continue;
+    const name = match[2];
+    const skill = name ? byName.get(name) : void 0;
+    if (!skill) continue;
     let body = "";
     try {
       body = readSkillBody(skill).trim();
     } catch {
-      return match;
+      continue;
     }
-    expanded.push(name);
-    return `${prefix}<skill name="${skill.name}" location="${skill.filePath}">
+    const rawBefore = text.slice(0, offset);
+    const rawAfter = text.slice(offset + match[0].length);
+    const boundaryWhitespace = (rawBefore.match(/\s*$/)?.[0] ?? "") + (rawAfter.match(/^\s*/)?.[0] ?? "");
+    const before = rawBefore.trimEnd();
+    const after = rawAfter.trimStart();
+    const separator = before.length > 0 && after.length > 0 ? boundaryWhitespace.includes("\n") ? "\n" : ATTACHED_SKILL_SUFFIX.test(after) ? "" : " " : "";
+    const userMessage = `${before}${separator}${after}`.trim();
+    const skillBlock = `<skill name="${skill.name}" location="${skill.filePath}">
 References are relative to ${skill.baseDir}.
 
 ${body}
 </skill>`;
-  });
-  return { text: result, expanded };
+    return { text: userMessage ? `${skillBlock}
+
+${userMessage}` : skillBlock, expanded: [name] };
+  }
+  return { text, expanded: [] };
 };
-var discoverSkills = (cwd) => {
+async function discoverSkills(cwd) {
   const resolvedCwd = cwd ?? process.cwd();
   const settingsManager = SettingsManager2.create(resolvedCwd);
-  return loadSkills2({
+  const loader = new DefaultResourceLoader({
     cwd: resolvedCwd,
     agentDir: getAgentDir2(),
-    skillPaths: settingsManager.getSkillPaths(),
-    includeDefaults: true
-  }).skills;
-};
+    settingsManager,
+    // Resource discovery needs package/.agents paths, not another recursive
+    // activation of SumoCode or unrelated extensions.
+    noExtensions: true,
+    noPromptTemplates: true,
+    noThemes: true,
+    noContextFiles: true
+  });
+  await loader.reload();
+  return loader.getSkills().skills;
+}
 function installSkillInlineExpansion(pi, options = {}) {
   let cache2;
   const loadSkillsOnce = () => {
-    if (!cache2 || cache2.cwd !== options.cwd) cache2 = { cwd: options.cwd, skills: discoverSkills(options.cwd) };
-    return cache2.skills;
+    cache2 ??= (options.discoverSkills ?? discoverSkills)(options.cwd);
+    return cache2;
   };
   pi.on("session_start", () => {
     cache2 = void 0;
   });
-  pi.on("input", (event) => {
+  pi.on("input", async (event) => {
     if (!event.text.includes("/skill:")) return { action: "continue" };
-    const { text, expanded } = expandInlineSkillTokens(event.text, loadSkillsOnce());
-    if (expanded.length === 0) return { action: "continue" };
-    return { action: "transform", text };
+    try {
+      const { text, expanded } = expandInlineSkillTokens(
+        event.text,
+        await loadSkillsOnce(),
+        options.readSkillBody ?? readSkillBodyFromDisk
+      );
+      if (expanded.length === 0) return { action: "continue" };
+      return { action: "transform", text };
+    } catch {
+      return { action: "continue" };
+    }
   });
 }
 
@@ -4550,6 +4577,74 @@ function bg(hex) {
 function color2(text, hex) {
   return `${fg4(hex)}${text}${RESET6}`;
 }
+var INLINE_SKILL_TOKEN = /(?:^|(?<=\s))\/skill:([A-Za-z0-9][A-Za-z0-9_-]*)/g;
+function splitEditorRowUnits(row3) {
+  const units = [];
+  for (let index = 0; index < row3.length; ) {
+    if (row3.startsWith(CURSOR_MARKER, index)) {
+      units.push({ raw: CURSOR_MARKER, visible: "" });
+      index += CURSOR_MARKER.length;
+      continue;
+    }
+    if (row3[index] === "\x1B") {
+      if (row3[index + 1] === "[") {
+        let end2 = index + 2;
+        while (end2 < row3.length && !/[\x40-\x7e]/.test(row3[end2])) end2 += 1;
+        end2 = Math.min(row3.length, end2 + 1);
+        units.push({ raw: row3.slice(index, end2), visible: "" });
+        index = end2;
+        continue;
+      }
+      const st = row3.indexOf("\x1B\\", index + 2);
+      const end = st === -1 ? Math.min(row3.length, index + 2) : st + 2;
+      units.push({ raw: row3.slice(index, end), visible: "" });
+      index = end;
+      continue;
+    }
+    const glyph = String.fromCodePoint(row3.codePointAt(index));
+    units.push({ raw: glyph, visible: glyph });
+    index += glyph.length;
+  }
+  return units;
+}
+function formatInlineSkillRowsForEditor(rows, colors = { accent: activeThemeColors().accent }) {
+  const parsed = rows.map((row3) => {
+    const units = splitEditorRowUnits(row3);
+    return { row: row3, units, visible: units.map((unit) => unit.visible).join("") };
+  });
+  const visible = parsed.map((row3) => row3.visible).join("");
+  if (!visible.includes("/skill:")) return [...rows];
+  const accented = /* @__PURE__ */ new Set();
+  for (const match of visible.matchAll(INLINE_SKILL_TOKEN)) {
+    const start = match.index;
+    const end = start + match[0].length;
+    for (let index = start; index < end; index += 1) accented.add(index);
+  }
+  if (accented.size === 0) return [...rows];
+  let rowOffset = 0;
+  return parsed.map(({ units, visible: rowVisible }) => {
+    let output = "";
+    let visibleIndex = 0;
+    let accentActive = false;
+    for (const unit of units) {
+      if (unit.visible.length === 0) {
+        output += unit.raw;
+        if (unit.raw === RESET6) accentActive = false;
+        continue;
+      }
+      const desired = accented.has(rowOffset + visibleIndex);
+      if (desired !== accentActive) {
+        output += desired ? fg4(colors.accent) : RESET6;
+        accentActive = desired;
+      }
+      output += unit.raw;
+      visibleIndex += unit.visible.length;
+    }
+    if (accentActive) output += RESET6;
+    rowOffset += rowVisible.length;
+    return output;
+  });
+}
 function dividerFg() {
   return fg4(activeThemeColors().divider);
 }
@@ -4773,6 +4868,9 @@ var CathedralEditor = class extends CustomEditor {
     }
     const text = this.getText();
     const showPlaceholder = splash && text.length === 0;
+    const lastContentIdx = bottomIdx === -1 ? innerRows.length : bottomIdx;
+    const contentRows = innerRows.slice(1, lastContentIdx);
+    const decoratedContentRows = showPlaceholder ? contentRows : formatInlineSkillRowsForEditor(contentRows);
     const renderContent = (row3, isFirstContent) => {
       if (showPlaceholder && isFirstContent) {
         const prompt = ` ${color2(">", activeThemeColors().accent)} ${CURSOR_MARKER}`;
@@ -4785,10 +4883,9 @@ var CathedralEditor = class extends CustomEditor {
       return fullRow(wrapRow(row3, frameWidth, paintFrameBackground));
     };
     const result = [fullRow(renderTopBorder(frameWidth, label, paintFrameBackground))];
-    const lastContentIdx = bottomIdx === -1 ? innerRows.length : bottomIdx;
     let contentSeen = false;
-    for (let i = 1; i < lastContentIdx; i++) {
-      result.push(renderContent(innerRows[i], !contentSeen));
+    for (const row3 of decoratedContentRows) {
+      result.push(renderContent(row3, !contentSeen));
       contentSeen = true;
     }
     result.push(fullRow(renderBottomBorder(frameWidth, paintFrameBackground)));

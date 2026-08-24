@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { CURSOR_MARKER } from "@earendil-works/pi-tui";
-import { alignAutocompleteRow, formatInlineSkillTokensForEditor, normalizeRawMultilinePasteInput } from "./cathedral-editor.js";
+import {
+	alignAutocompleteRow,
+	formatInlineSkillRowsForEditor,
+	formatInlineSkillTokensForEditor,
+	normalizeRawMultilinePasteInput,
+} from "./cathedral-editor.js";
 
 const ANSI_PATTERN = /\u001b\[[0-9;]*m/g;
 const stripAnsi = (value: string): string => value.replace(ANSI_PATTERN, "");
@@ -65,6 +70,18 @@ describe("formatInlineSkillTokensForEditor", () => {
 		const input = "🙂 /skill:herdr";
 		const formatted = formatInlineSkillTokensForEditor(input, { accent: "#112233" });
 		expect(formatted).toContain("\u001b[38;2;17;34;51m/skill:herdr");
+	});
+
+	it("styles a skill token across Pi-wrapped editor rows", () => {
+		const formatted = formatInlineSkillRowsForEditor(["check /skill:her", "dr      "], { accent: "#112233" });
+		expect(formatted.map(stripAnsi)).toEqual(["check /skill:her", "dr      "]);
+		expect(formatted[0]).toContain("\u001b[38;2;17;34;51m/skill:her");
+		expect(formatted[1]).toContain("\u001b[38;2;17;34;51mdr");
+	});
+
+	it("does not join skill fragments across a padded logical-line boundary", () => {
+		const rows = ["check /skill:   ", "herdr           "];
+		expect(formatInlineSkillRowsForEditor(rows, { accent: "#112233" })).toEqual(rows);
 	});
 
 	it("does not style path-like fragments", () => {

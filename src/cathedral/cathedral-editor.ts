@@ -135,42 +135,58 @@ function splitEditorRowUnits(row: string): EditorRowUnit[] {
  * CathedralEditor is a legacy ANSI wrapper around Pi's byte-rendered editor;
  * typed Cathedral primitives are not appropriate at this compatibility seam.
  */
+export function formatInlineSkillRowsForEditor(
+	rows: readonly string[],
+	colors: EditorSkillColors = { accent: activeThemeColors().accent },
+): string[] {
+	const parsed = rows.map((row) => {
+		const units = splitEditorRowUnits(row);
+		return { row, units, visible: units.map((unit) => unit.visible).join("") };
+	});
+	// Pi pads every non-wrapped row to the editor width. Joining visible rows
+	// therefore keeps a genuinely wrapped token contiguous while padding blocks
+	// false matches across logical line boundaries.
+	const visible = parsed.map((row) => row.visible).join("");
+	if (!visible.includes("/skill:")) return [...rows];
+	const accented = new Set<number>();
+	for (const match of visible.matchAll(INLINE_SKILL_TOKEN)) {
+		const start = match.index;
+		const end = start + match[0].length;
+		for (let index = start; index < end; index += 1) accented.add(index);
+	}
+	if (accented.size === 0) return [...rows];
+
+	let rowOffset = 0;
+	return parsed.map(({ units, visible: rowVisible }) => {
+		let output = "";
+		let visibleIndex = 0;
+		let accentActive = false;
+		for (const unit of units) {
+			if (unit.visible.length === 0) {
+				output += unit.raw;
+				if (unit.raw === RESET) accentActive = false;
+				continue;
+			}
+			const desired = accented.has(rowOffset + visibleIndex);
+			if (desired !== accentActive) {
+				output += desired ? fg(colors.accent) : RESET;
+				accentActive = desired;
+			}
+			output += unit.raw;
+			// Regex match indices are UTF-16 offsets; keep astral graphemes aligned.
+			visibleIndex += unit.visible.length;
+		}
+		if (accentActive) output += RESET;
+		rowOffset += rowVisible.length;
+		return output;
+	});
+}
+
 export function formatInlineSkillTokensForEditor(
 	row: string,
 	colors: EditorSkillColors = { accent: activeThemeColors().accent },
 ): string {
-	if (!row.includes("/skill:")) return row;
-	const units = splitEditorRowUnits(row);
-	const visible = units.map((unit) => unit.visible).join("");
-	const colorAt = new Map<number, string>();
-	for (const match of visible.matchAll(INLINE_SKILL_TOKEN)) {
-		const start = match.index;
-		const end = start + match[0].length;
-		for (let index = start; index < end; index += 1) colorAt.set(index, colors.accent);
-	}
-	if (colorAt.size === 0) return row;
-
-	let output = "";
-	let visibleIndex = 0;
-	let activeColor: string | undefined;
-	for (const unit of units) {
-		if (unit.visible.length === 0) {
-			output += unit.raw;
-			if (unit.raw === RESET) activeColor = undefined;
-			continue;
-		}
-		const desired = colorAt.get(visibleIndex);
-		if (desired !== activeColor) {
-			if (desired) output += fg(desired);
-			else if (activeColor) output += RESET;
-			activeColor = desired;
-		}
-		output += unit.raw;
-		// Regex match indices are UTF-16 offsets; keep astral graphemes aligned.
-		visibleIndex += unit.visible.length;
-	}
-	if (activeColor) output += RESET;
-	return output;
+	return formatInlineSkillRowsForEditor([row], colors)[0] ?? row;
 }
 
 function dividerFg(): string {
@@ -482,6 +498,9 @@ export class CathedralEditor extends CustomEditor {
 		// has no concept of placeholders; we shim it from the outside.
 		const text = this.getText();
 		const showPlaceholder = splash && text.length === 0;
+		const lastContentIdx = bottomIdx === -1 ? innerRows.length : bottomIdx;
+		const contentRows = innerRows.slice(1, lastContentIdx);
+		const decoratedContentRows = showPlaceholder ? contentRows : formatInlineSkillRowsForEditor(contentRows);
 		const renderContent = (row: string, isFirstContent: boolean): string => {
 			if (showPlaceholder && isFirstContent) {
 				// Preserve Pi's zero-width cursor marker while painting our ghost text.
@@ -493,17 +512,15 @@ export class CathedralEditor extends CustomEditor {
 				const ghost = `${prompt}${color(placeholder, activeThemeColors().foregroundDim)}`;
 				return fullRow(wrapRow(ghost, frameWidth, paintFrameBackground));
 			}
-			const decorated = formatInlineSkillTokensForEditor(row);
-			if (!splash) return wrapActiveRow(decorated, frameWidth, paintFrameBackground, isFirstContent);
-			return fullRow(wrapRow(decorated, frameWidth, paintFrameBackground));
+			if (!splash) return wrapActiveRow(row, frameWidth, paintFrameBackground, isFirstContent);
+			return fullRow(wrapRow(row, frameWidth, paintFrameBackground));
 		};
 
 		const result: string[] = [fullRow(renderTopBorder(frameWidth, label, paintFrameBackground))];
 
-		const lastContentIdx = bottomIdx === -1 ? innerRows.length : bottomIdx;
 		let contentSeen = false;
-		for (let i = 1; i < lastContentIdx; i++) {
-			result.push(renderContent(innerRows[i]!, !contentSeen));
+		for (const row of decoratedContentRows) {
+			result.push(renderContent(row, !contentSeen));
 			contentSeen = true;
 		}
 		result.push(fullRow(renderBottomBorder(frameWidth, paintFrameBackground)));

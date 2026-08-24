@@ -69,4 +69,32 @@ A->>B: first message`, 50);
 
 		expect(outcome.kind).toBe("fallback");
 	});
+
+	it("does not split compact activation state across interaction bands", () => {
+		const outcome = renderCathedralMermaid(`sequenceDiagram
+participant A as Alpha participant
+participant B as Bravo participant
+participant C as Charlie participant
+A->>+B: activate
+B-->>-A: deactivate
+A->>C: continue`, 32);
+
+		expect(outcome.kind).toBe("fallback");
+	});
+
+	it("stops banding when the cumulative diagram exceeds the row limit", () => {
+		const messages = Array.from({ length: 300 }, (_, index) => `C->>D: step ${index}`);
+		const outcome = renderCathedralMermaid([
+			"sequenceDiagram",
+			"participant A as Alpha",
+			"participant B as Bravo",
+			"participant C as Charlie",
+			"participant D as Delta",
+			"A->>B: first",
+			"C->>D: start",
+			...messages,
+		].join("\n"), 30);
+
+		expect(outcome.kind).toBe("fallback");
+	});
 });

@@ -82,26 +82,27 @@ function renderSequenceBandsRetry(source: string, width: number): MermaidRenderO
 	if (!sequence || sequence.messages.length === 0) return undefined;
 
 	const bands: MermaidArt[] = [];
+	let finalizedRowCount = 0;
 	let currentMessages: SequenceMessage[] = [];
 	let currentArt: MermaidArt | undefined;
 	for (const message of sequence.messages) {
 		const candidateMessages = [...currentMessages, message];
 		const candidateArt = renderSequenceBand(sequence, candidateMessages);
 		if (candidateArt && candidateArt.width <= width) {
+			const separatorRows = bands.length === 0 ? 0 : 1;
+			if (finalizedRowCount + separatorRows + candidateArt.styled.length > MAX_VISIBLE_ROWS) return undefined;
 			currentMessages = candidateMessages;
 			currentArt = candidateArt;
 			continue;
 		}
 		if (!currentArt) return undefined;
+		finalizedRowCount += (bands.length === 0 ? 0 : 1) + currentArt.styled.length;
 		bands.push(currentArt);
 		currentMessages = [message];
 		currentArt = renderSequenceBand(sequence, currentMessages) ?? undefined;
-		if (!currentArt || currentArt.width > width) return undefined;
+		if (!currentArt || currentArt.width > width || finalizedRowCount + 1 + currentArt.styled.length > MAX_VISIBLE_ROWS) return undefined;
 	}
 	if (currentArt) bands.push(currentArt);
-
-	const rowCount = bands.reduce((count, band) => count + band.styled.length, Math.max(0, bands.length - 1));
-	if (rowCount > MAX_VISIBLE_ROWS) return undefined;
 	const colors = activeThemeColors();
 	return {
 		kind: "rendered",
@@ -170,7 +171,10 @@ function sequenceMessageParticipants(statement: string): readonly [string, strin
 		for (const operator of SEQUENCE_OPERATORS) {
 			if (!statement.startsWith(operator, position)) continue;
 			const from = statement.slice(0, position).trim();
-			const rest = statement.slice(position + operator.length).trimStart().replace(/^[+-]+/, "");
+			const rest = statement.slice(position + operator.length).trimStart();
+			// Compact activation/deactivation can span interaction bands, so it
+			// cannot be split without carrying state between independent diagrams.
+			if (/^[+-]/.test(rest)) return undefined;
 			const colon = rest.indexOf(":");
 			const to = (colon === -1 ? rest : rest.slice(0, colon)).trim();
 			// Positions are visited left-to-right and operators longest-first, so

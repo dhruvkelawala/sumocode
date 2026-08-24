@@ -167,6 +167,18 @@ describe("herdrTerminalHost", () => {
 		expect(fake.exec).toHaveBeenCalledWith("herdr", ["agent", "prompt", "w1:p2", "continue with tests"], { timeout: 10000 });
 	});
 
+	it("treats a stalled Herdr prompt as delivered", async () => {
+		const exec = vi.fn(async () => ({
+			stdout: "",
+			stderr: JSON.stringify({ error: { code: "agent_prompt_stalled", message: "agent prompt produced no observed state change" } }),
+			code: 1,
+			killed: false,
+		}));
+		await expect(herdrTerminalHost.sendPaneText({ exec } as never, { host: "herdr", paneId: "w1:p2" }, "continue with tests")).resolves.toEqual({ ok: true });
+		expect(exec).toHaveBeenCalledTimes(1);
+		expect(exec).toHaveBeenCalledWith("herdr", ["agent", "prompt", "w1:p2", "continue with tests"], { timeout: 10000 });
+	});
+
 	it("does not fall back to raw pane input when Herdr reports a blocked agent", async () => {
 		const exec = vi.fn(async () => ({
 			stdout: "",

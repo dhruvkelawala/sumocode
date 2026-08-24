@@ -210,6 +210,10 @@ export const herdrTerminalHost = {
 			const prompted = await pi.exec("herdr", ["agent", "prompt", pane.paneId, text], { timeout: HERDR_AGENT_PROMPT_TIMEOUT_MS });
 			if (prompted.code === 0) return { ok: true };
 			const error = parseHerdrError(prompted);
+			// Herdr reports this only after delivering the prompt and then failing
+			// to observe the agent transition quickly enough. Treat it as sent so
+			// callers do not retry and duplicate the instruction.
+			if (error?.code === "agent_prompt_stalled") return { ok: true };
 			if (error?.code === "agent_blocked") return { ok: false, error: error.message || "agent is blocked" };
 			if (error?.code === "agent_not_found") return { ok: false, error: error.message || "Herdr does not recognize an agent in this pane yet" };
 			return execFailure("herdr agent prompt", prompted);

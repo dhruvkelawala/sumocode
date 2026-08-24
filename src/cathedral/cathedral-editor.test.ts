@@ -86,9 +86,9 @@ describe("formatInlineSkillTokensForEditor", () => {
 		expect(formatted[1]).toContain("\u001b[38;2;17;34;51mdr");
 	});
 
-	it("does not join skill fragments across a padded logical-line boundary", () => {
-		const rows = ["check /skill:   ", "herdr           "];
-		expect(formatInlineSkillRowsForEditor(rows, { accent: "#112233" })).toEqual(rows);
+	it("does not join skill fragments across an exact-width hard-newline boundary", () => {
+		const rows = ["check /skill:", "herdr"];
+		expect(formatInlineSkillRowsForEditor(rows, { accent: "#112233" }, new Set([0]))).toEqual(rows);
 	});
 
 	it("does not style path-like fragments", () => {

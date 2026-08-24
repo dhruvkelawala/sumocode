@@ -39,6 +39,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { CustomEditor } from "@earendil-works/pi-coding-agent";
 import { CURSOR_MARKER, truncateToWidth, visibleWidth, type EditorTheme, type TUI } from "@earendil-works/pi-tui";
+import { wordWrapLine } from "@earendil-works/pi-tui/dist/components/editor.js";
 import { sessionHasMessages as cachedSessionHasMessages } from "../session-cache.js";
 import { activeThemeColors } from "../themes/index.js";
 import { EditorImageDraftState, isLikelyClipboardImagePath, normalizePastedImagePath, setActiveEditorDraftController } from "./editor-draft-state.js";
@@ -139,15 +140,21 @@ function splitEditorRowUnits(row: string): EditorRowUnit[] {
 export function formatInlineSkillRowsForEditor(
 	rows: readonly string[],
 	colors: EditorSkillColors = { accent: activeThemeColors().accent },
+	hardBreakAfterRows: ReadonlySet<number> = new Set(),
 ): string[] {
 	const parsed = rows.map((row) => {
 		const units = splitEditorRowUnits(row);
 		return { row, units, visible: units.map((unit) => unit.visible).join("") };
 	});
-	// Pi pads every non-wrapped row to the editor width. Joining visible rows
-	// therefore keeps a genuinely wrapped token contiguous while padding blocks
-	// false matches across logical line boundaries.
-	const visible = parsed.map((row) => row.visible).join("");
+	const rowOffsets: number[] = [];
+	let visible = "";
+	for (let index = 0; index < parsed.length; index += 1) {
+		rowOffsets.push(visible.length);
+		visible += parsed[index]!.visible;
+		// Preserve hard newlines from the logical editor text. Soft-wrapped rows
+		// remain contiguous so one skill token can be accented across both.
+		if (hardBreakAfterRows.has(index)) visible += "\n";
+	}
 	if (!visible.includes("/skill:")) return [...rows];
 	const accented = new Set<number>();
 	for (const match of visible.matchAll(INLINE_SKILL_TOKEN)) {
@@ -157,8 +164,8 @@ export function formatInlineSkillRowsForEditor(
 	}
 	if (accented.size === 0) return [...rows];
 
-	let rowOffset = 0;
-	return parsed.map(({ units, visible: rowVisible }) => {
+	return parsed.map(({ units }, rowIndex) => {
+		const rowOffset = rowOffsets[rowIndex] ?? 0;
 		let output = "";
 		let visibleIndex = 0;
 		let accentActive = false;
@@ -180,7 +187,6 @@ export function formatInlineSkillRowsForEditor(
 			visibleIndex += unit.visible.length;
 		}
 		if (accentActive) output += RESET_FG;
-		rowOffset += rowVisible.length;
 		return output;
 	});
 }
@@ -464,6 +470,26 @@ export class CathedralEditor extends CustomEditor {
 		internals.tryTriggerAutocomplete();
 	}
 
+	private hardBreakAfterVisibleRows(layoutWidth: number, visibleRowCount: number): ReadonlySet<number> {
+		// Compatibility seam: mirror Pi Editor.layoutText's own wordWrapLine calls
+		// so hard logical newlines remain distinguishable from soft wraps. The
+		// private segmenter preserves Pi's atomic paste-marker behavior byte-for-byte.
+		const internals = this as unknown as {
+			scrollOffset: number;
+			segment(text: string, granularity: "grapheme"): Iterable<Intl.SegmentData>;
+		};
+		const allBreaks: boolean[] = [];
+		for (const line of this.getLines()) {
+			const chunks = wordWrapLine(line, layoutWidth, [...internals.segment(line, "grapheme")]);
+			for (let index = 0; index < chunks.length; index += 1) allBreaks.push(index === chunks.length - 1);
+		}
+		const result = new Set<number>();
+		for (let index = 0; index < visibleRowCount; index += 1) {
+			if (allBreaks[internals.scrollOffset + index]) result.add(index);
+		}
+		return result;
+	}
+
 	override render(width: number): string[] {
 		// Too narrow for our chrome — fall back to Pi's bare render.
 		if (width < 8) return super.render(width);
@@ -503,7 +529,10 @@ export class CathedralEditor extends CustomEditor {
 		const showPlaceholder = splash && text.length === 0;
 		const lastContentIdx = bottomIdx === -1 ? innerRows.length : bottomIdx;
 		const contentRows = innerRows.slice(1, lastContentIdx);
-		const decoratedContentRows = showPlaceholder ? contentRows : formatInlineSkillRowsForEditor(contentRows);
+		const hardBreakAfterRows = this.hardBreakAfterVisibleRows(Math.max(1, piContentWidth - 1), contentRows.length);
+		const decoratedContentRows = showPlaceholder
+			? contentRows
+			: formatInlineSkillRowsForEditor(contentRows, undefined, hardBreakAfterRows);
 		const renderContent = (row: string, isFirstContent: boolean): string => {
 			if (showPlaceholder && isFirstContent) {
 				// Preserve Pi's zero-width cursor marker while painting our ghost text.

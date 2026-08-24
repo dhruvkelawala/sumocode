@@ -4548,6 +4548,7 @@ function installAltscreen(pi) {
 // src/cathedral/cathedral-editor.ts
 import { CustomEditor } from "@earendil-works/pi-coding-agent";
 import { CURSOR_MARKER, truncateToWidth as truncateToWidth4, visibleWidth as visibleWidth5 } from "@earendil-works/pi-tui";
+import { wordWrapLine } from "@earendil-works/pi-tui/dist/components/editor.js";
 
 // src/cathedral/multiline-paste.ts
 var CSI_U_SHIFT_ENTER = "\x1B[13;2u";
@@ -4630,12 +4631,18 @@ function splitEditorRowUnits(row3) {
   }
   return units;
 }
-function formatInlineSkillRowsForEditor(rows, colors = { accent: activeThemeColors().accent }) {
+function formatInlineSkillRowsForEditor(rows, colors = { accent: activeThemeColors().accent }, hardBreakAfterRows = /* @__PURE__ */ new Set()) {
   const parsed = rows.map((row3) => {
     const units = splitEditorRowUnits(row3);
     return { row: row3, units, visible: units.map((unit) => unit.visible).join("") };
   });
-  const visible = parsed.map((row3) => row3.visible).join("");
+  const rowOffsets = [];
+  let visible = "";
+  for (let index = 0; index < parsed.length; index += 1) {
+    rowOffsets.push(visible.length);
+    visible += parsed[index].visible;
+    if (hardBreakAfterRows.has(index)) visible += "\n";
+  }
   if (!visible.includes("/skill:")) return [...rows];
   const accented = /* @__PURE__ */ new Set();
   for (const match of visible.matchAll(INLINE_SKILL_TOKEN)) {
@@ -4644,8 +4651,8 @@ function formatInlineSkillRowsForEditor(rows, colors = { accent: activeThemeColo
     for (let index = start; index < end; index += 1) accented.add(index);
   }
   if (accented.size === 0) return [...rows];
-  let rowOffset = 0;
-  return parsed.map(({ units, visible: rowVisible }) => {
+  return parsed.map(({ units }, rowIndex) => {
+    const rowOffset = rowOffsets[rowIndex] ?? 0;
     let output = "";
     let visibleIndex = 0;
     let accentActive = false;
@@ -4664,7 +4671,6 @@ function formatInlineSkillRowsForEditor(rows, colors = { accent: activeThemeColo
       visibleIndex += unit.visible.length;
     }
     if (accentActive) output += RESET_FG;
-    rowOffset += rowVisible.length;
     return output;
   });
 }
@@ -4872,6 +4878,19 @@ var CathedralEditor = class extends CustomEditor {
     if (boundary !== " " && boundary !== "	") return;
     internals.tryTriggerAutocomplete();
   }
+  hardBreakAfterVisibleRows(layoutWidth, visibleRowCount) {
+    const internals = this;
+    const allBreaks = [];
+    for (const line of this.getLines()) {
+      const chunks = wordWrapLine(line, layoutWidth, [...internals.segment(line, "grapheme")]);
+      for (let index = 0; index < chunks.length; index += 1) allBreaks.push(index === chunks.length - 1);
+    }
+    const result = /* @__PURE__ */ new Set();
+    for (let index = 0; index < visibleRowCount; index += 1) {
+      if (allBreaks[internals.scrollOffset + index]) result.add(index);
+    }
+    return result;
+  }
   render(width) {
     if (width < 8) return super.render(width);
     const splash = this.isSplash();
@@ -4893,7 +4912,8 @@ var CathedralEditor = class extends CustomEditor {
     const showPlaceholder = splash && text.length === 0;
     const lastContentIdx = bottomIdx === -1 ? innerRows.length : bottomIdx;
     const contentRows = innerRows.slice(1, lastContentIdx);
-    const decoratedContentRows = showPlaceholder ? contentRows : formatInlineSkillRowsForEditor(contentRows);
+    const hardBreakAfterRows = this.hardBreakAfterVisibleRows(Math.max(1, piContentWidth - 1), contentRows.length);
+    const decoratedContentRows = showPlaceholder ? contentRows : formatInlineSkillRowsForEditor(contentRows, void 0, hardBreakAfterRows);
     const renderContent = (row3, isFirstContent) => {
       if (showPlaceholder && isFirstContent) {
         const prompt = ` ${color2(">", activeThemeColors().accent)} ${CURSOR_MARKER}`;

@@ -44,6 +44,11 @@ describe("expandInlineSkillTokens", () => {
 		expect(parseSkillBlock(result.text)?.userMessage).toBe("Please review:\n    if (x) {");
 	});
 
+	it("preserves indentation at the beginning of the remaining prompt", () => {
+		const result = expandInlineSkillTokens("    if (x) {}\nuse /skill:tdd", [makeSkill()], readBody);
+		expect(result.text.endsWith("</skill>\n\n    if (x) {}\nuse")).toBe(true);
+	});
+
 	it("keeps trailing punctuation attached when removing an inline skill", () => {
 		const comma = expandInlineSkillTokens("use /skill:tdd, please", [makeSkill()], readBody);
 		const possessive = expandInlineSkillTokens("follow /skill:tdd's guidance", [makeSkill()], readBody);

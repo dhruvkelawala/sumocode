@@ -44,9 +44,10 @@ function removeInlineSkillToken(text: string, offset: number, length: number): s
 	if (/^[ \t]*$/.test(beforeOnLine) && /^[ \t]*$/.test(afterOnLine)) {
 		// Remove the whole standalone invocation line, not the indentation of the
 		// following line (which can be semantically significant code).
-		const before = text.slice(0, lineStart);
+		const beforeEnd = nextNewline === -1 && lineStart > 0 ? lineStart - 1 : lineStart;
+		const before = text.slice(0, beforeEnd);
 		const after = nextNewline === -1 ? "" : text.slice(nextNewline + 1);
-		return `${before}${after}`.trim();
+		return `${before}${after}`;
 	}
 
 	const rawBefore = text.slice(0, offset);
@@ -62,7 +63,7 @@ function removeInlineSkillToken(text: string, offset: number, length: number): s
 			? ""
 			: " "
 		: "";
-	return `${before}${separator}${after}`.trim();
+	return `${before}${separator}${after}`;
 }
 
 export const expandInlineSkillTokens = (

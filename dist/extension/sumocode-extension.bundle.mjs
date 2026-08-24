@@ -3853,9 +3853,10 @@ function removeInlineSkillToken(text, offset, length) {
   const beforeOnLine = text.slice(lineStart, offset);
   const afterOnLine = text.slice(tokenEnd, lineEnd);
   if (/^[ \t]*$/.test(beforeOnLine) && /^[ \t]*$/.test(afterOnLine)) {
-    const before2 = text.slice(0, lineStart);
+    const beforeEnd = nextNewline === -1 && lineStart > 0 ? lineStart - 1 : lineStart;
+    const before2 = text.slice(0, beforeEnd);
     const after2 = nextNewline === -1 ? "" : text.slice(nextNewline + 1);
-    return `${before2}${after2}`.trim();
+    return `${before2}${after2}`;
   }
   const rawBefore = text.slice(0, offset);
   const rawAfter = text.slice(tokenEnd);
@@ -3864,7 +3865,7 @@ function removeInlineSkillToken(text, offset, length) {
   const before = preservesLineIndent ? rawBefore : rawBefore.replace(/[ \t]+$/, "");
   const after = rawAfter.replace(/^[ \t]+/, "");
   const separator = before.length > 0 && after.length > 0 ? preservesLineIndent || before.endsWith("\n") || after.startsWith("\n") || ATTACHED_SKILL_SUFFIX.test(after) ? "" : " " : "";
-  return `${before}${separator}${after}`.trim();
+  return `${before}${separator}${after}`;
 }
 var expandInlineSkillTokens = (text, skills, readSkillBody = readSkillBodyFromDisk) => {
   if (text.startsWith("/skill:")) return { text, expanded: [] };

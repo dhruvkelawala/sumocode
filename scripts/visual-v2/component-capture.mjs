@@ -23,6 +23,7 @@ export async function captureComponentScenario(scenario) {
 
 async function renderComponentLines(kind, scenario) {
 	if (kind === "input-frame-typed") return renderInputFrameTyped(scenario.dimensions.cols);
+	if (kind === "input-frame-inline-skill") return renderInputFrameInlineSkill(scenario.dimensions.cols);
 	if (kind === "footer-ready") return renderFooterReady(scenario.dimensions.cols);
 	if (kind === "top-bar-default") return renderTopBarDefault(scenario.dimensions.cols);
 	if (kind === "sidebar-editorial") return renderSidebarEditorial(scenario.dimensions.cols);
@@ -38,6 +39,27 @@ async function renderInputFrameTyped(width) {
 		...mod.renderInputFrame("review src/auth/session.ts and tighten the return type", width, { promptColor: "accent" }),
 		mod.renderInputHints(width),
 	];
+}
+
+async function renderInputFrameInlineSkill(width) {
+	const editorMod = await jiti.import(`${repoRoot}/src/cathedral/cathedral-editor.ts`);
+	const inputMod = await jiti.import(`${repoRoot}/src/cathedral/input-frame.ts`);
+	const passthrough = (text) => text;
+	const tui = { requestRender() {}, terminal: { columns: width, rows: 45, setTitle() {} } };
+	const theme = {
+		borderColor: passthrough,
+		selectList: {
+			selectedPrefix: passthrough,
+			selectedText: passthrough,
+			description: passthrough,
+			scrollInfo: passthrough,
+			noMatch: passthrough,
+		},
+	};
+	const keybindings = { matches: () => false };
+	const editor = editorMod.createCathedralEditor(tui, theme, keybindings, { isSplash: () => false });
+	editor.setText("Testing /skill:apr");
+	return [...editor.render(width), inputMod.renderInputHints(width)];
 }
 
 async function renderTopBarDefault(width) {

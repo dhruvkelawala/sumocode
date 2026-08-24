@@ -1,6 +1,5 @@
-import { describe, expect, it } from "vitest";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import type { Skill } from "@earendil-works/pi-coding-agent";
+import { describe, expect, it, vi } from "vitest";
+import { parseSkillBlock, type ExtensionAPI, type Skill } from "@earendil-works/pi-coding-agent";
 import { type ReadSkillBody, expandInlineSkillTokens, installSkillInlineExpansion } from "./skill-inline.js";
 
 const makeSkill = (overrides: Partial<Skill> = {}): Skill => ({
@@ -22,20 +21,48 @@ describe("expandInlineSkillTokens", () => {
 		expect(result.expanded).toEqual([]);
 	});
 
-	it("expands a skill invoked mid-sentence in place", () => {
+	it("hoists a mid-sentence skill into Pi's collapsible envelope shape", () => {
 		const result = expandInlineSkillTokens("please use /skill:tdd to fix this", [makeSkill()], readBody);
 		expect(result.expanded).toEqual(["tdd"]);
 		expect(result.text).toBe(
-			'please use <skill name="tdd" location="/skills/tdd/SKILL.md">\nReferences are relative to /skills/tdd.\n\nbody of tdd\n</skill> to fix this',
+			'<skill name="tdd" location="/skills/tdd/SKILL.md">\nReferences are relative to /skills/tdd.\n\nbody of tdd\n</skill>\n\nplease use to fix this',
 		);
+		expect(parseSkillBlock(result.text)).toMatchObject({
+			name: "tdd",
+			location: "/skills/tdd/SKILL.md",
+			userMessage: "please use to fix this",
+		});
 	});
 
-	it("expands multiple distinct inline invocations", () => {
+	it("preserves a newline when removing a skill token on its own line", () => {
+		const result = expandInlineSkillTokens("before\n/skill:tdd\nafter", [makeSkill()], readBody);
+		expect(parseSkillBlock(result.text)?.userMessage).toBe("before\nafter");
+	});
+
+	it("preserves indentation after removing a standalone skill line", () => {
+		const result = expandInlineSkillTokens("Please review:\n/skill:tdd\n    if (x) {", [makeSkill()], readBody);
+		expect(parseSkillBlock(result.text)?.userMessage).toBe("Please review:\n    if (x) {");
+	});
+
+	it("preserves indentation at the beginning of the remaining prompt", () => {
+		const result = expandInlineSkillTokens("    if (x) {}\nuse /skill:tdd", [makeSkill()], readBody);
+		expect(result.text.endsWith("</skill>\n\n    if (x) {}\nuse")).toBe(true);
+	});
+
+	it("keeps trailing punctuation attached when removing an inline skill", () => {
+		const comma = expandInlineSkillTokens("use /skill:tdd, please", [makeSkill()], readBody);
+		const possessive = expandInlineSkillTokens("follow /skill:tdd's guidance", [makeSkill()], readBody);
+		expect(parseSkillBlock(comma.text)?.userMessage).toBe("use, please");
+		expect(parseSkillBlock(possessive.text)?.userMessage).toBe("follow's guidance");
+	});
+
+	it("expands one skill per prompt, matching Pi's command semantics", () => {
 		const skills = [makeSkill(), makeSkill({ name: "apr", filePath: "/skills/apr/SKILL.md", baseDir: "/skills/apr" })];
 		const result = expandInlineSkillTokens("run /skill:tdd then /skill:apr", skills, readBody);
-		expect(result.expanded).toEqual(["tdd", "apr"]);
+		expect(result.expanded).toEqual(["tdd"]);
 		expect(result.text).toContain('name="tdd"');
-		expect(result.text).toContain('name="apr"');
+		expect(result.text).toContain("run then /skill:apr");
+		expect(result.text).not.toContain('name="apr"');
 	});
 
 	it("passes through unknown skill names untouched", () => {
@@ -72,5 +99,34 @@ describe("installSkillInlineExpansion", () => {
 		installSkillInlineExpansion(pi);
 		expect(handlers.has("input")).toBe(true);
 		expect(handlers.has("session_start")).toBe(true);
+	});
+
+	it("retries discovery after a transient rejection", async () => {
+		type InputHandler = (event: { text: string }) => Promise<unknown>;
+		const handlers = new Map<string, unknown>();
+		const pi = { on: (event: string, handler: unknown) => handlers.set(event, handler) } as unknown as ExtensionAPI;
+		const discoverSkills = vi.fn()
+			.mockRejectedValueOnce(new Error("temporary filesystem failure"))
+			.mockResolvedValueOnce([makeSkill()]);
+		installSkillInlineExpansion(pi, { discoverSkills, readSkillBody: readBody });
+		const input = handlers.get("input") as InputHandler;
+
+		expect(await input({ text: "use /skill:tdd now" })).toEqual({ action: "continue" });
+		expect(await input({ text: "use /skill:tdd now" })).toMatchObject({ action: "transform" });
+		expect(discoverSkills).toHaveBeenCalledTimes(2);
+	});
+
+	it("uses resource-loader discovery so contributed skills can transform", async () => {
+		type InputHandler = (event: { text: string }) => Promise<unknown>;
+		const handlers = new Map<string, unknown>();
+		const pi = { on: (event: string, handler: unknown) => handlers.set(event, handler) } as unknown as ExtensionAPI;
+		const herdr = makeSkill({ name: "herdr", filePath: "/project/.agents/skills/herdr/SKILL.md", baseDir: "/project/.agents/skills/herdr" });
+		installSkillInlineExpansion(pi, { discoverSkills: async () => [herdr], readSkillBody: readBody });
+
+		const result = await (handlers.get("input") as InputHandler)({ text: "check this /skill:herdr" });
+		expect(result).toEqual({
+			action: "transform",
+			text: '<skill name="herdr" location="/project/.agents/skills/herdr/SKILL.md">\nReferences are relative to /project/.agents/skills/herdr.\n\nbody of herdr\n</skill>\n\ncheck this',
+		});
 	});
 });

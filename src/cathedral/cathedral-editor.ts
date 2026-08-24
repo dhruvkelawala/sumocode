@@ -51,6 +51,7 @@ export { normalizeRawMultilinePasteInput } from "./multiline-paste.js";
 import { countLegacyModifierEnterPresses, CSI_U_SHIFT_ENTER, normalizeRawMultilinePasteInput } from "./multiline-paste.js";
 
 const RESET = "\u001b[0m";
+const RESET_FG = "\u001b[39m";
 const ANSI_PATTERN = /\u001b\[[0-9;]*m/g;
 const SPLASH_INPUT_FRAME_WIDTH = 60;
 const RAW_PASTE_CR_WINDOW_MS = 50;
@@ -90,6 +91,121 @@ function bg(hex: string): string {
 
 function color(text: string, hex: string): string {
 	return `${fg(hex)}${text}${RESET}`;
+}
+
+type EditorSkillColors = { readonly accent: string };
+type EditorRowUnit = { readonly raw: string; readonly visible: string };
+const INLINE_SKILL_TOKEN = /(?:^|(?<=\s))\/skill:([A-Za-z0-9][A-Za-z0-9_-]*)/g;
+
+function splitEditorRowUnits(row: string): EditorRowUnit[] {
+	const units: EditorRowUnit[] = [];
+	for (let index = 0; index < row.length;) {
+		if (row.startsWith(CURSOR_MARKER, index)) {
+			units.push({ raw: CURSOR_MARKER, visible: "" });
+			index += CURSOR_MARKER.length;
+			continue;
+		}
+		if (row[index] === "\u001b") {
+			if (row[index + 1] === "[") {
+				let end = index + 2;
+				while (end < row.length && !/[\x40-\x7e]/.test(row[end]!)) end += 1;
+				end = Math.min(row.length, end + 1);
+				units.push({ raw: row.slice(index, end), visible: "" });
+				index = end;
+				continue;
+			}
+			// Preserve non-CSI terminal controls (OSC/APC) atomically through ST.
+			const st = row.indexOf("\u001b\\", index + 2);
+			const end = st === -1 ? Math.min(row.length, index + 2) : st + 2;
+			units.push({ raw: row.slice(index, end), visible: "" });
+			index = end;
+			continue;
+		}
+		const glyph = String.fromCodePoint(row.codePointAt(index)!);
+		units.push({ raw: glyph, visible: glyph });
+		index += glyph.length;
+	}
+	return units;
+}
+
+/**
+ * Decorate the complete `/skill:name` token in Pi's rendered editor row with
+ * the Cathedral accent. Visible characters and columns remain unchanged, so
+ * cursor/layout math stays owned by Pi.
+ *
+ * CathedralEditor is a legacy ANSI wrapper around Pi's byte-rendered editor;
+ * typed Cathedral primitives are not appropriate at this compatibility seam.
+ */
+export type EditorSkillSourceRange = { readonly start: number; readonly end: number };
+export type EditorSkillSourceLayout = {
+	readonly text: string;
+	readonly rows: readonly EditorSkillSourceRange[];
+};
+
+export function formatInlineSkillRowsForEditor(
+	rows: readonly string[],
+	colors: EditorSkillColors = { accent: activeThemeColors().accent },
+	source?: EditorSkillSourceLayout,
+): string[] {
+	const parsed = rows.map((row) => {
+		const units = splitEditorRowUnits(row);
+		return { row, units, visible: units.map((unit) => unit.visible).join("") };
+	});
+	let fallbackOffset = 0;
+	const sourceRows = source?.rows ?? parsed.map((row) => {
+		const range = { start: fallbackOffset, end: fallbackOffset + row.visible.length };
+		fallbackOffset = range.end;
+		return range;
+	});
+	const sourceText = source?.text ?? parsed.map((row) => row.visible).join("");
+	if (!sourceText.includes("/skill:")) return [...rows];
+	const tokenRanges = [...sourceText.matchAll(INLINE_SKILL_TOKEN)].map((match) => ({
+		start: match.index,
+		end: match.index + match[0].length,
+	}));
+	if (tokenRanges.length === 0) return [...rows];
+	const accentedByRow = sourceRows.map((row) => {
+		const accented = new Set<number>();
+		for (const token of tokenRanges) {
+			const start = Math.max(row.start, token.start);
+			const end = Math.min(row.end, token.end);
+			for (let index = start; index < end; index += 1) accented.add(index - row.start);
+		}
+		return accented;
+	});
+
+	return parsed.map(({ units }, rowIndex) => {
+		const accented = accentedByRow[rowIndex] ?? new Set<number>();
+		let output = "";
+		let visibleIndex = 0;
+		let accentActive = false;
+		for (const unit of units) {
+			if (unit.visible.length === 0) {
+				output += unit.raw;
+				if (unit.raw === RESET) accentActive = false;
+				continue;
+			}
+			const desired = accented.has(visibleIndex);
+			if (desired !== accentActive) {
+				// Reset only foreground when leaving the token. A full SGR reset
+				// would cancel Pi's inverse fallback cursor when it follows directly.
+				output += desired ? fg(colors.accent) : RESET_FG;
+				accentActive = desired;
+			}
+			output += unit.raw;
+			// Regex match indices are UTF-16 offsets; keep astral graphemes aligned.
+			visibleIndex += unit.visible.length;
+		}
+		if (accentActive) output += RESET_FG;
+		return output;
+	});
+}
+
+export function formatInlineSkillTokensForEditor(
+	row: string,
+	colors: EditorSkillColors = { accent: activeThemeColors().accent },
+): string {
+	return formatInlineSkillRowsForEditor([row], colors)[0] ?? row;
 }
 
 function dividerFg(): string {
@@ -364,6 +480,37 @@ export class CathedralEditor extends CustomEditor {
 		internals.tryTriggerAutocomplete();
 	}
 
+	private visibleRowSourceRanges(layoutWidth: number, visibleRowCount: number): readonly EditorSkillSourceRange[] {
+		// Compatibility seam: consume Pi Editor.layoutText's exact FULL logical
+		// layout, then project source offsets through scrollOffset. Layout chunks
+		// are contiguous slices of each logical line, including atomic paste-marker
+		// handling, so no private pi-tui module import or duplicate wrap algorithm is
+		// needed (peer-only extension installs cannot resolve deep package imports).
+		const internals = this as unknown as {
+			scrollOffset: number;
+			layoutText(width: number): Array<{ text: string }>;
+		};
+		const layoutRows = internals.layoutText(layoutWidth);
+		const allRanges: EditorSkillSourceRange[] = [];
+		let layoutIndex = 0;
+		let lineOffset = 0;
+		for (const line of this.getLines()) {
+			let lineIndex = 0;
+			do {
+				const chunk = layoutRows[layoutIndex++];
+				if (!chunk) break;
+				const end = Math.min(line.length, lineIndex + chunk.text.length);
+				allRanges.push({ start: lineOffset + lineIndex, end: lineOffset + end });
+				lineIndex = end;
+				// Defensive progress if a future Pi layout emits an empty chunk for a
+				// non-empty line. Styling degrades for that line instead of looping.
+				if (chunk.text.length === 0 && line.length > 0) lineIndex = line.length;
+			} while (lineIndex < line.length);
+			lineOffset += line.length + 1; // include the hard newline between logical lines
+		}
+		return allRanges.slice(internals.scrollOffset, internals.scrollOffset + visibleRowCount);
+	}
+
 	override render(width: number): string[] {
 		// Too narrow for our chrome — fall back to Pi's bare render.
 		if (width < 8) return super.render(width);
@@ -401,6 +548,12 @@ export class CathedralEditor extends CustomEditor {
 		// has no concept of placeholders; we shim it from the outside.
 		const text = this.getText();
 		const showPlaceholder = splash && text.length === 0;
+		const lastContentIdx = bottomIdx === -1 ? innerRows.length : bottomIdx;
+		const contentRows = innerRows.slice(1, lastContentIdx);
+		const visibleSourceRanges = this.visibleRowSourceRanges(Math.max(1, piContentWidth - 1), contentRows.length);
+		const decoratedContentRows = showPlaceholder
+			? contentRows
+			: formatInlineSkillRowsForEditor(contentRows, undefined, { text, rows: visibleSourceRanges });
 		const renderContent = (row: string, isFirstContent: boolean): string => {
 			if (showPlaceholder && isFirstContent) {
 				// Preserve Pi's zero-width cursor marker while painting our ghost text.
@@ -418,10 +571,9 @@ export class CathedralEditor extends CustomEditor {
 
 		const result: string[] = [fullRow(renderTopBorder(frameWidth, label, paintFrameBackground))];
 
-		const lastContentIdx = bottomIdx === -1 ? innerRows.length : bottomIdx;
 		let contentSeen = false;
-		for (let i = 1; i < lastContentIdx; i++) {
-			result.push(renderContent(innerRows[i]!, !contentSeen));
+		for (const row of decoratedContentRows) {
+			result.push(renderContent(row, !contentSeen));
 			contentSeen = true;
 		}
 		result.push(fullRow(renderBottomBorder(frameWidth, paintFrameBackground)));

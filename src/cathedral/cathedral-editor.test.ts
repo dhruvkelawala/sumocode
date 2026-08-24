@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { alignAutocompleteRow, normalizeRawMultilinePasteInput } from "./cathedral-editor.js";
+import { CURSOR_MARKER } from "@earendil-works/pi-tui";
+import {
+	alignAutocompleteRow,
+	formatInlineSkillRowsForEditor,
+	formatInlineSkillTokensForEditor,
+	normalizeRawMultilinePasteInput,
+} from "./cathedral-editor.js";
 
 const ANSI_PATTERN = /\u001b\[[0-9;]*m/g;
 const stripAnsi = (value: string): string => value.replace(ANSI_PATTERN, "");
@@ -39,6 +45,71 @@ describe("normalizeRawMultilinePasteInput", () => {
 		// modifier-Enter encodings, so paste-with-embedded-ESC stays in the
 		// rewrite path.
 		expect(normalizeRawMultilinePasteInput("\x1b[31mError\x1b[0m\rline two")).toBe("\x1b[31mError\x1b[0m\nline two");
+	});
+});
+
+describe("formatInlineSkillTokensForEditor", () => {
+	it("styles the complete mid-sentence skill token with the accent without changing visible text", () => {
+		const input = "check /skill:herdr here";
+		const formatted = formatInlineSkillTokensForEditor(input, { accent: "#112233" });
+
+		expect(stripAnsi(formatted)).toBe(input);
+		expect(formatted).toContain("\u001b[38;2;17;34;51m/skill:herdr");
+	});
+
+	it("preserves Pi's cursor marker and inverse cursor styling inside a skill token", () => {
+		const input = `check /skill:her${CURSOR_MARKER}\u001b[7md\u001b[0mr`;
+		const formatted = formatInlineSkillTokensForEditor(input, { accent: "#112233" });
+
+		expect(formatted.split(CURSOR_MARKER)).toHaveLength(2);
+		expect(stripAnsi(formatted).replace(CURSOR_MARKER, "")).toBe("check /skill:herdr");
+		expect(formatted).toContain("\u001b[7m");
+	});
+
+	it("preserves Pi's inverse fallback cursor immediately after a skill token", () => {
+		const input = `/skill:herdr${CURSOR_MARKER}\u001b[7m \u001b[0m`;
+		const formatted = formatInlineSkillTokensForEditor(input, { accent: "#112233" });
+		expect(formatted).toContain(`${CURSOR_MARKER}\u001b[7m\u001b[39m \u001b[0m`);
+		expect(formatted).not.toContain(`${CURSOR_MARKER}\u001b[7m\u001b[0m `);
+	});
+
+	it("keeps token offsets correct after astral Unicode", () => {
+		const input = "🙂 /skill:herdr";
+		const formatted = formatInlineSkillTokensForEditor(input, { accent: "#112233" });
+		expect(formatted).toContain("\u001b[38;2;17;34;51m/skill:herdr");
+	});
+
+	it("styles a skill token across Pi-wrapped editor rows", () => {
+		const rows = ["check /skill:her", "dr      "];
+		const source = { text: "check /skill:herdr", rows: [{ start: 0, end: 16 }, { start: 16, end: 18 }] };
+		const formatted = formatInlineSkillRowsForEditor(rows, { accent: "#112233" }, source);
+		expect(formatted.map(stripAnsi)).toEqual(rows);
+		expect(formatted[0]).toContain("\u001b[38;2;17;34;51m/skill:her");
+		expect(formatted[1]).toContain("\u001b[38;2;17;34;51mdr");
+	});
+
+	it("does not join skill fragments across an exact-width hard-newline boundary", () => {
+		const rows = ["check /skill:", "herdr"];
+		const source = { text: "check /skill:\nherdr", rows: [{ start: 0, end: 13 }, { start: 14, end: 19 }] };
+		expect(formatInlineSkillRowsForEditor(rows, { accent: "#112233" }, source)).toEqual(rows);
+	});
+
+	it("uses hidden logical text when a skill token crosses the viewport edge", () => {
+		const partial = formatInlineSkillRowsForEditor(["dr"], { accent: "#112233" }, {
+			text: "check /skill:herdr",
+			rows: [{ start: 16, end: 18 }],
+		});
+		const pathFragment = formatInlineSkillRowsForEditor(["/skill:tdd"], { accent: "#112233" }, {
+			text: "prefix/skill:tdd",
+			rows: [{ start: 6, end: 16 }],
+		});
+		expect(partial[0]).toContain("\u001b[38;2;17;34;51mdr");
+		expect(pathFragment).toEqual(["/skill:tdd"]);
+	});
+
+	it("does not style path-like fragments", () => {
+		const input = "docs/skill:herdr/readme";
+		expect(formatInlineSkillTokensForEditor(input, { accent: "#112233" })).toBe(input);
 	});
 });
 

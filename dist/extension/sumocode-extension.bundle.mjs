@@ -3843,6 +3843,7 @@ import {
   stripFrontmatter
 } from "@earendil-works/pi-coding-agent";
 var SKILL_TOKEN = /(^|(?<=\s))\/skill:([A-Za-z0-9][A-Za-z0-9_-]*)/g;
+var ATTACHED_SKILL_SUFFIX = /^(?:[,.;:!?%‰°)\]}]|['’](?:s|t|re|ve|ll|d|m)\b)/iu;
 var readSkillBodyFromDisk = (skill) => stripFrontmatter(fs2.readFileSync(skill.filePath, "utf-8")).trim();
 var expandInlineSkillTokens = (text, skills, readSkillBody = readSkillBodyFromDisk) => {
   if (text.startsWith("/skill:")) return { text, expanded: [] };
@@ -3865,7 +3866,7 @@ var expandInlineSkillTokens = (text, skills, readSkillBody = readSkillBodyFromDi
     const boundaryWhitespace = (rawBefore.match(/\s*$/)?.[0] ?? "") + (rawAfter.match(/^\s*/)?.[0] ?? "");
     const before = rawBefore.trimEnd();
     const after = rawAfter.trimStart();
-    const separator = before.length > 0 && after.length > 0 ? boundaryWhitespace.includes("\n") ? "\n" : " " : "";
+    const separator = before.length > 0 && after.length > 0 ? boundaryWhitespace.includes("\n") ? "\n" : ATTACHED_SKILL_SUFFIX.test(after) ? "" : " " : "";
     const userMessage = `${before}${separator}${after}`.trim();
     const skillBlock = `<skill name="${skill.name}" location="${skill.filePath}">
 References are relative to ${skill.baseDir}.

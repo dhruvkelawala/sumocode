@@ -26,6 +26,7 @@ import {
  */
 
 const SKILL_TOKEN = /(^|(?<=\s))\/skill:([A-Za-z0-9][A-Za-z0-9_-]*)/g;
+const ATTACHED_SKILL_SUFFIX = /^(?:[,.;:!?%‰°)\]}]|['’](?:s|t|re|ve|ll|d|m)\b)/iu;
 
 export type InlineSkillExpansion = { text: string; expanded: string[] };
 
@@ -60,7 +61,13 @@ export const expandInlineSkillTokens = (
 		const boundaryWhitespace = (rawBefore.match(/\s*$/)?.[0] ?? "") + (rawAfter.match(/^\s*/)?.[0] ?? "");
 		const before = rawBefore.trimEnd();
 		const after = rawAfter.trimStart();
-		const separator = before.length > 0 && after.length > 0 ? (boundaryWhitespace.includes("\n") ? "\n" : " ") : "";
+		const separator = before.length > 0 && after.length > 0
+			? boundaryWhitespace.includes("\n")
+				? "\n"
+				: ATTACHED_SKILL_SUFFIX.test(after)
+					? ""
+					: " "
+			: "";
 		const userMessage = `${before}${separator}${after}`.trim();
 		const skillBlock = `<skill name="${skill.name}" location="${skill.filePath}">\nReferences are relative to ${skill.baseDir}.\n\n${body}\n</skill>`;
 		return { text: userMessage ? `${skillBlock}\n\n${userMessage}` : skillBlock, expanded: [name] };

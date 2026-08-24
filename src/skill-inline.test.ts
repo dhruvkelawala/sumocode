@@ -39,6 +39,13 @@ describe("expandInlineSkillTokens", () => {
 		expect(parseSkillBlock(result.text)?.userMessage).toBe("before\nafter");
 	});
 
+	it("keeps trailing punctuation attached when removing an inline skill", () => {
+		const comma = expandInlineSkillTokens("use /skill:tdd, please", [makeSkill()], readBody);
+		const possessive = expandInlineSkillTokens("follow /skill:tdd's guidance", [makeSkill()], readBody);
+		expect(parseSkillBlock(comma.text)?.userMessage).toBe("use, please");
+		expect(parseSkillBlock(possessive.text)?.userMessage).toBe("follow's guidance");
+	});
+
 	it("expands one skill per prompt, matching Pi's command semantics", () => {
 		const skills = [makeSkill(), makeSkill({ name: "apr", filePath: "/skills/apr/SKILL.md", baseDir: "/skills/apr" })];
 		const result = expandInlineSkillTokens("run /skill:tdd then /skill:apr", skills, readBody);

@@ -106,7 +106,8 @@ interface TextReadableComponent extends Component {
 }
 
 const ANSI_PATTERN = /\u001b(?:\[[0-?]*[ -/]*[@-~]|\][^\u0007]*(?:\u0007|\u001b\\)|_[^\u0007]*(?:\u0007|\u001b\\))/g;
-const THINKING_LEVELS = new Set<ThinkingLevel>(["off", "minimal", "low", "medium", "high", "xhigh"]);
+// Canonical pi thinking levels; keep in sync with @earendil-works/pi-ai.
+const THINKING_LEVELS = new Set<ThinkingLevel>(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
 const SPLASH_INPUT_FRAME_WIDTH = 60;
 const SIMPLE_INPUT_FRAME_ROWS = 3;
 const VISUAL_SIDEBAR_CONTEXT_TOKENS = 42_000;

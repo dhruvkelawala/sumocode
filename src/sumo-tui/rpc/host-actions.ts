@@ -45,7 +45,7 @@ import {
 	type LovelyWebConfigKey,
 	type LovelyWebConfigScope,
 } from "./lovely-web-config.js";
-import type { InlineSelectorHost, InlineSelectorItem } from "./inline-selector.js";
+import type { InlineSelectorHost, InlineSelectorItem, InlineSelectorTab } from "./inline-selector.js";
 import { notifyOnError } from "./safe-send.js";
 import { logDiagnostic } from "../runtime/diagnostics.js";
 import type { MermaidRenderingMode } from "../transcript/mermaid.js";
@@ -62,7 +62,7 @@ export interface RpcHostSlashCommand {
 }
 
 type HostModals = Pick<ModalManager, "select" | "confirm" | "input" | "editor">;
-type HostInlineSelectors = Pick<InlineSelectorHost, "select">;
+type HostInlineSelectors = Pick<InlineSelectorHost, "select" | "selectTabs">;
 type HostNotifications = Pick<NotificationCenter, "notify">;
 type MemoryClientFactory = () => RemnicMemoryClient;
 
@@ -186,6 +186,13 @@ function scopedValueDescription(scopeValue: unknown, effectiveValue: unknown): s
 
 function modelSelectorItem(model: RpcModelOption): InlineSelectorItem {
 	return { value: model.label, label: model.label, isCurrent: model.active };
+}
+
+function modelListsEqual(left: readonly RpcModelOption[], right: readonly RpcModelOption[]): boolean {
+	return left.length === right.length && left.every((model, index) => {
+		const other = right[index];
+		return other !== undefined && model.provider === other.provider && model.id === other.id;
+	});
 }
 
 function parseModelLabel(label: string): { provider: string; id: string } | undefined {
@@ -453,6 +460,13 @@ export class RpcHostActions {
 		this.persistTheme = options.persistTheme ?? ((name) => saveSumoCodeConfigPatch({ themeName: name }));
 	}
 
+	private modelSelectorTabs(enabledModels: readonly RpcModelOption[], availableModels: readonly RpcModelOption[]): InlineSelectorTab[] {
+		return [
+			{ id: "enabled", label: "enabled", options: enabledModels.map(modelSelectorItem) },
+			{ id: "all", label: "all", options: availableModels.map(modelSelectorItem) },
+		];
+	}
+
 	public handleInput(data: string): boolean {
 		if (data === RPC_HOST_COMMAND_PALETTE_INPUT || data === "ctrl+/" || matchesKey(data, Key.ctrl("/"))) {
 			void notifyOnError(() => this.openCommandPalette(), this.notifications);
@@ -667,13 +681,17 @@ export class RpcHostActions {
 			notify(this.notifications, "branch summary in progress", "warning");
 			return;
 		}
-		const models = await this.controls.getEnabledModels();
-		if (models.length === 0) {
+		const enabledModels = await this.controls.getEnabledModels();
+		const availableModels = await this.controls.getAvailableModels();
+		if (availableModels.length === 0) {
 			notify(this.notifications, "no models available", "warning");
 			return;
 		}
-		const items = models.map(modelSelectorItem);
-		const selected = await this.inlineSelectors.select("Choose model", items);
+		const selected = modelListsEqual(enabledModels, availableModels)
+			? await this.inlineSelectors.select("Choose model", availableModels.map(modelSelectorItem))
+			: await this.inlineSelectors.selectTabs("Choose model", this.modelSelectorTabs(enabledModels, availableModels), {
+				initialTabId: enabledModels.length > 0 ? "enabled" : "all",
+			});
 		if (selected === undefined) return;
 		const parsed = parseModelLabel(selected);
 		if (!parsed) {

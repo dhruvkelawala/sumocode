@@ -1,5 +1,5 @@
 import type { Component } from "@earendil-works/pi-tui";
-import { decodeKittyPrintable, fuzzyFilter, getKeybindings, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { decodeKittyPrintable, fuzzyFilter, getKeybindings, Key, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { activeThemeColors } from "../../themes/index.js";
 import {
 	FOCUSED_MARK,
@@ -60,9 +60,13 @@ import {
  * `SelectList.setFilter` (`select-list.js:25-30`) is the reference for
  * resetting `selectedIndex` to 0 on every filter change, reproduced here as
  * `setQuery`.
+ *
+ * Tabbed selectors reuse the same surface: Tab / Shift+Tab changes the active
+ * option group, while the search query filters only the active group.
  */
 
 export const INLINE_SELECTOR_HINT_ROW = "↑↓ choose    ⏎ select    ⎋ cancel";
+const INLINE_SELECTOR_TABBED_HINT_ROW = "↑↓ choose    ⇥ tab    ⏎ select    ⎋ cancel";
 
 /** Maximum rows the inline selector list shows before scrolling (mirrors Pi's own selector components). */
 const DEFAULT_MAX_VISIBLE = 8;
@@ -83,12 +87,31 @@ export interface InlineSelectorItem {
 	readonly isCurrent?: boolean;
 }
 
+export interface InlineSelectorTab {
+	readonly id: string;
+	readonly label: string;
+	readonly options: readonly (string | InlineSelectorItem)[];
+}
+
 type NormalizedItem = {
 	readonly value: string;
 	readonly label: string;
 	readonly description: string;
 	readonly isCurrent: boolean;
 };
+
+type NormalizedTab = {
+	readonly id: string;
+	readonly label: string;
+	readonly items: NormalizedItem[];
+};
+
+export interface InlineSelectorComponentOptions {
+	readonly maxVisible?: number;
+	readonly initialValue?: string;
+	readonly tabs?: readonly InlineSelectorTab[];
+	readonly initialTabId?: string;
+}
 
 function normalizeItems(options: readonly (string | InlineSelectorItem)[]): NormalizedItem[] {
 	return options.map((option) => {
@@ -102,6 +125,15 @@ function normalizeItems(options: readonly (string | InlineSelectorItem)[]): Norm
 			isCurrent: option.isCurrent ?? false,
 		};
 	});
+}
+
+function normalizeTabs(options: readonly (string | InlineSelectorItem)[], tabs?: readonly InlineSelectorTab[]): NormalizedTab[] {
+	if (!tabs || tabs.length === 0) return [{ id: "default", label: "", items: normalizeItems(options) }];
+	return tabs.map((tab) => ({
+		id: tab.id,
+		label: tab.label,
+		items: normalizeItems(tab.options),
+	}));
 }
 
 const CURRENT_MARK = "●"; // "●" -- mirrors sidebar-rendering.ts's colored status dot
@@ -122,23 +154,40 @@ function currentTag(isCurrent: boolean): string {
  * current-value column, and a footer hint row.
  */
 export class InlineSelectorComponent implements Component {
-	private readonly items: NormalizedItem[];
+	private readonly tabs: NormalizedTab[];
+	private readonly maxVisible: number;
+	private activeTabIndex = 0;
 	private selectedIndex = 0;
 	/** Search-as-you-type query (plan 038); reset to "" per selector open (see constructor). */
 	private query = "";
-	private filteredCache: { readonly query: string; readonly result: NormalizedItem[] } | undefined;
-
+	private filteredCache: { readonly query: string; readonly tabIndex: number; readonly result: NormalizedItem[] } | undefined;
 
 	public constructor(
 		private readonly title: string,
 		options: readonly (string | InlineSelectorItem)[],
 		private readonly done: (value: string | undefined) => void,
-		private readonly maxVisible: number = DEFAULT_MAX_VISIBLE,
+		maxVisibleOrOptions: number | InlineSelectorComponentOptions = DEFAULT_MAX_VISIBLE,
 		initialValue?: string,
 	) {
-		this.items = normalizeItems(options);
-		if (initialValue !== undefined) {
-			const initialIndex = this.items.findIndex((item) => item.value === initialValue);
+		const componentOptions = typeof maxVisibleOrOptions === "number"
+			? {
+				maxVisible: maxVisibleOrOptions,
+				...(initialValue !== undefined ? { initialValue } : {}),
+			}
+			: maxVisibleOrOptions;
+		this.maxVisible = componentOptions.maxVisible ?? DEFAULT_MAX_VISIBLE;
+		this.tabs = normalizeTabs(options, componentOptions.tabs);
+
+		const initialTabIndex = componentOptions.initialTabId === undefined
+			? -1
+			: this.tabs.findIndex((tab) => tab.id === componentOptions.initialTabId);
+		if (initialTabIndex >= 0) this.activeTabIndex = initialTabIndex;
+
+		if (componentOptions.initialValue !== undefined) {
+			const tabWithInitial = this.tabs.findIndex((tab) => tab.items.some((item) => item.value === componentOptions.initialValue));
+			if (tabWithInitial >= 0 && initialTabIndex < 0) this.activeTabIndex = tabWithInitial;
+			const activeItems = this.tabs[this.activeTabIndex]?.items ?? [];
+			const initialIndex = activeItems.findIndex((item) => item.value === componentOptions.initialValue);
 			if (initialIndex >= 0) this.selectedIndex = initialIndex;
 		}
 		this.invalidate();
@@ -151,9 +200,10 @@ export class InlineSelectorComponent implements Component {
 	/** Items narrowed by `query`, in `fuzzyFilter`'s best-match-first order (identity order when `query` is empty). */
 	private filteredItems(): NormalizedItem[] {
 		const cached = this.filteredCache;
-		if (cached?.query === this.query) return cached.result;
-		const result = fuzzyFilter(this.items, this.query, (item) => item.label);
-		this.filteredCache = { query: this.query, result };
+		if (cached?.query === this.query && cached.tabIndex === this.activeTabIndex) return cached.result;
+		const activeItems = this.tabs[this.activeTabIndex]?.items ?? [];
+		const result = fuzzyFilter(activeItems, this.query, (item) => item.label);
+		this.filteredCache = { query: this.query, tabIndex: this.activeTabIndex, result };
 		return result;
 	}
 
@@ -164,8 +214,23 @@ export class InlineSelectorComponent implements Component {
 		this.invalidate();
 	}
 
+	private switchTab(direction: 1 | -1): void {
+		if (this.tabs.length <= 1) return;
+		this.activeTabIndex = (this.activeTabIndex + direction + this.tabs.length) % this.tabs.length;
+		this.selectedIndex = 0;
+		this.invalidate();
+	}
+
 	public handleInput(data: string): void {
 		const kb = getKeybindings();
+		if (this.tabs.length > 1 && matchesKey(data, Key.shift(Key.tab))) {
+			this.switchTab(-1);
+			return;
+		}
+		if (this.tabs.length > 1 && matchesKey(data, Key.tab)) {
+			this.switchTab(1);
+			return;
+		}
 		const items = this.filteredItems();
 		if (kb.matches(data, "tui.select.up")) {
 			this.selectedIndex = items.length === 0 ? 0 : this.selectedIndex === 0 ? items.length - 1 : this.selectedIndex - 1;
@@ -208,6 +273,10 @@ export class InlineSelectorComponent implements Component {
 		lines.push(wrapPanelRow(center(`${fg("✦", activeThemeColors().accent)}  ${fg(this.title.toUpperCase(), activeThemeColors().accent)}  ${fg("✦", activeThemeColors().accent)}`, w), w));
 		lines.push(wrapPanelRow(splitRule(w), w));
 		lines.push(wrapPanelRow("", w));
+		if (this.tabs.length > 1) {
+			lines.push(wrapPanelRow(center(this.renderTabs(), w), w));
+			lines.push(wrapPanelRow("", w));
+		}
 		lines.push(wrapPanelRow(this.renderSearchRow(), w));
 		lines.push(wrapPanelRow("", w));
 
@@ -229,9 +298,20 @@ export class InlineSelectorComponent implements Component {
 
 		lines.push(wrapPanelRow("", w));
 		lines.push(wrapPanelRow(splitRule(w), w));
-		lines.push(wrapPanelRow(center(fg(INLINE_SELECTOR_HINT_ROW, activeThemeColors().foregroundDim), w), w));
+		const hint = this.tabs.length > 1 ? INLINE_SELECTOR_TABBED_HINT_ROW : INLINE_SELECTOR_HINT_ROW;
+		lines.push(wrapPanelRow(center(fg(hint, activeThemeColors().foregroundDim), w), w));
 		lines.push(wrapPanelRow("", w));
 		return lines;
+	}
+
+	private renderTabs(): string {
+		const colors = activeThemeColors();
+		return this.tabs.map((tab, index) => {
+			const label = `${tab.label.toUpperCase()} ${tab.items.length}`;
+			return index === this.activeTabIndex
+				? fg(`◆ ${label}`, colors.accent)
+				: fg(`◇ ${label}`, colors.foregroundDim);
+		}).join(fg("  │  ", colors.divider));
 	}
 
 	/** Search row: typed query in normal text, or a dim placeholder when empty (mirrors `command-palette.ts`'s search row). */
@@ -312,19 +392,22 @@ export class InlineSelectorHost implements EditorLikeComponent {
 		opts?: number | { maxVisible?: number; initialValue?: string },
 	): Promise<string | undefined> {
 		const normalized = typeof opts === "number" ? { maxVisible: opts } : opts ?? {};
-		return new Promise<string | undefined>((resolve) => {
-			const entry: QueuedSelector = {
-				create: (done) => new InlineSelectorComponent(title, options, done as (value: string | undefined) => void, normalized.maxVisible, normalized.initialValue),
-				resolve: resolve as (value: unknown) => void,
-			};
-			if (this.active) {
-				this.queue.push(entry);
-				this.onChange();
-				return;
-			}
-			this.activate(entry);
-			this.onChange();
-		});
+		return this.enqueue((done) => new InlineSelectorComponent(title, options, done, normalized.maxVisible, normalized.initialValue));
+	}
+
+	/** Opens one selector split into tabs; Tab / Shift+Tab switches the active tab. */
+	public selectTabs(
+		title: string,
+		tabs: readonly InlineSelectorTab[],
+		opts: { maxVisible?: number; initialValue?: string; initialTabId?: string } = {},
+	): Promise<string | undefined> {
+		const componentOptions: InlineSelectorComponentOptions = {
+			...(opts.maxVisible !== undefined ? { maxVisible: opts.maxVisible } : {}),
+			...(opts.initialValue !== undefined ? { initialValue: opts.initialValue } : {}),
+			...(opts.initialTabId !== undefined ? { initialTabId: opts.initialTabId } : {}),
+			tabs,
+		};
+		return this.enqueue((done) => new InlineSelectorComponent(title, [], done, componentOptions));
 	}
 
 	/** True while an inline selector occupies the editor slot (used to gate input routing/focus like the old modal). */
@@ -380,6 +463,22 @@ export class InlineSelectorHost implements EditorLikeComponent {
 
 	public setSplashProvider(provider: () => boolean): void {
 		this.editor.setSplashProvider?.(provider);
+	}
+
+	private enqueue(create: (done: (value: string | undefined) => void) => Component): Promise<string | undefined> {
+		return new Promise<string | undefined>((resolve) => {
+			const entry: QueuedSelector = {
+				create: (done) => create(done as (value: string | undefined) => void),
+				resolve: resolve as (value: unknown) => void,
+			};
+			if (this.active) {
+				this.queue.push(entry);
+				this.onChange();
+				return;
+			}
+			this.activate(entry);
+			this.onChange();
+		});
 	}
 
 	private activate(entry: QueuedSelector): void {

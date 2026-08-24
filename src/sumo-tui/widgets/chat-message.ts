@@ -258,15 +258,19 @@ function renderCodeRows(
 	if (!isMermaidLanguage(block.lang) || mode === "off" || (isStreaming && mode !== "streaming")) {
 		return renderCathedralCodeBlock(block.lang, block.source, width, codeOptions);
 	}
-	const rendered = renderCathedralMermaid(block.source, width);
-	if (!rendered) return renderCathedralCodeBlock(block.lang, block.source, width, codeOptions);
-	if (!isStreaming && rendered.warnings.length > 0) {
+	const outcome = renderCathedralMermaid(block.source, width);
+	if (outcome.kind === "fallback") {
+		const fallbackRows = renderCathedralCodeBlock(block.lang, block.source, width, codeOptions);
+		// While streaming, the source may simply be incomplete — stay quiet.
+		return isStreaming ? fallbackRows : [...fallbackRows, ...mermaidWarningRow(outcome.reason, 1, width)];
+	}
+	if (!isStreaming && outcome.warnings.length > 0) {
 		return [
 			...renderCathedralCodeBlock(block.lang, block.source, width, codeOptions),
-			...mermaidWarningRow(rendered.warnings[0]!, rendered.warnings.length, width),
+			...mermaidWarningRow(outcome.warnings[0]!, outcome.warnings.length, width),
 		];
 	}
-	return [...rendered.rows];
+	return [...outcome.rows];
 }
 
 function renderMarkdownRows(text: string, width: number): string[] {

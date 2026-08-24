@@ -1,3 +1,4 @@
+import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { Component, OverlayOptions } from "@earendil-works/pi-tui";
 import { Key, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
@@ -25,6 +26,12 @@ export type PaletteInputResult = {
 };
 
 export const COMMAND_PALETTE_HINT_ROW = "↑↓ wander    ⏎ attend    ⎋ retreat";
+/**
+ * Fallback thinking levels when no model is resolved yet. The THINKING palette
+ * row derives its options from the active model via getSupportedThinkingLevels()
+ * so per-model gating (e.g. `max` only on Opus 4.6+, `xhigh` only on Opus 4.7+,
+ * Sonnet 5, and Fable 5) flows through automatically.
+ */
 export const COMMAND_PALETTE_THINKING_LEVELS: readonly ThinkingLevel[] = [
 	"off",
 	"minimal",
@@ -32,6 +39,7 @@ export const COMMAND_PALETTE_THINKING_LEVELS: readonly ThinkingLevel[] = [
 	"medium",
 	"high",
 	"xhigh",
+	"max",
 ];
 
 export const COMMAND_PALETTE_SHORTCUT = "ctrl+/";
@@ -258,6 +266,12 @@ export function buildPaletteSnapshot(ctx: PaletteSnapshotContext): CommandPalett
 	};
 }
 
+function thinkingLevelsForContext(ctx: ExtensionContext): readonly ThinkingLevel[] {
+	const model = (ctx as { model?: Parameters<typeof getSupportedThinkingLevels>[0] }).model;
+	if (!model) return COMMAND_PALETTE_THINKING_LEVELS;
+	return getSupportedThinkingLevels(model);
+}
+
 export async function handlePaletteSelection(mode: PaletteMode | undefined, ctx: ExtensionContext, pi: ExtensionAPI): Promise<void> {
 	if (mode === undefined) return;
 
@@ -275,8 +289,9 @@ export async function handlePaletteSelection(mode: PaletteMode | undefined, ctx:
 	}
 
 	if (mode === "THINKING") {
-		const selected = await showDivineQuery(ctx, "Set thinking level", [...COMMAND_PALETTE_THINKING_LEVELS]);
-		if (selected && COMMAND_PALETTE_THINKING_LEVELS.includes(selected as ThinkingLevel)) {
+		const levels = thinkingLevelsForContext(ctx);
+		const selected = await showDivineQuery(ctx, "Set thinking level", [...levels]);
+		if (selected && levels.includes(selected as ThinkingLevel)) {
 			pi.setThinkingLevel(selected as ThinkingLevel);
 		}
 		return;

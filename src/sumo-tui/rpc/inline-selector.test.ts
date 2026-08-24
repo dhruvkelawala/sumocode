@@ -25,6 +25,8 @@ const ARROW_DOWN = "[B";
 const ENTER = "\r";
 const ESCAPE = "";
 const BACKSPACE = "\x7f";
+const TAB = "\t";
+const SHIFT_TAB = "\x1b[Z";
 
 class FakeEditor {
 	public text = "";
@@ -81,6 +83,28 @@ describe("InlineSelectorComponent", () => {
 		const component = new InlineSelectorComponent("Pick", ["alpha", "beta"], done);
 		component.handleInput(ESCAPE);
 		expect(done).toHaveBeenCalledWith(undefined);
+	});
+
+	it("renders tabs and switches active option lists with Tab and Shift+Tab", () => {
+		const component = new InlineSelectorComponent("Choose model", [], () => undefined, {
+			tabs: [
+				{ id: "enabled", label: "enabled", options: ["anthropic/opus"] },
+				{ id: "all", label: "all", options: ["disabled/outside-scope", "anthropic/opus"] },
+			],
+		});
+
+		let stripped = component.render(80).join("\n").replace(/\[[0-9;]*m/g, "");
+		expect(stripped).toContain("ENABLED 1");
+		expect(stripped).toContain("ALL 2");
+		expect(stripped).not.toContain("disabled/outside-scope");
+
+		component.handleInput(TAB);
+		stripped = component.render(80).join("\n").replace(/\[[0-9;]*m/g, "");
+		expect(stripped).toContain("disabled/outside-scope");
+
+		component.handleInput(SHIFT_TAB);
+		stripped = component.render(80).join("\n").replace(/\[[0-9;]*m/g, "");
+		expect(stripped).not.toContain("disabled/outside-scope");
 	});
 });
 

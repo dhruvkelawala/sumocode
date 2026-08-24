@@ -142,6 +142,36 @@ describe("installHerdrRpcBridge", () => {
 		expect(harness.requests[2]).toMatchObject({ method: "pane.report_agent", params: { state: "idle" } });
 	});
 
+	it("keeps retrying display metadata until Herdr receives it", async () => {
+		vi.useFakeTimers();
+		try {
+			let metadataAttempts = 0;
+			const harness = createHarness(enabledEnv, async (request) => {
+				if (request.method === "pane.report_metadata") {
+					metadataAttempts += 1;
+					return metadataAttempts >= 3;
+				}
+				return true;
+			});
+
+			await harness.handlers.get("session_start")?.({ reason: "startup" }, contextWithoutSession);
+			await vi.advanceTimersByTimeAsync(0);
+
+			expect(metadataAttempts).toBe(2);
+			expect(harness.requests.filter((request) => request.method === "pane.report_agent").map((request) => request.params.state)).toEqual(["idle"]);
+
+			await vi.advanceTimersByTimeAsync(2_000);
+
+			const metadataRequests = harness.requests.filter((request) => request.method === "pane.report_metadata");
+			expect(metadataAttempts).toBe(3);
+			expect(metadataRequests).toHaveLength(3);
+			expect(metadataRequests[0]).toBe(metadataRequests[1]);
+			expect(metadataRequests[1]).toBe(metadataRequests[2]);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("keeps retrying a settled state until Herdr receives it", async () => {
 		vi.useFakeTimers();
 		try {

@@ -115,11 +115,13 @@ export function installHerdrRpcBridge(pi: ExtensionAPI, options: HerdrRpcBridgeO
 		});
 	};
 
+	let stopped = false;
+
 	// Herdr grants full lifecycle authority only to the hardcoded
 	// ("herdr:pi", "pi") pair, so the semantic agent must stay "pi". The
 	// display name is presentation-only and can be renamed without touching
 	// that authority.
-	const reportDisplayName = () => send({
+	const buildDisplayNameRequest = () => ({
 		id: requestId("display"),
 		method: "pane.report_metadata",
 		params: {
@@ -131,12 +133,46 @@ export function installHerdrRpcBridge(pi: ExtensionAPI, options: HerdrRpcBridgeO
 		},
 	});
 
+	let displayRequest: unknown | undefined;
+	let displaySendInFlight = false;
+	let displayRetryTimer: ReturnType<typeof setTimeout> | undefined;
+
+	const scheduleDisplayRetry = (): void => {
+		if (stopped || displayRetryTimer !== undefined || displayRequest === undefined) return;
+		displayRetryTimer = setTimeout(() => {
+			displayRetryTimer = undefined;
+			void drainDisplayReport();
+		}, STATE_RETRY_DELAY_MS);
+		displayRetryTimer.unref?.();
+	};
+
+	const drainDisplayReport = async (): Promise<void> => {
+		if (stopped || displaySendInFlight || displayRetryTimer !== undefined || displayRequest === undefined) return;
+		displaySendInFlight = true;
+		try {
+			let delivered = false;
+			try {
+				delivered = await send(displayRequest);
+			} catch {
+				// Treat transport errors like dropped reports.
+			}
+			if (delivered) displayRequest = undefined;
+		} finally {
+			displaySendInFlight = false;
+			if (!stopped && displayRequest !== undefined) scheduleDisplayRetry();
+		}
+	};
+
+	const reportDisplayName = async () => {
+		displayRequest ??= buildDisplayNameRequest();
+		await drainDisplayReport();
+	};
+
 	// Keep the head until delivery. Dropping a settled report leaves Herdr
 	// stuck on working because Pi will not emit the same transition again.
 	const queuedStates: QueuedState[] = [];
 	let sendInFlight = false;
 	let stateRetryTimer: ReturnType<typeof setTimeout> | undefined;
-	let stopped = false;
 
 	const sendState = (state: QueuedState) => send({
 		id: requestId("state"),
@@ -233,6 +269,11 @@ export function installHerdrRpcBridge(pi: ExtensionAPI, options: HerdrRpcBridgeO
 			clearTimeout(stateRetryTimer);
 			stateRetryTimer = undefined;
 		}
+		if (displayRetryTimer !== undefined) {
+			clearTimeout(displayRetryTimer);
+			displayRetryTimer = undefined;
+		}
+		displayRequest = undefined;
 		queuedStates.length = 0;
 		if (event.reason !== "quit") return;
 		void send({

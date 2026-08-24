@@ -15410,7 +15410,8 @@ function installHerdrRpcBridge(pi, options = {}) {
       }
     });
   };
-  const reportDisplayName = () => send({
+  let stopped = false;
+  const buildDisplayNameRequest = () => ({
     id: requestId("display"),
     method: "pane.report_metadata",
     params: {
@@ -15421,10 +15422,39 @@ function installHerdrRpcBridge(pi, options = {}) {
       seq: nextSeq()
     }
   });
+  let displayRequest;
+  let displaySendInFlight = false;
+  let displayRetryTimer;
+  const scheduleDisplayRetry = () => {
+    if (stopped || displayRetryTimer !== void 0 || displayRequest === void 0) return;
+    displayRetryTimer = setTimeout(() => {
+      displayRetryTimer = void 0;
+      void drainDisplayReport();
+    }, STATE_RETRY_DELAY_MS);
+    displayRetryTimer.unref?.();
+  };
+  const drainDisplayReport = async () => {
+    if (stopped || displaySendInFlight || displayRetryTimer !== void 0 || displayRequest === void 0) return;
+    displaySendInFlight = true;
+    try {
+      let delivered = false;
+      try {
+        delivered = await send(displayRequest);
+      } catch {
+      }
+      if (delivered) displayRequest = void 0;
+    } finally {
+      displaySendInFlight = false;
+      if (!stopped && displayRequest !== void 0) scheduleDisplayRetry();
+    }
+  };
+  const reportDisplayName = async () => {
+    displayRequest ??= buildDisplayNameRequest();
+    await drainDisplayReport();
+  };
   const queuedStates = [];
   let sendInFlight = false;
   let stateRetryTimer;
-  let stopped = false;
   const sendState = (state) => send({
     id: requestId("state"),
     method: "pane.report_agent",
@@ -15512,6 +15542,11 @@ function installHerdrRpcBridge(pi, options = {}) {
       clearTimeout(stateRetryTimer);
       stateRetryTimer = void 0;
     }
+    if (displayRetryTimer !== void 0) {
+      clearTimeout(displayRetryTimer);
+      displayRetryTimer = void 0;
+    }
+    displayRequest = void 0;
     queuedStates.length = 0;
     if (event.reason !== "quit") return;
     void send({

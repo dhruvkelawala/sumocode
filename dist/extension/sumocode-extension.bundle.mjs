@@ -4548,7 +4548,6 @@ function installAltscreen(pi) {
 // src/cathedral/cathedral-editor.ts
 import { CustomEditor } from "@earendil-works/pi-coding-agent";
 import { CURSOR_MARKER, truncateToWidth as truncateToWidth4, visibleWidth as visibleWidth5 } from "@earendil-works/pi-tui";
-import { wordWrapLine } from "@earendil-works/pi-tui/dist/components/editor.js";
 
 // src/cathedral/multiline-paste.ts
 var CSI_U_SHIFT_ENTER = "\x1B[13;2u";
@@ -4887,13 +4886,20 @@ var CathedralEditor = class extends CustomEditor {
   }
   visibleRowSourceRanges(layoutWidth, visibleRowCount) {
     const internals = this;
+    const layoutRows = internals.layoutText(layoutWidth);
     const allRanges = [];
+    let layoutIndex = 0;
     let lineOffset = 0;
     for (const line of this.getLines()) {
-      const chunks = wordWrapLine(line, layoutWidth, [...internals.segment(line, "grapheme")]);
-      for (const chunk of chunks) {
-        allRanges.push({ start: lineOffset + chunk.startIndex, end: lineOffset + chunk.endIndex });
-      }
+      let lineIndex = 0;
+      do {
+        const chunk = layoutRows[layoutIndex++];
+        if (!chunk) break;
+        const end = Math.min(line.length, lineIndex + chunk.text.length);
+        allRanges.push({ start: lineOffset + lineIndex, end: lineOffset + end });
+        lineIndex = end;
+        if (chunk.text.length === 0 && line.length > 0) lineIndex = line.length;
+      } while (lineIndex < line.length);
       lineOffset += line.length + 1;
     }
     return allRanges.slice(internals.scrollOffset, internals.scrollOffset + visibleRowCount);

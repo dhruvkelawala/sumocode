@@ -39,7 +39,6 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { CustomEditor } from "@earendil-works/pi-coding-agent";
 import { CURSOR_MARKER, truncateToWidth, visibleWidth, type EditorTheme, type TUI } from "@earendil-works/pi-tui";
-import { wordWrapLine } from "@earendil-works/pi-tui/dist/components/editor.js";
 import { sessionHasMessages as cachedSessionHasMessages } from "../session-cache.js";
 import { activeThemeColors } from "../themes/index.js";
 import { EditorImageDraftState, isLikelyClipboardImagePath, normalizePastedImagePath, setActiveEditorDraftController } from "./editor-draft-state.js";
@@ -482,20 +481,31 @@ export class CathedralEditor extends CustomEditor {
 	}
 
 	private visibleRowSourceRanges(layoutWidth: number, visibleRowCount: number): readonly EditorSkillSourceRange[] {
-		// Compatibility seam: mirror Pi Editor.layoutText's own wordWrapLine calls
-		// over the FULL logical draft, then project source offsets through Pi's
-		// scrollOffset. Hidden rows still contribute context to token matching.
+		// Compatibility seam: consume Pi Editor.layoutText's exact FULL logical
+		// layout, then project source offsets through scrollOffset. Layout chunks
+		// are contiguous slices of each logical line, including atomic paste-marker
+		// handling, so no private pi-tui module import or duplicate wrap algorithm is
+		// needed (peer-only extension installs cannot resolve deep package imports).
 		const internals = this as unknown as {
 			scrollOffset: number;
-			segment(text: string, granularity: "grapheme"): Iterable<Intl.SegmentData>;
+			layoutText(width: number): Array<{ text: string }>;
 		};
+		const layoutRows = internals.layoutText(layoutWidth);
 		const allRanges: EditorSkillSourceRange[] = [];
+		let layoutIndex = 0;
 		let lineOffset = 0;
 		for (const line of this.getLines()) {
-			const chunks = wordWrapLine(line, layoutWidth, [...internals.segment(line, "grapheme")]);
-			for (const chunk of chunks) {
-				allRanges.push({ start: lineOffset + chunk.startIndex, end: lineOffset + chunk.endIndex });
-			}
+			let lineIndex = 0;
+			do {
+				const chunk = layoutRows[layoutIndex++];
+				if (!chunk) break;
+				const end = Math.min(line.length, lineIndex + chunk.text.length);
+				allRanges.push({ start: lineOffset + lineIndex, end: lineOffset + end });
+				lineIndex = end;
+				// Defensive progress if a future Pi layout emits an empty chunk for a
+				// non-empty line. Styling degrades for that line instead of looping.
+				if (chunk.text.length === 0 && line.length > 0) lineIndex = line.length;
+			} while (lineIndex < line.length);
 			lineOffset += line.length + 1; // include the hard newline between logical lines
 		}
 		return allRanges.slice(internals.scrollOffset, internals.scrollOffset + visibleRowCount);

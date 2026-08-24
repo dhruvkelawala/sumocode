@@ -3,13 +3,22 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 const SOURCE = "herdr:pi";
 const AGENT = "pi";
+const DISPLAY_SOURCE = "sumocode:display";
+const DISPLAY_AGENT = "sumocode";
+const STATE_RETRY_DELAY_MS = 2_000;
 
 type AgentState = "working" | "blocked" | "idle";
-type SendRequest = (request: unknown) => Promise<void>;
+type SendRequestAttempt = (request: unknown, timeoutMs: number) => Promise<boolean>;
+
+interface QueuedState {
+	readonly state: AgentState;
+	readonly message?: string;
+	readonly seq: number;
+}
 
 interface HerdrRpcBridgeOptions {
 	readonly env?: NodeJS.ProcessEnv;
-	readonly sendRequest?: SendRequest;
+	readonly sendRequestAttempt?: SendRequestAttempt;
 }
 
 interface SessionContext {
@@ -24,24 +33,30 @@ function socketEndpoint(path: string): string {
 	return process.platform === "win32" ? `\\\\.\\pipe\\${path}` : path;
 }
 
-function sendSocketRequest(path: string, request: unknown): Promise<void> {
+function sendSocketRequestAttempt(path: string, request: unknown, timeoutMs: number): Promise<boolean> {
 	return new Promise((resolve) => {
 		let settled = false;
+		let timeout: ReturnType<typeof setTimeout> | undefined;
 		const socket = net.createConnection(socketEndpoint(path));
-		const finish = () => {
+		const finish = (delivered: boolean) => {
 			if (settled) return;
 			settled = true;
-			clearTimeout(timeout);
+			if (timeout) clearTimeout(timeout);
 			socket.destroy();
-			resolve();
+			resolve(delivered);
 		};
-		const timeout = setTimeout(finish, 500);
-		timeout.unref?.();
-		socket.on("error", finish);
+		socket.on("error", () => finish(false));
 		socket.on("connect", () => socket.write(`${JSON.stringify(request)}\n`));
-		socket.on("data", finish);
-		socket.on("end", finish);
+		socket.on("data", () => finish(true));
+		socket.on("end", () => finish(false));
+		timeout = setTimeout(() => finish(false), timeoutMs);
+		timeout.unref?.();
 	});
+}
+
+async function sendRequest(attempt: SendRequestAttempt, request: unknown): Promise<boolean> {
+	if (await attempt(request, 500)) return true;
+	return attempt(request, 1500);
 }
 
 function sessionRef(ctx: SessionContext): { agent_session_path?: string; agent_session_id?: string } {
@@ -71,7 +86,8 @@ export function installHerdrRpcBridge(pi: ExtensionAPI, options: HerdrRpcBridgeO
 	const path = env.HERDR_SOCKET_PATH;
 	if (env.SUMOCODE_RPC_CHILD !== "1" || env.HERDR_ENV !== "1" || !paneId || !path) return;
 
-	const send = options.sendRequest ?? ((request) => sendSocketRequest(path, request));
+	const attempt = options.sendRequestAttempt ?? ((request, timeoutMs) => sendSocketRequestAttempt(path, request, timeoutMs));
+	const send = (request: unknown) => sendRequest(attempt, request);
 	let seq = Date.now() * 1000;
 	let active = false;
 	let blockedCount = 0;
@@ -99,25 +115,118 @@ export function installHerdrRpcBridge(pi: ExtensionAPI, options: HerdrRpcBridgeO
 		});
 	};
 
-	const publishState = async (force = false) => {
+	let stopped = false;
+
+	// Herdr grants full lifecycle authority only to the hardcoded
+	// ("herdr:pi", "pi") pair, so the semantic agent must stay "pi". The
+	// display name is presentation-only and can be renamed without touching
+	// that authority.
+	const buildDisplayNameRequest = () => ({
+		id: requestId("display"),
+		method: "pane.report_metadata",
+		params: {
+			pane_id: paneId,
+			source: DISPLAY_SOURCE,
+			agent: AGENT,
+			display_agent: DISPLAY_AGENT,
+			seq: nextSeq(),
+		},
+	});
+
+	let displayRequest: unknown | undefined;
+	let displaySendInFlight = false;
+	let displayRetryTimer: ReturnType<typeof setTimeout> | undefined;
+
+	const scheduleDisplayRetry = (): void => {
+		if (stopped || displayRetryTimer !== undefined || displayRequest === undefined) return;
+		displayRetryTimer = setTimeout(() => {
+			displayRetryTimer = undefined;
+			void drainDisplayReport();
+		}, STATE_RETRY_DELAY_MS);
+		displayRetryTimer.unref?.();
+	};
+
+	const drainDisplayReport = async (): Promise<void> => {
+		if (stopped || displaySendInFlight || displayRetryTimer !== undefined || displayRequest === undefined) return;
+		displaySendInFlight = true;
+		try {
+			let delivered = false;
+			try {
+				delivered = await send(displayRequest);
+			} catch {
+				// Treat transport errors like dropped reports.
+			}
+			if (delivered) displayRequest = undefined;
+		} finally {
+			displaySendInFlight = false;
+			if (!stopped && displayRequest !== undefined) scheduleDisplayRetry();
+		}
+	};
+
+	const reportDisplayName = async () => {
+		displayRequest ??= buildDisplayNameRequest();
+		await drainDisplayReport();
+	};
+
+	// Keep the head until delivery. Dropping a settled report leaves Herdr
+	// stuck on working because Pi will not emit the same transition again.
+	const queuedStates: QueuedState[] = [];
+	let sendInFlight = false;
+	let stateRetryTimer: ReturnType<typeof setTimeout> | undefined;
+
+	const sendState = (state: QueuedState) => send({
+		id: requestId("state"),
+		method: "pane.report_agent",
+		params: {
+			pane_id: paneId,
+			source: SOURCE,
+			agent: AGENT,
+			state: state.state,
+			message: state.message,
+			seq: state.seq,
+			...(currentContext ? sessionRef(currentContext) : {}),
+		},
+	});
+
+	const scheduleStateRetry = (): void => {
+		if (stopped || stateRetryTimer !== undefined || queuedStates.length === 0) return;
+		stateRetryTimer = setTimeout(() => {
+			stateRetryTimer = undefined;
+			void drainStateQueue();
+		}, STATE_RETRY_DELAY_MS);
+		stateRetryTimer.unref?.();
+	};
+
+	const drainStateQueue = async (): Promise<void> => {
+		if (stopped || sendInFlight || stateRetryTimer !== undefined) return;
+		sendInFlight = true;
+		try {
+			while (!stopped) {
+				const state = queuedStates[0];
+				if (!state) return;
+				let delivered = false;
+				try {
+					delivered = await sendState(state);
+				} catch {
+					// Treat transport errors like dropped reports.
+				}
+				if (!delivered) return;
+				queuedStates.shift();
+			}
+		} finally {
+			sendInFlight = false;
+			if (!stopped && queuedStates.length > 0) scheduleStateRetry();
+		}
+	};
+
+	const publishState = (force = false) => {
 		const state: AgentState = blockedCount > 0 ? "blocked" : active ? "working" : "idle";
 		const message = blockedCount > 0 ? blockedMessage : undefined;
 		if (!force && state === lastState && message === lastMessage) return;
 		lastState = state;
 		lastMessage = message;
-		await send({
-			id: requestId("state"),
-			method: "pane.report_agent",
-			params: {
-				pane_id: paneId,
-				source: SOURCE,
-				agent: AGENT,
-				state,
-				message,
-				seq: nextSeq(),
-				...(currentContext ? sessionRef(currentContext) : {}),
-			},
-		});
+		queuedStates.push({ state, message, seq: nextSeq() });
+		void drainStateQueue();
 	};
 
 	const eventBus = pi.events as { on?: (name: string, handler: (data: unknown) => void) => void } | undefined;
@@ -137,7 +246,8 @@ export function installHerdrRpcBridge(pi: ExtensionAPI, options: HerdrRpcBridgeO
 		currentContext = ctx as SessionContext;
 		active = ctx.isIdle?.() === false;
 		await reportSession(currentContext, event.reason);
-		await publishState(true);
+		await reportDisplayName();
+		publishState(true);
 	});
 	pi.on("agent_start", (_event, ctx) => {
 		currentContext = ctx as SessionContext;
@@ -152,6 +262,19 @@ export function installHerdrRpcBridge(pi: ExtensionAPI, options: HerdrRpcBridgeO
 		void publishState();
 	});
 	pi.on("session_shutdown", (event) => {
+		// Pi replaces the extension runtime after every shutdown. Stop this
+		// instance's retry loop; the next session owns a fresh bridge.
+		stopped = true;
+		if (stateRetryTimer !== undefined) {
+			clearTimeout(stateRetryTimer);
+			stateRetryTimer = undefined;
+		}
+		if (displayRetryTimer !== undefined) {
+			clearTimeout(displayRetryTimer);
+			displayRetryTimer = undefined;
+		}
+		displayRequest = undefined;
+		queuedStates.length = 0;
 		if (event.reason !== "quit") return;
 		void send({
 			id: requestId("release"),

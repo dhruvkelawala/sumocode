@@ -5357,11 +5357,37 @@ var execFailure = (operation, result) => ({
   ok: false,
   error: result.stderr || result.stdout || `${operation} exited ${result.code}`
 });
-function resolveCallerWorkspaceId(env) {
+function parseHerdrError(result) {
+  for (const text of [result.stderr, result.stdout]) {
+    try {
+      const parsed = JSON.parse(text);
+      if (parsed.error) return parsed.error;
+    } catch {
+    }
+  }
+  return void 0;
+}
+var HERDR_AGENT_PROMPT_TIMEOUT_MS = 1e4;
+var hasHerdrCaller = (env = process.env) => env.HERDR_ENV === "1" && Boolean(env.HERDR_PANE_ID);
+function workspaceIdFromPaneEnv(env) {
   const paneId2 = env.HERDR_PANE_ID;
   if (!paneId2) return void 0;
   const workspace = paneId2.split(":")[0];
   return workspace && /^w[0-9A-Za-z]+$/.test(workspace) ? workspace : void 0;
+}
+async function currentPane(pi) {
+  const result = await pi.exec("herdr", ["pane", "current", "--current"], { timeout: 5e3 });
+  if (result.code !== 0) return execFailure("herdr pane current", result);
+  const parsed = parseEnvelope(result.stdout);
+  if (!parsed.ok) return parsed;
+  return parsed.pane?.pane_id ? { ok: true, pane: parsed.pane } : { ok: false, error: "herdr pane current did not return a pane_id" };
+}
+async function resolveCallerWorkspaceId(pi, env = process.env) {
+  if (hasHerdrCaller(env)) {
+    const current = await currentPane(pi);
+    if (current.ok && current.pane.workspace_id) return current.pane.workspace_id;
+  }
+  return workspaceIdFromPaneEnv(env);
 }
 function workspaceIdFromWorktreeResult(parsed) {
   return parsed.workspace?.workspace_id ?? parsed.root_pane?.workspace_id;
@@ -5398,15 +5424,18 @@ async function paneForTab(pi, tabId) {
   const pane = listed.panes.find((candidate) => candidate.tab_id === tabId);
   return pane?.pane_id ? { ok: true, pane } : { ok: false, error: `herdr returned no pane for tab ${tabId}` };
 }
-async function splitPane(pi, anchorPaneId, direction, cwd) {
-  const result = await pi.exec("herdr", ["pane", "split", anchorPaneId, "--direction", direction, "--cwd", cwd, "--no-focus"], { timeout: 5e3 });
+function paneTargetArgs(target) {
+  return target.kind === "current" ? ["--current"] : [target.paneId];
+}
+async function splitPane(pi, target, direction, cwd) {
+  const result = await pi.exec("herdr", ["pane", "split", ...paneTargetArgs(target), "--direction", direction, "--cwd", cwd, "--no-focus"], { timeout: 5e3 });
   if (result.code !== 0) return execFailure("herdr pane split", result);
   const parsed = parseEnvelope(result.stdout);
   if (!parsed.ok) return parsed;
   return parsed.pane?.pane_id ? { ok: true, pane: parsed.pane } : { ok: false, error: "herdr pane split did not return a pane_id" };
 }
 async function createTabPane(pi, cwd, label) {
-  const workspaceId = resolveCallerWorkspaceId(process.env);
+  const workspaceId = await resolveCallerWorkspaceId(pi, process.env);
   const workspaceArgs = workspaceId ? ["--workspace", workspaceId] : [];
   const result = await pi.exec("herdr", ["tab", "create", ...workspaceArgs, "--cwd", cwd, "--label", label, "--no-focus"], { timeout: 5e3 });
   if (result.code !== 0) return execFailure("herdr tab create", result);
@@ -5432,13 +5461,13 @@ async function startAgentPane(pi, options) {
       anchorPaneId = listed.panes[0]?.pane_id;
     }
     if (!anchorPaneId) return { ok: false, error: `herdr returned no pane for workspace ${options.placement.workspaceId}` };
-    target = await splitPane(pi, anchorPaneId, "right", options.cwd);
+    target = await splitPane(pi, { kind: "id", paneId: anchorPaneId }, "right", options.cwd);
     if (target.ok) {
       await pi.exec("herdr", ["pane", "move", anchorPaneId, "--new-tab", "--workspace", options.placement.workspaceId, "--label", "shell", "--no-focus"], { timeout: 5e3 }).catch(() => void 0);
     }
   } else if (options.placement.kind === "tab") {
     const anchor = await paneForTab(pi, options.placement.tabId);
-    target = anchor.ok && anchor.pane.pane_id ? await splitPane(pi, anchor.pane.pane_id, options.placement.direction, options.cwd) : anchor;
+    target = anchor.ok && anchor.pane.pane_id ? await splitPane(pi, { kind: "id", paneId: anchor.pane.pane_id }, options.placement.direction, options.cwd) : anchor;
   } else {
     target = await createTabPane(pi, options.cwd, options.placement.label);
   }
@@ -5464,16 +5493,19 @@ var herdrTerminalHost = {
   startAgentPane,
   async sendPaneText(pi, pane, text) {
     try {
-      const result = await pi.exec("herdr", ["pane", "run", pane.paneId, text], { timeout: 5e3 });
-      if (result.code !== 0) return execFailure("herdr pane run", result);
-      return { ok: true };
+      const prompted = await pi.exec("herdr", ["agent", "prompt", pane.paneId, text], { timeout: HERDR_AGENT_PROMPT_TIMEOUT_MS });
+      if (prompted.code === 0) return { ok: true };
+      const error = parseHerdrError(prompted);
+      if (error?.code === "agent_prompt_stalled") return { ok: true };
+      if (error?.code === "agent_blocked") return { ok: false, error: error.message || "agent is blocked" };
+      if (error?.code === "agent_not_found") return { ok: false, error: error.message || "Herdr does not recognize an agent in this pane yet" };
+      return execFailure("herdr agent prompt", prompted);
     } catch (error) {
       return { ok: false, error: error instanceof Error ? error.message : String(error) };
     }
   },
   async openCommandInSplit(pi, direction, options) {
-    const callerPaneId = process.env.HERDR_PANE_ID;
-    const target = callerPaneId ? await splitPane(pi, callerPaneId, direction, options.cwd) : await createTabPane(pi, options.cwd, "sumocode");
+    const target = hasHerdrCaller() ? await splitPane(pi, { kind: "current" }, direction, options.cwd) : await createTabPane(pi, options.cwd, "sumocode");
     if (!target.ok) return target;
     const started = await runPaneCommand(pi, target.pane, options.shellCommand);
     if (!started.ok) return started;
@@ -15302,28 +15334,36 @@ function registerRpcLoginCommand(pi, deps = {}) {
 import net from "node:net";
 var SOURCE = "herdr:pi";
 var AGENT = "pi";
+var DISPLAY_SOURCE = "sumocode:display";
+var DISPLAY_AGENT = "sumocode";
+var STATE_RETRY_DELAY_MS = 2e3;
 function socketEndpoint(path2) {
   return process.platform === "win32" ? `\\\\.\\pipe\\${path2}` : path2;
 }
-function sendSocketRequest(path2, request) {
+function sendSocketRequestAttempt(path2, request, timeoutMs) {
   return new Promise((resolve8) => {
     let settled = false;
+    let timeout;
     const socket = net.createConnection(socketEndpoint(path2));
-    const finish = () => {
+    const finish = (delivered) => {
       if (settled) return;
       settled = true;
-      clearTimeout(timeout);
+      if (timeout) clearTimeout(timeout);
       socket.destroy();
-      resolve8();
+      resolve8(delivered);
     };
-    const timeout = setTimeout(finish, 500);
-    timeout.unref?.();
-    socket.on("error", finish);
+    socket.on("error", () => finish(false));
     socket.on("connect", () => socket.write(`${JSON.stringify(request)}
 `));
-    socket.on("data", finish);
-    socket.on("end", finish);
+    socket.on("data", () => finish(true));
+    socket.on("end", () => finish(false));
+    timeout = setTimeout(() => finish(false), timeoutMs);
+    timeout.unref?.();
   });
+}
+async function sendRequest(attempt, request) {
+  if (await attempt(request, 500)) return true;
+  return attempt(request, 1500);
 }
 function sessionRef(ctx) {
   try {
@@ -15343,7 +15383,8 @@ function installHerdrRpcBridge(pi, options = {}) {
   const paneId2 = env.HERDR_PANE_ID;
   const path2 = env.HERDR_SOCKET_PATH;
   if (env.SUMOCODE_RPC_CHILD !== "1" || env.HERDR_ENV !== "1" || !paneId2 || !path2) return;
-  const send = options.sendRequest ?? ((request) => sendSocketRequest(path2, request));
+  const attempt = options.sendRequestAttempt ?? ((request, timeoutMs) => sendSocketRequestAttempt(path2, request, timeoutMs));
+  const send = (request) => sendRequest(attempt, request);
   let seq = Date.now() * 1e3;
   let active = false;
   let blockedCount = 0;
@@ -15369,25 +15410,100 @@ function installHerdrRpcBridge(pi, options = {}) {
       }
     });
   };
-  const publishState = async (force = false) => {
+  let stopped = false;
+  const buildDisplayNameRequest = () => ({
+    id: requestId("display"),
+    method: "pane.report_metadata",
+    params: {
+      pane_id: paneId2,
+      source: DISPLAY_SOURCE,
+      agent: AGENT,
+      display_agent: DISPLAY_AGENT,
+      seq: nextSeq()
+    }
+  });
+  let displayRequest;
+  let displaySendInFlight = false;
+  let displayRetryTimer;
+  const scheduleDisplayRetry = () => {
+    if (stopped || displayRetryTimer !== void 0 || displayRequest === void 0) return;
+    displayRetryTimer = setTimeout(() => {
+      displayRetryTimer = void 0;
+      void drainDisplayReport();
+    }, STATE_RETRY_DELAY_MS);
+    displayRetryTimer.unref?.();
+  };
+  const drainDisplayReport = async () => {
+    if (stopped || displaySendInFlight || displayRetryTimer !== void 0 || displayRequest === void 0) return;
+    displaySendInFlight = true;
+    try {
+      let delivered = false;
+      try {
+        delivered = await send(displayRequest);
+      } catch {
+      }
+      if (delivered) displayRequest = void 0;
+    } finally {
+      displaySendInFlight = false;
+      if (!stopped && displayRequest !== void 0) scheduleDisplayRetry();
+    }
+  };
+  const reportDisplayName = async () => {
+    displayRequest ??= buildDisplayNameRequest();
+    await drainDisplayReport();
+  };
+  const queuedStates = [];
+  let sendInFlight = false;
+  let stateRetryTimer;
+  const sendState = (state) => send({
+    id: requestId("state"),
+    method: "pane.report_agent",
+    params: {
+      pane_id: paneId2,
+      source: SOURCE,
+      agent: AGENT,
+      state: state.state,
+      message: state.message,
+      seq: state.seq,
+      ...currentContext ? sessionRef(currentContext) : {}
+    }
+  });
+  const scheduleStateRetry = () => {
+    if (stopped || stateRetryTimer !== void 0 || queuedStates.length === 0) return;
+    stateRetryTimer = setTimeout(() => {
+      stateRetryTimer = void 0;
+      void drainStateQueue();
+    }, STATE_RETRY_DELAY_MS);
+    stateRetryTimer.unref?.();
+  };
+  const drainStateQueue = async () => {
+    if (stopped || sendInFlight || stateRetryTimer !== void 0) return;
+    sendInFlight = true;
+    try {
+      while (!stopped) {
+        const state = queuedStates[0];
+        if (!state) return;
+        let delivered = false;
+        try {
+          delivered = await sendState(state);
+        } catch {
+        }
+        if (!delivered) return;
+        queuedStates.shift();
+      }
+    } finally {
+      sendInFlight = false;
+      if (!stopped && queuedStates.length > 0) scheduleStateRetry();
+    }
+  };
+  const publishState = (force = false) => {
     const state = blockedCount > 0 ? "blocked" : active ? "working" : "idle";
     const message = blockedCount > 0 ? blockedMessage : void 0;
     if (!force && state === lastState && message === lastMessage) return;
     lastState = state;
     lastMessage = message;
-    await send({
-      id: requestId("state"),
-      method: "pane.report_agent",
-      params: {
-        pane_id: paneId2,
-        source: SOURCE,
-        agent: AGENT,
-        state,
-        message,
-        seq: nextSeq(),
-        ...currentContext ? sessionRef(currentContext) : {}
-      }
-    });
+    queuedStates.push({ state, message, seq: nextSeq() });
+    void drainStateQueue();
   };
   const eventBus = pi.events;
   eventBus?.on?.("herdr:blocked", (data) => {
@@ -15405,7 +15521,8 @@ function installHerdrRpcBridge(pi, options = {}) {
     currentContext = ctx;
     active = ctx.isIdle?.() === false;
     await reportSession(currentContext, event.reason);
-    await publishState(true);
+    await reportDisplayName();
+    publishState(true);
   });
   pi.on("agent_start", (_event, ctx) => {
     currentContext = ctx;
@@ -15420,6 +15537,17 @@ function installHerdrRpcBridge(pi, options = {}) {
     void publishState();
   });
   pi.on("session_shutdown", (event) => {
+    stopped = true;
+    if (stateRetryTimer !== void 0) {
+      clearTimeout(stateRetryTimer);
+      stateRetryTimer = void 0;
+    }
+    if (displayRetryTimer !== void 0) {
+      clearTimeout(displayRetryTimer);
+      displayRetryTimer = void 0;
+    }
+    displayRequest = void 0;
+    queuedStates.length = 0;
     if (event.reason !== "quit") return;
     void send({
       id: requestId("release"),

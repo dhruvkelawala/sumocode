@@ -66,6 +66,13 @@ describe("formatInlineSkillTokensForEditor", () => {
 		expect(formatted).toContain("\u001b[7m");
 	});
 
+	it("preserves Pi's inverse fallback cursor immediately after a skill token", () => {
+		const input = `/skill:herdr${CURSOR_MARKER}\u001b[7m \u001b[0m`;
+		const formatted = formatInlineSkillTokensForEditor(input, { accent: "#112233" });
+		expect(formatted).toContain(`${CURSOR_MARKER}\u001b[7m\u001b[39m \u001b[0m`);
+		expect(formatted).not.toContain(`${CURSOR_MARKER}\u001b[7m\u001b[0m `);
+	});
+
 	it("keeps token offsets correct after astral Unicode", () => {
 		const input = "🙂 /skill:herdr";
 		const formatted = formatInlineSkillTokensForEditor(input, { accent: "#112233" });

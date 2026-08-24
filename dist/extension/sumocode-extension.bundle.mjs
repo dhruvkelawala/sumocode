@@ -4565,6 +4565,7 @@ function normalizeRawMultilinePasteInput(data) {
 
 // src/cathedral/cathedral-editor.ts
 var RESET6 = "\x1B[0m";
+var RESET_FG = "\x1B[39m";
 var ANSI_PATTERN3 = /\u001b\[[0-9;]*m/g;
 var SPLASH_INPUT_FRAME_WIDTH2 = 60;
 var RAW_PASTE_CR_WINDOW_MS = 50;
@@ -4656,13 +4657,13 @@ function formatInlineSkillRowsForEditor(rows, colors = { accent: activeThemeColo
       }
       const desired = accented.has(rowOffset + visibleIndex);
       if (desired !== accentActive) {
-        output += desired ? fg4(colors.accent) : RESET6;
+        output += desired ? fg4(colors.accent) : RESET_FG;
         accentActive = desired;
       }
       output += unit.raw;
       visibleIndex += unit.visible.length;
     }
-    if (accentActive) output += RESET6;
+    if (accentActive) output += RESET_FG;
     rowOffset += rowVisible.length;
     return output;
   });

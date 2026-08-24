@@ -51,6 +51,7 @@ export { normalizeRawMultilinePasteInput } from "./multiline-paste.js";
 import { countLegacyModifierEnterPresses, CSI_U_SHIFT_ENTER, normalizeRawMultilinePasteInput } from "./multiline-paste.js";
 
 const RESET = "\u001b[0m";
+const RESET_FG = "\u001b[39m";
 const ANSI_PATTERN = /\u001b\[[0-9;]*m/g;
 const SPLASH_INPUT_FRAME_WIDTH = 60;
 const RAW_PASTE_CR_WINDOW_MS = 50;
@@ -169,14 +170,16 @@ export function formatInlineSkillRowsForEditor(
 			}
 			const desired = accented.has(rowOffset + visibleIndex);
 			if (desired !== accentActive) {
-				output += desired ? fg(colors.accent) : RESET;
+				// Reset only foreground when leaving the token. A full SGR reset
+				// would cancel Pi's inverse fallback cursor when it follows directly.
+				output += desired ? fg(colors.accent) : RESET_FG;
 				accentActive = desired;
 			}
 			output += unit.raw;
 			// Regex match indices are UTF-16 offsets; keep astral graphemes aligned.
 			visibleIndex += unit.visible.length;
 		}
-		if (accentActive) output += RESET;
+		if (accentActive) output += RESET_FG;
 		rowOffset += rowVisible.length;
 		return output;
 	});

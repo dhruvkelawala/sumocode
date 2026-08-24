@@ -236,6 +236,41 @@ describe("ChatMessage", () => {
 		message.dispose();
 	});
 
+	it("reflows a wide sequence diagram into width-safe interaction bands", async () => {
+		const yoga = await loadYoga();
+		const source = `sequenceDiagram
+	participant SRC as Issue sources<br/>(issue-tracker.md / Linear / GitHub)
+	participant FA as Fleet Agent<br/>(planning LLM run)
+	participant D as Dhruv
+	participant CP as Control plane
+	participant W as Worker (Mini)<br/>SumoCode in Herdr
+	participant GH as GitHub / CI / Preview
+	FA->>SRC: read sources
+	FA->>FA: rank with legible factors
+	FA-->>D: Queue: "#1 because it unblocks #15"
+	D->>CP: Approve dispatch
+	CP->>W: route -> worktree + task launch
+	W-->>D: question (attention state)
+	W->>GH: push branch, open PR
+	GH-->>CP: CI failed
+	CP->>W: same run, delta task
+	GH-->>D: CI green + preview healthy
+	D->>CP: Approve merge
+	CP->>GH: verify: merged ✓ CI-on-main ✓ deploy ✓`;
+		const message = ChatMessage.create(yoga, "sumo", "", undefined, FIXED_TIME, [{ type: "code", lang: "mermaid", source }]);
+
+		// The screenshot's 98-column message frame leaves 94 columns for art.
+		const plain = renderRows(message, 98).map(stripAnsi).join("\n");
+		expect(plain).toContain("Issue sources");
+		expect(plain).toContain("read sources");
+		expect(plain).toContain("verify: merged ✓ CI-on-main ✓ deploy ✓");
+		expect(plain).not.toContain("mermaid diagram not rendered:");
+		expect(plain).not.toContain("sequenceDiagram");
+		expect(plain).not.toContain("FA-");
+		expect(plain).not.toContain("W-");
+		message.dispose();
+	});
+
 	it("renders tall Mermaid diagrams that the old row limit rejected", async () => {
 		const yoga = await loadYoga();
 		const source = ["flowchart TD", ...Array.from({ length: 21 }, (_, index) => `N${index} --> N${index + 1}`)].join("\n");

@@ -26,15 +26,18 @@ const settledPayload = (snapshot: SubagentSnapshot): DeliveryPayload => {
 	const paneLine = snapshot.pane
 		? `Pane: ${snapshot.pane.paneId ?? snapshot.pane.tabId ?? snapshot.pane.workspaceId ?? "unknown"} · agent ${snapshot.pane.agentName}`
 		: undefined;
+	const roleLine = snapshot.roleId ? `Role: ${snapshot.roleId}` : undefined;
+	const metadata = [roleLine, paneLine].filter((line): line is string => line !== undefined).join("\n");
 	return {
 		id: snapshot.id,
 		title: snapshot.title,
 		status: snapshot.status,
-		content: paneLine ? `${result}\n\n${paneLine}` : result,
+		content: metadata ? `${result}\n\n${metadata}` : result,
 		details: {
 			id: snapshot.id,
 			title: snapshot.title,
 			status: snapshot.status,
+			...(snapshot.roleId ? { roleId: snapshot.roleId } : {}),
 			activity: activityFromSubagentSnapshot(snapshot),
 			manifest: snapshot.manifest,
 			...(snapshot.pane ? { pane: snapshot.pane } : {}),
@@ -81,6 +84,7 @@ export function installSubagents(pi: ExtensionAPI): SubagentManager {
 				model: task.model ?? inheritedModel,
 				thinking: task.thinking ?? task.inherited?.thinking,
 				tools: paneNarrowed ? paneBuiltIn : undefined,
+				appendSystemPrompt: task.appendSystemPrompt,
 				signal: task.signal,
 				host,
 				pi,
@@ -94,6 +98,7 @@ export function installSubagents(pi: ExtensionAPI): SubagentManager {
 			thinking: task.thinking,
 			inherited: task.inherited ?? {},
 			builtInTools: getBuiltInToolsFromActiveTools([...(task.builtInTools ?? [])]),
+			appendSystemPrompt: task.appendSystemPrompt,
 			signal: task.signal,
 		});
 	}, { terminalHost: host, pi });

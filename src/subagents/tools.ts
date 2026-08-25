@@ -7,6 +7,7 @@ import type { PaneRef, TerminalHost } from "../terminal-host/types.js";
 import { latestText, type SubagentSnapshot } from "./domain.js";
 import { type AtCapacityDetails, SubagentManager } from "./manager.js";
 import { formatCompletionManifestSummary, SUBAGENT_PROMPT_GUIDELINES, SUBAGENT_PROMPT_SNIPPET, SUBAGENT_TOOL_DESCRIPTIONS } from "./prompt.js";
+import { loadRoles } from "./roles.js";
 
 const StringEnum = <T extends readonly string[]>(values: T, options?: { description?: string }) =>
 	Type.Unsafe<T[number]>({
@@ -59,9 +60,10 @@ const formatDuration = (ms: number): string => {
 
 const formatSnapshotLine = (snapshot: SubagentSnapshot, includeBranch = false): string => {
 	const model = snapshot.modelLabel ?? "inherit";
+	const identity = [snapshot.roleId, model].filter((part): part is string => part !== undefined).join(", ");
 	const branch = includeBranch && snapshot.worktree ? ` · ${snapshot.worktree.branch}` : "";
 	const pane = snapshot.pane ? ` · pane ${snapshot.pane.paneId ?? snapshot.pane.tabId ?? snapshot.pane.workspaceId ?? "unknown"} · agent ${snapshot.pane.agentName}` : "";
-	return `${snapshot.id} [${snapshot.status}] "${snapshot.title}" (${model}, ${formatDuration(Date.now() - snapshot.createdAt)}, ${snapshot.cwd})${branch}${pane}`;
+	return `${snapshot.id} [${snapshot.status}] "${snapshot.title}" (${identity}, ${formatDuration(Date.now() - snapshot.createdAt)}, ${snapshot.cwd})${branch}${pane}`;
 };
 
 const manifestSummary = (snapshot: SubagentSnapshot): string | undefined => snapshot.manifest
@@ -91,7 +93,13 @@ export function registerSubagentTools(
 	manager: SubagentManager,
 	delivery?: Pick<DeferredResultDelivery, "consume">,
 	host: TerminalHost = getTerminalHost(),
+	roleLoader: typeof loadRoles = loadRoles,
 ): void {
+	const registeredRoles = roleLoader().roles;
+	const roleDescription = [
+		"Optional role preset. Explicit spawn parameters override role defaults. Known roles:",
+		...registeredRoles.map((role) => `${role.id} — ${role.description}`),
+	].join("\n");
 	pi.registerTool({
 		name: "subagent_spawn",
 		label: "Subagent Spawn",
@@ -101,6 +109,7 @@ export function registerSubagentTools(
 		parameters: Type.Object({
 			prompt: Type.String({ description: "Self-contained child subagent prompt." }),
 			name: Type.String({ description: "Short human-readable title for this subagent." }),
+			role: Type.Optional(Type.String({ description: roleDescription })),
 			model: Type.Optional(Type.String({ description: "Optional model override as provider/modelId." })),
 			thinking: Type.Optional(StringEnum(["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const, { description: "Optional thinking level override." })),
 			working_dir: Type.Optional(Type.String({ description: "Working directory for the child. Defaults to the current project cwd." })),
@@ -110,20 +119,38 @@ export function registerSubagentTools(
 			visible: Type.Optional(Type.Boolean({ description: "Open the child as an interactive pane in the terminal host — watchable and steerable; requires a running terminal host." })),
 		}),
 		async execute(toolCallId, params, _signal, _onUpdate, ctx) {
-			if (params.visible === true && host.kind === "none") {
+			const loadedRoles = roleLoader().roles;
+			const role = params.role ? loadedRoles.find((candidate) => candidate.id === params.role) : undefined;
+			if (params.role && !role) {
+				const knownRoles = loadedRoles.map((candidate) => candidate.id);
+				return makeToolResult(`Unknown subagent role: ${params.role}. Known roles: ${knownRoles.join(", ") || "(none)"}.`, {
+					action: "spawn",
+					status: "unknown_role",
+					role: params.role,
+					knownRoles,
+				});
+			}
+			const visible = params.visible ?? role?.defaultVisible;
+			if (visible === true && host.kind === "none") {
 				throw new Error("visible subagents require a running terminal host (herdr or cmux)");
 			}
+			const activeTools = pi.getActiveTools();
+			const builtInTools = role?.tools
+				? role.tools.filter((tool) => activeTools.includes(tool))
+				: activeTools;
 			const spawned = await manager.spawn({
 				sourceId: toolCallId,
 				prompt: params.prompt,
 				title: params.name,
 				cwd: params.working_dir ?? ctx.cwd,
-				visible: params.visible,
-				worktree: params.worktree,
+				roleId: role?.id,
+				appendSystemPrompt: role?.systemPrompt,
+				visible,
+				worktree: params.worktree ?? role?.defaultWorktree,
 				branch: params.branch,
 				baseRef: params.baseRef,
-				model: params.model,
-				thinking: params.thinking,
+				model: params.model ?? role?.model,
+				thinking: params.thinking ?? role?.thinking,
 				inherited: {
 					model: ctx.model ? { provider: ctx.model.provider, id: ctx.model.id } : undefined,
 					// Mirror native-task-tool.ts (`pi.getThinkingLevel()` at spawn time):
@@ -131,7 +158,7 @@ export function registerSubagentTools(
 					// call overrides it, instead of silently defaulting to "low".
 					thinking: pi.getThinkingLevel(),
 				},
-				builtInTools: pi.getActiveTools(),
+				builtInTools,
 			});
 			if (isAtCapacity(spawned)) return formatAtCapacity(spawned);
 			if (spawned.status !== "running") {

@@ -52,6 +52,7 @@ export interface SubagentSnapshot {
 	readonly sourceId?: string;
 	readonly title: string;
 	readonly prompt: string;
+	readonly roleId?: string;
 	readonly cwd: string;
 	readonly baseRef: string;
 	readonly worktree?: SubagentWorktreeRef;

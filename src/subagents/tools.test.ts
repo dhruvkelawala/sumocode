@@ -3,8 +3,9 @@ import { registerSubagentTools } from "./tools.js";
 import { SubagentManager, type SpawnSubagentTask } from "./manager.js";
 import type { SubagentEvent, SubagentSnapshot } from "./domain.js";
 import type { TerminalHost, TerminalHostKind } from "../terminal-host/types.js";
+import { loadRoles, type SubagentRole } from "./roles.js";
 
-const createHarness = (hostKind: TerminalHostKind = "herdr") => {
+const createHarness = (hostKind: TerminalHostKind = "herdr", roles?: readonly SubagentRole[]) => {
 	const registered: Array<{ name: string; parameters?: unknown; execute: (...args: unknown[]) => Promise<unknown> }> = [];
 	const emitters = new Map<string, (event: SubagentEvent) => void>();
 	const sendPaneText = vi.fn(async () => hostKind === "cmux"
@@ -21,14 +22,18 @@ const createHarness = (hostKind: TerminalHostKind = "herdr") => {
 	};
 	const piExec = { exec: vi.fn() } as never;
 	const createWorktree = vi.fn(async (options) => ({ ok: true as const, path: "/tmp/isolated", branch: options.branch ?? "sumo/task", baseRef: options.baseRef ?? "HEAD" }));
-	const manager = new SubagentManager((task: SpawnSubagentTask & { id: string }) => ({
-		events: (emit) => {
-			emitters.set(task.id, emit);
-			emit({ kind: "run-started" });
-			if (task.visible) emit({ kind: "pane-attached", pane: { agentName: "worker-abc", workspaceId: "w1", tabId: "w1:t1", paneId: "w1:p2" } });
-		},
-		interrupt: vi.fn(() => emitters.get(task.id)?.({ kind: "run-settled", outcome: { kind: "interrupted" } })),
-	}), {
+	const spawnedTasks: Array<SpawnSubagentTask & { id: string }> = [];
+	const manager = new SubagentManager((task: SpawnSubagentTask & { id: string }) => {
+		spawnedTasks.push(task);
+		return {
+			events: (emit) => {
+				emitters.set(task.id, emit);
+				emit({ kind: "run-started" });
+				if (task.visible) emit({ kind: "pane-attached", pane: { agentName: "worker-abc", workspaceId: "w1", tabId: "w1:t1", paneId: "w1:p2" } });
+			},
+			interrupt: vi.fn(() => emitters.get(task.id)?.({ kind: "run-settled", outcome: { kind: "interrupted" } })),
+		};
+	}, {
 		captureGitContext: async () => ({ repoRoot: "/tmp/project", baseRef: "base-ref" }),
 		createWorktree,
 		resolveWorktreeBaseRef: async () => "base-ref-sha",
@@ -47,10 +52,11 @@ const createHarness = (hostKind: TerminalHostKind = "herdr") => {
 		}),
 	});
 	const pi = { registerTool: vi.fn((tool) => registered.push(tool)), on: vi.fn(), getThinkingLevel: vi.fn(() => "medium"), getActiveTools: vi.fn(() => ["read", "bash"]) };
-	registerSubagentTools(pi as never, manager, undefined, host);
+	const roleLoader: typeof loadRoles = roles ? (() => ({ roles, warnings: [] })) : loadRoles;
+	registerSubagentTools(pi as never, manager, undefined, host, roleLoader);
 	const tool = (name: string) => registered.find((entry) => entry.name === name)!;
 	const ctx = { cwd: "/tmp/project", model: { provider: "openai", id: "gpt-5", thinkingLevel: "low" } };
-	return { registered, manager, emitters, tool, ctx, host, sendPaneText, createWorktree };
+	return { registered, manager, emitters, tool, ctx, host, sendPaneText, createWorktree, spawnedTasks };
 };
 
 const textOf = (result: unknown): string => ((result as { content: Array<{ text: string }> }).content[0].text);
@@ -62,6 +68,53 @@ describe("subagent tools", () => {
 		const spawnSchema = JSON.stringify(tool("subagent_spawn").parameters);
 		expect(spawnSchema).toContain("visible");
 		expect(spawnSchema).toContain("baseRef");
+	});
+
+	it("enumerates loaded roles in the spawn schema", () => {
+		const role: SubagentRole = { id: "audit", label: "Audit", description: "use for audits", systemPrompt: "audit carefully" };
+		const { tool } = createHarness("herdr", [role]);
+		const spawnSchema = JSON.stringify(tool("subagent_spawn").parameters);
+		expect(spawnSchema).toContain("audit — use for audits");
+		expect(spawnSchema).toContain("Explicit spawn parameters override role defaults");
+	});
+
+	it("applies role defaults, preserves explicit precedence, and only narrows parent tools", async () => {
+		const role: SubagentRole = {
+			id: "audit",
+			label: "Audit",
+			description: "use for audits",
+			systemPrompt: "audit carefully",
+			model: "anthropic/role-model",
+			thinking: "high",
+			tools: ["read", "edit"],
+			defaultVisible: false,
+		};
+		const { tool, ctx, manager, spawnedTasks } = createHarness("herdr", [role]);
+		await tool("subagent_spawn").execute("tc", {
+			prompt: "audit it",
+			name: "auditor",
+			role: "audit",
+			model: "openai/explicit",
+			thinking: "minimal",
+		}, undefined, undefined, ctx as never);
+
+		expect(spawnedTasks[0]).toMatchObject({
+			roleId: "audit",
+			appendSystemPrompt: "audit carefully",
+			model: "openai/explicit",
+			thinking: "minimal",
+			builtInTools: ["read"],
+		});
+		expect(manager.get("sa-1")).toMatchObject({ roleId: "audit", modelLabel: "openai/explicit", thinkingLabel: "minimal" });
+	});
+
+	it("returns an inline error for an unknown role", async () => {
+		const role: SubagentRole = { id: "audit", label: "Audit", description: "use for audits", systemPrompt: "audit carefully" };
+		const { tool, ctx, manager } = createHarness("herdr", [role]);
+		const result = await tool("subagent_spawn").execute("tc", { prompt: "do it", name: "worker", role: "missing" }, undefined, undefined, ctx as never);
+		expect(textOf(result)).toBe("Unknown subagent role: missing. Known roles: audit.");
+		expect(result).toMatchObject({ details: { action: "spawn", status: "unknown_role", knownRoles: ["audit"] } });
+		expect(manager.list()).toEqual([]);
 	});
 
 	it("spawn returns an id and automatic-delivery guidance", async () => {

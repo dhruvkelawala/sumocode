@@ -144,6 +144,32 @@ describe("spawnPiChild", () => {
 		expect(events.at(-1)).toEqual({ kind: "run-settled", outcome: { kind: "failed", errorText: "boom", partialText: undefined } });
 	});
 
+	it("appends role system instructions after task args and before the prompt", () => {
+		const proc = new FakeProcess();
+		const spawn = vi.fn(() => proc);
+		const child = createPiChildSpawner(spawn as never, () => undefined)({
+			prompt: "do work",
+			cwd: "/tmp",
+			inherited: {},
+			appendSystemPrompt: "review carefully",
+		});
+		collect(child.events as (emit: (event: SubagentEvent) => void) => void);
+		const args = (spawn.mock.calls[0] as unknown[])[1] as string[];
+		const appendIndex = args.indexOf("--append-system-prompt");
+		expect(appendIndex).toBeGreaterThan(args.indexOf("--tools"));
+		expect(args[appendIndex + 1]).toBe("review carefully");
+		expect(args.at(-1)).toBe("do work");
+	});
+
+	it("omits role system instructions when none are configured", () => {
+		const proc = new FakeProcess();
+		const spawn = vi.fn(() => proc);
+		const child = createPiChildSpawner(spawn as never, () => undefined)({ prompt: "x", cwd: "/tmp", inherited: {} });
+		collect(child.events as (emit: (event: SubagentEvent) => void) => void);
+		const args = (spawn.mock.calls[0] as unknown[])[1] as string[];
+		expect(args).not.toContain("--append-system-prompt");
+	});
+
 	it("injects the claude-oauth adapter via -e when the resolver finds it", () => {
 		const proc = new FakeProcess();
 		const spawn = vi.fn(() => proc);

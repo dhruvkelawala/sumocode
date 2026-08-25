@@ -36,6 +36,8 @@ export interface SpawnSubagentTask {
 	readonly sourceId?: string;
 	readonly prompt: string;
 	readonly title: string;
+	readonly roleId?: string;
+	readonly appendSystemPrompt?: string;
 	readonly cwd: string;
 	readonly visible?: boolean;
 	readonly worktree?: boolean;
@@ -102,6 +104,7 @@ const makeInitialSnapshot = (
 	...(task.sourceId ? { sourceId: task.sourceId } : {}),
 	title: task.title,
 	prompt: task.prompt,
+	...(task.roleId ? { roleId: task.roleId } : {}),
 	cwd,
 	baseRef,
 	worktree,

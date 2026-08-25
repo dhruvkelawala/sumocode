@@ -6149,10 +6149,14 @@ async function listWorkspacePanes(pi, workspaceId) {
 async function paneForTab(pi, tabId) {
   const workspaceId = tabId.split(":")[0];
   if (!workspaceId) return { ok: false, error: `invalid herdr tab id: ${tabId}` };
-  const listed = await listWorkspacePanes(pi, workspaceId);
-  if (!listed.ok) return listed;
-  const pane = listed.panes.find((candidate) => candidate.tab_id === tabId);
-  return pane?.pane_id ? { ok: true, pane } : { ok: false, error: `herdr returned no pane for tab ${tabId}` };
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const listed = await listWorkspacePanes(pi, workspaceId);
+    if (!listed.ok) return listed;
+    const pane = listed.panes.find((candidate) => candidate.tab_id === tabId);
+    if (pane?.pane_id) return { ok: true, pane };
+    if (attempt < 3) await new Promise((resolve8) => setTimeout(resolve8, 25));
+  }
+  return { ok: false, error: `herdr returned no pane for tab ${tabId}` };
 }
 function paneTargetArgs(target) {
   return target.kind === "current" ? ["--current"] : [target.paneId];
@@ -14784,8 +14788,8 @@ var MAX_PANES_PER_TAB = 4;
 var splitDirection = (paneCount) => paneCount % 2 === 0 ? "right" : "down";
 function planPlacement(input) {
   if (input.hostKind !== "herdr") return { kind: "fallback-split", direction: "right" };
-  if (input.isolated) return { kind: "workspace" };
   if (!input.sessionTabId) {
+    if (input.isolated) return { kind: "workspace" };
     const tabNumber = Math.floor(input.visiblePanes.length / MAX_PANES_PER_TAB) + 1;
     return { kind: "new-tab", label: tabNumber === 1 ? "subagents" : `subagents ${tabNumber}` };
   }
@@ -14919,6 +14923,8 @@ var SubagentManager = class {
     this.buildCompletionManifestImpl = dependencies.buildCompletionManifest ?? buildCompletionManifest;
     this.terminalHost = dependencies.terminalHost;
     this.pi = dependencies.pi;
+    this.initialVisibleTabId = dependencies.initialVisibleTabId;
+    this.subagentsTabId = this.initialVisibleTabId;
   }
   backendFactory;
   nextId = 1;
@@ -14934,6 +14940,7 @@ var SubagentManager = class {
   buildCompletionManifestImpl;
   terminalHost;
   pi;
+  initialVisibleTabId;
   subagentsTabId;
   visibleSpawnTail = Promise.resolve();
   dequeueTail = Promise.resolve();
@@ -15051,7 +15058,7 @@ var SubagentManager = class {
           // panes stay open for inspection and still occupy tab real estate.
           // Over-counting an already-closed pane merely opens a fresh tab
           // earlier — the conservative failure mode.
-          visiblePanes: this.list().flatMap((snapshot2) => snapshot2.visible && !snapshot2.worktree && snapshot2.pane ? [snapshot2.pane] : []),
+          visiblePanes: this.list().flatMap((snapshot2) => snapshot2.visible && snapshot2.pane ? [snapshot2.pane] : []),
           sessionTabId: this.subagentsTabId
         });
         if (planned.kind === "workspace") {
@@ -15259,7 +15266,7 @@ var SubagentManager = class {
     if (event.kind === "run-settled") {
       const settling = this.snapshots.get(id);
       if (event.outcome.kind === "failed" && settling?.visible && !settling.worktree && !settling.pane && this.subagentsTabId !== void 0) {
-        this.subagentsTabId = void 0;
+        this.subagentsTabId = this.initialVisibleTabId;
       }
       void this.startSettle(id, event.outcome);
       return;
@@ -15268,7 +15275,7 @@ var SubagentManager = class {
     if (!current) return;
     if (event.kind === "pane-attached") {
       this.snapshots.set(id, { ...current, pane: event.pane });
-      if (!current.worktree && event.pane.tabId) this.subagentsTabId = event.pane.tabId;
+      if (event.pane.tabId) this.subagentsTabId = event.pane.tabId;
       this.notify();
       return;
     }
@@ -15445,12 +15452,12 @@ var SUBAGENT_PROMPT_GUIDELINES = [
   "Use visible subagents for long or interactive work the human may want to watch or steer; use headless subagents for silent, bounded fan-out.",
   "All children have their own context, cannot see this conversation, and cannot spawn subagents; prompts must be self-contained with objective, paths, constraints, expected output, and stop conditions.",
   "Use subagent_send to steer a running visible child; it sends the text followed by Enter. Headless or settled children cannot receive input.",
-  "Visible isolated children appear as herdr workspaces; non-isolated visible children tile into a subagents tab. cmux provides only a degraded single-split fallback.",
+  "Visible Herdr children split beside the parent when its tab is available, including worktree-backed children; overflow falls back to subagent tabs/workspaces. cmux provides only a degraded single-split fallback.",
   "delegation is fire-and-forget: after spawning, continue other work or end your turn. settled results arrive as automatic follow-up messages that wake you. do NOT call subagent_wait right after subagent_spawn.",
   "spawn with a role for recurring shapes: research, review, documentor, designer, implement-cheap, implement-smart. the role sets the child's system prompt, tool limits, and defaults; your prompt supplies the concrete objective and stop conditions.",
   "if spawn returns status=queued, the child starts automatically when a slot frees \u2014 do not retry, do not wait.",
   `At most ${SUBAGENT_MAX_RUNNING} subagents can run concurrently. If spawn returns status=at_capacity, the queue is full; cancel something or end your turn and respawn later.`,
-  "To delegate a self-contained coding task, spawn an isolated, watchable child: `subagent_spawn { visible: true, worktree: true, model, baseRef: 'origin/main' }`. It branches `sumo/<slug>` from baseRef, opens a herdr workspace you can watch or steer, and returns a completion manifest to review before acting on the result.",
+  "To delegate a self-contained coding task, spawn an isolated, watchable child: `subagent_spawn { visible: true, worktree: true, model, baseRef: 'origin/main' }`. It branches `sumo/<slug>` from baseRef, opens beside the parent when possible (otherwise in a Herdr workspace), and returns a completion manifest to review before acting on the result.",
   "Headless children run WITHOUT the dangerous-command approval gate (same trust model as the native task tool): they cannot prompt the user, so their bash executes directly. Do not delegate destructive commands against the user's checkout; use worktree isolation for write-heavy work. Isolated worktrees are preserved after completion and never auto-removed."
 ];
 var SUBAGENT_PROMPT_SNIPPET = "Spawn, steer, check, wait for, cancel, and list headless or visible subagents with self-contained prompts.";
@@ -15789,7 +15796,14 @@ function installSubagents(pi) {
       appendSystemPrompt: task.appendSystemPrompt,
       signal: task.signal
     });
-  }, { terminalHost: host, pi });
+  }, {
+    terminalHost: host,
+    pi,
+    // Herdr injects the caller tab into the RPC child. Seed visible placement
+    // with it so the first child is actually beside the operator instead of
+    // disappearing into a background `subagents` tab.
+    initialVisibleTabId: host.kind === "herdr" ? process.env.HERDR_TAB_ID : void 0
+  });
   const delivery = createDeferredResultDelivery();
   const observedSettledIds = /* @__PURE__ */ new Set();
   let latestContext;
@@ -15814,14 +15828,16 @@ function installSubagents(pi) {
         ageMs: Math.max(0, now - snapshot.createdAt)
       }));
       const queuedCount = active.length - running.length;
-      ctx.ui.setWidget(
-        SUBAGENT_STATUS_WIDGET_KEY,
-        () => ({
-          invalidate: () => void 0,
-          render: (width) => renderSubagentStatusRow({ width, running, queuedCount })
-        }),
-        { placement: "aboveEditor" }
-      );
+      const render = (width) => renderSubagentStatusRow({ width, running, queuedCount });
+      if (ctx.mode === "rpc") {
+        ctx.ui.setWidget(SUBAGENT_STATUS_WIDGET_KEY, render(240), { placement: "aboveEditor" });
+      } else {
+        ctx.ui.setWidget(
+          SUBAGENT_STATUS_WIDGET_KEY,
+          () => ({ invalidate: () => void 0, render }),
+          { placement: "aboveEditor" }
+        );
+      }
       statusWidgetVisible = true;
     } catch {
     }

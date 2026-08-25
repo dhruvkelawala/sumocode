@@ -72,7 +72,7 @@ vi.mock("./backend-pi.js", () => ({
 type Handler = (event: unknown, ctx: unknown) => void;
 type Tool = { name: string; execute: (...args: unknown[]) => Promise<unknown> };
 
-const createHarness = (hasUI = false) => {
+const createHarness = (hasUI = false, mode: "tui" | "rpc" = "tui") => {
 	let idle = true;
 	const handlers = new Map<string, Handler[]>();
 	const tools = new Map<string, Tool>();
@@ -88,6 +88,7 @@ const createHarness = (hasUI = false) => {
 	const manager = installSubagents(pi as never);
 	const ctx = {
 		cwd: "/tmp/project",
+		mode,
 		model: { provider: "openai", id: "gpt-5" },
 		isIdle: () => idle,
 		hasUI,
@@ -131,6 +132,17 @@ describe("subagent result delivery", () => {
 		backend.emitters[0]?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
 		await vi.waitFor(() => expect(harness.manager.get("sa-1")?.status).toBe("done"));
 		expect(harness.setWidget).toHaveBeenLastCalledWith("sumocode-subagents", undefined, { placement: "aboveEditor" });
+	});
+
+	it("publishes pre-rendered lines in RPC because component factories are unsupported", async () => {
+		const harness = createHarness(true, "rpc");
+		harness.fire("session_start");
+		await spawn(harness.manager, "research");
+
+		const widget = harness.setWidget.mock.calls.at(-1)?.[1];
+		expect(Array.isArray(widget)).toBe(true);
+		expect((widget as string[]).join("\n")).toContain("1 running");
+		expect((widget as string[]).join("\n")).toContain("sa-1 research");
 	});
 
 	it("renders queued count and clears the widget on shutdown", async () => {

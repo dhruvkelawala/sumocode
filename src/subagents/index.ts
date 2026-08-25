@@ -104,7 +104,14 @@ export function installSubagents(pi: ExtensionAPI): SubagentManager {
 			appendSystemPrompt: task.appendSystemPrompt,
 			signal: task.signal,
 		});
-	}, { terminalHost: host, pi });
+	}, {
+		terminalHost: host,
+		pi,
+		// Herdr injects the caller tab into the RPC child. Seed visible placement
+		// with it so the first child is actually beside the operator instead of
+		// disappearing into a background `subagents` tab.
+		initialVisibleTabId: host.kind === "herdr" ? process.env.HERDR_TAB_ID : undefined,
+	});
 	const delivery = createDeferredResultDelivery();
 	const observedSettledIds = new Set<string>();
 	let latestContext: ExtensionContext | undefined;
@@ -132,14 +139,20 @@ export function installSubagents(pi: ExtensionAPI): SubagentManager {
 					ageMs: Math.max(0, now - snapshot.createdAt),
 				}));
 			const queuedCount = active.length - running.length;
-			ctx.ui.setWidget(
-				SUBAGENT_STATUS_WIDGET_KEY,
-				() => ({
-					invalidate: () => undefined,
-					render: (width: number) => renderSubagentStatusRow({ width, running, queuedCount }),
-				}),
-				{ placement: "aboveEditor" },
-			);
+			const render = (width: number) => renderSubagentStatusRow({ width, running, queuedCount });
+			// Pi RPC supports setWidget string arrays only; component factories are
+			// silently ignored (docs/rpc.md, Extension UI Protocol). Render a bounded
+			// line in the child and let the retained host clip it to the real viewport.
+			// TUI mode keeps the width-aware factory path.
+			if (ctx.mode === "rpc") {
+				ctx.ui.setWidget(SUBAGENT_STATUS_WIDGET_KEY, render(240), { placement: "aboveEditor" });
+			} else {
+				ctx.ui.setWidget(
+					SUBAGENT_STATUS_WIDGET_KEY,
+					() => ({ invalidate: () => undefined, render }),
+					{ placement: "aboveEditor" },
+				);
+			}
 			statusWidgetVisible = true;
 		} catch {
 			// Settlement delivery must survive UI adapter failures.

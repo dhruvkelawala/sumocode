@@ -65,6 +65,8 @@ export interface SubagentManagerDependencies {
 	readonly buildCompletionManifest?: typeof buildCompletionManifest;
 	readonly terminalHost?: TerminalHost;
 	readonly pi?: PiExecLike;
+	/** Parent Herdr tab injected into the RPC child; first visible pane splits here. */
+	readonly initialVisibleTabId?: string;
 }
 
 async function gitRead(cwd: string, args: readonly string[]): Promise<string | undefined> {
@@ -141,6 +143,7 @@ export class SubagentManager {
 	private readonly buildCompletionManifestImpl: typeof buildCompletionManifest;
 	private readonly terminalHost?: TerminalHost;
 	private readonly pi?: PiExecLike;
+	private readonly initialVisibleTabId?: string;
 	private subagentsTabId?: string;
 	private visibleSpawnTail: Promise<void> = Promise.resolve();
 	private dequeueTail: Promise<void> = Promise.resolve();
@@ -157,6 +160,8 @@ export class SubagentManager {
 		this.buildCompletionManifestImpl = dependencies.buildCompletionManifest ?? buildCompletionManifest;
 		this.terminalHost = dependencies.terminalHost;
 		this.pi = dependencies.pi;
+		this.initialVisibleTabId = dependencies.initialVisibleTabId;
+		this.subagentsTabId = this.initialVisibleTabId;
 	}
 
 	public async spawn(task: SpawnSubagentTask): Promise<SubagentSnapshot | AtCapacityDetails> {
@@ -284,7 +289,7 @@ export class SubagentManager {
 					// panes stay open for inspection and still occupy tab real estate.
 					// Over-counting an already-closed pane merely opens a fresh tab
 					// earlier — the conservative failure mode.
-					visiblePanes: this.list().flatMap((snapshot) => snapshot.visible && !snapshot.worktree && snapshot.pane ? [snapshot.pane] : []),
+					visiblePanes: this.list().flatMap((snapshot) => snapshot.visible && snapshot.pane ? [snapshot.pane] : []),
 					sessionTabId: this.subagentsTabId,
 				});
 				if (planned.kind === "workspace") {
@@ -535,7 +540,7 @@ export class SubagentManager {
 				!settling.pane &&
 				this.subagentsTabId !== undefined
 			) {
-				this.subagentsTabId = undefined;
+				this.subagentsTabId = this.initialVisibleTabId;
 			}
 			void this.startSettle(id, event.outcome);
 			return;
@@ -544,7 +549,7 @@ export class SubagentManager {
 		if (!current) return;
 		if (event.kind === "pane-attached") {
 			this.snapshots.set(id, { ...current, pane: event.pane });
-			if (!current.worktree && event.pane.tabId) this.subagentsTabId = event.pane.tabId;
+			if (event.pane.tabId) this.subagentsTabId = event.pane.tabId;
 			this.notify();
 			return;
 		}

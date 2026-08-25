@@ -11,8 +11,7 @@ describe("subagent prompt guidance", () => {
 		const guidance = SUBAGENT_PROMPT_GUIDELINES.join("\n");
 		expect(guidance).toContain("Use visible subagents for long or interactive work");
 		expect(guidance).toContain("use headless subagents for silent, bounded fan-out");
-		expect(guidance).toContain("Visible isolated children appear as herdr workspaces");
-		expect(guidance).toContain("non-isolated visible children tile into a subagents tab");
+		expect(guidance).toContain("Visible Herdr children split beside the parent when its tab is available");
 		expect(SUBAGENT_PROMPT_SNIPPET).toContain("visible subagents");
 	});
 

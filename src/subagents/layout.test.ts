@@ -15,8 +15,13 @@ describe("planPlacement", () => {
 		expect(planPlacement({ hostKind, isolated: true, visiblePanes: [] })).toEqual({ kind: "fallback-split", direction: "right" });
 	});
 
-	it("classifies isolated herdr children as workspace placements", () => {
+	it("uses a workspace for isolated Herdr children only when no caller tab is available", () => {
 		expect(planPlacement({ hostKind: "herdr", isolated: true, visiblePanes: [] })).toEqual({ kind: "workspace" });
+		expect(planPlacement({ hostKind: "herdr", isolated: true, visiblePanes: [], sessionTabId: "w1:t1" })).toEqual({
+			kind: "tab",
+			tabId: "w1:t1",
+			direction: "right",
+		});
 	});
 
 	it("creates the first subagents tab when no session tab exists", () => {

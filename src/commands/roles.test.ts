@@ -29,7 +29,7 @@ function queuedPalette(selections: Array<string | undefined>, calls: SearchPalet
 }
 
 	describe("runRolesCommand", () => {
-	it("lists one summary row per role plus the two actions on surface 1", async () => {
+	it("lists exactly one summary row per role on surface 1", async () => {
 		const calls: SearchPaletteOptions[] = [];
 		await runRolesCommand(commandDeps({
 			loadRoles: () => ({ roles: BUILT_IN_ROLES, warnings: [] }),

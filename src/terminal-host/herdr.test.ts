@@ -115,6 +115,31 @@ describe("herdrTerminalHost", () => {
 		expect(exec).toHaveBeenNthCalledWith(3, "herdr", ["pane", "run", "w3:p4", "run child"], { timeout: 5000 });
 	});
 
+	it("retries a just-created tab until its root pane becomes listable", async () => {
+		let lists = 0;
+		const exec = vi.fn(async (_bin: string, args: string[]) => {
+			if (args[0] === "tab") return { stdout: JSON.stringify({ result: { tab_id: "w5:t8" } }), stderr: "", code: 0, killed: false };
+			if (args[1] === "list") {
+				lists += 1;
+				return {
+					stdout: JSON.stringify({ result: { panes: lists === 1 ? [] : [{ pane_id: "w5:p9", workspace_id: "w5", tab_id: "w5:t8" }] } }),
+					stderr: "",
+					code: 0,
+					killed: false,
+				};
+			}
+			return { stdout: JSON.stringify({ result: { type: "ok" } }), stderr: "", code: 0, killed: false };
+		});
+
+		await expect(herdrTerminalHost.startAgentPane({ exec } as never, {
+			name: "research",
+			cwd: "/repo",
+			shellCommand: "run child",
+			placement: { kind: "new-tab", label: "subagents" },
+		})).resolves.toMatchObject({ ok: true, tabId: "w5:t8", paneId: "w5:p9" });
+		expect(lists).toBe(2);
+	});
+
 	it("creates a no-focus tab with a root pane for the first child", async () => {
 		vi.stubEnv("HERDR_PANE_ID", "");
 		const exec = vi.fn(async (_bin: string, args: string[]) => args[0] === "tab"

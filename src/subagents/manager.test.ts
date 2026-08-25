@@ -382,6 +382,56 @@ describe("SubagentManager", () => {
 		expect(backendFactory).toHaveBeenCalledWith(expect.objectContaining({ cwd: "/isolated/worktree/packages/api" }));
 	});
 
+	it("splits the first visible child beside the parent when its Herdr tab is known", async () => {
+		const backendFactory = vi.fn(() => ({ events: () => undefined, interrupt: () => undefined }));
+		const host: TerminalHost = {
+			kind: "herdr",
+			openCommandInSplit: vi.fn(),
+			closePane: vi.fn(),
+			notify: vi.fn(),
+		};
+		const manager = new SubagentManager(backendFactory, {
+			captureGitContext: async () => ({ repoRoot: "/repo", baseRef: "abc123" }),
+			terminalHost: host,
+			pi: { exec: vi.fn() } as never,
+			initialVisibleTabId: "w1:t1",
+		});
+
+		await manager.spawn({ prompt: "p", title: "visible", cwd: "/repo", visible: true });
+
+		expect(backendFactory).toHaveBeenCalledWith(expect.objectContaining({
+			placement: { kind: "tab", tabId: "w1:t1", direction: "right" },
+		}));
+	});
+
+	it("runs a worktree-backed visible child beside the parent when its Herdr tab is known", async () => {
+		const backendFactory = vi.fn(() => ({ events: () => undefined, interrupt: () => undefined }));
+		const openExistingWorktreeWorkspace = vi.fn();
+		const host: TerminalHost = {
+			kind: "herdr",
+			openCommandInSplit: vi.fn(),
+			openExistingWorktreeWorkspace,
+			closePane: vi.fn(),
+			notify: vi.fn(),
+		};
+		const manager = new SubagentManager(backendFactory, {
+			captureGitContext: async () => ({ repoRoot: "/repo", baseRef: "abc123" }),
+			createWorktree: async () => ({ ok: true, path: "/isolated/worktree", branch: "sumo/demo", baseRef: "abc123" }),
+			resolveWorktreeBaseRef: async () => "abc123",
+			terminalHost: host,
+			pi: { exec: vi.fn() } as never,
+			initialVisibleTabId: "w1:t1",
+		});
+
+		await manager.spawn({ prompt: "p", title: "visible", cwd: "/repo", visible: true, worktree: true });
+
+		expect(openExistingWorktreeWorkspace).not.toHaveBeenCalled();
+		expect(backendFactory).toHaveBeenCalledWith(expect.objectContaining({
+			cwd: "/isolated/worktree",
+			placement: { kind: "tab", tabId: "w1:t1", direction: "right" },
+		}));
+	});
+
 	it("stores the first visible tab id and reuses it for later placement", async () => {
 		const backendTasks: Array<SpawnSubagentTask & { placement?: unknown }> = [];
 		const host: TerminalHost = {

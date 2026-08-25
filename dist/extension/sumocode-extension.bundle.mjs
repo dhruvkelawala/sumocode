@@ -5274,7 +5274,7 @@ function renderPalette(options, state, width) {
   lines.push(panelLine("", w));
   lines.push(panelLine(center2(`${dividerText(halfRule)}  ${dividerText("\xB7")}  ${dividerText(halfRule)}`, w), w));
   lines.push(panelLine("", w));
-  lines.push(panelLine(`     ${accent2("\u276F")}  ${cursorCell()}${state.searchQuery.length > 0 ? foreground(searchText) : dim2(searchText)}`, w));
+  lines.push(panelLine(state.searchQuery.length > 0 ? `     ${accent2("\u276F")}  ${foreground(searchText)}${cursorCell()}` : `     ${accent2("\u276F")}  ${cursorCell()}${dim2(searchText)}`, w));
   lines.push(panelLine("", w));
   if (filtered.length === 0) {
     lines.push(panelLine(`     ${dividerText("\xB7")}   ${dim2("no matching option")}`, w));
@@ -5671,7 +5671,7 @@ function renderCommandPalette(snapshot, width, renderOptions = {}) {
   lines.push(panelLine2("", w));
   lines.push(panelLine2(center3(`${dividerText2(halfRule)}  ${dividerText2("\xB7")}  ${dividerText2(halfRule)}`, w), w));
   lines.push(panelLine2("", w));
-  lines.push(panelLine2(`     ${accent3("\u276F")}  ${cursorCell2()}${snapshot.searchQuery.length > 0 ? foreground2(searchText) : dim3(searchText)}`, w));
+  lines.push(panelLine2(snapshot.searchQuery.length > 0 ? `     ${accent3("\u276F")}  ${foreground2(searchText)}${cursorCell2()}` : `     ${accent3("\u276F")}  ${cursorCell2()}${dim3(searchText)}`, w));
   lines.push(panelLine2("", w));
   if (rows.length === 0) {
     lines.push(panelLine2(`     ${dividerText2("\xB7")}   ${dim3(renderOptions.emptyText ?? "no matching command")}`, w));

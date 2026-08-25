@@ -131,7 +131,10 @@ function renderPalette(options: Pick<SearchPaletteOptions, "title" | "placeholde
 	lines.push(panelLine("", w));
 	lines.push(panelLine(center(`${dividerText(halfRule)}  ${dividerText("·")}  ${dividerText(halfRule)}`, w), w));
 	lines.push(panelLine("", w));
-	lines.push(panelLine(`     ${accent("❯")}  ${cursorCell()}${state.searchQuery.length > 0 ? foreground(searchText) : dim(searchText)}`, w));
+	// Caret trails the typed query (❯ res█); leads the placeholder when empty.
+	lines.push(panelLine(state.searchQuery.length > 0
+		? `     ${accent("❯")}  ${foreground(searchText)}${cursorCell()}`
+		: `     ${accent("❯")}  ${cursorCell()}${dim(searchText)}`, w));
 	lines.push(panelLine("", w));
 
 	if (filtered.length === 0) {

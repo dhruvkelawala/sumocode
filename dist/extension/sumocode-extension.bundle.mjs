@@ -5016,7 +5016,6 @@ function registerSumoReloadCommand(pi, deps = {}) {
 // src/commands/roles.ts
 import { existsSync as existsSync2, mkdirSync as mkdirSync3, readFileSync as readFileSync5, writeFileSync as writeFileSync3 } from "node:fs";
 import { dirname as dirname2 } from "node:path";
-import { spawnSync } from "node:child_process";
 
 // src/subagents/roles.ts
 import { readFileSync as readFileSync4 } from "node:fs";
@@ -5365,10 +5364,6 @@ async function showSearchPalette(ctx, options) {
 }
 
 // src/commands/roles.ts
-var OPEN_ACTION_ID = "action:open";
-var RESET_ACTION_ID = "action:reset";
-var OPEN_ACTION = "open roles.json in $EDITOR";
-var RESET_ACTION = "reset a role to built-in\u2026";
 var READ_ONLY_TOOLS = ["read", "grep", "find", "ls", "bash"];
 var THINKING_LEVELS2 = ["inherit", "off", "minimal", "low", "medium", "high", "xhigh", "max"];
 var errorText = (error) => error instanceof Error ? error.message : String(error);
@@ -5379,21 +5374,6 @@ async function writeMutation(deps, mutation) {
   } catch (error) {
     return { kind: "error", opened: false, message: `unable to update roles.json: ${errorText(error)}` };
   }
-}
-async function openRolesEditor(deps) {
-  if (deps.editorUnavailable) {
-    return {
-      kind: "instructions",
-      opened: false,
-      message: `roles file: ${deps.rolesPath} \u2014 ${deps.editorUnavailable}`
-    };
-  }
-  const ensured = await writeMutation(deps, { kind: "ensure" });
-  if (ensured) return ensured;
-  const outcome = await deps.openEditor(deps.rolesPath);
-  if (outcome.status === 0) return { kind: "success", opened: true, message: "role updated \u2014 applies to the next spawn" };
-  if (outcome.error) return { kind: "error", opened: true, message: `failed to launch editor: ${outcome.error}` };
-  return { kind: "error", opened: true, message: `editor exited with code ${outcome.status}` };
 }
 function sameTools(actual, expected) {
   return actual.length === expected.length && actual.every((tool, index) => tool === expected[index]);
@@ -5419,11 +5399,7 @@ function roleSummary(role) {
   return `${role.model ?? "inherit"} \xB7 ${role.thinking ?? "inherit"} \xB7 ${worktree}`;
 }
 function roleListRows(roles) {
-  return [
-    ...roles.map((role) => ({ id: `role:${role.id}`, label: role.id, value: roleSummary(role) })),
-    { id: OPEN_ACTION_ID, label: OPEN_ACTION, value: "" },
-    { id: RESET_ACTION_ID, label: RESET_ACTION, value: "" }
-  ];
+  return roles.map((role) => ({ id: `role:${role.id}`, label: role.id, value: roleSummary(role) }));
 }
 function roleFieldRows(role) {
   const rows = [];
@@ -5498,7 +5474,7 @@ async function chooseMutation(deps, selection) {
       value: value === "inherit default" ? void 0 : value === "true"
     };
   }
-  return { kind: "set-if-absent", roleId: role.id, field: "systemPrompt", value: role.systemPrompt };
+  return void 0;
 }
 var successResult = (opened) => ({
   kind: "success",
@@ -5522,24 +5498,6 @@ async function runRolesCommand(deps) {
       rows: roleListRows(roles)
     });
     if (selectedRole === void 0) return latestResult;
-    if (selectedRole === OPEN_ACTION_ID) {
-      const result = await openRolesEditor(deps);
-      if (result.kind === "error") return result;
-      latestResult = result;
-      continue;
-    }
-    if (selectedRole === RESET_ACTION_ID) {
-      const roleId2 = await deps.showPalette({
-        title: "RESET ROLE TO BUILT-IN",
-        placeholder: "choose a role\u2026",
-        rows: BUILT_IN_ROLES.map((role2) => ({ id: role2.id, label: role2.id, value: role2.label }))
-      });
-      if (roleId2 === void 0) continue;
-      const failed = await writeMutation(deps, { kind: "reset", roleId: roleId2 });
-      if (failed) return failed;
-      latestResult = successResult(false);
-      continue;
-    }
     const roleId = selectedRole.startsWith("role:") ? selectedRole.slice("role:".length) : void 0;
     const role = roles.find((candidate) => candidate.id === roleId);
     if (!role) continue;
@@ -5553,17 +5511,19 @@ async function runRolesCommand(deps) {
       if (selected === void 0) break;
       const fieldSelection = surface.selections.get(selected);
       if (!fieldSelection) break;
+      if (fieldSelection.field === "systemPrompt") {
+        latestResult = {
+          kind: "instructions",
+          opened: false,
+          message: `role system prompts live in ${deps.rolesPath} under "systemPrompt" \u2014 edit the file directly; changes apply to the next spawn`
+        };
+        continue;
+      }
       const mutation = await chooseMutation(deps, fieldSelection);
       if (!mutation) continue;
       const failed = await writeMutation(deps, mutation);
       if (failed) return failed;
-      if (fieldSelection.field === "systemPrompt") {
-        const result = await openRolesEditor(deps);
-        if (result.kind === "error") return result;
-        latestResult = result;
-      } else {
-        latestResult = successResult(false);
-      }
+      latestResult = successResult(false);
     }
   }
 }
@@ -5581,18 +5541,10 @@ function readRolesDocument(path2) {
 }
 function writeRolesFile(path2, mutation) {
   const document = readRolesDocument(path2);
-  if (mutation.kind === "reset") {
-    document.roles = document.roles.filter((role) => role.id !== mutation.roleId);
-  } else if (mutation.kind === "set" || mutation.kind === "set-if-absent") {
-    let overlay = document.roles.find((role) => role.id === mutation.roleId);
-    if (!overlay) {
-      overlay = { id: mutation.roleId };
-      document.roles.push(overlay);
-    }
-    if (mutation.kind === "set-if-absent" && Object.prototype.hasOwnProperty.call(overlay, mutation.field)) {
-    } else if (mutation.value === void 0) delete overlay[mutation.field];
-    else overlay[mutation.field] = mutation.value;
-  }
+  const overlay = document.roles.find((role) => role.id === mutation.roleId);
+  if (overlay && mutation.value === void 0) delete overlay[mutation.field];
+  else if (overlay) overlay[mutation.field] = mutation.value;
+  else document.roles.push({ id: mutation.roleId, [mutation.field]: mutation.value });
   mkdirSync3(dirname2(path2), { recursive: true });
   writeFileSync3(path2, `${JSON.stringify(document, null, 2)}
 `, { mode: 384 });
@@ -5607,15 +5559,6 @@ function notify2(ctx, result) {
   stream.write(`${result.message}
 `);
 }
-function parseEditorCommand(editor) {
-  const parts = editor.trim().split(/\s+/).filter((part) => part.length > 0);
-  return { command: parts[0] ?? editor, args: parts.slice(1) };
-}
-function defaultOpenEditor(editor, path2) {
-  const { command, args } = parseEditorCommand(editor);
-  const child = spawnSync(command, [...args, path2], { stdio: "inherit", env: process.env });
-  return { status: child.status ?? 1, error: child.error?.message };
-}
 function registerRolesCommand(pi) {
   pi.registerCommand("sumo:roles", {
     description: "Edit subagent role presets",
@@ -5625,15 +5568,11 @@ function registerRolesCommand(pi) {
         const result = await runRolesCommand({
           rolesPath: path2,
           isTTY: ctx.hasUI,
-          // The RPC host has no usable TTY for stdio:inherit and spawnSync
-          // would block its whole event loop — degrade to instructions.
-          ...ctx.mode === "rpc" ? { editorUnavailable: "$EDITOR cannot run inside the rpc host \u2014 edit the file directly; changes apply to the next spawn" } : {},
           loadRoles,
           writeRolesFile: (mutation) => writeRolesFile(path2, mutation),
           showPalette: (options) => showSearchPalette(ctx, options),
           getAvailableModels: () => ctx.modelRegistry.getAvailable().map((model) => ({ id: model.id, provider: model.provider })),
-          input: (title, placeholder) => ctx.ui.input(title, placeholder),
-          openEditor: (editorPath) => defaultOpenEditor(process.env.EDITOR?.trim() || "vi", editorPath)
+          input: (title, placeholder) => ctx.ui.input(title, placeholder)
         });
         if (result) notify2(ctx, result);
       } catch (error) {
@@ -6778,7 +6717,7 @@ Title: ${message}`, ["Open PR", "Cancel"]);
 import { existsSync as existsSync3 } from "node:fs";
 import { homedir as homedir6 } from "node:os";
 import { join as join5 } from "node:path";
-import { spawnSync as spawnSync2 } from "node:child_process";
+import { spawnSync } from "node:child_process";
 var DEFAULT_PERSONA_PATH = join5(homedir6(), ".pi", "agent", "APPEND_SYSTEM.md");
 function runPersonaCommand(deps) {
   if (!deps.fileExists(deps.personaPath)) {
@@ -6832,7 +6771,7 @@ function parsePersonaEditorCommand(editor) {
 }
 function defaultRunEditor(editor, file) {
   const { command, args } = parsePersonaEditorCommand(editor);
-  const child = spawnSync2(command, [...args, file], { stdio: "inherit", env: process.env });
+  const child = spawnSync(command, [...args, file], { stdio: "inherit", env: process.env });
   return {
     status: child.status ?? 1,
     error: child.error?.message

@@ -1,15 +1,10 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import { spawnSync } from "node:child_process";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { BUILT_IN_TOOLS } from "../native-task-config.js";
 import { BUILT_IN_ROLES, loadRoles, resolveRolesPath, type LoadedRoles, type SubagentRole } from "../subagents/roles.js";
 import { showSearchPalette, type SearchPaletteOptions, type SearchPaletteRow } from "./roles-palette.js";
 
-const OPEN_ACTION_ID = "action:open";
-const RESET_ACTION_ID = "action:reset";
-const OPEN_ACTION = "open roles.json in $EDITOR";
-const RESET_ACTION = "reset a role to built-in…";
 const READ_ONLY_TOOLS = ["read", "grep", "find", "ls", "bash"] as const;
 const THINKING_LEVELS = ["inherit", "off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 
@@ -22,32 +17,16 @@ export type RolesCommandResult = {
 };
 
 export type RolesFileMutation =
-	| { readonly kind: "ensure" }
-	| { readonly kind: "reset"; readonly roleId: string }
-	| { readonly kind: "set" | "set-if-absent"; readonly roleId: string; readonly field: string; readonly value: unknown };
-
-export interface RolesEditorOutcome {
-	readonly status: number;
-	readonly error?: string;
-}
+	| { readonly kind: "set"; readonly roleId: string; readonly field: string; readonly value: unknown };
 
 export interface RolesCommandDeps {
 	readonly rolesPath: string;
 	readonly isTTY: boolean;
-	/**
-	 * When set, `open roles.json in $EDITOR` degrades to instructions instead
-	 * of spawning. The RPC host must NEVER spawnSync an interactive editor:
-	 * stdio:inherit has no TTY there and the sync call blocks the host's whole
-	 * event loop — the cathedral shell freezes until the process is killed
-	 * (operator-verified crash, plan 085 fix).
-	 */
-	readonly editorUnavailable?: string;
 	readonly loadRoles: () => LoadedRoles;
 	readonly writeRolesFile: (mutation: RolesFileMutation) => void | Promise<void>;
 	readonly showPalette: (options: SearchPaletteOptions) => Promise<string | undefined>;
 	readonly getAvailableModels: () => { readonly id: string; readonly provider?: string }[];
 	readonly input: (title: string, placeholder: string) => Promise<string | undefined>;
-	readonly openEditor: (path: string) => RolesEditorOutcome | Promise<RolesEditorOutcome>;
 }
 
 interface RoleFieldSelection {
@@ -64,22 +43,6 @@ async function writeMutation(deps: RolesCommandDeps, mutation: RolesFileMutation
 	} catch (error) {
 		return { kind: "error", opened: false, message: `unable to update roles.json: ${errorText(error)}` };
 	}
-}
-
-async function openRolesEditor(deps: RolesCommandDeps): Promise<RolesCommandResult> {
-	if (deps.editorUnavailable) {
-		return {
-			kind: "instructions",
-			opened: false,
-			message: `roles file: ${deps.rolesPath} — ${deps.editorUnavailable}`,
-		};
-	}
-	const ensured = await writeMutation(deps, { kind: "ensure" });
-	if (ensured) return ensured;
-	const outcome = await deps.openEditor(deps.rolesPath);
-	if (outcome.status === 0) return { kind: "success", opened: true, message: "role updated — applies to the next spawn" };
-	if (outcome.error) return { kind: "error", opened: true, message: `failed to launch editor: ${outcome.error}` };
-	return { kind: "error", opened: true, message: `editor exited with code ${outcome.status}` };
 }
 
 function sameTools(actual: readonly string[], expected: readonly string[]): boolean {
@@ -112,13 +75,9 @@ function roleSummary(role: SubagentRole): string {
 	return `${role.model ?? "inherit"} · ${role.thinking ?? "inherit"} · ${worktree}`;
 }
 
-/** Surface 1 — one row per role (plus the two file-level actions). */
+/** Surface 1 — one row per role. */
 function roleListRows(roles: readonly SubagentRole[]): SearchPaletteRow[] {
-	return [
-		...roles.map((role) => ({ id: `role:${role.id}`, label: role.id, value: roleSummary(role) })),
-		{ id: OPEN_ACTION_ID, label: OPEN_ACTION, value: "" },
-		{ id: RESET_ACTION_ID, label: RESET_ACTION, value: "" },
-	];
+	return roles.map((role) => ({ id: `role:${role.id}`, label: role.id, value: roleSummary(role) }));
 }
 
 /** Surface 2 — the chosen role's editable fields with current values. */
@@ -199,7 +158,8 @@ async function chooseMutation(deps: RolesCommandDeps, selection: RoleFieldSelect
 			value: value === "inherit default" ? undefined : value === "true",
 		};
 	}
-	return { kind: "set-if-absent", roleId: role.id, field: "systemPrompt", value: role.systemPrompt };
+	// systemPrompt is handled by the caller (instructions pointing at the file).
+	return undefined;
 }
 
 const successResult = (opened: boolean): RolesCommandResult => ({
@@ -231,25 +191,6 @@ export async function runRolesCommand(deps: RolesCommandDeps): Promise<RolesComm
 		});
 		if (selectedRole === undefined) return latestResult;
 
-		if (selectedRole === OPEN_ACTION_ID) {
-			const result = await openRolesEditor(deps);
-			if (result.kind === "error") return result;
-			latestResult = result;
-			continue;
-		}
-		if (selectedRole === RESET_ACTION_ID) {
-			const roleId = await deps.showPalette({
-				title: "RESET ROLE TO BUILT-IN",
-				placeholder: "choose a role…",
-				rows: BUILT_IN_ROLES.map((role) => ({ id: role.id, label: role.id, value: role.label })),
-			});
-			if (roleId === undefined) continue;
-			const failed = await writeMutation(deps, { kind: "reset", roleId });
-			if (failed) return failed;
-			latestResult = successResult(false);
-			continue;
-		}
-
 		const roleId = selectedRole.startsWith("role:") ? selectedRole.slice("role:".length) : undefined;
 		const role = roles.find((candidate) => candidate.id === roleId);
 		if (!role) continue;
@@ -265,17 +206,21 @@ export async function runRolesCommand(deps: RolesCommandDeps): Promise<RolesComm
 
 			const fieldSelection = surface.selections.get(selected);
 			if (!fieldSelection) break;
+			if (fieldSelection.field === "systemPrompt") {
+				// Long-form prompts don't belong in a one-line input and $EDITOR
+				// cannot run from the rpc host (plan 085) — point at the file.
+				latestResult = {
+					kind: "instructions",
+					opened: false,
+					message: `role system prompts live in ${deps.rolesPath} under "systemPrompt" — edit the file directly; changes apply to the next spawn`,
+				};
+				continue;
+			}
 			const mutation = await chooseMutation(deps, fieldSelection);
 			if (!mutation) continue;
 			const failed = await writeMutation(deps, mutation);
 			if (failed) return failed;
-			if (fieldSelection.field === "systemPrompt") {
-				const result = await openRolesEditor(deps);
-				if (result.kind === "error") return result;
-				latestResult = result;
-			} else {
-				latestResult = successResult(false);
-			}
+			latestResult = successResult(false);
 		}
 	}
 }
@@ -300,19 +245,10 @@ function readRolesDocument(path: string): RolesDocument {
 
 export function writeRolesFile(path: string, mutation: RolesFileMutation): void {
 	const document = readRolesDocument(path);
-	if (mutation.kind === "reset") {
-		document.roles = document.roles.filter((role) => role.id !== mutation.roleId);
-	} else if (mutation.kind === "set" || mutation.kind === "set-if-absent") {
-		let overlay = document.roles.find((role) => role.id === mutation.roleId);
-		if (!overlay) {
-			overlay = { id: mutation.roleId };
-			document.roles.push(overlay);
-		}
-		if (mutation.kind === "set-if-absent" && Object.prototype.hasOwnProperty.call(overlay, mutation.field)) {
-			// Keep the operator's existing long-form text intact before opening it.
-		} else if (mutation.value === undefined) delete overlay[mutation.field];
-		else overlay[mutation.field] = mutation.value;
-	}
+	const overlay = document.roles.find((role) => role.id === mutation.roleId);
+	if (overlay && mutation.value === undefined) delete overlay[mutation.field];
+	else if (overlay) overlay[mutation.field] = mutation.value;
+	else document.roles.push({ id: mutation.roleId, [mutation.field]: mutation.value });
 	mkdirSync(dirname(path), { recursive: true });
 	writeFileSync(path, `${JSON.stringify(document, null, 2)}\n`, { mode: 0o600 });
 }
@@ -327,22 +263,6 @@ function notify(ctx: ExtensionContext, result: RolesCommandResult): void {
 	stream.write(`${result.message}\n`);
 }
 
-/**
- * Split an EDITOR value like `"code --wait"` or `"nvim -f"` into command +
- * args. spawnSync treats the whole string as a binary name otherwise,
- * which ENOENTs every editor configured with flags (operator-verified).
- */
-export function parseEditorCommand(editor: string): { command: string; args: readonly string[] } {
-	const parts = editor.trim().split(/\s+/).filter((part) => part.length > 0);
-	return { command: parts[0] ?? editor, args: parts.slice(1) };
-}
-
-function defaultOpenEditor(editor: string, path: string): RolesEditorOutcome {
-	const { command, args } = parseEditorCommand(editor);
-	const child = spawnSync(command, [...args, path], { stdio: "inherit", env: process.env });
-	return { status: child.status ?? 1, error: child.error?.message };
-}
-
 export function registerRolesCommand(pi: ExtensionAPI): void {
 	pi.registerCommand("sumo:roles", {
 		description: "Edit subagent role presets",
@@ -352,15 +272,11 @@ export function registerRolesCommand(pi: ExtensionAPI): void {
 				const result = await runRolesCommand({
 					rolesPath: path,
 					isTTY: ctx.hasUI,
-					// The RPC host has no usable TTY for stdio:inherit and spawnSync
-					// would block its whole event loop — degrade to instructions.
-					...(ctx.mode === "rpc" ? { editorUnavailable: "$EDITOR cannot run inside the rpc host — edit the file directly; changes apply to the next spawn" } : {}),
 					loadRoles,
 					writeRolesFile: (mutation) => writeRolesFile(path, mutation),
 					showPalette: (options) => showSearchPalette(ctx, options),
 					getAvailableModels: () => ctx.modelRegistry.getAvailable().map((model) => ({ id: model.id, provider: model.provider })),
 					input: (title, placeholder) => ctx.ui.input(title, placeholder),
-					openEditor: (editorPath) => defaultOpenEditor(process.env.EDITOR?.trim() || "vi", editorPath),
 				});
 				if (result) notify(ctx, result);
 			} catch (error) {

@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { BUILT_IN_ROLES } from "../subagents/roles.js";
-import { parseEditorCommand, registerRolesCommand, runRolesCommand, writeRolesFile, type RolesCommandDeps, type RolesFileMutation } from "./roles.js";
+import { registerRolesCommand, runRolesCommand, writeRolesFile, type RolesCommandDeps, type RolesFileMutation } from "./roles.js";
 import type { SearchPaletteOptions } from "./roles-palette.js";
 
 const research = BUILT_IN_ROLES.find((role) => role.id === "research")!;
@@ -17,7 +17,6 @@ function commandDeps(overrides: Partial<RolesCommandDeps> = {}): RolesCommandDep
 		showPalette: vi.fn(async () => undefined),
 		getAvailableModels: () => [],
 		input: vi.fn(async () => undefined),
-		openEditor: vi.fn(() => ({ status: 0 })),
 		...overrides,
 	};
 }
@@ -30,29 +29,6 @@ function queuedPalette(selections: Array<string | undefined>, calls: SearchPalet
 }
 
 	describe("runRolesCommand", () => {
-	it("degrades $EDITOR to instructions when the editor is unavailable (rpc host)", async () => {
-		const write = vi.fn();
-		const openEditor = vi.fn(() => ({ status: 0 }));
-		const calls: SearchPaletteOptions[] = [];
-		const result = await runRolesCommand(commandDeps({
-			editorUnavailable: "$EDITOR cannot run inside the rpc host — edit the file directly; changes apply to the next spawn",
-			showPalette: queuedPalette(["action:open", undefined], calls),
-			writeRolesFile: write,
-			openEditor,
-		}));
-
-		expect(result).toMatchObject({ kind: "instructions", opened: false, message: expect.stringContaining("rpc host") });
-		expect(openEditor).not.toHaveBeenCalled();
-		// ensure-write also skipped — nothing touches the file in this mode
-		expect(write).not.toHaveBeenCalled();
-	});
-
-	it("splits EDITOR values with flags into command + args", () => {
-		expect(parseEditorCommand("nvim -f")).toEqual({ command: "nvim", args: ["-f"] });
-		expect(parseEditorCommand("code --wait")).toEqual({ command: "code", args: ["--wait"] });
-		expect(parseEditorCommand("  vi  ")).toEqual({ command: "vi", args: [] });
-	});
-
 	it("lists one summary row per role plus the two actions on surface 1", async () => {
 		const calls: SearchPaletteOptions[] = [];
 		await runRolesCommand(commandDeps({
@@ -63,7 +39,9 @@ function queuedPalette(selections: Array<string | undefined>, calls: SearchPalet
 		const rows = calls[0]?.rows ?? [];
 		expect(rows.slice(0, BUILT_IN_ROLES.length).map((row) => row.id)).toEqual(BUILT_IN_ROLES.map((role) => `role:${role.id}`));
 		expect(rows.find((row) => row.id === "role:implement-cheap")?.value).toContain("low");
-		expect(rows.slice(-2).map((row) => row.label)).toEqual(["open roles.json in $EDITOR", "reset a role to built-in…"]);
+		expect(rows).toHaveLength(BUILT_IN_ROLES.length);
+		expect(rows.some((row) => row.label.includes("$EDITOR"))).toBe(false);
+		expect(rows.some((row) => row.label.includes("reset"))).toBe(false);
 	});
 
 	it("drills into the role's fields with current values on surface 2", async () => {
@@ -215,18 +193,14 @@ function queuedPalette(selections: Array<string | undefined>, calls: SearchPalet
 		expect(write).not.toHaveBeenCalled();
 	});
 
-	it("writes the effective system prompt before opening the editor", async () => {
+	it("selecting system prompt shows file instructions without writing or spawning", async () => {
 		const write = vi.fn();
-		const openEditor = vi.fn(() => ({ status: 0 }));
 		const result = await runRolesCommand(commandDeps({
 			showPalette: queuedPalette(["role:research", "field:research:systemPrompt", undefined, undefined]),
 			writeRolesFile: write,
-			openEditor,
 		}));
-		expect(write.mock.calls[0]?.[0]).toEqual({ kind: "set-if-absent", roleId: "research", field: "systemPrompt", value: research.systemPrompt });
-		expect(write.mock.calls[1]?.[0]).toEqual({ kind: "ensure" });
-		expect(openEditor).toHaveBeenCalledWith("/agent/sumocode/roles.json");
-		expect(result).toMatchObject({ kind: "success", opened: true });
+		expect(result).toMatchObject({ kind: "instructions", opened: false, message: expect.stringContaining("roles.json") });
+		expect(write).not.toHaveBeenCalled();
 	});
 });
 
@@ -240,27 +214,6 @@ describe("writeRolesFile", () => {
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}
-	});
-
-	it("resets one built-in role without disturbing other overlays", () => {
-		const dir = mkdtempSync(join(tmpdir(), "sumocode-roles-reset-"));
-		const path = join(dir, "roles.json");
-		try {
-			writeRolesFile(path, { kind: "set", roleId: "research", field: "thinking", value: "high" });
-			writeRolesFile(path, { kind: "set", roleId: "review", field: "thinking", value: "low" });
-			writeRolesFile(path, { kind: "reset", roleId: "research" });
-			expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({ roles: [{ id: "review", thinking: "low" }] });
-		} finally {
-			rmSync(dir, { recursive: true, force: true });
-		}
-	});
-});
-
-describe("registerRolesCommand", () => {
-	it("registers sumo:roles for the command palette", () => {
-		const registerCommand = vi.fn();
-		registerRolesCommand({ registerCommand } as never);
-		expect(registerCommand).toHaveBeenCalledWith("sumo:roles", expect.objectContaining({ description: expect.any(String), handler: expect.any(Function) }));
 	});
 
 	it("routes the RPC palette path through ctx.ui.select (custom() is a documented rpc no-op)", async () => {

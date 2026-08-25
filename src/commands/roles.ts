@@ -104,7 +104,10 @@ function pickerRows(values: readonly string[]): SearchPaletteRow[] {
 }
 
 function modelValue(model: { readonly id: string; readonly provider?: string }): string {
-	return model.provider && !model.id.includes("/") ? `${model.provider}/${model.id}` : model.id;
+	// Registry ids may themselves contain slashes (for example OpenRouter's
+	// `z-ai/glm-5.3`). The subagent model contract is provider/modelId, so the
+	// registry provider must still prefix the complete id.
+	return model.provider ? `${model.provider}/${model.id}` : model.id;
 }
 
 async function chooseMutation(deps: RolesCommandDeps, selection: RoleFieldSelection): Promise<RolesFileMutation | undefined> {

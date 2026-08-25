@@ -5421,7 +5421,7 @@ function pickerRows(values) {
   return values.map((value) => ({ id: value, label: value, value: "" }));
 }
 function modelValue(model) {
-  return model.provider && !model.id.includes("/") ? `${model.provider}/${model.id}` : model.id;
+  return model.provider ? `${model.provider}/${model.id}` : model.id;
 }
 async function chooseMutation(deps, selection) {
   const { role, field } = selection;

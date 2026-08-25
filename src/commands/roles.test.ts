@@ -99,6 +99,22 @@ function queuedPalette(selections: Array<string | undefined>, calls: SearchPalet
 		expect(result).toMatchObject({ kind: "success", message: "role updated — applies to the next spawn" });
 	});
 
+	it("preserves the provider when a registry model id contains a slash", async () => {
+		const write = vi.fn();
+		await runRolesCommand(commandDeps({
+			showPalette: queuedPalette(["role:research", "field:research:model", "registry:0", undefined, undefined]),
+			getAvailableModels: () => [{ id: "z-ai/glm-5.3", provider: "openrouter" }],
+			writeRolesFile: write,
+		}));
+
+		expect(write).toHaveBeenCalledWith({
+			kind: "set",
+			roleId: "research",
+			field: "model",
+			value: "openrouter/z-ai/glm-5.3",
+		});
+	});
+
 	it("routes the explicit other model path through input", async () => {
 		const write = vi.fn();
 		const input = vi.fn(async () => " openai/gpt-5 ");

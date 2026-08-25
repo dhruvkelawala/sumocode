@@ -15,7 +15,7 @@
 
 ## Status
 
-- **Implementation state**: ACCEPTANCE REPAIR — backend complete; RPC strip and visible-pane fixes implemented on `advisor/085-roles-palette-ux`; operator reload/live approval and a clean full integration run remain before DONE.
+- **Implementation state**: BLOCKED — backend complete; RPC strip and worktree-backed visible pane live-verified after reload in the parent tab (`w8:t1`, child `w8:p8`); only a clean full local integration run remains before DONE.
 - **Priority**: P2
 - **Effort**: L
 - **Risk**: MED (Step 4, the queue, is the risky part; Steps 1–3 and 5 are LOW)

@@ -12,7 +12,7 @@
 
 ## Status
 
-- **Implementation state**: DOGFOOD — superseded by operator-approved one-level role drill-in and removal of editor/reset actions; registry search and RPC caret are implemented, but this plan's original flat-surface done criteria no longer describe the accepted UX.
+- **Implementation state**: DONE — superseded by the operator-approved one-level role drill-in and removal of editor/reset actions; registry search, RPC caret, and all six configured role/model paths were live-verified. The original flat-surface criteria no longer describe the accepted UX.
 - **Priority**: P2 (operator dogfood feedback — blocks /roles adoption)
 - **Effort**: M
 - **Risk**: LOW

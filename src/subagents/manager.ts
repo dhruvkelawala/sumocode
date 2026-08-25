@@ -4,14 +4,12 @@ import { promisify } from "node:util";
 import { createWorktree, resolveCreateOptions, type CreateWorktreeOptions, type CreateWorktreeResult } from "../git/worktree.js";
 import type { AgentPanePlacement, PiExecLike, TerminalHost } from "../terminal-host/types.js";
 import type { SpawnedChild } from "./backend-pi.js";
-import type { LiveToolState, RunOutcome, SubagentEvent, SubagentSnapshot, SubagentWorktreeRef } from "./domain.js";
+import { SUBAGENT_MAX_QUEUED, SUBAGENT_MAX_RUNNING, type LiveToolState, type RunOutcome, type SubagentEvent, type SubagentSnapshot, type SubagentWorktreeRef } from "./domain.js";
 import { planPlacement } from "./layout.js";
 import { buildCompletionManifest, type CompletionManifestEvidence } from "./manifest.js";
 
 const execFileAsync = promisify(execFile);
 
-const MAX_RUNNING = 4;
-const MAX_QUEUED = 16;
 const MAX_TRACKED = 64;
 const ERROR_TEXT_MAX = 4096;
 const CANCEL_WAIT_MS = 5_500;
@@ -163,11 +161,11 @@ export class SubagentManager {
 
 	public async spawn(task: SpawnSubagentTask): Promise<SubagentSnapshot | AtCapacityDetails> {
 		const runningSummaries = this.runningSummaries();
-		if (runningSummaries.length >= MAX_RUNNING || this.queuedTasks.length > 0) {
-			if (this.queuedTasks.length >= MAX_QUEUED) {
+		if (runningSummaries.length >= SUBAGENT_MAX_RUNNING || this.queuedTasks.length > 0) {
+			if (this.queuedTasks.length >= SUBAGENT_MAX_QUEUED) {
 				return {
 					status: "at_capacity",
-					capacity: MAX_RUNNING,
+					capacity: SUBAGENT_MAX_RUNNING,
 					runningCount: runningSummaries.length,
 					running: runningSummaries,
 					retryHint: "queue is full — do NOT retry in a loop; cancel something or end your turn and respawn later",
@@ -461,7 +459,7 @@ export class SubagentManager {
 	}
 
 	private async drainQueue(): Promise<void> {
-		while (this.queuedTasks.length > 0 && this.runningSummaries().length < MAX_RUNNING) {
+		while (this.queuedTasks.length > 0 && this.runningSummaries().length < SUBAGENT_MAX_RUNNING) {
 			const queued = this.queuedTasks.shift();
 			if (!queued) return;
 			try {

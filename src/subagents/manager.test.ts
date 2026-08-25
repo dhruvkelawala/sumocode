@@ -1,10 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 import { SubagentManager, type SpawnSubagentTask } from "./manager.js";
-import type { SubagentEvent } from "./domain.js";
+import { SUBAGENT_MAX_QUEUED, SUBAGENT_MAX_RUNNING, type SubagentEvent } from "./domain.js";
 import type { CompletionManifest, CompletionManifestEvidence } from "./manifest.js";
 import type { TerminalHost } from "../terminal-host/types.js";
 
 const makeTask = (title: string): SpawnSubagentTask => ({ title, prompt: `prompt ${title}`, cwd: "/tmp" });
+const subagentId = (sequence: number): string => `sa-${sequence}`;
+const firstQueuedId = subagentId(SUBAGENT_MAX_RUNNING + 1);
+const secondQueuedId = subagentId(SUBAGENT_MAX_RUNNING + 2);
 
 const fakeManifestBuilder = async (options: Parameters<NonNullable<import("./manager.js").SubagentManagerDependencies["buildCompletionManifest"]>>[0]) => ({
 	baseRef: options.baseRef,
@@ -36,15 +39,15 @@ const deferredBackend = () => {
 };
 
 describe("SubagentManager", () => {
-	it("queues the fifth spawn instead of refusing it", async () => {
+	it(`queues spawn ${SUBAGENT_MAX_RUNNING + 1} instead of refusing it`, async () => {
 		const { manager } = deferredBackend();
-		for (let index = 0; index < 4; index += 1) await expect(manager.spawn(makeTask(`${index}`))).resolves.toMatchObject({ id: `sa-${index + 1}` });
+		for (let index = 0; index < SUBAGENT_MAX_RUNNING; index += 1) await expect(manager.spawn(makeTask(`${index}`))).resolves.toMatchObject({ id: subagentId(index + 1) });
 		const queued = await manager.spawn(makeTask("queued"));
-		expect(queued).toMatchObject({ id: "sa-5", status: "queued", baseRef: "HEAD" });
-		expect(manager.list()).toHaveLength(5);
+		expect(queued).toMatchObject({ id: firstQueuedId, status: "queued", baseRef: "HEAD" });
+		expect(manager.list()).toHaveLength(SUBAGENT_MAX_RUNNING + 1);
 	});
 
-	it("queues while four spawns are still in setup without doing deferred work", async () => {
+	it("queues while all running-capacity spawns are still in setup without doing deferred work", async () => {
 		let releaseCapture: () => void = () => undefined;
 		const captureGate = new Promise<void>((resolve) => { releaseCapture = resolve; });
 		const captureGitContext = vi.fn(async () => {
@@ -52,51 +55,53 @@ describe("SubagentManager", () => {
 			return { baseRef: "base-ref" };
 		});
 		const manager = new SubagentManager(() => ({ events: () => undefined, interrupt: () => undefined }), { captureGitContext });
-		const pending = Array.from({ length: 4 }, (_, index) => manager.spawn(makeTask(`pending-${index}`)));
+		const pending = Array.from({ length: SUBAGENT_MAX_RUNNING }, (_, index) => manager.spawn(makeTask(`pending-${index}`)));
 
 		const queued = await manager.spawn(makeTask("queued"));
 
-		expect(queued).toMatchObject({ id: "sa-5", status: "queued" });
-		expect(captureGitContext).toHaveBeenCalledTimes(4);
+		expect(queued).toMatchObject({ id: firstQueuedId, status: "queued" });
+		expect(captureGitContext).toHaveBeenCalledTimes(SUBAGENT_MAX_RUNNING);
 		releaseCapture();
 		await Promise.all(pending);
 	});
 
 	it("starts queued tasks in fifo order as running slots free", async () => {
 		const { manager, emitters } = deferredBackend();
-		for (let index = 0; index < 4; index += 1) await manager.spawn(makeTask(`running-${index}`));
+		for (let index = 0; index < SUBAGENT_MAX_RUNNING; index += 1) await manager.spawn(makeTask(`running-${index}`));
 		await manager.spawn(makeTask("first queued"));
 		await manager.spawn(makeTask("second queued"));
 
 		emitters.get("sa-1")?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
-		await vi.waitFor(() => expect(manager.get("sa-5")?.status).toBe("running"));
-		expect(manager.get("sa-6")?.status).toBe("queued");
+		await vi.waitFor(() => expect(manager.get(firstQueuedId)?.status).toBe("running"));
+		expect(manager.get(secondQueuedId)?.status).toBe("queued");
 
 		emitters.get("sa-2")?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
-		await vi.waitFor(() => expect(manager.get("sa-6")?.status).toBe("running"));
+		await vi.waitFor(() => expect(manager.get(secondQueuedId)?.status).toBe("running"));
 	});
 
 	it("cancels a queued task without starting a child", async () => {
 		const { manager, emitters, interrupts } = deferredBackend();
-		for (let index = 0; index < 4; index += 1) await manager.spawn(makeTask(`running-${index}`));
+		for (let index = 0; index < SUBAGENT_MAX_RUNNING; index += 1) await manager.spawn(makeTask(`running-${index}`));
 		await manager.spawn(makeTask("queued"));
 
-		await expect(manager.cancel(["sa-5"])).resolves.toEqual(["Cancelled sa-5"]);
-		expect(manager.get("sa-5")).toMatchObject({ status: "error", errorText: "interrupted", manifest: { exit: "interrupted" } });
-		expect(interrupts.has("sa-5")).toBe(false);
+		await expect(manager.cancel([firstQueuedId])).resolves.toEqual([`Cancelled ${firstQueuedId}`]);
+		expect(manager.get(firstQueuedId)).toMatchObject({ status: "error", errorText: "interrupted", manifest: { exit: "interrupted" } });
+		expect(interrupts.has(firstQueuedId)).toBe(false);
 		emitters.get("sa-1")?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
 		await vi.waitFor(() => expect(manager.get("sa-1")?.status).toBe("done"));
-		expect(interrupts.has("sa-5")).toBe(false);
+		expect(interrupts.has(firstQueuedId)).toBe(false);
 	});
 
-	it("returns at_capacity only after all sixteen queue slots are filled", async () => {
+	it("returns at_capacity only after every queue slot is filled", async () => {
 		const { manager } = deferredBackend();
-		for (let index = 0; index < 20; index += 1) {
+		const acceptedCount = SUBAGENT_MAX_RUNNING + SUBAGENT_MAX_QUEUED;
+		for (let index = 0; index < acceptedCount; index += 1) {
 			const spawned = await manager.spawn(makeTask(`${index}`));
-			expect(spawned).toMatchObject({ id: `sa-${index + 1}`, status: index < 4 ? "running" : "queued" });
+			expect(spawned).toMatchObject({ id: subagentId(index + 1), status: index < SUBAGENT_MAX_RUNNING ? "running" : "queued" });
 		}
 		const over = await manager.spawn(makeTask("over"));
-		expect(over).toMatchObject({ status: "at_capacity", capacity: 4, runningCount: 4 });
+		expect(over).toMatchObject({ status: "at_capacity", runningCount: SUBAGENT_MAX_RUNNING });
+		expect("capacity" in over ? over.capacity : undefined).toBe(SUBAGENT_MAX_RUNNING);
 		expect("retryHint" in over ? over.retryHint : "").toContain("do NOT retry in a loop");
 	});
 
@@ -110,14 +115,14 @@ describe("SubagentManager", () => {
 			interrupt: () => undefined,
 		}));
 		const manager = new SubagentManager(starts, { captureGitContext: async () => ({ baseRef: "base-ref" }), buildCompletionManifest: fakeManifestBuilder });
-		for (let index = 0; index < 4; index += 1) await manager.spawn(makeTask(`running-${index}`));
+		for (let index = 0; index < SUBAGENT_MAX_RUNNING; index += 1) await manager.spawn(makeTask(`running-${index}`));
 		await manager.spawn(makeTask("queued"));
 
 		emitters.get("sa-1")?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
 		emitters.get("sa-2")?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
 
-		await vi.waitFor(() => expect(manager.get("sa-5")?.status).toBe("running"));
-		expect(starts.mock.calls.filter(([task]) => task.id === "sa-5")).toHaveLength(1);
+		await vi.waitFor(() => expect(manager.get(firstQueuedId)?.status).toBe("running"));
+		expect(starts.mock.calls.filter(([task]) => task.id === firstQueuedId)).toHaveLength(1);
 	});
 
 	it("frees capacity while a settled child manifest is still collecting", async () => {
@@ -131,12 +136,12 @@ describe("SubagentManager", () => {
 			captureGitContext: async () => ({ baseRef: "base-ref" }),
 			buildCompletionManifest: async () => manifestPromise,
 		});
-		for (let index = 0; index < 4; index += 1) await manager.spawn(makeTask(`${index}`));
+		for (let index = 0; index < SUBAGENT_MAX_RUNNING; index += 1) await manager.spawn(makeTask(`${index}`));
 		emitters.get("sa-1")?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
 
 		const replacement = await manager.spawn(makeTask("replacement"));
 
-		expect(replacement).toMatchObject({ id: "sa-5", status: "running" });
+		expect(replacement).toMatchObject({ id: firstQueuedId, status: "running" });
 		resolveManifest({ baseRef: "base-ref", changedPaths: [], dirty: false, commits: 0, exit: "completed", durationMs: 1 });
 		await vi.waitFor(() => expect(manager.get("sa-1")?.status).toBe("done"));
 	});

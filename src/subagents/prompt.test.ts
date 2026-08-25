@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { SUBAGENT_MAX_RUNNING } from "./domain.js";
 import {
 	SUBAGENT_PROMPT_GUIDELINES,
 	SUBAGENT_PROMPT_SNIPPET,
@@ -21,6 +22,7 @@ describe("subagent prompt guidance", () => {
 		expect(guidance).toContain("do NOT call subagent_wait right after subagent_spawn");
 		expect(guidance).toContain("research, review, documentor, designer, implement-cheap, implement-smart");
 		expect(guidance).toContain("status=queued");
+		expect(guidance).toContain(`At most ${SUBAGENT_MAX_RUNNING} subagents can run concurrently.`);
 		expect(SUBAGENT_TOOL_DESCRIPTIONS.wait).toContain("Last resort");
 		expect(SUBAGENT_TOOL_DESCRIPTIONS.wait).toContain("prefer ending your turn");
 	});

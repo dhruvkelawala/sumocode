@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { SubagentEvent } from "./domain.js";
+import { SUBAGENT_MAX_RUNNING, type SubagentEvent } from "./domain.js";
 import { installSubagents } from "./index.js";
 
 const backend = vi.hoisted(() => ({
@@ -136,18 +136,18 @@ describe("subagent result delivery", () => {
 	it("renders queued count and clears the widget on shutdown", async () => {
 		const harness = createHarness(true);
 		harness.fire("session_start");
-		for (let index = 0; index < 4; index += 1) await spawn(harness.manager, `running-${index}`);
+		for (let index = 0; index < SUBAGENT_MAX_RUNNING; index += 1) await spawn(harness.manager, `running-${index}`);
 		await spawn(harness.manager, "queued");
 		const factory = harness.setWidget.mock.calls.at(-1)?.[1] as (() => { render(width: number): string[] });
 		expect(factory().render(140).join("\n")).toContain("1 queued");
 
 		harness.fire("session_shutdown");
 		expect(harness.setWidget).toHaveBeenLastCalledWith("sumocode-subagents", undefined, { placement: "aboveEditor" });
-		await vi.waitFor(() => expect(harness.manager.list().slice(0, 5).every((snapshot) => snapshot.status === "error")).toBe(true));
-		expect(backend.piCalls).toBe(4);
+		await vi.waitFor(() => expect(harness.manager.list().slice(0, SUBAGENT_MAX_RUNNING + 1).every((snapshot) => snapshot.status === "error")).toBe(true));
+		expect(backend.piCalls).toBe(SUBAGENT_MAX_RUNNING);
 
 		harness.fire("session_start");
-		await expect(spawn(harness.manager, "next session")).resolves.toMatchObject({ id: "sa-6", status: "running" });
+		await expect(spawn(harness.manager, "next session")).resolves.toMatchObject({ id: `sa-${SUBAGENT_MAX_RUNNING + 2}`, status: "running" });
 		harness.fire("session_shutdown");
 	});
 
@@ -173,9 +173,9 @@ describe("subagent result delivery", () => {
 	it("does not deliver a queued snapshot as a settled result", async () => {
 		const harness = createHarness();
 		harness.setIdle(false);
-		for (let index = 0; index < 4; index += 1) await spawn(harness.manager, `running-${index}`);
+		for (let index = 0; index < SUBAGENT_MAX_RUNNING; index += 1) await spawn(harness.manager, `running-${index}`);
 		const queued = await spawn(harness.manager, "queued");
-		expect(queued).toMatchObject({ id: "sa-5", status: "queued" });
+		expect(queued).toMatchObject({ id: `sa-${SUBAGENT_MAX_RUNNING + 1}`, status: "queued" });
 		harness.setIdle(true);
 		harness.fire("agent_end");
 		expect(harness.sendMessage).not.toHaveBeenCalled();

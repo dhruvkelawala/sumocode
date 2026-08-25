@@ -21,8 +21,12 @@ export function renderSubagentStatusRow(options: {
 }): string[] {
 	const theme = getActiveTheme();
 	const width = Math.max(0, Math.floor(options.width));
-	const segments = options.running.map((subagent) => `${subagent.id} ${subagent.roleId ?? fallbackTitle(subagent.title)} ${ageLabel(subagent.ageMs)}`);
+	const segments: string[] = [];
+	if (options.running.length > 0) segments.push(`${options.running.length} running`);
 	if (options.queuedCount > 0) segments.push(`${options.queuedCount} queued`);
+	segments.push(
+		...options.running.map((subagent) => `${subagent.id} ${subagent.roleId ?? fallbackTitle(subagent.title)} ${ageLabel(subagent.ageMs)}`),
+	);
 	const suffix = segments.length > 0 ? ` · ${segments.join(" · ")}` : "";
 	const row = textLine([
 		span("◈", { fg: theme.tokens.colors.accent }),

@@ -1,4 +1,4 @@
-import type { SubagentStatus } from "./domain.js";
+import { SUBAGENT_MAX_RUNNING, type SubagentStatus } from "./domain.js";
 import type { CompletionManifestEvidence } from "./manifest.js";
 
 const RESULT_OUTPUT_MAX_CHARS = 24 * 1024;
@@ -59,7 +59,7 @@ export const SUBAGENT_PROMPT_GUIDELINES = [
 	"delegation is fire-and-forget: after spawning, continue other work or end your turn. settled results arrive as automatic follow-up messages that wake you. do NOT call subagent_wait right after subagent_spawn.",
 	"spawn with a role for recurring shapes: research, review, documentor, designer, implement-cheap, implement-smart. the role sets the child's system prompt, tool limits, and defaults; your prompt supplies the concrete objective and stop conditions.",
 	"if spawn returns status=queued, the child starts automatically when a slot frees — do not retry, do not wait.",
-	"At most 4 subagents can run concurrently. If spawn returns status=at_capacity, the queue is full; cancel something or end your turn and respawn later.",
+	`At most ${SUBAGENT_MAX_RUNNING} subagents can run concurrently. If spawn returns status=at_capacity, the queue is full; cancel something or end your turn and respawn later.`,
 	"To delegate a self-contained coding task, spawn an isolated, watchable child: `subagent_spawn { visible: true, worktree: true, model, baseRef: 'origin/main' }`. It branches `sumo/<slug>` from baseRef, opens a herdr workspace you can watch or steer, and returns a completion manifest to review before acting on the result.",
 	"Headless children run WITHOUT the dangerous-command approval gate (same trust model as the native task tool): they cannot prompt the user, so their bash executes directly. Do not delegate destructive commands against the user's checkout; use worktree isolation for write-heavy work. Isolated worktrees are preserved after completion and never auto-removed.",
 ];

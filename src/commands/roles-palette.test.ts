@@ -54,9 +54,9 @@ describe("updatePaletteState", () => {
 });
 
 describe("showSearchPalette", () => {
-	it("uses the custom-component path regardless of ctx.mode", async () => {
+	it("uses the custom-component path in tui mode", async () => {
 		const custom = vi.fn(async () => "review:model");
-		const result = await showSearchPalette({ mode: "rpc", ui: { custom } } as never, {
+		const result = await showSearchPalette({ mode: "tui", ui: { custom } } as never, {
 			title: "SUBAGENT ROLES",
 			placeholder: "what shall we tune…",
 			rows: ROWS,
@@ -67,5 +67,34 @@ describe("showSearchPalette", () => {
 			overlayOptions: expect.objectContaining({ anchor: "center", width: 80 }),
 		});
 		expect(result).toBe("review:model");
+	});
+
+	it("falls back to ctx.ui.select in rpc mode because custom() is a documented no-op there", async () => {
+		const custom = vi.fn(async () => undefined);
+		const labels: string[] = [];
+		const select = vi.fn(async (_title: string, options: readonly string[]) => {
+			labels.push(...options);
+			return options[1];
+		});
+		const result = await showSearchPalette({ mode: "rpc", ui: { custom, select } } as never, {
+			title: "SUBAGENT ROLES",
+			placeholder: "what shall we tune…",
+			rows: ROWS,
+		});
+
+		expect(custom).not.toHaveBeenCalled();
+		expect(select).toHaveBeenCalledTimes(1);
+		expect(labels[0]).toContain(ROWS[0]!.label);
+		expect(result).toBe(ROWS[1]!.id);
+	});
+
+	it("returns undefined when the rpc select is cancelled", async () => {
+		const select = vi.fn(async () => undefined);
+		const result = await showSearchPalette({ mode: "rpc", ui: { select } } as never, {
+			title: "SUBAGENT ROLES",
+			placeholder: "what shall we tune…",
+			rows: ROWS,
+		});
+		expect(result).toBeUndefined();
 	});
 });

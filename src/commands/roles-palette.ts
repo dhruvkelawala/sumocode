@@ -208,11 +208,27 @@ class SearchPaletteComponent implements Component {
 	}
 }
 
+function rowLabel(row: SearchPaletteRow): string {
+	return row.value.length > 0 ? `${row.label}  ${row.value}` : row.label;
+}
+
 export async function showSearchPalette(
-	ctx: Pick<ExtensionContext, "ui">,
+	ctx: Pick<ExtensionContext, "mode" | "ui">,
 	options: SearchPaletteOptions,
 ): Promise<string | undefined> {
-	// The RPC cathedral shell hosts custom components via the extension-ui adapter (plan 085 fix; operator-verified 2026-08-25).
+	// In RPC mode `ctx.ui.custom()` is a DOCUMENTED no-op returning undefined
+	// (pi docs/extensions.md §run modes: “RPC … custom() returns undefined”) —
+	// component factories cannot cross the process boundary. Fall back to
+	// ctx.ui.select, which the cathedral shell renders as a search-mode Divine
+	// Query modal for long lists (type-to-filter; see widgets/modal.ts
+	// SELECT_SEARCH_THRESHOLD, plan 085 fix).
+	if (ctx.mode === "rpc") {
+		const labels = options.rows.map(rowLabel);
+		const selected = await ctx.ui.select(options.title, labels);
+		const selectedIndex = selected === undefined ? -1 : labels.indexOf(selected);
+		return selectedIndex < 0 ? undefined : options.rows[selectedIndex]?.id;
+	}
+
 	return ctx.ui.custom<string | undefined>(
 		(_tui, _theme, _keybindings, done) => new SearchPaletteComponent(options, {
 			searchQuery: "",

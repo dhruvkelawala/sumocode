@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ModalManager } from "./modal.js";
+import { ModalManager, SELECT_SEARCH_THRESHOLD } from "./modal.js";
+
+const longOptions = (count: number): string[] => Array.from({ length: count }, (_, index) => `option-${String(index).padStart(2, "0")}`);
 
 const ANSI_PATTERN = /\u001b(?:\[[0-?]*[ -/]*[@-~]|\][^\u0007]*(?:\u0007|\u001b\\)|_[^\u0007]*(?:\u0007|\u001b\\))/g;
 
@@ -77,6 +79,79 @@ describe("ModalManager", () => {
 		expect(rendered).not.toContain("\u0007");
 		expect(rendered).toContain("Title");
 		expect(rendered).toContain("Option");
+	});
+
+	it("keeps letter-jump on short selects at the search threshold", async () => {
+		const modals = new ModalManager();
+		const options = longOptions(SELECT_SEARCH_THRESHOLD);
+		const result = modals.select("Pick", options);
+		modals.handleInput("c");
+		await expect(result).resolves.toBe(options[2]);
+	});
+
+	it("filters instead of letter-jumping above the search threshold", async () => {
+		const modals = new ModalManager();
+		const options = [...longOptions(SELECT_SEARCH_THRESHOLD), "research model"];
+		const result = modals.select("Pick", options);
+
+		// Typing builds a query — it must NOT answer with option c).
+		for (const char of "research") modals.handleInput(char);
+		const snapshot = modals.getActiveDialogSnapshot();
+		expect(snapshot?.searchActive).toBe(true);
+		expect(snapshot?.searchQuery).toBe("research");
+		expect(snapshot?.options).toEqual(["research model"]);
+
+		modals.handleInput("enter");
+		await expect(result).resolves.toBe("research model");
+	});
+
+	it("navigates the filtered list and edits the query with backspace", async () => {
+		const modals = new ModalManager();
+		const options = [...longOptions(SELECT_SEARCH_THRESHOLD - 1), "alpha one", "alpha two"];
+		const result = modals.select("Pick", options);
+
+		for (const char of "alphax") modals.handleInput(char);
+		expect(modals.getActiveDialogSnapshot()?.options).toEqual([]);
+		modals.handleInput("backspace");
+		expect(modals.getActiveDialogSnapshot()?.options).toEqual(["alpha one", "alpha two"]);
+
+		modals.handleInput("down");
+		modals.handleInput("enter");
+		await expect(result).resolves.toBe("alpha two");
+	});
+
+	it("treats j and k as query text in search mode, not navigation", async () => {
+		const modals = new ModalManager();
+		const options = [...longOptions(SELECT_SEARCH_THRESHOLD), "jk-target"];
+		const result = modals.select("Pick", options);
+		modals.handleInput("j");
+		modals.handleInput("k");
+		expect(modals.getActiveDialogSnapshot()?.searchQuery).toBe("jk");
+		expect(modals.getActiveDialogSnapshot()?.options).toEqual(["jk-target"]);
+		modals.handleInput("enter");
+		await expect(result).resolves.toBe("jk-target");
+	});
+
+	it("accepts multi-character typed/pasted chunks as search query text", async () => {
+		const modals = new ModalManager();
+		const options = [...longOptions(SELECT_SEARCH_THRESHOLD), "designer model"];
+		const result = modals.select("Pick", options);
+		modals.handleInput("designer mo");
+		expect(modals.getActiveDialogSnapshot()?.searchQuery).toBe("designer mo");
+		expect(modals.getActiveDialogSnapshot()?.options).toEqual(["designer model"]);
+		modals.handleInput("enter");
+		await expect(result).resolves.toBe("designer model");
+	});
+
+	it("enter on an empty filtered list does not resolve the select", async () => {
+		const modals = new ModalManager();
+		const options = longOptions(SELECT_SEARCH_THRESHOLD + 1);
+		const result = modals.select("Pick", options);
+		for (const char of "zzz") modals.handleInput(char);
+		modals.handleInput("enter");
+		// Still open: escape resolves undefined, proving enter did not settle it.
+		modals.handleInput("escape");
+		await expect(result).resolves.toBeUndefined();
 	});
 
 	it("displays sanitized select labels but resolves the original raw option value", async () => {

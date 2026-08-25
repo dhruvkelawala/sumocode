@@ -121,9 +121,18 @@ export class ModalLayer extends ModalManager {
 		// language the owned shell used, not a bare debug card.
 		const dialog = this.getActiveDialogSnapshot();
 		if (dialog?.kind === "select" && dialog.options) {
+			// Search-mode selects (plan 085 fix): long lists render a filter row
+			// and drop letter labels — typing filters, it does not letter-jump.
+			const colors = activeThemeColors();
+			const searchRow = dialog.searchActive
+				? dialog.searchQuery && dialog.searchQuery.length > 0
+					? `${scriptoriumFg("❯ ", colors.accent)}${scriptoriumFg(dialog.searchQuery, colors.foreground)}${scriptoriumFg("█", colors.foreground)}`
+					: `${scriptoriumFg("❯ ", colors.accent)}${scriptoriumFg("█", colors.foreground)}${scriptoriumFg("type to filter…", colors.foregroundDim)}`
+				: undefined;
 			return renderDivineQuery(
 				{ title: dialog.title, options: dialog.options, focusedIndex: dialog.selectedIndex },
 				modalWidth,
+				{ searchRow, hideLetters: dialog.searchActive === true },
 			);
 		}
 		if (dialog?.kind === "confirm") {

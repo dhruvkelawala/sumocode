@@ -197,7 +197,7 @@ describe("registerRolesCommand", () => {
 		expect(registerCommand).toHaveBeenCalledWith("sumo:roles", expect.objectContaining({ description: expect.any(String), handler: expect.any(Function) }));
 	});
 
-	it("uses ctx.ui.custom for the RPC palette path", async () => {
+	it("routes the RPC palette path through ctx.ui.select (custom() is a documented rpc no-op)", async () => {
 		let handler: ((args: string, ctx: unknown) => Promise<void>) | undefined;
 		const registerCommand = vi.fn((_name: string, options: { handler: typeof handler }) => {
 			handler = options.handler;
@@ -213,7 +213,7 @@ describe("registerRolesCommand", () => {
 			modelRegistry: { getAvailable: () => [] },
 		});
 
-		expect(custom).toHaveBeenCalledWith(expect.any(Function), expect.objectContaining({ overlay: true }));
-		expect(select).not.toHaveBeenCalled();
+		expect(select).toHaveBeenCalledTimes(1);
+		expect(custom).not.toHaveBeenCalled();
 	});
 });

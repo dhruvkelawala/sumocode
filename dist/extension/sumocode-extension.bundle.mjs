@@ -1982,7 +1982,7 @@ function wrapIndentedText(text, width, indent) {
 function optionLabel(index) {
   return `${String.fromCharCode(65 + index)}) `;
 }
-function buildInnerRows(snapshot, contentWidth, extras, compact) {
+function buildInnerRows(snapshot, contentWidth, extras, compact, searchRow, hideLetters) {
   const inner = [];
   const indent = "     ";
   const colors = activeThemeColors();
@@ -1995,12 +1995,16 @@ function buildInnerRows(snapshot, contentWidth, extras, compact) {
     inner.push(fg2(questionLine, colors.foreground));
   }
   if (!compact) inner.push("");
+  if (searchRow !== void 0) {
+    inner.push(`${indent}${searchRow}`);
+    inner.push("");
+  }
   for (let i = 0; i < snapshot.options.length; i += 1) {
     const focused = i === snapshot.focusedIndex;
     const mark = focusMarker(focused);
     const optionIndent = `${indent}${mark}   `;
     const continuationIndent = `${indent}    `;
-    const label = `${optionLabel(i)}${snapshot.options[i]}`;
+    const label = `${hideLetters ? "" : optionLabel(i)}${snapshot.options[i]}`;
     const wrappedOption = wrapIndentedText(label, contentWidth, continuationIndent);
     for (let optionRow = 0; optionRow < wrappedOption.length; optionRow += 1) {
       const raw = (wrappedOption[optionRow] ?? "").slice(continuationIndent.length);
@@ -2012,7 +2016,8 @@ function buildInnerRows(snapshot, contentWidth, extras, compact) {
   if (!compact) {
     inner.push("");
     inner.push(splitRule(contentWidth));
-    inner.push(center(fg2("\u2191\u2193 wander    \u23CE answer    \u238B retreat", colors.foregroundDim), contentWidth));
+    const hint = searchRow !== void 0 ? "type to filter    \u2191\u2193 wander    \u23CE answer    \u238B retreat" : "\u2191\u2193 wander    \u23CE answer    \u238B retreat";
+    inner.push(center(fg2(hint, colors.foregroundDim), contentWidth));
   }
   for (const extra of extras) inner.push(extra);
   inner.push("");
@@ -2020,7 +2025,7 @@ function buildInnerRows(snapshot, contentWidth, extras, compact) {
 }
 function renderDivineQuery(snapshot, width, options = {}) {
   if (width < 1) return [];
-  const inner = buildInnerRows(snapshot, width, options.extras ?? [], options.compact === true);
+  const inner = buildInnerRows(snapshot, width, options.extras ?? [], options.compact === true, options.searchRow, options.hideLetters === true);
   return inner.map((innerLine) => wrapPanelRow(innerLine, width));
 }
 function updateDivineQuery(snapshot, data) {
@@ -5344,7 +5349,16 @@ var SearchPaletteComponent = class {
     return renderPalette(this.options, this.state, width);
   }
 };
+function rowLabel(row3) {
+  return row3.value.length > 0 ? `${row3.label}  ${row3.value}` : row3.label;
+}
 async function showSearchPalette(ctx, options) {
+  if (ctx.mode === "rpc") {
+    const labels = options.rows.map(rowLabel);
+    const selected = await ctx.ui.select(options.title, labels);
+    const selectedIndex = selected === void 0 ? -1 : labels.indexOf(selected);
+    return selectedIndex < 0 ? void 0 : options.rows[selectedIndex]?.id;
+  }
   return ctx.ui.custom(
     (_tui, _theme, _keybindings, done) => new SearchPaletteComponent(options, {
       searchQuery: "",

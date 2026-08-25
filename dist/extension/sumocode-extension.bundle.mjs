@@ -14253,6 +14253,7 @@ function installActivityManagerBridge(pi, terminalManager, subagentManager, opti
 
 // src/subagent-status-row.ts
 var TITLE_PREFIX_MAX = 18;
+var LEFT_PADDING = "  ";
 function ageLabel(ageMs) {
   const seconds = Math.max(0, Math.floor(ageMs / 1e3));
   if (seconds < 60) return `${seconds}s`;
@@ -14273,6 +14274,7 @@ function renderSubagentStatusRow(options) {
   );
   const suffix = segments.length > 0 ? ` \xB7 ${segments.join(" \xB7 ")}` : "";
   const row3 = textLine([
+    span(LEFT_PADDING),
     span("\u25C8", { fg: theme.tokens.colors.accent }),
     span(` subagents${suffix}`, { fg: theme.tokens.colors.foregroundDim })
   ]);

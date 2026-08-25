@@ -27,7 +27,7 @@ describe("RPC subagent status strip", () => {
 				id: "subagent-strip-1",
 				method: "setWidget",
 				widgetKey: "sumocode-subagents",
-				widgetLines: ["◈ subagents · 1 running · sa-1 research 3s"],
+				widgetLines: ["  ◈ subagents · 1 running · sa-1 research 3s"],
 				widgetPlacement: "aboveEditor",
 			}],
 		});
@@ -48,6 +48,8 @@ describe("RPC subagent status strip", () => {
 			({ text }) => text.includes("◈ subagents · 1 running · sa-1 research 3s"),
 			{ cols: COLS, rows: ROWS, timeoutMs: 10_000 },
 		);
+		const stripRow = screen.rows.find((row) => row.includes("◈ subagents"));
+		expect(stripRow?.indexOf("◈ subagents")).toBe(2);
 		expect(screen.text.indexOf("◈ subagents")).toBeLessThan(screen.text.indexOf("CTRL+/ · COMMANDS"));
 	}, 30_000);
 });

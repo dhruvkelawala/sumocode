@@ -2,6 +2,7 @@ import { getActiveTheme } from "./themes/index.js";
 import { lineToAnsi, span, textLine, truncateLine } from "./sumo-tui/render/primitives.js";
 
 const TITLE_PREFIX_MAX = 18;
+const LEFT_PADDING = "  ";
 
 function ageLabel(ageMs: number): string {
 	const seconds = Math.max(0, Math.floor(ageMs / 1_000));
@@ -29,6 +30,7 @@ export function renderSubagentStatusRow(options: {
 	);
 	const suffix = segments.length > 0 ? ` · ${segments.join(" · ")}` : "";
 	const row = textLine([
+		span(LEFT_PADDING),
 		span("◈", { fg: theme.tokens.colors.accent }),
 		span(` subagents${suffix}`, { fg: theme.tokens.colors.foregroundDim }),
 	]);

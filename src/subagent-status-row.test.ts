@@ -14,7 +14,7 @@ describe("renderSubagentStatusRow", () => {
 			],
 			queuedCount: 1,
 		});
-		expect(plain(row)).toBe("◈ subagents · 2 running · 1 queued · sa-2 research 4m · sa-5 implement-cheap 40s");
+		expect(plain(row)).toBe("  ◈ subagents · 2 running · 1 queued · sa-2 research 4m · sa-5 implement-cheap 40s");
 	});
 
 	it("keeps aggregate counts visible when per-agent detail is truncated", () => {
@@ -39,7 +39,7 @@ describe("renderSubagentStatusRow", () => {
 			running: [],
 			queuedCount: 2,
 		});
-		expect(plain(row)).toBe("◈ subagents · 2 queued");
+		expect(plain(row)).toBe("  ◈ subagents · 2 queued");
 	});
 
 	it("omits the queue segment when the queue is empty", () => {

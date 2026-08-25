@@ -2,14 +2,18 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { spawnSync } from "node:child_process";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { showDivineQuery } from "../divine-query.js";
 import { BUILT_IN_TOOLS } from "../native-task-config.js";
 import { BUILT_IN_ROLES, loadRoles, resolveRolesPath, type LoadedRoles, type SubagentRole } from "../subagents/roles.js";
+import { showSearchPalette, type SearchPaletteOptions, type SearchPaletteRow } from "./roles-palette.js";
 
+const OPEN_ACTION_ID = "action:open";
+const RESET_ACTION_ID = "action:reset";
 const OPEN_ACTION = "open roles.json in $EDITOR";
-const RESET_ACTION = "reset a role to built-in";
-const ROLE_FIELDS = ["model", "thinking", "tools", "default worktree", "default visible", "system prompt"] as const;
+const RESET_ACTION = "reset a role to built-in…";
 const READ_ONLY_TOOLS = ["read", "grep", "find", "ls", "bash"] as const;
+const THINKING_LEVELS = ["inherit", "off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+
+type EditableRoleField = "model" | "thinking" | "tools" | "worktree" | "visible" | "systemPrompt";
 
 export type RolesCommandResult = {
 	readonly kind: "success" | "error" | "instructions";
@@ -32,12 +36,16 @@ export interface RolesCommandDeps {
 	readonly isTTY: boolean;
 	readonly loadRoles: () => LoadedRoles;
 	readonly writeRolesFile: (mutation: RolesFileMutation) => void | Promise<void>;
-	readonly select: (title: string, options: readonly string[]) => Promise<string | undefined>;
+	readonly showPalette: (options: SearchPaletteOptions) => Promise<string | undefined>;
+	readonly getAvailableModels: () => { readonly id: string; readonly provider?: string }[];
 	readonly input: (title: string, placeholder: string) => Promise<string | undefined>;
 	readonly openEditor: (path: string) => RolesEditorOutcome | Promise<RolesEditorOutcome>;
 }
 
-const roleOption = (role: SubagentRole): string => `${role.id} · ${role.label} · ${role.model ?? "inherit"} · ${role.thinking ?? "inherit"}`;
+interface RoleFieldSelection {
+	readonly role: SubagentRole;
+	readonly field: EditableRoleField;
+}
 
 const errorText = (error: unknown): string => error instanceof Error ? error.message : String(error);
 
@@ -59,6 +67,120 @@ async function openRolesEditor(deps: RolesCommandDeps): Promise<RolesCommandResu
 	return { kind: "error", opened: true, message: `editor exited with code ${outcome.status}` };
 }
 
+function sameTools(actual: readonly string[], expected: readonly string[]): boolean {
+	return actual.length === expected.length && actual.every((tool, index) => tool === expected[index]);
+}
+
+function toolsValue(role: SubagentRole): string {
+	if (!role.tools) return "inherit parent";
+	if (sameTools(role.tools, READ_ONLY_TOOLS)) return "read-only";
+	if (sameTools(role.tools, BUILT_IN_TOOLS)) return "full built-in set";
+	return role.tools.join(", ");
+}
+
+function booleanValue(value: boolean | undefined): string {
+	return value === undefined ? "inherit default" : String(value);
+}
+
+function systemPromptValue(role: SubagentRole): string {
+	const builtIn = BUILT_IN_ROLES.find((candidate) => candidate.id === role.id);
+	return builtIn?.systemPrompt === role.systemPrompt ? "(built-in)" : "(custom)";
+}
+
+function roleFieldId(roleId: string, field: EditableRoleField): string {
+	return `field:${roleId}:${field}`;
+}
+
+function surfaceRows(roles: readonly SubagentRole[]): { rows: SearchPaletteRow[]; selections: Map<string, RoleFieldSelection> } {
+	const rows: SearchPaletteRow[] = [];
+	const selections = new Map<string, RoleFieldSelection>();
+	const add = (role: SubagentRole, field: EditableRoleField, label: string, value: string): void => {
+		const id = roleFieldId(role.id, field);
+		rows.push({ id, label: `${role.id} ${label}`, value });
+		selections.set(id, { role, field });
+	};
+
+	for (const role of roles) {
+		add(role, "model", "model", role.model ?? "inherit");
+		add(role, "thinking", "thinking", role.thinking ?? "inherit");
+		add(role, "tools", "tools", toolsValue(role));
+		add(role, "worktree", "worktree", booleanValue(role.defaultWorktree));
+		add(role, "visible", "visible", booleanValue(role.defaultVisible));
+	}
+	for (const role of roles) add(role, "systemPrompt", "system prompt", systemPromptValue(role));
+	rows.push({ id: OPEN_ACTION_ID, label: OPEN_ACTION, value: "" });
+	rows.push({ id: RESET_ACTION_ID, label: RESET_ACTION, value: "" });
+	return { rows, selections };
+}
+
+function pickerRows(values: readonly string[]): SearchPaletteRow[] {
+	return values.map((value) => ({ id: value, label: value, value: "" }));
+}
+
+function modelValue(model: { readonly id: string; readonly provider?: string }): string {
+	return model.provider && !model.id.includes("/") ? `${model.provider}/${model.id}` : model.id;
+}
+
+async function chooseMutation(deps: RolesCommandDeps, selection: RoleFieldSelection): Promise<RolesFileMutation | undefined> {
+	const { role, field } = selection;
+	if (field === "model") {
+		const models = deps.getAvailableModels();
+		const rows: SearchPaletteRow[] = [
+			{ id: "inherit", label: "inherit", value: "use parent session's model" },
+			...models.map((model, index) => ({ id: `registry:${index}`, label: model.id, value: model.provider ?? "" })),
+			{ id: "other", label: "other", value: "type provider/modelId…" },
+		];
+		const selected = await deps.showPalette({ title: `${role.id.toUpperCase()} MODEL`, placeholder: "choose a model…", rows });
+		if (selected === undefined) return undefined;
+		if (selected === "inherit") return { kind: "set", roleId: role.id, field: "model", value: "inherit" };
+		if (selected === "other") {
+			const model = await deps.input("model (provider/modelId)", role.model ?? "");
+			if (model === undefined || !model.trim()) return undefined;
+			return { kind: "set", roleId: role.id, field: "model", value: model.trim() };
+		}
+		const model = models[Number(selected.replace("registry:", ""))];
+		return model ? { kind: "set", roleId: role.id, field: "model", value: modelValue(model) } : undefined;
+	}
+	if (field === "thinking") {
+		const thinking = await deps.showPalette({ title: `${role.id.toUpperCase()} THINKING`, placeholder: "choose a thinking level…", rows: pickerRows(THINKING_LEVELS) });
+		return thinking === undefined ? undefined : { kind: "set", roleId: role.id, field: "thinking", value: thinking === "inherit" ? undefined : thinking };
+	}
+	if (field === "tools") {
+		const tools = await deps.showPalette({
+			title: `${role.id.toUpperCase()} TOOLS`,
+			placeholder: "choose a tool policy…",
+			rows: pickerRows(["inherit parent", "read-only (read, grep, find, ls, bash)", "full built-in set"]),
+		});
+		if (tools === undefined) return undefined;
+		return {
+			kind: "set",
+			roleId: role.id,
+			field: "tools",
+			value: tools === "inherit parent" ? undefined : tools.startsWith("read-only") ? [...READ_ONLY_TOOLS] : [...BUILT_IN_TOOLS],
+		};
+	}
+	if (field === "worktree" || field === "visible") {
+		const value = await deps.showPalette({
+			title: `${role.id.toUpperCase()} ${field.toUpperCase()}`,
+			placeholder: "choose a default…",
+			rows: pickerRows(["inherit default", "true", "false"]),
+		});
+		return value === undefined ? undefined : {
+			kind: "set",
+			roleId: role.id,
+			field: field === "worktree" ? "defaultWorktree" : "defaultVisible",
+			value: value === "inherit default" ? undefined : value === "true",
+		};
+	}
+	return { kind: "set-if-absent", roleId: role.id, field: "systemPrompt", value: role.systemPrompt };
+}
+
+const successResult = (opened: boolean): RolesCommandResult => ({
+	kind: "success",
+	opened,
+	message: "role updated — applies to the next spawn",
+});
+
 export async function runRolesCommand(deps: RolesCommandDeps): Promise<RolesCommandResult | undefined> {
 	if (!deps.isTTY) {
 		return {
@@ -68,67 +190,49 @@ export async function runRolesCommand(deps: RolesCommandDeps): Promise<RolesComm
 		};
 	}
 
-	const loaded = deps.loadRoles();
-	const roleOptions = loaded.roles.map(roleOption);
-	const selected = await deps.select("SUBAGENT ROLES", [...roleOptions, OPEN_ACTION, RESET_ACTION]);
-	if (selected === undefined) return undefined;
-	if (selected === OPEN_ACTION) return openRolesEditor(deps);
-	if (selected === RESET_ACTION) {
-		const resetOptions = BUILT_IN_ROLES.map((role) => `${role.id} · ${role.label}`);
-		const resetSelection = await deps.select("RESET ROLE TO BUILT-IN", resetOptions);
-		if (resetSelection === undefined) return undefined;
-		const role = BUILT_IN_ROLES[resetOptions.indexOf(resetSelection)];
-		if (!role) return undefined;
-		const failed = await writeMutation(deps, { kind: "reset", roleId: role.id });
-		return failed ?? { kind: "success", opened: false, message: "role updated — applies to the next spawn" };
-	}
+	let latestResult: RolesCommandResult | undefined;
+	while (true) {
+		const surface = surfaceRows(deps.loadRoles().roles);
+		const selected = await deps.showPalette({
+			title: "SUBAGENT ROLES",
+			placeholder: "what shall we tune…",
+			rows: surface.rows,
+		});
+		if (selected === undefined) return latestResult;
 
-	const role = loaded.roles[roleOptions.indexOf(selected)];
-	if (!role) return undefined;
-	const field = await deps.select(`${role.id.toUpperCase()} ROLE`, ROLE_FIELDS);
-	if (field === undefined) return undefined;
-
-	let mutation: RolesFileMutation | undefined;
-	if (field === "model") {
-		const mode = await deps.select("MODEL", ["inherit (use parent session's model)", "set a specific model…"]);
-		if (mode === undefined) return undefined;
-		if (mode === "inherit (use parent session's model)") {
-			mutation = { kind: "set", roleId: role.id, field: "model", value: "inherit" };
-		} else {
-			const model = await deps.input("model (provider/modelId)", role.model ?? "");
-			if (model === undefined || !model.trim()) return undefined;
-			mutation = { kind: "set", roleId: role.id, field: "model", value: model.trim() };
+		if (selected === OPEN_ACTION_ID) {
+			const result = await openRolesEditor(deps);
+			if (result.kind === "error") return result;
+			latestResult = result;
+			continue;
 		}
-	} else if (field === "thinking") {
-		const thinking = await deps.select("THINKING", ["inherit", "off", "minimal", "low", "medium", "high", "xhigh", "max"]);
-		if (thinking === undefined) return undefined;
-		mutation = { kind: "set", roleId: role.id, field: "thinking", value: thinking === "inherit" ? undefined : thinking };
-	} else if (field === "tools") {
-		const tools = await deps.select("TOOLS", ["inherit parent", "read-only (read, grep, find, ls, bash)", "full built-in set"]);
-		if (tools === undefined) return undefined;
-		mutation = {
-			kind: "set",
-			roleId: role.id,
-			field: "tools",
-			value: tools === "inherit parent" ? undefined : tools.startsWith("read-only") ? [...READ_ONLY_TOOLS] : [...BUILT_IN_TOOLS],
-		};
-	} else if (field === "default worktree" || field === "default visible") {
-		const value = await deps.select(field.toUpperCase(), ["inherit default", "true", "false"]);
-		if (value === undefined) return undefined;
-		mutation = {
-			kind: "set",
-			roleId: role.id,
-			field: field === "default worktree" ? "defaultWorktree" : "defaultVisible",
-			value: value === "inherit default" ? undefined : value === "true",
-		};
-	} else {
-		const failed = await writeMutation(deps, { kind: "set-if-absent", roleId: role.id, field: "systemPrompt", value: role.systemPrompt });
-		if (failed) return failed;
-		return openRolesEditor(deps);
-	}
+		if (selected === RESET_ACTION_ID) {
+			const roleId = await deps.showPalette({
+				title: "RESET ROLE TO BUILT-IN",
+				placeholder: "choose a role…",
+				rows: BUILT_IN_ROLES.map((role) => ({ id: role.id, label: role.id, value: role.label })),
+			});
+			if (roleId === undefined) continue;
+			const failed = await writeMutation(deps, { kind: "reset", roleId });
+			if (failed) return failed;
+			latestResult = successResult(false);
+			continue;
+		}
 
-	const failed = mutation ? await writeMutation(deps, mutation) : undefined;
-	return failed ?? { kind: "success", opened: false, message: "role updated — applies to the next spawn" };
+		const fieldSelection = surface.selections.get(selected);
+		if (!fieldSelection) continue;
+		const mutation = await chooseMutation(deps, fieldSelection);
+		if (!mutation) continue;
+		const failed = await writeMutation(deps, mutation);
+		if (failed) return failed;
+		if (fieldSelection.field === "systemPrompt") {
+			const result = await openRolesEditor(deps);
+			if (result.kind === "error") return result;
+			latestResult = result;
+		} else {
+			latestResult = successResult(false);
+		}
+	}
 }
 
 interface RolesDocument {
@@ -194,7 +298,8 @@ export function registerRolesCommand(pi: ExtensionAPI): void {
 					isTTY: ctx.hasUI,
 					loadRoles,
 					writeRolesFile: (mutation) => writeRolesFile(path, mutation),
-					select: (title, options) => showDivineQuery(ctx, title, options),
+					showPalette: (options) => showSearchPalette(ctx, options),
+					getAvailableModels: () => ctx.modelRegistry.getAvailable().map((model) => ({ id: model.id, provider: model.provider })),
 					input: (title, placeholder) => ctx.ui.input(title, placeholder),
 					openEditor: (editorPath) => defaultOpenEditor(process.env.EDITOR?.trim() || "vi", editorPath),
 				});

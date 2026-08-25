@@ -1982,7 +1982,7 @@ function wrapIndentedText(text, width, indent) {
 function optionLabel(index) {
   return `${String.fromCharCode(65 + index)}) `;
 }
-function buildInnerRows(snapshot, contentWidth, extras, compact, searchRow, hideLetters) {
+function buildInnerRows(snapshot, contentWidth, extras, compact) {
   const inner = [];
   const indent = "     ";
   const colors = activeThemeColors();
@@ -1995,16 +1995,12 @@ function buildInnerRows(snapshot, contentWidth, extras, compact, searchRow, hide
     inner.push(fg2(questionLine, colors.foreground));
   }
   if (!compact) inner.push("");
-  if (searchRow !== void 0) {
-    inner.push(`${indent}${searchRow}`);
-    inner.push("");
-  }
   for (let i = 0; i < snapshot.options.length; i += 1) {
     const focused = i === snapshot.focusedIndex;
     const mark = focusMarker(focused);
     const optionIndent = `${indent}${mark}   `;
     const continuationIndent = `${indent}    `;
-    const label = `${hideLetters ? "" : optionLabel(i)}${snapshot.options[i]}`;
+    const label = `${optionLabel(i)}${snapshot.options[i]}`;
     const wrappedOption = wrapIndentedText(label, contentWidth, continuationIndent);
     for (let optionRow = 0; optionRow < wrappedOption.length; optionRow += 1) {
       const raw = (wrappedOption[optionRow] ?? "").slice(continuationIndent.length);
@@ -2016,8 +2012,7 @@ function buildInnerRows(snapshot, contentWidth, extras, compact, searchRow, hide
   if (!compact) {
     inner.push("");
     inner.push(splitRule(contentWidth));
-    const hint = searchRow !== void 0 ? "type to filter    \u2191\u2193 wander    \u23CE answer    \u238B retreat" : "\u2191\u2193 wander    \u23CE answer    \u238B retreat";
-    inner.push(center(fg2(hint, colors.foregroundDim), contentWidth));
+    inner.push(center(fg2("\u2191\u2193 wander    \u23CE answer    \u238B retreat", colors.foregroundDim), contentWidth));
   }
   for (const extra of extras) inner.push(extra);
   inner.push("");
@@ -2025,7 +2020,7 @@ function buildInnerRows(snapshot, contentWidth, extras, compact, searchRow, hide
 }
 function renderDivineQuery(snapshot, width, options = {}) {
   if (width < 1) return [];
-  const inner = buildInnerRows(snapshot, width, options.extras ?? [], options.compact === true, options.searchRow, options.hideLetters === true);
+  const inner = buildInnerRows(snapshot, width, options.extras ?? [], options.compact === true);
   return inner.map((innerLine) => wrapPanelRow(innerLine, width));
 }
 function updateDivineQuery(snapshot, data) {
@@ -5691,24 +5686,31 @@ function normalizedActiveIndex2(snapshot, rows) {
   if (rows.length === 0) return 0;
   return Math.min(Math.max(0, snapshot.activeIndex), rows.length - 1);
 }
-function renderCommandPalette(snapshot, width) {
+function renderCommandPalette(snapshot, width, renderOptions = {}) {
   const w = Math.max(1, Math.floor(width));
-  const rows = filterPaletteRows(snapshot.rows, snapshot.searchQuery);
+  const rows = renderOptions.prefiltered ? [...snapshot.rows] : filterPaletteRows(snapshot.rows, snapshot.searchQuery);
   const active = normalizedActiveIndex2(snapshot, rows);
-  const searchText = snapshot.searchQuery.length > 0 ? snapshot.searchQuery : "what shall we attend to\u2026";
+  const searchText = snapshot.searchQuery.length > 0 ? snapshot.searchQuery : renderOptions.placeholder ?? "what shall we attend to\u2026";
   const halfRule = "\u2500".repeat(22);
   const lines = [];
   lines.push(panelLine2("", w));
-  lines.push(panelLine2(center3(`${accent3("\u273E")}  ${accent3("COMMAND PALETTE")}  ${accent3("\u273E")}`, w), w));
+  lines.push(panelLine2(center3(`${accent3("\u273E")}  ${accent3(renderOptions.title ?? "COMMAND PALETTE")}  ${accent3("\u273E")}`, w), w));
   lines.push(panelLine2("", w));
   lines.push(panelLine2(center3(`${dividerText2(halfRule)}  ${dividerText2("\xB7")}  ${dividerText2(halfRule)}`, w), w));
   lines.push(panelLine2("", w));
   lines.push(panelLine2(`     ${accent3("\u276F")}  ${cursorCell2()}${snapshot.searchQuery.length > 0 ? foreground2(searchText) : dim3(searchText)}`, w));
   lines.push(panelLine2("", w));
   if (rows.length === 0) {
-    lines.push(panelLine2(`     ${dividerText2("\xB7")}   ${dim3("no matching command")}`, w));
+    lines.push(panelLine2(`     ${dividerText2("\xB7")}   ${dim3(renderOptions.emptyText ?? "no matching command")}`, w));
   } else {
-    for (const [index, row3] of rows.entries()) {
+    const cap = renderOptions.maxVisibleRows !== void 0 ? Math.max(1, renderOptions.maxVisibleRows) : rows.length;
+    const offset = rows.length <= cap ? 0 : Math.min(rows.length - cap, Math.max(0, active - Math.floor(cap / 2)));
+    const windowRows = rows.slice(offset, offset + cap);
+    const hiddenAbove = offset;
+    const hiddenBelow = rows.length - offset - windowRows.length;
+    if (hiddenAbove > 0) lines.push(panelLine2(`         ${dim3(`\u2026 ${hiddenAbove} more`)}`, w));
+    for (const [windowIndex, row3] of windowRows.entries()) {
+      const index = windowIndex + offset;
       const focused = index === active;
       const marker = focused ? accent3("\u2748") : dividerText2("\xB7");
       const label = focused ? foreground2(row3.label) : dim3(row3.label);
@@ -5718,6 +5720,7 @@ function renderCommandPalette(snapshot, width) {
       const padBetween = Math.max(2, w - visibleWidth7(left) - visibleWidth7(valueText) - 5);
       lines.push(panelLine2(`${left}${" ".repeat(padBetween)}${valueText}`, w));
     }
+    if (hiddenBelow > 0) lines.push(panelLine2(`         ${dim3(`\u2026 ${hiddenBelow} more`)}`, w));
   }
   lines.push(panelLine2("", w));
   lines.push(panelLine2(center3(`${dividerText2(halfRule)}  ${dividerText2("\xB7")}  ${dividerText2(halfRule)}`, w), w));

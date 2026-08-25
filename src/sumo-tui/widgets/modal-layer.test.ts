@@ -55,9 +55,16 @@ describe("ModalLayer", () => {
 		options.push("research model");
 		const result = layer.select("SUBAGENT ROLES", options);
 
-		const before = layer.render(80).join("\n");
+		const beforeLines = layer.render(80);
+		const before = beforeLines.join("\n");
+		// Command-palette language: dialog title in the ✾ header, filter row,
+		// no DIVINE QUERY branding, no letter labels, windowed rows.
+		expect(before).toContain("SUBAGENT ROLES");
+		expect(before).not.toContain("DIVINE QUERY");
 		expect(before).toContain("type to filter");
 		expect(before).not.toContain("A) choice-00");
+		expect(beforeLines.filter((line) => line.includes("choice-")).length).toBeLessThanOrEqual(12);
+		expect(before).toContain("more");
 
 		// Typing filters (no letter-jump), Enter answers with the match.
 		for (const char of "research") layer.handleInput(char);

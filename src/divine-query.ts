@@ -79,17 +79,6 @@ export interface DivineQueryRenderOptions {
 	 * surfaceLifted bg + foreground fg.
 	 */
 	readonly extras?: readonly string[];
-	/**
-	 * Pre-styled type-to-filter row rendered between the question body and the
-	 * options (search-mode selects, plan 085 fix). Presence also switches the
-	 * footer hint to include "type to filter".
-	 */
-	readonly searchRow?: string;
-	/**
-	 * Suppress the A) B) C) letter labels. Search-mode selects must not imply
-	 * letter-jump — typing filters instead of answering there.
-	 */
-	readonly hideLetters?: boolean;
 }
 
 // ── Pure render ──────────────────────────────────────────────
@@ -103,7 +92,7 @@ function optionLabel(index: number): string {
  * width (i.e. excluding the side borders). Returned rows are not yet padded
  * to width — `wrapPanelRow` handles padding + bg paint at the framing layer.
  */
-function buildInnerRows(snapshot: DivineQuerySnapshot, contentWidth: number, extras: readonly string[], compact: boolean, searchRow?: string, hideLetters?: boolean): string[] {
+function buildInnerRows(snapshot: DivineQuerySnapshot, contentWidth: number, extras: readonly string[], compact: boolean): string[] {
 	const inner: string[] = [];
 	const indent = "     ";
 	const colors = activeThemeColors();
@@ -131,19 +120,13 @@ function buildInnerRows(snapshot: DivineQuerySnapshot, contentWidth: number, ext
 
 	if (!compact) inner.push("");
 
-	// Type-to-filter row (search-mode selects)
-	if (searchRow !== undefined) {
-		inner.push(`${indent}${searchRow}`);
-		inner.push("");
-	}
-
 	// Options
 	for (let i = 0; i < snapshot.options.length; i += 1) {
 		const focused = i === snapshot.focusedIndex;
 		const mark = focusMarker(focused);
 		const optionIndent = `${indent}${mark}   `;
 		const continuationIndent = `${indent}    `;
-		const label = `${hideLetters ? "" : optionLabel(i)}${snapshot.options[i]}`;
+		const label = `${optionLabel(i)}${snapshot.options[i]}`;
 		const wrappedOption = wrapIndentedText(label, contentWidth, continuationIndent);
 		for (let optionRow = 0; optionRow < wrappedOption.length; optionRow += 1) {
 			const raw = (wrappedOption[optionRow] ?? "").slice(continuationIndent.length);
@@ -158,10 +141,7 @@ function buildInnerRows(snapshot: DivineQuerySnapshot, contentWidth: number, ext
 	if (!compact) {
 		inner.push("");
 		inner.push(splitRule(contentWidth));
-		const hint = searchRow !== undefined
-			? "type to filter    ↑↓ wander    ⏎ answer    ⎋ retreat"
-			: "↑↓ wander    ⏎ answer    ⎋ retreat";
-		inner.push(center(fg(hint, colors.foregroundDim), contentWidth));
+		inner.push(center(fg("↑↓ wander    ⏎ answer    ⎋ retreat", colors.foregroundDim), contentWidth));
 	}
 
 	// Extras (e.g. edit-mode editor rows from question-tool)
@@ -179,7 +159,7 @@ export function renderDivineQuery(
 	options: DivineQueryRenderOptions = {},
 ): string[] {
 	if (width < 1) return [];
-	const inner = buildInnerRows(snapshot, width, options.extras ?? [], options.compact === true, options.searchRow, options.hideLetters === true);
+	const inner = buildInnerRows(snapshot, width, options.extras ?? [], options.compact === true);
 	return inner.map((innerLine) => wrapPanelRow(innerLine, width));
 }
 

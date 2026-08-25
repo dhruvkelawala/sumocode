@@ -14004,8 +14004,12 @@ function fallbackTitle(title) {
 function renderSubagentStatusRow(options) {
   const theme = getActiveTheme();
   const width = Math.max(0, Math.floor(options.width));
-  const segments = options.running.map((subagent) => `${subagent.id} ${subagent.roleId ?? fallbackTitle(subagent.title)} ${ageLabel(subagent.ageMs)}`);
+  const segments = [];
+  if (options.running.length > 0) segments.push(`${options.running.length} running`);
   if (options.queuedCount > 0) segments.push(`${options.queuedCount} queued`);
+  segments.push(
+    ...options.running.map((subagent) => `${subagent.id} ${subagent.roleId ?? fallbackTitle(subagent.title)} ${ageLabel(subagent.ageMs)}`)
+  );
   const suffix = segments.length > 0 ? ` \xB7 ${segments.join(" \xB7 ")}` : "";
   const row3 = textLine([
     span("\u25C8", { fg: theme.tokens.colors.accent }),
@@ -14513,6 +14517,11 @@ import { execFile as execFile6 } from "node:child_process";
 import { isAbsolute as isAbsolute3, join as join19, relative as relative2 } from "node:path";
 import { promisify as promisify4 } from "node:util";
 
+// src/subagents/domain.ts
+var SUBAGENT_MAX_RUNNING = 10;
+var SUBAGENT_MAX_QUEUED = 16;
+var latestText = (snap) => snap.liveText || snap.finalText;
+
 // src/subagents/layout.ts
 var MAX_PANES_PER_TAB = 4;
 var splitDirection = (paneCount) => paneCount % 2 === 0 ? "right" : "down";
@@ -14593,8 +14602,6 @@ async function buildCompletionManifest(options) {
 
 // src/subagents/manager.ts
 var execFileAsync3 = promisify4(execFile6);
-var MAX_RUNNING = 4;
-var MAX_QUEUED = 16;
 var MAX_TRACKED = 64;
 var ERROR_TEXT_MAX2 = 4096;
 var CANCEL_WAIT_MS = 5500;
@@ -14680,11 +14687,11 @@ var SubagentManager = class {
   consumedIds = /* @__PURE__ */ new Set();
   async spawn(task) {
     const runningSummaries = this.runningSummaries();
-    if (runningSummaries.length >= MAX_RUNNING || this.queuedTasks.length > 0) {
-      if (this.queuedTasks.length >= MAX_QUEUED) {
+    if (runningSummaries.length >= SUBAGENT_MAX_RUNNING || this.queuedTasks.length > 0) {
+      if (this.queuedTasks.length >= SUBAGENT_MAX_QUEUED) {
         return {
           status: "at_capacity",
-          capacity: MAX_RUNNING,
+          capacity: SUBAGENT_MAX_RUNNING,
           runningCount: runningSummaries.length,
           running: runningSummaries,
           retryHint: "queue is full \u2014 do NOT retry in a loop; cancel something or end your turn and respawn later"
@@ -14941,7 +14948,7 @@ var SubagentManager = class {
     return next;
   }
   async drainQueue() {
-    while (this.queuedTasks.length > 0 && this.runningSummaries().length < MAX_RUNNING) {
+    while (this.queuedTasks.length > 0 && this.runningSummaries().length < SUBAGENT_MAX_RUNNING) {
       const queued = this.queuedTasks.shift();
       if (!queued) return;
       try {
@@ -15185,7 +15192,7 @@ var SUBAGENT_PROMPT_GUIDELINES = [
   "delegation is fire-and-forget: after spawning, continue other work or end your turn. settled results arrive as automatic follow-up messages that wake you. do NOT call subagent_wait right after subagent_spawn.",
   "spawn with a role for recurring shapes: research, review, documentor, designer, implement-cheap, implement-smart. the role sets the child's system prompt, tool limits, and defaults; your prompt supplies the concrete objective and stop conditions.",
   "if spawn returns status=queued, the child starts automatically when a slot frees \u2014 do not retry, do not wait.",
-  "At most 4 subagents can run concurrently. If spawn returns status=at_capacity, the queue is full; cancel something or end your turn and respawn later.",
+  `At most ${SUBAGENT_MAX_RUNNING} subagents can run concurrently. If spawn returns status=at_capacity, the queue is full; cancel something or end your turn and respawn later.`,
   "To delegate a self-contained coding task, spawn an isolated, watchable child: `subagent_spawn { visible: true, worktree: true, model, baseRef: 'origin/main' }`. It branches `sumo/<slug>` from baseRef, opens a herdr workspace you can watch or steer, and returns a completion manifest to review before acting on the result.",
   "Headless children run WITHOUT the dangerous-command approval gate (same trust model as the native task tool): they cannot prompt the user, so their bash executes directly. Do not delegate destructive commands against the user's checkout; use worktree isolation for write-heavy work. Isolated worktrees are preserved after completion and never auto-removed."
 ];
@@ -15201,11 +15208,6 @@ var SUBAGENT_TOOL_DESCRIPTIONS = {
 
 // src/subagents/tools.ts
 import { Type as Type5 } from "typebox";
-
-// src/subagents/domain.ts
-var latestText = (snap) => snap.liveText || snap.finalText;
-
-// src/subagents/tools.ts
 var StringEnum2 = (values, options) => Type5.Unsafe({
   type: "string",
   enum: [...values],

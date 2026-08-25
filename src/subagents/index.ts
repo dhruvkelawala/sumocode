@@ -1,5 +1,6 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { activityFromSubagentSnapshot } from "../activity/subagent-adapter.js";
+import { renderSubagentStatusRow } from "../subagent-status-row.js";
 import { BUILT_IN_TOOLS, getBuiltInToolsFromActiveTools } from "../native-task-config.js";
 import { getTerminalHost } from "../terminal-host/index.js";
 import { spawnPaneChild } from "./backend-pane.js";
@@ -12,6 +13,8 @@ import { registerSubagentTools } from "./tools.js";
 
 export { SubagentManager } from "./manager.js";
 export type { AtCapacityDetails, SpawnSubagentTask } from "./manager.js";
+
+const SUBAGENT_STATUS_WIDGET_KEY = "sumocode-subagents";
 
 const settledPayload = (snapshot: SubagentSnapshot): DeliveryPayload => {
 	const result = buildSubagentResultMessage({
@@ -106,6 +109,52 @@ export function installSubagents(pi: ExtensionAPI): SubagentManager {
 	const observedSettledIds = new Set<string>();
 	let latestContext: ExtensionContext | undefined;
 	let unsubscribe: (() => void) | undefined;
+	let statusWidgetVisible = false;
+
+	const publishStatusWidget = (): void => {
+		const ctx = latestContext;
+		if (!ctx?.hasUI) return;
+		const snapshots = manager.list();
+		const active = snapshots.filter((snapshot) => snapshot.status === "running" || snapshot.status === "queued");
+		try {
+			if (active.length === 0) {
+				if (statusWidgetVisible) ctx.ui.setWidget(SUBAGENT_STATUS_WIDGET_KEY, undefined, { placement: "aboveEditor" });
+				statusWidgetVisible = false;
+				return;
+			}
+			const now = Date.now();
+			const running = active
+				.filter((snapshot) => snapshot.status === "running")
+				.map((snapshot) => ({
+					id: snapshot.id,
+					...(snapshot.roleId ? { roleId: snapshot.roleId } : {}),
+					title: snapshot.title,
+					ageMs: Math.max(0, now - snapshot.createdAt),
+				}));
+			const queuedCount = active.length - running.length;
+			ctx.ui.setWidget(
+				SUBAGENT_STATUS_WIDGET_KEY,
+				() => ({
+					invalidate: () => undefined,
+					render: (width: number) => renderSubagentStatusRow({ width, running, queuedCount }),
+				}),
+				{ placement: "aboveEditor" },
+			);
+			statusWidgetVisible = true;
+		} catch {
+			// Settlement delivery must survive UI adapter failures.
+		}
+	};
+
+	const clearStatusWidget = (ctx: ExtensionContext | undefined): void => {
+		if (!ctx?.hasUI || !statusWidgetVisible) return;
+		try {
+			ctx.ui.setWidget(SUBAGENT_STATUS_WIDGET_KEY, undefined, { placement: "aboveEditor" });
+		} catch {
+			// Session cleanup remains best-effort when the UI is already gone.
+		}
+		statusWidgetVisible = false;
+	};
 
 	const flush = (): void => {
 		for (const payload of delivery.drain()) {
@@ -137,6 +186,7 @@ export function installSubagents(pi: ExtensionAPI): SubagentManager {
 				delivery.forget(id);
 			}
 		}
+		publishStatusWidget();
 		if (latestContext?.isIdle()) flush();
 	};
 
@@ -161,6 +211,7 @@ export function installSubagents(pi: ExtensionAPI): SubagentManager {
 	pi.on("session_start", (_event, ctx) => {
 		latestContext = ctx;
 		armDelivery();
+		publishStatusWidget();
 		if (ctx.isIdle()) flush();
 	});
 	pi.on("agent_start", (_event, ctx) => { latestContext = ctx; });
@@ -177,6 +228,7 @@ export function installSubagents(pi: ExtensionAPI): SubagentManager {
 	// worse than losing in-flight work. Kill on EVERY shutdown until a durable
 	// registry exists; when it does, adopt the terminal lifecycle model.
 	pi.on("session_shutdown", () => {
+		clearStatusWidget(latestContext);
 		latestContext = undefined;
 		unsubscribe?.();
 		unsubscribe = undefined;

@@ -72,11 +72,12 @@ vi.mock("./backend-pi.js", () => ({
 type Handler = (event: unknown, ctx: unknown) => void;
 type Tool = { name: string; execute: (...args: unknown[]) => Promise<unknown> };
 
-const createHarness = () => {
+const createHarness = (hasUI = false) => {
 	let idle = true;
 	const handlers = new Map<string, Handler[]>();
 	const tools = new Map<string, Tool>();
 	const sendMessage = vi.fn(() => { idle = false; });
+	const setWidget = vi.fn();
 	const pi = {
 		on: vi.fn((event: string, handler: Handler) => handlers.set(event, [...(handlers.get(event) ?? []), handler])),
 		registerTool: vi.fn((tool: Tool) => tools.set(tool.name, tool)),
@@ -89,6 +90,8 @@ const createHarness = () => {
 		cwd: "/tmp/project",
 		model: { provider: "openai", id: "gpt-5" },
 		isIdle: () => idle,
+		hasUI,
+		ui: { setWidget },
 	};
 	const fire = (event: string) => {
 		for (const handler of handlers.get(event) ?? []) handler({ type: event }, ctx);
@@ -96,6 +99,7 @@ const createHarness = () => {
 	return {
 		manager,
 		sendMessage,
+		setWidget,
 		tool: (name: string) => tools.get(name)!,
 		ctx,
 		fire,
@@ -117,6 +121,55 @@ beforeEach(() => {
 });
 
 describe("subagent result delivery", () => {
+	it("sets the status widget while active and clears it after the last settlement", async () => {
+		const harness = createHarness(true);
+		harness.fire("session_start");
+		expect(harness.setWidget).not.toHaveBeenCalled();
+		await spawn(harness.manager, "research");
+		expect(harness.setWidget).toHaveBeenCalledWith("sumocode-subagents", expect.any(Function), { placement: "aboveEditor" });
+
+		backend.emitters[0]?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
+		await vi.waitFor(() => expect(harness.manager.get("sa-1")?.status).toBe("done"));
+		expect(harness.setWidget).toHaveBeenLastCalledWith("sumocode-subagents", undefined, { placement: "aboveEditor" });
+	});
+
+	it("renders queued count and clears the widget on shutdown", async () => {
+		const harness = createHarness(true);
+		harness.fire("session_start");
+		for (let index = 0; index < 4; index += 1) await spawn(harness.manager, `running-${index}`);
+		await spawn(harness.manager, "queued");
+		const factory = harness.setWidget.mock.calls.at(-1)?.[1] as (() => { render(width: number): string[] });
+		expect(factory().render(140).join("\n")).toContain("1 queued");
+
+		harness.fire("session_shutdown");
+		expect(harness.setWidget).toHaveBeenLastCalledWith("sumocode-subagents", undefined, { placement: "aboveEditor" });
+		await vi.waitFor(() => expect(harness.manager.list().slice(0, 5).every((snapshot) => snapshot.status === "error")).toBe(true));
+		expect(backend.piCalls).toBe(4);
+
+		harness.fire("session_start");
+		await expect(spawn(harness.manager, "next session")).resolves.toMatchObject({ id: "sa-6", status: "running" });
+		harness.fire("session_shutdown");
+	});
+
+	it("never calls setWidget without UI", async () => {
+		const harness = createHarness(false);
+		harness.fire("session_start");
+		await spawn(harness.manager);
+		backend.emitters[0]?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
+		await vi.waitFor(() => expect(harness.manager.get("sa-1")?.status).toBe("done"));
+		harness.fire("session_shutdown");
+		expect(harness.setWidget).not.toHaveBeenCalled();
+	});
+
+	it("keeps settlement working when setWidget throws", async () => {
+		const harness = createHarness(true);
+		harness.setWidget.mockImplementation(() => { throw new Error("ui gone"); });
+		harness.fire("session_start");
+		await expect(spawn(harness.manager)).resolves.toMatchObject({ status: "running" });
+		backend.emitters[0]?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
+		await vi.waitFor(() => expect(harness.manager.get("sa-1")?.status).toBe("done"));
+	});
+
 	it("does not deliver a queued snapshot as a settled result", async () => {
 		const harness = createHarness();
 		harness.setIdle(false);

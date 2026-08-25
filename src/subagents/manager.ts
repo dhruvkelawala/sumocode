@@ -445,6 +445,9 @@ export class SubagentManager {
 	}
 
 	public disposeAll(): void {
+		const queuedIds = this.queuedTasks.map((queued) => queued.id);
+		this.queuedTasks.length = 0;
+		for (const id of queuedIds) void this.startSettle(id, { kind: "interrupted" });
 		for (const [id, entry] of this.children) {
 			const snapshot = this.snapshots.get(id);
 			if (snapshot?.status === "running") entry.child.interrupt();

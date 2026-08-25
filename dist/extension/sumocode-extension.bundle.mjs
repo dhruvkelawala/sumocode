@@ -5344,16 +5344,7 @@ var SearchPaletteComponent = class {
     return renderPalette(this.options, this.state, width);
   }
 };
-function rowLabel(row3) {
-  return row3.value.length > 0 ? `${row3.label}  ${row3.value}` : row3.label;
-}
 async function showSearchPalette(ctx, options) {
-  if (ctx.mode === "rpc") {
-    const labels = options.rows.map(rowLabel);
-    const selected = await ctx.ui.select(options.title, labels);
-    const selectedIndex = selected === void 0 ? -1 : labels.indexOf(selected);
-    return selectedIndex < 0 ? void 0 : options.rows[selectedIndex]?.id;
-  }
   return ctx.ui.custom(
     (_tui, _theme, _keybindings, done) => new SearchPaletteComponent(options, {
       searchQuery: "",

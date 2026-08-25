@@ -208,21 +208,11 @@ class SearchPaletteComponent implements Component {
 	}
 }
 
-function rowLabel(row: SearchPaletteRow): string {
-	return row.value.length > 0 ? `${row.label}  ${row.value}` : row.label;
-}
-
 export async function showSearchPalette(
-	ctx: Pick<ExtensionContext, "mode" | "ui">,
+	ctx: Pick<ExtensionContext, "ui">,
 	options: SearchPaletteOptions,
 ): Promise<string | undefined> {
-	if (ctx.mode === "rpc") {
-		const labels = options.rows.map(rowLabel);
-		const selected = await ctx.ui.select(options.title, labels);
-		const selectedIndex = selected === undefined ? -1 : labels.indexOf(selected);
-		return selectedIndex < 0 ? undefined : options.rows[selectedIndex]?.id;
-	}
-
+	// The RPC cathedral shell hosts custom components via the extension-ui adapter (plan 085 fix; operator-verified 2026-08-25).
 	return ctx.ui.custom<string | undefined>(
 		(_tui, _theme, _keybindings, done) => new SearchPaletteComponent(options, {
 			searchQuery: "",

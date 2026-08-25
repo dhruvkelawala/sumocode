@@ -54,19 +54,18 @@ describe("updatePaletteState", () => {
 });
 
 describe("showSearchPalette", () => {
-	it("maps the RPC selector label back to its row id", async () => {
-		const select = vi.fn(async () => "review model  anthropic/claude-opus");
-		const result = await showSearchPalette({ mode: "rpc", ui: { select } } as never, {
+	it("uses the custom-component path regardless of ctx.mode", async () => {
+		const custom = vi.fn(async () => "review:model");
+		const result = await showSearchPalette({ mode: "rpc", ui: { custom } } as never, {
 			title: "SUBAGENT ROLES",
 			placeholder: "what shall we tune…",
 			rows: ROWS,
 		});
 
-		expect(select).toHaveBeenCalledWith("SUBAGENT ROLES", [
-			"research model  inherit",
-			"review model  anthropic/claude-opus",
-			"research tools  read-only",
-		]);
+		expect(custom).toHaveBeenCalledWith(expect.any(Function), {
+			overlay: true,
+			overlayOptions: expect.objectContaining({ anchor: "center", width: 80 }),
+		});
 		expect(result).toBe("review:model");
 	});
 });

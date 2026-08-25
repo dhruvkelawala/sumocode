@@ -197,21 +197,23 @@ describe("registerRolesCommand", () => {
 		expect(registerCommand).toHaveBeenCalledWith("sumo:roles", expect.objectContaining({ description: expect.any(String), handler: expect.any(Function) }));
 	});
 
-	it("uses ctx.ui.select for the RPC palette path", async () => {
+	it("uses ctx.ui.custom for the RPC palette path", async () => {
 		let handler: ((args: string, ctx: unknown) => Promise<void>) | undefined;
 		const registerCommand = vi.fn((_name: string, options: { handler: typeof handler }) => {
 			handler = options.handler;
 		});
 		registerRolesCommand({ registerCommand } as never);
+		const custom = vi.fn(async () => undefined);
 		const select = vi.fn(async () => undefined);
 
 		await handler?.("", {
 			hasUI: true,
 			mode: "rpc",
-			ui: { select, input: vi.fn(), notify: vi.fn() },
+			ui: { custom, select, input: vi.fn(), notify: vi.fn() },
 			modelRegistry: { getAvailable: () => [] },
 		});
 
-		expect(select).toHaveBeenCalledWith("SUBAGENT ROLES", expect.arrayContaining([expect.stringContaining("research model  inherit")]));
+		expect(custom).toHaveBeenCalledWith(expect.any(Function), expect.objectContaining({ overlay: true }));
+		expect(select).not.toHaveBeenCalled();
 	});
 });

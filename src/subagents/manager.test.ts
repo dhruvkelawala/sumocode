@@ -36,31 +36,88 @@ const deferredBackend = () => {
 };
 
 describe("SubagentManager", () => {
-	it("enforces capacity", async () => {
+	it("queues the fifth spawn instead of refusing it", async () => {
 		const { manager } = deferredBackend();
 		for (let index = 0; index < 4; index += 1) await expect(manager.spawn(makeTask(`${index}`))).resolves.toMatchObject({ id: `sa-${index + 1}` });
-		const over = await manager.spawn(makeTask("over"));
-		expect(over).toMatchObject({ status: "at_capacity", capacity: 4, runningCount: 4 });
-		expect(manager.list()).toHaveLength(4);
+		const queued = await manager.spawn(makeTask("queued"));
+		expect(queued).toMatchObject({ id: "sa-5", status: "queued", baseRef: "HEAD" });
+		expect(manager.list()).toHaveLength(5);
 	});
 
-	it("includes setup-pending spawns in capacity summaries", async () => {
+	it("queues while four spawns are still in setup without doing deferred work", async () => {
 		let releaseCapture: () => void = () => undefined;
 		const captureGate = new Promise<void>((resolve) => { releaseCapture = resolve; });
-		const manager = new SubagentManager(() => ({ events: () => undefined, interrupt: () => undefined }), {
-			captureGitContext: async () => {
-				await captureGate;
-				return { baseRef: "base-ref" };
-			},
+		const captureGitContext = vi.fn(async () => {
+			await captureGate;
+			return { baseRef: "base-ref" };
 		});
+		const manager = new SubagentManager(() => ({ events: () => undefined, interrupt: () => undefined }), { captureGitContext });
 		const pending = Array.from({ length: 4 }, (_, index) => manager.spawn(makeTask(`pending-${index}`)));
 
-		const over = await manager.spawn(makeTask("over"));
+		const queued = await manager.spawn(makeTask("queued"));
 
-		expect(over).toMatchObject({ status: "at_capacity", runningCount: 4 });
-		expect("running" in over ? over.running.map((task) => task.id) : []).toEqual(["sa-1", "sa-2", "sa-3", "sa-4"]);
+		expect(queued).toMatchObject({ id: "sa-5", status: "queued" });
+		expect(captureGitContext).toHaveBeenCalledTimes(4);
 		releaseCapture();
 		await Promise.all(pending);
+	});
+
+	it("starts queued tasks in fifo order as running slots free", async () => {
+		const { manager, emitters } = deferredBackend();
+		for (let index = 0; index < 4; index += 1) await manager.spawn(makeTask(`running-${index}`));
+		await manager.spawn(makeTask("first queued"));
+		await manager.spawn(makeTask("second queued"));
+
+		emitters.get("sa-1")?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
+		await vi.waitFor(() => expect(manager.get("sa-5")?.status).toBe("running"));
+		expect(manager.get("sa-6")?.status).toBe("queued");
+
+		emitters.get("sa-2")?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
+		await vi.waitFor(() => expect(manager.get("sa-6")?.status).toBe("running"));
+	});
+
+	it("cancels a queued task without starting a child", async () => {
+		const { manager, emitters, interrupts } = deferredBackend();
+		for (let index = 0; index < 4; index += 1) await manager.spawn(makeTask(`running-${index}`));
+		await manager.spawn(makeTask("queued"));
+
+		await expect(manager.cancel(["sa-5"])).resolves.toEqual(["Cancelled sa-5"]);
+		expect(manager.get("sa-5")).toMatchObject({ status: "error", errorText: "interrupted", manifest: { exit: "interrupted" } });
+		expect(interrupts.has("sa-5")).toBe(false);
+		emitters.get("sa-1")?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
+		await vi.waitFor(() => expect(manager.get("sa-1")?.status).toBe("done"));
+		expect(interrupts.has("sa-5")).toBe(false);
+	});
+
+	it("returns at_capacity only after all sixteen queue slots are filled", async () => {
+		const { manager } = deferredBackend();
+		for (let index = 0; index < 20; index += 1) {
+			const spawned = await manager.spawn(makeTask(`${index}`));
+			expect(spawned).toMatchObject({ id: `sa-${index + 1}`, status: index < 4 ? "running" : "queued" });
+		}
+		const over = await manager.spawn(makeTask("over"));
+		expect(over).toMatchObject({ status: "at_capacity", capacity: 4, runningCount: 4 });
+		expect("retryHint" in over ? over.retryHint : "").toContain("do NOT retry in a loop");
+	});
+
+	it("serializes concurrent dequeues so one queued task starts once", async () => {
+		const emitters = new Map<string, (event: SubagentEvent) => void>();
+		const starts = vi.fn((task: SpawnSubagentTask & { id: string }) => ({
+			events: (emit: (event: SubagentEvent) => void) => {
+				emitters.set(task.id, emit);
+				emit({ kind: "run-started" });
+			},
+			interrupt: () => undefined,
+		}));
+		const manager = new SubagentManager(starts, { captureGitContext: async () => ({ baseRef: "base-ref" }), buildCompletionManifest: fakeManifestBuilder });
+		for (let index = 0; index < 4; index += 1) await manager.spawn(makeTask(`running-${index}`));
+		await manager.spawn(makeTask("queued"));
+
+		emitters.get("sa-1")?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
+		emitters.get("sa-2")?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
+
+		await vi.waitFor(() => expect(manager.get("sa-5")?.status).toBe("running"));
+		expect(starts.mock.calls.filter(([task]) => task.id === "sa-5")).toHaveLength(1);
 	});
 
 	it("frees capacity while a settled child manifest is still collecting", async () => {

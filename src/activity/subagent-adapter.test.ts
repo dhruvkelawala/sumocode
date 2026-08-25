@@ -25,6 +25,13 @@ function snapshot(overrides: Partial<SubagentSnapshot> = {}): SubagentSnapshot {
 }
 
 describe("subagent Activity adapter", () => {
+	it("maps queued snapshots without running output", () => {
+		const activity = activityFromSubagentSnapshot(snapshot({ status: "queued", liveText: "not started" }));
+		expect(activity).toMatchObject({ id: "subagent:sa-7", status: "queued" });
+		expect(activity.outputTail).toBeUndefined();
+		expect(activity.currentStep).toBeUndefined();
+	});
+
 	it("maps running live text and nested tools", () => {
 		const activity = activityFromSubagentSnapshot(snapshot({
 			liveText: "Inspecting src/auth.ts",

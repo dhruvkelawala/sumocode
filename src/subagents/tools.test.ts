@@ -164,12 +164,12 @@ describe("subagent tools", () => {
 		expect(textOf(result)).toContain("· sumo/custom");
 	});
 
-	it("at capacity returns cooperative status details", async () => {
+	it("reports an automatic queue position when running capacity is occupied", async () => {
 		const { tool, ctx } = createHarness();
 		for (let index = 0; index < 4; index += 1) await tool("subagent_spawn").execute("tc", { prompt: "do", name: `w${index}` }, undefined, undefined, ctx as never);
-		const result = await tool("subagent_spawn").execute("tc", { prompt: "do", name: "over" }, undefined, undefined, ctx as never);
-		expect(textOf(result)).toContain("status=at_capacity");
-		expect(result).toMatchObject({ details: { status: "at_capacity", runningCount: 4 } });
+		const result = await tool("subagent_spawn").execute("tc", { prompt: "do", name: "queued worker" }, undefined, undefined, ctx as never);
+		expect(textOf(result)).toBe("Queued sa-5 (queued worker) at position 1 — starts automatically when a slot frees. Do not retry or wait.");
+		expect(result).toMatchObject({ details: { subagent: { id: "sa-5", status: "queued" }, activity: { status: "queued" } } });
 	});
 
 	it("sends text to a running visible child pane", async () => {

@@ -117,6 +117,17 @@ beforeEach(() => {
 });
 
 describe("subagent result delivery", () => {
+	it("does not deliver a queued snapshot as a settled result", async () => {
+		const harness = createHarness();
+		harness.setIdle(false);
+		for (let index = 0; index < 4; index += 1) await spawn(harness.manager, `running-${index}`);
+		const queued = await spawn(harness.manager, "queued");
+		expect(queued).toMatchObject({ id: "sa-5", status: "queued" });
+		harness.setIdle(true);
+		harness.fire("agent_end");
+		expect(harness.sendMessage).not.toHaveBeenCalled();
+	});
+
 	it("defers while the parent is busy and flushes exactly once on agent_end", async () => {
 		const harness = createHarness();
 		harness.setIdle(false);

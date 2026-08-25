@@ -11,6 +11,7 @@ import { buildCompletionManifest, type CompletionManifestEvidence } from "./mani
 const execFileAsync = promisify(execFile);
 
 const MAX_RUNNING = 4;
+const MAX_QUEUED = 16;
 const MAX_TRACKED = 64;
 const ERROR_TEXT_MAX = 4096;
 const CANCEL_WAIT_MS = 5_500;
@@ -89,7 +90,7 @@ async function captureGitContext(cwd: string): Promise<SpawnGitContext> {
 	return { repoRoot, baseRef };
 }
 
-const isSettled = (snapshot: SubagentSnapshot): boolean => snapshot.status !== "running";
+const isSettled = (snapshot: SubagentSnapshot): boolean => snapshot.status !== "running" && snapshot.status !== "queued";
 
 const makeInitialSnapshot = (
 	task: SpawnSubagentTask,
@@ -99,6 +100,7 @@ const makeInitialSnapshot = (
 	cwd = task.cwd,
 	worktree?: SubagentWorktreeRef,
 	sessionFilePath?: string,
+	status: "queued" | "running" = "running",
 ): SubagentSnapshot => ({
 	id,
 	...(task.sourceId ? { sourceId: task.sourceId } : {}),
@@ -109,7 +111,7 @@ const makeInitialSnapshot = (
 	baseRef,
 	worktree,
 	...(task.visible ? { visible: true } : {}),
-	status: "running",
+	status,
 	createdAt,
 	modelLabel: task.model ?? (task.inherited?.model ? `${task.inherited.model.provider}/${task.inherited.model.id}` : undefined),
 	thinkingLabel: task.thinking ?? task.inherited?.thinking,
@@ -130,6 +132,7 @@ const upsertTool = (tools: readonly LiveToolState[], next: LiveToolState): reado
 export class SubagentManager {
 	private nextId = 1;
 	private readonly pendingSpawns = new Map<string, { title: string; createdAt: number }>();
+	private readonly queuedTasks: Array<{ task: SpawnSubagentTask; id: string; createdAt: number }> = [];
 	private readonly snapshots = new Map<string, SubagentSnapshot>();
 	private readonly children = new Map<string, { child: SpawnedChild; controller: AbortController }>();
 	private readonly waitInterest = new Map<string, number>();
@@ -142,6 +145,7 @@ export class SubagentManager {
 	private readonly pi?: PiExecLike;
 	private subagentsTabId?: string;
 	private visibleSpawnTail: Promise<void> = Promise.resolve();
+	private dequeueTail: Promise<void> = Promise.resolve();
 	private readonly settlingIds = new Set<string>();
 	private readonly settlingPromises = new Map<string, Promise<void>>();
 	private readonly settlingOutcomes = new Map<string, RunOutcome>();
@@ -158,27 +162,44 @@ export class SubagentManager {
 	}
 
 	public async spawn(task: SpawnSubagentTask): Promise<SubagentSnapshot | AtCapacityDetails> {
+		const runningSummaries = this.runningSummaries();
+		if (runningSummaries.length >= MAX_RUNNING || this.queuedTasks.length > 0) {
+			if (this.queuedTasks.length >= MAX_QUEUED) {
+				return {
+					status: "at_capacity",
+					capacity: MAX_RUNNING,
+					runningCount: runningSummaries.length,
+					running: runningSummaries,
+					retryHint: "queue is full — do NOT retry in a loop; cancel something or end your turn and respawn later",
+				};
+			}
+			const id = `sa-${this.nextId++}`;
+			const createdAt = Date.now();
+			const snapshot = makeInitialSnapshot(task, id, createdAt, "HEAD", task.cwd, undefined, undefined, "queued");
+			this.queuedTasks.push({ task, id, createdAt });
+			this.snapshots.set(id, snapshot);
+			this.notify();
+			this.prune();
+			return snapshot;
+		}
+
+		const id = `sa-${this.nextId++}`;
+		return this.startTask(task, id, Date.now());
+	}
+
+	private runningSummaries(): SubagentCapacityTaskSummary[] {
 		// A run-settled child is removed from `children` before its bounded
 		// manifest read begins, so evidence collection does not occupy a worker
 		// slot for up to five seconds.
 		const running = this.list().filter((snapshot) => snapshot.status === "running" && this.children.has(snapshot.id));
-		const pendingSummaries = [...this.pendingSpawns].map(([id, spawn]) => ({ id, title: spawn.title, status: "running" as const, ageMs: Date.now() - spawn.createdAt }));
-		const runningSummaries = [
+		const pending = [...this.pendingSpawns].map(([id, spawn]) => ({ id, title: spawn.title, status: "running" as const, ageMs: Date.now() - spawn.createdAt }));
+		return [
 			...running.map((snapshot) => ({ id: snapshot.id, title: snapshot.title, status: snapshot.status, ageMs: Date.now() - snapshot.createdAt })),
-			...pendingSummaries,
+			...pending,
 		];
-		if (runningSummaries.length >= MAX_RUNNING) {
-			return {
-				status: "at_capacity",
-				capacity: MAX_RUNNING,
-				runningCount: runningSummaries.length,
-				running: runningSummaries,
-				retryHint: "wait for a running subagent to settle, then retry subagent_spawn",
-			};
-		}
+	}
 
-		const id = `sa-${this.nextId++}`;
-		const createdAt = Date.now();
+	private async startTask(task: SpawnSubagentTask, id: string, createdAt: number): Promise<SubagentSnapshot> {
 		this.pendingSpawns.set(id, { title: task.title, createdAt });
 		let pending = true;
 		let releaseVisibleSpawn: (() => void) | undefined;
@@ -402,7 +423,13 @@ export class SubagentManager {
 				lines.set(id, `${id} was already ${snapshot.status === "done" ? "done" : "settled"}`);
 				continue;
 			}
-			this.children.get(id)?.child.interrupt();
+			if (snapshot.status === "queued") {
+				const queueIndex = this.queuedTasks.findIndex((queued) => queued.id === id);
+				if (queueIndex >= 0) this.queuedTasks.splice(queueIndex, 1);
+				void this.startSettle(id, { kind: "interrupted" });
+			} else {
+				this.children.get(id)?.child.interrupt();
+			}
 			targets.push(id);
 		}
 		await Promise.allSettled(targets.map(async (id) => {
@@ -413,6 +440,7 @@ export class SubagentManager {
 			}
 			lines.set(id, `Cancelled ${id}`);
 		}));
+		void this.scheduleDequeue();
 		return ids.map((id) => lines.get(id) ?? `${id} is unknown`);
 	}
 
@@ -420,6 +448,33 @@ export class SubagentManager {
 		for (const [id, entry] of this.children) {
 			const snapshot = this.snapshots.get(id);
 			if (snapshot?.status === "running") entry.child.interrupt();
+		}
+	}
+
+	private scheduleDequeue(): Promise<void> {
+		const next = this.dequeueTail.then(() => this.drainQueue());
+		this.dequeueTail = next.catch(() => undefined);
+		return next;
+	}
+
+	private async drainQueue(): Promise<void> {
+		while (this.queuedTasks.length > 0 && this.runningSummaries().length < MAX_RUNNING) {
+			const queued = this.queuedTasks.shift();
+			if (!queued) return;
+			try {
+				await this.startTask(queued.task, queued.id, queued.createdAt);
+			} catch (error) {
+				const current = this.snapshots.get(queued.id);
+				if (current?.status === "queued") {
+					this.recordSpawnFailure(
+						queued.task,
+						queued.id,
+						queued.createdAt,
+						"HEAD",
+						`unable to start queued child: ${error instanceof Error ? error.message : String(error)}`,
+					);
+				}
+			}
 		}
 	}
 
@@ -547,6 +602,19 @@ export class SubagentManager {
 		this.children.delete(id);
 		const settledAt = Date.now();
 		try {
+			if (current.status === "queued") {
+				this.snapshots.set(id, {
+					...current,
+					status: "error",
+					settledAt,
+					errorText: "interrupted",
+					manifest: { exit: "interrupted", durationMs: Math.max(0, settledAt - current.createdAt) },
+				});
+				if ((this.waitInterest.get(id) ?? 0) > 0) this.consumedIds.add(id);
+				this.notify();
+				this.prune();
+				return;
+			}
 			// Configuration failures can settle synchronously before the backend
 			// emits run-started. No child ran, so avoid blocking spawn on checkout
 			// git reads and attach only the truthful process facts.
@@ -568,6 +636,7 @@ export class SubagentManager {
 		} finally {
 			this.settlingIds.delete(id);
 			this.startedIds.delete(id);
+			void this.scheduleDequeue();
 		}
 	}
 

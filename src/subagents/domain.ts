@@ -1,6 +1,6 @@
 import type { CompletionManifestEvidence } from "./manifest.js";
 
-export type SubagentStatus = "running" | "done" | "error";
+export type SubagentStatus = "queued" | "running" | "done" | "error";
 
 export type SubagentEvent =
 	| { kind: "run-started" }

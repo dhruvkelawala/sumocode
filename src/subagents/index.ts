@@ -123,7 +123,7 @@ export function installSubagents(pi: ExtensionAPI): SubagentManager {
 
 	const onManagerChange = (): void => {
 		for (const snapshot of manager.list()) {
-			if (snapshot.status === "running" || observedSettledIds.has(snapshot.id)) continue;
+			if (snapshot.status === "running" || snapshot.status === "queued" || observedSettledIds.has(snapshot.id)) continue;
 			observedSettledIds.add(snapshot.id);
 			if (manager.consumedIds.has(snapshot.id)) delivery.consume(snapshot.id);
 			else delivery.defer(snapshot.id, () => settledPayload(snapshot));

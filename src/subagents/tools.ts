@@ -161,6 +161,14 @@ export function registerSubagentTools(
 				builtInTools,
 			});
 			if (isAtCapacity(spawned)) return formatAtCapacity(spawned);
+			if (spawned.status === "queued") {
+				const position = manager.list().filter((snapshot) => snapshot.status === "queued").findIndex((snapshot) => snapshot.id === spawned.id) + 1;
+				return makeToolResult(`Queued ${spawned.id} (${spawned.title}) at position ${position} — starts automatically when a slot frees. Do not retry or wait.`, {
+					action: "spawn",
+					subagent: spawned,
+					activity: activityEnvelope(spawned, toolCallId),
+				});
+			}
 			if (spawned.status !== "running") {
 				// The failure is being returned INLINE — consume it so the change
 				// listener's already-deferred payload is not ALSO auto-delivered
@@ -193,6 +201,7 @@ export function registerSubagentTools(
 		async execute(_toolCallId, params) {
 			const snapshot = manager.get(params.id);
 			if (!snapshot) throw new Error(`Unknown subagent id: ${params.id}`);
+			if (snapshot.status === "queued") throw new Error(`Subagent ${params.id} is queued and cannot receive input until it starts`);
 			if (snapshot.status !== "running") throw new Error(`Subagent ${params.id} is already settled (${snapshot.status}) and cannot receive input`);
 			if (!snapshot.visible) throw new Error("headless children cannot receive input — respawn with visible: true");
 			if (!snapshot.pane?.paneId) throw new Error(`Visible subagent ${params.id} does not have a ready pane`);

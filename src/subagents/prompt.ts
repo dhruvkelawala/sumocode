@@ -7,7 +7,7 @@ const RESULT_OUTPUT_MAX_LINES = 600;
 export interface SubagentResultMessageInput {
 	readonly id: string;
 	readonly title: string;
-	readonly status: Exclude<SubagentStatus, "running">;
+	readonly status: Exclude<SubagentStatus, "running" | "queued">;
 	readonly errorText?: string;
 	readonly output: string;
 	readonly sessionFilePath?: string;

@@ -77,8 +77,15 @@ function notify(ctx: ExtensionContext, result: PersonaCommandResult): void {
 	stream.write(`${result.message}\n`);
 }
 
+/** Split an EDITOR value with flags (`"nvim -f"`) into command + args. */
+export function parsePersonaEditorCommand(editor: string): { command: string; args: readonly string[] } {
+	const parts = editor.trim().split(/\s+/).filter((part) => part.length > 0);
+	return { command: parts[0] ?? editor, args: parts.slice(1) };
+}
+
 function defaultRunEditor(editor: string, file: string): EditorOutcome {
-	const child = spawnSync(editor, [file], { stdio: "inherit", env: process.env });
+	const { command, args } = parsePersonaEditorCommand(editor);
+	const child = spawnSync(command, [...args, file], { stdio: "inherit", env: process.env });
 	return {
 		status: child.status ?? 1,
 		error: child.error?.message,
@@ -96,6 +103,16 @@ export function registerPersonaCommand(
 	pi.registerCommand("sumo:persona", {
 		description: "Edit the Zeus persona prompt in $EDITOR",
 		handler: async (_args, ctx) => {
+			// Same RPC-host guard as roles: spawnSync with stdio:inherit has no
+			// TTY here and blocks the host event loop — the shell would freeze.
+			if (ctx.mode === "rpc") {
+				notify(ctx, {
+					kind: "instructions",
+					opened: false,
+					message: `persona file: ${personaPath} — $EDITOR cannot run inside the rpc host — edit it directly, then reload Pi`,
+				});
+				return;
+			}
 			const result = runPersonaCommand({
 				personaPath,
 				isTTY: ctx.hasUI,

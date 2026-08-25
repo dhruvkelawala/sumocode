@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { BUILT_IN_ROLES } from "../subagents/roles.js";
-import { registerRolesCommand, runRolesCommand, writeRolesFile, type RolesCommandDeps, type RolesFileMutation } from "./roles.js";
+import { parseEditorCommand, registerRolesCommand, runRolesCommand, writeRolesFile, type RolesCommandDeps, type RolesFileMutation } from "./roles.js";
 import type { SearchPaletteOptions } from "./roles-palette.js";
 
 const research = BUILT_IN_ROLES.find((role) => role.id === "research")!;
@@ -30,6 +30,29 @@ function queuedPalette(selections: Array<string | undefined>, calls: SearchPalet
 }
 
 	describe("runRolesCommand", () => {
+	it("degrades $EDITOR to instructions when the editor is unavailable (rpc host)", async () => {
+		const write = vi.fn();
+		const openEditor = vi.fn(() => ({ status: 0 }));
+		const calls: SearchPaletteOptions[] = [];
+		const result = await runRolesCommand(commandDeps({
+			editorUnavailable: "$EDITOR cannot run inside the rpc host — edit the file directly; changes apply to the next spawn",
+			showPalette: queuedPalette(["action:open", undefined], calls),
+			writeRolesFile: write,
+			openEditor,
+		}));
+
+		expect(result).toMatchObject({ kind: "instructions", opened: false, message: expect.stringContaining("rpc host") });
+		expect(openEditor).not.toHaveBeenCalled();
+		// ensure-write also skipped — nothing touches the file in this mode
+		expect(write).not.toHaveBeenCalled();
+	});
+
+	it("splits EDITOR values with flags into command + args", () => {
+		expect(parseEditorCommand("nvim -f")).toEqual({ command: "nvim", args: ["-f"] });
+		expect(parseEditorCommand("code --wait")).toEqual({ command: "code", args: ["--wait"] });
+		expect(parseEditorCommand("  vi  ")).toEqual({ command: "vi", args: [] });
+	});
+
 	it("lists one summary row per role plus the two actions on surface 1", async () => {
 		const calls: SearchPaletteOptions[] = [];
 		await runRolesCommand(commandDeps({

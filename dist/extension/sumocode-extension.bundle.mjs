@@ -5381,6 +5381,13 @@ async function writeMutation(deps, mutation) {
   }
 }
 async function openRolesEditor(deps) {
+  if (deps.editorUnavailable) {
+    return {
+      kind: "instructions",
+      opened: false,
+      message: `roles file: ${deps.rolesPath} \u2014 ${deps.editorUnavailable}`
+    };
+  }
   const ensured = await writeMutation(deps, { kind: "ensure" });
   if (ensured) return ensured;
   const outcome = await deps.openEditor(deps.rolesPath);
@@ -5600,8 +5607,13 @@ function notify2(ctx, result) {
   stream.write(`${result.message}
 `);
 }
+function parseEditorCommand(editor) {
+  const parts = editor.trim().split(/\s+/).filter((part) => part.length > 0);
+  return { command: parts[0] ?? editor, args: parts.slice(1) };
+}
 function defaultOpenEditor(editor, path2) {
-  const child = spawnSync(editor, [path2], { stdio: "inherit", env: process.env });
+  const { command, args } = parseEditorCommand(editor);
+  const child = spawnSync(command, [...args, path2], { stdio: "inherit", env: process.env });
   return { status: child.status ?? 1, error: child.error?.message };
 }
 function registerRolesCommand(pi) {
@@ -5613,6 +5625,9 @@ function registerRolesCommand(pi) {
         const result = await runRolesCommand({
           rolesPath: path2,
           isTTY: ctx.hasUI,
+          // The RPC host has no usable TTY for stdio:inherit and spawnSync
+          // would block its whole event loop — degrade to instructions.
+          ...ctx.mode === "rpc" ? { editorUnavailable: "$EDITOR cannot run inside the rpc host \u2014 edit the file directly; changes apply to the next spawn" } : {},
           loadRoles,
           writeRolesFile: (mutation) => writeRolesFile(path2, mutation),
           showPalette: (options) => showSearchPalette(ctx, options),
@@ -6811,8 +6826,13 @@ function notify4(ctx, result) {
   stream.write(`${result.message}
 `);
 }
+function parsePersonaEditorCommand(editor) {
+  const parts = editor.trim().split(/\s+/).filter((part) => part.length > 0);
+  return { command: parts[0] ?? editor, args: parts.slice(1) };
+}
 function defaultRunEditor(editor, file) {
-  const child = spawnSync2(editor, [file], { stdio: "inherit", env: process.env });
+  const { command, args } = parsePersonaEditorCommand(editor);
+  const child = spawnSync2(command, [...args, file], { stdio: "inherit", env: process.env });
   return {
     status: child.status ?? 1,
     error: child.error?.message
@@ -6825,6 +6845,14 @@ function registerPersonaCommand(pi, overrides = {}) {
   pi.registerCommand("sumo:persona", {
     description: "Edit the Zeus persona prompt in $EDITOR",
     handler: async (_args, ctx) => {
+      if (ctx.mode === "rpc") {
+        notify4(ctx, {
+          kind: "instructions",
+          opened: false,
+          message: `persona file: ${personaPath} \u2014 $EDITOR cannot run inside the rpc host \u2014 edit it directly, then reload Pi`
+        });
+        return;
+      }
       const result = runPersonaCommand({
         personaPath,
         isTTY: ctx.hasUI,

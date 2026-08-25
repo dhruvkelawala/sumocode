@@ -34,6 +34,14 @@ export interface RolesEditorOutcome {
 export interface RolesCommandDeps {
 	readonly rolesPath: string;
 	readonly isTTY: boolean;
+	/**
+	 * When set, `open roles.json in $EDITOR` degrades to instructions instead
+	 * of spawning. The RPC host must NEVER spawnSync an interactive editor:
+	 * stdio:inherit has no TTY there and the sync call blocks the host's whole
+	 * event loop — the cathedral shell freezes until the process is killed
+	 * (operator-verified crash, plan 085 fix).
+	 */
+	readonly editorUnavailable?: string;
 	readonly loadRoles: () => LoadedRoles;
 	readonly writeRolesFile: (mutation: RolesFileMutation) => void | Promise<void>;
 	readonly showPalette: (options: SearchPaletteOptions) => Promise<string | undefined>;
@@ -59,6 +67,13 @@ async function writeMutation(deps: RolesCommandDeps, mutation: RolesFileMutation
 }
 
 async function openRolesEditor(deps: RolesCommandDeps): Promise<RolesCommandResult> {
+	if (deps.editorUnavailable) {
+		return {
+			kind: "instructions",
+			opened: false,
+			message: `roles file: ${deps.rolesPath} — ${deps.editorUnavailable}`,
+		};
+	}
 	const ensured = await writeMutation(deps, { kind: "ensure" });
 	if (ensured) return ensured;
 	const outcome = await deps.openEditor(deps.rolesPath);
@@ -312,8 +327,19 @@ function notify(ctx: ExtensionContext, result: RolesCommandResult): void {
 	stream.write(`${result.message}\n`);
 }
 
+/**
+ * Split an EDITOR value like `"code --wait"` or `"nvim -f"` into command +
+ * args. spawnSync treats the whole string as a binary name otherwise,
+ * which ENOENTs every editor configured with flags (operator-verified).
+ */
+export function parseEditorCommand(editor: string): { command: string; args: readonly string[] } {
+	const parts = editor.trim().split(/\s+/).filter((part) => part.length > 0);
+	return { command: parts[0] ?? editor, args: parts.slice(1) };
+}
+
 function defaultOpenEditor(editor: string, path: string): RolesEditorOutcome {
-	const child = spawnSync(editor, [path], { stdio: "inherit", env: process.env });
+	const { command, args } = parseEditorCommand(editor);
+	const child = spawnSync(command, [...args, path], { stdio: "inherit", env: process.env });
 	return { status: child.status ?? 1, error: child.error?.message };
 }
 
@@ -326,6 +352,9 @@ export function registerRolesCommand(pi: ExtensionAPI): void {
 				const result = await runRolesCommand({
 					rolesPath: path,
 					isTTY: ctx.hasUI,
+					// The RPC host has no usable TTY for stdio:inherit and spawnSync
+					// would block its whole event loop — degrade to instructions.
+					...(ctx.mode === "rpc" ? { editorUnavailable: "$EDITOR cannot run inside the rpc host — edit the file directly; changes apply to the next spawn" } : {}),
 					loadRoles,
 					writeRolesFile: (mutation) => writeRolesFile(path, mutation),
 					showPalette: (options) => showSearchPalette(ctx, options),

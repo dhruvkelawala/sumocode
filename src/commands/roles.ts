@@ -91,25 +91,37 @@ function roleFieldId(roleId: string, field: EditableRoleField): string {
 	return `field:${roleId}:${field}`;
 }
 
-function surfaceRows(roles: readonly SubagentRole[]): { rows: SearchPaletteRow[]; selections: Map<string, RoleFieldSelection> } {
+/** Surface-1 summary column: model · thinking · worktree posture. */
+function roleSummary(role: SubagentRole): string {
+	const worktree = role.defaultWorktree === true ? "worktree" : role.defaultWorktree === false ? "no worktree" : "inherit wt";
+	return `${role.model ?? "inherit"} · ${role.thinking ?? "inherit"} · ${worktree}`;
+}
+
+/** Surface 1 — one row per role (plus the two file-level actions). */
+function roleListRows(roles: readonly SubagentRole[]): SearchPaletteRow[] {
+	return [
+		...roles.map((role) => ({ id: `role:${role.id}`, label: role.id, value: roleSummary(role) })),
+		{ id: OPEN_ACTION_ID, label: OPEN_ACTION, value: "" },
+		{ id: RESET_ACTION_ID, label: RESET_ACTION, value: "" },
+	];
+}
+
+/** Surface 2 — the chosen role's editable fields with current values. */
+function roleFieldRows(role: SubagentRole): { rows: SearchPaletteRow[]; selections: Map<string, RoleFieldSelection> } {
 	const rows: SearchPaletteRow[] = [];
 	const selections = new Map<string, RoleFieldSelection>();
-	const add = (role: SubagentRole, field: EditableRoleField, label: string, value: string): void => {
+	const add = (field: EditableRoleField, label: string, value: string): void => {
 		const id = roleFieldId(role.id, field);
-		rows.push({ id, label: `${role.id} ${label}`, value });
+		rows.push({ id, label, value });
 		selections.set(id, { role, field });
 	};
 
-	for (const role of roles) {
-		add(role, "model", "model", role.model ?? "inherit");
-		add(role, "thinking", "thinking", role.thinking ?? "inherit");
-		add(role, "tools", "tools", toolsValue(role));
-		add(role, "worktree", "worktree", booleanValue(role.defaultWorktree));
-		add(role, "visible", "visible", booleanValue(role.defaultVisible));
-	}
-	for (const role of roles) add(role, "systemPrompt", "system prompt", systemPromptValue(role));
-	rows.push({ id: OPEN_ACTION_ID, label: OPEN_ACTION, value: "" });
-	rows.push({ id: RESET_ACTION_ID, label: RESET_ACTION, value: "" });
+	add("model", "model", role.model ?? "inherit");
+	add("thinking", "thinking", role.thinking ?? "inherit");
+	add("tools", "tools", toolsValue(role));
+	add("worktree", "worktree", booleanValue(role.defaultWorktree));
+	add("visible", "visible", booleanValue(role.defaultVisible));
+	add("systemPrompt", "system prompt", systemPromptValue(role));
 	return { rows, selections };
 }
 
@@ -191,22 +203,26 @@ export async function runRolesCommand(deps: RolesCommandDeps): Promise<RolesComm
 	}
 
 	let latestResult: RolesCommandResult | undefined;
+	// One level of nesting (operator preference, 2026-08-25): surface 1 lists
+	// roles; surface 2 drills into the chosen role's fields; Esc walks back
+	// UP one level instead of exiting. Edits keep you on surface 2 so multiple
+	// tweaks to one role don't re-descend.
 	while (true) {
-		const surface = surfaceRows(deps.loadRoles().roles);
-		const selected = await deps.showPalette({
+		const roles = deps.loadRoles().roles;
+		const selectedRole = await deps.showPalette({
 			title: "SUBAGENT ROLES",
-			placeholder: "what shall we tune…",
-			rows: surface.rows,
+			placeholder: "which role shall we attend to…",
+			rows: roleListRows(roles),
 		});
-		if (selected === undefined) return latestResult;
+		if (selectedRole === undefined) return latestResult;
 
-		if (selected === OPEN_ACTION_ID) {
+		if (selectedRole === OPEN_ACTION_ID) {
 			const result = await openRolesEditor(deps);
 			if (result.kind === "error") return result;
 			latestResult = result;
 			continue;
 		}
-		if (selected === RESET_ACTION_ID) {
+		if (selectedRole === RESET_ACTION_ID) {
 			const roleId = await deps.showPalette({
 				title: "RESET ROLE TO BUILT-IN",
 				placeholder: "choose a role…",
@@ -219,18 +235,32 @@ export async function runRolesCommand(deps: RolesCommandDeps): Promise<RolesComm
 			continue;
 		}
 
-		const fieldSelection = surface.selections.get(selected);
-		if (!fieldSelection) continue;
-		const mutation = await chooseMutation(deps, fieldSelection);
-		if (!mutation) continue;
-		const failed = await writeMutation(deps, mutation);
-		if (failed) return failed;
-		if (fieldSelection.field === "systemPrompt") {
-			const result = await openRolesEditor(deps);
-			if (result.kind === "error") return result;
-			latestResult = result;
-		} else {
-			latestResult = successResult(false);
+		const roleId = selectedRole.startsWith("role:") ? selectedRole.slice("role:".length) : undefined;
+		const role = roles.find((candidate) => candidate.id === roleId);
+		if (!role) continue;
+
+		while (true) {
+			const surface = roleFieldRows(deps.loadRoles().roles.find((candidate) => candidate.id === role.id) ?? role);
+			const selected = await deps.showPalette({
+				title: `ROLE — ${role.id.toUpperCase()}`,
+				placeholder: "what shall we tune…",
+				rows: surface.rows,
+			});
+			if (selected === undefined) break; // Esc walks back up to surface 1
+
+			const fieldSelection = surface.selections.get(selected);
+			if (!fieldSelection) break;
+			const mutation = await chooseMutation(deps, fieldSelection);
+			if (!mutation) continue;
+			const failed = await writeMutation(deps, mutation);
+			if (failed) return failed;
+			if (fieldSelection.field === "systemPrompt") {
+				const result = await openRolesEditor(deps);
+				if (result.kind === "error") return result;
+				latestResult = result;
+			} else {
+				latestResult = successResult(false);
+			}
 		}
 	}
 }

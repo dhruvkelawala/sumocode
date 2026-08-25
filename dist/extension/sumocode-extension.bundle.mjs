@@ -5407,24 +5407,31 @@ function systemPromptValue(role) {
 function roleFieldId(roleId, field) {
   return `field:${roleId}:${field}`;
 }
-function surfaceRows(roles) {
+function roleSummary(role) {
+  const worktree = role.defaultWorktree === true ? "worktree" : role.defaultWorktree === false ? "no worktree" : "inherit wt";
+  return `${role.model ?? "inherit"} \xB7 ${role.thinking ?? "inherit"} \xB7 ${worktree}`;
+}
+function roleListRows(roles) {
+  return [
+    ...roles.map((role) => ({ id: `role:${role.id}`, label: role.id, value: roleSummary(role) })),
+    { id: OPEN_ACTION_ID, label: OPEN_ACTION, value: "" },
+    { id: RESET_ACTION_ID, label: RESET_ACTION, value: "" }
+  ];
+}
+function roleFieldRows(role) {
   const rows = [];
   const selections = /* @__PURE__ */ new Map();
-  const add = (role, field, label, value) => {
+  const add = (field, label, value) => {
     const id = roleFieldId(role.id, field);
-    rows.push({ id, label: `${role.id} ${label}`, value });
+    rows.push({ id, label, value });
     selections.set(id, { role, field });
   };
-  for (const role of roles) {
-    add(role, "model", "model", role.model ?? "inherit");
-    add(role, "thinking", "thinking", role.thinking ?? "inherit");
-    add(role, "tools", "tools", toolsValue(role));
-    add(role, "worktree", "worktree", booleanValue(role.defaultWorktree));
-    add(role, "visible", "visible", booleanValue(role.defaultVisible));
-  }
-  for (const role of roles) add(role, "systemPrompt", "system prompt", systemPromptValue(role));
-  rows.push({ id: OPEN_ACTION_ID, label: OPEN_ACTION, value: "" });
-  rows.push({ id: RESET_ACTION_ID, label: RESET_ACTION, value: "" });
+  add("model", "model", role.model ?? "inherit");
+  add("thinking", "thinking", role.thinking ?? "inherit");
+  add("tools", "tools", toolsValue(role));
+  add("worktree", "worktree", booleanValue(role.defaultWorktree));
+  add("visible", "visible", booleanValue(role.defaultVisible));
+  add("systemPrompt", "system prompt", systemPromptValue(role));
   return { rows, selections };
 }
 function pickerRows(values) {
@@ -5501,43 +5508,55 @@ async function runRolesCommand(deps) {
   }
   let latestResult;
   while (true) {
-    const surface = surfaceRows(deps.loadRoles().roles);
-    const selected = await deps.showPalette({
+    const roles = deps.loadRoles().roles;
+    const selectedRole = await deps.showPalette({
       title: "SUBAGENT ROLES",
-      placeholder: "what shall we tune\u2026",
-      rows: surface.rows
+      placeholder: "which role shall we attend to\u2026",
+      rows: roleListRows(roles)
     });
-    if (selected === void 0) return latestResult;
-    if (selected === OPEN_ACTION_ID) {
+    if (selectedRole === void 0) return latestResult;
+    if (selectedRole === OPEN_ACTION_ID) {
       const result = await openRolesEditor(deps);
       if (result.kind === "error") return result;
       latestResult = result;
       continue;
     }
-    if (selected === RESET_ACTION_ID) {
-      const roleId = await deps.showPalette({
+    if (selectedRole === RESET_ACTION_ID) {
+      const roleId2 = await deps.showPalette({
         title: "RESET ROLE TO BUILT-IN",
         placeholder: "choose a role\u2026",
-        rows: BUILT_IN_ROLES.map((role) => ({ id: role.id, label: role.id, value: role.label }))
+        rows: BUILT_IN_ROLES.map((role2) => ({ id: role2.id, label: role2.id, value: role2.label }))
       });
-      if (roleId === void 0) continue;
-      const failed2 = await writeMutation(deps, { kind: "reset", roleId });
-      if (failed2) return failed2;
+      if (roleId2 === void 0) continue;
+      const failed = await writeMutation(deps, { kind: "reset", roleId: roleId2 });
+      if (failed) return failed;
       latestResult = successResult(false);
       continue;
     }
-    const fieldSelection = surface.selections.get(selected);
-    if (!fieldSelection) continue;
-    const mutation = await chooseMutation(deps, fieldSelection);
-    if (!mutation) continue;
-    const failed = await writeMutation(deps, mutation);
-    if (failed) return failed;
-    if (fieldSelection.field === "systemPrompt") {
-      const result = await openRolesEditor(deps);
-      if (result.kind === "error") return result;
-      latestResult = result;
-    } else {
-      latestResult = successResult(false);
+    const roleId = selectedRole.startsWith("role:") ? selectedRole.slice("role:".length) : void 0;
+    const role = roles.find((candidate) => candidate.id === roleId);
+    if (!role) continue;
+    while (true) {
+      const surface = roleFieldRows(deps.loadRoles().roles.find((candidate) => candidate.id === role.id) ?? role);
+      const selected = await deps.showPalette({
+        title: `ROLE \u2014 ${role.id.toUpperCase()}`,
+        placeholder: "what shall we tune\u2026",
+        rows: surface.rows
+      });
+      if (selected === void 0) break;
+      const fieldSelection = surface.selections.get(selected);
+      if (!fieldSelection) break;
+      const mutation = await chooseMutation(deps, fieldSelection);
+      if (!mutation) continue;
+      const failed = await writeMutation(deps, mutation);
+      if (failed) return failed;
+      if (fieldSelection.field === "systemPrompt") {
+        const result = await openRolesEditor(deps);
+        if (result.kind === "error") return result;
+        latestResult = result;
+      } else {
+        latestResult = successResult(false);
+      }
     }
   }
 }

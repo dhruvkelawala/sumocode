@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { BUILT_IN_ROLES } from "../subagents/roles.js";
-import { registerRolesCommand, runRolesCommand, writeRolesFile, type RolesCommandDeps } from "./roles.js";
+import { registerRolesCommand, runRolesCommand, writeRolesFile, type RolesCommandDeps, type RolesFileMutation } from "./roles.js";
 import type { SearchPaletteOptions } from "./roles-palette.js";
 
 const research = BUILT_IN_ROLES.find((role) => role.id === "research")!;
@@ -29,8 +29,8 @@ function queuedPalette(selections: Array<string | undefined>, calls: SearchPalet
 	});
 }
 
-describe("runRolesCommand", () => {
-	it("shows every role×field row with its current value on surface 1", async () => {
+	describe("runRolesCommand", () => {
+	it("lists one summary row per role plus the two actions on surface 1", async () => {
 		const calls: SearchPaletteOptions[] = [];
 		await runRolesCommand(commandDeps({
 			loadRoles: () => ({ roles: BUILT_IN_ROLES, warnings: [] }),
@@ -38,28 +38,46 @@ describe("runRolesCommand", () => {
 		}));
 
 		const rows = calls[0]?.rows ?? [];
-		for (const role of BUILT_IN_ROLES) {
-			for (const field of ["model", "thinking", "tools", "worktree", "visible", "system prompt"]) {
-				expect(rows.some((row) => row.label === `${role.id} ${field}`)).toBe(true);
-			}
-		}
-		expect(rows).toContainEqual({ id: "field:research:model", label: "research model", value: "inherit" });
-		expect(rows).toContainEqual({ id: "field:research:tools", label: "research tools", value: "read-only" });
-		expect(rows).toContainEqual({ id: "field:research:systemPrompt", label: "research system prompt", value: "(built-in)" });
+		expect(rows.slice(0, BUILT_IN_ROLES.length).map((row) => row.id)).toEqual(BUILT_IN_ROLES.map((role) => `role:${role.id}`));
+		expect(rows.find((row) => row.id === "role:implement-cheap")?.value).toContain("low");
 		expect(rows.slice(-2).map((row) => row.label)).toEqual(["open roles.json in $EDITOR", "reset a role to built-in…"]);
+	});
+
+	it("drills into the role's fields with current values on surface 2", async () => {
+		const calls: SearchPaletteOptions[] = [];
+		await runRolesCommand(commandDeps({
+			showPalette: queuedPalette(["role:research", undefined, undefined], calls),
+		}));
+
+		expect(calls[0]?.title).toBe("SUBAGENT ROLES");
+		expect(calls[1]?.title).toBe("ROLE — RESEARCH");
+		const rows = calls[1]?.rows ?? [];
+		expect(rows).toContainEqual({ id: "field:research:model", label: "model", value: "inherit" });
+		expect(rows).toContainEqual({ id: "field:research:tools", label: "tools", value: "read-only" });
+		expect(rows).toContainEqual({ id: "field:research:systemPrompt", label: "system prompt", value: "(built-in)" });
+	});
+
+	it("esc from surface 2 walks back up to surface 1", async () => {
+		const calls: SearchPaletteOptions[] = [];
+		const result = await runRolesCommand(commandDeps({
+			showPalette: queuedPalette(["role:research", undefined, undefined], calls),
+		}));
+
+		expect(calls.map((call) => call.title)).toEqual(["SUBAGENT ROLES", "ROLE — RESEARCH", "SUBAGENT ROLES"]);
+		expect(result).toBeUndefined();
 	});
 
 	it("lists inherit first, registry models with providers, and other last", async () => {
 		const calls: SearchPaletteOptions[] = [];
 		await runRolesCommand(commandDeps({
-			showPalette: queuedPalette(["field:research:model", undefined, undefined], calls),
+			showPalette: queuedPalette(["role:research", "field:research:model", undefined, undefined], calls),
 			getAvailableModels: () => [
 				{ id: "claude-opus-4-7", provider: "anthropic" },
 				{ id: "gpt-5", provider: "openai" },
 			],
 		}));
 
-		expect(calls[1]?.rows).toEqual([
+		expect(calls[2]?.rows).toEqual([
 			{ id: "inherit", label: "inherit", value: "use parent session's model" },
 			{ id: "registry:0", label: "claude-opus-4-7", value: "anthropic" },
 			{ id: "registry:1", label: "gpt-5", value: "openai" },
@@ -70,7 +88,7 @@ describe("runRolesCommand", () => {
 	it("writes exactly one sparse mutation for a registry model", async () => {
 		const write = vi.fn();
 		const result = await runRolesCommand(commandDeps({
-			showPalette: queuedPalette(["field:research:model", "registry:0", undefined]),
+			showPalette: queuedPalette(["role:research", "field:research:model", "registry:0", undefined, undefined]),
 			getAvailableModels: () => [{ id: "claude-opus-4-7", provider: "anthropic" }],
 			writeRolesFile: write,
 		}));
@@ -84,7 +102,7 @@ describe("runRolesCommand", () => {
 		const write = vi.fn();
 		const input = vi.fn(async () => " openai/gpt-5 ");
 		await runRolesCommand(commandDeps({
-			showPalette: queuedPalette(["field:research:model", "other", undefined]),
+			showPalette: queuedPalette(["role:research", "field:research:model", "other", undefined, undefined]),
 			input,
 			writeRolesFile: write,
 		}));
@@ -93,23 +111,48 @@ describe("runRolesCommand", () => {
 		expect(write).toHaveBeenCalledWith({ kind: "set", roleId: "research", field: "model", value: "openai/gpt-5" });
 	});
 
-	it("reopens surface 1 after a write", async () => {
+	it("stays on surface 2 after a write, then walks up on esc", async () => {
 		const calls: SearchPaletteOptions[] = [];
 		await runRolesCommand(commandDeps({
-			showPalette: queuedPalette(["field:research:thinking", "high", undefined], calls),
+			showPalette: queuedPalette(["role:research", "field:research:thinking", "high", undefined, undefined], calls),
 		}));
 
-		expect(calls.map((call) => call.title)).toEqual(["SUBAGENT ROLES", "RESEARCH THINKING", "SUBAGENT ROLES"]);
+		expect(calls.map((call) => call.title)).toEqual([
+			"SUBAGENT ROLES",
+			"ROLE — RESEARCH",
+			"RESEARCH THINKING",
+			"ROLE — RESEARCH",
+			"SUBAGENT ROLES",
+		]);
+	});
+
+	it("reflects a written value on the reopened surface 2", async () => {
+		const calls: SearchPaletteOptions[] = [];
+		let thinking: "high" | undefined;
+		const write = vi.fn((mutation: RolesFileMutation) => {
+			if (mutation.kind === "set" && mutation.field === "thinking") thinking = mutation.value as "high";
+		});
+		await runRolesCommand(commandDeps({
+			loadRoles: () => ({
+				roles: [{ ...research, ...(thinking ? { thinking } : {}) }],
+				warnings: [],
+			}),
+			showPalette: queuedPalette(["role:research", "field:research:thinking", "high", undefined, undefined], calls),
+			writeRolesFile: write,
+		}));
+
+		const rowsAfterWrite = calls[3]?.rows ?? [];
+		expect(rowsAfterWrite.find((row) => row.id === "field:research:thinking")?.value).toBe("high");
 	});
 
 	it("degrades an empty model registry to inherit and other", async () => {
 		const calls: SearchPaletteOptions[] = [];
 		await runRolesCommand(commandDeps({
-			showPalette: queuedPalette(["field:research:model", undefined, undefined], calls),
+			showPalette: queuedPalette(["role:research", "field:research:model", undefined, undefined], calls),
 			getAvailableModels: () => [],
 		}));
 
-		expect(calls[1]?.rows.map((row) => row.id)).toEqual(["inherit", "other"]);
+		expect(calls[2]?.rows.map((row) => row.id)).toEqual(["inherit", "other"]);
 	});
 
 	it("writes explicit model inheritance for every role", async () => {
@@ -117,7 +160,7 @@ describe("runRolesCommand", () => {
 			const write = vi.fn();
 			await runRolesCommand(commandDeps({
 				loadRoles: () => ({ roles: BUILT_IN_ROLES, warnings: [] }),
-				showPalette: queuedPalette([`field:${role.id}:model`, "inherit", undefined]),
+			showPalette: queuedPalette([`role:${role.id}`, `field:${role.id}:model`, "inherit", undefined, undefined]),
 				writeRolesFile: write,
 			}));
 			expect(write).toHaveBeenCalledWith({ kind: "set", roleId: role.id, field: "model", value: "inherit" });
@@ -143,7 +186,7 @@ describe("runRolesCommand", () => {
 	it("writes nothing when a value picker is cancelled", async () => {
 		const write = vi.fn();
 		await runRolesCommand(commandDeps({
-			showPalette: queuedPalette(["field:research:model", undefined, undefined]),
+			showPalette: queuedPalette(["role:research", "field:research:model", undefined, undefined]),
 			writeRolesFile: write,
 		}));
 		expect(write).not.toHaveBeenCalled();
@@ -153,7 +196,7 @@ describe("runRolesCommand", () => {
 		const write = vi.fn();
 		const openEditor = vi.fn(() => ({ status: 0 }));
 		const result = await runRolesCommand(commandDeps({
-			showPalette: queuedPalette(["field:research:systemPrompt", undefined]),
+			showPalette: queuedPalette(["role:research", "field:research:systemPrompt", undefined, undefined]),
 			writeRolesFile: write,
 			openEditor,
 		}));

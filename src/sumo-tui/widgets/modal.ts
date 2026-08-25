@@ -81,8 +81,8 @@ interface SelectOption {
  */
 export const SELECT_SEARCH_THRESHOLD = 10;
 
-export function selectSearchActive(optionCount: number): boolean {
-	return optionCount > SELECT_SEARCH_THRESHOLD;
+export function selectSearchActive(options: readonly SelectOption[]): boolean {
+	return selectIsPaletteContent(options) || options.length > SELECT_SEARCH_THRESHOLD;
 }
 
 /** Case-insensitive substring filter over option labels (palette parity). */
@@ -90,6 +90,16 @@ export function filterSelectOptions(options: readonly SelectOption[], searchQuer
 	const query = searchQuery.trim().toLowerCase();
 	if (query.length === 0) return options;
 	return options.filter((option) => option.label.toLowerCase().includes(query));
+}
+
+/**
+ * Two-column rows ("label  value" — the label·value seam /roles and friends
+ * send through ctx.ui.select) are palette CONTENT: they render and behave as
+ * a searchable palette regardless of row count, so short role lists don't
+ * fall back to lettered Divine Query while long ones get the palette.
+ */
+export function selectIsPaletteContent(options: readonly SelectOption[]): boolean {
+	return options.some((option) => / {2}\S/u.test(option.label));
 }
 
 function keyEq(data: string, ...ids: readonly string[]): boolean {
@@ -280,7 +290,7 @@ export class ModalManager implements Component {
 			case "confirm":
 				return { kind: active.kind, title: active.title, message: active.message, selectedIndex: active.selectedIndex };
 			case "select": {
-				const searchActive = selectSearchActive(active.options.length);
+				const searchActive = selectSearchActive(active.options);
 				const visibleOptions = searchActive ? filterSelectOptions(active.options, active.searchQuery) : active.options;
 				return {
 					kind: active.kind,
@@ -325,7 +335,7 @@ export class ModalManager implements Component {
 
 		// Long selects filter instead of letter-jumping (plan 085 fix): with 10+
 		// rows, letters are unmemorable and typing must SEARCH, not answer.
-		if (this.active.kind === "select" && selectSearchActive(this.active.options.length)) {
+		if (this.active.kind === "select" && selectSearchActive(this.active.options)) {
 			this.handleSearchSelect(data, this.active);
 			return;
 		}
@@ -412,7 +422,7 @@ export class ModalManager implements Component {
 			const no = this.active.selectedIndex === 1 ? "▶ No" : "  No";
 			lines.push(line(`${yes}    ${no}`));
 		} else if (this.active.kind === "select") {
-			const searchActive = selectSearchActive(this.active.options.length);
+			const searchActive = selectSearchActive(this.active.options);
 			const visibleOptions = searchActive ? filterSelectOptions(this.active.options, this.active.searchQuery) : this.active.options;
 			if (searchActive) lines.push(line(`/ ${this.active.searchQuery || "type to filter"}`));
 			for (const [index, option] of visibleOptions.entries()) {

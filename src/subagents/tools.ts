@@ -172,7 +172,7 @@ export function registerSubagentTools(
 					activity: activityEnvelope(spawned, toolCallId),
 				});
 			}
-			return makeToolResult(`Started ${spawned.id} (${spawned.title}). Its result will be delivered to you automatically when it settles, or use subagent_wait to block for it.`, {
+			return makeToolResult(`Started ${spawned.id} (${spawned.title}). No polling needed — continue other work or END YOUR TURN; the result will be delivered to you and wake you automatically when it settles. Only call subagent_wait if you cannot take a single further step without this result.`, {
 				action: "spawn",
 				subagent: spawned,
 				activity: activityEnvelope(spawned, toolCallId),

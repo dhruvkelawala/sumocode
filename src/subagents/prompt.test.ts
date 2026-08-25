@@ -15,6 +15,16 @@ describe("subagent prompt guidance", () => {
 		expect(SUBAGENT_PROMPT_SNIPPET).toContain("visible subagents");
 	});
 
+	it("teaches fire-and-forget role delegation and demotes waiting", () => {
+		const guidance = SUBAGENT_PROMPT_GUIDELINES.join("\n");
+		expect(guidance).toContain("delegation is fire-and-forget");
+		expect(guidance).toContain("do NOT call subagent_wait right after subagent_spawn");
+		expect(guidance).toContain("research, review, documentor, designer, implement-cheap, implement-smart");
+		expect(guidance).toContain("status=queued");
+		expect(SUBAGENT_TOOL_DESCRIPTIONS.wait).toContain("Last resort");
+		expect(SUBAGENT_TOOL_DESCRIPTIONS.wait).toContain("prefer ending your turn");
+	});
+
 	it("documents the isolated coding-task recipe with worktree and baseRef", () => {
 		const guidance = SUBAGENT_PROMPT_GUIDELINES.join("\n");
 		expect(guidance).toContain("To delegate a self-contained coding task");

@@ -120,7 +120,8 @@ describe("subagent tools", () => {
 	it("spawn returns an id and automatic-delivery guidance", async () => {
 		const { tool, ctx } = createHarness();
 		const result = await tool("subagent_spawn").execute("tc", { prompt: "do it", name: "worker" }, undefined, undefined, ctx as never);
-		expect(textOf(result)).toBe("Started sa-1 (worker). Its result will be delivered to you automatically when it settles, or use subagent_wait to block for it.");
+		expect(textOf(result)).toBe("Started sa-1 (worker). No polling needed — continue other work or END YOUR TURN; the result will be delivered to you and wake you automatically when it settles. Only call subagent_wait if you cannot take a single further step without this result.");
+		expect(textOf(result)).not.toMatch(/block for\s+it/);
 		expect(result).toMatchObject({
 			details: {
 				action: "spawn",

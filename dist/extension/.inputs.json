@@ -40,6 +40,7 @@
     "src/commands/persona.ts",
     "src/commands/reload.ts",
     "src/commands/review.ts",
+    "src/commands/roles-palette.ts",
     "src/commands/roles.ts",
     "src/commands/ship.ts",
     "src/commands/slate.ts",
@@ -125,6 +126,6 @@
     "src/working-indicator.ts",
     "tsconfig.json"
   ],
-  "hash": "fa3077ee918230b6081fe29b4ecda8a3ceb6229050747a4b363cff39f9684422",
-  "outputsHash": "16122c0da3ca802122f2dc24e6e2c092c5f3420cc6b87c884be5b7634ac9aea2"
+  "hash": "1bb382c4aa01f16352b4618184d97dd6cf4a1fc001119aa2ed0a6642ba224758",
+  "outputsHash": "04f6865b922a0d769e885277e31f3af08de704f97287edf199385e6b4a1b509c"
 }

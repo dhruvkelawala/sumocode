@@ -1575,8 +1575,8 @@ function renderSplashVersionLine(width) {
   if (width <= 0 || SPLASH_VERSION_LINE.length > width) return "";
   const padLeft = Math.floor((width - SPLASH_VERSION_LINE.length) / 2);
   const padRight2 = width - SPLASH_VERSION_LINE.length - padLeft;
-  const dim4 = colorHex(SPLASH_VERSION_LINE, activeThemeColors().foregroundDim);
-  return `${" ".repeat(padLeft)}${dim4}${" ".repeat(padRight2)}`;
+  const dim5 = colorHex(SPLASH_VERSION_LINE, activeThemeColors().foregroundDim);
+  return `${" ".repeat(padLeft)}${dim5}${" ".repeat(padRight2)}`;
 }
 function renderFooterBlock(snapshot, width = 160) {
   if (!snapshot.isSplash) return [formatFooterLine(snapshot, width)];
@@ -1760,8 +1760,8 @@ function renderInputHints(width, options = {}) {
   const rightLen = rightPlain.length;
   const left = options.leftHint;
   const dimFg = fg(activeThemeColors().foregroundDim);
-  const accent3 = fg(activeThemeColors().accent);
-  const rightColored = `${accent3}CTRL+/${RESET2} ${dimFg}\xB7 COMMANDS${RESET2}`;
+  const accent4 = fg(activeThemeColors().accent);
+  const rightColored = `${accent4}CTRL+/${RESET2} ${dimFg}\xB7 COMMANDS${RESET2}`;
   const colorLeftHint = (text) => {
     if (options.leftHintStyle === "model-thinking") {
       const prefix = "\u2570\u2500 ";
@@ -1954,8 +1954,8 @@ function splitRule(width) {
   return center(piece, width);
 }
 function titleRow(text, width) {
-  const accent3 = activeThemeColors().accent;
-  return center(`${fg2(TITLE_FLOWER, accent3)}  ${fg2(text, accent3)}  ${fg2(TITLE_FLOWER, accent3)}`, width);
+  const accent4 = activeThemeColors().accent;
+  return center(`${fg2(TITLE_FLOWER, accent4)}  ${fg2(text, accent4)}  ${fg2(TITLE_FLOWER, accent4)}`, width);
 }
 function focusMarker(focused) {
   const colors = activeThemeColors();
@@ -2297,17 +2297,17 @@ var CathedralQnAComponent = class {
       return `${liftedBg}${divider("\u2502")}${paddedContent}${" ".repeat(rightPad)}${divider("\u2502")}${RESET4}`;
     };
     const emptyBoxLine = () => `${liftedBg}${divider("\u2502")}${" ".repeat(boxWidth - 2)}${divider("\u2502")}${RESET4}`;
-    const padToWidth4 = (line) => {
+    const padToWidth5 = (line) => {
       const len = visibleWidth4(line);
       return line + " ".repeat(Math.max(0, width - len));
     };
     const lines = [];
-    lines.push(padToWidth4(`${liftedBg}${divider("\u256D" + horizontalLine(boxWidth - 2) + "\u256E")}${RESET4}`));
+    lines.push(padToWidth5(`${liftedBg}${divider("\u256D" + horizontalLine(boxWidth - 2) + "\u256E")}${RESET4}`));
     const title = `${accent("\u273E")}  ${accent("DIVINE QUERY")}  ${accent("\u273E")}  ${dim(`${this.currentIndex + 1}/${this.questions.length}`)}`;
-    lines.push(padToWidth4(boxLine(title)));
+    lines.push(padToWidth5(boxLine(title)));
     const ruleLen = Math.max(1, Math.floor((contentWidth - 6) / 2 - 5));
     const splitRule2 = `${divider("\u2500".repeat(ruleLen))}  ${divider("\xB7")}  ${divider("\u2500".repeat(ruleLen))}`;
-    lines.push(padToWidth4(boxLine(splitRule2)));
+    lines.push(padToWidth5(boxLine(splitRule2)));
     const progressParts = [];
     for (let i = 0; i < this.questions.length; i++) {
       const answered = (this.answers[i]?.trim() || "").length > 0;
@@ -2316,37 +2316,37 @@ var CathedralQnAComponent = class {
       else if (answered) progressParts.push(idle("\u2713"));
       else progressParts.push(divider("\xB7"));
     }
-    lines.push(padToWidth4(boxLine(progressParts.join(" "))));
-    lines.push(padToWidth4(emptyBoxLine()));
+    lines.push(padToWidth5(boxLine(progressParts.join(" "))));
+    lines.push(padToWidth5(emptyBoxLine()));
     const q = this.questions[this.currentIndex];
     const questionText = `${accent("Q:")} ${fg3(q.question)}`;
     for (const line of wrapTextWithAnsi2(questionText, contentWidth)) {
-      lines.push(padToWidth4(boxLine(line)));
+      lines.push(padToWidth5(boxLine(line)));
     }
     if (q.context) {
-      lines.push(padToWidth4(emptyBoxLine()));
+      lines.push(padToWidth5(emptyBoxLine()));
       for (const line of wrapTextWithAnsi2(dim(`> ${q.context}`), contentWidth - 2)) {
-        lines.push(padToWidth4(boxLine(line)));
+        lines.push(padToWidth5(boxLine(line)));
       }
     }
-    lines.push(padToWidth4(emptyBoxLine()));
+    lines.push(padToWidth5(emptyBoxLine()));
     const answerPrefix = accent("A: ");
     const editorWidth = contentWidth - 4 - 3;
     const editorLines = this.editor.render(editorWidth);
     for (let i = 1; i < editorLines.length - 1; i++) {
       const prefix = i === 1 ? answerPrefix : "   ";
-      lines.push(padToWidth4(boxLine(prefix + editorLines[i])));
+      lines.push(padToWidth5(boxLine(prefix + editorLines[i])));
     }
-    lines.push(padToWidth4(emptyBoxLine()));
-    lines.push(padToWidth4(boxLine(splitRule2)));
+    lines.push(padToWidth5(emptyBoxLine()));
+    lines.push(padToWidth5(boxLine(splitRule2)));
     if (this.showingConfirmation) {
       const confirmMsg = `${thinking("Submit all answers?")} ${dim("(Enter/y to confirm, Esc/n to cancel)")}`;
-      lines.push(padToWidth4(boxLine(truncateToWidth3(confirmMsg, contentWidth))));
+      lines.push(padToWidth5(boxLine(truncateToWidth3(confirmMsg, contentWidth))));
     } else {
       const controls = dim("\u21C5 wander    \u23CE answer    \u21E7\u21E5 retreat    \u238B cancel");
-      lines.push(padToWidth4(boxLine(truncateToWidth3(controls, contentWidth))));
+      lines.push(padToWidth5(boxLine(truncateToWidth3(controls, contentWidth))));
     }
-    lines.push(padToWidth4(`${liftedBg}${divider("\u2570" + horizontalLine(boxWidth - 2) + "\u256F")}${RESET4}`));
+    lines.push(padToWidth5(`${liftedBg}${divider("\u2570" + horizontalLine(boxWidth - 2) + "\u256F")}${RESET4}`));
     this.cachedLines = lines;
     return lines;
   }
@@ -5189,12 +5189,188 @@ function loadRoles(dependencies = {}) {
   return { roles, warnings };
 }
 
+// src/commands/roles-palette.ts
+import { Key as Key3, matchesKey as matchesKey4, truncateToWidth as truncateToWidth5, visibleWidth as visibleWidth6 } from "@earendil-works/pi-tui";
+var HINT_ROW = "\u2191\u2193 wander    \u238F filter    \u23CE attend    \u238B retreat";
+var MAX_VISIBLE_ROWS = 9;
+var RESET7 = "\x1B[0m";
+var FG_RESET2 = "\x1B[39m";
+var ROLES_PALETTE_OVERLAY_OPTIONS = {
+  anchor: "center",
+  width: 80,
+  minWidth: 50,
+  maxHeight: 20
+};
+function panelBg() {
+  return activeThemeColors().surfaceLifted;
+}
+function paletteDivider() {
+  return activeThemeColors().divider;
+}
+function ansiColor(hex, channel) {
+  const normalized = hex.replace("#", "");
+  const red = parseInt(normalized.slice(0, 2), 16);
+  const green = parseInt(normalized.slice(2, 4), 16);
+  const blue = parseInt(normalized.slice(4, 6), 16);
+  return `\x1B[${channel};2;${red};${green};${blue}m`;
+}
+function fg5(text, hex) {
+  return `${ansiColor(hex, 38)}${text}${FG_RESET2}`;
+}
+function dim2(text) {
+  return fg5(text, activeThemeColors().foregroundDim);
+}
+function accent2(text) {
+  return fg5(text, activeThemeColors().accent);
+}
+function dividerText(text) {
+  return fg5(text, paletteDivider());
+}
+function foreground(text) {
+  return fg5(text, activeThemeColors().foreground);
+}
+function cursorCell() {
+  return `${ansiColor(activeThemeColors().accent, 48)}${ansiColor(activeThemeColors().background, 38)} ${FG_RESET2}${ansiColor(panelBg(), 48)}`;
+}
+function padToWidth(text, width) {
+  const len = visibleWidth6(text);
+  if (len >= width) return truncateToWidth5(text, width, "");
+  return `${text}${" ".repeat(width - len)}`;
+}
+function panelLine(text, width) {
+  return `${ansiColor(panelBg(), 48)}${ansiColor(activeThemeColors().foreground, 38)}${padToWidth(text, width)}${RESET7}`;
+}
+function center2(text, width) {
+  const len = visibleWidth6(text);
+  if (len >= width) return truncateToWidth5(text, width, "");
+  const left = Math.floor((width - len) / 2);
+  const right = width - len - left;
+  return `${" ".repeat(left)}${text}${" ".repeat(right)}`;
+}
+function filterRows(rows, searchQuery) {
+  const query = searchQuery.trim().toLowerCase();
+  if (query.length === 0) return [...rows];
+  return rows.filter((row3) => `${row3.label} ${row3.value}`.toLowerCase().includes(query));
+}
+function normalizedActiveIndex(state, rows) {
+  if (rows.length === 0) return 0;
+  return Math.min(Math.max(0, state.activeIndex), rows.length - 1);
+}
+function visibleRows(rows, activeIndex) {
+  if (rows.length <= MAX_VISIBLE_ROWS) return { rows, offset: 0 };
+  const maxOffset = rows.length - MAX_VISIBLE_ROWS;
+  const offset = Math.min(maxOffset, Math.max(0, activeIndex - Math.floor(MAX_VISIBLE_ROWS / 2)));
+  return { rows: rows.slice(offset, offset + MAX_VISIBLE_ROWS), offset };
+}
+function renderPalette(options, state, width) {
+  const w = Math.max(1, Math.floor(width));
+  const filtered = filterRows(state.rows, state.searchQuery);
+  const active = normalizedActiveIndex(state, filtered);
+  const window = visibleRows(filtered, active);
+  const searchText = state.searchQuery.length > 0 ? state.searchQuery : options.placeholder;
+  const halfRule = "\u2500".repeat(22);
+  const lines = [];
+  lines.push(panelLine("", w));
+  lines.push(panelLine(center2(`${accent2("\u273E")}  ${accent2(options.title)}  ${accent2("\u273E")}`, w), w));
+  lines.push(panelLine("", w));
+  lines.push(panelLine(center2(`${dividerText(halfRule)}  ${dividerText("\xB7")}  ${dividerText(halfRule)}`, w), w));
+  lines.push(panelLine("", w));
+  lines.push(panelLine(`     ${accent2("\u276F")}  ${cursorCell()}${state.searchQuery.length > 0 ? foreground(searchText) : dim2(searchText)}`, w));
+  lines.push(panelLine("", w));
+  if (filtered.length === 0) {
+    lines.push(panelLine(`     ${dividerText("\xB7")}   ${dim2("no matching option")}`, w));
+  } else {
+    for (const [visibleIndex, row3] of window.rows.entries()) {
+      const focused = visibleIndex + window.offset === active;
+      const marker = focused ? accent2("\u2748") : dividerText("\xB7");
+      const label = focused ? foreground(row3.label) : dim2(row3.label);
+      const value = focused ? foreground(row3.value) : dim2(row3.value);
+      const left = `     ${marker}   ${label}`;
+      const padBetween = Math.max(2, w - visibleWidth6(left) - visibleWidth6(value) - 5);
+      lines.push(panelLine(`${left}${" ".repeat(padBetween)}${value}`, w));
+    }
+  }
+  lines.push(panelLine("", w));
+  lines.push(panelLine(center2(`${dividerText(halfRule)}  ${dividerText("\xB7")}  ${dividerText(halfRule)}`, w), w));
+  lines.push(panelLine(center2(dim2(HINT_ROW), w), w));
+  lines.push(panelLine("", w));
+  return lines;
+}
+function keyEq(data, ...ids) {
+  for (const id of ids) {
+    if (data === id) return true;
+    if (matchesKey4(data, id)) return true;
+  }
+  return false;
+}
+function updatePaletteState(state, data) {
+  const rows = filterRows(state.rows, state.searchQuery);
+  const active = normalizedActiveIndex(state, rows);
+  if (keyEq(data, Key3.escape, Key3.esc)) return { state, done: true, selection: void 0 };
+  if (keyEq(data, Key3.enter, Key3.return)) {
+    return { state: { ...state, activeIndex: active }, done: true, selection: rows[active]?.id };
+  }
+  if (keyEq(data, Key3.down, Key3.tab)) {
+    return { state: { ...state, activeIndex: rows.length === 0 ? 0 : (active + 1) % rows.length } };
+  }
+  if (keyEq(data, Key3.up, Key3.shift(Key3.tab))) {
+    return { state: { ...state, activeIndex: rows.length === 0 ? 0 : (active - 1 + rows.length) % rows.length } };
+  }
+  if (keyEq(data, Key3.backspace)) {
+    return { state: { ...state, searchQuery: state.searchQuery.slice(0, -1), activeIndex: 0 } };
+  }
+  if (data.length === 1 && !new RegExp("\\p{Cc}", "u").test(data)) {
+    return { state: { ...state, searchQuery: `${state.searchQuery}${data}`, activeIndex: 0 } };
+  }
+  return { state: { ...state, activeIndex: active } };
+}
+var SearchPaletteComponent = class {
+  constructor(options, state, done) {
+    this.options = options;
+    this.state = state;
+    this.done = done;
+  }
+  options;
+  state;
+  done;
+  invalidate() {
+  }
+  handleInput(data) {
+    const result = updatePaletteState(this.state, data);
+    this.state = result.state;
+    if (result.done) this.done(result.selection);
+  }
+  render(width) {
+    return renderPalette(this.options, this.state, width);
+  }
+};
+function rowLabel(row3) {
+  return row3.value.length > 0 ? `${row3.label}  ${row3.value}` : row3.label;
+}
+async function showSearchPalette(ctx, options) {
+  if (ctx.mode === "rpc") {
+    const labels = options.rows.map(rowLabel);
+    const selected = await ctx.ui.select(options.title, labels);
+    const selectedIndex = selected === void 0 ? -1 : labels.indexOf(selected);
+    return selectedIndex < 0 ? void 0 : options.rows[selectedIndex]?.id;
+  }
+  return ctx.ui.custom(
+    (_tui, _theme, _keybindings, done) => new SearchPaletteComponent(options, {
+      searchQuery: "",
+      activeIndex: 0,
+      rows: options.rows
+    }, done),
+    { overlay: true, overlayOptions: ROLES_PALETTE_OVERLAY_OPTIONS }
+  );
+}
+
 // src/commands/roles.ts
+var OPEN_ACTION_ID = "action:open";
+var RESET_ACTION_ID = "action:reset";
 var OPEN_ACTION = "open roles.json in $EDITOR";
-var RESET_ACTION = "reset a role to built-in";
-var ROLE_FIELDS2 = ["model", "thinking", "tools", "default worktree", "default visible", "system prompt"];
+var RESET_ACTION = "reset a role to built-in\u2026";
 var READ_ONLY_TOOLS = ["read", "grep", "find", "ls", "bash"];
-var roleOption = (role) => `${role.id} \xB7 ${role.label} \xB7 ${role.model ?? "inherit"} \xB7 ${role.thinking ?? "inherit"}`;
+var THINKING_LEVELS2 = ["inherit", "off", "minimal", "low", "medium", "high", "xhigh", "max"];
 var errorText = (error) => error instanceof Error ? error.message : String(error);
 async function writeMutation(deps, mutation) {
   try {
@@ -5212,6 +5388,109 @@ async function openRolesEditor(deps) {
   if (outcome.error) return { kind: "error", opened: true, message: `failed to launch editor: ${outcome.error}` };
   return { kind: "error", opened: true, message: `editor exited with code ${outcome.status}` };
 }
+function sameTools(actual, expected) {
+  return actual.length === expected.length && actual.every((tool, index) => tool === expected[index]);
+}
+function toolsValue(role) {
+  if (!role.tools) return "inherit parent";
+  if (sameTools(role.tools, READ_ONLY_TOOLS)) return "read-only";
+  if (sameTools(role.tools, BUILT_IN_TOOLS)) return "full built-in set";
+  return role.tools.join(", ");
+}
+function booleanValue(value) {
+  return value === void 0 ? "inherit default" : String(value);
+}
+function systemPromptValue(role) {
+  const builtIn = BUILT_IN_ROLES.find((candidate) => candidate.id === role.id);
+  return builtIn?.systemPrompt === role.systemPrompt ? "(built-in)" : "(custom)";
+}
+function roleFieldId(roleId, field) {
+  return `field:${roleId}:${field}`;
+}
+function surfaceRows(roles) {
+  const rows = [];
+  const selections = /* @__PURE__ */ new Map();
+  const add = (role, field, label, value) => {
+    const id = roleFieldId(role.id, field);
+    rows.push({ id, label: `${role.id} ${label}`, value });
+    selections.set(id, { role, field });
+  };
+  for (const role of roles) {
+    add(role, "model", "model", role.model ?? "inherit");
+    add(role, "thinking", "thinking", role.thinking ?? "inherit");
+    add(role, "tools", "tools", toolsValue(role));
+    add(role, "worktree", "worktree", booleanValue(role.defaultWorktree));
+    add(role, "visible", "visible", booleanValue(role.defaultVisible));
+  }
+  for (const role of roles) add(role, "systemPrompt", "system prompt", systemPromptValue(role));
+  rows.push({ id: OPEN_ACTION_ID, label: OPEN_ACTION, value: "" });
+  rows.push({ id: RESET_ACTION_ID, label: RESET_ACTION, value: "" });
+  return { rows, selections };
+}
+function pickerRows(values) {
+  return values.map((value) => ({ id: value, label: value, value: "" }));
+}
+function modelValue(model) {
+  return model.provider && !model.id.includes("/") ? `${model.provider}/${model.id}` : model.id;
+}
+async function chooseMutation(deps, selection) {
+  const { role, field } = selection;
+  if (field === "model") {
+    const models = deps.getAvailableModels();
+    const rows = [
+      { id: "inherit", label: "inherit", value: "use parent session's model" },
+      ...models.map((model2, index) => ({ id: `registry:${index}`, label: model2.id, value: model2.provider ?? "" })),
+      { id: "other", label: "other", value: "type provider/modelId\u2026" }
+    ];
+    const selected = await deps.showPalette({ title: `${role.id.toUpperCase()} MODEL`, placeholder: "choose a model\u2026", rows });
+    if (selected === void 0) return void 0;
+    if (selected === "inherit") return { kind: "set", roleId: role.id, field: "model", value: "inherit" };
+    if (selected === "other") {
+      const model2 = await deps.input("model (provider/modelId)", role.model ?? "");
+      if (model2 === void 0 || !model2.trim()) return void 0;
+      return { kind: "set", roleId: role.id, field: "model", value: model2.trim() };
+    }
+    const model = models[Number(selected.replace("registry:", ""))];
+    return model ? { kind: "set", roleId: role.id, field: "model", value: modelValue(model) } : void 0;
+  }
+  if (field === "thinking") {
+    const thinking2 = await deps.showPalette({ title: `${role.id.toUpperCase()} THINKING`, placeholder: "choose a thinking level\u2026", rows: pickerRows(THINKING_LEVELS2) });
+    return thinking2 === void 0 ? void 0 : { kind: "set", roleId: role.id, field: "thinking", value: thinking2 === "inherit" ? void 0 : thinking2 };
+  }
+  if (field === "tools") {
+    const tools = await deps.showPalette({
+      title: `${role.id.toUpperCase()} TOOLS`,
+      placeholder: "choose a tool policy\u2026",
+      rows: pickerRows(["inherit parent", "read-only (read, grep, find, ls, bash)", "full built-in set"])
+    });
+    if (tools === void 0) return void 0;
+    return {
+      kind: "set",
+      roleId: role.id,
+      field: "tools",
+      value: tools === "inherit parent" ? void 0 : tools.startsWith("read-only") ? [...READ_ONLY_TOOLS] : [...BUILT_IN_TOOLS]
+    };
+  }
+  if (field === "worktree" || field === "visible") {
+    const value = await deps.showPalette({
+      title: `${role.id.toUpperCase()} ${field.toUpperCase()}`,
+      placeholder: "choose a default\u2026",
+      rows: pickerRows(["inherit default", "true", "false"])
+    });
+    return value === void 0 ? void 0 : {
+      kind: "set",
+      roleId: role.id,
+      field: field === "worktree" ? "defaultWorktree" : "defaultVisible",
+      value: value === "inherit default" ? void 0 : value === "true"
+    };
+  }
+  return { kind: "set-if-absent", roleId: role.id, field: "systemPrompt", value: role.systemPrompt };
+}
+var successResult = (opened) => ({
+  kind: "success",
+  opened,
+  message: "role updated \u2014 applies to the next spawn"
+});
 async function runRolesCommand(deps) {
   if (!deps.isTTY) {
     return {
@@ -5220,64 +5499,47 @@ async function runRolesCommand(deps) {
       message: `roles file: ${deps.rolesPath} \u2014 edit it directly; changes apply to the next spawn`
     };
   }
-  const loaded = deps.loadRoles();
-  const roleOptions = loaded.roles.map(roleOption);
-  const selected = await deps.select("SUBAGENT ROLES", [...roleOptions, OPEN_ACTION, RESET_ACTION]);
-  if (selected === void 0) return void 0;
-  if (selected === OPEN_ACTION) return openRolesEditor(deps);
-  if (selected === RESET_ACTION) {
-    const resetOptions = BUILT_IN_ROLES.map((role3) => `${role3.id} \xB7 ${role3.label}`);
-    const resetSelection = await deps.select("RESET ROLE TO BUILT-IN", resetOptions);
-    if (resetSelection === void 0) return void 0;
-    const role2 = BUILT_IN_ROLES[resetOptions.indexOf(resetSelection)];
-    if (!role2) return void 0;
-    const failed2 = await writeMutation(deps, { kind: "reset", roleId: role2.id });
-    return failed2 ?? { kind: "success", opened: false, message: "role updated \u2014 applies to the next spawn" };
-  }
-  const role = loaded.roles[roleOptions.indexOf(selected)];
-  if (!role) return void 0;
-  const field = await deps.select(`${role.id.toUpperCase()} ROLE`, ROLE_FIELDS2);
-  if (field === void 0) return void 0;
-  let mutation;
-  if (field === "model") {
-    const mode = await deps.select("MODEL", ["inherit (use parent session's model)", "set a specific model\u2026"]);
-    if (mode === void 0) return void 0;
-    if (mode === "inherit (use parent session's model)") {
-      mutation = { kind: "set", roleId: role.id, field: "model", value: "inherit" };
-    } else {
-      const model = await deps.input("model (provider/modelId)", role.model ?? "");
-      if (model === void 0 || !model.trim()) return void 0;
-      mutation = { kind: "set", roleId: role.id, field: "model", value: model.trim() };
+  let latestResult;
+  while (true) {
+    const surface = surfaceRows(deps.loadRoles().roles);
+    const selected = await deps.showPalette({
+      title: "SUBAGENT ROLES",
+      placeholder: "what shall we tune\u2026",
+      rows: surface.rows
+    });
+    if (selected === void 0) return latestResult;
+    if (selected === OPEN_ACTION_ID) {
+      const result = await openRolesEditor(deps);
+      if (result.kind === "error") return result;
+      latestResult = result;
+      continue;
     }
-  } else if (field === "thinking") {
-    const thinking2 = await deps.select("THINKING", ["inherit", "off", "minimal", "low", "medium", "high", "xhigh", "max"]);
-    if (thinking2 === void 0) return void 0;
-    mutation = { kind: "set", roleId: role.id, field: "thinking", value: thinking2 === "inherit" ? void 0 : thinking2 };
-  } else if (field === "tools") {
-    const tools = await deps.select("TOOLS", ["inherit parent", "read-only (read, grep, find, ls, bash)", "full built-in set"]);
-    if (tools === void 0) return void 0;
-    mutation = {
-      kind: "set",
-      roleId: role.id,
-      field: "tools",
-      value: tools === "inherit parent" ? void 0 : tools.startsWith("read-only") ? [...READ_ONLY_TOOLS] : [...BUILT_IN_TOOLS]
-    };
-  } else if (field === "default worktree" || field === "default visible") {
-    const value = await deps.select(field.toUpperCase(), ["inherit default", "true", "false"]);
-    if (value === void 0) return void 0;
-    mutation = {
-      kind: "set",
-      roleId: role.id,
-      field: field === "default worktree" ? "defaultWorktree" : "defaultVisible",
-      value: value === "inherit default" ? void 0 : value === "true"
-    };
-  } else {
-    const failed2 = await writeMutation(deps, { kind: "set-if-absent", roleId: role.id, field: "systemPrompt", value: role.systemPrompt });
-    if (failed2) return failed2;
-    return openRolesEditor(deps);
+    if (selected === RESET_ACTION_ID) {
+      const roleId = await deps.showPalette({
+        title: "RESET ROLE TO BUILT-IN",
+        placeholder: "choose a role\u2026",
+        rows: BUILT_IN_ROLES.map((role) => ({ id: role.id, label: role.id, value: role.label }))
+      });
+      if (roleId === void 0) continue;
+      const failed2 = await writeMutation(deps, { kind: "reset", roleId });
+      if (failed2) return failed2;
+      latestResult = successResult(false);
+      continue;
+    }
+    const fieldSelection = surface.selections.get(selected);
+    if (!fieldSelection) continue;
+    const mutation = await chooseMutation(deps, fieldSelection);
+    if (!mutation) continue;
+    const failed = await writeMutation(deps, mutation);
+    if (failed) return failed;
+    if (fieldSelection.field === "systemPrompt") {
+      const result = await openRolesEditor(deps);
+      if (result.kind === "error") return result;
+      latestResult = result;
+    } else {
+      latestResult = successResult(false);
+    }
   }
-  const failed = mutation ? await writeMutation(deps, mutation) : void 0;
-  return failed ?? { kind: "success", opened: false, message: "role updated \u2014 applies to the next spawn" };
 }
 function readRolesDocument(path2) {
   if (!existsSync2(path2)) return { roles: [] };
@@ -5334,7 +5596,8 @@ function registerRolesCommand(pi) {
           isTTY: ctx.hasUI,
           loadRoles,
           writeRolesFile: (mutation) => writeRolesFile(path2, mutation),
-          select: (title, options) => showDivineQuery(ctx, title, options),
+          showPalette: (options) => showSearchPalette(ctx, options),
+          getAvailableModels: () => ctx.modelRegistry.getAvailable().map((model) => ({ id: model.id, provider: model.provider })),
           input: (title, placeholder) => ctx.ui.input(title, placeholder),
           openEditor: (editorPath) => defaultOpenEditor(process.env.EDITOR?.trim() || "vi", editorPath)
         });
@@ -5348,7 +5611,7 @@ function registerRolesCommand(pi) {
 
 // src/command-palette.ts
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
-import { Key as Key3, matchesKey as matchesKey4, truncateToWidth as truncateToWidth5, visibleWidth as visibleWidth6 } from "@earendil-works/pi-tui";
+import { Key as Key4, matchesKey as matchesKey5, truncateToWidth as truncateToWidth6, visibleWidth as visibleWidth7 } from "@earendil-works/pi-tui";
 var COMMAND_PALETTE_HINT_ROW = "\u2191\u2193 wander    \u23CE attend    \u238B retreat";
 var COMMAND_PALETTE_THINKING_LEVELS = [
   "off",
@@ -5366,50 +5629,50 @@ var COMMAND_PALETTE_OVERLAY_OPTIONS = {
   minWidth: 50,
   maxHeight: 20
 };
-var RESET7 = "\x1B[0m";
-var FG_RESET2 = "\x1B[39m";
-function panelBg() {
+var RESET8 = "\x1B[0m";
+var FG_RESET3 = "\x1B[39m";
+function panelBg2() {
   return activeThemeColors().surfaceLifted;
 }
-function paletteDivider() {
+function paletteDivider2() {
   return activeThemeColors().divider;
 }
-function ansiColor(hex, channel) {
+function ansiColor2(hex, channel) {
   const normalized = hex.replace("#", "");
   const red = parseInt(normalized.slice(0, 2), 16);
   const green = parseInt(normalized.slice(2, 4), 16);
   const blue = parseInt(normalized.slice(4, 6), 16);
   return `\x1B[${channel};2;${red};${green};${blue}m`;
 }
-function fg5(text, hex) {
-  return `${ansiColor(hex, 38)}${text}${FG_RESET2}`;
+function fg6(text, hex) {
+  return `${ansiColor2(hex, 38)}${text}${FG_RESET3}`;
 }
-function dim2(text) {
-  return fg5(text, activeThemeColors().foregroundDim);
+function dim3(text) {
+  return fg6(text, activeThemeColors().foregroundDim);
 }
-function accent2(text) {
-  return fg5(text, activeThemeColors().accent);
+function accent3(text) {
+  return fg6(text, activeThemeColors().accent);
 }
-function dividerText(text) {
-  return fg5(text, paletteDivider());
+function dividerText2(text) {
+  return fg6(text, paletteDivider2());
 }
-function foreground(text) {
-  return fg5(text, activeThemeColors().foreground);
+function foreground2(text) {
+  return fg6(text, activeThemeColors().foreground);
 }
-function cursorCell() {
-  return `${ansiColor(activeThemeColors().accent, 48)}${ansiColor(activeThemeColors().background, 38)} ${FG_RESET2}${ansiColor(panelBg(), 48)}`;
+function cursorCell2() {
+  return `${ansiColor2(activeThemeColors().accent, 48)}${ansiColor2(activeThemeColors().background, 38)} ${FG_RESET3}${ansiColor2(panelBg2(), 48)}`;
 }
-function padToWidth(text, width) {
-  const len = visibleWidth6(text);
-  if (len >= width) return truncateToWidth5(text, width, "");
+function padToWidth2(text, width) {
+  const len = visibleWidth7(text);
+  if (len >= width) return truncateToWidth6(text, width, "");
   return `${text}${" ".repeat(width - len)}`;
 }
-function panelLine(text, width) {
-  return `${ansiColor(panelBg(), 48)}${ansiColor(activeThemeColors().foreground, 38)}${padToWidth(text, width)}${RESET7}`;
+function panelLine2(text, width) {
+  return `${ansiColor2(panelBg2(), 48)}${ansiColor2(activeThemeColors().foreground, 38)}${padToWidth2(text, width)}${RESET8}`;
 }
-function center2(text, width) {
-  const len = visibleWidth6(text);
-  if (len >= width) return truncateToWidth5(text, width, "");
+function center3(text, width) {
+  const len = visibleWidth7(text);
+  if (len >= width) return truncateToWidth6(text, width, "");
   const left = Math.floor((width - len) / 2);
   const right = width - len - left;
   return `${" ".repeat(left)}${text}${" ".repeat(right)}`;
@@ -5419,70 +5682,70 @@ function filterPaletteRows(rows, searchQuery) {
   if (query.length === 0) return [...rows];
   return rows.filter((row3) => row3.label.toLowerCase().includes(query));
 }
-function normalizedActiveIndex(snapshot, rows) {
+function normalizedActiveIndex2(snapshot, rows) {
   if (rows.length === 0) return 0;
   return Math.min(Math.max(0, snapshot.activeIndex), rows.length - 1);
 }
 function renderCommandPalette(snapshot, width) {
   const w = Math.max(1, Math.floor(width));
   const rows = filterPaletteRows(snapshot.rows, snapshot.searchQuery);
-  const active = normalizedActiveIndex(snapshot, rows);
+  const active = normalizedActiveIndex2(snapshot, rows);
   const searchText = snapshot.searchQuery.length > 0 ? snapshot.searchQuery : "what shall we attend to\u2026";
   const halfRule = "\u2500".repeat(22);
   const lines = [];
-  lines.push(panelLine("", w));
-  lines.push(panelLine(center2(`${accent2("\u273E")}  ${accent2("COMMAND PALETTE")}  ${accent2("\u273E")}`, w), w));
-  lines.push(panelLine("", w));
-  lines.push(panelLine(center2(`${dividerText(halfRule)}  ${dividerText("\xB7")}  ${dividerText(halfRule)}`, w), w));
-  lines.push(panelLine("", w));
-  lines.push(panelLine(`     ${accent2("\u276F")}  ${cursorCell()}${snapshot.searchQuery.length > 0 ? foreground(searchText) : dim2(searchText)}`, w));
-  lines.push(panelLine("", w));
+  lines.push(panelLine2("", w));
+  lines.push(panelLine2(center3(`${accent3("\u273E")}  ${accent3("COMMAND PALETTE")}  ${accent3("\u273E")}`, w), w));
+  lines.push(panelLine2("", w));
+  lines.push(panelLine2(center3(`${dividerText2(halfRule)}  ${dividerText2("\xB7")}  ${dividerText2(halfRule)}`, w), w));
+  lines.push(panelLine2("", w));
+  lines.push(panelLine2(`     ${accent3("\u276F")}  ${cursorCell2()}${snapshot.searchQuery.length > 0 ? foreground2(searchText) : dim3(searchText)}`, w));
+  lines.push(panelLine2("", w));
   if (rows.length === 0) {
-    lines.push(panelLine(`     ${dividerText("\xB7")}   ${dim2("no matching command")}`, w));
+    lines.push(panelLine2(`     ${dividerText2("\xB7")}   ${dim3("no matching command")}`, w));
   } else {
     for (const [index, row3] of rows.entries()) {
       const focused = index === active;
-      const marker = focused ? accent2("\u2748") : dividerText("\xB7");
-      const label = focused ? foreground(row3.label) : dim2(row3.label);
+      const marker = focused ? accent3("\u2748") : dividerText2("\xB7");
+      const label = focused ? foreground2(row3.label) : dim3(row3.label);
       const value = displayPaletteValue(row3);
-      const valueText = value.length > 0 ? focused ? foreground(value) : dim2(value) : "";
+      const valueText = value.length > 0 ? focused ? foreground2(value) : dim3(value) : "";
       const left = `     ${marker}   ${label}`;
-      const padBetween = Math.max(2, w - visibleWidth6(left) - visibleWidth6(valueText) - 5);
-      lines.push(panelLine(`${left}${" ".repeat(padBetween)}${valueText}`, w));
+      const padBetween = Math.max(2, w - visibleWidth7(left) - visibleWidth7(valueText) - 5);
+      lines.push(panelLine2(`${left}${" ".repeat(padBetween)}${valueText}`, w));
     }
   }
-  lines.push(panelLine("", w));
-  lines.push(panelLine(center2(`${dividerText(halfRule)}  ${dividerText("\xB7")}  ${dividerText(halfRule)}`, w), w));
-  lines.push(panelLine(center2(dim2(COMMAND_PALETTE_HINT_ROW), w), w));
-  lines.push(panelLine("", w));
+  lines.push(panelLine2("", w));
+  lines.push(panelLine2(center3(`${dividerText2(halfRule)}  ${dividerText2("\xB7")}  ${dividerText2(halfRule)}`, w), w));
+  lines.push(panelLine2(center3(dim3(COMMAND_PALETTE_HINT_ROW), w), w));
+  lines.push(panelLine2("", w));
   return lines;
 }
 function displayPaletteValue(row3) {
   return row3.currentValue.replace(/^CURRENT:\s*/i, "").trim();
 }
-function keyEq(data, ...ids) {
+function keyEq2(data, ...ids) {
   for (const id of ids) {
     if (data === id) return true;
-    if (matchesKey4(data, id)) return true;
+    if (matchesKey5(data, id)) return true;
   }
   return false;
 }
 function updateCommandPaletteSnapshot(snapshot, data) {
   const rows = filterPaletteRows(snapshot.rows, snapshot.searchQuery);
-  const active = normalizedActiveIndex(snapshot, rows);
-  if (keyEq(data, Key3.escape, Key3.esc)) {
+  const active = normalizedActiveIndex2(snapshot, rows);
+  if (keyEq2(data, Key4.escape, Key4.esc)) {
     return { snapshot, done: true, selection: void 0 };
   }
-  if (keyEq(data, Key3.enter, Key3.return)) {
+  if (keyEq2(data, Key4.enter, Key4.return)) {
     return { snapshot: { ...snapshot, activeIndex: active }, done: true, selection: rows[active]?.label };
   }
-  if (keyEq(data, Key3.down)) {
+  if (keyEq2(data, Key4.down)) {
     return { snapshot: { ...snapshot, activeIndex: Math.min(Math.max(0, rows.length - 1), active + 1) } };
   }
-  if (keyEq(data, Key3.up)) {
+  if (keyEq2(data, Key4.up)) {
     return { snapshot: { ...snapshot, activeIndex: Math.max(0, active - 1) } };
   }
-  if (keyEq(data, Key3.backspace)) {
+  if (keyEq2(data, Key4.backspace)) {
     return { snapshot: { ...snapshot, searchQuery: snapshot.searchQuery.slice(0, -1), activeIndex: 0 } };
   }
   if (data.length === 1 && !new RegExp("\\p{Cc}", "u").test(data)) {
@@ -6736,7 +6999,7 @@ function registerReviewCommand(pi, options = {}) {
 }
 
 // src/working-indicator.ts
-var RESET8 = "\x1B[0m";
+var RESET9 = "\x1B[0m";
 function indicatorFrameAt(tick, frames) {
   const length = frames.length;
   if (length === 0) return "";
@@ -6750,7 +7013,7 @@ function renderIndicator(tick, frames, hex) {
   const red = Number.parseInt(normalized.slice(0, 2), 16);
   const green = Number.parseInt(normalized.slice(2, 4), 16);
   const blue = Number.parseInt(normalized.slice(4, 6), 16);
-  return `\x1B[38;2;${red};${green};${blue}m${frame}${RESET8}`;
+  return `\x1B[38;2;${red};${green};${blue}m${frame}${RESET9}`;
 }
 var WORKING_INDICATOR_MIN_WIDTH = 80;
 var WORKING_INDICATOR_WIDGET_KEY = "sumocode-working-indicator";
@@ -6807,7 +7070,7 @@ var WorkingIndicatorComponent = class {
     const theme = getActiveTheme();
     const indicator = resolveThemeWorkingIndicator(theme, this.env);
     const frame = renderIndicator(this.tick, indicator.frames, theme.tokens.colors.accent);
-    const label = `${dimAnsi(theme.tokens.colors.foregroundDim)}Working\u2026${RESET8}`;
+    const label = `${dimAnsi(theme.tokens.colors.foregroundDim)}Working\u2026${RESET9}`;
     return [` ${frame}${" ".repeat(indicator.labelGapCells)}${label}`];
   }
   start() {
@@ -7234,7 +7497,7 @@ function registerTabsCommand(pi, options = {}) {
 }
 
 // src/commands/theme.ts
-import { truncateToWidth as truncateToWidth6, visibleWidth as visibleWidth7 } from "@earendil-works/pi-tui";
+import { truncateToWidth as truncateToWidth7, visibleWidth as visibleWidth8 } from "@earendil-works/pi-tui";
 
 // src/sumo-tui/render/cell.ts
 var DEFAULT_CELL_ATTRS = Object.freeze({
@@ -7288,25 +7551,25 @@ function styleLine(line, hex) {
 }
 function renderThemeResultLines(details, width) {
   const colors = activeThemeColors();
-  const accent3 = details.tone === "warning" ? colors.states.approval : colors.accent;
-  const fg8 = colors.foreground;
-  const dim4 = colors.foregroundDim;
+  const accent4 = details.tone === "warning" ? colors.states.approval : colors.accent;
+  const fg9 = colors.foreground;
+  const dim5 = colors.foregroundDim;
   const safeWidth = Math.max(8, width);
   const label = details.tone === "warning" ? "/sumo:theme \xB7 failed" : "/sumo:theme";
   const headPrefix = "\u250C\u2500 ";
-  const headInnerWidth = Math.max(0, safeWidth - visibleWidth7(headPrefix) - 1);
-  const headLabel = truncateToWidth6(label, headInnerWidth, "\u2026");
-  const headRule = "\u2500".repeat(Math.max(0, safeWidth - visibleWidth7(headPrefix) - visibleWidth7(headLabel) - 1));
+  const headInnerWidth = Math.max(0, safeWidth - visibleWidth8(headPrefix) - 1);
+  const headLabel = truncateToWidth7(label, headInnerWidth, "\u2026");
+  const headRule = "\u2500".repeat(Math.max(0, safeWidth - visibleWidth8(headPrefix) - visibleWidth8(headLabel) - 1));
   const out = [];
-  out.push(`${styleLine(headPrefix, dim4)}${styleLine(headLabel, accent3)} ${styleLine(headRule, dim4)}`);
+  out.push(`${styleLine(headPrefix, dim5)}${styleLine(headLabel, accent4)} ${styleLine(headRule, dim5)}`);
   const bodyPrefix = "\u2502 ";
-  const bodyInnerWidth = Math.max(0, safeWidth - visibleWidth7(bodyPrefix));
+  const bodyInnerWidth = Math.max(0, safeWidth - visibleWidth8(bodyPrefix));
   for (const raw of details.lines) {
-    const clipped = truncateToWidth6(raw, bodyInnerWidth, "\u2026");
-    out.push(`${styleLine(bodyPrefix, dim4)}${styleLine(clipped, fg8)}`);
+    const clipped = truncateToWidth7(raw, bodyInnerWidth, "\u2026");
+    out.push(`${styleLine(bodyPrefix, dim5)}${styleLine(clipped, fg9)}`);
   }
   const tailRule = "\u2500".repeat(Math.max(0, safeWidth - 1));
-  out.push(`${styleLine("\u2514", dim4)}${styleLine(tailRule, dim4)}`);
+  out.push(`${styleLine("\u2514", dim5)}${styleLine(tailRule, dim5)}`);
   return out;
 }
 var ThemeResultComponent = class {
@@ -7840,7 +8103,7 @@ function registerWorktreeCommand(pi, options = {}) {
 }
 
 // src/memory-editor.ts
-import { matchesKey as matchesKey5, wrapTextWithAnsi as wrapTextWithAnsi3 } from "@earendil-works/pi-tui";
+import { matchesKey as matchesKey6, wrapTextWithAnsi as wrapTextWithAnsi3 } from "@earendil-works/pi-tui";
 
 // src/memory.ts
 import { readFileSync as readFileSync8 } from "node:fs";
@@ -8219,16 +8482,16 @@ var MemoryEditorComponent = class {
   handleInput(data) {
     const mode = this.snapshot.mode ?? "command";
     if (mode === "search") {
-      if (matchesKey5(data, "escape") || data === "escape" || data === "\x1B") {
+      if (matchesKey6(data, "escape") || data === "escape" || data === "\x1B") {
         this.snapshot = { ...this.snapshot, mode: "command" };
         this.deps.invalidate();
         return;
       }
-      if (matchesKey5(data, "backspace") || data === "backspace") {
+      if (matchesKey6(data, "backspace") || data === "backspace") {
         this.updateSearch(this.snapshot.searchQuery.slice(0, -1));
         return;
       }
-      if (matchesKey5(data, "enter") || data === "enter" || matchesKey5(data, "return") || data === "return" || data === "\r" || data === "\n") {
+      if (matchesKey6(data, "enter") || data === "enter" || matchesKey6(data, "return") || data === "return" || data === "\r" || data === "\n") {
         this.snapshot = { ...this.snapshot, mode: "command" };
         this.deps.invalidate();
         return;
@@ -8238,7 +8501,7 @@ var MemoryEditorComponent = class {
       }
       return;
     }
-    if (matchesKey5(data, "escape") || data === "escape" || data === "\x1B") {
+    if (matchesKey6(data, "escape") || data === "escape" || data === "\x1B") {
       this.deps.close();
       return;
     }
@@ -8247,11 +8510,11 @@ var MemoryEditorComponent = class {
       this.deps.invalidate();
       return;
     }
-    if (matchesKey5(data, "up") || data === "up") {
+    if (matchesKey6(data, "up") || data === "up") {
       this.moveFocus(-1);
       return;
     }
-    if (matchesKey5(data, "down") || data === "down") {
+    if (matchesKey6(data, "down") || data === "down") {
       this.moveFocus(1);
       return;
     }
@@ -8500,13 +8763,13 @@ function getCachedMcpRoster(opts) {
 }
 
 // src/sumo-tui/cathedral/ansi.ts
-import { truncateToWidth as truncateToWidth8, visibleWidth as visibleWidth9 } from "@earendil-works/pi-tui";
+import { truncateToWidth as truncateToWidth9, visibleWidth as visibleWidth10 } from "@earendil-works/pi-tui";
 
 // src/sumo-tui/render/primitives.ts
-import { truncateToWidth as truncateToWidth7, visibleWidth as visibleWidth8 } from "@earendil-works/pi-tui";
+import { truncateToWidth as truncateToWidth8, visibleWidth as visibleWidth9 } from "@earendil-works/pi-tui";
 var SEGMENTER_CTOR = Intl.Segmenter;
 var GRAPHEME_SEGMENTER = SEGMENTER_CTOR ? new SEGMENTER_CTOR(void 0, { granularity: "grapheme" }) : void 0;
-var RESET9 = "\x1B[0m";
+var RESET10 = "\x1B[0m";
 function parseHex(hex) {
   const normalized = hex.replace("#", "");
   if (!/^[0-9a-fA-F]{6}$/.test(normalized)) return void 0;
@@ -8525,8 +8788,8 @@ function sgrForStyle(style) {
   if (style.dim) attrs.push("2");
   if (style.inverse) attrs.push("7");
   if (attrs.length > 0) output += `\x1B[${attrs.join(";")}m`;
-  const fg8 = style.fg ? parseHex(style.fg) : void 0;
-  if (fg8) output += `\x1B[38;2;${fg8[0]};${fg8[1]};${fg8[2]}m`;
+  const fg9 = style.fg ? parseHex(style.fg) : void 0;
+  if (fg9) output += `\x1B[38;2;${fg9[0]};${fg9[1]};${fg9[2]}m`;
   const bg2 = style.bg ? parseHex(style.bg) : void 0;
   if (bg2) output += `\x1B[48;2;${bg2[0]};${bg2[1]};${bg2[2]}m`;
   return output;
@@ -8556,7 +8819,7 @@ function textLine(parts = [], style) {
   return { spans: parts.map(toSpan), style };
 }
 function lineWidth(line) {
-  return line.spans.reduce((width, part) => width + visibleWidth8(part.text), 0);
+  return line.spans.reduce((width, part) => width + visibleWidth9(part.text), 0);
 }
 function truncateLine(line, width) {
   const safeWidth = Math.max(0, Math.floor(width));
@@ -8565,13 +8828,13 @@ function truncateLine(line, width) {
   const spans = [];
   for (const part of line.spans) {
     if (remaining <= 0) break;
-    const partWidth = visibleWidth8(part.text);
+    const partWidth = visibleWidth9(part.text);
     if (partWidth <= remaining) {
       spans.push(part);
       remaining -= partWidth;
       continue;
     }
-    const truncated = truncateToWidth7(part.text, remaining, "");
+    const truncated = truncateToWidth8(part.text, remaining, "");
     if (truncated.length > 0) spans.push({ ...part, text: truncated });
     remaining = 0;
   }
@@ -8594,11 +8857,11 @@ function lineToAnsi(line, options = {}) {
   for (const part of prepared.spans) {
     if (part.text.length === 0) continue;
     const effectiveStyle = mergeStyle(baseStyle, part.style);
-    if (hasStyle(effectiveStyle)) output += `${RESET9}${sgrForStyle(effectiveStyle)}`;
-    else if (output.length > 0) output += RESET9;
+    if (hasStyle(effectiveStyle)) output += `${RESET10}${sgrForStyle(effectiveStyle)}`;
+    else if (output.length > 0) output += RESET10;
     output += part.text;
   }
-  return output.length === 0 ? "" : `${output}${RESET9}`;
+  return output.length === 0 ? "" : `${output}${RESET10}`;
 }
 
 // src/sumo-tui/cathedral/ansi.ts
@@ -8616,12 +8879,12 @@ function fgHex(hex) {
   return `\x1B[38;2;${r};${g};${b}m`;
 }
 function visibleLength3(text) {
-  return visibleWidth9(text);
+  return visibleWidth10(text);
 }
 function padAnsiToWidth2(line, width) {
   const safeWidth = Math.max(0, Math.floor(width));
-  const truncated = visibleWidth9(line) > safeWidth ? truncateToWidth8(line, safeWidth, "") : line;
-  const padding = Math.max(0, safeWidth - visibleWidth9(truncated));
+  const truncated = visibleWidth10(line) > safeWidth ? truncateToWidth9(line, safeWidth, "") : line;
+  const padding = Math.max(0, safeWidth - visibleWidth10(truncated));
   return `${truncated}${" ".repeat(padding)}`;
 }
 function surfaceLine(content, width) {
@@ -8777,12 +9040,12 @@ var CancellableWorkerRuntime = class {
 var SIDEBAR_SUB_TABS = ["CONTEXT", "MEMORY"];
 var TOKEN_BAR_CELLS = 22;
 var MEMORY_DISPLAY_LIMIT = 5;
-var FG_RESET3 = "\x1B[39m";
+var FG_RESET4 = "\x1B[39m";
 var DIM_OFF = "\x1B[22m";
 function colorHex3(text, hex) {
-  return `${fgHex(hex)}${text}${FG_RESET3}`;
+  return `${fgHex(hex)}${text}${FG_RESET4}`;
 }
-function dim3(text) {
+function dim4(text) {
   return `\x1B[2m${text}${DIM_OFF}`;
 }
 function tokenUsageRatio(used, total) {
@@ -8909,11 +9172,11 @@ function renderMemoryFactLine(item, width) {
 function memoryLines(snapshot, width) {
   const lines = [row2(colorHex3(sectionLabel("MEMORY"), activeThemeColors().foregroundDim), width), blank(width)];
   if (snapshot.memoryUnavailable) {
-    lines.push(row2(dim3(VOICE.errors.daemonDown), width));
+    lines.push(row2(dim4(VOICE.errors.daemonDown), width));
     return lines;
   }
   if (snapshot.memory.length === 0) {
-    lines.push(row2(dim3(VOICE.empty.memory), width));
+    lines.push(row2(dim4(VOICE.empty.memory), width));
     return lines;
   }
   const shown = snapshot.memory.slice(0, MEMORY_DISPLAY_LIMIT);
@@ -8962,7 +9225,7 @@ function renderRegistrySidebarLines(snapshot, width) {
 }
 
 // src/sidebar-placement.ts
-import { truncateToWidth as truncateToWidth9, visibleWidth as visibleWidth10 } from "@earendil-works/pi-tui";
+import { truncateToWidth as truncateToWidth10, visibleWidth as visibleWidth11 } from "@earendil-works/pi-tui";
 var SIDEBAR_MIN_TERMINAL_WIDTH = 120;
 var SIDEBAR_WIDTH = 30;
 var SIDEBAR_GUTTER_WIDTH = 2;
@@ -8972,9 +9235,9 @@ function sidebarOverlayTargetRows(termHeight) {
   return Math.max(1, Math.floor(termHeight) - SIDEBAR_OVERLAY_TOP_MARGIN_ROWS - SIDEBAR_OVERLAY_BOTTOM_RESERVED_ROWS);
 }
 var STATIC_SIDEBAR_DOCK_MARKER = /* @__PURE__ */ Symbol("sumocode.staticSidebarDock");
-function padToWidth2(line, width) {
-  const truncated = visibleWidth10(line) > width ? truncateToWidth9(line, width, "") : line;
-  const padding = Math.max(0, width - visibleWidth10(truncated));
+function padToWidth3(line, width) {
+  const truncated = visibleWidth11(line) > width ? truncateToWidth10(line, width, "") : line;
+  const padding = Math.max(0, width - visibleWidth11(truncated));
   return `${truncated}${" ".repeat(padding)}`;
 }
 function renderComponents(components, width) {
@@ -9006,8 +9269,8 @@ var StaticSidebarDock = class {
     const lines = [];
     const blankSidebarRow = surfaceLine("", SIDEBAR_WIDTH);
     for (let i = 0; i < rowCount; i++) {
-      const left = padToWidth2(mainLines[i] ?? "", mainWidth);
-      const right = i < sidebarLines.length ? padToWidth2(sidebarLines[i], SIDEBAR_WIDTH) : blankSidebarRow;
+      const left = padToWidth3(mainLines[i] ?? "", mainWidth);
+      const right = i < sidebarLines.length ? padToWidth3(sidebarLines[i], SIDEBAR_WIDTH) : blankSidebarRow;
       lines.push(`${left}${" ".repeat(SIDEBAR_GUTTER_WIDTH)}${right}`);
     }
     return lines;
@@ -9399,11 +9662,11 @@ function installMemoryExtraction(pi, createClient = createRemnicMemoryClient) {
 import { readFileSync as readFileSync10 } from "node:fs";
 import { dirname as dirname5, resolve as resolve3 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
-import { truncateToWidth as truncateToWidth10 } from "@earendil-works/pi-tui";
-var RESET10 = "\x1B[0m";
+import { truncateToWidth as truncateToWidth11 } from "@earendil-works/pi-tui";
+var RESET11 = "\x1B[0m";
 var ANSI_PATTERN4 = /\u001b(?:\[[0-?]*[ -/]*[@-~]|\][^\u0007]*(?:\u0007|\u001b\\))/g;
 var CURSOR_VISIBILITY_PATTERN = /\u001b\[\?25[lh]/g;
-function fg6(hex) {
+function fg7(hex) {
   const n = hex.replace("#", "");
   const r = Number.parseInt(n.slice(0, 2), 16);
   const g = Number.parseInt(n.slice(2, 4), 16);
@@ -9411,18 +9674,18 @@ function fg6(hex) {
   return `\x1B[38;2;${r};${g};${b}m`;
 }
 function accentFg() {
-  return fg6(activeThemeColors().accent);
+  return fg7(activeThemeColors().accent);
 }
 function mutedFg() {
-  return fg6(activeThemeColors().foregroundDim);
+  return fg7(activeThemeColors().foregroundDim);
 }
 var DIM = "\x1B[2m";
 function visibleLength4(text) {
   return text.replace(ANSI_PATTERN4, "").length;
 }
-function center3(line, width) {
+function center4(line, width) {
   const len = visibleLength4(line);
-  if (len >= width) return truncateToWidth10(line, width, "");
+  if (len >= width) return truncateToWidth11(line, width, "");
   const pad = Math.floor((width - len) / 2);
   return `${" ".repeat(pad)}${line}`;
 }
@@ -9459,18 +9722,18 @@ var SUMOCODE_QUOTE_ATTRIBUTION = "\u2014 SUMO";
 function renderSplashContent(snapshot, width) {
   if (snapshot.hasMessages) return [];
   const content = [];
-  for (const row3 of SUMO_FACE) content.push(center3(row3, width));
+  for (const row3 of SUMO_FACE) content.push(center4(row3, width));
   if (SUMO_FACE.length > 0) {
     content.push("");
     content.push("");
   }
   for (const row3 of SUMOCODE_WORDMARK) {
-    content.push(center3(`${accentFg()}${row3}${RESET10}`, width));
+    content.push(center4(`${accentFg()}${row3}${RESET11}`, width));
   }
   content.push("");
   content.push("");
-  content.push(center3(`${DIM}${mutedFg()}${snapshot.quote}${RESET10}`, width));
-  content.push(center3(`${DIM}${mutedFg()}${snapshot.quoteAttribution}${RESET10}`, width));
+  content.push(center4(`${DIM}${mutedFg()}${snapshot.quote}${RESET11}`, width));
+  content.push(center4(`${DIM}${mutedFg()}${snapshot.quoteAttribution}${RESET11}`, width));
   return content;
 }
 function renderSplash(snapshot, width, terminalHeight) {
@@ -9525,13 +9788,13 @@ function installSplash(pi) {
 }
 
 // src/top-chrome.ts
-var RESET11 = "\x1B[0m";
+var RESET12 = "\x1B[0m";
 var ANSI_PATTERN5 = /\u001b\[[0-9;]*m/g;
 var TOP_CHROME_BRAND = "SUMOCODE";
 function visibleLength5(text) {
   return text.replace(ANSI_PATTERN5, "").length;
 }
-function fg7(hex) {
+function fg8(hex) {
   const n = hex.replace("#", "");
   const r = Number.parseInt(n.slice(0, 2), 16);
   const g = Number.parseInt(n.slice(2, 4), 16);
@@ -9539,7 +9802,7 @@ function fg7(hex) {
   return `\x1B[38;2;${r};${g};${b}m`;
 }
 function color3(text, hex) {
-  return `${fg7(hex)}${text}${RESET11}`;
+  return `${fg8(hex)}${text}${RESET12}`;
 }
 function ellipsize3(text, max) {
   if (max <= 0) return "";
@@ -9563,8 +9826,8 @@ var DOT_GLYPHS = {
 function activeSegment(active, maxLabel, dotSize) {
   const label = ellipsize3(active.label, maxLabel);
   const dot = color3(DOT_GLYPHS[dotSize], activeThemeColors().accent);
-  const dim4 = (ch) => color3(ch, activeThemeColors().foregroundDim);
-  return `${dim4("\u2551 ")}${dot}${dim4(" " + label + " \u2551")}`;
+  const dim5 = (ch) => color3(ch, activeThemeColors().foregroundDim);
+  return `${dim5("\u2551 ")}${dot}${dim5(" " + label + " \u2551")}`;
 }
 var ACTIVE_OVERHEAD = 6;
 function recentSegment(label) {
@@ -9585,7 +9848,7 @@ function iconsSegment() {
 function brandSegment() {
   return color3(TOP_CHROME_BRAND, activeThemeColors().accent);
 }
-function padToWidth3(text, width) {
+function padToWidth4(text, width) {
   const len = visibleLength5(text);
   if (len >= width) return text;
   return `${text}${" ".repeat(width - len)}`;
@@ -9597,7 +9860,7 @@ function renderTopChrome(snapshot, width) {
   if (innerWidth <= 0) return " ".repeat(width);
   const brand = brandSegment();
   if (snapshot.hidden) {
-    return `${outerPad}${padToWidth3(brand, innerWidth)}${outerPad}`;
+    return `${outerPad}${padToWidth4(brand, innerWidth)}${outerPad}`;
   }
   const brandLen = visibleLength5(brand);
   const dotSize = snapshot.dotSize ?? "medium";
@@ -9640,7 +9903,7 @@ function renderTopChrome(snapshot, width) {
       consumed = innerWidth;
     }
   }
-  return `${outerPad}${padToWidth3(line, innerWidth)}${outerPad}`;
+  return `${outerPad}${padToWidth4(line, innerWidth)}${outerPad}`;
 }
 function renderTopChromeBlock(snapshot, width) {
   const line = renderTopChrome(snapshot, width);
@@ -9766,8 +10029,8 @@ function compactionStatusLabelForReason(reason, options = {}) {
 }
 function renderCompactionStatusRow(options) {
   const theme = getActiveTheme();
-  const accent3 = theme.tokens.colors.accent;
-  const dim4 = theme.tokens.colors.foregroundDim;
+  const accent4 = theme.tokens.colors.accent;
+  const dim5 = theme.tokens.colors.foregroundDim;
   const width = Math.max(0, Math.floor(options.width));
   const labelStr = ` ${options.label}`;
   const available = Math.max(0, width - 1 - labelStr.length);
@@ -9776,18 +10039,18 @@ function renderCompactionStatusRow(options) {
   const filledCells = options.completed === true ? barWidth : Math.max(0, Math.floor(fillRatio * barWidth));
   const barParts = [];
   if (options.completed === true || filledCells >= barWidth) {
-    barParts.push(span("\u2501".repeat(barWidth), { fg: accent3 }));
+    barParts.push(span("\u2501".repeat(barWidth), { fg: accent4 }));
   } else {
-    if (filledCells > 0) barParts.push(span("\u2501".repeat(filledCells), { fg: accent3 }));
+    if (filledCells > 0) barParts.push(span("\u2501".repeat(filledCells), { fg: accent4 }));
     const sparkIdx = Math.floor(options.tick / GLYPH_TICK_DIVISOR) % SPARK_FRAMES.length;
     const glyph = SPARK_FRAMES[sparkIdx] ?? "\u25C8";
-    barParts.push(span(glyph, { fg: accent3 }));
+    barParts.push(span(glyph, { fg: accent4 }));
     const trackWidth = barWidth - filledCells - 1;
-    if (trackWidth > 0) barParts.push(span("\u2500".repeat(trackWidth), { fg: dim4 }));
+    if (trackWidth > 0) barParts.push(span("\u2500".repeat(trackWidth), { fg: dim5 }));
   }
   const row3 = textLine(
-    [" ", ...barParts, span(labelStr, { fg: dim4 })],
-    { fg: dim4 }
+    [" ", ...barParts, span(labelStr, { fg: dim5 })],
+    { fg: dim5 }
   );
   return [lineToAnsi(truncateLine(row3, width))];
 }

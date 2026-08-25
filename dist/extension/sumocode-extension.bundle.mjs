@@ -1,7 +1,7 @@
 // src/extension.ts
-import { existsSync as existsSync11, readFileSync as readFileSync14, realpathSync as realpathSync4 } from "node:fs";
-import { homedir as homedir14 } from "node:os";
-import { dirname as dirname12, join as join19, resolve as resolve7, sep } from "node:path";
+import { existsSync as existsSync12, readFileSync as readFileSync16, realpathSync as realpathSync4 } from "node:fs";
+import { homedir as homedir15 } from "node:os";
+import { dirname as dirname13, join as join20, resolve as resolve7, sep } from "node:path";
 import { fileURLToPath as fileURLToPath4 } from "node:url";
 
 // src/cathedral/input-hints.ts
@@ -5013,6 +5013,339 @@ function registerSumoReloadCommand(pi, deps = {}) {
   });
 }
 
+// src/commands/roles.ts
+import { existsSync as existsSync2, mkdirSync as mkdirSync3, readFileSync as readFileSync5, writeFileSync as writeFileSync3 } from "node:fs";
+import { dirname as dirname2 } from "node:path";
+import { spawnSync } from "node:child_process";
+
+// src/subagents/roles.ts
+import { readFileSync as readFileSync4 } from "node:fs";
+import { homedir as homedir5 } from "node:os";
+import { join as join4 } from "node:path";
+var MAX_ROLES_FILE_BYTES = 256 * 1024;
+var THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+var ROLE_FIELDS = /* @__PURE__ */ new Set(["id", "label", "description", "systemPrompt", "model", "thinking", "tools", "defaultWorktree", "defaultVisible"]);
+var BUILT_IN_ROLES = [
+  {
+    id: "research",
+    label: "Research",
+    description: "use proactively for read-only investigation and evidence gathering",
+    systemPrompt: "act as a read-only investigator. never modify files. answer with evidence using file:line references or urls. state what was not checked. report findings only, not fixes.",
+    tools: ["read", "grep", "find", "ls", "bash"]
+  },
+  {
+    id: "review",
+    label: "Review",
+    description: "use for evidence-backed technical review of a bounded change",
+    systemPrompt: "review like a tech lead. verify claims by opening cited code. report findings ordered by severity with file:line evidence. never edit files. flag out-of-scope diff hunks explicitly.",
+    tools: ["read", "grep", "find", "ls", "bash"]
+  },
+  {
+    id: "documentor",
+    label: "Documentor",
+    description: "use for writing or updating repository documentation",
+    systemPrompt: "write or update documentation only. match the repository's existing documentation voice and structure. never change source code semantics. list every file touched.",
+    defaultWorktree: true
+  },
+  {
+    id: "designer",
+    label: "Designer",
+    description: "use for ui and ux changes that require visual review evidence",
+    systemPrompt: "perform ui and ux work. read the repository's design conventions and visual specifications before changing any surface. produce capture and review evidence for visual changes. never promote goldens.",
+    defaultWorktree: true
+  },
+  {
+    id: "implement-cheap",
+    label: "Implement Cheap",
+    description: "use for a precise implementation slice with explicit verification",
+    systemPrompt: "implement exactly the specified slice. make the smallest diff that passes verification. run the named verification commands. if the specification is ambiguous, stop and report instead of improvising.",
+    thinking: "low",
+    defaultWorktree: true
+  },
+  {
+    id: "implement-smart",
+    label: "Implement Smart",
+    description: "use for a bounded implementation slice that requires judgment",
+    systemPrompt: "implement with judgment. keep scope tight. document tradeoffs made. run full relevant verification.",
+    thinking: "high",
+    defaultWorktree: true
+  }
+];
+function resolveRolesPath(env = process.env) {
+  const agentDir = env.PI_CODING_AGENT_DIR ?? join4(homedir5(), ".pi", "agent");
+  return join4(agentDir, "sumocode", "roles.json");
+}
+var isRecord2 = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
+var hasOwn = (record, key) => Object.prototype.hasOwnProperty.call(record, key);
+var isThinking = (value) => THINKING_LEVELS.includes(value);
+function normalizedOverlay(value, index, builtIn, warnings) {
+  if (!isRecord2(value)) {
+    warnings.push(`roles[${index}] must be an object; entry skipped`);
+    return void 0;
+  }
+  const id = typeof value.id === "string" ? value.id.trim() : "";
+  if (!id || !/^[a-z0-9][a-z0-9-]*$/.test(id)) {
+    warnings.push(`roles[${index}] has an invalid id; entry skipped`);
+    return void 0;
+  }
+  if (!builtIn && (typeof value.label !== "string" || !value.label.trim() || typeof value.systemPrompt !== "string" || !value.systemPrompt.trim())) {
+    warnings.push(`role ${id} is new and requires label and systemPrompt; entry skipped`);
+    return void 0;
+  }
+  for (const field of Object.keys(value)) {
+    if (!ROLE_FIELDS.has(field)) warnings.push(`role ${id} ignores unknown field ${field}`);
+  }
+  for (const field of ["label", "description", "systemPrompt"]) {
+    if (hasOwn(value, field) && typeof value[field] !== "string") {
+      warnings.push(`role ${id} has an invalid ${field}; entry skipped`);
+      return void 0;
+    }
+  }
+  if (hasOwn(value, "model") && (typeof value.model !== "string" || !value.model.trim())) {
+    warnings.push(`role ${id} has an invalid model; entry skipped`);
+    return void 0;
+  }
+  if (hasOwn(value, "thinking") && (typeof value.thinking !== "string" || !isThinking(value.thinking))) {
+    warnings.push(`role ${id} has an invalid thinking level; entry skipped`);
+    return void 0;
+  }
+  for (const field of ["defaultWorktree", "defaultVisible"]) {
+    if (hasOwn(value, field) && typeof value[field] !== "boolean") {
+      warnings.push(`role ${id} has an invalid ${field}; entry skipped`);
+      return void 0;
+    }
+  }
+  if (hasOwn(value, "tools") && !Array.isArray(value.tools)) {
+    warnings.push(`role ${id} has an invalid tools list; entry skipped`);
+    return void 0;
+  }
+  const overlay = { id };
+  for (const field of ["label", "description", "systemPrompt"]) {
+    if (typeof value[field] === "string") overlay[field] = value[field];
+  }
+  if (hasOwn(value, "model")) overlay.model = value.model === "inherit" ? void 0 : value.model.trim();
+  if (typeof value.thinking === "string" && isThinking(value.thinking)) overlay.thinking = value.thinking;
+  if (typeof value.defaultWorktree === "boolean") overlay.defaultWorktree = value.defaultWorktree;
+  if (typeof value.defaultVisible === "boolean") overlay.defaultVisible = value.defaultVisible;
+  if (Array.isArray(value.tools)) {
+    const tools = [];
+    for (const tool of value.tools) {
+      if (typeof tool !== "string" || !BUILT_IN_TOOLS.includes(tool)) {
+        warnings.push(`role ${id} ignores invalid tool ${String(tool)}`);
+        continue;
+      }
+      if (!tools.includes(tool)) tools.push(tool);
+    }
+    overlay.tools = tools;
+  }
+  return overlay;
+}
+function loadRoles(dependencies = {}) {
+  const readFile = dependencies.readFile ?? readFileSync4;
+  const path2 = resolveRolesPath(dependencies.env);
+  let contents;
+  try {
+    contents = readFile(path2, "utf8");
+  } catch (error) {
+    const code = isRecord2(error) && typeof error.code === "string" ? error.code : void 0;
+    return code === "ENOENT" ? { roles: BUILT_IN_ROLES, warnings: [] } : { roles: BUILT_IN_ROLES, warnings: [`unable to read roles.json: ${error instanceof Error ? error.message : String(error)}`] };
+  }
+  if (Buffer.byteLength(contents, "utf8") > MAX_ROLES_FILE_BYTES) {
+    return { roles: BUILT_IN_ROLES, warnings: ["roles.json exceeds 256 KB; using built-in roles"] };
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(contents);
+  } catch (error) {
+    return { roles: BUILT_IN_ROLES, warnings: [`invalid roles.json: ${error instanceof Error ? error.message : String(error)}`] };
+  }
+  if (!isRecord2(parsed) || !Array.isArray(parsed.roles)) {
+    return { roles: BUILT_IN_ROLES, warnings: ["roles.json must contain a roles array; using built-in roles"] };
+  }
+  const warnings = [];
+  const roles = BUILT_IN_ROLES.map((role) => ({ ...role }));
+  for (let index = 0; index < parsed.roles.length; index += 1) {
+    const raw = parsed.roles[index];
+    const rawId = isRecord2(raw) && typeof raw.id === "string" ? raw.id.trim() : "";
+    const roleIndex = roles.findIndex((role) => role.id === rawId);
+    const overlay = normalizedOverlay(raw, index, roleIndex >= 0, warnings);
+    if (!overlay) continue;
+    if (roleIndex >= 0) {
+      roles[roleIndex] = { ...roles[roleIndex], ...overlay };
+      continue;
+    }
+    roles.push({
+      id: overlay.id,
+      label: overlay.label,
+      description: overlay.description ?? "use for a custom operator-defined delegation role",
+      systemPrompt: overlay.systemPrompt,
+      ...hasOwn(overlay, "model") ? { model: overlay.model } : {},
+      ...overlay.thinking ? { thinking: overlay.thinking } : {},
+      ...overlay.tools ? { tools: overlay.tools } : {},
+      ...overlay.defaultWorktree === void 0 ? {} : { defaultWorktree: overlay.defaultWorktree },
+      ...overlay.defaultVisible === void 0 ? {} : { defaultVisible: overlay.defaultVisible }
+    });
+  }
+  return { roles, warnings };
+}
+
+// src/commands/roles.ts
+var OPEN_ACTION = "open roles.json in $EDITOR";
+var RESET_ACTION = "reset a role to built-in";
+var ROLE_FIELDS2 = ["model", "thinking", "tools", "default worktree", "default visible", "system prompt"];
+var READ_ONLY_TOOLS = ["read", "grep", "find", "ls", "bash"];
+var roleOption = (role) => `${role.id} \xB7 ${role.label} \xB7 ${role.model ?? "inherit"} \xB7 ${role.thinking ?? "inherit"}`;
+var errorText = (error) => error instanceof Error ? error.message : String(error);
+async function writeMutation(deps, mutation) {
+  try {
+    await deps.writeRolesFile(mutation);
+    return void 0;
+  } catch (error) {
+    return { kind: "error", opened: false, message: `unable to update roles.json: ${errorText(error)}` };
+  }
+}
+async function openRolesEditor(deps) {
+  const ensured = await writeMutation(deps, { kind: "ensure" });
+  if (ensured) return ensured;
+  const outcome = await deps.openEditor(deps.rolesPath);
+  if (outcome.status === 0) return { kind: "success", opened: true, message: "role updated \u2014 applies to the next spawn" };
+  if (outcome.error) return { kind: "error", opened: true, message: `failed to launch editor: ${outcome.error}` };
+  return { kind: "error", opened: true, message: `editor exited with code ${outcome.status}` };
+}
+async function runRolesCommand(deps) {
+  if (!deps.isTTY) {
+    return {
+      kind: "instructions",
+      opened: false,
+      message: `roles file: ${deps.rolesPath} \u2014 edit it directly; changes apply to the next spawn`
+    };
+  }
+  const loaded = deps.loadRoles();
+  const roleOptions = loaded.roles.map(roleOption);
+  const selected = await deps.select("SUBAGENT ROLES", [...roleOptions, OPEN_ACTION, RESET_ACTION]);
+  if (selected === void 0) return void 0;
+  if (selected === OPEN_ACTION) return openRolesEditor(deps);
+  if (selected === RESET_ACTION) {
+    const resetOptions = BUILT_IN_ROLES.map((role3) => `${role3.id} \xB7 ${role3.label}`);
+    const resetSelection = await deps.select("RESET ROLE TO BUILT-IN", resetOptions);
+    if (resetSelection === void 0) return void 0;
+    const role2 = BUILT_IN_ROLES[resetOptions.indexOf(resetSelection)];
+    if (!role2) return void 0;
+    const failed2 = await writeMutation(deps, { kind: "reset", roleId: role2.id });
+    return failed2 ?? { kind: "success", opened: false, message: "role updated \u2014 applies to the next spawn" };
+  }
+  const role = loaded.roles[roleOptions.indexOf(selected)];
+  if (!role) return void 0;
+  const field = await deps.select(`${role.id.toUpperCase()} ROLE`, ROLE_FIELDS2);
+  if (field === void 0) return void 0;
+  let mutation;
+  if (field === "model") {
+    const mode = await deps.select("MODEL", ["inherit (use parent session's model)", "set a specific model\u2026"]);
+    if (mode === void 0) return void 0;
+    if (mode === "inherit (use parent session's model)") {
+      mutation = { kind: "set", roleId: role.id, field: "model", value: "inherit" };
+    } else {
+      const model = await deps.input("model (provider/modelId)", role.model ?? "");
+      if (model === void 0 || !model.trim()) return void 0;
+      mutation = { kind: "set", roleId: role.id, field: "model", value: model.trim() };
+    }
+  } else if (field === "thinking") {
+    const thinking2 = await deps.select("THINKING", ["inherit", "off", "minimal", "low", "medium", "high", "xhigh", "max"]);
+    if (thinking2 === void 0) return void 0;
+    mutation = { kind: "set", roleId: role.id, field: "thinking", value: thinking2 === "inherit" ? void 0 : thinking2 };
+  } else if (field === "tools") {
+    const tools = await deps.select("TOOLS", ["inherit parent", "read-only (read, grep, find, ls, bash)", "full built-in set"]);
+    if (tools === void 0) return void 0;
+    mutation = {
+      kind: "set",
+      roleId: role.id,
+      field: "tools",
+      value: tools === "inherit parent" ? void 0 : tools.startsWith("read-only") ? [...READ_ONLY_TOOLS] : [...BUILT_IN_TOOLS]
+    };
+  } else if (field === "default worktree" || field === "default visible") {
+    const value = await deps.select(field.toUpperCase(), ["inherit default", "true", "false"]);
+    if (value === void 0) return void 0;
+    mutation = {
+      kind: "set",
+      roleId: role.id,
+      field: field === "default worktree" ? "defaultWorktree" : "defaultVisible",
+      value: value === "inherit default" ? void 0 : value === "true"
+    };
+  } else {
+    const failed2 = await writeMutation(deps, { kind: "set-if-absent", roleId: role.id, field: "systemPrompt", value: role.systemPrompt });
+    if (failed2) return failed2;
+    return openRolesEditor(deps);
+  }
+  const failed = mutation ? await writeMutation(deps, mutation) : void 0;
+  return failed ?? { kind: "success", opened: false, message: "role updated \u2014 applies to the next spawn" };
+}
+function readRolesDocument(path2) {
+  if (!existsSync2(path2)) return { roles: [] };
+  const parsed = JSON.parse(readFileSync5(path2, "utf8"));
+  if (typeof parsed !== "object" || parsed === null || !Array.isArray(parsed.roles)) {
+    throw new Error("roles.json must contain a roles array");
+  }
+  const roles = parsed.roles;
+  if (!roles.every((entry) => typeof entry === "object" && entry !== null && typeof entry.id === "string")) {
+    throw new Error("roles.json contains an invalid role entry");
+  }
+  return parsed;
+}
+function writeRolesFile(path2, mutation) {
+  const document = readRolesDocument(path2);
+  if (mutation.kind === "reset") {
+    document.roles = document.roles.filter((role) => role.id !== mutation.roleId);
+  } else if (mutation.kind === "set" || mutation.kind === "set-if-absent") {
+    let overlay = document.roles.find((role) => role.id === mutation.roleId);
+    if (!overlay) {
+      overlay = { id: mutation.roleId };
+      document.roles.push(overlay);
+    }
+    if (mutation.kind === "set-if-absent" && Object.prototype.hasOwnProperty.call(overlay, mutation.field)) {
+    } else if (mutation.value === void 0) delete overlay[mutation.field];
+    else overlay[mutation.field] = mutation.value;
+  }
+  mkdirSync3(dirname2(path2), { recursive: true });
+  writeFileSync3(path2, `${JSON.stringify(document, null, 2)}
+`, { mode: 384 });
+}
+function notify2(ctx, result) {
+  const type = result.kind === "error" ? "error" : "info";
+  if (ctx.hasUI) {
+    ctx.ui.notify(result.message, type);
+    return;
+  }
+  const stream = type === "error" ? process.stderr : process.stdout;
+  stream.write(`${result.message}
+`);
+}
+function defaultOpenEditor(editor, path2) {
+  const child = spawnSync(editor, [path2], { stdio: "inherit", env: process.env });
+  return { status: child.status ?? 1, error: child.error?.message };
+}
+function registerRolesCommand(pi) {
+  pi.registerCommand("sumo:roles", {
+    description: "Edit subagent role presets",
+    handler: async (_args, ctx) => {
+      const path2 = resolveRolesPath();
+      try {
+        const result = await runRolesCommand({
+          rolesPath: path2,
+          isTTY: ctx.hasUI,
+          loadRoles,
+          writeRolesFile: (mutation) => writeRolesFile(path2, mutation),
+          select: (title, options) => showDivineQuery(ctx, title, options),
+          input: (title, placeholder) => ctx.ui.input(title, placeholder),
+          openEditor: (editorPath) => defaultOpenEditor(process.env.EDITOR?.trim() || "vi", editorPath)
+        });
+        if (result) notify2(ctx, result);
+      } catch (error) {
+        notify2(ctx, { kind: "error", opened: false, message: `unable to edit roles: ${errorText(error)}` });
+      }
+    }
+  });
+}
+
 // src/command-palette.ts
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import { Key as Key3, matchesKey as matchesKey4, truncateToWidth as truncateToWidth5, visibleWidth as visibleWidth6 } from "@earendil-works/pi-tui";
@@ -6040,7 +6373,7 @@ function registerSlateCommand(pi) {
 }
 
 // src/commands/ship.ts
-function notify2(ctx, message, type = "info") {
+function notify3(ctx, message, type = "info") {
   if (ctx.hasUI) {
     ctx.ui.notify(message, type);
     return;
@@ -6087,7 +6420,7 @@ function registerShipCommand(pi, options = {}) {
         await ensureOk(status, "git status");
         const files = changedFiles(status.stdout);
         if (files.length === 0) {
-          notify2(ctx, "/sumo:ship: no working-tree changes to commit", "warning");
+          notify3(ctx, "/sumo:ship: no working-tree changes to commit", "warning");
           return;
         }
         const branchResult = await exec(pi, "git", ["branch", "--show-current"], ctx.cwd);
@@ -6100,48 +6433,48 @@ function registerShipCommand(pi, options = {}) {
 Message: ${message}
 Files: ${summary}`, ["Commit", "Cancel"]);
           if (commitChoice !== "Commit") {
-            notify2(ctx, "/sumo:ship stopped before commit");
+            notify3(ctx, "/sumo:ship stopped before commit");
             return;
           }
         }
         await ensureOk(await exec(pi, "git", ["add", "-A"], ctx.cwd), "git add");
         await ensureOk(await exec(pi, "git", ["commit", "-m", message], ctx.cwd), "git commit");
-        notify2(ctx, `committed locally: ${message} \xB7 ${summary}`);
+        notify3(ctx, `committed locally: ${message} \xB7 ${summary}`);
         if (!ctx.hasUI) {
-          notify2(ctx, "/sumo:ship stopped before push: interactive confirmation required", "warning");
+          notify3(ctx, "/sumo:ship stopped before push: interactive confirmation required", "warning");
           return;
         }
         const pushChoice = await ask(ctx, `Push branch ${branch}?
 Commit: ${message}
 Files: ${summary}`, ["Push", "Cancel"]);
         if (pushChoice !== "Push") {
-          notify2(ctx, "/sumo:ship stopped before push");
+          notify3(ctx, "/sumo:ship stopped before push");
           return;
         }
         await ensureOk(await exec(pi, "git", ["push", "-u", "origin", "HEAD"], ctx.cwd), "git push");
-        notify2(ctx, `pushed ${branch}`);
+        notify3(ctx, `pushed ${branch}`);
         const prChoice = await ask(ctx, `Open PR for ${branch}?
 Title: ${message}`, ["Open PR", "Cancel"]);
         if (prChoice !== "Open PR") {
-          notify2(ctx, "/sumo:ship stopped before PR creation");
+          notify3(ctx, "/sumo:ship stopped before PR creation");
           return;
         }
         await ensureOk(await exec(pi, "gh", ["pr", "create", "--fill"], ctx.cwd), "gh pr create");
-        notify2(ctx, `PR opened for ${branch}`);
+        notify3(ctx, `PR opened for ${branch}`);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        notify2(ctx, `/sumo:ship: ${message}`, "warning");
+        notify3(ctx, `/sumo:ship: ${message}`, "warning");
       }
     }
   });
 }
 
 // src/commands/persona.ts
-import { existsSync as existsSync2 } from "node:fs";
-import { homedir as homedir5 } from "node:os";
-import { join as join4 } from "node:path";
-import { spawnSync } from "node:child_process";
-var DEFAULT_PERSONA_PATH = join4(homedir5(), ".pi", "agent", "APPEND_SYSTEM.md");
+import { existsSync as existsSync3 } from "node:fs";
+import { homedir as homedir6 } from "node:os";
+import { join as join5 } from "node:path";
+import { spawnSync as spawnSync2 } from "node:child_process";
+var DEFAULT_PERSONA_PATH = join5(homedir6(), ".pi", "agent", "APPEND_SYSTEM.md");
 function runPersonaCommand(deps) {
   if (!deps.fileExists(deps.personaPath)) {
     return {
@@ -6178,7 +6511,7 @@ function runPersonaCommand(deps) {
     message: `editor "${deps.editor}" exited with code ${outcome.status}`
   };
 }
-function notify3(ctx, result) {
+function notify4(ctx, result) {
   const type = result.kind === "error" ? "error" : "info";
   if (ctx.hasUI) {
     ctx.ui.notify(result.message, type);
@@ -6189,7 +6522,7 @@ function notify3(ctx, result) {
 `);
 }
 function defaultRunEditor(editor, file) {
-  const child = spawnSync(editor, [file], { stdio: "inherit", env: process.env });
+  const child = spawnSync2(editor, [file], { stdio: "inherit", env: process.env });
   return {
     status: child.status ?? 1,
     error: child.error?.message
@@ -6197,7 +6530,7 @@ function defaultRunEditor(editor, file) {
 }
 function registerPersonaCommand(pi, overrides = {}) {
   const personaPath = overrides.personaPath ?? DEFAULT_PERSONA_PATH;
-  const fileExists = overrides.fileExists ?? existsSync2;
+  const fileExists = overrides.fileExists ?? existsSync3;
   const runEditor = overrides.runEditor ?? defaultRunEditor;
   pi.registerCommand("sumo:persona", {
     description: "Edit the Zeus persona prompt in $EDITOR",
@@ -6209,7 +6542,7 @@ function registerPersonaCommand(pi, overrides = {}) {
         fileExists,
         runEditor
       });
-      notify3(ctx, result);
+      notify4(ctx, result);
     }
   });
 }
@@ -6349,7 +6682,7 @@ Output format:
 - Tests/verification section: what commands you ran and what they returned.
 - If GREEN: state every file you read, every command you ran, and why no blocking issues remain.`;
 }
-function notify4(ctx, message, type = "info") {
+function notify5(ctx, message, type = "info") {
   if (ctx.hasUI) {
     ctx.ui.notify(message, type);
     return;
@@ -6363,7 +6696,7 @@ function registerReviewCommand(pi, options = {}) {
     handler: async (args, ctx) => {
       const subagentSpawner = options.subagentSpawner;
       if (!subagentSpawner) {
-        notify4(ctx, "/sumo:review cannot start: subagent manager is not available", "warning");
+        notify5(ctx, "/sumo:review cannot start: subagent manager is not available", "warning");
         return;
       }
       const { model: aliasModel, scopeArgs } = extractModelAlias(args ?? "");
@@ -6386,17 +6719,17 @@ function registerReviewCommand(pi, options = {}) {
           builtInTools: pi.getActiveTools()
         });
         if (subagent.status === "at_capacity") {
-          notify4(ctx, `/sumo:review is at capacity (${subagent.runningCount}/${subagent.capacity}): ${subagent.retryHint}`, "warning");
+          notify5(ctx, `/sumo:review is at capacity (${subagent.runningCount}/${subagent.capacity}): ${subagent.retryHint}`, "warning");
           return;
         }
         if (subagent.status !== "running") {
-          notify4(ctx, `/sumo:review failed to start subagent: ${subagent.errorText ?? "unknown error"}`, "warning");
+          notify5(ctx, `/sumo:review failed to start subagent: ${subagent.errorText ?? "unknown error"}`, "warning");
           return;
         }
-        notify4(ctx, `review started: ${subagent.id} \xB7 ${model} \xB7 ${label}. it is running in a watchable herdr pane; its result will arrive as a card automatically.`);
+        notify5(ctx, `review started: ${subagent.id} \xB7 ${model} \xB7 ${label}. it is running in a watchable herdr pane; its result will arrive as a card automatically.`);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        notify4(ctx, `/sumo:review failed to start subagent: ${message}`, "warning");
+        notify5(ctx, `/sumo:review failed to start subagent: ${message}`, "warning");
       }
     }
   });
@@ -6600,9 +6933,9 @@ function registerSpinnerCommand(pi) {
 
 // src/commands/sync.ts
 import { execFile as execFileCallback } from "node:child_process";
-import { existsSync as existsSync3, lstatSync, mkdirSync as mkdirSync3, readFileSync as readFileSync4, realpathSync, renameSync as renameSync2, rmSync, symlinkSync } from "node:fs";
-import { homedir as homedir6 } from "node:os";
-import { dirname as dirname2, join as join5, resolve as resolve2 } from "node:path";
+import { existsSync as existsSync4, lstatSync, mkdirSync as mkdirSync4, readFileSync as readFileSync6, realpathSync, renameSync as renameSync2, rmSync, symlinkSync } from "node:fs";
+import { homedir as homedir7 } from "node:os";
+import { dirname as dirname3, join as join6, resolve as resolve2 } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 var execFile2 = promisify(execFileCallback);
@@ -6625,35 +6958,35 @@ function moduleUrlToPath(moduleUrl) {
   return moduleUrl.startsWith("file:") ? fileURLToPath(moduleUrl) : moduleUrl;
 }
 function packageRootFromModule(moduleUrl, deps) {
-  const exists = deps.exists ?? existsSync3;
+  const exists = deps.exists ?? existsSync4;
   const modulePath = moduleUrlToPath(moduleUrl);
-  let current = dirname2(modulePath);
+  let current = dirname3(modulePath);
   while (true) {
-    if (packageNameAt(current, deps) === "@dhruvkelawala/sumocode" && exists(join5(current, "src", "extension.ts"))) return current;
-    const parent = dirname2(current);
+    if (packageNameAt(current, deps) === "@dhruvkelawala/sumocode" && exists(join6(current, "src", "extension.ts"))) return current;
+    const parent = dirname3(current);
     if (parent === current) break;
     current = parent;
   }
-  return resolve2(dirname2(modulePath), "..", "..");
+  return resolve2(dirname3(modulePath), "..", "..");
 }
 function resolveConfigRepo(deps) {
   const env = deps.env ?? process.env;
   if (env.SUMOCODE_CONFIG_DIR) return resolve2(env.SUMOCODE_CONFIG_DIR);
-  const homeDir = deps.homeDir ?? homedir6();
-  return join5(homeDir, ".config", CONFIG_REPO_NAME);
+  const homeDir = deps.homeDir ?? homedir7();
+  return join6(homeDir, ".config", CONFIG_REPO_NAME);
 }
 function resolvePiAgentDir(deps) {
-  const homeDir = deps.homeDir ?? homedir6();
-  return join5(homeDir, ".pi", "agent");
+  const homeDir = deps.homeDir ?? homedir7();
+  return join6(homeDir, ".pi", "agent");
 }
 function isGitRepo(dir, deps) {
-  const exists = deps.exists ?? existsSync3;
-  return exists(join5(dir, ".git"));
+  const exists = deps.exists ?? existsSync4;
+  return exists(join6(dir, ".git"));
 }
 function packageNameAt(dir, deps) {
-  const exists = deps.exists ?? existsSync3;
-  const readFile = deps.readFile ?? ((path2, encoding) => readFileSync4(path2, encoding));
-  const packagePath = join5(dir, "package.json");
+  const exists = deps.exists ?? existsSync4;
+  const readFile = deps.readFile ?? ((path2, encoding) => readFileSync6(path2, encoding));
+  const packagePath = join6(dir, "package.json");
   if (!exists(packagePath)) return void 0;
   try {
     const parsed = JSON.parse(readFile(packagePath, "utf8"));
@@ -6663,12 +6996,12 @@ function packageNameAt(dir, deps) {
   }
 }
 function findActiveSumoDevTree(cwd, deps) {
-  const exists = deps.exists ?? existsSync3;
+  const exists = deps.exists ?? existsSync4;
   let current = resolve2(cwd);
   while (true) {
     const isSumocodePackage = packageNameAt(current, deps) === "@dhruvkelawala/sumocode";
-    if (isSumocodePackage && exists(join5(current, "src", "extension.ts")) && exists(join5(current, ".git"))) return current;
-    const parent = dirname2(current);
+    if (isSumocodePackage && exists(join6(current, "src", "extension.ts")) && exists(join6(current, ".git"))) return current;
+    const parent = dirname3(current);
     if (parent === current) return void 0;
     current = parent;
   }
@@ -6695,14 +7028,14 @@ function resolvesToSamePath(left, right) {
   }
 }
 function ensureConfigSymlinks(configRepo, agentDir) {
-  mkdirSync3(agentDir, { recursive: true });
+  mkdirSync4(agentDir, { recursive: true });
   let backupDir;
   let linked = 0;
   let backedUp = 0;
   for (const item of MANAGED_CONFIG_ITEMS) {
-    const source = join5(configRepo, item);
+    const source = join6(configRepo, item);
     if (!pathExists(source)) continue;
-    const target = join5(agentDir, item);
+    const target = join6(agentDir, item);
     if (pathExists(target)) {
       if (resolvesToSamePath(source, target)) {
         linked += 1;
@@ -6712,13 +7045,13 @@ function ensureConfigSymlinks(configRepo, agentDir) {
       if (targetStat.isSymbolicLink()) {
         rmSync(target);
       } else {
-        backupDir ??= join5(
+        backupDir ??= join6(
           agentDir,
           "pre-sumocode-backup",
           `sync-${(/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-")}`
         );
-        mkdirSync3(backupDir, { recursive: true });
-        renameSync2(target, join5(backupDir, item));
+        mkdirSync4(backupDir, { recursive: true });
+        renameSync2(target, join6(backupDir, item));
         backedUp += 1;
       }
     }
@@ -6798,7 +7131,7 @@ async function executeSumoBootstrap(ctx, deps = {}) {
   const steps = [];
   ctx.ui.notify("bootstrapping SumoCode on this machine\u2026", "info");
   if (!isGitRepo(configRepo, deps)) {
-    const exists = deps.exists ?? existsSync3;
+    const exists = deps.exists ?? existsSync4;
     if (exists(configRepo)) {
       steps.push({
         label: "clone sumocode-config",
@@ -6849,15 +7182,15 @@ function registerSumoSyncCommand(pi, deps = {}) {
 }
 
 // src/commands/tabs.ts
-import { existsSync as existsSync4, readFileSync as readFileSync5, writeFileSync as writeFileSync3 } from "node:fs";
-import { homedir as homedir7 } from "node:os";
-import { join as join6 } from "node:path";
+import { existsSync as existsSync5, readFileSync as readFileSync7, writeFileSync as writeFileSync4 } from "node:fs";
+import { homedir as homedir8 } from "node:os";
+import { join as join7 } from "node:path";
 var TABS_LOCAL_CONFIG_KEY = "topChromeHidden";
-var DEFAULT_TABS_CONFIG_PATH = join6(homedir7(), ".sumocode", "local-config.json");
+var DEFAULT_TABS_CONFIG_PATH = join7(homedir8(), ".sumocode", "local-config.json");
 function isTopChromeHidden(configPath = DEFAULT_TABS_CONFIG_PATH) {
   try {
-    if (!existsSync4(configPath)) return false;
-    const raw = readFileSync5(configPath, "utf8");
+    if (!existsSync5(configPath)) return false;
+    const raw = readFileSync7(configPath, "utf8");
     const parsed = JSON.parse(raw);
     return parsed[TABS_LOCAL_CONFIG_KEY] === true;
   } catch {
@@ -6867,15 +7200,15 @@ function isTopChromeHidden(configPath = DEFAULT_TABS_CONFIG_PATH) {
 function setTopChromeHidden(hidden, configPath = DEFAULT_TABS_CONFIG_PATH) {
   let parsed = {};
   try {
-    if (existsSync4(configPath)) {
-      parsed = JSON.parse(readFileSync5(configPath, "utf8"));
+    if (existsSync5(configPath)) {
+      parsed = JSON.parse(readFileSync7(configPath, "utf8"));
       if (typeof parsed !== "object" || parsed === null) parsed = {};
     }
   } catch {
     parsed = {};
   }
   parsed[TABS_LOCAL_CONFIG_KEY] = hidden;
-  writeFileSync3(configPath, `${JSON.stringify(parsed, null, 2)}
+  writeFileSync4(configPath, `${JSON.stringify(parsed, null, 2)}
 `);
 }
 function registerTabsCommand(pi, options = {}) {
@@ -7186,12 +7519,12 @@ function registerThemeCheckCommand(pi) {
 }
 
 // src/commands/worktree.ts
-import { existsSync as existsSync6 } from "node:fs";
+import { existsSync as existsSync7 } from "node:fs";
 
 // src/git/worktree.ts
 import { execFile as execFile3, execFileSync as execFileSync2 } from "node:child_process";
-import { existsSync as existsSync5, mkdirSync as mkdirSync4 } from "node:fs";
-import { basename as basename2, dirname as dirname3, join as join7 } from "node:path";
+import { existsSync as existsSync6, mkdirSync as mkdirSync5 } from "node:fs";
+import { basename as basename2, dirname as dirname4, join as join8 } from "node:path";
 import { promisify as promisify2 } from "node:util";
 var execFileAsync = promisify2(execFile3);
 var DEFAULT_GIT_TIMEOUT_MS = 15e3;
@@ -7226,7 +7559,7 @@ function slugifyBranch(task) {
   return slug || "task";
 }
 function worktreeRoot(repoRoot = process.cwd()) {
-  return join7(dirname3(repoRoot), `${basename2(repoRoot)}.sumo-worktrees`);
+  return join8(dirname4(repoRoot), `${basename2(repoRoot)}.sumo-worktrees`);
 }
 function pathSegmentForBranch(branch) {
   return branch.replace(/[^a-zA-Z0-9._-]+/g, "__");
@@ -7237,7 +7570,7 @@ async function branchExists(repoRoot, branch) {
 function resolveCreateOptions(options) {
   const baseRef = options.baseRef ?? "HEAD";
   const branch = options.branch ?? `sumo/${slugifyBranch(options.task ?? "task")}`;
-  const path2 = options.path ?? join7(worktreeRoot(options.repoRoot), pathSegmentForBranch(branch));
+  const path2 = options.path ?? join8(worktreeRoot(options.repoRoot), pathSegmentForBranch(branch));
   return { branch, baseRef, path: path2 };
 }
 async function createWorktree(options) {
@@ -7245,11 +7578,11 @@ async function createWorktree(options) {
   if (await branchExists(options.repoRoot, branch)) {
     return failure("branch_already_exists", `branch already exists: ${branch}`);
   }
-  if (existsSync5(path2)) {
+  if (existsSync6(path2)) {
     return failure("path_already_exists", `worktree path already exists: ${path2}`);
   }
   try {
-    mkdirSync4(dirname3(path2), { recursive: true });
+    mkdirSync5(dirname4(path2), { recursive: true });
     await git(options.repoRoot, ["worktree", "add", "-b", branch, path2, baseRef]);
     return { ok: true, path: path2, branch, baseRef };
   } catch (error) {
@@ -7323,7 +7656,7 @@ function parseWorktreeArgs(args) {
   }
   return { mode: "delegate", value: withoutBase, ...parsedBase };
 }
-function notify5(_pi, ctx, message, type = "info") {
+function notify6(_pi, ctx, message, type = "info") {
   if (ctx.hasUI) {
     ctx.ui.notify(message, type);
     return;
@@ -7353,39 +7686,39 @@ function findSumoWorktree(worktrees, target) {
 async function handlePrune(pi, ctx, target, list, remove) {
   const listed = await list(ctx.cwd);
   if (!listed.ok) {
-    notify5(pi, ctx, `/sumo:worktree prune: ${listed.message}`, "warning");
+    notify6(pi, ctx, `/sumo:worktree prune: ${listed.message}`, "warning");
     return;
   }
   const sumoWorktrees = listSumoWorktrees(listed.worktrees);
   if (!target) {
     if (sumoWorktrees.length === 0) {
-      notify5(pi, ctx, "no sumo worktrees found");
+      notify6(pi, ctx, "no sumo worktrees found");
       return;
     }
     const lines = sumoWorktrees.map((worktree) => `${worktree.branch ?? "detached"} \xB7 ${worktree.path}`);
-    notify5(pi, ctx, `sumo worktrees:
+    notify6(pi, ctx, `sumo worktrees:
 ${lines.join("\n")}
 run /sumo:worktree prune <branch-or-path> to remove one`);
     return;
   }
   const match = findSumoWorktree(listed.worktrees, target);
   if (!match) {
-    notify5(pi, ctx, `/sumo:worktree prune: no tracked sumo worktree matched ${target}`, "warning");
+    notify6(pi, ctx, `/sumo:worktree prune: no tracked sumo worktree matched ${target}`, "warning");
     return;
   }
   const removed = await remove({ repoRoot: ctx.cwd, path: match.path });
   if (!removed.ok) {
-    notify5(pi, ctx, `/sumo:worktree prune: ${removed.message}`, "warning");
+    notify6(pi, ctx, `/sumo:worktree prune: ${removed.message}`, "warning");
     return;
   }
-  notify5(pi, ctx, `removed worktree ${match.branch ?? match.path}`);
+  notify6(pi, ctx, `removed worktree ${match.branch ?? match.path}`);
 }
 function registerWorktreeCommand(pi, options = {}) {
   const create = options.create ?? createWorktree;
   const list = options.list ?? listWorktrees;
   const remove = options.remove ?? removeWorktree;
   const configuredTerminalHost = options.terminalHost;
-  const pathExists3 = options.pathExists ?? existsSync6;
+  const pathExists3 = options.pathExists ?? existsSync7;
   const getTerminalSize2 = options.terminalSize ?? terminalSize;
   const setupAction = options.setupAction ?? process.env.SUMOCODE_WORKTREE_SETUP ?? DEFAULT_SETUP_ACTION;
   pi.registerCommand("sumo:worktree", {
@@ -7394,11 +7727,11 @@ function registerWorktreeCommand(pi, options = {}) {
       try {
         const parsed = parseWorktreeArgs(args ?? "");
         if (parsed.baseRef === "") {
-          notify5(pi, ctx, "Usage: /sumo:worktree [new [name] | open <branch-or-path> | <task> | prune [branch-or-path]] [--base <ref>]", "warning");
+          notify6(pi, ctx, "Usage: /sumo:worktree [new [name] | open <branch-or-path> | <task> | prune [branch-or-path]] [--base <ref>]", "warning");
           return;
         }
         if (parsed.baseRef !== void 0 && (parsed.mode === "reopen" || parsed.mode === "prune")) {
-          notify5(pi, ctx, "/sumo:worktree: --base is only valid for fresh or delegated worktrees", "warning");
+          notify6(pi, ctx, "/sumo:worktree: --base is only valid for fresh or delegated worktrees", "warning");
           return;
         }
         if (parsed.mode === "prune") {
@@ -7406,28 +7739,28 @@ function registerWorktreeCommand(pi, options = {}) {
           return;
         }
         if (!ctx.hasUI) {
-          notify5(pi, ctx, "/sumo:worktree requires interactive UI", "warning");
+          notify6(pi, ctx, "/sumo:worktree requires interactive UI", "warning");
           return;
         }
         const terminalHost = configuredTerminalHost ?? getTerminalHost();
         if (terminalHost.kind === "none") {
-          notify5(pi, ctx, "/sumo:worktree requires a terminal host (cmux or herdr)", "warning");
+          notify6(pi, ctx, "/sumo:worktree requires a terminal host (cmux or herdr)", "warning");
           return;
         }
         if (parsed.mode === "reopen") {
           if (!parsed.value) {
-            notify5(pi, ctx, "Usage: /sumo:worktree open <branch-or-path>", "warning");
+            notify6(pi, ctx, "Usage: /sumo:worktree open <branch-or-path>", "warning");
             return;
           }
           const listed = await list(ctx.cwd);
           if (!listed.ok) {
-            notify5(pi, ctx, `/sumo:worktree open: ${listed.message}`, "warning");
+            notify6(pi, ctx, `/sumo:worktree open: ${listed.message}`, "warning");
             return;
           }
           const match = findSumoWorktree(listed.worktrees, parsed.value);
           if (!match) {
             const available = listSumoWorktrees(listed.worktrees).map((worktree) => worktree.branch ?? worktree.path);
-            notify5(
+            notify6(
               pi,
               ctx,
               `/sumo:worktree open: no tracked sumo worktree matched ${parsed.value} \xB7 available: ${available.join(", ") || "none"}`,
@@ -7440,19 +7773,19 @@ function registerWorktreeCommand(pi, options = {}) {
           if (terminalHost.openExistingWorktreeWorkspace) {
             const opened3 = await terminalHost.openExistingWorktreeWorkspace(pi, { path: match.path, label: label2, shellCommand: paneCommand2, sourceCwd: ctx.cwd });
             if (opened3.ok) {
-              notify5(pi, ctx, `opened ${match.branch ?? match.path} as herdr workspace "${label2}" \xB7 setup: ${setupAction || "none"}`);
+              notify6(pi, ctx, `opened ${match.branch ?? match.path} as herdr workspace "${label2}" \xB7 setup: ${setupAction || "none"}`);
               return;
             }
-            notify5(pi, ctx, `/sumo:worktree: herdr workspace open failed (${opened3.error}); falling back to split`, "warning");
+            notify6(pi, ctx, `/sumo:worktree: herdr workspace open failed (${opened3.error}); falling back to split`, "warning");
           }
           const direction2 = chooseDiffSplitDirection(getTerminalSize2());
           const command2 = buildShellCommand(match.path, paneCommand2);
           const opened2 = await terminalHost.openCommandInSplit(pi, direction2, { cwd: match.path, shellCommand: command2 });
           if (!opened2.ok) {
-            notify5(pi, ctx, `/sumo:worktree: ${opened2.error}`, "warning");
+            notify6(pi, ctx, `/sumo:worktree: ${opened2.error}`, "warning");
             return;
           }
-          notify5(pi, ctx, `reopened ${match.branch ?? match.path} in ${direction2} split`);
+          notify6(pi, ctx, `reopened ${match.branch ?? match.path} in ${direction2} split`);
           return;
         }
         const task = parsed.mode === "fresh" ? parsed.value || `wt-${Date.now().toString(36)}` : parsed.value;
@@ -7464,12 +7797,12 @@ function registerWorktreeCommand(pi, options = {}) {
           const opened2 = await terminalHost.openWorktreeWorkspace(pi, { ...resolved, label, shellCommand: paneCommand, sourceCwd: ctx.cwd });
           if (opened2.ok) {
             const freshLabel2 = parsed.mode === "fresh" ? " (fresh session)" : "";
-            notify5(pi, ctx, `opened ${resolved.branch}${freshLabel2} as herdr workspace "${label}" \xB7 setup: ${setupAction || "none"}`);
+            notify6(pi, ctx, `opened ${resolved.branch}${freshLabel2} as herdr workspace "${label}" \xB7 setup: ${setupAction || "none"}`);
             return;
           }
           if (pathExists3(resolved.path)) {
             const recovery = parsed.mode === "fresh" ? `Open it with /sumo:worktree open ${resolved.branch}` : `Open it with /sumo:worktree open ${resolved.branch} (opens a fresh session \u2014 re-issue your task there; the delegated prompt was not delivered)`;
-            notify5(
+            notify6(
               pi,
               ctx,
               `/sumo:worktree: herdr created workspace "${label}" but launching the session failed (${opened2.error}). ${recovery}`,
@@ -7477,30 +7810,30 @@ function registerWorktreeCommand(pi, options = {}) {
             );
             return;
           }
-          notify5(pi, ctx, `/sumo:worktree: herdr workspace create failed (${opened2.error}); falling back to split`, "warning");
+          notify6(pi, ctx, `/sumo:worktree: herdr workspace create failed (${opened2.error}); falling back to split`, "warning");
         }
         created = await create({ repoRoot: ctx.cwd, task, baseRef: parsed.baseRef ?? "HEAD" });
         if (!created.ok) {
-          notify5(pi, ctx, `/sumo:worktree: ${created.message}`, "warning");
+          notify6(pi, ctx, `/sumo:worktree: ${created.message}`, "warning");
           return;
         }
         const command = buildShellCommand(created.path, paneCommand);
         if (parsed.mode === "fresh" && !sessionHasMessages(ctx) && terminalHost.replaceCurrentPane) {
           const opened2 = await terminalHost.replaceCurrentPane(pi, { cwd: created.path, shellCommand: command });
-          if (!opened2.ok) notify5(pi, ctx, `/sumo:worktree: ${opened2.error}`, "warning");
+          if (!opened2.ok) notify6(pi, ctx, `/sumo:worktree: ${opened2.error}`, "warning");
           return;
         }
         const direction = chooseDiffSplitDirection(getTerminalSize2());
         const opened = await terminalHost.openCommandInSplit(pi, direction, { cwd: created.path, shellCommand: command });
         if (!opened.ok) {
-          notify5(pi, ctx, `/sumo:worktree: ${opened.error}`, "warning");
+          notify6(pi, ctx, `/sumo:worktree: ${opened.error}`, "warning");
           return;
         }
         const freshLabel = parsed.mode === "fresh" ? " (fresh session)" : "";
-        notify5(pi, ctx, `opened ${created.branch}${freshLabel} in ${direction} split \xB7 setup: ${setupAction || "none"}`);
+        notify6(pi, ctx, `opened ${created.branch}${freshLabel} in ${direction} split \xB7 setup: ${setupAction || "none"}`);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        notify5(pi, ctx, `/sumo:worktree: ${message}`, "warning");
+        notify6(pi, ctx, `/sumo:worktree: ${message}`, "warning");
       }
     }
   });
@@ -7510,9 +7843,9 @@ function registerWorktreeCommand(pi, options = {}) {
 import { matchesKey as matchesKey5, wrapTextWithAnsi as wrapTextWithAnsi3 } from "@earendil-works/pi-tui";
 
 // src/memory.ts
-import { readFileSync as readFileSync6 } from "node:fs";
-import { homedir as homedir8 } from "node:os";
-import { join as join8 } from "node:path";
+import { readFileSync as readFileSync8 } from "node:fs";
+import { homedir as homedir9 } from "node:os";
+import { join as join9 } from "node:path";
 var MemoryClientError = class extends Error {
   constructor(code, message, cause) {
     super(message);
@@ -7525,15 +7858,15 @@ var MemoryClientError = class extends Error {
 };
 var DEFAULT_REMNIC_BASE_URL = "http://127.0.0.1:7749";
 var DEFAULT_REMNIC_TIMEOUT_MS = 3e3;
-var DEFAULT_REMNIC_TOKEN_PATH = join8(homedir8(), ".sumocode", "remnic-auth-token");
+var DEFAULT_REMNIC_TOKEN_PATH = join9(homedir9(), ".sumocode", "remnic-auth-token");
 function defaultTokenProvider() {
   try {
-    return readFileSync6(DEFAULT_REMNIC_TOKEN_PATH, "utf8").trim() || void 0;
+    return readFileSync8(DEFAULT_REMNIC_TOKEN_PATH, "utf8").trim() || void 0;
   } catch {
     return void 0;
   }
 }
-function isRecord2(value) {
+function isRecord3(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 function asString(value) {
@@ -7548,16 +7881,16 @@ function asStringArray(value) {
   return strings.length === 0 ? void 0 : strings;
 }
 function factFromUnknown(value) {
-  const raw = isRecord2(value) && isRecord2(value.memory) ? value.memory : value;
-  if (!isRecord2(raw)) return void 0;
-  const id = asString(raw.id) ?? asString(raw.memoryId) ?? (isRecord2(value) ? asString(value.memoryId) : void 0);
+  const raw = isRecord3(value) && isRecord3(value.memory) ? value.memory : value;
+  if (!isRecord3(raw)) return void 0;
+  const id = asString(raw.id) ?? asString(raw.memoryId) ?? (isRecord3(value) ? asString(value.memoryId) : void 0);
   const text = asString(raw.content) ?? asString(raw.text) ?? asString(raw.summary) ?? asString(raw.preview);
   if (!id || !text) return void 0;
   return {
     id,
     text,
     category: asString(raw.category),
-    score: asNumber(raw.score) ?? (isRecord2(value) ? asNumber(value.score) : void 0),
+    score: asNumber(raw.score) ?? (isRecord3(value) ? asNumber(value.score) : void 0),
     createdAt: asString(raw.createdAt) ?? asString(raw.created_at) ?? asString(raw.created),
     updatedAt: asString(raw.updatedAt) ?? asString(raw.updated_at) ?? asString(raw.updated),
     tags: asStringArray(raw.tags),
@@ -7619,7 +7952,7 @@ function createRemnicMemoryClient(options = {}) {
     async query(prompt, n = 5) {
       const body = JSON.stringify({ query: prompt.trim() || " ", topK: n, mode: "full" });
       const payload = await requestJson("/engram/v1/recall", { method: "POST", body });
-      if (!isRecord2(payload)) {
+      if (!isRecord3(payload)) {
         throw new MemoryClientError("malformed_response", "Remnic recall response was not an object");
       }
       const rawResults = Array.isArray(payload.results) ? payload.results : Array.isArray(payload.memories) ? payload.memories : void 0;
@@ -7632,7 +7965,7 @@ function createRemnicMemoryClient(options = {}) {
       try {
         await requestJson("/engram/v1/health", { method: "GET" });
         const browse = await requestJson("/engram/v1/memories?limit=1&sort=updated_desc", { method: "GET" });
-        if (!isRecord2(browse)) return { ok: true, factCount: 0 };
+        if (!isRecord3(browse)) return { ok: true, factCount: 0 };
         const memories = Array.isArray(browse.memories) ? browse.memories : [];
         const latest = factFromUnknown(memories[0]);
         return {
@@ -7655,7 +7988,7 @@ function createRemnicMemoryClient(options = {}) {
         `/engram/v1/memories?q=${encodeURIComponent(text)}&limit=1&sort=updated_desc`,
         { method: "GET" }
       );
-      if (isRecord2(lookup) && Array.isArray(lookup.memories)) {
+      if (isRecord3(lookup) && Array.isArray(lookup.memories)) {
         const fact = factFromUnknown(lookup.memories[0]);
         if (fact) return fact;
       }
@@ -7692,7 +8025,7 @@ function createRemnicMemoryClient(options = {}) {
       search.set("offset", String(params.offset ?? 0));
       search.set("sort", "updated_desc");
       const payload = await requestJson(`/engram/v1/memories?${search.toString()}`, { method: "GET" });
-      if (!isRecord2(payload)) {
+      if (!isRecord3(payload)) {
         throw new MemoryClientError("malformed_response", "Remnic browse response was not an object");
       }
       const memories = Array.isArray(payload.memories) ? payload.memories : [];
@@ -8096,26 +8429,26 @@ function registerMemoryCommand(pi, createClient = createRemnicMemoryClient) {
 }
 
 // src/sidebar.ts
-import { homedir as homedir10 } from "node:os";
-import { basename as basename3, join as join10 } from "node:path";
+import { homedir as homedir11 } from "node:os";
+import { basename as basename3, join as join11 } from "node:path";
 
 // src/mcp-config-reader.ts
-import { existsSync as existsSync7, readFileSync as readFileSync7 } from "node:fs";
-import { homedir as homedir9 } from "node:os";
-import { join as join9 } from "node:path";
+import { existsSync as existsSync8, readFileSync as readFileSync9 } from "node:fs";
+import { homedir as homedir10 } from "node:os";
+import { join as join10 } from "node:path";
 function resolveMcpConfigCandidates(opts) {
-  const home = homedir9();
+  const home = homedir10();
   return [
-    join9(home, ".config", "mcp", "mcp.json"),
-    join9(opts.piAgentDir, "mcp.json"),
-    join9(opts.cwd, ".mcp.json"),
-    join9(opts.cwd, ".pi", "mcp.json")
+    join10(home, ".config", "mcp", "mcp.json"),
+    join10(opts.piAgentDir, "mcp.json"),
+    join10(opts.cwd, ".mcp.json"),
+    join10(opts.cwd, ".pi", "mcp.json")
   ];
 }
 function readMcpConfig(path2) {
   try {
-    if (!existsSync7(path2)) return void 0;
-    const raw = readFileSync7(path2, "utf8");
+    if (!existsSync8(path2)) return void 0;
+    const raw = readFileSync9(path2, "utf8");
     const parsed = JSON.parse(raw);
     if (!parsed || typeof parsed !== "object") return void 0;
     return parsed;
@@ -8698,7 +9031,7 @@ function installNonCapturingSidebarOverlay(tui, sidebarComponent, shouldShowSide
 var SIDEBAR_MEMORY_DEBOUNCE_MS = 200;
 var SIDEBAR_MEMORY_RETRY_MS = 5e3;
 function resolvePiAgentDir2() {
-  return process.env.PI_CODING_AGENT_DIR ?? join10(homedir10(), ".pi", "agent");
+  return process.env.PI_CODING_AGENT_DIR ?? join11(homedir11(), ".pi", "agent");
 }
 setMcpDiagnosticHandler((event) => {
   logDiagnostic(event.type, { path: event.path, importsCount: event.importsCount });
@@ -9063,8 +9396,8 @@ function installMemoryExtraction(pi, createClient = createRemnicMemoryClient) {
 }
 
 // src/splash.ts
-import { readFileSync as readFileSync8 } from "node:fs";
-import { dirname as dirname4, resolve as resolve3 } from "node:path";
+import { readFileSync as readFileSync10 } from "node:fs";
+import { dirname as dirname5, resolve as resolve3 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 import { truncateToWidth as truncateToWidth10 } from "@earendil-works/pi-tui";
 var RESET10 = "\x1B[0m";
@@ -9110,11 +9443,11 @@ var SUMOCODE_WORDMARK = (() => {
   );
   return rows;
 })();
-var ASSET_DIR = resolve3(dirname4(fileURLToPath2(import.meta.url)), "assets");
+var ASSET_DIR = resolve3(dirname5(fileURLToPath2(import.meta.url)), "assets");
 var FACE_PATH = resolve3(ASSET_DIR, "sumo-face.ans");
 function loadFace() {
   try {
-    const raw = readFileSync8(FACE_PATH, "utf8").replace(CURSOR_VISIBILITY_PATTERN, "");
+    const raw = readFileSync10(FACE_PATH, "utf8").replace(CURSOR_VISIBILITY_PATTERN, "");
     return raw.replace(/\r?\n$/, "").split(/\r?\n/).filter((line) => line.length > 0);
   } catch {
     return [];
@@ -9558,13 +9891,13 @@ import {
   fchmodSync as fchmodSync2,
   fstatSync as fstatSync2,
   ftruncateSync,
-  mkdirSync as mkdirSync6,
+  mkdirSync as mkdirSync7,
   openSync as openSync2,
-  readFileSync as readFileSync10,
+  readFileSync as readFileSync12,
   readSync,
-  writeFileSync as writeFileSync5
+  writeFileSync as writeFileSync6
 } from "node:fs";
-import { dirname as dirname7, join as join13 } from "node:path";
+import { dirname as dirname8, join as join14 } from "node:path";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
 
 // src/background-tasks/process-tree.ts
@@ -9837,18 +10170,18 @@ import {
   fstatSync,
   fsyncSync,
   lstatSync as lstatSync2,
-  mkdirSync as mkdirSync5,
+  mkdirSync as mkdirSync6,
   openSync,
-  readFileSync as readFileSync9,
+  readFileSync as readFileSync11,
   readdirSync,
   realpathSync as realpathSync2,
   renameSync as renameSync3,
   rmSync as rmSync2,
   unlinkSync,
-  writeFileSync as writeFileSync4
+  writeFileSync as writeFileSync5
 } from "node:fs";
-import { homedir as homedir11 } from "node:os";
-import { basename as basename4, dirname as dirname5, isAbsolute, join as join11, relative, resolve as resolve4 } from "node:path";
+import { homedir as homedir12 } from "node:os";
+import { basename as basename4, dirname as dirname6, isAbsolute, join as join12, relative, resolve as resolve4 } from "node:path";
 
 // src/activity/domain.ts
 var ACTIVITY_KINDS = /* @__PURE__ */ new Set(["tool", "task", "subagent", "terminal"]);
@@ -10536,8 +10869,8 @@ function assertPrivateDirectory(path2) {
   if (!hasPrivateMode(stat.mode, true)) throw new Error(`Directory permissions must be 0700: ${path2}`);
 }
 function defaultTerminalStoreRoot() {
-  const agentDir = process.env.PI_CODING_AGENT_DIR ?? join11(homedir11(), ".pi", "agent");
-  return join11(agentDir, "state", "sumocode-terminals");
+  const agentDir = process.env.PI_CODING_AGENT_DIR ?? join12(homedir12(), ".pi", "agent");
+  return join12(agentDir, "state", "sumocode-terminals");
 }
 function sameFileIdentity(left, right) {
   return left.dev === right.dev && left.ino === right.ino;
@@ -10569,7 +10902,7 @@ function assertPrivateFile(path2) {
 function readFileNoFollow(path2) {
   const descriptor = openPrivateExistingFile(path2, constants.O_RDONLY);
   try {
-    return readFileSync9(descriptor, "utf8");
+    return readFileSync11(descriptor, "utf8");
   } finally {
     closeSync(descriptor);
   }
@@ -10578,26 +10911,26 @@ function writeExclusivePrivateFile(path2, contents) {
   const descriptor = openSync(path2, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | NO_FOLLOW, PRIVATE_FILE_MODE);
   try {
     fchmodSync(descriptor, PRIVATE_FILE_MODE);
-    writeFileSync4(descriptor, contents, "utf8");
+    writeFileSync5(descriptor, contents, "utf8");
     fsyncSync(descriptor);
   } finally {
     closeSync(descriptor);
   }
 }
 function atomicWriteJson(path2, value) {
-  const temporary = join11(dirname5(path2), `.${randomUUID()}.tmp`);
+  const temporary = join12(dirname6(path2), `.${randomUUID()}.tmp`);
   let descriptor;
   try {
     descriptor = openSync(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | NO_FOLLOW, PRIVATE_FILE_MODE);
     fchmodSync(descriptor, PRIVATE_FILE_MODE);
-    writeFileSync4(descriptor, `${JSON.stringify(value, null, 2)}
+    writeFileSync5(descriptor, `${JSON.stringify(value, null, 2)}
 `, "utf8");
     fsyncSync(descriptor);
     closeSync(descriptor);
     descriptor = void 0;
     renameSync3(temporary, path2);
     try {
-      const directoryDescriptor = openSync(dirname5(path2), constants.O_RDONLY | NO_FOLLOW);
+      const directoryDescriptor = openSync(dirname6(path2), constants.O_RDONLY | NO_FOLLOW);
       try {
         fsyncSync(directoryDescriptor);
       } finally {
@@ -10654,7 +10987,7 @@ var TerminalTaskStore = class {
     } catch (error) {
       if (errorCode2(error) !== "ENOENT") throw error;
     }
-    mkdirSync5(requestedRoot, { recursive: true, mode: PRIVATE_DIRECTORY_MODE });
+    mkdirSync6(requestedRoot, { recursive: true, mode: PRIVATE_DIRECTORY_MODE });
     if (uid !== void 0) assertOwnedByCurrentUser(requestedRoot, uid);
     chmodSync(requestedRoot, PRIVATE_DIRECTORY_MODE);
     assertPrivateDirectory(requestedRoot);
@@ -10677,7 +11010,7 @@ var TerminalTaskStore = class {
     }
     const snapshots = [];
     for (const entry of entries) {
-      const taskDirectory = join11(this.rootDir, entry.name);
+      const taskDirectory = join12(this.rootDir, entry.name);
       if (entry.isSymbolicLink()) {
         this.diagnostic("corrupt", taskDirectory, "symlink/reparse task directories are not allowed");
         continue;
@@ -10689,7 +11022,7 @@ var TerminalTaskStore = class {
         this.diagnostic("corrupt", taskDirectory, error);
         continue;
       }
-      const metaPath = join11(taskDirectory, "meta.json");
+      const metaPath = join12(taskDirectory, "meta.json");
       if (!pathExists2(metaPath)) continue;
       const snapshot = this.readCandidate(metaPath);
       if (!snapshot) continue;
@@ -10735,7 +11068,7 @@ var TerminalTaskStore = class {
   assertTaskDirectory(path2) {
     const resolvedPath = resolve4(path2);
     const relativePath = relative(this.rootDir, resolvedPath);
-    if (!relativePath || relativePath.startsWith("..") || isAbsolute(relativePath) || dirname5(relativePath) !== ".") {
+    if (!relativePath || relativePath.startsWith("..") || isAbsolute(relativePath) || dirname6(relativePath) !== ".") {
       throw new Error("Terminal task directory must be a direct child of the store root");
     }
     assertPrivateDirectory(this.rootDir);
@@ -10747,8 +11080,8 @@ var TerminalTaskStore = class {
   /** Safely open an existing regular artifact confined to a verified task directory. */
   openArtifact(path2, flags) {
     const resolvedPath = resolve4(path2);
-    const taskDirectory = this.assertTaskDirectory(dirname5(resolvedPath));
-    if (dirname5(resolvedPath) !== taskDirectory || basename4(resolvedPath) !== basename4(path2)) {
+    const taskDirectory = this.assertTaskDirectory(dirname6(resolvedPath));
+    if (dirname6(resolvedPath) !== taskDirectory || basename4(resolvedPath) !== basename4(path2)) {
       throw new Error("Terminal artifact must be a direct child of its task directory");
     }
     return openPrivateExistingFile(resolvedPath, flags);
@@ -10781,19 +11114,19 @@ var TerminalTaskStore = class {
     if (!relativePath || relativePath.startsWith("..") || isAbsolute(relativePath) || basename4(resolvedPath) !== "meta.json") {
       throw new Error("Terminal metadata must live in a task directory under the store root");
     }
-    const taskDirectory = dirname5(resolvedPath);
+    const taskDirectory = dirname6(resolvedPath);
     this.assertTaskDirectory(taskDirectory);
     return resolvedPath;
   }
   assertSnapshotPath(snapshot, metaPath) {
     if (!parseTerminalTaskSnapshot(snapshot)) throw new Error("Invalid terminal task snapshot");
     const resolvedMetaPath = this.assertStoreMetaPath(metaPath);
-    const taskDirectory = dirname5(resolvedMetaPath);
+    const taskDirectory = dirname6(resolvedMetaPath);
     if (basename4(taskDirectory) !== `${snapshot.id}-${snapshot.createdAt}`) throw new Error("Terminal task directory does not match id and creation time");
-    const expectedLogFile = join11(taskDirectory, "output.log");
+    const expectedLogFile = join12(taskDirectory, "output.log");
     if (snapshot.logFile !== expectedLogFile) throw new Error("Terminal log path must be canonical and store-confined");
     for (const name of KNOWN_ARTIFACT_NAMES) {
-      const artifact = join11(taskDirectory, name);
+      const artifact = join12(taskDirectory, name);
       if (!pathExists2(artifact)) continue;
       assertPrivateFile(artifact);
       if (realpathSync2(artifact) !== artifact) throw new Error(`Terminal artifact must not escape its task directory: ${artifact}`);
@@ -10830,7 +11163,7 @@ var TerminalTaskStore = class {
     return this.readCandidate(path2);
   }
   withTaskLock(metaPath, operation) {
-    const lockPath = join11(dirname5(metaPath), ".meta.lock");
+    const lockPath = join12(dirname6(metaPath), ".meta.lock");
     const token = randomUUID();
     const owner = this.processStartTime ? { token, pid: process.pid, processStartTime: this.processStartTime, verifiable: true } : { token, pid: process.pid, verifiable: false };
     const deadline = Date.now() + this.lockTimeoutMs;
@@ -10840,11 +11173,11 @@ var TerminalTaskStore = class {
         sleepSync(this.lockPollMs);
         continue;
       }
-      const candidate = join11(dirname5(metaPath), `.meta.lock-candidate-${token}`);
+      const candidate = join12(dirname6(metaPath), `.meta.lock-candidate-${token}`);
       try {
-        mkdirSync5(candidate, { mode: PRIVATE_DIRECTORY_MODE });
+        mkdirSync6(candidate, { mode: PRIVATE_DIRECTORY_MODE });
         chmodSync(candidate, PRIVATE_DIRECTORY_MODE);
-        writeExclusivePrivateFile(join11(candidate, "owner.json"), `${JSON.stringify(owner)}
+        writeExclusivePrivateFile(join12(candidate, "owner.json"), `${JSON.stringify(owner)}
 `);
         try {
           renameSync3(candidate, lockPath);
@@ -10874,7 +11207,7 @@ var TerminalTaskStore = class {
   takeoverPaths(lockPath) {
     const prefix = `${basename4(lockPath)}.takeover-`;
     try {
-      return readdirSync(dirname5(lockPath), { encoding: "utf8" }).filter((name) => name.startsWith(prefix)).map((name) => join11(dirname5(lockPath), name));
+      return readdirSync(dirname6(lockPath), { encoding: "utf8" }).filter((name) => name.startsWith(prefix)).map((name) => join12(dirname6(lockPath), name));
     } catch {
       return [];
     }
@@ -10882,7 +11215,7 @@ var TerminalTaskStore = class {
   hasBlockingTakeover(lockPath, ownToken) {
     let blocked = false;
     for (const path2 of this.takeoverPaths(lockPath)) {
-      const owner = parseLockOwner(join11(path2, "owner.json"));
+      const owner = parseLockOwner(join12(path2, "owner.json"));
       if (owner?.token === ownToken) continue;
       if (owner && processProvesOwnerGone(owner)) {
         rmSync2(path2, { recursive: true, force: true });
@@ -10893,12 +11226,12 @@ var TerminalTaskStore = class {
     return blocked;
   }
   ownsLock(lockPath, token) {
-    const canonicalOwner = parseLockOwner(join11(lockPath, "owner.json"));
+    const canonicalOwner = parseLockOwner(join12(lockPath, "owner.json"));
     if (canonicalOwner?.token === token) return true;
-    return this.takeoverPaths(lockPath).some((path2) => parseLockOwner(join11(path2, "owner.json"))?.token === token);
+    return this.takeoverPaths(lockPath).some((path2) => parseLockOwner(join12(path2, "owner.json"))?.token === token);
   }
   breakAbandonedLock(lockPath) {
-    const owner = parseLockOwner(join11(lockPath, "owner.json"));
+    const owner = parseLockOwner(join12(lockPath, "owner.json"));
     if (!owner || !processProvesOwnerGone(owner)) return false;
     this.beforeAbandonedLockRename?.();
     const takeoverPath = `${lockPath}.takeover-${randomUUID()}`;
@@ -10908,7 +11241,7 @@ var TerminalTaskStore = class {
       if (errorCode2(error) === "ENOENT") return true;
       return false;
     }
-    const movedOwner = parseLockOwner(join11(takeoverPath, "owner.json"));
+    const movedOwner = parseLockOwner(join12(takeoverPath, "owner.json"));
     if (!movedOwner || movedOwner.token !== owner.token) {
       return false;
     }
@@ -10918,7 +11251,7 @@ var TerminalTaskStore = class {
   releaseLock(lockPath, owner) {
     for (let pass = 0; pass < 2; pass += 1) {
       for (const path2 of [lockPath, ...this.takeoverPaths(lockPath)]) {
-        const currentOwner = parseLockOwner(join11(path2, "owner.json"));
+        const currentOwner = parseLockOwner(join12(path2, "owner.json"));
         if (!currentOwner || currentOwner.token !== owner.token) continue;
         const releasePath = `${path2}.release-${owner.token}-${randomUUID()}`;
         try {
@@ -10940,19 +11273,19 @@ var TerminalTaskStore = class {
 };
 
 // src/background-tasks/visible-spawn.ts
-import { dirname as dirname6, join as join12 } from "node:path";
+import { dirname as dirname7, join as join13 } from "node:path";
 function buildVisibleTaskPaths(taskId, startedAtMs, baseDir) {
-  const root = baseDir ?? join12(process.env.TMPDIR ?? "/tmp", "sumocode-bg");
-  const dir = join12(root, `${taskId}-${startedAtMs}`);
+  const root = baseDir ?? join13(process.env.TMPDIR ?? "/tmp", "sumocode-bg");
+  const dir = join13(root, `${taskId}-${startedAtMs}`);
   return {
-    logFile: join12(dir, "output.log"),
-    exitFile: join12(dir, "exit.code"),
-    markerFile: join12(dir, "started.marker"),
-    scriptFile: join12(dir, "run.sh"),
-    metaFile: join12(dir, "meta.json"),
-    promptFile: join12(dir, "prompt.txt"),
-    responseFile: join12(dir, "response.md"),
-    diagFile: join12(dir, "diag.jsonl")
+    logFile: join13(dir, "output.log"),
+    exitFile: join13(dir, "exit.code"),
+    markerFile: join13(dir, "started.marker"),
+    scriptFile: join13(dir, "run.sh"),
+    metaFile: join13(dir, "meta.json"),
+    promptFile: join13(dir, "prompt.txt"),
+    responseFile: join13(dir, "response.md"),
+    diagFile: join13(dir, "diag.jsonl")
   };
 }
 function shellEscape3(value) {
@@ -10962,7 +11295,7 @@ function buildVisibleAgentArgs(options) {
   const modelFlags = options.model ? ["--model", options.model] : [];
   const thinkingFlags = options.thinking ? ["--thinking", options.thinking] : [];
   const toolsFlags = options.tools === void 0 ? [] : options.tools.length === 0 ? ["--no-tools"] : ["--tools", options.tools.join(",")];
-  return ["task", ...modelFlags, ...thinkingFlags, ...toolsFlags, "--task-dir", dirname6(options.paths.promptFile)];
+  return ["task", ...modelFlags, ...thinkingFlags, ...toolsFlags, "--task-dir", dirname7(options.paths.promptFile)];
 }
 function buildVisibleAgentCommand(options) {
   return [
@@ -11001,24 +11334,24 @@ function normalizePositive(value, fallback) {
 }
 function taskPaths(store, id, createdAt) {
   const visiblePaths = buildVisibleTaskPaths(id, createdAt, store.rootDir);
-  const directory = dirname7(visiblePaths.logFile);
+  const directory = dirname8(visiblePaths.logFile);
   return {
     ...visiblePaths,
     directory,
-    launchFile: join13(directory, "launch.ready"),
-    commandFile: join13(directory, process.platform === "win32" ? "command.cmd" : "command.sh"),
-    windowsScriptFile: join13(directory, "run.cmd")
+    launchFile: join14(directory, "launch.ready"),
+    commandFile: join14(directory, process.platform === "win32" ? "command.cmd" : "command.sh"),
+    windowsScriptFile: join14(directory, "run.cmd")
   };
 }
 function openPrivateFile(store, path2, flags) {
   return store.openArtifact(path2, flags);
 }
 function createPrivateFile(store, path2, contents) {
-  store.assertTaskDirectory(dirname7(path2));
+  store.assertTaskDirectory(dirname8(path2));
   const descriptor = openSync2(path2, constants2.O_WRONLY | constants2.O_CREAT | constants2.O_EXCL | NO_FOLLOW2, PRIVATE_FILE_MODE2);
   try {
     fchmodSync2(descriptor, PRIVATE_FILE_MODE2);
-    writeFileSync5(descriptor, contents, "utf8");
+    writeFileSync6(descriptor, contents, "utf8");
   } finally {
     closeSync2(descriptor);
   }
@@ -11026,7 +11359,7 @@ function createPrivateFile(store, path2, contents) {
   closeSync2(verified);
 }
 function createPrivateTaskDirectory(store, path2) {
-  mkdirSync6(path2, { mode: PRIVATE_DIRECTORY_MODE2 });
+  mkdirSync7(path2, { mode: PRIVATE_DIRECTORY_MODE2 });
   chmodSync2(path2, PRIVATE_DIRECTORY_MODE2);
   store.assertTaskDirectory(path2);
 }
@@ -11034,7 +11367,7 @@ function readExitCode(store, path2) {
   let descriptor;
   try {
     descriptor = openPrivateFile(store, path2, constants2.O_RDONLY);
-    const text = readFileSync10(descriptor, "utf8").trim();
+    const text = readFileSync12(descriptor, "utf8").trim();
     if (!/^-?\d+$/.test(text)) return void 0;
     const exitCode = Number.parseInt(text, 10);
     return Number.isSafeInteger(exitCode) ? exitCode : void 0;
@@ -11101,7 +11434,7 @@ function capSettledLog(store, path2, maxBytes) {
     descriptor = openPrivateFile(store, path2, constants2.O_WRONLY);
     try {
       ftruncateSync(descriptor, 0);
-      writeFileSync5(descriptor, `${marker}${tail}`.slice(-maxBytes), "utf8");
+      writeFileSync6(descriptor, `${marker}${tail}`.slice(-maxBytes), "utf8");
     } finally {
       closeSync2(descriptor);
     }
@@ -11112,7 +11445,7 @@ function appendPrivateFile(store, path2, contents) {
   let descriptor;
   try {
     descriptor = openPrivateFile(store, path2, constants2.O_WRONLY | constants2.O_APPEND);
-    writeFileSync5(descriptor, contents, "utf8");
+    writeFileSync6(descriptor, contents, "utf8");
   } catch {
   } finally {
     if (descriptor !== void 0) closeSync2(descriptor);
@@ -12033,11 +12366,11 @@ ${command}
     this.adopt(current, false);
     return { snapshot: current, changed: false };
   }
-  adopt(snapshot, notify6) {
+  adopt(snapshot, notify7) {
     const previous = this.tasks.get(snapshot.id);
     this.tasks.set(snapshot.id, snapshot);
     this.ensureRuntime(snapshot);
-    if (!notify6 || previous?.revision === snapshot.revision) return;
+    if (!notify7 || previous?.revision === snapshot.revision) return;
     for (const listener of this.listeners) {
       try {
         listener(snapshot);
@@ -12496,8 +12829,8 @@ import { createHash as createHash2, randomUUID as randomUUID5 } from "node:crypt
 
 // src/activity/feed-publisher.ts
 import { randomUUID as randomUUID4 } from "node:crypto";
-import { existsSync as existsSync8, linkSync as linkSync2, readdirSync as readdirSync3, renameSync as renameSync5, rmSync as rmSync3 } from "node:fs";
-import { basename as basename6, dirname as dirname9, join as join15 } from "node:path";
+import { existsSync as existsSync9, linkSync as linkSync2, readdirSync as readdirSync3, renameSync as renameSync5, rmSync as rmSync3 } from "node:fs";
+import { basename as basename6, dirname as dirname10, join as join16 } from "node:path";
 
 // src/activity/persistence.ts
 import { createHash, randomUUID as randomUUID3 } from "node:crypto";
@@ -12510,17 +12843,17 @@ import {
   fstatSync as fstatSync3,
   linkSync,
   lstatSync as lstatSync3,
-  mkdirSync as mkdirSync7,
+  mkdirSync as mkdirSync8,
   openSync as openSync3,
-  readFileSync as readFileSync11,
+  readFileSync as readFileSync13,
   readdirSync as readdirSync2,
   realpathSync as realpathSync3,
   renameSync as renameSync4,
   unlinkSync as unlinkSync2,
-  writeFileSync as writeFileSync6
+  writeFileSync as writeFileSync7
 } from "node:fs";
-import { homedir as homedir12 } from "node:os";
-import { basename as basename5, dirname as dirname8, join as join14, resolve as resolve5 } from "node:path";
+import { homedir as homedir13 } from "node:os";
+import { basename as basename5, dirname as dirname9, join as join15, resolve as resolve5 } from "node:path";
 var ACTIVITY_SCHEMA_VERSION = 1;
 var PRIVATE_ACTIVITY_DIRECTORY_MODE = 448;
 var PRIVATE_ACTIVITY_FILE_MODE = 384;
@@ -12556,16 +12889,16 @@ function ensureCanonicalBaseDirectory(path2) {
     } catch (error) {
       if (errorCode3(error) !== "ENOENT") throw error;
       missing.unshift(basename5(cursor));
-      const parent = dirname8(cursor);
+      const parent = dirname9(cursor);
       if (parent === cursor) throw error;
       cursor = parent;
     }
   }
   let canonical = realpathSync3(cursor);
   for (const segment of missing) {
-    const candidate = join14(canonical, segment);
+    const candidate = join15(canonical, segment);
     try {
-      mkdirSync7(candidate, { mode: PRIVATE_ACTIVITY_DIRECTORY_MODE });
+      mkdirSync8(candidate, { mode: PRIVATE_ACTIVITY_DIRECTORY_MODE });
     } catch (error) {
       if (errorCode3(error) !== "EEXIST") throw error;
     }
@@ -12577,9 +12910,9 @@ function ensureCanonicalBaseDirectory(path2) {
 }
 function ensurePrivateChildDirectory(parent, name) {
   assertPrivateDirectory2(parent);
-  const candidate = join14(parent, name);
+  const candidate = join15(parent, name);
   try {
-    mkdirSync7(candidate, { mode: PRIVATE_ACTIVITY_DIRECTORY_MODE });
+    mkdirSync8(candidate, { mode: PRIVATE_ACTIVITY_DIRECTORY_MODE });
   } catch (error) {
     if (errorCode3(error) !== "EEXIST") throw error;
   }
@@ -12590,7 +12923,7 @@ function ensurePrivateChildDirectory(parent, name) {
 }
 function defaultActivityStateRoot(env = process.env) {
   if (env.SUMOCODE_STATE_DIR) return resolve5(env.SUMOCODE_STATE_DIR);
-  const agentDir = env.PI_CODING_AGENT_DIR ?? join14(homedir12(), ".pi", "agent");
+  const agentDir = env.PI_CODING_AGENT_DIR ?? join15(homedir13(), ".pi", "agent");
   return resolve5(agentDir, "state");
 }
 function ensurePrivateSumocodeDirectory(segments, rootDir = defaultActivityStateRoot()) {
@@ -12601,11 +12934,11 @@ function ensurePrivateSumocodeDirectory(segments, rootDir = defaultActivityState
   let root = base;
   for (const segment of ["sumocode", ...segments]) {
     try {
-      mkdirSync7(join14(root, segment), { mode: PRIVATE_ACTIVITY_DIRECTORY_MODE });
+      mkdirSync8(join15(root, segment), { mode: PRIVATE_ACTIVITY_DIRECTORY_MODE });
     } catch (error) {
       if (errorCode3(error) !== "EEXIST") throw error;
     }
-    const candidate = join14(root, segment);
+    const candidate = join15(root, segment);
     assertOwnedDirectory(candidate);
     chmodSync3(candidate, PRIVATE_ACTIVITY_DIRECTORY_MODE);
     assertPrivateDirectory2(candidate);
@@ -12625,9 +12958,9 @@ function activityPaths(ownerSessionId2, rootDir = defaultActivityStateRoot()) {
   const directory = ensurePrivateChildDirectory(root, hashedSessionId(ownerSessionId2));
   return {
     directory,
-    feedFile: join14(directory, "feed.json"),
-    uiFile: join14(directory, "ui.json"),
-    writerFile: join14(directory, "writer.json")
+    feedFile: join15(directory, "feed.json"),
+    uiFile: join15(directory, "ui.json"),
+    writerFile: join15(directory, "writer.json")
   };
 }
 function readPrivateJson(path2, maxBytes = ACTIVITY_DOCUMENT_MAX_BYTES) {
@@ -12644,7 +12977,7 @@ function readPrivateJson(path2, maxBytes = ACTIVITY_DOCUMENT_MAX_BYTES) {
       throw new Error(`Activity state file changed during read: ${path2}`);
     }
     if (opened.size > maxBytes) throw new Error(`Activity state file exceeds ${maxBytes} bytes: ${path2}`);
-    return JSON.parse(readFileSync11(descriptor, "utf8"));
+    return JSON.parse(readFileSync13(descriptor, "utf8"));
   } catch (error) {
     if (errorCode3(error) === "ENOENT") return void 0;
     throw error;
@@ -12653,14 +12986,14 @@ function readPrivateJson(path2, maxBytes = ACTIVITY_DOCUMENT_MAX_BYTES) {
   }
 }
 function writePrivateJsonExclusive(path2, value) {
-  const directory = dirname8(path2);
+  const directory = dirname9(path2);
   assertPrivateDirectory2(directory);
-  const temporary = join14(directory, `.${randomUUID3()}.claim`);
+  const temporary = join15(directory, `.${randomUUID3()}.claim`);
   let descriptor;
   try {
     descriptor = openSync3(temporary, constants3.O_WRONLY | constants3.O_CREAT | constants3.O_EXCL | NO_FOLLOW3, PRIVATE_ACTIVITY_FILE_MODE);
     fchmodSync3(descriptor, PRIVATE_ACTIVITY_FILE_MODE);
-    writeFileSync6(descriptor, `${JSON.stringify(value, null, 2)}
+    writeFileSync7(descriptor, `${JSON.stringify(value, null, 2)}
 `, "utf8");
     fsyncSync2(descriptor);
     closeSync3(descriptor);
@@ -12685,14 +13018,14 @@ function writePrivateJsonExclusive(path2, value) {
   }
 }
 function atomicWritePrivateJson(path2, value) {
-  const directory = dirname8(path2);
+  const directory = dirname9(path2);
   assertPrivateDirectory2(directory);
-  const temporary = join14(directory, `.${randomUUID3()}.tmp`);
+  const temporary = join15(directory, `.${randomUUID3()}.tmp`);
   let descriptor;
   try {
     descriptor = openSync3(temporary, constants3.O_WRONLY | constants3.O_CREAT | constants3.O_EXCL | NO_FOLLOW3, PRIVATE_ACTIVITY_FILE_MODE);
     fchmodSync3(descriptor, PRIVATE_ACTIVITY_FILE_MODE);
-    writeFileSync6(descriptor, `${JSON.stringify(value, null, 2)}
+    writeFileSync7(descriptor, `${JSON.stringify(value, null, 2)}
 `, "utf8");
     fsyncSync2(descriptor);
     closeSync3(descriptor);
@@ -12751,7 +13084,7 @@ function sameWriterProcess(left, right) {
 function writerTakeoverPaths(writerFile) {
   const prefix = `${basename6(writerFile)}.takeover-`;
   try {
-    return readdirSync3(dirname9(writerFile), { encoding: "utf8" }).filter((name) => name.startsWith(prefix)).map((name) => join15(dirname9(writerFile), name));
+    return readdirSync3(dirname10(writerFile), { encoding: "utf8" }).filter((name) => name.startsWith(prefix)).map((name) => join16(dirname10(writerFile), name));
   } catch {
     return [];
   }
@@ -12996,7 +13329,7 @@ var ActivityFeedPublisher = class {
       this.writerOwned = claim.owned;
       this.writerDeathProven = claim.writerDeathProven;
     } else {
-      this.writerOwned = this.unleasedWriterForTests && !existsSync8(this.writerFile);
+      this.writerOwned = this.unleasedWriterForTests && !existsSync9(this.writerFile);
     }
     this.load();
     if (this.writerOwned && this.writerDeathProven) {
@@ -13041,9 +13374,9 @@ var ActivityFeedPublisher = class {
     return this.activities.map((activity) => activity);
   }
   publish(activities) {
-    if (this.writerIdentity && !existsSync8(this.writerFile)) recoverOwnTakeover(this.writerFile, this.writerIdentity);
+    if (this.writerIdentity && !existsSync9(this.writerFile)) recoverOwnTakeover(this.writerFile, this.writerIdentity);
     const currentWriter = this.writerIdentity ? readWriter(this.writerFile) : void 0;
-    const fixtureLeaseWasClaimed = this.unleasedWriterForTests && existsSync8(this.writerFile);
+    const fixtureLeaseWasClaimed = this.unleasedWriterForTests && existsSync9(this.writerFile);
     if (!this.writerOwned || fixtureLeaseWasClaimed || this.writerIdentity && (!currentWriter || !sameWriter(currentWriter, this.writerIdentity))) {
       this.writerOwned = false;
       throw new Error("Activity feed is owned by another live session writer");
@@ -13193,6 +13526,7 @@ function subagentStatus(record, budget) {
   const manifestExit = firstString(budget, asRecord2(record.manifest, budget)?.exit)?.toLowerCase();
   const error = firstString(budget, record.errorText)?.toLowerCase();
   if (manifestExit === "interrupted" || error === "interrupted" || status === "cancelled" || status === "canceled") return "cancelled";
+  if (status === "queued") return "queued";
   if (status === "done" || status === "completed" || status === "success" || status === "succeeded") return "succeeded";
   if (status === "error" || status === "failed" || manifestExit === "failed") return "failed";
   return "running";
@@ -13656,30 +13990,58 @@ function installActivityManagerBridge(pi, terminalManager, subagentManager, opti
   return bridge;
 }
 
+// src/subagent-status-row.ts
+var TITLE_PREFIX_MAX = 18;
+function ageLabel(ageMs) {
+  const seconds = Math.max(0, Math.floor(ageMs / 1e3));
+  if (seconds < 60) return `${seconds}s`;
+  return `${Math.floor(seconds / 60)}m`;
+}
+function fallbackTitle(title) {
+  const normalized = title.replace(/\s+/g, " ").trim() || "subagent";
+  return normalized.length <= TITLE_PREFIX_MAX ? normalized : `${normalized.slice(0, TITLE_PREFIX_MAX - 1)}\u2026`;
+}
+function renderSubagentStatusRow(options) {
+  const theme = getActiveTheme();
+  const width = Math.max(0, Math.floor(options.width));
+  const segments = options.running.map((subagent) => `${subagent.id} ${subagent.roleId ?? fallbackTitle(subagent.title)} ${ageLabel(subagent.ageMs)}`);
+  if (options.queuedCount > 0) segments.push(`${options.queuedCount} queued`);
+  const suffix = segments.length > 0 ? ` \xB7 ${segments.join(" \xB7 ")}` : "";
+  const row3 = textLine([
+    span("\u25C8", { fg: theme.tokens.colors.accent }),
+    span(` subagents${suffix}`, { fg: theme.tokens.colors.foregroundDim })
+  ]);
+  return [lineToAnsi(truncateLine(row3, width))];
+}
+
 // src/subagents/backend-pane.ts
 import {
-  existsSync as existsSync9,
-  mkdirSync as mkdirSync8,
-  readFileSync as readFileSync12,
-  writeFileSync as writeFileSync7
+  existsSync as existsSync10,
+  mkdirSync as mkdirSync9,
+  readFileSync as readFileSync14,
+  writeFileSync as writeFileSync8
 } from "node:fs";
-import { dirname as dirname10, join as join16 } from "node:path";
+import { dirname as dirname11, join as join17 } from "node:path";
 var RESPONSE_POLL_INTERVAL_MS = 750;
 var ERROR_TEXT_MAX = 4096;
 var nodeFs = {
-  existsSync: existsSync9,
-  mkdirSync: mkdirSync8,
-  readFileSync: readFileSync12,
-  writeFileSync: writeFileSync7
+  existsSync: existsSync10,
+  mkdirSync: mkdirSync9,
+  readFileSync: readFileSync14,
+  writeFileSync: writeFileSync8
 };
-var errorText = (error) => error instanceof Error ? error.message : String(error);
+var errorText2 = (error) => error instanceof Error ? error.message : String(error);
 var createPaneChildSpawner = (dependencies = {}) => (options) => {
   const fs3 = dependencies.fs ?? nodeFs;
   const now = dependencies.now ?? Date.now;
-  const baseDir = dependencies.baseDir ?? join16(process.env.TMPDIR ?? "/tmp", "sumocode-subagents");
+  const baseDir = dependencies.baseDir ?? join17(process.env.TMPDIR ?? "/tmp", "sumocode-subagents");
   const paths = buildVisibleTaskPaths(options.id, now(), baseDir);
-  fs3.mkdirSync(dirname10(paths.promptFile), { recursive: true });
-  fs3.writeFileSync(paths.promptFile, options.prompt, { mode: 384 });
+  fs3.mkdirSync(dirname11(paths.promptFile), { recursive: true });
+  const prompt = options.appendSystemPrompt ? `role instructions (follow these for this entire session):
+${options.appendSystemPrompt}
+---
+${options.prompt}` : options.prompt;
+  fs3.writeFileSync(paths.promptFile, prompt, { mode: 384 });
   fs3.writeFileSync(paths.logFile, "");
   const commandOptions = {
     cwd: options.cwd,
@@ -13730,7 +14092,7 @@ var createPaneChildSpawner = (dependencies = {}) => (options) => {
     try {
       return fs3.existsSync(path2) ? fs3.readFileSync(path2, "utf8") : "";
     } catch (error) {
-      return `[unable to read ${path2}: ${errorText(error)}]`;
+      return `[unable to read ${path2}: ${errorText2(error)}]`;
     }
   };
   const poll = () => {
@@ -13766,7 +14128,7 @@ var createPaneChildSpawner = (dependencies = {}) => (options) => {
       }
       settle({ kind: "run-settled", outcome: { kind: "interrupted" } });
     } catch (error) {
-      settle({ kind: "run-settled", outcome: { kind: "failed", errorText: `failed to close visible child pane: ${errorText(error)}` } });
+      settle({ kind: "run-settled", outcome: { kind: "failed", errorText: `failed to close visible child pane: ${errorText2(error)}` } });
     }
   };
   function interrupt() {
@@ -13813,7 +14175,7 @@ var createPaneChildSpawner = (dependencies = {}) => (options) => {
         pollTimer.unref?.();
         poll();
       } catch (error) {
-        settle({ kind: "run-settled", outcome: { kind: "failed", errorText: errorText(error) } });
+        settle({ kind: "run-settled", outcome: { kind: "failed", errorText: errorText2(error) } });
       }
     })().finally(markReady);
   };
@@ -13825,33 +14187,33 @@ var spawnPaneChild = createPaneChildSpawner();
 
 // src/subagents/backend-pi.ts
 import { spawn as nodeSpawn } from "node:child_process";
-import { existsSync as existsSync10, readFileSync as readFileSync13, statSync } from "node:fs";
-import { homedir as homedir13 } from "node:os";
-import { dirname as dirname11, isAbsolute as isAbsolute2, join as join17, resolve as resolve6 } from "node:path";
+import { existsSync as existsSync11, readFileSync as readFileSync15, statSync } from "node:fs";
+import { homedir as homedir14 } from "node:os";
+import { dirname as dirname12, isAbsolute as isAbsolute2, join as join18, resolve as resolve6 } from "node:path";
 var DEFAULT_BUILT_IN_TOOLS = ["read", "bash", "edit", "write", "grep", "find", "ls"];
 var PREVIEW_MAX2 = 160;
 var ERROR_MAX = 4096;
 var CLAUDE_OAUTH_ADAPTER_PACKAGE = "pi-claude-oauth-adapter";
 function adapterEntryFromPackageDir(packageDir) {
   try {
-    const manifest = JSON.parse(readFileSync13(join17(packageDir, "package.json"), "utf8"));
+    const manifest = JSON.parse(readFileSync15(join18(packageDir, "package.json"), "utf8"));
     const entries = manifest.pi?.extensions;
     const first = Array.isArray(entries) ? entries[0] : void 0;
     if (typeof first !== "string") return void 0;
-    const entryPath = join17(packageDir, first);
-    return existsSync10(entryPath) ? entryPath : void 0;
+    const entryPath = join18(packageDir, first);
+    return existsSync11(entryPath) ? entryPath : void 0;
   } catch {
     return void 0;
   }
 }
 function adapterPathSourcesFromSettings(settingsPath) {
   try {
-    const settings = JSON.parse(readFileSync13(settingsPath, "utf8"));
+    const settings = JSON.parse(readFileSync15(settingsPath, "utf8"));
     if (!Array.isArray(settings.packages)) return [];
     const sources = settings.packages.map((entry) => typeof entry === "string" ? entry : entry?.source).filter((source) => typeof source === "string" && source.includes(CLAUDE_OAUTH_ADAPTER_PACKAGE));
     return sources.filter((source) => !source.startsWith("npm:") && !source.startsWith("git:") && !source.startsWith("http")).map((source) => {
-      if (source.startsWith("~/")) return join17(homedir13(), source.slice(2));
-      return isAbsolute2(source) ? source : resolve6(dirname11(settingsPath), source);
+      if (source.startsWith("~/")) return join18(homedir14(), source.slice(2));
+      return isAbsolute2(source) ? source : resolve6(dirname12(settingsPath), source);
     });
   } catch {
     return [];
@@ -13868,10 +14230,10 @@ function resolveClaudeOauthAdapterEntry(env = process.env) {
     }
     return void 0;
   }
-  const agentDir = env.PI_CODING_AGENT_DIR ?? join17(homedir13(), ".pi", "agent");
+  const agentDir = env.PI_CODING_AGENT_DIR ?? join18(homedir14(), ".pi", "agent");
   const candidateDirs = [
-    join17(agentDir, "npm", "node_modules", CLAUDE_OAUTH_ADAPTER_PACKAGE),
-    ...adapterPathSourcesFromSettings(join17(agentDir, "settings.json"))
+    join18(agentDir, "npm", "node_modules", CLAUDE_OAUTH_ADAPTER_PACKAGE),
+    ...adapterPathSourcesFromSettings(join18(agentDir, "settings.json"))
   ];
   for (const dir of candidateDirs) {
     const entry = adapterEntryFromPackageDir(dir);
@@ -14048,8 +14410,9 @@ var createPiChildSpawner = (spawnImpl = nodeSpawn, resolveAdapterEntry = resolve
   const events = (emit) => {
     emit({ kind: "run-started" });
     const adapterEntry = resolveAdapterEntry();
+    const roleArgs = options.appendSystemPrompt ? ["--append-system-prompt", options.appendSystemPrompt] : [];
     const adapterArgs = adapterEntry ? ["-e", adapterEntry] : [];
-    const proc = spawnImpl("pi", [...config.subprocessArgs, ...adapterArgs, options.prompt], {
+    const proc = spawnImpl("pi", [...config.subprocessArgs, ...roleArgs, ...adapterArgs, options.prompt], {
       cwd: options.cwd,
       shell: false,
       stdio: ["pipe", "pipe", "pipe"],
@@ -14147,7 +14510,7 @@ function createDeferredResultDelivery() {
 
 // src/subagents/manager.ts
 import { execFile as execFile6 } from "node:child_process";
-import { isAbsolute as isAbsolute3, join as join18, relative as relative2 } from "node:path";
+import { isAbsolute as isAbsolute3, join as join19, relative as relative2 } from "node:path";
 import { promisify as promisify4 } from "node:util";
 
 // src/subagents/layout.ts
@@ -14231,6 +14594,7 @@ async function buildCompletionManifest(options) {
 // src/subagents/manager.ts
 var execFileAsync3 = promisify4(execFile6);
 var MAX_RUNNING = 4;
+var MAX_QUEUED = 16;
 var MAX_TRACKED = 64;
 var ERROR_TEXT_MAX2 = 4096;
 var CANCEL_WAIT_MS = 5500;
@@ -14255,17 +14619,18 @@ async function captureGitContext(cwd) {
   ]);
   return { repoRoot, baseRef };
 }
-var isSettled = (snapshot) => snapshot.status !== "running";
-var makeInitialSnapshot = (task, id, createdAt, baseRef, cwd = task.cwd, worktree, sessionFilePath) => ({
+var isSettled = (snapshot) => snapshot.status !== "running" && snapshot.status !== "queued";
+var makeInitialSnapshot = (task, id, createdAt, baseRef, cwd = task.cwd, worktree, sessionFilePath, status = "running") => ({
   id,
   ...task.sourceId ? { sourceId: task.sourceId } : {},
   title: task.title,
   prompt: task.prompt,
+  ...task.roleId ? { roleId: task.roleId } : {},
   cwd,
   baseRef,
   worktree,
   ...task.visible ? { visible: true } : {},
-  status: "running",
+  status,
   createdAt,
   modelLabel: task.model ?? (task.inherited?.model ? `${task.inherited.model.provider}/${task.inherited.model.id}` : void 0),
   thinkingLabel: task.thinking ?? task.inherited?.thinking,
@@ -14294,6 +14659,7 @@ var SubagentManager = class {
   backendFactory;
   nextId = 1;
   pendingSpawns = /* @__PURE__ */ new Map();
+  queuedTasks = [];
   snapshots = /* @__PURE__ */ new Map();
   children = /* @__PURE__ */ new Map();
   waitInterest = /* @__PURE__ */ new Map();
@@ -14306,29 +14672,45 @@ var SubagentManager = class {
   pi;
   subagentsTabId;
   visibleSpawnTail = Promise.resolve();
+  dequeueTail = Promise.resolve();
   settlingIds = /* @__PURE__ */ new Set();
   settlingPromises = /* @__PURE__ */ new Map();
   settlingOutcomes = /* @__PURE__ */ new Map();
   startedIds = /* @__PURE__ */ new Set();
   consumedIds = /* @__PURE__ */ new Set();
   async spawn(task) {
-    const running = this.list().filter((snapshot) => snapshot.status === "running" && this.children.has(snapshot.id));
-    const pendingSummaries = [...this.pendingSpawns].map(([id2, spawn2]) => ({ id: id2, title: spawn2.title, status: "running", ageMs: Date.now() - spawn2.createdAt }));
-    const runningSummaries = [
-      ...running.map((snapshot) => ({ id: snapshot.id, title: snapshot.title, status: snapshot.status, ageMs: Date.now() - snapshot.createdAt })),
-      ...pendingSummaries
-    ];
-    if (runningSummaries.length >= MAX_RUNNING) {
-      return {
-        status: "at_capacity",
-        capacity: MAX_RUNNING,
-        runningCount: runningSummaries.length,
-        running: runningSummaries,
-        retryHint: "wait for a running subagent to settle, then retry subagent_spawn"
-      };
+    const runningSummaries = this.runningSummaries();
+    if (runningSummaries.length >= MAX_RUNNING || this.queuedTasks.length > 0) {
+      if (this.queuedTasks.length >= MAX_QUEUED) {
+        return {
+          status: "at_capacity",
+          capacity: MAX_RUNNING,
+          runningCount: runningSummaries.length,
+          running: runningSummaries,
+          retryHint: "queue is full \u2014 do NOT retry in a loop; cancel something or end your turn and respawn later"
+        };
+      }
+      const id2 = `sa-${this.nextId++}`;
+      const createdAt = Date.now();
+      const snapshot = makeInitialSnapshot(task, id2, createdAt, "HEAD", task.cwd, void 0, void 0, "queued");
+      this.queuedTasks.push({ task, id: id2, createdAt });
+      this.snapshots.set(id2, snapshot);
+      this.notify();
+      this.prune();
+      return snapshot;
     }
     const id = `sa-${this.nextId++}`;
-    const createdAt = Date.now();
+    return this.startTask(task, id, Date.now());
+  }
+  runningSummaries() {
+    const running = this.list().filter((snapshot) => snapshot.status === "running" && this.children.has(snapshot.id));
+    const pending = [...this.pendingSpawns].map(([id, spawn2]) => ({ id, title: spawn2.title, status: "running", ageMs: Date.now() - spawn2.createdAt }));
+    return [
+      ...running.map((snapshot) => ({ id: snapshot.id, title: snapshot.title, status: snapshot.status, ageMs: Date.now() - snapshot.createdAt })),
+      ...pending
+    ];
+  }
+  async startTask(task, id, createdAt) {
     this.pendingSpawns.set(id, { title: task.title, createdAt });
     let pending = true;
     let releaseVisibleSpawn;
@@ -14370,7 +14752,7 @@ var SubagentManager = class {
           return this.recordSpawnFailure(task, id, createdAt, baseRef, `unable to create worktree: ${created.message}`);
         }
         const subPath = relative2(gitContext.repoRoot, task.cwd);
-        childCwd = subPath && !subPath.startsWith("..") && !isAbsolute3(subPath) ? join18(created.path, subPath) : created.path;
+        childCwd = subPath && !subPath.startsWith("..") && !isAbsolute3(subPath) ? join19(created.path, subPath) : created.path;
         const resolvedBaseRef = await this.resolveWorktreeBaseRefImpl(created.path);
         if (!resolvedBaseRef) {
           worktree = {
@@ -14524,7 +14906,13 @@ var SubagentManager = class {
         lines.set(id, `${id} was already ${snapshot.status === "done" ? "done" : "settled"}`);
         continue;
       }
-      this.children.get(id)?.child.interrupt();
+      if (snapshot.status === "queued") {
+        const queueIndex = this.queuedTasks.findIndex((queued) => queued.id === id);
+        if (queueIndex >= 0) this.queuedTasks.splice(queueIndex, 1);
+        void this.startSettle(id, { kind: "interrupted" });
+      } else {
+        this.children.get(id)?.child.interrupt();
+      }
       targets.push(id);
     }
     await Promise.allSettled(targets.map(async (id) => {
@@ -14535,12 +14923,41 @@ var SubagentManager = class {
       }
       lines.set(id, `Cancelled ${id}`);
     }));
+    void this.scheduleDequeue();
     return ids.map((id) => lines.get(id) ?? `${id} is unknown`);
   }
   disposeAll() {
+    const queuedIds = this.queuedTasks.map((queued) => queued.id);
+    this.queuedTasks.length = 0;
+    for (const id of queuedIds) void this.startSettle(id, { kind: "interrupted" });
     for (const [id, entry] of this.children) {
       const snapshot = this.snapshots.get(id);
       if (snapshot?.status === "running") entry.child.interrupt();
+    }
+  }
+  scheduleDequeue() {
+    const next = this.dequeueTail.then(() => this.drainQueue());
+    this.dequeueTail = next.catch(() => void 0);
+    return next;
+  }
+  async drainQueue() {
+    while (this.queuedTasks.length > 0 && this.runningSummaries().length < MAX_RUNNING) {
+      const queued = this.queuedTasks.shift();
+      if (!queued) return;
+      try {
+        await this.startTask(queued.task, queued.id, queued.createdAt);
+      } catch (error) {
+        const current = this.snapshots.get(queued.id);
+        if (current?.status === "queued") {
+          this.recordSpawnFailure(
+            queued.task,
+            queued.id,
+            queued.createdAt,
+            "HEAD",
+            `unable to start queued child: ${error instanceof Error ? error.message : String(error)}`
+          );
+        }
+      }
     }
   }
   async reserveVisibleSpawn() {
@@ -14552,12 +14969,12 @@ var SubagentManager = class {
     await previous;
     return release;
   }
-  recordSpawnFailure(task, id, createdAt, baseRef, errorText2, cwd = task.cwd, worktree) {
+  recordSpawnFailure(task, id, createdAt, baseRef, errorText3, cwd = task.cwd, worktree) {
     const snapshot = {
       ...makeInitialSnapshot(task, id, createdAt, baseRef, cwd, worktree),
       status: "error",
       settledAt: Date.now(),
-      errorText: errorText2.slice(0, ERROR_TEXT_MAX2)
+      errorText: errorText3.slice(0, ERROR_TEXT_MAX2)
     };
     this.snapshots.set(id, snapshot);
     this.notify();
@@ -14640,6 +15057,19 @@ var SubagentManager = class {
     this.children.delete(id);
     const settledAt = Date.now();
     try {
+      if (current.status === "queued") {
+        this.snapshots.set(id, {
+          ...current,
+          status: "error",
+          settledAt,
+          errorText: "interrupted",
+          manifest: { exit: "interrupted", durationMs: Math.max(0, settledAt - current.createdAt) }
+        });
+        if ((this.waitInterest.get(id) ?? 0) > 0) this.consumedIds.add(id);
+        this.notify();
+        this.prune();
+        return;
+      }
       const manifest = outcome.kind === "failed" && !this.startedIds.has(id) ? { exit: outcome.kind, durationMs: Math.max(0, settledAt - current.createdAt) } : await this.collectManifest(current, outcome);
       const latest = this.snapshots.get(id);
       if (!latest || isSettled(latest)) return;
@@ -14654,6 +15084,7 @@ var SubagentManager = class {
     } finally {
       this.settlingIds.delete(id);
       this.startedIds.delete(id);
+      void this.scheduleDequeue();
     }
   }
   async collectManifest(snapshot, outcome) {
@@ -14751,17 +15182,19 @@ var SUBAGENT_PROMPT_GUIDELINES = [
   "All children have their own context, cannot see this conversation, and cannot spawn subagents; prompts must be self-contained with objective, paths, constraints, expected output, and stop conditions.",
   "Use subagent_send to steer a running visible child; it sends the text followed by Enter. Headless or settled children cannot receive input.",
   "Visible isolated children appear as herdr workspaces; non-isolated visible children tile into a subagents tab. cmux provides only a degraded single-split fallback.",
-  "After spawning, keep working; call subagent_wait only when the result is required to proceed.",
-  "At most 4 subagents can run concurrently. If spawn returns status=at_capacity, wait/cancel/list before retrying.",
+  "delegation is fire-and-forget: after spawning, continue other work or end your turn. settled results arrive as automatic follow-up messages that wake you. do NOT call subagent_wait right after subagent_spawn.",
+  "spawn with a role for recurring shapes: research, review, documentor, designer, implement-cheap, implement-smart. the role sets the child's system prompt, tool limits, and defaults; your prompt supplies the concrete objective and stop conditions.",
+  "if spawn returns status=queued, the child starts automatically when a slot frees \u2014 do not retry, do not wait.",
+  "At most 4 subagents can run concurrently. If spawn returns status=at_capacity, the queue is full; cancel something or end your turn and respawn later.",
   "To delegate a self-contained coding task, spawn an isolated, watchable child: `subagent_spawn { visible: true, worktree: true, model, baseRef: 'origin/main' }`. It branches `sumo/<slug>` from baseRef, opens a herdr workspace you can watch or steer, and returns a completion manifest to review before acting on the result.",
   "Headless children run WITHOUT the dangerous-command approval gate (same trust model as the native task tool): they cannot prompt the user, so their bash executes directly. Do not delegate destructive commands against the user's checkout; use worktree isolation for write-heavy work. Isolated worktrees are preserved after completion and never auto-removed."
 ];
 var SUBAGENT_PROMPT_SNIPPET = "Spawn, steer, check, wait for, cancel, and list headless or visible subagents with self-contained prompts.";
 var SUBAGENT_TOOL_DESCRIPTIONS = {
-  spawn: "Start one child subagent and return immediately with its id. Set visible=true for an interactive terminal-host pane, or omit it for silent headless execution. Optionally isolate it in a preserved git worktree. Its result is delivered automatically when it settles; use subagent_wait to block for it.",
+  spawn: "Start one child subagent and return immediately with its id. Set visible=true for an interactive terminal-host pane, or omit it for silent headless execution. Optionally isolate it in a preserved git worktree. Its result is delivered automatically when it settles; no polling is needed.",
   send: "Send prompt text followed by Enter to a running visible subagent pane.",
   check: "Peek at one subagent without consuming its eventual result.",
-  wait: "Block until one or more subagents settle, then return their bounded results and mark them consumed.",
+  wait: "Block until subagents settle. Last resort: results deliver automatically on settlement; prefer ending your turn. Use only when nothing can proceed without the result.",
   cancel: "Interrupt running subagents and mark their results consumed.",
   list: "List all tracked subagents and their current status."
 };
@@ -14812,9 +15245,10 @@ var formatDuration = (ms) => {
 };
 var formatSnapshotLine = (snapshot, includeBranch = false) => {
   const model = snapshot.modelLabel ?? "inherit";
+  const identity = [snapshot.roleId, model].filter((part) => part !== void 0).join(", ");
   const branch = includeBranch && snapshot.worktree ? ` \xB7 ${snapshot.worktree.branch}` : "";
   const pane = snapshot.pane ? ` \xB7 pane ${snapshot.pane.paneId ?? snapshot.pane.tabId ?? snapshot.pane.workspaceId ?? "unknown"} \xB7 agent ${snapshot.pane.agentName}` : "";
-  return `${snapshot.id} [${snapshot.status}] "${snapshot.title}" (${model}, ${formatDuration(Date.now() - snapshot.createdAt)}, ${snapshot.cwd})${branch}${pane}`;
+  return `${snapshot.id} [${snapshot.status}] "${snapshot.title}" (${identity}, ${formatDuration(Date.now() - snapshot.createdAt)}, ${snapshot.cwd})${branch}${pane}`;
 };
 var manifestSummary = (snapshot) => snapshot.manifest ? formatCompletionManifestSummary(snapshot.manifest) : void 0;
 var boundedWaitText = (snapshots) => {
@@ -14833,7 +15267,12 @@ var boundedWaitText = (snapshots) => {
   }
   return chunks.join("\n\n---\n\n");
 };
-function registerSubagentTools(pi, manager, delivery, host = getTerminalHost()) {
+function registerSubagentTools(pi, manager, delivery, host = getTerminalHost(), roleLoader = loadRoles) {
+  const registeredRoles = roleLoader().roles;
+  const roleDescription = [
+    "Optional role preset. Explicit spawn parameters override role defaults. Known roles:",
+    ...registeredRoles.map((role) => `${role.id} \u2014 ${role.description}`)
+  ].join("\n");
   pi.registerTool({
     name: "subagent_spawn",
     label: "Subagent Spawn",
@@ -14843,6 +15282,7 @@ function registerSubagentTools(pi, manager, delivery, host = getTerminalHost()) 
     parameters: Type5.Object({
       prompt: Type5.String({ description: "Self-contained child subagent prompt." }),
       name: Type5.String({ description: "Short human-readable title for this subagent." }),
+      role: Type5.Optional(Type5.String({ description: roleDescription })),
       model: Type5.Optional(Type5.String({ description: "Optional model override as provider/modelId." })),
       thinking: Type5.Optional(StringEnum2(["off", "minimal", "low", "medium", "high", "xhigh", "max"], { description: "Optional thinking level override." })),
       working_dir: Type5.Optional(Type5.String({ description: "Working directory for the child. Defaults to the current project cwd." })),
@@ -14852,20 +15292,36 @@ function registerSubagentTools(pi, manager, delivery, host = getTerminalHost()) 
       visible: Type5.Optional(Type5.Boolean({ description: "Open the child as an interactive pane in the terminal host \u2014 watchable and steerable; requires a running terminal host." }))
     }),
     async execute(toolCallId, params, _signal, _onUpdate, ctx) {
-      if (params.visible === true && host.kind === "none") {
+      const loadedRoles = roleLoader().roles;
+      const role = params.role ? loadedRoles.find((candidate) => candidate.id === params.role) : void 0;
+      if (params.role && !role) {
+        const knownRoles = loadedRoles.map((candidate) => candidate.id);
+        return makeToolResult2(`Unknown subagent role: ${params.role}. Known roles: ${knownRoles.join(", ") || "(none)"}.`, {
+          action: "spawn",
+          status: "unknown_role",
+          role: params.role,
+          knownRoles
+        });
+      }
+      const visible = params.visible ?? role?.defaultVisible;
+      if (visible === true && host.kind === "none") {
         throw new Error("visible subagents require a running terminal host (herdr or cmux)");
       }
+      const activeTools = pi.getActiveTools();
+      const builtInTools = role?.tools ? role.tools.filter((tool) => activeTools.includes(tool)) : activeTools;
       const spawned = await manager.spawn({
         sourceId: toolCallId,
         prompt: params.prompt,
         title: params.name,
         cwd: params.working_dir ?? ctx.cwd,
-        visible: params.visible,
-        worktree: params.worktree,
+        roleId: role?.id,
+        appendSystemPrompt: role?.systemPrompt,
+        visible,
+        worktree: params.worktree ?? role?.defaultWorktree,
         branch: params.branch,
         baseRef: params.baseRef,
-        model: params.model,
-        thinking: params.thinking,
+        model: params.model ?? role?.model,
+        thinking: params.thinking ?? role?.thinking,
         inherited: {
           model: ctx.model ? { provider: ctx.model.provider, id: ctx.model.id } : void 0,
           // Mirror native-task-tool.ts (`pi.getThinkingLevel()` at spawn time):
@@ -14873,9 +15329,17 @@ function registerSubagentTools(pi, manager, delivery, host = getTerminalHost()) 
           // call overrides it, instead of silently defaulting to "low".
           thinking: pi.getThinkingLevel()
         },
-        builtInTools: pi.getActiveTools()
+        builtInTools
       });
       if (isAtCapacity(spawned)) return formatAtCapacity(spawned);
+      if (spawned.status === "queued") {
+        const position = manager.list().filter((snapshot) => snapshot.status === "queued").findIndex((snapshot) => snapshot.id === spawned.id) + 1;
+        return makeToolResult2(`Queued ${spawned.id} (${spawned.title}) at position ${position} \u2014 starts automatically when a slot frees. Do not retry or wait.`, {
+          action: "spawn",
+          subagent: spawned,
+          activity: activityEnvelope(spawned, toolCallId)
+        });
+      }
       if (spawned.status !== "running") {
         delivery?.consume(spawned.id);
         return makeToolResult2(`Subagent ${spawned.id} (${spawned.title}) failed to start: ${spawned.errorText ?? "unknown error"}`, {
@@ -14884,7 +15348,7 @@ function registerSubagentTools(pi, manager, delivery, host = getTerminalHost()) 
           activity: activityEnvelope(spawned, toolCallId)
         });
       }
-      return makeToolResult2(`Started ${spawned.id} (${spawned.title}). Its result will be delivered to you automatically when it settles, or use subagent_wait to block for it.`, {
+      return makeToolResult2(`Started ${spawned.id} (${spawned.title}). No polling needed \u2014 continue other work or END YOUR TURN; the result will be delivered to you and wake you automatically when it settles. Only call subagent_wait if you cannot take a single further step without this result.`, {
         action: "spawn",
         subagent: spawned,
         activity: activityEnvelope(spawned, toolCallId)
@@ -14904,6 +15368,7 @@ function registerSubagentTools(pi, manager, delivery, host = getTerminalHost()) 
     async execute(_toolCallId, params) {
       const snapshot = manager.get(params.id);
       if (!snapshot) throw new Error(`Unknown subagent id: ${params.id}`);
+      if (snapshot.status === "queued") throw new Error(`Subagent ${params.id} is queued and cannot receive input until it starts`);
       if (snapshot.status !== "running") throw new Error(`Subagent ${params.id} is already settled (${snapshot.status}) and cannot receive input`);
       if (!snapshot.visible) throw new Error("headless children cannot receive input \u2014 respawn with visible: true");
       if (!snapshot.pane?.paneId) throw new Error(`Visible subagent ${params.id} does not have a ready pane`);
@@ -14995,6 +15460,7 @@ function registerSubagentTools(pi, manager, delivery, host = getTerminalHost()) 
 }
 
 // src/subagents/index.ts
+var SUBAGENT_STATUS_WIDGET_KEY = "sumocode-subagents";
 var settledPayload = (snapshot) => {
   const result = buildSubagentResultMessage({
     id: snapshot.id,
@@ -15006,17 +15472,20 @@ var settledPayload = (snapshot) => {
     manifest: snapshot.manifest
   });
   const paneLine = snapshot.pane ? `Pane: ${snapshot.pane.paneId ?? snapshot.pane.tabId ?? snapshot.pane.workspaceId ?? "unknown"} \xB7 agent ${snapshot.pane.agentName}` : void 0;
+  const roleLine = snapshot.roleId ? `Role: ${snapshot.roleId}` : void 0;
+  const metadata = [roleLine, paneLine].filter((line) => line !== void 0).join("\n");
   return {
     id: snapshot.id,
     title: snapshot.title,
     status: snapshot.status,
-    content: paneLine ? `${result}
+    content: metadata ? `${result}
 
-${paneLine}` : result,
+${metadata}` : result,
     details: {
       id: snapshot.id,
       title: snapshot.title,
       status: snapshot.status,
+      ...snapshot.roleId ? { roleId: snapshot.roleId } : {},
       activity: activityFromSubagentSnapshot(snapshot),
       manifest: snapshot.manifest,
       ...snapshot.pane ? { pane: snapshot.pane } : {}
@@ -15044,6 +15513,7 @@ function installSubagents(pi) {
         model: task.model ?? inheritedModel,
         thinking: task.thinking ?? task.inherited?.thinking,
         tools: paneNarrowed ? paneBuiltIn : void 0,
+        appendSystemPrompt: task.appendSystemPrompt,
         signal: task.signal,
         host,
         pi,
@@ -15057,6 +15527,7 @@ function installSubagents(pi) {
       thinking: task.thinking,
       inherited: task.inherited ?? {},
       builtInTools: getBuiltInToolsFromActiveTools([...task.builtInTools ?? []]),
+      appendSystemPrompt: task.appendSystemPrompt,
       signal: task.signal
     });
   }, { terminalHost: host, pi });
@@ -15064,6 +15535,46 @@ function installSubagents(pi) {
   const observedSettledIds = /* @__PURE__ */ new Set();
   let latestContext;
   let unsubscribe;
+  let statusWidgetVisible = false;
+  const publishStatusWidget = () => {
+    const ctx = latestContext;
+    if (!ctx?.hasUI) return;
+    const snapshots = manager.list();
+    const active = snapshots.filter((snapshot) => snapshot.status === "running" || snapshot.status === "queued");
+    try {
+      if (active.length === 0) {
+        if (statusWidgetVisible) ctx.ui.setWidget(SUBAGENT_STATUS_WIDGET_KEY, void 0, { placement: "aboveEditor" });
+        statusWidgetVisible = false;
+        return;
+      }
+      const now = Date.now();
+      const running = active.filter((snapshot) => snapshot.status === "running").map((snapshot) => ({
+        id: snapshot.id,
+        ...snapshot.roleId ? { roleId: snapshot.roleId } : {},
+        title: snapshot.title,
+        ageMs: Math.max(0, now - snapshot.createdAt)
+      }));
+      const queuedCount = active.length - running.length;
+      ctx.ui.setWidget(
+        SUBAGENT_STATUS_WIDGET_KEY,
+        () => ({
+          invalidate: () => void 0,
+          render: (width) => renderSubagentStatusRow({ width, running, queuedCount })
+        }),
+        { placement: "aboveEditor" }
+      );
+      statusWidgetVisible = true;
+    } catch {
+    }
+  };
+  const clearStatusWidget = (ctx) => {
+    if (!ctx?.hasUI || !statusWidgetVisible) return;
+    try {
+      ctx.ui.setWidget(SUBAGENT_STATUS_WIDGET_KEY, void 0, { placement: "aboveEditor" });
+    } catch {
+    }
+    statusWidgetVisible = false;
+  };
   const flush = () => {
     for (const payload of delivery.drain()) {
       pi.sendMessage(
@@ -15079,7 +15590,7 @@ function installSubagents(pi) {
   };
   const onManagerChange = () => {
     for (const snapshot of manager.list()) {
-      if (snapshot.status === "running" || observedSettledIds.has(snapshot.id)) continue;
+      if (snapshot.status === "running" || snapshot.status === "queued" || observedSettledIds.has(snapshot.id)) continue;
       observedSettledIds.add(snapshot.id);
       if (manager.consumedIds.has(snapshot.id)) delivery.consume(snapshot.id);
       else delivery.defer(snapshot.id, () => settledPayload(snapshot));
@@ -15091,6 +15602,7 @@ function installSubagents(pi) {
         delivery.forget(id);
       }
     }
+    publishStatusWidget();
     if (latestContext?.isIdle()) flush();
   };
   const armDelivery = () => {
@@ -15106,6 +15618,7 @@ function installSubagents(pi) {
   pi.on("session_start", (_event, ctx) => {
     latestContext = ctx;
     armDelivery();
+    publishStatusWidget();
     if (ctx.isIdle()) flush();
   });
   pi.on("agent_start", (_event, ctx) => {
@@ -15116,6 +15629,7 @@ function installSubagents(pi) {
     flush();
   });
   pi.on("session_shutdown", () => {
+    clearStatusWidget(latestContext);
     latestContext = void 0;
     unsubscribe?.();
     unsubscribe = void 0;
@@ -15126,7 +15640,7 @@ function installSubagents(pi) {
 }
 
 // src/task-mode.ts
-import { appendFileSync as appendFileSync3, writeFileSync as writeFileSync8 } from "node:fs";
+import { appendFileSync as appendFileSync3, writeFileSync as writeFileSync9 } from "node:fs";
 var TASK_MARKER_ENV_KEYS = [
   "SUMOCODE_TASK_RESPONSE_FILE",
   "SUMOCODE_TASK_EXIT_FILE",
@@ -15185,7 +15699,7 @@ function persistResponse(messages) {
     return;
   }
   try {
-    writeFileSync8(file, `${text}
+    writeFileSync9(file, `${text}
 `);
     diagLog("response_written", { file, bytes: text.length });
   } catch (error) {
@@ -15198,7 +15712,7 @@ function writeTaskExitMarker(code, env = process.env) {
   const file = env.SUMOCODE_TASK_EXIT_FILE;
   if (!file) return;
   try {
-    writeFileSync8(file, `${code}
+    writeFileSync9(file, `${code}
 `);
     diagLog("exit_marker_written", { file, code });
   } catch (error) {
@@ -15211,7 +15725,7 @@ function writeTaskStartedMarker(env = process.env) {
   const file = env.SUMOCODE_TASK_STARTED_FILE;
   if (!file) return;
   try {
-    writeFileSync8(file, `${process.pid}
+    writeFileSync9(file, `${process.pid}
 `);
     diagLog("started_marker_written", { file });
   } catch (error) {
@@ -15878,7 +16392,7 @@ function registerRpcTreeNavigationCommand(pi) {
 
 // src/extension.ts
 var SUMOCODE_PACKAGE_NAME = "@dhruvkelawala/sumocode";
-var LEGACY_TASK_TOOL_EXTENSION_PATH = join19(".pi", "agent", "extensions", "task-tool", "index.ts");
+var LEGACY_TASK_TOOL_EXTENSION_PATH = join20(".pi", "agent", "extensions", "task-tool", "index.ts");
 function canonicalize(path2, realpath) {
   try {
     return realpath(path2);
@@ -15893,13 +16407,13 @@ function moduleUrlToPath2(moduleUrl) {
     return moduleUrl;
   }
 }
-function isInstalledPiAgentGitModule(moduleUrl, homeDir = homedir14()) {
+function isInstalledPiAgentGitModule(moduleUrl, homeDir = homedir15()) {
   const modulePath = resolve7(moduleUrlToPath2(moduleUrl));
   const agentGitRoot = `${resolve7(homeDir, ".pi", "agent", "git")}${sep}`;
   return modulePath.startsWith(agentGitRoot);
 }
 function packageNameAt2(dir, exists, readFile) {
-  const packagePath = join19(dir, "package.json");
+  const packagePath = join20(dir, "package.json");
   if (!exists(packagePath)) return void 0;
   try {
     const parsed = JSON.parse(readFile(packagePath, "utf8"));
@@ -15909,44 +16423,44 @@ function packageNameAt2(dir, exists, readFile) {
   }
 }
 function packageRootFromModulePath(modulePath, exists, readFile) {
-  let current = dirname12(modulePath);
+  let current = dirname13(modulePath);
   for (let level = 0; level < 5; level += 1) {
     if (packageNameAt2(current, exists, readFile) === SUMOCODE_PACKAGE_NAME) return current;
-    const parent = dirname12(current);
+    const parent = dirname13(current);
     if (parent === current) return void 0;
     current = parent;
   }
   return void 0;
 }
 function findActiveSumoDevTree2(cwd, options = {}) {
-  const exists = options.exists ?? existsSync11;
-  const readFile = options.readFile ?? ((path2, encoding) => readFileSync14(path2, encoding));
+  const exists = options.exists ?? existsSync12;
+  const readFile = options.readFile ?? ((path2, encoding) => readFileSync16(path2, encoding));
   let current = resolve7(cwd);
   while (true) {
     const isSumocodePackage = packageNameAt2(current, exists, readFile) === SUMOCODE_PACKAGE_NAME;
-    const hasExtensionSource = exists(join19(current, "src", "extension.ts"));
-    const hasGitMetadata = exists(join19(current, ".git"));
+    const hasExtensionSource = exists(join20(current, "src", "extension.ts"));
+    const hasGitMetadata = exists(join20(current, ".git"));
     if (isSumocodePackage && hasExtensionSource && hasGitMetadata) return current;
-    const parent = dirname12(current);
+    const parent = dirname13(current);
     if (parent === current) return void 0;
     current = parent;
   }
 }
 function shouldNoopDuplicateInstalledExtension(options = {}) {
   const moduleUrl = options.moduleUrl ?? import.meta.url;
-  if (!isInstalledPiAgentGitModule(moduleUrl, options.homeDir ?? homedir14())) return false;
+  if (!isInstalledPiAgentGitModule(moduleUrl, options.homeDir ?? homedir15())) return false;
   const env = options.env ?? process.env;
   const launcherRoot = env.SUMOCODE_ROOT_DIR;
   if (launcherRoot) {
     const realpath = options.realpath ?? ((path2) => realpathSync4(path2));
-    const exists = options.exists ?? existsSync11;
-    const readFile = options.readFile ?? ((path2, encoding) => readFileSync14(path2, encoding));
+    const exists = options.exists ?? existsSync12;
+    const readFile = options.readFile ?? ((path2, encoding) => readFileSync16(path2, encoding));
     const modulePath = canonicalize(moduleUrlToPath2(moduleUrl), realpath);
     const packageRoot = packageRootFromModulePath(modulePath, exists, readFile);
     const canonicalLauncherRoot = canonicalize(launcherRoot, realpath);
     if (packageRoot !== void 0 && canonicalize(packageRoot, realpath) === canonicalLauncherRoot) return false;
-    const moduleDir = dirname12(modulePath);
-    const grandparent = dirname12(moduleDir);
+    const moduleDir = dirname13(modulePath);
+    const grandparent = dirname13(moduleDir);
     if (grandparent === canonicalLauncherRoot) return false;
     return true;
   }
@@ -15954,8 +16468,8 @@ function shouldNoopDuplicateInstalledExtension(options = {}) {
   return findActiveSumoDevTree2(options.cwd ?? process.cwd(), options) !== void 0;
 }
 function hasLegacyTaskToolExtension(options = {}) {
-  const exists = options.exists ?? existsSync11;
-  return exists(join19(options.homeDir ?? homedir14(), LEGACY_TASK_TOOL_EXTENSION_PATH));
+  const exists = options.exists ?? existsSync12;
+  return exists(join20(options.homeDir ?? homedir15(), LEGACY_TASK_TOOL_EXTENSION_PATH));
 }
 function shouldInstallNativeTaskTool(options = {}) {
   if (options.force === "1" || options.force === "true") return true;
@@ -16012,6 +16526,7 @@ function installRpcChildProfile(pi) {
   const { subagentManager } = installOrchestrationTools(pi);
   installTaskModeAutoExit(pi);
   registerSumoReloadCommand(pi);
+  registerRolesCommand(pi);
   installSumoInteractions(pi, { subagentManager, includeUiSurfaces: false });
 }
 var PROCESS_INSTALL_LATCH = /* @__PURE__ */ Symbol.for("sumocode.extension.processInstallLatch");
@@ -16096,6 +16611,7 @@ function sumocode(pi) {
   installWorkingIndicator(pi);
   installCompactionIndicator(pi);
   registerSumoReloadCommand(pi);
+  registerRolesCommand(pi);
   installSumoInteractions(pi, { subagentManager });
   logDiagnostic("extension_activate_end", {
     taskMode: isTaskMode(),

@@ -444,6 +444,11 @@ function isSymbolValue(value: unknown): value is symbol {
 	return typeof value === "symbol";
 }
 
+/** Realm-independent callability check: functions from other realms (vm contexts, iframes) fail `instanceof Function`. */
+function isFunctionValue(value: unknown): value is (...args: never[]) => void {
+	return typeof value === "function";
+}
+
 function isPreviewContainer(value: unknown): value is object {
 	return typeof value === "object";
 }
@@ -476,7 +481,7 @@ export function safeValuePreview(value: unknown, options: SafeValuePreviewOption
 		if (current === null || isBooleanValue(current) || isNumberValue(current)) return current;
 		if (isBigIntValue(current)) return `${current.toString()}n`;
 		if (current === undefined) return "[undefined]";
-		if (current instanceof Function) return "[Function]";
+		if (isFunctionValue(current)) return "[Function]";
 		if (isSymbolValue(current)) return current.toString();
 		if (!isPreviewContainer(current)) return sanitizeActivityText(String(current));
 		if (seen.has(current)) return "[Circular]";

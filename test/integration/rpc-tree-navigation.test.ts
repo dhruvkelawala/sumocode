@@ -258,7 +258,7 @@ describe("real Pi RPC tree navigation bridge", () => {
 		const invoke = async (targetId: string, summarize: boolean, customInstructions?: string) => {
 			invocation += 1;
 			const navigationRequestId = `019f8a78-b4f5-7b7b-b774-2d2e4bce${String(910 + invocation).padStart(4, "0")}`;
-			const payload = Buffer.from(JSON.stringify({ requestId: navigationRequestId, targetId, summarize, ...(customInstructions === undefined && { customInstructions }) }), "utf8").toString("base64url");
+			const payload = Buffer.from(JSON.stringify({ requestId: navigationRequestId, targetId, summarize, ...(customInstructions !== undefined && { customInstructions }) }), "utf8").toString("base64url");
 			const prompt = client.request({ type: "prompt", message: `/sumo:rpc-tree-navigate ${payload}` });
 			const outcomePromise = client.waitForOutcome();
 			expect(await prompt).toMatchObject({ type: "response", command: "prompt", success: true });

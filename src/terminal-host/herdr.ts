@@ -119,10 +119,17 @@ async function listWorkspacePanes(pi: PiExecLike, workspaceId: string): Promise<
 async function paneForTab(pi: PiExecLike, tabId: string): Promise<HostResult<{ pane: HerdrPaneInfo }>> {
 	const workspaceId = tabId.split(":")[0];
 	if (!workspaceId) return { ok: false, error: `invalid herdr tab id: ${tabId}` };
-	const listed = await listWorkspacePanes(pi, workspaceId);
-	if (!listed.ok) return listed;
-	const pane = listed.panes.find((candidate) => candidate.tab_id === tabId);
-	return pane?.pane_id ? { ok: true, pane } : { ok: false, error: `herdr returned no pane for tab ${tabId}` };
+	// A just-created tab can be returned before its root pane appears in
+	// `pane list` (observed live as `no pane for tab`). Bound the retry so a
+	// genuinely closed/stale tab still fails quickly and invalidates the cache.
+	for (let attempt = 0; attempt < 4; attempt += 1) {
+		const listed = await listWorkspacePanes(pi, workspaceId);
+		if (!listed.ok) return listed;
+		const pane = listed.panes.find((candidate) => candidate.tab_id === tabId);
+		if (pane?.pane_id) return { ok: true, pane };
+		if (attempt < 3) await new Promise<void>((resolve) => setTimeout(resolve, 25));
+	}
+	return { ok: false, error: `herdr returned no pane for tab ${tabId}` };
 }
 
 type PaneTarget = { kind: "current" } | { kind: "id"; paneId: string };

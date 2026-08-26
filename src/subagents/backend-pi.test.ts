@@ -152,6 +152,38 @@ describe("spawnPiChild", () => {
 		expect(events.at(-1)).toEqual({ kind: "run-settled", outcome: { kind: "failed", errorText: "boom", partialText: undefined } });
 	});
 
+	it("appends role system instructions after task args and before the prompt", () => {
+		const proc = new FakeProcess();
+		const spawn = vi.fn(() => proc);
+		// SAFETY: the spawn double only needs to return a FakeProcess; the spawner reads no other spawn surface.
+		const child = createPiChildSpawner(spawn as never, () => undefined)({
+			prompt: "do work",
+			cwd: "/tmp",
+			inherited: {},
+			appendSystemPrompt: "review carefully",
+		});
+		// SAFETY: FakeProcess.events exposes the (emit) => void collector shape collect expects.
+		collect(child.events as (emit: (event: SubagentEvent) => void) => void);
+		// SAFETY: mock.calls[0][1] is the argv string array recorded by the vi.fn spawn double.
+		const args = (spawn.mock.calls[0] as unknown[])[1] as string[];
+		const appendIndex = args.indexOf("--append-system-prompt");
+		expect(appendIndex).toBeGreaterThan(args.indexOf("--tools"));
+		expect(args[appendIndex + 1]).toBe("review carefully");
+		expect(args.at(-1)).toBe("do work");
+	});
+
+	it("omits role system instructions when none are configured", () => {
+		const proc = new FakeProcess();
+		const spawn = vi.fn(() => proc);
+		// SAFETY: the spawn double only needs to return a FakeProcess; the spawner reads no other spawn surface.
+		const child = createPiChildSpawner(spawn as never, () => undefined)({ prompt: "x", cwd: "/tmp", inherited: {} });
+		// SAFETY: FakeProcess.events exposes the (emit) => void collector shape collect expects.
+		collect(child.events as (emit: (event: SubagentEvent) => void) => void);
+		// SAFETY: mock.calls[0][1] is the argv string array recorded by the vi.fn spawn double.
+		const args = (spawn.mock.calls[0] as unknown[])[1] as string[];
+		expect(args).not.toContain("--append-system-prompt");
+	});
+
 	it("injects the claude-oauth adapter via -e when the resolver finds it", () => {
 		const proc = new FakeProcess();
 		const spawn = vi.fn(() => proc);

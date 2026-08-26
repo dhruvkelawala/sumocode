@@ -1,5 +1,6 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { activityFromSubagentSnapshot } from "../activity/subagent-adapter.js";
+import { renderSubagentStatusRow, type SubagentStatusRunningEntry } from "../subagent-status-row.js";
 import { BUILT_IN_TOOLS, getBuiltInToolsFromActiveTools } from "../native-task-config.js";
 import { getTerminalHost } from "../terminal-host/index.js";
 import type { TerminalHost } from "../terminal-host/types.js";
@@ -14,6 +15,19 @@ import { registerSubagentTools } from "./tools.js";
 export { SubagentManager } from "./manager.js";
 export type { AtCapacityDetails, SpawnSubagentTask } from "./manager.js";
 
+const SUBAGENT_STATUS_WIDGET_KEY = "sumocode-subagents";
+
+/** Delivery `details` contract for a settled subagent result. */
+interface SettledSubagentDetails {
+	id: string;
+	title: string;
+	status: SubagentSnapshot["status"];
+	roleId?: string;
+	activity: ReturnType<typeof activityFromSubagentSnapshot>;
+	manifest: SubagentSnapshot["manifest"];
+	pane: SubagentSnapshot["pane"];
+}
+
 const settledPayload = (snapshot: SubagentSnapshot): DeliveryPayload => {
 	const result = buildSubagentResultMessage({
 		id: snapshot.id,
@@ -27,19 +41,23 @@ const settledPayload = (snapshot: SubagentSnapshot): DeliveryPayload => {
 	const paneLine = snapshot.pane
 		? `Pane: ${snapshot.pane.paneId ?? snapshot.pane.tabId ?? snapshot.pane.workspaceId ?? "unknown"} · agent ${snapshot.pane.agentName}`
 		: undefined;
+	const roleLine = snapshot.roleId ? `Role: ${snapshot.roleId}` : undefined;
+	const metadata = [roleLine, paneLine].filter((line): line is string => line !== undefined).join("\n");
+	const details: SettledSubagentDetails = {
+		id: snapshot.id,
+		title: snapshot.title,
+		status: snapshot.status,
+		activity: activityFromSubagentSnapshot(snapshot),
+		manifest: snapshot.manifest,
+		pane: snapshot.pane,
+	};
+	if (snapshot.roleId !== undefined) details.roleId = snapshot.roleId;
 	return {
 		id: snapshot.id,
 		title: snapshot.title,
 		status: snapshot.status,
-		content: paneLine ? `${result}\n\n${paneLine}` : result,
-		details: {
-			id: snapshot.id,
-			title: snapshot.title,
-			status: snapshot.status,
-			activity: activityFromSubagentSnapshot(snapshot),
-			manifest: snapshot.manifest,
-			pane: snapshot.pane,
-		},
+		content: metadata ? `${result}\n\n${metadata}` : result,
+		details,
 	};
 };
 
@@ -91,6 +109,7 @@ export function installSubagents(pi: ExtensionAPI, options: SubagentsInstallOpti
 				model: task.model ?? inheritedModel,
 				thinking: task.thinking ?? task.inherited?.thinking,
 				tools: paneNarrowed ? paneBuiltIn : undefined,
+				appendSystemPrompt: task.appendSystemPrompt,
 				signal: task.signal,
 				host,
 				pi,
@@ -104,13 +123,85 @@ export function installSubagents(pi: ExtensionAPI, options: SubagentsInstallOpti
 			thinking: task.thinking,
 			inherited: task.inherited ?? {},
 			builtInTools: getBuiltInToolsFromActiveTools([...(task.builtInTools ?? [])]),
+			appendSystemPrompt: task.appendSystemPrompt,
 			signal: task.signal,
 		});
-	}, { terminalHost: host, pi, ...options.managerDependencies });
+	}, {
+		terminalHost: host,
+		pi,
+		// Herdr injects the caller tab into the RPC child. Seed visible placement
+		// with it so the first child is actually beside the operator instead of
+		// disappearing into a background `subagents` tab.
+		initialVisibleTabId: host.kind === "herdr" ? process.env.HERDR_TAB_ID : undefined,
+		...options.managerDependencies,
+	});
 	const delivery = createDeferredResultDelivery();
 	const observedSettledIds = new Set<string>();
 	let latestContext: ExtensionContext | undefined;
 	let unsubscribe: (() => void) | undefined;
+	let statusWidgetVisible = false;
+
+	// Manager callbacks intentionally reuse only a context captured by a Pi
+	// session event and cleared before shutdown. This is not an eager/module-load
+	// UI call: both owned TUI and RPC need the manager event itself to surface and
+	// clear asynchronous work while the parent is idle (live + PTY verified).
+	const publishStatusWidget = (): void => {
+		const ctx = latestContext;
+		if (!ctx?.hasUI) return;
+		const snapshots = manager.list();
+		const active = snapshots.filter((snapshot) => snapshot.status === "running" || snapshot.status === "queued");
+		try {
+			if (active.length === 0) {
+				if (statusWidgetVisible) ctx.ui.setWidget(SUBAGENT_STATUS_WIDGET_KEY, undefined, { placement: "aboveEditor" });
+				statusWidgetVisible = false;
+				return;
+			}
+			// The accepted strip contract is event-driven and explicitly has no age
+			// timer: ages are approximate snapshots that advance on manager changes.
+			// Avoid a background UI ticker solely for cosmetic elapsed-time drift.
+			const now = Date.now();
+			const running = active
+				.filter((snapshot) => snapshot.status === "running")
+				.map((snapshot) => {
+					type MutableEntry = { -readonly [K in keyof SubagentStatusRunningEntry]: SubagentStatusRunningEntry[K] };
+					const entry: MutableEntry = {
+						id: snapshot.id,
+						title: snapshot.title,
+						ageMs: Math.max(0, now - snapshot.createdAt),
+					};
+					if (snapshot.roleId !== undefined) entry.roleId = snapshot.roleId;
+					return entry;
+				});
+			const queuedCount = active.length - running.length;
+			const render = (width: number) => renderSubagentStatusRow({ width, running, queuedCount });
+			// Pi RPC supports setWidget string arrays only; component factories are
+			// silently ignored (docs/rpc.md, Extension UI Protocol). Render a bounded
+			// line in the child and let the retained host clip it to the real viewport.
+			// TUI mode keeps the width-aware factory path.
+			if (ctx.mode === "rpc") {
+				ctx.ui.setWidget(SUBAGENT_STATUS_WIDGET_KEY, render(240), { placement: "aboveEditor" });
+			} else {
+				ctx.ui.setWidget(
+					SUBAGENT_STATUS_WIDGET_KEY,
+					() => ({ invalidate: () => undefined, render }),
+					{ placement: "aboveEditor" },
+				);
+			}
+			statusWidgetVisible = true;
+		} catch {
+			// Settlement delivery must survive UI adapter failures.
+		}
+	};
+
+	const clearStatusWidget = (ctx: ExtensionContext | undefined): void => {
+		if (!ctx?.hasUI || !statusWidgetVisible) return;
+		try {
+			ctx.ui.setWidget(SUBAGENT_STATUS_WIDGET_KEY, undefined, { placement: "aboveEditor" });
+		} catch {
+			// Session cleanup remains best-effort when the UI is already gone.
+		}
+		statusWidgetVisible = false;
+	};
 
 	const flush = (): void => {
 		for (const payload of delivery.drain()) {
@@ -128,7 +219,7 @@ export function installSubagents(pi: ExtensionAPI, options: SubagentsInstallOpti
 
 	const onManagerChange = (): void => {
 		for (const snapshot of manager.list()) {
-			if (snapshot.status === "running" || observedSettledIds.has(snapshot.id)) continue;
+			if (snapshot.status === "running" || snapshot.status === "queued" || observedSettledIds.has(snapshot.id)) continue;
 			observedSettledIds.add(snapshot.id);
 			if (manager.consumedIds.has(snapshot.id)) delivery.consume(snapshot.id);
 			else delivery.defer(snapshot.id, () => settledPayload(snapshot));
@@ -142,6 +233,7 @@ export function installSubagents(pi: ExtensionAPI, options: SubagentsInstallOpti
 				delivery.forget(id);
 			}
 		}
+		publishStatusWidget();
 		if (latestContext?.isIdle()) flush();
 	};
 
@@ -166,6 +258,7 @@ export function installSubagents(pi: ExtensionAPI, options: SubagentsInstallOpti
 	pi.on("session_start", (_event, ctx) => {
 		latestContext = ctx;
 		armDelivery();
+		publishStatusWidget();
 		if (ctx.isIdle()) flush();
 	});
 	pi.on("agent_start", (_event, ctx) => { latestContext = ctx; });
@@ -182,6 +275,7 @@ export function installSubagents(pi: ExtensionAPI, options: SubagentsInstallOpti
 	// worse than losing in-flight work. Kill on EVERY shutdown until a durable
 	// registry exists; when it does, adopt the terminal lifecycle model.
 	pi.on("session_shutdown", () => {
+		clearStatusWidget(latestContext);
 		latestContext = undefined;
 		unsubscribe?.();
 		unsubscribe = undefined;

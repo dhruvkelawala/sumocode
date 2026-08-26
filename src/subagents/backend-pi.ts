@@ -305,6 +305,7 @@ export const createPiChildSpawner = (spawnImpl: SpawnLike = nodeSpawn, resolveAd
 	thinking?: string;
 	inherited: { model?: { provider: string; id: string }; thinking?: string };
 	builtInTools?: readonly BuiltInToolName[];
+	appendSystemPrompt?: string;
 	signal?: AbortSignal;
 }): SpawnedChild => {
 	const config = resolveTaskConfig({
@@ -339,9 +340,10 @@ export const createPiChildSpawner = (spawnImpl: SpawnLike = nodeSpawn, resolveAd
 	const events = (emit: (event: SubagentEvent) => void): void => {
 		emit({ kind: "run-started" });
 		const adapterEntry = resolveAdapterEntry();
+		const roleArgs = options.appendSystemPrompt ? ["--append-system-prompt", options.appendSystemPrompt] : [];
 		const adapterArgs = adapterEntry ? ["-e", adapterEntry] : [];
 		// SAFETY: stdio is piped below, so the spawned child always has non-null streams.
-		const proc = spawnImpl("pi", [...config.subprocessArgs, ...adapterArgs, options.prompt], {
+		const proc = spawnImpl("pi", [...config.subprocessArgs, ...roleArgs, ...adapterArgs, options.prompt], {
 			cwd: options.cwd,
 			shell: false,
 			stdio: ["pipe", "pipe", "pipe"],

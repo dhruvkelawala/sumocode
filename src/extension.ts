@@ -13,6 +13,7 @@ import { applyStartupTheme } from "./themes/index.js";
 import { installAltscreen } from "./cathedral/altscreen.js";
 import { installCathedralEditor } from "./cathedral/cathedral-editor.js";
 import { registerSumoReloadCommand } from "./commands/reload.js";
+import { registerRolesCommand } from "./commands/roles.js";
 import { installSumoInteractions } from "./interaction-registry.js";
 import { installFooter } from "./footer.js";
 import { installMemoryExtraction } from "./memory-extraction.js";
@@ -257,6 +258,7 @@ function installRpcChildProfile(pi: ExtensionAPI): void {
 	const { subagentManager } = installOrchestrationTools(pi);
 	installTaskModeAutoExit(pi);
 	registerSumoReloadCommand(pi);
+	registerRolesCommand(pi);
 	installSumoInteractions(pi, { subagentManager, includeUiSurfaces: false });
 }
 
@@ -404,6 +406,7 @@ export default function sumocode(pi: ExtensionAPI): void {
 	installWorkingIndicator(pi);
 	installCompactionIndicator(pi);
 	registerSumoReloadCommand(pi);
+	registerRolesCommand(pi);
 	installSumoInteractions(pi, { subagentManager });
 	logDiagnostic("extension_activate_end", {
 		taskMode: isTaskMode(),

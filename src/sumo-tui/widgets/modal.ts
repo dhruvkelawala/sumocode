@@ -36,6 +36,8 @@ type ActiveModal =
 			readonly title: string;
 			readonly options: readonly SelectOption[];
 			selectedIndex: number;
+			/** Type-to-filter query; only active for selects above SELECT_SEARCH_THRESHOLD options. */
+			searchQuery: string;
 			readonly resolve: (value: string | undefined) => void;
 			cleanup: () => void;
 	  }
@@ -72,6 +74,36 @@ interface SelectOption {
 
 function isString<T>(value: T): value is T & string {
 	return typeof value === "string";
+}
+
+/**
+ * Selects with more options than this get type-to-filter instead of Divine
+ * Query letter-jump. Letter-jump stays for short lists (question tool,
+ * confirms, thinking levels) where a single keypress answering is the point;
+ * beyond ~10 rows letters stop being memorable and filtering wins (operator
+ * feedback, plan 085 fix — /roles rendered 32 lettered rows with no search).
+ */
+export const SELECT_SEARCH_THRESHOLD = 10;
+
+export function selectSearchActive(options: readonly SelectOption[]): boolean {
+	return selectIsPaletteContent(options) || options.length > SELECT_SEARCH_THRESHOLD;
+}
+
+/** Case-insensitive substring filter over option labels (palette parity). */
+export function filterSelectOptions(options: readonly SelectOption[], searchQuery: string): readonly SelectOption[] {
+	const query = searchQuery.trim().toLowerCase();
+	if (query.length === 0) return options;
+	return options.filter((option) => option.label.toLowerCase().includes(query));
+}
+
+/**
+ * Two-column rows ("label  value" — the label·value seam /roles and friends
+ * send through ctx.ui.select) are palette CONTENT: they render and behave as
+ * a searchable palette regardless of row count, so short role lists don't
+ * fall back to lettered Divine Query while long ones get the palette.
+ */
+export function selectIsPaletteContent(options: readonly SelectOption[]): boolean {
+	return options.some((option) => / {2}\S/u.test(option.label));
 }
 
 function keyEq(data: string, ...ids: readonly string[]): boolean {
@@ -188,6 +220,7 @@ export class ModalManager implements Component {
 				title: sanitizeModalText(title),
 				options: options.map((option) => ({ label: sanitizeSingleLineModalText(option), value: option })),
 				selectedIndex: 0,
+				searchQuery: "",
 				resolve,
 				cleanup: () => undefined,
 			};
@@ -251,6 +284,8 @@ export class ModalManager implements Component {
 			readonly message?: string;
 			readonly options?: readonly string[];
 			readonly selectedIndex: number;
+			readonly searchActive?: boolean;
+			readonly searchQuery?: string;
 			readonly value?: string;
 			readonly placeholder?: string;
 			readonly details?: readonly string[];
@@ -262,8 +297,26 @@ export class ModalManager implements Component {
 		switch (active.kind) {
 			case "confirm":
 				return { kind: active.kind, title: active.title, message: active.message, selectedIndex: active.selectedIndex };
-			case "select":
-				return { kind: active.kind, title: active.title, options: active.options.map((option) => option.label), selectedIndex: active.selectedIndex };
+			case "select": {
+				const searchActive = selectSearchActive(active.options);
+				const visibleOptions = searchActive ? filterSelectOptions(active.options, active.searchQuery) : active.options;
+				if (searchActive) {
+					return {
+						kind: active.kind,
+						title: active.title,
+						options: visibleOptions.map((option) => option.label),
+						selectedIndex: active.selectedIndex,
+						searchActive: true,
+						searchQuery: active.searchQuery,
+					};
+				}
+				return {
+						kind: active.kind,
+						title: active.title,
+						options: visibleOptions.map((option) => option.label),
+						selectedIndex: active.selectedIndex,
+					};
+			}
 			case "input":
 				return {
 					kind: active.kind,
@@ -297,6 +350,12 @@ export class ModalManager implements Component {
 			return;
 		}
 
+		// Long selects filter instead of letter-jumping (plan 085 fix): with 10+
+		// rows, letters are unmemorable and typing must SEARCH, not answer.
+		if (this.active.kind === "select" && selectSearchActive(this.active.options)) {
+			this.handleSearchSelect(data, this.active);
+			return;
+		}
 		// Divine Query parity: a/b/c… selects an option directly (letters take
 		// priority over j/k nav, exactly like updateDivineQuery).
 		if (this.active.kind === "select" && data.length === 1) {
@@ -320,6 +379,46 @@ export class ModalManager implements Component {
 		}
 	}
 
+	/**
+	 * Search-mode select input: printable chars build the filter (including
+	 * j/k — they must TYPE here), arrows/tab navigate the filtered list,
+	 * Enter answers with the focused filtered option. Esc is handled by the
+	 * shared dismissal path before reaching this method.
+	 */
+	private handleSearchSelect(data: string, modal: Extract<ActiveModal, { kind: "select" }>): void {
+		const filtered = filterSelectOptions(modal.options, modal.searchQuery);
+		if (keyEq(data, Key.enter, "return", "enter")) {
+			// No matches → keep the modal open (Enter must not read as cancel).
+			if (filtered.length === 0) return;
+			this.finish(filtered[modal.selectedIndex]?.value);
+			return;
+		}
+		if (keyEq(data, Key.up, "up", Key.left, "left")) {
+			if (filtered.length > 0) modal.selectedIndex = (modal.selectedIndex - 1 + filtered.length) % filtered.length;
+			this.onChange();
+			return;
+		}
+		if (keyEq(data, Key.down, "down", Key.right, "right") || data === "\t") {
+			if (filtered.length > 0) modal.selectedIndex = (modal.selectedIndex + 1) % filtered.length;
+			this.onChange();
+			return;
+		}
+		if (keyEq(data, Key.backspace, "backspace")) {
+			modal.searchQuery = modal.searchQuery.slice(0, -1);
+			modal.selectedIndex = 0;
+			this.onChange();
+			return;
+		}
+		// Fast typing and pastes arrive as multi-character chunks (same reality
+		// handleInputModal handles) — sanitize and append the whole chunk.
+		const printable = sanitizeInputChunk(data);
+		if (printable.length > 0) {
+			modal.searchQuery = `${modal.searchQuery}${printable}`;
+			modal.selectedIndex = 0;
+			this.onChange();
+		}
+	}
+
 	public render(width: number): string[] {
 		if (!this.active || width <= 0) return [];
 		// Use the full width the caller gives us: ModalLayer (and any other
@@ -340,7 +439,10 @@ export class ModalManager implements Component {
 			const no = this.active.selectedIndex === 1 ? "▶ No" : "  No";
 			lines.push(line(`${yes}    ${no}`));
 		} else if (this.active.kind === "select") {
-			for (const [index, option] of this.active.options.entries()) {
+			const searchActive = selectSearchActive(this.active.options);
+			const visibleOptions = searchActive ? filterSelectOptions(this.active.options, this.active.searchQuery) : this.active.options;
+			if (searchActive) lines.push(line(`/ ${this.active.searchQuery || "type to filter"}`));
+			for (const [index, option] of visibleOptions.entries()) {
 				lines.push(line(`${index === this.active.selectedIndex ? "▶" : " "} ${option.label}`));
 			}
 		} else if (this.active.kind === "input") {

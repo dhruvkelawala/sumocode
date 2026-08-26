@@ -1,6 +1,11 @@
 import type { CompletionManifestEvidence } from "./manifest.js";
 
-export type SubagentStatus = "running" | "done" | "error";
+/** Concurrent running-children ceiling. Queue absorbs bursts beyond it (plan 083). */
+export const SUBAGENT_MAX_RUNNING = 10;
+/** Bounded FIFO depth for spawns accepted past the running ceiling. */
+export const SUBAGENT_MAX_QUEUED = 16;
+
+export type SubagentStatus = "queued" | "running" | "done" | "error";
 
 export type SubagentEvent =
 	| { kind: "run-started" }
@@ -52,6 +57,7 @@ export interface SubagentSnapshot {
 	readonly sourceId?: string;
 	readonly title: string;
 	readonly prompt: string;
+	readonly roleId?: string;
 	readonly cwd: string;
 	readonly baseRef: string;
 	readonly worktree?: SubagentWorktreeRef;

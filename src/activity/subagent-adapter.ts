@@ -252,6 +252,7 @@ function subagentStatus(record: Record<string, unknown>, budget: AdapterTraversa
 	const manifestExit = firstString(budget, asRecord(record.manifest, budget)?.exit)?.toLowerCase();
 	const error = firstString(budget, record.errorText)?.toLowerCase();
 	if (manifestExit === "interrupted" || error === "interrupted" || status === "cancelled" || status === "canceled") return "cancelled";
+	if (status === "queued") return "queued";
 	if (status === "done" || status === "completed" || status === "success" || status === "succeeded") return "succeeded";
 	if (status === "error" || status === "failed" || manifestExit === "failed") return "failed";
 	return "running";
@@ -354,6 +355,7 @@ function activityFromSubagentRecord(record: Record<string, unknown>, budget: Ada
 	const status = subagentStatus(record, budget);
 	const liveText = firstString(budget, record.liveText);
 	const finalText = firstString(budget, record.finalText);
+	// Queued children have not produced output or a current step yet.
 	const output = status === "running" ? liveText ?? finalText : undefined;
 	const error = status === "failed" || status === "cancelled" ? firstString(budget, record.errorText) : undefined;
 	const summary = status === "succeeded" || status === "failed" || status === "cancelled" ? finalText : undefined;
@@ -384,6 +386,7 @@ function activityFromSubagentRecord(record: Record<string, unknown>, budget: Ada
 	const branch = firstString(budget, worktree?.branch);
 	const subject = [id, paneLabel ? `pane ${paneLabel}` : undefined, branch].filter((part): part is string => !!part).join(" · ");
 	const outputLastLine = output?.split("\n").filter((line) => line.trim().length > 0).at(-1);
+	// Keep queued cards structural until their backend actually starts.
 	const currentStep = status === "running"
 		? outputLastLine ? boundedText(outputLastLine.trim(), 256) : paneLabel ? `pane ${paneLabel} · running` : undefined
 		: undefined;

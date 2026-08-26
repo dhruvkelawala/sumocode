@@ -41,12 +41,14 @@ function getRuntimeFromContext(ctx: ExtensionCommandContext): RpcLoginRuntime {
 	return rawRuntime;
 
 	function isLoginRuntime<T>(value: T): value is T & RpcLoginRuntime {
+		if (typeof value !== "object" || value === null) return false;
+		// SAFETY: probing Pi's undocumented private runtime seam; the typeof
+		// checks below verify every capability is callable before use.
+		const candidate = value as { getAvailable?: unknown; getProviders?: unknown; login?: unknown };
 		return (
-			typeof value === "object" &&
-			value !== null &&
-			"getAvailable" in value &&
-			"getProviders" in value &&
-			"login" in value
+			typeof candidate.getAvailable === "function" &&
+			typeof candidate.getProviders === "function" &&
+			typeof candidate.login === "function"
 		);
 	}
 }

@@ -9,7 +9,12 @@ import { activeThemeColors, getActiveTheme } from "./themes/index.js";
 export type PaletteMode = "SESSION" | "MODEL" | "THINKING" | "MEMORY" | "THEME" | "SETTINGS";
 
 export type PaletteRow = {
-	label: PaletteMode;
+	/**
+	 * Row label. The command palette itself uses PaletteMode values; the
+	 * search-mode select modal (plan 085) reuses this renderer with arbitrary
+	 * option labels, so the type is the general string.
+	 */
+	label: string;
 	currentValue: string;
 };
 
@@ -135,26 +140,55 @@ function normalizedActiveIndex(snapshot: CommandPaletteSnapshot, rows: readonly 
 	return Math.min(Math.max(0, snapshot.activeIndex), rows.length - 1);
 }
 
-export function renderCommandPalette(snapshot: CommandPaletteSnapshot, width: number): string[] {
+export interface PaletteRenderOptions {
+	/** Header text between the ✾ glyphs. Defaults to COMMAND PALETTE. */
+	readonly title?: string;
+	/** Dim search-row placeholder when the query is empty. */
+	readonly placeholder?: string;
+	/** Empty-state row text when no rows match. */
+	readonly emptyText?: string;
+	/**
+	 * Rows are already filtered by the caller (e.g. the select modal's own
+	 * query filter) — skip the internal label filter so the visible list can
+	 * never diverge from what Enter selects.
+	 */
+	readonly prefiltered?: boolean;
+	/** Cap visible rows, windowed around the focused row, with … N more markers. */
+	readonly maxVisibleRows?: number;
+}
+
+export function renderCommandPalette(snapshot: CommandPaletteSnapshot, width: number, renderOptions: PaletteRenderOptions = {}): string[] {
 	const w = Math.max(1, Math.floor(width));
-	const rows = filterPaletteRows(snapshot.rows, snapshot.searchQuery);
+	const rows = renderOptions.prefiltered ? [...snapshot.rows] : filterPaletteRows(snapshot.rows, snapshot.searchQuery);
 	const active = normalizedActiveIndex(snapshot, rows);
-	const searchText = snapshot.searchQuery.length > 0 ? snapshot.searchQuery : "what shall we attend to…";
+	const searchText = snapshot.searchQuery.length > 0 ? snapshot.searchQuery : (renderOptions.placeholder ?? "what shall we attend to…");
 	const halfRule = "─".repeat(22);
 	const lines: string[] = [];
 
 	lines.push(panelLine("", w));
-	lines.push(panelLine(center(`${accent("✾")}  ${accent("COMMAND PALETTE")}  ${accent("✾")}`, w), w));
+	lines.push(panelLine(center(`${accent("✾")}  ${accent(renderOptions.title ?? "COMMAND PALETTE")}  ${accent("✾")}`, w), w));
 	lines.push(panelLine("", w));
 	lines.push(panelLine(center(`${dividerText(halfRule)}  ${dividerText("·")}  ${dividerText(halfRule)}`, w), w));
 	lines.push(panelLine("", w));
-	lines.push(panelLine(`     ${accent("❯")}  ${cursorCell()}${snapshot.searchQuery.length > 0 ? foreground(searchText) : dim(searchText)}`, w));
+	// Caret trails the typed query (❯ res█); leads the placeholder when empty.
+	lines.push(panelLine(snapshot.searchQuery.length > 0
+		? `     ${accent("❯")}  ${foreground(searchText)}${cursorCell()}`
+		: `     ${accent("❯")}  ${cursorCell()}${dim(searchText)}`, w));
 	lines.push(panelLine("", w));
 
 	if (rows.length === 0) {
-		lines.push(panelLine(`     ${dividerText("·")}   ${dim("no matching command")}`, w));
+		lines.push(panelLine(`     ${dividerText("·")}   ${dim(renderOptions.emptyText ?? "no matching command")}`, w));
 	} else {
-		for (const [index, row] of rows.entries()) {
+		// Window long lists around the focused row (palette parity for modal
+		// selects — 32 unwindowed rows overflow the overlay, plan 085 fix).
+		const cap = renderOptions.maxVisibleRows !== undefined ? Math.max(1, renderOptions.maxVisibleRows) : rows.length;
+		const offset = rows.length <= cap ? 0 : Math.min(rows.length - cap, Math.max(0, active - Math.floor(cap / 2)));
+		const windowRows = rows.slice(offset, offset + cap);
+		const hiddenAbove = offset;
+		const hiddenBelow = rows.length - offset - windowRows.length;
+		if (hiddenAbove > 0) lines.push(panelLine(`         ${dim(`… ${hiddenAbove} more`)}`, w));
+		for (const [windowIndex, row] of windowRows.entries()) {
+			const index = windowIndex + offset;
 			const focused = index === active;
 			const marker = focused ? accent("❈") : dividerText("·");
 			const label = focused ? foreground(row.label) : dim(row.label);
@@ -164,6 +198,7 @@ export function renderCommandPalette(snapshot: CommandPaletteSnapshot, width: nu
 			const padBetween = Math.max(2, w - visibleWidth(left) - visibleWidth(valueText) - 5);
 			lines.push(panelLine(`${left}${" ".repeat(padBetween)}${valueText}`, w));
 		}
+		if (hiddenBelow > 0) lines.push(panelLine(`         ${dim(`… ${hiddenBelow} more`)}`, w));
 	}
 
 	lines.push(panelLine("", w));
@@ -202,7 +237,9 @@ export function updateCommandPaletteSnapshot(snapshot: CommandPaletteSnapshot, d
 		return { snapshot, done: true, selection: undefined };
 	}
 	if (keyEq(data, Key.enter, Key.return)) {
-		return { snapshot: { ...snapshot, activeIndex: active }, done: true, selection: rows[active]?.label };
+		// SAFETY: in palette mode the row labels are PaletteMode literals by
+		// construction of palette-mode rows; other modes resolve to undefined.
+		return { snapshot: { ...snapshot, activeIndex: active }, done: true, selection: rows[active]?.label as PaletteMode | undefined };
 	}
 	if (keyEq(data, Key.down)) {
 		return { snapshot: { ...snapshot, activeIndex: Math.min(Math.max(0, rows.length - 1), active + 1) } };

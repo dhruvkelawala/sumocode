@@ -40,6 +40,8 @@
     "src/commands/persona.ts",
     "src/commands/reload.ts",
     "src/commands/review.ts",
+    "src/commands/roles-palette.ts",
+    "src/commands/roles.ts",
     "src/commands/ship.ts",
     "src/commands/slate.ts",
     "src/commands/spinner.ts",
@@ -76,6 +78,7 @@
     "src/skill-inline.ts",
     "src/slate.ts",
     "src/splash.ts",
+    "src/subagent-status-row.ts",
     "src/subagents/backend-pane.ts",
     "src/subagents/backend-pi.ts",
     "src/subagents/delivery.ts",
@@ -85,6 +88,7 @@
     "src/subagents/manager.ts",
     "src/subagents/manifest.ts",
     "src/subagents/prompt.ts",
+    "src/subagents/roles.ts",
     "src/subagents/tools.ts",
     "src/sumo-tui/cathedral/ansi.ts",
     "src/sumo-tui/cathedral/metrics-hud.ts",
@@ -122,6 +126,6 @@
     "src/working-indicator.ts",
     "tsconfig.json"
   ],
-  "hash": "8a84f79bef82f820a5092453776b8a5f26acd6fdafb421edcea58eeabf9f481b",
-  "outputsHash": "1651f6c9d60d9106d51729b3476080d2bbebdb069e9c93142a8dd6702beb0efb"
+  "hash": "a5678e7d7e13a9b1236e94a68b40830961e6113253cc1c03c65c3df15211c980",
+  "outputsHash": "2ec68aad04508504050a802c7d6b85c82828df2c339fba39054dec853e1fd188"
 }

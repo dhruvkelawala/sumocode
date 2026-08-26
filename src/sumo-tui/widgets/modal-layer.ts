@@ -1,5 +1,6 @@
 import { truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
 import { renderDivineQuery } from "../../divine-query.js";
+import { renderCommandPalette } from "../../command-palette.js";
 import { fg as scriptoriumFg } from "../../cathedral/scriptorium-chrome.js";
 import { SumoNode } from "../layout/node.js";
 import type { YogaNode } from "../layout/yoga.js";
@@ -121,6 +122,32 @@ export class ModalLayer extends ModalManager {
 		// language the owned shell used, not a bare debug card.
 		const dialog = this.getActiveDialogSnapshot();
 		if (dialog?.kind === "select" && dialog.options) {
+			// Search-mode selects (plan 085 fix): render in the COMMAND PALETTE
+			// language — header title, ❯ filter row, two-column rows with
+			// right-aligned values (split on the two-space label · value seam),
+			// windowed list. Short selects keep Divine Query letter parity.
+			if (dialog.searchActive) {
+				return renderCommandPalette(
+					{
+						searchQuery: dialog.searchQuery ?? "",
+						activeIndex: dialog.selectedIndex,
+						rows: dialog.options.map((option) => {
+							const seam = option.indexOf("  ");
+							return seam === -1
+								? { label: option, currentValue: "" }
+								: { label: option.slice(0, seam), currentValue: option.slice(seam).trim() };
+						}),
+					},
+					modalWidth,
+					{
+						title: dialog.title,
+						placeholder: "type to filter…",
+						emptyText: "no matching option",
+						prefiltered: true,
+						maxVisibleRows: 12,
+					},
+				);
+			}
 			return renderDivineQuery(
 				{ title: dialog.title, options: dialog.options, focusedIndex: dialog.selectedIndex },
 				modalWidth,

@@ -20,8 +20,11 @@ const splitDirection = (paneCount: number): SplitDirection => paneCount % 2 === 
 
 export function planPlacement(input: PlacementInput): Placement {
 	if (input.hostKind !== "herdr") return { kind: "fallback-split", direction: "right" };
-	if (input.isolated) return { kind: "workspace" };
+	// A live caller tab wins even for worktree-backed children: the pane can run
+	// from the isolated cwd without hiding the work behind another workspace.
+	// Without a caller tab, isolated children retain the workspace fallback.
 	if (!input.sessionTabId) {
+		if (input.isolated) return { kind: "workspace" };
 		const tabNumber = Math.floor(input.visiblePanes.length / MAX_PANES_PER_TAB) + 1;
 		return { kind: "new-tab", label: tabNumber === 1 ? "subagents" : `subagents ${tabNumber}` };
 	}

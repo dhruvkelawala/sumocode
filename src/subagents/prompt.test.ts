@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { SUBAGENT_MAX_RUNNING } from "./domain.js";
 import {
 	SUBAGENT_PROMPT_GUIDELINES,
 	SUBAGENT_PROMPT_SNIPPET,
@@ -10,9 +11,19 @@ describe("subagent prompt guidance", () => {
 		const guidance = SUBAGENT_PROMPT_GUIDELINES.join("\n");
 		expect(guidance).toContain("Use visible subagents for long or interactive work");
 		expect(guidance).toContain("use headless subagents for silent, bounded fan-out");
-		expect(guidance).toContain("Visible isolated children appear as herdr workspaces");
-		expect(guidance).toContain("non-isolated visible children tile into a subagents tab");
+		expect(guidance).toContain("Visible Herdr children split beside the parent when its tab is available");
 		expect(SUBAGENT_PROMPT_SNIPPET).toContain("visible subagents");
+	});
+
+	it("teaches fire-and-forget role delegation and demotes waiting", () => {
+		const guidance = SUBAGENT_PROMPT_GUIDELINES.join("\n");
+		expect(guidance).toContain("delegation is fire-and-forget");
+		expect(guidance).toContain("do NOT call subagent_wait right after subagent_spawn");
+		expect(guidance).toContain("research, review, documentor, designer, implement-cheap, implement-smart");
+		expect(guidance).toContain("status=queued");
+		expect(guidance).toContain(`At most ${SUBAGENT_MAX_RUNNING} subagents can run concurrently.`);
+		expect(SUBAGENT_TOOL_DESCRIPTIONS.wait).toContain("Last resort");
+		expect(SUBAGENT_TOOL_DESCRIPTIONS.wait).toContain("prefer ending your turn");
 	});
 
 	it("documents the isolated coding-task recipe with worktree and baseRef", () => {

@@ -42,6 +42,7 @@ export interface PaneChildOptions {
 	pi: PiExecLike;
 	placement: AgentPanePlacement;
 	readonly tools?: readonly string[];
+	readonly appendSystemPrompt?: string;
 }
 
 export interface PaneBackendDependencies {
@@ -66,7 +67,13 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 	const baseDir = dependencies.baseDir ?? join(process.env.TMPDIR ?? "/tmp", "sumocode-subagents");
 	const paths = buildVisibleTaskPaths(options.id, now(), baseDir);
 	fs.mkdirSync(dirname(paths.promptFile), { recursive: true });
-	fs.writeFileSync(paths.promptFile, options.prompt, { mode: 0o600 });
+	// Headless children receive a true appended system prompt. The visible task
+	// wrapper has no equivalent flag yet, so preserve the role contract as a
+	// prompt-file preamble until that wrapper seam is added.
+	const prompt = options.appendSystemPrompt
+		? `role instructions (follow these for this entire session):\n${options.appendSystemPrompt}\n---\n${options.prompt}`
+		: options.prompt;
+	fs.writeFileSync(paths.promptFile, prompt, { mode: 0o600 });
 	fs.writeFileSync(paths.logFile, "");
 	const commandOptions = {
 		cwd: options.cwd,

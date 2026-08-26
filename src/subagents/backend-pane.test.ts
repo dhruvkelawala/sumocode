@@ -41,6 +41,7 @@ const flushPromises = async (): Promise<void> => {
 const createHarness = (
 	startResult: typeof startedPane | { ok: false; error: string } = startedPane,
 	placement: { kind: "tab"; tabId: string; direction: "right" } | { kind: "workspace"; workspaceId: string; paneId: string } = { kind: "tab", tabId: "w1:t1", direction: "right" },
+	appendSystemPrompt?: string,
 ) => {
 	const fs = new FakeFs();
 	const closePane = vi.fn(async () => ({ ok: true as const }));
@@ -60,6 +61,7 @@ const createHarness = (
 		id: "sa-1",
 		model: "openai/gpt-5",
 		thinking: "high",
+		appendSystemPrompt,
 		host,
 		pi: { exec: vi.fn() } as never,
 		placement,
@@ -104,6 +106,17 @@ describe("pane subagent backend", () => {
 		} finally {
 			vi.useRealTimers();
 		}
+	});
+
+	it("prepends role instructions to the visible prompt file", () => {
+		const harness = createHarness(startedPane, { kind: "tab", tabId: "w1:t1", direction: "right" }, "review carefully");
+		expect(harness.fs.files.get(harness.paths.promptFile)).toBe([
+			"role instructions (follow these for this entire session):",
+			"review carefully",
+			"---",
+			"do the work",
+		].join("\n"));
+		harness.child.interrupt();
 	});
 
 	it("uses the stderr log tail and partial response for non-zero exits", async () => {

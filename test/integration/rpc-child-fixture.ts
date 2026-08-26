@@ -46,6 +46,8 @@ export interface RpcChildFixtureOptions {
 	readonly compactReason?: "manual" | "threshold" | "overflow";
 	readonly compactSummary?: string;
 	readonly compactTokensBefore?: number;
+	/** Fire-and-forget extension UI requests emitted when the first prompt starts. */
+	readonly extensionUiRequests?: readonly unknown[];
 }
 
 export async function createRpcChildFixture(prefix: string, options: RpcChildFixtureOptions = {}): Promise<string> {
@@ -78,6 +80,7 @@ const settleDelayMs = ${JSON.stringify(options.settleDelayMs ?? 0)};
 const compactReason = ${JSON.stringify(options.compactReason ?? "manual")};
 const compactSummary = ${JSON.stringify(options.compactSummary ?? "Fixture compaction summary.")};
 const compactTokensBefore = ${JSON.stringify(options.compactTokensBefore ?? 42000)};
+let extensionUiRequests = ${JSON.stringify(options.extensionUiRequests ?? [])};
 const commandLogPath = process.env.SUMOCODE_RPC_FIXTURE_LOG;
 const availableModels = [
 	{ provider: "openai", id: "gpt-5", label: "openai/gpt-5" },
@@ -230,6 +233,8 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 		];
 		isStreaming = true;
 		write({ type: "agent_start" });
+		for (const request of extensionUiRequests) write(request);
+		extensionUiRequests = [];
 		write(response(command, {}));
 		if (streamChunks) {
 			let text = "";

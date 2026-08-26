@@ -49,6 +49,32 @@ describe("ModalLayer", () => {
 		expect(text).toContain("B) hint line");
 	});
 
+	it("renders long selects as a search-mode Divine Query: filter row, no letters", async () => {
+		const layer = new ModalLayer({ getTerminalSize: () => ({ columns: 80, rows: 40 }) });
+		const options = Array.from({ length: 12 }, (_, index) => `choice-${String(index).padStart(2, "0")}`);
+		options.push("research model");
+		const result = layer.select("SUBAGENT ROLES", options);
+
+		const beforeLines = layer.render(80);
+		const before = beforeLines.join("\n");
+		// Command-palette language: dialog title in the ✾ header, filter row,
+		// no DIVINE QUERY branding, no letter labels, windowed rows.
+		expect(before).toContain("SUBAGENT ROLES");
+		expect(before).not.toContain("DIVINE QUERY");
+		expect(before).toContain("type to filter");
+		expect(before).not.toContain("A) choice-00");
+		expect(beforeLines.filter((line) => line.includes("choice-")).length).toBeLessThanOrEqual(12);
+		expect(before).toContain("more");
+
+		// Typing filters (no letter-jump), Enter answers with the match.
+		for (const char of "research") layer.handleInput(char);
+		const filtered = layer.render(80).join("\n");
+		expect(filtered).toContain("research");
+		expect(filtered).not.toContain("choice-00");
+		layer.handleInput("enter");
+		await expect(result).resolves.toBe("research model");
+	});
+
 	it("selects an option directly via its letter (Divine Query parity)", async () => {
 		const layer = new ModalLayer({ getTerminalSize: () => ({ columns: 80, rows: 24 }) });
 		const result = layer.select("PICK", ["alpha", "beta"]);

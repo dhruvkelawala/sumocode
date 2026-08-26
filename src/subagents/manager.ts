@@ -4,13 +4,12 @@ import { promisify } from "node:util";
 import { createWorktree, resolveCreateOptions, type CreateWorktreeOptions, type CreateWorktreeResult } from "../git/worktree.js";
 import type { AgentPanePlacement, PiExecLike, TerminalHost } from "../terminal-host/types.js";
 import type { SpawnedChild } from "./backend-pi.js";
-import type { LiveToolState, RunOutcome, SubagentEvent, SubagentSnapshot, SubagentWorktreeRef } from "./domain.js";
+import { SUBAGENT_MAX_QUEUED, SUBAGENT_MAX_RUNNING, type LiveToolState, type RunOutcome, type SubagentEvent, type SubagentSnapshot, type SubagentWorktreeRef } from "./domain.js";
 import { planPlacement } from "./layout.js";
 import { buildCompletionManifest, type CompletionManifestEvidence } from "./manifest.js";
 
 const execFileAsync = promisify(execFile);
 
-const MAX_RUNNING = 4;
 const MAX_TRACKED = 64;
 const ERROR_TEXT_MAX = 4096;
 const CANCEL_WAIT_MS = 5_500;
@@ -36,6 +35,8 @@ export interface SpawnSubagentTask {
 	readonly sourceId?: string;
 	readonly prompt: string;
 	readonly title: string;
+	readonly roleId?: string;
+	readonly appendSystemPrompt?: string;
 	readonly cwd: string;
 	readonly visible?: boolean;
 	readonly worktree?: boolean;
@@ -64,6 +65,8 @@ export interface SubagentManagerDependencies {
 	readonly buildCompletionManifest?: typeof buildCompletionManifest;
 	readonly terminalHost?: TerminalHost;
 	readonly pi?: PiExecLike;
+	/** Parent Herdr tab injected into the RPC child; first visible pane splits here. */
+	readonly initialVisibleTabId?: string;
 }
 
 async function gitRead(cwd: string, args: readonly string[]): Promise<string | undefined> {
@@ -87,7 +90,7 @@ async function captureGitContext(cwd: string): Promise<SpawnGitContext> {
 	return { repoRoot, baseRef };
 }
 
-const isSettled = (snapshot: SubagentSnapshot): boolean => snapshot.status !== "running";
+const isSettled = (snapshot: SubagentSnapshot): boolean => snapshot.status !== "running" && snapshot.status !== "queued";
 
 const makeInitialSnapshot = (
 	task: SpawnSubagentTask,
@@ -97,16 +100,18 @@ const makeInitialSnapshot = (
 	cwd = task.cwd,
 	worktree?: SubagentWorktreeRef,
 	sessionFilePath?: string,
+	status: "queued" | "running" = "running",
 ): SubagentSnapshot => ({
 	id,
 	...(task.sourceId ? { sourceId: task.sourceId } : {}),
 	title: task.title,
 	prompt: task.prompt,
+	...(task.roleId ? { roleId: task.roleId } : {}),
 	cwd,
 	baseRef,
 	worktree,
 	...(task.visible ? { visible: true } : {}),
-	status: "running",
+	status,
 	createdAt,
 	modelLabel: task.model ?? (task.inherited?.model ? `${task.inherited.model.provider}/${task.inherited.model.id}` : undefined),
 	thinkingLabel: task.thinking ?? task.inherited?.thinking,
@@ -127,6 +132,7 @@ const upsertTool = (tools: readonly LiveToolState[], next: LiveToolState): reado
 export class SubagentManager {
 	private nextId = 1;
 	private readonly pendingSpawns = new Map<string, { title: string; createdAt: number }>();
+	private readonly queuedTasks: Array<{ task: SpawnSubagentTask; id: string; createdAt: number; generation: number }> = [];
 	private readonly snapshots = new Map<string, SubagentSnapshot>();
 	private readonly children = new Map<string, { child: SpawnedChild; controller: AbortController }>();
 	private readonly waitInterest = new Map<string, number>();
@@ -137,12 +143,17 @@ export class SubagentManager {
 	private readonly buildCompletionManifestImpl: typeof buildCompletionManifest;
 	private readonly terminalHost?: TerminalHost;
 	private readonly pi?: PiExecLike;
+	private readonly initialVisibleTabId?: string;
 	private subagentsTabId?: string;
 	private visibleSpawnTail: Promise<void> = Promise.resolve();
+	private dequeueTail: Promise<void> = Promise.resolve();
 	private readonly settlingIds = new Set<string>();
 	private readonly settlingPromises = new Map<string, Promise<void>>();
 	private readonly settlingOutcomes = new Map<string, RunOutcome>();
 	private readonly startedIds = new Set<string>();
+	private readonly cancelledSetupIds = new Set<string>();
+	private readonly workspacePlacedIds = new Set<string>();
+	private lifecycleGeneration = 0;
 	public readonly consumedIds = new Set<string>();
 
 	public constructor(private readonly backendFactory: BackendFactory, dependencies: SubagentManagerDependencies = {}) {
@@ -152,30 +163,55 @@ export class SubagentManager {
 		this.buildCompletionManifestImpl = dependencies.buildCompletionManifest ?? buildCompletionManifest;
 		this.terminalHost = dependencies.terminalHost;
 		this.pi = dependencies.pi;
+		this.initialVisibleTabId = dependencies.initialVisibleTabId;
+		this.subagentsTabId = this.initialVisibleTabId;
 	}
 
 	public async spawn(task: SpawnSubagentTask): Promise<SubagentSnapshot | AtCapacityDetails> {
+		const generation = this.lifecycleGeneration;
+		const runningSummaries = this.runningSummaries();
+		if (runningSummaries.length >= SUBAGENT_MAX_RUNNING || this.queuedTasks.length > 0) {
+			if (this.queuedTasks.length >= SUBAGENT_MAX_QUEUED) {
+				return {
+					status: "at_capacity",
+					capacity: SUBAGENT_MAX_RUNNING,
+					runningCount: runningSummaries.length,
+					running: runningSummaries,
+					retryHint: "queue is full — do NOT retry in a loop; cancel something or end your turn and respawn later",
+				};
+			}
+			const id = `sa-${this.nextId++}`;
+			const createdAt = Date.now();
+			const snapshot = makeInitialSnapshot(task, id, createdAt, "HEAD", task.cwd, undefined, undefined, "queued");
+			this.queuedTasks.push({ task, id, createdAt, generation });
+			this.snapshots.set(id, snapshot);
+			this.notify();
+			this.prune();
+			return snapshot;
+		}
+
+		const id = `sa-${this.nextId++}`;
+		const snapshot = await this.startTask(task, id, Date.now(), generation);
+		// A direct spawn can fail setup after later calls have filled the queue.
+		// Drain immediately instead of leaving accepted work parked until an
+		// unrelated running child settles.
+		if (snapshot.status !== "running" && generation === this.lifecycleGeneration) void this.scheduleDequeue();
+		return snapshot;
+	}
+
+	private runningSummaries(): SubagentCapacityTaskSummary[] {
 		// A run-settled child is removed from `children` before its bounded
 		// manifest read begins, so evidence collection does not occupy a worker
 		// slot for up to five seconds.
 		const running = this.list().filter((snapshot) => snapshot.status === "running" && this.children.has(snapshot.id));
-		const pendingSummaries = [...this.pendingSpawns].map(([id, spawn]) => ({ id, title: spawn.title, status: "running" as const, ageMs: Date.now() - spawn.createdAt }));
-		const runningSummaries = [
+		const pending = [...this.pendingSpawns].map(([id, spawn]) => ({ id, title: spawn.title, status: "running" as const, ageMs: Date.now() - spawn.createdAt }));
+		return [
 			...running.map((snapshot) => ({ id: snapshot.id, title: snapshot.title, status: snapshot.status, ageMs: Date.now() - snapshot.createdAt })),
-			...pendingSummaries,
+			...pending,
 		];
-		if (runningSummaries.length >= MAX_RUNNING) {
-			return {
-				status: "at_capacity",
-				capacity: MAX_RUNNING,
-				runningCount: runningSummaries.length,
-				running: runningSummaries,
-				retryHint: "wait for a running subagent to settle, then retry subagent_spawn",
-			};
-		}
+	}
 
-		const id = `sa-${this.nextId++}`;
-		const createdAt = Date.now();
+	private async startTask(task: SpawnSubagentTask, id: string, createdAt: number, generation: number): Promise<SubagentSnapshot> {
 		this.pendingSpawns.set(id, { title: task.title, createdAt });
 		let pending = true;
 		let releaseVisibleSpawn: (() => void) | undefined;
@@ -187,6 +223,10 @@ export class SubagentManager {
 		try {
 			const gitContext = await this.captureGitContextImpl(task.cwd);
 			const baseRef = gitContext.baseRef ?? "HEAD";
+			if (this.setupInterrupted(id, generation)) {
+				releasePending();
+				return this.recordSetupInterruption(task, id, createdAt, baseRef, "interrupted during setup");
+			}
 			let manifestBaseRef = baseRef;
 			if (task.branch && !task.worktree) {
 				releasePending();
@@ -245,11 +285,19 @@ export class SubagentManager {
 					baseRef: manifestBaseRef,
 					repoRoot: gitContext.repoRoot,
 				};
+				if (this.setupInterrupted(id, generation)) {
+					releasePending();
+					return this.recordSetupInterruption(task, id, createdAt, manifestBaseRef, `interrupted during setup. Worktree created at ${created.path} is preserved.`, childCwd, worktree);
+				}
 			}
 
 			let placement: AgentPanePlacement | undefined;
 			if (task.visible) {
 				releaseVisibleSpawn = await this.reserveVisibleSpawn();
+				if (this.setupInterrupted(id, generation)) {
+					releasePending();
+					return this.recordSetupInterruption(task, id, createdAt, manifestBaseRef, "interrupted during setup", childCwd, worktree);
+				}
 				const host = this.terminalHost;
 				if (!host || !this.pi || host.kind === "none") {
 					releasePending();
@@ -262,7 +310,7 @@ export class SubagentManager {
 					// panes stay open for inspection and still occupy tab real estate.
 					// Over-counting an already-closed pane merely opens a fresh tab
 					// earlier — the conservative failure mode.
-					visiblePanes: this.list().flatMap((snapshot) => snapshot.visible && !snapshot.worktree && snapshot.pane ? [snapshot.pane] : []),
+					visiblePanes: this.list().flatMap((snapshot) => snapshot.visible && snapshot.pane ? [snapshot.pane] : []),
 					sessionTabId: this.subagentsTabId,
 				});
 				if (planned.kind === "workspace") {
@@ -274,6 +322,10 @@ export class SubagentManager {
 							: { ok: false, error: `${host.kind} cannot open an existing worktree workspace` };
 					} catch (error) {
 						opened = { ok: false, error: error instanceof Error ? error.message : String(error) };
+					}
+					if (this.setupInterrupted(id, generation)) {
+						releasePending();
+						return this.recordSetupInterruption(task, id, createdAt, manifestBaseRef, "interrupted during setup", childCwd, worktree);
 					}
 					const workspaceId = opened.ok ? opened.pane.workspaceId : undefined;
 					if (!opened.ok || !workspaceId) {
@@ -288,11 +340,17 @@ export class SubagentManager {
 				else placement = { kind: "new-tab", label: planned.kind === "new-tab" ? planned.label : "subagents" };
 			}
 
+			if (this.setupInterrupted(id, generation)) {
+				releasePending();
+				return this.recordSetupInterruption(task, id, createdAt, manifestBaseRef, "interrupted during setup", childCwd, worktree);
+			}
 			const controller = new AbortController();
+			if (placement?.kind === "workspace") this.workspacePlacedIds.add(id);
 			let child: SpawnedChild;
 			try {
 				child = this.backendFactory({ ...task, cwd: childCwd, id, signal: controller.signal, placement });
 			} catch (error) {
+				this.workspacePlacedIds.delete(id);
 				releasePending();
 				const message = error instanceof Error ? error.message : String(error);
 				const preservationNote = worktree ? ` Worktree created at ${worktree.path} is preserved.` : "";
@@ -313,6 +371,7 @@ export class SubagentManager {
 			if (synchronousSettle) await synchronousSettle;
 			return this.snapshots.get(id) ?? snapshot;
 		} finally {
+			this.cancelledSetupIds.delete(id);
 			releaseVisibleSpawn?.();
 			releasePending();
 		}
@@ -399,7 +458,14 @@ export class SubagentManager {
 				lines.set(id, `${id} was already ${snapshot.status === "done" ? "done" : "settled"}`);
 				continue;
 			}
-			this.children.get(id)?.child.interrupt();
+			if (snapshot.status === "queued") {
+				const queueIndex = this.queuedTasks.findIndex((queued) => queued.id === id);
+				if (queueIndex >= 0) this.queuedTasks.splice(queueIndex, 1);
+				else if (this.pendingSpawns.has(id)) this.cancelledSetupIds.add(id);
+				void this.startSettle(id, { kind: "interrupted" });
+			} else {
+				this.children.get(id)?.child.interrupt();
+			}
 			targets.push(id);
 		}
 		await Promise.allSettled(targets.map(async (id) => {
@@ -410,14 +476,70 @@ export class SubagentManager {
 			}
 			lines.set(id, `Cancelled ${id}`);
 		}));
+		void this.scheduleDequeue();
 		return ids.map((id) => lines.get(id) ?? `${id} is unknown`);
 	}
 
 	public disposeAll(): void {
+		// In-flight setup cannot be synchronously interrupted, so advance the
+		// generation first. Every awaited setup path checks this token before it
+		// may construct a backend, preventing post-shutdown orphan children while
+		// still allowing this manager to serve a later session.
+		this.lifecycleGeneration += 1;
+		const queuedIds = this.queuedTasks.map((queued) => queued.id);
+		this.queuedTasks.length = 0;
+		for (const id of queuedIds) void this.startSettle(id, { kind: "interrupted" });
 		for (const [id, entry] of this.children) {
 			const snapshot = this.snapshots.get(id);
 			if (snapshot?.status === "running") entry.child.interrupt();
 		}
+	}
+
+	private scheduleDequeue(): Promise<void> {
+		const next = this.dequeueTail.then(() => this.drainQueue());
+		this.dequeueTail = next.catch(() => undefined);
+		return next;
+	}
+
+	private async drainQueue(): Promise<void> {
+		while (this.queuedTasks.length > 0 && this.runningSummaries().length < SUBAGENT_MAX_RUNNING) {
+			const queued = this.queuedTasks.shift();
+			if (!queued) return;
+			try {
+				await this.startTask(queued.task, queued.id, queued.createdAt, queued.generation);
+			} catch (error) {
+				const current = this.snapshots.get(queued.id);
+				if (current?.status === "queued") {
+					this.recordSpawnFailure(
+						queued.task,
+						queued.id,
+						queued.createdAt,
+						"HEAD",
+						`unable to start queued child: ${error instanceof Error ? error.message : String(error)}`,
+					);
+				}
+			}
+		}
+	}
+
+	private setupInterrupted(id: string, generation: number): boolean {
+		return generation !== this.lifecycleGeneration || this.cancelledSetupIds.has(id);
+	}
+
+	private recordSetupInterruption(
+		task: SpawnSubagentTask,
+		id: string,
+		createdAt: number,
+		baseRef: string,
+		errorText: string,
+		cwd = task.cwd,
+		worktree?: SubagentWorktreeRef,
+	): SubagentSnapshot {
+		const current = this.snapshots.get(id);
+		// Cancellation settles a dequeued task before its blocked setup resumes.
+		// Never overwrite that terminal snapshot with a second failure record.
+		if (current && isSettled(current)) return current;
+		return this.recordSpawnFailure(task, id, createdAt, baseRef, errorText, cwd, worktree);
 	}
 
 	private async reserveVisibleSpawn(): Promise<() => void> {
@@ -462,7 +584,8 @@ export class SubagentManager {
 
 	private fold(id: string, event: SubagentEvent): void {
 		if (event.kind === "run-settled") {
-			// A visible non-isolated child that FAILS before any pane attached is
+			this.workspacePlacedIds.delete(id);
+			// A visible child that FAILS before any pane attached is
 			// evidence the cached subagents tab may be gone (e.g. the human closed
 			// it — splitting a closed cached tab fails, and no pane event ever
 			// fired). Invalidate the cache so the next spawn re-plans a fresh tab
@@ -472,11 +595,10 @@ export class SubagentManager {
 			if (
 				event.outcome.kind === "failed" &&
 				settling?.visible &&
-				!settling.worktree &&
 				!settling.pane &&
 				this.subagentsTabId !== undefined
 			) {
-				this.subagentsTabId = undefined;
+				this.subagentsTabId = this.initialVisibleTabId;
 			}
 			void this.startSettle(id, event.outcome);
 			return;
@@ -485,7 +607,11 @@ export class SubagentManager {
 		if (!current) return;
 		if (event.kind === "pane-attached") {
 			this.snapshots.set(id, { ...current, pane: event.pane });
-			if (!current.worktree && event.pane.tabId) this.subagentsTabId = event.pane.tabId;
+			const workspacePlaced = this.workspacePlacedIds.delete(id);
+			// A worktree workspace is an isolation fallback, not a shared caller
+			// destination. Caching its tab would collapse later isolated children
+			// into the first workspace whenever HERDR_TAB_ID is unavailable.
+			if (event.pane.tabId && !workspacePlaced) this.subagentsTabId = event.pane.tabId;
 			this.notify();
 			return;
 		}
@@ -544,6 +670,19 @@ export class SubagentManager {
 		this.children.delete(id);
 		const settledAt = Date.now();
 		try {
+			if (current.status === "queued") {
+				this.snapshots.set(id, {
+					...current,
+					status: "error",
+					settledAt,
+					errorText: "interrupted",
+					manifest: { exit: "interrupted", durationMs: Math.max(0, settledAt - current.createdAt) },
+				});
+				if ((this.waitInterest.get(id) ?? 0) > 0) this.consumedIds.add(id);
+				this.notify();
+				this.prune();
+				return;
+			}
 			// Configuration failures can settle synchronously before the backend
 			// emits run-started. No child ran, so avoid blocking spawn on checkout
 			// git reads and attach only the truthful process facts.
@@ -565,6 +704,7 @@ export class SubagentManager {
 		} finally {
 			this.settlingIds.delete(id);
 			this.startedIds.delete(id);
+			void this.scheduleDequeue();
 		}
 	}
 

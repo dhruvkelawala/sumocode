@@ -33,6 +33,20 @@ function snapshot(overrides: Partial<CommandPaletteSnapshot> = {}): CommandPalet
 }
 
 describe("renderCommandPalette", () => {
+	it("places the caret cell AFTER the typed query, and before the placeholder when empty", () => {
+		// Both panelLine's bg paint (index 0) and the caret cell use 48;2; — the
+		// caret is the SECOND such escape on the line.
+		const caretIndex = (line: string): number => [...line.matchAll(/\u001b\[48;2;/g)][1]?.index ?? -1;
+		const searchLine = (query: string) => renderCommandPalette(snapshot({ searchQuery: query }), 80).find((line) => line.includes("\u276f"))!;
+
+		const typed = searchLine("res");
+		expect(typed.replace(ANSI, "")).toContain("res");
+		expect(caretIndex(typed)).toBeGreaterThan(typed.indexOf("res")); // caret trails the text
+
+		const empty = searchLine("");
+		expect(caretIndex(empty)).toBeLessThan(empty.indexOf("what shall")); // caret leads the placeholder
+	});
+
 	it("renders the six Scriptorium mode rows in fixed order", () => {
 		const lines = plain(renderCommandPalette(snapshot(), 80)).join("\n");
 		expect(lines.indexOf("SESSION")).toBeLessThan(lines.indexOf("MODEL"));

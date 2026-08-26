@@ -1,5 +1,20 @@
 import { describe, expect, it, vi } from "vitest";
-import { runPersonaCommand } from "./persona.js";
+import { parsePersonaEditorCommand, runPersonaCommand } from "./persona.js";
+
+describe("parsePersonaEditorCommand", () => {
+	it("preserves an existing executable path containing spaces", () => {
+		const path = "/Applications/Visual Studio Code.app/Contents/MacOS/code";
+		expect(parsePersonaEditorCommand(path, (candidate) => candidate === path)).toEqual({ command: path, args: [] });
+	});
+
+	it("parses quoted executable paths and editor flags without a shell", () => {
+		expect(parsePersonaEditorCommand('"/Applications/Visual Studio Code.app/Contents/MacOS/code" --wait', () => false)).toEqual({
+			command: "/Applications/Visual Studio Code.app/Contents/MacOS/code",
+			args: ["--wait"],
+		});
+		expect(parsePersonaEditorCommand("nvim -f", () => false)).toEqual({ command: "nvim", args: ["-f"] });
+	});
+});
 
 describe("runPersonaCommand", () => {
 	it("returns an error and does not open the editor when the persona file is missing", () => {

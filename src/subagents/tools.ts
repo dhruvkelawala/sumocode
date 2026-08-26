@@ -7,6 +7,7 @@ import type { PaneRef, TerminalHost } from "../terminal-host/types.js";
 import { latestText, type SubagentSnapshot } from "./domain.js";
 import { type AtCapacityDetails, SubagentManager } from "./manager.js";
 import { formatCompletionManifestSummary, SUBAGENT_PROMPT_GUIDELINES, SUBAGENT_PROMPT_SNIPPET, SUBAGENT_TOOL_DESCRIPTIONS } from "./prompt.js";
+import { loadRoles } from "./roles.js";
 
 const StringEnum = <T extends readonly string[]>(values: T, options?: { description?: string }) =>
 	Type.Unsafe<T[number]>({
@@ -59,9 +60,10 @@ const formatDuration = (ms: number): string => {
 
 const formatSnapshotLine = (snapshot: SubagentSnapshot, includeBranch = false): string => {
 	const model = snapshot.modelLabel ?? "inherit";
+	const identity = [snapshot.roleId, model].filter((part): part is string => part !== undefined).join(", ");
 	const branch = includeBranch && snapshot.worktree ? ` · ${snapshot.worktree.branch}` : "";
 	const pane = snapshot.pane ? ` · pane ${snapshot.pane.paneId ?? snapshot.pane.tabId ?? snapshot.pane.workspaceId ?? "unknown"} · agent ${snapshot.pane.agentName}` : "";
-	return `${snapshot.id} [${snapshot.status}] "${snapshot.title}" (${model}, ${formatDuration(Date.now() - snapshot.createdAt)}, ${snapshot.cwd})${branch}${pane}`;
+	return `${snapshot.id} [${snapshot.status}] "${snapshot.title}" (${identity}, ${formatDuration(Date.now() - snapshot.createdAt)}, ${snapshot.cwd})${branch}${pane}`;
 };
 
 const manifestSummary = (snapshot: SubagentSnapshot): string | undefined => snapshot.manifest
@@ -91,7 +93,13 @@ export function registerSubagentTools(
 	manager: SubagentManager,
 	delivery?: Pick<DeferredResultDelivery, "consume">,
 	host: TerminalHost = getTerminalHost(),
+	roleLoader: typeof loadRoles = loadRoles,
 ): void {
+	const registeredRoles = roleLoader().roles;
+	const roleDescription = [
+		"Optional role preset. Explicit spawn parameters override role defaults. Known roles:",
+		...registeredRoles.map((role) => `${role.id} — ${role.description}`),
+	].join("\n");
 	pi.registerTool({
 		name: "subagent_spawn",
 		label: "Subagent Spawn",
@@ -101,6 +109,7 @@ export function registerSubagentTools(
 		parameters: Type.Object({
 			prompt: Type.String({ description: "Self-contained child subagent prompt." }),
 			name: Type.String({ description: "Short human-readable title for this subagent." }),
+			role: Type.Optional(Type.String({ description: roleDescription })),
 			model: Type.Optional(Type.String({ description: "Optional model override as provider/modelId." })),
 			thinking: Type.Optional(StringEnum(["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const, { description: "Optional thinking level override." })),
 			working_dir: Type.Optional(Type.String({ description: "Working directory for the child. Defaults to the current project cwd." })),
@@ -110,20 +119,47 @@ export function registerSubagentTools(
 			visible: Type.Optional(Type.Boolean({ description: "Open the child as an interactive pane in the terminal host — watchable and steerable; requires a running terminal host." })),
 		}),
 		async execute(toolCallId, params, _signal, _onUpdate, ctx) {
-			if (params.visible === true && host.kind === "none") {
+			const loaded = roleLoader();
+			const loadedRoles = loaded.roles;
+			if (params.role && loaded.warnings.length > 0) {
+				return makeToolResult(`Unable to spawn role ${params.role}: roles.json has invalid configuration:\n${loaded.warnings.map((warning) => `- ${warning}`).join("\n")}`, {
+					action: "spawn",
+					status: "invalid_role_config",
+					role: params.role,
+					warnings: loaded.warnings,
+				});
+			}
+			const role = params.role ? loadedRoles.find((candidate) => candidate.id === params.role) : undefined;
+			if (params.role && !role) {
+				const knownRoles = loadedRoles.map((candidate) => candidate.id);
+				return makeToolResult(`Unknown subagent role: ${params.role}. Known roles: ${knownRoles.join(", ") || "(none)"}.`, {
+					action: "spawn",
+					status: "unknown_role",
+					role: params.role,
+					knownRoles,
+				});
+			}
+			const visible = params.visible ?? role?.defaultVisible;
+			if (visible === true && host.kind === "none") {
 				throw new Error("visible subagents require a running terminal host (herdr or cmux)");
 			}
+			const activeTools = pi.getActiveTools();
+			const builtInTools = role?.tools
+				? role.tools.filter((tool) => activeTools.includes(tool))
+				: activeTools;
 			const spawned = await manager.spawn({
 				sourceId: toolCallId,
 				prompt: params.prompt,
 				title: params.name,
 				cwd: params.working_dir ?? ctx.cwd,
-				visible: params.visible,
-				worktree: params.worktree,
+				roleId: role?.id,
+				appendSystemPrompt: role?.systemPrompt,
+				visible,
+				worktree: params.worktree ?? role?.defaultWorktree,
 				branch: params.branch,
 				baseRef: params.baseRef,
-				model: params.model,
-				thinking: params.thinking,
+				model: params.model ?? role?.model,
+				thinking: params.thinking ?? role?.thinking,
 				inherited: {
 					model: ctx.model ? { provider: ctx.model.provider, id: ctx.model.id } : undefined,
 					// Mirror native-task-tool.ts (`pi.getThinkingLevel()` at spawn time):
@@ -131,9 +167,17 @@ export function registerSubagentTools(
 					// call overrides it, instead of silently defaulting to "low".
 					thinking: pi.getThinkingLevel(),
 				},
-				builtInTools: pi.getActiveTools(),
+				builtInTools,
 			});
 			if (isAtCapacity(spawned)) return formatAtCapacity(spawned);
+			if (spawned.status === "queued") {
+				const position = manager.list().filter((snapshot) => snapshot.status === "queued").findIndex((snapshot) => snapshot.id === spawned.id) + 1;
+				return makeToolResult(`Queued ${spawned.id} (${spawned.title}) at position ${position} — starts automatically when a slot frees. Do not retry or wait.`, {
+					action: "spawn",
+					subagent: spawned,
+					activity: activityEnvelope(spawned, toolCallId),
+				});
+			}
 			if (spawned.status !== "running") {
 				// The failure is being returned INLINE — consume it so the change
 				// listener's already-deferred payload is not ALSO auto-delivered
@@ -145,7 +189,7 @@ export function registerSubagentTools(
 					activity: activityEnvelope(spawned, toolCallId),
 				});
 			}
-			return makeToolResult(`Started ${spawned.id} (${spawned.title}). Its result will be delivered to you automatically when it settles, or use subagent_wait to block for it.`, {
+			return makeToolResult(`Started ${spawned.id} (${spawned.title}). No polling needed — continue other work or END YOUR TURN; the result will be delivered to you and wake you automatically when it settles. Only call subagent_wait if you cannot take a single further step without this result.`, {
 				action: "spawn",
 				subagent: spawned,
 				activity: activityEnvelope(spawned, toolCallId),
@@ -166,6 +210,7 @@ export function registerSubagentTools(
 		async execute(_toolCallId, params) {
 			const snapshot = manager.get(params.id);
 			if (!snapshot) throw new Error(`Unknown subagent id: ${params.id}`);
+			if (snapshot.status === "queued") throw new Error(`Subagent ${params.id} is queued and cannot receive input until it starts`);
 			if (snapshot.status !== "running") throw new Error(`Subagent ${params.id} is already settled (${snapshot.status}) and cannot receive input`);
 			if (!snapshot.visible) throw new Error("headless children cannot receive input — respawn with visible: true");
 			if (!snapshot.pane?.paneId) throw new Error(`Visible subagent ${params.id} does not have a ready pane`);

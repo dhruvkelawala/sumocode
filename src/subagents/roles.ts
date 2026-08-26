@@ -124,17 +124,17 @@ function normalizedOverlay(value: unknown, index: number, builtIn: boolean, warn
 		warnings.push(`role ${id} has an invalid model; entry skipped`);
 		return undefined;
 	}
-	if (hasOwn(value, "thinking") && (typeof value.thinking !== "string" || !isThinking(value.thinking))) {
+	if (hasOwn(value, "thinking") && (typeof value.thinking !== "string" || (value.thinking !== "inherit" && !isThinking(value.thinking)))) {
 		warnings.push(`role ${id} has an invalid thinking level; entry skipped`);
 		return undefined;
 	}
 	for (const field of ["defaultWorktree", "defaultVisible"] as const) {
-		if (hasOwn(value, field) && typeof value[field] !== "boolean") {
+		if (hasOwn(value, field) && typeof value[field] !== "boolean" && value[field] !== "inherit") {
 			warnings.push(`role ${id} has an invalid ${field}; entry skipped`);
 			return undefined;
 		}
 	}
-	if (hasOwn(value, "tools") && !Array.isArray(value.tools)) {
+	if (hasOwn(value, "tools") && !Array.isArray(value.tools) && value.tools !== "inherit") {
 		warnings.push(`role ${id} has an invalid tools list; entry skipped`);
 		return undefined;
 	}
@@ -144,10 +144,11 @@ function normalizedOverlay(value: unknown, index: number, builtIn: boolean, warn
 		if (typeof value[field] === "string") overlay[field] = value[field];
 	}
 	if (hasOwn(value, "model")) overlay.model = value.model === "inherit" ? undefined : (value.model as string).trim();
-	if (typeof value.thinking === "string" && isThinking(value.thinking)) overlay.thinking = value.thinking;
-	if (typeof value.defaultWorktree === "boolean") overlay.defaultWorktree = value.defaultWorktree;
-	if (typeof value.defaultVisible === "boolean") overlay.defaultVisible = value.defaultVisible;
-	if (Array.isArray(value.tools)) {
+	if (hasOwn(value, "thinking")) overlay.thinking = value.thinking === "inherit" ? undefined : value.thinking as SubagentRole["thinking"];
+	if (hasOwn(value, "defaultWorktree")) overlay.defaultWorktree = value.defaultWorktree === "inherit" ? undefined : value.defaultWorktree as boolean;
+	if (hasOwn(value, "defaultVisible")) overlay.defaultVisible = value.defaultVisible === "inherit" ? undefined : value.defaultVisible as boolean;
+	if (value.tools === "inherit") overlay.tools = undefined;
+	else if (Array.isArray(value.tools)) {
 		const tools: string[] = [];
 		for (const tool of value.tools) {
 			if (typeof tool !== "string" || !(BUILT_IN_TOOLS as readonly string[]).includes(tool)) {

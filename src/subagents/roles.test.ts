@@ -59,10 +59,18 @@ describe("subagent roles", () => {
 		expect(loaded.warnings.join("\n")).toContain("must be an object");
 	});
 
-	it("normalizes explicit model inheritance to undefined", () => {
-		const loaded = fromJson({ roles: [{ id: "research", model: "inherit" }] });
-		const role = loaded.roles.find((candidate) => candidate.id === "research");
-		expect(role).toHaveProperty("model", undefined);
+	it("normalizes explicit inheritance sentinels over built-in defaults", () => {
+		const loaded = fromJson({ roles: [
+			{ id: "research", model: "inherit", tools: "inherit" },
+			{ id: "implement-cheap", thinking: "inherit", defaultWorktree: "inherit" },
+		] });
+		const research = loaded.roles.find((candidate) => candidate.id === "research");
+		const implementCheap = loaded.roles.find((candidate) => candidate.id === "implement-cheap");
+		expect(research).toHaveProperty("model", undefined);
+		expect(research).toHaveProperty("tools", undefined);
+		expect(implementCheap).toHaveProperty("thinking", undefined);
+		expect(implementCheap).toHaveProperty("defaultWorktree", undefined);
+		expect(loaded.warnings).toEqual([]);
 	});
 
 	it("falls back to built-ins for bad json and oversized files", () => {

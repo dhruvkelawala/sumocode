@@ -151,6 +151,7 @@ export class SubagentManager {
 	private readonly settlingPromises = new Map<string, Promise<void>>();
 	private readonly settlingOutcomes = new Map<string, RunOutcome>();
 	private readonly startedIds = new Set<string>();
+	private readonly cancelledSetupIds = new Set<string>();
 	private lifecycleGeneration = 0;
 	public readonly consumedIds = new Set<string>();
 
@@ -221,9 +222,9 @@ export class SubagentManager {
 		try {
 			const gitContext = await this.captureGitContextImpl(task.cwd);
 			const baseRef = gitContext.baseRef ?? "HEAD";
-			if (generation !== this.lifecycleGeneration) {
+			if (this.setupInterrupted(id, generation)) {
 				releasePending();
-				return this.recordSpawnFailure(task, id, createdAt, baseRef, "interrupted during session shutdown");
+				return this.recordSetupInterruption(task, id, createdAt, baseRef, "interrupted during setup");
 			}
 			let manifestBaseRef = baseRef;
 			if (task.branch && !task.worktree) {
@@ -283,18 +284,18 @@ export class SubagentManager {
 					baseRef: manifestBaseRef,
 					repoRoot: gitContext.repoRoot,
 				};
-				if (generation !== this.lifecycleGeneration) {
+				if (this.setupInterrupted(id, generation)) {
 					releasePending();
-					return this.recordSpawnFailure(task, id, createdAt, manifestBaseRef, `interrupted during session shutdown. Worktree created at ${created.path} is preserved.`, childCwd, worktree);
+					return this.recordSetupInterruption(task, id, createdAt, manifestBaseRef, `interrupted during setup. Worktree created at ${created.path} is preserved.`, childCwd, worktree);
 				}
 			}
 
 			let placement: AgentPanePlacement | undefined;
 			if (task.visible) {
 				releaseVisibleSpawn = await this.reserveVisibleSpawn();
-				if (generation !== this.lifecycleGeneration) {
+				if (this.setupInterrupted(id, generation)) {
 					releasePending();
-					return this.recordSpawnFailure(task, id, createdAt, manifestBaseRef, "interrupted during session shutdown", childCwd, worktree);
+					return this.recordSetupInterruption(task, id, createdAt, manifestBaseRef, "interrupted during setup", childCwd, worktree);
 				}
 				const host = this.terminalHost;
 				if (!host || !this.pi || host.kind === "none") {
@@ -321,9 +322,9 @@ export class SubagentManager {
 					} catch (error) {
 						opened = { ok: false, error: error instanceof Error ? error.message : String(error) };
 					}
-					if (generation !== this.lifecycleGeneration) {
+					if (this.setupInterrupted(id, generation)) {
 						releasePending();
-						return this.recordSpawnFailure(task, id, createdAt, manifestBaseRef, "interrupted during session shutdown", childCwd, worktree);
+						return this.recordSetupInterruption(task, id, createdAt, manifestBaseRef, "interrupted during setup", childCwd, worktree);
 					}
 					const workspaceId = opened.ok ? opened.pane.workspaceId : undefined;
 					if (!opened.ok || !workspaceId) {
@@ -338,9 +339,9 @@ export class SubagentManager {
 				else placement = { kind: "new-tab", label: planned.kind === "new-tab" ? planned.label : "subagents" };
 			}
 
-			if (generation !== this.lifecycleGeneration) {
+			if (this.setupInterrupted(id, generation)) {
 				releasePending();
-				return this.recordSpawnFailure(task, id, createdAt, manifestBaseRef, "interrupted during session shutdown", childCwd, worktree);
+				return this.recordSetupInterruption(task, id, createdAt, manifestBaseRef, "interrupted during setup", childCwd, worktree);
 			}
 			const controller = new AbortController();
 			let child: SpawnedChild;
@@ -367,6 +368,7 @@ export class SubagentManager {
 			if (synchronousSettle) await synchronousSettle;
 			return this.snapshots.get(id) ?? snapshot;
 		} finally {
+			this.cancelledSetupIds.delete(id);
 			releaseVisibleSpawn?.();
 			releasePending();
 		}
@@ -456,6 +458,7 @@ export class SubagentManager {
 			if (snapshot.status === "queued") {
 				const queueIndex = this.queuedTasks.findIndex((queued) => queued.id === id);
 				if (queueIndex >= 0) this.queuedTasks.splice(queueIndex, 1);
+				else if (this.pendingSpawns.has(id)) this.cancelledSetupIds.add(id);
 				void this.startSettle(id, { kind: "interrupted" });
 			} else {
 				this.children.get(id)?.child.interrupt();
@@ -514,6 +517,26 @@ export class SubagentManager {
 				}
 			}
 		}
+	}
+
+	private setupInterrupted(id: string, generation: number): boolean {
+		return generation !== this.lifecycleGeneration || this.cancelledSetupIds.has(id);
+	}
+
+	private recordSetupInterruption(
+		task: SpawnSubagentTask,
+		id: string,
+		createdAt: number,
+		baseRef: string,
+		errorText: string,
+		cwd = task.cwd,
+		worktree?: SubagentWorktreeRef,
+	): SubagentSnapshot {
+		const current = this.snapshots.get(id);
+		// Cancellation settles a dequeued task before its blocked setup resumes.
+		// Never overwrite that terminal snapshot with a second failure record.
+		if (current && isSettled(current)) return current;
+		return this.recordSpawnFailure(task, id, createdAt, baseRef, errorText, cwd, worktree);
 	}
 
 	private async reserveVisibleSpawn(): Promise<() => void> {

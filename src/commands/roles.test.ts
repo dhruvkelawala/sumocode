@@ -184,6 +184,22 @@ function queuedPalette(selections: Array<string | undefined>, calls: SearchPalet
 		}
 	});
 
+	it.each([
+		["thinking", "inherit", "thinking", "inherit"],
+		["tools", "inherit parent", "tools", "inherit"],
+		["worktree", "inherit default", "defaultWorktree", "inherit"],
+		["visible", "inherit default", "defaultVisible", "inherit"],
+	] as const)("persists explicit %s inheritance instead of deleting the overlay", async (field, pickerValue, storedField, storedValue) => {
+		const write = vi.fn();
+		await runRolesCommand(commandDeps({
+			loadRoles: () => ({ roles: BUILT_IN_ROLES, warnings: [] }),
+			showPalette: queuedPalette(["role:implement-cheap", `field:implement-cheap:${field}`, pickerValue, undefined, undefined]),
+			writeRolesFile: write,
+		}));
+
+		expect(write).toHaveBeenCalledWith({ kind: "set", roleId: "implement-cheap", field: storedField, value: storedValue });
+	});
+
 	it("returns path instructions without opening a palette or writing in a non-TTY context", async () => {
 		const showPalette = vi.fn();
 		const write = vi.fn();
@@ -227,6 +243,18 @@ describe("writeRolesFile", () => {
 		try {
 			writeRolesFile(path, { kind: "set", roleId: "research", field: "model", value: "inherit" });
 			expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({ roles: [{ id: "research", model: "inherit" }] });
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("persists inheritance sentinels in an existing overlay", () => {
+		const dir = mkdtempSync(join(tmpdir(), "sumocode-roles-inherit-command-"));
+		const path = join(dir, "roles.json");
+		try {
+			writeRolesFile(path, { kind: "set", roleId: "implement-cheap", field: "thinking", value: "high" });
+			writeRolesFile(path, { kind: "set", roleId: "implement-cheap", field: "thinking", value: "inherit" });
+			expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({ roles: [{ id: "implement-cheap", thinking: "inherit" }] });
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}

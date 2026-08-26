@@ -5104,17 +5104,17 @@ function normalizedOverlay(value, index, builtIn, warnings) {
     warnings.push(`role ${id} has an invalid model; entry skipped`);
     return void 0;
   }
-  if (hasOwn(value, "thinking") && (typeof value.thinking !== "string" || !isThinking(value.thinking))) {
+  if (hasOwn(value, "thinking") && (typeof value.thinking !== "string" || value.thinking !== "inherit" && !isThinking(value.thinking))) {
     warnings.push(`role ${id} has an invalid thinking level; entry skipped`);
     return void 0;
   }
   for (const field of ["defaultWorktree", "defaultVisible"]) {
-    if (hasOwn(value, field) && typeof value[field] !== "boolean") {
+    if (hasOwn(value, field) && typeof value[field] !== "boolean" && value[field] !== "inherit") {
       warnings.push(`role ${id} has an invalid ${field}; entry skipped`);
       return void 0;
     }
   }
-  if (hasOwn(value, "tools") && !Array.isArray(value.tools)) {
+  if (hasOwn(value, "tools") && !Array.isArray(value.tools) && value.tools !== "inherit") {
     warnings.push(`role ${id} has an invalid tools list; entry skipped`);
     return void 0;
   }
@@ -5123,10 +5123,11 @@ function normalizedOverlay(value, index, builtIn, warnings) {
     if (typeof value[field] === "string") overlay[field] = value[field];
   }
   if (hasOwn(value, "model")) overlay.model = value.model === "inherit" ? void 0 : value.model.trim();
-  if (typeof value.thinking === "string" && isThinking(value.thinking)) overlay.thinking = value.thinking;
-  if (typeof value.defaultWorktree === "boolean") overlay.defaultWorktree = value.defaultWorktree;
-  if (typeof value.defaultVisible === "boolean") overlay.defaultVisible = value.defaultVisible;
-  if (Array.isArray(value.tools)) {
+  if (hasOwn(value, "thinking")) overlay.thinking = value.thinking === "inherit" ? void 0 : value.thinking;
+  if (hasOwn(value, "defaultWorktree")) overlay.defaultWorktree = value.defaultWorktree === "inherit" ? void 0 : value.defaultWorktree;
+  if (hasOwn(value, "defaultVisible")) overlay.defaultVisible = value.defaultVisible === "inherit" ? void 0 : value.defaultVisible;
+  if (value.tools === "inherit") overlay.tools = void 0;
+  else if (Array.isArray(value.tools)) {
     const tools = [];
     for (const tool of value.tools) {
       if (typeof tool !== "string" || !BUILT_IN_TOOLS.includes(tool)) {
@@ -5547,7 +5548,7 @@ async function chooseMutation(deps, selection) {
   }
   if (field === "thinking") {
     const thinking2 = await deps.showPalette({ title: `${role.id.toUpperCase()} THINKING`, placeholder: "choose a thinking level\u2026", rows: pickerRows(THINKING_LEVELS2) });
-    return thinking2 === void 0 ? void 0 : { kind: "set", roleId: role.id, field: "thinking", value: thinking2 === "inherit" ? void 0 : thinking2 };
+    return thinking2 === void 0 ? void 0 : { kind: "set", roleId: role.id, field: "thinking", value: thinking2 };
   }
   if (field === "tools") {
     const tools = await deps.showPalette({
@@ -5560,7 +5561,7 @@ async function chooseMutation(deps, selection) {
       kind: "set",
       roleId: role.id,
       field: "tools",
-      value: tools === "inherit parent" ? void 0 : tools.startsWith("read-only") ? [...READ_ONLY_TOOLS] : [...BUILT_IN_TOOLS]
+      value: tools === "inherit parent" ? "inherit" : tools.startsWith("read-only") ? [...READ_ONLY_TOOLS] : [...BUILT_IN_TOOLS]
     };
   }
   if (field === "worktree" || field === "visible") {
@@ -5573,7 +5574,7 @@ async function chooseMutation(deps, selection) {
       kind: "set",
       roleId: role.id,
       field: field === "worktree" ? "defaultWorktree" : "defaultVisible",
-      value: value === "inherit default" ? void 0 : value === "true"
+      value: value === "inherit default" ? "inherit" : value === "true"
     };
   }
   return void 0;
@@ -14938,6 +14939,7 @@ var SubagentManager = class {
   settlingPromises = /* @__PURE__ */ new Map();
   settlingOutcomes = /* @__PURE__ */ new Map();
   startedIds = /* @__PURE__ */ new Set();
+  cancelledSetupIds = /* @__PURE__ */ new Set();
   lifecycleGeneration = 0;
   consumedIds = /* @__PURE__ */ new Set();
   async spawn(task) {
@@ -14987,9 +14989,9 @@ var SubagentManager = class {
     try {
       const gitContext = await this.captureGitContextImpl(task.cwd);
       const baseRef = gitContext.baseRef ?? "HEAD";
-      if (generation !== this.lifecycleGeneration) {
+      if (this.setupInterrupted(id, generation)) {
         releasePending();
-        return this.recordSpawnFailure(task, id, createdAt, baseRef, "interrupted during session shutdown");
+        return this.recordSetupInterruption(task, id, createdAt, baseRef, "interrupted during setup");
       }
       let manifestBaseRef = baseRef;
       if (task.branch && !task.worktree) {
@@ -15040,17 +15042,17 @@ var SubagentManager = class {
           baseRef: manifestBaseRef,
           repoRoot: gitContext.repoRoot
         };
-        if (generation !== this.lifecycleGeneration) {
+        if (this.setupInterrupted(id, generation)) {
           releasePending();
-          return this.recordSpawnFailure(task, id, createdAt, manifestBaseRef, `interrupted during session shutdown. Worktree created at ${created.path} is preserved.`, childCwd, worktree);
+          return this.recordSetupInterruption(task, id, createdAt, manifestBaseRef, `interrupted during setup. Worktree created at ${created.path} is preserved.`, childCwd, worktree);
         }
       }
       let placement;
       if (task.visible) {
         releaseVisibleSpawn = await this.reserveVisibleSpawn();
-        if (generation !== this.lifecycleGeneration) {
+        if (this.setupInterrupted(id, generation)) {
           releasePending();
-          return this.recordSpawnFailure(task, id, createdAt, manifestBaseRef, "interrupted during session shutdown", childCwd, worktree);
+          return this.recordSetupInterruption(task, id, createdAt, manifestBaseRef, "interrupted during setup", childCwd, worktree);
         }
         const host = this.terminalHost;
         if (!host || !this.pi || host.kind === "none") {
@@ -15075,9 +15077,9 @@ var SubagentManager = class {
           } catch (error) {
             opened = { ok: false, error: error instanceof Error ? error.message : String(error) };
           }
-          if (generation !== this.lifecycleGeneration) {
+          if (this.setupInterrupted(id, generation)) {
             releasePending();
-            return this.recordSpawnFailure(task, id, createdAt, manifestBaseRef, "interrupted during session shutdown", childCwd, worktree);
+            return this.recordSetupInterruption(task, id, createdAt, manifestBaseRef, "interrupted during setup", childCwd, worktree);
           }
           const workspaceId = opened.ok ? opened.pane.workspaceId : void 0;
           if (!opened.ok || !workspaceId) {
@@ -15089,9 +15091,9 @@ var SubagentManager = class {
         } else if (planned.kind === "tab") placement = planned;
         else placement = { kind: "new-tab", label: planned.kind === "new-tab" ? planned.label : "subagents" };
       }
-      if (generation !== this.lifecycleGeneration) {
+      if (this.setupInterrupted(id, generation)) {
         releasePending();
-        return this.recordSpawnFailure(task, id, createdAt, manifestBaseRef, "interrupted during session shutdown", childCwd, worktree);
+        return this.recordSetupInterruption(task, id, createdAt, manifestBaseRef, "interrupted during setup", childCwd, worktree);
       }
       const controller = new AbortController();
       let child;
@@ -15115,6 +15117,7 @@ var SubagentManager = class {
       if (synchronousSettle) await synchronousSettle;
       return this.snapshots.get(id) ?? snapshot;
     } finally {
+      this.cancelledSetupIds.delete(id);
       releaseVisibleSpawn?.();
       releasePending();
     }
@@ -15194,6 +15197,7 @@ var SubagentManager = class {
       if (snapshot.status === "queued") {
         const queueIndex = this.queuedTasks.findIndex((queued) => queued.id === id);
         if (queueIndex >= 0) this.queuedTasks.splice(queueIndex, 1);
+        else if (this.pendingSpawns.has(id)) this.cancelledSetupIds.add(id);
         void this.startSettle(id, { kind: "interrupted" });
       } else {
         this.children.get(id)?.child.interrupt();
@@ -15245,6 +15249,14 @@ var SubagentManager = class {
         }
       }
     }
+  }
+  setupInterrupted(id, generation) {
+    return generation !== this.lifecycleGeneration || this.cancelledSetupIds.has(id);
+  }
+  recordSetupInterruption(task, id, createdAt, baseRef, errorText3, cwd = task.cwd, worktree) {
+    const current = this.snapshots.get(id);
+    if (current && isSettled(current)) return current;
+    return this.recordSpawnFailure(task, id, createdAt, baseRef, errorText3, cwd, worktree);
   }
   async reserveVisibleSpawn() {
     const previous = this.visibleSpawnTail;

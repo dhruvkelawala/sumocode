@@ -105,8 +105,39 @@ describe("SubagentManager", () => {
 		manager.disposeAll();
 		releaseCapture();
 
-		await expect(spawning).resolves.toMatchObject({ status: "error", errorText: "interrupted during session shutdown" });
+		await expect(spawning).resolves.toMatchObject({ status: "error", errorText: "interrupted during setup" });
 		expect(backendFactory).not.toHaveBeenCalled();
+	});
+
+	it("prevents a dequeued task cancelled during setup from launching", async () => {
+		const emitters = new Map<string, (event: SubagentEvent) => void>();
+		let blockSetup = false;
+		let releaseCapture = (): void => undefined;
+		const captureGate = new Promise<void>((resolve) => { releaseCapture = resolve; });
+		const backendFactory = vi.fn((task: SpawnSubagentTask & { id: string }) => ({
+			events: (emit: (event: SubagentEvent) => void) => {
+				emitters.set(task.id, emit);
+				emit({ kind: "run-started" });
+			},
+			interrupt: () => undefined,
+		}));
+		const captureGitContext = vi.fn(async () => {
+			if (blockSetup) await captureGate;
+			return { baseRef: "base-ref" };
+		});
+		const manager = new SubagentManager(backendFactory, { captureGitContext, buildCompletionManifest: fakeManifestBuilder });
+		for (let index = 0; index < SUBAGENT_MAX_RUNNING; index += 1) await manager.spawn(makeTask(`running-${index}`));
+		blockSetup = true;
+		await manager.spawn(makeTask("queued"));
+
+		emitters.get("sa-1")?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
+		await vi.waitFor(() => expect(captureGitContext).toHaveBeenCalledTimes(SUBAGENT_MAX_RUNNING + 1));
+		await expect(manager.cancel([firstQueuedId])).resolves.toEqual([`Cancelled ${firstQueuedId}`]);
+		releaseCapture();
+
+		await vi.waitFor(() => expect(manager.get(firstQueuedId)?.status).toBe("error"));
+		expect(manager.get(firstQueuedId)).toMatchObject({ errorText: "interrupted", manifest: { exit: "interrupted" } });
+		expect(backendFactory.mock.calls.some(([task]) => task.id === firstQueuedId)).toBe(false);
 	});
 
 	it("starts queued tasks in fifo order as running slots free", async () => {

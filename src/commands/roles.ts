@@ -132,7 +132,7 @@ async function chooseMutation(deps: RolesCommandDeps, selection: RoleFieldSelect
 	}
 	if (field === "thinking") {
 		const thinking = await deps.showPalette({ title: `${role.id.toUpperCase()} THINKING`, placeholder: "choose a thinking level…", rows: pickerRows(THINKING_LEVELS) });
-		return thinking === undefined ? undefined : { kind: "set", roleId: role.id, field: "thinking", value: thinking === "inherit" ? undefined : thinking };
+		return thinking === undefined ? undefined : { kind: "set", roleId: role.id, field: "thinking", value: thinking };
 	}
 	if (field === "tools") {
 		const tools = await deps.showPalette({
@@ -145,7 +145,7 @@ async function chooseMutation(deps: RolesCommandDeps, selection: RoleFieldSelect
 			kind: "set",
 			roleId: role.id,
 			field: "tools",
-			value: tools === "inherit parent" ? undefined : tools.startsWith("read-only") ? [...READ_ONLY_TOOLS] : [...BUILT_IN_TOOLS],
+			value: tools === "inherit parent" ? "inherit" : tools.startsWith("read-only") ? [...READ_ONLY_TOOLS] : [...BUILT_IN_TOOLS],
 		};
 	}
 	if (field === "worktree" || field === "visible") {
@@ -158,7 +158,7 @@ async function chooseMutation(deps: RolesCommandDeps, selection: RoleFieldSelect
 			kind: "set",
 			roleId: role.id,
 			field: field === "worktree" ? "defaultWorktree" : "defaultVisible",
-			value: value === "inherit default" ? undefined : value === "true",
+			value: value === "inherit default" ? "inherit" : value === "true",
 		};
 	}
 	// systemPrompt is handled by the caller (instructions pointing at the file).

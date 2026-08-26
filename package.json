@@ -52,6 +52,7 @@
     "vitest": "^4.1.5"
   },
   "scripts": {
+    "lint": "oxlint",
     "typecheck": "tsc --noEmit",
     "build": "tsc --noEmit",
     "build:host": "node scripts/build-host.mjs",

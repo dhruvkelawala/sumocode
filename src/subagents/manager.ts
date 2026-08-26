@@ -152,6 +152,7 @@ export class SubagentManager {
 	private readonly settlingOutcomes = new Map<string, RunOutcome>();
 	private readonly startedIds = new Set<string>();
 	private readonly cancelledSetupIds = new Set<string>();
+	private readonly workspacePlacedIds = new Set<string>();
 	private lifecycleGeneration = 0;
 	public readonly consumedIds = new Set<string>();
 
@@ -344,10 +345,12 @@ export class SubagentManager {
 				return this.recordSetupInterruption(task, id, createdAt, manifestBaseRef, "interrupted during setup", childCwd, worktree);
 			}
 			const controller = new AbortController();
+			if (placement?.kind === "workspace") this.workspacePlacedIds.add(id);
 			let child: SpawnedChild;
 			try {
 				child = this.backendFactory({ ...task, cwd: childCwd, id, signal: controller.signal, placement });
 			} catch (error) {
+				this.workspacePlacedIds.delete(id);
 				releasePending();
 				const message = error instanceof Error ? error.message : String(error);
 				const preservationNote = worktree ? ` Worktree created at ${worktree.path} is preserved.` : "";
@@ -581,6 +584,7 @@ export class SubagentManager {
 
 	private fold(id: string, event: SubagentEvent): void {
 		if (event.kind === "run-settled") {
+			this.workspacePlacedIds.delete(id);
 			// A visible child that FAILS before any pane attached is
 			// evidence the cached subagents tab may be gone (e.g. the human closed
 			// it — splitting a closed cached tab fails, and no pane event ever
@@ -603,7 +607,11 @@ export class SubagentManager {
 		if (!current) return;
 		if (event.kind === "pane-attached") {
 			this.snapshots.set(id, { ...current, pane: event.pane });
-			if (event.pane.tabId) this.subagentsTabId = event.pane.tabId;
+			const workspacePlaced = this.workspacePlacedIds.delete(id);
+			// A worktree workspace is an isolation fallback, not a shared caller
+			// destination. Caching its tab would collapse later isolated children
+			// into the first workspace whenever HERDR_TAB_ID is unavailable.
+			if (event.pane.tabId && !workspacePlaced) this.subagentsTabId = event.pane.tabId;
 			this.notify();
 			return;
 		}

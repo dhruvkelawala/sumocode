@@ -35,6 +35,13 @@ describe("subagent roles", () => {
 		expect(loaded.warnings).toEqual([]);
 	});
 
+	it("rejects empty built-in instruction overrides instead of erasing the role contract", () => {
+		const loaded = fromJson({ roles: [{ id: "research", systemPrompt: "   " }] });
+		const role = loaded.roles.find((candidate) => candidate.id === "research");
+		expect(role?.systemPrompt).toContain("read-only investigator");
+		expect(loaded.warnings).toEqual(["role research has an invalid systemPrompt; entry skipped"]);
+	});
+
 	it("accepts complete new roles and rejects incomplete ones", () => {
 		const loaded = fromJson({ roles: [
 			{ id: "security", label: "Security", systemPrompt: "audit security", description: "use for security audits" },

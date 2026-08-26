@@ -711,6 +711,53 @@ describe("SubagentManager", () => {
 		expect(backendFactory).toHaveBeenCalledWith(expect.objectContaining({ cwd: "/isolated/worktree/packages/api", placement: { kind: "workspace", workspaceId: "w9", paneId: "w9:p1" } }));
 	});
 
+	it("keeps separate workspace fallbacks for isolated children when no caller tab exists", async () => {
+		const backendTasks: Array<SpawnSubagentTask & { placement?: unknown }> = [];
+		let workspace = 8;
+		const openExistingWorktreeWorkspace = vi.fn(async () => {
+			workspace += 1;
+			return { ok: true as const, pane: { host: "herdr" as const, paneId: `w${workspace}:p1`, workspaceId: `w${workspace}` } };
+		});
+		const host: TerminalHost = {
+			kind: "herdr",
+			openCommandInSplit: vi.fn(),
+			openExistingWorktreeWorkspace,
+			closePane: vi.fn(),
+			notify: vi.fn(),
+		};
+		const manager = new SubagentManager((task) => {
+			backendTasks.push(task);
+			const placement = task.placement?.kind === "workspace" ? task.placement : undefined;
+			return {
+				events: (emit) => {
+					emit({ kind: "run-started" });
+					emit({ kind: "pane-attached", pane: {
+						agentName: `${task.id}-worker`,
+						workspaceId: placement?.workspaceId ?? "unknown",
+						tabId: `${placement?.workspaceId ?? "unknown"}:t1`,
+						paneId: `${placement?.workspaceId ?? "unknown"}:p2`,
+					} });
+				},
+				interrupt: () => undefined,
+			};
+		}, {
+			captureGitContext: async () => ({ repoRoot: "/repo", baseRef: "abc123" }),
+			createWorktree: async (options) => ({ ok: true, path: `/isolated/${options.task}`, branch: options.branch ?? `sumo/${options.task}`, baseRef: options.baseRef ?? "HEAD" }),
+			resolveWorktreeBaseRef: async () => "abc123",
+			terminalHost: host,
+			pi: { exec: vi.fn() } as never,
+		});
+
+		await manager.spawn({ prompt: "p1", title: "first", cwd: "/repo", visible: true, worktree: true });
+		await manager.spawn({ prompt: "p2", title: "second", cwd: "/repo", visible: true, worktree: true });
+
+		expect(openExistingWorktreeWorkspace).toHaveBeenCalledTimes(2);
+		expect(backendTasks.map((task) => task.placement)).toEqual([
+			{ kind: "workspace", workspaceId: "w9", paneId: "w9:p1" },
+			{ kind: "workspace", workspaceId: "w10", paneId: "w10:p1" },
+		]);
+	});
+
 	it("fails closed when a created worktree cannot be opened as a host workspace", async () => {
 		const backendFactory = vi.fn(() => ({ events: () => undefined, interrupt: () => undefined }));
 		const host: TerminalHost = {

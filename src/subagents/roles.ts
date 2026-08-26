@@ -115,7 +115,7 @@ function normalizedOverlay(value: unknown, index: number, builtIn: boolean, warn
 		if (!ROLE_FIELDS.has(field)) warnings.push(`role ${id} ignores unknown field ${field}`);
 	}
 	for (const field of ["label", "description", "systemPrompt"] as const) {
-		if (hasOwn(value, field) && typeof value[field] !== "string") {
+		if (hasOwn(value, field) && (typeof value[field] !== "string" || !value[field].trim())) {
 			warnings.push(`role ${id} has an invalid ${field}; entry skipped`);
 			return undefined;
 		}

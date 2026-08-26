@@ -5095,7 +5095,7 @@ function normalizedOverlay(value, index, builtIn, warnings) {
     if (!ROLE_FIELDS.has(field)) warnings.push(`role ${id} ignores unknown field ${field}`);
   }
   for (const field of ["label", "description", "systemPrompt"]) {
-    if (hasOwn(value, field) && typeof value[field] !== "string") {
+    if (hasOwn(value, field) && (typeof value[field] !== "string" || !value[field].trim())) {
       warnings.push(`role ${id} has an invalid ${field}; entry skipped`);
       return void 0;
     }
@@ -14973,6 +14973,7 @@ var SubagentManager = class {
   settlingOutcomes = /* @__PURE__ */ new Map();
   startedIds = /* @__PURE__ */ new Set();
   cancelledSetupIds = /* @__PURE__ */ new Set();
+  workspacePlacedIds = /* @__PURE__ */ new Set();
   lifecycleGeneration = 0;
   consumedIds = /* @__PURE__ */ new Set();
   async spawn(task) {
@@ -15129,10 +15130,12 @@ var SubagentManager = class {
         return this.recordSetupInterruption(task, id, createdAt, manifestBaseRef, "interrupted during setup", childCwd, worktree);
       }
       const controller = new AbortController();
+      if (placement?.kind === "workspace") this.workspacePlacedIds.add(id);
       let child;
       try {
         child = this.backendFactory({ ...task, cwd: childCwd, id, signal: controller.signal, placement });
       } catch (error) {
+        this.workspacePlacedIds.delete(id);
         releasePending();
         const message = error instanceof Error ? error.message : String(error);
         const preservationNote = worktree ? ` Worktree created at ${worktree.path} is preserved.` : "";
@@ -15324,6 +15327,7 @@ var SubagentManager = class {
   }
   fold(id, event) {
     if (event.kind === "run-settled") {
+      this.workspacePlacedIds.delete(id);
       const settling = this.snapshots.get(id);
       if (event.outcome.kind === "failed" && settling?.visible && !settling.pane && this.subagentsTabId !== void 0) {
         this.subagentsTabId = this.initialVisibleTabId;
@@ -15335,7 +15339,8 @@ var SubagentManager = class {
     if (!current) return;
     if (event.kind === "pane-attached") {
       this.snapshots.set(id, { ...current, pane: event.pane });
-      if (event.pane.tabId) this.subagentsTabId = event.pane.tabId;
+      const workspacePlaced = this.workspacePlacedIds.delete(id);
+      if (event.pane.tabId && !workspacePlaced) this.subagentsTabId = event.pane.tabId;
       this.notify();
       return;
     }

@@ -65,6 +65,50 @@ describe("SubagentManager", () => {
 		await Promise.all(pending);
 	});
 
+	it("starts queued work when a direct spawn frees capacity by failing setup", async () => {
+		let releaseCapture = (): void => undefined;
+		const captureGate = new Promise<void>((resolve) => { releaseCapture = resolve; });
+		const starts = vi.fn((task: SpawnSubagentTask & { id: string }) => {
+			if (task.id === "sa-1") throw new Error("setup failed");
+			return { events: () => undefined, interrupt: () => undefined };
+		});
+		const manager = new SubagentManager(starts, {
+			captureGitContext: async () => {
+				await captureGate;
+				return { baseRef: "base-ref" };
+			},
+		});
+		const pending = Array.from({ length: SUBAGENT_MAX_RUNNING }, (_, index) => manager.spawn(makeTask(`pending-${index}`)));
+		await vi.waitFor(() => expect(manager.list()).toHaveLength(0));
+		const queued = await manager.spawn(makeTask("queued"));
+		expect(queued).toMatchObject({ id: firstQueuedId, status: "queued" });
+
+		releaseCapture();
+		await Promise.all(pending);
+		await vi.waitFor(() => expect(manager.get(firstQueuedId)?.status).toBe("running"));
+		expect(starts.mock.calls.filter(([task]) => task.id === firstQueuedId)).toHaveLength(1);
+	});
+
+	it("prevents an in-flight setup from launching a child after shutdown", async () => {
+		let releaseCapture = (): void => undefined;
+		const captureGate = new Promise<void>((resolve) => { releaseCapture = resolve; });
+		const backendFactory = vi.fn(() => ({ events: () => undefined, interrupt: () => undefined }));
+		const manager = new SubagentManager(backendFactory, {
+			captureGitContext: async () => {
+				await captureGate;
+				return { baseRef: "base-ref" };
+			},
+		});
+		const spawning = manager.spawn(makeTask("pending"));
+		await Promise.resolve();
+
+		manager.disposeAll();
+		releaseCapture();
+
+		await expect(spawning).resolves.toMatchObject({ status: "error", errorText: "interrupted during session shutdown" });
+		expect(backendFactory).not.toHaveBeenCalled();
+	});
+
 	it("starts queued tasks in fifo order as running slots free", async () => {
 		const { manager, emitters } = deferredBackend();
 		for (let index = 0; index < SUBAGENT_MAX_RUNNING; index += 1) await manager.spawn(makeTask(`running-${index}`));
@@ -528,6 +572,48 @@ describe("SubagentManager", () => {
 		mode = "attach";
 		await manager.spawn({ prompt: "p3", title: "third", cwd: "/repo", visible: true });
 		expect(backendTasks[2]?.placement).toEqual({ kind: "new-tab", label: "subagents" });
+	});
+
+	it("invalidates a stale cached tab after a worktree-backed child fails before attach", async () => {
+		const backendTasks: Array<SpawnSubagentTask & { placement?: unknown }> = [];
+		let mode: "attach" | "fail-preattach" = "attach";
+		const host: TerminalHost = {
+			kind: "herdr",
+			openCommandInSplit: vi.fn(),
+			openExistingWorktreeWorkspace: vi.fn(async () => ({ ok: true as const, pane: { host: "herdr" as const, paneId: "w9:p1", workspaceId: "w9" } })),
+			closePane: vi.fn(),
+			notify: vi.fn(),
+		};
+		const manager = new SubagentManager((task) => {
+			backendTasks.push(task);
+			const current = mode;
+			return {
+				events: (emit) => {
+					emit({ kind: "run-started" });
+					if (current === "attach") {
+						emit({ kind: "pane-attached", pane: { agentName: `${task.id}-worker`, workspaceId: "w1", tabId: "w1:t5", paneId: `w1:p${task.id}` } });
+					} else {
+						emit({ kind: "run-settled", outcome: { kind: "failed", errorText: "stale tab" } });
+					}
+				},
+				interrupt: () => undefined,
+			};
+		}, {
+			captureGitContext: async () => ({ repoRoot: "/repo", baseRef: "abc123" }),
+			createWorktree: async (options) => ({ ok: true, path: `/isolated/${options.task}`, branch: options.branch ?? `sumo/${options.task}`, baseRef: options.baseRef ?? "HEAD" }),
+			resolveWorktreeBaseRef: async () => "abc123",
+			terminalHost: host,
+			pi: { exec: vi.fn() } as never,
+		});
+
+		await manager.spawn({ prompt: "p1", title: "first", cwd: "/repo", visible: true });
+		mode = "fail-preattach";
+		await manager.spawn({ prompt: "p2", title: "second", cwd: "/repo", visible: true, worktree: true });
+		expect(backendTasks[1]?.placement).toEqual({ kind: "tab", tabId: "w1:t5", direction: "down" });
+
+		mode = "attach";
+		await manager.spawn({ prompt: "p3", title: "third", cwd: "/repo", visible: true, worktree: true });
+		expect(backendTasks[2]?.placement).toEqual({ kind: "workspace", workspaceId: "w9", paneId: "w9:p1" });
 	});
 
 	it("serializes concurrent visible placement until the first tab id is durable", async () => {

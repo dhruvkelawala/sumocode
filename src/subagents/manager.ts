@@ -132,7 +132,7 @@ const upsertTool = (tools: readonly LiveToolState[], next: LiveToolState): reado
 export class SubagentManager {
 	private nextId = 1;
 	private readonly pendingSpawns = new Map<string, { title: string; createdAt: number }>();
-	private readonly queuedTasks: Array<{ task: SpawnSubagentTask; id: string; createdAt: number }> = [];
+	private readonly queuedTasks: Array<{ task: SpawnSubagentTask; id: string; createdAt: number; generation: number }> = [];
 	private readonly snapshots = new Map<string, SubagentSnapshot>();
 	private readonly children = new Map<string, { child: SpawnedChild; controller: AbortController }>();
 	private readonly waitInterest = new Map<string, number>();
@@ -151,6 +151,7 @@ export class SubagentManager {
 	private readonly settlingPromises = new Map<string, Promise<void>>();
 	private readonly settlingOutcomes = new Map<string, RunOutcome>();
 	private readonly startedIds = new Set<string>();
+	private lifecycleGeneration = 0;
 	public readonly consumedIds = new Set<string>();
 
 	public constructor(private readonly backendFactory: BackendFactory, dependencies: SubagentManagerDependencies = {}) {
@@ -165,6 +166,7 @@ export class SubagentManager {
 	}
 
 	public async spawn(task: SpawnSubagentTask): Promise<SubagentSnapshot | AtCapacityDetails> {
+		const generation = this.lifecycleGeneration;
 		const runningSummaries = this.runningSummaries();
 		if (runningSummaries.length >= SUBAGENT_MAX_RUNNING || this.queuedTasks.length > 0) {
 			if (this.queuedTasks.length >= SUBAGENT_MAX_QUEUED) {
@@ -179,7 +181,7 @@ export class SubagentManager {
 			const id = `sa-${this.nextId++}`;
 			const createdAt = Date.now();
 			const snapshot = makeInitialSnapshot(task, id, createdAt, "HEAD", task.cwd, undefined, undefined, "queued");
-			this.queuedTasks.push({ task, id, createdAt });
+			this.queuedTasks.push({ task, id, createdAt, generation });
 			this.snapshots.set(id, snapshot);
 			this.notify();
 			this.prune();
@@ -187,7 +189,12 @@ export class SubagentManager {
 		}
 
 		const id = `sa-${this.nextId++}`;
-		return this.startTask(task, id, Date.now());
+		const snapshot = await this.startTask(task, id, Date.now(), generation);
+		// A direct spawn can fail setup after later calls have filled the queue.
+		// Drain immediately instead of leaving accepted work parked until an
+		// unrelated running child settles.
+		if (snapshot.status !== "running" && generation === this.lifecycleGeneration) void this.scheduleDequeue();
+		return snapshot;
 	}
 
 	private runningSummaries(): SubagentCapacityTaskSummary[] {
@@ -202,7 +209,7 @@ export class SubagentManager {
 		];
 	}
 
-	private async startTask(task: SpawnSubagentTask, id: string, createdAt: number): Promise<SubagentSnapshot> {
+	private async startTask(task: SpawnSubagentTask, id: string, createdAt: number, generation: number): Promise<SubagentSnapshot> {
 		this.pendingSpawns.set(id, { title: task.title, createdAt });
 		let pending = true;
 		let releaseVisibleSpawn: (() => void) | undefined;
@@ -214,6 +221,10 @@ export class SubagentManager {
 		try {
 			const gitContext = await this.captureGitContextImpl(task.cwd);
 			const baseRef = gitContext.baseRef ?? "HEAD";
+			if (generation !== this.lifecycleGeneration) {
+				releasePending();
+				return this.recordSpawnFailure(task, id, createdAt, baseRef, "interrupted during session shutdown");
+			}
 			let manifestBaseRef = baseRef;
 			if (task.branch && !task.worktree) {
 				releasePending();
@@ -272,11 +283,19 @@ export class SubagentManager {
 					baseRef: manifestBaseRef,
 					repoRoot: gitContext.repoRoot,
 				};
+				if (generation !== this.lifecycleGeneration) {
+					releasePending();
+					return this.recordSpawnFailure(task, id, createdAt, manifestBaseRef, `interrupted during session shutdown. Worktree created at ${created.path} is preserved.`, childCwd, worktree);
+				}
 			}
 
 			let placement: AgentPanePlacement | undefined;
 			if (task.visible) {
 				releaseVisibleSpawn = await this.reserveVisibleSpawn();
+				if (generation !== this.lifecycleGeneration) {
+					releasePending();
+					return this.recordSpawnFailure(task, id, createdAt, manifestBaseRef, "interrupted during session shutdown", childCwd, worktree);
+				}
 				const host = this.terminalHost;
 				if (!host || !this.pi || host.kind === "none") {
 					releasePending();
@@ -302,6 +321,10 @@ export class SubagentManager {
 					} catch (error) {
 						opened = { ok: false, error: error instanceof Error ? error.message : String(error) };
 					}
+					if (generation !== this.lifecycleGeneration) {
+						releasePending();
+						return this.recordSpawnFailure(task, id, createdAt, manifestBaseRef, "interrupted during session shutdown", childCwd, worktree);
+					}
 					const workspaceId = opened.ok ? opened.pane.workspaceId : undefined;
 					if (!opened.ok || !workspaceId) {
 						releasePending();
@@ -315,6 +338,10 @@ export class SubagentManager {
 				else placement = { kind: "new-tab", label: planned.kind === "new-tab" ? planned.label : "subagents" };
 			}
 
+			if (generation !== this.lifecycleGeneration) {
+				releasePending();
+				return this.recordSpawnFailure(task, id, createdAt, manifestBaseRef, "interrupted during session shutdown", childCwd, worktree);
+			}
 			const controller = new AbortController();
 			let child: SpawnedChild;
 			try {
@@ -448,6 +475,11 @@ export class SubagentManager {
 	}
 
 	public disposeAll(): void {
+		// In-flight setup cannot be synchronously interrupted, so advance the
+		// generation first. Every awaited setup path checks this token before it
+		// may construct a backend, preventing post-shutdown orphan children while
+		// still allowing this manager to serve a later session.
+		this.lifecycleGeneration += 1;
 		const queuedIds = this.queuedTasks.map((queued) => queued.id);
 		this.queuedTasks.length = 0;
 		for (const id of queuedIds) void this.startSettle(id, { kind: "interrupted" });
@@ -468,7 +500,7 @@ export class SubagentManager {
 			const queued = this.queuedTasks.shift();
 			if (!queued) return;
 			try {
-				await this.startTask(queued.task, queued.id, queued.createdAt);
+				await this.startTask(queued.task, queued.id, queued.createdAt, queued.generation);
 			} catch (error) {
 				const current = this.snapshots.get(queued.id);
 				if (current?.status === "queued") {
@@ -526,7 +558,7 @@ export class SubagentManager {
 
 	private fold(id: string, event: SubagentEvent): void {
 		if (event.kind === "run-settled") {
-			// A visible non-isolated child that FAILS before any pane attached is
+			// A visible child that FAILS before any pane attached is
 			// evidence the cached subagents tab may be gone (e.g. the human closed
 			// it — splitting a closed cached tab fails, and no pane event ever
 			// fired). Invalidate the cache so the next spawn re-plans a fresh tab
@@ -536,7 +568,6 @@ export class SubagentManager {
 			if (
 				event.outcome.kind === "failed" &&
 				settling?.visible &&
-				!settling.worktree &&
 				!settling.pane &&
 				this.subagentsTabId !== undefined
 			) {

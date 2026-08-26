@@ -1,7 +1,16 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { Component, OverlayOptions } from "@earendil-works/pi-tui";
-import { Key, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { Key, matchesKey } from "@earendil-works/pi-tui";
 import { activeThemeColors } from "../themes/index.js";
+import {
+	lineToAnsi,
+	lineWidth,
+	span,
+	textLine,
+	truncateLine,
+	type Span,
+	type Style,
+} from "../sumo-tui/render/primitives.js";
 
 export interface SearchPaletteRow {
 	readonly id: string;
@@ -29,8 +38,6 @@ export interface SearchPaletteInputResult {
 
 const HINT_ROW = "↑↓ wander    ⎏ filter    ⏎ attend    ⎋ retreat";
 const MAX_VISIBLE_ROWS = 9;
-const RESET = "\u001b[0m";
-const FG_RESET = "\u001b[39m";
 
 export const ROLES_PALETTE_OVERLAY_OPTIONS: OverlayOptions = {
 	anchor: "center",
@@ -41,62 +48,49 @@ export const ROLES_PALETTE_OVERLAY_OPTIONS: OverlayOptions = {
 
 // Intentionally duplicates the command-palette interaction core for plan 085;
 // /roles remains locally adaptable without refactoring src/command-palette.ts.
-function panelBg(): string {
-	return activeThemeColors().surfaceLifted;
+// Rendering still uses the shared typed primitives so Cathedral colors, resets,
+// padding, and terminal-cell truncation retain one owner.
+function panelStyle(): Style {
+	const colors = activeThemeColors();
+	return { fg: colors.foreground, bg: colors.surfaceLifted };
 }
 
-function paletteDivider(): string {
-	return activeThemeColors().divider;
+function colored(text: string, fg: string): Span {
+	return span(text, { fg });
 }
 
-function ansiColor(hex: string, channel: 38 | 48): string {
-	const normalized = hex.replace("#", "");
-	const red = parseInt(normalized.slice(0, 2), 16);
-	const green = parseInt(normalized.slice(2, 4), 16);
-	const blue = parseInt(normalized.slice(4, 6), 16);
-	return `\u001b[${channel};2;${red};${green};${blue}m`;
+function dim(text: string): Span {
+	return colored(text, activeThemeColors().foregroundDim);
 }
 
-function fg(text: string, hex: string): string {
-	return `${ansiColor(hex, 38)}${text}${FG_RESET}`;
+function accent(text: string): Span {
+	return colored(text, activeThemeColors().accent);
 }
 
-function dim(text: string): string {
-	return fg(text, activeThemeColors().foregroundDim);
+function dividerText(text: string): Span {
+	return colored(text, activeThemeColors().divider);
 }
 
-function accent(text: string): string {
-	return fg(text, activeThemeColors().accent);
+function foreground(text: string): Span {
+	return colored(text, activeThemeColors().foreground);
 }
 
-function dividerText(text: string): string {
-	return fg(text, paletteDivider());
+function cursorCell(): Span {
+	const colors = activeThemeColors();
+	return span(" ", { fg: colors.background, bg: colors.accent });
 }
 
-function foreground(text: string): string {
-	return fg(text, activeThemeColors().foreground);
+function panelLine(parts: readonly (Span | string)[], width: number): string {
+	const style = panelStyle();
+	return lineToAnsi(textLine(parts, style), { width, style });
 }
 
-function cursorCell(): string {
-	return `${ansiColor(activeThemeColors().accent, 48)}${ansiColor(activeThemeColors().background, 38)} ${FG_RESET}${ansiColor(panelBg(), 48)}`;
-}
-
-function padToWidth(text: string, width: number): string {
-	const len = visibleWidth(text);
-	if (len >= width) return truncateToWidth(text, width, "");
-	return `${text}${" ".repeat(width - len)}`;
-}
-
-function panelLine(text: string, width: number): string {
-	return `${ansiColor(panelBg(), 48)}${ansiColor(activeThemeColors().foreground, 38)}${padToWidth(text, width)}${RESET}`;
-}
-
-function center(text: string, width: number): string {
-	const len = visibleWidth(text);
-	if (len >= width) return truncateToWidth(text, width, "");
-	const left = Math.floor((width - len) / 2);
-	const right = width - len - left;
-	return `${" ".repeat(left)}${text}${" ".repeat(right)}`;
+function centered(parts: readonly (Span | string)[], width: number): readonly (Span | string)[] {
+	const content = truncateLine(textLine(parts), width);
+	const contentWidth = lineWidth(content);
+	const left = Math.floor((width - contentWidth) / 2);
+	const right = width - contentWidth - left;
+	return [" ".repeat(left), ...content.spans, " ".repeat(right)];
 }
 
 export function filterRows(rows: readonly SearchPaletteRow[], searchQuery: string): SearchPaletteRow[] {
@@ -126,35 +120,35 @@ function renderPalette(options: Pick<SearchPaletteOptions, "title" | "placeholde
 	const halfRule = "─".repeat(22);
 	const lines: string[] = [];
 
-	lines.push(panelLine("", w));
-	lines.push(panelLine(center(`${accent("✾")}  ${accent(options.title)}  ${accent("✾")}`, w), w));
-	lines.push(panelLine("", w));
-	lines.push(panelLine(center(`${dividerText(halfRule)}  ${dividerText("·")}  ${dividerText(halfRule)}`, w), w));
-	lines.push(panelLine("", w));
+	lines.push(panelLine([], w));
+	lines.push(panelLine(centered([accent("✾"), "  ", accent(options.title), "  ", accent("✾")], w), w));
+	lines.push(panelLine([], w));
+	lines.push(panelLine(centered([dividerText(halfRule), "  ", dividerText("·"), "  ", dividerText(halfRule)], w), w));
+	lines.push(panelLine([], w));
 	// Caret trails the typed query (❯ res█); leads the placeholder when empty.
 	lines.push(panelLine(state.searchQuery.length > 0
-		? `     ${accent("❯")}  ${foreground(searchText)}${cursorCell()}`
-		: `     ${accent("❯")}  ${cursorCell()}${dim(searchText)}`, w));
-	lines.push(panelLine("", w));
+		? ["     ", accent("❯"), "  ", foreground(searchText), cursorCell()]
+		: ["     ", accent("❯"), "  ", cursorCell(), dim(searchText)], w));
+	lines.push(panelLine([], w));
 
 	if (filtered.length === 0) {
-		lines.push(panelLine(`     ${dividerText("·")}   ${dim("no matching option")}`, w));
+		lines.push(panelLine(["     ", dividerText("·"), "   ", dim("no matching option")], w));
 	} else {
 		for (const [visibleIndex, row] of window.rows.entries()) {
 			const focused = visibleIndex + window.offset === active;
 			const marker = focused ? accent("❈") : dividerText("·");
 			const label = focused ? foreground(row.label) : dim(row.label);
 			const value = focused ? foreground(row.value) : dim(row.value);
-			const left = `     ${marker}   ${label}`;
-			const padBetween = Math.max(2, w - visibleWidth(left) - visibleWidth(value) - 5);
-			lines.push(panelLine(`${left}${" ".repeat(padBetween)}${value}`, w));
+			const left = textLine(["     ", marker, "   ", label]);
+			const padBetween = Math.max(2, w - lineWidth(left) - lineWidth(textLine([value])) - 5);
+			lines.push(panelLine([...left.spans, " ".repeat(padBetween), value], w));
 		}
 	}
 
-	lines.push(panelLine("", w));
-	lines.push(panelLine(center(`${dividerText(halfRule)}  ${dividerText("·")}  ${dividerText(halfRule)}`, w), w));
-	lines.push(panelLine(center(dim(HINT_ROW), w), w));
-	lines.push(panelLine("", w));
+	lines.push(panelLine([], w));
+	lines.push(panelLine(centered([dividerText(halfRule), "  ", dividerText("·"), "  ", dividerText(halfRule)], w), w));
+	lines.push(panelLine(centered([dim(HINT_ROW)], w), w));
+	lines.push(panelLine([], w));
 	return lines;
 }
 

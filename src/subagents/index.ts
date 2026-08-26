@@ -118,6 +118,10 @@ export function installSubagents(pi: ExtensionAPI): SubagentManager {
 	let unsubscribe: (() => void) | undefined;
 	let statusWidgetVisible = false;
 
+	// Manager callbacks intentionally reuse only a context captured by a Pi
+	// session event and cleared before shutdown. This is not an eager/module-load
+	// UI call: both owned TUI and RPC need the manager event itself to surface and
+	// clear asynchronous work while the parent is idle (live + PTY verified).
 	const publishStatusWidget = (): void => {
 		const ctx = latestContext;
 		if (!ctx?.hasUI) return;
@@ -129,6 +133,9 @@ export function installSubagents(pi: ExtensionAPI): SubagentManager {
 				statusWidgetVisible = false;
 				return;
 			}
+			// The accepted strip contract is event-driven and explicitly has no age
+			// timer: ages are approximate snapshots that advance on manager changes.
+			// Avoid a background UI ticker solely for cosmetic elapsed-time drift.
 			const now = Date.now();
 			const running = active
 				.filter((snapshot) => snapshot.status === "running")

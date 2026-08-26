@@ -2297,17 +2297,17 @@ var CathedralQnAComponent = class {
       return `${liftedBg}${divider("\u2502")}${paddedContent}${" ".repeat(rightPad)}${divider("\u2502")}${RESET4}`;
     };
     const emptyBoxLine = () => `${liftedBg}${divider("\u2502")}${" ".repeat(boxWidth - 2)}${divider("\u2502")}${RESET4}`;
-    const padToWidth5 = (line) => {
+    const padToWidth4 = (line) => {
       const len = visibleWidth4(line);
       return line + " ".repeat(Math.max(0, width - len));
     };
     const lines = [];
-    lines.push(padToWidth5(`${liftedBg}${divider("\u256D" + horizontalLine(boxWidth - 2) + "\u256E")}${RESET4}`));
+    lines.push(padToWidth4(`${liftedBg}${divider("\u256D" + horizontalLine(boxWidth - 2) + "\u256E")}${RESET4}`));
     const title = `${accent("\u273E")}  ${accent("DIVINE QUERY")}  ${accent("\u273E")}  ${dim(`${this.currentIndex + 1}/${this.questions.length}`)}`;
-    lines.push(padToWidth5(boxLine(title)));
+    lines.push(padToWidth4(boxLine(title)));
     const ruleLen = Math.max(1, Math.floor((contentWidth - 6) / 2 - 5));
     const splitRule2 = `${divider("\u2500".repeat(ruleLen))}  ${divider("\xB7")}  ${divider("\u2500".repeat(ruleLen))}`;
-    lines.push(padToWidth5(boxLine(splitRule2)));
+    lines.push(padToWidth4(boxLine(splitRule2)));
     const progressParts = [];
     for (let i = 0; i < this.questions.length; i++) {
       const answered = (this.answers[i]?.trim() || "").length > 0;
@@ -2316,37 +2316,37 @@ var CathedralQnAComponent = class {
       else if (answered) progressParts.push(idle("\u2713"));
       else progressParts.push(divider("\xB7"));
     }
-    lines.push(padToWidth5(boxLine(progressParts.join(" "))));
-    lines.push(padToWidth5(emptyBoxLine()));
+    lines.push(padToWidth4(boxLine(progressParts.join(" "))));
+    lines.push(padToWidth4(emptyBoxLine()));
     const q = this.questions[this.currentIndex];
     const questionText = `${accent("Q:")} ${fg3(q.question)}`;
     for (const line of wrapTextWithAnsi2(questionText, contentWidth)) {
-      lines.push(padToWidth5(boxLine(line)));
+      lines.push(padToWidth4(boxLine(line)));
     }
     if (q.context) {
-      lines.push(padToWidth5(emptyBoxLine()));
+      lines.push(padToWidth4(emptyBoxLine()));
       for (const line of wrapTextWithAnsi2(dim(`> ${q.context}`), contentWidth - 2)) {
-        lines.push(padToWidth5(boxLine(line)));
+        lines.push(padToWidth4(boxLine(line)));
       }
     }
-    lines.push(padToWidth5(emptyBoxLine()));
+    lines.push(padToWidth4(emptyBoxLine()));
     const answerPrefix = accent("A: ");
     const editorWidth = contentWidth - 4 - 3;
     const editorLines = this.editor.render(editorWidth);
     for (let i = 1; i < editorLines.length - 1; i++) {
       const prefix = i === 1 ? answerPrefix : "   ";
-      lines.push(padToWidth5(boxLine(prefix + editorLines[i])));
+      lines.push(padToWidth4(boxLine(prefix + editorLines[i])));
     }
-    lines.push(padToWidth5(emptyBoxLine()));
-    lines.push(padToWidth5(boxLine(splitRule2)));
+    lines.push(padToWidth4(emptyBoxLine()));
+    lines.push(padToWidth4(boxLine(splitRule2)));
     if (this.showingConfirmation) {
       const confirmMsg = `${thinking("Submit all answers?")} ${dim("(Enter/y to confirm, Esc/n to cancel)")}`;
-      lines.push(padToWidth5(boxLine(truncateToWidth3(confirmMsg, contentWidth))));
+      lines.push(padToWidth4(boxLine(truncateToWidth3(confirmMsg, contentWidth))));
     } else {
       const controls = dim("\u21C5 wander    \u23CE answer    \u21E7\u21E5 retreat    \u238B cancel");
-      lines.push(padToWidth5(boxLine(truncateToWidth3(controls, contentWidth))));
+      lines.push(padToWidth4(boxLine(truncateToWidth3(controls, contentWidth))));
     }
-    lines.push(padToWidth5(`${liftedBg}${divider("\u2570" + horizontalLine(boxWidth - 2) + "\u256F")}${RESET4}`));
+    lines.push(padToWidth4(`${liftedBg}${divider("\u2570" + horizontalLine(boxWidth - 2) + "\u256F")}${RESET4}`));
     this.cachedLines = lines;
     return lines;
   }
@@ -5189,62 +5189,164 @@ function loadRoles(dependencies = {}) {
 }
 
 // src/commands/roles-palette.ts
-import { Key as Key3, matchesKey as matchesKey4, truncateToWidth as truncateToWidth5, visibleWidth as visibleWidth6 } from "@earendil-works/pi-tui";
+import { Key as Key3, matchesKey as matchesKey4 } from "@earendil-works/pi-tui";
+
+// src/sumo-tui/render/primitives.ts
+import { truncateToWidth as truncateToWidth5, visibleWidth as visibleWidth6 } from "@earendil-works/pi-tui";
+
+// src/sumo-tui/render/cell.ts
+var DEFAULT_CELL_ATTRS = Object.freeze({
+  bold: false,
+  italic: false,
+  underline: false,
+  dim: false,
+  inverse: false
+});
+var BLANK_CELL = Object.freeze({
+  char: " ",
+  attrs: DEFAULT_CELL_ATTRS
+});
+
+// src/sumo-tui/render/primitives.ts
+var SEGMENTER_CTOR = Intl.Segmenter;
+var GRAPHEME_SEGMENTER = SEGMENTER_CTOR ? new SEGMENTER_CTOR(void 0, { granularity: "grapheme" }) : void 0;
+var RESET7 = "\x1B[0m";
+function parseHex(hex) {
+  const normalized = hex.replace("#", "");
+  if (!/^[0-9a-fA-F]{6}$/.test(normalized)) return void 0;
+  return [
+    Number.parseInt(normalized.slice(0, 2), 16),
+    Number.parseInt(normalized.slice(2, 4), 16),
+    Number.parseInt(normalized.slice(4, 6), 16)
+  ];
+}
+function sgrForStyle(style) {
+  let output = "";
+  const attrs = [];
+  if (style.bold) attrs.push("1");
+  if (style.italic) attrs.push("3");
+  if (style.underline) attrs.push("4");
+  if (style.dim) attrs.push("2");
+  if (style.inverse) attrs.push("7");
+  if (attrs.length > 0) output += `\x1B[${attrs.join(";")}m`;
+  const fg8 = style.fg ? parseHex(style.fg) : void 0;
+  if (fg8) output += `\x1B[38;2;${fg8[0]};${fg8[1]};${fg8[2]}m`;
+  const bg2 = style.bg ? parseHex(style.bg) : void 0;
+  if (bg2) output += `\x1B[48;2;${bg2[0]};${bg2[1]};${bg2[2]}m`;
+  return output;
+}
+function mergeStyle(base, override) {
+  if (!base && !override) return {};
+  return {
+    fg: override?.fg ?? base?.fg,
+    bg: override?.bg ?? base?.bg,
+    bold: override?.bold ?? base?.bold,
+    italic: override?.italic ?? base?.italic,
+    underline: override?.underline ?? base?.underline,
+    dim: override?.dim ?? base?.dim,
+    inverse: override?.inverse ?? base?.inverse
+  };
+}
+function hasStyle(style) {
+  return style.fg !== void 0 || style.bg !== void 0 || style.bold === true || style.italic === true || style.underline === true || style.dim === true || style.inverse === true;
+}
+function toSpan(part) {
+  return typeof part === "string" ? { text: part } : part;
+}
+function span(text, style) {
+  return { text, style };
+}
+function textLine(parts = [], style) {
+  return { spans: parts.map(toSpan), style };
+}
+function lineWidth(line) {
+  return line.spans.reduce((width, part) => width + visibleWidth6(part.text), 0);
+}
+function truncateLine(line, width) {
+  const safeWidth = Math.max(0, Math.floor(width));
+  if (safeWidth === 0) return { spans: [], style: line.style };
+  let remaining = safeWidth;
+  const spans = [];
+  for (const part of line.spans) {
+    if (remaining <= 0) break;
+    const partWidth = visibleWidth6(part.text);
+    if (partWidth <= remaining) {
+      spans.push(part);
+      remaining -= partWidth;
+      continue;
+    }
+    const truncated = truncateToWidth5(part.text, remaining, "");
+    if (truncated.length > 0) spans.push({ ...part, text: truncated });
+    remaining = 0;
+  }
+  return { spans, style: line.style };
+}
+function padLine(line, width, style) {
+  const safeWidth = Math.max(0, Math.floor(width));
+  const truncated = truncateLine(line, safeWidth);
+  const padding = Math.max(0, safeWidth - lineWidth(truncated));
+  if (padding === 0) return truncated;
+  return {
+    spans: [...truncated.spans, { text: " ".repeat(padding), style }],
+    style: truncated.style
+  };
+}
+function lineToAnsi(line, options = {}) {
+  const prepared = options.width === void 0 ? line : padLine(line, options.width, options.style ?? line.style);
+  const baseStyle = mergeStyle(options.style, prepared.style);
+  let output = "";
+  for (const part of prepared.spans) {
+    if (part.text.length === 0) continue;
+    const effectiveStyle = mergeStyle(baseStyle, part.style);
+    if (hasStyle(effectiveStyle)) output += `${RESET7}${sgrForStyle(effectiveStyle)}`;
+    else if (output.length > 0) output += RESET7;
+    output += part.text;
+  }
+  return output.length === 0 ? "" : `${output}${RESET7}`;
+}
+
+// src/commands/roles-palette.ts
 var HINT_ROW = "\u2191\u2193 wander    \u238F filter    \u23CE attend    \u238B retreat";
 var MAX_VISIBLE_ROWS = 9;
-var RESET7 = "\x1B[0m";
-var FG_RESET2 = "\x1B[39m";
 var ROLES_PALETTE_OVERLAY_OPTIONS = {
   anchor: "center",
   width: 80,
   minWidth: 50,
   maxHeight: 20
 };
-function panelBg() {
-  return activeThemeColors().surfaceLifted;
+function panelStyle() {
+  const colors = activeThemeColors();
+  return { fg: colors.foreground, bg: colors.surfaceLifted };
 }
-function paletteDivider() {
-  return activeThemeColors().divider;
-}
-function ansiColor(hex, channel) {
-  const normalized = hex.replace("#", "");
-  const red = parseInt(normalized.slice(0, 2), 16);
-  const green = parseInt(normalized.slice(2, 4), 16);
-  const blue = parseInt(normalized.slice(4, 6), 16);
-  return `\x1B[${channel};2;${red};${green};${blue}m`;
-}
-function fg5(text, hex) {
-  return `${ansiColor(hex, 38)}${text}${FG_RESET2}`;
+function colored(text, fg8) {
+  return span(text, { fg: fg8 });
 }
 function dim2(text) {
-  return fg5(text, activeThemeColors().foregroundDim);
+  return colored(text, activeThemeColors().foregroundDim);
 }
 function accent2(text) {
-  return fg5(text, activeThemeColors().accent);
+  return colored(text, activeThemeColors().accent);
 }
 function dividerText(text) {
-  return fg5(text, paletteDivider());
+  return colored(text, activeThemeColors().divider);
 }
 function foreground(text) {
-  return fg5(text, activeThemeColors().foreground);
+  return colored(text, activeThemeColors().foreground);
 }
 function cursorCell() {
-  return `${ansiColor(activeThemeColors().accent, 48)}${ansiColor(activeThemeColors().background, 38)} ${FG_RESET2}${ansiColor(panelBg(), 48)}`;
+  const colors = activeThemeColors();
+  return span(" ", { fg: colors.background, bg: colors.accent });
 }
-function padToWidth(text, width) {
-  const len = visibleWidth6(text);
-  if (len >= width) return truncateToWidth5(text, width, "");
-  return `${text}${" ".repeat(width - len)}`;
+function panelLine(parts, width) {
+  const style = panelStyle();
+  return lineToAnsi(textLine(parts, style), { width, style });
 }
-function panelLine(text, width) {
-  return `${ansiColor(panelBg(), 48)}${ansiColor(activeThemeColors().foreground, 38)}${padToWidth(text, width)}${RESET7}`;
-}
-function center2(text, width) {
-  const len = visibleWidth6(text);
-  if (len >= width) return truncateToWidth5(text, width, "");
-  const left = Math.floor((width - len) / 2);
-  const right = width - len - left;
-  return `${" ".repeat(left)}${text}${" ".repeat(right)}`;
+function centered(parts, width) {
+  const content = truncateLine(textLine(parts), width);
+  const contentWidth = lineWidth(content);
+  const left = Math.floor((width - contentWidth) / 2);
+  const right = width - contentWidth - left;
+  return [" ".repeat(left), ...content.spans, " ".repeat(right)];
 }
 function filterRows(rows, searchQuery) {
   const query = searchQuery.trim().toLowerCase();
@@ -5269,30 +5371,30 @@ function renderPalette(options, state, width) {
   const searchText = state.searchQuery.length > 0 ? state.searchQuery : options.placeholder;
   const halfRule = "\u2500".repeat(22);
   const lines = [];
-  lines.push(panelLine("", w));
-  lines.push(panelLine(center2(`${accent2("\u273E")}  ${accent2(options.title)}  ${accent2("\u273E")}`, w), w));
-  lines.push(panelLine("", w));
-  lines.push(panelLine(center2(`${dividerText(halfRule)}  ${dividerText("\xB7")}  ${dividerText(halfRule)}`, w), w));
-  lines.push(panelLine("", w));
-  lines.push(panelLine(state.searchQuery.length > 0 ? `     ${accent2("\u276F")}  ${foreground(searchText)}${cursorCell()}` : `     ${accent2("\u276F")}  ${cursorCell()}${dim2(searchText)}`, w));
-  lines.push(panelLine("", w));
+  lines.push(panelLine([], w));
+  lines.push(panelLine(centered([accent2("\u273E"), "  ", accent2(options.title), "  ", accent2("\u273E")], w), w));
+  lines.push(panelLine([], w));
+  lines.push(panelLine(centered([dividerText(halfRule), "  ", dividerText("\xB7"), "  ", dividerText(halfRule)], w), w));
+  lines.push(panelLine([], w));
+  lines.push(panelLine(state.searchQuery.length > 0 ? ["     ", accent2("\u276F"), "  ", foreground(searchText), cursorCell()] : ["     ", accent2("\u276F"), "  ", cursorCell(), dim2(searchText)], w));
+  lines.push(panelLine([], w));
   if (filtered.length === 0) {
-    lines.push(panelLine(`     ${dividerText("\xB7")}   ${dim2("no matching option")}`, w));
+    lines.push(panelLine(["     ", dividerText("\xB7"), "   ", dim2("no matching option")], w));
   } else {
     for (const [visibleIndex, row3] of window.rows.entries()) {
       const focused = visibleIndex + window.offset === active;
       const marker = focused ? accent2("\u2748") : dividerText("\xB7");
       const label = focused ? foreground(row3.label) : dim2(row3.label);
       const value = focused ? foreground(row3.value) : dim2(row3.value);
-      const left = `     ${marker}   ${label}`;
-      const padBetween = Math.max(2, w - visibleWidth6(left) - visibleWidth6(value) - 5);
-      lines.push(panelLine(`${left}${" ".repeat(padBetween)}${value}`, w));
+      const left = textLine(["     ", marker, "   ", label]);
+      const padBetween = Math.max(2, w - lineWidth(left) - lineWidth(textLine([value])) - 5);
+      lines.push(panelLine([...left.spans, " ".repeat(padBetween), value], w));
     }
   }
-  lines.push(panelLine("", w));
-  lines.push(panelLine(center2(`${dividerText(halfRule)}  ${dividerText("\xB7")}  ${dividerText(halfRule)}`, w), w));
-  lines.push(panelLine(center2(dim2(HINT_ROW), w), w));
-  lines.push(panelLine("", w));
+  lines.push(panelLine([], w));
+  lines.push(panelLine(centered([dividerText(halfRule), "  ", dividerText("\xB7"), "  ", dividerText(halfRule)], w), w));
+  lines.push(panelLine(centered([dim2(HINT_ROW)], w), w));
+  lines.push(panelLine([], w));
   return lines;
 }
 function keyEq(data, ...ids) {
@@ -5603,47 +5705,47 @@ var COMMAND_PALETTE_OVERLAY_OPTIONS = {
   maxHeight: 20
 };
 var RESET8 = "\x1B[0m";
-var FG_RESET3 = "\x1B[39m";
-function panelBg2() {
+var FG_RESET2 = "\x1B[39m";
+function panelBg() {
   return activeThemeColors().surfaceLifted;
 }
-function paletteDivider2() {
+function paletteDivider() {
   return activeThemeColors().divider;
 }
-function ansiColor2(hex, channel) {
+function ansiColor(hex, channel) {
   const normalized = hex.replace("#", "");
   const red = parseInt(normalized.slice(0, 2), 16);
   const green = parseInt(normalized.slice(2, 4), 16);
   const blue = parseInt(normalized.slice(4, 6), 16);
   return `\x1B[${channel};2;${red};${green};${blue}m`;
 }
-function fg6(text, hex) {
-  return `${ansiColor2(hex, 38)}${text}${FG_RESET3}`;
+function fg5(text, hex) {
+  return `${ansiColor(hex, 38)}${text}${FG_RESET2}`;
 }
 function dim3(text) {
-  return fg6(text, activeThemeColors().foregroundDim);
+  return fg5(text, activeThemeColors().foregroundDim);
 }
 function accent3(text) {
-  return fg6(text, activeThemeColors().accent);
+  return fg5(text, activeThemeColors().accent);
 }
 function dividerText2(text) {
-  return fg6(text, paletteDivider2());
+  return fg5(text, paletteDivider());
 }
 function foreground2(text) {
-  return fg6(text, activeThemeColors().foreground);
+  return fg5(text, activeThemeColors().foreground);
 }
 function cursorCell2() {
-  return `${ansiColor2(activeThemeColors().accent, 48)}${ansiColor2(activeThemeColors().background, 38)} ${FG_RESET3}${ansiColor2(panelBg2(), 48)}`;
+  return `${ansiColor(activeThemeColors().accent, 48)}${ansiColor(activeThemeColors().background, 38)} ${FG_RESET2}${ansiColor(panelBg(), 48)}`;
 }
-function padToWidth2(text, width) {
+function padToWidth(text, width) {
   const len = visibleWidth7(text);
   if (len >= width) return truncateToWidth6(text, width, "");
   return `${text}${" ".repeat(width - len)}`;
 }
 function panelLine2(text, width) {
-  return `${ansiColor2(panelBg2(), 48)}${ansiColor2(activeThemeColors().foreground, 38)}${padToWidth2(text, width)}${RESET8}`;
+  return `${ansiColor(panelBg(), 48)}${ansiColor(activeThemeColors().foreground, 38)}${padToWidth(text, width)}${RESET8}`;
 }
-function center3(text, width) {
+function center2(text, width) {
   const len = visibleWidth7(text);
   if (len >= width) return truncateToWidth6(text, width, "");
   const left = Math.floor((width - len) / 2);
@@ -5667,9 +5769,9 @@ function renderCommandPalette(snapshot, width, renderOptions = {}) {
   const halfRule = "\u2500".repeat(22);
   const lines = [];
   lines.push(panelLine2("", w));
-  lines.push(panelLine2(center3(`${accent3("\u273E")}  ${accent3(renderOptions.title ?? "COMMAND PALETTE")}  ${accent3("\u273E")}`, w), w));
+  lines.push(panelLine2(center2(`${accent3("\u273E")}  ${accent3(renderOptions.title ?? "COMMAND PALETTE")}  ${accent3("\u273E")}`, w), w));
   lines.push(panelLine2("", w));
-  lines.push(panelLine2(center3(`${dividerText2(halfRule)}  ${dividerText2("\xB7")}  ${dividerText2(halfRule)}`, w), w));
+  lines.push(panelLine2(center2(`${dividerText2(halfRule)}  ${dividerText2("\xB7")}  ${dividerText2(halfRule)}`, w), w));
   lines.push(panelLine2("", w));
   lines.push(panelLine2(snapshot.searchQuery.length > 0 ? `     ${accent3("\u276F")}  ${foreground2(searchText)}${cursorCell2()}` : `     ${accent3("\u276F")}  ${cursorCell2()}${dim3(searchText)}`, w));
   lines.push(panelLine2("", w));
@@ -5696,8 +5798,8 @@ function renderCommandPalette(snapshot, width, renderOptions = {}) {
     if (hiddenBelow > 0) lines.push(panelLine2(`         ${dim3(`\u2026 ${hiddenBelow} more`)}`, w));
   }
   lines.push(panelLine2("", w));
-  lines.push(panelLine2(center3(`${dividerText2(halfRule)}  ${dividerText2("\xB7")}  ${dividerText2(halfRule)}`, w), w));
-  lines.push(panelLine2(center3(dim3(COMMAND_PALETTE_HINT_ROW), w), w));
+  lines.push(panelLine2(center2(`${dividerText2(halfRule)}  ${dividerText2("\xB7")}  ${dividerText2(halfRule)}`, w), w));
+  lines.push(panelLine2(center2(dim3(COMMAND_PALETTE_HINT_ROW), w), w));
   lines.push(panelLine2("", w));
   return lines;
 }
@@ -7034,8 +7136,8 @@ function formatSpinnerInspection(frames, hex, intervalMs) {
   const lines = [`${frames.length} frames \xB7 ${intervalMs}ms per frame`];
   for (let i = 0; i < frames.length; i++) {
     const num = String(i + 1).padStart(2, " ");
-    const colored = renderIndicator(i, frames, hex);
-    lines.push(`  ${num}. ${colored}  ${frames[i]}`);
+    const colored2 = renderIndicator(i, frames, hex);
+    lines.push(`  ${num}. ${colored2}  ${frames[i]}`);
   }
   return lines.join("\n");
 }
@@ -7497,19 +7599,6 @@ function registerTabsCommand(pi, options = {}) {
 // src/commands/theme.ts
 import { truncateToWidth as truncateToWidth7, visibleWidth as visibleWidth8 } from "@earendil-works/pi-tui";
 
-// src/sumo-tui/render/cell.ts
-var DEFAULT_CELL_ATTRS = Object.freeze({
-  bold: false,
-  italic: false,
-  underline: false,
-  dim: false,
-  inverse: false
-});
-var BLANK_CELL = Object.freeze({
-  char: " ",
-  attrs: DEFAULT_CELL_ATTRS
-});
-
 // src/sumo-tui/cathedral/theme-bridge.ts
 var bridgeThemeVersion = 0;
 var bridgeThemeListeners = /* @__PURE__ */ new Set();
@@ -7550,7 +7639,7 @@ function styleLine(line, hex) {
 function renderThemeResultLines(details, width) {
   const colors = activeThemeColors();
   const accent4 = details.tone === "warning" ? colors.states.approval : colors.accent;
-  const fg9 = colors.foreground;
+  const fg8 = colors.foreground;
   const dim5 = colors.foregroundDim;
   const safeWidth = Math.max(8, width);
   const label = details.tone === "warning" ? "/sumo:theme \xB7 failed" : "/sumo:theme";
@@ -7564,7 +7653,7 @@ function renderThemeResultLines(details, width) {
   const bodyInnerWidth = Math.max(0, safeWidth - visibleWidth8(bodyPrefix));
   for (const raw of details.lines) {
     const clipped = truncateToWidth7(raw, bodyInnerWidth, "\u2026");
-    out.push(`${styleLine(bodyPrefix, dim5)}${styleLine(clipped, fg9)}`);
+    out.push(`${styleLine(bodyPrefix, dim5)}${styleLine(clipped, fg8)}`);
   }
   const tailRule = "\u2500".repeat(Math.max(0, safeWidth - 1));
   out.push(`${styleLine("\u2514", dim5)}${styleLine(tailRule, dim5)}`);
@@ -8761,108 +8850,7 @@ function getCachedMcpRoster(opts) {
 }
 
 // src/sumo-tui/cathedral/ansi.ts
-import { truncateToWidth as truncateToWidth9, visibleWidth as visibleWidth10 } from "@earendil-works/pi-tui";
-
-// src/sumo-tui/render/primitives.ts
 import { truncateToWidth as truncateToWidth8, visibleWidth as visibleWidth9 } from "@earendil-works/pi-tui";
-var SEGMENTER_CTOR = Intl.Segmenter;
-var GRAPHEME_SEGMENTER = SEGMENTER_CTOR ? new SEGMENTER_CTOR(void 0, { granularity: "grapheme" }) : void 0;
-var RESET10 = "\x1B[0m";
-function parseHex(hex) {
-  const normalized = hex.replace("#", "");
-  if (!/^[0-9a-fA-F]{6}$/.test(normalized)) return void 0;
-  return [
-    Number.parseInt(normalized.slice(0, 2), 16),
-    Number.parseInt(normalized.slice(2, 4), 16),
-    Number.parseInt(normalized.slice(4, 6), 16)
-  ];
-}
-function sgrForStyle(style) {
-  let output = "";
-  const attrs = [];
-  if (style.bold) attrs.push("1");
-  if (style.italic) attrs.push("3");
-  if (style.underline) attrs.push("4");
-  if (style.dim) attrs.push("2");
-  if (style.inverse) attrs.push("7");
-  if (attrs.length > 0) output += `\x1B[${attrs.join(";")}m`;
-  const fg9 = style.fg ? parseHex(style.fg) : void 0;
-  if (fg9) output += `\x1B[38;2;${fg9[0]};${fg9[1]};${fg9[2]}m`;
-  const bg2 = style.bg ? parseHex(style.bg) : void 0;
-  if (bg2) output += `\x1B[48;2;${bg2[0]};${bg2[1]};${bg2[2]}m`;
-  return output;
-}
-function mergeStyle(base, override) {
-  if (!base && !override) return {};
-  return {
-    fg: override?.fg ?? base?.fg,
-    bg: override?.bg ?? base?.bg,
-    bold: override?.bold ?? base?.bold,
-    italic: override?.italic ?? base?.italic,
-    underline: override?.underline ?? base?.underline,
-    dim: override?.dim ?? base?.dim,
-    inverse: override?.inverse ?? base?.inverse
-  };
-}
-function hasStyle(style) {
-  return style.fg !== void 0 || style.bg !== void 0 || style.bold === true || style.italic === true || style.underline === true || style.dim === true || style.inverse === true;
-}
-function toSpan(part) {
-  return typeof part === "string" ? { text: part } : part;
-}
-function span(text, style) {
-  return { text, style };
-}
-function textLine(parts = [], style) {
-  return { spans: parts.map(toSpan), style };
-}
-function lineWidth(line) {
-  return line.spans.reduce((width, part) => width + visibleWidth9(part.text), 0);
-}
-function truncateLine(line, width) {
-  const safeWidth = Math.max(0, Math.floor(width));
-  if (safeWidth === 0) return { spans: [], style: line.style };
-  let remaining = safeWidth;
-  const spans = [];
-  for (const part of line.spans) {
-    if (remaining <= 0) break;
-    const partWidth = visibleWidth9(part.text);
-    if (partWidth <= remaining) {
-      spans.push(part);
-      remaining -= partWidth;
-      continue;
-    }
-    const truncated = truncateToWidth8(part.text, remaining, "");
-    if (truncated.length > 0) spans.push({ ...part, text: truncated });
-    remaining = 0;
-  }
-  return { spans, style: line.style };
-}
-function padLine(line, width, style) {
-  const safeWidth = Math.max(0, Math.floor(width));
-  const truncated = truncateLine(line, safeWidth);
-  const padding = Math.max(0, safeWidth - lineWidth(truncated));
-  if (padding === 0) return truncated;
-  return {
-    spans: [...truncated.spans, { text: " ".repeat(padding), style }],
-    style: truncated.style
-  };
-}
-function lineToAnsi(line, options = {}) {
-  const prepared = options.width === void 0 ? line : padLine(line, options.width, options.style ?? line.style);
-  const baseStyle = mergeStyle(options.style, prepared.style);
-  let output = "";
-  for (const part of prepared.spans) {
-    if (part.text.length === 0) continue;
-    const effectiveStyle = mergeStyle(baseStyle, part.style);
-    if (hasStyle(effectiveStyle)) output += `${RESET10}${sgrForStyle(effectiveStyle)}`;
-    else if (output.length > 0) output += RESET10;
-    output += part.text;
-  }
-  return output.length === 0 ? "" : `${output}${RESET10}`;
-}
-
-// src/sumo-tui/cathedral/ansi.ts
 var SIDEBAR_INDENT = "  ";
 function parseHex2(hex) {
   const normalized = hex.replace("#", "");
@@ -8877,12 +8865,12 @@ function fgHex(hex) {
   return `\x1B[38;2;${r};${g};${b}m`;
 }
 function visibleLength3(text) {
-  return visibleWidth10(text);
+  return visibleWidth9(text);
 }
 function padAnsiToWidth2(line, width) {
   const safeWidth = Math.max(0, Math.floor(width));
-  const truncated = visibleWidth10(line) > safeWidth ? truncateToWidth9(line, safeWidth, "") : line;
-  const padding = Math.max(0, safeWidth - visibleWidth10(truncated));
+  const truncated = visibleWidth9(line) > safeWidth ? truncateToWidth8(line, safeWidth, "") : line;
+  const padding = Math.max(0, safeWidth - visibleWidth9(truncated));
   return `${truncated}${" ".repeat(padding)}`;
 }
 function surfaceLine(content, width) {
@@ -9038,10 +9026,10 @@ var CancellableWorkerRuntime = class {
 var SIDEBAR_SUB_TABS = ["CONTEXT", "MEMORY"];
 var TOKEN_BAR_CELLS = 22;
 var MEMORY_DISPLAY_LIMIT = 5;
-var FG_RESET4 = "\x1B[39m";
+var FG_RESET3 = "\x1B[39m";
 var DIM_OFF = "\x1B[22m";
 function colorHex3(text, hex) {
-  return `${fgHex(hex)}${text}${FG_RESET4}`;
+  return `${fgHex(hex)}${text}${FG_RESET3}`;
 }
 function dim4(text) {
   return `\x1B[2m${text}${DIM_OFF}`;
@@ -9223,7 +9211,7 @@ function renderRegistrySidebarLines(snapshot, width) {
 }
 
 // src/sidebar-placement.ts
-import { truncateToWidth as truncateToWidth10, visibleWidth as visibleWidth11 } from "@earendil-works/pi-tui";
+import { truncateToWidth as truncateToWidth9, visibleWidth as visibleWidth10 } from "@earendil-works/pi-tui";
 var SIDEBAR_MIN_TERMINAL_WIDTH = 120;
 var SIDEBAR_WIDTH = 30;
 var SIDEBAR_GUTTER_WIDTH = 2;
@@ -9233,9 +9221,9 @@ function sidebarOverlayTargetRows(termHeight) {
   return Math.max(1, Math.floor(termHeight) - SIDEBAR_OVERLAY_TOP_MARGIN_ROWS - SIDEBAR_OVERLAY_BOTTOM_RESERVED_ROWS);
 }
 var STATIC_SIDEBAR_DOCK_MARKER = /* @__PURE__ */ Symbol("sumocode.staticSidebarDock");
-function padToWidth3(line, width) {
-  const truncated = visibleWidth11(line) > width ? truncateToWidth10(line, width, "") : line;
-  const padding = Math.max(0, width - visibleWidth11(truncated));
+function padToWidth2(line, width) {
+  const truncated = visibleWidth10(line) > width ? truncateToWidth9(line, width, "") : line;
+  const padding = Math.max(0, width - visibleWidth10(truncated));
   return `${truncated}${" ".repeat(padding)}`;
 }
 function renderComponents(components, width) {
@@ -9267,8 +9255,8 @@ var StaticSidebarDock = class {
     const lines = [];
     const blankSidebarRow = surfaceLine("", SIDEBAR_WIDTH);
     for (let i = 0; i < rowCount; i++) {
-      const left = padToWidth3(mainLines[i] ?? "", mainWidth);
-      const right = i < sidebarLines.length ? padToWidth3(sidebarLines[i], SIDEBAR_WIDTH) : blankSidebarRow;
+      const left = padToWidth2(mainLines[i] ?? "", mainWidth);
+      const right = i < sidebarLines.length ? padToWidth2(sidebarLines[i], SIDEBAR_WIDTH) : blankSidebarRow;
       lines.push(`${left}${" ".repeat(SIDEBAR_GUTTER_WIDTH)}${right}`);
     }
     return lines;
@@ -9660,11 +9648,11 @@ function installMemoryExtraction(pi, createClient = createRemnicMemoryClient) {
 import { readFileSync as readFileSync10 } from "node:fs";
 import { dirname as dirname5, resolve as resolve3 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
-import { truncateToWidth as truncateToWidth11 } from "@earendil-works/pi-tui";
-var RESET11 = "\x1B[0m";
+import { truncateToWidth as truncateToWidth10 } from "@earendil-works/pi-tui";
+var RESET10 = "\x1B[0m";
 var ANSI_PATTERN4 = /\u001b(?:\[[0-?]*[ -/]*[@-~]|\][^\u0007]*(?:\u0007|\u001b\\))/g;
 var CURSOR_VISIBILITY_PATTERN = /\u001b\[\?25[lh]/g;
-function fg7(hex) {
+function fg6(hex) {
   const n = hex.replace("#", "");
   const r = Number.parseInt(n.slice(0, 2), 16);
   const g = Number.parseInt(n.slice(2, 4), 16);
@@ -9672,18 +9660,18 @@ function fg7(hex) {
   return `\x1B[38;2;${r};${g};${b}m`;
 }
 function accentFg() {
-  return fg7(activeThemeColors().accent);
+  return fg6(activeThemeColors().accent);
 }
 function mutedFg() {
-  return fg7(activeThemeColors().foregroundDim);
+  return fg6(activeThemeColors().foregroundDim);
 }
 var DIM = "\x1B[2m";
 function visibleLength4(text) {
   return text.replace(ANSI_PATTERN4, "").length;
 }
-function center4(line, width) {
+function center3(line, width) {
   const len = visibleLength4(line);
-  if (len >= width) return truncateToWidth11(line, width, "");
+  if (len >= width) return truncateToWidth10(line, width, "");
   const pad = Math.floor((width - len) / 2);
   return `${" ".repeat(pad)}${line}`;
 }
@@ -9720,18 +9708,18 @@ var SUMOCODE_QUOTE_ATTRIBUTION = "\u2014 SUMO";
 function renderSplashContent(snapshot, width) {
   if (snapshot.hasMessages) return [];
   const content = [];
-  for (const row3 of SUMO_FACE) content.push(center4(row3, width));
+  for (const row3 of SUMO_FACE) content.push(center3(row3, width));
   if (SUMO_FACE.length > 0) {
     content.push("");
     content.push("");
   }
   for (const row3 of SUMOCODE_WORDMARK) {
-    content.push(center4(`${accentFg()}${row3}${RESET11}`, width));
+    content.push(center3(`${accentFg()}${row3}${RESET10}`, width));
   }
   content.push("");
   content.push("");
-  content.push(center4(`${DIM}${mutedFg()}${snapshot.quote}${RESET11}`, width));
-  content.push(center4(`${DIM}${mutedFg()}${snapshot.quoteAttribution}${RESET11}`, width));
+  content.push(center3(`${DIM}${mutedFg()}${snapshot.quote}${RESET10}`, width));
+  content.push(center3(`${DIM}${mutedFg()}${snapshot.quoteAttribution}${RESET10}`, width));
   return content;
 }
 function renderSplash(snapshot, width, terminalHeight) {
@@ -9786,13 +9774,13 @@ function installSplash(pi) {
 }
 
 // src/top-chrome.ts
-var RESET12 = "\x1B[0m";
+var RESET11 = "\x1B[0m";
 var ANSI_PATTERN5 = /\u001b\[[0-9;]*m/g;
 var TOP_CHROME_BRAND = "SUMOCODE";
 function visibleLength5(text) {
   return text.replace(ANSI_PATTERN5, "").length;
 }
-function fg8(hex) {
+function fg7(hex) {
   const n = hex.replace("#", "");
   const r = Number.parseInt(n.slice(0, 2), 16);
   const g = Number.parseInt(n.slice(2, 4), 16);
@@ -9800,7 +9788,7 @@ function fg8(hex) {
   return `\x1B[38;2;${r};${g};${b}m`;
 }
 function color3(text, hex) {
-  return `${fg8(hex)}${text}${RESET12}`;
+  return `${fg7(hex)}${text}${RESET11}`;
 }
 function ellipsize3(text, max) {
   if (max <= 0) return "";
@@ -9846,7 +9834,7 @@ function iconsSegment() {
 function brandSegment() {
   return color3(TOP_CHROME_BRAND, activeThemeColors().accent);
 }
-function padToWidth4(text, width) {
+function padToWidth3(text, width) {
   const len = visibleLength5(text);
   if (len >= width) return text;
   return `${text}${" ".repeat(width - len)}`;
@@ -9858,7 +9846,7 @@ function renderTopChrome(snapshot, width) {
   if (innerWidth <= 0) return " ".repeat(width);
   const brand = brandSegment();
   if (snapshot.hidden) {
-    return `${outerPad}${padToWidth4(brand, innerWidth)}${outerPad}`;
+    return `${outerPad}${padToWidth3(brand, innerWidth)}${outerPad}`;
   }
   const brandLen = visibleLength5(brand);
   const dotSize = snapshot.dotSize ?? "medium";
@@ -9901,7 +9889,7 @@ function renderTopChrome(snapshot, width) {
       consumed = innerWidth;
     }
   }
-  return `${outerPad}${padToWidth4(line, innerWidth)}${outerPad}`;
+  return `${outerPad}${padToWidth3(line, innerWidth)}${outerPad}`;
 }
 function renderTopChromeBlock(snapshot, width) {
   const line = renderTopChrome(snapshot, width);
@@ -14950,8 +14938,10 @@ var SubagentManager = class {
   settlingPromises = /* @__PURE__ */ new Map();
   settlingOutcomes = /* @__PURE__ */ new Map();
   startedIds = /* @__PURE__ */ new Set();
+  lifecycleGeneration = 0;
   consumedIds = /* @__PURE__ */ new Set();
   async spawn(task) {
+    const generation = this.lifecycleGeneration;
     const runningSummaries = this.runningSummaries();
     if (runningSummaries.length >= SUBAGENT_MAX_RUNNING || this.queuedTasks.length > 0) {
       if (this.queuedTasks.length >= SUBAGENT_MAX_QUEUED) {
@@ -14965,15 +14955,17 @@ var SubagentManager = class {
       }
       const id2 = `sa-${this.nextId++}`;
       const createdAt = Date.now();
-      const snapshot = makeInitialSnapshot(task, id2, createdAt, "HEAD", task.cwd, void 0, void 0, "queued");
-      this.queuedTasks.push({ task, id: id2, createdAt });
-      this.snapshots.set(id2, snapshot);
+      const snapshot2 = makeInitialSnapshot(task, id2, createdAt, "HEAD", task.cwd, void 0, void 0, "queued");
+      this.queuedTasks.push({ task, id: id2, createdAt, generation });
+      this.snapshots.set(id2, snapshot2);
       this.notify();
       this.prune();
-      return snapshot;
+      return snapshot2;
     }
     const id = `sa-${this.nextId++}`;
-    return this.startTask(task, id, Date.now());
+    const snapshot = await this.startTask(task, id, Date.now(), generation);
+    if (snapshot.status !== "running" && generation === this.lifecycleGeneration) void this.scheduleDequeue();
+    return snapshot;
   }
   runningSummaries() {
     const running = this.list().filter((snapshot) => snapshot.status === "running" && this.children.has(snapshot.id));
@@ -14983,7 +14975,7 @@ var SubagentManager = class {
       ...pending
     ];
   }
-  async startTask(task, id, createdAt) {
+  async startTask(task, id, createdAt, generation) {
     this.pendingSpawns.set(id, { title: task.title, createdAt });
     let pending = true;
     let releaseVisibleSpawn;
@@ -14995,6 +14987,10 @@ var SubagentManager = class {
     try {
       const gitContext = await this.captureGitContextImpl(task.cwd);
       const baseRef = gitContext.baseRef ?? "HEAD";
+      if (generation !== this.lifecycleGeneration) {
+        releasePending();
+        return this.recordSpawnFailure(task, id, createdAt, baseRef, "interrupted during session shutdown");
+      }
       let manifestBaseRef = baseRef;
       if (task.branch && !task.worktree) {
         releasePending();
@@ -15044,10 +15040,18 @@ var SubagentManager = class {
           baseRef: manifestBaseRef,
           repoRoot: gitContext.repoRoot
         };
+        if (generation !== this.lifecycleGeneration) {
+          releasePending();
+          return this.recordSpawnFailure(task, id, createdAt, manifestBaseRef, `interrupted during session shutdown. Worktree created at ${created.path} is preserved.`, childCwd, worktree);
+        }
       }
       let placement;
       if (task.visible) {
         releaseVisibleSpawn = await this.reserveVisibleSpawn();
+        if (generation !== this.lifecycleGeneration) {
+          releasePending();
+          return this.recordSpawnFailure(task, id, createdAt, manifestBaseRef, "interrupted during session shutdown", childCwd, worktree);
+        }
         const host = this.terminalHost;
         if (!host || !this.pi || host.kind === "none") {
           releasePending();
@@ -15071,6 +15075,10 @@ var SubagentManager = class {
           } catch (error) {
             opened = { ok: false, error: error instanceof Error ? error.message : String(error) };
           }
+          if (generation !== this.lifecycleGeneration) {
+            releasePending();
+            return this.recordSpawnFailure(task, id, createdAt, manifestBaseRef, "interrupted during session shutdown", childCwd, worktree);
+          }
           const workspaceId = opened.ok ? opened.pane.workspaceId : void 0;
           if (!opened.ok || !workspaceId) {
             releasePending();
@@ -15080,6 +15088,10 @@ var SubagentManager = class {
           placement = { kind: "workspace", workspaceId, paneId: opened.pane.paneId };
         } else if (planned.kind === "tab") placement = planned;
         else placement = { kind: "new-tab", label: planned.kind === "new-tab" ? planned.label : "subagents" };
+      }
+      if (generation !== this.lifecycleGeneration) {
+        releasePending();
+        return this.recordSpawnFailure(task, id, createdAt, manifestBaseRef, "interrupted during session shutdown", childCwd, worktree);
       }
       const controller = new AbortController();
       let child;
@@ -15200,6 +15212,7 @@ var SubagentManager = class {
     return ids.map((id) => lines.get(id) ?? `${id} is unknown`);
   }
   disposeAll() {
+    this.lifecycleGeneration += 1;
     const queuedIds = this.queuedTasks.map((queued) => queued.id);
     this.queuedTasks.length = 0;
     for (const id of queuedIds) void this.startSettle(id, { kind: "interrupted" });
@@ -15218,7 +15231,7 @@ var SubagentManager = class {
       const queued = this.queuedTasks.shift();
       if (!queued) return;
       try {
-        await this.startTask(queued.task, queued.id, queued.createdAt);
+        await this.startTask(queued.task, queued.id, queued.createdAt, queued.generation);
       } catch (error) {
         const current = this.snapshots.get(queued.id);
         if (current?.status === "queued") {
@@ -15267,7 +15280,7 @@ var SubagentManager = class {
   fold(id, event) {
     if (event.kind === "run-settled") {
       const settling = this.snapshots.get(id);
-      if (event.outcome.kind === "failed" && settling?.visible && !settling.worktree && !settling.pane && this.subagentsTabId !== void 0) {
+      if (event.outcome.kind === "failed" && settling?.visible && !settling.pane && this.subagentsTabId !== void 0) {
         this.subagentsTabId = this.initialVisibleTabId;
       }
       void this.startSettle(id, event.outcome);

@@ -108,6 +108,11 @@ function isString(value: string | undefined): value is string {
 	return typeof value === "string";
 }
 
+/** JSON.parse succeeds on `null` and other primitives; only objects carry protocol fields. */
+function isMessageRecord(value: RpcMessageLike | null): value is RpcMessageLike {
+	return typeof value === "object" && value !== null;
+}
+
 function isResponse(value: RpcMessageLike): value is RpcResponse {
 	return value.type === "response";
 }
@@ -348,6 +353,10 @@ export class SumoRpcClient {
 			return;
 		}
 		this.consecutiveProtocolErrors = 0;
+
+		// Stray child output can decode to a JSON primitive (e.g. console.log(null));
+		// only object-shaped lines are protocol candidates.
+		if (!isMessageRecord(parsed)) return;
 
 		if (isResponse(parsed)) {
 			const pending = parsed.id ? this.pending.get(parsed.id) : undefined;

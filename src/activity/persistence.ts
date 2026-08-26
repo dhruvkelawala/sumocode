@@ -305,14 +305,13 @@ export function writePrivateJsonExclusive(path: string, value: unknown): void {
 		}
 	} finally {
 		if (descriptor !== undefined) closeSync(descriptor);
-	}
-	// Cleanup lives outside finally so a failed unlink can never mask the
-	// operation's own success or failure; a leftover dot-prefixed temporary is
-	// unreferenced and harmless.
-	try {
-		unlinkSync(temporary);
-	} catch (error) {
-		if (!errorMatches(error, "ENOENT")) throw error;
+		try {
+			unlinkSync(temporary);
+		} catch {
+			// Swallowed: either the rename/link consumed the temporary name or
+			// the write is already failing — an unlink error must never mask the
+			// primary result or exception.
+		}
 	}
 }
 
@@ -512,13 +511,12 @@ export function atomicWritePrivateJson(path: string, value: unknown): void {
 		}
 	} finally {
 		if (descriptor !== undefined) closeSync(descriptor);
-	}
-	// Cleanup lives outside finally so a failed unlink can never mask the
-	// operation's own success or failure; a leftover dot-prefixed temporary is
-	// unreferenced and harmless.
-	try {
-		unlinkSync(temporary);
-	} catch (error) {
-		if (!errorMatches(error, "ENOENT")) throw error;
+		try {
+			unlinkSync(temporary);
+		} catch {
+			// Swallowed: either the rename/link consumed the temporary name or
+			// the write is already failing — an unlink error must never mask the
+			// primary result or exception.
+		}
 	}
 }

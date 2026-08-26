@@ -266,7 +266,7 @@ function createPiEventInstrumentation() {
       instrumented.add(listener);
       return (...args) => {
         logDiagnostic("pi_event", { name: eventName });
-        listener(...args);
+        return listener(...args);
       };
     }
   };
@@ -11385,11 +11385,10 @@ function atomicWriteJson(path2, value) {
     }
   } finally {
     if (descriptor !== void 0) closeSync(descriptor);
-  }
-  try {
-    unlinkSync(temporary);
-  } catch (error) {
-    if (!errorMatches(error, "ENOENT")) throw error;
+    try {
+      unlinkSync(temporary);
+    } catch {
+    }
   }
 }
 function isBooleanValue2(value) {
@@ -13477,11 +13476,10 @@ function writePrivateJsonExclusive(path2, value) {
     }
   } finally {
     if (descriptor !== void 0) closeSync3(descriptor);
-  }
-  try {
-    unlinkSync2(temporary);
-  } catch (error) {
-    if (!errorMatches2(error, "ENOENT")) throw error;
+    try {
+      unlinkSync2(temporary);
+    } catch {
+    }
   }
 }
 function atomicWritePrivateJson(path2, value) {
@@ -13509,11 +13507,10 @@ function atomicWritePrivateJson(path2, value) {
     }
   } finally {
     if (descriptor !== void 0) closeSync3(descriptor);
-  }
-  try {
-    unlinkSync2(temporary);
-  } catch (error) {
-    if (!errorMatches2(error, "ENOENT")) throw error;
+    try {
+      unlinkSync2(temporary);
+    } catch {
+    }
   }
 }
 

@@ -354,13 +354,13 @@ function atomicWriteJson(path: string, value: TerminalTaskSnapshot): void {
 		}
 	} finally {
 		if (descriptor !== undefined) closeSync(descriptor);
-	}
-	// Cleanup lives outside finally so a failed unlink can never mask the
-	// write's own success or failure; a leftover dot-prefixed temp is unreferenced.
-	try {
-		unlinkSync(temporary);
-	} catch (error) {
-		if (!errorMatches(error, "ENOENT")) throw error;
+		try {
+			unlinkSync(temporary);
+		} catch {
+			// Swallowed: either the rename consumed the temporary name or the write
+			// is already failing — an unlink error must never mask the primary
+			// result or exception.
+		}
 	}
 }
 

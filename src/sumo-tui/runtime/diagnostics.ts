@@ -74,9 +74,13 @@ export function createPiEventInstrumentation(): { wrap(eventName: string, listen
 		wrap(eventName, listener) {
 			if (instrumented.has(listener)) return listener;
 			instrumented.add(listener);
-			return (...args: never[]): void => {
+			// Returns the listener's result (including promises from async listeners):
+			// result-bearing gates such as the tool_call block decision flow through
+			// the instrumentation wrapper unchanged.
+			// oxlint-disable-next-line anti-slop/no-unknown-returns -- transparent instrumentation: the wrapper must pass through whatever the wrapped Pi listener returns (void, gate decision objects, or promises) without narrowing it.
+			return (...args: never[]): unknown => {
 				logDiagnostic("pi_event", { name: eventName });
-				listener(...args);
+				return listener(...args);
 			};
 		},
 	};

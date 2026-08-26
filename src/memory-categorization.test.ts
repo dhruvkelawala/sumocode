@@ -102,6 +102,11 @@ describe("routeFactToPanel — keyword rules", () => {
 		expect(routeFactToPanel(fact({ text: "macbook is landscape" }))).toBe("SYSTEM");
 	});
 
+	it("herdr host facts → SYSTEM", () => {
+		expect(routeFactToPanel(fact({ text: "uses herdr" }))).toBe("SYSTEM");
+		expect(routeFactToPanel(fact({ text: "Herdr ships workspace and pane management" }))).toBe("SYSTEM");
+	});
+
 	it("sumocode/openclaw/cathedral → PROJECTS", () => {
 		expect(routeFactToPanel(fact({ text: "SumoCode is the cathedral product" }))).toBe("PROJECTS");
 		expect(routeFactToPanel(fact({ text: "OpenClaw ACPX integration" }))).toBe("PROJECTS");

@@ -8309,7 +8309,7 @@ function routeFactToPanel(fact) {
   if (cat === "entity" || cat === "relationship") return "IDENTITY";
   const text = (fact.text ?? "").toLowerCase();
   if (/\b(works\s+at|based\s+in|located\s+in|lives\s+in|senior\s+(frontend|backend|engineer|developer)|software\s+engineer|principal\s+engineer|staff\s+engineer|lead\s+engineer)\b/.test(text)) return "IDENTITY";
-  if (/\b(portrait|landscape|terminal|libghostty|visual verification)\b/.test(text)) return "SYSTEM";
+  if (/\b(herdr|portrait|landscape|terminal|libghostty|visual verification)\b/.test(text)) return "SYSTEM";
   if (/\b(sumocode|openclaw|cathedral|project:)\b/.test(text)) return "PROJECTS";
   if (/\b(tdd|workflow|always|never|prefer)\b/.test(text)) return "WORKFLOW";
   if (/\b(typescript|pnpm|react|vite|tailwind|next\.?js|bun|node)\b/.test(text)) return "PREFERENCES";

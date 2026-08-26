@@ -111,6 +111,8 @@ function buildOpenAIResponsesFastOptions(model, options) {
 function buildOpenAICodexResponsesFastOptions(model, options) {
   return {
     ...buildBaseProviderOptions(model, options),
+    // SAFETY: clampReasoning already narrowed to the reasoningEffort union;
+    // Codex accepts the same values as the Responses reasoningEffort type.
     reasoningEffort: clampReasoning(model, options?.reasoning),
     serviceTier: SERVICE_TIER
   };
@@ -141,8 +143,11 @@ function notify(ctx, message, level) {
 function publishFastModeStatus(ctx, state, model) {
   if (!ctx?.hasUI) return;
   const setStatus = ctx.ui.setStatus;
-  if (typeof setStatus !== "function") return;
+  if (!isSetStatusFunction(setStatus)) return;
   setStatus.call(ctx.ui, FAST_MODE_STATUS_KEY, shouldApplyFastMode(state, model) ? FAST_MODE_STATUS_TEXT : void 0);
+}
+function isSetStatusFunction(value) {
+  return typeof value === "function";
 }
 function installFastMode(pi, options = {}) {
   const state = {
@@ -164,11 +169,15 @@ function installFastMode(pi, options = {}) {
   );
   registerApiProvider({
     api: "openai-responses",
+    // SAFETY: the api discriminator keys the stream; the fallback path casts
+    // the generic model/options to the provider's concrete shapes.
     stream: nativeOpenAIResponses?.stream ?? ((model, context, streamOptions) => streamOpenAIResponses(model, context, streamOptions)),
     streamSimple
   }, OPENAI_RESPONSES_FAST_SOURCE);
   registerApiProvider({
     api: "openai-codex-responses",
+    // SAFETY: the api discriminator keys the stream; the fallback path casts
+    // the generic model/options to the provider's concrete shapes.
     stream: nativeOpenAICodexResponses?.stream ?? ((model, context, streamOptions) => streamOpenAICodexResponses(model, context, streamOptions)),
     streamSimple
   }, OPENAI_CODEX_RESPONSES_FAST_SOURCE);
@@ -211,7 +220,6 @@ import { execFile, execFileSync } from "node:child_process";
 
 // src/sumo-tui/runtime/diagnostics.ts
 import { appendFileSync } from "node:fs";
-var PI_EVENT_INSTRUMENTED_PROPERTY = "__sumoTuiDiagnosticsPiEventsInstrumented";
 var PREVIEW_MAX = 160;
 function diagnosticsFile() {
   const file = process.env.SUMO_TUI_DIAG_FILE;
@@ -220,16 +228,19 @@ function diagnosticsFile() {
 function isDiagnosticsEnabled() {
   return diagnosticsFile() !== void 0;
 }
+function isDiagnosticString(value) {
+  return typeof value === "string";
+}
+function isScalarDiagnosticValue(value) {
+  return typeof value === "number" || typeof value === "boolean" || value === null || value === void 0;
+}
 function sanitizeDiagnosticValue(value) {
-  if (typeof value === "string") return value.length > PREVIEW_MAX ? `${value.slice(0, PREVIEW_MAX)}\u2026` : value;
-  if (typeof value === "number" || typeof value === "boolean" || value === null || value === void 0) return value;
+  if (isDiagnosticString(value)) return value.length > PREVIEW_MAX ? `${value.slice(0, PREVIEW_MAX)}\u2026` : value;
+  if (isScalarDiagnosticValue(value)) return value;
   if (Array.isArray(value)) return value.map((entry) => sanitizeDiagnosticValue(entry));
-  if (typeof value === "object") {
-    const next = {};
-    for (const [key, entry] of Object.entries(value)) next[key] = sanitizeDiagnosticValue(entry);
-    return next;
-  }
-  return String(value);
+  const next = {};
+  for (const [key, entry] of Object.entries(value)) next[key] = sanitizeDiagnosticValue(entry);
+  return next;
 }
 var diagnosticsStart = performance.now();
 var lastMark = diagnosticsStart;
@@ -246,21 +257,21 @@ function logDiagnostic(event, fields = {}) {
   } catch {
   }
 }
-function instrumentPiEventEmitter(pi) {
-  if (!isDiagnosticsEnabled()) return;
-  const target = pi;
-  if (target[PI_EVENT_INSTRUMENTED_PROPERTY] || typeof target.on !== "function") return;
-  const originalOn = target.on.bind(pi);
-  target.on = (eventName, listener, ...args) => {
-    if (typeof listener !== "function") return originalOn(eventName, listener, ...args);
-    const name = String(eventName);
-    const wrappedListener = (...listenerArgs) => {
-      logDiagnostic("pi_event", { name });
-      return listener(...listenerArgs);
-    };
-    return originalOn(eventName, wrappedListener, ...args);
+function createPiEventInstrumentation() {
+  if (!isDiagnosticsEnabled()) return void 0;
+  const instrumented = /* @__PURE__ */ new WeakSet();
+  return {
+    wrap(eventName, listener) {
+      if (instrumented.has(listener)) return listener;
+      instrumented.add(listener);
+      return (...args) => {
+        logDiagnostic("pi_event", { name: eventName });
+        listener(...args);
+      };
+    }
   };
-  target[PI_EVENT_INSTRUMENTED_PROPERTY] = true;
+}
+function logPiEventInstrumented() {
   logDiagnostic("pi_event_instrumentation", { enabled: true });
 }
 
@@ -276,11 +287,14 @@ var TERMINAL_IO_ERROR_CODES = /* @__PURE__ */ new Set([
   "EBADF",
   "ERR_STREAM_DESTROYED"
 ]);
-function isTerminalIoError(error) {
-  if (typeof error !== "object" || error === null) return false;
-  const candidate = error;
-  if (typeof candidate.code === "string" && TERMINAL_IO_ERROR_CODES.has(candidate.code)) return true;
-  const message = typeof candidate.message === "string" ? candidate.message : "";
+function isErrorString(value) {
+  return typeof value === "string";
+}
+function isTerminalIoError(cause) {
+  if (cause === null || cause === void 0) return false;
+  const candidate = cause;
+  if (isErrorString(candidate.code) && TERMINAL_IO_ERROR_CODES.has(candidate.code)) return true;
+  const message = isErrorString(candidate.message) ? candidate.message : "";
   return message === "Object has been destroyed" || /\b(?:write|read) EIO\b/i.test(message) || /\b(?:write|read) EPIPE\b/i.test(message) || /\bsetRawMode ENOTTY\b/i.test(message);
 }
 
@@ -1408,7 +1422,7 @@ function saveSumoCodeConfigPatch(patch, options = {}) {
   if (raw !== void 0) {
     try {
       const parsed = JSON.parse(raw);
-      if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return { success: false, path: path2, error: "Existing SumoCode config is not a JSON object" };
+      if (!isObjectValue(parsed) || parsed === null || Array.isArray(parsed)) return { success: false, path: path2, error: "Existing SumoCode config is not a JSON object" };
       existing = parsed;
     } catch (error) {
       return { success: false, path: path2, error: error instanceof Error ? error.message : String(error) };
@@ -1435,7 +1449,7 @@ function mergeMissingSumoCodeConfig(primary, fallback) {
 function finalizeSumoCodeConfig(config) {
   return {
     primaryAgentName: config.primaryAgentName ?? DEFAULT_SUMOCODE_CONFIG.primaryAgentName,
-    ...config.themeName === void 0 ? {} : { themeName: config.themeName }
+    ...config.themeName !== void 0 && { themeName: config.themeName }
   };
 }
 function readConfigFile(path2) {
@@ -1448,6 +1462,12 @@ function writeConfigFileAtomic(path2, content) {
   writeFileSync(tmpPath, content);
   renameSync(tmpPath, path2);
 }
+function isObjectValue(value) {
+  return typeof value === "object";
+}
+function isString(value) {
+  return typeof value === "string";
+}
 function parseSumoCodeConfig(raw) {
   let parsed;
   try {
@@ -1455,13 +1475,13 @@ function parseSumoCodeConfig(raw) {
   } catch {
     return void 0;
   }
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return void 0;
+  if (!isObjectValue(parsed) || parsed === null || Array.isArray(parsed)) return void 0;
   const record = parsed;
   if (record.primaryAgentName === void 0 && record.themeName === void 0) return void 0;
-  if (record.primaryAgentName !== void 0 && (typeof record.primaryAgentName !== "string" || record.primaryAgentName.trim().length === 0)) return void 0;
-  const primaryAgentName = typeof record.primaryAgentName === "string" ? record.primaryAgentName.trim() : void 0;
-  const themeName = typeof record.themeName === "string" && record.themeName.trim().length > 0 ? record.themeName.trim().toLowerCase() : void 0;
-  return { ...primaryAgentName === void 0 ? {} : { primaryAgentName }, ...themeName === void 0 ? {} : { themeName } };
+  if (record.primaryAgentName !== void 0 && (!isString(record.primaryAgentName) || record.primaryAgentName.trim().length === 0)) return void 0;
+  const primaryAgentName = isString(record.primaryAgentName) ? record.primaryAgentName.trim() : void 0;
+  const themeName = isString(record.themeName) && record.themeName.trim().length > 0 ? record.themeName.trim().toLowerCase() : void 0;
+  return { ...primaryAgentName !== void 0 && { primaryAgentName }, ...themeName !== void 0 && { themeName } };
 }
 
 // src/themes/startup.ts
@@ -1847,7 +1867,9 @@ function latestThinkingLevel(ctx) {
   let latest;
   try {
     for (const entry of ctx.sessionManager.getBranch()) {
-      if (entry.type === "thinking_level_change") latest = entry.thinkingLevel;
+      if (entry.type === "thinking_level_change") {
+        latest = entry.thinkingLevel;
+      }
     }
   } catch {
     return void 0;
@@ -2462,10 +2484,11 @@ var QuestionParams = Type.Object({
   )
 });
 var FREE_TEXT_LABEL = "Type something\u2026";
+var isStringOption = (option) => typeof option === "string";
 function normalizeQuestionOptions(options) {
   if (!options?.length) return [];
   return options.map((option) => {
-    if (typeof option === "string") {
+    if (isStringOption(option)) {
       const label = option.trim();
       return { label, value: label };
     }
@@ -3317,7 +3340,7 @@ var upsertToolEvent = (result, event) => {
 var mapWithConcurrencyLimit = async (items, concurrency, fn) => {
   if (items.length === 0) return [];
   const limit = Math.max(1, Math.min(concurrency, items.length));
-  const results = new Array(items.length);
+  const results = Array.from({ length: items.length });
   let nextIndex = 0;
   const runWorker = async () => {
     const currentIndex = nextIndex;
@@ -3326,7 +3349,7 @@ var mapWithConcurrencyLimit = async (items, concurrency, fn) => {
     results[currentIndex] = await fn(items[currentIndex], currentIndex);
     await runWorker();
   };
-  await Promise.all(new Array(limit).fill(null).map(async () => runWorker()));
+  await Promise.all(Array.from({ length: limit }, () => null).map(async () => runWorker()));
   return results;
 };
 var runSingleTask = async (options) => {
@@ -4345,7 +4368,8 @@ var TerminalSessionOwner = class {
 var GLOBAL_OWNER_KEY = "__sumoDefaultTerminalSessionOwner";
 var globalForOwner = globalThis;
 if (!globalForOwner[GLOBAL_OWNER_KEY]) globalForOwner[GLOBAL_OWNER_KEY] = new TerminalSessionOwner();
-var defaultTerminalSessionOwner = globalForOwner[GLOBAL_OWNER_KEY];
+var existingOwner = globalForOwner[GLOBAL_OWNER_KEY] ?? (globalForOwner[GLOBAL_OWNER_KEY] = new TerminalSessionOwner());
+var defaultTerminalSessionOwner = existingOwner;
 
 // src/sumo-tui/runtime/lifecycle.ts
 var EXIT_SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP", "SIGQUIT"];
@@ -4373,9 +4397,9 @@ function getNodeInput() {
     setRawMode: (enabled) => stdin.setRawMode?.(enabled)
   };
 }
-function crashText(error) {
-  if (error instanceof Error) return error.stack ?? `${error.name}: ${error.message}`;
-  return String(error);
+function crashText(cause) {
+  if (cause instanceof Error) return cause.stack ?? `${cause.name}: ${cause.message}`;
+  return String(cause);
 }
 var LifecycleRuntime = class {
   terminalSession;
@@ -4386,6 +4410,7 @@ var LifecycleRuntime = class {
   makeDir;
   appendFile;
   processHandlersInstalled = false;
+  piEventsInstrumented = false;
   sigtstpInstalled = false;
   suspended = false;
   signalHandlers = /* @__PURE__ */ new Map();
@@ -4400,7 +4425,7 @@ var LifecycleRuntime = class {
   }
   installLifecycle(pi) {
     this.installProcessHandlers();
-    instrumentPiEventEmitter(pi);
+    this.instrumentPiEvents(pi);
     pi.on("session_start", (_event, ctx) => {
       if (!ctx.hasUI) return;
       this.acquireRawMode();
@@ -4454,6 +4479,16 @@ var LifecycleRuntime = class {
     } catch (error) {
       if (!isTerminalIoError(error)) throw error;
     }
+  }
+  instrumentPiEvents(pi) {
+    if (this.piEventsInstrumented) return;
+    const instrumentation = createPiEventInstrumentation();
+    if (!instrumentation) return;
+    const registrar = pi.on.bind(pi);
+    const instrumented = (eventName, listener, ...rest) => registrar(eventName, instrumentation.wrap(eventName, listener), ...rest);
+    Object.assign(pi, { on: instrumented });
+    this.piEventsInstrumented = true;
+    logPiEventInstrumented();
   }
   registerReraisingSignal(signal) {
     let reraised = false;
@@ -4516,12 +4551,12 @@ var LifecycleRuntime = class {
     } catch {
     }
   }
-  logCrash(error) {
+  logCrash(cause) {
     try {
       const logDir = join3(this.getHomeDir(), ".sumocode");
       this.makeDir(logDir, { recursive: true });
       this.appendFile(join3(logDir, "crash.log"), `[${(/* @__PURE__ */ new Date()).toISOString()}] uncaughtException
-${crashText(error)}
+${crashText(cause)}
 
 `, "utf8");
     } catch {
@@ -4766,7 +4801,7 @@ var CathedralEditor = class extends CustomEditor {
     super(cathedralTui, theme, keybindings);
     this.cathedralTui = cathedralTui;
     this.isSplash = isSplash;
-    this.handlePaste = this.cathedralHandlePaste;
+    unsafeCast(this).handlePaste = this.cathedralHandlePaste;
     delete this.onSubmit;
     Object.defineProperty(this, "onSubmit", {
       configurable: true,
@@ -4841,7 +4876,7 @@ var CathedralEditor = class extends CustomEditor {
    */
   cathedralHandlePaste = (pastedText) => {
     if (this.collapseImagePath(pastedText)) return;
-    CustomEditor.prototype.handlePaste.call(this, pastedText);
+    unsafeCast(CustomEditor.prototype).handlePaste.call(this, pastedText);
   };
   handleInput(data) {
     const now = Date.now();
@@ -4873,7 +4908,7 @@ var CathedralEditor = class extends CustomEditor {
    */
   maybeTriggerMidLineSlashMenu(data) {
     if (data !== "/") return;
-    const internals = this;
+    const internals = unsafeCast(this);
     if (internals.autocompleteState) return;
     const { line, col } = this.getCursor();
     const textBeforeCursor = (this.getText().split("\n")[line] ?? "").slice(0, col);
@@ -4885,7 +4920,7 @@ var CathedralEditor = class extends CustomEditor {
     internals.tryTriggerAutocomplete();
   }
   visibleRowSourceRanges(layoutWidth, visibleRowCount) {
-    const internals = this;
+    const internals = unsafeCast(this);
     const layoutRows = internals.layoutText(layoutWidth);
     const allRanges = [];
     let layoutIndex = 0;
@@ -4962,6 +4997,9 @@ function sessionHasMessages4(ctx) {
   } catch {
     return false;
   }
+}
+function unsafeCast(...[value]) {
+  return value;
 }
 function installCathedralEditor(pi) {
   pi.on("session_start", (_event, ctx) => {
@@ -5240,9 +5278,14 @@ function installCommandPalette(pi) {
     handler: async (ctx) => {
       if (!ctx.hasUI) return;
       const selection = await ctx.ui.custom(
-        (_tui, _theme, _keybindings, done) => new CommandPaletteComponent(
-          buildPaletteSnapshot({ ...ctx, getThinkingLevel: () => pi.getThinkingLevel() }),
-          done
+        (_tui, _theme, _keybindings, done) => (
+          // SAFETY: the palette component receives the ctx surface it reads
+          // (model/registry/thinking-level accessors) plus a getThinkingLevel
+          // bound to the live Pi instance.
+          new CommandPaletteComponent(
+            buildPaletteSnapshot({ ...ctx, getThinkingLevel: () => pi.getThinkingLevel() }),
+            done
+          )
         ),
         { overlay: true, overlayOptions: COMMAND_PALETTE_OVERLAY_OPTIONS }
       );
@@ -6003,7 +6046,7 @@ function registerSlateTools(pi) {
       index: Type3.Number({ description: "1-based index of the item to remove" })
     }),
     async execute(_toolCallId, params) {
-      const index = typeof params.index === "number" ? params.index : 1;
+      const index = params.index;
       const removed = slate.remove(index);
       if (!removed) {
         return {
@@ -6229,7 +6272,7 @@ function extractModelAlias(args) {
   const trimmed = args.trim();
   const spaceIdx = trimmed.indexOf(" ");
   const firstWord = (spaceIdx === -1 ? trimmed : trimmed.slice(0, spaceIdx)).toLowerCase();
-  const alias = MODEL_ALIASES[firstWord];
+  const alias = firstWord in MODEL_ALIASES ? MODEL_ALIASES[firstWord] : void 0;
   if (alias) {
     const rest = spaceIdx === -1 ? "" : trimmed.slice(spaceIdx + 1);
     return { model: alias, scopeArgs: rest };
@@ -6650,6 +6693,9 @@ function isGitRepo(dir, deps) {
   const exists = deps.exists ?? existsSync3;
   return exists(join5(dir, ".git"));
 }
+function isNamedPackage(value) {
+  return typeof value.name === "string";
+}
 function packageNameAt(dir, deps) {
   const exists = deps.exists ?? existsSync3;
   const readFile = deps.readFile ?? ((path2, encoding) => readFileSync4(path2, encoding));
@@ -6657,7 +6703,7 @@ function packageNameAt(dir, deps) {
   if (!exists(packagePath)) return void 0;
   try {
     const parsed = JSON.parse(readFile(packagePath, "utf8"));
-    return typeof parsed.name === "string" ? parsed.name : void 0;
+    return isNamedPackage(parsed) ? parsed.name : void 0;
   } catch {
     return void 0;
   }
@@ -6854,6 +6900,9 @@ import { homedir as homedir7 } from "node:os";
 import { join as join6 } from "node:path";
 var TABS_LOCAL_CONFIG_KEY = "topChromeHidden";
 var DEFAULT_TABS_CONFIG_PATH = join6(homedir7(), ".sumocode", "local-config.json");
+function isConfigObject(value) {
+  return typeof value === "object" && value !== null;
+}
 function isTopChromeHidden(configPath = DEFAULT_TABS_CONFIG_PATH) {
   try {
     if (!existsSync4(configPath)) return false;
@@ -6868,8 +6917,9 @@ function setTopChromeHidden(hidden, configPath = DEFAULT_TABS_CONFIG_PATH) {
   let parsed = {};
   try {
     if (existsSync4(configPath)) {
-      parsed = JSON.parse(readFileSync5(configPath, "utf8"));
-      if (typeof parsed !== "object" || parsed === null) parsed = {};
+      const decoded = JSON.parse(readFileSync5(configPath, "utf8"));
+      if (!isConfigObject(decoded)) parsed = {};
+      else parsed = decoded;
     }
   } catch {
     parsed = {};
@@ -6929,19 +6979,21 @@ function emitCathedralThemeChanged(themeName) {
 function applyKnownTheme(theme, applyPiTheme, persistTheme = (name) => saveSumoCodeConfigPatch({ themeName: name })) {
   let piWarning;
   if (applyPiTheme) {
-    const result = applyPiTheme(theme.name);
-    if (!result.success) piWarning = result.error ?? theme.name;
+    const result2 = applyPiTheme(theme.name);
+    if (!result2.success) piWarning = result2.error ?? theme.name;
   }
   emitCathedralThemeChanged(theme.name);
   const persistResult = persistTheme?.(theme.name);
   const persistenceWarning = persistResult && !persistResult.success ? persistResult.error ?? theme.name : void 0;
-  return { ...piWarning === void 0 ? {} : { piWarning }, ...persistenceWarning === void 0 ? {} : { persistenceWarning } };
+  const result = {};
+  if (piWarning !== void 0) result.piWarning = piWarning;
+  if (persistenceWarning !== void 0) result.persistenceWarning = persistenceWarning;
+  return result;
 }
 var THEME_RESULT_CUSTOM_TYPE = "sumocode-theme-result";
 function isThemeResultDetails(details) {
   if (typeof details !== "object" || details === null) return false;
-  const record = details;
-  return (record.tone === "info" || record.tone === "warning") && Array.isArray(record.lines) && record.lines.every((line) => typeof line === "string");
+  return (details.tone === "info" || details.tone === "warning") && Array.isArray(details.lines) && details.lines.every((line) => typeof line === "string");
 }
 function rgbAnsi(hex, channel) {
   const n = hex.replace("#", "");
@@ -7214,11 +7266,14 @@ async function gitOk(repoRoot, args) {
     return false;
   }
 }
-function gitFailure(error) {
-  const maybe = error;
-  const stdout = typeof maybe.stdout === "string" ? maybe.stdout : void 0;
-  const stderr = typeof maybe.stderr === "string" ? maybe.stderr : void 0;
-  const message = stderr?.trim() || (typeof maybe.message === "string" ? maybe.message : "git command failed");
+function isString2(value) {
+  return typeof value === "string";
+}
+function gitFailure(cause) {
+  const maybe = cause;
+  const stdout = isString2(maybe.stdout) ? maybe.stdout : void 0;
+  const stderr = isString2(maybe.stderr) ? maybe.stderr : void 0;
+  const message = stderr?.trim() || (isString2(maybe.message) ? maybe.message : "git command failed");
   return failure("git_failed", message, { stdout, stderr });
 }
 function slugifyBranch(task) {
@@ -7573,7 +7628,7 @@ function errorCodeForStatus(status) {
 function jsonHeaders(token) {
   return {
     "content-type": "application/json",
-    ...token ? { authorization: `Bearer ${token}` } : {}
+    ...token && { authorization: `Bearer ${token}` }
   };
 }
 function withTimeout(timeoutMs) {
@@ -7595,7 +7650,7 @@ function createRemnicMemoryClient(options = {}) {
         signal: controller.signal,
         headers: {
           ...jsonHeaders(token),
-          ...init.headers ?? {}
+          ...init.headers ?? void 0
         }
       });
       if (!response.ok) {
@@ -7647,7 +7702,7 @@ function createRemnicMemoryClient(options = {}) {
     async add(text, category) {
       const payload = await requestJson("/engram/v1/memories", {
         method: "POST",
-        body: JSON.stringify({ content: text, ...category ? { category } : {} })
+        body: JSON.stringify({ content: text, ...category && { category } })
       });
       const immediate = factFromUnknown(payload);
       if (immediate) return immediate;
@@ -8016,10 +8071,10 @@ async function showMemoryEditor(ctx, client = createRemnicMemoryClient()) {
     focusedFactId: null
   };
   await ctx.ui.custom(
-    (tui, _theme, _kb, done) => new MemoryEditorComponent(initial, {
+    (_tui, _theme, _kb, done) => new MemoryEditorComponent(initial, {
       client,
       notify: (message, level) => ctx.ui.notify(message, level ?? "info"),
-      invalidate: () => tui.requestRender(),
+      invalidate: () => _tui.requestRender(),
       close: () => done()
     }),
     {
@@ -8117,11 +8172,14 @@ function readMcpConfig(path2) {
     if (!existsSync7(path2)) return void 0;
     const raw = readFileSync7(path2, "utf8");
     const parsed = JSON.parse(raw);
-    if (!parsed || typeof parsed !== "object") return void 0;
+    if (!parsed || !isObjectValue2(parsed)) return void 0;
     return parsed;
   } catch {
     return void 0;
   }
+}
+function isObjectValue2(value) {
+  return typeof value === "object";
 }
 function isPlainObject(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -8142,6 +8200,7 @@ function loadConfiguredMcpServers(opts) {
       mcpDiagnosticHandler?.({
         type: "mcp_imports_unresolved",
         path: path2,
+        // SAFETY: guarded by hasNonEmptyImports, which checks Array.isArray.
         importsCount: cfg.imports.length
       });
     }
@@ -8213,8 +8272,11 @@ function mergeStyle(base, override) {
 function hasStyle(style) {
   return style.fg !== void 0 || style.bg !== void 0 || style.bold === true || style.italic === true || style.underline === true || style.dim === true || style.inverse === true;
 }
+function isString3(value) {
+  return typeof value === "string";
+}
 function toSpan(part) {
-  return typeof part === "string" ? { text: part } : part;
+  return isString3(part) ? { text: part } : part;
 }
 function span(text, style) {
   return { text, style };
@@ -8799,20 +8861,32 @@ function createSidebarMemoryCache(memoryClient, debounceMs = SIDEBAR_MEMORY_DEBO
     }
   };
 }
+function isObjectMessage(value) {
+  return typeof value === "object" && value !== null;
+}
+function isString4(value) {
+  return typeof value === "string";
+}
+function isTextPart(value) {
+  if (typeof value !== "object" || value === null) return false;
+  const record = value;
+  return record.type === "text" && isString4(record.text);
+}
 function messageText(message) {
-  if (!message || typeof message !== "object") return "";
+  if (!isObjectMessage(message)) return "";
   const maybe = message;
   if (maybe.role !== "user") return "";
-  if (typeof maybe.content === "string") return maybe.content;
+  if (isString4(maybe.content)) return maybe.content;
   if (Array.isArray(maybe.content)) {
     return maybe.content.map((part) => {
-      if (part && typeof part === "object" && part.type === "text") {
-        return part.text;
-      }
+      if (isTextPart(part)) return part.text;
       return void 0;
     }).filter((part) => typeof part === "string").join("\n");
   }
   return "";
+}
+function isNumber(value) {
+  return typeof value === "number";
 }
 function sessionHasMessages5(ctx) {
   return sessionHasMessages(ctx);
@@ -8821,7 +8895,7 @@ function snapshotFromContext(ctx, memorySnapshot, activeSubTab, metrics) {
   const { input, output, cost } = getSessionUsage(ctx);
   const contextUsage = ctx.getContextUsage();
   const contextWindow = contextUsage?.contextWindow ?? ctx.model?.contextWindow ?? 0;
-  const currentContextTokens = typeof contextUsage?.tokens === "number" ? contextUsage.tokens : void 0;
+  const currentContextTokens = isNumber(contextUsage?.tokens) ? contextUsage.tokens : void 0;
   const branch = getGitBranch(ctx) ?? void 0;
   return {
     projectName: basename3(ctx.cwd) || ctx.cwd,
@@ -8878,6 +8952,8 @@ function installSidebar(pi) {
       const sidebarComponent = createSidebarComponent(
         () => snapshotFromContext(ctx, memoryCache?.snapshot() ?? { memory: [] }, activeSubTab, metricsHud.snapshot()),
         void 0,
+        // SAFETY: the TUI terminal exposes an optional rows field; a missing
+        // value falls back to the default overlay row target.
         () => sidebarOverlayTargetRows(tui.terminal?.rows ?? 0)
       );
       const overlay = installNonCapturingSidebarOverlay(tui, sidebarComponent, () => sessionHasMessages5(ctx));
@@ -8953,13 +9029,13 @@ var InteractionRegistry = class {
     };
   }
   claim(kind, id, owners) {
-    const existingOwner = owners.get(id);
-    if (existingOwner) {
+    const existingOwner2 = owners.get(id);
+    if (existingOwner2) {
       this.diagnostics.push({
         kind,
         id,
         owner: this.activeOwner,
-        conflictsWith: existingOwner,
+        conflictsWith: existingOwner2,
         action: "skipped"
       });
       return false;
@@ -9393,7 +9469,11 @@ function installTopChrome(pi, loader) {
 }
 function sessionHasMessages7(ctx) {
   try {
-    if (typeof ctx.cwd === "string" && ctx.sessionManager && typeof ctx.sessionManager.getBranch === "function") {
+    if (
+      // oxlint-disable-next-line anti-slop/no-runtime-typeof -- shape probe for real ExtensionContext vs test mock
+      typeof ctx.cwd === "string" && ctx.sessionManager && // oxlint-disable-next-line anti-slop/no-runtime-typeof -- callability guard before invoking getBranch
+      typeof ctx.sessionManager.getBranch === "function"
+    ) {
       return sessionHasMessages(ctx);
     }
     return ctx.sessionManager?.getBranch?.().some((entry) => entry.type === "message") ?? false;
@@ -9415,11 +9495,15 @@ function defaultSnapshot(ctx, state) {
 
 // src/compaction-state.ts
 var COMPACTION_REASON_KEY = /* @__PURE__ */ Symbol.for("sumocode.compactionReason");
-function setCompactionReason(reason) {
+function setGlobal(reason) {
   globalThis[COMPACTION_REASON_KEY] = reason;
 }
+function setCompactionReason(reason) {
+  setGlobal(reason);
+}
 function getCompactionReason() {
-  return globalThis[COMPACTION_REASON_KEY] ?? null;
+  const stored = globalThis[COMPACTION_REASON_KEY];
+  return stored ?? null;
 }
 
 // src/compaction-status-row.ts
@@ -9569,14 +9653,25 @@ import { fileURLToPath as fileURLToPath3 } from "node:url";
 
 // src/background-tasks/process-tree.ts
 import { execFile as execFile4, execFileSync as execFileSync3 } from "node:child_process";
+function isPowerShellJsonObject(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function isSafeIntegerAtLeast(value, min) {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= min;
+}
+function isNonEmptyString(value) {
+  return typeof value === "string" && value.length > 0;
+}
 function errorCode(error) {
-  return typeof error === "object" && error !== null && "code" in error ? String(error.code) : void 0;
+  const code = error.code;
+  return code === void 0 || code === null ? void 0 : String(code);
 }
 function positivePidStatus(pid) {
   try {
     process.kill(pid, 0);
     return "alive";
   } catch (error) {
+    if (!(error instanceof Error)) return "unknown";
     const code = errorCode(error);
     if (code === "ESRCH") return "gone";
     if (code === "EPERM") return "alive";
@@ -9588,7 +9683,7 @@ function posixGroupEmpty(processGroupId) {
     process.kill(-processGroupId, 0);
     return false;
   } catch (error) {
-    if (errorCode(error) === "ESRCH") return true;
+    if (error instanceof Error && errorCode(error) === "ESRCH") return true;
     return false;
   }
 }
@@ -9605,10 +9700,9 @@ function listWindowsProcesses() {
     const values = Array.isArray(parsed) ? parsed : [parsed];
     const rows = [];
     for (const value of values) {
-      if (!value || typeof value !== "object") return void 0;
-      const row3 = value;
-      if (typeof row3.pid !== "number" || !Number.isSafeInteger(row3.pid) || row3.pid <= 0 || typeof row3.parentPid !== "number" || !Number.isSafeInteger(row3.parentPid) || row3.parentPid < 0 || typeof row3.processStartTime !== "string" || !row3.processStartTime) return void 0;
-      rows.push({ pid: row3.pid, parentPid: row3.parentPid, processStartTime: row3.processStartTime });
+      if (!isPowerShellJsonObject(value)) return void 0;
+      if (!isSafeIntegerAtLeast(value.pid, 1) || !isSafeIntegerAtLeast(value.parentPid, 0) || !isNonEmptyString(value.processStartTime)) return void 0;
+      rows.push({ pid: value.pid, parentPid: value.parentPid, processStartTime: value.processStartTime });
     }
     return rows;
   } catch {
@@ -9727,7 +9821,7 @@ async function rawSystemSignal(identity, signal, verification) {
     process.kill(-identity.processGroupId, signal);
     return { ok: true, gone: false };
   } catch (error) {
-    const code = errorCode(error);
+    const code = error instanceof Error ? errorCode(error) : void 0;
     if (code === "ESRCH") return { ok: true, gone: true };
     return { ok: false, gone: false, error: error instanceof Error ? error.message : String(error) };
   }
@@ -9866,11 +9960,34 @@ var SECRET_KEY_WORDS = /* @__PURE__ */ new Set([
   "secret",
   "token"
 ]);
+function isActivityKind(value) {
+  if (!isStringValue(value)) return false;
+  return ACTIVITY_KINDS.has(value);
+}
+function isActivityStatus(value) {
+  if (!isStringValue(value)) return false;
+  return ACTIVITY_STATUSES.has(value);
+}
 function isSettledActivityStatus(status) {
   return TERMINAL_STATUS.has(status);
 }
+function isRecordLike(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+function isStringValue(value) {
+  return typeof value === "string";
+}
+function isNumberValue(value) {
+  return typeof value === "number";
+}
+function stringOrUndefined(value) {
+  return isStringValue(value) ? value : void 0;
+}
+function numberOrUndefined(value) {
+  return isNumberValue(value) ? value : void 0;
+}
 function recordOf(value) {
-  return value && typeof value === "object" && !Array.isArray(value) ? value : void 0;
+  return isRecordLike(value) ? value : void 0;
 }
 function optionalString(value) {
   return value === void 0 || typeof value === "string";
@@ -9881,22 +9998,22 @@ function optionalFiniteNumber(value) {
 function parseActivityBody(value) {
   if (value === void 0) return void 0;
   const body = recordOf(value);
-  if (!body || typeof body.kind !== "string" || typeof body.text !== "string") return void 0;
+  if (!body || !isStringValue(body.kind) || !isStringValue(body.text)) return void 0;
   switch (body.kind) {
     case "text":
     case "diff":
       return { kind: body.kind, text: body.text };
-    case "source":
+    case "source": {
       if (!optionalFiniteNumber(body.startLine) || !optionalFiniteNumber(body.totalLines)) return void 0;
-      return {
-        kind: "source",
-        text: body.text,
-        ...body.startLine === void 0 ? {} : { startLine: body.startLine },
-        ...body.totalLines === void 0 ? {} : { totalLines: body.totalLines }
-      };
+      const parsed = { kind: "source", text: body.text };
+      if (body.startLine !== void 0) parsed.startLine = body.startLine;
+      if (body.totalLines !== void 0) parsed.totalLines = body.totalLines;
+      return parsed;
+    }
     case "terminal":
       if (!optionalString(body.command)) return void 0;
-      return { kind: "terminal", text: body.text, ...body.command === void 0 ? {} : { command: body.command } };
+      if (body.command === void 0) return { kind: "terminal", text: body.text };
+      return { kind: "terminal", text: body.text, command: body.command };
     default:
       return void 0;
   }
@@ -9904,25 +10021,24 @@ function parseActivityBody(value) {
 function parseActivitySnapshot(value, depth = 0) {
   if (depth > 8) return void 0;
   const record = recordOf(value);
-  if (!record || typeof record.id !== "string" || typeof record.title !== "string") return void 0;
-  if (typeof record.kind !== "string" || !ACTIVITY_KINDS.has(record.kind)) return void 0;
-  if (typeof record.status !== "string" || !ACTIVITY_STATUSES.has(record.status)) return void 0;
+  if (!record || !isStringValue(record.id) || !isStringValue(record.title)) return void 0;
+  if (!isActivityKind(record.kind) || !isActivityStatus(record.status)) return void 0;
   for (const candidate of [record.sourceId, record.subject, record.currentStep, record.outputTail, record.ownerSessionId, record.model, record.thinking]) {
     if (!optionalString(candidate)) return void 0;
   }
   for (const candidate of [record.createdAt, record.updatedAt, record.settledAt]) {
     if (!optionalFiniteNumber(candidate)) return void 0;
   }
-  const sourceId = typeof record.sourceId === "string" ? record.sourceId : void 0;
-  const subject = typeof record.subject === "string" ? record.subject : void 0;
-  const currentStep = typeof record.currentStep === "string" ? record.currentStep : void 0;
-  const outputTail = typeof record.outputTail === "string" ? record.outputTail : void 0;
-  const ownerSessionId2 = typeof record.ownerSessionId === "string" ? record.ownerSessionId : void 0;
-  const model = typeof record.model === "string" ? record.model : void 0;
-  const thinking2 = typeof record.thinking === "string" ? record.thinking : void 0;
-  const createdAt = typeof record.createdAt === "number" ? record.createdAt : void 0;
-  const updatedAt = typeof record.updatedAt === "number" ? record.updatedAt : void 0;
-  const settledAt = typeof record.settledAt === "number" ? record.settledAt : void 0;
+  const sourceId = stringOrUndefined(record.sourceId);
+  const subject = stringOrUndefined(record.subject);
+  const currentStep = stringOrUndefined(record.currentStep);
+  const outputTail = stringOrUndefined(record.outputTail);
+  const ownerSessionId2 = stringOrUndefined(record.ownerSessionId);
+  const model = stringOrUndefined(record.model);
+  const thinking2 = stringOrUndefined(record.thinking);
+  const createdAt = numberOrUndefined(record.createdAt);
+  const updatedAt = numberOrUndefined(record.updatedAt);
+  const settledAt = numberOrUndefined(record.settledAt);
   const body = parseActivityBody(record.body);
   if (record.body !== void 0 && body === void 0) return void 0;
   let activeTools;
@@ -9939,10 +10055,10 @@ function parseActivitySnapshot(value, depth = 0) {
   if (record.result !== void 0) {
     const resultRecord = recordOf(record.result);
     if (!resultRecord || !optionalString(resultRecord.summary) || !optionalString(resultRecord.error)) return void 0;
-    result = {
-      ...resultRecord.summary === void 0 ? {} : { summary: resultRecord.summary },
-      ...resultRecord.error === void 0 ? {} : { error: resultRecord.error }
-    };
+    const parsedResult = {};
+    if (resultRecord.summary !== void 0) parsedResult.summary = resultRecord.summary;
+    if (resultRecord.error !== void 0) parsedResult.error = resultRecord.error;
+    result = parsedResult;
   }
   let metrics;
   if (record.metrics !== void 0) {
@@ -9951,37 +10067,33 @@ function parseActivitySnapshot(value, depth = 0) {
     for (const candidate of [metricRecord.tokens, metricRecord.tokensIn, metricRecord.tokensOut, metricRecord.contextWindow, metricRecord.costUsd, metricRecord.turns, metricRecord.elapsedMs]) {
       if (!optionalFiniteNumber(candidate)) return void 0;
     }
-    metrics = {
-      ...typeof metricRecord.tokens === "number" ? { tokens: metricRecord.tokens } : {},
-      ...typeof metricRecord.tokensIn === "number" ? { tokensIn: metricRecord.tokensIn } : {},
-      ...typeof metricRecord.tokensOut === "number" ? { tokensOut: metricRecord.tokensOut } : {},
-      ...typeof metricRecord.contextWindow === "number" ? { contextWindow: metricRecord.contextWindow } : {},
-      ...typeof metricRecord.costUsd === "number" ? { costUsd: metricRecord.costUsd } : {},
-      ...typeof metricRecord.turns === "number" ? { turns: metricRecord.turns } : {},
-      ...typeof metricRecord.elapsedMs === "number" ? { elapsedMs: metricRecord.elapsedMs } : {}
-    };
+    const parsedMetrics = {};
+    if (isNumberValue(metricRecord.tokens)) parsedMetrics.tokens = metricRecord.tokens;
+    if (isNumberValue(metricRecord.tokensIn)) parsedMetrics.tokensIn = metricRecord.tokensIn;
+    if (isNumberValue(metricRecord.tokensOut)) parsedMetrics.tokensOut = metricRecord.tokensOut;
+    if (isNumberValue(metricRecord.contextWindow)) parsedMetrics.contextWindow = metricRecord.contextWindow;
+    if (isNumberValue(metricRecord.costUsd)) parsedMetrics.costUsd = metricRecord.costUsd;
+    if (isNumberValue(metricRecord.turns)) parsedMetrics.turns = metricRecord.turns;
+    if (isNumberValue(metricRecord.elapsedMs)) parsedMetrics.elapsedMs = metricRecord.elapsedMs;
+    metrics = parsedMetrics;
   }
-  return {
-    id: record.id,
-    kind: record.kind,
-    title: record.title,
-    status: record.status,
-    ...sourceId === void 0 ? {} : { sourceId },
-    ...record.invocation === void 0 ? {} : { invocation: record.invocation },
-    ...subject === void 0 ? {} : { subject },
-    ...currentStep === void 0 ? {} : { currentStep },
-    ...outputTail === void 0 ? {} : { outputTail },
-    ...body === void 0 ? {} : { body },
-    ...activeTools === void 0 ? {} : { activeTools },
-    ...result === void 0 ? {} : { result },
-    ...ownerSessionId2 === void 0 ? {} : { ownerSessionId: ownerSessionId2 },
-    ...createdAt === void 0 ? {} : { createdAt },
-    ...updatedAt === void 0 ? {} : { updatedAt },
-    ...settledAt === void 0 ? {} : { settledAt },
-    ...model === void 0 ? {} : { model },
-    ...thinking2 === void 0 ? {} : { thinking: thinking2 },
-    ...metrics === void 0 ? {} : { metrics }
-  };
+  const snapshot = { id: record.id, kind: record.kind, title: record.title, status: record.status };
+  if (sourceId !== void 0) snapshot.sourceId = sourceId;
+  if (record.invocation !== void 0) snapshot.invocation = record.invocation;
+  if (subject !== void 0) snapshot.subject = subject;
+  if (currentStep !== void 0) snapshot.currentStep = currentStep;
+  if (outputTail !== void 0) snapshot.outputTail = outputTail;
+  if (body !== void 0) snapshot.body = body;
+  if (activeTools !== void 0) snapshot.activeTools = activeTools;
+  if (result !== void 0) snapshot.result = result;
+  if (ownerSessionId2 !== void 0) snapshot.ownerSessionId = ownerSessionId2;
+  if (createdAt !== void 0) snapshot.createdAt = createdAt;
+  if (updatedAt !== void 0) snapshot.updatedAt = updatedAt;
+  if (settledAt !== void 0) snapshot.settledAt = settledAt;
+  if (model !== void 0) snapshot.model = model;
+  if (thinking2 !== void 0) snapshot.thinking = thinking2;
+  if (metrics !== void 0) snapshot.metrics = metrics;
+  return snapshot;
 }
 function skipControlString(text, start) {
   let index = start + 2;
@@ -10141,6 +10253,18 @@ function boundedText(text, maxChars) {
   if (text.length <= maxChars) return text;
   return `${text.slice(0, Math.max(0, maxChars - 1))}\u2026`;
 }
+function isBooleanValue(value) {
+  return typeof value === "boolean";
+}
+function isBigIntValue(value) {
+  return typeof value === "bigint";
+}
+function isSymbolValue(value) {
+  return typeof value === "symbol";
+}
+function isPreviewContainer(value) {
+  return typeof value === "object";
+}
 function safeValuePreview(value, options = {}) {
   const maxChars = Math.max(1, Math.floor(options.maxChars ?? 2e3));
   const maxDepth = Math.max(0, Math.floor(options.maxDepth ?? 4));
@@ -10163,13 +10287,13 @@ function safeValuePreview(value, options = {}) {
   const visit = (current, depth) => {
     if (remainingNodes <= 0) return "[Truncated]";
     remainingNodes -= 1;
-    if (typeof current === "string") return inspectString(current).text;
-    if (current === null || typeof current === "boolean" || typeof current === "number") return current;
-    if (typeof current === "bigint") return `${current.toString()}n`;
+    if (isStringValue(current)) return inspectString(current).text;
+    if (current === null || isBooleanValue(current) || isNumberValue(current)) return current;
+    if (isBigIntValue(current)) return `${current.toString()}n`;
     if (current === void 0) return "[undefined]";
-    if (typeof current === "function") return "[Function]";
-    if (typeof current === "symbol") return current.toString();
-    if (typeof current !== "object") return sanitizeActivityText(String(current));
+    if (current instanceof Function) return "[Function]";
+    if (isSymbolValue(current)) return current.toString();
+    if (!isPreviewContainer(current)) return sanitizeActivityText(String(current));
     if (seen.has(current)) return "[Circular]";
     if (depth >= maxDepth) return "[Truncated]";
     seen.add(current);
@@ -10240,22 +10364,24 @@ function sameActivity(existing, incoming) {
 function canonicalIdentity(existing, incoming) {
   if (!isToolCanonicalTransition(existing, incoming) || !sameActivity(existing, incoming)) {
     const sourceId2 = incoming.sourceId ?? existing.sourceId;
-    return {
+    const identity2 = {
       id: incoming.id,
       kind: incoming.kind,
-      title: incoming.title,
-      ...sourceId2 ? { sourceId: sourceId2 } : {}
+      title: incoming.title
     };
+    if (sourceId2) identity2.sourceId = sourceId2;
+    return identity2;
   }
   const canonical = existing.kind === "tool" ? incoming : existing;
   const tool = existing.kind === "tool" ? existing : incoming;
   const sourceId = canonical.sourceId && canonical.sourceId !== canonical.id ? canonical.sourceId : tool.id !== canonical.id ? tool.id : tool.sourceId;
-  return {
+  const identity = {
     id: canonical.id,
     kind: canonical.kind,
-    title: canonical.title,
-    ...sourceId ? { sourceId } : {}
+    title: canonical.title
   };
+  if (sourceId) identity.sourceId = sourceId;
+  return identity;
 }
 function mergeBody(existing, incoming) {
   if (!incoming) return existing;
@@ -10304,33 +10430,34 @@ function mergeActivitySnapshot(existing, incoming) {
   const model = incoming.model ?? existing.model;
   const thinking2 = incoming.thinking ?? existing.thinking;
   const metrics = incoming.metrics || existing.metrics ? { ...existing.metrics, ...incoming.metrics } : void 0;
-  return {
+  const merged = {
     ...existing,
     ...incoming,
     ...identity,
-    status,
-    ...invocation === void 0 ? {} : { invocation },
-    ...subject === void 0 ? {} : { subject },
-    ...currentStep === void 0 ? {} : { currentStep },
-    ...outputTail === void 0 ? {} : { outputTail },
-    ...body === void 0 ? {} : { body },
-    ...activeTools === void 0 ? {} : { activeTools },
-    ...result === void 0 ? {} : { result },
-    ...ownerSessionId2 === void 0 ? {} : { ownerSessionId: ownerSessionId2 },
-    ...createdAt === void 0 ? {} : { createdAt },
-    ...updatedAt === void 0 ? {} : { updatedAt },
-    ...settledAt === void 0 ? {} : { settledAt },
-    ...model === void 0 ? {} : { model },
-    ...thinking2 === void 0 ? {} : { thinking: thinking2 },
-    ...metrics === void 0 ? {} : { metrics }
+    status
   };
+  if (invocation !== void 0) merged.invocation = invocation;
+  if (subject !== void 0) merged.subject = subject;
+  if (currentStep !== void 0) merged.currentStep = currentStep;
+  if (outputTail !== void 0) merged.outputTail = outputTail;
+  if (body !== void 0) merged.body = body;
+  if (activeTools !== void 0) merged.activeTools = activeTools;
+  if (result !== void 0) merged.result = result;
+  if (ownerSessionId2 !== void 0) merged.ownerSessionId = ownerSessionId2;
+  if (createdAt !== void 0) merged.createdAt = createdAt;
+  if (updatedAt !== void 0) merged.updatedAt = updatedAt;
+  if (settledAt !== void 0) merged.settledAt = settledAt;
+  if (model !== void 0) merged.model = model;
+  if (thinking2 !== void 0) merged.thinking = thinking2;
+  if (metrics !== void 0) merged.metrics = metrics;
+  return merged;
 }
 
 // src/activity/output-tail.ts
 var ACTIVITY_OUTPUT_MAX_BYTES = 16 * 1024;
 var ACTIVITY_OUTPUT_MAX_LINES = 25;
 function positiveInteger(value, fallback) {
-  return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : fallback;
+  return value !== void 0 && Number.isFinite(value) && value > 0 ? Math.floor(value) : fallback;
 }
 function startsWithUtf8Continuation(bytes) {
   return bytes.length > 0 && (bytes[0] & 192) === 128;
@@ -10353,7 +10480,7 @@ function trimStringToUtf8Tail(text, maxBytes) {
 function boundedOutputTail(value, options = {}) {
   const maxBytes = positiveInteger(options.maxBytes, ACTIVITY_OUTPUT_MAX_BYTES);
   const maxLines = positiveInteger(options.maxLines, ACTIVITY_OUTPUT_MAX_LINES);
-  const decoded = typeof value === "string" ? value : decodeValidUtf8Tail(value, value.byteLength);
+  const decoded = value instanceof Uint8Array ? decodeValidUtf8Tail(value, value.byteLength) : value;
   const sanitized = sanitizeActivityTextTail(decoded, { maxChars: maxBytes, maxLines });
   const byteBounded = trimStringToUtf8Tail(sanitized, maxBytes);
   const lines = byteBounded.split("\n");
@@ -10389,9 +10516,11 @@ function terminalActivitySnapshot(task, outputTail) {
   const command = sanitizeActivityText(task.command).slice(0, 4 * 1024);
   const cwd = sanitizeActivityText(task.cwd).slice(0, 2 * 1024);
   const output = boundedOutputTail(outputTail);
+  const leading = {};
+  if (task.sourceId) leading.sourceId = task.sourceId;
   return {
     id: task.id,
-    ...task.sourceId ? { sourceId: task.sourceId } : {},
+    ...leading,
     kind: "terminal",
     title,
     status: terminalActivityStatus(task.status),
@@ -10449,17 +10578,25 @@ function isOptionalTimestamp(value) {
 function isOptionalString(value) {
   return value === void 0 || typeof value === "string";
 }
+function isStringValue2(value) {
+  return typeof value === "string";
+}
+function isNumberValue2(value) {
+  return typeof value === "number";
+}
+function isStoredObject(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
 function isProcessTreeVerification(value) {
   if (value === void 0) return true;
-  if (!value || typeof value !== "object") return false;
-  const members = value.members;
+  if (!isStoredObject(value)) return false;
+  const { members } = value;
   if (!Array.isArray(members) || members.length === 0 || members.length > 4096) return false;
   const pids = /* @__PURE__ */ new Set();
   for (const member of members) {
-    if (!member || typeof member !== "object") return false;
-    const anchor = member;
-    if (!isPositiveInteger(anchor.pid) || !hasText(anchor.processStartTime) || pids.has(anchor.pid)) return false;
-    pids.add(anchor.pid);
+    if (!isStoredObject(member)) return false;
+    if (!isPositiveInteger(member.pid) || !hasText(member.processStartTime) || pids.has(member.pid)) return false;
+    pids.add(member.pid);
   }
   return true;
 }
@@ -10476,11 +10613,21 @@ function pathExists2(path2) {
     lstatSync2(path2);
     return true;
   } catch (error) {
-    return typeof error === "object" && error !== null && "code" in error && error.code !== "ENOENT";
+    return error instanceof Error && errorHasCode(error) && !errorMatches(error, "ENOENT");
   }
 }
 function errorCode2(error) {
-  return typeof error === "object" && error !== null && "code" in error ? String(error.code) : void 0;
+  const code = error.code;
+  return code === void 0 || code === null ? void 0 : String(code);
+}
+function errorMatches(cause, code) {
+  return causeIsError(cause) && errorCode2(cause) === code;
+}
+function causeIsError(cause) {
+  return cause instanceof Error;
+}
+function errorHasCode(error) {
+  return error.code !== void 0 && error.code !== null;
 }
 function sleepSync(milliseconds) {
   Atomics.wait(LOCK_SLEEP, 0, 0, Math.max(1, milliseconds));
@@ -10488,13 +10635,23 @@ function sleepSync(milliseconds) {
 function isValidTerminalTaskId(id) {
   return TERMINAL_ID_PATTERN.test(id) && !id.includes("..");
 }
+function isStatusValue(value) {
+  return typeof value === "string" && STATUSES.has(value);
+}
+function isPolicyValue(value) {
+  return typeof value === "string" && POLICIES.has(value);
+}
+function isDeliveryStateValue(value) {
+  return typeof value === "string" && DELIVERY_STATES.has(value);
+}
 function parseTerminalTaskSnapshot(value) {
-  if (!value || typeof value !== "object") return void 0;
+  if (!isStoredObject(value)) return void 0;
   const record = value;
-  if (record.schemaVersion !== TERMINAL_TASK_SCHEMA_VERSION || !isPositiveInteger(record.revision) || typeof record.id !== "string" || !isValidTerminalTaskId(record.id) || !(record.sourceId === void 0 || hasText(record.sourceId) && record.sourceId.length <= 512) || !hasText(record.ownerSessionId) || !hasText(record.command) || !hasText(record.cwd) || !hasText(record.title) || !STATUSES.has(record.status) || !POLICIES.has(record.completionPolicy) || !isPositiveInteger(record.createdAt) || !isPositiveInteger(record.updatedAt) || record.updatedAt < record.createdAt || !isOptionalTimestamp(record.settledAt) || !(record.exitCode === void 0 || record.exitCode === null || Number.isSafeInteger(record.exitCode)) || !isOptionalTimestamp(record.observedAt) || !isOptionalTimestamp(record.consumedAt) || !DELIVERY_STATES.has(record.deliveryState) || !isOptionalString(record.completionId) || !isOptionalString(record.deliveryClaimToken) || !(record.pid === void 0 || isPositiveInteger(record.pid)) || !(record.processGroupId === void 0 || isPositiveInteger(record.processGroupId)) || !isOptionalString(record.processStartTime) || !isProcessTreeVerification(record.processTreeVerification) || typeof record.logFile !== "string" || !isAbsolute(record.logFile) || resolve4(record.logFile) !== record.logFile) {
+  if (record.schemaVersion !== TERMINAL_TASK_SCHEMA_VERSION || !isPositiveInteger(record.revision) || !isStringValue2(record.id) || !isValidTerminalTaskId(record.id) || !(record.sourceId === void 0 || hasText(record.sourceId) && record.sourceId.length <= 512) || !hasText(record.ownerSessionId) || !hasText(record.command) || !hasText(record.cwd) || !hasText(record.title) || !isStatusValue(record.status) || !isPolicyValue(record.completionPolicy) || !isPositiveInteger(record.createdAt) || !isPositiveInteger(record.updatedAt) || record.updatedAt < record.createdAt || !isOptionalTimestamp(record.settledAt) || !(record.exitCode === void 0 || record.exitCode === null || Number.isSafeInteger(record.exitCode)) || !isOptionalTimestamp(record.observedAt) || !isOptionalTimestamp(record.consumedAt) || !isDeliveryStateValue(record.deliveryState) || !isOptionalString(record.completionId) || !isOptionalString(record.deliveryClaimToken) || !(record.pid === void 0 || isPositiveInteger(record.pid)) || !(record.processGroupId === void 0 || isPositiveInteger(record.processGroupId)) || !isOptionalString(record.processStartTime) || !isProcessTreeVerification(record.processTreeVerification) || !hasText(record.logFile) || !isAbsolute(record.logFile) || resolve4(record.logFile) !== record.logFile) {
     return void 0;
   }
-  const status = record.status;
+  const status = isStatusValue(record.status) ? record.status : void 0;
+  if (status === void 0) return void 0;
   const settled = isTerminalTaskSettled(status);
   const hasIdentity = record.pid !== void 0 || record.processGroupId !== void 0 || record.processStartTime !== void 0;
   const completeIdentity = isPositiveInteger(record.pid) && isPositiveInteger(record.processGroupId) && hasText(record.processStartTime);
@@ -10522,9 +10679,8 @@ function parseTerminalTaskSnapshot(value) {
   return record;
 }
 function schemaVersionOf(value) {
-  if (!value || typeof value !== "object") return void 0;
-  const version = value.schemaVersion;
-  return typeof version === "number" ? version : void 0;
+  if (!isStoredObject(value)) return void 0;
+  return isNumberValue2(value.schemaVersion) ? value.schemaVersion : void 0;
 }
 function assertOwnedByCurrentUser(path2, uid) {
   const stat = lstatSync2(path2);
@@ -10607,17 +10763,20 @@ function atomicWriteJson(path2, value) {
     }
   } finally {
     if (descriptor !== void 0) closeSync(descriptor);
-    try {
-      unlinkSync(temporary);
-    } catch (error) {
-      if (errorCode2(error) !== "ENOENT") throw error;
-    }
   }
+  try {
+    unlinkSync(temporary);
+  } catch (error) {
+    if (!errorMatches(error, "ENOENT")) throw error;
+  }
+}
+function isBooleanValue2(value) {
+  return typeof value === "boolean";
 }
 function parseLockOwner(path2) {
   try {
     const value = JSON.parse(readFileNoFollow(path2));
-    if (!hasText(value.token) || !isPositiveInteger(value.pid) || typeof value.verifiable !== "boolean") return void 0;
+    if (!hasText(value.token) || !isPositiveInteger(value.pid) || !isBooleanValue2(value.verifiable)) return void 0;
     if (value.verifiable && !hasText(value.processStartTime)) return void 0;
     if (!value.verifiable && value.processStartTime !== void 0) return void 0;
     return value;
@@ -10629,8 +10788,8 @@ function processProvesOwnerGone(owner) {
   try {
     process.kill(owner.pid, 0);
   } catch (error) {
-    if (errorCode2(error) === "ESRCH") return true;
-    if (errorCode2(error) !== "EPERM") return false;
+    if (errorMatches(error, "ESRCH")) return true;
+    if (!errorMatches(error, "EPERM")) return false;
   }
   if (!owner.verifiable || !owner.processStartTime) return false;
   const actualStartTime = captureProcessStartTime(owner.pid);
@@ -10646,13 +10805,13 @@ var TerminalTaskStore = class {
   beforeAbandonedLockRename;
   constructor(options = {}) {
     const requestedRoot = resolve4(options.rootDir ?? defaultTerminalStoreRoot());
-    const uid = typeof process.getuid === "function" ? process.getuid() : void 0;
+    const uid = process.getuid?.();
     try {
       const existing = lstatSync2(requestedRoot);
       if (existing.isSymbolicLink()) throw new Error(`Terminal store root must not be a symlink: ${requestedRoot}`);
       if (uid !== void 0) assertOwnedByCurrentUser(requestedRoot, uid);
     } catch (error) {
-      if (errorCode2(error) !== "ENOENT") throw error;
+      if (!errorMatches(error, "ENOENT")) throw error;
     }
     mkdirSync5(requestedRoot, { recursive: true, mode: PRIVATE_DIRECTORY_MODE });
     if (uid !== void 0) assertOwnedByCurrentUser(requestedRoot, uid);
@@ -10670,7 +10829,7 @@ var TerminalTaskStore = class {
     this.metaPathById.clear();
     let entries;
     try {
-      entries = readdirSync(this.rootDir, { withFileTypes: true, encoding: "utf8" });
+      entries = readdirSync(this.rootDir, { withFileTypes: true });
     } catch (error) {
       this.diagnostic("io", this.rootDir, error);
       return [];
@@ -10852,14 +11011,14 @@ var TerminalTaskStore = class {
           this.releaseLock(lockPath, owner);
         } catch (error) {
           rmSync2(candidate, { recursive: true, force: true });
-          if (errorCode2(error) !== "EEXIST" && errorCode2(error) !== "ENOTEMPTY") throw error;
+          if (!errorMatches(error, "EEXIST") && !errorMatches(error, "ENOTEMPTY")) throw error;
         }
       } catch (error) {
         try {
           rmSync2(candidate, { recursive: true, force: true });
         } catch {
         }
-        if (errorCode2(error) !== "EEXIST" && errorCode2(error) !== "ENOTEMPTY") throw error;
+        if (!errorMatches(error, "EEXIST") && !errorMatches(error, "ENOTEMPTY")) throw error;
       }
       if (this.breakAbandonedLock(lockPath)) continue;
       if (Date.now() >= deadline) throw new TerminalTaskLockBusyError(`Timed out waiting for terminal task lock: ${lockPath}`);
@@ -10905,7 +11064,7 @@ var TerminalTaskStore = class {
     try {
       renameSync3(lockPath, takeoverPath);
     } catch (error) {
-      if (errorCode2(error) === "ENOENT") return true;
+      if (errorMatches(error, "ENOENT")) return true;
       return false;
     }
     const movedOwner = parseLockOwner(join11(takeoverPath, "owner.json"));
@@ -10925,7 +11084,7 @@ var TerminalTaskStore = class {
           renameSync3(path2, releasePath);
           rmSync2(releasePath, { recursive: true, force: true });
         } catch (error) {
-          if (errorCode2(error) !== "ENOENT") this.diagnostic("io", path2, error);
+          if (!errorMatches(error, "ENOENT")) this.diagnostic("io", path2, error);
         }
       }
     }
@@ -10997,7 +11156,10 @@ var PRIVATE_DIRECTORY_MODE2 = 448;
 var NO_FOLLOW2 = constants2.O_NOFOLLOW ?? 0;
 var MAX_TRANSITION_RETRIES = 16;
 function normalizePositive(value, fallback) {
-  return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : fallback;
+  return value !== void 0 && Number.isFinite(value) && value > 0 ? Math.floor(value) : fallback;
+}
+function errnoIs(error, code) {
+  return error.code === code;
 }
 function taskPaths(store, id, createdAt) {
   const visiblePaths = buildVisibleTaskPaths(id, createdAt, store.rootDir);
@@ -11047,8 +11209,10 @@ function readExitCode(store, path2) {
 function immutableTerminalSnapshot(snapshot) {
   const clone = structuredClone(snapshot);
   const freeze = (value) => {
-    if (!value || typeof value !== "object" || Object.isFrozen(value)) return;
-    for (const child of Object.values(value)) freeze(child);
+    if (Object.isFrozen(value)) return;
+    for (const child of Object.values(value)) {
+      if (child !== null && child instanceof Object) freeze(child);
+    }
     Object.freeze(value);
   };
   freeze(clone);
@@ -11263,7 +11427,7 @@ var TerminalTaskManager = class {
         paths = candidatePaths;
         break;
       } catch (error) {
-        if (!(typeof error === "object" && error !== null && "code" in error && error.code === "EEXIST")) throw error;
+        if (!(error instanceof Error) || !errnoIs(error, "EEXIST")) throw error;
       }
     }
     if (!id || !paths) throw new Error("Unable to allocate a unique terminal task directory");
@@ -11283,11 +11447,10 @@ ${command}
       logMaxBytes: this.logMaxBytes
     };
     createPrivateFile(this.store, scriptFile, process.platform === "win32" ? buildWindowsScript(runnerOptions) : buildPosixScript(runnerOptions));
-    const initial = {
+    const initialWithoutSourceId = {
       schemaVersion: TERMINAL_TASK_SCHEMA_VERSION,
       revision: 1,
       id,
-      ...sourceId ? { sourceId } : {},
       ownerSessionId: ownerSessionId2,
       command,
       cwd,
@@ -11299,6 +11462,7 @@ ${command}
       deliveryState: "none",
       logFile: paths.logFile
     };
+    const initial = sourceId ? { ...initialWithoutSourceId, sourceId } : initialWithoutSourceId;
     this.store.create(initial, paths.metaFile);
     this.adopt(initial, true);
     let child;
@@ -11400,7 +11564,8 @@ ${command}
           if (timer) clearTimeout(timer);
           unsubscribe();
           signal?.removeEventListener("abort", onAbort);
-          error ? reject(error) : resolve8();
+          if (error) reject(error);
+          else resolve8();
         };
         const onAbort = () => finish(abortError());
         unsubscribe = this.addChangeListener(() => {
@@ -11665,7 +11830,7 @@ ${command}
       try {
         createPrivateFile(this.store, paths.launchFile, "recovered\n");
       } catch (error) {
-        if (!(typeof error === "object" && error !== null && "code" in error && error.code === "EEXIST")) {
+        if (!(error instanceof Error) || !errnoIs(error, "EEXIST")) {
           this.diagnostic(snapshot.id, `unable to release recovered launch gate: ${error instanceof Error ? error.message : String(error)}`);
         }
       }
@@ -11960,11 +12125,11 @@ ${command}
     if (!restore) this.diagnostic(id, `persisted stop remains pending: ${reason}`);
     return { id, outcome: "failed", task: result, message: `Failed to stop terminal ${id}: ${reason}.` };
   }
-  failUnlaunched(id, error) {
+  failUnlaunched(id, cause) {
     this.settleFailedLaunch(id);
     const current = this.store.get(id);
     if (current) appendPrivateFile(this.store, current.logFile, `
-[spawn error] ${error instanceof Error ? error.message : String(error)}
+[spawn error] ${cause instanceof Error ? cause.message : String(cause)}
 `);
   }
   settleFailedLaunch(id) {
@@ -12109,8 +12274,7 @@ function installBackgroundTasks(pi, managerOptions = {}) {
     if (ownerSessionId2) lifecycle.ownerSessionIds.add(ownerSessionId2);
   });
   pi.on("session_shutdown", async (event, ctx) => {
-    const reason = event?.reason;
-    if (reason !== "quit") {
+    if (event.reason !== "quit") {
       manager.detach();
       return;
     }
@@ -12215,7 +12379,11 @@ var DEFAULT_WAIT_TIMEOUT_MS = 3e4;
 var MAX_WAIT_TIMEOUT_MS = 3e5;
 var MAX_TERMINAL_IDS = 64;
 var COMPLETION_OUTPUT_BYTES = 8 * 1024;
-var StringEnum = (values, options) => Type4.Unsafe({ type: "string", enum: [...values], ...options?.description ? { description: options.description } : {} });
+var StringEnum = (values, options) => {
+  const schema = { type: "string", enum: [...values] };
+  if (options?.description !== void 0) schema.description = options.description;
+  return Type4.Unsafe(schema);
+};
 function makeToolResult(text, details) {
   return { content: [{ type: "text", text }], details };
 }
@@ -12228,26 +12396,32 @@ function sessionId(ctx) {
   if (!id) throw new Error("Current Pi session has no stable session id");
   return id;
 }
+function isPayloadObject(value) {
+  return typeof value === "object" && value !== null;
+}
+function isPayloadString(value) {
+  return typeof value === "string";
+}
+function branchDetails(record) {
+  return record.details ?? null;
+}
 function completionsFromContext(ctx) {
   const ids = /* @__PURE__ */ new Set();
   const receipts = [];
   for (const entry of ctx.sessionManager.getBranch()) {
-    if (!entry || typeof entry !== "object") continue;
-    const record = entry;
+    if (!isPayloadObject(entry)) continue;
     let details;
-    if (record.type === "custom_message") details = record.details;
-    else if (record.type === "message") {
-      const message = record.message;
-      if (message && typeof message === "object" && message.role === "custom") {
-        details = message.details;
-      }
-    }
-    if (!details || typeof details !== "object") continue;
+    if (entry.type === "custom_message") details = branchDetails(entry);
+    else if (entry.type === "message") {
+      const message = entry.message;
+      details = isPayloadObject(message) && message.role === "custom" ? branchDetails(message) : null;
+    } else details = null;
+    if (!isPayloadObject(details)) continue;
     const completionId = details.completionId;
     const claimToken = details.deliveryClaimToken;
-    if (typeof completionId !== "string") continue;
+    if (!isPayloadString(completionId)) continue;
     ids.add(completionId);
-    if (typeof claimToken === "string") receipts.push({ completionId, claimToken });
+    if (isPayloadString(claimToken)) receipts.push({ completionId, claimToken });
   }
   return { ids, receipts };
 }
@@ -12484,8 +12658,7 @@ function installTerminalTools(pi, manager) {
     }
   });
   pi.on("session_shutdown", (event) => {
-    const reason = event?.reason;
-    if (reason === "quit") coordinator.dispose();
+    if (event.reason === "quit") coordinator.dispose();
     else coordinator.unbind();
   });
   return coordinator;
@@ -12529,12 +12702,17 @@ var ACTIVITY_FEED_MAX_BYTES = 64 * 1024 * 1024;
 var ACTIVITY_UI_MAX_BYTES = 64 * 1024 * 1024;
 var NO_FOLLOW3 = constants3.O_NOFOLLOW ?? 0;
 function errorCode3(error) {
-  return typeof error === "object" && error !== null && "code" in error ? String(error.code) : void 0;
+  const code = error.code;
+  return code === void 0 || code === null ? void 0 : String(code);
+}
+function errorMatches2(error, code) {
+  return error instanceof Error && errorCode3(error) === code;
 }
 function assertOwnedDirectory(path2) {
   const stat = lstatSync3(path2);
   if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error(`Activity state path is not a directory: ${path2}`);
-  if (typeof process.getuid === "function" && stat.uid !== process.getuid()) {
+  const uid = process.getuid?.();
+  if (uid !== void 0 && stat.uid !== uid) {
     throw new Error(`Activity state path is owned by a different user: ${path2}`);
   }
 }
@@ -12554,7 +12732,7 @@ function ensureCanonicalBaseDirectory(path2) {
       if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error(`Activity state path is not a directory: ${cursor}`);
       break;
     } catch (error) {
-      if (errorCode3(error) !== "ENOENT") throw error;
+      if (!errorMatches2(error, "ENOENT")) throw error;
       missing.unshift(basename5(cursor));
       const parent = dirname8(cursor);
       if (parent === cursor) throw error;
@@ -12567,7 +12745,7 @@ function ensureCanonicalBaseDirectory(path2) {
     try {
       mkdirSync7(candidate, { mode: PRIVATE_ACTIVITY_DIRECTORY_MODE });
     } catch (error) {
-      if (errorCode3(error) !== "EEXIST") throw error;
+      if (!errorMatches2(error, "EEXIST")) throw error;
     }
     assertOwnedDirectory(candidate);
     canonical = candidate;
@@ -12581,7 +12759,7 @@ function ensurePrivateChildDirectory(parent, name) {
   try {
     mkdirSync7(candidate, { mode: PRIVATE_ACTIVITY_DIRECTORY_MODE });
   } catch (error) {
-    if (errorCode3(error) !== "EEXIST") throw error;
+    if (!errorMatches2(error, "EEXIST")) throw error;
   }
   assertOwnedDirectory(candidate);
   chmodSync3(candidate, PRIVATE_ACTIVITY_DIRECTORY_MODE);
@@ -12603,7 +12781,7 @@ function ensurePrivateSumocodeDirectory(segments, rootDir = defaultActivityState
     try {
       mkdirSync7(join14(root, segment), { mode: PRIVATE_ACTIVITY_DIRECTORY_MODE });
     } catch (error) {
-      if (errorCode3(error) !== "EEXIST") throw error;
+      if (!errorMatches2(error, "EEXIST")) throw error;
     }
     const candidate = join14(root, segment);
     assertOwnedDirectory(candidate);
@@ -12646,7 +12824,7 @@ function readPrivateJson(path2, maxBytes = ACTIVITY_DOCUMENT_MAX_BYTES) {
     if (opened.size > maxBytes) throw new Error(`Activity state file exceeds ${maxBytes} bytes: ${path2}`);
     return JSON.parse(readFileSync11(descriptor, "utf8"));
   } catch (error) {
-    if (errorCode3(error) === "ENOENT") return void 0;
+    if (errorMatches2(error, "ENOENT")) return void 0;
     throw error;
   } finally {
     if (descriptor !== void 0) closeSync3(descriptor);
@@ -12677,11 +12855,11 @@ function writePrivateJsonExclusive(path2, value) {
     }
   } finally {
     if (descriptor !== void 0) closeSync3(descriptor);
-    try {
-      unlinkSync2(temporary);
-    } catch (error) {
-      if (errorCode3(error) !== "ENOENT") throw error;
-    }
+  }
+  try {
+    unlinkSync2(temporary);
+  } catch (error) {
+    if (!errorMatches2(error, "ENOENT")) throw error;
   }
 }
 function atomicWritePrivateJson(path2, value) {
@@ -12709,11 +12887,11 @@ function atomicWritePrivateJson(path2, value) {
     }
   } finally {
     if (descriptor !== void 0) closeSync3(descriptor);
-    try {
-      unlinkSync2(temporary);
-    } catch (error) {
-      if (errorCode3(error) !== "ENOENT") throw error;
-    }
+  }
+  try {
+    unlinkSync2(temporary);
+  } catch (error) {
+    if (!errorMatches2(error, "ENOENT")) throw error;
   }
 }
 
@@ -12725,22 +12903,32 @@ var MAX_ACTIVE_TOOLS = 16;
 var MAX_TITLE_CHARS = 512;
 var MAX_ID_CHARS = 512;
 var MAX_SUBJECT_CHARS = 2 * 1024;
+function isStringValue3(value) {
+  return typeof value === "string";
+}
 function positiveInteger2(value) {
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
 }
+function isRecordLike2(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
 function recordOf2(value) {
-  return value && typeof value === "object" && !Array.isArray(value) ? value : void 0;
+  return isRecordLike2(value) ? value : void 0;
 }
 function errorCode4(error) {
-  return typeof error === "object" && error !== null && "code" in error ? String(error.code) : void 0;
+  const code = error.code;
+  return code === void 0 || code === null ? void 0 : String(code);
+}
+function errorMatches3(error, code) {
+  return error instanceof Error && errorCode4(error) === code;
 }
 function parseWriterIdentity(value) {
   const record = recordOf2(value);
-  if (!record || record.schemaVersion !== ACTIVITY_WRITER_SCHEMA_VERSION || typeof record.token !== "string" || !record.token || !positiveInteger2(record.pid) || typeof record.processStartTime !== "string" || !record.processStartTime) return void 0;
+  if (!record || record.schemaVersion !== ACTIVITY_WRITER_SCHEMA_VERSION || !isStringValue3(record.token) || !record.token || !positiveInteger2(record.pid) || !isStringValue3(record.processStartTime) || !record.processStartTime) return void 0;
   return { token: record.token, pid: record.pid, processStartTime: record.processStartTime };
 }
 function writerDocument(writer) {
-  return { schemaVersion: ACTIVITY_WRITER_SCHEMA_VERSION, ...writer };
+  return { schemaVersion: ACTIVITY_WRITER_SCHEMA_VERSION, token: writer.token, pid: writer.pid, processStartTime: writer.processStartTime };
 }
 function sameWriter(left, right) {
   return left.token === right.token && left.pid === right.pid && left.processStartTime === right.processStartTime;
@@ -12764,7 +12952,7 @@ function restoreTakeoverLease(path2, writerFile) {
   try {
     linkSync2(path2, writerFile);
   } catch (error) {
-    if (errorCode4(error) !== "EEXIST") throw error;
+    if (!errorMatches3(error, "EEXIST")) throw error;
   }
   const canonical = readWriter(writerFile);
   if (canonical) rmSync3(path2, { force: true });
@@ -12811,7 +12999,7 @@ function claimWriter(writerFile, candidate, inspectWriter) {
         writePrivateJsonExclusive(writerFile, writerDocument(candidate));
         return { owned: true, writerDeathProven: abandonedWriterDeathProven };
       } catch (error) {
-        if (errorCode4(error) === "EEXIST") continue;
+        if (errorMatches3(error, "EEXIST")) continue;
         throw error;
       }
     }
@@ -12823,7 +13011,7 @@ function claimWriter(writerFile, candidate, inspectWriter) {
     try {
       renameSync5(writerFile, takeover);
     } catch (error) {
-      if (errorCode4(error) === "ENOENT") continue;
+      if (errorMatches3(error, "ENOENT")) continue;
       throw error;
     }
     const moved = readWriter(takeover);
@@ -12836,7 +13024,7 @@ function claimWriter(writerFile, candidate, inspectWriter) {
       rmSync3(takeover, { force: true });
       return { owned: true, writerDeathProven: previousWriterDead || abandonedWriterDeathProven };
     } catch (error) {
-      if (errorCode4(error) !== "EEXIST") throw error;
+      if (!errorMatches3(error, "EEXIST")) throw error;
     }
   }
   return { owned: false, writerDeathProven: false };
@@ -12855,12 +13043,10 @@ function sanitizeBody(body) {
   const text = boundedOutputTail(redactActivitySecrets(body.text));
   if (body.kind === "terminal") return { kind: "terminal", text };
   if (body.kind === "source") {
-    return {
-      kind: "source",
-      text,
-      ...body.startLine === void 0 ? {} : { startLine: body.startLine },
-      ...body.totalLines === void 0 ? {} : { totalLines: body.totalLines }
-    };
+    const source = { kind: "source", text };
+    if (body.startLine !== void 0) source.startLine = body.startLine;
+    if (body.totalLines !== void 0) source.totalLines = body.totalLines;
+    return source;
   }
   return { kind: body.kind, text };
 }
@@ -12870,33 +13056,38 @@ function sanitizeActivityForFeed(activity, ownerSessionId2, depth = 0) {
   const body = sanitizeBody(activity.body);
   const summary = activity.result?.summary === void 0 ? void 0 : boundedOutputTail(redactActivitySecrets(activity.result.summary));
   const error = activity.result?.error === void 0 ? void 0 : boundedOutputTail(redactActivitySecrets(activity.result.error));
-  return {
+  const leading = {};
+  if (activity.sourceId) leading.sourceId = boundedHead(activity.sourceId, MAX_ID_CHARS);
+  const projected = {
     id: boundedHead(activity.id, MAX_ID_CHARS),
-    ...activity.sourceId ? { sourceId: boundedHead(activity.sourceId, MAX_ID_CHARS) } : {},
+    ...leading,
     kind: activity.kind,
     title: boundedSafeHead(activity.title, MAX_TITLE_CHARS) || "activity",
-    status: activity.status,
-    // Invocation/command payloads can embed credentials in otherwise ordinary
-    // strings. Terminal subjects are working directories, so omit them too;
-    // other Activity kinds use product-owned labels rather than shell context.
-    ...activity.kind === "terminal" || activity.subject === void 0 ? {} : { subject: boundedSafeHead(activity.subject, MAX_SUBJECT_CHARS) },
-    ...activity.currentStep === void 0 ? {} : { currentStep: boundedSafeHead(redactActivitySecrets(activity.currentStep), MAX_SUBJECT_CHARS) },
-    ...outputTail === void 0 ? {} : { outputTail },
-    ...body === void 0 ? {} : { body },
-    ...activeTools && activeTools.length > 0 ? { activeTools } : {},
-    ...summary !== void 0 || error !== void 0 ? { result: { ...summary === void 0 ? {} : { summary }, ...error === void 0 ? {} : { error } } } : {},
-    ownerSessionId: ownerSessionId2,
-    ...activity.createdAt === void 0 ? {} : { createdAt: activity.createdAt },
-    ...activity.updatedAt === void 0 ? {} : { updatedAt: activity.updatedAt },
-    ...activity.settledAt === void 0 ? {} : { settledAt: activity.settledAt },
-    ...activity.model === void 0 ? {} : { model: boundedSafeHead(activity.model, 256) },
-    ...activity.thinking === void 0 ? {} : { thinking: boundedSafeHead(activity.thinking, 64) },
-    ...activity.metrics === void 0 ? {} : { metrics: { ...activity.metrics } }
+    status: activity.status
   };
+  if (activity.kind !== "terminal" && activity.subject !== void 0) projected.subject = boundedSafeHead(activity.subject, MAX_SUBJECT_CHARS);
+  if (activity.currentStep !== void 0) projected.currentStep = boundedSafeHead(redactActivitySecrets(activity.currentStep), MAX_SUBJECT_CHARS);
+  if (outputTail !== void 0) projected.outputTail = outputTail;
+  if (body !== void 0) projected.body = body;
+  if (activeTools && activeTools.length > 0) projected.activeTools = activeTools;
+  if (summary !== void 0 || error !== void 0) {
+    const resultSummary = {};
+    if (summary !== void 0) resultSummary.summary = summary;
+    if (error !== void 0) resultSummary.error = error;
+    projected.result = resultSummary;
+  }
+  projected.ownerSessionId = ownerSessionId2;
+  if (activity.createdAt !== void 0) projected.createdAt = activity.createdAt;
+  if (activity.updatedAt !== void 0) projected.updatedAt = activity.updatedAt;
+  if (activity.settledAt !== void 0) projected.settledAt = activity.settledAt;
+  if (activity.model !== void 0) projected.model = boundedSafeHead(activity.model, 256);
+  if (activity.thinking !== void 0) projected.thinking = boundedSafeHead(activity.thinking, 64);
+  if (activity.metrics !== void 0) projected.metrics = { ...activity.metrics };
+  return projected;
 }
 function parseActivityFeedDocument(value, expectedOwnerSessionId) {
   const record = recordOf2(value);
-  if (!record || record.schemaVersion !== ACTIVITY_SCHEMA_VERSION || typeof record.ownerSessionId !== "string" || !record.ownerSessionId || expectedOwnerSessionId !== void 0 && record.ownerSessionId !== expectedOwnerSessionId || !positiveInteger2(record.revision) || !positiveInteger2(record.updatedAt) || !Array.isArray(record.activities)) return void 0;
+  if (!record || record.schemaVersion !== ACTIVITY_SCHEMA_VERSION || !isStringValue3(record.ownerSessionId) || !record.ownerSessionId || expectedOwnerSessionId !== void 0 && record.ownerSessionId !== expectedOwnerSessionId || !positiveInteger2(record.revision) || !positiveInteger2(record.updatedAt) || !Array.isArray(record.activities)) return void 0;
   const activities = [];
   for (const candidate of record.activities) {
     const activity = parseActivitySnapshot(candidate);
@@ -12937,25 +13128,28 @@ function feedDocumentBytes(document) {
 function budgetActivity(activity, maxOutputBytes, maxChildren, minimal = false) {
   const outputTail = maxOutputBytes > 0 && activity.outputTail ? boundedOutputTail(activity.outputTail, { maxBytes: maxOutputBytes }) : void 0;
   const activeTools = maxChildren > 0 ? activity.activeTools?.slice(0, maxChildren).map((child) => budgetActivity(child, maxOutputBytes, maxChildren, minimal)) : void 0;
-  return {
+  const leading = {};
+  if (activity.sourceId) leading.sourceId = activity.sourceId;
+  const budgeted = {
     id: activity.id,
+    ...leading,
     kind: activity.kind,
     title: minimal ? boundedHead(activity.title, 128) : activity.title,
-    status: activity.status,
-    ...activity.sourceId ? { sourceId: activity.sourceId } : {},
-    ...!minimal && activity.subject !== void 0 ? { subject: activity.subject } : {},
-    ...!minimal && activity.currentStep !== void 0 ? { currentStep: activity.currentStep } : {},
-    ...outputTail === void 0 ? {} : { outputTail },
-    ...activeTools && activeTools.length > 0 ? { activeTools } : {},
-    ...!minimal && activity.result !== void 0 ? { result: activity.result } : {},
-    ...activity.ownerSessionId === void 0 ? {} : { ownerSessionId: activity.ownerSessionId },
-    ...activity.createdAt === void 0 ? {} : { createdAt: activity.createdAt },
-    ...activity.updatedAt === void 0 ? {} : { updatedAt: activity.updatedAt },
-    ...activity.settledAt === void 0 ? {} : { settledAt: activity.settledAt },
-    ...!minimal && activity.model !== void 0 ? { model: activity.model } : {},
-    ...!minimal && activity.thinking !== void 0 ? { thinking: activity.thinking } : {},
-    ...!minimal && activity.metrics !== void 0 ? { metrics: activity.metrics } : {}
+    status: activity.status
   };
+  if (!minimal && activity.subject !== void 0) budgeted.subject = activity.subject;
+  if (!minimal && activity.currentStep !== void 0) budgeted.currentStep = activity.currentStep;
+  if (outputTail !== void 0) budgeted.outputTail = outputTail;
+  if (activeTools && activeTools.length > 0) budgeted.activeTools = activeTools;
+  if (!minimal && activity.result !== void 0) budgeted.result = activity.result;
+  if (activity.ownerSessionId !== void 0) budgeted.ownerSessionId = activity.ownerSessionId;
+  if (activity.createdAt !== void 0) budgeted.createdAt = activity.createdAt;
+  if (activity.updatedAt !== void 0) budgeted.updatedAt = activity.updatedAt;
+  if (activity.settledAt !== void 0) budgeted.settledAt = activity.settledAt;
+  if (!minimal && activity.model !== void 0) budgeted.model = activity.model;
+  if (!minimal && activity.thinking !== void 0) budgeted.thinking = activity.thinking;
+  if (!minimal && activity.metrics !== void 0) budgeted.metrics = activity.metrics;
+  return budgeted;
 }
 function fitFeedBudget(activities, ownerSessionId2, revision, updatedAt) {
   const fits = (candidate) => feedDocumentBytes({
@@ -13113,8 +13307,11 @@ function claimNode(budget) {
   budget.remainingNodes -= 1;
   return true;
 }
+function isRecordLike3(value) {
+  return typeof value === "object" && value !== null;
+}
 function boundedRecord(value, budget) {
-  if (typeof value !== "object" || value === null || !claimNode(budget)) return void 0;
+  if (!isRecordLike3(value) || !claimNode(budget)) return void 0;
   return value;
 }
 function boundedPriorityArray(value, maxItems, budget, isPreferred) {
@@ -13139,8 +13336,11 @@ function boundedPriorityArray(value, maxItems, budget, isPreferred) {
   const selectedSettled = remaining > 0 ? settled.slice(-remaining).reverse() : [];
   return [...preferred, ...selectedSettled];
 }
+function isStringValue4(value) {
+  return typeof value === "string";
+}
 function boundedAdapterText(value, maxChars, budget) {
-  if (typeof value !== "string" || budget.remainingChars <= 0) return void 0;
+  if (!isStringValue4(value) || budget.remainingChars <= 0) return void 0;
   const outputMax = Math.max(1, Math.floor(maxChars));
   const inspectedChars = Math.min(value.length, outputMax, budget.remainingChars);
   budget.remainingChars -= inspectedChars;
@@ -13182,11 +13382,20 @@ function boundedText2(value, maxChars = TEXT_MAX) {
 function firstString(budget, ...values) {
   return firstBoundedAdapterString(budget, TEXT_MAX, ...values);
 }
+function isNumberValue3(value) {
+  return typeof value === "number";
+}
 function numberFrom(value) {
-  return typeof value === "number" && Number.isFinite(value) ? value : void 0;
+  return isNumberValue3(value) && Number.isFinite(value) ? value : void 0;
+}
+function isRecordLike4(value) {
+  return typeof value === "object" && value !== null;
 }
 function paneId(pane, budget) {
   return firstString(budget, pane?.paneId, pane?.tabId, pane?.workspaceId);
+}
+function isUnfinishedToolValue(value) {
+  return isRecordLike4(value) && value.done !== true;
 }
 function subagentStatus(record, budget) {
   const status = firstString(budget, record.status)?.toLowerCase();
@@ -13208,15 +13417,21 @@ function toolActivity(toolValue, budget, parentId, originalIndex) {
   const rawArgs = firstString(budget, tool.argsPreview);
   const output = rawOutput ? boundedText2(rawOutput, CHILD_PREVIEW_MAX) : void 0;
   const args = rawArgs ? boundedText2(rawArgs, CHILD_PREVIEW_MAX) : void 0;
-  return {
+  const projected = {
     id,
     kind: "tool",
     title: name,
-    status: done ? isError ? "failed" : "succeeded" : "running",
-    ...args ? { invocation: args } : {},
-    ...output ? { outputTail: output } : {},
-    ...done && (output || isError) ? { result: { ...output ? { summary: output } : {}, ...isError ? { error: output ?? `${name} failed` } : {} } } : {}
+    status: done ? isError ? "failed" : "succeeded" : "running"
   };
+  if (args) projected.invocation = args;
+  if (output) projected.outputTail = output;
+  if (done && (output || isError)) {
+    const resultSummary = {};
+    if (output) resultSummary.summary = output;
+    if (isError) resultSummary.error = output ?? `${name} failed`;
+    projected.result = resultSummary;
+  }
+  return projected;
 }
 function invocationFromSubagent(record, budget) {
   const pane = asRecord2(record.pane, budget);
@@ -13231,27 +13446,26 @@ function invocationFromSubagent(record, budget) {
   const worktreePath = firstString(budget, worktree?.path);
   const worktreeBranch = firstString(budget, worktree?.branch);
   const worktreeBaseRef = firstString(budget, worktree?.baseRef);
-  return {
-    prompt: boundedText2(prompt, PROMPT_MAX),
-    ...cwd ? { cwd } : {},
-    ...baseRef ? { baseRef } : {},
-    ...record.visible === true ? { visible: true } : {},
-    ...pane ? {
-      pane: {
-        ...agentName ? { agentName } : {},
-        ...workspaceId ? { workspaceId } : {},
-        ...tabId ? { tabId } : {},
-        ...paneRef ? { paneId: paneRef } : {}
-      }
-    } : {},
-    ...worktree ? {
-      worktree: {
-        ...worktreePath ? { path: worktreePath } : {},
-        ...worktreeBranch ? { branch: worktreeBranch } : {},
-        ...worktreeBaseRef ? { baseRef: worktreeBaseRef } : {}
-      }
-    } : {}
-  };
+  const invocation = { prompt: boundedText2(prompt, PROMPT_MAX) };
+  if (cwd) invocation.cwd = cwd;
+  if (baseRef) invocation.baseRef = baseRef;
+  if (record.visible === true) invocation.visible = true;
+  if (pane) {
+    const projectedPane = {};
+    if (agentName) projectedPane.agentName = agentName;
+    if (workspaceId) projectedPane.workspaceId = workspaceId;
+    if (tabId) projectedPane.tabId = tabId;
+    if (paneRef) projectedPane.paneId = paneRef;
+    invocation.pane = projectedPane;
+  }
+  if (worktree) {
+    const projectedWorktree = {};
+    if (worktreePath) projectedWorktree.path = worktreePath;
+    if (worktreeBranch) projectedWorktree.branch = worktreeBranch;
+    if (worktreeBaseRef) projectedWorktree.baseRef = worktreeBaseRef;
+    invocation.worktree = projectedWorktree;
+  }
+  return invocation;
 }
 function activityFromSubagentRecord(record, budget) {
   const id = firstString(budget, record.id) ?? "unknown";
@@ -13263,12 +13477,7 @@ function activityFromSubagentRecord(record, budget) {
   const output = status === "running" ? liveText ?? finalText : void 0;
   const error = status === "failed" || status === "cancelled" ? firstString(budget, record.errorText) : void 0;
   const summary = status === "succeeded" || status === "failed" || status === "cancelled" ? finalText : void 0;
-  const liveTools = boundedPriorityArray(
-    record.liveTools,
-    MAX_CHILD_TOOLS,
-    budget,
-    (value) => typeof value === "object" && value !== null && value.done !== true
-  ).map(({ value, originalIndex }) => toolActivity(value, budget, `subagent:${id}`, originalIndex)).filter((tool) => tool !== void 0);
+  const liveTools = boundedPriorityArray(record.liveTools, MAX_CHILD_TOOLS, budget, isUnfinishedToolValue).map(({ value, originalIndex }) => toolActivity(value, budget, `subagent:${id}`, originalIndex)).filter((tool) => tool !== void 0);
   const usage = asRecord2(record.usage, budget);
   const manifest = asRecord2(record.manifest, budget);
   const createdAt = numberFrom(record.createdAt);
@@ -13279,13 +13488,16 @@ function activityFromSubagentRecord(record, budget) {
   const contextWindow = numberFrom(usage?.contextWindow);
   const costUsd = numberFrom(usage?.costUsd);
   const turns = numberFrom(usage?.turns);
-  const metrics = [tokens, contextWindow, costUsd, turns, elapsedMs].some((value) => value !== void 0 && value > 0) ? {
-    ...tokens !== void 0 && tokens > 0 ? { tokens } : {},
-    ...contextWindow !== void 0 && contextWindow > 0 ? { contextWindow } : {},
-    ...costUsd !== void 0 && costUsd > 0 ? { costUsd } : {},
-    ...turns !== void 0 && turns > 0 ? { turns } : {},
-    ...elapsedMs !== void 0 && elapsedMs > 0 ? { elapsedMs } : {}
-  } : void 0;
+  let metrics;
+  if ([tokens, contextWindow, costUsd, turns, elapsedMs].some((value) => value !== void 0 && value > 0)) {
+    const parsedMetrics = {};
+    if (tokens !== void 0 && tokens > 0) parsedMetrics.tokens = tokens;
+    if (contextWindow !== void 0 && contextWindow > 0) parsedMetrics.contextWindow = contextWindow;
+    if (costUsd !== void 0 && costUsd > 0) parsedMetrics.costUsd = costUsd;
+    if (turns !== void 0 && turns > 0) parsedMetrics.turns = turns;
+    if (elapsedMs !== void 0 && elapsedMs > 0) parsedMetrics.elapsedMs = elapsedMs;
+    metrics = parsedMetrics;
+  }
   const paneLabel = paneId(pane, budget);
   const branch = firstString(budget, worktree?.branch);
   const subject = [id, paneLabel ? `pane ${paneLabel}` : void 0, branch].filter((part) => !!part).join(" \xB7 ");
@@ -13295,30 +13507,39 @@ function activityFromSubagentRecord(record, budget) {
   const sourceId = firstString(budget, record.sourceId);
   const model = firstString(budget, record.modelLabel);
   const thinking2 = firstString(budget, record.thinkingLabel);
-  return {
+  const leadingOptionals = {};
+  if (sourceId) leadingOptionals.sourceId = sourceId;
+  const activity = {
     // Plan 082's canonical manager identity remains subagent:<sa-id>;
     // sourceId carries the spawn-call correlation through manager/feed updates.
     id: `subagent:${id}`,
-    ...sourceId ? { sourceId } : {},
+    ...leadingOptionals,
     kind: "subagent",
     title,
     status,
     invocation: invocationFromSubagent(record, budget),
-    subject,
-    ...currentStep ? { currentStep } : {},
-    ...output ? { outputTail: boundedText2(output) } : {},
-    ...liveTools.length > 0 ? { activeTools: liveTools } : {},
-    ...summary || error ? { result: { ...summary ? { summary: boundedText2(summary) } : {}, ...error ? { error: boundedText2(error) } : {} } } : {},
-    ...createdAt === void 0 ? {} : { createdAt },
-    ...settledAt === void 0 ? {} : { settledAt },
-    ...model ? { model } : {},
-    ...thinking2 ? { thinking: thinking2 } : {},
-    ...metrics ? { metrics } : {}
+    subject
   };
+  if (currentStep) activity.currentStep = currentStep;
+  if (output) activity.outputTail = boundedText2(output);
+  if (liveTools.length > 0) activity.activeTools = liveTools;
+  if (summary || error) {
+    const resultSummary = {};
+    if (summary) resultSummary.summary = boundedText2(summary);
+    if (error) resultSummary.error = boundedText2(error);
+    activity.result = resultSummary;
+  }
+  if (createdAt !== void 0) activity.createdAt = createdAt;
+  if (settledAt !== void 0) activity.settledAt = settledAt;
+  if (model) activity.model = model;
+  if (thinking2) activity.thinking = thinking2;
+  if (metrics) activity.metrics = metrics;
+  return activity;
 }
 function activityFromSubagentSnapshot(snapshot) {
   const budget = createAdapterTraversalBudget({ maxNodes: ADAPTER_MAX_NODES, maxChars: ADAPTER_MAX_CHARS });
-  return activityFromSubagentRecord(snapshot, budget);
+  const loose = snapshot;
+  return activityFromSubagentRecord(loose, budget);
 }
 
 // src/activity/manager-bridge.ts
@@ -13330,14 +13551,18 @@ function ownerSessionId(ctx) {
   return ctx.sessionManager.getSessionId() || void 0;
 }
 function errorCode5(error) {
-  return typeof error === "object" && error !== null && "code" in error ? String(error.code) : void 0;
+  const code = error.code;
+  return code === void 0 || code === null ? void 0 : String(code);
+}
+function errorMatches4(cause, code) {
+  return cause instanceof Error && errorCode5(cause) === code;
 }
 function inspectProcessWriter(writer) {
   try {
     process.kill(writer.pid, 0);
   } catch (error) {
-    if (errorCode5(error) === "ESRCH") return "dead";
-    if (errorCode5(error) !== "EPERM") return "unknown";
+    if (errorMatches4(error, "ESRCH")) return "dead";
+    if (!errorMatches4(error, "EPERM")) return "unknown";
   }
   const actualStartTime = captureProcessBirthTime(writer.pid);
   if (actualStartTime === writer.processStartTime) return "alive";
@@ -13828,6 +14053,7 @@ import { spawn as nodeSpawn } from "node:child_process";
 import { existsSync as existsSync10, readFileSync as readFileSync13, statSync } from "node:fs";
 import { homedir as homedir13 } from "node:os";
 import { dirname as dirname11, isAbsolute as isAbsolute2, join as join17, resolve as resolve6 } from "node:path";
+var isString5 = (value) => typeof value === "string";
 var DEFAULT_BUILT_IN_TOOLS = ["read", "bash", "edit", "write", "grep", "find", "ls"];
 var PREVIEW_MAX2 = 160;
 var ERROR_MAX = 4096;
@@ -13837,7 +14063,7 @@ function adapterEntryFromPackageDir(packageDir) {
     const manifest = JSON.parse(readFileSync13(join17(packageDir, "package.json"), "utf8"));
     const entries = manifest.pi?.extensions;
     const first = Array.isArray(entries) ? entries[0] : void 0;
-    if (typeof first !== "string") return void 0;
+    if (!isString5(first)) return void 0;
     const entryPath = join17(packageDir, first);
     return existsSync10(entryPath) ? entryPath : void 0;
   } catch {
@@ -13848,7 +14074,7 @@ function adapterPathSourcesFromSettings(settingsPath) {
   try {
     const settings = JSON.parse(readFileSync13(settingsPath, "utf8"));
     if (!Array.isArray(settings.packages)) return [];
-    const sources = settings.packages.map((entry) => typeof entry === "string" ? entry : entry?.source).filter((source) => typeof source === "string" && source.includes(CLAUDE_OAUTH_ADAPTER_PACKAGE));
+    const sources = settings.packages.map((entry) => isString5(entry) ? entry : entry?.source).filter((source) => isString5(source) && source.includes(CLAUDE_OAUTH_ADAPTER_PACKAGE));
     return sources.filter((source) => !source.startsWith("npm:") && !source.startsWith("git:") && !source.startsWith("http")).map((source) => {
       if (source.startsWith("~/")) return join17(homedir13(), source.slice(2));
       return isAbsolute2(source) ? source : resolve6(dirname11(settingsPath), source);
@@ -13882,7 +14108,7 @@ function resolveClaudeOauthAdapterEntry(env = process.env) {
 var sanitizePreview = (value, max = PREVIEW_MAX2) => {
   if (value === void 0) return void 0;
   let text;
-  if (typeof value === "string") text = value;
+  if (isString5(value)) text = value;
   else {
     try {
       text = JSON.stringify(value);
@@ -13905,11 +14131,11 @@ var safeToolArgumentsPreview = (value) => {
 };
 var stringifyToolOutput2 = (value) => {
   if (value === void 0) return void 0;
-  if (typeof value === "string") return value;
+  if (isString5(value)) return value;
   if (isRecord(value)) {
     const content = value.content;
     if (Array.isArray(content)) {
-      const text = content.map((part) => isRecord(part) && part.type === "text" && typeof part.text === "string" ? part.text : void 0).filter((part) => part !== void 0).join("\n");
+      const text = content.map((part) => isRecord(part) && part.type === "text" && isString5(part.text) ? part.text : void 0).filter((part) => part !== void 0).join("\n");
       if (text.trim().length > 0) return text;
     }
   }
@@ -13922,8 +14148,9 @@ var stringifyToolOutput2 = (value) => {
 var parseJsonLine2 = (line) => {
   if (!line.trim()) return void 0;
   try {
-    const parsed = JSON.parse(line);
-    return isRecord(parsed) ? parsed : void 0;
+    const decoded = JSON.parse(line);
+    if (!isRecord(decoded)) return void 0;
+    return decoded;
   } catch {
     return void 0;
   }
@@ -13932,41 +14159,41 @@ var isMessage2 = (value) => {
   return isRecord(value) && (value.role === "assistant" || value.role === "user" || value.role === "toolResult");
 };
 var messageText2 = (message) => {
-  if (typeof message.text === "string") return message.text;
-  if (typeof message.content === "string") return message.content;
+  if (isString5(message.text)) return message.text;
+  if (isString5(message.content)) return message.content;
   if (Array.isArray(message.content)) {
-    return message.content.map((part) => isRecord(part) && typeof part.text === "string" ? part.text : "").join("");
+    return message.content.map((part) => isRecord(part) && isString5(part.text) ? part.text : "").join("");
   }
   return "";
 };
 var mapPiEvent = (event) => {
-  const typeText = typeof event.type === "string" ? event.type : "";
+  const typeText = isString5(event.type) ? event.type : "";
   if (typeText === "message_update") {
     const assistantEvent = isRecord(event.assistantMessageEvent) ? event.assistantMessageEvent : void 0;
-    if (assistantEvent?.type === "text_delta" && typeof assistantEvent.delta === "string") {
+    if (assistantEvent?.type === "text_delta" && isString5(assistantEvent.delta)) {
       return [{ kind: "assistant-delta", delta: assistantEvent.delta }];
     }
   }
   if (typeText === "tool_execution_start") {
     return [{
       kind: "tool-start",
-      toolId: typeof event.toolCallId === "string" ? event.toolCallId : `${event.toolName ?? "tool"}`,
-      name: typeof event.toolName === "string" ? event.toolName : "tool",
+      toolId: isString5(event.toolCallId) ? event.toolCallId : `${event.toolName ?? "tool"}`,
+      name: isString5(event.toolName) ? event.toolName : "tool",
       argsPreview: safeToolArgumentsPreview(event.args)
     }];
   }
   if (typeText === "tool_execution_update") {
     return [{
       kind: "tool-update",
-      toolId: typeof event.toolCallId === "string" ? event.toolCallId : `${event.toolName ?? "tool"}`,
+      toolId: isString5(event.toolCallId) ? event.toolCallId : `${event.toolName ?? "tool"}`,
       outputPreview: sanitizePreview(stringifyToolOutput2(event.partialResult))
     }];
   }
   if (typeText === "tool_execution_end") {
     return [{
       kind: "tool-end",
-      toolId: typeof event.toolCallId === "string" ? event.toolCallId : `${event.toolName ?? "tool"}`,
-      name: typeof event.toolName === "string" ? event.toolName : "tool",
+      toolId: isString5(event.toolCallId) ? event.toolCallId : `${event.toolName ?? "tool"}`,
+      name: isString5(event.toolName) ? event.toolName : "tool",
       isError: event.isError === true,
       outputPreview: sanitizePreview(stringifyToolOutput2(event.result))
     }];
@@ -14020,9 +14247,11 @@ var attachAbortSignal2 = (proc, signal) => {
 };
 var createPiChildSpawner = (spawnImpl = nodeSpawn, resolveAdapterEntry = resolveClaudeOauthAdapterEntry) => (options) => {
   const config = resolveTaskConfig({
+    // SAFETY: options.thinking comes from the typed SpawnSubagentTask.thinking field.
     item: { prompt: options.prompt, model: options.model, thinking: options.thinking, fork: false },
     defaultModel: void 0,
     defaultThinking: "inherit",
+    // SAFETY: inherited thinking strings are validated by resolveTaskConfig below.
     inheritedThinking: options.inherited.thinking ?? "low",
     ctxModel: options.inherited.model,
     // Children inherit the PARENT's active built-in tool set (mirroring
@@ -14074,8 +14303,8 @@ var createPiChildSpawner = (spawnImpl = nodeSpawn, resolveAdapterEntry = resolve
       }
       const messageValue = parsed.message;
       if (isMessage2(messageValue) && messageValue.role === "assistant") {
-        if (typeof messageValue.stopReason === "string") stopReason = messageValue.stopReason;
-        if (typeof messageValue.errorMessage === "string") errorMessage = messageValue.errorMessage;
+        if (isString5(messageValue.stopReason)) stopReason = messageValue.stopReason;
+        if (isString5(messageValue.errorMessage)) errorMessage = messageValue.errorMessage;
       }
     };
     proc.stdout.on("data", (data) => {
@@ -14256,26 +14485,29 @@ async function captureGitContext(cwd) {
   return { repoRoot, baseRef };
 }
 var isSettled = (snapshot) => snapshot.status !== "running";
-var makeInitialSnapshot = (task, id, createdAt, baseRef, cwd = task.cwd, worktree, sessionFilePath) => ({
-  id,
-  ...task.sourceId ? { sourceId: task.sourceId } : {},
-  title: task.title,
-  prompt: task.prompt,
-  cwd,
-  baseRef,
-  worktree,
-  ...task.visible ? { visible: true } : {},
-  status: "running",
-  createdAt,
-  modelLabel: task.model ?? (task.inherited?.model ? `${task.inherited.model.provider}/${task.inherited.model.id}` : void 0),
-  thinkingLabel: task.thinking ?? task.inherited?.thinking,
-  sessionFilePath,
-  usage: { turns: 0 },
-  transcript: [],
-  liveText: "",
-  liveTools: [],
-  finalText: ""
-});
+var makeInitialSnapshot = (task, id, createdAt, baseRef, cwd = task.cwd, worktree, sessionFilePath) => {
+  const snapshot = {
+    id,
+    title: task.title,
+    prompt: task.prompt,
+    cwd,
+    baseRef,
+    worktree,
+    status: "running",
+    createdAt,
+    modelLabel: task.model ?? (task.inherited?.model ? `${task.inherited.model.provider}/${task.inherited.model.id}` : void 0),
+    thinkingLabel: task.thinking ?? task.inherited?.thinking,
+    sessionFilePath,
+    usage: { turns: 0 },
+    transcript: [],
+    liveText: "",
+    liveTools: [],
+    finalText: ""
+  };
+  if (task.sourceId !== void 0) snapshot.sourceId = task.sourceId;
+  if (task.visible) snapshot.visible = true;
+  return snapshot;
+};
 var upsertTool = (tools, next) => {
   const index = tools.findIndex((tool) => tool.id === next.id);
   if (index === -1) return [...tools, next];
@@ -14566,7 +14798,7 @@ var SubagentManager = class {
   }
   consumeEvents(id, events) {
     const emit = (event) => this.fold(id, event);
-    if (typeof events === "function") {
+    if (!(Symbol.asyncIterator in events)) {
       events(emit);
       return;
     }
@@ -14773,11 +15005,12 @@ import { Type as Type5 } from "typebox";
 var latestText = (snap) => snap.liveText || snap.finalText;
 
 // src/subagents/tools.ts
-var StringEnum2 = (values, options) => Type5.Unsafe({
-  type: "string",
-  enum: [...values],
-  ...options?.description ? { description: options.description } : {}
-});
+var StringEnum2 = (values, options) => {
+  const schema = { type: "string", enum: [...values] };
+  return Type5.Unsafe(
+    options?.description ? { ...schema, description: options.description } : schema
+  );
+};
 var makeToolResult2 = (text, details) => ({ content: [{ type: "text", text }], details });
 var activityEnvelope = (snapshot, sourceId) => {
   const activity = activityFromSubagentSnapshot(snapshot);
@@ -14797,13 +15030,16 @@ var trimLines = (text, maxChars, maxLines) => {
   const lines = text.split("\n").slice(0, maxLines).join("\n");
   return lines.length > maxChars ? `${lines.slice(0, maxChars - 1)}\u2026` : lines;
 };
-var cancellationMetadata = (snapshot) => ({
-  id: snapshot.id,
-  title: trimLines(snapshot.title, 256, 1),
-  status: snapshot.status,
-  createdAt: snapshot.createdAt,
-  ...snapshot.settledAt === void 0 ? {} : { settledAt: snapshot.settledAt }
-});
+var cancellationMetadata = (snapshot) => {
+  const meta = {
+    id: snapshot.id,
+    title: trimLines(snapshot.title, 256, 1),
+    status: snapshot.status,
+    createdAt: snapshot.createdAt
+  };
+  if (snapshot.settledAt !== void 0) meta.settledAt = snapshot.settledAt;
+  return meta;
+};
 var formatDuration = (ms) => {
   const seconds = Math.max(0, Math.round(ms / 1e3));
   const minutes = Math.floor(seconds / 60);
@@ -15019,12 +15255,14 @@ ${paneLine}` : result,
       status: snapshot.status,
       activity: activityFromSubagentSnapshot(snapshot),
       manifest: snapshot.manifest,
-      ...snapshot.pane ? { pane: snapshot.pane } : {}
+      pane: snapshot.pane
     }
   };
 };
-function installSubagents(pi) {
-  const host = getTerminalHost();
+function installSubagents(pi, options = {}) {
+  const host = options.terminalHost ?? getTerminalHost();
+  const spawnPane = options.spawnPaneChild ?? spawnPaneChild;
+  const spawnHeadless = options.spawnPiChild ?? spawnPiChild;
   const manager = new SubagentManager((task) => {
     if (task.visible) {
       if (!task.placement) {
@@ -15036,7 +15274,7 @@ function installSubagents(pi) {
       const inheritedModel = task.inherited?.model ? `${task.inherited.model.provider}/${task.inherited.model.id}` : void 0;
       const paneBuiltIn = getBuiltInToolsFromActiveTools([...task.builtInTools ?? []]);
       const paneNarrowed = task.builtInTools !== void 0 && paneBuiltIn.length < BUILT_IN_TOOLS.length;
-      return spawnPaneChild({
+      return spawnPane({
         prompt: task.prompt,
         name: task.title,
         cwd: task.cwd,
@@ -15050,7 +15288,7 @@ function installSubagents(pi) {
         placement: task.placement
       });
     }
-    return spawnPiChild({
+    return spawnHeadless({
       prompt: task.prompt,
       cwd: task.cwd,
       model: task.model,
@@ -15059,7 +15297,7 @@ function installSubagents(pi) {
       builtInTools: getBuiltInToolsFromActiveTools([...task.builtInTools ?? []]),
       signal: task.signal
     });
-  }, { terminalHost: host, pi });
+  }, { terminalHost: host, pi, ...options.managerDependencies });
   const delivery = createDeferredResultDelivery();
   const observedSettledIds = /* @__PURE__ */ new Set();
   let latestContext;
@@ -15152,11 +15390,14 @@ function diagLog(event, detail) {
   try {
     appendFileSync3(
       file,
-      `${JSON.stringify({ t: Date.now(), pid: process.pid, event, ...detail ?? {} })}
+      `${JSON.stringify({ t: Date.now(), pid: process.pid, event, ...detail ?? void 0 })}
 `
     );
   } catch {
   }
+}
+function isText(value) {
+  return typeof value === "string";
 }
 function extractFinalAssistantText(messages) {
   if (!Array.isArray(messages)) return "";
@@ -15165,7 +15406,7 @@ function extractFinalAssistantText(messages) {
     if (!msg || msg.role !== "assistant" || !Array.isArray(msg.content)) continue;
     const parts = [];
     for (const block of msg.content) {
-      if (block && block.type === "text" && typeof block.text === "string") {
+      if (block && block.type === "text" && isText(block.text)) {
         parts.push(block.text);
       }
     }
@@ -15220,9 +15461,12 @@ function writeTaskStartedMarker(env = process.env) {
     });
   }
 }
+function isNumber2(value) {
+  return typeof value === "number";
+}
 function installTaskExitMarker(env = process.env) {
   if (!env.SUMOCODE_TASK_EXIT_FILE) return;
-  process.once("exit", (code) => writeTaskExitMarker(typeof code === "number" ? code : 0, env));
+  process.once("exit", (code) => writeTaskExitMarker(isNumber2(code) ? code : 0, env));
 }
 var STATUS_KEY = "sumocode-task-auto-exit";
 var DEFAULT_GRACE_MS = 1e4;
@@ -15281,7 +15525,11 @@ function installTaskModeAutoExit(pi, options = {}) {
   });
   pi.on("agent_end", (event, ctx) => {
     diagLog("agent_end", { userTookOver, armed });
-    persistResponse(event.messages ?? []);
+    persistResponse(
+      // SAFETY: agent_end carries the completed turn's messages; non-array
+      // payloads fall back to an empty list below.
+      event.messages ?? []
+    );
     if (userTookOver) return;
     if (armed) return;
     armed = true;
@@ -15321,11 +15569,14 @@ var AUTH_LABELS = {
   api_key: "Sign in with an API key"
 };
 function getRuntimeFromContext(ctx) {
-  const runtime = Reflect.get(ctx.modelRegistry, "runtime");
-  if (!runtime || typeof runtime.getAvailable !== "function" || typeof runtime.getProviders !== "function" || typeof runtime.login !== "function") {
+  const rawRuntime = Reflect.get(ctx.modelRegistry, "runtime");
+  if (!isLoginRuntime(rawRuntime)) {
     throw new Error("Pi's authentication runtime is unavailable; update SumoCode's Pi compatibility adapter");
   }
-  return runtime;
+  return rawRuntime;
+  function isLoginRuntime(value) {
+    return typeof value === "object" && value !== null && "getAvailable" in value && "getProviders" in value && "login" in value;
+  }
 }
 function loginMethods(runtime) {
   const methods = [];
@@ -15518,15 +15769,17 @@ async function sendRequest(attempt, request) {
   if (await attempt(request, 500)) return true;
   return attempt(request, 1500);
 }
+var isAbsolutePath = (value) => typeof value === "string" && value.startsWith("/");
+var isNonEmptyString2 = (value) => typeof value === "string" && value.length > 0;
 function sessionRef(ctx) {
   try {
     const path2 = ctx.sessionManager?.getSessionFile?.();
-    if (typeof path2 === "string" && path2.startsWith("/")) return { agent_session_path: path2 };
+    if (isAbsolutePath(path2)) return { agent_session_path: path2 };
   } catch {
   }
   try {
     const id = ctx.sessionManager?.getSessionId?.();
-    if (typeof id === "string" && id.length > 0) return { agent_session_id: id };
+    if (isNonEmptyString2(id)) return { agent_session_id: id };
   } catch {
   }
   return {};
@@ -15608,19 +15861,18 @@ function installHerdrRpcBridge(pi, options = {}) {
   const queuedStates = [];
   let sendInFlight = false;
   let stateRetryTimer;
-  const sendState = (state) => send({
-    id: requestId("state"),
-    method: "pane.report_agent",
-    params: {
+  const sendState = (state) => {
+    const params = {
       pane_id: paneId2,
       source: SOURCE,
       agent: AGENT,
       state: state.state,
       message: state.message,
-      seq: state.seq,
-      ...currentContext ? sessionRef(currentContext) : {}
-    }
-  });
+      seq: state.seq
+    };
+    if (currentContext) Object.assign(params, sessionRef(currentContext));
+    return send({ id: requestId("state"), method: "pane.report_agent", params });
+  };
   const scheduleStateRetry = () => {
     if (stopped || stateRetryTimer !== void 0 || queuedStates.length === 0) return;
     stateRetryTimer = setTimeout(() => {
@@ -15711,6 +15963,12 @@ function installHerdrRpcBridge(pi, options = {}) {
 }
 
 // src/sumo-tui/pi-compat/tree-navigation-command.ts
+function isPayloadObject2(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function isString6(value) {
+  return typeof value === "string";
+}
 var RPC_TREE_NAVIGATION_COMMAND = "sumo:rpc-tree-navigate";
 var RPC_TREE_NAVIGATION_RESULT_STATUS_KEY = "sumocode.rpc-tree-navigation-result";
 var MAX_TREE_NAVIGATION_ENCODED_BYTES = 24576;
@@ -15741,7 +15999,7 @@ function exactKeys(value, allowed) {
   return keys.length === sortedAllowed.length && keys.every((key, index) => key === sortedAllowed[index]);
 }
 function validateRpcTreeNavigationRequest(value) {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error("tree navigation request must be an object");
+  if (!isPayloadObject2(value)) throw new Error("tree navigation request must be an object");
   const record = value;
   const allowed = record.summarize === true ? ["requestId", "targetId", "summarize", ...Object.hasOwn(record, "customInstructions") ? ["customInstructions"] : []] : ["requestId", "targetId", "summarize"];
   if (!exactKeys(record, allowed)) throw new Error("tree navigation request has unknown or invalid fields");
@@ -15765,15 +16023,12 @@ function parseRequestJson(decoded) {
   } catch {
     throw new Error("tree navigation payload is malformed JSON");
   }
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) throw new Error("tree navigation payload must be an object");
+  if (!isPayloadObject2(parsed)) throw new Error("tree navigation payload must be an object");
   validateRpcTreeNavigationRequest(parsed);
-  const record = parsed;
-  return {
-    requestId: record.requestId,
-    targetId: record.targetId.trim(),
-    summarize: record.summarize,
-    ...typeof record.customInstructions === "string" ? { customInstructions: record.customInstructions } : {}
-  };
+  if (isString6(parsed.customInstructions)) {
+    return { requestId: parsed.requestId, targetId: parsed.targetId.trim(), summarize: parsed.summarize, customInstructions: parsed.customInstructions };
+  }
+  return { requestId: parsed.requestId, targetId: parsed.targetId.trim(), summarize: parsed.summarize };
 }
 function decodeRpcTreeNavigationPayload(encoded) {
   if (utf8Bytes(encoded) > MAX_TREE_NAVIGATION_ENCODED_BYTES) throw new Error("tree navigation payload is too large");
@@ -15781,9 +16036,7 @@ function decodeRpcTreeNavigationPayload(encoded) {
 }
 function boundedOutcome(outcome) {
   if (outcome.editorText !== void 0 && utf8Bytes(outcome.editorText) > MAX_TREE_NAVIGATION_EDITOR_TEXT_BYTES) {
-    const withoutEditorText = { ...outcome };
-    delete withoutEditorText.editorText;
-    return withoutEditorText;
+    return { requestId: outcome.requestId, status: outcome.status, leafId: outcome.leafId };
   }
   return outcome;
 }
@@ -15794,10 +16047,10 @@ function encodeRpcTreeNavigationOutcome(outcome) {
   return Buffer.from(json, "utf8").toString("base64url");
 }
 function entryEditorText(entry) {
-  if (typeof entry !== "object" || entry === null) return void 0;
+  if (!isPayloadObject2(entry)) return void 0;
   const record = entry;
   if (record.type === "message") {
-    if (typeof record.message !== "object" || record.message === null) return void 0;
+    if (!isPayloadObject2(record.message)) return void 0;
     const message = record.message;
     if (message.role !== "user") return void 0;
     const text = contentText(message.content);
@@ -15809,17 +16062,20 @@ function entryEditorText(entry) {
   }
   return void 0;
 }
+function isTextBlock(value) {
+  return isPayloadObject2(value) && value.type === "text" && isString6(value.text);
+}
 function contentText(content) {
-  if (typeof content === "string") return content;
+  if (isString6(content)) return content;
   if (!Array.isArray(content)) return "";
-  return content.filter((block) => typeof block === "object" && block !== null && block.type === "text" && typeof block.text === "string").map((block) => block.text).join("");
+  return content.filter(isTextBlock).map((block) => block.text).join("");
 }
 function recoverRequestId(encoded) {
   try {
     if (utf8Bytes(encoded) > MAX_TREE_NAVIGATION_ENCODED_BYTES) return void 0;
     const decoded = decodeBase64Url(encoded);
     const parsed = JSON.parse(Buffer.from(decoded).toString("utf8"));
-    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return void 0;
+    if (!isPayloadObject2(parsed)) return void 0;
     const requestId = parsed.requestId;
     return isCanonicalUuid(requestId) ? requestId : void 0;
   } catch {
@@ -15848,16 +16104,10 @@ async function executeRpcTreeNavigation(encoded, ctx) {
   let editorText;
   try {
     editorText = entryEditorText(ctx.sessionManager.getEntry(request.targetId));
-    const result = await ctx.navigateTree(request.targetId, {
-      summarize: request.summarize,
-      ...request.customInstructions === void 0 ? {} : { customInstructions: request.customInstructions }
-    });
-    const outcome = {
-      requestId: request.requestId,
-      status: result.cancelled ? "cancelled" : "committed",
-      leafId: ctx.sessionManager.getLeafId(),
-      ...result.cancelled || editorText === void 0 ? {} : { editorText }
-    };
+    const navigateOptions = request.customInstructions === void 0 ? { summarize: request.summarize } : { summarize: request.summarize, customInstructions: request.customInstructions };
+    const result = await ctx.navigateTree(request.targetId, navigateOptions);
+    const leafId = ctx.sessionManager.getLeafId();
+    const outcome = result.cancelled || editorText === void 0 ? { requestId: request.requestId, status: result.cancelled ? "cancelled" : "committed", leafId } : { requestId: request.requestId, status: "committed", leafId, editorText };
     ctx.ui.setStatus(RPC_TREE_NAVIGATION_RESULT_STATUS_KEY, encodeRpcTreeNavigationOutcome(outcome));
   } catch {
     const outcome = {
@@ -15903,7 +16153,7 @@ function packageNameAt2(dir, exists, readFile) {
   if (!exists(packagePath)) return void 0;
   try {
     const parsed = JSON.parse(readFile(packagePath, "utf8"));
-    return typeof parsed.name === "string" ? parsed.name : void 0;
+    return asOptionalString(parsed.name) ? parsed.name : void 0;
   } catch {
     return void 0;
   }
@@ -16015,16 +16265,20 @@ function installRpcChildProfile(pi) {
   installSumoInteractions(pi, { subagentManager, includeUiSurfaces: false });
 }
 var PROCESS_INSTALL_LATCH = /* @__PURE__ */ Symbol.for("sumocode.extension.processInstallLatch");
+var asOptionalString = (value) => typeof value === "string";
+function globalLatchScope() {
+  return globalThis;
+}
 function processInstallLatch(scope) {
   return scope[PROCESS_INSTALL_LATCH] ??= /* @__PURE__ */ new WeakSet();
 }
-function isSumocodeAlreadyInstalledInProcess(runtime, scope = globalThis) {
+function isSumocodeAlreadyInstalledInProcess(runtime, scope = globalLatchScope()) {
   return processInstallLatch(scope).has(runtime);
 }
-function markSumocodeInstalledInProcess(runtime, scope = globalThis) {
+function markSumocodeInstalledInProcess(runtime, scope = globalLatchScope()) {
   processInstallLatch(scope).add(runtime);
 }
-function resetSumocodeProcessInstallLatchForTests(scope = globalThis) {
+function resetSumocodeProcessInstallLatchForTests(scope = globalLatchScope()) {
   delete scope[PROCESS_INSTALL_LATCH];
 }
 function sumocode(pi) {

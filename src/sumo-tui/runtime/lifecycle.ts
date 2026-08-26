@@ -3,7 +3,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { consumeActiveEditorDraftClear } from "../../cathedral/editor-draft-state.js";
-import { instrumentPiEventEmitter, logDiagnostic } from "./diagnostics.js";
+import { createPiEventInstrumentation, logDiagnostic, logPiEventInstrumented } from "./diagnostics.js";
 import { FrameScheduler, type FrameRenderCallback } from "./frame-scheduler.js";
 import { defaultTerminalSessionOwner, TerminalSessionOwner } from "./terminal-controller.js";
 import { isTerminalIoError } from "./terminal-errors.js";
@@ -14,14 +14,14 @@ export type LifecycleListener = (...args: unknown[]) => void;
 
 export interface LifecycleProcess {
 	readonly pid: number;
-	on(event: LifecycleProcessEvent, listener: LifecycleListener): unknown;
-	removeListener(event: LifecycleProcessEvent, listener: LifecycleListener): unknown;
+	on(event: LifecycleProcessEvent, listener: LifecycleListener): void;
+	removeListener(event: LifecycleProcessEvent, listener: LifecycleListener): void;
 	kill(pid: number, signal: LifecycleSignal): void;
 	exit?(code?: number): void;
 }
 
 export interface LifecycleInput {
-	on(event: "data", listener: (data: string | Buffer) => void): unknown;
+	on(event: "data", listener: (data: string | Buffer) => void): void;
 	setRawMode?(enabled: boolean): void;
 }
 
@@ -33,9 +33,9 @@ export interface TerminalDimensions {
 export interface TerminalDimensionSource {
 	readonly columns?: number;
 	readonly rows?: number;
-	on?(event: "resize", listener: () => void): unknown;
-	off?(event: "resize", listener: () => void): unknown;
-	removeListener?(event: "resize", listener: () => void): unknown;
+	on?(event: "resize", listener: () => void): void;
+	off?(event: "resize", listener: () => void): void;
+	removeListener?(event: "resize", listener: () => void): void;
 }
 
 export interface TerminalDimensionsHandle {
@@ -55,7 +55,7 @@ export interface LifecycleRuntimeOptions {
 	readonly scheduler?: FrameScheduler;
 	readonly render?: FrameRenderCallback;
 	readonly homeDir?: () => string;
-	readonly mkdirSync?: (path: string, options: { recursive: true }) => unknown;
+	readonly mkdirSync?: (path: string, options: { recursive: true }) => void;
 	readonly appendFileSync?: (path: string, data: string, encoding: BufferEncoding) => void;
 }
 
@@ -70,16 +70,20 @@ const ACTIVE_SUMO_RUNTIME_KEY = Symbol.for("sumocode.activeSumoRuntime");
 
 export function isRetainedSumoRuntimeActive(): boolean {
 	type ActiveRuntimeBox = { runtime: unknown };
-	const host = globalThis as unknown as Record<symbol, ActiveRuntimeBox | undefined>;
+	// SAFETY: the Symbol.for registry slot is written only by this module and
+	// always holds an ActiveRuntimeBox when present.
+	const host = globalThis as Record<symbol, ActiveRuntimeBox | undefined>;
 	if (host[ACTIVE_SUMO_RUNTIME_KEY]?.runtime) return true;
 	return process.env.SUMO_TUI === "1";
 }
 
 function getNodeProcess(): LifecycleProcess {
-	const processLike = process as unknown as {
+	// SAFETY: Node's process object satisfies this structural contract at
+	// runtime; the broader event-name signature mirrors Node's own overloads.
+	const processLike = process as {
 		pid: number;
-		on(event: string, listener: LifecycleListener): unknown;
-		removeListener(event: string, listener: LifecycleListener): unknown;
+		on(event: string, listener: LifecycleListener): void;
+		removeListener(event: string, listener: LifecycleListener): void;
 		kill(pid: number, signal: string): void;
 	};
 
@@ -93,9 +97,11 @@ function getNodeProcess(): LifecycleProcess {
 }
 
 function getNodeInput(): LifecycleInput | undefined {
-	const stdin = process.stdin as unknown as {
+	// SAFETY: process.stdin carries the data/setRawMode surface used here
+	// whenever it is a TTY; isTTY is checked before the object is returned.
+	const stdin = process.stdin as {
 		readonly isTTY?: boolean;
-		on(event: "data", listener: (data: string | Buffer) => void): unknown;
+		on(event: "data", listener: (data: string | Buffer) => void): void;
 		setRawMode?(enabled: boolean): void;
 	};
 	if (stdin.isTTY !== true) return undefined;
@@ -105,9 +111,9 @@ function getNodeInput(): LifecycleInput | undefined {
 	};
 }
 
-function crashText(error: unknown): string {
-	if (error instanceof Error) return error.stack ?? `${error.name}: ${error.message}`;
-	return String(error);
+function crashText(cause: unknown): string {
+	if (cause instanceof Error) return cause.stack ?? `${cause.name}: ${cause.message}`;
+	return String(cause);
 }
 
 /** Subscribe to terminal resize events and expose the latest cell dimensions. */
@@ -141,9 +147,10 @@ export class LifecycleRuntime {
 	private readonly input: LifecycleInput | undefined;
 	private readonly scheduler: FrameScheduler;
 	private readonly getHomeDir: () => string;
-	private readonly makeDir: (path: string, options: { recursive: true }) => unknown;
+	private readonly makeDir: (path: string, options: { recursive: true }) => void;
 	private readonly appendFile: (path: string, data: string, encoding: BufferEncoding) => void;
 	private processHandlersInstalled = false;
+	private piEventsInstrumented = false;
 	private sigtstpInstalled = false;
 	private suspended = false;
 	private readonly signalHandlers = new Map<LifecycleSignal, LifecycleListener>();
@@ -160,7 +167,7 @@ export class LifecycleRuntime {
 
 	public installLifecycle(pi: ExtensionAPI): LifecycleRenderControls {
 		this.installProcessHandlers();
-		instrumentPiEventEmitter(pi);
+		this.instrumentPiEvents(pi);
 
 		pi.on("session_start", (_event, ctx) => {
 			if (!ctx.hasUI) return;
@@ -244,6 +251,21 @@ export class LifecycleRuntime {
 		}
 	}
 
+	private instrumentPiEvents(pi: ExtensionAPI): void {
+		if (this.piEventsInstrumented) return;
+		const instrumentation = createPiEventInstrumentation();
+		if (!instrumentation) return;
+		type Registrar = (eventName: string, listener: (...args: never[]) => void, ...rest: readonly unknown[]) => void;
+		// SAFETY: pi.on is an overloaded event registrar; the widened closure
+		// forwards every overload unchanged except for wrapping the listener.
+		const registrar = pi.on.bind(pi) as Registrar;
+		const instrumented: Registrar = (eventName, listener, ...rest) =>
+			registrar(eventName, instrumentation.wrap(eventName, listener), ...rest);
+		Object.assign(pi, { on: instrumented });
+		this.piEventsInstrumented = true;
+		logPiEventInstrumented();
+	}
+
 	private registerReraisingSignal(signal: (typeof EXIT_SIGNALS)[number]): void {
 		let reraised = false;
 		const handler = (): void => {
@@ -316,11 +338,11 @@ export class LifecycleRuntime {
 		}
 	}
 
-	private logCrash(error: unknown): void {
+	private logCrash(cause: unknown): void {
 		try {
 			const logDir = join(this.getHomeDir(), ".sumocode");
 			this.makeDir(logDir, { recursive: true });
-			this.appendFile(join(logDir, "crash.log"), `[${new Date().toISOString()}] uncaughtException\n${crashText(error)}\n\n`, "utf8");
+			this.appendFile(join(logDir, "crash.log"), `[${new Date().toISOString()}] uncaughtException\n${crashText(cause)}\n\n`, "utf8");
 		} catch {
 			// Best-effort crash logging. Cleanup/rethrow semantics matter more than
 			// the log file when the terminal is already recovering from a crash.
@@ -334,8 +356,11 @@ export function createLifecycleRuntime(options: LifecycleRuntimeOptions = {}): L
 
 const GLOBAL_LIFECYCLE_KEY = "__sumoDefaultLifecycleRuntime";
 type GlobalWithLifecycle = typeof globalThis & { [GLOBAL_LIFECYCLE_KEY]?: LifecycleRuntime };
+// SAFETY: this module owns the __sumoDefaultLifecycleRuntime global slot and
+// always stores a LifecycleRuntime in it immediately below.
 const globalForLifecycle = globalThis as GlobalWithLifecycle;
 if (!globalForLifecycle[GLOBAL_LIFECYCLE_KEY]) globalForLifecycle[GLOBAL_LIFECYCLE_KEY] = createLifecycleRuntime();
+// SAFETY: the guard above guarantees the slot was just populated.
 const defaultLifecycle = globalForLifecycle[GLOBAL_LIFECYCLE_KEY] as LifecycleRuntime;
 defaultLifecycle.installProcessHandlers();
 

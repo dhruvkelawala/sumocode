@@ -96,11 +96,17 @@ function gitOkSync(repoRoot: string, args: readonly string[]): boolean {
 	}
 }
 
-function gitFailure(error: unknown): WorktreeFailure {
-	const maybe = error as { message?: unknown; stdout?: unknown; stderr?: unknown };
-	const stdout = typeof maybe.stdout === "string" ? maybe.stdout : undefined;
-	const stderr = typeof maybe.stderr === "string" ? maybe.stderr : undefined;
-	const message = stderr?.trim() || (typeof maybe.message === "string" ? maybe.message : "git command failed");
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- predicate over an arbitrary git rejection field; the typeof check is the sanctioned parse.
+function isString(value: unknown): value is string {
+	return typeof value === "string";
+}
+
+function gitFailure(cause: unknown): WorktreeFailure {
+	// SAFETY: gitSync rejects with an ExecFileException carrying these optional fields.
+	const maybe = cause as { message?: unknown; stdout?: unknown; stderr?: unknown };
+	const stdout = isString(maybe.stdout) ? maybe.stdout : undefined;
+	const stderr = isString(maybe.stderr) ? maybe.stderr : undefined;
+	const message = stderr?.trim() || (isString(maybe.message) ? maybe.message : "git command failed");
 	return failure("git_failed", message, { stdout, stderr });
 }
 
@@ -132,7 +138,7 @@ function branchExistsSync(repoRoot: string, branch: string): boolean {
 	return gitOkSync(repoRoot, ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`]);
 }
 
-export function resolveCreateOptions(options: CreateWorktreeOptions): { branch: string; baseRef: string; path: string } {
+export function resolveCreateOptions(options: CreateWorktreeOptions) {
 	const baseRef = options.baseRef ?? "HEAD";
 	const branch = options.branch ?? `sumo/${slugifyBranch(options.task ?? "task")}`;
 	const path = options.path ?? join(worktreeRoot(options.repoRoot), pathSegmentForBranch(branch));
@@ -175,10 +181,17 @@ export async function createWorktree(options: CreateWorktreeOptions): Promise<Cr
 	}
 }
 
+interface WorktreePorcelainInfo {
+	path?: string;
+	head?: string;
+	branch?: string;
+	detached?: boolean;
+}
+
 export function parseWorktreePorcelain(output: string): WorktreeInfo[] {
 	const records = output.trim().split(/\n\s*\n/).filter(Boolean);
 	return records.map((record) => {
-		const info: { path?: string; head?: string; branch?: string; detached?: boolean } = {};
+		const info: WorktreePorcelainInfo = {};
 		for (const line of record.split("\n")) {
 			const [key, ...rest] = line.split(" ");
 			const value = rest.join(" ");

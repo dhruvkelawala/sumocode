@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import type { Readable } from "node:stream";
 import { unwatchFile, watchFile } from "node:fs";
 import { resolve } from "node:path";
 
@@ -14,7 +15,7 @@ export interface WatchGitBranchDependencies {
 type PromiseResolvers<T> = {
 	readonly promise: Promise<T>;
 	readonly resolve: (value: T | PromiseLike<T>) => void;
-	readonly reject: (reason?: unknown) => void;
+	readonly reject: (cause?: unknown) => void;
 };
 
 type PromiseWithResolversConstructor = PromiseConstructor & {
@@ -22,6 +23,8 @@ type PromiseWithResolversConstructor = PromiseConstructor & {
 };
 
 function execFileText(execFileFn: ExecFile, file: string, args: readonly string[], cwd: string): Promise<string | undefined> {
+	// SAFETY: withResolvers is a standard ES2024 Promise API; the intersection
+	// narrows the lib-provided constructor to the overload we require.
 	const { promise, resolve } = (Promise as PromiseWithResolversConstructor).withResolvers<string | undefined>();
 	// execFile's own `timeout` option installs a REFERENCED timer that keeps Node
 	// (and the launcher) alive until it fires, even with the child and its pipes
@@ -41,8 +44,11 @@ function execFileText(execFileFn: ExecFile, file: string, args: readonly string[
 	});
 	// Also unref the child and its stdout/stderr pipe handles so nothing holds
 	// the event loop once the runtime has been torn down and the terminal cleaned.
-	const unrefStream = (stream: unknown): void => {
-		(stream as { unref?: () => void } | null | undefined)?.unref?.();
+	const unrefStream = (stream: Readable | null | undefined): void => {
+		if (stream == null) return;
+		// SAFETY: child-process stdio handles carry Node's unref() even though
+		// the Readable interface omits it; optional call guards shimmed streams.
+		(stream as Readable & { unref?: () => void }).unref?.();
 	};
 	child?.unref?.();
 	unrefStream(child?.stdout);

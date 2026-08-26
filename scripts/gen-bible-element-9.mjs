@@ -29,19 +29,6 @@ const padRight = (s, n) => {
 const STATE_GLYPH = { ok: "\u2713", running: "\u25b6", failed: "\u2717" };
 const STATE_CLASS = { ok: "fg-idle", running: "fg-tool", failed: "fg-approve" };
 
-// Inline tool pill (compact, used inside chat boxes):
-//   ✓ [bash]  pnpm test src/auth  · 22 tests, 1.2s
-function toolPillInline({ name, target, state, note }) {
-	const glyph = STATE_GLYPH[state];
-	const stateClass = STATE_CLASS[state];
-	const noteHTML = note ? `<span class="fg-dim">  \u00b7 ${note}</span>` : "";
-	return (
-		`<span class="${stateClass}">${glyph}</span> ` +
-		`<span class="fg-accent">[${name}]</span>` +
-		`<span class="fg-fg">  ${target}</span>` +
-		noteHTML
-	);
-}
 
 // Framed tool pill (Element 9 spec):
 //   ━━━ [bash]  pnpm test src/auth  ━━━━━━━━━━━━━━━━━━━━━ ✓ 22 tests, 1.2s

@@ -135,7 +135,7 @@ describe("tool renderer", () => {
 		expect(rows.some((row) => row.includes("-14 const old = 2;"))).toBe(true);
 		expect(rows.some((row) => row.includes("+14 const next = 3;"))).toBe(true);
 		const addedRow = rows.find((row) => row.includes("+14 const next = 3;"));
-		expect(addedRow).not.toMatch(/^\│\s+\d+\s+\+14/);
+		expect(addedRow).not.toMatch(/^│\s+\d+\s+\+14/);
 	});
 
 	it("still falls back to the +N/-N summary when no diff string is present", () => {

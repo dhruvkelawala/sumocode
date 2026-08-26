@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { Dirent } from "node:fs";
 import {
 	chmodSync,
 	closeSync,
@@ -79,6 +80,8 @@ interface LockOwner {
 	readonly verifiable: boolean;
 }
 
+// oxlint-disable anti-slop/no-unknown-parameters, anti-slop/no-unsafe-dictionary-type -- durable store boundary: meta/lock files and snapshots are untrusted JSON,
+// so `unknown` inputs and open records are this module's parsing contract.
 function isSafeInteger(value: unknown): value is number {
 	return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
@@ -95,17 +98,28 @@ function isOptionalString(value: unknown): value is string | undefined {
 	return value === undefined || typeof value === "string";
 }
 
+function isStringValue(value: unknown): value is string {
+	return typeof value === "string";
+}
+
+function isNumberValue(value: unknown): value is number {
+	return typeof value === "number";
+}
+
+function isStoredObject(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function isProcessTreeVerification(value: unknown): boolean {
 	if (value === undefined) return true;
-	if (!value || typeof value !== "object") return false;
-	const members = (value as { members?: unknown }).members;
+	if (!isStoredObject(value)) return false;
+	const { members } = value;
 	if (!Array.isArray(members) || members.length === 0 || members.length > 4096) return false;
 	const pids = new Set<number>();
 	for (const member of members) {
-		if (!member || typeof member !== "object") return false;
-		const anchor = member as { pid?: unknown; processStartTime?: unknown };
-		if (!isPositiveInteger(anchor.pid) || !hasText(anchor.processStartTime) || pids.has(anchor.pid)) return false;
-		pids.add(anchor.pid);
+		if (!isStoredObject(member)) return false;
+		if (!isPositiveInteger(member.pid) || !hasText(member.processStartTime) || pids.has(member.pid)) return false;
+		pids.add(member.pid);
 	}
 	return true;
 }
@@ -125,14 +139,28 @@ function pathExists(path: string): boolean {
 		lstatSync(path);
 		return true;
 	} catch (error) {
-		return typeof error === "object" && error !== null && "code" in error && (error as { code?: unknown }).code !== "ENOENT";
+		// Mirror the original contract exactly: only errno-bearing rejections with a non-ENOENT code count as existing.
+		return error instanceof Error && errorHasCode(error) && !errorMatches(error, "ENOENT");
 	}
 }
 
-function errorCode(error: unknown): string | undefined {
-	return typeof error === "object" && error !== null && "code" in error
-		? String((error as { code?: unknown }).code)
-		: undefined;
+/** Extract the errno string from a Node rejection. */
+function errorCode(error: Error): string | undefined {
+	// SAFETY: lstat/rename/unlink reject with NodeJS.ErrnoException whose optional `code` carries the errno string.
+	const code = (error as NodeJS.ErrnoException).code;
+	return code === undefined || code === null ? undefined : String(code);
+}
+
+function errorMatches(cause: unknown, code: string): boolean {
+	return causeIsError(cause) && errorCode(cause) === code;
+}
+
+function causeIsError(cause: unknown): cause is NodeJS.ErrnoException {
+	return cause instanceof Error;
+}
+
+function errorHasCode(error: NodeJS.ErrnoException): boolean {
+	return error.code !== undefined && error.code !== null;
 }
 
 function sleepSync(milliseconds: number): void {
@@ -143,20 +171,36 @@ export function isValidTerminalTaskId(id: string): boolean {
 	return TERMINAL_ID_PATTERN.test(id) && !id.includes("..");
 }
 
+function isStatusValue(value: unknown): value is TerminalTaskStatus {
+	// SAFETY: membership in STATUSES proves this string is a TerminalTaskStatus.
+	return typeof value === "string" && STATUSES.has(value as TerminalTaskStatus);
+}
+
+function isPolicyValue(value: unknown): value is TerminalCompletionPolicy {
+	// SAFETY: membership in POLICIES proves this string is a TerminalCompletionPolicy.
+	return typeof value === "string" && POLICIES.has(value as TerminalCompletionPolicy);
+}
+
+function isDeliveryStateValue(value: unknown): value is TerminalDeliveryState {
+	// SAFETY: membership in DELIVERY_STATES proves this string is a TerminalDeliveryState.
+	return typeof value === "string" && DELIVERY_STATES.has(value as TerminalDeliveryState);
+}
+
 export function parseTerminalTaskSnapshot(value: unknown): TerminalTaskSnapshot | undefined {
-	if (!value || typeof value !== "object") return undefined;
+	if (!isStoredObject(value)) return undefined;
+	// SAFETY: the record's fields are untrusted JSON; each one is individually validated below before use.
 	const record = value as Partial<TerminalTaskSnapshot>;
 	if (
 		record.schemaVersion !== TERMINAL_TASK_SCHEMA_VERSION ||
 		!isPositiveInteger(record.revision) ||
-		typeof record.id !== "string" || !isValidTerminalTaskId(record.id) ||
+		!isStringValue(record.id) || !isValidTerminalTaskId(record.id) ||
 		!(record.sourceId === undefined || (hasText(record.sourceId) && record.sourceId.length <= 512)) ||
 		!hasText(record.ownerSessionId) ||
 		!hasText(record.command) ||
 		!hasText(record.cwd) ||
 		!hasText(record.title) ||
-		!STATUSES.has(record.status as TerminalTaskStatus) ||
-		!POLICIES.has(record.completionPolicy as TerminalCompletionPolicy) ||
+		!isStatusValue(record.status) ||
+		!isPolicyValue(record.completionPolicy) ||
 		!isPositiveInteger(record.createdAt) ||
 		!isPositiveInteger(record.updatedAt) ||
 		record.updatedAt < record.createdAt ||
@@ -164,19 +208,20 @@ export function parseTerminalTaskSnapshot(value: unknown): TerminalTaskSnapshot 
 		!(record.exitCode === undefined || record.exitCode === null || Number.isSafeInteger(record.exitCode)) ||
 		!isOptionalTimestamp(record.observedAt) ||
 		!isOptionalTimestamp(record.consumedAt) ||
-		!DELIVERY_STATES.has(record.deliveryState as TerminalDeliveryState) ||
+		!isDeliveryStateValue(record.deliveryState) ||
 		!isOptionalString(record.completionId) ||
 		!isOptionalString(record.deliveryClaimToken) ||
 		!(record.pid === undefined || isPositiveInteger(record.pid)) ||
 		!(record.processGroupId === undefined || isPositiveInteger(record.processGroupId)) ||
 		!isOptionalString(record.processStartTime) ||
 		!isProcessTreeVerification(record.processTreeVerification) ||
-		typeof record.logFile !== "string" || !isAbsolute(record.logFile) || resolve(record.logFile) !== record.logFile
+		!hasText(record.logFile) || !isAbsolute(record.logFile) || resolve(record.logFile) !== record.logFile
 	) {
 		return undefined;
 	}
 
-	const status = record.status as TerminalTaskStatus;
+	const status = isStatusValue(record.status) ? record.status : undefined;
+	if (status === undefined) return undefined;
 	const settled = isTerminalTaskSettled(status);
 	const hasIdentity = record.pid !== undefined || record.processGroupId !== undefined || record.processStartTime !== undefined;
 	const completeIdentity = isPositiveInteger(record.pid) && isPositiveInteger(record.processGroupId) && hasText(record.processStartTime);
@@ -210,13 +255,13 @@ export function parseTerminalTaskSnapshot(value: unknown): TerminalTaskSnapshot 
 	if (record.deliveryState === "claimed" ? !hasText(record.deliveryClaimToken) : record.deliveryClaimToken !== undefined) return undefined;
 	if (!settled && record.deliveryState !== "none") return undefined;
 
+	// SAFETY: every field above was validated against TerminalTaskSnapshot's invariants before this point.
 	return record as TerminalTaskSnapshot;
 }
 
 function schemaVersionOf(value: unknown): number | undefined {
-	if (!value || typeof value !== "object") return undefined;
-	const version = (value as { schemaVersion?: unknown }).schemaVersion;
-	return typeof version === "number" ? version : undefined;
+	if (!isStoredObject(value)) return undefined;
+	return isNumberValue(value.schemaVersion) ? value.schemaVersion : undefined;
 }
 
 function assertOwnedByCurrentUser(path: string, uid: number): void {
@@ -285,7 +330,7 @@ function writeExclusivePrivateFile(path: string, contents: string): void {
 	}
 }
 
-function atomicWriteJson(path: string, value: unknown): void {
+function atomicWriteJson(path: string, value: TerminalTaskSnapshot): void {
 	const temporary = join(dirname(path), `.${randomUUID()}.tmp`);
 	let descriptor: number | undefined;
 	try {
@@ -311,18 +356,26 @@ function atomicWriteJson(path: string, value: unknown): void {
 		if (descriptor !== undefined) closeSync(descriptor);
 		try {
 			unlinkSync(temporary);
-		} catch (error) {
-			if (errorCode(error) !== "ENOENT") throw error;
+		} catch {
+			// Swallowed: either the rename consumed the temporary name or the write
+			// is already failing — an unlink error must never mask the primary
+			// result or exception.
 		}
 	}
 }
 
+function isBooleanValue(value: unknown): value is boolean {
+	return typeof value === "boolean";
+}
+
 function parseLockOwner(path: string): LockOwner | undefined {
 	try {
+		// SAFETY: owner.json is written by this store; malformed content is rejected field-by-field below.
 		const value = JSON.parse(readFileNoFollow(path)) as Partial<LockOwner>;
-		if (!hasText(value.token) || !isPositiveInteger(value.pid) || typeof value.verifiable !== "boolean") return undefined;
+		if (!hasText(value.token) || !isPositiveInteger(value.pid) || !isBooleanValue(value.verifiable)) return undefined;
 		if (value.verifiable && !hasText(value.processStartTime)) return undefined;
 		if (!value.verifiable && value.processStartTime !== undefined) return undefined;
+		// SAFETY: token/pid/verifiable/processStartTime were each validated above.
 		return value as LockOwner;
 	} catch {
 		return undefined;
@@ -333,8 +386,8 @@ function processProvesOwnerGone(owner: LockOwner): boolean {
 	try {
 		process.kill(owner.pid, 0);
 	} catch (error) {
-		if (errorCode(error) === "ESRCH") return true;
-		if (errorCode(error) !== "EPERM") return false;
+		if (errorMatches(error, "ESRCH")) return true;
+		if (!errorMatches(error, "EPERM")) return false;
 	}
 	if (!owner.verifiable || !owner.processStartTime) return false;
 	const actualStartTime = captureProcessStartTime(owner.pid);
@@ -352,13 +405,14 @@ export class TerminalTaskStore {
 
 	public constructor(options: TerminalTaskStoreOptions = {}) {
 		const requestedRoot = resolve(options.rootDir ?? defaultTerminalStoreRoot());
-		const uid = typeof process.getuid === "function" ? process.getuid() : undefined;
+		// process.getuid is POSIX-only and may be absent at runtime on Windows builds.
+		const uid = process.getuid?.();
 		try {
 			const existing = lstatSync(requestedRoot);
 			if (existing.isSymbolicLink()) throw new Error(`Terminal store root must not be a symlink: ${requestedRoot}`);
 			if (uid !== undefined) assertOwnedByCurrentUser(requestedRoot, uid);
 		} catch (error) {
-			if (errorCode(error) !== "ENOENT") throw error;
+			if (!errorMatches(error, "ENOENT")) throw error;
 		}
 		mkdirSync(requestedRoot, { recursive: true, mode: PRIVATE_DIRECTORY_MODE });
 		if (uid !== undefined) assertOwnedByCurrentUser(requestedRoot, uid);
@@ -375,15 +429,15 @@ export class TerminalTaskStore {
 
 	public loadAll(): TerminalTaskSnapshot[] {
 		this.metaPathById.clear();
-		let entries: ReturnType<typeof readdirSync>;
+		let entries: Dirent[];
 		try {
-			entries = readdirSync(this.rootDir, { withFileTypes: true, encoding: "utf8" }) as never;
+			entries = readdirSync(this.rootDir, { withFileTypes: true });
 		} catch (error) {
 			this.diagnostic("io", this.rootDir, error);
 			return [];
 		}
 		const snapshots: TerminalTaskSnapshot[] = [];
-		for (const entry of entries as unknown as Array<{ name: string; isDirectory(): boolean; isSymbolicLink(): boolean }>) {
+		for (const entry of entries) {
 			const taskDirectory = join(this.rootDir, entry.name);
 			if (entry.isSymbolicLink()) {
 				this.diagnostic("corrupt", taskDirectory, "symlink/reparse task directories are not allowed");
@@ -581,7 +635,7 @@ export class TerminalTaskStore {
 					this.releaseLock(lockPath, owner);
 				} catch (error) {
 					rmSync(candidate, { recursive: true, force: true });
-					if (errorCode(error) !== "EEXIST" && errorCode(error) !== "ENOTEMPTY") throw error;
+					if (!errorMatches(error, "EEXIST") && !errorMatches(error, "ENOTEMPTY")) throw error;
 				}
 			} catch (error) {
 				try {
@@ -589,7 +643,7 @@ export class TerminalTaskStore {
 				} catch {
 					// Candidate cleanup is best effort; it never owns the canonical lock.
 				}
-				if (errorCode(error) !== "EEXIST" && errorCode(error) !== "ENOTEMPTY") throw error;
+				if (!errorMatches(error, "EEXIST") && !errorMatches(error, "ENOTEMPTY")) throw error;
 			}
 			if (this.breakAbandonedLock(lockPath)) continue;
 			if (Date.now() >= deadline) throw new TerminalTaskLockBusyError(`Timed out waiting for terminal task lock: ${lockPath}`);
@@ -606,7 +660,7 @@ export class TerminalTaskStore {
 	private takeoverPaths(lockPath: string): string[] {
 		const prefix = `${basename(lockPath)}.takeover-`;
 		try {
-			return (readdirSync(dirname(lockPath), { encoding: "utf8" }) as string[])
+			return readdirSync(dirname(lockPath), { encoding: "utf8" })
 				.filter((name) => name.startsWith(prefix))
 				.map((name) => join(dirname(lockPath), name));
 		} catch {
@@ -644,7 +698,7 @@ export class TerminalTaskStore {
 		try {
 			renameSync(lockPath, takeoverPath);
 		} catch (error) {
-			if (errorCode(error) === "ENOENT") return true;
+			if (errorMatches(error, "ENOENT")) return true;
 			return false;
 		}
 		const movedOwner = parseLockOwner(join(takeoverPath, "owner.json"));
@@ -670,7 +724,7 @@ export class TerminalTaskStore {
 					renameSync(path, releasePath);
 					rmSync(releasePath, { recursive: true, force: true });
 				} catch (error) {
-					if (errorCode(error) !== "ENOENT") this.diagnostic("io", path, error);
+					if (!errorMatches(error, "ENOENT")) this.diagnostic("io", path, error);
 				}
 			}
 		}

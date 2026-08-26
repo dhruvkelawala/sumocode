@@ -5,6 +5,7 @@ import { Editor, type EditorTheme, type TUI } from "@earendil-works/pi-tui";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { spawnPiPty, spawnSumocodePty, type SpawnedPiPty } from "./spawn-pi-pty.js";
 
+// oxlint-disable-next-line no-control-regex -- intentional ESC/control-byte match to strip ANSI in captured output
 const ANSI_PATTERN = /\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\)|_[^\x07]*(?:\x07|\x1b\\))/g;
 const BRACKETED_PASTE_ENABLE = "\x1b[?2004h";
 
@@ -31,10 +32,11 @@ function stripAnsi(text: string): string {
 }
 
 function fakeTui(): TUI {
+	// SAFETY: fake supplies the requestRender/terminal surface Editor reads.
 	return {
 		requestRender: vi.fn(),
 		terminal: { columns: 80, rows: 24, setTitle: vi.fn() },
-	} as unknown as TUI;
+	} as never;
 }
 
 describe("multiline paste and newline handling", () => {

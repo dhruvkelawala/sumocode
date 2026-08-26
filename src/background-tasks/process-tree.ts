@@ -40,10 +40,32 @@ export interface ProcessTreeOperations {
 	waitForTreeEmpty(identity: ProcessTreeIdentity, timeoutMs: number, verification?: ProcessTreeVerification): Promise<boolean>;
 }
 
-function errorCode(error: unknown): string | undefined {
-	return typeof error === "object" && error !== null && "code" in error
-		? String((error as { code?: unknown }).code)
-		: undefined;
+/** JSON shape emitted by `ConvertTo-Json -Compress` for the CIM row query. */
+type PowerShellJson =
+	| string
+	| number
+	| boolean
+	| null
+	| readonly PowerShellJson[]
+	| { readonly [key: string]: PowerShellJson };
+
+function isPowerShellJsonObject(value: PowerShellJson): value is { readonly [key: string]: PowerShellJson } {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isSafeIntegerAtLeast(value: PowerShellJson, min: number): value is number {
+	return typeof value === "number" && Number.isSafeInteger(value) && value >= min;
+}
+
+function isNonEmptyString(value: PowerShellJson): value is string {
+	return typeof value === "string" && value.length > 0;
+}
+
+/** Extract the errno string (`ESRCH`, `EPERM`, ...) from a Node rejection. */
+function errorCode(error: Error): string | undefined {
+	// SAFETY: process.kill and execFile reject with NodeJS.ErrnoException, whose optional `code` holds the errno string.
+	const code = (error as NodeJS.ErrnoException).code;
+	return code === undefined || code === null ? undefined : String(code);
 }
 
 function positivePidStatus(pid: number): "alive" | "gone" | "unknown" {
@@ -51,6 +73,7 @@ function positivePidStatus(pid: number): "alive" | "gone" | "unknown" {
 		process.kill(pid, 0);
 		return "alive";
 	} catch (error) {
+		if (!(error instanceof Error)) return "unknown";
 		const code = errorCode(error);
 		if (code === "ESRCH") return "gone";
 		if (code === "EPERM") return "alive";
@@ -63,7 +86,7 @@ function posixGroupEmpty(processGroupId: number): boolean {
 		process.kill(-processGroupId, 0);
 		return false;
 	} catch (error) {
-		if (errorCode(error) === "ESRCH") return true;
+		if (error instanceof Error && errorCode(error) === "ESRCH") return true;
 		// EPERM proves the group exists. Unknown failures are conservative: never
 		// report cancellation while group emptiness is unproven.
 		return false;
@@ -83,18 +106,18 @@ function listWindowsProcesses(): WindowsProcessRow[] | undefined {
 		].join(" ");
 		const output = execFileSync("powershell.exe", ["-NoProfile", "-Command", script], { encoding: "utf8" }).trim();
 		if (!output) return [];
-		const parsed = JSON.parse(output) as unknown;
+		// SAFETY: ConvertTo-Json -Compress emits exactly one JSON value; malformed output throws and is caught below.
+		const parsed = JSON.parse(output) as PowerShellJson;
 		const values = Array.isArray(parsed) ? parsed : [parsed];
 		const rows: WindowsProcessRow[] = [];
 		for (const value of values) {
-			if (!value || typeof value !== "object") return undefined;
-			const row = value as Record<string, unknown>;
+			if (!isPowerShellJsonObject(value)) return undefined;
 			if (
-				typeof row.pid !== "number" || !Number.isSafeInteger(row.pid) || row.pid <= 0 ||
-				typeof row.parentPid !== "number" || !Number.isSafeInteger(row.parentPid) || row.parentPid < 0 ||
-				typeof row.processStartTime !== "string" || !row.processStartTime
+				!isSafeIntegerAtLeast(value.pid, 1) ||
+				!isSafeIntegerAtLeast(value.parentPid, 0) ||
+				!isNonEmptyString(value.processStartTime)
 			) return undefined;
-			rows.push({ pid: row.pid, parentPid: row.parentPid, processStartTime: row.processStartTime });
+			rows.push({ pid: value.pid, parentPid: value.parentPid, processStartTime: value.processStartTime });
 		}
 		return rows;
 	} catch {
@@ -178,7 +201,7 @@ export function captureProcessStartTime(pid: number, platform: NodeJS.Platform =
 		if (platform === "win32") {
 			return execFileSync(
 				"powershell.exe",
-				["-NoProfile", "-Command", `(Get-CimInstance Win32_Process -Filter \"ProcessId=${pid}\").CreationDate.ToUniversalTime().ToString('o')`],
+				["-NoProfile", "-Command", `(Get-CimInstance Win32_Process -Filter "ProcessId=${pid}").CreationDate.ToUniversalTime().ToString('o')`],
 				{ encoding: "utf8" },
 			).trim() || undefined;
 		}
@@ -265,7 +288,7 @@ async function rawSystemSignal(
 		process.kill(-identity.processGroupId, signal);
 		return { ok: true, gone: false };
 	} catch (error) {
-		const code = errorCode(error);
+		const code = error instanceof Error ? errorCode(error) : undefined;
 		if (code === "ESRCH") return { ok: true, gone: true };
 		// In particular, EPERM must never fall back to the positive leader PID:
 		// doing so could leave descendants alive while claiming cancellation.

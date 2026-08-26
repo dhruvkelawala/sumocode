@@ -1,16 +1,9 @@
 import { appendFileSync } from "node:fs";
 
-const PI_EVENT_INSTRUMENTED_PROPERTY = "__sumoTuiDiagnosticsPiEventsInstrumented";
-
 type DiagnosticValue = string | number | boolean | null | undefined | DiagnosticValue[] | { readonly [key: string]: DiagnosticValue };
-type DiagnosticFields = Record<string, unknown>;
+type DiagnosticFields = { readonly [key: string]: DiagnosticValue };
 
 const PREVIEW_MAX = 160;
-
-interface InstrumentablePiEventEmitter {
-	on?: unknown;
-	[PI_EVENT_INSTRUMENTED_PROPERTY]?: true;
-}
 
 function diagnosticsFile(): string | undefined {
 	const file = process.env.SUMO_TUI_DIAG_FILE;
@@ -21,16 +14,21 @@ export function isDiagnosticsEnabled(): boolean {
 	return diagnosticsFile() !== undefined;
 }
 
-function sanitizeDiagnosticValue(value: unknown): DiagnosticValue {
-	if (typeof value === "string") return value.length > PREVIEW_MAX ? `${value.slice(0, PREVIEW_MAX)}…` : value;
-	if (typeof value === "number" || typeof value === "boolean" || value === null || value === undefined) return value;
+function isDiagnosticString(value: DiagnosticValue): value is string {
+	return typeof value === "string";
+}
+
+function isScalarDiagnosticValue(value: DiagnosticValue): value is number | boolean | null | undefined {
+	return typeof value === "number" || typeof value === "boolean" || value === null || value === undefined;
+}
+
+function sanitizeDiagnosticValue(value: DiagnosticValue): DiagnosticValue {
+	if (isDiagnosticString(value)) return value.length > PREVIEW_MAX ? `${value.slice(0, PREVIEW_MAX)}…` : value;
+	if (isScalarDiagnosticValue(value)) return value;
 	if (Array.isArray(value)) return value.map((entry) => sanitizeDiagnosticValue(entry));
-	if (typeof value === "object") {
-		const next: Record<string, DiagnosticValue> = {};
-		for (const [key, entry] of Object.entries(value)) next[key] = sanitizeDiagnosticValue(entry);
-		return next;
-	}
-	return String(value);
+	const next: { [key: string]: DiagnosticValue } = {};
+	for (const [key, entry] of Object.entries(value)) next[key] = sanitizeDiagnosticValue(entry);
+	return next;
 }
 
 const diagnosticsStart = performance.now();
@@ -63,20 +61,32 @@ export function logRuntimeStart(fields: DiagnosticFields = {}): void {
 	});
 }
 
-export function instrumentPiEventEmitter(pi: unknown): void {
-	if (!isDiagnosticsEnabled()) return;
-	const target = pi as InstrumentablePiEventEmitter;
-	if (target[PI_EVENT_INSTRUMENTED_PROPERTY] || typeof target.on !== "function") return;
-	const originalOn = target.on.bind(pi) as (eventName: unknown, listener: unknown, ...args: unknown[]) => unknown;
-	target.on = (eventName: unknown, listener: unknown, ...args: unknown[]): unknown => {
-		if (typeof listener !== "function") return originalOn(eventName, listener, ...args);
-		const name = String(eventName);
-		const wrappedListener = (...listenerArgs: unknown[]): unknown => {
-			logDiagnostic("pi_event", { name });
-			return (listener as (...wrappedArgs: unknown[]) => unknown)(...listenerArgs);
-		};
-		return originalOn(eventName, wrappedListener, ...args);
+type AnyPiEventListener = (...args: never[]) => void;
+
+/**
+ * Wraps a single listener so each invocation is traced. Returns `undefined`
+ * when diagnostics are disabled so callers can skip patching entirely.
+ */
+export function createPiEventInstrumentation(): { wrap(eventName: string, listener: AnyPiEventListener): AnyPiEventListener } | undefined {
+	if (!isDiagnosticsEnabled()) return undefined;
+	const instrumented = new WeakSet<AnyPiEventListener>();
+	return {
+		wrap(eventName, listener) {
+			if (instrumented.has(listener)) return listener;
+			instrumented.add(listener);
+			// Returns the listener's result (including promises from async listeners):
+			// result-bearing gates such as the tool_call block decision flow through
+			// the instrumentation wrapper unchanged.
+			// oxlint-disable-next-line anti-slop/no-unknown-returns -- transparent instrumentation: the wrapper must pass through whatever the wrapped Pi listener returns (void, gate decision objects, or promises) without narrowing it.
+			return (...args: never[]): unknown => {
+				logDiagnostic("pi_event", { name: eventName });
+				return listener(...args);
+			};
+		},
 	};
-	target[PI_EVENT_INSTRUMENTED_PROPERTY] = true;
+}
+
+/** Emitted once per successful emitter instrumentation. */
+export function logPiEventInstrumented(): void {
 	logDiagnostic("pi_event_instrumentation", { enabled: true });
 }

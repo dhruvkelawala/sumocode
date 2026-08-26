@@ -4,7 +4,9 @@ import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { DEFAULT_SUMOCODE_CONFIG, loadSumoCodeConfig, resolveGlobalSumoCodeConfigPath, resolveSumoCodeConfigCandidates, saveSumoCodeConfigPatch } from "./sumocode-config.js";
 
-function writeJson(path: string, value: unknown): void {
+type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
+
+function writeJson(path: string, value: JsonValue): void {
 	mkdirSync(dirname(path), { recursive: true });
 	writeFileSync(path, `${JSON.stringify(value)}\n`);
 }

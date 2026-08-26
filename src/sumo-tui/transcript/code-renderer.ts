@@ -24,7 +24,11 @@ const WRAPPED_TEXT_LANGUAGES = new Set(["txt", "text", "plain", "plaintext"]);
 
 // ── Syntax highlighting ──────────────────────────────────────
 
-const KEYWORD_SETS: Record<string, ReadonlySet<string>> = {
+interface KeywordSets {
+	[lang: string]: ReadonlySet<string>;
+}
+
+const KEYWORD_SETS: KeywordSets = {
 	ts: new Set(["async", "await", "const", "let", "var", "function", "return", "if", "else", "for", "while", "do", "switch", "case", "break", "continue", "throw", "try", "catch", "finally", "class", "extends", "implements", "import", "export", "from", "default", "new", "typeof", "instanceof", "in", "of", "null", "undefined", "true", "false", "void", "type", "interface", "enum", "as", "is", "keyof", "readonly", "declare", "module", "namespace", "abstract", "private", "protected", "public", "static", "yield", "delete", "super", "this", "debugger", "with"]),
 	typescript: new Set(["async", "await", "const", "let", "var", "function", "return", "if", "else", "for", "while", "do", "switch", "case", "break", "continue", "throw", "try", "catch", "finally", "class", "extends", "implements", "import", "export", "from", "default", "new", "typeof", "instanceof", "in", "of", "null", "undefined", "true", "false", "void", "type", "interface", "enum", "as", "is", "keyof", "readonly", "declare", "module", "namespace", "abstract", "private", "protected", "public", "static", "yield", "delete", "super", "this", "debugger", "with"]),
 	js: new Set(["async", "await", "const", "let", "var", "function", "return", "if", "else", "for", "while", "do", "switch", "case", "break", "continue", "throw", "try", "catch", "finally", "class", "extends", "import", "export", "from", "default", "new", "typeof", "instanceof", "in", "of", "null", "undefined", "true", "false", "void", "yield", "delete", "super", "this", "debugger", "with"]),
@@ -117,7 +121,8 @@ function highlightLine(line: string, lang: string, roles: CodeRoles): SyntaxSpan
 			while (j < line.length && /[a-zA-Z0-9_$]/.test(line[j]!)) j += 1;
 			const word = line.slice(i, j);
 			const after = line.slice(j);
-				if (KEYWORD_SETS[lang]?.has(word)) {
+				const keywords: ReadonlySet<string> | undefined = KEYWORD_SETS[lang];
+				if (keywords?.has(word)) {
 				pushColored(word, kw);
 			} else if (isFunctionCall(after)) {
 				pushColored(word, fn);
@@ -204,7 +209,7 @@ function wrappedCodeBodyRows(
 	roles: CodeRoles,
 	maxRows: number,
 	gutterWidth: number,
-): { rows: string[]; truncated: boolean } {
+) {
 	if (maxRows <= 0) return { rows: [], truncated: true };
 	const sourceWidth = Math.max(1, width - 4 - gutterWidth);
 	const source = textLine(bodySpans);

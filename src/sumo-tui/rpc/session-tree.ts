@@ -1,6 +1,6 @@
 import { collapseImagePathsForDisplay } from "../transcript/view-model.js";
 import { isBackgroundTaskWakeMessage } from "../../background-tasks/task-types.js";
-import type { SessionEntryLike } from "./session-reader.js";
+import type { SessionEntryLike, SessionEntryValue } from "./session-reader.js";
 
 export interface SessionTreeNode {
 	readonly entry: SessionEntryLike;
@@ -27,6 +27,14 @@ function timestampValue(value: string): number {
 	return Number.isNaN(timestamp) ? Number.POSITIVE_INFINITY : timestamp;
 }
 
+function isEntryString(value: SessionEntryValue | undefined): value is string {
+	return typeof value === "string";
+}
+
+function isTextBlock(block: SessionEntryValue): block is { type: "text"; text: string } {
+	return typeof block === "object" && block !== null && !Array.isArray(block) && block["type"] === "text" && typeof block["text"] === "string";
+}
+
 /** Build the session tree from flat file-order entries without recursion. */
 export function buildSessionTreeFromEntries(entries: readonly SessionEntryLike[]): SessionTreeNode[] {
 	const nodeMap = new Map<string, MutableNode>();
@@ -39,8 +47,8 @@ export function buildSessionTreeFromEntries(entries: readonly SessionEntryLike[]
 		fileOrder.set(entry.id, index);
 		nodeMap.set(entry.id, { entry, children: [] });
 		if (entry.type === "label") {
-			const targetId = typeof entry.targetId === "string" ? entry.targetId : undefined;
-			const label = typeof entry.label === "string" ? entry.label : undefined;
+			const targetId = isEntryString(entry.targetId) ? entry.targetId : undefined;
+			const label = isEntryString(entry.label) ? entry.label : undefined;
 			if (targetId) {
 				if (label) {
 					labelsById.set(targetId, label);
@@ -107,14 +115,16 @@ export function buildSessionTreeFromEntries(entries: readonly SessionEntryLike[]
 }
 
 export function treeEntryRoleAndText(entry: SessionEntryLike): { role: string; text: string } | undefined {
-	const message = entry.message as { role?: unknown; content?: unknown } | undefined;
-	if (!message || typeof message !== "object" || typeof message.role !== "string") return undefined;
+	// SAFETY: session entries are untyped JSON from Pi's own writer; the
+	// message payload is validated field-by-field below.
+	const message = entry.message as { role?: SessionEntryValue; content?: SessionEntryValue } | undefined;
+	if (!message || !isEntryString(message.role)) return undefined;
 	const content = message.content;
-	const text = typeof content === "string"
+	const text = isEntryString(content)
 		? content
 		: Array.isArray(content)
 			? content
-				.filter((block): block is { type: string; text: string } => typeof block === "object" && block !== null && (block as { type?: unknown }).type === "text" && typeof (block as { text?: unknown }).text === "string")
+				.filter(isTextBlock)
 				.map((block) => block.text)
 				.join(" ")
 			: "";
@@ -237,7 +247,7 @@ export function treeRowTimestamp(entry: SessionEntryLike, now: Date = new Date()
 export function entryTimestampsFromEntries(entries: readonly SessionEntryLike[]): Map<string, string> {
 	const map = new Map<string, string>();
 	for (const entry of entries) {
-		if (typeof entry.id === "string" && typeof entry.timestamp === "string") map.set(entry.id, entry.timestamp);
+		if (isEntryString(entry.id) && isEntryString(entry.timestamp)) map.set(entry.id, entry.timestamp);
 	}
 	return map;
 }

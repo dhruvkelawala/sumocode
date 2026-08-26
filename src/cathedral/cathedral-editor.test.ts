@@ -7,6 +7,7 @@ import {
 	normalizeRawMultilinePasteInput,
 } from "./cathedral-editor.js";
 
+// oxlint-disable-next-line no-control-regex -- intentional ESC byte match for terminal control sequences
 const ANSI_PATTERN = /\u001b\[[0-9;]*m/g;
 const stripAnsi = (value: string): string => value.replace(ANSI_PATTERN, "");
 

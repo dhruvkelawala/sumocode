@@ -27,14 +27,6 @@ const CAT_HTML_LINES = ansToHTMLLines(resolve(repoRoot, "src/assets/sumo-face.an
 const rep = (ch, n) => ch.repeat(n);
 const visibleLen = (s) =>
 	s.replace(/<[^>]+>/g, "").replace(/&gt;/g, ">").replace(/&lt;/g, "<").replace(/&amp;/g, "&").replace(/&nbsp;/g, " ").length;
-const padRight = (s, n) => {
-	const need = n - visibleLen(s);
-	return need > 0 ? s + rep(" ", need) : s;
-};
-const padLeft = (s, n) => {
-	const need = n - visibleLen(s);
-	return need > 0 ? rep(" ", need) + s : s;
-};
 const center = (s, n) => {
 	const need = n - visibleLen(s);
 	if (need <= 0) return s;
@@ -42,8 +34,6 @@ const center = (s, n) => {
 	const right = need - left;
 	return rep(" ", left) + s + rep(" ", right);
 };
-const row = (h) => padRight(h, 0); // joined later
-
 // Cat is the REAL production rendered output (truecolor chafa).
 // Loaded from src/assets/sumo-face.ans via CAT_HTML_LINES above.
 
@@ -86,8 +76,6 @@ const SPLASH_THINKING_LEVEL = "high";
 
 // ─── Build splash content rows for given dimensions ─────────────────────
 function buildSplash({ cols, rows: totalRows, placeholderIndex = 0 }) {
-	const lines = [];
-
 	// 1. Cat hero — center horizontally. Each line is already an HTML
 	// fragment with inline color spans (from chafa truecolor output).
 	// Visible width is 24 cells per the source asset.

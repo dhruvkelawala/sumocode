@@ -58,7 +58,8 @@ describe("Activity renderer", () => {
 	});
 
 	it("renders unknown tool output, error, and redacted invocation instead of a contentless fallback", () => {
-		const invocation: Record<string, unknown> = { query: "sumo", apiKey: "hidden", nested: { password: "hidden-too" } };
+		interface CyclicInvocation { query: string; apiKey: string; nested: { password: string }; self?: unknown }
+		const invocation: CyclicInvocation = { query: "sumo", apiKey: "hidden", nested: { password: "hidden-too" } };
 		invocation.self = invocation;
 		const projected = projectPiToolActivity({
 			id: "custom-1",

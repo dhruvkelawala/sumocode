@@ -15,6 +15,7 @@ import {
 	WorkingIndicatorComponent,
 } from "./working-indicator.js";
 
+// oxlint-disable-next-line no-control-regex -- intentional ESC/control-byte match to strip ANSI in captured output
 const ANSI_PATTERN = /\u001b\[[0-9;]*m/g;
 const stripAnsi = (s: string): string => s.replace(ANSI_PATTERN, "");
 
@@ -66,7 +67,9 @@ describe("renderIndicator", () => {
 		const raw = CATHEDRAL_INDICATOR_FRAMES[0];
 
 		expect(output).toContain(raw);
+		// oxlint-disable-next-line no-control-regex -- intentional ESC/control-byte match to strip ANSI in captured output
 		expect(output).toMatch(/\u001b\[38;2;\d+;\d+;\d+m/);
+		// oxlint-disable-next-line no-control-regex -- intentional ESC/control-byte match to strip ANSI in captured output
 		expect(output).toMatch(/\u001b\[0m$/);
 	});
 

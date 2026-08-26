@@ -5,7 +5,12 @@ import { describe, expect, it } from "vitest";
 import { readAuthoritativeSessionSnapshot } from "./session-snapshot.js";
 import type { SessionEntryLike } from "./session-reader.js";
 
-function diskFile(entries: readonly SessionEntryLike[], sessionId = "session-1"): { dir: string; file: string } {
+interface DiskFileFixture {
+	dir: string;
+	file: string;
+}
+
+function diskFile(entries: readonly SessionEntryLike[], sessionId = "session-1"): DiskFileFixture {
 	const dir = mkdtempSync(join(tmpdir(), "sumocode-session-snapshot-"));
 	const file = join(dir, "session.jsonl");
 	writeFileSync(file, [

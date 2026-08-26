@@ -17,6 +17,7 @@ import {
 	type CommandPaletteSnapshot,
 } from "./command-palette.js";
 
+// oxlint-disable-next-line no-control-regex -- intentional ESC/control-byte match to strip ANSI in captured output
 const ANSI = /\u001b\[[0-9;]*m/g;
 
 function plain(lines: string[]): string[] {
@@ -36,7 +37,7 @@ describe("renderCommandPalette", () => {
 	it("places the caret cell AFTER the typed query, and before the placeholder when empty", () => {
 		// Both panelLine's bg paint (index 0) and the caret cell use 48;2; — the
 		// caret is the SECOND such escape on the line.
-		const caretIndex = (line: string): number => [...line.matchAll(/\u001b\[48;2;/g)][1]?.index ?? -1;
+		const caretIndex = (line: string): number => [...line.matchAll(/\u001b\[48;2;/g)][1]?.index ?? -1; // oxlint-disable-line no-control-regex -- intentionally matching ANSI 48;2; escape sequences in a render test.
 		const searchLine = (query: string) => renderCommandPalette(snapshot({ searchQuery: query }), 80).find((line) => line.includes("\u276f"))!;
 
 		const typed = searchLine("res");
@@ -150,6 +151,7 @@ describe("installCommandPalette", () => {
 	it("registers Ctrl+/ for the palette without stealing Pi/TUI built-in model/editing shortcuts", () => {
 		const registerShortcut = vi.fn();
 		const registerCommand = vi.fn();
+		// SAFETY: the double supplies the registerShortcut/registerCommand surface the installer reads.
 		installCommandPalette({ registerShortcut, registerCommand } as never);
 
 		expect(registerCommand).not.toHaveBeenCalled();
@@ -160,11 +162,18 @@ describe("installCommandPalette", () => {
 	});
 
 	it("Ctrl+/ opens a centered 80-col overlay", async () => {
-		let handler: ((ctx: unknown) => Promise<void> | void) | undefined;
+		interface PaletteTestCtx {
+			hasUI: boolean;
+			ui: { custom(...args: unknown[]): Promise<undefined>; theme: { name: string } };
+			sessionManager: { getSessionName(): string; getSessionId(): string };
+			model: { id: string };
+		}
+		let handler: ((ctx: PaletteTestCtx) => Promise<void> | void) | undefined;
 		const registerShortcut = vi.fn((key: string, options: { handler: typeof handler }) => {
 			if (key === COMMAND_PALETTE_SHORTCUT) handler = options.handler;
 		});
 		const registerCommand = vi.fn();
+		// SAFETY: the double supplies the registerShortcut/registerCommand/getThinkingLevel surface the installer reads.
 		installCommandPalette({
 			registerShortcut,
 			registerCommand,
@@ -177,7 +186,7 @@ describe("installCommandPalette", () => {
 			ui: { custom, theme: { name: "cathedral" } },
 			sessionManager: { getSessionName: () => "refactor-auth-flow", getSessionId: () => "019dcbf5" },
 			model: { id: "claude-opus-4-7" },
-		} as never);
+		});
 
 		expect(custom).toHaveBeenCalledWith(expect.any(Function), {
 			overlay: true,
@@ -190,6 +199,7 @@ describe("buildPaletteSnapshot", () => {
 	afterEach(() => resetThemeRegistryForTests());
 
 	it("builds current values from context", () => {
+		// SAFETY: the double supplies the session/model/thinking/theme surface the snapshot reads.
 		const snap = buildPaletteSnapshot({
 			sessionManager: { getSessionName: () => "refactor-auth-flow", getSessionId: () => "019dcbf5" },
 			model: { id: "claude-opus-4-7" },
@@ -216,6 +226,7 @@ describe("buildPaletteSnapshot", () => {
 		const result = setActiveTheme("obsidian");
 		expect(result.success).toBe(true);
 
+		// SAFETY: the double supplies the session/model/thinking/theme surface the snapshot reads.
 		const snap = buildPaletteSnapshot({
 			sessionManager: { getSessionName: () => "any-session", getSessionId: () => "abc" },
 			model: { id: "claude-opus-4-7" },
@@ -234,6 +245,7 @@ describe("handlePaletteSelection", () => {
 		const setModel = vi.fn();
 		// showDivineQuery calls ctx.ui.custom — mock it to return the index of the selected model
 		const custom = vi.fn(() => Promise.resolve(1)); // index 1 = claude-sonnet-4-5
+		// SAFETY: the doubles supply the modelRegistry/ui surface and the setModel call sink.
 		await handlePaletteSelection("MODEL", {
 			modelRegistry: { getAvailable: () => [{ id: "claude-opus-4-7" }, selectedModel] },
 			ui: { custom },
@@ -247,6 +259,7 @@ describe("handlePaletteSelection", () => {
 		const setThinkingLevel = vi.fn();
 		// showDivineQuery calls ctx.ui.custom — mock returns index 5 = "xhigh"
 		const custom = vi.fn(() => Promise.resolve(5));
+		// SAFETY: the doubles supply the ui surface and the setThinkingLevel call sink.
 		await handlePaletteSelection("THINKING", { ui: { custom } } as never, { setThinkingLevel } as never);
 		expect(custom).toHaveBeenCalled();
 		expect(setThinkingLevel).toHaveBeenCalledWith("xhigh");
@@ -254,6 +267,7 @@ describe("handlePaletteSelection", () => {
 
 	it("SETTINGS opens Pi settings through the command editor", async () => {
 		const setEditorText = vi.fn();
+		// SAFETY: the doubles supply the ui surface and an empty call sink for SETTINGS.
 		await handlePaletteSelection("SETTINGS", { ui: { setEditorText } } as never, {} as never);
 		expect(setEditorText).toHaveBeenCalledWith("/settings");
 	});

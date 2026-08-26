@@ -18,7 +18,9 @@ interface HerdrPaneListResult { panes?: HerdrPaneInfo[] }
 
 function parseEnvelope<T>(stdout: string): HostResult<T> {
 	try {
+		// SAFETY: malformed herdr CLI output rejects into the catch below.
 		const parsed = JSON.parse(stdout) as HerdrEnvelope;
+		// SAFETY: callers pass T matching the documented herdr envelope result shape.
 		return { ok: true, ...(parsed.result as T) };
 	} catch {
 		return { ok: false, error: `Malformed herdr JSON: ${stdout.trim() || "<empty>"}` };
@@ -33,6 +35,7 @@ const execFailure = (operation: string, result: { code: number; stderr: string; 
 function parseHerdrError(result: { stderr: string; stdout: string }): { code?: string; message?: string } | undefined {
 	for (const text of [result.stderr, result.stdout]) {
 		try {
+			// SAFETY: non-JSON stream content rejects into the catch below.
 			const parsed = JSON.parse(text) as HerdrErrorEnvelope;
 			if (parsed.error) return parsed.error;
 		} catch {

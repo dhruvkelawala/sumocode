@@ -2,6 +2,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { BUILT_IN_ROLES } from "../subagents/roles.js";
 import { registerRolesCommand, runRolesCommand, writeRolesFile, type RolesCommandDeps, type RolesFileMutation } from "./roles.js";
 import type { SearchPaletteOptions } from "./roles-palette.js";
@@ -147,11 +148,13 @@ function queuedPalette(selections: Array<string | undefined>, calls: SearchPalet
 		const calls: SearchPaletteOptions[] = [];
 		let thinking: "high" | undefined;
 		const write = vi.fn((mutation: RolesFileMutation) => {
-			if (mutation.kind === "set" && mutation.field === "thinking") thinking = mutation.value as "high";
+			if (mutation.kind !== "set" || mutation.field !== "thinking") return;
+			// SAFETY: the test only ever writes a "high" thinking value, so the cast is checked by construction.
+			thinking = mutation.value as "high";
 		});
 		await runRolesCommand(commandDeps({
 			loadRoles: () => ({
-				roles: [{ ...research, ...(thinking ? { thinking } : {}) }],
+				roles: [thinking === undefined ? research : { ...research, thinking }],
 				warnings: [],
 			}),
 			showPalette: queuedPalette(["role:research", "field:research:thinking", "high", undefined, undefined], calls),
@@ -261,20 +264,22 @@ describe("writeRolesFile", () => {
 	});
 
 	it("routes the RPC palette path through ctx.ui.select (custom() is a documented rpc no-op)", async () => {
-		let handler: ((args: string, ctx: unknown) => Promise<void>) | undefined;
+		let handler: ((args: string, ctx: ExtensionContext) => Promise<void>) | undefined;
 		const registerCommand = vi.fn((_name: string, options: { handler: typeof handler }) => {
 			handler = options.handler;
 		});
+		// SAFETY: the commandHost double carries only registerCommand, the surface registerRolesCommand reads.
 		registerRolesCommand({ registerCommand } as never);
 		const custom = vi.fn(async () => undefined);
 		const select = vi.fn(async () => undefined);
 
+		// SAFETY: the ctx double carries only the fields the roles command reads in rpc mode.
 		await handler?.("", {
 			hasUI: true,
 			mode: "rpc",
 			ui: { custom, select, input: vi.fn(), notify: vi.fn() },
 			modelRegistry: { getAvailable: () => [] },
-		});
+		} as never);
 
 		expect(select).toHaveBeenCalledTimes(1);
 		expect(custom).not.toHaveBeenCalled();

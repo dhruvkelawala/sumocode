@@ -147,7 +147,6 @@ const ALL_TAGS = /<\/?[^>]+>/g;
 const HTML_ENTITY = /&(amp|lt|gt|quot|#39|#x27|nbsp);/g;
 const ENTITY_MAP = { amp: "&", lt: "<", gt: ">", quot: '"', "#39": "'", "#x27": "'", nbsp: " " };
 
-function decodeEntity(_, e) { return ENTITY_MAP[e] ?? _; }
 
 function colorFromStyle(style) {
 	const varMatch = style.match(/(?:^|;)\s*color:\s*var\((--[a-zA-Z0-9-]+)\)/);

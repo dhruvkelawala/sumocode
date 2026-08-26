@@ -8,11 +8,21 @@ import { bufferToAnsiLines } from "../render/ansi-writer.js";
 import { CellBuffer } from "../render/buffer.js";
 import { composite } from "../render/compositor.js";
 import { ChatPager } from "../widgets/chat-pager.js";
-import { ChatViewportController, installChatViewportBridge, textFromAgentMessage, type ChatViewportHost, type ChatViewportRuntime } from "./chat-viewport-controller.js";
+import {
+	ChatViewportController,
+	installChatViewportBridge,
+	textFromAgentMessage,
+	type ChatViewportHost,
+	type ChatViewportRuntime,
+	type ForeignChatComponent,
+} from "./chat-viewport-controller.js";
+/* oxlint-disable anti-slop/no-chained-type-assertions -- test doubles cast minimal stub objects to Pi context types. */
+/* oxlint-disable anti-slop/require-safety-comment-for-type-assertion -- stub shape is exercised by the assertions below. */
 
+// oxlint-disable-next-line no-control-regex -- intentional ESC byte match to strip ANSI styling from rendered fixture lines
 const ANSI_PATTERN = /\u001b\[[0-9;]*m/g;
 
-function rows(count: number): { render(width: number): string[] } {
+function rows(count: number) {
 	return { render: (_width: number) => Array.from({ length: count }, () => "chrome") };
 }
 
@@ -917,7 +927,7 @@ describe("ChatViewportController", () => {
 			ui: { terminal: { rows: 24, columns: 120 }, requestRender: vi.fn() },
 			chatContainer: {
 				children: [] as unknown[],
-				addChild(child: unknown) {
+				addChild(child: ForeignChatComponent) {
 					this.children.push(child);
 				},
 				render: vi.fn(() => []),
@@ -957,7 +967,7 @@ describe("ChatViewportController", () => {
 			ui: { terminal: { rows: 24, columns: 120 }, requestRender: vi.fn() },
 			chatContainer: {
 				children: [] as unknown[],
-				addChild(child: unknown) {
+				addChild(child: ForeignChatComponent) {
 					this.children.push(child);
 				},
 				render: vi.fn(() => []),

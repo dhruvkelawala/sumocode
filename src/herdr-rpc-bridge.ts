@@ -8,7 +8,28 @@ const DISPLAY_AGENT = "sumocode";
 const STATE_RETRY_DELAY_MS = 2_000;
 
 type AgentState = "working" | "blocked" | "idle";
-type SendRequestAttempt = (request: unknown, timeoutMs: number) => Promise<boolean>;
+/** Wire request for Herdr's `pane.report_*` socket methods. */
+interface HerdrSocketRequest {
+	readonly id: string;
+	readonly method: string;
+	readonly params: HerdrRequestParams;
+}
+
+/** Params shared by the `pane.*` methods this bridge sends. */
+interface HerdrRequestParams {
+	readonly pane_id: string;
+	readonly source: string;
+	readonly agent: string;
+	readonly seq?: number;
+	readonly state?: AgentState;
+	readonly message?: string | undefined;
+	readonly session_start_source?: string | undefined;
+	readonly agent_session_path?: string;
+	readonly agent_session_id?: string;
+	readonly display_agent?: string;
+}
+
+type SendRequestAttempt = (request: HerdrSocketRequest, timeoutMs: number) => Promise<boolean>;
 
 interface QueuedState {
 	readonly state: AgentState;
@@ -33,7 +54,7 @@ function socketEndpoint(path: string): string {
 	return process.platform === "win32" ? `\\\\.\\pipe\\${path}` : path;
 }
 
-function sendSocketRequestAttempt(path: string, request: unknown, timeoutMs: number): Promise<boolean> {
+function sendSocketRequestAttempt(path: string, request: HerdrSocketRequest, timeoutMs: number): Promise<boolean> {
 	return new Promise((resolve) => {
 		let settled = false;
 		let timeout: ReturnType<typeof setTimeout> | undefined;
@@ -54,21 +75,31 @@ function sendSocketRequestAttempt(path: string, request: unknown, timeoutMs: num
 	});
 }
 
-async function sendRequest(attempt: SendRequestAttempt, request: unknown): Promise<boolean> {
+async function sendRequest(attempt: SendRequestAttempt, request: HerdrSocketRequest): Promise<boolean> {
 	if (await attempt(request, 500)) return true;
 	return attempt(request, 1500);
 }
 
-function sessionRef(ctx: SessionContext): { agent_session_path?: string; agent_session_id?: string } {
+interface SessionRef {
+	agent_session_path?: string;
+	agent_session_id?: string;
+}
+
+const isAbsolutePath = (value: string | undefined): value is string =>
+	typeof value === "string" && value.startsWith("/");
+const isNonEmptyString = (value: string | undefined): value is string =>
+	typeof value === "string" && value.length > 0;
+
+function sessionRef(ctx: SessionContext): SessionRef {
 	try {
 		const path = ctx.sessionManager?.getSessionFile?.();
-		if (typeof path === "string" && path.startsWith("/")) return { agent_session_path: path };
+		if (isAbsolutePath(path)) return { agent_session_path: path };
 	} catch {
 		// Fall through to the session id when Pi cannot expose its file.
 	}
 	try {
 		const id = ctx.sessionManager?.getSessionId?.();
-		if (typeof id === "string" && id.length > 0) return { agent_session_id: id };
+		if (isNonEmptyString(id)) return { agent_session_id: id };
 	} catch {
 		// A lifecycle update without a session ref can still publish state.
 	}
@@ -87,7 +118,7 @@ export function installHerdrRpcBridge(pi: ExtensionAPI, options: HerdrRpcBridgeO
 	if (env.SUMOCODE_RPC_CHILD !== "1" || env.HERDR_ENV !== "1" || !paneId || !path) return;
 
 	const attempt = options.sendRequestAttempt ?? ((request, timeoutMs) => sendSocketRequestAttempt(path, request, timeoutMs));
-	const send = (request: unknown) => sendRequest(attempt, request);
+	const send = (request: HerdrSocketRequest) => sendRequest(attempt, request);
 	let seq = Date.now() * 1000;
 	let active = false;
 	let blockedCount = 0;
@@ -133,7 +164,7 @@ export function installHerdrRpcBridge(pi: ExtensionAPI, options: HerdrRpcBridgeO
 		},
 	});
 
-	let displayRequest: unknown | undefined;
+	let displayRequest: HerdrSocketRequest | undefined;
 	let displaySendInFlight = false;
 	let displayRetryTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -174,19 +205,18 @@ export function installHerdrRpcBridge(pi: ExtensionAPI, options: HerdrRpcBridgeO
 	let sendInFlight = false;
 	let stateRetryTimer: ReturnType<typeof setTimeout> | undefined;
 
-	const sendState = (state: QueuedState) => send({
-		id: requestId("state"),
-		method: "pane.report_agent",
-		params: {
+	const sendState = (state: QueuedState) => {
+		const params: HerdrRequestParams = {
 			pane_id: paneId,
 			source: SOURCE,
 			agent: AGENT,
 			state: state.state,
 			message: state.message,
 			seq: state.seq,
-			...(currentContext ? sessionRef(currentContext) : {}),
-		},
-	});
+		};
+		if (currentContext) Object.assign(params, sessionRef(currentContext));
+		return send({ id: requestId("state"), method: "pane.report_agent", params });
+	};
 
 	const scheduleStateRetry = (): void => {
 		if (stopped || stateRetryTimer !== undefined || queuedStates.length === 0) return;
@@ -229,8 +259,12 @@ export function installHerdrRpcBridge(pi: ExtensionAPI, options: HerdrRpcBridgeO
 		void drainStateQueue();
 	};
 
+	// SAFETY: the Pi runtime exposes an events bus with an optional on() registrar.
+	// oxlint-disable-next-line anti-slop/no-unknown-parameters -- untyped Pi events surface; the payload is decoded defensively in the handler
 	const eventBus = pi.events as { on?: (name: string, handler: (data: unknown) => void) => void } | undefined;
-	eventBus?.on?.("herdr:blocked", (data: unknown) => {
+	eventBus?.on?.("herdr:blocked", (data) => {
+		// SAFETY: decode of a cross-process payload; non-object payloads are ignored.
+		// oxlint-disable-next-line anti-slop/no-runtime-typeof -- boundary decode of an untyped IPC payload
 		const report = typeof data === "object" && data !== null ? data as { active?: boolean; label?: string } : undefined;
 		if (report?.active) {
 			blockedCount += 1;
@@ -243,6 +277,8 @@ export function installHerdrRpcBridge(pi: ExtensionAPI, options: HerdrRpcBridgeO
 	});
 
 	pi.on("session_start", async (event, ctx) => {
+		// SAFETY: Pi's session context is the same shape the bridge reads; only
+		// isIdle/reason members are accessed below.
 		currentContext = ctx as SessionContext;
 		active = ctx.isIdle?.() === false;
 		await reportSession(currentContext, event.reason);
@@ -250,12 +286,16 @@ export function installHerdrRpcBridge(pi: ExtensionAPI, options: HerdrRpcBridgeO
 		publishState(true);
 	});
 	pi.on("agent_start", (_event, ctx) => {
+		// SAFETY: Pi's agent context is the same shape the bridge reads; only
+		// isIdle members are accessed below.
 		currentContext = ctx as SessionContext;
 		active = true;
 		void reportSession(currentContext);
 		void publishState();
 	});
 	pi.on("agent_settled", (_event, ctx) => {
+		// SAFETY: Pi's agent context is the same shape the bridge reads; only
+		// isIdle members are accessed below.
 		currentContext = ctx as SessionContext;
 		if (ctx.isIdle?.() !== true) return;
 		active = false;

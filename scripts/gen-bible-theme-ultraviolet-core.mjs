@@ -219,7 +219,7 @@ function buildTopBar() {
 function buildScene(kind, title) {
 	const middleRows = ROWS - 11;
 	const chatKind = kind === "runcat-active" ? "active" : kind;
-	const chatRows = buildChatRows(chatKind).map((row) => typeof row === "string" ? row : row).slice(0, middleRows);
+	const chatRows = buildChatRows(chatKind).slice(0, middleRows);
 	while (chatRows.length < middleRows) chatRows.push("");
 	// Two-cell gap after the glyph (labelGapCells: 2 — the icomoon cat overdraws its cell).
 	if (kind === "runcat-active") chatRows[middleRows - 1] = ` <span class="fg-accent runcat-glyph"></span>  <span class="fg-dim">Working…</span>`;

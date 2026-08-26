@@ -37,6 +37,8 @@ export interface ActivityStore {
 	dispose(): void;
 }
 
+type MutableActivityUiDocument = { -readonly [K in keyof ActivityUiDocument]: ActivityUiDocument[K] };
+
 interface ActivityUiDocument {
 	readonly schemaVersion: typeof ACTIVITY_SCHEMA_VERSION;
 	readonly ownerSessionId: string;
@@ -55,12 +57,40 @@ export interface FileActivityStoreOptions {
 	readonly onDiagnostic?: (diagnostic: ActivityFeedDiagnostic) => void;
 }
 
+// oxlint-disable anti-slop/no-unknown-parameters, anti-slop/no-unsafe-dictionary-type -- durable UI-state parser boundary: persisted documents are untrusted JSON,
+// so `unknown` inputs and open records are this module's parsing contract.
 function positiveInteger(value: unknown): value is number {
 	return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
 }
 
+function isBooleanValue(value: unknown): value is boolean {
+	return typeof value === "boolean";
+}
+
+function isRecordLike(value: unknown): value is Record<string, unknown> {
+	return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
 function recordOf(value: unknown): Record<string, unknown> | undefined {
-	return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+	return isRecordLike(value) ? value : undefined;
+}
+
+/** Writable mirror used to assemble store snapshots field-by-field. */
+type ActivityStoreState = Omit<ActivityStoreSnapshot, "revision">;
+type MutableActivityStoreState = { -readonly [K in keyof ActivityStoreState]: ActivityStoreState[K] };
+
+/** Assemble snapshot state with the canonical key order (ownerSessionId first). */
+function storeState(
+	ownerSessionId: string | undefined,
+	activities: readonly ActivitySnapshot[],
+	expansion: Readonly<Record<string, boolean>>,
+	defaultExpansion: boolean | undefined,
+): MutableActivityStoreState {
+	const optionalLeading: Pick<Partial<MutableActivityStoreState>, "ownerSessionId"> = {};
+	if (ownerSessionId !== undefined) optionalLeading.ownerSessionId = ownerSessionId;
+	const state: MutableActivityStoreState = { ...optionalLeading, activities, expansion };
+	if (defaultExpansion !== undefined) state.defaultExpansion = defaultExpansion;
+	return state;
 }
 
 function validExpansionId(id: string): boolean {
@@ -73,26 +103,31 @@ function parseUiDocument(value: unknown, ownerSessionId: string): ActivityUiDocu
 	if (
 		!record || record.schemaVersion !== ACTIVITY_SCHEMA_VERSION || record.ownerSessionId !== ownerSessionId ||
 		!positiveInteger(record.revision) || !positiveInteger(record.updatedAt) || !expansionRecord ||
-		!(record.defaultExpansion === undefined || typeof record.defaultExpansion === "boolean")
+		!(record.defaultExpansion === undefined || isBooleanValue(record.defaultExpansion))
 	) return undefined;
-	const entries = Object.entries(expansionRecord);
-	if (entries.some(([id, expanded]) => !validExpansionId(id) || typeof expanded !== "boolean")) return undefined;
-	return {
+	const entries = Object.entries(expansionRecord).sort(([left], [right]) => left.localeCompare(right));
+	const expansion: Record<string, boolean> = {};
+	for (const [id, expanded] of entries) {
+		if (!validExpansionId(id) || !isBooleanValue(expanded)) return undefined;
+		expansion[id] = expanded;
+	}
+	const document: MutableActivityUiDocument = {
 		schemaVersion: ACTIVITY_SCHEMA_VERSION,
 		ownerSessionId,
 		revision: record.revision,
 		updatedAt: record.updatedAt,
-		expansion: Object.fromEntries(entries.sort(([left], [right]) => left.localeCompare(right))) as Record<string, boolean>,
-		...(typeof record.defaultExpansion === "boolean" ? { defaultExpansion: record.defaultExpansion } : {}),
+		expansion,
 	};
+	if (isBooleanValue(record.defaultExpansion)) document.defaultExpansion = record.defaultExpansion;
+	return document;
 }
 
 function immutable<T>(value: T): T {
 	const seen = new WeakSet<object>();
-	const freeze = (candidate: unknown): void => {
-		if (!candidate || typeof candidate !== "object" || seen.has(candidate)) return;
+	const freeze = <T>(candidate: T): void => {
+		if (!candidate || !(candidate instanceof Object) || seen.has(candidate)) return;
 		seen.add(candidate);
-		for (const child of Object.values(candidate as Record<string, unknown>)) freeze(child);
+		for (const child of Object.values(candidate)) freeze(child);
 		Object.freeze(candidate);
 	};
 	freeze(value);
@@ -167,12 +202,7 @@ export class FileActivityStore implements ActivityStore {
 		if (ownerSessionId && this.ensurePaths(generation, ownerSessionId)) {
 			this.reload(generation, ownerSessionId);
 		}
-		this.apply({
-			...(ownerSessionId ? { ownerSessionId } : {}),
-			activities: this.feedActivities,
-			expansion: this.uiExpansion,
-			...(this.defaultExpansion === undefined ? {} : { defaultExpansion: this.defaultExpansion }),
-		});
+		this.apply(storeState(ownerSessionId, this.feedActivities, this.uiExpansion, this.defaultExpansion));
 		if (ownerSessionId) this.startObservation(generation, ownerSessionId);
 		return this.snapshot;
 	}
@@ -263,14 +293,14 @@ export class FileActivityStore implements ActivityStore {
 				const unchanged = JSON.stringify(next.expansion) === JSON.stringify(current?.expansion ?? {}) &&
 					next.defaultExpansion === current?.defaultExpansion;
 				if (unchanged && current) return current;
-				const document: ActivityUiDocument = {
+				const document: MutableActivityUiDocument = {
 					schemaVersion: ACTIVITY_SCHEMA_VERSION,
 					ownerSessionId,
 					revision: (current?.revision ?? 0) + 1,
 					updatedAt: Math.max(current?.updatedAt ?? 0, Math.max(1, Math.floor(this.now()))),
 					expansion: next.expansion,
-					...(next.defaultExpansion === undefined ? {} : { defaultExpansion: next.defaultExpansion }),
 				};
+				if (next.defaultExpansion !== undefined) document.defaultExpansion = next.defaultExpansion;
 				if (Buffer.byteLength(`${JSON.stringify(document, null, 2)}\n`, "utf8") > ACTIVITY_UI_MAX_BYTES) {
 					throw new Error(`Activity UI document exceeds ${ACTIVITY_UI_MAX_BYTES} bytes`);
 				}
@@ -284,12 +314,7 @@ export class FileActivityStore implements ActivityStore {
 		this.uiKnownGood = true;
 		this.uiExpansion = committed.expansion;
 		this.defaultExpansion = committed.defaultExpansion;
-		this.apply({
-			ownerSessionId,
-			activities: this.feedActivities,
-			expansion: committed.expansion,
-			...(committed.defaultExpansion === undefined ? {} : { defaultExpansion: committed.defaultExpansion }),
-		});
+		this.apply(storeState(ownerSessionId, this.feedActivities, committed.expansion, committed.defaultExpansion));
 	}
 
 	private protectedExpansionKeys(): ReadonlySet<string> {
@@ -349,12 +374,7 @@ export class FileActivityStore implements ActivityStore {
 		if (!this.ensurePaths(generation, ownerSessionId)) return;
 		this.ensureWatcher(generation, ownerSessionId);
 		this.reload(generation, ownerSessionId);
-		this.apply({
-			ownerSessionId,
-			activities: this.feedActivities,
-			expansion: this.uiExpansion,
-			...(this.defaultExpansion === undefined ? {} : { defaultExpansion: this.defaultExpansion }),
-		});
+		this.apply(storeState(ownerSessionId, this.feedActivities, this.uiExpansion, this.defaultExpansion));
 	}
 
 	private reload(generation: number, ownerSessionId: string): void {
@@ -405,13 +425,13 @@ export class FileActivityStore implements ActivityStore {
 		}
 	}
 
-	private apply(next: Omit<ActivityStoreSnapshot, "revision">): void {
-		const currentWithoutRevision = {
-			...(this.snapshot.ownerSessionId ? { ownerSessionId: this.snapshot.ownerSessionId } : {}),
-			activities: this.snapshot.activities,
-			expansion: this.snapshot.expansion,
-			...(this.snapshot.defaultExpansion === undefined ? {} : { defaultExpansion: this.snapshot.defaultExpansion }),
-		};
+	private apply(next: ActivityStoreState): void {
+		const currentWithoutRevision = storeState(
+			this.snapshot.ownerSessionId,
+			this.snapshot.activities,
+			this.snapshot.expansion,
+			this.snapshot.defaultExpansion,
+		);
 		if (semanticKey(currentWithoutRevision) === semanticKey(next)) return;
 		this.snapshot = immutable({ ...next, revision: this.snapshot.revision + 1 });
 		for (const listener of this.listeners) {
@@ -432,7 +452,7 @@ export class FileActivityStore implements ActivityStore {
 		this.pollTimer = undefined;
 	}
 
-	private diagnostic(kind: ActivityFeedDiagnostic["kind"], path: string, error: unknown): void {
-		this.onDiagnostic?.({ kind, path, message: error instanceof Error ? error.message : String(error) });
+	private diagnostic(kind: ActivityFeedDiagnostic["kind"], path: string, cause: unknown): void {
+		this.onDiagnostic?.({ kind, path, message: cause instanceof Error ? cause.message : String(cause) });
 	}
 }

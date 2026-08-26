@@ -7,13 +7,17 @@ import type { ActivitySnapshot, ActivityStatus } from "../../activity/domain.js"
 import { renderActivityBlockRows } from "./activity-renderer.js";
 import type { DelegationStatus, DelegationViewModel, ToolCallViewModel } from "./view-model.js";
 
-const STATUS: Record<DelegationStatus, ActivityStatus> = {
+const STATUS = {
 	queued: "queued",
 	running: "running",
 	success: "succeeded",
 	error: "failed",
 	cancelled: "cancelled",
-};
+} satisfies Record<DelegationStatus, ActivityStatus>;
+
+function isString<T>(value: T): value is T & string {
+	return typeof value === "string";
+}
 
 function toolStatus(status: ToolCallViewModel["status"]): ActivityStatus {
 	if (status === "pending") return "queued";
@@ -23,16 +27,16 @@ function toolStatus(status: ToolCallViewModel["status"]): ActivityStatus {
 }
 
 function childActivity(tool: ToolCallViewModel, parentId: string, index: number): ActivitySnapshot {
-	const output = typeof tool.output === "string" ? tool.output : undefined;
+	const output = isString(tool.output) ? tool.output : undefined;
 	const status = toolStatus(tool.status);
 	return {
 		id: tool.id ?? `${parentId}:tool:${tool.name}:${index}`,
 		kind: "tool",
 		title: tool.name,
 		status,
-		...(tool.input === undefined ? {} : { invocation: tool.input }),
-		...(output ? { outputTail: output } : {}),
-		...(output && status === "failed" ? { result: { error: output } } : {}),
+		...(tool.input !== undefined && { invocation: tool.input }),
+		...(output && { outputTail: output }),
+		...(output && status === "failed" && { result: { error: output } }),
 	};
 }
 
@@ -45,26 +49,24 @@ export function activityFromDelegationViewModel(delegation: DelegationViewModel)
 		kind: "task",
 		title: delegation.title,
 		status,
-		...(delegation.prompt ? { invocation: { prompt: delegation.prompt } } : {}),
-		...(delegation.agent ? { subject: delegation.agent } : {}),
-		...(status === "running" && summary ? { currentStep: summary.split("\n").find((line) => line.trim().length > 0) } : {}),
-		...(summary ? { outputTail: summary } : {}),
-		...(delegation.nestedTools && delegation.nestedTools.length > 0
-			? { activeTools: delegation.nestedTools.map((tool, index) => childActivity(tool, id, index)) }
-			: {}),
-		...(summary && status === "succeeded" ? { result: { summary } } : {}),
-		...(summary && status === "failed" ? { result: { error: summary } } : {}),
-		...(delegation.model ? { model: delegation.model } : {}),
-		...(delegation.thinking ? { thinking: delegation.thinking } : {}),
-		...(delegation.tokensIn !== undefined || delegation.tokensOut !== undefined || delegation.elapsedMs !== undefined
-			? {
-				metrics: {
-					...(delegation.tokensIn === undefined ? {} : { tokensIn: delegation.tokensIn }),
-					...(delegation.tokensOut === undefined ? {} : { tokensOut: delegation.tokensOut }),
-					...(delegation.elapsedMs === undefined ? {} : { elapsedMs: delegation.elapsedMs }),
-				},
-			}
-			: {}),
+		...(delegation.prompt && { invocation: { prompt: delegation.prompt } }),
+		...(delegation.agent && { subject: delegation.agent }),
+		...(status === "running" && summary && { currentStep: summary.split("\n").find((line) => line.trim().length > 0) }),
+		...(summary && { outputTail: summary }),
+		...(delegation.nestedTools?.length && {
+			activeTools: delegation.nestedTools.map((tool, index) => childActivity(tool, id, index)),
+		}),
+		...(summary && status === "succeeded" && { result: { summary } }),
+		...(summary && status === "failed" && { result: { error: summary } }),
+		...(delegation.model && { model: delegation.model }),
+		...(delegation.thinking && { thinking: delegation.thinking }),
+		...((delegation.tokensIn !== undefined || delegation.tokensOut !== undefined || delegation.elapsedMs !== undefined) && {
+			metrics: {
+				...(delegation.tokensIn !== undefined && { tokensIn: delegation.tokensIn }),
+				...(delegation.tokensOut !== undefined && { tokensOut: delegation.tokensOut }),
+				...(delegation.elapsedMs !== undefined && { elapsedMs: delegation.elapsedMs }),
+			},
+		}),
 	};
 }
 

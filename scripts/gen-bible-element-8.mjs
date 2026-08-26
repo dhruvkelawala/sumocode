@@ -62,11 +62,7 @@ function buildPalette({ cols, search, selectedIdx }) {
 		const valuePart = mode.value
 			? `<span class="fg-dim">${mode.arrow} ${mode.value}</span>`
 			: "";
-		const valueLen = mode.value ? mode.arrow.length + 1 + mode.value.length : 0;
-
-		const innerCols = cols - 8;
-		const padEnd = innerCols - mode.key.length - padAfterLabel - valueLen;
-
+	
 		// Build the row content (leave width math to padRight at end)
 		let rowHTML;
 		if (focused) {

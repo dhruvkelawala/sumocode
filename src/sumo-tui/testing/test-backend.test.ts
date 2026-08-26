@@ -6,6 +6,8 @@ import type { YogaNode } from "../layout/yoga.js";
 import { CellBuffer, type Rect } from "../render/buffer.js";
 import { PiEditorLeaf } from "../widgets/pi-editor-leaf.js";
 import { SumoTuiTestBackend } from "./test-backend.js";
+/* oxlint-disable anti-slop/no-chained-type-assertions -- test doubles cast minimal stub objects to Pi context types. */
+/* oxlint-disable anti-slop/require-safety-comment-for-type-assertion -- stub shape is exercised by the assertions below. */
 
 const backends: SumoTuiTestBackend[] = [];
 

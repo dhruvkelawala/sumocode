@@ -33,7 +33,9 @@ describe("cmux-split", () => {
 			return { code: 0, killed: false, stdout: "", stderr: "" };
 		});
 
-		await expect(openCommandInCurrentSurface({ exec } as never, "cd '/repo.wt/fresh' && exec sumocode")).resolves.toEqual({ ok: true });
+		await expect(openCommandInCurrentSurface(
+			// SAFETY: exec is the only TerminalHost member this code path calls.
+			{ exec } as never, "cd '/repo.wt/fresh' && exec sumocode")).resolves.toEqual({ ok: true });
 		expect(exec).toHaveBeenLastCalledWith(
 			"cmux",
 			[
@@ -62,7 +64,9 @@ describe("cmux-split", () => {
 			return { code: 1, killed: false, stdout: "", stderr: "surface unavailable" };
 		});
 
-		await expect(openCommandInCurrentSurface({ exec } as never, "exec sumocode")).resolves.toEqual({
+		await expect(openCommandInCurrentSurface(
+			// SAFETY: exec is the only TerminalHost member this code path calls.
+			{ exec } as never, "exec sumocode")).resolves.toEqual({
 			ok: false,
 			error: "surface unavailable",
 		});

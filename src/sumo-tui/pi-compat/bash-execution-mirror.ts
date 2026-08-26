@@ -1,6 +1,23 @@
 import type { ChatMessage } from "../widgets/chat-message.js";
 import type { ChatPager } from "../widgets/chat-pager.js";
 import { logDiagnostic } from "../runtime/diagnostics.js";
+import type { SessionRecord } from "../transcript/view-model.js";
+
+/**
+ * Opaque Pi truncation metadata forwarded verbatim between the foreign bash
+ * component and its own completion callback; never inspected here.
+ */
+export type TruncationResult = { readonly [key: string]: TruncationValue };
+export type TruncationValue = string | number | boolean | null | undefined | TruncationResult;
+
+// Boundary predicates for opaque Pi components crossing the compat seam.
+function isRecord<T>(value: T): value is T & SessionRecord {
+	return typeof value === "object" && value !== null;
+}
+
+function isCallable<T>(value: T): value is T & ((...args: never[]) => void) {
+	return typeof value === "function";
+}
 
 /**
  * Subset of Pi's `BashExecutionComponent` we depend on. Detected structurally
@@ -15,13 +32,13 @@ export interface BashExecutionLike {
 	getCommand(): string;
 	getOutput(): string;
 	appendOutput(chunk: string): void;
-	setComplete(exitCode?: number, cancelled?: boolean, truncationResult?: unknown, fullOutputPath?: string): void;
+	setComplete(exitCode?: number, cancelled?: boolean, truncationResult?: TruncationResult, fullOutputPath?: string): void;
 }
 
 interface BashCompletionState {
 	readonly exitCode: number | undefined;
 	readonly cancelled: boolean;
-	readonly truncationResult: unknown;
+	readonly truncationResult: TruncationResult | undefined;
 	readonly fullOutputPath: string | undefined;
 }
 
@@ -44,15 +61,14 @@ export interface BashMirrorScheduler {
  * bash-specific public methods: `getCommand`, `getOutput`, `appendOutput`,
  * `setComplete`.
  */
-export function isBashExecutionLike(value: unknown): value is BashExecutionLike {
-	if (!value || typeof value !== "object") return false;
-	const record = value as Record<string, unknown>;
+export function isBashExecutionLike<T>(value: T): value is T & BashExecutionLike {
+	if (!isRecord(value)) return false;
 	return (
-		typeof record.render === "function" &&
-		typeof record.getCommand === "function" &&
-		typeof record.getOutput === "function" &&
-		typeof record.appendOutput === "function" &&
-		typeof record.setComplete === "function"
+		isCallable(value.render) &&
+		isCallable(value.getCommand) &&
+		isCallable(value.getOutput) &&
+		isCallable(value.appendOutput) &&
+		isCallable(value.setComplete)
 	);
 }
 
@@ -75,7 +91,7 @@ export function renderBashMirrorText(component: BashExecutionLike, completion: B
 	} else if (completion.cancelled) {
 		lines.push("");
 		lines.push("cancelled");
-	} else if (typeof completion.exitCode === "number" && completion.exitCode !== 0) {
+	} else if (completion.exitCode !== undefined && completion.exitCode !== 0) {
 		lines.push("");
 		lines.push(`exit ${completion.exitCode}`);
 	}
@@ -104,7 +120,7 @@ export class BashExecutionMirror {
 		private readonly scheduler: BashMirrorScheduler,
 	) {}
 
-	public attach(component: unknown): boolean {
+	public attach<T>(component: T): boolean {
 		if (!isBashExecutionLike(component)) return false;
 		if (this.entries.has(component)) return false;
 
@@ -123,7 +139,7 @@ export class BashExecutionMirror {
 			if (entry.disposed) return;
 			this.refresh(component, entry);
 		};
-		component.setComplete = (exitCode?: number, cancelled?: boolean, truncationResult?: unknown, fullOutputPath?: string): void => {
+		component.setComplete = (exitCode?: number, cancelled?: boolean, truncationResult?: TruncationResult, fullOutputPath?: string): void => {
 			entry.originalSetComplete(exitCode, cancelled, truncationResult, fullOutputPath);
 			if (entry.disposed) return;
 			entry.completion = {
@@ -141,7 +157,7 @@ export class BashExecutionMirror {
 		return true;
 	}
 
-	public has(component: unknown): boolean {
+	public has<T>(component: T): boolean {
 		return isBashExecutionLike(component) && this.entries.has(component);
 	}
 

@@ -6,6 +6,8 @@ export const BUILT_IN_TOOLS = ["read", "bash", "edit", "write", "grep", "find", 
 export type BuiltInToolName = (typeof BUILT_IN_TOOLS)[number];
 
 const isBuiltInToolName = (toolName: string): toolName is BuiltInToolName => {
+	// SAFETY: widening the BUILT_IN_TOOLS literal tuple to readonly string[] only relaxes the
+	// element type for `includes`; membership still proves toolName is a BuiltInToolName.
 	return (BUILT_IN_TOOLS as readonly string[]).includes(toolName);
 };
 

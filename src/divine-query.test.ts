@@ -193,6 +193,7 @@ describe("showDivineQuery", () => {
 		const select = vi.fn(async () => "No, leave it as-is");
 		const custom = vi.fn();
 
+		// SAFETY: the double supplies the mode/ui surface showDivineQuery reads.
 		const result = await showDivineQuery(
 			{ mode: "rpc", ui: { select, custom } } as never,
 			"Should I rename it?",
@@ -205,6 +206,7 @@ describe("showDivineQuery", () => {
 	});
 
 	it("returns undefined when RPC select is cancelled", async () => {
+		// SAFETY: the double supplies the mode/ui surface showDivineQuery reads.
 		const result = await showDivineQuery(
 			{ mode: "rpc", ui: { select: vi.fn(async () => undefined), custom: vi.fn() } } as never,
 			"Should I rename it?",
@@ -217,6 +219,7 @@ describe("showDivineQuery", () => {
 	it("keeps the TUI custom overlay and maps the selected index to an option", async () => {
 		const custom = vi.fn(async () => 2);
 
+		// SAFETY: the double supplies the mode/ui surface showDivineQuery reads.
 		const result = await showDivineQuery(
 			{ mode: "tui", ui: { custom } } as never,
 			"Should I rename it?",

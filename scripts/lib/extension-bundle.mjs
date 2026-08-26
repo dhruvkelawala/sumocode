@@ -77,6 +77,7 @@ async function contentHash(base, files) {
 export async function extensionInputsHashFromManifest(root, inputs) {
 	const hash = createHash("sha256");
 	for (const input of inputs) {
+		// oxlint-disable-next-line anti-slop/no-runtime-typeof -- validating untrusted bundle manifest/input data
 		if (typeof input !== "string" || input.length === 0 || isAbsolute(input)) {
 			throw new Error("Invalid extension bundle input path");
 		}
@@ -109,13 +110,16 @@ export function extensionInputManifestsMatch(before, after) {
 
 export async function extensionInputManifestIsFresh(root, manifest) {
 	if (
+		// oxlint-disable-next-line anti-slop/no-runtime-typeof -- validating untrusted bundle manifest/input data
 		typeof manifest !== "object"
 		|| manifest === null
 		|| manifest.version !== EXTENSION_INPUT_MANIFEST_VERSION
 		|| !Array.isArray(manifest.inputs)
+		// oxlint-disable-next-line anti-slop/no-runtime-typeof -- validating untrusted bundle manifest/input data
 		|| typeof manifest.hash !== "string"
 	) return false;
 	const inputs = manifest.inputs;
+	// oxlint-disable-next-line anti-slop/no-runtime-typeof -- validating untrusted bundle manifest/input data
 	if (inputs.length === 0 || inputs.some((input) => typeof input !== "string") || new Set(inputs).size !== inputs.length) return false;
 	if ([...inputs].sort().some((input, index) => input !== inputs[index])) return false;
 	try {

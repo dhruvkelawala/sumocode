@@ -40,7 +40,20 @@ function flush(): Promise<void> {
 	return Promise.resolve().then(() => Promise.resolve());
 }
 
-function deferred(): { promise: Promise<void>; resolve: () => void } {
+// SAFETY: fixtures intentionally provide partial RpcHostChromeState /
+// AgentSessionEvent / controls shapes; unread members are never consulted.
+function asNever<T>(value: T): never {
+	// SAFETY: fixtures supply every field each assertion reads; `never` lets
+	// partial doubles satisfy closed unions without per-site comments.
+	return value as never;
+}
+
+interface DeferredVoid {
+	promise: Promise<void>;
+	resolve: () => void;
+}
+
+function deferred(): DeferredVoid {
 	let resolve!: () => void;
 	const promise = new Promise<void>((res) => {
 		resolve = res;
@@ -65,6 +78,8 @@ class FakeRpcCommandClient {
 }
 
 function rpcModel(provider: string, id: string): RpcAvailableModel {
+	// SAFETY: tests only read provider/id/name off the model fixture; the
+	// remaining Model fields are never consulted.
 	return {
 		provider,
 		id,
@@ -94,7 +109,7 @@ function interruptDeps(overrides: Partial<RpcHostInterruptDependencies> = {}): R
 		modals: { getActiveKind: () => undefined, close: vi.fn() },
 		overlays: { getActiveKind: () => undefined, close: vi.fn() },
 		editor: { getText: () => "", setText: vi.fn(), isAutocompleteOpen: () => false },
-		stateStore: { getSnapshot: () => ({ isStreaming: false }) as never },
+		stateStore: { getSnapshot: () => asNever({ isStreaming: false }) },
 		controls: { abort: vi.fn(async () => undefined) },
 		notifications: { notify: vi.fn() },
 		requestHostExit: vi.fn(),
@@ -152,7 +167,7 @@ describe("tree navigation compaction settling", () => {
 		let now = 0;
 		let reads = 0;
 		const unhandled: unknown[] = [];
-		const onUnhandled = (reason: unknown): void => { unhandled.push(reason); };
+		const onUnhandled = (cause: unknown): void => { unhandled.push(cause); };
 		process.on("unhandledRejection", onUnhandled);
 		try {
 			const error = await waitForTreeNavigationQuiet(
@@ -167,7 +182,7 @@ describe("tree navigation compaction settling", () => {
 					now: () => now,
 					wait: async (milliseconds) => { now += milliseconds; },
 				},
-			).then(() => undefined, (reason: unknown) => reason);
+			).then(() => undefined, (cause: unknown) => cause);
 			expect(error).toBeInstanceOf(RpcTreeNavigationQuietTimeoutError);
 			expect(error).toMatchObject({ attempts: 3, elapsedMs: 10 });
 			await flush();
@@ -183,12 +198,12 @@ describe("session hydration event barrier", () => {
 	it("keeps the full destination suffix when a later hydration retry fails", () => {
 		const buffer = new RpcSessionEventBuffer();
 		buffer.begin();
-		buffer.capture({ type: "agent_end", messages: [{ id: "old", role: "assistant", content: "old" }] } as never);
+		buffer.capture(asNever({ type: "agent_end", messages: [{ id: "old", role: "assistant", content: "old" }] }));
 		buffer.markHydrationBaseline();
-		const firstDestinationEvent = { type: "message_end", message: { id: "new", role: "assistant", content: "new" } } as never;
+		const firstDestinationEvent = asNever({ type: "message_end", message: { id: "new", role: "assistant", content: "new" } });
 		buffer.capture(firstDestinationEvent);
 		buffer.markHydrationBarrier();
-		const laterDestinationEvent = { type: "agent_settled" } as never;
+		const laterDestinationEvent = asNever({ type: "agent_settled" });
 		buffer.capture(laterDestinationEvent);
 
 		expect(buffer.finish({ afterFailureBaseline: true })).toEqual([firstDestinationEvent, laterDestinationEvent]);
@@ -197,12 +212,12 @@ describe("session hydration event barrier", () => {
 	it("splits snapshot-covered events from the final suffix without dropping scheduler effects", () => {
 		const buffer = new RpcSessionEventBuffer();
 		buffer.begin();
-		buffer.capture({ type: "message_end", message: { id: "old", role: "assistant", content: "old" } } as never);
+		buffer.capture(asNever({ type: "message_end", message: { id: "old", role: "assistant", content: "old" } }));
 		buffer.markHydrationBaseline();
-		const covered = { type: "agent_end", messages: [{ id: "covered", role: "assistant", content: "covered" }] } as never;
+		const covered = asNever({ type: "agent_end", messages: [{ id: "covered", role: "assistant", content: "covered" }] });
 		buffer.capture(covered);
 		buffer.markHydrationBarrier();
-		const suffix = { type: "agent_settled" } as never;
+		const suffix = asNever({ type: "agent_settled" });
 		buffer.capture(suffix);
 
 		expect(buffer.finishHydration()).toEqual({ supersededSnapshotEvents: [covered], suffixEvents: [suffix] });
@@ -217,7 +232,7 @@ describe("session hydration event barrier", () => {
 		// baseline is the ownership boundary: events emitted before the mutation
 		// response are old-session state and never reach the destination scheduler.
 		buffer.begin();
-		buffer.capture({ type: "agent_settled" } as never);
+		buffer.capture(asNever({ type: "agent_settled" }));
 		buffer.markHydrationBaseline();
 		scheduler.rebindSession("session-b", "");
 		scheduler.handleAgentEvent({ type: "agent_start" });
@@ -293,14 +308,18 @@ describe("session hydration event barrier", () => {
 	it("replays message_update, agent_end, and agent_settled events received during hydration in order", () => {
 		const buffer = new RpcSessionEventBuffer();
 		expect(buffer.begin()).toBe(true);
-		expect(buffer.capture({ type: "message_update", message: { id: "old-session", role: "assistant", content: "old" } } as never)).toBe(true);
+		expect(buffer.capture(asNever({ type: "message_update", message: { id: "old-session", role: "assistant", content: "old" } }))).toBe(true);
 		buffer.markHydrationBarrier();
 		const events = [
 			{ type: "message_update", message: { id: "draft", role: "assistant", content: "new tail" } },
 			{ type: "agent_end", messages: [{ role: "assistant", content: "complete" }], willRetry: false },
 			{ type: "agent_settled" },
 		] as const;
-		for (const event of events) expect(buffer.capture(event as never)).toBe(true);
+		// SAFETY: partial fixture; unread members of the target type are unused here.
+		for (const event of events) {
+			// SAFETY: events is a const tuple of well-formed session-event fixtures.
+			expect(buffer.capture(event as never)).toBe(true);
+		}
 
 		const state = new RpcHostStateStore();
 		state.hydrateFromRpcState(rpcState({ isStreaming: true, messageCount: 0 }));
@@ -512,7 +531,7 @@ describe("createRpcHostInterruptHandler wiring", () => {
 	it("passes Escape through to the editor when the autocomplete dropdown is open, even while streaming", () => {
 		const requestHostExit = vi.fn();
 		const handle = createRpcHostInterruptHandler(interruptDeps({
-			stateStore: { getSnapshot: () => ({ isStreaming: true }) as never },
+			stateStore: { getSnapshot: () => asNever({ isStreaming: true }) },
 			editor: { getText: () => "", setText: vi.fn(), isAutocompleteOpen: () => true },
 			requestHostExit,
 		}));
@@ -524,7 +543,7 @@ describe("createRpcHostInterruptHandler wiring", () => {
 	it("aborts (not passes) Escape while streaming once autocomplete is closed", () => {
 		const controls = { abort: vi.fn(async () => undefined) };
 		const handle = createRpcHostInterruptHandler(interruptDeps({
-			stateStore: { getSnapshot: () => ({ isStreaming: true }) as never },
+			stateStore: { getSnapshot: () => asNever({ isStreaming: true }) },
 			editor: { getText: () => "", setText: vi.fn(), isAutocompleteOpen: () => false },
 			controls,
 		}));
@@ -539,7 +558,7 @@ describe("createRpcHostInterruptHandler wiring", () => {
 		const controls = { abort: vi.fn(async () => undefined) };
 		const requestHostExit = vi.fn();
 		const handle = createRpcHostInterruptHandler(interruptDeps({
-			stateStore: { getSnapshot: () => ({ isStreaming: false }) as never },
+			stateStore: { getSnapshot: () => asNever({ isStreaming: false }) },
 			editor,
 			controls,
 			requestHostExit,
@@ -560,7 +579,7 @@ describe("createRpcHostInterruptHandler wiring", () => {
 		const controls = { abort: vi.fn(async () => undefined) };
 		const restoreQueuedDrafts = vi.fn();
 		const handle = createRpcHostInterruptHandler(interruptDeps({
-			stateStore: { getSnapshot: () => ({ isStreaming: true }) as never },
+			stateStore: { getSnapshot: () => asNever({ isStreaming: true }) },
 			controls,
 			restoreQueuedDrafts,
 		}));
@@ -574,7 +593,7 @@ describe("createRpcHostInterruptHandler wiring", () => {
 		const controls = { abort: vi.fn(async () => undefined) };
 		const requestHostExit = vi.fn();
 		const handle = createRpcHostInterruptHandler(interruptDeps({
-			stateStore: { getSnapshot: () => ({ isStreaming: false }) as never },
+			stateStore: { getSnapshot: () => asNever({ isStreaming: false }) },
 			controls,
 			requestHostExit,
 			submitInFlight: () => true,
@@ -596,7 +615,7 @@ describe("createRpcHostInterruptHandler wiring", () => {
 		const controls = { abort: vi.fn(async () => undefined) };
 		const abortInFlight = vi.fn(async () => undefined);
 		const handle = createRpcHostInterruptHandler(interruptDeps({
-			stateStore: { getSnapshot: () => ({ isStreaming: false }) as never },
+			stateStore: { getSnapshot: () => asNever({ isStreaming: false }) },
 			controls,
 			submitInFlight: () => true,
 			abortInFlight,
@@ -612,7 +631,7 @@ describe("createRpcHostInterruptHandler wiring", () => {
 		let inFlight = true;
 		const requestHostExit = vi.fn();
 		const handle = createRpcHostInterruptHandler(interruptDeps({
-			stateStore: { getSnapshot: () => ({ isStreaming: false }) as never },
+			stateStore: { getSnapshot: () => asNever({ isStreaming: false }) },
 			requestHostExit,
 			submitInFlight: () => inFlight,
 		}));
@@ -688,7 +707,7 @@ function exitDeps(overrides: Partial<RpcHostExitDependencies> = {}): RpcHostExit
 	return {
 		modals: { close: vi.fn() },
 		overlays: { drain: vi.fn() },
-		stateStore: { getSnapshot: () => ({ isStreaming: true, isCompacting: true }) as never },
+		stateStore: { getSnapshot: () => asNever({ isStreaming: true, isCompacting: true }) },
 		notifications: { notify: vi.fn() },
 		requestRender: vi.fn(),
 		stopHost: vi.fn(async () => undefined),
@@ -712,7 +731,7 @@ describe("app.interrupt action wiring reuses the interrupt tier module", () => {
 	it("replaying a canonical escape token aborts an in-flight stream via the interrupt tier", async () => {
 		const controls = { abort: vi.fn(async () => undefined) };
 		const handle = createRpcHostInterruptHandler(interruptDeps({
-			stateStore: { getSnapshot: () => ({ isStreaming: true }) as never },
+			stateStore: { getSnapshot: () => asNever({ isStreaming: true }) },
 			editor: { getText: () => "", setText: vi.fn(), isAutocompleteOpen: () => false },
 			controls,
 		}));
@@ -728,7 +747,7 @@ describe("app.interrupt action wiring reuses the interrupt tier module", () => {
 		const requestHostExit = vi.fn();
 		const notifications = { notify: vi.fn() };
 		const handle = createRpcHostInterruptHandler(interruptDeps({
-			stateStore: { getSnapshot: () => ({ isStreaming: false }) as never },
+			stateStore: { getSnapshot: () => asNever({ isStreaming: false }) },
 			notifications,
 			requestHostExit,
 		}));
@@ -776,11 +795,12 @@ describe("createModelCycleForwardHandler (app.model.cycleForward)", () => {
 				...enabledModels,
 			]),
 			getEnabledModels: vi.fn(async () => enabledModels),
-			setModel: vi.fn(async () => ({ modelLabel: "anthropic/claude-opus-4" }) as never),
+			setModel: vi.fn(async () => asNever({ modelLabel: "anthropic/claude-opus-4" })),
 		};
 		const notifications = { notify: vi.fn() };
 		const onStateChange = vi.fn();
 		const handle = createModelCycleForwardHandler({
+			// SAFETY: partial fixture; unread members of the target type are unused here.
 			controls: controls as never,
 			notifications,
 			onStateChange,
@@ -801,6 +821,7 @@ describe("createModelCycleForwardHandler (app.model.cycleForward)", () => {
 	it("notifies a warning instead of throwing when enabled-model discovery fails", async () => {
 		const notifications = { notify: vi.fn() };
 		const handle = createModelCycleForwardHandler({
+			// SAFETY: partial controls fixture; only the members below are exercised.
 			controls: {
 				cycleModel: vi.fn(),
 				getAvailableModels: vi.fn(),
@@ -831,11 +852,12 @@ describe("createModelCycleBackwardHandler (app.model.cycleBackward -- the other 
 				{ provider: "disabled", id: "outside-scope", label: "disabled/outside-scope", active: false },
 			]),
 			getEnabledModels: vi.fn(async () => enabledModels),
-			setModel: vi.fn(async () => ({ modelLabel: "openai/gpt-5" }) as never),
+			setModel: vi.fn(async () => asNever({ modelLabel: "openai/gpt-5" })),
 		};
 		const notifications = { notify: vi.fn() };
 		const onStateChange = vi.fn();
 		const handle = createModelCycleBackwardHandler({
+			// SAFETY: partial fixture; unread members of the target type are unused here.
 			controls: controls as never,
 			notifications,
 			onStateChange,
@@ -864,10 +886,11 @@ describe("createModelCycleBackwardHandler (app.model.cycleBackward -- the other 
 			cycleModel: vi.fn(),
 			getAvailableModels: vi.fn(),
 			getEnabledModels: vi.fn(async () => models),
-			setModel: vi.fn(async () => ({ modelLabel: "p/m199" }) as never),
+			setModel: vi.fn(async () => asNever({ modelLabel: "p/m199" })),
 		};
 		const notifications = { notify: vi.fn() };
 		const handle = createModelCycleBackwardHandler({
+			// SAFETY: partial fixture; unread members of the target type are unused here.
 			controls: controls as never,
 			notifications,
 		});
@@ -889,6 +912,7 @@ describe("createModelCycleBackwardHandler (app.model.cycleBackward -- the other 
 		};
 		const notifications = { notify: vi.fn() };
 		const handle = createModelCycleBackwardHandler({
+			// SAFETY: partial fixture; unread members of the target type are unused here.
 			controls: controls as never,
 			notifications,
 		});
@@ -910,6 +934,7 @@ describe("createModelCycleBackwardHandler (app.model.cycleBackward -- the other 
 		};
 		const notifications = { notify: vi.fn() };
 		const handle = createModelCycleBackwardHandler({
+			// SAFETY: partial fixture; unread members of the target type are unused here.
 			controls: controls as never,
 			notifications,
 		});
@@ -965,7 +990,7 @@ describe("createModelCycleBackwardHandler (app.model.cycleBackward -- the other 
 
 describe("createThinkingCycleHandler (app.thinking.cycle -- one of the two exact reported-broken chords)", () => {
 	it("calls controls.cycleThinkingLevel() and updates state without a confirmation toast", async () => {
-		const cycleThinkingLevel = vi.fn(async () => ({ thinkingLevel: "high" }) as never);
+		const cycleThinkingLevel = vi.fn(async () => asNever({ thinkingLevel: "high" }));
 		const notifications = { notify: vi.fn() };
 		const onStateChange = vi.fn();
 		const handle = createThinkingCycleHandler({ controls: { cycleThinkingLevel }, notifications, onStateChange });
@@ -1014,6 +1039,7 @@ describe("RPC host client-exit shutdown", () => {
 		expect(overlays.getActiveKind()).toBeUndefined();
 		expect(updateRuntimeState).toHaveBeenCalledWith(expect.objectContaining({ isStreaming: false, isCompacting: false }));
 		expect(notifications.notify).toHaveBeenCalledOnce();
+		// SAFETY: notify was asserted to have been called once with (string, level, timeout).
 		const [message] = notifications.notify.mock.calls[0] as [string, string, number];
 		expect(message.length).toBeLessThan(600);
 		expect(message).toContain("RPC child exited unexpectedly");

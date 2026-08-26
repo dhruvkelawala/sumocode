@@ -1,16 +1,19 @@
 import type { Component } from "@earendil-works/pi-tui";
 
+/** Values an overlay can hand back to its opener (palette selections etc.). */
+type OverlayValue = string | number | boolean | undefined;
+
 interface QueuedOverlay {
 	readonly kind: string;
-	readonly create: (done: (value: unknown) => void) => Component;
-	readonly resolve: (value: unknown) => void;
+	readonly create: (done: (value: OverlayValue) => void) => Component;
+	readonly resolve: (value: OverlayValue) => void;
 }
 
 export class RpcHostOverlayManager implements Component {
 	private active: Component | undefined;
 	private activeKind: string | undefined;
-	private finish: ((value: unknown) => void) | undefined;
-	private activeResolve: ((value: unknown) => void) | undefined;
+	private finish: ((value: OverlayValue) => void) | undefined;
+	private activeResolve: ((value: OverlayValue) => void) | undefined;
 	private readonly queue: QueuedOverlay[] = [];
 
 	public constructor(private readonly onChange: () => void = () => undefined) {}
@@ -22,8 +25,12 @@ export class RpcHostOverlayManager implements Component {
 		return new Promise<T>((resolve) => {
 			const entry: QueuedOverlay = {
 				kind,
-				create: create as (done: (value: unknown) => void) => Component,
-				resolve: resolve as (value: unknown) => void,
+				// SAFETY: T is resolved through the paired promise resolver below;
+				// the queue only erases the concrete OverlayValue-bound type.
+				create: create as (done: (value: OverlayValue) => void) => Component,
+				// SAFETY: same OverlayValue bound as create; the promise resolver
+				// restores T when the overlay finishes.
+				resolve: resolve as (value: OverlayValue) => void,
 			};
 			if (this.active) {
 				this.queue.push(entry);
@@ -35,7 +42,7 @@ export class RpcHostOverlayManager implements Component {
 		});
 	}
 
-	public close(value?: unknown): void {
+	public close(value?: OverlayValue): void {
 		if (!this.active && !this.finish) return;
 		const finish = this.finish;
 		this.active = undefined;
@@ -47,7 +54,7 @@ export class RpcHostOverlayManager implements Component {
 		this.onChange();
 	}
 
-	public drain(value?: unknown): void {
+	public drain(value?: OverlayValue): void {
 		const activeResolve = this.activeResolve;
 		const queued = this.queue.splice(0);
 		if (!this.active && !this.finish && activeResolve === undefined && queued.length === 0) return;
@@ -81,7 +88,7 @@ export class RpcHostOverlayManager implements Component {
 	private activate(entry: QueuedOverlay): void {
 		this.activeKind = entry.kind;
 		this.activeResolve = entry.resolve;
-		this.finish = (value: unknown) => {
+		this.finish = (value: OverlayValue) => {
 			this.active = undefined;
 			this.activeKind = undefined;
 			this.finish = undefined;

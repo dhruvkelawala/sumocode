@@ -4,7 +4,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { RpcModelOption } from "./controls.js";
 
-const THINKING_LEVELS: Record<ModelThinkingLevel, true> = {
+const THINKING_LEVELS = {
 	off: true,
 	minimal: true,
 	low: true,
@@ -12,19 +12,27 @@ const THINKING_LEVELS: Record<ModelThinkingLevel, true> = {
 	high: true,
 	xhigh: true,
 	max: true,
-};
+} satisfies Record<ModelThinkingLevel, true>;
 
 function resolvePiAgentDir(env: NodeJS.ProcessEnv = process.env): string {
 	return env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent");
 }
 
-function isStringArray(value: unknown): value is string[] {
-	return Array.isArray(value) && value.length > 0 && value.every((entry) => typeof entry === "string");
+type JsonEntry = string | number | boolean | null | JsonEntry[] | { [key: string]: JsonEntry };
+
+function isString(entry: JsonEntry | undefined): entry is string {
+	return typeof entry === "string";
+}
+
+function isStringArray(value: JsonEntry | undefined): value is string[] {
+	return Array.isArray(value) && value.length > 0 && value.every(isString);
 }
 
 export function readEnabledModelPatterns(env: NodeJS.ProcessEnv = process.env): string[] {
 	try {
-		const settings = JSON.parse(readFileSync(join(resolvePiAgentDir(env), "settings.json"), "utf8")) as { enabledModels?: unknown };
+		// SAFETY: JSON.parse of our own settings.json; the only field consumed is
+		// enabledModels and its shape is validated by isStringArray before use.
+		const settings = JSON.parse(readFileSync(join(resolvePiAgentDir(env), "settings.json"), "utf8")) as { enabledModels?: JsonEntry };
 		return isStringArray(settings.enabledModels) ? settings.enabledModels : [];
 	} catch {
 		return [];

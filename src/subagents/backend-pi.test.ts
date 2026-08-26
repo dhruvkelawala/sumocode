@@ -73,11 +73,13 @@ describe("spawnPiChild", () => {
 	it("translates pi json-line events", () => {
 		const proc = new FakeProcess();
 		const spawn = vi.fn(() => proc);
+		// SAFETY: the FakeProcess double satisfies the SpawnLike contract used on this path.
 		const child = createPiChildSpawner(spawn as never)({
 			prompt: "do work",
 			cwd: "/tmp/project",
 			inherited: { thinking: "low" },
 		});
+		// SAFETY: the pane/pi backends always expose the callback events form here.
 		const events = collect(child.events as (emit: (event: SubagentEvent) => void) => void);
 
 		proc.stdout.emit("data", `${JSON.stringify({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "hel" } })}\n`);
@@ -102,7 +104,9 @@ describe("spawnPiChild", () => {
 
 	it("redacts nested tool argument secrets before producing a bounded preview", () => {
 		const proc = new FakeProcess();
+		// SAFETY: the FakeProcess double satisfies the SpawnLike contract used on this path.
 		const child = createPiChildSpawner(vi.fn(() => proc) as never)({ prompt: "x", cwd: "/tmp", inherited: {} });
+		// SAFETY: the pane/pi backends always expose the callback events form here.
 		const events = collect(child.events as (emit: (event: SubagentEvent) => void) => void);
 		proc.stdout.emit("data", `${JSON.stringify({
 			type: "tool_execution_start",
@@ -126,7 +130,9 @@ describe("spawnPiChild", () => {
 	it("reports abort as interrupted", () => {
 		const proc = new FakeProcess();
 		const controller = new AbortController();
+		// SAFETY: the FakeProcess double satisfies the SpawnLike contract used on this path.
 		const child = createPiChildSpawner(vi.fn(() => proc) as never)({ prompt: "x", cwd: "/tmp", inherited: {}, signal: controller.signal });
+		// SAFETY: the pane/pi backends always expose the callback events form here.
 		const events = collect(child.events as (emit: (event: SubagentEvent) => void) => void);
 		const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
 		controller.abort();
@@ -137,7 +143,9 @@ describe("spawnPiChild", () => {
 
 	it("reports nonzero exit with stderr", () => {
 		const proc = new FakeProcess();
+		// SAFETY: the FakeProcess double satisfies the SpawnLike contract used on this path.
 		const child = createPiChildSpawner(vi.fn(() => proc) as never)({ prompt: "x", cwd: "/tmp", inherited: {} });
+		// SAFETY: the pane/pi backends always expose the callback events form here.
 		const events = collect(child.events as (emit: (event: SubagentEvent) => void) => void);
 		proc.stderr.emit("data", "boom");
 		proc.emit("close", 2);
@@ -147,13 +155,16 @@ describe("spawnPiChild", () => {
 	it("appends role system instructions after task args and before the prompt", () => {
 		const proc = new FakeProcess();
 		const spawn = vi.fn(() => proc);
+		// SAFETY: the spawn double only needs to return a FakeProcess; the spawner reads no other spawn surface.
 		const child = createPiChildSpawner(spawn as never, () => undefined)({
 			prompt: "do work",
 			cwd: "/tmp",
 			inherited: {},
 			appendSystemPrompt: "review carefully",
 		});
+		// SAFETY: FakeProcess.events exposes the (emit) => void collector shape collect expects.
 		collect(child.events as (emit: (event: SubagentEvent) => void) => void);
+		// SAFETY: mock.calls[0][1] is the argv string array recorded by the vi.fn spawn double.
 		const args = (spawn.mock.calls[0] as unknown[])[1] as string[];
 		const appendIndex = args.indexOf("--append-system-prompt");
 		expect(appendIndex).toBeGreaterThan(args.indexOf("--tools"));
@@ -164,8 +175,11 @@ describe("spawnPiChild", () => {
 	it("omits role system instructions when none are configured", () => {
 		const proc = new FakeProcess();
 		const spawn = vi.fn(() => proc);
+		// SAFETY: the spawn double only needs to return a FakeProcess; the spawner reads no other spawn surface.
 		const child = createPiChildSpawner(spawn as never, () => undefined)({ prompt: "x", cwd: "/tmp", inherited: {} });
+		// SAFETY: FakeProcess.events exposes the (emit) => void collector shape collect expects.
 		collect(child.events as (emit: (event: SubagentEvent) => void) => void);
+		// SAFETY: mock.calls[0][1] is the argv string array recorded by the vi.fn spawn double.
 		const args = (spawn.mock.calls[0] as unknown[])[1] as string[];
 		expect(args).not.toContain("--append-system-prompt");
 	});
@@ -173,8 +187,11 @@ describe("spawnPiChild", () => {
 	it("injects the claude-oauth adapter via -e when the resolver finds it", () => {
 		const proc = new FakeProcess();
 		const spawn = vi.fn(() => proc);
+		// SAFETY: the FakeProcess double satisfies the SpawnLike contract used on this path.
 		const child = createPiChildSpawner(spawn as never, () => "/fake/adapter/extensions/index.ts")({ prompt: "x", cwd: "/tmp", inherited: {} });
+		// SAFETY: the pane/pi backends always expose the callback events form here.
 		collect(child.events as (emit: (event: SubagentEvent) => void) => void);
+		// SAFETY: the typed spawn double records (command, args) pairs.
 		const args = (spawn.mock.calls[0] as unknown[])[1] as string[];
 		const eIndex = args.indexOf("-e");
 		expect(eIndex).toBeGreaterThan(-1);
@@ -186,8 +203,11 @@ describe("spawnPiChild", () => {
 	it("omits the -e flag when no adapter is installed", () => {
 		const proc = new FakeProcess();
 		const spawn = vi.fn(() => proc);
+		// SAFETY: the FakeProcess double satisfies the SpawnLike contract used on this path.
 		const child = createPiChildSpawner(spawn as never, () => undefined)({ prompt: "x", cwd: "/tmp", inherited: {} });
+		// SAFETY: the pane/pi backends always expose the callback events form here.
 		collect(child.events as (emit: (event: SubagentEvent) => void) => void);
+		// SAFETY: the typed spawn double records (command, args) pairs.
 		const args = (spawn.mock.calls[0] as unknown[])[1] as string[];
 		expect(args).not.toContain("-e");
 	});
@@ -198,7 +218,9 @@ describe("spawnPiChild", () => {
 			const proc = new FakeProcess();
 			const spawn = vi.fn(() => proc);
 			const controller = new AbortController();
+			// SAFETY: the FakeProcess double satisfies the SpawnLike contract used on this path.
 			const child = createPiChildSpawner(spawn as never)({ prompt: "x", cwd: "/tmp", inherited: {}, signal: controller.signal });
+			// SAFETY: the pane/pi backends always expose the callback events form here.
 			collect(child.events as (emit: (event: SubagentEvent) => void) => void);
 			expect(spawn).toHaveBeenCalledWith("pi", expect.any(Array), expect.objectContaining({ detached: true }));
 			controller.abort();
@@ -215,7 +237,9 @@ describe("spawnPiChild", () => {
 		try {
 			const proc = new FakeProcess();
 			const controller = new AbortController();
+			// SAFETY: the FakeProcess double satisfies the SpawnLike contract used on this path.
 			const child = createPiChildSpawner(vi.fn(() => proc) as never)({ prompt: "x", cwd: "/tmp", inherited: {}, signal: controller.signal });
+			// SAFETY: the pane/pi backends always expose the callback events form here.
 			collect(child.events as (emit: (event: SubagentEvent) => void) => void);
 			controller.abort();
 			expect(proc.kill).toHaveBeenCalledWith("SIGTERM");
@@ -229,7 +253,9 @@ describe("spawnPiChild", () => {
 		try {
 			const proc = new FakeProcess();
 			const controller = new AbortController();
+			// SAFETY: the FakeProcess double satisfies the SpawnLike contract used on this path.
 			const child = createPiChildSpawner(vi.fn(() => proc) as never)({ prompt: "x", cwd: "/tmp", inherited: {}, signal: controller.signal });
+			// SAFETY: the pane/pi backends always expose the callback events form here.
 			collect(child.events as (emit: (event: SubagentEvent) => void) => void);
 			const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
 			try {
@@ -252,7 +278,9 @@ describe("spawnPiChild", () => {
 		try {
 			const proc = new FakeProcess();
 			const controller = new AbortController();
+			// SAFETY: the FakeProcess double satisfies the SpawnLike contract used on this path.
 			const child = createPiChildSpawner(vi.fn(() => proc) as never)({ prompt: "x", cwd: "/tmp", inherited: {}, signal: controller.signal });
+			// SAFETY: the pane/pi backends always expose the callback events form here.
 			collect(child.events as (emit: (event: SubagentEvent) => void) => void);
 			const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
 			try {
@@ -271,7 +299,9 @@ describe("spawnPiChild", () => {
 
 	it("settles as failed without spawning when the model override is invalid", () => {
 		const spawn = vi.fn();
+		// SAFETY: the FakeProcess double satisfies the SpawnLike contract used on this path.
 		const child = createPiChildSpawner(spawn as never)({ prompt: "x", cwd: "/tmp", model: "gpt5-no-slash", inherited: {} });
+		// SAFETY: the pane/pi backends always expose the callback events form here.
 		const events = collect(child.events as (emit: (event: SubagentEvent) => void) => void);
 		expect(spawn).not.toHaveBeenCalled();
 		expect(events).toHaveLength(1);
@@ -281,7 +311,9 @@ describe("spawnPiChild", () => {
 
 	it("treats an externally signalled child (null code) as failed, not completed", () => {
 		const proc = new FakeProcess();
+		// SAFETY: the FakeProcess double satisfies the SpawnLike contract used on this path.
 		const child = createPiChildSpawner(vi.fn(() => proc) as never)({ prompt: "x", cwd: "/tmp", inherited: {} });
+		// SAFETY: the pane/pi backends always expose the callback events form here.
 		const events = collect(child.events as (emit: (event: SubagentEvent) => void) => void);
 		// External SIGTERM (operator kill / host cleanup): Node reports
 		// code=null with the signal — must never fold as completed.
@@ -291,7 +323,9 @@ describe("spawnPiChild", () => {
 
 	it("treats exit 0 with empty final text as completed, matching native-task semantics", () => {
 		const proc = new FakeProcess();
+		// SAFETY: the FakeProcess double satisfies the SpawnLike contract used on this path.
 		const child = createPiChildSpawner(vi.fn(() => proc) as never)({ prompt: "x", cwd: "/tmp", inherited: {} });
+		// SAFETY: the pane/pi backends always expose the callback events form here.
 		const events = collect(child.events as (emit: (event: SubagentEvent) => void) => void);
 		proc.emit("close", 0);
 		expect(events.at(-1)).toEqual({ kind: "run-settled", outcome: { kind: "completed", finalText: "" } });

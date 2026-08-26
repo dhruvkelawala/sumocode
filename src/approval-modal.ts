@@ -256,8 +256,8 @@ class ApprovalModalComponent implements Component {
 	}
 }
 
-export function normalizeApprovalChoice(value: unknown): ApprovalChoice {
-	if (typeof value !== "string") return "no";
+export function normalizeApprovalChoice(value: string | undefined): ApprovalChoice {
+	if (value === undefined) return "no";
 	const normalized = value.trim().toLowerCase();
 	if (normalized === "yes") return "yes";
 	if (normalized === "always") return "always";
@@ -336,7 +336,12 @@ export async function showApprovalModal(
 	}
 }
 
-function blockApproval(reason: string): { block: true; reason: string } {
+interface ApprovalBlock {
+	readonly block: true;
+	readonly reason: string;
+}
+
+function blockApproval(reason: string): ApprovalBlock {
 	return { block: true, reason };
 }
 
@@ -427,7 +432,7 @@ export function isDangerousBashCommand(command: string): boolean {
  */
 const sessionAllowSet = new Set<string>();
 
-function describeCommand(command: string): { command: string; description: string[] } {
+function describeCommand(command: string) {
 	if (/\brm\b/.test(command)) {
 		return { command, description: ["This will permanently delete files."] };
 	}
@@ -441,6 +446,11 @@ function describeCommand(command: string): { command: string; description: strin
 		return { command, description: ["Hard reset discards uncommitted changes."] };
 	}
 	return { command, description: ["The agent wants to execute a potentially dangerous command."] };
+}
+
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- predicate over an untyped tool input field; the typeof check is the sanctioned parse.
+function isString(value: unknown): value is string {
+	return typeof value === "string";
 }
 
 /**
@@ -464,7 +474,10 @@ export function installApprovalGate(pi: ExtensionAPI): void {
 	pi.on("tool_call", async (event, ctx) => {
 		if (event.toolName !== "bash") return;
 
-		const command = typeof event.input.command === "string" ? event.input.command : "";
+		// SAFETY: tool_call input is decoded defensively; a missing or non-string
+		// command field is treated as an empty command, which never matches a
+		// dangerous pattern and so is never gated.
+		const command = isString(event.input.command) ? event.input.command : "";
 		if (!isDangerousBashCommand(command)) return;
 		if (sessionAllowSet.has(command)) return;
 		if (!ctx.hasUI) return blockUnavailable();

@@ -1,3 +1,5 @@
+// oxlint-disable anti-slop/no-unknown-parameters, anti-slop/no-unsafe-dictionary-type -- I/O boundary parser (native task payload parsing boundary): inputs are untrusted producer JSON,
+// so `unknown` parameters and open string-keyed records are this module's real input contract.
 import type { ActivitySnapshot, ActivityStatus } from "./domain.js";
 import {
 	boundedAdapterPreview,
@@ -36,15 +38,40 @@ function firstString(budget: AdapterTraversalBudget, ...values: unknown[]): stri
 	return firstBoundedAdapterString(budget, TEXT_MAX, ...values);
 }
 
+function isNumberValue(value: unknown): value is number {
+	return typeof value === "number";
+}
+
+function isBooleanValue(value: unknown): value is boolean {
+	return typeof value === "boolean";
+}
+
+function isStringValue(value: unknown): value is string {
+	return typeof value === "string";
+}
+
+function isRecordLike(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null;
+}
+
 function numberFrom(value: unknown): number | undefined {
-	return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+	return isNumberValue(value) && Number.isFinite(value) ? value : undefined;
 }
 
 function booleanFrom(value: unknown): boolean | undefined {
-	return typeof value === "boolean" ? value : undefined;
+	return isBooleanValue(value) ? value : undefined;
 }
 
-function boundedUnknown(value: unknown, budget: AdapterTraversalBudget): unknown {
+/** Bounded producer-shaped arguments payload handed to the projector. */
+type ToolArgumentsPayload =
+	| string
+	| number
+	| boolean
+	| null
+	| readonly ToolArgumentsPayload[]
+	| { readonly [key: string]: ToolArgumentsPayload };
+
+function boundedUnknown(value: unknown, budget: AdapterTraversalBudget): ToolArgumentsPayload {
 	const preview = boundedAdapterPreview(value, budget, {
 		maxChars: 2_000,
 		maxDepth: 4,
@@ -53,14 +80,14 @@ function boundedUnknown(value: unknown, budget: AdapterTraversalBudget): unknown
 		maxNodes: 64,
 	});
 	try {
-		return JSON.parse(preview) as unknown;
+		return JSON.parse(preview);
 	} catch {
 		return { preview };
 	}
 }
 
 function textFromContent(content: unknown, budget: AdapterTraversalBudget): string | undefined {
-	if (typeof content === "string") return boundedAdapterText(content, TEXT_MAX, budget);
+	if (isStringValue(content)) return boundedAdapterText(content, TEXT_MAX, budget);
 	const parts = boundedArray(content, MAX_CONTENT_PARTS, budget);
 	if (parts.length === 0) return undefined;
 	let text = "";
@@ -137,13 +164,37 @@ function resultError(result: Record<string, unknown>, budget: AdapterTraversalBu
 	return error ? boundedText(error, CHILD_OUTPUT_MAX) : undefined;
 }
 
+interface ActivityResultSummary {
+	summary?: string;
+	error?: string;
+}
+
+/** Writable mirrors used to assemble snapshots field-by-field before returning them. */
+type MutableActivitySnapshot = { -readonly [K in keyof ActivitySnapshot]: ActivitySnapshot[K] };
+type MutableActivityMetrics = {
+	-readonly [K in keyof NonNullable<ActivitySnapshot["metrics"]>]: NonNullable<ActivitySnapshot["metrics"]>[K];
+};
+
+interface ProjectedInvocation {
+	prompt: string;
+	skill?: string;
+	model?: string;
+	thinking?: string;
+	fork?: boolean;
+}
+
+interface ProjectedInvocationRecord {
+	type: string;
+	tasks: readonly ProjectedInvocation[];
+}
+
 function projectedInvocationItem(
 	result: Record<string, unknown>,
 	source: Record<string, unknown> | undefined,
 	budget: AdapterTraversalBudget,
-): Record<string, unknown> {
+): ProjectedInvocation {
 	const prompt = firstString(budget, result.prompt, source?.prompt, source?.task) ?? "task";
-	const item: Record<string, unknown> = { prompt: boundedText(prompt, PROMPT_MAX) };
+	const item: ProjectedInvocation = { prompt: boundedText(prompt, PROMPT_MAX) };
 	const skill = firstString(budget, result.skill, source?.skill);
 	const model = firstString(budget, result.model, source?.model);
 	const thinking = firstString(budget, result.thinking, source?.thinking);
@@ -160,7 +211,7 @@ function invocationFromRecord(
 	mode: string,
 	results: readonly Record<string, unknown>[],
 	budget: AdapterTraversalBudget,
-): Record<string, unknown> | undefined {
+): ProjectedInvocationRecord | undefined {
 	const args = asRecord(record.arguments ?? record.input, budget);
 	const argumentTasks = boundedArray(args?.tasks, MAX_RESULTS, budget)
 		.map((value) => asRecord(value, budget))
@@ -180,22 +231,23 @@ function nestedToolStatus(value: unknown): ActivityStatus {
 }
 
 function isRunningToolValue(value: unknown): boolean {
-	if (typeof value !== "object" || value === null) return false;
-	const status = (value as Record<string, unknown>).status;
+	if (!isRecordLike(value)) return false;
+	const status = value.status;
 	return status === "pending" || status === "queued" || status === "running";
+}
+
+function isActiveSnapshot(value: unknown): value is ActivitySnapshot {
+	if (!isRecordLike(value)) return false;
+	return value.status === "queued" || value.status === "running";
 }
 
 function boundedToolActivities(
 	activities: readonly ActivitySnapshot[],
 	budget: AdapterTraversalBudget,
 ): ActivitySnapshot[] {
-	return boundedPriorityArray(
-		activities,
-		MAX_TOOLS_PER_RESULT,
-		budget,
-		(value) => typeof value === "object" && value !== null
-			&& (((value as ActivitySnapshot).status === "queued") || (value as ActivitySnapshot).status === "running"),
-	).map((entry) => entry.value as ActivitySnapshot);
+	// SAFETY: activities arrives as ActivitySnapshot[] and boundedPriorityArray only filters/reorders entries.
+	return boundedPriorityArray(activities, MAX_TOOLS_PER_RESULT, budget, isActiveSnapshot)
+		.map((entry) => entry.value as ActivitySnapshot);
 }
 
 function nestedToolsFromMessages(
@@ -302,13 +354,13 @@ function metricsFromResult(result: Record<string, unknown>, budget: AdapterTrave
 	const settledAt = numberFrom(result.settledAt ?? result.endedAt);
 	const elapsedMs = explicitElapsed ?? (startedAt !== undefined && settledAt !== undefined ? Math.max(0, settledAt - startedAt) : undefined);
 	if (![tokensIn, tokensOut, costUsd, turns, elapsedMs].some((value) => value !== undefined && value > 0)) return undefined;
-	return {
-		...(tokensIn !== undefined && tokensIn > 0 ? { tokensIn } : {}),
-		...(tokensOut !== undefined && tokensOut > 0 ? { tokensOut } : {}),
-		...(costUsd !== undefined && costUsd > 0 ? { costUsd } : {}),
-		...(turns !== undefined && turns > 0 ? { turns } : {}),
-		...(elapsedMs !== undefined && elapsedMs > 0 ? { elapsedMs } : {}),
-	};
+	const metrics: MutableActivityMetrics = {};
+	if (tokensIn !== undefined && tokensIn > 0) metrics.tokensIn = tokensIn;
+	if (tokensOut !== undefined && tokensOut > 0) metrics.tokensOut = tokensOut;
+	if (costUsd !== undefined && costUsd > 0) metrics.costUsd = costUsd;
+	if (turns !== undefined && turns > 0) metrics.turns = turns;
+	if (elapsedMs !== undefined && elapsedMs > 0) metrics.elapsedMs = elapsedMs;
+	return metrics;
 }
 
 function sumMetric(results: readonly ActivitySnapshot[], key: keyof NonNullable<ActivitySnapshot["metrics"]>): number | undefined {
@@ -323,13 +375,13 @@ function aggregateMetrics(results: readonly ActivitySnapshot[]): ActivitySnapsho
 	const turns = sumMetric(results, "turns");
 	const elapsedMs = sumMetric(results, "elapsedMs");
 	if ([tokensIn, tokensOut, costUsd, turns, elapsedMs].every((value) => value === undefined)) return undefined;
-	return {
-		...(tokensIn === undefined ? {} : { tokensIn }),
-		...(tokensOut === undefined ? {} : { tokensOut }),
-		...(costUsd === undefined ? {} : { costUsd }),
-		...(turns === undefined ? {} : { turns }),
-		...(elapsedMs === undefined ? {} : { elapsedMs }),
-	};
+	const metrics: MutableActivityMetrics = {};
+	if (tokensIn !== undefined) metrics.tokensIn = tokensIn;
+	if (tokensOut !== undefined) metrics.tokensOut = tokensOut;
+	if (costUsd !== undefined) metrics.costUsd = costUsd;
+	if (turns !== undefined) metrics.turns = turns;
+	if (elapsedMs !== undefined) metrics.elapsedMs = elapsedMs;
+	return metrics;
 }
 
 function childActivity(
@@ -347,23 +399,27 @@ function childActivity(
 	const metrics = metricsFromResult(result, budget);
 	const model = firstString(budget, result.model);
 	const thinking = firstString(budget, result.thinking);
-	return {
+	const child: MutableActivitySnapshot = {
 		id: `${parentId}:result:${index}`,
 		kind: "task",
 		title: taskTitle(prompt),
 		status,
 		invocation: projectedInvocationItem(result, undefined, budget),
 		subject: `task ${numberFrom(result.index) ?? index + 1}`,
-		...(status === "running" ? { currentStep: taskTitle(prompt) } : {}),
-		...(output ? { outputTail: output } : {}),
-		...(activeTools.length > 0 ? { activeTools } : {}),
-		...(status === "failed" || status === "cancelled" || status === "succeeded"
-			? { result: { ...(output ? { summary: output } : {}), ...(error ? { error } : {}) } }
-			: {}),
-		...(model ? { model } : {}),
-		...(thinking ? { thinking } : {}),
-		...(metrics ? { metrics } : {}),
 	};
+	if (status === "running") child.currentStep = taskTitle(prompt);
+	if (output) child.outputTail = output;
+	if (activeTools.length > 0) child.activeTools = activeTools;
+	if (status === "failed" || status === "cancelled" || status === "succeeded") {
+		const resultSummary: ActivityResultSummary = {};
+		if (output) resultSummary.summary = output;
+		if (error) resultSummary.error = error;
+		child.result = resultSummary;
+	}
+	if (model) child.model = model;
+	if (thinking) child.thinking = thinking;
+	if (metrics) child.metrics = metrics;
+	return child;
 }
 
 function labeledOutput(child: ActivitySnapshot, index: number, total: number): string | undefined {
@@ -427,27 +483,33 @@ export function activityFromNativeTaskRecord(
 	const updatedAt = numberFrom(details?.updatedAt ?? record.updatedAt);
 	const parentElapsed = numberFrom(details?.elapsedMs ?? details?.durationMs)
 		?? (startedAt !== undefined && updatedAt !== undefined ? Math.max(0, updatedAt - startedAt) : undefined);
-	const metrics = childMetrics || parentElapsed !== undefined
-		? { ...childMetrics, ...(parentElapsed !== undefined ? { elapsedMs: parentElapsed } : {}) }
-		: undefined;
+	let metrics: ActivitySnapshot["metrics"];
+	if (childMetrics || parentElapsed !== undefined) {
+		const merged: MutableActivityMetrics = { ...childMetrics };
+		if (parentElapsed !== undefined) merged.elapsedMs = parentElapsed;
+		metrics = merged;
+	}
 	const model = single?.model ?? firstString(budget, details?.modelOverride, argumentTasks[0]?.model, args?.model, record.model);
 	const thinking = single?.thinking ?? firstString(budget, argumentTasks[0]?.thinking, args?.thinking, record.thinking);
-	return {
-		id,
-		kind: "task",
-		title: taskTitle(firstPrompt),
-		status,
-		...(invocation ? { invocation } : {}),
-		...(mode === "single" ? {} : { subject: `${mode} · ${Math.max(children.length, argumentTasks.length)} tasks` }),
-		...(progress ? { currentStep: progress } : {}),
-		...(outputTail ? { outputTail: boundedText(outputTail) } : {}),
-		...(activeTools && activeTools.length > 0 ? { activeTools } : {}),
-		...(summary || error ? { result: { ...(summary ? { summary } : {}), ...(error ? { error } : {}) } } : {}),
-		...(startedAt === undefined ? {} : { createdAt: startedAt }),
-		...(updatedAt === undefined ? {} : { updatedAt }),
-		...((status === "succeeded" || status === "failed" || status === "cancelled") && updatedAt !== undefined ? { settledAt: updatedAt } : {}),
-		...(model ? { model } : {}),
-		...(thinking ? { thinking } : {}),
-		...(metrics ? { metrics } : {}),
-	};
+	const snapshot: MutableActivitySnapshot = { id, kind: "task", title: taskTitle(firstPrompt), status };
+	if (invocation) snapshot.invocation = invocation;
+	if (mode !== "single") snapshot.subject = `${mode} · ${Math.max(children.length, argumentTasks.length)} tasks`;
+	if (progress) snapshot.currentStep = progress;
+	if (outputTail) snapshot.outputTail = boundedText(outputTail);
+	if (activeTools && activeTools.length > 0) snapshot.activeTools = activeTools;
+	if (summary || error) {
+		const resultSummary: ActivityResultSummary = {};
+		if (summary) resultSummary.summary = summary;
+		if (error) resultSummary.error = error;
+		snapshot.result = resultSummary;
+	}
+	if (startedAt !== undefined) snapshot.createdAt = startedAt;
+	if (updatedAt !== undefined) {
+		snapshot.updatedAt = updatedAt;
+		if (status === "succeeded" || status === "failed" || status === "cancelled") snapshot.settledAt = updatedAt;
+	}
+	if (model) snapshot.model = model;
+	if (thinking) snapshot.thinking = thinking;
+	if (metrics) snapshot.metrics = metrics;
+	return snapshot;
 }

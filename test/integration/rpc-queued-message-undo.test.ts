@@ -18,7 +18,20 @@ afterEach(() => {
 	app = undefined;
 });
 
-async function readPromptCommands(path: string): Promise<Array<Record<string, unknown>>> {
+interface PromptCommand {
+	readonly type: string;
+	readonly message?: string;
+	readonly streamingBehavior?: string;
+}
+
+interface EvidenceEvent {
+	readonly type: string;
+	readonly toolNames?: readonly string[];
+	readonly role?: string;
+	readonly text?: string;
+}
+
+async function readPromptCommands(path: string): Promise<PromptCommand[]> {
 	let text = "";
 	try {
 		text = await readFile(path, "utf8");
@@ -29,7 +42,11 @@ async function readPromptCommands(path: string): Promise<Array<Record<string, un
 		.trim()
 		.split("\n")
 		.filter(Boolean)
-		.map((line) => JSON.parse(line) as Record<string, unknown>)
+		.map((line) =>
+			// SAFETY: the log is written by the RPC child fixture as JSON lines;
+			// only frames carrying a prompt type are kept by the filter below.
+			JSON.parse(line) as PromptCommand,
+		)
 		.filter((command) => command.type === "prompt");
 }
 
@@ -183,15 +200,19 @@ export default function install(pi) {
 	return providerPath;
 }
 
-async function readEvidence(path: string): Promise<Array<Record<string, unknown>>> {
+async function readEvidence(path: string): Promise<EvidenceEvent[]> {
 	try {
-		return (await readFile(path, "utf8")).trim().split("\n").filter(Boolean).map((line) => JSON.parse(line) as Record<string, unknown>);
+		return (await readFile(path, "utf8")).trim().split("\n").filter(Boolean).map((line) =>
+			// SAFETY: the evidence file is written by the fixture provider as JSON
+			// lines carrying the event fields asserted below.
+			JSON.parse(line) as EvidenceEvent,
+		);
 	} catch {
 		return [];
 	}
 }
 
-async function waitForEvidence(path: string, predicate: (events: readonly Record<string, unknown>[]) => boolean, timeoutMs = 10_000): Promise<Array<Record<string, unknown>>> {
+async function waitForEvidence(path: string, predicate: (events: readonly EvidenceEvent[]) => boolean, timeoutMs = 10_000): Promise<EvidenceEvent[]> {
 	const started = Date.now();
 	while (Date.now() - started < timeoutMs) {
 		const events = await readEvidence(path);

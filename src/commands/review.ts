@@ -5,7 +5,7 @@ import type { AtCapacityDetails, SpawnSubagentTask } from "../subagents/manager.
 export const DEFAULT_REVIEW_MODEL = "openai-codex/gpt-5.3-codex";
 
 /** Short aliases → full provider/model ids. */
-export const MODEL_ALIASES: Record<string, string> = {
+export const MODEL_ALIASES = {
 	codex: "openai-codex/gpt-5.3-codex",
 	opus: "anthropic/claude-opus-4.6",
 	sonnet: "anthropic/claude-sonnet-4.6",
@@ -32,11 +32,12 @@ export function resolveReviewModel(env: NodeJS.ProcessEnv = process.env): string
  *   "opus"       → { model: "anthropic/claude-opus-4.6",  scopeArgs: "" }
  *   ""           → { model: undefined, scopeArgs: "" }
  */
-export function extractModelAlias(args: string): { model: string | undefined; scopeArgs: string } {
+export function extractModelAlias(args: string) {
 	const trimmed = args.trim();
 	const spaceIdx = trimmed.indexOf(" ");
 	const firstWord = (spaceIdx === -1 ? trimmed : trimmed.slice(0, spaceIdx)).toLowerCase();
-	const alias = MODEL_ALIASES[firstWord];
+	// SAFETY: the `in` check guarantees firstWord is a key of MODEL_ALIASES.
+	const alias = firstWord in MODEL_ALIASES ? MODEL_ALIASES[firstWord as keyof typeof MODEL_ALIASES] : undefined;
 	if (alias) {
 		const rest = spaceIdx === -1 ? "" : trimmed.slice(spaceIdx + 1);
 		return { model: alias, scopeArgs: rest };

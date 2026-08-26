@@ -47,6 +47,7 @@ export function draftCommitMessage(branch: string, files: readonly string[]): st
 }
 
 async function exec(pi: ExtensionAPI, cmd: string, args: readonly string[], cwd: string): Promise<ExecResult> {
+	// SAFETY: pi.exec resolves with an ExecResult-shaped object matching this interface (code/stdout/stderr/killed).
 	return pi.exec(cmd, [...args], { cwd, timeout: 30_000 }) as Promise<ExecResult>;
 }
 

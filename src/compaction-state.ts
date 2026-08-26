@@ -14,12 +14,18 @@ const COMPACTION_REASON_KEY = Symbol.for("sumocode.compactionReason");
 
 export type CompactionReason = "manual" | "threshold" | "overflow";
 
-type Global = typeof globalThis & Record<symbol, CompactionReason | null>;
+function setGlobal(reason: CompactionReason | null): void {
+	// SAFETY: the symbol key is module-private and only ever written with
+	// CompactionReason | null values, so the global slot holds exactly that type.
+	(globalThis as { [COMPACTION_REASON_KEY]?: CompactionReason | null })[COMPACTION_REASON_KEY] = reason;
+}
 
 export function setCompactionReason(reason: CompactionReason | null): void {
-	(globalThis as Global)[COMPACTION_REASON_KEY] = reason;
+	setGlobal(reason);
 }
 
 export function getCompactionReason(): CompactionReason | null {
-	return (globalThis as Global)[COMPACTION_REASON_KEY] ?? null;
+	// SAFETY: see setGlobal — this module owns the only writes to the symbol key.
+	const stored = (globalThis as { [COMPACTION_REASON_KEY]?: CompactionReason | null })[COMPACTION_REASON_KEY];
+	return stored ?? null;
 }

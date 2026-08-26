@@ -92,9 +92,11 @@ export function rpcVisualFixtureFromEnv(env: NodeJS.ProcessEnv): RpcVisualFixtur
 	if (!fixtureId) return undefined;
 	if (fixtureId !== "completed-active") throw new Error(`Unsupported RPC visual fixture: ${fixtureId}`);
 	const inputPreview = env.SUMOCODE_VISUAL_RPC_INPUT_PREVIEW;
-	return {
+	const fixture = {
 		transcript: COMPLETED_ACTIVE_TRANSCRIPT,
 		state: COMPLETED_ACTIVE_STATE,
-		...(inputPreview && inputPreview.length > 0 ? { inputPreview } : {}),
+		inputPreview: inputPreview && inputPreview.length > 0 ? inputPreview : undefined,
 	};
+	if (!inputPreview || inputPreview.length === 0) delete fixture.inputPreview;
+	return fixture;
 }

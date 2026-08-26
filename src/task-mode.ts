@@ -68,19 +68,36 @@ export function resetTaskMarkerEnvForTests(): void {
 	capturedMarkerEnv = undefined;
 }
 
+interface DiagDetail {
+	readonly reason?: string;
+	readonly file?: string;
+	readonly bytes?: number;
+	readonly message?: string;
+	readonly taskMode?: string;
+	readonly keepOpen?: string;
+	readonly graceMs?: number;
+	readonly cmuxSurfaceId?: string;
+	readonly cmuxWorkspaceId?: string;
+	readonly source?: string;
+	readonly armed?: boolean;
+	readonly userTookOver?: boolean;
+	readonly code?: number;
+	readonly remaining?: number;
+}
+
 /**
  * Env-gated diagnostic logging. Set `SUMOCODE_TASK_DIAG_FILE=/tmp/xxx.jsonl`
  * to capture every lifecycle event the auto-exit goes through. Used by
  * `scripts/diag-task-auto-exit.mjs` to figure out where the close stalls.
  * No-op when the env var is unset (production default).
  */
-function diagLog(event: string, detail?: Record<string, unknown>): void {
+function diagLog(event: string, detail?: DiagDetail): void {
 	const file = capturedMarkerEnv?.SUMOCODE_TASK_DIAG_FILE ?? process.env.SUMOCODE_TASK_DIAG_FILE;
 	if (!file) return;
 	try {
 		appendFileSync(
 			file,
-			`${JSON.stringify({ t: Date.now(), pid: process.pid, event, ...(detail ?? {}) })}\n`,
+			`${JSON.stringify({ t: Date.now(), pid: process.pid, event, ...(detail ?? undefined) })}\n`,
 		);
 	} catch {
 		// diagnostics must never crash the extension
@@ -96,14 +113,23 @@ function diagLog(event: string, detail?: Record<string, unknown>): void {
  * Content is a block array (text blocks, tool_use blocks, etc.) — we
  * concatenate all text blocks of the last assistant message.
  */
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- predicate over an untyped Pi block field; the typeof check is the sanctioned parse.
+function isText(value: unknown): value is string {
+	return typeof value === "string";
+}
+
 export function extractFinalAssistantText(messages: unknown[]): string {
 	if (!Array.isArray(messages)) return "";
 	for (let i = messages.length - 1; i >= 0; i -= 1) {
+		// SAFETY: agent_end messages are untrusted Pi payloads; each entry is
+		// narrowed by the role/content guards below.
 		const msg = messages[i] as { role?: unknown; content?: unknown } | null;
 		if (!msg || msg.role !== "assistant" || !Array.isArray(msg.content)) continue;
 		const parts: string[] = [];
+		// SAFETY: msg.content was checked to be an array above; each block is
+		// narrowed by the type/text guards below.
 		for (const block of msg.content as Array<{ type?: unknown; text?: unknown }>) {
-			if (block && block.type === "text" && typeof block.text === "string") {
+			if (block && block.type === "text" && isText(block.text)) {
 				parts.push(block.text);
 			}
 		}
@@ -166,9 +192,13 @@ export function writeTaskStartedMarker(env: NodeJS.ProcessEnv = process.env): vo
 	}
 }
 
+function isNumber(value: number | undefined): value is number {
+	return typeof value === "number";
+}
+
 function installTaskExitMarker(env: NodeJS.ProcessEnv = process.env): void {
 	if (!env.SUMOCODE_TASK_EXIT_FILE) return;
-	process.once("exit", (code) => writeTaskExitMarker(typeof code === "number" ? code : 0, env));
+	process.once("exit", (code) => writeTaskExitMarker(isNumber(code) ? code : 0, env));
 }
 
 const STATUS_KEY = "sumocode-task-auto-exit";
@@ -261,7 +291,11 @@ export function installTaskModeAutoExit(pi: ExtensionAPI, options: TaskModeAutoE
 		// Always persist the latest completed turn. Completion is keyed off the
 		// real process-exit marker, so response.md can be overwritten safely if a
 		// human takes over and sends follow-up turns before shutdown.
-		persistResponse((event as { messages?: unknown[] }).messages ?? []);
+		persistResponse(
+			// SAFETY: agent_end carries the completed turn's messages; non-array
+			// payloads fall back to an empty list below.
+			(event as { messages?: unknown[] }).messages ?? [],
+		);
 		if (userTookOver) return;
 		// Only auto-exit on the FIRST agent_end after launch. Subsequent
 		// agent_end events fire because the user typed follow-up prompts

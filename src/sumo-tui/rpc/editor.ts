@@ -168,11 +168,11 @@ class MidLineSlashAutocompleteProvider extends CombinedAutocompleteProvider {
 		const match = options.force ? null : /[ \t]\/([^\s/]*)$/.exec(textBeforeCursor);
 		if (match) {
 			const prefix = match[1] ?? "";
-			const items = this.slashCommands.map((command) => ({
-				value: command.name,
-				label: command.name,
-				...(command.description ? { description: command.description } : {}),
-			}));
+			const items = this.slashCommands.map((command) => {
+				const item: AutocompleteItem = { value: command.name, label: command.name };
+				if (command.description) item.description = command.description;
+				return item;
+			});
 			const filtered = prefix.length === 0 ? items : fuzzyFilter(items, prefix, (item) => item.value);
 			if (filtered.length > 0) return { items: filtered, prefix };
 		}
@@ -306,13 +306,20 @@ export class RpcHostEditorController implements EditorTextController, KeyTarget 
 		if (options.onThinkingCycle) this.editor.onAction("app.thinking.cycle", options.onThinkingCycle);
 		if (options.onToolsExpandToggle) this.editor.onAction("app.tools.expand", options.onToolsExpandToggle);
 		if (options.onMessageFollowUp) this.editor.onAction("app.message.followUp", options.onMessageFollowUp);
-		if (options.onMessageForceSend) (this.editor.onAction as (action: string, handler: () => void) => void)("app.message.forceSend", options.onMessageForceSend);
+		if (options.onMessageForceSend) {
+			// SAFETY: CustomEditor's action map is string-keyed at runtime and
+			// matches() consults our merged keybindings table, which defines
+			// app.message.forceSend; only the declared signature is narrow.
+			(this.editor.onAction as (action: string, handler: () => void) => void)("app.message.forceSend", options.onMessageForceSend);
+		}
 		if (options.onMessageDequeue) this.editor.onAction("app.message.dequeue", options.onMessageDequeue);
-		// Cast: `app.theme.cycle` is a SumoCode-custom action, not part of pi's
-		// AppKeybinding union. CustomEditor's action map is string-keyed at
-		// runtime and `matches()` consults OUR merged keybindings table (which
-		// defines the action above), so only the declared signature is narrow.
-		if (options.onThemeCycle) (this.editor.onAction as (action: string, handler: () => void) => void)("app.theme.cycle", options.onThemeCycle);
+		if (options.onThemeCycle) {
+			// SAFETY: `app.theme.cycle` is a SumoCode-custom action, not part of
+			// pi's AppKeybinding union. CustomEditor's action map is string-keyed
+			// at runtime and matches() consults OUR merged keybindings table
+			// (which defines the action above), so the widened signature is exact.
+			(this.editor.onAction as (action: string, handler: () => void) => void)("app.theme.cycle", options.onThemeCycle);
+		}
 		// Ctrl+V → app.clipboard.pasteImage: read the clipboard image to a
 		// pi-clipboard-* temp file and insert its path; CathedralEditor's
 		// insertTextAtCursor collapses it into a compact [Image N] token
@@ -478,10 +485,22 @@ function modelToAutocompleteItem(model: RpcModelOption): AutocompleteItem {
 }
 
 function createFallbackTui(onRenderRequest: (() => void) | undefined): TUI {
-	return {
+	interface FallbackTerminal {
+		columns: number;
+		rows: number;
+		setTitle(title: string): void;
+	}
+	interface FallbackTui {
+		requestRender(): void;
+		terminal: FallbackTerminal;
+	}
+	const fallback: FallbackTui = {
 		requestRender: () => onRenderRequest?.(),
 		terminal: { columns: 80, rows: 24, setTitle: () => undefined },
-	} as unknown as TUI;
+	};
+	// SAFETY: TUI satisfies FallbackTui structurally; this fallback is only
+	// handed to CustomEditor paths that touch requestRender/terminal.
+	return fallback as TUI;
 }
 
 function createFallbackEditorTheme(): EditorTheme {
@@ -499,9 +518,12 @@ function createFallbackEditorTheme(): EditorTheme {
 }
 
 function createNoopKeybindings(): KeybindingsManager {
-	return {
+	const noop: Pick<KeybindingsManager, "matches"> = {
 		matches: () => false,
-	} as unknown as KeybindingsManager;
+	};
+	// SAFETY: this noop manager is only used where matches() gates every
+	// lookup; no other KeybindingsManager member is invoked.
+	return noop as KeybindingsManager;
 }
 
 /**
@@ -611,9 +633,19 @@ export function resolveRpcAgentDir(options: ResolveRpcAgentDirOptions = {}): str
 	return join(resolve(options.homeDir ?? homedir()), ".pi", "agent");
 }
 
-function isKeyIdLike(value: unknown): value is string | string[] {
-	if (typeof value === "string") return true;
-	return Array.isArray(value) && value.every((entry) => typeof entry === "string");
+type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
+
+function isConfigObject(value: JsonValue | undefined): value is { [key: string]: JsonValue } {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isStringEntry(entry: JsonValue | undefined): entry is string {
+	return typeof entry === "string";
+}
+
+function isKeyIdLike(value: JsonValue): value is string | string[] {
+	if (isStringEntry(value)) return true;
+	return Array.isArray(value) && value.every(isStringEntry);
 }
 
 /**
@@ -627,21 +659,27 @@ function isKeyIdLike(value: unknown): value is string | string[] {
 export function loadRpcKeybindingsOverrides(agentDir: string): KeybindingsConfig {
 	const path = join(agentDir, "keybindings.json");
 	if (!existsSync(path)) return {};
-	let parsed: unknown;
+	let parsed: JsonValue;
 	try {
-		parsed = JSON.parse(readFileSync(path, "utf8"));
+		// SAFETY: JSON.parse results are untyped by definition; every field is
+		// validated by isKeyIdLike before being copied into the config object.
+		parsed = JSON.parse(readFileSync(path, "utf8")) as JsonValue;
 	} catch {
 		return {};
 	}
-	if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return {};
+	if (!isConfigObject(parsed)) return {};
 	// User-authored keybindings.json is untyped JSON at the boundary -- `KeyId`
 	// is a template-literal union pi-tui validates internally via `matches()`
 	// at lookup time, not something we can narrow to statically here. Filtering
 	// to string/string[] shapes (mirrors pi's own `toKeybindingsConfig`) is the
 	// same validation depth pi's real loader applies before this cast.
 	const config: KeybindingsConfig = {};
-	for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
-		if (isKeyIdLike(value)) config[key] = value as never;
+	for (const [key, value] of Object.entries(parsed)) {
+		if (isKeyIdLike(value)) {
+			// SAFETY: isKeyIdLike proved value is a raw string or string[]; pi-tui's
+			// matches() re-validates the KeyId template-literal union at lookup time.
+			config[key] = value as never;
+		}
 	}
 	return config;
 }
@@ -658,5 +696,7 @@ export interface CreateRpcKeybindingsManagerOptions extends ResolveRpcAgentDirOp
 export function createRpcKeybindingsManager(options: CreateRpcKeybindingsManagerOptions = {}): KeybindingsManager {
 	const agentDir = resolveRpcAgentDir(options);
 	const userBindings = loadRpcKeybindingsOverrides(agentDir);
-	return new PiTuiKeybindingsManager(RPC_KEYBINDING_DEFINITIONS, userBindings) as unknown as KeybindingsManager;
+	// SAFETY: PiTuiKeybindingsManager implements the same matching surface;
+	// the public KeybindingsManager type is a structural subset used here.
+	return new PiTuiKeybindingsManager(RPC_KEYBINDING_DEFINITIONS, userBindings) as KeybindingsManager;
 }

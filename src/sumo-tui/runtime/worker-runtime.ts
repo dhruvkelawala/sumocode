@@ -31,6 +31,9 @@ interface MutableWorkerHandle<T> extends WorkerHandle<T> {
 	readonly controller: AbortController;
 }
 
+/** Non-generic surface the exclusive-group registry actually needs. */
+type ExclusiveWorker = Pick<MutableWorkerHandle<never>, "cancel">;
+
 /**
  * Small in-process async worker coordinator.
  *
@@ -41,7 +44,7 @@ interface MutableWorkerHandle<T> extends WorkerHandle<T> {
  */
 export class CancellableWorkerRuntime {
 	private nextId = 0;
-	private readonly exclusiveWorkers = new Map<string, MutableWorkerHandle<unknown>>();
+	private readonly exclusiveWorkers = new Map<string, ExclusiveWorker>();
 
 	public start<T>(options: WorkerStartOptions<T>): WorkerHandle<T> {
 		const id = ++this.nextId;
@@ -65,7 +68,7 @@ export class CancellableWorkerRuntime {
 
 		if (options.exclusiveGroup) {
 			this.exclusiveWorkers.get(options.exclusiveGroup)?.cancel();
-			this.exclusiveWorkers.set(options.exclusiveGroup, handle as MutableWorkerHandle<unknown>);
+			this.exclusiveWorkers.set(options.exclusiveGroup, handle);
 		}
 
 		void this.execute(options, handle).then(resolveResult);

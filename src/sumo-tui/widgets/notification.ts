@@ -17,14 +17,15 @@ export interface NotificationCenterOptions {
 	readonly onChange?: () => void;
 }
 
-const LEVEL_PREFIX: Record<NotificationLevel, string> = {
+const LEVEL_PREFIX = {
 	info: "ⓘ",
 	success: "✓",
 	warning: "⚠",
 	error: "✖",
-};
+} satisfies Record<NotificationLevel, string>;
 
 function stripAnsi(text: string): string {
+	// oxlint-disable-next-line no-control-regex -- intentional ESC byte match to strip ANSI styling from notification text
 	return text.replace(/\u001b\[[0-9;]*m/g, "");
 }
 

@@ -1,9 +1,24 @@
 import { describe, expect, it, vi } from "vitest";
 import { registerDivineQueryCommand } from "./divine-query.js";
 
+/** Minimal command-handler context shape exercised by these tests. */
+type CommandHandler = (
+	args: string[],
+	ctx: {
+		hasUI: boolean;
+		mode?: string;
+		ui?: {
+			custom?: (...args: unknown[]) => Promise<string | number>;
+			select?: (...args: unknown[]) => Promise<string | number>;
+			notify?: (...args: unknown[]) => void;
+		};
+	},
+) => Promise<void>;
+
 describe("/sumo:query slash command", () => {
 	it("registers /sumo:query on the pi API", () => {
 		const registerCommand = vi.fn();
+		// SAFETY: test double only exercises registerCommand, the sole member used here.
 		registerDivineQueryCommand({ registerCommand } as never);
 
 		expect(registerCommand).toHaveBeenCalledWith(
@@ -13,12 +28,13 @@ describe("/sumo:query slash command", () => {
 	});
 
 	it("opens the Divine Query overlay and reports the selected option", async () => {
-		let handler: ((args: string[], ctx: unknown) => Promise<void>) | undefined;
+		let handler: CommandHandler | undefined;
 		const registerCommand = vi.fn((_name: string, options: { handler: typeof handler }) => {
 			handler = options.handler;
 		});
 		const custom = vi.fn(async () => 0);
 		const notify = vi.fn();
+		// SAFETY: test double only exercises registerCommand, the sole member used here.
 		registerDivineQueryCommand({ registerCommand } as never);
 
 		await handler?.([], { hasUI: true, ui: { custom, notify } });
@@ -28,13 +44,14 @@ describe("/sumo:query slash command", () => {
 	});
 
 	it("uses primitive select in RPC mode and reports the selected option", async () => {
-		let handler: ((args: string[], ctx: unknown) => Promise<void>) | undefined;
+		let handler: CommandHandler | undefined;
 		const registerCommand = vi.fn((_name: string, options: { handler: typeof handler }) => {
 			handler = options.handler;
 		});
 		const select = vi.fn(async () => "Needs visual polish");
 		const custom = vi.fn();
 		const notify = vi.fn();
+		// SAFETY: test double only exercises registerCommand, the sole member used here.
 		registerDivineQueryCommand({ registerCommand } as never);
 
 		await handler?.([], { hasUI: true, mode: "rpc", ui: { select, custom, notify } });
@@ -45,11 +62,12 @@ describe("/sumo:query slash command", () => {
 	});
 
 	it("prints a message in non-interactive mode", async () => {
-		let handler: ((args: string[], ctx: unknown) => Promise<void>) | undefined;
+		let handler: CommandHandler | undefined;
 		const registerCommand = vi.fn((_name: string, options: { handler: typeof handler }) => {
 			handler = options.handler;
 		});
 		const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		// SAFETY: test double only exercises registerCommand, the sole member used here.
 		registerDivineQueryCommand({ registerCommand } as never);
 
 		try {

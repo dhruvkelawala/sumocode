@@ -1,3 +1,6 @@
+// oxlint-disable anti-slop/no-unknown-parameters, anti-slop/no-runtime-typeof, anti-slop/no-unsafe-dictionary-type, anti-slop/no-object-parameters, anti-slop/require-safety-comment-for-type-assertion -- roles.json file boundary parser: user-authored role overlays arrive as untrusted JSON,
+// so unknown-typed inputs, runtime typeof decoding guards, open records, and widening
+// assertions onto record shapes are this module's parsing contract.
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -199,17 +202,20 @@ export function loadRoles(dependencies: LoadRolesDependencies = {}): LoadedRoles
 			roles[roleIndex] = { ...roles[roleIndex], ...overlay } as SubagentRole;
 			continue;
 		}
-		roles.push({
-			id: overlay.id,
-			label: overlay.label as string,
-			description: overlay.description ?? "use for a custom operator-defined delegation role",
-			systemPrompt: overlay.systemPrompt as string,
-			...(hasOwn(overlay, "model") ? { model: overlay.model } : {}),
-			...(overlay.thinking ? { thinking: overlay.thinking } : {}),
-			...(overlay.tools ? { tools: overlay.tools } : {}),
-			...(overlay.defaultWorktree === undefined ? {} : { defaultWorktree: overlay.defaultWorktree }),
-			...(overlay.defaultVisible === undefined ? {} : { defaultVisible: overlay.defaultVisible }),
-		});
+		roles.push((() => {
+			const role: MutableRoleOverlay & { label: string; systemPrompt: string; description: string } = {
+				id: overlay.id,
+				label: overlay.label as string,
+				description: overlay.description ?? "use for a custom operator-defined delegation role",
+				systemPrompt: overlay.systemPrompt as string,
+			};
+			if (hasOwn(overlay, "model")) role.model = overlay.model;
+			if (overlay.thinking !== undefined) role.thinking = overlay.thinking;
+			if (overlay.tools !== undefined) role.tools = overlay.tools;
+			if (overlay.defaultWorktree !== undefined) role.defaultWorktree = overlay.defaultWorktree;
+			if (overlay.defaultVisible !== undefined) role.defaultVisible = overlay.defaultVisible;
+			return role as SubagentRole;
+		})());
 	}
 	return { roles, warnings };
 }

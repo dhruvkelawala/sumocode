@@ -72,7 +72,7 @@ describe("registerDiffCommand", () => {
 	}
 
 	function makePi(execImpl: (cmd: string, args: string[]) => Promise<{ code: number; killed: boolean; stdout: string; stderr: string }>) {
-		const handlers = new Map<string, (args: string | undefined, ctx: unknown) => Promise<void> | void>();
+		const handlers = new Map<string, (args: string | undefined, ctx: { hasUI: boolean; cwd?: string; ui?: { notify?: (...args: unknown[]) => void } }) => Promise<void> | void>();
 		const pi = {
 			registerCommand: vi.fn((name: string, opts: { handler: typeof handlers extends Map<string, infer V> ? V : never }) => {
 				handlers.set(name, opts.handler);
@@ -93,6 +93,7 @@ describe("registerDiffCommand", () => {
 
 	it("registers the sumo:diff slash command on Pi", () => {
 		const { pi } = makePi(async () => ({ code: 0, killed: false, stdout: "", stderr: "" }));
+		// SAFETY: test double only exercises the members this test asserts on.
 		registerDiffCommand(pi as never);
 		expect(pi.registerCommand).toHaveBeenCalledWith(
 			"sumo:diff",
@@ -102,6 +103,7 @@ describe("registerDiffCommand", () => {
 
 	it("notifies and exits when ctx.hasUI is false (e.g. RPC/print mode)", async () => {
 		const { pi, handlers } = makePi(async () => ({ code: 0, killed: false, stdout: "", stderr: "" }));
+		// SAFETY: test double only exercises the members this test asserts on.
 		registerDiffCommand(pi as never);
 		const handler = handlers.get("sumo:diff");
 		expect(handler).toBeDefined();
@@ -123,6 +125,7 @@ describe("registerDiffCommand", () => {
 			}
 			return { code: 0, killed: false, stdout: "", stderr: "" };
 		});
+		// SAFETY: test double only exercises the members this test asserts on.
 		registerDiffCommand(pi as never);
 
 		const { ctx, notifyMock } = makeCtx();
@@ -151,6 +154,7 @@ describe("registerDiffCommand", () => {
 		// exception escape; it must surface via ctx.ui.notify.
 		const { pi, handlers } = makePi(async () => ({ code: 0, killed: false, stdout: "", stderr: "" }));
 		const openCommandInSplit: TerminalHost["openCommandInSplit"] = vi.fn(async () => { throw new Error("boom: cmux blew up"); });
+		// SAFETY: test double only exercises the members this test asserts on.
 		registerDiffCommand(pi as never, { terminalHost: makeFakeHost("cmux", openCommandInSplit) });
 
 		const { ctx, notifyMock } = makeCtx();
@@ -184,6 +188,7 @@ describe("registerDiffCommand", () => {
 				}
 				return { code: 0, killed: false, stdout: "", stderr: "" };
 			});
+			// SAFETY: test double only exercises the members this test asserts on.
 			registerDiffCommand(pi as never, { terminalHost: cmuxTerminalHost });
 
 			const { ctx, notifyMock } = makeCtx();
@@ -219,6 +224,7 @@ describe("registerDiffCommand", () => {
 				}
 				return { code: 0, killed: false, stdout: "", stderr: "" };
 			});
+			// SAFETY: test double only exercises the members this test asserts on.
 			registerDiffCommand(pi as never, { terminalHost: cmuxTerminalHost });
 
 			const { ctx } = makeCtx();
@@ -244,6 +250,7 @@ describe("registerDiffCommand", () => {
 			}
 			return { code: 0, killed: false, stdout: "", stderr: "" };
 		});
+		// SAFETY: test double only exercises the members this test asserts on.
 		registerDiffCommand(pi as never, { terminalHost: cmuxTerminalHost });
 
 		const { ctx, notifyMock } = makeCtx();
@@ -258,6 +265,7 @@ describe("registerDiffCommand", () => {
 	it("opens a herdr split through an injected herdr host", async () => {
 		const openCommandInSplit = vi.fn<TerminalHost["openCommandInSplit"]>(async () => ({ ok: true as const, pane: { host: "herdr" as const, paneId: "pane:herdr-1" } }));
 		const { pi, handlers } = makePi(async () => ({ code: 0, killed: false, stdout: "", stderr: "" }));
+		// SAFETY: test double only exercises the members this test asserts on.
 		registerDiffCommand(pi as never, {
 			terminalHost: makeFakeHost("herdr", openCommandInSplit),
 			terminalSize: () => ({ columns: 160, rows: 50 }),
@@ -273,6 +281,7 @@ describe("registerDiffCommand", () => {
 
 	it("reports the honest no-host requirement without falling back to cmux", async () => {
 		const { pi, handlers } = makePi(async () => ({ code: 0, killed: false, stdout: "", stderr: "" }));
+		// SAFETY: test double only exercises the members this test asserts on.
 		registerDiffCommand(pi as never, {
 			terminalHost: makeFakeHost("none", vi.fn<TerminalHost["openCommandInSplit"]>(async () => ({ ok: false as const, error: "requires a terminal host (cmux or herdr)" }))),
 		});

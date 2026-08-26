@@ -1,76 +1,94 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { SUBAGENT_MAX_RUNNING, type SubagentEvent } from "./domain.js";
+import type { SpawnedChild } from "./backend-pi.js";
+import type { TerminalHost } from "../terminal-host/types.js";
 import { installSubagents } from "./index.js";
 
-const backend = vi.hoisted(() => ({
-	emitters: [] as Array<(event: SubagentEvent) => void>,
-	paneEmitters: [] as Array<(event: SubagentEvent) => void>,
+type ChildEmitter = (event: SubagentEvent) => void;
+
+/** Recorded interactions with the child-backend doubles. */
+interface BackendLog {
+	emitters: ChildEmitter[];
+	paneEmitters: ChildEmitter[];
+	piCalls: number;
+	/** SAFETY-free: placement is forwarded opaquely and never read here. */
+	paneCalls: Array<{ cwd: string; placement: unknown; model?: string; thinking?: string; tools?: readonly string[] }>;
+}
+
+const backend: BackendLog = {
+	emitters: [],
+	paneEmitters: [],
 	piCalls: 0,
-	paneCalls: [] as Array<{ cwd: string; placement: unknown; model?: string; thinking?: string; tools?: readonly string[] }>,
-}));
+	paneCalls: [],
+};
 
-vi.mock("./manifest.js", () => ({
-	buildCompletionManifest: vi.fn(async (options: { baseRef: string; outcome: { kind: "completed" | "failed" | "interrupted" }; worktree?: { path: string; branch: string } }) => ({
-		baseRef: options.baseRef,
-		headRef: "host-head",
-		branch: options.worktree?.branch,
-		worktreePath: options.worktree?.path,
-		changedPaths: options.worktree ? ["src/a.ts"] : [],
-		dirty: false,
-		commits: options.worktree ? 1 : 0,
-		exit: options.outcome.kind,
-		durationMs: 10,
-	})),
-}));
+/** Faithful stand-in for the herdr terminal host the manager talks through. */
+const fakeTerminalHost = (): TerminalHost => ({
+	kind: "herdr",
+	startAgentPane: vi.fn(),
+	sendPaneText: vi.fn(),
+	openCommandInSplit: vi.fn(),
+	openExistingWorktreeWorkspace: vi.fn(),
+	closePane: vi.fn(),
+	notify: vi.fn(),
+});
 
-vi.mock("../terminal-host/index.js", () => ({
-	getTerminalHost: () => ({
-		kind: "herdr",
-		startAgentPane: vi.fn(),
-		sendPaneText: vi.fn(),
-		openCommandInSplit: vi.fn(),
-		openExistingWorktreeWorkspace: vi.fn(),
-		closePane: vi.fn(),
-		notify: vi.fn(),
-	}),
-}));
+// SAFETY: placement is forwarded opaquely to the pane backend and never read here.
+const fakeSpawnPaneChild = vi.fn((options: { cwd: string; placement: unknown; model?: string; thinking?: string; tools?: readonly string[] }): SpawnedChild => {
+	backend.paneCalls.push(options);
+	return {
+		events: (emit: (event: SubagentEvent) => void) => {
+			backend.paneEmitters.push(emit);
+			emit({ kind: "run-started" });
+			emit({ kind: "pane-attached", pane: { agentName: "visible-worker-abc", workspaceId: "w1", tabId: "w1:t2", paneId: "w1:p3" } });
+		},
+		ready: Promise.resolve(),
+		interrupt: vi.fn(),
+	};
+});
 
-vi.mock("./backend-pane.js", () => ({
-	spawnPaneChild: vi.fn((options: { cwd: string; placement: unknown; model?: string; thinking?: string; tools?: readonly string[] }) => {
-		backend.paneCalls.push(options);
-		return {
-			events: (emit: (event: SubagentEvent) => void) => {
-				backend.paneEmitters.push(emit);
-				emit({ kind: "run-started" });
-				emit({ kind: "pane-attached", pane: { agentName: "visible-worker-abc", workspaceId: "w1", tabId: "w1:t2", paneId: "w1:p3" } });
-			},
-			ready: Promise.resolve(),
-			interrupt: vi.fn(),
-		};
-	}),
-}));
+const fakeSpawnPiChild = vi.fn((options: { model?: string }): SpawnedChild => {
+	backend.piCalls += 1;
+	let emitEvent: ((event: SubagentEvent) => void) | undefined;
+	return {
+		events: (emit: (event: SubagentEvent) => void) => {
+			emitEvent = emit;
+			backend.emitters.push(emit);
+			// Mirror the real backend's synchronous settle-as-failed path
+			// (invalid model override) for tests that need it.
+			if (options.model === "sync-fail") emit({ kind: "run-settled", outcome: { kind: "failed", errorText: "invalid model" } });
+			else emit({ kind: "run-started" });
+		},
+		interrupt: () => emitEvent?.({ kind: "run-settled", outcome: { kind: "interrupted" } }),
+		sessionFilePath: "/tmp/child-session.jsonl",
+	};
+});
 
-vi.mock("./backend-pi.js", () => ({
-	spawnPiChild: vi.fn((options: { model?: string }) => {
-		backend.piCalls += 1;
-		let emitEvent: ((event: SubagentEvent) => void) | undefined;
-		return {
-			events: (emit: (event: SubagentEvent) => void) => {
-				emitEvent = emit;
-				backend.emitters.push(emit);
-				// Mirror the real backend's synchronous settle-as-failed path
-				// (invalid model override) for tests that need it.
-				if (options.model === "sync-fail") emit({ kind: "run-settled", outcome: { kind: "failed", errorText: "invalid model" } });
-				else emit({ kind: "run-started" });
-			},
-			interrupt: vi.fn(() => emitEvent?.({ kind: "run-settled", outcome: { kind: "interrupted" } })),
-			sessionFilePath: "/tmp/child-session.jsonl",
-		};
-	}),
-}));
+/** Deterministic completion-manifest double mirroring the real builder's shape. */
+const fakeBuildCompletionManifest = async (options: { baseRef: string; outcome: { kind: "completed" | "failed" | "interrupted" }; worktree?: { path: string; branch: string } }) => ({
+	baseRef: options.baseRef,
+	headRef: "host-head",
+	branch: options.worktree?.branch,
+	worktreePath: options.worktree?.path,
+	changedPaths: options.worktree ? ["src/a.ts"] : [],
+	dirty: false,
+	commits: options.worktree ? 1 : 0,
+	exit: options.outcome.kind,
+	durationMs: 10,
+});
 
-type Handler = (event: unknown, ctx: unknown) => void;
-type Tool = { name: string; execute: (...args: unknown[]) => Promise<unknown> };
+/** Minimal command-handler context shape exercised by these tests. */
+type HandlerCtx = { cwd: string; model?: { provider: string; id: string }; isIdle?: () => boolean };
+type Handler = (event: { type: string }, ctx: HandlerCtx) => void;
+
+/** Tool result shape the tests inspect. */
+interface ToolResult {
+	content: Array<{ type: string; text: string }>;
+	isError?: boolean;
+}
+
+/** Minimal tool-definition shape captured from registerTool. */
+type Tool = { name: string; execute: (...args: unknown[]) => Promise<ToolResult> };
 
 const createHarness = (hasUI = false, mode: "tui" | "rpc" = "tui") => {
 	let idle = true;
@@ -82,10 +100,16 @@ const createHarness = (hasUI = false, mode: "tui" | "rpc" = "tui") => {
 		on: vi.fn((event: string, handler: Handler) => handlers.set(event, [...(handlers.get(event) ?? []), handler])),
 		registerTool: vi.fn((tool: Tool) => tools.set(tool.name, tool)),
 		sendMessage,
-		getActiveTools: vi.fn(() => ["read", "bash"]),
-		getThinkingLevel: vi.fn(() => "medium"),
+		getActiveTools: vi.fn((): string[] => ["read", "bash"]),
+		getThinkingLevel: vi.fn((): string => "medium"),
 	};
-	const manager = installSubagents(pi as never);
+	// SAFETY: the double implements every ExtensionAPI member installSubagents touches.
+	const manager = installSubagents(pi as never, {
+		terminalHost: fakeTerminalHost(),
+		spawnPaneChild: fakeSpawnPaneChild,
+		spawnPiChild: fakeSpawnPiChild,
+		managerDependencies: { buildCompletionManifest: fakeBuildCompletionManifest },
+	});
 	const ctx = {
 		cwd: "/tmp/project",
 		mode,
@@ -119,6 +143,8 @@ beforeEach(() => {
 	backend.paneEmitters.length = 0;
 	backend.piCalls = 0;
 	backend.paneCalls.length = 0;
+	fakeSpawnPaneChild.mockClear();
+	fakeSpawnPiChild.mockClear();
 });
 
 describe("subagent result delivery", () => {
@@ -141,7 +167,9 @@ describe("subagent result delivery", () => {
 
 		const widget = harness.setWidget.mock.calls.at(-1)?.[1];
 		expect(Array.isArray(widget)).toBe(true);
+		// SAFETY: Array.isArray(widget) is asserted above, so the string[] cast is checked.
 		expect((widget as string[]).join("\n")).toContain("1 running");
+		// SAFETY: Array.isArray(widget) is asserted above, so the string[] cast is checked.
 		expect((widget as string[]).join("\n")).toContain("sa-1 research");
 	});
 
@@ -150,6 +178,7 @@ describe("subagent result delivery", () => {
 		harness.fire("session_start");
 		for (let index = 0; index < SUBAGENT_MAX_RUNNING; index += 1) await spawn(harness.manager, `running-${index}`);
 		await spawn(harness.manager, "queued");
+		// SAFETY: the RPC setWidget contract delivers a component factory with a render method.
 		const factory = harness.setWidget.mock.calls.at(-1)?.[1] as (() => { render(width: number): string[] });
 		expect(factory().render(140).join("\n")).toContain("1 queued");
 
@@ -221,6 +250,7 @@ describe("subagent result delivery", () => {
 			},
 			{ deliverAs: "followUp", triggerTurn: true },
 		);
+		// SAFETY: sendMessage is always called with a single message payload argument.
 		const delivered = (harness.sendMessage.mock.calls[0] as unknown[])[0] as { content: string };
 		expect(delivered.content).toContain("```text\nshared checkout · base HEAD · +0 checkout commits · changed paths suppressed · checkout clean\n```");
 
@@ -292,6 +322,7 @@ describe("subagent result delivery", () => {
 		await spawn(harness.manager);
 		backend.emitters[0]?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "inline result" } });
 
+		// SAFETY: the ctx double carries only the members subagent_wait reads.
 		await harness.tool("subagent_wait").execute("tc", { ids: ["sa-1"] }, undefined, undefined, harness.ctx as never);
 		harness.setIdle(true);
 		harness.fire("agent_end");
@@ -352,6 +383,7 @@ describe("subagent result delivery", () => {
 		await vi.waitFor(() => expect(harness.manager.get("sa-1")?.status).toBe("done"));
 		harness.fire("agent_end");
 		expect(harness.sendMessage).toHaveBeenCalledTimes(1);
+		// SAFETY: sendMessage is always called with a single message payload argument.
 		expect((harness.sendMessage.mock.calls[0] as unknown[])[0]).toMatchObject({ customType: "subagent-result" });
 	});
 
@@ -373,8 +405,9 @@ describe("subagent result delivery", () => {
 		harness.setIdle(false);
 		const spawnTool = harness.tool("subagent_spawn");
 		// Force a synchronous settle-as-failed through an invalid model override.
-		const result = await spawnTool.execute("tc", { prompt: "p", name: "doomed", model: "sync-fail" }, undefined, undefined, harness.ctx as never);
-		const text = ((result as { content: Array<{ text: string }> }).content[0]).text;
+			// SAFETY: the ctx double carries only the members subagent_spawn reads.
+			const result = await spawnTool.execute("tc", { prompt: "p", name: "doomed", model: "sync-fail" }, undefined, undefined, harness.ctx as never);
+			const text = result.content[0]!.text;
 		expect(text).toContain("failed to start");
 		harness.fire("agent_end");
 		expect(harness.sendMessage).not.toHaveBeenCalled();
@@ -385,13 +418,15 @@ describe("subagent result delivery", () => {
 		harness.setIdle(false);
 		// Cancel sa-1 before it exists — manager reports unknown, and the
 		// delivery buffer must NOT record sa-1 as consumed.
-		await harness.tool("subagent_cancel").execute("tc", { ids: ["sa-1"] }, undefined, undefined, harness.ctx as never);
+			// SAFETY: the ctx double carries only the members subagent_cancel reads.
+			await harness.tool("subagent_cancel").execute("tc", { ids: ["sa-1"] }, undefined, undefined, harness.ctx as never);
 		// Now the real sa-1 spawns, settles, and must still auto-deliver.
 		await spawn(harness.manager, "real-sa-1");
 		backend.emitters.at(-1)?.({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
 		await vi.waitFor(() => expect(harness.manager.get("sa-1")?.status).toBe("done"));
 		harness.fire("agent_end");
 		expect(harness.sendMessage).toHaveBeenCalledTimes(1);
+		// SAFETY: sendMessage is always called with a single message payload argument.
 		expect((harness.sendMessage.mock.calls[0] as unknown[])[0]).toMatchObject({ customType: "subagent-result" });
 	});
 });

@@ -77,11 +77,17 @@ function notify(ctx: ExtensionContext, result: PersonaCommandResult): void {
 	stream.write(`${result.message}\n`);
 }
 
+/** Parsed EDITOR invocation: executable plus pre-split arguments. */
+export interface ParsedEditorCommand {
+	readonly command: string;
+	readonly args: readonly string[];
+}
+
 /** Parse an EDITOR command without invoking a shell. */
 export function parsePersonaEditorCommand(
 	editor: string,
 	pathExists: (path: string) => boolean = existsSync,
-): { command: string; args: readonly string[] } {
+): ParsedEditorCommand {
 	const trimmed = editor.trim();
 	// macOS application bundles and other executable paths may contain spaces.
 	// Prefer the complete existing path before interpreting whitespace as flags.

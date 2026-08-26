@@ -56,6 +56,7 @@ describe("updatePaletteState", () => {
 describe("showSearchPalette", () => {
 	it("uses the custom-component path in tui mode", async () => {
 		const custom = vi.fn(async () => "review:model");
+		// SAFETY: the ui double carries only custom/select, the surfaces showSearchPalette reads.
 		const result = await showSearchPalette({ mode: "tui", ui: { custom } } as never, {
 			title: "SUBAGENT ROLES",
 			placeholder: "what shall we tune…",
@@ -76,6 +77,7 @@ describe("showSearchPalette", () => {
 			labels.push(...options);
 			return options[1];
 		});
+		// SAFETY: the ui double carries only custom/select, the surfaces showSearchPalette reads.
 		const result = await showSearchPalette({ mode: "rpc", ui: { custom, select } } as never, {
 			title: "SUBAGENT ROLES",
 			placeholder: "what shall we tune…",
@@ -90,6 +92,7 @@ describe("showSearchPalette", () => {
 
 	it("returns undefined when the rpc select is cancelled", async () => {
 		const select = vi.fn(async () => undefined);
+		// SAFETY: the ui double carries only custom/select, the surfaces showSearchPalette reads.
 		const result = await showSearchPalette({ mode: "rpc", ui: { select } } as never, {
 			title: "SUBAGENT ROLES",
 			placeholder: "what shall we tune…",

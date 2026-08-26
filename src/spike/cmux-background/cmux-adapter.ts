@@ -77,6 +77,8 @@ function delay(ms: number): Promise<void> {
 
 function parseJson<T>(text: string): T | undefined {
 	try {
+		// SAFETY: JSON.parse is invoked on a freshly read line from the cmux
+		// socket; a syntax error is caught below and yields undefined.
 		return JSON.parse(text) as T;
 	} catch {
 		return undefined;

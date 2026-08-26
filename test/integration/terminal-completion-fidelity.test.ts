@@ -5,9 +5,14 @@ import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { afterEach, describe, expect, it } from "vitest";
 
+interface RpcRequest {
+	readonly type: string;
+	readonly message?: string;
+}
+
 interface RpcClient {
 	readonly child: ChildProcessWithoutNullStreams;
-	request(command: Record<string, unknown>): Promise<any>;
+	request(command: RpcRequest): Promise<any>;
 }
 
 const roots: string[] = [];
@@ -33,6 +38,8 @@ function launch(extension: string, sessionDir: string, sessionFile: string): Rpc
 	children.push(child);
 	const waiters = new Map<string, { resolve: (value: any) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>();
 	createInterface({ input: child.stdout }).on("line", (line) => {
+		// SAFETY: every RPC reply frame is a JSON object with an id field matching
+		// a pending waiter; non-object frames are ignored below via the id guard.
 		const value = JSON.parse(line) as { id?: string };
 		if (!value.id) return;
 		const waiter = waiters.get(value.id);

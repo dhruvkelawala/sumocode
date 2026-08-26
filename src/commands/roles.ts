@@ -34,6 +34,7 @@ interface RoleFieldSelection {
 	readonly field: EditableRoleField;
 }
 
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- unwraps an arbitrary caught rejection; the instanceof checks inside are the parse.
 const errorText = (error: unknown): string => error instanceof Error ? error.message : String(error);
 
 async function writeMutation(deps: RolesCommandDeps, mutation: RolesFileMutation): Promise<RolesCommandResult | undefined> {
@@ -80,8 +81,14 @@ function roleListRows(roles: readonly SubagentRole[]): SearchPaletteRow[] {
 	return roles.map((role) => ({ id: `role:${role.id}`, label: role.id, value: roleSummary(role) }));
 }
 
+/** Surface 2 output: palette rows plus the selection each row maps to. */
+interface RoleFieldRows {
+	readonly rows: SearchPaletteRow[];
+	readonly selections: Map<string, RoleFieldSelection>;
+}
+
 /** Surface 2 — the chosen role's editable fields with current values. */
-function roleFieldRows(role: SubagentRole): { rows: SearchPaletteRow[]; selections: Map<string, RoleFieldSelection> } {
+function roleFieldRows(role: SubagentRole): RoleFieldRows {
 	const rows: SearchPaletteRow[] = [];
 	const selections = new Map<string, RoleFieldSelection>();
 	const add = (field: EditableRoleField, label: string, value: string): void => {
@@ -228,6 +235,8 @@ export async function runRolesCommand(deps: RolesCommandDeps): Promise<RolesComm
 	}
 }
 
+// oxlint-disable anti-slop/no-unsafe-dictionary-type, anti-slop/no-runtime-typeof, anti-slop/require-safety-comment-for-type-assertion -- roles.json file boundary: the document is round-tripped to preserve unknown fields,
+// so the open record and typeof decoding guards are this parse's real contract.
 interface RolesDocument {
 	roles: Array<Record<string, unknown> & { id: string }>;
 	[key: string]: unknown;
@@ -245,6 +254,7 @@ function readRolesDocument(path: string): RolesDocument {
 	}
 	return parsed as RolesDocument;
 }
+// oxlint-enable anti-slop/no-unsafe-dictionary-type, anti-slop/no-runtime-typeof, anti-slop/require-safety-comment-for-type-assertion
 
 export function writeRolesFile(path: string, mutation: RolesFileMutation): void {
 	const document = readRolesDocument(path);

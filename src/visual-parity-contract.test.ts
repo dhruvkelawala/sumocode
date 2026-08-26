@@ -15,6 +15,8 @@ import { SIDEBAR_MIN_TERMINAL_WIDTH, SIDEBAR_WIDTH } from "./sidebar.js";
 const require = createRequire(import.meta.url);
 type PngInstance = { width: number; height: number; data: Buffer };
 type PngCtor = (new (opts: { width: number; height: number }) => PngInstance) & { sync: { write: (png: PngInstance) => Buffer } };
+// SAFETY: pngjs ships no type declarations; the PngCtor contract above matches
+// the subset (width/height/data + sync.write) this test file exercises.
 const { PNG } = require("pngjs") as { PNG: PngCtor };
 
 type CropDefinition =
@@ -86,6 +88,8 @@ type ScenarioManifest = {
 };
 
 const manifestPath = join(process.cwd(), "docs/visual/parity/scenarios.json");
+// SAFETY: scenarios.json is the committed parity manifest; the parsed shape is
+// the ScenarioManifest contract declared above and validated by each accessor.
 const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as ScenarioManifest;
 
 function scenario(id: string): Scenario {
@@ -136,7 +140,9 @@ function assertActiveRuntimeInputContract(active: Scenario): void {
 	]));
 }
 
-function writeJson(path: string, value: unknown): void {
+type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
+
+function writeJson(path: string, value: JsonValue | Snapshot): void {
 	mkdirSync(join(path, ".."), { recursive: true });
 	writeFileSync(path, `${JSON.stringify(value, null, "\t")}\n`);
 }
@@ -146,7 +152,21 @@ function writeOnePixelPng(path: string): void {
 	writeFileSync(path, Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==", "base64"));
 }
 
-function blankSnapshot(cols: number, rows: number): unknown {
+interface SnapshotCell {
+	char: string;
+	fg: string;
+	bg: string;
+	bold: boolean;
+	dim: boolean;
+}
+
+interface Snapshot {
+	cols: number;
+	rows: number;
+	cells: SnapshotCell[][];
+}
+
+function blankSnapshot(cols: number, rows: number): Snapshot {
 	const cell = { char: " ", fg: "#f5e6c8", bg: "#1a1511", bold: false, dim: false };
 	return {
 		cols,
@@ -162,7 +182,7 @@ type CellOverride = { row: number; col: number; char?: string; fg?: string; bg?:
  * accidentally rewriting the whole grid. `blankSnapshot` above intentionally
  * shares one cell object across every position — fine for read-only fixtures,
  * unsafe for mutation. */
-function mutableBlankSnapshot(cols: number, rows: number): any {
+function mutableBlankSnapshot(cols: number, rows: number): Snapshot {
 	return {
 		cols,
 		rows,
@@ -174,7 +194,7 @@ function mutableBlankSnapshot(cols: number, rows: number): any {
 /** Blank snapshot with individual cell text overrides applied — lets a test
  * write specific characters into specific rows/cols without hand-building
  * the full 160/60-wide cell grid. */
-function snapshotWithText(cols: number, rows: number, overrides: readonly CellOverride[]): any {
+function snapshotWithText(cols: number, rows: number, overrides: readonly CellOverride[]): Snapshot {
 	const snapshot = mutableBlankSnapshot(cols, rows);
 	for (const override of overrides) {
 		const cell = snapshot.cells[override.row]?.[override.col];
@@ -187,7 +207,7 @@ function snapshotWithText(cols: number, rows: number, overrides: readonly CellOv
 }
 
 /** Write a row of text starting at `col` into a snapshot's given row. */
-function writeRowText(snapshot: any, row: number, col: number, text: string): void {
+function writeRowText(snapshot: Snapshot, row: number, col: number, text: string): void {
 	for (let index = 0; index < text.length; index += 1) {
 		const cell = snapshot.cells[row]?.[col + index];
 		if (cell) cell.char = text[index];
@@ -483,6 +503,8 @@ describe("V2 visual parity contract", () => {
 			}));
 			console.log(JSON.stringify(rows));
 		`;
+		// SAFETY: the eval script prints a JSON array of { text, cursorBg } rows
+		// parsed from the committed Bible HTML; the fields are asserted below.
 		const rows = JSON.parse(execFileSync(process.execPath, ["--input-type=module", "--eval", script], {
 			cwd: process.cwd(),
 			encoding: "utf8",
@@ -517,6 +539,8 @@ describe("V2 visual parity contract", () => {
 				codeNumber: has(code, "#FFC857", "#100A1D", "1"),
 			}));
 		`;
+		// SAFETY: the eval script prints a JSON object of boolean token checks
+		// parsed from the committed Bible HTML; each key is asserted below.
 		const parsed = JSON.parse(execFileSync(process.execPath, ["--input-type=module", "--eval", script], {
 			cwd: process.cwd(),
 			encoding: "utf8",
@@ -542,6 +566,8 @@ describe("V2 visual parity contract", () => {
 			const crop = cropStyledGrid(parsed, { x: 40, y: 14, cols: 80, rows: 17 });
 			console.log(JSON.stringify(crop.grid.map((row) => row.map((cell) => cell.char).join(""))));
 		`;
+		// SAFETY: the eval script prints a JSON array of cropped rows parsed from
+		// the committed Bible HTML; the row strings are asserted below.
 		const rows = JSON.parse(execFileSync(process.execPath, ["--input-type=module", "--eval", script], {
 			cwd: process.cwd(),
 			encoding: "utf8",
@@ -605,8 +631,10 @@ describe("V2 visual parity contract", () => {
 	});
 
 	it("applies fixture themes generically and resets to Cathedral in-process", async () => {
+		// SAFETY: the fixture-capture module contract is the capture function
+		// declared below; the metadata fields are asserted right after the call.
 		const { captureFixtureScenario } = await import(pathToFileURL(join(process.cwd(), "scripts/visual-v2/fixture-capture.mjs")).href) as {
-			captureFixtureScenario: (scenario: Scenario) => Promise<{ bytes: string; metadata: Record<string, unknown> }>;
+			captureFixtureScenario: (scenario: Scenario) => Promise<{ bytes: string; metadata: { fixtureId: string; theme: string } }>;
 		};
 
 		const ultraviolet = await captureFixtureScenario(scenario("fixture-ultraviolet-core-tool-ledger"));
@@ -723,7 +751,7 @@ describe("V2 visual parity contract", () => {
 		const active = scenario("active-landscape-runtime");
 		const cropIds = active.crops.map((crop) => crop.id);
 
-		function writeActiveLandscapeCapture(root: string, snapshot: unknown, pngColorByCrop: Record<string, [number, number, number]>): void {
+		function writeActiveLandscapeCapture(root: string, snapshot: Snapshot, pngColorByCrop: Record<string, [number, number, number]>): void {
 			writeJson(join(root, "active-landscape-runtime/raw/capture-metadata.json"), {
 				command: active.runtime!.command,
 				args: active.runtime!.args,
@@ -733,6 +761,8 @@ describe("V2 visual parity contract", () => {
 			});
 			writeJson(join(root, "active-landscape-runtime/raw/terminal-snapshot.json"), snapshot);
 			for (const cropId of cropIds) {
+				// SAFETY: cropDefinition for a named crop carries the crop rectangle;
+				// "full" is handled by the null branch above.
 				const namedCrop = cropId === "full" ? null : (cropDefinition(cropId) as { x: number; y: number; cols: number; rows: number });
 				const dims = namedCrop ?? { cols: active.dimensions.cols, rows: active.dimensions.rows };
 				writeCropPng(
@@ -749,7 +779,7 @@ describe("V2 visual parity contract", () => {
 		// hint-row/sidebar cwd+branch text, D4 constants, MCP roster). Everything
 		// else — including the sidebar row immediately below the masked cwd/branch
 		// lines — is byte-identical.
-		function baseLandscapeSnapshot(sessionId: string, timestampMinute: string, projectLine: string): unknown {
+		function baseLandscapeSnapshot(sessionId: string, timestampMinute: string, projectLine: string): Snapshot {
 			const snap = snapshotWithText(160, 45, []);
 			// Column offsets below are copied verbatim from a real
 			// active-landscape-runtime capture so the synthetic fixture exercises
@@ -812,7 +842,7 @@ describe("V2 visual parity contract", () => {
 				// 130-159, but OUTSIDE the declared [10,11] row range). A real
 				// editorial/content change here must still fail the gate — this is
 				// the over-masking guard.
-				writeRowText(candidateSnapshot as any, 12, 130, "unexpected content drift".padEnd(30));
+				writeRowText(candidateSnapshot, 12, 130, "unexpected content drift".padEnd(30));
 
 				writeActiveLandscapeCapture(baseline, baselineSnapshot, {});
 				writeActiveLandscapeCapture(candidate, candidateSnapshot, {});
@@ -862,7 +892,7 @@ describe("V2 visual parity contract", () => {
 				// The working-indicator glyph region only covers row 36 col 1. Altering
 				// the WORD text right after it (cols 3+) is a real content change and
 				// must still fail even though col 1 on the same row is legitimately masked.
-				writeRowText(candidateSnapshot as any, 36, 3, "Rewriting…");
+				writeRowText(candidateSnapshot, 36, 3, "Rewriting…");
 
 				writeActiveLandscapeCapture(baseline, baselineSnapshot, {});
 				writeActiveLandscapeCapture(candidate, candidateSnapshot, {});
@@ -891,7 +921,7 @@ describe("V2 visual parity contract", () => {
 		// Sixth class (main-is-stale splash row): the mask is pattern-locked to
 		// EXACTLY `unknown · off` (baseline) vs `gpt-5.5 · high` (candidate).
 		// Any third string on either side must fail the gate.
-		function writeSplashCapture(root: string, snapshot: unknown): void {
+		function writeSplashCapture(root: string, snapshot: Snapshot): void {
 			writeJson(join(root, "splash-runtime/raw/capture-metadata.json"), {
 				command: "./bin/sumocode.sh",
 				args: ["--offline", "--no-extensions", "--no-session"],
@@ -903,7 +933,7 @@ describe("V2 visual parity contract", () => {
 			writeOnePixelPng(join(root, "splash-runtime/crops/full-runtime.png"));
 		}
 
-		function baseSplashSnapshot(hintText: string, versionLine: string): unknown {
+		function baseSplashSnapshot(hintText: string, versionLine: string): Snapshot {
 			const snap = snapshotWithText(160, 45, []);
 			// Column offsets copied from a real splash-runtime capture: the hint
 			// row's `╰─ <status>` opens at col 50 (variable segment at cols 53+).

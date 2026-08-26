@@ -54,7 +54,7 @@ export interface RpcShellAdapterOptions {
 	readonly editor?: Component;
 	readonly modal?: Component & { getActiveKind?(): string | undefined };
 	readonly overlay?: Component & { getActiveKind?(): string | undefined };
-	readonly notifications?: Component & { notify?(message: string, level?: NotificationLevel, timeoutMs?: number): unknown };
+	readonly notifications?: Component & { notify?(message: string, level?: NotificationLevel, timeoutMs?: number): void };
 	readonly extensionRegions?: {
 		readonly aboveEditor?: Component;
 		readonly belowEditor?: Component;
@@ -105,6 +105,7 @@ interface TextReadableComponent extends Component {
 	getText?(): string;
 }
 
+// oxlint-disable-next-line no-control-regex -- intentional ESC byte match for ANSI CSI/OSC/APC stripping
 const ANSI_PATTERN = /\u001b(?:\[[0-?]*[ -/]*[@-~]|\][^\u0007]*(?:\u0007|\u001b\\)|_[^\u0007]*(?:\u0007|\u001b\\))/g;
 // Canonical pi thinking levels; keep in sync with @earendil-works/pi-ai.
 const THINKING_LEVELS = new Set<ThinkingLevel>(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
@@ -123,7 +124,7 @@ export class RpcShellAdapter {
 	private readonly editor: Component | undefined;
 	private readonly modal: (Component & { getActiveKind?(): string | undefined }) | undefined;
 	private readonly overlay: (Component & { getActiveKind?(): string | undefined }) | undefined;
-	private readonly notifications: (Component & { notify?(message: string, level?: NotificationLevel, timeoutMs?: number): unknown }) | undefined;
+	private readonly notifications: (Component & { notify?(message: string, level?: NotificationLevel, timeoutMs?: number): void }) | undefined;
 	private readonly extensionAboveEditor: Component | undefined;
 	private readonly extensionBelowEditor: Component | undefined;
 	private readonly extensionSidebar: Component | undefined;
@@ -189,6 +190,8 @@ export class RpcShellAdapter {
 		// owner is known; unknown persisted IDs are deliberately pruned by the pager.
 		this.chat.applyActivityExpansionSnapshot(options.initialActivities?.expansion ?? {}, options.initialActivities?.defaultExpansion);
 		this.splash = createSplashTree(yoga, undefined, () => defaultSplashSnapshot(this.isActive()));
+		// SAFETY: the editor component optionally implements the splash-provider
+		// hook; the optional call is a no-op for components without it.
 		(this.editor as SplashAwareComponent | undefined)?.setSplashProvider?.(() => !this.isActive());
 		const editorComponent = new RpcEditorShellComponent(this, options.inputPreview);
 		this.selection = new SelectionController({
@@ -244,7 +247,7 @@ export class RpcShellAdapter {
 		// into a new TOOL card.
 		if (snapshot.activities) {
 			this.chat.reconcileFeedActivities(snapshot.activities.activities, {
-				...(snapshot.suppressSettledFeedOnly ? { materializeSettled: false } : {}),
+				materializeSettled: snapshot.suppressSettledFeedOnly !== true,
 			});
 		}
 		if (snapshot.transcript) {
@@ -262,7 +265,7 @@ export class RpcShellAdapter {
 			// without going through a revisioned controller).
 			if (snapshot.transcriptRevision === undefined) {
 				this.chat.replaceViewModels(snapshot.transcript.messages, {
-					...(snapshot.suppressSettledFeedOnly ? { materializeSettledFeed: false } : {}),
+					materializeSettledFeed: snapshot.suppressSettledFeedOnly !== true,
 				});
 			}
 			// Every transcript-carrying update repaints some of the chat
@@ -592,8 +595,14 @@ function isVisualHarness(env: NodeJS.ProcessEnv = process.env): boolean {
 	return env.SUMOCODE_HARNESS === "1";
 }
 
+function isThinkingLevelValue(value: string): value is ThinkingLevel {
+	// SAFETY: THINKING_LEVELS only holds ThinkingLevel literals, so widening
+	// the set to a plain string set loses nothing.
+	return (THINKING_LEVELS as ReadonlySet<string>).has(value);
+}
+
 function normalizeThinkingLevel(value: string | undefined): ThinkingLevel {
-	return THINKING_LEVELS.has(value as ThinkingLevel) ? value as ThinkingLevel : "medium";
+	return value !== undefined && isThinkingLevelValue(value) ? value : "medium";
 }
 
 function sumoState(state: RpcHostChromeState): SumoCodeState {
@@ -708,8 +717,9 @@ function stripAnsi(value: string): string {
 }
 
 function readEditorText(editor: Component | undefined): string {
-	const text = (editor as TextReadableComponent | undefined)?.getText?.();
-	return typeof text === "string" ? text : "";
+	// SAFETY: the chat editor component optionally exposes getText via the
+	// TextReadableComponent surface; the optional call is a no-op otherwise.
+	return (editor as TextReadableComponent | undefined)?.getText?.() ?? "";
 }
 
 function isSimpleSplashEditorFrame(rows: readonly string[]): boolean {

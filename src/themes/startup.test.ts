@@ -6,7 +6,9 @@ import { resolveGlobalSumoCodeConfigPath } from "../config/sumocode-config.js";
 import { getActiveTheme, resetThemeRegistryForTests } from "./registry.js";
 import { applyStartupTheme, resolveStartupThemeName } from "./startup.js";
 
-function writeGlobalConfig(homeDir: string, value: unknown): void {
+type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
+
+function writeGlobalConfig(homeDir: string, value: JsonValue): void {
 	const path = resolveGlobalSumoCodeConfigPath(homeDir, {});
 	mkdirSync(dirname(path), { recursive: true });
 	writeFileSync(path, `${JSON.stringify(value)}\n`);

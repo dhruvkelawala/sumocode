@@ -9,7 +9,7 @@ export interface OutputTailOptions {
 }
 
 function positiveInteger(value: number | undefined, fallback: number): number {
-	return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : fallback;
+	return value !== undefined && Number.isFinite(value) && value > 0 ? Math.floor(value) : fallback;
 }
 
 function startsWithUtf8Continuation(bytes: Uint8Array): boolean {
@@ -45,7 +45,7 @@ export function boundedOutputTail(value: string | Uint8Array, options: OutputTai
 	// Byte callers already pass a bounded terminal-read window (64 KiB in the
 	// manager bridge). Decode that complete window before retaining the tail so
 	// an OSC/DCS opener earlier in the window still suppresses its entire payload.
-	const decoded = typeof value === "string" ? value : decodeValidUtf8Tail(value, value.byteLength);
+	const decoded = value instanceof Uint8Array ? decodeValidUtf8Tail(value, value.byteLength) : value;
 	const sanitized = sanitizeActivityTextTail(decoded, { maxChars: maxBytes, maxLines });
 	const byteBounded = trimStringToUtf8Tail(sanitized, maxBytes);
 	const lines = byteBounded.split("\n");

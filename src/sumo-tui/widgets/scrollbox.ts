@@ -51,7 +51,7 @@ function intersectsViewport(rect: Rect, viewport: Rect): boolean {
 	return rect.top < viewport.top + viewport.height && rect.top + rect.height > viewport.top && rect.left < viewport.left + viewport.width && rect.left + rect.width > viewport.left;
 }
 
-function orderedChildBuckets(node: SumoNode): { normal: PositionedChild[]; absolute: PositionedChild[] } {
+function orderedChildBuckets(node: SumoNode) {
 	const normal: PositionedChild[] = [];
 	const absolute: PositionedChild[] = [];
 	node.children.forEach((child, order) => {
@@ -213,7 +213,7 @@ export class ScrollBox extends SumoNode {
 		return this.hardwareCursor;
 	}
 
-	public getChildHitOrigin(rect: Rect): { top: number; left: number } {
+	public getChildHitOrigin(rect: Rect) {
 		return { top: rect.top - this.scrollOffset, left: rect.left };
 	}
 

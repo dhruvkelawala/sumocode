@@ -1,7 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 import { loadYoga } from "../layout/yoga.js";
 import { ChatPager } from "../widgets/chat-pager.js";
-import { BashExecutionMirror, isBashExecutionLike, renderBashMirrorText, type BashExecutionLike } from "./bash-execution-mirror.js";
+import {
+	BashExecutionMirror,
+	isBashExecutionLike,
+	renderBashMirrorText,
+	type BashExecutionLike,
+	type TruncationResult,
+} from "./bash-execution-mirror.js";
 
 interface FakeBashOptions {
 	readonly command?: string;
@@ -37,7 +43,7 @@ class FakeBashComponent implements BashExecutionLike {
 		this.outputChunks.push(chunk);
 	}
 
-	public setComplete(exitCode?: number, cancelled?: boolean, _truncationResult?: unknown, fullOutputPath?: string): void {
+	public setComplete(exitCode?: number, cancelled?: boolean, _truncationResult?: TruncationResult, fullOutputPath?: string): void {
 		this.complete = true;
 		this.exitCode = exitCode;
 		this.cancelled = cancelled === true;

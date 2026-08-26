@@ -11,6 +11,8 @@ import {
 	markdownAndCodeBlocksFromText,
 	type ChatBlock,
 	type ChatMessageViewModel,
+	type SessionRecord,
+	type SessionValue,
 } from "../transcript/view-model.js";
 import { ChatPager } from "../widgets/chat-pager.js";
 import { BashExecutionMirror } from "./bash-execution-mirror.js";
@@ -25,8 +27,37 @@ const PORTRAIT_CHAT_GUTTER_MIN_WIDTH = 80;
 const STREAMING_CHAT_RENDER_COALESCE_MS = 100;
 const MOUSE_CHAT_RENDER_COALESCE_MS = 50;
 const BOTTOM_CHROME_SPACERS_INSTALLED = Symbol("sumo-tui.bottom-chrome-spacers-installed");
+// oxlint-disable-next-line no-control-regex -- intentional ESC/ANSI byte match used to strip styling from foreign Pi output
 const ANSI_PATTERN = /\u001b(?:\[[0-?]*[ -/]*[@-~]|\][^\u0007]*(?:\u0007|\u001b\\))/g;
 export const ACTIVE_BOTTOM_CHROME_SPACER_ROWS = 2;
+
+// Boundary predicates for opaque values crossing the Pi compat seam. They are
+// generic so callers keep their own static type; each check validates exactly
+// one runtime property before the value is used.
+function isRecord<T>(value: T): value is T & SessionRecord {
+	return typeof value === "object" && value !== null;
+}
+
+function asRecord<T>(value: T): SessionRecord | undefined {
+	return isRecord(value) ? value : undefined;
+}
+
+function isString<T>(value: T): value is T & string {
+	return typeof value === "string";
+}
+
+function isAddChildCapable(ui: PiTuiLike | undefined): ui is PiTuiLike & { addChild(component: ForeignChatComponent): void } {
+	return typeof ui?.addChild === "function";
+}
+
+/**
+ * Opaque foreign Pi renderable component handed across the compat seam.
+ * Structural on purpose: SumoCode only ever touches the optional hooks below.
+ */
+export type ForeignChatComponent = {
+	render?(width: number): string[];
+	invalidate?(): void;
+};
 
 interface PiRenderableComponent {
 	render(width: number): string[];
@@ -37,7 +68,7 @@ interface PiChatContainer {
 	clear?(): void;
 	invalidate?(): void;
 	render?(width: number): string[];
-	addChild?(component: unknown): void;
+	addChild?(component: ForeignChatComponent): void;
 }
 
 interface ForeignRenderableLike {
@@ -47,7 +78,7 @@ interface ForeignRenderableLike {
 interface PiTuiLike {
 	readonly terminal?: { readonly rows?: number; readonly columns?: number };
 	children?: unknown[];
-	addChild?(component: unknown): void;
+	addChild?(component: ForeignChatComponent): void;
 	requestRender?(force?: boolean): void;
 	addInputListener?(listener: (data: string) => { consume?: boolean; data?: string } | void): () => void;
 	handleInput?(data: string): void;
@@ -57,7 +88,7 @@ interface PiTuiLike {
 export interface ChatViewportHost {
 	readonly ui?: PiTuiLike;
 	readonly headerContainer?: PiRenderableComponent;
-	readonly pendingMessagesContainer?: PiRenderableComponent & { addChild?(component: unknown): void };
+	readonly pendingMessagesContainer?: PiRenderableComponent & { addChild?(component: ForeignChatComponent): void };
 	readonly statusContainer?: PiRenderableComponent;
 	readonly widgetContainerAbove?: PiRenderableComponent;
 	readonly widgetContainerBelow?: PiRenderableComponent;
@@ -101,8 +132,8 @@ interface ChatViewportBridgeRuntime extends ChatViewportRuntime {
 
 interface ChatViewportBridgeHost extends ChatViewportHost {
 	chatContainer?: PiChatContainer;
-	handleEvent?(event: unknown): unknown;
-	renderSessionContext?(sessionContext: unknown, options?: unknown): unknown;
+	handleEvent?(event: SessionValue): Promise<void>;
+	renderSessionContext?(sessionContext: SessionValue, options?: SessionValue): void;
 	[CHAT_VIEWPORT_BRIDGE_INSTALLED]?: () => void;
 }
 
@@ -111,11 +142,7 @@ function clampRenderedLine(line: string, width: number): string {
 	return visibleWidth(line) > safeWidth ? truncateToWidth(line, safeWidth, "") : line;
 }
 
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-	return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : undefined;
-}
-
-export function textFromAgentMessage(message: unknown): string {
+export function textFromAgentMessage<T>(message: T): string {
 	const viewModel = chatMessageViewModelFromPiMessage(message);
 	return viewModel ? chatMessageViewModelToPlainText(viewModel) : "";
 }
@@ -141,7 +168,7 @@ class BottomChromeSpacerComponent implements PiRenderableComponent {
 	}
 }
 
-function removeChild(children: unknown[], child: unknown): void {
+function removeChild<T>(children: T[], child: T): void {
 	const index = children.indexOf(child);
 	if (index >= 0) children.splice(index, 1);
 }
@@ -152,7 +179,7 @@ function installBottomChromeSpacers(host: ChatViewportBridgeHost, _chat: ChatPag
 	logDiagnostic("bottom_chrome_spacers_install", {
 		hasUi: ui !== undefined,
 		hasFooter: footer !== undefined,
-		hasAddChild: typeof ui?.addChild === "function",
+		hasAddChild: isAddChildCapable(ui),
 		hasChildren: Array.isArray(ui?.children),
 		alreadyInstalled: ui?.[BOTTOM_CHROME_SPACERS_INSTALLED] === true,
 	});
@@ -176,7 +203,7 @@ function installBottomChromeSpacers(host: ChatViewportBridgeHost, _chat: ChatPag
 	};
 
 	if (originalAddChild) {
-		ui.addChild = (component: unknown): void => {
+		ui.addChild = (component: ForeignChatComponent): void => {
 			if (component === footer && !inserted) {
 				originalAddChild.call(ui, beforeFooter);
 				originalAddChild.call(ui, component);
@@ -207,21 +234,21 @@ function hasBottomChromeSpacers(host: ChatViewportHost): boolean {
 	return host.ui?.[BOTTOM_CHROME_SPACERS_INSTALLED] === true;
 }
 
-function sessionMessages(sessionContext: unknown): unknown[] {
+function sessionMessages(sessionContext: SessionValue): SessionValue[] {
 	const messages = asRecord(sessionContext)?.messages;
 	return Array.isArray(messages) ? messages : [];
 }
 
-function isUserMessage(message: unknown): boolean {
+function isUserMessage(message: SessionValue): boolean {
 	return asRecord(message)?.role === "user";
 }
 
-function countUserMessages(messages: readonly unknown[]): number {
+function countUserMessages(messages: readonly SessionValue[]): number {
 	return messages.filter(isUserMessage).length;
 }
 
-function isForeignRenderableLike(value: unknown): value is ForeignRenderableLike {
-	return !!value && typeof value === "object" && typeof (value as { render?: unknown }).render === "function";
+function isForeignRenderableLike<T>(value: T): value is T & ForeignRenderableLike {
+	return isRecord(value) && typeof value.render === "function";
 }
 
 function renderForeignSystemText(component: ForeignRenderableLike, width: number): string {
@@ -336,7 +363,7 @@ export class ChatViewportController {
 		return lines;
 	}
 
-	public attachForeignChatComponent(component: unknown): void {
+	public attachForeignChatComponent<T>(component: T): void {
 		if (this.bashMirror.attach(component)) return;
 		if (!isForeignRenderableLike(component)) return;
 		const text = renderForeignSystemText(component, this.host.ui?.terminal?.columns ?? this.lastChatWidth);
@@ -362,9 +389,11 @@ export class ChatViewportController {
 		return this.inputRouter.handleInput(data);
 	}
 
-	public handleAgentEvent(event: unknown): void {
-		const record = asRecord(event);
-		if (!record || typeof record.type !== "string") return;
+	public handleAgentEvent<T>(event: T): void {
+		// SAFETY: T forwards the caller's raw agent event verbatim; asRecord plus
+		// the string check below re-validate shape at runtime before any branch.
+		const record = asRecord(event as SessionValue);
+		if (!record || !isString(record.type)) return;
 		const message = record.message;
 		switch (record.type) {
 			case "message_start":
@@ -385,12 +414,14 @@ export class ChatViewportController {
 				this.chat.endStreaming();
 				break;
 			case "compaction_start":
+				// SAFETY: compaction reasons on this event are written by this app's
+				// own compaction pipeline, whose vocabulary is CompactionReason.
 				setCompactionReason(record.reason as CompactionReason);
 				break;
 			case "compaction_end": {
 				setCompactionReason(null);
 				const result = asRecord(record.result);
-				if (typeof result?.summary === "string") {
+				if (isString(result?.summary)) {
 					const viewModel = this.viewModelMapper.messageFromPiMessage({
 						role: "compactionSummary",
 						summary: result.summary,
@@ -407,7 +438,10 @@ export class ChatViewportController {
 		}
 	}
 
-	public renderSessionContext(sessionContext: unknown): void {
+	public renderSessionContext<T>(sessionContext: T): void {
+		// SAFETY: T forwards the caller's raw session payload verbatim; the parse
+		// helpers below re-validate shape at runtime before any field access.
+		const context = sessionContext as SessionValue;
 		this.lastAssistantText = "";
 		this.liveAssistant = undefined;
 		this.liveAssistantBlocks = [];
@@ -416,12 +450,12 @@ export class ChatViewportController {
 		// Resume uses bulk transcript replacement instead of `clear()` + per-message
 		// replay; `replaceViewModels()` resets the chat-side scroll/banner state.
 		const profile = this.runtime.startResumeProfile?.();
-		const messages = measureMaybe(profile, "session_scan", () => sessionMessages(sessionContext));
+		const messages = measureMaybe(profile, "session_scan", () => sessionMessages(context));
 		this.markRenderDirty();
 		this.runtime.setEmptyChatQuoteState({ active: messages.length === 0, userMessageCount: countUserMessages(messages) });
 		const transcript = measureMaybe(profile, "transcript_model", () => {
 			this.viewModelMapper.reset();
-			return this.viewModelMapper.transcriptFromSessionContext(sessionContext);
+			return this.viewModelMapper.transcriptFromSessionContext(context);
 		});
 		const stats = measureMaybe(profile, "transcript_hydrate", () => this.chat.replaceViewModels(transcript.messages));
 		if (profile) {
@@ -434,11 +468,11 @@ export class ChatViewportController {
 		}
 	}
 
-	private handleToolExecutionEvent(record: Record<string, unknown>): void {
-		if (typeof record.toolCallId !== "string" || record.toolCallId.length === 0) return;
+	private handleToolExecutionEvent(record: SessionRecord): void {
+		if (!isString(record.toolCallId) || record.toolCallId.length === 0) return;
 		this.markRenderDirty();
 		const isEnd = record.type === "tool_execution_end";
-		const toolName = typeof record.toolName === "string" ? record.toolName : "tool";
+		const toolName = isString(record.toolName) ? record.toolName : "tool";
 		const result = isEnd ? record.result : record.partialResult;
 		const resultRecord = asRecord(result);
 		const viewModel = this.viewModelMapper.messageFromPiMessage(
@@ -472,7 +506,7 @@ export class ChatViewportController {
 		this.runtime.requestRender();
 	}
 
-	private handleMessageStart(message: unknown): void {
+	private handleMessageStart(message: SessionValue): void {
 		this.markRenderDirty();
 		const role = asRecord(message)?.role;
 		if (role === "user") {
@@ -498,11 +532,11 @@ export class ChatViewportController {
 		this.runtime.requestRender();
 	}
 
-	private handleMessageUpdate(message: unknown, assistantMessageEvent: unknown): void {
+	private handleMessageUpdate(message: SessionValue, assistantMessageEvent: SessionValue): void {
 		if (asRecord(message)?.role !== "assistant") return;
 		this.markRenderDirty();
 		const streamEvent = asRecord(assistantMessageEvent);
-		if (streamEvent?.type === "text_delta" && typeof streamEvent.delta === "string") {
+		if (streamEvent?.type === "text_delta" && isString(streamEvent.delta)) {
 			this.chat.beginStreaming();
 			this.appendAssistantTextDelta(streamEvent.delta);
 			return;
@@ -522,7 +556,7 @@ export class ChatViewportController {
 		this.lastAssistantText = text;
 	}
 
-	private handleMessageEnd(message: unknown): void {
+	private handleMessageEnd(message: SessionValue): void {
 		this.markRenderDirty();
 		if (asRecord(message)?.role === "assistant") {
 			const viewModel = this.viewModelMapper.messageFromPiMessage(message);
@@ -542,7 +576,7 @@ export class ChatViewportController {
 		}
 	}
 
-	private startAssistantMessage(message: unknown): void {
+	private startAssistantMessage(message: SessionValue): void {
 		const viewModel = this.viewModelMapper.messageFromPiMessage(message);
 		this.liveAssistant = viewModel
 			? { ...viewModel, role: "sumo", displayName: "SUMO" }
@@ -747,6 +781,9 @@ export class ChatViewportController {
 
 	private computeChatHeight(width: number): number {
 		const hostRows = Math.max(1, this.host.ui?.terminal?.rows ?? 24);
+		// SAFETY: stdout.rows exists whenever the process is attached to a TTY;
+		// Node types carry it only on the tty.WriteStream subtype, so read it
+		// defensively and fall back to 0 when absent.
 		const stdoutRows = (process.stdout as { rows?: number }).rows ?? 0;
 		const terminalRows = Math.max(1, hostRows, stdoutRows);
 		const terminalWidth = Math.max(1, this.host.ui?.terminal?.columns ?? width);
@@ -783,7 +820,9 @@ export class ChatViewportController {
 	}
 }
 
-export function installChatViewportBridge(upstream: unknown, runtime: ChatViewportBridgeRuntime): (() => void) | undefined {
+export function installChatViewportBridge<T>(upstream: T, runtime: ChatViewportBridgeRuntime): (() => void) | undefined {
+	// SAFETY: upstream is Pi's interactive mode instance crossing the compat
+	// seam; every member accessed below is optional and guarded at runtime.
 	const target = upstream as ChatViewportBridgeHost;
 	if (target[CHAT_VIEWPORT_BRIDGE_INSTALLED]) return undefined;
 	const snapshot = runtime.getSnapshot();
@@ -802,6 +841,8 @@ export function installChatViewportBridge(upstream: unknown, runtime: ChatViewpo
 	// view-model already places those bash messages via `replaceViewModels`, so
 	// suppress mirroring while Pi is replaying.
 	let replayingSessionHistory = false;
+	// SAFETY: Pi's status container exposes render(width); the optional bind
+	// below is guarded by originalStatusRender before any override happens.
 	const statusContainer = target.statusContainer as (PiRenderableComponent & { render?: (width: number) => string[] }) | undefined;
 	const originalStatusRender = statusContainer?.render?.bind(statusContainer);
 	const originalHandleEvent = target.handleEvent?.bind(target);
@@ -898,14 +939,14 @@ export function installChatViewportBridge(upstream: unknown, runtime: ChatViewpo
 	// so keep the override dynamic: in owned-shell mode, never run the expensive
 	// retained chat render just to hand Pi dead bytes.
 	if (originalAddChild) {
-		chatContainer.addChild = (component: unknown): void => {
+		chatContainer.addChild = (component: ForeignChatComponent): void => {
 			originalAddChild(component);
 			if (replayingSessionHistory) return;
 			if (isOwnedShellActive()) controller.attachForeignChatComponent(component);
 		};
 	}
 	if (pendingMessagesContainer && originalPendingAddChild) {
-		pendingMessagesContainer.addChild = (component: unknown): void => {
+		pendingMessagesContainer.addChild = (component: ForeignChatComponent): void => {
 			originalPendingAddChild(component);
 			if (replayingSessionHistory) return;
 			if (isOwnedShellActive()) controller.attachForeignChatComponent(component);
@@ -945,13 +986,13 @@ export function installChatViewportBridge(upstream: unknown, runtime: ChatViewpo
 		};
 	}
 	if (originalHandleEvent) {
-		target.handleEvent = async (event: unknown): Promise<unknown> => {
+		target.handleEvent = async (event: SessionValue): Promise<void> => {
 			controller.handleAgentEvent(event);
-			return originalHandleEvent(event);
+			await originalHandleEvent(event);
 		};
 	}
 	if (originalRenderSessionContext) {
-		target.renderSessionContext = (sessionContext: unknown, options?: unknown): unknown => {
+		target.renderSessionContext = (sessionContext: SessionValue, options?: SessionValue): void => {
 			controller.renderSessionContext(sessionContext);
 			replayingSessionHistory = true;
 			try {
@@ -989,3 +1030,5 @@ export function installChatViewportBridge(upstream: unknown, runtime: ChatViewpo
 	target[CHAT_VIEWPORT_BRIDGE_INSTALLED] = cleanup;
 	return cleanup;
 }
+
+

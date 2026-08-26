@@ -81,14 +81,21 @@ function isGitRepo(dir: string, deps: SumoSyncDeps): boolean {
 	return exists(join(dir, ".git"));
 }
 
+/** Runtime check that a decoded package.json carries a usable string name. */
+function isNamedPackage(value: { name?: string }): value is { name: string } {
+	return typeof value.name === "string";
+}
+
 function packageNameAt(dir: string, deps: SumoSyncDeps): string | undefined {
 	const exists = deps.exists ?? existsSync;
 	const readFile = deps.readFile ?? ((path, encoding) => readFileSync(path, encoding));
 	const packagePath = join(dir, "package.json");
 	if (!exists(packagePath)) return undefined;
 	try {
-		const parsed = JSON.parse(readFile(packagePath, "utf8")) as { name?: unknown };
-		return typeof parsed.name === "string" ? parsed.name : undefined;
+		// SAFETY: malformed package.json rejects into the catch below; only the optional
+		// string `name` field is ever read.
+		const parsed = JSON.parse(readFile(packagePath, "utf8")) as { name?: string };
+		return isNamedPackage(parsed) ? parsed.name : undefined;
 	} catch {
 		return undefined;
 	}
@@ -197,6 +204,7 @@ async function runStep(
 		const result = await run(file, args, { cwd: options.cwd, timeout: options.timeout ?? DEFAULT_TIMEOUT_MS });
 		return { label, ok: true, output: [result.stdout, result.stderr].filter(Boolean).join("\n").trim() };
 	} catch (error) {
+		// SAFETY: Node execFile rejections carry stdout/stderr/message strings on the error object.
 		const err = error as { stdout?: string; stderr?: string; message?: string };
 		return {
 			label,

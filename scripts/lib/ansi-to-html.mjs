@@ -8,6 +8,7 @@ import { readFileSync } from "node:fs";
 export function ansToHTMLLines(path) {
 	const raw = readFileSync(path, "utf8");
 	// Strip cursor-show/hide
+	// oxlint-disable-next-line no-control-regex -- intentional cursor-show/hide ESC byte match
 	const cleaned = raw.replace(/\x1b\[\?25[lh]/g, "");
 	const lines = cleaned.split(/\r?\n/).filter((l) => l.length > 0);
 	return lines.map((line) => parseAnsiLine(line));

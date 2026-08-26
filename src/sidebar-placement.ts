@@ -128,6 +128,9 @@ export class StaticSidebarDock implements Component {
 }
 
 function isStaticSidebarDock(component: Component): component is StaticSidebarDock {
+	// SAFETY: duck-type probe — the marker symbol key is only ever defined by
+	// StaticSidebarDock above, so presence of the own property identifies the class
+	// without importing it into a circular position.
 	return (component as Partial<Record<typeof STATIC_SIDEBAR_DOCK_MARKER, boolean>>)[STATIC_SIDEBAR_DOCK_MARKER] === true;
 }
 

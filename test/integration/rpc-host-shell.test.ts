@@ -174,6 +174,8 @@ describe("sumocode RPC host shell integration", () => {
 		await writeFile(bundlePath, "export const incomplete = true;\n");
 		// Repoint the manifest's outputsHash at the incomplete bundle so it passes
 		// the freshness/output-integrity checks, isolating the "no main()" guard.
+		// SAFETY: the manifest is JSON produced by the host build; the parsed
+		// value is assigned back only through its known outputsHash field.
 		const manifest = JSON.parse(originalManifest.toString()) as { outputsHash: string };
 		manifest.outputsHash = await hostOutputsHash(process.cwd());
 		await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
@@ -251,6 +253,7 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 		expect(screen).not.toMatch(/█████ █   █ █   █ █████/);
 		expect(screen).toContain("reload answer");
 		// Reload is a retained-frame handoff, not a terminal teardown/re-entry.
+		// oxlint-disable-next-line no-control-regex -- intentional ESC/control-byte match to strip ANSI in captured output
 		expect((output.match(/\x1b\[\?1049h/g) ?? []).length).toBe(1);
 		// Raw Ctrl-C must stay live while the successor hydrates off-screen.
 		app.sendInput("\u0003");
@@ -292,12 +295,11 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 
 	async function bootWithExtensionMode(mode: "bundle" | "source"): Promise<void> {
 		const agentDir = await mkdtemp(join(tmpdir(), `sumocode-extension-${mode}-agent-`));
+		const env: NodeJS.ProcessEnv = { PI_CODING_AGENT_DIR: agentDir };
+		if (mode === "source") env.SUMOCODE_EXTENSION_BUNDLE = "0";
 		app = spawnSumocodePty({
 			args: ["--offline", "--no-session", "--approve"],
-			env: {
-				PI_CODING_AGENT_DIR: agentDir,
-				...(mode === "source" ? { SUMOCODE_EXTENSION_BUNDLE: "0" } : {}),
-			},
+			env,
 			cols: 100,
 			rows: 30,
 		});
@@ -329,12 +331,11 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 		await expect(access(join(packageRoot, "node_modules"))).rejects.toThrow();
 		await expect(access(join(packageRoot, "pnpm-lock.yaml"))).rejects.toThrow();
 		const agentDir = await mkdtemp(join(tmpdir(), `sumocode-peer-only-${mode}-agent-`));
+		const env: NodeJS.ProcessEnv = { PI_CODING_AGENT_DIR: agentDir };
+		if (mode === "source") env.SUMOCODE_EXTENSION_BUNDLE = "0";
 		app = spawnPiPty({
 			args: ["--offline", "--no-extensions", "--no-session", "--approve", "-e", packageRoot],
-			env: {
-				PI_CODING_AGENT_DIR: agentDir,
-				...(mode === "source" ? { SUMOCODE_EXTENSION_BUNDLE: "0" } : {}),
-			},
+			env,
 			cols: 100,
 			rows: 30,
 		});
@@ -346,12 +347,11 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 
 	it.each(["bundle", "source"] as const)("boots the package manifest through the stable extension entry (%s)", async (mode) => {
 		const agentDir = await mkdtemp(join(tmpdir(), `sumocode-package-entry-${mode}-agent-`));
+		const env: NodeJS.ProcessEnv = { PI_CODING_AGENT_DIR: agentDir };
+		if (mode === "source") env.SUMOCODE_EXTENSION_BUNDLE = "0";
 		app = spawnPiPty({
 			args: ["--offline", "--no-extensions", "--no-session", "--approve", "-e", "."],
-			env: {
-				PI_CODING_AGENT_DIR: agentDir,
-				...(mode === "source" ? { SUMOCODE_EXTENSION_BUNDLE: "0" } : {}),
-			},
+			env,
 			cols: 100,
 			rows: 30,
 		});
@@ -418,6 +418,8 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 	it("falls back to source when a recorded host input has been deleted", async () => {
 		const manifestPath = join(process.cwd(), "dist", "host", ".inputs.json");
 		const original = await readFile(manifestPath);
+		// SAFETY: the inputs manifest is JSON produced by the host build; only
+		// the inputs array is rewritten here before re-serializing.
 		const manifest = JSON.parse(original.toString()) as { inputs: string[] };
 		manifest.inputs = [...manifest.inputs, "src/deleted-production-input.ts"].sort();
 		await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
@@ -485,6 +487,8 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 		app.sendInput(`hello world${CSI_U_ENTER}`);
 		await app.waitForOutput("fixture response complete: hello world", 15_000);
 
+		// SAFETY: the fixture RPC command log is JSONL; every frame carries the
+		// type field and optionally the provider/modelId/message fields asserted below.
 		const log = (await readFile(logPath, "utf8")).trim().split("\n")
 			.map((line) => JSON.parse(line) as { type: string; provider?: string; modelId?: string; message?: string });
 		const setModelIndex = log.findIndex((command) => command.type === "set_model");

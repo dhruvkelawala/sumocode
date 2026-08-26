@@ -18,6 +18,26 @@ export const TABS_LOCAL_CONFIG_KEY = "topChromeHidden" as const;
 export const DEFAULT_TABS_CONFIG_PATH = join(homedir(), ".sumocode", "local-config.json");
 
 /**
+ * Arbitrary key/value bag stored in local-config.json; only known keys are read,
+ * and every key present on disk is preserved when writing.
+ */
+/**
+ * Arbitrary key/value bag stored in local-config.json; only known keys are read,
+ * and every key present on disk is preserved when writing.
+ */
+type LocalConfigFile = {
+	[key: string]: string | number | boolean | null;
+};
+
+/** Anything JSON.parse can produce for this config file. */
+type DecodedConfig = LocalConfigFile | string | number | boolean | null;
+
+/** Runtime check that decoded JSON is a non-null object usable as a config bag. */
+function isConfigObject(value: DecodedConfig): value is LocalConfigFile {
+	return typeof value === "object" && value !== null;
+}
+
+/**
  * Read the topChromeHidden flag from a local-config.json file.
  * Returns false if file missing, malformed, or key absent.
  */
@@ -25,7 +45,8 @@ export function isTopChromeHidden(configPath: string = DEFAULT_TABS_CONFIG_PATH)
 	try {
 		if (!existsSync(configPath)) return false;
 		const raw = readFileSync(configPath, "utf8");
-		const parsed = JSON.parse(raw) as Record<string, unknown>;
+		// SAFETY: malformed JSON rejects into the catch below; only object payloads reach here.
+		const parsed = JSON.parse(raw) as LocalConfigFile;
 		return parsed[TABS_LOCAL_CONFIG_KEY] === true;
 	} catch {
 		return false;
@@ -37,11 +58,14 @@ export function isTopChromeHidden(configPath: string = DEFAULT_TABS_CONFIG_PATH)
  * any other keys present in the file. Creates the file (and key) if missing.
  */
 export function setTopChromeHidden(hidden: boolean, configPath: string = DEFAULT_TABS_CONFIG_PATH): void {
-	let parsed: Record<string, unknown> = {};
+	let parsed: LocalConfigFile = {};
 	try {
 		if (existsSync(configPath)) {
-			parsed = JSON.parse(readFileSync(configPath, "utf8")) as Record<string, unknown>;
-			if (typeof parsed !== "object" || parsed === null) parsed = {};
+			// SAFETY: malformed JSON rejects into the catch below; non-object payloads are
+			// reset to the empty bag exactly as before.
+			const decoded = JSON.parse(readFileSync(configPath, "utf8")) as DecodedConfig;
+			if (!isConfigObject(decoded)) parsed = {};
+			else parsed = decoded;
 		}
 	} catch {
 		parsed = {};

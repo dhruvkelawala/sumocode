@@ -37,11 +37,13 @@
     "@earendil-works/pi-ai": "0.84.1",
     "@earendil-works/pi-coding-agent": "0.84.1",
     "@earendil-works/pi-tui": "0.84.1",
+    "@oxlint/plugins": "1.80.0",
     "@types/node": "^25.6.0",
     "@xterm/headless": "^6.0.0",
     "esbuild": "0.28.2",
     "knip": "^5.66.0",
     "node-pty": "^1.1.0",
+    "oxlint": "1.80.0",
     "pixelmatch": "^7.1.1",
     "playwright": "^1.59.1",
     "pngjs": "^7.0.0",
@@ -50,6 +52,7 @@
     "vitest": "^4.1.5"
   },
   "scripts": {
+    "lint": "oxlint",
     "typecheck": "tsc --noEmit",
     "build": "tsc --noEmit",
     "build:host": "node scripts/build-host.mjs",

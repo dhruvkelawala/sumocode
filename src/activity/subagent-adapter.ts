@@ -1,3 +1,5 @@
+// oxlint-disable anti-slop/no-unknown-parameters, anti-slop/no-unsafe-dictionary-type -- I/O boundary parser (subagent tool payload projection): inputs are untrusted producer JSON,
+// so `unknown` parameters and open string-keyed records are this module's real input contract.
 import type { SubagentSnapshot } from "../subagents/domain.js";
 import {
 	type ActivityBody,
@@ -37,6 +39,17 @@ const ACTIVITY_TITLE_MAX = 1_024;
 const ACTIVITY_KINDS = new Set<ActivityKind>(["tool", "task", "subagent", "terminal"]);
 const ACTIVITY_STATUSES = new Set<ActivityStatus>(["queued", "running", "succeeded", "failed", "cancelled", "lost"]);
 
+interface ResultSummary {
+	summary?: string;
+	error?: string;
+}
+
+/** Writable mirrors used to assemble snapshots field-by-field before returning them. */
+type MutableActivitySnapshot = { -readonly [K in keyof ActivitySnapshot]: ActivitySnapshot[K] };
+type MutableActivityMetrics = {
+	-readonly [K in keyof NonNullable<ActivitySnapshot["metrics"]>]: NonNullable<ActivitySnapshot["metrics"]>[K];
+};
+
 function asRecord(value: unknown, budget: AdapterTraversalBudget): Record<string, unknown> | undefined {
 	return boundedRecord(value, budget);
 }
@@ -49,12 +62,40 @@ function firstString(budget: AdapterTraversalBudget, ...values: unknown[]): stri
 	return firstBoundedAdapterString(budget, TEXT_MAX, ...values);
 }
 
+function isStringValue(value: unknown): value is string {
+	return typeof value === "string";
+}
+
+function isBooleanValue(value: unknown): value is boolean {
+	return typeof value === "boolean";
+}
+
+function isNumberValue(value: unknown): value is number {
+	return typeof value === "number";
+}
+
 function numberFrom(value: unknown): number | undefined {
-	return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+	return isNumberValue(value) && Number.isFinite(value) ? value : undefined;
+}
+
+function isRecordLike(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null;
+}
+
+function isActivityKind(value: unknown): value is ActivityKind {
+	if (!isStringValue(value)) return false;
+	// SAFETY: membership in ACTIVITY_KINDS proves this string is an ActivityKind.
+	return ACTIVITY_KINDS.has(value as ActivityKind);
+}
+
+function isActivityStatus(value: unknown): value is ActivityStatus {
+	if (!isStringValue(value)) return false;
+	// SAFETY: membership in ACTIVITY_STATUSES proves this string is an ActivityStatus.
+	return ACTIVITY_STATUSES.has(value as ActivityStatus);
 }
 
 function textFromContent(content: unknown, budget: AdapterTraversalBudget): string | undefined {
-	if (typeof content === "string") return boundedAdapterText(content, TEXT_MAX, budget);
+	if (isStringValue(content)) return boundedAdapterText(content, TEXT_MAX, budget);
 	const parts = boundedArray(content, MAX_CONTENT_PARTS, budget);
 	if (parts.length === 0) return undefined;
 	let text = "";
@@ -68,7 +109,16 @@ function textFromContent(content: unknown, budget: AdapterTraversalBudget): stri
 	return text.trim().length > 0 ? boundedText(text) : undefined;
 }
 
-function boundedUnknown(value: unknown, budget: AdapterTraversalBudget): unknown {
+/** Producer-shaped invocation snapshot recovered from the bounded preview. */
+type InvocationSnapshotPayload =
+	| string
+	| number
+	| boolean
+	| null
+	| readonly InvocationSnapshotPayload[]
+	| { readonly [key: string]: InvocationSnapshotPayload };
+
+function boundedUnknown(value: unknown, budget: AdapterTraversalBudget): InvocationSnapshotPayload {
 	const preview = boundedAdapterPreview(value, budget, {
 		maxChars: 4_000,
 		maxDepth: 5,
@@ -77,31 +127,33 @@ function boundedUnknown(value: unknown, budget: AdapterTraversalBudget): unknown
 		maxNodes: 64,
 	});
 	try {
-		return JSON.parse(preview) as unknown;
+		return JSON.parse(preview);
 	} catch {
 		return { preview };
 	}
 }
 
+type MutableSourceBody = {
+	-readonly [K in keyof Extract<ActivityBody, { kind: "source" }>]: Extract<ActivityBody, { kind: "source" }>[K];
+};
+
 function bodyFromEnvelope(value: unknown, budget: AdapterTraversalBudget): ActivityBody | undefined {
 	const body = asRecord(value, budget);
-	if (!body || typeof body.kind !== "string" || typeof body.text !== "string") return undefined;
+	if (!body || !isStringValue(body.kind) || !isStringValue(body.text)) return undefined;
 	const text = boundedAdapterText(body.text, TEXT_MAX, budget);
 	if (text === undefined) return undefined;
 	if (body.kind === "text" || body.kind === "diff") return { kind: body.kind, text };
 	if (body.kind === "source") {
+		const source: MutableSourceBody = { kind: "source", text };
 		const startLine = numberFrom(body.startLine);
 		const totalLines = numberFrom(body.totalLines);
-		return {
-			kind: "source",
-			text,
-			...(startLine === undefined ? {} : { startLine }),
-			...(totalLines === undefined ? {} : { totalLines }),
-		};
+		if (startLine !== undefined) source.startLine = startLine;
+		if (totalLines !== undefined) source.totalLines = totalLines;
+		return source;
 	}
 	if (body.kind === "terminal") {
 		const command = firstString(budget, body.command);
-		return { kind: "terminal", ...(command ? { command } : {}), text };
+		return command ? { kind: "terminal", command, text } : { kind: "terminal", text };
 	}
 	return undefined;
 }
@@ -117,7 +169,7 @@ function boundedEnvelope(
 	const title = firstBoundedAdapterString(coreBudget, ACTIVITY_TITLE_MAX, record?.title);
 	const kind = record?.kind;
 	const status = record?.status;
-	if (!record || !id || !title || !ACTIVITY_KINDS.has(kind as ActivityKind) || !ACTIVITY_STATUSES.has(status as ActivityStatus)) return undefined;
+	if (!record || !id || !title || !isActivityKind(kind) || !isActivityStatus(status)) return undefined;
 	// Correlation identity shares the reserved core budget. Optional tails below
 	// may exhaust their per-item budget without dropping this Activity or making
 	// a later one in the same 64-item operation disappear.
@@ -132,15 +184,25 @@ function boundedEnvelope(
 	const summary = rawSummary ? boundedText(rawSummary, depth === 0 ? TEXT_MAX : CHILD_PREVIEW_MAX) : undefined;
 	const error = rawError ? boundedText(rawError, depth === 0 ? TEXT_MAX : CHILD_PREVIEW_MAX) : undefined;
 	const metricsRecord = asRecord(record.metrics, budget);
-	const metrics = metricsRecord ? {
-		...(numberFrom(metricsRecord.tokens) === undefined ? {} : { tokens: numberFrom(metricsRecord.tokens) }),
-		...(numberFrom(metricsRecord.tokensIn) === undefined ? {} : { tokensIn: numberFrom(metricsRecord.tokensIn) }),
-		...(numberFrom(metricsRecord.tokensOut) === undefined ? {} : { tokensOut: numberFrom(metricsRecord.tokensOut) }),
-		...(numberFrom(metricsRecord.contextWindow) === undefined ? {} : { contextWindow: numberFrom(metricsRecord.contextWindow) }),
-		...(numberFrom(metricsRecord.costUsd) === undefined ? {} : { costUsd: numberFrom(metricsRecord.costUsd) }),
-		...(numberFrom(metricsRecord.turns) === undefined ? {} : { turns: numberFrom(metricsRecord.turns) }),
-		...(numberFrom(metricsRecord.elapsedMs) === undefined ? {} : { elapsedMs: numberFrom(metricsRecord.elapsedMs) }),
-	} : undefined;
+	let metrics: MutableActivityMetrics | undefined;
+	if (metricsRecord) {
+		const parsedMetrics: MutableActivityMetrics = {};
+		const tokens = numberFrom(metricsRecord.tokens);
+		const tokensIn = numberFrom(metricsRecord.tokensIn);
+		const tokensOut = numberFrom(metricsRecord.tokensOut);
+		const contextWindow = numberFrom(metricsRecord.contextWindow);
+		const costUsd = numberFrom(metricsRecord.costUsd);
+		const turns = numberFrom(metricsRecord.turns);
+		const elapsedMs = numberFrom(metricsRecord.elapsedMs);
+		if (tokens !== undefined) parsedMetrics.tokens = tokens;
+		if (tokensIn !== undefined) parsedMetrics.tokensIn = tokensIn;
+		if (tokensOut !== undefined) parsedMetrics.tokensOut = tokensOut;
+		if (contextWindow !== undefined) parsedMetrics.contextWindow = contextWindow;
+		if (costUsd !== undefined) parsedMetrics.costUsd = costUsd;
+		if (turns !== undefined) parsedMetrics.turns = turns;
+		if (elapsedMs !== undefined) parsedMetrics.elapsedMs = elapsedMs;
+		metrics = parsedMetrics;
+	}
 	const activeTools = depth < MAX_ENVELOPE_DEPTH
 		? boundedArray(record.activeTools, MAX_CHILD_TOOLS, budget)
 			.map((child) => boundedEnvelope(child, budget, depth + 1))
@@ -149,31 +211,40 @@ function boundedEnvelope(
 	const ownerSessionId = firstString(budget, record.ownerSessionId);
 	const model = firstString(budget, record.model);
 	const thinking = firstString(budget, record.thinking);
-	return {
-		id,
-		...(sourceId ? { sourceId } : {}),
-		kind: kind as ActivityKind,
-		title,
-		status: status as ActivityStatus,
-		...(record.invocation === undefined ? {} : { invocation: boundedUnknown(record.invocation, budget) }),
-		...(subject ? { subject } : {}),
-		...(currentStep ? { currentStep } : {}),
-		...(outputTail ? { outputTail } : {}),
-		...(body ? { body } : {}),
-		...(activeTools && activeTools.length > 0 ? { activeTools } : {}),
-		...(summary || error ? { result: { ...(summary ? { summary } : {}), ...(error ? { error } : {}) } } : {}),
-		...(ownerSessionId ? { ownerSessionId } : {}),
-		...(numberFrom(record.createdAt) === undefined ? {} : { createdAt: numberFrom(record.createdAt) }),
-		...(numberFrom(record.updatedAt) === undefined ? {} : { updatedAt: numberFrom(record.updatedAt) }),
-		...(numberFrom(record.settledAt) === undefined ? {} : { settledAt: numberFrom(record.settledAt) }),
-		...(model ? { model } : {}),
-		...(thinking ? { thinking } : {}),
-		...(metrics && Object.keys(metrics).length > 0 ? { metrics } : {}),
-	};
+	const leadingOptionals: Partial<MutableActivitySnapshot> = {};
+	if (sourceId) leadingOptionals.sourceId = sourceId;
+	const activity: MutableActivitySnapshot = { id, ...leadingOptionals, kind, title, status };
+	if (record.invocation !== undefined) activity.invocation = boundedUnknown(record.invocation, budget);
+	if (subject) activity.subject = subject;
+	if (currentStep) activity.currentStep = currentStep;
+	if (outputTail) activity.outputTail = outputTail;
+	if (body) activity.body = body;
+	if (activeTools && activeTools.length > 0) activity.activeTools = activeTools;
+	if (summary || error) {
+		const resultSummary: ResultSummary = {};
+		if (summary) resultSummary.summary = summary;
+		if (error) resultSummary.error = error;
+		activity.result = resultSummary;
+	}
+	if (ownerSessionId) activity.ownerSessionId = ownerSessionId;
+	const createdAt = numberFrom(record.createdAt);
+	const updatedAt = numberFrom(record.updatedAt);
+	const settledAt = numberFrom(record.settledAt);
+	if (createdAt !== undefined) activity.createdAt = createdAt;
+	if (updatedAt !== undefined) activity.updatedAt = updatedAt;
+	if (settledAt !== undefined) activity.settledAt = settledAt;
+	if (model) activity.model = model;
+	if (thinking) activity.thinking = thinking;
+	if (metrics && Object.keys(metrics).length > 0) activity.metrics = metrics;
+	return activity;
 }
 
 function paneId(pane: Record<string, unknown> | undefined, budget: AdapterTraversalBudget): string | undefined {
 	return firstString(budget, pane?.paneId, pane?.tabId, pane?.workspaceId);
+}
+
+function isUnfinishedToolValue(value: unknown): value is Record<string, unknown> {
+	return isRecordLike(value) && value.done !== true;
 }
 
 function subagentStatus(record: Record<string, unknown>, budget: AdapterTraversalBudget): ActivityStatus {
@@ -203,18 +274,46 @@ function toolActivity(
 	const rawArgs = firstString(budget, tool.argsPreview);
 	const output = rawOutput ? boundedText(rawOutput, CHILD_PREVIEW_MAX) : undefined;
 	const args = rawArgs ? boundedText(rawArgs, CHILD_PREVIEW_MAX) : undefined;
-	return {
+	const projected: MutableActivitySnapshot = {
 		id,
 		kind: "tool",
 		title: name,
 		status: done ? (isError ? "failed" : "succeeded") : "running",
-		...(args ? { invocation: args } : {}),
-		...(output ? { outputTail: output } : {}),
-		...(done && (output || isError) ? { result: { ...(output ? { summary: output } : {}), ...(isError ? { error: output ?? `${name} failed` } : {}) } } : {}),
 	};
+	if (args) projected.invocation = args;
+	if (output) projected.outputTail = output;
+	if (done && (output || isError)) {
+		const resultSummary: ResultSummary = {};
+		if (output) resultSummary.summary = output;
+		if (isError) resultSummary.error = output ?? `${name} failed`;
+		projected.result = resultSummary;
+	}
+	return projected;
 }
 
-function invocationFromSubagent(record: Record<string, unknown>, budget: AdapterTraversalBudget): Record<string, unknown> {
+interface SubagentPaneInvocation {
+	agentName?: string;
+	workspaceId?: string;
+	tabId?: string;
+	paneId?: string;
+}
+
+interface SubagentWorktreeInvocation {
+	path?: string;
+	branch?: string;
+	baseRef?: string;
+}
+
+interface SubagentInvocation {
+	prompt: string;
+	cwd?: string;
+	baseRef?: string;
+	visible?: boolean;
+	pane?: SubagentPaneInvocation;
+	worktree?: SubagentWorktreeInvocation;
+}
+
+function invocationFromSubagent(record: Record<string, unknown>, budget: AdapterTraversalBudget): SubagentInvocation {
 	const pane = asRecord(record.pane, budget);
 	const worktree = asRecord(record.worktree, budget);
 	const prompt = firstString(budget, record.prompt) ?? "subagent";
@@ -227,27 +326,26 @@ function invocationFromSubagent(record: Record<string, unknown>, budget: Adapter
 	const worktreePath = firstString(budget, worktree?.path);
 	const worktreeBranch = firstString(budget, worktree?.branch);
 	const worktreeBaseRef = firstString(budget, worktree?.baseRef);
-	return {
-		prompt: boundedText(prompt, PROMPT_MAX),
-		...(cwd ? { cwd } : {}),
-		...(baseRef ? { baseRef } : {}),
-		...(record.visible === true ? { visible: true } : {}),
-		...(pane ? {
-			pane: {
-				...(agentName ? { agentName } : {}),
-				...(workspaceId ? { workspaceId } : {}),
-				...(tabId ? { tabId } : {}),
-				...(paneRef ? { paneId: paneRef } : {}),
-			},
-		} : {}),
-		...(worktree ? {
-			worktree: {
-				...(worktreePath ? { path: worktreePath } : {}),
-				...(worktreeBranch ? { branch: worktreeBranch } : {}),
-				...(worktreeBaseRef ? { baseRef: worktreeBaseRef } : {}),
-			},
-		} : {}),
-	};
+	const invocation: SubagentInvocation = { prompt: boundedText(prompt, PROMPT_MAX) };
+	if (cwd) invocation.cwd = cwd;
+	if (baseRef) invocation.baseRef = baseRef;
+	if (record.visible === true) invocation.visible = true;
+	if (pane) {
+		const projectedPane: SubagentPaneInvocation = {};
+		if (agentName) projectedPane.agentName = agentName;
+		if (workspaceId) projectedPane.workspaceId = workspaceId;
+		if (tabId) projectedPane.tabId = tabId;
+		if (paneRef) projectedPane.paneId = paneRef;
+		invocation.pane = projectedPane;
+	}
+	if (worktree) {
+		const projectedWorktree: SubagentWorktreeInvocation = {};
+		if (worktreePath) projectedWorktree.path = worktreePath;
+		if (worktreeBranch) projectedWorktree.branch = worktreeBranch;
+		if (worktreeBaseRef) projectedWorktree.baseRef = worktreeBaseRef;
+		invocation.worktree = projectedWorktree;
+	}
+	return invocation;
 }
 
 function activityFromSubagentRecord(record: Record<string, unknown>, budget: AdapterTraversalBudget): ActivitySnapshot {
@@ -261,12 +359,7 @@ function activityFromSubagentRecord(record: Record<string, unknown>, budget: Ada
 	const output = status === "running" ? liveText ?? finalText : undefined;
 	const error = status === "failed" || status === "cancelled" ? firstString(budget, record.errorText) : undefined;
 	const summary = status === "succeeded" || status === "failed" || status === "cancelled" ? finalText : undefined;
-	const liveTools = boundedPriorityArray(
-		record.liveTools,
-		MAX_CHILD_TOOLS,
-		budget,
-		(value) => typeof value === "object" && value !== null && (value as Record<string, unknown>).done !== true,
-	)
+	const liveTools = boundedPriorityArray(record.liveTools, MAX_CHILD_TOOLS, budget, isUnfinishedToolValue)
 		.map(({ value, originalIndex }) => toolActivity(value, budget, `subagent:${id}`, originalIndex))
 		.filter((tool): tool is ActivitySnapshot => tool !== undefined);
 	const usage = asRecord(record.usage, budget);
@@ -279,13 +372,16 @@ function activityFromSubagentRecord(record: Record<string, unknown>, budget: Ada
 	const contextWindow = numberFrom(usage?.contextWindow);
 	const costUsd = numberFrom(usage?.costUsd);
 	const turns = numberFrom(usage?.turns);
-	const metrics = [tokens, contextWindow, costUsd, turns, elapsedMs].some((value) => value !== undefined && value > 0) ? {
-		...(tokens !== undefined && tokens > 0 ? { tokens } : {}),
-		...(contextWindow !== undefined && contextWindow > 0 ? { contextWindow } : {}),
-		...(costUsd !== undefined && costUsd > 0 ? { costUsd } : {}),
-		...(turns !== undefined && turns > 0 ? { turns } : {}),
-		...(elapsedMs !== undefined && elapsedMs > 0 ? { elapsedMs } : {}),
-	} : undefined;
+	let metrics: MutableActivityMetrics | undefined;
+	if ([tokens, contextWindow, costUsd, turns, elapsedMs].some((value) => value !== undefined && value > 0)) {
+		const parsedMetrics: MutableActivityMetrics = {};
+		if (tokens !== undefined && tokens > 0) parsedMetrics.tokens = tokens;
+		if (contextWindow !== undefined && contextWindow > 0) parsedMetrics.contextWindow = contextWindow;
+		if (costUsd !== undefined && costUsd > 0) parsedMetrics.costUsd = costUsd;
+		if (turns !== undefined && turns > 0) parsedMetrics.turns = turns;
+		if (elapsedMs !== undefined && elapsedMs > 0) parsedMetrics.elapsedMs = elapsedMs;
+		metrics = parsedMetrics;
+	}
 	const paneLabel = paneId(pane, budget);
 	const branch = firstString(budget, worktree?.branch);
 	const subject = [id, paneLabel ? `pane ${paneLabel}` : undefined, branch].filter((part): part is string => !!part).join(" · ");
@@ -298,32 +394,43 @@ function activityFromSubagentRecord(record: Record<string, unknown>, budget: Ada
 	const sourceId = firstString(budget, record.sourceId);
 	const model = firstString(budget, record.modelLabel);
 	const thinking = firstString(budget, record.thinkingLabel);
-	return {
+	const leadingOptionals: Partial<MutableActivitySnapshot> = {};
+	if (sourceId) leadingOptionals.sourceId = sourceId;
+	const activity: MutableActivitySnapshot = {
 		// Plan 082's canonical manager identity remains subagent:<sa-id>;
 		// sourceId carries the spawn-call correlation through manager/feed updates.
 		id: `subagent:${id}`,
-		...(sourceId ? { sourceId } : {}),
+		...leadingOptionals,
 		kind: "subagent",
 		title,
 		status,
 		invocation: invocationFromSubagent(record, budget),
 		subject,
-		...(currentStep ? { currentStep } : {}),
-		...(output ? { outputTail: boundedText(output) } : {}),
-		...(liveTools.length > 0 ? { activeTools: liveTools } : {}),
-		...(summary || error ? { result: { ...(summary ? { summary: boundedText(summary) } : {}), ...(error ? { error: boundedText(error) } : {}) } } : {}),
-		...(createdAt === undefined ? {} : { createdAt }),
-		...(settledAt === undefined ? {} : { settledAt }),
-		...(model ? { model } : {}),
-		...(thinking ? { thinking } : {}),
-		...(metrics ? { metrics } : {}),
 	};
+	if (currentStep) activity.currentStep = currentStep;
+	if (output) activity.outputTail = boundedText(output);
+	if (liveTools.length > 0) activity.activeTools = liveTools;
+	if (summary || error) {
+		const resultSummary: ResultSummary = {};
+		if (summary) resultSummary.summary = boundedText(summary);
+		if (error) resultSummary.error = boundedText(error);
+		activity.result = resultSummary;
+	}
+	if (createdAt !== undefined) activity.createdAt = createdAt;
+	if (settledAt !== undefined) activity.settledAt = settledAt;
+	if (model) activity.model = model;
+	if (thinking) activity.thinking = thinking;
+	if (metrics) activity.metrics = metrics;
+	return activity;
 }
 
 /** Project a manager snapshot into a bounded renderer-neutral Activity. */
 export function activityFromSubagentSnapshot(snapshot: SubagentSnapshot): ActivitySnapshot {
 	const budget = createAdapterTraversalBudget({ maxNodes: ADAPTER_MAX_NODES, maxChars: ADAPTER_MAX_CHARS });
-	return activityFromSubagentRecord(snapshot as unknown as Record<string, unknown>, budget);
+	// SAFETY: SubagentSnapshot is a plain producer-owned object, so its runtime shape is a string-keyed record.
+	const loose: unknown = snapshot;
+	// SAFETY: the adapter only reads and sanitizes the record's fields; no mutation occurs.
+	return activityFromSubagentRecord(loose as Record<string, unknown>, budget);
 }
 
 function activityEnvelopes(
@@ -352,13 +459,17 @@ function activityFromOperationSubagent(value: unknown): ActivitySnapshot | undef
 	return record ? activityFromSubagentRecord(record, budget) : undefined;
 }
 
-function spawnInvocation(record: Record<string, unknown>, budget: AdapterTraversalBudget): unknown {
+interface SpawnInvocationArguments {
+	readonly [key: string]: string | boolean | undefined;
+}
+
+function spawnInvocation(record: Record<string, unknown>, budget: AdapterTraversalBudget): SpawnInvocationArguments {
 	const args = asRecord(record.arguments ?? record.input, budget) ?? {};
-	const projected: Record<string, unknown> = {};
+	const projected: Record<string, string | boolean | undefined> = {};
 	for (const key of ["prompt", "name", "model", "thinking", "working_dir", "worktree", "branch", "baseRef", "visible"] as const) {
 		const value = args[key];
-		if (typeof value === "string") projected[key] = boundedAdapterText(value, key === "prompt" ? PROMPT_MAX : 1_000, budget);
-		else if (typeof value === "boolean") projected[key] = value;
+		if (isStringValue(value)) projected[key] = boundedAdapterText(value, key === "prompt" ? PROMPT_MAX : 1_000, budget);
+		else if (isBooleanValue(value)) projected[key] = value;
 	}
 	return projected;
 }
@@ -367,15 +478,16 @@ function spawnToolActivity(record: Record<string, unknown>, toolCallId: string, 
 	const isError = record.isError === true;
 	const status = normalizePiActivityStatus(record.status, record.type === "toolResult" || record.role === "toolResult" ? (isError ? "failed" : "succeeded") : "queued");
 	const output = textFromContent(record.content, budget);
-	return {
+	const spawn: MutableActivitySnapshot = {
 		id: toolCallId,
 		kind: "tool",
 		title: "subagent_spawn",
 		status,
 		invocation: spawnInvocation(record, budget),
-		...(output ? { outputTail: output } : {}),
-		...(isError && output ? { result: { error: output } } : {}),
 	};
+	if (output) spawn.outputTail = output;
+	if (isError && output) spawn.result = { error: output };
+	return spawn;
 }
 
 /** Project subagent tool details; wait/cancel may yield several canonical updates. */
@@ -420,16 +532,17 @@ export function activityFromSubagentResultRecord(recordValue: unknown): Activity
 		errorText: details?.errorText ?? record.errorText,
 	}, budget);
 	const content = textFromContent(record.content, budget);
-	return {
+	const activity: MutableActivitySnapshot = {
 		id: `subagent:${id}`,
 		kind: "subagent",
 		title,
 		status,
 		subject: id,
-		...(content ? {
-			result: status === "failed" || status === "cancelled"
-				? { error: content }
-				: { summary: content },
-		} : {}),
 	};
+	if (content) {
+		activity.result = status === "failed" || status === "cancelled"
+			? { error: content }
+			: { summary: content };
+	}
+	return activity;
 }

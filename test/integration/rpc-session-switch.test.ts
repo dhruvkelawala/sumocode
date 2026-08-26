@@ -18,13 +18,19 @@ afterEach(() => {
 async function waitForChromeCacheWrite(path: string, after = -1): Promise<number> {
 	for (let attempt = 0; attempt < 200; attempt += 1) {
 		try {
+			// SAFETY: the cache file is written by this extension's chrome-cache
+			// JSON writer; a malformed file is caught below and retried.
 			const cache = JSON.parse(await readFile(path, "utf8")) as { byCwd?: Record<string, { savedAt?: number }> };
 			const savedAt = Object.values(cache.byCwd ?? {})[0]?.savedAt;
-			if (typeof savedAt === "number" && savedAt > after) return savedAt;
+			if (isSavedAtNumber(savedAt) && savedAt > after) return savedAt;
 		} catch {}
 		await new Promise((resolve) => setTimeout(resolve, 20));
 	}
 	throw new Error(`timed out waiting for chrome cache write after ${after}`);
+}
+
+function isSavedAtNumber(savedAt: number | undefined): savedAt is number {
+	return typeof savedAt === "number";
 }
 
 async function replayTerminalRows(output: string, cols: number, rows: number): Promise<string[]> {

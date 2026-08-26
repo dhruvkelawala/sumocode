@@ -52,7 +52,9 @@ class FakeProcess implements LifecycleProcess {
 	}
 
 	public emit(event: LifecycleProcessEvent, ...args: unknown[]): void {
-		for (const listener of [...(this.listeners.get(event) ?? [])]) {
+		// Snapshot listeners like Node's emit so a listener that (de)registers
+		// during dispatch does not skip or double-invoke siblings.
+		for (const listener of (this.listeners.get(event) ?? []).slice()) {
 			listener(...args);
 		}
 	}
@@ -90,7 +92,7 @@ function outputStub(): TerminalOutput & { writes: string[] } {
 	};
 }
 
-type Handler = (...args: unknown[]) => unknown;
+type Handler = (...args: unknown[]) => void;
 
 function buildPiStub() {
 	const handlers = new Map<string, Handler[]>();
@@ -101,11 +103,15 @@ function buildPiStub() {
 			handlers.set(event, list);
 		},
 	};
-	return { pi: pi as unknown as ExtensionAPI, handlers };
+	// SAFETY: the stub implements the on() registrar surface installLifecycle
+	// uses; other ExtensionAPI members are not exercised by these tests.
+	return { pi: pi as ExtensionAPI, handlers };
 }
 
 describe("useTerminalDimensions", () => {
 	it("tracks stdout resize events and unsubscribes cleanly", () => {
+		// SAFETY: the resize test only reads columns/rows and emits "resize",
+		// all provided by this intersection.
 		const source = new EventEmitter() as EventEmitter & { columns: number; rows: number };
 		source.columns = 100;
 		source.rows = 40;
@@ -130,7 +136,9 @@ describe("LifecycleRuntime", () => {
 		delete process.env.SUMO_TUI;
 		// Always clear the global retained-runtime symbol between tests so a stale
 		// runtime from one test cannot bleed into another.
-		const host = globalThis as unknown as Record<symbol, unknown>;
+		// SAFETY: the Symbol.for registry slot is written only by runtime code;
+		// deleting it cannot affect unrelated globals.
+		const host = globalThis as Record<symbol, { runtime: true } | undefined>;
 		delete host[Symbol.for("sumocode.activeSumoRuntime")];
 	});
 	it("registers process signal handlers exactly once", () => {
@@ -200,8 +208,10 @@ describe("LifecycleRuntime", () => {
 		// Simulate the --sumo-tui launch path: SumoInteractiveRuntime registers itself
 		// on the globalThis symbol but SUMO_TUI env is NOT set.
 		delete process.env.SUMO_TUI;
-		const host = globalThis as unknown as Record<symbol, { runtime: unknown }>;
-		host[Symbol.for("sumocode.activeSumoRuntime")] = { runtime: { fake: true } };
+		// SAFETY: the Symbol.for registry slot is written only by runtime code;
+		// seeding a fake ActiveRuntimeBox mirrors what the CLI launch path does.
+		const host = globalThis as Record<symbol, { runtime: true } | undefined>;
+		host[Symbol.for("sumocode.activeSumoRuntime")] = { runtime: true };
 
 		const fakeProcess = new FakeProcess();
 		const fakeInput = new FakeInput();
@@ -283,6 +293,7 @@ describe("LifecycleRuntime", () => {
 		const fakeProcess = new FakeProcess();
 		const output = outputStub();
 		const terminalSession = new TerminalSessionOwner({ output });
+		// SAFETY: every NodeJS.ErrnoException field is assigned explicitly below.
 		const error = new Error("write EIO") as NodeJS.ErrnoException;
 		error.code = "EIO";
 		vi.spyOn(terminalSession, "exitTerminal").mockImplementation(() => {

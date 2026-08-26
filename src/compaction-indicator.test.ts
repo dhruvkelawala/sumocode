@@ -44,6 +44,7 @@ describe("CompactionStatusComponent", () => {
 		const c = new CompactionStatusComponent("Compacting…", tui);
 		try {
 			const row = c.render(80)[0]!;
+			// oxlint-disable-next-line no-control-regex -- intentional ESC/control-byte match to strip ANSI in captured output
 			const plain = row.replace(/\x1b\[[0-9;]*m/g, "");
 			// At tick 0 bar starts with glyph + track chars.
 			expect(plain).toMatch(/[━─]/);
@@ -57,6 +58,7 @@ describe("CompactionStatusComponent", () => {
 		const c = new CompactionStatusComponent("Compacting…", tui);
 		try {
 			const row = c.render(80)[0]!;
+			// oxlint-disable-next-line no-control-regex -- intentional ESC/control-byte match to strip ANSI in captured output
 			const plain = row.replace(/\x1b\[[0-9;]*m/g, "");
 			// At tick 0, filledCells === 0: only unfilled track + glyph
 			expect(plain).not.toMatch(/▓▓/); // no solid fill yet
@@ -72,6 +74,7 @@ describe("CompactionStatusComponent", () => {
 			// With PLATEAU_TICKS=400 we need enough ticks to see fill start.
 			// 80 ticks (8 s) → ~18 % of barWidth ≈ 5 filled cells.
 			vi.advanceTimersByTime(8000);
+			// oxlint-disable-next-line no-control-regex -- intentional ESC/control-byte match to strip ANSI in captured output
 			const row = c.render(80)[0]!.replace(/\x1b\[[0-9;]*m/g, "");
 			expect(row).toContain("━");
 		} finally {
@@ -84,8 +87,10 @@ describe("CompactionStatusComponent", () => {
 		const c = new CompactionStatusComponent("Compacting…", tui);
 		try {
 			vi.advanceTimersByTime(40_000);
+			// oxlint-disable-next-line no-control-regex -- intentional ESC/control-byte match to strip ANSI in captured output
 			const rowA = c.render(80)[0]!.replace(/\x1b\[[0-9;]*m/g, "");
 			vi.advanceTimersByTime(30_000);
+			// oxlint-disable-next-line no-control-regex -- intentional ESC/control-byte match to strip ANSI in captured output
 			const rowB = c.render(80)[0]!.replace(/\x1b\[[0-9;]*m/g, "");
 			const traceA = [...rowA].filter((ch) => ch === "━").length;
 			const traceB = [...rowB].filter((ch) => ch === "━").length;
@@ -119,14 +124,14 @@ describe("CompactionStatusComponent", () => {
 // ── installCompactionIndicator integration tests ──────────────────────────────
 
 function buildPiStub() {
-	const handlers: Record<string, Array<(...args: unknown[]) => unknown>> = {};
+	const handlers: Record<string, Array<(...args: unknown[]) => void>> = {};
 	const pi = {
-		on: vi.fn((event: string, handler: (...args: unknown[]) => unknown) => {
+		on: vi.fn((event: string, handler: (...args: unknown[]) => void) => {
 			handlers[event] ??= [];
 			handlers[event].push(handler);
 		}),
 	};
-	const fire = async (event: string, payload: unknown, ctx: unknown) => {
+	const fire = async <P, C>(event: string, payload: P, ctx: C) => {
 		for (const h of handlers[event] ?? []) await h(payload, ctx);
 	};
 	return { pi, fire };
@@ -142,6 +147,7 @@ describe("compaction indicator — retained mode", () => {
 
 	it("registers session_before_compact, session_compact, and session_shutdown handlers", () => {
 		const { pi } = buildPiStub();
+		// SAFETY: the on() double supplies the registrar surface the installer reads.
 		installCompactionIndicator(pi as never);
 		const registered = pi.on.mock.calls.map((c) => c[0]);
 		expect(registered).toContain("session_before_compact");
@@ -152,6 +158,7 @@ describe("compaction indicator — retained mode", () => {
 	it("mounts animated component for manual /compact (customInstructions set)", async () => {
 		const { pi, fire } = buildPiStub();
 		const { ctx, setWidget } = buildCtxStub();
+		// SAFETY: the on() double supplies the registrar surface the installer reads.
 		installCompactionIndicator(pi as never);
 
 		await fire("session_before_compact", { customInstructions: "summarise recent" }, ctx);
@@ -161,6 +168,7 @@ describe("compaction indicator — retained mode", () => {
 			expect.any(Function),
 			{ placement: "aboveEditor" },
 		);
+		// SAFETY: setWidget recorded the component factory the indicator mounted; its shape is asserted here.
 		const factory = setWidget.mock.calls[0][1] as (tui: { requestRender(): void }) => { render(w: number): string[]; dispose?(): void };
 		const c = factory({ requestRender: vi.fn() });
 		const row = c.render(80)[0]!;
@@ -171,10 +179,12 @@ describe("compaction indicator — retained mode", () => {
 	it("mounts animated component with 'Auto-compacting…' when customInstructions is undefined", async () => {
 		const { pi, fire } = buildPiStub();
 		const { ctx, setWidget } = buildCtxStub();
+		// SAFETY: the on() double supplies the registrar surface the installer reads.
 		installCompactionIndicator(pi as never);
 
 		await fire("session_before_compact", { customInstructions: undefined }, ctx);
 
+		// SAFETY: setWidget recorded the component factory the indicator mounted; its shape is asserted here.
 		const factory = setWidget.mock.calls[0][1] as (tui: { requestRender(): void }) => { render(w: number): string[]; dispose?(): void };
 		const c = factory({ requestRender: vi.fn() });
 		const row = c.render(80)[0]!;
@@ -185,9 +195,11 @@ describe("compaction indicator — retained mode", () => {
 	it("clears widget on session_compact after completion hold", async () => {
 		const { pi, fire } = buildPiStub();
 		const { ctx, setWidget } = buildCtxStub();
+		// SAFETY: the on() double supplies the registrar surface the installer reads.
 		installCompactionIndicator(pi as never);
 
 		await fire("session_before_compact", { customInstructions: undefined }, ctx);
+		// SAFETY: setWidget recorded the component factory the indicator mounted; its shape is asserted here.
 		const factory = setWidget.mock.calls[0][1] as (tui: { requestRender(): void }) => { render(w: number): string[]; dispose?(): void };
 		const c = factory({ requestRender: vi.fn() });
 
@@ -208,6 +220,7 @@ describe("compaction indicator — retained mode", () => {
 	it("clears widget on session_shutdown", async () => {
 		const { pi, fire } = buildPiStub();
 		const { ctx, setWidget } = buildCtxStub();
+		// SAFETY: the on() double supplies the registrar surface the installer reads.
 		installCompactionIndicator(pi as never);
 
 		await fire("session_before_compact", { customInstructions: undefined }, ctx);
@@ -224,6 +237,7 @@ describe("compaction indicator — retained mode", () => {
 		const { pi, fire } = buildPiStub();
 		const { setWidget } = buildCtxStub();
 		const headlessCtx = { hasUI: false, ui: { setWidget } };
+		// SAFETY: the on() double supplies the registrar surface the installer reads.
 		installCompactionIndicator(pi as never);
 
 		await fire("session_before_compact", { customInstructions: undefined }, headlessCtx);
@@ -234,6 +248,7 @@ describe("compaction indicator — retained mode", () => {
 	it("does not double-clear when session_compact fires without a prior before_compact", async () => {
 		const { pi, fire } = buildPiStub();
 		const { ctx, setWidget } = buildCtxStub();
+		// SAFETY: the on() double supplies the registrar surface the installer reads.
 		installCompactionIndicator(pi as never);
 
 		await fire("session_compact", {}, ctx);
@@ -247,6 +262,7 @@ describe("compaction indicator — classic Pi (no SUMO_TUI)", () => {
 
 	it("registers no event handlers in classic mode", () => {
 		const { pi } = buildPiStub();
+		// SAFETY: the on() double supplies the registrar surface the installer reads.
 		installCompactionIndicator(pi as never);
 		expect(pi.on).not.toHaveBeenCalled();
 	});

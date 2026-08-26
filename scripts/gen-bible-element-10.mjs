@@ -13,15 +13,9 @@ const out = resolve(repoRoot, "docs", "ui", "bible");
 const rep = (ch, n) => ch.repeat(n);
 const visibleLen = (s) =>
 	s.replace(/<[^>]+>/g, "").replace(/&gt;/g, ">").replace(/&lt;/g, "<").replace(/&amp;/g, "&").replace(/&nbsp;/g, " ").length;
-const padRight = (s, n) => {
-	const need = n - visibleLen(s);
-	return need > 0 ? s + rep(" ", need) : s;
-};
 
 function buildCodeBlock({ cols, language, lines }) {
 	const innerWidth = cols - 2; // ╭ and ╮ on edges
-	const gutterWidth = 4; // "  N "
-	const codeWidth = innerWidth - gutterWidth - 2; // -2 for left padding inside frame
 
 	const rows = [];
 	const langTag = language ? `<span class="fg-divider">\u2500 </span><span class="fg-dim">${language}</span><span class="fg-divider"> \u2500</span>` : "";

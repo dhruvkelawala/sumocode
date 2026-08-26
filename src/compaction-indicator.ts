@@ -82,6 +82,8 @@ export class CompactionStatusComponent implements Component {
 		this.tui.requestRender();
 		return new Promise((resolve) => {
 			const t = setTimeout(resolve, COMPLETE_HOLD_MS);
+			// SAFETY: setTimeout in Node returns a Timeout with an optional unref();
+			// browsers return a number, for which the optional chain is a no-op.
 			(t as NodeJS.Timeout).unref?.();
 		});
 	}
@@ -145,6 +147,8 @@ export function installCompactionIndicator(pi: ExtensionAPI): void {
 		// Belt-and-suspenders: clear the reason even if compaction_end already
 		// cleared it, so no stale value survives into the next compaction.
 		setCompactionReason(null);
+		// SAFETY: Pi's session_compact context satisfies the same hasUI/ui surface
+		// clearWidget reads; non-TTY sessions gate on hasUI before clearing.
 		clearWidget(ctx as Parameters<typeof clearWidget>[0]);
 	});
 
@@ -154,6 +158,8 @@ export function installCompactionIndicator(pi: ExtensionAPI): void {
 		// Also clear the reason: compaction_end may never fire on abort paths,
 		// leaving a stale value that would mislabel the next compaction.
 		setCompactionReason(null);
+		// SAFETY: Pi's session_shutdown context satisfies the same hasUI/ui surface
+		// clearWidget reads; non-TTY sessions gate on hasUI before clearing.
 		clearWidget(ctx as Parameters<typeof clearWidget>[0]);
 	});
 }

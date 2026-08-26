@@ -26,6 +26,7 @@ import { sessionHasMessages as cachedSessionHasMessages } from "./session-cache.
 import { activeThemeColors, type SumoCodeState } from "./themes/index.js";
 
 const RESET = "\u001b[0m";
+// oxlint-disable-next-line no-control-regex -- intentional ANSI SGR escape match to strip styling in captured output
 const ANSI_PATTERN = /\u001b\[[0-9;]*m/g;
 
 export const TOP_CHROME_BRAND = "SUMOCODE";
@@ -74,11 +75,11 @@ const OUTER_PAD = 1;
 const BRAND_ACTIVE_GAP = 2;
 const COMPACT_TOP_CHROME_WIDTH = 80;
 const PORTRAIT_CHROME_BREATHING_WIDTH = 80;
-const DOT_GLYPHS: Record<TopChromeDotSize, string> = {
+const DOT_GLYPHS = {
 	small: "·",
 	medium: "•",
 	large: "●",
-};
+} satisfies Record<TopChromeDotSize, string>;
 
 /**
  * Compose the active-session segment: `║ • label ║`.
@@ -324,13 +325,19 @@ function sessionHasMessages(ctx: { sessionManager?: { getBranch?: () => unknown[
 		// ExtensionContext so we don't re-walk the branch on every header render.
 		// Falls back to the inline traversal for the test mock shape that only
 		// supplies `{ sessionManager: { getBranch } }`.
+		// SAFETY: structural probe distinguishing a full ExtensionContext from the
+		// test mock; both branches only touch members present on their operand.
 		if (
+			// oxlint-disable-next-line anti-slop/no-runtime-typeof -- shape probe for real ExtensionContext vs test mock
 			typeof (ctx as { cwd?: unknown }).cwd === "string" &&
 			ctx.sessionManager &&
+			// oxlint-disable-next-line anti-slop/no-runtime-typeof -- callability guard before invoking getBranch
 			typeof ctx.sessionManager.getBranch === "function"
 		) {
+			// SAFETY: cwd string + sessionManager.getBranch presence verified above.
 			return cachedSessionHasMessages(ctx as ExtensionContext);
 		}
+		// SAFETY: entry is an opaque branch item; only its optional `type` tag is read.
 		return ctx.sessionManager?.getBranch?.().some((entry) => (entry as { type?: string }).type === "message") ?? false;
 	} catch {
 		return false;

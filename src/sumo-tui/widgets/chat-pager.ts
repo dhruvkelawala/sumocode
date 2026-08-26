@@ -746,6 +746,8 @@ export class ChatPager extends SumoNode {
 	private updateActivityInMessage(message: ChatMessage, activity: ActivitySnapshot): void {
 		const blocks = message.toSnapshot().blocks ?? [];
 		const index = blocks.findIndex((block) => block.type === "activity" && sameActivity(block.activity, activity));
+		// SAFETY: the findIndex predicate above verified blocks[index] is an
+		// activity block; the element type of the snapshot array is the block union.
 		const existing = index === -1 || blocks[index]?.type !== "activity" ? undefined : blocks[index] as ActivityBlock;
 		const transcriptCanonicalSubagent = existing?.activity.kind === "subagent" && activity.kind === "subagent"
 			&& this.transcriptOwnedMessages.has(message) && sameActivity(existing.activity, activity);
@@ -1096,13 +1098,13 @@ export class ChatPager extends SumoNode {
 
 	private pruneInactiveActivityState(): void {
 		const currentIds = this.currentActivityIds();
-		for (const id of [...this.activityBookkeepingLru.keys()]) {
+		for (const id of this.activityBookkeepingLru.keys()) {
 			if (!currentIds.has(id)) this.dropActivityBookkeeping(id);
 		}
-		for (const id of [...this.activityStatuses.keys()]) {
+		for (const id of this.activityStatuses.keys()) {
 			if (!currentIds.has(id)) this.dropActivityBookkeeping(id);
 		}
-		for (const id of [...this.activityExpansionPersistenceKeys.keys()]) {
+		for (const id of this.activityExpansionPersistenceKeys.keys()) {
 			if (!currentIds.has(id)) this.dropActivityBookkeeping(id);
 		}
 	}
@@ -1204,7 +1206,7 @@ export class ChatPager extends SumoNode {
 		this.scheduleRender();
 	}
 
-	private virtualizeIfNeeded(): { addedLines: number; removedLines: number } {
+	private virtualizeIfNeeded() {
 		let removedLines = 0;
 		let addedLines = 0;
 		let archivedAny = false;
@@ -1281,14 +1283,19 @@ export class ChatPager extends SumoNode {
 	}
 
 	private disposeMessageNodes(): void {
-		const nodes = new Set<ChatMessage>([...this.activeMessages, ...this.archivedMessages]);
+		const nodes = new Set<ChatMessage>(this.activeMessages);
+		for (const message of this.archivedMessages) nodes.add(message);
 		if (this.placeholder) nodes.add(this.placeholder);
-		for (const child of [...this.scrollBox.children]) this.scrollBox.removeChild(child);
+		// Snapshot before removing: children is the live backing array and
+		// removeChild splices it, so iterating it directly would skip elements.
+		for (const child of this.scrollBox.children.slice()) this.scrollBox.removeChild(child);
 		for (const node of nodes) node.dispose();
 	}
 
 	private rebuildRenderedChildren(): void {
-		for (const child of [...this.scrollBox.children]) this.scrollBox.removeChild(child);
+		// Snapshot before removing: children is the live backing array and
+		// removeChild splices it, so iterating it directly would skip elements.
+		for (const child of this.scrollBox.children.slice()) this.scrollBox.removeChild(child);
 		if (this.placeholder) this.scrollBox.addChild(this.placeholder);
 		for (const message of this.activeMessages) this.scrollBox.addChild(message);
 	}

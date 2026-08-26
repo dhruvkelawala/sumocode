@@ -17,6 +17,7 @@ describe("herdrTerminalHost", () => {
 		const exec = vi.fn(async (_bin: string, args: string[]) => args[1] === "split"
 			? { stdout: JSON.stringify({ result: { pane: { pane_id: "w7:p9", workspace_id: "w7", tab_id: "w7:t2" } } }), stderr: "", code: 0, killed: false }
 			: { stdout: JSON.stringify({ result: { type: "ok" } }), stderr: "", code: 0, killed: false });
+		// SAFETY: test double only exercises the members this test asserts on.
 		const result = await herdrTerminalHost.openCommandInSplit({ exec } as never, "right", { cwd: "/tmp", shellCommand: "echo ok" });
 		expect(result).toEqual({ ok: true, pane: { host: "herdr", paneId: "w7:p9", workspaceId: "w7" } });
 		expect(exec).toHaveBeenNthCalledWith(1, "herdr", ["pane", "split", "--current", "--direction", "right", "--cwd", "/tmp", "--no-focus"], { timeout: 5000 });
@@ -27,6 +28,7 @@ describe("herdrTerminalHost", () => {
 		const exec = vi.fn(async (_bin: string, args: string[]) => args[0] === "tab"
 			? { stdout: JSON.stringify({ result: { root_pane: { pane_id: "w1:p2", workspace_id: "w1", tab_id: "w1:t2" } } }), stderr: "", code: 0, killed: false }
 			: { stdout: JSON.stringify({ result: { type: "ok" } }), stderr: "", code: 0, killed: false });
+		// SAFETY: test double only exercises the members this test asserts on.
 		const result = await herdrTerminalHost.openCommandInSplit({ exec } as never, "down", { cwd: "/tmp", shellCommand: "echo ok" });
 		expect(result).toEqual({ ok: true, pane: { host: "herdr", paneId: "w1:p2", workspaceId: "w1" } });
 		expect(exec).toHaveBeenNthCalledWith(1, "herdr", ["tab", "create", "--cwd", "/tmp", "--label", "sumocode", "--no-focus"], { timeout: 5000 });
@@ -43,6 +45,7 @@ describe("herdrTerminalHost", () => {
 			return { stdout: JSON.stringify({ result: { type: "ok" } }), stderr: "", code: 0, killed: false };
 		});
 		await expect(
+			// SAFETY: test double only exercises the members this test asserts on.
 			herdrTerminalHost.openWorktreeWorkspace?.({ exec } as never, { branch: "sumo/x", baseRef: "HEAD", path: "/repo.wt/sumo__x", label: "sumo · x", shellCommand: "exec sumocode", sourceCwd: "/repo" }),
 		).resolves.toEqual({ ok: true, pane: { host: "herdr", paneId: "wC:p1", workspaceId: "wC" } });
 	});
@@ -51,6 +54,7 @@ describe("herdrTerminalHost", () => {
 		process.env.HERDR_ENV = "1";
 		process.env.HERDR_PANE_ID = "w1:p1";
 		const fake = pi("not-json");
+		// SAFETY: test double only exercises the members this test asserts on.
 		const result = await herdrTerminalHost.openCommandInSplit(fake as never, "right", { cwd: "/tmp", shellCommand: "echo ok" });
 		expect(result.ok).toBe(false);
 	});
@@ -58,6 +62,7 @@ describe("herdrTerminalHost", () => {
 		const exec = vi.fn(async (_bin: string, args: string[]) => args[1] === "split"
 			? { stdout: JSON.stringify({ result: { pane: { pane_id: "w9:p2", workspace_id: "w9", tab_id: "w9:t1" } } }), stderr: "", code: 0, killed: false }
 			: { stdout: JSON.stringify({ result: { type: "ok" } }), stderr: "", code: 0, killed: false });
+		// SAFETY: test double only exercises the members this test asserts on.
 		const result = await herdrTerminalHost.startAgentPane({ exec } as never, {
 			name: "API Worker",
 			cwd: "/repo/packages/api",
@@ -76,6 +81,7 @@ describe("herdrTerminalHost", () => {
 			if (args[1] === "move") return { stdout: "", stderr: "move denied", code: 1, killed: false };
 			return { stdout: JSON.stringify({ result: { type: "ok" } }), stderr: "", code: 0, killed: false };
 		});
+		// SAFETY: test double only exercises the members this test asserts on.
 		await expect(herdrTerminalHost.startAgentPane({ exec } as never, {
 			name: "worker", cwd: "/repo", shellCommand: "run child", placement: { kind: "workspace", workspaceId: "w9", paneId: "w9:p1" },
 		})).resolves.toMatchObject({ ok: true, paneId: "w9:p2" });
@@ -88,6 +94,7 @@ describe("herdrTerminalHost", () => {
 			if (args[1] === "split") return { stdout: JSON.stringify({ result: { pane: { pane_id: "w9:p2", workspace_id: "w9", tab_id: "w9:t1" } } }), stderr: "", code: 0, killed: false };
 			return { stdout: JSON.stringify({ result: { type: "ok" } }), stderr: "", code: 0, killed: false };
 		});
+		// SAFETY: test double only exercises the members this test asserts on.
 		const result = await herdrTerminalHost.startAgentPane({ exec } as never, {
 			name: "API Worker",
 			cwd: "/repo/packages/api",
@@ -105,6 +112,7 @@ describe("herdrTerminalHost", () => {
 			if (args[1] === "split") return { stdout: JSON.stringify({ result: { pane: { pane_id: "w3:p4", workspace_id: "w3", tab_id: "w3:t2" } } }), stderr: "", code: 0, killed: false };
 			return { stdout: JSON.stringify({ result: { type: "ok" } }), stderr: "", code: 0, killed: false };
 		});
+		// SAFETY: test double only exercises the members this test asserts on.
 		await expect(herdrTerminalHost.startAgentPane({ exec } as never, {
 			name: "review",
 			cwd: "/repo",
@@ -131,6 +139,7 @@ describe("herdrTerminalHost", () => {
 			return { stdout: JSON.stringify({ result: { type: "ok" } }), stderr: "", code: 0, killed: false };
 		});
 
+		// SAFETY: the exec double implements the RPC exec surface startAgentPane drives.
 		await expect(herdrTerminalHost.startAgentPane({ exec } as never, {
 			name: "research",
 			cwd: "/repo",
@@ -145,6 +154,7 @@ describe("herdrTerminalHost", () => {
 		const exec = vi.fn(async (_bin: string, args: string[]) => args[0] === "tab"
 			? { stdout: JSON.stringify({ result: { root_pane: { pane_id: "w5:p9", workspace_id: "w5", tab_id: "w5:t8" } } }), stderr: "", code: 0, killed: false }
 			: { stdout: JSON.stringify({ result: { type: "ok" } }), stderr: "", code: 0, killed: false });
+		// SAFETY: test double only exercises the members this test asserts on.
 		await expect(herdrTerminalHost.startAgentPane({ exec } as never, {
 			name: "research",
 			cwd: "/repo",
@@ -168,6 +178,7 @@ describe("herdrTerminalHost", () => {
 			}
 			return { stdout: JSON.stringify({ result: { type: "ok" } }), stderr: "", code: 0, killed: false };
 		});
+		// SAFETY: test double only exercises the members this test asserts on.
 		await herdrTerminalHost.startAgentPane!({ exec } as never, {
 			name: "research", cwd: "/repo", shellCommand: "run child", placement: { kind: "new-tab", label: "subagents" },
 		});
@@ -181,6 +192,7 @@ describe("herdrTerminalHost", () => {
 			if (args[1] === "split") return { stdout: JSON.stringify({ result: { pane: { pane_id: "w1:p7", workspace_id: "w1", tab_id: "w1:t1" } } }), stderr: "", code: 0, killed: false };
 			return { stdout: "", stderr: args[1] === "rename" ? "rename denied" : "", code: args[1] === "rename" ? 1 : 0, killed: false };
 		});
+		// SAFETY: test double only exercises the members this test asserts on.
 		await expect(herdrTerminalHost.startAgentPane({ exec } as never, {
 			name: "worker", cwd: "/repo", shellCommand: "run child", placement: { kind: "workspace", workspaceId: "w1" },
 		})).resolves.toMatchObject({ ok: true, paneId: "w1:p7" });
@@ -188,6 +200,7 @@ describe("herdrTerminalHost", () => {
 
 	it("sends pane text through Herdr's agent prompt primitive", async () => {
 		const fake = pi("");
+		// SAFETY: test double only exercises the members this test asserts on.
 		await expect(herdrTerminalHost.sendPaneText(fake as never, { host: "herdr", paneId: "w1:p2" }, "continue with tests")).resolves.toEqual({ ok: true });
 		expect(fake.exec).toHaveBeenCalledWith("herdr", ["agent", "prompt", "w1:p2", "continue with tests"], { timeout: 10000 });
 	});
@@ -199,6 +212,7 @@ describe("herdrTerminalHost", () => {
 			code: 1,
 			killed: false,
 		}));
+		// SAFETY: test double only exercises the members this test asserts on.
 		await expect(herdrTerminalHost.sendPaneText({ exec } as never, { host: "herdr", paneId: "w1:p2" }, "continue with tests")).resolves.toEqual({ ok: true });
 		expect(exec).toHaveBeenCalledTimes(1);
 		expect(exec).toHaveBeenCalledWith("herdr", ["agent", "prompt", "w1:p2", "continue with tests"], { timeout: 10000 });
@@ -211,6 +225,7 @@ describe("herdrTerminalHost", () => {
 			code: 1,
 			killed: false,
 		}));
+		// SAFETY: test double only exercises the members this test asserts on.
 		await expect(herdrTerminalHost.sendPaneText({ exec } as never, { host: "herdr", paneId: "w1:p2" }, "continue with tests")).resolves.toEqual({ ok: false, error: "agent is waiting for approval" });
 		expect(exec).toHaveBeenCalledTimes(1);
 		expect(exec).toHaveBeenCalledWith("herdr", ["agent", "prompt", "w1:p2", "continue with tests"], { timeout: 10000 });
@@ -223,6 +238,7 @@ describe("herdrTerminalHost", () => {
 			code: 1,
 			killed: false,
 		}));
+		// SAFETY: test double only exercises the members this test asserts on.
 		await expect(herdrTerminalHost.sendPaneText({ exec } as never, { host: "herdr", paneId: "w1:p2" }, "continue with tests")).resolves.toEqual({ ok: false, error: "agent target w1:p2 not found" });
 		expect(exec).toHaveBeenCalledTimes(1);
 		expect(exec).toHaveBeenCalledWith("herdr", ["agent", "prompt", "w1:p2", "continue with tests"], { timeout: 10000 });
@@ -230,6 +246,7 @@ describe("herdrTerminalHost", () => {
 
 	it("reports malformed json", async () => {
 		const fake = pi("not-json");
+		// SAFETY: test double only exercises the members this test asserts on.
 		const result = await herdrTerminalHost.openCommandInSplit(fake as never, "down", { cwd: "/tmp", shellCommand: "echo ok" });
 		expect(result.ok).toBe(false);
 	});
@@ -244,6 +261,7 @@ describe("herdrTerminalHost", () => {
 			return { stdout: JSON.stringify({ result: { type: "ok" } }), stderr: "", code: 0, killed: false };
 		});
 
+		// SAFETY: test double only exercises the members this test asserts on.
 		const result = await herdrTerminalHost.openWorktreeWorkspace?.({ exec } as never, {
 			sourceCwd: "/repo",
 			branch: "sumo/task",
@@ -269,6 +287,7 @@ describe("herdrTerminalHost", () => {
 			return { stdout: "", stderr: "", code: 0, killed: false };
 		});
 
+		// SAFETY: test double only exercises the members this test asserts on.
 		const result = await herdrTerminalHost.openExistingWorktreeWorkspace?.({ exec } as never, { path: "/repo.wt/sumo__task", label: "sumo · task", shellCommand: "exec sumocode", sourceCwd: "/repo" });
 
 		expect(result).toEqual({ ok: true, pane: { host: "herdr", paneId: "wB:p1", workspaceId: "wB" } });
@@ -277,29 +296,35 @@ describe("herdrTerminalHost", () => {
 
 	it("passes --no-focus to worktree open when focus is explicitly disabled (visible subagents)", async () => {
 		const exec = vi.fn(async () => ({ code: 0, stdout: JSON.stringify({ result: { workspace_id: "w9", pane_id: "w9:p1" } }), stderr: "" }));
+		// SAFETY: test double only exercises the members this test asserts on.
 		await herdrTerminalHost.openExistingWorktreeWorkspace!({ exec } as never, { path: "/repo.wt/sumo__task", label: "sumo · task", sourceCwd: "/repo", focus: false });
 		expect(exec).toHaveBeenCalledWith("herdr", ["worktree", "open", "--cwd", "/repo", "--path", "/repo.wt/sumo__task", "--label", "sumo · task", "--no-focus", "--json"], { timeout: 5000 });
 	});
 	it("reports native worktree errors when workspace or panes are missing", async () => {
 		const noWorkspace = pi(JSON.stringify({ result: { type: "worktree_created" } }));
+		// SAFETY: test double only exercises the members this test asserts on.
 		await expect(herdrTerminalHost.openWorktreeWorkspace?.(noWorkspace as never, { branch: "sumo/task", baseRef: "HEAD", path: "/repo.wt/sumo__task", label: "sumo · task", shellCommand: "exec sumocode", sourceCwd: "/repo" })).resolves.toEqual({ ok: false, error: "herdr worktree create did not return a workspace_id" });
 
 		const exec = vi.fn(async (_bin: string, args: string[]) => {
 			if (args[0] === "worktree") return { stdout: JSON.stringify({ result: { workspace: { workspace_id: "wA" } } }), stderr: "", code: 0, killed: false };
 			return { stdout: JSON.stringify({ result: { panes: [] } }), stderr: "", code: 0, killed: false };
 		});
+		// SAFETY: test double only exercises the members this test asserts on.
 		const emptyPanes = await herdrTerminalHost.openWorktreeWorkspace?.({ exec } as never, { branch: "sumo/task", baseRef: "HEAD", path: "/repo.wt/sumo__task", label: "sumo · task", shellCommand: "exec sumocode", sourceCwd: "/repo" });
 		expect(emptyPanes).toEqual({ ok: false, error: "herdr pane list returned no panes for workspace wA" });
 	});
 	it("closes and notifies", async () => {
 		const fake = pi(JSON.stringify({ result: { type: "ok" } }));
+		// SAFETY: test double only exercises the members this test asserts on.
 		await herdrTerminalHost.closePane(fake as never, { host: "herdr", paneId: "w1:p2" });
+		// SAFETY: test double only exercises the members this test asserts on.
 		await herdrTerminalHost.notify(fake as never, "title", "body");
 		expect(fake.exec).toHaveBeenCalledWith("herdr", ["pane", "close", "w1:p2"], { timeout: 5000 });
 		expect(fake.exec).toHaveBeenCalledWith("herdr", ["notification", "show", "title", "--body", "body", "--sound", "done"], { timeout: 5000 });
 	});
 	it("notify is best-effort when exec rejects", async () => {
 		const fake = { exec: vi.fn(async () => { throw new Error("no daemon"); }) };
+		// SAFETY: test double only exercises the members this test asserts on.
 		await expect(herdrTerminalHost.notify(fake as never, "title", "body")).resolves.toBeUndefined();
 	});
 

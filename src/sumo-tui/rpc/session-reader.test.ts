@@ -8,7 +8,7 @@ type PromiseConstructorWithResolvers = PromiseConstructor & {
 	withResolvers<T>(): {
 		promise: Promise<T>;
 		resolve: (value: T | PromiseLike<T>) => void;
-		reject: (reason?: unknown) => void;
+		reject: (cause?: unknown) => void;
 	};
 };
 
@@ -192,6 +192,8 @@ describe("session-reader", () => {
 			const releaseReads: Array<() => void> = [];
 			const waitForStarted = (target: number): Promise<void> => {
 				if (startedReads >= target) return Promise.resolve();
+				// SAFETY: withResolvers is the standard ES2024 Promise API; the
+				// intersection narrows the lib constructor to that overload.
 				const { promise, resolve } = (Promise as PromiseConstructorWithResolvers).withResolvers<void>();
 				startedWaiter = { target, resolve };
 				return promise;
@@ -208,6 +210,7 @@ describe("session-reader", () => {
 					activeReads += 1;
 					startedReads += 1;
 					maxActiveReads = Math.max(maxActiveReads, activeReads);
+					// SAFETY: standard ES2024 withResolvers overload, as above.
 					const { promise, resolve } = (Promise as PromiseConstructorWithResolvers).withResolvers<void>();
 					releaseReads.push(resolve);
 					notifyStarted();

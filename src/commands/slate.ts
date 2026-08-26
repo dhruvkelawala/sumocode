@@ -24,6 +24,7 @@ export function getSlate(): Slate {
 function reconstructSlate(ctx: ExtensionContext): void {
 	try {
 		const entries = ctx.sessionManager.getBranch();
+		// SAFETY: getBranch returns the same SessionEntry shape that persistSlate wrote via Slate.toJSON.
 		slate = Slate.fromEntries(entries as Parameters<typeof Slate.fromEntries>[0]);
 	} catch {
 		slate = new Slate();
@@ -133,7 +134,7 @@ function registerSlateTools(pi: ExtensionAPI): void {
 			index: Type.Number({ description: "1-based index of the item to remove" }),
 		}),
 		async execute(_toolCallId, params) {
-			const index = typeof params.index === "number" ? params.index : 1;
+			const index = params.index;
 			const removed = slate.remove(index);
 			if (!removed) {
 				return {

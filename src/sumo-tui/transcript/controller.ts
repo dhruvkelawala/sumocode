@@ -1,6 +1,6 @@
-import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import { safeValuePreview } from "../../activity/domain.js";
 import { measureMaybe, type ResumeProfiler, type ResumeProfileMetadata } from "../runtime/resume-profiler.js";
+import type { ChatMessage } from "../widgets/chat-message.js";
 import type { ChatPagerReplaceStats } from "../widgets/chat-pager.js";
 import {
 	appendOrFoldTranscriptMessage,
@@ -11,9 +11,14 @@ import {
 	chatMessageViewModelFromPiMessage,
 	createTranscriptViewModelMapper,
 	type ChatMessageViewModel,
+	type SessionRecord,
+	type SessionValue,
 	type TranscriptViewModel,
 	type TranscriptViewModelMapper,
 } from "./view-model.js";
+
+/** Result of a fire-and-forget chat sink mutation (pager node, success flag, or nothing). */
+export type ChatSinkMutationResult = ChatMessage | boolean | undefined;
 
 export interface TaskPartialUpdate {
 	readonly toolCallId: string;
@@ -35,11 +40,11 @@ export interface TranscriptControllerChatSink {
 		options?: { readonly materializeSettledFeed?: boolean },
 	): ChatPagerReplaceStats;
 	/** Append one new message to the end of the pager without touching scroll/read state. */
-	addViewModel(message: ChatMessageViewModel, sourceIndex?: number): unknown;
+	addViewModel(message: ChatMessageViewModel, sourceIndex?: number): ChatSinkMutationResult;
 	/** Replace one rendered transcript node in place (scroll/read state preserved). */
-	replaceViewModelAt(index: number, message: ChatMessageViewModel): unknown;
+	replaceViewModelAt(index: number, message: ChatMessageViewModel): ChatSinkMutationResult;
 	/** Replace the pager's current last message in place (scroll/read state preserved). */
-	replaceLastWithViewModel(message: ChatMessageViewModel, sourceIndex?: number): unknown;
+	replaceLastWithViewModel(message: ChatMessageViewModel, sourceIndex?: number): ChatSinkMutationResult;
 	/** Mark the current last message as an in-flight assistant draft. */
 	beginStreaming(): void;
 	/** Settle the current assistant draft after its terminal lifecycle event. */
@@ -60,18 +65,34 @@ export interface TranscriptControllerOptions {
 interface LiveToolExecution {
 	readonly toolCallId: string;
 	readonly toolName: string;
-	readonly args?: unknown;
-	readonly content: unknown;
-	readonly details?: unknown;
+	readonly args?: SessionValue;
+	readonly content: SessionValue;
+	readonly details?: SessionValue;
 	readonly isError?: boolean;
 	readonly status: "running" | "success" | "error";
 }
 
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-	return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : undefined;
+function isRecord(value: SessionValue): value is SessionRecord {
+	return typeof value === "object" && value !== null;
 }
 
-function eventMessage(event: unknown): unknown | undefined {
+function asRecord(value: SessionValue): SessionRecord | undefined {
+	return isRecord(value) ? value : undefined;
+}
+
+function isString(value: SessionValue): value is string {
+	return typeof value === "string";
+}
+
+function isNumber(value: SessionValue): value is number {
+	return typeof value === "number";
+}
+
+function isBigint(value: SessionValue): value is bigint {
+	return typeof value === "bigint";
+}
+
+function eventMessage(event: SessionValue): SessionValue | undefined {
 	return asRecord(event)?.message;
 }
 
@@ -87,36 +108,39 @@ function eventMessage(event: unknown): unknown | undefined {
  * `tool_execution_*` events, and `start`/`done`/`error` settle through
  * `message_end`.
  */
-function applyAssistantStreamDelta(draft: unknown | undefined, event: Record<string, unknown> | undefined): unknown | undefined {
-	if (!event || typeof event.type !== "string") return draft;
+function applyAssistantStreamDelta(draft: SessionValue | undefined, event: SessionRecord | undefined): SessionValue | undefined {
+	if (!event || !isString(event.type)) return draft;
 	const base = asRecord(draft) ?? { role: "assistant", content: [] };
-	const content: Record<string, unknown>[] = Array.isArray(base.content)
-		? [...(base.content as Record<string, unknown>[])]
-		: [];
+	let content: SessionRecord[] = [];
+	if (Array.isArray(base.content)) {
+		// SAFETY: base.content passed Array.isArray above; each element is
+		// re-validated via asRecord before any field access below.
+		content = [...(base.content as SessionRecord[])];
+	}
 	const rawIndex = event.contentIndex;
-	const index = typeof rawIndex === "number" && rawIndex >= 0 ? Math.floor(rawIndex) : content.length;
+	const index = isNumber(rawIndex) && rawIndex >= 0 ? Math.floor(rawIndex) : content.length;
 	while (content.length <= index) content.push({ type: "text", text: "" });
-	const delta = typeof event.delta === "string" ? event.delta : "";
-	const finalText = typeof event.content === "string" ? event.content : undefined;
+	const delta = isString(event.delta) ? event.delta : "";
+	const finalText = isString(event.content) ? event.content : undefined;
 	const current = asRecord(content[index]);
 	switch (event.type) {
 		case "text_start":
 			content[index] = { type: "text", text: "" };
 			break;
 		case "text_delta":
-			content[index] = { type: "text", text: (current?.type === "text" && typeof current.text === "string" ? current.text : "") + delta };
+			content[index] = { type: "text", text: (current?.type === "text" && isString(current.text) ? current.text : "") + delta };
 			break;
 		case "text_end":
-			content[index] = { type: "text", text: finalText ?? (current?.type === "text" && typeof current.text === "string" ? current.text : "") };
+			content[index] = { type: "text", text: finalText ?? (current?.type === "text" && isString(current.text) ? current.text : "") };
 			break;
 		case "thinking_start":
 			content[index] = { type: "thinking", thinking: "" };
 			break;
 		case "thinking_delta":
-			content[index] = { type: "thinking", thinking: (current?.type === "thinking" && typeof current.thinking === "string" ? current.thinking : "") + delta };
+			content[index] = { type: "thinking", thinking: (current?.type === "thinking" && isString(current.thinking) ? current.thinking : "") + delta };
 			break;
 		case "thinking_end":
-			content[index] = { type: "thinking", thinking: finalText ?? (current?.type === "thinking" && typeof current.thinking === "string" ? current.thinking : "") };
+			content[index] = { type: "thinking", thinking: finalText ?? (current?.type === "thinking" && isString(current.thinking) ? current.thinking : "") };
 			break;
 		default:
 			return draft;
@@ -124,38 +148,38 @@ function applyAssistantStreamDelta(draft: unknown | undefined, event: Record<str
 	return { ...base, content };
 }
 
-function eventMessages(event: unknown): unknown[] | undefined {
+function eventMessages(event: SessionValue): SessionValue[] | undefined {
 	const messages = asRecord(event)?.messages;
 	return Array.isArray(messages) ? messages : undefined;
 }
 
-function sessionMessages(sessionContext: unknown): unknown[] {
+function sessionMessages(sessionContext: SessionValue): SessionValue[] {
 	const messages = asRecord(sessionContext)?.messages;
 	return Array.isArray(messages) ? messages : [];
 }
 
-function isUserMessage(message: unknown): boolean {
+function isUserMessage(message: SessionValue): boolean {
 	return asRecord(message)?.role === "user";
 }
 
-function countUserMessages(messages: readonly unknown[]): number {
+function countUserMessages(messages: readonly SessionValue[]): number {
 	return messages.filter(isUserMessage).length;
 }
 
-function stableMessageId(message: unknown): string | undefined {
+function stableMessageId(message: SessionValue): string | undefined {
 	const record = asRecord(message);
 	const id = record?.id;
-	if (typeof id === "string" && id.length > 0) return `id:${id}`;
+	if (isString(id) && id.length > 0) return `id:${id}`;
 	const role = record?.role;
 	const timestamp = record?.timestamp;
-	if (typeof role === "string" && (typeof timestamp === "number" || typeof timestamp === "string")) {
-		const toolCallId = typeof record?.toolCallId === "string" ? `:${record.toolCallId}` : "";
+	if (isString(role) && (isNumber(timestamp) || isString(timestamp))) {
+		const toolCallId = isString(record?.toolCallId) ? `:${record.toolCallId}` : "";
 		return `pi:${role}:${timestamp}${toolCallId}`;
 	}
 	return undefined;
 }
 
-function messagesEqual(left: unknown, right: unknown): boolean {
+function messagesEqual(left: SessionValue, right: SessionValue): boolean {
 	if (left === right) return true;
 	try {
 		return JSON.stringify(left) === JSON.stringify(right);
@@ -164,7 +188,7 @@ function messagesEqual(left: unknown, right: unknown): boolean {
 	}
 }
 
-function findCommittedMessageIndex(messages: readonly unknown[], message: unknown): number {
+function findCommittedMessageIndex(messages: readonly SessionValue[], message: SessionValue): number {
 	const id = stableMessageId(message);
 	for (let index = messages.length - 1; index >= 0; index -= 1) {
 		if (id ? stableMessageId(messages[index]) === id : messagesEqual(messages[index], message)) return index;
@@ -172,7 +196,7 @@ function findCommittedMessageIndex(messages: readonly unknown[], message: unknow
 	return -1;
 }
 
-function messageProgressScore(message: unknown): number {
+function messageProgressScore(message: SessionValue): number {
 	try {
 		return JSON.stringify(message)?.length ?? 0;
 	} catch {
@@ -180,12 +204,12 @@ function messageProgressScore(message: unknown): number {
 	}
 }
 
-function taskPartialFromEvent(event: unknown): TaskPartialUpdate | undefined {
+function taskPartialFromEvent(event: SessionValue): TaskPartialUpdate | undefined {
 	const record = asRecord(event);
 	if (!record || record.type !== "tool_execution_update") return undefined;
 	if (record.toolName !== "task") return undefined;
 	if (record.partialResult === undefined) return undefined;
-	const toolCallId = typeof record.toolCallId === "string" && record.toolCallId.length > 0 ? record.toolCallId : undefined;
+	const toolCallId = isString(record.toolCallId) && record.toolCallId.length > 0 ? record.toolCallId : undefined;
 	if (!toolCallId) return undefined;
 	return {
 		toolCallId,
@@ -195,13 +219,13 @@ function taskPartialFromEvent(event: unknown): TaskPartialUpdate | undefined {
 	};
 }
 
-function liveToolExecutionFromEvent(event: unknown): LiveToolExecution | undefined {
+function liveToolExecutionFromEvent(event: SessionValue): LiveToolExecution | undefined {
 	const record = asRecord(event);
 	if (!record || (record.type !== "tool_execution_start" && record.type !== "tool_execution_update" && record.type !== "tool_execution_end")) return undefined;
-	const toolName = typeof record.toolName === "string" && record.toolName.length > 0 ? record.toolName : "tool";
+	const toolName = isString(record.toolName) && record.toolName.length > 0 ? record.toolName : "tool";
 	// Pi's AgentSessionEvent contract requires toolCallId:string on every tool execution event.
 	// Drop malformed unknown input rather than reintroducing name-only correlation collisions.
-	const toolCallId = typeof record.toolCallId === "string" && record.toolCallId.length > 0 ? record.toolCallId : undefined;
+	const toolCallId = isString(record.toolCallId) && record.toolCallId.length > 0 ? record.toolCallId : undefined;
 	if (!toolCallId) return undefined;
 	const isEnd = record.type === "tool_execution_end";
 	const result = isEnd ? record.result : record.partialResult;
@@ -217,7 +241,7 @@ function liveToolExecutionFromEvent(event: unknown): LiveToolExecution | undefin
 	};
 }
 
-function liveToolPiMessage(tool: LiveToolExecution): unknown {
+function liveToolPiMessage(tool: LiveToolExecution): SessionRecord {
 	if (tool.status === "running") {
 		return {
 			role: "assistant",
@@ -244,11 +268,11 @@ function liveToolPiMessage(tool: LiveToolExecution): unknown {
 	};
 }
 
-function compactionSummaryMessageFromEvent(event: unknown): unknown | undefined {
+function compactionSummaryMessageFromEvent(event: SessionValue): SessionRecord | undefined {
 	const record = asRecord(event);
 	if (record?.type !== "compaction_end") return undefined;
 	const result = asRecord(record.result);
-	if (typeof result?.summary !== "string") return undefined;
+	if (!isString(result?.summary)) return undefined;
 	return {
 		role: "compactionSummary",
 		summary: result.summary,
@@ -281,9 +305,9 @@ export function getMessageContentKeyCacheMissesForTests(): number {
 
 export class TranscriptController {
 	private readonly mapper: TranscriptViewModelMapper;
-	private committedMessages: unknown[] = [];
+	private committedMessages: SessionValue[] = [];
 	private committedViewModelCache: ChatMessageViewModel[] | undefined;
-	private draftMessage: unknown | undefined;
+	private draftMessage: SessionValue | undefined;
 	private readonly taskPartials = new Map<string, TaskPartialUpdate>();
 	private readonly liveTools = new Map<string, LiveToolExecution>();
 	private lastTranscript: TranscriptViewModel = { messages: [] };
@@ -329,9 +353,12 @@ export class TranscriptController {
 		return this.publishFullReplace(this.viewModel());
 	}
 
-	public replaceFromSessionContext(sessionContext: unknown): TranscriptViewModel {
+	public replaceFromSessionContext<T>(sessionContext: T): TranscriptViewModel {
+		// SAFETY: T forwards the caller's raw session payload verbatim; the
+		// parse helpers below re-validate shape at runtime before any field access.
+		const context = sessionContext as SessionValue;
 		const profile = this.options.startResumeProfile?.();
-		const messages = measureMaybe(profile, "session_scan", () => sessionMessages(sessionContext));
+		const messages = measureMaybe(profile, "session_scan", () => sessionMessages(context));
 		this.options.setEmptyChatQuoteState?.({ active: messages.length === 0, userMessageCount: countUserMessages(messages) });
 		this.setCommittedMessages(messages);
 		const transcript = measureMaybe(profile, "transcript_model", () => this.viewModel());
@@ -348,10 +375,12 @@ export class TranscriptController {
 		return transcript;
 	}
 
-	public handleAgentEvent(event: AgentSessionEvent | unknown): TranscriptViewModel {
+	public handleAgentEvent<T>(event: T): TranscriptViewModel {
 		this.pendingChatOp = undefined;
-		const record = asRecord(event);
-		if (!record || typeof record.type !== "string") return this.lastTranscript;
+		// SAFETY: T forwards the caller's raw agent event verbatim; asRecord plus
+		// the string check below re-validate shape at runtime.
+		const record = asRecord(event as SessionValue);
+		if (!record || !isString(record.type)) return this.lastTranscript;
 		const taskPartial = taskPartialFromEvent(record);
 		if (taskPartial) this.taskPartials.set(taskPartial.toolCallId, taskPartial);
 		const liveTool = liveToolExecutionFromEvent(record);
@@ -545,7 +574,9 @@ export class TranscriptController {
 	}
 
 	private setCommittedMessages(messages: readonly unknown[]): void {
-		this.committedMessages = [...messages];
+		// SAFETY: elements arrive as opaque Pi session payloads; every consumer
+		// below re-validates shape through the is* / as* parse helpers.
+		this.committedMessages = [...messages] as SessionValue[];
 		this.currentRunStartIndex = undefined;
 		this.draftMessage = undefined;
 		this.pendingChatOp = undefined;
@@ -738,12 +769,12 @@ export function planChatDiff(
  * unchanged even if the committed-message remap (see `diffAndApplyToChat`'s doc
  * comment) gave them a new object identity.
  */
-function stringifyContentKey(value: unknown): string {
+function stringifyContentKey<T>(value: T): string {
 	const seen = new WeakSet<object>();
 	try {
-		return JSON.stringify(value, (_key, current: unknown) => {
-			if (typeof current === "bigint") return `${current.toString()}n`;
-			if (typeof current !== "object" || current === null) return current;
+		return JSON.stringify(value, (_key, current) => {
+			if (isBigint(current)) return `${current.toString()}n`;
+			if (!isRecord(current)) return current;
 			if (seen.has(current)) return "[Circular]";
 			seen.add(current);
 			return current;

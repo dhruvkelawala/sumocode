@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { renderSubagentStatusRow } from "./subagent-status-row.js";
 
-const ANSI = /\x1b\[[0-9;]*m/g;
+const ANSI = /\x1b\[[0-9;]*m/g; // oxlint-disable-line no-control-regex -- intentional ANSI escape sequence stripping in a render test.
 const plain = (value: string): string => value.replace(ANSI, "");
 
 describe("renderSubagentStatusRow", () => {

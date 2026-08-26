@@ -37,6 +37,9 @@ jobs:
       - name: Typecheck
         run: pnpm exec tsc --noEmit
 
+      - name: Lint (anti-slop oxlint)
+        run: pnpm lint
+
       - name: Unit tests
         run: pnpm test
 

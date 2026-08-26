@@ -112,9 +112,11 @@ describe("Slate serialization", () => {
 	});
 
 	it("fromEntries ignores entries with missing or non-array items", () => {
+		// SAFETY: the malformed items value is deliberately not a string[]; the
+		// fromEntries decode must ignore it rather than throw.
 		const entries = [
 			{ type: "custom", customType: SLATE_CUSTOM_TYPE, data: {} },
-			{ type: "custom", customType: SLATE_CUSTOM_TYPE, data: { items: "not-array" as unknown as string[] } },
+			{ type: "custom", customType: SLATE_CUSTOM_TYPE, data: { items: "not-array" as never } },
 		];
 
 		const slate = Slate.fromEntries(entries);

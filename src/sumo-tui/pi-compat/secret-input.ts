@@ -19,13 +19,19 @@ export function isSecretInputTitle(title: string): boolean {
 	return title.startsWith(SECRET_INPUT_PREFIX);
 }
 
-export function decodeAuthInputTitle(title: string): { title: string; auth: boolean; secret: boolean } {
+export interface DecodedInputTitle {
+	title: string;
+	auth: boolean;
+	secret: boolean;
+}
+
+export function decodeAuthInputTitle(title: string): DecodedInputTitle {
 	if (isSecretInputTitle(title)) return { title: title.slice(SECRET_INPUT_PREFIX.length), auth: true, secret: true };
 	if (title.startsWith(AUTH_INPUT_PREFIX)) return { title: title.slice(AUTH_INPUT_PREFIX.length), auth: true, secret: false };
 	return { title, auth: false, secret: false };
 }
 
-export function decodeSecretInputTitle(title: string): { title: string; secret: boolean } {
+export function decodeSecretInputTitle(title: string) {
 	const decoded = decodeAuthInputTitle(title);
 	return { title: decoded.title, secret: decoded.secret };
 }

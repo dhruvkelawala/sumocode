@@ -123,7 +123,7 @@ export class SidebarChromeNode extends SumoNode {
 		}
 	}
 
-	private measure(width: number, widthMode: MeasureMode): { width: number; height: number } {
+	private measure(width: number, widthMode: MeasureMode) {
 		const resolvedWidth = widthMode === MEASURE_MODE_EXACTLY ? Math.max(1, Math.floor(width)) : SIDEBAR_WIDTH;
 		return { width: resolvedWidth, height: this.lines(resolvedWidth).length };
 	}

@@ -148,12 +148,29 @@ export class ExtensionStatusPublication implements RegionStatusPublication {
 	}
 }
 
-function isStringArray(value: unknown): value is readonly string[] {
+function isStringArray<T>(value: T): value is T & readonly string[] {
 	return Array.isArray(value);
 }
 
-function isComponent(value: unknown): value is DisposableComponent {
-	return typeof value === "object" && value !== null && "render" in value && typeof (value as Component).render === "function";
+function isNumber<T>(value: T): value is T & number {
+	return typeof value === "number";
+}
+
+function isCallable<T>(value: T): value is T & ((...args: never[]) => void) {
+	return typeof value === "function";
+}
+
+function isOverlayOptionsFactory(value: OverlayOptions | (() => OverlayOptions) | undefined): value is () => OverlayOptions {
+	return typeof value === "function";
+}
+
+function isComponent<T>(value: T): value is T & DisposableComponent {
+	return (
+		typeof value === "object" &&
+		value !== null &&
+		"render" in value &&
+		isCallable(value.render)
+	);
 }
 
 function safeDispose(component: DisposableComponent): void {
@@ -173,7 +190,7 @@ function placementToSlot(placement: Exclude<WidgetPlacement, "modal"> | undefine
 
 function percentToCells(value: number | `${number}%` | undefined, total: number): number | undefined {
 	if (value === undefined) return undefined;
-	if (typeof value === "number") return value;
+	if (isNumber(value)) return value;
 	return Math.max(0, Math.floor((Number.parseFloat(value) / 100) * total));
 }
 
@@ -294,8 +311,14 @@ export class RegionRegistry {
 			return;
 		}
 
-		const component = factory(this.tui, this.editorTheme, this.keybindings) as unknown as DisposableComponent;
-		const node = PiEditorLeaf.create(this.yoga, component as unknown as CustomEditor, this.slots.editor);
+		// SAFETY: Pi's EditorComponent is structurally compatible with the
+		// DisposableComponent surface this registry manages (render + optional
+		// dispose); PiEditorLeaf.create below re-wraps it for the Yoga tree.
+		const component = factory(this.tui, this.editorTheme, this.keybindings) as DisposableComponent;
+		// SAFETY: the mounted editor satisfies CustomEditor's contract; Pi's
+		// editor leaf only needs the render/invalidate subset every Pi editor
+		// component implements, verified by factory typing above.
+		const node = PiEditorLeaf.create(this.yoga, component as CustomEditor, this.slots.editor);
 		this.mounts.set("__editor", { key: "__editor", slot: "editor", node, component });
 		this.onChange();
 	}
@@ -352,8 +375,8 @@ export class RegionRegistry {
 		}
 		const surface = new ModalSurfaceComponent(component);
 		const width = this.resolveOverlayWidth(
-			typeof overlayOptions === "function" ? overlayOptions() : overlayOptions,
-			((this.tui.terminal as { columns?: number } | undefined)?.columns ?? 80),
+			isOverlayOptionsFactory(overlayOptions) ? overlayOptions() : overlayOptions,
+			this.terminalColumns(),
 		);
 		const backdrop = new ModalBackdropNode(this.yoga.Node.create(), this.overlayRoot, () => surface.isVisible(width));
 		backdrop.position = POSITION_TYPE_ABSOLUTE;
@@ -381,7 +404,9 @@ export class RegionRegistry {
 	}
 
 	public clear(): void {
-		for (const key of [...this.mounts.keys()]) this.unmount(key);
+		// Snapshot keys first: unmount() deletes from this.mounts and fires
+		// onChange(), which could re-enter and mutate the map mid-iteration.
+		for (const key of Array.from(this.mounts.keys())) this.unmount(key);
 	}
 
 	public dispose(): void {
@@ -426,6 +451,12 @@ export class RegionRegistry {
 		return content(this.tui, this.theme, this.footerData ?? this.createEmptyFooterData());
 	}
 
+	private terminalColumns(): number {
+		// SAFETY: Pi's TUI terminal exposes runtime columns; its types are loose
+		// across versions, so read defensively and fall back to 80.
+		return (this.tui.terminal as { columns?: number } | undefined)?.columns ?? 80;
+	}
+
 	private resolveWidget(content: WidgetMount): DisposableComponent {
 		if (isStringArray(content)) return new StaticTextComponent(content);
 		if (isComponent(content)) return content;
@@ -438,11 +469,13 @@ export class RegionRegistry {
 			getExtensionStatuses: () => new Map<string, string>(),
 			getAvailableProviderCount: () => 0,
 			onBranchChange: () => () => undefined,
-		} as ReadonlyFooterDataProvider;
+		};
 	}
 
 	private applyOverlayOptions(node: SumoNode, overlayOptions: OverlayOptions | (() => OverlayOptions) | undefined): void {
-		const options = typeof overlayOptions === "function" ? overlayOptions() : overlayOptions;
+		const options = isOverlayOptionsFactory(overlayOptions) ? overlayOptions() : overlayOptions;
+		// SAFETY: Pi's TUI terminal exposes runtime columns/rows across versions
+		// with loose typing; read defensively and fall back to defaults.
 		const terminal = this.tui.terminal as { columns?: number; rows?: number } | undefined;
 		const columns = terminal?.columns ?? 80;
 		const rows = terminal?.rows ?? 24;
@@ -471,7 +504,9 @@ export class RegionRegistry {
 	}
 
 	private applyModalOptions(node: SumoNode, surface: ModalSurfaceComponent, overlayOptions: OverlayOptions | (() => OverlayOptions) | undefined): void {
-		const options = typeof overlayOptions === "function" ? overlayOptions() : overlayOptions;
+		const options = isOverlayOptionsFactory(overlayOptions) ? overlayOptions() : overlayOptions;
+		// SAFETY: Pi's TUI terminal exposes runtime columns/rows across versions
+		// with loose typing; read defensively and fall back to defaults.
 		const terminal = this.tui.terminal as { columns?: number; rows?: number } | undefined;
 		const columns = terminal?.columns ?? 80;
 		const rows = terminal?.rows ?? 24;

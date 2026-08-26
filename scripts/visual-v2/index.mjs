@@ -82,7 +82,7 @@ async function runScenario(scenario) {
 			: await captureRuntimeScenario(scenario);
 	writeFile(resolve(rawOut, "runtime-output.ansi"), capture.bytes);
 	const captureMetadata = {
-		...(capture.metadata ?? {}),
+		...capture.metadata,
 		scenarioContract: scenarioContractForMetadata(scenario),
 	};
 	writeJson(resolve(rawOut, "capture-metadata.json"), captureMetadata);
@@ -107,7 +107,7 @@ async function runScenario(scenario) {
 	// Bible HTML lives one level up from the renders/ PNG.
 	const bibleHtmlPath = scenario.bibleTargetPath
 		.replace(/\.png$/, ".html")
-		.replace(/[\/]renders[\/]/, "/");
+		.replace(/\/renders\//, "/");
 	let cellDiff = null;
 	const runtimeGrid = runtimeStyledGrid(snapshot);
 	try {
@@ -235,7 +235,7 @@ function cropStyledCellDiff(crop, runtimeGrid, rawOut) {
 	try {
 		const targetHtmlPath = crop.targetPath
 			.replace(/\.png$/, ".html")
-			.replace(/[\/]renders[\/]/, "/");
+			.replace(/\/renders\//, "/");
 		const targetGrid = parseBibleStyledGrid(targetHtmlPath);
 		const diff = diffStyledGrids(
 			cropStyledGrid(targetGrid, crop.targetCrop),

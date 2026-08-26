@@ -59,7 +59,7 @@ const nodeFs: PaneBackendFs = {
 	writeFileSync,
 };
 
-const errorText = (error: unknown): string => error instanceof Error ? error.message : String(error);
+const errorText = <T>(error: T): string => error instanceof Error ? error.message : String(error);
 
 export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {}) => (options: PaneChildOptions): SpawnedChild => {
 	const fs = dependencies.fs ?? nodeFs;

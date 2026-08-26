@@ -41,15 +41,20 @@ function contentHash(base: string, files: readonly string[]): string {
 // Re-hash exactly the recorded input set (esbuild's dependency graph plus the
 // recipe and copied assets). Modified, renamed, and deleted inputs all change
 // the recomputed hash, so a stale or mixed-checkout bundle is rejected.
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- predicate over untrusted manifest JSON fields; the typeof check is the sanctioned parse.
+function isString(value: unknown): value is string {
+	return typeof value === "string";
+}
+
 function inputManifestIsFresh(manifest: ExtensionInputManifest): boolean {
 	if (
 		manifest.version !== INPUT_MANIFEST_VERSION
 		|| !Array.isArray(manifest.inputs)
 		|| manifest.inputs.length === 0
-		|| typeof manifest.hash !== "string"
+		|| !isString(manifest.hash)
 	) return false;
 	const inputs = manifest.inputs;
-	if (inputs.some((input) => typeof input !== "string") || new Set(inputs).size !== inputs.length) return false;
+	if (inputs.some((input) => !isString(input)) || new Set(inputs).size !== inputs.length) return false;
 	if ([...inputs].sort().some((input, index) => input !== inputs[index])) return false;
 	const files: string[] = [];
 	for (const input of inputs) {
@@ -80,12 +85,14 @@ function extensionOutputsHash(): string {
 function hasFreshBundle(): boolean {
 	if (!existsSync(bundlePath) || !existsSync(inputManifestPath)) return false;
 	try {
+		// SAFETY: the manifest is JSON produced by the extension build; malformed
+		// files throw below and fall back to the source bundle path.
 		const manifest = JSON.parse(readFileSync(inputManifestPath, "utf8")) as ExtensionInputManifest;
 		// The output digest lives INSIDE the input manifest, so a partial update
 		// (merge/cherry-pick) cannot leave a matching manifest beside a stale
 		// bundle: both the source graph and the published bytes are one unit.
 		return inputManifestIsFresh(manifest)
-			&& typeof manifest.outputsHash === "string"
+			&& isString(manifest.outputsHash)
 			&& manifest.outputsHash === extensionOutputsHash();
 	} catch {
 		return false;

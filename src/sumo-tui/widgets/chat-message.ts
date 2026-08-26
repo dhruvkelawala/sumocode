@@ -81,7 +81,7 @@ function roleColor(role: ChatMessageRole): string {
 	return activeThemeColors().foregroundDim;
 }
 
-function takeVisible(input: string, maxWidth: number): { head: string; tail: string } {
+function takeVisible(input: string, maxWidth: number) {
 	if (maxWidth <= 0 || input.length === 0) return { head: "", tail: input };
 	let width = 0;
 	let index = 0;
@@ -112,8 +112,12 @@ function wrapPlainText(input: string, width: number): string[] {
 	return rows.length === 0 ? [""] : rows;
 }
 
+function isString<T>(value: T): value is T & string {
+	return typeof value === "string";
+}
+
 function textWidth(parts: readonly (Span | string)[]): number {
-	return parts.reduce((sum, part) => sum + visibleWidth(typeof part === "string" ? part : part.text), 0);
+	return parts.reduce((sum, part) => sum + visibleWidth(isString(part) ? part : part.text), 0);
 }
 
 function fitCellText(text: string, width: number): string {

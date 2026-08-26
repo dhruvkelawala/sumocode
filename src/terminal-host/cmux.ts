@@ -23,12 +23,12 @@ export const cmuxTerminalHost = {
 		return { ok: false, error: "not supported on cmux" };
 	},
 	async openCommandInSplit(pi: PiExecLike, direction: SplitDirection, options: { cwd: string; shellCommand: string }) {
-		const result = await openCommandInNewSplitWithRefs(pi as never, direction, options.shellCommand);
+		const result = await openCommandInNewSplitWithRefs(pi, direction, options.shellCommand);
 		if (!result.ok) return result;
 		return { ok: true, pane: { host: "cmux", paneId: result.surfaceRef, workspaceId: result.workspaceRef } };
 	},
 	async replaceCurrentPane(pi: PiExecLike, options: { shellCommand: string }) {
-		return openCommandInCurrentSurface(pi as never, options.shellCommand);
+		return openCommandInCurrentSurface(pi, options.shellCommand);
 	},
 	async closePane(pi: PiExecLike, pane: PaneRef) {
 		const result = await pi.exec("cmux", ["close-surface", "--workspace", pane.workspaceId ?? "", "--surface", pane.paneId], { timeout: 5000 });

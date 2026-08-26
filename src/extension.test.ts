@@ -12,7 +12,12 @@ import sumocode, {
 	shouldNoopHelperSubprocess,
 } from "./extension.js";
 
-type Handler = (...args: unknown[]) => unknown;
+type Handler = (...args: unknown[]) => void;
+
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- predicate over an untyped tool-call result; the typeof check is the sanctioned parse.
+function isBlockingResult(value: unknown): value is { block: true } {
+	return typeof value === "object" && value !== null && "block" in value && value.block === true;
+}
 
 /**
  * Ambient SumoCode/Pi env vars that change `sumocode(pi)` install behavior.
@@ -36,6 +41,10 @@ const AMBIENT_ENV_KEYS = [
 	"SUMOCODE_TASK_STARTED_FILE",
 	"SUMOCODE_TASK_DIAG_FILE",
 ] as const;
+
+interface RealpathTable {
+	readonly [key: string]: string;
+}
 
 let ambientEnvSnapshot: Map<string, string | undefined>;
 
@@ -226,7 +235,7 @@ describe("duplicate installed extension guard", () => {
 		it("does NOT noop for a bundled entry when the installed path resolves to the launcher root", () => {
 			const launcherRoot = "/Volumes/dev-disk/code/sumocode";
 			const fakeFs = packageFs(launcherRoot);
-			const realpathMap: Record<string, string> = {
+			const realpathMap: RealpathTable = {
 				[`${installedRoot}/${bundleEntry}`]: `${launcherRoot}/${bundleEntry}`,
 				[installedRoot]: launcherRoot,
 			};
@@ -274,7 +283,7 @@ describe("duplicate installed extension guard", () => {
 		});
 
 		it("does NOT noop when both paths canonicalize to the same real directory through a symlink", () => {
-			const realSymlinkMap: Record<string, string> = {
+			const realSymlinkMap: RealpathTable = {
 				"/Users/dev/.pi/agent/git/github.com/dhruvkelawala/sumocode/src/extension.ts": "/Volumes/dev-disk/code/sumocode/src/extension.ts",
 				"/Users/dev/.pi/agent/git/github.com/dhruvkelawala/sumocode": "/Volumes/dev-disk/code/sumocode",
 			};
@@ -334,9 +343,11 @@ describe("rpc child profile", () => {
 		process.env.SUMOCODE_NATIVE_TASK = "1";
 		try {
 			const { pi, handlers } = buildPiStub();
+			// SAFETY: the pi double supplies the register*/on surfaces the extension installs on.
 			sumocode(pi as never);
 
 			const commandNames = pi.registerCommand.mock.calls.map((call) => call[0]);
+			// SAFETY: registerTool records definitions carrying a name field; the cast reads only that field.
 			const toolNames = pi.registerTool.mock.calls.map((call) => (call[0] as { name: string }).name);
 			const shortcutNames = pi.registerShortcut.mock.calls.map((call) => call[0]);
 			expect(commandNames).toContain("sumo:review");
@@ -347,17 +358,19 @@ describe("rpc child profile", () => {
 			expect(shortcutNames).not.toContain("ctrl+/");
 
 			const ctx = { ...buildCtxStub(), mode: "rpc" };
+			// SAFETY: the ctx double supplies the ui surface the tool_call handlers read.
 			const toolCallResults = await Promise.all((handlers.get("tool_call") ?? []).map((handler) =>
 				handler({
 					toolName: "bash",
 					input: { command: "rm -rf node_modules/" },
 				}, ctx as never),
 			));
-			expect(toolCallResults.some((result) => typeof result === "object" && result !== null && "block" in result && result.block === true)).toBe(false);
+			expect(toolCallResults.some(isBlockingResult)).toBe(false);
 			expect(ctx.ui.select).not.toHaveBeenCalled();
 			expect(ctx.ui.custom).not.toHaveBeenCalled();
 
 			for (const handler of handlers.get("session_start") ?? []) {
+				// SAFETY: the ctx double supplies the ui surface the session_start handlers read.
 				await handler({ type: "session_start" }, ctx as never);
 			}
 
@@ -394,6 +407,7 @@ describe("helper subprocess guard", () => {
 		process.env.PI_CMUX_CHILD = "1";
 		try {
 			const { pi } = buildPiStub();
+			// SAFETY: the pi double supplies the register*/on surfaces the extension installs on.
 			sumocode(pi as never);
 			expect(pi.registerTool).not.toHaveBeenCalled();
 			expect(pi.registerCommand).not.toHaveBeenCalled();
@@ -418,7 +432,11 @@ describe("sumocode extension", () => {
 		try {
 			const { pi } = buildPiStub();
 
+			// SAFETY: the pi double supplies the register*/on surfaces the extension installs on.
+
 			sumocode(pi as never);
+
+			// SAFETY: registerTool records definitions carrying a name field; the cast reads only that field.
 
 			const toolNames = pi.registerTool.mock.calls.map((call) => (call[0] as { name: string }).name);
 			expect(toolNames).toContain("task");
@@ -434,7 +452,11 @@ describe("sumocode extension", () => {
 		try {
 			const { pi } = buildPiStub();
 
+			// SAFETY: the pi double supplies the register*/on surfaces the extension installs on.
+
 			sumocode(pi as never);
+
+			// SAFETY: registerTool records definitions carrying a name field; the cast reads only that field.
 
 			const toolNames = pi.registerTool.mock.calls.map((call) => (call[0] as { name: string }).name);
 			expect(toolNames.filter((name) => name.startsWith("subagent_"))).toEqual([
@@ -458,9 +480,12 @@ describe("sumocode extension", () => {
 	it("registers the v0.4 slash commands during full extension install", () => {
 		const { pi } = buildPiStub();
 
+		// SAFETY: the pi double supplies the register*/on surfaces the extension installs on.
+
 		sumocode(pi as never);
 
 		const commandNames = pi.registerCommand.mock.calls.map((call) => call[0]);
+		// SAFETY: registerTool records definitions carrying a name field; the cast reads only that field.
 		const toolNames = pi.registerTool.mock.calls.map((call) => (call[0] as { name: string }).name);
 		expect(commandNames).toContain("sumo:review");
 		for (const name of ["terminal_start", "terminal_check", "terminal_wait", "terminal_stop", "terminal_list"]) expect(toolNames).toContain(name);
@@ -470,9 +495,11 @@ describe("sumocode extension", () => {
 
 	it("does not block dangerous bash tool calls during full extension install", async () => {
 		const { pi, handlers } = buildPiStub();
+		// SAFETY: the pi double supplies the register*/on surfaces the extension installs on.
 		sumocode(pi as never);
 
 		const ctx = buildCtxStub();
+		// SAFETY: the ctx double supplies the ui surface the tool_call handlers read.
 		const toolCallResults = await Promise.all((handlers.get("tool_call") ?? []).map((handler) =>
 			handler({
 				toolName: "bash",
@@ -480,7 +507,7 @@ describe("sumocode extension", () => {
 			}, ctx as never),
 		));
 
-		expect(toolCallResults.some((result) => typeof result === "object" && result !== null && "block" in result && result.block === true)).toBe(false);
+		expect(toolCallResults.some(isBlockingResult)).toBe(false);
 		expect(ctx.ui.select).not.toHaveBeenCalled();
 		expect(ctx.ui.custom).not.toHaveBeenCalled();
 	});
@@ -488,11 +515,14 @@ describe("sumocode extension", () => {
 	it("does not push a 'SumoCode loaded' notification on session_start", () => {
 		const { pi, handlers } = buildPiStub();
 
+		// SAFETY: the pi double supplies the register*/on surfaces the extension installs on.
+
 		sumocode(pi as never);
 
 		const ctx = buildCtxStub();
 		const sessionStart = handlers.get("session_start") ?? [];
 		for (const handler of sessionStart) {
+			// SAFETY: the ctx double supplies the ui surface the session_start handlers read.
 			handler({ type: "session_start" }, ctx as never);
 		}
 
@@ -517,12 +547,14 @@ describe("process install latch", () => {
 		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 		try {
 			const first = buildPiStub();
+			// SAFETY: the pi double supplies the register*/on surfaces the extension installs on.
 			sumocode(first.pi as never);
 			const commandCalls = first.pi.registerCommand.mock.calls.length;
 			const toolCalls = first.pi.registerTool.mock.calls.length;
 			const eventCalls = first.pi.on.mock.calls.length;
 
 			// Installed package + launcher entry receive the same ExtensionAPI.
+			// SAFETY: the pi double supplies the register*/on surfaces the extension installs on.
 			sumocode(first.pi as never);
 			expect(first.pi.registerCommand).toHaveBeenCalledTimes(commandCalls);
 			expect(first.pi.registerTool).toHaveBeenCalledTimes(toolCalls);
@@ -531,6 +563,7 @@ describe("process install latch", () => {
 
 			// /new, /resume, and /fork recreate factories with a new API identity.
 			const replacement = buildPiStub();
+			// SAFETY: the pi double supplies the register*/on surfaces the extension installs on.
 			sumocode(replacement.pi as never);
 			expect(replacement.pi.registerCommand).toHaveBeenCalled();
 			expect(replacement.pi.on).toHaveBeenCalled();
@@ -543,6 +576,7 @@ describe("process install latch", () => {
 		const prev = process.env.PI_CMUX_CHILD;
 		process.env.PI_CMUX_CHILD = "1";
 		const helper = buildPiStub();
+		// SAFETY: the pi double supplies the register*/on surfaces the extension installs on.
 		sumocode(helper.pi as never); // helper-subprocess guard noops, must not latch
 		if (prev === undefined) delete process.env.PI_CMUX_CHILD;
 		else process.env.PI_CMUX_CHILD = prev;

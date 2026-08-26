@@ -1,5 +1,8 @@
 import { sanitizeActivityText, type ActivitySnapshot, type ActivityStatus } from "../activity/domain.js";
 import { boundedOutputTail } from "../activity/output-tail.js";
+
+/** Writable mirror used to assemble snapshots field-by-field before returning them. */
+type MutableActivitySnapshot = { -readonly [K in keyof ActivitySnapshot]: ActivitySnapshot[K] };
 import type { ProcessTreeVerification } from "./process-tree.js";
 
 export const TERMINAL_TASK_SCHEMA_VERSION = 4;
@@ -114,9 +117,11 @@ export function terminalActivitySnapshot(task: TerminalTaskSnapshot, outputTail:
 	const command = sanitizeActivityText(task.command).slice(0, 4 * 1024);
 	const cwd = sanitizeActivityText(task.cwd).slice(0, 2 * 1024);
 	const output = boundedOutputTail(outputTail);
+	const leading: Partial<MutableActivitySnapshot> = {};
+	if (task.sourceId) leading.sourceId = task.sourceId;
 	return {
 		id: task.id,
-		...(task.sourceId ? { sourceId: task.sourceId } : {}),
+		...leading,
 		kind: "terminal",
 		title,
 		status: terminalActivityStatus(task.status),

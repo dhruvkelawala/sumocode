@@ -2,10 +2,11 @@ import { describe, expect, it, vi } from "vitest";
 import { registerThemeCheckCommand } from "./theme-check.js";
 
 function registerHarness() {
-	let handler: ((args: string, ctx: unknown) => Promise<void>) | undefined;
+	let handler: ((args: string, ctx: { hasUI: boolean; mode?: string; ui?: { notify?: (...args: unknown[]) => void; custom?: (...args: unknown[]) => Promise<string | number | undefined> } }) => Promise<void>) | undefined;
 	const registerCommand = vi.fn((_name: string, options: { handler: typeof handler }) => {
 		handler = options.handler;
 	});
+	// SAFETY: test double only exercises the members this test asserts on.
 	registerThemeCheckCommand({ registerCommand } as never);
 	return { handler: handler!, registerCommand };
 }

@@ -9,11 +9,6 @@ import { fileURLToPath } from "node:url";
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const out = resolve(repoRoot, "docs", "ui", "bible");
 
-/** Construct one row of exact `cols` width. */
-function pad(s, n, ch = " ") {
-	if (s.length >= n) return s.slice(0, n);
-	return s + ch.repeat(n - s.length);
-}
 function rep(ch, n) { return ch.repeat(n); }
 
 /** Build the input frame as 3 rows + a hint row. */

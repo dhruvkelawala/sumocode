@@ -16,7 +16,7 @@ export function loadScenarioRegistry(options = {}) {
 		deviceScaleFactor: 2,
 		fontSize: 13,
 		lineHeight: 1.4,
-		...(manifest.defaults ?? {}),
+		...manifest.defaults,
 	};
 	const crops = manifest.crops ?? {};
 	const scenarios = manifest.scenarios.map((scenario) => normalizeScenario(scenario, defaults, crops));
@@ -41,18 +41,23 @@ export function loadScenarioRegistry(options = {}) {
 }
 
 function validateManifest(manifest, manifestPath) {
+	// oxlint-disable-next-line anti-slop/no-runtime-typeof -- validating untrusted scenario-manifest JSON fields
 	if (!manifest || typeof manifest !== "object") throw new Error(`Invalid manifest at ${manifestPath}`);
 	if (manifest.version !== 1) throw new Error(`Unsupported visual scenario manifest version: ${manifest.version}`);
+	// oxlint-disable-next-line anti-slop/no-runtime-typeof -- validating untrusted scenario-manifest JSON fields
 	if (!manifest.crops || typeof manifest.crops !== "object") throw new Error("Scenario manifest must define crops");
 	if (!Array.isArray(manifest.scenarios) || manifest.scenarios.length === 0) throw new Error("Scenario manifest must define scenarios");
 	const ids = new Set();
 	for (const scenario of manifest.scenarios) {
+		// oxlint-disable-next-line anti-slop/no-runtime-typeof -- validating untrusted scenario-manifest JSON fields
 		if (!scenario.id || typeof scenario.id !== "string") throw new Error("Every scenario needs a string id");
 		if (ids.has(scenario.id)) throw new Error(`Duplicate scenario id: ${scenario.id}`);
 		ids.add(scenario.id);
 		if (!LANES.has(scenario.lane)) throw new Error(`Scenario ${scenario.id} has invalid lane: ${scenario.lane}`);
 		if (!STATUSES.has(scenario.status)) throw new Error(`Scenario ${scenario.id} has invalid status: ${scenario.status}`);
+		// oxlint-disable-next-line anti-slop/no-runtime-typeof -- validating untrusted scenario-manifest JSON fields
 		if (!scenario.bibleTarget || typeof scenario.bibleTarget !== "string") throw new Error(`Scenario ${scenario.id} needs bibleTarget`);
+		// oxlint-disable-next-line anti-slop/no-runtime-typeof -- validating untrusted scenario-manifest JSON fields
 		if (scenario.lane === "fixture" && (!scenario.fixture || typeof scenario.fixture.id !== "string")) throw new Error(`Fixture scenario ${scenario.id} needs fixture.id`);
 		if (!scenario.dimensions || !Number.isInteger(scenario.dimensions.cols)) throw new Error(`Scenario ${scenario.id} needs integer dimensions.cols`);
 		validatePatternArray(scenario, "rejectIfOutputMatches");
@@ -63,6 +68,7 @@ function validateManifest(manifest, manifestPath) {
 		validateRuntimeInputs(scenario);
 		if (!Array.isArray(scenario.crops) || scenario.crops.length === 0) throw new Error(`Scenario ${scenario.id} needs crop definitions`);
 		for (const crop of scenario.crops) {
+			// oxlint-disable-next-line anti-slop/no-runtime-typeof -- validating untrusted scenario-manifest JSON fields
 			if (!crop.id || typeof crop.id !== "string") throw new Error(`Scenario ${scenario.id} has crop without id`);
 			const targetCrop = crop.targetCrop ?? crop.id;
 			const runtimeCrop = crop.runtimeCrop ?? crop.id;
@@ -78,6 +84,7 @@ function validateRuntimeInputs(scenario) {
 	if (inputs === undefined) return;
 	if (!Array.isArray(inputs)) throw new Error(`Scenario ${scenario.id} runtime.inputs must be an array`);
 	for (const [index, input] of inputs.entries()) {
+		// oxlint-disable-next-line anti-slop/no-runtime-typeof -- validating untrusted scenario-manifest JSON fields
 		if (!input || typeof input !== "object" || typeof input.type !== "string") {
 			throw new Error(`Scenario ${scenario.id} runtime.inputs[${index}] needs a string type`);
 		}
@@ -85,11 +92,13 @@ function validateRuntimeInputs(scenario) {
 			throw new Error(`Scenario ${scenario.id} runtime.inputs[${index}].afterMs must be a non-negative number`);
 		}
 		if (input.type === "text" || input.type === "key") {
+			// oxlint-disable-next-line anti-slop/no-runtime-typeof -- validating untrusted scenario-manifest JSON fields
 			if (typeof input.value !== "string") throw new Error(`Scenario ${scenario.id} runtime.inputs[${index}] needs a string value`);
 			continue;
 		}
 		if (input.type === "waitForOutput") {
 			const pattern = input.pattern ?? input.value;
+			// oxlint-disable-next-line anti-slop/no-runtime-typeof -- validating untrusted scenario-manifest JSON fields
 			if (typeof pattern !== "string" || pattern.length === 0) throw new Error(`Scenario ${scenario.id} runtime.inputs[${index}] needs a non-empty pattern`);
 			validateRegexPattern(scenario.id, `runtime.inputs[${index}].pattern`, pattern);
 			continue;
@@ -107,6 +116,7 @@ function validateInputPatternArray(scenarioId, inputIndex, patterns, field) {
 	if (!Array.isArray(patterns)) throw new Error(`Scenario ${scenarioId} runtime.inputs[${inputIndex}].${field} must be an array`);
 	if (field === "include" && patterns.length === 0) throw new Error(`Scenario ${scenarioId} runtime.inputs[${inputIndex}].${field} must be a non-empty array`);
 	for (const [patternIndex, pattern] of patterns.entries()) {
+		// oxlint-disable-next-line anti-slop/no-runtime-typeof -- validating untrusted scenario-manifest JSON fields
 		if (typeof pattern !== "string" || pattern.length === 0) {
 			throw new Error(`Scenario ${scenarioId} runtime.inputs[${inputIndex}].${field}[${patternIndex}] must be a non-empty string`);
 		}
@@ -119,6 +129,7 @@ function validatePatternArray(scenario, field) {
 	if (patterns === undefined) return;
 	if (!Array.isArray(patterns)) throw new Error(`Scenario ${scenario.id} ${field} must be an array`);
 	for (const pattern of patterns) {
+		// oxlint-disable-next-line anti-slop/no-runtime-typeof -- validating untrusted scenario-manifest JSON fields
 		if (typeof pattern !== "string" || pattern.length === 0) throw new Error(`Scenario ${scenario.id} ${field} entries must be non-empty strings`);
 		validateRegexPattern(scenario.id, field, pattern);
 	}

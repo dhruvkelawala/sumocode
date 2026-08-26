@@ -3,6 +3,7 @@ import { isTerminalIoError } from "./terminal-errors.js";
 
 describe("isTerminalIoError", () => {
 	it.each(["EPIPE", "EIO", "ENOTTY", "EBADF", "ERR_STREAM_DESTROYED"])("matches terminal error code %s", (code) => {
+		// SAFETY: every NodeJS.ErrnoException field is assigned explicitly below.
 		const error = new Error(code) as NodeJS.ErrnoException;
 		error.code = code;
 		expect(isTerminalIoError(error)).toBe(true);

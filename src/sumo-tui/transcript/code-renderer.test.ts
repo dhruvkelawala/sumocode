@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { resetThemeRegistryForTests, setActiveTheme } from "../../themes/index.js";
 import { isCathedralCodeBlockCollapsible, renderCathedralCodeBlock } from "./code-renderer.js";
 
+// oxlint-disable-next-line no-control-regex -- intentional ESC byte match for ANSI parsing
 const ANSI = /\u001b\[[0-9;]*m/g;
 const stripAnsi = (s: string): string => s.replace(ANSI, "");
 

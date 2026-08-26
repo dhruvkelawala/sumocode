@@ -11,6 +11,9 @@
 
 const SLATE_ENTRY_TYPE = "slate";
 
+/** Serialized slate entry shape stored via `pi.appendEntry("slate", …)`. */
+export type SlateState = { items: string[] };
+
 export interface SlateEntry {
 	readonly customType: string;
 	readonly data?: { items?: string[] };
@@ -60,8 +63,9 @@ export class Slate {
 		return count;
 	}
 
+
 	/** Serialize for `pi.appendEntry`. */
-	public toJSON(): { items: string[] } {
+	public toJSON(): SlateState {
 		return { items: [...this.items] };
 	}
 

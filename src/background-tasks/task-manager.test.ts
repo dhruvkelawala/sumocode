@@ -12,6 +12,7 @@ import { TERMINAL_TASK_SCHEMA_VERSION, type TerminalTaskSnapshot } from "./task-
 type MockChild = EventEmitter & { pid: number; unref: ReturnType<typeof vi.fn> };
 
 function mockChild(pid: number): MockChild {
+	// SAFETY: MockChild is a structural subset of EventEmitter's surface the manager touches.
 	const child = new EventEmitter() as MockChild;
 	child.pid = pid;
 	child.unref = vi.fn();
@@ -22,6 +23,11 @@ interface ProcessTreeHarness {
 	readonly operations: ProcessTreeOperations;
 	readonly empty: Map<number, boolean>;
 	readonly calls: string[];
+}
+
+function asChildProcess<T>(child: T): ChildProcess {
+	// SAFETY: MockChild implements exactly the ChildProcess surface the manager drives in these tests.
+	return child as ChildProcess;
 }
 
 function processTreeHarness(): ProcessTreeHarness {
@@ -74,10 +80,11 @@ describe("TerminalTaskManager", () => {
 		const next = new TerminalTaskManager({
 			store: new TerminalTaskStore({ rootDir }),
 			processTree: tree.operations,
+			// SAFETY: the mock spawn only implements the call signature this manager exercises.
 			spawn: vi.fn(() => {
 				const child = mockChild(4000 + children.length);
 				children.push(child);
-				return child as unknown as ChildProcess;
+				return asChildProcess(child);
 			}) as never,
 			now: () => now,
 			createId: () => ids.shift() ?? `term-${children.length}`,
@@ -138,7 +145,9 @@ describe("TerminalTaskManager", () => {
 		let replay: readonly TerminalTaskSnapshot[] = [];
 		const unsubscribe = target.subscribeChanges((snapshots) => { replay = snapshots; });
 		expect(Object.isFrozen(replay[0])).toBe(true);
-		expect(() => { (replay[0] as { title: string }).title = "mutated"; }).toThrow();
+		// SAFETY: the frozen snapshot in this fixture always has a string title field.
+		const titleHolder = replay[0] as { title: string };
+		expect(() => { titleHolder.title = "mutated"; }).toThrow();
 		expect(target.getSnapshots()[0]?.title).toBe("tests");
 		unsubscribe();
 	});
@@ -666,7 +675,7 @@ describe("TerminalTaskManager", () => {
 
 	it("settles safely with competing recovery pollers and no unhandled rejection", async () => {
 		const unhandled: unknown[] = [];
-		const onUnhandled = (error: unknown): void => { unhandled.push(error); };
+		const onUnhandled = (cause: unknown): void => { unhandled.push(cause); };
 		process.on("unhandledRejection", onUnhandled);
 		try {
 			const first = manager();

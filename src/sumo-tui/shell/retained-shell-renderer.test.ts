@@ -10,6 +10,8 @@ import type {
 	ShellTerminalSessionOwner,
 } from "./contracts.js";
 import { RetainedShellRenderer } from "./retained-shell-renderer.js";
+/* oxlint-disable anti-slop/no-chained-type-assertions -- test doubles cast minimal stub objects to Pi context types. */
+/* oxlint-disable anti-slop/require-safety-comment-for-type-assertion -- stub shape is exercised by the assertions below. */
 
 /**
  * Direct characterization tests for RetainedShellRenderer (plan 049).
@@ -112,11 +114,12 @@ async function createHarness(
 }
 
 function stripAnsi(text: string): string {
+	// oxlint-disable-next-line no-control-regex -- intentional ESC byte match to strip ANSI styling in assertions
 	return text.replace(/\u001b\[[0-9;]*m/g, "");
 }
 
 type RootYogaNodeForTest = {
-	readonly calculateLayout: (...args: unknown[]) => unknown;
+	readonly calculateLayout: (...args: unknown[]) => void;
 };
 
 type RendererInternalsForTest = {

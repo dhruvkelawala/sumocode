@@ -63,12 +63,13 @@ const createHarness = (
 		thinking: "high",
 		appendSystemPrompt,
 		host,
+		// SAFETY: pi.exec is the only member the pane backend uses on this object.
 		pi: { exec: vi.fn() } as never,
 		placement,
 	});
 	const events: SubagentEvent[] = [];
-	if (typeof child.events !== "function") throw new Error("pane backend must use callback events");
-	child.events((event: SubagentEvent) => events.push(event));
+	if (!(Symbol.asyncIterator in child.events)) child.events((event: SubagentEvent) => events.push(event));
+	else throw new Error("pane backend must use callback events");
 	return { fs, host, closePane, child, events, paths: buildVisibleTaskPaths("sa-1", 1234, "/tmp/subagents") };
 };
 
@@ -83,6 +84,7 @@ describe("pane subagent backend", () => {
 			expect(harness.events).toContainEqual({ kind: "run-started" });
 			expect(harness.events).toContainEqual({ kind: "pane-attached", pane: { agentName: "worker-abc", workspaceId: "w1", tabId: "w1:t1", paneId: "w1:p2" } });
 			expect(harness.fs.files.get(harness.paths.promptFile)).toBe("do the work");
+			// SAFETY: the harness host always records a StartAgentPaneOptions object as the second call argument.
 			const launched = (harness.host.startAgentPane as ReturnType<typeof vi.fn>).mock.calls[0]?.[1] as { shellCommand: string };
 			expect(launched.shellCommand).toBe("exec '/tmp/subagents/sa-1-1234/run.sh'");
 			const script = harness.fs.files.get(harness.paths.scriptFile) ?? "";
@@ -170,6 +172,7 @@ describe("pane subagent backend", () => {
 		try {
 			const harness = createHarness();
 			await flushPromises();
+			// SAFETY: closePane is a vi.fn double; queueing a rejection exercises the failure path.
 			(harness.closePane as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ ok: false, error: "pane still alive" });
 
 			harness.child.interrupt();
@@ -236,6 +239,7 @@ describe("pane subagent backend", () => {
 		const run = promisify(execFile);
 		const dir = mkdtempSync(joinPath(tmpdir(), "sumo-exit-guard-"));
 		try {
+			// SAFETY: the double implements only the TerminalHost members this flow touches.
 			const host: TerminalHost = {
 				kind: "herdr",
 				startAgentPane: vi.fn(async () => startedPane),
@@ -244,6 +248,7 @@ describe("pane subagent backend", () => {
 			} as never;
 			const spawn = createPaneChildSpawner({ baseDir: dir });
 			const controller = new AbortController();
+			// SAFETY: pi.exec is the only PaneChildOptions member this flow exercises beyond defaults.
 			const child = spawn({
 				id: "sa-guard",
 				prompt: "irrelevant",
@@ -253,12 +258,15 @@ describe("pane subagent backend", () => {
 				signal: controller.signal,
 				title: "guard",
 				placement: { kind: "tab", tabId: "w1:t1", direction: "right" },
+				// SAFETY: pi.exec is the only member the pane backend uses on this object.
 				pi: { exec: vi.fn() } as never,
 				host,
+				// SAFETY: the double covers every TerminalHost member this flow touches.
 			} as never);
-			if (typeof child.events !== "function") throw new Error("pane backend must use callback events");
-			child.events(() => {});
+			if (!(Symbol.asyncIterator in child.events)) child.events(() => {});
+			else throw new Error("pane backend must use callback events");
 			await flushPromises();
+			// SAFETY: startAgentPane records a StartAgentPaneOptions object as its second argument.
 			const started = (host.startAgentPane as ReturnType<typeof vi.fn>).mock.calls[0]?.[1] as { shellCommand: string };
 			await run("bash", ["-c", started.shellCommand]).catch(() => {});
 			const scriptFile = [...(started.shellCommand.match(/^exec '([^']+)'$/) ?? [])][1]!;

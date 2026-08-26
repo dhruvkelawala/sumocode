@@ -7,6 +7,7 @@ import {
 	shouldForceHardwareCursor,
 	shouldHidePiNoise,
 	type PiNoiseFilterState,
+	type ForeignChatComponent,
 } from "./pi-interactive-adapter.js";
 
 class TextNode {
@@ -14,6 +15,9 @@ class TextNode {
 }
 
 class Spacer {}
+
+/** Anything the fake container may hold: foreign components or bare text nodes. */
+type TestChild = { text?: string } | ForeignChatComponent;
 
 describe("Pi interactive adapter", () => {
 	it("matches Pi startup noise Text components after ANSI styling", () => {
@@ -43,7 +47,7 @@ describe("Pi interactive adapter", () => {
 		const upstream = {
 			chatContainer: {
 				children,
-				addChild(component: unknown) {
+				addChild(component: TestChild) {
 					children.push(component);
 				},
 			},

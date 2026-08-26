@@ -13,7 +13,7 @@ export function activityCardViewModel(activity: ActivitySnapshot): ChatMessageVi
 		id: `live-activity:${activity.id}`,
 		role: "system",
 		displayName: "ACTIVITY",
-		...(activity.createdAt === undefined ? {} : { timestamp: new Date(activity.createdAt) }),
+		...(activity.createdAt !== undefined && { timestamp: new Date(activity.createdAt) }),
 		blocks: [{ type: "activity", activity }],
 	};
 }

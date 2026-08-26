@@ -16,7 +16,12 @@ function temporaryDirectory(): string {
 	return directory;
 }
 
-function cacheFixture(): { stateRoot: string; path: string } {
+interface CacheFixture {
+	stateRoot: string;
+	path: string;
+}
+
+function cacheFixture(): CacheFixture {
 	const stateRoot = join(temporaryDirectory(), "state");
 	return {
 		stateRoot,

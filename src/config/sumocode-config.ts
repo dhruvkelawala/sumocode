@@ -2,6 +2,8 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
+type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
+
 export interface SumoCodeConfig {
 	readonly primaryAgentName: string;
 	readonly themeName?: string;
@@ -100,7 +102,7 @@ export function saveSumoCodeConfigPatch(patch: Partial<SumoCodeConfig>, options:
 	const path = resolveGlobalSumoCodeConfigPath(options.homeDir, options.env);
 	const readFile = options.readFile ?? readConfigFile;
 	const writeFile = options.writeFile ?? writeConfigFileAtomic;
-	let existing: Record<string, unknown> = {};
+	let existing: Record<string, JsonValue> = {};
 	let raw: string | undefined;
 	try {
 		raw = readFile(path);
@@ -109,9 +111,13 @@ export function saveSumoCodeConfigPatch(patch: Partial<SumoCodeConfig>, options:
 	}
 	if (raw !== undefined) {
 		try {
+			// SAFETY: JSON.parse returns any; unknown marks the value as needing
+			// the shape checks on the following line before any field access.
 			const parsed = JSON.parse(raw) as unknown;
-			if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return { success: false, path, error: "Existing SumoCode config is not a JSON object" };
-			existing = parsed as Record<string, unknown>;
+			if (!isObjectValue(parsed) || parsed === null || Array.isArray(parsed)) return { success: false, path, error: "Existing SumoCode config is not a JSON object" };
+			// SAFETY: the JSON.parse result was shape-checked above; unknown keys are
+			// preserved verbatim so other tools' settings survive the patch write.
+			existing = parsed as Record<string, JsonValue>;
 		} catch (error) {
 			return { success: false, path, error: error instanceof Error ? error.message : String(error) };
 		}
@@ -140,7 +146,7 @@ function mergeMissingSumoCodeConfig(primary: ParsedSumoCodeConfig | undefined, f
 function finalizeSumoCodeConfig(config: ParsedSumoCodeConfig): SumoCodeConfig {
 	return {
 		primaryAgentName: config.primaryAgentName ?? DEFAULT_SUMOCODE_CONFIG.primaryAgentName,
-		...(config.themeName === undefined ? {} : { themeName: config.themeName }),
+		...(config.themeName !== undefined && { themeName: config.themeName }),
 	};
 }
 
@@ -156,6 +162,16 @@ function writeConfigFileAtomic(path: string, content: string): void {
 	renameSync(tmpPath, path);
 }
 
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- predicate over parsed JSON; the typeof check is the sanctioned parse.
+function isObjectValue(value: unknown): value is object {
+	return typeof value === "object";
+}
+
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- predicate over parsed JSON fields; the typeof check is the sanctioned parse.
+function isString(value: unknown): value is string {
+	return typeof value === "string";
+}
+
 function parseSumoCodeConfig(raw: string): ParsedSumoCodeConfig | undefined {
 	let parsed: unknown;
 	try {
@@ -163,11 +179,13 @@ function parseSumoCodeConfig(raw: string): ParsedSumoCodeConfig | undefined {
 	} catch {
 		return undefined;
 	}
-	if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return undefined;
+	if (!isObjectValue(parsed) || parsed === null || Array.isArray(parsed)) return undefined;
+	// SAFETY: JSON.parse produced an object; the two known fields are decoded
+	// by the guards below and unknown fields are ignored.
 	const record = parsed as { primaryAgentName?: unknown; themeName?: unknown };
 	if (record.primaryAgentName === undefined && record.themeName === undefined) return undefined;
-	if (record.primaryAgentName !== undefined && (typeof record.primaryAgentName !== "string" || record.primaryAgentName.trim().length === 0)) return undefined;
-	const primaryAgentName = typeof record.primaryAgentName === "string" ? record.primaryAgentName.trim() : undefined;
-	const themeName = typeof record.themeName === "string" && record.themeName.trim().length > 0 ? record.themeName.trim().toLowerCase() : undefined;
-	return { ...(primaryAgentName === undefined ? {} : { primaryAgentName }), ...(themeName === undefined ? {} : { themeName }) };
+	if (record.primaryAgentName !== undefined && (!isString(record.primaryAgentName) || record.primaryAgentName.trim().length === 0)) return undefined;
+	const primaryAgentName = isString(record.primaryAgentName) ? record.primaryAgentName.trim() : undefined;
+	const themeName = isString(record.themeName) && record.themeName.trim().length > 0 ? record.themeName.trim().toLowerCase() : undefined;
+	return { ...(primaryAgentName !== undefined && { primaryAgentName }), ...(themeName !== undefined && { themeName }) };
 }

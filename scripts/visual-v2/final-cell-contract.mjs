@@ -3,6 +3,7 @@ export function validateFinalCellAssertions(scenario) {
 	if (assertions === undefined) return;
 	if (!Array.isArray(assertions)) throw new Error(`Scenario ${scenario.id} finalCellAssertions must be an array`);
 	for (const [index, assertion] of assertions.entries()) {
+		// oxlint-disable-next-line anti-slop/no-runtime-typeof -- validating untrusted scenario assertion fields
 		if (!assertion || typeof assertion !== "object") throw new Error(`Scenario ${scenario.id} finalCellAssertions[${index}] must be an object`);
 		for (const field of ["row", "col"]) {
 			if (!Number.isInteger(assertion[field]) || assertion[field] < 0) throw new Error(`Scenario ${scenario.id} finalCellAssertions[${index}].${field} must be a non-negative integer`);
@@ -11,8 +12,10 @@ export function validateFinalCellAssertions(scenario) {
 		const cols = scenario.dimensions?.cols;
 		if (Number.isInteger(rows) && assertion.row >= rows) throw new Error(`Scenario ${scenario.id} finalCellAssertions[${index}].row must be less than dimensions.rows (${rows})`);
 		if (Number.isInteger(cols) && assertion.col >= cols) throw new Error(`Scenario ${scenario.id} finalCellAssertions[${index}].col must be less than dimensions.cols (${cols})`);
+		// oxlint-disable-next-line anti-slop/no-runtime-typeof -- validating untrusted scenario assertion fields
 		if (assertion.text !== undefined && typeof assertion.text !== "string") throw new Error(`Scenario ${scenario.id} finalCellAssertions[${index}].text must be a string`);
 		if (assertion.charPattern !== undefined) {
+			// oxlint-disable-next-line anti-slop/no-runtime-typeof -- validating untrusted scenario assertion fields
 			if (typeof assertion.charPattern !== "string" || assertion.charPattern.length === 0) throw new Error(`Scenario ${scenario.id} finalCellAssertions[${index}].charPattern must be a non-empty string`);
 			try { new RegExp(assertion.charPattern, "u"); }
 			catch (error) { throw new Error(`Scenario ${scenario.id} finalCellAssertions[${index}].charPattern is invalid: ${error.message}`); }

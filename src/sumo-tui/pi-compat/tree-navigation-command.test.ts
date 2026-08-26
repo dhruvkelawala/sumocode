@@ -1,4 +1,5 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import type { SessionRecord } from "../transcript/view-model.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	decodeRpcTreeNavigationOutcome,
@@ -13,6 +14,8 @@ import {
 	MAX_TREE_NAVIGATION_EDITOR_TEXT_BYTES,
 	type RpcTreeNavigationRequest,
 } from "./tree-navigation-command.js";
+/* oxlint-disable anti-slop/no-chained-type-assertions -- test doubles cast minimal stub objects to Pi context types. */
+/* oxlint-disable anti-slop/require-safety-comment-for-type-assertion -- stub shape is exercised by the assertions below. */
 
 const requestId = "019f8a78-b4f5-7b7b-b774-2d2e4bce9001";
 
@@ -20,7 +23,7 @@ function request(overrides: Partial<RpcTreeNavigationRequest> = {}): RpcTreeNavi
 	return { requestId, targetId: "target", summarize: false, ...overrides };
 }
 
-function encoded(value: unknown): string {
+function encoded<T>(value: T): string {
 	return Buffer.from(JSON.stringify(value), "utf8").toString("base64url");
 }
 
@@ -30,7 +33,7 @@ function context(options: {
 	target?: unknown;
 	leafId?: string | null;
 	cancelled?: boolean;
-	navigate?: (targetId: string, options?: Record<string, unknown>) => Promise<{ cancelled: boolean }>;
+	navigate?: (targetId: string, options?: SessionRecord) => Promise<{ cancelled: boolean }>;
 } = {}): ExtensionCommandContext {
 	let leafId = options.leafId ?? "target";
 	return {
@@ -44,7 +47,7 @@ function context(options: {
 			getEntry: vi.fn(() => options.target),
 			getLeafId: vi.fn(() => leafId),
 		},
-		navigateTree: vi.fn(async (targetId: string, navigateOptions?: Record<string, unknown>) => {
+		navigateTree: vi.fn(async (targetId: string, navigateOptions?: SessionRecord) => {
 			if (options.navigate) return options.navigate(targetId, navigateOptions);
 			leafId = targetId;
 			return { cancelled: options.cancelled ?? false };

@@ -9,6 +9,7 @@ describe("/exit slash command", () => {
 		});
 		const shutdown = vi.fn();
 
+		// SAFETY: test double only exercises registerCommand, the sole member used here.
 		registerExitCommand({ registerCommand } as never);
 		await handler?.("", { shutdown });
 

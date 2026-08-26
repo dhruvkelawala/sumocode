@@ -104,7 +104,13 @@ function normalizedActiveIndex(state: SearchPaletteState, rows: readonly SearchP
 	return Math.min(Math.max(0, state.activeIndex), rows.length - 1);
 }
 
-function visibleRows(rows: readonly SearchPaletteRow[], activeIndex: number): { rows: readonly SearchPaletteRow[]; offset: number } {
+/** Window of palette rows visible at once. */
+interface VisibleRowsWindow {
+	readonly rows: readonly SearchPaletteRow[];
+	readonly offset: number;
+}
+
+function visibleRows(rows: readonly SearchPaletteRow[], activeIndex: number): VisibleRowsWindow {
 	if (rows.length <= MAX_VISIBLE_ROWS) return { rows, offset: 0 };
 	const maxOffset = rows.length - MAX_VISIBLE_ROWS;
 	const offset = Math.min(maxOffset, Math.max(0, activeIndex - Math.floor(MAX_VISIBLE_ROWS / 2)));
@@ -156,6 +162,8 @@ type AnyKey = Parameters<typeof matchesKey>[1];
 
 function keyEq(data: string, ...ids: readonly AnyKey[]): boolean {
 	for (const id of ids) {
+		// SAFETY: AnyKey is the union of Key.* literal ID types, each of which is
+		// representable as a string for the direct equality fast path.
 		if (data === (id as string)) return true;
 		if (matchesKey(data, id)) return true;
 	}

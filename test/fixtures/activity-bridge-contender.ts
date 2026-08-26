@@ -10,12 +10,18 @@ if (!stateRoot || !terminalRoot || !ownerSessionId || !ready || !deathGate || !t
 	throw new Error("usage: activity-bridge-contender <state-root> <terminal-root> <owner> <ready> <death-gate> <takeover-gate>");
 }
 
+// Predicate name follows the anti-slop convention: the only sanctioned `unknown`
+// parameter is one named `cause`, and the type guard is where typeof narrowing belongs.
+function isEsrchError(cause: unknown): cause is { code: string } {
+	return typeof cause === "object" && cause !== null && "code" in cause;
+}
+
 function inspectWriter(writer: ActivityFeedWriterIdentity): ActivityFeedWriterState {
 	if (writer.token === "incumbent") return existsSync(deathGate) ? "dead" : "alive";
 	try {
 		process.kill(writer.pid, 0);
 	} catch (error) {
-		if (typeof error === "object" && error !== null && "code" in error && String(error.code) === "ESRCH") return "dead";
+		if (isEsrchError(error) && String(error.code) === "ESRCH") return "dead";
 		return "unknown";
 	}
 	const actual = captureProcessBirthTime(writer.pid);

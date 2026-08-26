@@ -299,7 +299,7 @@ describe("ActivityFeedPublisher", () => {
 	it("bounds and sanitizes output, invocation secrets, ANSI, and controls", () => {
 		const stateRoot = root();
 		const publisher = fixturePublisher("session-a", { rootDir: stateRoot, now: () => 2_000 });
-		const noisy = `${Array.from({ length: 80 }, (_, index) => `\u001b[31m${index}:${"🧘".repeat(400)}\u001b[0m\t`).join("\n")}\nAuthorization: Bearer output-secret\nAuthorization: Basic YmFzaWMtc2VjcmV0\nAuthorization: AWS4-HMAC-SHA256 Credential=aws-secret\nProxy-Authorization: Digest proxy-secret\nCookie: session=cookie-secret\nSet-Cookie: auth=set-cookie-secret\nX-Api-Key: header-key-secret\nBearer bare-secret\nDATABASE_URL=postgres://user:db-password@host/db\nAWS_ACCESS_KEY_ID=AKIA1234567890123456\ngithub_pat_abcdefghijklmnopqrstuvwxyz\nxoxb-1234567890-secret\nnpm_abcdefghijklmnop\nsk_live_abcdefghijklmnop\nrk_live_abcdefghijklmnop\nAIza${"A".repeat(20)}${"1".repeat(15)}\naBcDeFgHiJkLmNoPqRsTuVwXyZ1234567890ABCD\n+ curl -u alice:hunter2 https://host\npassword prose-secret\npassword is prose-is-secret\nclient secret is client-secret-value\ndeploy --token opaque-secret --password 'quoted-secret' --api-key=key-secret\nopenai_api_key=prefixed-secret\ngithub_token=github-secret\ndb_password=db-secret\n\"service_client_secret\":\"json-secret\"\nAPI_KEY=env-secret\n${"A".repeat(64)}\n${"B".repeat(64)}\nsk-abcdefghijklmnop`;
+		const noisy = `${Array.from({ length: 80 }, (_, index) => `\u001b[31m${index}:${"🧘".repeat(400)}\u001b[0m\t`).join("\n")}\nAuthorization: Bearer output-secret\nAuthorization: Basic YmFzaWMtc2VjcmV0\nAuthorization: AWS4-HMAC-SHA256 Credential=aws-secret\nProxy-Authorization: Digest proxy-secret\nCookie: session=cookie-secret\nSet-Cookie: auth=set-cookie-secret\nX-Api-Key: header-key-secret\nBearer bare-secret\nDATABASE_URL=postgres://user:db-password@host/db\nAWS_ACCESS_KEY_ID=AKIA1234567890123456\ngithub_pat_abcdefghijklmnopqrstuvwxyz\nxoxb-1234567890-secret\nnpm_abcdefghijklmnop\nsk_live_abcdefghijklmnop\nrk_live_abcdefghijklmnop\nAIza${"A".repeat(20)}${"1".repeat(15)}\naBcDeFgHiJkLmNoPqRsTuVwXyZ1234567890ABCD\n+ curl -u alice:hunter2 https://host\npassword prose-secret\npassword is prose-is-secret\nclient secret is client-secret-value\ndeploy --token opaque-secret --password 'quoted-secret' --api-key=key-secret\nopenai_api_key=prefixed-secret\ngithub_token=github-secret\ndb_password=db-secret\n"service_client_secret":"json-secret"\nAPI_KEY=env-secret\n${"A".repeat(64)}\n${"B".repeat(64)}\nsk-abcdefghijklmnop`;
 		publisher.publish([activity("term-1", {
 			subject: "/Users/private/opaque-cwd-canary",
 			currentStep: "Authorization: Bearer current-step-secret",
@@ -379,8 +379,11 @@ describe("ActivityFeedPublisher", () => {
 	});
 
 	it("bounds deeply nested persisted invocation data during feed parsing", () => {
+		// SAFETY: each loop iteration rewraps `invocation`; only the runtime knows the final nesting depth.
+		// oxlint-disable anti-slop/no-unsafe-dictionary-type, anti-slop/no-known-value-widening -- deep-nesting fixture needs an open record.
 		let invocation: Record<string, unknown> = { leaf: "value" };
 		for (let depth = 0; depth < 20_000; depth += 1) invocation = { next: invocation };
+		// oxlint-enable anti-slop/no-unsafe-dictionary-type, anti-slop/no-known-value-widening
 		const parsed = parseActivityFeedDocument({
 			schemaVersion: 1,
 			ownerSessionId: "session-a",

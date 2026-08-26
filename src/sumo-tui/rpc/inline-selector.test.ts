@@ -1,20 +1,12 @@
-import type * as PiTui from "@earendil-works/pi-tui";
-import { describe, expect, it, vi } from "vitest";
+import * as PiTui from "@earendil-works/pi-tui";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FOCUSED_MARK, UNFOCUSED_MARK } from "../../cathedral/scriptorium-chrome.js";
-import { InlineSelectorComponent, InlineSelectorHost } from "./inline-selector.js";
+import { InlineSelectorComponent, InlineSelectorHost, setFuzzyFilterForTests } from "./inline-selector.js";
 
+// oxlint-disable no-control-regex -- intentional ESC byte matches for terminal key-sequence assertions
+// SAFETY: the hoisted box only collects the query strings observed by the
+// injected filter wrapper.
 const fuzzyFilterCalls = vi.hoisted(() => ({ queries: [] as string[] }));
-
-vi.mock("@earendil-works/pi-tui", async (importOriginal) => {
-	const actual = await importOriginal<typeof PiTui>();
-	return {
-		...actual,
-		fuzzyFilter: <T>(items: T[], query: string, getText: (item: T) => string): T[] => {
-			fuzzyFilterCalls.queries.push(query);
-			return actual.fuzzyFilter(items, query, getText);
-		},
-	};
-});
 
 // pi-tui's `SelectList.handleInput` matches raw terminal byte sequences via
 // its own `getKeybindings()` (see select-list.js), not the symbolic `Key.*`
@@ -59,6 +51,20 @@ class FakeEditor {
 		this.splashProvider = provider;
 	}
 }
+
+// Wrap pi-tui's real filter through the module's injection seam so query
+// observation works without module mocking.
+beforeEach(() => {
+	fuzzyFilterCalls.queries.length = 0;
+	setFuzzyFilterForTests((items, query, getText) => {
+		fuzzyFilterCalls.queries.push(query);
+		return PiTui.fuzzyFilter(items, query, getText);
+	});
+});
+
+afterEach(() => {
+	setFuzzyFilterForTests(undefined);
+});
 
 describe("InlineSelectorComponent", () => {
 	it("renders a Cathedral-styled title heading above the list rows", () => {

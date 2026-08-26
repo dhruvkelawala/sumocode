@@ -57,6 +57,8 @@ export interface SumoRpcClientOptions {
 	readonly args: readonly string[];
 	readonly cwd?: string;
 	readonly preSpawnedChild?: ChildProcessWithoutNullStreams;
+	/** Injection seam for tests; production always uses the real node spawn. */
+	readonly spawnFn?: typeof spawn;
 	readonly env?: NodeJS.ProcessEnv;
 	readonly requestTimeoutMs?: number;
 	readonly onProtocolError?: RpcProtocolErrorHandler;
@@ -75,8 +77,8 @@ const PRESPAWN_ERROR = Symbol.for("sumocode.rpc.preSpawnError");
  */
 export const NOTIFICATION_STDERR_LIMIT = 500;
 
-function toError(value: unknown): Error {
-	return value instanceof Error ? value : new Error(String(value));
+function toError(cause: unknown): Error {
+	return cause instanceof Error ? cause : new Error(String(cause));
 }
 
 function waitForChildClose(child: ChildProcessWithoutNullStreams): Promise<void> {
@@ -100,16 +102,23 @@ export function truncateForNotification(message: string, limit = NOTIFICATION_ST
 	return `${message.slice(0, limit)}…`;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
+type RpcMessageLike = { type?: string | undefined; id?: string | undefined };
+
+function isString(value: string | undefined): value is string {
+	return typeof value === "string";
+}
+
+/** JSON.parse succeeds on `null` and other primitives; only objects carry protocol fields. */
+function isMessageRecord(value: RpcMessageLike | null): value is RpcMessageLike {
 	return typeof value === "object" && value !== null;
 }
 
-function isResponse(value: unknown): value is RpcResponse {
-	return isRecord(value) && value.type === "response";
+function isResponse(value: RpcMessageLike): value is RpcResponse {
+	return value.type === "response";
 }
 
-function isExtensionUiRequest(value: unknown): value is RpcExtensionUIRequest {
-	return isRecord(value) && value.type === "extension_ui_request" && typeof value.id === "string";
+function isExtensionUiRequest(value: RpcMessageLike): value is RpcExtensionUIRequest {
+	return value.type === "extension_ui_request" && isString(value.id);
 }
 
 export class SumoRpcClient {
@@ -126,6 +135,11 @@ export class SumoRpcClient {
 	private exitNotified = false;
 
 	public constructor(private readonly options: SumoRpcClientOptions) {}
+
+	/** Observability/test seam: the adopted child process, when present. */
+	public get adoptedChild(): ChildProcessWithoutNullStreams | undefined {
+		return this.child;
+	}
 
 	public get pid(): number | undefined {
 		return this.child?.pid;
@@ -163,7 +177,8 @@ export class SumoRpcClient {
 		if (this.child) throw new Error("RPC child already started");
 		this.exited = false;
 		this.exitNotified = false;
-		const child = this.options.preSpawnedChild ?? spawn(this.options.command, [...this.options.args], {
+		const spawnChild = this.options.spawnFn ?? spawn;
+		const child = this.options.preSpawnedChild ?? spawnChild(this.options.command, [...this.options.args], {
 			cwd: this.options.cwd,
 			env: { ...process.env, ...this.options.env },
 			stdio: ["pipe", "pipe", "pipe"],
@@ -200,7 +215,9 @@ export class SumoRpcClient {
 		// saves asynchronous spawn errors on the child; Node retains completed
 		// exitCode/signalCode. Adopt either state instead of treating dead stdin
 		// as a live RPC transport and losing the original failure.
-		const preSpawnError = (child as unknown as { [PRESPAWN_ERROR]?: unknown })[PRESPAWN_ERROR];
+		// SAFETY: the entry file stamps PRESPAWN_ERROR onto the child before
+		// handoff; reading it through the symbol keeps that channel private.
+		const preSpawnError = (child as { [PRESPAWN_ERROR]?: unknown })[PRESPAWN_ERROR];
 		let adoptionError: Error | undefined;
 		if (preSpawnError !== undefined) {
 			adoptionError = toError(preSpawnError);
@@ -321,9 +338,11 @@ export class SumoRpcClient {
 	}
 
 	private handleLine(line: string): void {
-		let parsed: unknown;
+		let parsed: RpcMessageLike;
 		try {
-			parsed = JSON.parse(line);
+			// SAFETY: stdout lines are untyped JSON by definition; every consumer
+			// below validates shape via isResponse/isExtensionUiRequest first.
+			parsed = JSON.parse(line) as RpcMessageLike;
 		} catch (error) {
 			const parseError = toError(error);
 			this.consecutiveProtocolErrors += 1;
@@ -334,6 +353,10 @@ export class SumoRpcClient {
 			return;
 		}
 		this.consecutiveProtocolErrors = 0;
+
+		// Stray child output can decode to a JSON primitive (e.g. console.log(null));
+		// only object-shaped lines are protocol candidates.
+		if (!isMessageRecord(parsed)) return;
 
 		if (isResponse(parsed)) {
 			const pending = parsed.id ? this.pending.get(parsed.id) : undefined;
@@ -349,6 +372,8 @@ export class SumoRpcClient {
 			return;
 		}
 
+		// SAFETY: parsed lines come from Pi's own RPC writer; event payloads are
+		// consumed defensively downstream.
 		this.dispatchEvent(parsed as AgentSessionEvent);
 	}
 
@@ -370,7 +395,7 @@ export class SumoRpcClient {
 			try {
 				listener(event);
 			} catch (error) {
-				console.error(`[sumocode-rpc] event listener threw for event type "${String((event as { type?: unknown }).type)}": ${toError(error).message}`);
+				console.error(`[sumocode-rpc] event listener threw for event type "${String(event.type)}": ${toError(error).message}`);
 			}
 		}
 	}

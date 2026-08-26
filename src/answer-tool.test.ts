@@ -19,7 +19,7 @@ function assistantBranch(text: string) {
 }
 
 function registerHarness(extractionResult: ExtractionResult) {
-	let handler: ((args: string, ctx: unknown) => Promise<void>) | undefined;
+	let handler: ((args: string, ctx: ReturnType<typeof rpcCtx>) => Promise<void>) | undefined;
 	const sendMessage = vi.fn();
 	const extract = vi.fn(async () => extractionResult);
 	const pi = {
@@ -29,6 +29,7 @@ function registerHarness(extractionResult: ExtractionResult) {
 		registerShortcut: vi.fn(),
 		sendMessage,
 	};
+	// SAFETY: the doubles supply the register*/sendMessage surface installAnswerTool reads.
 	installAnswerTool(pi as never, { extractQuestionsFromText: extract as never });
 	return { handler: handler!, sendMessage, extract };
 }
@@ -66,6 +67,8 @@ describe("extractQuestionsFromText", () => {
 			}],
 		}));
 
+		// SAFETY: the doubles supply the model/credentials/complete surfaces the
+		// extraction helper touches; this test asserts on their call shapes.
 		const result = await extractQuestionsFromText(
 			"Ship it?",
 			model as never,

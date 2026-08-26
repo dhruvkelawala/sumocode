@@ -28,12 +28,12 @@ class FakeClient implements RpcCommandClient {
 interface Deferred<T> {
 	readonly promise: Promise<T>;
 	resolve(value: T): void;
-	reject(error: unknown): void;
+	reject(cause: unknown): void;
 }
 
 function deferred<T>(): Deferred<T> {
 	let resolve!: (value: T) => void;
-	let reject!: (error: unknown) => void;
+	let reject!: (cause: unknown) => void;
 	const promise = new Promise<T>((resolvePromise, rejectPromise) => {
 		resolve = resolvePromise;
 		reject = rejectPromise;
@@ -62,11 +62,9 @@ class DeferredFakeClient implements RpcCommandClient {
 }
 
 function model(provider: string, id: string): RpcAvailableModel {
-	return {
-		provider,
-		id,
-		name: `${provider} ${id}`,
-	} as RpcAvailableModel;
+	// SAFETY: tests only read provider/id/name off the model fixture; the
+	// remaining Model fields are never consulted by RpcHostControls.
+	return { provider, id, name: `${provider} ${id}` } as RpcAvailableModel;
 }
 
 function rpcState(overrides: Partial<RpcSessionState> = {}): RpcSessionState {
@@ -86,11 +84,20 @@ function rpcState(overrides: Partial<RpcSessionState> = {}): RpcSessionState {
 	};
 }
 
+// SAFETY: response data fixtures only include the fields each test asserts on;
+// unread payload fields are irrelevant.
+const asNever = <T,>(value: T) => value as never;
+
 function stateResponse(overrides: Partial<RpcSessionState> = {}): RpcResponse {
 	return { type: "response", command: "get_state", success: true, data: rpcState(overrides) };
 }
 
-function writeAgentSettings(content: Record<string, unknown>): { dir: string; env: NodeJS.ProcessEnv } {
+interface AgentSettingsFixture {
+	dir: string;
+	env: NodeJS.ProcessEnv;
+}
+
+function writeAgentSettings(content: Record<string, string[] | string | boolean | number | null>): AgentSettingsFixture {
 	const dir = mkdtempSync(join(tmpdir(), "sumocode-controls-enabled-models-"));
 	writeFileSync(join(dir, "settings.json"), JSON.stringify(content));
 	return { dir, env: { PI_CODING_AGENT_DIR: dir } };
@@ -577,10 +584,10 @@ describe("RpcHostControls", () => {
 
 	it("sends exact compaction, retry, and command-discovery payloads", async () => {
 		const client = new FakeClient(
-			{ type: "response", command: "compact", success: true, data: { summary: "done" } as never },
+			{ type: "response", command: "compact", success: true, data: asNever({ summary: "done" }) },
 			{ type: "response", command: "set_auto_compaction", success: true },
 			{ type: "response", command: "set_auto_retry", success: true },
-			{ type: "response", command: "get_commands", success: true, data: { commands: [{ name: "doctor", source: "extension", sourceInfo: {} as never }] } },
+			{ type: "response", command: "get_commands", success: true, data: asNever({ commands: [{ name: "doctor", source: "extension", sourceInfo: asNever({}) }] }) },
 		);
 		const controls = new RpcHostControls(client);
 
@@ -638,7 +645,7 @@ describe("RpcHostControls", () => {
 	});
 
 	it("passes a generous explicit timeout for compact instead of the client's 30s default", async () => {
-		const client = new FakeClient({ type: "response", command: "compact", success: true, data: { summary: "done" } as never });
+		const client = new FakeClient({ type: "response", command: "compact", success: true, data: asNever({ summary: "done" }) });
 		const controls = new RpcHostControls(client);
 
 		await controls.compact();
@@ -692,7 +699,7 @@ describe("RpcHostControls", () => {
 		const controls = new RpcHostControls(client, new RpcHostStateStore(), { treeNavigationOutcomeBroker: broker });
 		const request: RpcTreeNavigationRequest = { requestId: "019f8a78-b4f5-7b7b-b774-2d2e4bce9001", targetId: "entry-1", summarize: false };
 		const unhandled: unknown[] = [];
-		const onUnhandled = (reason: unknown): void => { unhandled.push(reason); };
+		const onUnhandled = (cause: unknown): void => { unhandled.push(cause); };
 		process.on("unhandledRejection", onUnhandled);
 		try {
 			const pending = controls.navigateTree(request);
@@ -743,13 +750,15 @@ describe("RpcHostControls", () => {
 		expect(client.commands).toHaveLength(1);
 		const command = client.commands[0];
 		expect(command).toMatchObject({ type: "prompt", message: expect.stringMatching(/^\/sumo:rpc-tree-navigate /) });
+		// SAFETY: the assertion above pins command to a prompt payload whose
+		// message carries the tree-navigation request text.
 		expect(decodeRpcTreeNavigationPayload((command as { message: string }).message.slice("/sumo:rpc-tree-navigate ".length))).toEqual(request);
 		expect(client.timeouts).toEqual([TREE_NAVIGATION_TIMEOUT_MS]);
 	});
 
 	it("leaves quick getters and setters on the client's default timeout", async () => {
 		const client = new FakeClient(
-			{ type: "response", command: "get_state", success: true, data: {} as never },
+			{ type: "response", command: "get_state", success: true, data: asNever({}) },
 			{ type: "response", command: "abort", success: true },
 		);
 		const controls = new RpcHostControls(client);

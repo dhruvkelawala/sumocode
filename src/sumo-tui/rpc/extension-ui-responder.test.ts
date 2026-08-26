@@ -1,4 +1,12 @@
 import type { RpcExtensionUIRequest } from "@earendil-works/pi-coding-agent";
+
+// SAFETY: deliberately widens a wire-shaped fixture past the closed
+// RpcExtensionUIRequest union to simulate a future Pi method.
+function asWire<T extends object>(value: T): RpcExtensionUIRequest {
+	// SAFETY: the fixture intentionally carries an unrecognized wire method;
+	// the responder must answer cancelled instead of hanging.
+	return value as RpcExtensionUIRequest;
+}
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ExtensionStatusPublication } from "../pi-compat/region-registry.js";
 import { authInputTitle, secretInputTitle } from "../pi-compat/secret-input.js";
@@ -294,11 +302,12 @@ describe("RpcExtensionUiResponder", () => {
 		const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
 
 		try {
-			// Cast through unknown: the wire payload from Pi's child process is untyped JSON, so a
-			// future Pi upgrade can send a method this responder's exhaustive switch doesn't know
-			// about. Simulate that here even though the current RpcExtensionUIRequest union is closed.
+			// The wire payload from Pi's child process is untyped JSON, so a future
+			// Pi upgrade can send a method this responder's exhaustive switch
+			// doesn't know about. Simulate that even though the current
+			// RpcExtensionUIRequest union is closed.
 			const response = responder.handle(
-				{ type: "extension_ui_request", id: "future-1", method: "future_method", title: "New" } as unknown as RpcExtensionUIRequest,
+				asWire({ type: "extension_ui_request", id: "future-1", method: "future_method", title: "New" }),
 			);
 
 			await expect(response).resolves.toEqual({ type: "extension_ui_response", id: "future-1", cancelled: true });

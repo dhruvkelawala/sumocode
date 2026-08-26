@@ -3,6 +3,7 @@ import { resetThemeRegistryForTests, setActiveTheme } from "../themes/index.js";
 import { ULTRAVIOLET_RUNCAT_FRAMES } from "../themes/ultraviolet-core.js";
 import { formatActiveSpinnerInspection, registerSpinnerCommand } from "./spinner.js";
 
+// oxlint-disable-next-line no-control-regex -- intentional ESC byte match to strip ANSI color codes
 const ANSI_PATTERN = /\u001b\[[0-9;]*m/g;
 const stripAnsi = (value: string): string => value.replace(ANSI_PATTERN, "");
 
@@ -62,6 +63,7 @@ describe("registerSpinnerCommand", () => {
 		let handler: ((args: string[], ctx: { hasUI: boolean }) => Promise<void>) | undefined;
 		const pi = { registerCommand: vi.fn((_name: string, command: { handler: typeof handler }) => { handler = command.handler; }) };
 
+		// SAFETY: test double only exercises the members this test asserts on.
 		registerSpinnerCommand(pi as never);
 		await handler?.([], { hasUI: false });
 
@@ -74,6 +76,7 @@ describe("registerSpinnerCommand", () => {
 		const pi = { registerCommand: vi.fn((_name: string, command: { handler: typeof handler }) => { handler = command.handler; }) };
 		const notify = vi.fn();
 
+		// SAFETY: test double only exercises the members this test asserts on.
 		registerSpinnerCommand(pi as never);
 		await handler?.([], { hasUI: true, ui: { notify } });
 

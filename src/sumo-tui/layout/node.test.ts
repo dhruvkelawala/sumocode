@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { SumoNode } from "./node.js";
 import { FLEX_DIRECTION_COLUMN, DIRECTION_LTR, freeRecursive, loadYoga, type YogaNode } from "./yoga.js";
+/* oxlint-disable anti-slop/no-chained-type-assertions -- test doubles cast minimal stub objects to Pi context types. */
+/* oxlint-disable anti-slop/require-safety-comment-for-type-assertion -- stub shape is exercised by the assertions below. */
 
 interface MockYogaNode {
 	children: MockYogaNode[];

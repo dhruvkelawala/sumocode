@@ -5,6 +5,7 @@ import {
 	renderInputHints,
 } from "./input-frame.js";
 
+// oxlint-disable-next-line no-control-regex -- intentional ESC byte match for terminal control sequences
 const ANSI = /\u001b\[[0-9;]*m/g;
 const stripAnsi = (s: string): string => s.replace(ANSI, "");
 const SPLASH_HINT = "╰─ gpt-5.5 · high";

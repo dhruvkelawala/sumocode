@@ -8,6 +8,11 @@ import type { ActivitySnapshot } from "./domain.js";
 import { ActivityFeedPublisher, type ActivityFeedPublisherOptions } from "./feed-publisher.js";
 import { activityPaths, atomicWritePrivateJson } from "./persistence.js";
 import { ACTIVITY_UI_MAX_EXPANSION_ENTRIES, FileActivityStore } from "./store.js";
+/** Adapt a partial fs.watch test stub to the option's declared signature. */
+function asFsWatchStub<T>(stub: T): typeof import("node:fs").watch {
+	// SAFETY: the stub implements exactly the watch/listener surface FileActivityStore exercises.
+	return stub as typeof import("node:fs").watch;
+}
 
 const roots: string[] = [];
 
@@ -54,9 +59,9 @@ describe("FileActivityStore", () => {
 		fixturePublisher("session-a", { rootDir: stateRoot, now: () => 2_000 }).publish([activity("term-1")]);
 		const store = new FileActivityStore({ rootDir: stateRoot });
 		store.bindSession("session-a");
-		const seen: unknown[] = [];
+		const seen: ReturnType<typeof store.getSnapshot>[] = [];
 		const unsubscribe = store.subscribe((snapshot) => seen.push(snapshot));
-		const first = seen[0] as ReturnType<typeof store.getSnapshot>;
+		const first = seen[0]!;
 		expect(seen).toHaveLength(1);
 		expect(first.activities).toMatchObject([{ id: "term-1" }]);
 		expect(Object.isFrozen(first)).toBe(true);
@@ -134,7 +139,7 @@ describe("FileActivityStore", () => {
 		fixturePublisher("session-b", { rootDir: stateRoot, now: () => 2_000 }).publish([activity("b")]);
 		const callbacks: Array<() => void> = [];
 		const closed: boolean[] = [];
-		const watchImpl = ((_path: string, callback: () => void) => {
+		const watchStub = (_path: string, callback: () => void) => {
 			const index = callbacks.length;
 			callbacks.push(callback);
 			closed[index] = false;
@@ -143,7 +148,8 @@ describe("FileActivityStore", () => {
 				close: () => { closed[index] = true; },
 			};
 			return watcher;
-		}) as unknown as typeof import("node:fs").watch;
+		};
+		const watchImpl = asFsWatchStub(watchStub);
 		const store = new FileActivityStore({ rootDir: stateRoot, watch: watchImpl, debounceMs: 5, pollMs: 1_000 });
 		store.bindSession("session-a");
 		store.bindSession("session-b");
@@ -163,6 +169,8 @@ describe("FileActivityStore", () => {
 		const seen: number[] = [];
 		store.subscribe((snapshot) => seen.push(snapshot.revision));
 		const path = activityPaths("session-a", stateRoot).feedFile;
+		// SAFETY: the fixture feed file was just written by this test from a known document shape.
+		// oxlint-disable-next-line anti-slop/no-unsafe-dictionary-type -- the parsed document is intentionally open for the mutation below.
 		const document = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
 		atomicWritePrivateJson(path, { ...document, revision: 99, updatedAt: 99 });
 		await new Promise<void>((resolve) => setTimeout(resolve, 80));
@@ -202,6 +210,8 @@ describe("FileActivityStore", () => {
 
 		const resumed = new FileActivityStore({ rootDir: stateRoot });
 		expect(resumed.bindSession("session-shared").expansion).toEqual({ "activity-a": true, "activity-b": true });
+		// SAFETY: the UI document was written by the resumed store above with a known schema.
+		// oxlint-disable-next-line anti-slop/no-unsafe-dictionary-type -- only loose toMatchObject access is needed.
 		const persisted = JSON.parse(readFileSync(activityPaths("session-shared", stateRoot).uiFile, "utf8")) as Record<string, unknown>;
 		expect(persisted).toMatchObject({ revision: 2, expansion: { "activity-a": true, "activity-b": true } });
 		resumed.dispose();
@@ -258,11 +268,12 @@ describe("FileActivityStore", () => {
 		const stateRoot = root();
 		let closed = 0;
 		let callback: (() => void) | undefined;
-		const watchImpl = ((_path: string, listener: () => void) => {
+		const watchStub = (_path: string, listener: () => void) => {
 			callback = listener;
 			const watcher = { on: () => watcher, close: () => { closed += 1; } };
 			return watcher;
-		}) as unknown as typeof import("node:fs").watch;
+		};
+		const watchImpl = asFsWatchStub(watchStub);
 		const store = new FileActivityStore({ rootDir: stateRoot, watch: watchImpl, debounceMs: 5, pollMs: 1_000 });
 		store.bindSession("session-a");
 		callback?.();

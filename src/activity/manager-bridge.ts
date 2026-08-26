@@ -66,18 +66,23 @@ function ownerSessionId(ctx: ExtensionContext): string | undefined {
 	return ctx.sessionManager.getSessionId() || undefined;
 }
 
-function errorCode(error: unknown): string | undefined {
-	return typeof error === "object" && error !== null && "code" in error
-		? String((error as { code?: unknown }).code)
-		: undefined;
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- unwraps an arbitrary caught rejection; the instanceof check at each call site is the parse.
+function errorCode(error: Error): string | undefined {
+	// SAFETY: process.kill rejections are NodeJS.ErrnoException whose optional `code` carries the errno string.
+	const code = (error as NodeJS.ErrnoException).code;
+	return code === undefined || code === null ? undefined : String(code);
+}
+
+function errorMatches(cause: unknown, code: string): boolean {
+	return cause instanceof Error && errorCode(cause) === code;
 }
 
 function inspectProcessWriter(writer: ActivityFeedWriterIdentity): ActivityFeedWriterState {
 	try {
 		process.kill(writer.pid, 0);
 	} catch (error) {
-		if (errorCode(error) === "ESRCH") return "dead";
-		if (errorCode(error) !== "EPERM") return "unknown";
+		if (errorMatches(error, "ESRCH")) return "dead";
+		if (!errorMatches(error, "EPERM")) return "unknown";
 	}
 	const actualStartTime = captureProcessBirthTime(writer.pid);
 	if (actualStartTime === writer.processStartTime) return "alive";

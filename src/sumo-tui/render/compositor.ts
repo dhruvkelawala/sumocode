@@ -44,6 +44,8 @@ function isRenderable(node: SumoNode): node is RenderableNode {
 }
 
 function asHitTestNode(node: SumoNode): HitTestNode {
+	// SAFETY: hit testing only walks the renderable subtree; every node passed
+	// here was admitted by isRenderable (render/getHardwareCursor present).
 	return node as HitTestNode;
 }
 

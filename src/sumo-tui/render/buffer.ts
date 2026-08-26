@@ -17,7 +17,9 @@ interface TextSegmenter {
 	segment(input: string): Iterable<{ segment: string }>;
 }
 
-const SEGMENTER_CTOR = (Intl as unknown as {
+// SAFETY: Intl.Segmenter is only available on newer runtimes; the constructor
+// is feature-detected here and callers fall back to whole-string segmentation.
+const SEGMENTER_CTOR = (Intl as {
 	Segmenter?: new (locale: string | undefined, options: { granularity: "grapheme" }) => TextSegmenter;
 }).Segmenter;
 
@@ -61,7 +63,7 @@ export class CellBuffer {
 		this.chars.fill(32);
 	}
 
-	public getDimensions(): { rows: number; cols: number } {
+	public getDimensions() {
 		return { rows: this.rows, cols: this.cols };
 	}
 
@@ -308,6 +310,7 @@ export class CellBuffer {
 		const uriStart = payload.indexOf(";", 2);
 		if (uriStart === -1) return;
 		const uri = payload.slice(uriStart + 1);
+		// oxlint-disable-next-line no-control-regex -- intentional control-byte check to reject hyperlinks containing raw control characters
 		style.hyperlink = uri.length > 0 && !/[\x00-\x1f\x7f]/.test(uri) ? uri : undefined;
 	}
 

@@ -51,8 +51,13 @@ function modelLabel(model: ModelIdentity): string {
 	return `${model.provider}/${model.id}`;
 }
 
+function isModelIdentityString(model: ModelIdentity | string): model is string {
+	return typeof model === "string";
+}
+
 function currentModelLabel(currentModel?: ModelIdentity | string): string | undefined {
-	return typeof currentModel === "string" ? currentModel : currentModel ? modelLabel(currentModel) : undefined;
+	if (currentModel === undefined) return undefined;
+	return isModelIdentityString(currentModel) ? currentModel : modelLabel(currentModel);
 }
 
 export function modelOptionsFrom(models: readonly RpcAvailableModel[], currentModel?: ModelIdentity | string): RpcModelOption[] {

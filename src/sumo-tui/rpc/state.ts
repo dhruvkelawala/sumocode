@@ -1,4 +1,4 @@
-import type { AgentSessionEvent, RpcSessionState } from "@earendil-works/pi-coding-agent";
+import type { AgentSessionEvent, RpcSessionState, SessionStats } from "@earendil-works/pi-coding-agent";
 import type { CompactionReason } from "../../compaction-state.js";
 
 export interface RpcHostChromeState {
@@ -39,28 +39,46 @@ export interface RpcHostChromeState {
 	readonly costUsd: number;
 }
 
-type ModelIdentityLike = { provider?: unknown; id?: unknown } | undefined;
+type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
+
+type ModelIdentityLike = { provider?: JsonValue; id?: JsonValue } | undefined;
+
+function isString(value: JsonValue | undefined): value is string {
+	return typeof value === "string";
+}
+
+function isJsonObject(value: JsonValue | undefined): value is { [key: string]: JsonValue } {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
 
 function modelLabelFromModel(model: ModelIdentityLike): string | undefined {
-	if (!model || typeof model.id !== "string") return undefined;
-	return typeof model.provider === "string" ? `${model.provider}/${model.id}` : model.id;
+	// SAFETY: model comes from RPC payloads of varying shape; every field read
+	// below goes through shape-validating guards.
+	const record = isJsonObject(model as JsonValue) ? (model as { [key: string]: JsonValue }) : undefined;
+	if (!record) return undefined;
+	const id = record["id"];
+	const provider = record["provider"];
+	if (!isString(id)) return undefined;
+	return isString(provider) ? `${provider}/${id}` : id;
 }
 
 function modelLabelFrom(state: RpcSessionState): string | undefined {
+	// SAFETY: RpcSessionState.model comes from Pi's own get_state payload and is
+	// only read field-by-field behind isString validation below.
 	return modelLabelFromModel(state.model as ModelIdentityLike);
 }
 
-function eventType(event: unknown): string | undefined {
-	return typeof (event as { type?: unknown }).type === "string" ? (event as { type: string }).type : undefined;
+function eventType(event: JsonValue): string | undefined {
+	return isJsonObject(event) && isString(event["type"]) ? event["type"] : undefined;
 }
 
-function compactionReasonFromEvent(event: unknown): CompactionReason | undefined {
-	const value = (event as { reason?: unknown }).reason;
+function compactionReasonFromEvent(event: JsonValue): CompactionReason | undefined {
+	const value = isJsonObject(event) ? event["reason"] : undefined;
 	return value === "manual" || value === "threshold" || value === "overflow" ? value : undefined;
 }
 
-function stringEntries(value: unknown): string[] {
-	return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string") : [];
+function stringEntries(value: JsonValue | undefined): string[] {
+	return Array.isArray(value) ? value.filter(isString) : [];
 }
 
 export class RpcHostStateStore {
@@ -83,11 +101,10 @@ export class RpcHostStateStore {
 	 * leaves `hydrated` and every other session field untouched.
 	 */
 	public seedChrome(chrome: { readonly modelLabel?: string; readonly thinkingLevel?: string }): RpcHostChromeState {
-		this.state = {
-			...this.state,
-			...(chrome.modelLabel !== undefined ? { modelLabel: chrome.modelLabel } : {}),
-			...(chrome.thinkingLevel !== undefined ? { thinkingLevel: chrome.thinkingLevel } : {}),
-		};
+		const next = { ...this.state };
+		if (chrome.modelLabel !== undefined) next.modelLabel = chrome.modelLabel;
+		if (chrome.thinkingLevel !== undefined) next.thinkingLevel = chrome.thinkingLevel;
+		this.state = next;
 		return this.getSnapshot();
 	}
 
@@ -115,40 +132,32 @@ export class RpcHostStateStore {
 		return this.getSnapshot();
 	}
 
-	public hydrateFromSessionStats(stats: unknown): RpcHostChromeState {
-		const record = typeof stats === "object" && stats !== null ? stats as Record<string, unknown> : {};
-		const tokens = typeof record.tokens === "object" && record.tokens !== null ? record.tokens as Record<string, unknown> : {};
-		const contextUsage = typeof record.contextUsage === "object" && record.contextUsage !== null
-			? record.contextUsage as Record<string, unknown>
-			: undefined;
-		const contextTokens = typeof contextUsage?.tokens === "number"
-			? contextUsage.tokens
-			: typeof tokens.total === "number"
-				? tokens.total
-				: this.state.contextTokens;
-		const contextWindow = typeof contextUsage?.contextWindow === "number"
-			? contextUsage.contextWindow
-			: this.state.contextWindow;
-		const messageCount = typeof record.totalMessages === "number" ? record.totalMessages : this.state.messageCount;
+	public hydrateFromSessionStats(stats: SessionStats | undefined): RpcHostChromeState {
+		const contextTokens = stats?.contextUsage?.tokens ?? stats?.tokens.total ?? this.state.contextTokens;
+		const contextWindow = stats?.contextUsage?.contextWindow ?? this.state.contextWindow;
+		const messageCount = stats?.totalMessages ?? this.state.messageCount;
 		this.state = this.withComposedQueue({
 			...this.state,
 			messageCount,
 			hasMessages: messageCount > 0,
 			contextTokens,
 			contextWindow,
-			costUsd: typeof record.cost === "number" ? record.cost : this.state.costUsd,
+			costUsd: stats?.cost ?? this.state.costUsd,
 		});
 		return this.getSnapshot();
 	}
 
 	public handleAgentEvent(event: AgentSessionEvent | unknown): RpcHostChromeState {
-		const type = eventType(event);
+		// SAFETY: agent events arrive from the RPC socket and may be any shape;
+		// every field below is read through shape-validating guards.
+		const payload = event as JsonValue;
+		const type = eventType(payload);
 		switch (type) {
 			case "agent_start":
 				this.state = { ...this.state, isStreaming: true, lastEventType: type };
 				break;
 			case "agent_end": {
-				const messages = (event as { messages?: unknown }).messages;
+				const messages = isJsonObject(payload) ? payload["messages"] : undefined;
 				const messageCount = Array.isArray(messages) ? messages.length : this.state.messageCount;
 				this.state = this.withComposedQueue({
 					...this.state,
@@ -160,13 +169,14 @@ export class RpcHostStateStore {
 				break;
 			}
 			case "compaction_start":
-				this.state = { ...this.state, isCompacting: true, compactionReason: compactionReasonFromEvent(event), lastEventType: type };
+				this.state = { ...this.state, isCompacting: true, compactionReason: compactionReasonFromEvent(payload), lastEventType: type };
 				break;
 			case "compaction_end":
 				this.state = { ...this.state, isCompacting: false, compactionReason: undefined, lastEventType: type };
 				break;
 			case "queue_update": {
-				const { steering, followUp } = event as { steering?: unknown; followUp?: unknown };
+				const steering = isJsonObject(payload) ? payload["steering"] : undefined;
+				const followUp = isJsonObject(payload) ? payload["followUp"] : undefined;
 				this.piQueuedMessages = [...stringEntries(steering), ...stringEntries(followUp)];
 				this.state = this.withComposedQueue({
 					...this.state,
@@ -176,13 +186,13 @@ export class RpcHostStateStore {
 				break;
 			}
 			case "session_info_changed":
-				this.state = { ...this.state, sessionName: (event as { name?: string }).name, lastEventType: type };
+				this.state = { ...this.state, sessionName: isJsonObject(payload) && isString(payload["name"]) ? payload["name"] : undefined, lastEventType: type };
 				break;
 			case "thinking_level_changed":
-				this.state = { ...this.state, thinkingLevel: (event as { level?: string }).level, lastEventType: type };
+				this.state = { ...this.state, thinkingLevel: isJsonObject(payload) && isString(payload["level"]) ? payload["level"] : undefined, lastEventType: type };
 				break;
 			case "tool_execution_update":
-				if ((event as { toolName?: unknown }).toolName === "task" && "partialResult" in (event as Record<string, unknown>)) {
+				if (isJsonObject(payload) && payload["toolName"] === "task" && "partialResult" in payload) {
 					this.state = { ...this.state, taskPartialCount: this.state.taskPartialCount + 1, lastEventType: type };
 				}
 				break;
@@ -217,11 +227,10 @@ export class RpcHostStateStore {
 	 */
 	public applyModelChange(model: ModelIdentityLike, thinkingLevel?: string): RpcHostChromeState {
 		const modelLabel = modelLabelFromModel(model);
-		this.state = {
-			...this.state,
-			...(modelLabel !== undefined ? { modelLabel } : {}),
-			...(thinkingLevel !== undefined ? { thinkingLevel } : {}),
-		};
+		const next = { ...this.state };
+		if (modelLabel !== undefined) next.modelLabel = modelLabel;
+		if (thinkingLevel !== undefined) next.thinkingLevel = thinkingLevel;
+		this.state = next;
 		return this.getSnapshot();
 	}
 

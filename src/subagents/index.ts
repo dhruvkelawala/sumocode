@@ -1,13 +1,14 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { activityFromSubagentSnapshot } from "../activity/subagent-adapter.js";
-import { renderSubagentStatusRow } from "../subagent-status-row.js";
+import { renderSubagentStatusRow, type SubagentStatusRunningEntry } from "../subagent-status-row.js";
 import { BUILT_IN_TOOLS, getBuiltInToolsFromActiveTools } from "../native-task-config.js";
 import { getTerminalHost } from "../terminal-host/index.js";
+import type { TerminalHost } from "../terminal-host/types.js";
 import { spawnPaneChild } from "./backend-pane.js";
 import { spawnPiChild } from "./backend-pi.js";
 import { createDeferredResultDelivery, type DeliveryPayload } from "./delivery.js";
 import type { SubagentSnapshot } from "./domain.js";
-import { SubagentManager } from "./manager.js";
+import { SubagentManager, type SubagentManagerDependencies } from "./manager.js";
 import { buildSubagentResultMessage } from "./prompt.js";
 import { registerSubagentTools } from "./tools.js";
 
@@ -15,6 +16,17 @@ export { SubagentManager } from "./manager.js";
 export type { AtCapacityDetails, SpawnSubagentTask } from "./manager.js";
 
 const SUBAGENT_STATUS_WIDGET_KEY = "sumocode-subagents";
+
+/** Delivery `details` contract for a settled subagent result. */
+interface SettledSubagentDetails {
+	id: string;
+	title: string;
+	status: SubagentSnapshot["status"];
+	roleId?: string;
+	activity: ReturnType<typeof activityFromSubagentSnapshot>;
+	manifest: SubagentSnapshot["manifest"];
+	pane: SubagentSnapshot["pane"];
+}
 
 const settledPayload = (snapshot: SubagentSnapshot): DeliveryPayload => {
 	const result = buildSubagentResultMessage({
@@ -31,25 +43,35 @@ const settledPayload = (snapshot: SubagentSnapshot): DeliveryPayload => {
 		: undefined;
 	const roleLine = snapshot.roleId ? `Role: ${snapshot.roleId}` : undefined;
 	const metadata = [roleLine, paneLine].filter((line): line is string => line !== undefined).join("\n");
+	const details: SettledSubagentDetails = {
+		id: snapshot.id,
+		title: snapshot.title,
+		status: snapshot.status,
+		activity: activityFromSubagentSnapshot(snapshot),
+		manifest: snapshot.manifest,
+		pane: snapshot.pane,
+	};
+	if (snapshot.roleId !== undefined) details.roleId = snapshot.roleId;
 	return {
 		id: snapshot.id,
 		title: snapshot.title,
 		status: snapshot.status,
 		content: metadata ? `${result}\n\n${metadata}` : result,
-		details: {
-			id: snapshot.id,
-			title: snapshot.title,
-			status: snapshot.status,
-			...(snapshot.roleId ? { roleId: snapshot.roleId } : {}),
-			activity: activityFromSubagentSnapshot(snapshot),
-			manifest: snapshot.manifest,
-			...(snapshot.pane ? { pane: snapshot.pane } : {}),
-		},
+		details,
 	};
 };
 
-export function installSubagents(pi: ExtensionAPI): SubagentManager {
-	const host = getTerminalHost();
+export interface SubagentsInstallOptions {
+	readonly terminalHost?: TerminalHost;
+	readonly spawnPaneChild?: typeof spawnPaneChild;
+	readonly spawnPiChild?: typeof spawnPiChild;
+	readonly managerDependencies?: SubagentManagerDependencies;
+}
+
+export function installSubagents(pi: ExtensionAPI, options: SubagentsInstallOptions = {}): SubagentManager {
+	const host = options.terminalHost ?? getTerminalHost();
+	const spawnPane = options.spawnPaneChild ?? spawnPaneChild;
+	const spawnHeadless = options.spawnPiChild ?? spawnPiChild;
 	const manager = new SubagentManager((task) => {
 		if (task.visible) {
 			if (!task.placement) {
@@ -79,7 +101,7 @@ export function installSubagents(pi: ExtensionAPI): SubagentManager {
 			// toward LESS access, never more — acceptable until pi grows a
 			// built-ins-only restriction flag.
 			const paneNarrowed = task.builtInTools !== undefined && paneBuiltIn.length < BUILT_IN_TOOLS.length;
-			return spawnPaneChild({
+			return spawnPane({
 				prompt: task.prompt,
 				name: task.title,
 				cwd: task.cwd,
@@ -94,7 +116,7 @@ export function installSubagents(pi: ExtensionAPI): SubagentManager {
 				placement: task.placement,
 			});
 		}
-		return spawnPiChild({
+		return spawnHeadless({
 			prompt: task.prompt,
 			cwd: task.cwd,
 			model: task.model,
@@ -111,6 +133,7 @@ export function installSubagents(pi: ExtensionAPI): SubagentManager {
 		// with it so the first child is actually beside the operator instead of
 		// disappearing into a background `subagents` tab.
 		initialVisibleTabId: host.kind === "herdr" ? process.env.HERDR_TAB_ID : undefined,
+		...options.managerDependencies,
 	});
 	const delivery = createDeferredResultDelivery();
 	const observedSettledIds = new Set<string>();
@@ -139,12 +162,16 @@ export function installSubagents(pi: ExtensionAPI): SubagentManager {
 			const now = Date.now();
 			const running = active
 				.filter((snapshot) => snapshot.status === "running")
-				.map((snapshot) => ({
-					id: snapshot.id,
-					...(snapshot.roleId ? { roleId: snapshot.roleId } : {}),
-					title: snapshot.title,
-					ageMs: Math.max(0, now - snapshot.createdAt),
-				}));
+				.map((snapshot) => {
+					type MutableEntry = { -readonly [K in keyof SubagentStatusRunningEntry]: SubagentStatusRunningEntry[K] };
+					const entry: MutableEntry = {
+						id: snapshot.id,
+						title: snapshot.title,
+						ageMs: Math.max(0, now - snapshot.createdAt),
+					};
+					if (snapshot.roleId !== undefined) entry.roleId = snapshot.roleId;
+					return entry;
+				});
 			const queuedCount = active.length - running.length;
 			const render = (width: number) => renderSubagentStatusRow({ width, running, queuedCount });
 			// Pi RPC supports setWidget string arrays only; component factories are

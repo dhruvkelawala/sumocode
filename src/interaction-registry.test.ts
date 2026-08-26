@@ -16,7 +16,11 @@ describe("InteractionRegistry", () => {
 	it("registers commands once and reports duplicate ownership diagnostics", () => {
 		const pi = buildPiStub();
 		const reported: InteractionConflictDiagnostic[][] = [];
-		const registry = createInteractionRegistry(pi as never, (diagnostics) => reported.push([...diagnostics]));
+		const registry = createInteractionRegistry(
+			// SAFETY: the stub implements the on/register* surface the registry reads.
+			pi as never,
+			(diagnostics) => reported.push([...diagnostics]),
+		);
 
 		registry.install("first", (api) => {
 			api.registerCommand("sumo:memory", { description: "first", handler: async () => undefined });
@@ -44,7 +48,11 @@ describe("InteractionRegistry", () => {
 	it("registers shortcuts once and reports duplicate ownership diagnostics", () => {
 		const pi = buildPiStub();
 		const diagnostics: InteractionConflictDiagnostic[] = [];
-		const registry = createInteractionRegistry(pi as never, (next) => diagnostics.push(...next));
+		const registry = createInteractionRegistry(
+			// SAFETY: the stub implements the on/register* surface the registry reads.
+			pi as never,
+			(next) => diagnostics.push(...next),
+		);
 
 		registry.install("palette", (api) => {
 			api.registerShortcut("ctrl+/", { description: "palette", handler: () => undefined });
@@ -69,6 +77,7 @@ describe("InteractionRegistry", () => {
 	it("installs SumoCode commands and keybindings through one registry", () => {
 		const pi = buildPiStub();
 		const diagnostics: InteractionConflictDiagnostic[] = [];
+		// SAFETY: the stub implements the on/register* surface the installer reads.
 		const snapshot = installSumoInteractions(pi as never, { reporter: (next) => diagnostics.push(...next) });
 
 		expect(diagnostics).toEqual([]);

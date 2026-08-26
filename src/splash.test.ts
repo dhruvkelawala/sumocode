@@ -7,6 +7,7 @@ import {
 	type SplashSnapshot,
 } from "./splash.js";
 
+// oxlint-disable-next-line no-control-regex -- intentional ESC/control-byte match to strip ANSI in captured output
 const ANSI = /\u001b\[[0-9;]*m/g;
 const stripAnsi = (s: string): string => s.replace(ANSI, "");
 
@@ -31,6 +32,7 @@ describe("renderSplash", () => {
 
 		// All wordmark rows are present in the rendered output.
 		for (const row of SUMOCODE_WORDMARK) {
+			// oxlint-disable-next-line no-control-regex -- intentional ESC/control-byte match to strip ANSI in captured output
 			expect(plain).toContain(row.replace(/\u001b\[[0-9;]*m/g, ""));
 		}
 		// #D97706 -> 217;119;6
@@ -39,6 +41,7 @@ describe("renderSplash", () => {
 
 	it("renders the BSH cat face above the wordmark", () => {
 		const lines = renderSplash(snapshot(), 160).map(stripAnsi);
+		// oxlint-disable-next-line no-control-regex -- intentional ESC/control-byte match to strip ANSI in captured output
 		const wordmarkRow = lines.findIndex((line) => line.includes(SUMOCODE_WORDMARK[0]!.replace(/\u001b\[[0-9;]*m/g, "")));
 		const faceCellRows = lines.slice(0, wordmarkRow).filter((line) => /[\u2580-\u259F]/.test(line));
 

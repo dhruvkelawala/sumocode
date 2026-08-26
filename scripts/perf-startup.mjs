@@ -51,6 +51,7 @@ async function readDiagnosticEvents(path) {
 					return undefined;
 				}
 			})
+			// oxlint-disable-next-line anti-slop/no-runtime-typeof -- guard on parsed diagnostics JSONL events
 			.filter((event) => event && typeof event === "object");
 	} catch {
 		return [];
@@ -59,6 +60,7 @@ async function readDiagnosticEvents(path) {
 
 function eventElapsedMs(events, eventName, startWallMs) {
 	const event = events.find((entry) => entry?.event === eventName);
+	// oxlint-disable-next-line anti-slop/no-runtime-typeof -- timestamp check on parsed diagnostics event
 	return typeof event?.ts === "number" ? Math.max(0, event.ts - startWallMs) : undefined;
 }
 

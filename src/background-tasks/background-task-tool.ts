@@ -9,6 +9,7 @@ interface ProcessTerminalLifecycle {
 const PROCESS_LIFECYCLE_KEY = Symbol.for("@dhruvkelawala/sumocode/terminal-process-lifecycle");
 
 function processLifecycle(): ProcessTerminalLifecycle {
+	// SAFETY: the symbol key is namespaced to this extension, so only this module ever stores a Partial<ProcessTerminalLifecycle> there.
 	const global = globalThis as typeof globalThis & {
 		[PROCESS_LIFECYCLE_KEY]?: Partial<ProcessTerminalLifecycle>;
 	};
@@ -18,6 +19,7 @@ function processLifecycle(): ProcessTerminalLifecycle {
 	// writer-token map added by the Activity lease integration.
 	lifecycle.ownerSessionIds ??= new Set<string>();
 	lifecycle.activityWriterTokens ??= new Map<string, string>();
+	// SAFETY: both optional fields were just normalized above, so the partial shape is now complete.
 	return lifecycle as ProcessTerminalLifecycle;
 }
 
@@ -54,8 +56,7 @@ export function installBackgroundTasks(
 	});
 
 	pi.on("session_shutdown", async (event, ctx) => {
-		const reason = (event as { reason?: string } | null | undefined)?.reason;
-		if (reason !== "quit") {
+		if (event.reason !== "quit") {
 			// Pi 0.80.6 recreates the extension factory/manager for /new, /resume,
 			// and /fork. Detach this invalidated instance's pollers without stopping
 			// durable children; the replacement manager adopts them from the store.

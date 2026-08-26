@@ -1,3 +1,4 @@
+import type { LovelyWebConfigPatch } from "./lovely-web-config.js";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readlinkSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -76,7 +77,9 @@ describe("Lovely Web config helpers", () => {
 		const path = updateLovelyWebConfigValue("user", cwd, "webFetchProvider", "firecrawl", env);
 		updateLovelyWebConfigValue("user", cwd, "firecrawlApiKey", "", env);
 
-		const written = JSON.parse(await readFile(path, "utf8")) as Record<string, unknown>;
+		// SAFETY: the file was just written by updateLovelyWebConfigValue and is
+		// only compared structurally via toEqual below.
+		const written = JSON.parse(await readFile(path, "utf8")) as LovelyWebConfigPatch;
 		expect(written).toEqual({ unknownFutureKey: "keep", webFetchProvider: "firecrawl" });
 	});
 

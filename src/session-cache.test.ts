@@ -16,12 +16,16 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 type Branch = ReturnType<ExtensionContext["sessionManager"]["getBranch"]>;
 
 function makeCtx(branch: ReadonlyArray<unknown> = [], cwd = "/tmp"): ExtensionContext {
+	// SAFETY: the double implements the sessionManager.getBranch surface the
+	// cache reads; other ExtensionContext members are not exercised here.
 	return {
 		cwd,
 		sessionManager: {
+			// SAFETY: the fixture branch is an array of message records; the cache
+			// only reads role/usage fields off each entry.
 			getBranch: vi.fn(() => branch as Branch),
-		} as unknown as ExtensionContext["sessionManager"],
-	} as unknown as ExtensionContext;
+		} as never,
+	} as never;
 }
 
 function assistantEntry(input: number, output: number, costTotal: number) {
@@ -56,7 +60,9 @@ describe("session-cache.getSessionUsage", () => {
 	it("does not re-walk the branch on subsequent calls within the same context", () => {
 		const branch = [assistantEntry(10, 5, 0.001)];
 		const ctx = makeCtx(branch);
-		const spy = ctx.sessionManager.getBranch as unknown as ReturnType<typeof vi.fn>;
+		// SAFETY: makeCtx wires getBranch through vi.fn; re-typing it lets the
+		// spy assertions below observe the call count.
+		const spy = ctx.sessionManager.getBranch as ReturnType<typeof vi.fn>;
 
 		getSessionUsage(ctx);
 		getSessionUsage(ctx);
@@ -68,7 +74,9 @@ describe("session-cache.getSessionUsage", () => {
 
 	it("re-walks after invalidateSessionUsage", () => {
 		const ctx = makeCtx([assistantEntry(10, 5, 0.001)]);
-		const spy = ctx.sessionManager.getBranch as unknown as ReturnType<typeof vi.fn>;
+		// SAFETY: makeCtx wires getBranch through vi.fn; re-typing it lets the
+		// spy assertions below observe the call count.
+		const spy = ctx.sessionManager.getBranch as ReturnType<typeof vi.fn>;
 
 		getSessionUsage(ctx);
 		invalidateSessionUsage(ctx);

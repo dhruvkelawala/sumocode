@@ -181,8 +181,11 @@ describe("subagent Activity adapter", () => {
 	});
 
 	it("bounds huge operation arrays and deeply nested invocation envelopes", () => {
+		// SAFETY: the loop below rebuilds `deep` as nested wrapper objects; its static type must stay open.
+		// oxlint-disable anti-slop/no-known-value-widening -- the nesting depth is only known at runtime.
 		let deep: unknown = { leaf: "visible" };
 		for (let index = 0; index < 10_000; index += 1) deep = { next: deep };
+		// oxlint-enable anti-slop/no-known-value-widening
 		const activities = Array.from({ length: 100_000 }, (_, index) => ({
 			id: `subagent:sa-${index + 1}`,
 			kind: "subagent",
@@ -211,6 +214,7 @@ describe("subagent Activity adapter", () => {
 			done: index !== 18,
 			isError: false,
 		}));
+		// SAFETY: snapshot() builds a full SubagentSnapshot; liveTools fixtures match the runtime shape.
 		const input = snapshot({ liveTools: liveTools as never });
 		const first = activityFromSubagentSnapshot(input);
 		const second = activityFromSubagentSnapshot(input);

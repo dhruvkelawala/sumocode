@@ -1,3 +1,5 @@
+// oxlint-disable anti-slop/no-unknown-parameters, anti-slop/no-unsafe-dictionary-type -- durable feed boundary: lease files and producer payloads are untrusted JSON,
+// so `unknown` inputs and open records are this module's parsing contract.
 import { randomUUID } from "node:crypto";
 import { existsSync, linkSync, readdirSync, renameSync, rmSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
@@ -62,32 +64,64 @@ export interface ActivityFeedPublisherOptions {
 	readonly allowUnleasedWritesForTests?: boolean;
 }
 
+function isStringValue(value: unknown): value is string {
+	return typeof value === "string";
+}
+
+/** Writable mirror used to assemble snapshots field-by-field before returning them. */
+type MutableActivitySnapshot = { -readonly [K in keyof ActivitySnapshot]: ActivitySnapshot[K] };
+
 function positiveInteger(value: unknown): value is number {
 	return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
 }
 
-function recordOf(value: unknown): Record<string, unknown> | undefined {
-	return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+function isRecordLike(value: unknown): value is Record<string, unknown> {
+	return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-function errorCode(error: unknown): string | undefined {
-	return typeof error === "object" && error !== null && "code" in error
-		? String((error as { code?: unknown }).code)
-		: undefined;
+function recordOf(value: unknown): Record<string, unknown> | undefined {
+	return isRecordLike(value) ? value : undefined;
+}
+
+function errorCode(error: Error): string | undefined {
+	// SAFETY: the fs calls here reject with NodeJS.ErrnoException whose optional `code` carries the errno string.
+	const code = (error as NodeJS.ErrnoException).code;
+	return code === undefined || code === null ? undefined : String(code);
+}
+
+/** Preserve the original fallback semantics for values thrown outside Error. */
+function errorMatches(error: unknown, code: string): boolean {
+	return error instanceof Error && errorCode(error) === code;
 }
 
 function parseWriterIdentity(value: unknown): ActivityFeedWriterIdentity | undefined {
 	const record = recordOf(value);
 	if (
 		!record || record.schemaVersion !== ACTIVITY_WRITER_SCHEMA_VERSION ||
-		typeof record.token !== "string" || !record.token ||
-		!positiveInteger(record.pid) || typeof record.processStartTime !== "string" || !record.processStartTime
+		!isStringValue(record.token) || !record.token ||
+		!positiveInteger(record.pid) || !isStringValue(record.processStartTime) || !record.processStartTime
 	) return undefined;
 	return { token: record.token, pid: record.pid, processStartTime: record.processStartTime };
 }
 
-function writerDocument(writer: ActivityFeedWriterIdentity): Record<string, unknown> {
-	return { schemaVersion: ACTIVITY_WRITER_SCHEMA_VERSION, ...writer };
+type MutableSourceBody = {
+	-readonly [K in keyof Extract<ActivityBody, { kind: "source" }>]: Extract<ActivityBody, { kind: "source" }>[K];
+};
+
+interface ResultSummary {
+	summary?: string;
+	error?: string;
+}
+
+interface WriterDocument {
+	schemaVersion: typeof ACTIVITY_WRITER_SCHEMA_VERSION;
+	token: string;
+	pid: number;
+	processStartTime: string;
+}
+
+function writerDocument(writer: ActivityFeedWriterIdentity): WriterDocument {
+	return { schemaVersion: ACTIVITY_WRITER_SCHEMA_VERSION, token: writer.token, pid: writer.pid, processStartTime: writer.processStartTime };
 }
 
 function sameWriter(left: ActivityFeedWriterIdentity, right: ActivityFeedWriterIdentity): boolean {
@@ -119,7 +153,7 @@ function restoreTakeoverLease(path: string, writerFile: string): ActivityFeedWri
 	try {
 		linkSync(path, writerFile);
 	} catch (error) {
-		if (errorCode(error) !== "EEXIST") throw error;
+		if (!errorMatches(error, "EEXIST")) throw error;
 	}
 	const canonical = readWriter(writerFile);
 	if (canonical) rmSync(path, { force: true });
@@ -186,7 +220,7 @@ function claimWriter(
 				writePrivateJsonExclusive(writerFile, writerDocument(candidate));
 				return { owned: true, writerDeathProven: abandonedWriterDeathProven };
 			} catch (error) {
-				if (errorCode(error) === "EEXIST") continue;
+				if (errorMatches(error, "EEXIST")) continue;
 				throw error;
 			}
 		}
@@ -199,7 +233,7 @@ function claimWriter(
 		try {
 			renameSync(writerFile, takeover);
 		} catch (error) {
-			if (errorCode(error) === "ENOENT") continue;
+			if (errorMatches(error, "ENOENT")) continue;
 			throw error;
 		}
 		const moved = readWriter(takeover);
@@ -215,7 +249,7 @@ function claimWriter(
 			rmSync(takeover, { force: true });
 			return { owned: true, writerDeathProven: previousWriterDead || abandonedWriterDeathProven };
 		} catch (error) {
-			if (errorCode(error) !== "EEXIST") throw error;
+			if (!errorMatches(error, "EEXIST")) throw error;
 		}
 	}
 	return { owned: false, writerDeathProven: false };
@@ -251,12 +285,10 @@ function sanitizeBody(body: ActivityBody | undefined): ActivityBody | undefined 
 	const text = boundedOutputTail(redactActivitySecrets(body.text));
 	if (body.kind === "terminal") return { kind: "terminal", text };
 	if (body.kind === "source") {
-		return {
-			kind: "source",
-			text,
-			...(body.startLine === undefined ? {} : { startLine: body.startLine }),
-			...(body.totalLines === undefined ? {} : { totalLines: body.totalLines }),
-		};
+		const source: MutableSourceBody = { kind: "source", text };
+		if (body.startLine !== undefined) source.startLine = body.startLine;
+		if (body.totalLines !== undefined) source.totalLines = body.totalLines;
+		return source;
 	}
 	return { kind: body.kind, text };
 }
@@ -274,36 +306,44 @@ export function sanitizeActivityForFeed(
 	const body = sanitizeBody(activity.body);
 	const summary = activity.result?.summary === undefined ? undefined : boundedOutputTail(redactActivitySecrets(activity.result.summary));
 	const error = activity.result?.error === undefined ? undefined : boundedOutputTail(redactActivitySecrets(activity.result.error));
-	return {
+	const leading: Partial<MutableActivitySnapshot> = {};
+	if (activity.sourceId) leading.sourceId = boundedHead(activity.sourceId, MAX_ID_CHARS);
+	const projected: MutableActivitySnapshot = {
 		id: boundedHead(activity.id, MAX_ID_CHARS),
-		...(activity.sourceId ? { sourceId: boundedHead(activity.sourceId, MAX_ID_CHARS) } : {}),
+		...leading,
 		kind: activity.kind,
 		title: boundedSafeHead(activity.title, MAX_TITLE_CHARS) || "activity",
 		status: activity.status,
-		// Invocation/command payloads can embed credentials in otherwise ordinary
-		// strings. Terminal subjects are working directories, so omit them too;
-		// other Activity kinds use product-owned labels rather than shell context.
-		...(activity.kind === "terminal" || activity.subject === undefined ? {} : { subject: boundedSafeHead(activity.subject, MAX_SUBJECT_CHARS) }),
-		...(activity.currentStep === undefined ? {} : { currentStep: boundedSafeHead(redactActivitySecrets(activity.currentStep), MAX_SUBJECT_CHARS) }),
-		...(outputTail === undefined ? {} : { outputTail }),
-		...(body === undefined ? {} : { body }),
-		...(activeTools && activeTools.length > 0 ? { activeTools } : {}),
-		...(summary !== undefined || error !== undefined ? { result: { ...(summary === undefined ? {} : { summary }), ...(error === undefined ? {} : { error }) } } : {}),
-		ownerSessionId,
-		...(activity.createdAt === undefined ? {} : { createdAt: activity.createdAt }),
-		...(activity.updatedAt === undefined ? {} : { updatedAt: activity.updatedAt }),
-		...(activity.settledAt === undefined ? {} : { settledAt: activity.settledAt }),
-		...(activity.model === undefined ? {} : { model: boundedSafeHead(activity.model, 256) }),
-		...(activity.thinking === undefined ? {} : { thinking: boundedSafeHead(activity.thinking, 64) }),
-		...(activity.metrics === undefined ? {} : { metrics: { ...activity.metrics } }),
 	};
+	// Invocation/command payloads can embed credentials in otherwise ordinary
+	// strings. Terminal subjects are working directories, so omit them too;
+	// other Activity kinds use product-owned labels rather than shell context.
+	if (activity.kind !== "terminal" && activity.subject !== undefined) projected.subject = boundedSafeHead(activity.subject, MAX_SUBJECT_CHARS);
+	if (activity.currentStep !== undefined) projected.currentStep = boundedSafeHead(redactActivitySecrets(activity.currentStep), MAX_SUBJECT_CHARS);
+	if (outputTail !== undefined) projected.outputTail = outputTail;
+	if (body !== undefined) projected.body = body;
+	if (activeTools && activeTools.length > 0) projected.activeTools = activeTools;
+	if (summary !== undefined || error !== undefined) {
+		const resultSummary: ResultSummary = {};
+		if (summary !== undefined) resultSummary.summary = summary;
+		if (error !== undefined) resultSummary.error = error;
+		projected.result = resultSummary;
+	}
+	projected.ownerSessionId = ownerSessionId;
+	if (activity.createdAt !== undefined) projected.createdAt = activity.createdAt;
+	if (activity.updatedAt !== undefined) projected.updatedAt = activity.updatedAt;
+	if (activity.settledAt !== undefined) projected.settledAt = activity.settledAt;
+	if (activity.model !== undefined) projected.model = boundedSafeHead(activity.model, 256);
+	if (activity.thinking !== undefined) projected.thinking = boundedSafeHead(activity.thinking, 64);
+	if (activity.metrics !== undefined) projected.metrics = { ...activity.metrics };
+	return projected;
 }
 
 export function parseActivityFeedDocument(value: unknown, expectedOwnerSessionId?: string): ActivityFeedDocument | undefined {
 	const record = recordOf(value);
 	if (
 		!record || record.schemaVersion !== ACTIVITY_SCHEMA_VERSION ||
-		typeof record.ownerSessionId !== "string" || !record.ownerSessionId ||
+		!isStringValue(record.ownerSessionId) || !record.ownerSessionId ||
 		(expectedOwnerSessionId !== undefined && record.ownerSessionId !== expectedOwnerSessionId) ||
 		!positiveInteger(record.revision) || !positiveInteger(record.updatedAt) ||
 		!Array.isArray(record.activities)
@@ -367,25 +407,28 @@ function budgetActivity(
 	const activeTools = maxChildren > 0
 		? activity.activeTools?.slice(0, maxChildren).map((child) => budgetActivity(child, maxOutputBytes, maxChildren, minimal))
 		: undefined;
-	return {
+	const leading: Partial<MutableActivitySnapshot> = {};
+	if (activity.sourceId) leading.sourceId = activity.sourceId;
+	const budgeted: MutableActivitySnapshot = {
 		id: activity.id,
+		...leading,
 		kind: activity.kind,
 		title: minimal ? boundedHead(activity.title, 128) : activity.title,
 		status: activity.status,
-		...(activity.sourceId ? { sourceId: activity.sourceId } : {}),
-		...(!minimal && activity.subject !== undefined ? { subject: activity.subject } : {}),
-		...(!minimal && activity.currentStep !== undefined ? { currentStep: activity.currentStep } : {}),
-		...(outputTail === undefined ? {} : { outputTail }),
-		...(activeTools && activeTools.length > 0 ? { activeTools } : {}),
-		...(!minimal && activity.result !== undefined ? { result: activity.result } : {}),
-		...(activity.ownerSessionId === undefined ? {} : { ownerSessionId: activity.ownerSessionId }),
-		...(activity.createdAt === undefined ? {} : { createdAt: activity.createdAt }),
-		...(activity.updatedAt === undefined ? {} : { updatedAt: activity.updatedAt }),
-		...(activity.settledAt === undefined ? {} : { settledAt: activity.settledAt }),
-		...(!minimal && activity.model !== undefined ? { model: activity.model } : {}),
-		...(!minimal && activity.thinking !== undefined ? { thinking: activity.thinking } : {}),
-		...(!minimal && activity.metrics !== undefined ? { metrics: activity.metrics } : {}),
 	};
+	if (!minimal && activity.subject !== undefined) budgeted.subject = activity.subject;
+	if (!minimal && activity.currentStep !== undefined) budgeted.currentStep = activity.currentStep;
+	if (outputTail !== undefined) budgeted.outputTail = outputTail;
+	if (activeTools && activeTools.length > 0) budgeted.activeTools = activeTools;
+	if (!minimal && activity.result !== undefined) budgeted.result = activity.result;
+	if (activity.ownerSessionId !== undefined) budgeted.ownerSessionId = activity.ownerSessionId;
+	if (activity.createdAt !== undefined) budgeted.createdAt = activity.createdAt;
+	if (activity.updatedAt !== undefined) budgeted.updatedAt = activity.updatedAt;
+	if (activity.settledAt !== undefined) budgeted.settledAt = activity.settledAt;
+	if (!minimal && activity.model !== undefined) budgeted.model = activity.model;
+	if (!minimal && activity.thinking !== undefined) budgeted.thinking = activity.thinking;
+	if (!minimal && activity.metrics !== undefined) budgeted.metrics = activity.metrics;
+	return budgeted;
 }
 
 /** Keep every retained record while shrinking optional presentation payloads to the reader's hard cap. */

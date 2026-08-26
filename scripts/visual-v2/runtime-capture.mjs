@@ -30,6 +30,7 @@ export async function captureRuntimeScenario(scenario) {
 			}
 			return result;
 		} catch (error) {
+			// oxlint-disable-next-line unicorn/no-useless-fallback-in-spread -- retry diagnostics may be absent
 			attemptDiagnostics.push({ attempt, message: error.message, ...(error.diagnostics ?? {}) });
 			lastError = error;
 			if (!error.retryable || attempt === maxAttempts) break;
@@ -223,6 +224,7 @@ function runtimeKeyBytes(value) {
 async function waitForOutputMatch(scenario, input, getOutput, hasExited) {
 	const timeoutMs = Math.max(1, Number(input.timeoutMs ?? 5000));
 	const pattern = input.pattern ?? input.value;
+	// oxlint-disable-next-line anti-slop/no-runtime-typeof -- input contract check on scenario wait spec
 	if (typeof pattern !== "string" || pattern.length === 0) {
 		throw new Error(`Runtime waitForOutput input in ${scenario.id} needs a non-empty pattern`);
 	}
@@ -278,6 +280,7 @@ function compilePatternList(scenario, patterns, field) {
 		throw new Error(`Runtime final-screen wait in ${scenario.id} ${field} must be an array`);
 	}
 	return patterns.map((pattern) => {
+		// oxlint-disable-next-line anti-slop/no-runtime-typeof -- entry contract check on scenario pattern list
 		if (typeof pattern !== "string" || pattern.length === 0) {
 			throw new Error(`Runtime final-screen wait in ${scenario.id} ${field} entries must be non-empty strings`);
 		}
@@ -393,8 +396,11 @@ export function findRejection(text, patterns) {
 
 function stripAnsi(value) {
 	return String(value)
+		// oxlint-disable-next-line eslint/no-control-regex -- intentional OSC ANSI sequence match
 		.replace(/\u001b\][^\u0007]*(?:\u0007|\u001b\\)/g, "")
+		// oxlint-disable-next-line eslint/no-control-regex -- intentional CSI ANSI sequence match
 		.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "")
+		// oxlint-disable-next-line eslint/no-control-regex -- intentional charset-select ANSI sequence match
 		.replace(/\u001b[()][A-Za-z0-9]/g, "")
 		.replace(/\r/g, "");
 }

@@ -7,8 +7,12 @@ import { safeValuePreview } from "../activity/domain.js";
 import { type BuiltInToolName, resolveTaskConfig } from "../native-task-config.js";
 import { isRecord, type TaskThinking, type ThinkingLevel } from "../native-task-params.js";
 
+/** Runtime string discriminator for decoded child-process payloads. */
+const isString = <T>(value: T): value is T & string => typeof value === "string";
+
 /** Fallback only — callers should thread the parent's active tool set through. */
-const DEFAULT_BUILT_IN_TOOLS: readonly BuiltInToolName[] = ["read", "bash", "edit", "write", "grep", "find", "ls"] as BuiltInToolName[];
+// SAFETY: every entry is a literal from the BuiltInToolName union.
+const DEFAULT_BUILT_IN_TOOLS = ["read", "bash", "edit", "write", "grep", "find", "ls"] as const satisfies readonly BuiltInToolName[];
 const PREVIEW_MAX = 160;
 const ERROR_MAX = 4096;
 
@@ -16,10 +20,11 @@ const CLAUDE_OAUTH_ADAPTER_PACKAGE = "pi-claude-oauth-adapter";
 
 function adapterEntryFromPackageDir(packageDir: string): string | undefined {
 	try {
+		// SAFETY: malformed manifests reject into the catch below; only the optional extensions list is read.
 		const manifest = JSON.parse(readFileSync(join(packageDir, "package.json"), "utf8")) as { pi?: { extensions?: unknown } };
 		const entries = manifest.pi?.extensions;
 		const first = Array.isArray(entries) ? entries[0] : undefined;
-		if (typeof first !== "string") return undefined;
+		if (!isString(first)) return undefined;
 		const entryPath = join(packageDir, first);
 		return existsSync(entryPath) ? entryPath : undefined;
 	} catch {
@@ -30,11 +35,13 @@ function adapterEntryFromPackageDir(packageDir: string): string | undefined {
 /** Local-checkout package sources from a Pi settings file that look like the adapter. */
 function adapterPathSourcesFromSettings(settingsPath: string): string[] {
 	try {
+		// SAFETY: malformed settings files reject into the catch below.
 		const settings = JSON.parse(readFileSync(settingsPath, "utf8")) as { packages?: unknown };
 		if (!Array.isArray(settings.packages)) return [];
+		// SAFETY: package entries may be plain strings or { source } objects.
 		const sources = settings.packages
-			.map((entry) => typeof entry === "string" ? entry : (entry as { source?: unknown })?.source)
-			.filter((source): source is string => typeof source === "string" && source.includes(CLAUDE_OAUTH_ADAPTER_PACKAGE));
+						.map((entry) => isString(entry) ? entry : (entry as { source?: unknown })?.source)
+			.filter((source): source is string => isString(source) && source.includes(CLAUDE_OAUTH_ADAPTER_PACKAGE));
 		return sources
 			.filter((source) => !source.startsWith("npm:") && !source.startsWith("git:") && !source.startsWith("http"))
 			.map((source) => {
@@ -112,10 +119,10 @@ interface Message {
 	errorMessage?: unknown;
 }
 
-const sanitizePreview = (value: unknown, max = PREVIEW_MAX): string | undefined => {
+const sanitizePreview = <T>(value: T, max = PREVIEW_MAX): string | undefined => {
 	if (value === undefined) return undefined;
 	let text: string;
-	if (typeof value === "string") text = value;
+	if (isString(value)) text = value;
 	else {
 		try {
 			text = JSON.stringify(value);
@@ -123,11 +130,12 @@ const sanitizePreview = (value: unknown, max = PREVIEW_MAX): string | undefined 
 			text = String(value);
 		}
 	}
+	// oxlint-disable-next-line no-control-regex -- intentional ESC byte match to strip ANSI escape sequences
 	const flattened = text.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "").replace(/[\t\r\n]+/g, " ").trim();
 	return flattened.length > max ? `${flattened.slice(0, max - 1)}…` : flattened;
 };
 
-const safeToolArgumentsPreview = (value: unknown): string | undefined => {
+const safeToolArgumentsPreview = <T>(value: T): string | undefined => {
 	if (value === undefined) return undefined;
 	const preview = safeValuePreview(value, {
 		maxChars: PREVIEW_MAX,
@@ -138,14 +146,14 @@ const safeToolArgumentsPreview = (value: unknown): string | undefined => {
 	return preview.replace(/[\t\r\n]+/g, " ").trim();
 };
 
-const stringifyToolOutput = (value: unknown): string | undefined => {
+const stringifyToolOutput = <T>(value: T): string | undefined => {
 	if (value === undefined) return undefined;
-	if (typeof value === "string") return value;
+	if (isString(value)) return value;
 	if (isRecord(value)) {
 		const content = value.content;
 		if (Array.isArray(content)) {
 			const text = content
-				.map((part) => isRecord(part) && part.type === "text" && typeof part.text === "string" ? part.text : undefined)
+				.map((part) => isRecord(part) && part.type === "text" && isString(part.text) ? part.text : undefined)
 				.filter((part): part is string => part !== undefined)
 				.join("\n");
 			if (text.trim().length > 0) return text;
@@ -158,59 +166,66 @@ const stringifyToolOutput = (value: unknown): string | undefined => {
 	}
 };
 
-const parseJsonLine = (line: string): Record<string, unknown> | undefined => {
+/** Decoded JSON object from a child-process output line; fields are validated at each read site. */
+interface ParsedJsonLine {
+	[key: string]: string | number | boolean | null | ParsedJsonLine | readonly ParsedJsonLine[] | undefined;
+}
+
+const parseJsonLine = (line: string): ParsedJsonLine | undefined => {
 	if (!line.trim()) return undefined;
 	try {
-		const parsed = JSON.parse(line) as unknown;
-		return isRecord(parsed) ? parsed : undefined;
+		const decoded: unknown = JSON.parse(line);
+		if (!isRecord(decoded)) return undefined;
+		// SAFETY: isRecord verified an object payload; per-field checks happen where each field is read.
+		return decoded as ParsedJsonLine;
 	} catch {
 		return undefined;
 	}
 };
 
-const isMessage = (value: unknown): value is Message => {
+const isMessage = <T>(value: T): value is T & Message => {
 	return isRecord(value) && (value.role === "assistant" || value.role === "user" || value.role === "toolResult");
 };
 
 const messageText = (message: Message): string => {
-	if (typeof message.text === "string") return message.text;
-	if (typeof message.content === "string") return message.content;
+	if (isString(message.text)) return message.text;
+	if (isString(message.content)) return message.content;
 	if (Array.isArray(message.content)) {
 		return message.content
-			.map((part) => isRecord(part) && typeof part.text === "string" ? part.text : "")
+			.map((part) => isRecord(part) && isString(part.text) ? part.text : "")
 			.join("");
 	}
 	return "";
 };
 
-const mapPiEvent = (event: Record<string, unknown>): SubagentEvent[] => {
-	const typeText = typeof event.type === "string" ? event.type : "";
+const mapPiEvent = (event: ParsedJsonLine): SubagentEvent[] => {
+	const typeText = isString(event.type) ? event.type : "";
 	if (typeText === "message_update") {
 		const assistantEvent = isRecord(event.assistantMessageEvent) ? event.assistantMessageEvent : undefined;
-		if (assistantEvent?.type === "text_delta" && typeof assistantEvent.delta === "string") {
+		if (assistantEvent?.type === "text_delta" && isString(assistantEvent.delta)) {
 			return [{ kind: "assistant-delta", delta: assistantEvent.delta }];
 		}
 	}
 	if (typeText === "tool_execution_start") {
 		return [{
 			kind: "tool-start",
-			toolId: typeof event.toolCallId === "string" ? event.toolCallId : `${event.toolName ?? "tool"}`,
-			name: typeof event.toolName === "string" ? event.toolName : "tool",
+			toolId: isString(event.toolCallId) ? event.toolCallId : `${event.toolName ?? "tool"}`,
+			name: isString(event.toolName) ? event.toolName : "tool",
 			argsPreview: safeToolArgumentsPreview(event.args),
 		}];
 	}
 	if (typeText === "tool_execution_update") {
 		return [{
 			kind: "tool-update",
-			toolId: typeof event.toolCallId === "string" ? event.toolCallId : `${event.toolName ?? "tool"}`,
+			toolId: isString(event.toolCallId) ? event.toolCallId : `${event.toolName ?? "tool"}`,
 			outputPreview: sanitizePreview(stringifyToolOutput(event.partialResult)),
 		}];
 	}
 	if (typeText === "tool_execution_end") {
 		return [{
 			kind: "tool-end",
-			toolId: typeof event.toolCallId === "string" ? event.toolCallId : `${event.toolName ?? "tool"}`,
-			name: typeof event.toolName === "string" ? event.toolName : "tool",
+			toolId: isString(event.toolCallId) ? event.toolCallId : `${event.toolName ?? "tool"}`,
+			name: isString(event.toolName) ? event.toolName : "tool",
 			isError: event.isError === true,
 			outputPreview: sanitizePreview(stringifyToolOutput(event.result)),
 		}];
@@ -257,7 +272,12 @@ const signalGroup = (proc: ChildProcessWithoutNullStreams, signal: NodeJS.Signal
 	}
 };
 
-const attachAbortSignal = (proc: ChildProcessWithoutNullStreams, signal: AbortSignal | undefined): { isAborted: () => boolean; interrupt: () => void } => {
+interface AbortState {
+	isAborted: () => boolean;
+	interrupt: () => void;
+}
+
+const attachAbortSignal = (proc: ChildProcessWithoutNullStreams, signal: AbortSignal | undefined): AbortState => {
 	let aborted = false;
 	// `proc.killed` only means a signal was successfully SENT, not that the
 	// process exited — gating SIGKILL on it means a child that ignores SIGTERM
@@ -289,9 +309,11 @@ export const createPiChildSpawner = (spawnImpl: SpawnLike = nodeSpawn, resolveAd
 	signal?: AbortSignal;
 }): SpawnedChild => {
 	const config = resolveTaskConfig({
+		// SAFETY: options.thinking comes from the typed SpawnSubagentTask.thinking field.
 		item: { prompt: options.prompt, model: options.model, thinking: options.thinking as TaskThinking | undefined, fork: false },
 		defaultModel: undefined,
 		defaultThinking: "inherit",
+		// SAFETY: inherited thinking strings are validated by resolveTaskConfig below.
 		inheritedThinking: (options.inherited.thinking ?? "low") as ThinkingLevel,
 		ctxModel: options.inherited.model,
 		// Children inherit the PARENT's active built-in tool set (mirroring
@@ -320,6 +342,7 @@ export const createPiChildSpawner = (spawnImpl: SpawnLike = nodeSpawn, resolveAd
 		const adapterEntry = resolveAdapterEntry();
 		const roleArgs = options.appendSystemPrompt ? ["--append-system-prompt", options.appendSystemPrompt] : [];
 		const adapterArgs = adapterEntry ? ["-e", adapterEntry] : [];
+		// SAFETY: stdio is piped below, so the spawned child always has non-null streams.
 		const proc = spawnImpl("pi", [...config.subprocessArgs, ...roleArgs, ...adapterArgs, options.prompt], {
 			cwd: options.cwd,
 			shell: false,
@@ -327,7 +350,7 @@ export const createPiChildSpawner = (spawnImpl: SpawnLike = nodeSpawn, resolveAd
 			// Own process group on POSIX so interrupt/SIGKILL can signal the
 			// whole tree (see signalGroup) instead of just the pi pid.
 			detached: process.platform !== "win32",
-		}) as ChildProcessWithoutNullStreams;
+}) as ChildProcessWithoutNullStreams;
 		proc.stdin.end();
 		const abortState = attachAbortSignal(proc, options.signal);
 		interrupt = abortState.interrupt;
@@ -345,8 +368,8 @@ export const createPiChildSpawner = (spawnImpl: SpawnLike = nodeSpawn, resolveAd
 			}
 			const messageValue = parsed.message;
 			if (isMessage(messageValue) && messageValue.role === "assistant") {
-				if (typeof messageValue.stopReason === "string") stopReason = messageValue.stopReason;
-				if (typeof messageValue.errorMessage === "string") errorMessage = messageValue.errorMessage;
+								if (isString(messageValue.stopReason)) stopReason = messageValue.stopReason;
+				if (isString(messageValue.errorMessage)) errorMessage = messageValue.errorMessage;
 			}
 		};
 		proc.stdout.on("data", (data) => {

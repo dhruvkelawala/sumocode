@@ -76,7 +76,7 @@ export const TERMINAL_CLEANUP_SEQUENCE =
 
 export interface TerminalOutput {
 	readonly isTTY?: boolean;
-	write(data: string): unknown;
+	write(data: string): void;
 }
 
 export interface TerminalCursor {
@@ -411,6 +411,9 @@ export class TerminalController extends TerminalSessionOwner {}
  */
 const GLOBAL_OWNER_KEY = "__sumoDefaultTerminalSessionOwner";
 type GlobalWithOwner = typeof globalThis & { [GLOBAL_OWNER_KEY]?: TerminalSessionOwner };
+// SAFETY: this module owns the __sumoDefaultTerminalSessionOwner global slot
+// and always stores a TerminalSessionOwner in it immediately below.
 const globalForOwner = globalThis as GlobalWithOwner;
 if (!globalForOwner[GLOBAL_OWNER_KEY]) globalForOwner[GLOBAL_OWNER_KEY] = new TerminalSessionOwner();
-export const defaultTerminalSessionOwner: TerminalSessionOwner = globalForOwner[GLOBAL_OWNER_KEY] as TerminalSessionOwner;
+const existingOwner = globalForOwner[GLOBAL_OWNER_KEY] ?? (globalForOwner[GLOBAL_OWNER_KEY] = new TerminalSessionOwner());
+export const defaultTerminalSessionOwner: TerminalSessionOwner = existingOwner;

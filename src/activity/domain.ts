@@ -1,3 +1,5 @@
+// oxlint-disable anti-slop/no-unknown-parameters, anti-slop/no-unsafe-dictionary-type -- I/O boundary parser (strict activity snapshot/parser boundary): inputs are untrusted producer JSON,
+// so `unknown` parameters and open string-keyed records are this module's real input contract.
 export type ActivityKind = "tool" | "task" | "subagent" | "terminal";
 export type ActivityStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled" | "lost";
 export type ActivityBody =
@@ -65,12 +67,50 @@ const SECRET_KEY_WORDS = new Set([
 	"token",
 ]);
 
+function isActivityKind(value: unknown): value is ActivityKind {
+	if (!isStringValue(value)) return false;
+	// SAFETY: membership in ACTIVITY_KINDS proves this string is an ActivityKind.
+	return ACTIVITY_KINDS.has(value as ActivityKind);
+}
+
+function isActivityStatus(value: unknown): value is ActivityStatus {
+	if (!isStringValue(value)) return false;
+	// SAFETY: membership in ACTIVITY_STATUSES proves this string is an ActivityStatus.
+	return ACTIVITY_STATUSES.has(value as ActivityStatus);
+}
+
 export function isSettledActivityStatus(status: ActivityStatus): boolean {
 	return TERMINAL_STATUS.has(status);
 }
 
+function isRecordLike(value: unknown): value is Record<string, unknown> {
+	return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function isStringValue(value: unknown): value is string {
+	return typeof value === "string";
+}
+
+function isNumberValue(value: unknown): value is number {
+	return typeof value === "number";
+}
+
+function stringOrUndefined(value: unknown): string | undefined {
+	return isStringValue(value) ? value : undefined;
+}
+
+function numberOrUndefined(value: unknown): number | undefined {
+	return isNumberValue(value) ? value : undefined;
+}
+
+/** Writable mirrors used to assemble snapshots field-by-field before returning them. */
+type MutableActivitySnapshot = { -readonly [K in keyof ActivitySnapshot]: ActivitySnapshot[K] };
+type MutableActivityMetrics = {
+	-readonly [K in keyof NonNullable<ActivitySnapshot["metrics"]>]: NonNullable<ActivitySnapshot["metrics"]>[K];
+};
+
 function recordOf(value: unknown): Record<string, unknown> | undefined {
-	return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+	return isRecordLike(value) ? value : undefined;
 }
 
 function optionalString(value: unknown): value is string | undefined {
@@ -81,25 +121,40 @@ function optionalFiniteNumber(value: unknown): value is number | undefined {
 	return value === undefined || (typeof value === "number" && Number.isFinite(value));
 }
 
+interface ActivityResultSummary {
+	summary?: string;
+	error?: string;
+}
+
+type ActivityIdentity = Pick<ActivitySnapshot, "id" | "kind" | "title" | "sourceId">;
+type MutableActivityIdentity = { -readonly [K in keyof ActivityIdentity]: ActivityIdentity[K] };
+
+/** Writable mirror of ActivitySnapshot["result"]. */
+type MutableActivityResultSummary = { -readonly [K in keyof ActivityResultSummary]: ActivityResultSummary[K] };
+
+type MutableSourceBody = {
+	-readonly [K in keyof Extract<ActivityBody, { kind: "source" }>]: Extract<ActivityBody, { kind: "source" }>[K];
+};
+
 function parseActivityBody(value: unknown): ActivityBody | undefined {
 	if (value === undefined) return undefined;
 	const body = recordOf(value);
-	if (!body || typeof body.kind !== "string" || typeof body.text !== "string") return undefined;
+	if (!body || !isStringValue(body.kind) || !isStringValue(body.text)) return undefined;
 	switch (body.kind) {
 		case "text":
 		case "diff":
 			return { kind: body.kind, text: body.text };
-		case "source":
+		case "source": {
 			if (!optionalFiniteNumber(body.startLine) || !optionalFiniteNumber(body.totalLines)) return undefined;
-			return {
-				kind: "source",
-				text: body.text,
-				...(body.startLine === undefined ? {} : { startLine: body.startLine }),
-				...(body.totalLines === undefined ? {} : { totalLines: body.totalLines }),
-			};
+			const parsed: MutableSourceBody = { kind: "source", text: body.text };
+			if (body.startLine !== undefined) parsed.startLine = body.startLine;
+			if (body.totalLines !== undefined) parsed.totalLines = body.totalLines;
+			return parsed;
+		}
 		case "terminal":
 			if (!optionalString(body.command)) return undefined;
-			return { kind: "terminal", text: body.text, ...(body.command === undefined ? {} : { command: body.command }) };
+			if (body.command === undefined) return { kind: "terminal", text: body.text };
+			return { kind: "terminal", text: body.text, command: body.command };
 		default:
 			return undefined;
 	}
@@ -109,25 +164,24 @@ function parseActivityBody(value: unknown): ActivityBody | undefined {
 export function parseActivitySnapshot(value: unknown, depth = 0): ActivitySnapshot | undefined {
 	if (depth > 8) return undefined;
 	const record = recordOf(value);
-	if (!record || typeof record.id !== "string" || typeof record.title !== "string") return undefined;
-	if (typeof record.kind !== "string" || !ACTIVITY_KINDS.has(record.kind as ActivityKind)) return undefined;
-	if (typeof record.status !== "string" || !ACTIVITY_STATUSES.has(record.status as ActivityStatus)) return undefined;
+	if (!record || !isStringValue(record.id) || !isStringValue(record.title)) return undefined;
+	if (!isActivityKind(record.kind) || !isActivityStatus(record.status)) return undefined;
 	for (const candidate of [record.sourceId, record.subject, record.currentStep, record.outputTail, record.ownerSessionId, record.model, record.thinking]) {
 		if (!optionalString(candidate)) return undefined;
 	}
 	for (const candidate of [record.createdAt, record.updatedAt, record.settledAt]) {
 		if (!optionalFiniteNumber(candidate)) return undefined;
 	}
-	const sourceId = typeof record.sourceId === "string" ? record.sourceId : undefined;
-	const subject = typeof record.subject === "string" ? record.subject : undefined;
-	const currentStep = typeof record.currentStep === "string" ? record.currentStep : undefined;
-	const outputTail = typeof record.outputTail === "string" ? record.outputTail : undefined;
-	const ownerSessionId = typeof record.ownerSessionId === "string" ? record.ownerSessionId : undefined;
-	const model = typeof record.model === "string" ? record.model : undefined;
-	const thinking = typeof record.thinking === "string" ? record.thinking : undefined;
-	const createdAt = typeof record.createdAt === "number" ? record.createdAt : undefined;
-	const updatedAt = typeof record.updatedAt === "number" ? record.updatedAt : undefined;
-	const settledAt = typeof record.settledAt === "number" ? record.settledAt : undefined;
+	const sourceId = stringOrUndefined(record.sourceId);
+	const subject = stringOrUndefined(record.subject);
+	const currentStep = stringOrUndefined(record.currentStep);
+	const outputTail = stringOrUndefined(record.outputTail);
+	const ownerSessionId = stringOrUndefined(record.ownerSessionId);
+	const model = stringOrUndefined(record.model);
+	const thinking = stringOrUndefined(record.thinking);
+	const createdAt = numberOrUndefined(record.createdAt);
+	const updatedAt = numberOrUndefined(record.updatedAt);
+	const settledAt = numberOrUndefined(record.settledAt);
 	const body = parseActivityBody(record.body);
 	if (record.body !== undefined && body === undefined) return undefined;
 	let activeTools: ActivitySnapshot[] | undefined;
@@ -144,10 +198,10 @@ export function parseActivitySnapshot(value: unknown, depth = 0): ActivitySnapsh
 	if (record.result !== undefined) {
 		const resultRecord = recordOf(record.result);
 		if (!resultRecord || !optionalString(resultRecord.summary) || !optionalString(resultRecord.error)) return undefined;
-		result = {
-			...(resultRecord.summary === undefined ? {} : { summary: resultRecord.summary }),
-			...(resultRecord.error === undefined ? {} : { error: resultRecord.error }),
-		};
+		const parsedResult: MutableActivityResultSummary = {};
+		if (resultRecord.summary !== undefined) parsedResult.summary = resultRecord.summary;
+		if (resultRecord.error !== undefined) parsedResult.error = resultRecord.error;
+		result = parsedResult;
 	}
 	let metrics: ActivitySnapshot["metrics"];
 	if (record.metrics !== undefined) {
@@ -156,37 +210,33 @@ export function parseActivitySnapshot(value: unknown, depth = 0): ActivitySnapsh
 		for (const candidate of [metricRecord.tokens, metricRecord.tokensIn, metricRecord.tokensOut, metricRecord.contextWindow, metricRecord.costUsd, metricRecord.turns, metricRecord.elapsedMs]) {
 			if (!optionalFiniteNumber(candidate)) return undefined;
 		}
-		metrics = {
-			...(typeof metricRecord.tokens === "number" ? { tokens: metricRecord.tokens } : {}),
-			...(typeof metricRecord.tokensIn === "number" ? { tokensIn: metricRecord.tokensIn } : {}),
-			...(typeof metricRecord.tokensOut === "number" ? { tokensOut: metricRecord.tokensOut } : {}),
-			...(typeof metricRecord.contextWindow === "number" ? { contextWindow: metricRecord.contextWindow } : {}),
-			...(typeof metricRecord.costUsd === "number" ? { costUsd: metricRecord.costUsd } : {}),
-			...(typeof metricRecord.turns === "number" ? { turns: metricRecord.turns } : {}),
-			...(typeof metricRecord.elapsedMs === "number" ? { elapsedMs: metricRecord.elapsedMs } : {}),
-		};
+		const parsedMetrics: MutableActivityMetrics = {};
+		if (isNumberValue(metricRecord.tokens)) parsedMetrics.tokens = metricRecord.tokens;
+		if (isNumberValue(metricRecord.tokensIn)) parsedMetrics.tokensIn = metricRecord.tokensIn;
+		if (isNumberValue(metricRecord.tokensOut)) parsedMetrics.tokensOut = metricRecord.tokensOut;
+		if (isNumberValue(metricRecord.contextWindow)) parsedMetrics.contextWindow = metricRecord.contextWindow;
+		if (isNumberValue(metricRecord.costUsd)) parsedMetrics.costUsd = metricRecord.costUsd;
+		if (isNumberValue(metricRecord.turns)) parsedMetrics.turns = metricRecord.turns;
+		if (isNumberValue(metricRecord.elapsedMs)) parsedMetrics.elapsedMs = metricRecord.elapsedMs;
+		metrics = parsedMetrics;
 	}
-	return {
-		id: record.id,
-		kind: record.kind as ActivityKind,
-		title: record.title,
-		status: record.status as ActivityStatus,
-		...(sourceId === undefined ? {} : { sourceId }),
-		...(record.invocation === undefined ? {} : { invocation: record.invocation }),
-		...(subject === undefined ? {} : { subject }),
-		...(currentStep === undefined ? {} : { currentStep }),
-		...(outputTail === undefined ? {} : { outputTail }),
-		...(body === undefined ? {} : { body }),
-		...(activeTools === undefined ? {} : { activeTools }),
-		...(result === undefined ? {} : { result }),
-		...(ownerSessionId === undefined ? {} : { ownerSessionId }),
-		...(createdAt === undefined ? {} : { createdAt }),
-		...(updatedAt === undefined ? {} : { updatedAt }),
-		...(settledAt === undefined ? {} : { settledAt }),
-		...(model === undefined ? {} : { model }),
-		...(thinking === undefined ? {} : { thinking }),
-		...(metrics === undefined ? {} : { metrics }),
-	};
+	const snapshot: MutableActivitySnapshot = { id: record.id, kind: record.kind, title: record.title, status: record.status };
+	if (sourceId !== undefined) snapshot.sourceId = sourceId;
+	if (record.invocation !== undefined) snapshot.invocation = record.invocation;
+	if (subject !== undefined) snapshot.subject = subject;
+	if (currentStep !== undefined) snapshot.currentStep = currentStep;
+	if (outputTail !== undefined) snapshot.outputTail = outputTail;
+	if (body !== undefined) snapshot.body = body;
+	if (activeTools !== undefined) snapshot.activeTools = activeTools;
+	if (result !== undefined) snapshot.result = result;
+	if (ownerSessionId !== undefined) snapshot.ownerSessionId = ownerSessionId;
+	if (createdAt !== undefined) snapshot.createdAt = createdAt;
+	if (updatedAt !== undefined) snapshot.updatedAt = updatedAt;
+	if (settledAt !== undefined) snapshot.settledAt = settledAt;
+	if (model !== undefined) snapshot.model = model;
+	if (thinking !== undefined) snapshot.thinking = thinking;
+	if (metrics !== undefined) snapshot.metrics = metrics;
+	return snapshot;
 }
 
 function skipControlString(text: string, start: number): number {
@@ -373,6 +423,36 @@ function boundedText(text: string, maxChars: number): string {
 	return `${text.slice(0, Math.max(0, maxChars - 1))}…`;
 }
 
+/** JSON-shaped preview tree produced by safeValuePreview. */
+type PreviewValue =
+	| string
+	| number
+	| boolean
+	| null
+	| readonly PreviewValue[]
+	| { [key: string]: PreviewValue };
+
+function isBooleanValue(value: unknown): value is boolean {
+	return typeof value === "boolean";
+}
+
+function isBigIntValue(value: unknown): value is bigint {
+	return typeof value === "bigint";
+}
+
+function isSymbolValue(value: unknown): value is symbol {
+	return typeof value === "symbol";
+}
+
+/** Realm-independent callability check: functions from other realms (vm contexts, iframes) fail `instanceof Function`. */
+function isFunctionValue(value: unknown): value is (...args: never[]) => void {
+	return typeof value === "function";
+}
+
+function isPreviewContainer(value: unknown): value is object {
+	return typeof value === "object";
+}
+
 /** Circular-safe, size-bounded preview intended for untrusted invocation values. */
 export function safeValuePreview(value: unknown, options: SafeValuePreviewOptions = {}): string {
 	const maxChars = Math.max(1, Math.floor(options.maxChars ?? 2_000));
@@ -382,7 +462,7 @@ export function safeValuePreview(value: unknown, options: SafeValuePreviewOption
 	let remainingNodes = Math.max(1, Math.floor(options.maxNodes ?? 256));
 	let remainingStringChars = Math.max(1, Math.floor(options.maxTotalStringChars ?? maxChars));
 	const seen = new WeakSet<object>();
-	const inspectString = (text: string): { text: string; truncated: boolean } => {
+	const inspectString = (text: string) => {
 		if (remainingStringChars <= 0) return { text: "[Truncated]", truncated: true };
 		const inspectedChars = Math.min(text.length, maxStringChars, remainingStringChars);
 		remainingStringChars -= inspectedChars;
@@ -394,16 +474,16 @@ export function safeValuePreview(value: unknown, options: SafeValuePreviewOption
 		};
 	};
 
-	const visit = (current: unknown, depth: number): unknown => {
+	const visit = (current: unknown, depth: number): PreviewValue => {
 		if (remainingNodes <= 0) return "[Truncated]";
 		remainingNodes -= 1;
-		if (typeof current === "string") return inspectString(current).text;
-		if (current === null || typeof current === "boolean" || typeof current === "number") return current;
-		if (typeof current === "bigint") return `${current.toString()}n`;
+		if (isStringValue(current)) return inspectString(current).text;
+		if (current === null || isBooleanValue(current) || isNumberValue(current)) return current;
+		if (isBigIntValue(current)) return `${current.toString()}n`;
 		if (current === undefined) return "[undefined]";
-		if (typeof current === "function") return "[Function]";
-		if (typeof current === "symbol") return current.toString();
-		if (typeof current !== "object") return sanitizeActivityText(String(current));
+		if (isFunctionValue(current)) return "[Function]";
+		if (isSymbolValue(current)) return current.toString();
+		if (!isPreviewContainer(current)) return sanitizeActivityText(String(current));
 		if (seen.has(current)) return "[Circular]";
 		if (depth >= maxDepth) return "[Truncated]";
 		seen.add(current);
@@ -413,7 +493,7 @@ export function safeValuePreview(value: unknown, options: SafeValuePreviewOption
 			if (current.length > inspected.length) result.push(`… ${current.length - inspected.length} more`);
 			return result;
 		}
-		const result: Record<string, unknown> = {};
+		const result: { [key: string]: PreviewValue } = {};
 		const keys: string[] = [];
 		let hasMore = false;
 		try {
@@ -438,6 +518,7 @@ export function safeValuePreview(value: unknown, options: SafeValuePreviewOption
 				continue;
 			}
 			try {
+				// SAFETY: current was narrowed above to a non-array object and `key` came from its own enumerable properties.
 				result[displayKey] = visit((current as Record<string, unknown>)[key], depth + 1);
 			} catch {
 				result[displayKey] = "[Uninspectable]";
@@ -489,24 +570,26 @@ function canonicalIdentity(
 ): Pick<ActivitySnapshot, "id" | "kind" | "title" | "sourceId"> {
 	if (!isToolCanonicalTransition(existing, incoming) || !sameActivity(existing, incoming)) {
 		const sourceId = incoming.sourceId ?? existing.sourceId;
-		return {
+		const identity: MutableActivityIdentity = {
 			id: incoming.id,
 			kind: incoming.kind,
 			title: incoming.title,
-			...(sourceId ? { sourceId } : {}),
 		};
+		if (sourceId) identity.sourceId = sourceId;
+		return identity;
 	}
 	const canonical = existing.kind === "tool" ? incoming : existing;
 	const tool = existing.kind === "tool" ? existing : incoming;
 	const sourceId = canonical.sourceId && canonical.sourceId !== canonical.id
 		? canonical.sourceId
 		: tool.id !== canonical.id ? tool.id : tool.sourceId;
-	return {
+	const identity: MutableActivityIdentity = {
 		id: canonical.id,
 		kind: canonical.kind,
 		title: canonical.title,
-		...(sourceId ? { sourceId } : {}),
 	};
+	if (sourceId) identity.sourceId = sourceId;
+	return identity;
 }
 
 function mergeBody(existing: ActivityBody | undefined, incoming: ActivityBody | undefined): ActivityBody | undefined {
@@ -567,24 +650,25 @@ export function mergeActivitySnapshot(existing: ActivitySnapshot, incoming: Acti
 	const model = incoming.model ?? existing.model;
 	const thinking = incoming.thinking ?? existing.thinking;
 	const metrics = incoming.metrics || existing.metrics ? { ...existing.metrics, ...incoming.metrics } : undefined;
-	return {
+	const merged: MutableActivitySnapshot = {
 		...existing,
 		...incoming,
 		...identity,
 		status,
-		...(invocation === undefined ? {} : { invocation }),
-		...(subject === undefined ? {} : { subject }),
-		...(currentStep === undefined ? {} : { currentStep }),
-		...(outputTail === undefined ? {} : { outputTail }),
-		...(body === undefined ? {} : { body }),
-		...(activeTools === undefined ? {} : { activeTools }),
-		...(result === undefined ? {} : { result }),
-		...(ownerSessionId === undefined ? {} : { ownerSessionId }),
-		...(createdAt === undefined ? {} : { createdAt }),
-		...(updatedAt === undefined ? {} : { updatedAt }),
-		...(settledAt === undefined ? {} : { settledAt }),
-		...(model === undefined ? {} : { model }),
-		...(thinking === undefined ? {} : { thinking }),
-		...(metrics === undefined ? {} : { metrics }),
 	};
+	if (invocation !== undefined) merged.invocation = invocation;
+	if (subject !== undefined) merged.subject = subject;
+	if (currentStep !== undefined) merged.currentStep = currentStep;
+	if (outputTail !== undefined) merged.outputTail = outputTail;
+	if (body !== undefined) merged.body = body;
+	if (activeTools !== undefined) merged.activeTools = activeTools;
+	if (result !== undefined) merged.result = result;
+	if (ownerSessionId !== undefined) merged.ownerSessionId = ownerSessionId;
+	if (createdAt !== undefined) merged.createdAt = createdAt;
+	if (updatedAt !== undefined) merged.updatedAt = updatedAt;
+	if (settledAt !== undefined) merged.settledAt = settledAt;
+	if (model !== undefined) merged.model = model;
+	if (thinking !== undefined) merged.thinking = thinking;
+	if (metrics !== undefined) merged.metrics = metrics;
+	return merged;
 }

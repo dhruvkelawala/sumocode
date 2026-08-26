@@ -5,6 +5,8 @@ import { TerminalSessionOwner, type TerminalPatch } from "../runtime/terminal-co
 import { ChatPager } from "../widgets/chat-pager.js";
 import { createSplashTree, defaultSplashSnapshot } from "../cathedral/splash-tree.js";
 import { OwnedShellRenderer, ownedShellEnabled } from "./owned-shell-renderer.js";
+/* oxlint-disable anti-slop/no-chained-type-assertions -- test doubles cast minimal stub objects to Pi context types. */
+/* oxlint-disable anti-slop/require-safety-comment-for-type-assertion -- stub shape is exercised by the assertions below. */
 
 class StaticComponent implements Component {
 	public rows: readonly string[];
@@ -41,7 +43,7 @@ class CursorEditor implements Component {
 class FakeTerminal {
 	public patches: TerminalPatch[] = [];
 	public cursors: ({ row: number; col: number } | null)[] = [];
-	public readonly output: { isTTY: boolean; write: (data: string) => unknown };
+	public readonly output: { isTTY: boolean; write: (data: string) => void };
 	public readonly owner: TerminalSessionOwner;
 
 	public constructor() {
@@ -490,9 +492,9 @@ describe("OwnedShellRenderer", () => {
 		const yoga = await loadYoga();
 		const chat = ChatPager.create(yoga);
 		const fakeTerminal = new FakeTerminal();
-		const overlay: { component: Component; options?: OverlayOptions; hidden?: boolean; focusOrder?: number } = {
+		const overlay = {
 			component: new StaticComponent(["│ SIDEBAR │"]),
-			options: { width: 10, anchor: "top-right", maxHeight: "100%" },
+			options: { width: 10, anchor: "top-right", maxHeight: "100%" } satisfies OverlayOptions,
 			focusOrder: 1,
 		};
 		const overlayHost = { overlayStack: [overlay] };
@@ -582,6 +584,7 @@ describe("OwnedShellRenderer", () => {
 });
 
 function stripAnsi(text: string): string {
+	// oxlint-disable-next-line no-control-regex -- intentional ESC byte match to strip ANSI styling in assertions
 	return text.replace(/\u001b\[[0-9;]*m/g, "");
 }
 

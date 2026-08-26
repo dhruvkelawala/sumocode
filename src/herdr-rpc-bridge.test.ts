@@ -5,13 +5,14 @@ function createHarness(
 	env: NodeJS.ProcessEnv = {},
 	sendRequestAttempt: (request: any, timeoutMs: number) => Promise<boolean> = async () => true,
 ) {
-	const handlers = new Map<string, (event: any, ctx: any) => unknown>();
-	const eventHandlers = new Map<string, (data: any) => unknown>();
+	const handlers = new Map<string, (event: any, ctx: any) => void>();
+	const eventHandlers = new Map<string, (data: any) => void>();
 	const attempts: Array<{ request: any; timeoutMs: number }> = [];
 	const pi = {
-		on: vi.fn((name: string, handler: (event: any, ctx: any) => unknown) => handlers.set(name, handler)),
-		events: { on: vi.fn((name: string, handler: (data: any) => unknown) => eventHandlers.set(name, handler)) },
+		on: vi.fn((name: string, handler: (event: any, ctx: any) => void) => handlers.set(name, handler)),
+		events: { on: vi.fn((name: string, handler: (data: any) => void) => eventHandlers.set(name, handler)) },
 	};
+	// SAFETY: the double supplies the on/events registrar surface the bridge reads.
 	installHerdrRpcBridge(pi as never, {
 		env,
 		sendRequestAttempt: async (request, timeoutMs) => {

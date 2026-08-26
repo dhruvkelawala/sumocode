@@ -15,9 +15,17 @@ function fallbackTitle(title: string): string {
 	return normalized.length <= TITLE_PREFIX_MAX ? normalized : `${normalized.slice(0, TITLE_PREFIX_MAX - 1)}…`;
 }
 
+/** One running subagent summarized in the footer status row. */
+export interface SubagentStatusRunningEntry {
+	readonly id: string;
+	readonly roleId?: string;
+	readonly title: string;
+	readonly ageMs: number;
+}
+
 export function renderSubagentStatusRow(options: {
 	readonly width: number;
-	readonly running: readonly { id: string; roleId?: string; title: string; ageMs: number }[];
+	readonly running: readonly SubagentStatusRunningEntry[];
 	readonly queuedCount: number;
 }): string[] {
 	const theme = getActiveTheme();

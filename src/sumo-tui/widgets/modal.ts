@@ -72,6 +72,10 @@ interface SelectOption {
 	readonly value: string;
 }
 
+function isString<T>(value: T): value is T & string {
+	return typeof value === "string";
+}
+
 /**
  * Selects with more options than this get type-to-filter instead of Divine
  * Query letter-jump. Letter-jump stays for short lists (question tool,
@@ -105,6 +109,8 @@ export function selectIsPaletteContent(options: readonly SelectOption[]): boolea
 function keyEq(data: string, ...ids: readonly string[]): boolean {
 	for (const id of ids) {
 		if (data === id) return true;
+		// SAFETY: id strings come from this module's own modal keybinding
+		// declarations, which are valid KeyId values by construction.
 		if (matchesKey(data, id as KeyId)) return true;
 	}
 	return false;
@@ -123,7 +129,9 @@ function pad(text: string, width: number): string {
 	return visible >= width ? text : `${text}${" ".repeat(width - visible)}`;
 }
 
+// oxlint-disable-next-line no-control-regex -- intentional ESC byte match for ANSI parsing
 const ANSI_PATTERN = /\u001b(?:\[[0-?]*[ -/]*[@-~]|\][^\u0007]*(?:\u0007|\u001b\\)|_[^\u0007]*(?:\u0007|\u001b\\))/g;
+// oxlint-disable-next-line no-control-regex -- intentional control-byte match to strip C0/C1 noise from modal text
 const CONTROL_PATTERN = /[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]/g;
 const BRACKETED_PASTE_START = "\u001b[200~";
 const BRACKETED_PASTE_END = "\u001b[201~";
@@ -160,7 +168,7 @@ function wrapText(text: string, width: number): string[] {
 			continue;
 		}
 		let current = "";
-		for (const char of [...raw]) {
+		for (const char of raw) {
 			const next = `${current}${char}`;
 			if (visibleWidth(next) <= width) {
 				current = next;
@@ -292,13 +300,22 @@ export class ModalManager implements Component {
 			case "select": {
 				const searchActive = selectSearchActive(active.options);
 				const visibleOptions = searchActive ? filterSelectOptions(active.options, active.searchQuery) : active.options;
+				if (searchActive) {
+					return {
+						kind: active.kind,
+						title: active.title,
+						options: visibleOptions.map((option) => option.label),
+						selectedIndex: active.selectedIndex,
+						searchActive: true,
+						searchQuery: active.searchQuery,
+					};
+				}
 				return {
-					kind: active.kind,
-					title: active.title,
-					options: visibleOptions.map((option) => option.label),
-					selectedIndex: active.selectedIndex,
-					...(searchActive ? { searchActive: true, searchQuery: active.searchQuery } : {}),
-				};
+						kind: active.kind,
+						title: active.title,
+						options: visibleOptions.map((option) => option.label),
+						selectedIndex: active.selectedIndex,
+					};
 			}
 			case "input":
 				return {
@@ -526,7 +543,7 @@ export class ModalManager implements Component {
 		}
 		modal.cleanup();
 		if (modal.kind === "confirm") modal.resolve(value === true);
-		else modal.resolve(typeof value === "string" ? value : undefined);
+		else modal.resolve(isString(value) ? value : undefined);
 		this.activateNext();
 		this.onChange();
 	}

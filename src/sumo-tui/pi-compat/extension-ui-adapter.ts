@@ -130,6 +130,8 @@ export class SumoExtensionUIAdapter implements ExtensionUIContext {
 		this.currentTheme = options.theme;
 		this.keybindings = options.keybindings;
 		this.notifications = options.notifications ?? new NotificationCenter({ onChange: options.onRenderRequest });
+		// SAFETY: Pi's TUI terminal exposes runtime columns/rows with loose
+		// typing across versions; both reads fall back to sane defaults.
 		this.modals = options.modals ?? new ModalLayer({
 			onChange: options.onRenderRequest,
 			getTerminalSize: () => ({
@@ -238,6 +240,8 @@ export class SumoExtensionUIAdapter implements ExtensionUIContext {
 		content: string[] | ((tui: TUI, theme: Theme) => Component & { dispose?(): void }) | undefined,
 		options?: ExtensionWidgetOptions,
 	): void {
+		// SAFETY: ExtensionWidgetOptions.placement carries the same vocabulary as
+		// WidgetPlacement; undefined preserves the registry default placement.
 		this.regionRegistry.mountWidget(key, content, { placement: options?.placement as WidgetPlacement | undefined });
 	}
 
@@ -289,7 +293,7 @@ export class SumoExtensionUIAdapter implements ExtensionUIContext {
 					else this.regionRegistry.mountModal(key, wrapper, options?.overlayOptions);
 					options?.onHandle?.(this.createOverlayHandle(key, wrapper));
 				})
-				.catch((error: unknown) => {
+				.catch((error) => {
 					if (settled) return;
 					settled = true;
 					reject(error);

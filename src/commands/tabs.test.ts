@@ -9,6 +9,12 @@ import {
 	setTopChromeHidden,
 } from "./tabs.js";
 
+/** Minimal shape of the command-handler context the tests drive. */
+type CommandHandler = (
+	args: string,
+	ctx: { ui: { notify: (...args: unknown[]) => void } },
+) => Promise<void>;
+
 describe("tabs slash command — local config flag", () => {
 	let tmpHome: string;
 	let configPath: string;
@@ -44,7 +50,7 @@ describe("tabs slash command — local config flag", () => {
 	it("setTopChromeHidden writes the flag and preserves other keys", () => {
 		writeFileSync(configPath, JSON.stringify({ otherSetting: "preserved", sidebarAnchor: "right-center" }));
 		setTopChromeHidden(true, configPath);
-		const written = JSON.parse(readFileSync(configPath, "utf8")) as Record<string, unknown>;
+		const written = JSON.parse(readFileSync(configPath, "utf8"));
 		expect(written[TABS_LOCAL_CONFIG_KEY]).toBe(true);
 		expect(written.otherSetting).toBe("preserved");
 		expect(written.sidebarAnchor).toBe("right-center");
@@ -52,7 +58,7 @@ describe("tabs slash command — local config flag", () => {
 
 	it("setTopChromeHidden creates the file when it doesn't exist", () => {
 		setTopChromeHidden(true, configPath);
-		const written = JSON.parse(readFileSync(configPath, "utf8")) as Record<string, unknown>;
+		const written = JSON.parse(readFileSync(configPath, "utf8"));
 		expect(written[TABS_LOCAL_CONFIG_KEY]).toBe(true);
 	});
 });
@@ -60,6 +66,7 @@ describe("tabs slash command — local config flag", () => {
 describe("registerTabsCommand", () => {
 	it("registers a /sumo:tabs slash command on the pi API", () => {
 		const registerCommand = vi.fn();
+		// SAFETY: test double only exercises registerCommand, the sole member used here.
 		registerTabsCommand({ registerCommand } as never);
 		expect(registerCommand).toHaveBeenCalledWith(
 			"sumo:tabs",
@@ -71,11 +78,12 @@ describe("registerTabsCommand", () => {
 		const tmpHome = mkdtempSync(join(tmpdir(), "sumocode-tabs-cmd-"));
 		const configPath = join(tmpHome, "local-config.json");
 		try {
-			let handler: ((args: string, ctx: unknown) => Promise<void>) | undefined;
+			let handler: CommandHandler | undefined;
 			const registerCommand = vi.fn((_name: string, opts: { handler: typeof handler }) => {
 				handler = opts.handler;
 			});
 			const notify = vi.fn();
+			// SAFETY: test double only exercises registerCommand, the sole member used here.
 			registerTabsCommand({ registerCommand } as never, { configPath });
 			await handler!("hide", { ui: { notify } });
 			expect(isTopChromeHidden(configPath)).toBe(true);
@@ -90,11 +98,12 @@ describe("registerTabsCommand", () => {
 		const configPath = join(tmpHome, "local-config.json");
 		try {
 			writeFileSync(configPath, JSON.stringify({ [TABS_LOCAL_CONFIG_KEY]: true }));
-			let handler: ((args: string, ctx: unknown) => Promise<void>) | undefined;
+			let handler: CommandHandler | undefined;
 			const registerCommand = vi.fn((_name: string, opts: { handler: typeof handler }) => {
 				handler = opts.handler;
 			});
 			const notify = vi.fn();
+			// SAFETY: test double only exercises registerCommand, the sole member used here.
 			registerTabsCommand({ registerCommand } as never, { configPath });
 			await handler!("show", { ui: { notify } });
 			expect(isTopChromeHidden(configPath)).toBe(false);
@@ -108,14 +117,16 @@ describe("registerTabsCommand", () => {
 		const tmpHome = mkdtempSync(join(tmpdir(), "sumocode-tabs-cmd-status-"));
 		const configPath = join(tmpHome, "local-config.json");
 		try {
-			let handler: ((args: string, ctx: unknown) => Promise<void>) | undefined;
+			let handler: CommandHandler | undefined;
 			const registerCommand = vi.fn((_name: string, opts: { handler: typeof handler }) => {
 				handler = opts.handler;
 			});
 			const notify = vi.fn();
+			// SAFETY: test double only exercises registerCommand, the sole member used here.
 			registerTabsCommand({ registerCommand } as never, { configPath });
 			await handler!("", { ui: { notify } });
 			expect(notify).toHaveBeenCalled();
+			// SAFETY: the status branch always calls notify with a single message string.
 			const message = notify.mock.calls[0]?.[0] as string;
 			expect(message.toLowerCase()).toMatch(/visible|hidden/);
 		} finally {

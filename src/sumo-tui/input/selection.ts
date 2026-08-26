@@ -91,11 +91,17 @@ function rowHasSelectable(buffer: CellBuffer, row: number): boolean {
  * single-line drag from promoting the selection into a multi-row text-flow
  * selection that visually highlights an entire content row from col 2.
  */
+interface SelectionSnapResult {
+	point: SelectionPoint;
+	snapped: boolean;
+	fromRow: number;
+}
+
 function snapFocusToSelectableRow(
 	candidate: SelectionPoint,
 	anchor: SelectionPoint | undefined,
 	buffer: CellBuffer | undefined,
-): { point: SelectionPoint; snapped: boolean; fromRow: number } {
+): SelectionSnapResult {
 	if (!buffer || !hasSemanticSelection(buffer) || !anchor) return { point: candidate, snapped: false, fromRow: candidate.row };
 	if (rowHasSelectable(buffer, candidate.row)) return { point: candidate, snapped: false, fromRow: candidate.row };
 	const { rows } = buffer.getDimensions();
@@ -240,8 +246,10 @@ export class SelectionController {
 		const text = this.extractSelectedText(buffer);
 		logDiagnostic("selection_finish", {
 			semantic: hasSemanticSelection(buffer),
-			anchor: this.anchor,
-			focus: this.focus,
+			anchorRow: this.anchor?.row ?? -1,
+			anchorCol: this.anchor?.col ?? -1,
+			focusRow: this.focus?.row ?? -1,
+			focusCol: this.focus?.col ?? -1,
 			selectedChars: text.length,
 			selectedLines: text.length === 0 ? 0 : text.split("\n").length,
 		});

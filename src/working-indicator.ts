@@ -229,7 +229,10 @@ export function installWorkingIndicator(pi: ExtensionAPI): void {
 		if (isRetainedMode()) {
 			// Retained SumoTUI owns the chrome. Hide Pi's inline loader row and
 			// drive a theme-aware widget above the editor instead.
+			// SAFETY: duck-typed probe for an optional newer Pi UI API; the assertion only
+			// adds the optional member and the typeof check guards every use.
 			const workingUi = ctx.ui as { setWorkingVisible?: (visible: boolean) => void };
+			// oxlint-disable-next-line anti-slop/no-runtime-typeof -- capability probe on an optional Pi UI hook
 			if (typeof workingUi.setWorkingVisible === "function") workingUi.setWorkingVisible(false);
 			else ctx.ui.setWorkingIndicator({ frames: [] });
 			ctx.ui.setWidget(

@@ -1,9 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
 import { createRpcPromptScheduler, RpcPromptPreflightRejection } from "./prompt-scheduler.js";
 
-function deferred(): { promise: Promise<void>; resolve: () => void; reject: (error: unknown) => void } {
+interface Deferred {
+	promise: Promise<void>;
+	resolve: () => void;
+	reject: (cause: unknown) => void;
+}
+
+function deferred(): Deferred {
 	let resolve!: () => void;
-	let reject!: (error: unknown) => void;
+	let reject!: (cause: unknown) => void;
 	const promise = new Promise<void>((res, rej) => {
 		resolve = res;
 		reject = rej;

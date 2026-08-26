@@ -1,5 +1,5 @@
 import type { Component } from "@earendil-works/pi-tui";
-import { decodeKittyPrintable, fuzzyFilter, getKeybindings, Key, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { decodeKittyPrintable, fuzzyFilter as piFuzzyFilter, getKeybindings, Key, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { activeThemeColors } from "../../themes/index.js";
 import {
 	FOCUSED_MARK,
@@ -49,6 +49,18 @@ import {
  * before any scroll-window/selection math runs -- mirrors `command-palette.ts`'s
  * `searchQuery`/`filterPaletteRows` shape (a visible search row above the list,
  * backspace/printable-character handling that resets the cursor to index 0).
+/**
+ * Injectable dependency seam (tests wrap the real pi-tui filter to observe
+ * queries); production always uses pi-tui's own implementation.
+ */
+type FuzzyFilterFn = typeof piFuzzyFilter;
+let fuzzyFilterImpl: FuzzyFilterFn = piFuzzyFilter;
+
+export function setFuzzyFilterForTests(fn: FuzzyFilterFn | undefined): void {
+	fuzzyFilterImpl = fn ?? piFuzzyFilter;
+}
+
+/*
  * Filtering uses pi-tui's own `fuzzyFilter` (already used by this codebase for
  * the model-argument autocomplete in `editor.ts`) rather than a plain substring
  * match: a synthetic 540-item model-list check (`fuzzy-check` script, see report)
@@ -107,15 +119,19 @@ type NormalizedTab = {
 };
 
 export interface InlineSelectorComponentOptions {
-	readonly maxVisible?: number;
-	readonly initialValue?: string;
-	readonly tabs?: readonly InlineSelectorTab[];
-	readonly initialTabId?: string;
+	maxVisible?: number;
+	initialValue?: string;
+	tabs?: readonly InlineSelectorTab[];
+	initialTabId?: string;
+}
+
+function isStringOption(option: string | InlineSelectorItem): option is string {
+	return typeof option === "string";
 }
 
 function normalizeItems(options: readonly (string | InlineSelectorItem)[]): NormalizedItem[] {
 	return options.map((option) => {
-		if (typeof option === "string") {
+		if (isStringOption(option)) {
 			return { value: option, label: option, description: "", isCurrent: false };
 		}
 		return {
@@ -169,12 +185,10 @@ export class InlineSelectorComponent implements Component {
 		maxVisibleOrOptions: number | InlineSelectorComponentOptions = DEFAULT_MAX_VISIBLE,
 		initialValue?: string,
 	) {
-		const componentOptions = typeof maxVisibleOrOptions === "number"
-			? {
-				maxVisible: maxVisibleOrOptions,
-				...(initialValue !== undefined ? { initialValue } : {}),
-			}
+		const componentOptions = isNumberOption(maxVisibleOrOptions)
+			? { maxVisible: maxVisibleOrOptions }
 			: maxVisibleOrOptions;
+		if (isNumberOption(maxVisibleOrOptions) && initialValue !== undefined) componentOptions.initialValue = initialValue;
 		this.maxVisible = componentOptions.maxVisible ?? DEFAULT_MAX_VISIBLE;
 		this.tabs = normalizeTabs(options, componentOptions.tabs);
 
@@ -202,7 +216,7 @@ export class InlineSelectorComponent implements Component {
 		const cached = this.filteredCache;
 		if (cached?.query === this.query && cached.tabIndex === this.activeTabIndex) return cached.result;
 		const activeItems = this.tabs[this.activeTabIndex]?.items ?? [];
-		const result = fuzzyFilter(activeItems, this.query, (item) => item.label);
+		const result = fuzzyFilterImpl(activeItems, this.query, (item) => item.label);
 		this.filteredCache = { query: this.query, tabIndex: this.activeTabIndex, result };
 		return result;
 	}
@@ -324,7 +338,7 @@ export class InlineSelectorComponent implements Component {
 		return `     ${marker}  ${styled}`;
 	}
 
-	private visibleRange(itemCount: number): { startIndex: number; endIndex: number } {
+	private visibleRange(itemCount: number): VisibleRange {
 		const maxVisible = Math.max(1, this.maxVisible);
 		const startIndex = Math.max(0, Math.min(this.selectedIndex - Math.floor(maxVisible / 2), itemCount - maxVisible));
 		const endIndex = Math.min(startIndex + maxVisible, itemCount);
@@ -355,9 +369,21 @@ interface EditorLikeComponent extends Component {
 	setSplashProvider?(provider: () => boolean): void;
 }
 
+type SelectorResolution = string | undefined;
+
 interface QueuedSelector {
-	readonly create: (done: (value: unknown) => void) => Component;
-	readonly resolve: (value: unknown) => void;
+	readonly create: (done: (value: SelectorResolution) => void) => Component;
+	readonly resolve: (value: SelectorResolution) => void;
+}
+
+function isNumberOption(value: number | InlineSelectorComponentOptions): value is number {
+	return typeof value === "number";
+}
+
+type VisibleRange = { startIndex: number; endIndex: number };
+
+function isSelectOptsNumber(opts: number | { maxVisible?: number; initialValue?: string } | undefined): opts is number {
+	return typeof opts === "number";
 }
 
 /**
@@ -373,7 +399,7 @@ interface QueuedSelector {
  */
 export class InlineSelectorHost implements EditorLikeComponent {
 	private active: Component | undefined;
-	private finish: ((value: unknown) => void) | undefined;
+	private finish: ((value: SelectorResolution) => void) | undefined;
 	private readonly queue: QueuedSelector[] = [];
 
 	public constructor(
@@ -391,7 +417,7 @@ export class InlineSelectorHost implements EditorLikeComponent {
 		options: readonly (string | InlineSelectorItem)[],
 		opts?: number | { maxVisible?: number; initialValue?: string },
 	): Promise<string | undefined> {
-		const normalized = typeof opts === "number" ? { maxVisible: opts } : opts ?? {};
+		const normalized = isSelectOptsNumber(opts) ? { maxVisible: opts } : opts ?? {};
 		return this.enqueue((done) => new InlineSelectorComponent(title, options, done, normalized.maxVisible, normalized.initialValue));
 	}
 
@@ -401,12 +427,10 @@ export class InlineSelectorHost implements EditorLikeComponent {
 		tabs: readonly InlineSelectorTab[],
 		opts: { maxVisible?: number; initialValue?: string; initialTabId?: string } = {},
 	): Promise<string | undefined> {
-		const componentOptions: InlineSelectorComponentOptions = {
-			...(opts.maxVisible !== undefined ? { maxVisible: opts.maxVisible } : {}),
-			...(opts.initialValue !== undefined ? { initialValue: opts.initialValue } : {}),
-			...(opts.initialTabId !== undefined ? { initialTabId: opts.initialTabId } : {}),
-			tabs,
-		};
+		const componentOptions: InlineSelectorComponentOptions = { tabs };
+		if (opts.maxVisible !== undefined) componentOptions.maxVisible = opts.maxVisible;
+		if (opts.initialValue !== undefined) componentOptions.initialValue = opts.initialValue;
+		if (opts.initialTabId !== undefined) componentOptions.initialTabId = opts.initialTabId;
 		return this.enqueue((done) => new InlineSelectorComponent(title, [], done, componentOptions));
 	}
 
@@ -468,8 +492,8 @@ export class InlineSelectorHost implements EditorLikeComponent {
 	private enqueue(create: (done: (value: string | undefined) => void) => Component): Promise<string | undefined> {
 		return new Promise<string | undefined>((resolve) => {
 			const entry: QueuedSelector = {
-				create: (done) => create(done as (value: string | undefined) => void),
-				resolve: resolve as (value: unknown) => void,
+				create: (done) => create(done),
+				resolve,
 			};
 			if (this.active) {
 				this.queue.push(entry);
@@ -482,7 +506,7 @@ export class InlineSelectorHost implements EditorLikeComponent {
 	}
 
 	private activate(entry: QueuedSelector): void {
-		this.finish = (value: unknown) => {
+		this.finish = (value: SelectorResolution) => {
 			this.active = undefined;
 			this.finish = undefined;
 			entry.resolve(value);

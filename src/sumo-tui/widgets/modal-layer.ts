@@ -29,7 +29,7 @@ function linkedHttpUrl(text: string, color: string): string {
 	return `\u001b]8;;${text}\u001b\\${scriptoriumFg("open authentication page", color)}${OSC8_CLOSE}`;
 }
 
-function rgb(hex: string): { r: number; g: number; b: number } {
+function rgb(hex: string) {
 	const normalized = hex.replace("#", "");
 	return {
 		r: Number.parseInt(normalized.slice(0, 2), 16),
@@ -124,7 +124,7 @@ export class ModalLayer extends ModalManager {
 		if (dialog?.kind === "select" && dialog.options) {
 			// Search-mode selects (plan 085 fix): render in the COMMAND PALETTE
 			// language — header title, ❯ filter row, two-column rows with
-			// right-aligned values (split on the two-space label · value seam),
+			// right-aligned values (split on the two-space label · value seam),
 			// windowed list. Short selects keep Divine Query letter parity.
 			if (dialog.searchActive) {
 				return renderCommandPalette(

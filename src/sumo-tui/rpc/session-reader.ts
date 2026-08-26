@@ -36,12 +36,15 @@ export interface SessionFileHeader {
 	readonly parentSession?: string;
 }
 
+/** JSON-ish value shapes found inside Pi session `.jsonl` entries. */
+export type SessionEntryValue = string | number | boolean | null | SessionEntryValue[] | { [key: string]: SessionEntryValue };
+
 export interface SessionEntryLike {
 	readonly type: string;
 	readonly id: string;
 	readonly parentId: string | null;
 	readonly timestamp: string;
-	readonly [key: string]: unknown;
+	readonly [key: string]: SessionEntryValue;
 }
 
 export type SessionFileLine = SessionFileHeader | SessionEntryLike;
@@ -85,6 +88,8 @@ export type { SessionTreeNode } from "./session-tree.js";
 function parseLine(line: string): SessionFileLine | undefined {
 	if (!line.trim()) return undefined;
 	try {
+		// SAFETY: each jsonl line is untyped JSON from disk by definition;
+		// every consumed field below is validated before use.
 		return JSON.parse(line) as SessionFileLine;
 	} catch {
 		return undefined;
@@ -96,28 +101,52 @@ function isHeader(entry: SessionFileLine): entry is SessionFileHeader {
 }
 
 interface AgentMessageLike {
-	readonly role?: unknown;
-	readonly content?: unknown;
-	readonly timestamp?: unknown;
+	readonly role?: SessionEntryValue;
+	readonly content?: SessionEntryValue;
+	readonly timestamp?: SessionEntryValue;
+}
+
+function isString(value: SessionEntryValue | undefined): value is string {
+	return typeof value === "string";
+}
+
+function isNumber(value: SessionEntryValue | undefined): value is number {
+	return typeof value === "number";
+}
+
+function isJsonObject(value: SessionEntryValue | undefined): value is { [key: string]: SessionEntryValue } {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isUserOrAssistantRole(role: SessionEntryValue | undefined): boolean {
+	return role === "user" || role === "assistant";
+}
+
+function isTextBlock(block: SessionEntryValue): block is { type: "text"; text: string } {
+	return isJsonObject(block) && block["type"] === "text";
 }
 
 function extractTextContent(message: AgentMessageLike): string {
 	const content = message.content;
-	if (typeof content === "string") return content;
+	if (isString(content)) return content;
 	if (!Array.isArray(content)) return "";
 	return content
-		.filter((block): block is { type: string; text: string } => {
-			return typeof block === "object" && block !== null && (block as { type?: unknown }).type === "text";
-		})
+		.filter(isTextBlock)
 		.map((block) => block.text)
 		.join(" ");
 }
 
+function messageOf(entry: SessionEntryLike): AgentMessageLike | undefined {
+	// SAFETY: session entries are untyped JSON from Pi's own writer; the
+	// message payload is validated field-by-field by every consumer.
+	return isJsonObject(entry.message) ? entry.message as AgentMessageLike : undefined;
+}
+
 function messageActivityTime(entry: SessionEntryLike): number | undefined {
-	const message = entry.message as AgentMessageLike | undefined;
-	if (!message || typeof message !== "object" || typeof message.role !== "string" || !("content" in message)) return undefined;
-	if (message.role !== "user" && message.role !== "assistant") return undefined;
-	if (typeof message.timestamp === "number") return message.timestamp;
+	const message = messageOf(entry);
+	if (!message || !isString(message.role) || message.content === undefined) return undefined;
+	if (!isUserOrAssistantRole(message.role)) return undefined;
+	if (isNumber(message.timestamp)) return message.timestamp;
 	const t = new Date(entry.timestamp).getTime();
 	return Number.isNaN(t) ? undefined : t;
 }
@@ -160,16 +189,16 @@ export async function readSessionInfo(filePath: string, { maxBytes = 256 * 1024 
 				continue;
 			}
 			if (entry.type === "session_info") {
-				const rawName = (entry as SessionEntryLike & { name?: string }).name;
-				name = rawName?.trim() || undefined;
+				const rawName = entry.name;
+				name = isString(rawName) ? rawName.trim() || undefined : undefined;
 			}
 			if (entry.type !== "message") continue;
 			messageCount += 1;
 			const activityTime = messageActivityTime(entry);
-			if (typeof activityTime === "number") lastActivityTime = Math.max(lastActivityTime ?? 0, activityTime);
-			const message = entry.message as AgentMessageLike | undefined;
-			if (!message || typeof message !== "object" || typeof message.role !== "string" || !("content" in message)) continue;
-			if (message.role !== "user" && message.role !== "assistant") continue;
+			if (activityTime !== undefined) lastActivityTime = Math.max(lastActivityTime ?? 0, activityTime);
+			const message = messageOf(entry);
+			if (!message || !isString(message.role) || message.content === undefined) continue;
+			if (!isUserOrAssistantRole(message.role)) continue;
 			const textContent = extractTextContent(message);
 			if (!textContent) continue;
 			if (!firstMessage && message.role === "user") firstMessage = textContent;
@@ -180,15 +209,15 @@ export async function readSessionInfo(filePath: string, { maxBytes = 256 * 1024 
 
 	if (!header) return undefined;
 
-	const cwd = typeof header.cwd === "string" ? header.cwd : "";
-	const headerTime = typeof header.timestamp === "string" ? new Date(header.timestamp).getTime() : Number.NaN;
+	const cwd = isString(header.cwd) ? header.cwd : "";
+	const headerTime = isString(header.timestamp) ? new Date(header.timestamp).getTime() : Number.NaN;
 	// Truncated scans only see a PREFIX of the file, so any in-window
 	// activity time is stale by construction — a long-running session would
 	// sort (and display its age) as of its early messages, not its latest.
 	// The filesystem mtime is the authoritative "last written" signal there.
 	const modified = truncatedScan
 		? stats.mtime
-		: typeof lastActivityTime === "number" && lastActivityTime > 0
+		: lastActivityTime !== undefined && lastActivityTime > 0
 			? new Date(lastActivityTime)
 			: !Number.isNaN(headerTime)
 				? new Date(headerTime)
@@ -219,7 +248,7 @@ async function readSessionInfosWithLimit(
 	concurrency: number,
 	reader: SessionInfoReader,
 ): Promise<(SessionListInfo | undefined)[]> {
-	const infos: (SessionListInfo | undefined)[] = new Array(files.length);
+	const infos: (SessionListInfo | undefined)[] = Array.from({ length: files.length });
 	const normalizedConcurrency = Number.isFinite(concurrency) ? Math.max(1, Math.floor(concurrency)) : 1;
 	const workerCount = Math.min(files.length, normalizedConcurrency);
 	let nextIndex = 0;
@@ -266,11 +295,11 @@ export async function readSessionEntries(filePath: string): Promise<SessionDiskE
 			const entry = parseLine(line);
 			if (!entry) continue;
 			if (!sessionId) {
-				if (!isHeader(entry) || typeof entry.id !== "string") return undefined;
+				if (!isHeader(entry) || !isString(entry.id)) return undefined;
 				sessionId = entry.id;
 				continue;
 			}
-			if (isHeader(entry) || typeof entry.id !== "string") continue;
+			if (isHeader(entry) || !isString(entry.id)) continue;
 			entries.push(entry);
 		}
 	} catch {

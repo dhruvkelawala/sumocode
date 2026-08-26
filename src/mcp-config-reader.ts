@@ -39,8 +39,13 @@ import type { McpServerSnapshot } from "./sumo-tui/cathedral/sidebar-rendering.j
  * traces.
  */
 
+interface McpServerConfig {
+	readonly command?: string;
+	readonly args?: readonly string[];
+}
+
 interface McpConfigFile {
-	readonly mcpServers?: Record<string, unknown>;
+	readonly mcpServers?: Record<string, McpServerConfig>;
 	readonly imports?: unknown;
 }
 
@@ -69,12 +74,19 @@ function readMcpConfig(path: string): McpConfigFile | undefined {
 		if (!existsSync(path)) return undefined;
 		const raw = readFileSync(path, "utf8");
 		const parsed: unknown = JSON.parse(raw);
-		if (!parsed || typeof parsed !== "object") return undefined;
+		if (!parsed || !isObjectValue(parsed)) return undefined;
+		// SAFETY: JSON.parse produced an object shape; only the mcpServers/imports
+		// fields are read, and both are guarded before use below.
 		return parsed as McpConfigFile;
 	} catch {
 		// Malformed JSON, permission denied, etc. \u2014 fail closed: no servers from this file.
 		return undefined;
 	}
+}
+
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- predicate over parsed JSON; the typeof check is the sanctioned parse.
+function isObjectValue(value: unknown): value is object {
+	return typeof value === "object";
 }
 
 /**
@@ -83,7 +95,8 @@ function readMcpConfig(path: string): McpConfigFile | undefined {
  * a higher-precedence file (project) overrides a lower-precedence one (user
  * global) for a given server name.
  */
-function isPlainObject(value: unknown): value is Record<string, unknown> {
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- predicate over parsed JSON values; the typeof check is the sanctioned parse.
+function isPlainObject(value: unknown): value is object {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
@@ -121,6 +134,7 @@ export function loadConfiguredMcpServers(opts: LoadMcpServersOptions): readonly 
 			mcpDiagnosticHandler?.({
 				type: "mcp_imports_unresolved",
 				path,
+				// SAFETY: guarded by hasNonEmptyImports, which checks Array.isArray.
 				importsCount: (cfg.imports as readonly unknown[]).length,
 			});
 		}

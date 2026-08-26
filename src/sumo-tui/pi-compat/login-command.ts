@@ -1,11 +1,11 @@
-import type { AuthEvent, AuthInteraction, AuthPrompt, AuthType, Provider } from "@earendil-works/pi-ai";
+import type { Api, AuthEvent, AuthInteraction, AuthPrompt, AuthType, Credential, Model, Provider } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { authInputTitle } from "./secret-input.js";
 
 export interface RpcLoginRuntime {
-	getAvailable(): Promise<readonly unknown[]>;
+	getAvailable(): Promise<readonly Model<Api>[]>;
 	getProviders(): readonly Provider[];
-	login(providerId: string, type: AuthType, interaction: AuthInteraction): Promise<unknown>;
+	login(providerId: string, type: AuthType, interaction: AuthInteraction): Promise<Credential>;
 }
 
 export interface RpcLoginCommandDeps {
@@ -19,10 +19,10 @@ type LoginMethod = {
 
 let activeLoginAbort: AbortController | undefined;
 
-const AUTH_LABELS: Readonly<Record<AuthType, string>> = {
+const AUTH_LABELS = {
 	oauth: "Sign in with an account",
 	api_key: "Sign in with an API key",
-};
+} satisfies Record<AuthType, string>;
 
 function getRuntimeFromContext(ctx: ExtensionCommandContext): RpcLoginRuntime {
 	// Pi exposes only the synchronous ModelRegistry compatibility facade to
@@ -30,11 +30,27 @@ function getRuntimeFromContext(ctx: ExtensionCommandContext): RpcLoginRuntime {
 	// ModelRuntime. In 0.83.x ModelRegistry retains that runtime as an ordinary
 	// `runtime` field. Keep this version-checked private seam isolated here until
 	// Pi exposes login through ExtensionContext or RPC directly.
-	const runtime = Reflect.get(ctx.modelRegistry, "runtime") as Partial<RpcLoginRuntime> | undefined;
-	if (!runtime || typeof runtime.getAvailable !== "function" || typeof runtime.getProviders !== "function" || typeof runtime.login !== "function") {
+	// SAFETY: Pi 0.83.x keeps its login ModelRuntime on the undocumented
+	// `runtime` field of ModelRegistry; the capability checks below verify
+	// each method before the facade is handed to callers.
+	// oxlint-disable-next-line anti-slop/no-reflect-get -- ModelRegistry declares `runtime` private upstream, so Reflect.get is the only typed seam probe that does not patch Pi's shipped types.
+	const rawRuntime = Reflect.get(ctx.modelRegistry, "runtime");
+	if (!isLoginRuntime(rawRuntime)) {
 		throw new Error("Pi's authentication runtime is unavailable; update SumoCode's Pi compatibility adapter");
 	}
-	return runtime as RpcLoginRuntime;
+	return rawRuntime;
+
+	function isLoginRuntime<T>(value: T): value is T & RpcLoginRuntime {
+		if (typeof value !== "object" || value === null) return false;
+		// SAFETY: probing Pi's undocumented private runtime seam; the typeof
+		// checks below verify every capability is callable before use.
+		const candidate = value as { getAvailable?: unknown; getProviders?: unknown; login?: unknown };
+		return (
+			typeof candidate.getAvailable === "function" &&
+			typeof candidate.getProviders === "function" &&
+			typeof candidate.login === "function"
+		);
+	}
 }
 
 function loginMethods(runtime: RpcLoginRuntime): LoginMethod[] {

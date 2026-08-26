@@ -5,7 +5,7 @@ import { SUBAGENT_MAX_RUNNING, type SubagentEvent, type SubagentSnapshot } from 
 import type { TerminalHost, TerminalHostKind } from "../terminal-host/types.js";
 import { loadRoles, type SubagentRole } from "./roles.js";
 
-const createHarness = (hostKind: TerminalHostKind = "herdr", roles?: readonly SubagentRole[]) => {
+const createHarness = (hostKind: TerminalHostKind = "herdr", roles?: readonly SubagentRole[], roleWarnings: readonly string[] = []) => {
 	const registered: Array<{ name: string; parameters?: unknown; execute: (...args: unknown[]) => Promise<unknown> }> = [];
 	const emitters = new Map<string, (event: SubagentEvent) => void>();
 	const sendPaneText = vi.fn(async () => hostKind === "cmux"
@@ -52,7 +52,7 @@ const createHarness = (hostKind: TerminalHostKind = "herdr", roles?: readonly Su
 		}),
 	});
 	const pi = { registerTool: vi.fn((tool) => registered.push(tool)), on: vi.fn(), getThinkingLevel: vi.fn(() => "medium"), getActiveTools: vi.fn(() => ["read", "bash"]) };
-	const roleLoader: typeof loadRoles = roles ? (() => ({ roles, warnings: [] })) : loadRoles;
+	const roleLoader: typeof loadRoles = roles ? (() => ({ roles, warnings: roleWarnings })) : loadRoles;
 	registerSubagentTools(pi as never, manager, undefined, host, roleLoader);
 	const tool = (name: string) => registered.find((entry) => entry.name === name)!;
 	const ctx = { cwd: "/tmp/project", model: { provider: "openai", id: "gpt-5", thinkingLevel: "low" } };
@@ -106,6 +106,28 @@ describe("subagent tools", () => {
 			builtInTools: ["read"],
 		});
 		expect(manager.get("sa-1")).toMatchObject({ roleId: "audit", modelLabel: "openai/explicit", thinkingLabel: "minimal" });
+	});
+
+	it("fails closed before spawning a role when roles.json has loader warnings", async () => {
+		const role: SubagentRole = { id: "audit", label: "Audit", description: "use for audits", systemPrompt: "audit carefully" };
+		const { tool, ctx, manager } = createHarness("herdr", [role], ["role audit has an invalid thinking level; entry skipped"]);
+
+		const result = await tool("subagent_spawn").execute("tc", { prompt: "do it", name: "worker", role: "audit" }, undefined, undefined, ctx as never);
+
+		expect(textOf(result)).toContain("roles.json has invalid configuration");
+		expect(textOf(result)).toContain("invalid thinking level");
+		expect(result).toMatchObject({ details: { action: "spawn", status: "invalid_role_config", role: "audit" } });
+		expect(manager.list()).toEqual([]);
+	});
+
+	it("keeps role-loader warnings out of role-free spawns", async () => {
+		const role: SubagentRole = { id: "audit", label: "Audit", description: "use for audits", systemPrompt: "audit carefully" };
+		const { tool, ctx, manager } = createHarness("herdr", [role], ["invalid optional role overlay"]);
+
+		const result = await tool("subagent_spawn").execute("tc", { prompt: "do it", name: "worker" }, undefined, undefined, ctx as never);
+
+		expect(textOf(result)).toContain("Started sa-1");
+		expect(manager.get("sa-1")?.roleId).toBeUndefined();
 	});
 
 	it("returns an inline error for an unknown role", async () => {

@@ -6872,8 +6872,41 @@ function notify4(ctx, result) {
   stream.write(`${result.message}
 `);
 }
-function parsePersonaEditorCommand(editor) {
-  const parts = editor.trim().split(/\s+/).filter((part) => part.length > 0);
+function parsePersonaEditorCommand(editor, pathExists3 = existsSync3) {
+  const trimmed = editor.trim();
+  if (trimmed && pathExists3(trimmed)) return { command: trimmed, args: [] };
+  const parts = [];
+  let current = "";
+  let quote;
+  let escaped = false;
+  for (const char of trimmed) {
+    if (escaped) {
+      current += char;
+      escaped = false;
+      continue;
+    }
+    if (char === "\\" && quote !== "single") {
+      escaped = true;
+      continue;
+    }
+    if (char === "'" && quote !== "double") {
+      quote = quote === "single" ? void 0 : "single";
+      continue;
+    }
+    if (char === '"' && quote !== "single") {
+      quote = quote === "double" ? void 0 : "double";
+      continue;
+    }
+    if (/\s/u.test(char) && quote === void 0) {
+      if (current) parts.push(current);
+      current = "";
+      continue;
+    }
+    current += char;
+  }
+  if (escaped) current += "\\";
+  if (current) parts.push(current);
+  if (quote !== void 0) return { command: trimmed || editor, args: [] };
   return { command: parts[0] ?? editor, args: parts.slice(1) };
 }
 function defaultRunEditor(editor, file) {
@@ -15585,7 +15618,17 @@ function registerSubagentTools(pi, manager, delivery, host = getTerminalHost(), 
       visible: Type5.Optional(Type5.Boolean({ description: "Open the child as an interactive pane in the terminal host \u2014 watchable and steerable; requires a running terminal host." }))
     }),
     async execute(toolCallId, params, _signal, _onUpdate, ctx) {
-      const loadedRoles = roleLoader().roles;
+      const loaded = roleLoader();
+      const loadedRoles = loaded.roles;
+      if (params.role && loaded.warnings.length > 0) {
+        return makeToolResult2(`Unable to spawn role ${params.role}: roles.json has invalid configuration:
+${loaded.warnings.map((warning) => `- ${warning}`).join("\n")}`, {
+          action: "spawn",
+          status: "invalid_role_config",
+          role: params.role,
+          warnings: loaded.warnings
+        });
+      }
       const role = params.role ? loadedRoles.find((candidate) => candidate.id === params.role) : void 0;
       if (params.role && !role) {
         const knownRoles = loadedRoles.map((candidate) => candidate.id);

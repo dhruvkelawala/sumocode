@@ -119,7 +119,16 @@ export function registerSubagentTools(
 			visible: Type.Optional(Type.Boolean({ description: "Open the child as an interactive pane in the terminal host — watchable and steerable; requires a running terminal host." })),
 		}),
 		async execute(toolCallId, params, _signal, _onUpdate, ctx) {
-			const loadedRoles = roleLoader().roles;
+			const loaded = roleLoader();
+			const loadedRoles = loaded.roles;
+			if (params.role && loaded.warnings.length > 0) {
+				return makeToolResult(`Unable to spawn role ${params.role}: roles.json has invalid configuration:\n${loaded.warnings.map((warning) => `- ${warning}`).join("\n")}`, {
+					action: "spawn",
+					status: "invalid_role_config",
+					role: params.role,
+					warnings: loaded.warnings,
+				});
+			}
 			const role = params.role ? loadedRoles.find((candidate) => candidate.id === params.role) : undefined;
 			if (params.role && !role) {
 				const knownRoles = loadedRoles.map((candidate) => candidate.id);

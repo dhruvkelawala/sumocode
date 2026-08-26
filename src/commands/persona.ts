@@ -77,9 +77,51 @@ function notify(ctx: ExtensionContext, result: PersonaCommandResult): void {
 	stream.write(`${result.message}\n`);
 }
 
-/** Split an EDITOR value with flags (`"nvim -f"`) into command + args. */
-export function parsePersonaEditorCommand(editor: string): { command: string; args: readonly string[] } {
-	const parts = editor.trim().split(/\s+/).filter((part) => part.length > 0);
+/** Parse an EDITOR command without invoking a shell. */
+export function parsePersonaEditorCommand(
+	editor: string,
+	pathExists: (path: string) => boolean = existsSync,
+): { command: string; args: readonly string[] } {
+	const trimmed = editor.trim();
+	// macOS application bundles and other executable paths may contain spaces.
+	// Prefer the complete existing path before interpreting whitespace as flags.
+	if (trimmed && pathExists(trimmed)) return { command: trimmed, args: [] };
+
+	const parts: string[] = [];
+	let current = "";
+	let quote: "single" | "double" | undefined;
+	let escaped = false;
+	for (const char of trimmed) {
+		if (escaped) {
+			current += char;
+			escaped = false;
+			continue;
+		}
+		if (char === "\\" && quote !== "single") {
+			escaped = true;
+			continue;
+		}
+		if (char === "'" && quote !== "double") {
+			quote = quote === "single" ? undefined : "single";
+			continue;
+		}
+		if (char === '"' && quote !== "single") {
+			quote = quote === "double" ? undefined : "double";
+			continue;
+		}
+		if (/\s/u.test(char) && quote === undefined) {
+			if (current) parts.push(current);
+			current = "";
+			continue;
+		}
+		current += char;
+	}
+	if (escaped) current += "\\";
+	if (current) parts.push(current);
+	// An unmatched quote is malformed input; preserve the whole value as the
+	// executable so spawnSync reports one truthful ENOENT instead of invoking a
+	// surprising prefix with fabricated arguments.
+	if (quote !== undefined) return { command: trimmed || editor, args: [] };
 	return { command: parts[0] ?? editor, args: parts.slice(1) };
 }
 
